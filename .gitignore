@@ -1,0 +1,58 @@
+
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Code coverage profiles and other test artifacts
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+.env
+
+# Editor/IDE
+# .idea/
+# .vscode/
+
+test.sh
+cover.out
+TODO
+*_gitignore*
+*gitignore_*
+.cursor/
+.claude/
+
+# Coverage output directories
+web/coverage/
+coverage_ws/
+
+# Frontend build output (keep placeholder for go:embed)
+web/dist/*
+!web/dist/PLACEHOLDER.txt
+!web/dist/.gitkeep
+
+# Release build output (cross-compiled binaries)
+dist/
+
+config.yaml
+tmp/
+cmd/switch-a/config.yaml
+tmpclaude-*
+review_agent.md
+.agents
+.tmp
