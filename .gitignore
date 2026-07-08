@@ -18,9 +18,7 @@ profile.cov
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-# Go workspace file
-go.work
-go.work.sum
+# go.work 入库(双模块本地开发依赖 workspace 解析,执行计划 §6.2),不忽略
 
 # env file
 .env
@@ -56,3 +54,10 @@ tmpclaude-*
 review_agent.md
 .agents
 .tmp
+
+# 第三方参考克隆(仅本地查阅,不入库);锚定仓库根,勿殃及 transport/webrtc/
+/trash/
+/webrtc/
+
+# Node
+node_modules/

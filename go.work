@@ -1,0 +1,10 @@
+// go.work 只服务本地开发:core 尚未发布任何 tag,根模块对 core 的 require
+// 是占位 pseudo-version,本地一切构建/测试须经 workspace 解析(执行计划 §6.2)。
+// CI 另以 GOWORK=off 跑构建校验,守"根模块禁 replace、以版本 require core"的
+// 发版不变量。
+go 1.26.4
+
+use (
+	.
+	./core
+)

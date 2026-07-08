@@ -1,0 +1,2 @@
+# CI 在 Linux 上以 bash 执行 .sh,CRLF 会破坏解释器行为——钉死 LF。
+*.sh text eol=lf

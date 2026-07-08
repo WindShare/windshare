@@ -1,0 +1,94 @@
+# CI(执行计划 T0.2):两个 Go 模块分别 vet + test + 覆盖率门禁(≥70%,
+# 按模块分别计,§7),web 侧 install + build + vitest,外加 GOWORK=off
+# 构建校验守双模块发版不变量(§6.2)。
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  COVERAGE_THRESHOLD: "70"
+
+jobs:
+  go-core:
+    name: Go core 模块
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
+      - name: go test(含覆盖率)
+        run: go test ./... -covermode=atomic -coverprofile=cover.out
+      - name: 覆盖率门禁
+        run: bash ../.github/scripts/coverage-gate.sh cover.out "$COVERAGE_THRESHOLD"
+
+  go-root:
+    name: Go 根模块
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      # ./... 不跨嵌套模块边界(core/ 是独立模块),故本 job 天然只覆盖根模块,
+      # 覆盖率按模块分别计(§7)。
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
+      - name: go test(含覆盖率)
+        run: go test ./... -covermode=atomic -coverprofile=cover.out
+      - name: 覆盖率门禁
+        run: |
+          # 模块暂无任何测试文件时 go test 可能不落 profile,补空 profile 走空集判定
+          [ -f cover.out ] || echo "mode: atomic" > cover.out
+          bash .github/scripts/coverage-gate.sh cover.out "$COVERAGE_THRESHOLD"
+
+  gowork-off:
+    name: GOWORK=off 构建校验(发版不变量,§6.2)
+    runs-on: ubuntu-latest
+    # core 尚未发布(无 tag、无真实 pseudo-version),GOWORK=off 下根模块一旦
+    # import core 便无法解析 require——首次 push 并以真实 pseudo-version 填
+    # require 后,删除 continue-on-error 使之成为硬门禁。
+    continue-on-error: true
+    env:
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - name: 根模块 GOWORK=off 构建
+        run: go build ./...
+      - name: core 模块 GOWORK=off 构建
+        run: go build ./...
+        working-directory: core
+
+  web:
+    name: Web(Vite + React + TS)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: install
+        run: npm ci
+      - name: build
+        run: npm run build
+      - name: vitest
+        run: npx vitest run

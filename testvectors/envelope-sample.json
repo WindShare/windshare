@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "kind": "envelope-sample",
+  "description": "信封格式自检样例(非加密向量):Go(core/internal/testvec)与 TS(web/test/vectors.ts)读取骨架各自解析本文件,锁定共享信封 schema 与 base64 编码约定。",
+  "cases": [
+    {
+      "name": "hello",
+      "bytesB64": "aGVsbG8="
+    },
+    {
+      "name": "empty",
+      "bytesB64": ""
+    }
+  ]
+}
