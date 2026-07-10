@@ -56,8 +56,9 @@ review_agent.md
 .tmp
 
 # 第三方参考克隆(仅本地查阅,不入库);锚定仓库根,勿殃及 transport/webrtc/
-/.trash/
+.trash
 /.webrtc/
+.orchestration
 
 # Node
 node_modules/
