@@ -9,6 +9,22 @@
 - **Prefer Deep Modules**: Avoid coupling all functionality at one layer; use meaningful module boundaries to contain complexity.
 - **Semantic Precision**: Avoid ambiguous or overloaded fields.
 
+
+### docs
+
+- Doc Maintenance: Keep concise, avoid redundancy, clean up outdated content promptly to reduce AI context usage.
+- Error reporting or log usage in English. Use English as much as possible to make it easier for international developers.
+
 ### Go Specifics
 - **Accept Interfaces, Return Structs**: Define interfaces where they are used (consumer side), not where they are implemented.
 - **Hard Requirement**: Project CI enforces a **70% minimum test coverage**.
+
+
+### check
+
+GOPLS_CHECK: git ls-files -z '*.go' | xargs -0 gopls check -severity=hint
+sloc: sloc-guard.exe check
+web: pnpm -C web lint && pnpm -C web exec tsc -b
+
+
+## Project Overview

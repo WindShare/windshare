@@ -21,19 +21,19 @@ export interface VectorFile {
 export function loadVectorFile(url: URL): VectorFile {
   const parsed: unknown = JSON.parse(readFileSync(url, "utf8"));
   if (typeof parsed !== "object" || parsed === null) {
-    throw new Error(`向量文件 ${url}: 顶层须为对象`);
+    throw new Error(`vector file ${url}: top level must be an object`);
   }
   const f = parsed as Partial<VectorFile>;
   if (f.version !== ENVELOPE_VERSION) {
     throw new Error(
-      `向量文件 ${url}: 信封版本 ${f.version} 不支持(本实现为 ${ENVELOPE_VERSION})`,
+      `vector file ${url}: unsupported envelope version ${f.version} (implementation version ${ENVELOPE_VERSION})`,
     );
   }
   if (typeof f.kind !== "string" || f.kind === "") {
-    throw new Error(`向量文件 ${url}: 缺少 kind`);
+    throw new Error(`vector file ${url}: missing kind`);
   }
   if (!Array.isArray(f.cases) || f.cases.some((c) => typeof c?.name !== "string" || c.name === "")) {
-    throw new Error(`向量文件 ${url}: cases 每项须有 name`);
+    throw new Error(`vector file ${url}: every case must have a name`);
   }
   return f as VectorFile;
 }

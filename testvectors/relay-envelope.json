@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "kind": "relay-envelope",
+  "description": "Relay binary envelopes. Binary values use standard padded base64. manifest = 0x01 ‖ sealedManifest; forward = 0x02 ‖ sessionId(8 bytes) ‖ opaque inner frame; terminal-forward = 0x03 ‖ sessionId(8 bytes) ‖ opaque final inner ERROR frame. Routed envelopes add exactly 9 bytes to the inner frame, so a 65536-byte MaxFrameSize inner frame occupies 65545 bytes on the relay WebSocket. The terminal type is a lifecycle boundary: once accepted it is delivered ahead of queued session data, then the session is tombstoned and later traffic is discarded.",
+  "cases": [
+    {
+      "name": "manifest",
+      "envelope": "manifest",
+      "typeByte": 1,
+      "payloadB64": "3q2+7wA=",
+      "frameB64": "Ad6tvu8A"
+    },
+    {
+      "name": "ordinary-forward",
+      "envelope": "forward",
+      "typeByte": 2,
+      "sessionIdB64": "AAECAwQFBgc=",
+      "payloadB64": "AQIAAAABAAAAAAAAAAgHBgUEAwIB",
+      "frameB64": "AgABAgMEBQYHAQIAAAABAAAAAAAAAAgHBgUEAwIB"
+    },
+    {
+      "name": "terminal-forward",
+      "envelope": "terminal-forward",
+      "typeByte": 3,
+      "sessionIdB64": "AAECAwQFBgc=",
+      "payloadB64": "AwIABQBkcmlmdA==",
+      "frameB64": "AwABAgMEBQYHAwIABQBkcmlmdA=="
+    }
+  ]
+}

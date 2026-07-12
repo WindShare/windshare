@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "kind": "path-policy",
+  "description": "版本化跨平台路径契约。Canonicalize 只做 NFC;CollisionKey = NFC(Unicode 15.0.0 locale-independent full case fold(path))。valid 用例记录规范路径及碰撞键,同一 collisionGroup 必须碰撞;invalid-path 用例必须在清单或文件系统操作前拒绝。根级 .wsresume 前缀按完整折叠保留,Cc/Cf、Win32 非法/设备名(含上标 COM/LPT 与 CONIN$/CONOUT$)均拒绝。",
+  "cases": [
+    {
+      "name": "policy-version",
+      "policyVersion": "windshare/path/v1-unicode-15.0.0",
+      "unicodeVersion": "15.0.0"
+    },
+    {
+      "name": "ascii",
+      "input": "tree/readme.txt",
+      "expected": "valid",
+      "canonical": "tree/readme.txt",
+      "collisionKey": "tree/readme.txt"
+    },
+    {
+      "name": "sharp-s-uppercase",
+      "input": "ẞ.txt",
+      "expected": "valid",
+      "canonical": "ẞ.txt",
+      "collisionKey": "ss.txt",
+      "collisionGroup": "sharp-s"
+    },
+    {
+      "name": "sharp-s-expanded",
+      "input": "ss.txt",
+      "expected": "valid",
+      "canonical": "ss.txt",
+      "collisionKey": "ss.txt",
+      "collisionGroup": "sharp-s"
+    },
+    {
+      "name": "turkish-ascii-uppercase-i",
+      "input": "I.txt",
+      "expected": "valid",
+      "canonical": "I.txt",
+      "collisionKey": "i.txt",
+      "collisionGroup": "turkish-ascii-i"
+    },
+    {
+      "name": "turkish-ascii-lowercase-i",
+      "input": "i.txt",
+      "expected": "valid",
+      "canonical": "i.txt",
+      "collisionKey": "i.txt",
+      "collisionGroup": "turkish-ascii-i"
+    },
+    {
+      "name": "turkish-dotted-uppercase-i",
+      "input": "İ.txt",
+      "expected": "valid",
+      "canonical": "İ.txt",
+      "collisionKey": "i̇.txt",
+      "collisionGroup": "turkish-dotted-i"
+    },
+    {
+      "name": "turkish-dotted-expanded",
+      "input": "i̇.txt",
+      "expected": "valid",
+      "canonical": "i̇.txt",
+      "collisionKey": "i̇.txt",
+      "collisionGroup": "turkish-dotted-i"
+    },
+    {
+      "name": "turkish-dotless-i",
+      "input": "ı.txt",
+      "expected": "valid",
+      "canonical": "ı.txt",
+      "collisionKey": "ı.txt"
+    },
+    {
+      "name": "nfc",
+      "input": "café.txt",
+      "expected": "valid",
+      "canonical": "café.txt",
+      "collisionKey": "café.txt",
+      "collisionGroup": "nfc-nfd"
+    },
+    {
+      "name": "nfd-canonicalized",
+      "input": "café.txt",
+      "expected": "valid",
+      "canonical": "café.txt",
+      "collisionKey": "café.txt",
+      "collisionGroup": "nfc-nfd"
+    },
+    {
+      "name": "post-policy-composition-sequence",
+      "input": "𐗉.txt",
+      "expected": "valid",
+      "canonical": "𐗉.txt",
+      "collisionKey": "𐗉.txt"
+    },
+    {
+      "name": "post-policy-composite",
+      "input": "𐗉.txt",
+      "expected": "valid",
+      "canonical": "𐗉.txt",
+      "collisionKey": "𐗉.txt"
+    },
+    {
+      "name": "nested-journal-name",
+      "input": "tree/.wsresume-part",
+      "expected": "valid",
+      "canonical": "tree/.wsresume-part",
+      "collisionKey": "tree/.wsresume-part"
+    },
+    {
+      "name": "folded-journal-prefix",
+      "input": ".WSRESUME-part",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "full-fold-journal-prefix",
+      "input": ".wſresume-part",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "bidi-format-character",
+      "input": "safe/evil‮txt.exe",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "zero-width-joiner",
+      "input": "safe/a‍b",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "control-character",
+      "input": "safe/line\nbreak",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "superscript-com-device",
+      "input": "COM¹.txt",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "superscript-lpt-device",
+      "input": "lpt²",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "console-input-device",
+      "input": "CONIN$",
+      "expected": "invalid-path"
+    },
+    {
+      "name": "console-output-device",
+      "input": "conout$.log",
+      "expected": "invalid-path"
+    }
+  ]
+}

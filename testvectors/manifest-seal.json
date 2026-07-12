@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "kind": "manifest-seal",
+  "description": "清单确定性 CBOR + GCM 封装(§6.4,B4/B5/B6):canonicalCbor = RFC 8949 Core Deterministic 编码的 {v, chunkSize, entries[{path,size,mtime,isDir}]}(entries 数组顺序即流顺序;mtime 为 Unix 毫秒);sealedManifest = nonce(12B)‖AES-256-GCM(key=manifestKey, nonce, plaintext=canonicalCbor, aad=suiteByte 0x01)。解码步骤:取 sealedManifest 首 12B 为 nonce → manifestKey = HKDF(readSecret, 'windshare/v1 manifest') → GCM Open(aad=0x01)得 canonicalCbor → 严格 CBOR 解码。本用例出自固定分享:readSecret=000102…0f,注入计数 RNG(字节流 0x00,0x01,…),清单 nonce 消耗其前 12B。",
+  "cases": [
+    {
+      "name": "share-tree",
+      "readSecretB64": "AAECAwQFBgcICQoLDA0ODw==",
+      "manifestKeyB64": "SgTq+qQO6emT3CVOPdsc0edeFnuWRcZxpV+Lco9fhCw=",
+      "nonceB64": "AAECAwQFBgcICQoL",
+      "manifest": {
+        "v": 1,
+        "chunkSize": 1024,
+        "entries": [
+          {
+            "path": "tree",
+            "size": 0,
+            "mtime": 1710000000000,
+            "isDir": true
+          },
+          {
+            "path": "tree/a.txt",
+            "size": 1500,
+            "mtime": 1710000000001,
+            "isDir": false
+          },
+          {
+            "path": "tree/b.bin",
+            "size": 700,
+            "mtime": 1710000000002,
+            "isDir": false
+          },
+          {
+            "path": "tree/empty.txt",
+            "size": 0,
+            "mtime": 1710000000003,
+            "isDir": false
+          },
+          {
+            "path": "tree/naïve.txt",
+            "size": 100,
+            "mtime": 1710000000004,
+            "isDir": false
+          },
+          {
+            "path": "tree/sub",
+            "size": 0,
+            "mtime": 1710000000005,
+            "isDir": true
+          }
+        ]
+      },
+      "canonicalCborB64": "o2F2AWdlbnRyaWVzhqRkcGF0aGR0cmVlZHNpemUAZWlzRGly9WVtdGltZRsAAAGOI/FMAKRkcGF0aGp0cmVlL2EudHh0ZHNpemUZBdxlaXNEaXL0ZW10aW1lGwAAAY4j8UwBpGRwYXRoanRyZWUvYi5iaW5kc2l6ZRkCvGVpc0RpcvRlbXRpbWUbAAABjiPxTAKkZHBhdGhudHJlZS9lbXB0eS50eHRkc2l6ZQBlaXNEaXL0ZW10aW1lGwAAAY4j8UwDpGRwYXRob3RyZWUvbmHDr3ZlLnR4dGRzaXplGGRlaXNEaXL0ZW10aW1lGwAAAY4j8UwEpGRwYXRoaHRyZWUvc3ViZHNpemUAZWlzRGly9WVtdGltZRsAAAGOI/FMBWljaHVua1NpemUZBAA=",
+      "sealedManifestB64": "AAECAwQFBgcICQoLCg75q6uKb0YboGGqLn16NrTtEJb+vJ87h4g2cKyJ6bOSQ/7W/yxcMlvGTo5XEiJ55cvAukjseIBonzrDaOkqWtKpGZ9OkWCHUcOuEw2qvJ2UaYbuKF7gBh2dhLH8JXPMUeuAXkQ9cSIQtAMuMp7RGkTfzqazMqHHNLc250em7wsuOqVWnU1P+qrv/6QALe6odIApf8r52+XJYhSiRbc0+Tz+wCEBp6vNeYCXezgxfoVWpMzrhEiq5JttlTjZGMP5FbHWS0w9MTMJT6L8sMdSv6oPEVbKS0h9bCtVnrLZLfgPPyA01JvymL63Z6JYy2b9HPebxh12zBW/u3WVBfDDDMtPdj5urrcsByfy8lHoxNtNTeta+NN1NDmBGuFPebRS9IllH2av+sJhAR6tG35nbJBIMrjfvg/sytWZGuCI"
+    }
+  ]
+}

@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "kind": "relay-signaling",
+  "description": "Shared Go/browser signaling-object contract. accepted=true requires both runtimes to decode the exact-key JSON object. canonical, when present, is the shared re-encoding for inputs whose opaque payload has one cross-runtime lexical form; its absence deliberately makes no byte-canonical claim for parser-sensitive payload JSON. Protocol strings must be non-empty Unicode scalar text; optional strings are either absent or non-empty; payload remains opaque valid JSON. All JSON structure, including ignored fields, is bounded to 64 nested objects/arrays so runtime parser recursion limits are not protocol behavior. accepted=false pins hostile spellings that both runtimes must reject before routing.",
+  "cases": [
+    {
+      "name": "keepalive",
+      "wire": "{\"type\":\"keepalive\"}",
+      "accepted": true,
+      "canonical": "{\"type\":\"keepalive\"}"
+    },
+    {
+      "name": "join",
+      "wire": "{\"type\":\"join\",\"shareId\":\"AAAAAAAAAAAA\"}",
+      "accepted": true,
+      "canonical": "{\"type\":\"join\",\"shareId\":\"AAAAAAAAAAAA\"}"
+    },
+    {
+      "name": "manifest",
+      "wire": "{\"type\":\"manifest\",\"sessionId\":\"AQIDBAUGBwg\"}",
+      "accepted": true,
+      "canonical": "{\"type\":\"manifest\",\"sessionId\":\"AQIDBAUGBwg\"}"
+    },
+    {
+      "name": "not-found",
+      "wire": "{\"type\":\"not_found\"}",
+      "accepted": true,
+      "canonical": "{\"type\":\"not_found\"}"
+    },
+    {
+      "name": "signal-offer",
+      "wire": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"offer\",\"payload\":{\"type\":\"offer\",\"sdp\":\"v=0\"}}",
+      "accepted": true,
+      "canonical": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"offer\",\"payload\":{\"type\":\"offer\",\"sdp\":\"v=0\"}}"
+    },
+    {
+      "name": "bye",
+      "wire": "{\"type\":\"bye\",\"sessionId\":\"AQIDBAUGBwg\"}",
+      "accepted": true,
+      "canonical": "{\"type\":\"bye\",\"sessionId\":\"AQIDBAUGBwg\"}"
+    },
+    {
+      "name": "connection-error",
+      "wire": "{\"type\":\"error\",\"code\":\"rate_limited\",\"message\":\"slow down\"}",
+      "accepted": true,
+      "canonical": "{\"type\":\"error\",\"code\":\"rate_limited\",\"message\":\"slow down\"}"
+    },
+    {
+      "name": "session-error",
+      "wire": "{\"type\":\"error\",\"code\":\"sender_gone\",\"message\":\"offline\",\"sessionId\":\"AQIDBAUGBwg\"}",
+      "accepted": true,
+      "canonical": "{\"type\":\"error\",\"code\":\"sender_gone\",\"message\":\"offline\",\"sessionId\":\"AQIDBAUGBwg\"}"
+    },
+    {
+      "name": "serializer-sensitive-protocol-strings",
+      "wire": "{\"type\":\"error\",\"code\":\"<>&\",\"message\":\"\\u2028\\u2029\"}",
+      "accepted": true,
+      "canonical": "{\"type\":\"error\",\"code\":\"<>&\",\"message\":\"\u2028\u2029\"}"
+    },
+    {
+      "name": "unknown-field-is-ignored",
+      "wire": "{\"type\":\"join\",\"shareId\":\"AAAAAAAAAAAA\",\"future\":true}",
+      "accepted": true,
+      "canonical": "{\"type\":\"join\",\"shareId\":\"AAAAAAAAAAAA\"}"
+    },
+    {
+      "name": "case-alias-is-only-unknown",
+      "wire": "{\"type\":\"join\",\"shareId\":\"AAAAAAAAAAAA\",\"ShareID\":\"bad!\"}",
+      "accepted": true,
+      "canonical": "{\"type\":\"join\",\"shareId\":\"AAAAAAAAAAAA\"}"
+    },
+    {
+      "name": "paired-surrogate-is-scalar",
+      "wire": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"\\ud83d\\ude00\",\"payload\":null}",
+      "accepted": true,
+      "canonical": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"😀\",\"payload\":null}"
+    },
+    {
+      "name": "replacement-character-is-scalar",
+      "wire": "{\"type\":\"error\",\"code\":\"x\",\"message\":\"\\ufffd\"}",
+      "accepted": true,
+      "canonical": "{\"type\":\"error\",\"code\":\"x\",\"message\":\"�\"}"
+    },
+    {
+      "name": "serializer-sensitive-payload-string",
+      "wire": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"candidate\",\"payload\":{\"html\":\"<>&\",\"separator\":\"\\u2028\"}}",
+      "accepted": true,
+      "canonical": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"candidate\",\"payload\":{\"html\":\"<>&\",\"separator\":\"\u2028\"}}"
+    },
+    {
+      "name": "payload-integer-key-order",
+      "wire": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"candidate\",\"payload\":{\"2\":\"two\",\"1\":\"one\"}}",
+      "accepted": true
+    },
+    {
+      "name": "payload-duplicate-keys",
+      "wire": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"candidate\",\"payload\":{\"candidate\":\"first\",\"candidate\":\"last\"}}",
+      "accepted": true
+    },
+    {
+      "name": "payload-number-lexemes",
+      "wire": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"candidate\",\"payload\":{\"minusZero\":-0,\"exponent\":1e2}}",
+      "accepted": true
+    },
+    {
+      "name": "payload-at-depth-limit",
+      "wire": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"offer\",\"payload\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[null]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}",
+      "accepted": true,
+      "canonical": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"offer\",\"payload\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[null]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}"
+    },
+    {
+      "name": "ignored-field-at-depth-limit",
+      "wire": "{\"type\":\"keepalive\",\"future\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[null]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}",
+      "accepted": true,
+      "canonical": "{\"type\":\"keepalive\"}"
+    },
+    {
+      "name": "top-level-array",
+      "wire": "[]",
+      "accepted": false
+    },
+    {
+      "name": "type-case-alias",
+      "wire": "{\"Type\":\"join\",\"shareId\":\"AAAAAAAAAAAA\"}",
+      "accepted": false
+    },
+    {
+      "name": "share-id-case-alias",
+      "wire": "{\"type\":\"join\",\"ShareId\":\"AAAAAAAAAAAA\"}",
+      "accepted": false
+    },
+    {
+      "name": "lone-high-surrogate",
+      "wire": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"\\ud800\",\"payload\":{}}",
+      "accepted": false
+    },
+    {
+      "name": "lone-low-surrogate",
+      "wire": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"\\udc00\",\"payload\":{}}",
+      "accepted": false
+    },
+    {
+      "name": "broken-surrogate-pair",
+      "wire": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"\\ud800\\u0041\",\"payload\":{}}",
+      "accepted": false
+    },
+    {
+      "name": "null-kind",
+      "wire": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":null,\"payload\":{}}",
+      "accepted": false
+    },
+    {
+      "name": "missing-payload",
+      "wire": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"offer\"}",
+      "accepted": false
+    },
+    {
+      "name": "null-error-message",
+      "wire": "{\"type\":\"error\",\"code\":\"x\",\"message\":null}",
+      "accepted": false
+    },
+    {
+      "name": "empty-error-message",
+      "wire": "{\"type\":\"error\",\"code\":\"x\",\"message\":\"\"}",
+      "accepted": false
+    },
+    {
+      "name": "non-scalar-error-message",
+      "wire": "{\"type\":\"error\",\"code\":\"x\",\"message\":\"\\ud800\"}",
+      "accepted": false
+    },
+    {
+      "name": "null-optional-session",
+      "wire": "{\"type\":\"error\",\"code\":\"x\",\"sessionId\":null}",
+      "accepted": false
+    },
+    {
+      "name": "empty-optional-session",
+      "wire": "{\"type\":\"error\",\"code\":\"x\",\"sessionId\":\"\"}",
+      "accepted": false
+    },
+    {
+      "name": "unknown-type",
+      "wire": "{\"type\":\"teleport\"}",
+      "accepted": false
+    },
+    {
+      "name": "payload-above-depth-limit",
+      "wire": "{\"type\":\"signal\",\"sessionId\":\"AQIDBAUGBwg\",\"kind\":\"offer\",\"payload\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[null]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}",
+      "accepted": false
+    },
+    {
+      "name": "ignored-field-above-depth-limit",
+      "wire": "{\"type\":\"keepalive\",\"future\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[null]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}",
+      "accepted": false
+    }
+  ]
+}

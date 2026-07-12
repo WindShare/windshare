@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "kind": "transfer-plan",
+  "description": "选择只编译一次的传输契约。selectors=null 表示完整选择,selectors=[] 表示空选择;目录选择子选择子树,精确文件只选择该文件。chunks 是规范化半开区间 [first,end),数值为十进制字符串。planId = hex(SHA-256('windshare/v1 transfer-plan\\x00' ‖ 对按 UTF-8 字节排序的每条已选规范路径追加 u64_be(路径字节数) ‖ 路径字节))。utf8-byte-order-not-utf16 用例的 BMP 私用字符与 supplementary 字符顺序专门防止浏览器误用 JavaScript 默认 UTF-16 sort。",
+  "cases": [
+    {
+      "name": "full-selection",
+      "selectors": null,
+      "selectedPaths": [
+        "tree",
+        "tree/a.txt",
+        "tree/b.bin",
+        "tree/empty.txt",
+        "tree/naïve.txt",
+        "tree/sub"
+      ],
+      "selectedBytes": "2300",
+      "chunks": [
+        {
+          "first": "0",
+          "end": "3"
+        }
+      ],
+      "planId": "071e294a679e7884eaa130eba75dab6b1921307464982629ed84c630670b6d3c"
+    },
+    {
+      "name": "explicit-directory-subtree",
+      "selectors": [
+        "tree"
+      ],
+      "selectedPaths": [
+        "tree",
+        "tree/a.txt",
+        "tree/b.bin",
+        "tree/empty.txt",
+        "tree/naïve.txt",
+        "tree/sub"
+      ],
+      "selectedBytes": "2300",
+      "chunks": [
+        {
+          "first": "0",
+          "end": "3"
+        }
+      ],
+      "planId": "071e294a679e7884eaa130eba75dab6b1921307464982629ed84c630670b6d3c"
+    },
+    {
+      "name": "exact-file",
+      "selectors": [
+        "tree/b.bin"
+      ],
+      "selectedPaths": [
+        "tree/b.bin"
+      ],
+      "selectedBytes": "700",
+      "chunks": [
+        {
+          "first": "1",
+          "end": "3"
+        }
+      ],
+      "planId": "4c02752340cca9d56f5ef0c74bd53bff74d3b932f2721c9550a56cf03341a962"
+    },
+    {
+      "name": "selector-order-and-duplicates",
+      "selectors": [
+        "tree/b.bin",
+        "tree",
+        "tree/b.bin"
+      ],
+      "selectedPaths": [
+        "tree",
+        "tree/a.txt",
+        "tree/b.bin",
+        "tree/empty.txt",
+        "tree/naïve.txt",
+        "tree/sub"
+      ],
+      "selectedBytes": "2300",
+      "chunks": [
+        {
+          "first": "0",
+          "end": "3"
+        }
+      ],
+      "planId": "071e294a679e7884eaa130eba75dab6b1921307464982629ed84c630670b6d3c"
+    },
+    {
+      "name": "empty-selection",
+      "selectors": [],
+      "selectedPaths": [],
+      "selectedBytes": "0",
+      "chunks": [],
+      "planId": "7b58c721c3b85900feb5eb1a85eb80433bab17ad02ef5351e6e9e8d81f9df669"
+    },
+    {
+      "name": "utf8-byte-order-not-utf16",
+      "selectors": null,
+      "selectedPaths": [
+        "𐀀-supplementary.txt",
+        "-bmp-private.txt"
+      ],
+      "selectedBytes": "0",
+      "chunks": [],
+      "planId": "2f85f1f980954a6e138f9fd80fd24d7c0bd831f4cf168893019b8b7d3d0d24f8"
+    }
+  ]
+}
