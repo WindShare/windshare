@@ -1,4 +1,35 @@
-// 接收界面(执行计划 §6.2/§6.10,M1b T5.3):文件树勾选、进度、分离密钥
-// 输入框、起传/ICE 用户手势门禁、fragment 读毕 history.replaceState 抹除、
-// 落盘(FSA 优先,非 FSA 多文件流式 ZIP 降级,条目路径按 §6.13 校验)。
-export {};
+export {
+  BrowserReceiverGateway,
+  type BrowserGatewayRuntime,
+} from './browser-gateway'
+export {
+  browserOutputChoices,
+  prepareBrowserOutput,
+  type BrowserOutputPreparer,
+  type BrowserOutputRuntime,
+  type PreparedBrowserOutput,
+} from './browser-output'
+export {
+  browserNavigation,
+  consumeLocationCapability,
+  type CapabilityParser,
+  type InitialCapability,
+  type NavigationPort,
+} from './capability-source'
+export { createReceiverController, ReceiverController } from './controller'
+export { ReceiverApp } from './ReceiverApp'
+export {
+  EntrySelectionModel,
+  ReceiverPublicError,
+  emptyProgress,
+  type JoinedShare,
+  type OutputChoice,
+  type OutputChoiceId,
+  type ReceiverGateway,
+  type ReceiverPhase,
+  type ReceiverPublicErrorCode,
+  type ReceiverSnapshot,
+  type ReceiverTransferObserver,
+  type SelectionRow,
+  type TransferProgress,
+} from './model'

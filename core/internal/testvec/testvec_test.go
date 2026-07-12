@@ -2,9 +2,10 @@ package testvec
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -43,14 +44,15 @@ func TestLoadEnvelopeSample(t *testing.T) {
 
 func TestLoadRejectsBadEnvelope(t *testing.T) {
 	cases := []struct {
-		name    string
-		content string
-		wantErr string
+		name       string
+		content    string
+		wantErr    error
+		wantSyntax bool
 	}{
-		{"未知信封版本", `{"version": 99, "kind": "x", "cases": []}`, "信封版本"},
-		{"缺少 kind", `{"version": 1, "cases": []}`, "缺少 kind"},
-		{"用例缺少 name", `{"version": 1, "kind": "x", "cases": [{"foo": 1}]}`, "缺少 name"},
-		{"非法 JSON", `{`, "解析向量文件"},
+		{"unknown envelope version", `{"version": 99, "kind": "x", "cases": []}`, ErrUnsupportedEnvelopeVersion, false},
+		{"missing kind", `{"version": 1, "cases": []}`, ErrMissingKind, false},
+		{"case missing name", `{"version": 1, "kind": "x", "cases": [{"foo": 1}]}`, ErrMissingCaseName, false},
+		{"invalid JSON", `{`, nil, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,15 +61,20 @@ func TestLoadRejectsBadEnvelope(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err := Load(path)
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("Load err = %v, want含 %q", err, tc.wantErr)
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Load err = %v, want errors.Is %v", err, tc.wantErr)
+			}
+			if tc.wantSyntax {
+				if _, ok := errors.AsType[*json.SyntaxError](err); !ok {
+					t.Fatalf("Load err = %v, want *json.SyntaxError", err)
+				}
 			}
 		})
 	}
 }
 
 func TestLoadMissingFile(t *testing.T) {
-	if _, err := Load(filepath.Join(t.TempDir(), "不存在.json")); err == nil {
-		t.Fatal("Load 对不存在的文件应报错")
+	if _, err := Load(filepath.Join(t.TempDir(), "missing.json")); err == nil {
+		t.Fatal("Load should fail for a nonexistent file")
 	}
 }

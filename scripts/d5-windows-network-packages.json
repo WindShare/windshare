@@ -1,0 +1,10 @@
+[
+  { "Name": "webrtc", "Path": "./transport/webrtc" },
+  { "Name": "relay", "Path": "./transport/relay" },
+  { "Name": "connectivity", "Path": "./connectivity" },
+  { "Name": "cli", "Path": "./cmd/windshare/internal/cli" },
+  { "Name": "e2e", "Path": "./e2e" },
+  { "Name": "relay-httpapi", "Path": "./relay/httpapi" },
+  { "Name": "relay-signaling", "Path": "./relay/signaling" },
+  { "Name": "wsrelay", "Path": "./relay/cmd/wsrelay" }
+]

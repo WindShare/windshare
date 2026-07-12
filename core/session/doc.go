@@ -2,7 +2,8 @@
 //
 // FrameChannel/BlockStore/Sink 接口在此消费侧定义,transport/*(根模块)与
 // osfs 在外层实现;调度器独占块协议(请求队列/在途/超时/重排/源评分/
-// 有序交付/热切换),传输层只搬帧。数据面帧(REQUEST/BLOCK/ERROR,定长
+// 有序交付/热切换),传输层只搬帧并以 SendTerminal 保证终局帧先于关闭。
+// 数据面帧(REQUEST/BLOCK/ERROR,定长
 // 小端二进制)的编解码与 MaxFrameSize 等线常量同归此包,Go↔TS 以金标向量
 // 逐字节对拍。
 package session

@@ -1,6 +1,13 @@
-// Package share 是纯加密门面(执行计划 §6.6):Sharer/Receiver 组合
-// link/layout/chunk/manifest,把全部 IO 以 FileSource/FileSink 接口注入,
-// 自身无网络/磁盘副作用。Options 可注入固定 readSecret 与随机源——随机
-// nonce 时代金标向量确定性的命脉(附录 B11)。密钥派生在此接线
-// (core/internal/keyderiv)。
+// Package share composes authenticated manifests, packed-stream geometry, and
+// injected file IO into sender and receiver facades. Options can inject the read secret
+// and random source that make nonce-bearing vectors deterministic; key derivation is
+// wired here through core/internal/keyderiv.
+//
+// A Receiver is inert until Plan compiles selection exactly once. TransferPlan then
+// owns canonical selected entries, compact chunk demand, selected bytes, deterministic
+// PlanID, selective block materialization, have-state, and finalization. Boundary chunks
+// may be downloaded in full, but their unselected sibling ranges never reach FileSink.
+//
+// Sharer.BlockStore/Sealer and TransferPlan.Sink plus Receiver.Opener expose narrow
+// session dependencies without importing any transport implementation.
 package share

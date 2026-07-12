@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "kind": "keyderiv",
+  "description": "HKDF-SHA256 密钥树 KAT(§6.3):manifestKey = HKDF(ikm=readSecret, salt=空, info='windshare/v1 manifest', L=32);streamKey 同法 info='windshare/v1 stream';segKey = HKDF(ikm=streamKey, salt=空, info='windshare/v1 seg'‖u32_be(seg), L=32)。label 为精确 ASCII 字面字节、无结尾 NUL。二进制字段一律 base64(标准字母表、含填充)。",
+  "cases": [
+    {
+      "name": "secret-00-0f",
+      "readSecretB64": "AAECAwQFBgcICQoLDA0ODw==",
+      "manifestKeyB64": "SgTq+qQO6emT3CVOPdsc0edeFnuWRcZxpV+Lco9fhCw=",
+      "streamKeyB64": "KsCu3N3WwUPJvC5QOkNBDYT4ZlAx3qgHIcUMUCLwrf4=",
+      "segKeys": [
+        {
+          "seg": 0,
+          "keyB64": "2nKPDR5mZRuxyUt12M7oJV4ekmMSXYQ2bXO2ylHaGmE="
+        },
+        {
+          "seg": 1,
+          "keyB64": "sAj/UHK/0LI9BUA0tjAAnGAFTqnmjyx5yTBmSsPLkWI="
+        },
+        {
+          "seg": 256,
+          "keyB64": "7HCLWA7ti9HtVJOVZc1x2y8I9Ynw4tvy88Rz7TyYPIg="
+        },
+        {
+          "seg": 4294967295,
+          "keyB64": "ituwUkpCA+wgpYLvBBmu69H6rQtc1da/Dd1afaUjhPU="
+        }
+      ]
+    },
+    {
+      "name": "secret-ff",
+      "readSecretB64": "/////////////////////w==",
+      "manifestKeyB64": "ylcopOfV4uUAKJYPtwHnzp4rr2fhIiPVOhE4Q+xmjTE=",
+      "streamKeyB64": "NqlZl8rGhJMOPD1sJWWwFF9qiemcfNo6rFhzuB+fa60=",
+      "segKeys": [
+        {
+          "seg": 0,
+          "keyB64": "QORdbB3kpiLhIDBAk0xkGTNL0LYgrFdsm2Q0BNDKyHU="
+        }
+      ]
+    }
+  ]
+}

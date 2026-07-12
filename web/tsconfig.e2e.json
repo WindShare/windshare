@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.e2e.tsbuildinfo",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "@playwright/test"],
+    "module": "esnext",
+    "moduleResolution": "bundler"
+  },
+  "include": [
+    "test/browser/**/*.spec.ts",
+    "e2e/**/*.spec.ts",
+    "e2e/**/*.probe.ts",
+    "e2e/**/*.config.ts"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "terminalIntent": "terminal-intent",
+  "terminalFrame": "binary-message-without-prefix",
+  "terminalAck": "terminal-ack",
+  "sequence": [
+    "terminal-intent",
+    "binary-message-without-prefix",
+    "terminal-ack"
+  ]
+}

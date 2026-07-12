@@ -1,6 +1,13 @@
-# CI(执行计划 T0.2):两个 Go 模块分别 vet + test + 覆盖率门禁(≥70%,
-# 按模块分别计,§7),web 侧 install + build + vitest,外加 GOWORK=off
-# 构建校验守双模块发版不变量(§6.2)。
+# CI parity with the local validation contract (docs/.orchestration/work-plan.md §10).
+# Every job mirrors a local gate command; the exact command-to-job mapping is
+# recorded in docs/.orchestration/E1.md. Both Go modules are validated
+# independently (`./...` does not cross the nested core/ module boundary), each
+# with vet, build, race tests, and a >=70% per-module coverage gate. Ubuntu jobs
+# natively provide the GOOS=linux compile/type-check path of §10.2; the
+# windows-network job provides the Windows side through the frozen D5 fixed-path
+# runner. OS-network test cases are gated at shared constructors
+# (internal/testnetwork): open on Linux, skip on Windows outside the runner, so
+# no ordinary job can hang on them.
 name: CI
 
 on:
@@ -11,8 +18,82 @@ env:
   COVERAGE_THRESHOLD: "70"
 
 jobs:
+  hygiene:
+    name: Hygiene (gofmt, whitespace, gopls)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - name: gofmt over tracked Go files
+        run: |
+          unformatted="$(git ls-files -z -- '*.go' | xargs -0 gofmt -l)"
+          if [ -n "$unformatted" ]; then
+            echo "files need gofmt:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+      # Local §10.1 runs `git diff --check` against the dirty worktree; on a
+      # clean checkout the equivalent is diffing the committed tree against the
+      # empty tree so every tracked file is inspected.
+      - name: whitespace errors over the committed tree
+        run: git diff --check "$(git hash-object -t tree /dev/null)"
+      - name: gopls check (severity=hint, tracked files)
+        run: |
+          go install golang.org/x/tools/gopls@v0.22.0
+          gopls_bin="$(go env GOPATH)/bin/gopls"
+          set -o pipefail
+          git ls-files -z -- '*.go' | xargs -0 "$gopls_bin" check -severity=hint | tee gopls-diagnostics.txt
+          if [ -s gopls-diagnostics.txt ]; then
+            echo "gopls reported diagnostics" >&2
+            exit 1
+          fi
+
+  sloc:
+    name: SLOC guard
+    runs-on: ubuntu-latest
+    env:
+      # Pinned to the version used by the local gate.
+      SLOC_GUARD_VERSION: v0.4.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: install sloc-guard
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/sloc-guard.tar.gz" \
+            "https://github.com/doraemonkeys/sloc-guard/releases/download/${SLOC_GUARD_VERSION}/sloc-guard-${SLOC_GUARD_VERSION}-linux-x64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/sloc-guard"
+          tar -xzf "$RUNNER_TEMP/sloc-guard.tar.gz" -C "$RUNNER_TEMP/sloc-guard"
+          binary="$(find "$RUNNER_TEMP/sloc-guard" -type f -name sloc-guard | head -n 1)"
+          if [ -z "$binary" ]; then
+            echo "sloc-guard binary not found in the release archive" >&2
+            exit 1
+          fi
+          sudo install -m 0755 "$binary" /usr/local/bin/sloc-guard
+      - name: sloc-guard check
+        run: sloc-guard check
+
+  go-root:
+    name: Go root module (vet, build, race, coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
+      - name: go test -race
+        run: go test -race -count=1 ./...
+      - name: go test with coverage
+        run: go test -count=1 ./... -covermode=atomic -coverprofile=cover.out
+      - name: coverage gate (>=70% per module)
+        run: bash .github/scripts/coverage-gate.sh cover.out "$COVERAGE_THRESHOLD"
+
   go-core:
-    name: Go core 模块
+    name: Go core module (vet, build, race, coverage)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -26,40 +107,44 @@ jobs:
         run: go vet ./...
       - name: go build
         run: go build ./...
-      - name: go test(含覆盖率)
-        run: go test ./... -covermode=atomic -coverprofile=cover.out
-      - name: 覆盖率门禁
+      - name: go test -race
+        run: go test -race -count=1 ./...
+      - name: go test with coverage
+        run: go test -count=1 ./... -covermode=atomic -coverprofile=cover.out
+      - name: coverage gate (>=70% per module)
         run: bash ../.github/scripts/coverage-gate.sh cover.out "$COVERAGE_THRESHOLD"
 
-  go-root:
-    name: Go 根模块
+  golden-vectors:
+    name: Golden-vector idempotence
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.work
-      # ./... 不跨嵌套模块边界(core/ 是独立模块),故本 job 天然只覆盖根模块,
-      # 覆盖率按模块分别计(§7)。
-      - name: go vet
-        run: go vet ./...
-      - name: go build
-        run: go build ./...
-      - name: go test(含覆盖率)
-        run: go test ./... -covermode=atomic -coverprofile=cover.out
-      - name: 覆盖率门禁
+      # Mirrors §10.3: regenerate every vector family twice; the regenerations
+      # must be byte-identical and must match the committed files exactly.
+      - name: regenerate twice and compare hashes
         run: |
-          # 模块暂无任何测试文件时 go test 可能不落 profile,补空 profile 走空集判定
-          [ -f cover.out ] || echo "mode: atomic" > cover.out
-          bash .github/scripts/coverage-gate.sh cover.out "$COVERAGE_THRESHOLD"
+          go -C core test -count=1 ./share -update
+          go test -count=1 ./relay/protocol -update
+          sha256sum testvectors/*.json | sort > "$RUNNER_TEMP/vectors-first.sha256"
+          go -C core test -count=1 ./share -update
+          go test -count=1 ./relay/protocol -update
+          sha256sum testvectors/*.json | sort > "$RUNNER_TEMP/vectors-second.sha256"
+          diff "$RUNNER_TEMP/vectors-first.sha256" "$RUNNER_TEMP/vectors-second.sha256"
+      - name: committed vectors match regeneration
+        run: |
+          status="$(git -c core.quotepath=false status --short -- testvectors)"
+          if [ -n "$status" ]; then
+            echo "regenerated vectors differ from committed testvectors/:" >&2
+            echo "$status" >&2
+            exit 1
+          fi
 
-  gowork-off:
-    name: GOWORK=off 构建校验(发版不变量,§6.2)
+  gowork-off-core:
+    name: GOWORK=off core build (release invariant, hard gate)
     runs-on: ubuntu-latest
-    # core 尚未发布(无 tag、无真实 pseudo-version),GOWORK=off 下根模块一旦
-    # import core 便无法解析 require——首次 push 并以真实 pseudo-version 填
-    # require 后,删除 continue-on-error 使之成为硬门禁。
-    continue-on-error: true
     env:
       GOWORK: "off"
     steps:
@@ -67,21 +152,50 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.work
-      - name: 根模块 GOWORK=off 构建
-        run: go build ./...
-      - name: core 模块 GOWORK=off 构建
+      # Hard gate: the core module must always build without the workspace. It
+      # runs as its own job so the expected root G-EXT failure can never skip
+      # or soften this validation.
+      - name: core module GOWORK=off build
         run: go build ./...
         working-directory: core
 
+  gowork-off-root:
+    name: GOWORK=off root build (G-EXT, temporarily soft)
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      # G-EXT (work-plan §1): core has never been published, so the root
+      # module's placeholder pseudo-version require cannot resolve while the
+      # workspace is off. Only this single step is soft. After the first
+      # core/vX.Y.Z publication, remove `continue-on-error` so the root
+      # release invariant becomes a required hard gate.
+      - name: root module GOWORK=off build (soft until G-EXT resolves)
+        id: root-gowork-off
+        run: go build ./...
+        continue-on-error: true
+      - name: report G-EXT publication status
+        run: |
+          if [ "${{ steps.root-gowork-off.outcome }}" = "success" ]; then
+            echo "Root GOWORK=off build passed: G-EXT appears resolved. Remove continue-on-error from the previous step and make it required."
+          else
+            echo "Root GOWORK=off build failed as documented by G-EXT (core is not yet published). Expected until the first core publication."
+          fi
+
   web:
-    name: Web(Vite + React + TS)
+    name: Web (frozen install, lint, typecheck, build, vitest)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
-      # 包管理器一律 pnpm(项目约束);版本取 web/package.json 的 packageManager 字段
+      # pnpm only (project constraint); the version comes from the
+      # packageManager field in web/package.json.
       - uses: pnpm/action-setup@v4
         with:
           package_json_file: web/package.json
@@ -90,9 +204,96 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
-      - name: install
+      - name: install (frozen lockfile)
         run: pnpm install --frozen-lockfile
+      - name: lint
+        run: pnpm lint
+      - name: forced typecheck
+        run: pnpm exec tsc -b --force
       - name: build
         run: pnpm build
-      - name: vitest
-        run: pnpm vitest run
+      - name: vitest (consumes all golden-vector families)
+        run: pnpm test
+
+  web-playwright:
+    name: Web Playwright (M1b + M1c real browser)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The Playwright harness builds the windshare/wsrelay/hostile-sender
+      # child binaries itself via `go build` (web/e2e/fixtures/process.ts), so
+      # this job needs the Go toolchain as well.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: install (frozen lockfile)
+        run: pnpm -C web install --frozen-lockfile
+      - name: install Chromium
+        run: pnpm -C web exec playwright install --with-deps chromium
+      # web/playwright.config.ts hard-rejects a direct invocation only on
+      # Windows, where the sanctioned path is the frozen D5 runner in
+      # BrowserTests mode. On Linux the direct command below is the sanctioned
+      # §10.4 invocation, so CI runs the full M1b+M1c scenario suite here
+      # against real wsrelay/windshare/Chromium.
+      # Playwright traces/screenshots are deliberately not uploaded as
+      # artifacts: failure traces of capability-driving specs can contain the
+      # capability URL including the key fragment.
+      - name: Playwright M1b+M1c suite
+        run: pnpm -C web exec playwright test
+      # The D1/D2 WebRTC interop specs live outside the main scenario gate and
+      # run only through this dedicated config (forward-routed by R-C-e2e.md).
+      # The config starts its own Vite server and the Go Pion helper server.
+      - name: Playwright D1/D2 WebRTC interop suite
+        run: pnpm -C web exec playwright test --config test/transport/webrtc/browser.playwright.config.ts
+
+  windows-network:
+    name: Windows fixed-path network verification
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      # Windows-tagged files are otherwise only compiled, never vet-analyzed:
+      # ubuntu jobs vet GOOS=linux and the test steps below do not run vet
+      # (E1-review.md finding LOW-1).
+      - name: go vet (root, GOOS=windows)
+        run: go vet ./...
+      - name: go vet (core, GOOS=windows)
+        run: go vet ./...
+        working-directory: core
+      - name: firewall audit policy regression
+        shell: pwsh
+        run: ./scripts/d5-windows-firewall-audit.tests.ps1
+      - name: immutable evidence policy regression
+        shell: pwsh
+        run: ./scripts/d5-evidence.tests.ps1
+      - name: Windows network classification regression
+        shell: pwsh
+        run: ./scripts/d5-windows-network-policy.tests.ps1
+      - name: Windows stable-identity lease regression
+        shell: pwsh
+        run: ./scripts/d5-windows-stable-e2e-lease.tests.ps1
+      - name: Windows runner capability-boundary regression
+        shell: pwsh
+        run: ./scripts/d5-windows-capability.tests.ps1
+      # Random go-build identities skip OS-network cases at the shared
+      # socket/process constructors, so ordinary Windows tests cannot hang on
+      # them. The fixed runner then executes every classified package test
+      # under -race and accepts only the exact preflight semantics.
+      - name: ordinary Windows tests (OS-network cases gated)
+        shell: pwsh
+        run: ./scripts/d5-windows-performance.ps1 -Mode OrdinaryTests -Race
+      - name: core Windows race tests
+        run: go -C core test -race -count=1 ./...
+      - name: fixed-path full real-network suite
+        shell: pwsh
+        run: ./scripts/d5-windows-performance.ps1 -Mode NetworkTests

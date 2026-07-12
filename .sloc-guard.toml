@@ -1,0 +1,107 @@
+# sloc-guard configuration file
+# See: https://github.com/doraemonkeys/sloc-guard for documentation
+version = "2"
+
+# Optional: inherit from presets or remote configs
+# extends = "preset:rust-strict"
+# extends = "https://example.com/shared-config.toml"
+
+# =============================================================================
+# Scanner: How to discover files
+# =============================================================================
+[scanner]
+gitignore = true                          # Respect .gitignore (default: true)
+exclude = [".git/**", "**/node_modules/**", "**/dist/**", "trash/**"]
+
+# =============================================================================
+# Content: SLOC (Source Lines of Code) limits
+# =============================================================================
+[content]
+# File types to analyze (Go backend + React/TS web frontend)
+extensions = ["go", "ts", "tsx", "js", "jsx"]
+max_lines = 600                           # Default max lines per file (Go and other sources)
+warn_threshold = 0.9                      # Warn at 90% of limit
+skip_comments = true                      # Don't count comment lines
+skip_blank = true                         # Don't count blank lines
+
+# Content Rules: Override limits for specific paths (last match wins)
+[[content.rules]]
+pattern = "**/*.tsx"
+max_lines = 800
+reason = "React components carry JSX markup overhead"
+
+[[content.rules]]
+pattern = "**/*_test.go"
+max_lines = 1100
+reason = "Go tests need room for table-driven cases and fixtures"
+
+[[content.rules]]
+pattern = "**/*.test.ts"
+max_lines = 1200
+reason = "Web tests need room for fixtures and golden vectors"
+
+[[content.rules]]
+pattern = "**/*.test.tsx"
+max_lines = 1200
+reason = "Web tests need room for fixtures and golden vectors"
+
+[[content.rules]]
+pattern = "web/test/**"
+max_lines = 1200
+reason = "Shared test fixtures and golden vectors"
+
+# =============================================================================
+# Structure: Directory organization limits
+# =============================================================================
+# No global max_files/max_dirs: structure limits apply only where the rules
+# below match, so docs/testvectors/etc. stay unconstrained (allowlist model).
+[structure]
+warn_threshold = 0.8                      # Warn at 80% of limits (inherited by rules)
+
+# Go module roots (exact-match globs don't cover the root dir via "/**")
+[[structure.rules]]
+scope = "{cmd,core,relay,transport,webrtc}"
+max_files = 20
+max_dirs = 20
+reason = "Go source: keep packages small and flat"
+
+[[structure.rules]]
+scope = "{cmd,core,relay,transport,webrtc}/**"
+max_files = 20
+max_dirs = 20
+reason = "Go source: keep packages small and flat"
+
+[[structure.rules]]
+scope = "web/{src,test}"
+max_files = 30
+max_dirs = 20
+reason = "Web source: keep component tree small and flat"
+
+[[structure.rules]]
+scope = "web/{src,test}/**"
+max_files = 30
+max_dirs = 20
+reason = "Web source: keep component tree small and flat"
+
+# =============================================================================
+# Baseline: Grandfather existing violations
+# =============================================================================
+[baseline]
+# ratchet = "warn"                        # warn|auto|strict - enforce violations can only decrease
+
+# =============================================================================
+# Trend: History tracking settings
+# =============================================================================
+[trend]
+max_entries = 100                         # Keep last 100 snapshots
+max_age_days = 90                         # Delete entries older than 90 days
+min_interval_secs = 3600                  # At most one entry per hour
+# min_code_delta = 10                     # Ignore changes < 10 lines
+
+# =============================================================================
+# Custom Languages: Define comment syntax for unsupported languages
+# =============================================================================
+# [languages.hcl]
+# extensions = ["tf", "hcl"]
+# single_line_comments = ["#", "//"]
+# multi_line_comments = [["/*", "*/"]]
