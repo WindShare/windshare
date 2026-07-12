@@ -39,6 +39,18 @@ TODO
 web/coverage/
 coverage_ws/
 
+# Stray coverage profiles produced by unquoted pwsh args
+# (`-coverprofile=$var` writes a literal `$var`; `-coverprofile=x.out`
+# tokenizes as `x` + `.out`). Quote the whole argument to avoid new ones.
+$*
+root-cover
+core-cover
+cover
+d4-core
+
+# Playwright/benchmark run artifacts
+test-results/
+
 # Frontend build output (keep placeholder for go:embed)
 web/dist/*
 !web/dist/PLACEHOLDER.txt
