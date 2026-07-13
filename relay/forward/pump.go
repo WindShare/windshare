@@ -101,6 +101,14 @@ var (
 )
 
 func NewPump(w Writer, opts Options) *Pump {
+	p := newPump(w, opts)
+	go p.run()
+	return p
+}
+
+// newPump builds a pump without starting its writer loop, so tests can place a
+// dequeue at an exact point relative to a concurrently parked producer.
+func newPump(w Writer, opts Options) *Pump {
 	if opts.ConnectionQueueMessages <= 0 {
 		opts.ConnectionQueueMessages = DefaultConnectionQueueMessages
 	}
@@ -117,7 +125,6 @@ func NewPump(w Writer, opts Options) *Pump {
 		done:     make(chan struct{}),
 	}
 	p.wake = sync.NewCond(&p.mu)
-	go p.run()
 	return p
 }
 
@@ -362,18 +369,27 @@ func (p *Pump) next() (item, bool) {
 		if p.closed {
 			return item{}, false
 		}
-		if len(p.connection) > 0 {
-			it := p.connection[0]
-			p.connection = p.connection[1:]
+		if it, ok := p.dequeueLocked(); ok {
 			p.writing = &it
-			return it, true
-		}
-		if it, ok := p.nextSessionLocked(); ok {
-			p.writing = &it
+			// Capacity frees at the dequeue, not when the write completes: the
+			// post-write broadcast in run fires while the queue is still full.
+			// Without this wakeup a producer parked in EnqueueForwardContext that
+			// re-checked between that broadcast and this dequeue would stall until
+			// the next write completes even though a slot just opened.
+			p.wake.Broadcast()
 			return it, true
 		}
 		p.wake.Wait()
 	}
+}
+
+func (p *Pump) dequeueLocked() (item, bool) {
+	if len(p.connection) > 0 {
+		it := p.connection[0]
+		p.connection = p.connection[1:]
+		return it, true
+	}
+	return p.nextSessionLocked()
 }
 
 func (p *Pump) nextSessionLocked() (item, bool) {

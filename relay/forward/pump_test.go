@@ -499,6 +499,121 @@ func TestEnqueueForwardContextBackpressureAndCancellation(t *testing.T) {
 	w.finish()
 }
 
+// errProbeContext 上报 EnqueueForwardContext 每次 Err 检查。producer 从该检查
+// 起持有 p.mu,直到 Cond.Wait 完成登记并释放锁;因此测试观察到一次检查后再拿到
+// p.mu,即证明 producer 已挂起在 p.wake 上且没有在途唤醒。
+type errProbeContext struct {
+	context.Context
+	checks chan struct{}
+}
+
+func (c *errProbeContext) Err() error {
+	select {
+	case c.checks <- struct{}{}:
+	default:
+	}
+	return c.Context.Err()
+}
+
+// awaitParkedProducer 阻塞至由 ctx 驱动的 producer 挂起在 p.wake 上。前提是
+// s1 队列已满且无人出队,Overflow(继而 Wait)是 producer 离开临界区的唯一
+// 路径;临界区内顺带复核该前提。
+func awaitParkedProducer(t *testing.T, p *Pump, ctx *errProbeContext) {
+	t.Helper()
+	select {
+	case <-ctx.checks:
+	case <-time.After(2 * time.Second):
+		t.Fatal("producer never reached its context check")
+	}
+	p.mu.Lock()
+	full := len(p.sessions[s1].data) >= p.opts.SessionQueueFrames
+	p.mu.Unlock()
+	if !full {
+		t.Fatal("session queue drained before the producer parked")
+	}
+}
+
+// TestEnqueueForwardContextWakesWhenDequeueFreesCapacity 钉死引发
+// TestEnqueueForwardContextBackpressureAndCancellation 偶发超时的交错:写完成
+// 后 run 的广播发生在队列仍满时,producer 被唤醒、复查仍 Overflow、再度挂起,
+// 随后 next 才出队腾出容量。容量转换只发生在出队这一刻,故必须由出队本身唤醒
+// producer——下一次写完成的广播可能任意远(测试写者被门控时则永不到来)。
+func TestEnqueueForwardContextWakesWhenDequeueFreesCapacity(t *testing.T) {
+	p := newPump(nil, Options{SessionQueueFrames: 1})
+	defer p.Close()
+	p.OpenSession(s1)
+	if got := p.EnqueueForward(s1, []byte("full")); got != Enqueued {
+		t.Fatalf("fill enqueue = %v", got)
+	}
+
+	ctx := &errProbeContext{Context: context.Background(), checks: make(chan struct{}, 1)}
+	result := make(chan EnqueueResult, 1)
+	go func() { result <- p.EnqueueForwardContext(ctx, s1, []byte("resume")) }()
+	awaitParkedProducer(t, p, ctx)
+
+	if it, ok := p.next(); !ok || string(it.data) != "full" {
+		t.Fatalf("dequeue = %q/%v", it.data, ok)
+	}
+	select {
+	case got := <-result:
+		if got != Enqueued {
+			t.Fatalf("parked producer resumed with %v, want Enqueued", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("dequeue freed a slot but never woke the parked producer")
+	}
+}
+
+// 互补交错:出队先于 producer 到达,producer 必须直接看到空位立即返回,
+// 不依赖任何唤醒。
+func TestEnqueueForwardContextSeesCapacityWithoutWakeup(t *testing.T) {
+	p := newPump(nil, Options{SessionQueueFrames: 1})
+	defer p.Close()
+	p.OpenSession(s1)
+	if got := p.EnqueueForward(s1, []byte("full")); got != Enqueued {
+		t.Fatalf("fill enqueue = %v", got)
+	}
+	if it, ok := p.next(); !ok || string(it.data) != "full" {
+		t.Fatalf("dequeue = %q/%v", it.data, ok)
+	}
+	if got := p.EnqueueForwardContext(context.Background(), s1, []byte("after")); got != Enqueued {
+		t.Fatalf("enqueue after dequeue = %v, want Enqueued", got)
+	}
+}
+
+// 挂起中的 producer 必须能被取消唤醒(AfterFunc 广播边),且取消不得入队。
+func TestEnqueueForwardContextCancelWakesParkedProducer(t *testing.T) {
+	p := newPump(nil, Options{SessionQueueFrames: 1})
+	defer p.Close()
+	p.OpenSession(s1)
+	if got := p.EnqueueForward(s1, []byte("full")); got != Enqueued {
+		t.Fatalf("fill enqueue = %v", got)
+	}
+
+	cancellable, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &errProbeContext{Context: cancellable, checks: make(chan struct{}, 1)}
+	result := make(chan EnqueueResult, 1)
+	go func() { result <- p.EnqueueForwardContext(ctx, s1, []byte("never")) }()
+	awaitParkedProducer(t, p, ctx)
+
+	cancel()
+	select {
+	case got := <-result:
+		if got != ContextDone {
+			t.Fatalf("canceled parked producer = %v, want ContextDone", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancellation never woke the parked producer")
+	}
+	p.mu.Lock()
+	if n := len(p.sessions[s1].data); n != 1 {
+		p.mu.Unlock()
+		t.Fatalf("queue length after canceled enqueue = %d, want 1", n)
+	}
+	p.mu.Unlock()
+}
+
 func TestSessionControlOverflowIsIsolated(t *testing.T) {
 	w := newGatedWriter()
 	p := NewPump(w, Options{SessionControlMessages: 1})
