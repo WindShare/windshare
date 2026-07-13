@@ -1,3 +1,9 @@
+// These tests drive a deterministic whole-repo SSA static-analysis gate with
+// no concurrency of its own: race instrumentation adds ~4x runtime and zero
+// signal, so race builds skip them. The non-race coverage gates remain the
+// authoritative execution.
+//go:build !race
+
 package main
 
 import (
