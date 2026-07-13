@@ -1,0 +1,43 @@
+# go-test-coverage config for the ROOT module (github.com/windshare/windshare).
+# The core module has its own gate at core/.testcoverage.yml (total >=90).
+# https://github.com/vladopajic/go-test-coverage
+#
+# Windows dev runs read lower than CI: OS-network test cases gate-skip at the
+# shared constructors (internal/testnetwork), so network-heavy packages
+# (connectivity, relay/signaling, relay/httpapi, transport/relay,
+# cmd/windshare/internal/cli, internal/testnetwork) under-count locally.
+# The ubuntu CI run is the authoritative measurement.
+
+profile: cover.out
+local-prefix: github.com/windshare/windshare
+
+threshold:
+  # Every package must hold the floor on its own; the module total cannot
+  # subsidize an under-tested package.
+  package: 70
+  # Root module total.
+  total: 80
+  # No per-file floor.
+  file: 0
+
+# Require every coverage-ignore annotation to carry an explanatory comment:
+# ```go
+# if err != nil { // coverage-ignore
+#   return err
+# }
+# ```
+force-annotation-comment: true
+
+# Structural exclusions only: process entry points and test-support fixtures.
+# Product packages are never excluded here — a low number in a product package
+# is a finding, not a config problem.
+exclude:
+  paths:
+    # CLI entry point; all business logic lives in cmd/windshare/internal/cli.
+    - ^cmd/windshare/main\.go$
+    # wsrelay daemon entry point (flag/signal/config wiring), hard to unit test.
+    - ^relay/cmd/wsrelay/main\.go$
+    # Windows capability probe fixture for internal/testnetwork forensics; no product logic.
+    - ^scripts/internal/d5capabilityprobe/
+    # Hostile-sender E2E fixture binary (Playwright receiver-boundary oracle); no product logic.
+    - ^web/e2e/fixtures/hostile-sender/

@@ -2,7 +2,9 @@
 # Every job mirrors a local gate command; the exact command-to-job mapping is
 # recorded in docs/.orchestration/E1.md. Both Go modules are validated
 # independently (`./...` does not cross the nested core/ module boundary), each
-# with vet, build, race tests, and a >=70% per-module coverage gate. Ubuntu jobs
+# with vet, build, race tests, and a go-test-coverage gate driven by the
+# module's .testcoverage.yml (core total >=90%, root total >=80%, every
+# package >=70%; the ubuntu profile is authoritative). Ubuntu jobs
 # natively provide the GOOS=linux compile/type-check path of §10.2 and all
 # real-socket coverage; the windows-network job runs GOOS=windows vet plus both
 # modules' race tests. OS-network test cases are gated at shared constructors
@@ -16,7 +18,8 @@ on:
   pull_request:
 
 env:
-  COVERAGE_THRESHOLD: "70"
+  # Pinned coverage-gate tool; thresholds live in each module's .testcoverage.yml.
+  GO_TEST_COVERAGE: github.com/vladopajic/go-test-coverage/v2@v2.18.8
 
 jobs:
   hygiene:
@@ -77,8 +80,8 @@ jobs:
         run: go test -race -count=1 ./...
       - name: go test with coverage
         run: go test -count=1 ./... -covermode=atomic -coverprofile=cover.out
-      - name: coverage gate (>=70% per module)
-        run: bash .github/scripts/coverage-gate.sh cover.out "$COVERAGE_THRESHOLD"
+      - name: coverage gate (total >=80%, package >=70%)
+        run: go run "$GO_TEST_COVERAGE" --config=.testcoverage.yml --profile=cover.out
 
   go-core:
     name: Go core module (vet, build, race, coverage)
@@ -99,8 +102,8 @@ jobs:
         run: go test -race -count=1 ./...
       - name: go test with coverage
         run: go test -count=1 ./... -covermode=atomic -coverprofile=cover.out
-      - name: coverage gate (>=70% per module)
-        run: bash ../.github/scripts/coverage-gate.sh cover.out "$COVERAGE_THRESHOLD"
+      - name: coverage gate (total >=90%, package >=70%)
+        run: go run "$GO_TEST_COVERAGE" --config=.testcoverage.yml --profile=cover.out
 
   golden-vectors:
     name: Golden-vector idempotence

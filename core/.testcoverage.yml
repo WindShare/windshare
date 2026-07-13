@@ -1,0 +1,26 @@
+# go-test-coverage config for the CORE module (github.com/windshare/windshare/core).
+# The root module has its own gate at ../.testcoverage.yml (total >=80).
+# https://github.com/vladopajic/go-test-coverage
+#
+# core is pure (no network/disk side-effect entry points; IO is injected), so
+# local and CI numbers match and the bar is higher than the root module's.
+
+profile: cover.out
+local-prefix: github.com/windshare/windshare/core
+
+threshold:
+  # Every package must hold the floor on its own; the module total cannot
+  # subsidize an under-tested package.
+  package: 70
+  # Core module total.
+  total: 90
+  # No per-file floor.
+  file: 0
+
+# Require every coverage-ignore annotation to carry an explanatory comment:
+# ```go
+# if err != nil { // coverage-ignore
+#   return err
+# }
+# ```
+force-annotation-comment: true
