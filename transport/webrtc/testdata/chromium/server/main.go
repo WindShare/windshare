@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/pion/ice/v4"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/core/session"
 	windwebrtc "github.com/windshare/windshare/transport/webrtc"
@@ -153,6 +155,22 @@ func main() {
 	}
 }
 
+// newLoopbackOnlyPeer confines ICE to loopback addresses. The interop suite
+// is strictly localhost — the browser, the Vite server, and this helper all
+// live on 127.0.0.1 — so non-loopback host candidates add nothing, and
+// binding them makes Windows Firewall mint a per-run "Query User" rule pair
+// for the go-run temp executable, which the D5 firewall-ownership preflight
+// rejects. mDNS is disabled for the same reason: its responder binds a
+// wildcard UDP socket. Loopback-only sockets never enter the consent flow.
+// Compare benchmarkLoopbackAPI in transport/webrtc/performance_test.go.
+func newLoopbackOnlyPeer() (*pion.PeerConnection, error) {
+	var setting pion.SettingEngine
+	setting.SetIncludeLoopbackCandidate(true)
+	setting.SetIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })
+	setting.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+	return pion.NewAPI(pion.WithSettingEngine(setting)).NewPeerConnection(pion.Configuration{})
+}
+
 func newInteropServer() (*interopServer, error) {
 	scenario := os.Getenv(scenarioEnvName)
 	if scenario == "" {
@@ -172,7 +190,7 @@ func newInteropServer() (*interopServer, error) {
 	if err := json.Unmarshal(fixtureData, &fixture); err != nil {
 		return nil, fmt.Errorf("decode terminal-control fixture: %w", err)
 	}
-	peer, err := pion.NewPeerConnection(pion.Configuration{})
+	peer, err := newLoopbackOnlyPeer()
 	if err != nil {
 		return nil, fmt.Errorf("create Pion peer: %w", err)
 	}
