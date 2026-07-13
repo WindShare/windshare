@@ -18,7 +18,7 @@ $coverageRoot = Join-Path $repositoryRoot 'tmp\local-coverage'
 $goTestCoverage = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'
 
 Write-Output ('Full-suite coverage run (core + root incl. OS-network cases): ' +
-    'expect 10-20 minutes; the root sweep alone carries the ~6.5-minute d5networkpolicy package.')
+    'expect ~3 minutes warm, ~10 minutes cold (d5networkpolicy analyses run 4-way parallel).')
 
 if (Test-Path -LiteralPath $coverageRoot) {
     Remove-Item -LiteralPath $coverageRoot -Recurse -Force
