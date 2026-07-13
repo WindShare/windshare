@@ -3,3 +3,6 @@
 # D5 firewall ownership evidence pins the byte-exact SHA256 of this tracked
 # source; an autocrlf checkout (e.g. Windows CI) must not rewrite its bytes.
 scripts/d5-windows-network-packages.json text eol=lf
+# Golden vectors are byte-compared against LF regenerations (core/share and
+# relay/protocol -update suites); an autocrlf checkout must not rewrite them.
+testvectors/*.json text eol=lf
