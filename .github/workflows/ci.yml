@@ -20,6 +20,9 @@ on:
 env:
   # Pinned coverage-gate tool; thresholds live in each module's .testcoverage.yml.
   GO_TEST_COVERAGE: github.com/vladopajic/go-test-coverage/v2@v2.18.8
+  # Pinned lint tool; the ruleset lives in .golangci.yml at the repo root.
+  # scripts/ci/lint.{ps1,sh} carry the same pin — bump them together.
+  GOLANGCI_LINT: github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 
 jobs:
   hygiene:
@@ -63,6 +66,23 @@ jobs:
         # Tracks the latest sloc-guard release so new gate features (e.g. rule
         # additions the config relies on) apply without a CI bump.
         uses: doraemonkeys/sloc-guard/.github/action@master
+
+  lint:
+    name: Lint (golangci-lint, both modules)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      # Executed via the pinned `go run` module string (the GO_TEST_COVERAGE
+      # precedent) so this job and scripts/ci/lint.{ps1,sh} run the identical
+      # linter build; one root .golangci.yml governs both modules.
+      - name: golangci-lint (root)
+        run: go run "$GOLANGCI_LINT" run ./...
+      - name: golangci-lint (core)
+        run: go run "$GOLANGCI_LINT" run ./...
+        working-directory: core
 
   go-root:
     name: Go root module (vet, build, race, coverage)
