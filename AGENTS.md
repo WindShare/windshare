@@ -22,6 +22,7 @@
 
 ### check
 
+ci: make ci
 GOPLS_CHECK: git ls-files -z '*.go' | xargs -0 gopls check -severity=hint
 sloc: sloc-guard.exe check
 web: pnpm -C web lint && pnpm -C web exec tsc -b
