@@ -72,5 +72,8 @@ review_agent.md
 /.webrtc/
 .orchestration
 
+# 产品愿景原始需求:仅本地,不入库(2026-07-13 起,历史已改写清除)
+docs/原始需求.md
+
 # Node
 node_modules/
