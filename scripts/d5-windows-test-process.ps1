@@ -431,10 +431,7 @@ function Invoke-D5BoundNonNetworkProcess(
         }
         $started = $true
         $childPID = $process.Id
-        $actualPath = [IO.Path]::GetFullPath($process.MainModule.FileName)
-        if (-not $actualPath.Equals($program.Path, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "$Context PID $childPID executable $actualPath does not match $($program.Path)"
-        }
+        Assert-D5ProcessImagePath $process $program.Path $Context
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
         $process.WaitForExit()
@@ -557,23 +554,7 @@ function Invoke-D5NetworkAuthorizedTestProcess(
             throw "Could not start network-authorized executable $Executable"
         }
         $started = $true
-        $expectedPath = [IO.Path]::GetFullPath($Executable)
-        $actualPath = $expectedPath
-        try {
-            if (-not $process.HasExited) {
-                $mainModule = $process.MainModule
-                if ($null -ne $mainModule) {
-                    $actualPath = [IO.Path]::GetFullPath($mainModule.FileName)
-                }
-            }
-        } catch {
-            if (-not $process.HasExited) {
-                throw
-            }
-        }
-        if (-not $actualPath.Equals($expectedPath, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Network-capable PID $($process.Id) executable $actualPath does not match $expectedPath"
-        }
+        Assert-D5ProcessImagePath $process $Executable 'Network-capable'
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
         $authorizationConsumed = if ($AllowUnusedAuthorization) {
@@ -597,7 +578,7 @@ function Invoke-D5NetworkAuthorizedTestProcess(
                 Disposition = if ($authorizationConsumed) { 'Consumed' } else { 'UnusedNoGate' }
                 ParentPID = $PID
                 ChildPID = $process.Id
-                Executable = $actualPath
+                Executable = [IO.Path]::GetFullPath($Executable)
                 Arguments = @($Arguments)
                 SHA256 = $program.SHA256
             }

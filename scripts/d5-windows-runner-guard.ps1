@@ -21,6 +21,89 @@ public static class D5NamedPipeIdentity
 '@
 }
 
+if ($null -eq ('D5ProcessIdentity' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class D5ProcessIdentity
+{
+    public const uint ProcessNameNative = 1;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool QueryFullProcessImageNameW(
+        IntPtr process,
+        uint flags,
+        StringBuilder exeName,
+        ref uint size
+    );
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern uint QueryDosDeviceW(
+        string deviceName,
+        StringBuilder targetPath,
+        uint capacity
+    );
+}
+'@
+}
+
+function Get-D5ProcessNativeImagePath([Parameter(Mandatory)] [Diagnostics.Process]$Process) {
+    # Process.MainModule (and the Win32-format image query) stop answering the
+    # moment a child exits, a race fast short-lived probes lose. The NT-native
+    # image name is served from the kernel process object, which the
+    # parent-held handle keeps alive even after exit.
+    $capacity = [uint32]32768
+    $builder = [Text.StringBuilder]::new([int]$capacity)
+    if (-not [D5ProcessIdentity]::QueryFullProcessImageNameW(
+            $Process.Handle,
+            [D5ProcessIdentity]::ProcessNameNative,
+            $builder,
+            [ref]$capacity
+        )) {
+        throw ("Could not resolve the executable image path of PID $($Process.Id): " +
+            [Runtime.InteropServices.Marshal]::GetLastWin32Error())
+    }
+    return $builder.ToString(0, [int]$capacity)
+}
+
+function ConvertTo-D5NativeImagePath([Parameter(Mandatory)] [string]$Path) {
+    # Identity is compared in NT-native form: drive letter to volume device is
+    # a function, while the reverse mapping can be ambiguous.
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $root = [IO.Path]::GetPathRoot($fullPath)
+    if ($root -notmatch '^[A-Za-z]:\\$') {
+        throw "Executable identity requires a drive-rooted path: $fullPath"
+    }
+    $capacity = [uint32]32768
+    $builder = [Text.StringBuilder]::new([int]$capacity)
+    if ([D5ProcessIdentity]::QueryDosDeviceW(
+            $fullPath.Substring(0, 2),
+            $builder,
+            $capacity
+        ) -eq 0) {
+        throw ("Could not resolve the volume device of $($fullPath.Substring(0, 2)): " +
+            [Runtime.InteropServices.Marshal]::GetLastWin32Error())
+    }
+    # QueryDosDevice yields a MULTI_SZ; StringBuilder marshaling stops at the
+    # first terminator, which is the current mapping.
+    return $builder.ToString() + $fullPath.Substring(2)
+}
+
+function Assert-D5ProcessImagePath(
+    [Parameter(Mandatory)] [Diagnostics.Process]$Process,
+    [Parameter(Mandatory)] [string]$ExpectedPath,
+    [Parameter(Mandatory)] [string]$Context
+) {
+    $expected = ConvertTo-D5NativeImagePath $ExpectedPath
+    $actual = Get-D5ProcessNativeImagePath $Process
+    if (-not $actual.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Context PID $($Process.Id) executable $actual does not match $expected"
+    }
+}
+
 function New-D5RunnerGuard {
     $name = "windshare-d5-$PID-$([guid]::NewGuid().ToString('N'))"
     $servers = [Collections.Generic.List[IO.Pipes.NamedPipeServerStream]]::new()
@@ -153,10 +236,11 @@ function Complete-D5LaunchAuthorization(
         throw "Launch authorization client PID $clientPID does not match parent-started PID $($Process.Id)"
     }
     $expectedPath = [IO.Path]::GetFullPath($ExpectedExecutable)
-    $actualPath = [IO.Path]::GetFullPath($Process.MainModule.FileName)
-    if (-not $actualPath.Equals($expectedPath, [StringComparison]::OrdinalIgnoreCase)) {
+    try {
+        Assert-D5ProcessImagePath $Process $expectedPath 'Parent-started'
+    } catch {
         $Authorization.State = 'Rejected'
-        throw "Parent-started PID $($Process.Id) executable $actualPath does not match $expectedPath"
+        throw
     }
     $program = Get-D5LaunchProgram $Authorization $expectedPath
     $item = Get-Item -LiteralPath $expectedPath
