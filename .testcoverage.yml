@@ -39,5 +39,10 @@ exclude:
     - ^relay/cmd/wsrelay/main\.go$
     # Windows capability probe fixture for internal/testnetwork forensics; no product logic.
     - ^scripts/internal/d5capabilityprobe/
+    # Test-support package (OS-network gating constructors + D5 capability
+    # probes, 15 statements): imported only by _test files and the D5 fixture;
+    # its Windows half executes only under the local D5 runner, so no single
+    # platform can cover it. First authoritative ubuntu run: 33.3%.
+    - ^internal/testnetwork/
     # Hostile-sender E2E fixture binary (Playwright receiver-boundary oracle); no product logic.
     - ^web/e2e/fixtures/hostile-sender/
