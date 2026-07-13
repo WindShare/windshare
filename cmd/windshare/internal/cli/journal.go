@@ -138,7 +138,7 @@ func (j *resumeJournal) Bind(plan *share.TransferPlan) error {
 			}
 		}
 		if err := target.Restore(j.have); err != nil {
-			return fmt.Errorf("%w: restore have state: %v", errJournalCorrupt, err)
+			return fmt.Errorf("%w: restore have state: %w", errJournalCorrupt, err)
 		}
 	}
 	j.planID = plan.PlanID()
@@ -341,7 +341,7 @@ func readJournal(path string) (journalState, error) {
 	}
 	state, err := decodeJournal(data)
 	if err != nil {
-		return journalState{}, fmt.Errorf("%w: %q: %v", errJournalCorrupt, path, err)
+		return journalState{}, fmt.Errorf("%w: %q: %w", errJournalCorrupt, path, err)
 	}
 	return state, nil
 }
@@ -373,7 +373,7 @@ func decodeJournal(data []byte) (journalState, error) {
 		return journalState{}, fmt.Errorf("invalid have-state length %d", bitfieldLength)
 	}
 	if err := state.have.UnmarshalBinary(data[cursor : cursor+int(bitfieldLength)]); err != nil {
-		return journalState{}, fmt.Errorf("invalid have-state: %v", err)
+		return journalState{}, fmt.Errorf("invalid have-state: %w", err)
 	}
 	cursor += int(bitfieldLength)
 	if len(data)-cursor < 8 {
@@ -404,7 +404,7 @@ func decodeJournal(data []byte) (journalState, error) {
 		}
 		canonicalPath := string(pathBytes)
 		if err := manifest.ValidatePath(canonicalPath); err != nil {
-			return journalState{}, fmt.Errorf("invalid owned path %q: %v", canonicalPath, err)
+			return journalState{}, fmt.Errorf("invalid owned path %q: %w", canonicalPath, err)
 		}
 		if len(state.owned) != 0 && state.owned[len(state.owned)-1] >= canonicalPath {
 			return journalState{}, errors.New("owned paths are not strictly sorted")

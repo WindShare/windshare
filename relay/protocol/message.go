@@ -570,12 +570,15 @@ func ValidateShareID(s string) error {
 		return fmt.Errorf("protocol: shareId is too long (%d > %d)", len(s), MaxShareIDChars)
 	}
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+		if c := s[i]; !isBase64URLChar(c) {
 			return fmt.Errorf("protocol: shareId contains non-base64url character %q", c)
 		}
 	}
 	return nil
+}
+
+func isBase64URLChar(c byte) bool {
+	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_'
 }
 
 // EncodeResumeToken 把 resumeToken 原像编码为线格式(base64url 无填充)。

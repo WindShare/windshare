@@ -172,8 +172,10 @@ func (p serverPolicy) newServer(handler http.Handler, tracker *connectionTracker
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	if err := run(ctx, os.Args[1:], nil, log.Printf); err != nil && !errors.Is(err, flag.ErrHelp) {
+	err := run(ctx, os.Args[1:], nil, log.Printf)
+	// Not a defer: log.Fatal exits the process and would skip it.
+	stop()
+	if err != nil && !errors.Is(err, flag.ErrHelp) {
 		log.Fatal(err)
 	}
 }

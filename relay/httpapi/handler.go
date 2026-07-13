@@ -125,12 +125,12 @@ func NewHandler(cfg Config) http.Handler {
 	allowed, _ := normalizeOrigins(cfg.AllowedOrigins)
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, protocol.Health{Status: protocol.HealthOK})
 	})
 
 	// 版本列表让客户端在建 WS 前发现错配并明确报错(§6.7);当前仅 v1。
-	mux.HandleFunc("GET /v1/config", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v1/config", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, protocol.ServerConfig{
 			ProtocolVersions: []string{protocol.ProtocolVersion},
 			Limits:           cfg.Limits,

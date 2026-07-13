@@ -85,8 +85,8 @@ func validRelayURLSpelling(raw string) bool {
 			}
 			continue
 		}
-		if !(isASCIIAlpha(character) ||
-			character >= '0' && character <= '9' || character == '+' || character == '.' || character == '-') {
+		if !isASCIIAlphanumeric(character) &&
+			character != '+' && character != '.' && character != '-' {
 			return false
 		}
 	}
@@ -133,8 +133,8 @@ func validRawRelayUserinfo(raw string, authorityStart, authorityEnd int) bool {
 	}
 	for index := range separator {
 		character := authority[index]
-		if !(isASCIIAlpha(character) || character >= '0' && character <= '9' ||
-			strings.ContainsRune("-._~:@", rune(character))) {
+		if !isASCIIAlphanumeric(character) &&
+			!strings.ContainsRune("-._~:@", rune(character)) {
 			return false
 		}
 	}
@@ -179,8 +179,8 @@ func validRawRelayPath(raw string, authorityEnd int) bool {
 			index += 2
 			continue
 		}
-		if !(isASCIIAlpha(character) || character >= '0' && character <= '9' ||
-			strings.ContainsRune("-._~$&+,/:;=@", rune(character))) {
+		if !isASCIIAlphanumeric(character) &&
+			!strings.ContainsRune("-._~$&+,/:;=@", rune(character)) {
 			return false
 		}
 	}
@@ -189,6 +189,10 @@ func validRawRelayPath(raw string, authorityEnd int) bool {
 
 func isASCIIAlpha(character byte) bool {
 	return character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z'
+}
+
+func isASCIIAlphanumeric(character byte) bool {
+	return isASCIIAlpha(character) || character >= '0' && character <= '9'
 }
 
 // net/url emits RawQuery verbatim while WHATWG percent-encodes unsafe text.
@@ -213,8 +217,8 @@ func validRawRelayQuery(raw string) bool {
 			index += 2
 			continue
 		}
-		if !(isASCIIAlpha(character) || character >= '0' && character <= '9' ||
-			strings.ContainsRune("-._~!$&()*+,;=:@/?", rune(character))) {
+		if !isASCIIAlphanumeric(character) &&
+			!strings.ContainsRune("-._~!$&()*+,;=:@/?", rune(character)) {
 			return false
 		}
 	}
@@ -323,7 +327,7 @@ func validRelayDNSName(hostname string) bool {
 		}
 		for index := range len(label) {
 			character := label[index]
-			if !(isASCIIAlpha(character) || character >= '0' && character <= '9' || character == '-') {
+			if !isASCIIAlphanumeric(character) && character != '-' {
 				return false
 			}
 		}

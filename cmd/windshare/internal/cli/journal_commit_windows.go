@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"syscall"
@@ -37,7 +38,7 @@ func installJournal(tempPath, targetPath string) error {
 	runtime.KeepAlive(temp)
 	runtime.KeepAlive(target)
 	if result == 0 {
-		if callErr == syscall.Errno(0) {
+		if errors.Is(callErr, syscall.Errno(0)) {
 			callErr = syscall.EINVAL
 		}
 		return callErr

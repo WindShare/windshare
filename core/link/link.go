@@ -277,7 +277,7 @@ func decodeKey(s string) (suite byte, secret []byte, err error) {
 	}
 	raw, err := strictRawURLEncoding.DecodeString(s)
 	if err != nil {
-		return 0, nil, fmt.Errorf("%w:%v", ErrMalformedFragment, err)
+		return 0, nil, fmt.Errorf("%w:%w", ErrMalformedFragment, err)
 	}
 	n, err := secretLen(raw[0])
 	if err != nil {

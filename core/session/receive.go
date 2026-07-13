@@ -680,7 +680,7 @@ func (r *ReceiveSession) onBlock(ce *chanEntry, b *Block) error {
 		// 处死通道——中转路径上的偶发损坏与恶意难分,交给重试上限收敛。
 		r.releaseAssignment(b.Index, fl, true)
 		if r.attempts[b.Index] >= r.opts.MaxBlockAttempts {
-			return fmt.Errorf("%w: block %d failed after %d attempts (authentication failed: %v)", ErrBlockExhausted, b.Index, r.attempts[b.Index], err)
+			return fmt.Errorf("%w: block %d failed after %d attempts (authentication failed: %w)", ErrBlockExhausted, b.Index, r.attempts[b.Index], err)
 		}
 		return nil
 	}

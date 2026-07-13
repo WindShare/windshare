@@ -240,6 +240,11 @@ func TestClassifySendErrorPreservesShareFatalBranches(t *testing.T) {
 		{name: "WebRTC transport", err: fmt.Errorf("%w: socket", transportwebrtc.ErrTransport), want: SendPathEnded},
 		{name: "joined path outcomes", err: errors.Join(context.Canceled, transportwebrtc.ErrRemoteClosed), want: SendPathEnded},
 		{name: "peer cause with terminal delivery", err: errors.Join(session.ErrPeerViolation, fmt.Errorf("%w: closed", session.ErrTerminalDelivery)), want: SendPathEnded},
+		// SendSession.handle wraps the decode detail with a second %w, so the
+		// sentinel must win over the generic join aggregation: one receiver's
+		// malformed frame ends that path, never the share.
+		{name: "peer violation wrapping decode detail", err: fmt.Errorf("%w: %w", session.ErrPeerViolation, errors.New("session: unknown frame type")), want: SendPathEnded},
+		{name: "peer violation wrapping decode detail with terminal delivery", err: errors.Join(fmt.Errorf("%w: %w", session.ErrPeerViolation, errors.New("session: unknown frame type")), fmt.Errorf("%w: closed", session.ErrTerminalDelivery)), want: SendPathEnded},
 		{name: "drift", err: fmt.Errorf("read: %w", osfs.ErrDrift), want: SendShareFatal},
 		{name: "drift with terminal delivery", err: errors.Join(osfs.ErrDrift, fmt.Errorf("%w: closed", session.ErrTerminalDelivery)), want: SendShareFatal},
 		{name: "unknown sealer with transport diagnostic", err: errors.Join(errors.New("seal failed"), fmt.Errorf("%w: %w", session.ErrTerminalDelivery, transportwebrtc.ErrTransport)), want: SendShareFatal},
