@@ -286,28 +286,7 @@ func (h *Hub) beginRegister(c *conn, reg *protocol.Register) (*registerAttempt, 
 		return nil, registerCollision
 	}
 	if existing, ok := h.shares[reg.ShareID]; ok {
-		if existing.sender != nil {
-			attempt.release()
-			return nil, registerCollision
-		}
-		// The token is the authentication boundary; manifest equality remains
-		// defense in depth and is checked while streaming the next frame.
-		if reg.ResumeToken == "" ||
-			reg.ResumeTokenHash != existing.resumeTokenHash ||
-			!protocol.VerifyResumeToken(reg.ResumeToken, existing.resumeTokenHash) {
-			attempt.release()
-			return nil, registerResumeRejected
-		}
-		if h.cfg.Admission != nil {
-			var ok bool
-			attempt.manifestPin, ok = existing.admissionLease.Pin()
-			if !ok {
-				attempt.release()
-				return nil, registerBudgetExceeded
-			}
-		}
-		attempt.existing = existing
-		return attempt, registerOK
+		return h.beginResumeLocked(attempt, existing, reg)
 	}
 	if attempt.reservation != nil {
 		decision := attempt.reservation.ReserveShare()
@@ -316,6 +295,34 @@ func (h *Hub) beginRegister(c *conn, reg *protocol.Register) (*registerAttempt, 
 			return nil, registerBudgetExceeded
 		}
 	}
+	return attempt, registerOK
+}
+
+// beginResumeLocked validates a grace-period re-registration against the
+// retained share. Caller holds Hub.mu, so the verdict and the manifest pin are
+// atomic with respect to senderGone/reapShare.
+func (h *Hub) beginResumeLocked(attempt *registerAttempt, existing *share, reg *protocol.Register) (*registerAttempt, registerOutcome) {
+	if existing.sender != nil {
+		attempt.release()
+		return nil, registerCollision
+	}
+	// The token is the authentication boundary; manifest equality remains
+	// defense in depth and is checked while streaming the next frame.
+	if reg.ResumeToken == "" ||
+		reg.ResumeTokenHash != existing.resumeTokenHash ||
+		!protocol.VerifyResumeToken(reg.ResumeToken, existing.resumeTokenHash) {
+		attempt.release()
+		return nil, registerResumeRejected
+	}
+	if h.cfg.Admission != nil {
+		var ok bool
+		attempt.manifestPin, ok = existing.admissionLease.Pin()
+		if !ok {
+			attempt.release()
+			return nil, registerBudgetExceeded
+		}
+	}
+	attempt.existing = existing
 	return attempt, registerOK
 }
 
@@ -333,26 +340,7 @@ func (h *Hub) finishRegister(c *conn, reg *protocol.Register, manifestFrame []by
 	}
 
 	if attempt.existing != nil {
-		existing := attempt.existing
-		if h.shares[reg.ShareID] != existing || existing.sender != nil ||
-			!bytes.Equal(manifestPayload(manifestFrame), manifestPayload(existing.manifestFrame)) {
-			return nil, registerResumeRejected
-		}
-		if attempt.reservation != nil {
-			lease, decision := attempt.reservation.Commit(existing.admissionLease)
-			if !decision.Allowed() || lease != existing.admissionLease {
-				if lease != nil && lease != existing.admissionLease {
-					lease.Release()
-				}
-				return nil, registerBudgetExceeded
-			}
-		}
-		if existing.graceTimer != nil {
-			existing.graceTimer.Stop()
-			existing.graceTimer = nil
-		}
-		existing.sender = c
-		return existing, registerOK
+		return h.finishResumeLocked(c, reg, manifestFrame, attempt)
 	}
 
 	if _, exists := h.shares[reg.ShareID]; exists {
@@ -376,6 +364,33 @@ func (h *Hub) finishRegister(c *conn, reg *protocol.Register, manifestFrame []by
 	}
 	h.shares[reg.ShareID] = sh
 	return sh, registerOK
+}
+
+// finishResumeLocked republishes the exact retained share once the streamed
+// manifest proved byte-identical. Caller holds Hub.mu: revalidation, admission
+// commit and sender takeover form one atomic step against concurrent
+// disconnect handling (see TestResumeRegisterOutcomePerDisconnectOrdering).
+func (h *Hub) finishResumeLocked(c *conn, reg *protocol.Register, manifestFrame []byte, attempt *registerAttempt) (*share, registerOutcome) {
+	existing := attempt.existing
+	if h.shares[reg.ShareID] != existing || existing.sender != nil ||
+		!bytes.Equal(manifestPayload(manifestFrame), manifestPayload(existing.manifestFrame)) {
+		return nil, registerResumeRejected
+	}
+	if attempt.reservation != nil {
+		lease, decision := attempt.reservation.Commit(existing.admissionLease)
+		if !decision.Allowed() || lease != existing.admissionLease {
+			if lease != nil && lease != existing.admissionLease {
+				lease.Release()
+			}
+			return nil, registerBudgetExceeded
+		}
+	}
+	if existing.graceTimer != nil {
+		existing.graceTimer.Stop()
+		existing.graceTimer = nil
+	}
+	existing.sender = c
+	return existing, registerOK
 }
 
 func manifestPayload(frame []byte) []byte {

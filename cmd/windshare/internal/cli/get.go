@@ -29,8 +29,42 @@ const journalFlushInterval = 500 * time.Millisecond
 const rejoinWindow = protocol.SenderReconnectGrace + 15*time.Second
 
 // runGet 实现 `windshare get`(§6.9):解析链接 → 拉清单 → (可选 --only)
-// → 断点续传下载 → 收尾物化 → 删除 journal。
+// → 断点续传下载 → 收尾物化 → 删除 journal。各阶段助手返回非 ExitOK 即已
+// 向用户报告过失败。
 func (a *App) runGet(ctx context.Context, args []string) int {
+	req, code := a.parseGetRequest(args)
+	if code != ExitOK {
+		return code
+	}
+
+	cfg := relay.ReceiverConfig{RelayURL: req.link.Relays[0], ShareID: req.link.ShareID, Logf: a.logf}
+	conn, code := a.dialGetRelay(ctx, cfg)
+	if code != ExitOK {
+		return code
+	}
+	// ReceiverRecovery owns every replacement link. This defer covers setup
+	// failures before ownership reaches that coordinator and is idempotent after.
+	defer func() { conn.Close() }()
+
+	transfer, code := a.prepareGetTransfer(conn, req)
+	// The sink outlives even a failed preparation (it exists once created), so
+	// its close-with-warning runs on every exit path below, before conn closes.
+	defer a.closeSink(transfer.sink)
+	if code != ExitOK {
+		return code
+	}
+	return a.receiveAndFinalize(ctx, conn, cfg, req, transfer)
+}
+
+// getRequest 是一次 `windshare get` 调用的已验证输入。
+type getRequest struct {
+	outDir string
+	only   []string
+	link   link.Link
+}
+
+// parseGetRequest 解析旗标与位置参数并落地链接解析(含 --key 合并)。
+func (a *App) parseGetRequest(args []string) (getRequest, int) {
 	fs := a.newFlagSet("get")
 	outDir := fs.String("o", ".", "output directory")
 	keyStr := fs.String("key", "", "separate key string when the link has no fragment")
@@ -38,135 +72,169 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	fs.Var(&only, "only", "download only this manifest path; repeatable, and directories select their subtrees")
 	pos, err := parseInterleaved(fs, args)
 	if err != nil {
-		return ExitUsage
+		return getRequest{}, ExitUsage
 	}
 	if len(pos) != 1 {
 		a.logf("get: exactly one link argument is required")
-		return ExitUsage
+		return getRequest{}, ExitUsage
 	}
 	lnk, err := a.resolveLink(pos[0], *keyStr)
 	if err != nil {
 		a.logf("get: %v", err)
-		return ExitUsage
+		return getRequest{}, ExitUsage
 	}
 	if len(lnk.Relays) == 0 {
 		a.logf("get: link has no relay address (?r=); cannot locate the share")
-		return ExitUsage
+		return getRequest{}, ExitUsage
 	}
+	return getRequest{outDir: *outDir, only: []string(only), link: lnk}, ExitOK
+}
 
-	cfg := relay.ReceiverConfig{RelayURL: lnk.Relays[0], ShareID: lnk.ShareID, Logf: a.logf}
+func (a *App) dialGetRelay(ctx context.Context, cfg relay.ReceiverConfig) (*relay.ReceiverConn, int) {
 	conn, err := relay.DialReceiver(ctx, cfg)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			a.logf("get: interrupted")
-			return ExitFailure
+			return nil, ExitFailure
 		}
 		a.logf("get: connect to relay: %v", err)
-		return ExitNetwork
+		return nil, ExitNetwork
 	}
-	// ReceiverRecovery owns every replacement link. This defer covers setup
-	// failures before ownership reaches that coordinator and is idempotent after.
-	defer func() { conn.Close() }()
+	return conn, ExitOK
+}
 
+// getTransfer 汇集一次下载所需的资源:resume journal(含给用户看的落盘
+// 路径)、输出 sink、选择计划,以及守卫 rejoin 身份的清单指纹。
+type getTransfer struct {
+	fingerprint manifest.Fingerprint
+	jpath       string
+	journal     *resumeJournal
+	sink        *osfs.Sink
+	rcv         *share.Receiver
+	plan        *share.TransferPlan
+	skipped     uint64 // 续传已到位而无需重下的所选块数
+}
+
+// prepareGetTransfer 建立 journal → sink → 接收方 → 计划的依赖链。失败时
+// 已创建的资源(尤其 sink)仍随返回值带出,由调用方的 defer 统一收尾。
+func (a *App) prepareGetTransfer(conn *relay.ReceiverConn, req getRequest) (getTransfer, int) {
+	var t getTransfer
 	sealed := conn.SealedManifest()
 	fingerprint, err := manifest.SealedFingerprint(sealed)
 	if err != nil {
 		a.logf("get: %v", err)
-		return ExitUsage
+		return t, ExitUsage
 	}
-	jpath := journalPath(*outDir, fingerprint)
-	journal, err := loadResume(jpath, fingerprint)
+	t.fingerprint = fingerprint
+	t.jpath = journalPath(req.outDir, fingerprint)
+	t.journal, err = loadResume(t.jpath, fingerprint)
 	if err != nil {
 		a.logf("get: %v\nAction: remove that file and any incomplete output created by this transaction, then retry.", err)
-		return ExitUsage
+		return t, ExitUsage
 	}
 
-	sink, err := osfs.NewSink(*outDir, osfs.SinkOptions{Ownership: journal})
+	t.sink, err = osfs.NewSink(req.outDir, osfs.SinkOptions{Ownership: t.journal})
 	if err != nil {
 		a.logf("get: %v", err)
-		return ExitFailure
+		return t, ExitFailure
 	}
-	defer func() {
-		if err := sink.Close(); err != nil {
-			a.logf("warning: %v", err)
-		}
-	}()
-	rcv, err := share.NewReceiver(lnk, sealed, sink)
+	t.rcv, err = share.NewReceiver(req.link, sealed, t.sink)
 	if err != nil {
 		// 到这一步链接结构已合法,解封失败几乎只有一个原因:密钥不对。
 		a.logf("get: %v\nCheck that the link or key is complete and belongs to this share.", err)
-		return ExitUsage
+		return t, ExitUsage
 	}
-	plan, err := rcv.Plan([]string(only))
+	t.plan, err = t.rcv.Plan(req.only)
 	if err != nil {
 		a.logf("get: %v", err)
-		return ExitUsage
+		return t, ExitUsage
 	}
-	if err := journal.Bind(plan); err != nil {
-		a.logf("get: %v\nAction: use the same selection as the incomplete download, or remove %s and the incomplete output created by that transaction before retrying.", err, jpath)
-		return ExitUsage
+	if err := t.journal.Bind(t.plan); err != nil {
+		a.logf("get: %v\nAction: use the same selection as the incomplete download, or remove %s and the incomplete output created by that transaction before retrying.", err, t.jpath)
+		return t, ExitUsage
 	}
-	have := plan.Sink().Have()
-	skipped := have.Count()
-	if journal.Resuming() {
-		a.logf("resume state found: %d/%d selected blocks already present", skipped, plan.Chunks().Count())
+	t.skipped = t.plan.Sink().Have().Count()
+	if t.journal.Resuming() {
+		a.logf("resume state found: %d/%d selected blocks already present", t.skipped, t.plan.Chunks().Count())
 	}
 
 	// journal 先于数据落盘建档:崩溃在"有数据无档"窗口会让重启撞上
 	// 同名文件保护,先建档把该窗口消掉(§6.12)。
-	if err := journal.Checkpoint(); err != nil {
+	if err := t.journal.Checkpoint(); err != nil {
 		a.logf("get: %v", err)
-		return ExitFailure
+		return t, ExitFailure
 	}
+	return t, ExitOK
+}
 
-	completedBytes, err := completedSelectedBytes(plan)
+// closeSink 收尾输出 sink;此时下载结局已定并报告,关闭失败只值一条警告。
+func (a *App) closeSink(sink *osfs.Sink) {
+	if sink == nil {
+		return
+	}
+	if err := sink.Close(); err != nil {
+		a.logf("warning: %v", err)
+	}
+}
+
+// receiveAndFinalize 跑恢复监督下的接收会话,并按终局走中断固化或收尾物化。
+func (a *App) receiveAndFinalize(ctx context.Context, conn *relay.ReceiverConn, cfg relay.ReceiverConfig, req getRequest, t getTransfer) int {
+	completedBytes, err := completedSelectedBytes(t.plan)
 	if err != nil {
 		a.logf("get: %v", err)
 		return ExitFailure
 	}
-	prog := newProgress(a.stderrWriter(), plan.SelectedBytes(), completedBytes)
-	jsink := &journalSink{inner: plan.Sink(), journal: journal, plan: plan, prog: prog}
-	sess, err := session.NewReceiveSession(plan.Chunks(), jsink, rcv.Opener(), session.Options{
-		MaxBlockBytes: rcv.MaxBlockBytes(),
+	prog := newProgress(a.stderrWriter(), t.plan.SelectedBytes(), completedBytes)
+	jsink := &journalSink{inner: t.plan.Sink(), journal: t.journal, plan: t.plan, prog: prog}
+	sess, err := session.NewReceiveSession(t.plan.Chunks(), jsink, t.rcv.Opener(), session.Options{
+		MaxBlockBytes: t.rcv.MaxBlockBytes(),
 	})
 	if err != nil {
 		a.logf("get: %v", err)
 		return ExitFailure
 	}
-	runErr := a.runReceiveRecovery(ctx, sess, conn, cfg, fingerprint)
+	runErr := a.runReceiveRecovery(ctx, sess, conn, cfg, t.fingerprint)
 	bytesGot, elapsed := prog.done()
 	if runErr != nil {
-		// 最新位图落档:中断处即续传起点。
-		if err := journal.Checkpoint(); err != nil {
-			a.logf("get: save resume state: %v", err)
-		}
-		if errors.Is(runErr, osfs.ErrAlreadyExists) {
-			if err := journal.RemoveIfUnowned(); err != nil {
-				a.logf("warning: %v", err)
-			}
-		}
-		return a.reportGetErr(runErr)
+		return a.settleInterruptedGet(runErr, t)
 	}
+	return a.finalizeGet(req, t, bytesGot, elapsed)
+}
 
+// settleInterruptedGet 固化中断现场为可续传状态,再折算退出码。
+func (a *App) settleInterruptedGet(runErr error, t getTransfer) int {
+	// 最新位图落档:中断处即续传起点。
+	if err := t.journal.Checkpoint(); err != nil {
+		a.logf("get: save resume state: %v", err)
+	}
+	if errors.Is(runErr, osfs.ErrAlreadyExists) {
+		if err := t.journal.RemoveIfUnowned(); err != nil {
+			a.logf("warning: %v", err)
+		}
+	}
+	return a.reportGetErr(runErr)
+}
+
+func (a *App) finalizeGet(req getRequest, t getTransfer, bytesGot int64, elapsed time.Duration) int {
 	// 完成条件 = 所选块全通过且物化完成,journal 其后才删(§6.12)。
-	if err := plan.Finalize(); err != nil {
+	if err := t.plan.Finalize(); err != nil {
 		if errors.Is(err, osfs.ErrAlreadyExists) {
-			if cleanupErr := journal.RemoveIfUnowned(); cleanupErr != nil {
+			if cleanupErr := t.journal.RemoveIfUnowned(); cleanupErr != nil {
 				a.logf("warning: %v", cleanupErr)
 			}
 		}
 		a.logf("get: finalize selected output: %v", err)
 		return a.reportGetErr(err)
 	}
-	if err := journal.Remove(); err != nil {
-		a.logf("warning: remove resume state %s: %v (it is safe to delete manually)", jpath, err)
+	if err := t.journal.Remove(); err != nil {
+		a.logf("warning: remove resume state %s: %v (it is safe to delete manually)", t.jpath, err)
 	}
 
-	absOut, err := filepath.Abs(*outDir)
+	absOut, err := filepath.Abs(req.outDir)
 	if err != nil {
-		absOut = *outDir
+		absOut = req.outDir
 	}
-	a.logf("download complete: %d entries, received %s in %s (%d blocks skipped by resume)", len(plan.SelectedEntries()), formatBytes(bytesGot), elapsed.Round(time.Millisecond), skipped)
+	a.logf("download complete: %d entries, received %s in %s (%d blocks skipped by resume)", len(t.plan.SelectedEntries()), formatBytes(bytesGot), elapsed.Round(time.Millisecond), t.skipped)
 	a.logf("output directory: %s", absOut)
 	return ExitOK
 }

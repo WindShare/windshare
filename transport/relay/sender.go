@@ -292,111 +292,157 @@ func (s *SenderConn) serveLink(l *link) error {
 			return l.cause()
 		}
 		if typ == websocket.MessageText {
-			msg, err := protocol.Decode(data)
-			if err != nil {
-				err = protocolViolation(ProtocolViolationMalformedMessage, "signaling message", err)
-				l.fail(err)
-				return err
-			}
-			switch m := msg.(type) {
-			case *protocol.Keepalive:
-				// 自己 keepalive 的回显,吞掉。
-			case *protocol.Signal:
-				sid, err := protocol.ParseSessionID(m.SessionID)
-				if err != nil {
-					l.fail(err)
-					return fmt.Errorf("relay: signal with bad sessionId: %w", err)
-				}
-				// §6.11:offer 可先于任何数据帧到达——signal 同样物化新会话。
-				ch, err := s.ensureSession(l, sid)
-				if err != nil {
-					l.fail(err)
-					return err
-				}
-				if ch == nil {
-					continue // terminal tombstone: never revive a completed session
-				}
-				if result := ch.deliverSignal(Signal{Kind: m.Kind, Payload: m.Payload}); result == ingressOverflow {
-					s.failSessionIngress(l, sid, IngressSignals)
-				}
-			case *protocol.Bye:
-				if sid, err := protocol.ParseSessionID(m.SessionID); err == nil {
-					if err := s.terminateSession(sid, nil, nil); err != nil {
-						l.fail(err)
-						return err
-					}
-				}
-			case *protocol.Error:
-				if m.SessionID != "" {
-					if sid, err := protocol.ParseSessionID(m.SessionID); err == nil {
-						if err := s.terminateSession(sid, &ServerError{Code: m.Code, Message: m.Message}, nil); err != nil {
-							l.fail(err)
-							return err
-						}
-					}
-					s.cfg.Logf("relay: session error from relay: %s (%s)", m.Code, m.Message)
-					continue
-				}
-				serr := &ServerError{Code: m.Code, Message: m.Message}
-				l.fail(serr)
-				return serr
-			default:
-				err := protocolViolation(
-					ProtocolViolationUnexpectedMessage,
-					fmt.Sprintf("signaling message %T", msg),
-					nil,
-				)
-				l.fail(err)
-				return err
-			}
-			continue
+			err = s.handleSignaling(l, data)
+		} else {
+			err = s.handleForwardFrame(l, data)
 		}
-		switch protocol.BinType(data) {
-		case protocol.BinTypeForward:
-			sid, inner, err := protocol.DecodeForwardFrame(data)
-			if err != nil {
-				err = protocolViolation(ProtocolViolationMalformedFrame, "forward frame", err)
-				l.fail(err)
-				return err
-			}
-			ch, err := s.ensureSession(l, sid)
-			if err != nil {
-				l.fail(err)
-				return err
-			}
-			if ch != nil {
-				if result := ch.deliver(session.Frame(inner)); result == ingressOverflow {
-					s.failSessionIngress(l, sid, IngressFrames)
-				}
-			}
-		case protocol.BinTypeTerminalForward:
-			sid, inner, err := protocol.DecodeTerminalForwardFrame(data)
-			if err != nil {
-				err = protocolViolation(ProtocolViolationMalformedFrame, "terminal forward frame", err)
-				l.fail(err)
-				return err
-			}
-			ch, err := s.ensureSession(l, sid)
-			if err != nil {
-				l.fail(err)
-				return err
-			}
-			if ch != nil {
-				if err := s.terminateSession(sid, nil, session.Frame(inner)); err != nil {
-					l.fail(err)
-					return err
-				}
-			}
-		default:
-			err := protocolViolation(
-				ProtocolViolationMalformedFrame,
-				fmt.Sprintf("unexpected binary frame type 0x%02x", protocol.BinType(data)),
-				nil,
-			)
+		if err != nil {
+			return err
+		}
+	}
+}
+
+// handleSignaling 处理一条文本信令;返回非 nil 即读循环终局原因(链路已
+// fail),nil 则继续读取。会话级事件不终局——连接同时服务多个接收会话。
+func (s *SenderConn) handleSignaling(l *link, data []byte) error {
+	msg, err := protocol.Decode(data)
+	if err != nil {
+		err = protocolViolation(ProtocolViolationMalformedMessage, "signaling message", err)
+		l.fail(err)
+		return err
+	}
+	switch m := msg.(type) {
+	case *protocol.Keepalive:
+		// 自己 keepalive 的回显,吞掉。
+		return nil
+	case *protocol.Signal:
+		return s.handleSignal(l, m)
+	case *protocol.Bye:
+		return s.handleBye(l, m)
+	case *protocol.Error:
+		return s.handleErrorMessage(l, m)
+	default:
+		err := protocolViolation(
+			ProtocolViolationUnexpectedMessage,
+			fmt.Sprintf("signaling message %T", msg),
+			nil,
+		)
+		l.fail(err)
+		return err
+	}
+}
+
+func (s *SenderConn) handleSignal(l *link, m *protocol.Signal) error {
+	sid, err := protocol.ParseSessionID(m.SessionID)
+	if err != nil {
+		l.fail(err)
+		return fmt.Errorf("relay: signal with bad sessionId: %w", err)
+	}
+	// §6.11:offer 可先于任何数据帧到达——signal 同样物化新会话。
+	ch, err := s.ensureSession(l, sid)
+	if err != nil {
+		l.fail(err)
+		return err
+	}
+	if ch == nil {
+		return nil // terminal tombstone: never revive a completed session
+	}
+	if result := ch.deliverSignal(Signal{Kind: m.Kind, Payload: m.Payload}); result == ingressOverflow {
+		s.failSessionIngress(l, sid, IngressSignals)
+	}
+	return nil
+}
+
+func (s *SenderConn) handleBye(l *link, m *protocol.Bye) error {
+	sid, err := protocol.ParseSessionID(m.SessionID)
+	if err != nil {
+		return nil
+	}
+	if err := s.terminateSession(sid, nil, nil); err != nil {
+		l.fail(err)
+		return err
+	}
+	return nil
+}
+
+// handleErrorMessage 区分会话级与连接级 error:带 sessionId 只终结该会话,
+// 不带则是中转对整条连接的否决(终局,不重连)。
+func (s *SenderConn) handleErrorMessage(l *link, m *protocol.Error) error {
+	if m.SessionID == "" {
+		serr := &ServerError{Code: m.Code, Message: m.Message}
+		l.fail(serr)
+		return serr
+	}
+	if sid, err := protocol.ParseSessionID(m.SessionID); err == nil {
+		if err := s.terminateSession(sid, &ServerError{Code: m.Code, Message: m.Message}, nil); err != nil {
 			l.fail(err)
 			return err
 		}
 	}
+	s.cfg.Logf("relay: session error from relay: %s (%s)", m.Code, m.Message)
+	return nil
+}
+
+// handleForwardFrame 解包一个二进制转发帧并按 sessionId 路由;返回非 nil
+// 即读循环终局原因,nil 则继续读取。
+func (s *SenderConn) handleForwardFrame(l *link, data []byte) error {
+	switch protocol.BinType(data) {
+	case protocol.BinTypeForward:
+		return s.handleForward(l, data)
+	case protocol.BinTypeTerminalForward:
+		return s.handleTerminalForward(l, data)
+	default:
+		err := protocolViolation(
+			ProtocolViolationMalformedFrame,
+			fmt.Sprintf("unexpected binary frame type 0x%02x", protocol.BinType(data)),
+			nil,
+		)
+		l.fail(err)
+		return err
+	}
+}
+
+func (s *SenderConn) handleForward(l *link, data []byte) error {
+	sid, inner, err := protocol.DecodeForwardFrame(data)
+	if err != nil {
+		err = protocolViolation(ProtocolViolationMalformedFrame, "forward frame", err)
+		l.fail(err)
+		return err
+	}
+	ch, err := s.ensureSession(l, sid)
+	if err != nil {
+		l.fail(err)
+		return err
+	}
+	if ch == nil {
+		return nil
+	}
+	if result := ch.deliver(session.Frame(inner)); result == ingressOverflow {
+		s.failSessionIngress(l, sid, IngressFrames)
+	}
+	return nil
+}
+
+func (s *SenderConn) handleTerminalForward(l *link, data []byte) error {
+	sid, inner, err := protocol.DecodeTerminalForwardFrame(data)
+	if err != nil {
+		err = protocolViolation(ProtocolViolationMalformedFrame, "terminal forward frame", err)
+		l.fail(err)
+		return err
+	}
+	ch, err := s.ensureSession(l, sid)
+	if err != nil {
+		l.fail(err)
+		return err
+	}
+	if ch == nil {
+		return nil
+	}
+	if err := s.terminateSession(sid, nil, session.Frame(inner)); err != nil {
+		l.fail(err)
+		return err
+	}
+	return nil
 }
 
 // ensureSession is the only active-state constructor. Terminal entries remain
