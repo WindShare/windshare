@@ -11,6 +11,8 @@ param(
 
     [switch]$Race,
 
+    [string]$CoverProfileRoot,
+
     [string]$EvidenceRoot
 )
 
@@ -19,6 +21,15 @@ $ErrorActionPreference = 'Stop'
 
 if (-not $IsWindows) {
     throw 'The D5 stable Windows network runner is Windows-only.'
+}
+if (-not [string]::IsNullOrWhiteSpace($CoverProfileRoot)) {
+    # Coverage measurement is meaningful only for the full fixed-path suite;
+    # partial modes would understate every classified package.
+    if ($Mode -ne 'NetworkTests') {
+        throw 'Coverage profiles require the full fixed-path suite: use -Mode NetworkTests'
+    }
+    $CoverProfileRoot = [IO.Path]::GetFullPath($CoverProfileRoot)
+    New-Item -ItemType Directory -Force -Path $CoverProfileRoot | Out-Null
 }
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
@@ -389,10 +400,18 @@ function Get-D5TestExecutionDefinitions {
         'NetworkTests' {
             foreach ($name in $script:binaries.Keys | Sort-Object) {
                 $timeout = if ($name -eq 'e2e') { '10m' } else { '5m' }
+                $arguments = @('-test.v', '-test.count=1', "-test.timeout=$timeout")
+                if (-not [string]::IsNullOrWhiteSpace($CoverProfileRoot)) {
+                    # A repeat phase overwrites the same profile, so each
+                    # package's statements count from exactly one execution.
+                    $arguments += "-test.coverprofile=$(
+                        Join-Path $CoverProfileRoot "$name.cover.out"
+                    )"
+                }
                 $definitions.Add([pscustomobject][ordered]@{
                     RequestID = "network-$name"
                     Name = $name
-                    Arguments = @('-test.v', '-test.count=1', "-test.timeout=$timeout")
+                    Arguments = $arguments
                     LogName = "{phase}/$name.txt"
                 })
             }
@@ -580,7 +599,11 @@ function Build-D5AtomicTestBinary([object]$Package) {
     $binary = Join-Path $harnessRoot "$($Package.Name).test.exe"
     $temporary = "$binary.building-$($script:ownerID)"
     $arguments = @('test', '-c', '-o', $temporary)
-    if ($Mode -eq 'NetworkTests' -or $Race) {
+    if (-not [string]::IsNullOrWhiteSpace($CoverProfileRoot)) {
+        # Coverage runs mirror the CI sweep (`-covermode=atomic`, no -race) so
+        # the local verdict measures exactly what the ubuntu gate measures.
+        $arguments += '-covermode=atomic'
+    } elseif ($Mode -eq 'NetworkTests' -or $Race) {
         $arguments += '-race'
     }
     $arguments += [string]$Package.Path

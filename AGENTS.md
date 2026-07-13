@@ -25,6 +25,7 @@
 GOPLS_CHECK: git ls-files -z '*.go' | xargs -0 gopls check -severity=hint
 sloc: sloc-guard.exe check
 web: pnpm -C web lint && pnpm -C web exec tsc -b
+本地覆盖率(含 OS-network 用例,与 CI 同门禁): ./scripts/local-coverage.ps1
 
 
 ## Project Overview
