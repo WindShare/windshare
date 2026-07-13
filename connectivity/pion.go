@@ -104,6 +104,17 @@ type pionNegotiation struct {
 	remoteDataChannels atomic.Uint32
 }
 
+// admissionState carries the mutable pre-Open negotiation state shared by the
+// phase handlers: channel ownership, remote-description gating, and the
+// per-peer candidate budget.
+type admissionState struct {
+	role                 negotiationRole
+	channel              *ownedPeerChannel
+	remoteDescriptionSet bool
+	remoteCandidateCount int
+	pendingCandidates    []pion.ICECandidateInit
+}
+
 func (f *PionChannelFactory) negotiate(
 	ctx context.Context,
 	signaling Signaling,
@@ -135,145 +146,172 @@ func (f *PionChannelFactory) negotiate(
 	n.configureRemoteDataChannels(role, channelResults)
 	n.start()
 
-	var channel *ownedPeerChannel
+	state := &admissionState{
+		role:              role,
+		pendingCandidates: make([]pion.ICECandidateInit, 0, maxCandidatesPerPeer),
+	}
 	if role == negotiationOfferer {
-		var transportChannel PeerChannel
-		transportChannel, err = createOffererChannel(peer)
-		if err == nil {
-			channel = n.own(transportChannel)
-		}
-		if err == nil {
-			err = n.createAndSendOffer()
+		if err := n.openOffererChannel(state); err != nil {
+			n.abort()
+			return nil, err
 		}
 	}
+	channel, err := n.awaitAdmission(ctx, state, channelResults)
 	if err != nil {
 		n.abort()
 		return nil, err
 	}
+	return channel, nil
+}
 
-	remoteDescriptionSet := false
-	descriptionReceived := false
-	remoteCandidateCount := 0
-	pendingCandidates := make([]pion.ICECandidateInit, 0, maxCandidatesPerPeer)
+func (n *pionNegotiation) openOffererChannel(state *admissionState) error {
+	transportChannel, err := createOffererChannel(n.peer)
+	if err != nil {
+		return err
+	}
+	state.channel = n.own(transportChannel)
+	return n.createAndSendOffer()
+}
+
+// awaitAdmission drives signaling until the DataChannel is admitted as Open or
+// the negotiation fails. On success ownership of the negotiation context moves
+// to maintain; on error the caller aborts, which closes the PeerConnection.
+func (n *pionNegotiation) awaitAdmission(
+	ctx context.Context,
+	state *admissionState,
+	channelResults <-chan dataChannelResult,
+) (*ownedPeerChannel, error) {
 	for {
 		var opened <-chan struct{}
 		var channelDone <-chan struct{}
-		if channel != nil {
-			opened = channel.Opened()
-			channelDone = channel.Done()
+		if state.channel != nil {
+			opened = state.channel.Opened()
+			channelDone = state.channel.Done()
 		}
 		select {
 		case <-ctx.Done():
-			n.abort()
 			return nil, ctx.Err()
 		case failure := <-n.failures:
-			// OnDataChannel precedes OnOpen, but its callback result and a relay
-			// read failure can become ready together. Reconcile that result before
-			// deciding whether an already-open channel can survive signaling loss.
-			if channel == nil && role == negotiationAnswerer {
-				select {
-				case result := <-channelResults:
-					if result.err != nil {
-						n.abort()
-						return nil, fmt.Errorf("%w: wrap remote DataChannel: %w", ErrPeerConnectionFailed, result.err)
-					}
-					channel = result.channel
-				default:
-				}
-			}
-			if err := ctx.Err(); err != nil {
-				n.abort()
-				return nil, err
-			}
-			if channel != nil && channel.State() == session.Open && !failure.fatalAfterOpen {
-				go n.maintain(channel, !failure.inboundUnavailable, remoteCandidateCount)
-				return channel, nil
-			}
-			n.abort()
-			return nil, failure.err
+			return n.settleFailure(ctx, state, failure, channelResults)
 		case result := <-channelResults:
 			if result.err != nil {
-				n.abort()
 				return nil, fmt.Errorf("%w: wrap remote DataChannel: %w", ErrPeerConnectionFailed, result.err)
 			}
-			channel = result.channel
+			state.channel = result.channel
 		case <-channelDone:
-			reason := channel.Err()
+			reason := state.channel.Err()
 			if reason == nil {
 				reason = ErrPeerConnectionFailed
 			}
-			n.abort()
 			return nil, fmt.Errorf("%w: DataChannel closed before Open: %w", ErrPeerConnectionFailed, reason)
 		case signal := <-n.inbound:
-			switch signal.Kind {
-			case protocol.SignalKindCandidate:
-				if remoteCandidateCount == maxCandidatesPerPeer {
-					n.abort()
-					return nil, ErrCandidateLimitExceeded
-				}
-				candidate, decodeErr := decodeCandidate(signal.Payload)
-				if decodeErr != nil {
-					n.abort()
-					return nil, decodeErr
-				}
-				remoteCandidateCount++
-				if !remoteDescriptionSet {
-					pendingCandidates = append(pendingCandidates, candidate)
-					continue
-				}
-				if addErr := peer.AddICECandidate(candidate); addErr != nil {
-					n.abort()
-					return nil, fmt.Errorf("%w: add ICE candidate: %w", ErrInvalidSignal, addErr)
-				}
-			case protocol.SignalKindOffer, protocol.SignalKindAnswer:
-				expectedKind, expectedType := expectedRemoteDescription(role)
-				if signal.Kind != expectedKind || descriptionReceived {
-					n.abort()
-					return nil, fmt.Errorf("%w: got %q", ErrUnexpectedSignal, signal.Kind)
-				}
-				description, decodeErr := decodeDescription(signal.Payload, expectedType)
-				if decodeErr != nil {
-					n.abort()
-					return nil, decodeErr
-				}
-				if setErr := peer.SetRemoteDescription(description); setErr != nil {
-					n.abort()
-					return nil, fmt.Errorf("%w: set remote description: %w", ErrInvalidSignal, setErr)
-				}
-				descriptionReceived = true
-				remoteDescriptionSet = true
-				if flushErr := flushCandidates(peer, pendingCandidates); flushErr != nil {
-					n.abort()
-					return nil, flushErr
-				}
-				pendingCandidates = nil
-				if role == negotiationAnswerer {
-					if answerErr := n.createAndSendAnswer(); answerErr != nil {
-						n.abort()
-						return nil, answerErr
-					}
-				}
-			default:
-				n.abort()
-				return nil, fmt.Errorf("%w: kind %q", ErrUnexpectedSignal, signal.Kind)
-			}
-		case <-opened:
-			if err := ctx.Err(); err != nil {
-				n.abort()
+			if err := n.handleAdmissionSignal(state, signal); err != nil {
 				return nil, err
 			}
-			if channel.State() != session.Open {
-				reason := channel.Err()
-				if reason == nil {
-					reason = ErrPeerConnectionFailed
-				}
-				n.abort()
-				return nil, fmt.Errorf("%w: DataChannel left Open before admission: %w", ErrPeerConnectionFailed, reason)
-			}
-			go n.maintain(channel, true, remoteCandidateCount)
-			return channel, nil
+		case <-opened:
+			return n.admitOpenedChannel(ctx, state)
 		}
 	}
+}
+
+// settleFailure decides whether an already-open channel survives a reported
+// failure. OnDataChannel precedes OnOpen, but its callback result and a relay
+// read failure can become ready together, so the pending channel result is
+// reconciled before deciding whether the channel can survive signaling loss.
+func (n *pionNegotiation) settleFailure(
+	ctx context.Context,
+	state *admissionState,
+	failure negotiationFailure,
+	channelResults <-chan dataChannelResult,
+) (*ownedPeerChannel, error) {
+	if state.channel == nil && state.role == negotiationAnswerer {
+		select {
+		case result := <-channelResults:
+			if result.err != nil {
+				return nil, fmt.Errorf("%w: wrap remote DataChannel: %w", ErrPeerConnectionFailed, result.err)
+			}
+			state.channel = result.channel
+		default:
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if state.channel != nil && state.channel.State() == session.Open && !failure.fatalAfterOpen {
+		go n.maintain(state.channel, !failure.inboundUnavailable, state.remoteCandidateCount)
+		return state.channel, nil
+	}
+	return nil, failure.err
+}
+
+func (n *pionNegotiation) handleAdmissionSignal(state *admissionState, signal Signal) error {
+	switch signal.Kind {
+	case protocol.SignalKindCandidate:
+		return n.admitRemoteCandidate(state, signal.Payload)
+	case protocol.SignalKindOffer, protocol.SignalKindAnswer:
+		return n.applyRemoteDescription(state, signal)
+	default:
+		return fmt.Errorf("%w: kind %q", ErrUnexpectedSignal, signal.Kind)
+	}
+}
+
+// admitRemoteCandidate buffers candidates that arrive ahead of the remote
+// description; Pion rejects AddICECandidate until one is set.
+func (n *pionNegotiation) admitRemoteCandidate(state *admissionState, payload json.RawMessage) error {
+	if state.remoteCandidateCount == maxCandidatesPerPeer {
+		return ErrCandidateLimitExceeded
+	}
+	candidate, err := decodeCandidate(payload)
+	if err != nil {
+		return err
+	}
+	state.remoteCandidateCount++
+	if !state.remoteDescriptionSet {
+		state.pendingCandidates = append(state.pendingCandidates, candidate)
+		return nil
+	}
+	if err := n.peer.AddICECandidate(candidate); err != nil {
+		return fmt.Errorf("%w: add ICE candidate: %w", ErrInvalidSignal, err)
+	}
+	return nil
+}
+
+func (n *pionNegotiation) applyRemoteDescription(state *admissionState, signal Signal) error {
+	expectedKind, expectedType := expectedRemoteDescription(state.role)
+	if signal.Kind != expectedKind || state.remoteDescriptionSet {
+		return fmt.Errorf("%w: got %q", ErrUnexpectedSignal, signal.Kind)
+	}
+	description, err := decodeDescription(signal.Payload, expectedType)
+	if err != nil {
+		return err
+	}
+	if err := n.peer.SetRemoteDescription(description); err != nil {
+		return fmt.Errorf("%w: set remote description: %w", ErrInvalidSignal, err)
+	}
+	state.remoteDescriptionSet = true
+	if err := flushCandidates(n.peer, state.pendingCandidates); err != nil {
+		return err
+	}
+	state.pendingCandidates = nil
+	if state.role == negotiationAnswerer {
+		return n.createAndSendAnswer()
+	}
+	return nil
+}
+
+func (n *pionNegotiation) admitOpenedChannel(ctx context.Context, state *admissionState) (*ownedPeerChannel, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if state.channel.State() != session.Open {
+		reason := state.channel.Err()
+		if reason == nil {
+			reason = ErrPeerConnectionFailed
+		}
+		return nil, fmt.Errorf("%w: DataChannel left Open before admission: %w", ErrPeerConnectionFailed, reason)
+	}
+	go n.maintain(state.channel, true, state.remoteCandidateCount)
+	return state.channel, nil
 }
 
 func createOffererChannel(peer *pion.PeerConnection) (PeerChannel, error) {

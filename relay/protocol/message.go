@@ -295,90 +295,127 @@ func Decode(data []byte) (Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	var m Message
-	switch typeName {
-	case TypeRegister:
-		shareID, err := object.requiredString("shareId")
-		if err != nil {
-			return nil, err
-		}
-		resumeTokenHash, err := object.requiredString("resumeTokenHash")
-		if err != nil {
-			return nil, err
-		}
-		resumeToken, _, err := object.optionalString("resumeToken")
-		if err != nil {
-			return nil, err
-		}
-		m = &Register{Type: typeName, ShareID: shareID, ResumeTokenHash: resumeTokenHash, ResumeToken: resumeToken}
-	case TypeRegistered:
-		shareID, err := object.requiredString("shareId")
-		if err != nil {
-			return nil, err
-		}
-		m = &Registered{Type: typeName, ShareID: shareID}
-	case TypeKeepalive:
-		m = &Keepalive{Type: typeName}
-	case TypeJoin:
-		shareID, err := object.requiredString("shareId")
-		if err != nil {
-			return nil, err
-		}
-		m = &Join{Type: typeName, ShareID: shareID}
-	case TypeManifest:
-		sessionID, err := object.requiredString("sessionId")
-		if err != nil {
-			return nil, err
-		}
-		m = &Manifest{Type: typeName, SessionID: sessionID}
-	case TypeNotFound:
-		m = &NotFound{Type: typeName}
-	case TypeSignal:
-		sessionID, err := object.requiredString("sessionId")
-		if err != nil {
-			return nil, err
-		}
-		kind, err := object.requiredString("kind")
-		if err != nil {
-			return nil, err
-		}
-		payload, ok := object["payload"]
-		if !ok {
-			return nil, errors.New("protocol: signal is missing payload")
-		}
-		m = &Signal{
-			Type:      typeName,
-			SessionID: sessionID,
-			Kind:      kind,
-			Payload:   append(json.RawMessage(nil), payload...),
-		}
-	case TypeBye:
-		sessionID, err := object.requiredString("sessionId")
-		if err != nil {
-			return nil, err
-		}
-		m = &Bye{Type: typeName, SessionID: sessionID}
-	case TypeError:
-		code, err := object.requiredString("code")
-		if err != nil {
-			return nil, err
-		}
-		message, _, err := object.optionalString("message")
-		if err != nil {
-			return nil, err
-		}
-		sessionID, _, err := object.optionalString("sessionId")
-		if err != nil {
-			return nil, err
-		}
-		m = &Error{Type: typeName, Code: code, Message: message, SessionID: sessionID}
-	default:
-		return nil, fmt.Errorf("protocol: unknown signaling message type %q", typeName)
+	m, err := decodeByType(typeName, object)
+	if err != nil {
+		return nil, err
 	}
 	if err := m.validate(); err != nil {
 		return nil, err
 	}
 	return m, nil
+}
+
+// decodeByType constructs the concrete message for an already-extracted type
+// tag. Field checks run in wire-schema order so a message missing several
+// fields reports the same error regardless of decoder version.
+func decodeByType(typeName string, object signalingObject) (Message, error) {
+	switch typeName {
+	case TypeRegister:
+		return decodeRegister(object)
+	case TypeRegistered:
+		return decodeRegistered(object)
+	case TypeKeepalive:
+		return &Keepalive{Type: TypeKeepalive}, nil
+	case TypeJoin:
+		return decodeJoin(object)
+	case TypeManifest:
+		return decodeManifest(object)
+	case TypeNotFound:
+		return &NotFound{Type: TypeNotFound}, nil
+	case TypeSignal:
+		return decodeSignal(object)
+	case TypeBye:
+		return decodeBye(object)
+	case TypeError:
+		return decodeError(object)
+	default:
+		return nil, fmt.Errorf("protocol: unknown signaling message type %q", typeName)
+	}
+}
+
+func decodeRegister(object signalingObject) (Message, error) {
+	shareID, err := object.requiredString("shareId")
+	if err != nil {
+		return nil, err
+	}
+	resumeTokenHash, err := object.requiredString("resumeTokenHash")
+	if err != nil {
+		return nil, err
+	}
+	resumeToken, _, err := object.optionalString("resumeToken")
+	if err != nil {
+		return nil, err
+	}
+	return &Register{Type: TypeRegister, ShareID: shareID, ResumeTokenHash: resumeTokenHash, ResumeToken: resumeToken}, nil
+}
+
+func decodeRegistered(object signalingObject) (Message, error) {
+	shareID, err := object.requiredString("shareId")
+	if err != nil {
+		return nil, err
+	}
+	return &Registered{Type: TypeRegistered, ShareID: shareID}, nil
+}
+
+func decodeJoin(object signalingObject) (Message, error) {
+	shareID, err := object.requiredString("shareId")
+	if err != nil {
+		return nil, err
+	}
+	return &Join{Type: TypeJoin, ShareID: shareID}, nil
+}
+
+func decodeManifest(object signalingObject) (Message, error) {
+	sessionID, err := object.requiredString("sessionId")
+	if err != nil {
+		return nil, err
+	}
+	return &Manifest{Type: TypeManifest, SessionID: sessionID}, nil
+}
+
+func decodeSignal(object signalingObject) (Message, error) {
+	sessionID, err := object.requiredString("sessionId")
+	if err != nil {
+		return nil, err
+	}
+	kind, err := object.requiredString("kind")
+	if err != nil {
+		return nil, err
+	}
+	payload, ok := object["payload"]
+	if !ok {
+		return nil, errors.New("protocol: signal is missing payload")
+	}
+	return &Signal{
+		Type:      TypeSignal,
+		SessionID: sessionID,
+		Kind:      kind,
+		Payload:   append(json.RawMessage(nil), payload...),
+	}, nil
+}
+
+func decodeBye(object signalingObject) (Message, error) {
+	sessionID, err := object.requiredString("sessionId")
+	if err != nil {
+		return nil, err
+	}
+	return &Bye{Type: TypeBye, SessionID: sessionID}, nil
+}
+
+func decodeError(object signalingObject) (Message, error) {
+	code, err := object.requiredString("code")
+	if err != nil {
+		return nil, err
+	}
+	message, _, err := object.optionalString("message")
+	if err != nil {
+		return nil, err
+	}
+	sessionID, _, err := object.optionalString("sessionId")
+	if err != nil {
+		return nil, err
+	}
+	return &Error{Type: TypeError, Code: code, Message: message, SessionID: sessionID}, nil
 }
 
 // jsonNestingWithinLimit is deliberately non-recursive and only owns the

@@ -167,6 +167,40 @@ func NewShareSender(
 	}, nil
 }
 
+type acceptResult struct {
+	receiver AcceptedReceiver
+	err      error
+}
+
+type receiverResult struct {
+	receiver AcceptedReceiver
+	err      error
+}
+
+// shareRun holds one Run invocation's fan-out state so the accept, serve, and
+// shutdown phases decompose into methods that share it instead of threading a
+// parameter list through each step.
+type shareRun struct {
+	share  *ShareSender
+	ctx    context.Context
+	runCtx context.Context
+	cancel context.CancelFunc
+
+	sourceCloseOnce sync.Once
+	sourceCloseErr  error
+
+	accepted chan acceptResult
+	results  chan receiverResult
+	workers  sync.WaitGroup
+
+	acceptPending bool
+	active        int
+	accepting     bool
+	ctxDone       <-chan struct{}
+	fatal         error
+	sourceErr     error
+}
+
 func (s *ShareSender) Run(ctx context.Context) (runErr error) {
 	if ctx == nil {
 		return fmt.Errorf("%w: context", ErrNilDependency)
@@ -176,125 +210,137 @@ func (s *ShareSender) Run(ctx context.Context) (runErr error) {
 	// before their deferred channel closes can emit per-session bye messages.
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
-	var sourceCloseOnce sync.Once
-	var sourceCloseErr error
-	closeSource := func() {
-		sourceCloseOnce.Do(func() { sourceCloseErr = s.source.Close() })
+	run := &shareRun{
+		share:     s,
+		ctx:       ctx,
+		runCtx:    runCtx,
+		cancel:    cancel,
+		accepted:  make(chan acceptResult, 1),
+		results:   make(chan receiverResult),
+		accepting: true,
+		ctxDone:   ctx.Done(),
 	}
-	defer func() {
-		closeSource()
-		if sourceCloseErr == nil {
-			return
-		}
-		shutdownErr := fmt.Errorf("connectivity: close receiver session source: %w", sourceCloseErr)
-		if runErr == nil || errors.Is(runErr, context.Canceled) && ctx.Err() != nil {
-			runErr = shutdownErr
-			return
-		}
-		runErr = errors.Join(runErr, shutdownErr)
-	}()
+	defer func() { runErr = run.joinSourceClose(runErr) }()
 	if err := ctx.Err(); err != nil {
-		closeSource()
+		run.closeSource()
 		return err
 	}
-	type acceptResult struct {
-		receiver AcceptedReceiver
-		err      error
-	}
-	type receiverResult struct {
-		receiver AcceptedReceiver
-		err      error
-	}
-	accepted := make(chan acceptResult, 1)
-	results := make(chan receiverResult)
-	var workers sync.WaitGroup
-	acceptPending := false
-	active := 0
-	accepting := true
-	ctxDone := ctx.Done()
-	beginExternalShutdown := func() {
-		if ctxDone == nil {
-			return
-		}
-		ctxDone = nil
-		accepting = false
-		closeSource()
-		cancel()
-	}
-	startAccept := func() {
-		acceptPending = true
-		go func() {
-			receiver, err := s.source.Accept(runCtx)
-			accepted <- acceptResult{receiver: receiver, err: err}
-		}()
-	}
-	startAccept()
-	var fatal error
-	var sourceErr error
+	run.startAccept()
+	run.loop()
+	run.workers.Wait()
+	return run.result()
+}
 
-	for acceptPending || active > 0 {
-		if ctx.Err() != nil {
-			beginExternalShutdown()
+func (r *shareRun) closeSource() {
+	r.sourceCloseOnce.Do(func() { r.sourceCloseErr = r.share.source.Close() })
+}
+
+// joinSourceClose folds the deferred source-withdrawal error into the run
+// result. An external cancellation is superseded by it because the caller
+// asked for shutdown and only the shutdown failure is news.
+func (r *shareRun) joinSourceClose(runErr error) error {
+	r.closeSource()
+	if r.sourceCloseErr == nil {
+		return runErr
+	}
+	shutdownErr := fmt.Errorf("connectivity: close receiver session source: %w", r.sourceCloseErr)
+	if runErr == nil || errors.Is(runErr, context.Canceled) && r.ctx.Err() != nil {
+		return shutdownErr
+	}
+	return errors.Join(runErr, shutdownErr)
+}
+
+func (r *shareRun) beginExternalShutdown() {
+	if r.ctxDone == nil {
+		return
+	}
+	r.ctxDone = nil
+	r.accepting = false
+	r.closeSource()
+	r.cancel()
+}
+
+func (r *shareRun) startAccept() {
+	r.acceptPending = true
+	go func() {
+		receiver, err := r.share.source.Accept(r.runCtx)
+		r.accepted <- acceptResult{receiver: receiver, err: err}
+	}()
+}
+
+func (r *shareRun) loop() {
+	for r.acceptPending || r.active > 0 {
+		if r.ctx.Err() != nil {
+			r.beginExternalShutdown()
 		}
 		select {
-		case result := <-accepted:
-			acceptPending = false
-			if result.err != nil {
-				if result.receiver.Channel != nil {
-					_ = result.receiver.Channel.Close()
-				}
-				accepting = false
-				if !errors.Is(result.err, io.EOF) && !errors.Is(result.err, context.Canceled) {
-					sourceErr = fmt.Errorf("%w: %w", ErrReceiverSourceEnded, result.err)
-				}
-				cancel()
-				continue
-			}
-			if result.receiver.Channel == nil || result.receiver.Signaling == nil {
-				fatal = fmt.Errorf("%w: accepted receiver channel and signaling are required", ErrNilDependency)
-				accepting = false
-				cancel()
-				continue
-			}
-			if ctx.Err() != nil {
-				beginExternalShutdown()
-			}
-			if runCtx.Err() != nil {
-				_ = result.receiver.Channel.Close()
-				continue
-			}
-			s.onStart(result.receiver)
-			active++
-			workers.Go(func() {
-				err := s.sender.ServeReceiver(runCtx, result.receiver.Channel, result.receiver.Signaling, s.store, s.sealer)
-				results <- receiverResult{receiver: result.receiver, err: err}
-			})
-			if accepting {
-				startAccept()
-			}
-		case result := <-results:
-			active--
-			s.onEnd(result.receiver, result.err)
-			if result.err != nil && !errors.Is(result.err, context.Canceled) && s.classify(result.err) == SendShareFatal && fatal == nil {
-				fatal = result.err
-				accepting = false
-				cancel()
-			}
-		case <-ctxDone:
-			beginExternalShutdown()
+		case result := <-r.accepted:
+			r.handleAccepted(result)
+		case result := <-r.results:
+			r.handleServed(result)
+		case <-r.ctxDone:
+			r.beginExternalShutdown()
 		}
 	}
-	workers.Wait()
-	if fatal != nil {
-		return fatal
+}
+
+func (r *shareRun) handleAccepted(result acceptResult) {
+	r.acceptPending = false
+	if result.err != nil {
+		if result.receiver.Channel != nil {
+			_ = result.receiver.Channel.Close()
+		}
+		r.accepting = false
+		if !errors.Is(result.err, io.EOF) && !errors.Is(result.err, context.Canceled) {
+			r.sourceErr = fmt.Errorf("%w: %w", ErrReceiverSourceEnded, result.err)
+		}
+		r.cancel()
+		return
 	}
-	if sourceErr != nil {
-		return sourceErr
+	if result.receiver.Channel == nil || result.receiver.Signaling == nil {
+		r.fatal = fmt.Errorf("%w: accepted receiver channel and signaling are required", ErrNilDependency)
+		r.accepting = false
+		r.cancel()
+		return
 	}
-	if err := ctx.Err(); err != nil {
-		return err
+	if r.ctx.Err() != nil {
+		r.beginExternalShutdown()
 	}
-	return nil
+	if r.runCtx.Err() != nil {
+		_ = result.receiver.Channel.Close()
+		return
+	}
+	r.share.onStart(result.receiver)
+	r.active++
+	r.workers.Go(func() {
+		err := r.share.sender.ServeReceiver(r.runCtx, result.receiver.Channel, result.receiver.Signaling, r.share.store, r.share.sealer)
+		r.results <- receiverResult{receiver: result.receiver, err: err}
+	})
+	if r.accepting {
+		r.startAccept()
+	}
+}
+
+func (r *shareRun) handleServed(result receiverResult) {
+	r.active--
+	r.share.onEnd(result.receiver, result.err)
+	if result.err != nil && !errors.Is(result.err, context.Canceled) && r.share.classify(result.err) == SendShareFatal && r.fatal == nil {
+		r.fatal = result.err
+		r.accepting = false
+		r.cancel()
+	}
+}
+
+// result reports the first share-fatal outcome ahead of source loss, which in
+// turn outranks plain external cancellation.
+func (r *shareRun) result() error {
+	if r.fatal != nil {
+		return r.fatal
+	}
+	if r.sourceErr != nil {
+		return r.sourceErr
+	}
+	return r.ctx.Err()
 }
 
 type RelayReceiverSource struct{ conn *relay.SenderConn }

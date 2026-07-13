@@ -435,23 +435,9 @@ func (p *Pump) run() {
 		p.mu.Lock()
 		p.writing = nil
 		if err != nil {
-			if it.borrowed {
-				it.data = nil
-			}
-			if it.delivery != nil {
-				it.delivery.finish(err)
-			}
-			p.closeLocked(err)
+			p.failWriteLocked(&it, err)
 		} else {
-			if it.terminal {
-				p.removeSessionLocked(it.session)
-			}
-			if it.delivery != nil {
-				if it.borrowed {
-					it.data = nil
-				}
-				it.delivery.finish(nil)
-			}
+			p.completeWriteLocked(&it)
 		}
 		p.wake.Broadcast()
 		p.mu.Unlock()
@@ -459,6 +445,35 @@ func (p *Pump) run() {
 			return
 		}
 	}
+}
+
+// failWriteLocked settles the item whose write failed before the pump closes
+// with that error: the item left the queues at dequeue and run has already
+// cleared p.writing, so closeLocked cannot reach its receipt.
+func (p *Pump) failWriteLocked(it *item, err error) {
+	if it.borrowed {
+		it.data = nil
+	}
+	if it.delivery != nil {
+		it.delivery.finish(err)
+	}
+	p.closeLocked(err)
+}
+
+// completeWriteLocked settles a delivered item: a terminal completes its
+// session removal only now, so the session ID cannot reopen while the
+// terminal write is still in flight.
+func (p *Pump) completeWriteLocked(it *item) {
+	if it.terminal {
+		p.removeSessionLocked(it.session)
+	}
+	if it.delivery == nil {
+		return
+	}
+	if it.borrowed {
+		it.data = nil
+	}
+	it.delivery.finish(nil)
 }
 
 func (p *Pump) closeLocked(err error) {

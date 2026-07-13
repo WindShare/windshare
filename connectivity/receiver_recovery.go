@@ -149,14 +149,7 @@ func (r *ReceiverRecovery) Run(ctx context.Context, initial ReceiverLink) error 
 	if ctx == nil || initial == nil {
 		return fmt.Errorf("%w: context and initial relay link are required", ErrNilDependency)
 	}
-	if err := r.validate.Validate(initial.SealedManifest()); err != nil {
-		_ = initial.Close()
-		_ = r.pool.Close()
-		return fmt.Errorf("%w: %w", ErrManifestIdentity, err)
-	}
-	if err := r.pool.AddRelay(initial.FrameChannel(), initial.Signaling()); err != nil {
-		_ = initial.Close()
-		_ = r.pool.Close()
+	if err := r.admitInitialLink(initial); err != nil {
 		return err
 	}
 	current := initial
@@ -168,76 +161,140 @@ func (r *ReceiverRecovery) Run(ctx context.Context, initial ReceiverLink) error 
 	sessionDone := make(chan error, 1)
 	go func() { sessionDone <- r.session.Run(ctx) }()
 
-	failedAttempts := 0
 	for {
+		if ended, sessionErr := r.awaitRelayInterruption(ctx, sessionDone, current); ended {
+			return sessionErr
+		}
+		next, ended, terminalErr := r.restoreRelay(ctx, sessionDone)
+		if ended {
+			return terminalErr
+		}
+		_ = current.Close()
+		current = next
+		r.onEvent(RecoveryEvent{Kind: RecoveryRelayRestored, ReceiverID: next.ID()})
+	}
+}
+
+func (r *ReceiverRecovery) admitInitialLink(initial ReceiverLink) error {
+	if err := r.validate.Validate(initial.SealedManifest()); err != nil {
+		_ = initial.Close()
+		_ = r.pool.Close()
+		return fmt.Errorf("%w: %w", ErrManifestIdentity, err)
+	}
+	if err := r.pool.AddRelay(initial.FrameChannel(), initial.Signaling()); err != nil {
+		_ = initial.Close()
+		_ = r.pool.Close()
+		return err
+	}
+	return nil
+}
+
+// awaitRelayInterruption blocks until the relay link drops, the session ends,
+// or the caller cancels. A session result racing the relay drop must win so a
+// completed transfer is never diverted into recovery.
+func (r *ReceiverRecovery) awaitRelayInterruption(
+	ctx context.Context,
+	sessionDone <-chan error,
+	current ReceiverLink,
+) (bool, error) {
+	select {
+	case sessionErr := <-sessionDone:
+		return true, sessionErr
+	case <-ctx.Done():
+		return true, r.settleSession(sessionDone, ctx.Err())
+	case <-current.Done():
 		select {
 		case sessionErr := <-sessionDone:
-			return sessionErr
-		case <-ctx.Done():
-			return r.settleSession(sessionDone, ctx.Err())
-		case <-current.Done():
-			select {
-			case sessionErr := <-sessionDone:
-				return sessionErr
-			default:
-			}
-			r.onEvent(RecoveryEvent{Kind: RecoveryRelayInterrupted, Err: current.Err(), ReceiverID: current.ID()})
+			return true, sessionErr
+		default:
 		}
-
-		for {
-			next, sessionErr, sessionEnded, dialErr := r.dialAgainstSession(ctx, sessionDone)
-			if sessionEnded {
-				return sessionErr
-			}
-			if dialErr != nil {
-				if next != nil {
-					_ = next.Close()
-				}
-				failedAttempts++
-				recoveryErr := fmt.Errorf("%w: %w", ErrRelayRecoveryFailed, dialErr)
-				if !r.pool.PeerAvailable() {
-					return r.settleSession(sessionDone, recoveryErr)
-				}
-				r.onEvent(RecoveryEvent{Kind: RecoveryContinuingOnPeer, Err: recoveryErr})
-				if ended, sessionErr := r.waitForPeerOrSession(ctx, sessionDone); ended {
-					return sessionErr
-				}
-				r.onEvent(RecoveryEvent{Kind: RecoveryPeerEnded, Err: recoveryErr})
-				delay, retry := r.retry.NextDelay(RecoveryRetry{Attempt: failedAttempts, Err: recoveryErr})
-				if !retry {
-					return r.settleSession(sessionDone, recoveryErr)
-				}
-				select {
-				case sessionErr := <-sessionDone:
-					return sessionErr
-				case <-ctx.Done():
-					return r.settleSession(sessionDone, ctx.Err())
-				case <-r.clock.After(delay):
-				}
-				continue
-			}
-
-			if err := r.validate.Validate(next.SealedManifest()); err != nil {
-				_ = next.Close()
-				return r.settleSession(sessionDone, fmt.Errorf("%w: %w", ErrManifestIdentity, err))
-			}
-			select {
-			case sessionErr := <-sessionDone:
-				_ = next.Close()
-				return sessionErr
-			default:
-			}
-			if err := r.pool.AddRelay(next.FrameChannel(), next.Signaling()); err != nil {
-				_ = next.Close()
-				return r.settleSession(sessionDone, err)
-			}
-			_ = current.Close()
-			current = next
-			failedAttempts = 0
-			r.onEvent(RecoveryEvent{Kind: RecoveryRelayRestored, ReceiverID: next.ID()})
-			break
-		}
+		r.onEvent(RecoveryEvent{Kind: RecoveryRelayInterrupted, Err: current.Err(), ReceiverID: current.ID()})
+		return false, nil
 	}
+}
+
+// restoreRelay redials until a manifest-validated link is admitted to the pool
+// or a terminal outcome ends the run. The attempt counter is scoped to one
+// recovery cycle: the sole non-terminal exit is a successful restore, which is
+// exactly where the original counter reset.
+func (r *ReceiverRecovery) restoreRelay(
+	ctx context.Context,
+	sessionDone <-chan error,
+) (ReceiverLink, bool, error) {
+	failedAttempts := 0
+	for {
+		next, sessionErr, sessionEnded, dialErr := r.dialAgainstSession(ctx, sessionDone)
+		if sessionEnded {
+			return nil, true, sessionErr
+		}
+		if dialErr != nil {
+			failedAttempts++
+			if ended, terminalErr := r.holdForRetry(ctx, sessionDone, next, failedAttempts, dialErr); ended {
+				return nil, true, terminalErr
+			}
+			continue
+		}
+		if ended, terminalErr := r.admitRestoredLink(sessionDone, next); ended {
+			return nil, true, terminalErr
+		}
+		return next, false, nil
+	}
+}
+
+// holdForRetry rides out a failed dial on the established peer, then applies
+// the retry policy once that peer ends. Without a peer the transfer has no
+// remaining path, so the recovery error becomes the settlement cause.
+func (r *ReceiverRecovery) holdForRetry(
+	ctx context.Context,
+	sessionDone <-chan error,
+	failed ReceiverLink,
+	attempt int,
+	dialErr error,
+) (bool, error) {
+	if failed != nil {
+		_ = failed.Close()
+	}
+	recoveryErr := fmt.Errorf("%w: %w", ErrRelayRecoveryFailed, dialErr)
+	if !r.pool.PeerAvailable() {
+		return true, r.settleSession(sessionDone, recoveryErr)
+	}
+	r.onEvent(RecoveryEvent{Kind: RecoveryContinuingOnPeer, Err: recoveryErr})
+	if ended, sessionErr := r.waitForPeerOrSession(ctx, sessionDone); ended {
+		return true, sessionErr
+	}
+	r.onEvent(RecoveryEvent{Kind: RecoveryPeerEnded, Err: recoveryErr})
+	delay, retry := r.retry.NextDelay(RecoveryRetry{Attempt: attempt, Err: recoveryErr})
+	if !retry {
+		return true, r.settleSession(sessionDone, recoveryErr)
+	}
+	select {
+	case sessionErr := <-sessionDone:
+		return true, sessionErr
+	case <-ctx.Done():
+		return true, r.settleSession(sessionDone, ctx.Err())
+	case <-r.clock.After(delay):
+	}
+	return false, nil
+}
+
+// admitRestoredLink gates the redialed link on manifest identity and a final
+// session-completion check before handing its channel to the pool.
+func (r *ReceiverRecovery) admitRestoredLink(sessionDone <-chan error, next ReceiverLink) (bool, error) {
+	if err := r.validate.Validate(next.SealedManifest()); err != nil {
+		_ = next.Close()
+		return true, r.settleSession(sessionDone, fmt.Errorf("%w: %w", ErrManifestIdentity, err))
+	}
+	select {
+	case sessionErr := <-sessionDone:
+		_ = next.Close()
+		return true, sessionErr
+	default:
+	}
+	if err := r.pool.AddRelay(next.FrameChannel(), next.Signaling()); err != nil {
+		_ = next.Close()
+		return true, r.settleSession(sessionDone, err)
+	}
+	return false, nil
 }
 
 // settleSession tears down the scheduler and arbitrates its result against the

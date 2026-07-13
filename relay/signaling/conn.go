@@ -187,6 +187,25 @@ func (c *conn) sendBorrowedBinaryHigh(frame []byte) (<-chan error, bool) {
 	return receipt, true
 }
 
+// registerRejected maps every non-OK registration outcome to its terminal
+// error. Reporting lives beside the serve loop so beginRegister/finishRegister
+// stay pure state transitions (hub_internal_test.go drives them directly).
+func (c *conn) registerRejected(outcome registerOutcome) bool {
+	switch outcome {
+	case registerOK:
+		return false
+	case registerCollision:
+		c.fatal(protocol.ErrCodeShareIDCollision, "shareId is already active; generate a new one")
+	case registerResumeRejected:
+		c.fatal(protocol.ErrCodeResumeRejected, "re-registration validation failed during grace period")
+	case registerBudgetExceeded:
+		c.fatal(protocol.ErrCodeManifestBudget, "relay registration capacity exhausted; retry later or use another relay")
+	case registerRateLimited:
+		c.fatal(protocol.ErrCodeRateLimited, "register rate limit exceeded; retry later")
+	}
+	return true
+}
+
 func (h *Hub) serveSender(c *conn, shareID string, reg *protocol.Register) {
 	if reg.ShareID != shareID {
 		c.fatal(protocol.ErrCodeShareIDMismatch, "register shareId does not match request path")
@@ -195,21 +214,11 @@ func (h *Hub) serveSender(c *conn, shareID string, reg *protocol.Register) {
 
 	attempt, outcome := h.beginRegister(c, reg)
 	if attempt != nil {
+		// Provisional admission outlives the whole serve loop: release runs
+		// after the deferred senderGone below has published the grace state.
 		defer attempt.release()
 	}
-	switch outcome {
-	case registerOK:
-	case registerCollision:
-		c.fatal(protocol.ErrCodeShareIDCollision, "shareId is already active; generate a new one")
-		return
-	case registerResumeRejected:
-		c.fatal(protocol.ErrCodeResumeRejected, "re-registration validation failed during grace period")
-		return
-	case registerBudgetExceeded:
-		c.fatal(protocol.ErrCodeManifestBudget, "relay registration capacity exhausted; retry later or use another relay")
-		return
-	case registerRateLimited:
-		c.fatal(protocol.ErrCodeRateLimited, "register rate limit exceeded; retry later")
+	if c.registerRejected(outcome) {
 		return
 	}
 
@@ -220,19 +229,7 @@ func (h *Hub) serveSender(c *conn, shareID string, reg *protocol.Register) {
 		return
 	}
 	sh, outcome := h.finishRegister(c, reg, sealed, attempt)
-	switch outcome {
-	case registerOK:
-	case registerCollision:
-		c.fatal(protocol.ErrCodeShareIDCollision, "shareId is already active; generate a new one")
-		return
-	case registerResumeRejected:
-		c.fatal(protocol.ErrCodeResumeRejected, "re-registration validation failed during grace period")
-		return
-	case registerBudgetExceeded:
-		c.fatal(protocol.ErrCodeManifestBudget, "relay registration capacity exhausted; retry later or use another relay")
-		return
-	case registerRateLimited:
-		c.fatal(protocol.ErrCodeRateLimited, "register rate limit exceeded; retry later")
+	if c.registerRejected(outcome) {
 		return
 	}
 	defer h.senderGone(sh, c)
@@ -248,70 +245,99 @@ func (h *Hub) serveSender(c *conn, shareID string, reg *protocol.Register) {
 			return
 		}
 		if typ == websocket.MessageText {
-			msg, err := protocol.Decode(data)
-			if err != nil {
-				c.fatal(protocol.ErrCodeProtocol, err.Error())
-				return
-			}
-			switch m := msg.(type) {
-			case *protocol.Keepalive:
-				// 原样回显兼作应用层 pong(§6.7)。
-				c.sendConnection(protocol.NewKeepalive())
-			case *protocol.Signal:
-				if !h.relayControlToReceiver(c, sh, m.SessionID, m) {
-					return
-				}
-			case *protocol.Bye:
-				h.byeFromSender(sh, m)
-			case *protocol.Error:
-				if c.diagnosticReports.Add(1) > maxClientDiagnosticReports {
-					c.fatal(protocol.ErrCodeProtocol, "too many client diagnostic reports")
-					return
-				}
-				h.cfg.Logf("signaling: sender reported error share=%s code=%s", shareID, m.Code)
-			default:
-				c.fatal(protocol.ErrCodeProtocol, "sender must not send "+data2type(data))
+			if !h.handleSenderText(c, sh, shareID, data) {
 				return
 			}
 			continue
 		}
-		kind := protocol.BinType(data)
-		if kind != protocol.BinTypeForward && kind != protocol.BinTypeTerminalForward {
-			c.fatal(protocol.ErrCodeProtocol, "invalid binary frame type")
-			return
-		}
-		if int64(len(data)) > h.cfg.MaxFrameSize+protocol.ForwardOverheadBytes {
-			c.fatal(protocol.ErrCodeFrameTooLarge, "forward frame exceeds MaxFrameSize")
-			return
-		}
-		var sid protocol.SessionID
-		if kind == protocol.BinTypeTerminalForward {
-			sid, _, err = protocol.DecodeTerminalForwardFrame(data)
-		} else {
-			sid, _, err = protocol.DecodeForwardFrame(data)
-		}
-		if err != nil {
-			c.fatal(protocol.ErrCodeProtocol, err.Error())
-			return
-		}
-		if kind == protocol.BinTypeTerminalForward {
-			sess, sender, ok := h.takeSession(sh, sid)
-			if !ok {
-				continue
-			}
-			if sender != nil {
-				sender.pump.CloseSession(sid)
-			}
-			if result, _ := sess.recv.sendTerminalForward(sid, data); result != forward.Enqueued {
-				sess.recv.pump.CloseSession(sid)
-			}
-			sess.recv.closeAfterFlush()
-			continue
-		}
-		if !h.routeSenderForward(c, sh, sid, data) {
+		if !h.handleSenderBinary(c, sh, data) {
 			return
 		}
 	}
+}
+
+// handleSenderText dispatches one signaling message from the sender. A false
+// return ends the serve loop; the required fatal has already been sent.
+func (h *Hub) handleSenderText(c *conn, sh *share, shareID string, data []byte) bool {
+	msg, err := protocol.Decode(data)
+	if err != nil {
+		c.fatal(protocol.ErrCodeProtocol, err.Error())
+		return false
+	}
+	switch m := msg.(type) {
+	case *protocol.Keepalive:
+		// 原样回显兼作应用层 pong(§6.7)。
+		c.sendConnection(protocol.NewKeepalive())
+	case *protocol.Signal:
+		return h.relayControlToReceiver(c, sh, m.SessionID, m)
+	case *protocol.Bye:
+		h.byeFromSender(sh, m)
+	case *protocol.Error:
+		if c.diagnosticReports.Add(1) > maxClientDiagnosticReports {
+			c.fatal(protocol.ErrCodeProtocol, "too many client diagnostic reports")
+			return false
+		}
+		h.cfg.Logf("signaling: sender reported error share=%s code=%s", shareID, m.Code)
+	default:
+		c.fatal(protocol.ErrCodeProtocol, "sender must not send "+data2type(data))
+		return false
+	}
+	return true
+}
+
+func (h *Hub) handleSenderBinary(c *conn, sh *share, data []byte) bool {
+	sid, terminal, ok := h.parseForwardFrame(c, data)
+	if !ok {
+		return false
+	}
+	if terminal {
+		h.terminalForwardFromSender(sh, sid, data)
+		return true
+	}
+	return h.routeSenderForward(c, sh, sid, data)
+}
+
+// parseForwardFrame enforces the binary framing rules shared by both roles,
+// issuing the protocol fatal itself so callers can simply stop on !ok.
+func (h *Hub) parseForwardFrame(c *conn, data []byte) (sid protocol.SessionID, terminal, ok bool) {
+	kind := protocol.BinType(data)
+	if kind != protocol.BinTypeForward && kind != protocol.BinTypeTerminalForward {
+		c.fatal(protocol.ErrCodeProtocol, "invalid binary frame type")
+		return sid, false, false
+	}
+	if int64(len(data)) > h.cfg.MaxFrameSize+protocol.ForwardOverheadBytes {
+		c.fatal(protocol.ErrCodeFrameTooLarge, "forward frame exceeds MaxFrameSize")
+		return sid, false, false
+	}
+	terminal = kind == protocol.BinTypeTerminalForward
+	var err error
+	if terminal {
+		sid, _, err = protocol.DecodeTerminalForwardFrame(data)
+	} else {
+		sid, _, err = protocol.DecodeForwardFrame(data)
+	}
+	if err != nil {
+		c.fatal(protocol.ErrCodeProtocol, err.Error())
+		return sid, false, false
+	}
+	return sid, terminal, true
+}
+
+// terminalForwardFromSender mirrors byeFromSender's teardown while relaying
+// the opaque terminal frame to the receiver. An already-taken session is a
+// benign race with the other teardown paths, not a protocol violation.
+func (h *Hub) terminalForwardFromSender(sh *share, sid protocol.SessionID, data []byte) {
+	sess, sender, ok := h.takeSession(sh, sid)
+	if !ok {
+		return
+	}
+	if sender != nil {
+		sender.pump.CloseSession(sid)
+	}
+	if result, _ := sess.recv.sendTerminalForward(sid, data); result != forward.Enqueued {
+		sess.recv.pump.CloseSession(sid)
+	}
+	sess.recv.closeAfterFlush()
 }
 
 func (h *Hub) routeSenderForward(c *conn, sh *share, sid protocol.SessionID, data []byte) bool {
@@ -334,75 +360,9 @@ func (h *Hub) routeSenderForward(c *conn, sh *share, sid protocol.SessionID, dat
 }
 
 func (h *Hub) serveReceiver(c *conn, shareID string, join *protocol.Join) {
-	// join 状态循环:not_found 后允许同连接重试(短窗退避的竞态是常态,
-	// §6.7),每次尝试都过限速闸。
-	var sh *share
-	var sess *receiverSession
-	var manifestPin *admission.LeasePin
-	for {
-		if join.ShareID != shareID {
-			c.fatal(protocol.ErrCodeShareIDMismatch, "join shareId does not match request path")
-			return
-		}
-		var joinAttempt *admission.JoinAttempt
-		if h.cfg.Admission != nil {
-			var decision admission.Decision
-			joinAttempt, decision = h.cfg.Admission.BeginJoin(c.ip)
-			if !decision.Allowed() {
-				c.fatal(protocol.ErrCodeRateLimited, "join rate limit exceeded; retry with backoff")
-				return
-			}
-		}
-		if sh = h.findShare(shareID); sh != nil {
-			if joinAttempt != nil {
-				decision := joinAttempt.AllowShare(sh.admissionLease)
-				if decision == admission.JoinRateExceeded {
-					c.fatal(protocol.ErrCodeRateLimited, "join rate limit exceeded; retry with backoff")
-					return
-				}
-				if !decision.Allowed() {
-					sh = nil
-				}
-			}
-		}
-		if sh != nil {
-			if sh.admissionLease != nil {
-				var ok bool
-				manifestPin, ok = sh.admissionLease.Pin()
-				if !ok {
-					sh = nil
-				}
-			}
-			if sh != nil {
-				sess = h.openSession(sh, c)
-			}
-			if sess != nil {
-				break
-			}
-			manifestPin.Release()
-			manifestPin = nil
-		}
-		if !c.sendConnection(protocol.NewNotFound()) {
-			return
-		}
-		typ, data, err := c.readActive()
-		if err != nil {
-			return
-		}
-		msg, derr := decodeText(typ, data)
-		if derr != nil {
-			c.fatal(protocol.ErrCodeProtocol, derr.Error())
-			return
-		}
-		switch m := msg.(type) {
-		case *protocol.Join:
-			join = m
-		case *protocol.Keepalive:
-			c.sendConnection(protocol.NewKeepalive())
-		default:
-			c.fatal(protocol.ErrCodeProtocol, "only join or keepalive is allowed before session establishment")
-			return
-		}
+	sh, sess, manifestPin, ok := h.awaitReceiverSession(c, shareID, join)
+	if !ok {
+		return
 	}
 	// 接收端断开(或本循环退出)即会话终结;未及 bye 由中转代发,发送端
 	// 无需区分"告别"与"消失"。
@@ -430,89 +390,200 @@ func (h *Hub) serveReceiver(c *conn, shareID string, join *protocol.Join) {
 			return
 		}
 		if typ == websocket.MessageText {
-			msg, err := protocol.Decode(data)
-			if err != nil {
-				c.fatal(protocol.ErrCodeProtocol, err.Error())
-				return
-			}
-			switch m := msg.(type) {
-			case *protocol.Keepalive:
-				c.sendConnection(protocol.NewKeepalive())
-			case *protocol.Signal:
-				if !h.relayControlToSender(c, sh, sess, m.SessionID, m) {
-					return
-				}
-			case *protocol.Bye:
-				if m.SessionID != sess.id.String() {
-					c.fatal(protocol.ErrCodeUnknownSession, "bye sessionId does not belong to this connection")
-					return
-				}
-				h.endSession(sh, sess, true)
-				c.closeAfterFlush()
-				return
-			case *protocol.Error:
-				if c.diagnosticReports.Add(1) > maxClientDiagnosticReports {
-					c.fatal(protocol.ErrCodeProtocol, "too many client diagnostic reports")
-					return
-				}
-				h.cfg.Logf("signaling: receiver reported error share=%s code=%s", shareID, m.Code)
-			default:
-				c.fatal(protocol.ErrCodeProtocol, "receiver must not send "+data2type(data))
+			if !h.handleReceiverText(c, sh, sess, shareID, data) {
 				return
 			}
 			continue
 		}
-		kind := protocol.BinType(data)
-		if kind != protocol.BinTypeForward && kind != protocol.BinTypeTerminalForward {
-			c.fatal(protocol.ErrCodeProtocol, "invalid binary frame type")
-			return
-		}
-		if int64(len(data)) > h.cfg.MaxFrameSize+protocol.ForwardOverheadBytes {
-			c.fatal(protocol.ErrCodeFrameTooLarge, "forward frame exceeds MaxFrameSize")
-			return
-		}
-		var sid protocol.SessionID
-		if kind == protocol.BinTypeTerminalForward {
-			sid, _, err = protocol.DecodeTerminalForwardFrame(data)
-		} else {
-			sid, _, err = protocol.DecodeForwardFrame(data)
-		}
-		if err != nil {
-			c.fatal(protocol.ErrCodeProtocol, err.Error())
-			return
-		}
-		if sid != sess.id {
-			c.fatal(protocol.ErrCodeUnknownSession, "forward frame sessionId does not belong to this connection")
-			return
-		}
-		if kind == protocol.BinTypeTerminalForward {
-			_, sender, ok := h.takeSession(sh, sid)
-			if !ok || sender == nil {
-				return
-			}
-			c.pump.CloseSession(sid)
-			if result, _ := sender.sendTerminalForward(sid, data); result != forward.Enqueued {
-				sender.pump.CloseSession(sid)
-			}
-			c.closeAfterFlush()
-			return
-		}
-		_, sender, ok := h.lookupSession(sh, sid)
-		if !ok {
-			c.fatal(protocol.ErrCodeSenderGone, "session is no longer active")
-			return
-		}
-		switch sender.pump.EnqueueForward(sid, data) {
-		case forward.Enqueued:
-		case forward.Overflow:
-			h.killSession(sh, sess, protocol.ErrCodeSessionOverflow, "sender forward queue overflow")
-			return
-		case forward.UnknownSession, forward.SessionTerminated, forward.PumpClosed:
-			h.endSession(sh, sess, false)
-			c.fatal(protocol.ErrCodeSenderGone, "sender disconnected")
+		if !h.handleReceiverBinary(c, sh, sess, data) {
 			return
 		}
 	}
+}
+
+// joinOutcome describes one pass of tryJoin's admission ladder.
+type joinOutcome int
+
+const (
+	joinOpened joinOutcome = iota
+	// joinRetry covers every "share not available" shape (absent, suspended,
+	// per-share admission verdicts, lost open races): the receiver only sees
+	// not_found and backs off, never learning which shape it hit.
+	joinRetry
+	joinRateLimited
+)
+
+// awaitReceiverSession 是 join 状态循环:not_found 后允许同连接重试(短窗
+// 退避的竞态是常态,§6.7),每次尝试——含 keepalive 触发的——都过限速闸。
+func (h *Hub) awaitReceiverSession(c *conn, shareID string, join *protocol.Join) (*share, *receiverSession, *admission.LeasePin, bool) {
+	for {
+		if join.ShareID != shareID {
+			c.fatal(protocol.ErrCodeShareIDMismatch, "join shareId does not match request path")
+			return nil, nil, nil, false
+		}
+		sh, sess, manifestPin, outcome := h.tryJoin(c, shareID)
+		switch outcome {
+		case joinOpened:
+			return sh, sess, manifestPin, true
+		case joinRateLimited:
+			c.fatal(protocol.ErrCodeRateLimited, "join rate limit exceeded; retry with backoff")
+			return nil, nil, nil, false
+		case joinRetry:
+		}
+		if !c.sendConnection(protocol.NewNotFound()) {
+			return nil, nil, nil, false
+		}
+		typ, data, err := c.readActive()
+		if err != nil {
+			return nil, nil, nil, false
+		}
+		msg, derr := decodeText(typ, data)
+		if derr != nil {
+			c.fatal(protocol.ErrCodeProtocol, derr.Error())
+			return nil, nil, nil, false
+		}
+		switch m := msg.(type) {
+		case *protocol.Join:
+			join = m
+		case *protocol.Keepalive:
+			c.sendConnection(protocol.NewKeepalive())
+		default:
+			c.fatal(protocol.ErrCodeProtocol, "only join or keepalive is allowed before session establishment")
+			return nil, nil, nil, false
+		}
+	}
+}
+
+// tryJoin makes one admission-gated attempt to open a session against the
+// active share. Every failed rung after BeginJoin degrades to joinRetry
+// except the rate verdicts, which must end the connection instead of feeding
+// a hot retry loop.
+func (h *Hub) tryJoin(c *conn, shareID string) (*share, *receiverSession, *admission.LeasePin, joinOutcome) {
+	var joinAttempt *admission.JoinAttempt
+	if h.cfg.Admission != nil {
+		var decision admission.Decision
+		joinAttempt, decision = h.cfg.Admission.BeginJoin(c.ip)
+		if !decision.Allowed() {
+			return nil, nil, nil, joinRateLimited
+		}
+	}
+	sh := h.findShare(shareID)
+	if sh == nil {
+		return nil, nil, nil, joinRetry
+	}
+	if joinAttempt != nil {
+		decision := joinAttempt.AllowShare(sh.admissionLease)
+		if decision == admission.JoinRateExceeded {
+			return nil, nil, nil, joinRateLimited
+		}
+		if !decision.Allowed() {
+			return nil, nil, nil, joinRetry
+		}
+	}
+	// The pin keeps the manifest budget alive across the handshake even if the
+	// share is reaped concurrently; a share that can no longer be pinned is
+	// indistinguishable from an absent one.
+	var manifestPin *admission.LeasePin
+	if sh.admissionLease != nil {
+		var ok bool
+		manifestPin, ok = sh.admissionLease.Pin()
+		if !ok {
+			return nil, nil, nil, joinRetry
+		}
+	}
+	sess := h.openSession(sh, c)
+	if sess == nil {
+		manifestPin.Release()
+		return nil, nil, nil, joinRetry
+	}
+	return sh, sess, manifestPin, joinOpened
+}
+
+// handleReceiverText dispatches one signaling message from the receiver. A
+// false return ends the serve loop; serveReceiver's deferred endSession and
+// pin release cover every exit uniformly.
+func (h *Hub) handleReceiverText(c *conn, sh *share, sess *receiverSession, shareID string, data []byte) bool {
+	msg, err := protocol.Decode(data)
+	if err != nil {
+		c.fatal(protocol.ErrCodeProtocol, err.Error())
+		return false
+	}
+	switch m := msg.(type) {
+	case *protocol.Keepalive:
+		c.sendConnection(protocol.NewKeepalive())
+	case *protocol.Signal:
+		return h.relayControlToSender(c, sh, sess, m.SessionID, m)
+	case *protocol.Bye:
+		if m.SessionID != sess.id.String() {
+			c.fatal(protocol.ErrCodeUnknownSession, "bye sessionId does not belong to this connection")
+			return false
+		}
+		h.endSession(sh, sess, true)
+		c.closeAfterFlush()
+		return false
+	case *protocol.Error:
+		if c.diagnosticReports.Add(1) > maxClientDiagnosticReports {
+			c.fatal(protocol.ErrCodeProtocol, "too many client diagnostic reports")
+			return false
+		}
+		h.cfg.Logf("signaling: receiver reported error share=%s code=%s", shareID, m.Code)
+	default:
+		c.fatal(protocol.ErrCodeProtocol, "receiver must not send "+data2type(data))
+		return false
+	}
+	return true
+}
+
+func (h *Hub) handleReceiverBinary(c *conn, sh *share, sess *receiverSession, data []byte) bool {
+	sid, terminal, ok := h.parseForwardFrame(c, data)
+	if !ok {
+		return false
+	}
+	if sid != sess.id {
+		c.fatal(protocol.ErrCodeUnknownSession, "forward frame sessionId does not belong to this connection")
+		return false
+	}
+	if terminal {
+		h.terminalForwardFromReceiver(c, sh, sid, data)
+		return false
+	}
+	return h.routeReceiverForward(c, sh, sess, sid, data)
+}
+
+// terminalForwardFromReceiver relays the receiver's final frame to the sender.
+// The connection ends either way: the terminal frame is the session's last
+// word, and a session already gone means there is nobody left to hear it.
+func (h *Hub) terminalForwardFromReceiver(c *conn, sh *share, sid protocol.SessionID, data []byte) {
+	_, sender, ok := h.takeSession(sh, sid)
+	if !ok || sender == nil {
+		return
+	}
+	c.pump.CloseSession(sid)
+	if result, _ := sender.sendTerminalForward(sid, data); result != forward.Enqueued {
+		sender.pump.CloseSession(sid)
+	}
+	c.closeAfterFlush()
+}
+
+// routeReceiverForward pushes one data frame toward the sender's bounded
+// session queue; a false return means the session was torn down with it.
+func (h *Hub) routeReceiverForward(c *conn, sh *share, sess *receiverSession, sid protocol.SessionID, data []byte) bool {
+	_, sender, ok := h.lookupSession(sh, sid)
+	if !ok {
+		c.fatal(protocol.ErrCodeSenderGone, "session is no longer active")
+		return false
+	}
+	switch sender.pump.EnqueueForward(sid, data) {
+	case forward.Enqueued:
+	case forward.Overflow:
+		h.killSession(sh, sess, protocol.ErrCodeSessionOverflow, "sender forward queue overflow")
+		return false
+	case forward.UnknownSession, forward.SessionTerminated, forward.PumpClosed:
+		h.endSession(sh, sess, false)
+		c.fatal(protocol.ErrCodeSenderGone, "sender disconnected")
+		return false
+	}
+	return true
 }
 
 // relayControlToReceiver keeps signal ordering inside the target session. A
