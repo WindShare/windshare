@@ -54,25 +54,12 @@ jobs:
   sloc:
     name: SLOC guard
     runs-on: ubuntu-latest
-    env:
-      # Pinned to the version used by the local gate.
-      SLOC_GUARD_VERSION: v0.4.0
     steps:
       - uses: actions/checkout@v4
-      - name: install sloc-guard
-        run: |
-          curl -fsSL -o "$RUNNER_TEMP/sloc-guard.tar.gz" \
-            "https://github.com/doraemonkeys/sloc-guard/releases/download/${SLOC_GUARD_VERSION}/sloc-guard-${SLOC_GUARD_VERSION}-linux-x64.tar.gz"
-          mkdir -p "$RUNNER_TEMP/sloc-guard"
-          tar -xzf "$RUNNER_TEMP/sloc-guard.tar.gz" -C "$RUNNER_TEMP/sloc-guard"
-          binary="$(find "$RUNNER_TEMP/sloc-guard" -type f -name sloc-guard | head -n 1)"
-          if [ -z "$binary" ]; then
-            echo "sloc-guard binary not found in the release archive" >&2
-            exit 1
-          fi
-          sudo install -m 0755 "$binary" /usr/local/bin/sloc-guard
       - name: sloc-guard check
-        run: sloc-guard check
+        # Tracks the latest sloc-guard release so new gate features (e.g. rule
+        # additions the config relies on) apply without a CI bump.
+        uses: doraemonkeys/sloc-guard/.github/action@master
 
   go-root:
     name: Go root module (vet, build, race, coverage)
