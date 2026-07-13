@@ -57,17 +57,20 @@ reason = "Shared test fixtures and golden vectors"
 # below match, so docs/testvectors/etc. stay unconstrained (allowlist model).
 [structure]
 warn_threshold = 0.8                      # Warn at 80% of limits (inherited by rules)
+# Go tests co-locate with sources, so they'd double a package's file count;
+# only affects structure counting (content limits above still apply).
+count_exclude = ["*_test.go"]
 
 # Go module roots (exact-match globs don't cover the root dir via "/**")
 [[structure.rules]]
 scope = "{cmd,core,relay,transport,webrtc}"
-max_files = 20
+max_files = 15
 max_dirs = 20
 reason = "Go source: keep packages small and flat"
 
 [[structure.rules]]
 scope = "{cmd,core,relay,transport,webrtc}/**"
-max_files = 20
+max_files = 15
 max_dirs = 20
 reason = "Go source: keep packages small and flat"
 
