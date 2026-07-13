@@ -309,9 +309,13 @@ function Invoke-D5PlannedBinary([object]$Definition, [string]$Phase) {
     $logPath = Join-Path $script:run.StagePath $relativeLog
     $executionRun = $script:run
     $executionID = $requestID
+    # GetNewClosure binds the block to a fresh dynamic module that resolves
+    # commands through the global scope, so script-scoped functions must be
+    # captured as variables to survive CI's dot-sourcing pwsh step wrapper.
+    $addSourceCheckpoint = ${function:Add-D5SourceCheckpoint}
     $checkpoint = {
         param([string]$Boundary)
-        Add-D5SourceCheckpoint $executionRun "$Boundary-execution-$executionID"
+        & $addSourceCheckpoint $executionRun "$Boundary-execution-$executionID"
     }.GetNewClosure()
     $result = Invoke-D5PlannedTestProcess `
         -Plan $binding.Plan `
@@ -349,9 +353,12 @@ function Get-D5BinaryManifest([string]$Name) {
         -SourceIdentity $script:run.SourceAtStart
     $enumerationRun = $script:run
     $enumerationName = $Name
+    # Same closure-module constraint as Invoke-D5PlannedBinary: capture the
+    # script-scoped function as a variable so the closure can invoke it.
+    $addSourceCheckpoint = ${function:Add-D5SourceCheckpoint}
     $checkpoint = {
         param([string]$Boundary)
-        Add-D5SourceCheckpoint $enumerationRun "$Boundary-enumeration-$enumerationName"
+        & $addSourceCheckpoint $enumerationRun "$Boundary-enumeration-$enumerationName"
     }.GetNewClosure()
     $result = Invoke-D5TestEnumerationProcess `
         -Operation $operation `
