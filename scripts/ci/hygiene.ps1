@@ -43,7 +43,9 @@ $emptyTree = @() | git hash-object -t tree --stdin
 if ($LASTEXITCODE -ne 0) {
     throw "git hash-object exited with code $LASTEXITCODE"
 }
-git diff --check $emptyTree
+# --no-pager: in an interactive terminal git would otherwise hand the diff to
+# less and park the whole gate on a keypress; gate scripts must never page.
+git --no-pager diff --check $emptyTree
 if ($LASTEXITCODE -ne 0) {
     throw 'git diff --check reported whitespace errors'
 }

@@ -23,7 +23,9 @@ if [ -n "$unformatted" ]; then
 fi
 
 echo "-- whitespace (git diff --check against the empty tree)"
-git diff --check "$(git hash-object -t tree /dev/null)"
+# --no-pager: in an interactive terminal git would otherwise hand the diff to
+# less and park the whole gate on a keypress; gate scripts must never page.
+git --no-pager diff --check "$(git hash-object -t tree /dev/null)"
 
 echo "-- gopls check (severity=hint, tracked Go files)"
 go install golang.org/x/tools/gopls@v0.22.0
