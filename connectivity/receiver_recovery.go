@@ -199,7 +199,7 @@ func (r *ReceiverRecovery) Run(ctx context.Context, initial ReceiverLink) error 
 					return r.settleSession(sessionDone, recoveryErr)
 				}
 				r.onEvent(RecoveryEvent{Kind: RecoveryContinuingOnPeer, Err: recoveryErr})
-				if sessionErr, ended := r.waitForPeerOrSession(ctx, sessionDone); ended {
+				if ended, sessionErr := r.waitForPeerOrSession(ctx, sessionDone); ended {
 					return sessionErr
 				}
 				r.onEvent(RecoveryEvent{Kind: RecoveryPeerEnded, Err: recoveryErr})
@@ -308,21 +308,21 @@ func (r *ReceiverRecovery) dialAgainstSession(
 func (r *ReceiverRecovery) waitForPeerOrSession(
 	ctx context.Context,
 	sessionDone <-chan error,
-) (error, bool) {
+) (bool, error) {
 	for r.pool.PeerAvailable() {
 		select {
 		case sessionErr := <-sessionDone:
-			return sessionErr, true
+			return true, sessionErr
 		case <-ctx.Done():
-			return r.settleSession(sessionDone, ctx.Err()), true
+			return true, r.settleSession(sessionDone, ctx.Err())
 		case <-r.pool.PeerChanges():
 		}
 	}
 	select {
 	case sessionErr := <-sessionDone:
-		return sessionErr, true
+		return true, sessionErr
 	default:
-		return nil, false
+		return false, nil
 	}
 }
 

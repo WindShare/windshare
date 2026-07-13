@@ -27,7 +27,8 @@ type SendErrorClassifier func(error) SendErrorDisposition
 
 // ClassifySendError preserves the original domain branch when terminal delivery
 // contributes a diagnostic error. Transport joins must not hide source drift or
-// an unknown sealer failure shared by every receiver.
+// an unknown sealer failure shared by every receiver, while a recognized
+// path-local sentinel is definitive even when it wraps unknown diagnostics.
 func ClassifySendError(err error) SendErrorDisposition {
 	if err == nil {
 		return SendPathEnded
@@ -55,9 +56,23 @@ func ClassifySendError(err error) SendErrorDisposition {
 		}
 		return SendShareFatal
 	}
+	// A path-local sentinel anywhere in the chain is a definitive verdict and
+	// must be recognized before the join aggregation below: sentinels wrap
+	// subordinate diagnostics (ErrPeerViolation carries the decode detail via
+	// %w), and aggregating first would let such an unknown child escalate one
+	// receiver's outcome to share-fatal. The share-wide causes — drift and
+	// terminal-delivery arbitration — have already claimed the chain above.
 	if errors.Is(err, transportwebrtc.ErrTransport) ||
 		errors.Is(err, transportwebrtc.ErrPeerProtocol) ||
-		errors.Is(err, transportwebrtc.ErrTerminalNotAcknowledged) {
+		errors.Is(err, transportwebrtc.ErrTerminalNotAcknowledged) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, session.ErrSessionClosed) ||
+		errors.Is(err, session.ErrPeerViolation) ||
+		errors.Is(err, relay.ErrChannelClosed) ||
+		errors.Is(err, relay.ErrConnClosed) ||
+		errors.Is(err, transportwebrtc.ErrChannelClosed) ||
+		errors.Is(err, transportwebrtc.ErrRemoteClosed) {
 		return SendPathEnded
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
@@ -70,16 +85,6 @@ func ClassifySendError(err error) SendErrorDisposition {
 				return SendShareFatal
 			}
 		}
-		return SendPathEnded
-	}
-	if errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, session.ErrSessionClosed) ||
-		errors.Is(err, session.ErrPeerViolation) ||
-		errors.Is(err, relay.ErrChannelClosed) ||
-		errors.Is(err, relay.ErrConnClosed) ||
-		errors.Is(err, transportwebrtc.ErrChannelClosed) ||
-		errors.Is(err, transportwebrtc.ErrRemoteClosed) {
 		return SendPathEnded
 	}
 	if _, ok := errors.AsType[*session.Error](err); ok {

@@ -1,0 +1,124 @@
+# golangci-lint v2 gate config, shared by both Go modules: `make lint` runs
+# the linter in the root module and in core/, which discovers this file
+# upward. spikes/ is experimental and stays outside this gate, matching its
+# exclusion from the race and coverage gates.
+version: "2"
+
+run:
+  # Guard against CI hangs; the full two-module run finishes well under this.
+  timeout: 5m
+
+linters:
+  # The v2 "standard" default set (errcheck, govet, ineffassign, staticcheck,
+  # unused) stays enabled; the list below adds to it. Deliberate deviations
+  # from the reference config this gate was adapted from:
+  #  - govet also runs standalone in `make vet` (CI go-root/go-core vet).
+  #    Keeping it here is harmless duplication and preserves the standard set.
+  #  - staticcheck overlaps the hygiene gate's `gopls check -severity=hint`,
+  #    which embeds a staticcheck subset. This is the full superset (SA + ST +
+  #    S + QF classes); both tools demand the same fix for shared checks, so
+  #    the gates cannot contradict each other.
+  #  - revive is dropped (owner decision 2026-07-13). The reference enabled it
+  #    solely to host file-length-limit, which sloc-guard already gates in
+  #    `make hygiene` (.sloc-guard.toml: 600 lines Go source / 1100 Go tests,
+  #    comments and blanks skipped). Without that rule revive falls back to
+  #    its golint-style defaults, dominated by `exported` demanding doc
+  #    comments on every exported symbol — mandated what-comments contradict
+  #    AGENTS.md "Explain Why, not What", and the residual non-`exported`
+  #    findings did not justify the rule engine.
+  #  - gocyclo is dropped: the reference itself marks it auxiliary, and one
+  #    complexity ruler (gocognit) alongside the nesting cap (nestif) is
+  #    enough; two overlapping rulers would demand double-negotiated budgets.
+  #  - misspell (in the reference) is not adopted (owner decision 2026-07-13).
+  enable:
+    - bodyclose # HTTP response bodies must be closed
+    - dupl # duplicated code blocks
+    - errorlint # Go 1.13+ error wrapping/comparison correctness
+    - funlen # function length cap
+    - gocognit # cognitive-complexity cap
+    - gocritic # broad opinionated diagnostics
+    - nestif # if-nesting depth cap
+    - prealloc # slice preallocation opportunities
+    - unconvert # unnecessary type conversions
+  exclusions:
+    paths:
+      # Test files are exempt from this gate ENTIRELY — a paths exclusion
+      # drops them from every enabled linter, correctness classes included
+      # (owner-endorsed, matching the reference config's wholesale test
+      # exemption). Rationale: table-driven tests legitimately exceed
+      # funlen/dupl budgets, sloc-guard separately caps *_test.go at 1100
+      # lines, and `go vet` plus the hygiene gate's gopls check still analyze
+      # test files. The reference config's broader bare `test` path pattern
+      # is deliberately not carried over — this repo has production packages
+      # with "test" in their import paths (internal/testnetwork) that must
+      # stay linted.
+      - _test\.go$
+    rules:
+      # `defer x.Close()` on read paths: the error is unactionable and Go
+      # convention ignores it; write paths must check Close explicitly (not
+      # via defer) and remain covered by errcheck.
+      - linters:
+          - errcheck
+        source: "defer.*\\.Close\\(\\)"
+      # False positive by library contract: coder/websocket's Dial documents
+      # "You never need to close resp.Body yourself" — it closes the real
+      # body on error paths itself (substituting nil or an in-memory
+      # NopCloser) and on success the body is the hijacked connection owned
+      # by the returned *websocket.Conn. A defensive Close would be dead code
+      # implying a caller obligation that does not exist.
+      - linters:
+          - bodyclose
+        source: "websocket\\.Dial\\("
+      # The D5 SSA fixed-point analyzer's complexity is intrinsic to its
+      # domain (control-flow dominance and termination proofs), and its
+      # sources are pinned by D5 source-fingerprint fixtures — style-driven
+      # rewrites would churn frozen hashes for zero correctness gain.
+      # Correctness linters (errcheck, staticcheck, errorlint, bodyclose)
+      # stay on for it.
+      - path: scripts/internal/d5networkpolicy/
+        linters:
+          - funlen
+          - gocognit
+          - gocritic
+          - nestif
+          - prealloc
+      # Test-support packages, mirroring their coverage-gate exemptions:
+      # channeltest's Run is a conformance-suite driver whose sequential
+      # scenario walk is inherently long, and testnetwork wraps OS-gated
+      # socket/process plumbing; neither is product logic. funlen is exempted
+      # with the complexity caps — same length-vs-suite-driver trade-off.
+      - path: session/channeltest/
+        linters:
+          - funlen
+          - gocognit
+          - nestif
+      - path: internal/testnetwork/
+        linters:
+          - funlen
+          - gocognit
+          - nestif
+  settings:
+    errcheck:
+      # CLI terminal writes: a failed write to the user's own stdout/stderr
+      # has no actionable recovery. File/socket writes use io.Writer methods
+      # directly and stay checked.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    funlen:
+      lines: 150
+      statements: 75
+      # Why-comments are encouraged by AGENTS.md and must not count against
+      # the budget.
+      ignore-comments: true
+    nestif:
+      # Effectively caps if-nesting around depth 4; deeper chains must be
+      # flattened (early returns) or extracted.
+      min-complexity: 5
+
+issues:
+  # Zero tolerance: never cap or deduplicate reported issues, so the gate
+  # always shows the full picture and any single finding fails the run.
+  max-issues-per-linter: 0
+  max-same-issues: 0

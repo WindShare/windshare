@@ -73,7 +73,7 @@ func (s *SendSession) handle(ctx context.Context, f Frame) error {
 	msg, err := Decode(f)
 	if err != nil {
 		// 可靠有序通道上的畸形帧不是丢包,是对端实现坏了或恶意——通知后终止。
-		cause := fmt.Errorf("%w: %v", ErrPeerViolation, err)
+		cause := fmt.Errorf("%w: %w", ErrPeerViolation, err)
 		return s.terminate(ctx, ErrCodeBadRequest, err.Error(), cause)
 	}
 	switch m := msg.(type) {
@@ -130,10 +130,10 @@ func (s *SendSession) terminate(ctx context.Context, code uint16, msg string, ca
 	msg = truncateErrorMessage(strings.ToValidUTF8(msg, "\uFFFD"))
 	f, err := EncodeError(code, msg)
 	if err != nil {
-		return errors.Join(cause, fmt.Errorf("%w while encoding: %v", ErrTerminalDelivery, err))
+		return errors.Join(cause, fmt.Errorf("%w while encoding: %w", ErrTerminalDelivery, err))
 	}
 	if err := s.ch.SendTerminal(ctx, f); err != nil {
-		return errors.Join(cause, fmt.Errorf("%w: %v", ErrTerminalDelivery, err))
+		return errors.Join(cause, fmt.Errorf("%w: %w", ErrTerminalDelivery, err))
 	}
 	return cause
 }

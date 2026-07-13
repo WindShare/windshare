@@ -70,21 +70,28 @@ func loadWindowsHarnessAuthorization() (processAuthorization, error) {
 	if err != nil {
 		return processAuthorization{}, err
 	}
+	// Failure paths discard the guard best-effort: the authorization error is
+	// the actionable failure, and a close error on a handle being thrown away
+	// has no recovery.
+	guardAdopted := false
+	defer func() {
+		if !guardAdopted {
+			_ = windows.CloseHandle(guard)
+		}
+	}()
 	payload, err := readParentAuthorization(guard)
 	if err != nil {
-		windows.CloseHandle(guard)
 		return processAuthorization{}, err
 	}
 	programs, err := validateParentAuthorization(payload)
 	if err != nil {
-		windows.CloseHandle(guard)
 		return processAuthorization{}, err
 	}
 	result := processAuthorization{runID: payload.RunID, programs: programs, guard: guard}
 	if err := result.verifyExecutable(currentExecutable()); err != nil {
-		windows.CloseHandle(guard)
 		return processAuthorization{}, err
 	}
+	guardAdopted = true
 	go monitorRunnerGuard(guard)
 	return result, nil
 }

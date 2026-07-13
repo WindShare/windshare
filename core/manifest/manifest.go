@@ -359,7 +359,7 @@ func decodeManifest(plain []byte) (*Manifest, error) {
 	}
 	var m Manifest
 	if err := strictDecMode.Unmarshal(plain, &m); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrNonCanonical, err)
+		return nil, fmt.Errorf("%w: %w", ErrNonCanonical, err)
 	}
 	reencoded, err := encMode.Marshal(&m)
 	if err != nil {
