@@ -169,7 +169,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.work
-      # G-EXT resolved 2026-07-13: core/v0.1.0 is published and the root
+      # G-EXT resolved 2026-07-13: core/v0.1.1 is published and the root
       # module requires it by version, so the two-module release invariant
       # (root builds without the workspace, no replace) is a hard gate.
       - name: root module GOWORK=off build
