@@ -15,6 +15,7 @@ import (
 )
 
 func TestCompilerDerivedExecutionPlans(t *testing.T) {
+	t.Parallel()
 	root := writeFixtureModule(t, map[string]string{
 		"owner/owner_test.go": `package owner
 import (
@@ -33,7 +34,7 @@ func TestSubtests(t *testing.T) {
 }
 `,
 	})
-	result, err := analyzeRoot(root)
+	result, err := analyzeFixtureRoot(root)
 	if err != nil {
 		t.Fatalf("analyze fixture: %v", err)
 	}
@@ -158,6 +159,7 @@ func TestExecutionPlanSelectionRejectsAmbiguity(t *testing.T) {
 }
 
 func TestCompilerDerivedLifecycleGate(t *testing.T) {
+	t.Parallel()
 	root := writeFixtureModule(t, map[string]string{
 		"owner/owner_test.go": `package owner
 import (
@@ -168,7 +170,7 @@ func TestPure(*testing.T) {}
 func TestMain(*testing.M) { testnetwork.AssertOSNetwork() }
 `,
 	})
-	result, err := analyzeRoot(root)
+	result, err := analyzeFixtureRoot(root)
 	if err != nil {
 		t.Fatalf("analyze fixture: %v", err)
 	}

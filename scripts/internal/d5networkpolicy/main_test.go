@@ -14,8 +14,7 @@ import (
 )
 
 func TestSemanticRuntimeBoundary(t *testing.T) {
-	// Each fixture owns a complete SSA dependency graph. Serial loading keeps
-	// peak memory bounded instead of multiplying that graph by GOMAXPROCS.
+	t.Parallel()
 	tests := []struct {
 		name       string
 		source     string
@@ -338,11 +337,12 @@ func caller() { testnetwork.AssertOSNetwork(); helper() }`,
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			root := writeFixtureModule(t, map[string]string{
 				"owner/owner.go":      test.production,
 				"owner/owner_test.go": test.source,
 			})
-			result, err := analyzeRoot(root)
+			result, err := analyzeFixtureRoot(root)
 			if err != nil {
 				t.Fatalf("analyze fixture: %v", err)
 			}
@@ -361,6 +361,7 @@ func caller() { testnetwork.AssertOSNetwork(); helper() }`,
 }
 
 func TestTransparentValueFlowTerminalSemantics(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		production string
@@ -673,11 +674,12 @@ func TestUnsafeNoReturn(*testing.T) { InvokeThenPanic(Socket) }`,
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			root := writeFixtureModule(t, map[string]string{
 				"owner/owner.go":      test.production,
 				"owner/owner_test.go": test.source,
 			})
-			result, err := analyzeRoot(root)
+			result, err := analyzeFixtureRoot(root)
 			if err != nil {
 				t.Fatalf("analyze fixture: %v", err)
 			}
@@ -696,6 +698,7 @@ func TestUnsafeNoReturn(*testing.T) { InvokeThenPanic(Socket) }`,
 }
 
 func TestRecoverOutcomeTransformers(t *testing.T) {
+	t.Parallel()
 	root := writeFixtureModule(t, map[string]string{
 		"owner/owner.go": `package owner
 import (
@@ -783,7 +786,7 @@ func safeAfterReverseLIFO() { EffectAfterReverseLIFO(Socket) }
 func safeAfterGoexit() { EffectAfterGoexit(Socket) }
 func safeAfterRecoveredGoexitPanic() { EffectAfterRecoveredGoexitPanic(Socket) }`,
 	})
-	result, err := analyzeRoot(root)
+	result, err := analyzeFixtureRoot(root)
 	if err != nil {
 		t.Fatalf("analyze fixture: %v", err)
 	}
@@ -821,6 +824,7 @@ func safeAfterRecoveredGoexitPanic() { EffectAfterRecoveredGoexitPanic(Socket) }
 }
 
 func TestDeferredUnwindOrdering(t *testing.T) {
+	t.Parallel()
 	root := writeFixtureModule(t, map[string]string{
 		"owner/owner.go": `package owner
 import (
@@ -894,7 +898,7 @@ func safeCallExitBeforeEffect() { DeferThenCallExit(Socket) }
 func safeCallBlockBeforeEffect() { DeferThenCallBlock(Socket) }
 func safeAmbiguousTail(exit bool) { DeferThenAmbiguousTail(Socket, exit) }`,
 	})
-	result, err := analyzeRoot(root)
+	result, err := analyzeFixtureRoot(root)
 	if err != nil {
 		t.Fatalf("analyze fixture: %v", err)
 	}
@@ -933,6 +937,23 @@ func safeAmbiguousTail(exit bool) { DeferThenAmbiguousTail(Socket, exit) }`,
 	if !result.classified["owner"] {
 		t.Fatalf("classified packages = %v, want owner", result.classified)
 	}
+}
+
+// Each fixture analysis holds a complete SSA dependency graph (net, testing,
+// and their transitive imports), so the number of concurrent loads — not
+// subtest count — sets peak memory. t.Parallel alone would admit
+// -test.parallel loads at once (GOMAXPROCS by default), multiplying that
+// graph by the core count on developer machines; four slots keep peak memory
+// bounded while still overlapping the go/packages loads that dominate wall
+// time.
+const maxConcurrentFixtureAnalyses = 4
+
+var fixtureAnalysisSlots = make(chan struct{}, maxConcurrentFixtureAnalyses)
+
+func analyzeFixtureRoot(root string) (analysisResult, error) {
+	fixtureAnalysisSlots <- struct{}{}
+	defer func() { <-fixtureAnalysisSlots }()
+	return analyzeRoot(root)
 }
 
 func writeFixtureModule(t *testing.T, fixtureFiles map[string]string) string {
