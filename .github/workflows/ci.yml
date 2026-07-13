@@ -160,7 +160,7 @@ jobs:
         working-directory: core
 
   gowork-off-root:
-    name: GOWORK=off root build (G-EXT, temporarily soft)
+    name: GOWORK=off root build
     runs-on: ubuntu-latest
     env:
       GOWORK: "off"
@@ -169,22 +169,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.work
-      # G-EXT (work-plan §1): core has never been published, so the root
-      # module's placeholder pseudo-version require cannot resolve while the
-      # workspace is off. Only this single step is soft. After the first
-      # core/vX.Y.Z publication, remove `continue-on-error` so the root
-      # release invariant becomes a required hard gate.
-      - name: root module GOWORK=off build (soft until G-EXT resolves)
-        id: root-gowork-off
+      # G-EXT resolved 2026-07-13: core/v0.1.0 is published and the root
+      # module requires it by version, so the two-module release invariant
+      # (root builds without the workspace, no replace) is a hard gate.
+      - name: root module GOWORK=off build
         run: go build ./...
-        continue-on-error: true
-      - name: report G-EXT publication status
-        run: |
-          if [ "${{ steps.root-gowork-off.outcome }}" = "success" ]; then
-            echo "Root GOWORK=off build passed: G-EXT appears resolved. Remove continue-on-error from the previous step and make it required."
-          else
-            echo "Root GOWORK=off build failed as documented by G-EXT (core is not yet published). Expected until the first core publication."
-          fi
 
   web:
     name: Web (frozen install, lint, typecheck, build, vitest)

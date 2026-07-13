@@ -3,11 +3,10 @@ module github.com/windshare/windshare
 go 1.26.5
 
 // 双模块发版机制(执行计划 §6.2):根模块以版本 require core,禁用 replace
-// (含 replace 会令 `go install .../cmd/windshare@latest` 失败)。core 尚未发布,
-// 此处暂填零值占位 pseudo-version,本地构建一律经 go.work 解析。
-// 发版两步:① 打 core/vX.Y.Z tag;② 将下行升为该版本(或首次 push 后的真实
-// pseudo-version),再打根模块 tag。
-require github.com/windshare/windshare/core v0.0.0-00010101000000-000000000000
+// (含 replace 会令 `go install .../cmd/windshare@latest` 失败)。发版两步:
+// ① 先打 core/vX.Y.Z tag;② 将下行升为该版本,再打根模块 tag。本地开发经
+// go.work 解析;发布构建(GOWORK=off)按此版本从远端解析。
+require github.com/windshare/windshare/core v0.1.0
 
 // WS 库选型:coder/websocket——context 原生 API、零第三方依赖、积极维护
 // (nhooyr.io/websocket 的官方延续);gorilla/websocket 处于维护模式且 API
@@ -25,11 +24,11 @@ require github.com/pion/webrtc/v4 v4.2.16
 
 // Relay endpoint normalization must resolve Unicode hosts exactly as browser
 // WHATWG URL does; pinning x/net directly also holds the audited security floor.
-require golang.org/x/net v0.55.0
+require golang.org/x/net v0.57.0 // indirect
 
 // The Windows test runner verifies handle-owned leases and named-pipe guards at
 // the OS boundary; this dependency is test-harness-only and already in the graph.
-require golang.org/x/sys v0.45.0
+require golang.org/x/sys v0.47.0
 
 // The D5 policy gate resolves actual call targets and control-flow dominance;
 // lexical import/name matching cannot prove that a runtime gate guards a socket.
@@ -54,7 +53,9 @@ require (
 	github.com/pion/turn/v5 v5.0.10 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	golang.org/x/crypto v0.52.0 // indirect
-	golang.org/x/text v0.39.0 // indirect
+	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/mod v0.38.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 )
