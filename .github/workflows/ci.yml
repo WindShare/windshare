@@ -3,11 +3,12 @@
 # recorded in docs/.orchestration/E1.md. Both Go modules are validated
 # independently (`./...` does not cross the nested core/ module boundary), each
 # with vet, build, race tests, and a >=70% per-module coverage gate. Ubuntu jobs
-# natively provide the GOOS=linux compile/type-check path of §10.2; the
-# windows-network job provides the Windows side through the frozen D5 fixed-path
-# runner. OS-network test cases are gated at shared constructors
-# (internal/testnetwork): open on Linux, skip on Windows outside the runner, so
-# no ordinary job can hang on them.
+# natively provide the GOOS=linux compile/type-check path of §10.2 and all
+# real-socket coverage; the windows-network job runs GOOS=windows vet plus both
+# modules' race tests. OS-network test cases are gated at shared constructors
+# (internal/testnetwork): open on Linux, skip on Windows outside the local D5
+# runner, so no Windows job can hang or touch the firewall. Firewall governance
+# is local-dev tooling by owner decision (2026-07-13) and does not run in CI.
 name: CI
 
 on:
@@ -243,8 +244,8 @@ jobs:
       - name: Playwright D1/D2 WebRTC interop suite
         run: pnpm -C web exec playwright test --config test/transport/webrtc/browser.playwright.config.ts
 
-  windows-network:
-    name: Windows fixed-path network verification
+  windows-tests:
+    name: Windows tests (vet + race, OS-network cases gated)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -259,30 +260,13 @@ jobs:
       - name: go vet (core, GOOS=windows)
         run: go vet ./...
         working-directory: core
-      - name: firewall audit policy regression
-        shell: pwsh
-        run: ./scripts/d5-windows-firewall-audit.tests.ps1
-      - name: immutable evidence policy regression
-        shell: pwsh
-        run: ./scripts/d5-evidence.tests.ps1
-      - name: Windows network classification regression
-        shell: pwsh
-        run: ./scripts/d5-windows-network-policy.tests.ps1
-      - name: Windows stable-identity lease regression
-        shell: pwsh
-        run: ./scripts/d5-windows-stable-e2e-lease.tests.ps1
-      - name: Windows runner capability-boundary regression
-        shell: pwsh
-        run: ./scripts/d5-windows-capability.tests.ps1
-      # Random go-build identities skip OS-network cases at the shared
-      # socket/process constructors, so ordinary Windows tests cannot hang on
-      # them. The fixed runner then executes every classified package test
-      # under -race and accepts only the exact preflight semantics.
-      - name: ordinary Windows tests (OS-network cases gated)
-        shell: pwsh
-        run: ./scripts/d5-windows-performance.ps1 -Mode OrdinaryTests -Race
+      # OS-network cases self-gate at the shared socket/process constructors
+      # (internal\testnetwork): skip on Windows outside the local D5 runner, so
+      # these sweeps cannot hang or touch the firewall. The D5 fixed-path
+      # runner and its firewall-forensics suites are local-dev tooling by
+      # owner decision (2026-07-13) and intentionally do not run in CI;
+      # real-socket coverage lives in the ubuntu jobs.
+      - name: root Windows race tests (OS-network cases gated)
+        run: go test -race -count=1 ./...
       - name: core Windows race tests
         run: go -C core test -race -count=1 ./...
-      - name: fixed-path full real-network suite
-        shell: pwsh
-        run: ./scripts/d5-windows-performance.ps1 -Mode NetworkTests
