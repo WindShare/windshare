@@ -8,7 +8,7 @@
 - Don't name your package util, common, or misc. Packages should differ by what they provide, not what they contain.
 - **Prefer Deep Modules**: Avoid coupling all functionality at one layer; use meaningful module boundaries to contain complexity.
 - **Semantic Precision**: Avoid ambiguous or overloaded fields.
-
+- **Concise User-Facing Docs**: Keep externally maintained docs (README, docs/) concise and easy to follow; nobody reads verbose documentation.
 
 ### docs
 
@@ -17,7 +17,7 @@
 
 ### Go Specifics
 - **Accept Interfaces, Return Structs**: Define interfaces where they are used (consumer side), not where they are implemented.
-- **Hard Requirement**: Project CI enforces a **70% minimum test coverage**.
+- **Hard Requirement**: CI enforces coverage with go-test-coverage (per-module `.testcoverage.yml`): **core total ≥90%, root total ≥80%, every package ≥70%**.
 
 
 ### check
