@@ -26,8 +26,8 @@ jobs:
     name: Hygiene (gofmt, whitespace, gopls)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
       - name: gofmt over tracked Go files
@@ -58,7 +58,7 @@ jobs:
     name: SLOC guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: sloc-guard check
         # Tracks the latest sloc-guard release so new gate features (e.g. rule
         # additions the config relies on) apply without a CI bump.
@@ -68,8 +68,8 @@ jobs:
     name: Go root module (vet, build, race, coverage)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
       - name: go vet
@@ -90,8 +90,8 @@ jobs:
       run:
         working-directory: core
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
       - name: go vet
@@ -109,8 +109,8 @@ jobs:
     name: Golden-vector idempotence
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
       # Mirrors §10.3: regenerate every vector family twice; the regenerations
@@ -139,8 +139,8 @@ jobs:
     env:
       GOWORK: "off"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
       # Hard gate: the core module must always build without the workspace. It
@@ -156,8 +156,8 @@ jobs:
     env:
       GOWORK: "off"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
       # G-EXT resolved 2026-07-13: core/v0.1.1 is published and the root
@@ -173,13 +173,13 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # pnpm only (project constraint); the version comes from the
       # packageManager field in web/package.json.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: web/package.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -199,17 +199,17 @@ jobs:
     name: Web Playwright (M1b + M1c real browser)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The Playwright harness builds the windshare/wsrelay/hostile-sender
       # child binaries itself via `go build` (web/e2e/fixtures/process.ts), so
       # this job needs the Go toolchain as well.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: web/package.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -238,8 +238,8 @@ jobs:
     name: Windows tests (vet + race, OS-network cases gated)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
       # Windows-tagged files are otherwise only compiled, never vet-analyzed:
