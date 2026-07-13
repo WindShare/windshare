@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -18,6 +19,18 @@ import (
 
 // testGrace 是测试用宽限期:长到期内动作从容完成,短到期满测试不磨叽。
 const testGrace = 300 * time.Millisecond
+
+// suspendSender 断开发送端并等到中转真正进入宽限挂起。CloseNow 只是客户端
+// 本地动作,与服务端读循环处理断开之间没有 happens-before;若紧接重注册,
+// 结果会随调度在 share_id_collision(发送端在服务端视角仍在线)与宽限语义
+// 之间摇摆。借一名接收端等 sender_gone 作屏障——该终止消息在 senderGone
+// 于 hub 锁内发布挂起态(sender == nil)之后才发出,收到即挂起已生效。
+func suspendSender(t *testing.T, ts *httptest.Server, shareID string, sender *tc) {
+	t.Helper()
+	recv, _, _ := join(t, ts, shareID)
+	_ = sender.ws.CloseNow()
+	recv.expectError(protocol.ErrCodeSenderGone)
+}
 
 func TestSenderGoneNotifiesReceiverThenResume(t *testing.T) {
 	ts, _ := startRelay(t, signaling.Config{SenderReconnectGrace: time.Minute}, httpapi.Config{})
@@ -55,7 +68,7 @@ func TestResumeRejectedOnBadToken(t *testing.T) {
 	ts, _ := startRelay(t, signaling.Config{SenderReconnectGrace: time.Minute}, httpapi.Config{})
 	sealed := randomManifest(t, 128)
 	sender := register(t, ts, shareA, testToken, sealed)
-	_ = sender.ws.CloseNow()
+	suspendSender(t, ts, shareA, sender)
 
 	// 错误原像:持链者能拿到清单字节,但没有 token 原像,抢注被拒(§6.8)。
 	wrong := bytes.Repeat([]byte{0x77}, protocol.ResumeTokenBytes)
@@ -76,7 +89,7 @@ func TestResumeRejectedOnManifestMismatch(t *testing.T) {
 	ts, _ := startRelay(t, signaling.Config{SenderReconnectGrace: time.Minute}, httpapi.Config{})
 	sealed := randomManifest(t, 128)
 	sender := register(t, ts, shareA, testToken, sealed)
-	_ = sender.ws.CloseNow()
+	suspendSender(t, ts, shareA, sender)
 
 	c := dial(t, ts, shareA)
 	c.send(protocol.NewResumeRegister(shareA, protocol.HashResumeToken(testToken), protocol.EncodeResumeToken(testToken)))
@@ -88,7 +101,7 @@ func TestResumeRejectedOnManifestMismatch(t *testing.T) {
 func TestGraceExpiryReclaimsShare(t *testing.T) {
 	ts, _ := startRelay(t, signaling.Config{SenderReconnectGrace: testGrace}, httpapi.Config{})
 	sender := register(t, ts, shareA, testToken, randomManifest(t, 128))
-	_ = sender.ws.CloseNow()
+	suspendSender(t, ts, shareA, sender)
 
 	// 期满后 shareId 被回收:全新 token 的普通 register 可以入驻。
 	// 轮询而非精确掐点——测试只关心"终将回收",不关心毫秒级时刻。

@@ -1,17 +1,9 @@
-// go.work 只服务本地开发:core 尚未发布任何 tag,根模块对 core 的 require
-// 是占位 pseudo-version,本地一切构建/测试须经 workspace 解析(执行计划 §6.2)。
-// CI 另以 GOWORK=off 跑构建校验,守"根模块禁 replace、以版本 require core"的
-// 发版不变量。
+// go.work 只服务本地开发:构建/测试经 workspace 把根模块对 core 的版本 require
+// 解析到本地 ./core,改动无需发版即可联调(执行计划 §6.2)。CI 另以 GOWORK=off
+// 跑构建校验,守"根模块禁 replace、以版本 require core"的发版不变量。
 go 1.26.5
 
 use (
 	.
 	./core
 )
-
-// use 指令只在包加载层生效;模块图加载(外部依赖进入 require 后必然发生)仍会
-// 按字面解析根模块对 core 的占位 pseudo-version → 触网拉取不存在的仓库而失败。
-// 按占位版本显式 replace 把它钉回工作区目录(Go 禁止对 workspace 模块做全版本
-// 替换,故须点名版本);根 go.mod 本身仍无 replace,发版不变量不变。core 首次
-// 发布、根 require 升为真实版本后,此行随之删除。
-replace github.com/windshare/windshare/core v0.0.0-00010101000000-000000000000 => ./core

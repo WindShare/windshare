@@ -2,6 +2,10 @@ Set-StrictMode -Version Latest
 
 $script:D5FirewallOwnershipSchemaVersion = 1
 $script:D5SHA256Pattern = '^[0-9a-f]{64}$'
+# The cleanup history corpus is deliberately untracked local forensic evidence
+# (docs/.orchestration is gitignored), so an environment that never ran a D5
+# cleanup -- e.g. a fresh CI checkout -- legitimately has none of it.
+$script:D5CleanupHistoryCorpusPrefix = 'docs/.orchestration/'
 
 function Get-D5OrdinalPayloadSHA256([string[]]$Rows) {
     $ordered = @($Rows | ForEach-Object { [string]$_ })
@@ -107,8 +111,11 @@ function Import-D5FirewallOwnershipEvidence(
     }
 
     $sourceIdentities = [Collections.Generic.List[object]]::new()
+    $missingHistorySources = [Collections.Generic.List[string]]::new()
+    $presentHistorySources = [Collections.Generic.List[string]]::new()
     foreach ($source in @($manifest.Sources)) {
-        $relativePath = ([string]$source.RelativePath).Replace(
+        $normalizedRelativePath = ([string]$source.RelativePath).Replace('\', '/')
+        $relativePath = $normalizedRelativePath.Replace(
             '/',
             [IO.Path]::DirectorySeparatorChar
         )
@@ -116,8 +123,21 @@ function Import-D5FirewallOwnershipEvidence(
         if (-not (Test-D5ProgramUnderRoot $path $root)) {
             throw "D5 firewall ownership source escapes the repository: $relativePath"
         }
+        $isHistorySource = $normalizedRelativePath.StartsWith(
+            $script:D5CleanupHistoryCorpusPrefix,
+            [StringComparison]::Ordinal
+        )
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            throw "D5 firewall ownership source is missing: $relativePath"
+            # Only the untracked history corpus may be absent; tracked sources
+            # exist in every checkout, so their loss is always an error.
+            if (-not $isHistorySource) {
+                throw "D5 firewall ownership source is missing: $relativePath"
+            }
+            $missingHistorySources.Add($normalizedRelativePath)
+            continue
+        }
+        if ($isHistorySource) {
+            $presentHistorySources.Add($normalizedRelativePath)
         }
         $expectedHash = ([string]$source.SHA256).ToLowerInvariant()
         $actualHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -125,10 +145,17 @@ function Import-D5FirewallOwnershipEvidence(
             throw "D5 firewall ownership source hash changed: $relativePath"
         }
         $sourceIdentities.Add([pscustomobject][ordered]@{
-            RelativePath = ([string]$source.RelativePath).Replace('\', '/')
+            RelativePath = $normalizedRelativePath
             SHA256 = $actualHash
         })
     }
+    # A surviving fragment proves this environment owns cleanup history, so a
+    # missing member is lost forensic evidence, not a fresh environment.
+    if ($missingHistorySources.Count -gt 0 -and $presentHistorySources.Count -gt 0) {
+        throw ('D5 cleanup history corpus is partially present; missing: ' +
+            ($missingHistorySources -join ', '))
+    }
+    $cleanupHistoryPresent = $missingHistorySources.Count -eq 0
 
     $candidateRelativePath = 'docs/.orchestration/firewall-cleanup-candidates.md'
     $candidateSources = @(
@@ -137,23 +164,6 @@ function Import-D5FirewallOwnershipEvidence(
     )
     if ($candidateSources.Count -ne 1) {
         throw 'D5 firewall ownership evidence must pin one cleanup candidate document'
-    }
-    $candidatePath = Join-Path $root ($candidateRelativePath.Replace(
-        '/',
-        [IO.Path]::DirectorySeparatorChar
-    ))
-    $candidateLines = @(Get-Content -LiteralPath $candidatePath)
-    $candidateStart = -1
-    $candidateEnd = -1
-    for ($index = 0; $index -lt $candidateLines.Count; $index++) {
-        if ($candidateLines[$index] -ceq '## Exact candidate payload') {
-            $candidateStart = $index
-        } elseif ($candidateLines[$index] -ceq '## Stable D5 identities to preserve') {
-            $candidateEnd = $index
-        }
-    }
-    if ($candidateStart -lt 0 -or $candidateEnd -le $candidateStart) {
-        throw 'D5 firewall ownership evidence cannot locate the cleanup candidate payload'
     }
     $cleanupProgramPaths = [Collections.Generic.HashSet[string]]::new(
         [StringComparer]::OrdinalIgnoreCase
@@ -168,58 +178,85 @@ function Import-D5FirewallOwnershipEvidence(
         [StringComparer]::OrdinalIgnoreCase
     )
     $cleanupRows = [Collections.Generic.List[string]]::new()
-    for ($index = $candidateStart + 1; $index -lt $candidateEnd; $index++) {
-        $fields = @(
-            $candidateLines[$index].Trim('|').Split('|') |
-                ForEach-Object { $_.Trim() }
-        )
-        if ($fields.Count -ne 7 -or
-            $fields[1] -notmatch '^[A-Za-z]:\\' -or
-            $fields[3] -notmatch '^\{[0-9A-F-]{36}\}$' -or
-            $fields[4] -notmatch '^\{[0-9A-F-]{36}\}$') {
-            continue
+    $cleanupOwnedRuleCount = 0
+    $cleanupOwnedProgramCount = 0
+    $cleanupOwnedPayloadSHA256 = Get-D5OrdinalPayloadSHA256 @()
+    if ($cleanupHistoryPresent) {
+        $candidatePath = Join-Path $root ($candidateRelativePath.Replace(
+            '/',
+            [IO.Path]::DirectorySeparatorChar
+        ))
+        $candidateLines = @(Get-Content -LiteralPath $candidatePath)
+        $candidateStart = -1
+        $candidateEnd = -1
+        for ($index = 0; $index -lt $candidateLines.Count; $index++) {
+            if ($candidateLines[$index] -ceq '## Exact candidate payload') {
+                $candidateStart = $index
+            } elseif ($candidateLines[$index] -ceq '## Stable D5 identities to preserve') {
+                $candidateEnd = $index
+            }
         }
-        $program = [IO.Path]::GetFullPath($fields[1])
-        $action = $fields[2]
-        if ($action -notin @('Allow', 'Block') -or -not $cleanupProgramPaths.Add($program)) {
-            throw "Cleanup candidate payload has invalid or repeated ownership for $program"
+        if ($candidateStart -lt 0 -or $candidateEnd -le $candidateStart) {
+            throw 'D5 firewall ownership evidence cannot locate the cleanup candidate payload'
         }
-        [void]$cleanupProgramRoots.Add((Get-D5CleanupOwnedProgramRoot $program))
-        [void]$cleanupProgramNames.Add([IO.Path]::GetFileName($program))
-        if ($fields[5] -match $script:D5SHA256Pattern) {
-            [void]$cleanupProgramHashes.Add($fields[5].ToLowerInvariant())
-        } elseif ($fields[5] -cne 'absent') {
-            throw "Cleanup candidate payload has invalid executable state for $program"
+        for ($index = $candidateStart + 1; $index -lt $candidateEnd; $index++) {
+            $fields = @(
+                $candidateLines[$index].Trim('|').Split('|') |
+                    ForEach-Object { $_.Trim() }
+            )
+            if ($fields.Count -ne 7 -or
+                $fields[1] -notmatch '^[A-Za-z]:\\' -or
+                $fields[3] -notmatch '^\{[0-9A-F-]{36}\}$' -or
+                $fields[4] -notmatch '^\{[0-9A-F-]{36}\}$') {
+                continue
+            }
+            $program = [IO.Path]::GetFullPath($fields[1])
+            $action = $fields[2]
+            if ($action -notin @('Allow', 'Block') -or -not $cleanupProgramPaths.Add($program)) {
+                throw "Cleanup candidate payload has invalid or repeated ownership for $program"
+            }
+            [void]$cleanupProgramRoots.Add((Get-D5CleanupOwnedProgramRoot $program))
+            [void]$cleanupProgramNames.Add([IO.Path]::GetFileName($program))
+            if ($fields[5] -match $script:D5SHA256Pattern) {
+                [void]$cleanupProgramHashes.Add($fields[5].ToLowerInvariant())
+            } elseif ($fields[5] -cne 'absent') {
+                throw "Cleanup candidate payload has invalid executable state for $program"
+            }
+            foreach ($protocolIndex in @(
+                [pscustomobject]@{ Protocol = 'TCP'; Field = 3 },
+                [pscustomobject]@{ Protocol = 'UDP'; Field = 4 }
+            )) {
+                $protocol = [string]$protocolIndex.Protocol
+                $guid = $fields[[int]$protocolIndex.Field].Trim('{}')
+                $ruleID = "$protocol Query User{$guid}$program"
+                $cleanupRows.Add(@(
+                    $program.ToLowerInvariant()
+                    $protocol
+                    $ruleID
+                    $ruleID
+                    $action
+                    'Inbound'
+                    'Private, Public'
+                    'True'
+                    'Local'
+                    'Any'
+                    'Any'
+                    'Any'
+                    'Any'
+                ) -join "`t")
+            }
         }
-        foreach ($protocolIndex in @(
-            [pscustomobject]@{ Protocol = 'TCP'; Field = 3 },
-            [pscustomobject]@{ Protocol = 'UDP'; Field = 4 }
-        )) {
-            $protocol = [string]$protocolIndex.Protocol
-            $guid = $fields[[int]$protocolIndex.Field].Trim('{}')
-            $ruleID = "$protocol Query User{$guid}$program"
-            $cleanupRows.Add(@(
-                $program.ToLowerInvariant()
-                $protocol
-                $ruleID
-                $ruleID
-                $action
-                'Inbound'
-                'Private, Public'
-                'True'
-                'Local'
-                'Any'
-                'Any'
-                'Any'
-                'Any'
-            ) -join "`t")
+        if ($cleanupProgramPaths.Count -ne [int]$manifest.CleanupOwned.ExpectedProgramCount -or
+            $cleanupRows.Count -ne [int]$manifest.CleanupOwned.ExpectedRuleCount -or
+            (Get-D5OrdinalPayloadSHA256 @($cleanupRows)) -cne
+                ([string]$manifest.CleanupOwned.ApprovedSemanticPayloadSHA256).ToLowerInvariant()) {
+            throw 'D5 cleanup-owned identity set does not match its authorized durable payload'
         }
-    }
-    if ($cleanupProgramPaths.Count -ne [int]$manifest.CleanupOwned.ExpectedProgramCount -or
-        $cleanupRows.Count -ne [int]$manifest.CleanupOwned.ExpectedRuleCount -or
-        (Get-D5OrdinalPayloadSHA256 @($cleanupRows)) -cne
-            ([string]$manifest.CleanupOwned.ApprovedSemanticPayloadSHA256).ToLowerInvariant()) {
-        throw 'D5 cleanup-owned identity set does not match its authorized durable payload'
+        $cleanupOwnedRuleCount = [int]$manifest.CleanupOwned.ExpectedRuleCount
+        $cleanupOwnedProgramCount = [int]$manifest.CleanupOwned.ExpectedProgramCount
+        $cleanupOwnedPayloadSHA256 = (
+            [string]$manifest.CleanupOwned.ApprovedSemanticPayloadSHA256
+        ).ToLowerInvariant()
     }
 
     $packageManifestPath = Join-Path $root 'scripts\d5-windows-network-packages.json'
@@ -315,6 +352,7 @@ function Import-D5FirewallOwnershipEvidence(
     return [pscustomobject][ordered]@{
         SchemaVersion = $script:D5FirewallOwnershipSchemaVersion
         Sources = @($sourceIdentities | Sort-Object RelativePath)
+        CleanupHistoryPresent = $cleanupHistoryPresent
         StableRelativePrograms = @($stableRelativePrograms | Sort-Object -Unique)
         D5HistoricalProgramSHA256 = $historicalHashes
         D5OwnedTemporaryPathPatterns = @($manifest.D5.OwnedTemporaryPathPatterns)
@@ -322,11 +360,9 @@ function Import-D5FirewallOwnershipEvidence(
         CleanupOwnedProgramRoots = @($cleanupProgramRoots | Sort-Object)
         CleanupOwnedProgramNames = @($cleanupProgramNames | Sort-Object)
         CleanupOwnedProgramSHA256 = @($cleanupProgramHashes | Sort-Object)
-        CleanupOwnedRuleCount = [int]$manifest.CleanupOwned.ExpectedRuleCount
-        CleanupOwnedProgramCount = [int]$manifest.CleanupOwned.ExpectedProgramCount
-        CleanupOwnedSemanticPayloadSHA256 = (
-            [string]$manifest.CleanupOwned.ApprovedSemanticPayloadSHA256
-        ).ToLowerInvariant()
+        CleanupOwnedRuleCount = $cleanupOwnedRuleCount
+        CleanupOwnedProgramCount = $cleanupOwnedProgramCount
+        CleanupOwnedSemanticPayloadSHA256 = $cleanupOwnedPayloadSHA256
         ExcludedRules = @($excludedRules)
         ExcludedProgramStates = @($excludedProgramStates | Sort-Object Program)
         ExcludedRuleCount = $expectedRuleCount
@@ -412,6 +448,7 @@ function New-D5FirewallOwnershipPolicy(
         AuthorizedPrograms = @($authorized | Sort-Object)
         AuthorizedProgramSet = $authorized
         ObservedRoots = $roots
+        CleanupHistoryPresent = [bool]$Evidence.CleanupHistoryPresent
         D5ProgramNames = @($names | Sort-Object)
         D5ProgramNameSet = $names
         D5ProgramSHA256 = @($hashes | Sort-Object)
@@ -522,6 +559,12 @@ function New-D5FirewallOwnershipSnapshot([object[]]$Rules, [object]$Policy) {
 
         $signature = ConvertTo-D5RuleSignature $rule
         if ($Policy.ExcludedProgramSet.Contains($program)) {
+            # Excluded pins were captured on the machine that owns the cleanup
+            # history corpus; observing one without the corpus means the
+            # forensic record was lost, not that this environment is fresh.
+            if (-not $Policy.CleanupHistoryPresent) {
+                throw "Preflight observed an evidence-pinned excluded rule while the cleanup history corpus is missing: $program"
+            }
             if (-not $Policy.ExcludedRuleSignatureSet.Contains($signature)) {
                 throw "Preflight found drift on an evidence-pinned excluded program: $program"
             }
