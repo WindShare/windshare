@@ -12,6 +12,7 @@ import (
 )
 
 func TestBoundMethodRecoveryOutcomeTransformers(t *testing.T) {
+	t.Parallel()
 	root := writeFixtureModule(t, map[string]string{
 		"owner/owner.go": `package owner
 import "net"
@@ -159,7 +160,7 @@ func safeAfterUnknownBoundRecovery(receiver Recovery) { EffectAfterUnknownBoundR
 func safeAfterNilInterfaceBinding() { EffectAfterNilInterfaceBinding(Socket) }
 func safeAfterNilValueReceiverBinding() { EffectAfterNilValueReceiverBinding(Socket) }`,
 	})
-	result, err := analyzeRoot(root)
+	result, err := analyzeFixtureRoot(root)
 	if err != nil {
 		t.Fatalf("analyze fixture: %v", err)
 	}
