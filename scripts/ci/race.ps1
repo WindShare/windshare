@@ -1,8 +1,10 @@
 # CI-parity race gate (Windows). Mirrors ci.yml windows-tests' race sweeps
 # and the -race test steps of go-root / go-core. OS-network cases gate-skip on
 # Windows outside the D5 runner by design (internal/testnetwork constructors);
-# their race coverage comes from `make network`. Expect several minutes: the
-# root d5networkpolicy package alone takes ~6.5 minutes.
+# their race coverage comes from `make network`. d5networkpolicy is excluded
+# from race builds (//go:build !race on its test files): a deterministic
+# static-analysis gate the race detector cannot inform; it runs in `make
+# coverage` instead. Expect well under a minute on a warm cache.
 [CmdletBinding()]
 param()
 
