@@ -96,6 +96,55 @@ func TestSessionTeardownIdempotent(t *testing.T) {
 	h.endSession(sh, sess, true)
 }
 
+// TestResumeRegisterOutcomePerDisconnectOrdering 钉死"发送端断开处理"与
+// "重注册处理"两种交错各自唯一的结果:注册结果只是 hub 已发布状态的纯函数。
+// 断开尚未处理(发送端在服务端视角仍在线)→ 冲突;挂起后清单不一致的 resume
+// → resume_rejected,且不得伤及挂起中的 share(仍可被正确字节恢复)。
+// e2e 侧由 suspendSender 屏障保证只落在第二种交错上。
+func TestResumeRegisterOutcomePerDisconnectOrdering(t *testing.T) {
+	token := make([]byte, protocol.ResumeTokenBytes)
+	reg := protocol.NewResumeRegister(shareX, protocol.HashResumeToken(token), protocol.EncodeResumeToken(token))
+	sealed := protocol.EncodeManifestFrame([]byte("sealed"))
+
+	h := NewHub(Config{})
+	oldSender := &conn{}
+	sh := &share{
+		id:              shareX,
+		resumeTokenHash: reg.ResumeTokenHash,
+		manifestFrame:   sealed,
+		sender:          oldSender,
+		sessions:        map[protocol.SessionID]*receiverSession{},
+	}
+	h.shares[shareX] = sh
+
+	// 交错 1:重注册先于断开处理到达 → 该 share 仍活跃,唯一合法答案是冲突。
+	if _, outcome := h.beginRegister(&conn{}, reg); outcome != registerCollision {
+		t.Fatalf("resume against a live sender = %v, want registerCollision", outcome)
+	}
+
+	// 交错 2:断开先被处理(挂起)→ 走宽限语义,清单不一致必须 resume_rejected。
+	h.senderGone(sh, oldSender)
+	attempt, outcome := h.beginRegister(&conn{}, reg)
+	if outcome != registerOK {
+		t.Fatalf("resume during grace failed at begin: %v", outcome)
+	}
+	forged := protocol.EncodeManifestFrame([]byte("forged"))
+	if _, outcome := h.finishRegister(&conn{}, reg, forged, attempt); outcome != registerResumeRejected {
+		t.Fatalf("mismatched manifest resume = %v, want registerResumeRejected", outcome)
+	}
+
+	// 被拒的抢注不得破坏挂起态:正主凭字节一致清单仍可恢复。
+	attempt, outcome = h.beginRegister(&conn{}, reg)
+	if outcome != registerOK {
+		t.Fatalf("resume after rejected hijack failed at begin: %v", outcome)
+	}
+	resumed := &conn{}
+	sh2, outcome := h.finishRegister(resumed, reg, sealed, attempt)
+	if outcome != registerOK || sh2 != sh || sh.sender != resumed {
+		t.Fatalf("legitimate resume after rejected hijack = %v (share %p, sender %p)", outcome, sh2, sh.sender)
+	}
+}
+
 func TestSenderGoneIgnoresSupersededConn(t *testing.T) {
 	h := NewHub(Config{})
 	current := &conn{}

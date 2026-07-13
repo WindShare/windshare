@@ -318,15 +318,29 @@ try {
     $classifier = Join-Path $testRoot 'd5networkpolicy.exe'
     $fixtureBinary = Join-Path $testRoot 'execution-plan-fixture.test.exe'
     New-Item -ItemType Directory -Force -Path $fixturePackage, $fixtureInternal | Out-Null
+    # The fixture reuses the root module identity, sources, and go.sum, so its
+    # go directive and x/sys pin must come from the root go.mod; a hardcoded
+    # version drifts on every root dependency bump and then fails hash checks.
+    $rootModuleJSON = & go -C $repositoryRoot mod edit -json
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not read the root go.mod for the execution-plan fixture'
+    }
+    $rootModule = ($rootModuleJSON -join "`n") | ConvertFrom-Json
+    $fixtureRequires = @(
+        $rootModule.Require | Where-Object { [string]$_.Path -eq 'golang.org/x/sys' }
+    )
+    if ($fixtureRequires.Count -ne 1) {
+        throw 'Root go.mod does not pin exactly one golang.org/x/sys for the fixture'
+    }
     [IO.File]::WriteAllText(
         (Join-Path $fixtureRoot 'go.mod'),
-        @'
+        @"
 module github.com/windshare/windshare
 
-go 1.26.5
+go $($rootModule.Go)
 
-require golang.org/x/sys v0.45.0
-'@,
+require golang.org/x/sys $($fixtureRequires[0].Version)
+"@,
         [Text.UTF8Encoding]::new($false)
     )
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'go.sum') -Destination (

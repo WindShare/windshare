@@ -19,15 +19,31 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $durableEvidence = Import-D5FirewallOwnershipEvidence `
     $repositoryRoot `
     (Join-Path $PSScriptRoot 'd5-windows-firewall-ownership.json')
-if ($durableEvidence.CleanupOwnedRuleCount -ne 628 -or
-    $durableEvidence.CleanupOwnedProgramCount -ne 314 -or
-    $durableEvidence.CleanupOwnedSemanticPayloadSHA256 -cne
-        'a8e826e7c86fe6a0efd1bb57e074e0d4de364ad7846dace5ff5c4433f2b2ce0b' -or
-    $durableEvidence.ExcludedRuleCount -ne 60 -or
+if ($durableEvidence.ExcludedRuleCount -ne 60 -or
     $durableEvidence.ExcludedProgramCount -ne 30 -or
     $durableEvidence.ExcludedSemanticPayloadSHA256 -cne
         'b631b4814182f302ea2bf5d0680f507187f9a602b7ad3d892147ff9a73031d2f') {
-    throw 'Durable D5 firewall ownership evidence did not reconstruct its approved payloads'
+    throw 'Durable D5 firewall exclusion evidence did not reconstruct its approved payload'
+}
+# The cleanup history corpus is untracked local forensic evidence, so its full
+# reconstruction is asserted only where the corpus exists; a checkout without
+# it (fresh CI) must degrade to an empty cleanup-owned identity set.
+if ($durableEvidence.CleanupHistoryPresent) {
+    if ($durableEvidence.CleanupOwnedRuleCount -ne 628 -or
+        $durableEvidence.CleanupOwnedProgramCount -ne 314 -or
+        $durableEvidence.CleanupOwnedSemanticPayloadSHA256 -cne
+            'a8e826e7c86fe6a0efd1bb57e074e0d4de364ad7846dace5ff5c4433f2b2ce0b') {
+        throw 'Durable D5 cleanup history did not reconstruct its approved payload'
+    }
+} elseif ($durableEvidence.CleanupOwnedRuleCount -ne 0 -or
+    $durableEvidence.CleanupOwnedProgramCount -ne 0 -or
+    @($durableEvidence.CleanupOwnedProgramPaths).Count -ne 0 -or
+    @($durableEvidence.CleanupOwnedProgramRoots).Count -ne 0 -or
+    @($durableEvidence.CleanupOwnedProgramNames).Count -ne 0 -or
+    @($durableEvidence.CleanupOwnedProgramSHA256).Count -ne 0 -or
+    $durableEvidence.CleanupOwnedSemanticPayloadSHA256 -cne
+        (Get-D5OrdinalPayloadSHA256 @())) {
+    throw 'A missing cleanup history corpus must yield empty cleanup-owned evidence'
 }
 
 function New-Rule([hashtable]$Override = @{}) {
@@ -63,10 +79,12 @@ function New-TestEvidence(
     [object[]]$ExcludedProgramStates = @(),
     [string[]]$D5Hashes = @(),
     [string[]]$D5PathPatterns = @(),
-    [string[]]$CleanupOwnedRoots = @()
+    [string[]]$CleanupOwnedRoots = @(),
+    [bool]$CleanupHistoryPresent = $true
 ) {
     return [pscustomobject]@{
         Sources = @()
+        CleanupHistoryPresent = $CleanupHistoryPresent
         StableRelativePrograms = @('hostile-sender.exe', 'webrtc.test.exe')
         D5HistoricalProgramSHA256 = $D5Hashes
         D5OwnedTemporaryPathPatterns = $D5PathPatterns
@@ -496,5 +514,66 @@ Assert-Throws {
         @($excludedTCP, $excludedUDP, $d5TemporaryRule) `
         $excludedPolicy
 } 'WindShare-attributable random/temp firewall program'
+
+$historyAbsentEvidence = New-TestEvidence `
+    @($excludedTCP, $excludedUDP) `
+    @([pscustomobject]@{ Program = $excludedProgram; Exists = $false; SHA256 = '' }) `
+    @() `
+    @() `
+    @() `
+    $false
+$historyAbsentPolicy = New-D5FirewallOwnershipPolicy `
+    $harnessRoot `
+    @($program, $unselectedProgram) `
+    $historyAbsentEvidence `
+    @() `
+    @('C:\Temp')
+Assert-Throws {
+    New-D5FirewallOwnershipBaseline @($excludedTCP) $historyAbsentPolicy
+} 'cleanup history corpus is missing'
+Assert-Throws {
+    New-D5FirewallOwnershipBaseline @($d5TemporaryRule) $historyAbsentPolicy
+} 'WindShare-attributable random/temp firewall program'
+[void](New-D5FirewallOwnershipBaseline @($unrelatedRule) $historyAbsentPolicy)
+
+$importRoot = Join-Path ([IO.Path]::GetTempPath()) `
+    "windshare-d5-ownership-import-$([guid]::NewGuid().ToString('N'))"
+try {
+    New-Item -ItemType Directory -Force -Path (Join-Path $importRoot 'scripts') | Out-Null
+    Copy-Item `
+        -LiteralPath (Join-Path $PSScriptRoot 'd5-windows-network-packages.json') `
+        -Destination (Join-Path $importRoot 'scripts\d5-windows-network-packages.json')
+    $syntheticManifestPath = Join-Path $importRoot 'scripts\d5-windows-firewall-ownership.json'
+    Copy-Item `
+        -LiteralPath (Join-Path $PSScriptRoot 'd5-windows-firewall-ownership.json') `
+        -Destination $syntheticManifestPath
+    $absentHistory = Import-D5FirewallOwnershipEvidence $importRoot $syntheticManifestPath
+    if ($absentHistory.CleanupHistoryPresent -or
+        $absentHistory.CleanupOwnedRuleCount -ne 0 -or
+        @($absentHistory.CleanupOwnedProgramPaths).Count -ne 0 -or
+        $absentHistory.ExcludedRuleCount -ne 60) {
+        throw 'Import without the cleanup history corpus must yield empty cleanup-owned evidence'
+    }
+    $partialDir = Join-Path $importRoot 'docs\.orchestration'
+    New-Item -ItemType Directory -Force -Path $partialDir | Out-Null
+    $partialPath = Join-Path $partialDir 'firewall-cleanup-result.md'
+    Set-Content -LiteralPath $partialPath -Value 'partial corpus fixture' -Encoding utf8
+    $partialManifest = Get-Content -LiteralPath $syntheticManifestPath -Raw | ConvertFrom-Json
+    foreach ($source in @($partialManifest.Sources)) {
+        if ([string]$source.RelativePath -ceq 'docs/.orchestration/firewall-cleanup-result.md') {
+            $source.SHA256 = (
+                Get-FileHash -LiteralPath $partialPath -Algorithm SHA256
+            ).Hash.ToLowerInvariant()
+        }
+    }
+    $partialManifestPath = Join-Path $importRoot 'scripts\partial-ownership.json'
+    $partialManifest | ConvertTo-Json -Depth 8 |
+        Set-Content -LiteralPath $partialManifestPath -Encoding utf8
+    Assert-Throws {
+        Import-D5FirewallOwnershipEvidence $importRoot $partialManifestPath
+    } 'partially present'
+} finally {
+    Remove-Item -LiteralPath $importRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 Write-Output 'D5 firewall semantic policy tests PASS'
