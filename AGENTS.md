@@ -25,3 +25,34 @@
 - Local CI: `make ci`.
 
 ## Project Overview
+
+WindShare is an open-source E2EE file/folder sharing tool. It creates links without pre-uploading, reading, or hashing content; receivers use the browser or CLI over WebRTC with relay fallback.
+
+```text
+.
+├── core/                         Independent Go module; network-free reusable core
+│   ├── link/, chunk/             Capability links and segmented AEAD blocks
+│   ├── layout/, manifest/        Packed-stream geometry and encrypted metadata
+│   ├── share/, session/          Transfer plans, sender/receiver, scheduling, frames
+│   ├── osfs/                     Root-confined source and sink
+│   └── internal/keyderiv/        HKDF key hierarchy
+├── cmd/windshare/                CLI sender and receiver
+├── connectivity/                 Signaling, P2P/relay orchestration, fallback, fan-out
+├── transport/
+│   ├── relay/                    WebSocket FrameChannel adapter
+│   └── webrtc/                   Pion DataChannel adapter
+├── relay/
+│   ├── cmd/wsrelay/              Relay server entry point
+│   ├── protocol/, signaling/     Shared wire types and session hub
+│   └── forward/, admission/      Data forwarding, isolation, and resource limits
+├── web/                          React/TypeScript browser receiver
+│   ├── src/crypto/, manifest/    WebCrypto and manifest validation
+│   ├── src/session/, transport/  Browser scheduler and frame channels
+│   ├── src/connectivity/         P2P/relay race and hot switching
+│   ├── src/download/, ui/        File sinks and React interface
+│   └── e2e/                      Playwright full-stack tests
+├── e2e/                          Process-level Go end-to-end tests
+├── testvectors/                  Go↔TypeScript golden vectors
+├── scripts/ci/                   Local CI gate implementations
+└── docs/                         Protocol and security documentation
+```
