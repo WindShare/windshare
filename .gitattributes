@@ -1,3 +1,12 @@
+# Repo-wide default: store LF, check out LF on every platform. Editors that
+# save CRLF get normalized at checkin, and working copies stay byte-identical
+# to the repo — eliminating autocrlf warnings, phantom diffs after eol-config
+# changes, and platform-dependent checkouts. Auto-detection leaves binaries
+# untouched. The specific pins below predate this rule and stay because each
+# documents a byte-exactness contract that must survive even if the umbrella
+# is ever loosened.
+* text=auto eol=lf
+
 # CI 在 Linux 上以 bash 执行 .sh,CRLF 会破坏解释器行为——钉死 LF。
 *.sh text eol=lf
 # D5 firewall ownership evidence pins the byte-exact SHA256 of this tracked
