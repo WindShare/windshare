@@ -19,15 +19,9 @@
 - **Accept Interfaces, Return Structs**: Define interfaces where they are used (consumer side), not where they are implemented.
 - **Hard Requirement**: CI enforces coverage with go-test-coverage (per-module `.testcoverage.yml`): **core total ≥90%, root total ≥80%, every package ≥70%**.
 
+### Validation
 
-### check
-
-ci: make ci
-GOPLS_CHECK: git ls-files -z '*.go' | xargs -0 gopls check -severity=hint
-lint: make lint
-sloc: sloc-guard.exe check
-web: pnpm -C web lint && pnpm -C web exec tsc -b
-本地覆盖率(含 OS-network 用例,与 CI 同门禁): ./scripts/local-coverage.ps1
-
+- During iteration: `make <gate>` (see `Makefile`).
+- Local CI: `make ci`.
 
 ## Project Overview
