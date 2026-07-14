@@ -684,3 +684,249 @@ function Invoke-D5PlannedTestProcess(
         AuthorizationRecord = $authorizationRecord
     }
 }
+
+# The parallel launch/join API keeps the parent a single-threaded poll-loop
+# dispatcher: the child processes are the only concurrency, so every state
+# mutation, record append, and console write happens on this thread. 50 ms of
+# handshake latency is noise next to a suite's runtime.
+$script:D5PlannedJoinPollMilliseconds = 50
+# ReadToEndAsync completes only when the last write handle to the child's
+# stdout pipe closes; a reparented orphan surviving the tree kill could hold
+# it open forever, so the post-exit drain is bounded rather than trusted.
+$script:D5PlannedOutputDrainTimeout = [timespan]::FromSeconds(10)
+
+function Start-D5PlannedTestProcess(
+    [Parameter(Mandatory)] [object]$Plan,
+    [Parameter(Mandatory)] [object[]]$ParentPrograms,
+    [Parameter(Mandatory)] [object]$ExpectedSourceIdentity,
+    [Parameter(Mandatory)] [string]$ExpectedRunID,
+    [Parameter(Mandatory)] [string]$ExpectedRequestID,
+    [Parameter(Mandatory)] [string]$ExpectedPlanSHA256,
+    [Parameter(Mandatory)] [string]$Name,
+    [string]$LogPath = ''
+) {
+    # Validation re-hashes the exact executable immediately before launch.
+    $validated = Assert-D5TestExecutionPlan `
+        -Plan $Plan `
+        -ParentPrograms $ParentPrograms `
+        -ExpectedSourceIdentity $ExpectedSourceIdentity `
+        -ExpectedRunID $ExpectedRunID `
+        -ExpectedRequestID $ExpectedRequestID `
+        -ExpectedPlanSHA256 $ExpectedPlanSHA256
+    $authorization = $null
+    $process = $null
+    $started = $false
+    try {
+        $overrides = @{}
+        if ($validated.NetworkAccess -ne 'none') {
+            $authorization = New-D5LaunchAuthorization $validated.RunID $ParentPrograms
+            $overrides['WINDSHARE_D5_AUTHORIZATION_PIPE'] = $authorization.Name
+        }
+        $start = New-D5TestProcessStartInfo `
+            $validated.Executable.Path `
+            @($validated.Arguments) `
+            $validated.WorkingDirectory `
+            @($script:D5NetworkAuthorityEnvironmentNames) `
+            $overrides
+        $process = [Diagnostics.Process]::new()
+        $process.StartInfo = $start
+        if (-not $process.Start()) {
+            throw "Could not start planned test executable $($validated.Executable.Path)"
+        }
+        $started = $true
+        Assert-D5ProcessImagePath $process $validated.Executable.Path 'Planned parallel'
+        return [pscustomobject]@{
+            Name = $Name
+            RequestID = $validated.RequestID
+            Validated = $validated
+            Process = $process
+            Authorization = $authorization
+            StdoutTask = $process.StandardOutput.ReadToEndAsync()
+            StderrTask = $process.StandardError.ReadToEndAsync()
+            LogPath = $LogPath
+            StartedAt = [datetimeoffset]::Now
+        }
+    } catch {
+        if ($started -and -not $process.HasExited) {
+            $process.Kill($true)
+            $process.WaitForExit()
+        }
+        Release-D5LaunchAuthorization $authorization
+        if ($null -ne $process) {
+            $process.Dispose()
+        }
+        throw
+    }
+}
+
+function Complete-D5PlannedTestWorker(
+    [Parameter(Mandatory)] [object]$Worker,
+    [string]$Failure = '',
+    [string]$Disposition = ''
+) {
+    $process = $Worker.Process
+    if (-not [string]::IsNullOrEmpty($Failure) -and -not $process.HasExited) {
+        $process.Kill($true)
+    }
+    $process.WaitForExit()
+    $stdout = ''
+    $stderr = ''
+    if ([Threading.Tasks.Task]::WaitAll(
+            [Threading.Tasks.Task[]]@($Worker.StdoutTask, $Worker.StderrTask),
+            $script:D5PlannedOutputDrainTimeout)) {
+        $stdout = $Worker.StdoutTask.GetAwaiter().GetResult()
+        $stderr = $Worker.StderrTask.GetAwaiter().GetResult()
+    } else {
+        $stderr = '[D5 runner: output drain timed out; captured output abandoned]'
+        $Failure = if ([string]::IsNullOrEmpty($Failure)) {
+            'output drain timeout'
+        } else {
+            "$Failure; output drain timeout"
+        }
+    }
+    if ([string]::IsNullOrEmpty($Failure)) {
+        # Post-exit re-hash: parity with the serial path's completed-execution
+        # verification.
+        [void](Assert-D5ProgramEvidence `
+            $Worker.Validated.Executable `
+            $Worker.Validated.Executable.Path `
+            'Completed planned parallel execution')
+    }
+    if ([string]::IsNullOrEmpty($Disposition)) {
+        $Disposition = if ($null -eq $Worker.Authorization) {
+            'CompletedWithoutNetworkAuthority'
+        } else {
+            [string]$Worker.Authorization.State
+        }
+    }
+    $duration = [datetimeoffset]::Now - $Worker.StartedAt
+    # Buffered per-package replay: capture is whole-buffer by design, so each
+    # suite prints as one readable block at completion time instead of an
+    # N-way interleave. The header must bypass the pipeline: this function's
+    # pipeline output is its result record.
+    [Console]::Out.WriteLine(('-- {0}: exit {1} in {2:mm\:ss} --' -f
+        $Worker.Name, $process.ExitCode, $duration))
+    Write-D5CapturedProcessOutput $stdout $stderr $Worker.LogPath
+    Release-D5LaunchAuthorization $Worker.Authorization
+    return [pscustomobject][ordered]@{
+        Name = [string]$Worker.Name
+        RequestID = [string]$Worker.RequestID
+        ExitCode = $process.ExitCode
+        Disposition = $Disposition
+        Duration = $duration
+        LogPath = [string]$Worker.LogPath
+        Failure = if ([string]::IsNullOrEmpty($Failure)) { $null } else { $Failure }
+    }
+}
+
+function Stop-D5PlannedTestProcesses(
+    [AllowEmptyCollection()] [object[]]$Workers
+) {
+    foreach ($worker in @($Workers)) {
+        try {
+            if (-not $worker.Process.HasExited) {
+                $worker.Process.Kill($true)
+                $worker.Process.WaitForExit()
+            }
+        } catch {
+            # Best-effort teardown: one unkillable or already-disposed worker
+            # must not leak its siblings' processes or authorizations.
+        } finally {
+            Release-D5LaunchAuthorization $worker.Authorization
+            $worker.Process.Dispose()
+        }
+    }
+}
+
+function Wait-D5PlannedTestProcesses(
+    [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]]$Workers,
+    [Parameter(Mandatory)] [timespan]$Timeout
+) {
+    $results = [Collections.Generic.List[object]]::new()
+    $pending = [Collections.Generic.List[object]]::new()
+    foreach ($worker in $Workers) {
+        $pending.Add($worker)
+    }
+    $deadline = [datetimeoffset]::Now.Add($Timeout)
+    try {
+        while ($pending.Count -gt 0 -and [datetimeoffset]::Now -lt $deadline) {
+            $progressed = $false
+            foreach ($worker in @($pending)) {
+                $authorization = $worker.Authorization
+                if ($null -ne $authorization -and
+                    [string]$authorization.State -eq 'AwaitingConnection') {
+                    if ($authorization.Connection.IsCompleted) {
+                        # Handshakes are serviced as they arrive: a child blocks
+                        # inside its gate until the parent writes the payload, so
+                        # completion cannot wait for worker order.
+                        try {
+                            Complete-D5LaunchAuthorization `
+                                $authorization `
+                                $worker.Process `
+                                $worker.Validated.Executable.Path
+                        } catch {
+                            # A rejected handshake condemns only its own worker;
+                            # sibling suites run on to give the full verdict. The
+                            # explicit disposition covers reject paths that leave
+                            # the authorization mid-transition (e.g. a payload
+                            # write onto a broken pipe).
+                            $results.Add((Complete-D5PlannedTestWorker `
+                                $worker `
+                                "rejected launch authorization: $_" `
+                                'Rejected'))
+                            [void]$pending.Remove($worker)
+                            $progressed = $true
+                            continue
+                        }
+                        $progressed = $true
+                    } elseif ($worker.Process.HasExited -and
+                        -not $authorization.Connection.IsCompleted) {
+                        # A plan grants only the opportunity to cross the gate;
+                        # the terminal unused state mirrors the serial path
+                        # (Complete-D5PlannedLaunchAuthorization).
+                        $authorization.State = 'UnusedNoGate'
+                        $progressed = $true
+                    }
+                }
+                if ($worker.Process.HasExited -and
+                    ($null -eq $authorization -or
+                        [string]$authorization.State -ne 'AwaitingConnection')) {
+                    $results.Add((Complete-D5PlannedTestWorker $worker))
+                    [void]$pending.Remove($worker)
+                    $progressed = $true
+                }
+            }
+            if (-not $progressed -and $pending.Count -gt 0) {
+                Start-Sleep -Milliseconds $script:D5PlannedJoinPollMilliseconds
+            }
+        }
+        foreach ($worker in @($pending)) {
+            $authorization = $worker.Authorization
+            if ($null -ne $authorization -and
+                [string]$authorization.State -eq 'AwaitingConnection' -and
+                $worker.Process.HasExited -and
+                -not $authorization.Connection.IsCompleted) {
+                $authorization.State = 'UnusedNoGate'
+            }
+            if ($worker.Process.HasExited -and
+                ($null -eq $authorization -or
+                    [string]$authorization.State -ne 'AwaitingConnection')) {
+                # Exited between the last poll and the sweep: a real completion,
+                # not a watchdog victim.
+                $results.Add((Complete-D5PlannedTestWorker $worker))
+            } else {
+                # Deadline breach: the per-binary Go -test.timeout is the
+                # primary enforcement; this watchdog only catches a child that
+                # outlived it.
+                $results.Add((Complete-D5PlannedTestWorker `
+                    $worker `
+                    'join timeout' `
+                    'JoinTimeout'))
+            }
+            [void]$pending.Remove($worker)
+        }
+        return @($results)
+    } finally {
+        Stop-D5PlannedTestProcesses $Workers
+    }
+}

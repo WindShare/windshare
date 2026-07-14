@@ -359,6 +359,7 @@ package fixture
 import (
     "net"
     "testing"
+    "time"
 
     "github.com/windshare/windshare/internal/testnetwork"
 )
@@ -383,6 +384,17 @@ func BenchmarkNetwork(b *testing.B) {
 func TestSubtests(t *testing.T) {
     t.Run("pure", func(*testing.T) {})
     t.Run("network", func(*testing.T) { invoke(networkCallback) })
+}
+
+// TestHold outlives any reasonable join deadline so the parallel wait loop's
+// watchdog kill path can be exercised deterministically.
+func TestHold(*testing.T) {
+    time.Sleep(30 * time.Second)
+}
+
+// TestFail gives the parallel aggregation contract a deterministic nonzero exit.
+func TestFail(t *testing.T) {
+    t.Fatal("deliberate fixture failure")
 }
 
 // semanticBoundary keeps the fixture inside the same gate/resource proof as the
@@ -471,6 +483,20 @@ func semanticBoundary(t *testing.T) {
             Executable = $fixtureProgram
             WorkingDirectory = $fixturePackage
             Arguments = @('-test.run=^TestSubtests$/pure$', '-test.count=1')
+        },
+        [ordered]@{
+            RequestID = 'hold-subtest'
+            PackagePath = 'fixture'
+            Executable = $fixtureProgram
+            WorkingDirectory = $fixturePackage
+            Arguments = @('-test.run=^TestHold$', '-test.count=1')
+        },
+        [ordered]@{
+            RequestID = 'fail-subtest'
+            PackagePath = 'fixture'
+            Executable = $fixtureProgram
+            WorkingDirectory = $fixturePackage
+            Arguments = @('-test.run=^TestFail$', '-test.count=1')
         }
     )
     [IO.File]::WriteAllText(
@@ -634,6 +660,145 @@ func semanticBoundary(t *testing.T) {
             -ExpectedPlanSHA256 $plans['network-benchmark'].PlanSHA256 `
             -SourceCheckpoint $sourceCheckpoint
     } 'network selection does not match'
+
+    # Parallel launch/join API: one consumed handshake and one terminal-unused
+    # grant complete concurrently under a single poll-loop join.
+    $parallelLogRoot = Join-Path $testRoot 'parallel-logs'
+    New-Item -ItemType Directory -Force -Path $parallelLogRoot | Out-Null
+    $happyWorkers = @(
+        foreach ($requestID in 'network-benchmark', 'pure-subtest') {
+            Start-D5PlannedTestProcess `
+                -Plan $plans[$requestID] `
+                -ParentPrograms @($fixtureProgram) `
+                -ExpectedSourceIdentity $sourceIdentity `
+                -ExpectedRunID 'execution-plan-regression' `
+                -ExpectedRequestID $requestID `
+                -ExpectedPlanSHA256 $plans[$requestID].PlanSHA256 `
+                -Name $requestID `
+                -LogPath (Join-Path $parallelLogRoot "$requestID.txt")
+        }
+    )
+    $happyResults = @(Wait-D5PlannedTestProcesses `
+        -Workers $happyWorkers `
+        -Timeout ([timespan]::FromMinutes(5)))
+    if ($happyResults.Count -ne 2) {
+        throw "Parallel happy path returned $($happyResults.Count) results, want 2"
+    }
+    $happyByName = @{}
+    foreach ($result in $happyResults) {
+        $happyByName[[string]$result.Name] = $result
+    }
+    foreach ($requestID in 'network-benchmark', 'pure-subtest') {
+        $result = $happyByName[$requestID]
+        if ($null -eq $result -or $result.ExitCode -ne 0 -or $null -ne $result.Failure) {
+            throw "Parallel worker $requestID did not complete cleanly"
+        }
+        $logPath = Join-Path $parallelLogRoot "$requestID.txt"
+        if (-not (Test-Path -LiteralPath $logPath -PathType Leaf) -or
+            (Get-Content -LiteralPath $logPath -Raw) -notmatch 'PASS') {
+            throw "Parallel worker $requestID did not write its suite output to $logPath"
+        }
+    }
+    if ([string]$happyByName['network-benchmark'].Disposition -cne 'Consumed') {
+        throw 'A parallel network-capable worker did not consume its one-use pipe'
+    }
+    if ([string]$happyByName['pure-subtest'].Disposition -cne 'UnusedNoGate') {
+        throw 'A parallel worker with a pure subtest did not terminate its unused grant'
+    }
+    foreach ($worker in $happyWorkers) {
+        if ([string]$worker.Authorization.State -cne 'Released') {
+            throw "Parallel worker $($worker.Name) authorization was not released"
+        }
+    }
+    foreach ($name in $environmentNames) {
+        if ([Environment]::GetEnvironmentVariable($name, 'Process') -ne
+            'forged-enumeration-authority') {
+            throw "Parallel execution mutated its parent authority environment: $name"
+        }
+    }
+
+    # Deadline kill: the join watchdog kills an over-deadline worker while its
+    # batch sibling still completes and reports.
+    $holdWorker = Start-D5PlannedTestProcess `
+        -Plan $plans['hold-subtest'] `
+        -ParentPrograms @($fixtureProgram) `
+        -ExpectedSourceIdentity $sourceIdentity `
+        -ExpectedRunID 'execution-plan-regression' `
+        -ExpectedRequestID 'hold-subtest' `
+        -ExpectedPlanSHA256 $plans['hold-subtest'].PlanSHA256 `
+        -Name 'hold-subtest' `
+        -LogPath (Join-Path $parallelLogRoot 'hold-subtest.txt')
+    $holdPID = $holdWorker.Process.Id
+    $fastWorker = Start-D5PlannedTestProcess `
+        -Plan $plans['pure-benchmark'] `
+        -ParentPrograms @($fixtureProgram) `
+        -ExpectedSourceIdentity $sourceIdentity `
+        -ExpectedRunID 'execution-plan-regression' `
+        -ExpectedRequestID 'pure-benchmark' `
+        -ExpectedPlanSHA256 $plans['pure-benchmark'].PlanSHA256 `
+        -Name 'pure-benchmark' `
+        -LogPath (Join-Path $parallelLogRoot 'deadline-pure-benchmark.txt')
+    $deadlineResults = @(Wait-D5PlannedTestProcesses `
+        -Workers @($holdWorker, $fastWorker) `
+        -Timeout ([timespan]::FromSeconds(3)))
+    if ($deadlineResults.Count -ne 2) {
+        throw "Deadline join returned $($deadlineResults.Count) results, want 2"
+    }
+    $deadlineByName = @{}
+    foreach ($result in $deadlineResults) {
+        $deadlineByName[[string]$result.Name] = $result
+    }
+    $holdResult = $deadlineByName['hold-subtest']
+    if ($null -eq $holdResult -or
+        [string]$holdResult.Disposition -cne 'JoinTimeout' -or
+        [string]::IsNullOrEmpty([string]$holdResult.Failure) -or
+        $holdResult.ExitCode -eq 0) {
+        throw 'The join deadline did not record the held worker as a timeout failure'
+    }
+    if (@(Get-Process -ErrorAction SilentlyContinue | Where-Object Id -eq $holdPID).Count -ne 0) {
+        throw "The join deadline left the held worker process $holdPID running"
+    }
+    $fastResult = $deadlineByName['pure-benchmark']
+    if ($null -eq $fastResult -or $fastResult.ExitCode -ne 0 -or $null -ne $fastResult.Failure) {
+        throw 'The sibling of a deadline-killed worker did not complete and report'
+    }
+
+    # Failure aggregation: all workers run to completion; a failing one carries
+    # its exit code while the passing sibling stays green.
+    $aggregationWorkers = @(
+        foreach ($requestID in 'fail-subtest', 'pure-benchmark') {
+            Start-D5PlannedTestProcess `
+                -Plan $plans[$requestID] `
+                -ParentPrograms @($fixtureProgram) `
+                -ExpectedSourceIdentity $sourceIdentity `
+                -ExpectedRunID 'execution-plan-regression' `
+                -ExpectedRequestID $requestID `
+                -ExpectedPlanSHA256 $plans[$requestID].PlanSHA256 `
+                -Name $requestID `
+                -LogPath (Join-Path $parallelLogRoot "aggregation-$requestID.txt")
+        }
+    )
+    $aggregationResults = @(Wait-D5PlannedTestProcesses `
+        -Workers $aggregationWorkers `
+        -Timeout ([timespan]::FromMinutes(5)))
+    if ($aggregationResults.Count -ne 2) {
+        throw "Aggregation join returned $($aggregationResults.Count) results, want 2"
+    }
+    $aggregationByName = @{}
+    foreach ($result in $aggregationResults) {
+        $aggregationByName[[string]$result.Name] = $result
+    }
+    $failResult = $aggregationByName['fail-subtest']
+    if ($null -eq $failResult -or
+        $failResult.ExitCode -eq 0 -or
+        $null -ne $failResult.Failure -or
+        [string]$failResult.Disposition -cne 'CompletedWithoutNetworkAuthority') {
+        throw 'A failing parallel worker did not carry its own exit code through the join'
+    }
+    $passResult = $aggregationByName['pure-benchmark']
+    if ($null -eq $passResult -or $passResult.ExitCode -ne 0 -or $null -ne $passResult.Failure) {
+        throw 'A failing parallel worker condemned its passing sibling'
+    }
 
     foreach ($name in $environmentNames) {
         [Environment]::SetEnvironmentVariable($name, $null, 'Process')
