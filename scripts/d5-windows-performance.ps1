@@ -44,6 +44,10 @@ $firewallLogName = 'Microsoft-Windows-Windows Firewall With Advanced Security/Fi
 $firewallRuleEventIDs = @(2052, 2097, 2099)
 $firewallQuietMilliseconds = 500
 $firewallQuiescenceTimeout = [timespan]::FromSeconds(10)
+# e2e carries the largest per-binary Go-level deadline (10m -test.timeout);
+# the parallel join adds 2m grace so this watchdog only fires on a child that
+# outlived its own deadline enforcement.
+$script:D5NetworkJoinTimeout = [timespan]::FromMinutes(12)
 $firewallObservedRoots = @(
     [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
     [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'go-build'))
@@ -238,6 +242,31 @@ function Open-D5FirewallRegistrationState([object[]]$Rules) {
     return $state
 }
 
+function Write-D5ForeignFirewallRuleWarning([object[]]$Rules) {
+    # NetworkTests preflight replacement (owner decision 2026-07-14): foreign
+    # WindShare-attributable rules outside the harness root are expected noise
+    # on a popups-disabled dev box, so they warn instead of failing the run. An
+    # unmanifested program inside our namespace still throws: nothing may squat
+    # the fixed paths the registration state vouches for.
+    $foreign = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($rule in @($Rules)) {
+        $program = [IO.Path]::GetFullPath([string]$rule.Program)
+        if ($script:firewallOwnershipPolicy.AuthorizedProgramSet.Contains($program)) {
+            continue
+        }
+        if (Test-D5ProgramUnderRoot $program $script:firewallOwnershipPolicy.HarnessRoot) {
+            throw "NetworkTests preflight found an unmanifested program under the stable harness root: $program"
+        }
+        if (Test-D5WindShareAttributedRule $rule $script:firewallOwnershipPolicy) {
+            [void]$foreign.Add($program)
+        }
+    }
+    if ($foreign.Count -gt 0) {
+        Write-Warning ('Ignoring WindShare-attributable firewall rules outside the harness root: ' +
+            (@($foreign | Sort-Object) -join ', '))
+    }
+}
+
 function New-D5CurrentFirewallOwnershipPolicy {
     $currentHashes = @(
         foreach ($program in $script:authorizedStablePrograms) {
@@ -402,8 +431,8 @@ function Get-D5TestExecutionDefinitions {
                 $timeout = if ($name -eq 'e2e') { '10m' } else { '5m' }
                 $arguments = @('-test.v', '-test.count=1', "-test.timeout=$timeout")
                 if (-not [string]::IsNullOrWhiteSpace($CoverProfileRoot)) {
-                    # A repeat phase overwrites the same profile, so each
-                    # package's statements count from exactly one execution.
+                    # One batch execution with -test.count=1: each package's
+                    # statements count from exactly one execution.
                     $arguments += "-test.coverprofile=$(
                         Join-Path $CoverProfileRoot "$name.cover.out"
                     )"
@@ -496,7 +525,9 @@ function Get-D5TestExecutionDefinitions {
 }
 
 function New-D5CompilerExecutionPlans(
-    [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]]$Definitions
+    [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]]$Definitions,
+    [Parameter(Mandatory)] [string]$PlanRoot,
+    [Parameter(Mandatory)] [object]$Source
 ) {
     if ($Definitions.Count -eq 0) {
         return
@@ -527,18 +558,17 @@ function New-D5CompilerExecutionPlans(
         })
     }
 
-    $requestPath = Join-Path $script:run.StagePath 'test-execution-plan-request.json'
-    $outputPath = Join-Path $script:run.StagePath 'test-execution-plans.json'
-    $compilerLog = Join-Path $script:run.StagePath 'test-execution-plan-compiler.txt'
-    $source = ConvertTo-D5BoundSourceIdentity $script:run.SourceAtStart
+    $requestPath = Join-Path $PlanRoot 'test-execution-plan-request.json'
+    $outputPath = Join-Path $PlanRoot 'test-execution-plans.json'
+    $compilerLog = Join-Path $PlanRoot 'test-execution-plan-compiler.txt'
+    $boundSource = ConvertTo-D5BoundSourceIdentity $Source
     Write-D5JSON $requestPath ([ordered]@{
         SchemaVersion = $script:D5TestExecutionPlanSchemaVersion
         RunID = $script:ownerID
-        Source = $source
+        Source = $boundSource
         Operations = @($requests)
     })
 
-    [void](Add-D5SourceCheckpoint $script:run 'before-compiler-execution-plan')
     Push-Location $repositoryRoot
     try {
         & go run ./scripts/internal/d5networkpolicy `
@@ -551,7 +581,6 @@ function New-D5CompilerExecutionPlans(
     } finally {
         Pop-Location
     }
-    [void](Add-D5SourceCheckpoint $script:run 'after-compiler-execution-plan')
     if ($exitCode -ne 0) {
         throw "Compiler execution-plan construction exited with code $exitCode"
     }
@@ -564,7 +593,7 @@ function New-D5CompilerExecutionPlans(
         throw 'Compiler execution-plan document identity is invalid'
     }
     Assert-D5EnumerationSourceIdentity `
-        $script:run.SourceAtStart `
+        $Source `
         $document.Source `
         'compiler execution-plan document'
     $plans = @($document.Plans)
@@ -582,7 +611,7 @@ function New-D5CompilerExecutionPlans(
         [void](Assert-D5TestExecutionPlan `
             -Plan $plan `
             -ParentPrograms @($script:initialProgramEvidence) `
-            -ExpectedSourceIdentity $script:run.SourceAtStart `
+            -ExpectedSourceIdentity $Source `
             -ExpectedRunID $script:ownerID `
             -ExpectedRequestID $requestID `
             -ExpectedPlanSHA256 $digest)
@@ -593,9 +622,12 @@ function New-D5CompilerExecutionPlans(
     }
 }
 
-function Build-D5AtomicTestBinary([object]$Package) {
+function Build-D5AtomicTestBinary(
+    [object]$Package,
+    [Parameter(Mandatory)] [scriptblock]$SourceCheckpoint
+) {
     Assert-D5HarnessLeaseHeld $script:harnessLease
-    [void](Add-D5SourceCheckpoint $script:run "before-build-$($Package.Name)")
+    [void](& $SourceCheckpoint "before-build-$($Package.Name)")
     $binary = Join-Path $harnessRoot "$($Package.Name).test.exe"
     $temporary = "$binary.building-$($script:ownerID)"
     $arguments = @('test', '-c', '-o', $temporary)
@@ -617,7 +649,7 @@ function Build-D5AtomicTestBinary([object]$Package) {
     } finally {
         [IO.File]::Delete($temporary)
     }
-    [void](Add-D5SourceCheckpoint $script:run "after-build-$($Package.Name)")
+    [void](& $SourceCheckpoint "after-build-$($Package.Name)")
     $script:binaries[$Package.Name] = $binary
     $packageDirectory = ([string]$Package.Path).TrimStart('.', '/', '\')
     $script:binaryWorkingDirectories[$Package.Name] = [IO.Path]::GetFullPath(
@@ -625,7 +657,11 @@ function Build-D5AtomicTestBinary([object]$Package) {
     )
 }
 
-function Build-D5StableChildren([bool]$IncludeHostileSender, [string]$ManifestPath) {
+function Build-D5StableChildren(
+    [bool]$IncludeHostileSender,
+    [string]$ManifestPath,
+    [Parameter(Mandatory)] [scriptblock]$SourceCheckpoint
+) {
     Assert-D5HarnessLeaseHeld $script:harnessLease
     New-Item -ItemType Directory -Force -Path $stableChildRoot | Out-Null
     $targets = [Collections.Generic.List[object]]::new()
@@ -646,14 +682,14 @@ function Build-D5StableChildren([bool]$IncludeHostileSender, [string]$ManifestPa
     $temporaryPaths = [Collections.Generic.List[string]]::new()
     try {
         foreach ($target in $targets) {
-            [void](Add-D5SourceCheckpoint $script:run "before-build-$([IO.Path]::GetFileName($target.Path))")
+            [void](& $SourceCheckpoint "before-build-$([IO.Path]::GetFileName($target.Path))")
             $temporary = "$($target.Path).building-$($script:ownerID)"
             $temporaryPaths.Add($temporary)
             & go build -race -o $temporary $target.Package
             if ($LASTEXITCODE -ne 0) {
                 throw "Failed to build stable child $($target.Package)"
             }
-            [void](Add-D5SourceCheckpoint $script:run "after-build-$([IO.Path]::GetFileName($target.Path))")
+            [void](& $SourceCheckpoint "after-build-$([IO.Path]::GetFileName($target.Path))")
         }
         Assert-D5HarnessLeaseHeld $script:harnessLease
         foreach ($target in $targets) {
@@ -698,11 +734,6 @@ function Invoke-D5SelectedMode([string]$Phase) {
             [void](Add-D5SourceCheckpoint $script:run 'after-ordinary-go-test')
             if ($exitCode -ne 0) {
                 throw "Ordinary Windows tests exited with code $exitCode"
-            }
-        }
-        'NetworkTests' {
-            foreach ($definition in $script:operationDefinitions) {
-                Invoke-D5PlannedBinary $definition $Phase
             }
         }
         'BrowserTests' {
@@ -866,8 +897,14 @@ $script:authorizedStablePrograms = @(
     }
 )
 
-$command = "scripts/d5-windows-performance.ps1 -Mode $Mode -BenchTime $BenchTime -Count $Count" + $(if ($Race) { ' -Race' } else { '' })
-$script:run = New-D5EvidenceRun $repositoryRoot $EvidenceRoot $Mode $command
+# NetworkTests runs lean (no evidence run); audited modes create theirs before
+# the lease so even a lease-acquisition failure publishes a Failed run.
+$script:run = if ($Mode -eq 'NetworkTests') {
+    $null
+} else {
+    $command = "scripts/d5-windows-performance.ps1 -Mode $Mode -BenchTime $BenchTime -Count $Count" + $(if ($Race) { ' -Race' } else { '' })
+    New-D5EvidenceRun $repositoryRoot $EvidenceRoot $Mode $command
+}
 $script:ownerID = "$PID-$([guid]::NewGuid().ToString('N'))"
 $script:binaries = @{}
 $script:binaryWorkingDirectories = @{}
@@ -886,221 +923,197 @@ $script:lastAudit = $null
 $script:registrationState = $null
 $script:firewallOwnershipPolicy = $null
 $script:firewallOwnershipBaseline = $null
-$publishedResult = $null
-$expectedPrograms = @()
-$networkCapablePrograms = @()
-$builtPrograms = @()
+$script:publishedResult = $null
 
-$environmentNames = @(
-    $browserNetworkContractName,
-    $browserLeaseTokenName,
-    $launchAuthorizationPipeName,
-    $runnerGuardName,
-    'WINDSHARE_D5_PLAYWRIGHT_OUTPUT_DIR',
-    'WINDSHARE_D5_CHILD_MANIFEST'
-)
-$savedEnvironment = @{}
-foreach ($name in $environmentNames) {
-    $savedEnvironment[$name] = [pscustomobject]@{
-        Defined = Test-Path "Env:$name"
-        Value = [Environment]::GetEnvironmentVariable($name, 'Process')
-    }
-    [Environment]::SetEnvironmentVariable($name, $null, 'Process')
-}
-
-try {
-    New-Item -ItemType Directory -Force -Path $harnessRoot, $stableChildRoot | Out-Null
-    $script:harnessLease = Acquire-D5HarnessLease $stableChildRoot $browserNetworkContractValue
-    Wait-D5HarnessNamespaceQuiescent $script:harnessLease $harnessRoot
-    $script:runnerGuard = New-D5RunnerGuard
-    [Environment]::SetEnvironmentVariable($runnerGuardName, $script:runnerGuard.Name, 'Process')
-    $script:firewallOwnershipPolicy = New-D5CurrentFirewallOwnershipPolicy
-
-    # The cursor precedes the initial snapshot so a rule change during enumeration
-    # is attributed to the first audited interval instead of entering a blind baseline.
-    $script:auditInitialRecordID = Get-D5LatestFirewallRecordID
-    $script:auditInitialRules = @(Get-D5FirewallRules)
-    $script:auditRecordID = [long]$script:auditInitialRecordID
-    $script:auditRules = @($script:auditInitialRules)
-    $script:auditInitialized = $true
-    Write-D5JSON (Join-Path $script:run.StagePath 'preflight-rules.json') $script:auditInitialRules
-    $script:firewallOwnershipBaseline = New-D5FirewallOwnershipBaseline `
-        $script:auditInitialRules `
-        $script:firewallOwnershipPolicy
-    Write-D5JSON `
-        (Join-Path $script:run.StagePath 'firewall-ownership-before.json') `
-        ([ordered]@{
-            EvidenceSources = @($script:firewallOwnershipPolicy.EvidenceSources)
-            StablePrograms = @($script:authorizedStablePrograms)
-            D5ExecutableNames = @($script:firewallOwnershipPolicy.D5ProgramNames)
-            D5ExecutableSHA256 = @($script:firewallOwnershipPolicy.D5ProgramSHA256)
-            CleanupOwned = [ordered]@{
-                RuleCount = $script:firewallOwnershipPolicy.CleanupOwnedRuleCount
-                ProgramCount = $script:firewallOwnershipPolicy.CleanupOwnedProgramCount
-                ProgramRootCount = @($script:firewallOwnershipPolicy.CleanupOwnedProgramRoots).Count
-                SemanticPayloadSHA256 = $script:firewallOwnershipPolicy.CleanupOwnedSemanticPayloadSHA256
-            }
-            Baseline = $script:firewallOwnershipBaseline
-        })
-    Assert-D5FirewallPreflight `
-        $script:auditInitialRules `
-        $script:firewallOwnershipPolicy `
-        $script:firewallOwnershipBaseline
-    # The no-action phase closes the cursor-before-snapshot interval before any build.
-    # A concurrent temp identity cannot be absorbed into the excluded baseline silently.
-    Invoke-D5AuditedPhase 'preflight-quiescence' $false @() { }
-    $script:registrationState = Open-D5FirewallRegistrationState @($script:auditRules)
-    Write-D5JSON `
-        (Join-Path $script:run.StagePath 'firewall-registration-before.json') `
-        $script:registrationState
-    [void](Add-D5SourceCheckpoint $script:run 'after-lease-before-builds')
-
-    Push-Location $repositoryRoot
+function Invoke-D5AuditedRun {
+    # The audited pipeline serves every mode except NetworkTests: evidence run,
+    # firewall event-log audit chain, ownership baseline, and per-binary source
+    # checkpoints behave exactly as before the 2026-07-14 flow split.
+    $expectedPrograms = @()
+    $networkCapablePrograms = @()
+    $builtPrograms = @()
+    # GetNewClosure binds the block to a fresh dynamic module that resolves
+    # commands through the global scope, so script-scoped functions must be
+    # captured as variables to survive CI's dot-sourcing pwsh step wrapper.
+    $addSourceCheckpoint = ${function:Add-D5SourceCheckpoint}
+    $auditedRun = $script:run
+    $buildCheckpoint = {
+        param([string]$Name)
+        [void](& $addSourceCheckpoint $auditedRun $Name)
+    }.GetNewClosure()
     try {
-        foreach ($package in $packages) {
-            Build-D5AtomicTestBinary $package
-        }
-        if ($Mode -eq 'NetworkTests') {
-            $builtPrograms += @(Build-D5StableChildren $false (Join-Path $script:run.StagePath 'e2e-child-manifest.json'))
-        } elseif ($Mode -eq 'BrowserTests') {
-            $env:WINDSHARE_D5_PLAYWRIGHT_OUTPUT_DIR = Join-Path $script:run.StagePath 'browser/test-results'
-            $env:WINDSHARE_D5_CHILD_MANIFEST = Join-Path $script:run.StagePath 'browser/launched-binaries.json'
-            $builtPrograms += @(Build-D5StableChildren $true $env:WINDSHARE_D5_CHILD_MANIFEST)
-            [Environment]::SetEnvironmentVariable(
-                $browserNetworkContractName,
-                $browserNetworkContractValue,
-                'Process'
-            )
-            [Environment]::SetEnvironmentVariable(
-                $browserLeaseTokenName,
-                $script:harnessLease.Token,
-                'Process'
-            )
-        }
-    } finally {
-        Pop-Location
-    }
-    $builtPrograms += @($script:binaries.Values)
-    $builtPrograms = @($builtPrograms | ForEach-Object { [IO.Path]::GetFullPath([string]$_) } | Sort-Object -Unique)
-    $script:firewallOwnershipPolicy = New-D5CurrentFirewallOwnershipPolicy
+        # The cursor precedes the initial snapshot so a rule change during enumeration
+        # is attributed to the first audited interval instead of entering a blind baseline.
+        $script:auditInitialRecordID = Get-D5LatestFirewallRecordID
+        $script:auditInitialRules = @(Get-D5FirewallRules)
+        $script:auditRecordID = [long]$script:auditInitialRecordID
+        $script:auditRules = @($script:auditInitialRules)
+        $script:auditInitialized = $true
+        Write-D5JSON (Join-Path $script:run.StagePath 'preflight-rules.json') $script:auditInitialRules
+        $script:firewallOwnershipBaseline = New-D5FirewallOwnershipBaseline `
+            $script:auditInitialRules `
+            $script:firewallOwnershipPolicy
+        Write-D5JSON `
+            (Join-Path $script:run.StagePath 'firewall-ownership-before.json') `
+            ([ordered]@{
+                EvidenceSources = @($script:firewallOwnershipPolicy.EvidenceSources)
+                StablePrograms = @($script:authorizedStablePrograms)
+                D5ExecutableNames = @($script:firewallOwnershipPolicy.D5ProgramNames)
+                D5ExecutableSHA256 = @($script:firewallOwnershipPolicy.D5ProgramSHA256)
+                CleanupOwned = [ordered]@{
+                    RuleCount = $script:firewallOwnershipPolicy.CleanupOwnedRuleCount
+                    ProgramCount = $script:firewallOwnershipPolicy.CleanupOwnedProgramCount
+                    ProgramRootCount = @($script:firewallOwnershipPolicy.CleanupOwnedProgramRoots).Count
+                    SemanticPayloadSHA256 = $script:firewallOwnershipPolicy.CleanupOwnedSemanticPayloadSHA256
+                }
+                Baseline = $script:firewallOwnershipBaseline
+            })
+        Assert-D5FirewallPreflight `
+            $script:auditInitialRules `
+            $script:firewallOwnershipPolicy `
+            $script:firewallOwnershipBaseline
+        # The no-action phase closes the cursor-before-snapshot interval before any build.
+        # A concurrent temp identity cannot be absorbed into the excluded baseline silently.
+        Invoke-D5AuditedPhase 'preflight-quiescence' $false @() { }
+        $script:registrationState = Open-D5FirewallRegistrationState @($script:auditRules)
+        Write-D5JSON `
+            (Join-Path $script:run.StagePath 'firewall-registration-before.json') `
+            $script:registrationState
+        [void](Add-D5SourceCheckpoint $script:run 'after-lease-before-builds')
 
-    $expectedPrograms = switch ($Mode) {
-        'NetworkTests' { $builtPrograms }
-        'BrowserTests' { $builtPrograms }
-        'Baseline' { @($script:binaries.Values) }
-        'Profile' { @($script:binaries.Values) }
-        default { @() }
-    }
-    $expectedPrograms = @(
-        $expectedPrograms |
-            ForEach-Object { [IO.Path]::GetFullPath([string]$_) } |
-            Sort-Object -Unique
-    )
-    $script:initialProgramEvidence = @(Get-D5BinaryEvidence $builtPrograms)
-    $script:operationDefinitions = @(Get-D5TestExecutionDefinitions)
-    New-D5CompilerExecutionPlans @($script:operationDefinitions)
-
-    $networkCapablePrograms = switch ($Mode) {
-        'NetworkTests' { $builtPrograms }
-        'BrowserTests' { $builtPrograms }
-        'Baseline' {
-            @($script:executionPlans.Values | Where-Object {
-                [string]$_.Plan.NetworkAccess -eq 'parent-owned-one-use-pipe'
-            } | ForEach-Object { [string]$_.Plan.Executable.Path })
-        }
-        'Profile' {
-            @($script:executionPlans.Values | Where-Object {
-                [string]$_.Plan.NetworkAccess -eq 'parent-owned-one-use-pipe'
-            } | ForEach-Object { [string]$_.Plan.Executable.Path })
-        }
-        default { @() }
-    }
-    $networkCapablePrograms = @(
-        $networkCapablePrograms |
-            ForEach-Object { [IO.Path]::GetFullPath([string]$_) } |
-            Sort-Object -Unique
-    )
-    $pendingRegistrationPrograms = @(
-        Get-D5PendingRegistrationPrograms $script:registrationState $networkCapablePrograms
-    )
-    if ($Mode -in @('Baseline', 'Profile') -and $pendingRegistrationPrograms.Count -ne 0) {
-        throw "$Mode requires prior bounded registration disposition for: $($pendingRegistrationPrograms -join ', ')"
-    }
-    Write-D5JSON (Join-Path $script:run.StagePath 'binary-manifest.json') ([ordered]@{
-        Mode = $Mode
-        ExpectedLaunchedPrograms = $expectedPrograms
-        NetworkCapablePrograms = $networkCapablePrograms
-        PendingFirstRegistrationPrograms = $pendingRegistrationPrograms
-        Binaries = @($script:initialProgramEvidence)
-    })
-
-    if ($Mode -in @('NetworkTests', 'Baseline', 'Profile')) {
-        $manifests = @(
-            foreach ($name in $script:binaries.Keys | Sort-Object) {
-                Get-D5BinaryManifest $name
+        Push-Location $repositoryRoot
+        try {
+            foreach ($package in $packages) {
+                Build-D5AtomicTestBinary $package $buildCheckpoint
             }
+            if ($Mode -eq 'BrowserTests') {
+                $env:WINDSHARE_D5_PLAYWRIGHT_OUTPUT_DIR = Join-Path $script:run.StagePath 'browser/test-results'
+                $env:WINDSHARE_D5_CHILD_MANIFEST = Join-Path $script:run.StagePath 'browser/launched-binaries.json'
+                $builtPrograms += @(Build-D5StableChildren $true $env:WINDSHARE_D5_CHILD_MANIFEST $buildCheckpoint)
+                [Environment]::SetEnvironmentVariable(
+                    $browserNetworkContractName,
+                    $browserNetworkContractValue,
+                    'Process'
+                )
+                [Environment]::SetEnvironmentVariable(
+                    $browserLeaseTokenName,
+                    $script:harnessLease.Token,
+                    'Process'
+                )
+            }
+        } finally {
+            Pop-Location
+        }
+        $builtPrograms += @($script:binaries.Values)
+        $builtPrograms = @($builtPrograms | ForEach-Object { [IO.Path]::GetFullPath([string]$_) } | Sort-Object -Unique)
+        $script:firewallOwnershipPolicy = New-D5CurrentFirewallOwnershipPolicy
+
+        $expectedPrograms = switch ($Mode) {
+            'BrowserTests' { $builtPrograms }
+            'Baseline' { @($script:binaries.Values) }
+            'Profile' { @($script:binaries.Values) }
+            default { @() }
+        }
+        $expectedPrograms = @(
+            $expectedPrograms |
+                ForEach-Object { [IO.Path]::GetFullPath([string]$_) } |
+                Sort-Object -Unique
         )
-        Write-D5JSON (Join-Path $script:run.StagePath 'test-manifest.json') $manifests
+        $script:initialProgramEvidence = @(Get-D5BinaryEvidence $builtPrograms)
+        $script:operationDefinitions = @(Get-D5TestExecutionDefinitions)
+        if (@($script:operationDefinitions).Count -gt 0) {
+            [void](Add-D5SourceCheckpoint $script:run 'before-compiler-execution-plan')
+            New-D5CompilerExecutionPlans `
+                -Definitions @($script:operationDefinitions) `
+                -PlanRoot $script:run.StagePath `
+                -Source $script:run.SourceAtStart
+            [void](Add-D5SourceCheckpoint $script:run 'after-compiler-execution-plan')
+        }
+
+        $networkCapablePrograms = switch ($Mode) {
+            'BrowserTests' { $builtPrograms }
+            'Baseline' {
+                @($script:executionPlans.Values | Where-Object {
+                    [string]$_.Plan.NetworkAccess -eq 'parent-owned-one-use-pipe'
+                } | ForEach-Object { [string]$_.Plan.Executable.Path })
+            }
+            'Profile' {
+                @($script:executionPlans.Values | Where-Object {
+                    [string]$_.Plan.NetworkAccess -eq 'parent-owned-one-use-pipe'
+                } | ForEach-Object { [string]$_.Plan.Executable.Path })
+            }
+            default { @() }
+        }
+        $networkCapablePrograms = @(
+            $networkCapablePrograms |
+                ForEach-Object { [IO.Path]::GetFullPath([string]$_) } |
+                Sort-Object -Unique
+        )
+        $pendingRegistrationPrograms = @(
+            Get-D5PendingRegistrationPrograms $script:registrationState $networkCapablePrograms
+        )
+        if ($Mode -in @('Baseline', 'Profile') -and $pendingRegistrationPrograms.Count -ne 0) {
+            throw "$Mode requires prior bounded registration disposition for: $($pendingRegistrationPrograms -join ', ')"
+        }
+        Write-D5JSON (Join-Path $script:run.StagePath 'binary-manifest.json') ([ordered]@{
+            Mode = $Mode
+            ExpectedLaunchedPrograms = $expectedPrograms
+            NetworkCapablePrograms = $networkCapablePrograms
+            PendingFirstRegistrationPrograms = $pendingRegistrationPrograms
+            Binaries = @($script:initialProgramEvidence)
+        })
+
+        if ($Mode -in @('Baseline', 'Profile')) {
+            $manifests = @(
+                foreach ($name in $script:binaries.Keys | Sort-Object) {
+                    Get-D5BinaryManifest $name
+                }
+            )
+            Write-D5JSON (Join-Path $script:run.StagePath 'test-manifest.json') $manifests
+        }
+
+        switch ($Mode) {
+            'BrowserTests' {
+                if ($pendingRegistrationPrograms.Count -gt 0) {
+                    Invoke-D5AuditedPhase 'browser-cold' $true $pendingRegistrationPrograms { Invoke-D5SelectedMode 'browser-cold' }
+                    $script:registrationState = Complete-D5FirewallRegistrationAttempt `
+                        $script:registrationState `
+                        @($script:lastAudit.AfterRules) `
+                        $pendingRegistrationPrograms `
+                        $script:firewallOwnershipPolicy `
+                        $script:firewallOwnershipBaseline
+                    Save-D5FirewallRegistrationState $script:registrationState
+                    Invoke-D5AuditedPhase 'browser-repeat' $false $expectedPrograms { Invoke-D5SelectedMode 'browser-repeat' }
+                } else {
+                    Invoke-D5AuditedPhase 'browser' $false $expectedPrograms { Invoke-D5SelectedMode 'browser' }
+                }
+                $launched = Get-Content -LiteralPath $env:WINDSHARE_D5_CHILD_MANIFEST -Raw | ConvertFrom-Json
+                $manifestPrograms = @($launched.binaries.Path | ForEach-Object { [IO.Path]::GetFullPath([string]$_) } | Sort-Object)
+                if ($manifestPrograms.Count -ne $expectedPrograms.Count -or
+                    @(Compare-Object -ReferenceObject @($expectedPrograms | Sort-Object) -DifferenceObject $manifestPrograms).Count -ne 0) {
+                    throw 'Browser runner manifest does not contain its exact per-mode program set'
+                }
+            }
+            'Baseline' {
+                Invoke-D5AuditedPhase 'measurement' $false $networkCapablePrograms { Invoke-D5SelectedMode 'measurement' }
+            }
+            'Profile' {
+                Invoke-D5AuditedPhase 'measurement' $false $networkCapablePrograms { Invoke-D5SelectedMode 'measurement' }
+            }
+            'OrdinaryTests' {
+                Invoke-D5AuditedPhase 'ordinary' $false @() { Invoke-D5SelectedMode 'ordinary' }
+            }
+            'Build' {
+                Invoke-D5AuditedPhase 'build' $false @() { }
+            }
+            'Audit' {
+                Invoke-D5AuditedPhase 'audit' $false @() { }
+            }
+        }
+    } catch {
+        Add-D5RunnerFailure $_
     }
 
-    switch ($Mode) {
-        'NetworkTests' {
-            if ($pendingRegistrationPrograms.Count -gt 0) {
-                Invoke-D5AuditedPhase 'cold' $true $pendingRegistrationPrograms { Invoke-D5SelectedMode 'cold' }
-                $script:registrationState = Complete-D5FirewallRegistrationAttempt `
-                    $script:registrationState `
-                    @($script:lastAudit.AfterRules) `
-                    $pendingRegistrationPrograms `
-                    $script:firewallOwnershipPolicy `
-                    $script:firewallOwnershipBaseline
-                Save-D5FirewallRegistrationState $script:registrationState
-                Invoke-D5AuditedPhase 'repeat' $false $networkCapablePrograms { Invoke-D5SelectedMode 'repeat' }
-            } else {
-                Invoke-D5AuditedPhase 'network' $false $networkCapablePrograms { Invoke-D5SelectedMode 'network' }
-            }
-        }
-        'BrowserTests' {
-            if ($pendingRegistrationPrograms.Count -gt 0) {
-                Invoke-D5AuditedPhase 'browser-cold' $true $pendingRegistrationPrograms { Invoke-D5SelectedMode 'browser-cold' }
-                $script:registrationState = Complete-D5FirewallRegistrationAttempt `
-                    $script:registrationState `
-                    @($script:lastAudit.AfterRules) `
-                    $pendingRegistrationPrograms `
-                    $script:firewallOwnershipPolicy `
-                    $script:firewallOwnershipBaseline
-                Save-D5FirewallRegistrationState $script:registrationState
-                Invoke-D5AuditedPhase 'browser-repeat' $false $expectedPrograms { Invoke-D5SelectedMode 'browser-repeat' }
-            } else {
-                Invoke-D5AuditedPhase 'browser' $false $expectedPrograms { Invoke-D5SelectedMode 'browser' }
-            }
-            $launched = Get-Content -LiteralPath $env:WINDSHARE_D5_CHILD_MANIFEST -Raw | ConvertFrom-Json
-            $manifestPrograms = @($launched.binaries.Path | ForEach-Object { [IO.Path]::GetFullPath([string]$_) } | Sort-Object)
-            if ($manifestPrograms.Count -ne $expectedPrograms.Count -or
-                @(Compare-Object -ReferenceObject @($expectedPrograms | Sort-Object) -DifferenceObject $manifestPrograms).Count -ne 0) {
-                throw 'Browser runner manifest does not contain its exact per-mode program set'
-            }
-        }
-        'Baseline' {
-            Invoke-D5AuditedPhase 'measurement' $false $networkCapablePrograms { Invoke-D5SelectedMode 'measurement' }
-        }
-        'Profile' {
-            Invoke-D5AuditedPhase 'measurement' $false $networkCapablePrograms { Invoke-D5SelectedMode 'measurement' }
-        }
-        'OrdinaryTests' {
-            Invoke-D5AuditedPhase 'ordinary' $false @() { Invoke-D5SelectedMode 'ordinary' }
-        }
-        'Build' {
-            Invoke-D5AuditedPhase 'build' $false @() { }
-        }
-        'Audit' {
-            Invoke-D5AuditedPhase 'audit' $false @() { }
-        }
-    }
-} catch {
-    Add-D5RunnerFailure $_
-}
-
-if ($null -ne $script:harnessLease) {
     try {
         Wait-D5HarnessNamespaceQuiescent $script:harnessLease $harnessRoot
         Assert-D5RunProgramsUnchanged 'post-run'
@@ -1169,17 +1182,275 @@ if ($null -ne $script:harnessLease) {
     } catch {
         Add-D5RunnerFailure $_ 'post-run ownership verification failed'
     }
+
+}
+
+function Invoke-D5NetworkTestsRun {
+    # Owner decision 2026-07-14 (supersedes the 2026-07-13 per-package forensics
+    # decision): NetworkTests is a lean deterministic-execution flow. It keeps
+    # the exclusive harness lease, fixed-path builds, compiler execution plans,
+    # the registration-pair check, and the one-use capability handshake; it
+    # deliberately does NOT create an evidence run, source checkpoints, firewall
+    # event-log audits or quiescence waits, zero-delta snapshot assertions, or
+    # per-binary program-evidence re-hash sweeps, and foreign WindShare-
+    # attributable rules outside the harness root demote to a one-line warning.
+    $runRoot = Join-Path $harnessRoot 'network-run'
+    $logRoot = Join-Path $runRoot 'logs'
+    if (Test-Path -LiteralPath $runRoot) {
+        Remove-Item -LiteralPath $runRoot -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $runRoot, $logRoot | Out-Null
+    # One identity read at flow start: the compiler plan schema embeds and
+    # re-verifies it, replacing the per-binary checkpoint sweeps.
+    $source = Get-D5SourceIdentity $repositoryRoot
+    $noCheckpoint = { param([string]$Name) }
+
+    Push-Location $repositoryRoot
+    try {
+        foreach ($package in $packages) {
+            Build-D5AtomicTestBinary $package $noCheckpoint
+        }
+        $builtPrograms = @(Build-D5StableChildren `
+            $false `
+            (Join-Path $runRoot 'e2e-child-manifest.json') `
+            $noCheckpoint)
+    } finally {
+        Pop-Location
+    }
+    $builtPrograms += @($script:binaries.Values)
+    $builtPrograms = @($builtPrograms | ForEach-Object { [IO.Path]::GetFullPath([string]$_) } | Sort-Object -Unique)
+    # One hash per binary: this manifest is what every launch validation and
+    # authorization handshake re-verifies against.
+    $script:initialProgramEvidence = @(Get-D5BinaryEvidence $builtPrograms)
+    # Post-build hashes feed rule attribution for the foreign-rule warning.
+    $script:firewallOwnershipPolicy = New-D5CurrentFirewallOwnershipPolicy
+
+    $script:operationDefinitions = @(Get-D5TestExecutionDefinitions)
+    New-D5CompilerExecutionPlans `
+        -Definitions @($script:operationDefinitions) `
+        -PlanRoot $runRoot `
+        -Source $source
+    foreach ($definition in $script:operationDefinitions) {
+        # The compiler's enumeration is authoritative; an empty plan would
+        # otherwise pass validation silently as SelectionClass 'empty'.
+        $binding = $script:executionPlans[[string]$definition.RequestID]
+        if (@($binding.Plan.Entries).Count -eq 0) {
+            throw "Stable binary $($script:binaries[[string]$definition.Name]) contains no tests"
+        }
+    }
+
+    $rules = @(Get-D5FirewallRules)
+    Write-D5ForeignFirewallRuleWarning $rules
+    # The registration-pair state is what keeps inbound sockets deterministic
+    # with firewall popups disabled: default-deny is silent otherwise.
+    $state = if (Test-Path -LiteralPath $registrationStatePath -PathType Leaf) {
+        Get-Content -LiteralPath $registrationStatePath -Raw | ConvertFrom-Json
+    } else {
+        $null
+    }
+    if ($null -ne $state) {
+        Assert-D5FirewallRegistrationEntries $state $rules $script:firewallOwnershipPolicy
+    } else {
+        $state = New-D5FirewallRegistrationEntries $rules $script:firewallOwnershipPolicy
+        Save-D5FirewallRegistrationState $state
+    }
+    $pending = @(Get-D5PendingRegistrationPrograms $state $builtPrograms)
+
+    Assert-D5HarnessLeaseHeld $script:harnessLease
+    $workers = [Collections.Generic.List[object]]::new()
+    $results = @()
+    try {
+        foreach ($definition in $script:operationDefinitions) {
+            $requestID = [string]$definition.RequestID
+            $binding = $script:executionPlans[$requestID]
+            $logPath = Join-Path $logRoot (([string]$definition.LogName).Replace('{phase}', 'network'))
+            $workers.Add((Start-D5PlannedTestProcess `
+                -Plan $binding.Plan `
+                -ParentPrograms @($script:initialProgramEvidence) `
+                -ExpectedSourceIdentity $source `
+                -ExpectedRunID $script:ownerID `
+                -ExpectedRequestID $requestID `
+                -ExpectedPlanSHA256 $binding.PlanSHA256 `
+                -Name ([string]$definition.Name) `
+                -LogPath $logPath))
+        }
+        $results = @(Wait-D5PlannedTestProcesses `
+            -Workers @($workers) `
+            -Timeout $script:D5NetworkJoinTimeout)
+    } catch {
+        # Drain and log already-launched siblings before teardown so a
+        # mid-batch launch failure still leaves their logs to inspect.
+        foreach ($worker in @($workers)) {
+            try {
+                [void](Complete-D5PlannedTestWorker $worker 'sibling launch failed' 'LaunchAborted')
+            } catch {
+                # Best-effort: the teardown below still kills and releases.
+            }
+        }
+        Stop-D5PlannedTestProcesses @($workers)
+        throw
+    }
+
+    # Covers e2e-spawned grandchildren under the harness root: a process-
+    # namespace drain, not a firewall event-log timer.
+    Wait-D5HarnessNamespaceQuiescent $script:harnessLease $harnessRoot
+
+    $failedResults = @($results | Where-Object {
+        $_.ExitCode -ne 0 -or -not [string]::IsNullOrEmpty([string]$_.Failure)
+    })
+    $registrationError = $null
+    if ($pending.Count -gt 0) {
+        $misshapenError = $null
+        try {
+            # Rule minting is synchronous with a child's first bind and the
+            # namespace is quiescent, so a fresh snapshot needs no settle-wait.
+            $freshRules = @(Get-D5FirewallRules)
+            # A failed batch must not persist 'NoRegistration' for a program
+            # that may never have reached its first bind (e.g. a JoinTimeout
+            # kill), and one misshapen mint must not block validly-minted
+            # siblings: record shape-valid full pairs always, 'NoRegistration'
+            # only after an all-clean join, and leave everything else pending
+            # for the next run to retry.
+            $recordablePrograms = [Collections.Generic.List[string]]::new()
+            $unrecordedPrograms = [Collections.Generic.List[string]]::new()
+            foreach ($program in $pending) {
+                $programRules = @($freshRules | Where-Object {
+                    [IO.Path]::GetFullPath([string]$_.Program).Equals(
+                        $program,
+                        [StringComparison]::OrdinalIgnoreCase
+                    )
+                })
+                if ($programRules.Count -eq 0) {
+                    if ($failedResults.Count -eq 0) {
+                        $recordablePrograms.Add($program)
+                    } else {
+                        $unrecordedPrograms.Add($program)
+                    }
+                    continue
+                }
+                try {
+                    Assert-D5FixedRegistrationRules $programRules $script:firewallOwnershipPolicy
+                    $recordablePrograms.Add($program)
+                } catch {
+                    if ($null -eq $misshapenError) {
+                        $misshapenError = $_
+                    }
+                    $unrecordedPrograms.Add($program)
+                }
+            }
+            if ($recordablePrograms.Count -gt 0) {
+                # Rules of unrecorded programs are filtered out so the final
+                # whole-state validation inside Complete does not trip over
+                # exactly what is being left pending.
+                $unrecordedSet = New-D5ProgramSet @($unrecordedPrograms)
+                $attemptRules = @($freshRules | Where-Object {
+                    -not $unrecordedSet.Contains([IO.Path]::GetFullPath([string]$_.Program))
+                })
+                $state = Complete-D5FirewallRegistrationEntries `
+                    $state `
+                    $attemptRules `
+                    @($recordablePrograms) `
+                    $script:firewallOwnershipPolicy
+                Save-D5FirewallRegistrationState $state
+            }
+            if ($unrecordedPrograms.Count -gt 0) {
+                Write-Warning ('Bounded registration attempt left unrecorded for still-pending program(s): ' +
+                    ($unrecordedPrograms -join ', ') + '; the next run retries it.')
+            }
+        } catch {
+            $registrationError = $_
+        }
+        if ($null -eq $registrationError) {
+            # A misshapen mint is recorded nowhere but must still fail the
+            # run loudly — after the results table below, never instead of it.
+            $registrationError = $misshapenError
+        }
+    }
+
+    Write-Output ''
+    Write-Output '== network results =='
+    $nameWidth = (@($results | ForEach-Object { ([string]$_.Name).Length }) + @(4) |
+        Measure-Object -Maximum).Maximum
+    $dispositionWidth = (@($results | ForEach-Object { ([string]$_.Disposition).Length }) + @(11) |
+        Measure-Object -Maximum).Maximum
+    Write-Output ('{0}  {1,-5}  {2,-5}  {3}  {4}' -f
+        'name'.PadRight($nameWidth), 'exit', 'time', 'disposition'.PadRight($dispositionWidth), 'log')
+    foreach ($result in $results) {
+        Write-Output ('{0}  {1,-5}  {2,-5}  {3}  {4}' -f
+            ([string]$result.Name).PadRight($nameWidth),
+            $result.ExitCode,
+            ('{0:mm\:ss}' -f $result.Duration),
+            ([string]$result.Disposition).PadRight($dispositionWidth),
+            [string]$result.LogPath)
+    }
+    $problems = [Collections.Generic.List[string]]::new()
+    if ($failedResults.Count -gt 0) {
+        $summary = @($failedResults | ForEach-Object {
+            if (-not [string]::IsNullOrEmpty([string]$_.Failure)) {
+                "$($_.Name) ($($_.Failure))"
+            } else {
+                "$($_.Name) (exit $($_.ExitCode))"
+            }
+        }) -join ', '
+        $problems.Add("$($failedResults.Count) network package(s) failed: $summary; see logs above")
+    }
+    if ($null -ne $registrationError) {
+        $problems.Add("registration completion failed: $registrationError")
+    }
+    if ($problems.Count -gt 0) {
+        throw ($problems -join '; ')
+    }
+}
+
+$environmentNames = @(
+    $browserNetworkContractName,
+    $browserLeaseTokenName,
+    $launchAuthorizationPipeName,
+    $runnerGuardName,
+    'WINDSHARE_D5_PLAYWRIGHT_OUTPUT_DIR',
+    'WINDSHARE_D5_CHILD_MANIFEST'
+)
+$savedEnvironment = @{}
+foreach ($name in $environmentNames) {
+    $savedEnvironment[$name] = [pscustomobject]@{
+        Defined = Test-Path "Env:$name"
+        Value = [Environment]::GetEnvironmentVariable($name, 'Process')
+    }
+    [Environment]::SetEnvironmentVariable($name, $null, 'Process')
 }
 
 try {
-    $status = if ($null -eq $script:failure) { 'Success' } else { 'Failed' }
-    $errorMessage = if ($null -eq $script:failure) { '' } else { [string]$script:failure }
-    $publishedResult = Complete-D5EvidenceRun $script:run $status $errorMessage
-    if ($publishedResult.Status -ne 'Success' -and $null -eq $script:failure) {
-        Add-D5RunnerFailure $publishedResult.Error 'evidence completion failed'
+    New-Item -ItemType Directory -Force -Path $harnessRoot, $stableChildRoot | Out-Null
+    $script:harnessLease = Acquire-D5HarnessLease $stableChildRoot $browserNetworkContractValue
+    Wait-D5HarnessNamespaceQuiescent $script:harnessLease $harnessRoot
+    $script:runnerGuard = New-D5RunnerGuard
+    [Environment]::SetEnvironmentVariable($runnerGuardName, $script:runnerGuard.Name, 'Process')
+    $script:firewallOwnershipPolicy = New-D5CurrentFirewallOwnershipPolicy
+    # Two self-contained flows, dispatched once on $Mode: NetworkTests runs the
+    # lean deterministic path (owner decision 2026-07-14); every other mode
+    # keeps the audited pipeline unchanged.
+    if ($Mode -eq 'NetworkTests') {
+        Invoke-D5NetworkTestsRun
+    } else {
+        Invoke-D5AuditedRun
     }
 } catch {
-    Add-D5RunnerFailure $_ 'evidence publication failed'
+    Add-D5RunnerFailure $_
+}
+
+# Publication sits outside the audited flow so a run that never entered it
+# (e.g. lease-acquisition failure) still publishes a Failed evidence run.
+if ($null -ne $script:run) {
+    try {
+        $status = if ($null -eq $script:failure) { 'Success' } else { 'Failed' }
+        $errorMessage = if ($null -eq $script:failure) { '' } else { [string]$script:failure }
+        $script:publishedResult = Complete-D5EvidenceRun $script:run $status $errorMessage
+        if ($script:publishedResult.Status -ne 'Success' -and $null -eq $script:failure) {
+            Add-D5RunnerFailure $script:publishedResult.Error 'evidence completion failed'
+        }
+    } catch {
+        Add-D5RunnerFailure $_ 'evidence publication failed'
+    }
 }
 
 foreach ($name in $environmentNames) {
@@ -1201,8 +1472,8 @@ try {
     Add-D5RunnerFailure $_ 'global harness lease cleanup failed'
 }
 
-if ($null -ne $publishedResult) {
-    Write-Output "D5 evidence published without overwrite: $($publishedResult.Path)"
+if ($null -ne $script:publishedResult) {
+    Write-Output "D5 evidence published without overwrite: $($script:publishedResult.Path)"
 }
 if ($null -ne $script:failure) {
     throw $script:failure

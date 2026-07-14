@@ -395,6 +395,78 @@ Assert-D5FirewallRegistrationState `
     $policy `
     $emptyOwnershipBaseline
 
+# The Entries cores must carry the whole determinism contract without any
+# ownership baseline (the lean NetworkTests flow calls them directly) and must
+# record dispositions identically to their preflighted wrappers.
+$coreEntriesState = New-D5FirewallRegistrationEntries @($coldTCP, $coldUDP) $policy
+Assert-D5FirewallRegistrationEntries $coreEntriesState @($coldTCP, $coldUDP) $policy
+if (($coreEntriesState | ConvertTo-Json -Depth 8 -Compress) -cne
+    ($registrationState | ConvertTo-Json -Depth 8 -Compress)) {
+    throw 'New-D5FirewallRegistrationEntries differs from its preflighted wrapper'
+}
+Assert-Throws {
+    Assert-D5FirewallRegistrationEntries $coreEntriesState @() $policy
+} 'changed before launch'
+$emptyEntriesState = New-D5FirewallRegistrationEntries @() $policy
+Assert-Throws {
+    Assert-D5FirewallRegistrationEntries $emptyEntriesState @($coldTCP, $coldUDP) $policy
+} 'unrecorded stable program'
+$coreNoRegistration = Complete-D5FirewallRegistrationEntries `
+    $emptyEntriesState `
+    @() `
+    @($program) `
+    $policy
+if (($coreNoRegistration | ConvertTo-Json -Depth 8 -Compress) -cne
+    ($noRegistration | ConvertTo-Json -Depth 8 -Compress)) {
+    throw 'Complete-D5FirewallRegistrationEntries NoRegistration differs from its wrapper'
+}
+$corePairRegistration = Complete-D5FirewallRegistrationEntries `
+    $emptyEntriesState `
+    @($coldTCP, $coldUDP) `
+    @($program) `
+    $policy
+if (($corePairRegistration | ConvertTo-Json -Depth 8 -Compress) -cne
+    ($pairRegistration | ConvertTo-Json -Depth 8 -Compress)) {
+    throw 'Complete-D5FirewallRegistrationEntries RegisteredPair differs from its wrapper'
+}
+
+# The Entries cores must reject silently-minted wrong-shape pairs (e.g. the
+# Private-only rules Windows creates with consent popups suppressed) instead
+# of recording them for the audited modes to trip over later.
+$privateOnlyTCP = New-Rule @{
+    InstanceID = "TCP Query User{$guid}$program"
+    RuleID = "TCP Query User{$guid}$program"
+    Program = $program
+    Protocol = 'TCP'
+    Profile = @('Private')
+}
+$privateOnlyUDP = New-Rule @{
+    InstanceID = "UDP Query User{$guid}$program"
+    RuleID = "UDP Query User{$guid}$program"
+    Program = $program
+    Protocol = 'UDP'
+    Profile = @('Private')
+}
+Assert-Throws {
+    New-D5FirewallRegistrationEntries @($privateOnlyTCP, $privateOnlyUDP) $policy
+} 'exact bounded Query User shape'
+Assert-Throws {
+    Assert-D5FirewallRegistrationEntries `
+        $coreEntriesState `
+        @($privateOnlyTCP, $privateOnlyUDP) `
+        $policy
+} 'exact bounded Query User shape'
+Assert-Throws {
+    Complete-D5FirewallRegistrationEntries `
+        $emptyEntriesState `
+        @($privateOnlyTCP, $privateOnlyUDP) `
+        @($program) `
+        $policy
+} 'exact bounded Query User shape'
+Assert-Throws {
+    New-D5FirewallRegistrationEntries @($coldTCP) $policy
+} 'exactly one TCP rule and one UDP rule'
+
 $excludedProgram = 'C:\Temp\go-build900\b001\exe\justus-go.exe'
 $excludedTCP = New-D5ExcludedEvidenceRule `
     $excludedProgram `

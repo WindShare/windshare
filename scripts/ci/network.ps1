@@ -4,7 +4,9 @@
 # network packages' full suites through the runner (NetworkTests mode builds
 # with -race; pre-registered firewall rule pairs mean no prompts and no
 # mutations). Together with `make race` this restores the race coverage the
-# ubuntu jobs get natively.
+# ubuntu jobs get natively. Since 2026-07-14 the runner executes the 8 packages
+# concurrently under a single whole-run registration check; per-package
+# forensics removed (owner decision, see docs/.orchestration/make-ci.md).
 [CmdletBinding()]
 param()
 

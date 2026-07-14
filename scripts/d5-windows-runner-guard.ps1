@@ -257,9 +257,17 @@ function Complete-D5LaunchAuthorization(
     } | ConvertTo-Json -Depth 8 -Compress
     $bytes = [Text.UTF8Encoding]::new($false).GetBytes($payload)
     $length = [BitConverter]::GetBytes([int]$bytes.Length)
-    $Authorization.Server.Write($length, 0, $length.Length)
-    $Authorization.Server.Write($bytes, 0, $bytes.Length)
-    $Authorization.Server.Flush()
+    try {
+        $Authorization.Server.Write($length, 0, $length.Length)
+        $Authorization.Server.Write($bytes, 0, $bytes.Length)
+        $Authorization.Server.Flush()
+    } catch {
+        # A child that connected and then died leaves a broken pipe; the failed
+        # handshake is consumed like every other rejection, never left mid-
+        # transition in 'Completing'.
+        $Authorization.State = 'Rejected'
+        throw
+    }
     $Authorization.AuthorizedPID = $Process.Id
     $Authorization.AuthorizedExecutable = $expectedPath
     $Authorization.State = 'Consumed'

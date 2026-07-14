@@ -372,12 +372,49 @@ function Get-D5ProgramRuleSignatures([object[]]$Rules, [string]$Program) {
     )
 }
 
-function New-D5FirewallRegistrationState(
+# The registration Entries functions carry the determinism core alone: do the
+# pre-registered rule pairs for the fixed paths exist, hold the bounded
+# Query-User shape, and match what was recorded? The preflighted
+# *State/*Attempt wrappers add the ownership-baseline forensics on top; the
+# NetworkTests flow calls the cores directly (owner decision 2026-07-14) while
+# every audited mode keeps the wrappers.
+function Assert-D5FixedRegistrationRules(
     [object[]]$Rules,
-    [object]$OwnershipPolicy,
-    [object]$OwnershipBaseline
+    [object]$OwnershipPolicy
 ) {
-    Assert-D5FirewallPreflight $Rules $OwnershipPolicy $OwnershipBaseline
+    # Pure rule-shape validation over the fixed paths: the bounded Query-User
+    # shape and exact TCP/UDP pairing need no ownership baseline, so the lean
+    # flow keeps them — recording a silently-minted wrong-shape pair would
+    # poison the state file that every audited mode trusts.
+    $identities = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $protocolsByProgram = @{}
+    foreach ($rule in @($Rules)) {
+        $program = [IO.Path]::GetFullPath([string]$rule.Program)
+        if (-not $OwnershipPolicy.AuthorizedProgramSet.Contains($program)) {
+            continue
+        }
+        Assert-D5FixedRule $rule $OwnershipPolicy.AuthorizedProgramSet 'Registration'
+        $identity = Get-D5RuleIdentity $rule
+        if (-not $identities.Add($identity)) {
+            throw "Registration found a duplicate stable firewall identity: $identity"
+        }
+        if (-not $protocolsByProgram.ContainsKey($program)) {
+            $protocolsByProgram[$program] = [Collections.Generic.HashSet[string]]::new(
+                [StringComparer]::OrdinalIgnoreCase
+            )
+        }
+        if (-not $protocolsByProgram[$program].Add((ConvertTo-D5ProtocolName $rule.Protocol))) {
+            throw "Registration found a duplicate protocol identity for $program"
+        }
+    }
+    Assert-D5ExactProtocolPairs $protocolsByProgram 'Registration'
+}
+
+function New-D5FirewallRegistrationEntries(
+    [object[]]$Rules,
+    [object]$OwnershipPolicy
+) {
+    Assert-D5FixedRegistrationRules $Rules $OwnershipPolicy
     $entries = [Collections.Generic.List[object]]::new()
     foreach ($program in $OwnershipPolicy.AuthorizedPrograms | Sort-Object -Unique) {
         $signatures = @(Get-D5ProgramRuleSignatures $Rules $program)
@@ -400,11 +437,19 @@ function New-D5FirewallRegistrationState(
     }
 }
 
-function Assert-D5FirewallRegistrationState(
-    [object]$State,
+function New-D5FirewallRegistrationState(
     [object[]]$Rules,
     [object]$OwnershipPolicy,
     [object]$OwnershipBaseline
+) {
+    Assert-D5FirewallPreflight $Rules $OwnershipPolicy $OwnershipBaseline
+    return New-D5FirewallRegistrationEntries $Rules $OwnershipPolicy
+}
+
+function Assert-D5FirewallRegistrationEntries(
+    [object]$State,
+    [object[]]$Rules,
+    [object]$OwnershipPolicy
 ) {
     if ([int]$State.SchemaVersion -ne 1 -or
         -not [IO.Path]::GetFullPath([string]$State.HarnessRoot).Equals(
@@ -413,7 +458,7 @@ function Assert-D5FirewallRegistrationState(
         )) {
         throw 'Firewall registration state has an invalid schema or harness root'
     }
-    Assert-D5FirewallPreflight $Rules $OwnershipPolicy $OwnershipBaseline
+    Assert-D5FixedRegistrationRules $Rules $OwnershipPolicy
     $authorized = $OwnershipPolicy.AuthorizedProgramSet
     $entries = @{}
     foreach ($entry in @($State.Entries)) {
@@ -450,6 +495,16 @@ function Assert-D5FirewallRegistrationState(
     }
 }
 
+function Assert-D5FirewallRegistrationState(
+    [object]$State,
+    [object[]]$Rules,
+    [object]$OwnershipPolicy,
+    [object]$OwnershipBaseline
+) {
+    Assert-D5FirewallPreflight $Rules $OwnershipPolicy $OwnershipBaseline
+    Assert-D5FirewallRegistrationEntries $State $Rules $OwnershipPolicy
+}
+
 function Get-D5PendingRegistrationPrograms(
     [object]$State,
     [string[]]$ExpectedPrograms
@@ -463,14 +518,12 @@ function Get-D5PendingRegistrationPrograms(
     )
 }
 
-function Complete-D5FirewallRegistrationAttempt(
+function Complete-D5FirewallRegistrationEntries(
     [object]$State,
     [object[]]$Rules,
     [string[]]$AttemptedPrograms,
-    [object]$OwnershipPolicy,
-    [object]$OwnershipBaseline
+    [object]$OwnershipPolicy
 ) {
-    Assert-D5FirewallPreflight $Rules $OwnershipPolicy $OwnershipBaseline
     $attempted = New-D5ProgramSet $AttemptedPrograms
     $existing = New-D5ProgramSet @($State.Entries | ForEach-Object { [string]$_.Program })
     $entries = [Collections.Generic.List[object]]::new()
@@ -496,6 +549,21 @@ function Complete-D5FirewallRegistrationAttempt(
         HarnessRoot = [IO.Path]::GetFullPath($OwnershipPolicy.HarnessRoot)
         Entries = @($entries | Sort-Object Program)
     }
-    Assert-D5FirewallRegistrationState $next $Rules $OwnershipPolicy $OwnershipBaseline
+    Assert-D5FirewallRegistrationEntries $next $Rules $OwnershipPolicy
     return $next
+}
+
+function Complete-D5FirewallRegistrationAttempt(
+    [object]$State,
+    [object[]]$Rules,
+    [string[]]$AttemptedPrograms,
+    [object]$OwnershipPolicy,
+    [object]$OwnershipBaseline
+) {
+    Assert-D5FirewallPreflight $Rules $OwnershipPolicy $OwnershipBaseline
+    return Complete-D5FirewallRegistrationEntries `
+        $State `
+        $Rules `
+        $AttemptedPrograms `
+        $OwnershipPolicy
 }
