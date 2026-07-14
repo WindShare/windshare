@@ -4,18 +4,21 @@
 #   Linux:   bash scripts/ci/<target>.sh
 #
 # Usage: `make ci` runs every gate of .github/workflows/ci.yml in
-# cheap-to-expensive order (hygiene vet lint race vectors coverage network
-# web browser); each gate is also independently invokable (e.g. `make race`).
-# Expected full `make ci` runtime on Windows: ~9 minutes with a warm Go
-# build cache (8:40 measured 2026-07-13); budget ~30 minutes cold. The
-# GOWORK=off release invariant (ci.yml gowork-off-core / gowork-off-root)
-# runs inside the `vet` gate.
+# substance-first order (owner decision 2026-07-14): gates that catch
+# compile/runtime errors (vet race vectors coverage network web browser) run
+# before the style/hygiene gates (hygiene lint), with sloc last — an
+# iterating agent sees real failures before style noise. Each gate is also
+# independently invokable (e.g. `make race`).
+# Expected full `make ci` runtime on Windows: ~5 minutes with a warm Go
+# build cache (4:57-5:20 measured 2026-07-14; NetworkTests packages run
+# concurrently); budget ~30 minutes cold. The GOWORK=off release invariant
+# (ci.yml gowork-off-core / gowork-off-root) runs inside the `vet` gate.
 #
 # Fidelity note: nothing is deduplicated or excluded relative to CI —
 # fidelity to CI beats local speed. Per-gate CI-job parity is recorded in
 # docs/.orchestration/make-ci.md.
 
-GATES := hygiene vet lint race vectors coverage network web browser
+GATES := vet race vectors coverage network web browser hygiene lint sloc
 
 ifeq ($(OS),Windows_NT)
 DISPATCH = pwsh -NoProfile -File scripts/ci/$@.ps1

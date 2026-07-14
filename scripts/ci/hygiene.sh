@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# CI-parity hygiene gate (Linux). Mirrors ci.yml jobs `hygiene` + `sloc`
-# verbatim: gofmt over tracked Go files, `git diff --check` against the empty
-# tree, gopls check -severity=hint (same pinned gopls@v0.22.0 install), then
-# sloc-guard check. CI obtains sloc-guard from the doraemonkeys/sloc-guard
-# action (latest release binary, cargo-install fallback); locally the binary
-# is a PATH prerequisite — install with:
-#   cargo install --git https://github.com/doraemonkeys/sloc-guard --locked
+# CI-parity hygiene gate (Linux). Mirrors ci.yml job `hygiene` verbatim
+# (sloc-guard lives in the standalone `sloc` gate since 2026-07-14): gofmt
+# over tracked Go files, `git diff --check` against the empty tree, gopls
+# check -severity=hint (same pinned gopls@v0.22.0 install).
 # Deviation from CI: gopls diagnostics are captured in a mktemp file instead
 # of ./gopls-diagnostics.txt so the gate never dirties the worktree.
 set -euo pipefail
@@ -37,13 +34,5 @@ if [ -s "$diagnostics_file" ]; then
   echo "gopls reported diagnostics" >&2
   exit 1
 fi
-
-echo "-- sloc-guard check"
-if ! command -v sloc-guard >/dev/null 2>&1; then
-  echo "sloc-guard not found on PATH; install it first:" >&2
-  echo "  cargo install --git https://github.com/doraemonkeys/sloc-guard --locked" >&2
-  exit 1
-fi
-sloc-guard check
 
 echo "== hygiene: PASS in ${SECONDS}s =="

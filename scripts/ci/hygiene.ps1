@@ -1,4 +1,5 @@
-# CI-parity hygiene gate (Windows). Mirrors ci.yml jobs `hygiene` + `sloc`:
+# CI-parity hygiene gate (Windows). Mirrors ci.yml job `hygiene`
+# (sloc-guard lives in the standalone `sloc` gate since 2026-07-14):
 #  - gofmt over tracked AND untracked Go files (work-plan §10.1: pre-commit
 #    runs must catch new sources; CI checks tracked only because a clean
 #    checkout has no untracked files).
@@ -7,8 +8,6 @@
 #    committed-tree diff.
 #  - gopls check -severity=hint over tracked Go files (the AGENTS.md
 #    GOPLS_CHECK command; CI pins gopls@v0.22.0, locally PATH's gopls is used).
-#  - sloc-guard check (CI installs the latest release via the sloc-guard
-#    action; locally the binary is a PATH prerequisite).
 [CmdletBinding()]
 param()
 
@@ -61,12 +60,6 @@ $goplsExitCode = $LASTEXITCODE
 $diagnostics | Write-Output
 if ($goplsExitCode -ne 0 -or $diagnostics.Count -gt 0) {
     throw 'gopls reported diagnostics'
-}
-
-Write-Output '-- sloc-guard check'
-sloc-guard.exe check
-if ($LASTEXITCODE -ne 0) {
-    throw "sloc-guard check exited with code $LASTEXITCODE"
 }
 
 Write-Output ('== hygiene: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)
