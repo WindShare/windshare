@@ -72,7 +72,7 @@ review_agent.md
 /.webrtc/
 .orchestration
 
-docs/原始需求.md
+原始需求.md
 
 # Node
 node_modules/
