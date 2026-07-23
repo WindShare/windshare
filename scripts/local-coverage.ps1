@@ -3,16 +3,61 @@
 # the exact go-test-coverage verdicts CI applies. Windows dev runs no longer
 # under-count network-heavy packages.
 [CmdletBinding()]
-param()
+param(
+    [string]$NetworkManifestPath,
+    [switch]$ValidateNetworkManifestOnly
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-if (-not $IsWindows) {
-    throw 'local-coverage drives the D5 fixed-path Windows runner and is Windows-only.'
+function Read-LocalCoverageNetworkPackages([string]$Path) {
+    $document = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $topLevelProperties = @($document.PSObject.Properties.Name | Sort-Object)
+    $expectedTopLevel = @('Packages', 'RetiredProgramTombstone', 'SchemaVersion')
+    if ([string]::Join("`n", $topLevelProperties) -cne [string]::Join("`n", $expectedTopLevel)) {
+        throw 'Coverage network manifest must use the exact schema-v2 top-level shape'
+    }
+    if ([int]$document.SchemaVersion -ne 2) {
+        throw 'Coverage network manifest has an unsupported schema'
+    }
+    $packages = @($document.Packages)
+    if ($packages.Count -eq 0) {
+        throw 'Coverage network manifest has no active packages'
+    }
+    $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $paths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($package in $packages) {
+        $properties = @($package.PSObject.Properties.Name | Sort-Object)
+        if ([string]::Join("`n", $properties) -cne "Name`nPath") {
+            throw 'Coverage network package must contain exactly Name and Path'
+        }
+        $name = [string]$package.Name
+        $path = ([string]$package.Path).Replace('\', '/')
+        if ($name -notmatch '^[a-z0-9][a-z0-9-]*$' -or
+            -not $path.StartsWith('./', [StringComparison]::Ordinal) -or
+            $path.Contains('/../', [StringComparison]::Ordinal) -or
+            -not $names.Add($name) -or
+            -not $paths.Add($path)) {
+            throw "Coverage network package is invalid: $name $path"
+        }
+    }
+    return $packages
 }
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+$defaultNetworkManifestPath = Join-Path $PSScriptRoot 'd5-windows-network-packages.json'
+if ([string]::IsNullOrWhiteSpace($NetworkManifestPath)) {
+    $NetworkManifestPath = $defaultNetworkManifestPath
+}
+$networkManifest = @(Read-LocalCoverageNetworkPackages $NetworkManifestPath)
+if ($ValidateNetworkManifestOnly) {
+    Write-Output "Validated $($networkManifest.Count) coverage network package(s)"
+    return
+}
+if (-not $IsWindows) {
+    throw 'local-coverage drives the D5 fixed-path Windows runner and is Windows-only.'
+}
 $coverageRoot = Join-Path $repositoryRoot 'tmp\local-coverage'
 # Same pinned gate tool as .github/workflows/ci.yml (GO_TEST_COVERAGE).
 $goTestCoverage = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'
@@ -43,10 +88,6 @@ Invoke-LocalGo (Join-Path $repositoryRoot 'core') @(
     'test', '-count=1', '-covermode=atomic', "-coverprofile=$coreProfile", './...'
 ) 'core module coverage tests'
 
-$networkManifest = @(
-    Get-Content -LiteralPath (Join-Path $PSScriptRoot 'd5-windows-network-packages.json') -Raw |
-        ConvertFrom-Json
-)
 Push-Location $repositoryRoot
 try {
     # `go list -m` reports every go.work module; the root go.mod is the

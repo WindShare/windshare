@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "kind": "v2-sender-objects",
+  "description": "Canonical CBOR, AES-GCM and Ed25519 transport-neutral sender objects.",
+  "cases": [
+    {
+      "name": "windshare/v2 object/descriptor",
+      "domain": "windshare/v2 object/descriptor",
+      "contextB64": "AiRCoKA4o9ukVCbfe33CT8S1Vb7rw5J4sFlOlT4=",
+      "contextHashB64": "nzGnh2ZeJ8CasfhIr4Hy7NzyEzD+b3aRuKDRyhXOgxk=",
+      "keyB64": "QJf/rkymcTqujczmpzms5e8PRSI08a/0Fm7ica6GlQ4=",
+      "nonceB64": "0NHS09TV1tfY2drb",
+      "canonicalCborB64": "qgABAQICAgNQQEFCQ0RFRkdISUpLTE1OTwRQUFFSU1RVVldYWVpbXF1eXwUaABAAAAYHB1ggKay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdcIGmVT8QAJeCB3aW5kc2hhcmUvcGF0aC92MS11bmljb2RlLTE1LjAuMA==",
+      "aadB64": "d2luZHNoYXJlL3YyIG9iamVjdC9kZXNjcmlwdG9yAJ8xp4dmXifAmrH4SK+B8uzc8hMw/m92kbig0coVzoMZAgAAAAAAAI8=",
+      "signaturePreimageB64": "d2luZHNoYXJlL3YyIG9iamVjdC9kZXNjcmlwdG9yAJ8xp4dmXifAmrH4SK+B8uzc8hMw/m92kbig0coVzoMZAgAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBO1eZro4Q2/eBvLZYFXoul3A==",
+      "objectB64": "AgAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBO1eZro4Q2/eBvLZYFXoul3IZ12dbXljAhPMxure5bwD4bJzI+qSRmw1G6aZems+gCERr/qm4+5Vtdpve2Fmf2tbEqKTtppABJrqXNgEaKnQ4="
+    },
+    {
+      "name": "windshare/v2 object/catalog-page",
+      "domain": "windshare/v2 object/catalog-page",
+      "contextB64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8AAAAA",
+      "contextHashB64": "DkUFXNsqXMXo6Enr4ssdUGpu12mbv5y6zcn7jyYJLSM=",
+      "keyB64": "r9W4bwpszHnYVwoyRjZxuUXGtSTKZ00/CkDK544TWRA=",
+      "nonceB64": "3N3e3+Dh4uPk5ebn",
+      "canonicalCborB64": "qQABAVBAQUJDREVGR0hJSktMTU5PAlBQUVJTVFVWV1hZWltcXV5fA1CAgYKDhIWGh4iJiouMjY6PBAAF9QZYIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4KHAVBgYWJjZGVmZ2hpamtsbW5vZnBob3Rvc/YaZVPxZAABhwJQcHFyc3R1dnd4eXp7fH1+f2pyZWFkbWUudHh0GgAgABcaZVPxyBoHVNTAAggA",
+      "aadB64": "d2luZHNoYXJlL3YyIG9iamVjdC9jYXRhbG9nLXBhZ2UADkUFXNsqXMXo6Enr4ssdUGpu12mbv5y6zcn7jyYJLSMCAAAAAAAAxA==",
+      "signaturePreimageB64": "d2luZHNoYXJlL3YyIG9iamVjdC9jYXRhbG9nLXBhZ2UADkUFXNsqXMXo6Enr4ssdUGpu12mbv5y6zcn7jyYJLSMCAAAAAAAAxNzd3t/g4eLj5OXm592FhOPpypZdqmtj3wg9VwBYJaNrNzcLwObB/C+Kv4RNoo2JpH59gN1M/MEYQh948zLHytFbJ0Ht8a4r49CMHlRWN5XIaQ11JeyTwMBOhYnp2n/rokg+dxxX2imurhKwq/G94xTuy5sR4fmkKEo7DDFlOCvui8icAQn8Y7GVggKZfRLcNeF1q7wX9gWTA6xJ/iMq5MhT+BMZZks2Yx/YpsLYJN3MhlcaWU0ymjhNZru3HyPprN/XFuH0OzozyehDhkCdHbc=",
+      "objectB64": "AgAAAAAAAMTc3d7f4OHi4+Tl5ufdhYTj6cqWXaprY98IPVcAWCWjazc3C8Dmwfwvir+ETaKNiaR+fYDdTPzBGEIfePMyx8rRWydB7fGuK+PQjB5UVjeVyGkNdSXsk8DAToWJ6dp/66JIPnccV9oprq4SsKvxveMU7subEeH5pChKOwwxZTgr7ovInAEJ/GOxlYICmX0S3DXhdau8F/YFkwOsSf4jKuTIU/gTGWZLNmMf2KbC2CTdzIZXGllNMpo4TWa7tx8j6azf1xbh9Ds6M8noQ4ZAnR23Hr43ZAb9U0A1sVkGh5BiCdRuQzQh4kDLb99AwnKhwhFIunZw6/DYzQ9jLX9p0mVnWs/kNkcLsOkPD5Yq8W5RAw=="
+    },
+    {
+      "name": "windshare/v2 object/directory-error",
+      "domain": "windshare/v2 object/directory-error",
+      "contextB64": "QEFCQ0RFRkdISUpLTE1OT2BhYmNkZWZnaGlqa2xtbm8=",
+      "contextHashB64": "gX9LuuMHmhL9v6qtdvIpz49i8N3etSsB0PlX1Lb5og0=",
+      "keyB64": "r9W4bwpszHnYVwoyRjZxuUXGtSTKZ00/CkDK544TWRA=",
+      "nonceB64": "CAkKCwwNDg8QERIT",
+      "canonicalCborB64": "pwABAVBAQUJDREVGR0hJSktMTU5PAlBgYWJjZGVmZ2hpamtsbW5vA1CgoaKjpKWmp6ipqqusra6vBBkgBwX1BhkD6A==",
+      "aadB64": "d2luZHNoYXJlL3YyIG9iamVjdC9kaXJlY3RvcnktZXJyb3IAgX9LuuMHmhL9v6qtdvIpz49i8N3etSsB0PlX1Lb5og0CAAAAAAAAUw==",
+      "signaturePreimageB64": "d2luZHNoYXJlL3YyIG9iamVjdC9kaXJlY3RvcnktZXJyb3IAgX9LuuMHmhL9v6qtdvIpz49i8N3etSsB0PlX1Lb5og0CAAAAAAAAUwgJCgsMDQ4PEBESE5yNtNTPqolHnZVaaCyWwvn0CvmWn4BWTVwdkCGF9Z9jvDrdNCMJtkUGySywAD9Dqk1VWiJd4ozFACMWgXVIv1A3NDGbxzGCHyfK7ekNFw8/GaFg",
+      "objectB64": "AgAAAAAAAFMICQoLDA0ODxAREhOcjbTUz6qJR52VWmgslsL59Ar5lp+AVk1cHZAhhfWfY7w63TQjCbZFBskssAA/Q6pNVVoiXeKMxQAjFoF1SL9QNzQxm8cxgh8nyu3pDRcPPxmhYNX3kF+43mXFQ2izM3hFqrY46RQ1kWCwjCJ23rfDi+ghhtJOTWkAKPJHb5yBxWWovSFTLmiEUk/WOKZ+Dc080Ac="
+    },
+    {
+      "name": "windshare/v2 object/file-revision",
+      "domain": "windshare/v2 object/file-revision",
+      "contextB64": "QEFCQ0RFRkdISUpLTE1OT3BxcnN0dXZ3eHl6e3x9fn8=",
+      "contextHashB64": "LSjtl5ay33t0N3cWMFZAl5f9eK6uoKbgMJ9e7vL2ju0=",
+      "keyB64": "4rzGG8yKKJdsSeoyXXqLxF+f8ep/ziFK/7s7CVkcgY0=",
+      "nonceB64": "6Onq6+zt7u/w8fLz",
+      "canonicalCborB64": "qAABAVBAQUJDREVGR0hJSktMTU5PAlBwcXJzdHV2d3h5ent8fX5/A1CQkZKTlJWWl5iZmpucnZ6fBBoAIAAXBRplU/HIBhoHVNTABwI=",
+      "aadB64": "d2luZHNoYXJlL3YyIG9iamVjdC9maWxlLXJldmlzaW9uAC0o7ZeWst97dDd3FjBWQJeX/XiurqCm4DCfXu7y9o7tAgAAAAAAAF0=",
+      "signaturePreimageB64": "d2luZHNoYXJlL3YyIG9iamVjdC9maWxlLXJldmlzaW9uAC0o7ZeWst97dDd3FjBWQJeX/XiurqCm4DCfXu7y9o7tAgAAAAAAAF3o6err7O3u7/Dx8vPAwj8Qj2OI+2hTaafVSk2zpjEnzxCgPVnf0b7a4PY1TYk+RaEP5PMRPJ3GtUV20P9RPBWgk9l1evfM+1HB6xlTlGZ+B5MCZ5Q10y/4ivdSSLcQDoXm5Gbw4Ofe5qg=",
+      "objectB64": "AgAAAAAAAF3o6err7O3u7/Dx8vPAwj8Qj2OI+2hTaafVSk2zpjEnzxCgPVnf0b7a4PY1TYk+RaEP5PMRPJ3GtUV20P9RPBWgk9l1evfM+1HB6xlTlGZ+B5MCZ5Q10y/4ivdSSLcQDoXm5Gbw4Ofe5qhOdpImnPq4wfOvw6A7nK33NQr35EgJsGO8cz3qWhGtXcazGa8XiogaXYENr/DB0zcqLl69nX7EzHWV1Ool2CkD"
+    },
+    {
+      "name": "windshare/v2 object/block-record",
+      "domain": "windshare/v2 object/block-record",
+      "contextB64": "QEFCQ0RFRkdISUpLTE1OT3BxcnN0dXZ3eHl6e3x9fn+QkZKTlJWWl5iZmpucnZ6fAAAAAAAAAAIAAAAX",
+      "contextHashB64": "YqqHdqQljfaEhfbBfX3D6Obto7Rh3BXCB1KKKTrztSw=",
+      "keyB64": "06GFV5Og2rr0wOuHIdcK/YuWlwQyhhf8s8MWtcf10Tw=",
+      "nonceB64": "9PX29/j5+vv8/f7/",
+      "canonicalCborB64": "pgABAVBAQUJDREVGR0hJSktMTU5PAlBwcXJzdHV2d3h5ent8fX5/A1CQkZKTlJWWl5iZmpucnZ6fBAIFV1dpbmRTaGFyZSB2MiBsYXN0IGJsb2Nr",
+      "aadB64": "d2luZHNoYXJlL3YyIG9iamVjdC9ibG9jay1yZWNvcmQAYqqHdqQljfaEhfbBfX3D6Obto7Rh3BXCB1KKKTrztSwCAAAAAAAAZA==",
+      "signaturePreimageB64": "d2luZHNoYXJlL3YyIG9iamVjdC9ibG9jay1yZWNvcmQAYqqHdqQljfaEhfbBfX3D6Obto7Rh3BXCB1KKKTrztSwCAAAAAAAAZPT19vf4+fr7/P3+/1aDxXpYtvPzCQHL5Oz4OTXqsJ3cuXZVB+LW9tulP8TTzB4Tz+djhxWogPlyU3WJwAa57S6zM4xaB+GOWbdmC1qekN6RhVcfOQFYPdl5R3vCzfYcjWuPHubpeLP2p7MAwhaBWUw=",
+      "objectB64": "AgAAAAAAAGT09fb3+Pn6+/z9/v9Wg8V6WLbz8wkBy+Ts+Dk16rCd3Ll2VQfi1vbbpT/E08weE8/nY4cVqID5clN1icAGue0uszOMWgfhjlm3ZgtanpDekYVXHzkBWD3ZeUd7ws32HI1rjx7m6Xiz9qezAMIWgVlMN0FDOeRPbjRdxcNftQ7hBEJvoop+OFT2L6Np8XMNbB85G+k+jY7mHuj3PSOJ4I5t6ZlfGLciBMiFY4sumDKHCQ=="
+    },
+    {
+      "name": "windshare/v2 object/offline-commit",
+      "domain": "windshare/v2 object/offline-commit",
+      "contextB64": "QEFCQ0RFRkdISUpLTE1OTw==",
+      "contextHashB64": "uiK33JX2zIdldXvkvM83zZLs5tSYfcJqMeJ0yb4jaSE=",
+      "keyB64": "QJf/rkymcTqujczmpzms5e8PRSI08a/0Fm7ica6GlQ4=",
+      "nonceB64": "FBUWFxgZGhscHR4f",
+      "canonicalCborB64": "pwABAVBAQUJDREVGR0hJSktMTU5PAlgg80Ul5BIRyo3s7O08qxs/anZAoHPuJstTkrEvo7oLCt4DGmVT/xAEWCAwMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OTwUFBhkECw==",
+      "aadB64": "d2luZHNoYXJlL3YyIG9iamVjdC9vZmZsaW5lLWNvbW1pdAC6IrfclfbMh2V1e+S8zzfNkuzm1Jh9wmox4nTJviNpIQIAAAAAAAB3",
+      "signaturePreimageB64": "d2luZHNoYXJlL3YyIG9iamVjdC9vZmZsaW5lLWNvbW1pdAC6IrfclfbMh2V1e+S8zzfNkuzm1Jh9wmox4nTJviNpIQIAAAAAAAB3FBUWFxgZGhscHR4fFGR6v4GBFzUtiUpogjA7WTndEMIfogx97trpJ+kuyFTfRdCOWtKaIS44UIa2l6LnflvF0RUWwA/Ruo0hP6Wgs9KWPqqrErP6UKaOFj20V6MvvOJTz2XTlsvkufHNzaCNae3xadtLCraZLJ0Z/6LU98LF7e55+N8=",
+      "objectB64": "AgAAAAAAAHcUFRYXGBkaGxwdHh8UZHq/gYEXNS2JSmiCMDtZOd0Qwh+iDH3u2ukn6S7IVN9F0I5a0pohLjhQhraXoud+W8XRFRbAD9G6jSE/paCz0pY+qqsSs/pQpo4WPbRXoy+84lPPZdOWy+S58c3NoI1p7fFp20sKtpksnRn/otT3wsXt7nn43yoa1BNM9Vkdt715RsYBoANseV3JO6d3RSOhX/YqnT4msesD5c3nzlJQobf4xXOQ6fqxoxwiqAaoJqDvyGOUDAw="
+    }
+  ]
+}

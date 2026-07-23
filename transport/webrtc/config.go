@@ -4,15 +4,16 @@ import (
 	"fmt"
 
 	pion "github.com/pion/webrtc/v4"
-	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/framechannel"
 )
 
 const (
 	ChannelLabel    = "windshare-frame-channel"
-	ChannelProtocol = "windshare-v1"
+	ChannelProtocol = "windshare-v2"
 
-	defaultLowWaterBytes  uint64 = 256 * 1024
-	defaultHighWaterBytes uint64 = 1024 * 1024
+	defaultLowWaterBytes               uint64 = 256 * 1024
+	defaultHighWaterBytes              uint64 = 1024 * 1024
+	defaultSendAdmissionHighWaterBytes        = defaultHighWaterBytes - 1
 )
 
 type flowControlProfile struct {
@@ -21,8 +22,11 @@ type flowControlProfile struct {
 }
 
 var defaultFlowControl = flowControlProfile{
-	lowWaterBytes:  defaultLowWaterBytes,
-	highWaterBytes: defaultHighWaterBytes,
+	lowWaterBytes: defaultLowWaterBytes,
+	// The published high-water value is an exclusive peak policy boundary once
+	// one maximum frame is queued. Reserving one byte here makes equality with
+	// that boundary unreachable without changing custom flow-control semantics.
+	highWaterBytes: defaultSendAdmissionHighWaterBytes,
 }
 
 // DefaultDataChannelInit returns a fresh in-band, ordered, reliable channel
@@ -84,12 +88,12 @@ func validateDataChannelParameters(dc dataChannel) error {
 
 func validateMessageCapability(dc dataChannel) error {
 	maximum := dc.maxMessageSize()
-	if maximum < uint32(session.MaxFrameSize) {
+	if maximum < uint32(framechannel.MaxFrameSize) {
 		return fmt.Errorf(
 			"%w: SCTP maximum message size is %d, need at least %d",
 			ErrInvalidDataChannel,
 			maximum,
-			session.MaxFrameSize,
+			framechannel.MaxFrameSize,
 		)
 	}
 	return nil

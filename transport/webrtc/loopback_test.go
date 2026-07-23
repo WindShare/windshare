@@ -9,7 +9,7 @@ import (
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
-	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/internal/testnetwork"
 )
 
@@ -28,7 +28,7 @@ func TestPionLoopbackPreservesMaximumFramesAndTerminal(t *testing.T) {
 	testnetwork.RequireOSNetwork(t)
 	pair := newPionChannelPair(t)
 
-	leftFrame := patternedLoopbackFrame(0x31, session.MaxFrameSize)
+	leftFrame := patternedLoopbackFrame(0x31, framechannel.MaxFrameSize)
 	if err := pair.left.Send(context.Background(), leftFrame); err != nil {
 		t.Fatalf("left Send maximum frame: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestPionLoopbackPreservesMaximumFramesAndTerminal(t *testing.T) {
 		t.Fatal("left-to-right maximum frame changed")
 	}
 
-	rightFrame := patternedLoopbackFrame(0x32, session.MaxFrameSize)
+	rightFrame := patternedLoopbackFrame(0x32, framechannel.MaxFrameSize)
 	if err := pair.right.Send(context.Background(), rightFrame); err != nil {
 		t.Fatalf("right Send maximum frame: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestPionLoopbackPreservesMaximumFramesAndTerminal(t *testing.T) {
 func TestPionLoopbackBackpressureCancellationAndRecovery(t *testing.T) {
 	testnetwork.RequireOSNetwork(t)
 	pair := newPionBlockedPeerPair(t)
-	frame := patternedLoopbackFrame(0x41, session.MaxFrameSize)
+	frame := patternedLoopbackFrame(0x41, framechannel.MaxFrameSize)
 	if err := pair.channel.Send(context.Background(), frame); err != nil {
 		t.Fatalf("send blocking probe: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestPionLoopbackBackpressureCancellationAndRecovery(t *testing.T) {
 func TestPionLoopbackRemoteCloseWakesBackpressure(t *testing.T) {
 	testnetwork.RequireOSNetwork(t)
 	pair := newPionBlockedPeerPair(t)
-	frame := patternedLoopbackFrame(0x51, session.MaxFrameSize)
+	frame := patternedLoopbackFrame(0x51, framechannel.MaxFrameSize)
 	if err := pair.channel.Send(context.Background(), frame); err != nil {
 		t.Fatalf("send blocking probe: %v", err)
 	}
@@ -370,7 +370,7 @@ func waitLoopbackDone(t *testing.T, channel *Channel) {
 	}
 }
 
-func receiveLoopbackFrame(t *testing.T, channel *Channel) session.Frame {
+func receiveLoopbackFrame(t *testing.T, channel *Channel) framechannel.Frame {
 	t.Helper()
 	select {
 	case frame, ok := <-channel.Recv():
@@ -407,8 +407,8 @@ func receiveLoopbackError(t *testing.T, result <-chan error) error {
 	}
 }
 
-func patternedLoopbackFrame(marker byte, size int) session.Frame {
-	frame := make(session.Frame, size)
+func patternedLoopbackFrame(marker byte, size int) framechannel.Frame {
+	frame := make(framechannel.Frame, size)
 	if size == 0 {
 		return frame
 	}

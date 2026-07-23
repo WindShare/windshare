@@ -109,6 +109,7 @@ func loadExecutionPlanRequest(path string) (executionPlanRequest, error) {
 func buildExecutionPlanDocument(
 	root string,
 	expectedPackages map[string]bool,
+	reservedExecutableNames map[string]bool,
 	catalog semanticCatalog,
 	request executionPlanRequest,
 ) (executionPlanDocument, error) {
@@ -142,6 +143,13 @@ func buildExecutionPlanDocument(
 		program, err := validateExecutionProgram(operation.Executable)
 		if err != nil {
 			return executionPlanDocument{}, fmt.Errorf("execution-plan %s: %w", operation.RequestID, err)
+		}
+		if reservedExecutableNames[strings.ToLower(filepath.Base(program.Path))] {
+			return executionPlanDocument{}, fmt.Errorf(
+				"execution-plan %s names a retired executable tombstone: %s",
+				operation.RequestID,
+				program.Path,
+			)
 		}
 		workingDirectory, err := validateExecutionWorkingDirectory(root, packagePath, operation.WorkingDirectory)
 		if err != nil {

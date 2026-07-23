@@ -22,6 +22,9 @@ $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) {
     throw 'The D5 stable Windows network runner is Windows-only.'
 }
+if ($Mode -eq 'Baseline' -and $Count -ne 5) {
+    throw 'D5 Baseline requires exactly five independent samples; -Count must be 5.'
+}
 if (-not [string]::IsNullOrWhiteSpace($CoverProfileRoot)) {
     # Coverage measurement is meaningful only for the full fixed-path suite;
     # partial modes would understate every classified package.
@@ -64,6 +67,8 @@ $runnerGuardName = 'WINDSHARE_D5_RUNNER_PIPE'
 . (Join-Path $PSScriptRoot 'd5-windows-stable-e2e-lease.ps1')
 . (Join-Path $PSScriptRoot 'd5-windows-runner-guard.ps1')
 . (Join-Path $PSScriptRoot 'd5-windows-test-process.ps1')
+. (Join-Path $PSScriptRoot 'go-benchmark-evidence.ps1')
+. (Join-Path $PSScriptRoot 'd5-pion-performance-evidence.ps1')
 
 function Test-D5RelevantProgram([string]$Program) {
     if ([string]::IsNullOrWhiteSpace($Program) -or
@@ -78,23 +83,100 @@ function Test-D5RelevantProgram([string]$Program) {
     }
 }
 
+function Get-D5RetiredProgramRuntimeStates {
+    $states = [Collections.Generic.List[object]]::new()
+    foreach ($program in @($script:firewallOwnershipPolicy.RetiredProgramSet)) {
+        $expectedNative = ConvertTo-D5NativeImagePath $program
+        $observations = [Collections.Generic.List[object]]::new()
+        $processName = [IO.Path]::GetFileNameWithoutExtension($program)
+        foreach ($process in @(Get-Process -Name $processName -ErrorAction SilentlyContinue)) {
+            try {
+                $observations.Add([pscustomobject]@{
+                    ProcessID = [int]$process.Id
+                    ImagePath = Get-D5ProcessNativeImagePath $process
+                })
+            } catch {
+                $observations.Add([pscustomobject]@{
+                    ProcessID = [int]$process.Id
+                    ImagePath = ''
+                })
+            } finally {
+                $process.Dispose()
+            }
+        }
+        $processIDs = @(Select-D5ExactProcessIDs $expectedNative @($observations))
+        $external = @($observations | Where-Object {
+            [string]$_.ImagePath -ine $expectedNative
+        })
+        if ($external.Count -gt 0) {
+            Write-Warning (
+                "Ignoring same-name processes outside the retired D5 image identity; " +
+                "resolved PIDs=$(@($external.ProcessID) -join ',')"
+            )
+        }
+        $exists = Test-Path -LiteralPath $program -PathType Leaf
+        $states.Add([pscustomobject][ordered]@{
+            Program = [IO.Path]::GetFullPath($program)
+            Exists = $exists
+            SHA256 = if ($exists) {
+                (Get-FileHash -LiteralPath $program -Algorithm SHA256).Hash.ToLowerInvariant()
+            } else {
+                ''
+            }
+            ProcessIDs = $processIDs
+        })
+    }
+    return @($states)
+}
+
+function Test-D5RelevantFirewallFilter([string]$Program, [string]$InstanceID) {
+    if (Test-D5RelevantProgram $Program) {
+        return $true
+    }
+    return $null -ne $script:firewallOwnershipPolicy -and
+        ($script:firewallOwnershipPolicy.RetiredRuleIdentitySet.Contains($InstanceID) -or
+            (Test-D5ExternalStableProgramPath $Program $script:firewallOwnershipPolicy))
+}
+
 function Get-D5FirewallRules {
+    $retiredStates = @(Get-D5RetiredProgramRuntimeStates)
+    Assert-D5RetiredProgramRuntimeStates `
+        $retiredStates `
+        $script:firewallOwnershipPolicy `
+        'Firewall observation'
+    $retiredStatesByProgram = @{}
+    foreach ($state in $retiredStates) {
+        $retiredStatesByProgram[[IO.Path]::GetFullPath([string]$state.Program)] = $state
+    }
     $snapshots = [Collections.Generic.List[object]]::new()
     $programStates = @{}
     foreach ($filter in @(Get-NetFirewallApplicationFilter -PolicyStore ActiveStore)) {
         $program = [Environment]::ExpandEnvironmentVariables([string]$filter.Program)
-        if (-not (Test-D5RelevantProgram $program)) {
+        if (-not (Test-D5RelevantFirewallFilter $program ([string]$filter.InstanceID))) {
             continue
         }
         $program = [IO.Path]::GetFullPath($program)
         if (-not $programStates.ContainsKey($program)) {
-            $exists = Test-Path -LiteralPath $program -PathType Leaf
-            $programStates[$program] = [pscustomobject]@{
-                Exists = $exists
-                SHA256 = if ($exists) {
-                    (Get-FileHash -LiteralPath $program -Algorithm SHA256).Hash.ToLowerInvariant()
-                } else {
-                    ''
+            $programStates[$program] = if ($retiredStatesByProgram.ContainsKey($program)) {
+                $retiredStatesByProgram[$program]
+            } elseif (Test-D5ProgramUnderRoot $program $script:firewallOwnershipPolicy.HarnessRoot) {
+                $exists = Test-Path -LiteralPath $program -PathType Leaf
+                [pscustomobject]@{
+                    Exists = $exists
+                    SHA256 = if ($exists) {
+                        (Get-FileHash -LiteralPath $program -Algorithm SHA256).Hash.ToLowerInvariant()
+                    } else {
+                        ''
+                    }
+                    ProcessIDs = @()
+                }
+            } else {
+                # External executable state cannot confer ownership, so hashing a
+                # host-owned path would add a needless permission/freshness blocker.
+                [pscustomobject]@{
+                    Exists = $false
+                    SHA256 = ''
+                    ProcessIDs = @()
                 }
             }
         }
@@ -106,9 +188,10 @@ function Get-D5FirewallRules {
                 RuleID = [string]$rule.Name
                 InstanceID = [string]$filter.InstanceID
                 Program = $program
+                DisplayName = [string]$rule.DisplayName
                 Direction = ConvertTo-D5SemanticValue $rule.Direction
                 Action = ConvertTo-D5SemanticValue $rule.Action
-                Profile = ConvertTo-D5SemanticValue $rule.Profile
+                Profile = @($rule.Profile | ForEach-Object { [string]$_ })
                 Enabled = ConvertTo-D5SemanticValue $rule.Enabled
                 PolicyStoreSourceType = ConvertTo-D5SemanticValue $rule.PolicyStoreSourceType
                 Protocol = ConvertTo-D5SemanticValue @($ports.Protocol)
@@ -118,10 +201,52 @@ function Get-D5FirewallRules {
                 RemoteAddress = ConvertTo-D5SemanticValue @($addresses.RemoteAddress)
                 ProgramExists = [bool]$programState.Exists
                 ProgramSHA256 = [string]$programState.SHA256
+                ProgramProcessIDs = @($programState.ProcessIDs)
             })
         }
     }
     return @($snapshots | Sort-Object Program, RuleID, InstanceID)
+}
+
+function Get-D5ActiveStoreFirewallRules {
+    $snapshots = [Collections.Generic.List[object]]::new()
+    foreach ($filter in @(Get-NetFirewallApplicationFilter -PolicyStore ActiveStore)) {
+        $program = [Environment]::ExpandEnvironmentVariables([string]$filter.Program)
+        foreach ($rule in @($filter | Get-NetFirewallRule -PolicyStore ActiveStore)) {
+            $ports = @($rule | Get-NetFirewallPortFilter)
+            $addresses = @($rule | Get-NetFirewallAddressFilter)
+            $snapshots.Add([pscustomobject][ordered]@{
+                RuleID = [string]$rule.Name
+                InstanceID = [string]$filter.InstanceID
+                Program = $program
+                Direction = ConvertTo-D5SemanticValue $rule.Direction
+                Action = ConvertTo-D5SemanticValue $rule.Action
+                Profile = @($rule.Profile | ForEach-Object { [string]$_ })
+                Enabled = ConvertTo-D5SemanticValue $rule.Enabled
+                PolicyStoreSourceType = ConvertTo-D5SemanticValue $rule.PolicyStoreSourceType
+                Protocol = ConvertTo-D5SemanticValue @($ports.Protocol)
+                LocalPort = ConvertTo-D5SemanticValue @($ports.LocalPort)
+                RemotePort = ConvertTo-D5SemanticValue @($ports.RemotePort)
+                LocalAddress = ConvertTo-D5SemanticValue @($addresses.LocalAddress)
+                RemoteAddress = ConvertTo-D5SemanticValue @($addresses.RemoteAddress)
+            })
+        }
+    }
+    return @($snapshots | Sort-Object Program, RuleID, InstanceID)
+}
+
+function Get-D5PlaywrightBrowserManifest {
+    $output = @(
+        & pnpm -C (Join-Path $repositoryRoot 'web') exec node scripts/verify-playwright-browsers.mjs --network-manifest-json 2>&1
+    )
+    if ($LASTEXITCODE -ne 0) {
+        throw "Playwright firewall manifest probe failed: $($output -join [Environment]::NewLine)"
+    }
+    try {
+        return @(($output -join [Environment]::NewLine) | ConvertFrom-Json)
+    } catch {
+        throw "Playwright firewall manifest is not valid JSON: $_"
+    }
 }
 
 function Get-D5LatestFirewallRecordID {
@@ -182,22 +307,27 @@ function Get-D5RelevantFirewallEvents([long]$AfterRecordID, [long]$ThroughRecord
 function Wait-D5FirewallQuiescence([long]$AfterRecordID) {
     $deadline = [datetimeoffset]::Now.Add($firewallQuiescenceTimeout)
     $previousRules = @(Get-D5FirewallRules)
+    $previousActiveStoreRules = @(Get-D5ActiveStoreFirewallRules)
     $previousRecordID = Get-D5LatestFirewallRecordID
     do {
         Start-Sleep -Milliseconds $firewallQuietMilliseconds
         $currentRules = @(Get-D5FirewallRules)
+        $currentActiveStoreRules = @(Get-D5ActiveStoreFirewallRules)
         $currentRecordID = Get-D5LatestFirewallRecordID
         if ($currentRecordID -eq $previousRecordID -and
-            (Test-D5RuleSetsEqual $previousRules $currentRules)) {
+            (Test-D5RuleSetsEqual $previousRules $currentRules) -and
+            (Test-D5RuleSetsEqual $previousActiveStoreRules $currentActiveStoreRules)) {
             return [pscustomobject]@{
                 AfterRecordID = $currentRecordID
                 AfterRules = $currentRules
+                AfterActiveStoreRules = $currentActiveStoreRules
                 NewRelevantEvents = @(
                     Get-D5RelevantFirewallEvents $AfterRecordID $currentRecordID
                 )
             }
         }
         $previousRules = $currentRules
+        $previousActiveStoreRules = $currentActiveStoreRules
         $previousRecordID = $currentRecordID
     } while ([datetimeoffset]::Now -lt $deadline)
     throw 'Windows Firewall did not reach the bounded D5 quiescence interval'
@@ -226,13 +356,28 @@ function Save-D5FirewallRegistrationState([object]$State) {
 
 function Open-D5FirewallRegistrationState([object[]]$Rules) {
     if (Test-Path -LiteralPath $registrationStatePath -PathType Leaf) {
-        $state = Get-Content -LiteralPath $registrationStatePath -Raw | ConvertFrom-Json
-        Assert-D5FirewallRegistrationState `
-            $state `
-            $Rules `
-            $script:firewallOwnershipPolicy `
-            $script:firewallOwnershipBaseline
-        return $state
+        $state = $null
+        try {
+            $state = Get-Content -LiteralPath $registrationStatePath -Raw | ConvertFrom-Json
+        } catch {
+            # Registration state is a derived cache, never firewall authority.
+            # Reconstructing an unreadable cache cannot broaden the observed
+            # exact rule set that the ownership preflight already validated.
+        }
+        $schema = if ($null -eq $state -or
+            $null -eq $state.PSObject.Properties['SchemaVersion']) {
+            -1
+        } else {
+            [int]$state.SchemaVersion
+        }
+        if ($schema -eq $script:D5FirewallRegistrationSchemaVersion) {
+            Assert-D5FirewallRegistrationState `
+                $state `
+                $Rules `
+                $script:firewallOwnershipPolicy `
+                $script:firewallOwnershipBaseline
+            return $state
+        }
     }
     $state = New-D5FirewallRegistrationState `
         $Rules `
@@ -243,26 +388,40 @@ function Open-D5FirewallRegistrationState([object[]]$Rules) {
 }
 
 function Write-D5ForeignFirewallRuleWarning([object[]]$Rules) {
-    # NetworkTests preflight replacement (owner decision 2026-07-14): foreign
-    # WindShare-attributable rules outside the harness root are expected noise
-    # on a popups-disabled dev box, so they warn instead of failing the run. An
-    # unmanifested program inside our namespace still throws: nothing may squat
-    # the fixed paths the registration state vouches for.
+    # A filename collision outside the canonical namespace conveys no ownership;
+    # report it for diagnosis without letting it weaken the exact stable-root
+    # manifest. Nothing may still squat an unmanifested path inside that root.
     $foreign = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $retired = [Collections.Generic.List[object]]::new()
     foreach ($rule in @($Rules)) {
         $program = [IO.Path]::GetFullPath([string]$rule.Program)
         if ($script:firewallOwnershipPolicy.AuthorizedProgramSet.Contains($program)) {
             continue
         }
+        if ($script:firewallOwnershipPolicy.RetiredProgramSet.Contains($program)) {
+            Assert-D5RetiredProgramRule $rule $script:firewallOwnershipPolicy 'NetworkTests preflight'
+            $retired.Add($rule)
+            continue
+        }
         if (Test-D5ProgramUnderRoot $program $script:firewallOwnershipPolicy.HarnessRoot) {
             throw "NetworkTests preflight found an unmanifested program under the stable harness root: $program"
         }
-        if (Test-D5WindShareAttributedRule $rule $script:firewallOwnershipPolicy) {
+        if (Test-D5ExternalStableProgramNameRule $rule $script:firewallOwnershipPolicy) {
             [void]$foreign.Add($program)
         }
     }
+    Assert-D5RetiredProgramRuleSet `
+        @($retired) `
+        $script:firewallOwnershipPolicy `
+        'NetworkTests preflight'
+    if ($retired.Count -gt 0) {
+        Write-Warning (
+            'The retired connectivity firewall tombstone remains as the exact inert Block TCP/UDP pair. ' +
+            'It grants no launch authority and cleanup is optional host administration.'
+        )
+    }
     if ($foreign.Count -gt 0) {
-        Write-Warning ('Ignoring WindShare-attributable firewall rules outside the harness root: ' +
+        Write-Warning ('Ignoring same-name firewall rules outside the canonical D5 harness root: ' +
             (@($foreign | Sort-Object) -join ', '))
     }
 }
@@ -342,6 +501,10 @@ function Invoke-D5PlannedBinary([object]$Definition, [string]$Phase) {
     if ($null -eq $binding) {
         throw "Compiler execution plan is missing for $requestID"
     }
+    Assert-D5ProgramsExcludeRetiredTombstone `
+        @([string]$binding.Plan.Executable.Path) `
+        $script:firewallOwnershipPolicy `
+        "Launch plan $requestID"
     Assert-D5HarnessLeaseHeld $script:harnessLease
     Assert-D5RunProgramsUnchanged "before launch of $name"
     [void](Add-D5SourceCheckpoint $script:run "before-launch-$name")
@@ -458,40 +621,6 @@ function Get-D5TestExecutionDefinitions {
                 )
                 LogName = 'baseline/pion.txt'
             })
-            $definitions.Add([pscustomobject][ordered]@{
-                RequestID = 'baseline-relay-queue'
-                Name = 'relay'
-                Arguments = @(
-                    '-test.run=^TestSharedForwardQueueChunkPolicy$',
-                    '-test.count=1',
-                    '-test.v'
-                )
-                LogName = 'baseline/relay-queue.txt'
-            })
-            $definitions.Add([pscustomobject][ordered]@{
-                RequestID = 'baseline-relay'
-                Name = 'relay'
-                Arguments = @(
-                    '-test.run=^$',
-                    '-test.bench=^BenchmarkRelayChunkTransfer$',
-                    '-test.benchmem',
-                    "-test.benchtime=$BenchTime",
-                    "-test.count=$Count"
-                )
-                LogName = 'baseline/relay.txt'
-            })
-            $definitions.Add([pscustomobject][ordered]@{
-                RequestID = 'baseline-connectivity-zero-pressure'
-                Name = 'connectivity'
-                Arguments = @(
-                    '-test.run=^$',
-                    '-test.bench=^BenchmarkSenderRequestWindowZeroPressure$',
-                    '-test.benchmem',
-                    "-test.benchtime=$BenchTime",
-                    "-test.count=$Count"
-                )
-                LogName = 'baseline/connectivity-zero-pressure.txt'
-            })
         }
         'Profile' {
             $profileRoot = Join-Path $script:run.StagePath 'profiles'
@@ -506,18 +635,6 @@ function Get-D5TestExecutionDefinitions {
                     "-test.memprofile=$(Join-Path $profileRoot 'pion.mem')"
                 )
                 LogName = 'profiles/pion.txt'
-            })
-            $definitions.Add([pscustomobject][ordered]@{
-                RequestID = 'profile-relay'
-                Name = 'relay'
-                Arguments = @(
-                    '-test.run=^$',
-                    '-test.bench=^BenchmarkRelayChunkTransfer/chunk_1024KiB$',
-                    "-test.benchtime=$BenchTime",
-                    "-test.cpuprofile=$(Join-Path $profileRoot 'relay.cpu')",
-                    "-test.memprofile=$(Join-Path $profileRoot 'relay.mem')"
-                )
-                LogName = 'profiles/relay.txt'
             })
         }
     }
@@ -546,6 +663,10 @@ function New-D5CompilerExecutionPlans(
             throw "Test execution request $requestID has no exact package manifest record"
         }
         $binary = [string]$script:binaries[$name]
+        Assert-D5ProgramsExcludeRetiredTombstone `
+            @($binary) `
+            $script:firewallOwnershipPolicy `
+            "Compiler execution-plan request $requestID"
         $program = Get-D5TestProgramEvidence `
             -Programs @($script:initialProgramEvidence) `
             -Executable $binary
@@ -607,6 +728,10 @@ function New-D5CompilerExecutionPlans(
             throw "Compiler execution-plan output does not contain exactly one $requestID plan"
         }
         $plan = $matches[0]
+        Assert-D5ProgramsExcludeRetiredTombstone `
+            @([string]$plan.Executable.Path) `
+            $script:firewallOwnershipPolicy `
+            "Compiler execution-plan output $requestID"
         $digest = ([string]$plan.PlanSHA256).ToLowerInvariant()
         [void](Assert-D5TestExecutionPlan `
             -Plan $plan `
@@ -629,6 +754,10 @@ function Build-D5AtomicTestBinary(
     Assert-D5HarnessLeaseHeld $script:harnessLease
     [void](& $SourceCheckpoint "before-build-$($Package.Name)")
     $binary = Join-Path $harnessRoot "$($Package.Name).test.exe"
+    Assert-D5ProgramsExcludeRetiredTombstone `
+        @($binary) `
+        $script:firewallOwnershipPolicy `
+        "Stable package build $($Package.Name)"
     $temporary = "$binary.building-$($script:ownerID)"
     $arguments = @('test', '-c', '-o', $temporary)
     if (-not [string]::IsNullOrWhiteSpace($CoverProfileRoot)) {
@@ -658,7 +787,6 @@ function Build-D5AtomicTestBinary(
 }
 
 function Build-D5StableChildren(
-    [bool]$IncludeHostileSender,
     [string]$ManifestPath,
     [Parameter(Mandatory)] [scriptblock]$SourceCheckpoint
 ) {
@@ -673,12 +801,10 @@ function Build-D5StableChildren(
         Path = Join-Path $stableChildRoot 'wsrelay.exe'
         Package = './relay/cmd/wsrelay'
     })
-    if ($IncludeHostileSender) {
-        $targets.Add([pscustomobject]@{
-            Path = Join-Path $stableChildRoot 'hostile-sender.exe'
-            Package = './web/e2e/fixtures/hostile-sender'
-        })
-    }
+    Assert-D5ProgramsExcludeRetiredTombstone `
+        @($targets.Path) `
+        $script:firewallOwnershipPolicy `
+        'Stable child build plan'
     $temporaryPaths = [Collections.Generic.List[string]]::new()
     try {
         foreach ($target in $targets) {
@@ -775,6 +901,9 @@ function Invoke-D5SelectedMode([string]$Phase) {
             foreach ($definition in $script:operationDefinitions) {
                 Invoke-D5PlannedBinary $definition $Phase
             }
+            $logPath = Join-Path $script:run.StagePath 'baseline/pion.txt'
+            $baseline = Get-D5PionBaselineEvidence $logPath
+            Write-D5JSON (Join-Path $script:run.StagePath 'baseline/pion-summary.json') $baseline
         }
         'Profile' {
             New-Item -ItemType Directory -Force -Path (
@@ -796,6 +925,7 @@ function Invoke-D5AuditedPhase(
     Assert-D5HarnessLeaseHeld $script:harnessLease
     $beforeRecordID = [long]$script:auditRecordID
     $beforeRules = @($script:auditRules)
+    $beforeActiveStoreRules = @($script:activeStoreRules)
     $runError = $null
     try {
         & $Action
@@ -815,6 +945,11 @@ function Invoke-D5AuditedPhase(
         }
         throw $settleError
     }
+    $activeStoreDelta = New-D5FirewallSemanticTransition `
+        $beforeActiveStoreRules `
+        @($settled.AfterActiveStoreRules) `
+        $script:playwrightFirewallDebtPolicy `
+        "$Phase ActiveStore evidence"
     $audit = [pscustomobject][ordered]@{
         Phase = $Phase
         AllowColdRegistration = $AllowColdRegistration
@@ -823,19 +958,37 @@ function Invoke-D5AuditedPhase(
         AfterRecordID = [long]$settled.AfterRecordID
         BeforeRules = $beforeRules
         AfterRules = @($settled.AfterRules)
+        BeforeActiveStore = $activeStoreDelta.Before
+        AfterActiveStore = $activeStoreDelta.After
+        ActiveStoreDelta = $activeStoreDelta
         NewRelevantEvents = @($settled.NewRelevantEvents)
     }
     $script:phaseAudits.Add($audit)
     $script:auditRecordID = [long]$audit.AfterRecordID
     $script:auditRules = @($audit.AfterRules)
+    $script:activeStoreRules = @($settled.AfterActiveStoreRules)
     Write-D5JSON (Join-Path $script:run.StagePath 'firewall-audit.json') ([ordered]@{
         Mode = $Mode
         InitialRecordID = $script:auditInitialRecordID
         InitialRules = @($script:auditInitialRules)
+        InitialActiveStore = New-D5ActiveStoreFirewallSummary @($script:activeStoreInitialRules)
+        InitialPlaywrightDebt = $script:playwrightFirewallDebtAtStart
+        InitialExternalDebt = $script:externalFirewallDebtAtStart
         Phases = @($script:phaseAudits)
     })
     $policyError = $null
     try {
+        $activeStoreTransition = Assert-D5ActiveStoreFirewallTransition `
+            @($script:activeStoreInitialRules) `
+            $beforeActiveStoreRules `
+            @($script:activeStoreRules) `
+            $harnessRoot `
+            $script:playwrightFirewallDebtPolicy `
+            $AllowColdRegistration `
+            $ExpectedPrograms `
+            $Phase
+        $script:playwrightFirewallDebt = $activeStoreTransition.PlaywrightDebt
+        $script:externalFirewallDebt = $activeStoreTransition.ExternalDebt
         Assert-D5FirewallAuditChain @($script:phaseAudits) $script:auditInitialRecordID @($script:auditInitialRules)
         if ($AllowColdRegistration) {
             Assert-D5ColdFirewallRegistration `
@@ -876,15 +1029,16 @@ function Add-D5RunnerFailure([object]$ErrorRecord, [string]$Context = '') {
     }
 }
 
-$allPackages = @(
-    Get-Content -LiteralPath (Join-Path $PSScriptRoot 'd5-windows-network-packages.json') -Raw |
-        ConvertFrom-Json
-)
+$networkManifest = Get-Content `
+    -LiteralPath (Join-Path $PSScriptRoot 'd5-windows-network-packages.json') `
+    -Raw |
+    ConvertFrom-Json
+$allPackages = @($networkManifest.Packages)
 $packages = switch ($Mode) {
     'NetworkTests' { $allPackages }
     'Build' { $allPackages }
-    'Baseline' { @($allPackages | Where-Object { $_.Name -in @('webrtc', 'relay', 'connectivity') }) }
-    'Profile' { @($allPackages | Where-Object { $_.Name -in @('webrtc', 'relay') }) }
+    'Baseline' { @($allPackages | Where-Object { $_.Name -eq 'webrtc' }) }
+    'Profile' { @($allPackages | Where-Object { $_.Name -eq 'webrtc' }) }
     default { @() }
 }
 $script:firewallOwnershipEvidence = Import-D5FirewallOwnershipEvidence `
@@ -923,6 +1077,13 @@ $script:lastAudit = $null
 $script:registrationState = $null
 $script:firewallOwnershipPolicy = $null
 $script:firewallOwnershipBaseline = $null
+$script:activeStoreInitialRules = @()
+$script:activeStoreRules = @()
+$script:playwrightFirewallDebtPolicy = $null
+$script:playwrightFirewallDebtAtStart = $null
+$script:playwrightFirewallDebt = $null
+$script:externalFirewallDebtAtStart = $null
+$script:externalFirewallDebt = $null
 $script:publishedResult = $null
 
 function Invoke-D5AuditedRun {
@@ -942,14 +1103,69 @@ function Invoke-D5AuditedRun {
         [void](& $addSourceCheckpoint $auditedRun $Name)
     }.GetNewClosure()
     try {
-        # The cursor precedes the initial snapshot so a rule change during enumeration
-        # is attributed to the first audited interval instead of entering a blind baseline.
+        if ($Mode -eq 'BrowserTests') {
+            $browserManifest = @(Get-D5PlaywrightBrowserManifest)
+            $cacheRoots = @($browserManifest.cacheRoot | Sort-Object -Unique)
+            if ($cacheRoots.Count -ne 1) {
+                throw 'Playwright browser manifest must resolve to one cache root'
+            }
+            $script:playwrightFirewallDebtPolicy = New-D5PlaywrightFirewallDebtPolicy `
+                ([string]$cacheRoots[0]) `
+                $browserManifest
+        }
+
+        # The cursor precedes both initial snapshots so enumeration cannot create a blind baseline.
         $script:auditInitialRecordID = Get-D5LatestFirewallRecordID
+        $script:activeStoreInitialRules = @(Get-D5ActiveStoreFirewallRules)
         $script:auditInitialRules = @(Get-D5FirewallRules)
         $script:auditRecordID = [long]$script:auditInitialRecordID
         $script:auditRules = @($script:auditInitialRules)
-        $script:auditInitialized = $true
+        $script:activeStoreRules = @($script:activeStoreInitialRules)
+        $script:externalFirewallDebtAtStart = New-D5ExternalFirewallDebtSnapshot `
+            @($script:activeStoreInitialRules) `
+            $harnessRoot `
+            $script:playwrightFirewallDebtPolicy
+        if ($null -ne $script:playwrightFirewallDebtPolicy) {
+            $script:playwrightFirewallDebtAtStart = Get-D5PlaywrightFirewallDebtSnapshot `
+                @($script:activeStoreInitialRules) `
+                $script:playwrightFirewallDebtPolicy `
+                'ActiveStore preflight'
+            $script:playwrightFirewallDebt = $script:playwrightFirewallDebtAtStart
+        }
+
+        # Snapshots are pure evidence. Persist exact normalized entries, classes,
+        # limits and violations before any policy assertion can terminate the run.
         Write-D5JSON (Join-Path $script:run.StagePath 'preflight-rules.json') $script:auditInitialRules
+        Write-D5JSON `
+            (Join-Path $script:run.StagePath 'active-store-before.json') `
+            ([ordered]@{
+                Summary = New-D5ActiveStoreFirewallSummary @($script:activeStoreInitialRules)
+                PlaywrightDebt = $script:playwrightFirewallDebtAtStart
+                ExternalDebt = $script:externalFirewallDebtAtStart
+            })
+        Assert-D5ExternalFirewallDebtSnapshot `
+            $script:externalFirewallDebtAtStart `
+            'ActiveStore preflight'
+        if ($null -ne $script:playwrightFirewallDebtAtStart) {
+            Assert-D5PlaywrightFirewallDebtSnapshot `
+                $script:playwrightFirewallDebtAtStart `
+                'ActiveStore preflight'
+        }
+        $script:externalFirewallDebt = New-D5ExternalFirewallTransition `
+            @($script:activeStoreInitialRules) `
+            @($script:activeStoreInitialRules) `
+            $harnessRoot `
+            $script:playwrightFirewallDebtPolicy `
+            'ActiveStore preflight'
+        Assert-D5ExternalFirewallTransition `
+            $script:externalFirewallDebt `
+            'ActiveStore preflight'
+        Write-D5ForeignFirewallRuleWarning $script:auditInitialRules
+        if ($null -ne $script:playwrightFirewallDebtAtStart -and
+            [int]$script:playwrightFirewallDebtAtStart.PairCount -gt 0) {
+            Write-Warning $script:playwrightFirewallDebtAtStart.CleanupAdvisory
+        }
+        $script:auditInitialized = $true
         $script:firewallOwnershipBaseline = New-D5FirewallOwnershipBaseline `
             $script:auditInitialRules `
             $script:firewallOwnershipPolicy
@@ -989,7 +1205,7 @@ function Invoke-D5AuditedRun {
             if ($Mode -eq 'BrowserTests') {
                 $env:WINDSHARE_D5_PLAYWRIGHT_OUTPUT_DIR = Join-Path $script:run.StagePath 'browser/test-results'
                 $env:WINDSHARE_D5_CHILD_MANIFEST = Join-Path $script:run.StagePath 'browser/launched-binaries.json'
-                $builtPrograms += @(Build-D5StableChildren $true $env:WINDSHARE_D5_CHILD_MANIFEST $buildCheckpoint)
+                $builtPrograms += @(Build-D5StableChildren $env:WINDSHARE_D5_CHILD_MANIFEST $buildCheckpoint)
                 [Environment]::SetEnvironmentVariable(
                     $browserNetworkContractName,
                     $browserNetworkContractValue,
@@ -1006,6 +1222,10 @@ function Invoke-D5AuditedRun {
         }
         $builtPrograms += @($script:binaries.Values)
         $builtPrograms = @($builtPrograms | ForEach-Object { [IO.Path]::GetFullPath([string]$_) } | Sort-Object -Unique)
+        Assert-D5ProgramsExcludeRetiredTombstone `
+            $builtPrograms `
+            $script:firewallOwnershipPolicy `
+            'Audited build plan'
         $script:firewallOwnershipPolicy = New-D5CurrentFirewallOwnershipPolicy
 
         $expectedPrograms = switch ($Mode) {
@@ -1049,6 +1269,14 @@ function Invoke-D5AuditedRun {
                 ForEach-Object { [IO.Path]::GetFullPath([string]$_) } |
                 Sort-Object -Unique
         )
+        Assert-D5ProgramsExcludeRetiredTombstone `
+            @($expectedPrograms) `
+            $script:firewallOwnershipPolicy `
+            'Audited launch plan'
+        Assert-D5ProgramsExcludeRetiredTombstone `
+            @($networkCapablePrograms) `
+            $script:firewallOwnershipPolicy `
+            'Audited network launch plan'
         $pendingRegistrationPrograms = @(
             Get-D5PendingRegistrationPrograms $script:registrationState $networkCapablePrograms
         )
@@ -1144,6 +1372,33 @@ function Invoke-D5AuditedRun {
         [void](Add-D5SourceCheckpoint $script:run 'after-execution-before-final-audit')
         if ($script:auditInitialized) {
             Invoke-D5AuditedPhase 'final-quiescence' $false $networkCapablePrograms { }
+            Write-D5JSON `
+                (Join-Path $script:run.StagePath 'active-store-after.json') `
+                ([ordered]@{
+                    Summary = New-D5ActiveStoreFirewallSummary @($script:activeStoreRules)
+                    PlaywrightDebt = $script:playwrightFirewallDebt
+                    ExternalDebt = $script:externalFirewallDebt
+                })
+            if ($null -ne $script:playwrightFirewallDebt -and
+                [int]$script:playwrightFirewallDebt.PairCount -gt
+                    [int]$script:playwrightFirewallDebtAtStart.PairCount) {
+                Write-Warning (
+                    'Playwright firewall debt increased during this run. ' +
+                    $script:playwrightFirewallDebt.CleanupAdvisory
+                )
+            }
+            if ($null -ne $script:externalFirewallDebt -and
+                ([int]$script:externalFirewallDebt.AddedRuleCount -gt 0 -or
+                 [int]$script:externalFirewallDebt.RemovedRuleCount -gt 0 -or
+                 [int]$script:externalFirewallDebt.ChangedRuleCount -gt 0)) {
+                Write-Warning (
+                    'External firewall telemetry changed during this run: ' +
+                    "added=$($script:externalFirewallDebt.AddedRuleCount), " +
+                    "removed=$($script:externalFirewallDebt.RemovedRuleCount), " +
+                    "changed=$($script:externalFirewallDebt.ChangedRuleCount). " +
+                    $script:externalFirewallDebt.CleanupAdvisory
+                )
+            }
         }
         if ($null -ne $script:firewallOwnershipBaseline) {
             Assert-D5FirewallOwnershipBaseline `
@@ -1211,7 +1466,6 @@ function Invoke-D5NetworkTestsRun {
             Build-D5AtomicTestBinary $package $noCheckpoint
         }
         $builtPrograms = @(Build-D5StableChildren `
-            $false `
             (Join-Path $runRoot 'e2e-child-manifest.json') `
             $noCheckpoint)
     } finally {
@@ -1219,6 +1473,10 @@ function Invoke-D5NetworkTestsRun {
     }
     $builtPrograms += @($script:binaries.Values)
     $builtPrograms = @($builtPrograms | ForEach-Object { [IO.Path]::GetFullPath([string]$_) } | Sort-Object -Unique)
+    Assert-D5ProgramsExcludeRetiredTombstone `
+        $builtPrograms `
+        $script:firewallOwnershipPolicy `
+        'NetworkTests build and launch plan'
     # One hash per binary: this manifest is what every launch validation and
     # authorization handshake re-verifies against.
     $script:initialProgramEvidence = @(Get-D5BinaryEvidence $builtPrograms)
@@ -1330,6 +1588,10 @@ function Invoke-D5NetworkTestsRun {
                 }
                 try {
                     Assert-D5FixedRegistrationRules $programRules $script:firewallOwnershipPolicy
+                    Assert-D5ColdRegistrationRuleSet `
+                        $programRules `
+                        @($program) `
+                        'NetworkTests cold registration'
                     $recordablePrograms.Add($program)
                 } catch {
                     if ($null -eq $misshapenError) {
@@ -1426,6 +1688,10 @@ try {
     $script:runnerGuard = New-D5RunnerGuard
     [Environment]::SetEnvironmentVariable($runnerGuardName, $script:runnerGuard.Name, 'Process')
     $script:firewallOwnershipPolicy = New-D5CurrentFirewallOwnershipPolicy
+    Assert-D5ProgramsExcludeRetiredTombstone `
+        @($script:authorizedStablePrograms) `
+        $script:firewallOwnershipPolicy `
+        'Stable build manifest'
     # Two self-contained flows, dispatched once on $Mode: NetworkTests runs the
     # lean deterministic path (owner decision 2026-07-14); every other mode
     # keeps the audited pipeline unchanged.
@@ -1438,38 +1704,67 @@ try {
     Add-D5RunnerFailure $_
 }
 
-# Publication sits outside the audited flow so a run that never entered it
-# (e.g. lease-acquisition failure) still publishes a Failed evidence run.
-if ($null -ne $script:run) {
-    try {
-        $status = if ($null -eq $script:failure) { 'Success' } else { 'Failed' }
-        $errorMessage = if ($null -eq $script:failure) { '' } else { [string]$script:failure }
-        $script:publishedResult = Complete-D5EvidenceRun $script:run $status $errorMessage
-        if ($script:publishedResult.Status -ne 'Success' -and $null -eq $script:failure) {
-            Add-D5RunnerFailure $script:publishedResult.Error 'evidence completion failed'
+$restoreEnvironment = {
+    $restoreErrors = [Collections.Generic.List[string]]::new()
+    foreach ($name in $environmentNames) {
+        try {
+            $saved = $savedEnvironment[$name]
+            if ($saved.Defined) {
+                [Environment]::SetEnvironmentVariable($name, [string]$saved.Value, 'Process')
+            } else {
+                [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+            }
+        } catch {
+            $restoreErrors.Add("${name}: $_")
         }
-    } catch {
-        Add-D5RunnerFailure $_ 'evidence publication failed'
     }
-}
+    if ($restoreErrors.Count -ne 0) {
+        throw ($restoreErrors -join '; ')
+    }
+}.GetNewClosure()
+$releaseRunnerGuard = ${function:Release-D5RunnerGuard}
+$runnerGuardToRelease = $script:runnerGuard
+$releaseRunnerGuardAction = {
+    if ($null -ne $runnerGuardToRelease) {
+        & $releaseRunnerGuard $runnerGuardToRelease
+    }
+}.GetNewClosure()
+$releaseHarnessLease = ${function:Release-D5HarnessLease}
+$harnessLeaseToRelease = $script:harnessLease
+$releaseHarnessLeaseAction = {
+    if ($null -ne $harnessLeaseToRelease) {
+        & $releaseHarnessLease $harnessLeaseToRelease
+    }
+}.GetNewClosure()
+$addFinalSourceCheckpoint = ${function:Add-D5SourceCheckpoint}
+$runToFinalize = $script:run
+$finalSourceAudit = {
+    if ($null -ne $runToFinalize) {
+        [void](& $addFinalSourceCheckpoint $runToFinalize 'after-environment-and-harness-cleanup')
+    }
+}.GetNewClosure()
 
-foreach ($name in $environmentNames) {
-    $saved = $savedEnvironment[$name]
-    if ($saved.Defined) {
-        [Environment]::SetEnvironmentVariable($name, [string]$saved.Value, 'Process')
-    } else {
-        [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+# A content-addressed Success becomes visible only after every process-global
+# restoration, audited teardown, and final source checkpoint has succeeded.
+$requestedStatus = if ($null -eq $script:failure) { 'Success' } else { 'Failed' }
+$initialError = if ($null -eq $script:failure) { '' } else { [string]$script:failure }
+try {
+    $transaction = Complete-D5EvidenceTransaction `
+        $script:run `
+        $requestedStatus `
+        $initialError `
+        @(
+            [pscustomobject]@{ Name = 'environment restoration'; Action = $restoreEnvironment },
+            [pscustomobject]@{ Name = 'runner guard cleanup'; Action = $releaseRunnerGuardAction },
+            [pscustomobject]@{ Name = 'global harness lease cleanup'; Action = $releaseHarnessLeaseAction },
+            [pscustomobject]@{ Name = 'final source audit'; Action = $finalSourceAudit }
+        )
+    $script:publishedResult = $transaction.Result
+    if ($transaction.Status -ne 'Success') {
+        $script:failure = [Exception]::new([string]$transaction.Error)
     }
-}
-try {
-    Release-D5RunnerGuard $script:runnerGuard
 } catch {
-    Add-D5RunnerFailure $_ 'runner guard cleanup failed'
-}
-try {
-    Release-D5HarnessLease $script:harnessLease
-} catch {
-    Add-D5RunnerFailure $_ 'global harness lease cleanup failed'
+    Add-D5RunnerFailure $_ 'evidence publication transaction failed'
 }
 
 if ($null -ne $script:publishedResult) {

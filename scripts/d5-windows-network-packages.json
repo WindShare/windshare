@@ -1,10 +1,16 @@
-[
-  { "Name": "webrtc", "Path": "./transport/webrtc" },
-  { "Name": "relay", "Path": "./transport/relay" },
-  { "Name": "connectivity", "Path": "./connectivity" },
-  { "Name": "cli", "Path": "./cmd/windshare/internal/cli" },
-  { "Name": "e2e", "Path": "./e2e" },
-  { "Name": "relay-httpapi", "Path": "./relay/httpapi" },
-  { "Name": "relay-signaling", "Path": "./relay/signaling" },
-  { "Name": "wsrelay", "Path": "./relay/cmd/wsrelay" }
-]
+{
+  "SchemaVersion": 2,
+  "Packages": [
+    { "Name": "webrtc", "Path": "./transport/webrtc" },
+    { "Name": "cli", "Path": "./cmd/windshare/internal/cli" },
+    { "Name": "e2e", "Path": "./e2e" },
+    { "Name": "wsrelay", "Path": "./relay/cmd/wsrelay" }
+  ],
+  "RetiredProgramTombstone": {
+    "RelativeProgram": "connectivity.test.exe",
+    "DisplayName": "connectivity.test",
+    "Action": "Block",
+    "TCPGuid": "E9A64ACF-24D6-4B94-91CE-D8E468113113",
+    "UDPGuid": "6A523662-D935-4D63-BE14-EEC446E3B720"
+  }
+}

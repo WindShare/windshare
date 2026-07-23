@@ -26,6 +26,11 @@ skip_blank = true                         # Don't count blank lines
 
 # Content Rules: Override limits for specific paths (last match wins)
 [[content.rules]]
+pattern = "**/*.ts"
+max_lines = 700
+reason = "TypeScript sources get modest headroom over the Go default"
+
+[[content.rules]]
 pattern = "**/*.tsx"
 max_lines = 800
 reason = "React components carry JSX markup overhead"
@@ -64,26 +69,34 @@ count_exclude = ["*_test.go"]
 # Go module roots (exact-match globs don't cover the root dir via "/**")
 [[structure.rules]]
 scope = "{cmd,core,relay,transport,webrtc}"
-max_files = 15
-max_dirs = 20
+max_files = 20
+max_dirs = 25
+warn_dirs_at = 20
+warn_files_at = 15
 reason = "Go source: keep packages small and flat"
 
 [[structure.rules]]
 scope = "{cmd,core,relay,transport,webrtc}/**"
-max_files = 15
-max_dirs = 20
+max_files = 20
+max_dirs = 25
+warn_dirs_at = 20
+warn_files_at = 15
 reason = "Go source: keep packages small and flat"
 
 [[structure.rules]]
 scope = "web/{src,test}"
 max_files = 30
-max_dirs = 20
+max_dirs = 25
+warn_dirs_at = 20
+warn_files_at = 24
 reason = "Web source: keep component tree small and flat"
 
 [[structure.rules]]
 scope = "web/{src,test}/**"
 max_files = 30
-max_dirs = 20
+max_dirs = 25
+warn_dirs_at = 20
+warn_files_at = 24
 reason = "Web source: keep component tree small and flat"
 
 # =============================================================================

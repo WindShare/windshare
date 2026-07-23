@@ -202,7 +202,10 @@ function New-D5EvidenceRun(
     }
 }
 
-function Test-D5EvidenceDirectory([string]$Path) {
+function Test-D5EvidenceDirectory(
+    [string]$Path,
+    [string]$ExpectedEvidenceID = ''
+) {
     $root = [IO.Path]::GetFullPath($Path)
     $manifestPath = Join-Path $root 'manifest.json'
     $payloadPath = Join-Path $root 'payload.json'
@@ -217,11 +220,16 @@ function Test-D5EvidenceDirectory([string]$Path) {
     $payload = $payloadJSON | ConvertFrom-Json
     $computedID = Get-D5TextSHA256 $payloadJSON
     $directoryID = Split-Path -Leaf $root
+    $requiredID = if ([string]::IsNullOrWhiteSpace($ExpectedEvidenceID)) {
+        $directoryID
+    } else {
+        $ExpectedEvidenceID.ToLowerInvariant()
+    }
     if ([string]$manifest.EvidenceID -ne $computedID -or
         [string]$manifest.PayloadSHA256 -ne $computedID -or
         [string]$manifest.PayloadFile -ne 'payload.json' -or
-        $directoryID -ne $computedID) {
-        throw "Evidence content address is invalid: recorded $($manifest.EvidenceID), computed $computedID, directory $directoryID"
+        $requiredID -ne $computedID) {
+        throw "Evidence content address is invalid: recorded $($manifest.EvidenceID), computed $computedID, required $requiredID"
     }
     $expected = @{}
     foreach ($artifact in @($payload.Artifacts)) {
@@ -252,14 +260,61 @@ function Test-D5EvidenceDirectory([string]$Path) {
     return $true
 }
 
+function Get-D5EvidencePublicationOperation(
+    [object]$Operations,
+    [string]$Name,
+    [scriptblock]$Default
+) {
+    if ($null -eq $Operations) {
+        return $Default
+    }
+    $property = $Operations.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) {
+        return $Default
+    }
+    if ($property.Value -isnot [scriptblock]) {
+        throw "Evidence publication operation $Name is not a script block"
+    }
+    return [scriptblock]$property.Value
+}
+
+function Seal-D5EvidenceStaging([string]$Path) {
+    $files = @(Get-ChildItem -LiteralPath $Path -File -Recurse)
+    if ($files.Count -lt 2) {
+        throw 'Evidence staging is incomplete before read-only sealing'
+    }
+    foreach ($file in $files) {
+        $file.IsReadOnly = $true
+    }
+    foreach ($file in Get-ChildItem -LiteralPath $Path -File -Recurse) {
+        if (-not $file.IsReadOnly) {
+            throw "Evidence staging file was not sealed read-only: $($file.FullName)"
+        }
+    }
+}
+
 function Complete-D5EvidenceRun(
     [object]$Run,
     [ValidateSet('Success', 'Failed')]
     [string]$Status,
     [string]$ErrorMessage = '',
-    [datetimeoffset]$CompletedAt = [datetimeoffset]::Now
+    [datetimeoffset]$CompletedAt = [datetimeoffset]::Now,
+    [object]$PublicationOperations = $null
 ) {
-    $environment = Get-D5EvidenceEnvironment $Run.RepositoryRoot
+    $payloadPath = Join-Path $Run.StagePath 'payload.json'
+    $manifestPath = Join-Path $Run.StagePath 'manifest.json'
+    if ((Test-Path -LiteralPath $payloadPath) -or (Test-Path -LiteralPath $manifestPath)) {
+        throw 'Evidence staging already contains publication metadata'
+    }
+    $captureEnvironment = Get-D5EvidencePublicationOperation $PublicationOperations 'Environment' {
+        param([object]$EvidenceRun)
+        Get-D5EvidenceEnvironment $EvidenceRun.RepositoryRoot
+    }
+    $captureSource = Get-D5EvidencePublicationOperation $PublicationOperations 'SourceCheckpoint' {
+        param([object]$EvidenceRun)
+        Add-D5SourceCheckpoint $EvidenceRun 'completion-after-artifact-capture' -NoThrow
+    }
+    $environment = & $captureEnvironment $Run
     $artifacts = @(
         Get-ChildItem -LiteralPath $Run.StagePath -File -Recurse |
             Sort-Object FullName |
@@ -271,7 +326,7 @@ function Complete-D5EvidenceRun(
                 }
             }
     )
-    $sourceAtEnd = Add-D5SourceCheckpoint $Run 'completion-after-artifact-capture' -NoThrow
+    $sourceAtEnd = & $captureSource $Run
     $sourceUnchanged = [bool]$Run.SourceStable -and
         (Test-D5SourceIdentityEqual $Run.SourceAtStart $sourceAtEnd)
     $effectiveStatus = $Status
@@ -316,32 +371,105 @@ function Complete-D5EvidenceRun(
         PayloadSHA256 = $evidenceID
         PayloadFile = 'payload.json'
     }
-    $payloadPath = Join-Path $Run.StagePath 'payload.json'
     [IO.File]::WriteAllText(
         $payloadPath,
         $payloadJSON,
         [Text.UTF8Encoding]::new($false)
     )
-    $manifestPath = Join-Path $Run.StagePath 'manifest.json'
     [IO.File]::WriteAllText(
         $manifestPath,
         ($manifest | ConvertTo-Json -Depth 24),
         [Text.UTF8Encoding]::new($false)
     )
-    Move-Item -LiteralPath $Run.StagePath -Destination $destination
-    if (-not (Test-D5EvidenceDirectory $destination)) {
-        throw "Published evidence failed verification: $destination"
+    $verify = Get-D5EvidencePublicationOperation $PublicationOperations 'Verify' {
+        param([string]$Path, [string]$EvidenceID)
+        Test-D5EvidenceDirectory $Path $EvidenceID
     }
-    foreach ($file in Get-ChildItem -LiteralPath $destination -File -Recurse) {
-        $file.IsReadOnly = $true
+    $seal = Get-D5EvidencePublicationOperation $PublicationOperations 'Seal' {
+        param([string]$Path)
+        Seal-D5EvidenceStaging $Path
     }
+    $move = Get-D5EvidencePublicationOperation $PublicationOperations 'Move' {
+        param([string]$Source, [string]$Destination)
+        [IO.Directory]::Move($Source, $Destination)
+    }
+
+    # Validation and sealing happen while the directory is hidden under its
+    # staging name. The only operation that makes Success discoverable is the
+    # final same-volume atomic directory rename.
+    [void](& $verify $Run.StagePath $evidenceID)
+    [void](& $seal $Run.StagePath)
+    [void](& $verify $Run.StagePath $evidenceID)
     $Run.CompletionStatus = $effectiveStatus
     $Run.CompletionError = $effectiveError
-    return [pscustomobject]@{
+    $result = [pscustomobject]@{
         Path = $destination
         EvidenceID = $evidenceID
         Status = $effectiveStatus
         Error = $effectiveError
         SourceUnchanged = $sourceUnchanged
+    }
+    [void](& $move $Run.StagePath $destination)
+    return $result
+}
+
+function Complete-D5EvidenceTransaction(
+    [AllowNull()] [object]$Run,
+    [ValidateSet('Success', 'Failed')]
+    [string]$RequestedStatus,
+    [string]$ErrorMessage = '',
+    [AllowEmptyCollection()] [object[]]$FinalizationSteps = @(),
+    [datetimeoffset]$CompletedAt = [datetimeoffset]::MinValue,
+    [object]$PublicationOperations = $null
+) {
+    $errors = [Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($ErrorMessage)) {
+        $errors.Add($ErrorMessage)
+    }
+    foreach ($step in $FinalizationSteps) {
+        $name = [string]$step.Name
+        $action = $step.Action
+        if ([string]::IsNullOrWhiteSpace($name) -or $action -isnot [scriptblock]) {
+            $errors.Add('evidence finalization step is malformed')
+            continue
+        }
+        try {
+            [void](& $action)
+        } catch {
+            $errors.Add("$name failed: $_")
+        }
+    }
+    $effectiveStatus = if ($RequestedStatus -eq 'Success' -and $errors.Count -eq 0) {
+        'Success'
+    } else {
+        'Failed'
+    }
+    $effectiveError = if ($errors.Count -eq 0) { '' } else { $errors -join '; ' }
+    # A default timestamp belongs to the completed transaction, not merely to
+    # function entry. Explicit timestamps remain injectable for deterministic evidence tests.
+    $publicationCompletedAt = if ($PSBoundParameters.ContainsKey('CompletedAt')) {
+        [datetimeoffset]$CompletedAt
+    } else {
+        [datetimeoffset]::Now
+    }
+    if ($null -eq $Run) {
+        return [pscustomobject][ordered]@{
+            Result = $null
+            Status = $effectiveStatus
+            Error = $effectiveError
+            FinalizationFailures = @($errors)
+        }
+    }
+    $result = Complete-D5EvidenceRun `
+        $Run `
+        $effectiveStatus `
+        $effectiveError `
+        $publicationCompletedAt `
+        $PublicationOperations
+    return [pscustomobject][ordered]@{
+        Result = $result
+        Status = $result.Status
+        Error = $result.Error
+        FinalizationFailures = @($errors)
     }
 }

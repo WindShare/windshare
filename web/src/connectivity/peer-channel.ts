@@ -1,4 +1,4 @@
-import type { FrameChannel } from '../contracts'
+import type { FrameChannel } from '../contracts/channel'
 import type { WebRTCFrameChannel } from '../transport/webrtc'
 
 export interface PeerChannel extends FrameChannel {

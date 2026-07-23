@@ -1,10 +1,11 @@
 import './App.css'
-import { ReceiverApp, type ReceiverController } from './ui'
+import { V2ReceiverApp } from './ui/V2ReceiverApp'
+import type { V2ReceiverController } from './ui/v2-controller'
 
 export interface AppProps {
-  readonly controller: ReceiverController
+  readonly controller: V2ReceiverController
 }
 
 export default function App({ controller }: AppProps) {
-  return <ReceiverApp controller={controller} />
+  return <V2ReceiverApp controller={controller} />
 }

@@ -2,6 +2,9 @@ package link
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -11,17 +14,21 @@ import (
 	"unicode/utf8"
 )
 
-// suite 常量的语义家在本包:suiteByte 是链接 fragment 的首字节,兼作 AEAD 的
-// AAD 域分隔(§6.3);chunk/manifest 从这里取值,保证全仓库同一来源。
 const (
-	// SuiteAESGCM = suite 0x01:{AES-256-GCM, HKDF-SHA256, 128-bit readSecret, 随机 nonce}。
-	SuiteAESGCM byte = 0x01
+	// SuiteSenderAuthenticated is the native capability and sender-object suite.
+	SuiteSenderAuthenticated byte = 0x02
 
-	// ReadSecretBytes:16B/128-bit,链接中唯一秘密;128-bit 随机密钥免疫离线爆破(§2.2)。
+	// ReadSecretBytes is the 128-bit capability secret width.
 	ReadSecretBytes = 16
+	// SenderAuthenticatedShareIDBytes is the relay route width.
+	SenderAuthenticatedShareIDBytes = 12
+	// PKHashBytes is the truncated sender Ed25519 public-key hash width.
+	PKHashBytes = 16
+)
 
-	// ShareIDBytes:9B/72-bit 路由句柄,抗枚举且 base64url 恰 12 字符、无填充。
-	ShareIDBytes = 9
+const (
+	senderKeyDomain = "windshare/v2 sender-key\x00"
+	shareIDDomain   = "windshare/v2 share-id\x00"
 )
 
 // relayParam 是中转提示的查询参数名(?r=,非秘密;自始按多值列表解析,§6.3)。
@@ -34,9 +41,8 @@ var (
 	// fragment 为空 → 转入密钥输入流程(网页输入框 / CLI --key,§6.10)。
 	ErrMissingFragment = errors.New("link: link does not contain a key fragment")
 
-	// ErrUnknownSuite:fragment 布局随 suite 而变,未知 suite 按 0x01 硬解只会
-	// 得到错误密钥,必须明确报错引导升级(与 B15 清单版本同一策略)。
-	ErrUnknownSuite = errors.New("link: unsupported link suite; upgrade required")
+	// Unknown suites must fail before their key material can be interpreted.
+	ErrUnknownSuite = errors.New("link: unsupported link suite")
 
 	ErrMalformedLink     = errors.New("link: malformed link")
 	ErrMalformedShareID  = errors.New("link: malformed shareId")
@@ -51,8 +57,48 @@ var (
 type Link struct {
 	Suite      byte     // 套件/版本位,fragment 首字节
 	ReadSecret []byte   // 16B;链接中唯一秘密
-	ShareID    string   // 9B 随机的 base64url;纯路由句柄,不入密钥
+	PKHash     []byte   // suite 0x02 only: first16(SHA-256(sender-key-domain || sender public key))
+	ShareID    string   // suite-specific base64url relay route; never an encryption input
 	Relays     []string // ?r= 多值,自始按列表解析(M1 仅用首个)
+}
+
+// SenderKeyHash binds a suite-0x02 capability to its Ed25519 sender identity.
+func SenderKeyHash(publicKey ed25519.PublicKey) ([PKHashBytes]byte, error) {
+	var result [PKHashBytes]byte
+	if len(publicKey) != ed25519.PublicKeySize {
+		return result, fmt.Errorf("%w: sender public key must be %d bytes", ErrMalformedFragment, ed25519.PublicKeySize)
+	}
+	digest := sha256.Sum256(append([]byte(senderKeyDomain), publicKey...))
+	copy(result[:], digest[:PKHashBytes])
+	return result, nil
+}
+
+// ShareIDForSenderKeyHash deterministically derives the v2 relay route from the public sender identity.
+func ShareIDForSenderKeyHash(pkHash []byte) (string, error) {
+	if len(pkHash) != PKHashBytes {
+		return "", fmt.Errorf("%w: pkHash must be %d bytes", ErrMalformedFragment, PKHashBytes)
+	}
+	digest := sha256.Sum256(append([]byte(shareIDDomain), pkHash...))
+	return base64.RawURLEncoding.EncodeToString(digest[:SenderAuthenticatedShareIDBytes]), nil
+}
+
+// NewSenderAuthenticated constructs the native suite-0x02 capability identity.
+func NewSenderAuthenticated(readSecret []byte, publicKey ed25519.PublicKey, relays []string) (Link, error) {
+	if len(readSecret) != ReadSecretBytes {
+		return Link{}, fmt.Errorf("%w: readSecret must be %d bytes", ErrMalformedFragment, ReadSecretBytes)
+	}
+	pkHash, err := SenderKeyHash(publicKey)
+	if err != nil {
+		return Link{}, err
+	}
+	shareID, err := ShareIDForSenderKeyHash(pkHash[:])
+	if err != nil {
+		return Link{}, err
+	}
+	return Link{
+		Suite: SuiteSenderAuthenticated, ReadSecret: bytes.Clone(readSecret), PKHash: bytes.Clone(pkHash[:]),
+		ShareID: shareID, Relays: append([]string(nil), relays...),
+	}, nil
 }
 
 // NewReadSecret 从 rng 取 ReadSecretBytes 随机字节。随机源注入而非内取
@@ -65,16 +111,7 @@ func NewReadSecret(rng io.Reader) ([]byte, error) {
 	return buf, nil
 }
 
-// NewShareID 生成 ShareIDBytes 随机字节的 base64url 路由句柄(不入密钥,§6.3)。
-func NewShareID(rng io.Reader) (string, error) {
-	buf := make([]byte, ShareIDBytes)
-	if _, err := io.ReadFull(rng, buf); err != nil {
-		return "", fmt.Errorf("link: generate shareId: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
-}
-
-// URL 构造完整能力链接:<base>/<shareId>?r=<relay>#base64url(suiteByte‖readSecret)。
+// URL constructs the capability URL with the suite-specific fragment payload.
 // base 为前端基址(前端域是部署期配置,§6.3);fragment 由浏览器语义保证不发往服务器。
 func (l Link) URL(base string) (string, error) {
 	u, err := l.bareURL(base)
@@ -103,23 +140,26 @@ func (l Link) SplitURL(base string) (bare, key string, err error) {
 	return u.String(), key, nil
 }
 
-// KeyString 编码能力令牌 base64url(suiteByte‖readSecret),无填充。
+// KeyString encodes suite||readSecret||pkHash with strict unpadded base64url.
 func (l Link) KeyString() (string, error) {
-	n, err := secretLen(l.Suite)
-	if err != nil {
-		return "", err
+	if l.Suite != SuiteSenderAuthenticated {
+		return "", fmt.Errorf("%w(suite 0x%02x)", ErrUnknownSuite, l.Suite)
 	}
-	if len(l.ReadSecret) != n {
-		return "", fmt.Errorf("%w: readSecret must be %d bytes, got %d", ErrMalformedFragment, n, len(l.ReadSecret))
+	if len(l.ReadSecret) != ReadSecretBytes {
+		return "", fmt.Errorf("%w: readSecret must be %d bytes, got %d", ErrMalformedFragment, ReadSecretBytes, len(l.ReadSecret))
 	}
-	buf := make([]byte, 0, 1+n)
+	if len(l.PKHash) != PKHashBytes {
+		return "", fmt.Errorf("%w: pkHash must be %d bytes, got %d", ErrMalformedFragment, PKHashBytes, len(l.PKHash))
+	}
+	buf := make([]byte, 0, 1+ReadSecretBytes+PKHashBytes)
 	buf = append(buf, l.Suite)
 	buf = append(buf, l.ReadSecret...)
+	buf = append(buf, l.PKHash...)
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
 func (l Link) bareURL(base string) (*url.URL, error) {
-	if err := validShareID(l.ShareID); err != nil {
+	if err := validateIdentityForSuite(l); err != nil {
 		return nil, err
 	}
 	u, _, err := parseAbsoluteURL(base)
@@ -146,8 +186,11 @@ func Parse(raw string) (Link, error) {
 	if u.Fragment == "" {
 		return Link{}, ErrMissingFragment
 	}
-	l.Suite, l.ReadSecret, err = decodeKey(u.Fragment)
+	l.Suite, l.ReadSecret, l.PKHash, err = decodeKey(u.Fragment)
 	if err != nil {
+		return Link{}, err
+	}
+	if err := validateIdentityForSuite(l); err != nil {
 		return Link{}, err
 	}
 	return l, nil
@@ -163,7 +206,11 @@ func Split(full string) (bare, key string, err error) {
 	if u.Fragment == "" {
 		return "", "", ErrMissingFragment
 	}
-	if _, _, err := decodeKey(u.Fragment); err != nil {
+	suite, _, pkHash, err := decodeKey(u.Fragment)
+	if err != nil {
+		return "", "", err
+	}
+	if err := validateIdentityForSuite(Link{Suite: suite, PKHash: pkHash, ShareID: lastSegment(u.Path), ReadSecret: make([]byte, ReadSecretBytes)}); err != nil {
 		return "", "", err
 	}
 	key = u.Fragment
@@ -179,20 +226,23 @@ func Merge(bare, key string) (Link, error) {
 	if err != nil {
 		return Link{}, err
 	}
-	suite, secret, err := decodeKey(key)
+	suite, secret, pkHash, err := decodeKey(key)
 	if err != nil {
 		return Link{}, err
 	}
 	if u.Fragment != "" {
-		s2, sec2, err := decodeKey(u.Fragment)
+		s2, sec2, hash2, err := decodeKey(u.Fragment)
 		if err != nil {
 			return Link{}, err
 		}
-		if s2 != suite || !bytes.Equal(sec2, secret) {
+		if s2 != suite || !bytes.Equal(sec2, secret) || !bytes.Equal(hash2, pkHash) {
 			return Link{}, ErrKeyConflict
 		}
 	}
-	l.Suite, l.ReadSecret = suite, secret
+	l.Suite, l.ReadSecret, l.PKHash = suite, secret, pkHash
+	if err := validateIdentityForSuite(l); err != nil {
+		return Link{}, err
+	}
 	return l, nil
 }
 
@@ -204,7 +254,7 @@ func parseBare(raw string) (Link, *url.URL, error) {
 		return Link{}, nil, err
 	}
 	shareID := lastSegment(u.Path)
-	if err := validShareID(shareID); err != nil {
+	if err := validBareShareID(shareID); err != nil {
 		return Link{}, nil, err
 	}
 	return Link{ShareID: shareID, Relays: query[relayParam]}, u, nil
@@ -254,49 +304,65 @@ func lastSegment(p string) string {
 	return p
 }
 
-// validShareID 只保证与链接/中转编码互操作(base64url 恰解出 9B);shareId
-// 是纯路由句柄,此校验不承担安全职责。
-func validShareID(s string) error {
+func validBareShareID(s string) error {
 	raw, err := strictRawURLEncoding.DecodeString(s)
-	if err != nil || len(raw) != ShareIDBytes {
+	if err != nil || len(raw) != SenderAuthenticatedShareIDBytes {
 		return fmt.Errorf("%w:%q", ErrMalformedShareID, s)
 	}
 	return nil
 }
 
-// decodeKey 宽容解析密钥串(§6.10 接收侧):接受纯 base64url 串、带 # 前缀的
-// 串、或误粘的完整链接(取其 fragment)——手剪单链与 --split-key 产物等价,
-// 接收侧不区分来源。首尾空白一律容忍(聊天渠道复制常见)。
-func decodeKey(s string) (suite byte, secret []byte, err error) {
+func validateIdentityForSuite(l Link) error {
+	raw, err := strictRawURLEncoding.DecodeString(l.ShareID)
+	if err != nil {
+		return fmt.Errorf("%w:%q", ErrMalformedShareID, l.ShareID)
+	}
+	if l.Suite != SuiteSenderAuthenticated {
+		return fmt.Errorf("%w(suite 0x%02x)", ErrUnknownSuite, l.Suite)
+	}
+	if len(raw) != SenderAuthenticatedShareIDBytes || len(l.PKHash) != PKHashBytes {
+		return fmt.Errorf("%w:%q", ErrMalformedShareID, l.ShareID)
+	}
+	expected, err := ShareIDForSenderKeyHash(l.PKHash)
+	if err != nil || !constantTimeStringEqual(expected, l.ShareID) {
+		return fmt.Errorf("%w:%q", ErrMalformedShareID, l.ShareID)
+	}
+	return nil
+}
+
+func constantTimeStringEqual(left, right string) bool {
+	return len(left) == len(right) && subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
+}
+
+// decodeKey accepts a key string, a leading '#', or a complete copied URL and
+// then applies strict suite-specific byte widths.
+func decodeKey(s string) (suite byte, secret, pkHash []byte, err error) {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexByte(s, '#'); i >= 0 {
 		s = strings.TrimSpace(s[i+1:])
 	}
 	if s == "" {
-		return 0, nil, fmt.Errorf("%w: key string is empty", ErrMalformedFragment)
+		return 0, nil, nil, fmt.Errorf("%w: key string is empty", ErrMalformedFragment)
 	}
 	raw, err := strictRawURLEncoding.DecodeString(s)
 	if err != nil {
-		return 0, nil, fmt.Errorf("%w:%w", ErrMalformedFragment, err)
+		return 0, nil, nil, fmt.Errorf("%w:%w", ErrMalformedFragment, err)
 	}
-	n, err := secretLen(raw[0])
-	if err != nil {
-		return 0, nil, err
+	if len(raw) == 0 {
+		return 0, nil, nil, fmt.Errorf("%w: key string decodes to zero bytes", ErrMalformedFragment)
 	}
-	if len(raw) != 1+n {
-		return 0, nil, fmt.Errorf("%w: got %d bytes, suite 0x%02x requires %d", ErrMalformedFragment, len(raw), raw[0], 1+n)
+	if raw[0] != SuiteSenderAuthenticated {
+		return 0, nil, nil, fmt.Errorf("%w(suite 0x%02x)", ErrUnknownSuite, raw[0])
 	}
-	return raw[0], raw[1:], nil
-}
-
-// secretLen 给出 fragment 中 suite 字节之后的密钥长度,按 suite 分派:
-// 0x01 = 16B readSecret;0x02(M2)将为 readSecret‖pkHash 共 32B(§6.14)。
-// 长度不跨 suite 硬编码,未知 suite 明确引导升级而非硬解出错误密钥。
-func secretLen(suite byte) (int, error) {
-	switch suite {
-	case SuiteAESGCM:
-		return ReadSecretBytes, nil
-	default:
-		return 0, fmt.Errorf("%w(suite 0x%02x)", ErrUnknownSuite, suite)
+	const encodedBytes = 1 + ReadSecretBytes + PKHashBytes
+	if len(raw) != encodedBytes {
+		return 0, nil, nil, fmt.Errorf(
+			"%w: got %d bytes, suite 0x%02x requires %d",
+			ErrMalformedFragment,
+			len(raw),
+			raw[0],
+			encodedBytes,
+		)
 	}
+	return raw[0], bytes.Clone(raw[1 : 1+ReadSecretBytes]), bytes.Clone(raw[1+ReadSecretBytes:]), nil
 }

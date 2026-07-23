@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -117,6 +118,7 @@ func TestSubtests(t *testing.T) {
 	document, err := buildExecutionPlanDocument(
 		root,
 		map[string]bool{"owner": true},
+		nil,
 		result.catalog,
 		request,
 	)
@@ -155,6 +157,55 @@ func TestExecutionPlanSelectionRejectsAmbiguity(t *testing.T) {
 				t.Fatalf("selectSemanticEntries(%q) succeeded, want fail-closed error", test.arguments)
 			}
 		})
+	}
+}
+
+func TestExecutionPlanRejectsRetiredExecutableTombstone(t *testing.T) {
+	t.Parallel()
+	root := writeFixtureModule(t, map[string]string{
+		"owner/owner_test.go": `package owner
+import "testing"
+func TestPure(*testing.T) {}
+`,
+	})
+	program := currentTestProgram(t)
+	raw, err := os.ReadFile(program.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program.Path = filepath.Join(t.TempDir(), retiredConnectivityProgram)
+	if err := os.WriteFile(program.Path, raw, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	request := executionPlanRequest{
+		SchemaVersion: executionPlanSchemaVersion,
+		RunID:         "retired-program-regression",
+		Source: executionSourceIdentity{
+			IdentityKind: "workspace-manifest",
+			Commit:       "0123456789abcdef0123456789abcdef01234567",
+			SourceDigest: strings.Repeat("a", 64),
+		},
+		Operations: []executionOperationRequest{{
+			RequestID:        "retired-program",
+			PackagePath:      "owner",
+			Executable:       program,
+			WorkingDirectory: filepath.Join(root, "owner"),
+			Arguments:        []string{"-test.run=^TestPure$"},
+		}},
+	}
+	_, err = buildExecutionPlanDocument(
+		root,
+		map[string]bool{"owner": true},
+		map[string]bool{retiredConnectivityProgram: true},
+		semanticCatalog{entries: []semanticEntry{{
+			PackagePath: "owner",
+			Kind:        "test",
+			Name:        "TestPure",
+		}}},
+		request,
+	)
+	if err == nil || !strings.Contains(err.Error(), "retired executable tombstone") {
+		t.Fatalf("buildExecutionPlanDocument error = %v, want retired tombstone rejection", err)
 	}
 }
 

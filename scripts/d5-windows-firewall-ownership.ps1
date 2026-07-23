@@ -1,7 +1,11 @@
 Set-StrictMode -Version Latest
 
 $script:D5FirewallOwnershipSchemaVersion = 1
+$script:D5NetworkManifestSchemaVersion = 2
 $script:D5SHA256Pattern = '^[0-9a-f]{64}$'
+$script:D5GUIDPattern = '^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$'
+$script:D5RetiredConnectivityRelativeProgram = 'connectivity.test.exe'
+$script:D5RetiredConnectivityDisplayName = 'connectivity.test'
 # The cleanup history corpus is deliberately untracked local forensic evidence
 # (docs/.orchestration is gitignored), so an environment that never ran a D5
 # cleanup -- e.g. a fresh CI checkout -- legitimately has none of it.
@@ -31,6 +35,17 @@ function Test-D5OrdinalStringSetsEqual([string[]]$Expected, [string[]]$Actual) {
         }
     }
     return $true
+}
+
+function Assert-D5ExactPropertySet(
+    [object]$Value,
+    [string[]]$Expected,
+    [string]$Context
+) {
+    $actual = @($Value.PSObject.Properties.Name | ForEach-Object { [string]$_ })
+    if (-not (Test-D5OrdinalStringSetsEqual $Expected $actual)) {
+        throw "$Context has an invalid field set: $($actual -join ', ')"
+    }
 }
 
 function ConvertTo-D5ProgramStateSignature([string]$Program, [bool]$Exists, [string]$SHA256) {
@@ -79,6 +94,72 @@ function New-D5ExcludedEvidenceRule(
         LocalAddress = 'Any'
         RemoteAddress = 'Any'
     }
+}
+
+function New-D5RetiredProgramTombstoneRule(
+    [string]$Program,
+    [string]$DisplayName,
+    [string]$Action,
+    [string]$Protocol,
+    [string]$Guid
+) {
+    $ruleID = "$Protocol Query User{$Guid}$Program"
+    return [pscustomobject][ordered]@{
+        RuleID = $ruleID
+        InstanceID = $ruleID
+        Program = $Program
+        DisplayName = $DisplayName
+        Direction = 'Inbound'
+        Action = $Action
+        Profile = 'Private, Public'
+        Enabled = $true
+        PolicyStoreSourceType = 'Local'
+        Protocol = $Protocol
+        LocalPort = 'Any'
+        RemotePort = 'Any'
+        LocalAddress = 'Any'
+        RemoteAddress = 'Any'
+        ProgramExists = $false
+        ProgramSHA256 = ''
+        ProgramProcessIDs = @()
+    }
+}
+
+function ConvertTo-D5RetiredProgramRuleSignature([object]$Rule) {
+    $program = [IO.Path]::GetFullPath([string]$Rule.Program).ToLowerInvariant()
+    $identity = {
+        param([string]$Value)
+        $match = [regex]::Match(
+            $Value,
+            '(?i)^(?<protocol>TCP|UDP) Query User\{(?<guid>[0-9a-f-]{36})\}(?<program>.+)$'
+        )
+        if (-not $match.Success) {
+            return $Value
+        }
+        try {
+            $identityProgram = [IO.Path]::GetFullPath(
+                $match.Groups['program'].Value
+            ).ToLowerInvariant()
+        } catch {
+            return $Value
+        }
+        if ($identityProgram -cne $program) {
+            return $Value
+        }
+        return "$($match.Groups['protocol'].Value.ToUpperInvariant()) Query User{$($match.Groups['guid'].Value.ToUpperInvariant())}$program"
+    }
+    $signature = [ordered]@{
+        RuleID = & $identity (ConvertTo-D5SemanticValue $Rule.RuleID)
+        InstanceID = & $identity (ConvertTo-D5SemanticValue $Rule.InstanceID)
+        Program = $program
+        DisplayName = ConvertTo-D5SemanticValue $Rule.DisplayName
+    }
+    foreach ($field in $script:D5FirewallSemanticFields) {
+        if ($field -notin @('RuleID', 'InstanceID', 'Program')) {
+            $signature[$field] = ConvertTo-D5SemanticValue $Rule.$field
+        }
+    }
+    return $signature | ConvertTo-Json -Compress
 }
 
 function Get-D5CleanupOwnedProgramRoot([string]$Program) {
@@ -260,17 +341,57 @@ function Import-D5FirewallOwnershipEvidence(
     }
 
     $packageManifestPath = Join-Path $root 'scripts\d5-windows-network-packages.json'
-    $packages = @(Get-Content -LiteralPath $packageManifestPath -Raw | ConvertFrom-Json)
+    $networkManifest = Get-Content -LiteralPath $packageManifestPath -Raw | ConvertFrom-Json
+    Assert-D5ExactPropertySet `
+        $networkManifest `
+        @('Packages', 'RetiredProgramTombstone', 'SchemaVersion') `
+        'D5 network package manifest'
+    if ([int]$networkManifest.SchemaVersion -ne $script:D5NetworkManifestSchemaVersion) {
+        throw 'D5 network package manifest has an unsupported schema'
+    }
+    $tombstone = $networkManifest.RetiredProgramTombstone
+    Assert-D5ExactPropertySet `
+        $tombstone `
+        @('Action', 'DisplayName', 'RelativeProgram', 'TCPGuid', 'UDPGuid') `
+        'D5 retired connectivity tombstone'
+    if ([string]$tombstone.RelativeProgram -cne $script:D5RetiredConnectivityRelativeProgram -or
+        [string]$tombstone.DisplayName -cne $script:D5RetiredConnectivityDisplayName -or
+        [string]$tombstone.Action -cne 'Block' -or
+        [string]$tombstone.TCPGuid -notmatch $script:D5GUIDPattern -or
+        [string]$tombstone.UDPGuid -notmatch $script:D5GUIDPattern -or
+        [string]$tombstone.TCPGuid -ceq [string]$tombstone.UDPGuid) {
+        throw 'D5 network package manifest altered the exact retired connectivity tombstone'
+    }
+    $packages = @($networkManifest.Packages)
     $stableRelativePrograms = [Collections.Generic.List[string]]::new()
+    $packageNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $packagePaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($package in $packages) {
+        Assert-D5ExactPropertySet $package @('Name', 'Path') 'D5 network package record'
         $name = [string]$package.Name
-        if ($name -notmatch '^[a-z0-9][a-z0-9-]*$') {
+        $path = ([string]$package.Path).Replace('\', '/')
+        if ($path.StartsWith('./', [StringComparison]::Ordinal)) {
+            $path = $path.Substring(2)
+        }
+        if ($name -notmatch '^[a-z0-9][a-z0-9-]*$' -or
+            [string]::IsNullOrWhiteSpace($path) -or
+            $path.StartsWith('../', [StringComparison]::Ordinal) -or
+            -not $packageNames.Add($name) -or
+            -not $packagePaths.Add($path) -or
+            "$name.test.exe" -ceq $script:D5RetiredConnectivityRelativeProgram) {
             throw "D5 package manifest has an invalid executable name: $name"
         }
         $stableRelativePrograms.Add("$name.test.exe")
     }
+    if ($packages.Count -eq 0) {
+        throw 'D5 network package manifest has no active packages'
+    }
     foreach ($relativeProgram in @($manifest.D5.StableChildRelativePrograms)) {
-        $stableRelativePrograms.Add(([string]$relativeProgram).Replace('\', '/'))
+        $normalized = ([string]$relativeProgram).Replace('\', '/')
+        if ($normalized -ceq $script:D5RetiredConnectivityRelativeProgram) {
+            throw 'D5 stable child manifest reintroduced the retired connectivity executable'
+        }
+        $stableRelativePrograms.Add($normalized)
     }
 
     $excludedRules = [Collections.Generic.List[object]]::new()
@@ -363,6 +484,13 @@ function Import-D5FirewallOwnershipEvidence(
         CleanupOwnedRuleCount = $cleanupOwnedRuleCount
         CleanupOwnedProgramCount = $cleanupOwnedProgramCount
         CleanupOwnedSemanticPayloadSHA256 = $cleanupOwnedPayloadSHA256
+        RetiredProgramTombstone = [pscustomobject][ordered]@{
+            RelativeProgram = [string]$tombstone.RelativeProgram
+            DisplayName = [string]$tombstone.DisplayName
+            Action = [string]$tombstone.Action
+            TCPGuid = [string]$tombstone.TCPGuid
+            UDPGuid = [string]$tombstone.UDPGuid
+        }
         ExcludedRules = @($excludedRules)
         ExcludedProgramStates = @($excludedProgramStates | Sort-Object Program)
         ExcludedRuleCount = $expectedRuleCount
@@ -398,13 +526,50 @@ function New-D5FirewallOwnershipPolicy(
         }
     }
 
-    $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $retiredEntry = $Evidence.RetiredProgramTombstone
+    $retiredRelative = ([string]$retiredEntry.RelativeProgram).Replace(
+        '/',
+        [IO.Path]::DirectorySeparatorChar
+    )
+    $retiredProgram = [IO.Path]::GetFullPath((Join-Path $root $retiredRelative))
+    if ([string]$retiredEntry.RelativeProgram -cne $script:D5RetiredConnectivityRelativeProgram -or
+        -not (Test-D5ProgramUnderRoot $retiredProgram $root) -or
+        $authorized.Contains($retiredProgram)) {
+        throw 'D5 firewall ownership policy does not reserve the exact retired connectivity path'
+    }
+    $retiredPrograms = New-D5ProgramSet @($retiredProgram)
+    $retiredNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    [void]$retiredNames.Add([IO.Path]::GetFileName($retiredProgram))
+    $retiredRules = @(
+        New-D5RetiredProgramTombstoneRule `
+            ($retiredProgram.ToLowerInvariant()) `
+            ([string]$retiredEntry.DisplayName) `
+            ([string]$retiredEntry.Action) `
+            'TCP' `
+            ([string]$retiredEntry.TCPGuid)
+        New-D5RetiredProgramTombstoneRule `
+            ($retiredProgram.ToLowerInvariant()) `
+            ([string]$retiredEntry.DisplayName) `
+            ([string]$retiredEntry.Action) `
+            'UDP' `
+            ([string]$retiredEntry.UDPGuid)
+    )
+    $retiredRuleSignatures = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $retiredRuleIdentities = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase
+    )
+    foreach ($rule in $retiredRules) {
+        if (-not $retiredRuleSignatures.Add((ConvertTo-D5RetiredProgramRuleSignature $rule)) -or
+            -not $retiredRuleIdentities.Add([string]$rule.InstanceID)) {
+            throw 'D5 retired connectivity tombstone repeats a firewall identity'
+        }
+    }
+
+    $stableNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($program in $evidencePrograms) {
-        [void]$names.Add([IO.Path]::GetFileName($program))
+        [void]$stableNames.Add([IO.Path]::GetFileName($program))
     }
-    foreach ($name in @($Evidence.CleanupOwnedProgramNames)) {
-        [void]$names.Add([string]$name)
-    }
+    [void]$stableNames.Add([IO.Path]::GetFileName($retiredProgram))
     $hashes = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($hash in @($Evidence.D5HistoricalProgramSHA256) +
         @($Evidence.CleanupOwnedProgramSHA256) +
@@ -449,8 +614,8 @@ function New-D5FirewallOwnershipPolicy(
         AuthorizedProgramSet = $authorized
         ObservedRoots = $roots
         CleanupHistoryPresent = [bool]$Evidence.CleanupHistoryPresent
-        D5ProgramNames = @($names | Sort-Object)
-        D5ProgramNameSet = $names
+        D5ProgramNames = @($stableNames | Sort-Object)
+        StableProgramNameSet = $stableNames
         D5ProgramSHA256 = @($hashes | Sort-Object)
         D5ProgramSHA256Set = $hashes
         D5OwnedTemporaryPathPatterns = @($Evidence.D5OwnedTemporaryPathPatterns)
@@ -467,6 +632,12 @@ function New-D5FirewallOwnershipPolicy(
         ExcludedProgramCount = [int]$Evidence.ExcludedProgramCount
         ExcludedSemanticPayloadSHA256 = [string]$Evidence.ExcludedSemanticPayloadSHA256
         ExcludedExecutableStateProvenanceSHA256 = [string]$Evidence.ExcludedExecutableStateProvenanceSHA256
+        RetiredProgram = $retiredProgram
+        RetiredProgramSet = $retiredPrograms
+        RetiredProgramNameSet = $retiredNames
+        RetiredRules = $retiredRules
+        RetiredRuleSignatureSet = $retiredRuleSignatures
+        RetiredRuleIdentitySet = $retiredRuleIdentities
         EvidenceSources = @($Evidence.Sources)
     }
 }
@@ -477,34 +648,40 @@ function Test-D5ProgramObserved([string]$Program, [object]$Policy) {
             return $true
         }
     }
-    return $Policy.ExcludedProgramSet.Contains([IO.Path]::GetFullPath($Program))
+    $fullProgram = [IO.Path]::GetFullPath($Program)
+    return $Policy.RetiredProgramSet.Contains($fullProgram) -or
+        $Policy.ExcludedProgramSet.Contains($fullProgram) -or
+        (Test-D5ExternalStableProgramPath $fullProgram $Policy)
 }
 
-function Test-D5WindShareAttributedRule([object]$Rule, [object]$Policy) {
-    $program = [IO.Path]::GetFullPath([string]$Rule.Program)
-    if ($Policy.CleanupOwnedProgramPathSet.Contains($program)) {
-        return $true
-    }
-    foreach ($root in @($Policy.CleanupOwnedProgramRoots)) {
-        if (Test-D5ProgramUnderRoot $program ([string]$root)) {
-            return $true
+function Test-D5ExternalStableProgramPath([string]$Program, [object]$Policy) {
+    $program = [IO.Path]::GetFullPath($Program)
+    return -not (Test-D5ProgramUnderRoot $program $Policy.HarnessRoot) -and
+        $Policy.StableProgramNameSet.Contains([IO.Path]::GetFileName($program))
+}
+
+function Test-D5ExternalStableProgramNameRule([object]$Rule, [object]$Policy) {
+    return Test-D5ExternalStableProgramPath ([string]$Rule.Program) $Policy
+}
+
+function Select-D5ExactProcessIDs(
+    [string]$ExpectedImagePath,
+    [object[]]$Observations
+) {
+    foreach ($observation in $Observations) {
+        if ([string]::IsNullOrWhiteSpace([string]$observation.ImagePath)) {
+            throw "Cannot classify same-name PID $($observation.ProcessID) without an executable image path"
         }
     }
-    if ($Policy.D5ProgramNameSet.Contains([IO.Path]::GetFileName($program))) {
-        return $true
-    }
-    $hashProperty = $Rule.PSObject.Properties['ProgramSHA256']
-    if ($null -ne $hashProperty -and
-        -not [string]::IsNullOrWhiteSpace([string]$hashProperty.Value) -and
-        $Policy.D5ProgramSHA256Set.Contains([string]$hashProperty.Value)) {
-        return $true
-    }
-    foreach ($pattern in @($Policy.D5OwnedTemporaryPathPatterns)) {
-        if ($program -match [string]$pattern) {
-            return $true
-        }
-    }
-    return $false
+    return @(
+        $Observations |
+            Where-Object {
+                [string]$_.ImagePath -and
+                [string]$_.ImagePath -ieq $ExpectedImagePath
+            } |
+            ForEach-Object { [int]$_.ProcessID } |
+            Sort-Object -Unique
+    )
 }
 
 function Get-D5RuleProgramState([object]$Rule) {
@@ -530,8 +707,105 @@ function Get-D5RuleProgramState([object]$Rule) {
     }
 }
 
+function Assert-D5RetiredProgramRuntimeStates(
+    [object[]]$States,
+    [object]$Policy,
+    [string]$Phase
+) {
+    if ($States.Count -ne 1) {
+        throw "$Phase must observe exactly one retired connectivity runtime state"
+    }
+    $state = $States[0]
+    $program = [IO.Path]::GetFullPath([string]$state.Program)
+    if (-not $Policy.RetiredProgramSet.Contains($program)) {
+        throw "$Phase observed an unlisted retired program: $program"
+    }
+    $processProperty = $state.PSObject.Properties['ProcessIDs']
+    if ($null -eq $processProperty) {
+        throw "$Phase cannot prove the retired connectivity program has no matching process"
+    }
+    if ([bool]$state.Exists) {
+        throw "$Phase found the retired connectivity executable reintroduced: $program"
+    }
+    if (@($processProperty.Value).Count -ne 0) {
+        throw "$Phase found a live retired connectivity process: $program"
+    }
+}
+
+function Assert-D5ProgramsExcludeRetiredTombstone(
+    [string[]]$Programs,
+    [object]$Policy,
+    [string]$Context
+) {
+    foreach ($candidate in $Programs) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            throw "$Context contains an empty executable path"
+        }
+        if ($candidate.IndexOfAny([char[]]'*?') -ge 0) {
+            throw "$Context contains a wildcard executable path: $candidate"
+        }
+        $program = [IO.Path]::GetFullPath($candidate)
+        if ($Policy.RetiredProgramSet.Contains($program) -or
+            $Policy.RetiredProgramNameSet.Contains([IO.Path]::GetFileName($program))) {
+            throw "$Context reintroduced the retired connectivity executable: $program"
+        }
+    }
+}
+
+function Assert-D5RetiredProgramRule(
+    [object]$Rule,
+    [object]$Policy,
+    [string]$Phase
+) {
+    $program = [IO.Path]::GetFullPath([string]$Rule.Program)
+    if (-not $Policy.RetiredProgramSet.Contains($program)) {
+        throw "$Phase found an unlisted retired firewall program: $program"
+    }
+    $existsProperty = $Rule.PSObject.Properties['ProgramExists']
+    $hashProperty = $Rule.PSObject.Properties['ProgramSHA256']
+    $processProperty = $Rule.PSObject.Properties['ProgramProcessIDs']
+    if ($null -eq $existsProperty -or $null -eq $hashProperty -or $null -eq $processProperty) {
+        throw "$Phase lacks inert runtime evidence for the retired connectivity rule"
+    }
+    if ([bool]$existsProperty.Value -or
+        -not [string]::IsNullOrEmpty([string]$hashProperty.Value)) {
+        throw "$Phase found the retired connectivity executable reintroduced: $program"
+    }
+    if (@($processProperty.Value).Count -ne 0) {
+        throw "$Phase found a live retired connectivity process: $program"
+    }
+    $signature = ConvertTo-D5RetiredProgramRuleSignature $Rule
+    if (-not $Policy.RetiredRuleSignatureSet.Contains($signature)) {
+        throw "$Phase found an altered retired connectivity firewall rule: $signature"
+    }
+}
+
+function Assert-D5RetiredProgramRuleSet(
+    [object[]]$Rules,
+    [object]$Policy,
+    [string]$Phase
+) {
+    # Zero rules means the host owner removed the obsolete pair. Any surviving
+    # fragment must remain the exact historical pair; accepting a half-pair
+    # would turn the tombstone into a general stable-root allowlist.
+    if ($Rules.Count -eq 0) {
+        return
+    }
+    if ($Rules.Count -ne $Policy.RetiredRuleSignatureSet.Count) {
+        throw "$Phase requires either zero retired rules or the exact retired TCP/UDP pair"
+    }
+    $actual = @($Rules | ForEach-Object {
+        Assert-D5RetiredProgramRule $_ $Policy $Phase
+        ConvertTo-D5RetiredProgramRuleSignature $_
+    })
+    if (-not (Test-D5OrdinalStringSetsEqual @($Policy.RetiredRuleSignatureSet) $actual)) {
+        throw "$Phase altered the exact retired connectivity TCP/UDP pair"
+    }
+}
+
 function New-D5FirewallOwnershipSnapshot([object[]]$Rules, [object]$Policy) {
     $stableRules = [Collections.Generic.List[object]]::new()
+    $retiredRules = [Collections.Generic.List[object]]::new()
     $pinnedRules = [Collections.Generic.List[object]]::new()
     $unrelatedRules = [Collections.Generic.List[object]]::new()
     $excludedProgramStates = @{}
@@ -545,52 +819,62 @@ function New-D5FirewallOwnershipSnapshot([object[]]$Rules, [object]$Policy) {
             $stableRules.Add($rule)
             continue
         }
+        if ($Policy.RetiredProgramSet.Contains($program)) {
+            Assert-D5RetiredProgramRule $rule $Policy 'Preflight'
+            $state = Get-D5RuleProgramState $rule
+            $stateSignature = ConvertTo-D5ProgramStateSignature `
+                $state.Program `
+                $state.Exists `
+                $state.SHA256
+            if ($excludedProgramStates.ContainsKey($program) -and
+                [string]$excludedProgramStates[$program] -cne $stateSignature) {
+                throw "Firewall observations disagree about executable state for $program"
+            }
+            $excludedProgramStates[$program] = $stateSignature
+            $retiredRules.Add($rule)
+            continue
+        }
         if (Test-D5ProgramUnderRoot $program $Policy.HarnessRoot) {
             throw "Preflight found an unmanifested program under the stable harness root: $program"
         }
 
-        $state = Get-D5RuleProgramState $rule
-        $stateSignature = ConvertTo-D5ProgramStateSignature $state.Program $state.Exists $state.SHA256
-        if ($excludedProgramStates.ContainsKey($program) -and
-            [string]$excludedProgramStates[$program] -cne $stateSignature) {
-            throw "Firewall observations disagree about executable state for $program"
-        }
+        # Outside-root executable state has no ownership meaning. Record only
+        # the normalized program identity so an unreadable or stale host binary
+        # cannot become a preflight dependency; ActiveStore debt owns all dynamic
+        # rule telemetry and its limits.
+        $stateSignature = ConvertTo-D5ProgramStateSignature $program $false ''
         $excludedProgramStates[$program] = $stateSignature
 
         $signature = ConvertTo-D5RuleSignature $rule
-        if ($Policy.ExcludedProgramSet.Contains($program)) {
-            # Excluded pins were captured on the machine that owns the cleanup
-            # history corpus; observing one without the corpus means the
-            # forensic record was lost, not that this environment is fresh.
-            if (-not $Policy.CleanupHistoryPresent) {
-                throw "Preflight observed an evidence-pinned excluded rule while the cleanup history corpus is missing: $program"
-            }
-            if (-not $Policy.ExcludedRuleSignatureSet.Contains($signature)) {
-                throw "Preflight found drift on an evidence-pinned excluded program: $program"
-            }
-            if (Test-D5WindShareAttributedRule $rule $Policy) {
-                throw "Preflight found a WindShare-attributable random/temp firewall program: $program"
-            }
+        # Outside the canonical harness namespace, names, historical hashes and
+        # cleanup provenance are observational metadata only. Exact historical
+        # pins retain their classification when unchanged, but neither a pin nor
+        # a same-name executable can acquire D5 ownership.
+        if ($Policy.ExcludedProgramSet.Contains($program) -and
+            $Policy.ExcludedRuleSignatureSet.Contains($signature)) {
             $pinnedRules.Add($rule)
             continue
-        }
-        if (Test-D5WindShareAttributedRule $rule $Policy) {
-            throw "Preflight found a WindShare-attributable random/temp firewall program: $program"
         }
         $unrelatedRules.Add($rule)
     }
 
-    $excludedRules = @($pinnedRules) + @($unrelatedRules)
+    Assert-D5RetiredProgramRuleSet @($retiredRules) $Policy 'Preflight'
+
+    $excludedRules = @($retiredRules) + @($pinnedRules) + @($unrelatedRules)
     $ruleSignatures = @($excludedRules | ForEach-Object { ConvertTo-D5RuleSignature $_ })
     $programStateSignatures = @($excludedProgramStates.Values | ForEach-Object { [string]$_ })
     $excludedPrograms = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $pinnedPrograms = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $retiredPrograms = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $unrelatedPrograms = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($rule in $excludedRules) {
         [void]$excludedPrograms.Add([IO.Path]::GetFullPath([string]$rule.Program))
     }
     foreach ($rule in $pinnedRules) {
         [void]$pinnedPrograms.Add([IO.Path]::GetFullPath([string]$rule.Program))
+    }
+    foreach ($rule in $retiredRules) {
+        [void]$retiredPrograms.Add([IO.Path]::GetFullPath([string]$rule.Program))
     }
     foreach ($rule in $unrelatedRules) {
         [void]$unrelatedPrograms.Add([IO.Path]::GetFullPath([string]$rule.Program))
@@ -601,6 +885,8 @@ function New-D5FirewallOwnershipSnapshot([object[]]$Rules, [object]$Policy) {
         EvidenceProgramCount = [int]$Policy.ExcludedProgramCount
         EvidenceSemanticPayloadSHA256 = [string]$Policy.ExcludedSemanticPayloadSHA256
         EvidenceExecutableStateProvenanceSHA256 = [string]$Policy.ExcludedExecutableStateProvenanceSHA256
+        RetiredTombstoneRuleCount = $retiredRules.Count
+        RetiredTombstoneProgramCount = $retiredPrograms.Count
         PinnedExcludedRuleCount = $pinnedRules.Count
         PinnedExcludedProgramCount = $pinnedPrograms.Count
         UnrelatedExcludedRuleCount = $unrelatedRules.Count
@@ -614,6 +900,7 @@ function New-D5FirewallOwnershipSnapshot([object[]]$Rules, [object]$Policy) {
     }
     return [pscustomobject]@{
         StableRules = @($stableRules)
+        RetiredTombstoneRules = @($retiredRules)
         PinnedExcludedRules = @($pinnedRules)
         UnrelatedExcludedRules = @($unrelatedRules)
         State = $state
@@ -626,10 +913,13 @@ function Assert-D5FirewallOwnershipState([object]$State) {
     }
     $rules = @($State.RuleSignatures | ForEach-Object { [string]$_ })
     $programs = @($State.ProgramStateSignatures | ForEach-Object { [string]$_ })
-    if ([int]$State.PinnedExcludedRuleCount + [int]$State.UnrelatedExcludedRuleCount -ne
+    # Rule classifications are disjoint, but a host-owned program may have one
+    # historical pinned rule and one drifted rule. Program telemetry therefore
+    # overlaps by design and must not be treated as an ownership partition.
+    if ([int]$State.RetiredTombstoneRuleCount +
+            [int]$State.PinnedExcludedRuleCount +
+            [int]$State.UnrelatedExcludedRuleCount -ne
             [int]$State.ExcludedRuleCount -or
-        [int]$State.PinnedExcludedProgramCount + [int]$State.UnrelatedExcludedProgramCount -ne
-            [int]$State.ExcludedProgramCount -or
         $rules.Count -ne [int]$State.ExcludedRuleCount -or
         $programs.Count -ne [int]$State.ExcludedProgramCount -or
         (Get-D5OrdinalPayloadSHA256 $rules) -cne [string]$State.ExcludedRulePayloadSHA256 -or
@@ -653,27 +943,21 @@ function Assert-D5FirewallOwnershipBaseline(
     Assert-D5FirewallOwnershipState $Baseline
     $current = (New-D5FirewallOwnershipSnapshot $Rules $Policy).State
     Assert-D5FirewallOwnershipState $current
-    $scalarFields = @(
+    # Only durable policy provenance and the inert stable-root tombstone belong
+    # to this fail-closed baseline. Outside-root observations remain in both
+    # snapshots for evidence, but their identities and executable state are
+    # governed exclusively by bounded ActiveStore telemetry.
+    $stableFields = @(
         'EvidenceRuleCount',
         'EvidenceProgramCount',
         'EvidenceSemanticPayloadSHA256',
         'EvidenceExecutableStateProvenanceSHA256',
-        'PinnedExcludedRuleCount',
-        'PinnedExcludedProgramCount',
-        'UnrelatedExcludedRuleCount',
-        'UnrelatedExcludedProgramCount',
-        'ExcludedRuleCount',
-        'ExcludedProgramCount',
-        'ExcludedRulePayloadSHA256',
-        'ExcludedExecutableStateSHA256'
+        'RetiredTombstoneRuleCount',
+        'RetiredTombstoneProgramCount'
     )
-    foreach ($field in $scalarFields) {
+    foreach ($field in $stableFields) {
         if ([string]$Baseline.$field -cne [string]$current.$field) {
-            throw "$Phase changed excluded firewall ownership field $field"
+            throw "$Phase changed stable firewall ownership field $field"
         }
-    }
-    if (-not (Test-D5OrdinalStringSetsEqual @($Baseline.RuleSignatures) @($current.RuleSignatures)) -or
-        -not (Test-D5OrdinalStringSetsEqual @($Baseline.ProgramStateSignatures) @($current.ProgramStateSignatures))) {
-        throw "$Phase changed excluded firewall identities or executable state"
     }
 }

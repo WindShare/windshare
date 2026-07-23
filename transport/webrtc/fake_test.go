@@ -6,14 +6,14 @@ import (
 	"sync"
 
 	pion "github.com/pion/webrtc/v4"
-	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/channeltest"
 )
 
 var errFakeClosed = errors.New("fake DataChannel is closed")
 
 type fakeSent struct {
-	frame    session.Frame
+	frame    framechannel.Frame
 	terminal bool
 }
 
@@ -59,7 +59,7 @@ func newFakeDataChannel(ready pion.DataChannelState) *fakeDataChannel {
 		protocol:       ChannelProtocol,
 		ordered:        true,
 		ready:          ready,
-		maximumMessage: session.MaxFrameSize,
+		maximumMessage: framechannel.MaxFrameSize,
 		sent:           make(chan fakeSent, 256),
 		terminalAck:    make(chan struct{}, 8),
 	}
@@ -180,7 +180,7 @@ func (f *fakeDataChannel) Send(data []byte) error {
 	f.buffered += f.sendIncrement
 	sent := f.sent
 	f.mu.Unlock()
-	sent <- fakeSent{frame: session.Frame(data), terminal: terminal}
+	sent <- fakeSent{frame: framechannel.Frame(data), terminal: terminal}
 	return nil
 }
 
@@ -303,7 +303,7 @@ func (f *fakeDataChannel) fail(err error) {
 	}
 }
 
-func (f *fakeDataChannel) deliverBinary(frame session.Frame) {
+func (f *fakeDataChannel) deliverBinary(frame framechannel.Frame) {
 	f.deliver(pion.DataChannelMessage{Data: frame})
 }
 
@@ -354,7 +354,7 @@ func (f *fakeDataChannel) receiveSent(ctx context.Context) (channeltest.SentFram
 	}
 }
 
-func (f *fakeDataChannel) deliverTerminal(ctx context.Context, frame session.Frame) error {
+func (f *fakeDataChannel) deliverTerminal(ctx context.Context, frame framechannel.Frame) error {
 	f.deliverText(terminalIntentControl)
 	f.deliverBinary(frame)
 	select {

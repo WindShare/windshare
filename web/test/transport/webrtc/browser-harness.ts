@@ -264,71 +264,76 @@ export async function runPionInterop(apiBase = '/d2-pion'): Promise<PionInteropR
     lowWaterObserved = true
   }, { once: true })
 
-  await negotiateWithPion(peer, apiBase)
-  await channel.opened
-  await channel.send(patternedFrame(config.clientProbeMarker, config.maxFrameSize))
-  const burst = patternedFrame(config.clientBurstMarker, config.maxFrameSize)
-  const clientBurstMessages = await fillToHighWater(channel, raw, burst)
-  const highWaterObserved = raw.bufferedAmount >= config.highWaterBytes
+  try {
+    await negotiateWithPion(peer, apiBase)
+    await channel.opened
+    await channel.send(patternedFrame(config.clientProbeMarker, config.maxFrameSize))
+    const burst = patternedFrame(config.clientBurstMarker, config.maxFrameSize)
+    const clientBurstMessages = await fillToHighWater(channel, raw, burst)
+    const highWaterObserved = raw.bufferedAmount >= config.highWaterBytes
 
-  const controller = new AbortController()
-  let cancellationSettled = false
-  const canceledSend = channel.send(
-    Uint8Array.of(config.canceledSendMarker),
-    controller.signal,
-  )
-  canceledSend.then(() => {
-    cancellationSettled = true
-  }).catch(() => undefined)
-  await Promise.resolve()
-  const cancellationWaitObserved = highWaterObserved && !cancellationSettled
-  controller.abort(new DOMException('Pion interop cancellation', 'AbortError'))
-  const cancellationError = await errorName(canceledSend)
+    const controller = new AbortController()
+    let cancellationSettled = false
+    const canceledSend = channel.send(
+      Uint8Array.of(config.canceledSendMarker),
+      controller.signal,
+    )
+    canceledSend.then(() => {
+      cancellationSettled = true
+    }).catch(() => undefined)
+    await Promise.resolve()
+    const cancellationWaitObserved = highWaterObserved && !cancellationSettled
+    controller.abort(new DOMException('Pion interop cancellation', 'AbortError'))
+    const cancellationError = await errorName(canceledSend)
 
-  await channel.send(Uint8Array.of(config.clientFinishedMarker))
-  await channel.done
-  const serverFrames = await serverFramesPromise
-  const server = await fetchJSON<Record<string, unknown>>(`${apiBase}/result`)
-  const serverErrors = stringArray(server['errors'])
-  await channel.close()
-  const result: PionInteropResult = {
-    browser: {
-      label: raw.label,
-      protocol: raw.protocol,
-      ordered: raw.ordered,
-      reliable: raw.maxPacketLifeTime === null && raw.maxRetransmits === null,
-      negotiated: raw.negotiated,
-      maximumMessageSize: peer.sctp?.maxMessageSize ?? 0,
-      highWaterObserved,
-      lowWaterObserved,
-      cancellationWaitObserved,
-      cancellationError,
-      canceledMarkerReceived: serverErrors.some(
-        (error) => error.includes(`marker=0x${config.canceledSendMarker.toString(16)}`),
-      ),
-      exactServerProbe: containsSummary(
+    await channel.send(Uint8Array.of(config.clientFinishedMarker))
+    await channel.done
+    const serverFrames = await serverFramesPromise
+    const server = await fetchJSON<Record<string, unknown>>(`${apiBase}/result`)
+    const serverErrors = stringArray(server['errors'])
+    await channel.close()
+    return {
+      browser: {
+        label: raw.label,
+        protocol: raw.protocol,
+        ordered: raw.ordered,
+        reliable: raw.maxPacketLifeTime === null && raw.maxRetransmits === null,
+        negotiated: raw.negotiated,
+        maximumMessageSize: peer.sctp?.maxMessageSize ?? 0,
+        highWaterObserved,
+        lowWaterObserved,
+        cancellationWaitObserved,
+        cancellationError,
+        canceledMarkerReceived: serverErrors.some(
+          (error) => error.includes(`marker=0x${config.canceledSendMarker.toString(16)}`),
+        ),
+        exactServerProbe: containsSummary(
+          serverFrames,
+          patternedFrame(config.serverProbeMarker, config.maxFrameSize),
+        ),
+        serverBurstMessages: serverFrames.filter(
+          (frame) =>
+            frame.marker === config.serverBurstMarker &&
+            frame.size === config.maxFrameSize,
+        ).length,
+        serverFinished: serverFrames.some(
+          (frame) => frame.marker === config.serverFinishedMarker && frame.size === 1,
+        ),
+        terminalLast: serverFrames.at(-1)?.marker === config.serverTerminalMarker &&
+          serverFrames.at(-1)?.size === config.terminalFrameBytes,
+        channelState: channel.state,
+        channelReason: errorNameOf(channel.reason),
+        clientBurstMessages,
         serverFrames,
-        patternedFrame(config.serverProbeMarker, config.maxFrameSize),
-      ),
-      serverBurstMessages: serverFrames.filter(
-        (frame) =>
-          frame.marker === config.serverBurstMarker &&
-          frame.size === config.maxFrameSize,
-      ).length,
-      serverFinished: serverFrames.some(
-        (frame) => frame.marker === config.serverFinishedMarker && frame.size === 1,
-      ),
-      terminalLast: serverFrames.at(-1)?.marker === config.serverTerminalMarker &&
-        serverFrames.at(-1)?.size === config.terminalFrameBytes,
-      channelState: channel.state,
-      channelReason: errorNameOf(channel.reason),
-      clientBurstMessages,
-      serverFrames,
-    },
-    server,
+      },
+      server,
+    }
+  } catch (cause) {
+    const server = await fetchJSON<Record<string, unknown>>(`${apiBase}/result`)
+    throw new Error(`Pion interop failed; server=${JSON.stringify(server)}`, { cause })
+  } finally {
+    peer.close()
   }
-  peer.close()
-  return result
 }
 
 async function createPeerPair(): Promise<PeerPair> {

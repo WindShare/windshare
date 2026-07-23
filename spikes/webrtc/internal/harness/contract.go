@@ -3,14 +3,13 @@ package harness
 import (
 	"time"
 
-	"github.com/windshare/windshare/core/session"
-	"github.com/windshare/windshare/relay/protocol"
+	"github.com/windshare/windshare/core/framechannel"
 )
 
 const (
 	DefaultAddress  = "127.0.0.1:17845"
 	ChannelLabel    = "windshare-frame-channel"
-	ChannelProtocol = "windshare-v1"
+	ChannelProtocol = "windshare-v2"
 
 	lowWaterMarkBytes  uint64 = 256 * 1024
 	highWaterMarkBytes uint64 = 1024 * 1024
@@ -27,7 +26,7 @@ const (
 	backpressureTimeout = 15 * time.Second
 )
 
-var spikeSessionID = protocol.SessionID{1, 2, 3, 4, 5, 6, 7, 8}
+const spikeSessionID = "AQIDBAUGBwg"
 
 type PublicConfig struct {
 	SessionID          string `json:"sessionId"`
@@ -48,10 +47,10 @@ type PublicConfig struct {
 
 func publicConfig() PublicConfig {
 	return PublicConfig{
-		SessionID:          spikeSessionID.String(),
+		SessionID:          spikeSessionID,
 		ChannelLabel:       ChannelLabel,
 		ChannelProtocol:    ChannelProtocol,
-		MaxFrameSize:       session.MaxFrameSize,
+		MaxFrameSize:       framechannel.MaxFrameSize,
 		LowWaterMark:       lowWaterMarkBytes,
 		HighWaterMark:      highWaterMarkBytes,
 		MaxBurstMessages:   maxBurstMessages,

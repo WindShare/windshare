@@ -24,7 +24,6 @@ export interface BinaryPaths {
   readonly directory: string
   readonly windshare: string
   readonly relay: string
-  readonly hostileSender: string
 }
 
 interface StableBuildLeaseRecord {
@@ -180,7 +179,7 @@ function parseStableBinaryManifest(raw: string): StableBinaryManifest {
     typeof manifest.recordedAt !== 'string' ||
     !Number.isFinite(Date.parse(manifest.recordedAt)) ||
     !Array.isArray(manifest.binaries) ||
-    manifest.binaries.length !== 3
+    manifest.binaries.length !== 2
   ) {
     throw new Error('The stable Windows binary manifest has an invalid shape')
   }
@@ -211,7 +210,6 @@ async function loadStableWindowsBinaries(directory: string): Promise<BinaryPaths
   const outputs = {
     windshare: join(directory, 'windshare.exe'),
     relay: join(directory, 'wsrelay.exe'),
-    hostileSender: join(directory, 'hostile-sender.exe'),
   }
   const manifestPath = process.env.WINDSHARE_D5_CHILD_MANIFEST
   if (manifestPath === undefined || manifestPath.length === 0) {

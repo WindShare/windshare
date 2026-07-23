@@ -2,14 +2,9 @@ import process from 'node:process'
 
 import { expect, test, type Page } from '@playwright/test'
 
-import { submitSeparateKey } from './test'
+import { submitCapabilityKey } from './capability-input'
 
-interface C4Harness {
-  mountC4Harness(mode: 'key' | 'key-pending'): Promise<void>
-  failPendingJoin(): void
-}
-
-const HARNESS_PATH = '/test/browser/c4-harness.ts'
+const SHARE_WITHOUT_FRAGMENT = '/s/AAAAAAAAAAAAAAAA'
 const MAIN_CONFIG_TIMEOUT_PROBE_MS = 3_000
 const temporaryKey = process.env.WINDSHARE_ARTIFACT_PROBE_KEY
 
@@ -17,13 +12,9 @@ if (temporaryKey === undefined || temporaryKey === '') {
   throw new Error('Separate-key artifact probe requires a temporary key')
 }
 
-async function mountKeyEntry(page: Page, pendingJoin: boolean) {
-  await page.goto('/')
-  const mode: 'key' | 'key-pending' = pendingJoin ? 'key-pending' : 'key'
-  await page.evaluate(async ({ path, mode }) => {
-    const harness = (await import(path)) as C4Harness
-    await harness.mountC4Harness(mode)
-  }, { path: HARNESS_PATH, mode })
+async function mountKeyEntry(page: Page) {
+  await page.goto(SHARE_WITHOUT_FRAGMENT)
+  await expect(page.getByLabel('Separate key')).toBeVisible()
 }
 
 async function disableSubmitAfterInput(page: Page): Promise<void> {
@@ -38,11 +29,11 @@ async function disableSubmitAfterInput(page: Page): Promise<void> {
 }
 
 test('sanitizes a helper failure after the key field was filled', async ({ page }) => {
-  await mountKeyEntry(page, false)
+  await mountKeyEntry(page)
   await disableSubmitAfterInput(page)
 
-  await expect(submitSeparateKey(page, temporaryKey)).rejects.toThrow(
-    'The browser could not submit the temporary separate key',
+  await expect(submitCapabilityKey(page, temporaryKey)).rejects.toThrow(
+    'The browser could not submit the temporary capability key',
   )
   throw new Error('Forced sanitized separate-key helper failure')
 })
@@ -52,23 +43,11 @@ test.describe('production action timing', () => {
 
   test('keeps the test-wide timeout artifact capability-free', async ({ page }) => {
     test.setTimeout(MAIN_CONFIG_TIMEOUT_PROBE_MS)
-    await mountKeyEntry(page, false)
+    await mountKeyEntry(page)
     await disableSubmitAfterInput(page)
     await expect(page.getByRole('button', { name: 'Open share' })).toBeEnabled()
 
-    await submitSeparateKey(page, temporaryKey)
+    await submitCapabilityKey(page, temporaryKey)
     throw new Error('Separate-key timeout probe unexpectedly submitted')
   })
-})
-
-test('keeps a late gateway failure artifact on an empty retry form', async ({ page }) => {
-  await mountKeyEntry(page, true)
-  await submitSeparateKey(page, temporaryKey)
-  await page.evaluate(async (path) => {
-    const harness = (await import(path)) as C4Harness
-    harness.failPendingJoin()
-  }, HARNESS_PATH)
-  await expect(page.getByLabel('Separate key')).toHaveValue('')
-
-  throw new Error('Forced late gateway failure after capability destruction')
 })

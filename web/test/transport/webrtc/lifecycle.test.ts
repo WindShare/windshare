@@ -109,7 +109,7 @@ describe('WebRTC DataChannel construction', () => {
 
   it.each([
     ['label', { label: 'wrong-label' }],
-    ['protocol', { protocol: 'windshare-v1-invalid' }],
+    ['protocol', { protocol: 'windshare-v2-invalid' }],
     ['ordering', { ordered: false }],
     ['packet lifetime', { maxPacketLifeTime: 1 }],
     ['retransmits', { maxRetransmits: 1 }],
@@ -125,7 +125,7 @@ describe('WebRTC DataChannel construction', () => {
   })
 
   it('closes a factory-owned raw channel when actual settings are invalid', () => {
-    const raw = new FakeRTCDataChannel({ protocol: 'windshare-v1-invalid' })
+    const raw = new FakeRTCDataChannel({ protocol: 'windshare-v2-invalid' })
     const peer = new FakeRTCPeerConnection(raw)
 
     expect(() => createWindShareFrameChannel(peer.asPeer())).toThrow(

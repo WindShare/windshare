@@ -1,9 +1,9 @@
-// Package testvec 读取仓库 testvectors/ 下的黄金向量文件(执行计划 §7,T0.3)。
+// Package testvec reads the canonical cross-runtime fixtures in core/testvectors.
 //
-// 跨实现对拍以仓库 checkout 为准:core 的模块 zip 不含 testvectors/,故本包
-// 不内置路径,只按调用方(core 各包的测试)传入的相对路径读取。信封格式与
-// 编码约定见 testvectors/README.md;cases 保持 json.RawMessage,由消费测试
-// 按 kind 解成具体结构——信封解析器不理解具体 kind,新增向量类别无需改动本包。
+// Keeping the sole vector authority inside the core module makes released module
+// tests self-contained while Go and TypeScript still consume the exact same bytes.
+// Callers provide paths because the envelope parser intentionally knows nothing
+// about kind-specific schemas.
 package testvec
 
 import (

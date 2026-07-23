@@ -2,7 +2,9 @@ package keyderiv_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"testing"
 
 	"github.com/windshare/windshare/core/internal/keyderiv"
@@ -24,6 +26,65 @@ func mustHex(s string) []byte {
 		panic(err)
 	}
 	return b
+}
+
+func mustB64(s string) []byte {
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func TestSuite02FrozenKeyTree(t *testing.T) {
+	share := mustB64("QEFCQ0RFRkdISUpLTE1OTw==")
+	pkHash := mustB64("JEKgoDij26RUJt97fcJPxA==")
+	file := mustB64("cHFyc3R1dnd4eXp7fH1+fw==")
+	revision := mustB64("kJGSk5SVlpeYmZqbnJ2enw==")
+	descriptor, err := keyderiv.V2DescriptorKey(secretA, pkHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, _ := keyderiv.V2CatalogKey(secretA, share)
+	fileObject, _ := keyderiv.V2FileObjectKey(secretA, share, file)
+	revisionKey, _ := keyderiv.V2RevisionKey(fileObject, revision)
+	segment, _ := keyderiv.V2FileSegmentKey(revisionKey, 0)
+	wants := [][]byte{
+		mustB64("QJf/rkymcTqujczmpzms5e8PRSI08a/0Fm7ica6GlQ4="),
+		mustB64("r9W4bwpszHnYVwoyRjZxuUXGtSTKZ00/CkDK544TWRA="),
+		mustB64("4rzGG8yKKJdsSeoyXXqLxF+f8ep/ziFK/7s7CVkcgY0="),
+		mustB64("XMN/TJMjXIrfGygoJr8lGJU68JPoRd/5fHdTa3TGWis="),
+		mustB64("06GFV5Og2rr0wOuHIdcK/YuWlwQyhhf8s8MWtcf10Tw="),
+	}
+	for index, got := range [][]byte{descriptor, catalog, fileObject, revisionKey, segment} {
+		if !bytes.Equal(got, wants[index]) {
+			t.Fatalf("suite-0x02 key %d = %x, want %x", index, got, wants[index])
+		}
+	}
+	if bytes.Equal(descriptor, catalog) || bytes.Equal(fileObject, revisionKey) {
+		t.Fatal("suite-0x02 key domains collapsed")
+	}
+}
+
+func TestSuite02RejectsEveryWrongWidth(t *testing.T) {
+	secret := make([]byte, keyderiv.V2ReadSecretBytes)
+	id := make([]byte, keyderiv.V2IdentityBytes)
+	key := make([]byte, keyderiv.KeyBytes)
+	tests := []func() error{
+		func() error { _, err := keyderiv.V2DescriptorKey(secret[:15], id); return err },
+		func() error { _, err := keyderiv.V2DescriptorKey(secret, id[:15]); return err },
+		func() error { _, err := keyderiv.V2CatalogKey(secret, id[:15]); return err },
+		func() error { _, err := keyderiv.V2FileObjectKey(secret, id, id[:15]); return err },
+		func() error { _, err := keyderiv.V2RevisionKey(key[:31], id); return err },
+		func() error { _, err := keyderiv.V2RevisionKey(key, id[:15]); return err },
+		func() error { _, err := keyderiv.V2FileSegmentKey(key[:31], 0); return err },
+		func() error { _, err := keyderiv.V2SessionAuthKey(secret, id[:15]); return err },
+	}
+	for index, test := range tests {
+		if err := test(); !errors.Is(err, keyderiv.ErrV2KeyMaterial) {
+			t.Fatalf("wrong-width case %d error = %v", index, err)
+		}
+	}
 }
 
 func TestKAT(t *testing.T) {

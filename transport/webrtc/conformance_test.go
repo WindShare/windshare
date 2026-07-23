@@ -6,7 +6,7 @@ import (
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
-	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/channeltest"
 )
 
@@ -25,11 +25,11 @@ func TestFrameChannelConformance(t *testing.T) {
 		return channeltest.Fixture{
 			Channel:     channel,
 			ReceiveSent: fake.receiveSent,
-			Deliver: func(frame session.Frame) error {
+			Deliver: func(frame framechannel.Frame) error {
 				fake.deliverBinary(frame)
 				return nil
 			},
-			DeliverTerminal: func(frame session.Frame) error {
+			DeliverTerminal: func(frame framechannel.Frame) error {
 				ctx, cancel := context.WithTimeout(context.Background(), conformanceTimeout)
 				defer cancel()
 				return fake.deliverTerminal(ctx, frame)

@@ -9,8 +9,9 @@ import (
 	"testing"
 )
 
-// 与 web/test/vectors.test.ts 消费同一份样例文件,双端共同锁定信封 schema。
-const sampleRelPath = "../../../testvectors/envelope-sample.json"
+// The Go and TypeScript consumers share this file so neither can silently fork
+// the language-neutral envelope contract.
+const sampleRelPath = "../../testvectors/envelope-sample.json"
 
 func TestLoadEnvelopeSample(t *testing.T) {
 	f, err := Load(sampleRelPath)

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "messageKinds": {
+    "offer": 16,
+    "answer": 17,
+    "candidate": 18
+  },
+  "peerPathIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "attemptIdB64": "ISIjJCUmJygpKissLS4vMA==",
+  "senderPublicKeyB64": "C0eCPnEJXdWb54rCccV27zifh7ZFYasHz5pOvNAtIEE=",
+  "controlBinding": {
+    "shareInstanceB64": "QUJDREVGR0hJSktMTU5PUA==",
+    "protocolSessionIdB64": "YWJjZGVmZ2hpamtsbW5vcA==",
+    "laneId": 16909060,
+    "laneEpoch": 2,
+    "direction": 1,
+    "operationIdB64": "gYKDhIWGh4iJiouMjY6PkA=="
+  },
+  "offer": {
+    "sdp": "v=0\r\na=setup:actpass\r\n",
+    "bodyB64": "hAFQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wdnY9MA0KYT1zZXR1cDphY3RwYXNzDQo="
+  },
+  "answer": {
+    "sdp": "v=0\r\na=setup:active\r\n",
+    "bodyB64": "hAFQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wdXY9MA0KYT1zZXR1cDphY3RpdmUNCg==",
+    "sequence": "9",
+    "unsignedWrapperCborB64": "ogABAYQBUAECAwQFBgcICQoLDA0ODxBQISIjJCUmJygpKissLS4vMHV2PTANCmE9c2V0dXA6YWN0aXZlDQo=",
+    "controlPreimageB64": "d2luZHNoYXJlL3YyIGNvbnRyb2wvb3BlcmF0aW9uAEFCQ0RFRkdISUpLTE1OT1BhYmNkZWZnaGlqa2xtbm9wAQIDBAAAAAIBAAAAAAAAAAkRgYKDhIWGh4iJiouMjY6PkI3hpWYer6ZB64/gYQgNnNNPKOuyyBEVKXd7MKDaM5I6",
+    "controlSignatureB64": "Bhkv+qS76sFafccZ1cuFA52eg8gnwwQxVVWbOBDdRl5YLMGGaltdtn5RXS7O8ImIcPoaJaoidZSXdk9ue+TpAg==",
+    "signedBodyB64": "owABAYQBUAECAwQFBgcICQoLDA0ODxBQISIjJCUmJygpKissLS4vMHV2PTANCmE9c2V0dXA6YWN0aXZlDQoY/1hABhkv+qS76sFafccZ1cuFA52eg8gnwwQxVVWbOBDdRl5YLMGGaltdtn5RXS7O8ImIcPoaJaoidZSXdk9ue+TpAg=="
+  },
+  "candidate": {
+    "candidate": "candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host",
+    "sdpMid": "data",
+    "sdpMLineIndex": 0,
+    "usernameFragment": "windshare",
+    "bodyB64": "hwFQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8weDRjYW5kaWRhdGU6MSAxIHVkcCAyMTIyMjYwMjIzIDE5Mi4wLjIuMSA1MDAwIHR5cCBob3N0ZGRhdGEAaXdpbmRzaGFyZQ==",
+    "sequence": "10",
+    "unsignedWrapperCborB64": "ogABAYcBUAECAwQFBgcICQoLDA0ODxBQISIjJCUmJygpKissLS4vMHg0Y2FuZGlkYXRlOjEgMSB1ZHAgMjEyMjI2MDIyMyAxOTIuMC4yLjEgNTAwMCB0eXAgaG9zdGRkYXRhAGl3aW5kc2hhcmU=",
+    "controlPreimageB64": "d2luZHNoYXJlL3YyIGNvbnRyb2wvb3BlcmF0aW9uAEFCQ0RFRkdISUpLTE1OT1BhYmNkZWZnaGlqa2xtbm9wAQIDBAAAAAIBAAAAAAAAAAoSgYKDhIWGh4iJiouMjY6PkJP0VEvkiS6Id5EgNIUbgWkoG44qk0Ti8GP3ED4q+zAJ",
+    "controlSignatureB64": "uHLPimuwDFVETydYJJWyRcOnELb6dhLg2nsYGq16Hj0VYOU3+b+xTfWHqGzH31UAc52YaLfNxsJHrm90TBVNCw==",
+    "signedBodyB64": "owABAYcBUAECAwQFBgcICQoLDA0ODxBQISIjJCUmJygpKissLS4vMHg0Y2FuZGlkYXRlOjEgMSB1ZHAgMjEyMjI2MDIyMyAxOTIuMC4yLjEgNTAwMCB0eXAgaG9zdGRkYXRhAGl3aW5kc2hhcmUY/1hAuHLPimuwDFVETydYJJWyRcOnELb6dhLg2nsYGq16Hj0VYOU3+b+xTfWHqGzH31UAc52YaLfNxsJHrm90TBVNCw=="
+  }
+}

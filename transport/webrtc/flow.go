@@ -2,7 +2,20 @@ package webrtc
 
 import "context"
 
-func (c *Channel) acquireSendTurn(ctx context.Context) error {
+func (c *Channel) acquireSendAdmissionTurn(admission *sendAdmission) error {
+	select {
+	case <-admission.done:
+		return c.lifecycle.sendAdmissionError(admission)
+	case <-c.sendTurn:
+		if err := c.lifecycle.sendAdmissionError(admission); err != nil {
+			c.releaseSendTurn()
+			return err
+		}
+		return nil
+	}
+}
+
+func (c *Channel) acquireOwnedSendTurn(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -17,10 +30,35 @@ func (c *Channel) releaseSendTurn() {
 	c.sendTurn <- struct{}{}
 }
 
-// waitForCapacity implements hysteresis rather than treating every callback as
-// permission to send. A stale or coalesced callback only wakes the waiter; the
-// authoritative buffered amount must cross the low-water boundary.
-func (c *Channel) waitForCapacity(ctx context.Context, required terminalState) error {
+// Capacity callbacks are hints only. Rechecking both the durable admission and
+// buffered amount prevents a stale wake from reviving a canceled or retired send.
+func (c *Channel) waitForSendAdmissionCapacity(admission *sendAdmission) error {
+	if err := c.lifecycle.sendAdmissionError(admission); err != nil {
+		return err
+	}
+	amount := c.dc.BufferedAmount()
+	if amount < c.flow.highWaterBytes {
+		return nil
+	}
+	for amount > c.flow.lowWaterBytes {
+		select {
+		case <-admission.done:
+			return c.lifecycle.sendAdmissionError(admission)
+		case <-c.flowWake:
+		case <-c.lifecycle.stateWakeSignal():
+		}
+		if err := c.lifecycle.sendAdmissionError(admission); err != nil {
+			return err
+		}
+		amount = c.dc.BufferedAmount()
+	}
+	return c.lifecycle.sendAdmissionError(admission)
+}
+
+// waitForOwnedCapacity is used only after terminal lifecycle ownership became
+// irreversible. Every later cancellation or lifecycle error therefore remains
+// an accepted send failure rather than being reclassified as pre-admission.
+func (c *Channel) waitForOwnedCapacity(ctx context.Context, required terminalState) error {
 	if err := c.lifecycle.requireSendState(required); err != nil {
 		return err
 	}

@@ -6,8 +6,10 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
-import { ManagedProcess, settleCleanupTasks } from './fixtures/process'
-import { disableCapabilityArtifacts, expect, test } from './fixtures/test'
+import { expect, test } from '@playwright/test'
+
+import { PLAYWRIGHT_BROWSER_NAMES } from '../playwright.projects'
+import { ManagedProcess, settleCleanupTasks } from './fixtures/managed-process'
 
 const DIAGNOSTIC_TIMEOUT_MS = 200
 const DUMMY_CAPABILITY = 'capability-must-not-appear'
@@ -23,7 +25,7 @@ const ARTIFACT_PROBE_CONFIG = resolve(
 )
 const execFileAsync = promisify(execFile)
 
-disableCapabilityArtifacts()
+test.use({ trace: 'off', screenshot: 'off', video: 'off' })
 
 test('fixture failures redact capabilities and surface orphaned cleanup', async () => {
   const child = new ManagedProcess(
@@ -91,8 +93,9 @@ async function artifactFiles(directory: string): Promise<string[]> {
 }
 
 test('failed separate-key submissions leave every generated artifact capability-free', async ({
-  baseUrl,
+  baseURL,
 }) => {
+  if (baseURL === undefined) throw new Error('Capability artifact probe requires a base URL')
   const outputDirectory = await mkdtemp(join(tmpdir(), 'windshare-c5-artifacts-'))
   try {
     let probeFailure: unknown
@@ -104,7 +107,7 @@ test('failed separate-key submissions leave every generated artifact capability-
           cwd: WEB_ROOT,
           env: {
             ...process.env,
-            WINDSHARE_ARTIFACT_PROBE_BASE_URL: baseUrl,
+            WINDSHARE_ARTIFACT_PROBE_BASE_URL: baseURL,
             WINDSHARE_ARTIFACT_PROBE_KEY: DUMMY_SEPARATE_KEY,
             WINDSHARE_ARTIFACT_PROBE_OUTPUT: outputDirectory,
           },
@@ -125,7 +128,9 @@ test('failed separate-key submissions leave every generated artifact capability-
     }
 
     const files = await artifactFiles(outputDirectory)
-    expect(files.filter((path) => path.endsWith('error-context.md'))).toHaveLength(3)
+    expect(files.filter((path) => path.endsWith('error-context.md'))).toHaveLength(
+      2 * PLAYWRIGHT_BROWSER_NAMES.length,
+    )
     expect(files.some((path) => extname(path) === '.png')).toBe(true)
     expect(files.some((path) => extname(path) === '.webm')).toBe(true)
     for (const path of files) {
