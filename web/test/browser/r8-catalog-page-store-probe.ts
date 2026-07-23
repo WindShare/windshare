@@ -15,6 +15,7 @@ import type {
   V2CatalogPage,
   V2DirectoryFailure,
 } from '../../src/catalog/v2-records'
+import { waitForIndexedDbTransaction } from '../../src/catalog/v2-indexeddb-transaction'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { createSignedRootCollisionFixture } from '../catalog/signed-root-collision-fixture'
 import { runSignedCatalogOwnershipProbe } from '../catalog/signed-catalog-ownership-probe'
@@ -34,14 +35,14 @@ export async function probeSamePageCollisions(): Promise<Readonly<Record<string,
   const store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
   try {
     await store.begin('root')
-    const nodeCollisionRejected = await stageRejected(store, page(0, 'root', [
+    const nodeCollisionRejected = await rejectsAuthenticatedOwnership(store, page(0, 'root', [
       entry('node-1', 'first'),
       entry('node-1', 'second'),
     ]))
     await store.stage(page(0, 'root', [entry('node-1', 'first')]))
     await store.abort('root')
 
-    const nameCollisionRejected = await stageRejected(store, page(0, 'root', [
+    const nameCollisionRejected = await rejectsAuthenticatedOwnership(store, page(0, 'root', [
       entry('node-1', 'Straße'),
       entry('node-2', 'STRASSE'),
     ]))
@@ -65,20 +66,20 @@ export async function probeCrossPageOwnership(): Promise<Readonly<Record<string,
     await store.begin('root')
     await store.stage(page(0, 'root', [entry('node-1', 'Straße')]))
 
-    const crossPageNameRejected = await stageRejected(
+    const crossPageNameRejected = await rejectsAuthenticatedOwnership(
       store,
       page(1, 'root', [entry('node-2', 'STRASSE')]),
     )
     await store.stage(page(1, 'root', [entry('node-2', 'valid-name')]))
 
-    const crossPageNodeRejected = await stageRejected(
+    const crossPageNodeRejected = await rejectsAuthenticatedOwnership(
       store,
       page(2, 'root', [entry('node-1', 'released-name')]),
     )
     await store.stage(page(2, 'root', [entry('node-3', 'released-name')]))
 
     await store.begin('second')
-    const crossDirectoryNodeRejected = await stageRejected(
+    const crossDirectoryNodeRejected = await rejectsAuthenticatedOwnership(
       store,
       page(0, 'second', [entry('node-1', 'second-only')]),
     )
@@ -130,7 +131,7 @@ export async function probeCommitAbortAndReopen(): Promise<Readonly<Record<strin
     store.close()
 
     store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
-    const crashResidueRejected = await stageRejected(store, storedPage)
+    const crashResidueRejected = await rejectsAuthenticatedOwnership(store, storedPage)
     await store.begin('root')
     await store.stage(storedPage)
     await store.commit(committed)
@@ -448,7 +449,7 @@ export async function probeMalformedBudgetChargeFailsClosed(): Promise<Readonly<
     const key: IDBValidKey = ['share', 'root', 'generation', 0]
     const record = await requestResult<Record<string, unknown>>(pages.get(key))
     pages.put({ ...record, entryCharge: -1 })
-    await transactionCompletion(corruption)
+    await waitForIndexedDbTransaction(corruption)
 
     let rejectedClosed = false
     try {
@@ -535,7 +536,7 @@ export async function probeSchemaReset(): Promise<Readonly<Record<string, unknow
       budgetRecords: await requestResult(budgets.count()),
       currentVersion: CURRENT_DATABASE_VERSION,
     })
-    await transactionCompletion(transaction)
+    await waitForIndexedDbTransaction(transaction)
     return result
   } finally {
     database.close()
@@ -627,7 +628,7 @@ async function rewritePageCharge(
   const pages = transaction.objectStore(PAGE_STORE)
   const record = await requestResult<Record<string, unknown>>(pages.get(key))
   pages.put({ ...record, entryCharge })
-  await transactionCompletion(transaction)
+  await waitForIndexedDbTransaction(transaction)
 }
 
 function nextTask(): Promise<void> {
@@ -681,7 +682,7 @@ function withHangCeiling<T>(promise: Promise<T>): Promise<T> {
   })
 }
 
-async function stageRejected(
+async function rejectsAuthenticatedOwnership(
   store: IndexedDbV2CatalogPageStore,
   candidate: V2CatalogPage,
 ): Promise<boolean> {
@@ -690,7 +691,7 @@ async function stageRejected(
     return false
   } catch (error) {
     if (!(error instanceof V2CatalogPageStoreError)) throw error
-    return true
+    return error.kind === 'authenticated-ownership'
   }
 }
 
@@ -737,13 +738,5 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     request.addEventListener('success', () => resolve(request.result), { once: true })
     request.addEventListener('error', () => reject(request.error), { once: true })
-  })
-}
-
-function transactionCompletion(transaction: IDBTransaction): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    transaction.addEventListener('complete', () => resolve(), { once: true })
-    transaction.addEventListener('abort', () => reject(transaction.error), { once: true })
-    transaction.addEventListener('error', () => reject(transaction.error), { once: true })
   })
 }

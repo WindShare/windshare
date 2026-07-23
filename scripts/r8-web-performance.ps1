@@ -29,18 +29,16 @@ try {
     Push-Location $repositoryRoot
     try {
         $sourceIdentity = Get-D5SourceIdentitySummary (Get-D5SourceIdentity $repositoryRoot)
-        $cpuName = if ($IsWindows) {
-            [string](Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name)
-        } else {
-            [string]$env:PROCESSOR_IDENTIFIER
-        }
+        # Host labels are diagnostic only. Do not let Windows management
+        # telemetry prevent browser scenarios from reaching their real gates.
+        $cpuName = [string]$env:PROCESSOR_IDENTIFIER
         if ([string]::IsNullOrWhiteSpace($cpuName)) {
             $cpuName = [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString()
         }
-        $physicalMemoryBytes = if ($IsWindows) {
-            [uint64](Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
-        } else {
+        $physicalMemoryBytes = if (-not $IsWindows) {
             [uint64][GC]::GetGCMemoryInfo().TotalAvailableMemoryBytes
+        } else {
+            $null
         }
         $playwrightRuntime = (& pnpm -C web exec node scripts/report-playwright-runtime.mjs) |
             ConvertFrom-Json

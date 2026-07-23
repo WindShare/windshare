@@ -140,19 +140,10 @@ function Get-D5EvidenceEnvironment([string]$RepositoryRoot) {
     $cpu = $null
     $physicalMemoryBytes = $null
     if ($IsWindows) {
-        try {
-            $cpu = @(
-                Get-CimInstance Win32_Processor -ErrorAction Stop |
-                    ForEach-Object { [string]$_.Name } |
-                    Sort-Object -Unique
-            ) -join '; '
-            $physicalMemoryBytes = [long](
-                Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
-            ).TotalPhysicalMemory
-        } catch {
-            $cpu = $null
-            $physicalMemoryBytes = $null
-        }
+        # Hardware labels are descriptive only. Environment-provided metadata
+        # avoids turning an unhealthy Windows management provider into a test
+        # prerequisite; exact semantic/resource measurements remain in-run.
+        $cpu = [string]$env:PROCESSOR_IDENTIFIER
     } elseif ($null -ne (Get-Command 'lscpu' -ErrorAction SilentlyContinue)) {
         $modelLine = @(& lscpu 2>$null | Where-Object { $_ -match '^Model name\s*:' } | Select-Object -First 1)
         if ($modelLine.Count -eq 1) {

@@ -106,25 +106,31 @@ function Get-D5HarnessProcesses([string]$HarnessRoot) {
         [IO.Path]::DirectorySeparatorChar,
         [IO.Path]::AltDirectorySeparatorChar
     )
-    return @(
-        Get-CimInstance Win32_Process -ErrorAction Stop |
-            Where-Object {
-                if ([string]::IsNullOrWhiteSpace([string]$_.ExecutablePath)) {
-                    return $false
-                }
-                $path = [IO.Path]::GetFullPath([string]$_.ExecutablePath)
-                return $path.StartsWith(
-                    $root + [IO.Path]::DirectorySeparatorChar,
-                    [StringComparison]::OrdinalIgnoreCase
-                )
-            } |
-            ForEach-Object {
-                [pscustomobject]@{
-                    ProcessID = [int]$_.ProcessID
-                    ExecutablePath = [IO.Path]::GetFullPath([string]$_.ExecutablePath)
-                }
+    $processes = [Collections.Generic.List[object]]::new()
+    foreach ($process in [Diagnostics.Process]::GetProcesses()) {
+        try {
+            $executablePath = [string]$process.MainModule.FileName
+            if ([string]::IsNullOrWhiteSpace($executablePath)) {
+                continue
             }
-    )
+            $path = [IO.Path]::GetFullPath($executablePath)
+            if ($path.StartsWith(
+                $root + [IO.Path]::DirectorySeparatorChar,
+                [StringComparison]::OrdinalIgnoreCase
+            )) {
+                $processes.Add([pscustomobject]@{
+                    ProcessID = [int]$process.Id
+                    ExecutablePath = $path
+                })
+            }
+        } catch {
+            # Processes under the user-owned harness root are readable. Other
+            # protected host processes are irrelevant to namespace ownership.
+        } finally {
+            $process.Dispose()
+        }
+    }
+    return @($processes)
 }
 
 function Wait-D5HarnessNamespaceQuiescent(

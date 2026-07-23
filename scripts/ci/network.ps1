@@ -2,11 +2,11 @@
 # jobs run the OS-network cases natively and ungated; on Windows those cases
 # gate-skip outside the D5 fixed-path runner, so this gate runs the classified
 # network packages' full suites through the runner (NetworkTests mode builds
-# with -race; pre-registered firewall rule pairs mean no prompts and no
-# mutations). Together with `make race` this restores the race coverage the
-# ubuntu jobs get natively. Since 2026-07-14 the runner executes the 8 packages
-# concurrently under a single whole-run registration check; per-package
-# forensics removed (owner decision, see docs/.orchestration/make-ci.md).
+# with -race). Firewall prompts and host-owned rules are outside the verdict;
+# the fixed binary hashes, compiler plans and one-use capability remain the
+# launch authority. Together with `make race` this restores the race coverage
+# the ubuntu jobs get natively. The runner executes the classified packages
+# concurrently and reports every package result.
 [CmdletBinding()]
 param()
 

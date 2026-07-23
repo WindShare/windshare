@@ -59,6 +59,7 @@ export interface V2ReceiverSupervisorOptions {
 }
 
 interface V2ReceiverGeneration extends V2ContentGeneration {
+  readonly broker: V2BlockBroker
   relay: V2RelayReceiverConnection
   relayLaneId: number
   readonly session: V2ReceiverSessionRuntime

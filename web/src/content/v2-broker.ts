@@ -304,17 +304,20 @@ export interface V2BlockSlice {
   readonly data: Uint8Array<ArrayBuffer>
 }
 
+export interface V2BlockRangeReaderOptions {
+  readonly signal?: AbortSignal
+  readonly maximumParallel?: number
+  readonly priority?: V2BlockPriority
+}
+
+// Function-property variance prevents a route-authorized method from masquerading as this scoped port.
 export interface V2BlockRangeReader {
-  readRange(
+  readonly readRange: (
     descriptor: V2FileRevisionDescriptor,
     leaseId: Uint8Array,
     range: ByteRange,
-    options?: {
-      readonly signal?: AbortSignal
-      readonly maximumParallel?: number
-      readonly priority?: V2BlockPriority
-    },
-  ): AsyncGenerator<V2BlockSlice>
+    options?: V2BlockRangeReaderOptions,
+  ) => AsyncGenerator<V2BlockSlice>
 }
 
 export interface V2ContentLaneStatus {
@@ -327,18 +330,27 @@ export interface V2BlockBrokerOptions {
   readonly validateDemand?: (demand: V2BlockDemand) => unknown
 }
 
-export interface V2BlockReadOptions {
+export interface V2RouteAuthorizedBlockReadOptions {
   readonly routes: V2BlockRouteEligibility
   readonly signal?: AbortSignal
   readonly priority?: V2BlockPriority
 }
 
-export interface V2BlockRangeOptions extends V2BlockReadOptions {
-  readonly maximumParallel?: number
+export interface V2RouteAuthorizedBlockRangeOptions extends V2BlockRangeReaderOptions {
+  readonly routes: V2BlockRouteEligibility
+}
+
+export interface V2RouteAuthorizedBlockRangeReader {
+  readonly readRouteAuthorizedRange: (
+    descriptor: V2FileRevisionDescriptor,
+    leaseId: Uint8Array,
+    range: ByteRange,
+    options: V2RouteAuthorizedBlockRangeOptions,
+  ) => AsyncGenerator<V2BlockSlice>
 }
 
 /** Receiver-scoped cache/singleflight; every new upstream dispatch carries consumer route authority. */
-export class V2BlockBroker {
+export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
   readonly #lanes: V2LaneSet
   readonly #maximumCacheBytes: number
   readonly #maximumUpstreamReads: number
@@ -375,7 +387,7 @@ export class V2BlockBroker {
 
   async readBlock(
     demand: V2BlockDemand,
-    options: V2BlockReadOptions,
+    options: V2RouteAuthorizedBlockReadOptions,
   ): Promise<V2BlockRecord> {
     this.#requireOpen()
     options.signal?.throwIfAborted()
@@ -422,11 +434,11 @@ export class V2BlockBroker {
     }
   }
 
-  async *readRange(
+  async *readRouteAuthorizedRange(
     descriptor: V2FileRevisionDescriptor,
     leaseId: Uint8Array,
     range: ByteRange,
-    options: V2BlockRangeOptions,
+    options: V2RouteAuthorizedBlockRangeOptions,
   ): AsyncGenerator<V2BlockSlice> {
     options.routes.assertActive()
     const plan = descriptor.geometry.plan(range)

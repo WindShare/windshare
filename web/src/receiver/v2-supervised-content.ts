@@ -1,12 +1,12 @@
 import { encodeBase64Url, equalBytes } from '../crypto/bytes'
 import { byteRange, type ByteRange } from '../content/geometry'
 import {
-  type V2BlockPriority,
   type V2BlockRangeReader,
+  type V2BlockRangeReaderOptions,
   type V2BlockRouteEligibility,
   type V2BlockSlice,
   type V2ContentLaneStatus,
-  V2BlockBroker,
+  type V2RouteAuthorizedBlockRangeReader,
   V2LaneSet,
 } from '../content/v2-broker'
 import {
@@ -20,7 +20,7 @@ import type { V2FileRevisionDescriptor } from '../content/v2-records'
 export interface V2ContentGeneration {
   readonly id: number
   readonly revisions: V2RevisionService
-  readonly broker: V2BlockBroker
+  readonly broker: V2RouteAuthorizedBlockRangeReader
   readonly lanes: V2LaneSet
 }
 
@@ -75,11 +75,7 @@ export class V2SupervisedContent {
           descriptor: V2FileRevisionDescriptor,
           leaseId: Uint8Array,
           range: ByteRange,
-          options: {
-            readonly signal?: AbortSignal
-            readonly maximumParallel?: number
-            readonly priority?: V2BlockPriority
-          } = {},
+          options: V2BlockRangeReaderOptions = {},
         ) => this.#readRange(descriptor, leaseId, range, routes, options),
       }),
       lanes: Object.freeze(new V2SupervisedLaneStatus(
@@ -134,11 +130,7 @@ export class V2SupervisedContent {
     token: Uint8Array,
     requested: ByteRange,
     routes: V2BlockRouteEligibility,
-    options: {
-      readonly signal?: AbortSignal
-      readonly maximumParallel?: number
-      readonly priority?: V2BlockPriority
-    },
+    options: V2BlockRangeReaderOptions,
   ): AsyncGenerator<V2BlockSlice> {
     this.#requireOpen()
     routes.assertActive()
@@ -154,7 +146,7 @@ export class V2SupervisedContent {
         const binding = await authorization.binding(options.signal)
         try {
           let yielded = false
-          for await (const slice of binding.generation.broker.readRange(
+          for await (const slice of binding.generation.broker.readRouteAuthorizedRange(
             binding.opened.descriptor,
             binding.opened.leaseId,
             byteRange(offset, checked.end),

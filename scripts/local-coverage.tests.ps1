@@ -33,9 +33,8 @@ try {
         )
         $path = Join-Path $testRoot "valid-$count.json"
         Write-NetworkManifestFixture $path ([ordered]@{
-            SchemaVersion = 2
+            SchemaVersion = 3
             Packages = $packages
-            RetiredProgramTombstone = [ordered]@{}
         })
         $output = @(& $coverageScript -ValidateNetworkManifestOnly -NetworkManifestPath $path)
         if ($output -notcontains "Validated $count coverage network package(s)") {
@@ -47,7 +46,6 @@ try {
     Write-NetworkManifestFixture $wrongSchema ([ordered]@{
         SchemaVersion = 1
         Packages = @([ordered]@{ Name = 'package'; Path = './package' })
-        RetiredProgramTombstone = [ordered]@{}
     })
     Assert-Throws {
         & $coverageScript -ValidateNetworkManifestOnly -NetworkManifestPath $wrongSchema
@@ -55,9 +53,8 @@ try {
 
     $missingPath = Join-Path $testRoot 'missing-path.json'
     Write-NetworkManifestFixture $missingPath ([ordered]@{
-        SchemaVersion = 2
+        SchemaVersion = 3
         Packages = @([ordered]@{ Name = 'package' })
-        RetiredProgramTombstone = [ordered]@{}
     })
     Assert-Throws {
         & $coverageScript -ValidateNetworkManifestOnly -NetworkManifestPath $missingPath

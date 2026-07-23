@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestLoadManifestPinsRetiredConnectivityTombstone(t *testing.T) {
+func TestLoadManifestPinsExactPackageSet(t *testing.T) {
 	t.Parallel()
 	document := validManifestDocument()
 	manifest, err := loadManifest(writeManifest(t, document))
@@ -19,61 +19,6 @@ func TestLoadManifestPinsRetiredConnectivityTombstone(t *testing.T) {
 	}
 	if !manifest.packages["transport/webrtc"] || len(manifest.packages) != 1 {
 		t.Fatalf("active packages = %#v, want exact fixture package", manifest.packages)
-	}
-	if !manifest.reservedExecutableNames[retiredConnectivityProgram] ||
-		len(manifest.reservedExecutableNames) != 1 {
-		t.Fatalf("reserved executable names = %#v, want exact connectivity tombstone", manifest.reservedExecutableNames)
-	}
-}
-
-func TestLoadManifestRejectsBroadenedOrReintroducedTombstone(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name   string
-		mutate func(*manifestDocument)
-	}{
-		{
-			name: "wildcard tombstone",
-			mutate: func(document *manifestDocument) {
-				document.RetiredProgramTombstone.RelativeProgram = "*.test.exe"
-			},
-		},
-		{
-			name: "unlisted tombstone",
-			mutate: func(document *manifestDocument) {
-				document.RetiredProgramTombstone.RelativeProgram = "other.test.exe"
-			},
-		},
-		{
-			name: "live action",
-			mutate: func(document *manifestDocument) {
-				document.RetiredProgramTombstone.Action = "Allow"
-			},
-		},
-		{
-			name: "reintroduced active package",
-			mutate: func(document *manifestDocument) {
-				document.Packages = append(document.Packages, packageRecord{
-					Name: "connectivity",
-					Path: "./connectivity",
-				})
-			},
-		},
-		{
-			name: "duplicate rule identity",
-			mutate: func(document *manifestDocument) {
-				document.RetiredProgramTombstone.UDPGuid = document.RetiredProgramTombstone.TCPGuid
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			document := validManifestDocument()
-			test.mutate(&document)
-			if _, err := loadManifest(writeManifest(t, document)); err == nil {
-				t.Fatal("loadManifest succeeded, want strict tombstone rejection")
-			}
-		})
 	}
 }
 
@@ -86,8 +31,8 @@ func TestLoadManifestRejectsUnknownOrTrailingJSON(t *testing.T) {
 	}
 	unknown := strings.Replace(
 		string(raw),
-		`"SchemaVersion":2`,
-		`"SchemaVersion":2,"WildcardRetirements":[]`,
+		`"SchemaVersion":3`,
+		`"SchemaVersion":3,"UnexpectedPolicy":[]`,
 		1,
 	)
 	for name, content := range map[string]string{
@@ -111,13 +56,6 @@ func validManifestDocument() manifestDocument {
 		SchemaVersion: networkManifestSchemaVersion,
 		Packages: []packageRecord{
 			{Name: "webrtc", Path: "./transport/webrtc"},
-		},
-		RetiredProgramTombstone: retiredProgramTombstone{
-			RelativeProgram: retiredConnectivityProgram,
-			DisplayName:     retiredConnectivityDisplay,
-			Action:          "Block",
-			TCPGuid:         "E9A64ACF-24D6-4B94-91CE-D8E468113113",
-			UDPGuid:         "6A523662-D935-4D63-BE14-EEC446E3B720",
 		},
 	}
 }

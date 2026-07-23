@@ -20,38 +20,23 @@ import (
 )
 
 const (
-	networkManifestSchemaVersion = 2
-	retiredConnectivityProgram   = "connectivity.test.exe"
-	retiredConnectivityDisplay   = "connectivity.test"
+	networkManifestSchemaVersion = 3
 )
 
-var (
-	manifestPackageNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-	manifestGUIDPattern        = regexp.MustCompile(`^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$`)
-)
+var manifestPackageNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 type packageRecord struct {
 	Name string `json:"Name"`
 	Path string `json:"Path"`
 }
 
-type retiredProgramTombstone struct {
-	RelativeProgram string `json:"RelativeProgram"`
-	DisplayName     string `json:"DisplayName"`
-	Action          string `json:"Action"`
-	TCPGuid         string `json:"TCPGuid"`
-	UDPGuid         string `json:"UDPGuid"`
-}
-
 type manifestDocument struct {
-	SchemaVersion           int                     `json:"SchemaVersion"`
-	Packages                []packageRecord         `json:"Packages"`
-	RetiredProgramTombstone retiredProgramTombstone `json:"RetiredProgramTombstone"`
+	SchemaVersion int             `json:"SchemaVersion"`
+	Packages      []packageRecord `json:"Packages"`
 }
 
 type fixedManifest struct {
-	packages                map[string]bool
-	reservedExecutableNames map[string]bool
+	packages map[string]bool
 }
 
 type analysisResult struct {
@@ -108,7 +93,6 @@ func main() {
 		document, err := buildExecutionPlanDocument(
 			root,
 			manifest.packages,
-			manifest.reservedExecutableNames,
 			result.catalog,
 			request,
 		)
@@ -157,27 +141,14 @@ func loadManifest(path string) (fixedManifest, error) {
 			networkManifestSchemaVersion,
 		)
 	}
-	tombstone := document.RetiredProgramTombstone
-	if tombstone.RelativeProgram != retiredConnectivityProgram ||
-		tombstone.DisplayName != retiredConnectivityDisplay ||
-		tombstone.Action != "Block" ||
-		!manifestGUIDPattern.MatchString(tombstone.TCPGuid) ||
-		!manifestGUIDPattern.MatchString(tombstone.UDPGuid) ||
-		tombstone.TCPGuid == tombstone.UDPGuid {
-		return fixedManifest{}, fmt.Errorf(
-			"fixed package manifest has an invalid retired connectivity tombstone: %+v",
-			tombstone,
-		)
-	}
 	packages := make(map[string]bool, len(document.Packages))
 	names := make(map[string]bool, len(document.Packages))
 	for _, record := range document.Packages {
 		path := strings.TrimPrefix(filepath.ToSlash(record.Path), "./")
 		if !manifestPackageNamePattern.MatchString(record.Name) ||
 			path == "" || path == "." || strings.HasPrefix(path, "../") ||
-			packages[path] || names[record.Name] ||
-			strings.EqualFold(record.Name+".test.exe", tombstone.RelativeProgram) {
-			return fixedManifest{}, fmt.Errorf("invalid, duplicate, or retired package record: %+v", record)
+			packages[path] || names[record.Name] {
+			return fixedManifest{}, fmt.Errorf("invalid or duplicate package record: %+v", record)
 		}
 		packages[path] = true
 		names[record.Name] = true
@@ -185,12 +156,7 @@ func loadManifest(path string) (fixedManifest, error) {
 	if len(packages) == 0 {
 		return fixedManifest{}, errors.New("fixed package manifest has no active packages")
 	}
-	return fixedManifest{
-		packages: packages,
-		reservedExecutableNames: map[string]bool{
-			strings.ToLower(tombstone.RelativeProgram): true,
-		},
-	}, nil
+	return fixedManifest{packages: packages}, nil
 }
 
 func fatalf(format string, arguments ...any) {
