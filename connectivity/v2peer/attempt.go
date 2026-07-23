@@ -496,8 +496,7 @@ func (attempt *peerAttempt) deliverFailure(
 }
 
 func peerFailure(err error) (uint16, string) {
-	var rejected *peerOperationRejection
-	if errors.As(err, &rejected) {
+	if rejected, ok := errors.AsType[*peerOperationRejection](err); ok {
 		return rejected.code, rejected.message
 	}
 	switch {

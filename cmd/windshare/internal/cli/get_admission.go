@@ -167,10 +167,7 @@ func newRelayContentAdmissionWithExecution(
 	if downloadT0.IsZero() || clock == nil || relay == nil {
 		return nil, ErrInvalidReceiverAdmission
 	}
-	delay := downloadT0.Add(receiverRelayAdmissionWindow).Sub(clock.Now())
-	if delay < 0 {
-		delay = 0
-	}
+	delay := max(downloadT0.Add(receiverRelayAdmissionWindow).Sub(clock.Now()), 0)
 	timer := clock.NewTimer(delay)
 	if timer == nil || timer.C() == nil {
 		// Timer construction is part of admission setup. Roll back the suspension

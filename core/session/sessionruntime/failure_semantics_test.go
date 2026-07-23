@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"errors"
+	"maps"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -41,9 +42,7 @@ func TestRemoteOperationErrorRejectsAuthenticatedMalformedSemantics(t *testing.T
 	} {
 		t.Run(name, func(t *testing.T) {
 			fields := make(map[uint64]any, len(valid)+1)
-			for key, value := range valid {
-				fields[key] = value
-			}
+			maps.Copy(fields, valid)
 			mutate(fields)
 			semantic, err := protocolsession.EncodeBody(fields)
 			if err != nil {

@@ -135,9 +135,7 @@ func (handler *catalogHandler) Run(ctx context.Context) error {
 				cancel()
 				continue
 			}
-			wait.Add(1)
-			go func() {
-				defer wait.Done()
+			wait.Go(func() {
 				select {
 				case handler.workers <- struct{}{}:
 					defer func() { <-handler.workers }()
@@ -147,7 +145,7 @@ func (handler *catalogHandler) Run(ctx context.Context) error {
 				}
 				handler.process(operationContext, queued.operation.id, queued.message.Body())
 				handler.remove(queued.operation)
-			}()
+			})
 		}
 	}
 }

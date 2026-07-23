@@ -42,7 +42,7 @@ func TestScanProgressCoalescesBackpressureWithoutBlockingScan(t *testing.T) {
 		return nil
 	})
 	scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
-		for index := 0; index < 300; index++ {
+		for index := range 300 {
 			if err := request.Children.Add(ctx, progressScannedFile(t, index)); err != nil {
 				return ScanResult{}, err
 			}

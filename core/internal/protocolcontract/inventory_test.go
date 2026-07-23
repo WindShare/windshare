@@ -17,7 +17,7 @@ func TestVectorInventoryIsExact(t *testing.T) {
 		t.Fatalf("read vector inventory: %v", err)
 	}
 	var expected []string
-	for _, line := range strings.Split(string(encoded), "\n") {
+	for line := range strings.SplitSeq(string(encoded), "\n") {
 		name := strings.TrimSpace(line)
 		if name != "" && !strings.HasPrefix(name, "#") {
 			expected = append(expected, name)

@@ -248,7 +248,7 @@ func (s *FilesystemOutputSession) BeginFile(ctx context.Context, output transfer
 		return nil, transfer.VerifiedDurableRanges{}, ErrOutputTransactionLimit
 	}
 	if existing, found := s.journal.file(canonical); found {
-		transaction, durable, reused, reuseErr := s.resumeFileLocked(ctx, output, locator, relative, *existing)
+		transaction, durable, reused, reuseErr := s.resumeFileLocked(output, locator, relative, *existing)
 		if reuseErr != nil {
 			return nil, transfer.VerifiedDurableRanges{}, reuseErr
 		}
@@ -256,11 +256,10 @@ func (s *FilesystemOutputSession) BeginFile(ctx context.Context, output transfer
 			return transaction, durable, nil
 		}
 	}
-	return s.beginNewFileLocked(ctx, output, locator, relative)
+	return s.beginNewFileLocked(output, locator, relative)
 }
 
 func (s *FilesystemOutputSession) resumeFileLocked(
-	ctx context.Context,
 	output transfer.OutputFile,
 	locator transfer.OutputLocator,
 	relative string,
@@ -348,7 +347,6 @@ func (s *FilesystemOutputSession) restorePublishedOutputMetadata(output transfer
 }
 
 func (s *FilesystemOutputSession) beginNewFileLocked(
-	ctx context.Context,
 	output transfer.OutputFile,
 	locator transfer.OutputLocator,
 	relative string,
@@ -405,7 +403,6 @@ func (s *FilesystemOutputSession) beginNewFileLocked(
 	s.active[locator.CanonicalPath()] = transaction
 	cleanup = false
 	verified, _ := transfer.VerifyDurableRanges(binding, 0, empty)
-	_ = ctx
 	return transaction, verified, nil
 }
 

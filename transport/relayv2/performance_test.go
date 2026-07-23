@@ -353,7 +353,7 @@ func BenchmarkR8RelaySenderRegistration(b *testing.B) {
 	b.ReportAllocs()
 	var stats RegistrationStats
 	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		stats, err = r8RunSenderRegistration(fixture)
 		if err != nil {
 			b.Fatal(err)

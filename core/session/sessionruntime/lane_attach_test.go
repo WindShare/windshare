@@ -372,7 +372,11 @@ func TestSenderMigratesSameBlockOperationAfterSendDetachRace(t *testing.T) {
 
 completed:
 	route.sendMu.Lock()
+	preferredAfterSend := route.preferred
 	route.sendMu.Unlock()
+	if !preferredAfterSend.valid(true) {
+		t.Fatal("completed send erased its synchronized route")
+	}
 	select {
 	case <-peerSenderLane.done:
 	case <-time.After(time.Second):
@@ -454,7 +458,11 @@ func TestSenderResignsAmbiguousFinalForSurvivingLane(t *testing.T) {
 	}
 	receiver.rpc.end(call)
 	route.sendMu.Lock()
+	preferredAfterSend := route.preferred
 	route.sendMu.Unlock()
+	if !preferredAfterSend.valid(true) {
+		t.Fatal("completed send erased its synchronized route")
+	}
 	select {
 	case <-peerSenderLane.done:
 	case <-time.After(time.Second):

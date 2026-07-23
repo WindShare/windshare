@@ -52,7 +52,7 @@ func FragmentRecord(operationID protocolsession.OperationID, object []byte) ([]p
 	}
 	recordID := records.RecordIDFromObject(object)
 	messages := make([]protocolsession.Message, count)
-	for index := 0; index < count; index++ {
+	for index := range count {
 		start := index * MaxFragmentPayloadBytes
 		end := min(start+MaxFragmentPayloadBytes, len(object))
 		plaintext := make([]byte, FragmentHeaderBytes, FragmentHeaderBytes+end-start)

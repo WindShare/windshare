@@ -166,15 +166,13 @@ func TestClientSingleflightAndDirectoryFailureIsolation(t *testing.T) {
 	start := make(chan struct{})
 	var wait sync.WaitGroup
 	for range 16 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			<-start
 			loaded, loadErr := client.LoadDirectory(context.Background(), healthy)
 			if loadErr != nil || !loaded.Equal(healthySnapshot) {
 				t.Errorf("concurrent load = %v, %v", loaded, loadErr)
 			}
-		}()
+		})
 	}
 	close(start)
 	wait.Wait()

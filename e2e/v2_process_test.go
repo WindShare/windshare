@@ -292,10 +292,7 @@ func writeV2PatternFile(t *testing.T, filename string, size int64, wantSHA256 st
 	writer := io.MultiWriter(file, digest)
 	remaining := size
 	for remaining > 0 {
-		next := int64(len(pattern))
-		if remaining < next {
-			next = remaining
-		}
+		next := min(remaining, int64(len(pattern)))
 		written, writeErr := writer.Write(pattern[:int(next)])
 		if writeErr != nil || written != int(next) {
 			_ = file.Close()

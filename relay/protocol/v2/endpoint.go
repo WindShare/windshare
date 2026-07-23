@@ -52,7 +52,7 @@ func NormalizeRelayEndpoint(raw string) (RelayEndpoint, error) {
 		return RelayEndpoint{}, err
 	}
 	escapedPath := parsed.EscapedPath()
-	for _, segment := range strings.Split(escapedPath, "/") {
+	for segment := range strings.SplitSeq(escapedPath, "/") {
 		decoded, decodeErr := url.PathUnescape(segment)
 		if decodeErr != nil || !utf8.ValidString(decoded) || decoded == "." || decoded == ".." {
 			return RelayEndpoint{}, fmt.Errorf("%w: relay base path", ErrIdentity)
@@ -62,8 +62,8 @@ func NormalizeRelayEndpoint(raw string) (RelayEndpoint, error) {
 		return RelayEndpoint{}, fmt.Errorf("%w: relay query", ErrIdentity)
 	}
 	path := parsed.Path
-	if strings.HasSuffix(escapedPath, "/") {
-		escapedPath = strings.TrimSuffix(escapedPath, "/")
+	if trimmedEscapedPath, ok := strings.CutSuffix(escapedPath, "/"); ok {
+		escapedPath = trimmedEscapedPath
 		path = strings.TrimSuffix(path, "/")
 	}
 	parsed.Path = path + WebSocketPath
@@ -129,7 +129,7 @@ func validRelayDNSName(hostname string) bool {
 	if name == "" || len(name) > 253 {
 		return false
 	}
-	for _, label := range strings.Split(name, ".") {
+	for label := range strings.SplitSeq(name, ".") {
 		if len(label) == 0 || len(label) > 63 || strings.HasPrefix(label, "-") ||
 			strings.HasSuffix(label, "-") || strings.HasPrefix(label, "xn--") ||
 			len(label) > 3 && label[2:4] == "--" {

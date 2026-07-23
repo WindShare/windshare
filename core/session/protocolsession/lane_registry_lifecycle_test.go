@@ -34,7 +34,7 @@ func newLifecycleLaneRegistry(
 func TestLaneRegistryExactRevocationReclaimsCanceledGrantLane(t *testing.T) {
 	now := time.Unix(100, 0)
 	registry, _, _, _, _ := newLifecycleLaneRegistry(t, &now)
-	for iteration := 0; iteration < DefaultMaxPendingGrants*2; iteration++ {
+	for iteration := range DefaultMaxPendingGrants * 2 {
 		operationID := testOperationID(byte(iteration + 1))
 		grant, err := registry.IssueGrant(0, operationID, laneSequence(byte(iteration+2), LaneAttachNonceBytes))
 		if err != nil {

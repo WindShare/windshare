@@ -210,11 +210,11 @@ func r8WideScannedFile(index int) (ScannedChild, error) {
 	if err != nil {
 		return ScannedChild{}, err
 	}
-	identity, err := NewSourceIdentity([]byte(fmt.Sprintf("source-%d", index)))
+	identity, err := NewSourceIdentity(fmt.Appendf(nil, "source-%d", index))
 	if err != nil {
 		return ScannedChild{}, err
 	}
-	candidate, err := NewVersionCandidate([]byte(fmt.Sprintf("version-%d", index)))
+	candidate, err := NewVersionCandidate(fmt.Appendf(nil, "version-%d", index))
 	if err != nil {
 		return ScannedChild{}, err
 	}

@@ -44,15 +44,13 @@ func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 	results := make(chan result, 2)
 	var wait sync.WaitGroup
 	for _, identity := range []LaneIdentity{runtime.initial, secondIdentity} {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			<-start
 			disposition, err := (laneInboundRouter{
 				runtime: runtime, identity: identity,
 			}).RouteInbound(context.Background(), request)
 			results <- result{disposition: disposition, err: err}
-		}()
+		})
 	}
 	close(start)
 	wait.Wait()

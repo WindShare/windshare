@@ -345,13 +345,11 @@ func TestReceiverCandidateConcurrentAuthenticatedIngressChargesSenderOnce(t *tes
 	}
 	resultsByReplay := make(chan candidateSendResult, authenticatedCandidateReplays)
 	var replays sync.WaitGroup
-	for replay := 0; replay < authenticatedCandidateReplays; replay++ {
-		replays.Add(1)
-		go func() {
-			defer replays.Done()
+	for range authenticatedCandidateReplays {
+		replays.Go(func() {
 			disposition, sendErr := operation.SendCandidate(harness.ctx, candidateBody)
 			resultsByReplay <- candidateSendResult{disposition: disposition, err: sendErr}
-		}()
+		})
 	}
 	replays.Wait()
 	close(resultsByReplay)

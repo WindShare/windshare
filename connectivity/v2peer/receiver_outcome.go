@@ -1,6 +1,10 @@
 package v2peer
 
-import "github.com/windshare/windshare/core/session/protocolsession"
+import (
+	"slices"
+
+	"github.com/windshare/windshare/core/session/protocolsession"
+)
 
 type ReceiverTerminalOwner string
 
@@ -307,12 +311,7 @@ func (outcome ReceiverAttemptOutcome) LocallyCanceled() bool {
 }
 
 func (outcome ReceiverAttemptOutcome) HasRetainedCauseClass(class ReceiverCauseClass) bool {
-	for _, retained := range outcome.retainedCauseClasses {
-		if retained == class {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(outcome.retainedCauseClasses, class)
 }
 
 type ReceiverTerminationTrace struct {

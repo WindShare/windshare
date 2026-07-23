@@ -81,7 +81,7 @@ func TestReceiverAttemptRemoteDiagnosticSnapshotsAreDetached(t *testing.T) {
 	const concurrentReaders = 16
 	var readers sync.WaitGroup
 	readers.Add(concurrentReaders)
-	for index := 0; index < concurrentReaders; index++ {
+	for range concurrentReaders {
 		go func() {
 			defer readers.Done()
 			published := harness.attempt.Outcome()
@@ -221,7 +221,7 @@ func TestReceiverErrorTreeTraversalBoundsBranchingAndWideGraphs(t *testing.T) {
 
 func TestReceiverErrorTreeTraversalIsDepthBounded(t *testing.T) {
 	deep := error(errors.New("unreachable deep leaf"))
-	for depth := 0; depth < maximumReceiverErrorTreeDepth+8; depth++ {
+	for depth := range maximumReceiverErrorTreeDepth + 8 {
 		deep = fmt.Errorf("trusted receiver depth %d: %w", depth, deep)
 	}
 	for _, test := range []struct {

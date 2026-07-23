@@ -51,7 +51,7 @@ func TestOutboundReplayPermitBindsAuthorityAndCanonicalMessage(t *testing.T) {
 	}
 	finalReplay.pin.release()
 	originalDeadline := now.Add(OperationTombstoneLifetime)
-	for replayIndex := 0; replayIndex < 2; replayIndex++ {
+	for replayIndex := range 2 {
 		now = now.Add(OperationTombstoneLifetime / 3)
 		delayedReplay, replayErr := table.AcceptOutboundReplay(
 			DirectionSenderToReceiver, final, finalAdmission.Replay,
@@ -174,7 +174,7 @@ func TestPeerAnswerReplayDoesNotAdvanceMultiplicityTwice(t *testing.T) {
 	if err != nil || admission.Replay.IsZero() {
 		t.Fatalf("answer admission=%+v error=%v", admission, err)
 	}
-	for replay := 0; replay < 2; replay++ {
+	for replay := range 2 {
 		replayed, err := table.AcceptOutboundReplay(
 			DirectionSenderToReceiver, answer, admission.Replay,
 		)

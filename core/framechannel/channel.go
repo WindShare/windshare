@@ -84,8 +84,7 @@ func classifySendFailure(disposition SendDisposition, fallback, cause error) err
 // A nil result means successful transport acceptance; a raw non-nil error is
 // also accepted because the transport did not prove pre-acceptance rejection.
 func SendDispositionOf(err error) SendDisposition {
-	var failure *sendFailure
-	if errors.As(err, &failure) {
+	if failure, ok := errors.AsType[*sendFailure](err); ok {
 		return failure.disposition
 	}
 	return SendAccepted

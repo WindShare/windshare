@@ -6,7 +6,7 @@ import (
 )
 
 func TestOutboundOperationLeaseConcurrentReleaseAndSettlementIsIdempotent(t *testing.T) {
-	for iteration := 0; iteration < 128; iteration++ {
+	for iteration := range 128 {
 		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
 		operationID := testOperationID(byte(iteration + 1))
 		request := mustMessage(t, MessageRequestBlocks, &operationID, map[uint64]any{0: uint64(1)})

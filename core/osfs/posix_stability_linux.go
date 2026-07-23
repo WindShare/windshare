@@ -19,7 +19,7 @@ func platformMutationToken(file *os.File) (posixMutationToken, error) {
 	}
 	return posixMutationToken{
 		device: uint64(stat.Dev), inode: stat.Ino, size: stat.Size,
-		modifiedSec: stat.Mtim.Sec, modifiedNS: stat.Mtim.Nsec,
-		changedSec: stat.Ctim.Sec, changedNS: stat.Ctim.Nsec,
+		modifiedSec: int64(stat.Mtim.Sec), modifiedNS: int64(stat.Mtim.Nsec),
+		changedSec: int64(stat.Ctim.Sec), changedNS: int64(stat.Ctim.Nsec),
 	}, nil
 }

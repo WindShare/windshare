@@ -1,7 +1,6 @@
 package v2peer
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -10,8 +9,7 @@ import (
 )
 
 func TestReceiverCandidateBindingConflictRemainsSessionUnsafeAndSiblingUsable(t *testing.T) {
-	parent, cancelParent := context.WithCancel(context.Background())
-	defer cancelParent()
+	parent := t.Context()
 	harness := newReceiverHarnessWithContext(t, parent, func(
 		config *ReceiverFactoryConfig,
 		signaling *receiverTestSignaling,

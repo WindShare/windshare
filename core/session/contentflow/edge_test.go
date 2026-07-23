@@ -50,7 +50,7 @@ func TestAssemblerAdmissionTombstoneCapacityAndExpiryEdges(t *testing.T) {
 	assembler.Close()
 
 	full, _ := NewAssembler(session, hierarchy, func() time.Time { return now })
-	for index := 0; index < MaxFragmentTombstones; index++ {
+	for index := range MaxFragmentTombstones {
 		full.recordTombstones[assemblyKey{
 			operation: flowID[protocolsession.OperationID](byte(index%250 + 1)),
 			record:    records.RecordID{byte(index / 250), byte(index%250 + 1)},

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -362,10 +363,5 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 }
 
 func receiverRuntimeScopeHasClass(classes []ReceiverCauseClass, expected ReceiverCauseClass) bool {
-	for _, class := range classes {
-		if class == expected {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(classes, expected)
 }

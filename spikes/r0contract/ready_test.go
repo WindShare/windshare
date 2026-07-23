@@ -22,11 +22,6 @@ func (source *observableSource) openRoot(_ int) {
 	source.rootOpens++
 }
 
-func (source *observableSource) readDescendant() error {
-	source.descendantOps++
-	return errors.New("descendant enumeration is blocked")
-}
-
 type readyCatalog struct {
 	failCommit bool
 	committed  bool
@@ -63,7 +58,7 @@ func (relay *observableRelay) register(descriptor []byte) error {
 }
 
 func prepareReady(source *observableSource, rootCount int, catalog *readyCatalog, relay *observableRelay) error {
-	for root := 0; root < rootCount; root++ {
+	for root := range rootCount {
 		source.openRoot(root)
 	}
 	if err := catalog.commit(rootCount); err != nil {

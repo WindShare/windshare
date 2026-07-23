@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 )
 
@@ -50,8 +49,8 @@ func wideScannedFile(t *testing.T, index int) ScannedChild {
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity, _ := NewSourceIdentity([]byte(fmt.Sprintf("source-%d", index)))
-	candidate, _ := NewVersionCandidate([]byte(fmt.Sprintf("version-%d", index)))
+	identity, _ := NewSourceIdentity(fmt.Appendf(nil, "source-%d", index))
+	candidate, _ := NewVersionCandidate(fmt.Appendf(nil, "version-%d", index))
 	return ScannedChild{
 		FileID: wideFileID(uint64(index)), Name: name, Locator: locator,
 		SourceIdentity: identity, VersionCandidate: candidate, ExpectedSize: uint64(index),
@@ -262,11 +261,11 @@ func TestFileCatalogBackendFaultsNeverPublishHalfGeneration(t *testing.T) {
 			baseline := shareBudget.Snapshot().Used
 			faultErr := errors.New("injected disk fault")
 			if point == FileFaultStagePage || point == FileFaultStagePageObject {
-				faultErr = syscall.ENOSPC
+				faultErr = errInjectedCatalogStorageCapacity
 			}
 			faults.set(point, faultErr)
 			scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
-				for index := 0; index < 3; index++ {
+				for index := range 3 {
 					if err := request.Children.Add(ctx, wideScannedFile(t, index)); err != nil {
 						return ScanResult{}, err
 					}
@@ -276,7 +275,7 @@ func TestFileCatalogBackendFaultsNeverPublishHalfGeneration(t *testing.T) {
 			_, scanErr := store.ListChildren(context.Background(), directory, session, ScanOptions{}, scanner)
 			if scanErr == nil {
 				t.Fatal("injected backend fault was accepted")
-			} else if (point == FileFaultStagePage || point == FileFaultStagePageObject) && !errors.Is(scanErr, syscall.ENOSPC) {
+			} else if (point == FileFaultStagePage || point == FileFaultStagePageObject) && !errors.Is(scanErr, errInjectedCatalogStorageCapacity) {
 				t.Fatalf("disk-full cause was lost: %v", scanErr)
 			}
 			var failure *DirectoryFailure
@@ -319,7 +318,7 @@ func TestFileCatalogCancellationCleansStagingAndSortRuns(t *testing.T) {
 	), session)
 	started := make(chan struct{})
 	scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
-		for index := 0; index < 100; index++ {
+		for index := range 100 {
 			if err := request.Children.Add(ctx, wideScannedFile(t, index)); err != nil {
 				return ScanResult{}, err
 			}
@@ -493,7 +492,7 @@ func TestInjectedSpillFailureIsAtomicAndBudgetClean(t *testing.T) {
 func TestExternalSortIsPermutationDeterministic(t *testing.T) {
 	const entries = 321
 	var reference [][]byte
-	for seed := int64(0); seed < 6; seed++ {
+	for seed := range int64(6) {
 		rootPath := t.TempDir()
 		process := generousBudget(t, fmt.Sprintf("process-%d", seed))
 		shareBudget := generousBudget(t, fmt.Sprintf("share-%d", seed))

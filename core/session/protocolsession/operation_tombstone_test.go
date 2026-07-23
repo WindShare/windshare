@@ -79,7 +79,7 @@ func TestCancelledTombstoneScopesLateTrafficAndFingerprintsRacedFinal(t *testing
 		t.Fatalf("compatible fragment: disposition=%d error=%v", disposition, err)
 	}
 	final := mustMessage(t, MessageOperationComplete, &operationID, map[uint64]any{0: uint64(1)})
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		if disposition, err := table.Observe(DirectionSenderToReceiver, final); err != nil || disposition != OperationDrop {
 			t.Fatalf("exact raced final %d: disposition=%d error=%v", attempt, disposition, err)
 		}

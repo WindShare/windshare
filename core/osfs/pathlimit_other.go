@@ -43,29 +43,11 @@ func isPathTooLongError(err error) bool {
 	return errors.Is(err, syscall.ENAMETOOLONG)
 }
 
-func isDirectoryNotEmptyError(err error) bool {
-	return errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST)
-}
-
 func outputPlatformCapabilities() (transfer.DurabilityLevel, bool) {
 	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
 		return transfer.DurabilityPowerLoss, true
 	}
 	return transfer.DurabilityProcessRestart, false
-}
-
-func lockOutputFile(file *os.File) error {
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
-			return errors.Join(ErrOutputSessionActive, err)
-		}
-		return err
-	}
-	return nil
-}
-
-func unlockOutputFile(file *os.File) error {
-	return syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 }
 
 func outputObjectIdentity(file *os.File) (transfer.OutputObjectIdentity, error) {

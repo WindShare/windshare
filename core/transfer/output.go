@@ -366,9 +366,13 @@ func outputFailureRequiresJobAbort(err error, capabilities OutputCapabilities) b
 	return !capabilities.FileFailureIsolation
 }
 
+type jobAbortRequirement interface {
+	error
+	RequiresJobAbort() bool
+}
+
 func outputFailureExplicitlyRequiresJobAbort(err error) bool {
-	var scoped interface{ RequiresJobAbort() bool }
-	if errors.As(err, &scoped) {
+	if scoped, ok := errors.AsType[jobAbortRequirement](err); ok {
 		return scoped.RequiresJobAbort()
 	}
 	return false

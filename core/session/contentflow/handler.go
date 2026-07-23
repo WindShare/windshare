@@ -198,9 +198,7 @@ func (h *SenderHandler) Run(ctx context.Context) error {
 				cancel()
 				continue
 			}
-			operations.Add(1)
-			go func() {
-				defer operations.Done()
+			operations.Go(func() {
 				select {
 				case h.workers <- struct{}{}:
 					defer func() { <-h.workers }()
@@ -210,7 +208,7 @@ func (h *SenderHandler) Run(ctx context.Context) error {
 				}
 				h.process(operationContext, queued.message)
 				h.unregister(queued.operation)
-			}()
+			})
 		}
 	}
 }

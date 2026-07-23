@@ -383,7 +383,7 @@ func (r *LaneRegistry) reclaimUnclaimedLaneLocked(laneID uint32) {
 }
 
 func (r *LaneRegistry) allocateLaneID() (uint32, error) {
-	for attempts := uint64(0); attempts < uint64(^uint32(0)); attempts++ {
+	for range uint64(^uint32(0)) {
 		candidate := r.nextLaneID
 		r.nextLaneID++
 		if r.nextLaneID == 0 {

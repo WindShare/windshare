@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"io"
+	"maps"
 	"sync"
 	"testing"
 
@@ -218,9 +219,7 @@ func TestSealAccountingRollsBackFailureAndIsConcurrentSafe(t *testing.T) {
 	var mu sync.Mutex
 	var wait sync.WaitGroup
 	for range 2 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			_, err := concurrent.SealBlock(record)
 			mu.Lock()
 			defer mu.Unlock()
@@ -229,7 +228,7 @@ func TestSealAccountingRollsBackFailureAndIsConcurrentSafe(t *testing.T) {
 			} else if errors.Is(err, ErrSealLimit) {
 				limits++
 			}
-		}()
+		})
 	}
 	wait.Wait()
 	if successes != 1 || limits != 1 {
@@ -334,7 +333,7 @@ func TestRevisionCodecPreservesOptionalModifiedTimeAndRejectsHostileFields(t *te
 		func(fields map[uint64]any) { fields[1] = make([]byte, 15) },
 		func(fields map[uint64]any) { fields[2] = make([]byte, 15) },
 		func(fields map[uint64]any) { fields[3] = make([]byte, 15) },
-		func(fields map[uint64]any) { fields[4] = catalog.MaxFileSize + 1 },
+		func(fields map[uint64]any) { fields[4] = uint64(catalog.MaxFileSize) + 1 },
 		func(fields map[uint64]any) { fields[5] = nil; fields[6] = uint64(1) },
 		func(fields map[uint64]any) { fields[6] = uint64(1) << 32 },
 		func(fields map[uint64]any) { fields[7] = uint64(255) },
@@ -342,9 +341,7 @@ func TestRevisionCodecPreservesOptionalModifiedTimeAndRejectsHostileFields(t *te
 	}
 	for index, mutate := range tests {
 		fields := make(map[uint64]any, len(base))
-		for key, value := range base {
-			fields[key] = value
-		}
+		maps.Copy(fields, base)
 		mutate(fields)
 		encoded, _ := recordEncMode.Marshal(fields)
 		if _, err := decodeRevision(encoded, fixture.share, fixture.file, catalog.MinChunkSize); err == nil {
@@ -379,9 +376,7 @@ func TestBlockCodecRejectsEverySemanticSubstitution(t *testing.T) {
 	}
 	for index, mutate := range tests {
 		fields := make(map[uint64]any, len(base)+1)
-		for key, value := range base {
-			fields[key] = value
-		}
+		maps.Copy(fields, base)
 		mutate(fields)
 		encoded, _ := recordEncMode.Marshal(fields)
 		if _, err := decodeBlock(encoded, fixture.descriptor, 0); err == nil {
@@ -420,7 +415,9 @@ func TestObjectBoundaryErrorsDoNotConsumeOrCrossIdentity(t *testing.T) {
 		t.Fatalf("invalid AES key error=%v", err)
 	}
 	key := segmentSealKey{file: fixture.file, revision: fixture.revision}
-	if !sealer.reserveSegmentSeal(key) || !sealer.reserveSegmentSeal(key) {
+	firstReserved := sealer.reserveSegmentSeal(key)
+	secondReserved := sealer.reserveSegmentSeal(key)
+	if !firstReserved || !secondReserved {
 		t.Fatal("test seal reservations failed")
 	}
 	sealer.releaseSegmentSeal(key)

@@ -192,7 +192,7 @@ func TestFactoryDefaultsValidationAndHandshakeFailures(t *testing.T) {
 	_ = malformedSender.Close()
 	_ = malformedPeer.Close()
 
-	testSenderAcceptDependencyFailures(t, fixture, baseSender)
+	testSenderAcceptDependencyFailures(t, baseSender)
 }
 
 func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
@@ -329,7 +329,7 @@ func TestReceiverRevisionFailureAndDuplicateLeasePaths(t *testing.T) {
 	}
 }
 
-func testSenderAcceptDependencyFailures(t *testing.T, fixture *verticalFixture, base SenderFactoryConfig) {
+func testSenderAcceptDependencyFailures(t *testing.T, base SenderFactoryConfig) {
 	t.Helper()
 	tests := []struct {
 		name   string

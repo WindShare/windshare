@@ -3,6 +3,7 @@ package protocolsession
 import (
 	"bytes"
 	"errors"
+	"maps"
 	"testing"
 	"time"
 )
@@ -124,9 +125,7 @@ func TestDecodeOperationFailureRejectsHostileSignedSemantics(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			fields := make(map[uint64]any, len(valid)+1)
-			for key, value := range valid {
-				fields[key] = value
-			}
+			maps.Copy(fields, valid)
 			mutate(fields)
 			encoded, err := messageEncMode.Marshal(fields)
 			if err != nil {
