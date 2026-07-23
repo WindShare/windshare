@@ -90,9 +90,14 @@ func TestOutboundTransactionRequiresExactLiveGenerationAuthority(t *testing.T) {
 		if _, err := beginOutboundTransaction(runtime, ctx, operationID); !errors.Is(err, protocolsession.ErrUnknownOperation) {
 			t.Fatalf("expired-generation transaction error=%v", err)
 		}
-		// Failed lease acquisition must release the route's send serialization lock.
+		// Reading the route under the send lock proves failed lease acquisition
+		// released serialization without weakening the route-state assertion.
 		route.sendMu.Lock()
+		preferredAfterFailure := route.preferred
 		route.sendMu.Unlock()
+		if !preferredAfterFailure.valid(true) {
+			t.Fatal("failed lease acquisition erased the synchronized route")
+		}
 		if runtime.routes.current(operationID) != route {
 			t.Fatal("stale generation consumed the route owned by cleanup")
 		}

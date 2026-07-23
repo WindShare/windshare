@@ -556,16 +556,14 @@ func TestOperationIDSourceUsesOneRandomPrefixAndConcurrentMonotonicSuffixes(t *t
 	errorsSeen := make(chan error, count)
 	var wait sync.WaitGroup
 	for range count {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			identity, err := source.New()
 			if err != nil {
 				errorsSeen <- err
 				return
 			}
 			identities <- identity
-		}()
+		})
 	}
 	wait.Wait()
 	close(identities)

@@ -429,7 +429,7 @@ func TestRelayContentAdmissionConcurrentFailureReportsOwningTransitionOnce(t *te
 	const contenders = 32
 	start := make(chan struct{})
 	results := make(chan error, contenders)
-	for contender := 0; contender < contenders; contender++ {
+	for range contenders {
 		go func() {
 			<-start
 			results <- admission.ObservePeer(receiverPeerDetached)
@@ -442,7 +442,7 @@ func TestRelayContentAdmissionConcurrentFailureReportsOwningTransitionOnce(t *te
 	if err := <-peerResult; err != nil {
 		t.Fatalf("owning peer signal=%v", err)
 	}
-	for contender := 0; contender < contenders; contender++ {
+	for range contenders {
 		if err := <-results; err != nil {
 			t.Fatalf("non-owning transition replayed error=%v", err)
 		}
@@ -700,7 +700,7 @@ func TestRelayContentAdmissionHighContentionPublishesOneRevocableCapability(t *t
 	start := make(chan struct{})
 	var contendersDone sync.WaitGroup
 	contendersDone.Add(contenders)
-	for contender := 0; contender < contenders; contender++ {
+	for contender := range contenders {
 		go func(index int) {
 			defer contendersDone.Done()
 			<-start
@@ -721,7 +721,7 @@ func TestRelayContentAdmissionHighContentionPublishesOneRevocableCapability(t *t
 	terminalStart := make(chan struct{})
 	var terminalDone sync.WaitGroup
 	terminalDone.Add(contenders)
-	for contender := 0; contender < contenders; contender++ {
+	for contender := range contenders {
 		go func(index int) {
 			defer terminalDone.Done()
 			<-terminalStart
@@ -947,7 +947,7 @@ func TestRelayContentAdmissionDeadlineAndPeerFailureResumeExactlyOnce(t *testing
 }
 
 func TestRelayContentAdmissionPeerFailureSurvivesRelayEpochReplacement(t *testing.T) {
-	for attempt := 0; attempt < 100; attempt++ {
+	for attempt := range 100 {
 		var sessionID protocolsession.ProtocolSessionID
 		sessionID[0] = byte(attempt + 1)
 		lanes, err := transfer.NewLaneSet(transfer.LaneSetConfig{ProtocolSessionID: sessionID})

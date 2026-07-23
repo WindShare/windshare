@@ -457,7 +457,10 @@ func TestReceiverPeerRuntimeLifecycleOwnsBeforeDonePublication(t *testing.T) {
 }
 
 func TestReceiverPeerInvalidValuesFailClosed(t *testing.T) {
-	if _, err := (&ReceiverRuntime{}).OpenPeerOperation(nil, nil); !errors.Is(err, ErrRuntimeClosed) {
+	// These calls intentionally exercise the public fail-closed contract without
+	// manufacturing context authority that an invalid receiver cannot own.
+	var missingContext context.Context
+	if _, err := (&ReceiverRuntime{}).OpenPeerOperation(missingContext, nil); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("invalid receiver runtime open error = %v", err)
 	}
 	for name, operation := range map[string]*ReceiverPeerOperation{
@@ -481,16 +484,16 @@ func TestReceiverPeerInvalidValuesFailClosed(t *testing.T) {
 			if _, ok := operation.MaximumContinuations(); ok {
 				t.Fatal("invalid peer operation exposed a continuation budget")
 			}
-			if _, err := operation.SendCandidate(nil, nil); !errors.Is(err, ErrRuntimeClosed) {
+			if _, err := operation.SendCandidate(missingContext, nil); !errors.Is(err, ErrRuntimeClosed) {
 				t.Fatalf("invalid peer candidate error = %v", err)
 			}
-			if control, ok := operation.Receive(nil).Control(); ok {
+			if control, ok := operation.Receive(missingContext).Control(); ok {
 				t.Fatalf("invalid peer operation exposed control: %+v", control)
 			}
-			if termination, ok := operation.Receive(nil).Termination(); ok {
+			if termination, ok := operation.Receive(missingContext).Termination(); ok {
 				t.Fatalf("invalid peer operation manufactured a termination: %+v", termination)
 			}
-			termination := operation.Terminate(nil)
+			termination := operation.Terminate(missingContext)
 			if operation != nil && operation.OwnsTermination(termination) {
 				t.Fatalf("invalid peer operation validated a terminal value: %+v", termination)
 			}

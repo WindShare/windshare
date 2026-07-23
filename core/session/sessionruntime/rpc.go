@@ -72,7 +72,7 @@ func (source *operationIDSource) New() (protocolsession.OperationID, error) {
 	source.mu.Lock()
 	defer source.mu.Unlock()
 	if !source.initialized {
-		for attempt := 0; attempt < operationIDPrefixAttempts; attempt++ {
+		for range operationIDPrefixAttempts {
 			if _, err := io.ReadFull(source.random, source.prefix[:]); err != nil {
 				return protocolsession.OperationID{}, err
 			}
@@ -307,7 +307,7 @@ func (client *rpcClient) sendContinuation(
 		return protocolsession.SendOutcomeDropped, err
 	}
 	var retryCause error
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		result := client.sendContinuationAttempt(ctx, call, message, kind, attempt, retryCause)
 		if result.retry {
 			retryCause = result.retryCause

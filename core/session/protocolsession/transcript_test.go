@@ -386,9 +386,7 @@ func TestClientHelloReplayGuardIsAtomicAndExpiresAtFiveMinutes(t *testing.T) {
 	var replays atomic.Int32
 	var wait sync.WaitGroup
 	for range 32 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			err := guard.admit(client)
 			switch {
 			case err == nil:
@@ -398,7 +396,7 @@ func TestClientHelloReplayGuardIsAtomicAndExpiresAtFiveMinutes(t *testing.T) {
 			default:
 				t.Errorf("admit client hello: %v", err)
 			}
-		}()
+		})
 	}
 	wait.Wait()
 	if admitted.Load() != 1 || replays.Load() != 31 {

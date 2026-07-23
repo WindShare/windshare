@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+var errInjectedCatalogStorageCapacity = errors.New("injected catalog storage capacity failure")
+
 type failureSealerProbe struct {
 	calls    atomic.Int32
 	delegate FailureSealer
@@ -226,7 +228,7 @@ func TestFailurePersistenceFaultsNeverPublishHalfAuthority(t *testing.T) {
 		point FileBackendFaultPoint
 		err   error
 	}{
-		{point: FileFaultStageFailure, err: syscall.ENOSPC},
+		{point: FileFaultStageFailure, err: errInjectedCatalogStorageCapacity},
 		{point: FileFaultPublishFailure, err: syscall.EIO},
 	} {
 		t.Run(string(test.point), func(t *testing.T) {

@@ -101,9 +101,7 @@ func TestReceiverBlockLaneUnknownSendDoesNotIssueSecondOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	writerDone := make(chan error, 1)
-	writerContext, stopWriter := context.WithCancel(context.Background())
-	defer stopWriter()
-	go func() { writerDone <- physical.writer.Run(writerContext) }()
+	go func() { writerDone <- physical.writer.Run(t.Context()) }()
 	// Cancellation deterministically selects the now-stopped attempted writer;
 	// TryControl then performs synchronous local tombstone reconciliation.
 	runtime.lanes.mu.Lock()

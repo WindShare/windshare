@@ -3,6 +3,7 @@ package catalogflow
 import (
 	"bytes"
 	"errors"
+	"maps"
 	"testing"
 	"time"
 
@@ -324,9 +325,7 @@ func marshalIntegerMapInOrder(
 
 func cloneIntegerFields(source map[uint64]any) map[uint64]any {
 	cloned := make(map[uint64]any, len(source))
-	for key, value := range source {
-		cloned[key] = value
-	}
+	maps.Copy(cloned, source)
 	return cloned
 }
 

@@ -179,8 +179,7 @@ func TestClientErrorsAndQueueBounds(t *testing.T) {
 		t.Fatalf("relay error = %v", err)
 	}
 
-	linkContext, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	linkContext := t.Context()
 	blocked := newScriptedSocket()
 	l := newLink(linkContext, blocked, false)
 	id := relaySessionID(5)

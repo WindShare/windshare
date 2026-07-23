@@ -594,8 +594,7 @@ func normalizeWindowsNTError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var status windows.NTStatus
-	if errors.As(err, &status) {
+	if status, ok := errors.AsType[windows.NTStatus](err); ok {
 		return status.Errno()
 	}
 	return err

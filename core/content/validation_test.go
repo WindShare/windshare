@@ -116,9 +116,7 @@ func TestKeyTreeDestroySerializesWithConcurrentDerivation(t *testing.T) {
 	errorsOut := make(chan error, 16)
 	var workers sync.WaitGroup
 	for range 16 {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			<-start
 			for range 32 {
 				_, err := tree.FileObjectKey(catalogID[catalog.FileID](1))
@@ -127,7 +125,7 @@ func TestKeyTreeDestroySerializesWithConcurrentDerivation(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	close(start)
 	tree.Destroy()

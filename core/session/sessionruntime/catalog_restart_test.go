@@ -69,11 +69,11 @@ func TestCatalogServiceReplaysExactOpaquePageAfterEvictionAndRestart(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := catalogflow.NewListRequest(directoryID, pointerTo(committed.Generation()), 0)
+	request, err := catalogflow.NewListRequest(directoryID, new(committed.Generation()), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := newRestartCatalogService(t, share, store, sessionBudget, scanner, objects)
+	service := newRestartCatalogService(t, share, store, sessionBudget, scanner)
 	before, err := service.Serve(ctx, request, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestCatalogServiceReplaysExactOpaquePageAfterEvictionAndRestart(t *testing.
 		return catalog.ScanResult{}, errors.New("durable replay attempted a new scan")
 	})
 	recoveredService := newRestartCatalogService(
-		t, share, recovered, recoveredBudget, unexpectedScan, recoveredObjects,
+		t, share, recovered, recoveredBudget, unexpectedScan,
 	)
 	after, err := recoveredService.Serve(ctx, request, nil)
 	if err != nil {
@@ -181,7 +181,6 @@ func newRestartCatalogService(
 	store *catalog.CatalogStore,
 	budget *catalog.BudgetAccount,
 	scanner catalog.DirectoryScanner,
-	objects *catalogflow.SealedCatalogStore,
 ) *catalogflow.AddressedSenderService {
 	t.Helper()
 	source, err := catalogflow.NewCatalogStoreSource(catalogflow.CatalogStoreSourceConfig{
@@ -196,5 +195,3 @@ func newRestartCatalogService(
 	}
 	return service
 }
-
-func pointerTo[T any](value T) *T { return &value }

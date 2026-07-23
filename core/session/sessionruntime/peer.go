@@ -3,6 +3,7 @@ package sessionruntime
 import (
 	"bytes"
 	"context"
+	"slices"
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -234,10 +235,8 @@ func (snapshot *ReceiverPeerDiagnosticSnapshot) append(diagnostic ReceiverPeerDi
 	if diagnostic.code == 0 {
 		return
 	}
-	for _, existing := range snapshot.components[:snapshot.count] {
-		if existing == diagnostic {
-			return
-		}
+	if slices.Contains(snapshot.components[:snapshot.count], diagnostic) {
+		return
 	}
 	if snapshot.truncated {
 		return

@@ -624,7 +624,7 @@ func TestFileFailureRecoveryStreamsBeyondOneDirectoryBatch(t *testing.T) {
 	}
 	var previous ScanAttemptID
 	var wantTail ScanAttemptID
-	for index := 0; index < failureDirectoryReadBatch+1; index++ {
+	for index := range failureDirectoryReadBatch + 1 {
 		var attempt ScanAttemptID
 		var generation DirectoryGeneration
 		binary.BigEndian.PutUint32(attempt[12:], uint32(index+1))

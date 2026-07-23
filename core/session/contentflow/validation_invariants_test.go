@@ -179,7 +179,7 @@ func TestSenderHandlerLifecycleSnapshotReportsOnlyBoundedOwnership(t *testing.T)
 		queue:   make(chan queuedOperation, 2),
 		workers: make(chan struct{}, 2),
 		active: map[handlerOperation]context.CancelFunc{
-			handlerOperation{}: func() {},
+			{}: func() {},
 		},
 	}
 	handler.queue <- queuedOperation{}

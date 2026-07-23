@@ -86,7 +86,7 @@ func (transaction *outboundTransaction) Run(
 	var permit protocolsession.OutboundReplayPermit
 	var combined error
 	aggregate := protocolsession.SendOutcomeDropped
-	for attempts := 0; attempts < protocolsession.DefaultMaxLogicalLanes; attempts++ {
+	for range protocolsession.DefaultMaxLogicalLanes {
 		completion, err := transaction.runLaneAttempt(ctx, attempt, permit)
 		if !completion.Replay.IsZero() {
 			permit = completion.Replay

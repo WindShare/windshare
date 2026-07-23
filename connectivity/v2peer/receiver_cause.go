@@ -29,10 +29,10 @@ var (
 	receiverTrustedJoinType      = reflect.TypeOf(errors.Join(errReceiverStructuralProbe, errReceiverStructuralProbe))
 	receiverTrustedWrapType      = reflect.TypeOf(fmt.Errorf("receiver structural wrapper: %w", errReceiverStructuralProbe))
 	receiverTrustedMultiWrapType = reflect.TypeOf(fmt.Errorf("receiver structural wrappers: %w %w", errReceiverStructuralProbe, errReceiverStructuralProbe))
-	receiverSessionFailureType   = reflect.TypeOf((*transfer.SessionFailureError)(nil))
-	receiverRemoteFailureType    = reflect.TypeOf(sessionruntime.RemoteOperationError{})
-	receiverSafeDiagnosticType   = reflect.TypeOf((*receiverSafeDiagnosticError)(nil))
-	receiverOwnedJoinType        = reflect.TypeOf((*receiverOwnedJoinError)(nil))
+	receiverSessionFailureType   = reflect.TypeFor[*transfer.SessionFailureError]()
+	receiverRemoteFailureType    = reflect.TypeFor[sessionruntime.RemoteOperationError]()
+	receiverSafeDiagnosticType   = reflect.TypeFor[*receiverSafeDiagnosticError]()
+	receiverOwnedJoinType        = reflect.TypeFor[*receiverOwnedJoinError]()
 )
 
 // receiverOwnedJoinError makes the canonical result safe to share across

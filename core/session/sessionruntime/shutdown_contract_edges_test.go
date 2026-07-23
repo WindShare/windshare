@@ -25,13 +25,16 @@ func TestSenderLifecycleRejectsMissingReceiverAndContextAuthority(t *testing.T) 
 	nilRuntime.WaitClosed()
 
 	runtime := &SenderRuntime{}
-	if err := runtime.Stop(nil, "stop"); !errors.Is(err, ErrRuntimeConfig) {
+	// A named nil context is deliberate invalid-input evidence; production
+	// lifecycle calls must always carry caller-owned cancellation authority.
+	var missingContext context.Context
+	if err := runtime.Stop(missingContext, "stop"); !errors.Is(err, ErrRuntimeConfig) {
 		t.Fatalf("nil stop context error=%v", err)
 	}
-	if err := runtime.BeginStop(nil, "stop"); !errors.Is(err, ErrRuntimeConfig) {
+	if err := runtime.BeginStop(missingContext, "stop"); !errors.Is(err, ErrRuntimeConfig) {
 		t.Fatalf("nil begin-stop context error=%v", err)
 	}
-	if err := runtime.WaitStopped(nil); !errors.Is(err, ErrRuntimeConfig) {
+	if err := runtime.WaitStopped(missingContext); !errors.Is(err, ErrRuntimeConfig) {
 		t.Fatalf("nil wait-stop context error=%v", err)
 	}
 
@@ -42,7 +45,7 @@ func TestSenderLifecycleRejectsMissingReceiverAndContextAuthority(t *testing.T) 
 	if err := nilFactory.BeginStop("stop"); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("nil factory begin-stop error=%v", err)
 	}
-	if err := (&SenderFactory{}).Stop(nil, "stop"); !errors.Is(err, ErrRuntimeConfig) {
+	if err := (&SenderFactory{}).Stop(missingContext, "stop"); !errors.Is(err, ErrRuntimeConfig) {
 		t.Fatalf("nil factory stop context error=%v", err)
 	}
 	if normalized, err := normalizeTerminalMessage(""); err != nil || normalized != "Sender stopped" {

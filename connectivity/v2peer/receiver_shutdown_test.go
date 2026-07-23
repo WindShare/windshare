@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -295,13 +296,11 @@ func TestReceiverAttemptConcurrentCloseTerminatesExactOperationOnce(t *testing.T
 	start := make(chan struct{})
 	results := make(chan error, concurrentReceiverCloses)
 	var closes sync.WaitGroup
-	for index := 0; index < concurrentReceiverCloses; index++ {
-		closes.Add(1)
-		go func() {
-			defer closes.Done()
+	for range concurrentReceiverCloses {
+		closes.Go(func() {
 			<-start
 			results <- harness.attempt.Close()
-		}()
+		})
 	}
 	close(start)
 	closes.Wait()
@@ -822,8 +821,7 @@ func TestReceiverCoreSessionFailureBecomesOwnedProtocolDiagnostic(t *testing.T) 
 		!containsReceiverCauseClass(classified.classes, ReceiverCauseUnknown) {
 		t.Fatalf("core session failure classification=%+v unwrap_calls=%d", classified, unsafeChild.unwrapCalls)
 	}
-	var exposed *transfer.SessionFailureError
-	if errors.As(classified.retained, &exposed) {
+	if _, ok := errors.AsType[*transfer.SessionFailureError](classified.retained); ok {
 		t.Fatal("core SessionFailureError escaped the owned receiver residual")
 	}
 }
@@ -838,8 +836,7 @@ func TestReceiverCrossScopeSessionFailureRequiresSealedAuthority(t *testing.T) {
 		containsReceiverCauseClass(classified.classes, ReceiverCauseUnknown) {
 		t.Fatalf("cross-scope session failure classification=%+v", classified)
 	}
-	var exposed *transfer.SessionFailureError
-	if errors.As(classified.retained, &exposed) {
+	if _, ok := errors.AsType[*transfer.SessionFailureError](classified.retained); ok {
 		t.Fatal("cross-scope core wrapper escaped the owned receiver residual")
 	}
 	decision := receiverUnsafeConsequence(ReceiverProvenanceRemoteFailureScopeViolation)
@@ -911,7 +908,7 @@ func TestReceiverUntrustedSessionFailureShapesRemainOpaque(t *testing.T) {
 
 func TestReceiverDepthTruncationCannotConsumeLaterSiblingBudget(t *testing.T) {
 	deep := error(errors.New("unreachable receiver leaf"))
-	for depth := 0; depth < maximumReceiverErrorTreeDepth+8; depth++ {
+	for depth := range maximumReceiverErrorTreeDepth + 8 {
 		deep = fmt.Errorf("trusted receiver depth %d: %w", depth, deep)
 	}
 	diagnostic := transfer.NewSessionFailure(protocolsession.ErrInvalidOperationFailure)
@@ -958,7 +955,7 @@ func TestReceiverWideDiagnosticOrderCannotChangeSealedSessionAuthority(t *testin
 
 func TestReceiverAttemptSealedSessionConsequenceSurvivesDiagnosticOrder(t *testing.T) {
 	deep := error(errors.New("unreachable structural-scope diagnostic"))
-	for depth := 0; depth < maximumReceiverErrorTreeDepth+8; depth++ {
+	for depth := range maximumReceiverErrorTreeDepth + 8 {
 		deep = fmt.Errorf("trusted structural-scope depth %d: %w", depth, deep)
 	}
 	sessionDiagnostic := transfer.NewSessionFailure(protocolsession.ErrInvalidOperationFailure)
@@ -1109,19 +1106,9 @@ func containsReceiverBenignCause(
 	causes []ReceiverBenignCause,
 	want ReceiverBenignCause,
 ) bool {
-	for _, cause := range causes {
-		if cause == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(causes, want)
 }
 
 func containsReceiverCauseClass(classes []ReceiverCauseClass, want ReceiverCauseClass) bool {
-	for _, class := range classes {
-		if class == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(classes, want)
 }

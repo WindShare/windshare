@@ -141,7 +141,7 @@ func TestSessionWriterSettlementLeaseAnchorsTombstoneAfterPhysicalSend(t *testin
 			}
 			settledAt := clock.Now()
 
-			for replayIndex := 0; replayIndex < 2; replayIndex++ {
+			for replayIndex := range 2 {
 				clock.Set(settledAt.Add(
 					time.Duration(replayIndex+1) * (OperationTombstoneLifetime / 3),
 				))

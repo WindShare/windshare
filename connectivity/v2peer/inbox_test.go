@@ -45,13 +45,11 @@ func TestReceiverAttemptCloseAndConcurrentPushLeaveNoRetainedEvents(t *testing.T
 	const producers = 64
 	start := make(chan struct{})
 	var wait sync.WaitGroup
-	for index := 0; index < producers; index++ {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+	for range producers {
+		wait.Go(func() {
 			<-start
 			attempt.push(receiverEvent{kind: receiverConnectionFailed, err: errors.New("test")})
-		}()
+		})
 	}
 	close(start)
 	attempt.closeInbox()

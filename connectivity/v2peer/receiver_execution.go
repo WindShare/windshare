@@ -203,8 +203,7 @@ func (execution *receiverExecution) openSignaling() receiverWorkflowResult {
 }
 
 func (execution *receiverExecution) classifySignalingOpenFailure(err error) receiverWorkflowResult {
-	var failure *receiverSignalingOpenFailure
-	if errors.As(err, &failure) {
+	if failure, ok := errors.AsType[*receiverSignalingOpenFailure](err); ok {
 		if !failure.ownedBy(execution.binding) {
 			return receiverPreOperationAdapterFailure(nil)
 		}
@@ -268,16 +267,14 @@ func (execution *receiverExecution) startWorkers() {
 
 func (execution *receiverExecution) startDeadline() {
 	execution.timer = execution.attempt.deadline
-	execution.children.Add(1)
-	go func() {
-		defer execution.children.Done()
+	execution.children.Go(func() {
 		select {
 		case <-execution.timer.C():
 			execution.attempt.cancel(errAttemptTimeout)
 		case <-execution.deadlineDone:
 		case <-execution.attempt.ctx.Done():
 		}
-	}()
+	})
 }
 
 func (execution *receiverExecution) close(
@@ -408,9 +405,7 @@ func (execution *receiverExecution) startAttachment() error {
 	}
 	execution.channelOpened = true
 	execution.attachStarted = true
-	execution.children.Add(1)
-	go func() {
-		defer execution.children.Done()
+	execution.children.Go(func() {
 		grant, err := execution.attempt.lanes.RequestLane(execution.attempt.ctx, 0)
 		var lane sessionruntime.LaneIdentity
 		if err == nil {
@@ -419,7 +414,7 @@ func (execution *receiverExecution) startAttachment() error {
 			)
 		}
 		execution.attempt.push(receiverEvent{kind: receiverAttached, lane: lane, err: err})
-	}()
+	})
 	return nil
 }
 

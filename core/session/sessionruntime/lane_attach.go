@@ -505,7 +505,7 @@ func (runtime *SenderRuntime) AttachedLanes() int {
 }
 
 func readNonzeroLaneNonce(source io.Reader, size int) ([]byte, error) {
-	for attempt := 0; attempt < laneNonceAttempts; attempt++ {
+	for range laneNonceAttempts {
 		value := make([]byte, size)
 		if _, err := io.ReadFull(source, value); err != nil {
 			return nil, err

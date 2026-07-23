@@ -236,7 +236,7 @@ func (factory *ReceiverFactory) newBinding() (v2signal.Binding, error) {
 }
 
 func readReceiverSignalID[T ~[v2signal.IdentityBytes]byte](source io.Reader) (T, error) {
-	for attempt := 0; attempt < 4; attempt++ {
+	for range 4 {
 		var identity T
 		if _, err := io.ReadFull(source, identity[:]); err != nil {
 			return T{}, err

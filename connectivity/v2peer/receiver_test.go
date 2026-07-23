@@ -189,8 +189,7 @@ func TestReceiverAttemptMalformedSemanticCancelsOnlyExactOperation(t *testing.T)
 		{name: "candidate", kind: protocolsession.MessagePeerCandidate},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			parent, cancelParent := context.WithCancel(context.Background())
-			defer cancelParent()
+			parent := t.Context()
 			harness := newReceiverHarnessWithContext(t, parent, nil)
 			harness.operation.controls <- receiverTestControl{kind: test.kind, body: []byte{0xff}}
 			select {
@@ -376,13 +375,6 @@ func (peer *receiverTestPeerConnection) emitCandidate(candidate *pion.ICECandida
 	callback := peer.onCandidate
 	peer.mu.Unlock()
 	callback(candidate)
-}
-
-func (peer *receiverTestPeerConnection) fail() {
-	peer.mu.Lock()
-	callback := peer.onState
-	peer.mu.Unlock()
-	callback(pion.PeerConnectionStateFailed)
 }
 
 func (peer *receiverTestPeerConnection) emitUnexpectedDataChannel(channel *pion.DataChannel) {
@@ -781,8 +773,7 @@ func TestReceiverAttemptAcceptsAlignedLowerCandidateLimit(t *testing.T) {
 }
 
 func TestReceiverAttemptPhysicalLossCancelsSignalingWithoutEndingParent(t *testing.T) {
-	parent, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	parent := t.Context()
 	harness := newReceiverHarnessWithContext(t, parent, nil)
 	harness.answer(t)
 	harness.openAndAwaitLane(t)
@@ -847,8 +838,7 @@ func TestReceiverAttemptRejectsSecondAuthenticatedAnswer(t *testing.T) {
 }
 
 func TestReceiverAttemptIsolatesSenderCreatedDataChannelToPeerPath(t *testing.T) {
-	parent, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	parent := t.Context()
 	harness := newReceiverHarnessWithContext(t, parent, nil)
 	harness.peer.emitUnexpectedDataChannel(nil)
 	select {

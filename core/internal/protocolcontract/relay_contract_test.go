@@ -132,7 +132,7 @@ func canonicalV2RelayEndpoints(raw string) (string, string, error) {
 		return "", "", err
 	}
 	escapedPath := u.EscapedPath()
-	for _, segment := range strings.Split(escapedPath, "/") {
+	for segment := range strings.SplitSeq(escapedPath, "/") {
 		decoded, err := url.PathUnescape(segment)
 		if err != nil || !utf8.ValidString(decoded) || decoded == "." || decoded == ".." {
 			return "", "", fmt.Errorf("relay base path is invalid")
@@ -142,8 +142,8 @@ func canonicalV2RelayEndpoints(raw string) (string, string, error) {
 		return "", "", fmt.Errorf("relay base query is invalid")
 	}
 	path := u.Path
-	if strings.HasSuffix(escapedPath, "/") {
-		escapedPath = strings.TrimSuffix(escapedPath, "/")
+	if trimmed, ok := strings.CutSuffix(escapedPath, "/"); ok {
+		escapedPath = trimmed
 		path = strings.TrimSuffix(path, "/")
 	}
 	u.Path = path + v2RelayWebSocketPath
@@ -207,7 +207,7 @@ func validV2RelayDNSName(hostname string) bool {
 	if name == "" || len(name) > 253 {
 		return false
 	}
-	for _, label := range strings.Split(name, ".") {
+	for label := range strings.SplitSeq(name, ".") {
 		if len(label) == 0 || len(label) > 63 || strings.HasPrefix(label, "-") ||
 			strings.HasSuffix(label, "-") || strings.HasPrefix(label, "xn--") ||
 			(len(label) > 3 && label[2:4] == "--") {

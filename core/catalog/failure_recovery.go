@@ -143,6 +143,9 @@ func (b *FileCatalogBackend) replayFailureDirectoryLocked(
 	}
 	var usage ResourceUsage
 	for _, record := range records {
+		if err := ctx.Err(); err != nil {
+			return ResourceUsage{}, err
+		}
 		meta, found, err := b.loadFailureLocked(directory, record.attempt)
 		if err != nil || !found {
 			return ResourceUsage{}, ErrCorruptCatalogStorage

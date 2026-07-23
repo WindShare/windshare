@@ -115,7 +115,7 @@ func TestSessionWriterControlPriorityAndFairDataBurst(t *testing.T) {
 		t.Fatal(err)
 	}
 	operationID := testOperationID(60)
-	for marker := byte(0); marker < 16; marker++ {
+	for marker := range byte(16) {
 		if _, err := writer.TryData(mustFragmentMessage(t, operationID, marker)); err != nil {
 			t.Fatal(err)
 		}
@@ -261,7 +261,7 @@ func TestSessionWriterTerminalAdmissionIsImmediateAndOutOfBand(t *testing.T) {
 }
 
 func TestSessionWriterBoundedQueuesClassesAndStopReceipts(t *testing.T) {
-	controlMessage := mustMessage(t, MessageListChildren, pointerOperationID(testOperationID(80)), map[uint64]any{0: uint64(1)})
+	controlMessage := mustMessage(t, MessageListChildren, new(testOperationID(80)), map[uint64]any{0: uint64(1)})
 	controlWriter, _ := NewSessionWriter(newRuntimeChannel(0), &passthroughSealer{}, &permissivePolicy{direction: DirectionReceiverToSender})
 	receipts := make([]SendReceipt, 0, ControlQueueFrameLimit)
 	for range ControlQueueFrameLimit {
@@ -659,8 +659,6 @@ func mustPreparedControl(t *testing.T, kind MessageKind, operationID *OperationI
 	return prepared
 }
 
-func pointerOperationID(id OperationID) *OperationID { return &id }
-
 func mustPlaintext(t *testing.T, message Message) []byte {
 	t.Helper()
 	plaintext, err := EncodeMessage(message)
@@ -668,13 +666,6 @@ func mustPlaintext(t *testing.T, message Message) []byte {
 		t.Fatal(err)
 	}
 	return plaintext
-}
-
-func waitReceipt(t *testing.T, receipt SendReceipt) (SendOutcome, error) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	return receipt.Wait(ctx)
 }
 
 func (p *passthroughSealer) String() string { return fmt.Sprintf("sequence=%d", p.next) }

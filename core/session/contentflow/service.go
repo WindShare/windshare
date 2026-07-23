@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -110,9 +111,7 @@ func (s *SenderService) Open(ctx context.Context, request OpenRequest) (OpenResu
 			return OpenResults{}, fmt.Errorf("%w: session lease identity reused", ErrRevisionStoreContract)
 		}
 	}
-	for leaseID, descriptor := range leases {
-		s.leases[leaseID] = descriptor
-	}
+	maps.Copy(s.leases, leases)
 	s.mu.Unlock()
 	return validatedResults, nil
 }

@@ -157,7 +157,7 @@ func decodeMap(plaintext []byte, expectedFields int) (map[uint64]cbor.RawMessage
 	if len(fields) != expectedFields {
 		return nil, ErrInvalidRecord
 	}
-	for key := 0; key < expectedFields; key++ {
+	for key := range expectedFields {
 		if fields[uint64(key)] == nil {
 			return nil, ErrInvalidRecord
 		}

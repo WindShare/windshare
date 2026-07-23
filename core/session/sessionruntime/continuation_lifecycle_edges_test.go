@@ -68,7 +68,10 @@ func TestOperationCallClosedStateRejectsEveryAuthorityMutation(t *testing.T) {
 	if _, err := (*operationCall)(nil).acquireCandidateSend(context.Background(), context.Background()); !errors.Is(err, ErrOperationMissing) {
 		t.Fatalf("nil candidate call error=%v", err)
 	}
-	if _, err := (&operationCall{}).acquireCandidateSend(nil, context.Background()); !errors.Is(err, ErrOperationMissing) {
+	// A named nil value keeps this deliberate invalid-input contract distinct from
+	// production call sites, which must always propagate an owned context.
+	var missingContext context.Context
+	if _, err := (&operationCall{}).acquireCandidateSend(missingContext, context.Background()); !errors.Is(err, ErrOperationMissing) {
 		t.Fatalf("nil candidate context error=%v", err)
 	}
 

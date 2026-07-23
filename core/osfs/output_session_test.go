@@ -480,11 +480,8 @@ func TestFilesystemOutputAbortIsolationAndConcurrentTransactions(t *testing.T) {
 	const files = 8
 	var wait sync.WaitGroup
 	errorsOut := make(chan error, files)
-	for index := 0; index < files; index++ {
-		index := index
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+	for index := range files {
+		wait.Go(func() {
 			descriptor := outputTestDescriptor(t, config, byte(40+index), byte(60+index), 128, catalog.ModifiedTime{})
 			path := filepath.ToSlash(filepath.Join("parallel", phaseName(checkpointPhase(index+1))+"-"+string(rune('a'+index))+".bin"))
 			transaction, _, err := session.BeginFile(context.Background(), outputTestFile(path, descriptor))
@@ -504,7 +501,7 @@ func TestFilesystemOutputAbortIsolationAndConcurrentTransactions(t *testing.T) {
 				err = transaction.Commit(context.Background())
 			}
 			errorsOut <- err
-		}()
+		})
 	}
 	wait.Wait()
 	close(errorsOut)
@@ -640,7 +637,7 @@ func TestFilesystemOutputBoundsActiveTransactions(t *testing.T) {
 	root := t.TempDir()
 	config := outputTestConfig(root)
 	session, _ := NewFilesystemOutputSession(config)
-	for index := 0; index < MaxFilesystemOutputTransactions; index++ {
+	for index := range MaxFilesystemOutputTransactions {
 		descriptor := outputTestDescriptor(t, config, byte(130+index), byte(170+index), 0, catalog.ModifiedTime{})
 		_, _, err := session.BeginFile(context.Background(), outputTestFile(fmt.Sprintf("bounded/%02d.bin", index), descriptor))
 		if err != nil {

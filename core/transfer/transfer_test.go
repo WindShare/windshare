@@ -568,7 +568,7 @@ func TestLaneSetContentSuspensionsShareLogicalLaneBudget(t *testing.T) {
 	lanes, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](44)})
 	defer lanes.Close()
 	holds := make([]*ContentLaneSuspension, 0, MaxLogicalLanes)
-	for index := 0; index < MaxLogicalLanes; index++ {
+	for index := range MaxLogicalLanes {
 		identity := LaneIdentity{ID: uint32(index + 1), Epoch: 1}
 		if err := lanes.Add(identity, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, nil
@@ -715,7 +715,7 @@ func TestBlockBrokerSingleflightCancellationAndReceiverIsolation(t *testing.T) {
 func TestBlockBrokerRangeReadsOnlyIntersectingLocalBlocks(t *testing.T) {
 	descriptor := transferDescriptor(t, 4)
 	lane := &countingLane{records: make(map[uint64]records.BlockRecord)}
-	for index := uint64(0); index < 4; index++ {
+	for index := range uint64(4) {
 		lane.records[index] = transferRecord(t, descriptor, index)
 	}
 	broker, lanes, _, lease, _ := newBrokerFixture(t, 4, lane, uint64(catalog.MinChunkSize)*3, uint64(catalog.MinChunkSize)*6)
