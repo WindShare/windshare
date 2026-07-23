@@ -15,12 +15,11 @@
     },
     {
       "RelativePath": "scripts/d5-windows-network-packages.json",
-      "SHA256": "8639df0ee468e6dbd90f5271cf0898b5a505a58da0a327c364c6ac5167894d4b"
+      "SHA256": "09bd4070aec882efd0a5258b07a71350dee38fba8e7ba18804ef7874c3524c0c"
     }
   ],
   "D5": {
     "StableChildRelativePrograms": [
-      "e2e-bin/hostile-sender.exe",
       "e2e-bin/windshare.exe",
       "e2e-bin/wsrelay.exe"
     ],

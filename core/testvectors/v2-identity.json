@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "kind": "v2-identity",
+  "description": "Suite 0x02 link identity and domain-separated HKDF contract.",
+  "cases": [
+    {
+      "catalogKeyB64": "r9W4bwpszHnYVwoyRjZxuUXGtSTKZ00/CkDK544TWRA=",
+      "descriptorKeyB64": "QJf/rkymcTqujczmpzms5e8PRSI08a/0Fm7ica6GlQ4=",
+      "fileIdB64": "cHFyc3R1dnd4eXp7fH1+fw==",
+      "fileObjectKeyB64": "4rzGG8yKKJdsSeoyXXqLxF+f8ep/ziFK/7s7CVkcgY0=",
+      "fileRevisionB64": "kJGSk5SVlpeYmZqbnJ2enw==",
+      "fileSegmentKeyB64": "06GFV5Og2rr0wOuHIdcK/YuWlwQyhhf8s8MWtcf10Tw=",
+      "keyString": "AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E",
+      "name": "suite-02-link-and-keys",
+      "pkHashB64": "JEKgoDij26RUJt97fcJPxA==",
+      "readSecretB64": "AAECAwQFBgcICQoLDA0ODw==",
+      "revisionKeyB64": "XMN/TJMjXIrfGygoJr8lGJU68JPoRd/5fHdTa3TGWis=",
+      "segment": "0",
+      "senderPublicKeyB64": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
+      "senderSeedB64": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
+      "shareId": "tVW-68OSeLBZTpU-",
+      "shareIdRawB64": "tVW+68OSeLBZTpU+",
+      "shareInstanceB64": "QEFCQ0RFRkdISUpLTE1OTw==",
+      "suite": 2
+    }
+  ]
+}

@@ -2,205 +2,159 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/windshare/windshare/internal/testnetwork"
-	"github.com/windshare/windshare/relay/admission"
-	"github.com/windshare/windshare/relay/protocol"
-	"github.com/windshare/windshare/relay/signaling"
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
-func TestRunServesAndShutsDownGracefully(t *testing.T) {
+func TestRunServesOnlyV2AndShutsDownGracefully(t *testing.T) {
 	testnetwork.RequireOSNetwork(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	ready := make(chan net.Addr, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, []string{"-listen", "127.0.0.1:0"}, func(a net.Addr) { ready <- a }, t.Logf)
+		done <- run(ctx, []string{
+			"-listen", "127.0.0.1:0", "-state-dir", t.TempDir(),
+		}, func(address net.Addr) { ready <- address }, t.Logf)
 	}()
-
-	var addr net.Addr
+	var address net.Addr
 	select {
-	case addr = <-ready:
+	case address = <-ready:
 	case err := <-done:
-		t.Fatalf("run exited early: %v", err)
+		t.Fatalf("run exited before ready: %v", err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("service did not become ready")
+		t.Fatal("relay did not become ready")
 	}
 
-	resp, err := http.Get(fmt.Sprintf("http://%s/v1/config", addr))
+	response, err := http.Get(fmt.Sprintf("http://%s/healthz", address))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	var cfg protocol.ServerConfig
-	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
+	body, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || string(body) != "ok\n" {
+		t.Fatalf("health response = %d %q, read=%v close=%v", response.StatusCode, body, readErr, closeErr)
+	}
+	response, err = http.Get(fmt.Sprintf("http://%s/v1/config", address))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.ProtocolVersions) == 0 || cfg.ProtocolVersions[0] != protocol.ProtocolVersion {
-		t.Fatalf("config = %+v", cfg)
-	}
-	if cfg.Limits.Admission.MaxConnections <= 0 ||
-		cfg.Limits.Admission.MaxSharesPerSource <= 0 ||
-		cfg.Limits.Timeouts.WebSocketKeepaliveMilliseconds <= 0 ||
-		cfg.Limits.Timeouts.SenderReconnectGraceMilliseconds <= 0 ||
-		cfg.Limits.MaxHeaderBytes <= 0 {
-		t.Fatalf("effective limits were not advertised: %+v", cfg.Limits)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("retired v1 route status = %d", response.StatusCode)
 	}
 
 	cancel()
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("graceful shutdown should return nil: %v", err)
+			t.Fatalf("graceful shutdown: %v", err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("graceful shutdown did not complete")
 	}
 }
 
-func TestRunWithCustomAdmissionPolicy(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ready := make(chan net.Addr, 1)
-	done := make(chan error, 1)
-	go func() {
-		done <- run(ctx, []string{
-			"-listen", "127.0.0.1:0",
-			"-max-connections", "17",
-			"-join-share-rate", "3",
-			"-sender-grace", "7s",
-			"-origins", "https://windshare.top",
-		},
-			func(a net.Addr) { ready <- a }, t.Logf)
-	}()
-	select {
-	case addr := <-ready:
-		resp, err := http.Get(fmt.Sprintf("http://%s/v1/config", addr))
-		if err != nil {
-			t.Fatal(err)
-		}
-		var cfg protocol.ServerConfig
-		if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
-			resp.Body.Close()
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if cfg.Limits.Admission.MaxConnections != 17 || cfg.Limits.Admission.JoinPerShare.PerSecond != 3 ||
-			cfg.Limits.Timeouts.SenderReconnectGraceMilliseconds != 7000 {
-			t.Fatalf("advertised policy = %+v", cfg.Limits.Admission)
-		}
-	case err := <-done:
-		t.Fatalf("run exited early: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("service did not become ready")
-	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("shutdown error: %v", err)
-	}
-}
-
 func TestServerPolicyBuildsHardenedServer(t *testing.T) {
 	policy := serverPolicy{
-		readHeaderTimeout: 2 * time.Second,
-		readTimeout:       3 * time.Second,
-		idleTimeout:       4 * time.Second,
-		maxHeaderBytes:    1234,
+		readHeaderTimeout: 2 * time.Second, readTimeout: 3 * time.Second,
+		idleTimeout: 4 * time.Second, maximumHeader: 1234,
 	}
 	if err := policy.validate(); err != nil {
 		t.Fatal(err)
 	}
-	srv := policy.newServer(http.NewServeMux(), nil)
-	if srv.ReadHeaderTimeout != policy.readHeaderTimeout ||
-		srv.ReadTimeout != policy.readTimeout ||
-		srv.IdleTimeout != policy.idleTimeout ||
-		srv.MaxHeaderBytes != policy.maxHeaderBytes {
-		t.Fatalf("server = %+v", srv)
+	server := policy.newServer(http.NewServeMux())
+	if server.ReadHeaderTimeout != policy.readHeaderTimeout || server.ReadTimeout != policy.readTimeout ||
+		server.IdleTimeout != policy.idleTimeout || server.MaxHeaderBytes != policy.maximumHeader {
+		t.Fatalf("server = %+v", server)
 	}
 }
 
-func TestConnectionTrackerCoversTCPAndTransfersHijackedLease(t *testing.T) {
-	cfg := admission.DefaultConfig()
-	cfg.MaxConnections = 1
-	controller, err := admission.NewController(cfg)
+func TestPublicRelayEndpointUsesActualListenerAndConfiguredIdentity(t *testing.T) {
+	derived, err := publicRelayEndpoint("", stringAddress("127.0.0.1:49231"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	hub := signaling.NewHub(signaling.Config{Admission: controller})
-	t.Cleanup(hub.Close)
-	tracker := newConnectionTracker(hub)
-
-	first, firstPeer := net.Pipe()
-	defer first.Close()
-	defer firstPeer.Close()
-	_ = tracker.connContext(context.Background(), first)
-	if snapshot := controller.Snapshot(); snapshot.Connections != 1 {
-		t.Fatalf("accepted TCP connection = %+v", snapshot)
+	if derived.DialURL != "ws://127.0.0.1:49231/v2/ws" {
+		t.Fatalf("derived endpoint = %+v", derived)
 	}
-
-	denied, deniedPeer := net.Pipe()
-	defer deniedPeer.Close()
-	_ = tracker.connContext(context.Background(), denied)
-	if snapshot := controller.Snapshot(); snapshot.Connections != 1 {
-		t.Fatalf("denied TCP connection changed accounting: %+v", snapshot)
+	configured, err := publicRelayEndpoint("https://Relay.Example:443/base?token=one", stringAddress("127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	tracker.connState(first, http.StateClosed)
-	if snapshot := controller.Snapshot(); snapshot.Connections != 0 {
-		t.Fatalf("closed TCP connection leaked accounting: %+v", snapshot)
-	}
-
-	hijacked, hijackedPeer := net.Pipe()
-	defer hijacked.Close()
-	defer hijackedPeer.Close()
-	_ = tracker.connContext(context.Background(), hijacked)
-	tracker.mu.Lock()
-	lease := tracker.leases[hijacked]
-	tracker.mu.Unlock()
-	tracker.connState(hijacked, http.StateHijacked)
-	if snapshot := controller.Snapshot(); snapshot.Connections != 1 {
-		t.Fatalf("hijack released transferred lease: %+v", snapshot)
-	}
-	lease.ReleaseIfTransferred()
-	if snapshot := controller.Snapshot(); snapshot.Connections != 0 {
-		t.Fatalf("transferred lease was not releasable: %+v", snapshot)
+	if configured.DialURL != "wss://relay.example/base/v2/ws?token=one" ||
+		configured.IdentityURL != "wss://relay.example/base/v2/ws" {
+		t.Fatalf("configured endpoint = %+v", configured)
 	}
 }
 
-func TestRunRejectsInvalidSecurityPolicyBeforeListening(t *testing.T) {
-	tests := [][]string{
-		{"-listen", "127.0.0.1:0", "-origins", "not-an-origin"},
-		{"-listen", "127.0.0.1:0", "-register-ip-rate", "0"},
-		{"-listen", "127.0.0.1:0", "-http-read-header-timeout", "0s"},
-		{"-listen", "127.0.0.1:0", "-http-read-header-timeout", "5s", "-http-read-timeout", "1s"},
-		{"-listen", "127.0.0.1:0", "-ws-keepalive-timeout", "0s"},
-		{"-listen", "127.0.0.1:0", "-ws-role-timeout", "1ns"},
-		{"-listen", "127.0.0.1:0", "-sender-grace", "1ns"},
-		{"-listen", "127.0.0.1:0", "-max-frame-bytes", "65537"},
-		{"-listen", "127.0.0.1:0", "-max-manifest-bytes", "16777217"},
-		{"-listen", "127.0.0.1:0", "-max-manifest-bytes", "100", "-max-manifest-bytes-per-ip", "99"},
-		{"-listen", "127.0.0.1:0", "-max-connections", "9007199254740992"},
-		{"-listen", "127.0.0.1:0", "-http-max-header-bytes", "9007199254740992"},
+func TestResolveStateDirectorySeparatesRelayIdentities(t *testing.T) {
+	first := v2.RelayIdentity{1}
+	second := v2.RelayIdentity{2}
+	left, err := resolveStateDirectory("", first)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, args := range tests {
-		if err := run(context.Background(), args, nil, t.Logf); err == nil {
-			t.Fatalf("invalid policy was accepted: %v", args)
+	right, err := resolveStateDirectory("", second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left == right || filepath.Base(left) == filepath.Base(right) {
+		t.Fatalf("identity directories collided: %q %q", left, right)
+	}
+	explicit := filepath.Join(t.TempDir(), "state")
+	resolved, err := resolveStateDirectory(explicit, first)
+	if err != nil || !filepath.IsAbs(resolved) {
+		t.Fatalf("explicit state directory = %q, %v", resolved, err)
+	}
+}
+
+func TestRunRejectsInvalidAndRetiredFlags(t *testing.T) {
+	tests := [][]string{
+		{"-definitely-not-a-flag"},
+		{"-listen", "999.999.999.999:1"},
+		{"-listen", "127.0.0.1:0", "-relay-base-url", "not a URL"},
+		{"-listen", "127.0.0.1:0", "-max-routes", "0"},
+		{"-listen", "127.0.0.1:0", "-max-sessions", "2", "-max-sessions-per-share", "3"},
+		{"-listen", "127.0.0.1:0", "-max-connections", "1", "-max-connections-per-source", "2"},
+		{"-listen", "127.0.0.1:0", "-http-read-header-timeout", "5s", "-http-read-timeout", "1s"},
+		{"-listen", "127.0.0.1:0", "-max-manifest-bytes", "1"},
+		{"-listen", "127.0.0.1:0", "-sender-grace", "1s"},
+	}
+	for _, arguments := range tests {
+		if err := run(context.Background(), arguments, nil, t.Logf); err == nil {
+			t.Fatalf("invalid policy was accepted: %v", arguments)
 		}
 	}
 }
 
-func TestRunRejectsBadFlags(t *testing.T) {
-	if err := run(context.Background(), []string{"-definitely-not-a-flag"}, nil, t.Logf); err == nil {
-		t.Fatal("invalid flag should return an error")
+type stringAddress string
+
+func (address stringAddress) Network() string { return "tcp" }
+func (address stringAddress) String() string  { return string(address) }
+
+func TestProductionSourceContainsNoV1RouteOrManifestFlag(t *testing.T) {
+	for _, retired := range []string{"/v1", "max-manifest", "sender-grace"} {
+		if strings.Contains(strings.ToLower(sourceText(t)), retired) {
+			t.Fatalf("production relay source still contains %q", retired)
+		}
 	}
-	if err := run(context.Background(), []string{"-listen", "999.999.999.999:1"}, nil, t.Logf); err == nil {
-		t.Fatal("invalid listen address should return an error")
+}
+
+func sourceText(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
 	}
+	return string(data)
 }

@@ -2,18 +2,13 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import './index.css'
-import {
-  BrowserReceiverGateway,
-  ReceiverController,
-  browserNavigation,
-  consumeLocationCapability,
-} from './ui'
+import { captureV2Location, V2ReceiverController } from './ui/v2-controller'
 
 // Initialization runs outside React so StrictMode cannot duplicate capability
 // parsing, fragment erasure, or the pre-gesture relay join. Capability removal
 // also precedes fallible browser-capability discovery in gateway construction.
-const initialCapability = consumeLocationCapability(browserNavigation(window))
-const controller = new ReceiverController(new BrowserReceiverGateway())
+const initialCapability = captureV2Location(window)
+const controller = new V2ReceiverController()
 controller.initialize(initialCapability)
 
 window.addEventListener('pagehide', (event) => {
@@ -22,7 +17,7 @@ window.addEventListener('pagehide', (event) => {
   if (event.persisted) {
     return
   }
-  controller.dispose().catch(() => undefined)
+  controller.dispose({ preserveOutputRecovery: true }).catch(() => undefined)
 })
 
 createRoot(document.getElementById('root')!).render(

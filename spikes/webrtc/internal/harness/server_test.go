@@ -8,8 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/core/session"
-	"github.com/windshare/windshare/relay/protocol"
+	"github.com/windshare/windshare/core/framechannel"
 )
 
 func TestHealthAndConfigRoutes(t *testing.T) {
@@ -38,7 +37,7 @@ func TestHealthAndConfigRoutes(t *testing.T) {
 	if err := json.Unmarshal(configResponse.Body.Bytes(), &config); err != nil {
 		t.Fatalf("decode config response: %v", err)
 	}
-	if config.SessionID != spikeSessionID.String() || config.MaxFrameSize != session.MaxFrameSize {
+	if config.SessionID != spikeSessionID || config.MaxFrameSize != framechannel.MaxFrameSize {
 		t.Fatalf("config response does not expose WindShare contract: %+v", config)
 	}
 }
@@ -54,20 +53,19 @@ func TestSignalRouteRejectsMalformedAndWrongSessionMessages(t *testing.T) {
 		}
 	})
 
-	wrongSession := protocol.SessionID{8, 7, 6, 5, 4, 3, 2, 1}
-	wrongEnvelope, err := protocol.Encode(protocol.NewSignal(
-		wrongSession.String(),
-		protocol.SignalKindOffer,
+	wrongEnvelope, err := encodeSignal(
+		"CAcGBQQDAgE",
+		signalKindOffer,
 		json.RawMessage(`{"type":"offer","sdp":"v=0\\r\\n"}`),
-	))
+	)
 	if err != nil {
 		t.Fatalf("encode wrong-session signal: %v", err)
 	}
-	answerEnvelope, err := protocol.Encode(protocol.NewSignal(
-		spikeSessionID.String(),
-		protocol.SignalKindAnswer,
+	answerEnvelope, err := encodeSignal(
+		spikeSessionID,
+		signalKindAnswer,
 		json.RawMessage(`{"type":"answer","sdp":"v=0\\r\\n"}`),
-	))
+	)
 	if err != nil {
 		t.Fatalf("encode unexpected answer signal: %v", err)
 	}
@@ -77,7 +75,7 @@ func TestSignalRouteRejectsMalformedAndWrongSessionMessages(t *testing.T) {
 		body []byte
 		want string
 	}{
-		{name: "malformed JSON", body: []byte(`{"type":`), want: "decode WindShare signal"},
+		{name: "malformed JSON", body: []byte(`{"type":`), want: "decode harness signal"},
 		{name: "wrong session", body: wrongEnvelope, want: "sessionId does not match"},
 		{name: "unexpected kind", body: answerEnvelope, want: "unexpected signal kind answer"},
 	}

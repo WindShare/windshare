@@ -6,6 +6,10 @@
 #  - whitespace: `git diff --check` against the empty tree, so every tracked
 #    file's worktree content is inspected — on a clean tree this equals CI's
 #    committed-tree diff.
+#  - source-only Go/Web v1 forbidden-reference scans (the Web gate also checks
+#    the built bundle).
+#  - short PowerShell contracts for R8 benchmark parsing, command transcripts,
+#    source checkpoints, schema validation, and atomic evidence publication.
 #  - gopls check -severity=hint over tracked Go files (the AGENTS.md
 #    GOPLS_CHECK command; CI pins gopls@v0.22.0, locally PATH's gopls is used).
 [CmdletBinding()]
@@ -20,7 +24,10 @@ $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 Write-Output '== hygiene =='
 
 Write-Output '-- gofmt (tracked + untracked Go files)'
-$gofmtFiles = @(git -c core.quotepath=false ls-files --cached --others --exclude-standard -- '*.go')
+$gofmtFiles = @(
+    git -c core.quotepath=false ls-files --cached --others --exclude-standard -- '*.go' |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+)
 if ($LASTEXITCODE -ne 0) {
     throw "git ls-files exited with code $LASTEXITCODE"
 }
@@ -49,8 +56,38 @@ if ($LASTEXITCODE -ne 0) {
     throw 'git diff --check reported whitespace errors'
 }
 
+Write-Output '-- Web v1 forbidden references (source-only)'
+node scripts/ci/web-forbidden.mjs --source-only
+if ($LASTEXITCODE -ne 0) {
+    throw 'Web v1 forbidden-reference gate failed'
+}
+
+Write-Output '-- Go v1 forbidden roots and production dependencies'
+node scripts/ci/go-v1-forbidden.mjs
+if ($LASTEXITCODE -ne 0) {
+    throw 'Go v1 forbidden-reference gate failed'
+}
+
+Write-Output '-- R8 performance evidence contracts'
+$r8EvidenceSuites = @(
+    'scripts/go-benchmark-evidence.tests.ps1',
+    'scripts/local-coverage.tests.ps1',
+    'scripts/r8-go-evidence.tests.ps1',
+    'scripts/r8-evidence-summary.tests.ps1',
+    'scripts/r8-web-performance-authority.tests.ps1'
+)
+foreach ($suite in $r8EvidenceSuites) {
+    & pwsh -NoProfile -File $suite
+    if ($LASTEXITCODE -ne 0) {
+        throw "R8 performance evidence contract failed: $suite"
+    }
+}
+
 Write-Output '-- gopls check (severity=hint, tracked Go files)'
-$trackedGoFiles = @(git -c core.quotepath=false ls-files -- '*.go')
+$trackedGoFiles = @(
+    git -c core.quotepath=false ls-files -- '*.go' |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+)
 if ($LASTEXITCODE -ne 0) {
     throw "git ls-files exited with code $LASTEXITCODE"
 }

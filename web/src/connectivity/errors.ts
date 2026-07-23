@@ -18,10 +18,3 @@ export class UnexpectedDataChannelError extends PeerNegotiationError {
     this.name = 'UnexpectedDataChannelError'
   }
 }
-
-export class ReceiverConnectivityClosedError extends Error {
-  constructor() {
-    super('browser receiver connectivity is closed')
-    this.name = 'ReceiverConnectivityClosedError'
-  }
-}

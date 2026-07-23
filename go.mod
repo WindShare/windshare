@@ -13,9 +13,8 @@ require github.com/windshare/windshare/core v0.1.1
 // 无 context 取消语义。
 require github.com/coder/websocket v1.8.15
 
-// 仅 e2e/ 测试使用:恶意发送端用例须手工封装"发送端 Validate 拒绝、但恶意端
-// 可绕过"的清单,须以与 core/manifest 同款的确定性 CBOR 编码(否则接收端的
-// canonical 重编码对拍会先于 Validate 拒之)。core 已依赖同版本,此处随之直依。
+// connectivity/v2signal uses deterministic CBOR for canonical E2EE signaling
+// envelopes; pinning it directly keeps the root wire codec explicit and auditable.
 require github.com/fxamacker/cbor/v2 v2.9.2
 
 // Pion is isolated in transport/webrtc so core remains transport-neutral. D1

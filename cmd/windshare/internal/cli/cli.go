@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
-	"time"
 )
 
 // 退出码语义(§6.9 工程要求):脚本据此区分"该重试"(网络)与"该改命令"
@@ -40,11 +39,9 @@ type App struct {
 	Stderr io.Writer
 	Stdin  io.Reader
 
-	stderrMu sync.Mutex
-
-	// RejoinWindow 覆盖传输中断后 rejoin 的退避总窗(零值取生产默认
-	// rejoinWindow)。注入点只为测试收短时序,不是用户面配置。
-	RejoinWindow time.Duration
+	stderrMu            sync.Mutex
+	receiverPeerFactory func() (receiverPeerStarter, error)
+	receiverClock       receiverAdmissionClock
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
@@ -81,11 +78,11 @@ func (a *App) Run(ctx context.Context, args []string) int {
 func (a *App) usage() {
 	fmt.Fprint(a.stderrWriter(), `Usage:
 	  windshare share <path...> [--relay <url>] [--block-size <bytes>] [--split-key] [--front-url <url>]
-	      Build a metadata-only manifest, register with the relay, print the link, and serve blocks until Ctrl-C.
+	      Commit selected roots, wait for relay registration, print a suite-02 link, and scan descendants on demand.
 	      --split-key prints a bare link and key string for delivery over separate channels.
 
 	  windshare get <link> [-o <directory>] [--only <path>]... [--key <key-string>]
-	      Resolve the link, fetch the manifest, and download with resume state in .wsresume-* files.
+	      Authenticate the descriptor, browse the progressive catalog, and publish files through a durable output session.
 	      If the link has no key, use --key or enter the key interactively.
 `)
 }

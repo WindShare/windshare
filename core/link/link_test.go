@@ -2,6 +2,7 @@ package link_test
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -12,35 +13,40 @@ import (
 	"github.com/windshare/windshare/core/link"
 )
 
+const retiredShareIDBytes = 9
+
 var (
-	testSecret  = []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
-	testShareID = base64.RawURLEncoding.EncodeToString([]byte("123456789")) // "MTIzNDU2Nzg5"
-	// testKey = base64url(0x01‖testSecret),各测试的合法密钥串。
-	testKey = mustKeyString()
+	testSecret    = []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+	testPublicKey = ed25519.NewKeyFromSeed(
+		bytes.Repeat([]byte{0x42}, ed25519.SeedSize),
+	).Public().(ed25519.PublicKey)
+	testCapability = newLink()
+	testShareID    = testCapability.ShareID
+	testKey        = mustKeyString(testCapability)
 )
 
-func mustKeyString() string {
-	k, err := link.Link{Suite: link.SuiteAESGCM, ReadSecret: testSecret, ShareID: testShareID}.KeyString()
+func mustKeyString(capability link.Link) string {
+	key, err := capability.KeyString()
 	if err != nil {
 		panic(err)
 	}
-	return k
+	return key
 }
 
 func newLink(relays ...string) link.Link {
-	return link.Link{Suite: link.SuiteAESGCM, ReadSecret: testSecret, ShareID: testShareID, Relays: relays}
+	capability, err := link.NewSenderAuthenticated(testSecret, testPublicKey, relays)
+	if err != nil {
+		panic(err)
+	}
+	return capability
 }
 
-// §8 的协议常量:值变更破坏线上全部既有链接,钉死防误改。
 func TestProtocolConstants(t *testing.T) {
-	if link.SuiteAESGCM != 0x01 {
-		t.Errorf("SuiteAESGCM = %#x, want 0x01", link.SuiteAESGCM)
-	}
-	if link.ReadSecretBytes != 16 {
-		t.Errorf("ReadSecretBytes = %d, want 16", link.ReadSecretBytes)
-	}
-	if link.ShareIDBytes != 9 {
-		t.Errorf("ShareIDBytes = %d, want 9", link.ShareIDBytes)
+	if link.SuiteSenderAuthenticated != 0x02 ||
+		link.SenderAuthenticatedShareIDBytes != 12 ||
+		link.PKHashBytes != 16 ||
+		link.ReadSecretBytes != 16 {
+		t.Fatal("native capability identity constants changed")
 	}
 }
 
@@ -75,7 +81,6 @@ func TestURLRoundTrip(t *testing.T) {
 	}
 }
 
-// fragment = base64url(1+16 字节) 无填充 → 恰 23 字符(§6.3 的链接长度承诺)。
 func TestFragmentEncoding(t *testing.T) {
 	full, err := newLink().URL("https://windshare.top")
 	if err != nil {
@@ -85,8 +90,8 @@ func TestFragmentEncoding(t *testing.T) {
 	if !ok {
 		t.Fatalf("link is missing fragment: %q", full)
 	}
-	if len(frag) != 23 {
-		t.Errorf("fragment length %d, want 23: %q", len(frag), frag)
+	if len(frag) != 44 {
+		t.Errorf("fragment length %d, want 44: %q", len(frag), frag)
 	}
 	if strings.Contains(frag, "=") {
 		t.Errorf("fragment contains padding: %q", frag)
@@ -104,11 +109,23 @@ func TestParseErrors(t *testing.T) {
 		{"空 fragment", base + "#", link.ErrMissingFragment},
 		{"fragment 非 base64url", base + "#!!!", link.ErrMalformedFragment},
 		{"fragment 带填充", base + "#" + testKey + "=", link.ErrMalformedFragment},
-		{"fragment 非规范尾位", base + "#" + testKey[:len(testKey)-1] + "9", link.ErrMalformedFragment},
-		{"fragment 短一字节", base + "#" + rawB64(append([]byte{0x01}, testSecret[:15]...)), link.ErrMalformedFragment},
-		{"fragment 长一字节", base + "#" + rawB64(append(append([]byte{0x01}, testSecret...), 0xAA)), link.ErrMalformedFragment},
-		{"未知 suite 0x02", base + "#" + rawB64(append([]byte{0x02}, testSecret...)), link.ErrUnknownSuite},
-		{"未知 suite 0x00", base + "#" + rawB64(append([]byte{0x00}, testSecret...)), link.ErrUnknownSuite},
+		{
+			"fragment short by one byte",
+			base + "#" + rawB64(append(append([]byte{0x02}, testSecret...), testCapability.PKHash[:15]...)),
+			link.ErrMalformedFragment,
+		},
+		{
+			"fragment long by one byte",
+			base + "#" + rawB64(append(append(append([]byte{0x02}, testSecret...), testCapability.PKHash...), 0xaa)),
+			link.ErrMalformedFragment,
+		},
+		{"retired suite 0x01", base + "#" + rawB64(append([]byte{0x01}, testSecret...)), link.ErrUnknownSuite},
+		{"unknown suite 0x00", base + "#" + rawB64(append([]byte{0x00}, testSecret...)), link.ErrUnknownSuite},
+		{
+			"retired shareId width",
+			"https://ex.com/" + rawB64(bytes.Repeat([]byte{1}, retiredShareIDBytes)) + "#" + testKey,
+			link.ErrMalformedShareID,
+		},
 		{"shareId 错长", "https://ex.com/short#" + testKey, link.ErrMalformedShareID},
 		{"shareId 非 base64url", "https://ex.com/!!!!!!!!!!!!#" + testKey, link.ErrMalformedShareID},
 		{"shareId 缺失", "https://ex.com/#" + testKey, link.ErrMalformedShareID},
@@ -233,7 +250,9 @@ func TestMergeTolerantKeyForms(t *testing.T) {
 
 func TestMergeErrors(t *testing.T) {
 	bare := "https://windshare.top/" + testShareID
-	otherKey, err := link.Link{Suite: link.SuiteAESGCM, ReadSecret: bytes.Repeat([]byte{0xFF}, 16), ShareID: testShareID}.KeyString()
+	otherCapability := newLink()
+	otherCapability.ReadSecret = bytes.Repeat([]byte{0xff}, link.ReadSecretBytes)
+	otherKey, err := otherCapability.KeyString()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +266,7 @@ func TestMergeErrors(t *testing.T) {
 		{"仅 # 号", bare, "###", link.ErrMalformedFragment},
 		{"非 base64url", bare, "not base64!", link.ErrMalformedFragment},
 		{"未知 suite", bare, rawB64(append([]byte{0x7F}, testSecret...)), link.ErrUnknownSuite},
-		{"错长密钥", bare, rawB64([]byte{0x01, 0xAB}), link.ErrMalformedFragment},
+		{"wrong key width", bare, rawB64([]byte{0x02, 0xab}), link.ErrMalformedFragment},
 		{"坏裸链接", "https://ex.com/bad", testKey, link.ErrMalformedShareID},
 		{"自带密钥冲突", bare + "#" + otherKey, testKey, link.ErrKeyConflict},
 		{"自带 fragment 不可解", bare + "#!!!", testKey, link.ErrMalformedFragment},
@@ -293,15 +312,21 @@ func TestSplitErrors(t *testing.T) {
 }
 
 func TestEncodeErrors(t *testing.T) {
+	unknownSuite := newLink()
+	unknownSuite.Suite = 0x03
+	shortSecret := newLink()
+	shortSecret.ReadSecret = testSecret[:8]
+	invalidShareID := newLink()
+	invalidShareID.ShareID = "xx"
 	tests := []struct {
 		name    string
 		l       link.Link
 		base    string
 		wantErr error
 	}{
-		{"未知 suite", link.Link{Suite: 0x02, ReadSecret: testSecret, ShareID: testShareID}, "https://ex.com", link.ErrUnknownSuite},
-		{"readSecret 错长", link.Link{Suite: 0x01, ReadSecret: testSecret[:8], ShareID: testShareID}, "https://ex.com", link.ErrMalformedFragment},
-		{"shareId 无效", link.Link{Suite: 0x01, ReadSecret: testSecret, ShareID: "xx"}, "https://ex.com", link.ErrMalformedShareID},
+		{"unknown suite", unknownSuite, "https://ex.com", link.ErrUnknownSuite},
+		{"wrong readSecret width", shortSecret, "https://ex.com", link.ErrMalformedFragment},
+		{"invalid shareId", invalidShareID, "https://ex.com", link.ErrMalformedShareID},
 		{"基址无 scheme", newLink(), "windshare.top", link.ErrMalformedLink},
 		{"基址为空", newLink(), "", link.ErrMalformedLink},
 		{"基址查询编码无效", newLink(), "https://ex.com/?r=%zz", link.ErrMalformedLink},
@@ -320,34 +345,72 @@ func TestEncodeErrors(t *testing.T) {
 	}
 }
 
-func TestNewReadSecretAndShareID(t *testing.T) {
-	rng := bytes.NewReader([]byte{
-		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, // readSecret
-		'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', // shareId
-	})
-	secret, err := link.NewReadSecret(rng)
+func TestSenderAuthenticatedLinkMatchesFrozenIdentityVector(t *testing.T) {
+	seed := make([]byte, ed25519.SeedSize)
+	for index := range seed {
+		seed[index] = 0x20 + byte(index)
+	}
+	publicKey := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
+	got, err := link.NewSenderAuthenticated(testSecret, publicKey, []string{"relay.example"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}; !bytes.Equal(secret, want) {
+	if got.ShareID != "tVW-68OSeLBZTpU-" {
+		t.Fatalf("share ID = %q", got.ShareID)
+	}
+	key, err := got.KeyString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != "AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E" {
+		t.Fatalf("key string = %q", key)
+	}
+	full, err := got.URL("https://windshare.example/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := link.Parse(full)
+	if err != nil || !reflect.DeepEqual(parsed, got) {
+		t.Fatalf("v2 round trip = %+v, %v", parsed, err)
+	}
+	bare, separate, err := link.Split(full)
+	if err != nil || separate != key {
+		t.Fatalf("v2 split = %q, %q, %v", bare, separate, err)
+	}
+	merged, err := link.Merge(bare, separate)
+	if err != nil || !reflect.DeepEqual(merged, got) {
+		t.Fatalf("v2 merge = %+v, %v", merged, err)
+	}
+
+	tampered := got
+	tampered.ShareID = rawB64(bytes.Repeat([]byte{0xff}, link.SenderAuthenticatedShareIDBytes))
+	if _, err := tampered.URL("https://windshare.example"); !errors.Is(err, link.ErrMalformedShareID) {
+		t.Fatalf("identity substitution error = %v", err)
+	}
+	badKey := append([]byte(nil), got.PKHash...)
+	badKey[0] ^= 1
+	tampered = got
+	tampered.PKHash = badKey
+	if _, err := tampered.URL("https://windshare.example"); !errors.Is(err, link.ErrMalformedShareID) {
+		t.Fatalf("pkHash substitution error = %v", err)
+	}
+}
+
+func TestNewReadSecret(t *testing.T) {
+	secret, err := link.NewReadSecret(bytes.NewReader([]byte{
+		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	if !bytes.Equal(secret, want) {
 		t.Errorf("NewReadSecret = %x, want %x from the injected source", secret, want)
 	}
-	id, err := link.NewShareID(rng)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := link.NewSenderAuthenticated(secret, testPublicKey, nil); err != nil {
+		t.Errorf("generated secret failed capability construction: %v", err)
 	}
-	if want := rawB64([]byte("abcdefghi")); id != want {
-		t.Errorf("NewShareID = %q, want %q", id, want)
-	}
-	// 产物必须能直接进链接编码(自洽)。
-	if _, err := (link.Link{Suite: link.SuiteAESGCM, ReadSecret: secret, ShareID: id}).URL("https://ex.com"); err != nil {
-		t.Errorf("generated value failed encoding validation: %v", err)
-	}
-	// 随机源耗尽 → 明确报错,不产出弱密钥。
 	if _, err := link.NewReadSecret(bytes.NewReader([]byte{1, 2, 3})); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Errorf("NewReadSecret with short random source err = %v", err)
-	}
-	if _, err := link.NewShareID(bytes.NewReader(nil)); err == nil {
-		t.Error("NewShareID should fail with an empty random source")
 	}
 }

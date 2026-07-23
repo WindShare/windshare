@@ -8,17 +8,50 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+)
+
+const (
+	networkManifestSchemaVersion = 2
+	retiredConnectivityProgram   = "connectivity.test.exe"
+	retiredConnectivityDisplay   = "connectivity.test"
+)
+
+var (
+	manifestPackageNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	manifestGUIDPattern        = regexp.MustCompile(`^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$`)
 )
 
 type packageRecord struct {
 	Name string `json:"Name"`
 	Path string `json:"Path"`
+}
+
+type retiredProgramTombstone struct {
+	RelativeProgram string `json:"RelativeProgram"`
+	DisplayName     string `json:"DisplayName"`
+	Action          string `json:"Action"`
+	TCPGuid         string `json:"TCPGuid"`
+	UDPGuid         string `json:"UDPGuid"`
+}
+
+type manifestDocument struct {
+	SchemaVersion           int                     `json:"SchemaVersion"`
+	Packages                []packageRecord         `json:"Packages"`
+	RetiredProgramTombstone retiredProgramTombstone `json:"RetiredProgramTombstone"`
+}
+
+type fixedManifest struct {
+	packages                map[string]bool
+	reservedExecutableNames map[string]bool
 }
 
 type analysisResult struct {
@@ -37,7 +70,7 @@ func main() {
 	if err != nil {
 		fatalf("resolve repository root: %v", err)
 	}
-	expected, err := loadManifest(resolveRootPath(root, *manifestFlag))
+	manifest, err := loadManifest(resolveRootPath(root, *manifestFlag))
 	if err != nil {
 		fatalf("load fixed package manifest: %v", err)
 	}
@@ -46,12 +79,12 @@ func main() {
 		fatalf("analyze test resource ownership: %v", err)
 	}
 	for path := range result.classified {
-		if !expected[path] {
+		if !manifest.packages[path] {
 			result.violations = append(result.violations,
 				"network/process test package is absent from the fixed runner manifest: "+path)
 		}
 	}
-	for path := range expected {
+	for path := range manifest.packages {
 		if !result.classified[path] {
 			result.violations = append(result.violations,
 				"fixed runner manifest package has no semantic network/process ownership: "+path)
@@ -72,7 +105,13 @@ func main() {
 		if err != nil {
 			fatalf("load execution-plan request: %v", err)
 		}
-		document, err := buildExecutionPlanDocument(root, expected, result.catalog, request)
+		document, err := buildExecutionPlanDocument(
+			root,
+			manifest.packages,
+			manifest.reservedExecutableNames,
+			result.catalog,
+			request,
+		)
 		if err != nil {
 			fatalf("construct execution plan: %v", err)
 		}
@@ -96,26 +135,62 @@ func resolveRootPath(root, path string) string {
 	return filepath.Join(root, filepath.FromSlash(path))
 }
 
-func loadManifest(path string) (map[string]bool, error) {
+func loadManifest(path string) (fixedManifest, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return fixedManifest{}, err
 	}
-	var records []packageRecord
+	var document manifestDocument
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&records); err != nil {
-		return nil, err
+	if err := decoder.Decode(&document); err != nil {
+		return fixedManifest{}, err
 	}
-	result := make(map[string]bool, len(records))
-	for _, record := range records {
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return fixedManifest{}, errors.New("fixed package manifest contains trailing JSON")
+	}
+	if document.SchemaVersion != networkManifestSchemaVersion {
+		return fixedManifest{}, fmt.Errorf(
+			"fixed package manifest schema = %d, want %d",
+			document.SchemaVersion,
+			networkManifestSchemaVersion,
+		)
+	}
+	tombstone := document.RetiredProgramTombstone
+	if tombstone.RelativeProgram != retiredConnectivityProgram ||
+		tombstone.DisplayName != retiredConnectivityDisplay ||
+		tombstone.Action != "Block" ||
+		!manifestGUIDPattern.MatchString(tombstone.TCPGuid) ||
+		!manifestGUIDPattern.MatchString(tombstone.UDPGuid) ||
+		tombstone.TCPGuid == tombstone.UDPGuid {
+		return fixedManifest{}, fmt.Errorf(
+			"fixed package manifest has an invalid retired connectivity tombstone: %+v",
+			tombstone,
+		)
+	}
+	packages := make(map[string]bool, len(document.Packages))
+	names := make(map[string]bool, len(document.Packages))
+	for _, record := range document.Packages {
 		path := strings.TrimPrefix(filepath.ToSlash(record.Path), "./")
-		if record.Name == "" || path == "" || result[path] {
-			return nil, fmt.Errorf("invalid or duplicate package record: %+v", record)
+		if !manifestPackageNamePattern.MatchString(record.Name) ||
+			path == "" || path == "." || strings.HasPrefix(path, "../") ||
+			packages[path] || names[record.Name] ||
+			strings.EqualFold(record.Name+".test.exe", tombstone.RelativeProgram) {
+			return fixedManifest{}, fmt.Errorf("invalid, duplicate, or retired package record: %+v", record)
 		}
-		result[path] = true
+		packages[path] = true
+		names[record.Name] = true
 	}
-	return result, nil
+	if len(packages) == 0 {
+		return fixedManifest{}, errors.New("fixed package manifest has no active packages")
+	}
+	return fixedManifest{
+		packages: packages,
+		reservedExecutableNames: map[string]bool{
+			strings.ToLower(tombstone.RelativeProgram): true,
+		},
+	}, nil
 }
 
 func fatalf(format string, arguments ...any) {

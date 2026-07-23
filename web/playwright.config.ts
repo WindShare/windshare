@@ -1,5 +1,7 @@
 import { defineConfig } from '@playwright/test'
 
+import { PLAYWRIGHT_BROWSER_PROJECTS } from './playwright.projects.js'
+
 const WINDOWS_NETWORK_CONTRACT = 'stable-harness-v3'
 const WINDOWS_LEASE_TOKEN_PATTERN = /^[0-9a-f]{32}$/u
 const WINDOWS_RUNNER_PIPE_PATTERN = /^windshare-d5-[1-9]\d*-[0-9a-f]{32}$/u
@@ -22,10 +24,19 @@ const WEB_BASE_URL = `http://${WEB_HOST}:${WEB_PORT}`
 const WEB_SERVER_TIMEOUT_MS = 120_000
 const BROWSER_TEST_TIMEOUT_MS = 120_000
 const OUTPUT_DIRECTORY = process.env.WINDSHARE_D5_PLAYWRIGHT_OUTPUT_DIR ?? 'test-results'
+const R8_PERFORMANCE_SAMPLES = process.env.WINDSHARE_R8_PERFORMANCE_SAMPLES
+if (R8_PERFORMANCE_SAMPLES !== undefined && R8_PERFORMANCE_SAMPLES !== '5') {
+  throw new Error('WINDSHARE_R8_PERFORMANCE_SAMPLES must be 5 when performance evidence is enabled')
+}
+const TEST_MATCH = [
+  'test/browser/**/*.spec.ts',
+  'e2e/**/*.spec.ts',
+  ...(R8_PERFORMANCE_SAMPLES === undefined ? [] : ['test/performance/**/*.spec.ts']),
+]
 
 export default defineConfig({
   testDir: '.',
-  testMatch: ['test/browser/**/*.spec.ts', 'e2e/**/*.spec.ts'],
+  testMatch: TEST_MATCH,
   outputDir: OUTPUT_DIRECTORY,
   fullyParallel: false,
   forbidOnly: true,
@@ -35,13 +46,13 @@ export default defineConfig({
   timeout: BROWSER_TEST_TIMEOUT_MS,
   use: {
     baseURL: WEB_BASE_URL,
-    browserName: 'chromium',
     locale: 'en-US',
     timezoneId: 'UTC',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'off',
   },
+  projects: PLAYWRIGHT_BROWSER_PROJECTS,
   webServer: {
     // A strict, fresh server makes an occupied developer port fail loudly instead
     // of letting the smoke test attach to unrelated content.

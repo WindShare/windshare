@@ -1,6 +1,8 @@
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from '@playwright/test'
 
+import { PLAYWRIGHT_BROWSER_PROJECTS } from '../../../playwright.projects.js'
+
 const REPOSITORY_ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 const WEB_ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const WEB_HOST = '127.0.0.1'
@@ -19,9 +21,9 @@ export default defineConfig({
   workers: 1,
   reporter: 'line',
   timeout: 120_000,
+  projects: PLAYWRIGHT_BROWSER_PROJECTS,
   use: {
     baseURL: WEB_BASE_URL,
-    browserName: 'chromium',
     locale: 'en-US',
     timezoneId: 'UTC',
     trace: 'retain-on-failure',
@@ -39,11 +41,11 @@ export default defineConfig({
       timeout: SERVER_TIMEOUT_MS,
     },
     {
-      command: 'go run ./transport/webrtc/testdata/chromium/server',
+      command: 'go run ./transport/webrtc/testdata/browser/server',
       cwd: REPOSITORY_ROOT,
       env: {
-        WINDSHARE_D1_CHROMIUM_ADDR: PION_ADDRESS,
-        WINDSHARE_D1_CHROMIUM_SCENARIO: 'happy',
+        WINDSHARE_D1_BROWSER_ADDR: PION_ADDRESS,
+        WINDSHARE_D1_BROWSER_SCENARIO: 'happy',
       },
       url: `http://${PION_ADDRESS}/healthz`,
       reuseExistingServer: false,

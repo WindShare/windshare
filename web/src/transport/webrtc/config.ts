@@ -2,7 +2,7 @@ import { MAX_FRAME_BYTES } from '../../contracts/channel'
 import { WebRTCDataChannelConfigurationError } from './errors'
 
 export const DATA_CHANNEL_LABEL = 'windshare-frame-channel'
-export const DATA_CHANNEL_PROTOCOL = 'windshare-v1'
+export const DATA_CHANNEL_PROTOCOL = 'windshare-v2'
 export const DATA_CHANNEL_LOW_WATER_BYTES = 256 * 1024
 export const DATA_CHANNEL_HIGH_WATER_BYTES = 1024 * 1024
 export const TERMINAL_INTENT_CONTROL = 'terminal-intent'

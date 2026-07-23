@@ -1,14 +1,21 @@
 import { expect, test } from '@playwright/test'
 import type * as BrowserHarness from './browser-harness'
+import {
+  requireConfinedPionIceCandidate,
+  requireNativePeerConnection,
+} from './browser-capability'
 
 const HARNESS_PATH = '/test/transport/webrtc/browser-harness.ts'
 const MAX_FRAME_BYTES = 65_536
 const HIGH_WATER_BYTES = 1024 * 1024
 
+test.beforeEach(async ({ page }) => requireNativePeerConnection(page))
+test.beforeEach(async ({ browserName, page }) =>
+  requireConfinedPionIceCandidate(page, browserName))
+
 test('production browser adapter interoperates with the accepted Pion adapter', async ({
   page,
 }) => {
-  await page.goto('/')
   const result = await page.evaluate(async (path) => {
     const harness = await import(path) as typeof BrowserHarness
     return harness.runPionInterop()
@@ -16,7 +23,7 @@ test('production browser adapter interoperates with the accepted Pion adapter', 
 
   expect(result.browser).toMatchObject({
     label: 'windshare-frame-channel',
-    protocol: 'windshare-v1',
+    protocol: 'windshare-v2',
     ordered: true,
     reliable: true,
     negotiated: false,
@@ -38,7 +45,7 @@ test('production browser adapter interoperates with the accepted Pion adapter', 
   expect(result.server).toMatchObject({
     errors: [],
     channelLabel: 'windshare-frame-channel',
-    channelProtocol: 'windshare-v1',
+    channelProtocol: 'windshare-v2',
     ordered: true,
     reliable: true,
     negotiated: false,

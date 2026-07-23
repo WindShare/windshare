@@ -1,6 +1,6 @@
 // TS 侧黄金向量读取骨架(执行计划 §7,T0.3),与 core/internal/testvec 对偶。
 // 跨实现对拍以仓库 checkout 为准:vitest 在 node 环境下经 fs 读取仓库内
-// testvectors/;信封格式与编码约定见 testvectors/README.md。cases 的 kind
+// core/testvectors/;信封格式与编码约定见 core/testvectors/README.md。cases 的 kind
 // 特定字段保持 unknown,由各消费测试自行窄化。
 import { readFileSync } from "node:fs";
 

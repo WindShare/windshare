@@ -26,13 +26,16 @@ env:
 
 jobs:
   hygiene:
-    name: Hygiene (gofmt, whitespace, gopls)
+    name: Hygiene (gofmt, whitespace, v1 forbidden, R8 evidence, gopls)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
       - name: gofmt over tracked Go files
         run: |
           unformatted="$(git ls-files -z -- '*.go' | xargs -0 gofmt -l)"
@@ -46,6 +49,16 @@ jobs:
       # empty tree so every tracked file is inspected.
       - name: whitespace errors over the committed tree
         run: git diff --check "$(git hash-object -t tree /dev/null)"
+      - name: Web v1 forbidden references (source-only)
+        run: node scripts/ci/web-forbidden.mjs --source-only
+      - name: Go v1 forbidden roots and production dependencies
+        run: node scripts/ci/go-v1-forbidden.mjs
+      - name: R8 performance evidence contracts
+        shell: pwsh
+        run: |
+          ./scripts/go-benchmark-evidence.tests.ps1
+          ./scripts/r8-go-evidence.tests.ps1
+          ./scripts/r8-evidence-summary.tests.ps1
       - name: gopls check (severity=hint, tracked files)
         run: |
           go install golang.org/x/tools/gopls@v0.22.0
@@ -133,44 +146,28 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
-      # Mirrors §10.3: regenerate every vector family twice; the regenerations
+      # Mirrors §10.3: regenerate every generated vector family twice; the regenerations
       # must be byte-identical and must match the committed files exactly.
       - name: regenerate twice and compare hashes
-        run: |
-          go -C core test -count=1 ./share -update
-          go test -count=1 ./relay/protocol -update
-          sha256sum testvectors/*.json | sort > "$RUNNER_TEMP/vectors-first.sha256"
-          go -C core test -count=1 ./share -update
-          go test -count=1 ./relay/protocol -update
-          sha256sum testvectors/*.json | sort > "$RUNNER_TEMP/vectors-second.sha256"
-          diff "$RUNNER_TEMP/vectors-first.sha256" "$RUNNER_TEMP/vectors-second.sha256"
-      - name: committed vectors match regeneration
-        run: |
-          status="$(git -c core.quotepath=false status --short -- testvectors)"
-          if [ -n "$status" ]; then
-            echo "regenerated vectors differ from committed testvectors/:" >&2
-            echo "$status" >&2
-            exit 1
-          fi
+        run: scripts/ci/vectors.sh
 
-  gowork-off-core:
-    name: GOWORK=off core build (release invariant, hard gate)
+  core-release:
+    name: Core module release artifact (canonical zip, extracted tests)
     runs-on: ubuntu-latest
-    env:
-      GOWORK: "off"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
-      # Hard gate: the core module must always build without the workspace. It
-      # runs as its own job so the expected root G-EXT failure can never skip
-      # or soften this validation.
-      - name: core module GOWORK=off build
-        run: go build ./...
-        working-directory: core
+      # The extracted artifact has no parent repository or go.work, so package
+      # tests cannot accidentally consume files outside the published module.
+      - name: build and validate deterministic core module artifact
+        run: bash scripts/ci/core-release.sh
 
   gowork-off-root:
+    # A core tag intentionally precedes the root require-version bump. Every
+    # other ref, including root tags and pull requests, must prove consumption.
+    if: ${{ !startsWith(github.ref, 'refs/tags/core/') }}
     name: GOWORK=off root build
     runs-on: ubuntu-latest
     env:
@@ -212,17 +209,18 @@ jobs:
         run: pnpm exec tsc -b --force
       - name: build
         run: pnpm build
+      - name: v1 forbidden production graph and bundle
+        run: pnpm forbidden
       - name: vitest (consumes all golden-vector families)
         run: pnpm test
 
   web-playwright:
-    name: Web Playwright (M1b + M1c real browser)
+    name: Web Playwright (Chromium + Firefox + WebKit real browser)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # The Playwright harness builds the windshare/wsrelay/hostile-sender
-      # child binaries itself via `go build` (web/e2e/fixtures/process.ts), so
-      # this job needs the Go toolchain as well.
+      # The real-stack fixture builds windshare/wsrelay child binaries itself
+      # via web/e2e/fixtures/v2-real-stack.ts, so this job needs Go as well.
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
@@ -236,22 +234,24 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - name: install (frozen lockfile)
         run: pnpm -C web install --frozen-lockfile
-      - name: install Chromium
-        run: pnpm -C web exec playwright install --with-deps chromium
+      - name: install Chromium, Firefox, and WebKit
+        run: pnpm -C web exec playwright install --with-deps chromium firefox webkit
+      - name: verify pinned browser executables
+        run: pnpm -C web run test:browser:preflight
       # web/playwright.config.ts hard-rejects a direct invocation only on
       # Windows, where the sanctioned path is the frozen D5 runner in
       # BrowserTests mode. On Linux the direct command below is the sanctioned
-      # §10.4 invocation, so CI runs the full M1b+M1c scenario suite here
-      # against real wsrelay/windshare/Chromium.
+      # §10.4 invocation, so CI runs the scenario suite here against real
+      # wsrelay/windshare on the centralized Chromium/Firefox/WebKit projects.
       # Playwright traces/screenshots are deliberately not uploaded as
       # artifacts: failure traces of capability-driving specs can contain the
       # capability URL including the key fragment.
-      - name: Playwright M1b+M1c suite
+      - name: Playwright three-engine scenario suite
         run: pnpm -C web exec playwright test
-      # The D1/D2 WebRTC interop specs live outside the main scenario gate and
-      # run only through this dedicated config (forward-routed by R-C-e2e.md).
-      # The config starts its own Vite server and the Go Pion helper server.
-      - name: Playwright D1/D2 WebRTC interop suite
+      # The production Pion WebRTC specs live outside the main scenario gate and
+      # run through their dedicated three-engine config. It starts its own Vite
+      # server and reusable loopback-only Go Pion helper.
+      - name: Playwright Pion WebRTC browser matrix
         run: pnpm -C web exec playwright test --config test/transport/webrtc/browser.playwright.config.ts
 
   windows-tests:

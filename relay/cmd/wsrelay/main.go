@@ -1,313 +1,257 @@
-// wsrelay 是中转/信令服务器入口(执行计划 §6.8):WS hub 承载 register/join/
-// 信令转发/回退数据面,HTTP 仅 health/config。二进制名取 wsrelay,避免与
-// transport/relay 及过泛的 `relay` 混淆(§6.2)。
 package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
-	"github.com/windshare/windshare/core/session"
-	"github.com/windshare/windshare/relay/admission"
+	"github.com/windshare/windshare/relay/connectionlimit"
 	"github.com/windshare/windshare/relay/httpapi"
-	"github.com/windshare/windshare/relay/protocol"
-	"github.com/windshare/windshare/relay/signaling"
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
+	"github.com/windshare/windshare/relay/signaling/v2endpoint"
+	"github.com/windshare/windshare/relay/signaling/v2route"
 )
 
 const (
-	// defaultListenAddr 空 host = 所有网卡;端口无既定习惯,取一个不与
-	// 常见开发服务(8080/3000/5173)相撞的值。
-	defaultListenAddr = ":8484"
-	// shutdownTimeout 是优雅退出时等 HTTP 面排空的上限;WS 连接不在其列
-	// (被劫持的连接由 hub.Close 直接终结)。
-	shutdownTimeout              = 5 * time.Second
-	defaultHTTPReadHeaderTimeout = 5 * time.Second
-	defaultHTTPReadTimeout       = 15 * time.Second
-	defaultHTTPIdleTimeout       = 60 * time.Second
-	defaultMaxHeaderBytes        = 1 << 20
-	// JSON numbers above 2^53-1 are not exact in browser clients. Every integer
-	// advertised by /v1/config must remain within that interoperable range.
-	maxPublishedInteger = int64(1<<53 - 1)
+	defaultListenAddress              = ":8484"
+	defaultMaximumRoutes              = 1_024
+	defaultMaximumSessions            = 4_096
+	defaultMaximumSessionsPerShare    = 64
+	defaultChallengeCapacity          = 4_096
+	defaultHTTPReadHeaderTimeout      = 5 * time.Second
+	defaultHTTPReadTimeout            = 15 * time.Second
+	defaultHTTPIdleTimeout            = 60 * time.Second
+	defaultMaximumHTTPHeaderBytes     = 1 << 20
+	defaultEndpointWriteTimeout       = 15 * time.Second
+	shutdownTimeout                   = 5 * time.Second
+	tombstoneFilename                 = "stopped-shares.bin"
+	defaultRelayStateDirectoryName    = "WindShare"
+	defaultRelayStateSubdirectoryName = "relay"
 )
 
 type serverPolicy struct {
 	readHeaderTimeout time.Duration
 	readTimeout       time.Duration
 	idleTimeout       time.Duration
-	maxHeaderBytes    int
+	maximumHeader     int
 }
 
-type connectionTracker struct {
-	hub *signaling.Hub
-
-	mu     sync.Mutex
-	leases map[net.Conn]*signaling.ConnectionLease
-}
-
-func newConnectionTracker(hub *signaling.Hub) *connectionTracker {
-	return &connectionTracker{hub: hub, leases: make(map[net.Conn]*signaling.ConnectionLease)}
-}
-
-func (t *connectionTracker) connContext(ctx context.Context, conn net.Conn) context.Context {
-	lease, decision := t.hub.AdmitConnection(connectionSource(conn.RemoteAddr()))
-	if !decision.Allowed() {
-		_ = conn.Close()
-		return ctx
-	}
-	t.mu.Lock()
-	t.leases[conn] = lease
-	t.mu.Unlock()
-	return httpapi.WithConnectionLease(ctx, lease)
-}
-
-func (t *connectionTracker) connState(conn net.Conn, state http.ConnState) {
-	if state != http.StateClosed && state != http.StateHijacked {
-		return
-	}
-	t.mu.Lock()
-	lease := t.leases[conn]
-	delete(t.leases, conn)
-	t.mu.Unlock()
-	// A hijacked request transfers ownership to the handler/ServeConn path.
-	if state == http.StateHijacked {
-		lease.TransferToHandler()
-	} else {
-		lease.Release()
-	}
-}
-
-func connectionSource(addr net.Addr) string {
-	host, _, err := net.SplitHostPort(addr.String())
-	if err == nil {
-		return host
-	}
-	return addr.String()
-}
-
-func (p serverPolicy) validate() error {
+func (policy serverPolicy) validate() error {
 	switch {
-	case p.readHeaderTimeout < time.Millisecond:
+	case policy.readHeaderTimeout < time.Millisecond:
 		return errors.New("wsrelay: http-read-header-timeout must be at least 1ms")
-	case p.readTimeout < time.Millisecond:
-		return errors.New("wsrelay: http-read-timeout must be at least 1ms")
-	case p.readTimeout < p.readHeaderTimeout:
+	case policy.readTimeout < policy.readHeaderTimeout:
 		return errors.New("wsrelay: http-read-timeout must not be shorter than http-read-header-timeout")
-	case p.idleTimeout < time.Millisecond:
+	case policy.idleTimeout < time.Millisecond:
 		return errors.New("wsrelay: http-idle-timeout must be at least 1ms")
-	case p.maxHeaderBytes <= 0:
+	case policy.maximumHeader <= 0:
 		return errors.New("wsrelay: http-max-header-bytes must be positive")
-	case int64(p.maxHeaderBytes) > maxPublishedInteger:
-		return errors.New("wsrelay: http-max-header-bytes exceeds the exact JSON integer range")
+	default:
+		return nil
 	}
-	return nil
 }
 
-func validatePublishedAdmission(cfg admission.Config) error {
-	limits := []struct {
-		name  string
-		value int64
-	}{
-		{"max-connections", int64(cfg.MaxConnections)},
-		{"max-concurrent-shares", int64(cfg.MaxConcurrentShares)},
-		{"max-shares-per-ip", int64(cfg.MaxSharesPerSource)},
-		{"max-manifest-bytes-per-ip", cfg.MaxManifestBytesPerSource},
-		{"max-total-manifest-bytes", cfg.MaxTotalManifestBytes},
-		{"register-ip-burst", int64(cfg.RegisterPerSource.Burst)},
-		{"join-ip-burst", int64(cfg.JoinPerSource.Burst)},
-		{"join-share-burst", int64(cfg.JoinPerShare.Burst)},
+func (policy serverPolicy) newServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler: handler, ReadHeaderTimeout: policy.readHeaderTimeout, ReadTimeout: policy.readTimeout,
+		IdleTimeout: policy.idleTimeout, MaxHeaderBytes: policy.maximumHeader,
 	}
-	for _, limit := range limits {
-		if limit.value > maxPublishedInteger {
-			return fmt.Errorf("wsrelay: %s exceeds the exact JSON integer range", limit.name)
-		}
-	}
-	return nil
-}
-
-func validateWirePolicy(maxManifest, maxFrame int64, grace, roleTimeout, keepaliveTimeout time.Duration) error {
-	switch {
-	case maxManifest <= 0:
-		return errors.New("wsrelay: max-manifest-bytes must be positive")
-	case maxManifest > signaling.DefaultMaxManifestSize:
-		return errors.New("wsrelay: max-manifest-bytes exceeds the protocol manifest limit")
-	case maxFrame <= 0:
-		return errors.New("wsrelay: max-frame-bytes must be positive")
-	case maxFrame > session.MaxFrameSize:
-		return errors.New("wsrelay: max-frame-bytes exceeds the protocol frame limit")
-	case grace < time.Millisecond:
-		return errors.New("wsrelay: sender-grace must be at least 1ms")
-	case roleTimeout < time.Millisecond:
-		return errors.New("wsrelay: ws-role-timeout must be at least 1ms")
-	case keepaliveTimeout < time.Millisecond:
-		return errors.New("wsrelay: ws-keepalive-timeout must be at least 1ms")
-	}
-	return nil
-}
-
-func (p serverPolicy) newServer(handler http.Handler, tracker *connectionTracker) *http.Server {
-	server := &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: p.readHeaderTimeout,
-		ReadTimeout:       p.readTimeout,
-		IdleTimeout:       p.idleTimeout,
-		MaxHeaderBytes:    p.maxHeaderBytes,
-	}
-	if tracker != nil {
-		server.ConnContext = tracker.connContext
-		server.ConnState = tracker.connState
-	}
-	return server
 }
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	err := run(ctx, os.Args[1:], nil, log.Printf)
-	// Not a defer: log.Fatal exits the process and would skip it.
 	stop()
 	if err != nil && !errors.Is(err, flag.ErrHelp) {
 		log.Fatal(err)
 	}
 }
 
-// run 与 main 分离以便测试驱动:onReady 在开始服务时携实际监听地址回调
-// (支持 :0 随机端口),ctx 取消触发优雅退出。
 func run(ctx context.Context, args []string, onReady func(net.Addr), logf func(string, ...any)) error {
-	fs := flag.NewFlagSet("wsrelay", flag.ContinueOnError)
-	admissionDefaults := admission.DefaultConfig()
+	flags := flag.NewFlagSet("wsrelay", flag.ContinueOnError)
 	var (
-		listen         = fs.String("listen", defaultListenAddr, "listen address in host:port form")
-		origins        = fs.String("origins", "", "allowed WebSocket origins, comma-separated full origins such as https://windshare.top")
-		allowLocalhost = fs.Bool("allow-localhost", true, "allow localhost/127.0.0.1 origins for development; disable after configuring -origins in production")
+		listenAddress  = flags.String("listen", defaultListenAddress, "listen address in host:port form")
+		relayBaseURL   = flags.String("relay-base-url", "", "public relay base URL; required when clients do not use the listener address")
+		stateDirectory = flags.String("state-dir", "", "durable relay state directory")
+		origins        = flags.String("origins", "", "allowed WebSocket origins, comma-separated full origins")
+		allowLocalhost = flags.Bool("allow-localhost", true, "allow localhost origins for development")
 
-		maxManifest      = fs.Int64("max-manifest-bytes", signaling.DefaultMaxManifestSize, "maximum bytes per manifest")
-		maxTotalManifest = fs.Int64("max-total-manifest-bytes", admissionDefaults.MaxTotalManifestBytes, "node-wide resident manifest memory budget")
-		maxFrame         = fs.Int64("max-frame-bytes", session.MaxFrameSize, "maximum data-plane frame size")
-		grace            = fs.Duration("sender-grace", protocol.SenderReconnectGrace, "sender re-registration grace period")
+		maximumConnections   = flags.Int("max-connections", connectionlimit.DefaultMaximumConnections, "maximum upgraded WebSocket connections")
+		maximumPerSource     = flags.Int("max-connections-per-source", connectionlimit.DefaultMaximumConnectionsPerSource, "maximum upgraded WebSockets per source")
+		maximumRoutes        = flags.Int("max-routes", defaultMaximumRoutes, "maximum live and permanently stopped routes")
+		maximumSessions      = flags.Int("max-sessions", defaultMaximumSessions, "maximum active and recently ended relay sessions")
+		maximumShareSessions = flags.Int("max-sessions-per-share", defaultMaximumSessionsPerShare, "maximum relay sessions for one share")
+		challengeCapacity    = flags.Int("challenge-capacity", defaultChallengeCapacity, "maximum outstanding one-use authentication challenges")
 
-		maxConnections      = fs.Int("max-connections", admissionDefaults.MaxConnections, "maximum upgraded WebSocket connections")
-		maxConcurrentShares = fs.Int("max-concurrent-shares", admissionDefaults.MaxConcurrentShares, "maximum live shares on this node")
-		maxSharesPerIP      = fs.Int("max-shares-per-ip", admissionDefaults.MaxSharesPerSource, "maximum live shares charged to one source IP")
-		maxManifestPerIP    = fs.Int64("max-manifest-bytes-per-ip", admissionDefaults.MaxManifestBytesPerSource, "maximum live manifest bytes charged to one source IP")
-		registerIPRate      = fs.Float64("register-ip-rate", admissionDefaults.RegisterPerSource.PerSecond, "register attempts per second for one source IP")
-		registerIPBurst     = fs.Int("register-ip-burst", admissionDefaults.RegisterPerSource.Burst, "register burst for one source IP")
-		joinShareRate       = fs.Float64("join-share-rate", admissionDefaults.JoinPerShare.PerSecond, "join attempts per second for one share")
-		joinShareBurst      = fs.Int("join-share-burst", admissionDefaults.JoinPerShare.Burst, "join burst for one share")
-		joinIPRate          = fs.Float64("join-ip-rate", admissionDefaults.JoinPerSource.PerSecond, "join attempts per second for one source IP")
-		joinIPBurst         = fs.Int("join-ip-burst", admissionDefaults.JoinPerSource.Burst, "join burst for one source IP")
-
-		roleTimeout       = fs.Duration("ws-role-timeout", signaling.DefaultRoleTimeout, "maximum time to establish a WebSocket role or upload its manifest")
-		keepaliveTimeout  = fs.Duration("ws-keepalive-timeout", signaling.DefaultKeepaliveTimeout, "maximum inactivity after WebSocket role establishment")
-		readHeaderTimeout = fs.Duration("http-read-header-timeout", defaultHTTPReadHeaderTimeout, "maximum time to read HTTP request headers")
-		readTimeout       = fs.Duration("http-read-timeout", defaultHTTPReadTimeout, "maximum time to read an HTTP request")
-		idleTimeout       = fs.Duration("http-idle-timeout", defaultHTTPIdleTimeout, "maximum HTTP keep-alive idle time")
-		maxHeaderBytes    = fs.Int("http-max-header-bytes", defaultMaxHeaderBytes, "maximum bytes in HTTP request headers")
+		endpointWriteTimeout = flags.Duration("ws-write-timeout", defaultEndpointWriteTimeout, "maximum time to write one WebSocket frame")
+		readHeaderTimeout    = flags.Duration("http-read-header-timeout", defaultHTTPReadHeaderTimeout, "maximum time to read HTTP headers")
+		readTimeout          = flags.Duration("http-read-timeout", defaultHTTPReadTimeout, "maximum time to read an HTTP request")
+		idleTimeout          = flags.Duration("http-idle-timeout", defaultHTTPIdleTimeout, "maximum HTTP keep-alive idle time")
+		maximumHeader        = flags.Int("http-max-header-bytes", defaultMaximumHTTPHeaderBytes, "maximum bytes in HTTP request headers")
 	)
-	if err := fs.Parse(args); err != nil {
+	if err := flags.Parse(args); err != nil {
 		return err
 	}
-
+	if flags.NArg() != 0 {
+		return errors.New("wsrelay: unexpected positional arguments")
+	}
 	policy := serverPolicy{
-		readHeaderTimeout: *readHeaderTimeout,
-		readTimeout:       *readTimeout,
-		idleTimeout:       *idleTimeout,
-		maxHeaderBytes:    *maxHeaderBytes,
+		readHeaderTimeout: *readHeaderTimeout, readTimeout: *readTimeout,
+		idleTimeout: *idleTimeout, maximumHeader: *maximumHeader,
 	}
 	if err := policy.validate(); err != nil {
 		return err
 	}
-	if err := validateWirePolicy(*maxManifest, *maxFrame, *grace, *roleTimeout, *keepaliveTimeout); err != nil {
-		return err
+	if *endpointWriteTimeout <= 0 || *maximumRoutes <= 0 || *maximumSessions <= 0 ||
+		*maximumShareSessions <= 0 || *maximumShareSessions > *maximumSessions || *challengeCapacity <= 0 {
+		return errors.New("wsrelay: invalid v2 route, session, challenge, or write limit")
 	}
-	admissionConfig := admission.Config{
-		MaxConnections:            *maxConnections,
-		MaxConcurrentShares:       *maxConcurrentShares,
-		MaxSharesPerSource:        *maxSharesPerIP,
-		MaxManifestBytesPerSource: *maxManifestPerIP,
-		MaxTotalManifestBytes:     *maxTotalManifest,
-		RegisterPerSource:         admission.Rate{PerSecond: *registerIPRate, Burst: *registerIPBurst},
-		JoinPerSource:             admission.Rate{PerSecond: *joinIPRate, Burst: *joinIPBurst},
-		JoinPerShare:              admission.Rate{PerSecond: *joinShareRate, Burst: *joinShareBurst},
-	}
-	controller, err := admission.NewController(admissionConfig)
-	if err != nil {
-		return fmt.Errorf("wsrelay: invalid admission policy: %w", err)
-	}
-	if err := validatePublishedAdmission(admissionConfig); err != nil {
-		return err
-	}
-	if *maxManifest > admissionConfig.MaxManifestBytesPerSource || *maxManifest > admissionConfig.MaxTotalManifestBytes {
-		return errors.New("wsrelay: max-manifest-bytes exceeds an enforced manifest budget")
-	}
-
-	hub := signaling.NewHub(signaling.Config{
-		MaxManifestSize:      *maxManifest,
-		MaxFrameSize:         *maxFrame,
-		SenderReconnectGrace: *grace,
-		RoleTimeout:          *roleTimeout,
-		KeepaliveTimeout:     *keepaliveTimeout,
-		Admission:            controller,
-		Logf:                 logf,
+	limiter, err := connectionlimit.New(connectionlimit.Config{
+		MaximumConnections: *maximumConnections, MaximumConnectionsPerSource: *maximumPerSource,
 	})
-	defer hub.Close()
+	if err != nil {
+		return fmt.Errorf("wsrelay: connection admission: %w", err)
+	}
 
-	var originList []string
+	listener, err := net.Listen("tcp", *listenAddress)
+	if err != nil {
+		return fmt.Errorf("wsrelay: listen on %s: %w", *listenAddress, err)
+	}
+	listenerOwned := true
+	defer func() {
+		if listenerOwned {
+			_ = listener.Close()
+		}
+	}()
+	endpoint, err := publicRelayEndpoint(*relayBaseURL, listener.Addr())
+	if err != nil {
+		return err
+	}
+	relayStateDirectory, err := resolveStateDirectory(*stateDirectory, endpoint.Identity)
+	if err != nil {
+		return err
+	}
+	tombstones, err := v2route.NewFileTombstoneStore(filepath.Join(relayStateDirectory, tombstoneFilename))
+	if err != nil {
+		return fmt.Errorf("wsrelay: initialize STOP tombstones: %w", err)
+	}
+	registry, err := v2route.New(ctx, v2route.Config{
+		MaxRoutes: *maximumRoutes, MaxSessions: *maximumSessions,
+		MaxSessionsPerShare: *maximumShareSessions, Random: rand.Reader, Tombstones: tombstones,
+	})
+	if err != nil {
+		return fmt.Errorf("wsrelay: initialize route registry: %w", err)
+	}
+	challenges, err := v2.NewChallengeLedger(v2.ChallengeLedgerConfig{Capacity: *challengeCapacity, Random: rand.Reader})
+	if err != nil {
+		return fmt.Errorf("wsrelay: initialize challenge ledger: %w", err)
+	}
+	endpointServer, err := v2endpoint.New(v2endpoint.Config{
+		Registry: registry, Challenges: challenges, RelayIdentity: endpoint.Identity,
+		WriteTimeout: *endpointWriteTimeout,
+		RetirementTracer: v2endpoint.RetirementTraceFunc(func(event v2endpoint.RetirementTrace) {
+			// A generation mismatch is expected during same-ID replacement races;
+			// retaining both labels makes the safety decision reconstructable.
+			logf(
+				"wsrelay: route_retirement connection_id=%s local_generation=%d current_generation=%d source=%s target=%s compare_result=%s applied=%t",
+				event.ConnectionID, event.LocalGeneration, event.CurrentGeneration,
+				event.Source, event.Target, event.CompareResult, event.Applied,
+			)
+		}),
+	})
+	if err != nil {
+		return fmt.Errorf("wsrelay: initialize v2 endpoint: %w", err)
+	}
+
+	var allowedOrigins []string
 	if *origins != "" {
-		originList = strings.Split(*origins, ",")
+		for origin := range strings.SplitSeq(*origins, ",") {
+			allowedOrigins = append(allowedOrigins, strings.TrimSpace(origin))
+		}
 	}
-	publicLimits := hub.ServerLimits()
-	publicLimits.MaxHeaderBytes = *maxHeaderBytes
-	publicLimits.Timeouts.HTTPReadHeaderMilliseconds = policy.readHeaderTimeout.Milliseconds()
-	publicLimits.Timeouts.HTTPReadMilliseconds = policy.readTimeout.Milliseconds()
-	publicLimits.Timeouts.HTTPIdleMilliseconds = policy.idleTimeout.Milliseconds()
-	apiConfig := httpapi.Config{
-		Hub:            hub,
-		AllowedOrigins: originList,
-		AllowLocalhost: *allowLocalhost,
-		Limits:         publicLimits,
+	httpConfig := httpapi.V2Config{
+		Server: endpointServer, AllowedOrigins: allowedOrigins, AllowLocalhost: *allowLocalhost,
+		AdmitConnection: limiter.Admit,
 	}
-	if err := httpapi.ValidateConfig(apiConfig); err != nil {
+	if err := httpapi.ValidateV2Config(httpConfig); err != nil {
 		return fmt.Errorf("wsrelay: invalid HTTP policy: %w", err)
 	}
-	handler := httpapi.NewHandler(apiConfig)
-
-	lis, err := net.Listen("tcp", *listen)
-	if err != nil {
-		return fmt.Errorf("wsrelay: listen on %s: %w", *listen, err)
-	}
-	tracker := newConnectionTracker(hub)
-	srv := policy.newServer(handler, tracker)
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Serve(lis) }()
-	logf("wsrelay: listening on %s (protocol %s)", lis.Addr(), protocol.ProtocolVersion)
+	v2Handler := httpapi.NewV2Handler(httpConfig)
+	mux := http.NewServeMux()
+	mux.Handle("/v2/ws", v2Handler)
+	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = writer.Write([]byte("ok\n"))
+	})
+	server := policy.newServer(mux)
+	serveResult := make(chan error, 1)
+	go func() { serveResult <- server.Serve(listener) }()
+	listenerOwned = false
+	logf("wsrelay: listening on %s (protocol v2, identity %s)", listener.Addr(), endpoint.IdentityURL)
 	if onReady != nil {
-		onReady(lis.Addr())
+		onReady(listener.Addr())
 	}
 
 	select {
-	case err := <-errCh:
-		return err
+	case err := <-serveResult:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
 	case <-ctx.Done():
 	}
-	// 优雅退出:先终结 WS 连接(劫持后的连接 Shutdown 管不到),再排空
-	// 常规 HTTP 面。对端(发送端凭 resumeToken、接收端凭 rejoin)自带
-	// 恢复语义,强断是安全的。
-	hub.Close()
-	shutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(shutCtx); err != nil {
-		return err
+	serverErr := server.Shutdown(shutdownContext)
+	endpointErr := endpointServer.Shutdown(shutdownContext)
+	if err := errors.Join(serverErr, endpointErr); err != nil {
+		return fmt.Errorf("wsrelay: shutdown: %w", err)
 	}
 	logf("wsrelay: stopped")
 	return nil
+}
+
+func publicRelayEndpoint(configured string, address net.Addr) (v2.RelayEndpoint, error) {
+	base := configured
+	if base == "" {
+		host, port, err := net.SplitHostPort(address.String())
+		if err != nil {
+			return v2.RelayEndpoint{}, fmt.Errorf("wsrelay: derive relay identity: %w", err)
+		}
+		ip := net.ParseIP(host)
+		if host == "" || ip != nil && ip.IsUnspecified() {
+			host = "127.0.0.1"
+		}
+		base = (&url.URL{Scheme: "ws", Host: net.JoinHostPort(host, port)}).String()
+	}
+	endpoint, err := v2.NormalizeRelayEndpoint(base)
+	if err != nil {
+		return v2.RelayEndpoint{}, fmt.Errorf("wsrelay: invalid relay-base-url: %w", err)
+	}
+	return endpoint, nil
+}
+
+func resolveStateDirectory(configured string, identity v2.RelayIdentity) (string, error) {
+	if configured != "" {
+		return filepath.Abs(configured)
+	}
+	root, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("wsrelay: locate user configuration directory: %w", err)
+	}
+	identityName := hex.EncodeToString(identity[:8])
+	return filepath.Join(root, defaultRelayStateDirectoryName, defaultRelayStateSubdirectoryName, identityName), nil
 }

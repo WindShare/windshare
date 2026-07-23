@@ -2,6 +2,8 @@ import process from 'node:process'
 
 import { defineConfig } from '@playwright/test'
 
+import { PLAYWRIGHT_BROWSER_PROJECTS } from '../../playwright.projects.js'
+
 const OUTPUT_DIR = process.env.WINDSHARE_ARTIFACT_PROBE_OUTPUT
 const BASE_URL = process.env.WINDSHARE_ARTIFACT_PROBE_BASE_URL
 const PROBE_TIMEOUT_MS = 10_000
@@ -21,9 +23,9 @@ export default defineConfig({
   reporter: 'line',
   timeout: PROBE_TIMEOUT_MS,
   expect: { timeout: PROBE_TIMEOUT_MS },
+  projects: PLAYWRIGHT_BROWSER_PROJECTS,
   use: {
     baseURL: BASE_URL,
-    browserName: 'chromium',
     // The ordinary helper-failure branch needs a bounded action. Its sibling
     // explicitly restores production's unbounded action timing and fails by the
     // overall test deadline so both artifact-capture orders remain executable.

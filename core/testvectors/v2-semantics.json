@@ -1,0 +1,577 @@
+{
+  "version": 1,
+  "kind": "v2-semantics",
+  "description": "R0 resource, operation-final, selection/timing, ZIP member, lifecycle and crash-commit state contracts.",
+  "cases": [
+    {
+      "name": "frozen-limits",
+      "values": {
+        "activeLanesProcess": "1024",
+        "activeLanesSession": "16",
+        "activeLanesShare": "256",
+        "activeLeasesProcess": "1024",
+        "activeLeasesSession": "32",
+        "activeLeasesShare": "256",
+        "applicationRelaySeconds": "8",
+        "catalogMemoryProcess": "536870912",
+        "catalogMemorySession": "16777216",
+        "catalogMemoryShare": "67108864",
+        "catalogSpillProcess": "17179869184",
+        "catalogSpillShare": "2147483648",
+        "clientHelloReplaySeconds": "300",
+        "committedEntriesProcess": "16777216",
+        "committedEntriesShare": "4194304",
+        "controlQueueBytes": "4194304",
+        "controlQueueFrames": "256",
+        "dataQueueBytes": "67108864",
+        "dataQueueFrames": "1024",
+        "joinStartingSeconds": "5",
+        "leaseMaximumSeconds": "7200",
+        "leaseRenewWindowSeconds": "60",
+        "leaseTTLSeconds": "120",
+        "logicalLanesSession": "16",
+        "maxBlockRequestIndices": "256",
+        "maxCatalogPageBytes": "61440",
+        "maxCatalogPageEntries": "256",
+        "maxChunkBytes": "4194304",
+        "maxDataFairnessBurst": "8",
+        "maxDescriptorBytes": "16384",
+        "maxDirectoryEntries": "1048576",
+        "maxFileBytes": "9007199254740991",
+        "maxFrameBytes": "65536",
+        "maxInitialRangesPerFile": "256",
+        "maxInitialRangesPerOpen": "1024",
+        "maxOpaqueCiphertextBytes": "65536",
+        "maxOpenBatch": "64",
+        "maxSelectedRootNameBytes": "1048576",
+        "maxSelectedRoots": "4096",
+        "minChunkBytes": "1024",
+        "operationTombstoneSeconds": "30",
+        "opfsMinimumReserveBytes": "536870912",
+        "opfsStagingJobBytes": "8589934592",
+        "opfsStagingProcessBytes": "17179869184",
+        "outputOpenTransactions": "32",
+        "reassemblyOperation": "4194816",
+        "reassemblyProcess": "1073741824",
+        "reassemblyRecordsProcess": "256",
+        "reassemblyRecordsSession": "16",
+        "reassemblyRecordsShare": "64",
+        "reassemblySession": "67108864",
+        "reassemblyShare": "268435456",
+        "receiverCacheProcess": "1073741824",
+        "receiverCacheSession": "134217728",
+        "relayChallengeSeconds": "30",
+        "relaySessionTombstoneSeconds": "60",
+        "revisionGraceSeconds": "120",
+        "scanConcurrencyProcess": "64",
+        "scanConcurrencySession": "4",
+        "scanConcurrencyShare": "16",
+        "scanWorkProcess": "16777216",
+        "scanWorkSession": "1048576",
+        "scanWorkShare": "4194304",
+        "sealedCacheProcess": "2147483648",
+        "sealedCacheShare": "268435456",
+        "segmentBytes": "17179869184",
+        "senderCrashGraceSeconds": "60",
+        "stableHandlesProcess": "1024",
+        "stableHandlesSession": "32",
+        "stableHandlesShare": "256"
+      }
+    },
+    {
+      "block": {
+        "cancelled": 16390,
+        "fragment-conflict": 16388,
+        "invalid-ref": 16385,
+        "object-auth": 16387,
+        "out-of-range": 16386,
+        "timeout": 16389
+      },
+      "directory": {
+        "budget": 8197,
+        "cancelled": 8200,
+        "collision": 8195,
+        "permanent-io": 8198,
+        "permission": 8194,
+        "stale": 8193,
+        "too-wide": 8196,
+        "transient-io": 8199
+      },
+      "name": "error-domains",
+      "peer": {
+        "admission": 20484,
+        "candidates": 20483,
+        "negotiation": 20481,
+        "timeout": 20482
+      },
+      "revision": {
+        "drift": 12295,
+        "invalid-lease": 12296,
+        "lease-expired": 12294,
+        "not-found": 12290,
+        "quota": 12293,
+        "stale": 12289,
+        "unreadable": 12291,
+        "unsupported-stability": 12292
+      },
+      "session": {
+        "auth": 4097,
+        "budget": 4101,
+        "illegal-terminal": 4103,
+        "malformed": 4099,
+        "replay-sequence": 4098,
+        "sender-signature": 4102,
+        "sender-stopped": 4104,
+        "version": 4100
+      }
+    },
+    {
+      "codes": {
+        "admission": 10,
+        "already-registered": 4,
+        "challenge-expired": 5,
+        "descriptor-invalid": 7,
+        "invalid-proof": 6,
+        "malformed": 1,
+        "not-found": 8,
+        "share-id-collision": 3,
+        "starting": 9,
+        "stopped": 11,
+        "unsupported-mode": 2
+      },
+      "name": "relay-registration-errors"
+    },
+    {
+      "crashGraceSeconds": "60",
+      "explicitStop": [
+        "per-route-storage-transaction",
+        "durable-tombstone-before-ack",
+        "exact-participant-cleanup-before-ack",
+        "unknown-durability-fail-closed",
+        "same-stop-id-resolution",
+        "no-crash-grace",
+        "permanent-reject-same-instance"
+      ],
+      "name": "relay-route-lifecycle",
+      "routeBudgetCounts": [
+        "starting",
+        "live",
+        "crash-grace",
+        "stopped-tombstone"
+      ],
+      "sessionBudgetCounts": [
+        "active",
+        "ended-id-tombstone"
+      ],
+      "sessionBudgetScopes": [
+        "global",
+        "per-share"
+      ],
+      "sessionTombstoneSeconds": "60",
+      "stopStoreOutcomes": [
+        "committed",
+        "definitely-not-committed",
+        "unknown"
+      ],
+      "stoppedTombstoneRetention": "until-future-authenticated-refresh",
+      "unexpectedDisconnect": [
+        "drop-sessions",
+        "enter-bounded-crash-grace",
+        "immediate-retirement-during-stop-commit"
+      ]
+    },
+    {
+      "byteLimitExclusive": "8388608",
+      "cases": [
+        {
+          "bytes": "8388607",
+          "class": "small",
+          "failed": false,
+          "files": "29",
+          "terminal": true
+        },
+        {
+          "bytes": "0",
+          "class": "large",
+          "failed": false,
+          "files": "30",
+          "terminal": true
+        },
+        {
+          "bytes": "8388608",
+          "class": "large",
+          "failed": false,
+          "files": "1",
+          "terminal": true
+        },
+        {
+          "bytes": "0",
+          "class": "large",
+          "failed": false,
+          "files": "30",
+          "terminal": false
+        },
+        {
+          "bytes": "8388608",
+          "class": "large",
+          "failed": true,
+          "files": "1",
+          "terminal": true
+        },
+        {
+          "bytes": "0",
+          "class": "unknown",
+          "failed": false,
+          "files": "0",
+          "terminal": false
+        },
+        {
+          "bytes": "0",
+          "class": "unknown",
+          "failed": true,
+          "files": "0",
+          "terminal": true
+        },
+        {
+          "bytes": "0",
+          "class": "small",
+          "failed": false,
+          "files": "0",
+          "terminal": true
+        }
+      ],
+      "fileLimitExclusive": "30",
+      "name": "selection-classification"
+    },
+    {
+      "name": "operation-final-matrix",
+      "operations": [
+        {
+          "legalFinals": [
+            "lease-result",
+            "operation-error"
+          ],
+          "request": "renew-lease"
+        },
+        {
+          "legalFinals": [
+            "operation-complete",
+            "operation-error"
+          ],
+          "request": "release-lease"
+        },
+        {
+          "legalFinals": [
+            "operation-complete",
+            "operation-error"
+          ],
+          "request": "request-blocks"
+        }
+      ]
+    },
+    {
+      "discoveryCannotDelay": true,
+      "independentTimers": true,
+      "name": "connection-timing",
+      "triggers": [
+        {
+          "applicationRelayDeadlineSeconds": null,
+          "outputPicker": "none",
+          "p2pStartSeconds": null,
+          "startsP2P": false,
+          "trigger": "browse"
+        },
+        {
+          "applicationRelayDeadlineSeconds": "8",
+          "outputPicker": "none",
+          "p2pStartSeconds": "0",
+          "startsP2P": true,
+          "trigger": "preview-click"
+        },
+        {
+          "applicationRelayDeadlineSeconds": "8",
+          "outputPicker": "synchronous",
+          "p2pStartSeconds": "0",
+          "startsP2P": true,
+          "trigger": "download-click"
+        }
+      ],
+      "turnInsertionOnly": true,
+      "unknownUsesNonSmallTiming": true
+    },
+    {
+      "cases": [
+        {
+          "accepted": true,
+          "candidate": "0",
+          "epoch": 0,
+          "expected": "0"
+        },
+        {
+          "accepted": false,
+          "candidate": "0",
+          "epoch": 0,
+          "expected": "1"
+        },
+        {
+          "accepted": false,
+          "candidate": "2",
+          "epoch": 0,
+          "expected": "1"
+        },
+        {
+          "accepted": true,
+          "candidate": "0",
+          "epoch": 1,
+          "expected": "0"
+        },
+        {
+          "accepted": false,
+          "candidate": "1",
+          "epoch": 0,
+          "expected": "closed"
+        }
+      ],
+      "name": "strict-sequence"
+    },
+    {
+      "cases": [
+        {
+          "accepted": true,
+          "candidate": 5,
+          "lane": 1,
+          "lastAccepted": 3
+        },
+        {
+          "accepted": false,
+          "candidate": 5,
+          "lane": 1,
+          "lastAccepted": 5
+        },
+        {
+          "accepted": false,
+          "candidate": 4,
+          "lane": 1,
+          "lastAccepted": 5
+        },
+        {
+          "accepted": true,
+          "candidate": 4,
+          "lane": 2,
+          "lastAccepted": null,
+          "otherLaneLast": 7
+        }
+      ],
+      "globallyAllocated": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "name": "lane-epoch-acceptance"
+    },
+    {
+      "cuts": [
+        {
+          "cut": "after-data-write",
+          "published": false
+        },
+        {
+          "cut": "after-data-flush",
+          "published": false
+        },
+        {
+          "cut": "after-journal-write",
+          "published": false
+        },
+        {
+          "cut": "after-journal-flush",
+          "published": false
+        },
+        {
+          "cut": "after-install",
+          "published": false
+        },
+        {
+          "cut": "after-reopen-verify",
+          "published": true
+        }
+      ],
+      "name": "output-checkpoint-crash-cuts",
+      "order": [
+        "data-write",
+        "data-flush",
+        "journal-write",
+        "journal-flush",
+        "atomic-install",
+        "reopen-verify"
+      ]
+    },
+    {
+      "backends": [
+        {
+          "backend": "fsa",
+          "durability": "none-until-reauthorization-and-reopen-proof",
+          "fileFailureIsolation": true,
+          "mtime": false,
+          "powerLoss": false,
+          "randomWrite": true
+        },
+        {
+          "backend": "opfs-staging",
+          "durability": "process-restart",
+          "fileFailureIsolation": true,
+          "mtime": false,
+          "powerLoss": false,
+          "randomWrite": true
+        },
+        {
+          "backend": "single-file-stream",
+          "durability": "none",
+          "failureAfterFirstByte": "abort-job",
+          "fileFailureIsolation": false,
+          "mtime": false,
+          "randomWrite": false
+        },
+        {
+          "backend": "zip-stream",
+          "durability": "none",
+          "fileFailureIsolation": false,
+          "memberStart": "first-local-file-header-byte",
+          "mtime": false,
+          "randomWrite": false
+        },
+        {
+          "backend": "cli-osfs",
+          "durability": "power-loss-when-file-and-directory-sync-proved-else-process-restart",
+          "fileFailureIsolation": true,
+          "mtime": true,
+          "randomWrite": true
+        }
+      ],
+      "name": "output-backend-capabilities"
+    },
+    {
+      "cases": [
+        {
+          "action": "skip-and-report",
+          "jobOutcome": "completed-with-errors",
+          "memberStarted": false
+        },
+        {
+          "action": "abort-job",
+          "jobOutcome": "aborted",
+          "memberStarted": true
+        }
+      ],
+      "name": "zip-member-failure"
+    },
+    {
+      "name": "catalog-transaction",
+      "preCommitCrashVisible": false,
+      "publishOnlyAfter": [
+        "pages",
+        "node-records",
+        "terminal",
+        "budget-charge",
+        "spill-flush",
+        "atomic-commit"
+      ]
+    },
+    {
+      "name": "stable-source-platforms",
+      "platforms": [
+        {
+          "mechanism": "deny-share-write-handle+volume-file-id",
+          "platform": "windows-local-ntfs-refs",
+          "supported": true
+        },
+        {
+          "mechanism": "device+inode+size+mtime-ns+ctime-ns",
+          "platform": "linux-local-regular",
+          "supported": true
+        },
+        {
+          "mechanism": "device+inode+size+mtime-ns+ctime-ns",
+          "platform": "darwin-local-regular",
+          "supported": true
+        },
+        {
+          "mechanism": "unsupported-stability",
+          "platform": "other-network-pseudo",
+          "supported": false
+        }
+      ]
+    },
+    {
+      "crashGraceSeconds": "60",
+      "explicitStopEffects": [
+        "reject-join",
+        "signed-session-terminal",
+        "cancel-scan-revision-lanes",
+        "cancel-uncommitted-upload",
+        "challenged-signed-stop",
+        "cleanup-staging"
+      ],
+      "explicitStopUsesCrashGrace": false,
+      "name": "offline-lifecycle",
+      "states": [
+        "preparing",
+        "live-only",
+        "offline-uploading",
+        "offline-committed",
+        "stopping",
+        "stopped"
+      ],
+      "transitions": [
+        {
+          "event": "registered",
+          "from": "preparing",
+          "to": "live-only"
+        },
+        {
+          "event": "stop",
+          "from": "preparing",
+          "to": "stopping"
+        },
+        {
+          "event": "begin-offline",
+          "from": "live-only",
+          "to": "offline-uploading"
+        },
+        {
+          "event": "stop",
+          "from": "live-only",
+          "to": "stopping"
+        },
+        {
+          "event": "commit-ack",
+          "from": "offline-uploading",
+          "to": "offline-committed"
+        },
+        {
+          "event": "stop",
+          "from": "offline-uploading",
+          "to": "stopping"
+        },
+        {
+          "event": "cleanup-complete",
+          "from": "stopping",
+          "to": "stopped"
+        },
+        {
+          "event": "sender-exit",
+          "from": "offline-committed",
+          "to": "offline-committed"
+        }
+      ],
+      "unexpectedDisconnectStates": [
+        "live-only",
+        "offline-uploading"
+      ]
+    }
+  ]
+}

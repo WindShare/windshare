@@ -14,6 +14,6 @@
 scripts/d5-windows-network-packages.json text eol=lf
 # Golden vectors are byte-compared against LF regenerations (core/share and
 # relay/protocol -update suites); an autocrlf checkout must not rewrite them.
-testvectors/*.json text eol=lf
+core/testvectors/*.json text eol=lf
 # make recipes run under msys sh; CRLF would leak \r into continuation lines.
 Makefile text eol=lf

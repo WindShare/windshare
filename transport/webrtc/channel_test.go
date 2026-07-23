@@ -3,15 +3,13 @@ package webrtc
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
-	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/framechannel"
 )
 
 const unitTimeout = 2 * time.Second
@@ -38,6 +36,36 @@ func TestDefaultDataChannelInit(t *testing.T) {
 	}
 	if first.MaxPacketLifeTime != nil || first.MaxRetransmits != nil || first.ID != nil {
 		t.Fatal("default channel unexpectedly limits reliability or pre-negotiates an ID")
+	}
+}
+
+func TestDefaultFlowControlKeepsPeakBelowExclusivePublishedBound(t *testing.T) {
+	const (
+		expectedHighWaterBytes          = 1024 * 1024
+		expectedMaxFrameBytes           = 64 * 1024
+		expectedSendAdmissionHighWater  = expectedHighWaterBytes - 1
+		expectedPeakExclusiveLimitBytes = expectedHighWaterBytes + expectedMaxFrameBytes
+	)
+	if defaultHighWaterBytes != expectedHighWaterBytes ||
+		framechannel.MaxFrameSize != expectedMaxFrameBytes ||
+		defaultFlowControl.highWaterBytes != expectedSendAdmissionHighWater {
+		t.Fatalf(
+			"production peak inputs changed: high=%d/%d frame=%d/%d admission=%d/%d",
+			defaultHighWaterBytes,
+			expectedHighWaterBytes,
+			framechannel.MaxFrameSize,
+			expectedMaxFrameBytes,
+			defaultFlowControl.highWaterBytes,
+			expectedSendAdmissionHighWater,
+		)
+	}
+	maximumAdmittedPeak := defaultFlowControl.highWaterBytes + uint64(framechannel.MaxFrameSize)
+	if maximumAdmittedPeak >= expectedPeakExclusiveLimitBytes {
+		t.Fatalf(
+			"maximum admitted peak = %d, must be below exclusive limit %d",
+			maximumAdmittedPeak,
+			expectedPeakExclusiveLimitBytes,
+		)
 	}
 }
 
@@ -75,6 +103,102 @@ func TestNewChannelRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestLifecycleTraceCorrelatesImmutableSendDecisions(t *testing.T) {
+	events := make(chan LifecycleTrace, 8)
+	fake := newFakeDataChannel(pion.DataChannelStateOpen)
+	channel, err := newChannelWithRuntime(fake, defaultFlowControl, channelRuntime{
+		lifecycleTracer: LifecycleTraceFunc(func(event LifecycleTrace) { events <- event }),
+	})
+	if err != nil {
+		t.Fatalf("construct traced channel: %v", err)
+	}
+	waitOpened(t, channel)
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = channel.Send(canceled, framechannel.Frame{0x21})
+	if disposition := framechannel.SendDispositionOf(err); disposition != framechannel.SendRejected {
+		t.Fatalf("canceled send disposition=%d error=%v", disposition, err)
+	}
+	rejected := receiveLifecycleTrace(t, events)
+	if rejected.ChannelID == 0 || rejected.OperationID == 0 ||
+		rejected.Operation != LifecycleOperationSend ||
+		rejected.Transition != LifecycleTransitionSendRejected ||
+		rejected.Disposition != framechannel.SendRejected ||
+		rejected.Cause != LifecycleCauseCanceled {
+		t.Fatalf("rejected trace = %+v", rejected)
+	}
+
+	fake.sendErr = errors.New("provider send failed")
+	err = channel.Send(context.Background(), framechannel.Frame{0x22})
+	if !errors.Is(err, ErrTransport) || framechannel.SendDispositionOf(err) != framechannel.SendAccepted {
+		t.Fatalf("accepted provider failure: %v", err)
+	}
+	accepted := receiveLifecycleTrace(t, events)
+	if accepted.ChannelID != rejected.ChannelID || accepted.OperationID <= rejected.OperationID ||
+		accepted.Operation != LifecycleOperationSend ||
+		accepted.Transition != LifecycleTransitionSendAccepted ||
+		accepted.Disposition != framechannel.SendAccepted ||
+		accepted.Cause != LifecycleCauseTransport {
+		t.Fatalf("accepted trace = %+v after %+v", accepted, rejected)
+	}
+
+	closed := receiveLifecycleTrace(t, events)
+	if closed.ChannelID != rejected.ChannelID ||
+		closed.Operation != LifecycleOperationChannel ||
+		closed.Transition != LifecycleTransitionClosedFailed ||
+		closed.State != framechannel.Closed ||
+		closed.Cause != LifecycleCauseTransport {
+		t.Fatalf("closed trace = %+v", closed)
+	}
+	if err := channel.Close(); err != nil {
+		t.Fatalf("close traced channel: %v", err)
+	}
+}
+
+func TestLifecycleTraceBackpressureIsBoundedAndObservable(t *testing.T) {
+	const overflowEvents = 5
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	observed := make(chan LifecycleTrace, lifecycleTraceQueueCapacity+2)
+	var first sync.Once
+	dispatcher := newLifecycleTraceDispatcher(LifecycleTraceFunc(func(event LifecycleTrace) {
+		first.Do(func() {
+			close(entered)
+			<-release
+		})
+		observed <- event
+	}))
+	dispatcher.emit(LifecycleTrace{ChannelID: 7, Transition: LifecycleTransitionSendRejected})
+	select {
+	case <-entered:
+	case <-time.After(unitTimeout):
+		t.Fatal("trace observer did not enter its deterministic backpressure gate")
+	}
+	for operationID := uint64(1); operationID <= lifecycleTraceQueueCapacity+overflowEvents; operationID++ {
+		dispatcher.emit(LifecycleTrace{
+			ChannelID: operationID, OperationID: operationID,
+			Transition: LifecycleTransitionSendRejected,
+		})
+	}
+	dispatcher.shutdown()
+	close(release)
+
+	for {
+		select {
+		case event := <-observed:
+			if event.Transition == LifecycleTransitionTraceDropped {
+				if event.Dropped != overflowEvents {
+					t.Fatalf("dropped trace count = %d, want %d", event.Dropped, overflowEvents)
+				}
+				return
+			}
+		case <-time.After(unitTimeout):
+			t.Fatal("bounded trace queue did not publish its drop record")
+		}
+	}
+}
+
 func TestChannelPublishesOpenOnlyAfterMessageCapability(t *testing.T) {
 	fake := newFakeDataChannel(pion.DataChannelStateConnecting)
 	fake.maximumMessage = 0
@@ -82,7 +206,7 @@ func TestChannelPublishesOpenOnlyAfterMessageCapability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct connecting channel: %v", err)
 	}
-	if channel.State() != session.Connecting {
+	if channel.State() != framechannel.Connecting {
 		t.Fatalf("initial state = %v, want Connecting", channel.State())
 	}
 	select {
@@ -91,9 +215,9 @@ func TestChannelPublishesOpenOnlyAfterMessageCapability(t *testing.T) {
 	default:
 	}
 
-	fake.open(session.MaxFrameSize)
+	fake.open(framechannel.MaxFrameSize)
 	waitOpened(t, channel)
-	if channel.State() != session.Open {
+	if channel.State() != framechannel.Open {
 		t.Fatalf("opened state = %v, want Open", channel.State())
 	}
 	if fake.lowThreshold != defaultLowWaterBytes {
@@ -103,7 +227,7 @@ func TestChannelPublishesOpenOnlyAfterMessageCapability(t *testing.T) {
 		t.Fatalf("close opened channel: %v", err)
 	}
 
-	for _, maximum := range []uint32{0, session.MaxFrameSize - 1} {
+	for _, maximum := range []uint32{0, framechannel.MaxFrameSize - 1} {
 		t.Run("reject-insufficient-capability", func(t *testing.T) {
 			fake := newFakeDataChannel(pion.DataChannelStateConnecting)
 			channel, err := newChannel(fake, defaultFlowControl)
@@ -136,7 +260,7 @@ func TestChannelReconcilesCloseDuringCallbackInstallation(t *testing.T) {
 	if !errors.Is(channel.Err(), ErrRemoteClosed) {
 		t.Fatalf("Err = %v, want ErrRemoteClosed", channel.Err())
 	}
-	if channel.State() != session.Closed {
+	if channel.State() != framechannel.Closed {
 		t.Fatalf("state = %v, want Closed", channel.State())
 	}
 	select {
@@ -181,10 +305,10 @@ func TestMessageAdmissionSerializesOpenReconciliation(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = channel.Close() })
 
-		fake.markOpenWithoutCallback(session.MaxFrameSize)
-		fake.deliverBinary(session.Frame{0x31})
+		fake.markOpenWithoutCallback(framechannel.MaxFrameSize)
+		fake.deliverBinary(framechannel.Frame{0x31})
 		waitOpened(t, channel)
-		if channel.State() != session.Open {
+		if channel.State() != framechannel.Open {
 			t.Fatalf("state after message reconciliation = %v, want Open", channel.State())
 		}
 
@@ -213,8 +337,8 @@ func TestMessageAdmissionSerializesOpenReconciliation(t *testing.T) {
 			t.Fatalf("construct connecting channel: %v", err)
 		}
 
-		fake.deliverBinary(session.Frame{0x32})
-		fake.markOpenWithoutCallback(session.MaxFrameSize)
+		fake.deliverBinary(framechannel.Frame{0x32})
+		fake.markOpenWithoutCallback(framechannel.MaxFrameSize)
 		fake.fireOpenCallback()
 		select {
 		case <-channel.Opened():
@@ -227,7 +351,7 @@ func TestMessageAdmissionSerializesOpenReconciliation(t *testing.T) {
 		if !errors.Is(channel.Err(), ErrInvalidDataChannel) {
 			t.Fatalf("Err = %v, want ErrInvalidDataChannel", channel.Err())
 		}
-		if channel.State() != session.Closed {
+		if channel.State() != framechannel.Closed {
 			t.Fatalf("state = %v, want Closed", channel.State())
 		}
 		if _, ok := <-channel.Recv(); ok {
@@ -245,7 +369,7 @@ func TestFlowControlRejectsStaleAndCoalescedWakes(t *testing.T) {
 	fake.setBuffered(flow.highWaterBytes)
 
 	result := make(chan error, 1)
-	go func() { result <- channel.Send(context.Background(), session.Frame{0x41}) }()
+	go func() { result <- channel.Send(context.Background(), framechannel.Frame{0x41}) }()
 	assertNoResult(t, result, "saturated Send returned")
 
 	fake.setBuffered(flow.highWaterBytes - 1)
@@ -278,7 +402,7 @@ func TestFlowControlSerializesConcurrentWakeups(t *testing.T) {
 	results := make(chan concurrentSendResult, 2)
 	for _, marker := range []byte{0x51, 0x52} {
 		go func() {
-			results <- concurrentSendResult{marker: marker, err: channel.Send(context.Background(), session.Frame{marker})}
+			results <- concurrentSendResult{marker: marker, err: channel.Send(context.Background(), framechannel.Frame{marker})}
 		}()
 	}
 	assertNoSendResult(t, results, "concurrent saturated Send returned")
@@ -310,7 +434,7 @@ func TestInboundProtocolFailuresCloseTheChannel(t *testing.T) {
 	}{
 		{"unknown-text", func(dc *fakeDataChannel) { dc.deliverText("unknown") }},
 		{"empty-binary", func(dc *fakeDataChannel) { dc.deliverBinary(nil) }},
-		{"oversized-binary", func(dc *fakeDataChannel) { dc.deliverBinary(make(session.Frame, session.MaxFrameSize+1)) }},
+		{"oversized-binary", func(dc *fakeDataChannel) { dc.deliverBinary(make(framechannel.Frame, framechannel.MaxFrameSize+1)) }},
 		{"unsolicited-ack", func(dc *fakeDataChannel) { dc.deliverText(terminalAckControl) }},
 		{"duplicate-intent", func(dc *fakeDataChannel) {
 			dc.deliverText(terminalIntentControl)
@@ -329,7 +453,7 @@ func TestInboundProtocolFailuresCloseTheChannel(t *testing.T) {
 			if !errors.Is(channel.Err(), ErrPeerProtocol) {
 				t.Fatalf("Err = %v, want ErrPeerProtocol", channel.Err())
 			}
-			if channel.State() != session.Closed {
+			if channel.State() != framechannel.Closed {
 				t.Fatalf("state = %v, want Closed", channel.State())
 			}
 		})
@@ -343,18 +467,21 @@ func TestTerminalCancellationOwnsAndClosesLifecycle(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
-	go func() { result <- channel.SendTerminal(ctx, session.Frame{0x71}) }()
+	go func() { result <- channel.SendTerminal(ctx, framechannel.Frame{0x71}) }()
 	assertNoResult(t, result, "saturated terminal returned before cancellation")
 	cancel()
 	err := receiveError(t, result)
 	if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrTerminalNotAcknowledged) {
 		t.Fatalf("SendTerminal cancellation = %v", err)
 	}
+	if disposition := framechannel.SendDispositionOf(err); disposition != framechannel.SendAccepted {
+		t.Fatalf("admitted terminal cancellation disposition=%d", disposition)
+	}
 	waitDone(t, channel)
-	if channel.State() != session.Closed {
+	if channel.State() != framechannel.Closed {
 		t.Fatalf("state = %v, want Closed", channel.State())
 	}
-	if err := channel.Send(context.Background(), session.Frame{1}); err == nil {
+	if err := channel.Send(context.Background(), framechannel.Frame{1}); err == nil {
 		t.Fatal("ordinary Send succeeded after terminal cancellation")
 	}
 	if err := channel.Close(); err != nil {
@@ -362,11 +489,97 @@ func TestTerminalCancellationOwnsAndClosesLifecycle(t *testing.T) {
 	}
 }
 
+func TestPreAdmissionCancellationAndRemoteTerminalHaveImmutableWinners(t *testing.T) {
+	t.Run("cancellation-before-remote-terminal", func(t *testing.T) {
+		lifecycle := newChannelLifecycle()
+		lifecycle.publishOpen()
+		ctx, cancel := context.WithCancel(context.Background())
+		admission := lifecycle.beginSendAdmission(ctx, sendTerminal)
+
+		cancel()
+		if !lifecycle.reserveRemoteIntent() {
+			t.Fatal("remote terminal did not win the channel transition")
+		}
+		err := lifecycle.admitLocalTerminal(admission)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("terminal admission = %v, want cancellation", err)
+		}
+		if disposition := framechannel.SendDispositionOf(err); disposition != framechannel.SendRejected {
+			t.Fatalf("cancellation-first disposition = %d, want rejected", disposition)
+		}
+	})
+
+	t.Run("remote-terminal-before-cancellation", func(t *testing.T) {
+		lifecycle := newChannelLifecycle()
+		lifecycle.publishOpen()
+		ctx, cancel := context.WithCancel(context.Background())
+		admission := lifecycle.beginSendAdmission(ctx, sendTerminal)
+
+		if !lifecycle.reserveRemoteIntent() {
+			t.Fatal("remote terminal did not win the channel transition")
+		}
+		cancel()
+		err := lifecycle.admitLocalTerminal(admission)
+		if !errors.Is(err, ErrChannelClosed) {
+			t.Fatalf("terminal admission = %v, want channel retirement", err)
+		}
+		if errors.Is(err, context.Canceled) {
+			t.Fatalf("later cancellation replaced remote retirement: %v", err)
+		}
+		if disposition := framechannel.SendDispositionOf(err); disposition != framechannel.SendRetired {
+			t.Fatalf("remote-first disposition = %d, want retired", disposition)
+		}
+	})
+}
+
+func TestOrdinarySendRefusalCannotBeReclassifiedByLaterTermination(t *testing.T) {
+	laterFailure := errors.New("physical failure after terminal ownership")
+	t.Run("remote-terminal-before-failure", func(t *testing.T) {
+		lifecycle := newChannelLifecycle()
+		lifecycle.publishOpen()
+		admission := lifecycle.beginSendAdmission(context.Background(), sendOrdinary)
+
+		if !lifecycle.reserveRemoteIntent() {
+			t.Fatal("remote terminal did not win admission")
+		}
+		if !lifecycle.beginTermination(laterFailure) {
+			t.Fatal("later physical termination was not published")
+		}
+		err := lifecycle.sendAdmissionError(admission)
+		if disposition := framechannel.SendDispositionOf(err); disposition != framechannel.SendRetired {
+			t.Fatalf("terminal-first disposition = %d error=%v", disposition, err)
+		}
+		if errors.Is(err, laterFailure) {
+			t.Fatalf("later failure rewrote immutable retirement: %v", err)
+		}
+	})
+
+	t.Run("failure-before-remote-terminal", func(t *testing.T) {
+		lifecycle := newChannelLifecycle()
+		lifecycle.publishOpen()
+		admission := lifecycle.beginSendAdmission(context.Background(), sendOrdinary)
+
+		if !lifecycle.beginTermination(laterFailure) {
+			t.Fatal("physical failure did not win admission")
+		}
+		if lifecycle.reserveRemoteIntent() {
+			t.Fatal("remote terminal overtook an already-published failure")
+		}
+		err := lifecycle.sendAdmissionError(admission)
+		if disposition := framechannel.SendDispositionOf(err); disposition != framechannel.SendRejected {
+			t.Fatalf("failure-first disposition = %d error=%v", disposition, err)
+		}
+		if !errors.Is(err, laterFailure) {
+			t.Fatalf("failure-first cause = %v, want physical failure", err)
+		}
+	})
+}
+
 func TestLocalTerminalProtocolFailurePreservesAcknowledgementError(t *testing.T) {
 	fake, channel := openFakeChannel(t, defaultFlowControl)
 	result := make(chan error, 1)
 	go func() {
-		result <- channel.SendTerminal(context.Background(), session.Frame{0x70})
+		result <- channel.SendTerminal(context.Background(), framechannel.Frame{0x70})
 	}()
 
 	select {
@@ -392,13 +605,13 @@ func TestLocalTerminalProtocolFailurePreservesAcknowledgementError(t *testing.T)
 func TestLocalTerminalAdmissionBypassesStalledInboundDelivery(t *testing.T) {
 	fake, channel := openFakeChannel(t, defaultFlowControl)
 	for index := range receiveQueueFrames + 1 {
-		fake.deliverBinary(session.Frame{byte(index + 1)})
+		fake.deliverBinary(framechannel.Frame{byte(index + 1)})
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	result := make(chan error, 1)
-	go func() { result <- channel.SendTerminal(ctx, session.Frame{0x72}) }()
+	go func() { result <- channel.SendTerminal(ctx, framechannel.Frame{0x72}) }()
 
 	sent, err := fake.receiveSent(ctx)
 	if err != nil {
@@ -421,7 +634,7 @@ func TestCloseAndTerminalAdmissionHaveOneLinearization(t *testing.T) {
 		closeResult := make(chan error, 1)
 		go func() {
 			<-start
-			terminalResult <- channel.SendTerminal(ctx, session.Frame{byte(iteration + 1)})
+			terminalResult <- channel.SendTerminal(ctx, framechannel.Frame{byte(iteration + 1)})
 		}()
 		go func() {
 			<-start
@@ -452,6 +665,9 @@ func TestCloseAndTerminalAdmissionHaveOneLinearization(t *testing.T) {
 		case err := <-terminalResult:
 			if err == nil || !errors.Is(err, ErrChannelClosed) {
 				t.Fatalf("iteration %d terminal losing to Close = %v", iteration, err)
+			}
+			if disposition := framechannel.SendDispositionOf(err); disposition != framechannel.SendRetired {
+				t.Fatalf("iteration %d terminal/Close disposition=%d", iteration, disposition)
 			}
 			if err := receiveError(t, closeResult); err != nil {
 				t.Fatalf("iteration %d winning Close: %v", iteration, err)
@@ -489,7 +705,7 @@ func TestInboundTerminationDrainsAcceptedBinaryBeforeEOF(t *testing.T) {
 			}
 			waitOpened(t, channel)
 
-			want := session.Frame{0x81, 0x82}
+			want := framechannel.Frame{0x81, 0x82}
 			fake.deliverBinary(want)
 			test.terminate(fake)
 			release()
@@ -508,6 +724,9 @@ func TestInboundTerminationDrainsAcceptedBinaryBeforeEOF(t *testing.T) {
 			waitDone(t, channel)
 			if !errors.Is(channel.Err(), test.want) {
 				t.Fatalf("Err = %v, want %v", channel.Err(), test.want)
+			}
+			if err := channel.SendTerminal(context.Background(), framechannel.Frame{0x83}); err == nil || framechannel.SendDispositionOf(err) != framechannel.SendRejected {
+				t.Fatalf("terminal after failed transport = %v disposition=%d", err, framechannel.SendDispositionOf(err))
 			}
 			if err := channel.Close(); err != nil {
 				t.Fatalf("cleanup terminated channel: %v", err)
@@ -535,7 +754,7 @@ func TestTerminalAckAdmissionCannotBeOvertakenByTermination(t *testing.T) {
 			waitOpened(t, channel)
 
 			result := make(chan error, 1)
-			go func() { result <- channel.SendTerminal(context.Background(), session.Frame{0x91}) }()
+			go func() { result <- channel.SendTerminal(context.Background(), framechannel.Frame{0x91}) }()
 			select {
 			case sent := <-fake.sent:
 				if !sent.terminal {
@@ -568,29 +787,35 @@ func TestRemoteTerminalIntentWakesSaturatedOrdinarySend(t *testing.T) {
 	fake.setBuffered(flow.highWaterBytes)
 
 	sendResult := make(chan error, 1)
-	go func() { sendResult <- channel.Send(context.Background(), session.Frame{0x73}) }()
+	go func() { sendResult <- channel.Send(context.Background(), framechannel.Frame{0x73}) }()
 	assertNoResult(t, sendResult, "saturated ordinary Send returned")
 
 	ctx, cancel := context.WithTimeout(context.Background(), unitTimeout)
 	defer cancel()
 	terminalResult := make(chan error, 1)
-	go func() { terminalResult <- fake.deliverTerminal(ctx, session.Frame{0x74}) }()
+	go func() { terminalResult <- fake.deliverTerminal(ctx, framechannel.Frame{0x74}) }()
 	if got := <-channel.Recv(); !bytes.Equal(got, []byte{0x74}) {
 		t.Fatalf("remote terminal = %x", got)
 	}
 
 	wokeBeforeCapacity := false
+	var sendErr error
 	select {
 	case err := <-sendResult:
 		wokeBeforeCapacity = err != nil
+		sendErr = err
 	case <-time.After(50 * time.Millisecond):
 	}
 	fake.setBuffered(flow.lowWaterBytes)
 	fake.fireLow()
 	if !wokeBeforeCapacity {
-		if err := receiveError(t, sendResult); err == nil {
+		sendErr = receiveError(t, sendResult)
+		if sendErr == nil {
 			t.Fatal("ordinary Send succeeded after remote terminal intent")
 		}
+	}
+	if disposition := framechannel.SendDispositionOf(sendErr); disposition != framechannel.SendRetired {
+		t.Fatalf("ordinary send after remote terminal disposition=%d error=%v", disposition, sendErr)
 	}
 	if err := receiveError(t, terminalResult); err != nil {
 		t.Fatalf("deliver remote terminal: %v", err)
@@ -600,9 +825,55 @@ func TestRemoteTerminalIntentWakesSaturatedOrdinarySend(t *testing.T) {
 	}
 }
 
+func TestLocalTerminalRetiresSaturatedOrdinarySendBeforeTransmission(t *testing.T) {
+	flow := flowControlProfile{lowWaterBytes: 10, highWaterBytes: 20}
+	fake, channel := openFakeChannel(t, flow)
+	fake.setBuffered(flow.highWaterBytes)
+	bufferedRead := fake.observeBufferedReads()
+
+	ordinaryResult := make(chan error, 1)
+	go func() {
+		ordinaryResult <- channel.Send(context.Background(), framechannel.Frame{0x75})
+	}()
+	select {
+	case <-bufferedRead:
+	case <-time.After(unitTimeout):
+		t.Fatal("ordinary send did not reach saturated capacity wait")
+	}
+
+	terminalResult := make(chan error, 1)
+	go func() {
+		terminalResult <- channel.SendTerminal(context.Background(), framechannel.Frame{0x76})
+	}()
+	ordinaryErr := receiveError(t, ordinaryResult)
+	if disposition := framechannel.SendDispositionOf(ordinaryErr); disposition != framechannel.SendRetired {
+		t.Fatalf("saturated ordinary disposition = %d error=%v", disposition, ordinaryErr)
+	}
+	select {
+	case sent := <-fake.sent:
+		t.Fatalf("frame transmitted before terminal capacity admission: %+v", sent)
+	default:
+	}
+
+	fake.setBuffered(flow.lowWaterBytes)
+	fake.fireLow()
+	select {
+	case sent := <-fake.sent:
+		if !sent.terminal || !bytes.Equal(sent.frame, []byte{0x76}) {
+			t.Fatalf("post-saturation send = terminal:%t frame:%x", sent.terminal, sent.frame)
+		}
+	case <-time.After(unitTimeout):
+		t.Fatal("terminal did not acquire the released send turn")
+	}
+	fake.deliverText(terminalAckControl)
+	if err := receiveError(t, terminalResult); err != nil {
+		t.Fatalf("terminal after saturated ordinary send: %v", err)
+	}
+}
+
 func TestRemoteTerminalClosesRecvBeforeAcknowledgement(t *testing.T) {
 	fake, channel := openFakeChannel(t, defaultFlowControl)
-	terminal := session.Frame{0x7a, 0x7b}
+	terminal := framechannel.Frame{0x7a, 0x7b}
 	ackObserved := make(chan error, 1)
 	fake.onAck = func() {
 		got, ok := <-channel.Recv()
@@ -642,7 +913,7 @@ func TestRemoteTerminalRequiresAcknowledgementTransmissionForCleanClose(t *testi
 	bufferedRead := fake.observeBufferedReads()
 
 	fake.deliverText(terminalIntentControl)
-	fake.deliverBinary(session.Frame{0xa1, 0xa2})
+	fake.deliverBinary(framechannel.Frame{0xa1, 0xa2})
 	select {
 	case frame, ok := <-channel.Recv():
 		if !ok || !bytes.Equal(frame, []byte{0xa1, 0xa2}) {
@@ -678,12 +949,124 @@ func TestRemoteTerminalRequiresAcknowledgementTransmissionForCleanClose(t *testi
 	}
 }
 
+func TestRemoteTerminalAckNormalizesConcurrentPhysicalTermination(t *testing.T) {
+	tests := []struct {
+		name      string
+		terminate func(*fakeDataChannel)
+	}{
+		{
+			name:      "remote-close",
+			terminate: func(dc *fakeDataChannel) { dc.fireCloseCallback() },
+		},
+		{
+			name: "transport-error",
+			terminate: func(dc *fakeDataChannel) {
+				dc.fail(errors.New("physical error after terminal acknowledgement"))
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			finishGate, releaseFinish := newInboundGate(t)
+			fake := newFakeDataChannel(pion.DataChannelStateOpen)
+			channel, err := newChannelWithRuntime(fake, defaultFlowControl, channelRuntime{
+				remoteTerminalFinishGate: finishGate,
+			})
+			if err != nil {
+				t.Fatalf("construct gated channel: %v", err)
+			}
+			waitOpened(t, channel)
+
+			fake.deliverText(terminalIntentControl)
+			fake.deliverBinary(framechannel.Frame{0xb1, 0xb2})
+			select {
+			case <-fake.terminalAck:
+			case <-time.After(unitTimeout):
+				t.Fatal("remote terminal acknowledgement was not transmitted")
+			}
+			test.terminate(fake)
+			releaseFinish()
+
+			waitDone(t, channel)
+			if channel.Err() != nil {
+				t.Fatalf("acknowledged remote terminal Err = %v", channel.Err())
+			}
+			channel.lifecycle.mu.Lock()
+			pending := channel.lifecycle.terminationPending
+			pendingBase := channel.lifecycle.terminationBase
+			channel.lifecycle.mu.Unlock()
+			if pending || pendingBase != nil {
+				t.Fatalf("completed lifecycle retained termination pending=%t base=%v", pending, pendingBase)
+			}
+			err = channel.SendTerminal(context.Background(), framechannel.Frame{0xb3})
+			if disposition := framechannel.SendDispositionOf(err); disposition != framechannel.SendRetired {
+				t.Fatalf("send after clean remote completion disposition=%d error=%v", disposition, err)
+			}
+			if err := channel.Close(); err != nil {
+				t.Fatalf("cleanup acknowledged remote terminal: %v", err)
+			}
+		})
+	}
+}
+
+func TestPhysicalTerminationBeforeRemoteAckRemainsFailure(t *testing.T) {
+	flow := flowControlProfile{lowWaterBytes: 10, highWaterBytes: 20}
+	tests := []struct {
+		name      string
+		terminate func(*fakeDataChannel)
+		want      error
+	}{
+		{
+			name:      "remote-close",
+			terminate: func(dc *fakeDataChannel) { dc.fireCloseCallback() },
+			want:      ErrRemoteClosed,
+		},
+		{
+			name: "transport-error",
+			terminate: func(dc *fakeDataChannel) {
+				dc.fail(errors.New("physical error before terminal acknowledgement"))
+			},
+			want: ErrTransport,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fake, channel := openFakeChannel(t, flow)
+			fake.setBuffered(flow.highWaterBytes)
+			bufferedRead := fake.observeBufferedReads()
+
+			fake.deliverText(terminalIntentControl)
+			fake.deliverBinary(framechannel.Frame{0xc1, 0xc2})
+			select {
+			case <-bufferedRead:
+			case <-time.After(unitTimeout):
+				t.Fatal("remote acknowledgement did not reach saturated capacity wait")
+			}
+			test.terminate(fake)
+
+			waitDone(t, channel)
+			if !errors.Is(channel.Err(), test.want) {
+				t.Fatalf("Err = %v, want %v", channel.Err(), test.want)
+			}
+			select {
+			case <-fake.terminalAck:
+				t.Fatal("acknowledgement transmitted after physical termination")
+			default:
+			}
+			err := channel.SendTerminal(context.Background(), framechannel.Frame{0xc3})
+			if disposition := framechannel.SendDispositionOf(err); disposition != framechannel.SendRejected {
+				t.Fatalf("send after failed remote completion disposition=%d error=%v", disposition, err)
+			}
+		})
+	}
+}
+
 func TestCloseCannotOvertakeObservedRemoteTerminal(t *testing.T) {
 	fake, channel := openFakeChannel(t, defaultFlowControl)
 	for index := range receiveQueueFrames {
-		fake.deliverBinary(session.Frame{byte(index + 1)})
+		fake.deliverBinary(framechannel.Frame{byte(index + 1)})
 	}
-	terminal := session.Frame{0xf1, 0xf2}
+	terminal := framechannel.Frame{0xf1, 0xf2}
 	fake.deliverText(terminalIntentControl)
 	fake.deliverBinary(terminal)
 
@@ -724,128 +1107,6 @@ func TestCallbackRacesCloseExactlyOnce(t *testing.T) {
 		waitDone(t, channel)
 		if fake.closeCalls() != 1 {
 			t.Fatalf("physical Close calls = %d, want 1", fake.closeCalls())
-		}
-	}
-}
-
-func TestTerminalControlFixtureMatchesImplementation(t *testing.T) {
-	data, err := os.ReadFile("testdata/terminal-control.json")
-	if err != nil {
-		t.Fatalf("read terminal fixture: %v", err)
-	}
-	var fixture struct {
-		Version        int      `json:"version"`
-		TerminalIntent string   `json:"terminalIntent"`
-		TerminalFrame  string   `json:"terminalFrame"`
-		TerminalAck    string   `json:"terminalAck"`
-		Sequence       []string `json:"sequence"`
-	}
-	if err := json.Unmarshal(data, &fixture); err != nil {
-		t.Fatalf("decode terminal fixture: %v", err)
-	}
-	wantSequence := []string{terminalIntentControl, fixture.TerminalFrame, terminalAckControl}
-	if fixture.Version != 1 || fixture.TerminalIntent != terminalIntentControl || fixture.TerminalAck != terminalAckControl || fixture.TerminalFrame == "" || len(fixture.Sequence) != len(wantSequence) {
-		t.Fatalf("terminal fixture does not match implementation: %+v", fixture)
-	}
-	for index := range wantSequence {
-		if fixture.Sequence[index] != wantSequence[index] {
-			t.Fatalf("terminal sequence[%d] = %q, want %q", index, fixture.Sequence[index], wantSequence[index])
-		}
-	}
-}
-
-func openFakeChannel(t *testing.T, flow flowControlProfile) (*fakeDataChannel, *Channel) {
-	t.Helper()
-	fake := newFakeDataChannel(pion.DataChannelStateOpen)
-	channel, err := newChannel(fake, flow)
-	if err != nil {
-		t.Fatalf("construct channel: %v", err)
-	}
-	waitOpened(t, channel)
-	t.Cleanup(func() { _ = channel.Close() })
-	return fake, channel
-}
-
-func waitOpened(t *testing.T, channel *Channel) {
-	t.Helper()
-	select {
-	case <-channel.Opened():
-	case <-channel.Done():
-		t.Fatalf("channel closed before Opened: %v", channel.Err())
-	case <-time.After(unitTimeout):
-		t.Fatal("timeout waiting for Opened")
-	}
-}
-
-func waitDone(t *testing.T, channel *Channel) {
-	t.Helper()
-	select {
-	case <-channel.Done():
-	case <-time.After(unitTimeout):
-		t.Fatal("timeout waiting for Done")
-	}
-}
-
-func receiveError(t *testing.T, result <-chan error) error {
-	t.Helper()
-	select {
-	case err := <-result:
-		return err
-	case <-time.After(unitTimeout):
-		t.Fatal("timeout waiting for operation result")
-		return nil
-	}
-}
-
-func assertNoResult(t *testing.T, result <-chan error, message string) {
-	t.Helper()
-	select {
-	case err := <-result:
-		t.Fatalf("%s: %v", message, err)
-	case <-time.After(50 * time.Millisecond):
-	}
-}
-
-func assertNoSendResult(t *testing.T, result <-chan concurrentSendResult, message string) {
-	t.Helper()
-	select {
-	case got := <-result:
-		t.Fatalf("%s: marker=0x%x err=%v", message, got.marker, got.err)
-	case <-time.After(50 * time.Millisecond):
-	}
-}
-
-func receiveSendResult(t *testing.T, result <-chan concurrentSendResult) concurrentSendResult {
-	t.Helper()
-	select {
-	case got := <-result:
-		return got
-	case <-time.After(unitTimeout):
-		t.Fatal("timeout waiting for concurrent Send result")
-		return concurrentSendResult{}
-	}
-}
-
-func newInboundGate(t *testing.T) (<-chan struct{}, func()) {
-	t.Helper()
-	gate := make(chan struct{})
-	var once sync.Once
-	release := func() { once.Do(func() { close(gate) }) }
-	t.Cleanup(release)
-	return gate, release
-}
-
-func assertChannelSettled(t *testing.T, channel *Channel) {
-	t.Helper()
-	for name, settled := range map[string]<-chan struct{}{
-		"Done":         channel.Done(),
-		"inboundDone":  channel.inboundDone,
-		"physicalDone": channel.physicalDone,
-	} {
-		select {
-		case <-settled:
-		default:
-			t.Fatalf("%s remained unsettled", name)
 		}
 	}
 }

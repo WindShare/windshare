@@ -13,8 +13,7 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
-	"github.com/windshare/windshare/core/session"
-	"github.com/windshare/windshare/relay/protocol"
+	"github.com/windshare/windshare/core/framechannel"
 )
 
 //go:embed web/index.html web/spike.js
@@ -102,43 +101,38 @@ func (h *Harness) handleResult(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *Harness) handleSignal(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, protocol.MaxSignalingMessageBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, maximumHarnessSignalBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "read signal: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	message, err := protocol.Decode(body)
+	message, err := decodeSignal(body)
 	if err != nil {
-		http.Error(w, "decode WindShare signal: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "decode harness signal: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	signalMessage, ok := message.(*protocol.Signal)
-	if !ok {
-		http.Error(w, "expected WindShare signal envelope", http.StatusBadRequest)
-		return
-	}
-	if signalMessage.SessionID != spikeSessionID.String() {
+	if message.SessionID != spikeSessionID {
 		http.Error(w, "signal sessionId does not match the spike session", http.StatusBadRequest)
 		return
 	}
 
-	switch signalMessage.Kind {
-	case protocol.SignalKindOffer:
-		h.handleOffer(w, signalMessage)
-	case protocol.SignalKindCandidate:
-		h.handleRemoteCandidate(w, signalMessage)
+	switch message.Kind {
+	case signalKindOffer:
+		h.handleOffer(w, message)
+	case signalKindCandidate:
+		h.handleRemoteCandidate(w, message)
 	default:
-		http.Error(w, "unexpected signal kind "+signalMessage.Kind, http.StatusBadRequest)
+		http.Error(w, "unexpected signal kind "+message.Kind, http.StatusBadRequest)
 	}
 }
 
-func (h *Harness) handleOffer(w http.ResponseWriter, signalMessage *protocol.Signal) {
+func (h *Harness) handleOffer(w http.ResponseWriter, message signalMessage) {
 	h.offerMu.Lock()
 	defer h.offerMu.Unlock()
 
 	var offer webrtc.SessionDescription
-	if err := json.Unmarshal(signalMessage.Payload, &offer); err != nil {
+	if err := json.Unmarshal(message.Payload, &offer); err != nil {
 		http.Error(w, "decode offer payload: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -173,7 +167,7 @@ func (h *Harness) handleOffer(w http.ResponseWriter, signalMessage *protocol.Sig
 		http.Error(w, "encode Pion answer payload: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	encoded, err := protocol.Encode(protocol.NewSignal(spikeSessionID.String(), protocol.SignalKindAnswer, payload))
+	encoded, err := encodeSignal(spikeSessionID, signalKindAnswer, payload)
 	if err != nil {
 		http.Error(w, "encode WindShare answer signal: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -184,9 +178,9 @@ func (h *Harness) handleOffer(w http.ResponseWriter, signalMessage *protocol.Sig
 	_, _ = w.Write(encoded)
 }
 
-func (h *Harness) handleRemoteCandidate(w http.ResponseWriter, signalMessage *protocol.Signal) {
+func (h *Harness) handleRemoteCandidate(w http.ResponseWriter, message signalMessage) {
 	var candidate webrtc.ICECandidateInit
-	if err := json.Unmarshal(signalMessage.Payload, &candidate); err != nil {
+	if err := json.Unmarshal(message.Payload, &candidate); err != nil {
 		http.Error(w, "decode browser ICE candidate: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -199,7 +193,7 @@ func (h *Harness) handleRemoteCandidate(w http.ResponseWriter, signalMessage *pr
 		return
 	}
 	h.record.update(func(value *Observation) { value.BrowserCandidateSignals++ })
-	encoded, err := protocol.Encode(protocol.NewSignal(spikeSessionID.String(), protocol.SignalKindCandidate, signalMessage.Payload))
+	encoded, err := encodeSignal(spikeSessionID, signalKindCandidate, message.Payload)
 	if err != nil {
 		http.Error(w, "re-encode browser candidate signal: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -221,7 +215,7 @@ func (h *Harness) onICECandidate(candidate *webrtc.ICECandidate) {
 		h.record.fail("encode Pion ICE candidate payload: " + err.Error())
 		return
 	}
-	encoded, err := protocol.Encode(protocol.NewSignal(spikeSessionID.String(), protocol.SignalKindCandidate, payload))
+	encoded, err := encodeSignal(spikeSessionID, signalKindCandidate, payload)
 	if err != nil {
 		h.record.fail("encode Pion ICE candidate signal: " + err.Error())
 		return
@@ -346,14 +340,14 @@ func (h *Harness) handleControl(channel *webrtc.DataChannel, data []byte) {
 }
 
 func (h *Harness) handleBinary(channel *webrtc.DataChannel, data []byte) {
-	if validPattern(data, clientProbeMarker, session.MaxFrameSize) {
+	if validPattern(data, clientProbeMarker, framechannel.MaxFrameSize) {
 		h.record.update(func(value *Observation) { value.BrowserProbeReceived = true })
 		if err := sendControl(channel, map[string]any{"type": "client-probe-accepted"}); err != nil {
 			h.record.fail("acknowledge browser 64 KiB probe: " + err.Error())
 		}
 		return
 	}
-	if len(data) == session.MaxFrameSize && data[0] == clientBurstMarker {
+	if len(data) == framechannel.MaxFrameSize && data[0] == clientBurstMarker {
 		h.dataMu.Lock()
 		h.clientBurstSeen++
 		h.dataMu.Unlock()
@@ -378,12 +372,12 @@ func (h *Harness) runServerBurst(channel *webrtc.DataChannel) {
 	}
 
 drained:
-	if err := channel.Send(patternedFrame(serverProbeMarker, session.MaxFrameSize)); err != nil {
+	if err := channel.Send(patternedFrame(serverProbeMarker, framechannel.MaxFrameSize)); err != nil {
 		h.serverBurstFailure(channel, "send Pion 64 KiB probe: "+err.Error())
 		return
 	}
 	h.record.update(func(value *Observation) { value.PionProbeSent = true })
-	frame := patternedFrame(serverBurstMarker, session.MaxFrameSize)
+	frame := patternedFrame(serverBurstMarker, framechannel.MaxFrameSize)
 	count := 0
 	peak := channel.BufferedAmount()
 	for peak < highWaterMarkBytes && count < maxBurstMessages {

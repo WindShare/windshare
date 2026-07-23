@@ -4,18 +4,17 @@
 #    (Windows-tagged files are analyzed, not just compiled).
 #  - the ubuntu analysis path via a GOOS=linux cross-vet of both modules
 #    (work-plan §10.2 cross-platform compile/type-check).
-#  - ci.yml gowork-off-core / gowork-off-root: the two-module release
-#    invariant builds, core first because it is CI's hard gate. They live
-#    inside `vet` instead of a separate make target because they are the same
-#    cheap compile-class checks and always run together with it in CI.
+#  - ci.yml gowork-off-root: the released-core consumer build. The stronger
+#    core invariant lives in the separate extracted-artifact `core-release`
+#    gate, where no parent repository or go.work can mask a missing file.
 #
 # The plain same-GOOS `go build ./...` steps (root + core) are intentionally
 # absent: `go vet` already compiles every package for analysis, the race and
 # coverage gates recompile the identical code so any compile break surfaces
 # there, and main-package linking is exercised by the D5 stable-children
 # builds. Repeating a same-GOOS build here would be pure duplication; only the
-# cross-GOOS vet and the GOWORK=off release builds below cover ground those
-# gates cannot.
+# cross-GOOS vet and the root GOWORK=off consumer build below cover ground
+# those gates cannot.
 [CmdletBinding()]
 param()
 
@@ -51,8 +50,7 @@ try {
 $originalGOWORK = $env:GOWORK
 $env:GOWORK = 'off'
 try {
-    Invoke-Step 'GOWORK=off go build (core, release-invariant hard gate)' { go -C core build ./... }
-    Invoke-Step 'GOWORK=off go build (root)' { go build ./... }
+    Invoke-Step 'GOWORK=off go build (root released-core consumer)' { go build ./... }
 } finally {
     $env:GOWORK = $originalGOWORK
 }

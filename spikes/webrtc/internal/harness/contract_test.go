@@ -3,26 +3,25 @@ package harness
 import (
 	"testing"
 
-	"github.com/windshare/windshare/core/session"
-	"github.com/windshare/windshare/relay/protocol"
+	"github.com/windshare/windshare/core/framechannel"
 )
 
 func TestPublicConfigUsesWindShareContract(t *testing.T) {
 	t.Parallel()
 
 	config := publicConfig()
-	if config.MaxFrameSize != session.MaxFrameSize {
-		t.Fatalf("MaxFrameSize = %d, want WindShare session.MaxFrameSize %d", config.MaxFrameSize, session.MaxFrameSize)
+	if config.MaxFrameSize != framechannel.MaxFrameSize {
+		t.Fatalf("MaxFrameSize = %d, want WindShare framechannel.MaxFrameSize %d", config.MaxFrameSize, framechannel.MaxFrameSize)
 	}
 	if config.MaxFrameSize != 64*1024 {
 		t.Fatalf("MaxFrameSize = %d, want exact 64 KiB spike frame", config.MaxFrameSize)
 	}
-	parsed, err := protocol.ParseSessionID(config.SessionID)
+	parsed, err := parseHarnessSessionID(config.SessionID)
 	if err != nil {
 		t.Fatalf("parse configured session ID: %v", err)
 	}
-	if parsed != spikeSessionID {
-		t.Fatalf("session ID = %v, want %v", parsed, spikeSessionID)
+	if parsed != [harnessSessionIDBytes]byte{1, 2, 3, 4, 5, 6, 7, 8} {
+		t.Fatalf("session ID = %v, want the fixed harness identity", parsed)
 	}
 	if config.ChannelLabel != ChannelLabel || config.ChannelProtocol != ChannelProtocol {
 		t.Fatalf("channel contract = %q/%q, want %q/%q", config.ChannelLabel, config.ChannelProtocol, ChannelLabel, ChannelProtocol)

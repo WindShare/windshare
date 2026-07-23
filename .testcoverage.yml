@@ -2,11 +2,9 @@
 # The core module has its own gate at core/.testcoverage.yml (total >=90).
 # https://github.com/vladopajic/go-test-coverage
 #
-# Windows dev runs read lower than CI: OS-network test cases gate-skip at the
-# shared constructors (internal/testnetwork), so network-heavy packages
-# (connectivity, relay/signaling, relay/httpapi, transport/relay,
-# cmd/windshare/internal/cli, internal/testnetwork) under-count locally.
-# The ubuntu CI run is the authoritative measurement.
+# Ordinary Windows runs under-count capability-gated process tests. The local
+# coverage script routes the current network manifest through the fixed-path D5
+# runner; the ubuntu CI sweep executes those tests directly.
 
 profile: cover.out
 local-prefix: github.com/windshare/windshare
@@ -44,5 +42,3 @@ exclude:
     # its Windows half executes only under the local D5 runner, so no single
     # platform can cover it. First authoritative ubuntu run: 33.3%.
     - ^internal/testnetwork/
-    # Hostile-sender E2E fixture binary (Playwright receiver-boundary oracle); no product logic.
-    - ^web/e2e/fixtures/hostile-sender/

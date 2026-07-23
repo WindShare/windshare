@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,11 +9,14 @@ import {
   assertStableWindowsE2ELeaseProof,
   stableWindowsE2EDirectory,
 } from '../../e2e/fixtures/windows-stable-runner'
-import { sha256 } from '../../e2e/fixtures/process'
 
 const LEASE_TOKEN = '0123456789abcdef0123456789abcdef'
 const WRONG_LEASE_TOKEN = 'fedcba9876543210fedcba9876543210'
 const WINDOWS_CONTRACT = 'stable-harness-v3'
+
+function sha256(data: Uint8Array): string {
+  return createHash('sha256').update(data).digest('hex')
+}
 
 describe('Windows real-stack executable identity', () => {
   it('maps every authorized run to the same fixed E2E directory', () => {

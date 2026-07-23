@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	pion "github.com/pion/webrtc/v4"
-	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/framechannel"
 )
 
 const (
@@ -60,15 +60,17 @@ const (
 )
 
 type inboundEvent struct {
-	kind   inboundEventKind
-	data   []byte
-	reason error
+	kind inboundEventKind
+	data []byte
 }
 
 type channelRuntime struct {
 	// Tests inject a gate to establish callback/worker schedules without sleeps.
 	// Production leaves it nil so dispatch begins immediately.
-	inboundGate <-chan struct{}
+	inboundGate              <-chan struct{}
+	remoteTerminalFinishGate <-chan struct{}
+
+	lifecycleTracer LifecycleTracer
 }
 
 // Channel is the sole owner of the callbacks installed on its Pion DataChannel.
@@ -79,27 +81,37 @@ type Channel struct {
 	lifecycle *channelLifecycle
 
 	callbackMu sync.Mutex
-	recv       chan session.Frame
+	recv       chan framechannel.Frame
 
-	inbound     chan inboundEvent
-	inboundDone chan struct{}
-	flowWake    chan struct{}
-	sendTurn    chan struct{}
-	inboundGate <-chan struct{}
+	inbound                  chan inboundEvent
+	inboundDone              chan struct{}
+	flowWake                 chan struct{}
+	sendTurn                 chan struct{}
+	inboundGate              <-chan struct{}
+	remoteTerminalFinishGate <-chan struct{}
 
 	physicalOnce sync.Once
 	physicalDone chan struct{}
 	physicalMu   sync.Mutex
 	physicalErr  error
+	traces       *lifecycleTraceDispatcher
 }
 
-var _ session.FrameChannel = (*Channel)(nil)
+var _ framechannel.Channel = (*Channel)(nil)
 
 func NewChannel(dc *pion.DataChannel) (*Channel, error) {
+	return NewChannelWithOptions(dc, ChannelOptions{})
+}
+
+// NewChannelWithOptions preserves the same transport contract while exposing
+// optional structured lifecycle decisions to the owning runtime.
+func NewChannelWithOptions(dc *pion.DataChannel, options ChannelOptions) (*Channel, error) {
 	if dc == nil {
 		return nil, ErrNilDataChannel
 	}
-	return newChannel(pionDataChannel{DataChannel: dc}, defaultFlowControl)
+	return newChannelWithRuntime(pionDataChannel{DataChannel: dc}, defaultFlowControl, channelRuntime{
+		lifecycleTracer: options.LifecycleTracer,
+	})
 }
 
 func newChannel(dc dataChannel, flow flowControlProfile) (*Channel, error) {
@@ -117,17 +129,22 @@ func newChannelWithRuntime(dc dataChannel, flow flowControlProfile, runtime chan
 		return nil, err
 	}
 
+	dispatcher := newLifecycleTraceDispatcher(runtime.lifecycleTracer)
+	lifecycle := newChannelLifecycle()
+	lifecycle.configureTrace(nextLifecycleChannelID.Add(1), dispatcher)
 	c := &Channel{
-		dc:           dc,
-		flow:         flow,
-		lifecycle:    newChannelLifecycle(),
-		recv:         make(chan session.Frame, receiveQueueFrames),
-		inbound:      make(chan inboundEvent, inboundQueueEvents),
-		inboundDone:  make(chan struct{}),
-		flowWake:     make(chan struct{}, 1),
-		sendTurn:     make(chan struct{}, 1),
-		inboundGate:  runtime.inboundGate,
-		physicalDone: make(chan struct{}),
+		dc:                       dc,
+		flow:                     flow,
+		lifecycle:                lifecycle,
+		recv:                     make(chan framechannel.Frame, receiveQueueFrames),
+		inbound:                  make(chan inboundEvent, inboundQueueEvents),
+		inboundDone:              make(chan struct{}),
+		flowWake:                 make(chan struct{}, 1),
+		sendTurn:                 make(chan struct{}, 1),
+		inboundGate:              runtime.inboundGate,
+		remoteTerminalFinishGate: runtime.remoteTerminalFinishGate,
+		physicalDone:             make(chan struct{}),
+		traces:                   dispatcher,
 	}
 	c.sendTurn <- struct{}{}
 
@@ -157,9 +174,9 @@ func (c *Channel) Opened() <-chan struct{} { return c.lifecycle.openedSignal() }
 
 func (c *Channel) Done() <-chan struct{} { return c.lifecycle.doneSignal() }
 
-func (c *Channel) Recv() <-chan session.Frame { return c.recv }
+func (c *Channel) Recv() <-chan framechannel.Frame { return c.recv }
 
-func (c *Channel) State() session.ChannelState {
+func (c *Channel) State() framechannel.ChannelState {
 	return c.lifecycle.channelState()
 }
 
@@ -169,33 +186,25 @@ func (c *Channel) Err() error {
 	return c.lifecycle.channelError()
 }
 
-func (c *Channel) Send(ctx context.Context, frame session.Frame) error {
+func (c *Channel) Send(ctx context.Context, frame framechannel.Frame) error {
 	if err := validateOutboundFrame(frame); err != nil {
+		return framechannel.RejectSend(err)
+	}
+	admission := c.lifecycle.beginSendAdmission(ctx, sendOrdinary)
+	if err := c.lifecycle.sendAdmissionError(admission); err != nil {
 		return err
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	snapshot := append(session.Frame(nil), frame...)
-	if err := c.acquireSendTurn(ctx); err != nil {
+	snapshot := append(framechannel.Frame(nil), frame...)
+	if err := c.acquireSendAdmissionTurn(admission); err != nil {
 		return err
 	}
 	defer c.releaseSendTurn()
 
-	if err := c.lifecycle.requireSendState(terminalNone); err != nil {
+	if err := c.waitForSendAdmissionCapacity(admission); err != nil {
 		return err
 	}
-	if err := c.waitForCapacity(ctx, terminalNone); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := c.lifecycle.requireSendState(terminalNone); err != nil {
-		return err
-	}
-	attempted, err := c.lifecycle.transmit(
-		terminalNone,
+	attempted, err := c.lifecycle.transmitSendAdmission(
+		admission,
 		func() error { return c.dc.Send(snapshot) },
 	)
 	if err != nil {
@@ -209,15 +218,16 @@ func (c *Channel) Send(ctx context.Context, frame session.Frame) error {
 	return nil
 }
 
-func (c *Channel) SendTerminal(ctx context.Context, frame session.Frame) error {
+func (c *Channel) SendTerminal(ctx context.Context, frame framechannel.Frame) error {
 	if err := validateOutboundFrame(frame); err != nil {
+		return framechannel.RejectSend(err)
+	}
+	admission := c.lifecycle.beginSendAdmission(ctx, sendTerminal)
+	if err := c.lifecycle.sendAdmissionError(admission); err != nil {
 		return err
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	snapshot := append(session.Frame(nil), frame...)
-	if err := c.lifecycle.admitLocalTerminal(); err != nil {
+	snapshot := append(framechannel.Frame(nil), frame...)
+	if err := c.lifecycle.admitLocalTerminal(admission); err != nil {
 		return err
 	}
 
@@ -251,8 +261,8 @@ func (c *Channel) SendTerminal(ctx context.Context, frame session.Frame) error {
 	}
 }
 
-func (c *Channel) sendLocalTerminal(ctx context.Context, frame session.Frame) error {
-	if err := c.acquireSendTurn(ctx); err != nil {
+func (c *Channel) sendLocalTerminal(ctx context.Context, frame framechannel.Frame) error {
+	if err := c.acquireOwnedSendTurn(ctx); err != nil {
 		return err
 	}
 	defer c.releaseSendTurn()
@@ -260,7 +270,7 @@ func (c *Channel) sendLocalTerminal(ctx context.Context, frame session.Frame) er
 	if err := c.lifecycle.requireSendState(terminalLocalPending); err != nil {
 		return err
 	}
-	if err := c.waitForCapacity(ctx, terminalLocalPending); err != nil {
+	if err := c.waitForOwnedCapacity(ctx, terminalLocalPending); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -277,7 +287,7 @@ func (c *Channel) sendLocalTerminal(ctx context.Context, frame session.Frame) er
 		return fmt.Errorf("%w: send terminal intent: %w", ErrTransport, err)
 	}
 
-	if err := c.waitForCapacity(ctx, terminalLocalPending); err != nil {
+	if err := c.waitForOwnedCapacity(ctx, terminalLocalPending); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -320,9 +330,9 @@ func (c *Channel) Close() error {
 	return nil
 }
 
-func validateOutboundFrame(frame session.Frame) error {
-	if len(frame) == 0 || len(frame) > session.MaxFrameSize {
-		return fmt.Errorf("%w: got %d bytes, want 1..%d", ErrFrameBounds, len(frame), session.MaxFrameSize)
+func validateOutboundFrame(frame framechannel.Frame) error {
+	if len(frame) == 0 || len(frame) > framechannel.MaxFrameSize {
+		return fmt.Errorf("%w: got %d bytes, want 1..%d", ErrFrameBounds, len(frame), framechannel.MaxFrameSize)
 	}
 	return nil
 }
@@ -403,7 +413,7 @@ func (c *Channel) onMessage(message pion.DataChannelMessage) {
 		}
 		return
 	}
-	if len(message.Data) == 0 || len(message.Data) > session.MaxFrameSize {
+	if len(message.Data) == 0 || len(message.Data) > framechannel.MaxFrameSize {
 		c.enqueuePeerFailure(fmt.Sprintf("binary message has invalid size %d", len(message.Data)))
 		return
 	}
@@ -424,7 +434,7 @@ func (c *Channel) enqueueTermination(reason error) {
 	if !c.lifecycle.beginTermination(reason) {
 		return
 	}
-	c.enqueueInbound(inboundEvent{kind: inboundTermination, reason: reason})
+	c.enqueueInbound(inboundEvent{kind: inboundTermination})
 }
 
 // enqueueInbound is called with callbackMu held. Holding admission order until
@@ -474,7 +484,9 @@ func (c *Channel) handleInbound(event inboundEvent, closeRecv func()) bool {
 	case inboundTerminalIntent:
 		return c.handleTerminalIntent()
 	case inboundTermination:
-		c.finish(c.lifecycle.classifyTermination(event.reason))
+		// The lifecycle retained the immutable callback cause when termination
+		// won; completion consumes that authority instead of copying it twice.
+		c.finish(nil)
 		return false
 	case inboundBinary:
 	default:
@@ -485,7 +497,7 @@ func (c *Channel) handleInbound(event inboundEvent, closeRecv func()) bool {
 	switch c.lifecycle.inboundBinaryMode() {
 	case inboundBinaryOrdinary:
 		select {
-		case c.recv <- session.Frame(event.data):
+		case c.recv <- framechannel.Frame(event.data):
 			return true
 		case <-c.lifecycle.localTerminalSignal():
 			return true
@@ -494,7 +506,7 @@ func (c *Channel) handleInbound(event inboundEvent, closeRecv func()) bool {
 		}
 	case inboundBinaryRemoteTerminal:
 		select {
-		case c.recv <- session.Frame(event.data):
+		case c.recv <- framechannel.Frame(event.data):
 		case <-c.lifecycle.stopSignal():
 			return false
 		}
@@ -503,6 +515,9 @@ func (c *Channel) handleInbound(event inboundEvent, closeRecv func()) bool {
 		if err := c.sendTerminalAck(); err != nil {
 			c.finish(err)
 			return false
+		}
+		if c.remoteTerminalFinishGate != nil {
+			<-c.remoteTerminalFinishGate
 		}
 		// The terminal sender owns physical close after it observes this ack.
 		// Closing here can overtake the acknowledgement still buffered in SCTP.
@@ -528,14 +543,14 @@ func (c *Channel) handleTerminalIntent() bool {
 
 func (c *Channel) sendTerminalAck() error {
 	ctx := context.Background()
-	if err := c.acquireSendTurn(ctx); err != nil {
+	if err := c.acquireOwnedSendTurn(ctx); err != nil {
 		return err
 	}
 	defer c.releaseSendTurn()
 	if err := c.lifecycle.requireSendState(terminalRemotePending); err != nil {
 		return err
 	}
-	if err := c.waitForCapacity(ctx, terminalRemotePending); err != nil {
+	if err := c.waitForOwnedCapacity(ctx, terminalRemotePending); err != nil {
 		return err
 	}
 	attempted, err := c.lifecycle.transmitRemoteTerminalAck(
@@ -582,6 +597,7 @@ func (c *Channel) runFinalizer() {
 	<-c.lifecycle.stopSignal()
 	<-c.inboundDone
 	c.lifecycle.complete()
+	c.traces.shutdown()
 }
 
 func (c *Channel) requestPhysicalClose() {

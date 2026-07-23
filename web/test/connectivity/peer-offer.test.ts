@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   BrowserOfferChannelFactory,
+  browserPeerConnectionAvailable,
   CandidateLimitExceededError,
   MAX_ICE_CANDIDATES_PER_PEER,
   PeerNegotiationError,
@@ -42,6 +43,7 @@ type InFlightFatalWait =
   }
 
 const FATAL_WAIT_KINDS = ['SDP', 'ICE', 'signaling'] as const satisfies readonly FatalWaitKind[]
+const LOCAL_CANDIDATE_REPLAY_STRESS_COUNT = 300
 
 const FATAL_CALLBACK_CASES = [
   {
@@ -89,6 +91,12 @@ const FATAL_WAIT_MATRIX = FATAL_WAIT_KINDS.flatMap((waitKind) =>
 )
 
 describe('browser offer negotiation', () => {
+  it('probes the injected runtime instead of inferring peer support from browser identity', () => {
+    expect(browserPeerConnectionAvailable({})).toBe(false)
+    expect(browserPeerConnectionAvailable({ RTCPeerConnection: undefined })).toBe(false)
+    expect(browserPeerConnectionAvailable({ RTCPeerConnection: class {} })).toBe(true)
+  })
+
   it('has no PeerConnection, offer, or ICE side effect before explicit offer', () => {
     let creations = 0
     const factory = new BrowserOfferChannelFactory({
@@ -151,6 +159,37 @@ describe('browser offer negotiation', () => {
     await expect(opening).rejects.toBeInstanceOf(CandidateLimitExceededError)
     expect(fixture.peer.closeCalls).toBe(1)
     expect(fixture.peer.raw.readyState).toBe('closed')
+  })
+
+  it('dedupes browser candidate callback replays before quota and event admission', async () => {
+    const fixture = negotiationFixture(1)
+    const channel = await openChannel(fixture)
+
+    for (let index = 0; index < LOCAL_CANDIDATE_REPLAY_STRESS_COUNT; index += 1) {
+      if (index % 2 === 0) fixture.peer.emitCandidate('same-local-candidate')
+      else fixture.peer.emitCandidateWithNullOptionals('same-local-candidate')
+    }
+    await settle()
+    expect(fixture.route.sent.filter((message) => (
+      message.kind === SIGNAL_KIND_CANDIDATE
+    ))).toEqual([
+      {
+        kind: SIGNAL_KIND_CANDIDATE,
+        payload: {
+          candidate: 'same-local-candidate',
+          sdpMid: null,
+          sdpMLineIndex: null,
+          usernameFragment: null,
+        },
+      },
+    ])
+    expect(channel.state).toBe('open')
+    expect(fixture.peer.closeCalls).toBe(0)
+
+    fixture.peer.emitCandidate('distinct-local-candidate')
+    await channel.done
+    expect(reasonContains(channel.reason, CandidateLimitExceededError)).toBe(true)
+    expect(fixture.peer.closeCalls).toBe(1)
   })
 
   it('cancels a hung browser SDP operation and closes both ownership layers', async () => {
@@ -610,9 +649,22 @@ class FakeNegotiationPeer extends EventTarget {
   }
 
   emitCandidate(candidate: string): void {
-    const value = {
+    this.#emitCandidate({ candidate })
+  }
+
+  emitCandidateWithNullOptionals(candidate: string): void {
+    this.#emitCandidate({
       candidate,
-      toJSON: () => ({ candidate }),
+      sdpMid: null,
+      sdpMLineIndex: null,
+      usernameFragment: null,
+    })
+  }
+
+  #emitCandidate(serialized: RTCIceCandidateInit): void {
+    const value = {
+      candidate: serialized.candidate,
+      toJSON: () => structuredClone(serialized),
     } as RTCIceCandidate
     const event = new Event('icecandidate')
     Object.defineProperty(event, 'candidate', { value })

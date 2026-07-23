@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/framechannel"
 )
 
 type terminalState uint8
@@ -46,9 +46,14 @@ const (
 // cannot observe a lock and then act later; that boundary preserves terminal and
 // Close linearization while keeping Pion's physical close outside the state lock.
 type channelLifecycle struct {
-	mu       sync.Mutex
-	state    session.ChannelState
-	terminal terminalState
+	mu        sync.Mutex
+	state     framechannel.ChannelState
+	terminal  terminalState
+	channelID uint64
+	traces    *lifecycleTraceDispatcher
+
+	pendingSends map[*sendAdmission]struct{}
+	nextSendID   uint64
 
 	remoteIntentSeen        bool
 	remoteTerminalPublished bool
@@ -69,7 +74,8 @@ type channelLifecycle struct {
 
 func newChannelLifecycle() *channelLifecycle {
 	return &channelLifecycle{
-		state:                 session.Connecting,
+		state:                 framechannel.Connecting,
+		pendingSends:          make(map[*sendAdmission]struct{}),
 		opened:                make(chan struct{}),
 		done:                  make(chan struct{}),
 		stop:                  make(chan struct{}),
@@ -93,7 +99,7 @@ func (l *channelLifecycle) localTerminalSignal() <-chan struct{} {
 	return l.localTerminalAdmitted
 }
 
-func (l *channelLifecycle) channelState() session.ChannelState {
+func (l *channelLifecycle) channelState() framechannel.ChannelState {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.state
@@ -108,10 +114,10 @@ func (l *channelLifecycle) channelError() error {
 func (l *channelLifecycle) callbackAdmission() callbackAdmissionState {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.state == session.Closed || l.terminationPending {
+	if l.state == framechannel.Closed || l.terminationPending {
 		return callbackAdmissionClosed
 	}
-	if l.state == session.Connecting {
+	if l.state == framechannel.Connecting {
 		return callbackAdmissionConnecting
 	}
 	return callbackAdmissionOpen
@@ -120,37 +126,10 @@ func (l *channelLifecycle) callbackAdmission() callbackAdmissionState {
 func (l *channelLifecycle) publishOpen() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.state == session.Connecting && !l.terminationPending {
-		l.state = session.Open
+	if l.state == framechannel.Connecting && !l.terminationPending {
+		l.state = framechannel.Open
 		close(l.opened)
 	}
-}
-
-func (l *channelLifecycle) admitLocalTerminal() error {
-	l.mu.Lock()
-	if l.state == session.Connecting {
-		l.mu.Unlock()
-		return ErrChannelNotOpen
-	}
-	if l.state == session.Closed {
-		err := l.closedErrorLocked()
-		l.mu.Unlock()
-		return err
-	}
-	if l.terminationPending {
-		err := l.pendingTerminationErrorLocked()
-		l.mu.Unlock()
-		return err
-	}
-	if l.terminal != terminalNone || l.remoteIntentSeen {
-		l.mu.Unlock()
-		return ErrChannelClosed
-	}
-	l.terminal = terminalLocalPending
-	close(l.localTerminalAdmitted)
-	l.mu.Unlock()
-	l.signalStateChange()
-	return nil
 }
 
 func (l *channelLifecycle) requireSendState(required terminalState) error {
@@ -201,7 +180,7 @@ func (l *channelLifecycle) transmitWithEffect(
 func (l *channelLifecycle) closeIfIdle() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	closeNow := l.state != session.Closed &&
+	closeNow := l.state != framechannel.Closed &&
 		l.terminal == terminalNone &&
 		!l.remoteIntentSeen
 	if !closeNow {
@@ -223,12 +202,14 @@ func (l *channelLifecycle) terminalOutcome() (bool, error) {
 
 func (l *channelLifecycle) reserveRemoteIntent() bool {
 	l.mu.Lock()
-	valid := l.state == session.Open &&
+	valid := l.state == framechannel.Open &&
 		!l.terminationPending &&
 		l.terminal == terminalNone &&
 		!l.remoteIntentSeen
 	if valid {
 		l.remoteIntentSeen = true
+		l.resolvePendingSendsLocked(framechannel.RetireSend(ErrChannelClosed))
+		l.traceChannelLocked(LifecycleTransitionRemoteTerminalReserved, nil)
 	}
 	l.mu.Unlock()
 	if valid {
@@ -239,7 +220,7 @@ func (l *channelLifecycle) reserveRemoteIntent() bool {
 
 func (l *channelLifecycle) acceptRemoteIntent() bool {
 	l.mu.Lock()
-	valid := l.state == session.Open &&
+	valid := l.state == framechannel.Open &&
 		l.terminal == terminalNone &&
 		l.remoteIntentSeen
 	if valid {
@@ -257,7 +238,7 @@ func (l *channelLifecycle) acceptRemoteIntent() bool {
 // while the transport call itself remains outside the lifecycle mutex.
 func (l *channelLifecycle) acknowledgeLocalTerminal(requestPhysicalClose func()) bool {
 	l.mu.Lock()
-	valid := l.state == session.Open &&
+	valid := l.state == framechannel.Open &&
 		!l.terminationPending &&
 		l.terminal == terminalLocalPending &&
 		l.localTerminalSent &&
@@ -277,27 +258,23 @@ func (l *channelLifecycle) acknowledgeLocalTerminal(requestPhysicalClose func())
 
 func (l *channelLifecycle) beginTermination(reason error) bool {
 	l.mu.Lock()
-	if l.state == session.Closed || l.terminationPending {
+	if l.state == framechannel.Closed || l.terminationPending {
 		l.mu.Unlock()
 		return false
 	}
 	l.terminationPending = true
 	l.terminationBase = reason
+	l.resolvePendingSendsLocked(framechannel.RejectSend(l.pendingTerminationErrorLocked()))
+	l.traceChannelLocked(LifecycleTransitionTerminationPending, reason)
 	l.mu.Unlock()
 	l.signalStateChange()
 	return true
 }
 
-func (l *channelLifecycle) classifyTermination(base error) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.classifyTerminationLocked(base)
-}
-
 func (l *channelLifecycle) inboundBinaryMode() inboundBinaryMode {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.state != session.Open {
+	if l.state != framechannel.Open {
 		return inboundBinaryStopped
 	}
 	switch l.terminal {
@@ -321,8 +298,27 @@ func (l *channelLifecycle) markRemoteTerminalPublished() {
 func (l *channelLifecycle) finish(reason error) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.state == session.Closed {
+	if l.state == framechannel.Closed {
 		return false
+	}
+	if l.terminationPending {
+		pendingReason := l.classifyTerminationLocked(l.terminationBase)
+		switch {
+		case reason == nil:
+			reason = pendingReason
+		case pendingReason != nil:
+			base := l.terminationBase
+			if base == nil {
+				base = ErrChannelClosed
+			}
+			if errors.Is(reason, base) {
+				// Ordered lifecycle classification already contains this physical
+				// cause and any required terminal semantic; joining would duplicate it.
+				reason = pendingReason
+			} else {
+				reason = errors.Join(reason, pendingReason)
+			}
+		}
 	}
 	if reason != nil &&
 		l.terminal == terminalLocalPending &&
@@ -337,10 +333,10 @@ func (l *channelLifecycle) finish(reason error) bool {
 func (l *channelLifecycle) complete() { close(l.done) }
 
 func (l *channelLifecycle) requireSendStateLocked(required terminalState) error {
-	if l.state == session.Connecting {
+	if l.state == framechannel.Connecting {
 		return ErrChannelNotOpen
 	}
-	if l.state == session.Closed {
+	if l.state == framechannel.Closed {
 		return l.closedErrorLocked()
 	}
 	if l.terminationPending {
@@ -403,8 +399,23 @@ func (l *channelLifecycle) classifyTerminationLocked(base error) error {
 }
 
 func (l *channelLifecycle) transitionClosedLocked(reason error) {
-	l.state = session.Closed
+	if reason == nil {
+		l.resolvePendingSendsLocked(framechannel.RetireSend(ErrChannelClosed))
+	} else {
+		l.resolvePendingSendsLocked(framechannel.RejectSend(reason))
+	}
+	l.state = framechannel.Closed
 	l.reason = reason
+	// Pending physical termination is an ingress-ordering mechanism, not a
+	// second close result. Consuming it here keeps Err and send classification
+	// consistent after every completed logical transition.
+	l.terminationPending = false
+	l.terminationBase = nil
+	if reason == nil {
+		l.traceChannelLocked(LifecycleTransitionClosedClean, nil)
+	} else {
+		l.traceChannelLocked(LifecycleTransitionClosedFailed, reason)
+	}
 	close(l.stop)
 }
 

@@ -2,6 +2,7 @@ import {
   createWindShareFrameChannel,
   type WebRTCFrameChannel,
 } from '../transport/webrtc'
+import { V2_MAXIMUM_PEER_CANDIDATES } from '../session/v2-operation-continuation'
 import { abortReason } from './clock'
 import {
   CandidateLimitExceededError,
@@ -22,7 +23,7 @@ import {
 } from './signaling'
 
 export const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
-export const MAX_ICE_CANDIDATES_PER_PEER = 64
+export const MAX_ICE_CANDIDATES_PER_PEER = V2_MAXIMUM_PEER_CANDIDATES
 
 // Lifecycle and description events need their own reserve because candidate limits
 // alone must not let a candidate burst hide cancellation or terminal settlement.
@@ -38,6 +39,17 @@ export interface BrowserOfferFactoryOptions {
   readonly maxCandidates?: number
 }
 
+export interface BrowserPeerConnectionEnvironment {
+  readonly RTCPeerConnection?: unknown
+}
+
+/** Keeps relay fallback tied to the active runtime capability, not a browser-name allowlist. */
+export function browserPeerConnectionAvailable(
+  environment: BrowserPeerConnectionEnvironment = globalThis,
+): boolean {
+  return typeof environment.RTCPeerConnection === 'function'
+}
+
 const DEFAULT_CONFIGURATION: RTCConfiguration = {
   iceServers: [{ urls: [DEFAULT_STUN_SERVER] }],
 }
@@ -49,8 +61,13 @@ export class BrowserOfferChannelFactory implements OfferChannelFactory {
 
   constructor(options: BrowserOfferFactoryOptions = {}) {
     const maximum = options.maxCandidates ?? MAX_ICE_CANDIDATES_PER_PEER
-    if (!Number.isSafeInteger(maximum) || maximum <= 0) {
-      throw new RangeError('maximum ICE candidates must be a positive integer')
+    if (
+      !Number.isSafeInteger(maximum) || maximum <= 0 ||
+      maximum > MAX_ICE_CANDIDATES_PER_PEER
+    ) {
+      throw new RangeError(
+        `maximum ICE candidates must be between 1 and ${MAX_ICE_CANDIDATES_PER_PEER}`,
+      )
     }
     this.#configuration = cloneConfiguration(options.configuration ?? DEFAULT_CONFIGURATION)
     this.#createPeerConnection = options.createPeerConnection ??
@@ -102,7 +119,7 @@ class OfferNegotiation {
   #readerTask: Promise<void> | undefined
   #openedChannel = false
   #signalingAvailable = true
-  #localCandidates = 0
+  readonly #localCandidateFingerprints = new Set<string>()
   #localCandidateFailureReported = false
   #parentClosed = false
 
@@ -180,6 +197,7 @@ class OfferNegotiation {
       this.#peer.removeEventListener('connectionstatechange', this.#onConnectionStateChange)
       this.#peer.removeEventListener('datachannel', this.#onUnexpectedDataChannel)
       this.#events.close()
+      this.#localCandidateFingerprints.clear()
       // Parent-first teardown prevents a terminal-pending DataChannel from
       // pinning cancellation or a fatal signaling violation.
       this.#closeParent()
@@ -360,14 +378,19 @@ class OfferNegotiation {
     if (event.candidate === null || this.#localCandidateFailureReported) {
       return
     }
-    this.#localCandidates += 1
-    if (this.#localCandidates > this.#maximumCandidates) {
-      this.#localCandidateFailureReported = true
-      this.#interrupt(new CandidateLimitExceededError(this.#maximumCandidates))
-      return
-    }
     try {
-      this.#events.push({ type: 'local-candidate', candidate: event.candidate.toJSON() })
+      const candidate = canonicalCandidate(event.candidate.toJSON())
+      const fingerprint = candidateIdentity(candidate)
+      if (this.#localCandidateFingerprints.has(fingerprint)) return
+      // Identity admission precedes both lifetime quota and event capacity so a
+      // browser callback replay cannot consume either resource twice.
+      this.#localCandidateFingerprints.add(fingerprint)
+      if (this.#localCandidateFingerprints.size > this.#maximumCandidates) {
+        this.#localCandidateFailureReported = true
+        this.#interrupt(new CandidateLimitExceededError(this.#maximumCandidates))
+        return
+      }
+      this.#events.push({ type: 'local-candidate', candidate })
     } catch (cause) {
       this.#localCandidateFailureReported = true
       this.#interrupt(
@@ -514,11 +537,48 @@ function decodeAnswer(payload: unknown): RTCSessionDescriptionInit {
 }
 
 function decodeCandidate(payload: unknown): RTCIceCandidateInit {
-  if (!isRecord(payload) || typeof payload.candidate !== 'string' ||
-      payload.candidate === '') {
+  if (!isRecord(payload) || typeof payload.candidate !== 'string' || payload.candidate === '') {
     throw new PeerNegotiationError('ICE candidate payload is invalid')
   }
   return structuredClone(payload) as RTCIceCandidateInit
+}
+
+function canonicalCandidate(payload: unknown): RTCIceCandidateInit {
+  if (!isRecord(payload) || typeof payload.candidate !== 'string' || payload.candidate === '') {
+    throw new TypeError('ICE candidate text is missing')
+  }
+  const sdpMid = optionalCandidateString(payload.sdpMid, 'sdpMid')
+  const usernameFragment = optionalCandidateString(payload.usernameFragment, 'usernameFragment')
+  const line = optionalCandidateLine(payload.sdpMLineIndex)
+  return Object.freeze({
+    candidate: payload.candidate,
+    sdpMid,
+    sdpMLineIndex: line ?? null,
+    usernameFragment,
+  })
+}
+
+function optionalCandidateLine(value: unknown): number | null {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 0xffff) {
+    throw new TypeError('ICE candidate m-line index is invalid')
+  }
+  return value
+}
+
+function optionalCandidateString(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'string') throw new TypeError(`ICE candidate ${label} is invalid`)
+  return value
+}
+
+function candidateIdentity(candidate: RTCIceCandidateInit): string {
+  return JSON.stringify([
+    candidate.candidate,
+    candidate.sdpMid ?? null,
+    candidate.sdpMLineIndex ?? null,
+    candidate.usernameFragment ?? null,
+  ])
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

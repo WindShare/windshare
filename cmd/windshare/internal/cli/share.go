@@ -3,189 +3,280 @@ package cli
 import (
 	"context"
 	"crypto/rand"
-	"errors"
 	"fmt"
+	"math"
+	"time"
 
-	"github.com/windshare/windshare/connectivity"
-	"github.com/windshare/windshare/core/link"
-	"github.com/windshare/windshare/core/manifest"
-	"github.com/windshare/windshare/core/osfs"
-	"github.com/windshare/windshare/core/share"
-	"github.com/windshare/windshare/relay/protocol"
-	"github.com/windshare/windshare/transport/relay"
+	"github.com/windshare/windshare/connectivity/v2peer"
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/liveshare"
+	"github.com/windshare/windshare/core/session/sessionruntime"
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
+	"github.com/windshare/windshare/transport/relayv2"
 )
 
-// shareIDAttempts 是 shareId 活跃碰撞时的重生成次数(§6.3:碰撞概率
-// astronomically rare,中转拒绝后客户端重生成;重试有限次让"中转异常地
-// 一直报碰撞"不至于死循环)。
-const shareIDAttempts = 3
+const (
+	shareStopTimeout      = 20 * time.Second
+	shareServeJoinTimeout = time.Second
+)
 
-// runShare 实现 `windshare share`(§6.9):仅 stat 出链接 → 注册中转 →
-// registered ack 后立即打印链接 → 保持在线供块;Ctrl-C 即停止分享。
+type shareRequest struct {
+	paths     []string
+	relayURL  string
+	frontURL  string
+	chunkSize uint32
+	splitKey  bool
+}
+
 func (a *App) runShare(ctx context.Context, args []string) int {
-	fs := a.newFlagSet("share")
-	relayURL := fs.String("relay", DefaultRelayURL, "relay server URL")
-	blockSize := fs.Int64("block-size", 0, "block size in bytes (power of two; 0 uses the default 1 MiB)")
-	splitKey := fs.Bool("split-key", false, "print a bare link and separate key string")
-	frontURL := fs.String("front-url", DefaultFrontURL, "frontend base URL embedded in the link")
-	paths, err := parseInterleaved(fs, args)
-	if err != nil {
-		return ExitUsage
-	}
-	if len(paths) == 0 {
-		a.logf("share: at least one path is required")
-		return ExitUsage
-	}
-
-	// 仅 stat 快照:出链接耗时与内容体积无关(§6.4)。跳过条目必须可观测,
-	// 否则"分享到的比预期少"对用户毫无线索。
-	snap, err := osfs.Walk(paths)
-	if err != nil {
-		a.logf("share: %v", err)
-		return ExitUsage
-	}
-	for _, sk := range snap.Skipped {
-		a.logf("warning: skipped %s (%s)", sk.Path, sk.Reason)
-	}
-	if len(snap.Entries) == 0 {
-		a.logf("share: selected paths contain no shareable content")
-		return ExitUsage
-	}
-	metas := make([]share.FileMeta, len(snap.Entries))
-	var totalBytes int64
-	for i, e := range snap.Entries {
-		metas[i] = share.FileMeta(e)
-		totalBytes += metas[i].Size
-	}
-
-	sharer, conn, code := a.registerShare(ctx, snap, metas, *relayURL, *blockSize)
+	request, code := a.parseShareRequest(args)
 	if code != ExitOK {
 		return code
 	}
 
-	lnk := sharer.Link()
-	lnk.Relays = []string{*relayURL}
-	if code := a.printLink(lnk, *frontURL, *splitKey); code != ExitOK {
-		_ = conn.Close()
-		return code
-	}
-	a.logf("share ready: %d entries, %s total, %d blocks; press Ctrl-C to stop", len(metas), formatBytes(totalBytes), sharer.NumChunks())
-
-	return a.serveShare(ctx, sharer, conn)
-}
-
-// registerShare 组装 Sharer 并注册中转,shareId 活跃碰撞时重建重试(§6.3;
-// 重建即换全新身份,旧身份未曾出链接,丢弃无副作用)。resumeToken 进程内
-// crypto/rand 生成:发送端本地秘密,不经链接/清单流出(§6.8)。
-// 退出码按阶段归类:本地构建失败 = 用户错误,注册失败 = 网络错误。
-func (a *App) registerShare(ctx context.Context, snap *osfs.Snapshot, metas []share.FileMeta, relayURL string, blockSize int64) (*share.Sharer, *relay.SenderConn, int) {
-	src := osfs.NewSource(snap)
-	for attempt := 1; ; attempt++ {
-		sharer, err := share.NewSharer(metas, src, share.Options{ChunkSize: blockSize})
-		if err != nil {
-			if errors.Is(err, manifest.ErrManifestTooLarge) {
-				// 序列化预检在出链接前失败(§6.9):给出可执行的处置建议。
-				a.logf("share: manifest exceeds the %s limit (%v)\nSplit the content into multiple shares or reduce the number of entries.", formatBytes(manifest.MaxManifestSize), err)
-			} else {
-				a.logf("share: %v", err)
-			}
-			return nil, nil, ExitUsage
-		}
-		sealed, err := sharer.SealedManifest()
-		if err != nil {
-			a.logf("share: %v", err)
-			return nil, nil, ExitFailure
-		}
-		token := make([]byte, protocol.ResumeTokenBytes)
-		if _, err := rand.Read(token); err != nil {
-			a.logf("share: generate resumeToken: %v", err)
-			return nil, nil, ExitFailure
-		}
-		conn, err := relay.DialSender(ctx, relay.SenderConfig{
-			RelayURL:       relayURL,
-			ShareID:        sharer.Link().ShareID,
-			SealedManifest: sealed,
-			ResumeToken:    token,
-			Logf:           a.logf,
-		})
-		if err == nil {
-			return sharer, conn, ExitOK
-		}
-		if srvErr, ok := errors.AsType[*relay.ServerError](err); ok &&
-			srvErr.Code == protocol.ErrCodeShareIDCollision && attempt < shareIDAttempts {
-			a.logf("share: shareId collision; regenerating (attempt %d)", attempt)
-			continue
-		}
-		if errors.Is(err, context.Canceled) {
-			a.logf("share: canceled")
-			return nil, nil, ExitFailure
-		}
-		a.logf("share: register with relay: %v", err)
-		return nil, nil, ExitNetwork
-	}
-}
-
-// printLink 输出能力链接(§6.9):registered ack 已到(DialSender 返回即 ack,
-// §10),此刻打印即"立即可分发"。链接是机器可读产物,走 stdout。
-func (a *App) printLink(lnk link.Link, frontURL string, splitKey bool) int {
-	if splitKey {
-		bare, key, err := lnk.SplitURL(frontURL)
-		if err != nil {
-			a.logf("share: construct link: %v", err)
-			return ExitUsage
-		}
-		fmt.Fprintf(a.Stdout, "Bare link: %s\nKey: %s\n", bare, key)
-		a.logf("send the bare link and key over separate channels; the receiver runs windshare get <bare-link> --key <key>")
-		return ExitOK
-	}
-	full, err := lnk.URL(frontURL)
+	prepared, err := liveshare.PrepareSender(ctx, liveshare.SenderConfig{
+		Paths: request.paths, Relays: []string{request.relayURL}, ChunkSize: request.chunkSize, Random: rand.Reader,
+	})
 	if err != nil {
-		a.logf("share: construct link: %v", err)
+		a.logf("share: prepare selected roots: %v", err)
 		return ExitUsage
 	}
-	fmt.Fprintf(a.Stdout, "Link: %s\n", full)
+	defer func() {
+		if err := prepared.Close(); err != nil {
+			a.logf("share: release local authority: %v", err)
+		}
+	}()
+	if err := prepared.AuthorizeRegistration(); err != nil {
+		a.logf("share: catalog root is not ready: %v", err)
+		return ExitFailure
+	}
+	material := prepared.Registration()
+	shareID, shareInstance, pkHash, err := relayRegistrationIdentity(material)
+	if err != nil {
+		a.logf("share: build relay identity: %v", err)
+		return ExitFailure
+	}
+	var resumeToken v2.ResumeToken
+	if _, err := rand.Read(resumeToken[:]); err != nil {
+		a.logf("share: generate relay resume credential: %v", err)
+		return ExitFailure
+	}
+	register, err := relayv2.NewFreshRegisterInit(shareID, shareInstance, pkHash, material.Descriptor, resumeToken)
+	if err != nil {
+		a.logf("share: build relay registration: %v", err)
+		return ExitFailure
+	}
+	connection, err := relayv2.DialSender(ctx, relayv2.SenderConfig{
+		RelayBaseURL: request.relayURL, Init: register, SenderPrivateKey: material.SenderPrivateKey,
+		Descriptor: material.Descriptor,
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			a.logf("share: interrupted before relay registration")
+			return ExitFailure
+		}
+		a.logf("share: relay registration failed: %v", err)
+		return ExitNetwork
+	}
+	lifecycle, err := newSenderRelayLifecycle(senderRelayLifecycleConfig{
+		relayURL: request.relayURL, fresh: register, resumeToken: resumeToken,
+		privateKey: material.SenderPrivateKey, initial: connection,
+	})
+	if err != nil {
+		_ = connection.Close()
+		a.logf("share: initialize relay lifecycle: %v", err)
+		return ExitFailure
+	}
+	terminalLedger := newShareTerminalLedger()
+	factory, err := a.newShareRuntimeFactory(prepared, lifecycle, terminalLedger)
+	if err != nil {
+		_ = lifecycle.Cleanup(context.Background())
+		a.logf("share: initialize session runtime: %v", err)
+		return ExitFailure
+	}
+	if err := a.printShareLink(prepared, request.frontURL, request.splitKey); err != nil {
+		stopContext, cancel := context.WithTimeout(context.Background(), shareStopTimeout)
+		_ = factory.Stop(stopContext, "Sender stopped")
+		cancel()
+		a.logf("share: build link: %v", err)
+		return ExitUsage
+	}
+	prepared.StartRootPrefetch()
+	a.logf("share: ready; root children warm in the background and deeper descendants remain on demand; press Ctrl-C to stop")
+
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- a.serveSessions(ctx, factory, lifecycle) }()
+	trigger := shareShutdownServeEnded
+	var serveErr error
+	select {
+	case <-ctx.Done():
+		trigger = shareShutdownCallerInterrupted
+	case serveErr = <-serveDone:
+		trigger = shareTriggerAfterServe(ctx.Err(), serveErr)
+	}
+	stopContext, cancelStop := context.WithTimeout(context.Background(), shareStopTimeout)
+	stopErr := factory.Stop(stopContext, "Sender stopped")
+	cancelStop()
+	if trigger == shareShutdownCallerInterrupted && serveErr == nil {
+		serveErr = awaitInterruptedShareServe(serveDone, shareServeJoinTimeout)
+	}
+	settlement := settleShareLifecycle(
+		trigger,
+		ctx.Err(),
+		serveErr,
+		stopErr,
+		terminalLedger.Snapshot(),
+	)
+	a.logf(
+		"share: shutdown share_id=%x trigger=%s serve=%s stop=%s terminal_observations=%d terminal_sessions=%d terminal_delivered_sessions=%d terminal_retired_sessions=%d terminal_failed_sessions=%d terminal_accepted_failed_lanes=%d decision=%s",
+		shareID[:],
+		settlement.trigger,
+		settlement.serve.outcome,
+		settlement.stop.outcome,
+		settlement.terminals.observations,
+		settlement.terminals.sessions,
+		settlement.terminals.deliveredSessions,
+		settlement.terminals.naturallyRetiredSessions,
+		settlement.terminals.failedSessions,
+		settlement.terminals.acceptedFailedLanes,
+		settlement.decision,
+	)
+	if err := settlement.Err(); err != nil {
+		a.logf("share: stopped with an error: %v", err)
+		return ExitNetwork
+	}
+	if trigger == shareShutdownCallerInterrupted {
+		a.logf("share: stopped")
+	}
 	return ExitOK
 }
 
-// serveShare keeps CLI concerns at the boundary: it wires relay/Pion adapters,
-// maps domain outcomes to user messages, and leaves fan-out lifecycle to the
-// reusable connectivity coordinator.
-func (a *App) serveShare(ctx context.Context, sharer *share.Sharer, conn *relay.SenderConn) int {
-	source, err := connectivity.NewRelayReceiverSource(conn)
-	if err != nil {
-		_ = conn.Close()
-		a.logf("share: initialize receiver source: %v", err)
-		return ExitFailure
-	}
-	peerFactory := connectivity.NewPionChannelFactory(connectivity.DefaultPionConfiguration())
-	sender, err := connectivity.NewShareSender(source, peerFactory, sharer.BlockStore(), sharer.Sealer(), connectivity.ShareSenderOptions{
-		OnReceiverStart: func(receiver connectivity.AcceptedReceiver) {
-			a.logf("receiver connected (session %s)", receiver.ID)
-		},
-		OnReceiverEnd: func(receiver connectivity.AcceptedReceiver, _ error) {
-			a.logf("session %s ended", receiver.ID)
+func (a *App) newShareRuntimeFactory(
+	prepared *liveshare.PreparedSender,
+	lifecycle *senderRelayLifecycle,
+	terminalLedger *shareTerminalLedger,
+) (*sessionruntime.SenderFactory, error) {
+	peers, err := v2peer.NewFactory(v2peer.Config{
+		Configuration: v2peer.DefaultConfiguration(),
+		OnError: func(error) {
+			a.logf("share: direct peer lane failed; relay service remains available")
 		},
 	})
 	if err != nil {
-		_ = source.Close()
-		a.logf("share: initialize connectivity: %v", err)
-		return ExitFailure
+		return nil, fmt.Errorf("initialize direct peer connectivity: %w", err)
 	}
-	err = sender.Run(ctx)
-	switch {
-	case err == nil:
-		return ExitOK
-	case errors.Is(err, context.Canceled) && ctx.Err() != nil:
-		a.logf("interrupt received; stopping share")
-		return ExitOK
-	case errors.Is(err, connectivity.ErrReceiverSourceEnded):
-		a.logf("relay connection ended: %v", err)
-		return ExitNetwork
-	case errors.Is(err, osfs.ErrDrift):
-		a.logf("share aborted: a source file changed; create a new share (%v)", err)
-		return ExitDrift
-	default:
-		a.logf("share aborted: %v", err)
-		return ExitFailure
+	return prepared.NewRuntimeFactory(liveshare.RuntimeFactoryConfig{
+		TerminalConnectivity: lifecycle,
+		PeerHandlers:         peers,
+		TerminalObserver: sessionruntime.SenderTerminalObserverFunc(
+			func(observation sessionruntime.SenderTerminalObservation) {
+				terminalLedger.ObserveSenderTerminal(observation)
+				a.logf(
+					"share: sender terminal session_id=%x lane_id=%d lane_epoch=%d settled=%t transport=%s outcome=%s decision=%s",
+					observation.ProtocolSessionID.Bytes(),
+					observation.Lane.ID,
+					observation.Lane.Epoch,
+					observation.Settled,
+					observation.TransportDisposition,
+					observation.Outcome,
+					observation.Decision,
+				)
+			},
+		),
+	})
+}
+
+func (a *App) parseShareRequest(args []string) (shareRequest, int) {
+	flags := a.newFlagSet("share")
+	relayURL := flags.String("relay", DefaultRelayURL, "relay server base URL")
+	blockSize := flags.Int64("block-size", 0, "file-local block size in bytes; 0 uses 1 MiB")
+	splitKey := flags.Bool("split-key", false, "print a bare link and separate key string")
+	frontURL := flags.String("front-url", DefaultFrontURL, "frontend base URL embedded in the link")
+	paths, err := parseInterleaved(flags, args)
+	if err != nil {
+		return shareRequest{}, ExitUsage
+	}
+	if len(paths) == 0 || *relayURL == "" || *frontURL == "" {
+		a.logf("share: at least one path, a relay URL, and a frontend URL are required")
+		return shareRequest{}, ExitUsage
+	}
+	chunkSize := int64(catalog.DefaultChunkSize)
+	if *blockSize != 0 {
+		chunkSize = *blockSize
+	}
+	if chunkSize < 0 || chunkSize > math.MaxUint32 {
+		a.logf("share: block size is outside the suite-02 range")
+		return shareRequest{}, ExitUsage
+	}
+	return shareRequest{
+		paths: paths, relayURL: *relayURL, frontURL: *frontURL, chunkSize: uint32(chunkSize), splitKey: *splitKey,
+	}, ExitOK
+}
+
+func relayRegistrationIdentity(material liveshare.RegistrationMaterial) (v2.ShareID, v2.ShareInstance, v2.PKHash, error) {
+	shareID, err := v2.ShareIDFromBytes(material.ShareID)
+	if err != nil {
+		return v2.ShareID{}, v2.ShareInstance{}, v2.PKHash{}, err
+	}
+	shareInstance, err := v2.ShareInstanceFromBytes(material.ShareInstance)
+	if err != nil {
+		return v2.ShareID{}, v2.ShareInstance{}, v2.PKHash{}, err
+	}
+	pkHash, err := v2.PKHashFromBytes(material.PKHash)
+	return shareID, shareInstance, pkHash, err
+}
+
+func (a *App) printShareLink(sender *liveshare.PreparedSender, frontURL string, split bool) error {
+	capability := sender.Capability()
+	if split {
+		bare, key, err := capability.SplitURL(frontURL)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(a.Stdout, "Bare link: %s\nKey: %s\n", bare, key)
+		return err
+	}
+	full, err := capability.URL(frontURL)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(a.Stdout, "Link: %s\n", full)
+	return err
+}
+
+func (a *App) serveSessions(
+	ctx context.Context,
+	factory *sessionruntime.SenderFactory,
+	lifecycle *senderRelayLifecycle,
+) error {
+	for {
+		channel, err := lifecycle.Accept(ctx)
+		if err != nil {
+			return err
+		}
+		go func() {
+			admission, err := factory.AdmitChannel(ctx, channel)
+			if err != nil {
+				_ = channel.Close()
+				if ctx.Err() == nil {
+					a.logf("share: rejected receiver session: %v", err)
+				}
+				return
+			}
+			if admission.Kind == sessionruntime.SenderChannelAttachedLane {
+				return
+			}
+			runtime := admission.Session
+			if runtime == nil {
+				_ = channel.Close()
+				a.logf("share: rejected receiver session: missing admitted runtime")
+				return
+			}
+			<-runtime.Done()
+			if err := runtime.Err(); err != nil && ctx.Err() == nil {
+				a.logf("share: receiver session ended: %v", err)
+			}
+			runtime.Close()
+		}()
 	}
 }

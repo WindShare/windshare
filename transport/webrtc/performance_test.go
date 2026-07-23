@@ -2,6 +2,7 @@ package webrtc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -9,15 +10,19 @@ import (
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
-	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/internal/testnetwork"
 )
 
 const (
-	benchmarkPeerTimeout     = 10 * time.Second
-	benchmarkTransferTimeout = 2 * time.Minute
-	benchmarkKiB             = 1024
-	benchmarkMiB             = 1024 * benchmarkKiB
+	benchmarkPeerTimeout                    = 10 * time.Second
+	benchmarkTransferTimeout                = 2 * time.Minute
+	benchmarkKiB                            = 1024
+	benchmarkMiB                            = 1024 * benchmarkKiB
+	benchmarkExpectedLowWaterBytes          = 256 * benchmarkKiB
+	benchmarkExpectedHighWaterBytes         = benchmarkMiB
+	benchmarkExpectedSendAdmissionHighWater = benchmarkExpectedHighWaterBytes - 1
+	benchmarkExpectedMaxFrameBytes          = 64 * benchmarkKiB
 )
 
 var benchmarkChunkSizes = [...]int{
@@ -40,6 +45,22 @@ func BenchmarkPionChunkTransfer(b *testing.B) {
 }
 
 func benchmarkPionChunkTransfer(b *testing.B, chunkBytes int) {
+	if defaultLowWaterBytes != benchmarkExpectedLowWaterBytes ||
+		defaultHighWaterBytes != benchmarkExpectedHighWaterBytes ||
+		defaultFlowControl.highWaterBytes != benchmarkExpectedSendAdmissionHighWater ||
+		framechannel.MaxFrameSize != benchmarkExpectedMaxFrameBytes {
+		b.Fatalf(
+			"production buffering constants changed: low=%d/%d high=%d/%d admission=%d/%d frame=%d/%d",
+			defaultLowWaterBytes,
+			benchmarkExpectedLowWaterBytes,
+			defaultHighWaterBytes,
+			benchmarkExpectedHighWaterBytes,
+			defaultFlowControl.highWaterBytes,
+			benchmarkExpectedSendAdmissionHighWater,
+			framechannel.MaxFrameSize,
+			benchmarkExpectedMaxFrameBytes,
+		)
+	}
 	left, right, raw := newBenchmarkPionPair(b)
 
 	frames, err := benchmarkChunkFrames(chunkBytes)
@@ -80,11 +101,21 @@ func benchmarkPionChunkTransfer(b *testing.B, chunkBytes int) {
 	if result.bytes != wantBytes {
 		b.Fatalf("received bytes = %d, want %d", result.bytes, wantBytes)
 	}
+	peakExclusiveLimitBytes := uint64(benchmarkExpectedHighWaterBytes + benchmarkExpectedMaxFrameBytes)
+	if peakBuffered >= peakExclusiveLimitBytes {
+		b.Fatalf(
+			"peak buffered bytes = %d, must be below one-frame high-water limit %d",
+			peakBuffered,
+			peakExclusiveLimitBytes,
+		)
+	}
 	b.ReportMetric(float64(len(frames)), "frames/chunk")
 	b.ReportMetric(float64(wireBytes), "wire-B/chunk")
 	b.ReportMetric(float64(peakBuffered), "peak-buffered-B")
 	b.ReportMetric(float64(defaultLowWaterBytes), "low-water-B")
 	b.ReportMetric(float64(defaultHighWaterBytes), "high-water-B")
+	b.ReportMetric(float64(defaultFlowControl.highWaterBytes), "send-admission-high-water-B")
+	b.ReportMetric(float64(framechannel.MaxFrameSize), "max-frame-B")
 }
 
 type benchmarkReceiveResult struct {
@@ -109,15 +140,24 @@ func receiveBenchmarkFrames(channel *Channel, frames int, result chan<- benchmar
 	result <- benchmarkReceiveResult{bytes: received}
 }
 
-func benchmarkChunkFrames(chunkBytes int) ([]session.Frame, error) {
+func benchmarkChunkFrames(chunkBytes int) ([]framechannel.Frame, error) {
+	if chunkBytes <= 0 {
+		return nil, errors.New("benchmark chunk size must be positive")
+	}
 	block := make([]byte, chunkBytes)
 	for index := range block {
 		block[index] = byte((index*31 + chunkBytes) % 251)
 	}
-	return session.SplitBlockCT(0, block, session.MaxBlockPayload)
+	frameCount := (len(block) + framechannel.MaxFrameSize - 1) / framechannel.MaxFrameSize
+	frames := make([]framechannel.Frame, 0, frameCount)
+	for offset := 0; offset < len(block); offset += framechannel.MaxFrameSize {
+		end := min(offset+framechannel.MaxFrameSize, len(block))
+		frames = append(frames, append(framechannel.Frame(nil), block[offset:end]...))
+	}
+	return frames, nil
 }
 
-func benchmarkFrameBytes(frames []session.Frame) int {
+func benchmarkFrameBytes(frames []framechannel.Frame) int {
 	total := 0
 	for _, frame := range frames {
 		total += len(frame)

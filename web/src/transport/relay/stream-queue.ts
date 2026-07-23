@@ -69,6 +69,15 @@ export class BoundedStreamQueue<T> {
     this.#drain()
   }
 
+  fail(reason: unknown): void {
+    if (this.#cancelled) return
+    this.#queue.length = 0
+    this.#closed = true
+    this.#cancelled = true
+    this.#pullWaiting = false
+    this.#controller?.error(reason)
+  }
+
   #discard(): void {
     this.#queue.length = 0
     this.#closed = true
