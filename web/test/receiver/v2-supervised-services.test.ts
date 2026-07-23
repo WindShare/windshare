@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import { byteRange, FileGeometry, type ByteRange } from '../../src/content/geometry'
 import {
-  type V2BlockRangeReader,
   type V2BlockRouteEligibility,
   type V2BlockSlice,
   V2BlockLaneAttemptsError,
   type V2LaneSet,
+  type V2RouteAuthorizedBlockRangeReader,
 } from '../../src/content/v2-broker'
 import {
   type V2OpenedRevision,
@@ -31,6 +31,7 @@ import { V2SupervisedConnectivity } from '../../src/receiver/v2-supervised-conne
 interface GenerationFixture {
   readonly generation: V2ContentGeneration
   readonly ranges: ByteRange[]
+  readonly routeAuthorities: V2BlockRouteEligibility[]
   opens: number
   releases: number
 }
@@ -147,6 +148,7 @@ function generationFixture(
     opens: 0,
     releases: 0,
     ranges: [] as ByteRange[],
+    routeAuthorities: [] as V2BlockRouteEligibility[],
   }
   const revisions = {
     open: async (): Promise<V2OpenedRevision> => {
@@ -159,20 +161,22 @@ function generationFixture(
       }
     },
   }
-  const broker: V2BlockRangeReader = {
-    readRange: (
+  const broker: V2RouteAuthorizedBlockRangeReader = {
+    readRouteAuthorizedRange: (
       _descriptor,
       _leaseId,
       range,
+      options,
     ) => {
       fixture.ranges.push(range)
+      fixture.routeAuthorities.push(options.routes)
       return serve(range)
     },
   }
   const generation = {
     id,
     revisions: revisions as unknown as V2RevisionService,
-    broker: broker as unknown as V2ContentGeneration['broker'],
+    broker,
     lanes: { size: 1 } as unknown as V2LaneSet,
   }
   return Object.assign(fixture, { generation })
@@ -202,7 +206,8 @@ describe('v2 supervised content generations', () => {
       provider,
       (length) => new Uint8Array(length).fill(8),
     )
-    const scoped = content.forRoutes(new V2ConnectivityRouteAuthority())
+    const routes = new V2ConnectivityRouteAuthority()
+    const scoped = content.forRoutes(routes)
     const opened = await scoped.revisions.open(stable.fileId)
 
     const reader = scoped.broker.readRange(
@@ -221,6 +226,8 @@ describe('v2 supervised content generations', () => {
     expect(checkpoints).toEqual([2, 2])
     expect(first.ranges).toEqual([byteRange(0n, 4n)])
     expect(second.ranges).toEqual([byteRange(2n, 4n)])
+    expect(first.routeAuthorities).toEqual([routes])
+    expect(second.routeAuthorities).toEqual([routes])
     expect(provider.recoveries).toBe(1)
     expect(first.opens).toBe(1)
     expect(second.opens).toBe(1)

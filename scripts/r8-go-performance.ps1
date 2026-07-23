@@ -55,21 +55,7 @@ function Get-R8HardwareEnvironment {
     $cpuModel = [string]$env:PROCESSOR_IDENTIFIER
     $physicalMemoryBytes = $null
     $probe = 'environment-fallback'
-    if ($IsWindows) {
-        try {
-            $processors = @(Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop)
-            $computer = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
-            $names = @($processors | ForEach-Object { ([string]$_.Name).Trim() } | Where-Object { $_ -ne '' } | Sort-Object -Unique)
-            if ($names.Count -gt 0) {
-                $cpuModel = $names -join ' + '
-            }
-            $physicalMemoryBytes = [long]$computer.TotalPhysicalMemory
-            $probe = 'windows-cim'
-        } catch {
-            # Hardware metadata is diagnostic context, not benchmark authority;
-            # a restricted CIM provider must not invalidate semantic results.
-        }
-    } elseif (Test-Path -LiteralPath '/proc/meminfo' -PathType Leaf) {
+    if (-not $IsWindows -and (Test-Path -LiteralPath '/proc/meminfo' -PathType Leaf)) {
         try {
             $memoryLine = Get-Content -LiteralPath '/proc/meminfo' | Where-Object { $_ -match '^MemTotal:' } | Select-Object -First 1
             if ($memoryLine -match '^MemTotal:\s+([0-9]+)\s+kB$') {

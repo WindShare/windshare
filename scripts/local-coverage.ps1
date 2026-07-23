@@ -14,11 +14,11 @@ $ErrorActionPreference = 'Stop'
 function Read-LocalCoverageNetworkPackages([string]$Path) {
     $document = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     $topLevelProperties = @($document.PSObject.Properties.Name | Sort-Object)
-    $expectedTopLevel = @('Packages', 'RetiredProgramTombstone', 'SchemaVersion')
+    $expectedTopLevel = @('Packages', 'SchemaVersion')
     if ([string]::Join("`n", $topLevelProperties) -cne [string]::Join("`n", $expectedTopLevel)) {
-        throw 'Coverage network manifest must use the exact schema-v2 top-level shape'
+        throw 'Coverage network manifest must use the exact schema-v3 top-level shape'
     }
-    if ([int]$document.SchemaVersion -ne 2) {
+    if ([int]$document.SchemaVersion -ne 3) {
         throw 'Coverage network manifest has an unsupported schema'
     }
     $packages = @($document.Packages)

@@ -118,7 +118,7 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
             end: Number(checked.end),
             priority: options?.priority ?? 'download',
           })
-          return productionBroker.readRange(candidate, candidateLease, checked, {
+          return productionBroker.readRouteAuthorizedRange(candidate, candidateLease, checked, {
             ...options,
             routes,
           })
@@ -439,17 +439,22 @@ async function measureR8MediaTrend(options: {
   const previewPath = '/src/preview/v2-preview.ts'
   const geometryPath = '/src/content/geometry.ts'
   const brokerPath = '/src/content/v2-broker.ts'
-  const [previewModule, geometryModule, brokerModule] = await Promise.all([
+  const connectivityPath = '/src/connectivity/v2-receiver-policy.ts'
+  const [previewModule, geometryModule, brokerModule, connectivityModule] = await Promise.all([
     import(previewPath) as Promise<typeof import('../../src/preview/v2-preview')>,
     import(geometryPath) as Promise<typeof import('../../src/content/geometry')>,
     import(brokerPath) as Promise<typeof import('../../src/content/v2-broker')>,
+    import(connectivityPath) as Promise<typeof import('../../src/connectivity/v2-receiver-policy')>,
   ])
   type CatalogFile = Extract<
     import('../../src/catalog/v2-records').V2CatalogEntry,
     { kind: 'file' }
   >
+  type ByteRange = import('../../src/content/geometry').ByteRange
   type Descriptor = import('../../src/content/v2-records').V2FileRevisionDescriptor
   type BlockLane = import('../../src/content/v2-broker').V2BlockLane
+  type RangeReader = import('../../src/content/v2-broker').V2BlockRangeReader
+  type RangeReaderOptions = import('../../src/content/v2-broker').V2BlockRangeReaderOptions
   type RevisionReader = import('../../src/content/v2-session-services').V2RevisionReader
 
   function identity(first: number): Uint8Array<ArrayBuffer> {
@@ -502,7 +507,22 @@ async function measureR8MediaTrend(options: {
     }
     const lanes = new brokerModule.V2LaneSet()
     lanes.add(lane, 'relay')
-    const broker = new brokerModule.V2BlockBroker(lanes)
+    const rawBroker = new brokerModule.V2BlockBroker(lanes)
+    const routes = new connectivityModule.V2ConnectivityRouteAuthority()
+    routes.admitRelay()
+    // Preview stays route-neutral so only this fixture boundary can supply activation authority.
+    const broker: RangeReader = Object.freeze({
+      readRange: (
+        candidate: Descriptor,
+        candidateLease: Uint8Array,
+        range: ByteRange,
+        options: RangeReaderOptions = {},
+      ) =>
+        rawBroker.readRouteAuthorizedRange(candidate, candidateLease, range, {
+          ...options,
+          routes,
+        }),
+    })
     const revisions: RevisionReader = {
       async open(fileId, signal) {
         signal?.throwIfAborted()
@@ -528,7 +548,8 @@ async function measureR8MediaTrend(options: {
         return total + Number(range.end - range.start)
       }, 0),
       close: () => {
-        broker.close()
+        routes.close()
+        rawBroker.close()
         lanes.close()
       },
     }

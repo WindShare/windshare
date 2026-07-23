@@ -1,4 +1,5 @@
 import { V2CatalogPageStoreError } from './v2-page-store-contracts'
+import { waitForIndexedDbTransaction } from './v2-indexeddb-transaction'
 import {
   V2_CATALOG_PAGE_ENTRIES,
   V2_CATALOG_PAGE_OBJECT_BYTES,
@@ -138,7 +139,7 @@ export async function bindCatalogBudgetPolicy(
       'Catalog cache database is already bound to another budget policy',
     )
   }
-  await transactionCompletion(transaction)
+  await waitForIndexedDbTransaction(transaction)
 }
 
 export async function touchCatalogShareBudget(
@@ -157,7 +158,7 @@ export async function touchCatalogShareBudget(
       Date.now(),
     ))
   }
-  await transactionCompletion(transaction)
+  await waitForIndexedDbTransaction(transaction)
 }
 
 export async function reserveCatalogPageBudget(
@@ -293,7 +294,7 @@ export async function evictCatalogShareRecords(
     profile.entries - share.entries,
     profile.metadataBytes - share.metadataBytes,
   ))
-  await transactionCompletion(transaction)
+  await waitForIndexedDbTransaction(transaction)
 }
 
 export async function catalogShareEvictionCandidates(
@@ -304,7 +305,7 @@ export async function catalogShareEvictionCandidates(
   const records = await requestResult<StoredBudget[]>(
     transaction.objectStore(CATALOG_BUDGET_STORE).getAll(),
   )
-  await transactionCompletion(transaction)
+  await waitForIndexedDbTransaction(transaction)
   return records
     .filter((record): record is StoredShareBudget =>
       record.kind === 'share' && record.shareOwnerKey !== currentShare)
@@ -465,14 +466,6 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     request.addEventListener('success', () => resolve(request.result), { once: true })
     request.addEventListener('error', () => reject(request.error), { once: true })
-  })
-}
-
-function transactionCompletion(transaction: IDBTransaction): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    transaction.addEventListener('complete', () => resolve(), { once: true })
-    transaction.addEventListener('abort', () => reject(transaction.error), { once: true })
-    transaction.addEventListener('error', () => reject(transaction.error), { once: true })
   })
 }
 

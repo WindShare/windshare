@@ -5,10 +5,8 @@
 #     lease token and runner pipe the config demands.
 #  2. The production Pion WebRTC matrix — direct invocation, same as Linux. Its Go
 #     Pion helper is loopback-only (SetIPFilter + SetIncludeLoopbackCandidate,
-#     mDNS disabled), so the `go run` temp exe binds no non-loopback socket
-#     and Windows Firewall mints no "Query User" rules; the D5 preflight of
-#     later gates therefore stays clean. Evidence in
-#     docs/.orchestration/make-ci.md "Windows interop enablement".
+#     mDNS disabled). Windows may still show a firewall prompt; that host UI is
+#     not a test failure and the gate does not inspect or mutate firewall rules.
 [CmdletBinding()]
 param()
 

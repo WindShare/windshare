@@ -25,6 +25,10 @@ import {
   type V2CatalogCacheBudgetLimits,
 } from './v2-cache-budget'
 import {
+  isIndexedDbConstraintError,
+  waitForIndexedDbTransaction,
+} from './v2-indexeddb-transaction'
+import {
   requireCachedFailure,
   snapshotCachedFailure,
   snapshotDirectory,
@@ -135,7 +139,7 @@ export class IndexedDbV2CatalogPageStore implements V2CatalogPageStore {
     const record = await requestResult<StoredDirectoryState | undefined>(
       transaction.objectStore(CATALOG_DIRECTORY_STORE).get(this.#directoryKey(directoryIdText)),
     )
-    await transactionCompletion(transaction)
+    await waitForIndexedDbTransaction(transaction)
     return record === undefined || record.kind !== 'committed' || record.pathPolicy !== V2_PATH_POLICY
       ? undefined
       : snapshotDirectory(record)
@@ -147,7 +151,7 @@ export class IndexedDbV2CatalogPageStore implements V2CatalogPageStore {
     const record = await requestResult<StoredDirectoryState | undefined>(
       transaction.objectStore(CATALOG_DIRECTORY_STORE).get(this.#directoryKey(directoryIdText)),
     )
-    await transactionCompletion(transaction)
+    await waitForIndexedDbTransaction(transaction)
     return record?.kind === 'failure' && record.pathPolicy === V2_PATH_POLICY
       ? snapshotCachedFailure(record)
       : undefined
@@ -164,7 +168,7 @@ export class IndexedDbV2CatalogPageStore implements V2CatalogPageStore {
         this.#pageKey(directory.directoryIdText, directory.generationText, pageIndex),
       ),
     )
-    await transactionCompletion(transaction)
+    await waitForIndexedDbTransaction(transaction)
     return record?.page
   }
 
@@ -228,7 +232,7 @@ export class IndexedDbV2CatalogPageStore implements V2CatalogPageStore {
       [CATALOG_PAGE_STORE, CATALOG_BUDGET_STORE],
       'readwrite',
     )
-    const completion = transactionCompletion(transaction)
+    const completion = waitForIndexedDbTransaction(transaction)
     try {
       const charge = await reserveCatalogPageBudget(
         transaction,
@@ -253,11 +257,11 @@ export class IndexedDbV2CatalogPageStore implements V2CatalogPageStore {
       abortTransaction(transaction)
       await completion.catch(() => undefined)
       if (error instanceof V2CatalogPageStoreError) throw error
-      const kind = isConstraintFailure(error) ? 'authenticated-ownership' : 'local-storage'
+      const kind = isIndexedDbConstraintError(error) ? 'authenticated-ownership' : 'local-storage'
       throw new V2CatalogPageStoreError(
         kind,
         kind === 'authenticated-ownership'
-          ? 'Catalog page violates node or portable sibling-name uniqueness'
+          ? 'Catalog page violates page, node, or portable sibling-name uniqueness'
           : 'Catalog page could not be persisted locally',
         { cause: error },
       )
@@ -275,7 +279,7 @@ export class IndexedDbV2CatalogPageStore implements V2CatalogPageStore {
       pathPolicy: V2_PATH_POLICY,
     }
     transaction.objectStore(CATALOG_DIRECTORY_STORE).put(record)
-    await transactionCompletion(transaction)
+    await waitForIndexedDbTransaction(transaction)
   }
 
   async storeFailure(cached: V2CachedDirectoryFailure): Promise<void> {
@@ -285,7 +289,7 @@ export class IndexedDbV2CatalogPageStore implements V2CatalogPageStore {
       [CATALOG_DIRECTORY_STORE, CATALOG_PAGE_STORE, CATALOG_BUDGET_STORE],
       'readwrite',
     )
-    const completion = transactionCompletion(transaction)
+    const completion = waitForIndexedDbTransaction(transaction)
     const record: StoredDirectoryFailure = {
       ...snapshotCachedFailure(cached),
       ownerKey: this.#directoryKey(cached.failure.directoryIdText),
@@ -310,7 +314,7 @@ export class IndexedDbV2CatalogPageStore implements V2CatalogPageStore {
       [CATALOG_DIRECTORY_STORE, CATALOG_PAGE_STORE, CATALOG_BUDGET_STORE],
       'readwrite',
     )
-    const completion = transactionCompletion(transaction)
+    const completion = waitForIndexedDbTransaction(transaction)
     const directoryKey = this.#directoryKey(directoryIdText)
     try {
       transaction.objectStore(CATALOG_DIRECTORY_STORE).delete(directoryKey)
@@ -474,14 +478,6 @@ function databaseOpenResult(request: IDBOpenDBRequest): Promise<IDBDatabase> {
   })
 }
 
-function transactionCompletion(transaction: IDBTransaction): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    transaction.addEventListener('complete', () => resolve(), { once: true })
-    transaction.addEventListener('abort', () => reject(transaction.error), { once: true })
-    transaction.addEventListener('error', () => reject(transaction.error), { once: true })
-  })
-}
-
 function abortTransaction(transaction: IDBTransaction): void {
   try {
     transaction.abort()
@@ -492,9 +488,4 @@ function abortTransaction(transaction: IDBTransaction): void {
 
 function ownershipFailure(message: string): V2CatalogPageStoreError {
   return new V2CatalogPageStoreError('authenticated-ownership', message)
-}
-
-function isConstraintFailure(error: unknown): boolean {
-  return typeof error === 'object' && error !== null &&
-    'name' in error && error.name === 'ConstraintError'
 }

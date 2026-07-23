@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
+import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
 import { byteRange, FileGeometry, type ByteRange } from '../../src/content/geometry'
 import {
   V2BlockBroker,
@@ -8,7 +9,6 @@ import {
   type V2BlockDemand,
   type V2BlockLane,
   type V2BlockRangeReader,
-  type V2BlockRouteEligibility,
 } from '../../src/content/v2-broker'
 import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
 import type { V2RevisionReader } from '../../src/content/v2-session-services'
@@ -18,13 +18,6 @@ import {
   type V2PreviewPorts,
   type V2VideoRangePort,
 } from '../../src/preview/v2-preview'
-
-const ALL_ROUTES: V2BlockRouteEligibility = Object.freeze({
-  active: true,
-  allows: () => true,
-  assertActive: () => undefined,
-  subscribe: () => () => undefined,
-})
 
 function identity(first: number): Uint8Array<ArrayBuffer> {
   const value = new Uint8Array(16)
@@ -72,17 +65,19 @@ function runtime(bytes: Uint8Array<ArrayBuffer>, blockSize: bigint) {
   const lanes = new V2LaneSet()
   lanes.add(lane, 'relay')
   const upstreamBroker = new V2BlockBroker(lanes)
+  const routes = new V2ConnectivityRouteAuthority()
+  routes.admitRelay()
   const broker: V2BlockRangeReader = Object.freeze({
     readRange: (
       revision: V2FileRevisionDescriptor,
       leaseId: Uint8Array,
       range: ByteRange,
       options: NonNullable<Parameters<V2BlockRangeReader['readRange']>[3]> = {},
-    ) => upstreamBroker.readRange(
+    ) => upstreamBroker.readRouteAuthorizedRange(
       revision,
       leaseId,
       range,
-      { ...options, routes: ALL_ROUTES },
+      { ...options, routes },
     ),
   })
   let releases = 0

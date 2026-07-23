@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 
 import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
 import { byteRange, FileGeometry } from '../../src/content/geometry'
@@ -7,6 +7,7 @@ import {
   V2LaneSet,
   type V2BlockDemand,
   type V2BlockLane,
+  type V2BlockRangeReader,
   type V2BlockRouteEligibility,
 } from '../../src/content/v2-broker'
 import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
@@ -96,6 +97,10 @@ async function turn(): Promise<void> {
 }
 
 describe('v2 preview/download block broker', () => {
+  it('keeps raw route authority out of the scoped range-reader port', () => {
+    expectTypeOf<V2BlockBroker>().not.toMatchTypeOf<V2BlockRangeReader>()
+  })
+
   it('keeps a shared upstream read alive when preview leaves but download remains', async () => {
     const activeLeases = new Set([10, 20, 30])
     const lane = new ControlledLane()
@@ -181,7 +186,7 @@ describe('v2 preview/download block broker', () => {
     const descriptor = revision()
     const collected = (async () => {
       const slices = []
-      for await (const slice of broker.readRange(
+      for await (const slice of broker.readRouteAuthorizedRange(
         descriptor,
         identity(4),
         byteRange(11n, 19n),
@@ -206,7 +211,7 @@ describe('v2 preview/download block broker', () => {
       { descriptor, leaseId: identity(5), localBlockIndex: 1n },
       { routes: ALL_ROUTES, priority: 'download' },
     )
-    const iterator = broker.readRange(
+    const iterator = broker.readRouteAuthorizedRange(
       descriptor,
       identity(4),
       byteRange(0n, 30n),
