@@ -35,6 +35,7 @@ cover.out
 TODO
 *_gitignore*
 *gitignore_*
+.trash_*
 .cursor/
 .claude/
 
