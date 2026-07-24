@@ -19,7 +19,7 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     ) {
         $env:GITHUB_REF.Substring('refs/tags/core/'.Length)
     } else {
-        'v0.2.1'
+        'v0.2.2'
     }
 }
 

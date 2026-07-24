@@ -12,7 +12,7 @@ if [ -n "${CORE_RELEASE_VERSION:-}" ]; then
 elif [[ "${GITHUB_REF:-}" == refs/tags/core/* ]]; then
   release_version="${GITHUB_REF#refs/tags/core/}"
 else
-  release_version="v0.2.1"
+  release_version="v0.2.2"
 fi
 temporary_base="${TMPDIR:-/tmp}"
 temporary_base="${temporary_base%/}"
