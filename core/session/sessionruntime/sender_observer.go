@@ -60,6 +60,7 @@ func observeSenderTerminal(
 	sessionID protocolsession.ProtocolSessionID,
 	lane LaneIdentity,
 	completion protocolsession.SendCompletion,
+	naturallyRetired bool,
 ) {
 	if observer == nil {
 		return
@@ -91,6 +92,9 @@ func observeSenderTerminal(
 		observation.Outcome = SenderTerminalOutcomeDropped
 	case protocolsession.SendOutcomeUnknown:
 		observation.Outcome = SenderTerminalOutcomeUnknown
+	}
+	if naturallyRetired && observation.Decision != SenderTerminalDecisionDelivered {
+		observation.Decision = SenderTerminalDecisionNaturalRetirement
 	}
 	observer.ObserveSenderTerminal(observation)
 }

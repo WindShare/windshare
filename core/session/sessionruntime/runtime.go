@@ -422,6 +422,10 @@ func (outbound senderOutbound) sendTerminalRecipients(
 		lane    LaneIdentity
 		receipt protocolsession.SendReceipt
 	}
+	type terminalCompletion struct {
+		lane       LaneIdentity
+		completion protocolsession.SendCompletion
+	}
 	receipts := make([]terminalReceipt, 0, len(lanes))
 	var combined error
 	var hardAdmissionError error
@@ -459,19 +463,29 @@ func (outbound senderOutbound) sendTerminalRecipients(
 		}
 		return combined
 	}
-	delivered := false
+	completions := make([]terminalCompletion, 0, len(receipts))
 	for _, pending := range receipts {
-		completion := pending.receipt.Await(deliveryContext)
+		completions = append(completions, terminalCompletion{
+			lane:       pending.lane,
+			completion: pending.receipt.Await(deliveryContext),
+		})
+	}
+	delivered := false
+	noUsableReplacement := !outbound.runtime.lanes.hasUsable()
+	for _, settled := range completions {
+		completion := settled.completion
+		naturallyRetired := terminalCompletionNaturallyRetired(completion, noUsableReplacement)
 		observeSenderTerminal(
 			outbound.observer,
 			outbound.runtime.sessionID,
-			pending.lane,
+			settled.lane,
 			completion,
+			naturallyRetired,
 		)
-		if completion.TransportDisposition == framechannel.SendRetired {
-			// Channel retirement won before physical transport acceptance. The
-			// admitted protocol receipt still settles, but it did not create a wire
-			// failure and cannot turn natural last-lane completion into stop failure.
+		if naturallyRetired {
+			// An admitted receipt can settle after channel retirement or while its
+			// owning writer publishes last-lane completion. Neither path reached the
+			// wire, so an absent replacement makes the lifecycle naturally complete.
 			continue
 		}
 		if completion.Err == nil && completion.Outcome == protocolsession.SendOutcomeDelivered {
@@ -500,6 +514,25 @@ func (outbound senderOutbound) sendTerminalRecipients(
 		return errors.Join(callerContext.Err(), hardAdmissionError)
 	}
 	return errors.Join(combined, callerContext.Err())
+}
+
+func terminalCompletionNaturallyRetired(
+	completion protocolsession.SendCompletion,
+	noUsableReplacement bool,
+) bool {
+	if completion.TransportDisposition == framechannel.SendRetired {
+		return true
+	}
+	return noUsableReplacement && completion.Settled &&
+		completion.TransportDisposition == 0 &&
+		completion.Outcome == protocolsession.SendOutcomeDropped &&
+		completion.Err != nil &&
+		errorTreeContainsOnly(
+			completion.Err,
+			protocolsession.ErrWriterStopped,
+			context.Canceled,
+			context.DeadlineExceeded,
+		)
 }
 
 func errorTreeContainsOnly(err error, allowed ...error) bool {
