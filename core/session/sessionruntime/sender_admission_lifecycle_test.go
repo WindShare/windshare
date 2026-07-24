@@ -798,6 +798,81 @@ func TestTerminalPreAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T)
 	}
 }
 
+func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T) {
+	body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{
+		Code: SessionStoppedCode, Message: "share cancelled",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	for _, test := range []struct {
+		name           string
+		addReplacement bool
+		wantError      bool
+		wantDecision   SenderTerminalDecision
+	}{
+		{name: "last writer retires", wantDecision: SenderTerminalDecisionNaturalRetirement},
+		{
+			name: "usable replacement remains", addReplacement: true, wantError: true,
+			wantDecision: SenderTerminalDecisionFailed,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+				recipients := runtime.lanes.snapshot()
+				if len(recipients) != 1 {
+					t.Fatalf("terminal recipients = %d, want 1", len(recipients))
+				}
+				if test.addReplacement {
+					replacement := newMemoryChannel(t)
+					if _, err := runtime.lanes.add(
+						LaneIdentity{ID: 2, Epoch: 1}, replacement, permissiveInboundAuthenticator(), false,
+					); err != nil {
+						t.Fatalf("add usable replacement: %v", err)
+					}
+				}
+				observed := make(chan SenderTerminalObservation, 1)
+				result := make(chan error, 1)
+				go func() {
+					result <- (senderOutbound{
+						runtime: runtime, privateKey: privateKey,
+						observer: SenderTerminalObserverFunc(
+							func(observation SenderTerminalObservation) { observed <- observation },
+						),
+					}).sendTerminalRecipients(
+						context.Background(), context.Background(), body, recipients,
+					)
+				}()
+				// The sender is durably blocked on the admitted receipt before the
+				// writer publishes its local retirement.
+				synctest.Wait()
+				writerContext, cancelWriter := context.WithCancel(context.Background())
+				cancelWriter()
+				if err := recipients[0].writer.Run(writerContext); !errors.Is(err, context.Canceled) {
+					t.Fatalf("stop recipient writer: %v", err)
+				}
+				synctest.Wait()
+				terminalErr := <-result
+				if test.wantError {
+					if !errors.Is(terminalErr, protocolsession.ErrWriterStopped) {
+						t.Fatalf("usable stopped recipient error = %v", terminalErr)
+					}
+				} else if terminalErr != nil {
+					t.Fatalf("naturally retired receipt failed terminal fanout: %v", terminalErr)
+				}
+				observation := <-observed
+				if observation.TransportDisposition != SenderTerminalTransportNotReached ||
+					observation.Outcome != SenderTerminalOutcomeDropped ||
+					observation.Decision != test.wantDecision {
+					t.Fatalf("post-admission retirement observation=%+v", observation)
+				}
+			})
+		})
+	}
+}
+
 func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) {
 	body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{
 		Code: SessionStoppedCode, Message: "share cancelled",
