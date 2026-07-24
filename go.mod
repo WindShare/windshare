@@ -6,7 +6,7 @@ go 1.26.5
 // (含 replace 会令 `go install .../cmd/windshare@latest` 失败)。发版两步:
 // ① 先打 core/vX.Y.Z tag;② 将下行升为该版本,再打根模块 tag。本地开发经
 // go.work 解析;发布构建(GOWORK=off)按此版本从远端解析。
-require github.com/windshare/windshare/core v0.2.1
+require github.com/windshare/windshare/core v0.2.2
 
 // WS 库选型:coder/websocket——context 原生 API、零第三方依赖、积极维护
 // (nhooyr.io/websocket 的官方延续);gorilla/websocket 处于维护模式且 API

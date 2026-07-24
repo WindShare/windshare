@@ -46,8 +46,8 @@ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZb
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/windshare/windshare/core v0.2.1 h1:zyCvBGpWiBRHubO7qR9LUuJW4a14TRD1lFYjHnL7E6w=
-github.com/windshare/windshare/core v0.2.1/go.mod h1:qsDW7Cw+wlo9sgUjD9SmkEfqCAz6gS+s454l45fBDuw=
+github.com/windshare/windshare/core v0.2.2 h1:PPwlOYbZvaNECyfhvfN+IXK65/rSByVpYiIV9gPqe9o=
+github.com/windshare/windshare/core v0.2.2/go.mod h1:qsDW7Cw+wlo9sgUjD9SmkEfqCAz6gS+s454l45fBDuw=
 github.com/wlynxg/anet v0.0.5 h1:J3VJGi1gvo0JwZ/P1/Yc/8p63SoW98B5dHkYDmpgvvU=
 github.com/wlynxg/anet v0.0.5/go.mod h1:eay5PRQr7fIVAMbTbchTnO9gG65Hg/uYGdc7mguHxoA=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
