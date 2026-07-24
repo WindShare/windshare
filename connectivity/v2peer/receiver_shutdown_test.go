@@ -258,7 +258,14 @@ func (operation *exactReceiverTestOperation) Terminate(
 		)
 		close(operation.terminateWake)
 	})
-	<-operation.receiveReturned
+	// Termination joins an active Receive, but an early Close may win before the
+	// worker enters Receive. The bound operation prevents a new Receive after
+	// that decision, so waiting in the latter case would deadlock the test double.
+	select {
+	case <-operation.receiveEntered:
+		<-operation.receiveReturned
+	default:
+	}
 	return operation.terminationResult()
 }
 

@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"os"
@@ -209,13 +212,21 @@ func (source *SelectedCatalogSource) ScanDirectory(ctx context.Context, request 
 	if err != nil || !bytes.Equal(beforeIdentity.Bytes(), request.Directory.SourceIdentity().Bytes()) {
 		return catalog.ScanResult{}, catalog.NewPermanentScanError(errors.Join(catalog.ErrDirectoryStale, err))
 	}
-	result, err := source.enumerateCatalogChildren(ctx, directory, handle, locator, request)
+	result, beforeEntries, err := source.enumerateCatalogChildren(ctx, directory, handle, locator, request)
 	if err != nil {
 		return catalog.ScanResult{}, err
 	}
-	afterIdentity, afterCandidate, err := platformCatalogBaseline(handle)
-	if err != nil || !bytes.Equal(beforeIdentity.Bytes(), afterIdentity.Bytes()) ||
-		!bytes.Equal(beforeCandidate.Bytes(), afterCandidate.Bytes()) {
+	afterHandle, err := directory.Open(".")
+	if err != nil {
+		return catalog.ScanResult{}, catalog.NewPermanentScanError(errors.Join(catalog.ErrDirectoryStale, err))
+	}
+	afterIdentity, afterCandidate, baselineErr := platformCatalogBaseline(afterHandle)
+	afterEntries, snapshotErr := catalogDirectoryFingerprint(ctx, afterHandle)
+	closeErr := afterHandle.Close()
+	if err := errors.Join(baselineErr, snapshotErr, closeErr); err != nil ||
+		!bytes.Equal(beforeIdentity.Bytes(), afterIdentity.Bytes()) ||
+		!bytes.Equal(beforeCandidate.Bytes(), afterCandidate.Bytes()) ||
+		!bytes.Equal(beforeEntries[:], afterEntries[:]) {
 		return catalog.ScanResult{}, catalog.NewPermanentScanError(errors.Join(catalog.ErrDirectoryStale, err))
 	}
 	return result, nil
@@ -227,31 +238,80 @@ func (source *SelectedCatalogSource) enumerateCatalogChildren(
 	handle *os.File,
 	locator catalog.Locator,
 	request catalog.ScanRequest,
-) (catalog.ScanResult, error) {
+) (catalog.ScanResult, [sha256.Size]byte, error) {
 	result := catalog.ScanResult{}
+	fingerprint := newCatalogDirectoryFingerprint()
 	for {
 		entries, readErr := handle.ReadDir(catalogEnumerationBatchSize)
 		for _, entry := range entries {
+			fingerprint.add(entry)
 			if err := request.Work.Consume(1); err != nil {
-				return catalog.ScanResult{}, err
+				return catalog.ScanResult{}, [sha256.Size]byte{}, err
 			}
 			child, omitted, err := source.scanChild(ctx, directory, locator, entry)
 			if err != nil {
-				return catalog.ScanResult{}, err
+				return catalog.ScanResult{}, [sha256.Size]byte{}, err
 			}
 			if omitted {
 				result.OmittedCount++
 				continue
 			}
 			if err := request.Children.Add(ctx, child); err != nil {
-				return catalog.ScanResult{}, err
+				return catalog.ScanResult{}, [sha256.Size]byte{}, err
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
-			return result, nil
+			return result, fingerprint.sum(), nil
 		}
 		if readErr != nil {
-			return catalog.ScanResult{}, catalog.NewTransientScanError(readErr, 0)
+			return catalog.ScanResult{}, [sha256.Size]byte{}, catalog.NewTransientScanError(readErr, 0)
+		}
+	}
+}
+
+type catalogDirectoryFingerprintState struct {
+	digest hash.Hash
+	count  uint64
+}
+
+func newCatalogDirectoryFingerprint() *catalogDirectoryFingerprintState {
+	return &catalogDirectoryFingerprintState{digest: sha256.New()}
+}
+
+func (fingerprint *catalogDirectoryFingerprintState) add(entry fs.DirEntry) {
+	name := []byte(entry.Name())
+	var header [12]byte
+	binary.BigEndian.PutUint64(header[:8], uint64(len(name)))
+	binary.BigEndian.PutUint32(header[8:], uint32(entry.Type()&fs.ModeType))
+	_, _ = fingerprint.digest.Write(header[:])
+	_, _ = fingerprint.digest.Write(name)
+	fingerprint.count++
+}
+
+func (fingerprint *catalogDirectoryFingerprintState) sum() [sha256.Size]byte {
+	var count [8]byte
+	binary.BigEndian.PutUint64(count[:], fingerprint.count)
+	_, _ = fingerprint.digest.Write(count[:])
+	var result [sha256.Size]byte
+	copy(result[:], fingerprint.digest.Sum(nil))
+	return result
+}
+
+func catalogDirectoryFingerprint(ctx context.Context, handle *os.File) ([sha256.Size]byte, error) {
+	fingerprint := newCatalogDirectoryFingerprint()
+	for {
+		if err := ctx.Err(); err != nil {
+			return [sha256.Size]byte{}, err
+		}
+		entries, err := handle.ReadDir(catalogEnumerationBatchSize)
+		for _, entry := range entries {
+			fingerprint.add(entry)
+		}
+		if errors.Is(err, io.EOF) {
+			return fingerprint.sum(), nil
+		}
+		if err != nil {
+			return [sha256.Size]byte{}, err
 		}
 	}
 }
