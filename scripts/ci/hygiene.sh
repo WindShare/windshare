@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # CI-parity hygiene gate (Linux). Mirrors ci.yml job `hygiene` verbatim
 # (sloc-guard lives in the standalone `sloc` gate since 2026-07-14): gofmt
-# over tracked Go files, `git diff --check` against the empty tree, a source-only
-# Go/Web v1 forbidden scans, short R8 evidence contracts, and gopls check
-# -severity=hint.
+# over tracked Go files, `git diff --check` against the empty tree, clone-visible
+# Makefile gate scripts, explicit workflow shell invocation, source-only Go/Web
+# v1 forbidden scans, short R8 evidence contracts, and gopls check -severity=hint.
 # Deviation from CI: gopls diagnostics are captured in a mktemp file instead
 # of ./gopls-diagnostics.txt so the gate never dirties the worktree.
 set -euo pipefail
@@ -32,6 +32,10 @@ echo "-- whitespace (git diff --check against the empty tree)"
 # --no-pager: in an interactive terminal git would otherwise hand the diff to
 # less and park the whole gate on a keypress; gate scripts must never page.
 git --no-pager diff --check "$(git hash-object -t tree /dev/null)"
+
+echo "-- CI checkout contract"
+node scripts/ci/contract.tests.mjs
+node scripts/ci/contract.mjs
 
 echo "-- Web v1 forbidden references (source-only)"
 node scripts/ci/web-forbidden.mjs --source-only

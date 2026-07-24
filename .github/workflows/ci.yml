@@ -20,9 +20,6 @@ on:
 env:
   # Pinned coverage-gate tool; thresholds live in each module's .testcoverage.yml.
   GO_TEST_COVERAGE: github.com/vladopajic/go-test-coverage/v2@v2.18.8
-  # Pinned lint tool; the ruleset lives in .golangci.yml at the repo root.
-  # scripts/ci/lint.{ps1,sh} carry the same pin — bump them together.
-  GOLANGCI_LINT: github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 
 jobs:
   hygiene:
@@ -49,6 +46,10 @@ jobs:
       # empty tree so every tracked file is inspected.
       - name: whitespace errors over the committed tree
         run: git diff --check "$(git hash-object -t tree /dev/null)"
+      - name: CI checkout contract
+        run: |
+          node scripts/ci/contract.tests.mjs
+          node scripts/ci/contract.mjs
       - name: Web v1 forbidden references (source-only)
         run: node scripts/ci/web-forbidden.mjs --source-only
       - name: Go v1 forbidden roots and production dependencies
@@ -88,14 +89,10 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
-      # Executed via the pinned `go run` module string (the GO_TEST_COVERAGE
-      # precedent) so this job and scripts/ci/lint.{ps1,sh} run the identical
-      # linter build; one root .golangci.yml governs both modules.
-      - name: golangci-lint (root)
-        run: go run "$GOLANGCI_LINT" run ./...
-      - name: golangci-lint (core)
-        run: go run "$GOLANGCI_LINT" run ./...
-        working-directory: core
+      # The canonical gate installs the pinned host linter once, then analyzes
+      # both modules for Linux and Windows build-tagged source sets.
+      - name: golangci-lint (Linux and Windows, both modules)
+        run: bash scripts/ci/lint.sh
 
   go-root:
     name: Go root module (vet, build, race, coverage)
@@ -149,7 +146,7 @@ jobs:
       # Mirrors §10.3: regenerate every generated vector family twice; the regenerations
       # must be byte-identical and must match the committed files exactly.
       - name: regenerate twice and compare hashes
-        run: scripts/ci/vectors.sh
+        run: bash scripts/ci/vectors.sh
 
   core-release:
     name: Core module release artifact (canonical zip, extracted tests)

@@ -15,8 +15,11 @@ func platformMutationToken(file *os.File) (posixMutationToken, error) {
 	}
 	stat, ok := information.Sys().(*syscall.Stat_t)
 	if !ok {
-		return posixMutationToken{}, errors.New("Linux FileInfo does not expose syscall.Stat_t")
+		return posixMutationToken{}, errors.New("file info does not expose syscall.Stat_t on Linux")
 	}
+	// syscall.Stat_t field widths differ across Linux architectures. These
+	// conversions are redundant on amd64 but required by narrower ABIs.
+	//nolint:unconvert
 	return posixMutationToken{
 		device: uint64(stat.Dev), inode: stat.Ino, size: stat.Size,
 		modifiedSec: int64(stat.Mtim.Sec), modifiedNS: int64(stat.Mtim.Nsec),

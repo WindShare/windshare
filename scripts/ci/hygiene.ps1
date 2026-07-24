@@ -6,6 +6,8 @@
 #  - whitespace: `git diff --check` against the empty tree, so every tracked
 #    file's worktree content is inspected — on a clean tree this equals CI's
 #    committed-tree diff.
+#  - checkout contract: every Makefile gate has clone-visible platform scripts,
+#    and workflows use an explicit shell instead of depending on executable bits.
 #  - source-only Go/Web v1 forbidden-reference scans (the Web gate also checks
 #    the built bundle).
 #  - short PowerShell contracts for R8 benchmark parsing, command transcripts,
@@ -54,6 +56,16 @@ if ($LASTEXITCODE -ne 0) {
 git --no-pager diff --check $emptyTree
 if ($LASTEXITCODE -ne 0) {
     throw 'git diff --check reported whitespace errors'
+}
+
+Write-Output '-- CI checkout contract'
+node scripts/ci/contract.tests.mjs
+if ($LASTEXITCODE -ne 0) {
+    throw 'CI checkout contract tests failed'
+}
+node scripts/ci/contract.mjs
+if ($LASTEXITCODE -ne 0) {
+    throw 'CI checkout contract failed'
 }
 
 Write-Output '-- Web v1 forbidden references (source-only)'
