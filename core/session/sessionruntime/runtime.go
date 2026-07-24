@@ -523,16 +523,26 @@ func terminalCompletionNaturallyRetired(
 	if completion.TransportDisposition == framechannel.SendRetired {
 		return true
 	}
-	return noUsableReplacement && completion.Settled &&
-		completion.TransportDisposition == 0 &&
-		completion.Outcome == protocolsession.SendOutcomeDropped &&
-		completion.Err != nil &&
-		errorTreeContainsOnly(
+	if !noUsableReplacement || !completion.Settled ||
+		completion.Outcome != protocolsession.SendOutcomeDropped || completion.Err == nil {
+		return false
+	}
+	switch completion.TransportDisposition {
+	case 0:
+		return errorTreeContainsOnly(
 			completion.Err,
 			protocolsession.ErrWriterStopped,
 			context.Canceled,
 			context.DeadlineExceeded,
 		)
+	case framechannel.SendRejected:
+		// SessionWriter sends with its lane lifecycle context. Once the last
+		// writer is unusable, an exact cancellation rejection is the claimed-send
+		// side of lane retirement and still proves that transport acquired nothing.
+		return errorTreeContainsOnly(completion.Err, context.Canceled)
+	default:
+		return false
+	}
 }
 
 func errorTreeContainsOnly(err error, allowed ...error) bool {
