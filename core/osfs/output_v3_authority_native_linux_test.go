@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 	"golang.org/x/sys/unix"
@@ -75,7 +77,7 @@ func TestLinuxExt4RejectsNonWritableSelectedParentBeforeProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.Chmod(parentPath, 0o755)
-	selection := v3RecoverySelectionPaths(t, []string{"locked/file.bin"}, 1)
+	selection := linuxNativeSelectionUnderParent(t, "locked", "file.bin", 1)
 	assertLinuxNativeAuthorityRejectsBeforeProbe(t, rootPath, selection, []string{"locked"})
 }
 
@@ -84,10 +86,17 @@ func TestLinuxExt4RejectsCreateModeInheritanceBeforeProbe(t *testing.T) {
 	t.Run("setgid", func(t *testing.T) {
 		rootPath := t.TempDir()
 		certifyLinuxExt4AuthorityTestRoot(t, rootPath)
-		if err := os.Chmod(rootPath, 0o2700); err != nil {
+		if err := os.Chmod(rootPath, 0o700|os.ModeSetgid); err != nil {
 			t.Fatal(err)
 		}
 		defer os.Chmod(rootPath, 0o700)
+		installed, err := os.Stat(rootPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if installed.Mode()&os.ModeSetgid == 0 {
+			t.Fatal("setgid inheritance witness was not installed")
+		}
 		assertLinuxNativeAuthorityRejectsBeforeProbe(
 			t, rootPath, v3RecoverySelection(t, true, 1), nil,
 		)
@@ -178,7 +187,7 @@ func TestLinuxExt4RejectsNestedMountIdentityBeforeProbe(t *testing.T) {
 	assertLinuxNativeAuthorityRejectsBeforeProbe(
 		t,
 		rootPath,
-		v3RecoverySelectionPaths(t, []string{"nested/file.bin"}, 1),
+		linuxNativeSelectionUnderParent(t, "nested", "file.bin", 1),
 		[]string{"nested"},
 		func(platform outputV3Platform) {
 			native, ok := platform.(*linuxV3Platform)
@@ -307,7 +316,7 @@ func assertLinuxNativeAuthorityRejectsBeforeProbe(
 	for index, entry := range entries {
 		gotNames[index] = entry.Name()
 	}
-	if !reflect.DeepEqual(gotNames, wantNames) {
+	if !slices.Equal(gotNames, wantNames) {
 		t.Fatalf("authority rejection root entries = %v, want %v (error %v)", gotNames, wantNames, err)
 	}
 	for _, selected := range selection.Files() {
@@ -315,6 +324,52 @@ func assertLinuxNativeAuthorityRejectsBeforeProbe(
 			t.Fatalf("authority rejection created content %q: %v", selected.Path, statErr)
 		}
 	}
+}
+
+func linuxNativeSelectionUnderParent(
+	t *testing.T,
+	parentPath string,
+	fileName string,
+	exactSize uint64,
+) transfer.OutputSelection {
+	t.Helper()
+	share := v3RecoveryIdentity16[catalog.ShareInstance](1)
+	root := v3RecoveryIdentity16[catalog.DirectoryID](2)
+	rootGeneration := v3RecoveryIdentity16[catalog.DirectoryGeneration](3)
+	parent := transfer.OutputSelectionDirectory{
+		Path: parentPath, DirectoryID: v3RecoveryIdentity16[catalog.DirectoryID](4),
+		Generation: v3RecoveryIdentity16[catalog.DirectoryGeneration](5),
+	}
+	file := transfer.OutputSelectionFile{
+		Path: parentPath + "/" + fileName, FileID: v3RecoveryIdentity16[catalog.FileID](6),
+		ParentDirectoryID: parent.DirectoryID, ParentGeneration: parent.Generation,
+		ExpectedSize: exactSize, ModifiedTime: v3RecoveryModifiedTime(t),
+	}
+	plan, err := transfer.NewOutputSelection(
+		share, root, rootGeneration,
+		[]transfer.OutputSelectionDirectory{parent},
+		[]transfer.OutputSelectionFile{file},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, err := transfer.NewSelectionRules(true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := transfer.NewCanonicalSelectionRequest(share, root, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := transfer.NewCanonicalSelectionV1(request, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := canonical.BindPlan(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return selection
 }
 
 type linuxV3NativeProbeCountingPlatform struct {

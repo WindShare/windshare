@@ -1271,6 +1271,12 @@ func (session *filesystemOutputSession) reduceFile(
 			if errors.Is(linkErr, errOutputAncestryUnsafe) {
 				return transfer.FileStart{}, outputAncestryPauseFault("revalidate recovery final publication", linkErr)
 			}
+			if publishResult == 0 && errors.Is(linkErr, errOutputV3LinkSourceChanged) {
+				return session.quarantineRecoveryStartWithCleanup(
+					file, recordDir, recordName, resumable.Bound(), resumestate.QuarantineAnchorUnsafe,
+					"close invalidated recovery publication witness", cleanupErr,
+				)
+			}
 			if publishResult == 0 && linkErr != nil {
 				if classifyOutputV3RecoveryFailure(
 					linkErr, outputV3AuthorizedMutation,
@@ -3082,6 +3088,13 @@ func (transaction *filesystemFileTransaction) publishPreparedLocked() (
 	if errors.Is(linkErr, errOutputAncestryUnsafe) {
 		return transfer.FileSettlement{}, false,
 			outputAncestryPauseFault("revalidate live final publication", linkErr)
+	}
+	if publishResult == 0 && errors.Is(linkErr, errOutputV3LinkSourceChanged) {
+		return transaction.installWitnessQuarantineWithCleanupLocked(
+			resumestate.QuarantineAnchorUnsafe,
+			"close invalidated live publication witness",
+			linkCleanupErr,
+		)
 	}
 	if publishResult == 0 && linkErr != nil {
 		if classifyOutputV3RecoveryFailure(linkErr, outputV3AuthorizedMutation) == outputV3RecoveryAmbiguous {
