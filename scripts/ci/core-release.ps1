@@ -248,11 +248,11 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
             throw 'native release root ownership was not established before worker access'
         }
 
-        $coordinatorGoExecutable = [IO.Path]::GetFullPath(
-            (Get-Command go -CommandType Application -ErrorAction Stop).Source
-        )
-        $coordinatorToolchain = Get-WindowsNativeCoordinatorGoToolchain `
-            -GoExecutable $coordinatorGoExecutable
+        $coordinatorToolchain = Get-WindowsNativeCoordinatorGoToolchain
+        Write-Output ('-- selected coordinator Go application: candidates={0}, version={1}' -f @(
+            $coordinatorToolchain.CandidateCount,
+            $coordinatorToolchain.SelectedVersion
+        ))
         $stagedToolchain = Copy-WindowsNativeGoToolchain `
             -Toolchain $coordinatorToolchain `
             -DestinationRoot (Join-Path $temporaryRoot 'go-toolchain')

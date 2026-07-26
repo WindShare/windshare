@@ -86,7 +86,7 @@ namespace WindShare.CoreRelease
     }
 }
 
-function Get-WindowsNativeLocalFixedNTFSAbsolutePath {
+function Resolve-WindowsNativeLocalFixedNTFSDirectoryLocation {
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -100,8 +100,11 @@ function Get-WindowsNativeLocalFixedNTFSAbsolutePath {
     if (-not [IO.Path]::IsPathFullyQualified($Path)) {
         throw "$Label must be an absolute path"
     }
-    $absolutePath = [IO.Path]::GetFullPath($Path)
-    $volumeRoot = [IO.Path]::GetPathRoot($absolutePath)
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        throw "$Label does not exist or is not a directory"
+    }
+    $resolvedPath = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $Path).Path)
+    $volumeRoot = [IO.Path]::GetPathRoot($resolvedPath)
     if ([string]::IsNullOrWhiteSpace($volumeRoot)) {
         throw "$Label has no volume root"
     }
@@ -113,60 +116,7 @@ function Get-WindowsNativeLocalFixedNTFSAbsolutePath {
         throw "$Label must be on NTFS, found $($drive.DriveFormat)"
     }
 
-    return $absolutePath
-}
-
-function Resolve-WindowsNativeReadableLocalFixedNTFSFile {
-    [CmdletBinding()]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Path,
-
-        [Parameter(Mandatory)]
-        [string]$Label
-    )
-
-    $absolutePath = Get-WindowsNativeLocalFixedNTFSAbsolutePath `
-        -Path $Path `
-        -Label $Label
-    $stream = $null
-    try {
-        # The setup-go cache is a trusted external input, but PowerShell's file
-        # provider can misclassify its entries. Opening the file proves the
-        # access the coordinator actually needs without changing cache ACLs.
-        $stream = [IO.File]::OpenRead($absolutePath)
-    } catch {
-        throw "$Label cannot be opened for reading: $($_.Exception.Message)"
-    } finally {
-        if ($null -ne $stream) {
-            $stream.Dispose()
-        }
-    }
-    return $absolutePath
-}
-
-function Resolve-WindowsNativeLocalFixedNTFSDirectoryLocation {
-    [CmdletBinding()]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Path,
-
-        [Parameter(Mandatory)]
-        [string]$Label
-    )
-
-    $absolutePath = Get-WindowsNativeLocalFixedNTFSAbsolutePath `
-        -Path $Path `
-        -Label $Label
-    if (-not (Test-Path -LiteralPath $absolutePath -PathType Container)) {
-        throw "$Label does not exist or is not a directory"
-    }
-    $resolvedPath = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $absolutePath).Path)
-    return Get-WindowsNativeLocalFixedNTFSAbsolutePath `
-        -Path $resolvedPath `
-        -Label $Label
+    return $resolvedPath
 }
 
 function Resolve-WindowsNativeLocalFixedNTFSDirectory {
@@ -214,17 +164,50 @@ function Assert-WindowsNativeTreeHasNoReparsePoints {
     }
 }
 
-function Get-WindowsNativeCoordinatorGoToolchain {
+function Select-WindowsNativeCoordinatorGoApplication {
     [CmdletBinding()]
     [OutputType([object])]
     param(
         [Parameter(Mandatory)]
-        [string]$GoExecutable
+        [AllowEmptyCollection()]
+        [object[]]$Candidates
     )
 
-    $resolvedGoExecutable = Resolve-WindowsNativeReadableLocalFixedNTFSFile `
-        -Path $GoExecutable `
-        -Label 'coordinator Go executable'
+    if ($Candidates.Count -eq 0) {
+        throw 'no Go application command is available on PATH'
+    }
+    $selected = $Candidates[0]
+    if ($selected -isnot [Management.Automation.ApplicationInfo]) {
+        throw 'first Go command candidate is not an ApplicationInfo'
+    }
+    $selectedPath = [string]$selected.Path
+    if ([string]::IsNullOrWhiteSpace($selectedPath) -or
+        -not [IO.Path]::IsPathFullyQualified($selectedPath)) {
+        throw 'first Go application candidate has no absolute executable path'
+    }
+    return [pscustomobject]@{
+        CandidateCount = $Candidates.Count
+        GoExecutable = [IO.Path]::GetFullPath($selectedPath)
+    }
+}
+
+function Get-WindowsNativeCoordinatorGoToolchain {
+    [CmdletBinding()]
+    [OutputType([object])]
+    param()
+
+    # Get-Command may return every matching ApplicationInfo even without -All.
+    # Select the first explicit PATH-ordered candidate, which is the application
+    # PowerShell itself invokes for the bare `go` command.
+    $applicationCandidates = @(
+        Get-Command go -CommandType Application -All -ErrorAction Stop
+    )
+    $selection = Select-WindowsNativeCoordinatorGoApplication `
+        -Candidates $applicationCandidates
+    $resolvedGoExecutable = $selection.GoExecutable
+    if (-not (Test-Path -LiteralPath $resolvedGoExecutable -PathType Leaf)) {
+        throw 'selected coordinator Go executable is not an existing file'
+    }
     $goRootOutput = @(& $resolvedGoExecutable env GOROOT)
     $goRootExitCode = $LASTEXITCODE
     if ($goRootExitCode -ne 0) {
@@ -241,11 +224,16 @@ function Get-WindowsNativeCoordinatorGoToolchain {
 
     # Hosted setup-go installations may themselves sit behind a trusted cache
     # junction. Only the copied destination is part of the worker boundary.
-    $resolvedGoRoot = Get-WindowsNativeLocalFixedNTFSAbsolutePath `
+    $resolvedGoRoot = Resolve-WindowsNativeLocalFixedNTFSDirectoryLocation `
         -Path $goRootValues[0] `
         -Label 'coordinator GOROOT'
     $expectedGoExecutable = Join-Path $resolvedGoRoot 'bin\go.exe'
-    $resolvedExpectedGoExecutable = [IO.Path]::GetFullPath($expectedGoExecutable)
+    if (-not (Test-Path -LiteralPath $expectedGoExecutable -PathType Leaf)) {
+        throw 'coordinator GOROOT has no bin\go.exe'
+    }
+    $resolvedExpectedGoExecutable = [IO.Path]::GetFullPath(
+        (Resolve-Path -LiteralPath $expectedGoExecutable).Path
+    )
     if (-not [string]::Equals(
         $resolvedGoExecutable,
         $resolvedExpectedGoExecutable,
@@ -254,8 +242,21 @@ function Get-WindowsNativeCoordinatorGoToolchain {
         throw 'coordinator Go executable is not the bin\go.exe reported by its GOROOT'
     }
 
+    $goVersionOutput = @(& $resolvedGoExecutable version)
+    $goVersionExitCode = $LASTEXITCODE
+    $goVersionValues = @($goVersionOutput | ForEach-Object {
+        ([string]$_).Trim()
+    } | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_)
+    })
+    if ($goVersionExitCode -ne 0 -or $goVersionValues.Count -ne 1) {
+        throw "resolve coordinator Go version failed with code $goVersionExitCode"
+    }
+
     return [pscustomobject]@{
         PSTypeName = 'WindShare.WindowsNativeCoordinatorGoToolchain'
+        CandidateCount = $selection.CandidateCount
+        SelectedVersion = $goVersionValues[0]
         GoRoot = $resolvedGoRoot
         GoExecutable = $resolvedGoExecutable
     }
@@ -272,14 +273,14 @@ function Copy-WindowsNativeGoToolchain {
         [string]$DestinationRoot
     )
 
-    $sourceRoot = Get-WindowsNativeLocalFixedNTFSAbsolutePath `
+    $sourceRoot = Resolve-WindowsNativeLocalFixedNTFSDirectoryLocation `
         -Path ([string]$Toolchain.GoRoot) `
         -Label 'coordinator GOROOT'
-    $sourceGoExecutable = Resolve-WindowsNativeReadableLocalFixedNTFSFile `
-        -Path ([string]$Toolchain.GoExecutable) `
-        -Label 'coordinator Go executable'
+    $sourceGoExecutable = [IO.Path]::GetFullPath(
+        (Resolve-Path -LiteralPath ([string]$Toolchain.GoExecutable)).Path
+    )
     $expectedSourceGoExecutable = [IO.Path]::GetFullPath(
-        (Join-Path $sourceRoot 'bin\go.exe')
+        (Resolve-Path -LiteralPath (Join-Path $sourceRoot 'bin\go.exe')).Path
     )
     if (-not [string]::Equals(
         $sourceGoExecutable,
