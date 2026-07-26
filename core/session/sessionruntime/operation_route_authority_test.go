@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/session/contentflow"
@@ -112,6 +113,10 @@ func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 }
 
 func TestForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
+	synctest.Test(t, testForcedHostileSameIDReuseRejectsDelayedOldRouteContext)
+}
+
+func testForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
 	// Honest receiver issuers never reuse an OperationID within a ProtocolSession.
 	// This forced post-retention collision exercises local ABA containment only.
 	var nanos atomic.Int64
@@ -160,6 +165,10 @@ func TestForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
 	); err != nil || outcome != protocolsession.SendOutcomeDelivered {
 		t.Fatalf("first final = %d, %v", outcome, err)
 	}
+	// Receipt settlement can wake the caller before the writer's deferred
+	// admission-pin release. The hostile clock jump must begin after that release
+	// or it models retention time passing while the first send is still in flight.
+	synctest.Wait()
 	nanos.Add((protocolsession.OperationTombstoneLifetime + time.Nanosecond).Nanoseconds())
 	if disposition, err := inbound.RouteInbound(context.Background(), request); err != nil ||
 		disposition != protocolsession.OperationDeliver {
