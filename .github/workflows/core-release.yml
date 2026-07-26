@@ -1,0 +1,119 @@
+name: Core Release Verification
+
+on:
+  push:
+    tags:
+      - "core/v*"
+      - "core-candidate/v*/**"
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact 40-character commit SHA to verify
+        required: true
+        type: string
+      version:
+        description: Core module version represented by the candidate
+        required: true
+        default: v0.3.0
+        type: string
+
+# Candidate code needs repository contents only. In particular, this workflow
+# cannot create a release, move a tag, publish a package, or mint an OIDC token.
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    name: Resolve exact candidate
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.candidate.outputs.commit_sha }}
+      version: ${{ steps.candidate.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Verify release-ref resolver contract
+        run: bash scripts/ci/core-release-ref.tests.sh
+      - id: candidate
+        name: Bind event to commit and module version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_CREATED: ${{ github.event.created }}
+          EVENT_DELETED: ${{ github.event.deleted }}
+          EVENT_FORCED: ${{ github.event.forced }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_AFTER: ${{ github.event.after }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          INPUT_COMMIT_SHA: ${{ inputs.commit_sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: bash scripts/ci/core-release-ref.sh
+
+  linux-ext4:
+    name: Linux ext4 extracted core and process-restart certification
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.candidate.outputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify exact clean checkout
+        env:
+          EXPECTED_SHA: ${{ needs.candidate.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: core/go.mod
+          cache: false
+      - name: Extract and verify Linux/ext4 candidate
+        env:
+          CORE_RELEASE_VERSION: ${{ needs.candidate.outputs.version }}
+          CORE_RELEASE_COMMIT_SHA: ${{ needs.candidate.outputs.commit_sha }}
+        run: bash scripts/ci/core-release.sh "$CORE_RELEASE_VERSION" "$CORE_RELEASE_COMMIT_SHA" linux-ext4
+
+  windows-ntfs:
+    name: Windows NTFS extracted core and process-restart certification
+    needs: candidate
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.candidate.outputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify exact clean checkout
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ needs.candidate.outputs.commit_sha }}
+        run: |
+          $actualSHA = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actualSHA -cne $env:EXPECTED_SHA) {
+              throw "checkout resolved to $actualSHA instead of $env:EXPECTED_SHA"
+          }
+          $status = @(git status --porcelain=v1 --untracked-files=all)
+          if ($LASTEXITCODE -ne 0 -or $status.Count -ne 0) {
+              throw "candidate checkout is not clean: $($status -join '; ')"
+          }
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: core/go.mod
+          cache: false
+      - name: Verify standard-user native gate helper contract
+        shell: pwsh
+        run: ./scripts/ci/core-release-windows-native.tests.ps1
+      - name: Extract and verify Windows/NTFS candidate
+        shell: pwsh
+        env:
+          CORE_RELEASE_VERSION: ${{ needs.candidate.outputs.version }}
+          CORE_RELEASE_COMMIT_SHA: ${{ needs.candidate.outputs.commit_sha }}
+        run: ./scripts/ci/core-release.ps1 -Version $env:CORE_RELEASE_VERSION -CommitSHA $env:CORE_RELEASE_COMMIT_SHA -NativeProfile windows-ntfs

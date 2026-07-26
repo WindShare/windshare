@@ -17,7 +17,9 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	framechannel "github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -168,21 +170,29 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 		t.Fatal(acceptedResult.err)
 	}
 	defer acceptedResult.runtime.Close()
-	outputRoot := t.TempDir()
-	output, err := receiver.OpenOutput(context.Background(), outputRoot)
-	if err != nil || output.Reopened {
-		t.Fatalf("output = %+v, %v", output, err)
+	outputFixture := testoutputroot.New(t)
+	outputRoot := outputFixture.RootPath
+	output, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{
+		RootPath: outputRoot, CreateRoot: outputFixture.CreateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(outputRoot); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("output authority created its root before terminal selection: %v", statErr)
 	}
 	// Closing the facade ends admission, but the connected runtime must retain
 	// its content-authentication resources until its own lifecycle ends.
 	receiver.Close()
 	rules, _ := transfer.NewSelectionRules(true, nil)
-	job, err := receiverRuntime.NewTransferJob(rules, output.Session)
+	job, err := receiverRuntime.NewTransferJob(rules, output)
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != transfer.JobSucceeded || result.SucceededFiles != 1 {
+	if result.Outcome != transfer.JobSucceeded || result.Settlement.Kind() != transfer.JobClosed ||
+		result.SucceededFiles != 1 || result.TerminationCause != nil || result.ResumeIntent.IsZero() ||
+		result.SelectionIdentity.IsZero() {
 		t.Fatalf("job result = %+v", result)
 	}
 	written, err := os.ReadFile(filepath.Join(outputRoot, "tree", "nested", "file.bin"))
@@ -358,13 +368,10 @@ func (channel *facadeChannel) Close() error {
 	return nil
 }
 
-func TestPreparedReceiverRejectsUseAfterClose(t *testing.T) {
+func TestPreparedReceiverRejectsConnectAfterClose(t *testing.T) {
 	receiver := &PreparedReceiver{closed: true}
 	if _, err := receiver.Connect(context.Background(), nil); err == nil {
 		t.Fatal("closed receiver accepted a channel")
-	}
-	if _, err := receiver.OpenOutput(context.Background(), t.TempDir()); err == nil {
-		t.Fatal("closed receiver opened output")
 	}
 	receiver.Close()
 }

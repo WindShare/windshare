@@ -1,10 +1,10 @@
 package transfer
 
 import (
-	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -17,6 +17,7 @@ const (
 	OutputSessionIdentityBytes = catalog.IdentityBytes
 	OutputObjectIdentityBytes  = 32
 	MaxOutputBackendIDBytes    = 128
+	maxOutputFailureTreeNodes  = 4096
 )
 
 var (
@@ -107,14 +108,67 @@ func (l OutputLocator) CanonicalPath() string       { return l.canonicalPath }
 func (l OutputLocator) Digest() OutputLocatorDigest { return l.digest }
 func (l OutputLocator) IsZero() bool                { return l.kind == 0 }
 
+// OutputFileTarget is the complete authority requested from an output backend.
+// It exists before WindShare owns a filesystem object, which keeps a pre-object
+// collision from fabricating an OutputObjectIdentity merely to identify itself.
+type OutputFileTarget struct {
+	backend    OutputBackendID
+	session    OutputSessionID
+	descriptor content.FileRevisionDescriptor
+	locator    OutputLocator
+}
+
+func NewOutputFileTarget(
+	backend OutputBackendID,
+	session OutputSessionID,
+	descriptor content.FileRevisionDescriptor,
+	locator OutputLocator,
+) (OutputFileTarget, error) {
+	target := OutputFileTarget{
+		backend: backend, session: session, descriptor: descriptor, locator: locator,
+	}
+	if !target.valid() {
+		return OutputFileTarget{}, ErrInvalidOutputBinding
+	}
+	return target, nil
+}
+
+func (target OutputFileTarget) BackendID() OutputBackendID { return target.backend }
+func (target OutputFileTarget) OutputSessionID() OutputSessionID {
+	return target.session
+}
+func (target OutputFileTarget) Descriptor() content.FileRevisionDescriptor {
+	return target.descriptor
+}
+func (target OutputFileTarget) ShareInstance() catalog.ShareInstance {
+	return target.descriptor.ShareInstance()
+}
+func (target OutputFileTarget) FileID() catalog.FileID { return target.descriptor.FileID() }
+func (target OutputFileTarget) FileRevision() content.FileRevision {
+	return target.descriptor.FileRevision()
+}
+func (target OutputFileTarget) ExactSize() uint64      { return target.descriptor.ExactSize() }
+func (target OutputFileTarget) Locator() OutputLocator { return target.locator }
+
+func (target OutputFileTarget) valid() bool {
+	if _, err := NewOutputBackendID(string(target.backend)); err != nil || target.session.IsZero() ||
+		target.descriptor.ShareInstance().IsZero() || target.descriptor.FileID().IsZero() ||
+		target.descriptor.FileRevision().IsZero() || target.locator.IsZero() {
+		return false
+	}
+	if target.locator.kind == OutputPathLocator {
+		canonical, err := catalog.CanonicalPath(target.locator.canonicalPath)
+		return err == nil && canonical == target.locator.canonicalPath
+	}
+	return target.locator.kind == OutputPersistentHandleLocator &&
+		target.locator.digest != (OutputLocatorDigest{})
+}
+
+// OutputFileBinding adds ownership of one concrete output object to the
+// immutable requested target. Durable ranges and transaction settlements use
+// this stronger identity; immediate collisions use only OutputFileTarget.
 type OutputFileBinding struct {
-	backend        OutputBackendID
-	session        OutputSessionID
-	share          catalog.ShareInstance
-	file           catalog.FileID
-	revision       content.FileRevision
-	exactSize      uint64
-	locator        OutputLocator
+	target         OutputFileTarget
 	objectIdentity OutputObjectIdentity
 }
 
@@ -125,40 +179,64 @@ func NewOutputFileBinding(
 	locator OutputLocator,
 	objectIdentity OutputObjectIdentity,
 ) (OutputFileBinding, error) {
-	if _, err := NewOutputBackendID(string(backend)); err != nil || session.IsZero() ||
-		descriptor.ShareInstance().IsZero() || descriptor.FileID().IsZero() || descriptor.FileRevision().IsZero() ||
-		locator.IsZero() || objectIdentity.IsZero() {
+	target, err := NewOutputFileTarget(backend, session, descriptor, locator)
+	if err != nil {
+		return OutputFileBinding{}, err
+	}
+	return BindOutputFileTarget(target, objectIdentity)
+}
+
+func BindOutputFileTarget(
+	target OutputFileTarget,
+	objectIdentity OutputObjectIdentity,
+) (OutputFileBinding, error) {
+	if !target.valid() || objectIdentity.IsZero() {
 		return OutputFileBinding{}, ErrInvalidOutputBinding
 	}
-	if locator.kind == OutputPathLocator {
-		if canonical, err := catalog.CanonicalPath(locator.canonicalPath); err != nil || canonical != locator.canonicalPath {
-			return OutputFileBinding{}, ErrInvalidOutputBinding
-		}
-	}
-	return OutputFileBinding{
-		backend: backend, session: session, share: descriptor.ShareInstance(), file: descriptor.FileID(),
-		revision: descriptor.FileRevision(), exactSize: descriptor.ExactSize(), locator: locator,
-		objectIdentity: objectIdentity,
-	}, nil
+	return OutputFileBinding{target: target, objectIdentity: objectIdentity}, nil
 }
 
-func (b OutputFileBinding) BackendID() OutputBackendID           { return b.backend }
-func (b OutputFileBinding) OutputSessionID() OutputSessionID     { return b.session }
-func (b OutputFileBinding) ShareInstance() catalog.ShareInstance { return b.share }
-func (b OutputFileBinding) FileID() catalog.FileID               { return b.file }
-func (b OutputFileBinding) FileRevision() content.FileRevision   { return b.revision }
-func (b OutputFileBinding) ExactSize() uint64                    { return b.exactSize }
-func (b OutputFileBinding) Locator() OutputLocator               { return b.locator }
-func (b OutputFileBinding) ObjectIdentity() OutputObjectIdentity { return b.objectIdentity }
+func (binding OutputFileBinding) Target() OutputFileTarget { return binding.target }
+func (binding OutputFileBinding) BackendID() OutputBackendID {
+	return binding.target.BackendID()
+}
+func (binding OutputFileBinding) OutputSessionID() OutputSessionID {
+	return binding.target.OutputSessionID()
+}
+func (binding OutputFileBinding) Descriptor() content.FileRevisionDescriptor {
+	return binding.target.Descriptor()
+}
+func (binding OutputFileBinding) ShareInstance() catalog.ShareInstance {
+	return binding.target.ShareInstance()
+}
+func (binding OutputFileBinding) FileID() catalog.FileID { return binding.target.FileID() }
+func (binding OutputFileBinding) FileRevision() content.FileRevision {
+	return binding.target.FileRevision()
+}
+func (binding OutputFileBinding) ExactSize() uint64      { return binding.target.ExactSize() }
+func (binding OutputFileBinding) Locator() OutputLocator { return binding.target.Locator() }
+func (binding OutputFileBinding) ObjectIdentity() OutputObjectIdentity {
+	return binding.objectIdentity
+}
+
+func (binding OutputFileBinding) valid() bool {
+	return binding.target.valid() && !binding.objectIdentity.IsZero()
+}
 
 type VerifiedDurableRanges struct {
-	binding    OutputFileBinding
-	generation uint64
-	ranges     content.RangeSet
+	binding              OutputFileBinding
+	checkpointGeneration CheckpointGeneration
+	ranges               content.RangeSet
 }
 
-func VerifyDurableRanges(binding OutputFileBinding, generation uint64, ranges content.RangeSet) (VerifiedDurableRanges, error) {
-	if binding.backend == "" || binding.session.IsZero() || binding.objectIdentity.IsZero() {
+type CheckpointGeneration uint64
+
+func VerifyDurableRanges(
+	binding OutputFileBinding,
+	checkpointGeneration CheckpointGeneration,
+	ranges content.RangeSet,
+) (VerifiedDurableRanges, error) {
+	if !binding.valid() {
 		return VerifiedDurableRanges{}, ErrInvalidOutputBinding
 	}
 	validated, err := content.NewRangeSet(ranges.Ranges())
@@ -166,15 +244,19 @@ func VerifyDurableRanges(binding OutputFileBinding, generation uint64, ranges co
 		return VerifiedDurableRanges{}, err
 	}
 	for _, current := range validated.Ranges() {
-		if current.End > binding.exactSize {
+		if current.End > binding.ExactSize() {
 			return VerifiedDurableRanges{}, ErrInvalidOutputBinding
 		}
 	}
-	return VerifiedDurableRanges{binding: binding, generation: generation, ranges: validated}, nil
+	return VerifiedDurableRanges{
+		binding: binding, checkpointGeneration: checkpointGeneration, ranges: validated,
+	}, nil
 }
 
 func (r VerifiedDurableRanges) Binding() OutputFileBinding { return r.binding }
-func (r VerifiedDurableRanges) Generation() uint64         { return r.generation }
+func (r VerifiedDurableRanges) CheckpointGeneration() CheckpointGeneration {
+	return r.checkpointGeneration
+}
 func (r VerifiedDurableRanges) Ranges() content.RangeSet {
 	clone, _ := content.NewRangeSet(r.ranges.Ranges())
 	return clone
@@ -312,68 +394,74 @@ type OutputFile struct {
 	Path         string
 	ExpectedSize uint64
 	Descriptor   content.FileRevisionDescriptor
-}
-
-type FileAbortDisposition uint8
-
-const (
-	FileAbortIsolated FileAbortDisposition = iota + 1
-	FileAbortSkippedBeforeStart
-	FileAbortRequiresJobAbort
-)
-
-type FileTransaction interface {
-	Binding() OutputFileBinding
-	WriteRange(context.Context, uint64, []byte) error
-	Checkpoint(context.Context) (VerifiedDurableRanges, error)
-	Commit(context.Context) error
-	Abort(context.Context, error) (FileAbortDisposition, error)
-}
-
-type OutputSession interface {
-	BackendID() OutputBackendID
-	SessionID() OutputSessionID
-	Capabilities() OutputCapabilities
-	EnsureDirectory(context.Context, OutputDirectory) error
-	FinalizeDirectory(context.Context, OutputDirectory) error
-	BeginFile(context.Context, OutputFile) (FileTransaction, VerifiedDurableRanges, error)
-	FinishJob(context.Context, JobOutcome) error
-	AbortJob(context.Context, error) error
+	Target       OutputFileTarget
 }
 
 type OutputSessionError struct {
-	cause error
-	fatal bool
+	cause            error
+	requiresJobPause bool
 }
 
-func NewOutputSessionError(cause error, fatal bool) error {
+func NewOutputSessionError(cause error, requiresJobPause bool) error {
 	if cause == nil {
 		cause = errors.New("output operation failed")
 	}
-	return &OutputSessionError{cause: cause, fatal: fatal}
+	return &OutputSessionError{cause: cause, requiresJobPause: requiresJobPause}
 }
 
 func (e *OutputSessionError) Error() string { return fmt.Sprintf("output session: %v", e.cause) }
 func (e *OutputSessionError) Unwrap() error { return e.cause }
-func (e *OutputSessionError) RequiresJobAbort() bool {
-	return e.fatal
+func (e *OutputSessionError) RequiresJobPause() bool {
+	return e.requiresJobPause
 }
 
-func outputFailureRequiresJobAbort(err error, capabilities OutputCapabilities) bool {
-	if outputFailureExplicitlyRequiresJobAbort(err) {
+func outputFailureRequiresJobPause(err error, capabilities OutputCapabilities) bool {
+	if outputFailureExplicitlyRequiresJobPause(err) {
 		return true
 	}
 	return !capabilities.FileFailureIsolation
 }
 
-type jobAbortRequirement interface {
+type jobPauseRequirement interface {
 	error
-	RequiresJobAbort() bool
+	RequiresJobPause() bool
 }
 
-func outputFailureExplicitlyRequiresJobAbort(err error) bool {
-	if scoped, ok := errors.AsType[jobAbortRequirement](err); ok {
-		return scoped.RequiresJobAbort()
+func outputFailureExplicitlyRequiresJobPause(err error) bool {
+	if err == nil {
+		return false
+	}
+	pending := []error{err}
+	seen := make(map[error]struct{})
+	for inspected := 0; len(pending) != 0 && inspected < maxOutputFailureTreeNodes; inspected++ {
+		last := len(pending) - 1
+		current := pending[last]
+		pending = pending[:last]
+		if current == nil {
+			continue
+		}
+		// Comparable wrapper identities make ordinary cyclic Unwrap graphs finite.
+		// The node budget also bounds pathological non-comparable implementations.
+		if reflect.TypeOf(current).Comparable() {
+			if _, duplicate := seen[current]; duplicate {
+				continue
+			}
+			seen[current] = struct{}{}
+		}
+		if scoped, ok := current.(jobPauseRequirement); ok && scoped.RequiresJobPause() {
+			return true
+		}
+		switch wrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			pending = append(pending, wrapped.Unwrap()...)
+		case interface{ Unwrap() error }:
+			pending = append(pending, wrapped.Unwrap())
+		}
 	}
 	return false
+}
+
+func isOutputFailure(err error) bool {
+	_, ok := errors.AsType[jobPauseRequirement](err)
+	return ok
 }

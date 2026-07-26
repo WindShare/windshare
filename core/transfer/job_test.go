@@ -108,16 +108,23 @@ type jobRevisionClient struct {
 	order      []catalog.FileID
 	released   []content.LeaseID
 	releaseErr error
+	openHook   func()
 }
 
 func (c *jobRevisionClient) OpenRevision(_ context.Context, file catalog.FileID) (OpenedRevision, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.order = append(c.order, file)
-	if err := c.failures[file]; err != nil {
-		return OpenedRevision{}, err
+	failure := c.failures[file]
+	opened := c.opened[file]
+	hook := c.openHook
+	c.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
-	return c.opened[file], nil
+	if failure != nil {
+		return OpenedRevision{}, failure
+	}
+	return opened, nil
 }
 
 func (c *jobRevisionClient) ReleaseRevision(_ context.Context, lease content.LeaseID) error {
@@ -191,11 +198,13 @@ type jobOutput struct {
 	session              OutputSessionID
 	durable              map[string]content.RangeSet
 	transactions         map[string]*jobFileTransaction
+	immediate            map[string]FileSettlement
 	directories          []string
 	finalized            []string
 	finished             JobOutcome
 	aborted              bool
 	ensureErr            error
+	admitErr             error
 	ensureFailures       map[string]error
 	finalizeErr          error
 	beginErr             error
@@ -204,12 +213,19 @@ type jobOutput struct {
 	nilTransaction       bool
 	transactionScript    jobTransactionScript
 	capabilitiesOverride *OutputCapabilities
+	admitted             []OutputSelection
+	events               []string
+	pauseCalls           int
+	completeCalls        int
+	completeSettlement   JobSettlementKind
+	pauseSettlement      JobSettlementKind
+	rawStart             *FileStart
 }
 
 func newJobOutput(share catalog.ShareInstance) *jobOutput {
 	return &jobOutput{
 		share: share, session: transferID[OutputSessionID](44), durable: make(map[string]content.RangeSet),
-		transactions: make(map[string]*jobFileTransaction),
+		transactions: make(map[string]*jobFileTransaction), immediate: make(map[string]FileSettlement),
 	}
 }
 
@@ -226,14 +242,26 @@ func (o *jobOutput) Capabilities() OutputCapabilities {
 	return capabilities
 }
 
-func (o *jobOutput) EnsureDirectory(_ context.Context, directory OutputDirectory) error {
-	o.mu.Lock()
-	o.directories = append(o.directories, directory.Path)
-	o.mu.Unlock()
-	if err := o.ensureFailures[directory.Path]; err != nil {
-		return err
+func (o *jobOutput) OpenSelection(_ context.Context, selection OutputSelection) (OutputSession, error) {
+	var preparationErr error
+	for _, directory := range selection.Directories() {
+		o.mu.Lock()
+		o.directories = append(o.directories, directory.Path)
+		o.events = append(o.events, "ensure:"+directory.Path)
+		o.mu.Unlock()
+		preparationErr = errors.Join(preparationErr, o.ensureFailures[directory.Path], o.ensureErr)
 	}
-	return o.ensureErr
+	if preparationErr != nil {
+		return nil, preparationErr
+	}
+	if o.admitErr != nil {
+		return nil, o.admitErr
+	}
+	o.mu.Lock()
+	o.admitted = append(o.admitted, selection)
+	o.events = append(o.events, "open")
+	o.mu.Unlock()
+	return o, nil
 }
 
 func (o *jobOutput) FinalizeDirectory(_ context.Context, directory OutputDirectory) error {
@@ -243,20 +271,25 @@ func (o *jobOutput) FinalizeDirectory(_ context.Context, directory OutputDirecto
 	return o.finalizeErr
 }
 
-func (o *jobOutput) BeginFile(_ context.Context, file OutputFile) (FileTransaction, VerifiedDurableRanges, error) {
+func (o *jobOutput) BeginFile(_ context.Context, file OutputFile) (FileStart, error) {
+	o.mu.Lock()
+	o.events = append(o.events, "begin:"+file.Path)
+	o.mu.Unlock()
 	if o.beginErr != nil {
-		return nil, VerifiedDurableRanges{}, o.beginErr
+		return FileStart{}, o.beginErr
 	}
-	locator, err := NewPathOutputLocator(file.Path)
-	if err != nil {
-		return nil, VerifiedDurableRanges{}, err
+	if o.rawStart != nil {
+		return *o.rawStart, nil
+	}
+	if settlement, ok := o.immediate[file.Path]; ok {
+		return NewFileSettlementStart(settlement)
 	}
 	var identity OutputObjectIdentity
 	digest := sha256.Sum256([]byte(file.Path))
 	copy(identity[:], digest[:])
-	binding, err := NewOutputFileBinding(jobOutputBackend, o.session, file.Descriptor, locator, identity)
+	binding, err := BindOutputFileTarget(file.Target, identity)
 	if err != nil {
-		return nil, VerifiedDurableRanges{}, err
+		return FileStart{}, err
 	}
 	o.mu.Lock()
 	durable := o.durable[file.Path]
@@ -264,24 +297,45 @@ func (o *jobOutput) BeginFile(_ context.Context, file OutputFile) (FileTransacti
 	o.transactions[file.Path] = transaction
 	o.mu.Unlock()
 	verified, err := VerifyDurableRanges(binding, 1, durable)
-	if o.nilTransaction {
-		return nil, verified, err
+	if err != nil {
+		return FileStart{}, err
 	}
-	return transaction, verified, err
+	if o.nilTransaction {
+		return FileStart{}, nil
+	}
+	return NewFileTransactionStart(transaction, verified)
 }
 
-func (o *jobOutput) FinishJob(_ context.Context, outcome JobOutcome) error {
+func (o *jobOutput) CompleteJob(_ context.Context, outcome JobOutcome) (JobSettlement, error) {
 	o.mu.Lock()
 	o.finished = outcome
+	o.completeCalls++
+	o.events = append(o.events, "complete")
 	o.mu.Unlock()
-	return o.finishErr
+	if o.finishErr != nil {
+		return JobSettlement{}, o.finishErr
+	}
+	kind := o.completeSettlement
+	if kind == 0 {
+		kind = JobClosed
+	}
+	return NewJobSettlement(kind)
 }
 
-func (o *jobOutput) AbortJob(context.Context, error) error {
+func (o *jobOutput) PauseJob(context.Context, JobPauseReason) (JobSettlement, error) {
 	o.mu.Lock()
 	o.aborted = true
+	o.pauseCalls++
+	o.events = append(o.events, "pause")
 	o.mu.Unlock()
-	return o.abortErr
+	if o.abortErr != nil {
+		return JobSettlement{}, o.abortErr
+	}
+	kind := o.pauseSettlement
+	if kind == 0 {
+		kind = JobPaused
+	}
+	return NewJobSettlement(kind)
 }
 
 type jobTransactionScript struct {
@@ -290,19 +344,29 @@ type jobTransactionScript struct {
 	omitCheckpoint   bool
 	dropPriorRanges  bool
 	commitErr        error
-	abortDisposition FileAbortDisposition
-	abortErr         error
+	commitSettlement FileSettlementKind
+	commitResult     *FileSettlement
+	pauseSettlement  FileSettlementKind
+	pauseErr         error
+	pauseResult      *FileSettlement
+	pauseHook        func(context.Context, FilePauseReason)
+	retireSettlement FileSettlementKind
+	retireErr        error
+	retireResult     *FileSettlement
 }
 
 type jobFileTransaction struct {
-	output     *jobOutput
-	binding    OutputFileBinding
-	durable    content.RangeSet
-	pending    content.RangeSet
-	generation uint64
-	committed  bool
-	aborted    bool
-	script     jobTransactionScript
+	output        *jobOutput
+	binding       OutputFileBinding
+	durable       content.RangeSet
+	pending       content.RangeSet
+	generation    CheckpointGeneration
+	commitCalls   int
+	committed     bool
+	aborted       bool
+	pauseReasons  []FilePauseReason
+	retireReasons []FileRetireReason
+	script        jobTransactionScript
 }
 
 func (t *jobFileTransaction) Binding() OutputFileBinding { return t.binding }
@@ -343,24 +407,91 @@ func (t *jobFileTransaction) Checkpoint(context.Context) (VerifiedDurableRanges,
 	return VerifyDurableRanges(t.binding, t.generation, merged)
 }
 
-func (t *jobFileTransaction) Commit(context.Context) error {
+func (t *jobFileTransaction) Commit(context.Context) (FileSettlement, error) {
+	t.commitCalls++
 	if t.script.commitErr != nil {
-		return t.script.commitErr
+		return FileSettlement{}, t.script.commitErr
+	}
+	if t.script.commitResult != nil {
+		return *t.script.commitResult, nil
 	}
 	if !RangesCoverFile(t.binding.ExactSize(), t.durable) {
-		return ErrIncompleteOutputFile
+		return FileSettlement{}, ErrIncompleteOutputFile
 	}
 	t.committed = true
-	return nil
+	kind := t.script.commitSettlement
+	if kind == 0 {
+		kind = FilePublished
+	}
+	checkpoint, err := VerifyDurableRanges(t.binding, t.generation, t.durable)
+	if err != nil {
+		return FileSettlement{}, err
+	}
+	return newJobFileSettlement(t.binding, kind, checkpoint)
 }
 
-func (t *jobFileTransaction) Abort(context.Context, error) (FileAbortDisposition, error) {
+func (t *jobFileTransaction) Pause(ctx context.Context, reason FilePauseReason) (FileSettlement, error) {
 	t.aborted = true
-	disposition := t.script.abortDisposition
-	if disposition == 0 {
-		disposition = FileAbortIsolated
+	t.pauseReasons = append(t.pauseReasons, reason)
+	if t.script.pauseHook != nil {
+		t.script.pauseHook(ctx, reason)
 	}
-	return disposition, t.script.abortErr
+	if t.script.pauseErr != nil {
+		return FileSettlement{}, t.script.pauseErr
+	}
+	if t.script.pauseResult != nil {
+		return *t.script.pauseResult, nil
+	}
+	kind := t.script.pauseSettlement
+	if kind == 0 {
+		kind = FilePaused
+	}
+	checkpoint, err := VerifyDurableRanges(t.binding, t.generation, t.durable)
+	if err != nil {
+		return FileSettlement{}, err
+	}
+	return newJobFileSettlement(t.binding, kind, checkpoint)
+}
+
+func (t *jobFileTransaction) Retire(_ context.Context, reason FileRetireReason) (FileSettlement, error) {
+	t.aborted = true
+	t.retireReasons = append(t.retireReasons, reason)
+	if t.script.retireErr != nil {
+		return FileSettlement{}, t.script.retireErr
+	}
+	if t.script.retireResult != nil {
+		return *t.script.retireResult, nil
+	}
+	kind := t.script.retireSettlement
+	if kind == 0 {
+		kind = FileRetired
+	}
+	checkpoint, err := VerifyDurableRanges(t.binding, t.generation, t.durable)
+	if err != nil {
+		return FileSettlement{}, err
+	}
+	return newJobFileSettlement(t.binding, kind, checkpoint)
+}
+
+func newJobFileSettlement(
+	binding OutputFileBinding,
+	kind FileSettlementKind,
+	checkpoint VerifiedDurableRanges,
+) (FileSettlement, error) {
+	switch kind {
+	case FilePublished, FilePaused, FilePublishBlocked:
+		return NewVerifiedFileSettlement(kind, checkpoint)
+	case FileQuarantined:
+		reference, err := NewOutputStateRef(binding.OutputSessionID(), binding.Locator().Digest())
+		if err != nil {
+			return FileSettlement{}, err
+		}
+		return NewTransactionQuarantinedFileSettlement(binding, reference, QuarantineOwnershipMismatch)
+	case FileRetired:
+		return NewRetiredFileSettlement(binding)
+	default:
+		return FileSettlement{}, ErrInvalidOutputSettlement
+	}
 }
 
 func TestTransferJobUsesCatalogClientBrokerAndSparseFileLocalResume(t *testing.T) {
@@ -469,8 +600,8 @@ func TestTransferJobRejectsRegressiveCheckpointAndCatalogCycle(t *testing.T) {
 			Blocks: scriptedRangeReader{}, Output: output,
 		})
 		result := job.Run(context.Background())
-		if result.Outcome != JobAborted || !output.aborted ||
-			!errors.Is(result.AbortCause, ErrOutputContract) {
+		if result.Outcome != JobPausedOutcome || !output.aborted ||
+			!errors.Is(result.TerminationCause, ErrOutputContract) {
 			t.Fatalf("regressive checkpoint result=%+v", result)
 		}
 	})
@@ -493,7 +624,7 @@ func TestTransferJobRejectsRegressiveCheckpointAndCatalogCycle(t *testing.T) {
 			Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
 		})
 		result := job.Run(context.Background())
-		if result.Outcome != JobAborted || !errors.Is(result.AbortCause, ErrCatalogIdentity) {
+		if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrCatalogIdentity) {
 			t.Fatalf("cyclic catalog result=%+v", result)
 		}
 	})
@@ -551,7 +682,7 @@ func (c failingCatalog) AcquireDirectory(
 	return snapshot, func() {}, err
 }
 
-func TestTransferJobIsolatesDirectoryFileAndBlockFailures(t *testing.T) {
+func TestTransferJobDiscoveryFailurePreventsRevisionAndContentWork(t *testing.T) {
 	share := transferID[catalog.ShareInstance](60)
 	root := transferID[catalog.DirectoryID](61)
 	failingDirectory := transferID[catalog.DirectoryID](62)
@@ -583,17 +714,14 @@ func TestTransferJobIsolatesDirectoryFileAndBlockFailures(t *testing.T) {
 		Revisions: revisions, Blocks: broker, Output: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != JobCompletedWithErrors || result.SucceededFiles != 1 || len(result.Directories) != 1 || len(result.Files) != 2 {
+	if result.Outcome != JobCompletedWithErrors || result.SucceededFiles != 0 || len(result.Directories) != 1 || len(result.Files) != 0 {
 		t.Fatalf("result=%+v", result)
 	}
 	if result.Measure.Class() != SelectionUnknown || result.Measure.DiscoveryTerminalSuccess {
 		t.Fatalf("failed discovery measure=%+v", result.Measure)
 	}
-	if transaction := output.transactions["block.bin"]; transaction == nil || !transaction.aborted {
-		t.Fatal("block failure did not abort only its file transaction")
-	}
-	if transaction := output.transactions["good.bin"]; transaction == nil || !transaction.committed {
-		t.Fatal("independent good file did not complete")
+	if len(revisions.order) != 0 || len(output.transactions) != 0 || len(output.admitted) != 0 {
+		t.Fatalf("incomplete discovery leaked work: revisions=%v transactions=%d admissions=%d", revisions.order, len(output.transactions), len(output.admitted))
 	}
 }
 
@@ -632,8 +760,8 @@ func TestTransferJobKeepsAdmissionLowerBoundSeparateFromExactResultMeasure(t *te
 		result.Measure.DiscoveredFiles != SmallTransferFileLimit+1 {
 		t.Fatalf("exact result=%+v", result)
 	}
-	if admissionMeasure.Class() != SelectionLarge || admissionMeasure.DiscoveredFiles != SmallTransferFileLimit ||
-		admissionMeasure.DiscoveryTerminalSuccess {
+	if admissionMeasure.Class() != SelectionLarge || admissionMeasure.DiscoveredFiles != SmallTransferFileLimit+1 ||
+		!admissionMeasure.DiscoveryTerminalSuccess {
 		t.Fatalf("admission lower bound=%+v", admissionMeasure)
 	}
 }
@@ -662,7 +790,7 @@ func TestTransferJobOmittedChildrenRemainUnknownAndCompleteWithErrors(t *testing
 		admissionMeasure = measure
 	}
 	if result.Outcome != JobCompletedWithErrors || len(result.Directories) != 1 ||
-		!errors.Is(result.Directories[0].Err, ErrCatalogEntriesOmitted) || result.Measure.Class() != SelectionUnknown {
+		!errors.Is(result.Directories[0].Cause, ErrCatalogEntriesOmitted) || result.Measure.Class() != SelectionUnknown {
 		t.Fatalf("result=%+v", result)
 	}
 	if admissionMeasure.Class() != SelectionUnknown || admissionMeasure.DiscoveryTerminalSuccess {
@@ -725,7 +853,8 @@ func TestTransferJobReportsMissingPathTargetAfterCompleteTraversal(t *testing.T)
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != JobAborted || !errors.Is(result.AbortCause, ErrSelectionTargetMissing) || !output.aborted {
+	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrSelectionTargetMissing) ||
+		output.aborted || output.pauseCalls != 0 || output.completeCalls != 0 {
 		t.Fatalf("result=%+v output aborted=%v", result, output.aborted)
 	}
 }
@@ -737,22 +866,22 @@ func (s sessionFailingBlocks) ReadRange(context.Context, content.LeaseID, conten
 }
 
 type crossCancelCatalog struct {
-	root         catalog.DirectoryID
-	rootSnapshot catalog.DirectorySnapshot
-	childStarted chan struct{}
-	childDone    chan struct{}
-	startOnce    sync.Once
-	doneOnce     sync.Once
+	root          catalog.DirectoryID
+	rootSnapshot  catalog.DirectorySnapshot
+	childSnapshot catalog.DirectorySnapshot
+	childStarted  chan struct{}
+	childDone     chan struct{}
+	startOnce     sync.Once
+	doneOnce      sync.Once
 }
 
-func (source *crossCancelCatalog) LoadDirectory(ctx context.Context, directory catalog.DirectoryID) (catalog.DirectorySnapshot, error) {
+func (source *crossCancelCatalog) LoadDirectory(_ context.Context, directory catalog.DirectoryID) (catalog.DirectorySnapshot, error) {
 	if directory == source.root {
 		return source.rootSnapshot, nil
 	}
 	source.startOnce.Do(func() { close(source.childStarted) })
-	<-ctx.Done()
 	source.doneOnce.Do(func() { close(source.childDone) })
-	return catalog.DirectorySnapshot{}, ctx.Err()
+	return source.childSnapshot, nil
 }
 
 func (source *crossCancelCatalog) AcquireDirectory(
@@ -764,8 +893,8 @@ func (source *crossCancelCatalog) AcquireDirectory(
 }
 
 type childSynchronizedFatalBlocks struct {
-	childStarted <-chan struct{}
-	err          error
+	childDone <-chan struct{}
+	err       error
 }
 
 func (blocks childSynchronizedFatalBlocks) ReadRange(
@@ -775,11 +904,11 @@ func (blocks childSynchronizedFatalBlocks) ReadRange(
 	content.Range,
 	RangeSink,
 ) error {
-	<-blocks.childStarted
+	<-blocks.childDone
 	return blocks.err
 }
 
-func TestTransferJobExecutionFatalCancelsAndJoinsAdmissionProbe(t *testing.T) {
+func TestTransferJobCompletesCatalogDiscoveryBeforeFirstRange(t *testing.T) {
 	share := transferID[catalog.ShareInstance](143)
 	root := transferID[catalog.DirectoryID](144)
 	child := transferID[catalog.DirectoryID](145)
@@ -791,7 +920,8 @@ func TestTransferJobExecutionFatalCancelsAndJoinsAdmissionProbe(t *testing.T) {
 		rootSnapshot: jobSnapshot(t, share, root, 1,
 			jobEntry(t, file, "file.bin", 1), jobDirectoryEntry(t, child, "later"),
 		),
-		childStarted: make(chan struct{}), childDone: make(chan struct{}),
+		childSnapshot: jobSnapshot(t, share, child, 2),
+		childStarted:  make(chan struct{}), childDone: make(chan struct{}),
 	}
 	fatal := NewSessionFailure(errors.New("content authority ended"))
 	rules, _ := NewSelectionRules(true, nil)
@@ -800,19 +930,19 @@ func TestTransferJobExecutionFatalCancelsAndJoinsAdmissionProbe(t *testing.T) {
 		Revisions: &jobRevisionClient{
 			opened: map[catalog.FileID]OpenedRevision{file: opened}, failures: make(map[catalog.FileID]error),
 		},
-		Blocks: childSynchronizedFatalBlocks{childStarted: source.childStarted, err: fatal}, Output: newJobOutput(share),
+		Blocks: childSynchronizedFatalBlocks{childDone: source.childDone, err: fatal}, Output: newJobOutput(share),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != JobAborted || !errors.Is(result.AbortCause, fatal) {
+	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, fatal) {
 		t.Fatalf("result=%+v", result)
 	}
 	select {
 	case <-source.childDone:
 	default:
-		t.Fatal("job returned before the cancelled admission probe joined")
+		t.Fatal("file range started before catalog discovery completed")
 	}
 }
 
@@ -837,13 +967,150 @@ func TestTransferJobSessionFailureAbortsJob(t *testing.T) {
 		Revisions: revisions, Blocks: sessionFailingBlocks{err: terminal}, Output: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != JobAborted || !errors.Is(result.AbortCause, terminal) || !output.aborted || output.finished != 0 ||
-		result.Measure.Class() != SelectionUnknown || result.Measure.DiscoveryTerminalSuccess ||
-		result.Measure.DiscoveredFiles > 2 || result.Measure.DiscoveredBytes > 2*chunk {
+	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, terminal) || !output.aborted || output.finished != 0 ||
+		result.Measure.Class() != SelectionSmall || !result.Measure.DiscoveryTerminalSuccess ||
+		result.Measure.DiscoveredFiles != 2 || result.Measure.DiscoveredBytes != 2*chunk {
 		t.Fatalf("result=%+v output=%+v", result, output)
 	}
-	if second := job.Run(context.Background()); second.Outcome != JobAborted || !errors.Is(second.AbortCause, ErrTransferJobRun) {
+	if second := job.Run(context.Background()); second.Outcome != JobPausedOutcome || !errors.Is(second.TerminationCause, ErrTransferJobRun) {
 		t.Fatalf("second run=%+v", second)
+	}
+}
+
+type retiredCountingRangeReader struct{ calls int }
+
+func (reader *retiredCountingRangeReader) ReadRange(
+	context.Context,
+	content.LeaseID,
+	content.FileRevisionDescriptor,
+	content.Range,
+	RangeSink,
+) error {
+	reader.calls++
+	return nil
+}
+
+func TestTransferJobAcceptsRecoveredImmediateRetirementWithoutContentOrSecondFileSettlement(t *testing.T) {
+	share := transferID[catalog.ShareInstance](96)
+	output := newJobOutput(share)
+	revisions := &jobRevisionClient{}
+	blocks := &retiredCountingRangeReader{}
+	job, file := branchJob(t, output, revisions, blocks)
+	opened := revisions.opened[file]
+	locator, err := NewPathOutputLocator("file.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := NewOutputFileTarget(output.BackendID(), output.SessionID(), opened.Descriptor, locator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identity OutputObjectIdentity
+	digest := sha256.Sum256([]byte("recovered-retiring-output"))
+	copy(identity[:], digest[:])
+	binding, err := BindOutputFileTarget(target, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retired, err := NewRetiredFileSettlement(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output.immediate["file.bin"] = retired
+
+	result := job.Run(context.Background())
+	if result.Outcome != JobCompletedWithErrors || result.Settlement.Kind() != JobClosed ||
+		result.TerminationCause != nil || result.SettlementFailure != nil || result.SucceededFiles != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(result.Files) != 1 || !errors.Is(result.Files[0].Cause, ErrOutputRetired) ||
+		result.Files[0].SettlementFailure != nil {
+		t.Fatalf("retired file result = %+v", result.Files)
+	}
+	settledBinding, bound := result.Files[0].Settlement.OutputBinding()
+	if result.Files[0].Settlement.Kind() != FileRetired || !bound || settledBinding != binding {
+		t.Fatalf("retired settlement = %+v", result.Files[0].Settlement)
+	}
+	if blocks.calls != 0 || len(output.transactions) != 0 || output.pauseCalls != 0 ||
+		output.completeCalls != 1 || output.finished != JobCompletedWithErrors {
+		t.Fatalf(
+			"range calls=%d transactions=%d pause=%d complete=%d outcome=%v",
+			blocks.calls, len(output.transactions), output.pauseCalls, output.completeCalls, output.finished,
+		)
+	}
+	if !slices.Equal(revisions.released, []content.LeaseID{opened.LeaseID}) {
+		t.Fatalf("released leases = %v, want %v", revisions.released, opened.LeaseID)
+	}
+}
+
+func TestTransferJobRetiresOnlyWithTypedPermanentSourceAuthority(t *testing.T) {
+	tests := []struct {
+		name        string
+		blocks      RangeReader
+		configure   func(*jobOutput)
+		wantOutcome JobOutcome
+		wantPause   FilePauseReason
+		wantRetire  FileRetireReason
+	}{
+		{
+			name:        "unclassified range failure pauses",
+			blocks:      scriptedRangeReader{err: errors.New("retryable transport failure")},
+			wantOutcome: JobPausedOutcome, wantPause: FilePauseTransportFailure,
+		},
+		{
+			name:   "output sink failure cannot impersonate a permanent source failure",
+			blocks: scriptedRangeReader{},
+			configure: func(output *jobOutput) {
+				output.transactionScript.writeErr = NewOutputSessionError(errors.New("output temporarily unavailable"), false)
+			},
+			wantOutcome: JobPausedOutcome, wantPause: FilePauseOutputFailure,
+		},
+		{
+			name: "permanent marker cannot override output fault scope",
+			blocks: scriptedRangeReader{err: errors.Join(
+				NewIsolatedPermanentSourceFailure(errors.New("source denied file")),
+				NewOutputFault(OutputFaultFile, OutputFaultStateIO, errors.New("checkpoint unavailable")),
+			)},
+			wantOutcome: JobPausedOutcome, wantPause: FilePauseOutputFailure,
+		},
+		{
+			name:        "typed permanent source failure retires",
+			blocks:      scriptedRangeReader{err: NewIsolatedPermanentSourceFailure(errors.New("source denied file"))},
+			wantOutcome: JobCompletedWithErrors,
+			wantRetire:  FileRetireIsolatedPermanentSourceFailure,
+		},
+		{
+			name:        "invalidated revision retires with its precise reason",
+			blocks:      scriptedRangeReader{err: content.ErrRevisionDrift},
+			wantOutcome: JobCompletedWithErrors,
+			wantRetire:  FileRetireInvalidatedRevision,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			share := transferID[catalog.ShareInstance](97)
+			output := newJobOutput(share)
+			if test.configure != nil {
+				test.configure(output)
+			}
+			job, _ := branchJob(t, output, &jobRevisionClient{}, test.blocks)
+			result := job.Run(context.Background())
+			transaction := output.transactions["file.bin"]
+			if transaction == nil || result.Outcome != test.wantOutcome || len(result.Files) != 1 {
+				t.Fatalf("result=%+v transaction=%+v", result, transaction)
+			}
+			if test.wantPause != 0 {
+				if !slices.Equal(transaction.pauseReasons, []FilePauseReason{test.wantPause}) ||
+					len(transaction.retireReasons) != 0 || result.Files[0].Settlement.Kind() != FilePaused {
+					t.Fatalf("pause=%v retire=%v failure=%+v", transaction.pauseReasons, transaction.retireReasons, result.Files[0])
+				}
+				return
+			}
+			if !slices.Equal(transaction.retireReasons, []FileRetireReason{test.wantRetire}) ||
+				len(transaction.pauseReasons) != 0 || result.Files[0].Settlement.Kind() != FileRetired {
+				t.Fatalf("pause=%v retire=%v failure=%+v", transaction.pauseReasons, transaction.retireReasons, result.Files[0])
+			}
+		})
 	}
 }
 
@@ -880,11 +1147,11 @@ func TestTransferJobRevisionSessionFailureStopsBeforeNextFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != JobAborted || !errors.Is(result.AbortCause, terminal) ||
+	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, terminal) ||
 		len(result.Files) != 0 || len(revisions.order) != 1 || !output.aborted || output.finished != 0 {
 		t.Fatalf(
 			"outcome=%v abort=%v file failures=%d revision attempts=%d output aborted=%v finished=%v",
-			result.Outcome, result.AbortCause, len(result.Files), len(revisions.order), output.aborted, output.finished,
+			result.Outcome, result.TerminationCause, len(result.Files), len(revisions.order), output.aborted, output.finished,
 		)
 	}
 }
@@ -902,7 +1169,7 @@ func TestTransferJobCancellationDuringDiscoveryIsAborted(t *testing.T) {
 		Revisions: &jobRevisionClient{}, Blocks: sessionFailingBlocks{}, Output: output,
 	})
 	result := job.Run(ctx)
-	if result.Outcome != JobAborted || !errors.Is(result.AbortCause, context.Canceled) {
+	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, context.Canceled) {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -914,10 +1181,10 @@ func TestSessionFailureMarkerAndOutputErrorScope(t *testing.T) {
 	fatal := NewOutputSessionError(errors.New("journal"), true)
 	nonfatal := NewOutputSessionError(errors.New("file"), false)
 	capabilities := newJobOutput(transferID[catalog.ShareInstance](1)).Capabilities()
-	if !outputFailureRequiresJobAbort(fatal, capabilities) || outputFailureRequiresJobAbort(nonfatal, capabilities) {
+	if !outputFailureRequiresJobPause(fatal, capabilities) || outputFailureRequiresJobPause(nonfatal, capabilities) {
 		t.Fatal("output error scope classification failed")
 	}
-	if !outputFailureExplicitlyRequiresJobAbort(fatal) || outputFailureExplicitlyRequiresJobAbort(nonfatal) {
+	if !outputFailureExplicitlyRequiresJobPause(fatal) || outputFailureExplicitlyRequiresJobPause(nonfatal) {
 		t.Fatal("explicit output error scope classification failed")
 	}
 	if (&OutputSessionError{cause: errors.New("x")}).Error() == "" {
@@ -980,7 +1247,10 @@ func TestTransferJobValidationEmptySelectionAndFailureBranches(t *testing.T) {
 	emptyOutput := newJobOutput(share)
 	emptyJob, err := NewTransferJob(TransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: emptyRules,
-		Catalog:   failingCatalog{failures: map[catalog.DirectoryID]error{root: errors.New("must not load")}},
+		Catalog: failingCatalog{
+			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{root: jobSnapshot(t, share, root, 1)},
+			failures:  make(map[catalog.DirectoryID]error),
+		},
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: emptyOutput,
 	})
 	if err != nil {
@@ -1002,47 +1272,46 @@ func TestTransferJobValidationEmptySelectionAndFailureBranches(t *testing.T) {
 		}, blocks: scriptedRangeReader{}, wantOutcome: JobCompletedWithErrors, wantFailureStage: FailureFileOutput},
 		{name: "fatal begin", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.beginErr = NewOutputSessionError(errors.New("journal"), true)
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobAborted},
+		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
 		{name: "canceled begin", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.beginErr = context.Canceled
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobAborted},
+		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
 		{name: "nil transaction contract", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.nilTransaction = true
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobAborted},
+		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
 		{name: "write", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.writeErr = errors.New("disk full")
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobCompletedWithErrors, wantFailureStage: FailureBlockTransfer},
+		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome, wantFailureStage: FailureBlockTransfer},
 		{name: "checkpoint", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.checkpointErr = errors.New("sync failed")
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobCompletedWithErrors, wantFailureStage: FailureFileOutput},
+		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome, wantFailureStage: FailureFileOutput},
 		{name: "fatal checkpoint cannot be skipped", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.checkpointErr = NewOutputSessionError(errors.New("backend lost"), true)
-			output.transactionScript.abortDisposition = FileAbortSkippedBeforeStart
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobAborted},
+		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
 		{name: "canceled checkpoint", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.checkpointErr = context.Canceled
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobAborted},
+		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
 		{name: "checkpoint contract", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.omitCheckpoint = true
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobAborted},
+		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
 		{name: "commit", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.commitErr = errors.New("publish failed")
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobCompletedWithErrors, wantFailureStage: FailureFileOutput},
+		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome, wantFailureStage: FailureFileOutput},
 		{name: "release", configure: func(_ *jobOutput, revisions *jobRevisionClient, _ catalog.FileID) {
 			revisions.releaseErr = errors.New("release failed")
 		}, blocks: scriptedRangeReader{}, wantOutcome: JobCompletedWithErrors, wantFailureStage: FailureLeaseRelease},
 		{name: "canceled release", configure: func(_ *jobOutput, revisions *jobRevisionClient, _ catalog.FileID) {
 			revisions.releaseErr = context.Canceled
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobAborted},
+		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
 		{name: "finish", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.finishErr = errors.New("finalize failed")
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobAborted},
-		{name: "abort disposition", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
-			output.transactionScript.abortDisposition = FileAbortRequiresJobAbort
-		}, blocks: scriptedRangeReader{err: errors.New("block failed")}, wantOutcome: JobAborted},
-		{name: "invalid abort disposition", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
-			output.transactionScript.abortDisposition = FileAbortDisposition(99)
-		}, blocks: scriptedRangeReader{err: errors.New("block failed")}, wantOutcome: JobAborted},
+		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
+		{name: "invalid retire settlement", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
+			output.transactionScript.retireSettlement = FilePublished
+		}, blocks: scriptedRangeReader{err: NewIsolatedPermanentSourceFailure(errors.New("block failed"))}, wantOutcome: JobPausedOutcome},
+		{name: "unknown retire settlement", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
+			output.transactionScript.retireSettlement = FileSettlementKind(99)
+		}, blocks: scriptedRangeReader{err: NewIsolatedPermanentSourceFailure(errors.New("block failed"))}, wantOutcome: JobPausedOutcome},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1077,17 +1346,16 @@ func TestTransferJobRevisionIdentitySessionReleaseAndStreamSkipBranches(t *testi
 	output = newJobOutput(share)
 	revisions = &jobRevisionClient{releaseErr: NewSessionFailure(errors.New("session closed"))}
 	job, _ = branchJob(t, output, revisions, scriptedRangeReader{})
-	if result = job.Run(context.Background()); result.Outcome != JobAborted {
+	if result = job.Run(context.Background()); result.Outcome != JobPausedOutcome {
 		t.Fatalf("session release result=%+v", result)
 	}
 
 	streamCapabilities, _ := NewOutputCapabilities(OutputCapabilities{Durability: DurabilityNone, Mode: OutputSingleFileStream})
 	output = newJobOutput(share)
 	output.capabilitiesOverride = &streamCapabilities
-	output.transactionScript.abortDisposition = FileAbortSkippedBeforeStart
 	revisions = &jobRevisionClient{}
 	job, _ = branchJob(t, output, revisions, scriptedRangeReader{err: errors.New("file unavailable")})
-	if result = job.Run(context.Background()); result.Outcome != JobCompletedWithErrors {
+	if result = job.Run(context.Background()); result.Outcome != JobPausedOutcome {
 		t.Fatalf("unstarted stream result=%+v", result)
 	}
 }
@@ -1105,11 +1373,11 @@ func TestTransferJobDirectoryOutputAndCatalogIdentityBranches(t *testing.T) {
 		finalizeErr error
 		want        JobOutcome
 	}{
-		{name: "ensure isolated", ensureErr: errors.New("mkdir denied"), want: JobCompletedWithErrors},
+		{name: "ensure failure before session open", ensureErr: errors.New("mkdir denied"), want: JobPausedOutcome},
 		{name: "finalize isolated", finalizeErr: errors.New("mtime denied"), want: JobCompletedWithErrors},
-		{name: "ensure fatal", ensureErr: NewOutputSessionError(errors.New("backend lost"), true), want: JobAborted},
-		{name: "ensure canceled", ensureErr: context.Canceled, want: JobAborted},
-		{name: "finalize deadline", finalizeErr: context.DeadlineExceeded, want: JobAborted},
+		{name: "ensure fatal", ensureErr: NewOutputSessionError(errors.New("backend lost"), true), want: JobPausedOutcome},
+		{name: "ensure canceled", ensureErr: context.Canceled, want: JobPausedOutcome},
+		{name: "finalize deadline", finalizeErr: context.DeadlineExceeded, want: JobPausedOutcome},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			output := newJobOutput(share)
@@ -1131,7 +1399,7 @@ func TestTransferJobDirectoryOutputAndCatalogIdentityBranches(t *testing.T) {
 		Catalog:   failingCatalog{snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{root: foreignSnapshot}, failures: make(map[catalog.DirectoryID]error)},
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
 	})
-	if result := job.Run(context.Background()); result.Outcome != JobAborted || result.AbortCause == nil {
+	if result := job.Run(context.Background()); result.Outcome != JobPausedOutcome || result.TerminationCause == nil {
 		t.Fatalf("foreign snapshot result=%+v", result)
 	}
 }

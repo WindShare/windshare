@@ -390,7 +390,7 @@ func (runtime *ReceiverRuntime) ReleaseRevision(ctx context.Context, lease conte
 
 func (runtime *ReceiverRuntime) NewTransferJob(
 	rules transfer.SelectionRules,
-	output transfer.OutputSession,
+	output transfer.OutputAuthority,
 ) (*transfer.TransferJob, error) {
 	dependencies := receiverTransferDependencies{runtime: runtime}
 	return transfer.NewTransferJob(transfer.TransferJobConfig{

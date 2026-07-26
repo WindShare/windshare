@@ -15,6 +15,15 @@ name: CI
 
 on:
   push:
+    # Core candidate and final tags have a dedicated two-OS release-verification
+    # workflow. Branches and every other tag, including root v* tags, retain CI.
+    # Branches are explicit because GitHub suppresses branch pushes whenever a
+    # workflow declares tag filters without a branch filter.
+    branches:
+      - "**"
+    tags-ignore:
+      - "core/v*"
+      - "core-candidate/v*/**"
   pull_request:
 
 env:
@@ -149,22 +158,22 @@ jobs:
         run: bash scripts/ci/vectors.sh
 
   core-release:
-    name: Core module release artifact (canonical zip, extracted tests)
+    name: Core module release artifact and Linux/ext4 certification
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.work
+          go-version-file: core/go.mod
+          cache: false
       # The extracted artifact has no parent repository or go.work, so package
       # tests cannot accidentally consume files outside the published module.
+      # The native profile is explicit here so workflow review cannot weaken the
+      # non-skippable ext4 certification by changing host detection.
       - name: build and validate deterministic core module artifact
-        run: bash scripts/ci/core-release.sh
+        run: bash scripts/ci/core-release.sh v0.3.0 "$GITHUB_SHA" linux-ext4
 
   gowork-off-root:
-    # A core tag intentionally precedes the root require-version bump. Every
-    # other ref, including root tags and pull requests, must prove consumption.
-    if: ${{ !startsWith(github.ref, 'refs/tags/core/') }}
     name: GOWORK=off root build
     runs-on: ubuntu-latest
     env:
@@ -174,9 +183,9 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
-      # G-EXT resolved 2026-07-13: core/v0.1.1 is published and the root
-      # module requires it by version, so the two-module release invariant
-      # (root builds without the workspace, no replace) is a hard gate.
+      # The dedicated core-tag workflow owns the core-first cut. Every event
+      # reaching ordinary CI must prove the root consumes a published core
+      # version without a workspace or replace directive.
       - name: root module GOWORK=off build
         run: go build ./...
 

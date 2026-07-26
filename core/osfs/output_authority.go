@@ -3,92 +3,542 @@ package osfs
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"errors"
-	"fmt"
 	"io"
-	"io/fs"
 	"math"
-	"os"
-	"path/filepath"
-	"slices"
-	"strings"
+	"runtime"
+	"sync"
 
-	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 )
 
-const (
-	OutputResumeIntentBytes    = sha256.Size
-	MaxOutputJournalCandidates = 256
-	outputIntentLockPrefix     = ".wsresume-output-intent-"
-	outputQuarantinePrefix     = ".wsresume-output-quarantine-"
-	outputDiscoveryBatchSize   = 128
-)
+const maxFilesystemOutputTransactions = 32
+
+const filesystemOutputBackendName = "windshare/native-output/v3"
+
+var filesystemOutputBackendID = func() transfer.OutputBackendID {
+	backend, err := transfer.NewOutputBackendID(filesystemOutputBackendName)
+	if err != nil {
+		panic(err)
+	}
+	return backend
+}()
 
 var (
-	ErrOutputDiscoveryAmbiguous = errors.New("osfs: more than one output session matches the resume intent")
-	ErrOutputDiscoveryLimit     = errors.New("osfs: output journal discovery limit reached")
-	ErrOutputDiscoveryUnsafe    = errors.New("osfs: output journal cannot be safely classified")
+	errUnsupportedOutputVolume = errors.New("osfs: output root is not on a certified filesystem")
+	errOutputRootUnsafe        = errors.New("osfs: output root recovery metadata is unsafe")
+	errOutputIntentUnsafe      = errors.New("osfs: resume-intent namespace is unsafe")
+	errOutputSessionActive     = errors.New("osfs: output session is already active")
+	errOutputSessionClosed     = errors.New("osfs: output session is closed")
+	errOutputFileActive        = errors.New("osfs: output file transaction is already active")
+	errOutputTransactionLimit  = errors.New("osfs: output transaction limit reached")
+	errOutputInspectionLimit   = errors.New("osfs: output namespace inspection limit reached")
+	errLegacyOutputState       = errors.New("osfs: legacy v2 output state is untrusted")
+	errReservedOutputPath      = errors.New("osfs: selected output path collides with private output state")
 )
 
-type OutputResumeIntent [OutputResumeIntentBytes]byte
-
-func OutputResumeIntentFromBytes(raw []byte) (OutputResumeIntent, error) {
-	if len(raw) != OutputResumeIntentBytes {
-		return OutputResumeIntent{}, transfer.ErrInvalidOutputBinding
-	}
-	var intent OutputResumeIntent
-	copy(intent[:], raw)
-	if intent.IsZero() {
-		return OutputResumeIntent{}, transfer.ErrInvalidOutputBinding
-	}
-	return intent, nil
+type FilesystemResumeRoot struct {
+	RootPath string
 }
 
-func (i OutputResumeIntent) Bytes() []byte { return append([]byte(nil), i[:]...) }
-func (i OutputResumeIntent) IsZero() bool  { return i == OutputResumeIntent{} }
+type ResumeAttentionScope uint8
 
-// FilesystemOutputIntent is the stable, caller-owned job identity. The random
-// OutputSessionID is deliberately absent: discovery obtains it only from a
-// validated journal bound to this share, intent, backend, and retained root.
-type FilesystemOutputIntent struct {
-	RootPath      string
-	ShareInstance catalog.ShareInstance
-	ResumeIntent  OutputResumeIntent
+const (
+	ResumeAttentionFile ResumeAttentionScope = iota + 1
+	ResumeAttentionIntent
+	ResumeAttentionRoot
+	ResumeAttentionLegacy
+)
+
+type ResumeAttention struct {
+	Scope  ResumeAttentionScope
+	Code   string
+	State  string
+	Detail string
 }
 
-type OutputSessionIDGenerator interface {
+type ResumeStateKind uint8
+
+const (
+	ResumeStateRecoverable ResumeStateKind = iota + 1
+	ResumeStateNeedsAttention
+	ResumeStateLegacyUntrusted
+	ResumeStateOpaqueUnsafe
+)
+
+type resumeStateEntryPin struct {
+	mu       sync.Mutex
+	entry    outputV3EntryRef
+	consumed bool
+}
+
+// resumeStateDirectoryPin shares one fixed root handle across legacy inventory
+// items. Each item owns one reference so consuming an item transfers its root
+// authority independently from closing the rest of the inventory.
+type resumeStateDirectoryPin struct {
+	mu         sync.Mutex
+	directory  outputV3Directory
+	references uint64
+}
+
+func newResumeStateDirectoryPin(directory outputV3Directory) *resumeStateDirectoryPin {
+	if directory == nil {
+		return nil
+	}
+	pin := &resumeStateDirectoryPin{directory: directory, references: 1}
+	runtime.SetFinalizer(pin, func(stale *resumeStateDirectoryPin) { _ = stale.forceClose() })
+	return pin
+}
+
+func (pin *resumeStateDirectoryPin) retain() bool {
+	if pin == nil {
+		return false
+	}
+	pin.mu.Lock()
+	defer pin.mu.Unlock()
+	if pin.directory == nil || pin.references == 0 || pin.references == math.MaxUint64 {
+		return false
+	}
+	pin.references++
+	return true
+}
+
+func (pin *resumeStateDirectoryPin) available() bool {
+	if pin == nil {
+		return false
+	}
+	pin.mu.Lock()
+	defer pin.mu.Unlock()
+	return pin.directory != nil && pin.references != 0
+}
+
+func (pin *resumeStateDirectoryPin) fixedDirectory() outputV3Directory {
+	if pin == nil {
+		return nil
+	}
+	pin.mu.Lock()
+	defer pin.mu.Unlock()
+	if pin.references == 0 {
+		return nil
+	}
+	return pin.directory
+}
+
+func (pin *resumeStateDirectoryPin) Close() error {
+	if pin == nil {
+		return nil
+	}
+	pin.mu.Lock()
+	if pin.directory == nil || pin.references == 0 {
+		pin.mu.Unlock()
+		return nil
+	}
+	pin.references--
+	if pin.references != 0 {
+		pin.mu.Unlock()
+		return nil
+	}
+	directory := pin.directory
+	pin.directory = nil
+	runtime.SetFinalizer(pin, nil)
+	pin.mu.Unlock()
+	return directory.Close()
+}
+
+func (pin *resumeStateDirectoryPin) forceClose() error {
+	if pin == nil {
+		return nil
+	}
+	pin.mu.Lock()
+	directory := pin.directory
+	pin.directory = nil
+	pin.references = 0
+	runtime.SetFinalizer(pin, nil)
+	pin.mu.Unlock()
+	return closeOutputV3Directory(directory)
+}
+
+func newResumeStateEntryPin(entry outputV3EntryRef) *resumeStateEntryPin {
+	if entry == nil {
+		return nil
+	}
+	pin := &resumeStateEntryPin{entry: entry}
+	runtime.SetFinalizer(pin, func(stale *resumeStateEntryPin) { _ = stale.Close() })
+	return pin
+}
+
+func (pin *resumeStateEntryPin) available() bool {
+	if pin == nil {
+		return false
+	}
+	pin.mu.Lock()
+	defer pin.mu.Unlock()
+	return !pin.consumed && pin.entry != nil
+}
+
+func (pin *resumeStateEntryPin) take() outputV3EntryRef {
+	if pin == nil {
+		return nil
+	}
+	pin.mu.Lock()
+	defer pin.mu.Unlock()
+	if pin.consumed || pin.entry == nil {
+		return nil
+	}
+	entry := pin.entry
+	pin.entry = nil
+	pin.consumed = true
+	runtime.SetFinalizer(pin, nil)
+	return entry
+}
+
+func (pin *resumeStateEntryPin) Close() error {
+	if pin == nil {
+		return nil
+	}
+	pin.mu.Lock()
+	entry := pin.entry
+	pin.entry = nil
+	pin.consumed = true
+	runtime.SetFinalizer(pin, nil)
+	pin.mu.Unlock()
+	if entry == nil {
+		return nil
+	}
+	return entry.Close()
+}
+
+type ResumeStateRef struct {
+	inventory       *ResumeStateInventory
+	itemID          uint64
+	rootPath        string
+	root            resumestate.OutputRootBinding
+	intent          transfer.ResumeIntent
+	session         transfer.OutputSessionID
+	kind            ResumeStateKind
+	namespaceName   string
+	sessionName     string
+	sessionKind     outputV3EntryKind
+	sessionPin      *resumeStateEntryPin
+	legacyName      string
+	legacyRemovable bool
+	legacySize      uint64
+	legacyDigest    [32]byte
+	legacyPin       *resumeStateEntryPin
+	legacyRoot      *resumeStateDirectoryPin
+}
+
+func (reference ResumeStateRef) ResumeIntent() transfer.ResumeIntent { return reference.intent }
+func (reference ResumeStateRef) SessionID() transfer.OutputSessionID { return reference.session }
+func (reference ResumeStateRef) Kind() ResumeStateKind               { return reference.kind }
+
+func (reference ResumeStateRef) validAuthority() bool {
+	if reference.rootPath == "" || reference.kind < ResumeStateRecoverable || reference.kind > ResumeStateOpaqueUnsafe {
+		return false
+	}
+	if reference.kind == ResumeStateLegacyUntrusted {
+		// Portable inventory is available even when v3 certification is unsupported.
+		// Discard must reach platform certification to return that typed refusal;
+		// discardLegacyState separately requires both live native pins before mutation.
+		return reference.legacyName != ""
+	}
+	if reference.kind == ResumeStateOpaqueUnsafe {
+		if reference.root.IsZero() || reference.namespaceName == "" {
+			return false
+		}
+		// Intent-only opaque references are listable but deliberately cannot grant
+		// destructive authority. A session-scoped opaque reference is minted only
+		// from an enumerated, fixed directory and carries that object's identity.
+		return reference.sessionName == "" ||
+			(reference.sessionKind != outputV3EntryAbsent && reference.sessionPin.available())
+	}
+	return !reference.root.IsZero() && !reference.intent.IsZero() && !reference.session.IsZero() &&
+		reference.namespaceName != "" && reference.sessionName != "" &&
+		reference.sessionKind == outputV3EntryDirectory && reference.sessionPin.available()
+}
+
+type ResumeStateSummary struct {
+	Reference      ResumeStateRef
+	Lifecycle      ResumeSessionLifecycle
+	FileRecords    uint64
+	AllocatedBytes uint64
+	Attention      []ResumeAttention
+}
+
+type resumeStateInventoryItem struct {
+	authority ResumeStateRef
+}
+
+// ResumeStateInventory owns the native entry pins behind one stable inventory.
+// Close releases every unconsumed item. A successful or failed discard consumes
+// exactly one item; callers must perform a fresh inventory before retrying.
+type ResumeStateInventory struct {
+	mu        sync.Mutex
+	summaries []ResumeStateSummary
+	items     map[uint64]resumeStateInventoryItem
+	closed    bool
+}
+
+func newResumeStateInventory(summaries []ResumeStateSummary) *ResumeStateInventory {
+	inventory := &ResumeStateInventory{
+		summaries: summaries,
+		items:     make(map[uint64]resumeStateInventoryItem, len(summaries)),
+	}
+	for index := range inventory.summaries {
+		itemID := uint64(index + 1)
+		authority := inventory.summaries[index].Reference
+		inventory.items[itemID] = resumeStateInventoryItem{authority: authority}
+		inventory.summaries[index].Reference = ResumeStateRef{
+			inventory:  inventory,
+			itemID:     itemID,
+			intent:     authority.intent,
+			session:    authority.session,
+			kind:       authority.kind,
+			legacyName: authority.legacyName,
+		}
+	}
+	return inventory
+}
+
+// Summaries returns an immutable-view copy whose references remain valid only
+// while this inventory is open and their item has not been consumed.
+func (inventory *ResumeStateInventory) Summaries() []ResumeStateSummary {
+	if inventory == nil {
+		return nil
+	}
+	inventory.mu.Lock()
+	defer inventory.mu.Unlock()
+	if inventory.closed {
+		return nil
+	}
+	result := make([]ResumeStateSummary, len(inventory.summaries))
+	copy(result, inventory.summaries)
+	for index := range result {
+		result[index].Attention = append([]ResumeAttention(nil), result[index].Attention...)
+	}
+	return result
+}
+
+func (inventory *ResumeStateInventory) consume(reference ResumeStateRef) (ResumeStateRef, error) {
+	if inventory == nil || reference.inventory != inventory || reference.itemID == 0 {
+		return ResumeStateRef{}, transfer.ErrInvalidOutputBinding
+	}
+	inventory.mu.Lock()
+	defer inventory.mu.Unlock()
+	if inventory.closed {
+		return ResumeStateRef{}, transfer.ErrInvalidOutputBinding
+	}
+	item, found := inventory.items[reference.itemID]
+	if !found || !resumeStateReferenceMetadataMatches(reference, item.authority) {
+		return ResumeStateRef{}, transfer.ErrInvalidOutputBinding
+	}
+	delete(inventory.items, reference.itemID)
+	return item.authority, nil
+}
+
+func resumeStateReferenceMetadataMatches(public, authority ResumeStateRef) bool {
+	return public.intent == authority.intent && public.session == authority.session &&
+		public.kind == authority.kind && public.legacyName == authority.legacyName
+}
+
+func (reference ResumeStateRef) releaseAuthority() error {
+	return errors.Join(
+		reference.sessionPin.Close(), reference.legacyPin.Close(), reference.legacyRoot.Close(),
+	)
+}
+
+func releaseResumeStateAuthorities(summaries []ResumeStateSummary) error {
+	var result error
+	for index := range summaries {
+		result = errors.Join(result, summaries[index].Reference.releaseAuthority())
+	}
+	return result
+}
+
+// Close deterministically releases all unconsumed native inventory handles.
+func (inventory *ResumeStateInventory) Close() error {
+	if inventory == nil {
+		return nil
+	}
+	inventory.mu.Lock()
+	if inventory.closed {
+		inventory.mu.Unlock()
+		return nil
+	}
+	inventory.closed = true
+	items := inventory.items
+	inventory.items = nil
+	inventory.summaries = nil
+	inventory.mu.Unlock()
+	var result error
+	for _, item := range items {
+		result = errors.Join(result, item.authority.releaseAuthority())
+	}
+	return result
+}
+
+type DiscardSettlementKind uint8
+
+const (
+	Discarded DiscardSettlementKind = iota + 1
+	DiscardAlreadyAbsent
+)
+
+type DiscardSettlement struct {
+	Kind         DiscardSettlementKind
+	RemovedBytes uint64
+}
+
+type outputSessionIDGenerator interface {
 	NewOutputSessionID() (transfer.OutputSessionID, error)
 }
 
-type OutputSessionIDGeneratorFunc func() (transfer.OutputSessionID, error)
+type outputObjectIDGenerator interface {
+	NewOutputObjectID() (resumestate.OutputObjectID, error)
+}
 
-func (f OutputSessionIDGeneratorFunc) NewOutputSessionID() (transfer.OutputSessionID, error) {
-	return f()
+type FilesystemOutputTraceOperation uint8
+
+const (
+	TraceFilesystemCertified FilesystemOutputTraceOperation = iota + 1
+	TraceFeatureProbeCompleted
+	TraceControlBootstrap
+	TraceNativeLock
+	TraceSessionOpened
+	TraceFilePhaseTransition
+	TraceFileRecoveryDecision
+	TraceFileSettlement
+	TraceSessionSettlement
+	TraceStateInstallCutAdopted
+	TraceAncestryValidation
+)
+
+type FilesystemOutputFileSettlementBoundary uint8
+
+const (
+	FilesystemOutputSettlementBeginFile FilesystemOutputFileSettlementBoundary = iota + 1
+	FilesystemOutputSettlementCommit
+	FilesystemOutputSettlementPause
+	FilesystemOutputSettlementJobPause
+	FilesystemOutputSettlementBeginFileCleanup
+	FilesystemOutputSettlementRetire
+)
+
+type FilesystemOutputNativeLockScope uint8
+
+const (
+	FilesystemOutputNativeLockCoordinator FilesystemOutputNativeLockScope = iota + 1
+	FilesystemOutputNativeLockSession
+)
+
+type FilesystemOutputNativeLockMilestone uint8
+
+const (
+	FilesystemOutputNativeLockAcquired FilesystemOutputNativeLockMilestone = iota + 1
+	FilesystemOutputNativeLockContended
+	FilesystemOutputNativeLockAcquireFailed
+	FilesystemOutputNativeLockReleased
+	FilesystemOutputNativeLockReleaseReportedFailure
+)
+
+type FilesystemOutputAncestryBoundary uint8
+
+const (
+	FilesystemOutputAncestryAdmission FilesystemOutputAncestryBoundary = iota + 1
+	FilesystemOutputAncestryRestart
+	FilesystemOutputAncestryBeginFile
+	FilesystemOutputAncestryRecovery
+	FilesystemOutputAncestryPublicationPre
+	FilesystemOutputAncestryPublicationPost
+	FilesystemOutputAncestryDirectoryFinalize
+	FilesystemOutputAncestrySessionFinalize
+)
+
+type FilesystemOutputAncestryDecision uint8
+
+const (
+	FilesystemOutputAncestryPrepared FilesystemOutputAncestryDecision = iota + 1
+	FilesystemOutputAncestryMatched
+	FilesystemOutputAncestryMismatch
+	FilesystemOutputAncestryAuthorityDenied
+	FilesystemOutputAncestryStructuralUnsafe
+)
+
+type FilesystemOutputStateInstallStage uint8
+
+const (
+	FilesystemOutputStateCreate FilesystemOutputStateInstallStage = iota + 1
+	FilesystemOutputStateReplace
+)
+
+type FilesystemOutputTrace struct {
+	Operation                 FilesystemOutputTraceOperation
+	ResumeIntent              transfer.ResumeIntent
+	SessionID                 transfer.OutputSessionID
+	LocatorDigest             transfer.OutputLocatorDigest
+	OutputObjectID            transfer.OutputObjectIdentity
+	PreviousPhase             FilesystemOutputFilePhase
+	NextPhase                 FilesystemOutputFilePhase
+	RecoveryAction            FilesystemOutputRecoveryAction
+	FileSettlement            transfer.FileSettlementKind
+	FileSettlementBoundary    FilesystemOutputFileSettlementBoundary
+	FilePauseReason           transfer.FilePauseReason
+	FileRetireReason          transfer.FileRetireReason
+	QuarantineReason          transfer.QuarantineReason
+	JobSettlement             transfer.JobSettlementKind
+	FailureScope              transfer.OutputFaultScope
+	FailureCode               transfer.OutputFaultCode
+	Certification             FilesystemOutputCertificationID
+	StateGeneration           uint64
+	StateInstallStage         FilesystemOutputStateInstallStage
+	SelectionIdentity         transfer.SelectionIdentity
+	OutputAncestryDigest      FilesystemOutputAncestryDigest
+	AncestryBoundary          FilesystemOutputAncestryBoundary
+	AncestryDecision          FilesystemOutputAncestryDecision
+	AncestryClaimCount        uint32
+	NativeLockScope           FilesystemOutputNativeLockScope
+	NativeLockMilestone       FilesystemOutputNativeLockMilestone
+	MutationReportedFailure   bool
+	ParentSyncReportedFailure bool
+	Failed                    bool
+}
+
+type FilesystemOutputTracer interface {
+	// Implementations must tolerate concurrent delivery from independent file and lock workflows.
+	TraceFilesystemOutput(FilesystemOutputTrace)
+}
+
+type FilesystemOutputTraceFunc func(FilesystemOutputTrace)
+
+func (function FilesystemOutputTraceFunc) TraceFilesystemOutput(event FilesystemOutputTrace) {
+	if function != nil {
+		function(event)
+	}
 }
 
 type FilesystemOutputAuthorityConfig struct {
-	SessionIDs OutputSessionIDGenerator
+	RootPath   string
+	CreateRoot bool
+	Tracer     FilesystemOutputTracer
 }
 
 type FilesystemOutputAuthority struct {
-	ids OutputSessionIDGenerator
-}
-
-type FilesystemOutputOpen struct {
-	Session     *FilesystemOutputSession
-	Reopened    bool
-	Quarantined int
+	rootPath        string
+	createRoot      bool
+	sessionIDs      outputSessionIDGenerator
+	objectIDs       outputObjectIDGenerator
+	tracer          FilesystemOutputTracer
+	platformFactory func(string, bool) (outputV3Platform, error)
+	random          io.Reader
 }
 
 func NewFilesystemOutputAuthority(config FilesystemOutputAuthorityConfig) (*FilesystemOutputAuthority, error) {
-	ids := config.SessionIDs
-	if ids == nil {
-		ids = cryptographicOutputSessionIDs{}
-	}
-	return &FilesystemOutputAuthority{ids: ids}, nil
+	return &FilesystemOutputAuthority{
+		rootPath: config.RootPath, createRoot: config.CreateRoot,
+		sessionIDs: cryptographicOutputSessionIDs{}, objectIDs: cryptographicOutputObjectIDs{}, tracer: config.Tracer,
+		platformFactory: openOutputV3Platform, random: rand.Reader,
+	}, nil
 }
 
 type cryptographicOutputSessionIDs struct{}
@@ -101,339 +551,34 @@ func (cryptographicOutputSessionIDs) NewOutputSessionID() (transfer.OutputSessio
 	return transfer.OutputSessionIDFromBytes(raw[:])
 }
 
-func (a *FilesystemOutputAuthority) OpenOrCreate(ctx context.Context, intent FilesystemOutputIntent) (FilesystemOutputOpen, error) {
-	if a == nil || a.ids == nil || intent.RootPath == "" || intent.ShareInstance.IsZero() || intent.ResumeIntent.IsZero() {
-		return FilesystemOutputOpen{}, transfer.ErrInvalidOutputBinding
-	}
-	if err := ctx.Err(); err != nil {
-		return FilesystemOutputOpen{}, err
-	}
-	abs, root, binding, err := openOutputDiscoveryRoot(intent.RootPath)
-	if err != nil {
-		return FilesystemOutputOpen{}, err
-	}
-	rootOwned := true
-	defer func() {
-		if rootOwned {
-			_ = root.Close()
-		}
-	}()
-	intentLockName := outputIntentLockName(intent.ShareInstance, intent.ResumeIntent)
-	intentLock, err := acquireOutputSessionLock(root, intentLockName)
-	if err != nil {
-		return FilesystemOutputOpen{}, filesystemPathFailure("lock output resume intent", filepath.Join(abs, intentLockName), err)
-	}
-	lockOwned := true
-	defer func() {
-		if lockOwned {
-			_ = intentLock.close(true)
-		}
-	}()
+type cryptographicOutputObjectIDs struct{}
 
-	matching, quarantined, err := discoverMatchingOutputSessions(ctx, root, intent, binding)
-	if err != nil {
-		return FilesystemOutputOpen{}, err
-	}
-	if len(matching) > 1 {
-		return FilesystemOutputOpen{}, ErrOutputDiscoveryAmbiguous
-	}
-	var session *FilesystemOutputSession
-	reopened := len(matching) == 1
-	if len(matching) == 1 {
-		session, err = openDiscoveredOutputSession(abs, intent, binding, matching[0])
-	} else {
-		session, err = a.createOutputSession(abs, intent, binding)
-	}
-	if err != nil {
-		return FilesystemOutputOpen{}, err
-	}
-	closeErr := errors.Join(intentLock.close(true), root.Close())
-	lockOwned, rootOwned = false, false
-	if closeErr != nil {
-		abandonFilesystemOutputSession(session)
-		return FilesystemOutputOpen{}, closeErr
-	}
-	return FilesystemOutputOpen{Session: session, Reopened: reopened, Quarantined: quarantined}, nil
+func (cryptographicOutputObjectIDs) NewOutputObjectID() (resumestate.OutputObjectID, error) {
+	return resumestate.NewOutputObjectID()
 }
 
-func discoverMatchingOutputSessions(ctx context.Context, root *os.Root, intent FilesystemOutputIntent, binding outputRootBinding) ([]transfer.OutputSessionID, int, error) {
-	names, err := discoverOutputJournalNames(root)
-	if err != nil {
-		return nil, 0, err
-	}
-	matching := make([]transfer.OutputSessionID, 0, 1)
-	quarantined := 0
-	for _, name := range names {
-		if err := ctx.Err(); err != nil {
-			return nil, quarantined, err
-		}
-		session, match, quarantinedName, err := inspectOutputJournal(root, name, intent, binding)
-		if err != nil {
-			return nil, quarantined, err
-		}
-		if quarantinedName {
-			quarantined++
-		}
-		if match {
-			matching = append(matching, session)
-		}
-	}
-	return matching, quarantined, nil
-}
-
-func inspectOutputJournal(root *os.Root, name string, intent FilesystemOutputIntent, binding outputRootBinding) (transfer.OutputSessionID, bool, bool, error) {
-	session, nameOK := outputSessionIDFromJournalName(name)
-	if !nameOK {
-		if err := quarantineOutputJournal(root, name); err != nil {
-			return transfer.OutputSessionID{}, false, false, errors.Join(ErrOutputDiscoveryUnsafe, err)
-		}
-		return transfer.OutputSessionID{}, false, true, nil
-	}
-	document, err := readOutputJournalAt(root, name)
-	if err != nil {
-		if !errors.Is(err, ErrOutputJournalCorrupt) {
-			return transfer.OutputSessionID{}, false, false, errors.Join(ErrOutputDiscoveryUnsafe, err)
-		}
-		if err := quarantineInactiveOutputJournal(root, name, session); err != nil {
-			return transfer.OutputSessionID{}, false, false, err
-		}
-		return transfer.OutputSessionID{}, false, true, nil
-	}
-	switch classifyOutputJournal(document, session, intent, binding) {
-	case outputJournalForeign:
-		return transfer.OutputSessionID{}, false, false, nil
-	case outputJournalStale:
-		if err := quarantineInactiveOutputJournal(root, name, session); err != nil {
-			return transfer.OutputSessionID{}, false, false, err
-		}
-		return transfer.OutputSessionID{}, false, true, nil
-	case outputJournalMatch:
-		return session, true, false, nil
-	default:
-		return transfer.OutputSessionID{}, false, false, ErrOutputDiscoveryUnsafe
-	}
-}
-
-func openDiscoveredOutputSession(rootPath string, intent FilesystemOutputIntent, binding outputRootBinding, session transfer.OutputSessionID) (*FilesystemOutputSession, error) {
-	config := FilesystemOutputSessionConfig{
-		RootPath: rootPath, ShareInstance: intent.ShareInstance, SessionID: session, ResumeIntent: intent.ResumeIntent,
-	}
-	return newFilesystemOutputSessionExpected(config, nil, &binding)
-}
-
-func (a *FilesystemOutputAuthority) createOutputSession(rootPath string, intent FilesystemOutputIntent, binding outputRootBinding) (*FilesystemOutputSession, error) {
-	for range outputNamespaceAllocationAttempts {
-		session, err := a.ids.NewOutputSessionID()
-		if err != nil {
-			return nil, err
-		}
-		if session.IsZero() {
-			continue
-		}
-		opened, err := openDiscoveredOutputSession(rootPath, intent, binding, session)
-		if errors.Is(err, ErrOutputBinding) || errors.Is(err, ErrOutputSessionActive) {
-			continue
-		}
-		return opened, err
-	}
-	return nil, errors.New("osfs: output session identity generator did not produce an unused non-zero identity")
-}
-
-func openOutputDiscoveryRoot(rootPath string) (string, *os.Root, outputRootBinding, error) {
-	abs, err := filepath.Abs(rootPath)
-	if err != nil {
-		return "", nil, outputRootBinding{}, filesystemPathFailure("resolve output discovery root", rootPath, err)
-	}
-	if exceedsPathLimit(abs) {
-		return "", nil, outputRootBinding{}, filesystemPathFailure("resolve output discovery root", rootPath, ErrPathTooLong)
-	}
-	if err := os.MkdirAll(abs, dirPerm); err != nil {
-		return "", nil, outputRootBinding{}, filesystemPathFailure("create output discovery root", abs, err)
-	}
-	root, err := os.OpenRoot(abs)
-	if err != nil {
-		return "", nil, outputRootBinding{}, filesystemPathFailure("open output discovery root", abs, err)
-	}
-	binding, err := bindOutputRoot(abs, root)
-	if err != nil {
-		return "", nil, outputRootBinding{}, errors.Join(filesystemPathFailure("bind output discovery root", abs, err), root.Close())
-	}
-	return abs, root, binding, nil
-}
-
-func discoverOutputJournalNames(root *os.Root) ([]string, error) {
-	directory, err := root.Open(".")
+func ListResumeState(ctx context.Context, root FilesystemResumeRoot) (*ResumeStateInventory, error) {
+	authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{})
 	if err != nil {
 		return nil, err
 	}
-	defer directory.Close()
-	names := make([]string, 0)
-	for {
-		entries, readErr := directory.ReadDir(outputDiscoveryBatchSize)
-		for _, entry := range entries {
-			name := entry.Name()
-			if !strings.HasPrefix(name, outputJournalPrefix) || !strings.HasSuffix(name, ".journal") ||
-				strings.HasPrefix(name, outputQuarantinePrefix) {
-				continue
-			}
-			names = append(names, name)
-			if len(names) > MaxOutputJournalCandidates {
-				return nil, ErrOutputDiscoveryLimit
-			}
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return nil, readErr
-		}
-	}
-	slices.Sort(names)
-	return names, nil
+	return authority.listResumeState(ctx, root)
 }
 
-func readOutputJournalAt(root *os.Root, name string) (outputJournalDocument, error) {
-	before, err := root.Lstat(name)
+func DiscardResumeState(ctx context.Context, reference ResumeStateRef) (DiscardSettlement, error) {
+	authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{})
 	if err != nil {
-		return outputJournalDocument{}, err
+		return DiscardSettlement{}, err
 	}
-	if !before.Mode().IsRegular() || isReparsePoint(before) {
-		return outputJournalDocument{}, ErrOutputJournalCorrupt
-	}
-	file, err := root.Open(name)
-	if err != nil {
-		return outputJournalDocument{}, err
-	}
-	after, statErr := file.Stat()
-	if statErr != nil || !after.Mode().IsRegular() || isReparsePoint(after) || !os.SameFile(before, after) {
-		return outputJournalDocument{}, errors.Join(ErrOutputJournalCorrupt, statErr, file.Close())
-	}
-	return decodeOutputJournalFile(file)
+	return authority.discardResumeState(ctx, reference)
 }
 
-func decodeOutputJournalFile(file *os.File) (outputJournalDocument, error) {
-	encoded, readErr := io.ReadAll(io.LimitReader(file, MaxOutputJournalBytes+1))
-	closeErr := file.Close()
-	if readErr != nil || closeErr != nil {
-		return outputJournalDocument{}, errors.Join(readErr, closeErr)
+func (authority *FilesystemOutputAuthority) trace(event FilesystemOutputTrace) {
+	if authority != nil && authority.tracer != nil {
+		authority.tracer.TraceFilesystemOutput(event)
 	}
-	return decodeOutputJournal(encoded)
 }
 
-type outputJournalClassification uint8
-
-const (
-	outputJournalForeign outputJournalClassification = iota
-	outputJournalStale
-	outputJournalMatch
-)
-
-func classifyOutputJournal(document outputJournalDocument, session transfer.OutputSessionID, intent FilesystemOutputIntent, root outputRootBinding) outputJournalClassification {
-	if document.Backend != string(filesystemOutputBackendID) ||
-		document.OutputSession != encodeOutputBytes(session.Bytes()) ||
-		document.RootLocator != root.locator || document.RootIdentity != root.identity {
-		return outputJournalStale
-	}
-	if document.ShareInstance != encodeOutputBytes(intent.ShareInstance.Bytes()) ||
-		document.ResumeIntent != encodeOutputBytes(intent.ResumeIntent.Bytes()) {
-		return outputJournalForeign
-	}
-	return outputJournalMatch
-}
-
-func quarantineInactiveOutputJournal(root *os.Root, name string, session transfer.OutputSessionID) error {
-	lockName := outputSessionLockName(session)
-	lock, err := acquireOutputSessionLock(root, lockName)
-	if err != nil {
-		if errors.Is(err, ErrOutputSessionActive) {
-			return errors.Join(ErrOutputDiscoveryUnsafe, err)
-		}
-		return err
-	}
-	quarantineErr := quarantineOutputJournal(root, name)
-	return errors.Join(quarantineErr, lock.close(true))
-}
-
-func quarantineOutputJournal(root *os.Root, name string) error {
-	for range outputNamespaceAllocationAttempts {
-		var random [outputStageRandomBytes]byte
-		if _, err := rand.Read(random[:]); err != nil {
-			return err
-		}
-		target := outputQuarantinePrefix + encodeOutputFilenameToken(random[:]) + ".journal"
-		if _, err := root.Lstat(target); err == nil {
-			continue
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		if err := root.Rename(name, target); err != nil {
-			return fmt.Errorf("quarantine output journal %q: %w", name, err)
-		}
-		return nil
-	}
-	return errors.New("osfs: could not allocate a unique output quarantine name")
-}
-
-func abandonFilesystemOutputSession(session *FilesystemOutputSession) {
-	if session == nil {
-		return
-	}
-	session.mu.Lock()
-	session.closed = true
-	_ = session.lock.close(false)
-	_ = session.root.Close()
-	session.mu.Unlock()
-}
-
-func (s *FilesystemOutputSession) persistCheckpoint(binding transfer.OutputFileBinding, stage string, generation uint64, ranges content.RangeSet, published bool) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return transfer.NewOutputSessionError(ErrOutputSessionClosed, true)
-	}
-	current, found := s.journal.file(binding.Locator().CanonicalPath())
-	if !found || !current.matches(binding) || current.Stage != stage {
-		return transfer.NewOutputSessionError(transfer.ErrOutputContract, true)
-	}
-	currentRanges, err := current.ranges()
-	if err != nil || current.Published || current.Generation == math.MaxUint64 || generation != current.Generation+1 ||
-		!journalRangesContain(ranges, currentRanges) {
-		return transfer.NewOutputSessionError(transfer.ErrOutputContract, true)
-	}
-	if published {
-		if !slices.Equal(ranges.Ranges(), currentRanges.Ranges()) || !transfer.RangesCoverFile(binding.ExactSize(), ranges) {
-			return transfer.NewOutputSessionError(transfer.ErrOutputContract, true)
-		}
-	} else if slices.Equal(ranges.Ranges(), currentRanges.Ranges()) {
-		return transfer.NewOutputSessionError(transfer.ErrOutputContract, true)
-	}
-	candidate := s.journal.clone()
-	candidate.put(journalFileFromBinding(binding, stage, generation, ranges, published))
-	loaded, err := persistOutputJournal(s.root, s.journalName, candidate, s.hook)
-	if err != nil {
-		return transfer.NewOutputSessionError(err, true)
-	}
-	verifyPath := stage
-	if published {
-		verifyPath = filepath.FromSlash(binding.Locator().CanonicalPath())
-	}
-	if err := s.verifyOwnedPath(verifyPath, binding.ObjectIdentity(), binding.ExactSize()); err != nil {
-		return transfer.NewOutputSessionError(err, true)
-	}
-	s.journal = loaded
-	return nil
-}
-
-func journalRangesContain(available, required content.RangeSet) bool {
-	availableRanges := available.Ranges()
-	index := 0
-	for _, current := range required.Ranges() {
-		for index < len(availableRanges) && availableRanges[index].End < current.End {
-			index++
-		}
-		if index == len(availableRanges) || availableRanges[index].Offset > current.Offset || availableRanges[index].End < current.End {
-			return false
-		}
-	}
-	return true
+func outputFault(scope transfer.OutputFaultScope, code transfer.OutputFaultCode, cause error) error {
+	return transfer.NewOutputFault(scope, code, cause)
 }

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -52,46 +53,31 @@ type Factory func(testing.TB) Fixture
 // the same contract even though its test code cannot import this Go package.
 func Run(t *testing.T, factory Factory) {
 	t.Helper()
-	if factory == nil {
-		t.Fatal("channeltest: factory must not be nil")
-	}
+	require(t, factory != nil, "channeltest: factory must not be nil")
 
 	t.Run("state-and-frame-bounds", func(t *testing.T) {
 		fixture := openFixture(t, factory)
-		if got := fixture.Channel.State(); got != framechannel.Open {
-			t.Fatalf("initial state = %v, want Open", got)
-		}
+		state := fixture.Channel.State()
+		require(t, state == framechannel.Open, "initial state = %v, want Open", state)
 
 		canceled, cancel := context.WithCancel(context.Background())
 		cancel()
-		if err := fixture.Channel.Send(canceled, framechannel.Frame{1}); !errors.Is(err, context.Canceled) {
-			t.Fatalf("Send with canceled context = %v, want context.Canceled", err)
-		}
-		if err := fixture.Channel.Send(context.Background(), nil); err == nil {
-			t.Fatal("Send accepted an empty frame")
-		}
-		if err := fixture.Channel.SendTerminal(context.Background(), nil); err == nil {
-			t.Fatal("SendTerminal accepted an empty frame")
-		}
+		err := fixture.Channel.Send(canceled, framechannel.Frame{1})
+		require(t, errors.Is(err, context.Canceled), "Send with canceled context = %v, want context.Canceled", err)
+		require(t, fixture.Channel.Send(context.Background(), nil) != nil, "Send accepted an empty frame")
+		require(t, fixture.Channel.SendTerminal(context.Background(), nil) != nil, "SendTerminal accepted an empty frame")
 		oversize := make(framechannel.Frame, framechannel.MaxFrameSize+1)
-		if err := fixture.Channel.Send(context.Background(), oversize); err == nil {
-			t.Fatal("Send accepted an oversized frame")
-		}
-		if err := fixture.Channel.SendTerminal(context.Background(), oversize); err == nil {
-			t.Fatal("SendTerminal accepted an oversized frame")
-		}
-		if got := fixture.Channel.State(); got != framechannel.Open {
-			t.Fatalf("invalid input changed state to %v", got)
-		}
+		require(t, fixture.Channel.Send(context.Background(), oversize) != nil, "Send accepted an oversized frame")
+		require(t, fixture.Channel.SendTerminal(context.Background(), oversize) != nil, "SendTerminal accepted an oversized frame")
+		state = fixture.Channel.State()
+		require(t, state == framechannel.Open, "invalid input changed state to %v", state)
 
 		want := patternedFrame(0x31, framechannel.MaxFrameSize)
-		if err := fixture.Channel.Send(context.Background(), want); err != nil {
-			t.Fatalf("Send maximum frame: %v", err)
-		}
+		err = fixture.Channel.Send(context.Background(), want)
+		require(t, err == nil, "Send maximum frame: %v", err)
 		got := receiveSent(t, fixture)
-		if got.Terminal || !bytes.Equal(got.Frame, want) {
-			t.Fatalf("maximum frame mismatch: terminal=%v bytes=%d", got.Terminal, len(got.Frame))
-		}
+		require(t, !got.Terminal && bytes.Equal(got.Frame, want),
+			"maximum frame mismatch: terminal=%v bytes=%d", got.Terminal, len(got.Frame))
 	})
 
 	t.Run("payload-ownership", func(t *testing.T) {
@@ -102,34 +88,28 @@ func Run(t *testing.T, factory Factory) {
 		// transport writers or changing bytes already queued for delivery.
 		outbound := patternedFrame(0x35, 257)
 		wantOutbound := append(framechannel.Frame(nil), outbound...)
-		if err := fixture.Channel.Send(context.Background(), outbound); err != nil {
-			t.Fatalf("Send ownership frame: %v", err)
-		}
+		err := fixture.Channel.Send(context.Background(), outbound)
+		require(t, err == nil, "Send ownership frame: %v", err)
 		mutate(outbound)
 		gotOutbound := receiveSent(t, fixture)
-		if gotOutbound.Terminal || !bytes.Equal(gotOutbound.Frame, wantOutbound) {
-			t.Fatal("outbound frame changed after caller reused its buffer")
-		}
+		require(t, !gotOutbound.Terminal && bytes.Equal(gotOutbound.Frame, wantOutbound),
+			"outbound frame changed after caller reused its buffer")
 
 		inbound := patternedFrame(0x36, 257)
 		wantInbound := append(framechannel.Frame(nil), inbound...)
-		if err := fixture.Deliver(inbound); err != nil {
-			t.Fatalf("deliver ownership frame: %v", err)
-		}
+		err = fixture.Deliver(inbound)
+		require(t, err == nil, "deliver ownership frame: %v", err)
 		mutate(inbound)
-		if got := receiveFrame(t, fixture.Channel); !bytes.Equal(got, wantInbound) {
-			t.Fatal("inbound frame changed after peer reused its buffer")
-		}
+		require(t, bytes.Equal(receiveFrame(t, fixture.Channel), wantInbound),
+			"inbound frame changed after peer reused its buffer")
 
 		terminal := patternedFrame(0x37, 64)
 		wantTerminal := append(framechannel.Frame(nil), terminal...)
-		if err := fixture.DeliverTerminal(terminal); err != nil {
-			t.Fatalf("deliver ownership terminal: %v", err)
-		}
+		err = fixture.DeliverTerminal(terminal)
+		require(t, err == nil, "deliver ownership terminal: %v", err)
 		mutate(terminal)
-		if got := receiveFrame(t, fixture.Channel); !bytes.Equal(got, wantTerminal) {
-			t.Fatal("inbound terminal changed after peer reused its buffer")
-		}
+		require(t, bytes.Equal(receiveFrame(t, fixture.Channel), wantTerminal),
+			"inbound terminal changed after peer reused its buffer")
 		assertRecvClosed(t, fixture.Channel)
 		assertClosed(t, fixture.Channel)
 	})
@@ -151,9 +131,8 @@ func Run(t *testing.T, factory Factory) {
 		cancel()
 		select {
 		case err := <-result:
-			if !errors.Is(err, context.Canceled) {
-				t.Fatalf("canceled saturated Send = %v, want context.Canceled", err)
-			}
+			require(t, errors.Is(err, context.Canceled),
+				"canceled saturated Send = %v, want context.Canceled", err)
 		case <-time.After(operationTimeout):
 			t.Fatal("canceled saturated Send did not wake")
 		}
@@ -174,9 +153,7 @@ func Run(t *testing.T, factory Factory) {
 		fixture.ReleaseSends()
 		select {
 		case err := <-result:
-			if err != nil {
-				t.Fatalf("Send after capacity recovery: %v", err)
-			}
+			require(t, err == nil, "Send after capacity recovery: %v", err)
 		case <-time.After(operationTimeout):
 			t.Fatal("Send did not resume after capacity recovery")
 		}
@@ -193,14 +170,11 @@ func Run(t *testing.T, factory Factory) {
 			t.Fatalf("saturated Send returned before remote close: %v", err)
 		case <-time.After(blockedObservation):
 		}
-		if err := fixture.RemoteClose(); err != nil {
-			t.Fatalf("remote close while Send blocked: %v", err)
-		}
+		err := fixture.RemoteClose()
+		require(t, err == nil, "remote close while Send blocked: %v", err)
 		select {
 		case err := <-result:
-			if err == nil {
-				t.Fatal("blocked Send succeeded after remote close")
-			}
+			require(t, err != nil, "blocked Send succeeded after remote close")
 		case <-time.After(operationTimeout):
 			t.Fatal("remote close did not wake blocked Send")
 		}
@@ -213,28 +187,22 @@ func Run(t *testing.T, factory Factory) {
 		result := make(chan error, 1)
 		go func() { result <- fixture.Channel.SendTerminal(context.Background(), want) }()
 		got := receiveSent(t, fixture)
-		if !got.Terminal || !bytes.Equal(got.Frame, want) {
-			t.Fatalf("terminal mismatch: terminal=%v bytes=%x", got.Terminal, got.Frame)
-		}
+		require(t, got.Terminal && bytes.Equal(got.Frame, want),
+			"terminal mismatch: terminal=%v bytes=%x", got.Terminal, got.Frame)
 		select {
 		case err := <-result:
-			if err != nil {
-				t.Fatalf("SendTerminal: %v", err)
-			}
+			require(t, err == nil, "SendTerminal: %v", err)
 		case <-time.After(operationTimeout):
 			t.Fatal("SendTerminal did not complete after peer delivery")
 		}
 		assertClosed(t, fixture.Channel)
 		assertRecvClosed(t, fixture.Channel)
-		if err := fixture.Channel.Send(context.Background(), framechannel.Frame{1}); err == nil {
-			t.Fatal("Send succeeded after terminal")
-		}
-		if err := fixture.Channel.SendTerminal(context.Background(), framechannel.Frame{1}); err == nil {
-			t.Fatal("second terminal succeeded")
-		}
-		if err := fixture.Channel.Close(); err != nil {
-			t.Fatalf("Close after terminal: %v", err)
-		}
+		require(t, fixture.Channel.Send(context.Background(), framechannel.Frame{1}) != nil,
+			"Send succeeded after terminal")
+		require(t, fixture.Channel.SendTerminal(context.Background(), framechannel.Frame{1}) != nil,
+			"second terminal succeeded")
+		err := fixture.Channel.Close()
+		require(t, err == nil, "Close after terminal: %v", err)
 	})
 
 	t.Run("terminal-not-overtaken-by-close", func(t *testing.T) {
@@ -260,17 +228,13 @@ func Run(t *testing.T, factory Factory) {
 		receiveSentTerminal(t, fixture, want)
 		select {
 		case err := <-terminalResult:
-			if err != nil {
-				t.Fatalf("SendTerminal after release: %v", err)
-			}
+			require(t, err == nil, "SendTerminal after release: %v", err)
 		case <-time.After(operationTimeout):
 			t.Fatal("SendTerminal did not complete after release")
 		}
 		select {
 		case err := <-closeResult:
-			if err != nil {
-				t.Fatalf("Close after terminal: %v", err)
-			}
+			require(t, err == nil, "Close after terminal: %v", err)
 		case <-time.After(operationTimeout):
 			t.Fatal("Close remained blocked after terminal completion")
 		}
@@ -281,76 +245,51 @@ func Run(t *testing.T, factory Factory) {
 		fixture := openFixture(t, factory)
 		ordinary := patternedFrame(0x61, framechannel.MaxFrameSize)
 		terminal := patternedFrame(0x62, 64)
-		if err := fixture.Deliver(ordinary); err != nil {
-			t.Fatalf("deliver ordinary frame: %v", err)
-		}
-		if err := fixture.DeliverTerminal(terminal); err != nil {
-			t.Fatalf("deliver terminal frame: %v", err)
-		}
+		err := fixture.Deliver(ordinary)
+		require(t, err == nil, "deliver ordinary frame: %v", err)
+		err = fixture.DeliverTerminal(terminal)
+		require(t, err == nil, "deliver terminal frame: %v", err)
 		// Late peer traffic may be reported or silently discarded, but it must
 		// never revive the stream or appear after the terminal.
 		_ = fixture.Deliver(framechannel.Frame{0xff})
 
-		if got := receiveFrame(t, fixture.Channel); !bytes.Equal(got, ordinary) {
-			t.Fatal("ordinary frame changed before delivery")
-		}
-		if got := receiveFrame(t, fixture.Channel); !bytes.Equal(got, terminal) {
-			t.Fatal("terminal was not the final received frame")
-		}
+		require(t, bytes.Equal(receiveFrame(t, fixture.Channel), ordinary),
+			"ordinary frame changed before delivery")
+		require(t, bytes.Equal(receiveFrame(t, fixture.Channel), terminal),
+			"terminal was not the final received frame")
 		assertRecvClosed(t, fixture.Channel)
 		assertClosed(t, fixture.Channel)
 	})
 
 	t.Run("close-idempotence", func(t *testing.T) {
 		fixture := openFixture(t, factory)
-		if err := fixture.Channel.Close(); err != nil {
-			t.Fatalf("first Close: %v", err)
-		}
-		if err := fixture.Channel.Close(); err != nil {
-			t.Fatalf("second Close: %v", err)
-		}
+		err := fixture.Channel.Close()
+		require(t, err == nil, "first Close: %v", err)
+		err = fixture.Channel.Close()
+		require(t, err == nil, "second Close: %v", err)
 		assertClosed(t, fixture.Channel)
 		assertRecvClosed(t, fixture.Channel)
-		if err := fixture.Channel.Send(context.Background(), framechannel.Frame{1}); err == nil {
-			t.Fatal("Send succeeded after Close")
-		}
+		require(t, fixture.Channel.Send(context.Background(), framechannel.Frame{1}) != nil,
+			"Send succeeded after Close")
 	})
 
 	t.Run("remote-close-and-late-traffic", func(t *testing.T) {
 		fixture := openFixture(t, factory)
-		if err := fixture.RemoteClose(); err != nil {
-			t.Fatalf("remote close: %v", err)
-		}
+		err := fixture.RemoteClose()
+		require(t, err == nil, "remote close: %v", err)
 		_ = fixture.Deliver(framechannel.Frame{1})
 		assertRecvClosed(t, fixture.Channel)
 		assertClosed(t, fixture.Channel)
-		if err := fixture.Channel.Send(context.Background(), framechannel.Frame{1}); err == nil {
-			t.Fatal("Send succeeded after remote close")
-		}
+		require(t, fixture.Channel.Send(context.Background(), framechannel.Frame{1}) != nil,
+			"Send succeeded after remote close")
 	})
 }
 
 func openFixture(t *testing.T, factory Factory) Fixture {
 	t.Helper()
 	fixture := factory(t)
-	switch {
-	case fixture.Channel == nil:
-		t.Fatal("channeltest: fixture Channel must not be nil")
-	case fixture.ReceiveSent == nil:
-		t.Fatal("channeltest: fixture ReceiveSent must not be nil")
-	case fixture.Deliver == nil:
-		t.Fatal("channeltest: fixture Deliver must not be nil")
-	case fixture.DeliverTerminal == nil:
-		t.Fatal("channeltest: fixture DeliverTerminal must not be nil")
-	case fixture.RemoteClose == nil:
-		t.Fatal("channeltest: fixture RemoteClose must not be nil")
-	case fixture.SaturateSends == nil:
-		t.Fatal("channeltest: fixture SaturateSends must not be nil")
-	case fixture.ReleaseSends == nil:
-		t.Fatal("channeltest: fixture ReleaseSends must not be nil")
-	case fixture.Cleanup == nil:
-		t.Fatal("channeltest: fixture Cleanup must not be nil")
-	}
+	fixtureErr := validateFixture(fixture)
+	require(t, fixtureErr == nil, "%v", fixtureErr)
 	t.Cleanup(func() {
 		fixture.ReleaseSends()
 		fixture.Cleanup()
@@ -363,9 +302,7 @@ func receiveSent(t *testing.T, fixture Fixture) SentFrame {
 	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
 	defer cancel()
 	got, err := fixture.ReceiveSent(ctx)
-	if err != nil {
-		t.Fatalf("receive sent frame: %v", err)
-	}
+	require(t, err == nil, "receive sent frame: %v", err)
 	return got
 }
 
@@ -375,9 +312,7 @@ func receiveSentFrame(t *testing.T, fixture Fixture, want framechannel.Frame) {
 	defer cancel()
 	for {
 		got, err := fixture.ReceiveSent(ctx)
-		if err != nil {
-			t.Fatalf("receive recovered frame: %v", err)
-		}
+		require(t, err == nil, "receive recovered frame: %v", err)
 		if !got.Terminal && bytes.Equal(got.Frame, want) {
 			return
 		}
@@ -390,9 +325,7 @@ func receiveSentTerminal(t *testing.T, fixture Fixture, want framechannel.Frame)
 	defer cancel()
 	for {
 		got, err := fixture.ReceiveSent(ctx)
-		if err != nil {
-			t.Fatalf("receive terminal frame: %v", err)
-		}
+		require(t, err == nil, "receive terminal frame: %v", err)
 		if got.Terminal && bytes.Equal(got.Frame, want) {
 			return
 		}
@@ -403,9 +336,7 @@ func receiveFrame(t *testing.T, channel framechannel.Channel) framechannel.Frame
 	t.Helper()
 	select {
 	case frame, ok := <-channel.Recv():
-		if !ok {
-			t.Fatal("Recv closed before expected frame")
-		}
+		require(t, ok, "Recv closed before expected frame")
 		return frame
 	case <-time.After(operationTimeout):
 		t.Fatal("timeout waiting for received frame")
@@ -417,9 +348,7 @@ func assertRecvClosed(t *testing.T, channel framechannel.Channel) {
 	t.Helper()
 	select {
 	case frame, ok := <-channel.Recv():
-		if ok {
-			t.Fatalf("Recv yielded frame after terminal close: %x", frame)
-		}
+		require(t, !ok, "Recv yielded frame after terminal close: %x", frame)
 	case <-time.After(operationTimeout):
 		t.Fatal("Recv did not close")
 	}
@@ -427,8 +356,35 @@ func assertRecvClosed(t *testing.T, channel framechannel.Channel) {
 
 func assertClosed(t *testing.T, channel framechannel.Channel) {
 	t.Helper()
-	if got := channel.State(); got != framechannel.Closed {
-		t.Fatalf("state = %v, want Closed", got)
+	require(t, channel.State() == framechannel.Closed, "state = %v, want Closed", channel.State())
+}
+
+func validateFixture(fixture Fixture) error {
+	requirements := []struct {
+		name    string
+		present bool
+	}{
+		{name: "Channel", present: fixture.Channel != nil},
+		{name: "ReceiveSent", present: fixture.ReceiveSent != nil},
+		{name: "Deliver", present: fixture.Deliver != nil},
+		{name: "DeliverTerminal", present: fixture.DeliverTerminal != nil},
+		{name: "RemoteClose", present: fixture.RemoteClose != nil},
+		{name: "SaturateSends", present: fixture.SaturateSends != nil},
+		{name: "ReleaseSends", present: fixture.ReleaseSends != nil},
+		{name: "Cleanup", present: fixture.Cleanup != nil},
+	}
+	for _, requirement := range requirements {
+		if !requirement.present {
+			return fmt.Errorf("channeltest: fixture %s must not be nil", requirement.name)
+		}
+	}
+	return nil
+}
+
+func require(t testing.TB, condition bool, format string, args ...any) {
+	t.Helper()
+	if !condition {
+		t.Fatalf(format, args...)
 	}
 }
 

@@ -22,10 +22,88 @@ import (
 )
 
 const (
-	windowsRevisionIdentityBytes  = windowsPersistentFileIdentityBytes
+	windowsRevisionIdentityBytes  = 24
 	windowsRevisionCandidateBytes = windowsRevisionIdentityBytes + 24
 	windowsFiletimeUnixOffset     = int64(116444736000000000)
 )
+
+type windowsRevisionFileIDInfo struct {
+	VolumeSerialNumber uint64
+	FileID             [16]byte
+}
+
+func inspectWindowsPersistentFileIdentity(handle windows.Handle) ([windowsRevisionIdentityBytes]byte, error) {
+	var information windowsRevisionFileIDInfo
+	if err := windows.GetFileInformationByHandleEx(
+		handle, windows.FileIdInfo, (*byte)(unsafe.Pointer(&information)), uint32(unsafe.Sizeof(information)),
+	); err != nil {
+		return [windowsRevisionIdentityBytes]byte{}, err
+	}
+	var identity [windowsRevisionIdentityBytes]byte
+	binary.BigEndian.PutUint64(identity[0:8], information.VolumeSerialNumber)
+	copy(identity[8:], information.FileID[:])
+	return identity, nil
+}
+
+type windowsRevisionVolume struct {
+	filesystem string
+	path       string
+	driveType  uint32
+}
+
+func inspectWindowsRevisionVolume(handle windows.Handle) (windowsRevisionVolume, error) {
+	var filesystem [32]uint16
+	var flags uint32
+	if err := windows.GetVolumeInformationByHandle(
+		handle, nil, 0, nil, nil, &flags, &filesystem[0], uint32(len(filesystem)),
+	); err != nil {
+		return windowsRevisionVolume{}, err
+	}
+	path, err := finalWindowsHandlePath(handle)
+	if err != nil {
+		return windowsRevisionVolume{}, err
+	}
+	volume := filepath.VolumeName(path)
+	if volume == "" {
+		return windowsRevisionVolume{}, errors.New("Windows revision volume path has no volume name")
+	}
+	root, err := windows.UTF16PtrFromString(volume + `\`)
+	if err != nil {
+		return windowsRevisionVolume{}, err
+	}
+	return windowsRevisionVolume{
+		filesystem: windows.UTF16ToString(filesystem[:]),
+		path:       path,
+		driveType:  windows.GetDriveType(root),
+	}, nil
+}
+
+func validateWindowsLocalRevisionVolume(volume windowsRevisionVolume) error {
+	if !strings.EqualFold(volume.filesystem, "NTFS") && !strings.EqualFold(volume.filesystem, "ReFS") {
+		return fmt.Errorf("Windows filesystem %q is outside the revision-stability support matrix", volume.filesystem)
+	}
+	if strings.HasPrefix(strings.TrimPrefix(volume.path, `\\?\`), `UNC\`) {
+		return errors.New("remote Windows filesystem is outside the revision-stability support matrix")
+	}
+	if volume.driveType != windows.DRIVE_FIXED && volume.driveType != windows.DRIVE_REMOVABLE {
+		return fmt.Errorf("Windows drive type %d is outside the revision-stability support matrix", volume.driveType)
+	}
+	return nil
+}
+
+func finalWindowsHandlePath(handle windows.Handle) (string, error) {
+	buffer := make([]uint16, 512)
+	for {
+		length, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), 0)
+		if err != nil {
+			return "", err
+		}
+		if length < uint32(len(buffer)) {
+			return windows.UTF16ToString(buffer[:length]), nil
+		}
+		buffer = make([]uint16, length+1)
+	}
+}
 
 func platformCatalogBaseline(file *os.File) (catalog.SourceIdentity, catalog.VersionCandidate, error) {
 	return windowsCatalogObjectBaseline(file)
@@ -150,7 +228,7 @@ func WindowsCatalogBaseline(file *os.File) (catalog.SourceIdentity, catalog.Vers
 	if file == nil {
 		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, content.ErrUnsupportedStability
 	}
-	if err := ensureSupportedWindowsVolume(windows.Handle(file.Fd())); err != nil {
+	if err := ensureSupportedWindowsRevisionVolume(windows.Handle(file.Fd())); err != nil {
 		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, err
 	}
 	token, err := inspectWindowsMutationToken(windows.Handle(file.Fd()))
@@ -177,7 +255,7 @@ func windowsCatalogObjectBaseline(file *os.File) (catalog.SourceIdentity, catalo
 		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, content.ErrUnsupportedStability
 	}
 	handle := windows.Handle(file.Fd())
-	if err := ensureSupportedWindowsVolume(handle); err != nil {
+	if err := ensureSupportedWindowsRevisionVolume(handle); err != nil {
 		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, err
 	}
 	token, err := inspectWindowsCatalogToken(handle)
@@ -382,7 +460,7 @@ func (nativeWindowsRevisionPlatform) OpenRoot(path string) (windowsRevisionRoot,
 	if err != nil {
 		return nil, classifyWindowsRootOpenError(err)
 	}
-	if err := ensureSupportedWindowsVolume(handle); err != nil {
+	if err := ensureSupportedWindowsRevisionVolume(handle); err != nil {
 		_ = windows.CloseHandle(handle)
 		return nil, err
 	}
@@ -635,10 +713,10 @@ func classifyWindowsRootOpenError(err error) error {
 	return err
 }
 
-func ensureSupportedWindowsVolume(handle windows.Handle) error {
-	volume, err := inspectWindowsVolume(handle)
+func ensureSupportedWindowsRevisionVolume(handle windows.Handle) error {
+	volume, err := inspectWindowsRevisionVolume(handle)
 	if err == nil {
-		err = validateWindowsLocalPersistentVolume(volume)
+		err = validateWindowsLocalRevisionVolume(volume)
 	}
 	if err != nil {
 		return errors.Join(content.ErrUnsupportedStability, err)

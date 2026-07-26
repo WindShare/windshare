@@ -32,8 +32,8 @@ func TestTransferJobRejectsMissingCatalogLeaseOnFailurePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != JobAborted || !errors.Is(result.AbortCause, ErrCatalogLeaseContract) ||
-		!isJobTerminalError(result.AbortCause) || isSessionFailure(result.AbortCause) {
+	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrCatalogLeaseContract) ||
+		!isJobTerminalError(result.TerminationCause) || isSessionFailure(result.TerminationCause) {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -103,13 +103,13 @@ func TestTransferJobPreservesParentCancellationCauseWithoutSelection(t *testing.
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(cause)
 	result := job.Run(ctx)
-	if result.Outcome != JobAborted || !errors.Is(result.AbortCause, cause) {
+	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, cause) {
 		t.Fatalf("result=%+v", result)
 	}
 }
 
 func TestTransferJobMaterializesOnlyAuthenticatedSelectedOutput(t *testing.T) {
-	t.Run("file target materializes ancestors only after revision opens", func(t *testing.T) {
+	t.Run("file target materializes only authenticated selected ancestors", func(t *testing.T) {
 		share := transferID[catalog.ShareInstance](150)
 		root := transferID[catalog.DirectoryID](151)
 		wanted := transferID[catalog.DirectoryID](152)
@@ -168,7 +168,8 @@ func TestTransferJobMaterializesOnlyAuthenticatedSelectedOutput(t *testing.T) {
 			Blocks: scriptedRangeReader{}, Output: output,
 		})
 		result := job.Run(context.Background())
-		if result.Outcome != JobCompletedWithErrors || len(result.Files) != 1 || len(output.directories) != 0 || len(output.finalized) != 0 {
+		if result.Outcome != JobCompletedWithErrors || len(result.Files) != 1 ||
+			!slices.Equal(output.directories, []string{"folder"}) || !slices.Equal(output.finalized, []string{"folder"}) {
 			t.Fatalf("result=%+v directories=%v finalized=%v", result, output.directories, output.finalized)
 		}
 	})
@@ -198,7 +199,7 @@ func TestTransferJobSelectedDirectoryRequiresSuccessfulGenerationBeforeOutput(t 
 	if result.Outcome != JobCompletedWithErrors || len(result.Directories) != 1 || result.Measure.Class() != SelectionUnknown {
 		t.Fatalf("result=%+v", result)
 	}
-	if !slices.Equal(output.directories, []string{"empty"}) || !slices.Equal(output.finalized, []string{"empty"}) {
+	if len(output.directories) != 0 || len(output.finalized) != 0 {
 		t.Fatalf("directories=%v finalized=%v", output.directories, output.finalized)
 	}
 }
@@ -221,7 +222,8 @@ func TestTransferJobMissingOpaqueTargetsRemainKindSafe(t *testing.T) {
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != JobAborted || !errors.Is(result.AbortCause, ErrSelectionTargetMissing) || !output.aborted {
+	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrSelectionTargetMissing) ||
+		output.aborted || output.pauseCalls != 0 || output.completeCalls != 0 {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -241,7 +243,8 @@ func TestTransferJobMissingOpaqueDirectoryTargetAborts(t *testing.T) {
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != JobAborted || !errors.Is(result.AbortCause, ErrSelectionTargetMissing) || !output.aborted {
+	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrSelectionTargetMissing) ||
+		output.aborted || output.pauseCalls != 0 || output.completeCalls != 0 {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -269,7 +272,7 @@ func TestTransferJobUnmatchedFileBelowFailedDirectoryRemainsUnknown(t *testing.T
 	for measure := range updates {
 		admission = measure
 	}
-	if result.Outcome != JobCompletedWithErrors || result.AbortCause != nil ||
+	if result.Outcome != JobCompletedWithErrors || result.TerminationCause != nil ||
 		result.Measure.Class() != SelectionUnknown || admission.Class() != SelectionUnknown ||
 		len(output.directories) != 0 || len(output.finalized) != 0 {
 		t.Fatalf("result=%+v admission=%+v directories=%v finalized=%v", result, admission, output.directories, output.finalized)
@@ -293,7 +296,7 @@ func TestTransferJobMissingPathDescendantLeavesAncestorVirtual(t *testing.T) {
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != JobAborted || !errors.Is(result.AbortCause, ErrSelectionTargetMissing) ||
+	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrSelectionTargetMissing) ||
 		len(output.directories) != 0 || len(output.finalized) != 0 {
 		t.Fatalf("result=%+v directories=%v finalized=%v", result, output.directories, output.finalized)
 	}

@@ -1093,7 +1093,7 @@ describe('R0 scheduling, recovery, and lifecycle contract', () => {
           randomWrite: false,
           fileFailureIsolation: false,
           mtime: false,
-          failureAfterFirstByte: 'abort-job',
+          failureAfterFirstByte: 'pause-job',
         },
         {
           backend: 'zip-stream',
@@ -1105,11 +1105,11 @@ describe('R0 scheduling, recovery, and lifecycle contract', () => {
         },
         {
           backend: 'cli-osfs',
-          durability:
-            'power-loss-when-file-and-directory-sync-proved-else-process-restart',
+          durability: 'process-restart',
           randomWrite: true,
           fileFailureIsolation: true,
           mtime: true,
+          powerLoss: false,
         },
       ],
     })
@@ -1121,7 +1121,7 @@ describe('R0 scheduling, recovery, and lifecycle contract', () => {
           action: 'skip-and-report',
           jobOutcome: 'completed-with-errors',
         },
-        { memberStarted: true, action: 'abort-job', jobOutcome: 'aborted' },
+        { memberStarted: true, action: 'pause-job', jobOutcome: 'paused' },
       ],
     })
 
