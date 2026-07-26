@@ -6,6 +6,9 @@
 windshare_prepare_core_release_go_environment() {
   local release_root="$1"
   local resolved_root
+  local module_cache_path
+  local build_cache_path
+  local go_path
   local cache_path
 
   if [ -z "$release_root" ] || [ ! -d "$release_root" ] || [ -L "$release_root" ]; then
@@ -14,18 +17,25 @@ windshare_prepare_core_release_go_environment() {
   fi
   resolved_root="$(cd -- "$release_root" && pwd -P)" || return 1
 
-  GOMODCACHE="$resolved_root/go-module-cache"
-  GOCACHE="$resolved_root/go-build-cache"
-  GOPATH="$resolved_root/go-path"
-  for cache_path in "$GOMODCACHE" "$GOCACHE" "$GOPATH"; do
+  module_cache_path="$resolved_root/go-module-cache"
+  build_cache_path="$resolved_root/go-build-cache"
+  go_path="$resolved_root/go-path"
+  for cache_path in "$module_cache_path" "$build_cache_path" "$go_path"; do
     if [ -e "$cache_path" ] || [ -L "$cache_path" ]; then
       echo "core release cache path must be fresh: $cache_path" >&2
       return 1
     fi
   done
-  for cache_path in "$GOMODCACHE" "$GOCACHE" "$GOPATH"; do
+  for cache_path in "$module_cache_path" "$build_cache_path" "$go_path"; do
     install -d -m 0700 -- "$cache_path" || return 1
   done
+
+  # Bash preserves an existing variable's export attribute across assignment.
+  # Publish paths only after every fallible setup step so a rejected release root
+  # cannot replace either exported caller values or initially unset shell state.
+  GOMODCACHE="$module_cache_path"
+  GOCACHE="$build_cache_path"
+  GOPATH="$go_path"
 
   # Explicit target knobs override the host defaults even with GOENV disabled.
   # Clearing them prevents a caller from silently turning native certification

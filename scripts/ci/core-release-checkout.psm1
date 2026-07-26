@@ -14,6 +14,51 @@ function Get-CoreReleaseVerifierPaths {
     return @($script:CoreReleaseVerifierPaths)
 }
 
+function Resolve-CoreReleaseGitExecutable {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$CommandCandidates
+    )
+
+    $candidates = @($CommandCandidates)
+    if ($candidates.Count -eq 0) {
+        throw 'Git executable discovery returned no Application candidates'
+    }
+
+    # PATH precedence is part of command resolution. Selecting candidate zero
+    # preserves it while preventing PowerShell from coercing every -All result
+    # into one invalid ProcessStartInfo filename.
+    $candidate = $candidates[0]
+    $commandType = $candidate.PSObject.Properties['CommandType']
+    if ($null -eq $commandType -or
+        $commandType.Value -ne [Management.Automation.CommandTypes]::Application) {
+        throw 'Git executable discovery did not select an Application command'
+    }
+    $source = $candidate.PSObject.Properties['Source']
+    $sourceValues = @()
+    if ($null -ne $source) {
+        $sourceValues = @($source.Value)
+    }
+    if ($sourceValues.Count -ne 1 -or
+        $sourceValues[0] -isnot [string] -or
+        [string]::IsNullOrWhiteSpace([string]$sourceValues[0])) {
+        throw 'Git Application candidate must expose exactly one executable path'
+    }
+
+    $executable = [string]$sourceValues[0]
+    if (-not [IO.Path]::IsPathFullyQualified($executable)) {
+        throw 'Git Application executable path must be fully qualified'
+    }
+    $executable = [IO.Path]::GetFullPath($executable)
+    if ([IO.Path]::GetExtension($executable) -ine '.exe' -or
+        -not [IO.File]::Exists($executable)) {
+        throw "Git Application executable path is not an existing .exe file: $executable"
+    }
+    return $executable
+}
+
 function Invoke-CoreReleaseGit {
     [CmdletBinding()]
     param(
@@ -21,9 +66,12 @@ function Invoke-CoreReleaseGit {
         [string[]]$Arguments
     )
 
-    $gitExecutable = [IO.Path]::GetFullPath(
-        (Get-Command git -CommandType Application -ErrorAction Stop).Source
-    )
+    $gitCommands = @(Get-Command git -CommandType Application -All -ErrorAction Stop)
+    $resolvedExecutables = @(Resolve-CoreReleaseGitExecutable -CommandCandidates $gitCommands)
+    if ($resolvedExecutables.Count -ne 1) {
+        throw 'Git executable discovery did not resolve exactly one executable'
+    }
+    $gitExecutable = [string]$resolvedExecutables[0]
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $gitExecutable
     $startInfo.UseShellExecute = $false

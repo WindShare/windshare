@@ -4,7 +4,10 @@ if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
     $PSNativeCommandUseErrorActionPreference = $false
 }
 
-Import-Module (Join-Path $PSScriptRoot 'core-release-checkout.psm1') -Force
+$checkoutModule = Import-Module `
+    (Join-Path $PSScriptRoot 'core-release-checkout.psm1') `
+    -Force `
+    -PassThru
 
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) (
     'windshare-core-checkout-contract-{0}' -f [Guid]::NewGuid().ToString('N')
@@ -35,8 +38,80 @@ function Assert-CheckoutThrows([string]$Label, [string]$ExpectedMessage) {
     throw "$Label did not fail closed"
 }
 
+function Resolve-TestGitExecutable([object[]]$Candidates) {
+    $resolved = @(& $checkoutModule {
+        Resolve-CoreReleaseGitExecutable -CommandCandidates $args[0]
+    } $Candidates)
+    if ($resolved.Count -ne 1) {
+        throw "test Git resolution returned $($resolved.Count) paths"
+    }
+    return [string]$resolved[0]
+}
+
+function Assert-GitResolutionThrows(
+    [string]$Label,
+    [object[]]$Candidates,
+    [string]$ExpectedMessage
+) {
+    try {
+        Resolve-TestGitExecutable -Candidates $Candidates | Out-Null
+    } catch {
+        if (-not $_.Exception.Message.Contains($ExpectedMessage, [StringComparison]::Ordinal)) {
+            throw "$Label failed for the wrong reason: $($_.Exception.Message)"
+        }
+        return
+    }
+    throw "$Label did not fail closed"
+}
+
 try {
     New-Item -ItemType Directory -Path $fixtureRepository | Out-Null
+    $gitApplication = @(Get-Command git -CommandType Application -All -ErrorAction Stop)[0]
+    $gitPath = [IO.Path]::GetFullPath([string]$gitApplication.Source)
+    $powerShellPath = [IO.Path]::GetFullPath((Get-Process -Id $PID).Path)
+    $multipleApplications = @(
+        [pscustomobject]@{
+            CommandType = [Management.Automation.CommandTypes]::Application
+            Source = $gitPath
+        },
+        [pscustomobject]@{
+            CommandType = [Management.Automation.CommandTypes]::Application
+            Source = $powerShellPath
+        }
+    )
+    $selectedGit = Resolve-TestGitExecutable -Candidates $multipleApplications
+    if ($selectedGit -cne $gitPath) {
+        throw "multiple Git Applications selected $selectedGit, want first candidate $gitPath"
+    }
+    Assert-GitResolutionThrows `
+        -Label 'alias Git candidate' `
+        -Candidates @([pscustomobject]@{
+            CommandType = [Management.Automation.CommandTypes]::Alias
+            Source = $gitPath
+        }) `
+        -ExpectedMessage 'did not select an Application command'
+    Assert-GitResolutionThrows `
+        -Label 'function Git candidate' `
+        -Candidates @([pscustomobject]@{
+            CommandType = [Management.Automation.CommandTypes]::Function
+            Source = $gitPath
+        }) `
+        -ExpectedMessage 'did not select an Application command'
+    Assert-GitResolutionThrows `
+        -Label 'array Git source' `
+        -Candidates @([pscustomobject]@{
+            CommandType = [Management.Automation.CommandTypes]::Application
+            Source = @($gitPath, $powerShellPath)
+        }) `
+        -ExpectedMessage 'exactly one executable path'
+    Assert-GitResolutionThrows `
+        -Label 'missing Git executable' `
+        -Candidates @([pscustomobject]@{
+            CommandType = [Management.Automation.CommandTypes]::Application
+            Source = Join-Path $testRoot 'missing-git.exe'
+        }) `
+        -ExpectedMessage 'not an existing .exe file'
+
     Invoke-CoreReleaseGit -Arguments @('-C', $fixtureRepository, 'init', '--quiet') | Out-Null
     [IO.File]::WriteAllText(
         (Join-Path $fixtureRepository 'tracked.txt'),
