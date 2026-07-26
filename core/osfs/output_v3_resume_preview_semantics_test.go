@@ -165,9 +165,25 @@ func TestOutputV3PrivateTreePreviewPreservesUnsafeEntryEvidence(t *testing.T) {
 			name: "public fallback keeps unsafe-directory attention",
 			directory: &outputV3ResumePreviewDirectory{
 				names: []string{"directory"}, entry: previewEntry(outputV3EntryDirectory, 0),
-				privateChildErr: injected, publicChild: emptyChild(nil),
+				privateChildErr: injected, publicChild: emptyChild(nil), matches: true,
 			},
 			wantAttention: 1,
+		},
+		{
+			name: "directory identity changed after recursive preview",
+			directory: &outputV3ResumePreviewDirectory{
+				names: []string{"directory"}, entry: previewEntry(outputV3EntryDirectory, 0),
+				privateChild: emptyChild(nil),
+			},
+			cause: errOutputV3Unsafe,
+		},
+		{
+			name: "directory revalidation failed after recursive preview",
+			directory: &outputV3ResumePreviewDirectory{
+				names: []string{"directory"}, entry: previewEntry(outputV3EntryDirectory, 0),
+				privateChild: emptyChild(nil), matchErr: injected,
+			},
+			cause: injected,
 		},
 		{
 			name: "unopenable directory",
@@ -181,7 +197,7 @@ func TestOutputV3PrivateTreePreviewPreservesUnsafeEntryEvidence(t *testing.T) {
 			name: "child close failure",
 			directory: &outputV3ResumePreviewDirectory{
 				names: []string{"directory"}, entry: previewEntry(outputV3EntryDirectory, 0),
-				privateChild: emptyChild(injected),
+				privateChild: emptyChild(injected), matches: true,
 			},
 			cause: injected,
 		},
