@@ -19,6 +19,7 @@ import (
 	"github.com/windshare/windshare/core/content/records"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/keyderiv"
+	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/catalogflow"
@@ -329,7 +330,7 @@ func TestCompositeRuntimeMultiReceiverStopAndAccessors(t *testing.T) {
 		t.Fatalf("receiver lane/session = %d/%d/%x", laneID, laneEpoch, firstReceiver.ProtocolSessionID())
 	}
 	if _, err := firstReceiver.NewTransferJob(transfer.SelectionRules{}, nil); err == nil {
-		t.Fatal("transfer job accepted a nil durable output boundary")
+		t.Fatal("transfer job accepted a nil output authority")
 	}
 
 	if err := fixture.senderFactory.Stop(context.Background(), "Maintenance"); err != nil {
@@ -450,27 +451,25 @@ func TestCompositeRuntimeTransferJobPublishesDurableFilesystemOutput(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := osfs.OutputResumeIntentFromBytes(bytes.Repeat([]byte{91}, osfs.OutputResumeIntentBytes))
-	if err != nil {
-		t.Fatal(err)
-	}
-	authority, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	outputRoot := t.TempDir()
-	opened, err := authority.OpenOrCreate(context.Background(), osfs.FilesystemOutputIntent{
-		RootPath: outputRoot, ShareInstance: fixture.share, ResumeIntent: intent,
+	outputFixture := testoutputroot.New(t)
+	outputRoot := outputFixture.RootPath
+	authority, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{
+		RootPath: outputRoot, CreateRoot: outputFixture.CreateRoot,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := receiver.NewTransferJob(rules, opened.Session)
+	if _, statErr := os.Stat(outputRoot); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("output authority created its root before terminal selection: %v", statErr)
+	}
+	job, err := receiver.NewTransferJob(rules, authority)
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != transfer.JobSucceeded || result.SucceededFiles != 1 || result.AbortCause != nil {
+	if result.Outcome != transfer.JobSucceeded || result.Settlement.Kind() != transfer.JobClosed ||
+		result.SucceededFiles != 1 || result.TerminationCause != nil || result.ResumeIntent.IsZero() ||
+		result.SelectionIdentity.IsZero() {
 		t.Fatalf("transfer result = %+v", result)
 	}
 	written, err := os.ReadFile(filepath.Join(outputRoot, "folder", "file.bin"))
@@ -479,6 +478,19 @@ func TestCompositeRuntimeTransferJobPublishesDurableFilesystemOutput(t *testing.
 	}
 	if !bytes.Equal(written, fixture.fileData) {
 		t.Fatal("durably published file changed bytes")
+	}
+	inventory, err := osfs.ListResumeState(context.Background(), osfs.FilesystemResumeRoot{RootPath: outputRoot})
+	if err != nil {
+		t.Fatalf("list completed transfer resume state: %v", err)
+	}
+	defer func() {
+		if err := inventory.Close(); err != nil {
+			t.Errorf("close completed transfer resume inventory: %v", err)
+		}
+	}()
+	resumes := inventory.Summaries()
+	if len(resumes) != 0 {
+		t.Fatalf("completed transfer retained resume sessions: %d", len(resumes))
 	}
 	if fixture.contentStore.blockReads.Load() != 3 {
 		t.Fatalf("durable job block reads = %d", fixture.contentStore.blockReads.Load())

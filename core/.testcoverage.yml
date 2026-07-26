@@ -2,8 +2,9 @@
 # The root module has its own gate at ../.testcoverage.yml (total >=80).
 # https://github.com/vladopajic/go-test-coverage
 #
-# core is pure (no network/disk side-effect entry points; IO is injected), so
-# local and CI numbers match and the bar is higher than the root module's.
+# Core is network-free, but osfs includes platform-native disk backends.
+# Coverage therefore depends on the exercised OS profile; the bar remains
+# higher than the root module's.
 
 profile: cover.out
 local-prefix: github.com/windshare/windshare/core

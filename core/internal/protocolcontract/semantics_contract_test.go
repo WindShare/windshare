@@ -22,7 +22,7 @@ func TestZipFailureEscalatesOnlyAfterMemberStart(t *testing.T) {
 	if action, outcome := zipMemberFailure(false); action != "skip-and-report" || outcome != "completed-with-errors" {
 		t.Fatalf("not-started ZIP member = (%q, %q)", action, outcome)
 	}
-	if action, outcome := zipMemberFailure(true); action != "abort-job" || outcome != "aborted" {
+	if action, outcome := zipMemberFailure(true); action != "pause-job" || outcome != "paused" {
 		t.Fatalf("started ZIP member = (%q, %q)", action, outcome)
 	}
 }

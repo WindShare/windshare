@@ -335,103 +335,29 @@ func TestWindowsPersistentIdentityUsesFullReFSWidth(t *testing.T) {
 		bytes.Equal(first.candidateBytes(), second.candidateBytes()) {
 		t.Fatal("distinct 128-bit file IDs collapsed to the legacy 64-bit identity")
 	}
-	firstOutput, err := windowsOutputObjectIdentity(first.identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondOutput, err := windowsOutputObjectIdentity(second.identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if firstOutput == secondOutput {
-		t.Fatal("output identity ignored the high file-ID bytes")
-	}
 }
 
-func TestWindowsSourceAndOutputVolumeSupportMatrix(t *testing.T) {
-	localNTFS := windowsVolume{
+func TestWindowsRevisionVolumeSupportMatrix(t *testing.T) {
+	localNTFS := windowsRevisionVolume{
 		filesystem: "NTFS", path: `\\?\C:\root`, driveType: windows.DRIVE_FIXED,
-		flags: windows.FILE_SUPPORTS_HARD_LINKS | windowsFileSupportsPOSIXUnlinkRename,
 	}
-	localReFS := windowsVolume{
+	localReFS := windowsRevisionVolume{
 		filesystem: "ReFS", path: `\\?\R:\root`, driveType: windows.DRIVE_REMOVABLE,
-		flags: windows.FILE_SUPPORTS_HARD_LINKS | windowsFileSupportsPOSIXUnlinkRename,
 	}
-	for _, supported := range []windowsVolume{localNTFS, localReFS} {
-		if err := validateWindowsLocalPersistentVolume(supported); err != nil {
+	for _, supported := range []windowsRevisionVolume{localNTFS, localReFS} {
+		if err := validateWindowsLocalRevisionVolume(supported); err != nil {
 			t.Fatalf("stable volume %+v: %v", supported, err)
 		}
-		if err := validateWindowsOutputVolume(supported); err != nil {
-			t.Fatalf("output volume %+v: %v", supported, err)
-		}
 	}
-	unsupported := []windowsVolume{
-		{filesystem: "FAT32", path: `\\?\F:\root`, driveType: windows.DRIVE_REMOVABLE, flags: localNTFS.flags},
-		{filesystem: "NTFS", path: `\\?\UNC\server\share\root`, driveType: windows.DRIVE_REMOTE, flags: localNTFS.flags},
-		{filesystem: "NTFS", path: `\\?\Z:\root`, driveType: windows.DRIVE_REMOTE, flags: localNTFS.flags},
+	unsupported := []windowsRevisionVolume{
+		{filesystem: "FAT32", path: `\\?\F:\root`, driveType: windows.DRIVE_REMOVABLE},
+		{filesystem: "NTFS", path: `\\?\UNC\server\share\root`, driveType: windows.DRIVE_REMOTE},
+		{filesystem: "NTFS", path: `\\?\Z:\root`, driveType: windows.DRIVE_REMOTE},
 	}
 	for _, volume := range unsupported {
-		if err := validateWindowsLocalPersistentVolume(volume); err == nil {
+		if err := validateWindowsLocalRevisionVolume(volume); err == nil {
 			t.Fatalf("unsupported stable volume admitted: %+v", volume)
 		}
-		if err := validateWindowsOutputVolume(volume); !errors.Is(err, ErrUnsupportedOutputVolume) {
-			t.Fatalf("unsupported output volume %+v error=%v", volume, err)
-		}
-	}
-	withoutHardLinks := localReFS
-	withoutHardLinks.flags = 0
-	if err := validateWindowsOutputVolume(withoutHardLinks); !errors.Is(err, ErrUnsupportedOutputVolume) {
-		t.Fatalf("hard-link-free ReFS output error=%v", err)
-	}
-	withoutHandleUnlink := localNTFS
-	withoutHandleUnlink.flags = windows.FILE_SUPPORTS_HARD_LINKS
-	if err := validateWindowsOutputVolume(withoutHandleUnlink); !errors.Is(err, ErrUnsupportedOutputVolume) {
-		t.Fatalf("path-racy NTFS output error=%v", err)
-	}
-}
-
-func TestWindowsOutputCleanupFollowsVerifiedHandleAcrossReplacement(t *testing.T) {
-	rootPath := t.TempDir()
-	originalPath := filepath.Join(rootPath, "owned.bin")
-	movedPath := filepath.Join(rootPath, "owned-moved.bin")
-	if err := os.WriteFile(originalPath, []byte("ours"), filePerm); err != nil {
-		t.Fatal(err)
-	}
-	root, err := os.OpenRoot(rootPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer root.Close()
-	file, err := openOutputRemovalFile(root, "owned.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity, err := outputObjectIdentity(file)
-	if err != nil {
-		_ = file.Close()
-		t.Fatal(err)
-	}
-	if err := os.Rename(originalPath, movedPath); err != nil {
-		_ = file.Close()
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(originalPath, []byte("foreign"), filePerm); err != nil {
-		_ = file.Close()
-		t.Fatal(err)
-	}
-	current, err := outputObjectIdentity(file)
-	if err != nil || current != identity {
-		_ = file.Close()
-		t.Fatalf("opened identity changed=%v err=%v", current, err)
-	}
-	if err := errors.Join(removeOpenedOutputFile(root, "owned.bin", file), file.Close()); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := os.ReadFile(originalPath); err != nil || string(got) != "foreign" {
-		t.Fatalf("replacement output=%q err=%v", got, err)
-	}
-	if _, err := os.Stat(movedPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("verified owned object survived handle deletion: %v", err)
 	}
 }
 

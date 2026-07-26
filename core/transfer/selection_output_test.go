@@ -217,7 +217,7 @@ func TestOutputBindingsDurableRangesAndCapabilities(t *testing.T) {
 	}
 	ranges, _ := content.NewRangeSet([]content.Range{{Offset: 0, End: 10}})
 	verified, err := VerifyDurableRanges(binding, 4, ranges)
-	if err != nil || verified.Binding() != binding || verified.Generation() != 4 || !rangesEqual(verified.Ranges(), ranges) {
+	if err != nil || verified.Binding() != binding || verified.CheckpointGeneration() != 4 || !rangesEqual(verified.Ranges(), ranges) {
 		t.Fatalf("verified=%+v err=%v", verified, err)
 	}
 	outside, _ := content.NewRangeSet([]content.Range{{Offset: 0, End: descriptor.ExactSize() + 1}})
@@ -325,7 +325,7 @@ func TestOutputIdentityLocatorAndErrorValidationBranches(t *testing.T) {
 		t.Fatal("output error did not retain its synthesized cause")
 	}
 	var outputError *OutputSessionError
-	if !errors.As(nilCause, &outputError) || outputError.RequiresJobAbort() {
+	if !errors.As(nilCause, &outputError) || outputError.RequiresJobPause() {
 		t.Fatal("nonfatal output error classification failed")
 	}
 }

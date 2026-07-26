@@ -1,0 +1,249 @@
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
+
+Import-Module (Join-Path $PSScriptRoot 'core-release-checkout.psm1') -Force
+
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) (
+    'windshare-core-checkout-contract-{0}' -f [Guid]::NewGuid().ToString('N')
+)
+$fixtureRepository = Join-Path $testRoot 'repository'
+$exactCheckout = Join-Path $testRoot 'exact-checkout'
+$commitSHA = ''
+$gitVariableNames = @('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE')
+$originalGitVariables = [ordered]@{}
+foreach ($name in $gitVariableNames) {
+    $originalGitVariables[$name] = [Environment]::GetEnvironmentVariable(
+        $name,
+        [EnvironmentVariableTarget]::Process
+    )
+}
+
+function Assert-CheckoutThrows([string]$Label, [string]$ExpectedMessage) {
+    try {
+        Assert-ExactCoreReleaseCheckout `
+            -RepositoryRoot $fixtureRepository `
+            -ExpectedCommit $commitSHA
+    } catch {
+        if (-not $_.Exception.Message.Contains($ExpectedMessage, [StringComparison]::Ordinal)) {
+            throw "$Label failed for the wrong reason: $($_.Exception.Message)"
+        }
+        return
+    }
+    throw "$Label did not fail closed"
+}
+
+try {
+    New-Item -ItemType Directory -Path $fixtureRepository | Out-Null
+    Invoke-CoreReleaseGit -Arguments @('-C', $fixtureRepository, 'init', '--quiet') | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $fixtureRepository 'tracked.txt'),
+        "committed release input`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    Invoke-CoreReleaseGit -Arguments @('-C', $fixtureRepository, 'add', '--', 'tracked.txt') | Out-Null
+    Invoke-CoreReleaseGit -Arguments @(
+        '-C', $fixtureRepository,
+        '-c', 'user.name=WindShare',
+        '-c', 'user.email=release-contract.invalid',
+        'commit', '--quiet', '-m', 'fixture'
+    ) | Out-Null
+    $commitSHA = [string](Invoke-CoreReleaseGit -Arguments @(
+        '-C', $fixtureRepository, 'rev-parse', 'HEAD'
+    ))
+    $commitSHA = $commitSHA.Trim()
+    if ($commitSHA -cnotmatch '^[0-9a-f]{40}$') {
+        throw 'fixture commit is not an exact SHA'
+    }
+
+    # -C does not override these process redirects. The checker must ignore them
+    # while preserving the caller's environment after every Git invocation.
+    $hostileGitValues = [ordered]@{
+        GIT_DIR       = Join-Path $testRoot 'redirected.git'
+        GIT_WORK_TREE = Join-Path $testRoot 'redirected-worktree'
+        GIT_INDEX_FILE = Join-Path $testRoot 'redirected-index'
+    }
+    foreach ($entry in $hostileGitValues.GetEnumerator()) {
+        [Environment]::SetEnvironmentVariable(
+            $entry.Key,
+            $entry.Value,
+            [EnvironmentVariableTarget]::Process
+        )
+    }
+    Assert-ExactCoreReleaseCheckout `
+        -RepositoryRoot $fixtureRepository `
+        -ExpectedCommit $commitSHA
+    foreach ($entry in $hostileGitValues.GetEnumerator()) {
+        $actual = [Environment]::GetEnvironmentVariable(
+            $entry.Key,
+            [EnvironmentVariableTarget]::Process
+        )
+        if ($actual -cne $entry.Value) {
+            throw "$($entry.Key) was not restored after isolated Git"
+        }
+        [Environment]::SetEnvironmentVariable(
+            $entry.Key,
+            $null,
+            [EnvironmentVariableTarget]::Process
+        )
+    }
+
+    [IO.File]::WriteAllText(
+        (Join-Path $fixtureRepository 'tracked.txt'),
+        "ordinary tracked mutation`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    Assert-CheckoutThrows 'tracked mutation' 'release checkout is not clean'
+    Invoke-CoreReleaseGit -Arguments @('-C', $fixtureRepository, 'checkout', '--', 'tracked.txt') | Out-Null
+
+    [IO.File]::WriteAllText(
+        (Join-Path $fixtureRepository 'untracked.txt'),
+        "untracked mutation`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    Assert-CheckoutThrows 'untracked mutation' 'release checkout is not clean'
+    Remove-Item -LiteralPath (Join-Path $fixtureRepository 'untracked.txt')
+
+    Invoke-CoreReleaseGit -Arguments @(
+        '-C', $fixtureRepository, 'update-index', '--assume-unchanged', 'tracked.txt'
+    ) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $fixtureRepository 'tracked.txt'),
+        "assume-unchanged mutation`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    Assert-CheckoutThrows 'assume-unchanged mutation' 'non-default Git index state'
+    Invoke-CoreReleaseGit -Arguments @(
+        '-C', $fixtureRepository, 'update-index', '--no-assume-unchanged', 'tracked.txt'
+    ) | Out-Null
+    Invoke-CoreReleaseGit -Arguments @('-C', $fixtureRepository, 'checkout', '--', 'tracked.txt') | Out-Null
+
+    Invoke-CoreReleaseGit -Arguments @(
+        '-C', $fixtureRepository, 'update-index', '--skip-worktree', 'tracked.txt'
+    ) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $fixtureRepository 'tracked.txt'),
+        "skip-worktree mutation`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    Assert-CheckoutThrows 'skip-worktree mutation' 'non-default Git index state'
+    Invoke-CoreReleaseGit -Arguments @(
+        '-C', $fixtureRepository, 'update-index', '--no-skip-worktree', 'tracked.txt'
+    ) | Out-Null
+    Invoke-CoreReleaseGit -Arguments @('-C', $fixtureRepository, 'checkout', '--', 'tracked.txt') | Out-Null
+
+    New-ExactCoreReleaseCheckout `
+        -SourceRepository $fixtureRepository `
+        -ExpectedCommit $commitSHA `
+        -Destination $exactCheckout `
+        -VerifierPaths @('tracked.txt')
+    [IO.File]::WriteAllText(
+        (Join-Path $fixtureRepository 'tracked.txt'),
+        "late source mutation`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    [IO.File]::WriteAllText(
+        (Join-Path $fixtureRepository 'untracked.txt'),
+        "late untracked mutation`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    Assert-ExactCoreReleaseCheckout `
+        -RepositoryRoot $exactCheckout `
+        -ExpectedCommit $commitSHA
+    $expectedObject = [string](Invoke-CoreReleaseGit -Arguments @(
+        '-C', $fixtureRepository, 'rev-parse', "${commitSHA}:tracked.txt"
+    ))
+    $actualObject = [string](Invoke-CoreReleaseGit -Arguments @(
+        'hash-object', '--', (Join-Path $exactCheckout 'tracked.txt')
+    ))
+    if ($actualObject.Trim() -cne $expectedObject.Trim()) {
+        throw 'private checkout consumed late source bytes'
+    }
+    [IO.File]::WriteAllText(
+        (Join-Path $exactCheckout 'tracked.txt'),
+        "post-projection mutation`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    $postProjectionRejected = $false
+    try {
+        Assert-ExactCoreReleaseFileProjection `
+            -RepositoryRoot $exactCheckout `
+            -ExpectedCommit $commitSHA `
+            -VerifierPaths @('tracked.txt')
+    } catch {
+        if (-not $_.Exception.Message.Contains(
+            'differs from its commit blob',
+            [StringComparison]::Ordinal
+        )) {
+            throw "post-projection mutation failed for the wrong reason: $($_.Exception.Message)"
+        }
+        $postProjectionRejected = $true
+    }
+    if (-not $postProjectionRejected) {
+        throw 'post-projection mutation escaped raw revalidation'
+    }
+
+    Remove-Item -LiteralPath (Join-Path $fixtureRepository 'untracked.txt')
+    [IO.File]::WriteAllText(
+        (Join-Path $fixtureRepository 'tracked.txt'),
+        "`$Id`$`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    [IO.File]::WriteAllText(
+        (Join-Path $fixtureRepository '.gitattributes'),
+        "tracked.txt ident`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    Invoke-CoreReleaseGit -Arguments @(
+        '-C', $fixtureRepository, 'add', '--', '.gitattributes', 'tracked.txt'
+    ) | Out-Null
+    Invoke-CoreReleaseGit -Arguments @(
+        '-C', $fixtureRepository,
+        '-c', 'user.name=WindShare',
+        '-c', 'user.email=release-contract.invalid',
+        'commit', '--quiet', '-m', 'ident-filter'
+    ) | Out-Null
+    $identCommit = [string](Invoke-CoreReleaseGit -Arguments @(
+        '-C', $fixtureRepository, 'rev-parse', 'HEAD'
+    ))
+    $identRejected = $false
+    try {
+        New-ExactCoreReleaseCheckout `
+            -SourceRepository $fixtureRepository `
+            -ExpectedCommit $identCommit.Trim() `
+            -Destination (Join-Path $testRoot 'ident-checkout') `
+            -VerifierPaths @('tracked.txt')
+    } catch {
+        if (-not $_.Exception.Message.Contains(
+            'differs from its commit blob',
+            [StringComparison]::Ordinal
+        )) {
+            throw "checkout transformation failed for the wrong reason: $($_.Exception.Message)"
+        }
+        $identRejected = $true
+    }
+    if (-not $identRejected) {
+        throw 'checkout transformation passed raw verifier projection'
+    }
+} finally {
+    foreach ($name in $gitVariableNames) {
+        [Environment]::SetEnvironmentVariable(
+            $name,
+            $originalGitVariables[$name],
+            [EnvironmentVariableTarget]::Process
+        )
+    }
+    if (Test-Path -LiteralPath $testRoot) {
+        $resolvedRoot = [IO.Path]::GetFullPath($testRoot)
+        $resolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+        $ownedPrefix = Join-Path $resolvedTemp 'windshare-core-checkout-contract-'
+        if (-not $resolvedRoot.StartsWith($ownedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "refusing to remove unowned checkout-test path: $resolvedRoot"
+        }
+        Remove-Item -LiteralPath $resolvedRoot -Recurse -Force
+    }
+}
+
+Write-Output 'core release checkout contract: PASS'

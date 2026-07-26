@@ -12,7 +12,6 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	framechannel "github.com/windshare/windshare/core/framechannel"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 )
 
@@ -118,12 +117,6 @@ func TestPreparedReceiverBeginCloseIsSafeFromConnectSendCallback(t *testing.T) {
 	case <-closed:
 	case <-time.After(time.Second):
 		t.Fatal("owner Close did not join callback-initiated close")
-	}
-	receiver.mu.Lock()
-	resumeIntent := receiver.resumeIntent
-	receiver.mu.Unlock()
-	if resumeIntent != (osfs.OutputResumeIntent{}) {
-		t.Fatal("closed receiver retained capability-derived resume authority")
 	}
 }
 

@@ -928,7 +928,7 @@ func operationFinalMatrix() []any {
 
 func zipMemberFailure(memberStarted bool) (string, string) {
 	if memberStarted {
-		return "abort-job", "aborted"
+		return "pause-job", "paused"
 	}
 	return "skip-and-report", "completed-with-errors"
 }
@@ -1053,9 +1053,9 @@ func semanticCases() []any {
 		map[string]any{"name": "output-backend-capabilities", "backends": []any{
 			map[string]any{"backend": "fsa", "durability": "none-until-reauthorization-and-reopen-proof", "randomWrite": true, "fileFailureIsolation": true, "mtime": false, "powerLoss": false},
 			map[string]any{"backend": "opfs-staging", "durability": "process-restart", "randomWrite": true, "fileFailureIsolation": true, "mtime": false, "powerLoss": false},
-			map[string]any{"backend": "single-file-stream", "durability": "none", "randomWrite": false, "fileFailureIsolation": false, "mtime": false, "failureAfterFirstByte": "abort-job"},
+			map[string]any{"backend": "single-file-stream", "durability": "none", "randomWrite": false, "fileFailureIsolation": false, "mtime": false, "failureAfterFirstByte": "pause-job"},
 			map[string]any{"backend": "zip-stream", "durability": "none", "randomWrite": false, "fileFailureIsolation": false, "mtime": false, "memberStart": "first-local-file-header-byte"},
-			map[string]any{"backend": "cli-osfs", "durability": "power-loss-when-file-and-directory-sync-proved-else-process-restart", "randomWrite": true, "fileFailureIsolation": true, "mtime": true},
+			map[string]any{"backend": "cli-osfs", "durability": "process-restart", "randomWrite": true, "fileFailureIsolation": true, "mtime": true, "powerLoss": false},
 		}},
 		map[string]any{"name": "zip-member-failure", "cases": zipMemberFailureCases()},
 		map[string]any{"name": "catalog-transaction", "publishOnlyAfter": []string{"pages", "node-records", "terminal", "budget-charge", "spill-flush", "atomic-commit"}, "preCommitCrashVisible": false},

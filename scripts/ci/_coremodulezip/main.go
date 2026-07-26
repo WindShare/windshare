@@ -61,16 +61,23 @@ var requiredFiles = []string{
 
 type configuration struct {
 	repositoryRoot string
+	commitSHA      string
 	stageDirectory string
 	zipPath        string
 	extractPath    string
 	version        string
 }
 
+type committedFile struct {
+	relativePath string
+	objectID     string
+}
+
 func main() {
 	config := configuration{}
 	flag.StringVar(&config.repositoryRoot, "repo", "", "repository root")
-	flag.StringVar(&config.stageDirectory, "stage", "", "empty directory for projected core sources")
+	flag.StringVar(&config.commitSHA, "commit", "", "exact lowercase 40-character release commit SHA")
+	flag.StringVar(&config.stageDirectory, "stage", "", "empty directory for committed core sources")
 	flag.StringVar(&config.zipPath, "zip", "", "module zip output path")
 	flag.StringVar(&config.extractPath, "extract", "", "empty directory for the extracted module")
 	flag.StringVar(&config.version, "version", "", "core semantic version")
@@ -82,20 +89,19 @@ func main() {
 	}
 }
 
-func run(config configuration) error {
+func run(config configuration) (runErr error) {
 	if err := validateConfiguration(config); err != nil {
 		return err
 	}
 
-	files, err := projectedCoreFiles(config.repositoryRoot)
+	files, err := committedCoreFiles(config.repositoryRoot, config.commitSHA)
 	if err != nil {
 		return err
 	}
 	if len(files) == 0 {
-		return errors.New("Git projection contains no core files")
+		return errors.New("release commit contains no core files")
 	}
-	coreDirectory := filepath.Join(config.repositoryRoot, "core")
-	if err := auditSourceDirectory(coreDirectory, files); err != nil {
+	if err := auditCommittedProjection(files); err != nil {
 		return err
 	}
 
@@ -111,7 +117,8 @@ func run(config configuration) error {
 	if err := validateReleaseMetadata(config.stageDirectory); err != nil {
 		return err
 	}
-	if err := validateModuleZipInput(config.stageDirectory, files); err != nil {
+	projectedPaths := committedFilePaths(files)
+	if err := validateModuleZipInput(config.stageDirectory, projectedPaths); err != nil {
 		return err
 	}
 
@@ -119,14 +126,27 @@ func run(config configuration) error {
 	if err := createModuleZip(config.zipPath, version, config.stageDirectory); err != nil {
 		return err
 	}
+	archiveValidated := false
+	defer func() {
+		if !archiveValidated {
+			runErr = removeFailedArchive(config.zipPath, runErr)
+		}
+	}()
 
 	// A second construction proves byte determinism instead of trusting file
 	// timestamps or platform-specific archive defaults.
 	secondZip := config.zipPath + ".determinism-check"
-	defer os.Remove(secondZip)
 	if err := createModuleZip(secondZip, version, config.stageDirectory); err != nil {
 		return err
 	}
+	defer func() {
+		if err := os.Remove(secondZip); err != nil && !errors.Is(err, os.ErrNotExist) {
+			// A leaked verifier makes the release workspace ambiguous, so its
+			// cleanup failure also invalidates publication of the primary zip.
+			archiveValidated = false
+			runErr = errors.Join(runErr, fmt.Errorf("remove determinism-check module zip: %w", err))
+		}
+	}()
 	firstDigest, err := fileDigest(config.zipPath)
 	if err != nil {
 		return err
@@ -143,15 +163,17 @@ func run(config configuration) error {
 	if err != nil {
 		return fmt.Errorf("check module zip: %w", err)
 	}
-	if len(checked.Valid) != len(files) {
-		return fmt.Errorf("module zip contains %d files; projected source contains %d", len(checked.Valid), len(files))
+	if err := validateModuleZipProjection(version, checked.Valid, projectedPaths); err != nil {
+		return err
 	}
 
 	if err := modzip.Unzip(config.extractPath, version, config.zipPath); err != nil {
 		return fmt.Errorf("extract module zip: %w", err)
 	}
+	archiveValidated = true
 
 	fmt.Printf("module=%s@%s\n", modulePath, config.version)
+	fmt.Printf("commit=%s\n", config.commitSHA)
 	fmt.Printf("files=%d\n", len(files))
 	fmt.Printf("sha256=%x\n", firstDigest)
 	return nil
@@ -160,6 +182,7 @@ func run(config configuration) error {
 func validateConfiguration(config configuration) error {
 	for name, value := range map[string]string{
 		"repo":    config.repositoryRoot,
+		"commit":  config.commitSHA,
 		"stage":   config.stageDirectory,
 		"zip":     config.zipPath,
 		"extract": config.extractPath,
@@ -172,30 +195,108 @@ func validateConfiguration(config configuration) error {
 	if err := module.Check(modulePath, config.version); err != nil {
 		return fmt.Errorf("invalid module version: %w", err)
 	}
+	if !isLowerHexCommitSHA(config.commitSHA) {
+		return errors.New("-commit must be an exact lowercase 40-character commit SHA")
+	}
 	return nil
 }
 
-func projectedCoreFiles(repositoryRoot string) ([]string, error) {
-	command := exec.Command(
-		"git", "-C", repositoryRoot, "ls-files", "-z",
-		"--cached", "--others", "--exclude-standard", "--", "core",
-	)
-	output, err := command.Output()
-	if err != nil {
-		var exitError *exec.ExitError
-		if errors.As(err, &exitError) {
-			return nil, fmt.Errorf("enumerate publishable core files: %s", strings.TrimSpace(string(exitError.Stderr)))
+func isLowerHexCommitSHA(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
 		}
-		return nil, fmt.Errorf("enumerate publishable core files: %w", err)
+	}
+	return true
+}
+
+func committedCoreFiles(repositoryRoot, commitSHA string) ([]committedFile, error) {
+	objectType, err := gitOutput(repositoryRoot, "cat-file", "-t", commitSHA)
+	if err != nil {
+		return nil, fmt.Errorf("inspect release commit: %w", err)
+	}
+	if strings.TrimSpace(string(objectType)) != "commit" {
+		return nil, errors.New("release SHA must directly identify a commit object")
 	}
 
-	seen := make(map[string]struct{})
-	files := make([]string, 0)
-	for _, gitPath := range bytes.Split(output, []byte{0}) {
-		if len(gitPath) == 0 {
+	output, err := gitOutput(
+		repositoryRoot,
+		"ls-tree", "-r", "-z", "--full-tree", commitSHA, "--", "core",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("enumerate committed core files: %w", err)
+	}
+	return parseCommittedCoreFiles(output)
+}
+
+func gitOutput(repositoryRoot string, arguments ...string) ([]byte, error) {
+	command := exec.Command("git", append([]string{"-C", repositoryRoot}, arguments...)...)
+	command.Env = isolatedGitEnvironment()
+	output, err := command.Output()
+	if err == nil {
+		return output, nil
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) {
+		return nil, fmt.Errorf(
+			"git %s: %s",
+			strings.Join(arguments, " "),
+			strings.TrimSpace(string(exitError.Stderr)),
+		)
+	}
+	return nil, fmt.Errorf("git %s: %w", strings.Join(arguments, " "), err)
+}
+
+func isolatedGitEnvironment() []string {
+	environment := make([]string, 0, len(os.Environ())+4)
+	for _, variable := range os.Environ() {
+		key, _, _ := strings.Cut(variable, "=")
+		if strings.HasPrefix(strings.ToUpper(key), "GIT_") {
 			continue
 		}
-		fullGitPath := filepath.ToSlash(string(gitPath))
+		environment = append(environment, variable)
+	}
+	// The publication set must come from the named repository, not caller
+	// redirects or machine-global ignore configuration.
+	return append(
+		environment,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_NO_REPLACE_OBJECTS=1",
+		"GIT_TERMINAL_PROMPT=0",
+	)
+}
+
+func parseCommittedCoreFiles(output []byte) ([]committedFile, error) {
+	seen := make(map[string]struct{})
+	files := make([]committedFile, 0)
+	for _, record := range bytes.Split(output, []byte{0}) {
+		if len(record) == 0 {
+			continue
+		}
+		header, gitPathBytes, found := bytes.Cut(record, []byte{'\t'})
+		if !found {
+			return nil, fmt.Errorf("Git returned a malformed tree record: %q", record)
+		}
+		fields := strings.Fields(string(header))
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("Git returned a malformed tree header: %q", header)
+		}
+		mode, objectType, objectID := fields[0], fields[1], fields[2]
+		if objectType != "blob" || (mode != "100644" && mode != "100755") {
+			return nil, fmt.Errorf("committed core path is not a regular file: %s", gitPathBytes)
+		}
+		if !isLowerHexCommitSHA(objectID) {
+			return nil, fmt.Errorf("committed core path has an invalid object ID: %s", gitPathBytes)
+		}
+
+		fullGitPath := string(gitPathBytes)
+		if strings.Contains(fullGitPath, "\\") {
+			return nil, fmt.Errorf("Git returned a non-canonical path: %q", fullGitPath)
+		}
 		const prefix = "core/"
 		if !strings.HasPrefix(fullGitPath, prefix) {
 			return nil, fmt.Errorf("Git returned a path outside core: %q", fullGitPath)
@@ -204,18 +305,6 @@ func projectedCoreFiles(repositoryRoot string) ([]string, error) {
 		if !isSafeModulePath(relativePath) {
 			return nil, fmt.Errorf("invalid core module path: %q", relativePath)
 		}
-		sourcePath := filepath.Join(repositoryRoot, filepath.FromSlash(fullGitPath))
-		info, err := os.Lstat(sourcePath)
-		if errors.Is(err, os.ErrNotExist) {
-			// A tracked deletion is absent from the prospective worktree artifact.
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("inspect %s: %w", fullGitPath, err)
-		}
-		if !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("publishable core path is not a regular file: %s", fullGitPath)
-		}
 		if err := validateTopLevelPath(relativePath); err != nil {
 			return nil, err
 		}
@@ -223,18 +312,31 @@ func projectedCoreFiles(repositoryRoot string) ([]string, error) {
 			return nil, fmt.Errorf("duplicate core module path: %s", relativePath)
 		}
 		seen[relativePath] = struct{}{}
-		files = append(files, relativePath)
+		files = append(files, committedFile{relativePath: relativePath, objectID: objectID})
 	}
-	sort.Strings(files)
+	sort.Slice(files, func(left, right int) bool {
+		return files[left].relativePath < files[right].relativePath
+	})
 	return files, nil
 }
 
+func committedFilePaths(files []committedFile) []string {
+	paths := make([]string, len(files))
+	for index, file := range files {
+		paths[index] = file.relativePath
+	}
+	return paths
+}
+
 func isSafeModulePath(filePath string) bool {
-	if filePath == "" || filePath == "." || strings.Contains(filePath, "\\") {
+	if filePath == "" || filePath == "." || path.IsAbs(filePath) || strings.Contains(filePath, "\\") {
 		return false
 	}
 	cleaned := path.Clean(filePath)
-	return cleaned == filePath && cleaned != ".." && !strings.HasPrefix(cleaned, "../")
+	if cleaned != filePath || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return false
+	}
+	return module.CheckFilePath(filePath) == nil
 }
 
 func validateTopLevelPath(filePath string) error {
@@ -254,76 +356,22 @@ func validateTopLevelPath(filePath string) error {
 	return nil
 }
 
-func auditSourceDirectory(coreDirectory string, projectedFiles []string) error {
-	entries, err := os.ReadDir(coreDirectory)
-	if err != nil {
-		return fmt.Errorf("read core source directory: %w", err)
-	}
+func auditCommittedProjection(files []committedFile) error {
 	seenFiles := make(map[string]struct{}, len(allowedTopLevelFiles))
 	seenDirectories := make(map[string]struct{}, len(allowedTopLevelDirectories))
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() {
-			if _, allowed := allowedTopLevelDirectories[name]; !allowed {
-				return fmt.Errorf("unexpected top-level core directory: %s", name)
-			}
-			seenDirectories[name] = struct{}{}
-			continue
+	for _, file := range files {
+		topLevel, _, nested := strings.Cut(file.relativePath, "/")
+		if nested {
+			seenDirectories[topLevel] = struct{}{}
+		} else {
+			seenFiles[topLevel] = struct{}{}
 		}
-		info, err := entry.Info()
-		if err != nil {
-			return fmt.Errorf("inspect core/%s: %w", name, err)
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("unexpected irregular top-level core path: %s", name)
-		}
-		if _, allowed := allowedTopLevelFiles[name]; !allowed {
-			return fmt.Errorf("unexpected top-level core file: %s", name)
-		}
-		seenFiles[name] = struct{}{}
 	}
 	if missing := setDifference(allowedTopLevelFiles, seenFiles); len(missing) != 0 {
 		return fmt.Errorf("required top-level core files are missing: %s", strings.Join(missing, ", "))
 	}
 	if missing := setDifference(allowedTopLevelDirectories, seenDirectories); len(missing) != 0 {
 		return fmt.Errorf("required top-level core directories are missing: %s", strings.Join(missing, ", "))
-	}
-
-	// Comparing x/mod's direct source view with Git's prospective publication
-	// catches ignored coverage profiles and other local files that CreateFromDir
-	// would otherwise silently add to a release built from the working tree.
-	checked, err := modzip.CheckDir(coreDirectory)
-	if err != nil {
-		return fmt.Errorf("check core source directory as module zip input: %w", err)
-	}
-	if len(checked.Omitted) != 0 {
-		return fmt.Errorf("core source contains files omitted by module zip rules: %v", checked.Omitted)
-	}
-
-	projected := make(map[string]struct{}, len(projectedFiles))
-	for _, filePath := range projectedFiles {
-		projected[filePath] = struct{}{}
-	}
-	accepted := make(map[string]struct{}, len(checked.Valid))
-	for _, filePath := range checked.Valid {
-		relativePath, err := filepath.Rel(coreDirectory, filePath)
-		if err != nil {
-			return fmt.Errorf("relativize module-zip path %s: %w", filePath, err)
-		}
-		normalized := filepath.ToSlash(relativePath)
-		if !isSafeModulePath(normalized) {
-			return fmt.Errorf("module-zip path escapes core: %s", filePath)
-		}
-		if err := validateTopLevelPath(normalized); err != nil {
-			return err
-		}
-		accepted[normalized] = struct{}{}
-	}
-	if difference := setDifference(accepted, projected); len(difference) != 0 {
-		return fmt.Errorf("core source has module-zip files outside the Git projection: %s", strings.Join(difference, ", "))
-	}
-	if difference := setDifference(projected, accepted); len(difference) != 0 {
-		return fmt.Errorf("Git projection has files rejected by module-zip rules: %s", strings.Join(difference, ", "))
 	}
 	return nil
 }
@@ -339,35 +387,44 @@ func requireEmptyDirectory(directory string) error {
 	return nil
 }
 
-func stageFiles(repositoryRoot, stageDirectory string, files []string) error {
-	for _, relativePath := range files {
-		sourcePath := filepath.Join(repositoryRoot, "core", filepath.FromSlash(relativePath))
+func stageFiles(repositoryRoot, stageDirectory string, files []committedFile) error {
+	for _, file := range files {
+		relativePath := file.relativePath
+		if !isSafeModulePath(relativePath) {
+			return fmt.Errorf("invalid staged module path: %q", relativePath)
+		}
+		if err := validateTopLevelPath(relativePath); err != nil {
+			return err
+		}
 		destinationPath := filepath.Join(stageDirectory, filepath.FromSlash(relativePath))
 		if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
 			return fmt.Errorf("create staging parent for %s: %w", relativePath, err)
 		}
-		if err := copyRegularFile(sourcePath, destinationPath); err != nil {
+		if err := copyCommittedBlob(repositoryRoot, file.objectID, destinationPath); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func copyRegularFile(sourcePath, destinationPath string) error {
-	source, err := os.Open(sourcePath)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", sourcePath, err)
-	}
-	defer source.Close()
-
+func copyCommittedBlob(repositoryRoot, objectID, destinationPath string) error {
 	destination, err := os.OpenFile(destinationPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", destinationPath, err)
 	}
-	_, copyErr := io.Copy(destination, source)
+	command := exec.Command("git", "-C", repositoryRoot, "cat-file", "blob", objectID)
+	command.Env = isolatedGitEnvironment()
+	command.Stdout = destination
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	copyErr := command.Run()
 	closeErr := destination.Close()
 	if copyErr != nil {
-		return fmt.Errorf("copy %s: %w", sourcePath, copyErr)
+		removeErr := os.Remove(destinationPath)
+		return errors.Join(
+			fmt.Errorf("read committed blob %s: %s: %w", objectID, strings.TrimSpace(stderr.String()), copyErr),
+			removeErr,
+		)
 	}
 	if closeErr != nil {
 		return fmt.Errorf("close %s: %w", destinationPath, closeErr)
@@ -449,16 +506,37 @@ func validateVectorInventory(stageDirectory string) error {
 		return errors.New("testvector inventory is empty")
 	}
 
-	entries, err := os.ReadDir(vectorDirectory)
+	actual := make(map[string]struct{})
+	err = filepath.WalkDir(vectorDirectory, func(filePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("inspect testvector path %s: %w", filePath, walkErr)
+		}
+		if filePath == vectorDirectory {
+			return nil
+		}
+		relativePath, err := filepath.Rel(vectorDirectory, filePath)
+		if err != nil {
+			return fmt.Errorf("relativize testvector path %s: %w", filePath, err)
+		}
+		normalized := filepath.ToSlash(relativePath)
+		if path.Ext(normalized) != ".json" {
+			return nil
+		}
+		if entry.IsDir() {
+			return fmt.Errorf("testvector JSON path is irregular: %s", normalized)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("inspect testvector %s: %w", normalized, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("testvector JSON path is irregular: %s", normalized)
+		}
+		actual[normalized] = struct{}{}
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("read testvector directory: %w", err)
-	}
-	actual := make(map[string]struct{})
-	for _, entry := range entries {
-		if !entry.Type().IsRegular() || path.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		actual[entry.Name()] = struct{}{}
 	}
 	if difference := setDifference(expected, actual); len(difference) != 0 {
 		return fmt.Errorf("testvector inventory names missing files: %s", strings.Join(difference, ", "))
@@ -480,7 +558,7 @@ func setDifference(left, right map[string]struct{}) []string {
 	return difference
 }
 
-func validateModuleZipInput(stageDirectory string, projectedFiles []string) error {
+func validateModuleZipInput(stageDirectory string, committedFiles []string) error {
 	checked, err := modzip.CheckDir(stageDirectory)
 	if err != nil {
 		return fmt.Errorf("check staged module: %w", err)
@@ -491,10 +569,62 @@ func validateModuleZipInput(stageDirectory string, projectedFiles []string) erro
 	if len(checked.Invalid) != 0 || checked.SizeError != nil {
 		return fmt.Errorf("module zip contains invalid files: %v; size: %v", checked.Invalid, checked.SizeError)
 	}
-	if len(checked.Valid) != len(projectedFiles) {
-		return fmt.Errorf("module zip accepts %d files; projected source contains %d", len(checked.Valid), len(projectedFiles))
+	accepted := make([]string, 0, len(checked.Valid))
+	for _, filePath := range checked.Valid {
+		relativePath, err := filepath.Rel(stageDirectory, filePath)
+		if err != nil {
+			return fmt.Errorf("relativize staged module path %s: %w", filePath, err)
+		}
+		accepted = append(accepted, filepath.ToSlash(relativePath))
+	}
+	return validateExactProjection(accepted, committedFiles, "staged module")
+}
+
+func validateModuleZipProjection(version module.Version, archiveFiles, committedFiles []string) error {
+	prefix := version.Path + "@" + version.Version + "/"
+	normalized := make([]string, 0, len(archiveFiles))
+	for _, archivePath := range archiveFiles {
+		if !strings.HasPrefix(archivePath, prefix) {
+			return fmt.Errorf("module zip path lacks canonical prefix %q: %s", prefix, archivePath)
+		}
+		normalized = append(normalized, strings.TrimPrefix(archivePath, prefix))
+	}
+	return validateExactProjection(normalized, committedFiles, "module zip")
+}
+
+func validateExactProjection(actualFiles, committedFiles []string, actualName string) error {
+	actual, err := modulePathSet(actualFiles, actualName)
+	if err != nil {
+		return err
+	}
+	committed, err := modulePathSet(committedFiles, "committed projection")
+	if err != nil {
+		return err
+	}
+	if difference := setDifference(actual, committed); len(difference) != 0 {
+		return fmt.Errorf("%s has files outside the committed projection: %s", actualName, strings.Join(difference, ", "))
+	}
+	if difference := setDifference(committed, actual); len(difference) != 0 {
+		return fmt.Errorf("committed projection has files absent from the %s: %s", actualName, strings.Join(difference, ", "))
 	}
 	return nil
+}
+
+func modulePathSet(files []string, owner string) (map[string]struct{}, error) {
+	result := make(map[string]struct{}, len(files))
+	for _, filePath := range files {
+		if !isSafeModulePath(filePath) {
+			return nil, fmt.Errorf("%s contains invalid module path: %q", owner, filePath)
+		}
+		if err := validateTopLevelPath(filePath); err != nil {
+			return nil, err
+		}
+		if _, duplicate := result[filePath]; duplicate {
+			return nil, fmt.Errorf("%s contains duplicate module path: %s", owner, filePath)
+		}
+		result[filePath] = struct{}{}
+	}
+	return result, nil
 }
 
 func createModuleZip(zipPath string, version module.Version, stageDirectory string) error {
@@ -508,12 +638,19 @@ func createModuleZip(zipPath string, version module.Version, stageDirectory stri
 	createErr := modzip.CreateFromDir(output, version, stageDirectory)
 	closeErr := output.Close()
 	if createErr != nil {
-		return fmt.Errorf("construct module zip: %w", createErr)
+		return removeFailedArchive(zipPath, fmt.Errorf("construct module zip: %w", createErr))
 	}
 	if closeErr != nil {
-		return fmt.Errorf("close module zip: %w", closeErr)
+		return removeFailedArchive(zipPath, fmt.Errorf("close module zip: %w", closeErr))
 	}
 	return nil
+}
+
+func removeFailedArchive(zipPath string, failure error) error {
+	if err := os.Remove(zipPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.Join(failure, fmt.Errorf("remove failed module zip: %w", err))
+	}
+	return failure
 }
 
 func fileDigest(filePath string) ([sha256.Size]byte, error) {

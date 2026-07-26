@@ -431,7 +431,7 @@
         {
           "backend": "single-file-stream",
           "durability": "none",
-          "failureAfterFirstByte": "abort-job",
+          "failureAfterFirstByte": "pause-job",
           "fileFailureIsolation": false,
           "mtime": false,
           "randomWrite": false
@@ -446,9 +446,10 @@
         },
         {
           "backend": "cli-osfs",
-          "durability": "power-loss-when-file-and-directory-sync-proved-else-process-restart",
+          "durability": "process-restart",
           "fileFailureIsolation": true,
           "mtime": true,
+          "powerLoss": false,
           "randomWrite": true
         }
       ],
@@ -462,8 +463,8 @@
           "memberStarted": false
         },
         {
-          "action": "abort-job",
-          "jobOutcome": "aborted",
+          "action": "pause-job",
+          "jobOutcome": "paused",
           "memberStarted": true
         }
       ],

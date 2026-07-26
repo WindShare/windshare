@@ -6,10 +6,16 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session/protocolsession"
+)
+
+const (
+	DefaultOutputSettlementTimeout = 30 * time.Second
+	MaximumOutputSettlementTimeout = 5 * time.Minute
 )
 
 var (
@@ -20,6 +26,10 @@ var (
 	ErrOutputContract        = errors.New("output session violated its file transaction contract")
 	ErrCatalogEntriesOmitted = errors.New("catalog directory omitted children")
 	ErrCatalogLeaseContract  = errors.New("catalog reader returned no release callback")
+	ErrOutputPublishBlocked  = errors.New("output publication is blocked by an existing final path")
+	ErrOutputQuarantined     = errors.New("output file needs manual ownership review")
+	ErrOutputRetired         = errors.New("output file retirement completed without content transfer")
+	errRangeReaderContract   = errors.New("range reader violated its requested output interval")
 )
 
 type JobOutcome uint8
@@ -27,13 +37,14 @@ type JobOutcome uint8
 const (
 	JobSucceeded JobOutcome = iota + 1
 	JobCompletedWithErrors
-	JobAborted
+	JobPausedOutcome
 )
 
 type FailureStage uint8
 
 const (
 	FailureDirectoryDiscovery FailureStage = iota + 1
+	FailureOutputAdmission
 	FailureDirectoryOutput
 	FailureRevisionOpen
 	FailureRevisionIdentity
@@ -46,23 +57,30 @@ type DirectoryJobFailure struct {
 	DirectoryID catalog.DirectoryID
 	Path        string
 	Stage       FailureStage
-	Err         error
+	Cause       error
 }
 
 type FileJobFailure struct {
-	FileID catalog.FileID
-	Path   string
-	Stage  FailureStage
-	Err    error
+	FileID              catalog.FileID
+	Path                string
+	Stage               FailureStage
+	Cause               error
+	Settlement          FileSettlement
+	SettlementFailure   error
+	LeaseReleaseFailure error
 }
 
 type JobResult struct {
-	Outcome        JobOutcome
-	Measure        SelectionMeasure
-	Directories    []DirectoryJobFailure
-	Files          []FileJobFailure
-	SucceededFiles uint64
-	AbortCause     error
+	Outcome           JobOutcome
+	Settlement        JobSettlement
+	ResumeIntent      ResumeIntent
+	SelectionIdentity SelectionIdentity
+	Measure           SelectionMeasure
+	Directories       []DirectoryJobFailure
+	Files             []FileJobFailure
+	SucceededFiles    uint64
+	TerminationCause  error
+	SettlementFailure error
 }
 
 type CatalogReader interface {
@@ -100,27 +118,29 @@ type RangeReader interface {
 }
 
 type TransferJobConfig struct {
-	ShareInstance catalog.ShareInstance
-	SyntheticRoot catalog.DirectoryID
-	Rules         SelectionRules
-	Catalog       CatalogReader
-	Revisions     RevisionClient
-	Blocks        RangeReader
-	Output        OutputSession
+	ShareInstance     catalog.ShareInstance
+	SyntheticRoot     catalog.DirectoryID
+	Rules             SelectionRules
+	Catalog           CatalogReader
+	Revisions         RevisionClient
+	Blocks            RangeReader
+	Output            OutputAuthority
+	SettlementTimeout time.Duration
+	Tracer            TransferLifecycleTracer
 }
 
 type TransferJob struct {
-	share              catalog.ShareInstance
-	root               catalog.DirectoryID
-	rules              SelectionRules
-	catalog            *catalogReplayReader
-	measurementCatalog *catalogReplayReader
-	catalogReplay      *catalogReplay
-	revisions          RevisionClient
-	blocks             RangeReader
-	output             OutputSession
-	tracker            selectionTracker
-	admission          selectionTracker
+	share             catalog.ShareInstance
+	root              catalog.DirectoryID
+	rules             SelectionRules
+	selectionRequest  CanonicalSelectionRequest
+	catalog           CatalogReader
+	revisions         RevisionClient
+	blocks            RangeReader
+	outputAuthority   OutputAuthority
+	settlementTimeout time.Duration
+	tracer            TransferLifecycleTracer
+	tracker           selectionTracker
 
 	mu      sync.Mutex
 	started bool
@@ -128,243 +148,781 @@ type TransferJob struct {
 
 func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 	if config.ShareInstance.IsZero() || config.SyntheticRoot.IsZero() || !config.Rules.validSnapshot() ||
-		config.Catalog == nil || config.Revisions == nil || config.Blocks == nil || config.Output == nil {
+		config.Catalog == nil || config.Revisions == nil || config.Blocks == nil || config.Output == nil ||
+		config.SettlementTimeout < 0 || config.SettlementTimeout > MaximumOutputSettlementTimeout {
 		return nil, ErrInvalidTransferJob
 	}
-	capabilities := config.Output.Capabilities()
-	if _, err := NewOutputCapabilities(capabilities); err != nil || config.Output.BackendID() == "" || config.Output.SessionID().IsZero() {
+	timeout := config.SettlementTimeout
+	if timeout == 0 {
+		timeout = DefaultOutputSettlementTimeout
+	}
+	selectionRequest, err := NewCanonicalSelectionRequest(config.ShareInstance, config.SyntheticRoot, config.Rules)
+	if err != nil {
 		return nil, ErrInvalidTransferJob
 	}
-	replay := newCatalogReplay(config.Catalog)
 	return &TransferJob{
 		share: config.ShareInstance, root: config.SyntheticRoot, rules: config.Rules,
-		catalog: replay.reader(catalogReplayExecution), measurementCatalog: replay.reader(catalogReplayMeasurement),
-		catalogReplay: replay, revisions: config.Revisions, blocks: config.Blocks, output: config.Output,
-		tracker: newSelectionTracker(), admission: newSelectionTracker(),
+		selectionRequest: selectionRequest,
+		catalog:          config.Catalog, revisions: config.Revisions, blocks: config.Blocks,
+		outputAuthority:   config.Output,
+		settlementTimeout: timeout, tracer: config.Tracer, tracker: newSelectionTracker(),
 	}, nil
 }
 
 func (j *TransferJob) Measure() SelectionMeasure { return j.tracker.snapshot() }
 
-// SelectionMeasures replays the latest job-scoped measurement and then emits
-// coalesced monotonic updates. A caller must subscribe before Run when an early
-// Large or terminal Small transition controls transport admission.
-func (j *TransferJob) SelectionMeasures() <-chan SelectionMeasure { return j.admission.Updates() }
+// SelectionMeasures publishes monotonic discovery updates. Discovery now owns
+// the first job phase, so no duplicate catalog walk can race output admission.
+func (j *TransferJob) SelectionMeasures() <-chan SelectionMeasure { return j.tracker.Updates() }
 
 func (j *TransferJob) Run(ctx context.Context) JobResult {
 	j.mu.Lock()
 	if j.started {
 		j.mu.Unlock()
-		return JobResult{Outcome: JobAborted, Measure: j.Measure(), AbortCause: ErrTransferJobRun}
+		return JobResult{Outcome: JobPausedOutcome, Measure: j.Measure(), TerminationCause: ErrTransferJobRun}
 	}
 	j.started = true
 	j.mu.Unlock()
 
 	runContext, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	measurementDone := make(chan error, 1)
-	go func() {
-		measure, err := measureSelection(runContext, SelectionMeasurementConfig{
-			ShareInstance: j.share, SyntheticRoot: j.root, Rules: j.rules, Catalog: j.measurementCatalog,
-		}, j.admission.replace)
-		j.admission.replace(measure)
-		j.admission.closeUpdates()
-		if err != nil {
-			cancel(err)
-		}
-		j.measurementCatalog.Close()
-		measurementDone <- err
-	}()
-
-	state := &jobRun{
-		job: j, claims: newSelectionIdentityClaims(j.root),
-		matchedPaths:       make(map[string]struct{}),
-		matchedDirectories: make(map[catalog.DirectoryID]struct{}), matchedFiles: make(map[catalog.FileID]struct{}),
+	state := newJobRun(j)
+	if cause := context.Cause(runContext); cause != nil {
+		state.terminationCause = cause
+		j.tracker.failDiscovery()
+		j.tracker.finishDiscovery()
+		j.tracker.closeUpdates()
+		return state.finish(ctx)
 	}
-	var executionErr error
-	if j.rules.HasSelection() {
-		rootSelected := j.rules.DirectorySelectedAt(j.root, "", j.rules.DefaultSelected())
-		executionErr = state.walkDirectory(runContext, j.root, newRootOutputFrame(), rootSelected)
-		if executionErr == nil && !state.discoveryFailed {
-			executionErr = j.rules.missingTargetsError(
-				state.matchedPaths, state.matchedDirectories, state.matchedFiles,
-			)
-		}
-		if executionErr != nil {
-			j.tracker.failDiscovery()
-			cancel(executionErr)
-		}
+	j.trace(TransferLifecycleTrace{Stage: TransferDiscoveryStarted})
+	selection, selectionReady, discoveryErr := state.discoverSelection(runContext)
+	if discoveryErr != nil {
+		j.tracker.failDiscovery()
+		state.terminationCause = discoveryErr
+		cancel(discoveryErr)
 	}
 	j.tracker.finishDiscovery()
 	j.tracker.closeUpdates()
-	j.catalog.Close()
-	measurementErr := <-measurementDone
-	// Both readers are closed before Wait, so no later Load can race a
-	// WaitGroup.Add. Joining source loads also makes cancellation causes and
-	// cache-lease release observable before the job reports completion.
-	j.catalogReplay.Wait()
-	if executionErr != nil || measurementErr != nil {
-		state.abortCause = context.Cause(runContext)
-		if state.abortCause == nil {
-			state.abortCause = errors.Join(executionErr, measurementErr)
+	j.trace(TransferLifecycleTrace{
+		Stage:             TransferDiscoveryCompleted,
+		SelectionIdentity: selection.Identity(), ResumeIntent: selection.ResumeIntent(),
+		Failed: discoveryErr != nil || !selectionReady,
+	})
+	if discoveryErr != nil || !selectionReady {
+		return state.finish(ctx)
+	}
+
+	state.setSelection(selection)
+	j.trace(TransferLifecycleTrace{
+		Stage:             TransferAdmissionStarted,
+		SelectionIdentity: selection.Identity(), ResumeIntent: selection.ResumeIntent(),
+	})
+	output, err := j.outputAuthority.OpenSelection(runContext, selection)
+	if err != nil {
+		state.terminationCause = err
+		j.trace(TransferLifecycleTrace{
+			Stage:             TransferAdmissionCompleted,
+			SelectionIdentity: selection.Identity(), ResumeIntent: selection.ResumeIntent(), Failed: true,
+		})
+		return state.finish(ctx)
+	}
+	if err := validateOutputSession(output); err != nil {
+		state.terminationCause = err
+		j.trace(TransferLifecycleTrace{
+			Stage: TransferAdmissionCompleted, SelectionIdentity: selection.Identity(),
+			ResumeIntent: selection.ResumeIntent(), Failed: true,
+		})
+		return state.finish(ctx)
+	}
+	state.output = output
+	state.admitted = true
+	j.trace(TransferLifecycleTrace{
+		Stage: TransferAdmissionCompleted, OutputSessionID: output.SessionID(),
+		SelectionIdentity: selection.Identity(), ResumeIntent: selection.ResumeIntent(),
+	})
+	for index := range state.plannedFiles {
+		if cause := context.Cause(runContext); cause != nil {
+			state.terminationCause = cause
+			break
+		}
+		file := state.plannedFiles[index]
+		if err := state.transferPlannedFile(runContext, file); err != nil {
+			if state.terminationCause == nil {
+				state.terminationCause = err
+			}
+			break
+		}
+		if state.settlementFailure != nil {
+			break
+		}
+	}
+	if state.terminationCause == nil && state.settlementFailure == nil {
+		if err := state.finalizeSelectionDirectories(runContext); err != nil {
+			state.terminationCause = err
 		}
 	}
 	return state.finish(ctx)
 }
 
-func (r *jobRun) transferFile(
-	ctx context.Context,
-	frame *directoryOutputFrame,
-	path string,
-	entry catalog.Entry,
-) error {
-	file, _ := entry.FileID()
-	opened, ready, err := r.openSelectedRevision(ctx, file, path, entry)
+func (r *jobRun) setSelection(selection OutputSelection) {
+	r.selectionIdentity = selection.Identity()
+	r.resumeIntent = selection.ResumeIntent()
+	r.job.trace(TransferLifecycleTrace{
+		Stage:             TransferSelectionFrozen,
+		SelectionIdentity: selection.Identity(), ResumeIntent: selection.ResumeIntent(),
+	})
+}
+
+func validateOutputSession(output OutputSession) error {
+	if output == nil {
+		return outputContractFault(nil)
+	}
+	if _, err := NewOutputBackendID(string(output.BackendID())); err != nil {
+		return outputContractFault(nil)
+	}
+	capabilities := output.Capabilities()
+	if _, err := NewOutputCapabilities(capabilities); err != nil || output.SessionID().IsZero() {
+		return outputContractFault(nil)
+	}
+	return nil
+}
+
+func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) error {
+	r.job.trace(TransferLifecycleTrace{
+		Stage: TransferFileStarted, OutputSessionID: r.output.SessionID(), ResumeIntent: r.resumeIntent,
+		FileID: plan.file,
+	})
+	opened, ready, err := r.openSelectedRevision(ctx, plan)
 	if err != nil || !ready {
 		return err
 	}
-	outputAvailable, err := frame.ensure(ctx, r)
+	locator, err := NewPathOutputLocator(plan.path)
 	if err != nil {
-		releaseErr := r.job.revisions.ReleaseRevision(context.WithoutCancel(ctx), opened.LeaseID)
-		return errors.Join(err, releaseErr)
+		return r.rejectUnstartedFile(ctx, plan, opened, NewJobDependencyContractError(err))
 	}
-	if !outputAvailable {
-		return r.releaseLease(ctx, file, path, opened.LeaseID)
+	target, err := NewOutputFileTarget(
+		r.output.BackendID(), r.output.SessionID(), opened.Descriptor, locator,
+	)
+	if err != nil {
+		return r.rejectUnstartedFile(ctx, plan, opened, NewJobDependencyContractError(err))
 	}
-	transaction, durable, ready, err := r.beginOutputFile(ctx, file, path, entry, opened)
-	if err != nil || !ready {
-		return err
+	start, err := r.output.BeginFile(ctx, OutputFile{
+		Path: plan.path, ExpectedSize: plan.entry.ExpectedSize(), Descriptor: opened.Descriptor, Target: target,
+	})
+	if err != nil {
+		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+		if isJobTerminalError(err) || outputFailureRequiresJobPause(err, r.output.Capabilities()) {
+			return errors.Join(err, releaseErr)
+		}
+		r.files = append(r.files, FileJobFailure{
+			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			Cause: err, LeaseReleaseFailure: releaseErr,
+		})
+		return nil
 	}
-	completed, err := r.transferMissingRanges(ctx, file, path, opened, transaction, durable)
+	if settlement, immediate := start.ImmediateSettlement(); immediate {
+		if err := validateImmediateFileSettlement(target, settlement); err != nil {
+			return r.rejectImmediateSettlement(ctx, plan, opened, settlement, err)
+		}
+		return r.handleImmediateSettlement(ctx, plan, opened, settlement)
+	}
+	transaction, durable, transactional := start.Transaction()
+	if !transactional || !start.valid() {
+		return r.rejectImmediateSettlement(ctx, plan, opened, start.settlement, ErrOutputContract)
+	}
+	if err := validateOutputTransaction(target, transaction, durable); err != nil {
+		return r.settleFailedFile(ctx, plan, opened, transaction, FailureFileOutput, err, 0)
+	}
+	completed, err := r.transferMissingRanges(ctx, plan, opened, transaction, durable)
 	if err != nil || !completed {
 		return err
 	}
-	return r.commitTransferredFile(ctx, file, path, opened, transaction)
+	return r.commitTransferredFile(ctx, plan, opened, transaction)
 }
 
-func (r *jobRun) openSelectedRevision(ctx context.Context, file catalog.FileID, path string, entry catalog.Entry) (OpenedRevision, bool, error) {
-	opened, err := r.job.revisions.OpenRevision(ctx, file)
+func (r *jobRun) rejectUnstartedFile(
+	ctx context.Context,
+	plan plannedFile,
+	opened OpenedRevision,
+	cause error,
+) error {
+	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	r.files = append(r.files, FileJobFailure{
+		FileID: plan.file, Path: plan.path, Stage: FailureFileOutput, Cause: cause,
+		LeaseReleaseFailure: releaseErr,
+	})
+	return errors.Join(cause, releaseErr)
+}
+
+func (r *jobRun) rejectImmediateSettlement(
+	ctx context.Context,
+	plan plannedFile,
+	opened OpenedRevision,
+	settlement FileSettlement,
+	cause error,
+) error {
+	fault := outputContractFault(cause)
+	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	r.settlementFailure = errors.Join(r.settlementFailure, fault)
+	r.files = append(r.files, FileJobFailure{
+		FileID: plan.file, Path: plan.path, Stage: FailureFileOutput, Cause: fault,
+		Settlement: settlement, SettlementFailure: fault, LeaseReleaseFailure: releaseErr,
+	})
+	r.traceFileSettlement(plan.file, settlement, true)
+	return fault
+}
+
+func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (OpenedRevision, bool, error) {
+	opened, err := r.job.revisions.OpenRevision(ctx, plan.file)
 	if err != nil {
 		if isJobTerminalError(err) {
 			return OpenedRevision{}, false, err
 		}
-		r.files = append(r.files, FileJobFailure{FileID: file, Path: path, Stage: FailureRevisionOpen, Err: err})
+		r.files = append(r.files, FileJobFailure{
+			FileID: plan.file, Path: plan.path, Stage: FailureRevisionOpen, Cause: err,
+		})
 		return OpenedRevision{}, false, nil
 	}
-	if err := validateOpenedFile(r.job.share, entry, opened); err != nil {
-		if releaseErr := r.releaseLease(ctx, file, path, opened.LeaseID); releaseErr != nil {
+	if err := validateOpenedFile(r.job.share, plan.entry, opened); err != nil {
+		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+		r.files = append(r.files, FileJobFailure{
+			FileID: plan.file, Path: plan.path, Stage: FailureRevisionIdentity,
+			Cause: err, LeaseReleaseFailure: releaseErr,
+		})
+		if releaseErr != nil && isJobTerminalError(releaseErr) {
 			return OpenedRevision{}, false, releaseErr
 		}
-		r.files = append(r.files, FileJobFailure{FileID: file, Path: path, Stage: FailureRevisionIdentity, Err: err})
 		return OpenedRevision{}, false, nil
 	}
 	return opened, true, nil
 }
 
-func (r *jobRun) beginOutputFile(ctx context.Context, file catalog.FileID, path string, entry catalog.Entry, opened OpenedRevision) (FileTransaction, VerifiedDurableRanges, bool, error) {
-	descriptor := opened.Descriptor
-	transaction, durable, err := r.job.output.BeginFile(ctx, OutputFile{
-		Path: path, ExpectedSize: entry.ExpectedSize(), Descriptor: descriptor,
-	})
-	if err != nil {
-		if releaseErr := r.releaseLease(ctx, file, path, opened.LeaseID); releaseErr != nil {
-			return nil, VerifiedDurableRanges{}, false, releaseErr
+func (r *jobRun) handleImmediateSettlement(
+	ctx context.Context,
+	plan plannedFile,
+	opened OpenedRevision,
+	settlement FileSettlement,
+) error {
+	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	r.acceptFileSettlement(settlement)
+	r.traceFileSettlement(plan.file, settlement, releaseErr != nil)
+	switch settlement.Kind() {
+	case FilePublished:
+		r.succeeded++
+		if releaseErr != nil {
+			r.files = append(r.files, FileJobFailure{
+				FileID: plan.file, Path: plan.path, Stage: FailureLeaseRelease,
+				Cause: releaseErr,
+			})
 		}
-		if isJobTerminalError(err) || outputFailureRequiresJobAbort(err, r.job.output.Capabilities()) {
-			return nil, VerifiedDurableRanges{}, false, err
+		if isJobTerminalError(releaseErr) {
+			return releaseErr
 		}
-		r.files = append(r.files, FileJobFailure{FileID: file, Path: path, Stage: FailureFileOutput, Err: err})
-		return nil, VerifiedDurableRanges{}, false, nil
+		return nil
+	case FileCollision:
+		r.files = append(r.files, FileJobFailure{
+			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			Cause: ErrOutputPublishBlocked, Settlement: settlement,
+			LeaseReleaseFailure: releaseErr,
+		})
+	case FilePublishBlocked:
+		r.files = append(r.files, FileJobFailure{
+			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			Cause: ErrOutputPublishBlocked, Settlement: settlement,
+			LeaseReleaseFailure: releaseErr,
+		})
+	case FileQuarantined:
+		r.files = append(r.files, FileJobFailure{
+			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			Cause: ErrOutputQuarantined, Settlement: settlement,
+			LeaseReleaseFailure: releaseErr,
+		})
+	case FileRetired:
+		// A recovered retirement is already-authorized durable cleanup. Preserve
+		// its exact settlement without creating a transaction or attempting a
+		// second settlement whose reason this run cannot authenticate.
+		r.files = append(r.files, FileJobFailure{
+			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			Cause: ErrOutputRetired, Settlement: settlement,
+			LeaseReleaseFailure: releaseErr,
+		})
+	default:
+		fault := outputContractFault(nil)
+		r.settlementFailure = errors.Join(r.settlementFailure, fault)
+		return fault
 	}
-	if err := validateOutputTransaction(r.job.output, path, descriptor, transaction, durable); err != nil {
-		contractErr := NewOutputSessionError(err, true)
-		if transaction == nil {
-			releaseErr := r.job.revisions.ReleaseRevision(context.WithoutCancel(ctx), opened.LeaseID)
-			return nil, VerifiedDurableRanges{}, false, errors.Join(contractErr, releaseErr)
-		}
-		return nil, VerifiedDurableRanges{}, false, r.abortTransferredFile(ctx, file, path, opened, transaction, FailureFileOutput, contractErr)
+	if isJobTerminalError(releaseErr) {
+		return releaseErr
 	}
-	return transaction, durable, true, nil
+	return nil
 }
 
-func (r *jobRun) transferMissingRanges(ctx context.Context, file catalog.FileID, path string, opened OpenedRevision, transaction FileTransaction, durable VerifiedDurableRanges) (bool, error) {
-	descriptor := opened.Descriptor
-	missing, err := MissingRanges(descriptor.ExactSize(), durable.Ranges())
+func (r *jobRun) transferMissingRanges(
+	ctx context.Context,
+	plan plannedFile,
+	opened OpenedRevision,
+	transaction FileTransaction,
+	durable VerifiedDurableRanges,
+) (bool, error) {
+	missing, err := MissingRanges(opened.Descriptor.ExactSize(), durable.Ranges())
 	if err != nil {
-		return false, r.abortTransferredFile(ctx, file, path, opened, transaction, FailureFileOutput, err)
+		return false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(err), 0,
+		)
 	}
-	for _, requested := range splitAtBlockBoundaries(missing, descriptor.Geometry()) {
-		checkpoint, completed, err := r.transferRange(ctx, file, path, opened, transaction, durable, requested)
-		if err != nil || !completed {
-			return false, err
+	for _, requested := range splitAtBlockBoundaries(missing, opened.Descriptor.Geometry()) {
+		buffered, bufferErr := newAtomicRequestedRangeSink(requested, transaction)
+		if bufferErr != nil {
+			return false, r.settleFailedFile(
+				ctx, plan, opened, transaction, FailureBlockTransfer, bufferErr, 0,
+			)
+		}
+		err := r.job.blocks.ReadRange(ctx, opened.LeaseID, opened.Descriptor, requested, buffered)
+		if bufferedErr := buffered.Failure(); bufferedErr != nil {
+			err = bufferedErr
+		}
+		if err != nil {
+			if invalidator, ok := r.job.blocks.(interface {
+				InvalidateRevision(catalog.FileID, content.FileRevision)
+			}); ok && (errors.Is(err, content.ErrRevisionDrift) || errors.Is(err, ErrBlockInvalidated)) {
+				invalidator.InvalidateRevision(plan.file, opened.Descriptor.FileRevision())
+			}
+			retireReason := fileRetireReason(err)
+			return false, r.settleFailedFile(
+				ctx, plan, opened, transaction, FailureBlockTransfer, err, retireReason,
+			)
+		}
+		if err := buffered.Flush(ctx); err != nil {
+			return false, r.settleFailedFile(
+				ctx, plan, opened, transaction, FailureBlockTransfer, err, 0,
+			)
+		}
+		checkpoint, checkpointErr := transaction.Checkpoint(ctx)
+		if checkpointErr != nil {
+			return false, r.settleFailedFile(
+				ctx, plan, opened, transaction, FailureFileOutput, checkpointErr, 0,
+			)
+		}
+		if checkpoint.Binding() != transaction.Binding() ||
+			checkpoint.CheckpointGeneration() <= durable.CheckpointGeneration() ||
+			!rangeContains(checkpoint.Ranges(), requested) || !rangesContain(checkpoint.Ranges(), durable.Ranges()) {
+			return false, r.settleFailedFile(
+				ctx, plan, opened, transaction, FailureFileOutput,
+				outputContractFault(nil), 0,
+			)
 		}
 		durable = checkpoint
 	}
-	if !RangesCoverFile(descriptor.ExactSize(), durable.Ranges()) {
-		contractErr := NewOutputSessionError(ErrOutputContract, true)
-		return false, r.abortTransferredFile(ctx, file, path, opened, transaction, FailureFileOutput, contractErr)
+	if !RangesCoverFile(opened.Descriptor.ExactSize(), durable.Ranges()) {
+		return false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureFileOutput,
+			outputContractFault(nil), 0,
+		)
 	}
 	return true, nil
 }
 
-func (r *jobRun) transferRange(ctx context.Context, file catalog.FileID, path string, opened OpenedRevision, transaction FileTransaction, durable VerifiedDurableRanges, requested content.Range) (VerifiedDurableRanges, bool, error) {
-	err := r.job.blocks.ReadRange(ctx, opened.LeaseID, opened.Descriptor, requested, transaction)
-	if err != nil {
-		return VerifiedDurableRanges{}, false, r.handleRangeReadFailure(ctx, file, path, opened, transaction, err)
-	}
-	checkpoint, err := transaction.Checkpoint(ctx)
-	if err != nil {
-		return VerifiedDurableRanges{}, false, r.abortTransferredFile(ctx, file, path, opened, transaction, FailureFileOutput, err)
-	}
-	if checkpoint.Binding() != transaction.Binding() || checkpoint.Generation() <= durable.Generation() ||
-		!rangeContains(checkpoint.Ranges(), requested) || !rangesContain(checkpoint.Ranges(), durable.Ranges()) {
-		contractErr := NewOutputSessionError(ErrOutputContract, true)
-		return VerifiedDurableRanges{}, false, r.abortTransferredFile(ctx, file, path, opened, transaction, FailureFileOutput, contractErr)
-	}
-	return checkpoint, true, nil
+type atomicRequestedRangeSink struct {
+	mu        sync.Mutex
+	target    RangeSink
+	requested content.Range
+	data      []byte
+	covered   []uint64
+	count     uint64
+	failure   error
+	sealed    bool
 }
 
-func rangesContain(available, required content.RangeSet) bool {
-	availableRanges := available.Ranges()
-	availableIndex := 0
-	for _, requiredRange := range required.Ranges() {
-		for availableIndex < len(availableRanges) && availableRanges[availableIndex].End < requiredRange.End {
-			availableIndex++
+func newAtomicRequestedRangeSink(
+	requested content.Range,
+	target RangeSink,
+) (*atomicRequestedRangeSink, error) {
+	if target == nil || requested.Offset >= requested.End {
+		return nil, rangeReaderContractError(errors.New("requested range is empty or has no output sink"))
+	}
+	length := requested.End - requested.Offset
+	maxInt := uint64(^uint(0) >> 1)
+	if length > uint64(catalog.MaxChunkSize) || length > maxInt {
+		return nil, rangeReaderContractError(errors.New("requested range exceeds the atomic protocol bound"))
+	}
+	return &atomicRequestedRangeSink{
+		target: target, requested: requested,
+		data: make([]byte, int(length)), covered: make([]uint64, (length+63)/64),
+	}, nil
+}
+
+func (sink *atomicRequestedRangeSink) WriteRange(
+	ctx context.Context,
+	offset uint64,
+	data []byte,
+) error {
+	if err := ctx.Err(); err != nil {
+		sink.mu.Lock()
+		if sink.failure == nil {
+			sink.failure = err
 		}
-		if availableIndex == len(availableRanges) || availableRanges[availableIndex].Offset > requiredRange.Offset ||
-			availableRanges[availableIndex].End < requiredRange.End {
-			return false
+		sink.mu.Unlock()
+		return err
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.failure != nil {
+		return sink.failure
+	}
+	if sink.sealed {
+		return sink.failContractLocked(errors.New("range reader wrote after returning"))
+	}
+	if len(data) == 0 || offset < sink.requested.Offset || offset >= sink.requested.End ||
+		uint64(len(data)) > sink.requested.End-offset {
+		return sink.failContractLocked(errors.New("range write escapes the requested interval"))
+	}
+	start := offset - sink.requested.Offset
+	end := start + uint64(len(data))
+	for index := start; index < end; index++ {
+		if sink.covered[index/64]&(uint64(1)<<(index%64)) != 0 {
+			return sink.failContractLocked(errors.New("range write overlaps bytes already supplied"))
 		}
 	}
-	return true
+	copy(sink.data[int(start):int(end)], data)
+	for index := start; index < end; index++ {
+		sink.covered[index/64] |= uint64(1) << (index % 64)
+	}
+	sink.count += uint64(len(data))
+	return nil
 }
 
-func (r *jobRun) handleRangeReadFailure(ctx context.Context, file catalog.FileID, path string, opened OpenedRevision, transaction FileTransaction, cause error) error {
-	if isJobTerminalError(cause) {
-		_, abortErr := transaction.Abort(context.WithoutCancel(ctx), cause)
-		releaseErr := r.job.revisions.ReleaseRevision(context.WithoutCancel(ctx), opened.LeaseID)
-		return errors.Join(cause, abortErr, releaseErr)
+func (sink *atomicRequestedRangeSink) Flush(ctx context.Context) error {
+	if sink == nil {
+		return rangeReaderContractError(errors.New("range reader returned no atomic sink"))
 	}
-	if invalidator, ok := r.job.blocks.(interface {
-		InvalidateRevision(catalog.FileID, content.FileRevision)
-	}); ok && (errors.Is(cause, content.ErrRevisionDrift) || errors.Is(cause, ErrBlockInvalidated)) {
-		invalidator.InvalidateRevision(file, opened.Descriptor.FileRevision())
+	sink.mu.Lock()
+	if sink.failure != nil {
+		err := sink.failure
+		sink.mu.Unlock()
+		return err
 	}
-	return r.abortTransferredFile(ctx, file, path, opened, transaction, FailureBlockTransfer, cause)
+	if sink.sealed {
+		err := sink.failContractLocked(errors.New("requested range was flushed more than once"))
+		sink.mu.Unlock()
+		return err
+	}
+	if sink.count != uint64(len(sink.data)) {
+		err := sink.failContractLocked(errors.New("range reader returned before covering the requested interval"))
+		sink.mu.Unlock()
+		return err
+	}
+	sink.sealed = true
+	target, offset, data := sink.target, sink.requested.Offset, sink.data
+	sink.mu.Unlock()
+	return target.WriteRange(ctx, offset, data)
 }
 
-func (r *jobRun) commitTransferredFile(ctx context.Context, file catalog.FileID, path string, opened OpenedRevision, transaction FileTransaction) error {
-	if err := transaction.Commit(ctx); err != nil {
-		return r.abortTransferredFile(ctx, file, path, opened, transaction, FailureFileOutput, err)
+func (sink *atomicRequestedRangeSink) Failure() error {
+	if sink == nil {
+		return rangeReaderContractError(errors.New("range reader returned no atomic sink"))
 	}
-	if releaseErr := r.job.revisions.ReleaseRevision(context.WithoutCancel(ctx), opened.LeaseID); releaseErr != nil {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	return sink.failure
+}
+
+func (sink *atomicRequestedRangeSink) failContractLocked(cause error) error {
+	if sink.failure == nil {
+		sink.failure = rangeReaderContractError(cause)
+	}
+	return sink.failure
+}
+
+func rangeReaderContractError(cause error) error {
+	return NewJobDependencyContractError(errors.Join(errRangeReaderContract, cause))
+}
+
+func (r *jobRun) settleFailedFile(
+	ctx context.Context,
+	plan plannedFile,
+	opened OpenedRevision,
+	transaction FileTransaction,
+	stage FailureStage,
+	cause error,
+	retireReason FileRetireReason,
+) error {
+	if !retireReason.valid() || isJobTerminalError(cause) || isOutputFailure(cause) ||
+		outputFailureRequiresJobPause(cause, r.output.Capabilities()) {
+		return r.pauseFailedFile(ctx, plan, opened, transaction, stage, cause)
+	}
+	settleContext, cancel := r.job.newSettlementContext(ctx)
+	settlement, settlementErr := transaction.Retire(settleContext, retireReason)
+	cancel()
+	settlementErr = validateSettlementFailure(settlementErr)
+	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	failure := FileJobFailure{
+		FileID: plan.file, Path: plan.path, Stage: stage, Cause: cause,
+		Settlement: settlement, SettlementFailure: settlementErr,
+		LeaseReleaseFailure: releaseErr,
+	}
+	valid := settlementErr == nil && settlement.matchesBinding(transaction.Binding()) &&
+		(settlement.Kind() == FileRetired || settlement.Kind() == FileQuarantined)
+	if !valid && settlementErr == nil {
+		settlementErr = outputContractFault(nil)
+		failure.SettlementFailure = settlementErr
+	}
+	if settlementErr == nil {
+		r.acceptFileSettlement(settlement)
+	}
+	r.files = append(r.files, failure)
+	r.traceFileSettlement(plan.file, settlement, settlementErr != nil)
+	if settlementErr != nil {
+		r.settlementFailure = errors.Join(r.settlementFailure, settlementErr)
+		return cause
+	}
+	if isJobTerminalError(releaseErr) {
+		return releaseErr
+	}
+	return nil
+}
+
+func (r *jobRun) pauseFailedFile(
+	ctx context.Context,
+	plan plannedFile,
+	opened OpenedRevision,
+	transaction FileTransaction,
+	stage FailureStage,
+	cause error,
+) error {
+	reason := filePauseReason(cause)
+	settleContext, cancel := r.job.newSettlementContext(ctx)
+	settlement, settlementErr := transaction.Pause(settleContext, reason)
+	cancel()
+	settlementErr = validateSettlementFailure(settlementErr)
+	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	if settlementErr == nil && (!settlement.matchesBinding(transaction.Binding()) ||
+		settlement.Kind() != FilePaused && settlement.Kind() != FileQuarantined) {
+		settlementErr = outputContractFault(nil)
+	}
+	if settlementErr == nil {
+		r.acceptFileSettlement(settlement)
+	}
+	r.files = append(r.files, FileJobFailure{
+		FileID: plan.file, Path: plan.path, Stage: stage, Cause: cause,
+		Settlement: settlement, SettlementFailure: settlementErr,
+		LeaseReleaseFailure: releaseErr,
+	})
+	r.traceFileSettlement(plan.file, settlement, settlementErr != nil)
+	if settlementErr != nil {
+		r.settlementFailure = errors.Join(r.settlementFailure, settlementErr)
+	}
+	return cause
+}
+
+func (r *jobRun) commitTransferredFile(
+	ctx context.Context,
+	plan plannedFile,
+	opened OpenedRevision,
+	transaction FileTransaction,
+) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return r.pauseFailedFile(ctx, plan, opened, transaction, FailureFileOutput, cause)
+	}
+	settleContext, cancel := r.job.newSettlementContext(ctx)
+	settlement, settlementErr := transaction.Commit(settleContext)
+	cancel()
+	settlementErr = validateSettlementFailure(settlementErr)
+	if settlementErr != nil {
+		r.settlementFailure = errors.Join(r.settlementFailure, settlementErr)
+		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+		r.files = append(r.files, FileJobFailure{
+			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			Settlement: settlement, SettlementFailure: settlementErr,
+			LeaseReleaseFailure: releaseErr,
+		})
+		r.traceFileSettlement(plan.file, settlement, true)
 		if isJobTerminalError(releaseErr) {
 			return releaseErr
 		}
-		r.files = append(r.files, FileJobFailure{FileID: file, Path: path, Stage: FailureLeaseRelease, Err: releaseErr})
+		return nil
 	}
-	r.succeeded++
+	if !settlement.matchesBinding(transaction.Binding()) || settlement.Kind() != FilePublished &&
+		settlement.Kind() != FilePublishBlocked && settlement.Kind() != FileQuarantined {
+		return r.rejectCommitSettlement(ctx, plan, opened, settlement)
+	}
+	r.acceptFileSettlement(settlement)
+	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	r.traceFileSettlement(plan.file, settlement, releaseErr != nil)
+	switch settlement.Kind() {
+	case FilePublished:
+		r.succeeded++
+		if releaseErr != nil {
+			r.files = append(r.files, FileJobFailure{
+				FileID: plan.file, Path: plan.path, Stage: FailureLeaseRelease, Cause: releaseErr,
+			})
+		}
+	case FilePublishBlocked:
+		r.files = append(r.files, FileJobFailure{
+			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			Cause: ErrOutputPublishBlocked, Settlement: settlement,
+			LeaseReleaseFailure: releaseErr,
+		})
+	case FileQuarantined:
+		r.files = append(r.files, FileJobFailure{
+			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			Cause: ErrOutputQuarantined, Settlement: settlement,
+			LeaseReleaseFailure: releaseErr,
+		})
+	}
+	if isJobTerminalError(releaseErr) {
+		return releaseErr
+	}
 	return nil
+}
+
+func (r *jobRun) rejectCommitSettlement(
+	ctx context.Context,
+	plan plannedFile,
+	opened OpenedRevision,
+	settlement FileSettlement,
+) error {
+	contractFailure := outputContractFault(nil)
+	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	r.settlementFailure = errors.Join(r.settlementFailure, contractFailure)
+	r.files = append(r.files, FileJobFailure{
+		FileID: plan.file, Path: plan.path, Stage: FailureFileOutput, Cause: contractFailure,
+		Settlement: settlement, SettlementFailure: contractFailure,
+		LeaseReleaseFailure: releaseErr,
+	})
+	r.traceFileSettlement(plan.file, settlement, true)
+	return errors.Join(contractFailure, releaseErr)
+}
+
+func (r *jobRun) releaseRevision(ctx context.Context, lease content.LeaseID) error {
+	settleContext, cancel := r.job.newSettlementContext(ctx)
+	err := r.job.revisions.ReleaseRevision(settleContext, lease)
+	cancel()
+	return err
+}
+
+func (r *jobRun) finish(ctx context.Context) JobResult {
+	if r.terminationCause == nil && r.settlementFailure == nil {
+		if cause := context.Cause(ctx); cause != nil {
+			r.terminationCause = cause
+		}
+	}
+	outcome := JobSucceeded
+	if len(r.directories) != 0 || len(r.files) != 0 {
+		outcome = JobCompletedWithErrors
+	}
+	if r.admitted {
+		if r.terminationCause != nil || r.settlementFailure != nil {
+			outcome = JobPausedOutcome
+			r.pauseJob(ctx)
+		} else {
+			r.completeJob(ctx, outcome)
+			if r.settlementFailure != nil {
+				outcome = JobPausedOutcome
+			}
+		}
+	} else if r.terminationCause != nil || r.settlementFailure != nil {
+		outcome = JobPausedOutcome
+	}
+	return JobResult{
+		Outcome: outcome, Settlement: r.settlement,
+		ResumeIntent: r.resumeIntent, SelectionIdentity: r.selectionIdentity,
+		Measure: r.job.Measure(), Directories: slices.Clone(r.directories), Files: slices.Clone(r.files),
+		SucceededFiles: r.succeeded, TerminationCause: r.terminationCause,
+		SettlementFailure: r.settlementFailure,
+	}
+}
+
+func (r *jobRun) pauseJob(ctx context.Context) {
+	reason := jobPauseReason(r.terminationCause, r.settlementFailure)
+	settleContext, cancel := r.job.newSettlementContext(ctx)
+	settlement, err := r.output.PauseJob(settleContext, reason)
+	cancel()
+	err = validateSettlementFailure(err)
+	if err == nil {
+		if settlement.Kind() != JobPaused && settlement.Kind() != JobPausedNeedsAttention ||
+			r.needsAttention && settlement.Kind() != JobPausedNeedsAttention {
+			err = outputContractFault(nil)
+		}
+	}
+	if err != nil {
+		r.settlementFailure = errors.Join(r.settlementFailure, err)
+	} else {
+		r.settlement = settlement
+	}
+	r.job.trace(TransferLifecycleTrace{
+		Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(), ResumeIntent: r.resumeIntent,
+		JobSettlement: settlement.Kind(), Failed: err != nil,
+	})
+}
+
+func (r *jobRun) completeJob(ctx context.Context, outcome JobOutcome) {
+	settleContext, cancel := r.job.newSettlementContext(ctx)
+	settlement, err := r.output.CompleteJob(settleContext, outcome)
+	cancel()
+	err = validateSettlementFailure(err)
+	if err == nil {
+		if settlement.Kind() != JobClosed && settlement.Kind() != JobPausedNeedsAttention ||
+			r.needsAttention && settlement.Kind() != JobPausedNeedsAttention {
+			err = outputContractFault(nil)
+		}
+	}
+	if err != nil {
+		r.settlementFailure = errors.Join(r.settlementFailure, err)
+		r.job.trace(TransferLifecycleTrace{
+			Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(), ResumeIntent: r.resumeIntent,
+			JobSettlement: settlement.Kind(), Failed: true,
+		})
+		return
+	}
+	r.settlement = settlement
+	r.job.trace(TransferLifecycleTrace{
+		Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(), ResumeIntent: r.resumeIntent,
+		JobSettlement: settlement.Kind(),
+	})
+}
+
+func (j *TransferJob) newSettlementContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), j.settlementTimeout)
+}
+
+func filePauseReason(cause error) FilePauseReason {
+	switch {
+	case errors.Is(cause, context.Canceled), errors.Is(cause, context.DeadlineExceeded):
+		return FilePauseInterrupted
+	case isSessionFailure(cause):
+		return FilePauseSessionFailure
+	case isOutputFailure(cause):
+		return FilePauseOutputFailure
+	default:
+		return FilePauseTransportFailure
+	}
+}
+
+func jobPauseReason(cause, settlementFailure error) JobPauseReason {
+	if settlementFailure != nil {
+		return JobPauseOutputFailure
+	}
+	switch {
+	case errors.Is(cause, context.Canceled), errors.Is(cause, context.DeadlineExceeded):
+		return JobPauseInterrupted
+	case isSessionFailure(cause):
+		return JobPauseSessionFailure
+	case isOutputFailure(cause):
+		return JobPauseOutputFailure
+	default:
+		return JobPauseTransportFailure
+	}
+}
+
+func fileRetireReason(cause error) FileRetireReason {
+	if errors.Is(cause, content.ErrRevisionDrift) || errors.Is(cause, ErrBlockInvalidated) {
+		return FileRetireInvalidatedRevision
+	}
+	var permanent interface{ IsolatedPermanentSourceFailure() }
+	if errors.As(cause, &permanent) {
+		return FileRetireIsolatedPermanentSourceFailure
+	}
+	return 0
 }
 
 func validateOpenedFile(share catalog.ShareInstance, entry catalog.Entry, opened OpenedRevision) error {
@@ -380,22 +938,40 @@ func validateOpenedFile(share catalog.ShareInstance, entry catalog.Entry, opened
 	return nil
 }
 
-func validateOutputTransaction(output OutputSession, path string, descriptor content.FileRevisionDescriptor, transaction FileTransaction, durable VerifiedDurableRanges) error {
+func validateOutputTransaction(
+	target OutputFileTarget,
+	transaction FileTransaction,
+	durable VerifiedDurableRanges,
+) error {
 	if transaction == nil {
-		return ErrOutputContract
+		return outputContractFault(nil)
 	}
 	binding := transaction.Binding()
-	if binding.BackendID() != output.BackendID() || binding.OutputSessionID() != output.SessionID() ||
-		binding.ShareInstance() != descriptor.ShareInstance() || binding.FileID() != descriptor.FileID() ||
-		binding.FileRevision() != descriptor.FileRevision() || binding.ExactSize() != descriptor.ExactSize() ||
-		binding.Locator().IsZero() || durable.Binding() != binding {
+	if validateOutputFileBinding(target, binding) != nil || durable.Binding() != binding {
+		return outputContractFault(nil)
+	}
+	return nil
+}
+
+func validateImmediateFileSettlement(
+	target OutputFileTarget,
+	settlement FileSettlement,
+) error {
+	// matchesTarget already proves the settlement's kind-specific binding and
+	// quarantine invariants. Immediate pause remains forbidden because it would
+	// bypass the transaction that owns resumable progress.
+	if !settlement.matchesTarget(target) || settlement.Kind() == FilePaused {
 		return ErrOutputContract
 	}
-	if binding.Locator().Kind() == OutputPathLocator {
-		locator, err := NewPathOutputLocator(path)
-		if err != nil || binding.Locator() != locator {
-			return ErrOutputContract
-		}
+	return nil
+}
+
+func validateOutputFileBinding(
+	target OutputFileTarget,
+	binding OutputFileBinding,
+) error {
+	if !target.valid() || !binding.valid() || binding.Target() != target {
+		return ErrOutputContract
 	}
 	return nil
 }
@@ -422,73 +998,55 @@ func rangeContains(ranges content.RangeSet, target content.Range) bool {
 	return false
 }
 
-func (r *jobRun) abortTransferredFile(ctx context.Context, file catalog.FileID, path string, opened OpenedRevision, transaction FileTransaction, stage FailureStage, cause error) error {
-	disposition, abortErr := transaction.Abort(context.WithoutCancel(ctx), cause)
-	releaseErr := r.job.revisions.ReleaseRevision(context.WithoutCancel(ctx), opened.LeaseID)
-	combined := errors.Join(cause, abortErr, releaseErr)
-	validDisposition := disposition >= FileAbortIsolated && disposition <= FileAbortRequiresJobAbort
-	if !validDisposition {
-		combined = errors.Join(combined, NewOutputSessionError(ErrOutputContract, true))
-	}
-	requiresOutputAbort := !validDisposition || disposition == FileAbortRequiresJobAbort ||
-		outputFailureExplicitlyRequiresJobAbort(cause) || outputFailureExplicitlyRequiresJobAbort(abortErr) ||
-		(disposition != FileAbortSkippedBeforeStart && !r.job.output.Capabilities().FileFailureIsolation)
-	if isJobTerminalError(cause) || isJobTerminalError(abortErr) || isJobTerminalError(releaseErr) || requiresOutputAbort {
-		return combined
-	}
-	r.files = append(r.files, FileJobFailure{FileID: file, Path: path, Stage: stage, Err: combined})
-	return nil
-}
-
-func (r *jobRun) releaseLease(ctx context.Context, file catalog.FileID, path string, lease content.LeaseID) error {
-	if err := r.job.revisions.ReleaseRevision(context.WithoutCancel(ctx), lease); err != nil {
-		if isJobTerminalError(err) {
-			return err
+func rangesContain(available, required content.RangeSet) bool {
+	availableRanges := available.Ranges()
+	availableIndex := 0
+	for _, requiredRange := range required.Ranges() {
+		for availableIndex < len(availableRanges) && availableRanges[availableIndex].End < requiredRange.End {
+			availableIndex++
 		}
-		r.files = append(r.files, FileJobFailure{FileID: file, Path: path, Stage: FailureLeaseRelease, Err: err})
+		if availableIndex == len(availableRanges) || availableRanges[availableIndex].Offset > requiredRange.Offset ||
+			availableRanges[availableIndex].End < requiredRange.End {
+			return false
+		}
 	}
-	return nil
+	return true
 }
 
-func (r *jobRun) finish(ctx context.Context) JobResult {
-	outcome := r.finishOutput(ctx)
-	return JobResult{
-		Outcome: outcome, Measure: r.job.Measure(), Directories: slices.Clone(r.directories), Files: slices.Clone(r.files),
-		SucceededFiles: r.succeeded, AbortCause: r.abortCause,
-	}
+func (r *jobRun) traceFileSettlement(file catalog.FileID, settlement FileSettlement, failed bool) {
+	r.job.trace(TransferLifecycleTrace{
+		Stage: TransferFileSettled, OutputSessionID: r.output.SessionID(), ResumeIntent: r.resumeIntent,
+		FileID:         file,
+		FileSettlement: settlement.Kind(), Failed: failed,
+	})
 }
 
-func (r *jobRun) finishOutput(ctx context.Context) JobOutcome {
-	if cause := r.terminalCause(ctx); cause != nil {
-		r.abortOutput(ctx, cause)
-		return JobAborted
-	}
-	outcome := JobSucceeded
-	if len(r.directories) != 0 || len(r.files) != 0 {
-		outcome = JobCompletedWithErrors
-	}
-	if err := r.job.output.FinishJob(ctx, outcome); err != nil {
-		r.abortOutput(ctx, err)
-		return JobAborted
-	}
-	return outcome
-}
-
-func (r *jobRun) terminalCause(ctx context.Context) error {
-	if r.abortCause != nil {
-		return r.abortCause
-	}
-	return context.Cause(ctx)
-}
-
-func (r *jobRun) abortOutput(ctx context.Context, cause error) {
-	r.abortCause = cause
-	if err := r.job.output.AbortJob(context.WithoutCancel(ctx), cause); err != nil {
-		r.abortCause = errors.Join(cause, err)
+func (r *jobRun) acceptFileSettlement(settlement FileSettlement) {
+	if settlement.Kind() == FilePublishBlocked || settlement.Kind() == FileQuarantined {
+		r.needsAttention = true
 	}
 }
 
 type SessionFailureError struct{ cause error }
+
+// IsolatedPermanentSourceFailureError is explicit retirement authority. A raw
+// range error is intentionally insufficient because it may be retryable
+// transport failure or may have originated in the output sink.
+type IsolatedPermanentSourceFailureError struct{ cause error }
+
+func NewIsolatedPermanentSourceFailure(cause error) error {
+	if cause == nil {
+		cause = errors.New("file source failed permanently")
+	}
+	return &IsolatedPermanentSourceFailureError{cause: cause}
+}
+
+func (failure *IsolatedPermanentSourceFailureError) Error() string {
+	return fmt.Sprintf("transfer isolated permanent source failure: %v", failure.cause)
+}
+func (failure *IsolatedPermanentSourceFailureError) Unwrap() error { return failure.cause }
+func (failure *IsolatedPermanentSourceFailureError) IsolatedPermanentSourceFailure() {
+}
 
 func NewSessionFailure(cause error) error {
 	if cause == nil {
@@ -511,8 +1069,7 @@ func isSessionFailure(err error) bool {
 func IsSessionFailure(err error) bool { return isSessionFailure(err) }
 
 // JobResourceBudgetError terminates one transfer because a local, bounded
-// resource policy was exhausted. Keeping this distinct from SessionFailureError
-// prevents local capacity from being misreported as peer identity compromise.
+// resource policy was exhausted. It must not be attributed to the peer session.
 type JobResourceBudgetError struct{ cause error }
 
 func NewJobResourceBudgetError(cause error) error {
@@ -528,8 +1085,7 @@ func (e *JobResourceBudgetError) Error() string {
 func (e *JobResourceBudgetError) Unwrap() error { return e.cause }
 func (e *JobResourceBudgetError) JobFatal()     {}
 
-// JobDependencyContractError identifies a local collaborator contract breach.
-// It is job-fatal but must not be attributed to the authenticated peer session.
+// JobDependencyContractError is a local collaborator breach, not peer fault.
 type JobDependencyContractError struct{ cause error }
 
 func NewJobDependencyContractError(cause error) error {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -16,14 +15,11 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/keyderiv"
 	"github.com/windshare/windshare/core/link"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 )
-
-const outputResumeIntentDomain = "windshare/v2 output-resume-intent\x00"
 
 var errReceiverClosed = errors.New("live share receiver is closed")
 
@@ -38,12 +34,11 @@ type ReceiverConfig struct {
 type PreparedReceiver struct {
 	mu sync.Mutex
 
-	descriptor   catalog.ShareDescriptor
-	factory      *sessionruntime.ReceiverFactory
-	resources    *receiverRuntimeResources
-	resumeIntent osfs.OutputResumeIntent
-	closed       bool
-	closeDone    chan struct{}
+	descriptor catalog.ShareDescriptor
+	factory    *sessionruntime.ReceiverFactory
+	resources  *receiverRuntimeResources
+	closed     bool
+	closeDone  chan struct{}
 }
 
 func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
@@ -124,15 +119,6 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 	}
 	authKey := sessionAuthKey.Bytes()
 	sessionAuthKey.Destroy()
-	digest := sha256.New()
-	_, _ = digest.Write([]byte(outputResumeIntentDomain))
-	_, _ = digest.Write(capability.ReadSecret)
-	_, _ = digest.Write(descriptor.ShareInstance().Bytes())
-	resumeIntent, err := osfs.OutputResumeIntentFromBytes(digest.Sum(nil))
-	if err != nil {
-		clear(authKey)
-		return fail(err)
-	}
 	factory, err := sessionruntime.NewReceiverFactory(sessionruntime.ReceiverFactoryConfig{
 		Descriptor: descriptor, SessionAuthKey: authKey, SenderPublicKey: publicKey,
 		CatalogVerifier: verifier, RecordOpener: opener,
@@ -148,7 +134,7 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 	// would expand the secret lifetime without serving any receiver operation.
 	clear(authKey)
 	return &PreparedReceiver{
-		descriptor: descriptor, factory: factory, resources: resources, resumeIntent: resumeIntent,
+		descriptor: descriptor, factory: factory, resources: resources,
 		closeDone: make(chan struct{}),
 	}, nil
 }
@@ -168,23 +154,6 @@ func (receiver *PreparedReceiver) Connect(ctx context.Context, channel framechan
 	factory := receiver.factory
 	receiver.mu.Unlock()
 	return factory.Connect(ctx, channel)
-}
-
-func (receiver *PreparedReceiver) OpenOutput(ctx context.Context, rootPath string) (osfs.FilesystemOutputOpen, error) {
-	receiver.mu.Lock()
-	if receiver.closed {
-		receiver.mu.Unlock()
-		return osfs.FilesystemOutputOpen{}, errReceiverClosed
-	}
-	share, intent := receiver.descriptor.ShareInstance(), receiver.resumeIntent
-	receiver.mu.Unlock()
-	authority, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{})
-	if err != nil {
-		return osfs.FilesystemOutputOpen{}, err
-	}
-	return authority.OpenOrCreate(ctx, osfs.FilesystemOutputIntent{
-		RootPath: rootPath, ShareInstance: share, ResumeIntent: intent,
-	})
 }
 
 // Close is the owner-side join. Dependency callbacks must call BeginClose so
@@ -238,7 +207,6 @@ func (receiver *PreparedReceiver) finishClose(
 	}
 	receiver.mu.Lock()
 	receiver.resources = nil
-	receiver.resumeIntent = osfs.OutputResumeIntent{}
 	close(done)
 	receiver.mu.Unlock()
 }
