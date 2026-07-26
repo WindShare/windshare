@@ -198,6 +198,10 @@ func TestRPCBeginCancellationAfterAdmissionQueuesOneExactCancel(t *testing.T) {
 }
 
 func TestRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGeneration(t *testing.T) {
+	synctest.Test(t, testRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGeneration)
+}
+
+func testRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGeneration(t *testing.T) {
 	now := time.Unix(10_000, 0)
 	runtime, channel := newUnstartedRuntimeWithPolicy(
 		t, protocolsession.RoleReceiver,
@@ -259,6 +263,9 @@ func TestRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGene
 
 	// Honest issuers never reuse an OperationID. This forced reuse models a
 	// hostile peer after the bounded replay window and exercises local ABA safety.
+	// Receipt settlement precedes the writer's deferred pin release, so fake time
+	// must remain fixed until that cleanup is durably blocked again.
+	synctest.Wait()
 	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Nanosecond)
 	_ = runtime.operations.TombstoneCount()
 	secondReceipt, err := lane.writer.TryControl(request)
@@ -267,7 +274,7 @@ func TestRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGene
 	}
 	second := secondReceipt.Await(context.Background())
 	if second.Outcome != protocolsession.SendOutcomeDelivered || !second.Generation.IsActive() {
-		t.Fatalf("forced second generation: %v", err)
+		t.Fatalf("forced second generation: %+v", second)
 	}
 	if err := rpc.cancelAndEnd(call, contentflow.CancelReasonOutputAbort); err != nil {
 		t.Fatalf("stale generation cleanup: %v", err)
@@ -279,6 +286,10 @@ func TestRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGene
 }
 
 func TestReceiverPeerOperationLateTerminateCannotCrossSameIDGeneration(t *testing.T) {
+	synctest.Test(t, testReceiverPeerOperationLateTerminateCannotCrossSameIDGeneration)
+}
+
+func testReceiverPeerOperationLateTerminateCannotCrossSameIDGeneration(t *testing.T) {
 	now := time.Unix(15_000, 0)
 	runtime, channel := newUnstartedRuntimeWithPolicy(
 		t,
@@ -344,6 +355,9 @@ func TestReceiverPeerOperationLateTerminateCannotCrossSameIDGeneration(t *testin
 		t.Fatalf("generation A retirement active=%d tombstones=%d",
 			runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 	}
+	// The offer receipt can wake before its writer-owned pin is released. Keep
+	// the injected clock fixed until that cleanup completes so expiry is causal.
+	synctest.Wait()
 	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Nanosecond)
 	_ = runtime.operations.TombstoneCount()
 
