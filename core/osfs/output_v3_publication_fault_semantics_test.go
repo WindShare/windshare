@@ -646,12 +646,9 @@ func TestOutputV3RetiringAnchorPreservesOperationAndCleanupFailuresWithoutQuaran
 				outputV3Directory: originalAnchors,
 				faults:            &faults,
 			}
-			t.Cleanup(func() {
-				session.stagesDir = originalStages
-				session.anchorsDir = originalAnchors
-			})
-
-			settlement, quarantined, err := session.retireBoundFile(recordDir, recordName, retiring, binding)
+			settlement, quarantined, err := outputV3RetireBoundFileAsOperation(
+				t, session, recordDir, recordName, retiring, binding,
+			)
 			if settlement.Kind() != 0 || quarantined ||
 				!errors.Is(err, cleanupFailure) || !outputV3FailureRequiresJobPause(err) {
 				t.Fatalf("retiring anchor coexistence = (kind=%v, quarantined=%t, err=%v, classify=%d, open=%d, remove=%d, sync=%d, close=%d, file-close=%d)",
@@ -666,7 +663,9 @@ func TestOutputV3RetiringAnchorPreservesOperationAndCleanupFailuresWithoutQuaran
 			if persisted.Phase() != resumestate.FileRetiring {
 				t.Fatalf("raw retiring anchor fault phase = %v, want Retiring", persisted.Phase())
 			}
-			settlement, quarantined, err = session.retireBoundFile(recordDir, recordName, retiring, binding)
+			settlement, quarantined, err = outputV3RetireBoundFileAsOperation(
+				t, session, recordDir, recordName, retiring, binding,
+			)
 			if err != nil || quarantined || settlement.Kind() != transfer.FileRetired {
 				t.Fatalf("raw retiring anchor retry = (kind=%v, quarantined=%t, err=%v)",
 					settlement.Kind(), quarantined, err)
@@ -715,10 +714,8 @@ func TestOutputV3RetirementPostMutationCleanupCutsRemainRetryable(t *testing.T) 
 				outputV3Directory: recordDir,
 				faults:            &recordFaults,
 			}
-			t.Cleanup(func() { session.stagesDir = originalStages })
-
-			settlement, quarantined, err := session.retireBoundFile(
-				faultedRecordDir, recordName, retiring, binding,
+			settlement, quarantined, err := outputV3RetireBoundFileAsOperation(
+				t, session, faultedRecordDir, recordName, retiring, binding,
 			)
 			if settlement.Kind() != 0 || quarantined || !errors.Is(err, cleanupFailure) ||
 				!outputV3FailureRequiresJobPause(err) {
@@ -739,8 +736,8 @@ func TestOutputV3RetirementPostMutationCleanupCutsRemainRetryable(t *testing.T) 
 			if persisted.Phase() != resumestate.FileRetiring {
 				t.Fatalf("post-mutation cleanup phase = %v, want Retiring", persisted.Phase())
 			}
-			settlement, quarantined, err = session.retireBoundFile(
-				faultedRecordDir, recordName, retiring, binding,
+			settlement, quarantined, err = outputV3RetireBoundFileAsOperation(
+				t, session, faultedRecordDir, recordName, retiring, binding,
 			)
 			if err != nil || quarantined || settlement.Kind() != transfer.FileRetired {
 				t.Fatalf("post-mutation cleanup retry = (kind=%v, quarantined=%t, err=%v)",
@@ -801,12 +798,9 @@ func TestOutputV3RetirementRetriesEveryOrderedCleanupCut(t *testing.T) {
 				outputV3Directory: recordDir,
 				faults:            &recordFaults,
 			}
-			t.Cleanup(func() {
-				session.stagesDir = originalStages
-				session.anchorsDir = originalAnchors
-			})
-
-			settlement, quarantined, err := session.retireBoundFile(faultedRecordDir, recordName, retiring, binding)
+			settlement, quarantined, err := outputV3RetireBoundFileAsOperation(
+				t, session, faultedRecordDir, recordName, retiring, binding,
+			)
 			cause := test.cause
 			if cause == nil {
 				cause = failure
@@ -837,7 +831,9 @@ func TestOutputV3RetirementRetriesEveryOrderedCleanupCut(t *testing.T) {
 				return
 			}
 
-			settlement, _, err = session.retireBoundFile(faultedRecordDir, recordName, retiring, binding)
+			settlement, _, err = outputV3RetireBoundFileAsOperation(
+				t, session, faultedRecordDir, recordName, retiring, binding,
+			)
 			if err != nil || settlement.Kind() != transfer.FileRetired {
 				t.Fatalf("retirement retry = (kind=%v, err=%v)", settlement.Kind(), err)
 			}
@@ -854,7 +850,9 @@ func TestOutputV3RetirementRecordSyncFailureLeavesNoDataBearingAuthority(t *test
 	faults := &outputV3RetirementRecordFaults{syncErrAt: 1, injected: failure}
 	faultedRecordDir := &outputV3RetirementRecordDirectory{outputV3Directory: recordDir, faults: faults}
 
-	settlement, _, err := session.retireBoundFile(faultedRecordDir, recordName, retiring, binding)
+	settlement, _, err := outputV3RetireBoundFileAsOperation(
+		t, session, faultedRecordDir, recordName, retiring, binding,
+	)
 	if settlement.Kind() != 0 || !errors.Is(err, failure) {
 		t.Fatalf("record sync cut = (kind=%v, err=%v)", settlement.Kind(), err)
 	}
@@ -1618,6 +1616,22 @@ func outputV3PreparedRetirement(
 		t.Fatal(err)
 	}
 	return opened.Session, recordDir, recordName.Name(), retiring, binding
+}
+
+func outputV3RetireBoundFileAsOperation(
+	t *testing.T,
+	session *filesystemOutputSession,
+	recordDir outputV3Directory,
+	recordName string,
+	retiring resumestate.BoundFileRecord,
+	binding transfer.OutputFileBinding,
+) (transfer.FileSettlement, bool, error) {
+	t.Helper()
+	if err := session.beginOperation(); err != nil {
+		t.Fatalf("begin retirement operation: %v", err)
+	}
+	defer session.endOperation()
+	return session.retireBoundFile(recordDir, recordName, retiring, binding)
 }
 
 func closeOutputV3ObservedFile(file outputV3File) error {

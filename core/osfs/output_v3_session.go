@@ -636,9 +636,19 @@ func (session *filesystemOutputSession) poisonState() {
 }
 
 func (session *filesystemOutputSession) teardownPoisoned() {
+	_ = session.shutdownOwner()
+}
+
+// shutdownOwner is the boundary for callers that do not already own the
+// exclusive operation gate. Closing outside this boundary could race an
+// ancestry revalidation that still relies on the platform handles.
+func (session *filesystemOutputSession) shutdownOwner() error {
+	if session == nil {
+		return nil
+	}
 	session.operationGate.Lock()
 	defer session.operationGate.Unlock()
-	_ = session.shutdownOwnerLocked()
+	return session.shutdownOwnerLocked()
 }
 
 // shutdownOwnerLocked deliberately performs no state mutation. Once durable
