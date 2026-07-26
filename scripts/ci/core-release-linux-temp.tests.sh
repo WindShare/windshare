@@ -144,6 +144,11 @@ assert_contains "scripts/ci/_corevulnerability/main.go" 'golang.org/x/vuln/cmd/g
 assert_contains "scripts/ci/_corevulnerability/main.go" '"GOPROXY=" + publicGoProxy'
 assert_contains "scripts/ci/_corevulnerability/main.go" '"GOSUMDB=" + publicGoChecksumDatabase'
 assert_contains "scripts/ci/core-release.sh" 'coverage_tool="github.com/vladopajic/go-test-coverage/v2@v2.18.8"'
+assert_contains "scripts/ci/core-release.sh" 'core_suite_test_timeout="30m"'
+assert_contains "scripts/ci/core-release.sh" 'go test -count=1 -timeout="$core_suite_test_timeout" ./...'
+assert_contains "scripts/ci/core-release.sh" 'go test -race -count=1 -timeout="$core_suite_test_timeout" ./...'
+assert_contains "scripts/ci/core-release.sh" 'go test -count=1 -timeout="$core_suite_test_timeout" ./... -covermode=atomic'
+assert_contains "scripts/ci/core-release.sh" 'go test -json -count=1 -timeout="$core_suite_test_timeout"'
 assert_contains "scripts/ci/core-release.ps1" "\$coverageTool = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'"
 if grep -Fq -- 'GO_TEST_COVERAGE' scripts/ci/core-release.sh scripts/ci/core-release.ps1; then
   fail "core release coverage verifier still accepts a caller override"

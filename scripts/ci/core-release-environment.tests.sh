@@ -93,7 +93,7 @@ for cache_path in "$GOMODCACHE" "$GOCACHE" "$GOPATH"; do
 done
 
 [ "$GOENV" = off ] || fail "GOENV is not off"
-[ -z "$GOFLAGS" ] || fail "GOFLAGS is not empty"
+[ "$GOFLAGS" = -modcacherw ] || fail "GOFLAGS does not keep the private module cache removable"
 [ "$GOTOOLCHAIN" = local ] || fail "GOTOOLCHAIN is not local"
 [ "$GOWORK" = off ] || fail "GOWORK is not off"
 [ "$GOPROXY" = https://proxy.golang.org ] || fail "GOPROXY is not the public Go proxy"

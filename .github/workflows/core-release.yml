@@ -84,7 +84,9 @@ jobs:
     name: Windows NTFS extracted core and process-restart certification
     needs: candidate
     runs-on: windows-latest
-    timeout-minutes: 40
+    # Standard, race, coverage, and standard-user NTFS certification are four
+    # independent evidence runs; their package-level bounds remain 30m each.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

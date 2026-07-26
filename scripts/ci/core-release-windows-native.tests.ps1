@@ -205,6 +205,20 @@ if ([regex]::Matches($releaseWorkflow, 'go-version-file:[ \t]+core/go\.mod').Cou
     $releaseWorkflow.Contains('go-version-file: go.work', [StringComparison]::Ordinal)) {
     throw 'core release jobs do not derive an uncached toolchain from core/go.mod'
 }
+$linuxReleaseJob = [regex]::Match(
+    $releaseWorkflow,
+    '(?ms)^  linux-ext4:\r?\n.*?(?=^  windows-ntfs:\r?$)'
+).Value
+$windowsReleaseJob = [regex]::Match(
+    $releaseWorkflow,
+    '(?ms)^  windows-ntfs:\r?\n.*\z'
+).Value
+if ([string]::IsNullOrWhiteSpace($linuxReleaseJob) -or
+    -not $linuxReleaseJob.Contains('timeout-minutes: 40', [StringComparison]::Ordinal) -or
+    [string]::IsNullOrWhiteSpace($windowsReleaseJob) -or
+    -not $windowsReleaseJob.Contains('timeout-minutes: 90', [StringComparison]::Ordinal)) {
+    throw 'core release workflow job timeouts do not preserve the platform-specific evidence budgets'
+}
 $ciWorkflowPath = Join-Path $repositoryRoot '.github\workflows\ci.yml'
 $ciWorkflow = [IO.File]::ReadAllText($ciWorkflowPath)
 $ordinaryReleaseJob = [regex]::Match(
@@ -277,12 +291,32 @@ Assert-FileContains `
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
     -Expected "`$coverageTool = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'"
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected "`$coreSuiteTestTimeout = '30m'"
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected "`$windowsNativeWorkerTimeoutMinutes = 35"
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected '[TimeSpan]::FromMinutes('
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected 'go test -count=1 "-timeout=$coreSuiteTestTimeout" ./...'
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected 'go test -race -count=1 "-timeout=$coreSuiteTestTimeout" ./...'
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected 'go test -count=1 "-timeout=$coreSuiteTestTimeout" ./... -covermode=atomic'
 Assert-FileDoesNotContain `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
     -Forbidden 'GO_TEST_COVERAGE'
 
 $nativeWorkerPath = Join-Path $PSScriptRoot 'core-release-windows-native-worker.ps1'
 foreach ($requiredWorkerText in @(
+    "`$coreSuiteTestTimeout = '30m'",
+    '"-timeout=$coreSuiteTestTimeout"',
     "`$env:GOPROXY = 'https://proxy.golang.org'",
     "`$env:GOSUMDB = 'sum.golang.org'",
     "`$env:GOPRIVATE = ''",
