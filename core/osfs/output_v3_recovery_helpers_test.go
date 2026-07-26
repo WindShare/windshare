@@ -251,7 +251,7 @@ func v3RecoveryOutputFileAt(
 
 func v3RecoveryCloseSession(t *testing.T, session *filesystemOutputSession) {
 	t.Helper()
-	if err := session.closeHandles(); err != nil {
+	if err := session.shutdownOwner(); err != nil {
 		t.Fatal(err)
 	}
 }
