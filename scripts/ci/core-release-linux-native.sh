@@ -73,7 +73,7 @@ cleanup() {
       detach_status=1
     elif [ -n "$loop_query" ]; then
       if [[ ! "$loop_device" =~ ^/dev/loop[0-9]+$ ]] ||
-         ! sudo -n losetup -d -- "$loop_device"; then
+         ! sudo -n losetup -d "$loop_device"; then
         detach_status=1
       fi
       sudo -n udevadm settle || detach_status=1

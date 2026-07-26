@@ -137,9 +137,15 @@ assert_contains "scripts/ci/core-release-linux-native.sh" 'TestLinuxExt4NativeCe
 assert_contains "scripts/ci/core-release-linux-native.sh" 'TestLinuxExt4ProcessRestartRecovery'
 assert_contains "scripts/ci/core-release-linux-native.sh" ': >"$preserve_marker"'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'sudo -n udevadm settle'
+assert_contains "scripts/ci/core-release-linux-native.sh" 'sudo -n losetup -d "$loop_device"'
+assert_contains "core/osfs/linux_output_persistent_identity_native_test.go" 'command.Stdin = bytes.NewReader(nil)'
+assert_contains "core/osfs/output_v3_native_certification_test.go" 'command.Stdin = bytes.NewReader(nil)'
 assert_contains "scripts/ci/core-release-linux-native-root.sh" 'WINDSHARE_LINUX_NATIVE_FIXTURE=loop-ext4-v1'
 assert_contains "scripts/ci/core-release-linux-native-root.sh" '--userspec="$receiver_uid:$receiver_gid"'
 assert_contains "scripts/ci/core-release-linux-native-root.sh" '/test/osfs.test'
+if grep -Fq -- 'losetup -d --' scripts/ci/core-release-linux-native.sh; then
+  fail "Linux native certification passes an option terminator as a loop device"
+fi
 assert_contains "scripts/ci/core-release.sh" 'windshare_prepare_core_release_go_environment "$temporary_root"'
 assert_contains "scripts/ci/core-release.sh" 'bash scripts/ci/core-release-checkout.tests.sh'
 assert_contains "scripts/ci/core-release.sh" 'windshare_create_exact_release_checkout'

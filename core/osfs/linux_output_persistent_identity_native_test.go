@@ -182,6 +182,9 @@ func observeLinuxNativeRestartIdentity(t *testing.T, path string) linuxNativeRes
 		t.Fatal(err)
 	}
 	command := exec.Command(os.Args[0], "-test.run=^TestLinuxExt4RestartIdentityWorker$")
+	// The native chroot intentionally has no device nodes. An EOF-backed pipe
+	// keeps os/exec from opening /dev/null before it starts the worker.
+	command.Stdin = bytes.NewReader(nil)
 	command.Env = append(os.Environ(),
 		linuxNativeRestartWorkerMode+"=observe",
 		linuxNativeReuseRootEnvironment+"="+path,
