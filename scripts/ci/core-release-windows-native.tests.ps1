@@ -41,6 +41,14 @@ function ConvertTo-TestWindowsNativeArgument([string]$Value) {
     } $Value
 }
 
+function Select-TestWindowsNativeGoApplication([object[]]$Candidates) {
+    return & $windowsNativeModule {
+        param([object[]]$ApplicationCandidates)
+        Select-WindowsNativeCoordinatorGoApplication `
+            -Candidates $ApplicationCandidates
+    } $Candidates
+}
+
 function New-TestWindowsNativeCoordinatorReleaseRoot(
     [string]$BasePath,
     [string]$LeafName
@@ -129,19 +137,10 @@ if (-not [string]::Equals(
     throw 'native release root base is not canonical CommonApplicationData'
 }
 
-$currentGoCommand = Get-Command go -CommandType Application -ErrorAction Stop
-$currentGoExecutable = [IO.Path]::GetFullPath(
-    (Resolve-Path -LiteralPath $currentGoCommand.Source).Path
-)
-Write-Output ('-- coordinator Go path diagnostics: absolute={0}, provider_leaf={1}' -f @(
-    [IO.Path]::IsPathFullyQualified($currentGoExecutable),
-    (Test-Path -LiteralPath $currentGoExecutable -PathType Leaf)
-))
 $originalGoToolchain = [Environment]::GetEnvironmentVariable('GOTOOLCHAIN', 'Process')
 try {
     $env:GOTOOLCHAIN = 'local'
-    $currentToolchain = Get-WindowsNativeCoordinatorGoToolchain `
-        -GoExecutable $currentGoExecutable
+    $currentToolchain = Get-WindowsNativeCoordinatorGoToolchain
 } finally {
     if ($null -eq $originalGoToolchain) {
         Remove-Item Env:GOTOOLCHAIN -ErrorAction SilentlyContinue
@@ -149,34 +148,59 @@ try {
         $env:GOTOOLCHAIN = $originalGoToolchain
     }
 }
-if (-not [string]::Equals(
-    $currentToolchain.GoExecutable,
-    $currentGoExecutable,
-    [StringComparison]::OrdinalIgnoreCase
-) -or -not [string]::Equals(
+Write-Output ('-- coordinator Go command diagnostics: candidate_count={0}, selected_version={1}' -f @(
+    $currentToolchain.CandidateCount,
+    $currentToolchain.SelectedVersion
+))
+if ($currentToolchain.CandidateCount -lt 1 -or
+    $currentToolchain.GoExecutable -isnot [string] -or
+    [string]::IsNullOrWhiteSpace($currentToolchain.SelectedVersion) -or
+    $currentToolchain.GoExecutable.Contains("`n", [StringComparison]::Ordinal) -or
+    $currentToolchain.GoExecutable.Contains("`r", [StringComparison]::Ordinal) -or
+    -not [string]::Equals(
     (Join-Path $currentToolchain.GoRoot 'bin\go.exe'),
     $currentToolchain.GoExecutable,
     [StringComparison]::OrdinalIgnoreCase
 )) {
     throw 'coordinator Go toolchain discovery did not preserve the exact go env GOROOT binding'
 }
-Assert-ThrowsContaining `
-    'relative coordinator Go executable' `
-    'must be an absolute path' {
-        Get-WindowsNativeCoordinatorGoToolchain -GoExecutable '.\go.exe'
+
+$selectorRoot = Join-Path ([IO.Path]::GetTempPath()) (
+    'windshare-go-selector-{0}' -f [Guid]::NewGuid().ToString('N')
+)
+$firstCommandRoot = Join-Path $selectorRoot 'first'
+$secondCommandRoot = Join-Path $selectorRoot 'second'
+$selectorCommandName = 'windshare-go-selector.cmd'
+New-Item -ItemType Directory -Path $firstCommandRoot | Out-Null
+New-Item -ItemType Directory -Path $secondCommandRoot | Out-Null
+[IO.File]::WriteAllText((Join-Path $firstCommandRoot $selectorCommandName), '@exit /b 0')
+[IO.File]::WriteAllText((Join-Path $secondCommandRoot $selectorCommandName), '@exit /b 0')
+$originalPath = $env:PATH
+try {
+    $env:PATH = $firstCommandRoot + [IO.Path]::PathSeparator + $secondCommandRoot
+    $orderedCandidates = @(
+        Get-Command $selectorCommandName -CommandType Application -All -ErrorAction Stop
+    )
+    $selectedCandidate = Select-TestWindowsNativeGoApplication `
+        -Candidates $orderedCandidates
+    if ($selectedCandidate.CandidateCount -ne 2 -or
+        $selectedCandidate.GoExecutable -isnot [string] -or
+        -not [string]::Equals(
+            $selectedCandidate.GoExecutable,
+            (Join-Path $firstCommandRoot $selectorCommandName),
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw 'Go application selection did not preserve first PATH candidate precedence'
     }
-Assert-ThrowsContaining `
-    'missing coordinator Go executable' `
-    'cannot be opened for reading' {
-        Get-WindowsNativeCoordinatorGoToolchain -GoExecutable (
-            Join-Path ([IO.Path]::GetTempPath()) (
-                'missing-go-{0}\bin\go.exe' -f [Guid]::NewGuid().ToString('N')
-            )
-        )
+} finally {
+    $env:PATH = $originalPath
+    if (Test-Path -LiteralPath $selectorRoot) {
+        Remove-Item -LiteralPath $selectorRoot -Recurse -Force
     }
+}
 
 $toolchainCopyRoot = Join-Path ([IO.Path]::GetTempPath()) (
-    'windshare-native-toolchain-copy-[literal]-{0}' -f [Guid]::NewGuid().ToString('N')
+    'windshare-native-toolchain-copy-{0}' -f [Guid]::NewGuid().ToString('N')
 )
 $syntheticGoRoot = Join-Path $toolchainCopyRoot 'source-go'
 $syntheticGoBin = Join-Path $syntheticGoRoot 'bin'
@@ -662,6 +686,12 @@ Assert-FileContains `
     -Expected 'Get-WindowsNativeCoordinatorGoToolchain'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected '-- selected coordinator Go application: candidates={0}, version={1}'
+Assert-FileDoesNotContain `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Forbidden '(Get-Command go -CommandType Application -ErrorAction Stop).Source'
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
     -Expected "-DestinationRoot (Join-Path `$temporaryRoot 'go-toolchain')"
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
@@ -757,7 +787,8 @@ foreach ($requiredModuleText in @(
     '[Environment+SpecialFolder]::CommonApplicationData',
     'CoordinatorReleaseRootLeafPattern',
     'Assert-WindowsNativeCoordinatorReleaseRoot -Ownership $Ownership',
-    '[IO.File]::OpenRead($absolutePath)',
+    'Get-Command go -CommandType Application -All -ErrorAction Stop',
+    '$selectedPath = [string]$selected.Path',
     '& $resolvedGoExecutable env GOROOT',
     'Copying into the already protected release root',
     'Copy-Item',
@@ -767,19 +798,6 @@ foreach ($requiredModuleText in @(
     Assert-FileContains -Path $nativeModulePath -Expected $requiredModuleText
 }
 $nativeModuleSource = [IO.File]::ReadAllText($nativeModulePath)
-foreach ($forbiddenSourceProviderProbe in @(
-    'Test-Path -LiteralPath $GoExecutable',
-    'Resolve-Path -LiteralPath $GoExecutable',
-    'Resolve-Path -LiteralPath ([string]$Toolchain.GoExecutable)',
-    'Test-Path -LiteralPath $expectedGoExecutable'
-)) {
-    if ($nativeModuleSource.Contains(
-        $forbiddenSourceProviderProbe,
-        [StringComparison]::Ordinal
-    )) {
-        throw "trusted external Go source still depends on a provider probe: $forbiddenSourceProviderProbe"
-    }
-}
 $interopInitializerIndex = $nativeModuleSource.IndexOf(
     'function Initialize-WindowsNativeDirectoryInterop',
     [StringComparison]::Ordinal
