@@ -2,8 +2,8 @@
 # Deterministic core module release gate (POSIX). The gate reads core exclusively
 # from one exact commit object, extracts its canonical module zip outside the
 # repository, and validates it without go.work or parent-module state. Linux
-# always enables its native profile so an unsupported environment fails instead
-# of turning release certification into a skip.
+# release evidence ends with an isolated loop-ext4 fixture, where the production
+# receiver runs unprivileged and must prove deterministic inode-reuse rejection.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -34,9 +34,10 @@ if [ "$native_profile" = "linux-ext4" ] && [ "$host_kernel" != "Linux" ]; then
   echo "the linux-ext4 core-release profile requires a Linux host" >&2
   exit 2
 fi
-if [ "$native_profile" = "linux-ext4" ]; then
-  export WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION="$native_profile"
-fi
+unset WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION
+unset WINDSHARE_LINUX_NATIVE_FIXTURE
+unset WINDSHARE_LINUX_NATIVE_TEMP_ROOT
+unset WINDSHARE_LINUX_NATIVE_REUSE_ROOT
 
 coverage_tool="github.com/vladopajic/go-test-coverage/v2@v2.18.8"
 # The extracted osfs suite legitimately approaches Go's 10-minute default on
@@ -187,39 +188,15 @@ fi
   echo "-- extracted core coverage gate (total >=90%, package >=70%)"
   go run "$coverage_tool" --config=.testcoverage.yml --profile="$temporary_root/cover.out"
 
-  if [ "$native_profile" = "linux-ext4" ]; then
-    native_events="$temporary_root/linux-ext4-native-tests.json"
-    native_tests='^(TestLinuxExt4NativeCertification|TestLinuxExt4ProcessRestartRecovery)$'
-    echo "-- required Linux/ext4 certification and process-restart tests"
-    set +e
-    TMPDIR="$TMPDIR" WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION="$native_profile" \
-      go test -json -count=1 -timeout="$core_suite_test_timeout" \
-        -run "$native_tests" ./osfs | tee "$native_events"
-    native_status="${PIPESTATUS[0]}"
-    set -e
-    if [ "$native_status" -ne 0 ]; then
-      echo "required Linux/ext4 native tests failed" >&2
-      exit "$native_status"
-    fi
-
-    # A selected test may hide an environmental skip in a subtest while its
-    # top-level test still reports PASS. Certification must fail closed at every
-    # level of the selected test tree.
-    if grep -Fq '"Action":"skip"' "$native_events"; then
-      echo "required Linux/ext4 native test suite reported SKIP" >&2
-      grep -F '"Action":"skip"' "$native_events" >&2
-      exit 1
-    fi
-
-    for required_test in \
-      TestLinuxExt4NativeCertification \
-      TestLinuxExt4ProcessRestartRecovery; do
-      if ! grep -Eq "\"Action\":\"pass\".*\"Test\":\"${required_test}\"" "$native_events"; then
-        echo "required native test did not report PASS: $required_test" >&2
-        exit 1
-      fi
-    done
-  fi
 )
+
+if [ "$native_profile" = "linux-ext4" ]; then
+  windshare_assert_exact_release_file_projection \
+    "$release_repository" \
+    "$release_commit" \
+    scripts/ci/core-release-linux-native.sh \
+    scripts/ci/core-release-linux-native-root.sh
+  bash scripts/ci/core-release-linux-native.sh "$artifact_root" "$temporary_root"
+fi
 
 echo "== core-release: PASS in ${SECONDS}s =="

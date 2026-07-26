@@ -22,7 +22,14 @@ const (
 	linuxTestDeviceMinor   = 2
 	linuxTestRootInode     = 73
 	linuxTestGeneration    = 19
+	linuxTestBirthSeconds  = 1_722_000_000
+	linuxTestBirthNanos    = 123_456_789
 )
+
+var linuxTestFilesystemUUID = [linuxFilesystemUUIDBytes]byte{
+	0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87,
+	0x98, 0xa9, 0xba, 0xcb, 0xdc, 0xed, 0xfe, 0x0f,
+}
 
 func TestLinuxFindMountInfo(t *testing.T) {
 	t.Parallel()
@@ -169,22 +176,43 @@ func TestLinuxRejectedFilesystemClosesRootBeforeMutation(t *testing.T) {
 	}
 }
 
-func TestLinuxCertificationRequiresIncarnationAndByteExactDirectories(t *testing.T) {
+func TestLinuxCertificationRequiresRestartIdentityAndByteExactDirectories(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*linuxOutputSystem)
 	}{
 		{
-			name: "inode generation unavailable",
+			name: "filesystem UUID unavailable",
 			mutate: func(system *linuxOutputSystem) {
-				system.getVersion = nil
+				system.getFilesystemUUID = nil
 			},
 		},
 		{
-			name: "zero inode generation",
+			name: "zero filesystem UUID",
 			mutate: func(system *linuxOutputSystem) {
-				system.getVersion = func(int) (uint32, error) { return 0, nil }
+				system.getFilesystemUUID = func(int) ([linuxFilesystemUUIDBytes]byte, error) {
+					return [linuxFilesystemUUIDBytes]byte{}, nil
+				}
+			},
+		},
+		{
+			name: "restart identity provider unavailable",
+			mutate: func(system *linuxOutputSystem) {
+				system.restartIdentity = nil
+			},
+		},
+		{
+			name: "birth time unavailable",
+			mutate: func(system *linuxOutputSystem) {
+				original := system.statx
+				system.statx = func(fd int, path string, flags int, mask int, stat *unix.Statx_t) error {
+					if err := original(fd, path, flags, mask, stat); err != nil {
+						return err
+					}
+					stat.Mask &^= uint32(unix.STATX_BTIME)
+					return nil
+				}
 			},
 		},
 		{
@@ -209,18 +237,6 @@ func TestLinuxCertificationRequiresIncarnationAndByteExactDirectories(t *testing
 			name: "project-inheriting directory",
 			mutate: func(system *linuxOutputSystem) {
 				system.getFlags = func(int) (uint32, error) { return linuxFSProjectInheritFlag, nil }
-			},
-		},
-		{
-			name: "generation lock proof unavailable",
-			mutate: func(system *linuxOutputSystem) {
-				system.verifyGenerationLock = nil
-			},
-		},
-		{
-			name: "legacy mutable inode generations",
-			mutate: func(system *linuxOutputSystem) {
-				system.verifyGenerationLock = func(int) error { return unix.EFAULT }
 			},
 		},
 		{
@@ -262,6 +278,36 @@ func TestLinuxCertificationRequiresIncarnationAndByteExactDirectories(t *testing
 	}
 }
 
+func TestLinuxCertificationTreatsGenerationAsOptionalEvidence(t *testing.T) {
+	t.Parallel()
+	tests := map[string]func(*linuxOutputSystem){
+		"provider unavailable": func(system *linuxOutputSystem) { system.getVersion = nil },
+		"zero generation": func(system *linuxOutputSystem) {
+			system.getVersion = func(int) (uint32, error) { return 0, nil }
+		},
+		"ioctl unsupported": func(system *linuxOutputSystem) {
+			system.getVersion = func(int) (uint32, error) { return 0, unix.ENOTTY }
+		},
+	}
+	for name, mutate := range tests {
+		name, mutate := name, mutate
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			system := linuxCertificationTestSystem(
+				linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true,
+			)
+			mutate(&system)
+			certificate, err := linuxCertifyExt4OutputFD(&system, 10)
+			if err != nil {
+				t.Fatalf("certify ext4: %v", err)
+			}
+			if certificate.rootRestartIdentity.hasGenerationProof {
+				t.Fatal("optional generation evidence was recorded when unavailable or zero")
+			}
+		})
+	}
+}
+
 func TestLinuxParseProcessUmask(t *testing.T) {
 	t.Parallel()
 	valid := map[string]uint32{
@@ -287,21 +333,25 @@ func TestLinuxParseProcessUmask(t *testing.T) {
 	}
 }
 
-func TestLinuxObjectIdentityRejectsForcedInodeReuse(t *testing.T) {
+func TestLinuxRestartIdentityRejectsSameInodeWithDifferentBirthTime(t *testing.T) {
 	t.Parallel()
-	first := linuxOpenObjectIdentity{
-		mountID: linuxTestUniqueMountID, deviceMajor: linuxTestDeviceMajor,
-		deviceMinor: linuxTestDeviceMinor, inode: linuxTestRootInode,
-		mode: unix.S_IFDIR, generation: 1, hasGeneration: true,
+	mount := linuxMountIdentity{
+		uniqueMountID: linuxTestUniqueMountID, deviceMajor: linuxTestDeviceMajor,
+		deviceMinor: linuxTestDeviceMinor, runtimeFilesystemID: [2]int32{17, 29},
+		filesystemUUID: linuxTestFilesystemUUID,
+	}
+	first := linuxDirectoryRestartIdentity{
+		mount: mount, inode: linuxTestRootInode, kind: unix.S_IFDIR,
+		birthSeconds: linuxTestBirthSeconds, birthNanoseconds: linuxTestBirthNanos,
 	}
 	reused := first
-	reused.generation = 2
-	if first.sameObject(reused) || first.sameInodeObject(reused) {
-		t.Fatal("same mount/device/inode with a new ext4 generation was accepted as one object")
+	reused.birthNanoseconds++
+	if first.sameDirectory(reused) {
+		t.Fatal("same mount and inode with a new birth time was accepted as one directory")
 	}
 }
 
-func TestLinuxRegularAllocationUsesFullIncarnationAndSimultaneousRawWitness(t *testing.T) {
+func TestLinuxRegularAllocationUsesLiveHandleIdentity(t *testing.T) {
 	t.Parallel()
 	const allocatedBlocks = uint64(7)
 	allocationInode := uint64(linuxTestRootInode)
@@ -333,20 +383,20 @@ func TestLinuxRegularAllocationUsesFullIncarnationAndSimultaneousRawWitness(t *t
 	}
 	certificate := linuxOutputCertificate{
 		mount: linuxMountIdentity{
-			uniqueMountID: linuxTestUniqueMountID,
-			deviceMajor:   linuxTestDeviceMajor,
-			deviceMinor:   linuxTestDeviceMinor,
-			filesystemID:  [2]int32{17, 29},
+			uniqueMountID:       linuxTestUniqueMountID,
+			deviceMajor:         linuxTestDeviceMajor,
+			deviceMinor:         linuxTestDeviceMinor,
+			runtimeFilesystemID: [2]int32{17, 29},
+			filesystemUUID:      linuxTestFilesystemUUID,
 		},
-		generationSpoofLocked: true,
-		durability:            linuxOutputProcessRestartDurability,
+		durability: linuxOutputProcessRestartDurability,
 	}
 	file := linuxOutputRegularFile{
 		system: &system, fd: 12, certificate: certificate,
-		object: linuxOpenObjectIdentity{
+		object: linuxOpenHandleIdentity{
 			mountID: linuxTestUniqueMountID, deviceMajor: linuxTestDeviceMajor,
 			deviceMinor: linuxTestDeviceMinor, inode: linuxTestRootInode,
-			mode: unix.S_IFREG | 0o600, generation: linuxTestGeneration, hasGeneration: true,
+			kind: unix.S_IFREG,
 		},
 	}
 	allocated, err := file.allocatedSize()
@@ -664,27 +714,30 @@ func linuxCertificationTestSystem(
 	returnUniqueMask bool,
 ) linuxOutputSystem {
 	return linuxOutputSystem{
-		getVersion:           func(int) (uint32, error) { return linuxTestGeneration, nil },
-		getFlags:             func(int) (uint32, error) { return 0, nil },
-		verifyGenerationLock: func(int) error { return nil },
-		readProcessStatus:    func() ([]byte, error) { return []byte("Umask:\t0022\n"), nil },
+		getVersion:        func(int) (uint32, error) { return linuxTestGeneration, nil },
+		getFlags:          func(int) (uint32, error) { return 0, nil },
+		getFilesystemUUID: func(int) ([linuxFilesystemUUIDBytes]byte, error) { return linuxTestFilesystemUUID, nil },
+		restartIdentity:   linuxStatxBirthTimeRestartIdentityProvider{},
+		readProcessStatus: func() ([]byte, error) { return []byte("Umask:\t0022\n"), nil },
 		statx: func(_ int, _ string, _ int, mask int, stat *unix.Statx_t) error {
-			mountMask := uint32(unix.STATX_MNT_ID)
+			returnedMask := uint32(mask)
 			mountID := uint64(linuxTestLegacyMountID)
 			if mask&unix.STATX_MNT_ID_UNIQUE != 0 {
-				mountMask = 0
 				mountID = linuxTestUniqueMountID
-				if returnUniqueMask {
-					mountMask = uint32(unix.STATX_MNT_ID_UNIQUE)
+				if !returnUniqueMask {
+					returnedMask &^= uint32(unix.STATX_MNT_ID_UNIQUE)
 				}
 			}
 			*stat = unix.Statx_t{
-				Mask:      uint32(unix.STATX_TYPE|unix.STATX_MODE|unix.STATX_INO|unix.STATX_SIZE|unix.STATX_UID) | mountMask,
+				Mask:      returnedMask,
 				Ino:       linuxTestRootInode,
 				Mode:      unix.S_IFDIR | linuxOutputDirectoryMode,
 				Dev_major: linuxTestDeviceMajor,
 				Dev_minor: linuxTestDeviceMinor,
 				Mnt_id:    mountID,
+				Btime: unix.StatxTimestamp{
+					Sec: linuxTestBirthSeconds, Nsec: linuxTestBirthNanos,
+				},
 			}
 			return nil
 		},

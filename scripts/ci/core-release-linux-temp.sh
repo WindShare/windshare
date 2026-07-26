@@ -118,6 +118,10 @@ windshare_linux_remove_release_root() {
   if [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; then
     return 0
   fi
+  if [ -e "$candidate/.windshare-preserve-native-fixture" ]; then
+    echo "refusing to remove a Linux native fixture with unproven loop detachment: $candidate" >&2
+    return 1
+  fi
   windshare_linux_assert_ext4_ancestry \
     "$expected_parent" "Linux release cleanup parent" >/dev/null || return 1
   resolved_candidate="$(

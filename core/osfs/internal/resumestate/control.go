@@ -8,7 +8,7 @@ import (
 
 const (
 	MaxCertificationIDBytes                                = 128
-	CertificationLinuxExt4ProcessRestart   CertificationID = "linux/ext4/process-restart/v1"
+	CertificationLinuxExt4ProcessRestart   CertificationID = "linux/ext4/process-restart/v2"
 	CertificationWindowsNTFSProcessRestart CertificationID = "windows/ntfs/process-restart/v1"
 )
 

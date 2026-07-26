@@ -15,7 +15,7 @@ type linuxOutputPinnedEntry struct {
 	system      *linuxOutputSystem
 	fd          int
 	certificate linuxOutputCertificate
-	object      linuxOpenObjectIdentity
+	object      linuxOpenHandleIdentity
 	kind        outputV3EntryKind
 	name        string
 }
@@ -30,7 +30,7 @@ func (directory *linuxOutputDirectory) openPinnedEntry(
 	if err := linuxValidateComponent(operation, name); err != nil {
 		return nil, err
 	}
-	before, err := directory.namedIdentityNoFollow(name)
+	before, err := directory.namedEntrySnapshotNoFollow(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fs.ErrNotExist
 	}
@@ -38,7 +38,7 @@ func (directory *linuxOutputDirectory) openPinnedEntry(
 		return nil, err
 	}
 	flags := unix.O_PATH
-	switch linuxFileType(before.mode) {
+	switch before.identity.kind {
 	case unix.S_IFREG:
 		flags = unix.O_RDONLY
 	case unix.S_IFDIR:
@@ -57,23 +57,17 @@ func (directory *linuxOutputDirectory) openPinnedEntry(
 	if err != nil {
 		return nil, err
 	}
-	after, err := directory.namedIdentityNoFollow(name)
+	after, err := directory.namedEntrySnapshotNoFollow(name)
 	if err != nil {
 		return nil, err
 	}
-	if !linuxSameNamespaceObject(before, opened) || !linuxSameNamespaceObject(opened, after) {
+	if !before.matches(opened.identity) || !after.matches(opened.identity) {
 		return nil, linuxUnsafe(operation, "entry changed while its no-follow handle was pinned", nil)
 	}
 	return &linuxOutputPinnedEntry{
 		system: directory.system, fd: fd, certificate: directory.certificate,
-		object: opened, kind: linuxOutputEntryKind(opened.mode), name: name,
+		object: opened.identity, kind: linuxOutputEntryKind(opened.mode), name: name,
 	}, nil
-}
-
-func linuxSameNamespaceObject(left, right linuxOpenObjectIdentity) bool {
-	return left.mountID == right.mountID &&
-		left.deviceMajor == right.deviceMajor && left.deviceMinor == right.deviceMinor &&
-		left.inode == right.inode && linuxFileType(left.mode) == linuxFileType(right.mode)
 }
 
 func (entry *linuxOutputPinnedEntry) close() error {
@@ -94,7 +88,7 @@ func (entry *linuxOutputPinnedEntry) allocatedSize() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if !entry.object.sameObject(current) || linuxFileType(entry.object.mode) != linuxFileType(current.mode) {
+	if !entry.object.sameObject(current.identity) || entry.object.kind != current.identity.kind {
 		return 0, linuxUnsafe(operation, "entry handle changed after it was pinned", nil)
 	}
 	requested := unix.STATX_TYPE | unix.STATX_INO | unix.STATX_BLOCKS | unix.STATX_MNT_ID_UNIQUE
@@ -107,11 +101,11 @@ func (entry *linuxOutputPinnedEntry) allocatedSize() (uint64, error) {
 	if stat.Mask&uint32(requested) != uint32(requested) {
 		return 0, linuxUnsupported(operation, "filesystem omitted allocation or identity", nil)
 	}
-	observed := linuxOpenObjectIdentity{
+	observed := linuxOpenHandleIdentity{
 		mountID: stat.Mnt_id, deviceMajor: stat.Dev_major, deviceMinor: stat.Dev_minor,
-		inode: stat.Ino, mode: stat.Mode,
+		inode: stat.Ino, kind: linuxFileType(stat.Mode),
 	}
-	if !linuxSameNamespaceObject(entry.object, observed) {
+	if !entry.object.sameObject(observed) {
 		return 0, linuxUnsafe(operation, "allocation metadata differs from the pinned object", nil)
 	}
 	const statBlockBytes = uint64(512)

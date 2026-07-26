@@ -214,7 +214,7 @@ $windowsReleaseJob = [regex]::Match(
     '(?ms)^  windows-ntfs:\r?\n.*\z'
 ).Value
 if ([string]::IsNullOrWhiteSpace($linuxReleaseJob) -or
-    -not $linuxReleaseJob.Contains('timeout-minutes: 40', [StringComparison]::Ordinal) -or
+    -not $linuxReleaseJob.Contains('timeout-minutes: 60', [StringComparison]::Ordinal) -or
     [string]::IsNullOrWhiteSpace($windowsReleaseJob) -or
     -not $windowsReleaseJob.Contains('timeout-minutes: 90', [StringComparison]::Ordinal)) {
     throw 'core release workflow job timeouts do not preserve the platform-specific evidence budgets'
@@ -226,10 +226,11 @@ $ordinaryReleaseJob = [regex]::Match(
     '(?ms)^  core-release:\r?\n.*?(?=^  gowork-off-root:\r?$)'
 ).Value
 if ([string]::IsNullOrWhiteSpace($ordinaryReleaseJob) -or
+    -not $ordinaryReleaseJob.Contains('timeout-minutes: 60', [StringComparison]::Ordinal) -or
     -not $ordinaryReleaseJob.Contains('go-version-file: core/go.mod', [StringComparison]::Ordinal) -or
     -not $ordinaryReleaseJob.Contains('cache: false', [StringComparison]::Ordinal) -or
     $ordinaryReleaseJob.Contains('go-version-file: go.work', [StringComparison]::Ordinal)) {
-    throw 'ordinary CI core-release job does not use the uncached core toolchain'
+    throw 'ordinary CI core-release job lacks the fixed timeout or uncached core toolchain'
 }
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `

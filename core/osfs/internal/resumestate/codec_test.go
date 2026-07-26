@@ -18,7 +18,7 @@ import (
 func TestCanonicalStateCodecsRoundTripIndependently(t *testing.T) {
 	control, err := NewControl(ControlSpec{
 		Backend: testBackend(t), OutputRoot: testRootBinding(t),
-		Certification: "linux/ext4/process-restart/v1", Durability: transfer.DurabilityProcessRestart,
+		Certification: CertificationLinuxExt4ProcessRestart, Durability: transfer.DurabilityProcessRestart,
 		Generation: 1,
 	})
 	if err != nil {
@@ -73,8 +73,8 @@ func TestCanonicalStateCodecGoldenDigests(t *testing.T) {
 		raw  []byte
 		want string
 	}{
-		{name: "control", raw: controlBytes, want: "16540ad5caa4a30d8f00e601a31a9fb2e92f499560196a7e22d22571505c2e34"},
-		{name: "header", raw: headerBytes, want: "f5227f36bf370073322e89aa688af9c9a4f83a54c6da6a31d7e75ec169f6d0fa"},
+		{name: "control", raw: controlBytes, want: "5fd030a017883d1844d1edb37b73acac250b025574b7506664843c709d1813c8"},
+		{name: "header", raw: headerBytes, want: "f631a25c51c67c4bc69cab8917f8ab7db652e6c48aa1e5d87578e1f34e9de4d1"},
 		{name: "file", raw: fileBytes, want: "b55b3d670a3d8ba013b7506a367bc5be5d80c3f9467cc0fcf77ee1325307db0d"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

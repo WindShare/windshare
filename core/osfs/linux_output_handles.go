@@ -44,7 +44,7 @@ func linuxSameOpenRegularFile(left, right *linuxOutputRegularFile) (bool, error)
 	if err != nil {
 		return false, err
 	}
-	return leftIdentity.sameObject(rightIdentity), nil
+	return leftIdentity.identity.sameObject(rightIdentity.identity), nil
 }
 
 func (directory *linuxOutputDirectory) setExactMode(permissions uint32) error {
@@ -154,7 +154,7 @@ func (directory *linuxOutputDirectory) verifyHandle() error {
 	if err != nil {
 		return err
 	}
-	if linuxFileType(identity.mode) != unix.S_IFDIR || !identity.sameObject(directory.object) {
+	if identity.identity.kind != unix.S_IFDIR || !identity.matches(directory.object) {
 		return linuxUnsafe(operation, "open directory object no longer matches its authority", nil)
 	}
 	if directory.requireExactPermissions && linuxPermissions(identity.mode) != directory.exactPermissions {
@@ -177,7 +177,7 @@ func (file *linuxOutputRegularFile) verifyHandle() error {
 	if err != nil {
 		return err
 	}
-	if !identity.sameObject(file.object) {
+	if !identity.matches(file.object) {
 		return linuxUnsafe(operation, "open file object no longer matches its authority", nil)
 	}
 	if file.requireExactPermissions && linuxPermissions(identity.mode) != file.exactPermissions {
@@ -193,7 +193,7 @@ func (file *linuxOutputRegularFile) verifyHandle() error {
 
 func linuxValidateExactOwner(
 	system *linuxOutputSystem,
-	identity linuxOpenObjectIdentity,
+	identity linuxOpenHandleFacts,
 	operation string,
 ) error {
 	if system == nil || system.geteuid == nil {
@@ -206,17 +206,17 @@ func linuxValidateExactOwner(
 	return nil
 }
 
-func (file *linuxOutputRegularFile) currentIdentity() (linuxOpenObjectIdentity, error) {
+func (file *linuxOutputRegularFile) currentIdentity() (linuxOpenHandleFacts, error) {
 	const operation = "inspect output regular file"
 	if file == nil || file.system == nil || file.fd < 0 {
-		return linuxOpenObjectIdentity{}, linuxUnsafe(operation, "file handle is closed or absent", nil)
+		return linuxOpenHandleFacts{}, linuxUnsafe(operation, "file handle is closed or absent", nil)
 	}
 	identity, err := linuxVerifyOpenObject(file.system, file.fd, file.certificate)
 	if err != nil {
-		return linuxOpenObjectIdentity{}, err
+		return linuxOpenHandleFacts{}, err
 	}
-	if linuxFileType(identity.mode) != unix.S_IFREG {
-		return linuxOpenObjectIdentity{}, linuxUnsafe(operation, "open object is not a regular file", nil)
+	if identity.identity.kind != unix.S_IFREG {
+		return linuxOpenHandleFacts{}, linuxUnsafe(operation, "open object is not a regular file", nil)
 	}
 	return identity, nil
 }

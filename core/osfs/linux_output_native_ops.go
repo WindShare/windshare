@@ -3,7 +3,6 @@
 package osfs
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -20,7 +19,6 @@ import (
 
 const (
 	linuxOutputDirectoryReadBufferBytes = 32 << 10
-	linuxOutputDirectoryClaimTag        = "linux/ext4/directory-object/v2"
 )
 
 var errLinuxOutputLockBusy = errors.New("osfs: Linux output lock is already held")
@@ -41,14 +39,14 @@ func (directory *linuxOutputDirectory) Duplicate() (*linuxOutputDirectory, error
 		return nil, err
 	}
 	identity, err := linuxVerifyOpenObject(directory.system, fd, directory.certificate)
-	if err != nil || linuxFileType(identity.mode) != unix.S_IFDIR || !identity.sameObject(directory.object) {
+	if err != nil || identity.identity.kind != unix.S_IFDIR || !identity.matches(directory.object) {
 		if err == nil {
 			err = linuxUnsafe(operation, "duplicated handle does not identify the fixed directory", nil)
 		}
 		return nil, errors.Join(err, directory.system.close(fd))
 	}
 	return &linuxOutputDirectory{
-		system: directory.system, fd: fd, certificate: directory.certificate, object: identity,
+		system: directory.system, fd: fd, certificate: directory.certificate, object: identity.identity,
 		absolutePath: directory.absolutePath, exactPermissions: directory.exactPermissions,
 		requireExactPermissions: directory.requireExactPermissions,
 	}, nil
@@ -104,7 +102,7 @@ func (directory *linuxOutputDirectory) namesMatching(
 	if err != nil {
 		return nil, err
 	}
-	if linuxFileType(identity.mode) != unix.S_IFDIR || !identity.sameObject(directory.object) {
+	if identity.identity.kind != unix.S_IFDIR || !identity.matches(directory.object) {
 		return nil, linuxUnsafe(operation, "enumeration cursor does not identify the fixed directory", nil)
 	}
 
@@ -189,12 +187,14 @@ func (directory *linuxOutputDirectory) classifyExactEntry(
 }
 
 func (directory *linuxOutputDirectory) prepareIdentityClaim() ([]byte, error) {
-	// Linux/ext4 needs no identity metadata installation. Preparation deliberately
-	// executes the same read-only proof that every later ancestry rebind repeats.
-	return directory.identityClaim()
+	return directory.directoryIdentityClaim(true)
 }
 
 func (directory *linuxOutputDirectory) identityClaim() ([]byte, error) {
+	return directory.directoryIdentityClaim(false)
+}
+
+func (directory *linuxOutputDirectory) directoryIdentityClaim(prepare bool) ([]byte, error) {
 	const operation = "claim output directory identity"
 	if err := directory.validateExclusiveChildMutationAuthority(); err != nil {
 		return nil, errors.Join(errOutputAncestryAuthorityDenied, err)
@@ -203,31 +203,33 @@ func (directory *linuxOutputDirectory) identityClaim() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if linuxFileType(identity.mode) != unix.S_IFDIR || !identity.sameObject(directory.object) {
+	if identity.identity.kind != unix.S_IFDIR || !identity.matches(directory.object) {
 		return nil, linuxUnsafe(operation, "directory changed while its identity was claimed", nil)
 	}
-	mount := directory.certificate.mount
-	if !identity.hasGeneration || identity.generation == 0 {
-		return nil, linuxUnsupported(operation, "directory has no non-reused ext4 incarnation", nil)
+	provider := directory.system.restartIdentity
+	if provider == nil {
+		return nil, linuxUnsupported(operation, "directory restart-identity provider is unavailable", nil)
 	}
-	objectClaim := make([]byte, len(linuxOutputDirectoryClaimTag)+8+4+4+4+4+8+4+2)
-	copy(objectClaim, linuxOutputDirectoryClaimTag)
-	offset := len(linuxOutputDirectoryClaimTag)
-	binary.BigEndian.PutUint64(objectClaim[offset:], mount.uniqueMountID)
-	offset += 8
-	binary.BigEndian.PutUint32(objectClaim[offset:], mount.deviceMajor)
-	offset += 4
-	binary.BigEndian.PutUint32(objectClaim[offset:], mount.deviceMinor)
-	offset += 4
-	binary.BigEndian.PutUint32(objectClaim[offset:], uint32(mount.filesystemID[0]))
-	offset += 4
-	binary.BigEndian.PutUint32(objectClaim[offset:], uint32(mount.filesystemID[1]))
-	offset += 4
-	binary.BigEndian.PutUint64(objectClaim[offset:], identity.inode)
-	offset += 8
-	binary.BigEndian.PutUint32(objectClaim[offset:], identity.generation)
-	offset += 4
-	binary.BigEndian.PutUint16(objectClaim[offset:], linuxFileType(identity.mode))
+	var restartIdentity linuxDirectoryRestartIdentity
+	if prepare {
+		restartIdentity, err = provider.Prepare(directory.system, directory.fd, directory.certificate.mount)
+	} else {
+		restartIdentity, err = provider.Read(directory.system, directory.fd, directory.certificate.mount)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !restartIdentity.matchesHandle(identity.identity) {
+		return nil, linuxUnsafe(operation, "restart identity differs from the open directory", nil)
+	}
+	if directory.object.sameObject(directory.certificate.rootObject) &&
+		!restartIdentity.sameDirectory(directory.certificate.rootRestartIdentity) {
+		return nil, linuxUnsafe(operation, "certified output-root restart identity changed", nil)
+	}
+	objectClaim, err := linuxEncodeDirectoryRestartIdentity(restartIdentity)
+	if err != nil {
+		return nil, err
+	}
 	if directory.absolutePath == "" {
 		return objectClaim, nil
 	}
@@ -251,26 +253,26 @@ func linuxOutputEntryKind(mode uint16) outputV3EntryKind {
 	}
 }
 
-func (directory *linuxOutputDirectory) namedIdentityNoFollow(name string) (linuxOpenObjectIdentity, error) {
+func (directory *linuxOutputDirectory) namedEntrySnapshotNoFollow(name string) (linuxNamedEntrySnapshot, error) {
 	const operation = "inspect opaque output entry"
 	requested := unix.STATX_TYPE | unix.STATX_INO | unix.STATX_MNT_ID_UNIQUE
 	var stat unix.Statx_t
 	if err := directory.system.statx(directory.fd, name, unix.AT_SYMLINK_NOFOLLOW, requested, &stat); err != nil {
-		return linuxOpenObjectIdentity{}, fmt.Errorf("%s %q: %w", operation, name, err)
+		return linuxNamedEntrySnapshot{}, fmt.Errorf("%s %q: %w", operation, name, err)
 	}
 	if stat.Mask&uint32(requested) != uint32(requested) {
-		return linuxOpenObjectIdentity{}, linuxUnsupported(operation, "filesystem omitted current named identity", nil)
+		return linuxNamedEntrySnapshot{}, linuxUnsupported(operation, "filesystem omitted current named identity", nil)
 	}
-	identity := linuxOpenObjectIdentity{
+	snapshot := linuxNamedEntrySnapshot{identity: linuxOpenHandleIdentity{
 		mountID: stat.Mnt_id, deviceMajor: stat.Dev_major, deviceMinor: stat.Dev_minor,
-		inode: stat.Ino, mode: stat.Mode, size: stat.Size,
-	}
+		inode: stat.Ino, kind: linuxFileType(stat.Mode),
+	}}
 	mount := directory.certificate.mount
-	if identity.mountID != mount.uniqueMountID ||
-		identity.deviceMajor != mount.deviceMajor || identity.deviceMinor != mount.deviceMinor {
-		return linuxOpenObjectIdentity{}, linuxUnsafe(operation, "entry crossed the certified ext4 mount", nil)
+	if snapshot.identity.mountID != mount.uniqueMountID ||
+		snapshot.identity.deviceMajor != mount.deviceMajor || snapshot.identity.deviceMinor != mount.deviceMinor {
+		return linuxNamedEntrySnapshot{}, linuxUnsafe(operation, "entry crossed the certified ext4 mount", nil)
 	}
-	return identity, nil
+	return snapshot, nil
 }
 
 func (file *linuxOutputRegularFile) ReadAt(destination []byte, offset int64) (int, error) {
@@ -333,7 +335,7 @@ func (file *linuxOutputRegularFile) allocatedSize() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if !file.object.sameObject(current) {
+	if !file.object.sameObject(current.identity) {
 		return 0, linuxUnsafe(operation, "open file no longer matches its fixed incarnation", nil)
 	}
 	requested := unix.STATX_TYPE | unix.STATX_MODE | unix.STATX_INO | unix.STATX_BLOCKS | unix.STATX_MNT_ID_UNIQUE
@@ -346,14 +348,14 @@ func (file *linuxOutputRegularFile) allocatedSize() (uint64, error) {
 	if stat.Mask&uint32(requested) != uint32(requested) {
 		return 0, linuxUnsupported(operation, "filesystem omitted allocation or current-object identity", nil)
 	}
-	identity := linuxOpenObjectIdentity{
+	identity := linuxOpenHandleIdentity{
 		mountID: stat.Mnt_id, deviceMajor: stat.Dev_major, deviceMinor: stat.Dev_minor,
-		inode: stat.Ino, mode: stat.Mode,
+		inode: stat.Ino, kind: linuxFileType(stat.Mode),
 	}
 	// STATX_BLOCKS is obtained separately from the generation-bearing identity.
 	// The full handle remains live across both observations, so raw inode equality
 	// cannot be satisfied by reuse while this comparison is in progress.
-	if linuxFileType(identity.mode) != unix.S_IFREG || !linuxSameNamespaceObject(identity, current) {
+	if identity.kind != unix.S_IFREG || !identity.sameObject(current.identity) {
 		return 0, linuxUnsafe(operation, "allocation metadata is outside the fixed file authority", nil)
 	}
 	const statBlockBytes = uint64(512)
@@ -553,11 +555,11 @@ func linuxRequireExtendedTimestampLayout(
 		// nanosecond/epoch extension rather than only caching it in memory.
 		return linuxUnsupported(operation, "ext4 inode lacks persistent extended timestamp fields", nil)
 	}
-	observed := linuxOpenObjectIdentity{
+	observed := linuxOpenHandleIdentity{
 		mountID: stat.Mnt_id, deviceMajor: stat.Dev_major, deviceMinor: stat.Dev_minor,
-		inode: stat.Ino, mode: stat.Mode,
+		inode: stat.Ino, kind: linuxFileType(stat.Mode),
 	}
-	if !linuxSameNamespaceObject(current, observed) || stat.Uid != current.ownerUID {
+	if !current.identity.sameObject(observed) || stat.Uid != current.ownerUID {
 		return linuxUnsafe(operation, "extended timestamp proof escaped or changed the fixed object authority", nil)
 	}
 	if stat.Btime.Nsec < 0 || stat.Btime.Nsec >= 1_000_000_000 {
@@ -581,15 +583,15 @@ func linuxReadHandleMetadata(
 	if stat.Mask&uint32(requested) != uint32(requested) {
 		return linuxOutputMetadata{}, linuxUnsupported(operation, "filesystem omitted required size, time, or identity fields", nil)
 	}
-	identity := linuxOpenObjectIdentity{
+	identity := linuxOpenHandleIdentity{
 		mountID: stat.Mnt_id, deviceMajor: stat.Dev_major, deviceMinor: stat.Dev_minor,
-		inode: stat.Ino, mode: stat.Mode, size: stat.Size,
+		inode: stat.Ino, kind: linuxFileType(stat.Mode),
 	}
 	if identity.mountID != certificate.mount.uniqueMountID ||
 		identity.deviceMajor != certificate.mount.deviceMajor || identity.deviceMinor != certificate.mount.deviceMinor {
 		return linuxOutputMetadata{}, linuxUnsafe(operation, "metadata handle crossed the certified mount", nil)
 	}
-	if linuxFileType(identity.mode) != expectedType {
+	if identity.kind != expectedType {
 		return linuxOutputMetadata{}, linuxUnsafe(operation, "metadata handle has the wrong object type", nil)
 	}
 	if stat.Mtime.Nsec < 0 || stat.Mtime.Nsec >= 1_000_000_000 {

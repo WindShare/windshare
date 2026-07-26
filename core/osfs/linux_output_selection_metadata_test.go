@@ -249,8 +249,7 @@ func TestLinuxTimestampMutationAndComparisonRecheckExactInodeLayout(t *testing.T
 	harness.omitProbeBirthTime = true
 	object := root.certificate.rootObject
 	object.inode++
-	object.mode = uint16(unix.S_IFREG | linuxOutputStateFileMode)
-	object.generation++
+	object.kind = unix.S_IFREG
 	file := &linuxOutputRegularFile{
 		system: root.system, fd: 11, certificate: root.certificate, object: object, writable: true,
 	}
@@ -542,25 +541,31 @@ func newLinuxSelectionMetadataRoot(
 		return linuxTestGeneration, nil
 	}
 	system.getFlags = func(int) (uint32, error) { return 0, nil }
+	system.getFilesystemUUID = func(int) ([linuxFilesystemUUIDBytes]byte, error) {
+		return linuxTestFilesystemUUID, nil
+	}
+	system.restartIdentity = linuxStatxBirthTimeRestartIdentityProvider{}
 	system.geteuid = func() int { return int(harness.ownerUID) }
-	directoryMode := harness.directoryMode
-	if directoryMode == 0 {
-		directoryMode = uint16(unix.S_IFDIR | 0o755)
+	mount := linuxMountIdentity{
+		uniqueMountID: linuxTestUniqueMountID,
+		deviceMajor:   linuxTestDeviceMajor, deviceMinor: linuxTestDeviceMinor,
+		runtimeFilesystemID: filesystemID,
+		filesystemUUID:      linuxTestFilesystemUUID,
+	}
+	rootObject := linuxOpenHandleIdentity{
+		mountID:     linuxTestUniqueMountID,
+		deviceMajor: linuxTestDeviceMajor, deviceMinor: linuxTestDeviceMinor,
+		inode: linuxTestRootInode, kind: unix.S_IFDIR,
 	}
 	certificate := linuxOutputCertificate{
-		mount: linuxMountIdentity{
-			uniqueMountID: linuxTestUniqueMountID,
-			deviceMajor:   linuxTestDeviceMajor, deviceMinor: linuxTestDeviceMinor,
-			filesystemID: filesystemID,
+		mount:      mount,
+		rootObject: rootObject,
+		rootRestartIdentity: linuxDirectoryRestartIdentity{
+			mount: mount, inode: linuxTestRootInode, kind: unix.S_IFDIR,
+			birthSeconds: 1_500_000_000,
+			generation:   linuxTestGeneration, hasGenerationProof: true,
 		},
-		rootObject: linuxOpenObjectIdentity{
-			mountID:     linuxTestUniqueMountID,
-			deviceMajor: linuxTestDeviceMajor, deviceMinor: linuxTestDeviceMinor,
-			inode: linuxTestRootInode, mode: directoryMode,
-			generation: linuxTestGeneration, hasGeneration: true,
-		},
-		generationSpoofLocked: true,
-		durability:            linuxOutputProcessRestartDurability,
+		durability: linuxOutputProcessRestartDurability,
 	}
 	return &linuxOutputDirectory{
 		system: system, fd: rootFD, certificate: certificate, object: certificate.rootObject,

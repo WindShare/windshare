@@ -78,6 +78,15 @@ fi
 rmdir -- "$refused_root"
 refused_root=""
 
+preserve_marker="$release_root/.windshare-preserve-native-fixture"
+: >"$preserve_marker"
+if windshare_linux_remove_release_root \
+  "$release_root" "$WINDSHARE_LINUX_RELEASE_TEMP_PARENT" >/dev/null 2>&1; then
+  fail "cleanup accepted a native fixture with unproven loop detachment"
+fi
+[ -d "$release_root" ] || fail "preserved native fixture was removed"
+rm -- "$preserve_marker"
+
 windshare_linux_cleanup_release_environment
 [ ! -e "$release_root" ] || fail "owned release root survived cleanup"
 release_root=""
@@ -109,14 +118,28 @@ fi
 ordinary_release_job="$(sed -n '/^  core-release:$/,/^  gowork-off-root:$/p' .github/workflows/ci.yml)"
 if ! grep -Fq -- 'go-version-file: core/go.mod' <<<"$ordinary_release_job" ||
    ! grep -Fq -- 'cache: false' <<<"$ordinary_release_job" ||
+   ! grep -Fq -- 'timeout-minutes: 60' <<<"$ordinary_release_job" ||
    grep -Fq -- 'go-version-file: go.work' <<<"$ordinary_release_job"; then
-  fail "ordinary CI core-release job does not use the uncached core toolchain"
+  fail "ordinary CI core-release job lacks the fixed timeout or uncached core toolchain"
 fi
 assert_contains "scripts/ci/core-release-ref.sh" 'object_type" != "commit"'
 assert_contains "scripts/ci/core-release-ref.sh" 'require_direct_commit_ref "$candidate_ref" "$commit_sha"'
 assert_contains "Makefile" 'bash scripts/ci/core-release.sh $(CORE_RELEASE_VERSION) $(CORE_RELEASE_COMMIT_SHA)'
 assert_contains "scripts/ci/core-release.sh" 'native_profile="linux-ext4"'
-assert_contains "scripts/ci/core-release.sh" 'export WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION="$native_profile"'
+assert_contains "scripts/ci/core-release.sh" 'unset WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION'
+assert_contains "scripts/ci/core-release.sh" 'bash scripts/ci/core-release-linux-native.sh "$artifact_root" "$temporary_root"'
+assert_contains "scripts/ci/core-release-linux-native.sh" 'CGO_ENABLED=0 GOWORK=off go -C "$artifact_root" test -c -o "$test_binary" ./osfs'
+assert_contains "scripts/ci/core-release-linux-native.sh" 'mkfs.ext4 -q -F -N 1024 -I 256 -m 0'
+assert_contains "scripts/ci/core-release-linux-native.sh" 'sudo -n unshare --mount --propagation private --fork --kill-child'
+assert_contains "scripts/ci/core-release-linux-native.sh" 'go tool test2json -t -p github.com/windshare/windshare/core/osfs'
+assert_contains "scripts/ci/core-release-linux-native.sh" 'TestLinuxExt4RestartIdentityRejectsForcedInodeReuse'
+assert_contains "scripts/ci/core-release-linux-native.sh" 'TestLinuxExt4NativeCertification'
+assert_contains "scripts/ci/core-release-linux-native.sh" 'TestLinuxExt4ProcessRestartRecovery'
+assert_contains "scripts/ci/core-release-linux-native.sh" ': >"$preserve_marker"'
+assert_contains "scripts/ci/core-release-linux-native.sh" 'sudo -n udevadm settle'
+assert_contains "scripts/ci/core-release-linux-native-root.sh" 'WINDSHARE_LINUX_NATIVE_FIXTURE=loop-ext4-v1'
+assert_contains "scripts/ci/core-release-linux-native-root.sh" '--userspec="$receiver_uid:$receiver_gid"'
+assert_contains "scripts/ci/core-release-linux-native-root.sh" '/test/osfs.test'
 assert_contains "scripts/ci/core-release.sh" 'windshare_prepare_core_release_go_environment "$temporary_root"'
 assert_contains "scripts/ci/core-release.sh" 'bash scripts/ci/core-release-checkout.tests.sh'
 assert_contains "scripts/ci/core-release.sh" 'windshare_create_exact_release_checkout'
@@ -130,6 +153,8 @@ assert_contains "scripts/ci/core-release.ps1" 'Assert-ExactCoreReleaseFileProjec
 assert_contains "scripts/ci/core-release.ps1" '-commit $CommitSHA'
 assert_contains "scripts/ci/core-release-checkout.sh" 'GIT_*) unset "$variable_name"'
 assert_contains "scripts/ci/core-release-checkout.sh" 'hash-object --no-filters'
+assert_contains "scripts/ci/core-release-checkout.sh" 'scripts/ci/core-release-linux-native.sh'
+assert_contains "scripts/ci/core-release-checkout.sh" 'scripts/ci/core-release-linux-native-root.sh'
 assert_contains "scripts/ci/core-release-checkout.psm1" "StartsWith('GIT_', [StringComparison]::OrdinalIgnoreCase)"
 assert_contains "scripts/ci/core-release-checkout.psm1" "'hash-object', '--no-filters'"
 assert_contains "scripts/ci/_coremodulezip/main.go" '"ls-tree", "-r", "-z", "--full-tree", commitSHA'
@@ -148,10 +173,12 @@ assert_contains "scripts/ci/core-release.sh" 'core_suite_test_timeout="30m"'
 assert_contains "scripts/ci/core-release.sh" 'go test -count=1 -timeout="$core_suite_test_timeout" ./...'
 assert_contains "scripts/ci/core-release.sh" 'go test -race -count=1 -timeout="$core_suite_test_timeout" ./...'
 assert_contains "scripts/ci/core-release.sh" 'go test -count=1 -timeout="$core_suite_test_timeout" ./... -covermode=atomic'
-assert_contains "scripts/ci/core-release.sh" 'go test -json -count=1 -timeout="$core_suite_test_timeout"'
 assert_contains "scripts/ci/core-release.ps1" "\$coverageTool = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'"
 if grep -Fq -- 'GO_TEST_COVERAGE' scripts/ci/core-release.sh scripts/ci/core-release.ps1; then
   fail "core release coverage verifier still accepts a caller override"
+fi
+if grep -Fq -- '--autoclear' scripts/ci/core-release-linux-native.sh; then
+  fail "Linux native certification relies on an unsupported implicit loop lifecycle"
 fi
 
 for module_file in go.mod core/go.mod; do

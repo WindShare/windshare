@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	linuxAbsolutePlacementClaimDomain     = "linux/ext4/absolute-placement/v1"
-	linuxAnchoredDirectoryClaimDomain     = "linux/ext4/anchored-directory-sha256/v1"
+	linuxAbsolutePlacementClaimDomain     = "linux/ext4/absolute-placement/v2"
+	linuxAnchoredDirectoryClaimDomain     = "linux/ext4/anchored-directory-sha256/v2"
 	linuxMaximumPlacementComponents       = 4096
 	linuxMaximumAbsolutePlacementClaimLen = 1 << 20
 	linuxClaimUint16Bytes                 = 2
@@ -27,8 +27,7 @@ const (
 
 type linuxOutputPlacementRecord struct {
 	component string
-	mount     linuxMountIdentity
-	directory linuxOpenObjectIdentity
+	directory linuxDirectoryRestartIdentity
 }
 
 func linuxCertifyAbsoluteOutputPlacement(
@@ -72,7 +71,7 @@ func linuxCertifyAbsoluteOutputPlacement(
 	}
 	records := make([]linuxOutputPlacementRecord, 0, len(components)+1)
 	records = append(records, linuxOutputPlacementRecord{
-		mount: currentCertificate.mount, directory: currentCertificate.rootObject,
+		directory: currentCertificate.rootRestartIdentity,
 	})
 
 	for _, component := range components {
@@ -114,7 +113,7 @@ func linuxCertifyAbsoluteOutputPlacement(
 		currentFD = childFD
 		currentCertificate = childCertificate
 		records = append(records, linuxOutputPlacementRecord{
-			component: component, mount: childCertificate.mount, directory: child,
+			component: component, directory: childCertificate.rootRestartIdentity,
 		})
 		if err := system.close(previousFD); err != nil {
 			return nil, fmt.Errorf("%s: close traversed ancestor: %w", operation, err)
@@ -126,7 +125,7 @@ func linuxCertifyAbsoluteOutputPlacement(
 		return nil, err
 	}
 	if currentCertificate.mount != expected.mount ||
-		!reopened.sameObject(expected.rootObject) ||
+		!reopened.matches(expected.rootObject) ||
 		!currentCertificate.rootObject.sameObject(expected.rootObject) {
 		return nil, linuxUnsafe(operation,
 			"filesystem-root walk did not reopen the certified output-root object", nil)
@@ -166,8 +165,8 @@ func linuxValidateAbsolutePlacementParent(
 	if err != nil {
 		return err
 	}
-	if linuxFileType(identity.mode) != unix.S_IFDIR ||
-		!identity.sameObject(certificate.rootObject) {
+	if identity.identity.kind != unix.S_IFDIR ||
+		!identity.matches(certificate.rootObject) {
 		return linuxUnsafe(operation, "ancestry handle is not its certified directory incarnation", nil)
 	}
 	receiverUID := uint32(system.geteuid())
@@ -196,7 +195,7 @@ func linuxValidateAbsolutePlacementParent(
 	if err != nil {
 		return err
 	}
-	if !rechecked.sameObject(identity) {
+	if !rechecked.identity.sameObject(identity.identity) {
 		return linuxUnsafe(operation, "ancestry directory changed while authority was inspected", nil)
 	}
 	return nil
@@ -206,37 +205,33 @@ func linuxStatxNamedPlacementDirectory(
 	system *linuxOutputSystem,
 	parentFD int,
 	component string,
-) (linuxOpenObjectIdentity, error) {
+) (linuxNamedEntrySnapshot, error) {
 	const operation = "inspect absolute output-root path component"
 	requested := unix.STATX_TYPE | unix.STATX_INO | unix.STATX_MNT_ID_UNIQUE
 	var stat unix.Statx_t
 	if err := system.statx(parentFD, component, unix.AT_SYMLINK_NOFOLLOW, requested, &stat); err != nil {
-		return linuxOpenObjectIdentity{}, linuxClassifyOpenError(operation, err)
+		return linuxNamedEntrySnapshot{}, linuxClassifyOpenError(operation, err)
 	}
 	if stat.Mask&uint32(requested) != uint32(requested) {
-		return linuxOpenObjectIdentity{}, linuxUnsupported(operation,
+		return linuxNamedEntrySnapshot{}, linuxUnsupported(operation,
 			"filesystem omitted required no-follow component identity", nil)
 	}
-	identity := linuxOpenObjectIdentity{
+	identity := linuxNamedEntrySnapshot{identity: linuxOpenHandleIdentity{
 		mountID: stat.Mnt_id, deviceMajor: stat.Dev_major, deviceMinor: stat.Dev_minor,
-		inode: stat.Ino, mode: stat.Mode,
-	}
-	if linuxFileType(identity.mode) != unix.S_IFDIR {
-		return linuxOpenObjectIdentity{}, linuxUnsafe(operation,
+		inode: stat.Ino, kind: linuxFileType(stat.Mode),
+	}}
+	if identity.identity.kind != unix.S_IFDIR {
+		return linuxNamedEntrySnapshot{}, linuxUnsafe(operation,
 			"an absolute output-root path component is not a directory", nil)
 	}
 	return identity, nil
 }
 
 func linuxNamedPlacementMatchesOpen(
-	named linuxOpenObjectIdentity,
-	opened linuxOpenObjectIdentity,
+	named linuxNamedEntrySnapshot,
+	opened linuxOpenHandleIdentity,
 ) bool {
-	return named.mountID == opened.mountID &&
-		named.deviceMajor == opened.deviceMajor &&
-		named.deviceMinor == opened.deviceMinor &&
-		named.inode == opened.inode &&
-		linuxFileType(named.mode) == linuxFileType(opened.mode)
+	return named.matches(opened)
 }
 
 func linuxEncodeAbsolutePlacementClaim(records []linuxOutputPlacementRecord) ([]byte, error) {
@@ -283,25 +278,11 @@ func linuxPlacementRecordEncodedLength(record linuxOutputPlacementRecord) (int, 
 	if len(record.component) > linuxOutputNameMaximumBytes {
 		return 0, linuxUnsupported(operation, "placement component exceeds the ext4 byte bound", nil)
 	}
-	identity := record.directory
-	if linuxFileType(identity.mode) != unix.S_IFDIR ||
-		!identity.hasGeneration || identity.generation == 0 {
-		return 0, linuxUnsupported(operation,
-			"placement directory lacks a non-reused ext4 incarnation", nil)
+	identity, err := linuxEncodeDirectoryRestartIdentity(record.directory)
+	if err != nil {
+		return 0, err
 	}
-	if identity.mountID != record.mount.uniqueMountID ||
-		identity.deviceMajor != record.mount.deviceMajor ||
-		identity.deviceMinor != record.mount.deviceMinor {
-		return 0, linuxUnsafe(operation,
-			"placement mount and directory identities disagree", nil)
-	}
-	const framedIdentityBytes = linuxClaimUint16Bytes +
-		linuxClaimUint64Bytes +
-		4*linuxClaimUint32Bytes +
-		linuxClaimUint64Bytes +
-		linuxClaimUint32Bytes +
-		linuxClaimUint16Bytes
-	return framedIdentityBytes + len(record.component), nil
+	return linuxClaimUint16Bytes + len(record.component) + linuxClaimUint32Bytes + len(identity), nil
 }
 
 func linuxEncodePlacementRecord(record linuxOutputPlacementRecord, encodedLength int) ([]byte, error) {
@@ -315,15 +296,12 @@ func linuxEncodePlacementRecord(record linuxOutputPlacementRecord, encodedLength
 			err,
 		)
 	}
-	identity := record.directory
-	encoded = linuxAppendUint64(encoded, record.mount.uniqueMountID)
-	encoded = linuxAppendUint32(encoded, record.mount.deviceMajor)
-	encoded = linuxAppendUint32(encoded, record.mount.deviceMinor)
-	encoded = linuxAppendUint32(encoded, uint32(record.mount.filesystemID[0]))
-	encoded = linuxAppendUint32(encoded, uint32(record.mount.filesystemID[1]))
-	encoded = linuxAppendUint64(encoded, identity.inode)
-	encoded = linuxAppendUint32(encoded, identity.generation)
-	encoded = linuxAppendUint16(encoded, linuxFileType(identity.mode))
+	identity, err := linuxEncodeDirectoryRestartIdentity(record.directory)
+	if err != nil {
+		return nil, err
+	}
+	encoded = linuxAppendUint32(encoded, uint32(len(identity)))
+	encoded = append(encoded, identity...)
 	if len(encoded) != encodedLength {
 		return nil, linuxUnsafe(
 			"encode absolute output-root placement record",
