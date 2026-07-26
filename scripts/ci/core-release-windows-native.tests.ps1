@@ -1,7 +1,10 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-Import-Module (Join-Path $PSScriptRoot 'core-release-windows-native.psm1') -Force
+$windowsNativeModule = Import-Module `
+    (Join-Path $PSScriptRoot 'core-release-windows-native.psm1') `
+    -Force `
+    -PassThru
 
 function Assert-Throws([string]$Label, [scriptblock]$Body) {
     $threw = $false
@@ -13,6 +16,29 @@ function Assert-Throws([string]$Label, [scriptblock]$Body) {
     if (-not $threw) {
         throw "$Label did not fail closed"
     }
+}
+
+function Assert-ThrowsContaining(
+    [string]$Label,
+    [string]$ExpectedMessage,
+    [scriptblock]$Body
+) {
+    try {
+        $null = & $Body
+    } catch {
+        if (-not $_.Exception.Message.Contains($ExpectedMessage, [StringComparison]::Ordinal)) {
+            throw "$Label failed for the wrong reason: $($_.Exception.Message)"
+        }
+        return
+    }
+    throw "$Label did not fail closed"
+}
+
+function ConvertTo-TestWindowsNativeArgument([string]$Value) {
+    return & $windowsNativeModule {
+        param([string]$ArgumentValue)
+        ConvertTo-WindowsNativeArgument $ArgumentValue
+    } $Value
 }
 
 function Assert-FileContains([string]$Path, [string]$Expected) {
@@ -76,6 +102,87 @@ Assert-Throws 'token without Users group' {
         -GroupSIDs @('S-1-1-0') `
         -IsAdministrator $false
 }
+
+$credentialCommandLineMaximumCharacters = 1023
+$githubTemporaryRoot = 'D:\a\_temp\windshare-core-release-{0}' -f ('a' * 32)
+$githubWorkerRoot = [IO.Path]::Combine($githubTemporaryRoot, 'windows-native-worker')
+$githubWorkerScript = [IO.Path]::Combine(
+    $githubWorkerRoot,
+    'core-release-windows-native-worker.ps1'
+)
+$githubArtifactRoot = [IO.Path]::Combine($githubTemporaryRoot, 'extracted-core')
+$githubPowerShellExecutable = 'C:\Program Files\PowerShell\7\pwsh.exe'
+$githubGoExecutable = 'C:\hostedtoolcache\windows\go\1.25.1\x64\bin\go.exe'
+$githubWorkerSID = 'S-1-5-21-1234567890-1234567890-1234567890-1001'
+$githubArgumentLine = New-WindowsNativeWorkerArgumentLine `
+    -PowerShellExecutable $githubPowerShellExecutable `
+    -WorkerScript $githubWorkerScript `
+    -ArtifactRoot $githubArtifactRoot `
+    -WorkRoot $githubWorkerRoot `
+    -GoExecutable $githubGoExecutable `
+    -ExpectedUserSID $githubWorkerSID
+$expectedGithubArgumentLine = @(
+    '-NoLogo',
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    ('"{0}"' -f $githubWorkerScript),
+    '-ArtifactRoot',
+    ('"{0}"' -f $githubArtifactRoot),
+    '-WorkRoot',
+    ('"{0}"' -f $githubWorkerRoot),
+    '-GoExecutable',
+    ('"{0}"' -f $githubGoExecutable),
+    '-ExpectedUserSID',
+    ('"{0}"' -f $githubWorkerSID)
+) -join ' '
+if ($githubArgumentLine -cne $expectedGithubArgumentLine) {
+    throw 'standard-user worker argument line lost its direct -File contract or exact quoting'
+}
+$githubFullCommandLine = '"{0}" {1}' -f $githubPowerShellExecutable, $githubArgumentLine
+if ($githubFullCommandLine.Length -gt $credentialCommandLineMaximumCharacters) {
+    throw "representative GitHub worker command line is unexpectedly $($githubFullCommandLine.Length) characters"
+}
+if ((ConvertTo-TestWindowsNativeArgument '') -cne '""' -or
+    (ConvertTo-TestWindowsNativeArgument 'alpha"beta') -cne '"alpha\"beta"' -or
+    (ConvertTo-TestWindowsNativeArgument 'C:\') -cne '"C:\\"') {
+    throw 'Windows native argument quoting does not preserve empty, quoted, or trailing-backslash values'
+}
+Assert-ThrowsContaining `
+    'overlong credential command line' `
+    'CreateProcessWithLogonW permits at most 1023' {
+        New-WindowsNativeWorkerArgumentLine `
+            -PowerShellExecutable $githubPowerShellExecutable `
+            -WorkerScript $githubWorkerScript `
+            -ArtifactRoot ('D:\' + ('a' * 900)) `
+            -WorkRoot $githubWorkerRoot `
+            -GoExecutable $githubGoExecutable `
+            -ExpectedUserSID $githubWorkerSID
+    }
+Assert-ThrowsContaining `
+    'control character in worker launch value' `
+    'contains a control character' {
+        New-WindowsNativeWorkerArgumentLine `
+            -PowerShellExecutable $githubPowerShellExecutable `
+            -WorkerScript $githubWorkerScript `
+            -ArtifactRoot ($githubArtifactRoot + "`nchild") `
+            -WorkRoot $githubWorkerRoot `
+            -GoExecutable $githubGoExecutable `
+            -ExpectedUserSID $githubWorkerSID
+    }
+Assert-ThrowsContaining `
+    'quote in worker launch value' `
+    'contains a double quote' {
+        New-WindowsNativeWorkerArgumentLine `
+            -PowerShellExecutable $githubPowerShellExecutable `
+            -WorkerScript ($githubWorkerScript + '"') `
+            -ArtifactRoot $githubArtifactRoot `
+            -WorkRoot $githubWorkerRoot `
+            -GoExecutable $githubGoExecutable `
+            -ExpectedUserSID $githubWorkerSID
+    }
 
 $writableProbeRoot = Join-Path ([IO.Path]::GetTempPath()) (
     'windshare-native-readonly-contract-{0}' -f [Guid]::NewGuid().ToString('N')
@@ -301,6 +408,18 @@ Assert-FileContains `
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
     -Expected '[TimeSpan]::FromMinutes('
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected 'New-WindowsNativeWorkerArgumentLine'
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected '-ArgumentList $workerArgumentLine'
+Assert-FileDoesNotContain `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Forbidden '-EncodedCommand'
+Assert-FileDoesNotContain `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Forbidden 'ConvertTo-SingleQuotedPowerShellLiteral'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
     -Expected 'go test -count=1 "-timeout=$coreSuiteTestTimeout" ./...'

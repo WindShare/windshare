@@ -13,6 +13,135 @@ $script:ForbiddenServiceSIDs = @(
     'S-1-5-19',
     'S-1-5-20'
 )
+# CreateProcessWithLogonW limits lpCommandLine to 1024 UTF-16 characters.
+# Reserve one character for its terminating NUL so every accepted launch is
+# inside the documented boundary rather than relying on edge interpretation.
+$script:MaximumCredentialCommandLineCharacters = 1023
+
+function ConvertTo-WindowsNativeArgument([string]$Value) {
+    $argument = [Text.StringBuilder]::new($Value.Length + 2)
+    [void]$argument.Append('"')
+    $backslashCount = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -ceq [char]'\') {
+            $backslashCount++
+            continue
+        }
+        if ($character -ceq [char]'"') {
+            if ($backslashCount -gt 0) {
+                [void]$argument.Append(('\' * ($backslashCount * 2)))
+                $backslashCount = 0
+            }
+            [void]$argument.Append('\"')
+            continue
+        }
+        if ($backslashCount -gt 0) {
+            [void]$argument.Append(('\' * $backslashCount))
+            $backslashCount = 0
+        }
+        [void]$argument.Append($character)
+    }
+    # Backslashes before the closing quote must be doubled so Windows argv
+    # parsing preserves a trailing directory separator instead of escaping it.
+    if ($backslashCount -gt 0) {
+        [void]$argument.Append(('\' * ($backslashCount * 2)))
+    }
+    [void]$argument.Append('"')
+    return $argument.ToString()
+}
+
+function Assert-WindowsNativeWorkerArgumentValue([string]$Value, [string]$Label) {
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        throw "$Label is empty"
+    }
+    foreach ($character in $Value.ToCharArray()) {
+        if ([char]::IsControl($character)) {
+            throw "$Label contains a control character"
+        }
+    }
+    # These inputs are filesystem paths or a SID, none of which can contain a
+    # double quote on Windows. Rejecting one exposes malformed launch state
+    # instead of allowing it to acquire command-line syntax accidentally.
+    if ($Value.Contains('"', [StringComparison]::Ordinal)) {
+        throw "$Label contains a double quote"
+    }
+}
+
+function New-WindowsNativeWorkerArgumentLine {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$PowerShellExecutable,
+
+        [Parameter(Mandatory)]
+        [string]$WorkerScript,
+
+        [Parameter(Mandatory)]
+        [string]$ArtifactRoot,
+
+        [Parameter(Mandatory)]
+        [string]$WorkRoot,
+
+        [Parameter(Mandatory)]
+        [string]$GoExecutable,
+
+        [Parameter(Mandatory)]
+        [string]$ExpectedUserSID
+    )
+
+    $pathArguments = @(
+        [pscustomobject]@{ Label = 'PowerShell executable'; Value = $PowerShellExecutable },
+        [pscustomobject]@{ Label = 'native worker script'; Value = $WorkerScript },
+        [pscustomobject]@{ Label = 'extracted artifact root'; Value = $ArtifactRoot },
+        [pscustomobject]@{ Label = 'native worker root'; Value = $WorkRoot },
+        [pscustomobject]@{ Label = 'Go executable'; Value = $GoExecutable }
+    )
+    foreach ($pathArgument in $pathArguments) {
+        Assert-WindowsNativeWorkerArgumentValue `
+            -Value $pathArgument.Value `
+            -Label $pathArgument.Label
+        if (-not [IO.Path]::IsPathFullyQualified($pathArgument.Value)) {
+            throw "$($pathArgument.Label) must be an absolute path"
+        }
+    }
+    Assert-WindowsNativeWorkerArgumentValue `
+        -Value $ExpectedUserSID `
+        -Label 'expected native worker SID'
+    if ($ExpectedUserSID -cnotmatch '^S-[0-9]+(?:-[0-9]+)+$') {
+        throw 'expected native worker SID is malformed'
+    }
+
+    $argumentLine = @(
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        (ConvertTo-WindowsNativeArgument $WorkerScript),
+        '-ArtifactRoot',
+        (ConvertTo-WindowsNativeArgument $ArtifactRoot),
+        '-WorkRoot',
+        (ConvertTo-WindowsNativeArgument $WorkRoot),
+        '-GoExecutable',
+        (ConvertTo-WindowsNativeArgument $GoExecutable),
+        '-ExpectedUserSID',
+        (ConvertTo-WindowsNativeArgument $ExpectedUserSID)
+    ) -join ' '
+    $fullCommandLine = '{0} {1}' -f @(
+        (ConvertTo-WindowsNativeArgument $PowerShellExecutable),
+        $argumentLine
+    )
+    if ($fullCommandLine.Length -gt $script:MaximumCredentialCommandLineCharacters) {
+        throw ('standard-user native worker command line is {0} characters; ' +
+            'CreateProcessWithLogonW permits at most {1} before its terminating NUL') -f @(
+                $fullCommandLine.Length,
+                $script:MaximumCredentialCommandLineCharacters
+            )
+    }
+    return $argumentLine
+}
 
 function Get-WindowsNativeRequiredTestNames {
     return @($script:RequiredWindowsNativeTests)
@@ -212,5 +341,6 @@ Export-ModuleMember -Function @(
     'Assert-WindowsNativeTestEvents',
     'ConvertFrom-WindowsNativeTestJSONLines',
     'Get-WindowsNativeRequiredTestExpression',
-    'Get-WindowsNativeRequiredTestNames'
+    'Get-WindowsNativeRequiredTestNames',
+    'New-WindowsNativeWorkerArgumentLine'
 )

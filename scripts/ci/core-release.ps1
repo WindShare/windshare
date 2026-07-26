@@ -46,6 +46,7 @@ $releaseEnvironmentState = $null
 
 Import-Module (Join-Path $PSScriptRoot 'core-release-environment.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'core-release-checkout.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'core-release-windows-native.psm1') -Force
 
 function Invoke-Step([string]$Label, [scriptblock]$Body) {
     Write-Output "-- $Label"
@@ -108,10 +109,6 @@ function Deny-EphemeralWindowsUserArtifactMutation(
     if ($LASTEXITCODE -ne 0) {
         throw "deny mutation access to the extracted artifact failed with code $LASTEXITCODE"
     }
-}
-
-function ConvertTo-SingleQuotedPowerShellLiteral([string]$Value) {
-    return "'$($Value.Replace("'", "''"))'"
 }
 
 function Stop-EphemeralWindowsWorkerProcess([Diagnostics.Process]$Process) {
@@ -252,14 +249,13 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
         )
         $powershellExecutable = [IO.Path]::GetFullPath((Get-Process -Id $PID).Path)
         $workerScript = Join-Path $workerRoot 'core-release-windows-native-worker.ps1'
-        $workerCommand = '& {0} -ArtifactRoot {1} -WorkRoot {2} -GoExecutable {3} -ExpectedUserSID {4}' -f @(
-            (ConvertTo-SingleQuotedPowerShellLiteral $workerScript),
-            (ConvertTo-SingleQuotedPowerShellLiteral $artifactRoot),
-            (ConvertTo-SingleQuotedPowerShellLiteral $workerRoot),
-            (ConvertTo-SingleQuotedPowerShellLiteral $goExecutable),
-            (ConvertTo-SingleQuotedPowerShellLiteral $userSID)
-        )
-        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($workerCommand))
+        $workerArgumentLine = New-WindowsNativeWorkerArgumentLine `
+            -PowerShellExecutable $powershellExecutable `
+            -WorkerScript $workerScript `
+            -ArtifactRoot $artifactRoot `
+            -WorkRoot $workerRoot `
+            -GoExecutable $goExecutable `
+            -ExpectedUserSID $userSID
         $stdoutPath = Join-Path $workerRoot 'worker-stdout.log'
         $stderrPath = Join-Path $workerRoot 'worker-stderr.log'
         $credential = [Management.Automation.PSCredential]::new(
@@ -270,10 +266,7 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
         Write-Output '-- required Windows/NTFS certification under an isolated standard-user token'
         $process = Start-Process `
             -FilePath $powershellExecutable `
-            -ArgumentList @(
-                '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-                '-EncodedCommand', $encodedCommand
-            ) `
+            -ArgumentList $workerArgumentLine `
             -Credential $credential `
             -WorkingDirectory $workerRoot `
             -RedirectStandardOutput $stdoutPath `
