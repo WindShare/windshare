@@ -126,16 +126,17 @@ function Grant-EphemeralWindowsUserAccess(
     }
 }
 
-function Deny-EphemeralWindowsUserArtifactMutation(
+function Deny-EphemeralWindowsUserTreeMutation(
     [string]$Path,
-    [string]$UserSID
+    [string]$UserSID,
+    [string]$Label
 ) {
     $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
-    # Keep the extracted candidate immutable even if later worker-root grants
-    # evolve; this direct deny outranks the worker's inherited read access.
+    # A direct deny on every descendant keeps immutable inputs read-only even if
+    # a copied source ACL or a future sibling grant would otherwise add rights.
     & $icacls $Path '/deny' "*${UserSID}:(OI)(CI)(WD,AD,WEA,WA,D,DC,WDAC,WO)" '/T' '/Q'
     if ($LASTEXITCODE -ne 0) {
-        throw "deny mutation access to the extracted artifact failed with code $LASTEXITCODE"
+        throw "deny mutation access to $Label failed with code $LASTEXITCODE"
     }
 }
 
@@ -247,6 +248,16 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
             throw 'native release root ownership was not established before worker access'
         }
 
+        $coordinatorGoExecutable = [IO.Path]::GetFullPath(
+            (Get-Command go -CommandType Application -ErrorAction Stop).Source
+        )
+        $coordinatorToolchain = Get-WindowsNativeCoordinatorGoToolchain `
+            -GoExecutable $coordinatorGoExecutable
+        $stagedToolchain = Copy-WindowsNativeGoToolchain `
+            -Toolchain $coordinatorToolchain `
+            -DestinationRoot (Join-Path $temporaryRoot 'go-toolchain')
+        Write-Output "-- staged coordinator GOROOT inside the protected native release root: $($stagedToolchain.GoRoot)"
+
         $workerRoot = Join-Path $temporaryRoot 'windows-native-worker'
         New-Item -ItemType Directory -Path $workerRoot | Out-Null
         $workerVerifierPaths = @(
@@ -268,12 +279,16 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
         }
         Grant-EphemeralWindowsUserAccess -Path $temporaryRoot -UserSID $userSID -Permission RX
         $temporaryRootOwnership.WorkerSID = $userSID
-        Deny-EphemeralWindowsUserArtifactMutation -Path $artifactRoot -UserSID $userSID
+        Deny-EphemeralWindowsUserTreeMutation `
+            -Path $artifactRoot `
+            -UserSID $userSID `
+            -Label 'the extracted artifact'
+        Deny-EphemeralWindowsUserTreeMutation `
+            -Path $stagedToolchain.GoRoot `
+            -UserSID $userSID `
+            -Label 'the staged GOROOT'
         Grant-EphemeralWindowsUserAccess -Path $workerRoot -UserSID $userSID -Permission M
 
-        $goExecutable = [IO.Path]::GetFullPath(
-            (Get-Command go -CommandType Application -ErrorAction Stop).Source
-        )
         $powershellExecutable = [IO.Path]::GetFullPath((Get-Process -Id $PID).Path)
         $workerScript = Join-Path $workerRoot 'core-release-windows-native-worker.ps1'
         $workerArgumentLine = New-WindowsNativeWorkerArgumentLine `
@@ -281,7 +296,7 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
             -WorkerScript $workerScript `
             -ArtifactRoot $artifactRoot `
             -WorkRoot $workerRoot `
-            -GoExecutable $goExecutable `
+            -GoExecutable $stagedToolchain.GoExecutable `
             -ExpectedUserSID $userSID
         $stdoutPath = Join-Path $workerRoot 'worker-stdout.log'
         $stderrPath = Join-Path $workerRoot 'worker-stderr.log'

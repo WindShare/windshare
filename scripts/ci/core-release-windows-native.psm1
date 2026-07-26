@@ -86,7 +86,7 @@ namespace WindShare.CoreRelease
     }
 }
 
-function Resolve-WindowsNativeLocalFixedNTFSDirectory {
+function Resolve-WindowsNativeLocalFixedNTFSDirectoryLocation {
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -116,6 +116,23 @@ function Resolve-WindowsNativeLocalFixedNTFSDirectory {
         throw "$Label must be on NTFS, found $($drive.DriveFormat)"
     }
 
+    return $resolvedPath
+}
+
+function Resolve-WindowsNativeLocalFixedNTFSDirectory {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Label
+    )
+
+    $resolvedPath = Resolve-WindowsNativeLocalFixedNTFSDirectoryLocation `
+        -Path $Path `
+        -Label $Label
     $currentDirectory = [IO.DirectoryInfo]::new($resolvedPath)
     while ($null -ne $currentDirectory) {
         $attributes = [IO.File]::GetAttributes($currentDirectory.FullName)
@@ -125,6 +142,175 @@ function Resolve-WindowsNativeLocalFixedNTFSDirectory {
         $currentDirectory = $currentDirectory.Parent
     }
     return $resolvedPath
+}
+
+function Assert-WindowsNativeTreeHasNoReparsePoints {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$RootPath,
+
+        [Parameter(Mandatory)]
+        [string]$Label
+    )
+
+    $resolvedRoot = Resolve-WindowsNativeLocalFixedNTFSDirectory `
+        -Path $RootPath `
+        -Label $Label
+    foreach ($entry in Get-ChildItem -LiteralPath $resolvedRoot -Force -Recurse) {
+        if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Label contains a reparse point: $($entry.FullName)"
+        }
+    }
+}
+
+function Get-WindowsNativeCoordinatorGoToolchain {
+    [CmdletBinding()]
+    [OutputType([object])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$GoExecutable
+    )
+
+    if (-not [IO.Path]::IsPathFullyQualified($GoExecutable) -or
+        -not (Test-Path -LiteralPath $GoExecutable -PathType Leaf)) {
+        throw 'coordinator Go executable must be an absolute existing file'
+    }
+    $resolvedGoExecutable = [IO.Path]::GetFullPath(
+        (Resolve-Path -LiteralPath $GoExecutable).Path
+    )
+    $goRootOutput = @(& $resolvedGoExecutable env GOROOT)
+    $goRootExitCode = $LASTEXITCODE
+    if ($goRootExitCode -ne 0) {
+        throw "resolve coordinator GOROOT failed with code $goRootExitCode"
+    }
+    $goRootValues = @($goRootOutput | ForEach-Object {
+        ([string]$_).Trim()
+    } | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_)
+    })
+    if ($goRootValues.Count -ne 1) {
+        throw "coordinator Go executable reported $($goRootValues.Count) GOROOT values, want exactly one"
+    }
+
+    # Hosted setup-go installations may themselves sit behind a trusted cache
+    # junction. Only the copied destination is part of the worker boundary.
+    $resolvedGoRoot = Resolve-WindowsNativeLocalFixedNTFSDirectoryLocation `
+        -Path $goRootValues[0] `
+        -Label 'coordinator GOROOT'
+    $expectedGoExecutable = Join-Path $resolvedGoRoot 'bin\go.exe'
+    if (-not (Test-Path -LiteralPath $expectedGoExecutable -PathType Leaf)) {
+        throw 'coordinator GOROOT has no bin\go.exe'
+    }
+    $resolvedExpectedGoExecutable = [IO.Path]::GetFullPath(
+        (Resolve-Path -LiteralPath $expectedGoExecutable).Path
+    )
+    if (-not [string]::Equals(
+        $resolvedGoExecutable,
+        $resolvedExpectedGoExecutable,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'coordinator Go executable is not the bin\go.exe reported by its GOROOT'
+    }
+
+    return [pscustomobject]@{
+        PSTypeName = 'WindShare.WindowsNativeCoordinatorGoToolchain'
+        GoRoot = $resolvedGoRoot
+        GoExecutable = $resolvedGoExecutable
+    }
+}
+
+function Copy-WindowsNativeGoToolchain {
+    [CmdletBinding()]
+    [OutputType([object])]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Toolchain,
+
+        [Parameter(Mandatory)]
+        [string]$DestinationRoot
+    )
+
+    $sourceRoot = Resolve-WindowsNativeLocalFixedNTFSDirectoryLocation `
+        -Path ([string]$Toolchain.GoRoot) `
+        -Label 'coordinator GOROOT'
+    $sourceGoExecutable = [IO.Path]::GetFullPath(
+        (Resolve-Path -LiteralPath ([string]$Toolchain.GoExecutable)).Path
+    )
+    $expectedSourceGoExecutable = [IO.Path]::GetFullPath(
+        (Resolve-Path -LiteralPath (Join-Path $sourceRoot 'bin\go.exe')).Path
+    )
+    if (-not [string]::Equals(
+        $sourceGoExecutable,
+        $expectedSourceGoExecutable,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'coordinator toolchain executable does not belong to its GOROOT'
+    }
+    if (-not [IO.Path]::IsPathFullyQualified($DestinationRoot)) {
+        throw 'staged GOROOT must be an absolute path'
+    }
+    $resolvedDestinationRoot = [IO.Path]::GetFullPath($DestinationRoot)
+    $destinationParentInfo = [IO.Directory]::GetParent($resolvedDestinationRoot)
+    if ($null -eq $destinationParentInfo) {
+        throw 'staged GOROOT has no parent directory'
+    }
+    $destinationParent = Resolve-WindowsNativeLocalFixedNTFSDirectory `
+        -Path $destinationParentInfo.FullName `
+        -Label 'staged GOROOT parent'
+    if (-not [string]::Equals(
+        $destinationParent,
+        $destinationParentInfo.FullName,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'staged GOROOT parent does not resolve to its canonical path'
+    }
+    $directorySeparator = [IO.Path]::DirectorySeparatorChar
+    if ([string]::Equals(
+        $sourceRoot,
+        $resolvedDestinationRoot,
+        [StringComparison]::OrdinalIgnoreCase
+    ) -or $resolvedDestinationRoot.StartsWith(
+        $sourceRoot + $directorySeparator,
+        [StringComparison]::OrdinalIgnoreCase
+    ) -or $sourceRoot.StartsWith(
+        $resolvedDestinationRoot + $directorySeparator,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'coordinator and staged GOROOT paths must be disjoint'
+    }
+    if (Test-Path -LiteralPath $resolvedDestinationRoot) {
+        throw 'staged GOROOT destination already exists'
+    }
+
+    # Copying into the already protected release root gives every toolchain file
+    # the release boundary's DACL without weakening the setup-go toolcache.
+    Copy-Item `
+        -LiteralPath $sourceRoot `
+        -Destination $resolvedDestinationRoot `
+        -Recurse `
+        -Force
+    $stagedGoRoot = Resolve-WindowsNativeLocalFixedNTFSDirectory `
+        -Path $resolvedDestinationRoot `
+        -Label 'staged GOROOT'
+    Assert-WindowsNativeTreeHasNoReparsePoints `
+        -RootPath $stagedGoRoot `
+        -Label 'staged GOROOT'
+    $stagedGoExecutable = Join-Path $stagedGoRoot 'bin\go.exe'
+    if (-not (Test-Path -LiteralPath $stagedGoExecutable -PathType Leaf)) {
+        throw 'staged GOROOT has no bin\go.exe'
+    }
+    $sourceGoLength = ([IO.FileInfo]::new($sourceGoExecutable)).Length
+    $stagedGoLength = ([IO.FileInfo]::new($stagedGoExecutable)).Length
+    if ($sourceGoLength -ne $stagedGoLength) {
+        throw 'staged Go executable length differs from the coordinator executable'
+    }
+
+    return [pscustomobject]@{
+        PSTypeName = 'WindShare.WindowsNativeStagedGoToolchain'
+        GoRoot = $stagedGoRoot
+        GoExecutable = [IO.Path]::GetFullPath($stagedGoExecutable)
+    }
 }
 
 function Get-WindowsNativeCommonApplicationDataRoot {
@@ -666,7 +852,10 @@ Export-ModuleMember -Function @(
     'Assert-WindowsNativeReadOnlyDirectory',
     'Assert-WindowsNativeStandardUserIdentity',
     'Assert-WindowsNativeTestEvents',
+    'Assert-WindowsNativeTreeHasNoReparsePoints',
     'ConvertFrom-WindowsNativeTestJSONLines',
+    'Copy-WindowsNativeGoToolchain',
+    'Get-WindowsNativeCoordinatorGoToolchain',
     'Get-WindowsNativeCommonApplicationDataRoot',
     'Get-WindowsNativeRequiredTestExpression',
     'Get-WindowsNativeRequiredTestNames',

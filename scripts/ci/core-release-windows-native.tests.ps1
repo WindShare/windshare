@@ -129,6 +129,99 @@ if (-not [string]::Equals(
     throw 'native release root base is not canonical CommonApplicationData'
 }
 
+$currentGoCommand = Get-Command go -CommandType Application -ErrorAction Stop
+$currentGoExecutable = [IO.Path]::GetFullPath(
+    (Resolve-Path -LiteralPath $currentGoCommand.Source).Path
+)
+$originalGoToolchain = [Environment]::GetEnvironmentVariable('GOTOOLCHAIN', 'Process')
+try {
+    $env:GOTOOLCHAIN = 'local'
+    $currentToolchain = Get-WindowsNativeCoordinatorGoToolchain `
+        -GoExecutable $currentGoExecutable
+} finally {
+    if ($null -eq $originalGoToolchain) {
+        Remove-Item Env:GOTOOLCHAIN -ErrorAction SilentlyContinue
+    } else {
+        $env:GOTOOLCHAIN = $originalGoToolchain
+    }
+}
+if (-not [string]::Equals(
+    $currentToolchain.GoExecutable,
+    $currentGoExecutable,
+    [StringComparison]::OrdinalIgnoreCase
+) -or -not [string]::Equals(
+    (Join-Path $currentToolchain.GoRoot 'bin\go.exe'),
+    $currentToolchain.GoExecutable,
+    [StringComparison]::OrdinalIgnoreCase
+)) {
+    throw 'coordinator Go toolchain discovery did not preserve the exact go env GOROOT binding'
+}
+
+$toolchainCopyRoot = Join-Path ([IO.Path]::GetTempPath()) (
+    'windshare-native-toolchain-copy-{0}' -f [Guid]::NewGuid().ToString('N')
+)
+$syntheticGoRoot = Join-Path $toolchainCopyRoot 'source-go'
+$syntheticGoBin = Join-Path $syntheticGoRoot 'bin'
+$syntheticGoNested = Join-Path $syntheticGoRoot 'pkg\tool\windows_amd64'
+$stagedSyntheticGoRoot = Join-Path $toolchainCopyRoot 'staged-go'
+New-Item -ItemType Directory -Path $syntheticGoBin | Out-Null
+New-Item -ItemType Directory -Path $syntheticGoNested | Out-Null
+$syntheticGoExecutable = Join-Path $syntheticGoBin 'go.exe'
+[IO.File]::WriteAllText($syntheticGoExecutable, 'synthetic-go')
+[IO.File]::WriteAllText(
+    (Join-Path $syntheticGoNested 'compile.exe'),
+    'synthetic-compile'
+)
+try {
+    $stagedSyntheticToolchain = Copy-WindowsNativeGoToolchain `
+        -Toolchain ([pscustomobject]@{
+            GoRoot = $syntheticGoRoot
+            GoExecutable = $syntheticGoExecutable
+        }) `
+        -DestinationRoot $stagedSyntheticGoRoot
+    if (-not [string]::Equals(
+        $stagedSyntheticToolchain.GoRoot,
+        [IO.Path]::GetFullPath($stagedSyntheticGoRoot),
+        [StringComparison]::OrdinalIgnoreCase
+    ) -or [IO.File]::ReadAllText(
+        (Join-Path $stagedSyntheticGoRoot 'pkg\tool\windows_amd64\compile.exe')
+    ) -cne 'synthetic-compile') {
+        throw 'staged Go toolchain copy did not preserve its root layout and files'
+    }
+    Assert-WindowsNativeTreeHasNoReparsePoints `
+        -RootPath $stagedSyntheticGoRoot `
+        -Label 'synthetic staged GOROOT'
+    $reparseTarget = Join-Path $toolchainCopyRoot 'reparse-target'
+    $reparsePath = Join-Path $stagedSyntheticGoRoot 'reparse-probe'
+    New-Item -ItemType Directory -Path $reparseTarget | Out-Null
+    New-Item -ItemType Junction -Path $reparsePath -Target $reparseTarget | Out-Null
+    try {
+        Assert-ThrowsContaining `
+            'reparse point in staged GOROOT' `
+            'contains a reparse point' {
+                Assert-WindowsNativeTreeHasNoReparsePoints `
+                    -RootPath $stagedSyntheticGoRoot `
+                    -Label 'synthetic staged GOROOT'
+            }
+    } finally {
+        if (Test-Path -LiteralPath $reparsePath) {
+            [IO.Directory]::Delete($reparsePath, $false)
+        }
+    }
+    Assert-Throws 'pre-existing staged GOROOT' {
+        Copy-WindowsNativeGoToolchain `
+            -Toolchain ([pscustomobject]@{
+                GoRoot = $syntheticGoRoot
+                GoExecutable = $syntheticGoExecutable
+            }) `
+            -DestinationRoot $stagedSyntheticGoRoot
+    }
+} finally {
+    if (Test-Path -LiteralPath $toolchainCopyRoot) {
+        Remove-Item -LiteralPath $toolchainCopyRoot -Recurse -Force
+    }
+}
+
 $rootContractBase = Join-Path ([IO.Path]::GetTempPath()) (
     'windshare-native-root-contract-{0}' -f [Guid]::NewGuid().ToString('N')
 )
@@ -213,7 +306,7 @@ try {
 }
 
 $credentialCommandLineMaximumCharacters = 1023
-$githubTemporaryRoot = 'D:\a\_temp\windshare-core-release-{0}' -f ('a' * 32)
+$githubTemporaryRoot = 'C:\ProgramData\windshare-core-release-{0}' -f ('a' * 32)
 $githubWorkerRoot = [IO.Path]::Combine($githubTemporaryRoot, 'windows-native-worker')
 $githubWorkerScript = [IO.Path]::Combine(
     $githubWorkerRoot,
@@ -221,7 +314,12 @@ $githubWorkerScript = [IO.Path]::Combine(
 )
 $githubArtifactRoot = [IO.Path]::Combine($githubTemporaryRoot, 'extracted-core')
 $githubPowerShellExecutable = 'C:\Program Files\PowerShell\7\pwsh.exe'
-$githubGoExecutable = 'C:\hostedtoolcache\windows\go\1.25.1\x64\bin\go.exe'
+$githubGoExecutable = [IO.Path]::Combine(
+    $githubTemporaryRoot,
+    'go-toolchain',
+    'bin',
+    'go.exe'
+)
 $githubWorkerSID = 'S-1-5-21-1234567890-1234567890-1234567890-1001'
 $githubArgumentLine = New-WindowsNativeWorkerArgumentLine `
     -PowerShellExecutable $githubPowerShellExecutable `
@@ -540,7 +638,16 @@ Assert-FileContains `
     -Expected "-Permission M"
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
-    -Expected 'Deny-EphemeralWindowsUserArtifactMutation'
+    -Expected 'Deny-EphemeralWindowsUserTreeMutation'
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected 'Get-WindowsNativeCoordinatorGoToolchain'
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected "-DestinationRoot (Join-Path `$temporaryRoot 'go-toolchain')"
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected '-GoExecutable $stagedToolchain.GoExecutable'
 Assert-FileDoesNotContain `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
     -Forbidden '-EncodedCommand'
@@ -602,6 +709,27 @@ if ($profileWaitIndex -lt 0 -or
     $profileWaitIndex -ge $userRemovalIndex) {
     throw 'bounded profile-unload wait does not precede ephemeral user deletion'
 }
+$toolchainCopyIndex = $releaseScript.IndexOf(
+    'Copy-WindowsNativeGoToolchain',
+    [StringComparison]::Ordinal
+)
+$workerAccessGrantIndex = $releaseScript.IndexOf(
+    'Grant-EphemeralWindowsUserAccess -Path $temporaryRoot',
+    [StringComparison]::Ordinal
+)
+if ($toolchainCopyIndex -lt 0 -or
+    $workerAccessGrantIndex -lt 0 -or
+    $toolchainCopyIndex -ge $workerAccessGrantIndex) {
+    throw 'coordinator GOROOT is not staged before the worker receives release-root access'
+}
+$immutableTreeDenials = [regex]::Matches(
+    $releaseScript,
+    '(?m)^\s*Deny-EphemeralWindowsUserTreeMutation `\r?$'
+)
+if ($immutableTreeDenials.Count -ne 2 -or
+    -not $releaseScript.Contains("-Path `$stagedToolchain.GoRoot", [StringComparison]::Ordinal)) {
+    throw 'artifact and staged GOROOT do not both receive direct recursive mutation denials'
+}
 
 $nativeModulePath = Join-Path $PSScriptRoot 'core-release-windows-native.psm1'
 foreach ($requiredModuleText in @(
@@ -610,7 +738,12 @@ foreach ($requiredModuleText in @(
     'SetAccessRuleProtection($true, $false)',
     '[Environment+SpecialFolder]::CommonApplicationData',
     'CoordinatorReleaseRootLeafPattern',
-    'Assert-WindowsNativeCoordinatorReleaseRoot -Ownership $Ownership'
+    'Assert-WindowsNativeCoordinatorReleaseRoot -Ownership $Ownership',
+    '& $resolvedGoExecutable env GOROOT',
+    'Copying into the already protected release root',
+    'Copy-Item',
+    'Assert-WindowsNativeTreeHasNoReparsePoints',
+    'staged Go executable length differs from the coordinator executable'
 )) {
     Assert-FileContains -Path $nativeModulePath -Expected $requiredModuleText
 }
@@ -655,8 +788,12 @@ foreach ($requiredWorkerText in @(
     '$env:HOMEDRIVE = $homeDrive',
     '$env:HOMEPATH = $homePath',
     '$env:GOTMPDIR = $goTempRoot',
+    '$env:GOROOT = $resolvedGoRoot',
     '-- standard-user profile and identity environment verified',
-    '-- standard-user NTFS roots and artifact write denial verified',
+    '-- standard-user NTFS roots, artifact immutability, and staged GOROOT immutability verified',
+    "-Label 'staged GOROOT'",
+    'Assert-WindowsNativeTreeHasNoReparsePoints',
+    '& $resolvedGoExecutable env GOROOT',
     '-- standard-user Go toolchain verified:',
     "@('GOOS', 'GOARCH', 'CGO_ENABLED', 'GOEXPERIMENT')"
 )) {
