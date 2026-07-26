@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -700,7 +701,7 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 		t.Fatalf("cancelled list request error = %v", err)
 	}
 
-	t.Run("await cancellation remains operation local", func(t *testing.T) {
+	runCatalogTransportSynctest(t, "await cancellation remains operation local", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		harness := newBlockedCatalogFetch(t, ctx)
 		cancel()
@@ -712,7 +713,7 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 		}
 	})
 
-	t.Run("malformed signed wrapper is session failure", func(t *testing.T) {
+	runCatalogTransportSynctest(t, "malformed signed wrapper is session failure", func(t *testing.T) {
 		harness := newBlockedCatalogFetch(t, context.Background())
 		message, err := protocolsession.NewMessage(
 			protocolsession.MessageScanProgress, &harness.call.id, []byte{1},
@@ -724,7 +725,7 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 		assertSessionFailure(t, harness.wait())
 	})
 
-	t.Run("malformed progress semantic is session failure", func(t *testing.T) {
+	runCatalogTransportSynctest(t, "malformed progress semantic is session failure", func(t *testing.T) {
 		harness := newBlockedCatalogFetch(t, context.Background())
 		enqueueCallResponse(harness.call, signedPeerOperationControl(
 			t, harness.receiver, harness.fixture.senderFactory.privateKey,
@@ -737,7 +738,7 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 		}
 	})
 
-	t.Run("duplicate progress is coalesced before unexpected final", func(t *testing.T) {
+	runCatalogTransportSynctest(t, "duplicate progress is coalesced before unexpected final", func(t *testing.T) {
 		harness := newBlockedCatalogFetch(t, context.Background())
 		semantic, err := protocolsession.EncodeScanProgress(protocolsession.ScanProgress{
 			AttemptID: id16[catalog.ScanAttemptID](92), DiscoveredEntries: 256,
@@ -763,7 +764,7 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 		}
 	})
 
-	t.Run("malformed operation error is session failure", func(t *testing.T) {
+	runCatalogTransportSynctest(t, "malformed operation error is session failure", func(t *testing.T) {
 		harness := newBlockedCatalogFetch(t, context.Background())
 		message, err := protocolsession.NewMessage(
 			protocolsession.MessageOperationError, &harness.call.id, []byte{1},
@@ -775,7 +776,7 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 		assertSessionFailure(t, harness.wait())
 	})
 
-	t.Run("directory operation error retains its typed domain", func(t *testing.T) {
+	runCatalogTransportSynctest(t, "directory operation error retains its typed domain", func(t *testing.T) {
 		harness := newBlockedCatalogFetch(t, context.Background())
 		semantic, err := protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{
 			Scope: protocolsession.OperationScopeDirectory,
@@ -795,7 +796,7 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 		}
 	})
 
-	t.Run("malformed catalog result wrapper is rejected", func(t *testing.T) {
+	runCatalogTransportSynctest(t, "malformed catalog result wrapper is rejected", func(t *testing.T) {
 		harness := newBlockedCatalogFetch(t, context.Background())
 		message, err := protocolsession.NewMessage(
 			protocolsession.MessageCatalogResult, &harness.call.id, []byte{1},
@@ -808,6 +809,11 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 			t.Fatal("malformed catalog result crossed the transport boundary")
 		}
 	})
+}
+
+func runCatalogTransportSynctest(t *testing.T, name string, test func(*testing.T)) {
+	t.Helper()
+	t.Run(name, func(t *testing.T) { synctest.Test(t, test) })
 }
 
 type blockedCatalogFetch struct {
@@ -843,6 +849,10 @@ func newBlockedCatalogFetch(t *testing.T, ctx context.Context) *blockedCatalogFe
 		sender.Close()
 		t.Fatal("catalog scan did not start")
 	}
+	// scanStarted proves sender-side ownership, but transport delivery can precede
+	// the receiver's send receipt. Quiesce before white-box response injection so
+	// the harness captures the exact admitted receiver generation.
+	synctest.Wait()
 	receiver.rpc.mu.Lock()
 	activeCalls := len(receiver.rpc.calls)
 	if activeCalls != 1 {
@@ -857,6 +867,13 @@ func newBlockedCatalogFetch(t *testing.T, ctx context.Context) *blockedCatalogFe
 		call = active
 	}
 	receiver.rpc.mu.Unlock()
+	generation, authority := call.operationAuthority()
+	if generation.IsZero() || authority.IsZero() {
+		close(fixture.scanGate)
+		receiver.Close()
+		sender.Close()
+		t.Fatal("catalog RPC call did not retain admitted operation authority")
+	}
 	harness := &blockedCatalogFetch{
 		t: t, fixture: fixture, sender: sender, receiver: receiver, call: call, result: result,
 	}
