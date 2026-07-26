@@ -31,16 +31,17 @@ $coverageTool = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'
 # timeout prevents cumulative suite work from being mistaken for a stuck test.
 $coreSuiteTestTimeout = '30m'
 $windowsNativeWorkerTimeoutMinutes = 35
+$windowsProfileUnloadTimeoutSeconds = 30
+$windowsProfileUnloadPollMilliseconds = 250
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $repositoryRoot = [IO.Path]::GetFullPath($repositoryRoot)
 $originalLocation = Get-Location
-$temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) (
-    'windshare-core-release-{0}' -f [Guid]::NewGuid().ToString('N')
-)
-$stageDirectory = Join-Path $temporaryRoot 'committed-core'
-$zipPath = Join-Path $temporaryRoot 'core.zip'
-$artifactRoot = Join-Path $temporaryRoot 'extracted-core'
-$releaseRepository = Join-Path $temporaryRoot 'release-repository'
+$temporaryRoot = ''
+$temporaryRootOwnership = $null
+$stageDirectory = ''
+$zipPath = ''
+$artifactRoot = ''
+$releaseRepository = ''
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 $releaseEnvironmentState = $null
 
@@ -58,6 +59,12 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 }
 
 function Remove-OwnedTemporaryRoot {
+    if ($NativeProfile -ceq 'windows-ntfs') {
+        if ($null -ne $temporaryRootOwnership) {
+            Remove-WindowsNativeCoordinatorReleaseRoot -Ownership $temporaryRootOwnership
+        }
+        return
+    }
     if (-not (Test-Path -LiteralPath $temporaryRoot)) {
         return
     }
@@ -69,6 +76,27 @@ function Remove-OwnedTemporaryRoot {
         throw "refusing to remove unowned temporary path: $resolvedTemporaryRoot"
     }
     Remove-Item -LiteralPath $resolvedTemporaryRoot -Recurse -Force
+}
+
+function Wait-EphemeralWindowsUserProfileUnload([string]$UserSID) {
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $profiles = @(Get-CimInstance -ClassName Win32_UserProfile | Where-Object {
+            $_.SID -ceq $UserSID
+        })
+        $loadedProfiles = @($profiles | Where-Object { $_.Loaded })
+        if ($loadedProfiles.Count -eq 0) {
+            return @($profiles)
+        }
+        if ($stopwatch.Elapsed.TotalSeconds -ge $windowsProfileUnloadTimeoutSeconds) {
+            $loadedPaths = @($loadedProfiles | ForEach-Object { $_.LocalPath })
+            throw ('ephemeral native worker profile remained loaded for {0} seconds: {1}' -f @(
+                $windowsProfileUnloadTimeoutSeconds,
+                ($loadedPaths -join ', ')
+            ))
+        }
+        Start-Sleep -Milliseconds $windowsProfileUnloadPollMilliseconds
+    }
 }
 
 function New-EphemeralWindowsUserPassword {
@@ -103,8 +131,8 @@ function Deny-EphemeralWindowsUserArtifactMutation(
     [string]$UserSID
 ) {
     $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
-    # A direct SID deny remains authoritative even when the hosted runner's
-    # parent temp directory grants write access through a broad local group.
+    # Keep the extracted candidate immutable even if later worker-root grants
+    # evolve; this direct deny outranks the worker's inherited read access.
     & $icacls $Path '/deny' "*${UserSID}:(OI)(CI)(WD,AD,WEA,WA,D,DC,WDAC,WO)" '/T' '/Q'
     if ($LASTEXITCODE -ne 0) {
         throw "deny mutation access to the extracted artifact failed with code $LASTEXITCODE"
@@ -132,13 +160,8 @@ function Remove-EphemeralWindowsUser([string]$UserName, [string]$UserSID) {
     $cleanupErrors = [Collections.Generic.List[string]]::new()
     if (-not [string]::IsNullOrWhiteSpace($UserSID)) {
         try {
-            $profiles = @(Get-CimInstance -ClassName Win32_UserProfile | Where-Object {
-                $_.SID -ceq $UserSID
-            })
+            $profiles = @(Wait-EphemeralWindowsUserProfileUnload -UserSID $UserSID)
             foreach ($profile in $profiles) {
-                if ($profile.Loaded) {
-                    throw "ephemeral native worker profile remains loaded: $($profile.LocalPath)"
-                }
                 Remove-CimInstance -InputObject $profile
             }
         } catch {
@@ -220,6 +243,9 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
         if ($unexpectedAdministrator.Count -ne 0) {
             throw 'ephemeral native worker unexpectedly belongs to the Administrators group'
         }
+        if ($null -eq $temporaryRootOwnership) {
+            throw 'native release root ownership was not established before worker access'
+        }
 
         $workerRoot = Join-Path $temporaryRoot 'windows-native-worker'
         New-Item -ItemType Directory -Path $workerRoot | Out-Null
@@ -241,6 +267,7 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
                 -Destination $workerRoot
         }
         Grant-EphemeralWindowsUserAccess -Path $temporaryRoot -UserSID $userSID -Permission RX
+        $temporaryRootOwnership.WorkerSID = $userSID
         Deny-EphemeralWindowsUserArtifactMutation -Path $artifactRoot -UserSID $userSID
         Grant-EphemeralWindowsUserAccess -Path $workerRoot -UserSID $userSID -Permission M
 
@@ -271,6 +298,8 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
             -WorkingDirectory $workerRoot `
             -RedirectStandardOutput $stdoutPath `
             -RedirectStandardError $stderrPath `
+            -LoadUserProfile `
+            -UseNewEnvironment `
             -WindowStyle Hidden `
             -PassThru
         $workerTimeoutMilliseconds = [int][TimeSpan]::FromMinutes(
@@ -321,7 +350,19 @@ Write-Output '== core-release =='
 Assert-ExactCoreReleaseCheckout -RepositoryRoot $repositoryRoot -ExpectedCommit $CommitSHA
 
 try {
-    New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
+    if ($NativeProfile -ceq 'windows-ntfs') {
+        $temporaryRootOwnership = New-WindowsNativeCoordinatorReleaseRoot
+        $temporaryRoot = $temporaryRootOwnership.RootPath
+    } else {
+        $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) (
+            'windshare-core-release-{0}' -f [Guid]::NewGuid().ToString('N')
+        )
+        New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
+    }
+    $stageDirectory = Join-Path $temporaryRoot 'committed-core'
+    $zipPath = Join-Path $temporaryRoot 'core.zip'
+    $artifactRoot = Join-Path $temporaryRoot 'extracted-core'
+    $releaseRepository = Join-Path $temporaryRoot 'release-repository'
     $releaseEnvironmentState = Enter-CoreReleaseGoEnvironment -ReleaseRoot $temporaryRoot
     Set-Location $repositoryRoot
     $currentPowerShell = [IO.Path]::GetFullPath((Get-Process -Id $PID).Path)
@@ -403,6 +444,9 @@ try {
             Set-Location $artifactRoot
         }
     }
+    if ($NativeProfile -ceq 'windows-ntfs') {
+        Invoke-RequiredWindowsNativeTestsAsStandardUser
+    }
     Invoke-Step 'GOWORK=off go test ./... (extracted core)' {
         go test -count=1 "-timeout=$coreSuiteTestTimeout" ./...
     }
@@ -415,9 +459,6 @@ try {
     }
     Invoke-Step 'extracted core coverage gate (total >=90%, package >=70%)' {
         go run $coverageTool --config=.testcoverage.yml "--profile=$coverageProfile"
-    }
-    if ($NativeProfile -ceq 'windows-ntfs') {
-        Invoke-RequiredWindowsNativeTestsAsStandardUser
     }
 } finally {
     $cleanupErrors = [Collections.Generic.List[string]]::new()

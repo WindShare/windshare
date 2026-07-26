@@ -187,7 +187,7 @@ func TestWindowsV3PublicGuardRejectsHostileOutputRootDACL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := windowsV3SetTestDirectoryDescriptor(rootPath, descriptor); err != nil {
+	if err := windowsV3SetTestDirectoryDACL(rootPath, descriptor, policy); err != nil {
 		t.Fatal(err)
 	}
 	platform, err := openWindowsV3OutputPlatform(rootPath)
@@ -217,8 +217,8 @@ func TestWindowsV3ExternalPlacementGuardPinsWithoutCertifyingHostileAncestorDACL
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := windowsV3SetTestDirectoryDescriptor(
-		external, windowsV3HostileExternalDescriptor(t, policy),
+	if err := windowsV3SetTestDirectoryDACL(
+		external, windowsV3HostileExternalDescriptor(t, policy), policy,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -375,8 +375,8 @@ func TestWindowsV3CreateRootPinsEveryExternalAndCreatedComponent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := windowsV3SetTestDirectoryDescriptor(
-		external, windowsV3HostileExternalDescriptor(t, policy),
+	if err := windowsV3SetTestDirectoryDACL(
+		external, windowsV3HostileExternalDescriptor(t, policy), policy,
 	); err != nil {
 		t.Fatal(err)
 	}

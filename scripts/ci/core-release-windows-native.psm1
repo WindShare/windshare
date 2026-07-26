@@ -8,6 +8,8 @@ $script:RequiredWindowsNativeTests = @(
 )
 $script:AdministratorsSID = 'S-1-5-32-544'
 $script:UsersSID = 'S-1-5-32-545'
+$script:SystemSID = 'S-1-5-18'
+$script:CoordinatorReleaseRootLeafPattern = '^windshare-core-release-[0-9a-f]{32}$'
 $script:ForbiddenServiceSIDs = @(
     'S-1-5-18',
     'S-1-5-19',
@@ -17,6 +19,330 @@ $script:ForbiddenServiceSIDs = @(
 # Reserve one character for its terminating NUL so every accepted launch is
 # inside the documented boundary rather than relying on edge interpretation.
 $script:MaximumCredentialCommandLineCharacters = 1023
+
+# DirectorySecurity.Create does not report whether a directory already existed.
+# The native release root must instead be born with its final protected DACL and
+# fail on a name collision, so the coordinator never hardens an attacker-created
+# object after the fact.
+function Initialize-WindowsNativeDirectoryInterop {
+    if ($null -eq ('WindShare.CoreRelease.NativeDirectory' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace WindShare.CoreRelease
+{
+    public static class NativeDirectory
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SecurityAttributes
+        {
+            public int Length;
+            public IntPtr SecurityDescriptor;
+            [MarshalAs(UnmanagedType.Bool)]
+            public bool InheritHandle;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateDirectoryW(
+            string path,
+            ref SecurityAttributes securityAttributes);
+
+        public static int CreateExclusive(string path, byte[] securityDescriptor)
+        {
+            if (String.IsNullOrWhiteSpace(path) ||
+                securityDescriptor == null ||
+                securityDescriptor.Length == 0)
+            {
+                return 87; // ERROR_INVALID_PARAMETER
+            }
+
+            GCHandle pinnedDescriptor = GCHandle.Alloc(
+                securityDescriptor,
+                GCHandleType.Pinned);
+            try
+            {
+                SecurityAttributes attributes = new SecurityAttributes
+                {
+                    Length = Marshal.SizeOf<SecurityAttributes>(),
+                    SecurityDescriptor = pinnedDescriptor.AddrOfPinnedObject(),
+                    InheritHandle = false
+                };
+                if (CreateDirectoryW(path, ref attributes))
+                {
+                    return 0;
+                }
+                return Marshal.GetLastWin32Error();
+            }
+            finally
+            {
+                pinnedDescriptor.Free();
+            }
+        }
+    }
+}
+'@
+    }
+}
+
+function Resolve-WindowsNativeLocalFixedNTFSDirectory {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Label
+    )
+
+    if (-not [IO.Path]::IsPathFullyQualified($Path)) {
+        throw "$Label must be an absolute path"
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        throw "$Label does not exist or is not a directory"
+    }
+    $resolvedPath = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $Path).Path)
+    $volumeRoot = [IO.Path]::GetPathRoot($resolvedPath)
+    if ([string]::IsNullOrWhiteSpace($volumeRoot)) {
+        throw "$Label has no volume root"
+    }
+    $drive = [IO.DriveInfo]::new($volumeRoot)
+    if (-not $drive.IsReady -or $drive.DriveType -ne [IO.DriveType]::Fixed) {
+        throw "$Label must be on a ready local fixed drive"
+    }
+    if (-not [string]::Equals($drive.DriveFormat, 'NTFS', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label must be on NTFS, found $($drive.DriveFormat)"
+    }
+
+    $currentDirectory = [IO.DirectoryInfo]::new($resolvedPath)
+    while ($null -ne $currentDirectory) {
+        $attributes = [IO.File]::GetAttributes($currentDirectory.FullName)
+        if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Label ancestry contains a reparse point: $($currentDirectory.FullName)"
+        }
+        $currentDirectory = $currentDirectory.Parent
+    }
+    return $resolvedPath
+}
+
+function Get-WindowsNativeCommonApplicationDataRoot {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $commonApplicationData = [Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::CommonApplicationData
+    )
+    if ([string]::IsNullOrWhiteSpace($commonApplicationData)) {
+        throw 'Windows did not resolve CommonApplicationData'
+    }
+    return Resolve-WindowsNativeLocalFixedNTFSDirectory `
+        -Path $commonApplicationData `
+        -Label 'canonical CommonApplicationData root'
+}
+
+function New-WindowsNativeCoordinatorDirectorySecurity(
+    [Security.Principal.SecurityIdentifier]$CoordinatorSID
+) {
+    $security = [Security.AccessControl.DirectorySecurity]::new()
+    $security.SetOwner($CoordinatorSID)
+    $security.SetAccessRuleProtection($true, $false)
+    $inheritanceFlags = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+        [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    foreach ($sidValue in @(
+        $CoordinatorSID.Value,
+        $script:SystemSID,
+        $script:AdministratorsSID
+    ) | Select-Object -Unique) {
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new($sidValue),
+            [Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritanceFlags,
+            [Security.AccessControl.PropagationFlags]::None,
+            [Security.AccessControl.AccessControlType]::Allow
+        )
+        [void]$security.AddAccessRule($rule)
+    }
+    return $security
+}
+
+function Assert-WindowsNativeCoordinatorReleaseRoot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Ownership,
+
+        [switch]$RequireEmpty
+    )
+
+    $basePath = Resolve-WindowsNativeLocalFixedNTFSDirectory `
+        -Path ([string]$Ownership.BasePath) `
+        -Label 'native release root parent'
+    $rootPath = Resolve-WindowsNativeLocalFixedNTFSDirectory `
+        -Path ([string]$Ownership.RootPath) `
+        -Label 'native release root'
+    if (-not [string]::Equals(
+        $basePath,
+        [IO.Path]::GetFullPath([string]$Ownership.BasePath),
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'native release root parent no longer resolves to its canonical path'
+    }
+    if (-not [string]::Equals(
+        $rootPath,
+        [IO.Path]::GetFullPath([string]$Ownership.RootPath),
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'native release root no longer resolves to its owned path'
+    }
+
+    $rootDirectory = [IO.DirectoryInfo]::new($rootPath)
+    if ($null -eq $rootDirectory.Parent -or
+        -not [string]::Equals(
+            $rootDirectory.Parent.FullName,
+            $basePath,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw 'native release root is not a direct child of its canonical parent'
+    }
+    if ($rootDirectory.Name -cne [string]$Ownership.LeafName -or
+        $rootDirectory.Name -cnotmatch $script:CoordinatorReleaseRootLeafPattern) {
+        throw 'native release root has an unexpected random leaf name'
+    }
+
+    $coordinatorSID = [string]$Ownership.CoordinatorSID
+    $acl = [IO.FileSystemAclExtensions]::GetAccessControl($rootDirectory)
+    $ownerSID = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($ownerSID -cne $coordinatorSID) {
+        throw "native release root owner is $ownerSID, want $coordinatorSID"
+    }
+    if (-not $acl.AreAccessRulesProtected) {
+        throw 'native release root DACL is not protected'
+    }
+
+    $expectedRights = @{}
+    foreach ($sidValue in @(
+        $coordinatorSID,
+        $script:SystemSID,
+        $script:AdministratorsSID
+    ) | Select-Object -Unique) {
+        $expectedRights[$sidValue] = [Security.AccessControl.FileSystemRights]::FullControl
+    }
+    $workerSIDProperty = $Ownership.PSObject.Properties['WorkerSID']
+    if ($null -ne $workerSIDProperty -and
+        -not [string]::IsNullOrWhiteSpace([string]$workerSIDProperty.Value)) {
+        $expectedRights[[string]$workerSIDProperty.Value] = `
+            [Security.AccessControl.FileSystemRights]::ReadAndExecute -bor `
+            [Security.AccessControl.FileSystemRights]::Synchronize
+    }
+
+    $rules = @($acl.GetAccessRules(
+        $true,
+        $true,
+        [Security.Principal.SecurityIdentifier]
+    ))
+    if ($rules.Count -ne $expectedRights.Count) {
+        throw "native release root has $($rules.Count) access rules, want $($expectedRights.Count)"
+    }
+    $requiredInheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+        [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    foreach ($rule in $rules) {
+        $ruleSID = $rule.IdentityReference.Value
+        if (-not $expectedRights.ContainsKey($ruleSID) -or
+            $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+            $rule.IsInherited -or
+            $rule.InheritanceFlags -ne $requiredInheritance -or
+            $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None -or
+            [int64]$rule.FileSystemRights -ne [int64]$expectedRights[$ruleSID]) {
+            throw "native release root has an unexpected access rule for $ruleSID"
+        }
+    }
+
+    if ($RequireEmpty -and @(Get-ChildItem -LiteralPath $rootPath -Force).Count -ne 0) {
+        throw 'new native release root is not empty'
+    }
+}
+
+function New-WindowsNativeCoordinatorReleaseRootAt(
+    [string]$BasePath,
+    [string]$LeafName = ''
+) {
+    $resolvedBasePath = Resolve-WindowsNativeLocalFixedNTFSDirectory `
+        -Path $BasePath `
+        -Label 'native release root parent'
+    $leafName = if ([string]::IsNullOrWhiteSpace($LeafName)) {
+        'windshare-core-release-{0}' -f [Guid]::NewGuid().ToString('N')
+    } else {
+        $LeafName
+    }
+    if ($leafName -cnotmatch $script:CoordinatorReleaseRootLeafPattern) {
+        throw 'native release root leaf name does not satisfy the ownership contract'
+    }
+    $rootPath = Join-Path $resolvedBasePath $leafName
+    $coordinatorSID = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $security = New-WindowsNativeCoordinatorDirectorySecurity -CoordinatorSID $coordinatorSID
+    $securityDescriptor = $security.GetSecurityDescriptorBinaryForm()
+    Initialize-WindowsNativeDirectoryInterop
+    $nativeError = [WindShare.CoreRelease.NativeDirectory]::CreateExclusive(
+        $rootPath,
+        $securityDescriptor
+    )
+    if ($nativeError -eq 183) {
+        throw "native release root collision: $rootPath"
+    }
+    if ($nativeError -ne 0) {
+        $nativeException = [ComponentModel.Win32Exception]::new($nativeError)
+        throw "create protected native release root failed: $($nativeException.Message) ($nativeError)"
+    }
+
+    $ownership = [pscustomobject]@{
+        PSTypeName = 'WindShare.WindowsNativeCoordinatorReleaseRoot'
+        BasePath = $resolvedBasePath
+        RootPath = $rootPath
+        LeafName = $leafName
+        CoordinatorSID = $coordinatorSID.Value
+        WorkerSID = ''
+    }
+    try {
+        Assert-WindowsNativeCoordinatorReleaseRoot -Ownership $ownership -RequireEmpty
+    } catch {
+        # CreateExclusive proves this exact empty object was created by this call;
+        # avoid recursive cleanup if validation nevertheless detects corruption.
+        if (Test-Path -LiteralPath $rootPath -PathType Container) {
+            [IO.Directory]::Delete($rootPath, $false)
+        }
+        throw
+    }
+    return $ownership
+}
+
+function New-WindowsNativeCoordinatorReleaseRoot {
+    [CmdletBinding()]
+    [OutputType([object])]
+    param()
+
+    return New-WindowsNativeCoordinatorReleaseRootAt `
+        -BasePath (Get-WindowsNativeCommonApplicationDataRoot)
+}
+
+function Remove-WindowsNativeCoordinatorReleaseRoot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Ownership
+    )
+
+    if (-not (Test-Path -LiteralPath ([string]$Ownership.RootPath))) {
+        return
+    }
+    Assert-WindowsNativeCoordinatorReleaseRoot -Ownership $Ownership
+    Remove-Item -LiteralPath ([string]$Ownership.RootPath) -Recurse -Force
+    if (Test-Path -LiteralPath ([string]$Ownership.RootPath)) {
+        throw 'native release root still exists after cleanup'
+    }
+}
 
 function ConvertTo-WindowsNativeArgument([string]$Value) {
     $argument = [Text.StringBuilder]::new($Value.Length + 2)
@@ -336,11 +662,16 @@ function Assert-WindowsNativeTestEvents {
 }
 
 Export-ModuleMember -Function @(
+    'Assert-WindowsNativeCoordinatorReleaseRoot',
     'Assert-WindowsNativeReadOnlyDirectory',
     'Assert-WindowsNativeStandardUserIdentity',
     'Assert-WindowsNativeTestEvents',
     'ConvertFrom-WindowsNativeTestJSONLines',
+    'Get-WindowsNativeCommonApplicationDataRoot',
     'Get-WindowsNativeRequiredTestExpression',
     'Get-WindowsNativeRequiredTestNames',
-    'New-WindowsNativeWorkerArgumentLine'
+    'New-WindowsNativeCoordinatorReleaseRoot',
+    'New-WindowsNativeWorkerArgumentLine',
+    'Remove-WindowsNativeCoordinatorReleaseRoot',
+    'Resolve-WindowsNativeLocalFixedNTFSDirectory'
 )
