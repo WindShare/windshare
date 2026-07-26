@@ -436,6 +436,10 @@ func TestBlockLocalFailuresCancelExactOperationAndPreserveSibling(t *testing.T) 
 				case <-time.After(time.Second):
 					t.Fatal("sender block read did not reach the cancellation gate")
 				}
+				// The sender can enter its blocked read before the receiver binds the
+				// settled request authority. Wait for that independent receipt path
+				// before capturing the exact two-sided lifecycle.
+				synctest.Wait()
 				operation := captureExactOperationLifecycle(
 					t, pair, senderContext, receiverTombstones, senderTombstones,
 					protocolsession.MessageRequestBlocks, contentHandlerLifecycle,

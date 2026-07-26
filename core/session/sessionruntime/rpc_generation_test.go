@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	framechannel "github.com/windshare/windshare/core/framechannel"
@@ -402,6 +403,10 @@ func TestReceiverPeerOperationLateTerminateCannotCrossSameIDGeneration(t *testin
 }
 
 func TestRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
+	synctest.Test(t, testRPCQueuedStaleResponseCannotCrossSameIDGeneration)
+}
+
+func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 	now := time.Unix(20_000, 0)
 	runtime, _ := newUnstartedRuntimeWithPolicy(
 		t, protocolsession.RoleReceiver,
@@ -471,6 +476,10 @@ func TestRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 		t.Fatalf("generation A exact tombstone: disposition=%d error=%v", disposition, err)
 	}
 
+	// Receipt settlement precedes the writer's deferred pin release. Keep fake
+	// time still until that cleanup finishes so the test cannot refresh A's
+	// tombstone after jumping past its lifetime.
+	synctest.Wait()
 	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Nanosecond)
 	_ = runtime.operations.TombstoneCount()
 	callB, generationB := beginGeneration()
