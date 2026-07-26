@@ -145,6 +145,9 @@ func runNativeOutputProcessRestartRecoveryTest(
 func killNativeOutputChildAfterReady(t *testing.T, readyPath string, environment []string) {
 	t.Helper()
 	command := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.count=1")
+	// The Linux native chroot intentionally has no device nodes. An EOF-backed
+	// pipe keeps os/exec from opening /dev/null before it starts the crash child.
+	command.Stdin = bytes.NewReader(nil)
 	command.Env = append(os.Environ(), environment...)
 	var childOutput bytes.Buffer
 	command.Stdout = &childOutput
