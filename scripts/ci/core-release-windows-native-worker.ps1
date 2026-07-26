@@ -21,6 +21,11 @@ if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
 
 Import-Module (Join-Path $PSScriptRoot 'core-release-windows-native.psm1') -Force
 
+# Native certification is itself a substantial osfs suite. Keep it on the same
+# package bound as extracted-core validation so Go's default cannot preempt the
+# release gate's explicit worker and workflow limits.
+$coreSuiteTestTimeout = '30m'
+
 function Resolve-RequiredDirectory([string]$Path, [string]$Label) {
     if (-not [IO.Path]::IsPathFullyQualified($Path)) {
         throw "$Label must be an absolute path"
@@ -147,7 +152,10 @@ $env:WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION = 'windows-ntfs'
 $jsonLogPath = Join-Path $resolvedWorkRoot 'native-test-events.jsonl'
 $goStderrPath = Join-Path $resolvedWorkRoot 'native-test-stderr.log'
 $testExpression = Get-WindowsNativeRequiredTestExpression
-$goArguments = @('test', '-json', '-count=1', '-run', $testExpression, './osfs')
+$goArguments = @(
+    'test', '-json', '-count=1', "-timeout=$coreSuiteTestTimeout",
+    '-run', $testExpression, './osfs'
+)
 Set-Location $resolvedArtifactRoot
 $jsonLines = @(& $resolvedGoExecutable @goArguments 2> $goStderrPath)
 $nativeExitCode = $LASTEXITCODE

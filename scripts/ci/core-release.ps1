@@ -26,6 +26,11 @@ if ($NativeProfile -cnotin @('', 'windows-ntfs')) {
 }
 
 $coverageTool = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'
+# The extracted osfs suite legitimately approaches Go's 10-minute default on
+# hosted Windows. The workflow job remains the outer hang bound; this package
+# timeout prevents cumulative suite work from being mistaken for a stuck test.
+$coreSuiteTestTimeout = '30m'
+$windowsNativeWorkerTimeoutMinutes = 35
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $repositoryRoot = [IO.Path]::GetFullPath($repositoryRoot)
 $originalLocation = Get-Location
@@ -275,10 +280,12 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
             -RedirectStandardError $stderrPath `
             -WindowStyle Hidden `
             -PassThru
-        $workerTimeoutMilliseconds = [int][TimeSpan]::FromMinutes(15).TotalMilliseconds
+        $workerTimeoutMilliseconds = [int][TimeSpan]::FromMinutes(
+            $windowsNativeWorkerTimeoutMinutes
+        ).TotalMilliseconds
         if (-not $process.WaitForExit($workerTimeoutMilliseconds)) {
             Stop-EphemeralWindowsWorkerProcess -Process $process
-            throw 'standard-user Windows/NTFS native worker exceeded its 15 minute timeout'
+            throw "standard-user Windows/NTFS native worker exceeded its $windowsNativeWorkerTimeoutMinutes minute timeout"
         }
         if (Test-Path -LiteralPath $stdoutPath) {
             Get-Content -LiteralPath $stdoutPath | ForEach-Object { Write-Output $_ }
@@ -403,11 +410,15 @@ try {
             Set-Location $artifactRoot
         }
     }
-    Invoke-Step 'GOWORK=off go test ./... (extracted core)' { go test -count=1 ./... }
-    Invoke-Step 'GOWORK=off go test -race ./... (extracted core)' { go test -race -count=1 ./... }
+    Invoke-Step 'GOWORK=off go test ./... (extracted core)' {
+        go test -count=1 "-timeout=$coreSuiteTestTimeout" ./...
+    }
+    Invoke-Step 'GOWORK=off go test -race ./... (extracted core)' {
+        go test -race -count=1 "-timeout=$coreSuiteTestTimeout" ./...
+    }
     $coverageProfile = Join-Path $temporaryRoot 'cover.out'
     Invoke-Step 'GOWORK=off go test with coverage (extracted core)' {
-        go test -count=1 ./... -covermode=atomic "-coverprofile=$coverageProfile"
+        go test -count=1 "-timeout=$coreSuiteTestTimeout" ./... -covermode=atomic "-coverprofile=$coverageProfile"
     }
     Invoke-Step 'extracted core coverage gate (total >=90%, package >=70%)' {
         go run $coverageTool --config=.testcoverage.yml "--profile=$coverageProfile"

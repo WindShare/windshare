@@ -26,12 +26,13 @@ const (
 	windowsV3VolumeGUIDClaimMaxBytes  = 128
 	windowsV3DirectoryClaimMaxBytes   = len(windowsV3DirectoryClaimTag) + 4 +
 		windowsV3VolumeGUIDClaimMaxBytes + 8 + len(windowsV3PersistentObjectID{})
-	windowsV3FileBothDirectoryInfoClass = 3
-	windowsV3FileNamesInformation       = 12
-	windowsV3FileNamesInformationHeader = 12
-	windowsV3FiletimeTicksPerSecond     = uint64(10_000_000)
-	windowsV3FiletimeNanosecondsPerTick = uint32(100)
-	windowsV3UnixEpochFiletimeSeconds   = int64(11_644_473_600)
+	windowsV3FileBothDirectoryInfoClass        = 3
+	windowsV3FileNamesInformation              = 12
+	windowsV3FileNamesInformationHeader        = 12
+	windowsV3FiletimeTicksPerSecond            = uint64(10_000_000)
+	windowsV3FiletimeNanosecondsPerTick        = uint32(100)
+	windowsV3UnixEpochFiletimeSeconds          = int64(11_644_473_600)
+	windowsV3FinalPathNameOpened        uint32 = 0x8
 )
 
 // windowsV3FileBothDirectoryInfo mirrors FILE_BOTH_DIR_INFORMATION. Keeping the
@@ -894,6 +895,50 @@ func windowsV3VerifyOpenedExactName(handle windows.Handle, expected string) erro
 	return windowsV3VerifyOpenedLeafAuthority(handle, expected, true)
 }
 
+func windowsV3VerifyOpenedPlacementLeafAuthority(
+	handle windows.Handle,
+	requested string,
+	parentCaseSensitive bool,
+) error {
+	const operation = "verify opened output placement name"
+	native, err := windowsV3RelativePath(requested, true)
+	if err != nil {
+		return windowsV3Failure(operation, requested, errWindowsV3OutputUnsafe, err)
+	}
+	normalized, err := windowsV3OpenedLeafNameWithFlags(handle, 0)
+	if err != nil {
+		return windowsV3Failure(operation, native, errWindowsV3OutputUnsafe, err)
+	}
+	opened, err := windowsV3OpenedLeafNameWithFlags(handle, windowsV3FinalPathNameOpened)
+	if err != nil {
+		return windowsV3Failure(operation, native, errWindowsV3OutputUnsafe, err)
+	}
+	match, compareErr := windowsV3PlacementLeafNamesMatch(
+		native, normalized, opened, parentCaseSensitive,
+	)
+	if compareErr != nil {
+		return windowsV3Failure(operation, native, errWindowsV3OutputUnsupported, compareErr)
+	}
+	if !match {
+		return windowsV3Failure(operation, native, errWindowsV3OutputUnsafe,
+			fmt.Errorf("requested placement resolves to normalized leaf %q through opened leaf %q", normalized, opened))
+	}
+	return nil
+}
+
+func windowsV3PlacementLeafNamesMatch(requested, normalized, opened string, caseSensitive bool) (bool, error) {
+	if caseSensitive {
+		return requested == normalized || requested == opened, nil
+	}
+	requestedKey, requestedErr := windowsV3NTFSCaseKey(requested)
+	normalizedKey, normalizedErr := windowsV3NTFSCaseKey(normalized)
+	openedKey, openedErr := windowsV3NTFSCaseKey(opened)
+	if requestedErr != nil || normalizedErr != nil || openedErr != nil {
+		return false, errors.Join(requestedErr, normalizedErr, openedErr)
+	}
+	return requestedKey == normalizedKey || requestedKey == openedKey, nil
+}
+
 func windowsV3VerifyOpenedLeafAuthority(handle windows.Handle, expected string, exact bool) error {
 	const operation = "verify opened output entry name"
 	native, err := windowsV3RelativePath(expected, true)
@@ -929,13 +974,16 @@ func windowsV3VerifyOpenedLeafAuthority(handle windows.Handle, expected string, 
 }
 
 func windowsV3OpenedLeafName(handle windows.Handle) (string, error) {
-	// GetFinalPathNameByHandle with normalized-name flags expands DOS 8.3 aliases
-	// while remaining bound to the already-open object. FileNameInfo preserves the
-	// spelling used to open the handle and therefore cannot authorize selection
-	// components against their actual long namespace name.
-	normalized, err := windowsV3FinalPath(handle, 0)
+	return windowsV3OpenedLeafNameWithFlags(handle, 0)
+}
+
+func windowsV3OpenedLeafNameWithFlags(handle windows.Handle, flags uint32) (string, error) {
+	// Both normalized and opened spellings come from the same handle. Callers can
+	// therefore distinguish canonical output lookup from placement-only alias
+	// binding without re-resolving an attacker-controlled path.
+	normalized, err := windowsV3FinalPath(handle, flags)
 	if err != nil {
-		return "", fmt.Errorf("query normalized opened file name: %w", err)
+		return "", fmt.Errorf("query opened file name: %w", err)
 	}
 	leaf := filepath.Base(normalized)
 	if leaf == "." || leaf == string(filepath.Separator) {

@@ -42,7 +42,10 @@ windshare_prepare_core_release_go_environment() {
   # into a cross-build or changing the compiler experiment set.
   unset GOOS GOARCH CGO_ENABLED GOEXPERIMENT
   GOENV=off
-  GOFLAGS=''
+  # Go normally makes downloaded module directories read-only. That protects a
+  # shared long-lived cache, but this cache is private and disposable; retaining
+  # owner write permission is what lets the owning release process remove it.
+  GOFLAGS=-modcacherw
   GOTOOLCHAIN=local
   GOWORK=off
   GOPROXY=https://proxy.golang.org

@@ -296,6 +296,30 @@ func (opener *windowsV3RecordingAncestryOpener) Open(
 	return handle, status, err
 }
 
+func TestWindowsV3PlacementLeafAuthorityAcceptsHandleReportedDOSAlias(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		caseSensitive bool
+		want          bool
+	}{
+		{name: "case-insensitive", want: true},
+		{name: "case-sensitive", caseSensitive: true, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			match, err := windowsV3PlacementLeafNamesMatch(
+				"RUNNER~1", "runneradmin", "RUNNER~1", test.caseSensitive,
+			)
+			if err != nil || match != test.want {
+				t.Fatalf("handle-reported alias match = (%t, %v), want %t", match, err, test.want)
+			}
+		})
+	}
+	match, err := windowsV3PlacementLeafNamesMatch("RUNNER~1", "runneradmin", "different", false)
+	if err != nil || match {
+		t.Fatalf("unreported placement alias match = (%t, %v), want false", match, err)
+	}
+}
+
 func TestWindowsV3AncestryGuardResolvesOnlyDriveRootAbsolutely(t *testing.T) {
 	rootPath := filepath.Join(windowsV3NativeTestTempDir(t), "external", "output")
 	if err := os.MkdirAll(rootPath, 0o700); err != nil {

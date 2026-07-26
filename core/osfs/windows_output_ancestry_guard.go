@@ -188,7 +188,9 @@ func (platform *windowsV3OutputPlatform) acquireDirectoryAncestryGuardWithOpener
 				validateErr = validateWindowsV3ExternalPlacement(facts, root.volume)
 			}
 			if validateErr == nil && index > 0 {
-				validateErr = windowsV3VerifyOpenedLeafAuthority(handle, openPath, parentCaseSensitive)
+				validateErr = windowsV3VerifyOpenedPlacementLeafAuthority(
+					handle, openPath, parentCaseSensitive,
+				)
 			}
 		}
 		authorityErr := error(nil)

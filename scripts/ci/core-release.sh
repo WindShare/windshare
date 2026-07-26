@@ -39,6 +39,10 @@ if [ "$native_profile" = "linux-ext4" ]; then
 fi
 
 coverage_tool="github.com/vladopajic/go-test-coverage/v2@v2.18.8"
+# The extracted osfs suite legitimately approaches Go's 10-minute default on
+# hosted runners. The workflow job remains the outer hang bound; this package
+# timeout prevents cumulative suite work from being mistaken for a stuck test.
+core_suite_test_timeout="30m"
 
 windshare_assert_exact_release_checkout "$repository_root" "$release_commit"
 echo "-- exact release checkout contract"
@@ -174,11 +178,12 @@ fi
       -cache "$temporary_root/vulnerability-cache"
   )
   echo "-- GOWORK=off go test ./... (extracted core)"
-  go test -count=1 ./...
+  go test -count=1 -timeout="$core_suite_test_timeout" ./...
   echo "-- GOWORK=off go test -race ./... (extracted core)"
-  go test -race -count=1 ./...
+  go test -race -count=1 -timeout="$core_suite_test_timeout" ./...
   echo "-- GOWORK=off go test with coverage (extracted core)"
-  go test -count=1 ./... -covermode=atomic -coverprofile="$temporary_root/cover.out"
+  go test -count=1 -timeout="$core_suite_test_timeout" ./... -covermode=atomic \
+    -coverprofile="$temporary_root/cover.out"
   echo "-- extracted core coverage gate (total >=90%, package >=70%)"
   go run "$coverage_tool" --config=.testcoverage.yml --profile="$temporary_root/cover.out"
 
@@ -188,7 +193,8 @@ fi
     echo "-- required Linux/ext4 certification and process-restart tests"
     set +e
     TMPDIR="$TMPDIR" WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION="$native_profile" \
-      go test -json -count=1 -run "$native_tests" ./osfs | tee "$native_events"
+      go test -json -count=1 -timeout="$core_suite_test_timeout" \
+        -run "$native_tests" ./osfs | tee "$native_events"
     native_status="${PIPESTATUS[0]}"
     set -e
     if [ "$native_status" -ne 0 ]; then
