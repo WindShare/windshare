@@ -126,20 +126,6 @@ function Grant-EphemeralWindowsUserAccess(
     }
 }
 
-function Deny-EphemeralWindowsUserTreeMutation(
-    [string]$Path,
-    [string]$UserSID,
-    [string]$Label
-) {
-    $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
-    # A direct deny on every descendant keeps immutable inputs read-only even if
-    # a copied source ACL or a future sibling grant would otherwise add rights.
-    & $icacls $Path '/deny' "*${UserSID}:(OI)(CI)(WD,AD,WEA,WA,D,DC,WDAC,WO)" '/T' '/Q'
-    if ($LASTEXITCODE -ne 0) {
-        throw "deny mutation access to $Label failed with code $LASTEXITCODE"
-    }
-}
-
 function Stop-EphemeralWindowsWorkerProcess([Diagnostics.Process]$Process) {
     if ($null -eq $Process -or $Process.HasExited) {
         return
@@ -279,14 +265,18 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
         }
         Grant-EphemeralWindowsUserAccess -Path $temporaryRoot -UserSID $userSID -Permission RX
         $temporaryRootOwnership.WorkerSID = $userSID
-        Deny-EphemeralWindowsUserTreeMutation `
-            -Path $artifactRoot `
+        $artifactMutationDeny = Set-WindowsNativeTreeMutationDeny `
+            -RootPath $artifactRoot `
             -UserSID $userSID `
             -Label 'the extracted artifact'
-        Deny-EphemeralWindowsUserTreeMutation `
-            -Path $stagedToolchain.GoRoot `
+        $toolchainMutationDeny = Set-WindowsNativeTreeMutationDeny `
+            -RootPath $stagedToolchain.GoRoot `
             -UserSID $userSID `
             -Label 'the staged GOROOT'
+        Write-Output ('-- installed mutation-only deny ACLs: artifact_entries={0}, staged_goroot_entries={1}' -f @(
+            $artifactMutationDeny.EntryCount,
+            $toolchainMutationDeny.EntryCount
+        ))
         Grant-EphemeralWindowsUserAccess -Path $workerRoot -UserSID $userSID -Permission M
 
         $powershellExecutable = [IO.Path]::GetFullPath((Get-Process -Id $PID).Path)

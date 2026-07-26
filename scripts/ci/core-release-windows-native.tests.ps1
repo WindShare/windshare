@@ -61,6 +61,37 @@ function New-TestWindowsNativeCoordinatorReleaseRoot(
     } $BasePath $LeafName
 }
 
+function Remove-TestWindowsNativeMutationDeny(
+    [string[]]$Paths,
+    [string]$UserSID
+) {
+    & $windowsNativeModule {
+        param([string[]]$EntryPaths, [string]$DeniedSID)
+
+        foreach ($entryPath in $EntryPaths) {
+            if (-not (Test-Path -LiteralPath $entryPath)) {
+                continue
+            }
+            $entry = Get-Item -LiteralPath $entryPath -Force
+            $security = Get-WindowsNativeFileSystemAccessControl -Entry $entry
+            $denyRules = @($security.GetAccessRules(
+                $true,
+                $false,
+                [Security.Principal.SecurityIdentifier]
+            ) | Where-Object {
+                $_.IdentityReference.Value -ceq $DeniedSID -and
+                    $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Deny
+            })
+            foreach ($denyRule in $denyRules) {
+                [void]$security.RemoveAccessRuleSpecific($denyRule)
+            }
+            Set-WindowsNativeFileSystemAccessControl `
+                -Entry $entry `
+                -Security $security
+        }
+    } $Paths $UserSID
+}
+
 function Assert-FileContains([string]$Path, [string]$Expected) {
     $content = [IO.File]::ReadAllText($Path)
     if (-not $content.Contains($Expected, [StringComparison]::Ordinal)) {
@@ -261,6 +292,94 @@ try {
 } finally {
     if (Test-Path -LiteralPath $toolchainCopyRoot) {
         Remove-Item -LiteralPath $toolchainCopyRoot -Recurse -Force
+    }
+}
+
+$mutationDenyTestRoot = Join-Path ([IO.Path]::GetTempPath()) (
+    'windshare-native-mutation-deny-{0}' -f [Guid]::NewGuid().ToString('N')
+)
+$mutationDenyTree = Join-Path $mutationDenyTestRoot 'immutable'
+$mutationDenyNested = Join-Path $mutationDenyTree 'nested'
+$mutationDenyFile = Join-Path $mutationDenyNested 'readable.txt'
+$mutationDenySID = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$mutationDenyPaths = @($mutationDenyTree, $mutationDenyNested, $mutationDenyFile)
+New-Item -ItemType Directory -Path $mutationDenyNested | Out-Null
+[IO.File]::WriteAllText($mutationDenyFile, 'readable-after-mutation-deny')
+try {
+    $mutationDeny = Set-WindowsNativeTreeMutationDeny `
+        -RootPath $mutationDenyTree `
+        -UserSID $mutationDenySID `
+        -Label 'mutation-deny test tree'
+    $expectedMutationRights = `
+        [Security.AccessControl.FileSystemRights]::WriteData -bor `
+        [Security.AccessControl.FileSystemRights]::AppendData -bor `
+        [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor `
+        [Security.AccessControl.FileSystemRights]::WriteAttributes -bor `
+        [Security.AccessControl.FileSystemRights]::Delete -bor `
+        [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor `
+        [Security.AccessControl.FileSystemRights]::ChangePermissions -bor `
+        [Security.AccessControl.FileSystemRights]::TakeOwnership
+    $forbiddenReadExecutionRights = `
+        [Security.AccessControl.FileSystemRights]::Synchronize -bor `
+        [Security.AccessControl.FileSystemRights]::ReadData -bor `
+        [Security.AccessControl.FileSystemRights]::ReadExtendedAttributes -bor `
+        [Security.AccessControl.FileSystemRights]::ReadAttributes -bor `
+        [Security.AccessControl.FileSystemRights]::ReadPermissions -bor `
+        [Security.AccessControl.FileSystemRights]::ExecuteFile
+    if ($mutationDeny.EntryCount -ne $mutationDenyPaths.Count -or
+        [int64]$mutationDeny.DeniedRights -ne [int64]$expectedMutationRights) {
+        throw 'mutation-deny helper did not cover the complete synthetic tree with the exact mask'
+    }
+    foreach ($entryPath in $mutationDenyPaths) {
+        $entry = Get-Item -LiteralPath $entryPath -Force
+        $security = if ($entry -is [IO.DirectoryInfo]) {
+            [IO.FileSystemAclExtensions]::GetAccessControl([IO.DirectoryInfo]$entry)
+        } else {
+            [IO.FileSystemAclExtensions]::GetAccessControl([IO.FileInfo]$entry)
+        }
+        $storedDenials = @($security.GetAccessRules(
+            $true,
+            $false,
+            [Security.Principal.SecurityIdentifier]
+        ) | Where-Object {
+            $_.IdentityReference.Value -ceq $mutationDenySID -and
+                $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Deny
+        })
+        if ($storedDenials.Count -ne 1 -or
+            [int64]$storedDenials[0].FileSystemRights -ne [int64]$expectedMutationRights -or
+            ([int64]$storedDenials[0].FileSystemRights -band
+                [int64]$forbiddenReadExecutionRights) -ne 0) {
+            throw "stored mutation-deny ACE broadened into read, execute, or synchronize rights: $entryPath"
+        }
+    }
+    $enumeratedEntries = @(Get-ChildItem `
+        -LiteralPath $mutationDenyTree `
+        -Force `
+        -Recurse `
+        -ErrorAction Stop)
+    if ($enumeratedEntries.Count -ne 2) {
+        throw 'mutation-only deny prevented complete tree enumeration'
+    }
+    $readStream = [IO.File]::OpenRead($mutationDenyFile)
+    try {
+        if ($readStream.Length -ne 'readable-after-mutation-deny'.Length) {
+            throw 'mutation-only deny did not preserve file read access'
+        }
+    } finally {
+        $readStream.Dispose()
+    }
+    Assert-Throws 'mutation-only deny file creation' {
+        [IO.File]::WriteAllText(
+            (Join-Path $mutationDenyTree 'forbidden-write.txt'),
+            'forbidden'
+        )
+    }
+} finally {
+    Remove-TestWindowsNativeMutationDeny `
+        -Paths $mutationDenyPaths `
+        -UserSID $mutationDenySID
+    if (Test-Path -LiteralPath $mutationDenyTestRoot) {
+        Remove-Item -LiteralPath $mutationDenyTestRoot -Recurse -Force
     }
 }
 
@@ -680,7 +799,7 @@ Assert-FileContains `
     -Expected "-Permission M"
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
-    -Expected 'Deny-EphemeralWindowsUserTreeMutation'
+    -Expected 'Set-WindowsNativeTreeMutationDeny'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
     -Expected 'Get-WindowsNativeCoordinatorGoToolchain'
@@ -772,10 +891,10 @@ if ($toolchainCopyIndex -lt 0 -or
 }
 $immutableTreeDenials = [regex]::Matches(
     $releaseScript,
-    '(?m)^\s*Deny-EphemeralWindowsUserTreeMutation `\r?$'
+    '(?m)^\s*\$[A-Za-z]+MutationDeny = Set-WindowsNativeTreeMutationDeny `\r?$'
 )
 if ($immutableTreeDenials.Count -ne 2 -or
-    -not $releaseScript.Contains("-Path `$stagedToolchain.GoRoot", [StringComparison]::Ordinal)) {
+    -not $releaseScript.Contains("-RootPath `$stagedToolchain.GoRoot", [StringComparison]::Ordinal)) {
     throw 'artifact and staged GOROOT do not both receive direct recursive mutation denials'
 }
 
@@ -793,6 +912,8 @@ foreach ($requiredModuleText in @(
     'Copying into the already protected release root',
     'Copy-Item',
     'Assert-WindowsNativeTreeHasNoReparsePoints',
+    'Set-WindowsNativeTreeMutationDeny',
+    'FileSystemAccessRule',
     'staged Go executable length differs from the coordinator executable'
 )) {
     Assert-FileContains -Path $nativeModulePath -Expected $requiredModuleText

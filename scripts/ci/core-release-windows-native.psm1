@@ -10,6 +10,15 @@ $script:AdministratorsSID = 'S-1-5-32-544'
 $script:UsersSID = 'S-1-5-32-545'
 $script:SystemSID = 'S-1-5-18'
 $script:CoordinatorReleaseRootLeafPattern = '^windshare-core-release-[0-9a-f]{32}$'
+$script:WindowsNativeMutationDenyRights = `
+    [Security.AccessControl.FileSystemRights]::WriteData -bor `
+    [Security.AccessControl.FileSystemRights]::AppendData -bor `
+    [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor `
+    [Security.AccessControl.FileSystemRights]::WriteAttributes -bor `
+    [Security.AccessControl.FileSystemRights]::Delete -bor `
+    [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor `
+    [Security.AccessControl.FileSystemRights]::ChangePermissions -bor `
+    [Security.AccessControl.FileSystemRights]::TakeOwnership
 $script:ForbiddenServiceSIDs = @(
     'S-1-5-18',
     'S-1-5-19',
@@ -161,6 +170,122 @@ function Assert-WindowsNativeTreeHasNoReparsePoints {
         if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
             throw "$Label contains a reparse point: $($entry.FullName)"
         }
+    }
+}
+
+function Get-WindowsNativeFileSystemAccessControl([IO.FileSystemInfo]$Entry) {
+    if ($Entry -is [IO.DirectoryInfo]) {
+        return [IO.FileSystemAclExtensions]::GetAccessControl([IO.DirectoryInfo]$Entry)
+    }
+    if ($Entry -is [IO.FileInfo]) {
+        return [IO.FileSystemAclExtensions]::GetAccessControl([IO.FileInfo]$Entry)
+    }
+    throw "native immutable-tree entry has an unsupported type: $($Entry.GetType().FullName)"
+}
+
+function Set-WindowsNativeFileSystemAccessControl(
+    [IO.FileSystemInfo]$Entry,
+    [Security.AccessControl.FileSystemSecurity]$Security
+) {
+    if ($Entry -is [IO.DirectoryInfo]) {
+        [IO.FileSystemAclExtensions]::SetAccessControl(
+            [IO.DirectoryInfo]$Entry,
+            [Security.AccessControl.DirectorySecurity]$Security
+        )
+        return
+    }
+    if ($Entry -is [IO.FileInfo]) {
+        [IO.FileSystemAclExtensions]::SetAccessControl(
+            [IO.FileInfo]$Entry,
+            [Security.AccessControl.FileSecurity]$Security
+        )
+        return
+    }
+    throw "native immutable-tree entry has an unsupported type: $($Entry.GetType().FullName)"
+}
+
+function Assert-WindowsNativeStoredMutationDeny(
+    [IO.FileSystemInfo]$Entry,
+    [Security.Principal.SecurityIdentifier]$UserSID
+) {
+    $security = Get-WindowsNativeFileSystemAccessControl -Entry $Entry
+    $denyRules = @($security.GetAccessRules(
+        $true,
+        $false,
+        [Security.Principal.SecurityIdentifier]
+    ) | Where-Object {
+        $_.IdentityReference.Value -ceq $UserSID.Value -and
+            $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Deny
+    })
+    if ($denyRules.Count -ne 1) {
+        throw "native immutable-tree entry has $($denyRules.Count) direct mutation-deny rules: $($Entry.FullName)"
+    }
+
+    $denyRule = $denyRules[0]
+    if ([int64]$denyRule.FileSystemRights -ne
+        [int64]$script:WindowsNativeMutationDenyRights -or
+        $denyRule.IsInherited -or
+        $denyRule.InheritanceFlags -ne [Security.AccessControl.InheritanceFlags]::None -or
+        $denyRule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None) {
+        throw "native immutable-tree entry did not persist the exact direct mutation-deny rule: $($Entry.FullName)"
+    }
+}
+
+function Set-WindowsNativeTreeMutationDeny {
+    [CmdletBinding()]
+    [OutputType([object])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$RootPath,
+
+        [Parameter(Mandatory)]
+        [string]$UserSID,
+
+        [Parameter(Mandatory)]
+        [string]$Label
+    )
+
+    $resolvedRoot = Resolve-WindowsNativeLocalFixedNTFSDirectory `
+        -Path $RootPath `
+        -Label $Label
+    Assert-WindowsNativeTreeHasNoReparsePoints `
+        -RootPath $resolvedRoot `
+        -Label $Label
+    $sid = [Security.Principal.SecurityIdentifier]::new($UserSID)
+    $denyRule = [Security.AccessControl.FileSystemAccessRule]::new(
+        $sid,
+        $script:WindowsNativeMutationDenyRights,
+        [Security.AccessControl.InheritanceFlags]::None,
+        [Security.AccessControl.PropagationFlags]::None,
+        [Security.AccessControl.AccessControlType]::Deny
+    )
+    if ([int64]$denyRule.FileSystemRights -ne
+        [int64]$script:WindowsNativeMutationDenyRights) {
+        throw 'Windows normalized the mutation-deny rule to a broader access mask'
+    }
+
+    $entries = [Collections.Generic.List[IO.FileSystemInfo]]::new()
+    foreach ($entry in Get-ChildItem -LiteralPath $resolvedRoot -Force -Recurse) {
+        if ($entry -isnot [IO.FileSystemInfo]) {
+            throw "$Label contains a non-filesystem entry"
+        }
+        $entries.Add($entry)
+    }
+    # Direct non-inheriting rules make every current input independent of copied
+    # inheritance state without denying SYNCHRONIZE and breaking read handles.
+    $entries.Add([IO.DirectoryInfo]::new($resolvedRoot))
+    foreach ($entry in $entries) {
+        $security = Get-WindowsNativeFileSystemAccessControl -Entry $entry
+        $security.SetAccessRule($denyRule)
+        Set-WindowsNativeFileSystemAccessControl -Entry $entry -Security $security
+        Assert-WindowsNativeStoredMutationDeny -Entry $entry -UserSID $sid
+    }
+
+    return [pscustomobject]@{
+        PSTypeName = 'WindShare.WindowsNativeTreeMutationDeny'
+        RootPath = $resolvedRoot
+        EntryCount = $entries.Count
+        DeniedRights = [int64]$script:WindowsNativeMutationDenyRights
     }
 }
 
@@ -904,5 +1029,6 @@ Export-ModuleMember -Function @(
     'New-WindowsNativeCoordinatorReleaseRoot',
     'New-WindowsNativeWorkerArgumentLine',
     'Remove-WindowsNativeCoordinatorReleaseRoot',
-    'Resolve-WindowsNativeLocalFixedNTFSDirectory'
+    'Resolve-WindowsNativeLocalFixedNTFSDirectory',
+    'Set-WindowsNativeTreeMutationDeny'
 )
