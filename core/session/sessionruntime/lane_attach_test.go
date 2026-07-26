@@ -67,10 +67,11 @@ func TestAttachedFrameChannelsRunDistinctBlocksInParallelAndFanOutTerminal(t *te
 			t.Fatalf("parallel block starts = %v", seen)
 		}
 	}
-	if firstReceiverChannel.sends.Load() < 2 || secondReceiverChannel.sends.Load() < 2 {
-		t.Fatalf("lane sends before release = %d/%d; both lanes must own a request",
-			firstReceiverChannel.sends.Load(), secondReceiverChannel.sends.Load())
-	}
+	// Sender-side starts prove concurrent reads, but A/B/A lane selection can
+	// expose both A starts before B's physical send goroutine is scheduled.
+	waitSessionCondition(t, "both attached lanes to own a request", func() bool {
+		return firstReceiverChannel.sends.Load() >= 2 && secondReceiverChannel.sends.Load() >= 2
+	})
 	close(gate)
 	if err := <-readResult; err != nil {
 		t.Fatal(err)
