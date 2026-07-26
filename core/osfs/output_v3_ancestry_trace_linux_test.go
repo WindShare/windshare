@@ -14,7 +14,7 @@ func TestLinuxOutputAncestryTraceSeparatesAuthorityFromIdentityContradictions(t 
 		root, harness := newLinuxSelectionMetadataRoot(t)
 		installLinuxSafeAuthorityHarness(root.system)
 		harness.directoryMode = uint16(unix.S_IFDIR | 0o770)
-		_, err := root.identityClaim()
+		_, err := (&linuxV3Directory{native: root}).IdentityClaim()
 		if !errors.Is(err, errOutputAncestryAuthorityDenied) ||
 			outputAncestryTraceDecision(err) != FilesystemOutputAncestryAuthorityDenied {
 			t.Fatalf("authority trace classification = %v, %v", outputAncestryTraceDecision(err), err)
@@ -34,7 +34,7 @@ func TestLinuxOutputAncestryTraceSeparatesAuthorityFromIdentityContradictions(t 
 			}
 			return nil
 		}
-		_, err := root.identityClaim()
+		_, err := (&linuxV3Directory{native: root}).IdentityClaim()
 		if err == nil || errors.Is(err, errOutputAncestryAuthorityDenied) ||
 			outputAncestryTraceDecision(err) != FilesystemOutputAncestryStructuralUnsafe {
 			t.Fatalf("identity trace classification = %v, %v", outputAncestryTraceDecision(err), err)

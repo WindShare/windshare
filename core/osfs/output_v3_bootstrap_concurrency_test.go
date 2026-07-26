@@ -113,7 +113,7 @@ func TestOutputV3BootstrapCandidateRejectsUnstableCoordinatorLockBeforeCompletio
 func TestOutputV3ConcurrentBootstrapCollisionLeavesNoCandidate(t *testing.T) {
 	rootPath := v3RecoveryRoot(t)
 	gate := &v3RecoveryBootstrapInstallGate{
-		ready: make(chan struct{}), release: make(chan struct{}),
+		scanReady: make(chan struct{}), ready: make(chan struct{}), release: make(chan struct{}),
 	}
 	defer func() {
 		select {
@@ -239,10 +239,23 @@ func v3RecoveryBuildBootstrapSubset(
 }
 
 type v3RecoveryBootstrapInstallGate struct {
-	mu       sync.Mutex
-	arrivals int
-	ready    chan struct{}
-	release  chan struct{}
+	mu           sync.Mutex
+	scanArrivals int
+	arrivals     int
+	scanReady    chan struct{}
+	ready        chan struct{}
+	release      chan struct{}
+}
+
+func (gate *v3RecoveryBootstrapInstallGate) waitForInitialScan() {
+	gate.mu.Lock()
+	gate.scanArrivals++
+	if gate.scanArrivals == 2 {
+		close(gate.scanReady)
+	}
+	ready := gate.scanReady
+	gate.mu.Unlock()
+	<-ready
 }
 
 func (gate *v3RecoveryBootstrapInstallGate) wait() {
@@ -315,6 +328,21 @@ func (directory *v3RecoveryBootstrapDirectory) Duplicate() (outputV3Directory, e
 
 func (directory *v3RecoveryBootstrapDirectory) SameDirectory(other outputV3Directory) (bool, error) {
 	return directory.outputV3Directory.SameDirectory(v3RecoveryUnwrapBootstrapDirectory(other))
+}
+
+func (directory *v3RecoveryBootstrapDirectory) NamesWithPrefix(
+	prefix string,
+	matchLimit int,
+) ([]string, error) {
+	names, err := directory.outputV3Directory.NamesWithPrefix(prefix, matchLimit)
+	if prefix == resumestate.BootstrapCandidatePrefix {
+		// Both participants must snapshot an empty root before either is allowed
+		// to construct a candidate. Platform certification cost otherwise lets
+		// one participant observe and recover the other's partial construction,
+		// which tests partial recovery rather than the intended install collision.
+		directory.gate.waitForInitialScan()
+	}
+	return names, err
 }
 
 func (directory *v3RecoveryBootstrapDirectory) OpenDirectory(

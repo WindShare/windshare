@@ -352,8 +352,13 @@ func (targetDirectory *linuxOutputDirectory) linkRegularFileNoReplace(
 	}
 	matches, err := sourceDirectory.regularEntryMatches(sourceName, expected)
 	if err != nil || !matches {
-		return errors.Join(linuxUnsafe(operation,
-			"fixed source entry does not identify the expected open file", nil), err)
+		// The no-replace primitive has not run yet, so this is deterministic
+		// source-witness invalidation rather than ambiguous publication history.
+		return errors.Join(
+			errOutputV3LinkSourceChanged,
+			linuxUnsafe(operation, "fixed source entry does not identify the expected open file", nil),
+			err,
+		)
 	}
 	// Linux requires CAP_DAC_READ_SEARCH for linkat(AT_EMPTY_PATH), so the
 	// certified backend instead links the exact name beneath a pinned private

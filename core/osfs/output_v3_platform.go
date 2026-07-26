@@ -16,6 +16,11 @@ var (
 	errOutputV3LockBusy    = errors.New("osfs: output namespace lock is already held")
 )
 
+// A platform emits this only before attempting the no-replace mutation. That
+// cut lets recovery distinguish an invalidated source witness from an unknown
+// final-publication outcome.
+var errOutputV3LinkSourceChanged = errors.New("osfs: fixed output link source changed")
+
 // outputV3EntryKind separates safe presence from object authority. Callers use
 // it to settle a pre-state final-path collision without opening or following a
 // directory, reparse point, or other non-regular object.

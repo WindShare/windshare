@@ -593,7 +593,11 @@ func previewPrivateDirectory(
 				return err
 			}
 			err = previewPrivateDirectory(child, state, depth+1, preview)
+			matches, matchErr := directory.EntryMatches(name, entry)
 			closeErr := errors.Join(child.Close(), entry.Close())
+			if matchErr != nil || !matches {
+				err = errors.Join(err, matchErr, errOutputV3Unsafe)
+			}
 			if err != nil || closeErr != nil {
 				return errors.Join(err, closeErr)
 			}
