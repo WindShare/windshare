@@ -80,7 +80,7 @@ func (directory *linuxOutputDirectory) validateExclusiveChildMutationAuthority()
 	if err != nil {
 		return err
 	}
-	if linuxFileType(identity.mode) != unix.S_IFDIR || !identity.sameObject(directory.object) {
+	if identity.identity.kind != unix.S_IFDIR || !identity.matches(directory.object) {
 		return linuxUnsafe(operation, "ancestry handle no longer identifies its fixed directory", nil)
 	}
 	receiverUID := uint32(directory.system.geteuid())

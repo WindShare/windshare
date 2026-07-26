@@ -239,7 +239,7 @@ func filesystemOutputRecoveryActionFromState(action resumestate.RecoveryAction) 
 type FilesystemOutputCertificationID string
 
 const (
-	FilesystemOutputCertificationLinuxExt4ProcessRestart   FilesystemOutputCertificationID = "linux/ext4/process-restart/v1"
+	FilesystemOutputCertificationLinuxExt4ProcessRestart   FilesystemOutputCertificationID = "linux/ext4/process-restart/v2"
 	FilesystemOutputCertificationWindowsNTFSProcessRestart FilesystemOutputCertificationID = "windows/ntfs/process-restart/v1"
 )
 

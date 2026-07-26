@@ -174,7 +174,7 @@ func (root *linuxOutputDirectory) validateSelectionMetadata(selection transfer.O
 	if err != nil {
 		return err
 	}
-	if !probeIdentity.sameObject(currentIdentity) {
+	if !probeIdentity.identity.sameObject(currentIdentity.identity) {
 		return linuxUnsafe(operation, "anonymous metadata probe identity changed", nil)
 	}
 	return root.verifyHandle()

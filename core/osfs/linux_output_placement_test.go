@@ -23,14 +23,15 @@ const (
 )
 
 type linuxPlacementTestNode struct {
-	fd         int
-	inode      uint64
-	generation uint32
-	ownerUID   uint32
-	mode       uint16
-	magic      int64
-	acl        []byte
-	children   map[string]*linuxPlacementTestNode
+	fd               int
+	inode            uint64
+	generation       uint32
+	birthNanoseconds uint32
+	ownerUID         uint32
+	mode             uint16
+	magic            int64
+	acl              []byte
+	children         map[string]*linuxPlacementTestNode
 }
 
 type linuxPlacementTestHarness struct {
@@ -40,7 +41,7 @@ type linuxPlacementTestHarness struct {
 	replaceAfterOpen  bool
 }
 
-func TestLinuxAbsolutePlacementClaimIsDeterministicAndIncarnationBound(t *testing.T) {
+func TestLinuxAbsolutePlacementClaimIsDeterministicAndRestartIdentityBound(t *testing.T) {
 	harness, expected := newLinuxPlacementTestHarness()
 	system := harness.system()
 
@@ -56,12 +57,15 @@ func TestLinuxAbsolutePlacementClaimIsDeterministicAndIncarnationBound(t *testin
 		t.Fatal("unchanged absolute placement produced different claims")
 	}
 
-	components, generations := decodeLinuxPlacementClaim(t, first)
+	components, birthNanoseconds, generations := decodeLinuxPlacementClaim(t, first)
 	if want := []string{"", "home", "receiver", "output"}; !reflect.DeepEqual(components, want) {
 		t.Fatalf("placement components = %v, want %v", components, want)
 	}
 	if want := []uint32{11, 12, 13, 14}; !reflect.DeepEqual(generations, want) {
 		t.Fatalf("placement generations = %v, want %v", generations, want)
+	}
+	if want := []uint32{11, 12, 13, 14}; !reflect.DeepEqual(birthNanoseconds, want) {
+		t.Fatalf("placement birth nanoseconds = %v, want %v", birthNanoseconds, want)
 	}
 }
 
@@ -167,21 +171,7 @@ func TestLinuxPlacementBoundsPathComponentsAndPreimage(t *testing.T) {
 
 	record := linuxOutputPlacementRecord{
 		component: strings.Repeat("a", linuxOutputNameMaximumBytes),
-		mount: linuxMountIdentity{
-			uniqueMountID: linuxPlacementTestUniqueMount,
-			deviceMajor:   8,
-			deviceMinor:   1,
-			filesystemID:  [2]int32{23, 29},
-		},
-		directory: linuxOpenObjectIdentity{
-			mountID:       linuxPlacementTestUniqueMount,
-			deviceMajor:   8,
-			deviceMinor:   1,
-			inode:         101,
-			mode:          unix.S_IFDIR | 0o755,
-			generation:    11,
-			hasGeneration: true,
-		},
+		directory: linuxPlacementRestartIdentity(101, 11, 11),
 	}
 	records := make([]linuxOutputPlacementRecord, linuxMaximumPlacementComponents+1)
 	for index := range records {
@@ -202,21 +192,7 @@ func TestLinuxPlacementDigestBindsPathOrderMountAndIncarnation(t *testing.T) {
 	record := func(component string, inode uint64, generation uint32) linuxOutputPlacementRecord {
 		return linuxOutputPlacementRecord{
 			component: component,
-			mount: linuxMountIdentity{
-				uniqueMountID: linuxPlacementTestUniqueMount,
-				deviceMajor:   8,
-				deviceMinor:   1,
-				filesystemID:  [2]int32{23, 29},
-			},
-			directory: linuxOpenObjectIdentity{
-				mountID:       linuxPlacementTestUniqueMount,
-				deviceMajor:   8,
-				deviceMinor:   1,
-				inode:         inode,
-				mode:          unix.S_IFDIR | 0o755,
-				generation:    generation,
-				hasGeneration: true,
-			},
+			directory: linuxPlacementRestartIdentity(inode, generation, generation),
 		}
 	}
 	baseRecords := []linuxOutputPlacementRecord{
@@ -244,14 +220,16 @@ func TestLinuxPlacementDigestBindsPathOrderMountAndIncarnation(t *testing.T) {
 			records[0], records[1] = records[1], records[0]
 		},
 		"mount": func(records []linuxOutputPlacementRecord) {
-			records[0].mount.uniqueMountID++
-			records[0].directory.mountID++
+			records[0].directory.mount.uniqueMountID++
 		},
 		"inode": func(records []linuxOutputPlacementRecord) {
 			records[0].directory.inode++
 		},
 		"generation": func(records []linuxOutputPlacementRecord) {
 			records[0].directory.generation++
+		},
+		"birth time": func(records []linuxOutputPlacementRecord) {
+			records[0].directory.birthNanoseconds++
 		},
 	}
 	for name, mutate := range mutations {
@@ -265,11 +243,31 @@ func TestLinuxPlacementDigestBindsPathOrderMountAndIncarnation(t *testing.T) {
 	}
 }
 
+func linuxPlacementRestartIdentity(
+	inode uint64,
+	birthNanoseconds uint32,
+	generation uint32,
+) linuxDirectoryRestartIdentity {
+	return linuxDirectoryRestartIdentity{
+		mount: linuxMountIdentity{
+			uniqueMountID:       linuxPlacementTestUniqueMount,
+			deviceMajor:         8,
+			deviceMinor:         1,
+			runtimeFilesystemID: [2]int32{23, 29},
+			filesystemUUID:      linuxTestFilesystemUUID,
+		},
+		inode: inode, kind: unix.S_IFDIR,
+		birthSeconds: 1_700_000_000, birthNanoseconds: birthNanoseconds,
+		generation: generation, hasGenerationProof: generation != 0,
+	}
+}
+
 func newLinuxPlacementTestHarness() (*linuxPlacementTestHarness, linuxOutputCertificate) {
 	node := func(fd int, inode uint64, generation uint32, owner uint32, mode uint16) *linuxPlacementTestNode {
 		return &linuxPlacementTestNode{
 			fd: fd, inode: inode, generation: generation, ownerUID: owner,
-			mode: uint16(unix.S_IFDIR) | mode, magic: linuxExt4SuperMagic,
+			birthNanoseconds: generation,
+			mode:             uint16(unix.S_IFDIR) | mode, magic: linuxExt4SuperMagic,
 			children: make(map[string]*linuxPlacementTestNode),
 		}
 	}
@@ -290,25 +288,16 @@ func newLinuxPlacementTestHarness() (*linuxPlacementTestHarness, linuxOutputCert
 }
 
 func (harness *linuxPlacementTestHarness) certificate(node *linuxPlacementTestNode) linuxOutputCertificate {
+	restart := linuxPlacementRestartIdentity(node.inode, node.birthNanoseconds, node.generation)
 	return linuxOutputCertificate{
-		mount: linuxMountIdentity{
-			uniqueMountID: linuxPlacementTestUniqueMount,
-			deviceMajor:   8,
-			deviceMinor:   1,
-			filesystemID:  [2]int32{23, 29},
+		mount: restart.mount,
+		rootObject: linuxOpenHandleIdentity{
+			mountID:     linuxPlacementTestUniqueMount,
+			deviceMajor: 8, deviceMinor: 1,
+			inode: node.inode, kind: unix.S_IFDIR,
 		},
-		rootObject: linuxOpenObjectIdentity{
-			mountID:       linuxPlacementTestUniqueMount,
-			deviceMajor:   8,
-			deviceMinor:   1,
-			inode:         node.inode,
-			mode:          node.mode,
-			ownerUID:      node.ownerUID,
-			generation:    node.generation,
-			hasGeneration: true,
-		},
-		generationSpoofLocked: true,
-		durability:            linuxOutputProcessRestartDurability,
+		rootRestartIdentity: restart,
+		durability:          linuxOutputProcessRestartDurability,
 	}
 }
 
@@ -348,19 +337,18 @@ func (harness *linuxPlacementTestHarness) system() linuxOutputSystem {
 					node = &clone
 				}
 			}
-			mountMask := uint32(unix.STATX_MNT_ID)
+			returnedMask := uint32(mask)
 			mountID := linuxPlacementTestMountID
 			if mask&unix.STATX_MNT_ID_UNIQUE != 0 {
-				mountMask = uint32(unix.STATX_MNT_ID_UNIQUE)
 				mountID = linuxPlacementTestUniqueMount
 			}
 			*stat = unix.Statx_t{
-				Mask: uint32(
-					unix.STATX_TYPE|unix.STATX_MODE|unix.STATX_INO|
-						unix.STATX_SIZE|unix.STATX_UID,
-				) | mountMask,
-				Ino: node.inode, Mode: node.mode, Uid: node.ownerUID,
+				Mask: returnedMask,
+				Ino:  node.inode, Mode: node.mode, Uid: node.ownerUID,
 				Dev_major: 8, Dev_minor: 1, Mnt_id: mountID,
+				Btime: unix.StatxTimestamp{
+					Sec: 1_700_000_000, Nsec: node.birthNanoseconds,
+				},
 			}
 			return nil
 		},
@@ -398,9 +386,12 @@ func (harness *linuxPlacementTestHarness) system() linuxOutputSystem {
 			}
 			return node.generation, nil
 		},
-		getFlags:             func(int) (uint32, error) { return 0, nil },
-		verifyGenerationLock: func(int) error { return nil },
-		readProcessStatus:    func() ([]byte, error) { return []byte("Umask:\t0022\n"), nil },
+		getFlags: func(int) (uint32, error) { return 0, nil },
+		getFilesystemUUID: func(int) ([linuxFilesystemUUIDBytes]byte, error) {
+			return linuxTestFilesystemUUID, nil
+		},
+		restartIdentity:   linuxStatxBirthTimeRestartIdentityProvider{},
+		readProcessStatus: func() ([]byte, error) { return []byte("Umask:\t0022\n"), nil },
 		readMountInfo: func() ([]byte, error) {
 			return []byte(fmt.Sprintf(
 				"%d 1 8:1 / / rw - ext4 /dev/test rw\n",
@@ -410,7 +401,7 @@ func (harness *linuxPlacementTestHarness) system() linuxOutputSystem {
 	}
 }
 
-func decodeLinuxPlacementClaim(t *testing.T, claim []byte) ([]string, []uint32) {
+func decodeLinuxPlacementClaim(t *testing.T, claim []byte) ([]string, []uint32, []uint32) {
 	t.Helper()
 	offset := 0
 	domain := decodeLinuxLength16(t, claim, &offset)
@@ -419,17 +410,41 @@ func decodeLinuxPlacementClaim(t *testing.T, claim []byte) ([]string, []uint32) 
 	}
 	count := int(decodeLinuxUint32(t, claim, &offset))
 	components := make([]string, 0, count)
+	birthNanoseconds := make([]uint32, 0, count)
 	generations := make([]uint32, 0, count)
 	for range count {
 		record := decodeLinuxLength32(t, claim, &offset)
 		recordOffset := 0
 		components = append(components, string(decodeLinuxLength16(t, record, &recordOffset)))
-		const mountAndFilesystemBytes = 8 + 4 + 4 + 4 + 4
-		recordOffset += mountAndFilesystemBytes
-		_ = decodeLinuxUint64(t, record, &recordOffset)
-		generations = append(generations, decodeLinuxUint32(t, record, &recordOffset))
-		if got := decodeLinuxUint16(t, record, &recordOffset); got != unix.S_IFDIR {
+		identity := decodeLinuxLength32(t, record, &recordOffset)
+		identityOffset := 0
+		if domain := string(decodeLinuxLength16(t, identity, &identityOffset)); domain != linuxDirectoryRestartIdentityClaimDomain {
+			t.Fatalf("directory identity domain = %q", domain)
+		}
+		mount := decodeLinuxLength32(t, identity, &identityOffset)
+		mountOffset := 0
+		if domain := string(decodeLinuxLength16(t, mount, &mountOffset)); domain != linuxMountIdentityClaimDomain {
+			t.Fatalf("mount identity domain = %q", domain)
+		}
+		const mountFieldsBytes = 8 + 4 + 4 + 4 + 4 + linuxFilesystemUUIDBytes
+		mountOffset += mountFieldsBytes
+		if mountOffset != len(mount) {
+			t.Fatalf("mount identity has %d trailing bytes", len(mount)-mountOffset)
+		}
+		_ = decodeLinuxUint64(t, identity, &identityOffset)
+		_ = decodeLinuxUint64(t, identity, &identityOffset)
+		birthNanoseconds = append(birthNanoseconds, decodeLinuxUint32(t, identity, &identityOffset))
+		hasGeneration := decodeLinuxBytes(t, identity, &identityOffset, 1)[0]
+		generation := decodeLinuxUint32(t, identity, &identityOffset)
+		if hasGeneration != 1 {
+			t.Fatalf("placement generation presence = %d", hasGeneration)
+		}
+		generations = append(generations, generation)
+		if got := decodeLinuxUint16(t, identity, &identityOffset); got != unix.S_IFDIR {
 			t.Fatalf("placement file type = %#x", got)
+		}
+		if identityOffset != len(identity) {
+			t.Fatalf("directory identity has %d trailing bytes", len(identity)-identityOffset)
 		}
 		if recordOffset != len(record) {
 			t.Fatalf("placement record has %d trailing bytes", len(record)-recordOffset)
@@ -438,7 +453,7 @@ func decodeLinuxPlacementClaim(t *testing.T, claim []byte) ([]string, []uint32) 
 	if offset != len(claim) {
 		t.Fatalf("placement claim has %d trailing bytes", len(claim)-offset)
 	}
-	return components, generations
+	return components, birthNanoseconds, generations
 }
 
 func decodeLinuxLength16(t *testing.T, encoded []byte, offset *int) []byte {

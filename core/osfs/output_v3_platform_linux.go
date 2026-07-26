@@ -3,7 +3,6 @@
 package osfs
 
 import (
-	"encoding/binary"
 	"errors"
 	"io/fs"
 	"path/filepath"
@@ -158,33 +157,31 @@ func (platform *linuxV3Platform) RootBinding() (resumestate.OutputRootBinding, e
 		return resumestate.OutputRootBinding{}, linuxV3Error(err)
 	}
 	certificate := root.certificate
-	volume := make([]byte, len("linux/ext4/volume/v1")+8+4+4+4+4)
-	copy(volume, "linux/ext4/volume/v1")
-	offset := len("linux/ext4/volume/v1")
-	binary.BigEndian.PutUint64(volume[offset:], certificate.mount.uniqueMountID)
-	offset += 8
-	binary.BigEndian.PutUint32(volume[offset:], certificate.mount.deviceMajor)
-	offset += 4
-	binary.BigEndian.PutUint32(volume[offset:], certificate.mount.deviceMinor)
-	offset += 4
-	binary.BigEndian.PutUint32(volume[offset:], uint32(certificate.mount.filesystemID[0]))
-	offset += 4
-	binary.BigEndian.PutUint32(volume[offset:], uint32(certificate.mount.filesystemID[1]))
-
-	if !certificate.rootObject.hasGeneration || certificate.rootObject.generation == 0 {
+	volume, err := linuxEncodeMountIdentity(certificate.mount)
+	if err != nil {
+		return resumestate.OutputRootBinding{}, linuxV3Error(err)
+	}
+	if root.system.restartIdentity == nil {
 		return resumestate.OutputRootBinding{}, errors.Join(
 			errOutputV3Unsupported,
-			errors.New("osfs: Linux output root has no non-reused ext4 incarnation"),
+			errors.New("osfs: Linux directory restart-identity provider is unavailable"),
 		)
 	}
-	object := make([]byte, len("linux/ext4/directory-object/v2")+8+4+2)
-	copy(object, "linux/ext4/directory-object/v2")
-	offset = len("linux/ext4/directory-object/v2")
-	binary.BigEndian.PutUint64(object[offset:], certificate.rootObject.inode)
-	offset += 8
-	binary.BigEndian.PutUint32(object[offset:], certificate.rootObject.generation)
-	offset += 4
-	binary.BigEndian.PutUint16(object[offset:], linuxFileType(certificate.rootObject.mode))
+	restartIdentity, err := root.system.restartIdentity.Read(root.system, root.fd, certificate.mount)
+	if err != nil {
+		return resumestate.OutputRootBinding{}, linuxV3Error(err)
+	}
+	if !restartIdentity.matchesHandle(root.object) ||
+		!restartIdentity.sameDirectory(certificate.rootRestartIdentity) {
+		return resumestate.OutputRootBinding{}, errors.Join(
+			errOutputV3Unsafe,
+			errors.New("osfs: Linux output-root restart identity changed"),
+		)
+	}
+	object, err := linuxEncodeDirectoryRestartIdentity(restartIdentity)
+	if err != nil {
+		return resumestate.OutputRootBinding{}, linuxV3Error(err)
+	}
 	binding, err := resumestate.NewOutputRootBinding(platform.Certification(), volume, object)
 	return binding, linuxV3Error(err)
 }

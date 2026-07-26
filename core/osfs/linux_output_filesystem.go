@@ -95,57 +95,59 @@ func linuxUnsafe(operation, reason string, cause error) error {
 }
 
 type linuxOutputSystem struct {
-	openat2              func(int, string, *unix.OpenHow) (int, error)
-	close                func(int) error
-	statx                func(int, string, int, int, *unix.Statx_t) error
-	fstatfs              func(int, *unix.Statfs_t) error
-	mkdirat              func(int, string, uint32) error
-	linkat               func(int, string, int, string, int) error
-	renameat2            func(int, string, int, string, uint) error
-	unlinkat             func(int, string, int) error
-	fsync                func(int) error
-	fchmod               func(int, uint32) error
-	ftruncate            func(int, int64) error
-	pread                func(int, []byte, int64) (int, error)
-	pwrite               func(int, []byte, int64) (int, error)
-	utimensat            func(int, string, []unix.Timespec, int) error
-	faccessat2           func(int, string, uint32, int) error
-	fgetxattr            func(int, string, []byte) (int, error)
-	geteuid              func() int
-	readDirent           func(int, []byte) (int, error)
-	flock                func(int, int) error
-	getVersion           func(int) (uint32, error)
-	getFlags             func(int) (uint32, error)
-	verifyGenerationLock func(int) error
-	readMountInfo        func() ([]byte, error)
-	readProcessStatus    func() ([]byte, error)
+	openat2           func(int, string, *unix.OpenHow) (int, error)
+	close             func(int) error
+	statx             func(int, string, int, int, *unix.Statx_t) error
+	fstatfs           func(int, *unix.Statfs_t) error
+	mkdirat           func(int, string, uint32) error
+	linkat            func(int, string, int, string, int) error
+	renameat2         func(int, string, int, string, uint) error
+	unlinkat          func(int, string, int) error
+	fsync             func(int) error
+	fchmod            func(int, uint32) error
+	ftruncate         func(int, int64) error
+	pread             func(int, []byte, int64) (int, error)
+	pwrite            func(int, []byte, int64) (int, error)
+	utimensat         func(int, string, []unix.Timespec, int) error
+	faccessat2        func(int, string, uint32, int) error
+	fgetxattr         func(int, string, []byte) (int, error)
+	geteuid           func() int
+	readDirent        func(int, []byte) (int, error)
+	flock             func(int, int) error
+	getVersion        func(int) (uint32, error)
+	getFlags          func(int) (uint32, error)
+	getFilesystemUUID func(int) ([linuxFilesystemUUIDBytes]byte, error)
+	restartIdentity   linuxDirectoryRestartIdentityProvider
+	readMountInfo     func() ([]byte, error)
+	readProcessStatus func() ([]byte, error)
 }
 
 var linuxHostOutputSystem = linuxOutputSystem{
-	openat2:              unix.Openat2,
-	close:                unix.Close,
-	statx:                unix.Statx,
-	fstatfs:              unix.Fstatfs,
-	mkdirat:              unix.Mkdirat,
-	linkat:               unix.Linkat,
-	renameat2:            unix.Renameat2,
-	unlinkat:             unix.Unlinkat,
-	fsync:                unix.Fsync,
-	fchmod:               unix.Fchmod,
-	ftruncate:            unix.Ftruncate,
-	pread:                unix.Pread,
-	pwrite:               unix.Pwrite,
-	utimensat:            unix.UtimesNanoAt,
-	faccessat2:           unix.Faccessat2,
-	fgetxattr:            unix.Fgetxattr,
-	geteuid:              unix.Geteuid,
-	readDirent:           unix.ReadDirent,
-	flock:                unix.Flock,
-	getVersion:           linuxGetInodeGeneration,
-	getFlags:             linuxGetInodeFlags,
-	verifyGenerationLock: linuxVerifyInodeGenerationLocked,
-	readMountInfo:        linuxReadMountInfo,
-	readProcessStatus:    linuxReadProcessStatus,
+	openat2:           unix.Openat2,
+	close:             unix.Close,
+	statx:             unix.Statx,
+	fstatfs:           unix.Fstatfs,
+	mkdirat:           unix.Mkdirat,
+	linkat:            unix.Linkat,
+	renameat2:         unix.Renameat2,
+	unlinkat:          unix.Unlinkat,
+	fsync:             unix.Fsync,
+	fchmod:            unix.Fchmod,
+	ftruncate:         unix.Ftruncate,
+	pread:             unix.Pread,
+	pwrite:            unix.Pwrite,
+	utimensat:         unix.UtimesNanoAt,
+	faccessat2:        unix.Faccessat2,
+	fgetxattr:         unix.Fgetxattr,
+	geteuid:           unix.Geteuid,
+	readDirent:        unix.ReadDirent,
+	flock:             unix.Flock,
+	getVersion:        linuxGetInodeGeneration,
+	getFlags:          linuxGetInodeFlags,
+	getFilesystemUUID: linuxGetFilesystemUUID,
+	restartIdentity:   linuxStatxBirthTimeRestartIdentityProvider{},
+	readMountInfo:     linuxReadMountInfo,
+	readProcessStatus: linuxReadProcessStatus,
 }
 
 type linuxOutputDurability uint8
@@ -153,54 +155,25 @@ type linuxOutputDurability uint8
 const linuxOutputProcessRestartDurability linuxOutputDurability = iota + 1
 
 type linuxMountIdentity struct {
-	uniqueMountID uint64
-	deviceMajor   uint32
-	deviceMinor   uint32
-	filesystemID  [2]int32
-}
-
-type linuxOpenObjectIdentity struct {
-	mountID       uint64
-	deviceMajor   uint32
-	deviceMinor   uint32
-	inode         uint64
-	mode          uint16
-	size          uint64
-	ownerUID      uint32
-	generation    uint32
-	hasGeneration bool
-}
-
-func (identity linuxOpenObjectIdentity) sameObject(other linuxOpenObjectIdentity) bool {
-	return identity.mountID == other.mountID &&
-		identity.deviceMajor == other.deviceMajor &&
-		identity.deviceMinor == other.deviceMinor &&
-		identity.inode == other.inode &&
-		identity.hasGeneration == other.hasGeneration &&
-		(!identity.hasGeneration || identity.generation == other.generation)
-}
-
-func (identity linuxOpenObjectIdentity) sameInodeObject(other linuxOpenObjectIdentity) bool {
-	return identity.deviceMajor == other.deviceMajor &&
-		identity.deviceMinor == other.deviceMinor &&
-		identity.inode == other.inode &&
-		linuxFileType(identity.mode) == linuxFileType(other.mode) &&
-		identity.hasGeneration == other.hasGeneration &&
-		(!identity.hasGeneration || identity.generation == other.generation)
+	uniqueMountID       uint64
+	deviceMajor         uint32
+	deviceMinor         uint32
+	runtimeFilesystemID [2]int32
+	filesystemUUID      [linuxFilesystemUUIDBytes]byte
 }
 
 type linuxOutputCertificate struct {
-	mount                 linuxMountIdentity
-	rootObject            linuxOpenObjectIdentity
-	generationSpoofLocked bool
-	durability            linuxOutputDurability
+	mount               linuxMountIdentity
+	rootObject          linuxOpenHandleIdentity
+	rootRestartIdentity linuxDirectoryRestartIdentity
+	durability          linuxOutputDurability
 }
 
 type linuxOutputDirectory struct {
 	system                  *linuxOutputSystem
 	fd                      int
 	certificate             linuxOutputCertificate
-	object                  linuxOpenObjectIdentity
+	object                  linuxOpenHandleIdentity
 	absolutePath            string
 	exactPermissions        uint32
 	requireExactPermissions bool
@@ -245,22 +218,25 @@ func linuxOpenExt4OutputRoot(path string, system *linuxOutputSystem) (*linuxOutp
 
 func linuxCertifyExt4OutputFD(system *linuxOutputSystem, fd int) (linuxOutputCertificate, error) {
 	const operation = "certify output filesystem"
-	legacy, err := linuxStatxOpenObject(system, fd, unix.STATX_MNT_ID)
+	legacy, err := linuxReadOpenHandleFacts(system, fd, unix.STATX_MNT_ID)
 	if err != nil {
 		return linuxOutputCertificate{}, err
 	}
-	if linuxFileType(legacy.mode) != unix.S_IFDIR {
+	if legacy.identity.kind != unix.S_IFDIR {
 		return linuxOutputCertificate{}, linuxUnsafe(operation, "output root handle is not a directory", nil)
 	}
-	unique, err := linuxStatxOpenObject(system, fd, unix.STATX_MNT_ID_UNIQUE)
+	unique, err := linuxReadOpenHandleFacts(system, fd, unix.STATX_MNT_ID_UNIQUE)
 	if err != nil {
 		return linuxOutputCertificate{}, err
 	}
 	// The legacy and unique statx queries intentionally return different mount
 	// ID domains. The inode comparison detects an object swap between them
 	// without treating that domain difference as a mount change.
-	if !legacy.sameInodeObject(unique) {
+	if !legacy.identity.sameInodeObject(unique.identity) {
 		return linuxOutputCertificate{}, linuxUnsafe(operation, "mount or root object changed during certification", nil)
+	}
+	if err := linuxVerifyOpenDirectoryFlags(system, fd, operation); err != nil {
+		return linuxOutputCertificate{}, err
 	}
 	var filesystem unix.Statfs_t
 	if err := system.fstatfs(fd, &filesystem); err != nil {
@@ -277,7 +253,7 @@ func linuxCertifyExt4OutputFD(system *linuxOutputSystem, fd int) (linuxOutputCer
 	if err != nil {
 		return linuxOutputCertificate{}, linuxUnsupported(operation, "mount table cannot be inspected", err)
 	}
-	mount, err := linuxFindMountInfo(mountInfo, legacy.mountID)
+	mount, err := linuxFindMountInfo(mountInfo, legacy.identity.mountID)
 	if err != nil {
 		return linuxOutputCertificate{}, linuxUnsafe(operation, "mount table is malformed or does not contain the open root", err)
 	}
@@ -286,7 +262,7 @@ func linuxCertifyExt4OutputFD(system *linuxOutputSystem, fd int) (linuxOutputCer
 		// table is the additional discriminator that keeps this allowlist exact.
 		return linuxOutputCertificate{}, linuxUnsupported(operation, "mounted filesystem type is not ext4", nil)
 	}
-	if mount.deviceMajor != legacy.deviceMajor || mount.deviceMinor != legacy.deviceMinor {
+	if mount.deviceMajor != legacy.identity.deviceMajor || mount.deviceMinor != legacy.identity.deviceMinor {
 		return linuxOutputCertificate{}, linuxUnsafe(operation, "mount table device does not match the open root", nil)
 	}
 	if system.readProcessStatus == nil {
@@ -311,190 +287,178 @@ func linuxCertifyExt4OutputFD(system *linuxOutputSystem, fd int) (linuxOutputCer
 		return linuxOutputCertificate{}, linuxUnsupported(operation,
 			"process umask masks required private owner permissions", nil)
 	}
-	if system.verifyGenerationLock == nil {
+	if system.getFilesystemUUID == nil {
 		return linuxOutputCertificate{}, linuxUnsupported(operation,
-			"ext4 inode-generation spoof-resistance provider is unavailable", nil)
+			"ext4 filesystem UUID provider is unavailable", nil)
 	}
-	if err := system.verifyGenerationLock(fd); err != nil {
+	filesystemUUID, err := system.getFilesystemUUID(fd)
+	if err != nil {
 		return linuxOutputCertificate{}, linuxUnsupported(operation,
-			"ext4 permits mutable inode generations or cannot prove they are locked", err)
+			"ext4 filesystem UUID is unavailable", err)
+	}
+	if filesystemUUID == [linuxFilesystemUUIDBytes]byte{} {
+		return linuxOutputCertificate{}, linuxUnsupported(operation,
+			"ext4 filesystem UUID is all zero", nil)
+	}
+	mountIdentity := linuxMountIdentity{
+		uniqueMountID:       unique.identity.mountID,
+		deviceMajor:         unique.identity.deviceMajor,
+		deviceMinor:         unique.identity.deviceMinor,
+		runtimeFilesystemID: filesystem.Fsid.Val,
+		filesystemUUID:      filesystemUUID,
+	}
+	if system.restartIdentity == nil {
+		return linuxOutputCertificate{}, linuxUnsupported(operation,
+			"directory restart-identity provider is unavailable", nil)
+	}
+	restartIdentity, err := system.restartIdentity.Read(system, fd, mountIdentity)
+	if err != nil {
+		return linuxOutputCertificate{}, err
+	}
+	if !restartIdentity.matchesHandle(unique.identity) {
+		return linuxOutputCertificate{}, linuxUnsafe(operation,
+			"restart identity differs from the certified root handle", nil)
 	}
 	return linuxOutputCertificate{
-		mount: linuxMountIdentity{
-			uniqueMountID: unique.mountID,
-			deviceMajor:   unique.deviceMajor,
-			deviceMinor:   unique.deviceMinor,
-			filesystemID:  filesystem.Fsid.Val,
-		},
-		rootObject:            unique,
-		generationSpoofLocked: true,
-		durability:            linuxOutputProcessRestartDurability,
+		mount:               mountIdentity,
+		rootObject:          unique.identity,
+		rootRestartIdentity: restartIdentity,
+		durability:          linuxOutputProcessRestartDurability,
 	}, nil
 }
 
-func linuxStatxOpenObject(system *linuxOutputSystem, fd int, mountMask int) (linuxOpenObjectIdentity, error) {
+func linuxReadOpenHandleFacts(system *linuxOutputSystem, fd int, mountMask int) (linuxOpenHandleFacts, error) {
 	const operation = "inspect open output object"
+	if system == nil || system.statx == nil {
+		return linuxOpenHandleFacts{}, linuxUnsupported(operation, "statx provider is unavailable", nil)
+	}
 	requested := unix.STATX_TYPE | unix.STATX_MODE | unix.STATX_INO | unix.STATX_SIZE | unix.STATX_UID | mountMask
 	var stat unix.Statx_t
 	err := system.statx(fd, "", unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW, requested, &stat)
 	if err != nil {
 		if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EOPNOTSUPP) {
-			return linuxOpenObjectIdentity{}, linuxUnsupported(operation, "required statx identity is unavailable", err)
+			return linuxOpenHandleFacts{}, linuxUnsupported(operation, "required statx identity is unavailable", err)
 		}
-		return linuxOpenObjectIdentity{}, fmt.Errorf("%s: %w", operation, err)
+		return linuxOpenHandleFacts{}, fmt.Errorf("%s: %w", operation, err)
 	}
 	requiredMask := uint32(
 		unix.STATX_TYPE | unix.STATX_MODE | unix.STATX_INO | unix.STATX_SIZE | unix.STATX_UID | mountMask,
 	)
 	if stat.Mask&requiredMask != requiredMask {
-		return linuxOpenObjectIdentity{}, linuxUnsupported(operation, "kernel did not return the requested non-reused mount identity", nil)
+		return linuxOpenHandleFacts{}, linuxUnsupported(operation, "kernel did not return the requested non-reused mount identity", nil)
 	}
-	identity := linuxOpenObjectIdentity{
-		mountID:     stat.Mnt_id,
-		deviceMajor: stat.Dev_major,
-		deviceMinor: stat.Dev_minor,
-		inode:       stat.Ino,
-		mode:        stat.Mode,
-		size:        stat.Size,
-		ownerUID:    stat.Uid,
+	return linuxOpenHandleFacts{
+		identity: linuxOpenHandleIdentity{
+			mountID: stat.Mnt_id, deviceMajor: stat.Dev_major, deviceMinor: stat.Dev_minor,
+			inode: stat.Ino, kind: linuxFileType(stat.Mode),
+		},
+		mode: stat.Mode, size: stat.Size, ownerUID: stat.Uid,
+	}, nil
+}
+
+func linuxVerifyOpenDirectoryFlags(system *linuxOutputSystem, fd int, operation string) error {
+	if system.getFlags == nil {
+		return linuxUnsupported(operation, "ext4 inode flag provider is unavailable", nil)
 	}
-	if objectType := linuxFileType(identity.mode); objectType == unix.S_IFDIR || objectType == unix.S_IFREG {
-		if system.getVersion == nil {
-			return linuxOpenObjectIdentity{}, linuxUnsupported(operation,
-				"ext4 inode generation provider is unavailable", nil)
-		}
-		generation, err := system.getVersion(fd)
-		if err != nil {
-			return linuxOpenObjectIdentity{}, linuxUnsupported(operation,
-				"ext4 inode generation is unavailable", err)
-		}
-		if generation == 0 {
-			return linuxOpenObjectIdentity{}, linuxUnsupported(operation,
-				"ext4 returned a zero inode generation", nil)
-		}
-		identity.generation = generation
-		identity.hasGeneration = true
+	flags, err := system.getFlags(fd)
+	if err != nil {
+		return linuxUnsupported(operation, "ext4 directory flags are unavailable", err)
 	}
-	if linuxFileType(identity.mode) == unix.S_IFDIR {
-		if system.getFlags == nil {
-			return linuxOpenObjectIdentity{}, linuxUnsupported(operation,
-				"ext4 inode flag provider is unavailable", nil)
-		}
-		flags, err := system.getFlags(fd)
-		if err != nil {
-			return linuxOpenObjectIdentity{}, linuxUnsupported(operation,
-				"ext4 directory flags are unavailable", err)
-		}
-		if flags&linuxFSCasefoldFlag != 0 {
-			return linuxOpenObjectIdentity{}, linuxUnsupported(operation,
-				"casefold directories are outside the certified byte-exact namespace", nil)
-		}
-		if flags&linuxFSEncryptFlag != 0 {
-			return linuxOpenObjectIdentity{}, linuxUnsupported(operation,
-				"fscrypt directories cannot preserve cross-policy publication and restart authority", nil)
-		}
-		if flags&linuxFSProjectInheritFlag != 0 {
-			return linuxOpenObjectIdentity{}, linuxUnsupported(operation,
-				"project-inheriting directories can reject publication across project identities", nil)
-		}
-		if flags&(linuxFSImmutableFlag|linuxFSAppendFlag) != 0 {
-			return linuxOpenObjectIdentity{}, linuxUnsupported(operation,
-				"immutable or append-only directories cannot satisfy recoverable mutation cuts", nil)
-		}
+	if flags&linuxFSCasefoldFlag != 0 {
+		return linuxUnsupported(operation,
+			"casefold directories are outside the certified byte-exact namespace", nil)
 	}
-	return identity, nil
+	if flags&linuxFSEncryptFlag != 0 {
+		return linuxUnsupported(operation,
+			"fscrypt directories cannot preserve cross-policy publication and restart authority", nil)
+	}
+	if flags&linuxFSProjectInheritFlag != 0 {
+		return linuxUnsupported(operation,
+			"project-inheriting directories can reject publication across project identities", nil)
+	}
+	if flags&(linuxFSImmutableFlag|linuxFSAppendFlag) != 0 {
+		return linuxUnsupported(operation,
+			"immutable or append-only directories cannot satisfy recoverable mutation cuts", nil)
+	}
+	return nil
 }
 
 func linuxGetInodeGeneration(fd int) (uint32, error) {
-	// FS_IOC_GETVERSION is encoded with the native C long width. Restricting the
-	// calculation to the generic Linux ioctl layout is part of this backend's
-	// fail-closed certification; unsupported architectures fail the ioctl rather
-	// than silently dropping the incarnation component.
 	request := linuxReadLongIOCTL('v', 1)
-	value, err := unix.IoctlGetInt(fd, request)
-	if err != nil {
-		return 0, err
-	}
-	return uint32(value), nil
+	return unix.IoctlGetUint32(fd, request)
 }
 
 func linuxGetInodeFlags(fd int) (uint32, error) {
-	value, err := unix.IoctlGetInt(fd, linuxReadLongIOCTL('f', 1))
-	if err != nil {
-		return 0, err
-	}
-	return uint32(value), nil
+	return unix.IoctlGetUint32(fd, linuxReadLongIOCTL('f', 1))
 }
 
-func linuxVerifyInodeGenerationLocked(fd int) error {
-	// ext4 rejects SETVERSION with ENOTTY before reading the user pointer when
-	// metadata_csum protects i_generation. A deliberately invalid pointer thus
-	// distinguishes a checksum-protected superblock from legacy ext4 without
-	// changing the selected root: mutable legacy generations reach copy_from_user
-	// and fail with EFAULT instead.
-	request := linuxWriteLongIOCTL('v', 2)
-	const deliberatelyInvalidUserPointer = uintptr(1)
+type linuxFilesystemUUIDResponse struct {
+	length uint8
+	uuid   [linuxFilesystemUUIDBytes]byte
+}
+
+func linuxGetFilesystemUUID(fd int) ([linuxFilesystemUUIDBytes]byte, error) {
+	response := linuxFilesystemUUIDResponse{}
+	request := linuxReadSizedIOCTL(0x15, 0, linuxFilesystemUUIDResponseBytes)
 	_, _, errno := unix.Syscall(
-		unix.SYS_IOCTL, uintptr(fd), uintptr(request), deliberatelyInvalidUserPointer,
+		unix.SYS_IOCTL, uintptr(fd), uintptr(request), uintptr(unsafe.Pointer(&response)),
 	)
-	if errno == unix.ENOTTY {
-		return nil
+	if errno != 0 {
+		return [linuxFilesystemUUIDBytes]byte{}, errno
 	}
-	if errno == 0 {
-		return errors.New("ext4 SETVERSION unexpectedly accepted an invalid user pointer")
+	if response.length != linuxFilesystemUUIDBytes {
+		return [linuxFilesystemUUIDBytes]byte{}, fmt.Errorf(
+			"filesystem UUID length is %d, want %d", response.length, linuxFilesystemUUIDBytes,
+		)
 	}
-	return errno
+	if response.uuid == [linuxFilesystemUUIDBytes]byte{} {
+		return [linuxFilesystemUUIDBytes]byte{}, errors.New("filesystem UUID is all zero")
+	}
+	return response.uuid, nil
 }
 
 func linuxReadLongIOCTL(kind byte, number uint) uint {
-	const (
-		linuxIOCRead      = uint(2)
-		linuxIOCDirection = uint(30)
-		linuxIOCSize      = uint(16)
-		linuxIOCType      = uint(8)
-	)
-	return linuxIOCRead<<linuxIOCDirection |
-		uint(unsafe.Sizeof(uintptr(0)))<<linuxIOCSize |
-		uint(kind)<<linuxIOCType | number
+	return linuxReadSizedIOCTL(uint(kind), number, uint(unsafe.Sizeof(uintptr(0))))
 }
 
-func linuxWriteLongIOCTL(kind byte, number uint) uint {
+func linuxReadSizedIOCTL(kind, number, size uint) uint {
 	const (
-		linuxIOCWrite     = uint(1)
-		linuxIOCDirection = uint(30)
-		linuxIOCSize      = uint(16)
-		linuxIOCType      = uint(8)
+		linuxIOCDirectionMask = uint(0xe0000000)
+		linuxIOCSizeShift     = uint(16)
+		linuxIOCTypeShift     = uint(8)
 	)
-	return linuxIOCWrite<<linuxIOCDirection |
-		uint(unsafe.Sizeof(uintptr(0)))<<linuxIOCSize |
-		uint(kind)<<linuxIOCType | number
+	// FS_IOC_GETFLAGS supplies the architecture's native _IOR direction bits;
+	// mips, powerpc, and sparc do not use the generic Linux direction encoding.
+	readDirection := uint(unix.FS_IOC_GETFLAGS) & linuxIOCDirectionMask
+	return readDirection | size<<linuxIOCSizeShift | kind<<linuxIOCTypeShift | number
 }
 
 func linuxVerifyOpenObject(
 	system *linuxOutputSystem,
 	fd int,
 	certificate linuxOutputCertificate,
-) (linuxOpenObjectIdentity, error) {
+) (linuxOpenHandleFacts, error) {
 	const operation = "verify open output object"
-	if !certificate.generationSpoofLocked {
-		return linuxOpenObjectIdentity{}, linuxUnsupported(operation,
-			"certified mount does not lock ext4 inode generations", nil)
-	}
-	identity, err := linuxStatxOpenObject(system, fd, unix.STATX_MNT_ID_UNIQUE)
+	identity, err := linuxReadOpenHandleFacts(system, fd, unix.STATX_MNT_ID_UNIQUE)
 	if err != nil {
-		return linuxOpenObjectIdentity{}, err
+		return linuxOpenHandleFacts{}, err
 	}
 	var filesystem unix.Statfs_t
 	if err := system.fstatfs(fd, &filesystem); err != nil {
-		return linuxOpenObjectIdentity{}, fmt.Errorf("%s: inspect filesystem: %w", operation, err)
+		return linuxOpenHandleFacts{}, fmt.Errorf("%s: inspect filesystem: %w", operation, err)
 	}
 	//nolint:unconvert // Statfs_t.Type is int32 on supported 32-bit Linux ABIs.
 	filesystemType := int64(filesystem.Type)
 	mount := certificate.mount
-	if identity.mountID != mount.uniqueMountID ||
-		identity.deviceMajor != mount.deviceMajor || identity.deviceMinor != mount.deviceMinor ||
-		filesystem.Fsid.Val != mount.filesystemID || filesystemType != linuxExt4SuperMagic {
-		return linuxOpenObjectIdentity{}, linuxUnsafe(operation, "object crossed or changed the certified ext4 mount", nil)
+	if identity.identity.mountID != mount.uniqueMountID ||
+		identity.identity.deviceMajor != mount.deviceMajor || identity.identity.deviceMinor != mount.deviceMinor ||
+		filesystem.Fsid.Val != mount.runtimeFilesystemID || filesystemType != linuxExt4SuperMagic {
+		return linuxOpenHandleFacts{}, linuxUnsafe(operation, "object crossed or changed the certified ext4 mount", nil)
+	}
+	if identity.identity.kind == unix.S_IFDIR {
+		if err := linuxVerifyOpenDirectoryFlags(system, fd, operation); err != nil {
+			return linuxOpenHandleFacts{}, err
+		}
 	}
 	return identity, nil
 }

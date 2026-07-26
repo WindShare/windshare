@@ -130,14 +130,14 @@ func TestLinuxExt4RejectsMutationAndProjectInheritanceFlagsBeforeMutation(t *tes
 				t.Skipf("host cannot inspect ext4 inode flags: %v", err)
 			}
 			if err := unix.IoctlSetPointerInt(
-				int(opened.Fd()), linuxWriteLongIOCTL('f', 2), int(original|flag),
+				int(opened.Fd()), unix.FS_IOC_SETFLAGS, int(original|flag),
 			); err != nil {
 				if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.EOPNOTSUPP) {
 					t.Skipf("host cannot install ext4 %s witness: %v", name, err)
 				}
 				t.Fatal(err)
 			}
-			defer unix.IoctlSetPointerInt(int(opened.Fd()), linuxWriteLongIOCTL('f', 2), int(original))
+			defer unix.IoctlSetPointerInt(int(opened.Fd()), unix.FS_IOC_SETFLAGS, int(original))
 			assertLinuxNativeAuthorityRejectsBeforeProbe(
 				t, rootPath, v3RecoverySelection(t, true, 1), nil,
 			)

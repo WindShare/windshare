@@ -19,7 +19,7 @@ type linuxOutputRegularFile struct {
 	system                  *linuxOutputSystem
 	fd                      int
 	certificate             linuxOutputCertificate
-	object                  linuxOpenObjectIdentity
+	object                  linuxOpenHandleIdentity
 	exactPermissions        uint32
 	requireExactPermissions bool
 	writable                bool
@@ -96,7 +96,7 @@ func (directory *linuxOutputDirectory) openDirectoryWithMode(
 		system:                  directory.system,
 		fd:                      fd,
 		certificate:             directory.certificate,
-		object:                  identity,
+		object:                  identity.identity,
 		exactPermissions:        permissions,
 		requireExactPermissions: requireExactMode,
 	}, nil
@@ -240,7 +240,7 @@ func (directory *linuxOutputDirectory) openRegularFileWithMode(
 		system:                  directory.system,
 		fd:                      fd,
 		certificate:             directory.certificate,
-		object:                  identity,
+		object:                  identity.identity,
 		exactPermissions:        permissions,
 		requireExactPermissions: requireExactMode,
 		writable:                writable,
@@ -303,7 +303,7 @@ func (directory *linuxOutputDirectory) createRegularFileExact(
 	if linuxFileType(identity.mode) != unix.S_IFREG {
 		return nil, linuxUnsafe(operation, "exclusive create did not produce a regular file", nil)
 	}
-	created.object = identity
+	created.object = identity.identity
 	authorityFixed = true
 	if err := created.setExactMode(permissions); err != nil {
 		return nil, err

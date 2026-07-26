@@ -57,10 +57,6 @@ func TestLinuxCreateAuthorityRejectsPermissionAndCreateModeInheritance(t *testin
 			root, harness := newLinuxSelectionMetadataRoot(t)
 			installLinuxSafeAuthorityHarness(root.system)
 			test.configure(harness, root.system)
-			if harness.directoryMode != 0 {
-				root.object.mode = harness.directoryMode
-				root.certificate.rootObject.mode = harness.directoryMode
-			}
 			if err := root.validateCreateAuthority(); !errors.Is(err, test.want) {
 				t.Fatalf("create authority error = %v, want %v", err, test.want)
 			}
@@ -107,9 +103,6 @@ func TestLinuxExactPrivateAuthorityRejectsForeignOwnedObjects(t *testing.T) {
 	installLinuxSafeAuthorityHarness(root.system)
 	harness.ownerUID = 2000
 	harness.directoryMode = uint16(unix.S_IFDIR | linuxOutputDirectoryMode)
-	root.object.mode = harness.directoryMode
-	root.object.ownerUID = harness.ownerUID
-	root.certificate.rootObject = root.object
 	root.exactPermissions = linuxOutputDirectoryMode
 	root.requireExactPermissions = true
 	root.system.geteuid = func() int { return 1000 }
@@ -119,11 +112,10 @@ func TestLinuxExactPrivateAuthorityRejectsForeignOwnedObjects(t *testing.T) {
 
 	file := &linuxOutputRegularFile{
 		system: root.system, fd: 11, certificate: root.certificate,
-		object: linuxOpenObjectIdentity{
+		object: linuxOpenHandleIdentity{
 			mountID: linuxTestUniqueMountID, deviceMajor: linuxTestDeviceMajor,
 			deviceMinor: linuxTestDeviceMinor, inode: linuxTestRootInode + 1,
-			mode: uint16(unix.S_IFREG | linuxOutputStateFileMode), ownerUID: harness.ownerUID,
-			generation: linuxTestGeneration + 1, hasGeneration: true,
+			kind: unix.S_IFREG,
 		},
 		exactPermissions: linuxOutputStateFileMode, requireExactPermissions: true,
 	}

@@ -33,14 +33,22 @@ also fixes the public vulnerability database; a finding or operational failure
 fails closed. The workflow requires these native tests to report top-level PASS
 with no skip anywhere in the selected test trees:
 
-- Linux/ext4: `TestLinuxExt4NativeCertification` and
-  `TestLinuxExt4ProcessRestartRecovery`;
+- Linux/ext4: `TestLinuxExt4RestartIdentityRejectsForcedInodeReuse`,
+  `TestLinuxExt4NativeCertification`, and `TestLinuxExt4ProcessRestartRecovery`;
 - Windows/local-NTFS: `TestWindowsNTFSNativeCertification` and
   `TestWindowsNTFSProcessRestartRecovery`.
 
-These tests certify process-restart recovery only. They make no reboot,
-OS-crash, or power-loss durability claim. The workflow has read-only repository
-permission and never creates or pushes a tag or release.
+These tests certify process-restart recovery on the same running kernel and
+mounted volume only. They make no unmount/remount, reboot, OS-crash, or
+power-loss durability claim. The workflow has read-only repository permission
+and never creates or pushes a tag or release.
+
+The Linux gate builds a 128 MiB ext4 image with 1024 inodes, mounts it only in a
+private namespace, and runs the static test binary in a chroot as the receiver
+UID with zero effective capabilities. It exhausts the inode pool and uses
+separate processes to prove 32 delete/recreate cycles reuse the same inode while
+the production root binding rejects every replacement. A skip, missing pass, or
+fixture/lifecycle failure blocks release.
 
 The Windows native tests run as a temporary local standard user, not as the
 elevated hosted-runner account. The worker proves its SID, non-administrator
@@ -58,11 +66,11 @@ bash scripts/ci/core-release.sh v0.3.0 <commit-sha>
 pwsh -NoProfile -File scripts/ci/core-release.ps1 -Version v0.3.0 -CommitSHA <commit-sha>
 ```
 
-The optional `linux-ext4` or `windows-ntfs` native profile is only for a runner
-known to satisfy that filesystem contract; a wrong filesystem, missing test, or
-skip anywhere in either required test tree is a failure. Manual workflow dispatch
-remains available for diagnostics once the workflow exists on the default branch,
-but it does not replace the retained candidate tag required for publication.
+The `linux-ext4` profile constructs its own loop-ext4 fixture; the
+`windows-ntfs` profile requires a local NTFS runner. A wrong filesystem, missing
+test, or skip anywhere in either required test tree is a failure. Manual workflow
+dispatch remains diagnostic only and does not replace the retained candidate tag
+required for publication.
 
 ## Public proxy verification
 
