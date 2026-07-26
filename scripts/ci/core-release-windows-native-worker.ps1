@@ -49,6 +49,20 @@ function Initialize-WritableDirectory([string]$Path, [string]$Label) {
     Assert-WritableExistingDirectory -Path $Path -Label $Label
 }
 
+function Assert-DisjointWindowsNativeRoots(
+    [string]$LeftPath,
+    [string]$LeftLabel,
+    [string]$RightPath,
+    [string]$RightLabel
+) {
+    $directorySeparator = [IO.Path]::DirectorySeparatorChar
+    if ([string]::Equals($LeftPath, $RightPath, [StringComparison]::OrdinalIgnoreCase) -or
+        $LeftPath.StartsWith($RightPath + $directorySeparator, [StringComparison]::OrdinalIgnoreCase) -or
+        $RightPath.StartsWith($LeftPath + $directorySeparator, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$LeftLabel and $RightLabel must be disjoint"
+    }
+}
+
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 $groupSIDs = @($identity.Groups | ForEach-Object { $_.Value })
@@ -102,24 +116,73 @@ $resolvedArtifactRoot = Resolve-WindowsNativeLocalFixedNTFSDirectory `
 $resolvedWorkRoot = Resolve-WindowsNativeLocalFixedNTFSDirectory `
     -Path $WorkRoot `
     -Label 'native worker root'
-$directorySeparator = [IO.Path]::DirectorySeparatorChar
-if ([string]::Equals($resolvedArtifactRoot, $resolvedWorkRoot, [StringComparison]::OrdinalIgnoreCase) -or
-    $resolvedArtifactRoot.StartsWith($resolvedWorkRoot + $directorySeparator, [StringComparison]::OrdinalIgnoreCase) -or
-    $resolvedWorkRoot.StartsWith($resolvedArtifactRoot + $directorySeparator, [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'extracted artifact and writable native worker roots must be disjoint'
-}
-Assert-WindowsNativeReadOnlyDirectory `
-    -Path $resolvedArtifactRoot `
-    -Label 'extracted artifact root'
-Write-Output '-- standard-user NTFS roots and artifact write denial verified'
-
 if (-not [IO.Path]::IsPathFullyQualified($GoExecutable)) {
     throw 'Go executable must be an absolute path'
 }
 $resolvedGoExecutable = [IO.Path]::GetFullPath($GoExecutable)
-if (-not (Test-Path -LiteralPath $resolvedGoExecutable -PathType Leaf)) {
-    throw 'Go executable is not an absolute existing file'
+$goExecutableInfo = [IO.FileInfo]::new($resolvedGoExecutable)
+if ($null -eq $goExecutableInfo.Directory -or
+    $null -eq $goExecutableInfo.Directory.Parent) {
+    throw 'Go executable does not have a GOROOT parent'
 }
+$resolvedGoRoot = Resolve-WindowsNativeLocalFixedNTFSDirectory `
+    -Path $goExecutableInfo.Directory.Parent.FullName `
+    -Label 'staged GOROOT'
+Assert-WindowsNativeTreeHasNoReparsePoints `
+    -RootPath $resolvedGoRoot `
+    -Label 'staged GOROOT'
+$expectedGoExecutable = Join-Path $resolvedGoRoot 'bin\go.exe'
+if (-not (Test-Path -LiteralPath $expectedGoExecutable -PathType Leaf)) {
+    throw 'staged GOROOT has no bin\go.exe'
+}
+$resolvedExpectedGoExecutable = [IO.Path]::GetFullPath(
+    (Resolve-Path -LiteralPath $expectedGoExecutable).Path
+)
+if (-not [string]::Equals(
+    $resolvedGoExecutable,
+    $resolvedExpectedGoExecutable,
+    [StringComparison]::OrdinalIgnoreCase
+)) {
+    throw 'Go executable is not the staged GOROOT bin\go.exe'
+}
+Assert-DisjointWindowsNativeRoots `
+    -LeftPath $resolvedArtifactRoot `
+    -LeftLabel 'extracted artifact root' `
+    -RightPath $resolvedWorkRoot `
+    -RightLabel 'native worker root'
+Assert-DisjointWindowsNativeRoots `
+    -LeftPath $resolvedArtifactRoot `
+    -LeftLabel 'extracted artifact root' `
+    -RightPath $resolvedGoRoot `
+    -RightLabel 'staged GOROOT'
+Assert-DisjointWindowsNativeRoots `
+    -LeftPath $resolvedWorkRoot `
+    -LeftLabel 'native worker root' `
+    -RightPath $resolvedGoRoot `
+    -RightLabel 'staged GOROOT'
+
+$releaseRoot = [IO.Directory]::GetParent($resolvedArtifactRoot)
+if ($null -eq $releaseRoot) {
+    throw 'extracted artifact root has no protected release parent'
+}
+foreach ($rootPath in @($resolvedWorkRoot, $resolvedGoRoot)) {
+    $rootParent = [IO.Directory]::GetParent($rootPath)
+    if ($null -eq $rootParent -or -not [string]::Equals(
+        $rootParent.FullName,
+        $releaseRoot.FullName,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'artifact, worker, and staged GOROOT must be direct siblings in the protected release root'
+    }
+}
+Assert-WindowsNativeReadOnlyDirectory `
+    -Path $resolvedArtifactRoot `
+    -Label 'extracted artifact root'
+Assert-WindowsNativeReadOnlyDirectory `
+    -Path $resolvedGoRoot `
+    -Label 'staged GOROOT'
+Write-Output '-- standard-user NTFS roots, artifact immutability, and staged GOROOT immutability verified'
+
 $goModPath = Join-Path $resolvedArtifactRoot 'go.mod'
 if (-not (Test-Path -LiteralPath $goModPath -PathType Leaf)) {
     throw 'extracted core artifact has no go.mod'
@@ -148,6 +211,7 @@ $env:GOENV = 'off'
 $env:GOFLAGS = ''
 $env:GOTOOLCHAIN = 'local'
 $env:GOWORK = 'off'
+$env:GOROOT = $resolvedGoRoot
 $env:GOPROXY = 'https://proxy.golang.org'
 $env:GOSUMDB = 'sum.golang.org'
 $env:GOPRIVATE = ''
@@ -164,6 +228,26 @@ foreach ($name in @('GOOS', 'GOARCH', 'CGO_ENABLED', 'GOEXPERIMENT')) {
 }
 $env:WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION = 'windows-ntfs'
 
+$reportedGoRootOutput = @(& $resolvedGoExecutable env GOROOT)
+$reportedGoRootExitCode = $LASTEXITCODE
+$reportedGoRootValues = @($reportedGoRootOutput | ForEach-Object {
+    ([string]$_).Trim()
+} | Where-Object {
+    -not [string]::IsNullOrWhiteSpace($_)
+})
+if ($reportedGoRootExitCode -ne 0 -or $reportedGoRootValues.Count -ne 1) {
+    throw "staged GOROOT identity check failed with code $reportedGoRootExitCode"
+}
+$reportedGoRoot = Resolve-WindowsNativeLocalFixedNTFSDirectory `
+    -Path $reportedGoRootValues[0] `
+    -Label 'Go-reported staged GOROOT'
+if (-not [string]::Equals(
+    $reportedGoRoot,
+    $resolvedGoRoot,
+    [StringComparison]::OrdinalIgnoreCase
+)) {
+    throw "Go reported GOROOT $reportedGoRoot, want staged root $resolvedGoRoot"
+}
 $goVersionOutput = @(& $resolvedGoExecutable version 2>&1)
 $goVersionExitCode = $LASTEXITCODE
 if ($goVersionExitCode -ne 0 -or $goVersionOutput.Count -eq 0) {
