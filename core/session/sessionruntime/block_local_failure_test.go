@@ -141,6 +141,10 @@ func captureExactOperationLifecycle(
 	handlerLifecycle func(*SenderRuntime) operationHandlerLifecycle,
 ) exactOperationLifecycle {
 	t.Helper()
+	// The sender can enter its handler before the receiver's physical-send
+	// receipt stores outbound authority. Quiescence makes the snapshot describe
+	// the admitted operation instead of that intentionally transient interval.
+	synctest.Wait()
 	call := onlyActiveCall(t, pair.receiver.rpc)
 	receiverGeneration, authority := call.operationAuthority()
 	senderGeneration, ok := protocolsession.OperationGenerationFromContext(senderContext, call.id)

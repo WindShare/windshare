@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -403,6 +404,10 @@ func TestCompositeRuntimeRenewsAndReleasesLeaseWithInjectedClock(t *testing.T) {
 }
 
 func TestOpenRevisionLocalFailureCompensatesTheRemoteLease(t *testing.T) {
+	synctest.Test(t, testOpenRevisionLocalFailureCompensatesTheRemoteLease)
+}
+
+func testOpenRevisionLocalFailureCompensatesTheRemoteLease(t *testing.T) {
 	fixture := newVerticalFixture(t)
 	released := make(chan content.LeaseID, 1)
 	fixture.contentStore.released = released
@@ -427,6 +432,10 @@ func TestOpenRevisionLocalFailureCompensatesTheRemoteLease(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("local open failure did not release the completed remote lease")
 	}
+	// The peer can receive RELEASE's final frame before the sender returns from
+	// physical delivery and retires its route. Observe the leak invariant only
+	// after those runnable delivery continuations finish.
+	synctest.Wait()
 	receiver.rpc.mu.Lock()
 	callCount := len(receiver.rpc.calls)
 	receiver.rpc.mu.Unlock()
