@@ -41,6 +41,18 @@ function ConvertTo-TestWindowsNativeArgument([string]$Value) {
     } $Value
 }
 
+function New-TestWindowsNativeCoordinatorReleaseRoot(
+    [string]$BasePath,
+    [string]$LeafName
+) {
+    return & $windowsNativeModule {
+        param([string]$RootBase, [string]$RootLeaf)
+        New-WindowsNativeCoordinatorReleaseRootAt `
+            -BasePath $RootBase `
+            -LeafName $RootLeaf
+    } $BasePath $LeafName
+}
+
 function Assert-FileContains([string]$Path, [string]$Expected) {
     $content = [IO.File]::ReadAllText($Path)
     if (-not $content.Contains($Expected, [StringComparison]::Ordinal)) {
@@ -101,6 +113,103 @@ Assert-Throws 'token without Users group' {
         -ExpectedUserSID $ordinarySID `
         -GroupSIDs @('S-1-1-0') `
         -IsAdministrator $false
+}
+
+$canonicalCommonData = Get-WindowsNativeCommonApplicationDataRoot
+$expectedCommonData = [IO.Path]::GetFullPath(
+    (Resolve-Path -LiteralPath ([Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::CommonApplicationData
+    ))).Path
+)
+if (-not [string]::Equals(
+    $canonicalCommonData,
+    $expectedCommonData,
+    [StringComparison]::OrdinalIgnoreCase
+)) {
+    throw 'native release root base is not canonical CommonApplicationData'
+}
+
+$rootContractBase = Join-Path ([IO.Path]::GetTempPath()) (
+    'windshare-native-root-contract-{0}' -f [Guid]::NewGuid().ToString('N')
+)
+New-Item -ItemType Directory -Path $rootContractBase | Out-Null
+$ownedRoot = $null
+try {
+    $ownedLeaf = 'windshare-core-release-{0}' -f [Guid]::NewGuid().ToString('N')
+    $ownedRoot = New-TestWindowsNativeCoordinatorReleaseRoot `
+        -BasePath $rootContractBase `
+        -LeafName $ownedLeaf
+    Assert-WindowsNativeCoordinatorReleaseRoot -Ownership $ownedRoot -RequireEmpty
+    if ($ownedRoot.LeafName -cne $ownedLeaf -or
+        -not [string]::Equals(
+            ([IO.DirectoryInfo]::new($ownedRoot.RootPath)).Parent.FullName,
+            [IO.Path]::GetFullPath($rootContractBase),
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw 'protected native root is not the exact requested direct child'
+    }
+    Assert-ThrowsContaining `
+        'atomic protected-root collision' `
+        'native release root collision' {
+            New-TestWindowsNativeCoordinatorReleaseRoot `
+                -BasePath $rootContractBase `
+                -LeafName $ownedLeaf
+        }
+    if (-not (Test-Path -LiteralPath $ownedRoot.RootPath -PathType Container)) {
+        throw 'collision handling removed the original protected native root'
+    }
+
+    $workerAccessSID = 'S-1-5-32-545'
+    $ownedRoot.WorkerSID = $workerAccessSID
+    $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+    & $icacls $ownedRoot.RootPath '/grant:r' "*${workerAccessSID}:(OI)(CI)RX" '/T' '/Q' | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "worker root-access contract setup failed with code $LASTEXITCODE"
+    }
+    Assert-WindowsNativeCoordinatorReleaseRoot -Ownership $ownedRoot
+
+    [IO.File]::WriteAllText((Join-Path $ownedRoot.RootPath 'cleanup-evidence'), 'owned')
+    Remove-WindowsNativeCoordinatorReleaseRoot -Ownership $ownedRoot
+    if (Test-Path -LiteralPath $ownedRoot.RootPath) {
+        throw 'validated native release root cleanup left its non-empty root behind'
+    }
+    $ownedRoot = $null
+
+    Assert-ThrowsContaining `
+        'malformed owned root leaf' `
+        'leaf name does not satisfy' {
+            New-TestWindowsNativeCoordinatorReleaseRoot `
+                -BasePath $rootContractBase `
+                -LeafName 'not-an-owned-release-root'
+        }
+
+    $nestedParent = Join-Path $rootContractBase 'nested'
+    New-Item -ItemType Directory -Path $nestedParent | Out-Null
+    $nestedLeaf = 'windshare-core-release-{0}' -f [Guid]::NewGuid().ToString('N')
+    $nestedPath = Join-Path $nestedParent $nestedLeaf
+    New-Item -ItemType Directory -Path $nestedPath | Out-Null
+    $forgedOwnership = [pscustomobject]@{
+        BasePath = [IO.Path]::GetFullPath($rootContractBase)
+        RootPath = [IO.Path]::GetFullPath($nestedPath)
+        LeafName = $nestedLeaf
+        CoordinatorSID = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        WorkerSID = ''
+    }
+    Assert-ThrowsContaining `
+        'nested cleanup target' `
+        'not a direct child' {
+            Remove-WindowsNativeCoordinatorReleaseRoot -Ownership $forgedOwnership
+        }
+    if (-not (Test-Path -LiteralPath $nestedPath -PathType Container)) {
+        throw 'failed-closed cleanup removed a forged nested target'
+    }
+} finally {
+    if ($null -ne $ownedRoot -and (Test-Path -LiteralPath $ownedRoot.RootPath)) {
+        Remove-Item -LiteralPath $ownedRoot.RootPath -Recurse -Force
+    }
+    if (Test-Path -LiteralPath $rootContractBase) {
+        Remove-Item -LiteralPath $rootContractBase -Recurse -Force
+    }
 }
 
 $credentialCommandLineMaximumCharacters = 1023
@@ -414,6 +523,24 @@ Assert-FileContains `
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
     -Expected '-ArgumentList $workerArgumentLine'
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected '-LoadUserProfile'
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected '-UseNewEnvironment'
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected 'New-WindowsNativeCoordinatorReleaseRoot'
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected 'Wait-EphemeralWindowsUserProfileUnload'
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected "-Permission M"
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected 'Deny-EphemeralWindowsUserArtifactMutation'
 Assert-FileDoesNotContain `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
     -Forbidden '-EncodedCommand'
@@ -433,6 +560,84 @@ Assert-FileDoesNotContain `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
     -Forbidden 'GO_TEST_COVERAGE'
 
+$releaseScriptPath = Join-Path $PSScriptRoot 'core-release.ps1'
+$releaseScript = [IO.File]::ReadAllText($releaseScriptPath)
+$nativeGateIndex = $releaseScript.LastIndexOf(
+    'Invoke-RequiredWindowsNativeTestsAsStandardUser',
+    [StringComparison]::Ordinal
+)
+$vulnerabilityIndex = $releaseScript.IndexOf(
+    "Invoke-Step 'version-pinned govulncheck (extracted core)'",
+    [StringComparison]::Ordinal
+)
+$ordinaryTestIndex = $releaseScript.IndexOf(
+    "Invoke-Step 'GOWORK=off go test ./... (extracted core)'",
+    [StringComparison]::Ordinal
+)
+$raceTestIndex = $releaseScript.IndexOf(
+    "Invoke-Step 'GOWORK=off go test -race ./... (extracted core)'",
+    [StringComparison]::Ordinal
+)
+$coverageTestIndex = $releaseScript.IndexOf(
+    "Invoke-Step 'GOWORK=off go test with coverage (extracted core)'",
+    [StringComparison]::Ordinal
+)
+if ($vulnerabilityIndex -lt 0 -or
+    $nativeGateIndex -le $vulnerabilityIndex -or
+    $ordinaryTestIndex -le $nativeGateIndex -or
+    $raceTestIndex -le $nativeGateIndex -or
+    $coverageTestIndex -le $nativeGateIndex) {
+    throw 'Windows native gate is not fail-fast after artifact build/vulnerability verification and before ordinary test evidence'
+}
+$profileWaitIndex = $releaseScript.IndexOf(
+    'Wait-EphemeralWindowsUserProfileUnload -UserSID $UserSID',
+    [StringComparison]::Ordinal
+)
+$userRemovalIndex = $releaseScript.IndexOf(
+    'Remove-LocalUser -Name $UserName',
+    [StringComparison]::Ordinal
+)
+if ($profileWaitIndex -lt 0 -or
+    $userRemovalIndex -lt 0 -or
+    $profileWaitIndex -ge $userRemovalIndex) {
+    throw 'bounded profile-unload wait does not precede ephemeral user deletion'
+}
+
+$nativeModulePath = Join-Path $PSScriptRoot 'core-release-windows-native.psm1'
+foreach ($requiredModuleText in @(
+    'CreateDirectoryW',
+    'CreateExclusive',
+    'SetAccessRuleProtection($true, $false)',
+    '[Environment+SpecialFolder]::CommonApplicationData',
+    'CoordinatorReleaseRootLeafPattern',
+    'Assert-WindowsNativeCoordinatorReleaseRoot -Ownership $Ownership'
+)) {
+    Assert-FileContains -Path $nativeModulePath -Expected $requiredModuleText
+}
+$nativeModuleSource = [IO.File]::ReadAllText($nativeModulePath)
+$interopInitializerIndex = $nativeModuleSource.IndexOf(
+    'function Initialize-WindowsNativeDirectoryInterop',
+    [StringComparison]::Ordinal
+)
+$addTypeIndex = $nativeModuleSource.IndexOf(
+    'Add-Type -TypeDefinition',
+    [StringComparison]::Ordinal
+)
+$nextFunctionIndex = $nativeModuleSource.IndexOf(
+    'function Resolve-WindowsNativeLocalFixedNTFSDirectory',
+    [StringComparison]::Ordinal
+)
+$interopCallIndex = $nativeModuleSource.LastIndexOf(
+    'Initialize-WindowsNativeDirectoryInterop',
+    [StringComparison]::Ordinal
+)
+if ($interopInitializerIndex -lt 0 -or
+    $addTypeIndex -le $interopInitializerIndex -or
+    $nextFunctionIndex -le $addTypeIndex -or
+    $interopCallIndex -le $nextFunctionIndex) {
+    throw 'CreateDirectoryW interop is not lazy and coordinator-root scoped'
+}
+
 $nativeWorkerPath = Join-Path $PSScriptRoot 'core-release-windows-native-worker.ps1'
 foreach ($requiredWorkerText in @(
     "`$coreSuiteTestTimeout = '30m'",
@@ -444,6 +649,15 @@ foreach ($requiredWorkerText in @(
     "`$env:GONOPROXY = ''",
     "`$env:GOINSECURE = ''",
     "`$env:GOTELEMETRY = 'off'",
+    '[Environment+SpecialFolder]::UserProfile',
+    '$env:USERPROFILE = $resolvedUserProfile',
+    '$env:HOME = $resolvedUserProfile',
+    '$env:HOMEDRIVE = $homeDrive',
+    '$env:HOMEPATH = $homePath',
+    '$env:GOTMPDIR = $goTempRoot',
+    '-- standard-user profile and identity environment verified',
+    '-- standard-user NTFS roots and artifact write denial verified',
+    '-- standard-user Go toolchain verified:',
     "@('GOOS', 'GOARCH', 'CGO_ENABLED', 'GOEXPERIMENT')"
 )) {
     Assert-FileContains -Path $nativeWorkerPath -Expected $requiredWorkerText
