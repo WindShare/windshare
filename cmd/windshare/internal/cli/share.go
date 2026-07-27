@@ -272,11 +272,16 @@ func (a *App) serveSessions(
 				a.logf("share: rejected receiver session: missing admitted runtime")
 				return
 			}
+			sessionID := runtime.ProtocolSessionID()
 			<-runtime.Done()
 			if err := runtime.Err(); err != nil && ctx.Err() == nil {
 				a.logf("share: receiver session ended: %v", err)
 			}
 			runtime.Close()
+			// Close joins composite cleanup and factory removal. Publishing retirement
+			// after that cut distinguishes a peer that merely completed its local work
+			// from one whose sender-side transport authority is fully retired.
+			a.logf("share: receiver session retired session_id=%x", sessionID.Bytes())
 		}()
 	}
 }

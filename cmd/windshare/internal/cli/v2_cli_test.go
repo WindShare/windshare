@@ -164,6 +164,10 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 			t.Fatalf("get %d exit=%d stderr=%q", index, code, getErrors.String())
 		}
 	}
+	// Receiver success and sender-side channel retirement are intentionally
+	// asynchronous. Stop only after both completed sessions have relinquished
+	// sender authority, so this test isolates the durable relay STOP contract.
+	waitTestLineCount(t, stderr, "share: receiver session retired ", 2)
 	cancelShare()
 	select {
 	case code := <-result:
@@ -215,6 +219,24 @@ func waitTestLine(t *testing.T, output *lockedTestBuffer, prefix string) string 
 	}
 	t.Fatalf("timed out waiting for %q in %q", prefix, output.String())
 	return ""
+}
+
+func waitTestLineCount(t *testing.T, output *lockedTestBuffer, prefix string, count int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		matched := 0
+		for line := range strings.SplitSeq(output.String(), "\n") {
+			if strings.HasPrefix(line, prefix) {
+				matched++
+			}
+		}
+		if matched >= count {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d %q lines in %q", count, prefix, output.String())
 }
 
 type memoryStopStore struct {
