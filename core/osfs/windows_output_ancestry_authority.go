@@ -54,6 +54,16 @@ func (verifier windowsV3NativeAncestryAuthorityVerifier) Verify(handle windows.H
 	return windowsV3VerifyAncestryAuthorityDescriptor(descriptor, verifier.policy)
 }
 
+func windowsV3IsAdministratorAccount(sid *windows.SID) bool {
+	if sid == nil || !sid.IsValid() {
+		return false
+	}
+	// The account name and account-domain components can vary, so only the
+	// native well-known-SID classifier can identify the privileged RID-500
+	// account without broad suffix matching or name resolution.
+	return sid.IsWellKnown(windows.WinAccountAdministratorSid)
+}
+
 func (policy *windowsV3PrivatePolicy) ancestryExempts(sid *windows.SID) bool {
 	if policy == nil || sid == nil {
 		return false
@@ -61,7 +71,8 @@ func (policy *windowsV3PrivatePolicy) ancestryExempts(sid *windows.SID) bool {
 	return policy.userSID != nil && sid.Equals(policy.userSID) ||
 		policy.systemSID != nil && sid.Equals(policy.systemSID) ||
 		policy.administratorsSID != nil && sid.Equals(policy.administratorsSID) ||
-		policy.trustedInstallerSID != nil && sid.Equals(policy.trustedInstallerSID)
+		policy.trustedInstallerSID != nil && sid.Equals(policy.trustedInstallerSID) ||
+		windowsV3IsAdministratorAccount(sid)
 }
 
 func windowsV3VerifyAncestryAuthorityDescriptor(

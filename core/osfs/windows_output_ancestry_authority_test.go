@@ -116,6 +116,73 @@ func TestWindowsV3AncestryAuthorityRejectsCrossPrincipalMutation(t *testing.T) {
 	}
 }
 
+func TestWindowsV3AncestryAuthorityClassifiesAdministratorAccountByNativeSID(t *testing.T) {
+	if windowsV3IsAdministratorAccount(nil) || windowsV3IsAdministratorAccount(new(windows.SID)) {
+		t.Fatal("an absent or invalid SID was classified as an Administrator account")
+	}
+	policy, err := newWindowsV3PrivatePolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountDomain, err := windows.StringToSid("S-1-5-21-111111111-222222222-333333333")
+	if err != nil {
+		t.Fatal(err)
+	}
+	administrator, err := windows.CreateWellKnownDomainSid(windows.WinAccountAdministratorSid, accountDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest, err := windows.CreateWellKnownDomainSid(windows.WinAccountGuestSid, accountDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extraSubauthority, err := windows.StringToSid("S-1-5-21-1-2-3-4-500")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		sid    *windows.SID
+		exempt bool
+	}{
+		{name: "administrator account", sid: administrator, exempt: true},
+		{name: "administrator group", sid: policy.administratorsSID, exempt: true},
+		{name: "ordinary account", sid: guest, exempt: false},
+		{name: "suffix lookalike", sid: extraSubauthority, exempt: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := policy.ancestryExempts(test.sid); got != test.exempt {
+				t.Fatalf("ancestry exemption = %t, want %t for %s", got, test.exempt, test.sid.String())
+			}
+		})
+	}
+
+	dangerous := fmt.Sprintf("0x%08x", uint32(windowsV3AncestryMutationRights))
+	allow := func(sid *windows.SID) string {
+		return fmt.Sprintf("(A;;%s;;;%s)", dangerous, sid.String())
+	}
+	privilegedDescriptor := windowsV3TestSecurityDescriptor(
+		t,
+		administrator,
+		allow(administrator),
+	)
+	if err := windowsV3VerifyAncestryAuthorityDescriptor(privilegedDescriptor, policy); err != nil {
+		t.Fatalf("Administrator ancestry authority was rejected: %v", err)
+	}
+	ordinaryOwner := windowsV3TestSecurityDescriptor(t, guest, "")
+	if err := windowsV3VerifyAncestryAuthorityDescriptor(ordinaryOwner, policy); err == nil {
+		t.Fatal("ordinary ancestry owner was accepted")
+	}
+	ordinaryTrustee := windowsV3TestSecurityDescriptor(
+		t,
+		policy.userSID,
+		allow(guest),
+	)
+	if err := windowsV3VerifyAncestryAuthorityDescriptor(ordinaryTrustee, policy); err == nil {
+		t.Fatal("ordinary ancestry mutation authority was accepted")
+	}
+}
+
 func TestWindowsV3AncestryAuthorityFailsClosedOnAmbiguousACLs(t *testing.T) {
 	policy, err := newWindowsV3PrivatePolicy()
 	if err != nil {
