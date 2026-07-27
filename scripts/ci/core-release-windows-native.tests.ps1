@@ -796,7 +796,13 @@ Assert-FileContains `
     -Expected 'Wait-EphemeralWindowsUserProfileUnload'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
-    -Expected "-Permission M"
+    -Expected "[ValidateSet('RX', 'M,DC')]"
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected "-Permission 'M,DC'"
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected 'FILE_DELETE_CHILD'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
     -Expected 'Set-WindowsNativeTreeMutationDeny'

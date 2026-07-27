@@ -116,7 +116,7 @@ function New-EphemeralWindowsUserPassword {
 function Grant-EphemeralWindowsUserAccess(
     [string]$Path,
     [string]$UserSID,
-    [ValidateSet('RX', 'M')]
+    [ValidateSet('RX', 'M,DC')]
     [string]$Permission
 ) {
     $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
@@ -277,7 +277,10 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
             $artifactMutationDeny.EntryCount,
             $toolchainMutationDeny.EntryCount
         ))
-        Grant-EphemeralWindowsUserAccess -Path $workerRoot -UserSID $userSID -Permission M
+        # The output root opens a directory handle with FILE_DELETE_CHILD.  icacls
+        # Modify does not imply that directory right, so grant it explicitly while
+        # keeping the broader release root and immutable trees read/execute-only.
+        Grant-EphemeralWindowsUserAccess -Path $workerRoot -UserSID $userSID -Permission 'M,DC'
 
         $powershellExecutable = [IO.Path]::GetFullPath((Get-Process -Id $PID).Path)
         $workerScript = Join-Path $workerRoot 'core-release-windows-native-worker.ps1'
