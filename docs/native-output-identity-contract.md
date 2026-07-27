@@ -1,6 +1,6 @@
 # Native filesystem output ownership and resume contract
 
-Status: implemented candidate. Certification is limited to process-restart durability on Linux/ext4 and Windows/local NTFS; no power-loss durability is claimed. Browser output has a separate design.
+Status: implemented in `core/v0.3.0`. Certification is limited to process-restart durability on Linux/ext4 and Windows/local NTFS; no power-loss durability is claimed. Browser output has a separate design.
 
 ## Product and durability contract
 
@@ -29,7 +29,7 @@ Process-restart durability covers receiver termination while the kernel and moun
 
 Unknown platforms, non-allowlisted filesystems, network filesystems, FUSE, cloud-placeholder namespaces, Windows remote volumes, reparse-based roots, and nested mounts are rejected. There is no silent non-recoverable fallback.
 
-Recovery state does not expire automatically. The CLI must provide resume list and explicit resume discard. A second interrupt exits immediately and is recovered as a process-crash cut.
+Recovery state does not expire automatically. `windshare resume list [-o <directory>]` reports a fresh inventory. `windshare resume discard -o <directory> --item <number>` lists again, previews that current item on the prompt stream, and removes it only after the user types the exact displayed `discard N` confirmation. Both confirmation input and preview/prompt output must be interactive terminals; redirection is rejected before inventory opens. Item numbers are ephemeral, no serialized reference or bulk/automatic discard is accepted, and a second interrupt exits immediately and is recovered as a process-crash cut.
 
 ## Identity and threat boundary
 
@@ -314,7 +314,7 @@ ListResumeState(context.Context, FilesystemResumeRoot) (*ResumeStateInventory, e
 DiscardResumeState(context.Context, ResumeStateRef) (DiscardSettlement, error)
 ~~~
 
-FilesystemOutputAuthorityConfig owns the root path and create-root policy. Its OpenSelection receives only the terminal OutputSelection already bound to CanonicalSelectionV1, performs certification and whole-selection admission, and returns an OutputSession only after the native session is ready. ResumeStateInventory owns the fixed native entry pins for one inventory and must be closed. Each ResumeStateRef is only an opaque item ID bound to that live inventory; Discard consumes it exactly once and never accepts an arbitrary or serialized internal path. DiscardSettlement reports Discarded or AlreadyAbsent and the removed internal byte count.
+FilesystemOutputAuthorityConfig owns the root path and create-root policy. Its OpenSelection receives only the terminal OutputSelection already bound to CanonicalSelectionV1, performs certification and whole-selection admission, and returns an OutputSession only after the native session is ready. ResumeStateInventory owns the fixed native entry pins for one inventory and must be closed. Each ResumeStateRef is only an opaque item ID bound to that live inventory; Discard consumes it exactly once and never accepts an arbitrary or serialized internal path. The CLI therefore keeps the freshly listed inventory open across preview, confirmation, and discard, then closes it exactly once; it never reconstructs a reference or removes an internal path directly. DiscardSettlement reports Discarded or AlreadyAbsent and the removed internal byte count.
 
 ## File protocol
 

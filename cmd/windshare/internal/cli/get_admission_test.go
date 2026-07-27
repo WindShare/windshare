@@ -17,10 +17,31 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 )
 
-type immediateSmallCatalog struct{}
+type immediateSmallCatalog struct {
+	share catalog.ShareInstance
+	root  catalog.DirectoryID
+}
 
-func (immediateSmallCatalog) LoadDirectory(context.Context, catalog.DirectoryID) (catalog.DirectorySnapshot, error) {
-	return catalog.DirectorySnapshot{}, errors.New("empty selection must not load catalog")
+func (source immediateSmallCatalog) LoadDirectory(
+	_ context.Context,
+	directory catalog.DirectoryID,
+) (catalog.DirectorySnapshot, error) {
+	if directory != source.root {
+		return catalog.DirectorySnapshot{}, errors.New("empty selection walked outside its synthetic root")
+	}
+	var generation catalog.DirectoryGeneration
+	generation[0] = 1
+	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+		ShareInstance: source.share, DirectoryID: directory, Generation: generation, Terminal: true,
+	}, catalog.PageCommitterFunc(func(catalog.PageCommitInput) (catalog.PageCommitment, error) {
+		raw := make([]byte, catalog.PageCommitmentBytes)
+		raw[0] = 1
+		return catalog.NewPageCommitment(raw)
+	}))
+	if err != nil {
+		return catalog.DirectorySnapshot{}, err
+	}
+	return catalog.NewDirectorySnapshot([]catalog.CatalogPage{page})
 }
 
 func (source immediateSmallCatalog) AcquireDirectory(
@@ -50,7 +71,7 @@ func (immediateSmallBlocks) ReadRange(
 	return errors.New("empty selection must not read blocks")
 }
 
-func TestClassifyTransferAbortSeparatesNetworkAndLocalFailures(t *testing.T) {
+func TestClassifyTransferTerminationSeparatesNetworkAndLocalFailures(t *testing.T) {
 	localOutput := errors.New("output commit failed")
 	resource := transfer.NewJobResourceBudgetError(transfer.ErrSelectionIdentityBudget)
 	session := transfer.NewSessionFailure(errors.New("peer session ended"))
@@ -65,19 +86,24 @@ func TestClassifyTransferAbortSeparatesNetworkAndLocalFailures(t *testing.T) {
 		"relay failure":   {cause: localOutput, connectionErr: errors.New("relay closed"), want: ExitNetwork},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := classifyTransferAbort(test.cause, test.runtimeErr, test.connectionErr); got != test.want {
+			if got := classifyTransferTermination(test.cause, test.runtimeErr, test.connectionErr); got != test.want {
 				t.Fatalf("exit=%d want=%d", got, test.want)
 			}
 		})
 	}
 }
 
-type immediateSmallOutput struct {
-	backend transfer.OutputBackendID
-	session transfer.OutputSessionID
+type immediateSmallOutputAuthority struct {
+	session *immediateSmallOutputSession
 }
 
-func newImmediateSmallOutput(t *testing.T) immediateSmallOutput {
+type immediateSmallOutputSession struct {
+	backend      transfer.OutputBackendID
+	session      transfer.OutputSessionID
+	capabilities transfer.OutputCapabilities
+}
+
+func newImmediateSmallOutputAuthority(t *testing.T) *immediateSmallOutputAuthority {
 	t.Helper()
 	backend, err := transfer.NewOutputBackendID("cli-admission-test")
 	if err != nil {
@@ -89,28 +115,54 @@ func newImmediateSmallOutput(t *testing.T) immediateSmallOutput {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return immediateSmallOutput{backend: backend, session: session}
+	capabilities, err := transfer.NewOutputCapabilities(transfer.OutputCapabilities{
+		Mode: transfer.OutputNativeTree, FileFailureIsolation: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &immediateSmallOutputAuthority{session: &immediateSmallOutputSession{
+		backend: backend, session: session, capabilities: capabilities,
+	}}
 }
 
-func (output immediateSmallOutput) BackendID() transfer.OutputBackendID { return output.backend }
-func (output immediateSmallOutput) SessionID() transfer.OutputSessionID { return output.session }
-func (immediateSmallOutput) Capabilities() transfer.OutputCapabilities {
-	return transfer.OutputCapabilities{Mode: transfer.OutputNativeTree, FileFailureIsolation: true}
+func (authority *immediateSmallOutputAuthority) OpenSelection(
+	context.Context,
+	transfer.OutputSelection,
+) (transfer.OutputSession, error) {
+	return authority.session, nil
 }
-func (immediateSmallOutput) EnsureDirectory(context.Context, transfer.OutputDirectory) error {
+
+func (output *immediateSmallOutputSession) BackendID() transfer.OutputBackendID {
+	return output.backend
+}
+func (output *immediateSmallOutputSession) SessionID() transfer.OutputSessionID {
+	return output.session
+}
+func (output *immediateSmallOutputSession) Capabilities() transfer.OutputCapabilities {
+	return output.capabilities
+}
+func (*immediateSmallOutputSession) FinalizeDirectory(context.Context, transfer.OutputDirectory) error {
 	return nil
 }
-func (immediateSmallOutput) FinalizeDirectory(context.Context, transfer.OutputDirectory) error {
-	return nil
-}
-func (immediateSmallOutput) BeginFile(
+func (*immediateSmallOutputSession) BeginFile(
 	context.Context,
 	transfer.OutputFile,
-) (transfer.FileTransaction, transfer.VerifiedDurableRanges, error) {
-	return nil, transfer.VerifiedDurableRanges{}, errors.New("empty selection must not begin files")
+) (transfer.FileStart, error) {
+	return transfer.FileStart{}, errors.New("empty selection must not begin files")
 }
-func (immediateSmallOutput) FinishJob(context.Context, transfer.JobOutcome) error { return nil }
-func (immediateSmallOutput) AbortJob(context.Context, error) error                { return nil }
+func (*immediateSmallOutputSession) PauseJob(
+	context.Context,
+	transfer.JobPauseReason,
+) (transfer.JobSettlement, error) {
+	return transfer.NewJobSettlement(transfer.JobPaused)
+}
+func (*immediateSmallOutputSession) CompleteJob(
+	context.Context,
+	transfer.JobOutcome,
+) (transfer.JobSettlement, error) {
+	return transfer.NewJobSettlement(transfer.JobClosed)
+}
 
 type fakeReceiverAdmissionTimer struct {
 	channel chan time.Time
@@ -258,8 +310,8 @@ func TestRunTransferJobObservesImmediateSmallWithoutSubscriptionRace(t *testing.
 	}
 	job, err := transfer.NewTransferJob(transfer.TransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
-		Catalog: immediateSmallCatalog{}, Revisions: immediateSmallRevisions{},
-		Blocks: immediateSmallBlocks{}, Output: newImmediateSmallOutput(t),
+		Catalog: immediateSmallCatalog{share: share, root: root}, Revisions: immediateSmallRevisions{},
+		Blocks: immediateSmallBlocks{}, Output: newImmediateSmallOutputAuthority(t),
 	})
 	if err != nil {
 		t.Fatal(err)

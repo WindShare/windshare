@@ -42,15 +42,22 @@ type App struct {
 	stderrMu            sync.Mutex
 	receiverPeerFactory func() (receiverPeerStarter, error)
 	receiverClock       receiverAdmissionClock
+	resumeSource        resumeStateSource
+	resumeInteractive   func(io.Reader, io.Writer) bool
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
 // /"中断下载"语义,§6.9)。
 func Main() int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	interrupts := make(chan os.Signal, interruptSignalBuffer)
+	signal.Notify(interrupts, os.Interrupt)
+	defer signal.Stop(interrupts)
 	app := &App{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin}
-	return app.Run(ctx, os.Args[1:])
+	return runCLIWithInterruptEscalation(
+		interrupts,
+		os.Exit,
+		func(ctx context.Context) int { return app.Run(ctx, os.Args[1:]) },
+	)
 }
 
 // Run 分派子命令。stdlib flag 不认子命令,这里手工分派(§6.9 工程要求:
@@ -65,6 +72,8 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		return a.runShare(ctx, args[1:])
 	case "get":
 		return a.runGet(ctx, args[1:])
+	case "resume":
+		return a.runResume(ctx, args[1:])
 	case "help", "-h", "--help":
 		a.usage()
 		return ExitOK
@@ -84,6 +93,12 @@ func (a *App) usage() {
 	  windshare get <link> [-o <directory>] [--only <path>]... [--key <key-string>]
 	      Authenticate the descriptor, browse the progressive catalog, and publish files through a durable output session.
 	      If the link has no key, use --key or enter the key interactively.
+
+	  windshare resume list [-o <directory>]
+	      List recovery state under an output root. Item numbers are valid only for that inventory.
+
+	  windshare resume discard -o <directory> --item <number>
+	      Preview one freshly listed recovery item on the terminal and require exact interactive confirmation before removal.
 `)
 }
 

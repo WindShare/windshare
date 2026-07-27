@@ -77,7 +77,7 @@ function networkExecutablePaths(browserName, executable) {
   }
   if (browserName !== 'chromium') return [executable]
 
-  // Headless Playwright launches the separately pinned shell, which is the Windows firewall identity.
+  // Headless Playwright delegates network work to a separately pinned shell.
   const installation = dirname(dirname(executable))
   const revision = /^chromium-(?<revision>[0-9]+)$/.exec(basename(installation))?.groups?.revision
   if (revision === undefined) {

@@ -158,10 +158,11 @@ func main() {
 // newLoopbackOnlyPeer confines ICE to loopback addresses. The interop suite
 // is strictly localhost — the browser, the Vite server, and this helper all
 // live on 127.0.0.1 — so non-loopback host candidates add nothing, and
-// binding them makes Windows Firewall mint a per-run "Query User" rule pair
-// for the go-run temp executable, which the D5 firewall-ownership preflight
-// rejects. mDNS is disabled for the same reason: its responder binds a
-// wildcard UDP socket. Loopback-only sockets never enter the consent flow.
+// non-loopback bindings needlessly expose the helper to host interfaces and may
+// trigger host-owned firewall consent UI. That UI and firewall state are outside
+// the test verdict; limiting the helper to its real trust boundary also keeps
+// normal execution independent of either. mDNS is disabled because its responder
+// binds a wildcard UDP socket. Loopback-only sockets avoid that extra exposure.
 // Compare benchmarkLoopbackAPI in transport/webrtc/performance_test.go.
 func newLoopbackOnlyPeer() (*pion.PeerConnection, error) {
 	var setting pion.SettingEngine

@@ -10,6 +10,7 @@ cd "$(dirname "$0")/../.."
 
 # Same pinned gate tool as ci.yml (env GO_TEST_COVERAGE).
 GO_TEST_COVERAGE='github.com/vladopajic/go-test-coverage/v2@v2.18.8'
+core_suite_test_timeout='30m'
 
 SECONDS=0
 echo "== coverage =="
@@ -23,7 +24,8 @@ echo "-- root coverage gate (total >=80%, package >=70%)"
 go run "$GO_TEST_COVERAGE" --config=.testcoverage.yml --profile="$profile_dir/root.cover.out"
 
 echo "-- core module coverage tests"
-go -C core test -count=1 ./... -covermode=atomic -coverprofile="$profile_dir/core.cover.out"
+go -C core test -count=1 -timeout="$core_suite_test_timeout" ./... \
+  -covermode=atomic -coverprofile="$profile_dir/core.cover.out"
 echo "-- core coverage gate (total >=90%, package >=70%)"
 (cd core && go run "$GO_TEST_COVERAGE" --config=.testcoverage.yml --profile="$profile_dir/core.cover.out")
 

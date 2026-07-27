@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
+	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -21,8 +24,9 @@ import (
 )
 
 const (
-	getJoinWindow       = 10 * time.Second
-	getProgressInterval = 500 * time.Millisecond
+	getJoinWindow                  = 10 * time.Second
+	getProgressInterval            = 500 * time.Millisecond
+	outputTraceIdentityPrefixBytes = 8
 )
 
 type getRequest struct {
@@ -35,6 +39,19 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	request, code := a.parseGetRequest(args)
 	if code != ExitOK {
 		return code
+	}
+	outputRoot, err := filepath.Abs(request.outDir)
+	if err != nil {
+		a.logf("get: resolve output directory: %v", err)
+		return ExitFailure
+	}
+	output, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{
+		RootPath: outputRoot, CreateRoot: true,
+		Tracer: osfs.FilesystemOutputTraceFunc(a.traceFilesystemOutput),
+	})
+	if err != nil {
+		a.logf("get: initialize output authority: %v", err)
+		return ExitFailure
 	}
 	connection, code := a.dialV2Receiver(ctx, request.link)
 	if code != ExitOK {
@@ -103,20 +120,8 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 		a.logf("get: resolve selection: %v", err)
 		return ExitUsage
 	}
-	output, err := prepared.OpenOutput(ctx, request.outDir)
+	job, err := runtime.NewTransferJob(rules, output)
 	if err != nil {
-		a.logf("get: open durable output session: %v", err)
-		return ExitFailure
-	}
-	if output.Reopened {
-		a.logf("get: resumed a durable output session")
-	}
-	if output.Quarantined > 0 {
-		a.logf("get: quarantined %d unrelated or corrupt output journal(s)", output.Quarantined)
-	}
-	job, err := runtime.NewTransferJob(rules, output.Session)
-	if err != nil {
-		_ = output.Session.AbortJob(context.Background(), err)
 		a.logf("get: initialize transfer: %v", err)
 		return ExitFailure
 	}
@@ -130,6 +135,62 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	admission.Wait()
 	<-admissionMonitorDone
 	return a.reportTransferResultWithAdmission(ctx, runtime, connection, result, admission.Err())
+}
+
+// Native output emits dense per-file lifecycle traces. The CLI keeps recovery,
+// attention, and failure boundaries while suppressing routine publish noise so
+// diagnostics stay reconstructable without turning a large transfer into a log.
+func (a *App) traceFilesystemOutput(event osfs.FilesystemOutputTrace) {
+	if !shouldLogFilesystemOutputTrace(event) {
+		return
+	}
+	intent := outputTraceIdentity(event.ResumeIntent.Bytes())
+	session := outputTraceIdentity(event.SessionID.Bytes())
+	locator := outputTraceIdentity(event.LocatorDigest[:])
+	a.logf(
+		"get: output trace operation=%d resume_intent=%s session=%s locator=%s certification=%q recovery_action=%q file_settlement=%s job_settlement=%s quarantine_reason=%d ancestry_boundary=%d ancestry_decision=%d ancestry_claims=%d native_lock_scope=%d native_lock_milestone=%d state_install_stage=%d state_generation=%d failure_scope=%d failure_code=%d mutation_failure=%t parent_sync_failure=%t failed=%t",
+		event.Operation, intent, session, locator, event.Certification, event.RecoveryAction.String(),
+		fileSettlementName(event.FileSettlement), jobSettlementName(event.JobSettlement), event.QuarantineReason,
+		event.AncestryBoundary, event.AncestryDecision, event.AncestryClaimCount,
+		event.NativeLockScope, event.NativeLockMilestone, event.StateInstallStage, event.StateGeneration,
+		event.FailureScope, event.FailureCode, event.MutationReportedFailure,
+		event.ParentSyncReportedFailure, event.Failed,
+	)
+}
+
+func shouldLogFilesystemOutputTrace(event osfs.FilesystemOutputTrace) bool {
+	if event.Failed {
+		return true
+	}
+	switch event.Operation {
+	case osfs.TraceFilesystemCertified, osfs.TraceSessionOpened,
+		osfs.TraceSessionSettlement, osfs.TraceStateInstallCutAdopted:
+		return true
+	case osfs.TraceFileRecoveryDecision:
+		return event.RecoveryAction == osfs.FilesystemOutputRecoveryResumeContent ||
+			event.RecoveryAction == osfs.FilesystemOutputRecoveryInstallQuarantine ||
+			event.RecoveryAction == osfs.FilesystemOutputRecoveryHoldQuarantine
+	case osfs.TraceFileSettlement:
+		return event.FileSettlement != transfer.FilePublished
+	case osfs.TraceNativeLock:
+		return event.NativeLockMilestone == osfs.FilesystemOutputNativeLockContended
+	default:
+		return false
+	}
+}
+
+func outputTraceIdentity(raw []byte) string {
+	nonzero := false
+	for _, value := range raw {
+		nonzero = nonzero || value != 0
+	}
+	if !nonzero {
+		return "-"
+	}
+	if len(raw) > outputTraceIdentityPrefixBytes {
+		raw = raw[:outputTraceIdentityPrefixBytes]
+	}
+	return hex.EncodeToString(raw)
 }
 
 func (a *App) parseGetRequest(args []string) (getRequest, int) {
@@ -278,23 +339,56 @@ func (a *App) reportTransferResultWithAdmission(
 	admissionErr error,
 ) int {
 	for _, failure := range result.Directories {
-		a.logf("get: directory %q failed at stage %d: %v", failure.Path, failure.Stage, failure.Err)
+		a.logf("get: directory %q failed at stage %d: %v", failure.Path, failure.Stage, failure.Cause)
 	}
 	for _, failure := range result.Files {
-		a.logf("get: file %q failed at stage %d: %v", failure.Path, failure.Stage, failure.Err)
+		a.logf(
+			"get: file %q failed at stage %d settlement=%s: %v",
+			failure.Path, failure.Stage, fileSettlementName(failure.Settlement.Kind()), failure.Cause,
+		)
+		if failure.SettlementFailure != nil {
+			a.logf("get: file %q output settlement failed: %v", failure.Path, failure.SettlementFailure)
+		}
+		if failure.LeaseReleaseFailure != nil {
+			a.logf("get: file %q revision lease release failed: %v", failure.Path, failure.LeaseReleaseFailure)
+		}
+	}
+	if result.SettlementFailure != nil {
+		a.logf("get: durable output settlement failed: %v", result.SettlementFailure)
+	}
+	switch result.Settlement.Kind() {
+	case transfer.JobPaused:
+		a.logf("get: transfer paused; verified progress was retained")
+	case transfer.JobPausedNeedsAttention:
+		a.logf("get: durable output state was retained and needs attention")
 	}
 	switch result.Outcome {
 	case transfer.JobSucceeded:
+		if result.TerminationCause != nil || result.SettlementFailure != nil {
+			a.logf("get: transfer returned success with terminal failure state")
+			return ExitFailure
+		}
 		a.logf("get: completed %d file(s), %d byte(s)", result.SucceededFiles, result.Measure.DiscoveredBytes)
+		if result.Settlement.Kind() == transfer.JobPausedNeedsAttention {
+			return ExitFailure
+		}
+		if result.Settlement.Kind() != transfer.JobClosed {
+			a.logf("get: transfer returned success without a closed output settlement")
+			return ExitFailure
+		}
 		return ExitOK
 	case transfer.JobCompletedWithErrors:
+		a.logf(
+			"get: completed %d file(s) with %d file failure(s) and %d directory failure(s)",
+			result.SucceededFiles, len(result.Files), len(result.Directories),
+		)
 		if transferResultDrifted(result) {
 			return ExitDrift
 		}
 		return ExitFailure
-	case transfer.JobAborted:
-		if errors.Is(result.AbortCause, transfer.ErrSelectionTargetMissing) {
-			a.logf("get: selection target was not found: %v", result.AbortCause)
+	case transfer.JobPausedOutcome:
+		if errors.Is(result.TerminationCause, transfer.ErrSelectionTargetMissing) {
+			a.logf("get: selection target was not found: %v", result.TerminationCause)
 			return ExitUsage
 		}
 		if transferResultDrifted(result) {
@@ -308,16 +402,16 @@ func (a *App) reportTransferResultWithAdmission(
 			connectionErr = connection.Err()
 		}
 		runtimeErr = errors.Join(runtimeErr, admissionErr)
-		err := errors.Join(result.AbortCause, runtimeErr, connectionErr)
-		if classifyTransferAbort(result.AbortCause, runtimeErr, connectionErr) == ExitNetwork {
-			a.logf("get: transfer aborted: %v", err)
+		err := errors.Join(result.TerminationCause, result.SettlementFailure, runtimeErr, connectionErr)
+		if classifyTransferTermination(result.TerminationCause, runtimeErr, connectionErr) == ExitNetwork {
+			a.logf("get: transfer stopped: %v", err)
 			return ExitNetwork
 		}
 		if ctx.Err() != nil {
 			a.logf("get: interrupted")
 			return ExitFailure
 		}
-		a.logf("get: transfer aborted: %v", err)
+		a.logf("get: transfer stopped: %v", err)
 		return ExitFailure
 	default:
 		a.logf("get: transfer returned an invalid outcome")
@@ -325,7 +419,7 @@ func (a *App) reportTransferResultWithAdmission(
 	}
 }
 
-func classifyTransferAbort(cause, runtimeErr, connectionErr error) int {
+func classifyTransferTermination(cause, runtimeErr, connectionErr error) int {
 	if runtimeErr != nil || connectionErr != nil || transfer.IsSessionFailure(cause) {
 		return ExitNetwork
 	}
@@ -333,19 +427,58 @@ func classifyTransferAbort(cause, runtimeErr, connectionErr error) int {
 }
 
 func transferResultDrifted(result transfer.JobResult) bool {
-	if errors.Is(result.AbortCause, content.ErrRevisionStale) || errors.Is(result.AbortCause, content.ErrSourceDrift) ||
-		errors.Is(result.AbortCause, catalog.ErrDirectoryStale) {
+	if isTransferDrift(result.TerminationCause) {
 		return true
 	}
 	for _, failure := range result.Directories {
-		if errors.Is(failure.Err, catalog.ErrDirectoryStale) {
+		if isTransferDrift(failure.Cause) {
 			return true
 		}
 	}
 	for _, failure := range result.Files {
-		if errors.Is(failure.Err, content.ErrRevisionStale) || errors.Is(failure.Err, content.ErrSourceDrift) {
+		if isTransferDrift(failure.Cause) {
 			return true
 		}
 	}
 	return false
+}
+
+func isTransferDrift(cause error) bool {
+	return errors.Is(cause, catalog.ErrDirectoryStale) ||
+		errors.Is(cause, content.ErrRevisionStale) ||
+		errors.Is(cause, content.ErrSourceDrift) ||
+		errors.Is(cause, content.ErrRevisionDrift) ||
+		errors.Is(cause, transfer.ErrBlockInvalidated)
+}
+
+func fileSettlementName(kind transfer.FileSettlementKind) string {
+	switch kind {
+	case transfer.FilePublished:
+		return "published"
+	case transfer.FilePaused:
+		return "paused"
+	case transfer.FileRetired:
+		return "retired"
+	case transfer.FileCollision:
+		return "collision"
+	case transfer.FilePublishBlocked:
+		return "publish-blocked"
+	case transfer.FileQuarantined:
+		return "quarantined"
+	default:
+		return "none"
+	}
+}
+
+func jobSettlementName(kind transfer.JobSettlementKind) string {
+	switch kind {
+	case transfer.JobClosed:
+		return "closed"
+	case transfer.JobPaused:
+		return "paused"
+	case transfer.JobPausedNeedsAttention:
+		return "paused-needs-attention"
+	default:
+		return "none"
+	}
 }

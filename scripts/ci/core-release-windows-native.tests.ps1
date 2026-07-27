@@ -112,6 +112,52 @@ if ((Get-WindowsNativeRequiredTestExpression) -cne $expectedExpression) {
     throw 'required native test expression drifted from the release contract'
 }
 
+$profilePolicySID = 'S-1-5-21-4000000001-4000000002-4000000003-4000000004'
+$profileDeleteCodes = [Collections.Generic.Queue[int]]::new()
+$profileDeleteCodes.Enqueue(32)
+$profileDeleteCodes.Enqueue(0)
+$profileDeleteDelays = [Collections.Generic.List[int]]::new()
+Remove-WindowsNativeEphemeralUserProfile `
+    -UserSID $profilePolicySID `
+    -TimeoutMilliseconds 1000 `
+    -PollMilliseconds 7 `
+    -DeleteAttempt { param([string]$SID, [string]$Path) $profileDeleteCodes.Dequeue() } `
+    -Delay { param([int]$Milliseconds) $profileDeleteDelays.Add($Milliseconds) }
+if ($profileDeleteCodes.Count -ne 0 -or
+    $profileDeleteDelays.Count -ne 1 -or
+    $profileDeleteDelays[0] -ne 7) {
+    throw 'profile deletion did not retry one transient native error exactly once'
+}
+Remove-WindowsNativeEphemeralUserProfile `
+    -UserSID $profilePolicySID `
+    -TimeoutMilliseconds 0 `
+    -PollMilliseconds 1 `
+    -DeleteAttempt { param([string]$SID, [string]$Path) 2 } `
+    -Delay { throw 'absent profile must not delay' }
+Assert-ThrowsContaining 'non-retryable profile deletion error' 'Win32 error 5' {
+    Remove-WindowsNativeEphemeralUserProfile `
+        -UserSID $profilePolicySID `
+        -TimeoutMilliseconds 1000 `
+        -PollMilliseconds 1 `
+        -DeleteAttempt { param([string]$SID, [string]$Path) 5 } `
+        -Delay { throw 'non-retryable profile error must not delay' }
+}
+Assert-ThrowsContaining 'busy profile deletion timeout' 'remained busy' {
+    Remove-WindowsNativeEphemeralUserProfile `
+        -UserSID $profilePolicySID `
+        -TimeoutMilliseconds 0 `
+        -PollMilliseconds 1 `
+        -DeleteAttempt { param([string]$SID, [string]$Path) 170 } `
+        -Delay { throw 'expired profile deletion must not delay' }
+}
+Assert-Throws 'invalid profile deletion SID' {
+    Remove-WindowsNativeEphemeralUserProfile `
+        -UserSID '..\not-a-sid' `
+        -TimeoutMilliseconds 0 `
+        -PollMilliseconds 1 `
+        -DeleteAttempt { param([string]$SID, [string]$Path) 0 }
+}
+
 $ordinarySID = 'S-1-5-21-100-200-300-1001'
 Assert-WindowsNativeStandardUserIdentity `
     -ActualUserSID $ordinarySID `
@@ -793,7 +839,16 @@ Assert-FileContains `
     -Expected 'New-WindowsNativeCoordinatorReleaseRoot'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
-    -Expected 'Wait-EphemeralWindowsUserProfileUnload'
+    -Expected 'Remove-WindowsNativeEphemeralUserProfile'
+Assert-FileDoesNotContain `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Forbidden 'Get-CimInstance'
+Assert-FileDoesNotContain `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Forbidden 'Remove-CimInstance'
+Assert-FileDoesNotContain `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Forbidden 'Get-WmiObject'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
     -Expected "[ValidateSet('ReadExecute', 'MutableDirectory')]"
@@ -875,18 +930,18 @@ if ($vulnerabilityIndex -lt 0 -or
     $coverageTestIndex -le $nativeGateIndex) {
     throw 'Windows native gate is not fail-fast after artifact build/vulnerability verification and before ordinary test evidence'
 }
-$profileWaitIndex = $releaseScript.IndexOf(
-    'Wait-EphemeralWindowsUserProfileUnload -UserSID $UserSID',
+$profileDeleteIndex = $releaseScript.IndexOf(
+    'Remove-WindowsNativeEphemeralUserProfile',
     [StringComparison]::Ordinal
 )
 $userRemovalIndex = $releaseScript.IndexOf(
     'Remove-LocalUser -Name $UserName',
     [StringComparison]::Ordinal
 )
-if ($profileWaitIndex -lt 0 -or
+if ($profileDeleteIndex -lt 0 -or
     $userRemovalIndex -lt 0 -or
-    $profileWaitIndex -ge $userRemovalIndex) {
-    throw 'bounded profile-unload wait does not precede ephemeral user deletion'
+    $profileDeleteIndex -ge $userRemovalIndex) {
+    throw 'bounded profile deletion does not precede ephemeral user deletion'
 }
 $toolchainCopyIndex = $releaseScript.IndexOf(
     'Copy-WindowsNativeGoToolchain',
@@ -914,6 +969,10 @@ $nativeModulePath = Join-Path $PSScriptRoot 'core-release-windows-native.psm1'
 foreach ($requiredModuleText in @(
     'CreateDirectoryW',
     'CreateExclusive',
+    'DeleteProfileW',
+    'Get-WindowsNativeEphemeralUserProfileRegistration',
+    'WindowsNativeProfileRetryableErrors',
+    'Remove-WindowsNativeEphemeralUserProfile',
     'SetAccessRuleProtection($true, $false)',
     '[Environment+SpecialFolder]::CommonApplicationData',
     'CoordinatorReleaseRootLeafPattern',
@@ -937,6 +996,7 @@ $interopInitializerIndex = $nativeModuleSource.IndexOf(
 )
 $addTypeIndex = $nativeModuleSource.IndexOf(
     'Add-Type -TypeDefinition',
+    $interopInitializerIndex,
     [StringComparison]::Ordinal
 )
 $nextFunctionIndex = $nativeModuleSource.IndexOf(

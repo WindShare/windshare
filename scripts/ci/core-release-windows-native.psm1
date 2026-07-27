@@ -28,6 +28,164 @@ $script:ForbiddenServiceSIDs = @(
 # Reserve one character for its terminating NUL so every accepted launch is
 # inside the documented boundary rather than relying on edge interpretation.
 $script:MaximumCredentialCommandLineCharacters = 1023
+$script:WindowsNativeSIDPattern = '^S-1-(?:[0-9]+-)+[0-9]+$'
+$script:Win32ErrorFileNotFound = 2
+$script:Win32ErrorPathNotFound = 3
+$script:Win32ErrorSharingViolation = 32
+$script:Win32ErrorLockViolation = 33
+$script:Win32ErrorBusy = 170
+$script:WindowsNativeProfileAbsentErrors = @(
+    $script:Win32ErrorFileNotFound,
+    $script:Win32ErrorPathNotFound
+)
+$script:WindowsNativeProfileRetryableErrors = @(
+    $script:Win32ErrorSharingViolation,
+    $script:Win32ErrorLockViolation,
+    $script:Win32ErrorBusy
+)
+
+# Profile cleanup is a lifecycle obligation for the one account this gate
+# creates, not host-management telemetry. Calling Userenv directly keeps WBEM
+# availability and policy outside the certification verdict.
+function Initialize-WindowsNativeUserProfileInterop {
+    if ($null -eq ('WindShare.CoreRelease.NativeUserProfile' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace WindShare.CoreRelease
+{
+    public static class NativeUserProfile
+    {
+        private const int ErrorGenFailure = 31;
+
+        [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool DeleteProfileW(
+            string sid,
+            string profilePath,
+            string computerName);
+
+        public static int Delete(string sid, string profilePath)
+        {
+            if (DeleteProfileW(sid, profilePath, null))
+            {
+                return 0;
+            }
+            int error = Marshal.GetLastWin32Error();
+            return error == 0 ? ErrorGenFailure : error;
+        }
+    }
+}
+'@
+    }
+}
+
+function Get-WindowsNativeEphemeralUserProfileRegistration([string]$UserSID) {
+    $profileList = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey(
+        'SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList',
+        $false
+    )
+    if ($null -eq $profileList) {
+        throw 'Windows profile registry root is unavailable'
+    }
+    try {
+        $profileKey = $profileList.OpenSubKey($UserSID, $false)
+        if ($null -eq $profileKey) {
+            return [pscustomobject]@{ Registered = $false; Path = '' }
+        }
+        try {
+            $rawPath = [string]$profileKey.GetValue(
+                'ProfileImagePath',
+                $null,
+                [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+            )
+            if ([string]::IsNullOrWhiteSpace($rawPath)) {
+                throw "ephemeral profile $UserSID has no registered image path"
+            }
+            return [pscustomobject]@{
+                Registered = $true
+                Path = [IO.Path]::GetFullPath(
+                    [Environment]::ExpandEnvironmentVariables($rawPath)
+                )
+            }
+        } finally {
+            $profileKey.Dispose()
+        }
+    } finally {
+        $profileList.Dispose()
+    }
+}
+
+function Invoke-WindowsNativeProfileDelete([string]$UserSID, [string]$ProfilePath) {
+    Initialize-WindowsNativeUserProfileInterop
+    $nativeProfilePath = if ([string]::IsNullOrWhiteSpace($ProfilePath)) {
+        $null
+    } else {
+        $ProfilePath
+    }
+    return [WindShare.CoreRelease.NativeUserProfile]::Delete($UserSID, $nativeProfilePath)
+}
+
+function Remove-WindowsNativeEphemeralUserProfile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$UserSID,
+
+        [Parameter(Mandatory)]
+        [ValidateRange(0, [int]::MaxValue)]
+        [int]$TimeoutMilliseconds,
+
+        [Parameter(Mandatory)]
+        [ValidateRange(1, [int]::MaxValue)]
+        [int]$PollMilliseconds,
+
+        [scriptblock]$DeleteAttempt,
+
+        [scriptblock]$Delay
+    )
+
+    if ($UserSID -cnotmatch $script:WindowsNativeSIDPattern) {
+        throw "invalid ephemeral Windows user SID: $UserSID"
+    }
+    if ($null -eq $DeleteAttempt) {
+        $DeleteAttempt = {
+            param([string]$SID, [string]$Path)
+            Invoke-WindowsNativeProfileDelete -UserSID $SID -ProfilePath $Path
+        }
+    }
+    if ($null -eq $Delay) {
+        $Delay = {
+            param([int]$Milliseconds)
+            Start-Sleep -Milliseconds $Milliseconds
+        }
+    }
+
+    $registration = Get-WindowsNativeEphemeralUserProfileRegistration -UserSID $UserSID
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $errorCode = [int](& $DeleteAttempt $UserSID ([string]$registration.Path))
+        if ($errorCode -eq 0 -or $errorCode -in $script:WindowsNativeProfileAbsentErrors) {
+            break
+        }
+        if ($errorCode -notin $script:WindowsNativeProfileRetryableErrors) {
+            throw "delete ephemeral Windows user profile failed with Win32 error $errorCode"
+        }
+        if ($stopwatch.ElapsedMilliseconds -ge $TimeoutMilliseconds) {
+            throw "ephemeral Windows user profile remained busy for $TimeoutMilliseconds milliseconds (Win32 error $errorCode)"
+        }
+        [void](& $Delay $PollMilliseconds)
+    }
+
+    $remaining = Get-WindowsNativeEphemeralUserProfileRegistration -UserSID $UserSID
+    if ($remaining.Registered) {
+        throw 'ephemeral Windows user profile remains registered after deletion'
+    }
+    if ($registration.Registered -and (Test-Path -LiteralPath $registration.Path)) {
+        throw "ephemeral Windows user profile directory remains after deletion: $($registration.Path)"
+    }
+}
 
 # DirectorySecurity.Create does not report whether a directory already existed.
 # The native release root must instead be born with its final protected DACL and
@@ -1028,6 +1186,7 @@ Export-ModuleMember -Function @(
     'Get-WindowsNativeRequiredTestNames',
     'New-WindowsNativeCoordinatorReleaseRoot',
     'New-WindowsNativeWorkerArgumentLine',
+    'Remove-WindowsNativeEphemeralUserProfile',
     'Remove-WindowsNativeCoordinatorReleaseRoot',
     'Resolve-WindowsNativeLocalFixedNTFSDirectory',
     'Set-WindowsNativeTreeMutationDeny'

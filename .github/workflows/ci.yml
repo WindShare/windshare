@@ -9,8 +9,8 @@
 # real-socket coverage; the windows-network job runs GOOS=windows vet plus both
 # modules' race tests. OS-network test cases are gated at shared constructors
 # (internal/testnetwork): open on Linux, skip on Windows outside the local D5
-# runner, so no Windows job can hang or touch the firewall. Firewall governance
-# is local-dev tooling by owner decision (2026-07-13) and does not run in CI.
+# runner, keeping the hosted Windows job deterministic. Firewall prompts and
+# host-owned state are outside every test verdict and are never queried here.
 name: CI
 
 on:
@@ -29,6 +29,9 @@ on:
 env:
   # Pinned coverage-gate tool; thresholds live in each module's .testcoverage.yml.
   GO_TEST_COVERAGE: github.com/vladopajic/go-test-coverage/v2@v2.18.8
+  # Native identity recovery can exceed Go's ten-minute package default under
+  # race or coverage instrumentation; this is a ceiling, not a runtime target.
+  CORE_SUITE_TEST_TIMEOUT: 30m
 
 jobs:
   hygiene:
@@ -138,9 +141,9 @@ jobs:
       - name: go build
         run: go build ./...
       - name: go test -race
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -timeout="$CORE_SUITE_TEST_TIMEOUT" ./...
       - name: go test with coverage
-        run: go test -count=1 ./... -covermode=atomic -coverprofile=cover.out
+        run: go test -count=1 -timeout="$CORE_SUITE_TEST_TIMEOUT" ./... -covermode=atomic -coverprofile=cover.out
       - name: coverage gate (total >=90%, package >=70%)
         run: go run "$GO_TEST_COVERAGE" --config=.testcoverage.yml --profile=cover.out
 
@@ -279,11 +282,10 @@ jobs:
         working-directory: core
       # OS-network cases self-gate at the shared socket/process constructors
       # (internal\testnetwork): skip on Windows outside the local D5 runner, so
-      # these sweeps cannot hang or touch the firewall. The D5 fixed-path
-      # runner and its firewall-forensics suites are local-dev tooling by
-      # owner decision (2026-07-13) and intentionally do not run in CI;
-      # real-socket coverage lives in the ubuntu jobs.
+      # these sweeps cannot hang on real-socket cases. The local D5 fixed-path
+      # runner covers those Windows cases; firewall prompts and host-owned state
+      # are outside its verdict. Real-socket CI coverage lives in the ubuntu jobs.
       - name: root Windows race tests (OS-network cases gated)
         run: go test -race -count=1 ./...
       - name: core Windows race tests
-        run: go -C core test -race -count=1 ./...
+        run: go -C core test -race -count=1 "-timeout=$env:CORE_SUITE_TEST_TIMEOUT" ./...
