@@ -7,12 +7,13 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 SECONDS=0
+core_suite_test_timeout='30m'
 echo "== race =="
 
 echo "-- go test -race (root, OS-network cases ungated)"
 go test -race -count=1 ./...
 
 echo "-- go test -race (core)"
-go -C core test -race -count=1 ./...
+go -C core test -race -count=1 -timeout="$core_suite_test_timeout" ./...
 
 echo "== race: PASS in ${SECONDS}s =="

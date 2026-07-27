@@ -21,6 +21,7 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/internal/testnetwork"
+	"github.com/windshare/windshare/internal/testoutputroot"
 	"github.com/windshare/windshare/relay/httpapi"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/relay/signaling/v2endpoint"
@@ -59,11 +60,34 @@ func TestRelayRegistrationIdentityRejectsWrongWidths(t *testing.T) {
 }
 
 func TestTransferResultDriftClassification(t *testing.T) {
-	if !transferResultDrifted(transfer.JobResult{AbortCause: content.ErrRevisionStale}) {
-		t.Fatal("revision drift was not classified")
+	for _, cause := range []error{
+		content.ErrRevisionStale,
+		content.ErrSourceDrift,
+		content.ErrRevisionDrift,
+		transfer.ErrBlockInvalidated,
+	} {
+		if !transferResultDrifted(transfer.JobResult{TerminationCause: cause}) {
+			t.Fatalf("drift %v was not classified", cause)
+		}
 	}
-	if transferResultDrifted(transfer.JobResult{AbortCause: errors.New("network")}) {
+	if transferResultDrifted(transfer.JobResult{TerminationCause: errors.New("network")}) {
 		t.Fatal("network failure was classified as drift")
+	}
+}
+
+func TestSelectionRulesKeepWholeShareAndPathIntentDistinct(t *testing.T) {
+	wholeShare, err := selectionRules(nil)
+	if err != nil || wholeShare.Mode() != transfer.SelectionByNodeID || !wholeShare.DefaultSelected() {
+		t.Fatalf("whole-share rules mode=%d default=%v error=%v", wholeShare.Mode(), wholeShare.DefaultSelected(), err)
+	}
+	paths, err := selectionRules([]string{"tree/b.txt", "tree/a.txt"})
+	if err != nil || paths.Mode() != transfer.SelectionByCatalogPath || paths.DefaultSelected() ||
+		!paths.FileSelectedAt(catalog.FileID{}, "tree/a.txt", false) ||
+		paths.FileSelectedAt(catalog.FileID{}, "tree/c.txt", false) {
+		t.Fatalf("path rules mode=%d default=%v error=%v", paths.Mode(), paths.DefaultSelected(), err)
+	}
+	if _, err := selectionRules([]string{"../escape"}); err == nil {
+		t.Fatal("non-canonical path selection was accepted")
 	}
 }
 
@@ -130,8 +154,8 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 	}
 	_ = joined.Close()
 	for index, arguments := range [][]string{
-		{"get", strings.TrimPrefix(linkLine, "Link: "), "-o", t.TempDir()},
-		{"get", strings.TrimPrefix(linkLine, "Link: "), "-o", t.TempDir(), "--only", filepath.Base(file)},
+		{"get", strings.TrimPrefix(linkLine, "Link: "), "-o", testoutputroot.New(t).RootPath},
+		{"get", strings.TrimPrefix(linkLine, "Link: "), "-o", testoutputroot.New(t).RootPath, "--only", filepath.Base(file)},
 	} {
 		getOutput := &lockedTestBuffer{}
 		getErrors := &lockedTestBuffer{}

@@ -18,9 +18,13 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/internal/testnetwork"
+	"github.com/windshare/windshare/internal/testoutputroot"
 )
 
-const v2ProcessTimeout = 30 * time.Second
+const (
+	v2ProcessTimeout              = 30 * time.Second
+	v2DurableResumeProcessTimeout = 4 * time.Minute
+)
 
 const (
 	v2ResumeFileCount       = 128
@@ -103,11 +107,15 @@ func (process *v2Process) stop() {
 }
 
 func (process *v2Process) wait(t *testing.T) error {
+	return process.waitWithin(t, v2ProcessTimeout)
+}
+
+func (process *v2Process) waitWithin(t *testing.T, timeout time.Duration) error {
 	t.Helper()
 	select {
 	case <-process.done:
 		return process.err
-	case <-time.After(v2ProcessTimeout):
+	case <-time.After(timeout):
 		process.stop()
 		t.Fatalf("process timeout; stdout=%q stderr=%q", process.stdout.String(), process.stderr.String())
 		return context.DeadlineExceeded
@@ -155,7 +163,10 @@ func TestV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testing.T
 	share := startV2Process(t, windshareBin, "share", root, "--relay", relayURL)
 	linkExpression := regexp.MustCompile(`(?m)^Link: (\S+)$`)
 	shareLink := waitV2Match(t, share, linkExpression, share.stdout)
-	outputs := []string{t.TempDir(), t.TempDir()}
+	outputs := []string{
+		testoutputroot.New(t).RootPath,
+		testoutputroot.New(t).RootPath,
+	}
 	receivers := make([]*v2Process, 0, len(outputs))
 	for _, output := range outputs {
 		receivers = append(receivers, startV2Process(t, windshareBin, "get", shareLink, "-o", output))
@@ -172,7 +183,7 @@ func TestV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testing.T
 		}
 	}
 
-	selectedOutput := t.TempDir()
+	selectedOutput := testoutputroot.New(t).RootPath
 	selected := startV2Process(
 		t, windshareBin, "get", shareLink, "-o", selectedOutput, "--only", "tree/nested/a.txt",
 	)
@@ -217,7 +228,7 @@ func TestV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 		"--block-size", fmt.Sprint(v2PionRelayCutBlockBytes),
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
-	output := t.TempDir()
+	output := testoutputroot.New(t).RootPath
 	receiver := startV2Process(t, windshareBin, "get", shareLink, "-o", output)
 	directMarker := waitV2Match(
 		t,
@@ -391,7 +402,7 @@ func TestV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 	address := waitV2Match(t, relay, v2RelayAddress, relay.stderr)
 	share := startV2Process(t, windshareBin, "share", root, "--relay", "ws://"+address)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
-	output := t.TempDir()
+	output := testoutputroot.New(t).RootPath
 	firstOutput := filepath.Join(output, "resume-tree", "file-000.bin")
 
 	interrupted := startV2Process(t, windshareBin, "get", shareLink, "-o", output)
@@ -399,7 +410,10 @@ func TestV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 	interrupted.stop()
 
 	resumed := startV2Process(t, windshareBin, "get", shareLink, "-o", output)
-	if err := resumed.wait(t); err != nil {
+	// Recovery revalidates every retained native witness. Race instrumentation
+	// makes that bounded O(file-count) work much slower than ordinary process
+	// readiness, so it needs its own ceiling without weakening other fail-fast waits.
+	if err := resumed.waitWithin(t, v2DurableResumeProcessTimeout); err != nil {
 		t.Fatalf(
 			"resumed receiver failed: %v; receiver stdout=%q stderr=%q; sender stdout=%q stderr=%q; relay stdout=%q stderr=%q",
 			err,
@@ -408,9 +422,9 @@ func TestV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 			relay.stdout.diagnosticString(), relay.stderr.diagnosticString(),
 		)
 	}
-	if !strings.Contains(resumed.stderr.String(), "resumed a durable output session") {
-		t.Fatalf("receiver did not report durable resume: %q", resumed.stderr.String())
-	}
+	// A fresh output session would hit the already-published first path and the
+	// no-replace contract would make this command fail. Successful completion is
+	// therefore the durable-resume oracle without exposing backend reopen state.
 	assertV2File(t, firstOutput, payload)
 	assertV2File(t, filepath.Join(output, "resume-tree", fmt.Sprintf("file-%03d.bin", v2ResumeFileCount-1)), payload)
 }

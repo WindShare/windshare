@@ -31,8 +31,8 @@ $coverageTool = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'
 # timeout prevents cumulative suite work from being mistaken for a stuck test.
 $coreSuiteTestTimeout = '30m'
 $windowsNativeWorkerTimeoutMinutes = 35
-$windowsProfileUnloadTimeoutSeconds = 30
-$windowsProfileUnloadPollMilliseconds = 250
+$windowsProfileDeletionTimeoutMilliseconds = 30000
+$windowsProfileDeletionPollMilliseconds = 250
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $repositoryRoot = [IO.Path]::GetFullPath($repositoryRoot)
 $originalLocation = Get-Location
@@ -76,27 +76,6 @@ function Remove-OwnedTemporaryRoot {
         throw "refusing to remove unowned temporary path: $resolvedTemporaryRoot"
     }
     Remove-Item -LiteralPath $resolvedTemporaryRoot -Recurse -Force
-}
-
-function Wait-EphemeralWindowsUserProfileUnload([string]$UserSID) {
-    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    while ($true) {
-        $profiles = @(Get-CimInstance -ClassName Win32_UserProfile | Where-Object {
-            $_.SID -ceq $UserSID
-        })
-        $loadedProfiles = @($profiles | Where-Object { $_.Loaded })
-        if ($loadedProfiles.Count -eq 0) {
-            return @($profiles)
-        }
-        if ($stopwatch.Elapsed.TotalSeconds -ge $windowsProfileUnloadTimeoutSeconds) {
-            $loadedPaths = @($loadedProfiles | ForEach-Object { $_.LocalPath })
-            throw ('ephemeral native worker profile remained loaded for {0} seconds: {1}' -f @(
-                $windowsProfileUnloadTimeoutSeconds,
-                ($loadedPaths -join ', ')
-            ))
-        }
-        Start-Sleep -Milliseconds $windowsProfileUnloadPollMilliseconds
-    }
 }
 
 function New-EphemeralWindowsUserPassword {
@@ -151,10 +130,10 @@ function Remove-EphemeralWindowsUser([string]$UserName, [string]$UserSID) {
     $cleanupErrors = [Collections.Generic.List[string]]::new()
     if (-not [string]::IsNullOrWhiteSpace($UserSID)) {
         try {
-            $profiles = @(Wait-EphemeralWindowsUserProfileUnload -UserSID $UserSID)
-            foreach ($profile in $profiles) {
-                Remove-CimInstance -InputObject $profile
-            }
+            Remove-WindowsNativeEphemeralUserProfile `
+                -UserSID $UserSID `
+                -TimeoutMilliseconds $windowsProfileDeletionTimeoutMilliseconds `
+                -PollMilliseconds $windowsProfileDeletionPollMilliseconds
         } catch {
             $cleanupErrors.Add("remove ephemeral profile: $($_.Exception.Message)")
         }
@@ -171,14 +150,6 @@ function Remove-EphemeralWindowsUser([string]$UserName, [string]$UserSID) {
     try {
         if ($null -ne (Get-LocalUser -Name $UserName -ErrorAction SilentlyContinue)) {
             throw 'ephemeral local user still exists after cleanup'
-        }
-        if (-not [string]::IsNullOrWhiteSpace($UserSID)) {
-            $remainingProfiles = @(Get-CimInstance -ClassName Win32_UserProfile | Where-Object {
-                $_.SID -ceq $UserSID
-            })
-            if ($remainingProfiles.Count -ne 0) {
-                throw 'ephemeral local user profile still exists after cleanup'
-            }
         }
     } catch {
         $cleanupErrors.Add("verify ephemeral account cleanup: $($_.Exception.Message)")

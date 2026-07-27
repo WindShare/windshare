@@ -61,6 +61,10 @@ if (-not $IsWindows) {
 $coverageRoot = Join-Path $repositoryRoot 'tmp\local-coverage'
 # Same pinned gate tool as .github/workflows/ci.yml (GO_TEST_COVERAGE).
 $goTestCoverage = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'
+# Native identity recovery deliberately exercises five-minute crash cuts. Match
+# the release verifier so Go's 10-minute default cannot misclassify cumulative
+# suite work as a stuck test.
+$coreSuiteTestTimeout = '30m'
 
 Write-Output ('Full-suite coverage run (core + root incl. OS-network cases): ' +
     'expect ~1.5 minutes warm, ~8 minutes cold (network packages run concurrently through the D5 runner).')
@@ -85,7 +89,8 @@ function Invoke-LocalGo([string]$Directory, [string[]]$Arguments, [string]$Conte
 # core is pure (no network gating), so one plain CI-parity sweep measures it.
 $coreProfile = Join-Path $coverageRoot 'core.cover.out'
 Invoke-LocalGo (Join-Path $repositoryRoot 'core') @(
-    'test', '-count=1', '-covermode=atomic', "-coverprofile=$coreProfile", './...'
+    'test', '-count=1', "-timeout=$coreSuiteTestTimeout", '-covermode=atomic',
+    "-coverprofile=$coreProfile", './...'
 ) 'core module coverage tests'
 
 Push-Location $repositoryRoot
@@ -124,8 +129,9 @@ Invoke-LocalGo $repositoryRoot (@(
     'test', '-count=1', '-covermode=atomic', "-coverprofile=$ordinaryProfile"
 ) + $ordinaryPackages) 'root module ordinary coverage tests'
 
-# Classified packages execute their real OS-network cases under the D5
-# fixed-path identities (pre-registered rule pairs: no prompts, no mutations).
+# Classified packages execute their real OS-network cases under D5 fixed-path
+# identities. Host firewall prompts and state are outside the verdict; the
+# runner neither inspects nor mutates them.
 & (Join-Path $PSScriptRoot 'd5-windows-performance.ps1') `
     -Mode NetworkTests `
     -CoverProfileRoot $coverageRoot
