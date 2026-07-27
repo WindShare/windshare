@@ -22,6 +22,7 @@
 
 ### Validation
 
+- Windows Firewall/WBEM are no longer validation gates; firewall prompts do not affect test verdicts and must not block normal test execution.
 - During iteration: `make <gate>` (see `Makefile`).
 - Local CI: `make ci`.
 
