@@ -796,10 +796,16 @@ Assert-FileContains `
     -Expected 'Wait-EphemeralWindowsUserProfileUnload'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
-    -Expected "[ValidateSet('RX', 'M,DC')]"
+    -Expected "[ValidateSet('ReadExecute', 'MutableDirectory')]"
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
-    -Expected "-Permission 'M,DC'"
+    -Expected "'ReadExecute' { '(OI)(CI)RX' }"
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected "'MutableDirectory' { '(OI)(CI)(M,DC)' }"
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Expected '-AccessProfile MutableDirectory'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
     -Expected 'FILE_DELETE_CHILD'
@@ -887,7 +893,7 @@ $toolchainCopyIndex = $releaseScript.IndexOf(
     [StringComparison]::Ordinal
 )
 $workerAccessGrantIndex = $releaseScript.IndexOf(
-    'Grant-EphemeralWindowsUserAccess -Path $temporaryRoot',
+    '-AccessProfile ReadExecute',
     [StringComparison]::Ordinal
 )
 if ($toolchainCopyIndex -lt 0 -or

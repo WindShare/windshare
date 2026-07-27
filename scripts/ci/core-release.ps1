@@ -116,13 +116,17 @@ function New-EphemeralWindowsUserPassword {
 function Grant-EphemeralWindowsUserAccess(
     [string]$Path,
     [string]$UserSID,
-    [ValidateSet('RX', 'M,DC')]
-    [string]$Permission
+    [ValidateSet('ReadExecute', 'MutableDirectory')]
+    [string]$AccessProfile
 ) {
+    $accessExpression = switch ($AccessProfile) {
+        'ReadExecute' { '(OI)(CI)RX' }
+        'MutableDirectory' { '(OI)(CI)(M,DC)' }
+    }
     $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
-    & $icacls $Path '/grant:r' "*${UserSID}:(OI)(CI)$Permission" '/T' '/Q'
+    & $icacls $Path '/grant:r' "*${UserSID}:$accessExpression" '/T' '/Q'
     if ($LASTEXITCODE -ne 0) {
-        throw "grant $Permission access to the ephemeral native worker failed with code $LASTEXITCODE"
+        throw "grant $AccessProfile access to the ephemeral native worker failed with code $LASTEXITCODE"
     }
 }
 
@@ -263,7 +267,10 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
                 -LiteralPath (Join-Path $releaseRepository $helperPath) `
                 -Destination $workerRoot
         }
-        Grant-EphemeralWindowsUserAccess -Path $temporaryRoot -UserSID $userSID -Permission RX
+        Grant-EphemeralWindowsUserAccess `
+            -Path $temporaryRoot `
+            -UserSID $userSID `
+            -AccessProfile ReadExecute
         $temporaryRootOwnership.WorkerSID = $userSID
         $artifactMutationDeny = Set-WindowsNativeTreeMutationDeny `
             -RootPath $artifactRoot `
@@ -280,7 +287,10 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
         # The output root opens a directory handle with FILE_DELETE_CHILD.  icacls
         # Modify does not imply that directory right, so grant it explicitly while
         # keeping the broader release root and immutable trees read/execute-only.
-        Grant-EphemeralWindowsUserAccess -Path $workerRoot -UserSID $userSID -Permission 'M,DC'
+        Grant-EphemeralWindowsUserAccess `
+            -Path $workerRoot `
+            -UserSID $userSID `
+            -AccessProfile MutableDirectory
 
         $powershellExecutable = [IO.Path]::GetFullPath((Get-Process -Id $PID).Path)
         $workerScript = Join-Path $workerRoot 'core-release-windows-native-worker.ps1'
