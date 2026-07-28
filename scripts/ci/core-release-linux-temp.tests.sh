@@ -153,7 +153,8 @@ fi
 assert_contains "scripts/ci/core-release.sh" 'native_profile="linux-ext4"'
 assert_contains "scripts/ci/core-release.sh" 'unset WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION'
 assert_contains "scripts/ci/core-release.sh" 'bash scripts/ci/core-release-linux-native.sh "$artifact_root" "$temporary_root"'
-assert_contains "scripts/ci/core-release-linux-native.sh" 'CGO_ENABLED=0 GOWORK=off go -C "$artifact_root" test -c -o "$test_binary" ./osfs'
+assert_contains "scripts/ci/core-release-linux-native.sh" 'compile_static_test_binary ./osfs "$osfs_test_binary"'
+assert_contains "scripts/ci/core-release-linux-native.sh" 'compile_static_test_binary ./osfs/internal/outputlinux "$outputlinux_test_binary"'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'mkfs.ext4 -q -F -N 1024 -I 256 -m 0'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'sudo -n unshare --mount --propagation private --fork --kill-child'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'go tool test2json -t -p github.com/windshare/windshare/core/osfs'
@@ -163,11 +164,12 @@ assert_contains "scripts/ci/core-release-linux-native.sh" 'TestLinuxExt4ProcessR
 assert_contains "scripts/ci/core-release-linux-native.sh" ': >"$preserve_marker"'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'sudo -n udevadm settle'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'sudo -n losetup -d "$loop_device"'
-assert_contains "core/osfs/linux_output_persistent_identity_native_test.go" 'command.Stdin = bytes.NewReader(nil)'
+assert_contains "core/osfs/internal/outputlinux/linux_output_persistent_identity_native_test.go" 'command.Stdin = bytes.NewReader(nil)'
 assert_contains "core/osfs/output_v3_native_certification_test.go" 'command.Stdin = bytes.NewReader(nil)'
 assert_contains "scripts/ci/core-release-linux-native-root.sh" 'WINDSHARE_LINUX_NATIVE_FIXTURE=loop-ext4-v1'
 assert_contains "scripts/ci/core-release-linux-native-root.sh" '--userspec="$receiver_uid:$receiver_gid"'
 assert_contains "scripts/ci/core-release-linux-native-root.sh" '/test/osfs.test'
+assert_contains "scripts/ci/core-release-linux-native-root.sh" '/test/outputlinux.test'
 if grep -Fq -- 'losetup -d --' scripts/ci/core-release-linux-native.sh; then
   fail "Linux native certification passes an option terminator as a loop device"
 fi

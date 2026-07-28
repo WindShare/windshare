@@ -1,6 +1,6 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { dirname, resolve } from 'node:path'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const DEFAULT_REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -8,6 +8,10 @@ const GATE_SCRIPT_EXTENSIONS = ['ps1', 'sh']
 const WORKFLOW_EXTENSIONS = new Set(['.yaml', '.yml'])
 const BARE_SHELL_INVOCATION =
   /(?:^|\brun:\s*|&&\s*|\|\|\s*|;\s*|\bthen\s+|\bdo\s+)["']?(?:\.\/)?(scripts\/ci\/[A-Za-z0-9._/-]+\.sh)["']?(?=\s|$)/u
+const STATIC_SHELL_CONTENT_ASSERTION =
+  /^\s*assert_(not_)?contains\s+"([^"$`]+)"(?:\s|$)/u
+const STATIC_SHELL_LITERAL_CONTENT_ASSERTION =
+  /^\s*assert_(not_)?contains\s+"([^"$`]+)"\s+'([^']*)'(?:\s|$)/u
 
 export function inspectCIContract(
   repositoryRoot,
@@ -59,6 +63,44 @@ export function inspectCIContract(
     }
   }
 
+  const ciDirectory = resolve(repositoryRoot, 'scripts', 'ci')
+  const shellContracts = readdirSync(ciDirectory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.sh'))
+    .map((entry) => entry.name)
+    .sort()
+  for (const shellContract of shellContracts) {
+    const contractPath = `scripts/ci/${shellContract}`
+    const source = readFileSync(resolve(ciDirectory, shellContract), 'utf8')
+    for (const assertion of findStaticShellContentAssertions(source)) {
+      const assertedPath = resolve(repositoryRoot, assertion.path)
+      const repositoryRelative = relative(repositoryRoot, assertedPath)
+      const escapesRepository = repositoryRelative === '..' ||
+        repositoryRelative.startsWith(`..${sep}`) || isAbsolute(repositoryRelative)
+      if (escapesRepository || !isRegularFile(assertedPath)) {
+        // Content assertions encode refactor-sensitive source contracts. Checking
+        // their literal targets on every host prevents Windows validation from
+        // overlooking a stale path that only the Linux shell suite would open.
+        violations.push(
+          `${contractPath}:${assertion.line} asserts content of missing repository file ${assertion.path}`,
+        )
+        continue
+      }
+      if (assertion.literal === undefined) continue
+
+      // Single-quoted shell arguments are literal by definition, so mirroring
+      // them here gives Windows the same refactor-drift signal as the Linux
+      // contract without attempting to interpret shell expansion.
+      const assertedSource = readFileSync(assertedPath, 'utf8')
+      const containsLiteral = assertedSource.includes(assertion.literal)
+      if (assertion.negated ? containsLiteral : !containsLiteral) {
+        const expectation = assertion.negated ? 'not contain' : 'contain'
+        violations.push(
+          `${contractPath}:${assertion.line} expects ${assertion.path} to ${expectation} literal ${JSON.stringify(assertion.literal)}`,
+        )
+      }
+    }
+  }
+
   return { gates, workflows, violations }
 }
 
@@ -93,6 +135,23 @@ export function findBareShellInvocations(workflow) {
   return invocations
 }
 
+export function findStaticShellContentAssertions(source) {
+  const assertions = []
+  for (const [index, line] of source.split(/\r?\n/u).entries()) {
+    const match = STATIC_SHELL_LITERAL_CONTENT_ASSERTION.exec(line) ??
+      STATIC_SHELL_CONTENT_ASSERTION.exec(line)
+    if (match !== null) {
+      assertions.push({
+        line: index + 1,
+        path: match[2],
+        literal: match[3],
+        negated: match[1] !== undefined,
+      })
+    }
+  }
+  return assertions
+}
+
 function trackedFiles(repositoryRoot, violations) {
   const result = spawnSync('git', ['ls-files', '-z', '--', 'scripts/ci'], {
     cwd: repositoryRoot,
@@ -125,6 +184,14 @@ function ignoredFiles(repositoryRoot, paths, violations) {
 function extensionOf(name) {
   const dot = name.lastIndexOf('.')
   return dot < 0 ? '' : name.slice(dot).toLowerCase()
+}
+
+function isRegularFile(path) {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
 }
 
 function main() {
