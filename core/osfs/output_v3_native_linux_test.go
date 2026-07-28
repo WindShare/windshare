@@ -3,12 +3,13 @@
 package osfs
 
 import (
-	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
+	"github.com/windshare/windshare/core/osfs/internal/outputlinux"
 	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 )
 
@@ -33,7 +34,7 @@ func TestLinuxExt4ProcessRestartRecovery(t *testing.T) {
 		t,
 		linuxExt4NativeCertificationProfile,
 		resumestate.CertificationLinuxExt4ProcessRestart,
-		linuxOutputProbePrefix+"31415926535897932384626433832795",
+		outputlinux.ProbeNamePrefix+"31415926535897932384626433832795",
 		0,
 	)
 	runNativeOutputSessionProcessRestartRecoveryTest(
@@ -113,15 +114,15 @@ func TestLinuxExt4DirectoryClaimsAndPinnedRemovalAreHandleBound(t *testing.T) {
 	}
 	defer duplicate.Close()
 	repeated, err := duplicate.IdentityClaim()
-	if err != nil || !bytes.Equal(claim, repeated) {
-		t.Fatalf("duplicate directory claim differs: equal=%t error=%v", bytes.Equal(claim, repeated), err)
+	if err != nil || !claim.Equal(repeated) {
+		t.Fatalf("duplicate directory claim differs: equal=%t error=%v", claim.Equal(repeated), err)
 	}
 
 	regularPath := filepath.Join(rootPath, "regular")
 	if err := os.WriteFile(regularPath, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if kind, exact, err := root.ClassifyExactEntry("regular"); err != nil || kind != outputV3EntryRegularFile || !exact {
+	if kind, exact, err := root.ClassifyExactEntry("regular"); err != nil || kind != outputcap.EntryRegularFile || !exact {
 		t.Fatalf("regular classification kind=%v exact=%t error=%v", kind, exact, err)
 	}
 	regular, err := root.OpenEntry("regular")
@@ -129,7 +130,7 @@ func TestLinuxExt4DirectoryClaimsAndPinnedRemovalAreHandleBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer regular.Close()
-	if regular.Kind() != outputV3EntryRegularFile {
+	if regular.Kind() != outputcap.EntryRegularFile {
 		t.Fatalf("pinned regular kind=%v", regular.Kind())
 	}
 	if err := root.RemoveEntry("regular", regular); err != nil {
@@ -154,7 +155,7 @@ func TestLinuxExt4DirectoryClaimsAndPinnedRemovalAreHandleBound(t *testing.T) {
 	if err := os.WriteFile(racePath, []byte("replacement"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := root.RemoveEntry("replacement-race", race); !errors.Is(err, errOutputV3Unsafe) {
+	if err := root.RemoveEntry("replacement-race", race); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("pinned removal accepted a replacement object: %v", err)
 	}
 	if got, err := os.ReadFile(racePath); err != nil || string(got) != "replacement" {
@@ -170,7 +171,7 @@ func TestLinuxExt4DirectoryClaimsAndPinnedRemovalAreHandleBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer directoryEntry.Close()
-	if directoryEntry.Kind() != outputV3EntryDirectory {
+	if directoryEntry.Kind() != outputcap.EntryDirectory {
 		t.Fatalf("pinned directory kind=%v", directoryEntry.Kind())
 	}
 	openedDirectory, err := root.OpenPinnedDirectory(directoryEntry, false)
@@ -195,7 +196,7 @@ func TestLinuxExt4DirectoryClaimsAndPinnedRemovalAreHandleBound(t *testing.T) {
 	if err := os.Symlink("target", linkPath); err != nil {
 		t.Fatal(err)
 	}
-	if kind, exact, err := root.ClassifyExactEntry("opaque-link"); err != nil || kind != outputV3EntryOther || !exact {
+	if kind, exact, err := root.ClassifyExactEntry("opaque-link"); err != nil || kind != outputcap.EntryOther || !exact {
 		t.Fatalf("opaque classification kind=%v exact=%t error=%v", kind, exact, err)
 	}
 	opaque, err := root.OpenEntry("opaque-link")
@@ -203,7 +204,7 @@ func TestLinuxExt4DirectoryClaimsAndPinnedRemovalAreHandleBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer opaque.Close()
-	if opaque.Kind() != outputV3EntryOther {
+	if opaque.Kind() != outputcap.EntryOther {
 		t.Fatalf("pinned symbolic-link kind=%v", opaque.Kind())
 	}
 	if err := root.RemoveEntry("opaque-link", opaque); err != nil {

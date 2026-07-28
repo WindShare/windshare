@@ -6,51 +6,26 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 )
 
 func TestOutputV3PublicTestDecoratorsPreserveDirectoryAuthority(t *testing.T) {
-	base := windowsV3NativeTestTempDir(t)
+	base := t.TempDir()
 	tests := []struct {
 		name      string
-		decorate  func(outputV3Directory) outputV3Directory
-		decorated func(outputV3Directory) bool
+		decorate  func(outputcap.Directory) outputcap.Directory
+		decorated func(outputcap.Directory) bool
 	}{
 		{
-			name: "batch admission",
-			decorate: func(root outputV3Directory) outputV3Directory {
-				return &windowsV3BatchCountingDirectory{
-					outputV3Directory: root,
-					counts:            &windowsV3BatchAdmissionCounts{},
+			name: "native conformance",
+			decorate: func(root outputcap.Directory) outputcap.Directory {
+				return &outputV3ConformanceDirectory{
+					Directory: root,
 				}
 			},
-			decorated: func(directory outputV3Directory) bool {
-				_, ok := directory.(*windowsV3BatchCountingDirectory)
-				return ok
-			},
-		},
-		{
-			name: "publication permission",
-			decorate: func(root outputV3Directory) outputV3Directory {
-				return &outputV3PublicationPermissionDirectory{
-					outputV3Directory: root,
-					gate:              &outputV3PublicationPermissionGate{},
-				}
-			},
-			decorated: func(directory outputV3Directory) bool {
-				_, ok := directory.(*outputV3PublicationPermissionDirectory)
-				return ok
-			},
-		},
-		{
-			name: "operation hold",
-			decorate: func(root outputV3Directory) outputV3Directory {
-				return &windowsV3OperationHoldDirectory{
-					outputV3Directory: root,
-					gate:              newWindowsV3OperationHoldGate("never-held"),
-				}
-			},
-			decorated: func(directory outputV3Directory) bool {
-				_, ok := directory.(*windowsV3OperationHoldDirectory)
+			decorated: func(directory outputcap.Directory) bool {
+				_, ok := directory.(*outputV3ConformanceDirectory)
 				return ok
 			},
 		},
@@ -79,10 +54,53 @@ func TestOutputV3PublicTestDecoratorsPreserveDirectoryAuthority(t *testing.T) {
 	}
 }
 
+// outputV3ConformanceDirectory proves the capability contract at the root
+// native boundary without importing runtime-only fault fixtures into osfs.
+type outputV3ConformanceDirectory struct {
+	outputcap.Directory
+}
+
+func (directory *outputV3ConformanceDirectory) Duplicate() (outputcap.Directory, error) {
+	duplicate, err := directory.Directory.Duplicate()
+	if err != nil {
+		return nil, err
+	}
+	return &outputV3ConformanceDirectory{Directory: duplicate}, nil
+}
+
+func (directory *outputV3ConformanceDirectory) SameDirectory(other outputcap.Directory) (bool, error) {
+	if wrapped, ok := other.(*outputV3ConformanceDirectory); ok {
+		other = wrapped.Directory
+	}
+	return directory.Directory.SameDirectory(other)
+}
+
+func (directory *outputV3ConformanceDirectory) OpenDirectory(
+	name string,
+	private bool,
+) (outputcap.Directory, error) {
+	opened, err := directory.Directory.OpenDirectory(name, private)
+	if err != nil {
+		return nil, err
+	}
+	return &outputV3ConformanceDirectory{Directory: opened}, nil
+}
+
+func (directory *outputV3ConformanceDirectory) CreateDirectory(
+	name string,
+	private bool,
+) (outputcap.Directory, error) {
+	created, err := directory.Directory.CreateDirectory(name, private)
+	if err != nil {
+		return nil, err
+	}
+	return &outputV3ConformanceDirectory{Directory: created}, nil
+}
+
 func assertOutputV3PublicTestDecoratorConformance(
 	t *testing.T,
-	root outputV3Directory,
-	isDecorated func(outputV3Directory) bool,
+	root outputcap.Directory,
+	isDecorated func(outputcap.Directory) bool,
 ) {
 	t.Helper()
 	duplicate, err := root.Duplicate()
@@ -120,7 +138,7 @@ func assertOutputV3PublicTestDecoratorConformance(
 
 func requireOutputV3OwnedTestDirectory(
 	t *testing.T,
-	directory outputV3Directory,
+	directory outputcap.Directory,
 	operation string,
 ) {
 	t.Helper()

@@ -15,7 +15,7 @@ import (
 	modzip "golang.org/x/mod/zip"
 )
 
-const testModuleVersion = "v0.3.0"
+const testModuleVersion = "v0.0.0-ci"
 
 func TestValidateConfiguration(t *testing.T) {
 	valid := configuration{
@@ -45,6 +45,7 @@ func TestValidateConfiguration(t *testing.T) {
 		{name: "version", mutate: func(config *configuration) { config.version = "" }, want: "-version is required"},
 		{name: "invalid version", mutate: func(config *configuration) { config.version = "release-3" }, want: "invalid module version"},
 		{name: "wrong major", mutate: func(config *configuration) { config.version = "v2.0.0" }, want: "invalid module version"},
+		{name: "closed version", mutate: func(config *configuration) { config.version = "v0.3.0" }, want: "closed and cannot be validated again"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

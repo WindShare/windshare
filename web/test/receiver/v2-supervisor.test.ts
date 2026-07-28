@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import type { Suite02CapabilityKey } from '../../src/crypto/suite02-link'
-import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
+import {
+  V2ConnectivityRouteAuthority,
+  type V2ContentLaneAdmissionObservation,
+} from '../../src/connectivity/v2-receiver-policy'
 import {
   V2BrowserSessionFactory,
   type V2AttachedRelay,
@@ -166,12 +169,14 @@ function supervisorFixture(
   relay: TrackedRelay,
   factory = new FakeSessionFactory(),
   share = descriptor(),
+  onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void,
 ) {
   const supervisor = new V2ReceiverReconnectSupervisor({
     descriptor: share,
     initial: core(session, relay),
     sessionFactory: factory,
     randomBytes: (length) => new Uint8Array(length).fill(9),
+    ...(onContentLaneAdmitted === undefined ? {} : { onContentLaneAdmitted }),
   })
   return { factory, supervisor }
 }
@@ -181,6 +186,37 @@ async function flushReconciliation(): Promise<void> {
 }
 
 describe('v2 receiver reconnect supervisor', () => {
+  it('preserves lane-admission observations across generation replacement', async () => {
+    const firstSession = new FakeSession([1])
+    const firstRelay = new TrackedRelay(1)
+    const secondSession = new FakeSession([10])
+    const secondRelay = new TrackedRelay(10)
+    const factory = new FakeSessionFactory()
+    factory.connectFreshImpl = async () => core(secondSession, secondRelay)
+    const observations: V2ContentLaneAdmissionObservation[] = []
+    const { supervisor } = supervisorFixture(
+      firstSession,
+      firstRelay,
+      factory,
+      descriptor(),
+      (observation) => observations.push(observation),
+    )
+    const download = supervisor.connectivity.begin('download', 'small')
+
+    expect(observations).toEqual([{ laneId: 1, route: 'relay' }])
+    firstSession.detach(1)
+    await flushReconciliation()
+
+    expect(supervisor.generationId).toBe(2)
+    expect(observations).toEqual([
+      { laneId: 1, route: 'relay' },
+      { laneId: 10, route: 'relay' },
+    ])
+
+    download.close()
+    await supervisor.close()
+  })
+
   it('reattaches one relay to the same generation when P2P survives', async () => {
     const session = new FakeSession([1, 2])
     const initialRelay = new TrackedRelay(1)

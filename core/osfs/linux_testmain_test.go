@@ -15,6 +15,7 @@ const (
 	linuxNativeFixtureEnvironment     = "WINDSHARE_LINUX_NATIVE_FIXTURE"
 	linuxNativeFixtureVersion         = "loop-ext4-v1"
 	linuxNativeFixtureTempEnvironment = "WINDSHARE_LINUX_NATIVE_TEMP_ROOT"
+	linuxNativeTestDirectoryMode      = 0o700
 )
 
 func TestMain(m *testing.M) {
@@ -64,7 +65,7 @@ func linuxNativeTestTempRoot() (string, bool, error) {
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		if !ok || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
-			info.Mode().Perm() != os.FileMode(linuxOutputDirectoryMode) ||
+			info.Mode().Perm() != os.FileMode(linuxNativeTestDirectoryMode) ||
 			stat.Uid != uint32(os.Geteuid()) {
 			return "", false, fmt.Errorf("native fixture temp root is not a receiver-owned 0700 directory")
 		}
@@ -79,7 +80,7 @@ func linuxNativeTestTempRoot() (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("create Linux native-test temp root: %w", err)
 	}
-	if err := os.Chmod(testTemp, linuxOutputDirectoryMode); err != nil {
+	if err := os.Chmod(testTemp, linuxNativeTestDirectoryMode); err != nil {
 		_ = os.RemoveAll(testTemp)
 		return "", false, fmt.Errorf("make Linux native-test temp root private: %w", err)
 	}

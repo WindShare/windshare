@@ -87,10 +87,15 @@ describe('v2 browser gateway connectivity injection', () => {
     captured.supervisorOptions.length = 0
   })
 
-  it('forwards the real-offer factory and authenticated block observer to the supervisor', async () => {
+  it('forwards connectivity diagnostics to the supervisor', async () => {
     const offersFactory = () => ({ offer: vi.fn() }) as never
     const onBlockFetched = vi.fn()
-    const gateway = new V2BrowserReceiverGateway({ offersFactory, onBlockFetched })
+    const onContentLaneAdmitted = vi.fn()
+    const gateway = new V2BrowserReceiverGateway({
+      offersFactory,
+      onBlockFetched,
+      onContentLaneAdmitted,
+    })
 
     const joined = await gateway.join(
       'https://receiver.test/s/share#key',
@@ -100,6 +105,7 @@ describe('v2 browser gateway connectivity injection', () => {
 
     expect(options?.offersFactory).toBe(offersFactory)
     expect(options?.onBlockFetched).toBe(onBlockFetched)
+    expect(options?.onContentLaneAdmitted).toBe(onContentLaneAdmitted)
     await joined.close()
   })
 })

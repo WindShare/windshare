@@ -1,6 +1,6 @@
 # Native filesystem output ownership and resume contract
 
-Status: implemented in `core/v0.3.0`. Certification is limited to process-restart durability on Linux/ext4 and Windows/local NTFS; no power-loss durability is claimed. Browser output has a separate design.
+Status: the native v3 contract exists in core, but the current post-`core/v0.3.0` tree is under validation and is not release-certified. Certification claims are limited to process-restart durability on Linux/ext4 and Windows/local NTFS; no power-loss durability is claimed. Browser output is capability-driven and does not inherit native ext4/NTFS identity, ancestry, metadata-side-effect, or durability claims.
 
 ## Product and durability contract
 
@@ -506,9 +506,11 @@ Do not add a replace directive, compatibility shim, Abort adapter, or dual v2/v3
 - core/transfer/output_selection.go
 - core/transfer/resume_intent.go
 - core/osfs/output_authority.go
-- core/osfs/output_v3_admission.go
-- core/osfs/output_v3_file.go
-- core/osfs/output_v3_terminal.go
+- core/osfs/internal/outputruntime/
+- core/osfs/internal/outputnamespace/
+- core/osfs/internal/outputcap/
 - core/osfs/internal/resumestate/
+- core/osfs/internal/outputlinux/
+- core/osfs/internal/outputwindows/
 - Linux linkat/renameat2/openat2, `FS_IOC_GETFSUUID`, `STATX_BTIME`, optional nonzero `FS_IOC_GETVERSION`, and directory fsync
 - Windows `FSCTL_CREATE_OR_GET_OBJECT_ID`, scoped directory guards, and handle-relative file link/rename information

@@ -23,7 +23,10 @@ import (
 	modzip "golang.org/x/mod/zip"
 )
 
-const modulePath = "github.com/windshare/windshare/core"
+const (
+	modulePath          = "github.com/windshare/windshare/core"
+	closedModuleVersion = "v0.3.0"
+)
 
 var allowedTopLevelFiles = map[string]struct{}{
 	".testcoverage.yml": {},
@@ -194,6 +197,11 @@ func validateConfiguration(config configuration) error {
 	}
 	if err := module.Check(modulePath, config.version); err != nil {
 		return fmt.Errorf("invalid module version: %w", err)
+	}
+	// Keep the canceled namespace unreachable even when a caller bypasses the
+	// workflow resolver and invokes an artifact script directly.
+	if config.version == closedModuleVersion {
+		return fmt.Errorf("module version %s is closed and cannot be validated again", config.version)
 	}
 	if !isLowerHexCommitSHA(config.commitSHA) {
 		return errors.New("-commit must be an exact lowercase 40-character commit SHA")

@@ -1,43 +1,38 @@
+//go:build windows
+
 package osfs
 
-// outputV3DecoratedPublicOperationGuard keeps the native guard's lifetime and
-// placement authority while allowing fault and race decorators to observe the
-// guarded root used by public-namespace operations.
-type outputV3DecoratedPublicOperationGuard struct {
-	outputV3PublicOperationGuard
-	root outputV3Directory
-}
+import (
+	"testing"
 
-func (guard *outputV3DecoratedPublicOperationGuard) Root() outputV3Directory {
-	if guard == nil {
-		return nil
-	}
-	return guard.root
-}
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
+	"github.com/windshare/windshare/core/osfs/internal/outputruntime"
+)
 
-func (guard *outputV3DecoratedPublicOperationGuard) Close() error {
-	if guard == nil {
-		return nil
-	}
-	guard.root = nil
-	if guard.outputV3PublicOperationGuard == nil {
-		return nil
-	}
-	err := guard.outputV3PublicOperationGuard.Close()
-	guard.outputV3PublicOperationGuard = nil
-	return err
-}
-
-func acquireOutputV3DecoratedPublicOperationGuard(
-	platform outputV3Platform,
-	decorate func(outputV3Directory) outputV3Directory,
-) (outputV3PublicOperationGuard, error) {
-	guard, err := platform.AcquirePublicOperationGuard()
+// newOutputV3DecoratedPublicAuthority keeps native fault injection at the
+// capability boundary while every test interaction still crosses the public
+// FilesystemOutputAuthority facade.
+func newOutputV3DecoratedPublicAuthority(
+	t *testing.T,
+	rootPath string,
+	decorate func(outputcap.Platform) outputcap.Platform,
+) *FilesystemOutputAuthority {
+	t.Helper()
+	runtimeAuthority, err := outputruntime.New(outputruntime.Config{
+		RootPath: rootPath,
+		PlatformFactory: func(path string, create bool) (outputcap.Platform, error) {
+			platform, openErr := openOutputV3Platform(path, create)
+			if openErr != nil {
+				return nil, openErr
+			}
+			if decorate == nil {
+				return platform, nil
+			}
+			return decorate(platform), nil
+		},
+	})
 	if err != nil {
-		return nil, err
+		t.Fatal(err)
 	}
-	return &outputV3DecoratedPublicOperationGuard{
-		outputV3PublicOperationGuard: guard,
-		root:                         decorate(guard.Root()),
-	}, nil
+	return &FilesystemOutputAuthority{authority: runtimeAuthority}
 }

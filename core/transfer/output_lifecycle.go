@@ -57,7 +57,7 @@ func (fault *OutputFault) RequiresJobPause() bool {
 	// session exists. Runtime namespace failures carry an OutputSessionError
 	// that explicitly requires pausing the already admitted session.
 	return fault.scope != OutputFaultFile &&
-		!(fault.scope == OutputFaultSession && fault.code == OutputFaultNamespaceUnsafe)
+		(fault.scope != OutputFaultSession || fault.code != OutputFaultNamespaceUnsafe)
 }
 
 func outputContractFault(cause error) error {

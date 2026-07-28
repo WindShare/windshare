@@ -9,6 +9,7 @@ import { snapshotPortableCatalogPath } from '../catalog/path-policy'
 import type { OfferChannelFactory } from '../connectivity/peer-offer'
 import type {
   V2ConnectivityActivation,
+  V2ContentLaneAdmissionObservation,
   V2ContentSizeClass,
 } from '../connectivity/v2-receiver-policy'
 import {
@@ -185,15 +186,20 @@ export class V2JoinedBrowserShare {
 export interface V2BrowserReceiverGatewayOptions {
   readonly offersFactory?: () => OfferChannelFactory
   readonly onBlockFetched?: (observation: V2BlockRouteObservation) => void
+  readonly onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void
 }
 
 export class V2BrowserReceiverGateway {
   readonly #offersFactory: (() => OfferChannelFactory) | undefined
   readonly #onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined
+  readonly #onContentLaneAdmitted: (
+    (observation: V2ContentLaneAdmissionObservation) => void
+  ) | undefined
 
   constructor(options: V2BrowserReceiverGatewayOptions = {}) {
     this.#offersFactory = options.offersFactory
     this.#onBlockFetched = options.onBlockFetched
+    this.#onContentLaneAdmitted = options.onContentLaneAdmitted
   }
 
   async join(input: string, pageUrl: string, signal?: AbortSignal): Promise<V2JoinedBrowserShare> {
@@ -242,9 +248,10 @@ export class V2BrowserReceiverGateway {
         ...(this.#offersFactory === undefined
           ? {}
           : { offersFactory: this.#offersFactory }),
-        ...(this.#onBlockFetched === undefined
-          ? {}
-          : { onBlockFetched: this.#onBlockFetched }),
+        ...gatewayConnectivityDiagnostics(
+          this.#onBlockFetched,
+          this.#onContentLaneAdmitted,
+        ),
       })
       const store = await IndexedDbV2CatalogPageStore.open(recoveryIdentity)
       catalog = new V2CatalogClient({
@@ -278,6 +285,17 @@ export class V2BrowserReceiverGateway {
     } finally {
       capability.readSecret.fill(0)
     }
+  }
+}
+
+function gatewayConnectivityDiagnostics(
+  onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined,
+  onContentLaneAdmitted:
+    ((observation: V2ContentLaneAdmissionObservation) => void) | undefined,
+) {
+  return {
+    ...(onBlockFetched === undefined ? {} : { onBlockFetched }),
+    ...(onContentLaneAdmitted === undefined ? {} : { onContentLaneAdmitted }),
   }
 }
 

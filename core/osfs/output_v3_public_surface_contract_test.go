@@ -18,13 +18,13 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 )
 
-var _ transfer.OutputSession = (*filesystemOutputSession)(nil)
+var _ transfer.OutputAuthority = (*FilesystemOutputAuthority)(nil)
 
 func TestFilesystemOutputAuthorityExportsOnlyIntentionalSurface(t *testing.T) {
-	authorityType := reflect.TypeOf((*FilesystemOutputAuthority)(nil))
+	authorityType := reflect.TypeFor[*FilesystemOutputAuthority]()
 	methods := make([]string, 0, authorityType.NumMethod())
-	for index := 0; index < authorityType.NumMethod(); index++ {
-		methods = append(methods, authorityType.Method(index).Name)
+	for method := range authorityType.Methods() {
+		methods = append(methods, method.Name)
 	}
 	want := []string{"OpenSelection"}
 	if !slices.Equal(methods, want) {
@@ -32,35 +32,29 @@ func TestFilesystemOutputAuthorityExportsOnlyIntentionalSurface(t *testing.T) {
 	}
 }
 
-func TestFilesystemOutputSessionImplementationMatchesTransferContract(t *testing.T) {
-	sessionType := reflect.TypeOf((*filesystemOutputSession)(nil))
-	methods := make([]string, 0, sessionType.NumMethod())
-	for index := 0; index < sessionType.NumMethod(); index++ {
-		methods = append(methods, sessionType.Method(index).Name)
+func TestFilesystemOutputAuthorityOpenSelectionReturnsTransferContract(t *testing.T) {
+	authorityType := reflect.TypeFor[*FilesystemOutputAuthority]()
+	method, found := authorityType.MethodByName("OpenSelection")
+	if !found {
+		t.Fatal("filesystem output authority does not expose OpenSelection")
 	}
-	want := []string{
-		"BackendID",
-		"BeginFile",
-		"Capabilities",
-		"CompleteJob",
-		"FinalizeDirectory",
-		"PauseJob",
-		"SessionID",
-	}
-	if !slices.Equal(methods, want) {
-		t.Fatalf("public filesystem output-session methods = %v, want %v", methods, want)
+	transferSession := reflect.TypeFor[transfer.OutputSession]()
+	if method.Type.NumOut() != 2 || method.Type.Out(0) != transferSession ||
+		method.Type.Out(1) != reflect.TypeFor[error]() {
+		t.Fatalf("OpenSelection results = (%v, %v), want (transfer.OutputSession, error)",
+			method.Type.Out(0), method.Type.Out(1))
 	}
 }
 
 func TestFilesystemOutputAuthorityConfigContainsOnlyPathPolicyAndTracer(t *testing.T) {
-	configType := reflect.TypeOf(FilesystemOutputAuthorityConfig{})
+	configType := reflect.TypeFor[FilesystemOutputAuthorityConfig]()
 	want := []struct {
 		name   string
 		typeOf reflect.Type
 	}{
-		{name: "RootPath", typeOf: reflect.TypeOf("")},
-		{name: "CreateRoot", typeOf: reflect.TypeOf(false)},
-		{name: "Tracer", typeOf: reflect.TypeOf((*FilesystemOutputTracer)(nil)).Elem()},
+		{name: "RootPath", typeOf: reflect.TypeFor[string]()},
+		{name: "CreateRoot", typeOf: reflect.TypeFor[bool]()},
+		{name: "Tracer", typeOf: reflect.TypeFor[FilesystemOutputTracer]()},
 	}
 	if configType.NumField() != len(want) {
 		t.Fatalf("filesystem output-authority config fields = %d, want %d", configType.NumField(), len(want))

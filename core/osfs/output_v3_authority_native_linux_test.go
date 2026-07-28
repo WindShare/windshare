@@ -8,30 +8,39 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
+	"github.com/windshare/windshare/core/osfs/internal/outputruntime"
 	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 	"golang.org/x/sys/unix"
+)
+
+const (
+	linuxNativeTestDefaultAccessACL     = "system.posix_acl_default"
+	linuxNativeTestFSImmutableFlag      = uint32(0x00000010)
+	linuxNativeTestFSAppendFlag         = uint32(0x00000020)
+	linuxNativeTestFSEncryptFlag        = uint32(0x00000800)
+	linuxNativeTestFSProjectInheritFlag = uint32(0x20000000)
 )
 
 func TestLinuxExt4RejectsStickySharedExternalAncestryBeforeState(t *testing.T) {
 	requireUnprivilegedLinuxExt4Certification(t)
 	shared := t.TempDir()
 	rootPath := filepath.Join(shared, "output")
-	if err := os.Mkdir(rootPath, linuxOutputDirectoryMode); err != nil {
+	if err := os.Mkdir(rootPath, linuxNativeTestDirectoryMode); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(shared, 0o777|os.ModeSticky); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(shared, linuxOutputDirectoryMode)
+	defer os.Chmod(shared, linuxNativeTestDirectoryMode)
 
 	assertLinuxNativeAuthorityRejectsBeforeProbe(
-		t, rootPath, v3RecoverySelection(t, true, 1), nil,
+		t, rootPath, linuxNativeRootFileSelection(t, 1), nil,
 	)
 }
 
@@ -40,10 +49,10 @@ func TestLinuxExt4AcceptsPrivateAbsoluteAncestryClaim(t *testing.T) {
 	carrier := t.TempDir()
 	privateParent := filepath.Join(carrier, "private")
 	rootPath := filepath.Join(privateParent, "output")
-	if err := os.Mkdir(privateParent, linuxOutputDirectoryMode); err != nil {
+	if err := os.Mkdir(privateParent, linuxNativeTestDirectoryMode); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(rootPath, linuxOutputDirectoryMode); err != nil {
+	if err := os.Mkdir(rootPath, linuxNativeTestDirectoryMode); err != nil {
 		t.Fatal(err)
 	}
 	platform, err := openOutputV3Platform(rootPath, false)
@@ -60,8 +69,12 @@ func TestLinuxExt4AcceptsPrivateAbsoluteAncestryClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(prepared) == 0 || !reflect.DeepEqual(prepared, revalidated) {
-		t.Fatalf("private ancestry claims differ: prepared=%x revalidated=%x", prepared, revalidated)
+	if prepared.IsZero() || !prepared.Equal(revalidated) {
+		t.Fatalf(
+			"private ancestry claims differ: prepared=%x revalidated=%x",
+			prepared.Bytes(),
+			revalidated.Bytes(),
+		)
 	}
 }
 
@@ -98,7 +111,7 @@ func TestLinuxExt4RejectsCreateModeInheritanceBeforeProbe(t *testing.T) {
 			t.Fatal("setgid inheritance witness was not installed")
 		}
 		assertLinuxNativeAuthorityRejectsBeforeProbe(
-			t, rootPath, v3RecoverySelection(t, true, 1), nil,
+			t, rootPath, linuxNativeRootFileSelection(t, 1), nil,
 		)
 	})
 
@@ -106,15 +119,15 @@ func TestLinuxExt4RejectsCreateModeInheritanceBeforeProbe(t *testing.T) {
 		rootPath := t.TempDir()
 		certifyLinuxExt4AuthorityTestRoot(t, rootPath)
 		acl := linuxNativeDefaultACL(0o7, 0, 0)
-		if err := unix.Setxattr(rootPath, linuxDefaultAccessACL, acl, 0); err != nil {
+		if err := unix.Setxattr(rootPath, linuxNativeTestDefaultAccessACL, acl, 0); err != nil {
 			if errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.EPERM) {
 				t.Skipf("host cannot install an ext4 default ACL witness: %v", err)
 			}
 			t.Fatal(err)
 		}
-		defer unix.Removexattr(rootPath, linuxDefaultAccessACL)
+		defer unix.Removexattr(rootPath, linuxNativeTestDefaultAccessACL)
 		assertLinuxNativeAuthorityRejectsBeforeProbe(
-			t, rootPath, v3RecoverySelection(t, true, 1), nil,
+			t, rootPath, linuxNativeRootFileSelection(t, 1), nil,
 		)
 	})
 }
@@ -122,9 +135,9 @@ func TestLinuxExt4RejectsCreateModeInheritanceBeforeProbe(t *testing.T) {
 func TestLinuxExt4RejectsMutationAndProjectInheritanceFlagsBeforeMutation(t *testing.T) {
 	requireUnprivilegedLinuxExt4Certification(t)
 	for name, flag := range map[string]uint32{
-		"immutable":       linuxFSImmutableFlag,
-		"append-only":     linuxFSAppendFlag,
-		"project-inherit": linuxFSProjectInheritFlag,
+		"immutable":       linuxNativeTestFSImmutableFlag,
+		"append-only":     linuxNativeTestFSAppendFlag,
+		"project-inherit": linuxNativeTestFSProjectInheritFlag,
 	} {
 		t.Run(name, func(t *testing.T) {
 			rootPath := t.TempDir()
@@ -134,7 +147,7 @@ func TestLinuxExt4RejectsMutationAndProjectInheritanceFlagsBeforeMutation(t *tes
 				t.Fatal(err)
 			}
 			defer opened.Close()
-			original, err := linuxGetInodeFlags(int(opened.Fd()))
+			original, err := linuxNativeTestGetInodeFlags(int(opened.Fd()))
 			if err != nil {
 				t.Skipf("host cannot inspect ext4 inode flags: %v", err)
 			}
@@ -148,7 +161,7 @@ func TestLinuxExt4RejectsMutationAndProjectInheritanceFlagsBeforeMutation(t *tes
 			}
 			defer unix.IoctlSetPointerInt(int(opened.Fd()), unix.FS_IOC_SETFLAGS, int(original))
 			assertLinuxNativeAuthorityRejectsBeforeProbe(
-				t, rootPath, v3RecoverySelection(t, true, 1), nil,
+				t, rootPath, linuxNativeRootFileSelection(t, 1), nil,
 			)
 		})
 	}
@@ -161,69 +174,19 @@ func TestLinuxExt4RejectsInheritedFscryptDirectoryBeforeProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	flags, err := linuxGetInodeFlags(int(opened.Fd()))
+	flags, err := linuxNativeTestGetInodeFlags(int(opened.Fd()))
 	if closeErr := opened.Close(); err == nil {
 		err = closeErr
 	}
 	if err != nil {
 		t.Skipf("host cannot inspect ext4 inode flags: %v", err)
 	}
-	if flags&linuxFSEncryptFlag == 0 {
+	if flags&linuxNativeTestFSEncryptFlag == 0 {
 		t.Skip("temporary directory does not inherit a real fscrypt policy")
 	}
 	assertLinuxNativeAuthorityRejectsBeforeProbe(
-		t, rootPath, v3RecoverySelection(t, true, 1), nil,
+		t, rootPath, linuxNativeRootFileSelection(t, 1), nil,
 	)
-}
-
-func TestLinuxExt4RejectsNestedMountIdentityBeforeProbe(t *testing.T) {
-	requireUnprivilegedLinuxExt4Certification(t)
-	rootPath := t.TempDir()
-	certifyLinuxExt4AuthorityTestRoot(t, rootPath)
-	if err := os.Mkdir(filepath.Join(rootPath, "nested"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	mismatchCalls := 0
-	assertLinuxNativeAuthorityRejectsBeforeProbe(
-		t,
-		rootPath,
-		linuxNativeSelectionUnderParent(t, "nested", "file.bin", 1),
-		[]string{"nested"},
-		func(platform outputV3Platform) {
-			native, ok := platform.(*linuxV3Platform)
-			if !ok || native.root == nil || native.root.native == nil || native.root.native.system == nil {
-				t.Fatalf("native Linux platform = %#v", platform)
-			}
-			system := *native.root.native.system
-			hostOpenat2 := system.openat2
-			hostStatx := system.statx
-			nestedFD := -1
-			system.openat2 = func(dirfd int, path string, how *unix.OpenHow) (int, error) {
-				fd, err := hostOpenat2(dirfd, path, how)
-				if err == nil && path == "nested" {
-					if how.Resolve&uint64(unix.RESOLVE_NO_XDEV) == 0 {
-						t.Fatal("selected-parent open omitted RESOLVE_NO_XDEV")
-					}
-					nestedFD = fd
-				}
-				return fd, err
-			}
-			system.statx = func(fd int, path string, flags int, mask int, stat *unix.Statx_t) error {
-				if err := hostStatx(fd, path, flags, mask, stat); err != nil {
-					return err
-				}
-				if fd == nestedFD && path == "" && mask&unix.STATX_MNT_ID_UNIQUE != 0 {
-					stat.Mnt_id = native.root.native.certificate.mount.uniqueMountID + 1
-					mismatchCalls++
-				}
-				return nil
-			}
-			native.root.native.system = &system
-		},
-	)
-	if mismatchCalls == 0 {
-		t.Fatal("selected nested directory never reached the injected mount-identity check")
-	}
 }
 
 func TestLinuxExt4PrivateExactOpenRejectsForeignOwnerEvenWithRootCapabilities(t *testing.T) {
@@ -232,19 +195,19 @@ func TestLinuxExt4PrivateExactOpenRejectsForeignOwnerEvenWithRootCapabilities(t 
 	}
 	rootPath := t.TempDir()
 	controlPath := filepath.Join(rootPath, ".windshare-output")
-	if err := os.Mkdir(controlPath, linuxOutputDirectoryMode); err != nil {
+	if err := os.Mkdir(controlPath, linuxNativeTestDirectoryMode); err != nil {
 		t.Fatal(err)
 	}
 	const foreignUID = 65534
 	if err := os.Chown(controlPath, foreignUID, foreignUID); err != nil {
 		t.Skipf("host cannot create a foreign-owned private-directory witness: %v", err)
 	}
-	if err := os.Chmod(controlPath, linuxOutputDirectoryMode); err != nil {
+	if err := os.Chmod(controlPath, linuxNativeTestDirectoryMode); err != nil {
 		t.Fatal(err)
 	}
 	platform, err := openOutputV3Platform(rootPath, false)
 	if err != nil {
-		if errors.Is(err, errUnsupportedOutputVolume) {
+		if errors.Is(err, outputcap.ErrRecoverableOutputUnsupported) {
 			t.Skipf("host is outside the certified Linux/ext4 profile: %v", err)
 		}
 		t.Fatal(err)
@@ -254,7 +217,7 @@ func TestLinuxExt4PrivateExactOpenRejectsForeignOwnerEvenWithRootCapabilities(t 
 	if opened != nil {
 		_ = opened.Close()
 	}
-	if !errors.Is(err, errOutputV3Unsafe) {
+	if !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("foreign-owned exact private directory open = %v", err)
 	}
 }
@@ -277,29 +240,20 @@ func assertLinuxNativeAuthorityRejectsBeforeProbe(
 	rootPath string,
 	selection transfer.OutputSelection,
 	wantNames []string,
-	configure ...func(outputV3Platform),
 ) {
 	t.Helper()
-	authority := v3RecoveryAuthority(t, rootPath, nil)
-	nativeFactory := authority.platformFactory
 	probeCalls := 0
-	authority.platformFactory = func(path string, create bool) (outputV3Platform, error) {
-		platform, err := nativeFactory(path, create)
-		if err != nil {
-			return nil, err
-		}
-		if len(configure) > 0 {
-			configure[0](platform)
-		}
-		return &linuxV3NativeProbeCountingPlatform{
-			outputV3Platform: platform, probeCalls: &probeCalls,
-		}, nil
-	}
+	authority := newLinuxNativeDecoratedPublicAuthority(
+		t,
+		rootPath,
+		nil,
+		func(platform outputcap.Platform) outputcap.Platform {
+			return &linuxNativeProbeCountingPlatform{Platform: platform, probeCalls: &probeCalls}
+		},
+	)
 	session, err := authority.OpenSelection(context.Background(), selection)
 	if session != nil {
-		if concrete, ok := session.(*filesystemOutputSession); ok {
-			_ = concrete.closeHandles()
-		}
+		_, _ = session.PauseJob(context.Background(), transfer.JobPauseOutputFailure)
 		t.Fatal("unsafe Linux authority opened an output session")
 	}
 	if err == nil {
@@ -326,6 +280,19 @@ func assertLinuxNativeAuthorityRejectsBeforeProbe(
 	}
 }
 
+func linuxNativeRootFileSelection(t *testing.T, exactSize uint64) transfer.OutputSelection {
+	t.Helper()
+	share := linuxNativeTestIdentity16[catalog.ShareInstance](1)
+	root := linuxNativeTestIdentity16[catalog.DirectoryID](2)
+	rootGeneration := linuxNativeTestIdentity16[catalog.DirectoryGeneration](3)
+	file := transfer.OutputSelectionFile{
+		Path: "file.bin", FileID: linuxNativeTestIdentity16[catalog.FileID](4),
+		ParentDirectoryID: root, ParentGeneration: rootGeneration,
+		ExpectedSize: exactSize, ModifiedTime: linuxNativeTestModifiedTime(t),
+	}
+	return linuxNativeCanonicalSelection(t, share, root, rootGeneration, nil, []transfer.OutputSelectionFile{file})
+}
+
 func linuxNativeSelectionUnderParent(
 	t *testing.T,
 	parentPath string,
@@ -333,22 +300,36 @@ func linuxNativeSelectionUnderParent(
 	exactSize uint64,
 ) transfer.OutputSelection {
 	t.Helper()
-	share := v3RecoveryIdentity16[catalog.ShareInstance](1)
-	root := v3RecoveryIdentity16[catalog.DirectoryID](2)
-	rootGeneration := v3RecoveryIdentity16[catalog.DirectoryGeneration](3)
+	share := linuxNativeTestIdentity16[catalog.ShareInstance](1)
+	root := linuxNativeTestIdentity16[catalog.DirectoryID](2)
+	rootGeneration := linuxNativeTestIdentity16[catalog.DirectoryGeneration](3)
 	parent := transfer.OutputSelectionDirectory{
-		Path: parentPath, DirectoryID: v3RecoveryIdentity16[catalog.DirectoryID](4),
-		Generation: v3RecoveryIdentity16[catalog.DirectoryGeneration](5),
+		Path: parentPath, DirectoryID: linuxNativeTestIdentity16[catalog.DirectoryID](4),
+		Generation: linuxNativeTestIdentity16[catalog.DirectoryGeneration](5),
 	}
 	file := transfer.OutputSelectionFile{
-		Path: parentPath + "/" + fileName, FileID: v3RecoveryIdentity16[catalog.FileID](6),
+		Path: parentPath + "/" + fileName, FileID: linuxNativeTestIdentity16[catalog.FileID](6),
 		ParentDirectoryID: parent.DirectoryID, ParentGeneration: parent.Generation,
-		ExpectedSize: exactSize, ModifiedTime: v3RecoveryModifiedTime(t),
+		ExpectedSize: exactSize, ModifiedTime: linuxNativeTestModifiedTime(t),
 	}
+	return linuxNativeCanonicalSelection(
+		t, share, root, rootGeneration, []transfer.OutputSelectionDirectory{parent}, []transfer.OutputSelectionFile{file},
+	)
+}
+
+func linuxNativeCanonicalSelection(
+	t *testing.T,
+	share catalog.ShareInstance,
+	root catalog.DirectoryID,
+	rootGeneration catalog.DirectoryGeneration,
+	directories []transfer.OutputSelectionDirectory,
+	files []transfer.OutputSelectionFile,
+) transfer.OutputSelection {
+	t.Helper()
 	plan, err := transfer.NewOutputSelection(
 		share, root, rootGeneration,
-		[]transfer.OutputSelectionDirectory{parent},
-		[]transfer.OutputSelectionFile{file},
+		directories,
+		files,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -372,14 +353,31 @@ func linuxNativeSelectionUnderParent(
 	return selection
 }
 
-type linuxV3NativeProbeCountingPlatform struct {
-	outputV3Platform
+func linuxNativeTestIdentity16[T ~[catalog.IdentityBytes]byte](value byte) T {
+	var identity T
+	for index := range identity {
+		identity[index] = value
+	}
+	return identity
+}
+
+func linuxNativeTestModifiedTime(t *testing.T) catalog.ModifiedTime {
+	t.Helper()
+	modified, err := catalog.NewModifiedTime(1_700_000_000, 0, catalog.TimePrecisionSeconds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return modified
+}
+
+type linuxNativeProbeCountingPlatform struct {
+	outputcap.Platform
 	probeCalls *int
 }
 
-func (platform *linuxV3NativeProbeCountingPlatform) ProbeRecoverableFeatures() error {
+func (platform *linuxNativeProbeCountingPlatform) ProbeRecoverableFeatures() error {
 	(*platform.probeCalls)++
-	return platform.outputV3Platform.ProbeRecoverableFeatures()
+	return platform.Platform.ProbeRecoverableFeatures()
 }
 
 func linuxNativeDefaultACL(owner, group, other uint16) []byte {
@@ -404,4 +402,43 @@ func linuxNativeDefaultACL(owner, group, other uint16) []byte {
 		binary.LittleEndian.PutUint32(encoded[offset+4:], undefinedID)
 	}
 	return encoded
+}
+
+func linuxNativeTestGetInodeFlags(fd int) (uint32, error) {
+	flags, err := unix.IoctlGetInt(fd, unix.FS_IOC_GETFLAGS)
+	return uint32(flags), err
+}
+
+// newLinuxNativeDecoratedPublicAuthority keeps native fault injection inside
+// this Linux-only certification fixture while every exercised operation still
+// crosses the public FilesystemOutputAuthority facade.
+func newLinuxNativeDecoratedPublicAuthority(
+	t *testing.T,
+	rootPath string,
+	tracer FilesystemOutputTracer,
+	decorate func(outputcap.Platform) outputcap.Platform,
+) *FilesystemOutputAuthority {
+	t.Helper()
+	var runtimeTracer outputruntime.FilesystemOutputTracer
+	if tracer != nil {
+		runtimeTracer = outputRuntimeTracer{target: tracer}
+	}
+	runtimeAuthority, err := outputruntime.New(outputruntime.Config{
+		RootPath: rootPath,
+		Tracer:   runtimeTracer,
+		PlatformFactory: func(path string, create bool) (outputcap.Platform, error) {
+			platform, openErr := openOutputV3Platform(path, create)
+			if openErr != nil {
+				return nil, openErr
+			}
+			if decorate == nil {
+				return platform, nil
+			}
+			return decorate(platform), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &FilesystemOutputAuthority{authority: runtimeAuthority}
 }

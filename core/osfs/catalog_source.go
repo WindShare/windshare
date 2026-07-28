@@ -17,6 +17,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/osfs/internal/pathfailure"
 )
 
 const catalogEnumerationBatchSize = 128
@@ -89,11 +90,11 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 ) (catalog.NodeRecord, *os.Root, string, error) {
 	absolute, err := filepath.Abs(selectedPath)
 	if err != nil {
-		return catalog.NodeRecord{}, nil, "", filesystemPathFailure("resolve selected root", selectedPath, err)
+		return catalog.NodeRecord{}, nil, "", pathfailure.Filesystem("resolve selected root", selectedPath, err)
 	}
 	before, err := os.Lstat(absolute)
 	if err != nil {
-		return catalog.NodeRecord{}, nil, "", filesystemPathFailure("inspect selected root", absolute, err)
+		return catalog.NodeRecord{}, nil, "", pathfailure.Filesystem("inspect selected root", absolute, err)
 	}
 	if isReparsePoint(before) || before.Mode()&os.ModeSymlink != 0 || !before.IsDir() && !before.Mode().IsRegular() {
 		return catalog.NodeRecord{}, nil, "", fmt.Errorf("osfs: selected root %q is not a stable file or directory", absolute)
@@ -104,7 +105,7 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 	}
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
-		return catalog.NodeRecord{}, nil, "", filesystemPathFailure("open selected root authority", rootPath, err)
+		return catalog.NodeRecord{}, nil, "", pathfailure.Filesystem("open selected root authority", rootPath, err)
 	}
 	openName := relative
 	if openName == "" {
@@ -113,7 +114,7 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 	handle, err := root.Open(openName)
 	if err != nil {
 		_ = root.Close()
-		return catalog.NodeRecord{}, nil, "", filesystemPathFailure("open selected root object", absolute, err)
+		return catalog.NodeRecord{}, nil, "", pathfailure.Filesystem("open selected root object", absolute, err)
 	}
 	opened, statErr := handle.Stat()
 	identity, candidate, baselineErr := platformCatalogBaseline(handle)

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly artifact_only_version=v0.0.0-ci
+readonly closed_release_version=v0.3.0
+
 fail() {
   echo "core release ref: $1" >&2
   exit 1
@@ -15,6 +18,12 @@ validate_sha() {
 validate_version() {
   if [[ ! "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
     fail "candidate version is not a safe semantic version: $1"
+  fi
+  if [ "$1" = "$artifact_only_version" ]; then
+    fail "release version is reserved for non-publishing artifact checks: $1"
+  fi
+  if [ "$1" = "$closed_release_version" ]; then
+    fail "release version is closed and cannot be verified again: $1"
   fi
 }
 

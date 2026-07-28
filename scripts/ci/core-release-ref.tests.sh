@@ -64,10 +64,24 @@ run_moved_push() {
   )
 }
 
+run_manual() {
+  local version="$1"
+  local candidate_sha="$2"
+  (
+    cd "$repository"
+    EVENT_NAME=workflow_dispatch \
+      INPUT_COMMIT_SHA="$candidate_sha" \
+      INPUT_VERSION="$version" \
+      GITHUB_OUTPUT="$output" \
+      bash "$resolver"
+  )
+}
+
 expect_failure() {
   local label="$1"
   local expected="$2"
   shift 2
+  : >"$output"
   : >"$stdout_log"
   : >"$stderr_log"
   if "$@" >"$stdout_log" 2>"$stderr_log"; then
@@ -75,6 +89,23 @@ expect_failure() {
   fi
   grep -Fq -- "$expected" "$stderr_log" ||
     fail "$label did not report the expected reason: $expected"
+  [ ! -s "$output" ] || fail "$label emitted release outputs before rejection"
+}
+
+expect_tag_version_rejected() {
+  local label="$1"
+  local version="$2"
+  local expected="$3"
+  local candidate="refs/tags/core-candidate/$version/$commit_sha"
+  local final="refs/tags/core/$version"
+
+  git -C "$repository" tag "${candidate#refs/tags/}" "$commit_sha"
+  expect_failure "$label candidate tag" "$expected" run_push "$candidate" "$commit_sha"
+  git -C "$repository" tag -d "${candidate#refs/tags/}" >/dev/null
+
+  git -C "$repository" tag "${final#refs/tags/}" "$commit_sha"
+  expect_failure "$label final tag" "$expected" run_push "$final" "$commit_sha"
+  git -C "$repository" tag -d "${final#refs/tags/}" >/dev/null
 }
 
 git init -q -b main "$repository"
@@ -86,14 +117,17 @@ git -C "$repository" commit -q -m "candidate"
 commit_sha="$(git -C "$repository" rev-parse HEAD)"
 moved_sha="$(printf 'moved ref fixture\n' | git -C "$repository" commit-tree \
   "$(git -C "$repository" rev-parse 'HEAD^{tree}')" -p "$commit_sha")"
-candidate_ref="refs/tags/core-candidate/v0.3.0/$commit_sha"
-final_ref="refs/tags/core/v0.3.0"
+test_version=v0.0.0-release-test
+artifact_only_version=v0.0.0-ci
+closed_release_version=v0.3.0
+candidate_ref="refs/tags/core-candidate/$test_version/$commit_sha"
+final_ref="refs/tags/core/$test_version"
 
 git -C "$repository" tag "${candidate_ref#refs/tags/}" "$commit_sha"
 : >"$output"
 run_push "$candidate_ref" "$commit_sha"
 grep -Fxq "commit_sha=$commit_sha" "$output" || fail "candidate output omitted the exact commit"
-grep -Fxq 'version=v0.3.0' "$output" || fail "candidate output omitted the exact version"
+grep -Fxq "version=$test_version" "$output" || fail "candidate output omitted the exact version"
 
 git -C "$repository" tag -d "${candidate_ref#refs/tags/}" >/dev/null
 git -C "$repository" tag -a -m "annotated candidate" "${candidate_ref#refs/tags/}" "$commit_sha"
@@ -132,28 +166,41 @@ expect_failure "matching candidate moved before final resolution" \
 
 git -C "$repository" tag -d "${candidate_ref#refs/tags/}" >/dev/null
 wrong_suffix=0000000000000000000000000000000000000000
-wrong_ref="refs/tags/core-candidate/v0.3.0/$wrong_suffix"
+wrong_ref="refs/tags/core-candidate/$test_version/$wrong_suffix"
 git -C "$repository" tag "${wrong_ref#refs/tags/}" "$commit_sha"
 expect_failure "candidate suffix mismatch" "candidate tag SHA suffix does not match github.sha" \
   run_push "$wrong_ref" "$commit_sha"
 
-: >"$output"
-(
-  cd "$repository"
-  EVENT_NAME=workflow_dispatch \
-    INPUT_COMMIT_SHA="$commit_sha" \
-    INPUT_VERSION=v0.3.0 \
-    GITHUB_OUTPUT="$output" \
-    bash "$resolver"
-)
-grep -Fxq "commit_sha=$commit_sha" "$output" || fail "manual output omitted the exact commit"
+expect_tag_version_rejected \
+  "closed version" \
+  "$closed_release_version" \
+  "release version is closed and cannot be verified again: $closed_release_version"
+expect_tag_version_rejected \
+  "artifact-only version" \
+  "$artifact_only_version" \
+  "release version is reserved for non-publishing artifact checks: $artifact_only_version"
 
-expect_failure "missing manual commit" "manual candidate is not an available commit object" env \
-  EVENT_NAME=workflow_dispatch \
-  INPUT_COMMIT_SHA=1111111111111111111111111111111111111111 \
-  INPUT_VERSION=v0.3.0 \
-  GITHUB_OUTPUT="$output" \
-  bash -c "cd '$repository' && bash '$resolver'"
+: >"$output"
+run_manual "$test_version" "$commit_sha"
+grep -Fxq "commit_sha=$commit_sha" "$output" || fail "manual output omitted the exact commit"
+grep -Fxq "version=$test_version" "$output" || fail "manual output omitted the exact version"
+
+expect_failure \
+  "closed manual version" \
+  "release version is closed and cannot be verified again: $closed_release_version" \
+  run_manual "$closed_release_version" "$commit_sha"
+expect_failure \
+  "artifact-only manual version" \
+  "release version is reserved for non-publishing artifact checks: $artifact_only_version" \
+  run_manual "$artifact_only_version" "$commit_sha"
+expect_failure \
+  "missing manual version" \
+  "candidate version is not a safe semantic version" \
+  run_manual "" "$commit_sha"
+expect_failure \
+  "missing manual commit" \
+  "manual candidate is not an available commit object" \
+  run_manual "$test_version" 1111111111111111111111111111111111111111
 
 trap - EXIT
 rm -rf -- "$temporary_root"

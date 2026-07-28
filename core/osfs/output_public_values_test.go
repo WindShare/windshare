@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 )
@@ -136,14 +137,14 @@ func TestFilesystemOutputIdentityAndDigestMappingsPreserveBytes(t *testing.T) {
 		t.Fatalf("output object mapping = %x, want %x", actual, object)
 	}
 
-	selection := v3RecoverySelection(t, false, 0)
+	selection := publicValuesSelection(t)
 	root, err := resumestate.NewOutputRootBinding(
 		resumestate.CertificationLinuxExt4ProcessRestart, []byte("volume"), []byte("root"),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := v3RecoveryAncestryBinding(t, root, selection)
+	binding := publicValuesAncestryBinding(t, root, selection)
 	digest := filesystemOutputAncestryDigestFromState(binding)
 	if digest.IsZero() || !bytes.Equal(digest.Bytes(), binding.Bytes()) || digest.String() != binding.String() {
 		t.Fatalf("ancestry digest mapping = %s, want %s", digest, binding)
@@ -151,4 +152,57 @@ func TestFilesystemOutputIdentityAndDigestMappingsPreserveBytes(t *testing.T) {
 	if zero := (FilesystemOutputAncestryDigest{}); !zero.IsZero() {
 		t.Fatal("zero ancestry digest reported non-zero")
 	}
+}
+
+func publicValuesSelection(t *testing.T) transfer.OutputSelection {
+	t.Helper()
+	identity := func(value byte) []byte { return bytes.Repeat([]byte{value}, catalog.IdentityBytes) }
+	share, err := catalog.ShareInstanceFromBytes(identity(0x21))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := catalog.DirectoryIDFromBytes(identity(0x22))
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation, err := catalog.DirectoryGenerationFromBytes(identity(0x23))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := transfer.NewOutputSelection(share, root, generation, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, err := transfer.NewSelectionRules(true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := transfer.NewCanonicalSelectionRequest(share, root, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := transfer.NewCanonicalSelectionV1(request, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := canonical.BindPlan(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return selection
+}
+
+func publicValuesAncestryBinding(
+	t *testing.T,
+	root resumestate.OutputRootBinding,
+	selection transfer.OutputSelection,
+) resumestate.OutputAncestryBinding {
+	t.Helper()
+	binding, err := resumestate.NewOutputAncestryBinding(root, selection.Identity(), []resumestate.OutputAncestryIdentityClaim{{
+		CanonicalPath: "", IdentityClaim: []byte("public-values-root-ancestry"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return binding
 }
