@@ -355,6 +355,9 @@ func TestLinuxPlatformAdapterLifecycle(t *testing.T) {
 	if err := privateDirectory.RemoveFile("state", stateReplacement); err != nil {
 		t.Fatalf("remove replaced state file: %v", err)
 	}
+	if err := privateDirectory.RemoveFile("stage", stage); err != nil {
+		t.Fatalf("remove staged source file: %v", err)
+	}
 	if err := root.RemoveDirectory("public", publicDirectory); err != nil {
 		t.Fatalf("remove public directory: %v", err)
 	}
