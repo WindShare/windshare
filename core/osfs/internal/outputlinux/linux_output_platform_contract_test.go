@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -64,6 +65,11 @@ func newLinuxAdapterTestPlatform(t *testing.T) (*linuxV3Platform, string) {
 	system.getVersion = func(int) (uint32, error) { return 0, unix.ENOTTY }
 	system.geteuid = unix.Geteuid
 	system.fsync = func(int) error { return nil }
+	system.fstatfs = func(_ int, stat *unix.Statfs_t) error {
+		reflect.ValueOf(stat).Elem().FieldByName("Type").SetInt(linuxExt4SuperMagic)
+		stat.Fsid.Val = [2]int32{17, 29}
+		return nil
+	}
 	system.getFilesystemUUID = func(int) ([linuxFilesystemUUIDBytes]byte, error) {
 		return linuxTestFilesystemUUID, nil
 	}
@@ -93,7 +99,7 @@ func newLinuxAdapterTestPlatform(t *testing.T) (*linuxV3Platform, string) {
 	}
 	root := &linuxV3Directory{
 		native: &linuxOutputDirectory{
-			system: systemAddress(&system), fd: fd, certificate: certificate,
+			system: &system, fd: fd, certificate: certificate,
 			object: facts.identity,
 		},
 	}
@@ -105,11 +111,6 @@ func newLinuxAdapterTestPlatform(t *testing.T) (*linuxV3Platform, string) {
 	})
 	return platform, rootPath
 }
-
-// systemAddress prevents accidental mutation of the copied provider while the
-// returned capability graph is alive and makes the ownership of the pointer
-// explicit at the construction boundary.
-func systemAddress(system *linuxOutputSystem) *linuxOutputSystem { return system }
 
 func TestLinuxPlatformAdapterLifecycle(t *testing.T) {
 	platform, rootPath := newLinuxAdapterTestPlatform(t)
