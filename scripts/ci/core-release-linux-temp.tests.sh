@@ -163,7 +163,7 @@ assert_contains "scripts/ci/core-release-linux-native.sh" 'TestLinuxExt4ProcessR
 assert_contains "scripts/ci/core-release-linux-native.sh" ': >"$preserve_marker"'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'sudo -n udevadm settle'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'sudo -n losetup -d "$loop_device"'
-assert_contains "core/osfs/linux_output_persistent_identity_native_test.go" 'command.Stdin = bytes.NewReader(nil)'
+assert_contains "core/osfs/internal/outputlinux/linux_output_persistent_identity_native_test.go" 'command.Stdin = bytes.NewReader(nil)'
 assert_contains "core/osfs/output_v3_native_certification_test.go" 'command.Stdin = bytes.NewReader(nil)'
 assert_contains "scripts/ci/core-release-linux-native-root.sh" 'WINDSHARE_LINUX_NATIVE_FIXTURE=loop-ext4-v1'
 assert_contains "scripts/ci/core-release-linux-native-root.sh" '--userspec="$receiver_uid:$receiver_gid"'
