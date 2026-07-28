@@ -9,7 +9,9 @@ const WORKFLOW_EXTENSIONS = new Set(['.yaml', '.yml'])
 const BARE_SHELL_INVOCATION =
   /(?:^|\brun:\s*|&&\s*|\|\|\s*|;\s*|\bthen\s+|\bdo\s+)["']?(?:\.\/)?(scripts\/ci\/[A-Za-z0-9._/-]+\.sh)["']?(?=\s|$)/u
 const STATIC_SHELL_CONTENT_ASSERTION =
-  /^\s*assert_(?:not_)?contains\s+"([^"$`]+)"(?:\s|$)/u
+  /^\s*assert_(not_)?contains\s+"([^"$`]+)"(?:\s|$)/u
+const STATIC_SHELL_LITERAL_CONTENT_ASSERTION =
+  /^\s*assert_(not_)?contains\s+"([^"$`]+)"\s+'([^']*)'(?:\s|$)/u
 
 export function inspectCIContract(
   repositoryRoot,
@@ -81,6 +83,20 @@ export function inspectCIContract(
         violations.push(
           `${contractPath}:${assertion.line} asserts content of missing repository file ${assertion.path}`,
         )
+        continue
+      }
+      if (assertion.literal === undefined) continue
+
+      // Single-quoted shell arguments are literal by definition, so mirroring
+      // them here gives Windows the same refactor-drift signal as the Linux
+      // contract without attempting to interpret shell expansion.
+      const assertedSource = readFileSync(assertedPath, 'utf8')
+      const containsLiteral = assertedSource.includes(assertion.literal)
+      if (assertion.negated ? containsLiteral : !containsLiteral) {
+        const expectation = assertion.negated ? 'not contain' : 'contain'
+        violations.push(
+          `${contractPath}:${assertion.line} expects ${assertion.path} to ${expectation} literal ${JSON.stringify(assertion.literal)}`,
+        )
       }
     }
   }
@@ -122,8 +138,16 @@ export function findBareShellInvocations(workflow) {
 export function findStaticShellContentAssertions(source) {
   const assertions = []
   for (const [index, line] of source.split(/\r?\n/u).entries()) {
-    const match = STATIC_SHELL_CONTENT_ASSERTION.exec(line)
-    if (match !== null) assertions.push({ line: index + 1, path: match[1] })
+    const match = STATIC_SHELL_LITERAL_CONTENT_ASSERTION.exec(line) ??
+      STATIC_SHELL_CONTENT_ASSERTION.exec(line)
+    if (match !== null) {
+      assertions.push({
+        line: index + 1,
+        path: match[2],
+        literal: match[3],
+        negated: match[1] !== undefined,
+      })
+    }
   }
   return assertions
 }

@@ -38,19 +38,31 @@ if [ -e "$native_root" ] || [ -L "$native_root" ]; then
   exit 1
 fi
 install -d -m 0700 -- "$native_root"
-test_binary="$native_root/osfs.test"
+osfs_test_binary="$native_root/osfs.test"
+outputlinux_test_binary="$native_root/outputlinux.test"
 image="$native_root/ext4.img"
 mountpoint_path="$native_root/mount"
 events="$native_root/events.json"
 preserve_marker="$release_root/.windshare-preserve-native-fixture"
 install -d -m 0700 -- "$mountpoint_path"
 
-echo "-- compile static Linux/osfs native certification binary"
-CGO_ENABLED=0 GOWORK=off go -C "$artifact_root" test -c -o "$test_binary" ./osfs
-if readelf -l "$test_binary" | grep -Fq 'INTERP'; then
-  echo "Linux native certification binary is dynamically linked" >&2
-  exit 1
-fi
+compile_static_test_binary() {
+  local package_path="$1"
+  local binary_path="$2"
+
+  CGO_ENABLED=0 GOWORK=off go -C "$artifact_root" test -c -o "$binary_path" "$package_path"
+  if readelf -l "$binary_path" | grep -Fq 'INTERP'; then
+    echo "Linux native certification binary is dynamically linked: $package_path" >&2
+    exit 1
+  fi
+}
+
+# The restart-identity contract lives with the Linux adapter package. Keep it
+# in its native package rather than copying the test into osfs, so the release
+# fixture executes the same package boundary that production code uses.
+echo "-- compile static Linux native certification binaries"
+compile_static_test_binary ./osfs "$osfs_test_binary"
+compile_static_test_binary ./osfs/internal/outputlinux "$outputlinux_test_binary"
 
 echo "-- construct deterministic tiny-inode ext4 fixture"
 truncate -s 128M -- "$image"
@@ -110,7 +122,8 @@ set +e
 timeout --signal=TERM --kill-after=30s 25m \
   sudo -n unshare --mount --propagation private --fork --kill-child \
     bash "$script_root/core-release-linux-native-root.sh" \
-      "$loop_device" "$mountpoint_path" "$test_binary" "$(id -u)" "$(id -g)" \
+      "$loop_device" "$mountpoint_path" "$osfs_test_binary" "$outputlinux_test_binary" \
+      "$(id -u)" "$(id -g)" \
   | go tool test2json -t -p github.com/windshare/windshare/core/osfs \
   | tee "$events"
 pipeline_status=("${PIPESTATUS[@]}")
