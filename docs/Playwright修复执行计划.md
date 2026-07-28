@@ -11,13 +11,16 @@
 
   | 字段 | 值 |
   |---|---|
-  | `rtcCapability` | `unavailable`（API 不存在）、`unusable`（API 存在但最小 DataChannel offer 探针失败）、`available`（探针成功） |
+  | `rtcCapability` | `unknown`（探针未形成终局）、`unavailable`（API 不存在）、`unusable`（最小 DataChannel offer 探针失败）、`available`（探针成功） |
   | `peerAttemptOutcome` | `not-started`、`admitted`、`failed` |
-  | `deliveryOutcome` | `succeeded`、`failed` |
-  | `runtimeOutcome` | `healthy`、`crashed`、`infrastructure-failed`、`unknown` |
+  | `deliveryOutcome` | `not-started`、`succeeded`、`failed` |
+  | `executionOutcome` | `healthy`、`crashed`、`infrastructure-failed`、`unknown` |
 
 - `available` 必须开始真实 attempt；只有 authenticated lane admission、允许的 direct selected pair、relay cut fence 后的新 peer block 和完整 bytes/hash 均成立才通过。
-- `unavailable` 只能来自 API 缺失，并必须完成同一负载的精确 relay fallback。`unusable`、`available + failed`、crash 和基础设施失败均阻塞；relay 最终成功不能掩盖 peer 失败。
+- `unavailable` 只能来自 API 缺失；产品必须在创建 binding/attempt 前执行同一 API-presence gate，并完成同一负载的精确 relay fallback。
+- 独立 probe 只分类、不控制产品。API 存在后，产品一旦分配 `attemptId` 即开始真实 attempt，并必须终结为 `admitted`/`failed`；`unusable` 与任何 peer outcome 均阻塞，relay 成功不能掩盖 peer 失败。
+- crash/基础设施失败发生在探针或传输开始前时，保留 `unknown`/`not-started`，不得伪造为 `unavailable` 或 delivery failure。
+- 样本保留完整 `attempts[]`；聚合规则固定为：无 attempt=`not-started`，任一 attempt `failed`=`failed`，否则至少一个 `admitted`=`admitted`。每个 attempt 恰有一个终局；admission 后的正常关闭不产生 `failed`。
 - 所有引擎使用同一分类器，不按浏览器名称预设能力。
 - 本计划只关闭浏览器 Playwright 门禁；core 覆盖率、core-release、Linux/ext4 和完整 R7 的图片/MP4 range/seek 取证仍需各自通过，不能由本计划宣称完成。
 
@@ -33,24 +36,27 @@
 | ID | 决策 | 约束 |
 |---|---|---|
 | P1 | 三个引擎都按动态能力阻塞 | `available` 必须通过 direct hot-switch；`unavailable` 必须通过 relay fallback；其他结果失败 |
-| P2 | PR 冻结 `TestIceTopology` | 明确测试接口/地址族、browser RTC 配置、Pion `PeerConnectionFactory`/`SettingEngine` 和 candidate admission；仅设置 `iceServers: []` 不算受控拓扑 |
-| P3 | direct 与 TURN 分开判定 | PR selected pair 的两端 candidate type 只能是 `host`/`prflx` 且均不得为 `relay`；协议和地址族必须记录。coturn、公共 STUN、受限网络放入非阻塞 scheduled/manual 矩阵 |
+| P2 | PR 冻结并先验证 `TestIceTopology` | 原生 browser↔Pion 在相同接口、地址族、RTC 配置和 candidate policy 下通过后，才接入产品 hot-switch；仅设置 `iceServers: []` 不算受控拓扑 |
+| P3 | direct 与 TURN 分开判定 | PR selected pair 的两端 candidate type 只能是 `host`/`prflx` 且均不得为 `relay`；browser 地址可空，地址族由同一 `attemptId` 的 Pion 证据确认。coturn、公共 STUN、受限网络放入非阻塞 scheduled/manual 矩阵 |
 | P4 | 产品 fallback 与能力门禁分层 | peer attempt 失败可以继续 relay，但必须报告 typed failure，不能静默把能力失败计为通过 |
-| P5 | 全部等待事件驱动 | attempt 只由 `admitted`/`failed` 终结；`fallback-active` 只是 delivery 事件，不能结束 peer barrier。timeout 必须由命名的 peer/lane/transfer deadline 推导 |
-| P6 | CI 保留诊断产物并保护真实 secret | 上传前扫描显式注入的 secret、GitHub token 格式及解包后的 trace ZIP；命中时隔离附件，不改变测试判定 |
+| P5 | 全部等待事件驱动 | attempt 只由 `admitted`/`failed` 终结；`fallback-active` 只是 delivery 事件，不能结束 peer barrier。timeout 必须由命名的 capability/peer/lane/transfer deadline 推导 |
+| P6 | CI 保留诊断产物并保护真实 secret | `guardOutcome` 独立于样本判定；secret 命中时隔离附件，scanner 崩溃或非法 ZIP 时 fail closed |
 | P7 | 两套配置职责分离 | 主配置验证产品 hot-switch/fallback；Pion 配置验证原生 adapter/interop；两者共享能力分类器，由 CI 聚合最终结果 |
 
 ## 4. 执行阶段
 
 ### Phase 0：恢复可观测的 peer attempt 状态
 
-- 将现有分散的 peer error、signaling 和 lane admission 回调整合为可选的 consumer-side `V2ConnectivityObserver`，贯通 connectivity → supervisor → gateway；不修改 v2 协议。
-- capability probe 单独产出 typed result，不伪造 `attemptId`。attempt event 使用 stage-specific union：
-  - 公共字段：`sessionId`、`generation`、`peerPathId`、`attemptId`、`side`、`sideSequence`、`elapsedMs`、`stage`。
-  - `laneId` 仅从 `lane-granted` 开始；candidate 计数按可用阶段记录；selected pair 仅在 admission 前读取；`failureScope`/`typedErrorCode` 仅属于 `failed`。
-  - stage 固定为 `started`、`offer-sent`、`answer-received`、`datachannel-open`、`lane-granted`、`lane-attached`、`admitted`、`failed`；只有最后两者是 attempt 终局。
-- `sideSequence` 只保证单侧单调；fixture collector 另加接收序号，不比较跨进程时钟。receiver 使用进程内 observer，Go sender 通过结构化 JSONL stderr 提供同一 correlation ID，不新增协议字段。
+- 浏览器增加可选 consumer-side `V2ConnectivityObserver`，贯通 offer/signaling/connectivity → supervisor → gateway；Go `v2peer` 增加独立 observer 并由 CLI 投影为版本化 JSONL。两端共享 evidence schema，不修改 v2 协议。
+- capability probe 独立、限时并在 `finally` 关闭临时 PeerConnection；它只产出 typed result，不伪造 `attemptId`，也不阻止 API 存在时的产品 attempt。
+- 产品在分配 binding 前执行 API-presence gate；分配 `attemptId` 后立即发出 browser `started`，所有退出路径都产生唯一 `admitted`/`failed` 终局。
+- attempt evidence 使用公共 envelope 加 side-specific union：
+  - 公共字段仅为 `schemaVersion`、`sessionId`、`peerPathId`、`attemptId`、`side`、`sideSequence`、`attemptElapsedMs`、`stage`。`localGeneration` 是可选的单侧诊断字段，不作为跨端 identity。
+  - browser stage：`started`、`offer-created`、`offer-sent`、`answer-received`、`datachannel-open`、`lane-granted`、`lane-attached`、`admitted`、`failed`；sender stage：`started`、`offer-received`、`answer-created`、`answer-sent`、`datachannel-open`、`lane-admission-started`、`admitted`、`failed`。
+  - lane 权威身份记录为 `{laneId, laneEpoch}`，只在已知后出现；candidate 计数按可用阶段记录；selected pair 在 browser admission 前读取；`failureScope`/`typedErrorCode` 仅属于 `failed`。
+- `sideSequence` 只保证单侧单调；fixture 另加接收序号，不比较跨进程时钟。collector 拒绝倒序、重复终局、终局后事件和缺失终局。
 - 保留并向上透传具体 peer operation code，不得统一丢成 generic error。
+- `V2LaneSet` 在调用 lane 前分配单调 `dispatchSequence` 并发出隔离异常的 dispatch observation；完成态 observation 不得代替 dispatch 证据。
 - 第一批 relay block 后进入测试 barrier：`admitted` 后执行 relay cut fence 再释放；`failed`/`unavailable`/`unusable` 直接释放并让 relay 完成；`fallback-active` 不释放 barrier。最终同时等待 peer 和 delivery 终局，再执行断言。
 - 断言 observer 抛错隔离、barrier 取消、fallback、lane 和 session 清理，不产生未处理 rejection。
 
@@ -58,40 +64,46 @@
 
 ### Phase 1：建立确定性的 PR ICE 环境
 
-- 通过 gateway/fixture 贯通 `BrowserOfferChannelFactory` 已有的 `RTCConfiguration` 注入；为 CLI/App 增加 consumer-side peer factory 注入，使 E2E fixture 可提供受控 Pion API/`SettingEngine`，生产继续使用默认配置。
-- 冻结 `TestIceTopology` 的接口、地址族和 candidate admission。若受控 runner 不能让某引擎建立允许的 direct pair，则该阶段未完成，不能 skip 或改判 unavailable。
-- admission 前使用 `getStats()` 归一化 local/remote candidate type、protocol、address family 和 selected pair；缺少可验证 pair 时失败。coturn 证据必须标为 TURN，不能冒充 direct。
-- focused PR evidence 每个引擎运行 3 个独立 Playwright 进程，`retries=0`；每个进程只跑一个样本并创建全新 browser/context。不得在单个 test/page 内循环样本。
+- 定义版本化、可序列化的 `TestIceTopology` profile（拓扑 ID、接口、地址族、candidate policy）。新增测试专用 `cmd/windshare/e2e` 入口，通过显式 profile 文件参数向共享 CLI App 注入 peer factory provider；生产入口始终使用默认 provider，未知 profile 直接失败。
+- gateway/fixture 用同一 profile 构造 `BrowserOfferChannelFactory` 的 `RTCConfiguration`；禁止仅在 JS fixture 中持有不可跨进程的 factory。
+- **Phase 1A（拓扑可行性）：** Chromium/Firefox 各运行 3 个独立 browser↔Pion 进程；使用同一 profile，禁止 skip/retry。未形成允许的 direct pair 时不得进入产品接入。
+- browser `getStats()` 强制 selected pair、candidate type、protocol 和非 `relay`；candidate address 为可空诊断字段。Pion 记录绑定同一 `attemptId` 的权威地址族和 selected pair，缺失任一侧证据即失败。
+- **Phase 1B（产品接入）：** 同一 profile 接入真实 `windshare`、16 MiB hot-switch 和 relay cut。Chromium/Firefox 各运行 3 个独立 Playwright 进程，每个进程仅含一个全新 browser/context 样本；runner 拒绝缺失、重复或 checkout SHA 不一致的 result。
 
-**完成条件：** 受控拓扑下 Chromium/Firefox 三次均观察到 `relay → admitted peer → relay cut fence → post-fence peer block`，并完成 bytes/hash；失败时存在 stage/code evidence。
+**完成条件：** Phase 1A 先三次通过；随后 Chromium/Firefox 三次均观察到 `relay → admitted peer → relay cut fence → post-fence peer block` 并完成 bytes/hash。相关 `make web`、root Go 单测和 coverage gate 通过。
 
 ### Phase 2：按能力语义修复并验证 WebKit
 
-- WebKit 同样每个样本使用独立 Playwright 进程；采集 `page.crash`、`pageerror`、console、`browser.disconnected`、runner exit code/stderr，不依赖 Playwright private fields。
+- WebKit 先以相同 `TestIceTopology` 完成 3 个独立 browser↔Pion 样本，再运行产品 hot-switch；两步均禁止 skip/retry。
+- WebKit 同样每个样本使用独立 Playwright 进程；采集公共 `page.crash`、`pageerror`、console、`browser.disconnected` 事件及 Playwright runner exit code/stdout/stderr，不读取 private fields，也不伪造不可取得的 browser process exit code。
 - 使用共享分类器区分 API 缺失、探针失败和 admission；不能用浏览器名称或一次异常归类为 unavailable。
 - `unavailable` 必须完成 relay fallback、bytes/hash 和 transfer terminal；`unusable`、attempt failed、`Target crashed`、资源/基础设施异常均阻塞。
 - 保留 trace、video、screenshot、`error-context.md` 和 stderr，按第 6 节 guard 后上传。
 
-**完成条件：** WebKit 的每次失败都能明确归类为 capability、浏览器进程、资源、应用或基础设施问题；能力缺失时 fallback 证据完整，能力存在时按 hot-switch 语义验收。
+**完成条件：** WebKit 三个独立样本均达到验收矩阵中的合法通过组合；失败可分类仅是中间里程碑，不能关闭本阶段。
 
 ### Phase 3：收敛 CI、脚本和证据
 
-- 主配置负责 hot-switch/fallback；Pion 配置负责 adapter/interop。两者运行三引擎并共享分类器；Pion 遇到 `unavailable` 时输出显式 not-applicable evidence，最终通过仍必须由主配置的 relay fallback 证据支撑，不能静默 skip。
-- CI 将两套配置作为独立 job 或 `if: !cancelled()` 步骤执行，始终运行 guard/upload，最后由聚合步骤按四个 outcome 判定；一个 suite 失败不能阻止另一个产生诊断。
-- 更新 `.github/workflows/ci.yml`、Linux/Windows browser scripts 和 `make browser`，保持项目、样本、判定和产物一致。本地只保留本地 artifact。
+- 主配置负责 hot-switch/fallback；Pion 配置负责 adapter/interop。两者运行三引擎并共享分类器；删除现有 capability/topology `test.skip`。Pion 遇到 `unavailable` 时测试仍运行并输出 not-applicable result，最终通过必须由主配置的 relay fallback result 支撑。
+- CI 固定为独立 `browser-main`、`browser-pion` job；两者无论测试结果均执行 guard/upload。`browser-verdict` 使用 `if: always()` 聚合四个 outcome、attempt reducer 和独立 `guardOutcome`；缺失、重复、schema/SHA 不匹配或 guard `failed` 均阻塞。
+- `make browser` 是本地唯一完整入口，依次运行 focused 3-sample evidence、主配置、Pion 配置和同一聚合器；即使前一 suite 失败也继续收集后一 suite 证据，最后统一返回非零。本地只保留本地 artifact。
+- 更新 `.github/workflows/ci.yml`、Linux/Windows browser scripts 和 `make browser`，保持项目、样本、判定和产物一致。
 - 新增非阻塞 scheduled/manual browser network matrix：scheduled 对公共 STUN、受限 UDP 和 coturn 各运行 5 个独立样本；真实 NAT 仅在声明拓扑的 manual/self-hosted runner 执行。结果不改变 PR 判定。
-- 先运行 focused evidence，再运行 `make browser`；`make ci` 独立报告其他门禁。GitHub 记录实际 checkout SHA；本地结果不能替代 Ubuntu runner。
+- 迭代时可单独运行 focused runner；最终运行包含它的 `make browser`。`make ci` 独立报告其他门禁。GitHub 记录实际 checkout SHA；本地结果不能替代 Ubuntu runner。
 - peer 能力相关 spec 禁止 skip、retry、提高全局 timeout 或关闭断言；timeout 只能来自命名 deadline。
 
 ## 5. 验收矩阵
 
 | `rtcCapability` | `peerAttemptOutcome` | 阻塞门禁必须验证 |
 |---|---|---|
-| `available` | `admitted` | direct selected pair；`relay→admitted peer→cut fence→post-fence peer dispatch`；完整 bytes/hash；runtime healthy |
+| `available` | `admitted` | direct selected pair；`relay→admitted peer→cut fence→post-fence peer dispatch`；完整 bytes/hash；execution healthy |
 | `available` | `failed` | 阻塞失败并保留 stage/code；relay 健康时仍完成 fallback bytes/hash 后再断言失败 |
-| `unavailable` | `not-started` | 同一负载的精确 relay fallback、完整 bytes/hash、runtime healthy |
-| `unusable` | `not-started` | 阻塞失败并保留 probe evidence；relay 健康时仍验证 fallback |
-| 任意值 | 任意值 | crash、基础设施失败、unknown、delivery failure 均阻塞，不能改判 unavailable |
+| `available` | `not-started` | 阻塞契约失败；保留 crash/基础设施/collector evidence |
+| `unavailable` | `not-started` | 同一负载的精确 relay fallback、完整 bytes/hash、execution healthy |
+| `unusable` | 任意值 | 阻塞失败并保留 probe 和实际 attempt evidence；relay 健康时仍验证 fallback |
+| `unavailable` | `admitted`/`failed` | 阻塞产品 capability gate 契约失败 |
+| `unknown` | 任意值 | 阻塞并保留 probe/runtime evidence，不能改判 unavailable |
+| 任意值 | 任意值 | crash、基础设施失败、execution unknown、delivery `not-started`/`failed` 均阻塞 |
 
 relay cut 使用异步 `cutAndWait` fence；它只在 proxy 停止接入且 receiver 已观察 relay lane detached/ineligible 后完成。route evidence 必须记录 block dispatch sequence；cut 前已派发的 relay block 可在 cut 后完成，但 fence 后不得新增 relay dispatch，且必须出现 fence 后的 peer dispatch。
 
@@ -99,15 +111,17 @@ relay cut 使用异步 `cutAndWait` fence；它只在 proxy 停止接入且 rece
 
 | 环境 | 入口 | 说明 |
 |---|---|---|
-| Ubuntu/GitHub | `make browser` | 三引擎、focused evidence、主配置和 Pion 配置；CI 内部独立执行并聚合 |
-| Windows 本地 | `make browser` | D5 BrowserTests 与 Pion 配置均执行；防火墙提示不参与 verdict |
+| Ubuntu 本地 | `make browser` | 三引擎、focused evidence、主配置、Pion 配置和聚合器 |
+| Windows 本地 | `make browser` | focused evidence、D5 BrowserTests、Pion 配置和聚合器；防火墙提示不参与 verdict |
+| GitHub | `browser-main`、`browser-pion` → `browser-verdict` | 两套 suite 独立产证，最终统一判定 |
 | 总门禁 | `make ci` | 独立报告 core/Go/Web 全部结果，不改变本计划的浏览器判定 |
 
 CI artifact 策略：
 
-- 失败时允许上传 Playwright trace、video、screenshot、`error-context.md`、console 和 browser stderr；这些产物是排查 Firefox/WebKit 问题的必要证据。
+- 外层 sample runner 在启动 Playwright 子进程前原子写入 `unknown`/`not-started` 初始 `result.json`，并在子进程退出后原子替换；页面和 Playwright 子进程不拥有最终文件。记录至少包含 suite、browser、sample、checkout SHA、四个 outcome、`attempts[]` 和 artifact 索引。
+- 失败时允许上传 Playwright trace、video、screenshot、`error-context.md`、console 和 runner/browser diagnostics；这些产物是排查 Firefox/WebKit 问题的必要证据。
 - 允许 fixture 生成的 capability URL、key、SDP、ICE candidate 和文件内容摘要；它们不得来自生产链接或 job secret。
-- 上传前只检查显式注入且非空的 GitHub/runner/repository secret，并补充 GitHub token 格式。ZIP 必须解包逐项扫描；命中时隔离整个附件并只记录文件名和规则名，不输出 secret；测试判定不变。
+- 上传前只检查显式注入且非空的 GitHub/runner/repository secret，并补充 GitHub token 格式。ZIP 必须解包逐项扫描；命中时 `guardOutcome=quarantined`、隔离附件且不改写样本 outcome。scanner 崩溃或非法 ZIP 记为 `failed`、禁止上传并使最终 verdict fail closed。
 - 不要求对普通诊断数据做过度脱敏；目标是防止 GitHub 密钥泄漏，而不是牺牲 CI 排查能力。
 
 ## 7. 不在本计划内
