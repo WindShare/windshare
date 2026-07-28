@@ -5,6 +5,7 @@ import type { V2BlockRecord } from '../../src/content/v2-records'
 import type { OfferChannelFactory } from '../../src/connectivity/peer-offer'
 import type { PeerChannel } from '../../src/connectivity/peer-channel'
 import {
+  type V2ContentLaneAdmissionObservation,
   V2ReceiverConnectivity,
   V2_RELAY_CONTENT_FALLBACK_MILLISECONDS,
 } from '../../src/connectivity/v2-receiver-policy'
@@ -127,7 +128,10 @@ function deferred<T>(): {
   return { promise, resolve }
 }
 
-function fixture(offers: OfferChannelFactory) {
+function fixture(
+  offers: OfferChannelFactory,
+  onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void,
+) {
   const session = new FakeSession()
   const lanes = new V2LaneSet()
   const errors: unknown[] = []
@@ -138,6 +142,7 @@ function fixture(offers: OfferChannelFactory) {
     offers,
     randomBytes: (length) => new Uint8Array(length).fill(7),
     onPeerError: (error) => errors.push(error),
+    ...(onContentLaneAdmitted === undefined ? {} : { onContentLaneAdmitted }),
   })
   return { connectivity, errors, lanes, session }
 }
@@ -224,6 +229,37 @@ describe('v2 receiver content activation policy', () => {
 
     download.close()
     await connectivity.close()
+  })
+
+  it('observes committed lane admissions without granting the callback policy authority', async () => {
+    vi.useFakeTimers()
+    const observations: V2ContentLaneAdmissionObservation[] = []
+    const visibleLaneIds: number[][] = []
+    const admittedLanes: { current?: V2LaneSet } = {}
+    const result = fixture(
+      new SuccessfulOffers(),
+      (observation) => {
+        observations.push(observation)
+        visibleLaneIds.push([...(admittedLanes.current?.laneIds() ?? [])])
+        throw new Error('diagnostic callback failed')
+      },
+    )
+    admittedLanes.current = result.lanes
+
+    const download = result.connectivity.begin('download', 'small')
+    await turn()
+
+    expect(observations).toEqual([
+      { laneId: 1, route: 'relay' },
+      { laneId: 2, route: 'peer' },
+    ])
+    expect(visibleLaneIds).toEqual([[1], [1, 2]])
+    expect(observations.every(Object.isFrozen)).toBe(true)
+    expect(result.lanes.laneIds()).toEqual([1, 2])
+    expect(result.errors).toEqual([])
+
+    download.close()
+    await result.connectivity.close()
   })
 
   it('keeps preview and download fallback cancellation independent', async () => {

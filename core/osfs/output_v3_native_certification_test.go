@@ -1,3 +1,5 @@
+//go:build linux || windows
+
 package osfs
 
 import (
@@ -14,6 +16,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 )
@@ -40,7 +43,7 @@ func openCertifiedNativeOutputForTest(
 	root string,
 	profile string,
 	expectedCertification resumestate.CertificationID,
-) outputV3Platform {
+) outputcap.Platform {
 	t.Helper()
 	platform, err := openOutputV3Platform(root, false)
 	if err != nil {
@@ -88,7 +91,7 @@ func openCertifiedNativeOutputForTest(
 func nativeOutputCertificationFailure(t *testing.T, profile, operation string, err error) {
 	t.Helper()
 	if os.Getenv(nativeOutputCertificationProfileEnvironment) == profile ||
-		!errors.Is(err, errOutputV3Unsupported) {
+		!errors.Is(err, outputcap.ErrRecoverableOutputUnsupported) {
 		t.Fatalf("%s for required %s profile: %v", operation, profile, err)
 	}
 	t.Skipf("%s is not certified on this test volume: %v", profile, err)
@@ -205,18 +208,6 @@ type nativeOutputSessionFixture struct {
 	payload    []byte
 }
 
-type nativeFixedOutputSessionIDs struct{ id transfer.OutputSessionID }
-
-func (generator nativeFixedOutputSessionIDs) NewOutputSessionID() (transfer.OutputSessionID, error) {
-	return generator.id, nil
-}
-
-type nativeFixedOutputObjectIDs struct{ id resumestate.OutputObjectID }
-
-func (generator nativeFixedOutputObjectIDs) NewOutputObjectID() (resumestate.OutputObjectID, error) {
-	return generator.id, nil
-}
-
 func runNativeOutputSessionProcessRestartRecoveryTest(
 	t *testing.T,
 	profile string,
@@ -287,11 +278,15 @@ func runNativeOutputSessionProcessRestartRecoveryTest(
 	if err != nil || !bytes.Equal(actual, fixture.payload) {
 		t.Fatalf("published native output differs after restart: bytes=%d err=%v", len(actual), err)
 	}
-	inventory, err := authority.listResumeState(context.Background(), FilesystemResumeRoot{RootPath: root})
+	inventory, err := ListResumeState(context.Background(), FilesystemResumeRoot{RootPath: root})
 	if err != nil {
 		t.Fatalf("list completed native output resume state: %v", err)
 	}
-	defer v3RecoveryCloseInventory(t, inventory)
+	defer func() {
+		if closeErr := inventory.Close(); closeErr != nil {
+			t.Errorf("close completed native output inventory: %v", closeErr)
+		}
+	}()
 	remaining := inventory.Summaries()
 	if len(remaining) != 0 {
 		t.Fatalf("completed native output retained resume sessions: count=%d", len(remaining))
@@ -348,24 +343,10 @@ func runNativeOutputSessionCrashChild(t *testing.T) {
 
 func newNativeOutputSessionAuthority(t *testing.T, root string) *FilesystemOutputAuthority {
 	t.Helper()
-	sessionID, err := transfer.OutputSessionIDFromBytes(
-		bytes.Repeat([]byte{0x71}, transfer.OutputSessionIdentityBytes),
-	)
-	if err != nil {
-		t.Fatalf("construct native output session ID: %v", err)
-	}
-	objectID, err := resumestate.OutputObjectIDFromBytes(
-		bytes.Repeat([]byte{0x72}, resumestate.OutputObjectIDBytes),
-	)
-	if err != nil {
-		t.Fatalf("construct native output object ID: %v", err)
-	}
 	authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root})
 	if err != nil {
 		t.Fatalf("construct native output authority: %v", err)
 	}
-	authority.sessionIDs = nativeFixedOutputSessionIDs{id: sessionID}
-	authority.objectIDs = nativeFixedOutputObjectIDs{id: objectID}
 	return authority
 }
 

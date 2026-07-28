@@ -4,7 +4,9 @@ on:
   push:
     tags:
       - "core/v*"
+      - "!core/v0.3.0"
       - "core-candidate/v*/**"
+      - "!core-candidate/v0.3.0/**"
   workflow_dispatch:
     inputs:
       commit_sha:
@@ -12,9 +14,8 @@ on:
         required: true
         type: string
       version:
-        description: Core module version represented by the candidate
+        description: Explicit new core module version represented by the candidate
         required: true
-        default: v0.3.0
         type: string
 
 # Candidate code needs repository contents only. In particular, this workflow

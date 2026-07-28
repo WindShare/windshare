@@ -3,15 +3,17 @@
 Core is released before the root module because the root's `GOWORK=off` build
 must consume a published core version without a `replace` directive.
 
+> The `core/v0.3.0` and `core-candidate/v0.3.0/*` namespaces are closed. Never create, move, force-update, or push those refs again, and do not trigger another tag-based v0.3.0 release verification. A future release must first choose a new version and exact commit; ordinary local `make core-release` remains only an artifact check and creates no tag. Its reserved `v0.0.0-ci` version is rejected by release-ref resolution.
+
 ## Candidate verification
 
-The next candidate version is `v0.3.0`. Create one lightweight candidate tag at
-the exact commit, with that same lowercase 40-character commit SHA in the tag:
+After maintainers choose `<next-version>`, create a new lightweight candidate tag
+at the exact commit, with that same lowercase 40-character commit SHA in the tag:
 
 ```text
-git tag --no-sign core-candidate/v0.3.0/<commit-sha> <commit-sha>
-git cat-file -t refs/tags/core-candidate/v0.3.0/<commit-sha>  # must print: commit
-git push origin refs/tags/core-candidate/v0.3.0/<commit-sha>
+git tag --no-sign core-candidate/<next-version>/<commit-sha> <commit-sha>
+git cat-file -t refs/tags/core-candidate/<next-version>/<commit-sha>  # must print: commit
+git push origin refs/tags/core-candidate/<next-version>/<commit-sha>
 ```
 
 The dedicated workflow accepts only a new, non-forced lightweight tag whose raw
@@ -62,8 +64,8 @@ commit. Use a standalone clone whose `.git` is a real directory, not a linked
 worktree, and keep it clean; uncommitted bytes are never release evidence:
 
 ```text
-bash scripts/ci/core-release.sh v0.3.0 <commit-sha>
-pwsh -NoProfile -File scripts/ci/core-release.ps1 -Version v0.3.0 -CommitSHA <commit-sha>
+bash scripts/ci/core-release.sh <next-version> <commit-sha>
+pwsh -NoProfile -File scripts/ci/core-release.ps1 -Version <next-version> -CommitSHA <commit-sha>
 ```
 
 The `linux-ext4` profile constructs its own loop-ext4 fixture; the
@@ -80,7 +82,7 @@ disposable PowerShell session. Replace `commit-sha` with the exact lowercase
 
 ```powershell
 $modulePath = 'github.com/windshare/windshare/core'
-$version = 'v0.3.0'
+$version = '<next-version>'
 $commitSHA = '<commit-sha>'
 if ($commitSHA -cnotmatch '^[0-9a-f]{40}$') { throw 'invalid certified commit SHA' }
 
@@ -136,17 +138,17 @@ cache is not publication evidence.
 
 ## Publication order
 
-1. Push `core-candidate/v0.3.0/<commit-sha>` and wait for both native jobs to
+1. Push `core-candidate/<next-version>/<commit-sha>` and wait for both native jobs to
    pass. Record the successful workflow run URL and retain the tag; ref existence
    alone is not evidence that candidate verification passed.
-2. Create and push a lightweight `core/v0.3.0` tag at that same commit. Its
+2. Create and push a lightweight `core/<next-version>` tag at that same commit. Its
    verification fails unless both the final and retained candidate refs directly
    contain that commit; annotated or indirect tags are rejected. Ordinary CI
    ignores both dedicated core tag namespaces.
 3. Run the fresh-cache public proxy verification above against the certified
    commit SHA.
 4. Only after that succeeds, update the root module's core requirement to
-   `v0.3.0` and its sums.
+   `<next-version>` and its sums.
 5. Run ordinary CI, including the root `GOWORK=off` build, before creating the
    root release tag.
 

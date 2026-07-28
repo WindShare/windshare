@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 repository_root="$(pwd -P)"
+readonly artifact_version=v0.0.0-ci
 test_parent="${TMPDIR:-/tmp}"
 test_parent="${test_parent%/}"
 if [ -z "$test_parent" ]; then
@@ -52,7 +53,7 @@ go run ./scripts/ci/_coremodulezip/main.go \
   -stage "$test_root/committed-core" \
   -zip "$test_root/core.zip" \
   -extract "$test_root/extracted-core" \
-  -version v0.3.0 >/dev/null
+  -version "$artifact_version" >/dev/null
 
 actual_readme_object="$(git hash-object -- "$test_root/extracted-core/README.md")"
 [ "$actual_readme_object" = "$expected_readme_object" ] ||

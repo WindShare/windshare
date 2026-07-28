@@ -427,6 +427,7 @@ type jobPauseRequirement interface {
 	RequiresJobPause() bool
 }
 
+//nolint:errorlint // This walk is intentionally bounded and cycle-safe; errors.As recursively follows an attacker-controlled graph without either guarantee.
 func outputFailureExplicitlyRequiresJobPause(err error) bool {
 	if err == nil {
 		return false

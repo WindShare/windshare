@@ -18,14 +18,15 @@
 # fidelity to CI beats local speed. Per-gate CI-job parity is recorded in
 # docs/.orchestration/m1/make-ci.md.
 
-# Keeping the candidate at the caller makes a version bump visible; the release
-# scripts deliberately have no environment- or tag-derived version fallback.
+# Ordinary validation uses a reserved prerelease version that release-ref
+# resolution rejects. `override` prevents a caller from converting this gate
+# into release evidence through an environment or command-line assignment.
 # The archive source is an explicit commit object; live index/worktree bytes are
 # never prospective publication evidence.
 # The POSIX entry point itself makes linux-ext4 mandatory on Linux so this thin
 # dispatcher cannot accidentally select a skippable release sweep.
-CORE_RELEASE_VERSION ?= v0.3.0
-CORE_RELEASE_COMMIT_SHA ?= $(shell git rev-parse --verify HEAD)
+override CORE_ARTIFACT_VERSION := v0.0.0-ci
+CORE_ARTIFACT_COMMIT_SHA ?= $(shell git rev-parse --verify HEAD)
 GATES := vet core-release race vectors coverage network web browser hygiene lint sloc
 SCRIPT_GATES := $(filter-out core-release,$(GATES))
 
@@ -46,9 +47,9 @@ ci: $(GATES)
 
 core-release:
 ifeq ($(OS),Windows_NT)
-	pwsh -NoProfile -File scripts/ci/core-release.ps1 -Version $(CORE_RELEASE_VERSION) -CommitSHA $(CORE_RELEASE_COMMIT_SHA)
+	pwsh -NoProfile -File scripts/ci/core-release.ps1 -Version "$(CORE_ARTIFACT_VERSION)" -CommitSHA "$(CORE_ARTIFACT_COMMIT_SHA)"
 else
-	bash scripts/ci/core-release.sh $(CORE_RELEASE_VERSION) $(CORE_RELEASE_COMMIT_SHA)
+	bash scripts/ci/core-release.sh "$(CORE_ARTIFACT_VERSION)" "$(CORE_ARTIFACT_COMMIT_SHA)"
 endif
 
 $(SCRIPT_GATES):

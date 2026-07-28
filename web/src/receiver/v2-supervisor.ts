@@ -2,6 +2,7 @@ import type { V2CatalogOperationClient } from '../catalog/v2-client'
 import type { V2CatalogPageRequest, V2ShareDescriptor } from '../catalog/v2-records'
 import {
   type V2ConnectivityActivation,
+  type V2ContentLaneAdmissionObservation,
   type V2ContentIntent,
   type V2ContentSizeClass,
   V2ReceiverConnectivity,
@@ -56,6 +57,7 @@ export interface V2ReceiverSupervisorOptions {
   readonly randomBytes?: (length: number) => Uint8Array
   readonly onRecoveryError?: (error: unknown) => void
   readonly onBlockFetched?: (observation: V2BlockRouteObservation) => void
+  readonly onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void
 }
 
 interface V2ReceiverGeneration extends V2ContentGeneration {
@@ -93,6 +95,9 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
   readonly #onRecoveryError: (error: unknown) => void
   readonly #onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined
+  readonly #onContentLaneAdmitted: (
+    (observation: V2ContentLaneAdmissionObservation) => void
+  ) | undefined
   readonly #lifetime = new AbortController()
   readonly #waiters = new Set<V2GenerationWaiter>()
   #current: V2ReceiverGeneration
@@ -113,6 +118,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     this.#randomBytes = options.randomBytes
     this.#onRecoveryError = options.onRecoveryError ?? (() => undefined)
     this.#onBlockFetched = options.onBlockFetched
+    this.#onContentLaneAdmitted = options.onContentLaneAdmitted
     this.connectivity = new V2SupervisedConnectivity(() => this.#clock.now())
     this.#current = this.#createGeneration(options.initial)
     this.connectivity.bind(this.#current.connectivity)
@@ -253,6 +259,9 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
         ),
         ...(this.#offersFactory === undefined ? {} : { offers: this.#offersFactory() }),
         ...(this.#randomBytes === undefined ? {} : { randomBytes: this.#randomBytes }),
+        ...(this.#onContentLaneAdmitted === undefined
+          ? {}
+          : { onContentLaneAdmitted: this.#onContentLaneAdmitted }),
         onPeerError: this.#onRecoveryError,
       })
       const generation: V2ReceiverGeneration = {

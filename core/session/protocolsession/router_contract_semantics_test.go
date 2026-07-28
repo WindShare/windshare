@@ -23,11 +23,11 @@ func TestRouterContextCapabilitiesRemainBoundToExactOperation(t *testing.T) {
 	}
 	defer admission.pin.release()
 
-	generationContext := WithOperationGeneration(nil, admission.Generation)
+	generationContext := WithOperationGeneration(routerMissingContext(), admission.Generation)
 	if generation, ok := OperationGenerationFromContext(generationContext, operationID); !ok || !generation.Same(admission.Generation) {
 		t.Fatalf("generation context=%+v ok=%v", generation, ok)
 	}
-	if _, ok := OperationGenerationFromContext(nil, operationID); ok {
+	if _, ok := OperationGenerationFromContext(routerMissingContext(), operationID); ok {
 		t.Fatal("nil context exposed a generation")
 	}
 	if _, ok := OperationGenerationFromContext(generationContext, OperationID{}); ok {
@@ -37,11 +37,11 @@ func TestRouterContextCapabilitiesRemainBoundToExactOperation(t *testing.T) {
 		t.Fatal("generation crossed operation identity")
 	}
 
-	permitContext := WithOutboundOperationPermit(nil, admission.Operation)
+	permitContext := WithOutboundOperationPermit(routerMissingContext(), admission.Operation)
 	if permit, ok := OutboundOperationPermitFromContext(permitContext, operationID); !ok || permit.IsZero() || permit.operationID != operationID {
 		t.Fatalf("permit context=%+v ok=%v", permit, ok)
 	}
-	if _, ok := OutboundOperationPermitFromContext(nil, operationID); ok {
+	if _, ok := OutboundOperationPermitFromContext(routerMissingContext(), operationID); ok {
 		t.Fatal("nil context exposed a permit")
 	}
 	if _, ok := OutboundOperationPermitFromContext(permitContext, OperationID{}); ok {
@@ -83,7 +83,7 @@ func TestRetainedMessageContextSeparatesValuesFromCancellation(t *testing.T) {
 		t.Fatalf("retained context ignored service cancellation: %v", retained.Err())
 	}
 
-	nilLifetime := RetainMessageContext(nil, context.WithValue(context.Background(), messageKey, "value"))
+	nilLifetime := RetainMessageContext(routerMissingContext(), context.WithValue(context.Background(), messageKey, "value"))
 	if nilLifetime.Value(messageKey) != "value" || nilLifetime.Done() != nil {
 		t.Fatalf("nil-lifetime context value=%v done=%v", nilLifetime.Value(messageKey), nilLifetime.Done())
 	}
@@ -94,6 +94,10 @@ func TestRetainedMessageContextSeparatesValuesFromCancellation(t *testing.T) {
 		t.Fatalf("retained context fallback=%v", direct.Value(lifetimeKey))
 	}
 }
+
+// routerMissingContext keeps intentional nil-capability coverage distinct from
+// accidental nil Context arguments in ordinary tests.
+func routerMissingContext() context.Context { return nil }
 
 func TestRoleRouterReplayTerminalAndClosedStateContracts(t *testing.T) {
 	t.Run("exact outbound replay", func(t *testing.T) {

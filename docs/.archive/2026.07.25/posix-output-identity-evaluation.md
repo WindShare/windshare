@@ -1,6 +1,6 @@
 # Filesystem output ownership and resume design
 
-状态：产品与架构方向已确认，待实现与验证。范围仅包含 native filesystem receiver；browser output 使用独立设计。
+> Archived and superseded by [Native filesystem output ownership and resume contract](../../native-output-identity-contract.md). This body is historical and non-normative: it predates process-restart-only certification, canonical-selection intent namespaces, ext4 restart identity, NTFS Object IDs, scoped corruption, deterministic publication recovery, and ordered retirement.
 
 ## Product contract
 

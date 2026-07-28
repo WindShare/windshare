@@ -18,6 +18,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+const windowsStabilityTestFilePermission = 0o600
+
 type fakeWindowsRevisionPlatform struct {
 	mu        sync.Mutex
 	tokens    []windowsMutationToken
@@ -552,7 +554,7 @@ func TestWindowsNativeBaselineAndRootFailuresAreExplicit(t *testing.T) {
 	}
 	closed, err := os.Open(filepath.Join(rootPath, "closed.bin"))
 	if errors.Is(err, os.ErrNotExist) {
-		if writeErr := os.WriteFile(filepath.Join(rootPath, "closed.bin"), []byte("x"), filePerm); writeErr != nil {
+		if writeErr := os.WriteFile(filepath.Join(rootPath, "closed.bin"), []byte("x"), windowsStabilityTestFilePermission); writeErr != nil {
 			t.Fatal(writeErr)
 		}
 		closed, err = os.Open(filepath.Join(rootPath, "closed.bin"))
@@ -570,7 +572,7 @@ func TestWindowsNativeBaselineAndRootFailuresAreExplicit(t *testing.T) {
 		t.Fatal("missing retained root admitted")
 	}
 	rootFile := filepath.Join(t.TempDir(), "not-a-root")
-	if err := os.WriteFile(rootFile, []byte("x"), filePerm); err != nil {
+	if err := os.WriteFile(rootFile, []byte("x"), windowsStabilityTestFilePermission); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := NewWindowsStabilityBinder([]string{rootFile}); err == nil {

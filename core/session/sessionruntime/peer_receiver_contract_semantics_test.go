@@ -24,11 +24,11 @@ func TestReceiverPeerOpenNormalizesNilContextAndRequiresContinuationAuthority(t 
 			bytes.NewReader(bytes.Repeat([]byte{0xc1}, protocolsession.IdentityBytes)),
 		)
 		receiver := &ReceiverRuntime{runtimeCore: runtime, rpc: rpc}
-		operation, err := receiver.OpenPeerOperation(nil, []byte{0xf6})
+		operation, err := receiver.OpenPeerOperation(receiverPeerMissingContext(), []byte{0xf6})
 		if err != nil || operation == nil || operation.OperationID().IsZero() {
 			t.Fatalf("nil-context peer open operation=%+v error=%v", operation, err)
 		}
-		termination := operation.Terminate(nil)
+		termination := operation.Terminate(receiverPeerMissingContext())
 		if !operation.OwnsTermination(termination) ||
 			termination.TransitionProvenance() != ReceiverPeerProvenanceLocalExplicitStop {
 			t.Fatalf("nil-context peer termination=%+v", termination)
@@ -53,7 +53,7 @@ func TestReceiverPeerOpenNormalizesNilContextAndRequiresContinuationAuthority(t 
 func TestReceiverPeerCandidateAndReceiveStateTransitionsFailClosed(t *testing.T) {
 	t.Run("nil candidate context", func(t *testing.T) {
 		fixture := newReceiverPeerTerminalFixture(t, 0xc3)
-		disposition, err := fixture.operation.SendCandidate(nil, []byte{0xf6})
+		disposition, err := fixture.operation.SendCandidate(receiverPeerMissingContext(), []byte{0xf6})
 		if err != nil || disposition != protocolsession.OperationDeliver {
 			t.Fatalf("nil-context candidate disposition=%d error=%v", disposition, err)
 		}
@@ -98,6 +98,10 @@ func TestReceiverPeerCandidateAndReceiveStateTransitionsFailClosed(t *testing.T)
 		fixture.operation.mu.Unlock()
 	})
 }
+
+// receiverPeerMissingContext keeps intentional normalization coverage distinct
+// from accidental nil Context arguments in ordinary tests.
+func receiverPeerMissingContext() context.Context { return nil }
 
 func TestReceiverPeerEvidenceClassificationPreservesOwnershipScope(t *testing.T) {
 	fixture := newReceiverPeerTerminalFixture(t, 0xc7)

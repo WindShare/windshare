@@ -22,6 +22,7 @@ const TRANSFER_COMPLETION_TIMEOUT_MILLISECONDS = 120_000
 const WRITE_BARRIER_TIMEOUT_MILLISECONDS = 15_000
 const MAXIMUM_ROUTE_WAITS_PER_SAMPLE = 3
 const STATE_POLL_INTERVAL_MILLISECONDS = 100
+const FAILURE_DIAGNOSTIC_MAXIMUM_DEPTH = 4
 
 interface ObservedRoute {
   readonly laneId: number
@@ -30,8 +31,25 @@ interface ObservedRoute {
   readonly localBlockIndex: string
 }
 
+interface ObservedLaneAdmission {
+  readonly laneId: number
+  readonly route: 'relay' | 'peer'
+}
+
+type ObservedTransferFailure =
+  | { readonly kind: 'directory'; readonly directoryId: string; readonly reason: string }
+  | { readonly kind: 'file'; readonly fileId: string; readonly reason: string }
+
+interface ObservedJobOutcome {
+  readonly status: 'Succeeded' | 'CompletedWithErrors' | 'Aborted'
+  readonly failures: readonly ObservedTransferFailure[]
+  readonly failureCount: number
+  readonly omittedFailureCount: number
+}
+
 interface HotSwitchState {
   readonly routes: readonly ObservedRoute[]
+  readonly laneAdmissions: readonly ObservedLaneAdmission[]
   readonly done: boolean
   readonly peerCapable?: boolean
   readonly writeProgress: {
@@ -57,9 +75,17 @@ interface HotSwitchState {
   }
   readonly byteLength?: number
   readonly sha256?: string
-  readonly outcome?: string
+  readonly outcome?: ObservedJobOutcome
   readonly error?: string
 }
+
+// The page-side probe mutates the same shape that the test later snapshots.
+// Deriving its draft type keeps those two contracts from drifting apart.
+type DeepMutable<T> = T extends readonly (infer Item)[]
+  ? DeepMutable<Item>[]
+  : T extends object
+    ? { -readonly [Key in keyof T]: DeepMutable<T[Key]> }
+    : T
 
 interface HotSwitchTrendSample {
   readonly peerCapable: boolean
@@ -179,38 +205,10 @@ async function runHotSwitchSample(options: {
 
     await options.page.goto(receiverLink)
     await options.page.evaluate(
-      ({ barrierTimeout, key }) => {
-        const state: {
-          routes: ObservedRoute[]
-          done: boolean
-          peerCapable?: boolean
-          writeProgress: {
-            startedWrites: number
-            completedWrites: number
-            writtenBytes: number
-            lastWriteAt?: number
-            visibilityState: DocumentVisibilityState
-            barrierEnteredAt?: number
-            barrierSettledAt?: number
-            barrierWaitMilliseconds?: number
-            barrierOutcome?: 'relay-cut' | 'timeout'
-            barrierVisibilityState?: DocumentVisibilityState
-          }
-          timings: {
-            clickedAt?: number
-            peerStartedAt?: number
-            firstRelayAt?: number
-            firstPeerAt?: number
-            relayCutAt?: number
-            firstPeerAfterCutAt?: number
-            transferCompletedAt?: number
-          }
-          byteLength?: number
-          sha256?: string
-          outcome?: string
-          error?: string
-        } = {
+      ({ barrierTimeout, failureDiagnosticMaximumDepth, key }) => {
+        const state: DeepMutable<HotSwitchState> = {
           routes: [],
+          laneAdmissions: [],
           done: false,
           writeProgress: {
             startedWrites: 0,
@@ -267,6 +265,34 @@ async function runHotSwitchSample(options: {
         })
 
         void (async () => {
+          const describeFailure = (reason: unknown, depth = 0): string => {
+            if (depth >= failureDiagnosticMaximumDepth) return '[nested failure truncated]'
+            if (reason instanceof AggregateError) {
+              const summary = `${reason.name}: ${reason.message}`
+              const nested: string[] = []
+              for (const error of reason.errors) {
+                nested.push(describeFailure(error, depth + 1))
+              }
+              const failures = nested.length === 0
+                ? summary
+                : `${summary}; errors=[${nested.join(' | ')}]`
+              return reason.cause === undefined
+                ? failures
+                : `${failures}; cause=${describeFailure(reason.cause, depth + 1)}`
+            }
+            if (reason instanceof Error) {
+              const summary = `${reason.name}: ${reason.message}`
+              return reason.cause === undefined
+                ? summary
+                : `${summary}; cause=${describeFailure(reason.cause, depth + 1)}`
+            }
+            if (typeof reason === 'string') return reason
+            try {
+              return String(reason)
+            } catch {
+              return '[unprintable non-Error failure]'
+            }
+          }
           const gatewayPath = '/src/ui/v2-gateway.ts'
           const offerPath = '/src/connectivity/peer-offer.ts'
           const streamPath = '/src/output/streams/single-file.ts'
@@ -301,6 +327,12 @@ async function runHotSwitchSample(options: {
             }
             const gateway = new gatewayModule.V2BrowserReceiverGateway({
               offersFactory: () => gatedOffers,
+              onContentLaneAdmitted: (observation) => {
+                state.laneAdmissions.push({
+                  laneId: observation.laneId,
+                  route: observation.route,
+                })
+              },
               onBlockFetched: (observation) => {
                 const observedAt = performance.now()
                 state.routes.push({
@@ -334,9 +366,13 @@ async function runHotSwitchSample(options: {
                   state.writeProgress.startedWrites += 1
                   state.writeProgress.lastWriteAt = performance.now()
                   state.writeProgress.visibilityState = document.visibilityState
-                  if (!writeBarrierUsed && state.timings.firstPeerAt !== undefined) {
-                    // One pending write proves the job is active at the relay cut
-                    // without making completion depend on a timer for every block.
+                  if (
+                    !writeBarrierUsed &&
+                    state.peerCapable === true &&
+                    state.timings.firstRelayAt !== undefined
+                  ) {
+                    // Holding the first relay write keeps output active while peer
+                    // admission proceeds independently on the control plane.
                     writeBarrierUsed = true
                     await waitForRelayCut()
                   }
@@ -350,6 +386,24 @@ async function runHotSwitchSample(options: {
             )
             const result = await joined.transferJob(output, activation).run()
             state.timings.transferCompletedAt = performance.now()
+            state.outcome = {
+              status: result.outcome.status,
+              failures: result.outcome.failures.map((failure): ObservedTransferFailure => (
+                failure.kind === 'file'
+                  ? {
+                      kind: 'file',
+                      fileId: failure.fileId,
+                      reason: describeFailure(failure.reason),
+                    }
+                  : {
+                      kind: 'directory',
+                      directoryId: failure.directoryId,
+                      reason: describeFailure(failure.reason),
+                    }
+              )),
+              failureCount: result.outcome.failureCount,
+              omittedFailureCount: result.outcome.omittedFailureCount,
+            }
             const length = chunks.reduce((total, chunk) => total + chunk.byteLength, 0)
             const bytes = new Uint8Array(length)
             let offset = 0
@@ -363,9 +417,8 @@ async function runHotSwitchSample(options: {
               digest,
               (byte) => byte.toString(16).padStart(2, '0'),
             ).join('')
-            state.outcome = result.outcome.status
           } catch (error) {
-            state.error = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+            state.error = describeFailure(error)
           } finally {
             activation?.close()
             await joined?.close().catch(() => undefined)
@@ -373,7 +426,11 @@ async function runHotSwitchSample(options: {
           }
         })()
       },
-      { barrierTimeout: WRITE_BARRIER_TIMEOUT_MILLISECONDS, key: share.key },
+      {
+        barrierTimeout: WRITE_BARRIER_TIMEOUT_MILLISECONDS,
+        failureDiagnosticMaximumDepth: FAILURE_DIAGNOSTIC_MAXIMUM_DEPTH,
+        key: share.key,
+      },
     )
 
     return await runWithSanitizedFailureTrace({
@@ -381,39 +438,32 @@ async function runHotSwitchSample(options: {
       sample: options.sample,
       testInfo: options.testInfo,
     }, async () => {
-      const firstRouteState = await waitForHotSwitchState(
-        options.page,
-        'the first authenticated route',
-        ROUTE_OBSERVATION_TIMEOUT_MILLISECONDS,
-        (state) => state.routes.length > 0,
-      )
-      const firstRoute = firstRouteState.routes[0]
-      if (firstRoute === undefined) throw new Error('Relay block observation disappeared')
-      expect(firstRoute.route).toBe('relay')
-
-      if (firstRouteState.peerCapable === undefined) {
-        throw new Error('Browser peer capability observation disappeared')
-      }
+      const { firstRoute, state: firstRouteState } = await waitForFirstRelayRoute(options.page)
       let firstPeerRoute: ObservedRoute | undefined
+      let admittedPeerLaneId: number | undefined
       if (firstRouteState.peerCapable) {
-        const firstPeerState = await waitForHotSwitchState(
+        const peerAdmissionState = await waitForHotSwitchState(
           options.page,
-          'an authenticated peer route with an active output write',
+          'an authenticated peer lane admission with an active output write',
           ROUTE_OBSERVATION_TIMEOUT_MILLISECONDS,
           (state) => (
-            state.routes.some((route) => route.route === 'peer') &&
+            state.laneAdmissions.some((admission) => admission.route === 'peer') &&
             state.writeProgress.barrierEnteredAt !== undefined &&
             state.writeProgress.barrierSettledAt === undefined
           ),
         )
-        firstPeerRoute = firstPeerState.routes.find((route) => route.route === 'peer')
-        if (firstPeerRoute === undefined) throw new Error('P2P block observation disappeared')
-        expect(firstPeerState.writeProgress.startedWrites).toBe(
-          firstPeerState.writeProgress.completedWrites + 1,
+        const peerAdmission = peerAdmissionState.laneAdmissions.find(
+          (admission) => admission.route === 'peer',
+        )
+        if (peerAdmission === undefined) throw new Error('P2P lane admission disappeared')
+        admittedPeerLaneId = peerAdmission.laneId
+        expect(admittedPeerLaneId).not.toBe(firstRoute.laneId)
+        expect(peerAdmissionState.writeProgress.startedWrites).toBe(
+          peerAdmissionState.writeProgress.completedWrites + 1,
         )
 
-        const peerRoutesBeforeCut = (await hotSwitchState(options.page)).routes.filter(
-          (route) => route.laneId === firstPeerRoute?.laneId,
+        const peerRoutesBeforeCut = peerAdmissionState.routes.filter(
+          (route) => route.laneId === admittedPeerLaneId,
         ).length
         proxy.cutConnections()
         await options.page.evaluate(() => {
@@ -431,76 +481,130 @@ async function runHotSwitchSample(options: {
           releaseBarrier()
         })
 
-        await waitForHotSwitchState(
+        const peerAfterCutState = await waitForHotSwitchState(
           options.page,
           'a peer block after relay loss',
           ROUTE_OBSERVATION_TIMEOUT_MILLISECONDS,
           (state) => state.routes.filter(
-            (route) => route.laneId === firstPeerRoute?.laneId,
+            (route) => route.laneId === admittedPeerLaneId && route.route === 'peer',
           ).length > peerRoutesBeforeCut,
         )
-      }
-      await waitForHotSwitchState(
-        options.page,
-        'successful transfer completion',
-        TRANSFER_COMPLETION_TIMEOUT_MILLISECONDS,
-        (state) => state.done,
-      )
-
-      const final = await hotSwitchState(options.page)
-      expect(final.error).toBeUndefined()
-      expect(final.outcome).toBe('Succeeded')
-      expect(final.byteLength).toBe(options.expected.byteLength)
-      expect(final.sha256).toBe(options.expectedHash)
-      expect(final.writeProgress.startedWrites).toBe(final.writeProgress.completedWrites)
-      expect(final.writeProgress.writtenBytes).toBe(options.expected.byteLength)
-      expect(final.writeProgress.lastWriteAt).toEqual(expect.any(Number))
-      expect(new Set(final.routes.map((route) => route.fileId)).size).toBe(1)
-      expect(final.routes[0]).toMatchObject({ laneId: firstRoute.laneId, route: 'relay' })
-      if (firstRouteState.peerCapable) {
-        expect(firstPeerRoute).toMatchObject({ route: 'peer' })
-        expect(firstPeerRoute?.laneId).not.toBe(firstRoute.laneId)
-        expect(final.writeProgress.barrierOutcome).toBe('relay-cut')
-        expect(requiredTiming(
-          final.writeProgress.barrierWaitMilliseconds,
-          'write barrier',
-        )).toBeGreaterThanOrEqual(0)
-      } else {
-        expect(final.routes.every((route) => route.route === 'relay')).toBe(true)
-        expect(new Set(final.routes.map((route) => route.laneId))).toEqual(
-          new Set([firstRoute.laneId]),
+        firstPeerRoute = peerAfterCutState.routes.find(
+          (route) => route.laneId === admittedPeerLaneId && route.route === 'peer',
         )
-        expect(final.writeProgress.barrierEnteredAt).toBeUndefined()
+        if (firstPeerRoute === undefined) throw new Error('Post-cut P2P block disappeared')
       }
-      const clickedAt = requiredTiming(final.timings.clickedAt, 'click')
-      const peerStartedAt = requiredTiming(final.timings.peerStartedAt, 'peer attempt start')
-      const firstRelayAt = requiredTiming(final.timings.firstRelayAt, 'first relay byte')
-      const transferCompletedAt = requiredTiming(
-        final.timings.transferCompletedAt,
-        'transfer completion',
-      )
-      return Object.freeze({
+      return await completeHotSwitchSample({
+        admittedPeerLaneId,
+        expectedBytes: options.expected.byteLength,
+        expectedHash: options.expectedHash,
+        firstPeerRoute,
+        firstRelayRoute: firstRoute,
+        page: options.page,
         peerCapable: firstRouteState.peerCapable,
-        peerAttemptStartMilliseconds: peerStartedAt - clickedAt,
-        firstRelayByteMilliseconds: firstRelayAt - clickedAt,
-        transferCompletionMilliseconds: transferCompletedAt - clickedAt,
-        ...(firstRouteState.peerCapable
-          ? {
-              firstPeerByteMilliseconds: requiredTiming(
-                final.timings.firstPeerAt,
-                'first peer byte',
-              ) - clickedAt,
-              peerAfterRelayCutMilliseconds: requiredTiming(
-                final.timings.firstPeerAfterCutAt,
-                'post-cut peer byte',
-              ) - requiredTiming(final.timings.relayCutAt, 'relay cut'),
-            }
-          : {}),
       })
     })
   } finally {
     await stack.dispose()
   }
+}
+
+async function waitForFirstRelayRoute(page: Page): Promise<{
+  readonly firstRoute: ObservedRoute
+  readonly state: HotSwitchState & { readonly peerCapable: boolean }
+}> {
+  const state = await waitForHotSwitchState(
+    page,
+    'the first authenticated route',
+    ROUTE_OBSERVATION_TIMEOUT_MILLISECONDS,
+    (candidate) => candidate.routes.length > 0,
+  )
+  const firstRoute = state.routes[0]
+  if (firstRoute === undefined) throw new Error('Relay block observation disappeared')
+  expect(firstRoute.route).toBe('relay')
+  if (state.peerCapable === undefined) {
+    throw new Error('Browser peer capability observation disappeared')
+  }
+  return {
+    firstRoute,
+    state: Object.freeze({ ...state, peerCapable: state.peerCapable }),
+  }
+}
+
+async function completeHotSwitchSample(options: {
+  readonly admittedPeerLaneId: number | undefined
+  readonly expectedBytes: number
+  readonly expectedHash: string
+  readonly firstPeerRoute: ObservedRoute | undefined
+  readonly firstRelayRoute: ObservedRoute
+  readonly page: Page
+  readonly peerCapable: boolean
+}): Promise<HotSwitchTrendSample> {
+  await waitForHotSwitchState(
+    options.page,
+    'successful transfer completion',
+    TRANSFER_COMPLETION_TIMEOUT_MILLISECONDS,
+    (state) => state.done,
+  )
+
+  const final = await hotSwitchState(options.page)
+  expect(final.error).toBeUndefined()
+  expect(final.outcome).toEqual({
+    status: 'Succeeded',
+    failures: [],
+    failureCount: 0,
+    omittedFailureCount: 0,
+  })
+  expect(final.byteLength).toBe(options.expectedBytes)
+  expect(final.sha256).toBe(options.expectedHash)
+  expect(final.writeProgress.startedWrites).toBe(final.writeProgress.completedWrites)
+  expect(final.writeProgress.writtenBytes).toBe(options.expectedBytes)
+  expect(final.writeProgress.lastWriteAt).toEqual(expect.any(Number))
+  expect(new Set(final.routes.map((route) => route.fileId)).size).toBe(1)
+  expect(final.routes[0]).toMatchObject({
+    laneId: options.firstRelayRoute.laneId,
+    route: 'relay',
+  })
+  if (options.peerCapable) {
+    expect(options.firstPeerRoute).toMatchObject({ route: 'peer' })
+    expect(options.firstPeerRoute?.laneId).toBe(options.admittedPeerLaneId)
+    expect(final.writeProgress.barrierOutcome).toBe('relay-cut')
+    expect(requiredTiming(
+      final.writeProgress.barrierWaitMilliseconds,
+      'write barrier',
+    )).toBeGreaterThanOrEqual(0)
+  } else {
+    expect(final.routes.every((route) => route.route === 'relay')).toBe(true)
+    expect(new Set(final.routes.map((route) => route.laneId))).toEqual(
+      new Set([options.firstRelayRoute.laneId]),
+    )
+    expect(final.writeProgress.barrierEnteredAt).toBeUndefined()
+  }
+  const clickedAt = requiredTiming(final.timings.clickedAt, 'click')
+  const peerStartedAt = requiredTiming(final.timings.peerStartedAt, 'peer attempt start')
+  const firstRelayAt = requiredTiming(final.timings.firstRelayAt, 'first relay byte')
+  const transferCompletedAt = requiredTiming(
+    final.timings.transferCompletedAt,
+    'transfer completion',
+  )
+  return Object.freeze({
+    peerCapable: options.peerCapable,
+    peerAttemptStartMilliseconds: peerStartedAt - clickedAt,
+    firstRelayByteMilliseconds: firstRelayAt - clickedAt,
+    transferCompletionMilliseconds: transferCompletedAt - clickedAt,
+    ...(options.peerCapable
+      ? {
+          firstPeerByteMilliseconds: requiredTiming(
+            final.timings.firstPeerAt,
+            'first peer byte',
+          ) - clickedAt,
+          peerAfterRelayCutMilliseconds: requiredTiming(
+            final.timings.firstPeerAfterCutAt,
+            'post-cut peer byte',
+          ) - requiredTiming(final.timings.relayCutAt, 'relay cut'),
+        }
+      : {}),
+  })
 }
 
 async function runWithSanitizedFailureTrace<T>(
@@ -551,6 +655,7 @@ async function hotSwitchState(
     return {
       ...state,
       routes: state.routes.map((route) => ({ ...route })),
+      laneAdmissions: state.laneAdmissions.map((admission) => ({ ...admission })),
       writeProgress: {
         ...state.writeProgress,
         visibilityState: document.visibilityState,
@@ -586,7 +691,15 @@ async function waitForHotSwitchState(
 }
 
 function transferProgressError(state: HotSwitchState, waitingFor: string): Error {
-  const reason = state.error ?? 'transfer completed before the expected observation'
+  let reason = state.error
+  if (reason === undefined && state.outcome?.status === 'Succeeded') {
+    reason = 'transfer completed successfully before the expected observation'
+  }
+  if (reason === undefined && state.outcome !== undefined) {
+    reason = `transfer returned ${state.outcome.status} with ` +
+      `${state.outcome.failureCount} failure(s)`
+  }
+  reason ??= 'transfer completed before the expected observation'
   return new Error(
     `Hot-switch transfer cannot reach ${waitingFor}: ${reason}; state=${JSON.stringify(state)}`,
   )

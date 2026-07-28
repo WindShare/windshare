@@ -7,6 +7,7 @@ if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
 Import-Module (Join-Path $PSScriptRoot 'core-release-environment.psm1') -Force
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+$artifactVersion = 'v0.0.0-ci'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) (
     'windshare-core-archive-contract-{0}' -f [Guid]::NewGuid().ToString('N')
 )
@@ -61,7 +62,7 @@ try {
         -stage (Join-Path $testRoot 'committed-core') `
         -zip (Join-Path $testRoot 'core.zip') `
         -extract (Join-Path $testRoot 'extracted-core') `
-        -version v0.3.0 | Out-Null
+        -version $artifactVersion | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "commit-bound archive helper exited with code $LASTEXITCODE"
     }

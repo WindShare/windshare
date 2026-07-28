@@ -11,6 +11,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/osfs/internal/pathfailure"
 )
 
 // StableBinding gives a platform/backend stability implementation an already
@@ -76,11 +77,11 @@ func newRootedRevisionSource(rootPaths []string, binder StabilityBinder, closer 
 	for _, path := range rootPaths {
 		absolute, err := filepath.Abs(path)
 		if err != nil {
-			return nil, errors.Join(filesystemPathFailure("open stable source root", path, err), closeRoots(roots), closeOwnedBinder(closer))
+			return nil, errors.Join(pathfailure.Filesystem("open stable source root", path, err), closeRoots(roots), closeOwnedBinder(closer))
 		}
 		root, err := os.OpenRoot(absolute)
 		if err != nil {
-			return nil, errors.Join(filesystemPathFailure("open stable source root", absolute, err), closeRoots(roots), closeOwnedBinder(closer))
+			return nil, errors.Join(pathfailure.Filesystem("open stable source root", absolute, err), closeRoots(roots), closeOwnedBinder(closer))
 		}
 		roots = append(roots, root)
 	}
@@ -136,7 +137,7 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, content.ErrRevisionStale
 		}
-		return nil, filesystemPathFailure("inspect stable revision", locator.RelativePath(), err)
+		return nil, pathfailure.Filesystem("inspect stable revision", locator.RelativePath(), err)
 	}
 	if !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 || isReparsePoint(before) {
 		s.mu.RUnlock()
@@ -148,7 +149,7 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, content.ErrRevisionStale
 		}
-		return nil, filesystemPathFailure("open stable revision", locator.RelativePath(), err)
+		return nil, pathfailure.Filesystem("open stable revision", locator.RelativePath(), err)
 	}
 	after, lstatErr := root.Lstat(locator.RelativePath())
 	s.mu.RUnlock()
@@ -157,7 +158,7 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 		if errors.Is(lstatErr, os.ErrNotExist) {
 			return nil, content.ErrRevisionStale
 		}
-		return nil, filesystemPathFailure("reinspect stable revision", locator.RelativePath(), lstatErr)
+		return nil, pathfailure.Filesystem("reinspect stable revision", locator.RelativePath(), lstatErr)
 	}
 	owned := false
 	defer func() {
@@ -167,7 +168,7 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 	}()
 	info, err := handle.Stat()
 	if err != nil {
-		return nil, filesystemPathFailure("stat stable revision", locator.RelativePath(), err)
+		return nil, pathfailure.Filesystem("stat stable revision", locator.RelativePath(), err)
 	}
 	// Lstat on both sides of Open prevents a path replacement from being
 	// accepted merely because its final target is regular. The binder then

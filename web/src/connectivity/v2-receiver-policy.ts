@@ -16,6 +16,11 @@ import {
 export const V2_RELAY_CONTENT_FALLBACK_MILLISECONDS = 8_000
 export const V2_P2P_CONNECT_TIMEOUT_MILLISECONDS = 10_000
 
+export interface V2ContentLaneAdmissionObservation {
+  readonly laneId: number
+  readonly route: V2BlockTransportRoute
+}
+
 export interface V2ReceiverConnectivityOptions {
   readonly session: V2ReceiverSessionRuntime
   readonly lanes: V2LaneSet
@@ -24,6 +29,7 @@ export interface V2ReceiverConnectivityOptions {
   readonly offers?: OfferChannelFactory
   readonly randomBytes?: (length: number) => Uint8Array
   readonly onPeerError?: (error: unknown) => void
+  readonly onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void
   readonly observePeerSignaling?: V2SessionSignalingObserver
 }
 
@@ -107,6 +113,9 @@ export class V2ReceiverConnectivity {
   readonly #offers: OfferChannelFactory
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
   readonly #onPeerError: (error: unknown) => void
+  readonly #onContentLaneAdmitted: (
+    observation: V2ContentLaneAdmissionObservation,
+  ) => void
   readonly #observePeerSignaling: V2SessionSignalingObserver
   readonly #lifetime = new AbortController()
   readonly #admitted = new Set<number>()
@@ -137,6 +146,7 @@ export class V2ReceiverConnectivity {
     this.#offers = options.offers ?? new BrowserOfferChannelFactory()
     this.#randomBytes = options.randomBytes
     this.#onPeerError = options.onPeerError ?? (() => undefined)
+    this.#onContentLaneAdmitted = options.onContentLaneAdmitted ?? (() => undefined)
     this.#observePeerSignaling = options.observePeerSignaling ?? (() => undefined)
     this.#unsubscribeLaneChanges = this.#session.subscribeLaneChanges((change) => {
       if (change.type === 'detached') {
@@ -367,6 +377,11 @@ export class V2ReceiverConnectivity {
     if (this.#admitted.has(laneId) || !this.#session.laneIds().includes(laneId)) return
     this.#lanes.add(this.#createBlockLane(laneId), route)
     this.#admitted.add(laneId)
+    try {
+      this.#onContentLaneAdmitted(Object.freeze({ laneId, route }))
+    } catch {
+      // Admission is already authoritative; diagnostics cannot revoke or corrupt it.
+    }
   }
 
   #requestRelay(activationId: number): void {

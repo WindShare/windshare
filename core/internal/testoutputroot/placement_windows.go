@@ -4,6 +4,8 @@ package testoutputroot
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -36,23 +38,16 @@ func protectWindowsPlacement(path string) error {
 		return err
 	}
 
-	entries := ""
+	var entries strings.Builder
 	principals := make([]*windows.SID, 0, 3)
 	for _, principal := range []*windows.SID{userSID, systemSID, administratorsSID} {
-		duplicate := false
-		for _, existing := range principals {
-			if principal.Equals(existing) {
-				duplicate = true
-				break
-			}
-		}
-		if duplicate {
+		if slices.ContainsFunc(principals, principal.Equals) {
 			continue
 		}
 		principals = append(principals, principal)
-		entries += fmt.Sprintf("(A;OICI;GA;;;%s)", principal.String())
+		fmt.Fprintf(&entries, "(A;OICI;GA;;;%s)", principal.String())
 	}
-	descriptor, err := windows.SecurityDescriptorFromString("O:" + userSID.String() + "D:P" + entries)
+	descriptor, err := windows.SecurityDescriptorFromString("O:" + userSID.String() + "D:P" + entries.String())
 	if err != nil {
 		return err
 	}

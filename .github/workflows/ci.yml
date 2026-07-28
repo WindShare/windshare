@@ -161,9 +161,12 @@ jobs:
         run: bash scripts/ci/vectors.sh
 
   core-release:
-    name: Core module release artifact and Linux/ext4 certification
+    name: Core module synthetic artifact and Linux/ext4 certification
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # This reserved version makes ordinary validation ineligible as release evidence.
+      CORE_ARTIFACT_VERSION: "v0.0.0-ci"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -175,7 +178,7 @@ jobs:
       # The native profile is explicit here so workflow review cannot weaken the
       # non-skippable ext4 certification by changing host detection.
       - name: build and validate deterministic core module artifact
-        run: bash scripts/ci/core-release.sh v0.3.0 "$GITHUB_SHA" linux-ext4
+        run: bash scripts/ci/core-release.sh "$CORE_ARTIFACT_VERSION" "$GITHUB_SHA" linux-ext4
 
   gowork-off-root:
     name: GOWORK=off root build

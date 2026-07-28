@@ -533,7 +533,7 @@ func TestScanAdmissionAndChildSinkEnforceLocalBudgetAndContext(t *testing.T) {
 	store.mu.Unlock()
 
 	collector := &scanChildCollector{}
-	if err := collector.Add(nil, ScannedChild{}); err == nil {
+	if err := collector.Add(commitStoreMissingContext(), ScannedChild{}); err == nil {
 		t.Fatal("child sink accepted a nil context")
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
@@ -555,6 +555,10 @@ func TestScanAdmissionAndChildSinkEnforceLocalBudgetAndContext(t *testing.T) {
 		t.Fatal("child sink accepted an identity-less child")
 	}
 }
+
+// commitStoreMissingContext keeps intentional nil-capability coverage distinct
+// from accidental nil Context arguments in ordinary tests.
+func commitStoreMissingContext() context.Context { return nil }
 
 func TestRunAttemptContainsAdmissionAndPostScanValidationFailures(t *testing.T) {
 	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)

@@ -12,13 +12,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
+	"golang.org/x/sys/windows"
 )
 
 const (
 	windowsV3OperationHoldTimeout      = 15 * time.Second
 	windowsV3ResumePostcheckHoldTarget = "resume-root-revalidation"
+	windowsV3OperationGuardFilePath    = "file.bin"
+	windowsV3LegacyJournalPrefix       = ".wsresume-output-"
+	windowsV3LegacyJournalIdentityHex  = "11111111111111111111111111111111"
+	windowsV3LegacyJournalSuffix       = ".journal"
+	windowsV3LegacyJournalBody         = "historic-v2-journal"
 )
 
 type windowsV3OperationHoldGate struct {
@@ -54,7 +62,7 @@ func (gate *windowsV3OperationHoldGate) unblock() {
 }
 
 type windowsV3OperationHoldPlatform struct {
-	outputV3Platform
+	outputcap.Platform
 	gate *windowsV3OperationHoldGate
 }
 
@@ -62,16 +70,16 @@ type windowsV3OperationHoldPlatform struct {
 // has pinned the complete placement chain. This preserves native directory
 // identity semantics while exposing the final cut of a resume operation.
 type windowsV3ResumePostcheckPlatform struct {
-	outputV3Platform
+	outputcap.Platform
 	gate          *windowsV3OperationHoldGate
 	guardAcquires atomic.Uint32
 }
 
 func (platform *windowsV3ResumePostcheckPlatform) AcquirePublicOperationGuard() (
-	outputV3PublicOperationGuard,
+	outputcap.PublicOperationGuard,
 	error,
 ) {
-	guard, err := platform.outputV3Platform.AcquirePublicOperationGuard()
+	guard, err := platform.Platform.AcquirePublicOperationGuard()
 	if err != nil {
 		return nil, err
 	}
@@ -82,28 +90,28 @@ func (platform *windowsV3ResumePostcheckPlatform) AcquirePublicOperationGuard() 
 }
 
 func (platform *windowsV3OperationHoldPlatform) AcquirePublicOperationGuard() (
-	outputV3PublicOperationGuard,
+	outputcap.PublicOperationGuard,
 	error,
 ) {
-	guard, err := platform.outputV3Platform.AcquirePublicOperationGuard()
+	guard, err := platform.Platform.AcquirePublicOperationGuard()
 	if err != nil {
 		return nil, err
 	}
 	return &windowsV3OperationHoldGuard{
-		outputV3PublicOperationGuard: guard,
+		PublicOperationGuard: guard,
 		root: &windowsV3OperationHoldDirectory{
-			outputV3Directory: guard.Root(),
-			gate:              platform.gate,
+			Directory: guard.Root(),
+			gate:      platform.gate,
 		},
 	}, nil
 }
 
 type windowsV3OperationHoldGuard struct {
-	outputV3PublicOperationGuard
-	root outputV3Directory
+	outputcap.PublicOperationGuard
+	root outputcap.Directory
 }
 
-func (guard *windowsV3OperationHoldGuard) Root() outputV3Directory {
+func (guard *windowsV3OperationHoldGuard) Root() outputcap.Directory {
 	if guard == nil {
 		return nil
 	}
@@ -111,50 +119,50 @@ func (guard *windowsV3OperationHoldGuard) Root() outputV3Directory {
 }
 
 func (guard *windowsV3OperationHoldGuard) Close() error {
-	if guard == nil || guard.outputV3PublicOperationGuard == nil {
+	if guard == nil || guard.PublicOperationGuard == nil {
 		return nil
 	}
-	err := guard.outputV3PublicOperationGuard.Close()
-	guard.outputV3PublicOperationGuard = nil
+	err := guard.PublicOperationGuard.Close()
+	guard.PublicOperationGuard = nil
 	guard.root = nil
 	return err
 }
 
 type windowsV3OperationHoldDirectory struct {
-	outputV3Directory
+	outputcap.Directory
 	gate *windowsV3OperationHoldGate
 	path string
 }
 
-func (directory *windowsV3OperationHoldDirectory) ObserveEntry(name string) (outputV3EntryKind, error) {
+func (directory *windowsV3OperationHoldDirectory) ObserveEntry(name string) (outputcap.EntryKind, error) {
 	directory.gate.hold(directory.childPath(name))
-	return directory.outputV3Directory.ObserveEntry(name)
+	return directory.Directory.ObserveEntry(name)
 }
 
-func (directory *windowsV3OperationHoldDirectory) Duplicate() (outputV3Directory, error) {
-	duplicate, err := directory.outputV3Directory.Duplicate()
+func (directory *windowsV3OperationHoldDirectory) Duplicate() (outputcap.Directory, error) {
+	duplicate, err := directory.Directory.Duplicate()
 	if err != nil {
 		return nil, err
 	}
 	return &windowsV3OperationHoldDirectory{
-		outputV3Directory: duplicate,
-		gate:              directory.gate,
-		path:              directory.path,
+		Directory: duplicate,
+		gate:      directory.gate,
+		path:      directory.path,
 	}, nil
 }
 
-func (directory *windowsV3OperationHoldDirectory) SameDirectory(other outputV3Directory) (bool, error) {
+func (directory *windowsV3OperationHoldDirectory) SameDirectory(other outputcap.Directory) (bool, error) {
 	if wrapped, ok := other.(*windowsV3OperationHoldDirectory); ok {
-		other = wrapped.outputV3Directory
+		other = wrapped.Directory
 	}
-	return directory.outputV3Directory.SameDirectory(other)
+	return directory.Directory.SameDirectory(other)
 }
 
 func (directory *windowsV3OperationHoldDirectory) OpenDirectory(
 	name string,
 	private bool,
-) (outputV3Directory, error) {
-	opened, err := directory.outputV3Directory.OpenDirectory(name, private)
+) (outputcap.Directory, error) {
+	opened, err := directory.Directory.OpenDirectory(name, private)
 	if err != nil || private {
 		return opened, err
 	}
@@ -164,8 +172,8 @@ func (directory *windowsV3OperationHoldDirectory) OpenDirectory(
 func (directory *windowsV3OperationHoldDirectory) CreateDirectory(
 	name string,
 	private bool,
-) (outputV3Directory, error) {
-	created, err := directory.outputV3Directory.CreateDirectory(name, private)
+) (outputcap.Directory, error) {
+	created, err := directory.Directory.CreateDirectory(name, private)
 	if err != nil || private {
 		return created, err
 	}
@@ -173,13 +181,13 @@ func (directory *windowsV3OperationHoldDirectory) CreateDirectory(
 }
 
 func (directory *windowsV3OperationHoldDirectory) wrap(
-	owned outputV3Directory,
+	owned outputcap.Directory,
 	name string,
-) outputV3Directory {
+) outputcap.Directory {
 	return &windowsV3OperationHoldDirectory{
-		outputV3Directory: owned,
-		gate:              directory.gate,
-		path:              directory.childPath(name),
+		Directory: owned,
+		gate:      directory.gate,
+		path:      directory.childPath(name),
 	}
 }
 
@@ -191,27 +199,22 @@ func (directory *windowsV3OperationHoldDirectory) childPath(name string) string 
 }
 
 func TestWindowsV3RecoveryRetainsFullPlacementGuardThroughFinalObservation(t *testing.T) {
-	base := windowsV3NativeTestTempDir(t)
+	base := t.TempDir()
 	externalPath := filepath.Join(base, "external")
 	rootPath := filepath.Join(externalPath, "output")
 	if err := os.MkdirAll(rootPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
 
-	gate := newWindowsV3OperationHoldGate(v3RecoveryFilePath)
+	gate := newWindowsV3OperationHoldGate(windowsV3OperationGuardFilePath)
 	t.Cleanup(gate.unblock)
-	authority := v3RecoveryAuthority(t, rootPath, nil)
-	authority.platformFactory = func(path string, create bool) (outputV3Platform, error) {
-		platform, err := openOutputV3Platform(path, create)
-		if err != nil {
-			return nil, err
-		}
-		return &windowsV3OperationHoldPlatform{outputV3Platform: platform, gate: gate}, nil
-	}
-	selection := v3RecoverySelection(t, true, 4)
-	opened := v3RecoveryOpen(t, authority, rootPath, selection)
-	file := v3RecoveryOutputFile(t, opened.Session, selection, 4)
-	transaction := v3RecoveryBeginTransaction(t, opened.Session, file)
+	authority := newOutputV3DecoratedPublicAuthority(t, rootPath, func(platform outputcap.Platform) outputcap.Platform {
+		return &windowsV3OperationHoldPlatform{Platform: platform, gate: gate}
+	})
+	selection := windowsV3OperationGuardSelection(t, 4)
+	session := windowsV3OperationOpen(t, authority, selection)
+	file := windowsV3OperationGuardFile(t, session, selection)
+	transaction := windowsV3OperationBeginTransaction(t, session, file)
 	if err := transaction.WriteRange(context.Background(), 0, []byte("data")); err != nil {
 		t.Fatal(err)
 	}
@@ -258,14 +261,14 @@ func TestWindowsV3RecoveryRetainsFullPlacementGuardThroughFinalObservation(t *te
 	if committed.err != nil || committed.settlement.Kind() != transfer.FilePublished {
 		t.Fatalf("guarded commit = (kind=%v, err=%v), want published", committed.settlement.Kind(), committed.err)
 	}
-	if !v3RecoveryIsBlockedAncestorReplacement(rootRenameErr) {
+	if !windowsV3OperationGuardBlocksAncestorReplacement(rootRenameErr) {
 		t.Fatalf("output-root rename while final observation held = %v, want placement denial", rootRenameErr)
 	}
-	if !v3RecoveryIsBlockedAncestorReplacement(externalRenameErr) {
+	if !windowsV3OperationGuardBlocksAncestorReplacement(externalRenameErr) {
 		t.Fatalf("external-ancestor rename while final observation held = %v, want placement denial", externalRenameErr)
 	}
 
-	v3RecoveryCloseSession(t, opened.Session)
+	windowsV3OperationCloseSession(t, session)
 	if err := os.Rename(rootPath, rootMoved); err != nil {
 		t.Fatalf("output-root rename remained blocked after operation cleanup: %v", err)
 	}
@@ -280,12 +283,84 @@ func TestWindowsV3RecoveryRetainsFullPlacementGuardThroughFinalObservation(t *te
 	}
 }
 
+func windowsV3OperationGuardSelection(t *testing.T, size uint64) transfer.OutputSelection {
+	t.Helper()
+	return windowsV3TestFileSelection(t, []string{windowsV3OperationGuardFilePath}, size)
+}
+
+func windowsV3OperationOpen(
+	t *testing.T,
+	authority *FilesystemOutputAuthority,
+	selection transfer.OutputSelection,
+) transfer.OutputSession {
+	t.Helper()
+	session, err := authority.OpenSelection(context.Background(), selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return session
+}
+
+func windowsV3OperationGuardFile(
+	t *testing.T,
+	session transfer.OutputSession,
+	selection transfer.OutputSelection,
+) transfer.OutputFile {
+	t.Helper()
+	selected := selection.Files()[0]
+	geometry, err := content.NewFileGeometry(selected.ExpectedSize, catalog.DefaultChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := content.NewFileRevisionDescriptor(
+		selection.ShareInstance(), selected.FileID,
+		windowsV3TestIdentity16[content.FileRevision](0xa1), geometry, selected.ModifiedTime,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locator, err := transfer.NewPathOutputLocator(selected.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := transfer.NewOutputFileTarget(session.BackendID(), session.SessionID(), descriptor, locator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return transfer.OutputFile{
+		Path: selected.Path, ExpectedSize: selected.ExpectedSize, Descriptor: descriptor, Target: target,
+	}
+}
+
+func windowsV3OperationBeginTransaction(
+	t *testing.T,
+	session transfer.OutputSession,
+	file transfer.OutputFile,
+) transfer.FileTransaction {
+	t.Helper()
+	start, err := session.BeginFile(context.Background(), file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, _, ok := start.Transaction()
+	if !ok {
+		settlement, _ := start.ImmediateSettlement()
+		t.Fatalf("begin guarded output file = immediate %v, want transaction", settlement.Kind())
+	}
+	return transaction
+}
+
+func windowsV3OperationCloseSession(t *testing.T, session transfer.OutputSession) {
+	t.Helper()
+	settlement, err := session.PauseJob(context.Background(), transfer.JobPauseInterrupted)
+	if err != nil || settlement.Kind() != transfer.JobPaused {
+		t.Fatalf("close guarded output session = (kind=%v, err=%v)", settlement.Kind(), err)
+	}
+}
+
 func TestWindowsResumeListingRetainsPlacementThroughFinalRevalidation(t *testing.T) {
 	fixture := newWindowsResumePlacementFixture(t)
-	base := v3RecoveryAuthority(t, fixture.rootPath, nil)
-	selection := v3RecoverySelection(t, false, 0)
-	opened := v3RecoveryOpen(t, base, fixture.rootPath, selection)
-	v3RecoveryCloseSession(t, opened.Session)
+	windowsV3CreatePausedResumeSession(t, fixture.rootPath)
 
 	gate := newWindowsV3OperationHoldGate(windowsV3ResumePostcheckHoldTarget)
 	t.Cleanup(gate.unblock)
@@ -297,8 +372,8 @@ func TestWindowsResumeListingRetainsPlacementThroughFinalRevalidation(t *testing
 	gate.enabled.Store(true)
 	result := make(chan listResult, 1)
 	go func() {
-		inventory, err := listingAuthority.listResumeState(
-			context.Background(), FilesystemResumeRoot{RootPath: fixture.rootPath},
+		inventory, err := windowsV3DecoratedListResumeState(
+			context.Background(), FilesystemResumeRoot{RootPath: fixture.rootPath}, listingAuthority,
 		)
 		result <- listResult{inventory: inventory, err: err}
 	}()
@@ -314,7 +389,7 @@ func TestWindowsResumeListingRetainsPlacementThroughFinalRevalidation(t *testing
 		t.Fatal("resume listing did not finish after releasing root revalidation")
 	}
 	if listed.inventory != nil {
-		defer v3RecoveryCloseInventory(t, listed.inventory)
+		defer windowsV3CloseResumeInventory(t, listed.inventory)
 	}
 	assertWindowsResumePlacementPinned(t, rootMoveErr, externalMoveErr)
 	if listed.err != nil {
@@ -327,7 +402,7 @@ func TestWindowsResumeListingRetainsPlacementThroughFinalRevalidation(t *testing
 
 	// The public-operation guards are closed before ListResumeState returns. A
 	// successful discard therefore proves the returned inventory owns its pin.
-	settlement, err := base.discardResumeState(context.Background(), summaries[0].Reference)
+	settlement, err := DiscardResumeState(context.Background(), summaries[0].Reference)
 	if err != nil || settlement.Kind != Discarded {
 		t.Fatalf("discard through independently pinned inventory = (%+v, %v)", settlement, err)
 	}
@@ -336,22 +411,19 @@ func TestWindowsResumeListingRetainsPlacementThroughFinalRevalidation(t *testing
 	}
 	fixture.assertSentinels(t)
 	fixture.exerciseReplacementRoundTrips(t)
-	assertWindowsResumeInventoryEmpty(t, base, fixture.rootPath)
+	assertWindowsResumeInventoryEmpty(t, fixture.rootPath)
 }
 
 func TestWindowsResumeDiscardRetainsPlacementThroughFinalRevalidation(t *testing.T) {
 	fixture := newWindowsResumePlacementFixture(t)
-	base := v3RecoveryAuthority(t, fixture.rootPath, nil)
-	selection := v3RecoverySelection(t, false, 0)
-	opened := v3RecoveryOpen(t, base, fixture.rootPath, selection)
-	v3RecoveryCloseSession(t, opened.Session)
-	inventory, err := base.listResumeState(
+	windowsV3CreatePausedResumeSession(t, fixture.rootPath)
+	inventory, err := ListResumeState(
 		context.Background(), FilesystemResumeRoot{RootPath: fixture.rootPath},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer v3RecoveryCloseInventory(t, inventory)
+	defer windowsV3CloseResumeInventory(t, inventory)
 	summaries := inventory.Summaries()
 	if len(summaries) != 1 {
 		t.Fatalf("Windows discard fixture inventory = %+v", summaries)
@@ -367,8 +439,8 @@ func TestWindowsResumeDiscardRetainsPlacementThroughFinalRevalidation(t *testing
 	gate.enabled.Store(true)
 	result := make(chan discardResult, 1)
 	go func() {
-		settlement, err := discardAuthority.discardResumeState(
-			context.Background(), summaries[0].Reference,
+		settlement, err := windowsV3DecoratedDiscardResumeState(
+			context.Background(), discardAuthority, summaries[0].Reference,
 		)
 		result <- discardResult{settlement: settlement, err: err}
 	}()
@@ -392,13 +464,13 @@ func TestWindowsResumeDiscardRetainsPlacementThroughFinalRevalidation(t *testing
 	}
 	fixture.assertSentinels(t)
 	fixture.exerciseReplacementRoundTrips(t)
-	assertWindowsResumeInventoryEmpty(t, base, fixture.rootPath)
+	assertWindowsResumeInventoryEmpty(t, fixture.rootPath)
 }
 
 func TestWindowsLegacyDiscardRetainsPlacementThroughFinalRevalidation(t *testing.T) {
 	fixture := newWindowsResumePlacementFixture(t)
-	base, inventory, summary, journalPath, _ := v3RecoveryListedLegacyV2Journal(t, fixture.rootPath)
-	defer v3RecoveryCloseInventory(t, inventory)
+	inventory, summary, journalPath := windowsV3ListedLegacyJournal(t, fixture.rootPath)
+	defer windowsV3CloseResumeInventory(t, inventory)
 
 	gate := newWindowsV3OperationHoldGate(windowsV3ResumePostcheckHoldTarget)
 	t.Cleanup(gate.unblock)
@@ -410,7 +482,9 @@ func TestWindowsLegacyDiscardRetainsPlacementThroughFinalRevalidation(t *testing
 	gate.enabled.Store(true)
 	result := make(chan discardResult, 1)
 	go func() {
-		settlement, err := discardAuthority.discardResumeState(context.Background(), summary.Reference)
+		settlement, err := windowsV3DecoratedDiscardResumeState(
+			context.Background(), discardAuthority, summary.Reference,
+		)
 		result <- discardResult{settlement: settlement, err: err}
 	}()
 	waitForWindowsResumePostcheck(t, gate, "legacy discard")
@@ -437,7 +511,42 @@ func TestWindowsLegacyDiscardRetainsPlacementThroughFinalRevalidation(t *testing
 	}
 	fixture.assertSentinels(t)
 	fixture.exerciseReplacementRoundTrips(t)
-	assertWindowsResumeInventoryEmpty(t, base, fixture.rootPath)
+	assertWindowsResumeInventoryEmpty(t, fixture.rootPath)
+}
+
+func windowsV3ListedLegacyJournal(
+	t *testing.T,
+	rootPath string,
+) (*ResumeStateInventory, ResumeStateSummary, string) {
+	t.Helper()
+	journalName := windowsV3LegacyJournalPrefix + windowsV3LegacyJournalIdentityHex + windowsV3LegacyJournalSuffix
+	journalPath := filepath.Join(rootPath, journalName)
+	// V2 journals are intentionally opaque to the v3 inventory. A historical
+	// regular-file image is enough to exercise pin-bound legacy removal without
+	// claiming the modern runtime can validate retired journal semantics.
+	if err := os.WriteFile(journalPath, []byte(windowsV3LegacyJournalBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := ListResumeState(context.Background(), FilesystemResumeRoot{RootPath: rootPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaries := inventory.Summaries()
+	if len(summaries) != 1 || summaries[0].Reference.Kind() != ResumeStateLegacyUntrusted ||
+		windowsV3LegacyHasAttention(summaries[0], "legacy-v2-journal-unreadable") {
+		_ = inventory.Close()
+		t.Fatalf("list removable legacy journal = %+v", summaries)
+	}
+	return inventory, summaries[0], journalPath
+}
+
+func windowsV3LegacyHasAttention(summary ResumeStateSummary, expected string) bool {
+	for _, attention := range summary.Attention {
+		if attention.Code == expected {
+			return true
+		}
+	}
+	return false
 }
 
 type windowsResumePlacementFixture struct {
@@ -452,7 +561,7 @@ type windowsResumePlacementFixture struct {
 
 func newWindowsResumePlacementFixture(t *testing.T) *windowsResumePlacementFixture {
 	t.Helper()
-	base := windowsV3NativeTestTempDir(t)
+	base := t.TempDir()
 	fixture := &windowsResumePlacementFixture{
 		externalPath:            filepath.Join(base, "external"),
 		externalMovedPath:       filepath.Join(base, "external-displaced"),
@@ -490,18 +599,65 @@ func windowsResumePostcheckAuthority(
 	gate *windowsV3OperationHoldGate,
 ) *FilesystemOutputAuthority {
 	t.Helper()
-	authority := v3RecoveryAuthority(t, rootPath, nil)
-	authority.platformFactory = func(path string, create bool) (outputV3Platform, error) {
-		platform, err := openOutputV3Platform(path, create)
-		if err != nil {
-			return nil, err
-		}
+	return newOutputV3DecoratedPublicAuthority(t, rootPath, func(platform outputcap.Platform) outputcap.Platform {
 		return &windowsV3ResumePostcheckPlatform{
-			outputV3Platform: platform,
-			gate:             gate,
-		}, nil
+			Platform: platform,
+			gate:     gate,
+		}
+	})
+}
+
+func windowsV3CreatePausedResumeSession(t *testing.T, rootPath string) {
+	t.Helper()
+	authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: rootPath})
+	if err != nil {
+		t.Fatal(err)
 	}
-	return authority
+	session := windowsV3OperationOpen(t, authority, publicValuesSelection(t))
+	windowsV3OperationCloseSession(t, session)
+}
+
+// The facade deliberately owns construction of ordinary listing authorities.
+// This bridge exists only in this test file so the already-open outputcap
+// decorator can hold the native final-revalidation cut; it projects the same
+// opaque public inventory returned by ListResumeState.
+func windowsV3DecoratedListResumeState(
+	ctx context.Context,
+	root FilesystemResumeRoot,
+	authority *FilesystemOutputAuthority,
+) (*ResumeStateInventory, error) {
+	if authority == nil || authority.authority == nil {
+		return nil, transfer.ErrInvalidOutputBinding
+	}
+	inventory, err := authority.authority.ListResumeState(ctx, root.RootPath)
+	if err != nil {
+		return nil, err
+	}
+	return &ResumeStateInventory{authority: inventory}, nil
+}
+
+// This is the matching in-flight discard seam. It accepts and returns only the
+// facade's opaque reference and projected settlement, never a runtime value.
+func windowsV3DecoratedDiscardResumeState(
+	ctx context.Context,
+	authority *FilesystemOutputAuthority,
+	reference ResumeStateRef,
+) (DiscardSettlement, error) {
+	if authority == nil || authority.authority == nil {
+		return DiscardSettlement{}, transfer.ErrInvalidOutputBinding
+	}
+	settlement, err := authority.authority.DiscardResumeState(ctx, reference.authority)
+	if err != nil {
+		return DiscardSettlement{}, err
+	}
+	return projectDiscardSettlement(settlement), nil
+}
+
+func windowsV3CloseResumeInventory(t *testing.T, inventory *ResumeStateInventory) {
+	t.Helper()
+	if err := inventory.Close(); err != nil {
+		t.Error(err)
+	}
 }
 
 func waitForWindowsResumePostcheck(
@@ -534,12 +690,17 @@ func windowsResumeAttemptPinnedMove(sourcePath, movedPath string) error {
 
 func assertWindowsResumePlacementPinned(t *testing.T, rootMoveErr, externalMoveErr error) {
 	t.Helper()
-	if !v3RecoveryIsBlockedAncestorReplacement(rootMoveErr) {
+	if !windowsV3OperationGuardBlocksAncestorReplacement(rootMoveErr) {
 		t.Fatalf("output-root displacement during final resume revalidation = %v, want placement denial", rootMoveErr)
 	}
-	if !v3RecoveryIsBlockedAncestorReplacement(externalMoveErr) {
+	if !windowsV3OperationGuardBlocksAncestorReplacement(externalMoveErr) {
 		t.Fatalf("external-ancestor displacement during final resume revalidation = %v, want placement denial", externalMoveErr)
 	}
+}
+
+func windowsV3OperationGuardBlocksAncestorReplacement(err error) bool {
+	return errors.Is(err, windows.ERROR_ACCESS_DENIED) ||
+		errors.Is(err, windows.ERROR_SHARING_VIOLATION)
 }
 
 func (fixture *windowsResumePlacementFixture) assertSentinels(t *testing.T) {
@@ -594,30 +755,34 @@ func (fixture *windowsResumePlacementFixture) requireSentinel(t *testing.T, path
 
 func assertWindowsResumeInventoryEmpty(
 	t *testing.T,
-	authority *FilesystemOutputAuthority,
 	rootPath string,
 ) {
 	t.Helper()
-	inventory, err := authority.listResumeState(
+	inventory, err := ListResumeState(
 		context.Background(), FilesystemResumeRoot{RootPath: rootPath},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer v3RecoveryCloseInventory(t, inventory)
+	defer windowsV3CloseResumeInventory(t, inventory)
 	if summaries := inventory.Summaries(); len(summaries) != 0 {
 		t.Fatalf("restored resume root inventory = %+v, want empty", summaries)
 	}
 }
 
 func TestWindowsV3DeniedCommitRetainsDeterministicPublishingCut(t *testing.T) {
-	rootPath := v3RecoveryRoot(t)
-	selection := windowsV3PlacementSelection(t, 4)
-	sessionIDs := &v3RecoverySessionIDs{}
-	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, rootPath, sessionIDs), rootPath, selection)
-	t.Cleanup(func() { _ = opened.Session.closeHandles() })
-	file := v3RecoveryOutputFile(t, opened.Session, selection, 4)
-	transaction := v3RecoveryBeginTransaction(t, opened.Session, file)
+	rootPath := t.TempDir()
+	selection := windowsV3PublishingSelection(t, 4)
+	trace := &windowsV3PublishingTrace{}
+	authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{
+		RootPath: rootPath, Tracer: trace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := windowsV3OperationOpen(t, authority, selection)
+	file := windowsV3OperationGuardFile(t, session, selection)
+	transaction := windowsV3OperationBeginTransaction(t, session, file)
 	if err := transaction.WriteRange(context.Background(), 0, []byte("data")); err != nil {
 		t.Fatal(err)
 	}
@@ -625,7 +790,7 @@ func TestWindowsV3DeniedCommitRetainsDeterministicPublishingCut(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	parentPath := filepath.Join(rootPath, windowsV3PlacementDirectory)
+	parentPath := filepath.Join(rootPath, windowsV3PublishingDirectory)
 	displacedPath := filepath.Join(filepath.Dir(rootPath), filepath.Base(rootPath)+"-publishing-cut-displaced")
 	t.Cleanup(func() {
 		_ = os.Rename(displacedPath, parentPath)
@@ -635,22 +800,21 @@ func TestWindowsV3DeniedCommitRetainsDeterministicPublishingCut(t *testing.T) {
 		t.Fatal(err)
 	}
 	settlement, commitErr := transaction.Commit(context.Background())
-	if settlement.Kind() != 0 || !outputV3FailureRequiresJobPause(commitErr) {
+	if settlement.Kind() != 0 || !windowsV3FailureRequiresJobPause(commitErr) {
 		t.Fatalf("commit through displaced ancestry = (kind=%v, err=%v), want retained pause", settlement.Kind(), commitErr)
 	}
-	persisted := outputV3PersistedFileRecord(t, opened.Session, windowsV3PlacementFile)
-	if persisted.Phase() != resumestate.FilePublishing {
-		t.Fatalf("denied publication phase = %v, want Publishing", persisted.Phase())
+	if !trace.SawPublishingTransition() {
+		t.Fatal("denied publication did not emit the durable Publishing transition")
 	}
 	for label, finalPath := range map[string]string{
-		"restored namespace":  filepath.Join(rootPath, filepath.FromSlash(windowsV3PlacementFile)),
+		"restored namespace":  filepath.Join(rootPath, filepath.FromSlash(windowsV3PublishingFilePath)),
 		"displaced namespace": filepath.Join(displacedPath, "file.bin"),
 	} {
 		if _, err := os.Stat(finalPath); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("%s acquired a premature final: %v", label, err)
 		}
 	}
-	paused, err := opened.Session.PauseJob(context.Background(), transfer.JobPauseOutputFailure)
+	paused, err := session.PauseJob(context.Background(), transfer.JobPauseOutputFailure)
 	if err != nil || paused.Kind() != transfer.JobPaused {
 		t.Fatalf("pause retained publication = (kind=%v, err=%v)", paused.Kind(), err)
 	}
@@ -658,12 +822,85 @@ func TestWindowsV3DeniedCommitRetainsDeterministicPublishingCut(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened := v3RecoveryOpen(t, v3RecoveryAuthority(t, rootPath, sessionIDs), rootPath, selection)
-	recoveryFile := v3RecoveryOutputFile(t, reopened.Session, selection, 4)
-	start, err := reopened.Session.BeginFile(context.Background(), recoveryFile)
+	reopenedAuthority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: rootPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened := windowsV3OperationOpen(t, reopenedAuthority, selection)
+	recoveryFile := windowsV3OperationGuardFile(t, reopened, selection)
+	start, err := reopened.BeginFile(context.Background(), recoveryFile)
 	settlement, immediate := start.ImmediateSettlement()
 	if err != nil || !immediate || settlement.Kind() != transfer.FilePublished {
 		t.Fatalf("restored deterministic cut = (kind=%v, immediate=%t, err=%v), want published", settlement.Kind(), immediate, err)
 	}
-	v3RecoveryCloseSession(t, reopened.Session)
+	windowsV3OperationCloseSession(t, reopened)
+}
+
+const (
+	windowsV3PublishingDirectory = "guarded"
+	windowsV3PublishingFilePath  = windowsV3PublishingDirectory + "/file.bin"
+)
+
+func windowsV3PublishingSelection(t *testing.T, size uint64) transfer.OutputSelection {
+	t.Helper()
+	share := windowsV3TestIdentity16[catalog.ShareInstance](0xc1)
+	root := windowsV3TestIdentity16[catalog.DirectoryID](0xc2)
+	rootGeneration := windowsV3TestIdentity16[catalog.DirectoryGeneration](0xc3)
+	parent := windowsV3TestIdentity16[catalog.DirectoryID](0xc4)
+	parentGeneration := windowsV3TestIdentity16[catalog.DirectoryGeneration](0xc5)
+	modified := windowsV3TestModifiedTime(t)
+	plan, err := transfer.NewOutputSelection(
+		share,
+		root,
+		rootGeneration,
+		[]transfer.OutputSelectionDirectory{{
+			Path: windowsV3PublishingDirectory, DirectoryID: parent,
+			Generation: parentGeneration, ModifiedTime: modified,
+		}},
+		[]transfer.OutputSelectionFile{{
+			Path:              windowsV3PublishingFilePath,
+			FileID:            windowsV3TestIdentity16[catalog.FileID](0xc6),
+			ParentDirectoryID: parent, ParentGeneration: parentGeneration,
+			ExpectedSize: size, ModifiedTime: modified,
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, err := transfer.NewSelectionRules(true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := transfer.NewCanonicalSelectionRequest(share, root, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := transfer.NewCanonicalSelectionV1(request, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := canonical.BindPlan(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return selection
+}
+
+type windowsV3PublishingTrace struct {
+	publishingTransitions int
+}
+
+func (trace *windowsV3PublishingTrace) TraceFilesystemOutput(event FilesystemOutputTrace) {
+	if event.Operation == TraceFilePhaseTransition && event.NextPhase == FilesystemOutputFilePublishing {
+		trace.publishingTransitions++
+	}
+}
+
+func (trace *windowsV3PublishingTrace) SawPublishingTransition() bool {
+	return trace != nil && trace.publishingTransitions != 0
+}
+
+func windowsV3FailureRequiresJobPause(err error) bool {
+	sessionErr, found := errors.AsType[*transfer.OutputSessionError](err)
+	return found && sessionErr.RequiresJobPause()
 }
