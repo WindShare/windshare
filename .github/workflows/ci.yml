@@ -6,8 +6,9 @@
 # module's .testcoverage.yml (core total >=90%, root total >=80%, every
 # package >=70%; the ubuntu profile is authoritative). Ubuntu jobs
 # natively provide the GOOS=linux compile/type-check path of §10.2 and all
-# real-socket coverage; the windows-network job runs GOOS=windows vet plus both
-# modules' race tests. OS-network test cases are gated at shared constructors
+# real-socket coverage; the hosted Windows jobs run GOOS=windows vet plus both
+# modules' race tests, isolating the NTFS-heavy core workload on its own runner.
+# OS-network test cases are gated at shared constructors
 # (internal/testnetwork): open on Linux, skip on Windows outside the local D5
 # runner, keeping the hosted Windows job deterministic. Firewall prompts and
 # host-owned state are outside every test verdict and are never queried here.
@@ -290,5 +291,19 @@ jobs:
       # are outside its verdict. Real-socket CI coverage lives in the ubuntu jobs.
       - name: root Windows race tests (OS-network cases gated)
         run: go test -race -count=1 ./...
-      - name: core Windows race tests
-        run: go -C core test -race -count=1 "-timeout=$env:CORE_SUITE_TEST_TIMEOUT" ./...
+      - name: ordinary core Windows race tests
+        run: ./scripts/ci/race.ps1 -CoreWorkload ordinary -SkipRoot
+
+  # outputruntime performs many real NTFS durability operations. Its test-level
+  # parallelism is useful only when it cannot contend with catalog on one hosted
+  # virtual disk, so this runner boundary preserves both workloads' throughput.
+  windows-output-runtime:
+    name: Windows output runtime race (isolated NTFS workload)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: NTFS-heavy output runtime race tests
+        run: ./scripts/ci/race.ps1 -CoreWorkload output-runtime -SkipRoot
