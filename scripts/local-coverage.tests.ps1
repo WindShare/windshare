@@ -25,7 +25,16 @@ function Assert-SourceContainsAll([string]$Path, [string]$Label, [string[]]$Expe
     $source = [IO.File]::ReadAllText($Path)
     foreach ($text in $Expected) {
         if (-not $source.Contains($text, [StringComparison]::Ordinal)) {
-            throw "$Label lost the core suite timeout contract: $text"
+            throw "$Label lost a source contract: $text"
+        }
+    }
+}
+
+function Assert-SourceExcludesAll([string]$Path, [string]$Label, [string[]]$Forbidden) {
+    $source = [IO.File]::ReadAllText($Path)
+    foreach ($text in $Forbidden) {
+        if ($source.Contains($text, [StringComparison]::Ordinal)) {
+            throw "$Label contains a forbidden source contract: $text"
         }
     }
 }
@@ -36,8 +45,13 @@ Assert-SourceContainsAll $coverageScript 'Local coverage' @(
     '"-timeout=$coreSuiteTestTimeout"'
 )
 Assert-SourceContainsAll (Join-Path $PSScriptRoot 'ci\race.ps1') 'Windows race gate' @(
-    "`$coreSuiteTestTimeout = '30m'",
-    'go -C core test -race -count=1 "-timeout=$coreSuiteTestTimeout" ./...'
+    '$env:CORE_SUITE_TEST_TIMEOUT',
+    "    '30m'",
+    "[ValidateSet('all', 'ordinary', 'output-runtime')]",
+    'github.com/windshare/windshare/core/osfs/internal/outputruntime',
+    '$corePackagePaths | Where-Object { $_ -ne $outputRuntimePackage }',
+    'go -C core test -race -count=1 "-timeout=$coreSuiteTestTimeout" @ordinaryCorePackages',
+    'go -C core test -race -count=1 "-timeout=$coreSuiteTestTimeout" $outputRuntimePackage'
 )
 Assert-SourceContainsAll (Join-Path $PSScriptRoot 'ci\race.sh') 'Linux race gate' @(
     "core_suite_test_timeout='30m'",
@@ -47,12 +61,17 @@ Assert-SourceContainsAll (Join-Path $PSScriptRoot 'ci\coverage.sh') 'Linux cover
     "core_suite_test_timeout='30m'",
     'go -C core test -count=1 -timeout="$core_suite_test_timeout" ./...'
 )
-Assert-SourceContainsAll (Join-Path $PSScriptRoot '..\.github\workflows\ci.yml') 'CI workflow' @(
+$ciWorkflow = Join-Path $PSScriptRoot '..\.github\workflows\ci.yml'
+Assert-SourceContainsAll $ciWorkflow 'CI workflow' @(
     'CORE_SUITE_TEST_TIMEOUT: 30m',
     'run: go test -race -count=1 ./...',
     'run: go test -count=1 ./... -covermode=atomic -coverprofile=cover.out',
     'run: go test -race -count=1 -timeout="$CORE_SUITE_TEST_TIMEOUT" ./...',
     'run: go test -count=1 -timeout="$CORE_SUITE_TEST_TIMEOUT" ./... -covermode=atomic -coverprofile=cover.out',
+    'run: ./scripts/ci/race.ps1 -CoreWorkload ordinary -SkipRoot',
+    'run: ./scripts/ci/race.ps1 -CoreWorkload output-runtime -SkipRoot'
+)
+Assert-SourceExcludesAll $ciWorkflow 'CI workflow' @(
     'run: go -C core test -race -count=1 "-timeout=$env:CORE_SUITE_TEST_TIMEOUT" ./...'
 )
 $hostIndependentValidationScripts = @(
