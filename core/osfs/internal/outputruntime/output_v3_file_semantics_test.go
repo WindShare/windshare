@@ -18,6 +18,7 @@ import (
 )
 
 func TestOutputV3BeginFileSeparatesPreStateCollisionFromReservedRecovery(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelectionPaths(t, []string{"preexisting.bin", "reserved.bin"}, 3)
 	var traces []FilesystemOutputTrace
@@ -64,6 +65,7 @@ func TestOutputV3BeginFileSeparatesPreStateCollisionFromReservedRecovery(t *test
 }
 
 func TestOutputV3BeginFileQuarantinesOnlyMatchingUnsafeFileNamespaces(t *testing.T) {
+	t.Parallel()
 	paths := []string{"corrupt.bin", "wrong-type.bin", "orphan-update.bin", "malformed-update.bin", "clean.bin"}
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelectionPaths(t, paths, 1)
@@ -120,6 +122,7 @@ func TestOutputV3BeginFileQuarantinesOnlyMatchingUnsafeFileNamespaces(t *testing
 }
 
 func TestOutputV3BeginFileRejectsInvalidAndDuplicateOwnershipClaims(t *testing.T) {
+	t.Parallel()
 	var nilSession *Session
 	if _, err := nilSession.BeginFile(context.Background(), transfer.OutputFile{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("nil session begin error = %v", err)
@@ -152,6 +155,7 @@ func TestOutputV3BeginFileRejectsInvalidAndDuplicateOwnershipClaims(t *testing.T
 }
 
 func TestOutputV3RecoveryScopesAmbiguousDataBearingCutsByPhase(t *testing.T) {
+	t.Parallel()
 	t.Run("witnessed-matching-final", func(t *testing.T) {
 		root := v3RecoveryRoot(t)
 		payload := []byte("owned")
@@ -242,6 +246,7 @@ func TestOutputV3RecoveryScopesAmbiguousDataBearingCutsByPhase(t *testing.T) {
 }
 
 func TestOutputV3PublishedCleanupAmbiguityPausesAndPreservesWitnesses(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	payload := []byte("published")
 	selection := v3RecoverySelection(t, true, uint64(len(payload)))
@@ -308,6 +313,7 @@ func TestOutputV3PublishedCleanupAmbiguityPausesAndPreservesWitnesses(t *testing
 }
 
 func TestOutputV3ActiveRetirementPausesWhenAStageLosesItsAnchor(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, true, 1)
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection)
@@ -343,6 +349,7 @@ func TestOutputV3ActiveRetirementPausesWhenAStageLosesItsAnchor(t *testing.T) {
 }
 
 func TestOutputV3TerminalCloseFailureIsCleanupStateIO(t *testing.T) {
+	t.Parallel()
 	cleanupCause := errors.New("terminal close cleanup failed")
 	primaryCause := errors.New("primary operation failed")
 	for _, test := range []struct {
@@ -404,6 +411,7 @@ func TestOutputV3TerminalCloseFailureIsCleanupStateIO(t *testing.T) {
 }
 
 func TestOutputV3TransactionStartRejectsPostObservationWitnessRaces(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		fault  string
@@ -488,6 +496,7 @@ func TestOutputV3TransactionStartRejectsPostObservationWitnessRaces(t *testing.T
 }
 
 func TestOutputV3PublishBlockedRetriesWithoutReceivingContent(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	payload := []byte("owned-output")
 	selection := v3RecoverySelection(t, true, uint64(len(payload)))
@@ -523,6 +532,7 @@ func TestOutputV3PublishBlockedRetriesWithoutReceivingContent(t *testing.T) {
 }
 
 func TestOutputV3CheckpointFailuresPreserveLastVerifiedAuthority(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, true, 3)
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection)
@@ -598,6 +608,7 @@ func TestOutputV3CheckpointFailuresPreserveLastVerifiedAuthority(t *testing.T) {
 }
 
 func TestOutputV3CheckpointWitnessComparisonSeparatesDenialFromContradiction(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name       string
 		cause      error
@@ -661,6 +672,7 @@ func TestOutputV3CheckpointWitnessComparisonSeparatesDenialFromContradiction(t *
 }
 
 func TestOutputV3WitnessCreationCleanupCannotChooseRecoveryTaxonomy(t *testing.T) {
+	t.Parallel()
 	rawFailure := errors.New("witness creation operation denied")
 	unsafeCause := errors.New("witness creation identity contradiction")
 	cleanupCause := errors.New("witness creation close diagnostic")
@@ -754,6 +766,7 @@ func TestOutputV3WitnessCreationCleanupCannotChooseRecoveryTaxonomy(t *testing.T
 }
 
 func TestOutputV3MetadataFailureResumesCompleteCheckpoint(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name      string
 		configure func(*outputV3SemanticFaultFile, error)
@@ -848,6 +861,7 @@ func TestOutputV3MetadataFailureResumesCompleteCheckpoint(t *testing.T) {
 }
 
 func TestOutputV3TransactionRejectsBoundsAndInvalidSettlementsWithoutMutation(t *testing.T) {
+	t.Parallel()
 	var nilTransaction *FileTransaction
 	if nilTransaction.Binding().BackendID() != "" {
 		t.Fatal("nil transaction exposed a binding")
@@ -911,6 +925,7 @@ func TestOutputV3TransactionRejectsBoundsAndInvalidSettlementsWithoutMutation(t 
 }
 
 func TestOutputV3ObjectAllocationSkipsZeroClaimsAndOccupiedNames(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection)
@@ -961,6 +976,7 @@ func TestOutputV3ObjectAllocationSkipsZeroClaimsAndOccupiedNames(t *testing.T) {
 }
 
 func TestOutputV3PublicationWitnessCleanupClosesEveryHandleOnce(t *testing.T) {
+	t.Parallel()
 	stageErr := errors.New("stage close failed")
 	anchorErr := errors.New("anchor close failed")
 	stage := &outputV3SemanticFaultFile{closeErr: stageErr}

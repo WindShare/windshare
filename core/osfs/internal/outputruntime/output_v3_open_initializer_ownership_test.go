@@ -14,6 +14,7 @@ import (
 )
 
 func TestOutputV3OpenInitializerSynchronouslyClosesEveryOwnerAfterUncertainAdoption(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelectionPaths(t, []string{"duplicate-a.bin", "duplicate-b.bin"}, 1)
 	sessionIDs := &v3RecoverySessionIDs{}

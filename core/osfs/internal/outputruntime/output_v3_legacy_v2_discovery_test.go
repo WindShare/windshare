@@ -19,6 +19,7 @@ import (
 )
 
 func TestOutputV3ListsAndDiscardsLegacyV2JournalWithoutRemovingItsStage(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	journalName := legacyOutputStatePrefix + strings.Repeat("11", transfer.OutputSessionIdentityBytes) + legacyOutputJournalSuffix
 	stageName := legacyOutputStagePrefix + strings.Repeat("22", 16)
@@ -98,6 +99,7 @@ func TestOutputV3ListsAndDiscardsLegacyV2JournalWithoutRemovingItsStage(t *testi
 }
 
 func TestOutputV3LegacyV2DiscardRejectsChangedAuthority(t *testing.T) {
+	t.Parallel()
 	t.Run("journal-content", func(t *testing.T) {
 		root := v3RecoveryRoot(t)
 		authority, inventory, summary, journalPath, journalBytes := v3RecoveryListedLegacyV2Journal(t, root)
@@ -176,6 +178,7 @@ func TestOutputV3LegacyV2DiscardRejectsChangedAuthority(t *testing.T) {
 }
 
 func TestOutputV3LegacyInventorySurvivesUnsupportedV3Platform(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	journalName := legacyOutputStatePrefix + strings.Repeat("11", transfer.OutputSessionIdentityBytes) + legacyOutputJournalSuffix
 	stageName := legacyOutputStagePrefix + strings.Repeat("22", 16)

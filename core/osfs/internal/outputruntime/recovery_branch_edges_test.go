@@ -20,6 +20,7 @@ type closeOnlyRecoveryFile struct {
 func (file closeOnlyRecoveryFile) Close() error { return file.closeErr }
 
 func TestOutputV3RecoveryBranchErrorEdges(t *testing.T) {
+	t.Parallel()
 	var digest resumestate.LocatorDigest
 	var bound resumestate.BoundFileRecord
 	var decision resumestate.UpdateTemporaryDecision

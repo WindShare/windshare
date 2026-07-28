@@ -13,6 +13,7 @@ import (
 )
 
 func TestOutputV3StateStoreRejectsUnprovableCreationAndReplacementCuts(t *testing.T) {
+	t.Parallel()
 	current, next, _, currentEncoded := stateStoreHeaderImages(t)
 
 	t.Run("invalid-create-image", func(t *testing.T) {
@@ -88,6 +89,7 @@ func TestOutputV3StateStoreRejectsUnprovableCreationAndReplacementCuts(t *testin
 }
 
 func TestOutputV3StateRecoveryRejectsAmbiguousObservationBoundaries(t *testing.T) {
+	t.Parallel()
 	t.Run("initial-target-observation", func(t *testing.T) {
 		directory := &stateTerminalClassifyDirectory{classifyErr: errStateTerminalInjected}
 		if _, err := (outputnamespace.Store{}).EnsureInitialRecord(directory, "record", []byte{1}, 1); !errors.Is(err, errStateTerminalInjected) {
@@ -185,6 +187,7 @@ func TestOutputV3StateRecoveryRejectsAmbiguousObservationBoundaries(t *testing.T
 }
 
 func TestOutputV3TerminalRecoveryRevalidatesAuthorityAtEveryRemovalBoundary(t *testing.T) {
+	t.Parallel()
 	for _, failAt := range []int{1, 2, 7, 8, 9, 10} {
 		t.Run(fmt.Sprintf("authority-check-%d", failAt), func(t *testing.T) {
 			fixture := newTerminalRecoveryFaultFixture(t, resumestate.SessionDiscarding)
@@ -204,6 +207,7 @@ func TestOutputV3TerminalRecoveryRevalidatesAuthorityAtEveryRemovalBoundary(t *t
 }
 
 func TestOutputV3TerminalShellAndLockObservationFailClosed(t *testing.T) {
+	t.Parallel()
 	t.Run("session-binding-before-shell-removal", func(t *testing.T) {
 		fixture := newTerminalRecoveryFaultFixture(t, resumestate.SessionDiscarding)
 		defer fixture.close(t)

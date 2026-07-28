@@ -17,6 +17,7 @@ import (
 )
 
 func TestOutputV3ListingIsolatesMalformedNamesAndKeepsTheirExactDiscardIdentity(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	authority := v3RecoveryAuthority(t, root, nil)
 	selection := v3RecoverySelection(t, false, 0)
@@ -107,6 +108,7 @@ func TestOutputV3ListingIsolatesMalformedNamesAndKeepsTheirExactDiscardIdentity(
 }
 
 func TestOutputV3ListingClassifiesRootAndIntentInspectionFaultsAtTheirScope(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	baseAuthority := v3RecoveryAuthority(t, root, nil)
@@ -206,6 +208,7 @@ func TestOutputV3ListingClassifiesRootAndIntentInspectionFaultsAtTheirScope(t *t
 }
 
 func TestOutputV3ReferenceAuthorityRejectsStructurallyIncompleteCapabilities(t *testing.T) {
+	t.Parallel()
 	if (ResumeStateRef{rootPath: "root"}).validAuthority() {
 		t.Fatal("untyped reference was accepted")
 	}
@@ -218,6 +221,7 @@ func TestOutputV3ReferenceAuthorityRejectsStructurallyIncompleteCapabilities(t *
 }
 
 func TestOutputV3SingleSessionListingConvertsObjectRacesIntoIntentAttention(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name          string
 		plan          *stateListingIdentityFaultPlan
@@ -331,6 +335,7 @@ func TestOutputV3SingleSessionListingConvertsObjectRacesIntoIntentAttention(t *t
 }
 
 func TestOutputV3LegacyListingRejectsUnboundedOrUnpinnableState(t *testing.T) {
+	t.Parallel()
 	if _, _, err := digestLegacyOutputJournal(&stateListingErrorReader{}); !errors.Is(err, errStateTerminalInjected) {
 		t.Fatalf("legacy digest read error = %v", err)
 	}
@@ -400,6 +405,7 @@ func TestOutputV3LegacyListingRejectsUnboundedOrUnpinnableState(t *testing.T) {
 }
 
 func TestOutputV3ListingRecognizesAValidLocklessTerminalSuffix(t *testing.T) {
+	t.Parallel()
 	fixture := newTerminalRecoveryFaultFixture(t, resumestate.SessionCompleting)
 	root := fixture.session.owner.rootPath
 	authority := fixture.session.owner
@@ -437,6 +443,7 @@ func TestOutputV3ListingRecognizesAValidLocklessTerminalSuffix(t *testing.T) {
 }
 
 func TestOutputV3LegacyDiscardRequiresLiveRootAndEntryPins(t *testing.T) {
+	t.Parallel()
 	if _, err := discardLegacyState(nil, ResumeStateRef{
 		kind: ResumeStateLegacyUntrusted, legacyName: "legacy.journal", legacyRemovable: true,
 	}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {

@@ -17,6 +17,7 @@ import (
 )
 
 func TestLinuxOutputV3DiscardStopsWhenPinnedNestedDirectoryEscapesSessionAncestry(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	authority := v3RecoveryAuthority(t, root, nil)

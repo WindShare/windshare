@@ -54,6 +54,7 @@ func (recorder *outputV3TraceRecorder) reset() {
 }
 
 func TestOutputV3FileSettlementTraceProjectsEveryTypedSettlement(t *testing.T) {
+	t.Parallel()
 	selection := v3RecoverySelection(t, true, 3)
 	recorder := &outputV3TraceRecorder{}
 	session := &Session{
@@ -171,6 +172,7 @@ func TestOutputV3FileSettlementTraceProjectsEveryTypedSettlement(t *testing.T) {
 }
 
 func TestOutputV3SettlementTraceRunsAfterJoinedPauseCleanup(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, true, 1)
 	recorder := &outputV3TraceRecorder{}
@@ -208,6 +210,7 @@ func TestOutputV3SettlementTraceRunsAfterJoinedPauseCleanup(t *testing.T) {
 }
 
 func TestOutputV3SettlementTracePublicBoundariesEmitExactlyOnce(t *testing.T) {
+	t.Parallel()
 	t.Run("BeginFile collision", func(t *testing.T) {
 		root := v3RecoveryRoot(t)
 		selection := v3RecoverySelection(t, true, 1)
@@ -279,6 +282,7 @@ func TestOutputV3SettlementTracePublicBoundariesEmitExactlyOnce(t *testing.T) {
 }
 
 func TestOutputV3PauseJobTracesEveryInternalFileSettlementOnce(t *testing.T) {
+	t.Parallel()
 	paths := []string{"a.bin", "b.bin", "c.bin"}
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelectionPaths(t, paths, 1)
@@ -316,6 +320,7 @@ func TestOutputV3PauseJobTracesEveryInternalFileSettlementOnce(t *testing.T) {
 }
 
 func TestOutputV3ConcurrentPausesTraceEachSettlementOnce(t *testing.T) {
+	t.Parallel()
 	paths := []string{"a.bin", "b.bin", "c.bin", "d.bin", "e.bin", "f.bin"}
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelectionPaths(t, paths, 1)
@@ -392,6 +397,7 @@ func (lock *outputV3TraceTestLock) Close() error {
 }
 
 func TestOutputV3NativeLockTraceReportsEachAcquireOutcomeOnce(t *testing.T) {
+	t.Parallel()
 	for _, scopeTest := range []struct {
 		name         string
 		scope        FilesystemOutputNativeLockScope
@@ -463,6 +469,7 @@ func TestOutputV3NativeLockTraceReportsEachAcquireOutcomeOnce(t *testing.T) {
 }
 
 func TestOutputV3NativeLockTraceClosesUnexpectedCreatedLock(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name          string
 		closeErr      error
@@ -502,6 +509,7 @@ func TestOutputV3NativeLockTraceClosesUnexpectedCreatedLock(t *testing.T) {
 }
 
 func TestOutputV3NativeLockTraceReportsOneTerminalEventUnderConcurrentClose(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name          string
 		closeErr      error
@@ -564,6 +572,7 @@ func TestOutputV3NativeLockTraceReportsOneTerminalEventUnderConcurrentClose(t *t
 }
 
 func TestOutputV3OpenSessionNativeLockTraceSequence(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	recorder := &outputV3TraceRecorder{}
@@ -600,6 +609,7 @@ func TestOutputV3OpenSessionNativeLockTraceSequence(t *testing.T) {
 }
 
 func TestOutputV3ContendingOpenerTracesNoFalseSessionOwnership(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	incumbent := v3RecoveryAuthority(t, root, nil)
@@ -623,6 +633,7 @@ func TestOutputV3ContendingOpenerTracesNoFalseSessionOwnership(t *testing.T) {
 }
 
 func TestOutputV3TerminalNativeLockHandoffTraceSequence(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	recorder := &outputV3TraceRecorder{}

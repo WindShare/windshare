@@ -15,6 +15,7 @@ import (
 )
 
 func TestOutputV3NestedDiscardCleanupStopsWhenParentIdentityChanges(t *testing.T) {
+	t.Parallel()
 	for _, replacedParent := range []string{"session", "intent"} {
 		t.Run(replacedParent, func(t *testing.T) {
 			root := v3RecoveryRoot(t)
@@ -132,6 +133,7 @@ func TestOutputV3NestedDiscardCleanupStopsWhenParentIdentityChanges(t *testing.T
 }
 
 func TestOutputV3DiscardRejectsListedSessionIdentityReplacement(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name      string
 		malformed bool

@@ -13,6 +13,7 @@ import (
 )
 
 func TestOutputV3SettlementEntryFailuresAreTypedAtSource(t *testing.T) {
+	t.Parallel()
 	var nilTransaction *FileTransaction
 	assertOutputV3Fault(t, outputV3CommitError(nilTransaction, context.Background()), transfer.OutputFaultFile, transfer.OutputFaultContract)
 	assertOutputV3Fault(
@@ -32,6 +33,7 @@ func TestOutputV3SettlementEntryFailuresAreTypedAtSource(t *testing.T) {
 }
 
 func TestOutputV3ExpiredSettlementContextsRemainTyped(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, true, 8)
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, &v3RecoverySessionIDs{}), root, selection)
@@ -56,6 +58,7 @@ func TestOutputV3ExpiredSettlementContextsRemainTyped(t *testing.T) {
 }
 
 func TestOutputV3PausePreservesCheckpointFaultClassification(t *testing.T) {
+	t.Parallel()
 	t.Run("ownership", func(t *testing.T) {
 		root := v3RecoveryRoot(t)
 		selection := v3RecoverySelection(t, true, 8)
@@ -97,6 +100,7 @@ func TestOutputV3PausePreservesCheckpointFaultClassification(t *testing.T) {
 }
 
 func TestOutputV3ExpiredCompleteJobFailureIsTyped(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, &v3RecoverySessionIDs{}), root, selection)
@@ -110,6 +114,7 @@ func TestOutputV3ExpiredCompleteJobFailureIsTyped(t *testing.T) {
 }
 
 func TestOutputV3StateNamespaceQuarantineReasonsMapToStateCorrupt(t *testing.T) {
+	t.Parallel()
 	for _, reason := range []resumestate.QuarantineReason{
 		resumestate.QuarantineUpdateTemporary,
 		resumestate.QuarantineOutputObjectDuplicate,
@@ -124,6 +129,7 @@ func TestOutputV3StateNamespaceQuarantineReasonsMapToStateCorrupt(t *testing.T) 
 }
 
 func TestOutputV3RecoveryFailureClassifierKeepsEvidenceAndDenialDistinct(t *testing.T) {
+	t.Parallel()
 	denied := errors.New("recovery denied")
 	for _, test := range []struct {
 		name     string

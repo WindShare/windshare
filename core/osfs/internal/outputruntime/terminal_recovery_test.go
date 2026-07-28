@@ -13,6 +13,7 @@ import (
 )
 
 func TestOutputV3RecoversEveryTerminalSessionRemovalCut(t *testing.T) {
+	t.Parallel()
 	for _, lifecycle := range []resumestate.SessionLifecycle{
 		resumestate.SessionCompleting,
 		resumestate.SessionDiscarding,
@@ -58,6 +59,7 @@ func TestOutputV3RecoversEveryTerminalSessionRemovalCut(t *testing.T) {
 }
 
 func TestOutputV3RemovesOnlyTheNamedTerminalSession(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	authority := v3RecoveryAuthority(t, root, nil)
 	selection := v3RecoverySelection(t, false, 0)

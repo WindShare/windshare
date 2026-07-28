@@ -16,6 +16,7 @@ import (
 )
 
 func TestOutputV3PublicationWitnessRejectsEveryBrokenAuthorityProof(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("publication witness fault")
 
 	for _, test := range []struct {
@@ -89,6 +90,7 @@ func TestOutputV3PublicationWitnessRejectsEveryBrokenAuthorityProof(t *testing.T
 }
 
 func TestOutputV3WitnessCreationCollisionsPersistPartialObjectQuarantine(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		stage  outputV3PublicationDirectoryFaults
@@ -141,6 +143,7 @@ func TestOutputV3WitnessCreationCollisionsPersistPartialObjectQuarantine(t *test
 }
 
 func TestOutputV3ObservationCloseFailuresRemainSeparateFromNamespaceEvidence(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("observation close fault")
 	for _, test := range []struct {
 		name        string
@@ -212,6 +215,7 @@ func TestOutputV3ObservationCloseFailuresRemainSeparateFromNamespaceEvidence(t *
 }
 
 func TestOutputV3AmbiguousObservationPersistsQuarantineBeforeCloseFailure(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("final observation close fault")
 	session, transaction := outputV3PublicationReadyTransaction(t)
 	result, err := session.linkFinalNoReplace(
@@ -254,6 +258,7 @@ func TestOutputV3AmbiguousObservationPersistsQuarantineBeforeCloseFailure(t *tes
 }
 
 func TestOutputV3SyncFinalParentSeparatesDenialFromIdentityContradiction(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("final parent reopen denied")
 	for _, test := range []struct {
 		name       string
@@ -319,6 +324,7 @@ func TestOutputV3SyncFinalParentSeparatesDenialFromIdentityContradiction(t *test
 }
 
 func TestOutputV3FinalPublicationRequiresPinnedIdentityAtEveryCut(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("final publication fault")
 
 	for _, test := range []struct {
@@ -407,6 +413,7 @@ func TestOutputV3FinalPublicationRequiresPinnedIdentityAtEveryCut(t *testing.T) 
 }
 
 func TestOutputV3ClassifiedCollisionPersistsDecisionBeforeCloseFailure(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("classified collision close fault")
 	for _, test := range []struct {
 		name        string
@@ -468,6 +475,7 @@ func TestOutputV3ClassifiedCollisionPersistsDecisionBeforeCloseFailure(t *testin
 }
 
 func TestOutputV3LinkCreatedFailuresRetainPublishingCut(t *testing.T) {
+	t.Parallel()
 	syncFailure := errors.New("published parent sync fault")
 	closeFailure := errors.New("published handle close fault")
 
@@ -534,6 +542,7 @@ func TestOutputV3LinkCreatedFailuresRetainPublishingCut(t *testing.T) {
 }
 
 func TestOutputV3PublishedCleanupMutationFailuresPauseWithoutQuarantine(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("published cleanup mutation fault")
 	for _, test := range []struct {
 		name        string
@@ -613,6 +622,7 @@ func TestOutputV3PublishedCleanupMutationFailuresPauseWithoutQuarantine(t *testi
 }
 
 func TestOutputV3RetiringAnchorPreservesOperationAndCleanupFailuresWithoutQuarantine(t *testing.T) {
+	t.Parallel()
 	operationFailure := errors.New("retiring anchor operation fault")
 	cleanupFailure := errors.New("retiring anchor cleanup fault")
 
@@ -680,6 +690,7 @@ func TestOutputV3RetiringAnchorPreservesOperationAndCleanupFailuresWithoutQuaran
 }
 
 func TestOutputV3RetirementPostMutationCleanupCutsRemainRetryable(t *testing.T) {
+	t.Parallel()
 	cleanupFailure := errors.New("post-mutation cleanup fault")
 
 	for _, test := range []struct {
@@ -753,6 +764,7 @@ func TestOutputV3RetirementPostMutationCleanupCutsRemainRetryable(t *testing.T) 
 }
 
 func TestOutputV3RetirementRetriesEveryOrderedCleanupCut(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("ordered retirement fault")
 
 	for _, test := range []struct {
@@ -850,6 +862,7 @@ func TestOutputV3RetirementRetriesEveryOrderedCleanupCut(t *testing.T) {
 }
 
 func TestOutputV3RetirementRecordSyncFailureLeavesNoDataBearingAuthority(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("retiring record directory sync failed")
 	session, recordDir, recordName, retiring, binding := outputV3PreparedRetirement(t)
 	faults := &outputV3RetirementRecordFaults{syncErrAt: 1, injected: failure}
@@ -891,6 +904,7 @@ func TestOutputV3RetirementRecordSyncFailureLeavesNoDataBearingAuthority(t *test
 }
 
 func TestOutputV3AnchorObservationClassifiesFixedNamespaceEvidence(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("anchor observation fault")
 	for _, test := range []struct {
 		name    string
@@ -931,6 +945,7 @@ func TestOutputV3AnchorObservationClassifiesFixedNamespaceEvidence(t *testing.T)
 }
 
 func TestOutputV3StageObservationClassifiesFixedNamespaceEvidence(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("stage observation fault")
 	for _, test := range []struct {
 		name        string

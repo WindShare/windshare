@@ -11,6 +11,7 @@ import (
 )
 
 func TestOutputV3QuarantineReasonMapping(t *testing.T) {
+	t.Parallel()
 	ambiguous := []resumestate.QuarantineReason{
 		resumestate.QuarantinePublicationHistory,
 		resumestate.QuarantineFinalMismatch,
@@ -45,6 +46,7 @@ func TestOutputV3QuarantineReasonMapping(t *testing.T) {
 }
 
 func TestOutputV3RetirementDecisionCleanupAndDefaultEdges(t *testing.T) {
+	t.Parallel()
 	cleanupErr := errors.New("observation close failed")
 	if err := fileRetirementObservationCleanupFault(resumestate.RecoveryDecision{}, nil); err != nil {
 		t.Fatalf("nil cleanup error = %v", err)
@@ -65,6 +67,7 @@ func TestOutputV3RetirementDecisionCleanupAndDefaultEdges(t *testing.T) {
 }
 
 func TestOutputV3FileFaultClassificationEdges(t *testing.T) {
+	t.Parallel()
 	regular := errors.New("disk write failed")
 	if err := fileOutputFault("write stage", regular); !errors.Is(err, regular) {
 		t.Fatalf("regular file fault lost cause: %v", err)

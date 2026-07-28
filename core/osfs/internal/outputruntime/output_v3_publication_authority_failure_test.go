@@ -17,6 +17,7 @@ import (
 )
 
 func TestOutputV3PostAdmissionLinkPermissionLossPausesAndRetries(t *testing.T) {
+	t.Parallel()
 	const locator = "scoped/file.bin"
 	payload := []byte("retained-across-authority-loss")
 	root := v3RecoveryRoot(t)

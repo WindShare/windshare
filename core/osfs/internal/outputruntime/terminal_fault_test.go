@@ -12,6 +12,7 @@ import (
 )
 
 func TestOutputV3TerminalRecoveryFailureCutsRemainRestartable(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name               string
 		lifecycle          resumestate.SessionLifecycle
@@ -161,6 +162,7 @@ func TestOutputV3TerminalRecoveryFailureCutsRemainRestartable(t *testing.T) {
 }
 
 func TestOutputV3TerminalLayoutInspectionRejectsAmbiguousOrUnownedCuts(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name             string
 		prepare          func(*testing.T, *Session, string)
@@ -262,6 +264,7 @@ func TestOutputV3TerminalLayoutInspectionRejectsAmbiguousOrUnownedCuts(t *testin
 }
 
 func TestOutputV3TerminalAuthorityVerificationRejectsStaleBindings(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	session := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection).Session
@@ -308,6 +311,7 @@ func TestOutputV3TerminalAuthorityVerificationRejectsStaleBindings(t *testing.T)
 }
 
 func TestOutputV3TerminalInspectionAndShellRemovalFailBeforeMutation(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	session := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection).Session
@@ -333,6 +337,7 @@ func TestOutputV3TerminalInspectionAndShellRemovalFailBeforeMutation(t *testing.
 }
 
 func TestOutputV3TerminalSessionRecoveryPropagatesPreflightFailuresBeforeRetirement(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name         string
 		configure    func(*testing.T, *terminalRecoveryFaultFixture)
@@ -418,6 +423,7 @@ func TestOutputV3TerminalSessionRecoveryPropagatesPreflightFailuresBeforeRetirem
 }
 
 func TestOutputV3TerminalSessionRecoveryJoinsLayoutCloseFailure(t *testing.T) {
+	t.Parallel()
 	fixture := newTerminalRecoveryFaultFixture(t, resumestate.SessionCompleting)
 	defer fixture.close(t)
 	fixture.sessionDirectory.childNamesErrAt = map[string]int{
@@ -452,6 +458,7 @@ func TestOutputV3TerminalSessionRecoveryJoinsLayoutCloseFailure(t *testing.T) {
 }
 
 func TestOutputV3DiscardHeaderStopsAfterAdoptedFixedReopenCloseFailure(t *testing.T) {
+	t.Parallel()
 	fixture := newTerminalRecoveryFaultFixture(t, resumestate.SessionActive)
 	defer fixture.close(t)
 	fixture.sessionDirectory.openFileName = resumestate.HeaderRecordName

@@ -13,6 +13,7 @@ import (
 )
 
 func TestOutputV3BeginFileFailsBeforeContentWhenAuthorityCannotBeProven(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("begin-file authority fault")
 	for _, test := range []struct {
 		name      string
@@ -130,6 +131,7 @@ func TestOutputV3BeginFileFailsBeforeContentWhenAuthorityCannotBeProven(t *testi
 }
 
 func TestOutputV3DirectoryLifecyclePropagatesSessionAndNamespaceFaults(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("directory lifecycle fault")
 	root := v3RecoveryRoot(t)
 	selection := v3SemanticNestedSelection(t, 1)
@@ -170,6 +172,7 @@ func TestOutputV3DirectoryLifecyclePropagatesSessionAndNamespaceFaults(t *testin
 }
 
 func TestOutputV3ObjectAllocationBudgetRejectsNonAuthorityIDs(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection)

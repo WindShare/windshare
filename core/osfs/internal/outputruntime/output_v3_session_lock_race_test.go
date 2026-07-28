@@ -19,6 +19,7 @@ import (
 const v3RecoveryLockGateTimeout = 10 * time.Second
 
 func TestOutputV3OpenerRereadsHeaderAndCleansTemporariesOnlyAfterSessionLock(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	sessionIDs := &v3RecoverySessionIDs{}

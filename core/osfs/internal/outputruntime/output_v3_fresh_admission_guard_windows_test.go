@@ -20,6 +20,7 @@ import (
 const windowsRuntimeFreshAdmissionHoldTimeout = 15 * time.Second
 
 func TestWindowsV3FreshSelectedDirectoryMaterializationRetainsPlacementGuard(t *testing.T) {
+	t.Parallel()
 	base := v3RecoveryRoot(t)
 	externalPath := filepath.Join(base, "external")
 	rootPath := filepath.Join(externalPath, "output")

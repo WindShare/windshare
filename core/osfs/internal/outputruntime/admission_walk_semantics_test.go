@@ -16,6 +16,7 @@ import (
 )
 
 func TestOutputV3AdmissionWalkStopsAtMissingDescendantsAndCreatesOnlyWhenAuthorized(t *testing.T) {
+	t.Parallel()
 	rootPath := newAdmissionTestRoot(t)
 	if err := os.MkdirAll(filepath.Join(rootPath, "parent", "existing"), 0o700); err != nil {
 		t.Fatal(err)
@@ -53,6 +54,7 @@ func TestOutputV3AdmissionWalkStopsAtMissingDescendantsAndCreatesOnlyWhenAuthori
 }
 
 func TestOutputV3AdmissionWalkPreservesAuthorityAndHandleClosure(t *testing.T) {
+	t.Parallel()
 	rootPath := newAdmissionTestRoot(t)
 	if err := os.MkdirAll(filepath.Join(rootPath, "parent", "child"), 0o700); err != nil {
 		t.Fatal(err)
@@ -102,6 +104,7 @@ func TestOutputV3AdmissionWalkPreservesAuthorityAndHandleClosure(t *testing.T) {
 }
 
 func TestOutputV3MaterializationClassifiesAuthorityAndCloseFailures(t *testing.T) {
+	t.Parallel()
 	rootPath := newAdmissionTestRoot(t)
 	if err := os.Mkdir(filepath.Join(rootPath, "parent"), 0o700); err != nil {
 		t.Fatal(err)
@@ -151,6 +154,7 @@ func TestOutputV3MaterializationClassifiesAuthorityAndCloseFailures(t *testing.T
 }
 
 func TestOutputV3FrozenSelectionRejectionsAreFreshSessionFaults(t *testing.T) {
+	t.Parallel()
 	rootPath := newAdmissionTestRoot(t)
 	platform, err := openOutputRuntimeTestPlatform(rootPath, false)
 	if err != nil {
@@ -211,6 +215,7 @@ func TestOutputV3FrozenSelectionRejectionsAreFreshSessionFaults(t *testing.T) {
 }
 
 func TestOutputV3FrozenSelectionRejectionsPauseMatchingIntent(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		configure func(*outputV3AdmissionStaticFailure)
@@ -280,6 +285,7 @@ func TestOutputV3FrozenSelectionRejectionsPauseMatchingIntent(t *testing.T) {
 }
 
 func TestOutputV3SelectedParentFailureUsesIntentLifecycleBoundary(t *testing.T) {
+	t.Parallel()
 	t.Run("fresh selection", func(t *testing.T) {
 		rootPath := newAdmissionTestRoot(t)
 		selection := outputV3AdmissionWalkSelection(t)
@@ -359,6 +365,7 @@ func TestOutputV3SelectedParentFailureUsesIntentLifecycleBoundary(t *testing.T) 
 }
 
 func TestOutputV3AuthorityPreflightSeparatesRootAndSelectedDescendantFaults(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		configure func(*outputV3AdmissionWalkFaults, error)
@@ -422,6 +429,7 @@ func TestOutputV3AuthorityPreflightSeparatesRootAndSelectedDescendantFaults(t *t
 }
 
 func TestOutputV3SelectionMetadataFailureUsesIntentLifecycleBoundary(t *testing.T) {
+	t.Parallel()
 	t.Run("fresh selection", func(t *testing.T) {
 		rootPath := newAdmissionTestRoot(t)
 		selection := outputV3AdmissionWalkSelection(t)

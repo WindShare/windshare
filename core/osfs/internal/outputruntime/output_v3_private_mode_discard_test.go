@@ -13,6 +13,7 @@ import (
 )
 
 func TestOutputV3ListsAndExplicitlyDiscardsWrongPrivateEnvelope(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name          string
 		target        func(string) string
@@ -66,6 +67,7 @@ func TestOutputV3ListsAndExplicitlyDiscardsWrongPrivateEnvelope(t *testing.T) {
 }
 
 func TestOutputV3ExplicitDiscardBlocksOnUnsafePresentSessionLock(t *testing.T) {
+	t.Parallel()
 	root, authority, sessionPath := v3RecoveryDiscardLockFixture(t)
 	if err := runtimeMakePrivateEnvelopeUnsafe(filepath.Join(sessionPath, resumestate.SessionLockName)); err != nil {
 		t.Fatal(err)
@@ -91,6 +93,7 @@ func TestOutputV3ExplicitDiscardBlocksOnUnsafePresentSessionLock(t *testing.T) {
 }
 
 func TestOutputV3ExplicitDiscardBlocksOnSessionLockAcquisitionFailure(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []v3RecoveryLockFailureMode{
 		v3RecoveryLockInjectedIO,
 		v3RecoveryLockCreatedRace,

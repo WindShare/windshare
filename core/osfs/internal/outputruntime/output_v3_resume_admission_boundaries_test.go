@@ -17,6 +17,7 @@ import (
 )
 
 func TestOutputV3BoundaryListEmptyRootIsReadOnlyAndRejectsUninstalledCandidate(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	authority := v3RecoveryAuthority(t, root, nil)
 
@@ -50,6 +51,7 @@ func TestOutputV3BoundaryListEmptyRootIsReadOnlyAndRejectsUninstalledCandidate(t
 }
 
 func TestOutputV3BoundaryCanceledDiscardDoesNotConsumeReference(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	authority := v3RecoveryAuthority(t, root, nil)
@@ -87,6 +89,7 @@ func TestOutputV3BoundaryCanceledDiscardDoesNotConsumeReference(t *testing.T) {
 }
 
 func TestOutputV3BoundaryMultipleSessionsRemainIndividuallyDiscardable(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	sessionIDs := &v3RecoverySessionIDs{}
@@ -163,6 +166,7 @@ func TestOutputV3BoundaryMultipleSessionsRemainIndividuallyDiscardable(t *testin
 }
 
 func TestOutputV3BoundaryStaticAdmissionPrecedesPlatformAuthority(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	authority := v3RecoveryAuthority(t, root, nil)
@@ -202,6 +206,7 @@ func TestOutputV3BoundaryStaticAdmissionPrecedesPlatformAuthority(t *testing.T) 
 }
 
 func TestOutputV3BoundaryForcedDirectoryPinRevokesAllRetains(t *testing.T) {
+	t.Parallel()
 	if pin := newResumeStateDirectoryPin(nil); pin != nil {
 		t.Fatalf("nil directory produced authority pin %+v", pin)
 	}

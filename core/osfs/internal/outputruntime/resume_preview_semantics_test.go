@@ -14,6 +14,7 @@ import (
 )
 
 func TestOutputV3ResumeAPIsRejectUnboundAndCanceledCapabilities(t *testing.T) {
+	t.Parallel()
 	if inventory, err := (*Authority)(nil).ListResumeState(
 		context.Background(), "root",
 	); inventory != nil || !errors.Is(err, transfer.ErrInvalidOutputBinding) {
@@ -49,6 +50,7 @@ func TestOutputV3ResumeAPIsRejectUnboundAndCanceledCapabilities(t *testing.T) {
 }
 
 func TestOutputV3PrivateTreePreviewEnforcesBudgetsBeforeTraversal(t *testing.T) {
+	t.Parallel()
 	injected := errors.New("private tree enumeration failed")
 	if preview, err := previewPrivateTree(&outputV3ResumePreviewDirectory{namesErr: injected}); !errors.Is(err, injected) || preview.allocatedBytes != 0 || preview.fileRecords != 0 ||
 		preview.entries != 0 || len(preview.attention) != 0 {
@@ -78,6 +80,7 @@ func TestOutputV3PrivateTreePreviewEnforcesBudgetsBeforeTraversal(t *testing.T) 
 }
 
 func TestOutputV3PrivateTreePreviewPreservesUnsafeEntryEvidence(t *testing.T) {
+	t.Parallel()
 	injected := errors.New("private entry inspection failed")
 	emptyChild := func(closeErr error) outputcap.Directory {
 		return &outputV3ResumePreviewDirectory{closeErr: closeErr}
@@ -245,6 +248,7 @@ func TestOutputV3PrivateTreePreviewPreservesUnsafeEntryEvidence(t *testing.T) {
 }
 
 func TestOutputV3PrivateEntryRemovalRequiresLiveAuthority(t *testing.T) {
+	t.Parallel()
 	injected := errors.New("private removal authority failed")
 	for _, test := range []struct {
 		name         string

@@ -11,6 +11,7 @@ import (
 )
 
 func TestOutputV3OpaqueDiscardRequiresLiveEntryAuthority(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("opaque discard fault")
 	for _, test := range []struct {
 		name        string
@@ -54,6 +55,7 @@ func TestOutputV3OpaqueDiscardRequiresLiveEntryAuthority(t *testing.T) {
 }
 
 func TestOutputV3EmptyIntentRemovalRevalidatesPinnedDirectory(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("empty intent removal fault")
 	if err := removeEmptyIntentShell(
 		nil, &outputV3ResumePreviewDirectory{namesErr: failure}, "intent",
@@ -105,6 +107,7 @@ func TestOutputV3EmptyIntentRemovalRevalidatesPinnedDirectory(t *testing.T) {
 }
 
 func TestOutputV3EmptySessionShellRequiresVerifiedEmptyIdentity(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("empty session shell fault")
 	entry := previewEntry(outputcap.EntryDirectory, 0)
 	for _, test := range []struct {
@@ -142,6 +145,7 @@ func TestOutputV3EmptySessionShellRequiresVerifiedEmptyIdentity(t *testing.T) {
 }
 
 func TestOutputV3CorruptDiscardStopsAtEveryAuthorityBoundary(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("corrupt discard fault")
 	for _, test := range []struct {
 		name     string

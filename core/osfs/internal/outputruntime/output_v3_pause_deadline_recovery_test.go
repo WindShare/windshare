@@ -14,6 +14,7 @@ import (
 )
 
 func TestOutputV3FilePauseWithExpiredDeadlineClosesAndReturnsLastVerifiedCheckpoint(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, true, 2)
 	authority := v3RecoveryAuthority(t, root, nil)
@@ -64,6 +65,7 @@ func TestOutputV3FilePauseWithExpiredDeadlineClosesAndReturnsLastVerifiedCheckpo
 }
 
 func TestOutputV3JobPauseDeadlineExpiryClosesEveryActiveFileAndReopens(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	paths := make([]string, maxFilesystemOutputTransactions)
 	for index := range paths {

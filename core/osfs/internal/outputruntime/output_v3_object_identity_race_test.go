@@ -17,6 +17,7 @@ import (
 const v3RecoveryObjectClaimSerializationWindow = 2 * time.Second
 
 func TestOutputV3ConcurrentFilesCannotPersistTheSameOutputObject(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelectionPaths(t, []string{"first.bin", "second.bin"}, 1)
 	sessionIDs := &v3RecoverySessionIDs{}

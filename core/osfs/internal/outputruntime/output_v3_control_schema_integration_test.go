@@ -12,6 +12,7 @@ import (
 )
 
 func TestOutputV3InstalledControlSchemaCorruptionBlocksWholeRootWithoutSessionMutation(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	sessionIDs := &v3RecoverySessionIDs{}
