@@ -46,6 +46,32 @@ try {
   writeFileSync(workflow, 'steps:\n  - run: bash scripts/ci/alpha.sh\n')
   assert.deepEqual(inspectLocal(root), [])
 
+  const shellContract = resolve(root, 'scripts/ci/alpha.sh')
+  writeFileSync(
+    shellContract,
+    '#!/usr/bin/env bash\nassert_contains "moved/source.go" \'required contract\'\n',
+  )
+  assert.deepEqual(inspectLocal(root), [
+    'scripts/ci/alpha.sh:2 asserts content of missing repository file moved/source.go',
+  ])
+  mkdirSync(resolve(root, 'moved'))
+  writeFileSync(resolve(root, 'moved/source.go'), 'required contract\n')
+  assert.deepEqual(inspectLocal(root), [])
+
+  writeFileSync(resolve(root, 'moved/source.go'), 'drifted contract\n')
+  assert.deepEqual(inspectLocal(root), [
+    'scripts/ci/alpha.sh:2 expects moved/source.go to contain literal "required contract"',
+  ])
+
+  writeFileSync(
+    shellContract,
+    '#!/usr/bin/env bash\nassert_not_contains "moved/source.go" \'forbidden contract\'\n',
+  )
+  writeFileSync(resolve(root, 'moved/source.go'), 'forbidden contract\n')
+  assert.deepEqual(inspectLocal(root), [
+    'scripts/ci/alpha.sh:2 expects moved/source.go to not contain literal "forbidden contract"',
+  ])
+
   console.log('ci-contract tests: PASS')
 } finally {
   for (const root of fixtureRoots) rmSync(root, { recursive: true, force: true })

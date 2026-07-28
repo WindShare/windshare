@@ -2,8 +2,9 @@
 # CI-parity hygiene gate (Linux). Mirrors ci.yml job `hygiene` verbatim
 # (sloc-guard lives in the standalone `sloc` gate since 2026-07-14): gofmt
 # over tracked Go files, `git diff --check` against the empty tree, clone-visible
-# Makefile gate scripts, explicit workflow shell invocation, source-only Go/Web
-# v1 forbidden scans, short R8 evidence contracts, and gopls check -severity=hint.
+# Makefile gate scripts, explicit workflow shell invocation, live targets for
+# static shell content assertions, source-only Go/Web v1 forbidden scans, short
+# R8 evidence contracts, and gopls check -severity=hint.
 # Deviation from CI: gopls diagnostics are captured in a mktemp file instead
 # of ./gopls-diagnostics.txt so the gate never dirties the worktree.
 set -euo pipefail
