@@ -7,7 +7,8 @@
 #    file's worktree content is inspected — on a clean tree this equals CI's
 #    committed-tree diff.
 #  - checkout contract: every Makefile gate has clone-visible platform scripts,
-#    and workflows use an explicit shell instead of depending on executable bits.
+#    workflows use an explicit shell instead of depending on executable bits,
+#    and static shell assertions cannot retain paths removed by a refactor.
 #  - source-only Go/Web v1 forbidden-reference scans (the Web gate also checks
 #    the built bundle).
 #  - short PowerShell contracts for R8 benchmark parsing, command transcripts,
