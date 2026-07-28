@@ -16,6 +16,7 @@ import (
 )
 
 func TestOutputV3ResumeStateInventoryOwnership(t *testing.T) {
+	t.Parallel()
 	t.Run("repeated-list-close", func(t *testing.T) {
 		root, authority, pins := v3RecoveryInventoryFixture(t, false)
 		for iteration := range 3 {

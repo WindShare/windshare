@@ -13,6 +13,7 @@ import (
 )
 
 func TestOutputV3ExplicitDiscardRecognizesLocklessFixedSessionCuts(t *testing.T) {
+	t.Parallel()
 	t.Run("exact empty terminal shell", func(t *testing.T) {
 		root, authority, selection, sessionPath := v3LocklessDiscardFixture(t)
 		for _, name := range []string{

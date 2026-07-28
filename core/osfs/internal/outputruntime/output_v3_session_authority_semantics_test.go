@@ -20,6 +20,7 @@ import (
 var errOutputV3ControlSessionInjected = errors.New("injected control/session failure")
 
 func TestOutputV3SessionSchemaCorruptionIsIntentScopedAndNonMutating(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*testing.T, string)
@@ -87,6 +88,7 @@ func TestOutputV3SessionSchemaCorruptionIsIntentScopedAndNonMutating(t *testing.
 }
 
 func TestOutputV3RestartResumesEveryNonterminalSessionCut(t *testing.T) {
+	t.Parallel()
 	for _, lifecycle := range []resumestate.SessionLifecycle{
 		resumestate.SessionPausing,
 		resumestate.SessionPaused,
@@ -120,6 +122,7 @@ func TestOutputV3RestartResumesEveryNonterminalSessionCut(t *testing.T) {
 }
 
 func TestOutputV3RestartSettlementFailurePreservesLifecycleCut(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	sessionIDs := &v3RecoverySessionIDs{}
@@ -168,6 +171,7 @@ func TestOutputV3RestartSettlementFailurePreservesLifecycleCut(t *testing.T) {
 }
 
 func TestOutputV3LockedSessionRevalidationRejectsReplacedAncestryWithoutMutation(t *testing.T) {
+	t.Parallel()
 	for _, target := range []string{"intent", "session"} {
 		t.Run(target, func(t *testing.T) {
 			root := v3RecoveryRoot(t)
@@ -222,6 +226,7 @@ func TestOutputV3LockedSessionRevalidationRejectsReplacedAncestryWithoutMutation
 }
 
 func TestOutputV3SessionBoundaryContractsRemainTotal(t *testing.T) {
+	t.Parallel()
 	var session *Session
 	if !session.SessionID().IsZero() || session.Capabilities() != (transfer.OutputCapabilities{}) ||
 		session.stateSnapshot().Header().Lifecycle() != 0 {
@@ -245,6 +250,7 @@ func TestOutputV3SessionBoundaryContractsRemainTotal(t *testing.T) {
 }
 
 func TestOutputV3SessionOpenAuthorityFailuresRemainPreciselyScoped(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		context   func() context.Context
@@ -379,6 +385,7 @@ func TestOutputV3SessionOpenAuthorityFailuresRemainPreciselyScoped(t *testing.T)
 }
 
 func TestOutputV3SessionLockAuthorityCutsBlockWithoutHeaderMutation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		plan      func(string) *outputV3ControlSessionFaultPlan

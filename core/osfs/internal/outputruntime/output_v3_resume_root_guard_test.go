@@ -14,6 +14,7 @@ import (
 var errResumeRootGuardCloseInjected = errors.New("injected resume root guard close failure")
 
 func TestResumeManagementUsesGuardedRootWithoutPrimaryFallback(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	base := v3RecoveryAuthority(t, root, nil)
 	selection := v3RecoverySelection(t, false, 0)
@@ -59,6 +60,7 @@ func TestResumeManagementUsesGuardedRootWithoutPrimaryFallback(t *testing.T) {
 }
 
 func TestResumeListingReleasesInventoryWhenGuardCleanupFails(t *testing.T) {
+	t.Parallel()
 	root, authority, pins := v3RecoveryInventoryFixture(t, false)
 	baseFactory := authority.platformFactory
 	authority.platformFactory = func(path string, create bool) (outputcap.Platform, error) {
@@ -87,6 +89,7 @@ func TestResumeListingReleasesInventoryWhenGuardCleanupFails(t *testing.T) {
 }
 
 func TestResumeDiscardClearsSettlementWhenGuardCleanupFails(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	base := v3RecoveryAuthority(t, root, nil)
 	selection := v3RecoverySelection(t, false, 0)
@@ -136,6 +139,7 @@ func TestResumeDiscardClearsSettlementWhenGuardCleanupFails(t *testing.T) {
 }
 
 func TestResumeDiscardClearsSettlementWhenRootRevalidationFails(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	base := v3RecoveryAuthority(t, root, nil)
 	selection := v3RecoverySelection(t, false, 0)
@@ -182,6 +186,7 @@ func TestResumeDiscardClearsSettlementWhenRootRevalidationFails(t *testing.T) {
 }
 
 func TestResumePublicRootOperationSeparatesRevalidationFromCleanup(t *testing.T) {
+	t.Parallel()
 	t.Run("matched", func(t *testing.T) {
 		platform := newOutputAncestryTestPlatform(t)
 		operation, acquireErr, cleanupErr := acquireResumePublicRootOperation(platform)

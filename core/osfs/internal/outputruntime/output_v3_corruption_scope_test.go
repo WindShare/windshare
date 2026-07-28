@@ -13,6 +13,7 @@ import (
 )
 
 func TestOutputV3RecoversInterruptedHeaderReplacementBeforeExactChildValidation(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	sessionIDs := &v3RecoverySessionIDs{}
@@ -61,6 +62,7 @@ func TestOutputV3RecoversInterruptedHeaderReplacementBeforeExactChildValidation(
 }
 
 func TestOutputV3CorruptHeaderIsIntentScopedAndExplicitlyDiscardable(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	sessionIDs := &v3RecoverySessionIDs{}
@@ -107,6 +109,7 @@ func TestOutputV3CorruptHeaderIsIntentScopedAndExplicitlyDiscardable(t *testing.
 }
 
 func TestOutputV3CorruptControlBlocksTheRootAndCannotBeDiscardedThroughSessionRef(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	authority := v3RecoveryAuthority(t, root, nil)
@@ -145,6 +148,7 @@ func TestOutputV3CorruptControlBlocksTheRootAndCannotBeDiscardedThroughSessionRe
 }
 
 func TestOutputV3ExplicitDiscardRemovesUnknownPrivateEntriesWithoutFollowingLinks(t *testing.T) {
+	t.Parallel()
 	for _, entryKind := range []string{"regular-file", "symbolic-link"} {
 		t.Run(entryKind, func(t *testing.T) {
 			root := v3RecoveryRoot(t)

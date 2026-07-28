@@ -42,6 +42,8 @@ func TestMain(m *testing.M) {
 
 	// Certification is deliberately package-scoped: child roots inherit the
 	// trusted ACL without repeating expensive placement enrollment in every cut.
+	// Each test still owns a distinct child, so parallel cases never share
+	// namespace mutation authority.
 	windowsRuntimeTestBase = base
 	code := m.Run()
 	windowsRuntimeTestBase = ""

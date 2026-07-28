@@ -11,6 +11,7 @@ import (
 )
 
 func TestOutputV3RecoveryDecisionEdgeBranches(t *testing.T) {
+	t.Parallel()
 	var session *Session
 	zeroState := fileRecoveryState{}
 	zeroIteration := fileRecoveryIteration{}

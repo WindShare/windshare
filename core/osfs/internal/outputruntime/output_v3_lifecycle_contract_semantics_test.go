@@ -12,6 +12,7 @@ import (
 )
 
 func TestOutputV3LifecycleSettlementContractsAndPauseReasons(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		job  transfer.JobPauseReason
 		file transfer.FilePauseReason
@@ -77,6 +78,7 @@ func TestOutputV3LifecycleSettlementContractsAndPauseReasons(t *testing.T) {
 }
 
 func TestOutputV3InstallLifecycleAdoptsVerifiedGenerationBeforeCleanupFailure(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	session := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection).Session
@@ -110,6 +112,7 @@ func TestOutputV3InstallLifecycleAdoptsVerifiedGenerationBeforeCleanupFailure(t 
 }
 
 func TestOutputV3CompleteJobRejectsCanceledAndActiveOwnership(t *testing.T) {
+	t.Parallel()
 	t.Run("canceled", func(t *testing.T) {
 		root := v3RecoveryRoot(t)
 		selection := v3RecoverySelection(t, false, 0)
@@ -145,6 +148,7 @@ func TestOutputV3CompleteJobRejectsCanceledAndActiveOwnership(t *testing.T) {
 }
 
 func TestOutputV3FailOwnerSettlementPreservesCauseAndCloseFailure(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	session := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection).Session
@@ -164,6 +168,7 @@ func TestOutputV3FailOwnerSettlementPreservesCauseAndCloseFailure(t *testing.T) 
 }
 
 func TestOutputV3AcquireTerminalLocksClassifiesEveryAuthorityBoundary(t *testing.T) {
+	t.Parallel()
 	injected := errors.New("terminal lock transition failed")
 	for _, test := range []struct {
 		name      string
@@ -416,6 +421,7 @@ func (directory *outputV3LifecyclePlatformDirectory) AcquireLock(
 }
 
 func TestOutputV3InspectAndRemoveEmptyShardsPreservesAmbiguity(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	session := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection).Session
@@ -440,6 +446,7 @@ func TestOutputV3InspectAndRemoveEmptyShardsPreservesAmbiguity(t *testing.T) {
 }
 
 func TestOutputV3InspectAndRemoveEmptyShardsClassifiesIOCuts(t *testing.T) {
+	t.Parallel()
 	injected := errors.New("shard cleanup failed")
 	for _, test := range []struct {
 		name      string

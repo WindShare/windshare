@@ -13,6 +13,7 @@ import (
 )
 
 func TestOutputV3FileStateGatePreservesCanonicalRecordAuthority(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("file-state gate fault")
 	for _, test := range []struct {
 		name              string
@@ -137,6 +138,7 @@ func TestOutputV3FileStateGatePreservesCanonicalRecordAuthority(t *testing.T) {
 }
 
 func TestOutputV3FileShardReconciliationFailsClosedAroundUpdateMutation(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("file-shard reconciliation fault")
 	for _, test := range []struct {
 		name             string
@@ -200,6 +202,7 @@ func TestOutputV3FileShardReconciliationFailsClosedAroundUpdateMutation(t *testi
 }
 
 func TestOutputV3UpdateTemporaryCleanupCannotChooseRecoveryTaxonomy(t *testing.T) {
+	t.Parallel()
 	rawFailure := errors.New("update temporary operation denied")
 	unsafeCause := errors.New("update temporary identity contradiction")
 	cleanupCause := errors.New("update temporary close diagnostic")
@@ -296,6 +299,7 @@ func TestOutputV3UpdateTemporaryCleanupCannotChooseRecoveryTaxonomy(t *testing.T
 }
 
 func TestOutputV3BeginFileZerosImmediateSettlementOnRecordShardCloseFailure(t *testing.T) {
+	t.Parallel()
 	session, file, recordName, shard, _ := outputV3FileShardFixture(t)
 	bound, closeErr, err := session.openBoundFileRecord(shard, recordName)
 	if closeErr != nil || err != nil {

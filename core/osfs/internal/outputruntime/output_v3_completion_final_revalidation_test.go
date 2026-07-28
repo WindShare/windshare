@@ -14,6 +14,7 @@ import (
 )
 
 func TestOutputV3CompletionRevalidatesPublishedFinalBeforeRetirement(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		mutate      func(*testing.T, string)
@@ -128,6 +129,7 @@ func TestOutputV3CompletionRevalidatesPublishedFinalBeforeRetirement(t *testing.
 }
 
 func TestOutputV3CompletionHoldsPublishedInternalCleanupAmbiguity(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	payload := []byte("published")
 	selection := v3RecoverySelection(t, true, uint64(len(payload)))
@@ -187,6 +189,7 @@ func TestOutputV3CompletionHoldsPublishedInternalCleanupAmbiguity(t *testing.T) 
 }
 
 func TestOutputV3CompletionHoldsRetiringInternalCleanupAmbiguity(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, true, 1)
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection)

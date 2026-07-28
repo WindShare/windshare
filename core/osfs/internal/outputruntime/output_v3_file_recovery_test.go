@@ -13,6 +13,7 @@ import (
 )
 
 func TestOutputV3RemovesRecognizedInterruptedStateUpdatesBeforeResumingContent(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name    string
 		written int
@@ -87,6 +88,7 @@ func TestOutputV3RemovesRecognizedInterruptedStateUpdatesBeforeResumingContent(t
 }
 
 func TestOutputV3DirectPublicationCollisionIsPublishBlocked(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	payload := []byte("owned output")
 	selection := v3RecoverySelection(t, true, uint64(len(payload)))
@@ -123,6 +125,7 @@ func TestOutputV3DirectPublicationCollisionIsPublishBlocked(t *testing.T) {
 }
 
 func TestOutputV3RecoveredPublishingAdoptsOnlyMatchingFinal(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name       string
 		final      string
@@ -176,6 +179,7 @@ func TestOutputV3RecoveredPublishingAdoptsOnlyMatchingFinal(t *testing.T) {
 }
 
 func TestOutputV3RecoversEveryRetirementRemovalCutInOrder(t *testing.T) {
+	t.Parallel()
 	for removed := 0; removed <= 3; removed++ {
 		t.Run(outputV3RetirementCutLabel(removed), func(t *testing.T) {
 			root := v3RecoveryRoot(t)

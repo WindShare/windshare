@@ -16,6 +16,7 @@ const (
 )
 
 func TestOutputV3AdoptedStateInstallTraceDecodesEveryRecordScope(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, true, 1)
 	authority := v3RecoveryAuthority(t, root, nil)

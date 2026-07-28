@@ -14,6 +14,7 @@ import (
 )
 
 func TestOutputV3BoundaryReopenRetiresSupersededEmptyCandidates(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	authority := v3RecoveryAuthority(t, root, &v3RecoverySessionIDs{})

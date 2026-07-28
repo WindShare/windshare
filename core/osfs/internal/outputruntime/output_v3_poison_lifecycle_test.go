@@ -15,6 +15,7 @@ import (
 )
 
 func TestOutputV3SettlementTransitionFailureReleasesOwner(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		fault     stateStoreFaultPoint
@@ -73,6 +74,7 @@ func TestOutputV3SettlementTransitionFailureReleasesOwner(t *testing.T) {
 }
 
 func TestOutputV3ConcurrentWriteWaitingAtPoisonCannotWrite(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelectionPaths(t, []string{"poison.bin", "writer.bin"}, 1)
 	sessionIDs := &v3RecoverySessionIDs{}

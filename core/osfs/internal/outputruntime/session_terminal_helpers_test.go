@@ -11,6 +11,7 @@ import (
 )
 
 func TestOutputV3TerminalHoldQuarantineKeepsValidReason(t *testing.T) {
+	t.Parallel()
 	_, _, _, retiring, _ := outputV3PreparedRetirement(t)
 	quarantined, err := resumestate.PrepareUnsafeNamespaceQuarantine(
 		retiring,
@@ -39,6 +40,7 @@ func TestOutputV3TerminalHoldQuarantineKeepsValidReason(t *testing.T) {
 }
 
 func TestOutputV3DiscardHeaderReadBindsTheFixedSessionNamespace(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection)
@@ -78,6 +80,7 @@ func TestOutputV3DiscardHeaderReadBindsTheFixedSessionNamespace(t *testing.T) {
 }
 
 func TestOutputV3RetirementDecisionHelpersClassifyCleanupAndSettlement(t *testing.T) {
+	t.Parallel()
 	cleanupErr := errors.New("observation close failed")
 	if err := fileRetirementObservationCleanupFault(resumestate.RecoveryDecision{}, cleanupErr); err == nil {
 		t.Fatal("ordinary retirement cleanup failure returned nil")
@@ -119,6 +122,7 @@ func TestOutputV3RetirementDecisionHelpersClassifyCleanupAndSettlement(t *testin
 }
 
 func TestOutputV3PublicationRejectsMissingWitnessBeforeIOL(t *testing.T) {
+	t.Parallel()
 	var session *Session
 	result, operationErr, cleanupErr := session.linkFinalNoReplaceResult(resumestate.BoundFileRecord{}, nil)
 	if result != 0 || cleanupErr != nil || !errors.Is(operationErr, outputcap.ErrUnsafeNamespace) {
