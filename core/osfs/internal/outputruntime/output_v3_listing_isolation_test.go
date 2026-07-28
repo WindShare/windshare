@@ -11,6 +11,7 @@ import (
 )
 
 func TestOutputV3ListingIsolatesUnsafePrivateTreeFromHealthyIntent(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	authority := v3RecoveryAuthority(t, root, nil)
 	unsafeSelection := v3RecoverySelection(t, false, 0)

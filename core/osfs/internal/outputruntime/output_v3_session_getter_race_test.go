@@ -10,6 +10,7 @@ import (
 )
 
 func TestOutputV3ImmutableSessionGettersDuringSettlement(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		settle     func(*Session) (transfer.JobSettlement, error)

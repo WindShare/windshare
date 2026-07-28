@@ -16,6 +16,7 @@ import (
 )
 
 func TestOutputV3PublicAuthorityInventoryRoundTrip(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	authority := v3RecoveryAuthority(t, root, nil)
@@ -45,6 +46,7 @@ func TestOutputV3PublicAuthorityInventoryRoundTrip(t *testing.T) {
 }
 
 func TestOutputV3NestedDirectoryLifecycleAndPreObjectCollision(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3SemanticNestedSelection(t, 23)
 	authority := v3RecoveryAuthority(t, root, nil)
@@ -130,6 +132,7 @@ func TestOutputV3NestedDirectoryLifecycleAndPreObjectCollision(t *testing.T) {
 }
 
 func TestOutputV3AuthorityPrimitivesRejectTamperingAndReleasePins(t *testing.T) {
+	t.Parallel()
 	if inventory := (*ResumeStateInventory)(nil); inventory.Summaries() != nil {
 		t.Fatal("nil inventory returned summaries")
 	} else if err := inventory.Close(); err != nil {
@@ -242,6 +245,7 @@ func (entry *v3SemanticEntryRef) Close() error {
 }
 
 func TestOutputV3AuthorityInventoryRejectsForgedReferences(t *testing.T) {
+	t.Parallel()
 	authority := ResumeStateRef{
 		rootPath: "root", kind: ResumeStateLegacyUntrusted, legacyName: ".wsresume-output-state",
 	}
@@ -285,6 +289,7 @@ func TestOutputV3AuthorityInventoryRejectsForgedReferences(t *testing.T) {
 }
 
 func TestOutputV3OpaqueInventoryRemovesOnlyPinnedSessionEntry(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	authority := v3RecoveryAuthority(t, root, nil)
 	incumbentSelection := v3RecoverySelection(t, false, 0)

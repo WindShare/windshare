@@ -11,6 +11,7 @@ import (
 )
 
 func TestScanOutputV3FileNamespaceBindsRecordsAndGroupsDuplicateObjects(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelectionPaths(t, []string{"first.bin", "second.bin"}, 10)
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection)
@@ -66,6 +67,7 @@ func TestScanOutputV3FileNamespaceBindsRecordsAndGroupsDuplicateObjects(t *testi
 }
 
 func TestScanOutputV3FileNamespaceRejectsEntryBeforeDecodingBeyondSelectionBudget(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, false, 0)
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection)
@@ -92,6 +94,7 @@ func TestScanOutputV3FileNamespaceRejectsEntryBeforeDecodingBeyondSelectionBudge
 }
 
 func TestOpenOutputV3SessionDurablyQuarantinesEveryDuplicateObjectClaimBeforeContent(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelectionPaths(t, []string{"first.bin", "second.bin"}, 10)
 	firstOpen := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection)

@@ -14,6 +14,7 @@ import (
 )
 
 func TestOutputV3RecoveryActionRetainsObservationCleanupOnlyForQuarantine(t *testing.T) {
+	t.Parallel()
 	if recoveryActionRetainsObservationCleanup(0) {
 		t.Fatal("zero recovery action retained observation cleanup")
 	}
@@ -26,6 +27,7 @@ func TestOutputV3RecoveryActionRetainsObservationCleanupOnlyForQuarantine(t *tes
 }
 
 func TestOutputV3RecoveryParentSyncObservationIsMonotonic(t *testing.T) {
+	t.Parallel()
 	if got := finalParentSyncObservation(resumestate.FileRecord{}, false); got != resumestate.FinalParentSyncRequired {
 		t.Fatalf("unsynced parent observation = %v, want required", got)
 	}
@@ -35,6 +37,7 @@ func TestOutputV3RecoveryParentSyncObservationIsMonotonic(t *testing.T) {
 }
 
 func TestOutputV3RecoveryObservationSnapshotsPreserveEvidence(t *testing.T) {
+	t.Parallel()
 	anchor := resumestate.AnchorVerified
 	stage := resumestate.EntrySameAsAnchor
 	partial := fileObservationBeforeFinal(anchor, stage)
@@ -58,6 +61,7 @@ func TestOutputV3RecoveryObservationSnapshotsPreserveEvidence(t *testing.T) {
 }
 
 func TestOutputV3RecoveryResultHelpersPreserveTerminalState(t *testing.T) {
+	t.Parallel()
 	state := fileRecoveryState{parentSynced: true}
 	if got := continuingFileRecovery(state); got.terminal || !got.state.parentSynced {
 		t.Fatalf("continuing result = %#v", got)
@@ -71,6 +75,7 @@ func TestOutputV3RecoveryResultHelpersPreserveTerminalState(t *testing.T) {
 }
 
 func TestOutputV3RecoveryGateEntryObservationMapping(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		kind outputcap.EntryKind
@@ -89,6 +94,7 @@ func TestOutputV3RecoveryGateEntryObservationMapping(t *testing.T) {
 }
 
 func TestOutputV3RecoveryObservationFailureClassifiesNamespaceEvidence(t *testing.T) {
+	t.Parallel()
 	unsafe, err := classifyFinalObservationFailure(outputcap.ErrUnsafeNamespace)
 	if err != nil || unsafe.entry != resumestate.EntryUnsafe {
 		t.Fatalf("unsafe observation = %#v, err %v", unsafe, err)
@@ -101,6 +107,7 @@ func TestOutputV3RecoveryObservationFailureClassifiesNamespaceEvidence(t *testin
 }
 
 func TestOutputV3RecoveryCleanupFaultIsRecognizable(t *testing.T) {
+	t.Parallel()
 	err := internalCleanupNeedsAttentionFault("remove ambiguous stage")
 	if !isInternalCleanupNeedsAttentionFault(err) {
 		t.Fatalf("cleanup fault was not recognized: %v", err)
@@ -117,6 +124,7 @@ func TestOutputV3RecoveryCleanupFaultIsRecognizable(t *testing.T) {
 }
 
 func TestOutputV3RecoveryActionRejectsUnsupported(t *testing.T) {
+	t.Parallel()
 	var session *Session
 	_, err := session.applyFileRecoveryAction(
 		transfer.OutputFile{}, nil, "", fileRecoveryState{},
@@ -126,6 +134,7 @@ func TestOutputV3RecoveryActionRejectsUnsupported(t *testing.T) {
 }
 
 func TestOutputV3RecoveryUnclassifiedPublicationAncestryRequiresPause(t *testing.T) {
+	t.Parallel()
 	var session *Session
 	_, handled, err := session.handleUnclassifiedRecoveredPublication(
 		transfer.OutputFile{}, nil, "", fileRecoveryState{},
@@ -148,6 +157,7 @@ func TestOutputV3RecoveryUnclassifiedPublicationAncestryRequiresPause(t *testing
 }
 
 func TestOutputV3TerminalPureDecisionBranches(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		job  transfer.JobPauseReason
 		want transfer.FilePauseReason
@@ -193,6 +203,7 @@ func TestOutputV3TerminalPureDecisionBranches(t *testing.T) {
 }
 
 func TestOutputV3DiscardHeaderPureTransitionsAndReplacementOutcomes(t *testing.T) {
+	t.Parallel()
 	opaque := ResumeStateRef{kind: ResumeStateOpaqueUnsafe}
 	if namespace, valid, corrupt, err := installDiscardingHeader(
 		outputnamespace.Store{}, resumestate.Control{}, nil, opaque, false, nil,
@@ -239,6 +250,7 @@ func TestOutputV3DiscardHeaderPureTransitionsAndReplacementOutcomes(t *testing.T
 }
 
 func TestOutputV3SettledRecoveryCollisionInstallsPublishBlockedCut(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, true, 8)
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, &v3RecoverySessionIDs{}), root, selection)

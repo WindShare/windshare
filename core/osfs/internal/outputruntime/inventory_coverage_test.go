@@ -7,6 +7,7 @@ import (
 )
 
 func TestFilesystemOutputInventoryStateMappings(t *testing.T) {
+	t.Parallel()
 	phaseCases := []struct {
 		state resumestate.FilePhase
 		want  FilesystemOutputFilePhase
@@ -92,6 +93,7 @@ func TestFilesystemOutputInventoryStateMappings(t *testing.T) {
 }
 
 func TestFilesystemOutputInventoryDigestAndIdentityConversions(t *testing.T) {
+	t.Parallel()
 	var digest FilesystemOutputAncestryDigest
 	got := digest.Bytes()
 	if len(got) != len(digest) {

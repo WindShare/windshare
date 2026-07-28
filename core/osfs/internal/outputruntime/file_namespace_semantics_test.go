@@ -12,6 +12,7 @@ import (
 )
 
 func TestScanOutputV3FileNamespaceClassifiesAttentionWithoutGrantingAuthority(t *testing.T) {
+	t.Parallel()
 	paths := []string{"corrupt.bin", "unreadable.bin", "unsafe-type.bin", "unbound.bin"}
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelectionPaths(t, paths, 1)
@@ -105,6 +106,7 @@ func TestScanOutputV3FileNamespaceClassifiesAttentionWithoutGrantingAuthority(t 
 }
 
 func TestScanOutputV3FileNamespaceRejectsInvalidOwnershipAndNamespaceRaces(t *testing.T) {
+	t.Parallel()
 	t.Run("nil-session", func(t *testing.T) {
 		_, err := scanOutputV3FileNamespace(nil)
 		outputV3SemanticRequireFault(t, err, transfer.OutputFaultSession, transfer.OutputFaultContract)
@@ -154,6 +156,7 @@ func TestScanOutputV3FileNamespaceRejectsInvalidOwnershipAndNamespaceRaces(t *te
 }
 
 func TestScanOutputV3FileNamespaceRejectsShardMutationDuringSecondPass(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, true, 1)
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection)
@@ -174,6 +177,7 @@ func TestScanOutputV3FileNamespaceRejectsShardMutationDuringSecondPass(t *testin
 }
 
 func TestOutputV3ReconcilesUpdateTemporaryCutsAtTheLocatorScope(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, true, 1)
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection)
@@ -241,6 +245,7 @@ func TestOutputV3ReconcilesUpdateTemporaryCutsAtTheLocatorScope(t *testing.T) {
 }
 
 func TestScanOutputV3FileNamespaceFailsClosedAtEveryPinnedShardCut(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("file namespace scan fault")
 	tooManyShards := make([]string, resumestate.MaxFileStateShardDirectories+1)
 	for index := range tooManyShards {
@@ -279,6 +284,7 @@ func TestScanOutputV3FileNamespaceFailsClosedAtEveryPinnedShardCut(t *testing.T)
 }
 
 func TestInstallScannedFileRecordRevalidatesShardBeforeMutation(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("scanned record install fault")
 	for _, test := range []struct {
 		name   string

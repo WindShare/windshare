@@ -14,6 +14,7 @@ import (
 )
 
 func TestOutputV3TerminalRecoveryPreflightsGlobalFileStateBudgetBeforeMutation(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	path := v3RecoveryPathBeforeTerminalOverflowShard(t)
 	selection := v3RecoverySelectionPaths(t, []string{path}, 1)

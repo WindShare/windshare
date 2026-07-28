@@ -17,6 +17,7 @@ import (
 )
 
 func TestOutputV3RevisionOnlyMismatchRetiresOldAuthorityWithoutRangeReuse(t *testing.T) {
+	t.Parallel()
 	payload := []byte("old-revision-checkpoint")
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, true, uint64(len(payload)))
@@ -60,6 +61,7 @@ func TestOutputV3RevisionOnlyMismatchRetiresOldAuthorityWithoutRangeReuse(t *tes
 }
 
 func TestOutputV3PublishingRevisionMismatchUsesPhaseEvidence(t *testing.T) {
+	t.Parallel()
 	payload := []byte("complete-old-revision")
 	for _, finalState := range []string{"missing", "matching", "foreign"} {
 		t.Run(finalState, func(t *testing.T) {
@@ -120,6 +122,7 @@ func TestOutputV3PublishingRevisionMismatchUsesPhaseEvidence(t *testing.T) {
 }
 
 func TestOutputV3PublishingRevisionMismatchClassifiesFinalParentReopenFailure(t *testing.T) {
+	t.Parallel()
 	payload := []byte("old-revision-final-parent")
 	for _, test := range []struct {
 		name       string
@@ -178,6 +181,7 @@ func TestOutputV3PublishingRevisionMismatchClassifiesFinalParentReopenFailure(t 
 }
 
 func TestOutputV3InvalidatedPublishedCleanupHoldPreservesAuthority(t *testing.T) {
+	t.Parallel()
 	payload := []byte("invalidated-published-hold")
 	foreignStage := []byte("foreign-invalidated-stage")
 	root := v3RecoveryRoot(t)
@@ -234,6 +238,7 @@ func TestOutputV3InvalidatedPublishedCleanupHoldPreservesAuthority(t *testing.T)
 }
 
 func TestOutputV3InvalidatedRetiringCleanupHoldPreservesPublishedEvidence(t *testing.T) {
+	t.Parallel()
 	payload := []byte("invalidated-retiring-hold")
 	foreignStage := []byte("foreign-retiring-stage")
 	root := v3RecoveryRoot(t)
@@ -310,6 +315,7 @@ func TestOutputV3InvalidatedRetiringCleanupHoldPreservesPublishedEvidence(t *tes
 }
 
 func TestOutputV3InvalidatedPublishedRevalidationPersistsFinalMismatch(t *testing.T) {
+	t.Parallel()
 	payload := []byte("published-before-revalidation")
 	replacement := append([]byte(nil), payload...)
 	replacement[0] ^= 0xff
@@ -481,6 +487,7 @@ func (directory *outputV3InvalidatedFinalReplacementDirectory) ValidateMetadataA
 }
 
 func TestOutputV3InvalidatedRevisionRetirementCutRetriesIdempotently(t *testing.T) {
+	t.Parallel()
 	payload := []byte("retry-invalidated-retirement")
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, true, uint64(len(payload)))
@@ -527,6 +534,7 @@ func TestOutputV3InvalidatedRevisionRetirementCutRetriesIdempotently(t *testing.
 }
 
 func TestOutputV3PublishBlockedRevisionMismatchUsesCurrentFinalEvidence(t *testing.T) {
+	t.Parallel()
 	payload := []byte("blocked-old-revision")
 	for _, finalState := range []string{"missing", "different", "matching"} {
 		t.Run(finalState, func(t *testing.T) {
@@ -592,6 +600,7 @@ func TestOutputV3PublishBlockedRevisionMismatchUsesCurrentFinalEvidence(t *testi
 }
 
 func TestOutputV3RevisionMismatchCompletesEveryDurableRetiringReason(t *testing.T) {
+	t.Parallel()
 	payload := []byte("durable-retirement")
 	for _, reason := range []resumestate.RetirementReason{
 		resumestate.RetirementPublished,

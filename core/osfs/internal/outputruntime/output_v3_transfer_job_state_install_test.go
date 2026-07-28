@@ -18,6 +18,7 @@ import (
 )
 
 func TestOutputV3TransferJobPausesEveryInitialStateInstallOutcomeAndConverges(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name            string
 		fault           stateStoreFaultPoint
@@ -89,6 +90,7 @@ func TestOutputV3TransferJobPausesEveryInitialStateInstallOutcomeAndConverges(t 
 }
 
 func TestOutputV3TransferJobIsolatesPreStateCollisionAndCompletesRemainingFiles(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	const collisionPath = "collision.bin"
 	const survivorPath = "survivor.bin"

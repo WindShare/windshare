@@ -16,6 +16,7 @@ import (
 )
 
 func TestOutputV3DirectoryAuthorityFailurePausesAndPreservesPublishedWitness(t *testing.T) {
+	t.Parallel()
 	payload := []byte("published-before-directory-denial")
 	for _, test := range []struct {
 		name   string
@@ -95,6 +96,7 @@ func TestOutputV3DirectoryAuthorityFailurePausesAndPreservesPublishedWitness(t *
 }
 
 func TestOutputV3FreshAdmissionMaterializesAndBindsSelectedDirectory(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := outputV3DirectoryAuthoritySelection(t, "scoped")
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, &v3RecoverySessionIDs{}), root, selection)
@@ -109,6 +111,7 @@ func TestOutputV3FreshAdmissionMaterializesAndBindsSelectedDirectory(t *testing.
 }
 
 func TestOutputV3FreshDirectoryCreateDenialCreatesNoResumeState(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := outputV3DirectoryAuthoritySelection(t, "scoped")
 	faults := outputV3PublicationDirectoryFaults{createDirectoryErr: syscall.EPERM}
@@ -132,6 +135,7 @@ func TestOutputV3FreshDirectoryCreateDenialCreatesNoResumeState(t *testing.T) {
 }
 
 func TestOutputV3FreshDirectorySyncFailureLeavesOnlyRequestedDirectory(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := outputV3DirectoryAuthoritySelection(t, "scoped")
 	faults := outputV3PublicationDirectoryFaults{syncErr: syscall.EPERM}
@@ -156,6 +160,7 @@ func TestOutputV3FreshDirectorySyncFailureLeavesOnlyRequestedDirectory(t *testin
 }
 
 func TestOutputV3MatchingRestartRejectsMissingSelectedDirectory(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := outputV3DirectoryAuthoritySelection(t, "scoped")
 	sessionIDs := &v3RecoverySessionIDs{}
@@ -183,6 +188,7 @@ func TestOutputV3MatchingRestartRejectsMissingSelectedDirectory(t *testing.T) {
 }
 
 func TestOutputV3MatchingRestartRejectsReplacedSelectedDirectory(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := outputV3DirectoryAuthoritySelection(t, "scoped")
 	sessionIDs := &v3RecoverySessionIDs{}
@@ -210,6 +216,7 @@ func TestOutputV3MatchingRestartRejectsReplacedSelectedDirectory(t *testing.T) {
 }
 
 func TestOutputV3FreshAdmissionRejectsSelectedDirectoryIdentityRaceBeforeState(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := outputV3DirectoryAuthoritySelection(t, "scoped")
 	// Root consistency and the root duplicate used to exact-reopen a top-level
@@ -235,6 +242,7 @@ func TestOutputV3FreshAdmissionRejectsSelectedDirectoryIdentityRaceBeforeState(t
 }
 
 func TestOutputV3FreshAdmissionRejectsGuardRootDisplacementBeforeMaterialization(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	displacedRoot := v3RecoveryRoot(t)
 	selection := outputV3DirectoryAuthoritySelection(t, "scoped")
@@ -271,6 +279,7 @@ func TestOutputV3FreshAdmissionRejectsGuardRootDisplacementBeforeMaterialization
 }
 
 func TestOutputV3FinalizeDirectoryCannotRecreateBoundSelectedDirectory(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := outputV3DirectoryAuthoritySelection(t, "scoped")
 	opened := v3RecoveryOpen(t, v3RecoveryAuthority(t, root, nil), root, selection)

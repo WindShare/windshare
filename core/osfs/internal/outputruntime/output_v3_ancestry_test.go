@@ -19,6 +19,7 @@ import (
 )
 
 func TestCanonicalOutputAncestryPathsCoversSelectionClosureExactlyOnce(t *testing.T) {
+	t.Parallel()
 	selection := outputAncestryTestSelection(t)
 	paths, err := canonicalOutputAncestryPaths(selection)
 	want := []string{"", "a", "a/b", "empty"}
@@ -28,6 +29,7 @@ func TestCanonicalOutputAncestryPathsCoversSelectionClosureExactlyOnce(t *testin
 }
 
 func TestOutputAncestryPreparationAndRebindUseExactOpaqueClaims(t *testing.T) {
+	t.Parallel()
 	selection := outputAncestryTestSelection(t)
 	platform := newOutputAncestryTestPlatform(t)
 	prepared, err := prepareOutputSelectionAncestry(platform, selection)
@@ -75,6 +77,7 @@ func TestOutputAncestryPreparationAndRebindUseExactOpaqueClaims(t *testing.T) {
 }
 
 func TestOutputAncestryRestartPreparationRejectsReplacementBinding(t *testing.T) {
+	t.Parallel()
 	selection := outputAncestryTestSelection(t)
 	platform := newOutputAncestryTestPlatform(t)
 	prepared, err := prepareOutputSelectionAncestry(platform, selection)
@@ -113,6 +116,7 @@ func TestOutputAncestryRestartPreparationRejectsReplacementBinding(t *testing.T)
 }
 
 func TestOutputAncestryGuardCloseFailureIsNeverIdentityAuthority(t *testing.T) {
+	t.Parallel()
 	selection := outputAncestryTestSelection(t)
 	platform := newOutputAncestryTestPlatform(t)
 	validation, err := prepareOutputSelectionAncestry(platform, selection)
@@ -135,6 +139,7 @@ func TestOutputAncestryGuardCloseFailureIsNeverIdentityAuthority(t *testing.T) {
 }
 
 func TestOutputAncestryOperationFaultSeparatesDenialFromContradiction(t *testing.T) {
+	t.Parallel()
 	denial := errors.Join(
 		errOutputAncestryAuthorityDenied,
 		outputcap.ErrUnsafeNamespace,
@@ -163,6 +168,7 @@ func TestOutputAncestryOperationFaultSeparatesDenialFromContradiction(t *testing
 }
 
 func TestOutputAncestryTraceExposesOnlyStableAggregateContext(t *testing.T) {
+	t.Parallel()
 	selection := outputAncestryTestSelection(t)
 	platform := newOutputAncestryTestPlatform(t)
 	validation, err := prepareOutputSelectionAncestry(platform, selection)
@@ -206,6 +212,7 @@ func TestOutputAncestryTraceExposesOnlyStableAggregateContext(t *testing.T) {
 }
 
 func TestOutputAncestryTraceDecisionIsSemanticallyStable(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
@@ -227,6 +234,7 @@ func TestOutputAncestryTraceDecisionIsSemanticallyStable(t *testing.T) {
 }
 
 func TestOutputAncestryAdmissionFaultRequiresExplicitPauseOnlyForExistingState(t *testing.T) {
+	t.Parallel()
 	cause := errors.Join(errOutputAncestryUnsafe, errOutputAncestryMismatch)
 	for _, test := range []struct {
 		name           string
@@ -260,6 +268,7 @@ func TestOutputAncestryAdmissionFaultRequiresExplicitPauseOnlyForExistingState(t
 }
 
 func TestOutputAncestryRestartReplacementPreservesIntentAndResumesAfterRestore(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := outputAncestryTestSelection(t)
 	authority := v3RecoveryAuthority(t, root, nil)
@@ -323,6 +332,7 @@ func TestOutputAncestryRestartReplacementPreservesIntentAndResumesAfterRestore(t
 }
 
 func TestOutputAncestrySessionFinalizeRejectsMismatchBeforeLifecycleMutation(t *testing.T) {
+	t.Parallel()
 	selection := outputAncestryTestSelection(t)
 	platform := newOutputAncestryTestPlatform(t)
 	prepared, err := prepareOutputSelectionAncestry(platform, selection)
@@ -554,6 +564,7 @@ func (guard *outputAncestryTestGuard) Close() error {
 }
 
 func TestOutputAncestryPlatformDecoratorRetainsPublicOperationGuard(t *testing.T) {
+	t.Parallel()
 	platform := newOutputAncestryTestPlatform(t)
 	decorated := &outputAncestryPlatformDecorator{Platform: platform}
 	selection := outputAncestryTestSelection(t)

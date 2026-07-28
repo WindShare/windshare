@@ -18,6 +18,7 @@ import (
 const windowsV3BatchAdmissionEntries = 64
 
 func TestWindowsV3FirstComponentAdmissionUsesOneNativeBatch(t *testing.T) {
+	t.Parallel()
 	rootPath := v3RecoveryRoot(t)
 	files := make([]windowsRuntimeBatchAdmissionFile, windowsV3BatchAdmissionEntries)
 	for index := range files {
@@ -69,6 +70,7 @@ func TestWindowsV3FirstComponentAdmissionUsesOneNativeBatch(t *testing.T) {
 }
 
 func TestOutputV3SelectionAuthorityRejectsBeforeNativeProbe(t *testing.T) {
+	t.Parallel()
 	rootPath := v3RecoveryRoot(t)
 	selection := windowsRuntimeBatchAdmissionSelection(t, []windowsRuntimeBatchAdmissionFile{{
 		size: 1, modified: v3RecoveryModifiedTime(t),

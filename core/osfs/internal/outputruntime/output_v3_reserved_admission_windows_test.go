@@ -16,6 +16,7 @@ import (
 )
 
 func TestWindowsV3ReservedSelectionFamiliesRejectBeforeProbe(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	authority := v3RecoveryAuthority(t, root, nil)
 	stats := &windowsV3ReservedAdmissionStats{}
@@ -86,6 +87,7 @@ func TestWindowsV3ReservedSelectionFamiliesRejectBeforeProbe(t *testing.T) {
 }
 
 func TestWindowsV3ReservedComponentKeyAllowsNormalSelection(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	platform, err := openOutputRuntimeTestPlatform(root, false)
 	if err != nil {
@@ -101,6 +103,7 @@ func TestWindowsV3ReservedComponentKeyAllowsNormalSelection(t *testing.T) {
 }
 
 func TestWindowsV3PlatformEquivalentSelectionRejectsBeforeProbe(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	authority := v3RecoveryAuthority(t, root, nil)
 	stats := &windowsV3ReservedAdmissionStats{}

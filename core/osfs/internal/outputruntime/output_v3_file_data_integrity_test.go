@@ -16,6 +16,7 @@ import (
 )
 
 func TestOutputV3RejectsRangeOverlapBeforeMutatingCheckpointAuthority(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	selection := v3RecoverySelection(t, true, 4)
 	sessionIDs := &v3RecoverySessionIDs{}
@@ -83,6 +84,7 @@ func TestOutputV3RejectsRangeOverlapBeforeMutatingCheckpointAuthority(t *testing
 }
 
 func TestOutputV3CommitReturnsTransactionBoundQuarantine(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	payload := []byte("owned")
 	foreign := []byte("other")
@@ -137,6 +139,7 @@ func TestOutputV3CommitReturnsTransactionBoundQuarantine(t *testing.T) {
 }
 
 func TestOutputV3PublishingTransactionHasExactlyOneTerminalClaimant(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	payload := []byte("publish")
 	selection := v3RecoverySelection(t, true, uint64(len(payload)))

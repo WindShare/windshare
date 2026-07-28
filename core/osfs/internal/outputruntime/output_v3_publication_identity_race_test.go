@@ -15,6 +15,7 @@ import (
 )
 
 func TestOutputV3DirectPublicationNeverLinksReplacedAnchor(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	payload := []byte("owned-by-transaction")
 	foreign := bytes.Repeat([]byte{0xf1}, len(payload))
@@ -57,6 +58,7 @@ func TestOutputV3DirectPublicationNeverLinksReplacedAnchor(t *testing.T) {
 }
 
 func TestOutputV3RecoveryPublicationNeverLinksReplacedAnchor(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	payload := []byte("owned-by-recovery")
 	foreign := bytes.Repeat([]byte{0xf2}, len(payload))
@@ -90,6 +92,7 @@ func TestOutputV3RecoveryPublicationNeverLinksReplacedAnchor(t *testing.T) {
 }
 
 func TestOutputV3DirectPublicationPersistsPostPublishingUnsafeLinkCut(t *testing.T) {
+	t.Parallel()
 	root := v3RecoveryRoot(t)
 	payload := []byte("unsafe-link-cut")
 	selection := v3RecoverySelection(t, true, uint64(len(payload)))
