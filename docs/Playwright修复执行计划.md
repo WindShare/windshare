@@ -6,21 +6,28 @@
 
 ## 1. 产品判定语义
 
-每个样本输出四个正交结果：
+所有样本输出公共结果：
 
 | 字段 | 值 |
 |---|---|
 | `rtcCapability` | `unknown`、`unavailable`、`unusable`、`available` |
-| `peerAttemptOutcome` | `not-started`、`admitted`、`failed` |
-| `deliveryOutcome` | `not-started`、`succeeded`、`failed` |
 | `executionOutcome` | `healthy`、`crashed`、`infrastructure-failed`、`unknown` |
+
+suite-specific 结果：
+
+| suite | 字段 | 值 |
+|---|---|---|
+| `main` | `peerAttemptOutcome` | `not-started`、`admitted`、`failed` |
+| `main` | `deliveryOutcome` | `not-started`、`succeeded`、`failed` |
+| `pion` | `applicability` | `unknown`、`applicable`、`not-applicable` |
+| `pion` | `nativeInteropOutcome` | `not-started`、`succeeded`、`failed` |
 
 - 所有引擎使用同一动态分类器，禁止按浏览器名称预设能力。
 - `available` 必须开始真实 peer attempt，并验证 direct selected pair、`relay → peer admission → relay cut fence → post-fence peer block`、16 MiB 完整 bytes/hash。
-- `unavailable` 只能来自 API 缺失；产品必须在创建 binding/attempt 前执行同一 gate，并完成相同负载的精确 relay fallback。
-- API 存在但探针失败为 `unusable`。产品可继续 relay 交付，但门禁必须失败，不能用 relay 成功掩盖 peer 回归。
+- `unavailable` 只能来自 API 缺失；产品必须在创建 binding/attempt 前执行 API presence gate，并完成相同负载的精确 relay fallback。
+- API 存在但探针失败为 `unusable`。探针不得抑制真实 peer attempt；产品可继续 relay 交付，但门禁必须失败。
 - crash 或基础设施失败保留 `unknown`/`not-started`，不得伪造为能力不可用或 delivery failure。
-- 样本保留完整 `attempts[]`。无 attempt=`not-started`，任一 attempt failed=`failed`，否则至少一个 admitted=`admitted`。
+- `main` 样本保留完整 `attempts[]`。无 attempt=`not-started`，任一 attempt failed=`failed`，否则至少一个 admitted=`admitted`。
 - peer 能力相关 spec 禁止 skip、retry、提高全局 timeout 或关闭断言。
 
 ## 2. 稳态门禁架构
@@ -44,6 +51,8 @@ Pion suite 只证明 adapter/interop，不重复完整产品传输。RTC API 不
 - `make browser-stability`：每个引擎、每个适用 suite 运行 5 个独立样本，用于 scheduled/manual 稳定性检查，不改变 PR verdict。
 - focused sample 与 remainder suite 必须互斥，禁止重复执行同一 spec。
 
+样本数由版本化 run policy 绑定到 context 和 verdict；`sampleIndex` 按该 policy 校验，禁止使用全局固定样本数。
+
 本地入口：
 
 | 入口 | 语义 |
@@ -63,7 +72,7 @@ Pion suite 只证明 adapter/interop，不重复完整产品传输。RTC API 不
 ### Phase 0：恢复 peer attempt 可观测性
 
 - 浏览器增加 consumer-side `V2ConnectivityObserver`；Go `v2peer` 增加独立 observer，由 CLI 投影为版本化 JSONL。它们不修改 v2 协议。
-- capability probe 独立、限时并在 `finally` 关闭临时 PeerConnection；它只分类，不控制产品。
+- capability probe 独立、限时并在 `finally` 关闭临时 PeerConnection；它只分类。产品仅由 API presence gate 控制，API 存在时即使探针失败也必须运行真实 attempt 至终局。
 - 产品分配 `attemptId` 后立即发出 `started`，所有退出路径产生唯一 `admitted`/`failed` 终局并保留 typed error code。
 - evidence envelope 使用 `schemaVersion`、`sessionId`、`peerPathId`、`attemptId`、`side`、`sideSequence`、`attemptElapsedMs`、`stage`。只校验单侧顺序，不比较跨进程时钟。
 - lane 使用 `{laneId, laneEpoch}`；dispatch 前分配单调 `dispatchSequence`。完成态事件不能替代 dispatch 证据。
@@ -101,11 +110,13 @@ Pion suite 只证明 adapter/interop，不重复完整产品传输。RTC API 不
 - Playwright、sample runner 和测试子进程不得获得 `GITHUB_TOKEN` 或 repository secret。
 - 独立 guard 拒绝 symlink、路径越界、超限和非法 ZIP，扫描显式注入的真实 secret 值及 GitHub token 格式。
 - guard 将获准附件复制到全新私有 staging，写入单一 manifest 和 `guard.json`，再原子封存 upload 目录；只上传该目录。
-- `guardOutcome` 独立于产品 outcome。`quarantined` 和 `failed` 都阻塞最终 verdict，但不得改写样本的四个产品结果。
+- `guardOutcome` 独立于产品 outcome。`quarantined` 和 `failed` 都阻塞最终 verdict，但不得改写样本结果。
 - fixture 生成的 capability URL、key、SDP、ICE candidate 和内容摘要属于合成诊断数据，可在通过 guard 后上传。
 - Workflow 使用 `permissions: contents: read`，checkout 设置 `persist-credentials: false`；真实 secret 只在独立 guard/finalize step 注入。
 
 ## 6. 验收矩阵
+
+`main`：
 
 | `rtcCapability` | `peerAttemptOutcome` | 结果 |
 |---|---|---|
@@ -113,8 +124,12 @@ Pion suite 只证明 adapter/interop，不重复完整产品传输。RTC API 不
 | `available` | `failed`/`not-started` | 阻塞；relay 健康时仍完成 fallback 后再报告 peer 失败 |
 | `unavailable` | `not-started` | 精确 relay fallback、bytes/hash 和 healthy runtime 成立 |
 | `unavailable` | `admitted`/`failed` | 阻塞 capability gate 契约错误 |
-| `unusable`/`unknown` | 任意 | 阻塞并保留 probe、runtime 和 fallback 证据 |
+| `unusable` | `admitted`/`failed` | 阻塞并保留 probe、attempt、runtime 和 fallback 证据 |
+| `unusable` | `not-started` | 健康 runtime 下阻塞 attempt gate 契约错误 |
+| `unknown` | 任意 | 阻塞并保留 probe、runtime 和 fallback 证据 |
 | 任意 | 任意 | crash、基础设施失败、delivery 未开始/失败或 guard 非 passed 均阻塞 |
+
+`pion`：API 缺失时必须为 `not-applicable`/`not-started`；API 存在时必须产生 native interop 终局。`unusable`、interop failed、crash、基础设施失败或 guard 非 passed 均阻塞。
 
 relay cut 使用异步 fence：receiver 确认 relay lane detached/ineligible 后才完成；cut 前 dispatch 可在 cut 后结束，但 fence 后不得产生新 relay dispatch，且必须出现 peer dispatch。
 
