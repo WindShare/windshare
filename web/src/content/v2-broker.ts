@@ -43,19 +43,39 @@ export class V2BlockLaneAttemptsError extends AggregateError {
 
 interface LaneState {
   readonly lane: V2BlockLane
+  readonly laneEpoch: number
   readonly route: V2BlockTransportRoute
   inflight: number
   failed: boolean
 }
 
 export interface V2BlockRouteObservation {
+  readonly dispatchSequence: number
   readonly laneId: number
+  readonly laneEpoch: number
   readonly route: V2BlockTransportRoute
   readonly fileId: string
   readonly localBlockIndex: bigint
 }
 
+export type V2BlockDispatchObservation = V2BlockRouteObservation
+
+/** Joined-share authority; protocol generations borrow it instead of resetting evidence order. */
+export class V2BlockDispatchSequenceAuthority {
+  #current = 0
+
+  next(): number {
+    if (this.#current === Number.MAX_SAFE_INTEGER) {
+      throw new RangeError('Block dispatch evidence sequence is exhausted')
+    }
+    this.#current += 1
+    return this.#current
+  }
+}
+
 export interface V2LaneSetOptions {
+  readonly dispatchSequence?: V2BlockDispatchSequenceAuthority
+  readonly onBlockDispatched?: (observation: V2BlockDispatchObservation) => void
   readonly onBlockFetched?: (observation: V2BlockRouteObservation) => void
 }
 
@@ -71,20 +91,27 @@ interface PendingLane {
 export class V2LaneSet {
   readonly #lanes = new Map<number, LaneState>()
   readonly #waiters = new Set<PendingLane>()
+  readonly #dispatchSequence: V2BlockDispatchSequenceAuthority
+  readonly #onBlockDispatched: (observation: V2BlockDispatchObservation) => void
   readonly #onBlockFetched: (observation: V2BlockRouteObservation) => void
   #rotation = 0
   #closed = false
 
   constructor(options: V2LaneSetOptions = {}) {
+    this.#dispatchSequence = options.dispatchSequence ?? new V2BlockDispatchSequenceAuthority()
+    this.#onBlockDispatched = options.onBlockDispatched ?? (() => undefined)
     this.#onBlockFetched = options.onBlockFetched ?? (() => undefined)
   }
 
-  add(lane: V2BlockLane, route: V2BlockTransportRoute): void {
+  add(lane: V2BlockLane, route: V2BlockTransportRoute, laneEpoch = 0): void {
     if (this.#closed) throw new Error('LaneSet is closed')
     if (!Number.isInteger(lane.id) || lane.id <= 0 || this.#lanes.has(lane.id)) {
       throw new TypeError('LaneSet requires a unique positive lane identity')
     }
-    this.#lanes.set(lane.id, { lane, route, inflight: 0, failed: false })
+    if (!Number.isInteger(laneEpoch) || laneEpoch < 0 || laneEpoch > 0xffff_ffff) {
+      throw new TypeError('LaneSet requires an unsigned lane epoch')
+    }
+    this.#lanes.set(lane.id, { lane, laneEpoch, route, inflight: 0, failed: false })
     this.#wakeWaiters()
   }
 
@@ -137,6 +164,21 @@ export class V2LaneSet {
       attempted.add(state)
       signal.throwIfAborted()
       state.inflight += 1
+      const observation = Object.freeze({
+        dispatchSequence: this.#dispatchSequence.next(),
+        laneId: state.lane.id,
+        laneEpoch: state.laneEpoch,
+        route: state.route,
+        fileId: demand.descriptor.fileIdText,
+        localBlockIndex: demand.localBlockIndex,
+      })
+      try {
+        // The sequence is allocated immediately before invocation so a relay-cut
+        // fence classifies dispatch authority rather than completion timing.
+        this.#onBlockDispatched(observation)
+      } catch {
+        // Diagnostics cannot delay, redirect, or cancel authenticated block work.
+      }
       try {
         // Eligibility is sampled at dispatch. Once one legitimate consumer starts
         // a shared BlockRef load, later cancellation cannot retroactively make the
@@ -144,12 +186,7 @@ export class V2LaneSet {
         const record = await state.lane.fetchBlock(demand, signal)
         state.failed = false
         try {
-          this.#onBlockFetched(Object.freeze({
-            laneId: state.lane.id,
-            route: state.route,
-            fileId: demand.descriptor.fileIdText,
-            localBlockIndex: demand.localBlockIndex,
-          }))
+          this.#onBlockFetched(Object.freeze({ ...observation }))
         } catch {
           // Diagnostics cannot become transfer authority or corrupt an authenticated success.
         }

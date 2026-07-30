@@ -3,20 +3,17 @@
 #   Windows: pwsh -NoProfile -File scripts/ci/<target>.ps1
 #   Linux:   bash scripts/ci/<target>.sh
 #
-# Usage: `make ci` runs every gate of .github/workflows/ci.yml in
-# substance-first order (owner decision 2026-07-14): gates that catch
-# compile/runtime errors (vet core-release race vectors coverage network web
-# browser) run before the style/hygiene gates (hygiene lint), with sloc last — an
-# iterating agent sees real failures before style noise. Each gate is also
-# independently invokable (e.g. `make race`).
+# Usage: `make ci` runs every blocking gate in substance-first order, including
+# the Docker-free browser gate exactly once.
+# Every gate remains independently invokable (e.g. `make race`).
 # Expected full `make ci` runtime on Windows: budget ~10 minutes warm and
 # ~30 minutes cold, including the extracted core release sweep.
 # The core artifact invariant runs in `core-release`; the root GOWORK=off
 # consumer build remains in `vet`.
 #
-# Fidelity note: nothing is deduplicated or excluded relative to CI —
-# fidelity to CI beats local speed. Per-gate CI-job parity is recorded in
-# docs/.orchestration/m1/make-ci.md.
+# Each non-browser gate preserves CI fidelity; browser parity lives in its own
+# dispatcher because its two suites publish separate evidence before one verdict.
+# Per-gate CI-job parity is recorded in docs/.orchestration/m1/make-ci.md.
 
 # Ordinary validation uses a reserved prerelease version that release-ref
 # resolution rejects. `override` prevents a caller from converting this gate
@@ -28,7 +25,12 @@
 override CORE_ARTIFACT_VERSION := v0.0.0-ci
 CORE_ARTIFACT_COMMIT_SHA ?= $(shell git rev-parse --verify HEAD)
 GATES := vet core-release race vectors coverage network web browser hygiene lint sloc
+# The composed CI graph has already established web dependencies before the
+# browser gate. A distinct private target makes that authority explicit while
+# keeping `make browser` independently self-sufficient.
+CI_GATES := $(subst browser,browser-ci,$(GATES))
 SCRIPT_GATES := $(filter-out core-release,$(GATES))
+LOCAL_ENTRYPOINTS := check browser-stability browser-network
 
 ifeq ($(OS),Windows_NT)
 DISPATCH = pwsh -NoProfile -File scripts/ci/$@.ps1
@@ -40,9 +42,9 @@ endif
 # lease, so parallel `make -j` would only interleave failures.
 .NOTPARALLEL:
 
-.PHONY: ci $(GATES)
+.PHONY: ci browser-ci $(GATES) $(LOCAL_ENTRYPOINTS)
 
-ci: $(GATES)
+ci: $(CI_GATES)
 	@echo "ci: all gates passed"
 
 core-release:
@@ -52,5 +54,15 @@ else
 	bash scripts/ci/core-release.sh "$(CORE_ARTIFACT_VERSION)" "$(CORE_ARTIFACT_COMMIT_SHA)"
 endif
 
+browser-ci:
+ifeq ($(OS),Windows_NT)
+	pwsh -NoProfile -File scripts/ci/browser.ps1 -SkipDependencyInstall
+else
+	bash scripts/ci/browser.sh --skip-dependency-install
+endif
+
 $(SCRIPT_GATES):
+	$(DISPATCH)
+
+$(LOCAL_ENTRYPOINTS):
 	$(DISPATCH)

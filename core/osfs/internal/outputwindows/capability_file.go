@@ -3,12 +3,15 @@
 package outputwindows
 
 import (
+	"encoding/binary"
 	"errors"
 	"io/fs"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 )
+
+const windowsCloseRevalidationIdentityDomain = "windows/ntfs/transient-file-id/v1"
 
 func (file *windowsOutputV3File) ReadAt(destination []byte, offset int64) (int, error) {
 	if file == nil || file.native == nil {
@@ -97,6 +100,31 @@ func (file *windowsOutputV3File) SameFile(other outputcap.File) (bool, error) {
 	}
 	same, err := sameWindowsV3OpenedObject(file.native, right.native)
 	return same, windowsOutputV3Error(err)
+}
+
+func (file *windowsOutputV3File) CloseRevalidationIdentity() (outputcap.TransientFileIdentity, error) {
+	if file == nil || file.native == nil || file.native.inspector == nil {
+		return outputcap.TransientFileIdentity{}, errors.Join(
+			outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: Windows file authority is closed"),
+		)
+	}
+	if err := file.native.verify(file.private); err != nil {
+		return outputcap.TransientFileIdentity{}, windowsOutputV3Error(err)
+	}
+	facts, err := file.native.inspector.Inspect(file.native.handle())
+	if err != nil || !facts.object.valid() {
+		return outputcap.TransientFileIdentity{}, windowsOutputV3Error(errors.Join(
+			err,
+			errors.New("osfs: Windows file identity is unavailable"),
+		))
+	}
+	guid := []byte(facts.object.volume.guid)
+	encoded := make([]byte, 8+len(facts.object.fileID)+len(guid))
+	binary.LittleEndian.PutUint64(encoded[:8], facts.object.volume.serial)
+	copy(encoded[8:24], facts.object.fileID[:])
+	copy(encoded[24:], guid)
+	return outputcap.NewTransientFileIdentity(windowsCloseRevalidationIdentityDomain, encoded), nil
 }
 
 func (lock *windowsOutputV3Lock) File() outputcap.File {

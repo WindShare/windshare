@@ -2,9 +2,12 @@ import type { V2ShareDescriptor } from '../catalog/v2-records'
 import { SenderObjectError } from '../crypto/sender-object'
 import { equalBytes } from '../crypto/bytes'
 import { V2CborError } from '../protocol/cbor'
-import { V2_MESSAGE_KIND } from '../session/v2-message'
+import { V2_MESSAGE_KIND, type V2SessionMessage } from '../session/v2-message'
 import type { V2ReceiverSessionRuntime, V2SessionOperation } from '../session/v2-runtime'
-import { V2SessionRuntimeError } from '../session/v2-runtime-types'
+import {
+  V2_OPERATION_CANCEL_REASON,
+  V2SessionRuntimeError,
+} from '../session/v2-runtime-types'
 import type {
   V2BlockDemand,
   V2BlockLane,
@@ -421,15 +424,8 @@ export class V2SessionBlockLane implements V2BlockLane {
         if (message.kind === V2_MESSAGE_KIND.operationError) {
           throw await remoteOperationErrorFor(this.#session, message.body, 'block')
         }
-        if (
-          message.kind !== V2_MESSAGE_KIND.operationComplete ||
-          decodeV2OperationComplete(message.body) !== 1 ||
-          object === undefined
-        ) {
-          throw new Error('Block operation completed without exactly one record')
-        }
         return await openV2BlockRecord(
-          object,
+          requireCompletedBlockObject(message, object),
           this.#share,
           this.#readSecret,
           demand.descriptor,
@@ -440,8 +436,13 @@ export class V2SessionBlockLane implements V2BlockLane {
       assembler.cancel()
       this.#session.cancelOperation(
         operation,
-        error instanceof V2FragmentTimeoutError ? 4 : 5,
-        this.id,
+        {
+          protocolReason: error instanceof V2FragmentTimeoutError
+            ? V2_OPERATION_CANCEL_REASON.timeout
+            : V2_OPERATION_CANCEL_REASON.laneRace,
+          cause: error,
+          laneId: this.id,
+        },
       ).catch(() => undefined)
       if (error instanceof SenderObjectError) {
         throw new V2BlockOperationError(
@@ -460,6 +461,25 @@ export class V2SessionBlockLane implements V2BlockLane {
       throw error
     }
   }
+}
+
+function requireCompletedBlockObject(
+  message: V2SessionMessage,
+  object: Uint8Array<ArrayBuffer> | undefined,
+): Uint8Array<ArrayBuffer> {
+  if (message.kind !== V2_MESSAGE_KIND.operationComplete) {
+    throw new Error('Block operation received an unexpected response')
+  }
+  if (decodeV2OperationComplete(message.body) !== 1) {
+    throw new Error('Block operation completed without exactly one result')
+  }
+  if (object === undefined) {
+    // A final can replay on a replacement lane after the original fragment
+    // send became physically ambiguous. The authenticated count preserves
+    // result authority; only the missing bytes need another bounded lane try.
+    throw new V2IncompleteBlockDeliveryError()
+  }
+  return object
 }
 
 function leaseKey(leaseId: Uint8Array): string {
@@ -553,6 +573,13 @@ function isRetryableLeaseLaneFailure(error: unknown): boolean {
 
 function isProtocolContentFailure(error: unknown): boolean {
   return error instanceof SenderObjectError || error instanceof V2CborError
+}
+
+class V2IncompleteBlockDeliveryError extends V2SessionRuntimeError {
+  constructor() {
+    super('lane', 'Block completion arrived without its promised fragment record')
+    this.name = 'V2IncompleteBlockDeliveryError'
+  }
 }
 
 class V2FragmentTimeoutError extends V2SessionRuntimeError {

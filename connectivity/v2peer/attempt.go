@@ -23,12 +23,17 @@ const (
 	peerCandidateFailureMessage   = "ICE candidate exchange failed"
 	peerCandidateLimitMessage     = "ICE candidate limit exceeded"
 	peerAdmissionFailureMessage   = "Peer channel admission failed"
+	peerAttemptCancelledMessage   = "Peer attempt was cancelled"
+	peerRuntimeStoppedMessage     = "Sender peer runtime stopped"
+	peerUnexpectedFailureMessage  = "Peer attempt failed unexpectedly"
 )
 
 var (
 	errAttemptTimeout   = errors.New("peer lane admission timed out")
 	errCandidateLimit   = errors.New("ICE candidate limit exceeded")
 	errChannelAdmission = errors.New("peer DataChannel admission failed")
+	errAnswerDropped    = errors.New("peer answer operation was retired before delivery")
+	errCandidateDropped = errors.New("peer candidate operation was retired before delivery")
 )
 
 type peerOperationRejection struct {
@@ -55,6 +60,7 @@ const (
 	attemptRemoteCandidate attemptEventKind = iota + 1
 	attemptLocalCandidate
 	attemptDataChannel
+	attemptDataChannelOpen
 	attemptAdmission
 	attemptChannelDone
 	attemptConnectionFailed
@@ -71,22 +77,30 @@ type attemptEvent struct {
 }
 
 type peerAttempt struct {
-	config  peerAttemptConfig
-	events  chan attemptEvent
-	inboxMu sync.Mutex
-	closed  bool
+	config   peerAttemptConfig
+	recorder *senderAttemptRecorder
+	events   chan attemptEvent
+	inboxMu  sync.Mutex
+	closed   bool
 
 	cancelMu sync.Mutex
 	cancel   context.CancelCauseFunc
 	attached atomic.Bool
 	done     chan struct{}
+
+	admissionMu     sync.Mutex
+	admissionPhase  attemptAdmissionPhase
+	admissionResult attemptEvent
+	admissionDone   chan struct{}
+	admissionCancel context.CancelCauseFunc
 }
 
 func newPeerAttempt(config peerAttemptConfig) *peerAttempt {
 	return &peerAttempt{
-		config: config,
-		events: make(chan attemptEvent, config.factory.maxCandidates*2+attemptEventReserve),
-		done:   make(chan struct{}),
+		config:   config,
+		recorder: newSenderAttemptRecorder(config.factory, config.session.ProtocolSessionID(), config.offer.Binding),
+		events:   make(chan attemptEvent, config.factory.maxCandidates*2+attemptEventReserve),
+		done:     make(chan struct{}), admissionDone: make(chan struct{}),
 	}
 }
 
@@ -209,26 +223,44 @@ func (attempt *peerAttempt) closeInbox() {
 	}
 }
 
-func (attempt *peerAttempt) run(ctx context.Context) (result error) {
-	var execution *attemptExecution
-	defer func() {
-		operationCanceled := execution != nil && execution.operationCanceled
-		result = attempt.deliverFailure(ctx, result, operationCanceled)
-	}()
+func (attempt *peerAttempt) run(ctx context.Context) error {
+	attempt.recorder.begin()
 	peer, err := attempt.config.factory.peerConnections.NewPeerConnection(
 		attempt.config.factory.configuration,
 	)
 	if err != nil || peer == nil {
-		return errors.Join(ErrNegotiation, err)
+		var cleanup error
+		if peer != nil {
+			cleanup = peer.Close()
+		}
+		return attempt.finish(ctx, errors.Join(ErrNegotiation, err), cleanup, false)
 	}
-	execution = newAttemptExecution(attempt, ctx, peer)
-	defer func() { result = errors.Join(result, execution.close(result)) }()
+	execution := newAttemptExecution(attempt, ctx, peer)
 	execution.registerCallbacks()
-	if err := execution.negotiate(); err != nil {
-		return err
+	result := execution.negotiate()
+	if result == nil {
+		execution.startDeadline()
+		result = execution.runEvents()
 	}
-	execution.startDeadline()
-	return execution.runEvents()
+	cleanup := execution.close(result)
+	return attempt.finish(ctx, result, cleanup, execution.operationCanceled)
+}
+
+func (attempt *peerAttempt) finish(
+	ctx context.Context,
+	primary error,
+	cleanup error,
+	operationCanceled bool,
+) error {
+	result := errors.Join(primary, cleanup)
+	if !attempt.recorder.admitted() {
+		attempt.recorder.fail(attemptFailure(result, primary, operationCanceled))
+	}
+	return attempt.deliverFailure(
+		ctx,
+		result,
+		operationCanceled || errors.Is(primary, errAnswerDropped) || errors.Is(primary, errCandidateDropped),
+	)
 }
 
 type attemptExecution struct {
@@ -293,6 +325,9 @@ func (execution *attemptExecution) negotiate() error {
 	if err != nil {
 		return fmt.Errorf("create local answer: %w", err)
 	}
+	execution.attempt.recorder.complete(
+		SenderAttemptAnswerCreated, execution.candidateCounts(), nil, nil,
+	)
 	if err := execution.peer.SetLocalDescription(answer); err != nil {
 		return fmt.Errorf("set local answer: %w", err)
 	}
@@ -306,13 +341,22 @@ func (execution *attemptExecution) negotiate() error {
 	if err != nil {
 		return err
 	}
-	_, err = execution.attempt.config.session.SendPeerControl(
+	disposition, err := execution.attempt.config.session.SendPeerControl(
 		execution.ctx,
 		protocolsession.MessagePeerAnswer,
 		execution.attempt.config.operation,
 		answerBody,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if disposition == protocolsession.OperationDrop {
+		return errAnswerDropped
+	}
+	execution.attempt.recorder.complete(
+		SenderAttemptAnswerSent, execution.candidateCounts(), nil, nil,
+	)
+	return nil
 }
 
 func (execution *attemptExecution) startDeadline() {
@@ -332,13 +376,21 @@ func (execution *attemptExecution) runEvents() error {
 	for {
 		select {
 		case <-execution.ctx.Done():
-			return context.Cause(execution.ctx)
+			cause := context.Cause(execution.ctx)
+			_, admissionErr := execution.settleAdmissionAtTerminal(cause)
+			return errors.Join(cause, admissionErr)
 		case <-execution.timeout:
-			return errAttemptTimeout
+			admitted, admissionErr := execution.settleAdmissionAtTerminal(errAttemptTimeout)
+			if admitted && execution.ctx.Err() == nil {
+				execution.stopDeadline()
+				continue
+			}
+			return errors.Join(errAttemptTimeout, admissionErr)
 		case event := <-execution.attempt.events:
 			done, err := execution.handleEvent(event)
-			if err != nil || done {
-				return err
+			terminal, result := execution.settleEventTerminal(done, err)
+			if terminal {
+				return result
 			}
 		}
 	}
@@ -352,6 +404,11 @@ func (execution *attemptExecution) handleEvent(event attemptEvent) (bool, error)
 		return false, execution.sendLocalCandidate(event.candidate)
 	case attemptDataChannel:
 		return false, execution.startDataChannel(event.raw)
+	case attemptDataChannelOpen:
+		execution.attempt.recorder.complete(
+			SenderAttemptDataChannelOpen, execution.candidateCounts(), nil, nil,
+		)
+		return false, nil
 	case attemptAdmission:
 		return false, execution.acceptAdmission(event)
 	case attemptChannelDone:
@@ -359,10 +416,21 @@ func (execution *attemptExecution) handleEvent(event attemptEvent) (bool, error)
 	case attemptConnectionFailed:
 		return true, event.err
 	case attemptOperationCanceled:
-		return execution.cancelOperation(event), nil
+		return execution.cancelOperation(event)
 	default:
 		return true, ErrProtocol
 	}
+}
+
+func (execution *attemptExecution) settleEventTerminal(done bool, cause error) (bool, error) {
+	if !done && cause == nil {
+		return false, nil
+	}
+	// Event producers are deliberately not an allow-list of terminal races. Any
+	// event that would leave the loop must first settle an in-flight core
+	// admission, including signaling errors introduced after DataChannel open.
+	_, admissionErr := execution.settleAdmissionAtTerminal(cause)
+	return true, errors.Join(cause, admissionErr)
 }
 
 func (execution *attemptExecution) addRemoteCandidate(
@@ -374,16 +442,20 @@ func (execution *attemptExecution) addRemoteCandidate(
 	if execution.remoteCandidates >= execution.attempt.config.factory.maxCandidates {
 		return errCandidateLimit
 	}
-	execution.remoteCandidates++
 	if err := execution.peer.AddICECandidate(candidateInit(candidate)); err != nil {
 		return fmt.Errorf("add remote ICE candidate: %w", err)
 	}
+	execution.remoteCandidates++
+	execution.attempt.recorder.recordCandidateCounts(execution.candidateCounts())
 	return nil
 }
 
 func (execution *attemptExecution) sendLocalCandidate(candidate v2signal.Candidate) error {
 	if !execution.signaling {
 		return nil
+	}
+	if execution.localCandidates >= execution.attempt.config.factory.maxCandidates {
+		return errCandidateLimit
 	}
 	body, err := v2signal.EncodeCandidate(candidate)
 	if err != nil {
@@ -395,13 +467,14 @@ func (execution *attemptExecution) sendLocalCandidate(candidate v2signal.Candida
 		execution.attempt.config.operation,
 		body,
 	)
-	if err != nil || disposition == protocolsession.OperationDrop {
+	if err != nil {
 		return err
 	}
-	execution.localCandidates++
-	if execution.localCandidates > execution.attempt.config.factory.maxCandidates {
-		return errCandidateLimit
+	if disposition == protocolsession.OperationDrop {
+		return errCandidateDropped
 	}
+	execution.localCandidates++
+	execution.attempt.recorder.recordCandidateCounts(execution.candidateCounts())
 	return nil
 }
 
@@ -419,14 +492,16 @@ func (execution *attemptExecution) startDataChannel(raw *pion.DataChannel) error
 		return errors.Join(errChannelAdmission, err)
 	}
 	execution.channel = channel
+	admissionEventsComplete := make(chan struct{})
 	execution.children.Add(2)
 	go func() {
 		defer execution.children.Done()
-		execution.attempt.admit(execution.ctx, channel)
+		defer close(admissionEventsComplete)
+		execution.attempt.awaitOpenAndAdmit(execution.ctx, channel)
 	}()
 	go func() {
 		defer execution.children.Done()
-		execution.attempt.watchChannel(channel)
+		execution.attempt.watchChannel(channel, admissionEventsComplete)
 	}()
 	return nil
 }
@@ -440,11 +515,21 @@ func (execution *attemptExecution) acceptAdmission(event attemptEvent) error {
 	}
 	execution.attempt.attached.Store(true)
 	execution.stopDeadline()
+	execution.attempt.recorder.complete(
+		SenderAttemptLaneAdmissionStarted, execution.candidateCounts(), &event.lane, nil,
+	)
+	pair := selectedPairEvidence(execution.peer)
+	execution.attempt.recorder.complete(
+		SenderAttemptAdmitted, execution.candidateCounts(), &event.lane, pair,
+	)
 	return nil
 }
 
 func (execution *attemptExecution) channelClosed(channelErr error) error {
 	if execution.operationCanceled {
+		return nil
+	}
+	if execution.attempt.attached.Load() && channelErr == nil {
 		return nil
 	}
 	return errors.Join(
@@ -454,13 +539,20 @@ func (execution *attemptExecution) channelClosed(channelErr error) error {
 	)
 }
 
-func (execution *attemptExecution) cancelOperation(event attemptEvent) bool {
+func (execution *attemptExecution) candidateCounts() SenderCandidateCounts {
+	return SenderCandidateCounts{
+		LocalEmitted: uint32(execution.localCandidates), RemoteAccepted: uint32(execution.remoteCandidates),
+	}
+}
+
+func (execution *attemptExecution) cancelOperation(event attemptEvent) (bool, error) {
 	execution.operationCanceled = true
 	execution.signaling = false
 	if event.completed != nil {
 		close(event.completed)
 	}
-	return !execution.attempt.attached.Load()
+	_, admissionErr := execution.settleAdmissionAtTerminal(context.Canceled)
+	return !execution.attempt.attached.Load(), admissionErr
 }
 
 func (execution *attemptExecution) stopDeadline() {
@@ -481,7 +573,7 @@ func (attempt *peerAttempt) deliverFailure(
 	result error,
 	operationCanceled bool,
 ) error {
-	if result == nil || operationCanceled || errors.Is(result, context.Canceled) {
+	if result == nil || operationCanceled || attempt.recorder.admitted() || errors.Is(result, context.Canceled) {
 		return result
 	}
 	code, message := peerFailure(result)
@@ -511,13 +603,102 @@ func peerFailure(err error) (uint16, string) {
 	}
 }
 
-func (attempt *peerAttempt) admit(ctx context.Context, channel PeerDataChannel) {
-	lane, err := attempt.config.session.AdmitPeerChannel(ctx, channel)
+func senderOperationAttemptFailure(code uint16, message string) SenderAttemptFailure {
+	operation := &PeerOperationFailure{Code: code, Message: message}
+	return SenderAttemptFailure{
+		Scope: AttemptFailureScopeAttempt, TypedCode: typedPeerErrorForOperationCode(code),
+		Message: message, Operation: operation,
+	}
+}
+
+func attemptFailure(result, primary error, operationCanceled bool) SenderAttemptFailure {
+	switch {
+	case operationCanceled || errors.Is(primary, errAnswerDropped) || errors.Is(primary, errCandidateDropped):
+		return senderAttemptCancelledFailure()
+	case errors.Is(primary, context.Canceled) || errors.Is(primary, context.DeadlineExceeded):
+		return senderRuntimeStoppedFailure()
+	case result != nil:
+		code, message := peerFailure(result)
+		return senderOperationAttemptFailure(code, message)
+	default:
+		return SenderAttemptFailure{
+			Scope: AttemptFailureScopeAttempt, TypedCode: TypedPeerErrorUnexpected,
+			Message: peerUnexpectedFailureMessage,
+		}
+	}
+}
+
+func senderAttemptCancelledFailure() SenderAttemptFailure {
+	return SenderAttemptFailure{
+		Scope: AttemptFailureScopeAttempt, TypedCode: TypedPeerErrorCancelled,
+		Message: peerAttemptCancelledMessage,
+	}
+}
+
+func senderRuntimeStoppedFailure() SenderAttemptFailure {
+	return SenderAttemptFailure{
+		Scope: AttemptFailureScopeSession, TypedCode: TypedPeerErrorStopped,
+		Message: peerRuntimeStoppedMessage,
+	}
+}
+
+func senderEvidenceCapacityFailure() SenderAttemptFailure {
+	return SenderAttemptFailure{
+		Scope: AttemptFailureScopeSession, TypedCode: TypedPeerErrorStopped,
+		Message: peerEvidenceCapacityFailureMessage,
+	}
+}
+
+func (attempt *peerAttempt) awaitOpenAndAdmit(ctx context.Context, channel PeerDataChannel) {
+	if !awaitDataChannelOpen(ctx, channel) {
+		return
+	}
+	admissionContext, admitted := attempt.beginAdmission(ctx)
+	if !admitted {
+		return
+	}
+	// Both events come from this goroutine, so FIFO delivery makes the public
+	// open milestone precede every admission result even when admission is fast.
+	attempt.push(attemptEvent{kind: attemptDataChannelOpen})
+	lane, err := attempt.config.session.AdmitPeerChannel(admissionContext, channel)
+	attempt.resolveAdmission(lane, err)
 	attempt.push(attemptEvent{kind: attemptAdmission, lane: lane, err: err})
 }
 
-func (attempt *peerAttempt) watchChannel(channel PeerDataChannel) {
+func awaitDataChannelOpen(ctx context.Context, channel PeerDataChannel) bool {
+	select {
+	case <-channel.Opened():
+		return true
+	default:
+	}
+
+	select {
+	case <-channel.Opened():
+		return true
+	case <-ctx.Done():
+	case <-channel.Done():
+	}
+
+	// Pion may publish Opened and Done in the same scheduler turn. Open is the
+	// authoritative admission precondition, so a completed Opened signal wins
+	// over teardown when both are observable.
+	select {
+	case <-channel.Opened():
+		return true
+	default:
+		return false
+	}
+}
+
+func (attempt *peerAttempt) watchChannel(
+	channel PeerDataChannel,
+	admissionEventsComplete <-chan struct{},
+) {
 	<-channel.Done()
+	// Admission owns the terminal decision once it returns a lane. Serializing
+	// Done behind its queued result prevents a fast normal close from overtaking
+	// the authoritative admission event in the attempt inbox.
+	<-admissionEventsComplete
 	attempt.push(attemptEvent{kind: attemptChannelDone, err: channel.Err()})
 }
 

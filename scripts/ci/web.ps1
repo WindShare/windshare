@@ -26,6 +26,8 @@ Invoke-Step 'pnpm lint' { pnpm -C web lint }
 Invoke-Step 'forced typecheck (tsc -b --force)' { pnpm -C web exec tsc -b --force }
 Invoke-Step 'pnpm build' { pnpm -C web build }
 Invoke-Step 'v1 forbidden production graph and bundle' { pnpm -C web forbidden }
-Invoke-Step 'vitest (consumes all golden-vector families)' { pnpm -C web test }
+Invoke-Step 'vitest remainder (browser contracts have one dedicated owner)' {
+    pnpm -C web run test:unit:remainder
+}
 
 Write-Output ('== web: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

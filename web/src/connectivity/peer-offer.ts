@@ -2,6 +2,11 @@ import {
   createWindShareFrameChannel,
   type WebRTCFrameChannel,
 } from '../transport/webrtc'
+import type {
+  BrowserIceCandidateEvidence,
+  BrowserSelectedPairEvidence,
+  CandidateCounts,
+} from '../../scripts/browser-evidence/attempt-evidence'
 import { V2_MAXIMUM_PEER_CANDIDATES } from '../session/v2-operation-continuation'
 import { abortReason } from './clock'
 import {
@@ -30,7 +35,22 @@ export const MAX_ICE_CANDIDATES_PER_PEER = V2_MAXIMUM_PEER_CANDIDATES
 const NEGOTIATION_EVENT_RESERVE = 16
 
 export interface OfferChannelFactory {
-  offer(route: SignalingRoute, signal: AbortSignal): Promise<PeerChannel>
+  offer(
+    route: SignalingRoute,
+    signal: AbortSignal,
+    observer?: V2PeerOfferAttemptObserver,
+  ): Promise<PeerChannel>
+}
+
+/** Consumer-side milestone port; implementations never receive attempt authority. */
+export interface V2PeerOfferAttemptObserver {
+  offerCreated(candidateCounts: CandidateCounts): void
+  offerSent(candidateCounts: CandidateCounts): void
+  answerReceived(candidateCounts: CandidateCounts): void
+  dataChannelOpened(
+    candidateCounts: CandidateCounts,
+    readSelectedPair: () => Promise<BrowserSelectedPairEvidence | null>,
+  ): void
 }
 
 export interface BrowserOfferFactoryOptions {
@@ -75,7 +95,11 @@ export class BrowserOfferChannelFactory implements OfferChannelFactory {
     this.#maxCandidates = maximum
   }
 
-  async offer(route: SignalingRoute, signal: AbortSignal): Promise<PeerChannel> {
+  async offer(
+    route: SignalingRoute,
+    signal: AbortSignal,
+    observer?: V2PeerOfferAttemptObserver,
+  ): Promise<PeerChannel> {
     signal.throwIfAborted()
     let peer: RTCPeerConnection
     try {
@@ -90,7 +114,13 @@ export class BrowserOfferChannelFactory implements OfferChannelFactory {
       closePeer(peer)
       throw error
     }
-    const negotiation = new OfferNegotiation(peer, channel, route, this.#maxCandidates)
+    const negotiation = new OfferNegotiation(
+      peer,
+      channel,
+      route,
+      this.#maxCandidates,
+      observer,
+    )
     negotiation.run(signal).catch(() => undefined)
     return negotiation.opened
   }
@@ -109,6 +139,8 @@ class OfferNegotiation {
   readonly #channel: WebRTCFrameChannel
   readonly #route: SignalingRoute
   readonly #maximumCandidates: number
+  readonly #observer: V2PeerOfferAttemptObserver | undefined
+  readonly #remote: RemoteNegotiationState
   readonly #events: EventQueue<NegotiationEvent>
   readonly #opened = deferred<PeerChannel>()
   readonly #settled = deferred<void>()
@@ -128,11 +160,14 @@ class OfferNegotiation {
     channel: WebRTCFrameChannel,
     route: SignalingRoute,
     maximumCandidates: number,
+    observer: V2PeerOfferAttemptObserver | undefined,
   ) {
     this.#peer = peer
     this.#channel = channel
     this.#route = route
     this.#maximumCandidates = maximumCandidates
+    this.#observer = observer
+    this.#remote = new RemoteNegotiationState(peer, maximumCandidates)
     this.#ownedChannel = new OwnedPeerChannel(
       channel,
       this.#settled.promise,
@@ -201,7 +236,7 @@ class OfferNegotiation {
       // Parent-first teardown prevents a terminal-pending DataChannel from
       // pinning cancellation or a fatal signaling violation.
       this.#closeParent()
-      await this.#reader?.cancel().catch(() => undefined)
+      await this.#reader?.cancel(this.#ownerFailure?.reason).catch(() => undefined)
       await this.#readerTask?.catch(() => undefined)
       try {
         this.#reader?.releaseLock()
@@ -229,17 +264,18 @@ class OfferNegotiation {
     if (local === null || local.type !== SIGNAL_KIND_OFFER || local.sdp === '') {
       throw new PeerNegotiationError('local offer description is unavailable')
     }
+    this.#observe((observer) => observer.offerCreated(this.#candidateCounts()))
     await this.#send({
       kind: SIGNAL_KIND_OFFER,
       payload: { type: local.type, sdp: local.sdp },
     }, signal)
+    this.#observe((observer) => observer.offerSent(this.#candidateCounts()))
   }
 
   async #processEvents(signal: AbortSignal): Promise<void> {
-    const remote = new RemoteNegotiationState(this.#peer, this.#maximumCandidates)
     while (true) {
       const event = await this.#events.next()
-      if (await this.#handleEvent(event, remote, signal) === 'done') {
+      if (await this.#handleEvent(event, signal) === 'done') {
         return
       }
     }
@@ -247,7 +283,6 @@ class OfferNegotiation {
 
   async #handleEvent(
     event: NegotiationEvent,
-    remote: RemoteNegotiationState,
     signal: AbortSignal,
   ): Promise<'continue' | 'done'> {
     if (event.type === 'failure') {
@@ -275,7 +310,10 @@ class OfferNegotiation {
       return 'continue'
     }
     if (this.#signalingAvailable) {
-      await remote.accept(event.signal, signal)
+      const accepted = await this.#remote.accept(event.signal, signal)
+      if (accepted === 'answer') {
+        this.#observe((observer) => observer.answerReceived(this.#candidateCounts()))
+      }
     }
     return 'continue'
   }
@@ -283,7 +321,27 @@ class OfferNegotiation {
   #publishOpenedChannel(): void {
     if (!this.#openedChannel) {
       this.#openedChannel = true
+      this.#observe((observer) => observer.dataChannelOpened(
+        this.#candidateCounts(),
+        () => readBrowserSelectedPair(this.#peer),
+      ))
       this.#opened.resolve(this.#ownedChannel)
+    }
+  }
+
+  #candidateCounts(): CandidateCounts {
+    return Object.freeze({
+      localEmitted: this.#localCandidateFingerprints.size,
+      remoteAccepted: this.#remote.acceptedCandidates,
+    })
+  }
+
+  #observe(report: (observer: V2PeerOfferAttemptObserver) => void): void {
+    if (this.#observer === undefined) return
+    try {
+      report(this.#observer)
+    } catch {
+      // Evidence is a consumer diagnostic and cannot become negotiation authority.
     }
   }
 
@@ -379,7 +437,11 @@ class OfferNegotiation {
       return
     }
     try {
-      const candidate = canonicalCandidate(event.candidate.toJSON())
+      const candidate = candidateForSignaling(event.candidate.toJSON())
+      // Firefox emits a non-null, empty candidate before the legacy null event.
+      // Pion reports the same end-of-candidates marker as nil, so both adapters
+      // keep gathering completion local instead of consuming wire candidate quota.
+      if (candidate === undefined) return
       const fingerprint = candidateIdentity(candidate)
       if (this.#localCandidateFingerprints.has(fingerprint)) return
       // Identity admission precedes both lifetime quota and event capacity so a
@@ -423,15 +485,23 @@ class RemoteNegotiationState {
     this.#maximumCandidates = maximumCandidates
   }
 
-  async accept(message: ConnectivitySignal, signal: AbortSignal): Promise<void> {
+  get acceptedCandidates(): number {
+    return this.#remoteCandidates
+  }
+
+  async accept(
+    message: ConnectivitySignal,
+    signal: AbortSignal,
+  ): Promise<'answer' | 'candidate'> {
     if (message.kind === SIGNAL_KIND_CANDIDATE) {
       await this.#acceptCandidate(message.payload, signal)
-      return
+      return 'candidate'
     }
     if (message.kind !== SIGNAL_KIND_ANSWER || this.#descriptionReceived) {
       throw new PeerNegotiationError(`unexpected signal kind ${JSON.stringify(message.kind)}`)
     }
     await this.#acceptAnswer(message.payload, signal)
+    return 'answer'
   }
 
   async #acceptCandidate(payload: unknown, signal: AbortSignal): Promise<void> {
@@ -543,13 +613,14 @@ function decodeCandidate(payload: unknown): RTCIceCandidateInit {
   return structuredClone(payload) as RTCIceCandidateInit
 }
 
-function canonicalCandidate(payload: unknown): RTCIceCandidateInit {
-  if (!isRecord(payload) || typeof payload.candidate !== 'string' || payload.candidate === '') {
+function candidateForSignaling(payload: unknown): RTCIceCandidateInit | undefined {
+  if (!isRecord(payload) || typeof payload.candidate !== 'string') {
     throw new TypeError('ICE candidate text is missing')
   }
   const sdpMid = optionalCandidateString(payload.sdpMid, 'sdpMid')
   const usernameFragment = optionalCandidateString(payload.usernameFragment, 'usernameFragment')
   const line = optionalCandidateLine(payload.sdpMLineIndex)
+  if (payload.candidate === '') return undefined
   return Object.freeze({
     candidate: payload.candidate,
     sdpMid,
@@ -579,6 +650,85 @@ function candidateIdentity(candidate: RTCIceCandidateInit): string {
     candidate.sdpMLineIndex ?? null,
     candidate.usernameFragment ?? null,
   ])
+}
+
+async function readBrowserSelectedPair(
+  peer: RTCPeerConnection,
+): Promise<BrowserSelectedPairEvidence | null> {
+  let report: RTCStatsReport
+  try {
+    report = await peer.getStats()
+  } catch {
+    // Admission is an authenticated session fact. Missing browser diagnostics are
+    // represented explicitly as null and remain a later evidence-verdict concern.
+    return null
+  }
+  const stats = new Map<string, Record<string, unknown>>()
+  report.forEach((entry) => {
+    if (isRecord(entry) && typeof entry.id === 'string') stats.set(entry.id, entry)
+  })
+  const selectedPairId = selectedCandidatePairId(stats)
+  if (selectedPairId === undefined) return null
+  const pair = stats.get(selectedPairId)
+  if (pair === undefined) return null
+  const localId = stringField(pair, 'localCandidateId')
+  const remoteId = stringField(pair, 'remoteCandidateId')
+  if (localId === undefined || remoteId === undefined) return null
+  const local = browserCandidateEvidence(stats.get(localId), localId)
+  const remote = browserCandidateEvidence(stats.get(remoteId), remoteId)
+  if (local === null || remote === null) return null
+  return Object.freeze({ candidatePairId: selectedPairId, local, remote })
+}
+
+function selectedCandidatePairId(
+  stats: ReadonlyMap<string, Record<string, unknown>>,
+): string | undefined {
+  for (const entry of stats.values()) {
+    if (entry.type !== 'transport') continue
+    const selected = stringField(entry, 'selectedCandidatePairId')
+    if (selected !== undefined) return selected
+  }
+  for (const entry of stats.values()) {
+    if (entry.type !== 'candidate-pair') continue
+    if (entry.selected === true || (entry.nominated === true && entry.state === 'succeeded')) {
+      return stringField(entry, 'id')
+    }
+  }
+  return undefined
+}
+
+function browserCandidateEvidence(
+  candidate: Record<string, unknown> | undefined,
+  candidateId: string,
+): BrowserIceCandidateEvidence | null {
+  if (candidate === undefined) return null
+  const candidateType = candidate.candidateType
+  const protocol = candidate.protocol
+  if (!isIceCandidateType(candidateType) || !isIceProtocol(protocol)) return null
+  const address = stringField(candidate, 'address') ?? stringField(candidate, 'ip')
+  const port = candidate.port
+  return Object.freeze({
+    candidateId,
+    candidateType,
+    protocol,
+    ...(address === undefined ? {} : { address }),
+    ...(typeof port === 'number' && Number.isSafeInteger(port) && port > 0 && port <= 65_535
+      ? { port }
+      : {}),
+  })
+}
+
+function stringField(record: Record<string, unknown>, field: string): string | undefined {
+  const value = record[field]
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+function isIceCandidateType(value: unknown): value is BrowserIceCandidateEvidence['candidateType'] {
+  return value === 'host' || value === 'prflx' || value === 'srflx' || value === 'relay'
+}
+
+function isIceProtocol(value: unknown): value is BrowserIceCandidateEvidence['protocol'] {
+  return value === 'udp' || value === 'tcp'
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

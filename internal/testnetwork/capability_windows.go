@@ -21,9 +21,8 @@ import (
 )
 
 const (
-	launchAuthorizationPipeEnv = "WINDSHARE_D5_AUTHORIZATION_PIPE"
-	guardConnectTimeout        = 10 * time.Second
-	maximumAuthorizationBytes  = 1 << 20
+	guardConnectTimeout       = 10 * time.Second
+	maximumAuthorizationBytes = 1 << 20
 )
 
 type authorizedProgram struct {
@@ -33,9 +32,12 @@ type authorizedProgram struct {
 }
 
 type authorizationPayload struct {
-	SchemaVersion int                 `json:"SchemaVersion"`
-	RunID         string              `json:"RunID"`
-	Programs      []authorizedProgram `json:"Programs"`
+	SchemaVersion   int                 `json:"SchemaVersion"`
+	RunID           string              `json:"RunID"`
+	Programs        []authorizedProgram `json:"Programs"`
+	AuthorityKind   string              `json:"AuthorityKind,omitempty"`
+	InvocationID    string              `json:"InvocationID,omitempty"`
+	OperationSHA256 string              `json:"OperationSHA256,omitempty"`
 }
 
 type processAuthorization struct {
@@ -65,7 +67,11 @@ func ensureWindowsHarnessAuthorization() error {
 }
 
 func loadWindowsHarnessAuthorization() (processAuthorization, error) {
-	pipeName := os.Getenv(launchAuthorizationPipeEnv)
+	pipeName := os.Getenv(launchAuthorizationPipeEnvironment)
+	childBinding, delegated, err := parseChildAuthorizationPipeName(pipeName)
+	if err != nil {
+		return processAuthorization{}, err
+	}
 	guard, err := connectAuthorizationPipe(pipeName)
 	if err != nil {
 		return processAuthorization{}, err
@@ -79,11 +85,16 @@ func loadWindowsHarnessAuthorization() (processAuthorization, error) {
 			_ = windows.CloseHandle(guard)
 		}
 	}()
+	if delegated {
+		if err := writeChildAuthorizationRequest(guard, childBinding); err != nil {
+			return processAuthorization{}, err
+		}
+	}
 	payload, err := readParentAuthorization(guard)
 	if err != nil {
 		return processAuthorization{}, err
 	}
-	programs, err := validateParentAuthorization(payload)
+	programs, err := validateParentAuthorization(payload, childBinding, delegated)
 	if err != nil {
 		return processAuthorization{}, err
 	}
@@ -166,9 +177,22 @@ func readPipeExact(handle windows.Handle, destination []byte) error {
 	return nil
 }
 
-func validateParentAuthorization(payload authorizationPayload) (map[string]authorizedProgram, error) {
+func validateParentAuthorization(
+	payload authorizationPayload,
+	childBinding childAuthorizationBinding,
+	delegated bool,
+) (map[string]authorizedProgram, error) {
 	if payload.SchemaVersion != 1 || payload.RunID == "" || len(payload.Programs) == 0 {
 		return nil, errors.New("parent authorization payload has an invalid run identity")
+	}
+	if delegated {
+		if payload.AuthorityKind != childAuthorizationKind ||
+			payload.InvocationID != childBinding.InvocationID ||
+			payload.OperationSHA256 != childBinding.OperationSHA256 {
+			return nil, errors.New("child authorization payload has an invalid operation binding")
+		}
+	} else if payload.AuthorityKind != "" || payload.InvocationID != "" || payload.OperationSHA256 != "" {
+		return nil, errors.New("root authorization payload contains child authority")
 	}
 	programs := make(map[string]authorizedProgram, len(payload.Programs))
 	for _, program := range payload.Programs {

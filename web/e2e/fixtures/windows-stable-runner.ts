@@ -50,7 +50,7 @@ export interface RunnerGuardedProcess {
 
 export interface WindowsStableRunner {
   readonly paths: BinaryPaths
-  assertBeforeLaunch(): Promise<void>
+  assertBeforeLaunch(signal?: AbortSignal): Promise<void>
   track(child: RunnerGuardedProcess): void
   close(): void
 }
@@ -108,6 +108,7 @@ export async function assertStableWindowsE2ELeaseProof(
   leaseToken: string | undefined,
   requireWriteDenied: () => Promise<void>,
   readRecord: () => Promise<string>,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (
     contract !== STABLE_WINDOWS_CONTRACT ||
@@ -118,8 +119,11 @@ export async function assertStableWindowsE2ELeaseProof(
   }
   // The denial must precede the identity read. Otherwise owner A can disappear
   // after its record is read and owner B's handle can accidentally prove A live.
+  signal?.throwIfAborted()
   await requireWriteDenied()
+  signal?.throwIfAborted()
   const record = parseStableBuildLease(await readRecord())
+  signal?.throwIfAborted()
   if (
     record.contract !== STABLE_WINDOWS_CONTRACT ||
     record.tokenSha256 !== sha256(Buffer.from(leaseToken, 'utf8'))
@@ -128,7 +132,11 @@ export async function assertStableWindowsE2ELeaseProof(
   }
 }
 
-async function requireStableLeaseWriteDenied(lockPath: string): Promise<void> {
+async function requireStableLeaseWriteDenied(
+  lockPath: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted()
   let writableHandle
   try {
     writableHandle = await open(lockPath, 'r+')
@@ -138,7 +146,11 @@ async function requireStableLeaseWriteDenied(lockPath: string): Promise<void> {
       cause: error,
     })
   }
-  await writableHandle.close()
+  try {
+    signal?.throwIfAborted()
+  } finally {
+    await writableHandle.close()
+  }
   throw new Error('The stable Windows E2E lease is not held by the auditing runner')
 }
 
@@ -146,20 +158,23 @@ export async function assertStableWindowsE2ELeaseAt(
   lockPath: string,
   contract: string | undefined,
   leaseToken: string | undefined,
+  signal?: AbortSignal,
 ): Promise<void> {
   await assertStableWindowsE2ELeaseProof(
     contract,
     leaseToken,
-    () => requireStableLeaseWriteDenied(lockPath),
-    () => readFile(lockPath, 'utf8'),
+    () => requireStableLeaseWriteDenied(lockPath, signal),
+    () => readFile(lockPath, { encoding: 'utf8', signal }),
+    signal,
   )
 }
 
-async function assertRunnerOwnsStableWindowsE2ELease(): Promise<void> {
+async function assertRunnerOwnsStableWindowsE2ELease(signal?: AbortSignal): Promise<void> {
   await assertStableWindowsE2ELeaseAt(
     STABLE_BUILD_LOCK,
     process.env.WINDSHARE_WINDOWS_OS_NETWORK,
     process.env[STABLE_LEASE_TOKEN_ENV],
+    signal,
   )
 }
 
@@ -206,7 +221,10 @@ function parseStableBinaryManifest(raw: string): StableBinaryManifest {
   return manifest as StableBinaryManifest
 }
 
-async function loadStableWindowsBinaries(directory: string): Promise<BinaryPaths> {
+async function loadStableWindowsBinaries(
+  directory: string,
+  signal?: AbortSignal,
+): Promise<BinaryPaths> {
   const outputs = {
     windshare: join(directory, 'windshare.exe'),
     relay: join(directory, 'wsrelay.exe'),
@@ -215,7 +233,10 @@ async function loadStableWindowsBinaries(directory: string): Promise<BinaryPaths
   if (manifestPath === undefined || manifestPath.length === 0) {
     throw new Error('WINDSHARE_D5_CHILD_MANIFEST is required for stable Windows E2E binaries')
   }
-  const manifest = parseStableBinaryManifest(await readFile(manifestPath, 'utf8'))
+  const manifest = parseStableBinaryManifest(await readFile(manifestPath, {
+    encoding: 'utf8',
+    signal,
+  }))
   const expected = new Set(Object.values(outputs))
   const recorded = new Set(manifest.binaries.map((binary) => binary.path))
   if (
@@ -225,7 +246,7 @@ async function loadStableWindowsBinaries(directory: string): Promise<BinaryPaths
     throw new Error('The auditing runner did not record the exact stable Windows binaries')
   }
   await Promise.all(manifest.binaries.map(async (binary) => {
-    const data = await readFile(binary.path)
+    const data = await readFile(binary.path, { signal })
     if (data.byteLength !== binary.bytes || sha256(data) !== binary.sha256) {
       throw new Error('A stable Windows binary differs from the runner-owned manifest')
     }
@@ -277,7 +298,8 @@ class RunnerGuard {
   }
 }
 
-async function connectRunnerGuard(): Promise<RunnerGuard> {
+async function connectRunnerGuard(signal?: AbortSignal): Promise<RunnerGuard> {
+  signal?.throwIfAborted()
   const pipeName = process.env[STABLE_RUNNER_PIPE_ENV]
   if (pipeName === undefined || !STABLE_RUNNER_PIPE_PATTERN.test(pipeName)) {
     throw new Error('The auditing runner guard name is missing or invalid')
@@ -293,6 +315,7 @@ async function connectRunnerGuard(): Promise<RunnerGuard> {
       clearTimeout(timeout)
       socket.off('connect', connected)
       socket.off('error', failed)
+      signal?.removeEventListener('abort', aborted)
     }
     const connected = () => {
       cleanup()
@@ -302,8 +325,15 @@ async function connectRunnerGuard(): Promise<RunnerGuard> {
       cleanup()
       rejectConnect(new Error('Could not connect to the auditing runner guard', { cause: error }))
     }
+    const aborted = () => {
+      cleanup()
+      socket.destroy()
+      rejectConnect(signal?.reason ?? new Error('Auditing runner guard connection was aborted'))
+    }
     socket.once('connect', connected)
     socket.once('error', failed)
+    signal?.addEventListener('abort', aborted, { once: true })
+    if (signal?.aborted === true) aborted()
   })
   return new RunnerGuard(socket)
 }
@@ -317,9 +347,9 @@ class StableWindowsRunner implements WindowsStableRunner {
     this.#guard = guard
   }
 
-  async assertBeforeLaunch(): Promise<void> {
+  async assertBeforeLaunch(signal?: AbortSignal): Promise<void> {
     this.#guard.assertAlive()
-    await assertRunnerOwnsStableWindowsE2ELease()
+    await assertRunnerOwnsStableWindowsE2ELease(signal)
     this.#guard.assertAlive()
   }
 
@@ -332,17 +362,20 @@ class StableWindowsRunner implements WindowsStableRunner {
   }
 }
 
-export async function openWindowsStableRunner(directory: string): Promise<WindowsStableRunner> {
+export async function openWindowsStableRunner(
+  directory: string,
+  signal?: AbortSignal,
+): Promise<WindowsStableRunner> {
   if (directory !== STABLE_E2E_DIRECTORY) {
     throw new Error('Windows E2E children must use the fixed runner-owned directory')
   }
-  await assertRunnerOwnsStableWindowsE2ELease()
-  const guard = await connectRunnerGuard()
+  await assertRunnerOwnsStableWindowsE2ELease(signal)
+  const guard = await connectRunnerGuard(signal)
   try {
-    await assertRunnerOwnsStableWindowsE2ELease()
+    await assertRunnerOwnsStableWindowsE2ELease(signal)
     guard.assertAlive()
-    const paths = await loadStableWindowsBinaries(directory)
-    await assertRunnerOwnsStableWindowsE2ELease()
+    const paths = await loadStableWindowsBinaries(directory, signal)
+    await assertRunnerOwnsStableWindowsE2ELease(signal)
     guard.assertAlive()
     return new StableWindowsRunner(paths, guard)
   } catch (error) {

@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
+import type { BrowserAttemptEvidence } from '../../scripts/browser-evidence/attempt-evidence'
 
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
+import { FileGeometry } from '../../src/content/geometry'
+import type {
+  V2BlockDemand,
+  V2BlockDispatchObservation,
+  V2BlockLane,
+  V2BlockRouteEligibility,
+} from '../../src/content/v2-broker'
+import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
 import type { Suite02CapabilityKey } from '../../src/crypto/suite02-link'
 import {
   V2ConnectivityRouteAuthority,
@@ -18,8 +27,16 @@ import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
 import { V2SessionRuntimeError, type V2LaneChange } from '../../src/session/v2-runtime-types'
 import type { V2RelayReceiverConnection } from '../../src/transport/relay/v2-receiver'
 
+const ALL_BLOCK_ROUTES: V2BlockRouteEligibility = Object.freeze({
+  active: true,
+  allows: () => true,
+  assertActive: () => undefined,
+  subscribe: () => () => undefined,
+})
+
 class FakeSession {
   readonly initialLaneId: number
+  readonly keys: { readonly protocolSessionId: Uint8Array<ArrayBuffer>; readonly initialLaneEpoch: 0 }
   readonly #laneIds: Set<number>
   readonly #listeners = new Set<(change: V2LaneChange) => void>()
   closeCalls = 0
@@ -28,6 +45,10 @@ class FakeSession {
   constructor(laneIds: readonly number[]) {
     if (laneIds.length === 0) throw new Error('A fake generation needs an initial lane')
     this.initialLaneId = laneIds[0]!
+    this.keys = Object.freeze({
+      protocolSessionId: identity(this.initialLaneId + 100),
+      initialLaneEpoch: 0,
+    })
     this.#laneIds = new Set(laneIds)
   }
 
@@ -136,6 +157,37 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   return value
 }
 
+const blockDescriptor: V2FileRevisionDescriptor = Object.freeze({
+  shareInstance: identity(70),
+  shareInstanceId: 'dispatch-share',
+  fileId: identity(71),
+  fileIdText: 'dispatch-file',
+  fileRevision: identity(72),
+  fileRevisionText: 'dispatch-revision',
+  exactSize: 2n,
+  geometry: new FileGeometry(2n, 1n),
+})
+
+function blockDemand(localBlockIndex: bigint): V2BlockDemand {
+  return { descriptor: blockDescriptor, leaseId: identity(73), localBlockIndex }
+}
+
+class ImmediateBlockLane implements V2BlockLane {
+  readonly id: number
+
+  constructor(id: number) {
+    this.id = id
+  }
+
+  fetchBlock(demand: V2BlockDemand): Promise<V2BlockRecord> {
+    return Promise.resolve({
+      descriptor: blockDescriptor,
+      localBlockIndex: demand.localBlockIndex,
+      data: Uint8Array.of(this.id),
+    })
+  }
+}
+
 function descriptor(seed = 1): V2ShareDescriptor {
   return Object.freeze({
     wireVersion: 2,
@@ -181,11 +233,57 @@ function supervisorFixture(
   return { factory, supervisor }
 }
 
+async function dispatchOnCurrentGeneration(
+  supervisor: V2ReceiverReconnectSupervisor,
+  laneId: number,
+  localBlockIndex: bigint,
+): Promise<void> {
+  await supervisor.execute(undefined, async (generation) => {
+    for (const currentLaneId of generation.lanes.laneIds()) generation.lanes.remove(currentLaneId)
+    generation.lanes.add(new ImmediateBlockLane(laneId), 'relay', 0)
+    await generation.lanes.fetch(
+      blockDemand(localBlockIndex),
+      ALL_BLOCK_ROUTES,
+      new AbortController().signal,
+    )
+  })
+}
+
 async function flushReconciliation(): Promise<void> {
   for (let turn = 0; turn < 16; turn += 1) await Promise.resolve()
 }
 
 describe('v2 receiver reconnect supervisor', () => {
+  it('projects connectivity attempt evidence through the generation boundary', async () => {
+    const session = new FakeSession([1])
+    const relay = new TrackedRelay(1)
+    const factory = new FakeSessionFactory()
+    const evidence: BrowserAttemptEvidence[] = []
+    const supervisor = new V2ReceiverReconnectSupervisor({
+      descriptor: descriptor(),
+      initial: core(session, relay),
+      sessionFactory: factory,
+      randomBytes: (length) => new Uint8Array(length).fill(12),
+      offersFactory: () => ({
+        offer: async () => { throw new Error('synthetic observed peer failure') },
+      }),
+      rtcApiPresent: () => true,
+      connectivityObserver: (event) => evidence.push(event),
+    })
+
+    const activation = supervisor.beginConnectivity('preview')
+    await flushReconciliation()
+
+    expect(evidence.map((event) => event.stage)).toEqual(['started', 'failed'])
+    expect(evidence.at(-1)).toMatchObject({
+      failedAtStage: 'offer-created',
+      typedErrorCode: 'unexpected',
+    })
+
+    activation.close()
+    await supervisor.close()
+  })
+
   it('preserves lane-admission observations across generation replacement', async () => {
     const firstSession = new FakeSession([1])
     const firstRelay = new TrackedRelay(1)
@@ -203,16 +301,44 @@ describe('v2 receiver reconnect supervisor', () => {
     )
     const download = supervisor.connectivity.begin('download', 'small')
 
-    expect(observations).toEqual([{ laneId: 1, route: 'relay' }])
+    expect(observations).toEqual([{ laneId: 1, laneEpoch: 0, route: 'relay' }])
     firstSession.detach(1)
     await flushReconciliation()
 
     expect(supervisor.generationId).toBe(2)
     expect(observations).toEqual([
-      { laneId: 1, route: 'relay' },
-      { laneId: 10, route: 'relay' },
+      { laneId: 1, laneEpoch: 0, route: 'relay' },
+      { laneId: 10, laneEpoch: 0, route: 'relay' },
     ])
 
+    download.close()
+    await supervisor.close()
+  })
+
+  it('keeps dispatch evidence contiguous across fresh protocol generations', async () => {
+    const firstSession = new FakeSession([1])
+    const firstRelay = new TrackedRelay(1)
+    const secondSession = new FakeSession([10])
+    const secondRelay = new TrackedRelay(10)
+    const factory = new FakeSessionFactory()
+    factory.connectFreshImpl = async () => core(secondSession, secondRelay)
+    const dispatches: V2BlockDispatchObservation[] = []
+    const supervisor = new V2ReceiverReconnectSupervisor({
+      descriptor: descriptor(),
+      initial: core(firstSession, firstRelay),
+      sessionFactory: factory,
+      randomBytes: (length) => new Uint8Array(length).fill(15),
+      onBlockDispatched: (observation) => dispatches.push(observation),
+    })
+    const download = supervisor.beginConnectivity('download', 'small')
+
+    await dispatchOnCurrentGeneration(supervisor, 1, 0n)
+    firstSession.detach(1)
+    await flushReconciliation()
+    expect(supervisor.generationId).toBe(2)
+    await dispatchOnCurrentGeneration(supervisor, 10, 1n)
+
+    expect(dispatches.map((observation) => observation.dispatchSequence)).toEqual([1, 2])
     download.close()
     await supervisor.close()
   })

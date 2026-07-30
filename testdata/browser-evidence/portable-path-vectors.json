@@ -1,0 +1,45 @@
+{
+  "accepted": [
+    "evidence/result.json",
+    "资料/😀.json",
+    "/private.json",
+    "𐀀/supplementary.json"
+  ],
+  "rejected": [
+    "stream:secret",
+    "less<than",
+    "greater>than",
+    "quote\"name",
+    "pipe|name",
+    "question?name",
+    "star*name",
+    "CON",
+    "CONIN$",
+    "CONOUT$.json",
+    "COM1",
+    "COM¹",
+    "LPT9.txt",
+    "LPT².log",
+    "trailing.",
+    "trailing ",
+    "not/../relative",
+    "é.json",
+    "ı.json",
+    "ß.json",
+    "É.json"
+  ],
+  "unordered": [
+    "𐀀/z",
+    "/z",
+    "a/z"
+  ],
+  "ordered": [
+    "a/z",
+    "/z",
+    "𐀀/z"
+  ],
+  "collisions": [
+    ["Evidence/Result.json", "evidence/result.json"],
+    ["A/资料.json", "a/资料.json"]
+  ]
+}

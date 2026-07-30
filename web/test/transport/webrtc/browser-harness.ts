@@ -6,9 +6,23 @@ import {
   createWindShareDataChannel,
   wrapWindShareDataChannel,
 } from '../../../src/transport/webrtc'
+import type { BrowserSelectedPairEvidence } from '../../../scripts/browser-evidence/attempt-evidence'
+import type { NativeInteropEvidence } from '../../../scripts/browser-evidence/result'
+import { browserRtcConfiguration } from '../../../scripts/browser-evidence/test-ice-topology'
+import {
+  buildNativeInteropFailureEvidence,
+  captureBrowserSelectedPair,
+  classifyNativeInteropFailure,
+  validateNativeInteropProof,
+  verifySerializedTestIceTopologyLock,
+  type SerializedTestIceTopologyLock,
+} from '../../ice-topology/native-interop'
 
 const MAX_FRAME_BYTES = 65_536
 const MAXIMUM_BURSTS = 256
+const NATIVE_INTEROP_DEADLINE_MS = 30_000
+const HTTP_REQUEST_DEADLINE_MS = 20_000
+const NATIVE_ATTEMPT_ID_BYTES = 16
 const TERMINAL_MARKER = 0xf0
 const CANCELED_MARKER = 0xcc
 const BARRIER_MARKER = 0xcb
@@ -44,6 +58,7 @@ interface PionConfig {
   readonly serverTerminalMarker: number
   readonly canceledSendMarker: number
   readonly terminalFrameBytes: number
+  readonly topologyLock: SerializedTestIceTopologyLock
 }
 
 export interface BrowserLoopbackResult {
@@ -91,6 +106,8 @@ export interface BrowserInvalidConfigurationResult {
 }
 
 export interface PionInteropResult {
+  readonly topology: PionTopologySummary
+  readonly nativeInteropEvidence: NativeInteropEvidence
   readonly browser: {
     readonly label: string
     readonly protocol: string
@@ -113,6 +130,37 @@ export interface PionInteropResult {
     readonly serverFrames: readonly FrameSummary[]
   }
   readonly server: Record<string, unknown>
+}
+
+export type PionInteropSampleResult =
+  | { readonly outcome: 'succeeded'; readonly result: PionInteropResult }
+  | {
+      readonly outcome: 'failed'
+      readonly topology: PionTopologySummary
+      readonly nativeInteropEvidence: NativeInteropEvidence
+    }
+
+export interface PionTopologySummary {
+  readonly topologyId: string
+  readonly topologyProfileSha256: string
+  readonly topologyResolutionSha256: string
+}
+
+class NativeInteropAttemptError extends Error {
+  readonly evidence: NativeInteropEvidence
+  readonly topology: PionTopologySummary
+
+  constructor(
+    message: string,
+    topology: PionTopologySummary,
+    evidence: NativeInteropEvidence,
+    options?: ErrorOptions,
+  ) {
+    super(message, options)
+    this.name = 'NativeInteropAttemptError'
+    this.topology = topology
+    this.evidence = evidence
+  }
 }
 
 export async function runBrowserLoopback(): Promise<BrowserLoopbackResult> {
@@ -255,7 +303,10 @@ export function runBrowserInvalidConfiguration(): BrowserInvalidConfigurationRes
 
 export async function runPionInterop(apiBase = '/d2-pion'): Promise<PionInteropResult> {
   const config = await fetchJSON<PionConfig>(`${apiBase}/config`)
-  const peer = new globalThis.RTCPeerConnection({ iceServers: [] })
+  const topologyLock = await verifySerializedTestIceTopologyLock(config.topologyLock)
+  const topology = topologySummary(topologyLock)
+  const attemptID = randomIdentity()
+  const peer = new globalThis.RTCPeerConnection(browserRtcConfiguration(topologyLock.profile))
   const raw = createWindShareDataChannel(peer)
   const channel = wrapWindShareDataChannel(peer, raw)
   const serverFramesPromise = collectFrames(channel.frames)
@@ -263,10 +314,20 @@ export async function runPionInterop(apiBase = '/d2-pion'): Promise<PionInteropR
   raw.addEventListener('bufferedamountlow', () => {
     lowWaterObserved = true
   }, { once: true })
+  let browserSelectedPair: BrowserSelectedPairEvidence | null = null
 
   try {
-    await negotiateWithPion(peer, apiBase)
-    await channel.opened
+    await withinNamedDeadline(
+      negotiateWithPion(peer, apiBase, attemptID),
+      'native browser/Pion negotiation',
+      NATIVE_INTEROP_DEADLINE_MS,
+    )
+    await withinNamedDeadline(
+      channel.opened,
+      'native browser/Pion DataChannel open',
+      NATIVE_INTEROP_DEADLINE_MS,
+    )
+    browserSelectedPair = await captureBrowserSelectedPair(peer)
     await channel.send(patternedFrame(config.clientProbeMarker, config.maxFrameSize))
     const burst = patternedFrame(config.clientBurstMarker, config.maxFrameSize)
     const clientBurstMessages = await fillToHighWater(channel, raw, burst)
@@ -287,12 +348,26 @@ export async function runPionInterop(apiBase = '/d2-pion'): Promise<PionInteropR
     const cancellationError = await errorName(canceledSend)
 
     await channel.send(Uint8Array.of(config.clientFinishedMarker))
-    await channel.done
+    await withinNamedDeadline(
+      channel.done,
+      'native browser/Pion channel terminal',
+      NATIVE_INTEROP_DEADLINE_MS,
+    )
     const serverFrames = await serverFramesPromise
     const server = await fetchJSON<Record<string, unknown>>(`${apiBase}/result`)
     const serverErrors = stringArray(server['errors'])
+    requirePionTopologyBinding(server, topology)
+    const nativeInteropEvidence = validateNativeInteropProof(
+      attemptID,
+      browserSelectedPair,
+      server['attemptId'],
+      server['selectedPair'],
+      topologyLock,
+    )
     await channel.close()
     return {
+      topology,
+      nativeInteropEvidence,
       browser: {
         label: raw.label,
         protocol: raw.protocol,
@@ -329,11 +404,55 @@ export async function runPionInterop(apiBase = '/d2-pion'): Promise<PionInteropR
       server,
     }
   } catch (cause) {
-    const server = await fetchJSON<Record<string, unknown>>(`${apiBase}/result`)
-    throw new Error(`Pion interop failed; server=${JSON.stringify(server)}`, { cause })
+    // Waiting for a terminal server result here can hide the browser-side root
+    // cause when negotiation fails before the Pion scenario reaches completion.
+    const browserFailure = classifyNativeInteropFailure(cause)
+    const snapshot = await fetchJSON<Record<string, unknown>>(`${apiBase}/snapshot`).catch(() => null)
+    if (snapshot?.['attemptId'] === attemptID) {
+      requirePionTopologyBinding(snapshot, topology)
+      const selectedPairValue = snapshot['selectedPair']
+      const evidence = buildNativeInteropFailureEvidence(
+        attemptID,
+        browserSelectedPair,
+        snapshot['attemptId'],
+        selectedPairValue === undefined ? null : selectedPairValue,
+        cause,
+        stringArray(snapshot['errors']),
+      )
+      throw new NativeInteropAttemptError(
+        `Pion interop failed: ${evidence.failureMessage}`,
+        topology,
+        evidence,
+        { cause },
+      )
+    }
+    throw new Error(
+      `Pion interop failed before Pion accepted attempt ${attemptID}: ${browserFailure.failureMessage}`,
+      { cause },
+    )
   } finally {
     peer.close()
   }
+}
+
+export async function runPionInteropSample(apiBase = '/d2-pion'): Promise<PionInteropSampleResult> {
+  try {
+    return { outcome: 'succeeded', result: await runPionInterop(apiBase) }
+  } catch (cause) {
+    if (cause instanceof NativeInteropAttemptError) {
+      return {
+        outcome: 'failed',
+        topology: cause.topology,
+        nativeInteropEvidence: cause.evidence,
+      }
+    }
+    throw cause
+  }
+}
+
+export async function readPionTopology(apiBase = '/d2-pion'): Promise<PionTopologySummary> {
+  const config = await fetchJSON<PionConfig>(`${apiBase}/config`)
+  return topologySummary(await verifySerializedTestIceTopologyLock(config.topologyLock))
 }
 
 async function createPeerPair(): Promise<PeerPair> {
@@ -368,31 +487,70 @@ async function negotiatePeers(
   await offerer.setRemoteDescription(requiredDescription(answerer))
 }
 
-async function negotiateWithPion(peer: RTCPeerConnection, apiBase: string): Promise<void> {
+async function negotiateWithPion(
+  peer: RTCPeerConnection,
+  apiBase: string,
+  attemptID: string,
+): Promise<void> {
   await peer.setLocalDescription(await peer.createOffer())
   await waitForIceGathering(peer)
   const answer = await fetchJSON<RTCSessionDescriptionInit>(`${apiBase}/offer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(requiredDescription(peer)),
+    body: JSON.stringify({ attemptId: attemptID, offer: requiredDescription(peer) }),
   })
   await peer.setRemoteDescription(answer)
+}
+
+function topologySummary(
+  lock: Awaited<ReturnType<typeof verifySerializedTestIceTopologyLock>>,
+): PionTopologySummary {
+  return {
+    topologyId: lock.profile.topologyId,
+    topologyProfileSha256: lock.profileSha256,
+    topologyResolutionSha256: lock.resolutionSha256,
+  }
+}
+
+function requirePionTopologyBinding(
+  server: Record<string, unknown>,
+  topology: PionTopologySummary,
+): void {
+  if (
+    server['topologyProfileSha256'] !== topology.topologyProfileSha256 ||
+    server['topologyResolutionSha256'] !== topology.topologyResolutionSha256
+  ) {
+    throw new Error('Pion selected-pair evidence is not bound to the browser topology lock')
+  }
+}
+
+function randomIdentity(): string {
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(NATIVE_ATTEMPT_ID_BYTES))
+  if (bytes.every((value) => value === 0)) bytes[0] = 1
+  let binary = ''
+  for (const value of bytes) binary += String.fromCharCode(value)
+  return globalThis.btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
 }
 
 async function waitForIceGathering(peer: RTCPeerConnection): Promise<void> {
   if (peer.iceGatheringState === 'complete') {
     return
   }
-  await new Promise<void>((resolve) => {
-    const changed = () => {
+  let changed: (() => void) | undefined
+  const gathered = new Promise<void>((resolve) => {
+    changed = () => {
       if (peer.iceGatheringState !== 'complete') {
         return
       }
-      peer.removeEventListener('icegatheringstatechange', changed)
       resolve()
     }
     peer.addEventListener('icegatheringstatechange', changed)
   })
+  try {
+    await withinNamedDeadline(gathered, 'native ICE gathering', NATIVE_INTEROP_DEADLINE_MS)
+  } finally {
+    if (changed !== undefined) peer.removeEventListener('icegatheringstatechange', changed)
+  }
 }
 
 async function fillToHighWater(
@@ -474,12 +632,39 @@ function requiredDescription(peer: RTCPeerConnection): RTCSessionDescription {
 }
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await globalThis.fetch(url, init)
-  const text = await response.text()
-  if (!response.ok) {
-    throw new Error(`${init?.method ?? 'GET'} ${url} failed: ${text}`)
+  const controller = new AbortController()
+  const timer = globalThis.setTimeout(() => {
+    controller.abort(new DOMException(`${init?.method ?? 'GET'} ${url} exceeded its named deadline`, 'TimeoutError'))
+  }, HTTP_REQUEST_DEADLINE_MS)
+  try {
+    const response = await globalThis.fetch(url, { ...init, signal: controller.signal })
+    const text = await response.text()
+    if (!response.ok) {
+      throw new Error(`${init?.method ?? 'GET'} ${url} failed: ${text}`)
+    }
+    return JSON.parse(text) as T
+  } finally {
+    globalThis.clearTimeout(timer)
   }
-  return JSON.parse(text) as T
+}
+
+async function withinNamedDeadline<T>(
+  work: Promise<T>,
+  operation: string,
+  deadlineMs: number,
+): Promise<T> {
+  work.catch(() => undefined)
+  let timer: ReturnType<typeof globalThis.setTimeout> | undefined
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = globalThis.setTimeout(() => {
+      reject(new DOMException(`${operation} exceeded ${deadlineMs} ms`, 'TimeoutError'))
+    }, deadlineMs)
+  })
+  try {
+    return await Promise.race([work, deadline])
+  } finally {
+    if (timer !== undefined) globalThis.clearTimeout(timer)
+  }
 }
 
 function stringArray(value: unknown): string[] {

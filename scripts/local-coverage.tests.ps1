@@ -108,12 +108,12 @@ try {
     foreach ($count in @(1, 3)) {
         $packages = @(
             1..$count | ForEach-Object {
-                [ordered]@{ Name = "package-$_"; Path = "./package-$_" }
+                [ordered]@{ Name = "package-$_"; Path = "./package-$_"; ExecutionClass = 'parallel' }
             }
         )
         $path = Join-Path $testRoot "valid-$count.json"
         Write-NetworkManifestFixture $path ([ordered]@{
-            SchemaVersion = 3
+            SchemaVersion = 4
             Packages = $packages
         })
         $output = @(& $coverageScript -ValidateNetworkManifestOnly -NetworkManifestPath $path)
@@ -125,7 +125,7 @@ try {
     $wrongSchema = Join-Path $testRoot 'wrong-schema.json'
     Write-NetworkManifestFixture $wrongSchema ([ordered]@{
         SchemaVersion = 1
-        Packages = @([ordered]@{ Name = 'package'; Path = './package' })
+        Packages = @([ordered]@{ Name = 'package'; Path = './package'; ExecutionClass = 'parallel' })
     })
     Assert-Throws {
         & $coverageScript -ValidateNetworkManifestOnly -NetworkManifestPath $wrongSchema
@@ -133,12 +133,25 @@ try {
 
     $missingPath = Join-Path $testRoot 'missing-path.json'
     Write-NetworkManifestFixture $missingPath ([ordered]@{
-        SchemaVersion = 3
-        Packages = @([ordered]@{ Name = 'package' })
+        SchemaVersion = 4
+        Packages = @([ordered]@{ Name = 'package'; ExecutionClass = 'parallel' })
     })
     Assert-Throws {
         & $coverageScript -ValidateNetworkManifestOnly -NetworkManifestPath $missingPath
-    } 'exactly Name and Path'
+    } 'exactly ExecutionClass, Name and Path'
+
+    $invalidExecutionClass = Join-Path $testRoot 'invalid-execution-class.json'
+    Write-NetworkManifestFixture $invalidExecutionClass ([ordered]@{
+        SchemaVersion = 4
+        Packages = @([ordered]@{
+            Name = 'package'
+            Path = './package'
+            ExecutionClass = 'process-heavy'
+        })
+    })
+    Assert-Throws {
+        & $coverageScript -ValidateNetworkManifestOnly -NetworkManifestPath $invalidExecutionClass
+    } 'Coverage network package is invalid'
 } finally {
     Remove-Item -LiteralPath $testRoot -Recurse -Force
 }

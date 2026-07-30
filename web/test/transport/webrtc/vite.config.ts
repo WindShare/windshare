@@ -1,7 +1,7 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-const PION_INTEROP_TARGET = 'http://127.0.0.1:17849'
+const PION_INTEROP_TARGET = `http://${process.env['WINDSHARE_PION_HTTP_ADDRESS'] ?? '127.0.0.1:17849'}`
 
 export default defineConfig({
   plugins: [react()],

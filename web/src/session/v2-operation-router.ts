@@ -136,6 +136,16 @@ export class V2OperationQueue implements V2SessionOperation {
     if (this.#failure !== undefined) return
     if (isSessionFailure(reason)) this.#authority.close()
     else this.#authority.retire('local-cancel')
+    this.#rejectConsumer(reason)
+  }
+
+  cancel(cause: unknown): void {
+    if (this.#failure !== undefined) return
+    this.#authority.retire('local-cancel')
+    this.#rejectConsumer(cause)
+  }
+
+  #rejectConsumer(reason: unknown): void {
     if (this.#closed) {
       this.#failure = reason
       this.#clearMessages()

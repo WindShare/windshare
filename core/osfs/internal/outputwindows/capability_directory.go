@@ -159,6 +159,30 @@ func (directory *windowsOutputV3Directory) PrepareIdentityClaim() (outputcap.Per
 	return outputcap.NewPersistentDirectoryIdentity(claim), nil
 }
 
+func (directory *windowsOutputV3Directory) PreparePrivateIdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
+	if directory == nil || directory.native == nil {
+		return outputcap.PersistentDirectoryIdentity{},
+			errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows private directory authority is closed"))
+	}
+	claim, err := directory.native.preparePrivateIdentityClaim()
+	if err != nil {
+		return outputcap.PersistentDirectoryIdentity{}, windowsOutputV3Error(err)
+	}
+	return outputcap.NewPersistentDirectoryIdentity(claim), nil
+}
+
+func (directory *windowsOutputV3Directory) PrivateIdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
+	if directory == nil || directory.native == nil {
+		return outputcap.PersistentDirectoryIdentity{},
+			errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows private directory authority is closed"))
+	}
+	claim, err := directory.native.privateIdentityClaim()
+	if err != nil {
+		return outputcap.PersistentDirectoryIdentity{}, windowsOutputV3Error(err)
+	}
+	return outputcap.NewPersistentDirectoryIdentity(claim), nil
+}
+
 func (directory *windowsOutputV3Directory) SameDirectory(other outputcap.Directory) (bool, error) {
 	right, ok := other.(*windowsOutputV3Directory)
 	if !ok || directory == nil || directory.native == nil || right == nil || right.native == nil {
