@@ -63,13 +63,11 @@ func TestOIDCValidatorExactClaimsAndConcurrentReplay(t *testing.T) {
 	var successes atomic.Int64
 	var wait sync.WaitGroup
 	for range 16 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			if concurrent.Validate(context.Background(), assertion) == nil {
 				successes.Add(1)
 			}
-		}()
+		})
 	}
 	wait.Wait()
 	if successes.Load() != 1 {

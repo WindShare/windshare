@@ -77,7 +77,6 @@ func TestCanonicalFrameRejectsUnknownDuplicateAndTruncatedInput(t *testing.T) {
 		{name: "duplicate", encoded: bytes.Replace(canonical, []byte(`"schemaVersion":2`), []byte(`"schemaVersion":2,"schemaVersion":2`), 1)},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			var framed bytes.Buffer
 			header := make([]byte, 4)
@@ -142,7 +141,6 @@ func TestStartRequestRequiresExplicitCanonicalArraysAndEnvironment(t *testing.T)
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			request := valid
 			test.mutate(&request)
@@ -206,7 +204,6 @@ func TestTerminateRequestRequiresExactPrivateIdentity(t *testing.T) {
 		{name: "reason", mutate: func(request *terminateRequest) { request.Reason = "other" }},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			request := valid

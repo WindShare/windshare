@@ -361,7 +361,7 @@ func ownerHelperArguments(testArguments []string) []string {
 	// The outer process owns the final profile. Sharing only its intermediate
 	// directory lets the production-path subprocess contribute counters without
 	// inheriting unrelated test controls.
-	for index := 0; index < len(testArguments); index++ {
+	for index := range testArguments {
 		argument := testArguments[index]
 		if strings.HasPrefix(argument, goTestCoverageDirectoryFlag+"=") {
 			return append(arguments, argument)

@@ -180,7 +180,6 @@ func TestPublishDirectoryDetectsDescendantSwapAtNativeCommit(t *testing.T) {
 
 func TestPublishDirectoryFailsClosedOnPostCommitDrift(t *testing.T) {
 	for _, boundary := range []publicationBoundary{boundaryAfterCommit, boundaryAfterDurability} {
-		boundary := boundary
 		t.Run(fmt.Sprintf("boundary-%d", boundary), func(t *testing.T) {
 			t.Parallel()
 			parent := t.TempDir()

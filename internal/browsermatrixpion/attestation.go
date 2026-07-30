@@ -77,10 +77,6 @@ func canonicalJSONLine(value any) ([]byte, error) {
 	return browsermatrixfixture.CanonicalJSONLine(value)
 }
 
-func marshalCanonicalObject(value any) ([]byte, error) {
-	return browsermatrixfixture.MarshalCanonicalObject(value)
-}
-
 func validICECredential(value string) bool {
 	return browsermatrixfixture.ValidICECredential(value)
 }

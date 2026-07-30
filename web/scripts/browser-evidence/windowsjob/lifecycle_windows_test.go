@@ -39,7 +39,6 @@ func TestTerminatePendingLaunchCanAuthenticateSpawnFailure(t *testing.T) {
 		job,
 		request,
 		statusPath,
-		terminateReasonParentRequest,
 		false,
 		events,
 		launcherWait,
@@ -74,7 +73,6 @@ func TestTerminatePendingLaunchRejectsIncompleteRootTransfer(t *testing.T) {
 		job,
 		request,
 		statusPath,
-		terminationReasonDeadline,
 		true,
 		events,
 		launcherWait,
@@ -333,7 +331,7 @@ func TestEmptyJobWinsAnExpiredDeadlineWithoutIntervention(t *testing.T) {
 
 func TestThirtyMillisecondDeadlineRechecksNaturallyEmptyTree(t *testing.T) {
 	const regressionRuns = 32
-	for run := 0; run < regressionRuns; run++ {
+	for run := range regressionRuns {
 		job := newStaleActiveJob(mustTerminationExitCodes(t, testNonce))
 		request := windowsIntegrationRequest(t, "echo", 5_000)
 		statusPath := filepath.Join(t.TempDir(), "status.json")
@@ -368,7 +366,7 @@ func TestThirtyMillisecondDeadlineRechecksNaturallyEmptyTree(t *testing.T) {
 
 func TestThirtyMillisecondRootExitRaceNeverAuthenticatesTimeout(t *testing.T) {
 	const regressionRuns = 100
-	for run := 0; run < regressionRuns; run++ {
+	for run := range regressionRuns {
 		codes := mustTerminationExitCodes(t, testNonce)
 		job := newRootExitRaceJob(codes)
 		request := windowsIntegrationRequest(t, "echo", 5_000)

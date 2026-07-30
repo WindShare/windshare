@@ -3,6 +3,7 @@ package browsernetworktopology
 import (
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -165,28 +166,11 @@ func validBrowser(browser Browser) bool {
 }
 
 func validCandidateType(candidateType CandidateType) bool {
-	for _, expected := range candidateTypeOrder {
-		if candidateType == expected {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(candidateTypeOrder, candidateType)
 }
 
 func validProtocol(protocol TransportProtocol) bool {
 	return protocol == ProtocolUDP || protocol == ProtocolTCP
-}
-
-func exactStrings(actual, expected []string) bool {
-	if len(actual) != len(expected) {
-		return false
-	}
-	for index := range expected {
-		if actual[index] != expected[index] {
-			return false
-		}
-	}
-	return true
 }
 
 func canonicalRelativePOSIXPath(value string) bool {

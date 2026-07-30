@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	SampleAuthoritySchemaVersion        = "windshare.browser-network-matrix.sample-authority/v1"
-	ControlAuthoritySchemaVersion       = "windshare.browser-network-matrix.control-authority/v1"
+	SampleAuthoritySchemaVersion         = "windshare.browser-network-matrix.sample-authority/v1"
+	ControlAuthoritySchemaVersion        = "windshare.browser-network-matrix.control-authority/v1"
 	AttemptRequestAuthoritySchemaVersion = "windshare.browser-network-matrix.attempt-request-authority/v1"
 	AttemptAuthoritySchemaVersion        = "windshare.browser-network-matrix.attempt-authority/v1"
 
@@ -31,9 +31,9 @@ type SampleAuthority struct {
 // ControlAuthority binds the broker-issued lease to the browser operation that
 // requested it, so the lease ID is never treated as self-authenticating context.
 type ControlAuthority struct {
-	SchemaVersion  string          `json:"schemaVersion"`
+	SchemaVersion   string          `json:"schemaVersion"`
 	SampleAuthority SampleAuthority `json:"sampleAuthority"`
-	ControlLeaseID string          `json:"controlLeaseId"`
+	ControlLeaseID  string          `json:"controlLeaseId"`
 }
 
 // AttemptFixtureBinding contains only immutable signed-fixture identities. The

@@ -181,13 +181,10 @@ func TestSenderEvidenceCapacityConcurrentBoundaryHasOneTerminalOwner(t *testing.
 	errorsSeen := make(chan error, len(offers))
 	var work sync.WaitGroup
 	for _, offer := range offers {
-		offer := offer
-		work.Add(1)
-		go func() {
-			defer work.Done()
+		work.Go(func() {
 			<-start
 			errorsSeen <- handler.HandleMessage(offer.ctx, offer.message)
-		}()
+		})
 	}
 	close(start)
 	work.Wait()

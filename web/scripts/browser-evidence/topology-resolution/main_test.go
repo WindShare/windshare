@@ -312,7 +312,6 @@ func TestWriteNewAtomicHasSingleWinner(t *testing.T) {
 	start := make(chan struct{})
 	results := make(chan error, 2)
 	for _, content := range [][]byte{[]byte("first"), []byte("second")} {
-		content := content
 		go func() {
 			<-start
 			results <- writeNewAtomic(outputPath, content)
