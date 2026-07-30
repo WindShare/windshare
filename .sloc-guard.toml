@@ -11,7 +11,16 @@ version = "2"
 # =============================================================================
 [scanner]
 gitignore = true                          # Respect .gitignore (default: true)
-exclude = [".git/**", "**/node_modules/**", "**/dist/**", "trash/**"]
+# These committed bundles are reproducibly checked by verify-generated.mjs;
+# their authored TypeScript remains subject to the normal limits.
+exclude = [
+  ".git/**",
+  "**/node_modules/**",
+  "**/dist/**",
+  "trash/**",
+  "scripts/ci/browsergate/generated-semantic/final-semantic-reducer.js",
+  "scripts/ci/browsergate/generated-semantic/final-semantic-reducer.d.mts",
+]
 
 # =============================================================================
 # Content: SLOC (Source Lines of Code) limits
