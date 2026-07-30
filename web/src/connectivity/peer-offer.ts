@@ -9,6 +9,7 @@ import type {
 } from '../../scripts/browser-evidence/attempt-evidence'
 import { V2_MAXIMUM_PEER_CANDIDATES } from '../session/v2-operation-continuation'
 import { abortReason } from './clock'
+import { NegotiationEventQueue } from './negotiation-event-queue'
 import {
   CandidateLimitExceededError,
   PeerNegotiationError,
@@ -141,7 +142,7 @@ class OfferNegotiation {
   readonly #maximumCandidates: number
   readonly #observer: V2PeerOfferAttemptObserver | undefined
   readonly #remote: RemoteNegotiationState
-  readonly #events: EventQueue<NegotiationEvent>
+  readonly #events: NegotiationEventQueue<NegotiationEvent>
   readonly #opened = deferred<PeerChannel>()
   readonly #settled = deferred<void>()
   readonly #interruption = new AbortController()
@@ -173,7 +174,7 @@ class OfferNegotiation {
       this.#settled.promise,
       () => this.#ownerFailure,
     )
-    this.#events = new EventQueue<NegotiationEvent>(
+    this.#events = new NegotiationEventQueue<NegotiationEvent>(
       maximumCandidates * 2 + NEGOTIATION_EVENT_RESERVE,
       () => ({
         type: 'failure',
@@ -543,58 +544,6 @@ class RemoteNegotiationState {
       }
       throw new PeerNegotiationError('could not add a remote ICE candidate', { cause })
     }
-  }
-}
-
-class EventQueue<T> {
-  readonly #items: T[] = []
-  readonly #capacity: number
-  readonly #overflow: () => T
-  readonly #onOverflow: (overflow: T) => void
-  #waiting: ((value: T) => void) | undefined
-  #closed = false
-  #overflowed = false
-
-  constructor(capacity: number, overflow: () => T, onOverflow: (overflow: T) => void) {
-    this.#capacity = capacity
-    this.#overflow = overflow
-    this.#onOverflow = onOverflow
-  }
-
-  push(value: T): void {
-    if (this.#closed || this.#overflowed) {
-      return
-    }
-    const waiting = this.#waiting
-    if (waiting !== undefined) {
-      this.#waiting = undefined
-      waiting(value)
-      return
-    }
-    if (this.#items.length >= this.#capacity) {
-      const overflow = this.#overflow()
-      this.#items.length = 0
-      this.#items.push(overflow)
-      this.#overflowed = true
-      this.#onOverflow(overflow)
-      return
-    }
-    this.#items.push(value)
-  }
-
-  next(): Promise<T> {
-    const value = this.#items.shift()
-    if (value !== undefined) {
-      return Promise.resolve(value)
-    }
-    return new Promise<T>((resolve) => {
-      this.#waiting = resolve
-    })
-  }
-
-  close(): void {
-    this.#closed = true
-    this.#items.length = 0
   }
 }
 
