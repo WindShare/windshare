@@ -307,7 +307,7 @@ func existingDirectoryHelperRequest(t *testing.T, operation string, includeLarge
 	return request{
 		SchemaVersion:          protocolVersion,
 		Operation:              operation,
-		ParentPath:             t.TempDir(),
+		ParentPath:             filepath.Join(t.TempDir(), "native-owned-publication-root"),
 		OutputName:             artifactpublish.ExistingDirectoryOutputName,
 		StagingName:            ".browser-evidence-upload-0123456789abcdef0123456789abcdef",
 		Artifacts:              []artifactRequest{},
