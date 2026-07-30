@@ -26,7 +26,7 @@ let vectors: PortablePathVectors
 
 beforeAll(async () => {
   const path = fileURLToPath(new URL(
-    '../../../testdata/browser-evidence/portable-path-vectors.json',
+    '../../../core/testvectors/portable-path-vectors.json',
     import.meta.url,
   ))
   vectors = JSON.parse(await readFile(path, 'utf8')) as PortablePathVectors

@@ -35,3 +35,48 @@ func TestPersistentDirectoryIdentityZeroValueIsEmpty(t *testing.T) {
 		t.Fatalf("zero identity = %x", identity.Bytes())
 	}
 }
+
+func TestTransientFileIdentityOwnsItsOpaqueEncoding(t *testing.T) {
+	source := []byte{0, 1, 2, 0xff}
+	identity := NewTransientFileIdentity("native-file-id", source)
+	source[0] = 9
+
+	if identity.IsZero() {
+		t.Fatal("complete identity reported zero")
+	}
+	if !identity.Equal(NewTransientFileIdentity("native-file-id", []byte{0, 1, 2, 0xff})) {
+		t.Fatal("identity changed with constructor input")
+	}
+	if identity.Equal(NewTransientFileIdentity("other-backend", []byte{0, 1, 2, 0xff})) {
+		t.Fatal("identical encoding from a different backend compared equal")
+	}
+	if identity.Equal(NewTransientFileIdentity("native-file-id", []byte{0, 1, 2, 3})) {
+		t.Fatal("different native encoding compared equal")
+	}
+}
+
+func TestTransientFileIdentityIncompleteValuesAreNeverComparable(t *testing.T) {
+	valid := NewTransientFileIdentity("native-file-id", []byte{1})
+	tests := []struct {
+		name     string
+		identity TransientFileIdentity
+	}{
+		{name: "zero value"},
+		{name: "missing domain", identity: NewTransientFileIdentity("", []byte{1})},
+		{name: "missing encoding", identity: NewTransientFileIdentity("native-file-id", nil)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if !test.identity.IsZero() {
+				t.Fatal("incomplete identity reported non-zero")
+			}
+			if test.identity.Equal(test.identity) {
+				t.Fatal("incomplete identity compared equal to itself")
+			}
+			if test.identity.Equal(valid) || valid.Equal(test.identity) {
+				t.Fatal("incomplete identity compared equal to a complete identity")
+			}
+		})
+	}
+}

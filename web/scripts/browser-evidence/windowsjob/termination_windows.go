@@ -124,7 +124,7 @@ func (job managedJob) captureTerminationSnapshotAttempt(
 		return snapshot, false, nil
 	}
 	if uint64(len(processIDs)) > uint64(totalProcessesBefore) {
-		return targetMemberSnapshot{}, false, errors.New("Job process snapshot exceeds its total-process generation")
+		return targetMemberSnapshot{}, false, errors.New("the Job Object process snapshot exceeds its total-process generation")
 	}
 	defer func() {
 		if resultErr != nil || retry {
@@ -138,7 +138,7 @@ func (job managedJob) captureTerminationSnapshotAttempt(
 	}
 	for _, processID := range processIDs {
 		if _, duplicate := retained[processID]; duplicate {
-			resultErr = errors.New("Job process snapshot contains a duplicate process ID")
+			resultErr = errors.New("the Job Object process snapshot contains a duplicate process ID")
 			return
 		}
 		var authority processExitAuthority
@@ -349,7 +349,7 @@ func waitForJobEmpty(job jobLifecycleAuthority, maximum time.Duration) error {
 			return nil
 		}
 		if !time.Now().Before(deadline) {
-			return errors.New("Job Object did not become empty within termination grace")
+			return errors.New("the Job Object did not become empty within termination grace")
 		}
 		time.Sleep(jobPollInterval)
 	}

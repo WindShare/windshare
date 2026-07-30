@@ -338,25 +338,33 @@ func (authority *ControlCredentialAuthority) grantedLeaseLocked(
 	if requested <= 0 || requested > maximumControlLease {
 		return 0, errors.New("control credential lease is outside authority")
 	}
-	granted := requested
-	if authority.fixture.ProfileID == "scheduled-coturn" {
-		if request.TURN == nil || !validControlTURNDeclaration(*request.TURN) {
-			return 0, errors.New("control credential TURN declaration is unavailable")
-		}
-		credentialExpiry, _ := parseCanonicalTimestamp(
-			request.TURN.ExpiresAt,
-		)
-		remaining := credentialExpiry.Sub(now)
-		if remaining < time.Millisecond || remaining > requested || remaining > authority.maximumLease {
-			return 0, errors.New("control credential Coturn lease is unavailable")
-		}
-		granted = remaining
-	} else if request.TURN != nil {
+	switch {
+	case authority.fixture.ProfileID == "scheduled-coturn":
+		return grantedScheduledCoturnLease(request.TURN, now, requested, authority.maximumLease)
+	case request.TURN != nil:
 		return 0, errors.New("control credential TURN declaration is unexpected")
-	} else if authority.maximumLease < granted {
-		granted = authority.maximumLease
+	case authority.maximumLease < requested:
+		return authority.maximumLease, nil
+	default:
+		return requested, nil
 	}
-	return granted, nil
+}
+
+func grantedScheduledCoturnLease(
+	declaration *ControlTURNDeclaration,
+	now time.Time,
+	requested time.Duration,
+	maximum time.Duration,
+) (time.Duration, error) {
+	if declaration == nil || !validControlTURNDeclaration(*declaration) {
+		return 0, errors.New("control credential TURN declaration is unavailable")
+	}
+	credentialExpiry, _ := parseCanonicalTimestamp(declaration.ExpiresAt)
+	remaining := credentialExpiry.Sub(now)
+	if remaining < time.Millisecond || remaining > requested || remaining > maximum {
+		return 0, errors.New("control credential Coturn lease is unavailable")
+	}
+	return remaining, nil
 }
 
 func sameControlCredentialAcquireRequest(

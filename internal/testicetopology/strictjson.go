@@ -11,7 +11,14 @@ import (
 	"unicode/utf8"
 )
 
-const maximumSafeJSONInteger = int64(1<<53 - 1)
+const (
+	maximumSafeJSONInteger = int64(1<<53 - 1)
+	highSurrogateFirst     = uint16(0xd800)
+	highSurrogateLast      = uint16(0xdbff)
+	lowSurrogateFirst      = uint16(0xdc00)
+	lowSurrogateLast       = uint16(0xdfff)
+	replacementCodeUnit    = uint16(0xfffd)
+)
 
 // validateCanonicalJSON keeps the Go and browser parsers on the same input
 // language. encoding/json alone loses duplicate names and accepts number forms
@@ -124,74 +131,101 @@ func (parser *canonicalJSONParser) string() (string, error) {
 	parser.offset++
 	var decoded strings.Builder
 	for parser.offset < len(parser.encoded) {
-		character := parser.encoded[parser.offset]
-		if character == '"' {
-			parser.offset++
+		terminated, err := parser.consumeStringElement(&decoded)
+		if err != nil {
+			return "", err
+		}
+		if terminated {
 			return decoded.String(), nil
-		}
-		if character < 0x20 {
-			return "", parser.fail("contains an unescaped string control character")
-		}
-		if character != '\\' {
-			r, size := utf8.DecodeRune(parser.encoded[parser.offset:])
-			if r == utf8.RuneError {
-				return "", parser.fail("contains the Unicode replacement character")
-			}
-			decoded.WriteRune(r)
-			parser.offset += size
-			continue
-		}
-
-		parser.offset++
-		if parser.offset >= len(parser.encoded) {
-			return "", parser.fail("contains an unterminated string escape")
-		}
-		escape := parser.encoded[parser.offset]
-		parser.offset++
-		switch escape {
-		case '"', '\\', '/':
-			decoded.WriteByte(escape)
-		case 'b':
-			decoded.WriteByte('\b')
-		case 'f':
-			decoded.WriteByte('\f')
-		case 'n':
-			decoded.WriteByte('\n')
-		case 'r':
-			decoded.WriteByte('\r')
-		case 't':
-			decoded.WriteByte('\t')
-		case 'u':
-			unit, err := parser.unicodeUnit()
-			if err != nil {
-				return "", err
-			}
-			if unit >= 0xd800 && unit <= 0xdbff {
-				if parser.offset+2 > len(parser.encoded) ||
-					parser.encoded[parser.offset] != '\\' || parser.encoded[parser.offset+1] != 'u' {
-					return "", parser.fail("contains an unpaired Unicode surrogate")
-				}
-				parser.offset += 2
-				low, lowErr := parser.unicodeUnit()
-				if lowErr != nil {
-					return "", lowErr
-				}
-				if low < 0xdc00 || low > 0xdfff {
-					return "", parser.fail("contains an unpaired Unicode surrogate")
-				}
-				decoded.WriteRune(utf16.DecodeRune(rune(unit), rune(low)))
-			} else if unit >= 0xdc00 && unit <= 0xdfff {
-				return "", parser.fail("contains an unpaired Unicode surrogate")
-			} else if unit == 0xfffd {
-				return "", parser.fail("contains the Unicode replacement character")
-			} else {
-				decoded.WriteRune(rune(unit))
-			}
-		default:
-			return "", parser.fail("contains an invalid string escape")
 		}
 	}
 	return "", parser.fail("contains an unterminated string")
+}
+
+func (parser *canonicalJSONParser) consumeStringElement(decoded *strings.Builder) (bool, error) {
+	character := parser.encoded[parser.offset]
+	switch {
+	case character == '"':
+		parser.offset++
+		return true, nil
+	case character < 0x20:
+		return false, parser.fail("contains an unescaped string control character")
+	case character == '\\':
+		parser.offset++
+		escaped, err := parser.escapedStringRune()
+		if err != nil {
+			return false, err
+		}
+		decoded.WriteRune(escaped)
+		return false, nil
+	default:
+		r, size := utf8.DecodeRune(parser.encoded[parser.offset:])
+		if r == utf8.RuneError {
+			return false, parser.fail("contains the Unicode replacement character")
+		}
+		decoded.WriteRune(r)
+		parser.offset += size
+		return false, nil
+	}
+}
+
+func (parser *canonicalJSONParser) escapedStringRune() (rune, error) {
+	if parser.offset >= len(parser.encoded) {
+		return 0, parser.fail("contains an unterminated string escape")
+	}
+	escape := parser.encoded[parser.offset]
+	parser.offset++
+	switch escape {
+	case '"', '\\', '/':
+		return rune(escape), nil
+	case 'b':
+		return '\b', nil
+	case 'f':
+		return '\f', nil
+	case 'n':
+		return '\n', nil
+	case 'r':
+		return '\r', nil
+	case 't':
+		return '\t', nil
+	case 'u':
+		return parser.unicodeEscapeRune()
+	default:
+		return 0, parser.fail("contains an invalid string escape")
+	}
+}
+
+func (parser *canonicalJSONParser) unicodeEscapeRune() (rune, error) {
+	unit, err := parser.unicodeUnit()
+	if err != nil {
+		return 0, err
+	}
+	switch {
+	case unit >= highSurrogateFirst && unit <= highSurrogateLast:
+		return parser.surrogatePairRune(unit)
+	case unit >= lowSurrogateFirst && unit <= lowSurrogateLast:
+		return 0, parser.fail("contains an unpaired Unicode surrogate")
+	case unit == replacementCodeUnit:
+		return 0, parser.fail("contains the Unicode replacement character")
+	default:
+		return rune(unit), nil
+	}
+}
+
+func (parser *canonicalJSONParser) surrogatePairRune(high uint16) (rune, error) {
+	if parser.offset+2 > len(parser.encoded) ||
+		parser.encoded[parser.offset] != '\\' || parser.encoded[parser.offset+1] != 'u' {
+		return 0, parser.fail("contains an unpaired Unicode surrogate")
+	}
+	parser.offset += 2
+	low, err := parser.unicodeUnit()
+	if err != nil {
+		return 0, err
+	}
+	if low < lowSurrogateFirst || low > lowSurrogateLast {
+		return 0, parser.fail("contains an unpaired Unicode surrogate")
+	}
+	return utf16.DecodeRune(rune(high), rune(low)), nil
 }
 
 func (parser *canonicalJSONParser) unicodeUnit() (uint16, error) {

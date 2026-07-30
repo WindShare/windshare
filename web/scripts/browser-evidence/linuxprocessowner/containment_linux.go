@@ -65,11 +65,19 @@ func (authority *inventoryAuthority) trackLocked(identity processIdentity) error
 	}
 	current, err := readStableProcessIdentity(identity.PID)
 	if err != nil || current.StartTimeTicks != identity.StartTimeTicks {
-		unix.Close(pidfd)
+		var identityFailure error
 		if err != nil {
-			return fmt.Errorf("revalidate pidfd identity %s: %w", key, err)
+			identityFailure = fmt.Errorf("revalidate pidfd identity %s: %w", key, err)
+		} else {
+			identityFailure = fmt.Errorf("pid %d was reused while acquiring pidfd", identity.PID)
 		}
-		return fmt.Errorf("pid %d was reused while acquiring pidfd", identity.PID)
+		closeErr := unix.Close(pidfd)
+		if closeErr != nil {
+			closeErr = fmt.Errorf("close unauthenticated pidfd for %s: %w", key, closeErr)
+		}
+		// Identity authentication is authoritative; descriptor cleanup can add
+		// evidence but must never replace the reason authority was refused.
+		return errors.Join(identityFailure, closeErr)
 	}
 	authority.tracked[key] = &trackedProcess{identity: identity, pidfd: pidfd}
 	return nil
