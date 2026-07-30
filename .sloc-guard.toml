@@ -60,6 +60,16 @@ max_lines = 1200
 reason = "Web tests need room for fixtures and golden vectors"
 
 [[content.rules]]
+pattern = "**/*.spec.ts"
+max_lines = 1200
+reason = "Playwright tests need the same fixture headroom as unit tests"
+
+[[content.rules]]
+pattern = "**/*.spec.tsx"
+max_lines = 1200
+reason = "Playwright tests need the same fixture headroom as unit tests"
+
+[[content.rules]]
 pattern = "web/test/**"
 max_lines = 1200
 reason = "Shared test fixtures and golden vectors"
@@ -75,9 +85,11 @@ warn_threshold = 0.8                      # Warn at 80% of limits (inherited by 
 # indicate production-module sprawl. Content limits above still apply.
 count_exclude = ["*_test.go", "*.test.ts", "*.test.tsx", "*.spec.ts", "*.spec.tsx"]
 
-# Go module roots (exact-match globs don't cover the root dir via "/**")
+# Repository source roots (exact-match globs don't cover the root dir via "/**").
+# Keeping connectivity and internal runtime packages in scope prevents test
+# infrastructure from escaping the same module boundaries as product code.
 [[structure.rules]]
-scope = "{cmd,core,relay,transport,webrtc}"
+scope = "{cmd,connectivity,core,internal,relay,transport}"
 max_files = 20
 max_dirs = 25
 warn_dirs_at = 20
@@ -85,7 +97,7 @@ warn_files_at = 15
 reason = "Go source: keep packages small and flat"
 
 [[structure.rules]]
-scope = "{cmd,core,relay,transport,webrtc}/**"
+scope = "{cmd,connectivity,core,internal,relay,transport}/**"
 max_files = 20
 max_dirs = 25
 warn_dirs_at = 20
@@ -93,19 +105,19 @@ warn_files_at = 15
 reason = "Go source: keep packages small and flat"
 
 [[structure.rules]]
-scope = "web/{src,test}"
-max_files = 30
+scope = "web/{e2e,scripts,src,test}"
+max_files = 20
 max_dirs = 25
 warn_dirs_at = 20
-warn_files_at = 24
+warn_files_at = 15
 reason = "Web source: keep component tree small and flat"
 
 [[structure.rules]]
-scope = "web/{src,test}/**"
-max_files = 30
+scope = "web/{e2e,scripts,src,test}/**"
+max_files = 20
 max_dirs = 25
 warn_dirs_at = 20
-warn_files_at = 24
+warn_files_at = 15
 reason = "Web source: keep component tree small and flat"
 
 # =============================================================================

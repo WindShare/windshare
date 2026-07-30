@@ -4,8 +4,16 @@ import { constants } from 'node:fs'
 import { lstat, mkdir, open, realpath } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 
+import {
+  BOOTSTRAP_GO_WORKSPACE_MODE,
+  assertBootstrapGoSourceInventory,
+  bootstrapOwnerPackage,
+  createBootstrapGoSourceAuthority,
+  parseBootstrapGoSourceInventory,
+} from './bootstrap-go-source-authority.mjs'
+
 export const BOOTSTRAP_BUILD_RECEIPT_SCHEMA_VERSION =
-  'windshare.bootstrap-build-receipt/v1'
+  'windshare.bootstrap-build-receipt/v2'
 
 const BOOTSTRAP_BUILD_DEADLINE_MS = 300_000
 const BOOTSTRAP_TERMINATION_GRACE_MS = 5_000
@@ -14,32 +22,20 @@ const MAXIMUM_EXECUTABLE_BYTES = 512 * 1024 * 1024
 const MAXIMUM_SOURCE_BYTES = 16 * 1024 * 1024
 const MAXIMUM_DIAGNOSTIC_PREVIEW_CHARACTERS = 512
 const BOOTSTRAP_GO_VERSION_RECIPE_IDENTITY = 'windshare.bootstrap-go-version/v1'
+const BOOTSTRAP_GO_MODULE_EDIT_RECIPE_IDENTITY = 'windshare.bootstrap-go-module-edit/v1'
+const BOOTSTRAP_GO_SOURCE_LIST_RECIPE_IDENTITY = 'windshare.bootstrap-go-source-list/v2'
 const BOOTSTRAP_OWNER_BUILD_RECIPE_IDENTITY = Object.freeze({
-  linux: 'windshare.bootstrap-owner-build/linux-process-owner/v1',
-  win32: 'windshare.bootstrap-owner-build/windows-job/v1',
+  linux: 'windshare.bootstrap-owner-build/linux-process-owner/v2',
+  win32: 'windshare.bootstrap-owner-build/windows-job/v2',
 })
 const GO_DOWNLOAD_PROGRESS_LINE_PATTERN =
   /^go: downloading ([A-Za-z0-9][A-Za-z0-9._~+!-]*(?:\/[A-Za-z0-9][A-Za-z0-9._~+!-]*)*) (v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/u
 const GO_SUM_LINE_PATTERN = /^([^\s]+) ([^\s]+?)(?:\/go\.mod)? h1:[A-Za-z0-9+/=]+$/u
 
-const OWNER_SOURCES = Object.freeze({
-  linux: Object.freeze([
-    'go.mod',
-    'go.sum',
-    'go.work',
-    'go.work.sum',
-    'web/scripts/browser-evidence/linuxprocessowner/main_linux.go',
-  ]),
-  win32: Object.freeze([
-    'go.mod',
-    'go.sum',
-    'go.work',
-    'go.work.sum',
-    'web/scripts/browser-evidence/windowsjob/main.go',
-    'web/scripts/browser-evidence/windowsjob/platform_windows.go',
-    'web/scripts/browser-evidence/windowsjob/protocol.go',
-  ]),
-})
+const BOOTSTRAP_MODULE_SOURCES = Object.freeze([
+  'go.mod',
+  'go.sum',
+])
 
 /**
  * Bootstrap is supply-chain authority, not process-containment authority. It is
@@ -56,39 +52,27 @@ export async function buildBootstrapProcessOwner({
   packagePath,
   cwd,
   deadlineMs = BOOTSTRAP_BUILD_DEADLINE_MS,
+  runProcess = runSealedBootstrapProcess,
 }) {
   const root = canonicalAbsolutePath(repositoryRoot, 'bootstrap repository root')
   const privateRoot = canonicalAbsolutePath(runtimeRoot, 'bootstrap runtime root')
   const executable = canonicalAbsolutePath(goExecutable, 'bootstrap Go executable')
   const output = canonicalAbsolutePath(outputPath, 'bootstrap owner output')
   const workingDirectory = canonicalAbsolutePath(cwd, 'bootstrap build working directory')
-  const expectedKind = platform === 'linux'
-    ? 'linux-process-owner'
-    : platform === 'win32'
-      ? 'windows-job'
-      : null
-  const expectedPackage = platform === 'linux'
-    ? './web/scripts/browser-evidence/linuxprocessowner'
-    : platform === 'win32'
-      ? './web/scripts/browser-evidence/windowsjob'
-      : null
-  if (expectedKind === null || packagePath !== expectedPackage || workingDirectory !== root) {
+  const owner = bootstrapOwnerPackage(platform, packagePath)
+  if (workingDirectory !== root) {
     throw new Error('bootstrap build is restricted to the current platform owner package')
   }
   requirePositiveInteger(deadlineMs, 'bootstrap build deadline')
+  if (typeof runProcess !== 'function') {
+    throw new Error('bootstrap sealed process runner is required')
+  }
   if (deadlineMs > BOOTSTRAP_BUILD_DEADLINE_MS) {
     throw new Error('bootstrap build deadline exceeds its named authority')
   }
   const goArchitecture = canonicalGoArchitecture(architecture)
-  const goOS = platform === 'win32' ? 'windows' : 'linux'
-  const sourcePaths = OWNER_SOURCES[platform]
+  const goOS = owner.goOS
   const cacheRoot = join(privateRoot, '.bootstrap-cache')
-  const environment = canonicalBootstrapEnvironment({
-    cacheRoot,
-    repositoryRoot: root,
-    goArchitecture,
-    goOS,
-  })
   await Promise.all([
     mkdir(join(cacheRoot, 'build'), { recursive: true, mode: 0o700 }),
     mkdir(join(cacheRoot, 'modules'), { recursive: true, mode: 0o700 }),
@@ -98,18 +82,20 @@ export async function buildBootstrapProcessOwner({
   ])
 
   const heldToolchain = await holdRegularFile(executable, MAXIMUM_EXECUTABLE_BYTES, 'Go toolchain')
-  const heldSources = []
+  let ownerSourceAuthority
   let heldOutput
   try {
-    for (const sourcePath of sourcePaths) {
-      heldSources.push(await holdRegularFile(
-        join(root, ...sourcePath.split('/')),
-        MAXIMUM_SOURCE_BYTES,
-        `bootstrap source ${sourcePath}`,
-      ))
-    }
-    const goSumSource = heldSources[sourcePaths.indexOf('go.sum')]
-    const goSumBytes = await goSumSource.readBytes()
+    ownerSourceAuthority = await createBootstrapGoSourceAuthority({
+      repositoryRoot: root,
+      runtimeRoot: privateRoot,
+      owner,
+      metadataRelativePaths: BOOTSTRAP_MODULE_SOURCES,
+      maximumSourceBytes: MAXIMUM_SOURCE_BYTES,
+      holdFile: holdRegularFile,
+    })
+    const commandRoot = ownerSourceAuthority.moduleRoot
+    const environment = canonicalBootstrapEnvironment({ cacheRoot, goArchitecture, goOS })
+    const goSumBytes = await ownerSourceAuthority.readSnapshotMetadata('go.sum')
     let encodedGoSum
     try {
       encodedGoSum = new TextDecoder('utf-8', { fatal: true }).decode(goSumBytes)
@@ -119,10 +105,10 @@ export async function buildBootstrapProcessOwner({
       goSumBytes.fill(0)
     }
     const allowedModuleDownloads = goModuleDownloadClosure(encodedGoSum)
-    const version = await runSealedBootstrapProcess({
+    const version = await runProcess({
       executable,
       arguments: Object.freeze(['version']),
-      cwd: root,
+      cwd: commandRoot,
       environment,
       deadlineMs: 30_000,
       operation: 'bootstrap-go-version',
@@ -133,7 +119,37 @@ export async function buildBootstrapProcessOwner({
         !/^go version go[^\s]+ [^\s]+\/[^\s]+\n$/u.test(version.stdout)) {
       throw new Error('bootstrap Go version probe emitted an unexpected identity')
     }
-    await assertHeldSetLive(heldToolchain, heldSources)
+    await Promise.all([heldToolchain.assertLive(), ownerSourceAuthority.assertLive()])
+    await resolveBootstrapModuleAuthority({
+      executable,
+      root: commandRoot,
+      environment,
+      runProcess,
+    })
+    await Promise.all([heldToolchain.assertLive(), ownerSourceAuthority.assertLive()])
+
+    const inventory = await resolveBootstrapOwnerSourceInventory({
+      executable,
+      root: commandRoot,
+      environment,
+      owner,
+      allowedModuleDownloads,
+      runProcess,
+    })
+    const selectedSources = ownerSourceAuthority.select(inventory)
+    const inventoryBeforeBuild = await resolveBootstrapOwnerSourceInventory({
+      executable,
+      root: commandRoot,
+      environment,
+      owner,
+      allowedModuleDownloads,
+      runProcess,
+    })
+    assertBootstrapGoSourceInventory(inventory, inventoryBeforeBuild)
+    await Promise.all([
+      heldToolchain.assertLive(),
+      ownerSourceAuthority.assertLive(),
+    ])
 
     const arguments_ = Object.freeze([
       'build',
@@ -143,29 +159,43 @@ export async function buildBootstrapProcessOwner({
       '-ldflags=-buildid=',
       '-o',
       output,
-      packagePath,
+      ...selectedSources.buildPaths,
     ])
-    const build = await runSealedBootstrapProcess({
+    const build = await runProcess({
       executable,
       arguments: arguments_,
-      cwd: workingDirectory,
+      cwd: commandRoot,
       environment,
       deadlineMs,
-      operation: `bootstrap-build-${expectedKind}`,
+      operation: `bootstrap-build-${owner.kind}`,
       recipeIdentity: BOOTSTRAP_OWNER_BUILD_RECIPE_IDENTITY[platform],
       spawnProcess: spawn,
     })
     assertBootstrapBuildOutput(build, allowedModuleDownloads)
-    await assertHeldSetLive(heldToolchain, heldSources)
+    const inventoryAfterBuild = await resolveBootstrapOwnerSourceInventory({
+      executable,
+      root: commandRoot,
+      environment,
+      owner,
+      allowedModuleDownloads,
+      runProcess,
+    })
+    assertBootstrapGoSourceInventory(inventory, inventoryAfterBuild)
+    await Promise.all([
+      heldToolchain.assertLive(),
+      ownerSourceAuthority.assertLive(),
+    ])
     heldOutput = await holdRegularFile(output, MAXIMUM_EXECUTABLE_BYTES, 'bootstrap owner output')
-    const sourceEntries = Object.freeze(heldSources.map((source, index) => Object.freeze({
-      relativePath: sourcePaths[index],
-      byteLength: source.byteLength,
-      sha256: source.sha256,
-    })))
+    const sourceEntries = Object.freeze(selectedSources.receiptSources.map(
+      ({ relativePath, authority }) => Object.freeze({
+        relativePath,
+        byteLength: authority.byteLength,
+        sha256: authority.sha256,
+      }),
+    ))
     const receipt = Object.freeze({
       schemaVersion: BOOTSTRAP_BUILD_RECEIPT_SCHEMA_VERSION,
-      kind: expectedKind,
+      kind: owner.kind,
       platform,
       architecture: goArchitecture,
       toolchain: Object.freeze({
@@ -179,9 +209,10 @@ export async function buildBootstrapProcessOwner({
         aggregateSha256: sha256(Buffer.from(JSON.stringify(sourceEntries), 'utf8')),
       }),
       recipe: Object.freeze({
+        identity: BOOTSTRAP_OWNER_BUILD_RECIPE_IDENTITY[platform],
         executable,
         arguments: arguments_,
-        cwd: workingDirectory,
+        cwd: commandRoot,
         environment,
         deadlineMs,
       }),
@@ -206,14 +237,17 @@ export async function buildBootstrapProcessOwner({
       receipt,
       async assertLive() {
         if (closed) throw new Error('bootstrap build authority is closed')
-        await assertHeldSetLive(heldToolchain, [...heldSources, heldOutput])
+        await Promise.all([
+          assertHeldSetLive(heldToolchain, [heldOutput]),
+          ownerSourceAuthority.assertLive(),
+        ])
       },
       async close() {
         if (closed) return
         closed = true
         await Promise.allSettled([
           heldToolchain.close(),
-          ...heldSources.map((source) => source.close()),
+          ownerSourceAuthority.close(),
           heldOutput.close(),
         ])
       },
@@ -221,14 +255,85 @@ export async function buildBootstrapProcessOwner({
   } catch (cause) {
     await Promise.allSettled([
       heldToolchain.close(),
-      ...heldSources.map((source) => source.close()),
+      ...(ownerSourceAuthority === undefined ? [] : [ownerSourceAuthority.close()]),
       ...(heldOutput === undefined ? [] : [heldOutput.close()]),
     ])
     throw cause
   }
 }
 
-function canonicalBootstrapEnvironment({ cacheRoot, repositoryRoot, goArchitecture, goOS }) {
+async function resolveBootstrapModuleAuthority({ executable, root, environment, runProcess }) {
+  const edited = await runProcess({
+    executable,
+    arguments: Object.freeze(['mod', 'edit', '-json']),
+    cwd: root,
+    environment,
+    deadlineMs: 30_000,
+    operation: 'bootstrap-go-module-edit',
+    recipeIdentity: BOOTSTRAP_GO_MODULE_EDIT_RECIPE_IDENTITY,
+    spawnProcess: spawn,
+  })
+  if (edited.stderr !== '') {
+    throw new Error(
+      'bootstrap Go module inspection emitted unexpected output: ' +
+      `stderr=${diagnosticText(edited.stderr)}`,
+    )
+  }
+  return parseBootstrapGoModuleAuthority(edited.stdout)
+}
+
+export function parseBootstrapGoModuleAuthority(encoded) {
+  if (typeof encoded !== 'string' || encoded === '') {
+    throw new Error('bootstrap Go module authority must be nonempty JSON text')
+  }
+  let value
+  try {
+    value = JSON.parse(encoded)
+  } catch (cause) {
+    throw new Error('bootstrap Go module authority is invalid JSON', { cause })
+  }
+  if (
+    value === null || typeof value !== 'object' || Array.isArray(value) ||
+    value.Module === null || typeof value.Module !== 'object' ||
+    Array.isArray(value.Module) || value.Module.Path !== 'github.com/windshare/windshare'
+  ) throw new Error('bootstrap Go module authority identifies an unexpected module')
+  if (value.Replace !== null && (!Array.isArray(value.Replace) || value.Replace.length > 0)) {
+    throw new Error('bootstrap Go module authority cannot prove replace directives are absent')
+  }
+  return Object.freeze({ modulePath: value.Module.Path })
+}
+
+async function resolveBootstrapOwnerSourceInventory({
+  executable,
+  root,
+  environment,
+  owner,
+  allowedModuleDownloads,
+  runProcess,
+}) {
+  const listed = await runProcess({
+    executable,
+    arguments: Object.freeze(['list', '-mod=readonly', '-json', owner.packagePath]),
+    cwd: root,
+    environment,
+    deadlineMs: 30_000,
+    operation: 'bootstrap-go-source-list',
+    recipeIdentity: BOOTSTRAP_GO_SOURCE_LIST_RECIPE_IDENTITY,
+    spawnProcess: spawn,
+  })
+  if (unexpectedGoCommandStderr(listed.stderr, allowedModuleDownloads)) {
+    throw new Error(
+      'bootstrap Go source discovery emitted unexpected output: ' +
+      `stderr=${diagnosticText(listed.stderr)}`,
+    )
+  }
+  return parseBootstrapGoSourceInventory(listed.stdout, {
+    repositoryRoot: root,
+    owner,
+  })
+}
+
+function canonicalBootstrapEnvironment({ cacheRoot, goArchitecture, goOS }) {
   const architectureFeature = goArchitecture === 'amd64'
     ? { GOAMD64: 'v1' }
     : { GOARM64: 'v8.0' }
@@ -247,7 +352,7 @@ function canonicalBootstrapEnvironment({ cacheRoot, repositoryRoot, goArchitectu
     GOPROXY: 'https://proxy.golang.org',
     GOSUMDB: 'sum.golang.org',
     GOTOOLCHAIN: 'local',
-    GOWORK: join(repositoryRoot, 'go.work'),
+    GOWORK: BOOTSTRAP_GO_WORKSPACE_MODE,
     HOME: join(cacheRoot, 'home'),
     TEMP: join(cacheRoot, 'tmp'),
     TMP: join(cacheRoot, 'tmp'),
@@ -349,7 +454,7 @@ function terminateBestEffort(child, signal) {
   }
 }
 
-async function holdRegularFile(path, maximumBytes, label) {
+export async function holdRegularFile(path, maximumBytes, label) {
   const canonical = canonicalAbsolutePath(path, label)
   if (await realpath(canonical) !== canonical) throw new Error(`${label} is not its canonical real path`)
   const named = await lstat(canonical, { bigint: true })
@@ -387,8 +492,14 @@ async function holdRegularFile(path, maximumBytes, label) {
       async readBytes() {
         await authority.assertLive()
         const bytes = await readHeldBytes(handle, authority.byteLength, label)
-        await authority.assertLive()
-        return bytes
+        try {
+          assertHeldBytesDigest(bytes, authority.sha256, label)
+          await authority.assertLive()
+          return bytes
+        } catch (cause) {
+          bytes.fill(0)
+          throw cause
+        }
       },
       async close() {
         if (closed) return
@@ -400,6 +511,12 @@ async function holdRegularFile(path, maximumBytes, label) {
   } catch (cause) {
     await handle.close().catch(() => undefined)
     throw cause
+  }
+}
+
+export function assertHeldBytesDigest(bytes, expectedSha256, label) {
+  if (sha256(bytes) !== expectedSha256) {
+    throw new Error(`${label} returned bytes outside its held digest`)
   }
 }
 
@@ -609,23 +726,27 @@ export function assertBootstrapBuildOutput({ stdout, stderr }, allowedDownloads)
   if (typeof stdout !== 'string' || typeof stderr !== 'string') {
     throw new Error('bootstrap owner build output must be text')
   }
-  // The private module cache deliberately starts empty. Go's verified module
-  // acquisition progress is therefore expected on a cold build, while any
-  // compiler warning, shell text, or malformed diagnostic remains fatal.
-  const allowed = new Set(requireStringArray(allowedDownloads, 'allowed Go module downloads'))
-  const lines = stderr === '' ? [] : stderr.endsWith('\n')
-    ? stderr.slice(0, -1).split('\n')
-    : null
-  const unexpected = lines === null || lines.some((line) => {
-    const match = GO_DOWNLOAD_PROGRESS_LINE_PATTERN.exec(line)
-    return match === null || !allowed.has(`${match[1]} ${match[2]}`)
-  })
-  if (stdout !== '' || unexpected) {
+  if (stdout !== '' || unexpectedGoCommandStderr(stderr, allowedDownloads)) {
     throw new Error(
       'bootstrap owner build emitted unexpected output: ' +
       `stdout=${diagnosticText(stdout)} stderr=${diagnosticText(stderr)}`,
     )
   }
+}
+
+function unexpectedGoCommandStderr(stderr, allowedDownloads) {
+  if (typeof stderr !== 'string') return true
+  // The private module cache deliberately starts empty. Go's verified module
+  // acquisition progress is therefore expected on a cold command, while any
+  // compiler warning, shell text, or malformed diagnostic remains fatal.
+  const allowed = new Set(requireStringArray(allowedDownloads, 'allowed Go module downloads'))
+  const lines = stderr === '' ? [] : stderr.endsWith('\n')
+    ? stderr.slice(0, -1).split('\n')
+    : null
+  return lines === null || lines.some((line) => {
+    const match = GO_DOWNLOAD_PROGRESS_LINE_PATTERN.exec(line)
+    return match === null || !allowed.has(`${match[1]} ${match[2]}`)
+  })
 }
 
 export function goModuleDownloadClosure(encodedGoSum) {
