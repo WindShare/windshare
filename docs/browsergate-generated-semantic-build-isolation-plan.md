@@ -8,7 +8,7 @@
 
 Make the generated reducer a deterministic, environment-isolated build artifact. The real verifier remains a runtime preflight, not a contract test; only its pure configuration, artifact, and orchestration logic enters contract discovery.
 
-Native memory authority is separate owner hardening. This P0 fixes the demonstrated root cause and does not claim that the raw developer CLI has an OS memory limit.
+This P0 fixes the isolation defect. External memory tooling is a one-time validation guard, not a product, local-development, or CI dependency; native memory authority remains separate owner hardening.
 
 ## Evidence
 
@@ -96,7 +96,7 @@ The related contract/workflow plan may establish its runner, directories, Make t
 1. Allow the related plan to establish `make browser-contract` and its fail-closed contract runner.
 2. Pin one exact Node version across local and CI entrypoints. Add pure regression contracts and hostile process fixtures without running the defective path.
 3. Refactor the clean-environment worker, isolated in-memory builder, artifact validator, typed result, and atomic publisher; delete the hand-maintained declaration file.
-4. Run the first real Windows and Linux builds inside external diagnostic memory bounds and compare their bytes; these bounds are validation evidence, not production owner authority.
+4. Run the first real Windows and Linux builds once inside external diagnostic memory bounds and compare their bytes; do not retain the tool as a project dependency.
 5. Regenerate once, then verify in independent Windows and Linux processes and review the generated diff.
 6. Wire the cross-platform process owner, then run `make browser-contract`, the generated-semantic process target, `make browser`, and `make ci`; complete the related plan's final validation.
 
