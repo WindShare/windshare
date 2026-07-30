@@ -55,6 +55,34 @@ type PersistentDirectoryIdentity struct {
 	encoded string
 }
 
+// TransientFileIdentity is a process-local comparison token used only when a
+// platform must release an open file before an immediately following namespace
+// mutation. It is deliberately not serializable: a live handle remains the
+// stronger authority, and native file identifiers are not restart ownership
+// proofs.
+type TransientFileIdentity struct {
+	domain  string
+	encoded string
+}
+
+// NewTransientFileIdentity copies a native identity into an immutable token.
+// The domain prevents accidentally comparing encodings from different native
+// backends.
+func NewTransientFileIdentity(domain string, encoded []byte) TransientFileIdentity {
+	return TransientFileIdentity{domain: domain, encoded: string(encoded)}
+}
+
+// Equal compares the complete opaque native identities.
+func (identity TransientFileIdentity) Equal(other TransientFileIdentity) bool {
+	return identity.domain != "" && identity.encoded != "" &&
+		identity.domain == other.domain && identity.encoded == other.encoded
+}
+
+// IsZero reports whether no native identity was supplied.
+func (identity TransientFileIdentity) IsZero() bool {
+	return identity.domain == "" || identity.encoded == ""
+}
+
 // NewPersistentDirectoryIdentity copies a native identity encoding into an
 // immutable value. Native encodings stay behind this boundary so callers cannot
 // mutate a previously admitted identity through a shared byte slice.
@@ -179,6 +207,22 @@ type File interface {
 	SetModifiedTime(catalog.ModifiedTime) error
 	MetadataMatches(uint64, catalog.ModifiedTime) (bool, error)
 	SameFile(File) (bool, error)
+}
+
+// CloseRevalidationIdentityProvider is optional because most consumers should
+// retain a File handle. Windows directory rename semantics require the artifact
+// publisher to close descendant handles first, so that one consumer captures a
+// short-lived identity and revalidates it immediately after the rename.
+type CloseRevalidationIdentityProvider interface {
+	CloseRevalidationIdentity() (TransientFileIdentity, error)
+}
+
+// PrivateDirectoryIdentityProvider exposes the restart-revalidatable identity
+// of a private staging directory. It is optional because general output
+// consumers must not confuse a cleanup receipt with public placement authority.
+type PrivateDirectoryIdentityProvider interface {
+	PreparePrivateIdentityClaim() (PersistentDirectoryIdentity, error)
+	PrivateIdentityClaim() (PersistentDirectoryIdentity, error)
 }
 
 // Lock retains both the namespace lock and the fixed file capability that

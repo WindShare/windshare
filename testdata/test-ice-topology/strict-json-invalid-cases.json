@@ -1,0 +1,65 @@
+{
+  "topologyContractCaseRegistrySchemaVersion": 1,
+  "cases": [
+    {
+      "name": "duplicate-root-member",
+      "needle": "\"topologyProfileSchemaVersion\":1",
+      "replacement": "\"topologyProfileSchemaVersion\":1,\"topologyProfileSchemaVersion\":1"
+    },
+    {
+      "name": "duplicate-nested-member",
+      "needle": "\"algorithm\":\"udp-connect-source-consensus-v1\"",
+      "replacement": "\"algorithm\":\"udp-connect-source-consensus-v1\",\"algorithm\":\"udp-connect-source-consensus-v1\""
+    },
+    {
+      "name": "duplicate-escaped-equivalent-member",
+      "needle": "\"algorithm\":\"udp-connect-source-consensus-v1\"",
+      "replacement": "\"algorithm\":\"udp-connect-source-consensus-v1\",\"\\u0061lgorithm\":\"udp-connect-source-consensus-v1\""
+    },
+    {
+      "name": "exponent-integer",
+      "needle": "\"topologyProfileSchemaVersion\":1",
+      "replacement": "\"topologyProfileSchemaVersion\":1e0"
+    },
+    {
+      "name": "decimal-integer",
+      "needle": "\"topologyProfileSchemaVersion\":1",
+      "replacement": "\"topologyProfileSchemaVersion\":1.0"
+    },
+    {
+      "name": "leading-plus-integer",
+      "needle": "\"topologyProfileSchemaVersion\":1",
+      "replacement": "\"topologyProfileSchemaVersion\":+1"
+    },
+    {
+      "name": "leading-zero-integer",
+      "needle": "\"topologyProfileSchemaVersion\":1",
+      "replacement": "\"topologyProfileSchemaVersion\":01"
+    },
+    {
+      "name": "negative-zero-integer",
+      "needle": "\"topologyProfileSchemaVersion\":1",
+      "replacement": "\"topologyProfileSchemaVersion\":-0"
+    },
+    {
+      "name": "unpaired-high-surrogate",
+      "needle": "pr-same-host-kernel-route-ipv4",
+      "replacement": "pr-same-host-kernel-route-ipv4\\ud800"
+    },
+    {
+      "name": "unpaired-low-surrogate",
+      "needle": "pr-same-host-kernel-route-ipv4",
+      "replacement": "pr-same-host-kernel-route-ipv4\\udfff"
+    },
+    {
+      "name": "escaped-replacement-character",
+      "needle": "pr-same-host-kernel-route-ipv4",
+      "replacement": "pr-same-host-kernel-route-ipv4\\ufffd"
+    },
+    {
+      "name": "literal-replacement-character",
+      "needle": "pr-same-host-kernel-route-ipv4",
+      "replacement": "pr-same-host-kernel-route-ipv4�"
+    }
+  ]
+}

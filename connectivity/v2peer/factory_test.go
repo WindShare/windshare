@@ -285,10 +285,6 @@ func TestSenderHandlerAnswersCandidatesAndAdmitsPeerChannel(t *testing.T) {
 	if err := channel.Close(); err != nil {
 		t.Fatalf("close peer channel: %v", err)
 	}
-	closedFailure := receiveTest(t, session.failures)
-	if closedFailure.operation != operation || closedFailure.code != protocolsession.PeerOperationCodeAdmission {
-		t.Fatalf("uncanceled channel close failure = %#v", closedFailure)
-	}
 	receiveTest(t, peer.closed)
 	waitForTest(t, func() bool {
 		handler.mu.Lock()
@@ -296,6 +292,11 @@ func TestSenderHandlerAnswersCandidatesAndAdmitsPeerChannel(t *testing.T) {
 		_, retired := handler.retiredOperations[operationKey]
 		return retired
 	})
+	select {
+	case closedFailure := <-session.failures:
+		t.Fatalf("normal post-admission close produced operation failure %#v", closedFailure)
+	default:
+	}
 
 	replayBody, _ := v2signal.EncodeOffer(v2signal.Offer{Binding: binding, SDP: "v=0\r\ns=replay\r\n"})
 	replayOperation := testOperationID(21)
@@ -332,8 +333,15 @@ func TestSenderHandlerRetainsBindingAcrossCompletionAndCancelUntilExpiry(t *test
 		factory: factory, session: handler.session, operation: operation,
 		offer: v2signal.Offer{Binding: binding, SDP: "v=0\r\n"}, onDone: handler.attemptDone,
 	})
-	handler.attempts[testPeerOperation(operation)] = attempt
-	handler.bindings[binding] = testPeerOperation(operation)
+	operationKey := testPeerOperation(operation)
+	handler.mu.Lock()
+	handler.attempts[operationKey] = attempt
+	handler.bindings[binding] = operationKey
+	if claim := handler.claimEvidenceLocked(operationKey, binding); !claim.acquired {
+		handler.mu.Unlock()
+		t.Fatalf("installed attempt evidence claim = %#v", claim)
+	}
+	handler.mu.Unlock()
 	handler.attemptDone(attempt, context.Canceled)
 
 	newOperation := testOperationID(31)
@@ -349,7 +357,7 @@ func TestSenderHandlerRetainsBindingAcrossCompletionAndCancelUntilExpiry(t *test
 		t.Fatalf("reserved replay budget = %v", err)
 	}
 	now = now.Add(30 * time.Second)
-	handler.retireRejectedOffer(testPeerOperation(newOperation), blockedBinding)
+	handler.claimRejectedOffer(testPeerOperation(newOperation), blockedBinding)
 
 	// Exhaustion fails closed for a full retention window measured from the
 	// rejected offer, even after the older tombstone itself expires.
@@ -362,13 +370,13 @@ func TestSenderHandlerRetainsBindingAcrossCompletionAndCancelUntilExpiry(t *test
 	now = now.Add(30 * time.Second)
 	if err := handler.startAttempt(
 		context.Background(), testPeerOperation(newOperation), v2signal.Offer{Binding: binding, SDP: "v=0\r\n"},
-	); err != nil {
-		t.Fatalf("binding reuse after fail-closed expiry: %v", err)
+	); !errors.Is(err, v2signal.ErrSignalBinding) {
+		t.Fatalf("session-lifetime evidence binding reuse = %v", err)
 	}
-	handler.work.Wait()
 
-	// A new ProtocolSession receives an isolated handler and may reuse an old
-	// path/attempt pair because the authenticated session authority changed.
+	// Replay tombstones may expire, but evidence identity cannot: accepting this
+	// pair again would restart sideSequence inside one ProtocolSession. A new
+	// ProtocolSession receives an isolated evidence authority and may reuse it.
 	reconnected := newDirectTestHandler(t, factory, newTestPeerSession(9))
 	if err := reconnected.startAttempt(
 		context.Background(), testPeerOperation(testOperationID(32)), v2signal.Offer{Binding: binding, SDP: "v=0\r\n"},
@@ -462,7 +470,9 @@ func TestSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
 }
 
 func TestSenderHandlerQueueOverflowTombstonesRejectedOfferBinding(t *testing.T) {
+	collector := &senderObservationCollector{}
 	factory := mustTestFactory(t, Config{
+		Observer: SenderAttemptObserverFunc(collector.observe),
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return nil, errors.New("unexpected attempt")
 		}),
@@ -485,19 +495,32 @@ func TestSenderHandlerQueueOverflowTombstonesRejectedOfferBinding(t *testing.T) 
 	if failure.operation != operation || failure.code != protocolsession.PeerOperationCodeNegotiation {
 		t.Fatalf("overflow failure = %#v", failure)
 	}
+	assertUnstartedSenderTerminal(
+		t,
+		collector.forAttempt(binding.AttemptID),
+		AttemptFailureScopeAttempt,
+		TypedPeerErrorNegotiation,
+	)
 	if err := handler.startAttempt(
 		context.Background(), testPeerOperation(testOperationID(132)), v2signal.Offer{Binding: binding, SDP: "v=0\r\n"},
 	); !errors.Is(err, v2signal.ErrSignalBinding) {
 		t.Fatalf("overflowed offer binding replay = %v", err)
 	}
+	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 3 {
+		t.Fatalf("overflowed binding restarted evidence: %#v", observations)
+	}
 }
 
-func TestSenderHandlerSuppressesOfferCanceledBeforePublication(t *testing.T) {
-	factory := mustTestFactory(t, Config{})
+func TestSenderHandlerTerminalizesOfferCanceledBeforePublication(t *testing.T) {
+	collector := &senderObservationCollector{}
+	factory := mustTestFactory(t, Config{
+		Observer: SenderAttemptObserverFunc(collector.observe),
+	})
 	handler := newDirectTestHandler(t, factory, newTestPeerSession(27))
 	operation := testOperationID(140)
+	binding := testBinding(141)
 	body, _ := v2signal.EncodeOffer(v2signal.Offer{
-		Binding: testBinding(141), SDP: "v=0\r\n",
+		Binding: binding, SDP: "v=0\r\n",
 	})
 	message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
 	operations, _ := protocolsession.NewOperationTable(
@@ -518,9 +541,24 @@ func TestSenderHandlerSuppressesOfferCanceledBeforePublication(t *testing.T) {
 	if len(handler.events) != 0 {
 		t.Fatal("canceled peer offer reached the negotiation queue")
 	}
+	assertUnstartedSenderTerminal(
+		t,
+		collector.forAttempt(binding.AttemptID),
+		AttemptFailureScopeAttempt,
+		TypedPeerErrorCancelled,
+	)
+	if err := handler.HandleMessage(messageContext, message); err != nil {
+		t.Fatalf("canceled offer replay: %v", err)
+	}
+	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 3 {
+		t.Fatalf("canceled offer replay restarted evidence: %#v", observations)
+	}
 
 	sibling := testOperationID(142)
-	siblingMessage := testMessage(t, protocolsession.MessagePeerOffer, sibling, body)
+	siblingBody, _ := v2signal.EncodeOffer(v2signal.Offer{
+		Binding: testBinding(143), SDP: "v=0\r\n",
+	})
+	siblingMessage := testMessage(t, protocolsession.MessagePeerOffer, sibling, siblingBody)
 	if err := handler.HandleMessage(
 		testPeerMessageContext(t, context.Background(), siblingMessage), siblingMessage,
 	); err != nil {

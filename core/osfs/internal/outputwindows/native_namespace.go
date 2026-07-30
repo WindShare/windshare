@@ -270,6 +270,14 @@ func windowsV3RootDirectoryAccess() uint32 {
 	return windowsV3DirectoryAccess() &^ windows.DELETE
 }
 
+func windowsV3PrivateRootParentAccess() uint32 {
+	// The child starts delete-on-close and carries its own DELETE authority, so
+	// rollback never needs ambient FILE_DELETE_CHILD. Excluding FILE_ADD_FILE as
+	// well keeps this capability unable to create any non-directory entry.
+	return windowsV3RootDirectoryAccess() &^
+		(windowsV3DirectoryDeleteChild | windowsV3DirectoryAddFile)
+}
+
 func windowsV3PrivateFileAccess() uint32 {
 	return windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE | windows.FILE_READ_ATTRIBUTES |
 		windows.FILE_WRITE_ATTRIBUTES | windows.READ_CONTROL | windows.DELETE | windows.SYNCHRONIZE

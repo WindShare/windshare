@@ -90,7 +90,7 @@ class FakeCatalogSession {
         if (message === undefined) throw new Error('test operation exhausted')
         return message
       },
-      close: () => undefined,
+      cancel: () => undefined,
     }
   }
 

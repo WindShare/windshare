@@ -20,14 +20,17 @@ import (
 )
 
 const (
-	networkManifestSchemaVersion = 3
+	networkManifestSchemaVersion = 4
+	executionClassParallel       = "parallel"
+	executionClassExclusive      = "exclusive"
 )
 
 var manifestPackageNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 type packageRecord struct {
-	Name string `json:"Name"`
-	Path string `json:"Path"`
+	Name           string `json:"Name"`
+	Path           string `json:"Path"`
+	ExecutionClass string `json:"ExecutionClass"`
 }
 
 type manifestDocument struct {
@@ -36,7 +39,8 @@ type manifestDocument struct {
 }
 
 type fixedManifest struct {
-	packages map[string]bool
+	packages         map[string]bool
+	executionClasses map[string]string
 }
 
 type analysisResult struct {
@@ -142,21 +146,25 @@ func loadManifest(path string) (fixedManifest, error) {
 		)
 	}
 	packages := make(map[string]bool, len(document.Packages))
+	executionClasses := make(map[string]string, len(document.Packages))
 	names := make(map[string]bool, len(document.Packages))
 	for _, record := range document.Packages {
 		path := strings.TrimPrefix(filepath.ToSlash(record.Path), "./")
 		if !manifestPackageNamePattern.MatchString(record.Name) ||
 			path == "" || path == "." || strings.HasPrefix(path, "../") ||
+			(record.ExecutionClass != executionClassParallel &&
+				record.ExecutionClass != executionClassExclusive) ||
 			packages[path] || names[record.Name] {
 			return fixedManifest{}, fmt.Errorf("invalid or duplicate package record: %+v", record)
 		}
 		packages[path] = true
+		executionClasses[path] = record.ExecutionClass
 		names[record.Name] = true
 	}
 	if len(packages) == 0 {
 		return fixedManifest{}, errors.New("fixed package manifest has no active packages")
 	}
-	return fixedManifest{packages: packages}, nil
+	return fixedManifest{packages: packages, executionClasses: executionClasses}, nil
 }
 
 func fatalf(format string, arguments ...any) {

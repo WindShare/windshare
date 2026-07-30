@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -57,63 +58,68 @@ type terminalFixture struct {
 }
 
 type publicConfig struct {
-	Scenario             string `json:"scenario"`
-	ChannelLabel         string `json:"channelLabel"`
-	ChannelProtocol      string `json:"channelProtocol"`
-	InvalidProtocol      string `json:"invalidProtocol"`
-	TerminalIntent       string `json:"terminalIntent"`
-	TerminalAck          string `json:"terminalAck"`
-	MaxFrameSize         int    `json:"maxFrameSize"`
-	LowWaterBytes        uint64 `json:"lowWaterBytes"`
-	HighWaterBytes       uint64 `json:"highWaterBytes"`
-	MaximumBursts        int    `json:"maximumBursts"`
-	ClientProbeMarker    byte   `json:"clientProbeMarker"`
-	ClientBurstMarker    byte   `json:"clientBurstMarker"`
-	ClientFinishedMarker byte   `json:"clientFinishedMarker"`
-	ServerProbeMarker    byte   `json:"serverProbeMarker"`
-	ServerBurstMarker    byte   `json:"serverBurstMarker"`
-	ServerFinishedMarker byte   `json:"serverFinishedMarker"`
-	ServerTerminalMarker byte   `json:"serverTerminalMarker"`
-	CanceledSendMarker   byte   `json:"canceledSendMarker"`
-	CancellationBarrier  byte   `json:"cancellationBarrier"`
-	RemoteCloseMarker    byte   `json:"remoteCloseMarker"`
-	TerminalFrameBytes   int    `json:"terminalFrameBytes"`
+	Scenario             string                  `json:"scenario"`
+	ChannelLabel         string                  `json:"channelLabel"`
+	ChannelProtocol      string                  `json:"channelProtocol"`
+	InvalidProtocol      string                  `json:"invalidProtocol"`
+	TerminalIntent       string                  `json:"terminalIntent"`
+	TerminalAck          string                  `json:"terminalAck"`
+	MaxFrameSize         int                     `json:"maxFrameSize"`
+	LowWaterBytes        uint64                  `json:"lowWaterBytes"`
+	HighWaterBytes       uint64                  `json:"highWaterBytes"`
+	MaximumBursts        int                     `json:"maximumBursts"`
+	ClientProbeMarker    byte                    `json:"clientProbeMarker"`
+	ClientBurstMarker    byte                    `json:"clientBurstMarker"`
+	ClientFinishedMarker byte                    `json:"clientFinishedMarker"`
+	ServerProbeMarker    byte                    `json:"serverProbeMarker"`
+	ServerBurstMarker    byte                    `json:"serverBurstMarker"`
+	ServerFinishedMarker byte                    `json:"serverFinishedMarker"`
+	ServerTerminalMarker byte                    `json:"serverTerminalMarker"`
+	CanceledSendMarker   byte                    `json:"canceledSendMarker"`
+	CancellationBarrier  byte                    `json:"cancellationBarrier"`
+	RemoteCloseMarker    byte                    `json:"remoteCloseMarker"`
+	TerminalFrameBytes   int                     `json:"terminalFrameBytes"`
+	TopologyLock         *serializedTopologyLock `json:"topologyLock,omitempty"`
 }
 
 type observation struct {
-	ChannelLabel             string   `json:"channelLabel"`
-	ChannelProtocol          string   `json:"channelProtocol"`
-	Ordered                  bool     `json:"ordered"`
-	Reliable                 bool     `json:"reliable"`
-	Negotiated               bool     `json:"negotiated"`
-	SCTPMaxMessageSize       uint32   `json:"sctpMaxMessageSize"`
-	ClientProbeReceived      bool     `json:"clientProbeReceived"`
-	ClientBurstMessages      int      `json:"clientBurstMessages"`
-	ServerProbeSent          bool     `json:"serverProbeSent"`
-	ServerBurstMessages      int      `json:"serverBurstMessages"`
-	ServerBufferPeak         uint64   `json:"serverBufferPeak"`
-	TerminalAcknowledged     bool     `json:"terminalAcknowledged"`
-	SendWaitObserved         bool     `json:"sendWaitObserved"`
-	SendCanceled             bool     `json:"sendCanceled"`
-	SendError                string   `json:"sendError"`
-	SendErrorCanceled        bool     `json:"sendErrorCanceled"`
-	SendErrorRemoteClosed    bool     `json:"sendErrorRemoteClosed"`
-	ChannelDone              bool     `json:"channelDone"`
-	ChannelStateClosed       bool     `json:"channelStateClosed"`
-	ChannelError             string   `json:"channelError"`
-	ChannelErrorRemoteClosed bool     `json:"channelErrorRemoteClosed"`
-	ChannelCreated           bool     `json:"channelCreated"`
-	ChannelOpened            bool     `json:"channelOpened"`
-	ChannelStateObserved     bool     `json:"channelStateObserved"`
-	InvalidChannelRejected   bool     `json:"invalidChannelRejected"`
-	InvalidChannelError      string   `json:"invalidChannelError"`
-	InvalidChannelErrorTyped bool     `json:"invalidChannelErrorTyped"`
-	RawChannelState          string   `json:"rawChannelState"`
-	RawChannelStateClosed    bool     `json:"rawChannelStateClosed"`
-	PhysicalCloseSettled     bool     `json:"physicalCloseSettled"`
-	PeerCloseSettled         bool     `json:"peerCloseSettled"`
-	Events                   []string `json:"events"`
-	Errors                   []string `json:"errors"`
+	AttemptID                string                    `json:"attemptId,omitempty"`
+	SelectedPair             *pionSelectedPairEvidence `json:"selectedPair,omitempty"`
+	TopologyProfileSHA256    string                    `json:"topologyProfileSha256,omitempty"`
+	TopologyResolutionSHA256 string                    `json:"topologyResolutionSha256,omitempty"`
+	ChannelLabel             string                    `json:"channelLabel"`
+	ChannelProtocol          string                    `json:"channelProtocol"`
+	Ordered                  bool                      `json:"ordered"`
+	Reliable                 bool                      `json:"reliable"`
+	Negotiated               bool                      `json:"negotiated"`
+	SCTPMaxMessageSize       uint32                    `json:"sctpMaxMessageSize"`
+	ClientProbeReceived      bool                      `json:"clientProbeReceived"`
+	ClientBurstMessages      int                       `json:"clientBurstMessages"`
+	ServerProbeSent          bool                      `json:"serverProbeSent"`
+	ServerBurstMessages      int                       `json:"serverBurstMessages"`
+	ServerBufferPeak         uint64                    `json:"serverBufferPeak"`
+	TerminalAcknowledged     bool                      `json:"terminalAcknowledged"`
+	SendWaitObserved         bool                      `json:"sendWaitObserved"`
+	SendCanceled             bool                      `json:"sendCanceled"`
+	SendError                string                    `json:"sendError"`
+	SendErrorCanceled        bool                      `json:"sendErrorCanceled"`
+	SendErrorRemoteClosed    bool                      `json:"sendErrorRemoteClosed"`
+	ChannelDone              bool                      `json:"channelDone"`
+	ChannelStateClosed       bool                      `json:"channelStateClosed"`
+	ChannelError             string                    `json:"channelError"`
+	ChannelErrorRemoteClosed bool                      `json:"channelErrorRemoteClosed"`
+	ChannelCreated           bool                      `json:"channelCreated"`
+	ChannelOpened            bool                      `json:"channelOpened"`
+	ChannelStateObserved     bool                      `json:"channelStateObserved"`
+	InvalidChannelRejected   bool                      `json:"invalidChannelRejected"`
+	InvalidChannelError      string                    `json:"invalidChannelError"`
+	InvalidChannelErrorTyped bool                      `json:"invalidChannelErrorTyped"`
+	RawChannelState          string                    `json:"rawChannelState"`
+	RawChannelStateClosed    bool                      `json:"rawChannelStateClosed"`
+	PhysicalCloseSettled     bool                      `json:"physicalCloseSettled"`
+	PeerCloseSettled         bool                      `json:"peerCloseSettled"`
+	Events                   []string                  `json:"events"`
+	Errors                   []string                  `json:"errors"`
 }
 
 type actionResponse struct {
@@ -121,9 +127,10 @@ type actionResponse struct {
 }
 
 type interopServer struct {
-	peer    *pion.PeerConnection
-	config  publicConfig
-	handler http.Handler
+	peer     *pion.PeerConnection
+	config   publicConfig
+	handler  http.Handler
+	topology *topologyRuntime
 
 	mu          sync.Mutex
 	offerMu     sync.Mutex
@@ -135,7 +142,20 @@ type interopServer struct {
 }
 
 func main() {
-	server, err := newInteropServer()
+        if len(os.Args) == 2 && os.Args[1] == "self-check" {
+                fmt.Println(`{"schemaVersion":1,"component":"pion-browser-interop-server","outcome":"ready"}`)
+                return
+        }
+        if len(os.Args) != 1 {
+                panic("Pion browser interop server accepts only the self-check command")
+        }
+        topologyContext, cancelTopology := context.WithTimeout(context.Background(), operationLimit)
+	defer cancelTopology()
+	topology, err := loadTopologyRuntime(topologyContext)
+	if err != nil {
+		panic(err)
+	}
+	server, err := newInteropServer(topology)
 	if err != nil {
 		panic(err)
 	}
@@ -172,7 +192,14 @@ func newLoopbackOnlyPeer() (*pion.PeerConnection, error) {
 	return pion.NewAPI(pion.WithSettingEngine(setting)).NewPeerConnection(pion.Configuration{})
 }
 
-func newInteropServer() (*interopServer, error) {
+func (s *interopServer) newPeerConnection() (*pion.PeerConnection, error) {
+	if s.topology == nil {
+		return newLoopbackOnlyPeer()
+	}
+	return s.topology.newPeerConnection()
+}
+
+func newInteropServer(topology *topologyRuntime) (*interopServer, error) {
 	scenario := os.Getenv(scenarioEnvName)
 	if scenario == "" {
 		scenario = scenarioHappy
@@ -192,6 +219,7 @@ func newInteropServer() (*interopServer, error) {
 		return nil, fmt.Errorf("decode terminal-control fixture: %w", err)
 	}
 	server := &interopServer{
+		topology: topology,
 		config: publicConfig{
 			Scenario:             scenario,
 			ChannelLabel:         windwebrtc.ChannelLabel,
@@ -216,6 +244,10 @@ func newInteropServer() (*interopServer, error) {
 			TerminalFrameBytes:   terminalFrameBytes,
 		},
 	}
+	if topology != nil {
+		publicLock := topology.public
+		server.config.TopologyLock = &publicLock
+	}
 	if err := server.replacePeer(); err != nil {
 		return nil, err
 	}
@@ -231,13 +263,14 @@ func newInteropServer() (*interopServer, error) {
 	mux.HandleFunc("POST /offer", server.handleOffer)
 	mux.HandleFunc("GET /action", server.handleAction)
 	mux.HandleFunc("GET /result", server.handleResult)
+	mux.HandleFunc("GET /snapshot", server.handleSnapshot)
 	mux.Handle("/", http.FileServer(http.FS(web)))
 	server.handler = mux
 	return server, nil
 }
 
 func (s *interopServer) replacePeer() error {
-	peer, err := newLoopbackOnlyPeer()
+	peer, err := s.newPeerConnection()
 	if err != nil {
 		return fmt.Errorf("create Pion peer: %w", err)
 	}
@@ -246,6 +279,10 @@ func (s *interopServer) replacePeer() error {
 	s.peer = peer
 	s.channelOnce = sync.Once{}
 	s.result = observation{Events: []string{}, Errors: []string{}}
+	if s.topology != nil {
+		s.result.TopologyProfileSHA256 = s.topology.profileSHA256
+		s.result.TopologyResolutionSHA256 = s.topology.resolutionSHA256
+	}
 	s.done = make(chan struct{})
 	s.doneOnce = sync.Once{}
 	s.actions = make(chan string, 1)
@@ -256,7 +293,7 @@ func (s *interopServer) replacePeer() error {
 			_ = raw.Close()
 			return
 		}
-		s.onDataChannel(raw)
+		s.onDataChannel(peer, raw)
 	})
 	peer.OnConnectionStateChange(func(state pion.PeerConnectionState) {
 		if !s.isCurrentPeer(peer) {
@@ -334,8 +371,8 @@ func (s *interopServer) handleOffer(w http.ResponseWriter, request *http.Request
 		return
 	}
 	request.Body = http.MaxBytesReader(w, request.Body, 1024*1024)
-	var offer pion.SessionDescription
-	if err := json.NewDecoder(request.Body).Decode(&offer); err != nil {
+	offer, attemptID, err := s.decodeOffer(request)
+	if err != nil {
 		http.Error(w, "decode browser offer: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -343,17 +380,31 @@ func (s *interopServer) handleOffer(w http.ResponseWriter, request *http.Request
 		http.Error(w, "browser payload is not an SDP offer", http.StatusBadRequest)
 		return
 	}
+	if attemptID != "" {
+		s.mu.Lock()
+		if s.result.AttemptID != "" {
+			s.mu.Unlock()
+			http.Error(w, "Pion peer already owns a native attempt", http.StatusConflict)
+			return
+		}
+		s.result.AttemptID = attemptID
+		s.result.Events = append(s.result.Events, "native-attempt-started")
+		s.mu.Unlock()
+	}
 	if err := peer.SetRemoteDescription(offer); err != nil {
+		s.fail("apply browser offer: " + err.Error())
 		http.Error(w, "apply browser offer: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	answer, err := peer.CreateAnswer(nil)
 	if err != nil {
+		s.fail("create Pion answer: " + err.Error())
 		http.Error(w, "create Pion answer: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	gathered := pion.GatheringCompletePromise(peer)
 	if err := peer.SetLocalDescription(answer); err != nil {
+		s.fail("apply Pion answer: " + err.Error())
 		http.Error(w, "apply Pion answer: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -362,10 +413,54 @@ func (s *interopServer) handleOffer(w http.ResponseWriter, request *http.Request
 	select {
 	case <-gathered:
 	case <-ctx.Done():
+		s.fail("Pion ICE gathering timed out")
 		http.Error(w, "Pion ICE gathering timed out", http.StatusGatewayTimeout)
 		return
 	}
 	writeJSON(w, http.StatusOK, peer.LocalDescription())
+}
+
+type topologyOfferRequest struct {
+	AttemptID string                  `json:"attemptId"`
+	Offer     pion.SessionDescription `json:"offer"`
+}
+
+func (s *interopServer) decodeOffer(request *http.Request) (pion.SessionDescription, string, error) {
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if s.topology == nil {
+		var offer pion.SessionDescription
+		if err := decoder.Decode(&offer); err != nil {
+			return pion.SessionDescription{}, "", err
+		}
+		if err := requireJSONEnd(decoder); err != nil {
+			return pion.SessionDescription{}, "", err
+		}
+		return offer, "", nil
+	}
+	var envelope topologyOfferRequest
+	if err := decoder.Decode(&envelope); err != nil {
+		return pion.SessionDescription{}, "", err
+	}
+	if err := requireJSONEnd(decoder); err != nil {
+		return pion.SessionDescription{}, "", err
+	}
+	if !validAttemptID(envelope.AttemptID) {
+		return pion.SessionDescription{}, "", fmt.Errorf("attemptId is not canonical nonzero 16-byte base64url")
+	}
+	return envelope.Offer, envelope.AttemptID, nil
+}
+
+func requireJSONEnd(decoder *json.Decoder) error {
+	var trailing json.RawMessage
+	err := decoder.Decode(&trailing)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err == nil {
+		return fmt.Errorf("request contains more than one JSON value")
+	}
+	return err
 }
 
 func (s *interopServer) handleResult(w http.ResponseWriter, request *http.Request) {
@@ -374,17 +469,29 @@ func (s *interopServer) handleResult(w http.ResponseWriter, request *http.Reques
 	s.mu.Unlock()
 	select {
 	case <-done:
-		s.mu.Lock()
-		result := s.result
-		result.Events = append([]string{}, result.Events...)
-		result.Errors = append([]string{}, result.Errors...)
-		s.mu.Unlock()
-		writeJSON(w, http.StatusOK, result)
+		writeJSON(w, http.StatusOK, s.resultSnapshot())
 	case <-request.Context().Done():
 	}
 }
 
-func (s *interopServer) onDataChannel(raw *pion.DataChannel) {
+func (s *interopServer) handleSnapshot(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.resultSnapshot())
+}
+
+func (s *interopServer) resultSnapshot() observation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := s.result
+	result.Events = append([]string{}, result.Events...)
+	result.Errors = append([]string{}, result.Errors...)
+	if result.SelectedPair != nil {
+		pair := *result.SelectedPair
+		result.SelectedPair = &pair
+	}
+	return result
+}
+
+func (s *interopServer) onDataChannel(peer *pion.PeerConnection, raw *pion.DataChannel) {
 	accepted := false
 	s.channelOnce.Do(func() {
 		accepted = true
@@ -416,14 +523,18 @@ func (s *interopServer) onDataChannel(raw *pion.DataChannel) {
 		s.mu.Lock()
 		s.result.ChannelCreated = true
 		s.mu.Unlock()
-		go s.runChannel(channel, raw)
+		go s.runChannel(peer, channel, raw)
 	})
 	if !accepted {
 		s.fail("peer created more than one DataChannel")
 	}
 }
 
-func (s *interopServer) runChannel(channel *windwebrtc.Channel, raw *pion.DataChannel) {
+func (s *interopServer) runChannel(
+	peer *pion.PeerConnection,
+	channel *windwebrtc.Channel,
+	raw *pion.DataChannel,
+) {
 	timer := time.NewTimer(operationLimit)
 	defer timer.Stop()
 	select {
@@ -433,6 +544,24 @@ func (s *interopServer) runChannel(channel *windwebrtc.Channel, raw *pion.DataCh
 		s.result.ChannelOpened = true
 		s.result.SCTPMaxMessageSize = raw.Transport().GetCapabilities().MaxMessageSize
 		s.mu.Unlock()
+		if s.topology != nil {
+			pair, err := s.topology.selectedPairEvidence(peer)
+			if err != nil {
+				s.fail("capture topology-bound Pion selected pair: " + err.Error())
+				_ = channel.Close()
+				return
+			}
+			s.mu.Lock()
+			if s.result.AttemptID == "" {
+				s.mu.Unlock()
+				s.fail("Pion DataChannel opened without a correlated native attempt ID")
+				_ = channel.Close()
+				return
+			}
+			s.result.SelectedPair = &pair
+			s.result.Events = append(s.result.Events, "selected-pair-captured")
+			s.mu.Unlock()
+		}
 	case <-channel.Done():
 		s.fail("production Channel closed before opening: " + errorText(channel.Err()))
 		return

@@ -9,34 +9,46 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 )
 
-func (handler *senderHandler) retireRejectedOffer(
+func (handler *senderHandler) claimRejectedOffer(
 	operation peerOperation,
 	binding v2signal.Binding,
-) {
+) evidenceClaim {
 	if binding.Validate() != nil {
-		return
+		return evidenceClaim{}
 	}
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
 	handler.expireRetiredLocked(handler.factory.now())
+	_, activeBinding := handler.bindings[binding]
+	claim := handler.claimEvidenceLocked(operation, binding)
+	if activeBinding {
+		// An active recorder owns this identity. Reserving a missing claim repairs
+		// focused harness state without publishing a competing sideSequence=1.
+		claim.acquired = false
+		return claim
+	}
 	if handler.attempts[operation] != nil {
-		return
+		// Reusing an operation with a new binding is still the first rejection of
+		// that distinct evidence identity, even though it also stops the collision.
+		return claim
 	}
-	if _, exists := handler.bindings[binding]; exists {
-		return
+	if claim.sessionTerminal {
+		return claim
 	}
-	if _, exists := handler.retiredOperations[operation]; exists {
-		return
+	_, retiredOperation := handler.retiredOperations[operation]
+	_, retiredBindingExists := handler.retiredBindings[binding]
+	if retiredOperation || retiredBindingExists {
+		return claim
 	}
-	if _, exists := handler.retiredBindings[binding]; exists {
-		return
+	if handler.stopping {
+		return claim
 	}
 	if len(handler.bindings)+len(handler.retiredBindings) >= handler.factory.maxRetiredBindings {
 		blockedUntil := handler.factory.now().Add(handler.factory.retiredBindingTTL)
 		if handler.replayBlockedUntil.Before(blockedUntil) {
 			handler.replayBlockedUntil = blockedUntil
 		}
-		return
+		return claim
 	}
 	retired := retiredBinding{
 		operation: operation, binding: binding,
@@ -44,6 +56,7 @@ func (handler *senderHandler) retireRejectedOffer(
 	}
 	handler.retiredOperations[operation] = retired
 	handler.retiredBindings[binding] = retired
+	return claim
 }
 
 func (handler *senderHandler) startAttempt(
@@ -51,8 +64,14 @@ func (handler *senderHandler) startAttempt(
 	operation peerOperation,
 	offer v2signal.Offer,
 ) error {
+	var capacityBoundary *v2signal.Binding
 	handler.mu.Lock()
-	defer handler.mu.Unlock()
+	defer func() {
+		handler.mu.Unlock()
+		if capacityBoundary != nil {
+			handler.emitRejectedOfferTerminal(*capacityBoundary, senderEvidenceCapacityFailure())
+		}
+	}()
 	if handler.stopping {
 		return context.Canceled
 	}
@@ -72,6 +91,12 @@ func (handler *senderHandler) startAttempt(
 	if _, exists := handler.retiredBindings[offer.Binding]; exists {
 		return errors.Join(ErrProtocol, v2signal.ErrSignalBinding)
 	}
+	if handler.evidenceAuthority.terminal {
+		return ErrEvidenceIdentityCapacity
+	}
+	if handler.evidenceAuthority.claimed(offer.Binding) {
+		return errors.Join(ErrProtocol, v2signal.ErrSignalBinding)
+	}
 	if len(handler.attempts) >= handler.factory.maxActiveAttempts {
 		return ErrAttemptCapacity
 	}
@@ -85,6 +110,17 @@ func (handler *senderHandler) startAttempt(
 		operation: operation.id, generation: operation.generation, offer: offer,
 		onDone: handler.attemptDone,
 	})
+	claim := handler.claimEvidenceLocked(operation, offer.Binding)
+	if claim.sessionTerminal {
+		if claim.acquired {
+			binding := offer.Binding
+			capacityBoundary = &binding
+		}
+		return ErrEvidenceIdentityCapacity
+	}
+	if !claim.acquired {
+		return errors.Join(ErrProtocol, v2signal.ErrSignalBinding)
+	}
 	handler.attempts[operation] = attempt
 	handler.bindings[offer.Binding] = operation
 	handler.work.Add(1)
@@ -151,8 +187,15 @@ func (handler *senderHandler) attemptDone(attempt *peerAttempt, result error) {
 	handler.mu.Unlock()
 	if result != nil && (!errors.Is(result, context.Canceled) ||
 		errors.Is(result, errPeerShutdown) || errors.Is(result, errChannelDrain)) {
-		handler.factory.onError(fmt.Errorf("%w: %w", ErrNegotiation, result))
+		handler.factory.reportError(fmt.Errorf("%w: %w", ErrNegotiation, result))
 	}
+}
+
+func (handler *senderHandler) claimEvidenceLocked(
+	operation peerOperation,
+	binding v2signal.Binding,
+) evidenceClaim {
+	return handler.evidenceAuthority.claim(operation, binding)
 }
 
 func (handler *senderHandler) expireRetiredLocked(now time.Time) {
@@ -168,7 +211,6 @@ func (handler *senderHandler) expireRetiredLocked(now time.Time) {
 }
 
 func (handler *senderHandler) stopAll() {
-	handler.closeInbox()
 	handler.mu.Lock()
 	handler.stopping = true
 	attempts := make([]*peerAttempt, 0, len(handler.attempts))
@@ -176,13 +218,16 @@ func (handler *senderHandler) stopAll() {
 		attempts = append(attempts, attempt)
 	}
 	handler.mu.Unlock()
+	handler.closeInbox()
 	for _, attempt := range attempts {
 		attempt.stop(context.Canceled)
 	}
+	handler.ingress.Wait()
 	handler.work.Wait()
 	handler.mu.Lock()
 	clear(handler.attempts)
 	clear(handler.bindings)
+	handler.evidenceAuthority.reset()
 	clear(handler.retiredOperations)
 	clear(handler.retiredBindings)
 	handler.replayBlockedUntil = time.Time{}
@@ -191,18 +236,37 @@ func (handler *senderHandler) stopAll() {
 
 func (handler *senderHandler) closeInbox() {
 	handler.inboxMu.Lock()
-	defer handler.inboxMu.Unlock()
 	if handler.closed {
+		handler.inboxMu.Unlock()
 		return
 	}
 	handler.closed = true
+	type abandonedOffer struct {
+		event   handlerEvent
+		failure SenderAttemptFailure
+	}
+	var abandoned []abandonedOffer
 	for {
 		select {
 		case event := <-handler.events:
+			if binding := offerBindingForEvent(event); binding != nil {
+				claim := handler.claimRejectedOffer(event.operation, *binding)
+				if claim.acquired {
+					failure := senderRuntimeStoppedFailure()
+					if claim.sessionTerminal {
+						failure = senderEvidenceCapacityFailure()
+					}
+					abandoned = append(abandoned, abandonedOffer{event: event, failure: failure})
+				}
+			}
 			if event.completed != nil {
 				event.completed <- context.Canceled
 			}
 		default:
+			handler.inboxMu.Unlock()
+			for _, abandonedOffer := range abandoned {
+				handler.emitUnstartedOfferTerminal(abandonedOffer.event, abandonedOffer.failure)
+			}
 			return
 		}
 	}

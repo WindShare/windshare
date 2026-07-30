@@ -5,8 +5,8 @@
 # with -race). Firewall prompts and host-owned rules are outside the verdict;
 # the fixed binary hashes, compiler plans and one-use capability remain the
 # launch authority. Together with `make race` this restores the race coverage
-# the ubuntu jobs get natively. The runner executes the classified packages
-# concurrently and reports every package result.
+# the ubuntu jobs get natively. The runner isolates process-heavy packages and
+# executes the remaining classified packages concurrently.
 [CmdletBinding()]
 param()
 

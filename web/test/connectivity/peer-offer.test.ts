@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import type {
+  BrowserSelectedPairEvidence,
+  CandidateCounts,
+} from '../../scripts/browser-evidence/attempt-evidence'
 
 import {
   BrowserOfferChannelFactory,
@@ -12,6 +16,7 @@ import {
   UnexpectedDataChannelError,
   type ConnectivitySignal,
   type SignalingRoute,
+  type V2PeerOfferAttemptObserver,
 } from '../../src/connectivity'
 import { TERMINAL_INTENT_CONTROL } from '../../src/transport/webrtc'
 import { FakeRTCDataChannel } from '../transport/webrtc/fakes'
@@ -144,6 +149,58 @@ describe('browser offer negotiation', () => {
     await settle()
     expect(fixture.peer.addedCandidates.at(-1)).toEqual({
       candidate: 'remote-after-answer',
+    })
+    await channel.close()
+  })
+
+  it('reports isolated negotiation milestones and a public selected-pair snapshot', async () => {
+    const fixture = negotiationFixture()
+    const milestones: Array<{ readonly stage: string; readonly counts: CandidateCounts }> = []
+    let readSelectedPair: (() => Promise<BrowserSelectedPairEvidence | null>) | undefined
+    const observer: V2PeerOfferAttemptObserver = {
+      offerCreated: (counts) => milestones.push({ stage: 'offer-created', counts }),
+      offerSent: (counts) => {
+        milestones.push({ stage: 'offer-sent', counts })
+        throw new Error('synthetic observer failure')
+      },
+      answerReceived: (counts) => milestones.push({ stage: 'answer-received', counts }),
+      dataChannelOpened: (counts, reader) => {
+        milestones.push({ stage: 'datachannel-open', counts })
+        readSelectedPair = reader
+      },
+    }
+
+    const opening = fixture.factory.offer(fixture.route, fixture.signal, observer)
+    await settle()
+    fixture.peer.emitCandidate('local-observed')
+    fixture.route.push(candidateSignal('remote-observed'))
+    fixture.route.push(answerSignal())
+    await settle()
+    fixture.peer.raw.open()
+    const channel = await opening
+
+    expect(milestones).toEqual([
+      { stage: 'offer-created', counts: { localEmitted: 0, remoteAccepted: 0 } },
+      { stage: 'offer-sent', counts: { localEmitted: 0, remoteAccepted: 0 } },
+      { stage: 'answer-received', counts: { localEmitted: 1, remoteAccepted: 1 } },
+      { stage: 'datachannel-open', counts: { localEmitted: 1, remoteAccepted: 1 } },
+    ])
+    expect(await readSelectedPair?.()).toEqual({
+      candidatePairId: 'pair-1',
+      local: {
+        candidateId: 'local-1',
+        candidateType: 'host',
+        protocol: 'udp',
+        address: '192.0.2.1',
+        port: 5_001,
+      },
+      remote: {
+        candidateId: 'remote-1',
+        candidateType: 'host',
+        protocol: 'udp',
+        address: '192.0.2.2',
+        port: 5_002,
+      },
     })
     await channel.close()
   })
@@ -419,6 +476,28 @@ describe('browser offer negotiation', () => {
   })
 })
 
+describe('browser ICE gathering completion', () => {
+  it('treats Firefox end-of-candidates as completion rather than a wire candidate', async () => {
+    const fixture = negotiationFixture(1)
+    const channel = await openChannel(fixture)
+
+    fixture.peer.emitEndOfCandidates()
+    fixture.peer.emitCandidate('only-real-candidate')
+    await settle()
+
+    expect(fixture.route.sent.filter((message) => (
+      message.kind === SIGNAL_KIND_CANDIDATE
+    ))).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ candidate: 'only-real-candidate' }),
+      }),
+    ])
+    expect(channel.state).toBe('open')
+    expect(fixture.peer.closeCalls).toBe(0)
+    await channel.close()
+  })
+})
+
 async function beginFatalWait(
   waitKind: FatalWaitKind,
   maximumCandidates: number,
@@ -585,6 +664,37 @@ class FakeNegotiationPeer extends EventTarget {
   addCandidateOperation: Promise<void> | undefined
   readonly lifecycle: string[] = []
   closeCalls = 0
+  readonly stats = new Map<string, Record<string, unknown>>([
+    ['transport-1', {
+      id: 'transport-1',
+      type: 'transport',
+      selectedCandidatePairId: 'pair-1',
+    }],
+    ['pair-1', {
+      id: 'pair-1',
+      type: 'candidate-pair',
+      localCandidateId: 'local-1',
+      remoteCandidateId: 'remote-1',
+      nominated: true,
+      state: 'succeeded',
+    }],
+    ['local-1', {
+      id: 'local-1',
+      type: 'local-candidate',
+      candidateType: 'host',
+      protocol: 'udp',
+      address: '192.0.2.1',
+      port: 5_001,
+    }],
+    ['remote-1', {
+      id: 'remote-1',
+      type: 'remote-candidate',
+      candidateType: 'host',
+      protocol: 'udp',
+      address: '192.0.2.2',
+      port: 5_002,
+    }],
+  ])
 
   constructor() {
     super()
@@ -615,6 +725,10 @@ class FakeNegotiationPeer extends EventTarget {
       this.addedCandidates.push(structuredClone(candidate))
     }
     return this.addCandidateOperation ?? Promise.resolve()
+  }
+
+  getStats(): Promise<RTCStatsReport> {
+    return Promise.resolve(this.stats as unknown as RTCStatsReport)
   }
 
   close(): void {
@@ -658,6 +772,15 @@ class FakeNegotiationPeer extends EventTarget {
       sdpMid: null,
       sdpMLineIndex: null,
       usernameFragment: null,
+    })
+  }
+
+  emitEndOfCandidates(): void {
+    this.#emitCandidate({
+      candidate: '',
+      sdpMid: 'data',
+      sdpMLineIndex: 0,
+      usernameFragment: 'gathering-complete',
     })
   }
 

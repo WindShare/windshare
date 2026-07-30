@@ -5,21 +5,32 @@ import {
   type V2BlockTransportRoute,
 } from '../content/v2-broker'
 import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
+import type { LaneIdentity } from '../../scripts/browser-evidence/attempt-evidence'
 import type { PeerChannel } from './peer-channel'
-import { BrowserOfferChannelFactory, type OfferChannelFactory } from './peer-offer'
+import {
+  browserPeerConnectionAvailable,
+  BrowserOfferChannelFactory,
+  type OfferChannelFactory,
+} from './peer-offer'
 import {
   createV2PeerBinding,
+  type V2ConnectivityObserver,
   type V2SessionSignalingObserver,
   V2SessionSignalingRoute,
 } from './v2-session-signaling'
+
+export type { V2ConnectivityObserver } from './v2-session-signaling'
 
 export const V2_RELAY_CONTENT_FALLBACK_MILLISECONDS = 8_000
 export const V2_P2P_CONNECT_TIMEOUT_MILLISECONDS = 10_000
 
 export interface V2ContentLaneAdmissionObservation {
   readonly laneId: number
+  readonly laneEpoch: number
   readonly route: V2BlockTransportRoute
 }
+
+export type V2ContentLaneDetachmentObservation = V2ContentLaneAdmissionObservation
 
 export interface V2ReceiverConnectivityOptions {
   readonly session: V2ReceiverSessionRuntime
@@ -28,8 +39,12 @@ export interface V2ReceiverConnectivityOptions {
   readonly relayLaneId?: number
   readonly offers?: OfferChannelFactory
   readonly randomBytes?: (length: number) => Uint8Array
+  readonly rtcApiPresent?: () => boolean
+  readonly connectivityObserver?: V2ConnectivityObserver
+  readonly now?: () => number
   readonly onPeerError?: (error: unknown) => void
   readonly onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void
+  readonly onContentLaneDetached?: (observation: V2ContentLaneDetachmentObservation) => void
   readonly observePeerSignaling?: V2SessionSignalingObserver
 }
 
@@ -101,6 +116,11 @@ interface V2ActiveConnectivity {
   sizeClass: V2ContentSizeClass
 }
 
+interface V2PeerAttemptResources {
+  route?: V2SessionSignalingRoute
+  peer?: PeerChannel
+}
+
 /**
  * Browsing keeps the joined relay as a control lane, while content admission is
  * governed independently by the 0/8 policy. This separation prevents catalog UI
@@ -112,13 +132,20 @@ export class V2ReceiverConnectivity {
   readonly #createBlockLane: (laneId: number) => V2BlockLane
   readonly #offers: OfferChannelFactory
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
+  readonly #rtcApiPresent: () => boolean
+  readonly #connectivityObserver: V2ConnectivityObserver | undefined
+  readonly #now: () => number
   readonly #onPeerError: (error: unknown) => void
   readonly #onContentLaneAdmitted: (
     observation: V2ContentLaneAdmissionObservation,
   ) => void
+  readonly #onContentLaneDetached: (
+    observation: V2ContentLaneDetachmentObservation,
+  ) => void
   readonly #observePeerSignaling: V2SessionSignalingObserver
   readonly #lifetime = new AbortController()
-  readonly #admitted = new Set<number>()
+  readonly #admitted = new Map<number, { readonly laneEpoch: number; readonly route: V2BlockTransportRoute }>()
+  readonly #laneEpochs = new Map<number, number>()
   readonly #routes = new Set<V2SessionSignalingRoute>()
   readonly #activations = new Map<number, V2ActiveConnectivity>()
   readonly #relayDemand = new Set<number>()
@@ -145,13 +172,22 @@ export class V2ReceiverConnectivity {
     this.#relayLaneId = options.relayLaneId ?? options.session.initialLaneId
     this.#offers = options.offers ?? new BrowserOfferChannelFactory()
     this.#randomBytes = options.randomBytes
+    this.#rtcApiPresent = options.rtcApiPresent ?? (() => browserPeerConnectionAvailable())
+    this.#connectivityObserver = options.connectivityObserver
+    this.#now = options.now ?? (() => performance.now())
     this.#onPeerError = options.onPeerError ?? (() => undefined)
     this.#onContentLaneAdmitted = options.onContentLaneAdmitted ?? (() => undefined)
+    this.#onContentLaneDetached = options.onContentLaneDetached ?? (() => undefined)
     this.#observePeerSignaling = options.observePeerSignaling ?? (() => undefined)
+    this.#laneEpochs.set(options.session.initialLaneId, options.session.keys.initialLaneEpoch)
     this.#unsubscribeLaneChanges = this.#session.subscribeLaneChanges((change) => {
-      if (change.type === 'detached') {
-        this.#admitted.delete(change.laneId)
-        this.#lanes.remove(change.laneId)
+      if (change.type === 'attached') {
+        this.#laneEpochs.set(change.laneId, change.laneEpoch)
+      } else {
+        if (this.#laneEpochs.get(change.laneId) === change.laneEpoch) {
+          this.#laneEpochs.delete(change.laneId)
+        }
+        this.#removeAdmittedLane(change.laneId, change.laneEpoch)
         if (change.laneId === this.#peerLaneId || change.laneId === this.#pendingPeerLaneId) {
           this.#peerDetached(change.laneId)
         }
@@ -220,10 +256,10 @@ export class V2ReceiverConnectivity {
     const previous = this.#relayLaneId
     this.#relayLaneId = laneId
     if (previous !== laneId && this.#admitted.has(previous)) {
-      this.#admitted.delete(previous)
-      this.#lanes.remove(previous)
+      const admitted = this.#admitted.get(previous)
+      if (admitted !== undefined) this.#removeAdmittedLane(previous, admitted.laneEpoch)
     }
-    if (this.#relayDemand.size > 0) this.#admit(laneId, 'relay')
+    if (this.#relayDemand.size > 0) this.#admitRelay()
   }
 
   close(): Promise<void> {
@@ -260,6 +296,7 @@ export class V2ReceiverConnectivity {
     const controller = new AbortController()
     this.#peerController = controller
     const task = this.#connectPeer(controller.signal)
+      .catch((error: unknown) => this.#reportPeerError(error))
       .finally(() => {
         if (this.#peerTask === task) this.#peerTask = undefined
         if (this.#peerController === controller) this.#peerController = undefined
@@ -269,56 +306,141 @@ export class V2ReceiverConnectivity {
   }
 
   async #connectPeer(signal: AbortSignal): Promise<void> {
+    if (!this.#apiGateAllowsAttempt()) return
     const attempt = peerAttemptDeadline(signal)
-    let route: V2SessionSignalingRoute | undefined
-    let peer: PeerChannel | undefined
+    const resources: V2PeerAttemptResources = {}
     try {
-      const binding = this.#randomBytes === undefined
-        ? createV2PeerBinding()
-        : createV2PeerBinding(this.#randomBytes)
-      route = new V2SessionSignalingRoute(this.#session, binding, this.#observePeerSignaling)
-      this.#routes.add(route)
-      peer = await this.#offers.offer(route, attempt.signal)
-      attempt.signal.throwIfAborted()
-      const grant = await this.#session.requestLaneGrant(
-        this.#peerReconnectLaneId ?? 0,
-        { signal: attempt.signal },
-      )
-      this.#pendingPeer = peer
-      this.#pendingPeerRoute = route
-      this.#pendingPeerLaneId = grant.laneId
-      await this.#session.attachGrantedLane(peer, grant, attempt.signal)
-      if (
-        this.#pendingPeer !== peer ||
-        this.#pendingPeerLaneId !== grant.laneId ||
-        !this.#session.laneIds().includes(grant.laneId)
-      ) {
-        throw new Error('Peer lane detached during admission')
-      }
-      this.#peer = peer
-      this.#peerRoute = route
-      this.#peerLaneId = grant.laneId
-      this.#peerReconnectLaneId = undefined
-      this.#pendingPeer = undefined
-      this.#pendingPeerRoute = undefined
-      this.#pendingPeerLaneId = undefined
-      this.#admit(grant.laneId, 'peer')
+      await this.#establishPeer(resources, attempt.signal)
     } catch (error) {
-      if (this.#pendingPeer === peer) {
-        this.#pendingPeer = undefined
-        this.#pendingPeerRoute = undefined
-        this.#pendingPeerLaneId = undefined
-      }
-      await peer?.close().catch(() => undefined)
-      await route?.close().catch(() => undefined)
-      if (route !== undefined) this.#routes.delete(route)
-      if (!signal.aborted) {
-        if (this.#activations.size > 0) this.#requestRelayForAll()
-        this.#onPeerError(error)
-      }
+      await this.#handlePeerAttemptFailure(resources, error, signal)
     } finally {
       attempt.close()
     }
+  }
+
+  #apiGateAllowsAttempt(): boolean {
+    try {
+      if (this.#rtcApiPresent()) return true
+      // API absence is the only attempt-free capability branch. Probe outcomes
+      // never enter product policy, so an API-present probe failure cannot suppress this path.
+      if (this.#activations.size > 0) this.#requestRelayForAll()
+    } catch (error) {
+      if (this.#activations.size > 0) this.#requestRelayForAll()
+      this.#reportPeerError(error)
+    }
+    return false
+  }
+
+  async #establishPeer(
+    resources: V2PeerAttemptResources,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const binding = this.#randomBytes === undefined
+      ? createV2PeerBinding()
+      : createV2PeerBinding(this.#randomBytes)
+    const route = new V2SessionSignalingRoute(
+      this.#session,
+      binding,
+      this.#observePeerSignaling,
+      this.#connectivityObserver,
+      this.#now,
+    )
+    resources.route = route
+    this.#routes.add(route)
+    const peer = await this.#offers.offer(route, signal, route)
+    resources.peer = peer
+    const admission = peerAdmissionSignal(signal, route.attemptFailureSignal)
+    try {
+      await this.#attachAndAdmitPeer(peer, route, admission.signal)
+    } finally {
+      admission.close()
+    }
+  }
+
+  async #attachAndAdmitPeer(
+    peer: PeerChannel,
+    route: V2SessionSignalingRoute,
+    signal: AbortSignal,
+  ): Promise<void> {
+    this.#requireLiveAttempt(route, signal)
+    const grant = await this.#session.requestLaneGrant(
+      this.#peerReconnectLaneId ?? 0,
+      { signal },
+    )
+    this.#requireLiveAttempt(route, signal)
+    const lane = laneIdentity(grant.laneId, grant.laneEpoch)
+    route.laneGranted(lane)
+    this.#pendingPeer = peer
+    this.#pendingPeerRoute = route
+    this.#pendingPeerLaneId = grant.laneId
+    await this.#session.attachGrantedLane(peer, grant, signal)
+    this.#requireLiveAttempt(route, signal)
+    this.#requirePendingPeer(peer, grant.laneId)
+    route.laneAttached(lane)
+    const selectedPair = await route.readSelectedPair(signal)
+    this.#requireLiveAttempt(route, signal)
+    if (!this.#admit(lane.laneId, lane.laneEpoch, 'peer')) {
+      throw new Error('Peer lane became ineligible before content admission')
+    }
+    // Publish only after lane admission succeeds so a rejected lane cannot leak
+    // into the durable peer state or require a compensating rollback.
+    this.#publishPeer(peer, route, lane)
+    route.admitted(lane, selectedPair)
+  }
+
+  #requireLiveAttempt(route: V2SessionSignalingRoute, signal: AbortSignal): void {
+    signal.throwIfAborted()
+    route.throwIfAttemptFailed()
+  }
+
+  #requirePendingPeer(peer: PeerChannel, laneId: number): void {
+    if (
+      this.#pendingPeer !== peer || this.#pendingPeerLaneId !== laneId ||
+      !this.#session.laneIds().includes(laneId)
+    ) throw new Error('Peer lane detached during admission')
+  }
+
+  #publishPeer(peer: PeerChannel, route: V2SessionSignalingRoute, lane: LaneIdentity): void {
+    this.#peer = peer
+    this.#peerRoute = route
+    this.#peerLaneId = lane.laneId
+    this.#peerReconnectLaneId = undefined
+    this.#pendingPeer = undefined
+    this.#pendingPeerRoute = undefined
+    this.#pendingPeerLaneId = undefined
+  }
+
+  async #handlePeerAttemptFailure(
+    resources: V2PeerAttemptResources,
+    error: unknown,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const typedErrorCode = this.#attemptStopCode(signal)
+    resources.route?.failAttempt(error, typedErrorCode === undefined ? {} : { typedErrorCode })
+    if (this.#pendingPeer === resources.peer) {
+      this.#pendingPeer = undefined
+      this.#pendingPeerRoute = undefined
+      this.#pendingPeerLaneId = undefined
+    }
+    await resources.peer?.close().catch(() => undefined)
+    await resources.route?.close().catch(() => undefined)
+    if (resources.route !== undefined) this.#routes.delete(resources.route)
+    if (signal.aborted) return
+    if (this.#activations.size > 0) this.#requestRelayForAll()
+    this.#reportPeerError(error)
+  }
+
+  #reportPeerError(error: unknown): void {
+    try {
+      this.#onPeerError(error)
+    } catch {
+      // Failure diagnostics cannot reject the owned attempt task after cleanup.
+    }
+  }
+
+  #attemptStopCode(signal: AbortSignal): 'runtime-stopped' | 'attempt-cancelled' | undefined {
+    if (this.#lifetime.signal.aborted) return 'runtime-stopped'
+    return signal.aborted ? 'attempt-cancelled' : undefined
   }
 
   async #admitRelayAfterDelay(
@@ -373,15 +495,17 @@ export class V2ReceiverConnectivity {
     }
   }
 
-  #admit(laneId: number, route: V2BlockTransportRoute): void {
-    if (this.#admitted.has(laneId) || !this.#session.laneIds().includes(laneId)) return
-    this.#lanes.add(this.#createBlockLane(laneId), route)
-    this.#admitted.add(laneId)
+  #admit(laneId: number, laneEpoch: number, route: V2BlockTransportRoute): boolean {
+    if (this.#admitted.has(laneId)) return true
+    if (!this.#session.laneIds().includes(laneId)) return false
+    this.#lanes.add(this.#createBlockLane(laneId), route, laneEpoch)
+    this.#admitted.set(laneId, { laneEpoch, route })
     try {
-      this.#onContentLaneAdmitted(Object.freeze({ laneId, route }))
+      this.#onContentLaneAdmitted(Object.freeze({ laneId, laneEpoch, route }))
     } catch {
       // Admission is already authoritative; diagnostics cannot revoke or corrupt it.
     }
+    return true
   }
 
   #requestRelay(activationId: number): void {
@@ -397,8 +521,32 @@ export class V2ReceiverConnectivity {
   }
 
   #admitRelay(): void {
-    this.#admit(this.#relayLaneId, 'relay')
+    const laneEpoch = this.#laneEpochs.get(this.#relayLaneId)
+    if (laneEpoch === undefined) {
+      throw new Error('Relay lane epoch is unavailable during content admission')
+    }
+    this.#admit(this.#relayLaneId, laneEpoch, 'relay')
   }
+
+  #removeAdmittedLane(laneId: number, laneEpoch: number): void {
+    const admitted = this.#admitted.get(laneId)
+    if (admitted === undefined || admitted.laneEpoch !== laneEpoch) return
+    this.#admitted.delete(laneId)
+    this.#lanes.remove(laneId)
+    try {
+      this.#onContentLaneDetached(Object.freeze({
+        laneId,
+        laneEpoch,
+        route: admitted.route,
+      }))
+    } catch {
+      // The lane is already ineligible; diagnostics cannot re-admit it.
+    }
+  }
+}
+
+function laneIdentity(laneId: number, laneEpoch: number): LaneIdentity {
+  return Object.freeze({ laneId, laneEpoch })
 }
 
 function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
@@ -434,6 +582,31 @@ function peerAttemptDeadline(parent: AbortSignal): {
     close: () => {
       globalThis.clearTimeout(timer)
       parent.removeEventListener('abort', abort)
+    },
+  }
+}
+
+function peerAdmissionSignal(
+  attempt: AbortSignal,
+  routeFailure: AbortSignal,
+): { readonly signal: AbortSignal; readonly close: () => void } {
+  const controller = new AbortController()
+  const abortFrom = (source: AbortSignal) => {
+    if (!controller.signal.aborted) {
+      controller.abort(source.reason ?? new DOMException('Peer admission aborted', 'AbortError'))
+    }
+  }
+  const attemptAborted = () => abortFrom(attempt)
+  const routeFailed = () => abortFrom(routeFailure)
+  attempt.addEventListener('abort', attemptAborted, { once: true })
+  routeFailure.addEventListener('abort', routeFailed, { once: true })
+  if (routeFailure.aborted) routeFailed()
+  if (attempt.aborted) attemptAborted()
+  return {
+    signal: controller.signal,
+    close: () => {
+      attempt.removeEventListener('abort', attemptAborted)
+      routeFailure.removeEventListener('abort', routeFailed)
     },
   }
 }

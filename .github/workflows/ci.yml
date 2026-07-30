@@ -14,6 +14,9 @@
 # host-owned state are outside every test verdict and are never queried here.
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     # Core candidate and final tags have a dedicated two-OS release-verification
@@ -25,7 +28,13 @@ on:
     tags-ignore:
       - "core/v*"
       - "core-candidate/v*/**"
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
 
 env:
   # Pinned coverage-gate tool; thresholds live in each module's .testcoverage.yml.
@@ -33,6 +42,9 @@ env:
   # Native identity recovery can exceed Go's ten-minute package default under
   # race or coverage instrumentation; this is a ceiling, not a runtime target.
   CORE_SUITE_TEST_TIMEOUT: 30m
+  # Both browser jobs share logical identity but materialize their own
+  # current-machine resolution lock on their independent hosted runners.
+  BROWSER_EVIDENCE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   hygiene:
@@ -40,6 +52,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
@@ -89,6 +103,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: sloc-guard check
         # Tracks the latest sloc-guard release so new gate features (e.g. rule
         # additions the config relies on) apply without a CI bump.
@@ -99,6 +115,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
@@ -112,6 +130,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
@@ -134,6 +154,8 @@ jobs:
         working-directory: core
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
@@ -153,6 +175,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
@@ -170,6 +194,8 @@ jobs:
       CORE_ARTIFACT_VERSION: "v0.0.0-ci"
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: core/go.mod
@@ -188,6 +214,8 @@ jobs:
       GOWORK: "off"
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
@@ -205,6 +233,8 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       # pnpm only (project constraint); the version comes from the
       # packageManager field in web/package.json.
       - uses: pnpm/action-setup@v6
@@ -225,54 +255,315 @@ jobs:
         run: pnpm build
       - name: v1 forbidden production graph and bundle
         run: pnpm forbidden
-      - name: vitest (consumes all golden-vector families)
-        run: pnpm test
+      - name: vitest remainder (browser contracts have one dedicated owner)
+        run: pnpm run test:unit:remainder
 
-  web-playwright:
-    name: Web Playwright (Chromium + Firefox + WebKit real browser)
+  browser-contract:
+    name: Browser contract (schema, reducer, guard, workflow)
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
-      # The real-stack fixture builds windshare/wsrelay child binaries itself
-      # via web/e2e/fixtures/v2-real-stack.ts, so this job needs Go as well.
-      - uses: actions/setup-go@v6
+        timeout-minutes: 5
         with:
-          go-version-file: go.work
+          persist-credentials: false
       - uses: pnpm/action-setup@v6
+        timeout-minutes: 5
         with:
           package_json_file: web/package.json
       - uses: actions/setup-node@v6
+        timeout-minutes: 10
         with:
           node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
-      - name: install (frozen lockfile)
-        run: pnpm -C web install --frozen-lockfile
-      - name: install Chromium, Firefox, and WebKit
-        run: pnpm -C web exec playwright install --with-deps chromium firefox webkit
-      - name: verify pinned browser executables
-        run: pnpm -C web run test:browser:preflight
-      # web/playwright.config.ts hard-rejects a direct invocation only on
-      # Windows, where the sanctioned path is the frozen D5 runner in
-      # BrowserTests mode. On Linux the direct command below is the sanctioned
-      # §10.4 invocation, so CI runs the scenario suite here against real
-      # wsrelay/windshare on the centralized Chromium/Firefox/WebKit projects.
-      # Playwright traces/screenshots are deliberately not uploaded as
-      # artifacts: failure traces of capability-driving specs can contain the
-      # capability URL including the key fragment.
-      - name: Playwright three-engine scenario suite
-        run: pnpm -C web exec playwright test
-      # The production Pion WebRTC specs live outside the main scenario gate and
-      # run through their dedicated three-engine config. It starts its own Vite
-      # server and reusable loopback-only Go Pion helper.
-      - name: Playwright Pion WebRTC browser matrix
-        run: pnpm -C web exec playwright test --config test/transport/webrtc/browser.playwright.config.ts
+      - name: install contract dependencies
+        timeout-minutes: 10
+        run: pnpm -C web install --frozen-lockfile --ignore-scripts
+      - name: run browser contract exactly once
+        timeout-minutes: 10
+        run: pnpm -C web run test:browser:evidence:contract
+
+  browser-main:
+    name: Browser main (focused samples + exclusive remainder)
+    needs: browser-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    outputs:
+      sealed_upload_path: ${{ steps.guard.outputs.sealed_upload_path }}
+      guard_outcome: ${{ steps.guard.outputs.guard_outcome }}
+      manifest_sha256: ${{ steps.guard.outputs.manifest_sha256 }}
+      manifest_byte_length: ${{ steps.guard.outputs.manifest_byte_length }}
+      settlement_invocation_id: ${{ steps.producer.outputs.settlement_invocation_id }}
+      settlement_runtime_manifest_sha256: ${{ steps.producer.outputs.settlement_runtime_manifest_sha256 }}
+      settlement_public_key_spki_base64: ${{ steps.producer.outputs.settlement_public_key_spki_base64 }}
+      settlement_public_key_sha256: ${{ steps.producer.outputs.settlement_public_key_sha256 }}
+    env:
+      BROWSER_EVIDENCE_ROOT: ${{ github.workspace }}/test-results/browser-evidence/main
+      BROWSER_EVIDENCE_CONTEXT: ${{ github.workspace }}/test-results/browser-evidence/main/context.json
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        timeout-minutes: 10
+        with:
+          go-version-file: go.work
+      - uses: pnpm/action-setup@v6
+        timeout-minutes: 5
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        timeout-minutes: 10
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: install browser runtime once
+        timeout-minutes: 28
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium firefox webkit
+          pnpm -C web run test:browser:preflight
+      - name: build and preflight main native runtime once
+        id: runtime
+        timeout-minutes: 13
+        run: >-
+          node scripts/ci/browsergate/main.mjs build-runtime
+          --output-parent "${{ github.workspace }}/test-results/browser-runtime/main"
+          --suite main
+          --run-id "$BROWSER_EVIDENCE_RUN_ID"
+          --checkout-sha "${{ github.sha }}"
+          --run-policy blocking
+          --github-output "$GITHUB_OUTPUT"
+      - name: produce main samples and exclusive remainder
+        id: producer
+        timeout-minutes: 35
+        run: >-
+          node scripts/ci/browsergate/main.mjs hosted-produce
+          --output-root "$BROWSER_EVIDENCE_ROOT"
+          --context "$BROWSER_EVIDENCE_CONTEXT"
+          --run-id "$BROWSER_EVIDENCE_RUN_ID"
+          --checkout-sha "${{ github.sha }}"
+          --run-policy blocking
+          --suite main
+          --runtime-manifest "${{ steps.runtime.outputs.runtime_manifest_path }}"
+          --runtime-manifest-sha256 "${{ steps.runtime.outputs.runtime_manifest_sha256 }}"
+          --github-output "$GITHUB_OUTPUT"
+      - name: guard and seal the main upload directory
+        id: guard
+        if: always()
+        timeout-minutes: 4
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/ci/browsergate/main.mjs guard-suite
+          --context "$BROWSER_EVIDENCE_CONTEXT"
+          --suite main
+          --secret-env GITHUB_TOKEN
+          --runtime-manifest "${{ steps.runtime.outputs.runtime_manifest_path }}"
+          --runtime-manifest-sha256 "${{ steps.runtime.outputs.runtime_manifest_sha256 }}"
+          --settlement-invocation-id "${{ steps.producer.outputs.settlement_invocation_id }}"
+          --settlement-runtime-manifest-sha256 "${{ steps.producer.outputs.settlement_runtime_manifest_sha256 }}"
+          --settlement-public-key-spki-base64 "${{ steps.producer.outputs.settlement_public_key_spki_base64 }}"
+          --settlement-public-key-sha256 "${{ steps.producer.outputs.settlement_public_key_sha256 }}"
+          --github-output "$GITHUB_OUTPUT"
+      - name: upload the single sealed main directory
+        timeout-minutes: 5
+        if: always() && steps.guard.outputs.guard_outcome == 'passed'
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-main-guarded
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+          path: ${{ steps.guard.outputs.sealed_upload_path }}
+      - name: dispose authenticated main native runtime
+        timeout-minutes: 5
+        if: >-
+          always() &&
+          steps.runtime.outputs.runtime_manifest_path != '' &&
+          steps.runtime.outputs.runtime_manifest_sha256 != ''
+        run: >-
+          node scripts/ci/browsergate/main.mjs dispose-runtime
+          --runtime-manifest "${{ steps.runtime.outputs.runtime_manifest_path }}"
+          --runtime-manifest-sha256 "${{ steps.runtime.outputs.runtime_manifest_sha256 }}"
+          --suite main
+          --run-id "$BROWSER_EVIDENCE_RUN_ID"
+          --checkout-sha "${{ github.sha }}"
+          --run-policy blocking
+
+  browser-pion:
+    name: Browser Pion (focused samples + exclusive remainder)
+    needs: browser-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    outputs:
+      sealed_upload_path: ${{ steps.guard.outputs.sealed_upload_path }}
+      guard_outcome: ${{ steps.guard.outputs.guard_outcome }}
+      manifest_sha256: ${{ steps.guard.outputs.manifest_sha256 }}
+      manifest_byte_length: ${{ steps.guard.outputs.manifest_byte_length }}
+      settlement_invocation_id: ${{ steps.producer.outputs.settlement_invocation_id }}
+      settlement_runtime_manifest_sha256: ${{ steps.producer.outputs.settlement_runtime_manifest_sha256 }}
+      settlement_public_key_spki_base64: ${{ steps.producer.outputs.settlement_public_key_spki_base64 }}
+      settlement_public_key_sha256: ${{ steps.producer.outputs.settlement_public_key_sha256 }}
+    env:
+      BROWSER_EVIDENCE_ROOT: ${{ github.workspace }}/test-results/browser-evidence/pion
+      BROWSER_EVIDENCE_CONTEXT: ${{ github.workspace }}/test-results/browser-evidence/pion/context.json
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        timeout-minutes: 10
+        with:
+          go-version-file: go.work
+      - uses: pnpm/action-setup@v6
+        timeout-minutes: 5
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        timeout-minutes: 10
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: install browser runtime once
+        timeout-minutes: 28
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium firefox webkit
+          pnpm -C web run test:browser:preflight
+      - name: build and preflight Pion native runtime once
+        id: runtime
+        timeout-minutes: 13
+        run: >-
+          node scripts/ci/browsergate/main.mjs build-runtime
+          --output-parent "${{ github.workspace }}/test-results/browser-runtime/pion"
+          --suite pion
+          --run-id "$BROWSER_EVIDENCE_RUN_ID"
+          --checkout-sha "${{ github.sha }}"
+          --run-policy blocking
+          --github-output "$GITHUB_OUTPUT"
+      - name: produce Pion samples and exclusive remainder
+        id: producer
+        timeout-minutes: 35
+        run: >-
+          node scripts/ci/browsergate/main.mjs hosted-produce
+          --output-root "$BROWSER_EVIDENCE_ROOT"
+          --context "$BROWSER_EVIDENCE_CONTEXT"
+          --run-id "$BROWSER_EVIDENCE_RUN_ID"
+          --checkout-sha "${{ github.sha }}"
+          --run-policy blocking
+          --suite pion
+          --runtime-manifest "${{ steps.runtime.outputs.runtime_manifest_path }}"
+          --runtime-manifest-sha256 "${{ steps.runtime.outputs.runtime_manifest_sha256 }}"
+          --github-output "$GITHUB_OUTPUT"
+      - name: guard and seal the Pion upload directory
+        id: guard
+        if: always()
+        timeout-minutes: 4
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/ci/browsergate/main.mjs guard-suite
+          --context "$BROWSER_EVIDENCE_CONTEXT"
+          --suite pion
+          --secret-env GITHUB_TOKEN
+          --runtime-manifest "${{ steps.runtime.outputs.runtime_manifest_path }}"
+          --runtime-manifest-sha256 "${{ steps.runtime.outputs.runtime_manifest_sha256 }}"
+          --settlement-invocation-id "${{ steps.producer.outputs.settlement_invocation_id }}"
+          --settlement-runtime-manifest-sha256 "${{ steps.producer.outputs.settlement_runtime_manifest_sha256 }}"
+          --settlement-public-key-spki-base64 "${{ steps.producer.outputs.settlement_public_key_spki_base64 }}"
+          --settlement-public-key-sha256 "${{ steps.producer.outputs.settlement_public_key_sha256 }}"
+          --github-output "$GITHUB_OUTPUT"
+      - name: upload the single sealed Pion directory
+        timeout-minutes: 5
+        if: always() && steps.guard.outputs.guard_outcome == 'passed'
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-pion-guarded
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+          path: ${{ steps.guard.outputs.sealed_upload_path }}
+      - name: dispose authenticated Pion native runtime
+        timeout-minutes: 5
+        if: >-
+          always() &&
+          steps.runtime.outputs.runtime_manifest_path != '' &&
+          steps.runtime.outputs.runtime_manifest_sha256 != ''
+        run: >-
+          node scripts/ci/browsergate/main.mjs dispose-runtime
+          --runtime-manifest "${{ steps.runtime.outputs.runtime_manifest_path }}"
+          --runtime-manifest-sha256 "${{ steps.runtime.outputs.runtime_manifest_sha256 }}"
+          --suite pion
+          --run-id "$BROWSER_EVIDENCE_RUN_ID"
+          --checkout-sha "${{ github.sha }}"
+          --run-policy blocking
+
+  browser-verdict:
+    name: Browser verdict (standard-library reducer)
+    needs:
+      - browser-main
+      - browser-pion
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+      - name: download sealed main evidence
+        id: download_main
+        timeout-minutes: 2
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: browser-main-guarded
+          path: browser-verdict-inputs/main
+      - name: download sealed Pion evidence
+        id: download_pion
+        timeout-minutes: 2
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: browser-pion-guarded
+          path: browser-verdict-inputs/pion
+      - name: reduce sealed browser evidence
+        id: verdict
+        timeout-minutes: 3
+        if: always()
+        run: >-
+          node scripts/ci/browsergate/verdict.mjs
+          --run-id "$BROWSER_EVIDENCE_RUN_ID"
+          --checkout-sha "${{ github.sha }}"
+          --main-root browser-verdict-inputs/main
+          --pion-root browser-verdict-inputs/pion
+          --suite-job-outcome main=${{ needs.browser-main.result }}
+          --suite-job-outcome pion=${{ needs.browser-pion.result }}
+          --guard-outcome main=${{ needs.browser-main.outputs.guard_outcome }}
+          --guard-outcome pion=${{ needs.browser-pion.outputs.guard_outcome }}
+          --manifest-sha256 main=${{ needs.browser-main.outputs.manifest_sha256 }}
+          --manifest-sha256 pion=${{ needs.browser-pion.outputs.manifest_sha256 }}
+          --manifest-byte-length main=${{ needs.browser-main.outputs.manifest_byte_length }}
+          --manifest-byte-length pion=${{ needs.browser-pion.outputs.manifest_byte_length }}
+          --download-outcome main=${{ steps.download_main.outcome }}
+          --download-outcome pion=${{ steps.download_pion.outcome }}
+          --output test-results/browser-verdict/verdict.json
 
   windows-tests:
     name: Windows tests (vet + race, OS-network cases gated)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
@@ -302,8 +593,45 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
       - name: NTFS-heavy output runtime race tests
         run: ./scripts/ci/race.ps1 -CoreWorkload output-runtime -SkipRoot
+
+  # Ordinary cross-platform tests inject a deterministic backend that is not a
+  # containment authority. This hosted boundary keeps the real Node named-pipe
+  # client and Go Job-object authority from drifting behind that test double.
+  windows-browser-process:
+    name: Windows browser process ownership (Job Object + Named Pipe)
+    runs-on: windows-latest
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        timeout-minutes: 10
+        with:
+          go-version-file: go.work
+      - uses: pnpm/action-setup@v6
+        timeout-minutes: 5
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        timeout-minutes: 10
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: install Windows browser runner dependencies
+        timeout-minutes: 15
+        run: pnpm -C web install --frozen-lockfile
+      - name: exercise the real Node to Go process-tree boundary
+        timeout-minutes: 30
+        run: |
+          pnpm -C web run test:browser:process
+          go test ./web/scripts/browser-evidence/windowsjob

@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import {
+  parseAttemptEvidence,
+  type BrowserAttemptEvidence,
+} from '../../scripts/browser-evidence/attempt-evidence'
 
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import type { ChannelState, FrameChannel } from '../../src/contracts/channel'
@@ -8,6 +12,7 @@ import {
   type V2PeerBinding,
 } from '../../src/connectivity/v2-signaling-codec'
 import {
+  V2AuthenticatedPeerOperationError,
   type V2SessionSignalingTrace,
   V2SessionSignalingRoute,
 } from '../../src/connectivity/v2-session-signaling'
@@ -28,7 +33,10 @@ import {
 } from '../../src/session/v2-message'
 import { V2OperationRouter } from '../../src/session/v2-operation-router'
 import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
-import type { V2SessionOperation } from '../../src/session/v2-runtime-types'
+import type {
+  V2OperationCancellation,
+  V2SessionOperation,
+} from '../../src/session/v2-runtime-types'
 import type { V2SessionKeys } from '../../src/session/v2-transcript'
 import { senderControlKeyPair, signSenderOperationControl } from '../session/signed-control-fixture'
 
@@ -70,6 +78,7 @@ class InMemoryFrameChannel implements FrameChannel {
 }
 
 class SignalingSessionFacade {
+  readonly keys = protocolKeys()
   readonly #router: V2OperationRouter
   readonly #operationId: Uint8Array<ArrayBuffer>
   operation: V2SessionOperation | undefined
@@ -97,13 +106,16 @@ class SignalingSessionFacade {
     this.followups.push(Object.freeze({ kind, body: body.slice() }))
   }
 
-  async cancelOperation(operation: V2SessionOperation): Promise<void> {
-    operation.close()
+  async cancelOperation(
+    operation: V2SessionOperation,
+    cancellation: V2OperationCancellation,
+  ): Promise<void> {
+    operation.cancel(cancellation.cause)
   }
 
   async close(): Promise<void> {
     this.closeCalls += 1
-    this.operation?.close()
+    this.operation?.cancel(new DOMException('Test session closed', 'AbortError'))
   }
 }
 
@@ -354,16 +366,20 @@ describe('v2 authenticated session signaling', () => {
     })
     const session = new SignalingSessionFacade(router, operationId)
     const traces: V2SessionSignalingTrace[] = []
+    const attemptEvidence: BrowserAttemptEvidence[] = []
     const route = new V2SessionSignalingRoute(
       session as unknown as V2ReceiverSessionRuntime,
       binding,
       (event) => traces.push(event),
+      (event) => attemptEvidence.push(parseAttemptEvidence(event) as BrowserAttemptEvidence),
     )
     const incoming = route.messages.getReader()
+    route.offerCreated({ localEmitted: 0, remoteAccepted: 0 })
     await route.send({
       kind: SIGNAL_KIND_OFFER,
       payload: { type: SIGNAL_KIND_OFFER, sdp: 'v=0\r\ns=attempt-local\r\n' },
     })
+    route.offerSent({ localEmitted: 0, remoteAccepted: 0 })
 
     const failedRead = incoming.read()
     await router.route(encodeV2Message(
@@ -373,12 +389,42 @@ describe('v2 authenticated session signaling', () => {
         [0, 1], [1, 5], [2, 0x5001], [3, false], [4, null], [5, 'peer rejected'],
       ])),
     ))
-    await expect(failedRead).rejects.toThrow(/Sender rejected peer negotiation/)
+    const peerFailure = await failedRead.then(
+      () => new Error('peer operation failure unexpectedly produced a signal'),
+      (reason: unknown) => reason,
+    )
+    expect(peerFailure).toBeInstanceOf(V2AuthenticatedPeerOperationError)
+    expect(peerFailure).toMatchObject({
+      message: 'peer rejected',
+      operationFailure: {
+        scope: 'peer',
+        code: 0x5001,
+        message: 'peer rejected',
+      },
+    })
     expect(session.closeCalls).toBe(0)
     expect(traces).toContainEqual(expect.objectContaining({
       type: 'route-failed',
       failureScope: 'attempt',
+      reason: peerFailure,
     }))
+    expect(attemptEvidence.map((event) => event.stage)).toEqual([
+      'started',
+      'offer-created',
+      'offer-sent',
+      'failed',
+    ])
+    expect(attemptEvidence.at(-1)).toMatchObject({
+      failedAtStage: 'answer-received',
+      failureScope: 'attempt',
+      typedErrorCode: 'peer-negotiation',
+      failureMessage: 'peer rejected',
+      authenticatedSenderOperationFailure: {
+        scope: 'peer',
+        code: 0x5001,
+        message: 'peer rejected',
+      },
+    })
 
     const healthyId = identity(53)
     const healthy = router.create(
@@ -395,7 +441,9 @@ describe('v2 authenticated session signaling', () => {
     await expect(healthy.next()).resolves.toEqual(result)
     incoming.releaseLock()
   })
+})
 
+describe('v2 authenticated signaling contract failures', () => {
   it('keeps authenticated binding conflicts session-fatal', async () => {
     const router = new V2OperationRouter(() => undefined)
     const operationId = identity(60)

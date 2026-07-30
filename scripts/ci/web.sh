@@ -24,7 +24,7 @@ pnpm -C web build
 echo "-- v1 forbidden production graph and bundle"
 pnpm -C web forbidden
 
-echo "-- vitest (consumes all golden-vector families)"
-pnpm -C web test
+echo "-- vitest remainder (browser contracts have one dedicated owner)"
+pnpm -C web run test:unit:remainder
 
 echo "== web: PASS in ${SECONDS}s =="

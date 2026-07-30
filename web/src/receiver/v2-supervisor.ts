@@ -3,16 +3,20 @@ import type { V2CatalogPageRequest, V2ShareDescriptor } from '../catalog/v2-reco
 import {
   type V2ConnectivityActivation,
   type V2ContentLaneAdmissionObservation,
+  type V2ContentLaneDetachmentObservation,
   type V2ContentIntent,
   type V2ContentSizeClass,
+  type V2ConnectivityObserver,
   V2ReceiverConnectivity,
 } from '../connectivity/v2-receiver-policy'
 import type { OfferChannelFactory } from '../connectivity/peer-offer'
 import {
   V2BlockBroker,
+  V2BlockDispatchSequenceAuthority,
   V2BlockLaneAttemptsError,
   V2LaneSet,
   type V2BlockRouteEligibility,
+  type V2BlockDispatchObservation,
   type V2BlockRouteObservation,
 } from '../content/v2-broker'
 import {
@@ -55,9 +59,13 @@ export interface V2ReceiverSupervisorOptions {
   readonly backoffMilliseconds?: (attempt: number) => number
   readonly offersFactory?: () => OfferChannelFactory
   readonly randomBytes?: (length: number) => Uint8Array
+  readonly rtcApiPresent?: () => boolean
+  readonly connectivityObserver?: V2ConnectivityObserver
   readonly onRecoveryError?: (error: unknown) => void
+  readonly onBlockDispatched?: (observation: V2BlockDispatchObservation) => void
   readonly onBlockFetched?: (observation: V2BlockRouteObservation) => void
   readonly onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void
+  readonly onContentLaneDetached?: (observation: V2ContentLaneDetachmentObservation) => void
 }
 
 interface V2ReceiverGeneration extends V2ContentGeneration {
@@ -93,13 +101,21 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
   readonly #backoffMilliseconds: (attempt: number) => number
   readonly #offersFactory: (() => OfferChannelFactory) | undefined
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
+  readonly #rtcApiPresent: (() => boolean) | undefined
+  readonly #connectivityObserver: V2ConnectivityObserver | undefined
   readonly #onRecoveryError: (error: unknown) => void
+  readonly #onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined
   readonly #onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined
   readonly #onContentLaneAdmitted: (
     (observation: V2ContentLaneAdmissionObservation) => void
   ) | undefined
+  readonly #onContentLaneDetached: (
+    (observation: V2ContentLaneDetachmentObservation) => void
+  ) | undefined
   readonly #lifetime = new AbortController()
   readonly #waiters = new Set<V2GenerationWaiter>()
+  // One joined share can replace protocol generations, but its route evidence is one stream.
+  readonly #dispatchSequence = new V2BlockDispatchSequenceAuthority()
   #current: V2ReceiverGeneration
   #nextGeneration = 1
   #reconcileTask: Promise<void> | undefined
@@ -116,9 +132,13 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     this.#backoffMilliseconds = options.backoffMilliseconds ?? defaultReconnectBackoff
     this.#offersFactory = options.offersFactory
     this.#randomBytes = options.randomBytes
+    this.#rtcApiPresent = options.rtcApiPresent
+    this.#connectivityObserver = options.connectivityObserver
     this.#onRecoveryError = options.onRecoveryError ?? (() => undefined)
+    this.#onBlockDispatched = options.onBlockDispatched
     this.#onBlockFetched = options.onBlockFetched
     this.#onContentLaneAdmitted = options.onContentLaneAdmitted
+    this.#onContentLaneDetached = options.onContentLaneDetached
     this.connectivity = new V2SupervisedConnectivity(() => this.#clock.now())
     this.#current = this.#createGeneration(options.initial)
     this.connectivity.bind(this.#current.connectivity)
@@ -220,7 +240,13 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
 
   #createGeneration(core: V2ProtocolGenerationCore): V2ReceiverGeneration {
     const lanes = new V2LaneSet(
-      this.#onBlockFetched === undefined ? {} : { onBlockFetched: this.#onBlockFetched },
+      {
+        dispatchSequence: this.#dispatchSequence,
+        ...(this.#onBlockDispatched === undefined
+          ? {}
+          : { onBlockDispatched: this.#onBlockDispatched }),
+        ...(this.#onBlockFetched === undefined ? {} : { onBlockFetched: this.#onBlockFetched }),
+      },
     )
     const brokerOwner: { current?: V2BlockBroker } = {}
     const readSecret = this.#factory.copyReadSecret()
@@ -259,9 +285,17 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
         ),
         ...(this.#offersFactory === undefined ? {} : { offers: this.#offersFactory() }),
         ...(this.#randomBytes === undefined ? {} : { randomBytes: this.#randomBytes }),
+        ...(this.#rtcApiPresent === undefined ? {} : { rtcApiPresent: this.#rtcApiPresent }),
+        ...(this.#connectivityObserver === undefined
+          ? {}
+          : { connectivityObserver: this.#connectivityObserver }),
+        now: () => this.#clock.now(),
         ...(this.#onContentLaneAdmitted === undefined
           ? {}
           : { onContentLaneAdmitted: this.#onContentLaneAdmitted }),
+        ...(this.#onContentLaneDetached === undefined
+          ? {}
+          : { onContentLaneDetached: this.#onContentLaneDetached }),
         onPeerError: this.#onRecoveryError,
       })
       const generation: V2ReceiverGeneration = {

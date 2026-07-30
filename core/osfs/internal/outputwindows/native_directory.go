@@ -25,20 +25,43 @@ func openWindowsV3OutputPlatform(path string) (*windowsV3OutputPlatform, error) 
 }
 
 func openWindowsV3OutputPlatformWithInspector(path string, inspector windowsV3HandleInspector) (*windowsV3OutputPlatform, error) {
+	return openWindowsV3OutputPlatformWithAuthority(
+		path,
+		inspector,
+		windowsV3RootDirectoryAccess(),
+		windowsV3DirectoryShareMode(false),
+	)
+}
+
+func openWindowsV3PrivateRootParent(path string) (*windowsV3OutputPlatform, error) {
+	return openWindowsV3OutputPlatformWithAuthority(
+		path,
+		nativeWindowsV3HandleInspector{},
+		windowsV3PrivateRootParentAccess(),
+		windowsV3DirectoryShareMode(true),
+	)
+}
+
+func openWindowsV3OutputPlatformWithAuthority(
+	path string,
+	inspector windowsV3HandleInspector,
+	rootAccess uint32,
+	shareMode uint32,
+) (*windowsV3OutputPlatform, error) {
 	if inspector == nil || path == "" {
 		return nil, windowsV3Failure("open output root", path, errWindowsV3OutputUnsupported, errors.New("missing root or inspector"))
+	}
+	if rootAccess == 0 {
+		return nil, windowsV3Failure("open output root", path, errWindowsV3OutputUnsupported, errors.New("missing root access authority"))
 	}
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return nil, windowsV3Failure("resolve output root", path, errWindowsV3OutputUnsupported, err)
 	}
 	handle, _, err := windowsV3OpenNativeWithOptions(
-		0, windowsV3NTPath(absolute), windowsV3RootDirectoryAccess(), windows.FILE_OPEN,
+		0, windowsV3NTPath(absolute), rootAccess, windows.FILE_OPEN,
 		windows.FILE_DIRECTORY_FILE, 0, nil,
-		// The root is the containment anchor rather than one of its descendants.
-		// Keeping delete sharing here permits private probe/control children to be
-		// reduced while public child handles still pin their own placement.
-		windowsV3DirectoryShareMode(false),
+		shareMode,
 		windows.OBJ_CASE_INSENSITIVE|windows.OBJ_DONT_REPARSE,
 	)
 	if err != nil {

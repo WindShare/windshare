@@ -21,6 +21,9 @@ import {
 import { V2OperationRouter, type V2OperationQueue } from './v2-operation-router'
 import {
   type V2LaneChange,
+  V2_OPERATION_CANCEL_REASON,
+  type V2OperationCancelReason,
+  type V2OperationCancellation,
   type V2ReceiverSessionOptions,
   type V2SessionOperation,
   V2SessionRuntimeError,
@@ -237,17 +240,23 @@ export class V2ReceiverSessionRuntime {
     const operation = this.#router.create(id, kind, canonicalBody)
     this.#operationLanes.set(operation, lane.id)
     operation.onSettled(() => this.#operationLanes.delete(operation))
-    if (options.signal !== undefined) {
+    const cancellationSignal = options.signal
+    if (cancellationSignal !== undefined) {
       const cancel = () => {
-        this.cancelOperation(operation, 4, lane.id).catch(() => undefined)
+        const cause = abortCause(cancellationSignal)
+        this.cancelOperation(operation, {
+          protocolReason: cancellationProtocolReason(cause),
+          cause,
+          laneId: lane.id,
+        }).catch(() => undefined)
       }
-      options.signal.addEventListener('abort', cancel, { once: true })
-      operation.onSettled(() => options.signal?.removeEventListener('abort', cancel))
+      cancellationSignal.addEventListener('abort', cancel, { once: true })
+      operation.onSettled(() => cancellationSignal.removeEventListener('abort', cancel))
     }
     try {
       await lane.writer.send(message)
     } catch (error) {
-      operation.close()
+      operation.cancel(error)
       throw error
     }
     return operation
@@ -273,27 +282,28 @@ export class V2ReceiverSessionRuntime {
 
   async cancelOperation(
     operation: V2SessionOperation,
-    reason: 1 | 2 | 3 | 4 | 5 = 1,
-    laneId?: number,
+    cancellation: V2OperationCancellation,
   ): Promise<void> {
     if (!this.#router.owns(operation)) {
       // A remote final may already have installed its routing tombstone while
       // authenticated responses remain buffered for the consumer. Cancellation
       // still owns releasing that session-wide queue admission.
-      operation.close()
+      operation.cancel(cancellation.cause)
       return
     }
     // Local ownership ends before remote I/O. Otherwise a disappeared or
     // backpressured lane can keep an abandoned operation routable forever.
-    operation.close()
-    const lane = (laneId === undefined ? undefined : this.#lanes.get(laneId)) ??
+    operation.cancel(cancellation.cause)
+    const lane = (cancellation.laneId === undefined
+      ? undefined
+      : this.#lanes.get(cancellation.laneId)) ??
       this.#lanes.get(this.initialLaneId) ??
       this.#lanes.values().next().value as V2SessionLane | undefined
     if (lane === undefined) return
     await lane.writer.send(encodeV2Message(
       V2_MESSAGE_KIND.cancel,
       operation.id,
-      encodeV2Body([reason]),
+      encodeV2Body([cancellation.protocolReason]),
     ))
   }
 
@@ -302,8 +312,12 @@ export class V2ReceiverSessionRuntime {
       await this.close()
       return
     }
+    const cause = new DOMException('Protocol session stopped', 'AbortError')
     for (const operation of this.#router.active()) {
-      this.cancelOperation(operation, 1).catch(() => undefined)
+      this.cancelOperation(operation, {
+        protocolReason: V2_OPERATION_CANCEL_REASON.user,
+        cause,
+      }).catch(() => undefined)
     }
     await this.close()
   }
@@ -502,6 +516,16 @@ function nonzeroRandom(
     if (value.byteLength === length && value.some((item) => item !== 0)) return value.slice()
   }
   throw new V2SessionRuntimeError('session', 'Random identity source returned invalid bytes')
+}
+
+function abortCause(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException('Operation aborted', 'AbortError')
+}
+
+function cancellationProtocolReason(cause: unknown): V2OperationCancelReason {
+  return cause instanceof DOMException && cause.name === 'TimeoutError'
+    ? V2_OPERATION_CANCEL_REASON.timeout
+    : V2_OPERATION_CANCEL_REASON.user
 }
 
 function deadlineSignal(

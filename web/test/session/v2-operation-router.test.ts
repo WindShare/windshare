@@ -217,6 +217,23 @@ describe('v2 operation replay ownership', () => {
 })
 
 describe('v2 operation tombstone and admission ownership', () => {
+  it('preserves the exact local cancellation cause across pending and later reads', async () => {
+    const router = new V2OperationRouter(() => undefined)
+    const operationId = identity(8)
+    const operation = router.create(
+      operationId,
+      V2_MESSAGE_KIND.listChildren,
+      EMPTY_REQUEST_BODY,
+    )
+    const pending = operation.next()
+    const cause = new Error('consumer-owned cancellation')
+
+    operation.cancel(cause)
+
+    await expect(pending).rejects.toBe(cause)
+    await expect(operation.next()).rejects.toBe(cause)
+  })
+
   it('rejects authenticated traffic for an operation outside the active or tombstone sets', async () => {
     const router = new V2OperationRouter(() => undefined)
     const message = encodeV2Message(

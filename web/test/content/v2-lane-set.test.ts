@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import { FileGeometry } from '../../src/content/geometry'
 import {
+  V2BlockDispatchSequenceAuthority,
   V2LaneSet,
   type V2BlockDemand,
+  type V2BlockDispatchObservation,
   type V2BlockLane,
   type V2BlockRouteEligibility,
   type V2BlockRouteObservation,
@@ -103,11 +105,15 @@ class ImmediateLane implements V2BlockLane {
 describe('v2 receiver LaneSet', () => {
   it('distributes blocks and reports transport provenance only after each fetch succeeds', async () => {
     const observations: V2BlockRouteObservation[] = []
-    const lanes = new V2LaneSet({ onBlockFetched: (observation) => observations.push(observation) })
+    const dispatches: V2BlockDispatchObservation[] = []
+    const lanes = new V2LaneSet({
+      onBlockDispatched: (observation) => dispatches.push(observation),
+      onBlockFetched: (observation) => observations.push(observation),
+    })
     const first = new DeferredLane(1)
     const second = new DeferredLane(2)
-    lanes.add(first, 'relay')
-    lanes.add(second, 'peer')
+    lanes.add(first, 'relay', 0)
+    lanes.add(second, 'peer', 9)
     const signal = new AbortController().signal
 
     const left = lanes.fetch(demand(0n), ALL_ROUTES, signal)
@@ -115,15 +121,96 @@ describe('v2 receiver LaneSet', () => {
     await Promise.resolve()
     expect(first.calls).toEqual([0n])
     expect(second.calls).toEqual([1n])
+    expect(dispatches).toEqual([
+      {
+        dispatchSequence: 1,
+        laneId: 1,
+        laneEpoch: 0,
+        route: 'relay',
+        fileId: 'file',
+        localBlockIndex: 0n,
+      },
+      {
+        dispatchSequence: 2,
+        laneId: 2,
+        laneEpoch: 9,
+        route: 'peer',
+        fileId: 'file',
+        localBlockIndex: 1n,
+      },
+    ])
+    expect(observations).toEqual([])
 
     first.resolve(0)
     second.resolve(0)
     expect((await left).data).toEqual(Uint8Array.of(1))
     expect((await right).data).toEqual(Uint8Array.of(2))
     expect(observations).toEqual([
-      { laneId: 1, route: 'relay', fileId: 'file', localBlockIndex: 0n },
-      { laneId: 2, route: 'peer', fileId: 'file', localBlockIndex: 1n },
+      {
+        dispatchSequence: 1,
+        laneId: 1,
+        laneEpoch: 0,
+        route: 'relay',
+        fileId: 'file',
+        localBlockIndex: 0n,
+      },
+      {
+        dispatchSequence: 2,
+        laneId: 2,
+        laneEpoch: 9,
+        route: 'peer',
+        fileId: 'file',
+        localBlockIndex: 1n,
+      },
     ])
+  })
+
+  it('isolates dispatch observers and assigns sequence before lane invocation', async () => {
+    const order: string[] = []
+    const lane: V2BlockLane = {
+      id: 7,
+      fetchBlock: async (input) => {
+        order.push('invoke')
+        return { descriptor, localBlockIndex: input.localBlockIndex, data: Uint8Array.of(7) }
+      },
+    }
+    const lanes = new V2LaneSet({
+      onBlockDispatched: (observation) => {
+        order.push(`dispatch-${observation.dispatchSequence}`)
+        throw new Error('synthetic dispatch observer failure')
+      },
+      onBlockFetched: (observation) => order.push(`complete-${observation.dispatchSequence}`),
+    })
+    lanes.add(lane, 'peer', 11)
+
+    await expect(lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal))
+      .resolves.toMatchObject({ data: Uint8Array.of(7) })
+    await expect(lanes.fetch(demand(1n), ALL_ROUTES, new AbortController().signal))
+      .resolves.toMatchObject({ data: Uint8Array.of(7) })
+
+    expect(order).toEqual([
+      'dispatch-1', 'invoke', 'complete-1',
+      'dispatch-2', 'invoke', 'complete-2',
+    ])
+  })
+
+  it('keeps one dispatch sequence across protocol-generation lane-set replacement', async () => {
+    const authority = new V2BlockDispatchSequenceAuthority()
+    const sequences: number[] = []
+    const observe = (observation: V2BlockDispatchObservation) => {
+      sequences.push(observation.dispatchSequence)
+    }
+    const firstGeneration = new V2LaneSet({ dispatchSequence: authority, onBlockDispatched: observe })
+    firstGeneration.add(new ImmediateLane(1), 'relay', 0)
+    await firstGeneration.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)
+    firstGeneration.close()
+
+    const secondGeneration = new V2LaneSet({ dispatchSequence: authority, onBlockDispatched: observe })
+    secondGeneration.add(new ImmediateLane(10), 'relay', 0)
+    await secondGeneration.fetch(demand(1n), ALL_ROUTES, new AbortController().signal)
+
+    expect(sequences).toEqual([1, 2])
+    secondGeneration.close()
   })
 
   it('waits without polling until content policy admits a lane', async () => {

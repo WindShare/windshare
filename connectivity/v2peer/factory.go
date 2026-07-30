@@ -17,26 +17,35 @@ import (
 )
 
 const (
-	DefaultSTUNServer         = "stun:stun.l.google.com:19302"
-	DefaultAttemptTimeout     = 10 * time.Second
-	DefaultMaxCandidates      = v2signal.DefaultMaximumCandidates
-	DefaultMaxActiveAttempts  = 4
-	DefaultRetiredBindingTTL  = protocolsession.OperationTombstoneLifetime
-	DefaultMaxRetiredBindings = 64
+	DefaultSTUNServer                            = "stun:stun.l.google.com:19302"
+	DefaultAttemptTimeout                        = 10 * time.Second
+	DefaultMaxCandidates                         = v2signal.DefaultMaximumCandidates
+	DefaultMaxActiveAttempts                     = 4
+	DefaultRetiredBindingTTL                     = protocolsession.OperationTombstoneLifetime
+	DefaultMaxRetiredBindings                    = 64
+	defaultEvidenceReplacementWavesPerActiveSlot = 64
+	// A session normally needs one direct attempt. Sixty-four replacement waves
+	// per active slot leave broad diagnostic headroom without letting an
+	// authenticated peer turn exact lifetime claims into unbounded state.
+	DefaultMaxSessionEvidenceIdentities = DefaultMaxActiveAttempts * defaultEvidenceReplacementWavesPerActiveSlot
 
-	maximumConfiguredCandidates = v2signal.MaximumCandidates
-	maximumConfiguredAttempts   = 64
-	maximumRetiredBindings      = 4_096
-	handlerEventReserve         = 16
+	maximumConfiguredCandidates        = v2signal.MaximumCandidates
+	maximumConfiguredAttempts          = 64
+	maximumRetiredBindings             = 4_096
+	maximumSessionEvidenceIdentities   = 65_536
+	handlerEventReserve                = 16
+	rejectedOfferAuthoritySDP          = "v=0\r\n"
+	peerEvidenceCapacityFailureMessage = "Sender peer evidence identity capacity exhausted"
 )
 
 var (
-	ErrConfig          = errors.New("v2 peer sender configuration is invalid")
-	ErrProtocol        = errors.New("authenticated v2 peer signaling is invalid")
-	ErrAttemptCapacity = errors.New("v2 peer attempt capacity is exhausted")
-	ErrReplayCapacity  = errors.New("v2 peer replay tombstone capacity is exhausted")
-	ErrEventCapacity   = errors.New("v2 peer signaling event capacity is exhausted")
-	ErrNegotiation     = errors.New("v2 peer negotiation failed")
+	ErrConfig                   = errors.New("v2 peer sender configuration is invalid")
+	ErrProtocol                 = errors.New("authenticated v2 peer signaling is invalid")
+	ErrAttemptCapacity          = errors.New("v2 peer attempt capacity is exhausted")
+	ErrReplayCapacity           = errors.New("v2 peer replay tombstone capacity is exhausted")
+	ErrEventCapacity            = errors.New("v2 peer signaling event capacity is exhausted")
+	ErrEvidenceIdentityCapacity = errors.New("v2 peer session evidence identity capacity is exhausted")
+	ErrNegotiation              = errors.New("v2 peer negotiation failed")
 )
 
 type PeerConnection interface {
@@ -89,29 +98,33 @@ func (function DataChannelAdapterFunc) WrapDataChannel(
 }
 
 type Config struct {
-	Configuration      pion.Configuration
-	PeerConnections    PeerConnectionFactory
-	DataChannels       DataChannelAdapter
-	AttemptTimeout     time.Duration
-	MaxCandidates      int
-	MaxActiveAttempts  int
-	RetiredBindingTTL  time.Duration
-	MaxRetiredBindings int
-	Now                func() time.Time
-	OnError            func(error)
+	Configuration                pion.Configuration
+	PeerConnections              PeerConnectionFactory
+	DataChannels                 DataChannelAdapter
+	Observer                     SenderAttemptObserver
+	AttemptTimeout               time.Duration
+	MaxCandidates                int
+	MaxActiveAttempts            int
+	RetiredBindingTTL            time.Duration
+	MaxRetiredBindings           int
+	MaxSessionEvidenceIdentities int
+	Now                          func() time.Time
+	OnError                      func(error)
 }
 
 type Factory struct {
-	configuration      pion.Configuration
-	peerConnections    PeerConnectionFactory
-	dataChannels       DataChannelAdapter
-	attemptTimeout     time.Duration
-	maxCandidates      int
-	maxActiveAttempts  int
-	retiredBindingTTL  time.Duration
-	maxRetiredBindings int
-	now                func() time.Time
-	onError            func(error)
+	configuration                pion.Configuration
+	peerConnections              PeerConnectionFactory
+	dataChannels                 DataChannelAdapter
+	attemptTimeout               time.Duration
+	maxCandidates                int
+	maxActiveAttempts            int
+	retiredBindingTTL            time.Duration
+	maxRetiredBindings           int
+	maxSessionEvidenceIdentities int
+	now                          func() time.Time
+	onError                      func(error)
+	observer                     SenderAttemptObserver
 }
 
 func DefaultConfiguration() pion.Configuration {
@@ -120,7 +133,8 @@ func DefaultConfiguration() pion.Configuration {
 
 func NewFactory(config Config) (*Factory, error) {
 	if config.AttemptTimeout < 0 || config.MaxCandidates < 0 || config.MaxActiveAttempts < 0 ||
-		config.RetiredBindingTTL < 0 || config.MaxRetiredBindings < 0 {
+		config.RetiredBindingTTL < 0 || config.MaxRetiredBindings < 0 ||
+		config.MaxSessionEvidenceIdentities < 0 {
 		return nil, ErrConfig
 	}
 	if config.AttemptTimeout == 0 {
@@ -138,10 +152,15 @@ func NewFactory(config Config) (*Factory, error) {
 	if config.MaxRetiredBindings == 0 {
 		config.MaxRetiredBindings = DefaultMaxRetiredBindings
 	}
+	if config.MaxSessionEvidenceIdentities == 0 {
+		config.MaxSessionEvidenceIdentities = DefaultMaxSessionEvidenceIdentities
+	}
 	if config.MaxCandidates > maximumConfiguredCandidates ||
 		config.MaxActiveAttempts > maximumConfiguredAttempts ||
 		config.MaxRetiredBindings > maximumRetiredBindings ||
-		config.MaxRetiredBindings < config.MaxActiveAttempts {
+		config.MaxRetiredBindings < config.MaxActiveAttempts ||
+		config.MaxSessionEvidenceIdentities > maximumSessionEvidenceIdentities ||
+		config.MaxSessionEvidenceIdentities < config.MaxActiveAttempts {
 		return nil, ErrConfig
 	}
 	if config.PeerConnections == nil {
@@ -165,8 +184,8 @@ func NewFactory(config Config) (*Factory, error) {
 		dataChannels: config.DataChannels, attemptTimeout: config.AttemptTimeout,
 		maxCandidates: config.MaxCandidates, maxActiveAttempts: config.MaxActiveAttempts,
 		retiredBindingTTL: config.RetiredBindingTTL, maxRetiredBindings: config.MaxRetiredBindings,
-		now:     config.Now,
-		onError: config.OnError,
+		maxSessionEvidenceIdentities: config.MaxSessionEvidenceIdentities,
+		now:                          config.Now, onError: config.OnError, observer: config.Observer,
 	}, nil
 }
 
@@ -181,6 +200,7 @@ func (factory *Factory) NewSenderPeerHandler(
 		factory: factory, session: session, events: make(chan handlerEvent, capacity),
 		attempts:          make(map[peerOperation]*peerAttempt),
 		bindings:          make(map[v2signal.Binding]peerOperation),
+		evidenceAuthority: newSenderEvidenceAuthority(factory.maxSessionEvidenceIdentities),
 		retiredOperations: make(map[peerOperation]retiredBinding),
 		retiredBindings:   make(map[v2signal.Binding]retiredBinding),
 	}, nil
@@ -193,9 +213,29 @@ func (factory *Factory) BeginOperationContinuation(
 	if factory == nil {
 		return nil, false, ErrConfig
 	}
-	return (v2signal.OperationContinuationClassifier{
+	classifier := v2signal.OperationContinuationClassifier{
 		MaximumCandidates: factory.maxCandidates,
-	}).BeginOperationContinuation(requestKind, canonicalRequestBody)
+	}
+	authority, tracked, err := classifier.BeginOperationContinuation(requestKind, canonicalRequestBody)
+	if err == nil || requestKind != protocolsession.MessagePeerOffer {
+		return authority, tracked, err
+	}
+	binding, recovered := recoverOfferBinding(canonicalRequestBody)
+	if !recovered {
+		return authority, tracked, err
+	}
+	// OperationTable must admit the generation before the sender handler can
+	// publish its rejection. Rebuilding only the continuation authority from a
+	// canonical placeholder preserves v2signal's single binding/scope owner while
+	// leaving the malformed original body for the handler to reject and observe.
+	placeholder, encodeErr := v2signal.EncodeOffer(v2signal.Offer{
+		Binding: binding,
+		SDP:     rejectedOfferAuthoritySDP,
+	})
+	if encodeErr != nil {
+		return nil, true, errors.Join(err, encodeErr)
+	}
+	return classifier.BeginOperationContinuation(requestKind, placeholder)
 }
 
 func (factory *Factory) ClassifyUnboundOperationContinuation(
@@ -220,13 +260,14 @@ const (
 )
 
 type handlerEvent struct {
-	kind      handlerEventKind
-	ctx       context.Context
-	operation peerOperation
-	offer     v2signal.Offer
-	candidate v2signal.Candidate
-	rejection *peerOperationRejection
-	completed chan error
+	kind         handlerEventKind
+	ctx          context.Context
+	operation    peerOperation
+	offer        v2signal.Offer
+	candidate    v2signal.Candidate
+	offerBinding *v2signal.Binding
+	rejection    *peerOperationRejection
+	completed    chan error
 }
 
 type peerOperation struct {
@@ -240,14 +281,20 @@ type senderHandler struct {
 	events  chan handlerEvent
 	inboxMu sync.Mutex
 	closed  bool
+	ingress sync.WaitGroup
 
-	mu                 sync.Mutex
-	attempts           map[peerOperation]*peerAttempt
-	bindings           map[v2signal.Binding]peerOperation
+	mu       sync.Mutex
+	attempts map[peerOperation]*peerAttempt
+	bindings map[v2signal.Binding]peerOperation
+	// Evidence identity is scoped to the ProtocolSession, while replay
+	// tombstones intentionally expire. Keeping these authorities separate is
+	// what makes one (session,path,attempt,side) stream terminal exactly once.
+	evidenceAuthority  senderEvidenceAuthority
 	retiredOperations  map[peerOperation]retiredBinding
 	retiredBindings    map[v2signal.Binding]retiredBinding
 	replayBlockedUntil time.Time
 	stopping           bool
+	runtimeContext     context.Context
 	work               sync.WaitGroup
 }
 
@@ -261,6 +308,17 @@ func (handler *senderHandler) HandleMessage(
 	ctx context.Context,
 	message protocolsession.Message,
 ) error {
+	if !handler.beginIngress() {
+		return context.Canceled
+	}
+	defer handler.ingress.Done()
+	return handler.handleMessage(ctx, message)
+}
+
+func (handler *senderHandler) handleMessage(
+	ctx context.Context,
+	message protocolsession.Message,
+) error {
 	operation, ok := message.OperationID()
 	if !ok || operation.IsZero() {
 		return errors.Join(ErrProtocol, protocolsession.ErrInvalidOperationID)
@@ -268,9 +326,6 @@ func (handler *senderHandler) HandleMessage(
 	generation, ok := protocolsession.OperationGenerationFromContext(ctx, operation)
 	if !ok || generation.IsZero() {
 		return errors.Join(ErrProtocol, protocolsession.ErrUnknownOperation)
-	}
-	if !generation.IsActive() {
-		return nil
 	}
 	operationKey := peerOperation{id: operation, generation: generation}
 	event := handlerEvent{ctx: ctx, operation: operationKey}
@@ -281,6 +336,9 @@ func (handler *senderHandler) HandleMessage(
 		event.offer, err = v2signal.DecodeOffer(message.Body())
 		if err != nil {
 			event.kind = handlerReject
+			if binding, recovered := recoverOfferBinding(message.Body()); recovered {
+				event.offerBinding = &binding
+			}
 			event.rejection = &peerOperationRejection{
 				code: protocolsession.PeerOperationCodeNegotiation, message: peerNegotiationFailureMessage, cause: err,
 			}
@@ -297,16 +355,30 @@ func (handler *senderHandler) HandleMessage(
 	default:
 		return errors.Join(ErrProtocol, protocolsession.ErrUnknownMessageKind)
 	}
+	if !generation.IsActive() {
+		return handler.terminalizeUnstartedOffer(event, handler.unstartedOfferFailure())
+	}
 	if err := handler.enqueue(ctx, event); err != nil {
-		if !errors.Is(err, ErrEventCapacity) {
-			return err
+		if errors.Is(err, ErrEventCapacity) {
+			return handler.rejectOperation(
+				ctx, operationKey, rejectionForEvent(event, err), offerBindingForEvent(event),
+			)
 		}
-		if event.kind == handlerOffer {
-			handler.retireRejectedOffer(operationKey, event.offer.Binding)
-		}
-		handler.rejectOperation(ctx, operationKey, rejectionForEvent(event, err))
+		return errors.Join(err, handler.terminalizeUnstartedOffer(event, handler.unstartedOfferFailure()))
 	}
 	return nil
+}
+
+func (handler *senderHandler) beginIngress() bool {
+	handler.inboxMu.Lock()
+	defer handler.inboxMu.Unlock()
+	if handler.closed {
+		return false
+	}
+	// Admission and shutdown share inboxMu so Wait can never race a new Add.
+	// Once admitted, ingress owns its evidence claim until HandleMessage returns.
+	handler.ingress.Add(1)
+	return true
 }
 
 func (handler *senderHandler) Cancel(
@@ -381,6 +453,9 @@ func (handler *senderHandler) enqueue(ctx context.Context, event handlerEvent) e
 }
 
 func (handler *senderHandler) Run(ctx context.Context) error {
+	handler.mu.Lock()
+	handler.runtimeContext = ctx
+	handler.mu.Unlock()
 	defer handler.stopAll()
 	for {
 		select {
@@ -398,10 +473,11 @@ func (handler *senderHandler) handleRunEvent(ctx context.Context, event handlerE
 	eventContext := protocolsession.RetainMessageContext(ctx, event.ctx)
 	if event.kind != handlerCancel && !event.operation.generation.IsZero() &&
 		!event.operation.generation.IsActive() {
+		terminalErr := handler.terminalizeUnstartedOffer(event, handler.unstartedOfferFailure())
 		if event.completed != nil {
 			event.completed <- nil
 		}
-		return nil
+		return terminalErr
 	}
 	var err error
 	var rejected *peerOperationRejection
@@ -414,7 +490,6 @@ func (handler *senderHandler) handleRunEvent(ctx context.Context, event handlerE
 				message: peerNegotiationFailureMessage,
 				cause:   err,
 			}
-			handler.retireRejectedOffer(event.operation, event.offer.Binding)
 		}
 	case handlerCandidate:
 		err = handler.acceptCandidate(event.operation, event.candidate)
@@ -436,14 +511,15 @@ func (handler *senderHandler) handleRunEvent(ctx context.Context, event handlerE
 		event.completed <- err
 	}
 	if rejected != nil {
-		handler.rejectOperation(eventContext, event.operation, rejected)
-		return nil
+		return handler.rejectOperation(
+			eventContext, event.operation, rejected, offerBindingForEvent(event),
+		)
 	}
 	if err != nil && ctx.Err() != nil {
 		return err
 	}
 	if err != nil {
-		handler.factory.onError(fmt.Errorf("cancel peer operation: %w", err))
+		handler.factory.reportError(fmt.Errorf("cancel peer operation: %w", err))
 	}
 	return nil
 }
@@ -462,11 +538,24 @@ func rejectionForEvent(event handlerEvent, cause error) *peerOperationRejection 
 	}
 }
 
+func offerBindingForEvent(event handlerEvent) *v2signal.Binding {
+	if event.kind == handlerOffer && event.offer.Binding.Validate() == nil {
+		binding := event.offer.Binding
+		return &binding
+	}
+	if event.kind == handlerReject && event.offerBinding != nil && event.offerBinding.Validate() == nil {
+		binding := *event.offerBinding
+		return &binding
+	}
+	return nil
+}
+
 func (handler *senderHandler) rejectOperation(
 	ctx context.Context,
 	operation peerOperation,
 	rejection *peerOperationRejection,
-) {
+	binding *v2signal.Binding,
+) error {
 	if rejection == nil {
 		rejection = &peerOperationRejection{
 			code:    protocolsession.PeerOperationCodeNegotiation,
@@ -479,14 +568,86 @@ func (handler *senderHandler) rejectOperation(
 	handler.mu.Unlock()
 	if attempt != nil {
 		attempt.stop(rejection)
-		return
+	}
+	claim := evidenceClaim{}
+	if binding != nil {
+		claim = handler.claimRejectedOffer(operation, *binding)
+		if claim.acquired {
+			failure := senderOperationAttemptFailure(rejection.code, rejection.message)
+			if claim.sessionTerminal {
+				failure = senderEvidenceCapacityFailure()
+			}
+			handler.emitRejectedOfferTerminal(*binding, failure)
+		}
+	}
+	if claim.sessionTerminal || handler.evidenceSessionTerminal() {
+		handler.factory.reportError(errors.Join(rejection, ErrEvidenceIdentityCapacity))
+		return ErrEvidenceIdentityCapacity
 	}
 	failureContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), failureDeliveryTimeout)
 	err := handler.session.FailPeerOperation(
 		failureContext, operation.id, rejection.code, rejection.message,
 	)
 	cancel()
-	handler.factory.onError(errors.Join(rejection, err))
+	handler.factory.reportError(errors.Join(rejection, err))
+	return nil
+}
+
+func (handler *senderHandler) terminalizeUnstartedOffer(
+	event handlerEvent,
+	failure SenderAttemptFailure,
+) error {
+	binding := offerBindingForEvent(event)
+	if binding == nil {
+		return nil
+	}
+	claim := handler.claimRejectedOffer(event.operation, *binding)
+	if claim.acquired {
+		if claim.sessionTerminal {
+			failure = senderEvidenceCapacityFailure()
+		}
+		handler.emitRejectedOfferTerminal(*binding, failure)
+	}
+	if claim.sessionTerminal {
+		return ErrEvidenceIdentityCapacity
+	}
+	return nil
+}
+
+func (handler *senderHandler) emitUnstartedOfferTerminal(
+	event handlerEvent,
+	failure SenderAttemptFailure,
+) {
+	binding := offerBindingForEvent(event)
+	if binding != nil {
+		handler.emitRejectedOfferTerminal(*binding, failure)
+	}
+}
+
+func (handler *senderHandler) emitRejectedOfferTerminal(
+	binding v2signal.Binding,
+	failure SenderAttemptFailure,
+) {
+	recorder := newSenderAttemptRecorder(handler.factory, handler.session.ProtocolSessionID(), binding)
+	recorder.begin()
+	recorder.fail(failure)
+}
+
+func (handler *senderHandler) unstartedOfferFailure() SenderAttemptFailure {
+	handler.mu.Lock()
+	runtimeStopped := handler.stopping ||
+		(handler.runtimeContext != nil && handler.runtimeContext.Err() != nil)
+	handler.mu.Unlock()
+	if runtimeStopped {
+		return senderRuntimeStoppedFailure()
+	}
+	return senderAttemptCancelledFailure()
+}
+
+func (handler *senderHandler) evidenceSessionTerminal() bool {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	return handler.evidenceAuthority.terminal
 }
 
 var _ sessionruntime.SenderPeerHandlerFactory = (*Factory)(nil)
