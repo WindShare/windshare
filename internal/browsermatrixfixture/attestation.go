@@ -400,7 +400,7 @@ func validateNetworkSemantics(profileID string, semantics NetworkSemantics) erro
 			validateCredentialExpiry(semantics.TURNCredentialExpiresAt) != nil ||
 			expectStringsEmpty(semantics.STUNEndpoint, semantics.OutboundUDP, semantics.InboundUDP,
 				semantics.RelayAccess, semantics.SenderHostID, semantics.SenderNetworkBoundaryID) {
-			return errors.New("Coturn fixture semantics are invalid")
+			return errors.New("coturn fixture semantics are invalid")
 		}
 	case "manual-real-nat":
 		if semantics.Kind != NetworkSemanticsManualRealNAT ||
@@ -572,12 +572,16 @@ func canonicalHTTPSOrigin(value *url.URL) string {
 func isAcceptedGlobalIPv4(address netip.Addr) bool {
 	octets := address.As4()
 	a, b, c, d := octets[0], octets[1], octets[2], octets[3]
-	return !(a == 0 || a == 10 || a == 127 || a >= 224 ||
+	return !isReservedGlobalIPv4Range(a, b, c, d)
+}
+
+func isReservedGlobalIPv4Range(a, b, c, d byte) bool {
+	return a == 0 || a == 10 || a == 127 || a >= 224 ||
 		a == 100 && b >= 64 && b <= 127 || a == 169 && b == 254 ||
 		a == 172 && b >= 16 && b <= 31 || a == 192 && b == 168 ||
 		a == 192 && b == 0 && (c == 2 || c == 0 && d != 9 && d != 10) ||
 		a == 192 && b == 88 && c == 99 || a == 198 && (b == 18 || b == 19) ||
-		a == 198 && b == 51 && c == 100 || a == 203 && b == 0 && c == 113)
+		a == 198 && b == 51 && c == 100 || a == 203 && b == 0 && c == 113
 }
 
 func sha256Hex(document []byte) string {

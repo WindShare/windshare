@@ -79,17 +79,18 @@ func waitForQuiet(
 			}
 		}
 		inventory, err := authority.refresh()
-		if err != nil {
+		switch {
+		case err != nil:
 			evidenceFailure = errors.Join(evidenceFailure, err)
 			quiet = 0
 			_ = authority.signalTracked(signal)
 			signalRootFallback(rootProcess, rootPID, rootTerminal, signal)
-		} else if len(inventory) == 0 && rootTerminal != nil && noChildren {
+		case len(inventory) == 0 && rootTerminal != nil && noChildren:
 			quiet++
 			if quiet >= quietInventoryCount {
 				return true, rootTerminal, evidenceFailure
 			}
-		} else {
+		default:
 			quiet = 0
 			if err := authority.signalInventory(inventory, signal); err != nil {
 				evidenceFailure = errors.Join(evidenceFailure, err)

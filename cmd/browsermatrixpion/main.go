@@ -30,6 +30,7 @@ import (
 
 const (
 	minimumControlBytes           = 32
+	maximumUDPPort                = 1<<16 - 1
 	canonicalUTCMillisecondLayout = "2006-01-02T15:04:05.000Z"
 )
 
@@ -60,46 +61,78 @@ type commandConfig struct {
 	brokerPolicy            *browsermatrixbroker.ServerPolicy
 }
 
+type commandArguments struct {
+	config                    commandConfig
+	udpPortMin                uint
+	udpPortMax                uint
+	credentialFile            string
+	certificateFile           string
+	privateKeyFile            string
+	attestationTemplateFile   string
+	attestationPrivateKeyFile string
+	brokerPolicyFile          string
+}
+
 func main() {
+	os.Exit(commandExitCode(os.Args[1:]))
+}
+
+func commandExitCode(arguments []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	config, err := parseCommand(os.Args[1:])
+	config, err := parseCommand(arguments)
 	if err != nil {
 		log.Print("remote Pion configuration rejected")
-		os.Exit(2)
+		return 2
 	}
 	defer erase(config.credential)
 	defer erase(config.attestationSigner)
 	config.trace = jsonTraceSink(os.Stderr)
 	if err := run(ctx, config); err != nil {
 		log.Print("remote Pion authority terminated unsuccessfully")
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func parseCommand(arguments []string) (commandConfig, error) {
+	parsed, err := parseCommandArguments(arguments)
+	if err != nil {
+		return commandConfig{}, err
+	}
+	return loadCommandConfig(parsed)
+}
+
+func parseCommandArguments(arguments []string) (commandArguments, error) {
 	flags := flag.NewFlagSet("browsermatrixpion", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var config commandConfig
-	var udpPortMin uint
-	var udpPortMax uint
-	var credentialFile string
-	var certificateFile string
-	var privateKeyFile string
-	var attestationTemplateFile string
-	var attestationPrivateKeyFile string
-	var brokerPolicyFile string
+	var parsed commandArguments
+	bindCommandFlags(flags, &parsed)
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
+		return commandArguments{}, errors.New("remote Pion arguments are invalid")
+	}
+	if !commandArgumentsAreComplete(parsed) {
+		return commandArguments{}, errors.New("remote Pion arguments are incomplete")
+	}
+	if !commandHTTPTimeoutsAreCoherent(parsed.config) {
+		return commandArguments{}, errors.New("remote Pion HTTP timeout authority is incoherent")
+	}
+	return parsed, nil
+}
+
+func bindCommandFlags(flags *flag.FlagSet, parsed *commandArguments) {
+	config := &parsed.config
 	flags.StringVar(&config.listenAddress, "listen", "", "required TLS listen address")
-	flags.StringVar(&attestationTemplateFile, "attestation-template-file", "", "required canonical external fixture declaration")
-	flags.StringVar(&attestationPrivateKeyFile, "attestation-private-key-file", "", "required Ed25519 PKCS#8 attestation private key")
-	flags.StringVar(&brokerPolicyFile, "credential-broker-policy-file", "", "optional canonical OIDC broker policy")
+	flags.StringVar(&parsed.attestationTemplateFile, "attestation-template-file", "", "required canonical external fixture declaration")
+	flags.StringVar(&parsed.attestationPrivateKeyFile, "attestation-private-key-file", "", "required Ed25519 PKCS#8 attestation private key")
+	flags.StringVar(&parsed.brokerPolicyFile, "credential-broker-policy-file", "", "optional canonical OIDC broker policy")
 	flags.StringVar(&config.publicIP, "public-ip", "", "required authorized public IPv4 address")
 	flags.StringVar(&config.controllerPublicIP, "controller-public-ip", "", "required externally observed controller IPv4 address")
-	flags.UintVar(&udpPortMin, "udp-port-min", 0, "required ICE UDP range start")
-	flags.UintVar(&udpPortMax, "udp-port-max", 0, "required ICE UDP range end")
-	flags.StringVar(&credentialFile, "credential-file", "", "required bearer credential file")
-	flags.StringVar(&certificateFile, "tls-certificate-file", "", "required TLS certificate file")
-	flags.StringVar(&privateKeyFile, "tls-private-key-file", "", "required TLS private key file")
+	flags.UintVar(&parsed.udpPortMin, "udp-port-min", 0, "required ICE UDP range start")
+	flags.UintVar(&parsed.udpPortMax, "udp-port-max", 0, "required ICE UDP range end")
+	flags.StringVar(&parsed.credentialFile, "credential-file", "", "required bearer credential file")
+	flags.StringVar(&parsed.certificateFile, "tls-certificate-file", "", "required TLS certificate file")
+	flags.StringVar(&parsed.privateKeyFile, "tls-private-key-file", "", "required TLS private key file")
 	flags.DurationVar(&config.maximumLease, "maximum-lease", 0, "required maximum attempt lease")
 	flags.DurationVar(&config.attemptStartTimeout, "attempt-start-timeout", 0, "required attempt construction deadline")
 	flags.DurationVar(&config.offerTimeout, "offer-timeout", 0, "required SDP offer deadline")
@@ -113,97 +146,134 @@ func parseCommand(arguments []string) (commandConfig, error) {
 	flags.DurationVar(&config.serverWriteTimeout, "server-write-timeout", 0, "required HTTP response deadline")
 	flags.DurationVar(&config.serverIdleTimeout, "server-idle-timeout", 0, "required HTTP idle deadline")
 	flags.DurationVar(&config.shutdownTimeout, "shutdown-timeout", 0, "required graceful shutdown deadline")
-	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
-		return commandConfig{}, errors.New("remote Pion arguments are invalid")
-	}
-	if config.listenAddress == "" || config.publicIP == "" || config.controllerPublicIP == "" ||
-		attestationTemplateFile == "" || attestationPrivateKeyFile == "" ||
-		udpPortMin == 0 || udpPortMin > 65535 || udpPortMax < udpPortMin || udpPortMax > 65535 ||
-		credentialFile == "" || certificateFile == "" || privateKeyFile == "" ||
-		config.maximumLease <= 0 || config.attemptStartTimeout <= 0 || config.offerTimeout <= 0 ||
-		config.probeTimeout <= 0 || config.bodyReadTimeout <= 0 || config.tombstoneRetention <= 0 ||
-		config.maximumActive <= 0 || config.maximumTombstones < config.maximumActive ||
-		config.serverReadHeaderTimeout <= 0 || config.serverReadTimeout <= 0 ||
-		config.serverWriteTimeout <= 0 || config.serverIdleTimeout <= 0 || config.shutdownTimeout <= 0 {
-		return commandConfig{}, errors.New("remote Pion arguments are incomplete")
-	}
-	maximumHandlerTime := max(
-		config.attemptStartTimeout,
-		config.offerTimeout,
-		config.probeTimeout,
-	)
-	if config.serverReadTimeout < config.serverReadHeaderTimeout+config.bodyReadTimeout ||
-		config.serverWriteTimeout < config.bodyReadTimeout+maximumHandlerTime {
-		return commandConfig{}, errors.New("remote Pion HTTP timeout authority is incoherent")
-	}
-	credential, err := readCredential(credentialFile)
+}
+
+func commandArgumentsAreComplete(parsed commandArguments) bool {
+	config := parsed.config
+	return config.listenAddress != "" && config.publicIP != "" && config.controllerPublicIP != "" &&
+		parsed.attestationTemplateFile != "" && parsed.attestationPrivateKeyFile != "" &&
+		parsed.udpPortMin > 0 && parsed.udpPortMin <= maximumUDPPort &&
+		parsed.udpPortMax >= parsed.udpPortMin && parsed.udpPortMax <= maximumUDPPort &&
+		parsed.credentialFile != "" && parsed.certificateFile != "" && parsed.privateKeyFile != "" &&
+		config.maximumLease > 0 && config.attemptStartTimeout > 0 && config.offerTimeout > 0 &&
+		config.probeTimeout > 0 && config.bodyReadTimeout > 0 && config.tombstoneRetention > 0 &&
+		config.maximumActive > 0 && config.maximumTombstones >= config.maximumActive &&
+		config.serverReadHeaderTimeout > 0 && config.serverReadTimeout > 0 &&
+		config.serverWriteTimeout > 0 && config.serverIdleTimeout > 0 && config.shutdownTimeout > 0
+}
+
+func commandHTTPTimeoutsAreCoherent(config commandConfig) bool {
+	maximumHandlerTime := max(config.attemptStartTimeout, config.offerTimeout, config.probeTimeout)
+	return config.serverReadTimeout >= config.serverReadHeaderTimeout+config.bodyReadTimeout &&
+		config.serverWriteTimeout >= config.bodyReadTimeout+maximumHandlerTime
+}
+
+func loadCommandConfig(parsed commandArguments) (commandConfig, error) {
+	credential, err := readCredential(parsed.credentialFile)
 	if err != nil {
 		return commandConfig{}, err
 	}
-	certificate, err := tls.LoadX509KeyPair(certificateFile, privateKeyFile)
-	if err != nil {
-		erase(credential)
-		return commandConfig{}, errors.New("remote Pion TLS identity is invalid")
-	}
-	fixtureDocument, err := readBoundedFile(attestationTemplateFile, 1<<20)
-	if err != nil {
-		erase(credential)
-		return commandConfig{}, errors.New("external fixture attestation template is unavailable")
-	}
-	fixture, err := browsermatrixpion.ParseCanonicalExternalFixture(fixtureDocument)
-	erase(fixtureDocument)
-	if err != nil {
-		erase(credential)
-		return commandConfig{}, errors.New("external fixture attestation template is invalid")
-	}
-	if fixture.ProfileID == "scheduled-coturn" {
-		credentialExpiry, parseErr := time.Parse(
-			canonicalUTCMillisecondLayout,
-			fixture.NetworkSemantics.TURNCredentialExpiresAt,
-		)
-		if parseErr != nil || !time.Now().UTC().Before(credentialExpiry) {
-			erase(credential)
-			return commandConfig{}, errors.New("external fixture TURN credential declaration is expired")
-		}
-	}
-	attestationSigner, err := readAttestationPrivateKey(attestationPrivateKeyFile)
-	if err != nil {
-		erase(credential)
-		return commandConfig{}, err
-	}
-	executableDigest, err := currentExecutableSHA256()
-	if err != nil || fixture.ImplementationSHA256 != executableDigest ||
-		fixture.TLSCertificateSHA256 != tlsLeafSHA256(certificate) ||
-		!tlsCertificateAuthorizesOrigin(certificate, fixture.ControllerOrigin, time.Now().UTC()) ||
-		!attestationKeyIsIndependentOfTLS(attestationSigner, certificate) ||
-		fixture.ControllerPublicIP != config.controllerPublicIP || fixture.RemotePeerPublicIP != config.publicIP ||
-		fixture.RemotePeerUDPPortMin != uint16(udpPortMin) || fixture.RemotePeerUDPPortMax != uint16(udpPortMax) {
-		erase(credential)
-		erase(attestationSigner)
-		return commandConfig{}, errors.New("external fixture declaration does not describe this process")
-	}
-	if brokerPolicyFile != "" {
-		policy, policyErr := browsermatrixbroker.LoadServerPolicy(brokerPolicyFile)
-		if policyErr != nil || policy.ControllerOrigin != fixture.ControllerOrigin ||
-			policy.ProfileID != fixture.ProfileID {
+	var attestationSigner ed25519.PrivateKey
+	accepted := false
+	defer func() {
+		if !accepted {
 			erase(credential)
 			erase(attestationSigner)
-			return commandConfig{}, errors.New("credential broker policy does not describe this fixture")
 		}
-		config.brokerPolicy = &policy
+	}()
+
+	certificate, err := tls.LoadX509KeyPair(parsed.certificateFile, parsed.privateKeyFile)
+	if err != nil {
+		return commandConfig{}, errors.New("remote Pion TLS identity is invalid")
+	}
+	fixture, err := loadExternalFixture(parsed.attestationTemplateFile)
+	if err != nil {
+		return commandConfig{}, err
+	}
+	if err := validateFixtureCredentialExpiry(fixture); err != nil {
+		return commandConfig{}, err
+	}
+	attestationSigner, err = readAttestationPrivateKey(parsed.attestationPrivateKeyFile)
+	if err != nil {
+		return commandConfig{}, err
+	}
+	if err := validateExternalFixtureAuthority(fixture, certificate, attestationSigner, parsed); err != nil {
+		return commandConfig{}, err
+	}
+	brokerPolicy, err := loadBrokerPolicy(parsed.brokerPolicyFile, fixture)
+	if err != nil {
+		return commandConfig{}, err
 	}
 	if fixture.ProfileID == "scheduled-coturn" {
-		erase(credential)
-		erase(attestationSigner)
-		return commandConfig{}, errors.New("Coturn fixture lacks a concrete revocable provider capability")
+		return commandConfig{}, errors.New("coturn fixture lacks a concrete revocable provider capability")
 	}
+
+	config := parsed.config
 	config.fixture = fixture
 	config.attestationSigner = attestationSigner
 	config.udpPortMin = fixture.RemotePeerUDPPortMin
 	config.udpPortMax = fixture.RemotePeerUDPPortMax
 	config.credential = credential
 	config.certificate = certificate
+	config.brokerPolicy = brokerPolicy
+	accepted = true
 	return config, nil
+}
+
+func loadExternalFixture(path string) (browsermatrixpion.ExternalFixture, error) {
+	fixtureDocument, err := readBoundedFile(path, 1<<20)
+	if err != nil {
+		return browsermatrixpion.ExternalFixture{}, errors.New("external fixture attestation template is unavailable")
+	}
+	defer erase(fixtureDocument)
+	fixture, err := browsermatrixpion.ParseCanonicalExternalFixture(fixtureDocument)
+	if err != nil {
+		return browsermatrixpion.ExternalFixture{}, errors.New("external fixture attestation template is invalid")
+	}
+	return fixture, nil
+}
+
+func validateFixtureCredentialExpiry(fixture browsermatrixpion.ExternalFixture) error {
+	if fixture.ProfileID != "scheduled-coturn" {
+		return nil
+	}
+	credentialExpiry, err := time.Parse(
+		canonicalUTCMillisecondLayout,
+		fixture.NetworkSemantics.TURNCredentialExpiresAt,
+	)
+	if err != nil || !time.Now().UTC().Before(credentialExpiry) {
+		return errors.New("external fixture TURN credential declaration is expired")
+	}
+	return nil
+}
+
+func validateExternalFixtureAuthority(
+	fixture browsermatrixpion.ExternalFixture,
+	certificate tls.Certificate,
+	attestationSigner ed25519.PrivateKey,
+	parsed commandArguments,
+) error {
+	executableDigest, err := currentExecutableSHA256()
+	if err != nil || fixture.ImplementationSHA256 != executableDigest ||
+		fixture.TLSCertificateSHA256 != tlsLeafSHA256(certificate) ||
+		!tlsCertificateAuthorizesOrigin(certificate, fixture.ControllerOrigin, time.Now().UTC()) ||
+		!attestationKeyIsIndependentOfTLS(attestationSigner, certificate) ||
+		fixture.ControllerPublicIP != parsed.config.controllerPublicIP || fixture.RemotePeerPublicIP != parsed.config.publicIP ||
+		fixture.RemotePeerUDPPortMin != uint16(parsed.udpPortMin) || fixture.RemotePeerUDPPortMax != uint16(parsed.udpPortMax) {
+		return errors.New("external fixture declaration does not describe this process")
+	}
+	return nil
+}
+
+func loadBrokerPolicy(path string, fixture browsermatrixpion.ExternalFixture) (*browsermatrixbroker.ServerPolicy, error) {
+	if path == "" {
+		return nil, nil
+	}
+	policy, err := browsermatrixbroker.LoadServerPolicy(path)
+	if err != nil || policy.ControllerOrigin != fixture.ControllerOrigin || policy.ProfileID != fixture.ProfileID {
+		return nil, errors.New("credential broker policy does not describe this fixture")
+	}
+	return &policy, nil
 }
 
 func readCredential(path string) ([]byte, error) {
@@ -213,13 +283,17 @@ func readCredential(path string) ([]byte, error) {
 		return nil, errors.New("remote Pion control credential is invalid")
 	}
 	for _, character := range value {
-		if !(character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' ||
-			character >= '0' && character <= '9' || character == '_' || character == '-') {
+		if !credentialCharacterIsSafe(character) {
 			erase(value)
 			return nil, errors.New("remote Pion control credential is invalid")
 		}
 	}
 	return value, nil
+}
+
+func credentialCharacterIsSafe(character byte) bool {
+	return character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' ||
+		character >= '0' && character <= '9' || character == '_' || character == '-'
 }
 
 func run(ctx context.Context, config commandConfig) (resultErr error) {

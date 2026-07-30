@@ -232,12 +232,13 @@ func portableToken(value string) bool {
 		return false
 	}
 	for _, character := range value {
-		if !(character >= 'a' && character <= 'z') &&
-			!(character >= 'A' && character <= 'Z') &&
-			!(character >= '0' && character <= '9') &&
-			!strings.ContainsRune("._-", character) {
-			return false
+		if character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' ||
+			strings.ContainsRune("._-", character) {
+			continue
 		}
+		return false
 	}
 	return true
 }
@@ -247,9 +248,10 @@ func lowercaseSHA256(value string) bool {
 		return false
 	}
 	for _, character := range value {
-		if !(character >= '0' && character <= '9') && !(character >= 'a' && character <= 'f') {
-			return false
+		if character >= '0' && character <= '9' || character >= 'a' && character <= 'f' {
+			continue
 		}
+		return false
 	}
 	return true
 }

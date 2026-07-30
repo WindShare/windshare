@@ -26,7 +26,7 @@ func decodeCanonicalDocument(encoded []byte, label string, target any, sentinel 
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("%w: decode %s: %v", sentinel, label, err)
+		return fmt.Errorf("%w: decode %s: %w", sentinel, label, err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
@@ -35,7 +35,7 @@ func decodeCanonicalDocument(encoded []byte, label string, target any, sentinel 
 
 	canonical, err := marshalCanonicalDocument(target)
 	if err != nil {
-		return fmt.Errorf("%w: encode decoded %s: %v", sentinel, label, err)
+		return fmt.Errorf("%w: encode decoded %s: %w", sentinel, label, err)
 	}
 	if !bytes.Equal(encoded, canonical) {
 		// Re-encoding detects duplicate names, alternate escapes, member reordering,

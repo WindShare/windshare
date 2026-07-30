@@ -279,3 +279,107 @@ func TestWindowsOutputV3FileEntryAndLockClosedSurfaceIsSafe(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWindowsOutputV3FileLiveSurfacePreservesPinnedAuthorityThroughSettlement(t *testing.T) {
+	platform := openWindowsV3TestPlatform(t)
+	t.Cleanup(func() {
+		if err := platform.Close(); err != nil {
+			t.Errorf("close platform: %v", err)
+		}
+	})
+	directory := &windowsOutputV3Directory{native: platform.Root()}
+
+	const name = "capability-live-surface.bin"
+	created, err := directory.CreateFile(name, true, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := created.Close(); err != nil {
+			t.Errorf("close file: %v", err)
+		}
+	})
+	file, ok := created.(*windowsOutputV3File)
+	if !ok {
+		t.Fatalf("created file type = %T", created)
+	}
+
+	payload := []byte("pinned Windows capability")
+	if written, err := file.WriteAt(payload, 0); err != nil || written != len(payload) {
+		t.Fatalf("write = %d, %v", written, err)
+	}
+	if err := file.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if size, err := file.Size(); err != nil || size != uint64(len(payload)) {
+		t.Fatalf("size = %d, %v", size, err)
+	}
+	if _, err := file.AllocatedSize(); err != nil {
+		t.Fatalf("allocated size: %v", err)
+	}
+	read := make([]byte, len(payload))
+	if count, err := file.ReadAt(read, 0); err != nil || count != len(payload) || string(read) != string(payload) {
+		t.Fatalf("read = %d, %q, %v", count, read, err)
+	}
+
+	modified, err := catalog.NewModifiedTime(1_700_000_000, 0, catalog.TimePrecisionSeconds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.SetModifiedTime(modified); err != nil {
+		t.Fatalf("set modified time: %v", err)
+	}
+	if matches, err := file.MetadataMatches(uint64(len(payload)), modified); err != nil || !matches {
+		t.Fatalf("metadata match = %t, %v", matches, err)
+	}
+
+	opened, err := directory.OpenFile(name, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := opened.Close(); err != nil {
+			t.Errorf("close peer: %v", err)
+		}
+	})
+	peer, ok := opened.(*windowsOutputV3File)
+	if !ok {
+		t.Fatalf("opened file type = %T", opened)
+	}
+	if same, err := file.SameFile(peer); err != nil || !same {
+		t.Fatalf("same file = %t, %v", same, err)
+	}
+	identity, err := file.CloseRevalidationIdentity()
+	if err != nil || identity.IsZero() {
+		t.Fatalf("primary close identity is zero: %v", err)
+	}
+	peerIdentity, err := peer.CloseRevalidationIdentity()
+	if err != nil || !identity.Equal(peerIdentity) {
+		t.Fatalf("peer close identity differs: %v", err)
+	}
+	if err := peer.Close(); err != nil {
+		t.Fatalf("close peer: %v", err)
+	}
+
+	const truncatedSize = 7
+	if err := file.Truncate(truncatedSize); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	if size, err := file.Size(); err != nil || size != truncatedSize {
+		t.Fatalf("truncated size = %d, %v", size, err)
+	}
+	// Unlinking while the pinned handle remains live proves settlement does not
+	// silently exchange name authority for a later path re-resolution.
+	if err := directory.RemoveFile(name, file); err != nil {
+		t.Fatalf("remove pinned file: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close unlinked file: %v", err)
+	}
+	if file.native != nil {
+		t.Fatal("closed wrapper retained native authority")
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+}

@@ -34,6 +34,7 @@ Generated v2 contracts:
 Frozen cross-runtime fixtures:
 
 - `path-policy.json`: catalog path canonicalization, rejection, and collision rules.
+- `portable-path-vectors.json`: portable artifact paths, ordering, and collision rules.
 - `envelope-sample.json`: language-neutral JSON envelope parser fixture.
 
 Binary fields use padded standard base64. Integers that may exceed JavaScript's

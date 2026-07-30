@@ -115,14 +115,14 @@ func Load(path string) (Profile, error) {
 
 func Parse(encoded []byte) (Profile, error) {
 	if err := validateCanonicalJSON(encoded, "test ICE topology"); err != nil {
-		return Profile{}, fmt.Errorf("%w: %v", ErrInvalidProfile, err)
+		return Profile{}, fmt.Errorf("%w: %w", ErrInvalidProfile, err)
 	}
 	if err := requireExactProfileShape(encoded); err != nil {
-		return Profile{}, fmt.Errorf("%w: %v", ErrInvalidProfile, err)
+		return Profile{}, fmt.Errorf("%w: %w", ErrInvalidProfile, err)
 	}
 	var profile Profile
 	if err := decodeCanonicalJSON(encoded, "test ICE topology", &profile); err != nil {
-		return Profile{}, fmt.Errorf("%w: %v", ErrInvalidProfile, err)
+		return Profile{}, fmt.Errorf("%w: %w", ErrInvalidProfile, err)
 	}
 	if err := profile.Validate(); err != nil {
 		return Profile{}, err
@@ -167,14 +167,14 @@ func ParseResolution(
 		return Resolution{}, fmt.Errorf("%w: expected profile SHA-256 is not canonical", ErrInvalidResolution)
 	}
 	if err := validateCanonicalJSON(encoded, "test ICE topology resolution"); err != nil {
-		return Resolution{}, fmt.Errorf("%w: %v", ErrInvalidResolution, err)
+		return Resolution{}, fmt.Errorf("%w: %w", ErrInvalidResolution, err)
 	}
 	if err := requireExactResolutionShape(encoded); err != nil {
-		return Resolution{}, fmt.Errorf("%w: %v", ErrInvalidResolution, err)
+		return Resolution{}, fmt.Errorf("%w: %w", ErrInvalidResolution, err)
 	}
 	var resolution Resolution
 	if err := decodeCanonicalJSON(encoded, "test ICE topology resolution", &resolution); err != nil {
-		return Resolution{}, fmt.Errorf("%w: %v", ErrInvalidResolution, err)
+		return Resolution{}, fmt.Errorf("%w: %w", ErrInvalidResolution, err)
 	}
 	if err := resolution.Validate(profile, expectedProfileSHA256); err != nil {
 		return Resolution{}, err
@@ -368,7 +368,7 @@ func IsOperationalIPv4Unicast(address string) bool {
 		values[index] = uint8(value)
 	}
 	return values[0] != 0 && values[0] != 127 && values[0] < 224 &&
-		!(values[0] == 169 && values[1] == 254)
+		(values[0] != 169 || values[1] != 254)
 }
 
 func ipv4Number(address string) (uint32, bool) {

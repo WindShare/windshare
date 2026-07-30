@@ -162,120 +162,153 @@ func decodeRequest(input io.Reader) (request, error) {
 }
 
 func publish(decoded request) (publishedResult, error) {
-	artifacts := make([]artifactpublish.Artifact, 0, len(decoded.Artifacts))
-	for _, encoded := range decoded.Artifacts {
+	artifacts, err := decodeArtifacts(decoded.Artifacts)
+	if err != nil {
+		return publishedResult{}, err
+	}
+
+	switch decoded.Operation {
+	case "directory":
+		return publishDirectory(decoded, artifacts)
+	case "file":
+		return publishFile(decoded, artifacts)
+	case "prepare-existing-directory":
+		return prepareExistingDirectory(decoded)
+	case "publish-existing-directory":
+		return publishExistingDirectory(decoded)
+	case "verify-existing-directory":
+		return verifyExistingDirectory(decoded)
+	case "cleanup-existing-directory":
+		return cleanupExistingDirectory(decoded)
+	default:
+		return publishedResult{}, fmt.Errorf("artifact helper operation is invalid")
+	}
+}
+
+func decodeArtifacts(encodedArtifacts []artifactRequest) ([]artifactpublish.Artifact, error) {
+	artifacts := make([]artifactpublish.Artifact, 0, len(encodedArtifacts))
+	for _, encoded := range encodedArtifacts {
 		bytes, err := base64.StdEncoding.Strict().DecodeString(encoded.BytesBase64)
 		if err != nil {
-			return publishedResult{}, errors.New("artifact helper bytes are not canonical base64")
+			return nil, errors.New("artifact helper bytes are not canonical base64")
 		}
 		artifacts = append(artifacts, artifactpublish.Artifact{
 			Name: encoded.Name, Bytes: bytes, SHA256: encoded.SHA256,
 		})
 	}
-	switch decoded.Operation {
-	case "directory":
-		if err := requireLegacyOperationShape(decoded); err != nil {
-			return publishedResult{}, err
-		}
-		result, err := artifactpublish.PublishDirectory(artifactpublish.DirectoryRequest{
-			ParentPath: decoded.ParentPath, OutputName: decoded.OutputName,
-			StagingName: decoded.StagingName, Artifacts: artifacts,
-		})
-		return publishedResult{artifacts: result.Artifacts}, err
-	case "file":
-		if err := requireLegacyOperationShape(decoded); err != nil {
-			return publishedResult{}, err
-		}
-		if len(artifacts) != 1 {
-			return publishedResult{}, errors.New("artifact helper file operation requires one artifact")
-		}
-		result, err := artifactpublish.PublishFile(artifactpublish.FileRequest{
-			ParentPath: decoded.ParentPath, OutputName: decoded.OutputName,
-			StagingName: decoded.StagingName, Artifact: artifacts[0],
-		})
-		return publishedResult{artifacts: result.Artifacts}, err
-	case "prepare-existing-directory":
-		if err := requirePrepareExistingDirectoryShape(decoded); err != nil {
-			return publishedResult{}, err
-		}
-		inventory, err := existingDirectoryInventory(decoded)
-		if err != nil {
-			return publishedResult{}, err
-		}
-		receipt, err := artifactpublish.PrepareExistingDirectoryStaging(artifactpublish.ExistingDirectoryStagingRequest{
-			ParentPath:             decoded.ParentPath,
-			StagingName:            decoded.StagingName,
-			Inventory:              inventory,
-			ManifestPath:           decoded.ManifestPath,
-			ExpectedManifestSHA256: decoded.ExpectedManifestSHA256,
-		})
-		if err != nil {
-			return publishedResult{stagingReceipt: receipt.Bytes()}, err
-		}
-		return publishedResult{artifacts: []artifactpublish.PublishedArtifact{}, stagingReceipt: receipt.Bytes()}, nil
-	case "publish-existing-directory":
-		if err := requirePublishExistingDirectoryShape(decoded); err != nil {
-			return publishedResult{}, err
-		}
-		inventory, err := existingDirectoryInventory(decoded)
-		if err != nil {
-			return publishedResult{}, err
-		}
-		receiptBytes, err := decodeStagingReceipt(decoded.StagingReceipt)
-		if err != nil {
-			return publishedResult{}, err
-		}
-		result, err := artifactpublish.PublishExistingDirectory(artifactpublish.ExistingDirectoryRequest{
-			ParentPath: decoded.ParentPath, OutputName: decoded.OutputName,
-			StagingName: decoded.StagingName, Inventory: inventory,
-			ManifestPath:           decoded.ManifestPath,
-			ExpectedManifestSHA256: decoded.ExpectedManifestSHA256,
-			SnapshotPaths:          decoded.SnapshotPaths,
-			Receipt:                artifactpublish.NewExistingDirectoryStagingReceipt(receiptBytes),
-		})
-		return existingPublishedResult(result), err
-	case "verify-existing-directory":
-		if err := requireVerifyExistingDirectoryShape(decoded); err != nil {
-			return publishedResult{}, err
-		}
-		inventory, err := existingDirectoryInventory(decoded)
-		if err != nil {
-			return publishedResult{}, err
-		}
-		result, err := artifactpublish.VerifyExistingDirectory(artifactpublish.ExistingDirectoryVerificationRequest{
-			ParentPath: decoded.ParentPath, OutputName: decoded.OutputName,
-			Inventory: inventory, ManifestPath: decoded.ManifestPath,
-			ExpectedManifestSHA256: decoded.ExpectedManifestSHA256,
-			SnapshotPaths:          decoded.SnapshotPaths,
-		})
-		return existingPublishedResult(result), err
-	case "cleanup-existing-directory":
-		if err := requireCleanupExistingDirectoryShape(decoded); err != nil {
-			return publishedResult{}, err
-		}
-		inventory, err := existingDirectoryInventory(decoded)
-		if err != nil {
-			return publishedResult{}, err
-		}
-		receiptBytes, err := decodeStagingReceipt(decoded.StagingReceipt)
-		if err != nil {
-			return publishedResult{}, err
-		}
-		outcome, err := artifactpublish.CleanupExistingDirectoryStaging(artifactpublish.ExistingDirectoryCleanupRequest{
-			ParentPath:             decoded.ParentPath,
-			StagingName:            decoded.StagingName,
-			Inventory:              inventory,
-			ManifestPath:           decoded.ManifestPath,
-			ExpectedManifestSHA256: decoded.ExpectedManifestSHA256,
-			Receipt:                artifactpublish.NewExistingDirectoryStagingReceipt(receiptBytes),
-		})
-		return publishedResult{
-			artifacts:      []artifactpublish.PublishedArtifact{},
-			cleanupOutcome: outcome,
-		}, err
-	default:
-		return publishedResult{}, fmt.Errorf("artifact helper operation is invalid")
+	return artifacts, nil
+}
+
+func publishDirectory(decoded request, artifacts []artifactpublish.Artifact) (publishedResult, error) {
+	if err := requireLegacyOperationShape(decoded); err != nil {
+		return publishedResult{}, err
 	}
+	result, err := artifactpublish.PublishDirectory(artifactpublish.DirectoryRequest{
+		ParentPath: decoded.ParentPath, OutputName: decoded.OutputName,
+		StagingName: decoded.StagingName, Artifacts: artifacts,
+	})
+	return publishedResult{artifacts: result.Artifacts}, err
+}
+
+func publishFile(decoded request, artifacts []artifactpublish.Artifact) (publishedResult, error) {
+	if err := requireLegacyOperationShape(decoded); err != nil {
+		return publishedResult{}, err
+	}
+	if len(artifacts) != 1 {
+		return publishedResult{}, errors.New("artifact helper file operation requires one artifact")
+	}
+	result, err := artifactpublish.PublishFile(artifactpublish.FileRequest{
+		ParentPath: decoded.ParentPath, OutputName: decoded.OutputName,
+		StagingName: decoded.StagingName, Artifact: artifacts[0],
+	})
+	return publishedResult{artifacts: result.Artifacts}, err
+}
+
+func prepareExistingDirectory(decoded request) (publishedResult, error) {
+	if err := requirePrepareExistingDirectoryShape(decoded); err != nil {
+		return publishedResult{}, err
+	}
+	inventory, err := existingDirectoryInventory(decoded)
+	if err != nil {
+		return publishedResult{}, err
+	}
+	receipt, err := artifactpublish.PrepareExistingDirectoryStaging(artifactpublish.ExistingDirectoryStagingRequest{
+		ParentPath:             decoded.ParentPath,
+		StagingName:            decoded.StagingName,
+		Inventory:              inventory,
+		ManifestPath:           decoded.ManifestPath,
+		ExpectedManifestSHA256: decoded.ExpectedManifestSHA256,
+	})
+	if err != nil {
+		return publishedResult{stagingReceipt: receipt.Bytes()}, err
+	}
+	return publishedResult{artifacts: []artifactpublish.PublishedArtifact{}, stagingReceipt: receipt.Bytes()}, nil
+}
+
+func publishExistingDirectory(decoded request) (publishedResult, error) {
+	if err := requirePublishExistingDirectoryShape(decoded); err != nil {
+		return publishedResult{}, err
+	}
+	inventory, err := existingDirectoryInventory(decoded)
+	if err != nil {
+		return publishedResult{}, err
+	}
+	receiptBytes, err := decodeStagingReceipt(decoded.StagingReceipt)
+	if err != nil {
+		return publishedResult{}, err
+	}
+	result, err := artifactpublish.PublishExistingDirectory(artifactpublish.ExistingDirectoryRequest{
+		ParentPath: decoded.ParentPath, OutputName: decoded.OutputName,
+		StagingName: decoded.StagingName, Inventory: inventory,
+		ManifestPath:           decoded.ManifestPath,
+		ExpectedManifestSHA256: decoded.ExpectedManifestSHA256,
+		SnapshotPaths:          decoded.SnapshotPaths,
+		Receipt:                artifactpublish.NewExistingDirectoryStagingReceipt(receiptBytes),
+	})
+	return existingPublishedResult(result), err
+}
+
+func verifyExistingDirectory(decoded request) (publishedResult, error) {
+	if err := requireVerifyExistingDirectoryShape(decoded); err != nil {
+		return publishedResult{}, err
+	}
+	inventory, err := existingDirectoryInventory(decoded)
+	if err != nil {
+		return publishedResult{}, err
+	}
+	result, err := artifactpublish.VerifyExistingDirectory(artifactpublish.ExistingDirectoryVerificationRequest{
+		ParentPath: decoded.ParentPath, OutputName: decoded.OutputName,
+		Inventory: inventory, ManifestPath: decoded.ManifestPath,
+		ExpectedManifestSHA256: decoded.ExpectedManifestSHA256,
+		SnapshotPaths:          decoded.SnapshotPaths,
+	})
+	return existingPublishedResult(result), err
+}
+
+func cleanupExistingDirectory(decoded request) (publishedResult, error) {
+	if err := requireCleanupExistingDirectoryShape(decoded); err != nil {
+		return publishedResult{}, err
+	}
+	inventory, err := existingDirectoryInventory(decoded)
+	if err != nil {
+		return publishedResult{}, err
+	}
+	receiptBytes, err := decodeStagingReceipt(decoded.StagingReceipt)
+	if err != nil {
+		return publishedResult{}, err
+	}
+	outcome, err := artifactpublish.CleanupExistingDirectoryStaging(artifactpublish.ExistingDirectoryCleanupRequest{
+		ParentPath:             decoded.ParentPath,
+		StagingName:            decoded.StagingName,
+		Inventory:              inventory,
+		ManifestPath:           decoded.ManifestPath,
+		ExpectedManifestSHA256: decoded.ExpectedManifestSHA256,
+		Receipt:                artifactpublish.NewExistingDirectoryStagingReceipt(receiptBytes),
+	})
+	return publishedResult{
+		artifacts:      []artifactpublish.PublishedArtifact{},
+		cleanupOutcome: outcome,
+	}, err
 }
 
 func existingDirectoryInventory(decoded request) (artifactpublish.ExistingDirectoryInventory, error) {

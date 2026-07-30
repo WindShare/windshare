@@ -109,6 +109,16 @@ func (authority *managedProcessExitAuthority) close() {
 	}
 }
 
+func closeOwnedProcessHandle(handle windows.Handle, operation string) error {
+	if handle == 0 || handle == windows.InvalidHandle {
+		return nil
+	}
+	if err := windows.CloseHandle(handle); err != nil {
+		return fmt.Errorf("%s: %w", operation, err)
+	}
+	return nil
+}
+
 func rootHandleFromEvent(job managedJob, event launcherEvent, launcher *os.Process) (windows.Handle, error) {
 	if uint64(uintptr(event.ProcessHandle)) != event.ProcessHandle {
 		return 0, errors.New("launcher-local root process handle does not fit this architecture")
@@ -201,8 +211,12 @@ func (root managedRoot) retainExitAuthority() (processExitAuthority, error) {
 	return authority, nil
 }
 
-func waitRootAndClose(handle windows.Handle, pid uint32) (rootStatus, error) {
-	defer windows.CloseHandle(handle)
+func waitRootAndClose(handle windows.Handle, pid uint32) (status rootStatus, resultErr error) {
+	defer func() {
+		// A successful wait is not settled while its durable identity handle leaks.
+		// Preserve the wait failure as the primary cause and append cleanup evidence.
+		resultErr = errors.Join(resultErr, closeOwnedProcessHandle(handle, "close exact root process handle"))
+	}()
 	result, err := windows.WaitForSingleObject(handle, windows.INFINITE)
 	if err != nil {
 		return rootStatus{}, fmt.Errorf("wait for root process: %w", err)

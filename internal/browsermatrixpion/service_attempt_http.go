@@ -8,6 +8,26 @@ import (
 	"time"
 )
 
+type attemptAdmission struct {
+	binding                AttemptBinding
+	requestID              string
+	lease                  time.Duration
+	authority              authorityLease
+	leaseIssuedAt          time.Time
+	requestedLeaseDeadline time.Time
+}
+
+type startedAttempt struct {
+	entry                 *leasedAttempt
+	authority             AttemptAuthority
+	publicationObservedAt time.Time
+}
+
+type attemptCreationFailure struct {
+	status int
+	code   string
+}
+
 func (service *Service) handleAttempts(
 	w http.ResponseWriter,
 	request *http.Request,
@@ -27,12 +47,69 @@ func (service *Service) handleAttempts(
 		writeProtocolError(w, http.StatusBadRequest, "invalid-attempt")
 		return
 	}
+	admission, authorized := service.authorizeAttemptAdmission(input, lease, authorization)
+	if !authorized {
+		writeProtocolError(w, http.StatusConflict, "authority-binding-mismatch")
+		return
+	}
+	if authorization.dynamic {
+		if err := service.controlCredentials.claimAttempt(
+			admission.authority.controlLeaseID,
+			admission.requestID,
+		); err != nil {
+			writeProtocolError(w, http.StatusConflict, "attempt-authority-consumed")
+			return
+		}
+	}
+	reservation, startup, status := service.reserveAttempt(
+		admission.requestID,
+		admission.lease,
+		admission.binding,
+		admission.authority.controlLeaseID,
+	)
+	if status != 0 {
+		writeProtocolError(w, status, "attempt-admission-rejected")
+		return
+	}
+	if reservation.attemptID == "" {
+		service.replayCreateAttempt(
+			w,
+			request,
+			admission.requestID,
+			admission.lease,
+			admission.binding,
+			admission.authority.controlLeaseID,
+			startup,
+		)
+		return
+	}
+	started, failure := service.startReservedAttempt(request.Context(), reservation, admission)
+	if failure.status != 0 {
+		writeProtocolError(w, failure.status, failure.code)
+		return
+	}
+	if failure = service.activateStartedAttempt(started); failure.status != 0 {
+		writeProtocolError(w, failure.status, failure.code)
+		return
+	}
+	writeJSON(w, http.StatusCreated, CreateAttemptResponse{
+		ProtocolVersion: ProtocolVersion, AttemptAuthority: started.authority,
+		LeaseIssuedAt:  started.entry.leaseIssuedAt.Format(canonicalTimestampLayout),
+		LeaseExpiresAt: started.entry.expiresAt.Format(canonicalTimestampLayout),
+		LeaseMillis:    started.entry.leaseLength.Milliseconds(),
+	})
+}
+
+func (service *Service) authorizeAttemptAdmission(
+	input CreateAttemptRequest,
+	lease time.Duration,
+	authorization requestAuthorization,
+) (attemptAdmission, bool) {
 	requestAuthority := input.RequestAuthority
 	binding := AttemptBinding{
 		ControlAuthority: requestAuthority.ControlAuthority,
 		FixtureBinding:   requestAuthority.FixtureBinding,
 	}
-	requestID := requestAuthority.RequestID
 	authority, authorized := service.authorityLeaseForBinding(binding)
 	admittedAt := service.clock.Now().UTC()
 	leaseIssuedAt := admittedAt.Truncate(time.Millisecond)
@@ -46,39 +123,22 @@ func (service *Service) handleAttempts(
 			Milestone: traceAttemptStarting, InstanceID: service.instanceID,
 			RunID:             requestAuthority.ControlAuthority.SampleAuthority.RunID,
 			AttestationSHA256: requestAuthority.FixtureBinding.AttestationSHA256,
-			RequestID:         requestID, Outcome: "authority-lease-rejected",
+			RequestID:         requestAuthority.RequestID, Outcome: "authority-lease-rejected",
 		})
-		writeProtocolError(w, http.StatusConflict, "authority-binding-mismatch")
-		return
+		return attemptAdmission{}, false
 	}
-	if authorization.dynamic {
-		if err := service.controlCredentials.claimAttempt(controlLeaseID, requestID); err != nil {
-			writeProtocolError(w, http.StatusConflict, "attempt-authority-consumed")
-			return
-		}
-	}
-	reservation, startup, status := service.reserveAttempt(
-		requestID,
-		lease,
-		binding,
-		controlLeaseID,
-	)
-	if status != 0 {
-		writeProtocolError(w, status, "attempt-admission-rejected")
-		return
-	}
-	if reservation.attemptID == "" {
-		service.replayCreateAttempt(
-			w,
-			request,
-			requestID,
-			lease,
-			binding,
-			controlLeaseID,
-			startup,
-		)
-		return
-	}
+	return attemptAdmission{
+		binding: binding, requestID: requestAuthority.RequestID, lease: lease,
+		authority: authority, leaseIssuedAt: leaseIssuedAt,
+		requestedLeaseDeadline: requestedLeaseDeadline,
+	}, true
+}
+
+func (service *Service) startReservedAttempt(
+	requestContext context.Context,
+	reservation attemptReservation,
+	admission attemptAdmission,
+) (startedAttempt, attemptCreationFailure) {
 	emitTrace(service.trace, TraceEvent{
 		Milestone: traceAttemptStarting, InstanceID: service.instanceID,
 		RunID:             reservation.binding.ControlAuthority.SampleAuthority.RunID,
@@ -86,20 +146,22 @@ func (service *Service) handleAttempts(
 		RequestID:         reservation.requestID, AttemptID: reservation.attemptID,
 	})
 	startupDeadline := service.clock.Now().UTC().Add(service.attemptStartTimeout)
-	if authority.expiresAt.Before(startupDeadline) {
-		startupDeadline = authority.expiresAt
+	if admission.authority.expiresAt.Before(startupDeadline) {
+		startupDeadline = admission.authority.expiresAt
 	}
-	if requestedLeaseDeadline.Before(startupDeadline) {
-		startupDeadline = requestedLeaseDeadline
+	if admission.requestedLeaseDeadline.Before(startupDeadline) {
+		startupDeadline = admission.requestedLeaseDeadline
 	}
-	ctx, cancel := context.WithDeadline(request.Context(), startupDeadline)
+	ctx, cancel := context.WithDeadline(requestContext, startupDeadline)
 	stop := context.AfterFunc(service.lifecycleContext, cancel)
 	if !service.registerStartupCancellation(reservation, cancel) {
 		stop()
 		cancel()
 		service.releaseFailedReservation(reservation, nil)
-		writeProtocolError(w, http.StatusConflict, "attempt-rejected")
-		return
+		return startedAttempt{}, attemptCreationFailure{
+			status: http.StatusConflict,
+			code:   "attempt-rejected",
+		}
 	}
 	attemptAuthority := attemptAuthorityFromParts(
 		reservation.binding,
@@ -118,37 +180,46 @@ func (service *Service) handleAttempts(
 			cleanupErr = attempt.Close()
 		}
 		service.releaseFailedReservation(reservation, cleanupErr)
-		writeProtocolError(w, http.StatusInternalServerError, "attempt-start-failed")
-		return
+		return startedAttempt{}, attemptCreationFailure{
+			status: http.StatusInternalServerError,
+			code:   "attempt-start-failed",
+		}
 	}
 	now := service.clock.Now().UTC()
-	expiresAt := requestedLeaseDeadline
-	if authority.expiresAt.Before(expiresAt) {
-		expiresAt = authority.expiresAt
+	expiresAt := admission.requestedLeaseDeadline
+	if admission.authority.expiresAt.Before(expiresAt) {
+		expiresAt = admission.authority.expiresAt
 	}
 	leaseContext, leaseCancel := context.WithDeadline(service.lifecycleContext, expiresAt)
 	entry := &leasedAttempt{
 		attempt: attempt, attemptID: reservation.attemptID, requestID: reservation.requestID,
 		challenge: reservation.challenge, binding: reservation.binding,
-		controlLeaseID: reservation.controlLeaseID, leaseLength: lease,
-		leaseIssuedAt: leaseIssuedAt, expiresAt: expiresAt,
-		authorityIssuedAt: authority.issuedAt, authorityExpiresAt: authority.expiresAt,
-		controlExpiresAt: authority.controlExpiresAt,
+		controlLeaseID: reservation.controlLeaseID, leaseLength: admission.lease,
+		leaseIssuedAt: admission.leaseIssuedAt, expiresAt: expiresAt,
+		authorityIssuedAt: admission.authority.issuedAt, authorityExpiresAt: admission.authority.expiresAt,
+		controlExpiresAt: admission.authority.controlExpiresAt,
 		lease:            leaseContext, leaseCancel: leaseCancel,
 		state: attemptActive, reaped: make(chan struct{}),
 	}
+	return startedAttempt{
+		entry: entry, authority: attemptAuthority, publicationObservedAt: now,
+	}, attemptCreationFailure{}
+}
+
+func (service *Service) activateStartedAttempt(started startedAttempt) attemptCreationFailure {
+	entry := started.entry
 	service.mu.Lock()
 	service.starting--
 	delete(service.attemptReservations, entry.attemptID)
 	if service.closed || len(service.containmentFailures) != 0 ||
-		service.controlLeaseRetiringLocked(entry.controlLeaseID) || !now.Before(expiresAt) {
+		service.controlLeaseRetiringLocked(entry.controlLeaseID) ||
+		!started.publicationObservedAt.Before(entry.expiresAt) {
 		service.retiring[entry.attemptID] = entry
 		entry.state = attemptRetiring
 		service.condition.Broadcast()
 		service.mu.Unlock()
 		service.reap(entry)
-		writeProtocolError(w, http.StatusConflict, "attempt-rejected")
-		return
+		return attemptCreationFailure{status: http.StatusConflict, code: "attempt-rejected"}
 	}
 	service.active[entry.attemptID] = entry
 	service.condition.Broadcast()
@@ -160,7 +231,10 @@ func (service *Service) handleAttempts(
 		RequestID:         entry.requestID, AttemptID: entry.attemptID,
 	})
 
-	timer := service.clock.AfterFunc(expiresAt.Sub(service.clock.Now().UTC()), func() { service.expireAttempt(entry) })
+	timer := service.clock.AfterFunc(
+		entry.expiresAt.Sub(service.clock.Now().UTC()),
+		func() { service.expireAttempt(entry) },
+	)
 	service.mu.Lock()
 	if timer == nil {
 		transitioned, owner := service.transitionToRetiringLocked(entry.attemptID, entry)
@@ -168,8 +242,10 @@ func (service *Service) handleAttempts(
 		if owner {
 			service.reap(transitioned)
 		}
-		writeProtocolError(w, http.StatusInternalServerError, "attempt-lease-failed")
-		return
+		return attemptCreationFailure{
+			status: http.StatusInternalServerError,
+			code:   "attempt-lease-failed",
+		}
 	}
 	activeAfterTimer := entry.state == attemptActive
 	if activeAfterTimer {
@@ -182,19 +258,14 @@ func (service *Service) handleAttempts(
 	if !activeAfterTimer {
 		<-entry.reaped
 		if entry.retireErr != nil {
-			writeProtocolError(w, http.StatusInternalServerError, "attempt-containment-failed")
-		} else {
-			writeProtocolError(w, http.StatusConflict, "attempt-rejected")
+			return attemptCreationFailure{
+				status: http.StatusInternalServerError,
+				code:   "attempt-containment-failed",
+			}
 		}
-		return
+		return attemptCreationFailure{status: http.StatusConflict, code: "attempt-rejected"}
 	}
-
-	writeJSON(w, http.StatusCreated, CreateAttemptResponse{
-		ProtocolVersion: ProtocolVersion, AttemptAuthority: attemptAuthority,
-		LeaseIssuedAt:  entry.leaseIssuedAt.Format(canonicalTimestampLayout),
-		LeaseExpiresAt: entry.expiresAt.Format(canonicalTimestampLayout),
-		LeaseMillis:    entry.leaseLength.Milliseconds(),
-	})
+	return attemptCreationFailure{}
 }
 
 func (service *Service) replayCreateAttempt(
@@ -285,34 +356,13 @@ func (service *Service) handleAttempt(
 			writeProtocolError(w, http.StatusNotFound, "attempt-not-found")
 			return
 		}
-		result := entry.attempt.Result()
-		result.ProtocolVersion = ProtocolVersion
-		result.AttemptAuthority = attemptAuthorityFromParts(
-			entry.binding, entry.requestID, entry.attemptID, entry.challenge,
-		)
-		result.ChallengeBindingSHA256 = challengeBindingSHA256(result.AttemptAuthority)
-		result.TerminalReceipt = nil
-		receiptIssued := false
-		if entry.terminalReceipt != nil {
-			applyAttemptTerminalReceipt(&result, *entry.terminalReceipt)
-		} else if result.State == attemptStateEstablished || result.State == attemptStateFailed {
-			signed, err := service.signAttemptTerminalResult(entry, result, now)
-			if err != nil {
-				entry.operation.Unlock()
-				service.rejectInvalidAttemptResult(entry)
-				writeProtocolError(w, http.StatusInternalServerError, "attempt-result-invalid")
-				return
-			}
-			entry.terminalReceipt = &signed
-			applyAttemptTerminalReceipt(&result, signed)
-			receiptIssued = true
-		} else if validatePendingAttemptResult(result) != nil {
-			entry.operation.Unlock()
+		result, receiptIssued, resultErr := service.resolveAttemptResultLocked(entry, now)
+		entry.operation.Unlock()
+		if resultErr != nil {
 			service.rejectInvalidAttemptResult(entry)
 			writeProtocolError(w, http.StatusInternalServerError, "attempt-result-invalid")
 			return
 		}
-		entry.operation.Unlock()
 		if receiptIssued {
 			emitTrace(service.trace, TraceEvent{
 				Milestone: traceTerminalReceipt, InstanceID: service.instanceID,
@@ -326,6 +376,34 @@ func (service *Service) handleAttempt(
 		service.deleteAttempt(w, parts[0], authorization)
 	default:
 		writeProtocolError(w, http.StatusMethodNotAllowed, "method-not-allowed")
+	}
+}
+
+func (service *Service) resolveAttemptResultLocked(
+	entry *leasedAttempt,
+	now time.Time,
+) (AttemptResult, bool, error) {
+	result := entry.attempt.Result()
+	result.ProtocolVersion = ProtocolVersion
+	result.AttemptAuthority = attemptAuthorityFromParts(
+		entry.binding, entry.requestID, entry.attemptID, entry.challenge,
+	)
+	result.ChallengeBindingSHA256 = challengeBindingSHA256(result.AttemptAuthority)
+	result.TerminalReceipt = nil
+	switch {
+	case entry.terminalReceipt != nil:
+		applyAttemptTerminalReceipt(&result, *entry.terminalReceipt)
+		return result, false, nil
+	case result.State == attemptStateEstablished || result.State == attemptStateFailed:
+		signed, err := service.signAttemptTerminalResult(entry, result, now)
+		if err != nil {
+			return result, false, err
+		}
+		entry.terminalReceipt = &signed
+		applyAttemptTerminalReceipt(&result, signed)
+		return result, true, nil
+	default:
+		return result, false, validatePendingAttemptResult(result)
 	}
 }
 

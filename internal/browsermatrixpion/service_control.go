@@ -173,64 +173,85 @@ func (service *Service) controlLeaseOwnsAttemptLocked(leaseID string) bool {
 	return false
 }
 
+type controlLeaseAttemptRetirementBatch struct {
+	hadRegistryOwnership bool
+	cancellations        []context.CancelFunc
+	startups             map[<-chan struct{}]struct{}
+	reaping              map[*leasedAttempt]bool
+}
+
 // revokeControlLeaseAttemptsAndWait closes the registry race in both directions:
 // a startup sees the retirement marker before publication, while revocation waits
 // for the request's exact startup/reap signal before it can return a receipt.
 func (service *Service) revokeControlLeaseAttemptsAndWait(leaseID string) error {
 	for {
-		var cancellations []context.CancelFunc
-		startups := make(map[<-chan struct{}]struct{})
-		reaping := make(map[*leasedAttempt]bool)
-
-		service.mu.Lock()
-		owned := service.controlLeaseOwnsAttemptLocked(leaseID)
-		for requestID, ownerLeaseID := range service.requestControlLeases {
-			if ownerLeaseID != leaseID {
-				continue
-			}
-			if cancel := service.requestCancels[requestID]; cancel != nil {
-				cancellations = append(cancellations, cancel)
-			}
-			if startup := service.requestStarts[requestID]; startup != nil {
-				startups[startup] = struct{}{}
-			}
-		}
-		for attemptID, entry := range service.active {
-			if entry.controlLeaseID != leaseID {
-				continue
-			}
-			if transitioned, owner := service.transitionToRetiringLocked(attemptID, entry); transitioned != nil {
-				reaping[transitioned] = owner
-			}
-		}
-		for _, entry := range service.retiring {
-			if entry.controlLeaseID == leaseID {
-				if _, exists := reaping[entry]; !exists {
-					reaping[entry] = false
-				}
-			}
-		}
-		service.mu.Unlock()
-
-		for _, cancel := range cancellations {
-			cancel()
-		}
-		for entry, owner := range reaping {
-			if owner {
-				go service.reap(entry)
-			}
-		}
-		for startup := range startups {
-			<-startup
-		}
-		for entry := range reaping {
-			<-entry.reaped
-		}
-		if !owned {
+		batch := service.captureControlLeaseAttemptRetirement(leaseID)
+		batch.settle(service)
+		if !batch.hadRegistryOwnership {
 			break
 		}
 	}
+	return service.verifyControlLeaseAttemptRetirement(leaseID)
+}
 
+func (service *Service) captureControlLeaseAttemptRetirement(
+	leaseID string,
+) controlLeaseAttemptRetirementBatch {
+	batch := controlLeaseAttemptRetirementBatch{
+		startups: make(map[<-chan struct{}]struct{}),
+		reaping:  make(map[*leasedAttempt]bool),
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	batch.hadRegistryOwnership = service.controlLeaseOwnsAttemptLocked(leaseID)
+	for requestID, ownerLeaseID := range service.requestControlLeases {
+		if ownerLeaseID != leaseID {
+			continue
+		}
+		if cancel := service.requestCancels[requestID]; cancel != nil {
+			batch.cancellations = append(batch.cancellations, cancel)
+		}
+		if startup := service.requestStarts[requestID]; startup != nil {
+			batch.startups[startup] = struct{}{}
+		}
+	}
+	for attemptID, entry := range service.active {
+		if entry.controlLeaseID != leaseID {
+			continue
+		}
+		if transitioned, owner := service.transitionToRetiringLocked(attemptID, entry); transitioned != nil {
+			batch.reaping[transitioned] = owner
+		}
+	}
+	for _, entry := range service.retiring {
+		if entry.controlLeaseID != leaseID {
+			continue
+		}
+		if _, exists := batch.reaping[entry]; !exists {
+			batch.reaping[entry] = false
+		}
+	}
+	return batch
+}
+
+func (batch controlLeaseAttemptRetirementBatch) settle(service *Service) {
+	for _, cancel := range batch.cancellations {
+		cancel()
+	}
+	for entry, owner := range batch.reaping {
+		if owner {
+			go service.reap(entry)
+		}
+	}
+	for startup := range batch.startups {
+		<-startup
+	}
+	for entry := range batch.reaping {
+		<-entry.reaped
+	}
+}
+
+func (service *Service) verifyControlLeaseAttemptRetirement(leaseID string) error {
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	if service.controlLeaseOwnsAttemptLocked(leaseID) ||
