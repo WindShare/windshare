@@ -142,14 +142,14 @@ type interopServer struct {
 }
 
 func main() {
-        if len(os.Args) == 2 && os.Args[1] == "self-check" {
-                fmt.Println(`{"schemaVersion":1,"component":"pion-browser-interop-server","outcome":"ready"}`)
-                return
-        }
-        if len(os.Args) != 1 {
-                panic("Pion browser interop server accepts only the self-check command")
-        }
-        topologyContext, cancelTopology := context.WithTimeout(context.Background(), operationLimit)
+	if len(os.Args) == 2 && os.Args[1] == "self-check" {
+		fmt.Println(`{"schemaVersion":1,"component":"pion-browser-interop-server","outcome":"ready"}`)
+		return
+	}
+	if len(os.Args) != 1 {
+		panic("Pion browser interop server accepts only the self-check command")
+	}
+	topologyContext, cancelTopology := context.WithTimeout(context.Background(), operationLimit)
 	defer cancelTopology()
 	topology, err := loadTopologyRuntime(topologyContext)
 	if err != nil {

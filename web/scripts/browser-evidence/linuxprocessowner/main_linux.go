@@ -720,7 +720,7 @@ func descendantInventory(
 	ownerPID int,
 	tracked map[string]*trackedProcess,
 ) ([]processIdentity, error) {
-	for attempt := 0; attempt < maximumInventoryReadTries; attempt++ {
+	for range maximumInventoryReadTries {
 		processes, err := readProcessTable()
 		if err != nil {
 			return nil, err
@@ -1123,10 +1123,7 @@ func streamChildInput(
 	}()
 	remaining := byteLength
 	for remaining > 0 {
-		chunk := int64(len(buffer))
-		if remaining < chunk {
-			chunk = remaining
-		}
+		chunk := min(remaining, int64(len(buffer)))
 		readBytes, readErr := io.ReadFull(source, buffer[:chunk])
 		if readErr != nil {
 			return fmt.Errorf("read exact child stdin bytes: %w", readErr)
@@ -1141,7 +1138,7 @@ func streamChildInput(
 			}
 			offset += written
 		}
-		for index := 0; index < readBytes; index++ {
+		for index := range readBytes {
 			buffer[index] = 0
 		}
 		remaining -= int64(readBytes)

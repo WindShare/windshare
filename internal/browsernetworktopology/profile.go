@@ -3,6 +3,7 @@ package browsernetworktopology
 import (
 	"errors"
 	"fmt"
+	"slices"
 )
 
 var (
@@ -257,21 +258,11 @@ func protocolOverlap(left, right []TransportProtocol) bool {
 }
 
 func containsCandidateType(values []CandidateType, expected CandidateType) bool {
-	for _, value := range values {
-		if value == expected {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, expected)
 }
 
 func containsProtocol(values []TransportProtocol, expected TransportProtocol) bool {
-	for _, value := range values {
-		if value == expected {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, expected)
 }
 
 func emptyCandidateConstraint(constraint CandidateTypeConstraint) bool {

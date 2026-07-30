@@ -256,7 +256,7 @@ func TestSenderObserverPanicCannotChangeConnectivityOutcome(t *testing.T) {
 	receiveTest(t, session.controls)
 	peer.emitDataChannel(&pion.DataChannel{})
 	receiveTest(t, session.admissions)
-	for index := 0; index < 7; index++ {
+	for index := range 7 {
 		if err := receiveTest(t, observerErrors); !errors.Is(err, ErrSenderObserverPanic) {
 			t.Fatalf("observer error[%d] = %v", index, err)
 		}

@@ -1526,7 +1526,7 @@ func TestAdmissionReservesCapacityBeforeFactoryAndRejectsDuplicateWithoutCreatio
 		}
 		const requestCount = 12
 		responses := make(chan *httptest.ResponseRecorder, requestCount)
-		for index := 0; index < requestCount; index++ {
+		for index := range requestCount {
 			request := newTestCreateAttemptRequest(
 				t, service, matrixRequestID(index+10), 1_000,
 			)
@@ -1540,7 +1540,7 @@ func TestAdmissionReservesCapacityBeforeFactoryAndRejectsDuplicateWithoutCreatio
 		awaitSignal(t, factory.started, "second admitted factory")
 		close(release)
 		created, rejected := 0, 0
-		for index := 0; index < requestCount; index++ {
+		for range requestCount {
 			switch response := awaitResponse(t, responses, "admission response"); response.Code {
 			case http.StatusCreated:
 				created++

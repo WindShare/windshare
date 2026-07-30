@@ -38,10 +38,10 @@ type ProbeResponse struct {
 }
 
 type AuthorityProbeRequest struct {
-	ProtocolVersion      string `json:"protocolVersion"`
+	ProtocolVersion      string           `json:"protocolVersion"`
 	ControlAuthority     ControlAuthority `json:"controlAuthority"`
-	Nonce                string `json:"nonce"`
-	RequestedLeaseMillis int64  `json:"requestedLeaseMillis"`
+	Nonce                string           `json:"nonce"`
+	RequestedLeaseMillis int64            `json:"requestedLeaseMillis"`
 }
 
 type TURNCredentialRequest struct {

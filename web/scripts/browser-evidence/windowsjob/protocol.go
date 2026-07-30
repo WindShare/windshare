@@ -105,19 +105,6 @@ type supervisorStatus struct {
 	SpawnFailure       *string     `json:"spawnFailure"`
 }
 
-type launcherEvent struct {
-	SchemaVersion int     `json:"schemaVersion"`
-	Type          string  `json:"type"`
-	PID           uint32  `json:"pid"`
-	ProcessHandle uint64  `json:"processHandle"`
-	SpawnFailure  *string `json:"spawnFailure"`
-}
-
-const (
-	launcherEventRootStarted = "root-started"
-	launcherEventSpawnFailed = "spawn-failed"
-)
-
 func readCanonicalFrame[T any](reader io.Reader, label string) (T, error) {
 	var zero T
 	header := make([]byte, 4)
@@ -351,7 +338,7 @@ func validateEnvironment(environment []environmentEntry) error {
 		if strings.IndexByte(entry.Value, 0) >= 0 {
 			return fmt.Errorf("environment value for %q contains NUL", entry.Name)
 		}
-		for previousIndex := 0; previousIndex < index; previousIndex++ {
+		for previousIndex := range index {
 			if strings.EqualFold(environment[previousIndex].Name, entry.Name) {
 				return fmt.Errorf("environment contains case-insensitive duplicate %q", entry.Name)
 			}
@@ -383,14 +370,6 @@ func asciiFold(value string) []byte {
 		if value >= 'A' && value <= 'Z' {
 			result[index] = value + ('a' - 'A')
 		}
-	}
-	return result
-}
-
-func environmentStrings(environment []environmentEntry) []string {
-	result := make([]string, len(environment))
-	for index, entry := range environment {
-		result[index] = entry.Name + "=" + entry.Value
 	}
 	return result
 }
@@ -496,10 +475,6 @@ func publishStatusNew(path string, status supervisorStatus) error {
 
 func ensureFreshStatusDestination(path string) error {
 	return ensureFreshPrivateDestination(path, "status")
-}
-
-func ensureFreshControlDestination(path string) error {
-	return ensureFreshPrivateDestination(path, "control")
 }
 
 func ensureFreshPrivateDestination(path, label string) error {

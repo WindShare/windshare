@@ -27,7 +27,6 @@ func TestParseSinglePathOptionRequiresOneCanonicalAbsolutePath(t *testing.T) {
 		{name: "extra", arguments: []string{"--status", validPath, "unexpected"}, wantError: true},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := parseSinglePathOption(test.arguments, "--status")
@@ -65,7 +64,6 @@ func TestParseLauncherHandlesRejectsSentinelsAndMalformedOptions(t *testing.T) {
 		{name: "invalid sentinel", arguments: []string{"--event-handle", maximumHandle}, wantError: true},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			gotEvent, gotStdin, err := parseLauncherHandles(test.arguments)
@@ -107,7 +105,6 @@ func TestRunCommandRejectsInvalidDispatchAndFramesBeforePlatformWork(t *testing.
 		{name: "launcher zero frame", arguments: []string{commandLauncher, "--event-handle", "1"}, input: zeroLengthFrame},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if err := runCommand(test.arguments, bytes.NewReader(test.input)); err == nil {

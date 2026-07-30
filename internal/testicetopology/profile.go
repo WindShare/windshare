@@ -376,7 +376,7 @@ func ipv4Number(address string) (uint32, bool) {
 		return 0, false
 	}
 	var result uint32
-	for _, octet := range strings.Split(address, ".") {
+	for octet := range strings.SplitSeq(address, ".") {
 		value, _ := strconv.ParseUint(octet, 10, 8)
 		result = result<<8 | uint32(value)
 	}

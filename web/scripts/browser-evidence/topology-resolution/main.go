@@ -49,9 +49,9 @@ type materializationRecord struct {
 }
 
 type selfCheckRecord struct {
-        SchemaVersion int    `json:"schemaVersion"`
-        Component     string `json:"component"`
-        Outcome       string `json:"outcome"`
+	SchemaVersion int    `json:"schemaVersion"`
+	Component     string `json:"component"`
+	Outcome       string `json:"outcome"`
 }
 
 func main() {
@@ -85,17 +85,17 @@ func execute(
 	if stdout == nil {
 		return errors.New("stdout writer is required")
 	}
-        if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		_, err := fmt.Fprintln(stdout, topologyResolutionUsage)
 		return err
-        }
-        if len(args) == 1 && args[0] == "self-check" {
-                return json.NewEncoder(stdout).Encode(selfCheckRecord{
-                        SchemaVersion: 1,
-                        Component:     "browser-evidence-topology-resolution",
-                        Outcome:       "ready",
-                })
-        }
+	}
+	if len(args) == 1 && args[0] == "self-check" {
+		return json.NewEncoder(stdout).Encode(selfCheckRecord{
+			SchemaVersion: 1,
+			Component:     "browser-evidence-topology-resolution",
+			Outcome:       "ready",
+		})
+	}
 	options, err := parseCommandOptions(args)
 	if err != nil {
 		return err

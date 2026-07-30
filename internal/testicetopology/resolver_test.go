@@ -335,7 +335,6 @@ func TestResolverFailureCategories(t *testing.T) {
 	}
 
 	for _, testCase := range tests {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			err := testCase.run()
@@ -460,7 +459,6 @@ func TestStandardNetworkProbeSourceRejectsInvalidEndpoints(t *testing.T) {
 		},
 	}
 	for _, testCase := range tests {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := testCase.network.ProbeSource(context.Background(), testCase.destination)
@@ -571,7 +569,6 @@ func TestStandardNetworkInterfacesFailClosed(t *testing.T) {
 		},
 	}
 	for _, testCase := range tests {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := testCase.network.Interfaces()
@@ -621,7 +618,6 @@ func TestParseInterfaceAddress(t *testing.T) {
 		{name: "unsupported", address: unsupportedNetworkAddress{}, wantError: true},
 	}
 	for _, testCase := range tests {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			parsed, err := parseInterfaceAddress(testCase.address)

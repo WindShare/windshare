@@ -85,7 +85,6 @@ func TestStrictJSONSharedMutationCorpus(t *testing.T) {
 		t.Fatalf("unexpected corpus registry: %+v", corpus)
 	}
 	for _, testCase := range corpus.Cases {
-		testCase := testCase
 		t.Run(testCase.Name, func(t *testing.T) {
 			t.Parallel()
 			if count := strings.Count(string(canonical), testCase.Needle); count != 1 {
@@ -138,7 +137,6 @@ func TestParseRejectsNonExactProfiles(t *testing.T) {
 		"empty":               "",
 	}
 	for name, encoded := range tests {
-		name, encoded := name, encoded
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := Parse([]byte(encoded)); !errors.Is(err, ErrInvalidProfile) {
@@ -185,7 +183,6 @@ func TestResolutionValidationRejectsContractDrift(t *testing.T) {
 		"zero prefix": func(value *Resolution) { value.Interface.EligibleAddresses[0].PrefixLength = 0 },
 	}
 	for name, mutate := range tests {
-		name, mutate := name, mutate
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			candidate := cloneResolution(valid)
@@ -227,7 +224,6 @@ func TestResolutionParseRejectsUnknownAndNonCanonicalJSON(t *testing.T) {
 		"trailing":          valid + `{}`,
 	}
 	for name, encoded := range tests {
-		name, encoded := name, encoded
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := ParseResolution([]byte(encoded), profile, sharedProfileSHA256); !errors.Is(err, ErrInvalidResolution) {

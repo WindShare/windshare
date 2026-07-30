@@ -62,7 +62,6 @@ func TestCanonicalJSONParserRejectsNonCanonicalInputs(t *testing.T) {
 		"invalid UTF-8":             invalidUTF8,
 	}
 	for name, encoded := range tests {
-		name, encoded := name, encoded
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if err := validateCanonicalJSON(encoded, "invalid fixture"); err == nil {

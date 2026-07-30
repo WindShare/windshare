@@ -185,14 +185,8 @@ func (recorder *senderAttemptRecorder) admitted() bool {
 
 func (recorder *senderAttemptRecorder) emit(observation SenderAttemptObservation) {
 	recorder.sequence++
-	elapsed := recorder.factory.now().Sub(recorder.startedAt)
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	elapsedMillis := uint64(elapsed / time.Millisecond)
-	if elapsedMillis < recorder.elapsed {
-		elapsedMillis = recorder.elapsed
-	}
+	elapsed := max(recorder.factory.now().Sub(recorder.startedAt), 0)
+	elapsedMillis := max(uint64(elapsed/time.Millisecond), recorder.elapsed)
 	recorder.elapsed = elapsedMillis
 	observation.SessionID = recorder.sessionID
 	observation.PeerPathID = recorder.binding.PeerPathID

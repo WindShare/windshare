@@ -57,7 +57,6 @@ func TestLoadManifestRejectsUnknownOrTrailingJSON(t *testing.T) {
 func TestLoadManifestRejectsMissingOrUnknownExecutionClass(t *testing.T) {
 	t.Parallel()
 	for _, executionClass := range []string{"", "process-heavy"} {
-		executionClass := executionClass
 		t.Run(executionClass, func(t *testing.T) {
 			document := validManifestDocument()
 			document.Packages[0].ExecutionClass = executionClass

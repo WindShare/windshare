@@ -67,7 +67,13 @@ func NewPionAttemptFactory(config PionAttemptFactoryConfig) (*PionAttemptFactory
 	// The configured address is operator-authorized public routing state. Pion
 	// must advertise that address rather than an incidental interface address
 	// enumerated by the host at runtime.
-	setting.SetNAT1To1IPs([]string{config.PublicIP}, pion.ICECandidateTypeHost)
+	if err := setting.SetICEAddressRewriteRules(pion.ICEAddressRewriteRule{
+		External:        []string{config.PublicIP},
+		AsCandidateType: pion.ICECandidateTypeHost,
+		Mode:            pion.ICEAddressRewriteReplace,
+	}); err != nil {
+		return nil, fmt.Errorf("configure remote Pion address rewrite: %w", err)
+	}
 	setting.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 	return &PionAttemptFactory{
 		api: pion.NewAPI(pion.WithSettingEngine(setting)), instanceID: config.InstanceID, trace: config.Trace,
@@ -195,9 +201,9 @@ func (attempt *pionAttempt) onICEState(state pion.ICEConnectionState) {
 		attempt.mu.Unlock()
 		emitTrace(attempt.trace, TraceEvent{
 			Milestone: tracePairObserved, InstanceID: attempt.instanceID,
-			RunID: attempt.authority.RequestAuthority.ControlAuthority.SampleAuthority.RunID,
+			RunID:             attempt.authority.RequestAuthority.ControlAuthority.SampleAuthority.RunID,
 			AttestationSHA256: attempt.authority.RequestAuthority.FixtureBinding.AttestationSHA256,
-			AttemptID: attempt.authority.AttemptID, Outcome: "selected",
+			AttemptID:         attempt.authority.AttemptID, Outcome: "selected",
 		})
 	case pion.ICEConnectionStateFailed:
 		attempt.fail("ice-failed")
@@ -271,9 +277,9 @@ func (attempt *pionAttempt) onChallenge(
 	attempt.mu.Unlock()
 	emitTrace(attempt.trace, TraceEvent{
 		Milestone: traceChallengeObserved, InstanceID: attempt.instanceID,
-		RunID: attempt.authority.RequestAuthority.ControlAuthority.SampleAuthority.RunID,
+		RunID:             attempt.authority.RequestAuthority.ControlAuthority.SampleAuthority.RunID,
 		AttestationSHA256: attempt.authority.RequestAuthority.FixtureBinding.AttestationSHA256,
-		AttemptID: attempt.authority.AttemptID, Outcome: "echoed",
+		AttemptID:         attempt.authority.AttemptID, Outcome: "echoed",
 	})
 }
 
