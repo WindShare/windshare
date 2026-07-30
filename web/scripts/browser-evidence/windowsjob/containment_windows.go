@@ -43,6 +43,16 @@ type jobProcessAccounting struct {
 	active uint32
 }
 
+type jobProcessIDQuery struct {
+	storage     []uintptr
+	headerWords int
+	capacity    int
+	assigned    uint64
+	listed      uint64
+	succeeded   bool
+	callErr     error
+}
+
 // jobLifecycleAuthority is consumed only after launcher identity is fenced out
 // of the Job. Termination remains provisional until exact retained member exits
 // and the process-generation counter jointly authenticate its cause.
@@ -104,7 +114,7 @@ func verifyExactJobLimits(handle windows.Handle) error {
 		return fmt.Errorf("read back Job Object limits: %w", callErr)
 	}
 	if limits.BasicLimitInformation.LimitFlags != windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE {
-		return fmt.Errorf("Job Object limits read back as %#x, expected exact non-breakaway kill-on-close %#x",
+		return fmt.Errorf("job object limits read back as %#x, expected exact non-breakaway kill-on-close %#x",
 			limits.BasicLimitInformation.LimitFlags,
 			windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 		)
@@ -154,61 +164,93 @@ func (job managedJob) processAccounting() (jobProcessAccounting, error) {
 
 func (job managedJob) activeProcessIDs(maximumProcesses int) ([]uint32, error) {
 	if maximumProcesses <= 0 {
-		return nil, errors.New("Job process snapshot limit must be positive")
+		return nil, errors.New("job process snapshot limit must be positive")
 	}
 	capacity := min(initialJobProcessIDCapacity, maximumProcesses)
-	headerWords := int((unsafe.Sizeof(jobObjectBasicProcessIDListHeader{}) + unsafe.Sizeof(uintptr(0)) - 1) / unsafe.Sizeof(uintptr(0)))
 	for {
-		buffer := make([]uintptr, headerWords+capacity)
-		header := (*jobObjectBasicProcessIDListHeader)(unsafe.Pointer(&buffer[0]))
-		var returnedLength uint32
-		result, _, callErr := queryJobInformationProcedure.Call(
-			uintptr(job.handle),
-			uintptr(windows.JobObjectBasicProcessIdList),
-			uintptr(unsafe.Pointer(&buffer[0])),
-			uintptr(len(buffer))*unsafe.Sizeof(uintptr(0)),
-			uintptr(unsafe.Pointer(&returnedLength)),
-		)
-		assigned := uint64(header.numberOfAssignedProcesses)
-		listed := uint64(header.numberOfProcessIDsInList)
-		if assigned > uint64(maximumProcesses) || listed > uint64(maximumProcesses) {
-			runtime.KeepAlive(buffer)
-			return nil, fmt.Errorf("Job contains more than the termination evidence limit of %d processes", maximumProcesses)
+		query := job.queryActiveProcessIDs(capacity)
+		if err := query.validateEvidenceLimit(maximumProcesses); err != nil {
+			return nil, err
 		}
-		if result == 0 {
-			runtime.KeepAlive(buffer)
-			if errors.Is(callErr, windows.ERROR_MORE_DATA) {
-				nextCapacity := int(assigned)
-				if nextCapacity <= capacity {
-					nextCapacity = capacity * 2
-				}
-				if nextCapacity > maximumProcesses {
-					return nil, fmt.Errorf("Job contains more than the termination evidence limit of %d processes", maximumProcesses)
-				}
-				capacity = nextCapacity
-				continue
-			}
-			if callErr == nil || errors.Is(callErr, windows.ERROR_SUCCESS) {
-				callErr = syscall.EINVAL
-			}
-			return nil, fmt.Errorf("query Job Object process IDs: %w", callErr)
+		if query.succeeded {
+			return query.validatedProcessIDs()
 		}
-		if listed > uint64(capacity) || listed != assigned {
-			runtime.KeepAlive(buffer)
-			return nil, errors.New("Job Object returned an incomplete process ID snapshot")
+		nextCapacity, err := query.retryCapacity(maximumProcesses)
+		if err != nil {
+			return nil, err
 		}
-		ids := make([]uint32, int(listed))
-		for index := range ids {
-			word := buffer[headerWords+index]
-			if uint64(word) == 0 || uint64(word) > maxWindowsProcessID {
-				runtime.KeepAlive(buffer)
-				return nil, errors.New("Job Object returned an invalid process ID")
-			}
-			ids[index] = uint32(word)
-		}
-		runtime.KeepAlive(buffer)
-		return ids, nil
+		capacity = nextCapacity
 	}
+}
+
+func (job managedJob) queryActiveProcessIDs(capacity int) jobProcessIDQuery {
+	pointerBytes := unsafe.Sizeof(uintptr(0))
+	headerWords := int((unsafe.Sizeof(jobObjectBasicProcessIDListHeader{}) + pointerBytes - 1) / pointerBytes)
+	storage := make([]uintptr, headerWords+capacity)
+	header := (*jobObjectBasicProcessIDListHeader)(unsafe.Pointer(&storage[0]))
+	var returnedLength uint32
+	result, _, callErr := queryJobInformationProcedure.Call(
+		uintptr(job.handle),
+		uintptr(windows.JobObjectBasicProcessIdList),
+		uintptr(unsafe.Pointer(&storage[0])),
+		uintptr(len(storage))*pointerBytes,
+		uintptr(unsafe.Pointer(&returnedLength)),
+	)
+	query := jobProcessIDQuery{
+		storage: storage, headerWords: headerWords, capacity: capacity,
+		assigned:  uint64(header.numberOfAssignedProcesses),
+		listed:    uint64(header.numberOfProcessIDsInList),
+		succeeded: result != 0, callErr: callErr,
+	}
+	runtime.KeepAlive(storage)
+	return query
+}
+
+func (query jobProcessIDQuery) validateEvidenceLimit(maximumProcesses int) error {
+	if query.assigned > uint64(maximumProcesses) || query.listed > uint64(maximumProcesses) {
+		return jobProcessEvidenceLimitError(maximumProcesses)
+	}
+	return nil
+}
+
+func (query jobProcessIDQuery) retryCapacity(maximumProcesses int) (int, error) {
+	if !errors.Is(query.callErr, windows.ERROR_MORE_DATA) {
+		callErr := query.callErr
+		if callErr == nil || errors.Is(callErr, windows.ERROR_SUCCESS) {
+			callErr = syscall.EINVAL
+		}
+		return 0, fmt.Errorf("query Job Object process IDs: %w", callErr)
+	}
+	nextCapacity := int(query.assigned)
+	if nextCapacity > query.capacity {
+		return nextCapacity, nil
+	}
+	if query.capacity > maximumProcesses/2 {
+		return 0, jobProcessEvidenceLimitError(maximumProcesses)
+	}
+	return query.capacity * 2, nil
+}
+
+func (query jobProcessIDQuery) validatedProcessIDs() ([]uint32, error) {
+	// The kernel writes the header and pointer-width IDs into one allocation;
+	// retaining it through validation keeps the unsafe view authoritative.
+	defer runtime.KeepAlive(query.storage)
+	if query.listed > uint64(query.capacity) || query.listed != query.assigned {
+		return nil, errors.New("job object returned an incomplete process ID snapshot")
+	}
+	ids := make([]uint32, int(query.listed))
+	for index := range ids {
+		word := query.storage[query.headerWords+index]
+		if uint64(word) == 0 || uint64(word) > maxWindowsProcessID {
+			return nil, errors.New("job object returned an invalid process ID")
+		}
+		ids[index] = uint32(word)
+	}
+	return ids, nil
+}
+
+func jobProcessEvidenceLimitError(maximumProcesses int) error {
+	return fmt.Errorf("job contains more than the termination evidence limit of %d processes", maximumProcesses)
 }
 
 func verifyJobHandleNonInheritable(handle windows.Handle) error {

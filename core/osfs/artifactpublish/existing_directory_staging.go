@@ -13,6 +13,55 @@ import (
 func (owner publisher) prepareExistingDirectoryStaging(
 	request ExistingDirectoryStagingRequest,
 ) (receipt ExistingDirectoryStagingReceipt, resultErr error) {
+	normalized, err := normalizeExistingDirectoryStagingRequest(request)
+	if err != nil {
+		return ExistingDirectoryStagingReceipt{}, err
+	}
+	// Native creation is the authority boundary for a missing publication root.
+	// In particular, a Win32 mkdir cannot establish the private ACL needed by
+	// handle-relative installation; an existing unsafe root is still rejected.
+	platform, root, err := owner.openOrCreatePrivateRoot(normalized.parentPath)
+	if err != nil {
+		return ExistingDirectoryStagingReceipt{}, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, platform.Close()) }()
+
+	stage, err := createExistingDirectoryStaging(root, normalized)
+	if err != nil {
+		return ExistingDirectoryStagingReceipt{}, err
+	}
+	preparation := newExistingDirectoryStagingPreparation(root, stage, normalized)
+	defer func() {
+		resultErr = preparation.joinReleaseErrors(resultErr)
+	}()
+
+	if err := preparation.createInventory(normalized.inventory); err != nil {
+		return ExistingDirectoryStagingReceipt{}, err
+	}
+	receipt, err = preparation.prepareDurableReceipt()
+	if err != nil {
+		return ExistingDirectoryStagingReceipt{}, err
+	}
+	if err := owner.settleExistingDirectoryPreparation(); err != nil {
+		return receipt, err
+	}
+	return receipt, nil
+}
+
+type existingDirectoryStagingPreparation struct {
+	root               outputcap.Directory
+	stage              outputcap.Directory
+	stagingName        string
+	directoryHandles   map[string]outputcap.Directory
+	fileHandles        map[string]outputcap.File
+	createdDirectories []string
+	createdFiles       []string
+	cleanupRequired    bool
+}
+
+func normalizeExistingDirectoryStagingRequest(
+	request ExistingDirectoryStagingRequest,
+) (normalizedExistingDirectory, error) {
 	normalized, err := normalizeExistingDirectory(
 		request.ParentPath,
 		ExistingDirectoryOutputName,
@@ -23,81 +72,100 @@ func (owner publisher) prepareExistingDirectoryStaging(
 		nil,
 	)
 	if err != nil {
-		return ExistingDirectoryStagingReceipt{}, err
+		return normalizedExistingDirectory{}, err
 	}
 	if !validExistingStagingName(normalized.stagingName) {
-		return ExistingDirectoryStagingReceipt{}, fmt.Errorf("%w: existing staging name is not invocation-owned", ErrUnsafe)
+		return normalizedExistingDirectory{}, fmt.Errorf("%w: existing staging name is not invocation-owned", ErrUnsafe)
 	}
-	// Native creation is the authority boundary for a missing publication root.
-	// In particular, a Win32 mkdir cannot establish the private ACL needed by
-	// handle-relative installation; an existing unsafe root is still rejected.
-	platform, root, err := owner.openOrCreatePrivateRoot(normalized.parentPath)
+	return normalized, nil
+}
+
+func createExistingDirectoryStaging(
+	root outputcap.Directory,
+	normalized normalizedExistingDirectory,
+) (outputcap.Directory, error) {
+	kind, err := root.ObserveEntry(normalized.outputName)
 	if err != nil {
-		return ExistingDirectoryStagingReceipt{}, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, platform.Close()) }()
-	kind, err := root.ObserveEntry(ExistingDirectoryOutputName)
-	if err != nil {
-		return ExistingDirectoryStagingReceipt{}, unsafeError("observe deterministic sealed artifact destination", err)
+		return nil, unsafeError("observe deterministic sealed artifact destination", err)
 	}
 	if kind != outputcap.EntryAbsent {
-		return ExistingDirectoryStagingReceipt{}, ErrCollision
+		return nil, ErrCollision
 	}
 	stage, err := root.CreateDirectory(normalized.stagingName, true)
 	if err != nil {
-		return ExistingDirectoryStagingReceipt{}, classifyNamespaceError(err)
+		return nil, classifyNamespaceError(err)
 	}
-	directoryHandles := map[string]outputcap.Directory{"": stage}
-	fileHandles := make(map[string]outputcap.File, len(normalized.inventory.Files))
-	createdDirectories := make([]string, 0, len(normalized.inventory.Directories))
-	createdFiles := make([]string, 0, len(normalized.inventory.Files))
-	cleanup := true
-	defer func() {
-		if cleanup {
-			resultErr = errors.Join(resultErr, cleanupPreparedExistingDirectory(
-				root, normalized.stagingName, createdDirectories, createdFiles, directoryHandles, fileHandles,
-			))
-		}
-		for _, file := range fileHandles {
-			resultErr = errors.Join(resultErr, file.Close())
-		}
-		for _, directory := range directoryHandles {
-			resultErr = errors.Join(resultErr, directory.Close())
-		}
-	}()
-	for _, relative := range normalized.inventory.Directories {
-		parentRelative := path.Dir(relative)
-		if parentRelative == "." {
-			parentRelative = ""
-		}
-		parent := directoryHandles[parentRelative]
-		child, createErr := parent.CreateDirectory(path.Base(relative), true)
-		if createErr != nil {
-			return ExistingDirectoryStagingReceipt{}, classifyNamespaceError(createErr)
-		}
-		directoryHandles[relative] = child
-		createdDirectories = append(createdDirectories, relative)
+	return stage, nil
+}
+
+func newExistingDirectoryStagingPreparation(
+	root outputcap.Directory,
+	stage outputcap.Directory,
+	normalized normalizedExistingDirectory,
+) *existingDirectoryStagingPreparation {
+	return &existingDirectoryStagingPreparation{
+		root:               root,
+		stage:              stage,
+		stagingName:        normalized.stagingName,
+		directoryHandles:   map[string]outputcap.Directory{"": stage},
+		fileHandles:        make(map[string]outputcap.File, len(normalized.inventory.Files)),
+		createdDirectories: make([]string, 0, len(normalized.inventory.Directories)),
+		createdFiles:       make([]string, 0, len(normalized.inventory.Files)),
+		cleanupRequired:    true,
 	}
-	for _, file := range normalized.inventory.Files {
-		parentRelative := path.Dir(file.RelativePath)
-		if parentRelative == "." {
-			parentRelative = ""
-		}
-		created, createErr := directoryHandles[parentRelative].CreateFile(
-			path.Base(file.RelativePath), true, int64(file.ByteLength),
-		)
-		if createErr != nil {
-			return ExistingDirectoryStagingReceipt{}, classifyNamespaceError(createErr)
-		}
-		fileHandles[file.RelativePath] = created
-		createdFiles = append(createdFiles, file.RelativePath)
+}
+
+func (preparation *existingDirectoryStagingPreparation) createInventory(
+	inventory ExistingDirectoryInventory,
+) error {
+	if err := preparation.createDirectories(inventory.Directories); err != nil {
+		return err
 	}
-	for index := len(createdDirectories) - 1; index >= 0; index-- {
-		if err := directoryHandles[createdDirectories[index]].Sync(); err != nil {
+	return preparation.createFiles(inventory.Files)
+}
+
+func (preparation *existingDirectoryStagingPreparation) createDirectories(directories []string) error {
+	for _, relative := range directories {
+		parent := preparation.directoryHandles[parentDirectoryPath(relative)]
+		child, err := parent.CreateDirectory(path.Base(relative), true)
+		if err != nil {
+			return classifyNamespaceError(err)
+		}
+		preparation.directoryHandles[relative] = child
+		preparation.createdDirectories = append(preparation.createdDirectories, relative)
+	}
+	return nil
+}
+
+func (preparation *existingDirectoryStagingPreparation) createFiles(files []ExistingDirectoryFile) error {
+	for _, file := range files {
+		parent := preparation.directoryHandles[parentDirectoryPath(file.RelativePath)]
+		created, err := parent.CreateFile(path.Base(file.RelativePath), true, int64(file.ByteLength))
+		if err != nil {
+			return classifyNamespaceError(err)
+		}
+		preparation.fileHandles[file.RelativePath] = created
+		preparation.createdFiles = append(preparation.createdFiles, file.RelativePath)
+	}
+	return nil
+}
+
+func parentDirectoryPath(relative string) string {
+	parentRelative := path.Dir(relative)
+	if parentRelative == "." {
+		return ""
+	}
+	return parentRelative
+}
+
+func (preparation *existingDirectoryStagingPreparation) prepareDurableReceipt() (ExistingDirectoryStagingReceipt, error) {
+	for index := len(preparation.createdDirectories) - 1; index >= 0; index-- {
+		directory := preparation.directoryHandles[preparation.createdDirectories[index]]
+		if err := directory.Sync(); err != nil {
 			return ExistingDirectoryStagingReceipt{}, unsafeError("sync prepared sealed artifact subdirectory", err)
 		}
 	}
-	provider, ok := stage.(outputcap.PrivateDirectoryIdentityProvider)
+	provider, ok := preparation.stage.(outputcap.PrivateDirectoryIdentityProvider)
 	if !ok {
 		return ExistingDirectoryStagingReceipt{}, unsafeError("prepare sealed artifact staging identity receipt", nil)
 	}
@@ -105,20 +173,46 @@ func (owner publisher) prepareExistingDirectoryStaging(
 	if err != nil || identity.IsZero() {
 		return ExistingDirectoryStagingReceipt{}, unsafeError("prepare sealed artifact staging identity receipt", err)
 	}
-	receipt = ExistingDirectoryStagingReceipt{identity: identity}
-	if err := stage.Sync(); err != nil {
+	if err := preparation.stage.Sync(); err != nil {
 		return ExistingDirectoryStagingReceipt{}, unsafeError("sync prepared sealed artifact staging directory", err)
 	}
-	if err := root.Sync(); err != nil {
+	if err := preparation.root.Sync(); err != nil {
 		return ExistingDirectoryStagingReceipt{}, unsafeError("sync prepared sealed artifact parent", err)
 	}
-	cleanup = false
-	if owner.prepareSettlementHook != nil {
-		if err := owner.prepareSettlementHook(); err != nil {
-			return receipt, unsafeError("settle prepared sealed artifact handles", err)
-		}
+	// Once the parent is durable, deleting the stage on a later Close ambiguity
+	// would destroy the only authority the returned receipt can safely recover.
+	preparation.cleanupRequired = false
+	return ExistingDirectoryStagingReceipt{identity: identity}, nil
+}
+
+func (preparation *existingDirectoryStagingPreparation) joinReleaseErrors(resultErr error) error {
+	if preparation.cleanupRequired {
+		resultErr = errors.Join(resultErr, cleanupPreparedExistingDirectory(
+			preparation.root,
+			preparation.stagingName,
+			preparation.createdDirectories,
+			preparation.createdFiles,
+			preparation.directoryHandles,
+			preparation.fileHandles,
+		))
 	}
-	return receipt, nil
+	for _, file := range preparation.fileHandles {
+		resultErr = errors.Join(resultErr, file.Close())
+	}
+	for _, directory := range preparation.directoryHandles {
+		resultErr = errors.Join(resultErr, directory.Close())
+	}
+	return resultErr
+}
+
+func (owner publisher) settleExistingDirectoryPreparation() error {
+	if owner.prepareSettlementHook == nil {
+		return nil
+	}
+	if err := owner.prepareSettlementHook(); err != nil {
+		return unsafeError("settle prepared sealed artifact handles", err)
+	}
+	return nil
 }
 
 func cleanupPreparedExistingDirectory(

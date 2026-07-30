@@ -275,6 +275,105 @@ func TestPublishFileUsesNoReplaceLinkAndRetiresProvenStage(t *testing.T) {
 	}
 }
 
+func TestPublishFileFailsClosedAtAuthorityBoundaries(t *testing.T) {
+	t.Parallel()
+
+	t.Run("invalid digest", func(t *testing.T) {
+		request := FileRequest{
+			ParentPath:  t.TempDir(),
+			OutputName:  "aggregate.json",
+			StagingName: ".aggregate.stage",
+			Artifact: Artifact{
+				Name: "aggregate.json", Bytes: []byte("aggregate\n"), SHA256: stringsOf("0", sha256.Size*2),
+			},
+		}
+		if _, err := PublishFile(request); !errors.Is(err, ErrUnsafe) {
+			t.Fatalf("invalid digest publication error = %v, want ErrUnsafe", err)
+		}
+	})
+
+	t.Run("missing parent", func(t *testing.T) {
+		parent := filepath.Join(t.TempDir(), "missing")
+		request := FileRequest{
+			ParentPath: parent, OutputName: "aggregate.json", StagingName: ".aggregate.stage",
+			Artifact: artifactFixture("aggregate.json", "aggregate\n"),
+		}
+		if _, err := PublishFile(request); !errors.Is(err, ErrUnsafe) {
+			t.Fatalf("missing parent publication error = %v, want ErrUnsafe", err)
+		}
+		if _, err := os.Stat(parent); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("file publication created missing parent: %v", err)
+		}
+	})
+
+	t.Run("occupied staging name", func(t *testing.T) {
+		parent := t.TempDir()
+		request := FileRequest{
+			ParentPath: parent, OutputName: "aggregate.json", StagingName: ".aggregate.stage",
+			Artifact: artifactFixture("aggregate.json", "aggregate\n"),
+		}
+		foreign := []byte("foreign\n")
+		stagePath := filepath.Join(parent, request.StagingName)
+		if err := os.WriteFile(stagePath, foreign, 0o600); err != nil {
+			t.Fatalf("create occupied staging name: %v", err)
+		}
+		if _, err := PublishFile(request); !errors.Is(err, ErrCollision) {
+			t.Fatalf("occupied staging publication error = %v, want ErrCollision", err)
+		}
+		content, err := os.ReadFile(stagePath)
+		if err != nil || !slices.Equal(content, foreign) {
+			t.Fatalf("occupied staging changed: content=%q err=%v", content, err)
+		}
+	})
+
+	t.Run("pre-commit content drift", func(t *testing.T) {
+		parent := t.TempDir()
+		request := FileRequest{
+			ParentPath: parent, OutputName: "aggregate.json", StagingName: ".aggregate.stage",
+			Artifact: artifactFixture("aggregate.json", "good\n"),
+		}
+		owner := publisher{open: openNativePlatform, hook: func(
+			boundary publicationBoundary,
+			state *transactionState,
+		) error {
+			if boundary != boundaryBeforeCommit {
+				return nil
+			}
+			_, err := state.stagedFiles[0].file.WriteAt([]byte("evil\n"), 0)
+			return err
+		}}
+		if _, err := owner.publishFile(request); !errors.Is(err, ErrUnsafe) {
+			t.Fatalf("pre-commit drift publication error = %v, want ErrUnsafe", err)
+		}
+		if _, err := os.Stat(filepath.Join(parent, request.OutputName)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("pre-commit drift reached final name: %v", err)
+		}
+	})
+
+	t.Run("post-durability ambiguity preserves recovery links", func(t *testing.T) {
+		parent := t.TempDir()
+		request := FileRequest{
+			ParentPath: parent, OutputName: "aggregate.json", StagingName: ".aggregate.stage",
+			Artifact: artifactFixture("aggregate.json", "aggregate\n"),
+		}
+		owner := publisher{open: openNativePlatform, hook: func(boundary publicationBoundary, _ *transactionState) error {
+			if boundary == boundaryAfterDurability {
+				return errors.New("injected response ambiguity")
+			}
+			return nil
+		}}
+		if _, err := owner.publishFile(request); !errors.Is(err, ErrUnsafe) {
+			t.Fatalf("post-durability publication error = %v, want ErrUnsafe", err)
+		}
+		for _, name := range []string{request.OutputName, request.StagingName} {
+			content, err := os.ReadFile(filepath.Join(parent, name))
+			if err != nil || !slices.Equal(content, request.Artifact.Bytes) {
+				t.Fatalf("recovery link %q: content=%q err=%v", name, content, err)
+			}
+		}
+	})
+}
+
 func TestPublicationRequestValidation(t *testing.T) {
 	t.Parallel()
 	valid := directoryFixture(t.TempDir(), "generation", ".stage-validation")

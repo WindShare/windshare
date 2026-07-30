@@ -1,5 +1,6 @@
 envelope-sample.json
 path-policy.json
+portable-path-vectors.json
 v2-fragment.json
 v2-identity.json
 v2-peer-signaling.json

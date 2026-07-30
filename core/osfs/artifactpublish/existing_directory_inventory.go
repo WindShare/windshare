@@ -48,6 +48,13 @@ type existingDirectoryNode struct {
 	files        map[string]ExistingDirectoryFile
 }
 
+type existingDirectoryInventoryIndex struct {
+	directories  []string
+	files        []ExistingDirectoryFile
+	directorySet map[string]struct{}
+	fileSet      map[string]ExistingDirectoryFile
+}
+
 func normalizeExistingDirectoryRequest(request ExistingDirectoryRequest) (normalizedExistingDirectory, error) {
 	if !validExistingStagingName(request.StagingName) {
 		return normalizedExistingDirectory{}, fmt.Errorf("%w: existing staging name is not invocation-owned", ErrUnsafe)
@@ -89,105 +96,186 @@ func normalizeExistingDirectory(
 	expectedManifestSHA256 string,
 	snapshotPaths []string,
 ) (normalizedExistingDirectory, error) {
-	if !filepath.IsAbs(parentPath) || filepath.Clean(parentPath) != parentPath {
-		return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact parent must be clean and absolute", ErrUnsafe)
+	if err := validateExistingDirectoryAuthority(
+		parentPath,
+		outputName,
+		inventory,
+		manifestPath,
+		expectedManifestSHA256,
+	); err != nil {
+		return normalizedExistingDirectory{}, err
 	}
-	if outputName != ExistingDirectoryOutputName {
-		return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact output name is not deterministic", ErrUnsafe)
-	}
-	if manifestPath != existingDirectoryManifestPath {
-		return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact manifest path is not canonical", ErrUnsafe)
-	}
-	if !isSHA256(expectedManifestSHA256) {
-		return normalizedExistingDirectory{}, fmt.Errorf("%w: expected sealed artifact manifest digest is invalid", ErrUnsafe)
-	}
-	if len(inventory.Files) < 1 || len(inventory.Files) > maximumExistingDirectoryFiles ||
-		len(inventory.Directories) > maximumExistingDirectoryDirectories {
-		return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact inventory exceeds its entry authority", ErrUnsafe)
-	}
-	directories := slices.Clone(inventory.Directories)
-	files := slices.Clone(inventory.Files)
-	if !sort.StringsAreSorted(directories) || !slices.IsSortedFunc(files, compareExistingFiles) {
-		return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact inventory is not canonically ordered", ErrUnsafe)
-	}
-	directorySet := make(map[string]struct{}, len(directories))
-	portableSet := make(map[string]struct{}, len(directories)+len(files))
-	for _, directory := range directories {
-		if err := requirePortableExistingPath(directory); err != nil {
-			return normalizedExistingDirectory{}, err
-		}
-		if _, repeated := directorySet[directory]; repeated {
-			return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact directory repeats", ErrUnsafe)
-		}
-		key := portableExistingPathKey(directory)
-		if _, collided := portableSet[key]; collided {
-			return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact paths collide portably", ErrUnsafe)
-		}
-		directorySet[directory] = struct{}{}
-		portableSet[key] = struct{}{}
-	}
-	fileSet := make(map[string]ExistingDirectoryFile, len(files))
-	var totalBytes uint64
-	for _, file := range files {
-		if err := requirePortableExistingPath(file.RelativePath); err != nil {
-			return normalizedExistingDirectory{}, err
-		}
-		if file.ByteLength > maximumExistingDirectoryFileBytes || !isSHA256(file.SHA256) {
-			return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact file metadata is outside its authority", ErrUnsafe)
-		}
-		if totalBytes > maximumExistingDirectoryTotalBytes-file.ByteLength {
-			return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact bytes exceed their total authority", ErrUnsafe)
-		}
-		totalBytes += file.ByteLength
-		if _, repeated := fileSet[file.RelativePath]; repeated {
-			return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact file repeats", ErrUnsafe)
-		}
-		key := portableExistingPathKey(file.RelativePath)
-		if _, collided := portableSet[key]; collided {
-			return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact paths collide portably", ErrUnsafe)
-		}
-		fileSet[file.RelativePath] = file
-		portableSet[key] = struct{}{}
-	}
-	manifestFile, ok := fileSet[manifestPath]
-	if !ok {
-		return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact manifest is absent from inventory", ErrUnsafe)
-	}
-	if manifestFile.ByteLength < 1 || manifestFile.ByteLength > maximumExistingDirectoryManifestBytes ||
-		manifestFile.SHA256 != expectedManifestSHA256 {
-		return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact manifest does not match external authority", ErrUnsafe)
-	}
-	for _, directory := range directories {
-		parent := path.Dir(directory)
-		if parent != "." {
-			if _, ok := directorySet[parent]; !ok {
-				return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact directory parent is absent", ErrUnsafe)
-			}
-		}
-	}
-	for _, file := range files {
-		parent := path.Dir(file.RelativePath)
-		if parent != "." {
-			if _, ok := directorySet[parent]; !ok {
-				return normalizedExistingDirectory{}, fmt.Errorf("%w: sealed artifact file parent is absent", ErrUnsafe)
-			}
-		}
-	}
-	normalizedSnapshots, err := normalizeExistingSnapshots(snapshotPaths, fileSet)
+	indexed, err := indexExistingDirectoryInventory(inventory)
 	if err != nil {
 		return normalizedExistingDirectory{}, err
 	}
-	tree := buildExistingDirectoryTree(directories, files)
+	if err := requireExistingManifestAuthority(
+		indexed.fileSet,
+		manifestPath,
+		expectedManifestSHA256,
+	); err != nil {
+		return normalizedExistingDirectory{}, err
+	}
+	if err := requireExistingParentClosure(indexed); err != nil {
+		return normalizedExistingDirectory{}, err
+	}
+	normalizedSnapshots, err := normalizeExistingSnapshots(snapshotPaths, indexed.fileSet)
+	if err != nil {
+		return normalizedExistingDirectory{}, err
+	}
+	tree := buildExistingDirectoryTree(indexed.directories, indexed.files)
 	return normalizedExistingDirectory{
-		parentPath:             parentPath,
-		outputName:             outputName,
-		stagingName:            stagingName,
-		inventory:              ExistingDirectoryInventory{Directories: directories, Files: files},
+		parentPath:  parentPath,
+		outputName:  outputName,
+		stagingName: stagingName,
+		inventory: ExistingDirectoryInventory{
+			Directories: indexed.directories,
+			Files:       indexed.files,
+		},
 		manifestPath:           manifestPath,
 		expectedManifestSHA256: expectedManifestSHA256,
 		snapshotPaths:          normalizedSnapshots,
 		tree:                   tree,
 	}, nil
+}
+
+func validateExistingDirectoryAuthority(
+	parentPath string,
+	outputName string,
+	inventory ExistingDirectoryInventory,
+	manifestPath string,
+	expectedManifestSHA256 string,
+) error {
+	if !filepath.IsAbs(parentPath) || filepath.Clean(parentPath) != parentPath {
+		return fmt.Errorf("%w: sealed artifact parent must be clean and absolute", ErrUnsafe)
+	}
+	if outputName != ExistingDirectoryOutputName {
+		return fmt.Errorf("%w: sealed artifact output name is not deterministic", ErrUnsafe)
+	}
+	if manifestPath != existingDirectoryManifestPath {
+		return fmt.Errorf("%w: sealed artifact manifest path is not canonical", ErrUnsafe)
+	}
+	if !isSHA256(expectedManifestSHA256) {
+		return fmt.Errorf("%w: expected sealed artifact manifest digest is invalid", ErrUnsafe)
+	}
+	if len(inventory.Files) < 1 || len(inventory.Files) > maximumExistingDirectoryFiles ||
+		len(inventory.Directories) > maximumExistingDirectoryDirectories {
+		return fmt.Errorf("%w: sealed artifact inventory exceeds its entry authority", ErrUnsafe)
+	}
+	return nil
+}
+
+func indexExistingDirectoryInventory(
+	inventory ExistingDirectoryInventory,
+) (existingDirectoryInventoryIndex, error) {
+	directories := slices.Clone(inventory.Directories)
+	files := slices.Clone(inventory.Files)
+	if !sort.StringsAreSorted(directories) || !slices.IsSortedFunc(files, compareExistingFiles) {
+		return existingDirectoryInventoryIndex{}, fmt.Errorf("%w: sealed artifact inventory is not canonically ordered", ErrUnsafe)
+	}
+	portableSet := make(map[string]struct{}, len(directories)+len(files))
+	directorySet, err := indexExistingDirectories(directories, portableSet)
+	if err != nil {
+		return existingDirectoryInventoryIndex{}, err
+	}
+	fileSet, err := indexExistingFiles(files, portableSet)
+	if err != nil {
+		return existingDirectoryInventoryIndex{}, err
+	}
+	return existingDirectoryInventoryIndex{
+		directories:  directories,
+		files:        files,
+		directorySet: directorySet,
+		fileSet:      fileSet,
+	}, nil
+}
+
+func indexExistingDirectories(
+	directories []string,
+	portableSet map[string]struct{},
+) (map[string]struct{}, error) {
+	directorySet := make(map[string]struct{}, len(directories))
+	for _, directory := range directories {
+		if err := requirePortableExistingPath(directory); err != nil {
+			return nil, err
+		}
+		if _, repeated := directorySet[directory]; repeated {
+			return nil, fmt.Errorf("%w: sealed artifact directory repeats", ErrUnsafe)
+		}
+		key := portableExistingPathKey(directory)
+		if _, collided := portableSet[key]; collided {
+			return nil, fmt.Errorf("%w: sealed artifact paths collide portably", ErrUnsafe)
+		}
+		directorySet[directory] = struct{}{}
+		portableSet[key] = struct{}{}
+	}
+	return directorySet, nil
+}
+
+func indexExistingFiles(
+	files []ExistingDirectoryFile,
+	portableSet map[string]struct{},
+) (map[string]ExistingDirectoryFile, error) {
+	fileSet := make(map[string]ExistingDirectoryFile, len(files))
+	var totalBytes uint64
+	for _, file := range files {
+		if err := requirePortableExistingPath(file.RelativePath); err != nil {
+			return nil, err
+		}
+		if file.ByteLength > maximumExistingDirectoryFileBytes || !isSHA256(file.SHA256) {
+			return nil, fmt.Errorf("%w: sealed artifact file metadata is outside its authority", ErrUnsafe)
+		}
+		if totalBytes > maximumExistingDirectoryTotalBytes-file.ByteLength {
+			return nil, fmt.Errorf("%w: sealed artifact bytes exceed their total authority", ErrUnsafe)
+		}
+		totalBytes += file.ByteLength
+		if _, repeated := fileSet[file.RelativePath]; repeated {
+			return nil, fmt.Errorf("%w: sealed artifact file repeats", ErrUnsafe)
+		}
+		key := portableExistingPathKey(file.RelativePath)
+		if _, collided := portableSet[key]; collided {
+			return nil, fmt.Errorf("%w: sealed artifact paths collide portably", ErrUnsafe)
+		}
+		fileSet[file.RelativePath] = file
+		portableSet[key] = struct{}{}
+	}
+	return fileSet, nil
+}
+
+func requireExistingManifestAuthority(
+	fileSet map[string]ExistingDirectoryFile,
+	manifestPath string,
+	expectedManifestSHA256 string,
+) error {
+	manifestFile, ok := fileSet[manifestPath]
+	if !ok {
+		return fmt.Errorf("%w: sealed artifact manifest is absent from inventory", ErrUnsafe)
+	}
+	if manifestFile.ByteLength < 1 || manifestFile.ByteLength > maximumExistingDirectoryManifestBytes ||
+		manifestFile.SHA256 != expectedManifestSHA256 {
+		return fmt.Errorf("%w: sealed artifact manifest does not match external authority", ErrUnsafe)
+	}
+	return nil
+}
+
+func requireExistingParentClosure(index existingDirectoryInventoryIndex) error {
+	for _, directory := range index.directories {
+		parent := path.Dir(directory)
+		if parent != "." {
+			if _, ok := index.directorySet[parent]; !ok {
+				return fmt.Errorf("%w: sealed artifact directory parent is absent", ErrUnsafe)
+			}
+		}
+	}
+	for _, file := range index.files {
+		parent := path.Dir(file.RelativePath)
+		if parent != "." {
+			if _, ok := index.directorySet[parent]; !ok {
+				return fmt.Errorf("%w: sealed artifact file parent is absent", ErrUnsafe)
+			}
+		}
+	}
+	return nil
 }
 
 func normalizeExistingSnapshots(

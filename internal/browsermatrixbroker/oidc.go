@@ -360,10 +360,11 @@ func validRepositoryPart(value string) bool {
 		return false
 	}
 	for _, current := range value {
-		if !(current >= 'A' && current <= 'Z' || current >= 'a' && current <= 'z' ||
-			current >= '0' && current <= '9' || strings.ContainsRune("_.-", current)) {
-			return false
+		if current >= 'A' && current <= 'Z' || current >= 'a' && current <= 'z' ||
+			current >= '0' && current <= '9' || strings.ContainsRune("_.-", current) {
+			continue
 		}
+		return false
 	}
 	return true
 }

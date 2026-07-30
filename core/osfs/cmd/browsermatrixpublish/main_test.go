@@ -92,6 +92,85 @@ func TestPublishRejectsCrossOperationAuthorityFields(t *testing.T) {
 	}
 }
 
+func TestPublishRejectsMalformedOperationSpecificAuthorities(t *testing.T) {
+	t.Parallel()
+
+	invalidLength := func(value *request) {
+		value.Inventory.Files[0].ByteLength = "01"
+	}
+	validReceipt := base64.StdEncoding.EncodeToString([]byte("prepared-receipt"))
+	tests := []struct {
+		name   string
+		value  request
+		mutate func(*request)
+	}{
+		{
+			name:  "directory authority",
+			value: request{Operation: "directory", Artifacts: []artifactRequest{}},
+			mutate: func(value *request) {
+				value.Inventory = &directoryInventoryRequest{Directories: []string{}, Files: []existingDirectoryFileRequest{}}
+			},
+		},
+		{
+			name:   "file cardinality",
+			value:  request{Operation: "file", Artifacts: []artifactRequest{}},
+			mutate: func(*request) {},
+		},
+		{
+			name:   "prepare inventory length",
+			value:  existingDirectoryHelperRequest(t, "prepare-existing-directory", false),
+			mutate: invalidLength,
+		},
+		{
+			name:   "prepare native policy",
+			value:  existingDirectoryHelperRequest(t, "prepare-existing-directory", false),
+			mutate: func(value *request) { value.ExpectedManifestSHA256 = "invalid" },
+		},
+		{
+			name:   "publish inventory length",
+			value:  existingDirectoryHelperRequest(t, "publish-existing-directory", false),
+			mutate: func(value *request) { value.StagingReceipt = validReceipt; invalidLength(value) },
+		},
+		{
+			name:   "publish receipt encoding",
+			value:  existingDirectoryHelperRequest(t, "publish-existing-directory", false),
+			mutate: func(value *request) { value.StagingReceipt = "***" },
+		},
+		{
+			name:   "verify inventory length",
+			value:  existingDirectoryHelperRequest(t, "verify-existing-directory", false),
+			mutate: func(value *request) { value.StagingName = ""; invalidLength(value) },
+		},
+		{
+			name:  "cleanup shape",
+			value: existingDirectoryHelperRequest(t, "cleanup-existing-directory", false),
+			mutate: func(value *request) {
+				value.StagingReceipt = validReceipt
+				value.SnapshotPaths = []string{"manifest.json"}
+			},
+		},
+		{
+			name:   "cleanup inventory length",
+			value:  existingDirectoryHelperRequest(t, "cleanup-existing-directory", false),
+			mutate: func(value *request) { value.StagingReceipt = validReceipt; invalidLength(value) },
+		},
+		{
+			name:   "cleanup receipt encoding",
+			value:  existingDirectoryHelperRequest(t, "cleanup-existing-directory", false),
+			mutate: func(value *request) { value.StagingReceipt = "***" },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			test.mutate(&test.value)
+			if _, err := publish(test.value); err == nil {
+				t.Fatal("malformed operation-specific authority unexpectedly accepted")
+			}
+		})
+	}
+}
+
 func TestPublishRejectsNullExistingDirectoryArrays(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -136,6 +215,21 @@ func TestDecodeRequestRequiresOneCanonicalJSONValue(t *testing.T) {
 		if _, err := decodeRequest(bytes.NewReader(noncanonical)); err == nil {
 			t.Fatalf("noncanonical request unexpectedly accepted: %q", noncanonical)
 		}
+	}
+}
+
+func TestDecodeAndScalarParsersRejectNonCanonicalBoundaries(t *testing.T) {
+	t.Parallel()
+	if _, err := decodeRequest(strings.NewReader("")); err == nil {
+		t.Fatal("empty request unexpectedly accepted")
+	}
+	for _, encoded := range []string{"", "00", "1x", "18446744073709551616"} {
+		if _, err := parseCanonicalUint64(encoded); err == nil {
+			t.Fatalf("noncanonical uint64 %q unexpectedly accepted", encoded)
+		}
+	}
+	if exitCode := writeSelfCheck(failingWriter{}); exitCode != 2 {
+		t.Fatalf("self-check writer failure exit code = %d, want 2", exitCode)
 	}
 }
 
@@ -222,6 +316,79 @@ func TestRunPublishesExistingLargeFileWithoutSerializingItsBytes(t *testing.T) {
 	}
 }
 
+func TestRunVerifiesPublishedDirectoryAndCleansPreparedStaging(t *testing.T) {
+	t.Parallel()
+
+	publishRequest := existingDirectoryHelperRequest(t, "prepare-existing-directory", false)
+	var prepared response
+	if err := json.Unmarshal(runHelperRequest(t, publishRequest), &prepared); err != nil || prepared.StagingReceipt == "" {
+		t.Fatalf("decode publication preparation: response=%#v err=%v", prepared, err)
+	}
+	manifestBytes := []byte("{\"sealed\":true}\n")
+	stagePath := filepath.Join(publishRequest.ParentPath, publishRequest.StagingName)
+	if err := os.WriteFile(filepath.Join(stagePath, "manifest.json"), manifestBytes, 0o600); err != nil {
+		t.Fatalf("write staged manifest: %v", err)
+	}
+	publishRequest.Operation = "publish-existing-directory"
+	publishRequest.SnapshotPaths = []string{"manifest.json"}
+	publishRequest.StagingReceipt = prepared.StagingReceipt
+	runHelperRequest(t, publishRequest)
+
+	publishRequest.Operation = "verify-existing-directory"
+	publishRequest.StagingName = ""
+	publishRequest.StagingReceipt = ""
+	var verified response
+	if err := json.Unmarshal(runHelperRequest(t, publishRequest), &verified); err != nil {
+		t.Fatalf("decode verification response: %v", err)
+	}
+	if verified.ManifestSHA256 != publishRequest.ExpectedManifestSHA256 || len(verified.Snapshots) != 1 ||
+		verified.Snapshots[0].RelativePath != "manifest.json" ||
+		verified.Snapshots[0].BytesBase64 != base64.StdEncoding.EncodeToString(manifestBytes) {
+		t.Fatalf("unexpected verification response: %#v", verified)
+	}
+
+	cleanupRequest := existingDirectoryHelperRequest(t, "prepare-existing-directory", false)
+	prepared = response{}
+	if err := json.Unmarshal(runHelperRequest(t, cleanupRequest), &prepared); err != nil || prepared.StagingReceipt == "" {
+		t.Fatalf("decode cleanup preparation: response=%#v err=%v", prepared, err)
+	}
+	cleanupStagePath := filepath.Join(cleanupRequest.ParentPath, cleanupRequest.StagingName)
+	cleanupRequest.Operation = "cleanup-existing-directory"
+	cleanupRequest.StagingReceipt = prepared.StagingReceipt
+	var cleaned response
+	if err := json.Unmarshal(runHelperRequest(t, cleanupRequest), &cleaned); err != nil {
+		t.Fatalf("decode cleanup response: %v", err)
+	}
+	if cleaned.CleanupOutcome != string(artifactpublish.ExistingDirectoryCleanupCompleted) {
+		t.Fatalf("unexpected cleanup response: %#v", cleaned)
+	}
+	if _, err := os.Lstat(cleanupStagePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("prepared staging survived authenticated cleanup: %v", err)
+	}
+}
+
+func TestRunMapsUnsafePublicationAndInputReadFailure(t *testing.T) {
+	t.Parallel()
+
+	unsafeRequest := validFileRequest(t)
+	unsafeRequest.Artifacts[0].SHA256 = strings.Repeat("0", sha256.Size*2)
+	encoded, err := json.Marshal(unsafeRequest)
+	if err != nil {
+		t.Fatalf("encode unsafe request: %v", err)
+	}
+	var failure bytes.Buffer
+	if exitCode := run(nil, bytes.NewReader(encoded), new(bytes.Buffer), &failure); exitCode != 2 {
+		t.Fatalf("unsafe publication exit code = %d, want 2", exitCode)
+	}
+	assertFailureResponse(t, failure.Bytes(), "publication-unsafe")
+
+	failure.Reset()
+	if exitCode := run(nil, failingReader{}, new(bytes.Buffer), &failure); exitCode != 2 {
+		t.Fatalf("input read failure exit code = %d, want 2", exitCode)
+	}
+	assertFailureResponse(t, failure.Bytes(), "protocol-invalid")
+}
+
 func TestRunMapsCollisionAndResponseWriteFailure(t *testing.T) {
 	t.Parallel()
 	request := validFileRequest(t)
@@ -267,6 +434,12 @@ type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) {
 	return 0, errors.New("injected writer failure")
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) {
+	return 0, errors.New("injected reader failure")
 }
 
 func validFileRequest(t *testing.T) request {

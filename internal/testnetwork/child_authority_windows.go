@@ -374,31 +374,47 @@ func (s *childAuthorizationServer) readExact(_ windows.Handle, destination []byt
 }
 
 func (s *childAuthorizationServer) read(destination []byte) (uint32, error) {
+	return s.runOverlappedPipeIO(destination, windows.ReadFile)
+}
+
+type overlappedPipeIO func(
+	windows.Handle,
+	[]byte,
+	*uint32,
+	*windows.Overlapped,
+) error
+
+func (s *childAuthorizationServer) runOverlappedPipeIO(
+	buffer []byte,
+	issue overlappedPipeIO,
+) (uint32, error) {
 	event, err := windows.CreateEvent(nil, 1, 0, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer windows.CloseHandle(event) //nolint:errcheck
 	overlapped := windows.Overlapped{HEvent: event}
-	var read uint32
+	var transferred uint32
 
+	// Retirement must not cross the checked issuance boundary, but the wait must
+	// remain outside the lock so retirement can cancel a pending operation.
 	s.ioMu.Lock()
 	if s.retired.Load() {
 		s.ioMu.Unlock()
 		return 0, errors.New("child authorization authority is retired")
 	}
-	err = windows.ReadFile(s.pipe, destination, &read, &overlapped)
+	err = issue(s.pipe, buffer, &transferred, &overlapped)
 	s.ioMu.Unlock()
 	if err == nil {
-		return read, nil
+		return transferred, nil
 	}
 	if !errors.Is(err, windows.ERROR_IO_PENDING) {
 		return 0, err
 	}
-	if err := windows.GetOverlappedResult(s.pipe, &overlapped, &read, true); err != nil {
+	if err := windows.GetOverlappedResult(s.pipe, &overlapped, &transferred, true); err != nil {
 		return 0, err
 	}
-	return read, nil
+	return transferred, nil
 }
 
 func (s *childAuthorizationServer) writeExact(_ windows.Handle, source []byte) error {
@@ -416,31 +432,7 @@ func (s *childAuthorizationServer) writeExact(_ windows.Handle, source []byte) e
 }
 
 func (s *childAuthorizationServer) write(source []byte) (uint32, error) {
-	event, err := windows.CreateEvent(nil, 1, 0, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer windows.CloseHandle(event) //nolint:errcheck
-	overlapped := windows.Overlapped{HEvent: event}
-	var written uint32
-
-	s.ioMu.Lock()
-	if s.retired.Load() {
-		s.ioMu.Unlock()
-		return 0, errors.New("child authorization authority is retired")
-	}
-	err = windows.WriteFile(s.pipe, source, &written, &overlapped)
-	s.ioMu.Unlock()
-	if err == nil {
-		return written, nil
-	}
-	if !errors.Is(err, windows.ERROR_IO_PENDING) {
-		return 0, err
-	}
-	if err := windows.GetOverlappedResult(s.pipe, &overlapped, &written, true); err != nil {
-		return 0, err
-	}
-	return written, nil
+	return s.runOverlappedPipeIO(source, windows.WriteFile)
 }
 
 func (s *childAuthorizationServer) retire() error {

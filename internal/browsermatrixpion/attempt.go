@@ -319,11 +319,11 @@ func challengeBindingSHA256(authority AttemptAuthority) string {
 
 func selectedPair(peer *pion.PeerConnection) (SelectedPairEvidence, error) {
 	if peer == nil || peer.SCTP() == nil || peer.SCTP().Transport() == nil || peer.SCTP().Transport().ICETransport() == nil {
-		return SelectedPairEvidence{}, errors.New("Pion ICE transport is unavailable")
+		return SelectedPairEvidence{}, errors.New("pion ICE transport is unavailable")
 	}
 	pair, err := peer.SCTP().Transport().ICETransport().GetSelectedCandidatePair()
 	if err != nil || pair == nil || pair.Local == nil || pair.Remote == nil {
-		return SelectedPairEvidence{}, errors.New("Pion selected candidate pair is unavailable")
+		return SelectedPairEvidence{}, errors.New("pion selected candidate pair is unavailable")
 	}
 	return SelectedPairEvidence{Local: candidateEvidence(pair.Local), Remote: candidateEvidence(pair.Remote)}, nil
 }
