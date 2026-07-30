@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 
-import { evaluateBrowserGate } from './verdict.mjs'
-import { runLocalBrowserGatePipeline } from './local-gate-runner.mjs'
+import { evaluateBrowserGate } from '../../verdict.mjs'
+import { runLocalBrowserGatePipeline } from '../../local-gate-runner.mjs'
 
 await verifyCanonicalTraceAndOpaquePayloads()
 await verifyDependencyReuseIsAnExplicitSuccessfulAuthority()
@@ -19,6 +19,7 @@ async function verifyCanonicalTraceAndOpaquePayloads() {
   assert.deepEqual(harness.calls, [
     'dependency-install',
     'browser-contract',
+    'generated-semantic-process',
     'browser-runtime-build',
     'browser-install',
     'browser-preflight',
@@ -36,6 +37,7 @@ async function verifyCanonicalTraceAndOpaquePayloads() {
     [
       ['dependency-install', 'success'],
       ['browser-contract', 'success'],
+      ['generated-semantic-process', 'success'],
       ['browser-runtime-build', 'success'],
       ['browser-install', 'success'],
       ['browser-preflight', 'success'],
@@ -93,6 +95,7 @@ async function verifyContractFailureSkipsSuiteWorkAndStillRunsVerdict() {
   assert.deepEqual(
     harness.trace.filter(({ outcome }) => outcome === 'skipped').map(({ operationId }) => operationId),
     [
+      'generated-semantic-process',
       'browser-runtime-build',
       'browser-install',
       'browser-preflight',
@@ -111,26 +114,28 @@ async function verifyContractFailureSkipsSuiteWorkAndStillRunsVerdict() {
 
 async function verifyEveryPrerequisiteFailureProjectsHostedStatus() {
   const cases = [
-    ['dependency-install', 'failure', 'skipped', 'skipped'],
-    ['browser-contract', 'failure', 'skipped', 'skipped'],
-    ['browser-runtime-build', 'success', 'failure', 'failure'],
-    ['browser-install', 'success', 'failure', 'failure'],
-    ['browser-preflight', 'success', 'failure', 'failure'],
-    ['main-topology-lock', 'success', 'failure', 'success'],
-    ['main-production', 'success', 'failure', 'success'],
-    ['main-guard', 'success', 'failure', 'success'],
-    ['main-sealed-evidence', 'success', 'failure', 'success'],
-    ['pion-topology-lock', 'success', 'success', 'failure'],
-    ['pion-production', 'success', 'success', 'failure'],
-    ['pion-guard', 'success', 'success', 'failure'],
-    ['pion-sealed-evidence', 'success', 'success', 'failure'],
-    ['browser-runtime-retirement', 'success', 'failure', 'failure'],
+    ['dependency-install', 'failure', 'skipped', 'skipped', 'skipped'],
+    ['browser-contract', 'failure', 'skipped', 'skipped', 'skipped'],
+    ['generated-semantic-process', 'success', 'failure', 'failure', 'failure'],
+    ['browser-runtime-build', 'success', 'success', 'failure', 'failure'],
+    ['browser-install', 'success', 'success', 'failure', 'failure'],
+    ['browser-preflight', 'success', 'success', 'failure', 'failure'],
+    ['main-topology-lock', 'success', 'success', 'failure', 'success'],
+    ['main-production', 'success', 'success', 'failure', 'success'],
+    ['main-guard', 'success', 'success', 'failure', 'success'],
+    ['main-sealed-evidence', 'success', 'success', 'failure', 'success'],
+    ['pion-topology-lock', 'success', 'success', 'success', 'failure'],
+    ['pion-production', 'success', 'success', 'success', 'failure'],
+    ['pion-guard', 'success', 'success', 'success', 'failure'],
+    ['pion-sealed-evidence', 'success', 'success', 'success', 'failure'],
+    ['browser-runtime-retirement', 'success', 'success', 'failure', 'failure'],
   ]
 
-  for (const [fault, contract, main, pion] of cases) {
+  for (const [fault, contract, processJob, main, pion] of cases) {
     const harness = createHarness({ fault, useStandardLibraryVerdict: true })
     const result = await runLocalBrowserGatePipeline(harness.ports)
     assert.equal(result.projection.contractJobOutcome, contract, fault)
+    assert.equal(result.projection.processJobOutcome, processJob, fault)
     assert.deepEqual(result.projection.verdictDependencies, { main, pion }, fault)
     assert.equal(result.exitCode, 1, fault)
     assert.equal(harness.standardLibraryVerdict.verdict, 'failed', fault)
@@ -206,6 +211,10 @@ function createHarness({
     },
     async runContract() {
       enter('browser-contract')
+      return Object.freeze({ exitCode: 0 })
+    },
+    async runGeneratedSemanticProcess() {
+      enter('generated-semantic-process')
       return Object.freeze({ exitCode: 0 })
     },
     async buildRuntime() {

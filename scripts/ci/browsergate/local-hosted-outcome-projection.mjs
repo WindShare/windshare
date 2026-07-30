@@ -8,11 +8,16 @@ const OPERATION_OUTCOMES = Object.freeze(['success', 'failure', 'skipped'])
  * outcome.
  */
 export function projectLocalHostedJobOutcomes(input) {
-  exactKeys(input, ['contract', 'suiteShared', 'suites'], 'local hosted outcome input')
+  exactKeys(input, ['contract', 'process', 'suiteShared', 'suites'], 'local hosted outcome input')
   exactKeys(
     input.contract,
     ['dependencyInstall', 'browserContract'],
     'local browser-contract job',
+  )
+  exactKeys(
+    input.process,
+    ['generatedSemantic'],
+    'local generated-semantic process job',
   )
   exactKeys(
     input.suiteShared,
@@ -25,6 +30,13 @@ export function projectLocalHostedJobOutcomes(input) {
     operationOutcome(input.contract.dependencyInstall, 'dependency install'),
     operationOutcome(input.contract.browserContract, 'browser contract'),
   ])
+  // Hosted process evidence is deliberately independent from the browser
+  // artifact DAG, so its failure blocks the workflow without changing the
+  // contract -> suite -> verdict dependency semantics.
+  const processJobOutcome = operationOutcome(
+    input.process.generatedSemantic,
+    'generated semantic process',
+  )
   const suites = {}
   for (const suite of SUITES) {
     const suiteInput = input.suites[suite]
@@ -47,6 +59,7 @@ export function projectLocalHostedJobOutcomes(input) {
 
   return Object.freeze({
     contractJobOutcome,
+    processJobOutcome,
     suites: Object.freeze(suites),
     // `browser-verdict` has `if: always()`: these are the exact values its
     // `needs.browser-{main,pion}.result` expressions would expose.

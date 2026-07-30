@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 
-import { projectLocalHostedJobOutcomes } from './local-hosted-outcome-projection.mjs'
+import { projectLocalHostedJobOutcomes } from '../../local-hosted-outcome-projection.mjs'
 
 const HOSTED_JOB_OUTCOMES = Object.freeze(['success', 'failure', 'cancelled', 'skipped'])
 
 verifyHappyProjection()
+verifyProcessJobRemainsIndependentFromArtifactDag()
 verifyContractDependencyFailuresSkipSuites()
 verifySharedSuiteOperationFailuresFailBothJobs()
 verifySuitePrerequisiteFailuresRemainSuiteLocal()
@@ -15,12 +16,27 @@ process.stdout.write('local/hosted browser outcome projection contracts: PASS\n'
 function verifyHappyProjection() {
   assert.deepEqual(projectLocalHostedJobOutcomes(successfulInput()), {
     contractJobOutcome: 'success',
+    processJobOutcome: 'success',
     suites: {
       main: { dependencyOutcome: 'success', jobOutcome: 'success' },
       pion: { dependencyOutcome: 'success', jobOutcome: 'success' },
     },
     verdictDependencies: { main: 'success', pion: 'success' },
   })
+}
+
+function verifyProcessJobRemainsIndependentFromArtifactDag() {
+  const input = successfulInput()
+  input.process.generatedSemantic = 'failure'
+  const projected = projectLocalHostedJobOutcomes(input)
+
+  assert.equal(projected.processJobOutcome, 'failure')
+  assert.equal(projected.contractJobOutcome, 'success')
+  assert.deepEqual(projected.verdictDependencies, {
+    main: 'success',
+    pion: 'success',
+  })
+  assertHostedVocabulary(projected)
 }
 
 function verifyContractDependencyFailuresSkipSuites() {
@@ -100,6 +116,7 @@ function verifyProjectionIsClosedOverItsPrerequisites() {
 
 function assertHostedVocabulary(projected) {
   assert(HOSTED_JOB_OUTCOMES.includes(projected.contractJobOutcome))
+  assert(HOSTED_JOB_OUTCOMES.includes(projected.processJobOutcome))
   for (const suite of ['main', 'pion']) {
     assert(HOSTED_JOB_OUTCOMES.includes(projected.suites[suite].dependencyOutcome))
     assert(HOSTED_JOB_OUTCOMES.includes(projected.suites[suite].jobOutcome))
@@ -112,6 +129,9 @@ function successfulInput() {
     contract: {
       dependencyInstall: 'success',
       browserContract: 'success',
+    },
+    process: {
+      generatedSemantic: 'success',
     },
     suiteShared: {
       runtimeBuild: 'success',

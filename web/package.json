@@ -17,8 +17,10 @@
     "test:unit:remainder": "vitest run --exclude test/browser-evidence/**",
     "test:browser": "playwright test",
     "test:browser:evidence": "node scripts/browser-evidence/cli.ts",
-    "test:browser:evidence:contract": "vitest run --config vitest.browser-contract.config.ts && node --import ../scripts/ci/browsergate/contract-child-process-guard.mjs ../scripts/ci/browsergate/contract-child-process-guard.tests.mjs && node --import ../scripts/ci/browsergate/contract-child-process-guard.mjs ../scripts/ci/browsergate/operation-deadlines.tests.mjs && node --import ../scripts/ci/browsergate/contract-child-process-guard.mjs ../scripts/ci/browsergate/runtime-build.tests.mjs && node --import ../scripts/ci/browsergate/contract-child-process-guard.mjs ../scripts/ci/browsergate/process/bootstrap-build-authority.tests.mjs && node --import ../scripts/ci/browsergate/contract-child-process-guard.mjs ../scripts/ci/browsergate/process/settlement-signer.tests.mjs && node --import ../scripts/ci/browsergate/contract-child-process-guard.mjs ../scripts/ci/browsergate/process/settlement-trust-handoff.tests.mjs && node --import ../scripts/ci/browsergate/contract-child-process-guard.mjs ../scripts/ci/browsergate/network-entry.tests.mjs && node --import ../scripts/ci/browsergate/contract-child-process-guard.mjs ../scripts/ci/browsergate/playwright-discovery.tests.mjs && node --import ../scripts/ci/browsergate/contract-child-process-guard.mjs ../scripts/ci/browsergate/local-hosted-outcome-projection.tests.mjs && node --import ../scripts/ci/browsergate/contract-child-process-guard.mjs ../scripts/ci/browsergate/local-gate-runner.tests.mjs && node --import ../scripts/ci/browsergate/contract-child-process-guard.mjs ../scripts/ci/browsergate/workflow-contract.tests.mjs",
-    "test:browser:process": "vitest run test/browser-evidence/process-runner.test.ts test/browser-evidence/windows-job-backend.test.ts test/browser-evidence/windows-job-client.test.ts && node ../scripts/ci/browsergate/process/runtime-command-owner.tests.mjs",
+    "test:browser:evidence:contract": "vitest run --config vitest.browser-contract.config.ts && node ../scripts/ci/browsergate/test-runner.mjs",
+    "test:browser:generated-semantic:process": "node ../scripts/ci/browsergate/tests/process/generated-semantic.tests.mjs",
+    "test:browser:process:integration": "vitest run test/browser-evidence/native-directory-publisher.test.ts test/browser-evidence/process-runner.test.ts test/browser-evidence/windows-job-backend.test.ts test/browser-evidence/windows-job-client.test.ts",
+    "test:browser:process": "pnpm run test:browser:process:integration && pnpm run test:browser:generated-semantic:process",
     "test:browser:preflight": "node scripts/verify-playwright-browsers.mjs"
   },
   "dependencies": {
@@ -44,6 +46,7 @@
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.63.0",
     "vite": "^8.1.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "yaml": "2.9.0"
   }
 }

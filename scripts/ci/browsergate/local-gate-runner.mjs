@@ -13,6 +13,7 @@ export function localGateOperationPlan({
   return Object.freeze([
     dependencyInstallReused ? 'dependency-install-reuse' : 'dependency-install',
     'browser-contract',
+    'generated-semantic-process',
     'browser-runtime-build',
     'browser-install',
     'browser-preflight',
@@ -37,6 +38,7 @@ export async function runLocalBrowserGatePipeline({
   dependencyInstallReused = false,
   acquireDependencies,
   runContract,
+  runGeneratedSemanticProcess,
   buildRuntime,
   installBrowserRuntime,
   runPreflight,
@@ -51,6 +53,7 @@ export async function runLocalBrowserGatePipeline({
   for (const [name, operation] of Object.entries({
     acquireDependencies,
     runContract,
+    runGeneratedSemanticProcess,
     buildRuntime,
     installBrowserRuntime,
     runPreflight,
@@ -95,6 +98,18 @@ export async function runLocalBrowserGatePipeline({
 
   const contractSucceeded = projectionInput.contract.browserContract === 'success'
   if (contractSucceeded) {
+    projectionInput.process.generatedSemantic = await exitOperation({
+      operationId: 'generated-semantic-process',
+      operation: runGeneratedSemanticProcess,
+      trace,
+    })
+  } else {
+    skippedTrace(trace, 'generated-semantic-process', 'browser-contract')
+  }
+
+  const generatedSemanticSucceeded =
+    projectionInput.process.generatedSemantic === 'success'
+  if (contractSucceeded && generatedSemanticSucceeded) {
     const built = await valueOperation({
       operationId: 'browser-runtime-build',
       operation: buildRuntime,
@@ -103,7 +118,11 @@ export async function runLocalBrowserGatePipeline({
     projectionInput.suiteShared.runtimeBuild = built.outcome
     runtime = built.value
   } else {
-    skippedTrace(trace, 'browser-runtime-build', 'browser-contract')
+    skippedTrace(
+      trace,
+      'browser-runtime-build',
+      contractSucceeded ? 'generated-semantic-process' : 'browser-contract',
+    )
   }
 
   if (projectionInput.suiteShared.runtimeBuild === 'success') {
@@ -204,7 +223,8 @@ export async function runLocalBrowserGatePipeline({
   })
   const verdictExitCode = verdictExecution.value?.exitCode ?? 1
   const dependenciesPassed = Object.values(projection.verdictDependencies)
-    .every((outcome) => outcome === 'success')
+    .every((outcome) => outcome === 'success') &&
+    projection.processJobOutcome === 'success'
 
   return Object.freeze({
     exitCode: verdictExitCode === 0 && dependenciesPassed ? 0 : 1,
@@ -220,6 +240,9 @@ function initialProjectionInput({ dependencyInstallReused }) {
     contract: {
       dependencyInstall: dependencyInstallReused ? 'success' : 'skipped',
       browserContract: 'skipped',
+    },
+    process: {
+      generatedSemantic: 'skipped',
     },
     suiteShared: {
       runtimeBuild: 'skipped',

@@ -10,14 +10,14 @@ import {
   buildBootstrapProcessOwner,
   holdRegularFile,
   parseBootstrapGoModuleAuthority,
-} from './bootstrap-build-authority.mjs'
+} from '../../process/bootstrap-build-authority.mjs'
 import {
   BOOTSTRAP_GO_WORKSPACE_MODE,
   assertBootstrapGoSourceInventory,
   bootstrapOwnerPackage,
   createBootstrapGoSourceAuthority,
   parseBootstrapGoSourceInventory,
-} from './bootstrap-go-source-authority.mjs'
+} from '../../process/bootstrap-go-source-authority.mjs'
 
 const MAXIMUM_TEST_SOURCE_BYTES = 1_048_576
 const TEST_GO_SUM = 'example.invalid/dependency v1.0.0 h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n'

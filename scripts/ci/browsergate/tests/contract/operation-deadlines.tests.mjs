@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 
-import { browserRunPolicy } from '../../../web/scripts/browser-evidence/run-policy.ts'
-import * as deadlineModule from './operation-deadlines.mjs'
+import { browserRunPolicy } from '../../../../../web/scripts/browser-evidence/run-policy.ts'
+import * as deadlineModule from '../../operation-deadlines.mjs'
 
 const {
   BROWSERGATE_BOOTSTRAP_QUERY_DEADLINE_MS,
+  BROWSERGATE_GENERATED_SEMANTIC_PROCESS_DEADLINE_MS,
   BROWSERGATE_GITHUB_ARTIFACT_UPLOAD_DEADLINE_MS,
   BROWSERGATE_GITHUB_RUNNER_ACTION_DEADLINE_MS,
   BROWSERGATE_GITHUB_SUITE_JOB_SETTLEMENT_RESERVE_MS,
@@ -99,9 +100,9 @@ for (const [policyId, expected] of Object.entries(expectedSuitePolicies)) {
 }
 
 const expectedLocalHardBudgetMs = Object.freeze({
-  blocking: 8_460_000,
-  closure: 13_080_000,
-  stability: 17_700_000,
+  blocking: 8_760_000,
+  closure: 13_380_000,
+  stability: 18_000_000,
 })
 for (const policyId of ['blocking', 'closure', 'stability']) {
   const local = createLocalBrowsergateDeadlinePolicy(browserRunPolicy(policyId), 'linux')
@@ -121,7 +122,7 @@ for (const policyId of ['blocking', 'closure', 'stability']) {
     leaseId: 'bootstrap/source-control-context-query',
     maximumDurationMs: 30_000,
   }])
-  assert.equal(local.sharedSetup.budgetMs, 46 * 60_000)
+  assert.equal(local.sharedSetup.budgetMs, 51 * 60_000)
   assert.equal(local.hardBudgetMs, expectedLocalHardBudgetMs[policyId])
   assert.deepEqual(local.sharedSetup.leases.map(({ leaseId, maximumDurationMs }) => ({
     leaseId,
@@ -129,6 +130,10 @@ for (const policyId of ['blocking', 'closure', 'stability']) {
   })), [
     { leaseId: 'local/dependency-install', maximumDurationMs: 600_000 },
     { leaseId: 'local/browser-contract', maximumDurationMs: 300_000 },
+    {
+      leaseId: 'local/generated-semantic-process',
+      maximumDurationMs: BROWSERGATE_GENERATED_SEMANTIC_PROCESS_DEADLINE_MS,
+    },
     { leaseId: 'runtime/batch-build', maximumDurationMs: 600_000 },
     { leaseId: 'runtime/manifest-preflight', maximumDurationMs: 180_000 },
     { leaseId: 'local/browser-install', maximumDurationMs: 900_000 },
@@ -144,8 +149,8 @@ const localDependencyReuse = createLocalBrowsergateDeadlinePolicy(
   'linux',
   { dependencyInstallReused: true },
 )
-assert.equal(localDependencyReuse.sharedSetup.budgetMs, 36 * 60_000)
-assert.equal(localDependencyReuse.hardBudgetMs, 7_860_000)
+assert.equal(localDependencyReuse.sharedSetup.budgetMs, 41 * 60_000)
+assert.equal(localDependencyReuse.hardBudgetMs, 8_160_000)
 assert.equal(
   BROWSERGATE_BOOTSTRAP_QUERY_DEADLINE_MS,
   30_000,

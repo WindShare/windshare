@@ -1,4 +1,6 @@
-> **P0 prerequisite:** Complete the [generated-semantic build isolation plan](browsergate-generated-semantic-build-isolation-plan.md) before running `make browser` / `make ci` or declaring this plan complete. Contract-only design work may continue, but full browser validation remains blocked until P0 settles.
+> **Archived 2026-07-30:** Implemented. Durable validation and generated-artifact invariants now live in [Browser evidence execution](../../../web/scripts/browser-evidence/README.md#validation-layers). This document is retained as the implementation record.
+
+> **Historical P0 prerequisite:** The [generated-semantic build isolation plan](browsergate-generated-semantic-build-isolation-plan.md) had to settle before full browser validation; contract-only work through step 5 could proceed independently.
 
 main.tests.mjs 确实没有进入任何持续门禁。
 workflow-contract.tests.mjs 本身正在阻塞 CI，但它只能验证 WindShare 特有的工作流语义，不能承担 YAML/GitHub Actions 合法性校验。真正缺失的是持续执行的 actionlint。
@@ -34,7 +36,7 @@ runner 是允许创建测试子进程的外层基础设施，本身不加载 gua
 ## main/discovery 怎么拆
 
 1. 将 `main.tests.mjs` 改为纯 contract entrypoint，纳入自动发现。
-2. 把 [playwright-discovery.tests.mjs](../scripts/ci/browsergate/playwright-discovery.tests.mjs#L272) 中真实 `spawnSync` 的部分迁到 `suite-discovery`，并让 orchestrator 的现有 `preExecutionDiscovery` 入口指向它。
+2. 把 [playwright-discovery.tests.mjs](../../../scripts/ci/browsergate/tests/suite-discovery/playwright-discovery.tests.mjs) 中真实 `spawnSync` 的部分迁到 `suite-discovery`，并让 orchestrator 的现有 `preExecutionDiscovery` 入口指向它。
 3. 剩余注入 fake launcher 的断言放进 `testsupport/playwright-discovery.assertions.mjs`。
 4. `main` 继续受 child-process guard 保护，不给它开例外。否则未来意外新增子进程也会被放过。
 
