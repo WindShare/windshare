@@ -1,3 +1,5 @@
+> **P0 prerequisite:** Complete the [generated-semantic build isolation plan](browsergate-generated-semantic-build-isolation-plan.md) before running `make browser` / `make ci` or declaring this plan complete. Contract-only design work may continue, but full browser validation remains blocked until P0 settles.
+
 main.tests.mjs 确实没有进入任何持续门禁。
 workflow-contract.tests.mjs 本身正在阻塞 CI，但它只能验证 WindShare 特有的工作流语义，不能承担 YAML/GitHub Actions 合法性校验。真正缺失的是持续执行的 actionlint。
 
