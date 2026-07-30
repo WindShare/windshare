@@ -12,12 +12,10 @@ import {
   type NetworkMatrixCandidatePolicyOutcome,
   type NetworkMatrixExecutionMode,
   type NetworkMatrixPrerequisiteOutcome,
-  type NetworkMatrixProfileId,
   type NetworkMatrixProfileRunOutcome,
   type NetworkMatrixRationaleCode,
   type NetworkMatrixRunOutcome,
   type NetworkMatrixSampleOrdinal,
-  type NetworkMatrixSampleOutcome,
 } from './vocabulary.ts'
 import {
   networkMatrixIdentities,
@@ -60,52 +58,22 @@ import {
   requireSafeInteger,
   requireSha256,
 } from './contract-support.ts'
+import type {
+  NetworkOrchestrationFailure,
+  NetworkProfileRunResult,
+  NetworkRunResult,
+  NetworkSampleFailure,
+  NetworkSampleResult,
+} from './result/contract.ts'
+import { requireUniqueObservedAuthorities } from './result/authority.ts'
 
-export interface NetworkSampleFailure {
-  readonly failureCode: (typeof NETWORK_MATRIX_SAMPLE_FAILURE_CODES)[number]
-}
-
-export interface NetworkSampleResult {
-  readonly schemaVersion: typeof NETWORK_SAMPLE_RESULT_SCHEMA
-  readonly runId: string
-  readonly manifestSha256: string
-  readonly identity: NetworkMatrixIdentity
-  readonly profileSha256: string
-  readonly attestationSha256: string
-  readonly sampleOutcome: NetworkMatrixSampleOutcome
-  readonly processInstanceId: string | null
-  readonly attemptEvidence: NetworkMatrixAttemptEvidence | null
-  readonly candidatePolicyOutcome: NetworkMatrixCandidatePolicyOutcome
-  readonly rationaleCodes: readonly NetworkMatrixRationaleCode[]
-  readonly failure: NetworkSampleFailure | null
-}
-
-export interface NetworkOrchestrationFailure {
-  readonly failureCode: (typeof NETWORK_MATRIX_ORCHESTRATION_FAILURE_CODES)[number]
-}
-
-export interface NetworkProfileRunResult {
-  readonly profileId: NetworkMatrixProfileId
-  readonly prerequisiteOutcome: NetworkMatrixPrerequisiteOutcome
-  readonly expectedSamples: typeof NETWORK_MATRIX_IDENTITIES_PER_PROFILE
-  readonly observedSamples: number
-  readonly sampleInfrastructureFailures: number
-  readonly profileOutcome: NetworkMatrixProfileRunOutcome
-}
-
-export interface NetworkRunResult {
-  readonly schemaVersion: typeof NETWORK_RUN_RESULT_SCHEMA
-  readonly runId: string
-  readonly manifestSha256: string
-  readonly executionMode: NetworkMatrixExecutionMode
-  readonly orchestrationOutcome: (typeof NETWORK_MATRIX_ORCHESTRATION_OUTCOMES)[number]
-  readonly orchestrationFailure: NetworkOrchestrationFailure | null
-  readonly expectedIdentities: readonly NetworkMatrixIdentity[]
-  readonly runtimeAttestations: readonly NetworkRuntimeAttestation[]
-  readonly samples: readonly NetworkSampleResult[]
-  readonly profileResults: readonly NetworkProfileRunResult[]
-  readonly runOutcome: NetworkMatrixRunOutcome
-}
+export type {
+  NetworkOrchestrationFailure,
+  NetworkProfileRunResult,
+  NetworkRunResult,
+  NetworkSampleFailure,
+  NetworkSampleResult,
+} from './result/contract.ts'
 
 interface NetworkSampleContext extends NetworkRuntimeAttestationContext {
   readonly profiles: readonly NetworkTopologyProfile[]
@@ -532,40 +500,6 @@ function parseSamples(
     return parsed
   })
   return Object.freeze(samples)
-}
-
-function requireUniqueObservedAuthorities(
-  sample: NetworkSampleResult,
-  processInstanceIds: Set<string>,
-  attemptIds: Set<string>,
-  challengeBindings: Set<string>,
-): void {
-  if (sample.sampleOutcome !== 'observed') return
-  if (sample.processInstanceId === null || sample.attemptEvidence === null) {
-    networkMatrixError('observed sample lacks its process or attempt authority')
-  }
-  requireUniqueAuthority(
-    processInstanceIds,
-    sample.processInstanceId,
-    'browser process instance ID',
-  )
-  requireUniqueAuthority(
-    attemptIds,
-    sample.attemptEvidence.attemptAuthority.attemptId,
-    'attempt ID',
-  )
-  if (sample.attemptEvidence.challenge !== null) {
-    requireUniqueAuthority(
-      challengeBindings,
-      sample.attemptEvidence.challenge.bindingSha256,
-      'challenge binding digest',
-    )
-  }
-}
-
-function requireUniqueAuthority(observed: Set<string>, value: string, label: string): void {
-  if (observed.has(value)) networkMatrixError(`network matrix repeats ${label} across observed samples`)
-  observed.add(value)
 }
 
 function deriveNetworkRunOutcome(

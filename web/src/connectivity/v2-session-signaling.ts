@@ -16,7 +16,6 @@ import {
 import {
   decodeV2OperationErrorControl,
   V2MessageError,
-  type V2OperationErrorControl,
   type V2SessionMessage,
   V2_MESSAGE_KIND,
 } from '../session/v2-message'
@@ -46,24 +45,17 @@ import {
   type ConnectivitySignal,
   type SignalingRoute,
 } from './signaling'
+import {
+  V2AuthenticatedPeerOperationError,
+  V2PeerProtocolError,
+  V2SessionSignalingError,
+} from './v2-session-signaling-errors'
+import { awaitPeerEvidence } from './abortable-peer-evidence'
 
-export class V2SessionSignalingError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options)
-    this.name = 'V2SessionSignalingError'
-  }
-}
-
-/** Authenticated sender text remains byte-for-byte visible to evidence consumers. */
-export class V2AuthenticatedPeerOperationError extends V2SessionSignalingError {
-  readonly operationFailure: V2OperationErrorControl & { readonly scope: 'peer' }
-
-  constructor(operationFailure: V2OperationErrorControl & { readonly scope: 'peer' }) {
-    super(operationFailure.message)
-    this.name = 'V2AuthenticatedPeerOperationError'
-    this.operationFailure = Object.freeze({ ...operationFailure })
-  }
-}
+export {
+  V2AuthenticatedPeerOperationError,
+  V2SessionSignalingError,
+} from './v2-session-signaling-errors'
 
 type V2SessionSignalingDecision = {
   readonly type: 'route-failed'
@@ -78,13 +70,6 @@ export type V2SessionSignalingTrace = V2SessionSignalingDecision & {
 
 export type V2SessionSignalingObserver = (event: V2SessionSignalingTrace) => void
 export type V2ConnectivityObserver = (event: BrowserAttemptEvidence) => void
-
-class V2PeerProtocolError extends V2SessionSignalingError {
-  constructor(message: string) {
-    super(message)
-    this.name = 'V2PeerProtocolError'
-  }
-}
 
 /**
  * Projects one PeerConnection negotiation over a single authenticated operation.
@@ -461,7 +446,7 @@ class BrowserAttemptLifecycle {
     }
     const selectedPair = signal === undefined
       ? await this.#selectedPairPromise
-      : await awaitWithSignal(this.#selectedPairPromise, signal)
+      : await awaitPeerEvidence(this.#selectedPairPromise, signal)
     this.#selectedPair = selectedPair
     this.#selectedPairRead = true
     return selectedPair
@@ -696,24 +681,6 @@ function diagnosticMessage(reason: unknown): string {
   if (reason instanceof Error) return reason.message
   if (typeof reason === 'string') return reason
   return 'Peer attempt failed without a diagnostic message'
-}
-
-function awaitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  signal.throwIfAborted()
-  return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(signal.reason ?? new DOMException('Peer evidence read aborted', 'AbortError'))
-    signal.addEventListener('abort', abort, { once: true })
-    promise.then(
-      (value) => {
-        signal.removeEventListener('abort', abort)
-        resolve(value)
-      },
-      (error: unknown) => {
-        signal.removeEventListener('abort', abort)
-        reject(error)
-      },
-    )
-  })
 }
 
 export function createV2PeerBinding(
