@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
 
-import { executeOwnedRuntimeCommand } from './runtime-command-owner.mjs'
+import { executeOwnedRuntimeCommand } from '../../process/runtime-command-owner.mjs'
 
 await missingOwnerFailsClosed('win32', 'Job helper')
 await missingOwnerFailsClosed('linux', 'subreaper helper')

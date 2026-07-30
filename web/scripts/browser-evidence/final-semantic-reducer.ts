@@ -12,8 +12,8 @@ import {
 } from './test-ice-topology.ts'
 import {
   parseGuardUploadManifest,
-  type GuardUploadManifest,
-} from './artifact/sealed-suite.ts'
+} from './artifact/sealed-suite/manifest-codec.ts'
+import type { GuardUploadManifest } from './artifact/sealed-suite/contract.ts'
 
 export interface FinalSemanticEvaluationInput {
   readonly result: unknown

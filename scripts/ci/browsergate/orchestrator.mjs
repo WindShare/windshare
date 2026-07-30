@@ -81,7 +81,17 @@ import {
   canonicalSampleCommandSha256,
   sampleDriverCommand,
 } from './process/sample-command-authority.mjs'
-import { evaluateFinalBrowserSample } from './generated-semantic/final-semantic-reducer.js'
+import { readPinnedNodeVersion } from '../node-version.mjs'
+import { createGeneratedSemanticEnvironment } from './generated-semantic/build/environment.mjs'
+import {
+  GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_MODE,
+  GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID,
+  GeneratedSemanticRuntimePreflightError,
+  generatedSemanticPreflightFailureContext,
+  generatedSemanticResultTraceContext,
+  requireGeneratedSemanticRuntimeExecution,
+  validateGeneratedSemanticRuntimeEvidence,
+} from './generated-semantic/runtime-preflight.mjs'
 
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const PLAYWRIGHT_CLI = join(
@@ -93,12 +103,14 @@ const PLAYWRIGHT_CLI = join(
   'cli.js',
 )
 const VITEST_CLI = join(REPOSITORY_ROOT, 'web', 'node_modules', 'vitest', 'vitest.mjs')
-const PLAYWRIGHT_DISCOVERY_INTEGRATION = join(
+const PLAYWRIGHT_SUITE_DISCOVERY = join(
   REPOSITORY_ROOT,
   'scripts',
   'ci',
   'browsergate',
-  'playwright-discovery.integration.tests.mjs',
+  'tests',
+  'suite-discovery',
+  'playwright-discovery.tests.mjs',
 )
 const GENERATED_SEMANTIC_VERIFIER = join(
   REPOSITORY_ROOT,
@@ -107,6 +119,14 @@ const GENERATED_SEMANTIC_VERIFIER = join(
   'browsergate',
   'generated-semantic',
   'verify-generated.mjs',
+)
+const GENERATED_SEMANTIC_ARTIFACT = join(
+  REPOSITORY_ROOT,
+  'scripts',
+  'ci',
+  'browsergate',
+  'generated-semantic',
+  'final-semantic-reducer.js',
 )
 const CLEAN_BOOTSTRAP_INTEGRATION_TEST =
   'test/browser-evidence/artifact-guard-clean-bootstrap.integration.test.ts'
@@ -145,6 +165,10 @@ const BOOTSTRAP_OWNER_SPECS = Object.freeze({
     packagePath: './web/scripts/browser-evidence/windowsjob',
     filename: 'browser-evidence-windowsjob.exe',
   }),
+})
+const SILENT_OWNED_RUNTIME_OPERATION_LIFECYCLE = Object.freeze({
+  emit: () => undefined,
+  trace: () => undefined,
 })
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const CHECKOUT_SHA_PATTERN = /^[0-9a-f]{40}$/u
@@ -321,9 +345,7 @@ export function sampleChildCommand({
   })
 }
 
-export async function runBrowserGateCli(arguments_) {
-  const [command, ...optionArguments] = arguments_
-  if (command === undefined) throw new Error(usage())
+export async function runBrowserGateCommand(command, optionArguments) {
   const options = parseOptions(optionArguments)
   if (command === 'local') return localCommand(options)
   if (command === 'build-runtime') return buildRuntimeCommand(options)
@@ -335,7 +357,7 @@ export async function runBrowserGateCli(arguments_) {
   if (command === 'guard-suite') return guardSuiteCommand(options)
   if (command === 'context-environment') return contextEnvironmentCommand(options)
   if (command === 'plan') return planCommand(options)
-  throw new Error('unknown browser orchestration command ' + JSON.stringify(command) + '\n' + usage())
+  throw new Error('browser orchestration router admitted unsupported command ' + JSON.stringify(command))
 }
 
 async function buildRuntimeCommand(options) {
@@ -499,6 +521,20 @@ async function localCommand(options) {
          deadlineAuthority,
        ),
      }),
+    runGeneratedSemanticProcess: async () => Object.freeze({
+      exitCode: runOperation(
+        'generated-semantic-process',
+        'local/generated-semantic-process',
+        BROWSERGATE_OPERATION_CLASS.GENERATED_SEMANTIC_PROCESS,
+        commandSpec(pnpmExecutable(), [
+          '-C',
+          'web',
+          'run',
+          'test:browser:generated-semantic:process',
+        ]),
+        deadlineAuthority,
+      ),
+    }),
     buildRuntime: () => buildInvocationRuntime({
       suites: BROWSER_SUITES,
       deadlineAuthority,
@@ -1699,7 +1735,7 @@ function suitePhaseCommand(phase) {
   if (phase.kind === 'playwright-discovery') {
     return Object.freeze({
       executable: process.execPath,
-      arguments: Object.freeze([PLAYWRIGHT_DISCOVERY_INTEGRATION, phase.suite]),
+      arguments: Object.freeze([PLAYWRIGHT_SUITE_DISCOVERY, phase.suite]),
       cwd: REPOSITORY_ROOT,
     })
   }
@@ -1738,6 +1774,14 @@ function requireSuitePhase(phase) {
     throw new Error(`unsupported owned suite phase ${JSON.stringify(phase.kind)}`)
   }
   return phase
+}
+
+async function loadGuardSemanticEvaluator() {
+  const reducer = await import('./generated-semantic/final-semantic-reducer.js')
+  if (typeof reducer.evaluateFinalBrowserSample !== 'function') {
+    throw new Error('generated semantic reducer does not export its guard evaluator')
+  }
+  return reducer.evaluateFinalBrowserSample
 }
 
 export async function runGuardSuite({
@@ -1793,6 +1837,9 @@ export async function runGuardSuite({
     topologyResolutionSnapshot.bytes,
     'guard topology resolution',
   )
+  // Generated semantics become observable only after runtime identity, settlement
+  // trust, context, ledger, and topology authority have all settled successfully.
+  const evaluateFinalBrowserSample = await loadGuardSemanticEvaluator()
   const inputs = []
   for (const [index, identity] of expected.entries()) {
     const claim = ledger.samples[index]
@@ -2000,6 +2047,9 @@ export async function buildInvocationRuntime({
   executeOwnedCommand = executeOwnedRuntimeCommand,
   resolveExecutable = resolveHostExecutable,
   createBootstrapOwner = createBootstrapProcessOwnerAuthority,
+  generatedSemanticTrace = runtimeGeneratedSemanticTrace,
+  authenticateRuntimeFile = authenticatedFileAuthority,
+  readRuntimeNodeVersion = readPinnedNodeVersion,
 } = {}) {
   const outputParentPath = resolve(outputParent)
   const defaults = executeBuild === undefined || executePreflight === undefined
@@ -2013,6 +2063,9 @@ export async function buildInvocationRuntime({
         executeOwnedCommand,
         resolveExecutable,
         createBootstrapOwner,
+        generatedSemanticTrace,
+        authenticateRuntimeFile,
+        readRuntimeNodeVersion,
       })
     : undefined
   if (defaults === undefined) {
@@ -2069,7 +2122,7 @@ export async function buildInvocationRuntime({
   return runtime
 }
 
-async function createRuntimeExecutionExecutors({
+function createRuntimeExecutionExecutors({
   platform,
   outputParent,
   inheritedEnvironment,
@@ -2079,6 +2132,9 @@ async function createRuntimeExecutionExecutors({
   executeOwnedCommand,
   resolveExecutable,
   createBootstrapOwner,
+  generatedSemanticTrace,
+  authenticateRuntimeFile,
+  readRuntimeNodeVersion,
 }) {
   const goExecutable = resolveExecutable('go', { platform, environment: inheritedEnvironment })
   const buildGrant = requireDeadlineGrant(
@@ -2099,15 +2155,21 @@ async function createRuntimeExecutionExecutors({
     preflightGrant,
     BROWSERGATE_OPERATION_CLASS.PREFLIGHT,
   ) ?? ownedOperationGrantFailure(buildGrant, BROWSERGATE_OPERATION_CLASS.RUNTIME_BUILD)
-  const bootstrap = blockedGrant === null
-    ? await createBootstrapOwner({
-        repositoryRoot: REPOSITORY_ROOT,
-        outputParent,
-        platform,
-        goExecutable,
-      })
-    : null
+  let bootstrap = null
+  let bootstrapPromise
   let adoptedFinalOwner = null
+
+  async function acquireBootstrapOwner() {
+    if (blockedGrant !== null) return null
+    bootstrapPromise ??= createBootstrapOwner({
+      repositoryRoot: REPOSITORY_ROOT,
+      outputParent,
+      platform,
+      goExecutable,
+    })
+    bootstrap = await bootstrapPromise
+    return bootstrap
+  }
 
   function unavailableBootstrapExecution(operationId, operationClass) {
     emit(operationId, 'not-run', {
@@ -2127,38 +2189,90 @@ async function createRuntimeExecutionExecutors({
   }
 
   return Object.freeze({
-    verifyGeneratedSemantic() {
-      if (bootstrap === null) {
-        unavailableBootstrapExecution(
-          'browser-runtime-generated-semantic-preflight',
-          BROWSERGATE_OPERATION_CLASS.PREFLIGHT,
-        )
-        return Promise.reject(new Error(
-          'generated semantic verifier failed before runtime batch build: bootstrap owner lease unavailable',
-        ))
-      }
-      return executeOwnedRuntimeOperation({
-        operationId: 'browser-runtime-generated-semantic-preflight',
-        authorizedGrant: preflightGrant,
+    async verifyGeneratedSemantic() {
+      const startedAtMs = Date.now()
+      let nodeExecutableAuthority
+      let result
+      traceGeneratedSemanticPreflight(generatedSemanticTrace, 'started', {
+        mode: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_MODE,
         operationClass: BROWSERGATE_OPERATION_CLASS.PREFLIGHT,
-        command: Object.freeze({
-          executable: process.execPath,
-          arguments: Object.freeze([GENERATED_SEMANTIC_VERIFIER]),
-          cwd: REPOSITORY_ROOT,
-        }),
-        platform,
-        inheritedEnvironment,
-        ...runtimeOwnerRequest(platform, bootstrap.artifact),
-        deadlineAuthority,
-        executeOwnedCommand,
-      }).then((execution) => {
-        if (
-          execution.launched !== true || execution.timedOut !== false ||
-          execution.treeEmpty !== true || execution.processEvidence.terminal !== 'exited' ||
-          execution.processEvidence.exitCode !== 0
-        ) throw new Error('generated semantic verifier failed before runtime batch build')
-        return execution
+        phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
+        owner: platform === 'win32' ? 'windows-job' : 'linux-subreaper',
       })
+      try {
+        if (await acquireBootstrapOwner() === null) {
+          throw new GeneratedSemanticRuntimePreflightError(
+            'bootstrap-owner-unavailable',
+            'generated semantic verifier bootstrap owner lease is unavailable',
+          )
+        }
+        nodeExecutableAuthority = await authenticateRuntimeFile(
+          process.execPath,
+          MAXIMUM_RUNTIME_EXECUTABLE_BYTES,
+          'generated semantic Node executable',
+        )
+        const verifierEnvironment = createGeneratedSemanticEnvironment({
+          platform,
+          temporaryRoot: dirname(bootstrap.artifact.path),
+          inheritedEnvironment,
+        })
+        const execution = await executeOwnedRuntimeOperation({
+          operationId: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID,
+          authorizedGrant: preflightGrant,
+          operationClass: BROWSERGATE_OPERATION_CLASS.PREFLIGHT,
+          command: Object.freeze({
+            executable: nodeExecutableAuthority.path,
+            executableByteLength: nodeExecutableAuthority.byteLength,
+            executableSha256: nodeExecutableAuthority.sha256,
+            arguments: Object.freeze([GENERATED_SEMANTIC_VERIFIER]),
+            cwd: REPOSITORY_ROOT,
+          }),
+          platform,
+          inheritedEnvironment: verifierEnvironment,
+          ...runtimeOwnerRequest(platform, bootstrap.artifact),
+          deadlineAuthority,
+          executeOwnedCommand,
+          operationLifecycle: SILENT_OWNED_RUNTIME_OPERATION_LIFECYCLE,
+        })
+        result = requireGeneratedSemanticRuntimeExecution({ execution, platform })
+        const expectedArtifact = await authenticateRuntimeFile(
+          GENERATED_SEMANTIC_ARTIFACT,
+          MAXIMUM_CONTRACT_BYTES,
+          'committed generated semantic artifact',
+        )
+        validateGeneratedSemanticRuntimeEvidence({
+          result,
+          expectedNodeVersion: readRuntimeNodeVersion(REPOSITORY_ROOT),
+          expectedArtifact,
+        })
+        const evidence = {
+          mode: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_MODE,
+          outcome: result.outcome,
+          nodeExecutableByteLength: nodeExecutableAuthority.byteLength,
+          nodeExecutableSha256: nodeExecutableAuthority.sha256,
+          ...generatedSemanticResultTraceContext(result),
+        }
+        traceGeneratedSemanticPreflight(generatedSemanticTrace, 'artifact-validated', evidence)
+        traceGeneratedSemanticPreflight(generatedSemanticTrace, 'settled', {
+          ...evidence,
+          elapsedMs: Date.now() - startedAtMs,
+        })
+        return execution
+      } catch (cause) {
+        traceGeneratedSemanticPreflight(generatedSemanticTrace, 'settled', {
+          mode: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_MODE,
+          outcome: 'failed',
+          elapsedMs: Date.now() - startedAtMs,
+          ...(nodeExecutableAuthority === undefined
+            ? {}
+            : {
+                nodeExecutableByteLength: nodeExecutableAuthority.byteLength,
+                nodeExecutableSha256: nodeExecutableAuthority.sha256,
+              }),
+          ...generatedSemanticPreflightFailureContext(cause),
+        })
+        throw new Error('generated semantic verifier failed before runtime batch build', { cause })
+      }
     },
     executeBuild(build) {
       if (bootstrap === null) {
@@ -2391,6 +2505,13 @@ function containsNamedProperty(value, expectedName) {
     name === expectedName || containsNamedProperty(child, expectedName))
 }
 
+function createOwnedRuntimeOperationLifecycle(operationId) {
+  return Object.freeze({
+    emit: (milestone, context) => emit(operationId, milestone, context),
+    trace: ({ milestone, context }) => emit(operationId, milestone, context),
+  })
+}
+
 async function executeOwnedRuntimeOperation({
   operationId,
   leaseId,
@@ -2403,6 +2524,7 @@ async function executeOwnedRuntimeOperation({
   linuxProcessOwner,
   deadlineAuthority,
   executeOwnedCommand,
+  operationLifecycle = createOwnedRuntimeOperationLifecycle(operationId),
 }) {
   const grant = authorizedGrant ?? requireDeadlineGrant(
     deadlineAuthority,
@@ -2411,7 +2533,7 @@ async function executeOwnedRuntimeOperation({
   )
   const requiredLeaseMs = operationClassDeadlineMs(operationClass)
   if (grant.outcome !== 'authorized' || grant.timeoutMs < requiredLeaseMs) {
-    emit(operationId, 'not-run', {
+    operationLifecycle.emit('not-run', {
       operationClass,
       phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
       reason: grant.outcome === 'authorized'
@@ -2424,7 +2546,7 @@ async function executeOwnedRuntimeOperation({
   }
   const processDeadlineMs = grant.timeoutMs - RUNTIME_PROCESS_CLEANUP_RESERVE_MS
   if (processDeadlineMs < 1) {
-    emit(operationId, 'not-run', {
+    operationLifecycle.emit('not-run', {
       operationClass,
       phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
       reason: 'insufficient-process-cleanup-reserve',
@@ -2433,7 +2555,7 @@ async function executeOwnedRuntimeOperation({
     return failedOwnedExecution()
   }
   const startedAtMs = Date.now()
-  emit(operationId, 'started', {
+  operationLifecycle.emit('started', {
     operationClass,
     phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
     timeoutMs: processDeadlineMs,
@@ -2454,12 +2576,12 @@ async function executeOwnedRuntimeOperation({
       terminationGraceMs: OWNED_PROCESS_TERMINATION_GRACE_MS,
       ...(windowsJobHelper === undefined ? {} : { windowsJobHelper }),
       ...(linuxProcessOwner === undefined ? {} : { linuxProcessOwner }),
-      trace: ({ milestone, context }) => emit(operationId, milestone, context),
+      trace: operationLifecycle.trace,
     })
     const passed = execution.launched === true && execution.timedOut === false &&
       execution.treeEmpty === true && execution.processEvidence.terminal === 'exited' &&
       execution.processEvidence.exitCode === 0
-    emit(operationId, passed ? 'completed' : 'failed', {
+    operationLifecycle.emit(passed ? 'completed' : 'failed', {
       operationClass,
       phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
       elapsedMs: Date.now() - startedAtMs,
@@ -2473,7 +2595,7 @@ async function executeOwnedRuntimeOperation({
     })
     return execution
   } catch (cause) {
-    emit(operationId, 'failed', {
+    operationLifecycle.emit('failed', {
       operationClass,
       phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
       elapsedMs: Date.now() - startedAtMs,
@@ -2500,6 +2622,22 @@ function failedOwnedExecution() {
     stdout: '',
     stderr: '',
   })
+}
+
+function runtimeGeneratedSemanticTrace({ operationId, milestone, context }) {
+  emit(operationId, milestone, context)
+}
+
+function traceGeneratedSemanticPreflight(trace, milestone, context) {
+  try {
+    trace(Object.freeze({
+      operationId: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID,
+      milestone,
+      context: Object.freeze({ ...context }),
+    }))
+  } catch {
+    // Process settlement and artifact authority must not depend on an observability transport.
+  }
 }
 
 function runtimeBuildTrace({ milestone, context = {} }) {
@@ -3317,20 +3455,4 @@ function emit(operationId, milestone, context = {}) {
 
 function errorMessage(cause) {
   return cause instanceof Error ? cause.message : String(cause)
-}
-
-function usage() {
-  return [
-    'browser orchestration commands:',
-    '  local [--run-policy blocking|closure|stability] [--output-root DIR] [--plan] [--skip-dependency-install]',
-    '  build-runtime --output-parent DIR --suite main|pion [--suite main|pion] [--github-output FILE]',
-    '  dispose-runtime --runtime-manifest FILE --runtime-manifest-sha256 SHA',
-    '  hosted-produce --output-root DIR --context FILE --run-id ID --checkout-sha SHA --run-policy blocking|closure|stability --suite main|pion --runtime-manifest FILE --runtime-manifest-sha256 SHA',
-    '  prepare --context FILE --run-id ID --checkout-sha SHA --run-policy blocking|closure|stability --runtime-manifest FILE --runtime-manifest-sha256 SHA',
-    '  samples --context FILE --suite main|pion --runtime-manifest FILE --runtime-manifest-sha256 SHA [--inside-windows-d5]',
-    '  full --context FILE --suite main|pion --runtime-manifest FILE --runtime-manifest-sha256 SHA [--inside-windows-d5]',
-    '  guard-suite --context FILE --suite main|pion --runtime-manifest FILE --runtime-manifest-sha256 SHA [--secret-env NAME] [--github-output FILE]',
-    '  context-environment --context FILE',
-    '  plan [--platform win32|linux|darwin] [--run-policy blocking|closure|stability]',
-  ].join('\n')
 }

@@ -1,0 +1,4 @@
+# NODE_ENV has Vite-specific behavior, while VITE_* values enter its client env.
+# Either value becoming observable means envDir:false no longer owns the build.
+NODE_ENV=development
+VITE_GENERATED_SEMANTIC_HOSTILE=must-not-be-observed

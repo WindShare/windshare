@@ -59,7 +59,7 @@ jobs:
           go-version-file: go.work
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .node-version
       - name: gofmt over tracked Go files
         run: |
           unformatted="$(git ls-files -z -- '*.go' | xargs -0 gofmt -l)"
@@ -116,7 +116,7 @@ jobs:
         uses: doraemonkeys/sloc-guard/.github/action@master
 
   lint:
-    name: Lint (golangci-lint, both modules)
+    name: Lint (actionlint + golangci-lint, both Go modules)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -125,9 +125,9 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
-      # The canonical gate installs the pinned host linter once, then analyzes
-      # both modules for Linux and Windows build-tagged source sets.
-      - name: golangci-lint (Linux and Windows, both modules)
+      # The canonical gate validates every workflow first, then installs the
+      # pinned host Go linter and analyzes both modules for both OS source sets.
+      - name: actionlint + golangci-lint (all workflows and both Go modules)
         run: bash scripts/ci/lint.sh
 
   go-root:
@@ -247,7 +247,7 @@ jobs:
           package_json_file: web/package.json
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - name: install (frozen lockfile)
@@ -279,7 +279,7 @@ jobs:
       - uses: actions/setup-node@v6
         timeout-minutes: 10
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - name: install contract dependencies
@@ -288,6 +288,34 @@ jobs:
       - name: run browser contract exactly once
         timeout-minutes: 10
         run: pnpm -C web run test:browser:evidence:contract
+
+  # The hostile-environment verifier is a real process boundary, so it remains
+  # independent of both contract discovery and the browser evidence artifact DAG.
+  browser-generated-semantic-process:
+    name: Browser generated-semantic process isolation (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        timeout-minutes: 5
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        timeout-minutes: 10
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: install generated-semantic process dependencies
+        timeout-minutes: 10
+        run: pnpm -C web install --frozen-lockfile --ignore-scripts
+      - name: verify generated-semantic process isolation
+        timeout-minutes: 10
+        run: pnpm -C web run test:browser:generated-semantic:process
 
   browser-main:
     name: Browser main (focused samples + exclusive remainder)
@@ -322,7 +350,7 @@ jobs:
       - uses: actions/setup-node@v6
         timeout-minutes: 10
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - name: install browser runtime once
@@ -432,7 +460,7 @@ jobs:
       - uses: actions/setup-node@v6
         timeout-minutes: 10
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - name: install browser runtime once
@@ -606,11 +634,11 @@ jobs:
       - name: NTFS-heavy output runtime race tests
         run: ./scripts/ci/race.ps1 -CoreWorkload output-runtime -SkipRoot
 
-  # Ordinary cross-platform tests inject a deterministic backend that is not a
-  # containment authority. This hosted boundary keeps the real Node named-pipe
-  # client and Go Job-object authority from drifting behind that test double.
+  # Ordinary cross-platform tests inject deterministic process backends. This
+  # hosted boundary keeps generated-semantic isolation, the real Node named-pipe
+  # client, and the Go Job-object authority from drifting behind those doubles.
   windows-browser-process:
-    name: Windows browser process ownership (Job Object + Named Pipe)
+    name: Windows browser process isolation (generated semantic + Job Object)
     runs-on: windows-latest
     timeout-minutes: 85
     steps:
@@ -629,13 +657,13 @@ jobs:
       - uses: actions/setup-node@v6
         timeout-minutes: 10
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - name: install Windows browser runner dependencies
         timeout-minutes: 15
         run: pnpm -C web install --frozen-lockfile
-      - name: exercise the real Node to Go process-tree boundary
+      - name: exercise generated-semantic and Windows process boundaries
         timeout-minutes: 30
         run: |
           pnpm -C web run test:browser:process
