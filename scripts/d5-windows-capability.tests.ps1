@@ -411,7 +411,7 @@ func semanticBoundary(t *testing.T) {
     )
     [IO.File]::WriteAllText(
         (Join-Path $fixtureRoot 'fixture-manifest.json'),
-        '{"SchemaVersion":3,"Packages":[{"Name":"fixture","Path":"./fixture"}]}',
+        '{"SchemaVersion":4,"Packages":[{"ExecutionClass":"parallel","Name":"fixture","Path":"./fixture"}]}',
         [Text.UTF8Encoding]::new($false)
     )
 

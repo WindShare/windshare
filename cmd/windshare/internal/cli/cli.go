@@ -42,6 +42,8 @@ type App struct {
 	stderrMu            sync.Mutex
 	receiverPeerFactory func() (receiverPeerStarter, error)
 	receiverClock       receiverAdmissionClock
+	senderPeerFactories SenderPeerFactoryProvider
+	senderPeerEvidence  io.Writer
 	resumeSource        resumeStateSource
 	resumeInteractive   func(io.Reader, io.Writer) bool
 }
@@ -49,14 +51,30 @@ type App struct {
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
 // /"中断下载"语义,§6.9)。
 func Main() int {
+	return RunProcess(os.Args[1:], ProcessConfig{})
+}
+
+// ProcessConfig contains the only process-level injection used by the dedicated
+// browser-test entry. Production Main always supplies the zero value, which has
+// no path, environment, or profile field capable of changing peer topology.
+type ProcessConfig struct {
+	SenderPeerFactories SenderPeerFactoryProvider
+	SenderPeerEvidence  io.Writer
+}
+
+func RunProcess(args []string, config ProcessConfig) int {
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
-	app := &App{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin}
+	app := &App{
+		Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
+		senderPeerFactories: config.SenderPeerFactories,
+		senderPeerEvidence:  config.SenderPeerEvidence,
+	}
 	return runCLIWithInterruptEscalation(
 		interrupts,
 		os.Exit,
-		func(ctx context.Context) int { return app.Run(ctx, os.Args[1:]) },
+		func(ctx context.Context) int { return app.Run(ctx, args) },
 	)
 }
 

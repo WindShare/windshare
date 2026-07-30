@@ -25,11 +25,34 @@ func (directory *windowsV3Directory) prepareIdentityClaim() ([]byte, error) {
 }
 
 func (directory *windowsV3Directory) identityClaim() ([]byte, error) {
-	const operation = "claim output directory identity"
+	return directory.encodeIdentityClaim(
+		"claim output directory identity",
+		directory.verifyPublicIdentityAuthority,
+	)
+}
+
+func (directory *windowsV3Directory) preparePrivateIdentityClaim() ([]byte, error) {
+	if _, err := directory.preparePrivatePersistentObjectID(); err != nil {
+		return nil, err
+	}
+	return directory.privateIdentityClaim()
+}
+
+func (directory *windowsV3Directory) privateIdentityClaim() ([]byte, error) {
+	return directory.encodeIdentityClaim(
+		"claim private output directory identity",
+		func() error { return directory.verify(true) },
+	)
+}
+
+func (directory *windowsV3Directory) encodeIdentityClaim(
+	operation string,
+	authorize func() error,
+) ([]byte, error) {
 	if err := directory.usable(); err != nil {
 		return nil, err
 	}
-	if err := directory.verifyPublicIdentityAuthority(); err != nil {
+	if err := authorize(); err != nil {
 		return nil, windowsV3Failure(
 			operation, directory.path, windowsV3AuthorityFailureClass(err), err,
 		)

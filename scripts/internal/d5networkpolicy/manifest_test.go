@@ -20,6 +20,9 @@ func TestLoadManifestPinsExactPackageSet(t *testing.T) {
 	if !manifest.packages["transport/webrtc"] || len(manifest.packages) != 1 {
 		t.Fatalf("active packages = %#v, want exact fixture package", manifest.packages)
 	}
+	if manifest.executionClasses["transport/webrtc"] != executionClassParallel {
+		t.Fatalf("execution classes = %#v, want parallel fixture", manifest.executionClasses)
+	}
 }
 
 func TestLoadManifestRejectsUnknownOrTrailingJSON(t *testing.T) {
@@ -31,8 +34,8 @@ func TestLoadManifestRejectsUnknownOrTrailingJSON(t *testing.T) {
 	}
 	unknown := strings.Replace(
 		string(raw),
-		`"SchemaVersion":3`,
-		`"SchemaVersion":3,"UnexpectedPolicy":[]`,
+		`"SchemaVersion":4`,
+		`"SchemaVersion":4,"UnexpectedPolicy":[]`,
 		1,
 	)
 	for name, content := range map[string]string{
@@ -51,11 +54,25 @@ func TestLoadManifestRejectsUnknownOrTrailingJSON(t *testing.T) {
 	}
 }
 
+func TestLoadManifestRejectsMissingOrUnknownExecutionClass(t *testing.T) {
+	t.Parallel()
+	for _, executionClass := range []string{"", "process-heavy"} {
+		executionClass := executionClass
+		t.Run(executionClass, func(t *testing.T) {
+			document := validManifestDocument()
+			document.Packages[0].ExecutionClass = executionClass
+			if _, err := loadManifest(writeManifest(t, document)); err == nil {
+				t.Fatalf("loadManifest accepted execution class %q", executionClass)
+			}
+		})
+	}
+}
+
 func validManifestDocument() manifestDocument {
 	return manifestDocument{
 		SchemaVersion: networkManifestSchemaVersion,
 		Packages: []packageRecord{
-			{Name: "webrtc", Path: "./transport/webrtc"},
+			{Name: "webrtc", Path: "./transport/webrtc", ExecutionClass: executionClassParallel},
 		},
 	}
 }

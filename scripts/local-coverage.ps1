@@ -16,9 +16,9 @@ function Read-LocalCoverageNetworkPackages([string]$Path) {
     $topLevelProperties = @($document.PSObject.Properties.Name | Sort-Object)
     $expectedTopLevel = @('Packages', 'SchemaVersion')
     if ([string]::Join("`n", $topLevelProperties) -cne [string]::Join("`n", $expectedTopLevel)) {
-        throw 'Coverage network manifest must use the exact schema-v3 top-level shape'
+        throw 'Coverage network manifest must use the exact schema-v4 top-level shape'
     }
-    if ([int]$document.SchemaVersion -ne 3) {
+    if ([int]$document.SchemaVersion -ne 4) {
         throw 'Coverage network manifest has an unsupported schema'
     }
     $packages = @($document.Packages)
@@ -29,14 +29,16 @@ function Read-LocalCoverageNetworkPackages([string]$Path) {
     $paths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($package in $packages) {
         $properties = @($package.PSObject.Properties.Name | Sort-Object)
-        if ([string]::Join("`n", $properties) -cne "Name`nPath") {
-            throw 'Coverage network package must contain exactly Name and Path'
+        if ([string]::Join("`n", $properties) -cne "ExecutionClass`nName`nPath") {
+            throw 'Coverage network package must contain exactly ExecutionClass, Name and Path'
         }
         $name = [string]$package.Name
         $path = ([string]$package.Path).Replace('\', '/')
+        $executionClass = [string]$package.ExecutionClass
         if ($name -notmatch '^[a-z0-9][a-z0-9-]*$' -or
             -not $path.StartsWith('./', [StringComparison]::Ordinal) -or
             $path.Contains('/../', [StringComparison]::Ordinal) -or
+            $executionClass -notin @('parallel', 'exclusive') -or
             -not $names.Add($name) -or
             -not $paths.Add($path)) {
             throw "Coverage network package is invalid: $name $path"
@@ -67,7 +69,7 @@ $goTestCoverage = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'
 $coreSuiteTestTimeout = '30m'
 
 Write-Output ('Full-suite coverage run (core + root incl. OS-network cases): ' +
-    'expect ~1.5 minutes warm, ~8 minutes cold (network packages run concurrently through the D5 runner).')
+    'expect ~1.5 minutes warm, ~8 minutes cold (e2e runs exclusively; remaining network packages run in parallel through D5).')
 
 if (Test-Path -LiteralPath $coverageRoot) {
     Remove-Item -LiteralPath $coverageRoot -Recurse -Force

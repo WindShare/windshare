@@ -84,7 +84,7 @@ function responseOperation(
       operationId,
       body,
     ),
-    close: () => undefined,
+    cancel: () => undefined,
   }
 }
 
@@ -144,7 +144,7 @@ describe('v2 session block lane deadlines', () => {
         signal?.addEventListener('abort', abort, { once: true })
         if (signal?.aborted) abort()
       }),
-      close: () => undefined,
+      cancel: () => undefined,
     }
     let cancellations = 0
     const session = {
@@ -173,6 +173,88 @@ describe('v2 session block lane deadlines', () => {
     await rejected
     expect(cancellations).toBe(1)
     lane.close()
+  })
+
+  it('retries a promised block whose fragments became ambiguous across a lane cut', async () => {
+    let cancellations = 0
+    const session = {
+      beginOperation: async () => responseOperation(
+        V2_MESSAGE_KIND.requestBlocks,
+        V2_MESSAGE_KIND.operationComplete,
+        encodeV2Body(new Map<number, unknown>([[0, 1], [1, 1]])),
+      ),
+      cancelOperation: async () => { cancellations += 1 },
+    } as unknown as V2ReceiverSessionRuntime
+    const incomplete = new V2SessionBlockLane(
+      1,
+      session,
+      share,
+      new Uint8Array(32).fill(9),
+      { leaseError: () => undefined } as never,
+    )
+    let peerCalls = 0
+    const lanes = new V2LaneSet()
+    lanes.add(incomplete, 'relay')
+    lanes.add({
+      id: 2,
+      fetchBlock: async (input) => {
+        peerCalls += 1
+        return {
+          descriptor: input.descriptor,
+          localBlockIndex: input.localBlockIndex,
+          data: Uint8Array.of(2),
+        }
+      },
+    }, 'peer')
+
+    await expect(lanes.fetch({
+      descriptor: revision,
+      leaseId: identity(6),
+      localBlockIndex: 0n,
+    }, ALL_ROUTES, new AbortController().signal)).resolves.toMatchObject({
+      data: Uint8Array.of(2),
+    })
+    expect(cancellations).toBe(1)
+    expect(peerCalls).toBe(1)
+    lanes.close()
+  })
+
+  it('does not retry an authenticated block completion with the wrong result count', async () => {
+    const session = {
+      beginOperation: async () => responseOperation(
+        V2_MESSAGE_KIND.requestBlocks,
+        V2_MESSAGE_KIND.operationComplete,
+        encodeV2Body(new Map<number, unknown>([[0, 1], [1, 0]])),
+      ),
+      cancelOperation: async () => undefined,
+    } as unknown as V2ReceiverSessionRuntime
+    const invalid = new V2SessionBlockLane(
+      1,
+      session,
+      share,
+      new Uint8Array(32).fill(9),
+      { leaseError: () => undefined } as never,
+    )
+    let peerCalls = 0
+    const lanes = new V2LaneSet()
+    lanes.add(invalid, 'relay')
+    lanes.add({
+      id: 2,
+      fetchBlock: async () => {
+        peerCalls += 1
+        throw new Error('wrong-result-count fallback must not run')
+      },
+    }, 'peer')
+
+    await expect(lanes.fetch({
+      descriptor: revision,
+      leaseId: identity(6),
+      localBlockIndex: 0n,
+    }, ALL_ROUTES, new AbortController().signal)).rejects.toThrow(
+      'Block operation completed without exactly one result',
+    )
+    expect(peerCalls).toBe(0)
+    lanes.close()
   })
 
   it('retries a lane-scoped lease renewal until a replacement lane succeeds', async () => {
@@ -233,7 +315,7 @@ describe('v2 session block lane deadlines', () => {
               signal?.addEventListener('abort', abort, { once: true })
               if (signal?.aborted) abort()
             }),
-            close: () => undefined,
+            cancel: () => undefined,
           } satisfies V2SessionOperation
         }
         throw new Error(`unexpected operation kind ${kind}`)

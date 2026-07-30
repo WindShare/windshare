@@ -1,9 +1,13 @@
 {
-  "SchemaVersion": 3,
+  "SchemaVersion": 4,
   "Packages": [
-    { "Name": "webrtc", "Path": "./transport/webrtc" },
-    { "Name": "cli", "Path": "./cmd/windshare/internal/cli" },
-    { "Name": "e2e", "Path": "./e2e" },
-    { "Name": "wsrelay", "Path": "./relay/cmd/wsrelay" }
+    { "Name": "browsermatrixbrokerclient", "Path": "./cmd/browsermatrixbrokerclient", "ExecutionClass": "parallel" },
+    { "Name": "browsermatrixbroker", "Path": "./internal/browsermatrixbroker", "ExecutionClass": "parallel" },
+    { "Name": "browsermatrixpion", "Path": "./internal/browsermatrixpion", "ExecutionClass": "parallel" },
+    { "Name": "webrtc", "Path": "./transport/webrtc", "ExecutionClass": "parallel" },
+    { "Name": "cli", "Path": "./cmd/windshare/internal/cli", "ExecutionClass": "parallel" },
+    { "Name": "e2e", "Path": "./e2e", "ExecutionClass": "exclusive" },
+    { "Name": "wsrelay", "Path": "./relay/cmd/wsrelay", "ExecutionClass": "parallel" },
+    { "Name": "windowsjob", "Path": "./web/scripts/browser-evidence/windowsjob", "ExecutionClass": "parallel" }
   ]
 }

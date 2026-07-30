@@ -7,6 +7,44 @@ import (
 	"runtime"
 )
 
+const launchAuthorizationPipeEnvironment = "WINDSHARE_D5_AUTHORIZATION_PIPE"
+
+// OSNetworkChildAuthority is a one-use delegation from an authenticated test
+// process to one exact child executable and operation. The environment value is
+// only a local pipe address; authority is issued after the server verifies the
+// connecting PID, executable, and operation binding.
+type OSNetworkChildAuthority struct {
+	pipeName string
+	retire   func() error
+}
+
+// NewOSNetworkChildAuthority preserves the per-process D5 boundary for fixtures
+// that must acquire a resource from inside a supervised child process.
+func NewOSNetworkChildAuthority(executable, operationID string) (OSNetworkChildAuthority, error) {
+	pipeName, retire, err := newOSNetworkChildAuthority(executable, operationID)
+	if err != nil {
+		return OSNetworkChildAuthority{}, err
+	}
+	return OSNetworkChildAuthority{pipeName: pipeName, retire: retire}, nil
+}
+
+// EnvironmentVariable returns the sole non-secret address needed by the child
+// to perform its PID-bound one-use authorization handshake.
+func (a OSNetworkChildAuthority) EnvironmentVariable() (string, string) {
+	return launchAuthorizationPipeEnvironment, a.pipeName
+}
+
+// Retire closes the parent-held guard. A child that has not authenticated can
+// no longer consume the grant; an authenticated child loses its live authority.
+func (a *OSNetworkChildAuthority) Retire() error {
+	if a == nil || a.retire == nil {
+		return nil
+	}
+	retire := a.retire
+	a.retire = nil
+	return retire()
+}
+
 type skipper interface {
 	Helper()
 	Skip(args ...any)

@@ -7,7 +7,6 @@ import (
 	"math"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -156,12 +155,7 @@ func (a *App) newShareRuntimeFactory(
 	lifecycle *senderRelayLifecycle,
 	terminalLedger *shareTerminalLedger,
 ) (*sessionruntime.SenderFactory, error) {
-	peers, err := v2peer.NewFactory(v2peer.Config{
-		Configuration: v2peer.DefaultConfiguration(),
-		OnError: func(error) {
-			a.logf("share: direct peer lane failed; relay service remains available")
-		},
-	})
+	peers, err := a.newSenderPeerFactory()
 	if err != nil {
 		return nil, fmt.Errorf("initialize direct peer connectivity: %w", err)
 	}

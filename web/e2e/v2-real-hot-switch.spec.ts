@@ -1,715 +1,1384 @@
 import { createHash } from 'node:crypto'
+import { mkdir } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
 
-import { expect, test } from '@playwright/test'
+import { expect, test as base } from '@playwright/test'
 import type { Page, TestInfo } from '@playwright/test'
 
+import type {
+  AttemptEvidence,
+  BrowserAttemptEvidence,
+} from '../scripts/browser-evidence/attempt-evidence'
+import {
+  reducePeerAttemptOutcome,
+  type LogicalAttempt,
+} from '../scripts/browser-evidence/attempt-collector'
+import {
+  CHILD_EVIDENCE_CONTEXT_ENV,
+  ChildEvidenceReporter,
+  publicBrowserDiagnosticSink,
+} from '../scripts/browser-evidence/child-evidence'
+import type { MainRouteEvidence } from '../scripts/browser-evidence/route-evidence'
+import {
+  MAIN_TRANSFER_BYTES,
+  MAIN_TRANSFER_SHA256,
+} from '../scripts/browser-evidence/result'
+import {
+  selectedPairAllowedByTopology,
+  type VerifiedTestIceTopologyLock,
+} from '../scripts/browser-evidence/test-ice-topology'
+import { BROWSER_ENGINES, type RtcCapability } from '../scripts/browser-evidence/vocabulary'
+import { classifyNativePeerConnection } from '../test/transport/webrtc/browser-capability'
+import type { NativeRtcCapability } from '../test/transport/webrtc/browser-capability'
+import {
+  acquireWholeSampleResource,
+  HotSwitchEvidenceCollector,
+  WholeSampleDeadline,
+  WholeSampleDeadlineExpiredError,
+  type BrowserAttemptTerminal,
+  type HotSwitchDeliveryTerminal,
+  type HotSwitchPageEvent,
+  type HotSwitchRuntimeTerminal,
+  type ObservedTransferFailure,
+} from './fixtures/hot-switch-evidence'
+import { acquireTestIceTopology } from './fixtures/test-ice-topology-runtime'
 import {
   V2RealStack,
   acquireRealStackBinaries,
+  readSenderAttemptEvidenceSnapshot,
   releaseRealStackBinaries,
   replaceRelayHint,
 } from './fixtures/v2-real-stack'
-import type { BinaryPaths } from './fixtures/windows-stable-runner'
 import {
-  r8PerformanceSampleCount,
-  reportR8Trend,
-  summarizeR8Metric,
-} from '../test/performance/r8-trend'
+  FixtureInfrastructureError,
+  containsFixtureInfrastructureFailure,
+} from './fixtures/managed-process'
+import type { BinaryPaths } from './fixtures/windows-stable-runner'
 
-const TRANSFER_BYTES = 16 * 1024 * 1024
-const ROUTE_OBSERVATION_TIMEOUT_MILLISECONDS = 60_000
-const TRANSFER_COMPLETION_TIMEOUT_MILLISECONDS = 120_000
-const WRITE_BARRIER_TIMEOUT_MILLISECONDS = 15_000
-const MAXIMUM_ROUTE_WAITS_PER_SAMPLE = 3
-const STATE_POLL_INTERVAL_MILLISECONDS = 100
+const TRANSFER_BYTES = MAIN_TRANSFER_BYTES
+const FIRST_RELAY_DISPATCH_DEADLINE_MS = 20_000
+const PEER_TERMINAL_DEADLINE_MS = 15_000
+const RELAY_INELIGIBILITY_DEADLINE_MS = 10_000
+const POST_FENCE_PEER_DISPATCH_DEADLINE_MS = 15_000
+const SENDER_EVIDENCE_TERMINAL_DEADLINE_MS = 10_000
+const SAMPLE_TEARDOWN_HEADROOM_MS = 20_000
+const SAMPLE_EVIDENCE_PUBLICATION_HEADROOM_MS = 2_000
+const SAMPLE_PLAYWRIGHT_COMPLETION_HEADROOM_MS = 1_000
 const FAILURE_DIAGNOSTIC_MAXIMUM_DEPTH = 4
+const HOT_SWITCH_TRACE_RELATIVE_PATH = 'main/hot-switch-trace.zip'
 
-interface ObservedRoute {
-  readonly laneId: number
-  readonly route: 'relay' | 'peer'
-  readonly fileId: string
-  readonly localBlockIndex: string
+interface PromiseSettlement<T> {
+  readonly value?: T
+  readonly error?: unknown
 }
 
-interface ObservedLaneAdmission {
-  readonly laneId: number
-  readonly route: 'relay' | 'peer'
+interface RegisteredLateCleanup {
+  readonly boundary: string
+  readonly settlement: Promise<PromiseSettlement<unknown>>
 }
 
-type ObservedTransferFailure =
-  | { readonly kind: 'directory'; readonly directoryId: string; readonly reason: string }
-  | { readonly kind: 'file'; readonly fileId: string; readonly reason: string }
+type RegisterLateCleanup = (boundary: string, task: Promise<unknown>) => void
 
-interface ObservedJobOutcome {
-  readonly status: 'Succeeded' | 'CompletedWithErrors' | 'Aborted'
-  readonly failures: readonly ObservedTransferFailure[]
-  readonly failureCount: number
-  readonly omittedFailureCount: number
-}
+class IntermediateEvidenceGate {
+  readonly #reporter: ChildEvidenceReporter | null
+  #open = true
 
-interface HotSwitchState {
-  readonly routes: readonly ObservedRoute[]
-  readonly laneAdmissions: readonly ObservedLaneAdmission[]
-  readonly done: boolean
-  readonly peerCapable?: boolean
-  readonly writeProgress: {
-    readonly startedWrites: number
-    readonly completedWrites: number
-    readonly writtenBytes: number
-    readonly lastWriteAt?: number
-    readonly visibilityState: DocumentVisibilityState
-    readonly barrierEnteredAt?: number
-    readonly barrierSettledAt?: number
-    readonly barrierWaitMilliseconds?: number
-    readonly barrierOutcome?: 'relay-cut' | 'timeout'
-    readonly barrierVisibilityState?: DocumentVisibilityState
+  constructor(reporter: ChildEvidenceReporter | null) {
+    this.#reporter = reporter
   }
-  readonly timings: {
-    readonly clickedAt?: number
-    readonly peerStartedAt?: number
-    readonly firstRelayAt?: number
-    readonly firstPeerAt?: number
-    relayCutAt?: number
-    readonly firstPeerAfterCutAt?: number
-    readonly transferCompletedAt?: number
+
+  close(): void {
+    this.#open = false
   }
-  readonly byteLength?: number
-  readonly sha256?: string
-  readonly outcome?: ObservedJobOutcome
-  readonly error?: string
+
+  publish(operation: (reporter: ChildEvidenceReporter) => void): void {
+    if (!this.#open || this.#reporter === null) return
+    operation(this.#reporter)
+  }
+
+  recordAttempt(evidence: AttemptEvidence): void {
+    this.publish((reporter) => reporter.recordAttempt(evidence))
+  }
 }
 
-// The page-side probe mutates the same shape that the test later snapshots.
-// Deriving its draft type keeps those two contracts from drifting apart.
-type DeepMutable<T> = T extends readonly (infer Item)[]
-  ? DeepMutable<Item>[]
-  : T extends object
-    ? { -readonly [Key in keyof T]: DeepMutable<T[Key]> }
-    : T
-
-interface HotSwitchTrendSample {
-  readonly peerCapable: boolean
-  readonly peerAttemptStartMilliseconds: number
-  readonly firstRelayByteMilliseconds: number
-  readonly firstPeerByteMilliseconds?: number
-  readonly peerAfterRelayCutMilliseconds?: number
-  readonly transferCompletionMilliseconds: number
+interface HotSwitchTestFixtures {
+  readonly wholeSampleDeadline: WholeSampleDeadline
 }
 
-let binaries: BinaryPaths | undefined
+const test = base.extend<HotSwitchTestFixtures>({
+  wholeSampleDeadline: [async ({ browserName }, use, testInfo) => {
+    // Automatic test fixtures are resolved before the non-auto page/context
+    // fixtures. Anchoring here preserves teardown time consumed by browser setup.
+    if (!BROWSER_ENGINES.includes(browserName)) {
+      throw new Error(`unsupported browser engine ${JSON.stringify(browserName)}`)
+    }
+    const deadline = new WholeSampleDeadline({
+      totalTimeoutMs: testInfo.timeout,
+      teardownReserveMs: SAMPLE_TEARDOWN_HEADROOM_MS,
+      evidencePublicationMs: SAMPLE_EVIDENCE_PUBLICATION_HEADROOM_MS,
+      completionMarginMs: SAMPLE_PLAYWRIGHT_COMPLETION_HEADROOM_MS,
+    })
+    try {
+      await use(deadline)
+    } finally {
+      deadline.dispose()
+    }
+  }, { auto: true }],
+})
+
+interface CollectedSample {
+  readonly capability: NativeRtcCapability
+  readonly expectedSha256: string
+  readonly topologyLock: VerifiedTestIceTopologyLock
+  readonly attempts: readonly LogicalAttempt[]
+  readonly peerTerminal: PromiseSettlement<BrowserAttemptTerminal> | null
+  readonly delivery: PromiseSettlement<HotSwitchDeliveryTerminal>
+  readonly runtime: PromiseSettlement<HotSwitchRuntimeTerminal>
+  readonly routeEvidence: MainRouteEvidence
+  readonly routeError?: unknown
+  readonly attemptError?: unknown
+  readonly orchestrationErrors: readonly unknown[]
+}
 
 test.use({
-  // The capability key is handed to the page before tracing starts. The focused
-  // trace below therefore retains failure evidence without serializing the key.
+  // The separate capability key enters the page before tracing starts. Failure
+  // evidence remains useful without serializing the secret-bearing setup call.
   trace: 'off',
   screenshot: 'only-on-failure',
   video: 'retain-on-failure',
 })
 
-test.beforeAll(async () => {
-  binaries = await acquireRealStackBinaries()
-})
-
-test.afterAll(async () => {
-  if (binaries !== undefined) await releaseRealStackBinaries(binaries)
-})
-
-test('uses the active runtime peer capability without corrupting one real transfer', async ({
+test('proves classified product hot-switch or exact relay fallback', async ({
   baseURL,
   browserName,
   page,
+  wholeSampleDeadline: deadline,
 }, testInfo) => {
-  if (binaries === undefined) throw new Error('Real-stack binaries are unavailable')
-  if (baseURL === undefined) throw new Error('Real-stack browser project requires a base URL')
-  const sampleCount = r8PerformanceSampleCount()
-  test.setTimeout(
-    sampleCount * (
-      TRANSFER_COMPLETION_TIMEOUT_MILLISECONDS +
-      MAXIMUM_ROUTE_WAITS_PER_SAMPLE * ROUTE_OBSERVATION_TIMEOUT_MILLISECONDS
-    ),
-  )
-  const expected = deterministicBytes(TRANSFER_BYTES)
-  const expectedHash = createHash('sha256').update(expected).digest('hex')
-  const samples: HotSwitchTrendSample[] = []
-  for (let sample = 0; sample < sampleCount; sample += 1) {
-    samples.push(await runHotSwitchSample({
-      baseURL,
-      expected,
-      expectedHash,
-      page,
-      sample,
-      testInfo,
-    }))
+  const reporter = optionalChildReporter()
+  const intermediateEvidence = new IntermediateEvidenceGate(reporter)
+  const collector = new HotSwitchEvidenceCollector(intermediateEvidence)
+  const diagnostics = observePublicBrowserDiagnostics(page, reporter, (error) => collector.abort(error))
+  const failures: unknown[] = []
+  const lateCleanupTasks: RegisteredLateCleanup[] = []
+  const registerLateCleanup: RegisterLateCleanup = (boundary, task) => {
+    // Attach rejection handling at registration time; the cleanup phase may not
+    // begin draining this task until after other resource owners have stopped.
+    lateCleanupTasks.push(Object.freeze({ boundary, settlement: settle(task) }))
   }
-  const peerCapable = samples.every((sample) => sample.peerCapable)
-  expect(samples.every((sample) => sample.peerCapable === peerCapable)).toBe(true)
-  reportR8Trend({
-    browser: browserName,
-    scenario: peerCapable ? 'real-relay-to-peer-hot-switch' : 'real-relay-fallback',
-    workload: {
-      samples: sampleCount,
-      bytesPerSample: TRANSFER_BYTES,
-      oneShotWriteBarrierTimeoutMilliseconds: WRITE_BARRIER_TIMEOUT_MILLISECONDS,
-      authenticatedRouteProvenance: true,
-    },
-    capabilities: { peerConnection: peerCapable, realRelay: true },
-    unavailable: peerCapable
-      ? {}
-      : { peerConnection: 'RTCPeerConnection is unavailable in this fixed browser runtime' },
-    metrics: {
-      peerAttemptStartMilliseconds: summarizeR8Metric(
-        samples.map((sample) => sample.peerAttemptStartMilliseconds),
-      ),
-      firstRelayByteMilliseconds: summarizeR8Metric(
-        samples.map((sample) => sample.firstRelayByteMilliseconds),
-      ),
-      transferCompletionMilliseconds: summarizeR8Metric(
-        samples.map((sample) => sample.transferCompletionMilliseconds),
-      ),
-      ...(peerCapable
-        ? {
-            firstPeerByteMilliseconds: summarizeR8Metric(samples.map((sample) => {
-              if (sample.firstPeerByteMilliseconds === undefined) {
-                throw new Error('Peer-capable trend sample lost its first peer byte')
-              }
-              return sample.firstPeerByteMilliseconds
-            })),
-            peerAfterRelayCutMilliseconds: summarizeR8Metric(samples.map((sample) => {
-              if (sample.peerAfterRelayCutMilliseconds === undefined) {
-                throw new Error('Peer-capable trend sample lost its post-cut peer byte')
-              }
-              return sample.peerAfterRelayCutMilliseconds
-            })),
-          }
-        : {}),
-    },
-  })
+  let forcedPageClose: Promise<PromiseSettlement<void>> | undefined
+  let forcedContextClose: Promise<PromiseSettlement<void>> | undefined
+  const abortWork = () => {
+    intermediateEvidence.close()
+    collector.abort(deadline.workSignal.reason)
+    diagnostics.expectTargetClose()
+    forcedPageClose ??= settle(page.close({ runBeforeUnload: false }))
+  }
+  const abortCleanup = () => {
+    // Closing the context is the cancellation authority for Playwright tracing
+    // and evaluate calls, which do not accept an AbortSignal themselves.
+    diagnostics.expectTargetClose()
+    forcedContextClose ??= settle(page.context().close())
+  }
+  deadline.workSignal.addEventListener('abort', abortWork, { once: true })
+  deadline.cleanupSignal.addEventListener('abort', abortCleanup, { once: true })
+  if (deadline.workSignal.aborted) abortWork()
+  if (deadline.cleanupSignal.aborted) abortCleanup()
+  let ownedBinaries: Awaited<ReturnType<typeof acquireRealStackBinaries>> | undefined
+  try {
+    try {
+      fixtureValue('Child evidence identity validation failed', () => {
+        validateReporterIdentity(reporter, browserName, testInfo)
+      })
+      if (baseURL === undefined) {
+        throw new FixtureInfrastructureError('Real-stack browser project requires a base URL')
+      }
+      ownedBinaries = await acquireFixtureWork(
+        deadline,
+        'Real-stack binary acquisition failed',
+        (signal) => acquireRealStackBinaries(signal),
+        'Late real-stack binary acquisition rollback failed',
+        releaseRealStackBinaries,
+        registerLateCleanup,
+      )
+      await runHotSwitchSample({
+        baseURL,
+        binaries: ownedBinaries,
+        collector,
+        deadline,
+        intermediateEvidence,
+        page,
+        reporter,
+        registerLateCleanup,
+        testInfo,
+      })
+    } catch (error) {
+      failures.push(error)
+    }
+    failures.push(...await releaseOwnedBinaries(deadline, ownedBinaries))
+    failures.push(...await drainLateCleanupTasks(deadline, lateCleanupTasks))
+    failures.push(...await drainTimedOutPlaywrightOwners({
+      abortCleanup,
+      abortWork,
+      deadline,
+      pendingContextClose: () => forcedContextClose,
+      pendingPageClose: () => forcedPageClose,
+    }))
+    // Publication is the final writer. Work-cutoff paths close this gate earlier;
+    // normal failures close it only after every bounded producer has drained.
+    intermediateEvidence.close()
+    diagnostics.close()
+    failures.push(...await publishChildBoundary(deadline, reporter, failures))
+    if (failures.length > 0) throw aggregateFailure(failures, 'Hot-switch sample boundary failed')
+  } finally {
+    diagnostics.close()
+    deadline.workSignal.removeEventListener('abort', abortWork)
+    deadline.cleanupSignal.removeEventListener('abort', abortCleanup)
+  }
 })
+
+async function releaseOwnedBinaries(
+  deadline: WholeSampleDeadline,
+  binaries: Awaited<ReturnType<typeof acquireRealStackBinaries>> | undefined,
+): Promise<readonly unknown[]> {
+  if (binaries === undefined) return []
+  try {
+    await fixtureCleanup(
+      deadline,
+      'Real-stack binary release failed',
+      () => releaseRealStackBinaries(binaries),
+    )
+    return []
+  } catch (error) {
+    return [error]
+  }
+}
+
+async function drainLateCleanupTasks(
+  deadline: WholeSampleDeadline,
+  tasks: readonly RegisteredLateCleanup[],
+): Promise<readonly unknown[]> {
+  if (tasks.length === 0) return []
+  try {
+    const settlements = await fixtureCleanup(
+      deadline,
+      'Late resource rollback drain failed',
+      () => Promise.all(tasks.map((task) => task.settlement)),
+    )
+    return settlements.flatMap((settlement, index) => {
+      if (settlement.error === undefined) return []
+      return [new FixtureInfrastructureError(
+        tasks[index]?.boundary ?? 'Late resource rollback failed',
+        settlement.error,
+      )]
+    })
+  } catch (error) {
+    return [error]
+  }
+}
+
+async function drainTimedOutPlaywrightOwners(options: {
+  readonly abortCleanup: () => void
+  readonly abortWork: () => void
+  readonly deadline: WholeSampleDeadline
+  readonly pendingContextClose: () => Promise<PromiseSettlement<void>> | undefined
+  readonly pendingPageClose: () => Promise<PromiseSettlement<void>> | undefined
+}): Promise<readonly unknown[]> {
+  const failures: unknown[] = []
+  // Work can no longer create page ownership. Keep the cleanup listener live
+  // while page close drains so context close remains available at the cutoff.
+  options.deadline.workSignal.removeEventListener('abort', options.abortWork)
+  failures.push(...await drainForcedPlaywrightClose(
+    options.deadline,
+    'Timed-out receiver page close failed',
+    options.pendingPageClose(),
+  ))
+  options.deadline.cleanupSignal.removeEventListener('abort', options.abortCleanup)
+  // abortCleanup may have created this owner during the preceding await.
+  failures.push(...await drainForcedPlaywrightClose(
+    options.deadline,
+    'Timed-out receiver context close failed',
+    options.pendingContextClose(),
+  ))
+  return failures
+}
+
+async function drainForcedPlaywrightClose(
+  deadline: WholeSampleDeadline,
+  boundary: string,
+  pending: Promise<PromiseSettlement<void>> | undefined,
+): Promise<readonly unknown[]> {
+  if (pending === undefined) return []
+  try {
+    const closed = await fixtureCleanup(deadline, boundary, () => pending)
+    return closed.error === undefined
+      ? []
+      : [new FixtureInfrastructureError(boundary, closed.error)]
+  } catch (error) {
+    return [error]
+  }
+}
+
+async function publishChildBoundary(
+  deadline: WholeSampleDeadline,
+  reporter: ChildEvidenceReporter | null,
+  failures: readonly unknown[],
+): Promise<readonly unknown[]> {
+  const publicationFailures: unknown[] = []
+  const observedFailure = failures.length === 0
+    ? undefined
+    : aggregateFailure(failures, 'Hot-switch sample boundary failed')
+  if (observedFailure !== undefined) {
+    try {
+      await fixturePublication(deadline, 'Child failure evidence publication failed', () => {
+        if (containsFixtureInfrastructureFailure(observedFailure)) {
+          reporter?.recordInfrastructureFailure(observedFailure)
+        }
+      })
+    } catch (error) {
+      publicationFailures.push(error)
+    }
+  }
+  if (reporter !== null) {
+    try {
+      await fixturePublication(deadline, 'Child lifecycle publication failed', async () => {
+        reporter.completeLifecycle()
+        await reporter.flush()
+      })
+    } catch (error) {
+      publicationFailures.push(error)
+    }
+  }
+  return publicationFailures
+}
 
 async function runHotSwitchSample(options: {
   readonly baseURL: string
-  readonly expected: Uint8Array
-  readonly expectedHash: string
+  readonly binaries: BinaryPaths
+  readonly collector: HotSwitchEvidenceCollector
+  readonly deadline: WholeSampleDeadline
+  readonly intermediateEvidence: IntermediateEvidenceGate
   readonly page: Page
-  readonly sample: number
+  readonly reporter: ChildEvidenceReporter | null
+  readonly registerLateCleanup: RegisterLateCleanup
   readonly testInfo: TestInfo
-}): Promise<HotSwitchTrendSample> {
-  if (binaries === undefined) throw new Error('Real-stack binaries are unavailable')
-  const stack = new V2RealStack(binaries)
+}): Promise<CollectedSample> {
+  const capability = await fixtureWork(
+    options.deadline,
+    'RTC capability classification failed',
+    () => classifyNativePeerConnection(options.page),
+  )
+  fixtureValue('Capability evidence publication failed', () => {
+    options.intermediateEvidence.publish((reporter) => reporter.recordCapability(capability.evidence))
+  })
+  const topology = await acquireFixtureWork(
+    options.deadline,
+    'Test ICE topology acquisition failed',
+    (signal) => acquireTestIceTopology(options.reporter?.context, process.env, signal),
+    'Late test ICE topology acquisition rollback failed',
+    (acquired) => acquired.release(),
+    options.registerLateCleanup,
+  )
+  let stack: V2RealStack
+  let expected: Uint8Array
+  let expectedHash: string
   try {
-    await stack.start()
-    const proxy = await stack.createRelayProxy()
-    const filePath = await stack.createFile(`hot-switch-${options.sample}.bin`, options.expected)
-    const share = await stack.share(filePath, options.baseURL)
-    const receiverLink = replaceRelayHint(share.bareLink, proxy.url)
-
-    await options.page.goto(receiverLink)
-    await options.page.evaluate(
-      ({ barrierTimeout, failureDiagnosticMaximumDepth, key }) => {
-        const state: DeepMutable<HotSwitchState> = {
-          routes: [],
-          laneAdmissions: [],
-          done: false,
-          writeProgress: {
-            startedWrites: 0,
-            completedWrites: 0,
-            writtenBytes: 0,
-            visibilityState: document.visibilityState,
-          },
-          timings: {},
+    fixtureValue('Published topology validation failed', () => {
+      validateReporterTopology(options.reporter, topology.lock)
+    })
+    expected = fixtureValue(
+      'Transfer payload fixture creation failed',
+      () => deterministicBytes(TRANSFER_BYTES),
+    )
+    expectedHash = fixtureValue(
+      'Transfer payload digest creation failed',
+      () => {
+        const actual = createHash('sha256').update(expected).digest('hex')
+        if (actual !== MAIN_TRANSFER_SHA256) {
+          throw new Error('deterministic transfer payload differs from its semantic authority')
         }
-        let releasePeer!: () => void
-        const peerRelease = new Promise<void>((resolve) => { releasePeer = resolve })
-        const waitForPeerRelease = (signal: AbortSignal): Promise<void> => Promise.race([
-          peerRelease,
-          new Promise<void>((_resolve, reject) => {
-            signal.addEventListener('abort', reject, { once: true })
-          }),
-        ])
-        let resolveWriteBarrier!: () => void
-        let rejectWriteBarrier!: (reason: unknown) => void
-        const writeBarrier = new Promise<void>((resolve, reject) => {
-          resolveWriteBarrier = resolve
-          rejectWriteBarrier = reject
-        })
-        let writeBarrierSettled = false
-        let writeBarrierTimeoutId: number | undefined
-        const settleWriteBarrier = (outcome: 'relay-cut' | 'timeout') => {
-          if (writeBarrierSettled) return
-          const enteredAt = state.writeProgress.barrierEnteredAt
-          if (enteredAt === undefined) throw new Error('Hot-switch write barrier is not waiting')
-          writeBarrierSettled = true
-          if (writeBarrierTimeoutId !== undefined) window.clearTimeout(writeBarrierTimeoutId)
-          const settledAt = performance.now()
-          state.writeProgress.barrierSettledAt = settledAt
-          state.writeProgress.barrierWaitMilliseconds = settledAt - enteredAt
-          state.writeProgress.barrierOutcome = outcome
-          state.writeProgress.visibilityState = document.visibilityState
-          if (outcome === 'relay-cut') resolveWriteBarrier()
-          else rejectWriteBarrier(new Error('Timed out waiting for the real relay cut'))
-        }
-        const timeOutWriteBarrier = () => settleWriteBarrier('timeout')
-        const releaseWriteBarrier = () => settleWriteBarrier('relay-cut')
-        const waitForRelayCut = (): Promise<void> => {
-          state.writeProgress.barrierEnteredAt = performance.now()
-          state.writeProgress.barrierVisibilityState = document.visibilityState
-          writeBarrierTimeoutId = window.setTimeout(timeOutWriteBarrier, barrierTimeout)
-          return writeBarrier
-        }
-        document.addEventListener('visibilitychange', () => {
-          state.writeProgress.visibilityState = document.visibilityState
-        })
-        Object.assign(window, {
-          __windshareHotSwitch: state,
-          __windshareReleaseHotSwitchBarrier: releaseWriteBarrier,
-        })
-
-        void (async () => {
-          const describeFailure = (reason: unknown, depth = 0): string => {
-            if (depth >= failureDiagnosticMaximumDepth) return '[nested failure truncated]'
-            if (reason instanceof AggregateError) {
-              const summary = `${reason.name}: ${reason.message}`
-              const nested: string[] = []
-              for (const error of reason.errors) {
-                nested.push(describeFailure(error, depth + 1))
-              }
-              const failures = nested.length === 0
-                ? summary
-                : `${summary}; errors=[${nested.join(' | ')}]`
-              return reason.cause === undefined
-                ? failures
-                : `${failures}; cause=${describeFailure(reason.cause, depth + 1)}`
-            }
-            if (reason instanceof Error) {
-              const summary = `${reason.name}: ${reason.message}`
-              return reason.cause === undefined
-                ? summary
-                : `${summary}; cause=${describeFailure(reason.cause, depth + 1)}`
-            }
-            if (typeof reason === 'string') return reason
-            try {
-              return String(reason)
-            } catch {
-              return '[unprintable non-Error failure]'
-            }
-          }
-          const gatewayPath = '/src/ui/v2-gateway.ts'
-          const offerPath = '/src/connectivity/peer-offer.ts'
-          const streamPath = '/src/output/streams/single-file.ts'
-          const gatewayModule = await import(gatewayPath) as typeof import('../src/ui/v2-gateway')
-          const offerModule = await import(offerPath) as typeof import(
-            '../src/connectivity/peer-offer'
-          )
-          const streamModule = await import(streamPath) as typeof import(
-            '../src/output/streams/single-file'
-          )
-          state.peerCapable = offerModule.browserPeerConnectionAvailable()
-          let joined: Awaited<ReturnType<
-            InstanceType<typeof gatewayModule.V2BrowserReceiverGateway>['join']
-          >> | undefined
-          let activation: ReturnType<
-            NonNullable<typeof joined>['beginDownloadConnectivity']
-          > | undefined
-          try {
-            const realOffers = new offerModule.BrowserOfferChannelFactory()
-            const gatedOffers = {
-              offer: async (
-                route: Parameters<typeof realOffers.offer>[0],
-                signal: AbortSignal,
-              ) => {
-                state.timings.peerStartedAt ??= performance.now()
-                const [peer] = await Promise.all([
-                  realOffers.offer(route, signal),
-                  waitForPeerRelease(signal),
-                ])
-                return peer
-              },
-            }
-            const gateway = new gatewayModule.V2BrowserReceiverGateway({
-              offersFactory: () => gatedOffers,
-              onContentLaneAdmitted: (observation) => {
-                state.laneAdmissions.push({
-                  laneId: observation.laneId,
-                  route: observation.route,
-                })
-              },
-              onBlockFetched: (observation) => {
-                const observedAt = performance.now()
-                state.routes.push({
-                  laneId: observation.laneId,
-                  route: observation.route,
-                  fileId: observation.fileId,
-                  localBlockIndex: observation.localBlockIndex.toString(),
-                })
-                if (observation.route === 'relay') state.timings.firstRelayAt ??= observedAt
-                if (observation.route === 'peer') {
-                  state.timings.firstPeerAt ??= observedAt
-                  if (state.timings.relayCutAt !== undefined) {
-                    state.timings.firstPeerAfterCutAt ??= observedAt
-                  }
-                }
-                if (state.routes.length === 1 && observation.route === 'relay') releasePeer()
-              },
-            })
-            joined = await gateway.join(key, window.location.href)
-            // Negotiation starts at click time so the test cannot consume the
-            // production peer deadline. Only lane admission waits for the first
-            // relay block, preserving the exact hot-switch boundary under test.
-            state.timings.clickedAt = performance.now()
-            activation = joined.beginDownloadConnectivity('large')
-            const chunks: Uint8Array[] = []
-            let writeBarrierUsed = false
-            const output = new streamModule.SingleFileStreamOutputSession(
-              `browser-${crypto.randomUUID()}`,
-              new WritableStream<Uint8Array>({
-                async write(chunk) {
-                  state.writeProgress.startedWrites += 1
-                  state.writeProgress.lastWriteAt = performance.now()
-                  state.writeProgress.visibilityState = document.visibilityState
-                  if (
-                    !writeBarrierUsed &&
-                    state.peerCapable === true &&
-                    state.timings.firstRelayAt !== undefined
-                  ) {
-                    // Holding the first relay write keeps output active while peer
-                    // admission proceeds independently on the control plane.
-                    writeBarrierUsed = true
-                    await waitForRelayCut()
-                  }
-                  chunks.push(chunk.slice())
-                  state.writeProgress.completedWrites += 1
-                  state.writeProgress.writtenBytes += chunk.byteLength
-                  state.writeProgress.lastWriteAt = performance.now()
-                  state.writeProgress.visibilityState = document.visibilityState
-                },
-              }),
-            )
-            const result = await joined.transferJob(output, activation).run()
-            state.timings.transferCompletedAt = performance.now()
-            state.outcome = {
-              status: result.outcome.status,
-              failures: result.outcome.failures.map((failure): ObservedTransferFailure => (
-                failure.kind === 'file'
-                  ? {
-                      kind: 'file',
-                      fileId: failure.fileId,
-                      reason: describeFailure(failure.reason),
-                    }
-                  : {
-                      kind: 'directory',
-                      directoryId: failure.directoryId,
-                      reason: describeFailure(failure.reason),
-                    }
-              )),
-              failureCount: result.outcome.failureCount,
-              omittedFailureCount: result.outcome.omittedFailureCount,
-            }
-            const length = chunks.reduce((total, chunk) => total + chunk.byteLength, 0)
-            const bytes = new Uint8Array(length)
-            let offset = 0
-            for (const chunk of chunks) {
-              bytes.set(chunk, offset)
-              offset += chunk.byteLength
-            }
-            const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
-            state.byteLength = bytes.byteLength
-            state.sha256 = Array.from(
-              digest,
-              (byte) => byte.toString(16).padStart(2, '0'),
-            ).join('')
-          } catch (error) {
-            state.error = describeFailure(error)
-          } finally {
-            activation?.close()
-            await joined?.close().catch(() => undefined)
-            state.done = true
-          }
-        })()
-      },
-      {
-        barrierTimeout: WRITE_BARRIER_TIMEOUT_MILLISECONDS,
-        failureDiagnosticMaximumDepth: FAILURE_DIAGNOSTIC_MAXIMUM_DEPTH,
-        key: share.key,
+        return actual
       },
     )
+    stack = fixtureValue(
+      'Real-stack construction failed',
+      () => new V2RealStack(options.binaries, topology),
+    )
+  } catch (error) {
+    try {
+      await fixtureCleanup(options.deadline, 'Test ICE topology release failed', topology.release)
+    } catch (releaseError) {
+      throw aggregateFailure(
+        [error, releaseError],
+        'Hot-switch initialization and topology cleanup failed',
+      )
+    }
+    throw error
+  }
+  let collected: CollectedSample | undefined
+  let operationError: unknown
+  let operationFailed = false
+  let cleanupStarted = false
+  const beginFixtureCleanup = (): readonly Promise<unknown>[] => {
+    cleanupStarted = true
+    const stackDisposal = settle(stack.dispose({
+      signal: options.deadline.cleanupSignal,
+    }))
+    // All owners enter teardown in the same turn. Trace retention can be slow
+    // on a sick browser and must not postpone local child termination.
+    return [
+      fixtureCleanup(
+        options.deadline,
+        'Receiver output cleanup failed',
+        () => releasePageOutput(options.page),
+      ),
+      fixtureCleanup(
+        options.deadline,
+        'Real-stack cleanup failed',
+        async () => {
+          const disposal = await stackDisposal
+          if (disposal.error !== undefined) throw disposal.error
+        },
+      ),
+      fixtureCleanup(
+        options.deadline,
+        'Test ICE topology cleanup failed',
+        async () => {
+          // A partially started sender may still be opening these files. Await
+          // actual child close, not the deadline wrapper, before deleting them.
+          await stackDisposal
+          await topology.release()
+        },
+      ),
+    ]
+  }
+  try {
+    await fixtureWork(options.deadline, 'Relay startup failed', (signal) => stack.start({
+      signal,
+      timeoutMilliseconds: options.deadline.remainingWork(),
+    }))
+    const proxy = await fixtureWork(
+      options.deadline,
+      'Relay proxy startup failed',
+      (signal) => stack.createRelayProxy({ signal }),
+    )
+    const filePath = await fixtureWork(
+      options.deadline,
+      'Shared-file fixture creation failed',
+      (signal) => stack.createFile('hot-switch.bin', expected, { signal }),
+    )
+    const share = await fixtureWork(
+      options.deadline,
+      'Sender startup failed',
+      (signal) => stack.share(filePath, options.baseURL, {
+        signal,
+        timeoutMilliseconds: options.deadline.remainingWork(),
+      }),
+    )
+    const receiverLink = replaceRelayHint(share.bareLink, proxy.url)
 
-    return await runWithSanitizedFailureTrace({
-      page: options.page,
-      sample: options.sample,
-      testInfo: options.testInfo,
-    }, async () => {
-      const { firstRoute, state: firstRouteState } = await waitForFirstRelayRoute(options.page)
-      let firstPeerRoute: ObservedRoute | undefined
-      let admittedPeerLaneId: number | undefined
-      if (firstRouteState.peerCapable) {
-        const peerAdmissionState = await waitForHotSwitchState(
-          options.page,
-          'an authenticated peer lane admission with an active output write',
-          ROUTE_OBSERVATION_TIMEOUT_MILLISECONDS,
-          (state) => (
-            state.laneAdmissions.some((admission) => admission.route === 'peer') &&
-            state.writeProgress.barrierEnteredAt !== undefined &&
-            state.writeProgress.barrierSettledAt === undefined
-          ),
-        )
-        const peerAdmission = peerAdmissionState.laneAdmissions.find(
-          (admission) => admission.route === 'peer',
-        )
-        if (peerAdmission === undefined) throw new Error('P2P lane admission disappeared')
-        admittedPeerLaneId = peerAdmission.laneId
-        expect(admittedPeerLaneId).not.toBe(firstRoute.laneId)
-        expect(peerAdmissionState.writeProgress.startedWrites).toBe(
-          peerAdmissionState.writeProgress.completedWrites + 1,
-        )
+    await fixtureWork(
+      options.deadline,
+      'Hot-switch evidence bridge installation failed',
+      () => options.page.exposeFunction(
+        '__windshareHotSwitchEvent',
+        (event: unknown) => options.collector.acceptPageEvent(event),
+      ),
+    )
+    await fixtureWork(options.deadline, 'Receiver navigation failed', () => options.page.goto(
+      receiverLink,
+      { timeout: options.deadline.remainingWork() },
+    ))
+    await fixtureWork(
+      options.deadline,
+      'Hot-switch page runtime initialization failed',
+      () => startPageTransfer(options.page, {
+        expectedHash,
+        key: share.key,
+        rtcConfiguration: topology.rtcConfiguration,
+      }),
+    )
+    const releaseOutput = () => fixtureWork(
+      options.deadline,
+      'Receiver output release failed',
+      () => releasePageOutput(options.page),
+    )
 
-        const peerRoutesBeforeCut = peerAdmissionState.routes.filter(
-          (route) => route.laneId === admittedPeerLaneId,
-        ).length
-        proxy.cutConnections()
-        await options.page.evaluate(() => {
-          const hotSwitchWindow = window as Window & {
-            __windshareHotSwitch?: HotSwitchState
-            __windshareReleaseHotSwitchBarrier?: () => void
+    collected = await runWithSanitizedFailureTrace(
+      {
+        deadline: options.deadline,
+        page: options.page,
+        reporter: options.reporter,
+        registerLateCleanup: options.registerLateCleanup,
+        testInfo: options.testInfo,
+        beginFixtureCleanup,
+      },
+      async () => {
+        // Delivery and runtime share one absolute sample budget. Starting both
+        // now prevents sequential evidence gaps from reaching Playwright's
+        // global timeout before the terminal authorities are observed.
+        const deliveryWait = settle(options.collector.waitForDelivery(
+          options.deadline.remainingWork(),
+        ))
+        const runtimeWait = settle(options.collector.waitForRuntimeSettlement(
+          options.deadline.remainingWork(),
+        ))
+        // Settle rather than throw at the first barrier. The collector retains
+        // producer events, so a missing relay dispatch can still proceed through
+        // full peer, delivery, and runtime terminal collection without starting
+        // their named deadlines before the semantic barrier they bound.
+        const firstRelayWait = settle(options.collector.waitForFirstRelayDispatch(
+          options.deadline.remainingWork(FIRST_RELAY_DISPATCH_DEADLINE_MS),
+        ))
+        const firstRelay = await firstRelayWait
+        const peerWait = capability.evidence.apiPresence === 'present'
+          ? settle(options.collector.waitForBrowserTerminal(
+              options.deadline.remainingWork(PEER_TERMINAL_DEADLINE_MS),
+            ))
+          : null
+        let peerTerminal: PromiseSettlement<BrowserAttemptTerminal> | null = null
+        const orchestrationErrors: unknown[] = []
+        let cutCompleted = false
+
+        if (firstRelay.error !== undefined || firstRelay.value === undefined) {
+          orchestrationErrors.push(
+            firstRelay.error ?? new Error('The first relay dispatch settled without evidence'),
+          )
+          await releaseOutput().catch((error) => orchestrationErrors.push(error))
+        } else if (capability.rtcCapability === 'available' && peerWait !== null) {
+          peerTerminal = await peerWait
+          const terminal = peerTerminal.value
+          if (terminal?.stage === 'admitted') {
+            try {
+              const fence = await fixtureWork(
+                options.deadline,
+                'Relay cut fence failed',
+                (signal) => proxy.cutAndWait(async () => {
+                  const receiverRelayIneligible = settle(
+                    options.collector.waitForRelayIneligibility(
+                      options.deadline.remainingWork(RELAY_INELIGIBILITY_DEADLINE_MS),
+                    ),
+                  )
+                  await sealPageRelayCut(options.page)
+                  const receiver = await receiverRelayIneligible
+                  if (receiver.error !== undefined) throw receiver.error
+                }, signal),
+              )
+              const boundary = options.collector.latestDispatchSequence()
+              options.collector.recordRelayCutFence(boundary, fence)
+              cutCompleted = true
+              const postFencePeer = settle(
+                options.collector.waitForPostFencePeerDispatch(
+                  terminal.lane,
+                  boundary,
+                  options.deadline.remainingWork(POST_FENCE_PEER_DISPATCH_DEADLINE_MS),
+                ),
+              )
+              await releaseOutput()
+              const postFence = await postFencePeer
+              if (postFence.error !== undefined) orchestrationErrors.push(postFence.error)
+            } catch (error) {
+              orchestrationErrors.push(error)
+              await releaseOutput().catch((releaseError) => {
+                orchestrationErrors.push(releaseError)
+              })
+            }
+          } else {
+            if (peerTerminal.error !== undefined) orchestrationErrors.push(peerTerminal.error)
+            await releaseOutput().catch((error) => orchestrationErrors.push(error))
           }
-          const state = hotSwitchWindow.__windshareHotSwitch
-          if (state === undefined) throw new Error('Hot-switch state is unavailable at relay cut')
-          const releaseBarrier = hotSwitchWindow.__windshareReleaseHotSwitchBarrier
-          if (releaseBarrier === undefined) {
-            throw new Error('Hot-switch write barrier is unavailable')
-          }
-          state.timings.relayCutAt = performance.now()
-          releaseBarrier()
+        } else {
+          // Probe failure never suppresses the real product attempt. It only means
+          // output must remain available to the relay while that attempt terminates.
+          await releaseOutput().catch((error) => orchestrationErrors.push(error))
+        }
+
+        const pendingPeer = peerTerminal === null && peerWait !== null
+          ? peerWait
+          : Promise.resolve(peerTerminal)
+        const [settledPeer, delivery, runtime] = await Promise.all([
+          pendingPeer,
+          deliveryWait,
+          runtimeWait,
+        ])
+        peerTerminal = settledPeer
+
+        let routeEvidence: MainRouteEvidence
+        let routeError: unknown
+        try {
+          routeEvidence = options.collector.routeEvidence(cutCompleted ? 'hot-switch' : 'relay-only')
+        } catch (error) {
+          routeError = error
+          routeEvidence = Object.freeze({ mode: 'relay-only', observations: Object.freeze([]) })
+        }
+
+        let attempts: readonly LogicalAttempt[] = Object.freeze([])
+        let attemptError: unknown
+        try {
+          const senderEvidence = await options.collector.waitForSenderTerminals(
+            () => fixtureWork(
+              options.deadline,
+              'Sender attempt evidence read failed',
+              (signal) => readSenderAttemptEvidenceSnapshot(share.senderEvidencePath, signal),
+            ),
+            options.deadline.remainingWork(SENDER_EVIDENCE_TERMINAL_DEADLINE_MS),
+          )
+          options.collector.ingestSenderEvidence(senderEvidence)
+          attempts = options.collector.finalizeAttempts()
+        } catch (error) {
+          attemptError = error
+        }
+
+        // Sender JSONL is replayed only after its producer terminal is stable.
+        // Publish delivery and route after that replay so the child log keeps
+        // the contract order: capability, complete attempts, delivery, route.
+        fixtureValue('Completed child authority publication failed', () => {
+          recordCompletedAuthorities(
+            options.intermediateEvidence,
+            delivery.value,
+            routeError === undefined ? routeEvidence : undefined,
+          )
         })
 
-        const peerAfterCutState = await waitForHotSwitchState(
-          options.page,
-          'a peer block after relay loss',
-          ROUTE_OBSERVATION_TIMEOUT_MILLISECONDS,
-          (state) => state.routes.filter(
-            (route) => route.laneId === admittedPeerLaneId && route.route === 'peer',
-          ).length > peerRoutesBeforeCut,
-        )
-        firstPeerRoute = peerAfterCutState.routes.find(
-          (route) => route.laneId === admittedPeerLaneId && route.route === 'peer',
-        )
-        if (firstPeerRoute === undefined) throw new Error('Post-cut P2P block disappeared')
-      }
-      return await completeHotSwitchSample({
-        admittedPeerLaneId,
-        expectedBytes: options.expected.byteLength,
-        expectedHash: options.expectedHash,
-        firstPeerRoute,
-        firstRelayRoute: firstRoute,
-        page: options.page,
-        peerCapable: firstRouteState.peerCapable,
-      })
-    })
-  } finally {
-    await stack.dispose()
+        const sample = Object.freeze({
+          capability,
+          expectedSha256: expectedHash,
+          topologyLock: topology.lock,
+          attempts,
+          peerTerminal,
+          delivery,
+          runtime,
+          routeEvidence,
+          ...(routeError === undefined ? {} : { routeError }),
+          ...(attemptError === undefined ? {} : { attemptError }),
+          orchestrationErrors: Object.freeze(orchestrationErrors),
+        })
+        // Acceptance belongs inside the sanitized trace boundary. Otherwise a
+        // truthful peer, route, or delivery failure would discard its trace
+        // before the test turns that evidence into a blocking verdict.
+        assertAcceptedSample(sample)
+        return sample
+      },
+    )
+  } catch (error) {
+    operationFailed = true
+    operationError = error
   }
+  if (!cleanupStarted) {
+    const cleanup = await Promise.allSettled(beginFixtureCleanup())
+    const cleanupErrors = cleanup.flatMap((result) =>
+      result.status === 'rejected'
+        ? [new FixtureInfrastructureError('Hot-switch fixture cleanup failed', result.reason)]
+        : [],
+    )
+    if (operationFailed || cleanupErrors.length > 0) {
+      throw aggregateFailure(
+        [...(operationFailed ? [operationError] : []), ...cleanupErrors],
+        !operationFailed
+          ? 'Hot-switch fixture cleanup failed'
+          : 'Hot-switch sample and cleanup failed',
+      )
+    }
+  }
+  if (operationFailed) throw operationError
+  if (collected === undefined) throw new Error('Hot-switch sample produced no collected evidence')
+  return collected
 }
 
-async function waitForFirstRelayRoute(page: Page): Promise<{
-  readonly firstRoute: ObservedRoute
-  readonly state: HotSwitchState & { readonly peerCapable: boolean }
-}> {
-  const state = await waitForHotSwitchState(
-    page,
-    'the first authenticated route',
-    ROUTE_OBSERVATION_TIMEOUT_MILLISECONDS,
-    (candidate) => candidate.routes.length > 0,
-  )
-  const firstRoute = state.routes[0]
-  if (firstRoute === undefined) throw new Error('Relay block observation disappeared')
-  expect(firstRoute.route).toBe('relay')
-  if (state.peerCapable === undefined) {
-    throw new Error('Browser peer capability observation disappeared')
-  }
-  return {
-    firstRoute,
-    state: Object.freeze({ ...state, peerCapable: state.peerCapable }),
-  }
+async function startPageTransfer(
+  page: Page,
+  input: {
+    readonly expectedHash: string
+    readonly key: string
+    readonly rtcConfiguration: RTCConfiguration
+  },
+): Promise<void> {
+  await page.evaluate(startPageTransferInBrowser, {
+    ...input,
+    failureDiagnosticMaximumDepth: FAILURE_DIAGNOSTIC_MAXIMUM_DEPTH,
+    transferBytes: TRANSFER_BYTES,
+  })
 }
 
-async function completeHotSwitchSample(options: {
-  readonly admittedPeerLaneId: number | undefined
-  readonly expectedBytes: number
+function startPageTransferInBrowser({
+  expectedHash,
+  failureDiagnosticMaximumDepth,
+  key,
+  rtcConfiguration,
+  transferBytes,
+}: {
   readonly expectedHash: string
-  readonly firstPeerRoute: ObservedRoute | undefined
-  readonly firstRelayRoute: ObservedRoute
-  readonly page: Page
-  readonly peerCapable: boolean
-}): Promise<HotSwitchTrendSample> {
-  await waitForHotSwitchState(
-    options.page,
-    'successful transfer completion',
-    TRANSFER_COMPLETION_TIMEOUT_MILLISECONDS,
-    (state) => state.done,
-  )
+  readonly failureDiagnosticMaximumDepth: number
+  readonly key: string
+  readonly rtcConfiguration: RTCConfiguration
+  readonly transferBytes: number
+}): void {
+      interface HotSwitchWindow extends Window {
+        __windshareHotSwitchEvent?: (event: HotSwitchPageEvent) => Promise<void>
+        __windshareReleaseHotSwitchOutput?: () => void
+        __windshareSealHotSwitchRelayCut?: () => Promise<void>
+      }
 
-  const final = await hotSwitchState(options.page)
-  expect(final.error).toBeUndefined()
-  expect(final.outcome).toEqual({
+      const hotSwitchWindow = window as HotSwitchWindow
+      const bridge = hotSwitchWindow.__windshareHotSwitchEvent
+      if (bridge === undefined) throw new Error('Hot-switch evidence bridge is unavailable')
+
+      const describeFailure = (reason: unknown, depth = 0): string => {
+        if (depth >= failureDiagnosticMaximumDepth) return '[nested failure truncated]'
+        if (reason instanceof AggregateError) {
+          const nested = reason.errors.map((error) => describeFailure(error, depth + 1))
+          const summary = `${reason.name}: ${reason.message}`
+          const failures = nested.length === 0 ? summary : `${summary}; errors=[${nested.join(' | ')}]`
+          return reason.cause === undefined
+            ? failures
+            : `${failures}; cause=${describeFailure(reason.cause, depth + 1)}`
+        }
+        if (reason instanceof Error) {
+          const summary = `${reason.name}: ${reason.message}`
+          return reason.cause === undefined
+            ? summary
+            : `${summary}; cause=${describeFailure(reason.cause, depth + 1)}`
+        }
+        try {
+          return String(reason)
+        } catch {
+          return '[unprintable non-Error failure]'
+        }
+      }
+
+      let bridgeQueue = Promise.resolve()
+      let bridgeFailure: string | undefined
+      let runtimeTerminalPublished = false
+      const publish = (event: HotSwitchPageEvent): Promise<void> => {
+        bridgeQueue = bridgeQueue
+          .then(() => bridge(event))
+          .catch((error: unknown) => {
+            bridgeFailure ??= describeFailure(error)
+          })
+        return bridgeQueue
+      }
+
+      const activeRelayLanes = new Set<string>()
+      let relayCutSealed = false
+      let relayIneligibilityPublished = false
+      const laneKey = (lane: { readonly laneId: number; readonly laneEpoch: number }) =>
+        `${lane.laneId}/${lane.laneEpoch}`
+      const publishRelayIneligibility = async (): Promise<void> => {
+        if (
+          !relayCutSealed || relayIneligibilityPublished || activeRelayLanes.size !== 0
+        ) return
+        relayIneligibilityPublished = true
+        await publish({ kind: 'relay-ineligible' })
+      }
+      hotSwitchWindow.__windshareSealHotSwitchRelayCut = async () => {
+        relayCutSealed = true
+        await publishRelayIneligibility()
+      }
+
+      let releasePeer!: () => void
+      let peerReleased = false
+      const peerRelease = new Promise<void>((resolveRelease) => {
+        releasePeer = () => {
+          if (peerReleased) return
+          peerReleased = true
+          resolveRelease()
+        }
+      })
+      const waitForPeerRelease = async (signal: AbortSignal): Promise<void> => {
+        signal.throwIfAborted()
+        await new Promise<void>((resolveRelease, rejectRelease) => {
+        const aborted = () => {
+            cleanup()
+            rejectRelease(signal.reason ?? new DOMException('Peer release aborted', 'AbortError'))
+          }
+          const released = () => {
+            cleanup()
+            resolveRelease()
+          }
+          const cleanup = () => signal.removeEventListener('abort', aborted)
+          signal.addEventListener('abort', aborted, { once: true })
+          if (signal.aborted) {
+            aborted()
+            return
+          }
+          peerRelease.then(released, rejectRelease)
+        })
+      }
+
+      let releaseOutput!: () => void
+      let outputReleased = false
+      const outputRelease = new Promise<void>((resolveRelease) => {
+        releaseOutput = () => {
+          if (outputReleased) return
+          outputReleased = true
+          resolveRelease()
+        }
+      })
+      hotSwitchWindow.__windshareReleaseHotSwitchOutput = releaseOutput
+
+      const transferTask = (async () => {
+        const gatewayPath = '/src/ui/v2-gateway.ts'
+        const offerPath = '/src/connectivity/peer-offer.ts'
+        const streamPath = '/src/output/streams/single-file.ts'
+        const gatewayModule = await import(gatewayPath) as typeof import('../src/ui/v2-gateway')
+        const offerModule = await import(offerPath) as typeof import('../src/connectivity/peer-offer')
+        const streamModule = await import(streamPath) as typeof import(
+          '../src/output/streams/single-file'
+        )
+        let joined: Awaited<ReturnType<
+          InstanceType<typeof gatewayModule.V2BrowserReceiverGateway>['join']
+        >> | undefined
+        let activation: ReturnType<
+          NonNullable<typeof joined>['beginDownloadConnectivity']
+        > | undefined
+        const chunks: Uint8Array[] = []
+        let deliveryStarted = false
+        let runtimeError: string | undefined
+
+        const snapshotDelivery = async () => {
+          const length = chunks.reduce((total, chunk) => total + chunk.byteLength, 0)
+          const bytes = new Uint8Array(length)
+          let offset = 0
+          for (const chunk of chunks) {
+            bytes.set(chunk, offset)
+            offset += chunk.byteLength
+          }
+          const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+          return {
+            bytes: length,
+            sha256: Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join(''),
+          }
+        }
+
+        try {
+          const realOffers = new offerModule.BrowserOfferChannelFactory({ configuration: rtcConfiguration })
+          const gatedOffers = {
+            offer: async (
+              route: Parameters<typeof realOffers.offer>[0],
+              signal: AbortSignal,
+              observer?: Parameters<typeof realOffers.offer>[2],
+            ) => {
+              const [peer] = await Promise.all([
+                realOffers.offer(route, signal, observer),
+                waitForPeerRelease(signal),
+              ])
+              return peer
+            },
+          }
+          const gateway = new gatewayModule.V2BrowserReceiverGateway({
+            offersFactory: () => gatedOffers,
+            connectivityObserver: (evidence: BrowserAttemptEvidence) => {
+              publish({ kind: 'attempt', evidence }).catch(() => undefined)
+            },
+            onBlockDispatched: (observation) => {
+              publish({
+                kind: 'dispatch',
+                observation: {
+                  dispatchSequence: observation.dispatchSequence,
+                  laneId: observation.laneId,
+                  laneEpoch: observation.laneEpoch,
+                  route: observation.route,
+                },
+              }).catch(() => undefined)
+              if (observation.route === 'relay') releasePeer()
+            },
+            onContentLaneAdmitted: (observation) => {
+              if (observation.route === 'relay') activeRelayLanes.add(laneKey(observation))
+              publish({ kind: 'lane-admitted', observation }).catch(() => undefined)
+            },
+            onContentLaneDetached: (observation) => {
+              if (observation.route === 'relay') activeRelayLanes.delete(laneKey(observation))
+              publish({ kind: 'lane-detached', observation })
+                .then(publishRelayIneligibility)
+                .catch(() => undefined)
+            },
+          })
+          joined = await gateway.join(key, window.location.href)
+          activation = joined.beginDownloadConnectivity('large')
+          let outputFenceUsed = false
+          const output = new streamModule.SingleFileStreamOutputSession(
+            `browser-${crypto.randomUUID()}`,
+            new WritableStream<Uint8Array>({
+              async write(chunk) {
+                if (!outputFenceUsed) {
+                  outputFenceUsed = true
+                  await outputRelease
+                }
+                chunks.push(chunk.slice())
+              },
+            }),
+          )
+          deliveryStarted = true
+          const result = await joined.transferJob(output, activation).run()
+          const received = await snapshotDelivery()
+          const jobOutcome = {
+            status: result.outcome.status,
+            failures: result.outcome.failures.map((failure): ObservedTransferFailure => (
+              failure.kind === 'file'
+                ? {
+                    kind: 'file',
+                    id: failure.fileId,
+                    reason: describeFailure(failure.reason),
+                  }
+                : {
+                    kind: 'directory',
+                    id: failure.directoryId,
+                    reason: describeFailure(failure.reason),
+                  }
+            )),
+            failureCount: result.outcome.failureCount,
+            omittedFailureCount: result.outcome.omittedFailureCount,
+          } as const
+          const succeeded = jobOutcome.status === 'Succeeded' &&
+            received.bytes === transferBytes && received.sha256 === expectedHash
+          await publish({
+            kind: 'delivery',
+            outcome: succeeded ? 'succeeded' : 'failed',
+            evidence: {
+              expectedBytes: transferBytes,
+              receivedBytes: received.bytes,
+              expectedSha256: expectedHash,
+              receivedSha256: received.sha256,
+              terminal: succeeded ? 'succeeded' : 'failed',
+            },
+            jobOutcome,
+          })
+        } catch (error) {
+          runtimeError = describeFailure(error)
+          if (deliveryStarted) {
+            const received = await snapshotDelivery()
+            await publish({
+              kind: 'delivery',
+              outcome: 'failed',
+              evidence: {
+                expectedBytes: transferBytes,
+                receivedBytes: received.bytes,
+                expectedSha256: expectedHash,
+                receivedSha256: received.sha256,
+                terminal: 'failed',
+              },
+              failureMessage: runtimeError,
+            })
+          }
+        } finally {
+          try {
+            activation?.close()
+          } catch (error) {
+            runtimeError ??= describeFailure(error)
+          }
+          try {
+            await joined?.close()
+          } catch (error) {
+            runtimeError ??= describeFailure(error)
+          }
+          // Observer callbacks intentionally do not block product control flow.
+          // Drain their serialized bridge before deciding whether the runtime
+          // terminal is healthy so a rejected observation cannot disappear.
+          await bridgeQueue
+          runtimeError ??= bridgeFailure
+          runtimeTerminalPublished = true
+          await publish({
+            kind: 'runtime-settled',
+            ...(runtimeError === undefined ? {} : { error: runtimeError }),
+          })
+        }
+      })()
+      transferTask.catch(async (error: unknown) => {
+        if (runtimeTerminalPublished) return
+        runtimeTerminalPublished = true
+        await publish({ kind: 'runtime-settled', error: describeFailure(error) })
+      }).catch(() => undefined)
+}
+
+function assertAcceptedSample(sample: CollectedSample): void {
+  if (sample.delivery.error !== undefined) throw sample.delivery.error
+  const delivery = sample.delivery.value
+  if (delivery === undefined) throw new Error('Delivery terminal disappeared after settlement')
+  expect(delivery.outcome).toBe('succeeded')
+  expect(delivery.evidence).toEqual({
+    expectedBytes: TRANSFER_BYTES,
+    receivedBytes: TRANSFER_BYTES,
+    expectedSha256: MAIN_TRANSFER_SHA256,
+    receivedSha256: MAIN_TRANSFER_SHA256,
+    terminal: 'succeeded',
+  })
+  expect(delivery.jobOutcome).toEqual({
     status: 'Succeeded',
     failures: [],
     failureCount: 0,
     omittedFailureCount: 0,
   })
-  expect(final.byteLength).toBe(options.expectedBytes)
-  expect(final.sha256).toBe(options.expectedHash)
-  expect(final.writeProgress.startedWrites).toBe(final.writeProgress.completedWrites)
-  expect(final.writeProgress.writtenBytes).toBe(options.expectedBytes)
-  expect(final.writeProgress.lastWriteAt).toEqual(expect.any(Number))
-  expect(new Set(final.routes.map((route) => route.fileId)).size).toBe(1)
-  expect(final.routes[0]).toMatchObject({
-    laneId: options.firstRelayRoute.laneId,
-    route: 'relay',
-  })
-  if (options.peerCapable) {
-    expect(options.firstPeerRoute).toMatchObject({ route: 'peer' })
-    expect(options.firstPeerRoute?.laneId).toBe(options.admittedPeerLaneId)
-    expect(final.writeProgress.barrierOutcome).toBe('relay-cut')
-    expect(requiredTiming(
-      final.writeProgress.barrierWaitMilliseconds,
-      'write barrier',
-    )).toBeGreaterThanOrEqual(0)
-  } else {
-    expect(final.routes.every((route) => route.route === 'relay')).toBe(true)
-    expect(new Set(final.routes.map((route) => route.laneId))).toEqual(
-      new Set([options.firstRelayRoute.laneId]),
-    )
-    expect(final.writeProgress.barrierEnteredAt).toBeUndefined()
+  if (sample.runtime.error !== undefined) throw sample.runtime.error
+  expect(sample.runtime.value?.error).toBeUndefined()
+  if (sample.attemptError !== undefined) throw sample.attemptError
+  if (sample.routeError !== undefined) throw sample.routeError
+  if (sample.orchestrationErrors.length > 0) {
+    throw aggregateFailure(sample.orchestrationErrors, 'Hot-switch orchestration evidence failed')
   }
-  const clickedAt = requiredTiming(final.timings.clickedAt, 'click')
-  const peerStartedAt = requiredTiming(final.timings.peerStartedAt, 'peer attempt start')
-  const firstRelayAt = requiredTiming(final.timings.firstRelayAt, 'first relay byte')
-  const transferCompletedAt = requiredTiming(
-    final.timings.transferCompletedAt,
-    'transfer completion',
+
+  const attemptOutcome = reducePeerAttemptOutcome(sample.attempts)
+  if (sample.capability.rtcCapability === 'available') {
+    if (sample.peerTerminal?.error !== undefined) throw sample.peerTerminal.error
+    expect(sample.peerTerminal?.value?.stage).toBe('admitted')
+    expect(attemptOutcome).toBe('admitted')
+    expect(sample.routeEvidence.mode).toBe('hot-switch')
+    assertDirectPairProof(sample.attempts, sample.capability.rtcCapability, sample.topologyLock)
+    return
+  }
+  if (sample.capability.rtcCapability === 'unavailable') {
+    expect(sample.peerTerminal).toBeNull()
+    expect(sample.attempts).toEqual([])
+    expect(attemptOutcome).toBe('not-started')
+    expect(sample.routeEvidence.mode).toBe('relay-only')
+    expect(sample.routeEvidence.observations.every(
+      (observation) => observation.kind === 'dispatch' && observation.route === 'relay',
+    )).toBe(true)
+    return
+  }
+
+  expect(sample.routeEvidence.mode).toBe('relay-only')
+  expect(sample.routeEvidence.observations.every(
+    (observation) => observation.kind === 'dispatch' && observation.route === 'relay',
+  )).toBe(true)
+  throw new Error(
+    `RTC capability ${sample.capability.rtcCapability} blocks acceptance after exact relay fallback`,
   )
-  return Object.freeze({
-    peerCapable: options.peerCapable,
-    peerAttemptStartMilliseconds: peerStartedAt - clickedAt,
-    firstRelayByteMilliseconds: firstRelayAt - clickedAt,
-    transferCompletionMilliseconds: transferCompletedAt - clickedAt,
-    ...(options.peerCapable
-      ? {
-          firstPeerByteMilliseconds: requiredTiming(
-            final.timings.firstPeerAt,
-            'first peer byte',
-          ) - clickedAt,
-          peerAfterRelayCutMilliseconds: requiredTiming(
-            final.timings.firstPeerAfterCutAt,
-            'post-cut peer byte',
-          ) - requiredTiming(final.timings.relayCutAt, 'relay cut'),
-        }
-      : {}),
+}
+
+function assertDirectPairProof(
+  attempts: readonly LogicalAttempt[],
+  rtcCapability: RtcCapability,
+  topology: VerifiedTestIceTopologyLock,
+): void {
+  expect(rtcCapability).toBe('available')
+  const admitted = attempts.filter((attempt) => attempt.outcome === 'admitted')
+  expect(admitted).toHaveLength(1)
+  const browser = admitted[0]?.events.find(({ evidence }) =>
+    evidence.side === 'browser' && evidence.stage === 'admitted')?.evidence
+  const sender = admitted[0]?.events.find(({ evidence }) =>
+    evidence.side === 'sender' && evidence.stage === 'admitted')?.evidence
+  if (browser?.side !== 'browser' || browser.stage !== 'admitted') {
+    throw new Error('Admitted attempt lacks its browser terminal')
+  }
+  if (sender?.side !== 'sender' || sender.stage !== 'admitted') {
+    throw new Error('Admitted attempt lacks its sender terminal')
+  }
+  expect(browser.selectedPair).not.toBeNull()
+  expect(sender.selectedPair).not.toBeNull()
+  if (browser.selectedPair === null || sender.selectedPair === null) return
+
+  expect(selectedPairAllowedByTopology(
+    browser.selectedPair,
+    topology.profile,
+    topology.resolution,
+  )).toBe(true)
+  expect(selectedPairAllowedByTopology(
+    sender.selectedPair,
+    topology.profile,
+    topology.resolution,
+  )).toBe(true)
+}
+
+function validateReporterTopology(
+  reporter: ChildEvidenceReporter | null,
+  topology: VerifiedTestIceTopologyLock,
+): void {
+  if (
+    reporter !== null &&
+    (reporter.context.topologyProfileSha256 !== topology.profileSha256 ||
+      reporter.context.topologyResolutionSha256 !== topology.resolutionSha256)
+  ) {
+    throw new Error('Main product topology digests differ from the parent evidence context')
+  }
+}
+
+function recordCompletedAuthorities(
+  gate: IntermediateEvidenceGate,
+  delivery: HotSwitchDeliveryTerminal | undefined,
+  route: MainRouteEvidence | undefined,
+): void {
+  gate.publish((reporter) => {
+    if (delivery !== undefined) reporter.recordDelivery(delivery.outcome, delivery.evidence)
+    if (route !== undefined) reporter.recordRoute(route)
+  })
+}
+
+async function sealPageRelayCut(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const seal = (
+      window as Window & { __windshareSealHotSwitchRelayCut?: () => Promise<void> }
+    ).__windshareSealHotSwitchRelayCut
+    if (seal === undefined) throw new Error('Hot-switch relay-cut seal is unavailable')
+    await seal()
+  })
+}
+
+async function releasePageOutput(page: Page): Promise<void> {
+  if (page.isClosed()) return
+  await page.evaluate(() => {
+    const release = (
+      window as Window & { __windshareReleaseHotSwitchOutput?: () => void }
+    ).__windshareReleaseHotSwitchOutput
+    release?.()
   })
 }
 
 async function runWithSanitizedFailureTrace<T>(
   options: {
+    readonly deadline: WholeSampleDeadline
     readonly page: Page
-    readonly sample: number
+    readonly reporter: ChildEvidenceReporter | null
+    readonly registerLateCleanup: RegisterLateCleanup
     readonly testInfo: TestInfo
+    readonly beginFixtureCleanup: () => readonly Promise<unknown>[]
   },
   operation: () => Promise<T>,
 ): Promise<T> {
   const tracing = options.page.context().tracing
-  await tracing.start({ screenshots: true, snapshots: true, sources: true })
+  await acquireFixtureWork(
+    options.deadline,
+    'Sanitized trace startup failed',
+    () => tracing.start({ screenshots: true, snapshots: true, sources: true }),
+    'Late sanitized trace startup rollback failed',
+    () => tracing.stop(),
+    options.registerLateCleanup,
+  )
+  let result: T | undefined
+  let operationError: unknown
+  let operationFailed = false
+  let operationDrain: Promise<unknown> | undefined
+  let operationTask: Promise<T> | undefined
   try {
-    const result = await operation()
-    await tracing.stop()
-    return result
+    // The outer work race closes the small synchronous gaps between named
+    // evidence waits, so a verdict cannot resolve just after the absolute cutoff.
+    result = await options.deadline.runWork(() => {
+      operationTask = Promise.resolve().then(operation)
+      return operationTask
+    })
   } catch (error) {
-    try {
-      const tracePath = options.testInfo.outputPath(`hot-switch-${options.sample}-trace.zip`)
-      await tracing.stop({ path: tracePath })
-      await options.testInfo.attach(`hot-switch-${options.sample}-trace`, {
-        path: tracePath,
-        contentType: 'application/zip',
-      })
-    } catch (traceError) {
-      throw new AggregateError(
-        [error, traceError],
-        'Hot-switch sample failed and its sanitized trace could not be retained',
-        { cause: traceError },
+    operationFailed = true
+    operationError = error instanceof WholeSampleDeadlineExpiredError
+      ? new FixtureInfrastructureError(
+          'Hot-switch product operation exceeded its work authority',
+          error,
+        )
+      : error
+    if (error instanceof WholeSampleDeadlineExpiredError && operationTask !== undefined) {
+      const admittedOperation = operationTask
+      operationDrain = fixtureCleanup(
+        options.deadline,
+        'Late hot-switch product operation drain failed',
+        async () => {
+          const late = await settle(admittedOperation)
+          if (late.error !== undefined && late.error !== error) {
+            throw new FixtureInfrastructureError(
+              'Hot-switch product operation failed after its work cutoff',
+              late.error,
+            )
+          }
+        },
       )
     }
-    throw error
+  }
+  const ownerCleanup = options.beginFixtureCleanup()
+  const traceFinalization = operationFailed
+    ? fixtureCleanup(
+        options.deadline,
+        'Sanitized failure trace retention failed',
+        async (signal) => {
+          signal.throwIfAborted()
+          const tracePath = options.reporter === null
+            ? options.testInfo.outputPath('hot-switch-trace.zip')
+            : resolve(
+                options.reporter.context.artifactRoot,
+                ...HOT_SWITCH_TRACE_RELATIVE_PATH.split('/'),
+              )
+          await mkdir(dirname(tracePath), { recursive: true })
+          signal.throwIfAborted()
+          await tracing.stop({ path: tracePath })
+          signal.throwIfAborted()
+          await options.testInfo.attach('hot-switch-trace', {
+            path: tracePath,
+            contentType: 'application/zip',
+          })
+          signal.throwIfAborted()
+          options.reporter?.recordArtifact({
+            kind: 'trace',
+            relativePath: HOT_SWITCH_TRACE_RELATIVE_PATH,
+            mediaType: 'application/zip',
+          })
+        },
+      )
+    : fixtureCleanup(
+        options.deadline,
+        'Sanitized trace finalization failed',
+        () => tracing.stop(),
+      )
+  const cleanup = await Promise.allSettled([
+    ...ownerCleanup,
+    traceFinalization,
+    ...(operationDrain === undefined ? [] : [operationDrain]),
+  ])
+  const cleanupErrors = cleanup.flatMap((settlement) =>
+    settlement.status === 'rejected' ? [settlement.reason] : [],
+  )
+  if (operationFailed || cleanupErrors.length > 0) {
+    throw aggregateFailure(
+      [
+        ...(operationFailed ? [operationError] : []),
+        ...cleanupErrors,
+      ],
+      operationFailed
+        ? 'Hot-switch sample and cleanup failed'
+        : 'Hot-switch fixture cleanup failed',
+    )
+  }
+  return result as T
+}
+
+function optionalChildReporter(): ChildEvidenceReporter | null {
+  const encoded = process.env[CHILD_EVIDENCE_CONTEXT_ENV]
+  return encoded === undefined || encoded === '' ? null : new ChildEvidenceReporter()
+}
+
+function validateReporterIdentity(
+  reporter: ChildEvidenceReporter | null,
+  browserName: string,
+  testInfo: TestInfo,
+): void {
+  if (reporter === null) return
+  if (reporter.context.suite !== 'main') {
+    throw new Error('Product hot-switch evidence context must identify the main suite')
+  }
+  if (reporter.context.browser !== browserName) {
+    throw new Error('Product hot-switch evidence browser differs from the Playwright project')
+  }
+  if (testInfo.project.retries !== 0 || testInfo.retry !== 0) {
+    throw new Error('Product hot-switch evidence prohibits Playwright retries')
+  }
+  if (testInfo.project.repeatEach !== 1 || testInfo.repeatEachIndex !== 0) {
+    throw new Error('Product hot-switch evidence requires one sample per child process')
   }
 }
 
-async function hotSwitchState(
+function observePublicBrowserDiagnostics(
   page: Page,
-): Promise<HotSwitchState> {
-  return page.evaluate(() => {
-    const state = (
-      window as Window & { __windshareHotSwitch?: HotSwitchState }
-    ).__windshareHotSwitch
-    if (state === undefined) throw new Error('Hot-switch state is unavailable')
-    const barrierEnteredAt = state.writeProgress.barrierEnteredAt
-    const barrierIsWaiting = (
-      barrierEnteredAt !== undefined && state.writeProgress.barrierSettledAt === undefined
-    )
-    return {
-      ...state,
-      routes: state.routes.map((route) => ({ ...route })),
-      laneAdmissions: state.laneAdmissions.map((admission) => ({ ...admission })),
-      writeProgress: {
-        ...state.writeProgress,
-        visibilityState: document.visibilityState,
-        ...(barrierIsWaiting
-          ? {
-              barrierWaitMilliseconds: performance.now() - barrierEnteredAt,
-            }
-          : {}),
-      },
-    }
+  reporter: ChildEvidenceReporter | null,
+  failRuntime: (error: Error) => void,
+): {
+  readonly close: () => void
+  readonly expectTargetClose: () => void
+} {
+  const sink = reporter === null ? null : publicBrowserDiagnosticSink(reporter)
+  const browser = page.context().browser()
+  let targetCloseExpected = false
+  const crashed = () => {
+    const error = new Error('Playwright page crash event')
+    sink?.pageCrashed(error)
+    failRuntime(error)
+  }
+  const pageError = (error: Error) => sink?.pageError(error)
+  const closed = () => {
+    if (targetCloseExpected) return
+    const error = new Error('Playwright page closed unexpectedly during the product sample')
+    sink?.targetCrashed(error)
+    failRuntime(error)
+  }
+  const consoleMessage = (message: { readonly type: () => string; readonly text: () => string }) => {
+    sink?.console(message.type(), message.text())
+  }
+  const disconnected = () => {
+    const error = new Error('Playwright browser disconnected during the product sample')
+    sink?.browserDisconnected(false, error)
+    failRuntime(error)
+  }
+  page.on('crash', crashed)
+  page.on('close', closed)
+  page.on('pageerror', pageError)
+  page.on('console', consoleMessage)
+  browser?.on('disconnected', disconnected)
+  return Object.freeze({
+    expectTargetClose: () => { targetCloseExpected = true },
+    close: () => {
+      page.off('crash', crashed)
+      page.off('close', closed)
+      page.off('pageerror', pageError)
+      page.off('console', consoleMessage)
+      browser?.off('disconnected', disconnected)
+    },
   })
 }
 
-async function waitForHotSwitchState(
-  page: Page,
-  waitingFor: string,
-  timeoutMilliseconds: number,
-  ready: (state: HotSwitchState) => boolean,
-): Promise<HotSwitchState> {
-  const deadline = Date.now() + timeoutMilliseconds
-  while (true) {
-    const state = await hotSwitchState(page)
-    if (state.error !== undefined) throw transferProgressError(state, waitingFor)
-    if (ready(state)) return state
-    if (state.done) throw transferProgressError(state, waitingFor)
-    if (Date.now() >= deadline) {
-      throw new Error(
-        `Timed out waiting for ${waitingFor}; state=${JSON.stringify(state)}`,
-      )
-    }
-    await page.waitForTimeout(STATE_POLL_INTERVAL_MILLISECONDS)
+async function fixtureOperation<T>(
+  boundary: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation()
+  } catch (cause) {
+    throw new FixtureInfrastructureError(boundary, cause)
   }
 }
 
-function transferProgressError(state: HotSwitchState, waitingFor: string): Error {
-  let reason = state.error
-  if (reason === undefined && state.outcome?.status === 'Succeeded') {
-    reason = 'transfer completed successfully before the expected observation'
-  }
-  if (reason === undefined && state.outcome !== undefined) {
-    reason = `transfer returned ${state.outcome.status} with ` +
-      `${state.outcome.failureCount} failure(s)`
-  }
-  reason ??= 'transfer completed before the expected observation'
-  return new Error(
-    `Hot-switch transfer cannot reach ${waitingFor}: ${reason}; state=${JSON.stringify(state)}`,
-  )
+function fixtureWork<T>(
+  deadline: WholeSampleDeadline,
+  boundary: string,
+  operation: (signal: AbortSignal) => T | PromiseLike<T>,
+): Promise<T> {
+  return fixtureOperation(boundary, () => deadline.runWork(operation))
 }
 
-function requiredTiming(value: number | undefined, label: string): number {
-  if (value === undefined || !Number.isFinite(value)) {
-    throw new Error(`Hot-switch trend lost ${label} timing`)
+async function acquireFixtureWork<T>(
+  deadline: WholeSampleDeadline,
+  acquisitionBoundary: string,
+  acquire: (signal: AbortSignal) => T | PromiseLike<T>,
+  rollbackBoundary: string,
+  rollback: (resource: T, signal: AbortSignal) => unknown | PromiseLike<unknown>,
+  registerLateCleanup: RegisterLateCleanup,
+): Promise<T> {
+  return fixtureOperation(acquisitionBoundary, () => acquireWholeSampleResource(
+    deadline,
+    acquire,
+    rollbackBoundary,
+    rollback,
+    registerLateCleanup,
+  ))
+}
+
+function fixtureCleanup<T>(
+  deadline: WholeSampleDeadline,
+  boundary: string,
+  operation: (signal: AbortSignal) => T | PromiseLike<T>,
+): Promise<T> {
+  return fixtureOperation(boundary, () => deadline.runCleanup(operation))
+}
+
+function fixturePublication<T>(
+  deadline: WholeSampleDeadline,
+  boundary: string,
+  operation: (signal: AbortSignal) => T | PromiseLike<T>,
+): Promise<T> {
+  return fixtureOperation(boundary, () => deadline.runPublication(operation))
+}
+
+function fixtureValue<T>(boundary: string, operation: () => T): T {
+  try {
+    return operation()
+  } catch (cause) {
+    throw new FixtureInfrastructureError(boundary, cause)
   }
-  return value
+}
+
+async function settle<T>(promise: Promise<T>): Promise<PromiseSettlement<T>> {
+  try {
+    return Object.freeze({ value: await promise })
+  } catch (error) {
+    return Object.freeze({ error })
+  }
+}
+
+function aggregateFailure(failures: readonly unknown[], message: string): unknown {
+  if (failures.length === 1) return failures[0]
+  return new AggregateError(failures, message)
 }
 
 function deterministicBytes(length: number): Uint8Array {

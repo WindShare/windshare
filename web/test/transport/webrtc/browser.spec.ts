@@ -1,14 +1,13 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import type * as BrowserHarness from './browser-harness'
-import { requireNativePeerConnection } from './browser-capability'
+import { classifyNativePeerConnection } from './browser-capability'
 
 const HARNESS_PATH = '/test/transport/webrtc/browser-harness.ts'
 
-test.beforeEach(async ({ page }) => requireNativePeerConnection(page))
-
 test('production browser adapters complete ICE, backpressure, cancellation, and terminal', async ({
   page,
-}) => {
+}, testInfo) => {
+  if (!await nativeAdapterApplicable(page, testInfo)) return
   const result = await page.evaluate(async (path) => {
     const harness = await import(path) as typeof BrowserHarness
     return harness.runBrowserLoopback()
@@ -31,7 +30,8 @@ test('production browser adapters complete ICE, backpressure, cancellation, and 
   })
 })
 
-test('remote browser close wakes a capacity-blocked production send', async ({ page }) => {
+test('remote browser close wakes a capacity-blocked production send', async ({ page }, testInfo) => {
+  if (!await nativeAdapterApplicable(page, testInfo)) return
   const result = await page.evaluate(async (path) => {
     const harness = await import(path) as typeof BrowserHarness
     return harness.runBrowserRemoteClose()
@@ -47,7 +47,8 @@ test('remote browser close wakes a capacity-blocked production send', async ({ p
   })
 })
 
-test('native DataChannel closing settles both production adapters', async ({ page }) => {
+test('native DataChannel closing settles both production adapters', async ({ page }, testInfo) => {
+  if (!await nativeAdapterApplicable(page, testInfo)) return
   const result = await page.evaluate(async (path) => {
     const harness = await import(path) as typeof BrowserHarness
     return harness.runBrowserDataChannelClose()
@@ -63,7 +64,8 @@ test('native DataChannel closing settles both production adapters', async ({ pag
   })
 })
 
-test('actual browser channel settings are rejected before negotiation', async ({ page }) => {
+test('actual browser channel settings are rejected before negotiation', async ({ page }, testInfo) => {
+  if (!await nativeAdapterApplicable(page, testInfo)) return
   const result = await page.evaluate(async (path) => {
     const harness = await import(path) as typeof BrowserHarness
     return harness.runBrowserInvalidConfiguration()
@@ -81,3 +83,20 @@ test('actual browser channel settings are rejected before negotiation', async ({
 
 const DATA_CHANNEL_LABEL = 'windshare-frame-channel'
 const DATA_CHANNEL_PROTOCOL = 'windshare-v2'
+
+async function nativeAdapterApplicable(page: Page, testInfo: TestInfo): Promise<boolean> {
+  const capability = await classifyNativePeerConnection(page)
+  await testInfo.attach('rtc-capability-evidence', {
+    body: JSON.stringify(capability),
+    contentType: 'application/json',
+  })
+  if (capability.rtcCapability === 'unavailable') {
+    expect(capability.pionApplicability).toBe('not-applicable')
+    return false
+  }
+  expect(
+    capability.rtcCapability,
+    `native RTC API is present but the local offer probe classified it as ${capability.rtcCapability}`,
+  ).toBe('available')
+  return true
+}

@@ -11,9 +11,19 @@ param(
 
     [switch]$Race,
 
+    [ValidateSet('Full', 'E2E')]
+    [string]$NetworkExecutionScope = 'Full',
+
     [string]$CoverProfileRoot,
 
-    [string]$EvidenceRoot
+    [string]$EvidenceRoot,
+
+    [string]$BrowserEvidenceContext,
+
+    [string]$BrowserSettlementTrustPath,
+
+    [ValidatePattern('^[a-f0-9]{64}$')]
+    [string]$BrowserSettlementInvocationId
 )
 
 Set-StrictMode -Version Latest
@@ -25,11 +35,55 @@ if (-not $IsWindows) {
 if ($Mode -eq 'Baseline' -and $Count -ne 5) {
     throw 'D5 Baseline requires exactly five independent samples; -Count must be 5.'
 }
+if ($NetworkExecutionScope -ne 'Full' -and $Mode -ne 'NetworkTests') {
+    throw '-NetworkExecutionScope is valid only with -Mode NetworkTests.'
+}
+if ($Mode -eq 'BrowserTests' -and [string]::IsNullOrWhiteSpace($BrowserEvidenceContext)) {
+    throw 'D5 BrowserTests requires -BrowserEvidenceContext so focused samples and the full suite share one locked topology.'
+}
+if (-not [string]::IsNullOrWhiteSpace($BrowserEvidenceContext)) {
+    if ($Mode -ne 'BrowserTests') {
+        throw '-BrowserEvidenceContext is valid only with -Mode BrowserTests'
+    }
+    $BrowserEvidenceContext = [IO.Path]::GetFullPath($BrowserEvidenceContext)
+    if (-not (Test-Path -LiteralPath $BrowserEvidenceContext -PathType Leaf)) {
+        throw "Browser evidence context is missing: $BrowserEvidenceContext"
+    }
+}
+if (
+    [string]::IsNullOrWhiteSpace($BrowserSettlementTrustPath) -xor
+    [string]::IsNullOrWhiteSpace($BrowserSettlementInvocationId)
+) {
+    throw '-BrowserSettlementTrustPath and -BrowserSettlementInvocationId must be provided together.'
+}
+if (-not [string]::IsNullOrWhiteSpace($BrowserSettlementTrustPath)) {
+    if ($Mode -ne 'BrowserTests' -or [string]::IsNullOrWhiteSpace($BrowserEvidenceContext)) {
+        throw 'Browser settlement trust handoff is valid only for BrowserTests with an evidence context.'
+    }
+    $BrowserSettlementTrustPath = [IO.Path]::GetFullPath($BrowserSettlementTrustPath)
+    $expectedSettlementParent = [IO.Path]::GetFullPath((Join-Path `
+        (Split-Path -Parent $BrowserEvidenceContext) `
+        'orchestration'))
+    if (-not [string]::Equals(
+        (Split-Path -Parent $BrowserSettlementTrustPath),
+        $expectedSettlementParent,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'Browser settlement trust handoff must stay in the context orchestration directory.'
+    }
+    $expectedSettlementName = "d5-settlement-trust-$BrowserSettlementInvocationId.json"
+    if ((Split-Path -Leaf $BrowserSettlementTrustPath) -cne $expectedSettlementName) {
+        throw 'Browser settlement trust handoff name must bind its invocation ID.'
+    }
+}
 if (-not [string]::IsNullOrWhiteSpace($CoverProfileRoot)) {
     # Coverage measurement is meaningful only for the full fixed-path suite;
     # partial modes would understate every classified package.
     if ($Mode -ne 'NetworkTests') {
         throw 'Coverage profiles require the full fixed-path suite: use -Mode NetworkTests'
+    }
+    if ($NetworkExecutionScope -ne 'Full') {
+        throw 'Coverage profiles require -NetworkExecutionScope Full.'
     }
     $CoverProfileRoot = [IO.Path]::GetFullPath($CoverProfileRoot)
     New-Item -ItemType Directory -Force -Path $CoverProfileRoot | Out-Null
@@ -42,18 +96,25 @@ if ([string]::IsNullOrWhiteSpace($EvidenceRoot)) {
     $EvidenceRoot = Join-Path $repositoryRoot 'tmp\d5-evidence'
 }
 # e2e carries the largest per-binary Go-level deadline (10m -test.timeout);
-# the parallel join adds 2m grace so this watchdog only fires on a child that
-# outlived its own deadline enforcement.
+# each execution batch gets 2m grace so this watchdog only fires on a child
+# that outlived its own deadline enforcement.
 $script:D5NetworkJoinTimeout = [timespan]::FromMinutes(12)
 $browserNetworkContractName = 'WINDSHARE_WINDOWS_OS_NETWORK'
 $browserNetworkContractValue = 'stable-harness-v3'
 $browserLeaseTokenName = 'WINDSHARE_D5_E2E_LEASE_TOKEN'
 $launchAuthorizationPipeName = 'WINDSHARE_D5_AUTHORIZATION_PIPE'
 $runnerGuardName = 'WINDSHARE_D5_RUNNER_PIPE'
+$browserTopologyEnvironmentNames = @(
+    'WINDSHARE_TEST_ICE_TOPOLOGY_PROFILE',
+    'WINDSHARE_TEST_ICE_TOPOLOGY_RESOLUTION',
+    'WINDSHARE_TEST_ICE_TOPOLOGY_PROFILE_SHA256',
+    'WINDSHARE_TEST_ICE_TOPOLOGY_RESOLUTION_SHA256'
+)
 
 . (Join-Path $PSScriptRoot 'd5-evidence.ps1')
 . (Join-Path $PSScriptRoot 'd5-windows-stable-e2e-lease.ps1')
 . (Join-Path $PSScriptRoot 'd5-windows-runner-guard.ps1')
+. (Join-Path $PSScriptRoot 'd5-windows-network-scheduler.ps1')
 . (Join-Path $PSScriptRoot 'd5-windows-test-process.ps1')
 . (Join-Path $PSScriptRoot 'go-benchmark-evidence.ps1')
 . (Join-Path $PSScriptRoot 'd5-pion-performance-evidence.ps1')
@@ -65,6 +126,48 @@ function Write-D5JSON([string]$Path, [object]$Value) {
         ($Value | ConvertTo-Json -Depth 16),
         [Text.UTF8Encoding]::new($false)
     )
+}
+
+function Import-D5BrowserEvidenceContext([string]$ContextPath) {
+    $arguments = @(
+        'scripts/ci/browsergate/main.mjs',
+        'context-environment',
+        '--context',
+        $ContextPath
+    )
+    Push-Location $repositoryRoot
+    try {
+        $lines = @(& node @arguments)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+    if ($exitCode -ne 0 -or $lines.Count -ne 1) {
+        throw "Browser evidence context validation exited with code $exitCode and emitted $($lines.Count) records"
+    }
+    try {
+        $record = $lines[0] | ConvertFrom-Json
+    } catch {
+        throw "Browser evidence context bridge emitted invalid JSON: $_"
+    }
+    $expectedRecordFields = @('checkoutSha', 'environment', 'runId', 'schemaVersion')
+    $actualRecordFields = @($record.PSObject.Properties.Name | Sort-Object)
+    if (@(Compare-Object $expectedRecordFields $actualRecordFields).Count -ne 0 -or
+        [int]$record.schemaVersion -ne 1) {
+        throw 'Browser evidence context bridge emitted an unsupported record'
+    }
+    $environment = $record.environment
+    $actualEnvironmentNames = @($environment.PSObject.Properties.Name | Sort-Object)
+    if (@(Compare-Object @($browserTopologyEnvironmentNames | Sort-Object) $actualEnvironmentNames).Count -ne 0) {
+        throw 'Browser evidence context bridge emitted an unexpected topology environment'
+    }
+    foreach ($name in $browserTopologyEnvironmentNames) {
+        $value = [string]$environment.$name
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            throw "Browser evidence context bridge emitted an empty $name"
+        }
+        [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+    }
 }
 
 function Get-D5BinaryEvidence([string[]]$Programs) {
@@ -212,6 +315,10 @@ function Get-D5TestExecutionDefinitions {
     switch ($Mode) {
         'NetworkTests' {
             foreach ($name in $script:binaries.Keys | Sort-Object) {
+                $manifestPackage = @($allPackages | Where-Object { [string]$_.Name -ceq $name })
+                if ($manifestPackage.Count -ne 1) {
+                    throw "Network test binary $name has no exact manifest scheduling record"
+                }
                 $timeout = if ($name -eq 'e2e') { '10m' } else { '5m' }
                 $arguments = @('-test.v', '-test.count=1', "-test.timeout=$timeout")
                 if (-not [string]::IsNullOrWhiteSpace($CoverProfileRoot)) {
@@ -224,6 +331,7 @@ function Get-D5TestExecutionDefinitions {
                 $definitions.Add([pscustomobject][ordered]@{
                     RequestID = "network-$name"
                     Name = $name
+                    ExecutionClass = [string]$manifestPackage[0].ExecutionClass
                     Arguments = $arguments
                     LogName = "{phase}/$name.txt"
                 })
@@ -396,6 +504,9 @@ function Build-D5AtomicTestBinary(
 }
 
 function Build-D5StableChildren(
+    [Parameter(Mandatory)]
+    [ValidateSet('./cmd/windshare', './cmd/windshare/e2e')]
+    [string]$WindsharePackage,
     [string]$ManifestPath,
     [Parameter(Mandatory)] [scriptblock]$SourceCheckpoint
 ) {
@@ -404,7 +515,9 @@ function Build-D5StableChildren(
     $targets = [Collections.Generic.List[object]]::new()
     $targets.Add([pscustomobject]@{
         Path = Join-Path $stableChildRoot 'windshare.exe'
-        Package = './cmd/windshare'
+        # The fixed filename is a manifest identity; the caller selects the
+        # production or topology-aware test entry according to the audited mode.
+        Package = $WindsharePackage
     })
     $targets.Add([pscustomobject]@{
         Path = Join-Path $stableChildRoot 'wsrelay.exe'
@@ -469,37 +582,67 @@ function Invoke-D5SelectedMode([string]$Phase) {
         }
         'BrowserTests' {
             $phaseRoot = Join-Path $script:run.StagePath "browser/$Phase"
-            $listLog = Join-Path $phaseRoot 'test-list.txt'
+            $sampleLog = Join-Path $phaseRoot 'independent-samples.txt'
             $runLog = Join-Path $phaseRoot 'playwright.txt'
             $env:WINDSHARE_D5_PLAYWRIGHT_OUTPUT_DIR = Join-Path $phaseRoot 'test-results'
-            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $listLog) | Out-Null
-            [void](Add-D5SourceCheckpoint $script:run 'before-browser-test-enumeration')
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $sampleLog) | Out-Null
+            $sampleExitCode = 0
+            $runExitCode = 1
             Push-Location $repositoryRoot
             try {
-                $listed = @(& pnpm -C web exec playwright test --list 2>&1 | Tee-Object -FilePath $listLog)
-                $listExitCode = $LASTEXITCODE
-                if ($listExitCode -eq 0) {
-                    $tests = @($listed | Where-Object { $_ -match '\s›\s' })
-                    if ($tests.Count -eq 0) {
-                        throw 'Playwright test enumeration returned no scenarios'
+                # D5 owns orchestration and evidence aggregation only. Browsergate
+                # gives every focused sample its own exact lease and Windows Job.
+                if (-not [string]::IsNullOrWhiteSpace($BrowserEvidenceContext)) {
+                    [void](Add-D5SourceCheckpoint $script:run 'before-browser-independent-samples')
+                    $sampleArguments = @(
+                        'scripts/ci/browsergate/main.mjs',
+                        'samples',
+                        '--context',
+                        $BrowserEvidenceContext,
+                        '--suite',
+                        'main',
+                        '--inside-windows-d5'
+                    )
+                    if (-not [string]::IsNullOrWhiteSpace($BrowserSettlementTrustPath)) {
+                        $sampleArguments += @(
+                            '--settlement-handoff-path',
+                            $BrowserSettlementTrustPath,
+                            '--settlement-invocation-id',
+                            $BrowserSettlementInvocationId
+                        )
                     }
-                    Write-D5JSON (Join-Path $phaseRoot 'test-manifest.json') ([ordered]@{
-                        Count = $tests.Count
-                        Tests = $tests
-                    })
-                    [void](Add-D5SourceCheckpoint $script:run 'before-browser-test-run')
-                    & pnpm -C web exec playwright test 2>&1 | Tee-Object -FilePath $runLog
-                    $runExitCode = $LASTEXITCODE
+                    & node @sampleArguments 2>&1 | Tee-Object -FilePath $sampleLog
+                    $sampleExitCode = $LASTEXITCODE
+                    [void](Add-D5SourceCheckpoint $script:run 'after-browser-independent-samples')
                 }
+
+                # The remainder is a separate exact lease and Windows Job. It still
+                # runs after rejected focused evidence so both result classes settle.
+                [void](Add-D5SourceCheckpoint $script:run 'before-browser-test-run')
+                $remainderArguments = @(
+                    'scripts/ci/browsergate/main.mjs',
+                    'full',
+                    '--context',
+                    $BrowserEvidenceContext,
+                    '--suite',
+                    'main',
+                    '--inside-windows-d5'
+                )
+                & node @remainderArguments 2>&1 | Tee-Object -FilePath $runLog
+                $runExitCode = $LASTEXITCODE
             } finally {
                 Pop-Location
             }
             [void](Add-D5SourceCheckpoint $script:run 'after-browser-test-run')
-            if ($listExitCode -ne 0) {
-                throw "Playwright test enumeration exited with code $listExitCode"
+            $problems = [Collections.Generic.List[string]]::new()
+            if ($sampleExitCode -ne 0) {
+                $problems.Add("independent main samples exited with code $sampleExitCode")
             }
             if ($runExitCode -ne 0) {
-                throw "Playwright exited with code $runExitCode"
+                $problems.Add("full Playwright main suite exited with code $runExitCode")
+            }
+            if ($problems.Count -ne 0) {
+                throw ($problems -join '; ')
             }
         }
         'Baseline' {
@@ -561,6 +704,9 @@ $script:run = if ($Mode -eq 'NetworkTests') {
     $null
 } else {
     $command = "scripts/d5-windows-performance.ps1 -Mode $Mode -BenchTime $BenchTime -Count $Count" + $(if ($Race) { ' -Race' } else { '' })
+    if (-not [string]::IsNullOrWhiteSpace($BrowserEvidenceContext)) {
+        $command += " -BrowserEvidenceContext `"$BrowserEvidenceContext`""
+    }
     New-D5EvidenceRun $repositoryRoot $EvidenceRoot $Mode $command
 }
 $script:ownerID = "$PID-$([guid]::NewGuid().ToString('N'))"
@@ -605,7 +751,10 @@ function Invoke-D5AuditedRun {
             if ($Mode -eq 'BrowserTests') {
                 $env:WINDSHARE_D5_PLAYWRIGHT_OUTPUT_DIR = Join-Path $script:run.StagePath 'browser/test-results'
                 $env:WINDSHARE_D5_CHILD_MANIFEST = Join-Path $script:run.StagePath 'browser/launched-binaries.json'
-                $builtPrograms += @(Build-D5StableChildren $env:WINDSHARE_D5_CHILD_MANIFEST $buildCheckpoint)
+                $builtPrograms += @(Build-D5StableChildren `
+                    './cmd/windshare/e2e' `
+                    $env:WINDSHARE_D5_CHILD_MANIFEST `
+                    $buildCheckpoint)
                 [Environment]::SetEnvironmentVariable(
                     $browserNetworkContractName,
                     $browserNetworkContractValue,
@@ -774,6 +923,7 @@ function Invoke-D5NetworkTestsRun {
             Build-D5AtomicTestBinary $package $noCheckpoint
         }
         $builtPrograms = @(Build-D5StableChildren `
+            './cmd/windshare' `
             (Join-Path $runRoot 'e2e-child-manifest.json') `
             $noCheckpoint)
     } finally {
@@ -798,45 +948,69 @@ function Invoke-D5NetworkTestsRun {
             throw "Stable binary $($script:binaries[[string]$definition.Name]) contains no tests"
         }
     }
+    $executionDefinitions = if ($NetworkExecutionScope -eq 'E2E') {
+        @($script:operationDefinitions | Where-Object { $_.Name -eq 'e2e' })
+    } else {
+        @($script:operationDefinitions)
+    }
+    if ($executionDefinitions.Count -eq 0) {
+        throw "Network execution scope $NetworkExecutionScope selected no compiler plan"
+    }
+    $executionBatches = @(Get-D5NetworkExecutionBatches $executionDefinitions)
+    $executionSteps = @(Get-D5NetworkExecutionSteps $executionBatches)
 
     Assert-D5HarnessLeaseHeld $script:harnessLease
-    $workers = [Collections.Generic.List[object]]::new()
-    $results = @()
-    try {
-        foreach ($definition in $script:operationDefinitions) {
-            $requestID = [string]$definition.RequestID
-            $binding = $script:executionPlans[$requestID]
-            $logPath = Join-Path $logRoot (([string]$definition.LogName).Replace('{phase}', 'network'))
-            $workers.Add((Start-D5PlannedTestProcess `
-                -Plan $binding.Plan `
-                -ParentPrograms @($script:initialProgramEvidence) `
-                -ExpectedSourceIdentity $source `
-                -ExpectedRunID $script:ownerID `
-                -ExpectedRequestID $requestID `
-                -ExpectedPlanSHA256 $binding.PlanSHA256 `
-                -Name ([string]$definition.Name) `
-                -LogPath $logPath))
+    $results = [Collections.Generic.List[object]]::new()
+    foreach ($step in $executionSteps) {
+        $batch = $step.Batch
+        $batchDefinitions = @($batch.Definitions)
+        $batchNames = @($batchDefinitions | ForEach-Object { [string]$_.Name }) -join ','
+        if ([string]$step.Kind -ceq $script:D5NetworkQuiescenceStepKind) {
+            Write-Output "-- network execution fence: class=$($batch.ExecutionClass) packages=$batchNames"
+            Wait-D5HarnessNamespaceQuiescent $script:harnessLease $harnessRoot
+            continue
         }
-        $results = @(Wait-D5PlannedTestProcesses `
-            -Workers @($workers) `
-            -Timeout $script:D5NetworkJoinTimeout)
-    } catch {
-        # Drain and log already-launched siblings before teardown so a
-        # mid-batch launch failure still leaves their logs to inspect.
-        foreach ($worker in @($workers)) {
-            try {
-                [void](Complete-D5PlannedTestWorker $worker 'sibling launch failed' 'LaunchAborted')
-            } catch {
-                # Best-effort: the teardown below still kills and releases.
-            }
+        if ([string]$step.Kind -cne $script:D5NetworkExecuteStepKind) {
+            throw "Network execution schedule contains unsupported step: $($step.Kind)"
         }
-        Stop-D5PlannedTestProcesses @($workers)
-        throw
-    }
 
-    # Covers e2e-spawned grandchildren under the harness root: a process-
-    # namespace drain, not a firewall event-log timer.
-    Wait-D5HarnessNamespaceQuiescent $script:harnessLease $harnessRoot
+        $workers = [Collections.Generic.List[object]]::new()
+        Write-Output "-- network execution batch: class=$($batch.ExecutionClass) packages=$batchNames"
+        try {
+            foreach ($definition in $batchDefinitions) {
+                $requestID = [string]$definition.RequestID
+                $binding = $script:executionPlans[$requestID]
+                $logPath = Join-Path $logRoot (([string]$definition.LogName).Replace('{phase}', 'network'))
+                $workers.Add((Start-D5PlannedTestProcess `
+                    -Plan $binding.Plan `
+                    -ParentPrograms @($script:initialProgramEvidence) `
+                    -ExpectedSourceIdentity $source `
+                    -ExpectedRunID $script:ownerID `
+                    -ExpectedRequestID $requestID `
+                    -ExpectedPlanSHA256 $binding.PlanSHA256 `
+                    -Name ([string]$definition.Name) `
+                    -LogPath $logPath))
+            }
+            $batchResults = @(Wait-D5PlannedTestProcesses `
+                -Workers @($workers) `
+                -Timeout $script:D5NetworkJoinTimeout)
+            foreach ($result in $batchResults) {
+                $results.Add($result)
+            }
+        } catch {
+            # Drain and log already-launched siblings before teardown so a
+            # mid-batch launch failure still leaves their logs to inspect.
+            foreach ($worker in @($workers)) {
+                try {
+                    [void](Complete-D5PlannedTestWorker $worker 'sibling launch failed' 'LaunchAborted')
+                } catch {
+                    # Best-effort: the teardown below still kills and releases.
+                }
+            }
+            Stop-D5PlannedTestProcesses @($workers)
+            throw
+        }
+    }
 
     $failedResults = @($results | Where-Object {
         $_.ExitCode -ne 0 -or -not [string]::IsNullOrEmpty([string]$_.Failure)
@@ -881,7 +1055,7 @@ $environmentNames = @(
     $runnerGuardName,
     'WINDSHARE_D5_PLAYWRIGHT_OUTPUT_DIR',
     'WINDSHARE_D5_CHILD_MANIFEST'
-)
+) + $browserTopologyEnvironmentNames
 $savedEnvironment = @{}
 foreach ($name in $environmentNames) {
     $savedEnvironment[$name] = [pscustomobject]@{
@@ -892,6 +1066,9 @@ foreach ($name in $environmentNames) {
 }
 
 try {
+    if ($Mode -eq 'BrowserTests') {
+        Import-D5BrowserEvidenceContext $BrowserEvidenceContext
+    }
     New-Item -ItemType Directory -Force -Path $harnessRoot, $stableChildRoot | Out-Null
     $script:harnessLease = Acquire-D5HarnessLease $stableChildRoot $browserNetworkContractValue
     Wait-D5HarnessNamespaceQuiescent $script:harnessLease $harnessRoot

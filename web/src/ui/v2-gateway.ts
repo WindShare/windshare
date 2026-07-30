@@ -9,7 +9,9 @@ import { snapshotPortableCatalogPath } from '../catalog/path-policy'
 import type { OfferChannelFactory } from '../connectivity/peer-offer'
 import type {
   V2ConnectivityActivation,
+  V2ConnectivityObserver,
   V2ContentLaneAdmissionObservation,
+  V2ContentLaneDetachmentObservation,
   V2ContentSizeClass,
 } from '../connectivity/v2-receiver-policy'
 import {
@@ -21,7 +23,10 @@ import { encodeBase64Url } from '../crypto/bytes'
 import { V2BrowserSessionFactory } from '../receiver/v2-session-factory'
 import { V2ReceiverReconnectSupervisor } from '../receiver/v2-supervisor'
 import { V2ReceiverSessionRuntime } from '../session/v2-runtime'
-import type { V2BlockRouteObservation } from '../content/v2-broker'
+import type {
+  V2BlockDispatchObservation,
+  V2BlockRouteObservation,
+} from '../content/v2-broker'
 import { V2FilePreview } from '../preview/v2-preview'
 import { V2TransferJob, type V2TransferJobOptions } from '../transfer/v2-job'
 import type { OutputSession } from '../transfer/output-session'
@@ -185,21 +190,35 @@ export class V2JoinedBrowserShare {
 
 export interface V2BrowserReceiverGatewayOptions {
   readonly offersFactory?: () => OfferChannelFactory
+  readonly rtcApiPresent?: () => boolean
+  readonly connectivityObserver?: V2ConnectivityObserver
+  readonly onBlockDispatched?: (observation: V2BlockDispatchObservation) => void
   readonly onBlockFetched?: (observation: V2BlockRouteObservation) => void
   readonly onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void
+  readonly onContentLaneDetached?: (observation: V2ContentLaneDetachmentObservation) => void
 }
 
 export class V2BrowserReceiverGateway {
   readonly #offersFactory: (() => OfferChannelFactory) | undefined
+  readonly #rtcApiPresent: (() => boolean) | undefined
+  readonly #connectivityObserver: V2ConnectivityObserver | undefined
+  readonly #onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined
   readonly #onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined
   readonly #onContentLaneAdmitted: (
     (observation: V2ContentLaneAdmissionObservation) => void
   ) | undefined
+  readonly #onContentLaneDetached: (
+    (observation: V2ContentLaneDetachmentObservation) => void
+  ) | undefined
 
   constructor(options: V2BrowserReceiverGatewayOptions = {}) {
     this.#offersFactory = options.offersFactory
+    this.#rtcApiPresent = options.rtcApiPresent
+    this.#connectivityObserver = options.connectivityObserver
+    this.#onBlockDispatched = options.onBlockDispatched
     this.#onBlockFetched = options.onBlockFetched
     this.#onContentLaneAdmitted = options.onContentLaneAdmitted
+    this.#onContentLaneDetached = options.onContentLaneDetached
   }
 
   async join(input: string, pageUrl: string, signal?: AbortSignal): Promise<V2JoinedBrowserShare> {
@@ -245,12 +264,14 @@ export class V2BrowserReceiverGateway {
           relayLaneId: session.initialLaneId,
         },
         sessionFactory,
-        ...(this.#offersFactory === undefined
-          ? {}
-          : { offersFactory: this.#offersFactory }),
-        ...gatewayConnectivityDiagnostics(
+        ...gatewayConnectivityOptions(
+          this.#offersFactory,
+          this.#rtcApiPresent,
+          this.#connectivityObserver,
+          this.#onBlockDispatched,
           this.#onBlockFetched,
           this.#onContentLaneAdmitted,
+          this.#onContentLaneDetached,
         ),
       })
       const store = await IndexedDbV2CatalogPageStore.open(recoveryIdentity)
@@ -288,14 +309,25 @@ export class V2BrowserReceiverGateway {
   }
 }
 
-function gatewayConnectivityDiagnostics(
+function gatewayConnectivityOptions(
+  offersFactory: (() => OfferChannelFactory) | undefined,
+  rtcApiPresent: (() => boolean) | undefined,
+  connectivityObserver: V2ConnectivityObserver | undefined,
+  onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined,
   onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined,
   onContentLaneAdmitted:
     ((observation: V2ContentLaneAdmissionObservation) => void) | undefined,
+  onContentLaneDetached:
+    ((observation: V2ContentLaneDetachmentObservation) => void) | undefined,
 ) {
   return {
+    ...(offersFactory === undefined ? {} : { offersFactory }),
+    ...(rtcApiPresent === undefined ? {} : { rtcApiPresent }),
+    ...(connectivityObserver === undefined ? {} : { connectivityObserver }),
+    ...(onBlockDispatched === undefined ? {} : { onBlockDispatched }),
     ...(onBlockFetched === undefined ? {} : { onBlockFetched }),
     ...(onContentLaneAdmitted === undefined ? {} : { onContentLaneAdmitted }),
+    ...(onContentLaneDetached === undefined ? {} : { onContentLaneDetached }),
   }
 }
 

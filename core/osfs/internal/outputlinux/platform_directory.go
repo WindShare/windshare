@@ -206,6 +206,30 @@ func (directory *linuxV3Directory) IdentityClaim() (outputcap.PersistentDirector
 	return outputcap.NewPersistentDirectoryIdentity(claim), nil
 }
 
+func (directory *linuxV3Directory) PreparePrivateIdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
+	if directory == nil || directory.native == nil {
+		return outputcap.PersistentDirectoryIdentity{},
+			errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux private directory authority is closed"))
+	}
+	claim, err := directory.native.directoryIdentityClaim(true)
+	if err != nil {
+		return outputcap.PersistentDirectoryIdentity{}, linuxV3Error(err)
+	}
+	return outputcap.NewPersistentDirectoryIdentity(claim), nil
+}
+
+func (directory *linuxV3Directory) PrivateIdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
+	if directory == nil || directory.native == nil {
+		return outputcap.PersistentDirectoryIdentity{},
+			errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux private directory authority is closed"))
+	}
+	claim, err := directory.native.directoryIdentityClaim(false)
+	if err != nil {
+		return outputcap.PersistentDirectoryIdentity{}, linuxV3Error(err)
+	}
+	return outputcap.NewPersistentDirectoryIdentity(claim), nil
+}
+
 func (directory *linuxV3Directory) SameDirectory(other outputcap.Directory) (bool, error) {
 	right, ok := other.(*linuxV3Directory)
 	if !ok || directory == nil || directory.native == nil || right == nil || right.native == nil {

@@ -1,23 +1,46 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  parseAttemptEvidence,
+  type BrowserAttemptEvidence,
+  type BrowserSelectedPairEvidence,
+  type CandidateCounts,
+} from '../../scripts/browser-evidence/attempt-evidence'
 
 import { V2LaneSet, type V2BlockLane } from '../../src/content/v2-broker'
 import type { V2BlockRecord } from '../../src/content/v2-records'
-import type { OfferChannelFactory } from '../../src/connectivity/peer-offer'
+import type {
+  OfferChannelFactory,
+  V2PeerOfferAttemptObserver,
+} from '../../src/connectivity/peer-offer'
 import type { PeerChannel } from '../../src/connectivity/peer-channel'
+import { SIGNAL_KIND_OFFER } from '../../src/connectivity/signaling'
+import { V2AuthenticatedPeerOperationError } from '../../src/connectivity/v2-session-signaling'
 import {
   type V2ContentLaneAdmissionObservation,
+  type V2ContentLaneDetachmentObservation,
   V2ReceiverConnectivity,
   V2_RELAY_CONTENT_FALLBACK_MILLISECONDS,
 } from '../../src/connectivity/v2-receiver-policy'
-import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
-import type { V2LaneChange } from '../../src/session/v2-runtime-types'
+import type { V2SessionMessage } from '../../src/session/v2-message'
+import type { V2ReceiverSessionRuntime, V2SessionOperation } from '../../src/session/v2-runtime'
+import type {
+  V2LaneChange,
+  V2OperationCancellation,
+} from '../../src/session/v2-runtime-types'
 
 class FakeSession {
   readonly initialLaneId = 1
+  readonly keys = Object.freeze({
+    protocolSessionId: identity(90),
+    initialLaneEpoch: 0,
+  })
   readonly #ids = new Set([this.initialLaneId])
   readonly #listeners = new Set<(change: V2LaneChange) => void>()
   attachGate: Promise<void> | undefined
   attachCalls = 0
+  grantGate: Promise<void> | undefined
+  grantCalls = 0
+  readonly #peerOperation = new ControlledSessionOperation()
   #nextLaneId = 2
 
   laneIds(): readonly number[] {
@@ -29,7 +52,12 @@ class FakeSession {
     return () => this.#listeners.delete(listener)
   }
 
-  async requestLaneGrant() {
+  async requestLaneGrant(
+    _requestedLaneId: number,
+    options: { readonly signal?: AbortSignal } = {},
+  ) {
+    this.grantCalls += 1
+    await awaitOptionalGate(this.grantGate, options.signal)
     const laneId = this.#nextLaneId++
     return {
       laneId,
@@ -39,16 +67,56 @@ class FakeSession {
     }
   }
 
-  async attachGrantedLane(_peer: PeerChannel, grant: { readonly laneId: number }): Promise<void> {
+  async attachGrantedLane(
+    _peer: PeerChannel,
+    grant: { readonly laneId: number },
+    signal?: AbortSignal,
+  ): Promise<void> {
     this.attachCalls += 1
-    await this.attachGate
+    await awaitOptionalGate(this.attachGate, signal)
+    signal?.throwIfAborted()
     this.#ids.add(grant.laneId)
+  }
+
+  async beginOperation(): Promise<V2SessionOperation> {
+    return this.#peerOperation as unknown as V2SessionOperation
+  }
+
+  async sendOperationMessage(): Promise<void> {}
+
+  async cancelOperation(
+    operation: V2SessionOperation,
+    cancellation: V2OperationCancellation,
+  ): Promise<void> {
+    operation.cancel(cancellation.cause)
+  }
+
+  async close(): Promise<void> {}
+
+  failPeerOperation(reason: unknown): void {
+    this.#peerOperation.fail(reason)
   }
 
   detach(laneId: number): void {
     this.#ids.delete(laneId)
     const change: V2LaneChange = { type: 'detached', laneId, laneEpoch: 1 }
     for (const listener of this.#listeners) listener(change)
+  }
+}
+
+class ControlledSessionOperation {
+  readonly #message = deferred<V2SessionMessage>()
+
+  next(): Promise<V2SessionMessage> {
+    return this.#message.promise
+  }
+
+  fail(reason: unknown): void {
+    this.#message.reject(reason)
+  }
+
+  cancel(reason: unknown): void {
+    this.#message.reject(reason)
   }
 }
 
@@ -86,6 +154,49 @@ class SuccessfulOffers implements OfferChannelFactory {
   }
 }
 
+class ObservedSuccessfulOffers implements OfferChannelFactory {
+  calls = 0
+
+  async offer(
+    _route: Parameters<OfferChannelFactory['offer']>[0],
+    _signal: AbortSignal,
+    observer?: V2PeerOfferAttemptObserver,
+  ): Promise<PeerChannel> {
+    this.calls += 1
+    const counts: CandidateCounts = Object.freeze({ localEmitted: 1, remoteAccepted: 1 })
+    observer?.offerCreated(counts)
+    observer?.offerSent(counts)
+    observer?.answerReceived(counts)
+    observer?.dataChannelOpened(counts, async () => SELECTED_PAIR)
+    return fakePeer()
+  }
+}
+
+class PostOpenSignalingOffers implements OfferChannelFactory {
+  async offer(
+    route: Parameters<OfferChannelFactory['offer']>[0],
+    signal: AbortSignal,
+    observer?: V2PeerOfferAttemptObserver,
+  ): Promise<PeerChannel> {
+    const counts: CandidateCounts = Object.freeze({ localEmitted: 1, remoteAccepted: 1 })
+    observer?.offerCreated(counts)
+    await route.send({
+      kind: SIGNAL_KIND_OFFER,
+      payload: { type: SIGNAL_KIND_OFFER, sdp: 'v=0\r\ns=post-open-failure\r\n' },
+    }, signal)
+    observer?.offerSent(counts)
+    observer?.answerReceived(counts)
+    observer?.dataChannelOpened(counts, async () => SELECTED_PAIR)
+    return fakePeer()
+  }
+}
+
+const SELECTED_PAIR: BrowserSelectedPairEvidence = Object.freeze({
+  candidatePairId: 'pair-1',
+  local: Object.freeze({ candidateId: 'local-1', candidateType: 'host', protocol: 'udp' }),
+  remote: Object.freeze({ candidateId: 'remote-1', candidateType: 'host', protocol: 'udp' }),
+})
+
 class DeferredSuccessfulOffers implements OfferChannelFactory {
   calls = 0
   readonly #peer = deferred<PeerChannel>()
@@ -122,33 +233,79 @@ function fakePeer(): PeerChannel {
 function deferred<T>(): {
   readonly promise: Promise<T>
   readonly resolve: (value: T) => void
+  readonly reject: (reason: unknown) => void
 } {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((accept) => { resolve = accept })
-  return { promise, resolve }
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((accept, decline) => {
+    resolve = accept
+    reject = decline
+  })
+  return { promise, resolve, reject }
+}
+
+async function awaitOptionalGate(
+  gate: Promise<void> | undefined,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  signal?.throwIfAborted()
+  if (gate === undefined) return
+  if (signal === undefined) {
+    await gate
+    return
+  }
+  await new Promise<void>((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener('abort', abort, { once: true })
+    gate.then(
+      () => {
+        signal.removeEventListener('abort', abort)
+        resolve()
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort)
+        reject(error)
+      },
+    )
+  })
 }
 
 function fixture(
   offers: OfferChannelFactory,
   onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void,
+  options: {
+    readonly rtcApiPresent?: () => boolean
+    readonly connectivityObserver?: (evidence: BrowserAttemptEvidence) => void
+    readonly randomBytes?: (length: number) => Uint8Array
+    readonly onContentLaneDetached?: (observation: V2ContentLaneDetachmentObservation) => void
+    readonly onPeerError?: (error: unknown) => void
+  } = {},
 ) {
   const session = new FakeSession()
   const lanes = new V2LaneSet()
   const errors: unknown[] = []
+  let identitySeed = 7
   const connectivity = new V2ReceiverConnectivity({
     session: session as unknown as V2ReceiverSessionRuntime,
     lanes,
     createBlockLane: (laneId) => new FakeLane(laneId),
     offers,
-    randomBytes: (length) => new Uint8Array(length).fill(7),
-    onPeerError: (error) => errors.push(error),
+    randomBytes: options.randomBytes ?? ((length) => new Uint8Array(length).fill(identitySeed++)),
+    rtcApiPresent: options.rtcApiPresent ?? (() => true),
+    ...(options.connectivityObserver === undefined
+      ? {}
+      : { connectivityObserver: options.connectivityObserver }),
+    ...(options.onContentLaneDetached === undefined
+      ? {}
+      : { onContentLaneDetached: options.onContentLaneDetached }),
+    onPeerError: options.onPeerError ?? ((error) => errors.push(error)),
     ...(onContentLaneAdmitted === undefined ? {} : { onContentLaneAdmitted }),
   })
   return { connectivity, errors, lanes, session }
 }
 
 async function turn(): Promise<void> {
-  for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  for (let index = 0; index < 20; index += 1) await Promise.resolve()
 }
 
 afterEach(() => vi.useRealTimers())
@@ -164,6 +321,206 @@ describe('v2 receiver content activation policy', () => {
     await connectivity.close()
   })
 
+  it('falls back without allocating a binding when the native API is absent', async () => {
+    vi.useFakeTimers()
+    const offers = new SuccessfulOffers()
+    const evidence: BrowserAttemptEvidence[] = []
+    let randomCalls = 0
+    const { connectivity, lanes } = fixture(offers, undefined, {
+      rtcApiPresent: () => false,
+      randomBytes: (length) => {
+        randomCalls += 1
+        return new Uint8Array(length).fill(8)
+      },
+      connectivityObserver: (event) => evidence.push(event),
+    })
+
+    const preview = connectivity.begin('preview')
+    await turn()
+
+    expect(offers.calls).toBe(0)
+    expect(randomCalls).toBe(0)
+    expect(evidence).toEqual([])
+    expect(lanes.laneIds()).toEqual([1])
+    expect(preview.routes.allows('relay')).toBe(true)
+
+    preview.close()
+    await connectivity.close()
+  })
+
+  it('contains API-gate and diagnostic observer exceptions without starting a task rejection', async () => {
+    vi.useFakeTimers()
+    const offers = new SuccessfulOffers()
+    const predicateFailure = new Error('synthetic API gate failure')
+    let reportedFailures = 0
+    const { connectivity, lanes } = fixture(offers, undefined, {
+      rtcApiPresent: () => { throw predicateFailure },
+      onPeerError: (error) => {
+        expect(error).toBe(predicateFailure)
+        reportedFailures += 1
+        throw new Error('synthetic peer diagnostic failure')
+      },
+    })
+
+    const preview = connectivity.begin('preview')
+    await turn()
+
+    expect(offers.calls).toBe(0)
+    expect(reportedFailures).toBe(1)
+    expect(lanes.laneIds()).toEqual([1])
+    expect(preview.routes.allows('relay')).toBe(true)
+
+    preview.close()
+    await expect(connectivity.close()).resolves.toBeUndefined()
+  })
+
+  it('emits one schema-valid lifecycle and does not fail it during normal cleanup', async () => {
+    vi.useFakeTimers()
+    const evidence: BrowserAttemptEvidence[] = []
+    const { connectivity, lanes } = fixture(new ObservedSuccessfulOffers(), undefined, {
+      connectivityObserver: (event) => evidence.push(parseAttemptEvidence(event) as BrowserAttemptEvidence),
+    })
+
+    const preview = connectivity.begin('preview')
+    await turn()
+
+    expect(lanes.laneIds()).toEqual([2])
+    expect(evidence.map((event) => event.stage)).toEqual([
+      'started',
+      'offer-created',
+      'offer-sent',
+      'answer-received',
+      'datachannel-open',
+      'lane-granted',
+      'lane-attached',
+      'admitted',
+    ])
+    expect(evidence.map((event) => event.sideSequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+    expect(evidence.at(-1)).toMatchObject({
+      stage: 'admitted',
+      lane: { laneId: 2, laneEpoch: 1 },
+      selectedPair: SELECTED_PAIR,
+    })
+
+    preview.close()
+    await connectivity.close()
+    expect(evidence.filter((event) => event.stage === 'failed')).toEqual([])
+  })
+
+  it('isolates observer exceptions from authenticated lane admission', async () => {
+    vi.useFakeTimers()
+    const stages: string[] = []
+    const { connectivity, lanes, errors } = fixture(new ObservedSuccessfulOffers(), undefined, {
+      connectivityObserver: (event) => {
+        stages.push(event.stage)
+        throw new Error('synthetic evidence consumer failure')
+      },
+    })
+
+    const preview = connectivity.begin('preview')
+    await turn()
+
+    expect(stages.at(-1)).toBe('admitted')
+    expect(lanes.laneIds()).toEqual([2])
+    expect(errors).toEqual([])
+
+    preview.close()
+    await connectivity.close()
+  })
+
+  it('blocks grant, attach, and admission after a post-Open authenticated failure', async () => {
+    vi.useFakeTimers()
+    const evidence: BrowserAttemptEvidence[] = []
+    const { connectivity, lanes, session } = fixture(new PostOpenSignalingOffers(), undefined, {
+      connectivityObserver: (event) => evidence.push(parseAttemptEvidence(event) as BrowserAttemptEvidence),
+    })
+    session.grantGate = new Promise<void>(() => undefined)
+    const preview = connectivity.begin('preview')
+    await turn()
+    expect(session.grantCalls).toBe(1)
+
+    session.failPeerOperation(new V2AuthenticatedPeerOperationError({
+      scope: 'peer',
+      code: 0x5004,
+      retryable: false,
+      retryAfterMilliseconds: undefined,
+      message: 'sender rejected lane admission',
+    }))
+    await turn()
+
+    expect(evidence.map((event) => event.stage)).toEqual([
+      'started',
+      'offer-created',
+      'offer-sent',
+      'answer-received',
+      'datachannel-open',
+      'failed',
+    ])
+    expect(evidence.at(-1)).toMatchObject({
+      failedAtStage: 'lane-granted',
+      typedErrorCode: 'peer-admission',
+      failureMessage: 'sender rejected lane admission',
+      authenticatedSenderOperationFailure: {
+        scope: 'peer',
+        code: 0x5004,
+        message: 'sender rejected lane admission',
+      },
+    })
+    expect(session.attachCalls).toBe(0)
+    expect(lanes.laneIds()).toEqual([1])
+
+    preview.close()
+    await connectivity.close()
+    expect(evidence.filter((event) => event.stage === 'failed')).toHaveLength(1)
+  })
+
+  it('starts and terminalizes an API-present attempt even when negotiation fails', async () => {
+    vi.useFakeTimers()
+    const evidence: BrowserAttemptEvidence[] = []
+    const { connectivity, lanes } = fixture({
+      offer: async () => { throw new Error('independent probe did not control this attempt') },
+    }, undefined, {
+      connectivityObserver: (event) => evidence.push(parseAttemptEvidence(event) as BrowserAttemptEvidence),
+      onPeerError: () => { throw new Error('synthetic peer diagnostic failure') },
+    })
+
+    const preview = connectivity.begin('preview')
+    await turn()
+
+    expect(evidence.map((event) => event.stage)).toEqual(['started', 'failed'])
+    expect(evidence.at(-1)).toMatchObject({
+      failedAtStage: 'offer-created',
+      failureScope: 'attempt',
+      typedErrorCode: 'unexpected',
+    })
+    expect(lanes.laneIds()).toEqual([1])
+    expect(preview.routes.allows('relay')).toBe(true)
+
+    preview.close()
+    await connectivity.close()
+    expect(evidence.filter((event) => event.stage === 'failed')).toHaveLength(1)
+  })
+
+  it('terminalizes a pending attempt exactly once when the runtime stops', async () => {
+    vi.useFakeTimers()
+    const evidence: BrowserAttemptEvidence[] = []
+    const { connectivity } = fixture(new PendingOffers(), undefined, {
+      connectivityObserver: (event) => evidence.push(parseAttemptEvidence(event) as BrowserAttemptEvidence),
+    })
+    connectivity.begin('preview')
+    await turn()
+
+    await connectivity.close()
+
+    expect(evidence.map((event) => event.stage)).toEqual(['started', 'failed'])
+    expect(evidence.at(-1)).toMatchObject({
+      failedAtStage: 'offer-created',
+      typedErrorCode: 'runtime-stopped',
+    })
+  })
+})
+
+describe('v2 receiver fallback and lane policy', () => {
   it('records preview timing at begin and admits relay at exactly eight seconds', async () => {
     vi.useFakeTimers()
     const offers = new PendingOffers()
@@ -250,8 +607,8 @@ describe('v2 receiver content activation policy', () => {
     await turn()
 
     expect(observations).toEqual([
-      { laneId: 1, route: 'relay' },
-      { laneId: 2, route: 'peer' },
+      { laneId: 1, laneEpoch: 0, route: 'relay' },
+      { laneId: 2, laneEpoch: 1, route: 'peer' },
     ])
     expect(visibleLaneIds).toEqual([[1], [1, 2]])
     expect(observations.every(Object.isFrozen)).toBe(true)
@@ -358,13 +715,26 @@ describe('v2 receiver content activation policy', () => {
   it('hot-switches to relay and starts a replacement peer when a peer lane detaches', async () => {
     vi.useFakeTimers()
     const offers = new SuccessfulOffers()
-    const { connectivity, lanes, session } = fixture(offers)
+    const detached: V2ContentLaneDetachmentObservation[] = []
+    const visibleLaneIds: number[][] = []
+    const owner: { lanes?: V2LaneSet } = {}
+    const result = fixture(offers, undefined, {
+      onContentLaneDetached: (observation) => {
+        detached.push(observation)
+        visibleLaneIds.push([...(owner.lanes?.laneIds() ?? [])])
+        throw new Error('synthetic detach observer failure')
+      },
+    })
+    const { connectivity, lanes, session } = result
+    owner.lanes = lanes
     const preview = connectivity.begin('preview')
     await turn()
     expect(lanes.laneIds()).toEqual([2])
 
     session.detach(2)
     await turn()
+    expect(detached).toEqual([{ laneId: 2, laneEpoch: 1, route: 'peer' }])
+    expect(visibleLaneIds).toEqual([[]])
     expect(lanes.laneIds()).toEqual([1, 3])
     expect(preview.routes.allows('relay')).toBe(true)
     expect(offers.calls).toBe(2)
