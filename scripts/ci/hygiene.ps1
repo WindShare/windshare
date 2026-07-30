@@ -9,24 +9,31 @@
 #  - checkout contract: every Makefile gate has clone-visible platform scripts,
 #    workflows use an explicit shell instead of depending on executable bits,
 #    and static shell assertions cannot retain paths removed by a refactor.
+#  - Windows native argument batching, which keeps repository-wide tools below
+#    the CreateProcess command-line ceiling without losing file coverage.
 #  - source-only Go/Web v1 forbidden-reference scans (the Web gate also checks
 #    the built bundle).
 #  - short PowerShell contracts for R8 benchmark parsing, command transcripts,
 #    source checkpoints, schema validation, and atomic evidence publication.
-#  - gopls check -severity=hint over tracked Go files (the AGENTS.md
-#    GOPLS_CHECK command; CI pins gopls@v0.22.0, locally PATH's gopls is used).
+#  - gopls check -severity=hint over tracked Go files, using the same version as
+#    CI so analyzer drift cannot make the local verdict disagree with GitHub.
 [CmdletBinding()]
 param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'hygiene/native-argument-batches.psm1') -Force
 
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $repositoryRoot
+$goplsVersion = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'gopls.version') -Raw).Trim()
+if ($goplsVersion -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+    throw "gopls.version is not a canonical release version: $goplsVersion"
+}
+$goplsModule = "golang.org/x/tools/gopls@$goplsVersion"
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 Write-Output '== hygiene =='
 
-Write-Output '-- gofmt (tracked + untracked Go files)'
 $gofmtFiles = @(
     git -c core.quotepath=false ls-files --cached --others --exclude-standard -- '*.go' |
         Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
@@ -34,12 +41,27 @@ $gofmtFiles = @(
 if ($LASTEXITCODE -ne 0) {
     throw "git ls-files exited with code $LASTEXITCODE"
 }
-# gofmt with an empty argument list would block reading stdin.
-$unformatted = @()
-if ($gofmtFiles.Count -gt 0) {
-    $unformatted = @(& gofmt -l @gofmtFiles)
+# gofmt with an empty argument list would block reading stdin. Batching also
+# mirrors xargs on Linux while staying below the Windows command-line ceiling.
+$gofmtBatches = @(Split-WindowsNativeArguments -Arguments $gofmtFiles)
+Write-Output (
+    '-- gofmt (tracked + untracked Go files; files={0}; batches={1})' -f
+        $gofmtFiles.Count, $gofmtBatches.Count
+)
+$unformatted = [Collections.Generic.List[string]]::new()
+$gofmtBatchIndex = 0
+foreach ($batch in $gofmtBatches) {
+    $gofmtBatchIndex++
+    $batchArguments = @($batch.Arguments)
+    $batchOutput = @(& gofmt -l @batchArguments)
     if ($LASTEXITCODE -ne 0) {
-        throw "gofmt exited with code $LASTEXITCODE"
+        throw (
+            'gofmt exited with code {0} (batch={1}/{2}; files={3})' -f
+                $LASTEXITCODE, $gofmtBatchIndex, $gofmtBatches.Count, $batchArguments.Count
+        )
+    }
+    foreach ($path in $batchOutput) {
+        $unformatted.Add([string]$path)
     }
 }
 if ($unformatted.Count -gt 0) {
@@ -69,6 +91,12 @@ if ($LASTEXITCODE -ne 0) {
     throw 'CI checkout contract failed'
 }
 
+Write-Output '-- Windows native argument batching contract'
+& pwsh -NoProfile -File scripts/ci/hygiene/native-argument-batches.tests.ps1
+if ($LASTEXITCODE -ne 0) {
+    throw 'Windows native argument batching contract failed'
+}
+
 Write-Output '-- Web v1 forbidden references (source-only)'
 node scripts/ci/web-forbidden.mjs --source-only
 if ($LASTEXITCODE -ne 0) {
@@ -96,7 +124,6 @@ foreach ($suite in $r8EvidenceSuites) {
     }
 }
 
-Write-Output '-- gopls check (severity=hint, tracked Go files)'
 $trackedGoFiles = @(
     git -c core.quotepath=false ls-files -- '*.go' |
         Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
@@ -104,11 +131,30 @@ $trackedGoFiles = @(
 if ($LASTEXITCODE -ne 0) {
     throw "git ls-files exited with code $LASTEXITCODE"
 }
-# CI fails on non-zero exit (pipefail) or any stdout diagnostic; mirror both.
-$diagnostics = @(& gopls check -severity=hint @trackedGoFiles)
-$goplsExitCode = $LASTEXITCODE
-$diagnostics | Write-Output
-if ($goplsExitCode -ne 0 -or $diagnostics.Count -gt 0) {
+# CI fails on non-zero exit (pipefail) or any stdout diagnostic; mirror both
+# across every Windows-safe argument batch.
+$goplsBatches = @(Split-WindowsNativeArguments -Arguments $trackedGoFiles)
+Write-Output (
+    '-- gopls check (version={0}; severity=hint; tracked-files={1}; batches={2})' -f
+        $goplsVersion, $trackedGoFiles.Count, $goplsBatches.Count
+)
+$goplsDiagnosticCount = 0
+$goplsBatchIndex = 0
+foreach ($batch in $goplsBatches) {
+    $goplsBatchIndex++
+    $batchArguments = @($batch.Arguments)
+    $batchDiagnostics = @(& go run $goplsModule check -severity=hint @batchArguments)
+    $goplsExitCode = $LASTEXITCODE
+    $batchDiagnostics | Write-Output
+    $goplsDiagnosticCount += $batchDiagnostics.Count
+    if ($goplsExitCode -ne 0) {
+        throw (
+            'gopls exited with code {0} (batch={1}/{2}; files={3})' -f
+                $goplsExitCode, $goplsBatchIndex, $goplsBatches.Count, $batchArguments.Count
+        )
+    }
+}
+if ($goplsDiagnosticCount -gt 0) {
     throw 'gopls reported diagnostics'
 }
 

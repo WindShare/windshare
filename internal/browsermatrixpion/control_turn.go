@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -159,10 +160,8 @@ func validControlTURNCredentialBytes(value []byte) bool {
 
 func containsAnyByte(value []byte, candidates ...byte) bool {
 	for _, current := range value {
-		for _, candidate := range candidates {
-			if current == candidate {
-				return true
-			}
+		if slices.Contains(candidates, current) {
+			return true
 		}
 	}
 	return false

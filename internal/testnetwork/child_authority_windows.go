@@ -290,10 +290,6 @@ func verifyChildExecutable(
 	return nil
 }
 
-func readPipeDocument(handle windows.Handle, destination any, maximumBytes uint32) error {
-	return readPipeDocumentWith(handle, destination, maximumBytes, readPipeExact)
-}
-
 func readPipeDocumentWith(
 	handle windows.Handle,
 	destination any,

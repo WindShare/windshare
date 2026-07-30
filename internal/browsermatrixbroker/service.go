@@ -383,9 +383,6 @@ func (handler *Handler) acquire(ctx context.Context, scope requestScope) ([]byte
 			errors.Join(errOperationConflict, acquireErr, registrationErr, validationErr),
 		)
 	}
-	ownedScope := scope
-	ownedScope.LeaseID = lease.LeaseID
-
 	if handler.turnProvider != nil {
 		bindRequest := TURNBindRequest{
 			ProviderLeaseID: reservation.ProviderLeaseID, RequestID: scope.RequestID,

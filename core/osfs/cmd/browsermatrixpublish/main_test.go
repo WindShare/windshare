@@ -103,7 +103,6 @@ func TestPublishRejectsNullExistingDirectoryArrays(t *testing.T) {
 		{name: "files", mutate: func(value *request) { value.Inventory.Files = nil }},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			request := existingDirectoryHelperRequest(t, "prepare-existing-directory", false)
@@ -143,7 +142,6 @@ func TestDecodeRequestRequiresOneCanonicalJSONValue(t *testing.T) {
 func TestRunPublishesEachOperationAndReturnsNativeRereadBytes(t *testing.T) {
 	t.Parallel()
 	for _, operation := range []string{"directory", "file"} {
-		operation := operation
 		t.Run(operation, func(t *testing.T) {
 			t.Parallel()
 			content := []byte("authenticated artifact\n")

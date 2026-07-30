@@ -87,7 +87,7 @@ func validCandidateLocalAddress(address *string) bool {
 	if len(*address) > 253 || !strings.HasSuffix(*address, ".local") {
 		return false
 	}
-	for _, label := range strings.Split(*address, ".") {
+	for label := range strings.SplitSeq(*address, ".") {
 		if len(label) < 1 || len(label) > 63 || !candidateMDNSLabelPattern.MatchString(label) {
 			return false
 		}

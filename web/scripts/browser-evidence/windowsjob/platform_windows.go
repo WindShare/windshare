@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -242,7 +243,7 @@ func runSupervisorPlatform(
 				return superviseLaunchedTree(job, request, statusPath, eventResult.event, deadline, replayedControl, launcher)
 			default:
 			}
-			return terminatePendingLaunch(job, request, statusPath, terminateReasonParentRequest, false, launcherEventChannel, launcher.wait)
+			return terminatePendingLaunch(job, request, statusPath, false, launcherEventChannel, launcher.wait)
 		case <-deadline.C:
 			select {
 			case eventResult := <-launcherEventChannel:
@@ -254,7 +255,7 @@ func runSupervisorPlatform(
 				return superviseLaunchedTree(job, request, statusPath, eventResult.event, immediateDeadline, controls, launcher)
 			default:
 			}
-			return terminatePendingLaunch(job, request, statusPath, terminationReasonDeadline, true, launcherEventChannel, launcher.wait)
+			return terminatePendingLaunch(job, request, statusPath, true, launcherEventChannel, launcher.wait)
 		}
 	}
 }
@@ -588,10 +589,7 @@ func (job managedJob) activeProcessIDs(maximumProcesses int) ([]uint32, error) {
 	if maximumProcesses <= 0 {
 		return nil, errors.New("Job process snapshot limit must be positive")
 	}
-	capacity := initialJobProcessIDCapacity
-	if capacity > maximumProcesses {
-		capacity = maximumProcesses
-	}
+	capacity := min(initialJobProcessIDCapacity, maximumProcesses)
 	headerWords := int((unsafe.Sizeof(jobObjectBasicProcessIDListHeader{}) + unsafe.Sizeof(uintptr(0)) - 1) / unsafe.Sizeof(uintptr(0)))
 	for {
 		buffer := make([]uintptr, headerWords+capacity)
@@ -654,7 +652,7 @@ func (job managedJob) captureTerminationSnapshot(
 	if err != nil {
 		return targetMemberSnapshot{}, err
 	}
-	for attempt := 0; attempt < terminationSnapshotExitChurnAttempts; attempt++ {
+	for range terminationSnapshotExitChurnAttempts {
 		snapshot, retry, err := job.captureTerminationSnapshotAttempt(
 			root,
 			maximumProcesses,
@@ -1181,7 +1179,6 @@ func mergeControlAuthorities(
 	stop := make(chan struct{})
 	var stopOnce sync.Once
 	for _, source := range sources {
-		source := source
 		go func() {
 			select {
 			case result := <-source:
@@ -1456,13 +1453,7 @@ func waitForProcessMembershipRelease(
 		if err != nil {
 			return err
 		}
-		found := false
-		for _, activeProcessID := range processIDs {
-			if activeProcessID == processID {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(processIDs, processID)
 		if !found {
 			return nil
 		}
@@ -1749,7 +1740,7 @@ func superviseSpawnFailure(
 func terminatePendingLaunch(
 	job managedJob,
 	request startRequest,
-	statusPath, reason string,
+	statusPath string,
 	timedOut bool,
 	events <-chan launcherEventResult,
 	launcherWait <-chan error,

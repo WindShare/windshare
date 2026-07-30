@@ -616,7 +616,7 @@ func validICEHost(value string) bool {
 	if len(value) > 253 || !strings.Contains(value, ".") {
 		return false
 	}
-	for _, label := range strings.Split(value, ".") {
+	for label := range strings.SplitSeq(value, ".") {
 		if len(label) < 1 || len(label) > 63 || !canonicalDNSLabelPattern.MatchString(label) {
 			return false
 		}

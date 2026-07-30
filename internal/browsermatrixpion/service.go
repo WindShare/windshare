@@ -597,9 +597,10 @@ func (service *Service) handleAuthorityProbe(
 	)
 	if status != 0 {
 		outcome := "credential-claim-rejected"
-		if status == http.StatusTooManyRequests {
+		switch status {
+		case http.StatusTooManyRequests:
 			outcome = "lease-capacity-rejected"
-		} else if status == http.StatusServiceUnavailable {
+		case http.StatusServiceUnavailable:
 			outcome = "issuance-unavailable"
 		}
 		emitTrace(service.trace, TraceEvent{

@@ -328,8 +328,7 @@ func (writer *canonicalJSONWriter) string(value string) {
 			writer.WriteString(`\t`)
 		default:
 			if r < 0x20 {
-				writer.WriteString(`\u`)
-				writer.WriteString(fmt.Sprintf("%04x", r))
+				fmt.Fprintf(writer, `\u%04x`, r)
 			} else {
 				writer.WriteRune(r)
 			}

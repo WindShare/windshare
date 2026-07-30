@@ -3,8 +3,9 @@
 # (sloc-guard lives in the standalone `sloc` gate since 2026-07-14): gofmt
 # over tracked Go files, `git diff --check` against the empty tree, clone-visible
 # Makefile gate scripts, explicit workflow shell invocation, live targets for
-# static shell content assertions, source-only Go/Web v1 forbidden scans, short
-# R8 evidence contracts, and gopls check -severity=hint.
+# static shell content assertions, Windows native argument batching, source-only
+# Go/Web v1 forbidden scans, short R8 evidence contracts, and gopls check
+# -severity=hint.
 # Deviation from CI: gopls diagnostics are captured in a mktemp file instead
 # of ./gopls-diagnostics.txt so the gate never dirties the worktree.
 set -euo pipefail
@@ -38,6 +39,9 @@ echo "-- CI checkout contract"
 node scripts/ci/contract.tests.mjs
 node scripts/ci/contract.mjs
 
+echo "-- Windows native argument batching contract"
+pwsh -NoProfile -File scripts/ci/hygiene/native-argument-batches.tests.ps1
+
 echo "-- Web v1 forbidden references (source-only)"
 node scripts/ci/web-forbidden.mjs --source-only
 
@@ -54,7 +58,12 @@ for suite in \
 done
 
 echo "-- gopls check (severity=hint, tracked Go files)"
-go install golang.org/x/tools/gopls@v0.22.0
+gopls_version="$(tr -d '\r\n' < scripts/ci/gopls.version)"
+if [[ ! "$gopls_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "gopls.version is not a canonical release version: $gopls_version" >&2
+  exit 1
+fi
+go install "golang.org/x/tools/gopls@$gopls_version"
 gopls_bin="$(go env GOPATH)/bin/gopls"
 diagnostics_file="$(mktemp)"
 trap 'rm -f "$diagnostics_file"' EXIT

@@ -277,7 +277,6 @@ func TestExistingDirectoryPublicationRequiresPreparedPersistentReceipt(t *testin
 			"empty": {},
 			"wrong": NewExistingDirectoryStagingReceipt([]byte("not-the-prepared-directory")),
 		} {
-			name, receipt := name, receipt
 			t.Run(name, func(t *testing.T) {
 				fixture := prepareExistingDirectoryFixture(t)
 				request := fixture.publishRequest()
