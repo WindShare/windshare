@@ -1,5 +1,44 @@
 import { createHash } from "node:crypto";
-//#region scripts/browser-evidence/contract/json.ts
+var PLAYWRIGHT_OUTCOMES = Object.freeze([
+	"not-started",
+	"passed",
+	"failed"
+]);
+var PION_APPLICABILITY = Object.freeze([
+	"unknown",
+	"applicable",
+	"not-applicable"
+]);
+var NATIVE_INTEROP_OUTCOMES = Object.freeze([
+	"not-started",
+	"succeeded",
+	"failed"
+]);
+var NATIVE_INTEROP_FAILURE_CODES = Object.freeze([
+	"peer-construction",
+	"negotiation",
+	"datachannel",
+	"interop-deadline",
+	"selected-pair",
+	"protocol",
+	"unexpected"
+]);
+var DELIVERY_TERMINALS = Object.freeze(["succeeded", "failed"]);
+var MAIN_TRANSFER_BYTES = 16777216;
+var MAIN_TRANSFER_SHA256 = "25e349f1212bb99491944eb8e885665bb71edc5d5db49d1cd2ef1ffafac1dd5d";
+var ARTIFACT_KINDS = Object.freeze([
+	"trace",
+	"video",
+	"screenshot",
+	"error-context",
+	"console-log",
+	"runner-stdout",
+	"runner-stderr",
+	"process-log",
+	"attempt-evidence",
+	"native-interop-evidence",
+	"result-diagnostic"
+]);
 var TEXT_ENCODER = new TextEncoder();
 var BrowserEvidenceContractError = class extends Error {
 	constructor(message, options) {
@@ -84,842 +123,6 @@ function freezeRecord(value) {
 	for (const item of Object.values(value)) if (typeof item === "object" && item !== null && !Object.isFrozen(item)) Object.freeze(item);
 	return Object.freeze(value);
 }
-var BROWSER_ENGINES = Object.freeze([
-	"chromium",
-	"firefox",
-	"webkit"
-]);
-var BROWSER_SUITES = Object.freeze(["main", "pion"]);
-var RESULT_STATUSES = Object.freeze([
-	"provisional",
-	"final-valid",
-	"final-invalid"
-]);
-var RTC_CAPABILITIES = Object.freeze([
-	"unknown",
-	"unavailable",
-	"unusable",
-	"available"
-]);
-var PEER_ATTEMPT_OUTCOMES = Object.freeze([
-	"not-started",
-	"admitted",
-	"failed"
-]);
-var DELIVERY_OUTCOMES = Object.freeze([
-	"not-started",
-	"succeeded",
-	"failed"
-]);
-var EXECUTION_OUTCOMES = Object.freeze([
-	"healthy",
-	"crashed",
-	"infrastructure-failed",
-	"unknown"
-]);
-var ATTEMPT_SIDES = Object.freeze(["browser", "sender"]);
-var BROWSER_ATTEMPT_STAGES = Object.freeze([
-	"started",
-	"offer-created",
-	"offer-sent",
-	"answer-received",
-	"datachannel-open",
-	"lane-granted",
-	"lane-attached",
-	"admitted",
-	"failed"
-]);
-var SENDER_ATTEMPT_STAGES = Object.freeze([
-	"started",
-	"offer-received",
-	"answer-created",
-	"answer-sent",
-	"datachannel-open",
-	"lane-admission-started",
-	"admitted",
-	"failed"
-]);
-var ATTEMPT_TERMINAL_STAGES = Object.freeze(["admitted", "failed"]);
-var ATTEMPT_FAILURE_SCOPES = Object.freeze(["attempt", "session"]);
-var TYPED_PEER_ERROR_CODES = Object.freeze([
-	"peer-negotiation",
-	"peer-timeout",
-	"peer-candidates",
-	"peer-admission",
-	"signaling-contract",
-	"attempt-cancelled",
-	"runtime-stopped",
-	"unexpected"
-]);
-var PEER_OPERATION_CODES = Object.freeze({
-	negotiation: 20481,
-	timeout: 20482,
-	candidates: 20483,
-	admission: 20484
-});
-var PEER_OPERATION_TYPED_ERRORS = Object.freeze({
-	[PEER_OPERATION_CODES.negotiation]: "peer-negotiation",
-	[PEER_OPERATION_CODES.timeout]: "peer-timeout",
-	[PEER_OPERATION_CODES.candidates]: "peer-candidates",
-	[PEER_OPERATION_CODES.admission]: "peer-admission"
-});
-var PEER_OPERATION_ERROR_REGISTRY = Object.freeze([
-	Object.freeze({
-		code: PEER_OPERATION_CODES.negotiation,
-		typedErrorCode: "peer-negotiation"
-	}),
-	Object.freeze({
-		code: PEER_OPERATION_CODES.timeout,
-		typedErrorCode: "peer-timeout"
-	}),
-	Object.freeze({
-		code: PEER_OPERATION_CODES.candidates,
-		typedErrorCode: "peer-candidates"
-	}),
-	Object.freeze({
-		code: PEER_OPERATION_CODES.admission,
-		typedErrorCode: "peer-admission"
-	})
-]);
-var ICE_CANDIDATE_TYPES = Object.freeze([
-	"host",
-	"prflx",
-	"srflx",
-	"relay"
-]);
-var ICE_PROTOCOLS = Object.freeze(["udp", "tcp"]);
-var IP_ADDRESS_FAMILIES = Object.freeze(["ipv4", "ipv6"]);
-Object.freeze({
-	schemaVersion: 1,
-	browserEngines: BROWSER_ENGINES,
-	suites: BROWSER_SUITES,
-	resultStatuses: RESULT_STATUSES,
-	rtcCapabilities: RTC_CAPABILITIES,
-	peerAttemptOutcomes: PEER_ATTEMPT_OUTCOMES,
-	deliveryOutcomes: DELIVERY_OUTCOMES,
-	executionOutcomes: EXECUTION_OUTCOMES,
-	attemptSides: ATTEMPT_SIDES,
-	browserStages: BROWSER_ATTEMPT_STAGES,
-	senderStages: SENDER_ATTEMPT_STAGES,
-	terminalStages: ATTEMPT_TERMINAL_STAGES,
-	failureScopes: ATTEMPT_FAILURE_SCOPES,
-	typedPeerErrorCodes: TYPED_PEER_ERROR_CODES,
-	peerOperationCodeMapping: PEER_OPERATION_ERROR_REGISTRY,
-	iceCandidateTypes: ICE_CANDIDATE_TYPES,
-	iceProtocols: ICE_PROTOCOLS,
-	ipAddressFamilies: IP_ADDRESS_FAMILIES
-});
-function typedErrorForPeerOperationCode(code) {
-	if (!Object.hasOwn(PEER_OPERATION_TYPED_ERRORS, code)) return void 0;
-	return PEER_OPERATION_TYPED_ERRORS[code];
-}
-//#endregion
-//#region scripts/browser-evidence/attempt-evidence.ts
-var COMMON_FIELDS = Object.freeze([
-	"schemaVersion",
-	"sessionId",
-	"peerPathId",
-	"attemptId",
-	"side",
-	"sideSequence",
-	"attemptElapsedMs",
-	"stage"
-]);
-var MAXIMUM_COUNTER = 4294967295;
-var MAXIMUM_DIAGNOSTIC_TEXT_BYTES = 512;
-function parseAttemptEvidence(value) {
-	const record = requireRecord(value, "attempt evidence");
-	const side = requireEnum(record.side, ATTEMPT_SIDES, "attempt side");
-	const stage = parseStage(record.stage, side);
-	requireAttemptKeys(record, side, stage);
-	const envelope = {
-		schemaVersion: requireLiteral(record.schemaVersion, 1, "attempt evidence schema version"),
-		sessionId: requireCanonicalIdentity(record.sessionId, "protocol session ID"),
-		peerPathId: requireCanonicalIdentity(record.peerPathId, "peer path ID"),
-		attemptId: requireCanonicalIdentity(record.attemptId, "peer attempt ID"),
-		side,
-		sideSequence: requireSafeInteger(record.sideSequence, 1, Number.MAX_SAFE_INTEGER, "attempt side sequence"),
-		attemptElapsedMs: requireSafeInteger(record.attemptElapsedMs, 0, Number.MAX_SAFE_INTEGER, "attempt elapsed milliseconds"),
-		stage,
-		...side === "sender" && optionalField(record, "localGeneration") !== void 0 ? { localGeneration: requireDecimalUint64(record.localGeneration, "sender local generation") } : {}
-	};
-	const payload = parseStagePayload(record, side, stage);
-	return freezeRecord({
-		...envelope,
-		...payload
-	});
-}
-function parseBrowserSelectedPair(value) {
-	const pair = requireRecord(value, "browser selected pair");
-	requireExactKeys(pair, [
-		"candidatePairId",
-		"local",
-		"remote"
-	], [], "browser selected pair");
-	return freezeRecord({
-		candidatePairId: requireString(pair.candidatePairId, "browser candidate pair ID", 256),
-		local: parseBrowserCandidate(pair.local, "browser local selected candidate"),
-		remote: parseBrowserCandidate(pair.remote, "browser remote selected candidate")
-	});
-}
-function parsePionSelectedPair(value) {
-	const pair = requireRecord(value, "Pion selected pair");
-	requireExactKeys(pair, ["local", "remote"], ["candidatePairId"], "Pion selected pair");
-	const pairId = optionalField(pair, "candidatePairId");
-	const local = parsePionCandidate(pair.local, "Pion local selected candidate");
-	const remote = parsePionCandidate(pair.remote, "Pion remote selected candidate");
-	if (local.addressFamily === remote.addressFamily && local.address === remote.address && local.port === remote.port && local.protocol === remote.protocol) contractError("Pion selected pair must identify distinct local and remote transport endpoints");
-	return freezeRecord({
-		...pairId === void 0 ? {} : { candidatePairId: requireString(pairId, "Pion candidate pair ID", 256) },
-		local,
-		remote
-	});
-}
-function parseStage(value, side) {
-	return side === "browser" ? requireEnum(value, BROWSER_ATTEMPT_STAGES, "browser attempt stage") : requireEnum(value, SENDER_ATTEMPT_STAGES, "sender attempt stage");
-}
-function requireAttemptKeys(record, side, stage) {
-	const required = [...COMMON_FIELDS];
-	const optional = side === "sender" ? ["localGeneration"] : [];
-	if (stage === "failed") {
-		required.push("failedAtStage", "failureScope", "typedErrorCode", "failureMessage");
-		optional.push("candidateCounts", "lane", "selectedPair", "authenticatedSenderOperationFailure");
-	} else if (stage === "admitted") required.push("candidateCounts", "lane", "selectedPair");
-	else if (candidateCountsRequired(side, stage)) {
-		required.push("candidateCounts");
-		if (laneRequired(side, stage)) required.push("lane");
-	}
-	requireExactKeys(record, required, optional, `${side} ${stage} attempt evidence`);
-}
-function candidateCountsRequired(side, stage) {
-	if (side === "browser") return stage !== "started";
-	return stage !== "started" && stage !== "offer-received";
-}
-function laneRequired(side, stage) {
-	return side === "browser" ? stage === "lane-granted" || stage === "lane-attached" : stage === "lane-admission-started";
-}
-function parseStagePayload(record, side, stage) {
-	if (stage === "started" || side === "sender" && stage === "offer-received") return {};
-	if (stage === "failed") return parseFailurePayload(record, side);
-	const candidateCounts = parseCandidateCounts(record.candidateCounts);
-	if (stage === "admitted") return {
-		candidateCounts,
-		lane: parseLaneIdentity(record.lane),
-		selectedPair: parseNullableSelectedPair(record.selectedPair, side)
-	};
-	if (laneRequired(side, stage)) return {
-		candidateCounts,
-		lane: parseLaneIdentity(record.lane)
-	};
-	return { candidateCounts };
-}
-function parseFailurePayload(record, side) {
-	const failedAtStage = parseFailureStage(record.failedAtStage, side);
-	const typedErrorCode = requireEnum(record.typedErrorCode, TYPED_PEER_ERROR_CODES, "typed peer error code");
-	const candidateCountsValue = optionalField(record, "candidateCounts");
-	const laneValue = optionalField(record, "lane");
-	const selectedPairValue = optionalField(record, "selectedPair");
-	const authenticatedOperationValue = optionalField(record, "authenticatedSenderOperationFailure");
-	const authenticatedSenderOperationFailure = authenticatedOperationValue === void 0 ? void 0 : parseAuthenticatedSenderOperationFailure(authenticatedOperationValue, typedErrorCode);
-	const failureScope = requireEnum(record.failureScope, ATTEMPT_FAILURE_SCOPES, "attempt failure scope");
-	const failureMessage = requireString(record.failureMessage, "attempt failure message", MAXIMUM_DIAGNOSTIC_TEXT_BYTES);
-	validateFailureFieldCausality({
-		side,
-		failedAtStage,
-		failureScope,
-		typedErrorCode,
-		failureMessage,
-		candidateCountsValue,
-		laneValue,
-		selectedPairValue,
-		authenticatedSenderOperationFailure
-	});
-	return buildFailurePayload({
-		side,
-		failedAtStage,
-		failureScope,
-		typedErrorCode,
-		failureMessage,
-		candidateCountsValue,
-		laneValue,
-		selectedPairValue,
-		authenticatedSenderOperationFailure
-	});
-}
-function validateFailureFieldCausality(parts) {
-	const { side, failedAtStage, failureScope, failureMessage, candidateCountsValue, laneValue, selectedPairValue, authenticatedSenderOperationFailure } = parts;
-	if (candidateCountsValue !== void 0 && !failureCanCarryCandidateCounts(side, failedAtStage)) contractError(`${side} failure cannot carry candidate counts before their first completed milestone`);
-	if (laneValue !== void 0 && !failureCanCarryKnownLane(side, failedAtStage)) contractError(`${side} failure cannot carry a lane before the lane milestone is known`);
-	if (selectedPairValue !== void 0 && failedAtStage !== "admitted") contractError(`${side} failure can carry selected-pair evidence only while admission fails`);
-	if (authenticatedSenderOperationFailure !== void 0) {
-		if (side !== "browser" || failedAtStage === "offer-created" || failedAtStage === "offer-sent") contractError("authenticated sender operation failure requires a browser stream after offer dispatch");
-		if (failureScope !== "attempt") contractError("authenticated sender peer operation failure must remain attempt-scoped");
-		if (failureMessage !== authenticatedSenderOperationFailure.message) contractError("authenticated sender operation message must be preserved losslessly");
-	}
-}
-function buildFailurePayload(parts) {
-	const result = {
-		failedAtStage: parts.failedAtStage,
-		failureScope: parts.failureScope,
-		typedErrorCode: parts.typedErrorCode,
-		failureMessage: parts.failureMessage
-	};
-	if (parts.candidateCountsValue !== void 0) result.candidateCounts = parseCandidateCounts(parts.candidateCountsValue);
-	if (parts.laneValue !== void 0) result.lane = parseLaneIdentity(parts.laneValue);
-	if (parts.selectedPairValue !== void 0) result.selectedPair = parseNullableSelectedPair(parts.selectedPairValue, parts.side);
-	if (parts.authenticatedSenderOperationFailure !== void 0) result.authenticatedSenderOperationFailure = parts.authenticatedSenderOperationFailure;
-	return result;
-}
-function parseFailureStage(value, side) {
-	const stage = requireEnum(value, side === "browser" ? BROWSER_ATTEMPT_STAGES : SENDER_ATTEMPT_STAGES, `${side} failed-at stage`);
-	if (stage === "started" || stage === "failed") contractError(`${side} failed-at stage must name the milestone that could not complete`);
-	return stage;
-}
-function parseCandidateCounts(value) {
-	const counts = requireRecord(value, "candidate counts");
-	requireExactKeys(counts, ["localEmitted", "remoteAccepted"], [], "candidate counts");
-	return freezeRecord({
-		localEmitted: requireSafeInteger(counts.localEmitted, 0, MAXIMUM_COUNTER, "local emitted candidate count"),
-		remoteAccepted: requireSafeInteger(counts.remoteAccepted, 0, MAXIMUM_COUNTER, "remote accepted candidate count")
-	});
-}
-function parseLaneIdentity(value) {
-	const lane = requireRecord(value, "lane identity");
-	requireExactKeys(lane, ["laneId", "laneEpoch"], [], "lane identity");
-	return freezeRecord({
-		laneId: requireSafeInteger(lane.laneId, 1, MAXIMUM_COUNTER, "lane ID"),
-		laneEpoch: requireSafeInteger(lane.laneEpoch, 1, MAXIMUM_COUNTER, "lane epoch")
-	});
-}
-function parseNullableSelectedPair(value, side) {
-	if (value === null) return null;
-	return side === "browser" ? parseBrowserSelectedPair(value) : parsePionSelectedPair(value);
-}
-function parseBrowserCandidate(value, label) {
-	const candidate = requireRecord(value, label);
-	requireExactKeys(candidate, [
-		"candidateId",
-		"candidateType",
-		"protocol"
-	], ["address", "port"], label);
-	const address = optionalField(candidate, "address");
-	const port = optionalField(candidate, "port");
-	return freezeRecord({
-		candidateId: requireString(candidate.candidateId, `${label} ID`, 256),
-		candidateType: requireEnum(candidate.candidateType, ICE_CANDIDATE_TYPES, `${label} type`),
-		protocol: requireEnum(candidate.protocol, ICE_PROTOCOLS, `${label} protocol`),
-		...address === void 0 ? {} : { address: requireString(address, `${label} address`, 255) },
-		...port === void 0 ? {} : { port: requireSafeInteger(port, 1, 65535, `${label} port`) }
-	});
-}
-function parsePionCandidate(value, label) {
-	const candidate = requireRecord(value, label);
-	requireExactKeys(candidate, [
-		"candidateType",
-		"protocol",
-		"address",
-		"port",
-		"addressFamily"
-	], ["candidateId"], label);
-	const addressFamily = requireEnum(candidate.addressFamily, IP_ADDRESS_FAMILIES, `${label} address family`);
-	const address = requireString(candidate.address, `${label} address`, 255);
-	if (!isOperationalUnicastAddress(address, addressFamily)) contractError(`${label} address must be operational non-loopback ${addressFamily} unicast`);
-	const candidateId = optionalField(candidate, "candidateId");
-	return freezeRecord({
-		...candidateId === void 0 ? {} : { candidateId: requireString(candidateId, `${label} ID`, 256) },
-		candidateType: requireEnum(candidate.candidateType, ICE_CANDIDATE_TYPES, `${label} type`),
-		protocol: requireEnum(candidate.protocol, ICE_PROTOCOLS, `${label} protocol`),
-		address,
-		port: requireSafeInteger(candidate.port, 1, 65535, `${label} port`),
-		addressFamily
-	});
-}
-function parseAuthenticatedSenderOperationFailure(value, typedErrorCode) {
-	const failure = requireRecord(value, "authenticated sender operation failure");
-	requireExactKeys(failure, [
-		"scope",
-		"code",
-		"message"
-	], [], "authenticated sender operation failure");
-	const code = requireSafeInteger(failure.code, 0, 65535, "authenticated peer operation code");
-	const mapped = typedErrorForPeerOperationCode(code);
-	if (mapped === void 0 || mapped !== typedErrorCode) contractError("authenticated peer operation code does not match the typed peer error code");
-	return freezeRecord({
-		scope: requireLiteral(failure.scope, "peer", "authenticated operation scope"),
-		code,
-		message: requireString(failure.message, "authenticated peer operation message", MAXIMUM_DIAGNOSTIC_TEXT_BYTES)
-	});
-}
-function failureCanCarryCandidateCounts(side, failedAtStage) {
-	if (side === "browser") return failedAtStage !== "offer-created";
-	return failedAtStage !== "offer-received" && failedAtStage !== "answer-created";
-}
-function failureCanCarryKnownLane(side, failedAtStage) {
-	return side === "browser" ? failedAtStage === "lane-attached" || failedAtStage === "admitted" : failedAtStage === "admitted";
-}
-function isOperationalUnicastAddress(address, family) {
-	if (family === "ipv4") {
-		const parts = address.split(".");
-		if (parts.length !== 4 || !parts.every((part) => {
-			if (!/^(0|[1-9]\d{0,2})$/u.test(part)) return false;
-			return Number(part) <= 255;
-		})) return false;
-		const octets = parts.map(Number);
-		const first = octets[0];
-		const second = octets[1];
-		return first !== void 0 && second !== void 0 && first !== 0 && first !== 127 && first < 224 && !(first === 169 && second === 254);
-	}
-	if (!address.includes(":") || !/^[0-9a-fA-F:.]+$/u.test(address)) return false;
-	const normalized = address.toLowerCase();
-	const firstGroup = normalized.split(":")[0];
-	if (normalized === "::" || normalized === "::1" || normalized.startsWith("ff") || firstGroup !== void 0 && /^fe[89ab]/u.test(firstGroup)) return false;
-	try {
-		return new URL(`http://[${address}]/`).hostname.length > 2;
-	} catch {
-		return false;
-	}
-}
-//#endregion
-//#region scripts/browser-evidence/attempt-collector.ts
-var BROWSER_SUCCESS_CHAIN = BROWSER_ATTEMPT_STAGES.filter((stage) => stage !== "failed");
-var SENDER_SUCCESS_CHAIN = SENDER_ATTEMPT_STAGES.filter((stage) => stage !== "failed");
-/**
-* Validation deliberately happens before reduction. A missing terminal is lost
-* evidence, not a peer failure, and coercing it into a fixed outcome would make
-* the browser gate claim a runtime fact it never observed.
-*/
-var AttemptCollector = class {
-	#attempts = /* @__PURE__ */ new Map();
-	#laneAuthorityBySession = /* @__PURE__ */ new Map();
-	#receiveSequence = 0;
-	#finalized = false;
-	#rejectedEvidence = false;
-	ingest(value) {
-		if (this.#finalized) contractError("attempt collector is already finalized");
-		if (this.#rejectedEvidence) contractError("attempt collector previously rejected evidence");
-		try {
-			const evidence = parseAttemptEvidence(value);
-			const key = attemptKey(evidence);
-			const attempt = cloneAttemptState(this.#attempts.get(key), evidence);
-			const laneAuthority = cloneSessionLaneAuthority(this.#laneAuthorityBySession.get(evidence.sessionId));
-			validateStreamEvent(ensureSideStream(attempt, evidence.side), attempt, evidence);
-			reserveObservedLane(laneAuthority, attempt);
-			const receiveSequence = this.#receiveSequence + 1;
-			const received = freezeRecord({
-				receiveSequence,
-				evidence
-			});
-			attempt.events.push(received);
-			this.#attempts.set(key, attempt);
-			this.#laneAuthorityBySession.set(evidence.sessionId, laneAuthority);
-			this.#receiveSequence = receiveSequence;
-			return received;
-		} catch (cause) {
-			this.#rejectedEvidence = true;
-			throw cause;
-		}
-	}
-	finalize() {
-		if (this.#finalized) contractError("attempt collector can only be finalized once");
-		this.#finalized = true;
-		if (this.#rejectedEvidence) contractError("attempt collector cannot finalize after rejected evidence");
-		const attempts = [...this.#attempts.values()].sort((left, right) => compareAttemptKeys(attemptKey(left), attemptKey(right))).map((attempt) => finalizeAttempt(attempt));
-		return Object.freeze(attempts);
-	}
-	finalizePreservingCompleted() {
-		if (this.#finalized) contractError("attempt collector can only be finalized once");
-		this.#finalized = true;
-		const attempts = [];
-		const violations = [];
-		for (const attempt of [...this.#attempts.values()].sort((left, right) => compareAttemptKeys(attemptKey(left), attemptKey(right)))) try {
-			attempts.push(finalizeAttempt(attempt));
-		} catch (cause) {
-			violations.push(errorMessage(cause));
-		}
-		if (this.#rejectedEvidence && violations.length === 0) violations.push("attempt collector rejected evidence after its last valid state");
-		return freezeRecord({
-			attempts: Object.freeze(attempts),
-			integrityViolations: Object.freeze([...new Set(violations)].sort(compareAttemptKeys))
-		});
-	}
-};
-function cloneAttemptState(current, evidence) {
-	if (current === void 0) return {
-		sessionId: evidence.sessionId,
-		peerPathId: evidence.peerPathId,
-		attemptId: evidence.attemptId,
-		streams: /* @__PURE__ */ new Map(),
-		events: [],
-		lane: void 0
-	};
-	return {
-		sessionId: current.sessionId,
-		peerPathId: current.peerPathId,
-		attemptId: current.attemptId,
-		streams: new Map([...current.streams].map(([side, stream]) => [side, { ...stream }])),
-		events: [...current.events],
-		lane: current.lane
-	};
-}
-function cloneSessionLaneAuthority(current) {
-	return {
-		laneIdOwners: new Map(current?.laneIdOwners),
-		laneEpochOwners: new Map(current?.laneEpochOwners)
-	};
-}
-function reserveObservedLane(authority, attempt) {
-	const lane = attempt.lane;
-	if (lane === void 0) return;
-	const owner = attemptKey(attempt);
-	const laneIdOwner = authority.laneIdOwners.get(lane.laneId);
-	const laneEpochOwner = authority.laneEpochOwners.get(lane.laneEpoch);
-	if (laneIdOwner !== void 0 && laneIdOwner !== owner) contractError(`lane ID ${lane.laneId} is reused within ProtocolSession ${attempt.sessionId}`);
-	if (laneEpochOwner !== void 0 && laneEpochOwner !== owner) contractError(`lane epoch ${lane.laneEpoch} is reused within ProtocolSession ${attempt.sessionId}`);
-	authority.laneIdOwners.set(lane.laneId, owner);
-	authority.laneEpochOwners.set(lane.laneEpoch, owner);
-}
-function ensureSideStream(attempt, side) {
-	let stream = attempt.streams.get(side);
-	if (stream === void 0) {
-		stream = {
-			side,
-			nextSuccessIndex: 0,
-			lastSequence: 0,
-			lastElapsedMs: 0,
-			terminal: void 0,
-			candidateCounts: void 0,
-			lane: void 0,
-			localGeneration: void 0
-		};
-		attempt.streams.set(side, stream);
-	}
-	return stream;
-}
-function reducePeerAttemptOutcome(attempts) {
-	if (attempts.length === 0) return "not-started";
-	const identities = /* @__PURE__ */ new Set();
-	let admitted = false;
-	let failed = false;
-	for (const attempt of attempts) {
-		const key = attemptKey(attempt);
-		if (identities.has(key)) contractError(`logical attempt ${key} appears more than once`);
-		identities.add(key);
-		if (attempt.outcome === "failed") failed = true;
-		else admitted = true;
-	}
-	if (failed) return "failed";
-	if (!admitted) contractError("non-empty logical attempt set has no terminal outcome");
-	return "admitted";
-}
-function parseLogicalAttempts(value, allowReceiveSequenceGaps = false) {
-	const normalized = requireArray(value, "logical attempts").map((item, index) => parseLogicalAttemptRecord(item, index));
-	const events = normalized.flatMap((attempt) => attempt.events).sort((left, right) => left.receiveSequence - right.receiveSequence);
-	const collector = new AttemptCollector();
-	let previousReceiveSequence = 0;
-	for (let index = 0; index < events.length; index += 1) {
-		const received = events[index];
-		if (received === void 0 || (allowReceiveSequenceGaps ? received.receiveSequence <= previousReceiveSequence : received.receiveSequence !== index + 1)) contractError("collector receive sequence must be contiguous from one");
-		previousReceiveSequence = received.receiveSequence;
-		const replayed = collector.ingest(received.evidence);
-		if (!allowReceiveSequenceGaps && replayed.receiveSequence !== received.receiveSequence) contractError("collector receive sequence does not reproduce");
-	}
-	const replayed = collector.finalize();
-	const rankByReceiveSequence = new Map(events.map((event, index) => [event.receiveSequence, index + 1]));
-	const normalizedForReplay = normalized.map((attempt) => freezeRecord({
-		...attempt,
-		events: Object.freeze(attempt.events.map((event) => freezeRecord({
-			...event,
-			receiveSequence: rankByReceiveSequence.get(event.receiveSequence)
-		})))
-	}));
-	if (JSON.stringify(replayed) !== JSON.stringify(normalizedForReplay)) contractError("serialized logical attempts do not match their producer evidence");
-	return allowReceiveSequenceGaps ? Object.freeze(normalized) : replayed;
-}
-function validateStreamEvent(stream, attempt, evidence) {
-	if (stream.terminal !== void 0) contractError(`${evidence.stage === "admitted" || evidence.stage === "failed" ? "duplicate terminal" : "post-terminal event"} for ${attemptKey(attempt)}/${stream.side}`);
-	if (evidence.sideSequence !== stream.lastSequence + 1) contractError(`side sequence is not contiguous for ${attemptKey(attempt)}/${stream.side}`);
-	if (stream.lastSequence === 0 && evidence.stage !== "started") contractError(`side stream does not begin with started for ${attemptKey(attempt)}/${stream.side}`);
-	if (evidence.attemptElapsedMs < stream.lastElapsedMs) contractError(`attempt elapsed time regressed for ${attemptKey(attempt)}/${stream.side}`);
-	const expectedStage = successChain(stream.side)[stream.nextSuccessIndex];
-	if (evidence.stage === "failed") {
-		if (evidence.failedAtStage !== expectedStage) contractError(`failed-at stage does not name the next milestone for ${attemptKey(attempt)}/${stream.side}`);
-		stream.terminal = "failed";
-	} else {
-		if (evidence.stage !== expectedStage) contractError(`attempt stage is out of order for ${attemptKey(attempt)}/${stream.side}`);
-		stream.nextSuccessIndex += 1;
-		if (evidence.stage === "admitted") stream.terminal = "admitted";
-	}
-	validateCandidateCounts(stream, evidence, attempt);
-	validateSelectedPair(stream, evidence, attempt);
-	validateLane(stream, attempt, evidence);
-	validateLocalGeneration(stream, evidence, attempt);
-	stream.lastSequence = evidence.sideSequence;
-	stream.lastElapsedMs = evidence.attemptElapsedMs;
-}
-function validateCandidateCounts(stream, evidence, attempt) {
-	const counts = Object.hasOwn(evidence, "candidateCounts") ? evidence.candidateCounts : void 0;
-	if (stream.candidateCounts !== void 0 && counts === void 0) contractError(`candidate counts disappeared for ${attemptKey(attempt)}/${stream.side}`);
-	if (counts !== void 0 && stream.candidateCounts !== void 0 && (counts.localEmitted < stream.candidateCounts.localEmitted || counts.remoteAccepted < stream.candidateCounts.remoteAccepted)) contractError(`cumulative candidate counts regressed for ${attemptKey(attempt)}/${stream.side}`);
-	if (counts !== void 0) stream.candidateCounts = counts;
-}
-function validateLane(stream, attempt, evidence) {
-	const lane = Object.hasOwn(evidence, "lane") ? evidence.lane : void 0;
-	if (stream.lane !== void 0 && lane === void 0) contractError(`known lane identity disappeared for ${attemptKey(attempt)}/${stream.side}`);
-	if (lane === void 0) return;
-	if (evidence.stage === "failed" && stream.lane === void 0) contractError(`failed evidence invents a lane before its milestone for ${attemptKey(attempt)}/${stream.side}`);
-	if (stream.lane !== void 0 && !sameLane$1(stream.lane, lane)) contractError(`lane identity changed within ${attemptKey(attempt)}/${stream.side}`);
-	if (attempt.lane !== void 0 && !sameLane$1(attempt.lane, lane)) contractError(`browser and sender lane identities differ for ${attemptKey(attempt)}`);
-	stream.lane = lane;
-	attempt.lane = lane;
-}
-function validateSelectedPair(stream, evidence, attempt) {
-	if (!Object.hasOwn(evidence, "selectedPair")) return;
-	if (evidence.stage === "failed" && stream.lane === void 0) contractError(`failed evidence invents selected-pair proof before lane admission for ${attemptKey(attempt)}/${stream.side}`);
-}
-function validateLocalGeneration(stream, evidence, attempt) {
-	if (evidence.side !== "sender") return;
-	const generation = evidence.localGeneration;
-	if (stream.localGeneration !== void 0 && generation === void 0) contractError(`known local generation disappeared for ${attemptKey(attempt)}/sender`);
-	if (generation !== void 0 && stream.localGeneration !== void 0 && generation !== stream.localGeneration) contractError(`local generation changed for ${attemptKey(attempt)}/sender`);
-	if (generation !== void 0) stream.localGeneration = generation;
-}
-function finalizeAttempt(attempt) {
-	const browser = attempt.streams.get("browser");
-	if (browser === void 0) contractError(`logical attempt ${attemptKey(attempt)} has no browser authority stream`);
-	for (const stream of attempt.streams.values()) if (stream.terminal === void 0) contractError(`side stream ${attemptKey(attempt)}/${stream.side} has no terminal`);
-	const failed = [...attempt.streams.values()].some((stream) => stream.terminal === "failed");
-	const answerReceivedIndex = BROWSER_SUCCESS_CHAIN.indexOf("answer-received");
-	const authenticatedBrowserFailure = attempt.events.find(({ evidence }) => evidence.side === "browser" && evidence.stage === "failed" && Object.hasOwn(evidence, "authenticatedSenderOperationFailure"))?.evidence;
-	const authenticatedSenderFailure = authenticatedBrowserFailure !== void 0;
-	const sender = attempt.streams.get("sender");
-	if (failed && (browser.nextSuccessIndex > answerReceivedIndex || authenticatedSenderFailure) && sender === void 0) contractError(`failed attempt ${attemptKey(attempt)} observed sender participation but has no sender stream`);
-	if (authenticatedSenderFailure && (sender === void 0 || !stageCompleted(sender, "offer-received"))) contractError(`authenticated sender failure ${attemptKey(attempt)} lacks sender offer reception`);
-	validateAuthenticatedSenderFailure(attempt, sender, authenticatedBrowserFailure);
-	validateCrossSideReachability(attempt, browser);
-	if (!failed) {
-		if (browser.terminal !== "admitted" || sender?.terminal !== "admitted") contractError(`admitted attempt ${attemptKey(attempt)} lacks both admitted side streams`);
-		if (attempt.lane === void 0) contractError(`admitted attempt ${attemptKey(attempt)} has no authoritative lane identity`);
-	}
-	return freezeRecord({
-		sessionId: attempt.sessionId,
-		peerPathId: attempt.peerPathId,
-		attemptId: attempt.attemptId,
-		outcome: failed ? "failed" : "admitted",
-		events: Object.freeze([...attempt.events])
-	});
-}
-function validateAuthenticatedSenderFailure(attempt, sender, browserEvidence) {
-	if (browserEvidence === void 0) return;
-	if (browserEvidence.side !== "browser" || browserEvidence.stage !== "failed") contractError(`authenticated sender failure ${attemptKey(attempt)} has invalid browser authority`);
-	const operation = browserEvidence.authenticatedSenderOperationFailure;
-	const senderEvidence = attempt.events.find(({ evidence }) => evidence.side === "sender" && evidence.stage === "failed")?.evidence;
-	if (operation === void 0 || sender?.terminal !== "failed" || senderEvidence?.side !== "sender" || senderEvidence.stage !== "failed") contractError(`authenticated sender failure ${attemptKey(attempt)} requires a failed sender terminal`);
-	if (senderEvidence.typedErrorCode !== browserEvidence.typedErrorCode || senderEvidence.failureScope !== browserEvidence.failureScope || senderEvidence.failureMessage !== operation.message) contractError(`authenticated sender failure ${attemptKey(attempt)} differs across producer streams`);
-}
-function validateCrossSideReachability(attempt, browser) {
-	const sender = attempt.streams.get("sender");
-	if (sender === void 0) return;
-	if (!stageCompleted(browser, "offer-sent")) contractError(`sender stream ${attemptKey(attempt)} exists before browser offer dispatch`);
-	for (const [browserStage, senderStage] of [
-		["answer-received", "answer-sent"],
-		["datachannel-open", "datachannel-open"],
-		["lane-granted", "lane-admission-started"]
-	]) if (stageCompleted(browser, browserStage) && !stageCompleted(sender, senderStage)) contractError(`browser ${browserStage} in ${attemptKey(attempt)} lacks sender ${senderStage}`);
-	if (stageCompleted(browser, "lane-attached") && sender.terminal !== "admitted") contractError(`browser lane attachment in ${attemptKey(attempt)} lacks sender admission`);
-	if (stageCompleted(sender, "datachannel-open") && !stageCompleted(browser, "answer-received")) contractError(`sender datachannel in ${attemptKey(attempt)} precedes browser answer receipt`);
-	if ((stageCompleted(sender, "lane-admission-started") || sender.terminal === "admitted") && !stageCompleted(browser, "datachannel-open")) contractError(`sender lane admission in ${attemptKey(attempt)} lacks browser datachannel`);
-}
-function stageCompleted(stream, stage) {
-	const stageIndex = successChain(stream.side).indexOf(stage);
-	return stageIndex >= 0 && stream.nextSuccessIndex > stageIndex;
-}
-function parseLogicalAttemptRecord(value, index) {
-	const record = requireRecord(value, `logical attempt ${index}`);
-	requireExactKeys(record, [
-		"sessionId",
-		"peerPathId",
-		"attemptId",
-		"outcome",
-		"events"
-	], [], `logical attempt ${index}`);
-	const sessionId = requireCanonicalIdentity(record.sessionId, `logical attempt ${index} session ID`);
-	const peerPathId = requireCanonicalIdentity(record.peerPathId, `logical attempt ${index} path ID`);
-	const attemptId = requireCanonicalIdentity(record.attemptId, `logical attempt ${index} attempt ID`);
-	const events = requireArray(record.events, `logical attempt ${index} events`).map((event, eventIndex) => {
-		const wrapper = requireRecord(event, `logical attempt ${index} event ${eventIndex}`);
-		requireExactKeys(wrapper, ["receiveSequence", "evidence"], [], `logical attempt ${index} event ${eventIndex}`);
-		const evidence = parseAttemptEvidence(wrapper.evidence);
-		if (evidence.sessionId !== sessionId || evidence.peerPathId !== peerPathId || evidence.attemptId !== attemptId) contractError(`logical attempt ${index} contains evidence for another identity`);
-		return freezeRecord({
-			receiveSequence: requireSafeInteger(wrapper.receiveSequence, 1, Number.MAX_SAFE_INTEGER, `logical attempt ${index} receive sequence`),
-			evidence
-		});
-	});
-	return freezeRecord({
-		sessionId,
-		peerPathId,
-		attemptId,
-		outcome: requireEnum(record.outcome, PEER_ATTEMPT_OUTCOMES.filter((outcome) => outcome !== "not-started"), `logical attempt ${index} outcome`),
-		events: Object.freeze(events)
-	});
-}
-function successChain(side) {
-	return side === "browser" ? BROWSER_SUCCESS_CHAIN : SENDER_SUCCESS_CHAIN;
-}
-function attemptKey(identity) {
-	return `${identity.sessionId}/${identity.peerPathId}/${identity.attemptId}`;
-}
-function sameLane$1(left, right) {
-	return left.laneId === right.laneId && left.laneEpoch === right.laneEpoch;
-}
-function compareAttemptKeys(left, right) {
-	if (left === right) return 0;
-	return left < right ? -1 : 1;
-}
-function errorMessage(cause) {
-	return cause instanceof Error ? cause.message : String(cause);
-}
-//#endregion
-//#region scripts/browser-evidence/filesystem/portable-path.ts
-var WINDOWS_DEVICE_SEGMENT = /^(?:aux|clock\$|com(?:[1-9¹²³])|con|conin\$|conout\$|lpt(?:[1-9¹²³])|nul|prn)(?:\..*)?$/iu;
-var WINDOWS_FORBIDDEN_CHARACTER = /[<>"|?*]/u;
-var PORTABLE_PATH_MAXIMUM_BYTES = 4096;
-function requirePortableRelativePath(value, label, maximumBytes = PORTABLE_PATH_MAXIMUM_BYTES) {
-	if (typeof value !== "string" || value.length === 0 || !hasOnlyUnicodeScalars(value)) throw new Error(`${label} must be non-empty Unicode scalar text`);
-	if (value !== value.normalize("NFC")) throw new Error(`${label} must use canonical Unicode NFC`);
-	const segments = value.split("/");
-	if (Buffer.byteLength(value, "utf8") > maximumBytes || segments.length > 64 || value.includes("\\") || value.includes(":") || value.startsWith("/") || containsControlCharacter(value) || WINDOWS_FORBIDDEN_CHARACTER.test(value) || segments.some((segment) => segment === "" || segment === "." || segment === ".." || Buffer.byteLength(segment, "utf8") > 255 || segment.endsWith(".") || segment.endsWith(" ") || WINDOWS_DEVICE_SEGMENT.test(segment) || containsNonAsciiCasedScalar(segment))) throw new Error(`${label} must be a portable normalized relative POSIX path`);
-	return value;
-}
-function portablePathCollisionKey(path) {
-	return path.replace(/[A-Z]/gu, (character) => character.toLowerCase());
-}
-function comparePortablePaths(left, right) {
-	return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
-}
-function containsControlCharacter(value) {
-	return [...value].some((scalar) => {
-		const codePoint = scalar.codePointAt(0) ?? 0;
-		return codePoint <= 31 || codePoint === 127;
-	});
-}
-function containsNonAsciiCasedScalar(value) {
-	return [...value].some((scalar) => (scalar.codePointAt(0) ?? 0) > 127 && scalar.toUpperCase() !== scalar.toLowerCase());
-}
-function hasOnlyUnicodeScalars(value) {
-	for (let index = 0; index < value.length; index += 1) {
-		const current = value.charCodeAt(index);
-		if (current >= 55296 && current <= 56319) {
-			const following = value.charCodeAt(index + 1);
-			if (following < 56320 || following > 57343) return false;
-			index += 1;
-		} else if (current >= 56320 && current <= 57343) return false;
-	}
-	return true;
-}
-//#endregion
-//#region scripts/browser-evidence/artifact/manifest.ts
-var ARTIFACT_MANIFEST_ID_SCHEMA_VERSION = 1;
-var ARTIFACT_MANIFEST_SET_SCHEMA_VERSION = 1;
-/**
-* Guard authorization must follow exact bytes and metadata across process
-* boundaries. Content-addressing the full manifest prevents a path-stable file
-* replacement from borrowing another sample's guard result.
-*/
-function artifactIdForManifest(artifact) {
-	const encoded = JSON.stringify({
-		schemaVersion: ARTIFACT_MANIFEST_ID_SCHEMA_VERSION,
-		kind: artifact.kind,
-		relativePath: artifact.relativePath,
-		mediaType: artifact.mediaType,
-		byteLength: artifact.byteLength,
-		sha256: artifact.sha256
-	});
-	return `artifact-${createHash("sha256").update(encoded, "utf8").digest("hex")}`;
-}
-function artifactManifestSha256(artifacts) {
-	const canonical = [...artifacts].map((artifact) => ({
-		artifactId: artifact.artifactId,
-		kind: artifact.kind,
-		relativePath: artifact.relativePath,
-		mediaType: artifact.mediaType,
-		byteLength: artifact.byteLength,
-		sha256: artifact.sha256
-	})).sort((left, right) => comparePortablePaths(left.relativePath, right.relativePath) || compareStrings$2(left.artifactId, right.artifactId));
-	return sha256Bytes(Buffer.from(JSON.stringify({
-		schemaVersion: ARTIFACT_MANIFEST_SET_SCHEMA_VERSION,
-		artifacts: canonical
-	}), "utf8"));
-}
-function sha256Bytes(value) {
-	return createHash("sha256").update(value).digest("hex");
-}
-function compareStrings$2(left, right) {
-	if (left === right) return 0;
-	return left < right ? -1 : 1;
-}
-//#endregion
-//#region scripts/browser-evidence/capability.ts
-var CAPABILITY_PROBE_DEADLINE_MS = 5e3;
-var RTC_API_PRESENCE = Object.freeze([
-	"unknown",
-	"absent",
-	"present"
-]);
-var CAPABILITY_PROBE_OUTCOMES = Object.freeze([
-	"not-started",
-	"succeeded",
-	"failed"
-]);
-var CAPABILITY_PROBE_FAILURE_CODES = Object.freeze([
-	"peer-construction",
-	"datachannel-construction",
-	"offer-creation",
-	"local-description",
-	"probe-deadline",
-	"unexpected"
-]);
-/**
-* The probe proves only that a native PeerConnection can retain a non-empty
-* local offer after creating the WindShare-shaped DataChannel. Waiting for ICE
-* or a remote peer here would collapse runtime capability into topology health.
-*/
-function classifyRtcCapability(evidence) {
-	validateCapabilityCombination(evidence);
-	if (evidence.apiPresence === "unknown") return "unknown";
-	if (evidence.apiPresence === "absent") return "unavailable";
-	if (evidence.probeOutcome === "not-started") return "unknown";
-	return evidence.probeOutcome === "succeeded" ? "available" : "unusable";
-}
-function parseCapabilityEvidence(value) {
-	const record = requireRecord(value, "capability evidence");
-	requireExactKeys(record, [
-		"schemaVersion",
-		"apiPresence",
-		"probeOutcome",
-		"probeDeadlineMs"
-	], ["failureCode", "failureMessage"], "capability evidence");
-	const failureCodeValue = optionalField(record, "failureCode");
-	const failureMessageValue = optionalField(record, "failureMessage");
-	const result = {
-		schemaVersion: requireLiteral(record.schemaVersion, 1, "capability schema version"),
-		apiPresence: requireEnum(record.apiPresence, RTC_API_PRESENCE, "RTC API presence"),
-		probeOutcome: requireEnum(record.probeOutcome, CAPABILITY_PROBE_OUTCOMES, "capability probe outcome"),
-		probeDeadlineMs: requireLiteral(record.probeDeadlineMs, CAPABILITY_PROBE_DEADLINE_MS, "capability probe deadline"),
-		...failureCodeValue === void 0 ? {} : { failureCode: requireEnum(failureCodeValue, CAPABILITY_PROBE_FAILURE_CODES, "capability probe failure code") },
-		...failureMessageValue === void 0 ? {} : { failureMessage: requireString(failureMessageValue, "capability failure message", 512) }
-	};
-	validateCapabilityCombination(result);
-	return freezeRecord(result);
-}
-function validateCapabilityCombination(evidence) {
-	const failed = evidence.probeOutcome === "failed";
-	if (failed !== (evidence.failureCode !== void 0)) contractError("only a failed capability probe may carry a failure code, and it must carry one");
-	if (evidence.failureMessage !== void 0 !== failed) contractError("only a failed capability probe may carry a failure message, and it must carry one");
-	if (evidence.apiPresence !== "present" && evidence.probeOutcome !== "not-started") contractError("a capability probe cannot run before native RTC API presence is proved");
-}
-//#endregion
-//#region scripts/browser-evidence/execution-evidence.ts
 var RUNNER_PROCESS_TERMINALS = Object.freeze([
 	"not-started",
 	"running-at-collection",
@@ -1027,163 +230,6 @@ function requirePortableToken$1(value, label) {
 	if (!/^[A-Za-z0-9._-]+$/u.test(token)) contractError(`${label} contains non-portable characters`);
 	return token;
 }
-//#endregion
-//#region scripts/browser-evidence/route-evidence.ts
-var MAIN_ROUTE_MODES = Object.freeze(["relay-only", "hot-switch"]);
-var DISPATCH_ROUTES = Object.freeze(["relay", "peer"]);
-function parseMainRouteEvidence(value) {
-	if (value === null) return null;
-	const evidence = requireRecord(value, "main route evidence");
-	requireExactKeys(evidence, ["mode", "observations"], [], "main route evidence");
-	const mode = requireEnum(evidence.mode, MAIN_ROUTE_MODES, "main route mode");
-	const observations = Object.freeze(requireArray(evidence.observations, "main route observations").map((item, index) => parseRouteObservation(item, index)));
-	validateObservationSequences(observations);
-	if (mode === "relay-only") validateRelayOnly(observations);
-	else validateHotSwitch(observations);
-	return freezeRecord({
-		mode,
-		observations
-	});
-}
-function parseRouteObservation(value, index) {
-	const observation = requireRecord(value, `route observation ${index}`);
-	const kind = requireEnum(observation.kind, [
-		"dispatch",
-		"peer-admitted",
-		"relay-cut-fence"
-	], `route observation ${index} kind`);
-	const observationSequence = requireSafeInteger(observation.observationSequence, 1, Number.MAX_SAFE_INTEGER, `route observation ${index} sequence`);
-	if (kind === "dispatch") {
-		requireExactKeys(observation, [
-			"observationSequence",
-			"kind",
-			"dispatchSequence",
-			"route",
-			"lane"
-		], [], `route dispatch observation ${index}`);
-		const route = requireEnum(observation.route, DISPATCH_ROUTES, `route dispatch ${index} route`);
-		return freezeRecord({
-			observationSequence,
-			kind,
-			dispatchSequence: requireSafeInteger(observation.dispatchSequence, 1, Number.MAX_SAFE_INTEGER, `route dispatch ${index} sequence`),
-			route,
-			lane: parseLane(observation.lane, `route dispatch ${index} lane`, route === "relay" ? "relay" : "peer")
-		});
-	}
-	if (kind === "peer-admitted") {
-		requireExactKeys(observation, [
-			"observationSequence",
-			"kind",
-			"sessionId",
-			"peerPathId",
-			"attemptId",
-			"lane"
-		], [], `peer admission observation ${index}`);
-		return freezeRecord({
-			observationSequence,
-			kind,
-			sessionId: requireCanonicalIdentity(observation.sessionId, "route admission session ID"),
-			peerPathId: requireCanonicalIdentity(observation.peerPathId, "route admission peer path ID"),
-			attemptId: requireCanonicalIdentity(observation.attemptId, "route admission attempt ID"),
-			lane: parseLane(observation.lane, "route admission lane", "peer")
-		});
-	}
-	requireExactKeys(observation, [
-		"observationSequence",
-		"kind",
-		"dispatchSequenceBoundary",
-		"proxyAccepting",
-		"receiverRelayEligible"
-	], [], `relay cut fence observation ${index}`);
-	if (requireBoolean(observation.proxyAccepting, "relay cut proxy accepting") || requireBoolean(observation.receiverRelayEligible, "receiver relay eligibility")) contractError("completed relay cut fence must stop proxy admission and receiver relay eligibility");
-	return freezeRecord({
-		observationSequence,
-		kind,
-		dispatchSequenceBoundary: requireSafeInteger(observation.dispatchSequenceBoundary, 1, Number.MAX_SAFE_INTEGER, "relay cut dispatch sequence boundary"),
-		proxyAccepting: false,
-		receiverRelayEligible: false
-	});
-}
-function validateObservationSequences(observations) {
-	let expectedDispatchSequence = 1;
-	for (let index = 0; index < observations.length; index += 1) {
-		const observation = observations[index];
-		if (observation === void 0 || observation.observationSequence !== index + 1) contractError("route observation sequence must be contiguous from one");
-		if (observation.kind === "dispatch") {
-			if (observation.dispatchSequence !== expectedDispatchSequence) contractError("route dispatch sequence must be contiguous from one");
-			expectedDispatchSequence += 1;
-		}
-	}
-}
-function validateRelayOnly(observations) {
-	if (observations.length === 0 || observations.some((observation) => observation.kind !== "dispatch" || observation.route !== "relay")) contractError("relay-only evidence must contain only relay dispatch observations");
-}
-function validateHotSwitch(observations) {
-	const admissions = observations.filter((observation) => observation.kind === "peer-admitted");
-	const fences = observations.filter((observation) => observation.kind === "relay-cut-fence");
-	if (admissions.length !== 1 || fences.length !== 1) contractError("hot-switch evidence requires exactly one peer admission and relay cut fence");
-	const admission = admissions[0];
-	const fence = fences[0];
-	if (admission === void 0 || fence === void 0 || admission.observationSequence >= fence.observationSequence) contractError("hot-switch peer admission must precede the relay cut fence");
-	const dispatches = observations.filter((observation) => observation.kind === "dispatch");
-	const relayBeforeAdmission = dispatches.some((dispatch) => dispatch.route === "relay" && dispatch.observationSequence < admission.observationSequence);
-	const peerBeforeAdmission = dispatches.some((dispatch) => dispatch.route === "peer" && dispatch.observationSequence < admission.observationSequence);
-	const peerOnUnadmittedLane = dispatches.some((dispatch) => dispatch.route === "peer" && !sameLane(dispatch.lane, admission.lane));
-	const lastBeforeFence = dispatches.filter((dispatch) => dispatch.observationSequence < fence.observationSequence).at(-1);
-	const peerAfterFence = dispatches.some((dispatch) => dispatch.route === "peer" && dispatch.observationSequence > fence.observationSequence && dispatch.dispatchSequence > fence.dispatchSequenceBoundary && sameLane(dispatch.lane, admission.lane));
-	const relayAfterFence = dispatches.some((dispatch) => dispatch.route === "relay" && dispatch.observationSequence > fence.observationSequence);
-	if (!relayBeforeAdmission || peerBeforeAdmission || peerOnUnadmittedLane || lastBeforeFence === void 0 || lastBeforeFence.dispatchSequence !== fence.dispatchSequenceBoundary || !peerAfterFence || relayAfterFence) contractError("hot-switch evidence does not prove relay, admission, cut fence, and post-fence peer dispatch");
-}
-function parseLane(value, label, authority) {
-	const lane = requireRecord(value, label);
-	requireExactKeys(lane, ["laneId", "laneEpoch"], [], label);
-	return freezeRecord({
-		laneId: requireSafeInteger(lane.laneId, 1, 4294967295, `${label} ID`),
-		laneEpoch: requireSafeInteger(lane.laneEpoch, authority === "relay" ? 0 : 1, authority === "relay" ? 0 : 4294967295, `${label} epoch`)
-	});
-}
-function sameLane(left, right) {
-	return left.laneId === right.laneId && left.laneEpoch === right.laneEpoch;
-}
-var BROWSER_RUN_POLICY_IDS = Object.freeze([
-	"blocking",
-	"closure",
-	"stability"
-]);
-var POLICY_SAMPLE_COUNTS = Object.freeze({
-	blocking: 1,
-	closure: 3,
-	stability: 5
-});
-var POLICIES = Object.freeze(Object.fromEntries(BROWSER_RUN_POLICY_IDS.map((policyId) => [policyId, freezeRecord({
-	schemaVersion: 1,
-	policyId,
-	policyVersion: 1,
-	sampleCount: POLICY_SAMPLE_COUNTS[policyId]
-})])));
-function browserRunPolicy(policyId) {
-	return POLICIES[policyId];
-}
-function parseBrowserRunPolicy(value, label = "browser run policy") {
-	const record = requireRecord(value, label);
-	requireExactKeys(record, [
-		"schemaVersion",
-		"policyId",
-		"policyVersion",
-		"sampleCount"
-	], [], label);
-	const canonical = browserRunPolicy(requireEnum(record.policyId, BROWSER_RUN_POLICY_IDS, `${label} identity`));
-	requireLiteral(record.schemaVersion, 1, `${label} schema version`);
-	requireLiteral(record.policyVersion, 1, `${label} version`);
-	requireLiteral(record.sampleCount, canonical.sampleCount, `${label} sample count`);
-	return canonical;
-}
-function validatePolicySampleIndex(sampleIndex, policy, label = "sample index") {
-	if (!Number.isSafeInteger(sampleIndex) || sampleIndex < 1 || sampleIndex > policy.sampleCount) throw new Error(`${label} must be in [1, ${policy.sampleCount}] for ${policy.policyId}@${policy.policyVersion}`);
-	return sampleIndex;
-}
-//#endregion
-//#region scripts/browser-evidence/contract/strict-json.ts
 var JSON_WHITESPACE = /* @__PURE__ */ new Set([
 	" ",
 	"	",
@@ -1551,48 +597,6 @@ async function sha256(value) {
 	const bytes = new TextEncoder().encode(value);
 	return [...new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", bytes))].map((item) => item.toString(16).padStart(2, "0")).join("");
 }
-//#endregion
-//#region scripts/browser-evidence/result.ts
-var PLAYWRIGHT_OUTCOMES = Object.freeze([
-	"not-started",
-	"passed",
-	"failed"
-]);
-var PION_APPLICABILITY = Object.freeze([
-	"unknown",
-	"applicable",
-	"not-applicable"
-]);
-var NATIVE_INTEROP_OUTCOMES = Object.freeze([
-	"not-started",
-	"succeeded",
-	"failed"
-]);
-var NATIVE_INTEROP_FAILURE_CODES = Object.freeze([
-	"peer-construction",
-	"negotiation",
-	"datachannel",
-	"interop-deadline",
-	"selected-pair",
-	"protocol",
-	"unexpected"
-]);
-var DELIVERY_TERMINALS = Object.freeze(["succeeded", "failed"]);
-var MAIN_TRANSFER_BYTES = 16777216;
-var MAIN_TRANSFER_SHA256 = "25e349f1212bb99491944eb8e885665bb71edc5d5db49d1cd2ef1ffafac1dd5d";
-var ARTIFACT_KINDS = Object.freeze([
-	"trace",
-	"video",
-	"screenshot",
-	"error-context",
-	"console-log",
-	"runner-stdout",
-	"runner-stderr",
-	"process-log",
-	"attempt-evidence",
-	"native-interop-evidence",
-	"result-diagnostic"
-]);
 function validateMainAcceptance(result, topologyLock) {
 	const { profile: topology, resolution } = readVerifiedTestIceTopologyLock(topologyLock);
 	if (result.resultStatus !== "final-valid" || result.executionOutcome !== "healthy" || result.playwrightOutcome !== "passed" || result.deliveryOutcome !== "succeeded") contractError("main acceptance requires valid, healthy, passed, successful delivery evidence");
@@ -1617,6 +621,1022 @@ function validatePionAcceptance(result) {
 		return "requires-main-relay-fallback";
 	}
 	contractError("unknown or unusable RTC capability is never accepted by the Pion suite");
+}
+/** Runtime admission remains an observed fact when pair proof is absent. This
+* predicate gives the later verdict one explicit authority for rejecting that
+* otherwise admitted sample without rewriting its peer outcome. */
+function hasDirectSelectedPairProof(attempts, topology, resolution) {
+	const admitted = attempts.filter((attempt) => attempt.outcome === "admitted");
+	return admitted.length > 0 && admitted.every((attempt) => {
+		const browser = attempt.events.find(({ evidence }) => evidence.side === "browser" && evidence.stage === "admitted")?.evidence;
+		const sender = attempt.events.find(({ evidence }) => evidence.side === "sender" && evidence.stage === "admitted")?.evidence;
+		if (browser?.side !== "browser" || browser.stage !== "admitted" || sender?.side !== "sender" || sender.stage !== "admitted" || browser.selectedPair === null || sender.selectedPair === null) return false;
+		return selectedPairAllowedByTopology(browser.selectedPair, topology, resolution) && selectedPairAllowedByTopology(sender.selectedPair, topology, resolution) && selectedPairsCorrelate(browser.selectedPair, sender.selectedPair);
+	});
+}
+function validateHotSwitchAttemptCorrelation(route, attempts) {
+	const admission = route.observations.find((observation) => observation.kind === "peer-admitted");
+	if (admission === void 0) contractError("hot-switch route evidence lacks peer admission");
+	const matches = attempts.filter((attempt) => attempt.sessionId === admission.sessionId && attempt.peerPathId === admission.peerPathId && attempt.attemptId === admission.attemptId);
+	if (matches.length !== 1 || matches[0]?.outcome !== "admitted") contractError("hot-switch route admission does not identify one admitted logical attempt");
+	const browserAdmission = matches[0].events.find(({ evidence }) => evidence.side === "browser" && evidence.stage === "admitted")?.evidence;
+	if (browserAdmission?.side !== "browser" || browserAdmission.stage !== "admitted" || browserAdmission.lane.laneId !== admission.lane.laneId || browserAdmission.lane.laneEpoch !== admission.lane.laneEpoch) contractError("hot-switch route admission lane differs from attempt admission");
+}
+function selectedPairsCorrelate(browser, pion) {
+	return browserLocalEndpointMatchesPionRemote(browser.local, pion.remote) && browserRemoteEndpointMatchesPionLocal(browser.remote, pion.local);
+}
+function browserLocalEndpointMatchesPionRemote(browser, pion) {
+	if (browser.protocol !== pion.protocol) return false;
+	if (browser.port !== void 0 && browser.port !== pion.port) return false;
+	if (browser.address === void 0) return browser.candidateType === "host";
+	if (isIpLiteral(browser.address)) return browser.address === pion.address;
+	return browser.candidateType === "host" && isMdnsHostname(browser.address);
+}
+function browserRemoteEndpointMatchesPionLocal(browser, pion) {
+	return browser.address !== void 0 && isIpLiteral(browser.address) && browser.address === pion.address && browser.port === pion.port && browser.protocol === pion.protocol;
+}
+function isIpLiteral(address) {
+	return address.includes(":") || /^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}$/u.test(address);
+}
+function isMdnsHostname(address) {
+	return /^(?=.{1,253}\.?$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+local\.?$/u.test(address);
+}
+var BROWSER_ENGINES = Object.freeze([
+	"chromium",
+	"firefox",
+	"webkit"
+]);
+var BROWSER_SUITES = Object.freeze(["main", "pion"]);
+var RESULT_STATUSES = Object.freeze([
+	"provisional",
+	"final-valid",
+	"final-invalid"
+]);
+var RTC_CAPABILITIES = Object.freeze([
+	"unknown",
+	"unavailable",
+	"unusable",
+	"available"
+]);
+var PEER_ATTEMPT_OUTCOMES = Object.freeze([
+	"not-started",
+	"admitted",
+	"failed"
+]);
+var DELIVERY_OUTCOMES = Object.freeze([
+	"not-started",
+	"succeeded",
+	"failed"
+]);
+var EXECUTION_OUTCOMES = Object.freeze([
+	"healthy",
+	"crashed",
+	"infrastructure-failed",
+	"unknown"
+]);
+var ATTEMPT_SIDES = Object.freeze(["browser", "sender"]);
+var BROWSER_ATTEMPT_STAGES = Object.freeze([
+	"started",
+	"offer-created",
+	"offer-sent",
+	"answer-received",
+	"datachannel-open",
+	"lane-granted",
+	"lane-attached",
+	"admitted",
+	"failed"
+]);
+var SENDER_ATTEMPT_STAGES = Object.freeze([
+	"started",
+	"offer-received",
+	"answer-created",
+	"answer-sent",
+	"datachannel-open",
+	"lane-admission-started",
+	"admitted",
+	"failed"
+]);
+var ATTEMPT_TERMINAL_STAGES = Object.freeze(["admitted", "failed"]);
+var ATTEMPT_FAILURE_SCOPES = Object.freeze(["attempt", "session"]);
+var TYPED_PEER_ERROR_CODES = Object.freeze([
+	"peer-negotiation",
+	"peer-timeout",
+	"peer-candidates",
+	"peer-admission",
+	"signaling-contract",
+	"attempt-cancelled",
+	"runtime-stopped",
+	"unexpected"
+]);
+var PEER_OPERATION_CODES = Object.freeze({
+	negotiation: 20481,
+	timeout: 20482,
+	candidates: 20483,
+	admission: 20484
+});
+var PEER_OPERATION_TYPED_ERRORS = Object.freeze({
+	[PEER_OPERATION_CODES.negotiation]: "peer-negotiation",
+	[PEER_OPERATION_CODES.timeout]: "peer-timeout",
+	[PEER_OPERATION_CODES.candidates]: "peer-candidates",
+	[PEER_OPERATION_CODES.admission]: "peer-admission"
+});
+var PEER_OPERATION_ERROR_REGISTRY = Object.freeze([
+	Object.freeze({
+		code: PEER_OPERATION_CODES.negotiation,
+		typedErrorCode: "peer-negotiation"
+	}),
+	Object.freeze({
+		code: PEER_OPERATION_CODES.timeout,
+		typedErrorCode: "peer-timeout"
+	}),
+	Object.freeze({
+		code: PEER_OPERATION_CODES.candidates,
+		typedErrorCode: "peer-candidates"
+	}),
+	Object.freeze({
+		code: PEER_OPERATION_CODES.admission,
+		typedErrorCode: "peer-admission"
+	})
+]);
+var ICE_CANDIDATE_TYPES = Object.freeze([
+	"host",
+	"prflx",
+	"srflx",
+	"relay"
+]);
+var ICE_PROTOCOLS = Object.freeze(["udp", "tcp"]);
+var IP_ADDRESS_FAMILIES = Object.freeze(["ipv4", "ipv6"]);
+Object.freeze({
+	schemaVersion: 1,
+	browserEngines: BROWSER_ENGINES,
+	suites: BROWSER_SUITES,
+	resultStatuses: RESULT_STATUSES,
+	rtcCapabilities: RTC_CAPABILITIES,
+	peerAttemptOutcomes: PEER_ATTEMPT_OUTCOMES,
+	deliveryOutcomes: DELIVERY_OUTCOMES,
+	executionOutcomes: EXECUTION_OUTCOMES,
+	attemptSides: ATTEMPT_SIDES,
+	browserStages: BROWSER_ATTEMPT_STAGES,
+	senderStages: SENDER_ATTEMPT_STAGES,
+	terminalStages: ATTEMPT_TERMINAL_STAGES,
+	failureScopes: ATTEMPT_FAILURE_SCOPES,
+	typedPeerErrorCodes: TYPED_PEER_ERROR_CODES,
+	peerOperationCodeMapping: PEER_OPERATION_ERROR_REGISTRY,
+	iceCandidateTypes: ICE_CANDIDATE_TYPES,
+	iceProtocols: ICE_PROTOCOLS,
+	ipAddressFamilies: IP_ADDRESS_FAMILIES
+});
+function typedErrorForPeerOperationCode(code) {
+	if (!Object.hasOwn(PEER_OPERATION_TYPED_ERRORS, code)) return void 0;
+	return PEER_OPERATION_TYPED_ERRORS[code];
+}
+var COMMON_FIELDS = Object.freeze([
+	"schemaVersion",
+	"sessionId",
+	"peerPathId",
+	"attemptId",
+	"side",
+	"sideSequence",
+	"attemptElapsedMs",
+	"stage"
+]);
+var MAXIMUM_COUNTER = 4294967295;
+var MAXIMUM_DIAGNOSTIC_TEXT_BYTES = 512;
+function parseAttemptEvidence(value) {
+	const record = requireRecord(value, "attempt evidence");
+	const side = requireEnum(record.side, ATTEMPT_SIDES, "attempt side");
+	const stage = parseStage(record.stage, side);
+	requireAttemptKeys(record, side, stage);
+	const envelope = {
+		schemaVersion: requireLiteral(record.schemaVersion, 1, "attempt evidence schema version"),
+		sessionId: requireCanonicalIdentity(record.sessionId, "protocol session ID"),
+		peerPathId: requireCanonicalIdentity(record.peerPathId, "peer path ID"),
+		attemptId: requireCanonicalIdentity(record.attemptId, "peer attempt ID"),
+		side,
+		sideSequence: requireSafeInteger(record.sideSequence, 1, Number.MAX_SAFE_INTEGER, "attempt side sequence"),
+		attemptElapsedMs: requireSafeInteger(record.attemptElapsedMs, 0, Number.MAX_SAFE_INTEGER, "attempt elapsed milliseconds"),
+		stage,
+		...side === "sender" && optionalField(record, "localGeneration") !== void 0 ? { localGeneration: requireDecimalUint64(record.localGeneration, "sender local generation") } : {}
+	};
+	const payload = parseStagePayload(record, side, stage);
+	return freezeRecord({
+		...envelope,
+		...payload
+	});
+}
+function parseBrowserSelectedPair(value) {
+	const pair = requireRecord(value, "browser selected pair");
+	requireExactKeys(pair, [
+		"candidatePairId",
+		"local",
+		"remote"
+	], [], "browser selected pair");
+	return freezeRecord({
+		candidatePairId: requireString(pair.candidatePairId, "browser candidate pair ID", 256),
+		local: parseBrowserCandidate(pair.local, "browser local selected candidate"),
+		remote: parseBrowserCandidate(pair.remote, "browser remote selected candidate")
+	});
+}
+function parsePionSelectedPair(value) {
+	const pair = requireRecord(value, "Pion selected pair");
+	requireExactKeys(pair, ["local", "remote"], ["candidatePairId"], "Pion selected pair");
+	const pairId = optionalField(pair, "candidatePairId");
+	const local = parsePionCandidate(pair.local, "Pion local selected candidate");
+	const remote = parsePionCandidate(pair.remote, "Pion remote selected candidate");
+	if (local.addressFamily === remote.addressFamily && local.address === remote.address && local.port === remote.port && local.protocol === remote.protocol) contractError("Pion selected pair must identify distinct local and remote transport endpoints");
+	return freezeRecord({
+		...pairId === void 0 ? {} : { candidatePairId: requireString(pairId, "Pion candidate pair ID", 256) },
+		local,
+		remote
+	});
+}
+function parseStage(value, side) {
+	return side === "browser" ? requireEnum(value, BROWSER_ATTEMPT_STAGES, "browser attempt stage") : requireEnum(value, SENDER_ATTEMPT_STAGES, "sender attempt stage");
+}
+function requireAttemptKeys(record, side, stage) {
+	const required = [...COMMON_FIELDS];
+	const optional = side === "sender" ? ["localGeneration"] : [];
+	if (stage === "failed") {
+		required.push("failedAtStage", "failureScope", "typedErrorCode", "failureMessage");
+		optional.push("candidateCounts", "lane", "selectedPair", "authenticatedSenderOperationFailure");
+	} else if (stage === "admitted") required.push("candidateCounts", "lane", "selectedPair");
+	else if (candidateCountsRequired(side, stage)) {
+		required.push("candidateCounts");
+		if (laneRequired(side, stage)) required.push("lane");
+	}
+	requireExactKeys(record, required, optional, `${side} ${stage} attempt evidence`);
+}
+function candidateCountsRequired(side, stage) {
+	if (side === "browser") return stage !== "started";
+	return stage !== "started" && stage !== "offer-received";
+}
+function laneRequired(side, stage) {
+	return side === "browser" ? stage === "lane-granted" || stage === "lane-attached" : stage === "lane-admission-started";
+}
+function parseStagePayload(record, side, stage) {
+	if (stage === "started" || side === "sender" && stage === "offer-received") return {};
+	if (stage === "failed") return parseFailurePayload(record, side);
+	const candidateCounts = parseCandidateCounts(record.candidateCounts);
+	if (stage === "admitted") return {
+		candidateCounts,
+		lane: parseLaneIdentity(record.lane),
+		selectedPair: parseNullableSelectedPair(record.selectedPair, side)
+	};
+	if (laneRequired(side, stage)) return {
+		candidateCounts,
+		lane: parseLaneIdentity(record.lane)
+	};
+	return { candidateCounts };
+}
+function parseFailurePayload(record, side) {
+	const failedAtStage = parseFailureStage(record.failedAtStage, side);
+	const typedErrorCode = requireEnum(record.typedErrorCode, TYPED_PEER_ERROR_CODES, "typed peer error code");
+	const candidateCountsValue = optionalField(record, "candidateCounts");
+	const laneValue = optionalField(record, "lane");
+	const selectedPairValue = optionalField(record, "selectedPair");
+	const authenticatedOperationValue = optionalField(record, "authenticatedSenderOperationFailure");
+	const authenticatedSenderOperationFailure = authenticatedOperationValue === void 0 ? void 0 : parseAuthenticatedSenderOperationFailure(authenticatedOperationValue, typedErrorCode);
+	const failureScope = requireEnum(record.failureScope, ATTEMPT_FAILURE_SCOPES, "attempt failure scope");
+	const failureMessage = requireString(record.failureMessage, "attempt failure message", MAXIMUM_DIAGNOSTIC_TEXT_BYTES);
+	validateFailureFieldCausality({
+		side,
+		failedAtStage,
+		failureScope,
+		typedErrorCode,
+		failureMessage,
+		candidateCountsValue,
+		laneValue,
+		selectedPairValue,
+		authenticatedSenderOperationFailure
+	});
+	return buildFailurePayload({
+		side,
+		failedAtStage,
+		failureScope,
+		typedErrorCode,
+		failureMessage,
+		candidateCountsValue,
+		laneValue,
+		selectedPairValue,
+		authenticatedSenderOperationFailure
+	});
+}
+function validateFailureFieldCausality(parts) {
+	const { side, failedAtStage, failureScope, failureMessage, candidateCountsValue, laneValue, selectedPairValue, authenticatedSenderOperationFailure } = parts;
+	if (candidateCountsValue !== void 0 && !failureCanCarryCandidateCounts(side, failedAtStage)) contractError(`${side} failure cannot carry candidate counts before their first completed milestone`);
+	if (laneValue !== void 0 && !failureCanCarryKnownLane(side, failedAtStage)) contractError(`${side} failure cannot carry a lane before the lane milestone is known`);
+	if (selectedPairValue !== void 0 && failedAtStage !== "admitted") contractError(`${side} failure can carry selected-pair evidence only while admission fails`);
+	if (authenticatedSenderOperationFailure !== void 0) {
+		if (side !== "browser" || failedAtStage === "offer-created" || failedAtStage === "offer-sent") contractError("authenticated sender operation failure requires a browser stream after offer dispatch");
+		if (failureScope !== "attempt") contractError("authenticated sender peer operation failure must remain attempt-scoped");
+		if (failureMessage !== authenticatedSenderOperationFailure.message) contractError("authenticated sender operation message must be preserved losslessly");
+	}
+}
+function buildFailurePayload(parts) {
+	const result = {
+		failedAtStage: parts.failedAtStage,
+		failureScope: parts.failureScope,
+		typedErrorCode: parts.typedErrorCode,
+		failureMessage: parts.failureMessage
+	};
+	if (parts.candidateCountsValue !== void 0) result.candidateCounts = parseCandidateCounts(parts.candidateCountsValue);
+	if (parts.laneValue !== void 0) result.lane = parseLaneIdentity(parts.laneValue);
+	if (parts.selectedPairValue !== void 0) result.selectedPair = parseNullableSelectedPair(parts.selectedPairValue, parts.side);
+	if (parts.authenticatedSenderOperationFailure !== void 0) result.authenticatedSenderOperationFailure = parts.authenticatedSenderOperationFailure;
+	return result;
+}
+function parseFailureStage(value, side) {
+	const stage = requireEnum(value, side === "browser" ? BROWSER_ATTEMPT_STAGES : SENDER_ATTEMPT_STAGES, `${side} failed-at stage`);
+	if (stage === "started" || stage === "failed") contractError(`${side} failed-at stage must name the milestone that could not complete`);
+	return stage;
+}
+function parseCandidateCounts(value) {
+	const counts = requireRecord(value, "candidate counts");
+	requireExactKeys(counts, ["localEmitted", "remoteAccepted"], [], "candidate counts");
+	return freezeRecord({
+		localEmitted: requireSafeInteger(counts.localEmitted, 0, MAXIMUM_COUNTER, "local emitted candidate count"),
+		remoteAccepted: requireSafeInteger(counts.remoteAccepted, 0, MAXIMUM_COUNTER, "remote accepted candidate count")
+	});
+}
+function parseLaneIdentity(value) {
+	const lane = requireRecord(value, "lane identity");
+	requireExactKeys(lane, ["laneId", "laneEpoch"], [], "lane identity");
+	return freezeRecord({
+		laneId: requireSafeInteger(lane.laneId, 1, MAXIMUM_COUNTER, "lane ID"),
+		laneEpoch: requireSafeInteger(lane.laneEpoch, 1, MAXIMUM_COUNTER, "lane epoch")
+	});
+}
+function parseNullableSelectedPair(value, side) {
+	if (value === null) return null;
+	return side === "browser" ? parseBrowserSelectedPair(value) : parsePionSelectedPair(value);
+}
+function parseBrowserCandidate(value, label) {
+	const candidate = requireRecord(value, label);
+	requireExactKeys(candidate, [
+		"candidateId",
+		"candidateType",
+		"protocol"
+	], ["address", "port"], label);
+	const address = optionalField(candidate, "address");
+	const port = optionalField(candidate, "port");
+	return freezeRecord({
+		candidateId: requireString(candidate.candidateId, `${label} ID`, 256),
+		candidateType: requireEnum(candidate.candidateType, ICE_CANDIDATE_TYPES, `${label} type`),
+		protocol: requireEnum(candidate.protocol, ICE_PROTOCOLS, `${label} protocol`),
+		...address === void 0 ? {} : { address: requireString(address, `${label} address`, 255) },
+		...port === void 0 ? {} : { port: requireSafeInteger(port, 1, 65535, `${label} port`) }
+	});
+}
+function parsePionCandidate(value, label) {
+	const candidate = requireRecord(value, label);
+	requireExactKeys(candidate, [
+		"candidateType",
+		"protocol",
+		"address",
+		"port",
+		"addressFamily"
+	], ["candidateId"], label);
+	const addressFamily = requireEnum(candidate.addressFamily, IP_ADDRESS_FAMILIES, `${label} address family`);
+	const address = requireString(candidate.address, `${label} address`, 255);
+	if (!isOperationalUnicastAddress(address, addressFamily)) contractError(`${label} address must be operational non-loopback ${addressFamily} unicast`);
+	const candidateId = optionalField(candidate, "candidateId");
+	return freezeRecord({
+		...candidateId === void 0 ? {} : { candidateId: requireString(candidateId, `${label} ID`, 256) },
+		candidateType: requireEnum(candidate.candidateType, ICE_CANDIDATE_TYPES, `${label} type`),
+		protocol: requireEnum(candidate.protocol, ICE_PROTOCOLS, `${label} protocol`),
+		address,
+		port: requireSafeInteger(candidate.port, 1, 65535, `${label} port`),
+		addressFamily
+	});
+}
+function parseAuthenticatedSenderOperationFailure(value, typedErrorCode) {
+	const failure = requireRecord(value, "authenticated sender operation failure");
+	requireExactKeys(failure, [
+		"scope",
+		"code",
+		"message"
+	], [], "authenticated sender operation failure");
+	const code = requireSafeInteger(failure.code, 0, 65535, "authenticated peer operation code");
+	const mapped = typedErrorForPeerOperationCode(code);
+	if (mapped === void 0 || mapped !== typedErrorCode) contractError("authenticated peer operation code does not match the typed peer error code");
+	return freezeRecord({
+		scope: requireLiteral(failure.scope, "peer", "authenticated operation scope"),
+		code,
+		message: requireString(failure.message, "authenticated peer operation message", MAXIMUM_DIAGNOSTIC_TEXT_BYTES)
+	});
+}
+function failureCanCarryCandidateCounts(side, failedAtStage) {
+	if (side === "browser") return failedAtStage !== "offer-created";
+	return failedAtStage !== "offer-received" && failedAtStage !== "answer-created";
+}
+function failureCanCarryKnownLane(side, failedAtStage) {
+	return side === "browser" ? failedAtStage === "lane-attached" || failedAtStage === "admitted" : failedAtStage === "admitted";
+}
+function isOperationalUnicastAddress(address, family) {
+	if (family === "ipv4") {
+		const parts = address.split(".");
+		if (parts.length !== 4 || !parts.every((part) => {
+			if (!/^(0|[1-9]\d{0,2})$/u.test(part)) return false;
+			return Number(part) <= 255;
+		})) return false;
+		const octets = parts.map(Number);
+		const first = octets[0];
+		const second = octets[1];
+		return first !== void 0 && second !== void 0 && first !== 0 && first !== 127 && first < 224 && !(first === 169 && second === 254);
+	}
+	if (!address.includes(":") || !/^[0-9a-fA-F:.]+$/u.test(address)) return false;
+	const normalized = address.toLowerCase();
+	const firstGroup = normalized.split(":")[0];
+	if (normalized === "::" || normalized === "::1" || normalized.startsWith("ff") || firstGroup !== void 0 && /^fe[89ab]/u.test(firstGroup)) return false;
+	try {
+		return new URL(`http://[${address}]/`).hostname.length > 2;
+	} catch {
+		return false;
+	}
+}
+var BROWSER_SUCCESS_CHAIN = BROWSER_ATTEMPT_STAGES.filter((stage) => stage !== "failed");
+var SENDER_SUCCESS_CHAIN = SENDER_ATTEMPT_STAGES.filter((stage) => stage !== "failed");
+/**
+* Validation deliberately happens before reduction. A missing terminal is lost
+* evidence, not a peer failure, and coercing it into a fixed outcome would make
+* the browser gate claim a runtime fact it never observed.
+*/
+var AttemptCollector = class {
+	#attempts = /* @__PURE__ */ new Map();
+	#laneAuthorityBySession = /* @__PURE__ */ new Map();
+	#receiveSequence = 0;
+	#finalized = false;
+	#rejectedEvidence = false;
+	ingest(value) {
+		if (this.#finalized) contractError("attempt collector is already finalized");
+		if (this.#rejectedEvidence) contractError("attempt collector previously rejected evidence");
+		try {
+			const evidence = parseAttemptEvidence(value);
+			const key = attemptKey(evidence);
+			const attempt = cloneAttemptState(this.#attempts.get(key), evidence);
+			const laneAuthority = cloneSessionLaneAuthority(this.#laneAuthorityBySession.get(evidence.sessionId));
+			validateStreamEvent(ensureSideStream(attempt, evidence.side), attempt, evidence);
+			reserveObservedLane(laneAuthority, attempt);
+			const receiveSequence = this.#receiveSequence + 1;
+			const received = freezeRecord({
+				receiveSequence,
+				evidence
+			});
+			attempt.events.push(received);
+			this.#attempts.set(key, attempt);
+			this.#laneAuthorityBySession.set(evidence.sessionId, laneAuthority);
+			this.#receiveSequence = receiveSequence;
+			return received;
+		} catch (cause) {
+			this.#rejectedEvidence = true;
+			throw cause;
+		}
+	}
+	finalize() {
+		if (this.#finalized) contractError("attempt collector can only be finalized once");
+		this.#finalized = true;
+		if (this.#rejectedEvidence) contractError("attempt collector cannot finalize after rejected evidence");
+		const attempts = [...this.#attempts.values()].sort((left, right) => compareAttemptKeys(attemptKey(left), attemptKey(right))).map((attempt) => finalizeAttempt(attempt));
+		return Object.freeze(attempts);
+	}
+	finalizePreservingCompleted() {
+		if (this.#finalized) contractError("attempt collector can only be finalized once");
+		this.#finalized = true;
+		const attempts = [];
+		const violations = [];
+		for (const attempt of [...this.#attempts.values()].sort((left, right) => compareAttemptKeys(attemptKey(left), attemptKey(right)))) try {
+			attempts.push(finalizeAttempt(attempt));
+		} catch (cause) {
+			violations.push(errorMessage(cause));
+		}
+		if (this.#rejectedEvidence && violations.length === 0) violations.push("attempt collector rejected evidence after its last valid state");
+		return freezeRecord({
+			attempts: Object.freeze(attempts),
+			integrityViolations: Object.freeze([...new Set(violations)].sort(compareAttemptKeys))
+		});
+	}
+};
+function cloneAttemptState(current, evidence) {
+	if (current === void 0) return {
+		sessionId: evidence.sessionId,
+		peerPathId: evidence.peerPathId,
+		attemptId: evidence.attemptId,
+		streams: /* @__PURE__ */ new Map(),
+		events: [],
+		lane: void 0
+	};
+	return {
+		sessionId: current.sessionId,
+		peerPathId: current.peerPathId,
+		attemptId: current.attemptId,
+		streams: new Map([...current.streams].map(([side, stream]) => [side, { ...stream }])),
+		events: [...current.events],
+		lane: current.lane
+	};
+}
+function cloneSessionLaneAuthority(current) {
+	return {
+		laneIdOwners: new Map(current?.laneIdOwners),
+		laneEpochOwners: new Map(current?.laneEpochOwners)
+	};
+}
+function reserveObservedLane(authority, attempt) {
+	const lane = attempt.lane;
+	if (lane === void 0) return;
+	const owner = attemptKey(attempt);
+	const laneIdOwner = authority.laneIdOwners.get(lane.laneId);
+	const laneEpochOwner = authority.laneEpochOwners.get(lane.laneEpoch);
+	if (laneIdOwner !== void 0 && laneIdOwner !== owner) contractError(`lane ID ${lane.laneId} is reused within ProtocolSession ${attempt.sessionId}`);
+	if (laneEpochOwner !== void 0 && laneEpochOwner !== owner) contractError(`lane epoch ${lane.laneEpoch} is reused within ProtocolSession ${attempt.sessionId}`);
+	authority.laneIdOwners.set(lane.laneId, owner);
+	authority.laneEpochOwners.set(lane.laneEpoch, owner);
+}
+function ensureSideStream(attempt, side) {
+	let stream = attempt.streams.get(side);
+	if (stream === void 0) {
+		stream = {
+			side,
+			nextSuccessIndex: 0,
+			lastSequence: 0,
+			lastElapsedMs: 0,
+			terminal: void 0,
+			candidateCounts: void 0,
+			lane: void 0,
+			localGeneration: void 0
+		};
+		attempt.streams.set(side, stream);
+	}
+	return stream;
+}
+function reducePeerAttemptOutcome(attempts) {
+	if (attempts.length === 0) return "not-started";
+	const identities = /* @__PURE__ */ new Set();
+	let admitted = false;
+	let failed = false;
+	for (const attempt of attempts) {
+		const key = attemptKey(attempt);
+		if (identities.has(key)) contractError(`logical attempt ${key} appears more than once`);
+		identities.add(key);
+		if (attempt.outcome === "failed") failed = true;
+		else admitted = true;
+	}
+	if (failed) return "failed";
+	if (!admitted) contractError("non-empty logical attempt set has no terminal outcome");
+	return "admitted";
+}
+function parseLogicalAttempts(value, allowReceiveSequenceGaps = false) {
+	const normalized = requireArray(value, "logical attempts").map((item, index) => parseLogicalAttemptRecord(item, index));
+	const events = normalized.flatMap((attempt) => attempt.events).sort((left, right) => left.receiveSequence - right.receiveSequence);
+	const collector = new AttemptCollector();
+	let previousReceiveSequence = 0;
+	for (let index = 0; index < events.length; index += 1) {
+		const received = events[index];
+		if (received === void 0 || (allowReceiveSequenceGaps ? received.receiveSequence <= previousReceiveSequence : received.receiveSequence !== index + 1)) contractError("collector receive sequence must be contiguous from one");
+		previousReceiveSequence = received.receiveSequence;
+		const replayed = collector.ingest(received.evidence);
+		if (!allowReceiveSequenceGaps && replayed.receiveSequence !== received.receiveSequence) contractError("collector receive sequence does not reproduce");
+	}
+	const replayed = collector.finalize();
+	const rankByReceiveSequence = new Map(events.map((event, index) => [event.receiveSequence, index + 1]));
+	const normalizedForReplay = normalized.map((attempt) => freezeRecord({
+		...attempt,
+		events: Object.freeze(attempt.events.map((event) => freezeRecord({
+			...event,
+			receiveSequence: rankByReceiveSequence.get(event.receiveSequence)
+		})))
+	}));
+	if (JSON.stringify(replayed) !== JSON.stringify(normalizedForReplay)) contractError("serialized logical attempts do not match their producer evidence");
+	return allowReceiveSequenceGaps ? Object.freeze(normalized) : replayed;
+}
+function validateStreamEvent(stream, attempt, evidence) {
+	if (stream.terminal !== void 0) contractError(`${evidence.stage === "admitted" || evidence.stage === "failed" ? "duplicate terminal" : "post-terminal event"} for ${attemptKey(attempt)}/${stream.side}`);
+	if (evidence.sideSequence !== stream.lastSequence + 1) contractError(`side sequence is not contiguous for ${attemptKey(attempt)}/${stream.side}`);
+	if (stream.lastSequence === 0 && evidence.stage !== "started") contractError(`side stream does not begin with started for ${attemptKey(attempt)}/${stream.side}`);
+	if (evidence.attemptElapsedMs < stream.lastElapsedMs) contractError(`attempt elapsed time regressed for ${attemptKey(attempt)}/${stream.side}`);
+	const expectedStage = successChain(stream.side)[stream.nextSuccessIndex];
+	if (evidence.stage === "failed") {
+		if (evidence.failedAtStage !== expectedStage) contractError(`failed-at stage does not name the next milestone for ${attemptKey(attempt)}/${stream.side}`);
+		stream.terminal = "failed";
+	} else {
+		if (evidence.stage !== expectedStage) contractError(`attempt stage is out of order for ${attemptKey(attempt)}/${stream.side}`);
+		stream.nextSuccessIndex += 1;
+		if (evidence.stage === "admitted") stream.terminal = "admitted";
+	}
+	validateCandidateCounts(stream, evidence, attempt);
+	validateSelectedPair(stream, evidence, attempt);
+	validateLane(stream, attempt, evidence);
+	validateLocalGeneration(stream, evidence, attempt);
+	stream.lastSequence = evidence.sideSequence;
+	stream.lastElapsedMs = evidence.attemptElapsedMs;
+}
+function validateCandidateCounts(stream, evidence, attempt) {
+	const counts = Object.hasOwn(evidence, "candidateCounts") ? evidence.candidateCounts : void 0;
+	if (stream.candidateCounts !== void 0 && counts === void 0) contractError(`candidate counts disappeared for ${attemptKey(attempt)}/${stream.side}`);
+	if (counts !== void 0 && stream.candidateCounts !== void 0 && (counts.localEmitted < stream.candidateCounts.localEmitted || counts.remoteAccepted < stream.candidateCounts.remoteAccepted)) contractError(`cumulative candidate counts regressed for ${attemptKey(attempt)}/${stream.side}`);
+	if (counts !== void 0) stream.candidateCounts = counts;
+}
+function validateLane(stream, attempt, evidence) {
+	const lane = Object.hasOwn(evidence, "lane") ? evidence.lane : void 0;
+	if (stream.lane !== void 0 && lane === void 0) contractError(`known lane identity disappeared for ${attemptKey(attempt)}/${stream.side}`);
+	if (lane === void 0) return;
+	if (evidence.stage === "failed" && stream.lane === void 0) contractError(`failed evidence invents a lane before its milestone for ${attemptKey(attempt)}/${stream.side}`);
+	if (stream.lane !== void 0 && !sameLane$1(stream.lane, lane)) contractError(`lane identity changed within ${attemptKey(attempt)}/${stream.side}`);
+	if (attempt.lane !== void 0 && !sameLane$1(attempt.lane, lane)) contractError(`browser and sender lane identities differ for ${attemptKey(attempt)}`);
+	stream.lane = lane;
+	attempt.lane = lane;
+}
+function validateSelectedPair(stream, evidence, attempt) {
+	if (!Object.hasOwn(evidence, "selectedPair")) return;
+	if (evidence.stage === "failed" && stream.lane === void 0) contractError(`failed evidence invents selected-pair proof before lane admission for ${attemptKey(attempt)}/${stream.side}`);
+}
+function validateLocalGeneration(stream, evidence, attempt) {
+	if (evidence.side !== "sender") return;
+	const generation = evidence.localGeneration;
+	if (stream.localGeneration !== void 0 && generation === void 0) contractError(`known local generation disappeared for ${attemptKey(attempt)}/sender`);
+	if (generation !== void 0 && stream.localGeneration !== void 0 && generation !== stream.localGeneration) contractError(`local generation changed for ${attemptKey(attempt)}/sender`);
+	if (generation !== void 0) stream.localGeneration = generation;
+}
+function finalizeAttempt(attempt) {
+	const browser = attempt.streams.get("browser");
+	if (browser === void 0) contractError(`logical attempt ${attemptKey(attempt)} has no browser authority stream`);
+	for (const stream of attempt.streams.values()) if (stream.terminal === void 0) contractError(`side stream ${attemptKey(attempt)}/${stream.side} has no terminal`);
+	const failed = [...attempt.streams.values()].some((stream) => stream.terminal === "failed");
+	const answerReceivedIndex = BROWSER_SUCCESS_CHAIN.indexOf("answer-received");
+	const authenticatedBrowserFailure = attempt.events.find(({ evidence }) => evidence.side === "browser" && evidence.stage === "failed" && Object.hasOwn(evidence, "authenticatedSenderOperationFailure"))?.evidence;
+	const authenticatedSenderFailure = authenticatedBrowserFailure !== void 0;
+	const sender = attempt.streams.get("sender");
+	if (failed && (browser.nextSuccessIndex > answerReceivedIndex || authenticatedSenderFailure) && sender === void 0) contractError(`failed attempt ${attemptKey(attempt)} observed sender participation but has no sender stream`);
+	if (authenticatedSenderFailure && (sender === void 0 || !stageCompleted(sender, "offer-received"))) contractError(`authenticated sender failure ${attemptKey(attempt)} lacks sender offer reception`);
+	validateAuthenticatedSenderFailure(attempt, sender, authenticatedBrowserFailure);
+	validateCrossSideReachability(attempt, browser);
+	if (!failed) {
+		if (browser.terminal !== "admitted" || sender?.terminal !== "admitted") contractError(`admitted attempt ${attemptKey(attempt)} lacks both admitted side streams`);
+		if (attempt.lane === void 0) contractError(`admitted attempt ${attemptKey(attempt)} has no authoritative lane identity`);
+	}
+	return freezeRecord({
+		sessionId: attempt.sessionId,
+		peerPathId: attempt.peerPathId,
+		attemptId: attempt.attemptId,
+		outcome: failed ? "failed" : "admitted",
+		events: Object.freeze([...attempt.events])
+	});
+}
+function validateAuthenticatedSenderFailure(attempt, sender, browserEvidence) {
+	if (browserEvidence === void 0) return;
+	if (browserEvidence.side !== "browser" || browserEvidence.stage !== "failed") contractError(`authenticated sender failure ${attemptKey(attempt)} has invalid browser authority`);
+	const operation = browserEvidence.authenticatedSenderOperationFailure;
+	const senderEvidence = attempt.events.find(({ evidence }) => evidence.side === "sender" && evidence.stage === "failed")?.evidence;
+	if (operation === void 0 || sender?.terminal !== "failed" || senderEvidence?.side !== "sender" || senderEvidence.stage !== "failed") contractError(`authenticated sender failure ${attemptKey(attempt)} requires a failed sender terminal`);
+	if (senderEvidence.typedErrorCode !== browserEvidence.typedErrorCode || senderEvidence.failureScope !== browserEvidence.failureScope || senderEvidence.failureMessage !== operation.message) contractError(`authenticated sender failure ${attemptKey(attempt)} differs across producer streams`);
+}
+function validateCrossSideReachability(attempt, browser) {
+	const sender = attempt.streams.get("sender");
+	if (sender === void 0) return;
+	if (!stageCompleted(browser, "offer-sent")) contractError(`sender stream ${attemptKey(attempt)} exists before browser offer dispatch`);
+	for (const [browserStage, senderStage] of [
+		["answer-received", "answer-sent"],
+		["datachannel-open", "datachannel-open"],
+		["lane-granted", "lane-admission-started"]
+	]) if (stageCompleted(browser, browserStage) && !stageCompleted(sender, senderStage)) contractError(`browser ${browserStage} in ${attemptKey(attempt)} lacks sender ${senderStage}`);
+	if (stageCompleted(browser, "lane-attached") && sender.terminal !== "admitted") contractError(`browser lane attachment in ${attemptKey(attempt)} lacks sender admission`);
+	if (stageCompleted(sender, "datachannel-open") && !stageCompleted(browser, "answer-received")) contractError(`sender datachannel in ${attemptKey(attempt)} precedes browser answer receipt`);
+	if ((stageCompleted(sender, "lane-admission-started") || sender.terminal === "admitted") && !stageCompleted(browser, "datachannel-open")) contractError(`sender lane admission in ${attemptKey(attempt)} lacks browser datachannel`);
+}
+function stageCompleted(stream, stage) {
+	const stageIndex = successChain(stream.side).indexOf(stage);
+	return stageIndex >= 0 && stream.nextSuccessIndex > stageIndex;
+}
+function parseLogicalAttemptRecord(value, index) {
+	const record = requireRecord(value, `logical attempt ${index}`);
+	requireExactKeys(record, [
+		"sessionId",
+		"peerPathId",
+		"attemptId",
+		"outcome",
+		"events"
+	], [], `logical attempt ${index}`);
+	const sessionId = requireCanonicalIdentity(record.sessionId, `logical attempt ${index} session ID`);
+	const peerPathId = requireCanonicalIdentity(record.peerPathId, `logical attempt ${index} path ID`);
+	const attemptId = requireCanonicalIdentity(record.attemptId, `logical attempt ${index} attempt ID`);
+	const events = requireArray(record.events, `logical attempt ${index} events`).map((event, eventIndex) => {
+		const wrapper = requireRecord(event, `logical attempt ${index} event ${eventIndex}`);
+		requireExactKeys(wrapper, ["receiveSequence", "evidence"], [], `logical attempt ${index} event ${eventIndex}`);
+		const evidence = parseAttemptEvidence(wrapper.evidence);
+		if (evidence.sessionId !== sessionId || evidence.peerPathId !== peerPathId || evidence.attemptId !== attemptId) contractError(`logical attempt ${index} contains evidence for another identity`);
+		return freezeRecord({
+			receiveSequence: requireSafeInteger(wrapper.receiveSequence, 1, Number.MAX_SAFE_INTEGER, `logical attempt ${index} receive sequence`),
+			evidence
+		});
+	});
+	return freezeRecord({
+		sessionId,
+		peerPathId,
+		attemptId,
+		outcome: requireEnum(record.outcome, PEER_ATTEMPT_OUTCOMES.filter((outcome) => outcome !== "not-started"), `logical attempt ${index} outcome`),
+		events: Object.freeze(events)
+	});
+}
+function successChain(side) {
+	return side === "browser" ? BROWSER_SUCCESS_CHAIN : SENDER_SUCCESS_CHAIN;
+}
+function attemptKey(identity) {
+	return `${identity.sessionId}/${identity.peerPathId}/${identity.attemptId}`;
+}
+function sameLane$1(left, right) {
+	return left.laneId === right.laneId && left.laneEpoch === right.laneEpoch;
+}
+function compareAttemptKeys(left, right) {
+	if (left === right) return 0;
+	return left < right ? -1 : 1;
+}
+function errorMessage(cause) {
+	return cause instanceof Error ? cause.message : String(cause);
+}
+var WINDOWS_DEVICE_SEGMENT = /^(?:aux|clock\$|com(?:[1-9¹²³])|con|conin\$|conout\$|lpt(?:[1-9¹²³])|nul|prn)(?:\..*)?$/iu;
+var WINDOWS_FORBIDDEN_CHARACTER = /[<>"|?*]/u;
+var PORTABLE_PATH_MAXIMUM_BYTES = 4096;
+function requirePortableRelativePath(value, label, maximumBytes = PORTABLE_PATH_MAXIMUM_BYTES) {
+	if (typeof value !== "string" || value.length === 0 || !hasOnlyUnicodeScalars(value)) throw new Error(`${label} must be non-empty Unicode scalar text`);
+	if (value !== value.normalize("NFC")) throw new Error(`${label} must use canonical Unicode NFC`);
+	const segments = value.split("/");
+	if (Buffer.byteLength(value, "utf8") > maximumBytes || segments.length > 64 || value.includes("\\") || value.includes(":") || value.startsWith("/") || containsControlCharacter(value) || WINDOWS_FORBIDDEN_CHARACTER.test(value) || segments.some((segment) => segment === "" || segment === "." || segment === ".." || Buffer.byteLength(segment, "utf8") > 255 || segment.endsWith(".") || segment.endsWith(" ") || WINDOWS_DEVICE_SEGMENT.test(segment) || containsNonAsciiCasedScalar(segment))) throw new Error(`${label} must be a portable normalized relative POSIX path`);
+	return value;
+}
+function portablePathCollisionKey(path) {
+	return path.replace(/[A-Z]/gu, (character) => character.toLowerCase());
+}
+function comparePortablePaths(left, right) {
+	return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
+}
+function containsControlCharacter(value) {
+	return [...value].some((scalar) => {
+		const codePoint = scalar.codePointAt(0) ?? 0;
+		return codePoint <= 31 || codePoint === 127;
+	});
+}
+function containsNonAsciiCasedScalar(value) {
+	return [...value].some((scalar) => (scalar.codePointAt(0) ?? 0) > 127 && scalar.toUpperCase() !== scalar.toLowerCase());
+}
+function hasOnlyUnicodeScalars(value) {
+	for (let index = 0; index < value.length; index += 1) {
+		const current = value.charCodeAt(index);
+		if (current >= 55296 && current <= 56319) {
+			const following = value.charCodeAt(index + 1);
+			if (following < 56320 || following > 57343) return false;
+			index += 1;
+		} else if (current >= 56320 && current <= 57343) return false;
+	}
+	return true;
+}
+var ARTIFACT_MANIFEST_ID_SCHEMA_VERSION = 1;
+var ARTIFACT_MANIFEST_SET_SCHEMA_VERSION = 1;
+/**
+* Guard authorization must follow exact bytes and metadata across process
+* boundaries. Content-addressing the full manifest prevents a path-stable file
+* replacement from borrowing another sample's guard result.
+*/
+function artifactIdForManifest(artifact) {
+	const encoded = JSON.stringify({
+		schemaVersion: ARTIFACT_MANIFEST_ID_SCHEMA_VERSION,
+		kind: artifact.kind,
+		relativePath: artifact.relativePath,
+		mediaType: artifact.mediaType,
+		byteLength: artifact.byteLength,
+		sha256: artifact.sha256
+	});
+	return `artifact-${createHash("sha256").update(encoded, "utf8").digest("hex")}`;
+}
+function artifactManifestSha256(artifacts) {
+	const canonical = [...artifacts].map((artifact) => ({
+		artifactId: artifact.artifactId,
+		kind: artifact.kind,
+		relativePath: artifact.relativePath,
+		mediaType: artifact.mediaType,
+		byteLength: artifact.byteLength,
+		sha256: artifact.sha256
+	})).sort((left, right) => comparePortablePaths(left.relativePath, right.relativePath) || compareStrings$2(left.artifactId, right.artifactId));
+	return sha256Bytes(Buffer.from(JSON.stringify({
+		schemaVersion: ARTIFACT_MANIFEST_SET_SCHEMA_VERSION,
+		artifacts: canonical
+	}), "utf8"));
+}
+function sha256Bytes(value) {
+	return createHash("sha256").update(value).digest("hex");
+}
+function compareStrings$2(left, right) {
+	if (left === right) return 0;
+	return left < right ? -1 : 1;
+}
+var CAPABILITY_PROBE_DEADLINE_MS = 5e3;
+var RTC_API_PRESENCE = Object.freeze([
+	"unknown",
+	"absent",
+	"present"
+]);
+var CAPABILITY_PROBE_OUTCOMES = Object.freeze([
+	"not-started",
+	"succeeded",
+	"failed"
+]);
+var CAPABILITY_PROBE_FAILURE_CODES = Object.freeze([
+	"peer-construction",
+	"datachannel-construction",
+	"offer-creation",
+	"local-description",
+	"probe-deadline",
+	"unexpected"
+]);
+/**
+* The probe proves only that a native PeerConnection can retain a non-empty
+* local offer after creating the WindShare-shaped DataChannel. Waiting for ICE
+* or a remote peer here would collapse runtime capability into topology health.
+*/
+function classifyRtcCapability(evidence) {
+	validateCapabilityCombination(evidence);
+	if (evidence.apiPresence === "unknown") return "unknown";
+	if (evidence.apiPresence === "absent") return "unavailable";
+	if (evidence.probeOutcome === "not-started") return "unknown";
+	return evidence.probeOutcome === "succeeded" ? "available" : "unusable";
+}
+function parseCapabilityEvidence(value) {
+	const record = requireRecord(value, "capability evidence");
+	requireExactKeys(record, [
+		"schemaVersion",
+		"apiPresence",
+		"probeOutcome",
+		"probeDeadlineMs"
+	], ["failureCode", "failureMessage"], "capability evidence");
+	const failureCodeValue = optionalField(record, "failureCode");
+	const failureMessageValue = optionalField(record, "failureMessage");
+	const result = {
+		schemaVersion: requireLiteral(record.schemaVersion, 1, "capability schema version"),
+		apiPresence: requireEnum(record.apiPresence, RTC_API_PRESENCE, "RTC API presence"),
+		probeOutcome: requireEnum(record.probeOutcome, CAPABILITY_PROBE_OUTCOMES, "capability probe outcome"),
+		probeDeadlineMs: requireLiteral(record.probeDeadlineMs, CAPABILITY_PROBE_DEADLINE_MS, "capability probe deadline"),
+		...failureCodeValue === void 0 ? {} : { failureCode: requireEnum(failureCodeValue, CAPABILITY_PROBE_FAILURE_CODES, "capability probe failure code") },
+		...failureMessageValue === void 0 ? {} : { failureMessage: requireString(failureMessageValue, "capability failure message", 512) }
+	};
+	validateCapabilityCombination(result);
+	return freezeRecord(result);
+}
+function validateCapabilityCombination(evidence) {
+	const failed = evidence.probeOutcome === "failed";
+	if (failed !== (evidence.failureCode !== void 0)) contractError("only a failed capability probe may carry a failure code, and it must carry one");
+	if (evidence.failureMessage !== void 0 !== failed) contractError("only a failed capability probe may carry a failure message, and it must carry one");
+	if (evidence.apiPresence !== "present" && evidence.probeOutcome !== "not-started") contractError("a capability probe cannot run before native RTC API presence is proved");
+}
+var MAIN_ROUTE_MODES = Object.freeze(["relay-only", "hot-switch"]);
+var DISPATCH_ROUTES = Object.freeze(["relay", "peer"]);
+function parseMainRouteEvidence(value) {
+	if (value === null) return null;
+	const evidence = requireRecord(value, "main route evidence");
+	requireExactKeys(evidence, ["mode", "observations"], [], "main route evidence");
+	const mode = requireEnum(evidence.mode, MAIN_ROUTE_MODES, "main route mode");
+	const observations = Object.freeze(requireArray(evidence.observations, "main route observations").map((item, index) => parseRouteObservation(item, index)));
+	validateObservationSequences(observations);
+	if (mode === "relay-only") validateRelayOnly(observations);
+	else validateHotSwitch(observations);
+	return freezeRecord({
+		mode,
+		observations
+	});
+}
+function parseRouteObservation(value, index) {
+	const observation = requireRecord(value, `route observation ${index}`);
+	const kind = requireEnum(observation.kind, [
+		"dispatch",
+		"peer-admitted",
+		"relay-cut-fence"
+	], `route observation ${index} kind`);
+	const observationSequence = requireSafeInteger(observation.observationSequence, 1, Number.MAX_SAFE_INTEGER, `route observation ${index} sequence`);
+	if (kind === "dispatch") {
+		requireExactKeys(observation, [
+			"observationSequence",
+			"kind",
+			"dispatchSequence",
+			"route",
+			"lane"
+		], [], `route dispatch observation ${index}`);
+		const route = requireEnum(observation.route, DISPATCH_ROUTES, `route dispatch ${index} route`);
+		return freezeRecord({
+			observationSequence,
+			kind,
+			dispatchSequence: requireSafeInteger(observation.dispatchSequence, 1, Number.MAX_SAFE_INTEGER, `route dispatch ${index} sequence`),
+			route,
+			lane: parseLane(observation.lane, `route dispatch ${index} lane`, route === "relay" ? "relay" : "peer")
+		});
+	}
+	if (kind === "peer-admitted") {
+		requireExactKeys(observation, [
+			"observationSequence",
+			"kind",
+			"sessionId",
+			"peerPathId",
+			"attemptId",
+			"lane"
+		], [], `peer admission observation ${index}`);
+		return freezeRecord({
+			observationSequence,
+			kind,
+			sessionId: requireCanonicalIdentity(observation.sessionId, "route admission session ID"),
+			peerPathId: requireCanonicalIdentity(observation.peerPathId, "route admission peer path ID"),
+			attemptId: requireCanonicalIdentity(observation.attemptId, "route admission attempt ID"),
+			lane: parseLane(observation.lane, "route admission lane", "peer")
+		});
+	}
+	requireExactKeys(observation, [
+		"observationSequence",
+		"kind",
+		"dispatchSequenceBoundary",
+		"proxyAccepting",
+		"receiverRelayEligible"
+	], [], `relay cut fence observation ${index}`);
+	if (requireBoolean(observation.proxyAccepting, "relay cut proxy accepting") || requireBoolean(observation.receiverRelayEligible, "receiver relay eligibility")) contractError("completed relay cut fence must stop proxy admission and receiver relay eligibility");
+	return freezeRecord({
+		observationSequence,
+		kind,
+		dispatchSequenceBoundary: requireSafeInteger(observation.dispatchSequenceBoundary, 1, Number.MAX_SAFE_INTEGER, "relay cut dispatch sequence boundary"),
+		proxyAccepting: false,
+		receiverRelayEligible: false
+	});
+}
+function validateObservationSequences(observations) {
+	let expectedDispatchSequence = 1;
+	for (let index = 0; index < observations.length; index += 1) {
+		const observation = observations[index];
+		if (observation === void 0 || observation.observationSequence !== index + 1) contractError("route observation sequence must be contiguous from one");
+		if (observation.kind === "dispatch") {
+			if (observation.dispatchSequence !== expectedDispatchSequence) contractError("route dispatch sequence must be contiguous from one");
+			expectedDispatchSequence += 1;
+		}
+	}
+}
+function validateRelayOnly(observations) {
+	if (observations.length === 0 || observations.some((observation) => observation.kind !== "dispatch" || observation.route !== "relay")) contractError("relay-only evidence must contain only relay dispatch observations");
+}
+function validateHotSwitch(observations) {
+	const admissions = observations.filter((observation) => observation.kind === "peer-admitted");
+	const fences = observations.filter((observation) => observation.kind === "relay-cut-fence");
+	if (admissions.length !== 1 || fences.length !== 1) contractError("hot-switch evidence requires exactly one peer admission and relay cut fence");
+	const admission = admissions[0];
+	const fence = fences[0];
+	if (admission === void 0 || fence === void 0 || admission.observationSequence >= fence.observationSequence) contractError("hot-switch peer admission must precede the relay cut fence");
+	const dispatches = observations.filter((observation) => observation.kind === "dispatch");
+	const relayBeforeAdmission = dispatches.some((dispatch) => dispatch.route === "relay" && dispatch.observationSequence < admission.observationSequence);
+	const peerBeforeAdmission = dispatches.some((dispatch) => dispatch.route === "peer" && dispatch.observationSequence < admission.observationSequence);
+	const peerOnUnadmittedLane = dispatches.some((dispatch) => dispatch.route === "peer" && !sameLane(dispatch.lane, admission.lane));
+	const lastBeforeFence = dispatches.filter((dispatch) => dispatch.observationSequence < fence.observationSequence).at(-1);
+	const peerAfterFence = dispatches.some((dispatch) => dispatch.route === "peer" && dispatch.observationSequence > fence.observationSequence && dispatch.dispatchSequence > fence.dispatchSequenceBoundary && sameLane(dispatch.lane, admission.lane));
+	const relayAfterFence = dispatches.some((dispatch) => dispatch.route === "relay" && dispatch.observationSequence > fence.observationSequence);
+	if (!relayBeforeAdmission || peerBeforeAdmission || peerOnUnadmittedLane || lastBeforeFence === void 0 || lastBeforeFence.dispatchSequence !== fence.dispatchSequenceBoundary || !peerAfterFence || relayAfterFence) contractError("hot-switch evidence does not prove relay, admission, cut fence, and post-fence peer dispatch");
+}
+function parseLane(value, label, authority) {
+	const lane = requireRecord(value, label);
+	requireExactKeys(lane, ["laneId", "laneEpoch"], [], label);
+	return freezeRecord({
+		laneId: requireSafeInteger(lane.laneId, 1, 4294967295, `${label} ID`),
+		laneEpoch: requireSafeInteger(lane.laneEpoch, authority === "relay" ? 0 : 1, authority === "relay" ? 0 : 4294967295, `${label} epoch`)
+	});
+}
+function sameLane(left, right) {
+	return left.laneId === right.laneId && left.laneEpoch === right.laneEpoch;
+}
+var BROWSER_RUN_POLICY_IDS = Object.freeze([
+	"blocking",
+	"closure",
+	"stability"
+]);
+var POLICY_SAMPLE_COUNTS = Object.freeze({
+	blocking: 1,
+	closure: 3,
+	stability: 5
+});
+var POLICIES = Object.freeze(Object.fromEntries(BROWSER_RUN_POLICY_IDS.map((policyId) => [policyId, freezeRecord({
+	schemaVersion: 1,
+	policyId,
+	policyVersion: 1,
+	sampleCount: POLICY_SAMPLE_COUNTS[policyId]
+})])));
+function browserRunPolicy(policyId) {
+	return POLICIES[policyId];
+}
+function parseBrowserRunPolicy(value, label = "browser run policy") {
+	const record = requireRecord(value, label);
+	requireExactKeys(record, [
+		"schemaVersion",
+		"policyId",
+		"policyVersion",
+		"sampleCount"
+	], [], label);
+	const canonical = browserRunPolicy(requireEnum(record.policyId, BROWSER_RUN_POLICY_IDS, `${label} identity`));
+	requireLiteral(record.schemaVersion, 1, `${label} schema version`);
+	requireLiteral(record.policyVersion, 1, `${label} version`);
+	requireLiteral(record.sampleCount, canonical.sampleCount, `${label} sample count`);
+	return canonical;
+}
+function validatePolicySampleIndex(sampleIndex, policy, label = "sample index") {
+	if (!Number.isSafeInteger(sampleIndex) || sampleIndex < 1 || sampleIndex > policy.sampleCount) throw new Error(`${label} must be in [1, ${policy.sampleCount}] for ${policy.policyId}@${policy.policyVersion}`);
+	return sampleIndex;
 }
 function parseBrowserSampleResult(value, topologyLock) {
 	const { profile: topology, resolution, profileSha256: expectedProfileSha256, resolutionSha256: expectedResolutionSha256 } = readVerifiedTestIceTopologyLock(topologyLock);
@@ -1786,26 +1806,6 @@ function applicabilityForApiPresence(presence) {
 	if (presence === "unknown") return "unknown";
 	return presence === "absent" ? "not-applicable" : "applicable";
 }
-/** Runtime admission remains an observed fact when pair proof is absent. This
-* predicate gives the later verdict one explicit authority for rejecting that
-* otherwise admitted sample without rewriting its peer outcome. */
-function hasDirectSelectedPairProof(attempts, topology, resolution) {
-	const admitted = attempts.filter((attempt) => attempt.outcome === "admitted");
-	return admitted.length > 0 && admitted.every((attempt) => {
-		const browser = attempt.events.find(({ evidence }) => evidence.side === "browser" && evidence.stage === "admitted")?.evidence;
-		const sender = attempt.events.find(({ evidence }) => evidence.side === "sender" && evidence.stage === "admitted")?.evidence;
-		if (browser?.side !== "browser" || browser.stage !== "admitted" || sender?.side !== "sender" || sender.stage !== "admitted" || browser.selectedPair === null || sender.selectedPair === null) return false;
-		return selectedPairAllowedByTopology(browser.selectedPair, topology, resolution) && selectedPairAllowedByTopology(sender.selectedPair, topology, resolution) && selectedPairsCorrelate(browser.selectedPair, sender.selectedPair);
-	});
-}
-function validateHotSwitchAttemptCorrelation(route, attempts) {
-	const admission = route.observations.find((observation) => observation.kind === "peer-admitted");
-	if (admission === void 0) contractError("hot-switch route evidence lacks peer admission");
-	const matches = attempts.filter((attempt) => attempt.sessionId === admission.sessionId && attempt.peerPathId === admission.peerPathId && attempt.attemptId === admission.attemptId);
-	if (matches.length !== 1 || matches[0]?.outcome !== "admitted") contractError("hot-switch route admission does not identify one admitted logical attempt");
-	const browserAdmission = matches[0].events.find(({ evidence }) => evidence.side === "browser" && evidence.stage === "admitted")?.evidence;
-	if (browserAdmission?.side !== "browser" || browserAdmission.stage !== "admitted" || browserAdmission.lane.laneId !== admission.lane.laneId || browserAdmission.lane.laneEpoch !== admission.lane.laneEpoch) contractError("hot-switch route admission lane differs from attempt admission");
-}
 function parseNativeInteropSide(value, side, parseSelectedPair) {
 	const evidence = requireRecord(value, `${side} native interop evidence`);
 	requireExactKeys(evidence, ["attemptId", "selectedPair"], [], `${side} native interop evidence`);
@@ -1813,25 +1813,6 @@ function parseNativeInteropSide(value, side, parseSelectedPair) {
 		attemptId: requireAttemptIdentity(evidence.attemptId),
 		selectedPair: evidence.selectedPair === null ? null : parseSelectedPair(evidence.selectedPair)
 	});
-}
-function selectedPairsCorrelate(browser, pion) {
-	return browserLocalEndpointMatchesPionRemote(browser.local, pion.remote) && browserRemoteEndpointMatchesPionLocal(browser.remote, pion.local);
-}
-function browserLocalEndpointMatchesPionRemote(browser, pion) {
-	if (browser.protocol !== pion.protocol) return false;
-	if (browser.port !== void 0 && browser.port !== pion.port) return false;
-	if (browser.address === void 0) return browser.candidateType === "host";
-	if (isIpLiteral(browser.address)) return browser.address === pion.address;
-	return browser.candidateType === "host" && isMdnsHostname(browser.address);
-}
-function browserRemoteEndpointMatchesPionLocal(browser, pion) {
-	return browser.address !== void 0 && isIpLiteral(browser.address) && browser.address === pion.address && browser.port === pion.port && browser.protocol === pion.protocol;
-}
-function isIpLiteral(address) {
-	return address.includes(":") || /^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}$/u.test(address);
-}
-function isMdnsHostname(address) {
-	return /^(?=.{1,253}\.?$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+local\.?$/u.test(address);
 }
 function parseArtifacts(value) {
 	const identities = /* @__PURE__ */ new Set();
@@ -1918,12 +1899,6 @@ function compareStrings$1(left, right) {
 	if (left === right) return 0;
 	return left < right ? -1 : 1;
 }
-Object.freeze([
-	"exited",
-	"signaled",
-	"spawn-failed"
-]);
-Object.freeze(["completed", "failed"]);
 Object.freeze([
 	"not-started",
 	"passed",
@@ -2097,9 +2072,6 @@ function requireDecimal(value, maximum, label) {
 	if (!Number.isSafeInteger(numeric) || numeric > maximum) throw new Error(`${label} exceeds its byte authority`);
 	return encoded;
 }
-function sameOrderedStrings(left, right) {
-	return left.length === right.length && left.every((value, index) => value === right[index]);
-}
 function compareArtifactManifests(left, right) {
 	return comparePortablePaths(left.relativePath, right.relativePath) || compareStrings(left.artifactId, right.artifactId);
 }
@@ -2113,8 +2085,9 @@ function compareStrings(left, right) {
 	if (left === right) return 0;
 	return left < right ? -1 : 1;
 }
-//#endregion
-//#region scripts/browser-evidence/final-semantic-reducer.ts
+function sameOrderedStrings(left, right) {
+	return left.length === right.length && left.every((value, index) => value === right[index]);
+}
 /** The dependency-free workflow bundle consumes the producer's exact v2 parser. */
 function parseFinalGuardUploadManifest(encoded) {
 	return parseGuardUploadManifest(encoded);
@@ -2134,5 +2107,4 @@ async function evaluateFinalBrowserSample(input) {
 		disposition
 	});
 }
-//#endregion
 export { evaluateFinalBrowserSample, parseFinalGuardUploadManifest };

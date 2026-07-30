@@ -10,6 +10,11 @@ cd "$(dirname "$0")/../.."
 GOLANGCI_LINT='github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2'
 TARGET_OPERATING_SYSTEMS=(linux windows)
 
+SECONDS=0
+echo "== lint =="
+
+bash scripts/ci/workflow-lint.sh
+
 HOST_OPERATING_SYSTEM="$(go env GOHOSTOS)"
 HOST_ARCHITECTURE="$(go env GOHOSTARCH)"
 GO_BIN="$(go env GOBIN)"
@@ -19,9 +24,6 @@ if [[ -z "$GO_BIN" ]]; then
     GO_BIN="${GO_PATH%%:*}/bin"
 fi
 LINTER_PATH="$GO_BIN/golangci-lint"
-
-SECONDS=0
-echo "== lint =="
 
 # Installing under host settings keeps the executable runnable while the later
 # invocations select target-specific source files through GOOS.

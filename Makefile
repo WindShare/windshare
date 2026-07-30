@@ -30,7 +30,7 @@ GATES := vet core-release race vectors coverage network web browser hygiene lint
 # keeping `make browser` independently self-sufficient.
 CI_GATES := $(subst browser,browser-ci,$(GATES))
 SCRIPT_GATES := $(filter-out core-release,$(GATES))
-LOCAL_ENTRYPOINTS := check browser-stability browser-network
+LOCAL_ENTRYPOINTS := check browser-contract browser-stability browser-network workflow-lint
 
 ifeq ($(OS),Windows_NT)
 DISPATCH = pwsh -NoProfile -File scripts/ci/$@.ps1

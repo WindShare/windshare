@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-import { runBrowserNetworkEntry } from './network-entry.mjs'
+import { runBrowserNetworkEntry } from '../../network-entry.mjs'
 
-const root = resolve(import.meta.dirname, '..', '..', '..')
+const root = resolve(import.meta.dirname, '..', '..', '..', '..', '..')
 const secretSentinels = Object.freeze({
   ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'network-entry-secret-token-must-not-leak',
   ACTIONS_ID_TOKEN_REQUEST_URL: 'https://secret.invalid/?value=network-entry-secret-url-must-not-leak',
@@ -92,4 +92,7 @@ for (const relativePath of [
 }
 
 const makefile = readFileSync(resolve(root, 'Makefile'), 'utf8')
-assert.match(makefile, /LOCAL_ENTRYPOINTS := check browser-stability browser-network/u)
+assert.match(
+  makefile,
+  /LOCAL_ENTRYPOINTS := check browser-contract browser-stability browser-network workflow-lint/u,
+)

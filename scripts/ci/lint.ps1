@@ -34,6 +34,10 @@ function Get-GoEnv([string]$Name) {
     return $value.Trim()
 }
 
+Invoke-Step 'GitHub Actions workflow lint' {
+    & (Join-Path $PSScriptRoot 'workflow-lint.ps1')
+}
+
 $hostOperatingSystem = Get-GoEnv 'GOHOSTOS'
 $hostArchitecture = Get-GoEnv 'GOHOSTARCH'
 $goBin = Get-GoEnv 'GOBIN'

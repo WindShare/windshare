@@ -26,21 +26,21 @@ import {
   runSuiteProduction,
   sampleChildCommand,
   suiteExecutionPlan,
-} from './main.mjs'
+} from '../../orchestrator.mjs'
 import {
   canonicalSampleCommandComponentSha256,
   canonicalSampleCommandSha256,
-} from './process/sample-command-authority.mjs'
+} from '../../process/sample-command-authority.mjs'
 import {
   BROWSERGATE_OPERATION_CLASS,
   BROWSERGATE_OPERATION_DEADLINE_MS,
   BROWSERGATE_OPERATION_PHASE,
-} from './operation-deadlines.mjs'
-import { browserRunPolicy } from '../../../web/scripts/browser-evidence/run-policy.ts'
-import { BROWSER_SAMPLE_DRIVER_SCHEMA_VERSION } from '../../../web/scripts/browser-evidence/sample-driver.ts'
-import { verifyPlaywrightDiscoveryContract } from './playwright-discovery.tests.mjs'
+} from '../../operation-deadlines.mjs'
+import { browserRunPolicy } from '../../../../../web/scripts/browser-evidence/run-policy.ts'
+import { BROWSER_SAMPLE_DRIVER_SCHEMA_VERSION } from '../../../../../web/scripts/browser-evidence/sample-driver.ts'
+import { verifyPlaywrightDiscoveryContract } from '../../testsupport/playwright-discovery.assertions.mjs'
 
-const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..')
 const WINDOWS_JOB_HELPER = Object.freeze({
   path: process.execPath,
   byteLength: 1,
@@ -107,6 +107,7 @@ function verifyOperationPlans() {
   assert.deepEqual(localOperationPlan('linux'), [
     'dependency-install',
     'browser-contract',
+    'generated-semantic-process',
     'browser-runtime-build',
     'browser-install',
     'browser-preflight',
@@ -127,6 +128,7 @@ function verifyOperationPlans() {
   assert.deepEqual(localOperationPlan('win32'), [
     'dependency-install',
     'browser-contract',
+    'generated-semantic-process',
     'browser-runtime-build',
     'browser-install',
     'browser-preflight',
@@ -144,9 +146,9 @@ function verifyOperationPlans() {
     'standard-library-verdict',
   ])
   assert.deepEqual(
-    localOperationPlan('linux', { skipDependencyInstall: true }).slice(0, 2),
-    ['dependency-install-reuse', 'browser-contract'],
-    'make ci may reuse dependencies but the contract remains the sole suite upstream owner',
+    localOperationPlan('linux', { skipDependencyInstall: true }).slice(0, 3),
+    ['dependency-install-reuse', 'browser-contract', 'generated-semantic-process'],
+    'make ci may reuse dependencies while the generated process still blocks local runtime construction',
   )
 
   const contextRoot = resolve(REPOSITORY_ROOT, 'test-results', 'browser-contract')
@@ -830,22 +832,28 @@ async function verifyOwnedSuitePhaseTerminalSemantics() {
   assert(nativeCommand.deadlineMs > 0)
   assert(nativeCommand.terminationGraceMs > 0)
 
-  let discoveryCommand
-  assert.equal(await executeOwnedSuitePhase({
-    phase: suiteExecutionPlan('main', 'linux').preExecutionDiscovery,
-    leaseId: 'test/discovery',
-    environment: {},
-    windowsJobHelper: null,
-    deadlineAuthority: fullAuthority(setupOperationClass, 'test/discovery'),
-    platform: 'linux',
-    executeNative: async (options) => {
-      discoveryCommand = options.command
-      return exited(0)
-    },
-  }), 0)
-  assert.equal(discoveryCommand.executable, process.execPath)
-  assert.match(discoveryCommand.arguments[0], /playwright-discovery\.integration\.tests\.mjs$/u)
-  assert.deepEqual(discoveryCommand.arguments.slice(1), ['main'])
+  for (const suite of ['main', 'pion']) {
+    const leaseId = `test/${suite}-discovery`
+    let discoveryCommand
+    assert.equal(await executeOwnedSuitePhase({
+      phase: suiteExecutionPlan(suite, 'linux').preExecutionDiscovery,
+      leaseId,
+      environment: {},
+      windowsJobHelper: null,
+      deadlineAuthority: fullAuthority(setupOperationClass, leaseId),
+      platform: 'linux',
+      executeNative: async (options) => {
+        discoveryCommand = options.command
+        return exited(0)
+      },
+    }), 0)
+    assert.equal(discoveryCommand.executable, process.execPath)
+    assert.match(
+      discoveryCommand.arguments[0],
+      /tests[\\/]suite-discovery[\\/]playwright-discovery\.tests\.mjs$/u,
+    )
+    assert.deepEqual(discoveryCommand.arguments.slice(1), [suite])
+  }
 
   let preflightCommand
   assert.equal(await executeOwnedSuitePhase({

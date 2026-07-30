@@ -9,12 +9,12 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-import { processSettlementPublicKeyFingerprint } from '../../../../web/scripts/browser-evidence/artifact/settlement-receipt.ts'
+import { processSettlementPublicKeyFingerprint } from '../../../../../web/scripts/browser-evidence/artifact/settlement-receipt.ts'
 import {
   createD5SettlementTrustHandoff,
   readD5SettlementTrustHandoff,
   writeD5SettlementTrustHandoff,
-} from './settlement-trust-handoff.mjs'
+} from '../../process/settlement-trust-handoff.mjs'
 
 const temporaryRoot = resolve(mkdtempSync(join(tmpdir(), 'windshare-d5-settlement-handoff-')))
 try {

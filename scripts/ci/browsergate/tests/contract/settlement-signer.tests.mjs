@@ -4,15 +4,15 @@ import { join, resolve } from 'node:path'
 import {
   canonicalSampleCommandSha256,
   createProcessSettlementSigner,
-} from './settlement-signer.mjs'
-import { verifyProcessSettlementAttestations } from '../../../../web/scripts/browser-evidence/artifact/settlement-receipt.ts'
-import { browserRunPolicy } from '../../../../web/scripts/browser-evidence/run-policy.ts'
+} from '../../process/settlement-signer.mjs'
+import { verifyProcessSettlementAttestations } from '../../../../../web/scripts/browser-evidence/artifact/settlement-receipt.ts'
+import { browserRunPolicy } from '../../../../../web/scripts/browser-evidence/run-policy.ts'
 
 const NOW_UNIX_MS = 1_800_000_000_000
 const RUNTIME_MANIFEST_SHA256 = 'a'.repeat(64)
 const CHECKOUT_SHA = 'b'.repeat(40)
 const RESULT_BYTES = Buffer.from('{"resultStatus":"final-valid"}\n', 'utf8')
-const REPOSITORY_ROOT = resolve('.')
+const REPOSITORY_ROOT = resolve(import.meta.dirname, '..', '..', '..', '..', '..')
 const OUTPUT_ROOT = resolve('settlement-test-output')
 const DRIVER_PATH = join(REPOSITORY_ROOT, 'web', 'scripts', 'browser-evidence', 'sample-driver.ts')
 const PLAYWRIGHT_PATH = join(REPOSITORY_ROOT, 'web', 'node_modules', '@playwright', 'test', 'cli.js')

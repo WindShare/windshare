@@ -22,6 +22,7 @@ export async function executeOwnedRuntimeCommand({
 }) {
   requireOperationId(operationId)
   requireCommand(command)
+  assertRuntimeCommandExecutableLive(command)
   requirePositiveInteger(deadlineMs, 'runtime command deadline')
   requirePositiveInteger(terminationGraceMs, 'runtime command termination grace')
   if (terminationSignal !== undefined && !(terminationSignal instanceof AbortSignal)) {
@@ -90,6 +91,7 @@ export async function executeOwnedRuntimeCommand({
   } else if (platform !== 'win32') {
     throw new Error(`unsupported runtime command platform ${JSON.stringify(platform)}`)
   }
+  assertRuntimeCommandExecutableLive(command)
   const result = Object.freeze({
     processEvidence: execution.processEvidence,
     timedOut: execution.timedOut,
@@ -180,6 +182,22 @@ function assertRuntimeArtifactLive(artifact, label) {
     metadataBefore.size !== metadataAfter.size || metadataBefore.mtimeNs !== metadataAfter.mtimeNs ||
     createHash('sha256').update(bytes).digest('hex') !== artifact.sha256
   ) throw new Error(`${label} changed while used`)
+}
+
+function assertRuntimeCommandExecutableLive(command) {
+  if (command.executableByteLength === undefined) return
+  const metadataBefore = lstatSync(command.executable, { bigint: true })
+  if (!metadataBefore.isFile() || metadataBefore.isSymbolicLink()) {
+    throw new Error('runtime command executable is not a regular file')
+  }
+  const bytes = readFileSync(command.executable)
+  const metadataAfter = lstatSync(command.executable, { bigint: true })
+  if (
+    metadataBefore.dev !== metadataAfter.dev || metadataBefore.ino !== metadataAfter.ino ||
+    metadataBefore.size !== metadataAfter.size || metadataBefore.mtimeNs !== metadataAfter.mtimeNs ||
+    bytes.byteLength !== command.executableByteLength ||
+    createHash('sha256').update(bytes).digest('hex') !== command.executableSha256
+  ) throw new Error('runtime command executable differs from its authenticated identity')
 }
 
 function canonicalEnvironment(value) {

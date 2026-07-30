@@ -1,8 +1,8 @@
 # Browsergate Generated Semantic Build Isolation Plan
 
-- Status: proposed P0 correctness prerequisite
-- Blocks: verifier execution before isolation lands, `make browser`, `make ci`, and final completion of the related plan
-- Does not block: contract/workflow work through step 5 of [Browsergate contract and workflow validation](browsergate-contract-and-workflow-validation-plan.md)
+- Status: archived — implemented and validated on 2026-07-30
+- Historical role: P0 correctness prerequisite for verifier execution, `make browser`, `make ci`, and completion of the related plan
+- Durable invariants: [Browser evidence execution](../../../web/scripts/browser-evidence/README.md#generated-semantic-artifact)
 
 ## Decision
 
@@ -40,6 +40,9 @@ The effective Vite configuration must include:
     sourcemap: false,
     rolldownOptions: {
       tsconfig: false,
+      experimental: {
+        attachDebugInfo: 'none',
+      },
       output: {
         format: 'es',
         entryFileNames: 'final-semantic-reducer.js',
@@ -60,7 +63,7 @@ Use absolute paths instead of `process.chdir`, and clean temporary state in `fin
 The injected builder returns one in-memory entry chunk. Before comparison or publication, require:
 
 - exactly one JavaScript output named `final-semantic-reducer.js`, with no assets or secondary chunks;
-- no dynamic imports and exactly the approved `node:crypto`, `node:path`, and `node:fs/promises` external imports, using bundler metadata rather than source regexes;
+- no dynamic imports and a canonical, duplicate-free observed subset of the approved `node:crypto`, `node:path`, and `node:fs/promises` external imports, using bundler metadata rather than source regexes;
 - the complete 64-hex semantic digest and the expected export surface;
 - the exact committed generated-directory surface.
 
@@ -104,7 +107,7 @@ The related contract/workflow plan may establish its runner, directories, Make t
 
 - Project Vite config, `.env`, inherited build environment, CWD, and application tsconfig policy cannot affect the worker; the effective config disables both Vite config and Rolldown tsconfig discovery.
 - No verifier code changes process working directory, and invalid CLI input starts no worker and performs no Vite or temporary-filesystem work.
-- Artifact validation rejects extra outputs, non-`node:` or dynamic imports, an incorrect full digest, and an incorrect export or directory surface.
+- Artifact validation rejects extra outputs, imports outside the approved Node capability set, dynamic imports, an incorrect full digest, and an incorrect export or directory surface.
 - `--write` publishes only validated bytes and preserves the prior artifact on failure.
 - The hand-maintained declaration file is absent; Windows and Linux builds under the pinned Node/Vite/Rolldown versions are byte-identical, and read-only verification leaves the worktree unchanged.
 - Runtime contracts prove one preflight per `build-runtime` invocation and no reducer load before preflight.
@@ -115,4 +118,4 @@ The related contract/workflow plan may establish its runner, directories, Make t
 
 Track operation-scoped native memory authority separately in the existing Windows Job/Linux owner framework. That work must freeze platform-specific metrics, authority availability, typed limit evidence, and empty-tree settlement; it must not expand this build module or move the verifier into contract discovery.
 
-After implementation, move durable invariants into the nearest maintained browsergate documentation and delete this temporary plan.
+Durable invariants now live in the maintained browser evidence documentation; this archived plan remains the implementation record.

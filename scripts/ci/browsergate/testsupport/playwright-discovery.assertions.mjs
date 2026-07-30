@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
 import {
   existsSync,
   mkdtempSync,
@@ -17,18 +16,18 @@ import {
   launchPlaywrightDiscovery,
   playwrightDiscoveryEnvironment,
   PLAYWRIGHT_DISCOVERY_COMMANDS,
-} from '../../../web/playwright.discovery.ts'
-import * as discoveryConfigFactory from '../../../web/playwright.discovery.config.ts'
+} from '../../../../web/playwright.discovery.ts'
+import * as discoveryConfigFactory from '../../../../web/playwright.discovery.config.ts'
 import {
   focusedPlaywrightSpec,
   playwrightDiscoveryProjectName,
   PLAYWRIGHT_SUITE_PARTITIONS,
   PLAYWRIGHT_SUITES,
-} from '../../../web/playwright.suite-config.ts'
+} from '../../../../web/playwright.suite-config.ts'
 
-const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..')
 const PLAYWRIGHT_WEB_ROOT = join(REPOSITORY_ROOT, 'web')
-const HOSTILE_DISCOVERY_ENVIRONMENT = Object.freeze({
+export const HOSTILE_DISCOVERY_ENVIRONMENT = Object.freeze({
   ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'forbidden-actions-oidc-token-sentinel',
   ACTIONS_RUNTIME_TOKEN: 'forbidden-actions-runtime-token-sentinel',
   ALL_PROXY: 'http://forbidden-all-proxy-sentinel.invalid',
@@ -66,20 +65,7 @@ export function verifyPlaywrightDiscoveryContract(productionPartitionPlan) {
   verifyWrapperFailureCleanup(hostEnvironment)
 }
 
-export function verifyPlaywrightDiscoveryIntegration(productionPartitionPlan, suite) {
-  verifyProductionConfigBoundary(productionPartitionPlan)
-  assert(PLAYWRIGHT_SUITES.includes(suite), 'Playwright discovery integration suite is invalid')
-  const hostEnvironment = hostileDiscoveryHostEnvironment()
-  const environment = playwrightDiscoveryEnvironment(hostEnvironment)
-  assertDiscoveryEnvironmentBoundary(environment)
-  if (suite === 'main') {
-    verifyDiscoveryNodeChild(environment)
-    verifyStaticDiscoveryModulesAreNotRunnable(hostEnvironment, suite)
-  }
-  verifyExactProductionPartition(hostEnvironment, [suite])
-}
-
-function verifyProductionConfigBoundary(productionPartitionPlan) {
+export function verifyProductionConfigBoundary(productionPartitionPlan) {
   assert.equal(typeof productionPartitionPlan, 'function')
   const mainConfig = readFileSync(join(PLAYWRIGHT_WEB_ROOT, 'playwright.config.ts'), 'utf8')
   const pionConfig = readFileSync(
@@ -135,91 +121,6 @@ function verifyDiscoveryConfigBoundary() {
   }
 }
 
-function verifyStaticDiscoveryModulesAreNotRunnable(hostEnvironment, suite) {
-  const canonical = PLAYWRIGHT_DISCOVERY_COMMANDS.find((command) => command.suite === suite)
-  assert.notEqual(canonical, undefined)
-  const environment = playwrightDiscoveryEnvironment(hostEnvironment)
-  for (const modulePath of [
-    join(PLAYWRIGHT_WEB_ROOT, 'playwright.discovery.config.ts'),
-    join(PLAYWRIGHT_WEB_ROOT, 'playwright.suite-config.ts'),
-  ]) {
-    const execution = spawnSync(canonical.executable, [
-      canonical.arguments[0],
-      'test',
-      '--config',
-      modulePath,
-      '__windshare_discovery_config_must_not_execute__',
-      '--pass-with-no-tests',
-    ], {
-      cwd: canonical.cwd,
-      encoding: 'utf8',
-      env: environment,
-      timeout: 30_000,
-      windowsHide: true,
-    })
-    const diagnostic = [execution.stdout, execution.stderr].filter(Boolean).join('\n')
-    assertNoDiscoverySentinelOutput(diagnostic)
-    assert.equal(execution.error, undefined, diagnostic)
-    assert.notEqual(execution.status, 0, modulePath + ' became a runnable static config')
-    assert.match(diagnostic, /config|export|property/u)
-  }
-}
-
-function verifyExactProductionPartition(hostEnvironment, suites) {
-  const discovered = new Map()
-  let actualListProcesses = 0
-  const commands = PLAYWRIGHT_DISCOVERY_COMMANDS.filter((command) => suites.includes(command.suite))
-  for (const command of commands) {
-    assert.equal(command.arguments.filter((argument) => argument === '--list').length, 1)
-    let wrapperConfig
-    const execution = launchPlaywrightDiscovery(
-      command,
-      hostEnvironment,
-      (executable, arguments_, options) => {
-        actualListProcesses += 1
-        wrapperConfig = observeWrapperConfig(arguments_)
-        return spawnSync(executable, [...arguments_], options)
-      },
-    )
-    assertWrapperRetired(wrapperConfig)
-    const diagnostic = [execution.stdout, execution.stderr].filter(Boolean).join('\n')
-    assertNoDiscoverySentinelOutput(diagnostic)
-    assert.equal(execution.error, undefined, diagnostic)
-    assert.equal(execution.status, 0, diagnostic)
-    discovered.set(
-      command.suite + '/' + command.partition,
-      discoveryTestIdentities(command, execution.stdout, diagnostic),
-    )
-  }
-  assert.equal(
-    actualListProcesses,
-    suites.length * PLAYWRIGHT_SUITE_PARTITIONS.length,
-    'discovery must issue one list-only process per requested suite partition',
-  )
-
-  for (const suite of suites) {
-    const base = requiredDiscoverySet(discovered, suite, 'base')
-    const focused = requiredDiscoverySet(discovered, suite, 'focused')
-    const remainder = requiredDiscoverySet(discovered, suite, 'remainder')
-    assert.equal(
-      focused.size,
-      3,
-      suite + ' focused discovery must resolve one test for each production browser',
-    )
-    assert(remainder.size > 0, suite + ' remainder discovery cannot be empty')
-    assert.deepEqual(
-      [...focused].filter((identity) => remainder.has(identity)),
-      [],
-      suite + ' production focused and remainder partitions must be disjoint',
-    )
-    assert.deepEqual(
-      [...new Set([...focused, ...remainder])].sort(),
-      [...base].sort(),
-      suite + ' discovery union must exactly equal the production partition',
-    )
-  }
-}
-
 function verifyPreSpawnDiscoveryBoundary(hostEnvironment) {
   const canonical = PLAYWRIGHT_DISCOVERY_COMMANDS[0]
   assert.notEqual(canonical, undefined)
@@ -268,25 +169,6 @@ function verifyPreSpawnDiscoveryBoundary(hostEnvironment) {
     /six list-only commands/u,
   )
   assertWrapperRetired(retiredWrapper)
-
-  const replay = spawnSync(canonical.executable, [
-    canonical.arguments[0],
-    'test',
-    '--config',
-    retiredWrapper,
-    '__windshare_retired_wrapper_must_not_execute__',
-    '--pass-with-no-tests',
-  ], {
-    cwd: canonical.cwd,
-    encoding: 'utf8',
-    env: playwrightDiscoveryEnvironment(hostEnvironment),
-    timeout: 30_000,
-    windowsHide: true,
-  })
-  const replayDiagnostic = [replay.stdout, replay.stderr].filter(Boolean).join('\n')
-  assertNoDiscoverySentinelOutput(replayDiagnostic)
-  assert.equal(replay.error, undefined, replayDiagnostic)
-  assert.notEqual(replay.status, 0, 'a retired wrapper remained executable')
   assert.equal(rejectedSpawnCalls, 0, 'invalid discovery spellings must be rejected pre-spawn')
 }
 
@@ -590,7 +472,7 @@ function verifyDiscoveryEnvironmentProjection() {
   assert.equal(environmentValue(windowsCasing, 'TMP'), 'C:\\SyntheticTmp')
 }
 
-function hostileDiscoveryHostEnvironment() {
+export function hostileDiscoveryHostEnvironment() {
   const hostPath = environmentValue(process.env, 'PATH')
   assert.notEqual(hostPath, undefined, 'Node discovery requires an inherited executable path')
   const hostSystemRoot = environmentValue(process.env, 'SYSTEMROOT')
@@ -607,66 +489,7 @@ function hostileDiscoveryHostEnvironment() {
   }
 }
 
-function verifyDiscoveryNodeChild(environment) {
-  const inspectedNames = [
-    'PATH',
-    'SYSTEMROOT',
-    'TEMP',
-    'TMP',
-    ...Object.keys(HOSTILE_DISCOVERY_ENVIRONMENT),
-  ]
-  const program = [
-    `const names = ${JSON.stringify(inspectedNames)}`,
-    'const entries = Object.entries(process.env)',
-    'const read = (name) => entries.find(([candidate]) => candidate.toUpperCase() === name)?.[1] ?? null',
-    'process.stdout.write(JSON.stringify({ execPath: process.execPath, values: Object.fromEntries(names.map((name) => [name, read(name)])) }))',
-  ].join(';')
-  const child = spawnSync(process.execPath, ['--input-type=module', '--eval', program], {
-    cwd: PLAYWRIGHT_WEB_ROOT,
-    encoding: 'utf8',
-    env: environment,
-    timeout: 30_000,
-    windowsHide: true,
-  })
-  const diagnostic = [child.stdout, child.stderr].filter(Boolean).join('\n')
-  assertNoDiscoverySentinelOutput(diagnostic)
-  assert.equal(child.error, undefined, diagnostic)
-  assert.equal(child.status, 0, diagnostic)
-  const observed = JSON.parse(child.stdout)
-  assert.equal(observed.execPath, process.execPath)
-  assert.equal(observed.values.PATH, environmentValue(environment, 'PATH'))
-  assert.equal(observed.values.TEMP, environmentValue(environment, 'TEMP'))
-  assert.equal(observed.values.TMP, environmentValue(environment, 'TMP'))
-  if (process.platform === 'win32') {
-    assert.equal(observed.values.SYSTEMROOT, environmentValue(environment, 'SYSTEMROOT'))
-  }
-  for (const name of Object.keys(HOSTILE_DISCOVERY_ENVIRONMENT)) {
-    assert.equal(observed.values[name], null, name + ' reached the discovery child')
-  }
-}
-
-function discoveryTestIdentities(command, output, diagnostic) {
-  const identities = new Set()
-  const pattern = /^  \[discovery-(main|pion)-(base|focused|remainder)-(chromium|firefox|webkit)\] › (.+)$/gmu
-  for (const match of output.matchAll(pattern)) {
-    assert.equal(match[1], command.suite, diagnostic)
-    assert.equal(match[2], command.partition, diagnostic)
-    identities.add('[' + match[3] + '] › ' + match[4])
-  }
-  const total = /^Total: (\d+) tests? in (\d+) files?$/mu.exec(output)
-  assert.notEqual(total, null, diagnostic)
-  assert.equal(identities.size, Number(total?.[1]), diagnostic)
-  assert(identities.size > 0, 'Playwright discovery returned zero tests\n' + diagnostic)
-  return identities
-}
-
-function requiredDiscoverySet(discovered, suite, partition) {
-  const value = discovered.get(suite + '/' + partition)
-  assert.notEqual(value, undefined, suite + '/' + partition + ' discovery is missing')
-  return value
-}
-
-function observeWrapperConfig(arguments_) {
+export function observeWrapperConfig(arguments_) {
   assert(Object.isFrozen(arguments_), 'launcher must freeze the final spawn argv')
   assert.equal(arguments_.length, 8)
   assert.equal(arguments_[1], 'test')
@@ -698,7 +521,7 @@ function observeWrapperConfig(arguments_) {
   return wrapperConfig
 }
 
-function assertWrapperRetired(wrapperConfig) {
+export function assertWrapperRetired(wrapperConfig) {
   assert.equal(typeof wrapperConfig, 'string')
   assert.equal(existsSync(wrapperConfig), false, 'one-shot wrapper survived child settlement')
   assert.equal(existsSync(dirname(wrapperConfig)), false, 'private wrapper directory survived cleanup')
@@ -731,7 +554,7 @@ function equivalentWindowsPath(value) {
     : portable
 }
 
-function assertDiscoveryEnvironmentBoundary(environment) {
+export function assertDiscoveryEnvironmentBoundary(environment) {
   assert.notEqual(environment, undefined)
   for (const [name, sentinel] of Object.entries(HOSTILE_DISCOVERY_ENVIRONMENT)) {
     assert.equal(environmentValue(environment, name), undefined, name + ' entered discovery')
@@ -739,13 +562,13 @@ function assertDiscoveryEnvironmentBoundary(environment) {
   }
 }
 
-function assertNoDiscoverySentinelOutput(output) {
+export function assertNoDiscoverySentinelOutput(output) {
   for (const sentinel of HOSTILE_DISCOVERY_SENTINELS) {
     assert(!output.includes(sentinel), 'a hostile environment sentinel reached discovery output')
   }
 }
 
-function environmentValue(environment, canonicalName) {
+export function environmentValue(environment, canonicalName) {
   const entry = Object.entries(environment)
     .find(([name]) => name.toUpperCase() === canonicalName)
   return entry?.[1]
