@@ -40,10 +40,12 @@ WindShare is an open-source E2EE file/folder sharing tool. It creates links with
 │   ├── framechannel/             Transport-neutral frame contract
 │   ├── transfer/                 Selection rules, jobs, OutputSession contract
 │   ├── liveshare/                Sender/receiver runtime assembly
-│   ├── osfs/                     Root-confined sources, revision stability, output sessions
+│   ├── osfs/                     Root-confined sources, resumable output, atomic artifact publication
 │   ├── testvectors/              Canonical Go↔TypeScript protocol vectors
 │   └── internal/keyderiv/        HKDF key hierarchy
-├── cmd/windshare/                CLI sender and receiver
+├── cmd/
+│   ├── windshare/                CLI sender and receiver
+│   └── browsermatrix*/           Test-only browser/Pion matrix processes
 ├── connectivity/
 │   ├── v2signal/                 E2EE peer signaling validation
 │   └── v2peer/                   P2P attempt orchestration and lane adoption
@@ -61,10 +63,14 @@ WindShare is an open-source E2EE file/folder sharing tool. It creates links with
 │   ├── src/catalog/, content/    Progressive catalog and file-local ranges
 │   ├── src/session/, transport/  Browser runtime and frame channels
 │   ├── src/connectivity/         P2P/relay race and hot switching
+│   ├── src/receiver/             Reconnect and protocol-generation supervision
 │   ├── src/transfer/, output/    Jobs, sinks, durable output sessions
 │   ├── src/preview/, ui/         Media preview and React interface
+│   ├── scripts/browser-*/        Browser evidence and network-matrix orchestration
 │   └── e2e/                      Playwright full-stack tests
+├── internal/                     Deterministic browser/Pion services and test topology
 ├── e2e/                          Process-level Go end-to-end tests
+├── testdata/                     Canonical browser evidence and network-topology fixtures
 ├── scripts/ci/                   Local CI gate implementations
 └── docs/                         Protocol and security documentation
 ```
