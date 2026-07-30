@@ -17,3 +17,6 @@ scripts/d5-windows-network-packages.json text eol=lf
 core/testvectors/*.json text eol=lf
 # make recipes run under msys sh; CRLF would leak \r into continuation lines.
 Makefile text eol=lf
+
+# Recovery archives preserve byte-exact incident records, including original whitespace.
+docs/.archive/**/.recovered-codex-playwright-recon.*.md binary
