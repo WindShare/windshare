@@ -22,8 +22,13 @@ on:
 
 jobs:
   current-commit:
+    # Reusable-workflow calls must advertise the maximum permission any
+    # conditionally reachable child job may request. current-commit.yml still
+    # narrows ordinary jobs to contents: read and grants this capability only
+    # to the protected broker when full mode is selected.
     permissions:
       contents: read
+      id-token: write
     uses: ./.github/workflows/current-commit.yml
     with:
       browser-authority: pr

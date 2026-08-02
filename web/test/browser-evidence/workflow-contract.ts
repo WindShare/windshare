@@ -320,7 +320,10 @@ export function validateCIWorkflow(workflow: WorkflowMapping): void {
     firstJob(jobs, 'CI reusable current-commit authority'),
     'pr',
     [],
-    { contents: 'read' },
+    // GitHub validates every job in a reusable workflow before evaluating its
+    // `if`; advertise the broker's OIDC capability at the call boundary while
+    // the called workflow keeps it absent from all PR-executed jobs.
+    { contents: 'read', 'id-token': 'write' },
   )
 }
 
