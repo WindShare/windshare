@@ -33,8 +33,8 @@ const RETIRED_TERMS = Object.freeze([
 describe('scheduler-agnostic browser network matrix contracts', () => {
   it('emits no retired event, label, context, profile, or proof vocabulary', async () => {
     const registry = await loadRegistry()
-    const run = makeRun(registry, 'manual')
-    const attestation = rawAttestation(registry, run.runId, 'manual-real-nat', 'satisfied')
+    const run = makeRun(registry, 'scheduled')
+    const attestation = rawAttestation(registry, run.runId, 'scheduled-public-stun', 'satisfied')
     const aggregate = aggregateNetworkMatrix(registry, [run])
     const canonicalProjection = JSON.stringify({
       manifest: registry.manifest,
@@ -57,11 +57,11 @@ describe('scheduler-agnostic browser network matrix contracts', () => {
     replaceExecutionMode(profile)
     expect(() => parseNetworkTopologyProfile(profile)).toThrow(/exactly/u)
 
-    const run = makeRunRaw(registry, 'manual')
+    const run = makeRunRaw(registry, 'scheduled')
     replaceExecutionMode(run)
     expect(() => parseNetworkRunResult(run, registry)).toThrow(/exactly/u)
 
-    const canonicalRun = makeRun(registry, 'manual')
+    const canonicalRun = makeRun(registry, 'scheduled')
     const aggregate = cloneJson(aggregateNetworkMatrix(registry, [canonicalRun])) as unknown as Record<
       string,
       unknown
@@ -74,16 +74,16 @@ describe('scheduler-agnostic browser network matrix contracts', () => {
   it('rejects retired authority-label and proof-union members without aliases', async () => {
     const registry = await loadRegistry()
     const profile = cloneJson(
-      registry.profiles.find(({ profileId }) => profileId === 'manual-real-nat'),
+      registry.profiles.find(({ profileId }) => profileId === 'scheduled-public-stun'),
     ) as unknown as Record<string, unknown>
     const authority = profile.authority as Record<string, unknown>
     authority[RETIRED_AUTHORITY_LABEL_KEY] = []
     expect(() => parseNetworkTopologyProfile(profile)).toThrow(/exactly/u)
 
     const runId = 'retired-proof-member-run'
-    const attestation = rawAttestation(registry, runId, 'manual-real-nat', 'satisfied')
+    const attestation = rawAttestation(registry, runId, 'scheduled-public-stun', 'satisfied')
     const proof = attestation.proof as Record<string, unknown>
-    proof[RETIRED_PROOF_KEY] = proof.operatorHost
+    proof[RETIRED_PROOF_KEY] = {}
     expect(() => parseNetworkRuntimeAttestation(attestation, {
       manifest: registry.manifest,
       manifestSha256: registry.manifestSha256,
@@ -94,13 +94,13 @@ describe('scheduler-agnostic browser network matrix contracts', () => {
   it('rejects the retired platform setup failure code in both failure vocabularies', async () => {
     const registry = await loadRegistry()
     const retiredFailureCode = ['runner', 'setup', 'failed'].join('-')
-    const run = makeRunRaw(registry, 'manual', { orchestrationOutcome: 'failed' })
+    const run = makeRunRaw(registry, 'scheduled', { orchestrationOutcome: 'failed' })
     const failure = run.orchestrationFailure as Record<string, unknown>
     failure.failureCode = retiredFailureCode
     expect(() => parseNetworkRunResult(run, registry)).toThrow(/frozen vocabulary/u)
 
-    const prerequisiteRun = makeRunRaw(registry, 'manual', {
-      prerequisiteOutcomes: { 'manual-real-nat': 'failed' },
+    const prerequisiteRun = makeRunRaw(registry, 'scheduled', {
+      prerequisiteOutcomes: { 'scheduled-public-stun': 'failed' },
     })
     const attestations = prerequisiteRun.runtimeAttestations as Record<string, unknown>[]
     const prerequisiteFailure = attestations[0]?.failure as Record<string, unknown>

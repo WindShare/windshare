@@ -15,7 +15,6 @@ const (
 	NetworkSemanticsPublicSTUN     = browsermatrixfixture.NetworkSemanticsPublicSTUN
 	NetworkSemanticsRestrictedUDP  = browsermatrixfixture.NetworkSemanticsRestrictedUDP
 	NetworkSemanticsCoturnRelay    = browsermatrixfixture.NetworkSemanticsCoturnRelay
-	NetworkSemanticsManualRealNAT  = browsermatrixfixture.NetworkSemanticsManualRealNAT
 	canonicalTimestampLayout       = browsermatrixfixture.CanonicalTimestampLayout
 	maximumClockSkew               = browsermatrixfixture.MaximumClockSkew
 )

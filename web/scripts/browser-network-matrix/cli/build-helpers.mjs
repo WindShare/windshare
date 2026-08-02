@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import {
   lstat,
@@ -12,7 +11,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 export const HELPER_BUILD_MANIFEST_SCHEMA_VERSION =
-  'windshare.browser-network-matrix.helper-build/v1'
+  'windshare.browser-network-matrix.helper-build/v2'
 
 const GO_BUILD_DEADLINE_MS = 300_000
 const GO_BUILD_REAP_DEADLINE_MS = 5_000
@@ -43,16 +42,13 @@ export function helperBuildPlan(outputDirectory, platform = process.platform, ar
     cwd: join(REPOSITORY_ROOT, 'core'),
     packagePath: './osfs/cmd/browsermatrixpublish',
     outputPath: join(outputDirectory, `browsermatrixpublish${executableSuffix}`),
+  }, {
+    operation: 'test-process-owner',
+    role: 'test-process-owner',
+    cwd: REPOSITORY_ROOT,
+    packagePath: './cmd/testprocessowner',
+    outputPath: join(outputDirectory, `testprocessowner${executableSuffix}`),
   }]
-  if (platform === 'win32') {
-    operations.push({
-      operation: 'windows-job-supervisor',
-      role: 'windows-job',
-      cwd: REPOSITORY_ROOT,
-      packagePath: './web/scripts/browser-evidence/windowsjob',
-      outputPath: join(outputDirectory, 'windowsjob.exe'),
-    })
-  }
   return Object.freeze(operations.map((operation) => Object.freeze({
     ...operation,
     platform,
@@ -93,13 +89,12 @@ export async function buildNetworkMatrixHelpers(
       operation = build.operation
       onProgress(Object.freeze({ operation, outcome: 'started', outputPath: build.outputPath }))
       await runOperation(build)
-      const helper = await authenticateHelper(build)
+      const helper = await validateBuiltHelper(build)
       helpers.push(helper)
       onProgress(Object.freeze({
         operation,
         outcome: 'completed',
         outputPath: helper.path,
-        sha256: helper.sha256,
       }))
     }
 
@@ -225,7 +220,8 @@ async function runGoBuildOperation(operation) {
     GOWORK: join(REPOSITORY_ROOT, 'go.work'),
     ...(operation.goArchitecture === 'amd64' ? { GOAMD64: 'v1' } : { GOARM64: 'v8.0' }),
   }
-  const child = spawn('go', operation.arguments, {
+  const goExecutable = process.env.WINDSHARE_GO_EXECUTABLE ?? 'go'
+  const child = spawn(goExecutable, operation.arguments, {
     cwd: operation.cwd,
     env: environment,
     shell: false,
@@ -287,7 +283,7 @@ async function runGoBuildOperation(operation) {
   }
 }
 
-async function authenticateHelper(operation) {
+async function validateBuiltHelper(operation) {
   const namedBefore = await lstat(operation.outputPath, { bigint: true })
   if (!namedBefore.isFile() || namedBefore.isSymbolicLink() || namedBefore.size < 1n ||
       namedBefore.size > BigInt(HELPER_MAXIMUM_BYTES) ||
@@ -298,22 +294,16 @@ async function authenticateHelper(operation) {
   try {
     const openedBefore = await handle.stat({ bigint: true })
     if (!sameFileRevision(namedBefore, openedBefore)) {
-      throw new Error(`${operation.operation} output changed while its authority was opened`)
+      throw new Error(`${operation.operation} output changed while it was inspected`)
     }
-    const bytes = await handle.readFile()
-    const [openedAfter, namedAfter] = await Promise.all([
-      handle.stat({ bigint: true }),
-      lstat(operation.outputPath, { bigint: true }),
-    ])
+    const namedAfter = await lstat(operation.outputPath, { bigint: true })
     if (
-      !sameFileRevision(namedBefore, openedAfter) ||
-      !sameFileRevision(namedBefore, namedAfter) ||
-      BigInt(bytes.byteLength) !== openedAfter.size
-    ) throw new Error(`${operation.operation} output changed while it was authenticated`)
+      !sameFileRevision(namedBefore, openedBefore) ||
+      !sameFileRevision(namedBefore, namedAfter)
+    ) throw new Error(`${operation.operation} output changed while it was inspected`)
     return Object.freeze({
       role: operation.role,
       path: operation.outputPath,
-      sha256: createHash('sha256').update(bytes).digest('hex'),
     })
   } finally {
     await handle.close()

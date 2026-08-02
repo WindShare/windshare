@@ -28,9 +28,21 @@ export function requireGuardUploadDirectoryPublisher(
   }
 }
 
+const OWNED_UNSETTLED_PUBLISHER_FAILURES = new WeakSet<object>()
+
 export class GuardUploadDirectoryPublisherUnsettledError extends Error {
   constructor(cause: Error) {
     super('guard upload directory publisher did not settle after forced termination', { cause })
     this.name = 'GuardUploadDirectoryPublisherUnsettledError'
+    OWNED_UNSETTLED_PUBLISHER_FAILURES.add(this)
+    Object.freeze(this)
   }
+}
+
+export function isGuardUploadDirectoryPublisherUnsettledError(
+  value: unknown,
+): value is GuardUploadDirectoryPublisherUnsettledError {
+  return (typeof value === 'object' || typeof value === 'function') &&
+    value !== null &&
+    OWNED_UNSETTLED_PUBLISHER_FAILURES.has(value)
 }

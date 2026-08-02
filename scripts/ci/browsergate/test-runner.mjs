@@ -3,6 +3,7 @@ import { lstatSync, readdirSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { types as nodeTypes } from 'node:util'
 
 export const BROWSER_CONTRACT_RUNNER_SCHEMA_VERSION =
   'windshare.browser-contract.runner/v1'
@@ -11,7 +12,9 @@ const COMPONENT = 'browser-contract-runner'
 const OPERATION_ID = 'browser-contract'
 const TEST_FILE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*\.tests\.mjs$/u
 const DIAGNOSTIC_TOKEN_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u
-const MAXIMUM_DIAGNOSTIC_MESSAGE_CHARACTERS = 512
+const PROCESS_LAUNCH_FAILURE_MESSAGE = 'browser contract test process launch failed'
+const DISCOVERY_FAILURE_MESSAGE = 'browser contract test discovery failed'
+const RUNNER_FAILURE_MESSAGE = 'browser contract runner failed'
 const BROWSERGATE_ROOT = dirname(fileURLToPath(import.meta.url))
 const REPOSITORY_ROOT = resolve(BROWSERGATE_ROOT, '..', '..', '..')
 const CONTRACT_ROOT = join(BROWSERGATE_ROOT, 'tests', 'contract')
@@ -60,14 +63,14 @@ export function classifyContractTestExecution(execution, durationMs) {
   }
 
   if (execution.error !== undefined && execution.error !== null) {
-    const errorCode = safeDiagnosticToken(execution.error.code)
+    const errorCode = safeOwnDiagnosticToken(execution.error, 'code')
     return failedClassification(
       duration,
       errorCode === 'ETIMEDOUT' ? 'timed-out' : 'start-failed',
       {
         terminal: 'spawn-failed',
         errorCode,
-        errorMessage: boundedMessage(execution.error),
+        errorMessage: PROCESS_LAUNCH_FAILURE_MESSAGE,
       },
     )
   }
@@ -124,8 +127,8 @@ export function aggregateContractResults({
       reason: 'discovery-failed',
       counts: resultCounts(0, 0, 0, 0),
       discovery: Object.freeze({
-        errorCode: safeDiagnosticToken(discoveryFailure?.code),
-        errorMessage: boundedMessage(discoveryFailure),
+        errorCode: safeOwnDiagnosticToken(discoveryFailure, 'code'),
+        errorMessage: DISCOVERY_FAILURE_MESSAGE,
       }),
     })
   }
@@ -368,9 +371,11 @@ function safeDiagnosticToken(value) {
   return typeof value === 'string' && DIAGNOSTIC_TOKEN_PATTERN.test(value) ? value : 'UNKNOWN'
 }
 
-function boundedMessage(cause) {
-  const message = cause instanceof Error ? cause.message : String(cause)
-  return message.slice(0, MAXIMUM_DIAGNOSTIC_MESSAGE_CHARACTERS)
+function safeOwnDiagnosticToken(cause, name) {
+  if (cause === null || typeof cause !== 'object' || nodeTypes.isProxy(cause)) return 'UNKNOWN'
+  const descriptor = Object.getOwnPropertyDescriptor(cause, name)
+  if (descriptor === undefined || !Object.hasOwn(descriptor, 'value')) return 'UNKNOWN'
+  return safeDiagnosticToken(descriptor.value)
 }
 
 function requireFunction(value, label) {
@@ -388,8 +393,8 @@ function unexpectedRunnerFailure(cause) {
     reason: 'runner-failed',
     counts: resultCounts(0, 0, 0, 0),
     discovery: Object.freeze({
-      errorCode: safeDiagnosticToken(cause?.code),
-      errorMessage: boundedMessage(cause),
+      errorCode: safeOwnDiagnosticToken(cause, 'code'),
+      errorMessage: RUNNER_FAILURE_MESSAGE,
     }),
   })
 }

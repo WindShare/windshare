@@ -296,7 +296,6 @@ function secret(browser: NetworkMatrixBrowser = 'chromium'): ContainedBrowserSam
       tlsCertificateSha256: '2'.repeat(64),
       attestationPublicKey: testFixtureAttestationPublicKeyPem(),
       credential: Buffer.from(CONTROL_CREDENTIAL, 'utf8'),
-      manualOperatorIdentity: null,
     },
     attemptLeaseMs: 1_000,
     resultPollIntervalMs: 10,

@@ -215,7 +215,7 @@ func validOpaqueID(value string) bool {
 
 func validProfileID(value string) bool {
 	switch value {
-	case "scheduled-public-stun", "scheduled-restricted-udp", "scheduled-coturn", "manual-real-nat":
+	case "scheduled-public-stun", "scheduled-restricted-udp", "scheduled-coturn":
 		return true
 	default:
 		return false

@@ -192,7 +192,6 @@ func newHandler(
 	identityValidator WorkloadIdentityValidator,
 ) (*Handler, error) {
 	if !canonicalControllerOrigin(config.ControllerOrigin) || !validProfileID(config.ProfileID) ||
-		config.ProfileID == "manual-real-nat" ||
 		!validExpectedIdentity(config.ExpectedIdentity) || config.LeaseDuration <= 0 ||
 		config.LeaseDuration > maximumControlLease ||
 		config.RetirementTimeout <= 0 || config.RetirementTimeout > maximumRetirementTimeout ||

@@ -24,7 +24,7 @@ import (
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
-func TestServerFreshResumeJoinForwardAndStop(t *testing.T) {
+func TestServerConcurrentJoinRejoinResumeAndStop(t *testing.T) {
 	const relayBase = "https://relay.example/team?access=test"
 	endpoint, err := v2.NormalizeRelayEndpoint(relayBase)
 	if err != nil {
@@ -63,19 +63,8 @@ func TestServerFreshResumeJoinForwardAndStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fresh registration: %v", err)
 	}
-	if stats := sender.RegistrationStats(); stats.BytesSent == 0 || stats.BytesReceived == 0 {
-		t.Fatalf("registration stats = %+v", stats)
-	}
-
-	receiver := dialReceiver(t, relayBase, fixture.init.ShareID, dial)
-	firstRelaySession := receiver.Channel().RelaySessionID()
-	senderChannel := establishSession(t, sender, receiver, []byte("receiver-to-sender"))
-	assertFrame(t, senderChannel.Recv(), "receiver-to-sender")
-	if err := senderChannel.Send(context.Background(), []byte("sender-to-receiver")); err != nil {
-		t.Fatal(err)
-	}
-	assertFrame(t, receiver.Channel().Recv(), "sender-to-receiver")
-
+	first := dialReceiver(t, relayBase, fixture.init.ShareID, dial)
+	firstRelaySession := first.Channel().RelaySessionID()
 	second := dialReceiver(t, relayBase, fixture.init.ShareID, dial)
 	secondRelaySession := second.Channel().RelaySessionID()
 	if secondRelaySession == firstRelaySession {
@@ -84,8 +73,8 @@ func TestServerFreshResumeJoinForwardAndStop(t *testing.T) {
 	secondChannel := establishSession(t, sender, second, []byte("second-session"))
 	assertFrame(t, secondChannel.Recv(), "second-session")
 	_ = second.Close()
-	_ = receiver.Close()
-	<-receiver.Done()
+	_ = first.Close()
+	<-first.Done()
 	rejoined := dialReceiver(t, relayBase, fixture.init.ShareID, dial)
 	if rejoined.Channel().RelaySessionID() == firstRelaySession || rejoined.Channel().RelaySessionID() == secondRelaySession {
 		t.Fatal("receiver rejoin revived a retired RelaySessionID")

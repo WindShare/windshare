@@ -6,7 +6,6 @@ import type {
   NetworkMatrixFixtureAuthorityBinding,
 } from '../../sample-authority.ts'
 import type {
-  ManualOperatorTopologyIdentity,
   SignedExternalFixtureAttestation,
   VerifiedExternalFixtureAuthority,
 } from '../external-fixture-attestation.ts'
@@ -32,7 +31,6 @@ export interface RemotePionControlOptions {
   /** The caller retains the only alias and erases these bytes when the lease retires. */
   readonly controlCredential: Uint8Array
   readonly controlLease: RemotePionControlLeaseBinding
-  readonly manualOperatorIdentity?: ManualOperatorTopologyIdentity
   readonly request?: RemotePionRequest
   readonly now?: () => number
   readonly localInterfaceAddresses?: () => readonly string[]

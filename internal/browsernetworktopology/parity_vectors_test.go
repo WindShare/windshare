@@ -2,84 +2,143 @@ package browsernetworktopology
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 )
 
-const (
-	sharedObservedSampleSHA256      = "7f308602aacf39a132715c46e4602155bbacf85835981c6e3d51df8a68745949"
-	sharedObservedAttestationSHA256 = "eb2b2711938bb89566306d4c8f2b1b1c2a6531a4ad4fe42ec4e1959f7e46a094"
-	sharedManualRunSHA256           = "09525e1b511ed0691688c04cb3b2b7a020d86d28e65de70077833e53aa503ce2"
-	sharedManualAggregateSHA256     = "d8aa746fee51ca8d8d1fa5fff19d77146be204926c7bfdc2f5a319672797053d"
-)
+const updateBrowserNetworkVectorsEnvironment = "WINDSHARE_UPDATE_BROWSER_NETWORK_VECTORS"
 
-func TestSharedModeLocalVectorsMatchTypeScriptContract(t *testing.T) {
+func TestSharedScheduledVectorsMatchTypeScriptContract(t *testing.T) {
 	contract, _, _ := loadFixtureContract(t)
 	vectorRoot := filepath.Join("..", "..", "testdata", "browser-network-matrix", "vectors")
-	sampleJSON := mustReadFile(t, filepath.Join(vectorRoot, "public-observed.sample.v1.json"))
-	if digest := sha256Text(sampleJSON); digest != sharedObservedSampleSHA256 {
-		t.Fatalf("shared sample SHA256 = %q", digest)
-	}
-	const sampleRunID = "shared-observed-sample-run"
+
+	const observedRunID = "shared-observed-sample-run"
 	attestation := satisfiedAttestation(
 		t,
 		contract,
-		sampleRunID,
+		observedRunID,
 		string(ProfileScheduledPublicSTUN),
 	)
-	attestationDigest, digestErr := attestation.SHA256(contract)
-	if digestErr != nil {
-		t.Fatal(digestErr)
+	identity := SampleIdentity{
+		ProfileID:     string(ProfileScheduledPublicSTUN),
+		Browser:       BrowserChromium,
+		SampleOrdinal: 1,
 	}
-	if attestationDigest != sharedObservedAttestationSHA256 {
-		t.Fatalf("shared attestation SHA256 = %q", attestationDigest)
-	}
-	sample, err := ParseSampleResult(sampleJSON, contract, attestation)
+	sample := observedSample(t, contract, attestation, identity)
+
+	const incompleteRunID = "shared-scheduled-not-executed-run"
+	run := buildRun(
+		t,
+		contract,
+		ModeScheduled,
+		incompleteRunID,
+		[]PrerequisiteOutcome{
+			PrerequisiteUnavailable,
+			PrerequisiteUnavailable,
+			PrerequisiteUnavailable,
+		},
+		OrchestrationHealthy,
+	)
+	aggregate, err := BuildAggregate(contract, []RunResult{run})
 	if err != nil {
-		t.Fatalf("ParseSampleResult shared vector: %v", err)
-	}
-	if sample.ProcessInstanceID == nil || sample.AttemptEvidence == nil ||
-		sample.AttemptEvidence.PionAuthority != PionAuthorityExternalRemote ||
-		sample.AttemptEvidence.Challenge == nil {
-		t.Fatalf("shared sample semantics differ: %+v", sample)
-	}
-	canonicalSample, err := sample.CanonicalJSON(contract, attestation)
-	if err != nil || !bytes.Equal(canonicalSample, sampleJSON) {
-		t.Fatalf("shared sample canonical bytes differ: err=%v", err)
+		t.Fatalf("BuildAggregate shared vector: %v", err)
 	}
 
-	runJSON := mustReadFile(t, filepath.Join(vectorRoot, "manual-not-executed.run.v1.json"))
-	if digest := sha256Text(runJSON); digest != sharedManualRunSHA256 {
-		t.Fatalf("shared run SHA256 = %q", digest)
+	documents := []struct {
+		name    string
+		encoded []byte
+	}{
+		{name: "public-observed.attestation.v3.json", encoded: mustCanonicalAttestation(t, attestation, contract)},
+		{name: "public-observed.sample.v2.json", encoded: mustCanonicalSample(t, sample, contract, attestation)},
+		{name: "scheduled-not-executed.run.v2.json", encoded: mustCanonicalRun(t, run, contract)},
+		{name: "scheduled-incomplete.verdict.v2.json", encoded: mustCanonicalAggregate(t, aggregate, contract, run)},
 	}
-	run, err := ParseRunResult(runJSON, contract)
-	if err != nil {
-		t.Fatalf("ParseRunResult shared vector: %v", err)
-	}
-	if run.ExecutionMode != ModeManual || run.RunOutcome != RunNotExecuted || len(run.Samples) != 0 ||
-		len(run.ProfileResults) != 1 || run.ProfileResults[0].ProfileOutcome != ProfileNotExecuted {
-		t.Fatalf("shared run semantics differ: %+v", run)
-	}
-	canonicalRun, err := run.CanonicalJSON(contract)
-	if err != nil || !bytes.Equal(canonicalRun, runJSON) {
-		t.Fatalf("shared run canonical bytes differ: err=%v", err)
+	if os.Getenv(updateBrowserNetworkVectorsEnvironment) == "1" {
+		if err := os.MkdirAll(vectorRoot, 0o755); err != nil {
+			t.Fatalf("create vector directory: %v", err)
+		}
+		for _, document := range documents {
+			if err := os.WriteFile(filepath.Join(vectorRoot, document.name), document.encoded, 0o644); err != nil {
+				t.Fatalf("write %s: %v", document.name, err)
+			}
+		}
 	}
 
-	aggregateJSON := mustReadFile(t, filepath.Join(vectorRoot, "manual-only.aggregate.v1.json"))
-	if digest := sha256Text(aggregateJSON); digest != sharedManualAggregateSHA256 {
-		t.Fatalf("shared aggregate SHA256 = %q", digest)
+	for _, document := range documents {
+		committed := mustReadFile(t, filepath.Join(vectorRoot, document.name))
+		if !bytes.Equal(committed, document.encoded) {
+			t.Fatalf("shared vector %s differs; regenerate with %s=1", document.name, updateBrowserNetworkVectorsEnvironment)
+		}
 	}
-	aggregate, err := ParseAggregate(aggregateJSON, contract, []RunResult{run})
+
+	parsedAttestation, err := ParseRuntimeAttestation(documents[0].encoded, contract)
 	if err != nil {
-		t.Fatalf("ParseAggregate shared vector: %v", err)
+		t.Fatalf("ParseRuntimeAttestation shared vector: %v", err)
 	}
-	if len(aggregate.Runs) != 1 || aggregate.Runs[0].ExecutionMode != ModeManual ||
-		aggregate.Counts.ExpectedIdentities != TotalIdentityCount || aggregate.Counts.ObservedSamples != 0 ||
-		aggregate.EvidenceOutcome != EvidenceIncomplete {
-		t.Fatalf("shared aggregate semantics differ: %+v", aggregate)
+	parsedSample, err := ParseSampleResult(documents[1].encoded, contract, parsedAttestation)
+	if err != nil || parsedSample.ProcessInstanceID == nil || parsedSample.AttemptEvidence == nil ||
+		parsedSample.AttemptEvidence.PionAuthority != PionAuthorityExternalRemote ||
+		parsedSample.AttemptEvidence.Challenge == nil {
+		t.Fatalf("shared sample semantics differ: sample=%+v err=%v", parsedSample, err)
 	}
-	canonicalAggregate, err := aggregate.CanonicalJSON(contract, []RunResult{run})
-	if err != nil || !bytes.Equal(canonicalAggregate, aggregateJSON) {
-		t.Fatalf("shared aggregate canonical bytes differ: err=%v", err)
+	parsedRun, err := ParseRunResult(documents[2].encoded, contract)
+	if err != nil || parsedRun.ExecutionMode != ModeScheduled || parsedRun.RunOutcome != RunNotExecuted ||
+		len(parsedRun.Samples) != 0 || len(parsedRun.ProfileResults) != len(frozenProfileSpecs) {
+		t.Fatalf("shared run semantics differ: run=%+v err=%v", parsedRun, err)
 	}
+	parsedAggregate, err := ParseAggregate(documents[3].encoded, contract, []RunResult{parsedRun})
+	if err != nil || len(parsedAggregate.Runs) != 1 ||
+		parsedAggregate.Runs[0].ExecutionMode != ModeScheduled ||
+		parsedAggregate.Counts.ExpectedIdentities != TotalIdentityCount ||
+		parsedAggregate.Counts.ObservedSamples != 0 ||
+		parsedAggregate.EvidenceOutcome != EvidenceIncomplete {
+		t.Fatalf("shared aggregate semantics differ: aggregate=%+v err=%v", parsedAggregate, err)
+	}
+}
+
+func mustCanonicalAttestation(t *testing.T, value RuntimeAttestation, contract Contract) []byte {
+	t.Helper()
+	encoded, err := value.CanonicalJSON(contract)
+	if err != nil {
+		t.Fatalf("canonical runtime attestation: %v", err)
+	}
+	return encoded
+}
+
+func mustCanonicalSample(
+	t *testing.T,
+	value SampleResult,
+	contract Contract,
+	attestation RuntimeAttestation,
+) []byte {
+	t.Helper()
+	encoded, err := value.CanonicalJSON(contract, attestation)
+	if err != nil {
+		t.Fatalf("canonical sample: %v", err)
+	}
+	return encoded
+}
+
+func mustCanonicalRun(t *testing.T, value RunResult, contract Contract) []byte {
+	t.Helper()
+	encoded, err := value.CanonicalJSON(contract)
+	if err != nil {
+		t.Fatalf("canonical run: %v", err)
+	}
+	return encoded
+}
+
+func mustCanonicalAggregate(
+	t *testing.T,
+	value Aggregate,
+	contract Contract,
+	run RunResult,
+) []byte {
+	t.Helper()
+	encoded, err := value.CanonicalJSON(contract, []RunResult{run})
+	if err != nil {
+		t.Fatalf("canonical aggregate: %v", err)
+	}
+	return encoded
 }

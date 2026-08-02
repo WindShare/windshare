@@ -136,7 +136,6 @@ function fixtureForProfile(
     'scheduled-public-stun': config.publicStun,
     'scheduled-restricted-udp': config.restrictedUdp,
     'scheduled-coturn': config.coturn,
-    'manual-real-nat': config.manualRealNat,
   }[profileId]
 }
 

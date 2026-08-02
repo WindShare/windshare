@@ -259,8 +259,8 @@ test('streams one million ZIP members through the production writer and durable 
   test.setTimeout(120_000)
   await page.goto('/')
   const result = await page.evaluate(async () => {
-    const probePath = '/test/browser/r8-bounded-output-probe.ts'
-    const probe = await import(probePath) as typeof import('./r8-bounded-output-probe')
+    const probePath = '/test/browser/bounded-output-probe.ts'
+    const probe = await import(probePath) as typeof import('./bounded-output-probe')
     return probe.probeMillionMemberZipWriter()
   })
 
@@ -298,7 +298,7 @@ test('bounds production ZIP assembly and rejects at the exact portable byte', as
     const spoolModule = await import(spoolPath) as typeof import(
       '../../src/output/streams/zip-spool'
     )
-    const databaseName = `r8-million-zip-${crypto.randomUUID()}`
+    const databaseName = `million-zip-${crypto.randomUUID()}`
     let maximumParts = 0
     let rejectionBufferedBytes = -1
     let rejectedWriteBytes = -1
@@ -431,7 +431,7 @@ test('bounds production ZIP assembly and rejects at the exact portable byte', as
 test('serializes OPFS quota across independent realms and reclaims an expired crash lease', async ({ context, page }) => {
   const secondPage = await context.newPage()
   await Promise.all([page.goto('/'), secondPage.goto('/')])
-  const databaseName = `r8-admission-${crypto.randomUUID()}`
+  const databaseName = `admission-${crypto.randomUUID()}`
   const reserveBytes = 512 * 1024 * 1024
 
   await Promise.all([
@@ -496,7 +496,7 @@ test('serializes OPFS quota across independent realms and reclaims an expired cr
       const admission = await import(admissionPath) as typeof import(
         '../../src/output/origin-private/admission'
       )
-      ;(globalThis as Record<string, unknown>).__r8Admission =
+      ;(globalThis as Record<string, unknown>).__outputAdmission =
         await admission.OriginPrivateStagingAdmission.open(sessionKey, {
           logicalBytes: 0n,
           additionalBytes: 0n,
@@ -511,7 +511,7 @@ test('serializes OPFS quota across independent realms and reclaims an expired cr
 
   async function reserve(target: typeof page, file: string, bytes: number): Promise<void> {
     await target.evaluate(async ({ path, size }) => {
-      const admission = (globalThis as Record<string, unknown>).__r8Admission as
+      const admission = (globalThis as Record<string, unknown>).__outputAdmission as
         import('../../src/output/origin-private/admission').OriginPrivateStagingAdmission
       await admission.reserve([path], BigInt(size), { logicalBytes: 0n, coveredBytes: 0n })
     }, { path: file, size: bytes })
@@ -519,7 +519,7 @@ test('serializes OPFS quota across independent realms and reclaims an expired cr
 
   async function release(target: typeof page): Promise<void> {
     await target.evaluate(async () => {
-      const admission = (globalThis as Record<string, unknown>).__r8Admission as
+      const admission = (globalThis as Record<string, unknown>).__outputAdmission as
         import('../../src/output/origin-private/admission').OriginPrivateStagingAdmission
       await admission.release()
     })
@@ -527,7 +527,7 @@ test('serializes OPFS quota across independent realms and reclaims an expired cr
 })
 
 test('sweeps expired ZIP spool namespaces after reload without deleting a live writer', async ({ context, page }) => {
-  const databaseName = `r8-spool-recovery-${crypto.randomUUID()}`
+  const databaseName = `spool-recovery-${crypto.randomUUID()}`
   await page.goto('/')
   await page.evaluate(async (name) => {
     const spoolPath = '/src/output/streams/zip-spool.ts'
@@ -692,8 +692,8 @@ test('sweeps expired ZIP spool namespaces after reload without deleting a live w
 test('fails closed at IndexedDB blocked and versionchange boundaries', async ({ page }) => {
   await page.goto('/')
   const result = await page.evaluate(async () => {
-    const probePath = '/test/browser/r8-idb-failclosed-probe.ts'
-    const probe = await import(probePath) as typeof import('./r8-idb-failclosed-probe')
+    const probePath = '/test/browser/idb-failclosed-probe.ts'
+    const probe = await import(probePath) as typeof import('./idb-failclosed-probe')
     return probe.probeIndexedDbFailureBoundaries()
   })
 
@@ -726,7 +726,7 @@ test('reopens real IndexedDB journal pages lazily and removes a crash candidate'
       '../../src/output/persistent-tree/session'
     )
     const fakes = await import(fakesPath) as typeof import('../output/fakes')
-    const databaseName = `r8-journal-pages-${crypto.randomUUID()}`
+    const databaseName = `journal-pages-${crypto.randomUUID()}`
     const backend = 'real-indexeddb-test'
     const outputSessionId = 'paged-session'
     const identity = { backend, outputSessionId }

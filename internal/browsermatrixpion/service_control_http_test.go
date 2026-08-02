@@ -22,7 +22,6 @@ func TestNewServiceRejectsIncompleteAuthority(t *testing.T) {
 	tests := map[string]func(*ServiceConfig){
 		"instance":        func(config *ServiceConfig) { config.Fixture.RemoteServiceInstanceID = "INVALID" },
 		"profile":         func(config *ServiceConfig) { config.Fixture.ProfileID = "unknown" },
-		"implementation":  func(config *ServiceConfig) { config.Fixture.ImplementationSHA256 = "invalid" },
 		"endpoint":        func(config *ServiceConfig) { config.Fixture.RemotePeerPublicIP = "" },
 		"signer":          func(config *ServiceConfig) { config.AttestationSigner = nil },
 		"lease":           func(config *ServiceConfig) { config.MaximumLease = 0 },

@@ -67,7 +67,7 @@ func (profile Profile) Validate() error {
 	}
 	if profile.Authority.AuthorityID != spec.authorityID ||
 		profile.Authority.AuthorityKind != spec.authorityKind ||
-		profile.Authority.AvailabilityExpectation != AvailabilityNotAssumed ||
+		profile.Authority.AvailabilityExpectation != AvailabilityRequired ||
 		!isCanonicalSHA256(profile.Authority.AttestationPublicKeySHA256) {
 		return fmt.Errorf("%w: authority binding differs for profile %q", ErrInvalidProfile, profile.ProfileID)
 	}

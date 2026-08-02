@@ -9,7 +9,13 @@ import { promisify } from 'node:util'
 import { expect, test } from '@playwright/test'
 
 import { PLAYWRIGHT_BROWSER_NAMES } from '../playwright.projects'
-import { ManagedProcess, settleCleanupTasks } from './fixtures/managed-process'
+import { createInheritedChildProcessBackend } from '../scripts/browser-evidence/process/inherited-child-process.mjs'
+import { sampleProcessEnvironment } from '../scripts/browser-evidence/process/sample-environment'
+import {
+  ManagedProcess,
+  settleCleanupTasks,
+  type ManagedProcessOptions,
+} from './fixtures/managed-process'
 
 const DIAGNOSTIC_TIMEOUT_MS = 200
 const DUMMY_CAPABILITY = 'capability-must-not-appear'
@@ -24,6 +30,7 @@ const ARTIFACT_PROBE_CONFIG = resolve(
   'e2e/fixtures/separate-key-artifact.config.ts',
 )
 const execFileAsync = promisify(execFile)
+const inheritedChildBackend = createInheritedChildProcessBackend()
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' })
 
@@ -34,7 +41,7 @@ test('fixture failures redact capabilities and surface orphaned cleanup', async 
       '-e',
       `process.stdout.write('Link: http://127.0.0.1/share#${DUMMY_CAPABILITY}\\nKey: ${DUMMY_CAPABILITY}\\n'); setInterval(() => undefined, 1_000)`,
     ],
-    { redactDiagnostics: true },
+    managedProcessOptions('redacted-readiness', { redactDiagnostics: true }),
   )
   let readinessFailure: unknown
   try {
@@ -60,7 +67,11 @@ test('fixture failures redact capabilities and surface orphaned cleanup', async 
 })
 
 test('rejects a clean child exit before readiness', async () => {
-  const child = new ManagedProcess(process.execPath, ['-e', 'process.exit(0)'])
+  const child = new ManagedProcess(
+    process.execPath,
+    ['-e', 'process.exit(0)'],
+    managedProcessOptions('exit-before-readiness'),
+  )
 
   await expect(child.waitFor('stdout', /^READY$/mu)).rejects.toThrow(
     'E2E child exited before /^READY$/mu appeared in stdout (code=0, signal=null)',
@@ -74,7 +85,7 @@ test('rejects a clean child exit after readiness but before cleanup', async () =
   const child = new ManagedProcess(process.execPath, [
     '-e',
     "process.stdout.write('READY\\n', () => process.exit(0))",
-  ])
+  ], managedProcessOptions('exit-after-readiness'))
 
   await child.waitFor('stdout', /^READY$/mu)
   await child.waitForExit()
@@ -82,6 +93,23 @@ test('rejects a clean child exit after readiness but before cleanup', async () =
     'E2E child exited before cleanup (code=0, signal=null)',
   )
 })
+
+function managedProcessOptions(
+  operationId: string,
+  options: Pick<ManagedProcessOptions, 'redactDiagnostics' | 'redactStdout'> = {},
+): ManagedProcessOptions {
+  const identity = Object.freeze({
+    runId: `fixture-safety-run-${process.pid}`,
+    operationId,
+    scenario: 'fixture-safety',
+  })
+  return Object.freeze({
+    ...options,
+    backend: inheritedChildBackend,
+    identity,
+    environment: sampleProcessEnvironment(undefined, {}),
+  })
+}
 
 async function artifactFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true })

@@ -10,12 +10,12 @@ import (
 
 	"github.com/pion/stun/v3"
 
-	"github.com/windshare/windshare/internal/testnetwork"
+	"github.com/windshare/windshare/internal/testloopback"
 )
 
 func TestRealSTUNProberRequiresServerReflexiveBindingResponse(t *testing.T) {
-	uri, stop := startLocalSTUNServer(t, net.IPv4(198, 51, 100, 20))
-	defer stop()
+	loopback := testloopback.New(t)
+	uri := startLocalSTUNServer(t, loopback, net.IPv4(198, 51, 100, 20))
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := (RealSTUNProber{}).Probe(ctx, uri); err == nil {
@@ -25,8 +25,7 @@ func TestRealSTUNProberRequiresServerReflexiveBindingResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	nonPublicURI, stopNonPublic := startLocalSTUNServer(t, net.IPv4zero)
-	defer stopNonPublic()
+	nonPublicURI := startLocalSTUNServer(t, loopback, net.IPv4zero)
 	if err := testSTUNProber().Probe(ctx, nonPublicURI); err == nil {
 		t.Fatal("unspecified mapped address accepted as server-reflexive")
 	}
@@ -66,13 +65,9 @@ func TestPublicSTUNAddressRejectsPrivateCarrierAndDocumentationRanges(t *testing
 	}
 }
 
-func startLocalSTUNServer(t *testing.T, mappedIP net.IP) (string, func()) {
+func startLocalSTUNServer(t *testing.T, loopback *testloopback.Fixture, mappedIP net.IP) string {
 	t.Helper()
-	testnetwork.RequireOSNetwork(t)
-	listener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	listener := loopback.ListenUDP()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -93,13 +88,15 @@ func startLocalSTUNServer(t *testing.T, mappedIP net.IP) (string, func()) {
 		)
 		_, _ = listener.WriteToUDP(response.Raw, remote)
 	}()
-	stop := func() {
-		_ = listener.Close()
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Errorf("close local STUN listener: %v", err)
+		}
 		select {
 		case <-done:
 		case <-time.After(time.Second):
 			t.Error("local STUN server did not retire")
 		}
-	}
-	return fmt.Sprintf("stun:127.0.0.1:%d", listener.LocalAddr().(*net.UDPAddr).Port), stop
+	})
+	return fmt.Sprintf("stun:127.0.0.1:%d", listener.LocalAddr().(*net.UDPAddr).Port)
 }

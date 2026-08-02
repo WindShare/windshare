@@ -1,22 +1,36 @@
-import { createHash } from 'node:crypto'
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseNetworkMatrixAggregateJson } from '../../scripts/browser-network-matrix/aggregate.ts'
+import { parseNetworkRuntimeAttestation } from '../../scripts/browser-network-matrix/attestation.ts'
 import { aggregateNetworkMatrixFiles } from '../../scripts/browser-network-matrix/cli/aggregate-files.ts'
-import { HELPER_BUILD_MANIFEST_SCHEMA_VERSION } from '../../scripts/browser-network-matrix/cli/build-helpers.mjs'
 import type { ImmutableTextFilePublisher } from '../../scripts/browser-network-matrix/cli/immutable-file-publication.ts'
 import type { NetworkMatrixPublisherHelperAuthority } from '../../scripts/browser-network-matrix/cli/publisher-helper.ts'
+import type { NetworkMatrixRuntimeBootstrap } from '../../scripts/browser-network-matrix/cli/execute.ts'
 import {
   browserNetworkMatrixCli,
   NetworkMatrixRuntimeNotWiredError,
 } from '../../scripts/browser-network-matrix/cli/main.ts'
+import { completedOwnedOperation } from '../../scripts/browser-network-matrix/owned-operation.ts'
 import {
   canonicalNetworkRunResultJson,
   parseNetworkRunResultJson,
 } from '../../scripts/browser-network-matrix/result.ts'
-import { loadRegistry, makeRun, MANIFEST_PATH } from './fixtures.ts'
+import type {
+  NetworkMatrixSampleExecutionContext,
+} from '../../scripts/browser-network-matrix/runner.ts'
+import type {
+  NetworkMatrixAuthorityPreparationContext,
+  PreparedNetworkMatrixAuthority,
+} from '../../scripts/browser-network-matrix/runtime-authority.ts'
+import {
+  loadRegistry,
+  makeRun,
+  MANIFEST_PATH,
+  matchedAttemptEvidence,
+  rawAttestation,
+} from './fixtures.ts'
 
 const temporaryRoots: string[] = []
 
@@ -26,14 +40,20 @@ afterEach(async () => {
 })
 
 describe('local browser network matrix CLI substrate', () => {
-  it('aggregates one explicit canonical run without fabricating the absent mode', async () => {
+  it('fails closed when invoked without an explicit command', async () => {
+    await expect(browserNetworkMatrixCli([])).rejects.toThrow(
+      /execute --mode scheduled/u,
+    )
+  })
+
+  it('aggregates exactly one explicit canonical scheduled run', async () => {
     const registry = await loadRegistry()
     const root = await temporaryRoot()
-    const runPath = join(root, 'manual.run.json')
-    const outputPath = join(root, 'manual.aggregate.json')
+    const runPath = join(root, 'scheduled.run.json')
+    const outputPath = join(root, 'scheduled.aggregate.json')
     await writeFile(
       runPath,
-      canonicalNetworkRunResultJson(makeRun(registry, 'manual', { runId: 'manual-local-run' }), registry),
+      canonicalNetworkRunResultJson(makeRun(registry, 'scheduled', { runId: 'scheduled-local-run' }), registry),
       'utf8',
     )
 
@@ -45,63 +65,55 @@ describe('local browser network matrix CLI substrate', () => {
     })
 
     expect(result.aggregate).toMatchObject({
-      evidenceOutcome: 'incomplete',
-      runs: [{ executionMode: 'manual', runId: 'manual-local-run' }],
+      evidenceOutcome: 'complete',
+      runs: [{ executionMode: 'scheduled', runId: 'scheduled-local-run' }],
     })
     const parsedRun = parseNetworkRunResultJson(await readFile(runPath, 'utf8'), registry)
     expect(parseNetworkMatrixAggregateJson(await readFile(outputPath, 'utf8'), registry, [parsedRun]))
       .toEqual(result.aggregate)
   })
 
-  it('combines two explicit distinct modes and publishes an immutable aggregate', async () => {
+  it('publishes an immutable scheduled aggregate', async () => {
     const registry = await loadRegistry()
     const root = await temporaryRoot()
     const scheduledPath = join(root, 'scheduled.run.json')
-    const manualPath = join(root, 'manual.run.json')
-    const outputPath = join(root, 'combined.aggregate.json')
-    await Promise.all([
-      writeFile(
-        scheduledPath,
-        canonicalNetworkRunResultJson(
-          makeRun(registry, 'scheduled', { runId: 'scheduled-local-run' }),
-          registry,
-        ),
-        'utf8',
+    const outputPath = join(root, 'scheduled.aggregate.json')
+    await writeFile(
+      scheduledPath,
+      canonicalNetworkRunResultJson(
+        makeRun(registry, 'scheduled', { runId: 'scheduled-local-run' }),
+        registry,
       ),
-      writeFile(
-        manualPath,
-        canonicalNetworkRunResultJson(makeRun(registry, 'manual', { runId: 'manual-local-run' }), registry),
-        'utf8',
-      ),
-    ])
+      'utf8',
+    )
 
     const result = await aggregateNetworkMatrixFiles({
       registry,
-      inputPaths: [manualPath, scheduledPath],
+      inputPaths: [scheduledPath],
       outputPath,
       publisher: testAggregatePublisher(),
     })
     expect(result.aggregate.evidenceOutcome).toBe('complete')
     expect(result.aggregate.runs.map(({ executionMode }) => executionMode))
-      .toEqual(['scheduled', 'manual'])
+      .toEqual(['scheduled'])
 
     await expect(aggregateNetworkMatrixFiles({
       registry,
-      inputPaths: [manualPath],
+      inputPaths: [scheduledPath],
       outputPath,
       publisher: testAggregatePublisher(),
     })).rejects.toThrow(/already exists/u)
     expect(await readFile(outputPath, 'utf8')).toBe(result.publication.encoded)
   })
 
-  it('rejects duplicate or non-canonical run inputs before publication', async () => {
+  it('rejects incorrect run cardinality or non-canonical input before publication', async () => {
     const registry = await loadRegistry()
     const root = await temporaryRoot()
-    const runPath = join(root, 'manual.run.json')
+    const runPath = join(root, 'scheduled.run.json')
     const outputPath = join(root, 'aggregate.json')
     await writeFile(
       runPath,
-      canonicalNetworkRunResultJson(makeRun(registry, 'manual'), registry),
+      canonicalNetworkRunResultJson(makeRun(registry, 'scheduled'), registry),
       'utf8',
     )
     await expect(aggregateNetworkMatrixFiles({
@@ -109,7 +121,7 @@ describe('local browser network matrix CLI substrate', () => {
       inputPaths: [runPath, runPath],
       outputPath,
       publisher: testAggregatePublisher(),
-    })).rejects.toThrow(/paths must be distinct/u)
+    })).rejects.toThrow(/requires exactly one scheduled run file/u)
 
     await writeFile(runPath, `\n${await readFile(runPath, 'utf8')}`, 'utf8')
     await expect(aggregateNetworkMatrixFiles({
@@ -125,7 +137,7 @@ describe('local browser network matrix CLI substrate', () => {
     const loadRegistry = vi.fn()
     await expect(browserNetworkMatrixCli([
       'execute',
-      '--mode', 'manual',
+      '--mode', 'scheduled',
       '--run-id', 'unwired-local-run',
       '--manifest', MANIFEST_PATH,
       '--output-root', 'unused-output',
@@ -140,42 +152,99 @@ describe('local browser network matrix CLI substrate', () => {
     const loadRegistry = vi.fn()
     const bootstrap = vi.fn(() => { throw new Error('runtime must remain unreachable') })
     const openPublisherHelper = vi.fn(async () =>
-      Promise.reject(new Error('publisher executable authentication failed')))
+      Promise.reject(new Error('publisher helper open failed')))
 
     await expect(browserNetworkMatrixCli([
       'execute',
-      '--mode', 'manual',
+      '--mode', 'scheduled',
       '--run-id', 'publisher-bootstrap-failure',
       '--manifest', MANIFEST_PATH,
       '--output-root', join(root, 'must-not-exist'),
       '--helper-manifest', join(root, 'helper-manifest.json'),
       '--publisher-helper', join(root, 'publisher-helper.exe'),
+      '--process-owner', join(root, 'testprocessowner'),
     ], {
       platform: 'linux',
       loadRegistry,
       runtimeBootstrap: { bootstrap },
       openPublisherHelper,
-    })).rejects.toThrow(/publisher executable authentication failed/u)
+    })).rejects.toThrow(/publisher helper open failed/u)
     expect(openPublisherHelper).toHaveBeenCalledOnce()
     expect(openPublisherHelper).toHaveBeenCalledWith({
       helperManifestPath: join(root, 'helper-manifest.json'),
       platform: 'linux',
       publisherHelperPath: join(root, 'publisher-helper.exe'),
+      processOwnerPath: join(root, 'testprocessowner'),
     })
     expect(loadRegistry).not.toHaveBeenCalled()
     expect(bootstrap).not.toHaveBeenCalled()
     await expect(access(join(root, 'must-not-exist'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('publishes settled execution and runner journals exactly once after cleanup', async () => {
+    const registry = await loadRegistry()
+    const root = await temporaryRoot()
+    const summaries: string[] = []
+    const encodedTraces: string[] = []
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      encodedTraces.push(String(chunk))
+      return true
+    })
+    try {
+      await expect(browserNetworkMatrixCli([
+        'execute',
+        '--mode', 'scheduled',
+        '--run-id', 'cli-owned-trace-publication',
+        '--manifest', MANIFEST_PATH,
+        '--output-root', join(root, 'output'),
+        '--helper-manifest', join(root, 'helper-manifest.json'),
+        '--publisher-helper', join(root, 'publisher-helper'),
+        '--process-owner', join(root, 'testprocessowner'),
+      ], {
+        platform: 'linux',
+        loadRegistry: async () => registry,
+        runtimeBootstrap: successfulCliBootstrap(),
+        openPublisherHelper: successfulExecutionPublisherHelperOpener(),
+        writeSummary: (encoded) => summaries.push(encoded),
+      })).resolves.toBe(0)
+    } finally {
+      stderr.mockRestore()
+    }
+
+    const traces = encodedTraces.map((encoded) => JSON.parse(encoded) as {
+      readonly component: string
+      readonly milestone: string
+    })
+    expect(traces.filter(({ milestone }) => milestone === 'execution-started')).toHaveLength(1)
+    expect(traces.filter(({ milestone }) => milestone === 'run-started')).toHaveLength(1)
+    expect(traces.filter(({ milestone }) => milestone === 'sample-started')).toHaveLength(45)
+    expect(traces.filter(({ milestone }) => milestone === 'sample-terminal')).toHaveLength(45)
+    expect(new Set(encodedTraces).size).toBe(encodedTraces.length)
+    const components = traces.map(({ component }) => component)
+    const firstRunner = components.indexOf('browser-network-matrix-runner')
+    expect(firstRunner).toBeGreaterThan(0)
+    expect(components.slice(0, firstRunner).every(
+      (component) => component === 'browser-network-matrix-execute',
+    )).toBe(true)
+    expect(components.slice(firstRunner).every(
+      (component) => component === 'browser-network-matrix-runner',
+    )).toBe(true)
+    expect(JSON.parse(summaries[0] as string)).toMatchObject({
+      acceptanceOutcome: 'passed',
+      command: 'execute',
+      commandOutcome: 'completed',
+    })
+  })
+
   it('exposes explicit aggregate inputs without requiring execution composition', async () => {
     const registry = await loadRegistry()
     const root = await temporaryRoot()
-    const runPath = join(root, 'manual.run.json')
-    const outputPath = join(root, 'manual.aggregate.json')
+    const runPath = join(root, 'scheduled.run.json')
+    const outputPath = join(root, 'scheduled.aggregate.json')
     const summaries: string[] = []
     await writeFile(
       runPath,
-      canonicalNetworkRunResultJson(makeRun(registry, 'manual'), registry),
+      canonicalNetworkRunResultJson(makeRun(registry, 'scheduled'), registry),
       'utf8',
     )
 
@@ -186,6 +255,7 @@ describe('local browser network matrix CLI substrate', () => {
       '--output', outputPath,
       '--helper-manifest', join(root, 'helper-manifest.json'),
       '--publisher-helper', join(root, 'publisher-helper.exe'),
+      '--process-owner', join(root, 'testprocessowner'),
     ], {
       platform: 'linux',
       openPublisherHelper: testPublisherHelperOpener(),
@@ -194,8 +264,8 @@ describe('local browser network matrix CLI substrate', () => {
 
     expect(JSON.parse(summaries[0] as string)).toMatchObject({
       command: 'aggregate',
-      modes: ['manual'],
-      evidenceOutcome: 'incomplete',
+      modes: ['scheduled'],
+      evidenceOutcome: 'complete',
       outputPath,
     })
     await expect(browserNetworkMatrixCli([
@@ -209,15 +279,15 @@ describe('local browser network matrix CLI substrate', () => {
   it('forwards all three Windows helper authorities without aliases or path inference', async () => {
     const registry = await loadRegistry()
     const root = await temporaryRoot()
-    const runPath = join(root, 'manual.run.json')
-    const outputPath = join(root, 'manual.aggregate.json')
+    const runPath = join(root, 'scheduled.run.json')
+    const outputPath = join(root, 'scheduled.aggregate.json')
     const helperManifestPath = join(root, 'helper-manifest.json')
     const publisherHelperPath = join(root, 'browsermatrixpublish.exe')
-    const windowsJobHelperPath = join(root, 'windowsjob.exe')
+    const processOwnerPath = join(root, 'testprocessowner.exe')
     const openPublisherHelper = vi.fn(testPublisherHelperOpener())
     await writeFile(
       runPath,
-      canonicalNetworkRunResultJson(makeRun(registry, 'manual'), registry),
+      canonicalNetworkRunResultJson(makeRun(registry, 'scheduled'), registry),
       'utf8',
     )
 
@@ -228,7 +298,7 @@ describe('local browser network matrix CLI substrate', () => {
       '--output', outputPath,
       '--helper-manifest', helperManifestPath,
       '--publisher-helper', publisherHelperPath,
-      '--windows-job-helper', windowsJobHelperPath,
+      '--process-owner', processOwnerPath,
     ], {
       platform: 'win32',
       openPublisherHelper,
@@ -238,11 +308,11 @@ describe('local browser network matrix CLI substrate', () => {
       helperManifestPath,
       platform: 'win32',
       publisherHelperPath,
-      windowsJobHelperPath,
+      processOwnerPath,
     })
   })
 
-  it('requires each helper authority exactly once and enforces platform-exact flags', async () => {
+  it('requires each helper authority exactly once on every supported platform', async () => {
     const root = await temporaryRoot()
     const base = [
       'aggregate',
@@ -255,12 +325,14 @@ describe('local browser network matrix CLI substrate', () => {
     await expect(browserNetworkMatrixCli([
       ...base,
       '--publisher-helper', join(root, 'publisher'),
+      '--process-owner', join(root, 'testprocessowner'),
     ], { platform: 'linux', openPublisherHelper })).rejects.toThrow(
       /option --helper-manifest must appear exactly once/u,
     )
     await expect(browserNetworkMatrixCli([
       ...base,
       '--helper-manifest', join(root, 'helper-manifest.json'),
+      '--process-owner', join(root, 'testprocessowner'),
     ], { platform: 'linux', openPublisherHelper })).rejects.toThrow(
       /option --publisher-helper must appear exactly once/u,
     )
@@ -268,22 +340,15 @@ describe('local browser network matrix CLI substrate', () => {
       ...base,
       '--helper-manifest', join(root, 'helper-manifest.json'),
       '--publisher-helper', join(root, 'publisher'),
-    ], { platform: 'win32', openPublisherHelper })).rejects.toThrow(
-      /option --windows-job-helper must appear exactly once/u,
-    )
-    await expect(browserNetworkMatrixCli([
-      ...base,
-      '--helper-manifest', join(root, 'helper-manifest.json'),
-      '--publisher-helper', join(root, 'publisher'),
-      '--windows-job-helper', join(root, 'windowsjob.exe'),
     ], { platform: 'linux', openPublisherHelper })).rejects.toThrow(
-      /--windows-job-helper is only valid on Windows/u,
+      /option --process-owner must appear exactly once/u,
     )
     await expect(browserNetworkMatrixCli([
       ...base,
       '--helper-manifest', join(root, 'one.json'),
       '--helper-manifest', join(root, 'two.json'),
       '--publisher-helper', join(root, 'publisher'),
+      '--process-owner', join(root, 'testprocessowner'),
     ], { platform: 'linux', openPublisherHelper })).rejects.toThrow(
       /option --helper-manifest must appear exactly once/u,
     )
@@ -292,6 +357,7 @@ describe('local browser network matrix CLI substrate', () => {
       '--helper-manifest', join(root, 'helper-manifest.json'),
       '--publisher-helper', join(root, 'one-publisher'),
       '--publisher-helper', join(root, 'two-publisher'),
+      '--process-owner', join(root, 'testprocessowner'),
     ], { platform: 'linux', openPublisherHelper })).rejects.toThrow(
       /option --publisher-helper must appear exactly once/u,
     )
@@ -299,10 +365,10 @@ describe('local browser network matrix CLI substrate', () => {
       ...base,
       '--helper-manifest', join(root, 'helper-manifest.json'),
       '--publisher-helper', join(root, 'publisher.exe'),
-      '--windows-job-helper', join(root, 'one-windowsjob.exe'),
-      '--windows-job-helper', join(root, 'two-windowsjob.exe'),
+      '--process-owner', join(root, 'one-testprocessowner.exe'),
+      '--process-owner', join(root, 'two-testprocessowner.exe'),
     ], { platform: 'win32', openPublisherHelper })).rejects.toThrow(
-      /option --windows-job-helper must appear at most once/u,
+      /option --process-owner must appear exactly once/u,
     )
     expect(openPublisherHelper).not.toHaveBeenCalled()
   })
@@ -320,10 +386,11 @@ describe('local browser network matrix CLI substrate', () => {
 
     await expect(browserNetworkMatrixCli([
       'execute',
-      '--mode', 'manual',
+      '--mode', 'scheduled',
       '--run-id', 'no-ambient-helper',
       '--manifest', MANIFEST_PATH,
       '--output-root', join(root, 'output'),
+      '--process-owner', join(root, 'testprocessowner'),
       '--helper', join(root, 'browsermatrixpublish'),
     ], {
       platform: 'linux',
@@ -332,10 +399,11 @@ describe('local browser network matrix CLI substrate', () => {
     })).rejects.toThrow(/unknown browser network matrix option --helper/u)
     await expect(browserNetworkMatrixCli([
       'execute',
-      '--mode', 'manual',
+      '--mode', 'scheduled',
       '--run-id', 'no-ambient-helper',
       '--manifest', MANIFEST_PATH,
       '--output-root', join(root, 'output'),
+      '--process-owner', join(root, 'testprocessowner'),
     ], {
       platform: 'linux',
       runtimeBootstrap: { bootstrap: vi.fn() },
@@ -344,25 +412,24 @@ describe('local browser network matrix CLI substrate', () => {
     expect(openPublisherHelper).not.toHaveBeenCalled()
   })
 
-  it('authenticates real manifest path and SHA before registry or runtime bootstrap', async () => {
+  it('validates the helper manifest before registry or runtime bootstrap', async () => {
     const root = await temporaryRoot()
     const helperManifestPath = join(root, 'helper-manifest.json')
     const publisherHelperPath = join(root, 'browsermatrixpublish.exe')
-    const windowsJobHelperPath = join(root, 'windowsjob.exe')
+    const processOwnerPath = join(root, 'testprocessowner.exe')
     await Promise.all([
       writeFile(publisherHelperPath, 'publisher bytes', 'utf8'),
-      writeFile(windowsJobHelperPath, 'Windows Job bytes', 'utf8'),
+      writeFile(processOwnerPath, 'test process owner bytes', 'utf8'),
     ])
     await writeFile(helperManifestPath, `${JSON.stringify({
-      schemaVersion: HELPER_BUILD_MANIFEST_SCHEMA_VERSION,
+      schemaVersion: 'windshare.browser-network-matrix.helper-build/unsupported',
       platform: 'win32',
       architecture: runtimeGoArchitecture(),
       helpers: [
-        { role: 'artifact-publisher', path: publisherHelperPath, sha256: '0'.repeat(64) },
+        { role: 'artifact-publisher', path: publisherHelperPath },
         {
-          role: 'windows-job',
-          path: windowsJobHelperPath,
-          sha256: createHash('sha256').update('Windows Job bytes').digest('hex'),
+          role: 'test-process-owner',
+          path: processOwnerPath,
         },
       ],
     })}\n`, 'utf8')
@@ -371,18 +438,18 @@ describe('local browser network matrix CLI substrate', () => {
 
     await expect(browserNetworkMatrixCli([
       'execute',
-      '--mode', 'manual',
-      '--run-id', 'manifest-sha-failure',
+      '--mode', 'scheduled',
+      '--run-id', 'manifest-schema-failure',
       '--manifest', MANIFEST_PATH,
       '--output-root', join(root, 'output'),
       '--helper-manifest', helperManifestPath,
       '--publisher-helper', publisherHelperPath,
-      '--windows-job-helper', windowsJobHelperPath,
+      '--process-owner', processOwnerPath,
     ], {
       platform: 'win32',
       loadRegistry,
       runtimeBootstrap: { bootstrap },
-    })).rejects.toThrow(/publisher helper bytes differ from the held helper manifest/u)
+    })).rejects.toThrow(/schema version/u)
     expect(loadRegistry).not.toHaveBeenCalled()
     expect(bootstrap).not.toHaveBeenCalled()
     await expect(access(join(root, 'output'))).rejects.toMatchObject({ code: 'ENOENT' })
@@ -408,6 +475,87 @@ function testPublisherHelperOpener(): () => Promise<NetworkMatrixPublisherHelper
   return async () => Object.freeze({
     artifactPublisher: Object.freeze({
       publish: () => Promise.reject(new Error('artifact publisher is unused in aggregate test')),
+    }),
+    aggregatePublisher: testAggregatePublisher(),
+    close: () => Promise.resolve(),
+  })
+}
+
+function successfulCliBootstrap(): NetworkMatrixRuntimeBootstrap {
+  return Object.freeze({
+    bootstrap(context) {
+      const authorities = Object.freeze({
+        prepare(authorityContext: NetworkMatrixAuthorityPreparationContext) {
+          const attestation = parseNetworkRuntimeAttestation(
+            rawAttestation(
+              authorityContext.registry,
+              authorityContext.runId,
+              authorityContext.profile.profileId,
+              'satisfied',
+            ),
+            {
+              manifest: authorityContext.registry.manifest,
+              manifestSha256: authorityContext.registry.manifestSha256,
+              runId: authorityContext.runId,
+            },
+          )
+          const prepared: PreparedNetworkMatrixAuthority = Object.freeze({
+            attestation,
+            execution: Object.freeze({
+              profileId: authorityContext.profile.profileId,
+              runtimeKind: 'external-fixture',
+            }),
+            close: () => completedOwnedOperation(undefined),
+            forceTerminateAndWait: () => Promise.resolve(),
+          })
+          return completedOwnedOperation(prepared)
+        },
+      })
+      const samples = Object.freeze({
+        execute(sampleContext: NetworkMatrixSampleExecutionContext) {
+          const processInstanceId = [
+            'cli-sample',
+            sampleContext.identity.profileId,
+            sampleContext.identity.browser,
+            sampleContext.identity.sampleOrdinal,
+          ].join('-')
+          return completedOwnedOperation(Object.freeze({
+            processInstanceId,
+            observation: Object.freeze({
+              sampleOutcome: 'observed' as const,
+              attemptEvidence: matchedAttemptEvidence(
+                sampleContext.identity,
+                sampleContext.runId,
+                { processInstanceId },
+              ),
+            }),
+          }))
+        },
+      })
+      return completedOwnedOperation(Object.freeze({
+        authorities,
+        samples,
+        closeAndWait: async () => Object.freeze({ terminal: 'closed' as const }),
+        forceTerminateAndWait: async () => Object.freeze({ terminal: 'closed' as const }),
+      }))
+    },
+  })
+}
+
+function successfulExecutionPublisherHelperOpener():
+() => Promise<NetworkMatrixPublisherHelperAuthority> {
+  return async () => Object.freeze({
+    artifactPublisher: Object.freeze({
+      async publish(input) {
+        const aggregateJson = input.deriveAggregateJson(input.runJson)
+        return Object.freeze({
+          outputRoot: input.outputRoot,
+          runPath: join(input.outputRoot, 'run.json'),
+          aggregatePath: join(input.outputRoot, 'aggregate.json'),
+          runJson: input.runJson,
+          aggregateJson,
+        })
+      },
     }),
     aggregatePublisher: testAggregatePublisher(),
     close: () => Promise.resolve(),

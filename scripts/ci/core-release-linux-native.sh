@@ -21,7 +21,11 @@ fi
 artifact_root="$(cd -- "$artifact_root" && pwd -P)"
 release_root="$(cd -- "$release_root" && pwd -P)"
 
-for command_name in go readelf truncate mkfs.ext4 losetup udevadm sudo unshare chroot timeout; do
+if [ -z "${WINDSHARE_GO_EXECUTABLE:-}" ] || [ ! -r "$WINDSHARE_GO_EXECUTABLE" ]; then
+  echo 'Linux/ext4 native certification requires the retained coordinator Go application' >&2
+  exit 1
+fi
+for command_name in readelf truncate mkfs.ext4 losetup udevadm sudo unshare chroot timeout; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "Linux/ext4 native certification is missing required command: $command_name" >&2
     exit 1
@@ -50,7 +54,7 @@ compile_static_test_binary() {
   local package_path="$1"
   local binary_path="$2"
 
-  CGO_ENABLED=0 GOWORK=off go -C "$artifact_root" test -c -o "$binary_path" "$package_path"
+  CGO_ENABLED=0 GOWORK=off "$WINDSHARE_GO_EXECUTABLE" -C "$artifact_root" test -c -o "$binary_path" "$package_path"
   if readelf -l "$binary_path" | grep -Fq 'INTERP'; then
     echo "Linux native certification binary is dynamically linked: $package_path" >&2
     exit 1
@@ -124,7 +128,7 @@ timeout --signal=TERM --kill-after=30s 25m \
     bash "$script_root/core-release-linux-native-root.sh" \
       "$loop_device" "$mountpoint_path" "$osfs_test_binary" "$outputlinux_test_binary" \
       "$(id -u)" "$(id -g)" \
-  | go tool test2json -t -p github.com/windshare/windshare/core/osfs \
+  | "$WINDSHARE_GO_EXECUTABLE" tool test2json -t -p github.com/windshare/windshare/core/osfs \
   | tee "$events"
 pipeline_status=("${PIPESTATUS[@]}")
 set -e

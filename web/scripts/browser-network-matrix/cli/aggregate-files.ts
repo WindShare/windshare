@@ -8,7 +8,6 @@ import {
 } from '../aggregate.ts'
 import type { LoadedNetworkMatrixRegistry } from '../manifest.ts'
 import { parseNetworkRunResultJson, type NetworkRunResult } from '../result.ts'
-import { NETWORK_MATRIX_EXECUTION_MODES } from '../vocabulary.ts'
 import { sameFileIdentity } from './filesystem-authority.ts'
 import {
   type ImmutableTextFilePublication,
@@ -35,14 +34,10 @@ export interface AggregateNetworkMatrixFilesResult {
 export async function aggregateNetworkMatrixFiles(
   options: AggregateNetworkMatrixFilesOptions,
 ): Promise<AggregateNetworkMatrixFilesResult> {
-  if (
-    options.inputPaths.length < 1 ||
-    options.inputPaths.length > NETWORK_MATRIX_EXECUTION_MODES.length
-  ) throw new Error('local network matrix aggregate requires one or two explicit run files')
-  const paths = options.inputPaths.map((path) => resolve(path))
-  if (new Set(paths).size !== paths.length) {
-    throw new Error('local network matrix aggregate run file paths must be distinct')
+  if (options.inputPaths.length !== 1) {
+    throw new Error('local network matrix aggregate requires exactly one scheduled run file')
   }
+  const paths = options.inputPaths.map((path) => resolve(path))
   const runs = Object.freeze(await Promise.all(paths.map(async (path) =>
     parseNetworkRunResultJson(await readStableRunJson(path), options.registry))))
   const aggregate = aggregateNetworkMatrix(options.registry, runs)

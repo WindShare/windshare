@@ -13,7 +13,6 @@ import (
 	"net/netip"
 	"sync"
 
-	"github.com/pion/ice/v4"
 	pion "github.com/pion/webrtc/v4"
 )
 
@@ -37,16 +36,20 @@ type AttemptFactory interface {
 	Create(context.Context, AttemptAuthority) (Attempt, error)
 }
 
+// PionPeerConnectionAPI is defined at the consuming factory so tests can bind
+// every PeerConnection to an already-held loopback UDP authority.
+type PionPeerConnectionAPI interface {
+	NewPeerConnection(pion.Configuration) (*pion.PeerConnection, error)
+}
+
 type PionAttemptFactoryConfig struct {
-	InstanceID string
-	PublicIP   string
-	UDPPortMin uint16
-	UDPPortMax uint16
-	Trace      TraceSink
+	InstanceID      string
+	PeerConnections PionPeerConnectionAPI
+	Trace           TraceSink
 }
 
 type PionAttemptFactory struct {
-	api        *pion.API
+	api        PionPeerConnectionAPI
 	instanceID string
 	trace      TraceSink
 }
@@ -55,28 +58,11 @@ func NewPionAttemptFactory(config PionAttemptFactoryConfig) (*PionAttemptFactory
 	if err := validateCanonicalID(config.InstanceID, "instance ID"); err != nil {
 		return nil, err
 	}
-	address, err := netip.ParseAddr(config.PublicIP)
-	if err != nil || !address.Is4() || address.String() != config.PublicIP || config.UDPPortMin == 0 || config.UDPPortMax < config.UDPPortMin {
-		return nil, errors.New("remote Pion endpoint authority is invalid")
+	if config.PeerConnections == nil {
+		return nil, errors.New("remote Pion PeerConnection API is invalid")
 	}
-	var setting pion.SettingEngine
-	setting.SetNetworkTypes([]pion.NetworkType{pion.NetworkTypeUDP4})
-	if err := setting.SetEphemeralUDPPortRange(config.UDPPortMin, config.UDPPortMax); err != nil {
-		return nil, fmt.Errorf("bind remote Pion UDP authority: %w", err)
-	}
-	// The configured address is operator-authorized public routing state. Pion
-	// must advertise that address rather than an incidental interface address
-	// enumerated by the host at runtime.
-	if err := setting.SetICEAddressRewriteRules(pion.ICEAddressRewriteRule{
-		External:        []string{config.PublicIP},
-		AsCandidateType: pion.ICECandidateTypeHost,
-		Mode:            pion.ICEAddressRewriteReplace,
-	}); err != nil {
-		return nil, fmt.Errorf("configure remote Pion address rewrite: %w", err)
-	}
-	setting.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 	return &PionAttemptFactory{
-		api: pion.NewAPI(pion.WithSettingEngine(setting)), instanceID: config.InstanceID, trace: config.Trace,
+		api: config.PeerConnections, instanceID: config.InstanceID, trace: config.Trace,
 	}, nil
 }
 
@@ -94,6 +80,9 @@ func (factory *PionAttemptFactory) Create(ctx context.Context, authority Attempt
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create remote Pion peer: %w", err)
+	}
+	if peer == nil {
+		return nil, errors.New("create remote Pion peer returned no PeerConnection")
 	}
 	attempt := &pionAttempt{
 		authority: authority, peer: peer,

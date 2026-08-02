@@ -105,7 +105,16 @@ type senderRelayLifecycleConfig struct {
 	initial     senderRelayEndpoint
 	dialer      senderRelayDialer
 	clock       senderRelayRecoveryClock
+	observe     func(senderRelayRecoveryMilestone)
 }
+
+type senderRelayRecoveryMilestone uint8
+
+const (
+	senderRelayRecoveryStarted senderRelayRecoveryMilestone = iota + 1
+	senderRelayRecoverySucceeded
+	senderRelayRecoveryFailed
+)
 
 type senderRelayLifecycle struct {
 	mu sync.Mutex
@@ -184,7 +193,15 @@ func (lifecycle *senderRelayLifecycle) current() (senderRelayConnection, error) 
 	return lifecycle.connection, nil
 }
 
-func (lifecycle *senderRelayLifecycle) recover(callerContext context.Context) error {
+func (lifecycle *senderRelayLifecycle) recover(callerContext context.Context) (resultErr error) {
+	lifecycle.observeRecovery(senderRelayRecoveryStarted)
+	defer func() {
+		if resultErr == nil {
+			lifecycle.observeRecovery(senderRelayRecoverySucceeded)
+			return
+		}
+		lifecycle.observeRecovery(senderRelayRecoveryFailed)
+	}()
 	old, err := lifecycle.detachForRecovery()
 	if err != nil {
 		return err
@@ -246,6 +263,12 @@ func (lifecycle *senderRelayLifecycle) recover(callerContext context.Context) er
 			return errors.Join(dialErr, waitErr)
 		}
 		delay = min(delay*2, senderRelayRetryMaximum)
+	}
+}
+
+func (lifecycle *senderRelayLifecycle) observeRecovery(milestone senderRelayRecoveryMilestone) {
+	if lifecycle != nil && lifecycle.config.observe != nil {
+		lifecycle.config.observe(milestone)
 	}
 }
 

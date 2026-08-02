@@ -18,18 +18,19 @@ import {
 } from '@zip.js/zip.js'
 
 import {
-  scanSampleArtifacts,
-  type ArtifactGuardScanHooks,
+  requireCompleteArtifactGuardTrace,
+  startScanSampleArtifacts,
+  type ArtifactGuardScanFaultCut,
 } from '../../scripts/browser-evidence/artifact/guard.ts'
 import {
-  runBrowserSample,
+  startBrowserSample,
+  type BrowserSampleRunExecution,
   type BrowserSampleRunOutcome,
-  type BrowserSampleTraceSink,
 } from '../../scripts/browser-evidence/sample-runner.ts'
 import type {
   BrowserSampleContainmentBackend,
 } from '../../scripts/browser-evidence/process/containment.ts'
-import type { BrowserSampleStagingHooks } from '../../scripts/browser-evidence/process/attachment-staging.ts'
+import type { BrowserSampleStagingFaultCut } from '../../scripts/browser-evidence/process/attachment-staging.ts'
 import { createDeterministicTestContainmentBackend } from './deterministic-containment.ts'
 import {
   parseTestIceTopologyJson,
@@ -66,7 +67,6 @@ import { createDeterministicDirectoryPublisher } from './deterministic-directory
 export const FRAMEWORK_CHECKOUT_SHA = 'a'.repeat(40)
 export const FRAMEWORK_RUN_ID = 'framework-run'
 export const FRAMEWORK_COMMAND_SHA256 = 'b'.repeat(64)
-export const FRAMEWORK_RUNTIME_MANIFEST_SHA256 = 'c'.repeat(64)
 export const SYNTHETIC_CHILD_PATH = fileURLToPath(
   new URL('./fixtures/synthetic-child.mjs', import.meta.url),
 )
@@ -89,9 +89,8 @@ export interface SyntheticSampleOptions {
   readonly maximumCapturedStreamBytes?: number
   readonly processDeadlineMs?: number
   readonly delayMs?: number
-  readonly trace?: BrowserSampleTraceSink
   readonly containmentBackend?: BrowserSampleContainmentBackend
-  readonly stagingHooks?: BrowserSampleStagingHooks
+  readonly stagingFaultCut?: BrowserSampleStagingFaultCut
   readonly readOnlyInputRoots?: readonly string[]
 }
 
@@ -180,7 +179,6 @@ export async function createFrameworkGuardAuthority(
   const publicKeySpkiBase64 = publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
   const settlementTrust = Object.freeze({
     invocationId: `framework-${randomBytes(16).toString('hex')}`,
-    runtimeManifestSha256: FRAMEWORK_RUNTIME_MANIFEST_SHA256,
     publicKeySpkiBase64,
     publicKeySha256: processSettlementPublicKeyFingerprint(publicKeySpkiBase64),
   })
@@ -218,33 +216,16 @@ function signFrameworkSettlement(
     sampleIndex: outcome.result.sampleIndex,
     checkoutSha: outcome.result.checkoutSha,
     commandSha256: FRAMEWORK_COMMAND_SHA256,
-    runtimeManifestSha256: trust.runtimeManifestSha256,
     resultSha256: createHash('sha256').update(resultBytes).digest('hex'),
     resultByteLength: String(resultBytes.byteLength),
     process: frameworkProcessEvidence(outcome),
-    launched: true,
     treeEmpty: true,
+    cleanupOutcome: 'completed',
     input: Object.freeze({ outcome: 'delivered', failureCode: '', failureMessage: '' }),
-    clientIo: Object.freeze({
-      requestOutcome: 'delivered',
-      rawInputOutcome: 'delivered',
-      controlOutcome: 'not-requested',
-      outputOutcome: 'delivered',
-      failureCode: '',
-      failureMessage: '',
-    }),
     ownership: Object.freeze({
-      backend: 'linux-subreaper',
-      ownerPid: 10,
-      rootPid: 11,
-      rootStartTimeTicks: '12',
-      inventoryScans: 2,
-      maximumObservedDescendants: 0,
-      quietInventoryCount: 2,
-      controlOutcome: 'target-terminal',
-      cleanupOutcome: 'completed',
-      failureCode: '',
-      failureMessage: '',
+      kind: 'test-process-owner',
+      backend: 'linux_subreaper',
+      terminationReason: 'natural',
     }),
     nonce: randomBytes(32).toString('hex'),
     issuedAtUnixMs: String(issuedAt),
@@ -260,15 +241,14 @@ function signFrameworkSettlement(
 function frameworkProcessEvidence(outcome: BrowserSampleRunOutcome): ProcessSettlementEvidence {
   const terminal = outcome.result.executionEvidence.runnerProcess
   if (terminal.terminal === 'exited') {
-    return Object.freeze({ terminal: 'exited', timedOut: false, exitCode: terminal.exitCode })
+    return Object.freeze({ terminal: 'exited', exitCode: terminal.exitCode })
   }
   if (terminal.terminal === 'signaled') {
-    return Object.freeze({ terminal: 'signaled', timedOut: false, signal: terminal.signal })
+    return Object.freeze({ terminal: 'signaled', signal: terminal.signal })
   }
   if (terminal.terminal === 'spawn-failed') {
     return Object.freeze({
       terminal: 'spawn-failed',
-      timedOut: false,
       errorCode: terminal.errorCode,
       errorMessage: terminal.errorMessage,
     })
@@ -287,12 +267,28 @@ export async function removeFrameworkWorkspace(path: string): Promise<void> {
 export async function runSyntheticSample(
   options: SyntheticSampleOptions,
 ): Promise<BrowserSampleRunOutcome> {
+  const execution = startSyntheticSample(options)
+  const outcome = await execution.result
+  const snapshot = execution.traces.snapshot()
+  if (
+    !snapshot.completed ||
+    snapshot.truncated ||
+    snapshot.observedEvents !== snapshot.capturedEvents
+  ) throw new Error('synthetic fixture discarded incomplete browser sample trace evidence')
+  return outcome
+}
+
+export function startSyntheticSample(
+  options: SyntheticSampleOptions,
+): BrowserSampleRunExecution {
   const browser = options.browser ?? 'chromium'
   const sampleIndex = options.sampleIndex ?? 1
   const sampleDirectory = join(options.workspace, options.suite, browser, `sample-${sampleIndex}`)
   const containmentBackend = options.containmentBackend ?? createDeterministicTestContainmentBackend()
-  return runBrowserSample({
+  return startBrowserSample({
     runId: options.runId ?? FRAMEWORK_RUN_ID,
+    operationId: `${options.suite}-${browser}-sample-${sampleIndex}`,
+    scenario: 'synthetic-browser-evidence',
     runPolicy: options.runPolicy ?? browserRunPolicy('closure'),
     suite: options.suite,
     browser,
@@ -321,27 +317,27 @@ export async function runSyntheticSample(
       : { maximumCapturedStreamBytes: options.maximumCapturedStreamBytes }),
     ...(options.processDeadlineMs === undefined ? {} : { processDeadlineMs: options.processDeadlineMs }),
     containmentBackend,
-    ...(options.stagingHooks === undefined ? {} : { stagingHooks: options.stagingHooks }),
+    ...(options.stagingFaultCut === undefined ? {} : { stagingFaultCut: options.stagingFaultCut }),
     readOnlyInputRoots: options.readOnlyInputRoots ?? [options.workspace],
-    trace: options.trace ?? (() => undefined),
   })
 }
 
 export async function guardSyntheticSample(
   outcome: BrowserSampleRunOutcome,
   explicitSecrets: readonly string[] = [],
-  hooks?: ArtifactGuardScanHooks,
+  faultCut?: ArtifactGuardScanFaultCut,
 ): Promise<ArtifactGuardResult> {
   const artifactRoot = artifactRootForOutcome(outcome)
-  return scanSampleArtifacts({
+  const execution = startScanSampleArtifacts({
     sample: outcome.result,
     sampleResultBytes: await readFile(outcome.resultPath),
     artifactRoot,
     explicitSecrets: explicitSecrets.map((value) => ({ value })),
-    ...(hooks?.beforeArtifactScan === undefined
-      ? {}
-      : { beforeArtifactScan: hooks.beforeArtifactScan }),
+    ...(faultCut === undefined ? {} : { faultCut }),
   })
+  const result = await execution.result
+  requireCompleteArtifactGuardTrace(execution.traces.snapshot(), 'synthetic artifact scan trace')
+  return result
 }
 
 export function artifactRootForOutcome(outcome: BrowserSampleRunOutcome): string {

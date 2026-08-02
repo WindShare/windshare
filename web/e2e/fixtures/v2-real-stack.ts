@@ -6,14 +6,15 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
+import { readChildEvidenceContext } from '../../scripts/browser-evidence/child-evidence'
+import type { InheritedChildProcessBackend } from '../../scripts/browser-evidence/process/inherited-child-process.mjs'
+import { sampleProcessEnvironment } from '../../scripts/browser-evidence/process/sample-environment'
+import {
+  CatalogEnumerationGateController,
+  type CatalogGateSnapshot,
+} from './catalog-enumeration-gate'
 import { ManagedProcess, settleCleanupTasks } from './managed-process'
 import type { SenderAttemptEvidenceSnapshot } from './hot-switch-evidence'
-import {
-  openWindowsStableRunner,
-  stableWindowsE2EDirectory,
-  type BinaryPaths,
-  type WindowsStableRunner,
-} from './windows-stable-runner'
 
 const execFileAsync = promisify(execFile)
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -24,14 +25,38 @@ const MAXIMUM_SENDER_EVIDENCE_BYTES = 1_000_000
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const REAL_STACK_READY_TIMEOUT_MILLISECONDS = 30_000
 const REAL_STACK_STOP_TIMEOUT_MILLISECONDS = 10_000
+const PROCESS_EVENT_SUCCEEDED = 'succeeded'
+const RELAY_COMPONENT = 'wsrelay'
+const RELAY_READY_MILESTONE = 'listener_ready'
+const SENDER_COMPONENT = 'windshare_share'
+const SENDER_READY_MILESTONE = 'sender_ready'
+const CATALOG_GATE_READY_MILESTONE = 'catalog_gate_ready'
+const CATALOG_SCAN_WAITING_MILESTONE = 'catalog_scan_waiting'
+const CATALOG_SCAN_RELEASED_MILESTONE = 'catalog_scan_released'
+const PROCESS_EVENT_STARTED = 'started'
+const RELAY_MAXIMUM_PROCESS_EVENTS = 1
+const SENDER_MAXIMUM_PROCESS_EVENTS = 1_024
 
 const binaryCleanup = new WeakMap<BinaryPaths, () => Promise<void>>()
-const binaryRunners = new WeakMap<BinaryPaths, WindowsStableRunner>()
+
+export interface BinaryPaths {
+  readonly directory: string
+  readonly windshare: string
+  readonly relay: string
+}
 
 export interface SplitShare {
   readonly bareLink: string
   readonly key: string
   readonly senderEvidencePath: string
+}
+
+export interface ProgressiveCatalogGate {
+  assertBlocked(bounds?: FixtureOperationBounds): Promise<CatalogGateSnapshot>
+}
+
+export interface ProgressiveSplitShare extends SplitShare {
+  readonly catalogGate: ProgressiveCatalogGate
 }
 
 export interface FixtureOperationBounds {
@@ -185,28 +210,8 @@ export class RelayProxy {
 
 export async function acquireRealStackBinaries(signal?: AbortSignal): Promise<BinaryPaths> {
   signal?.throwIfAborted()
-  const stableDirectory = stableWindowsE2EDirectory(
-    process.platform,
-    process.env.WINDSHARE_WINDOWS_OS_NETWORK,
-    process.env.WINDSHARE_D5_E2E_LEASE_TOKEN,
-  )
-  if (stableDirectory !== undefined) {
-    const runner = await openWindowsStableRunner(stableDirectory, signal)
-    if (signal?.aborted === true) {
-      runner.close()
-      signal.throwIfAborted()
-    }
-    binaryRunners.set(runner.paths, runner)
-    binaryCleanup.set(runner.paths, async () => runner.close())
-    return runner.paths
-  }
-
   const directory = await mkdtemp(join(tmpdir(), 'windshare-r7-browser-'))
-  const paths = Object.freeze({
-    directory,
-    windshare: join(directory, executableName('windshare-e2e')),
-    relay: join(directory, executableName('wsrelay')),
-  })
+  const paths = realStackBinaryPaths(directory)
   const results = await Promise.allSettled([
     build(paths.windshare, './cmd/windshare/e2e', signal),
     build(paths.relay, './relay/cmd/wsrelay', signal),
@@ -226,6 +231,18 @@ export async function acquireRealStackBinaries(signal?: AbortSignal): Promise<Bi
   return paths
 }
 
+export function realStackBinaryPaths(
+  directory: string,
+  platform: NodeJS.Platform = process.platform,
+): BinaryPaths {
+  requireAbsolutePath(directory, 'Real-stack binary directory')
+  return Object.freeze({
+    directory,
+    windshare: join(directory, executableName('windshare-e2e', platform)),
+    relay: join(directory, executableName('wsrelay', platform)),
+  })
+}
+
 export async function releaseRealStackBinaries(paths: BinaryPaths): Promise<void> {
   const cleanup = binaryCleanup.get(paths)
   if (cleanup === undefined) throw new Error('Real-stack binaries are not owned by this worker')
@@ -241,14 +258,26 @@ export class V2RealStack {
   readonly #topologyResolutionPath: string
   readonly #topologyProfileSha256: string
   readonly #topologyResolutionSha256: string
-  readonly #runner: WindowsStableRunner | undefined
+  readonly #processBackend: InheritedChildProcessBackend
+  readonly #context = readChildEvidenceContext()
   readonly #processes: ManagedProcess[] = []
   readonly #temporaryDirectories: string[] = []
   readonly #proxies: RelayProxy[] = []
+  readonly #catalogGates = new WeakMap<ProgressiveCatalogGate, {
+    readonly controller: CatalogEnumerationGateController
+    readonly sender: ManagedProcess
+    readonly senderEvidencePath: string
+  }>()
+  #processSequence = 0
   relayUrl = ''
 
-  constructor(binaries: BinaryPaths, topology: LockedTestIceTopology) {
+  constructor(
+    binaries: BinaryPaths,
+    topology: LockedTestIceTopology,
+    processBackend: InheritedChildProcessBackend,
+  ) {
     this.#binaries = binaries
+    this.#processBackend = processBackend
     requireAbsolutePath(topology.profilePath, 'Test ICE topology profile')
     requireAbsolutePath(topology.resolutionPath, 'Test ICE topology resolution')
     requireSha256(topology.lock.profileSha256, 'Test ICE topology profile')
@@ -257,29 +286,29 @@ export class V2RealStack {
     this.#topologyResolutionPath = topology.resolutionPath
     this.#topologyProfileSha256 = topology.lock.profileSha256
     this.#topologyResolutionSha256 = topology.lock.resolutionSha256
-    this.#runner = binaryRunners.get(binaries)
-    if (process.platform === 'win32' && this.#runner === undefined) {
-      throw new Error('Windows real-stack execution requires the D5 stable runner')
-    }
   }
 
   async start(bounds: FixtureOperationBounds = {}): Promise<void> {
-    await this.#runner?.assertBeforeLaunch(bounds.signal)
     bounds.signal?.throwIfAborted()
     const stateDirectory = await mkdtemp(join(tmpdir(), 'windshare-r7-relay-state-'))
     this.#temporaryDirectories.push(stateDirectory)
     bounds.signal?.throwIfAborted()
-    const relay = this.track(new ManagedProcess(
+    const relay = this.track(this.directProcess(
+      'relay',
       this.#binaries.relay,
       ['-listen', '127.0.0.1:0', '-state-dir', stateDirectory],
+      { maximumEvents: RELAY_MAXIMUM_PROCESS_EVENTS },
     ))
-    const ready = await relay.waitFor(
-      'stderr',
-      /wsrelay: listening on ([^\s]+)/u,
+    const ready = await relay.waitForEvent(
+      {
+        component: RELAY_COMPONENT,
+        milestone: RELAY_READY_MILESTONE,
+        outcome: PROCESS_EVENT_SUCCEEDED,
+      },
       operationTimeout(bounds, REAL_STACK_READY_TIMEOUT_MILLISECONDS),
       bounds.signal,
     )
-    const address = requiredCapture(ready, 1, 'relay address')
+    const address = listenerAddress(ready.payload, 'relay address')
     this.relayUrl = `ws://${address}`
   }
 
@@ -305,18 +334,97 @@ export class V2RealStack {
     return filePath
   }
 
+  async createDirectory(
+    name: string,
+    bounds: FixtureOperationBounds = {},
+  ): Promise<string> {
+    if (name.length === 0 || name.includes('/') || name.includes('\\')) {
+      throw new TypeError('Real-stack directory name must be one path segment')
+    }
+    const ownerDirectory = await mkdtemp(join(tmpdir(), 'windshare-r7-directory-'))
+    this.#temporaryDirectories.push(ownerDirectory)
+    bounds.signal?.throwIfAborted()
+    const directoryPath = join(ownerDirectory, name)
+    await mkdir(directoryPath)
+    return directoryPath
+  }
+
   async share(
     filePath: string,
     frontUrl: string,
     bounds: FixtureOperationBounds = {},
   ): Promise<SplitShare> {
-    await this.#runner?.assertBeforeLaunch(bounds.signal)
+    return this.startShare(filePath, frontUrl, false, bounds)
+  }
+
+  async shareWithCatalogGate(
+    directoryPath: string,
+    frontUrl: string,
+    bounds: FixtureOperationBounds = {},
+  ): Promise<ProgressiveSplitShare> {
+    const share = await this.startShare(directoryPath, frontUrl, true, bounds)
+    if (!('catalogGate' in share)) {
+      throw new Error('Progressive catalog share omitted its private gate')
+    }
+    return share
+  }
+
+  async releaseCatalogGate(
+    gate: ProgressiveCatalogGate,
+    bounds: FixtureOperationBounds = {},
+  ): Promise<CatalogGateSnapshot> {
+    const owned = this.#catalogGates.get(gate)
+    if (owned === undefined) {
+      throw new Error('Progressive catalog gate is not owned by this fixture')
+    }
+    const released = await owned.controller.release(bounds)
+    await owned.sender.waitForEvent(
+      {
+        component: SENDER_COMPONENT,
+        milestone: CATALOG_SCAN_RELEASED_MILESTONE,
+        outcome: PROCESS_EVENT_SUCCEEDED,
+      },
+      operationTimeout(bounds, REAL_STACK_READY_TIMEOUT_MILLISECONDS),
+      bounds.signal,
+    )
+    return released
+  }
+
+  async assertCatalogGatePrivate(
+    gate: ProgressiveCatalogGate,
+    browserUrl: string,
+    bounds: FixtureOperationBounds = {},
+  ): Promise<void> {
+    const owned = this.#catalogGates.get(gate)
+    if (owned === undefined) {
+      throw new Error('Progressive catalog gate is not owned by this fixture')
+    }
+    owned.controller.assertNotCapturedBy(owned.sender)
+    owned.controller.assertNotDisclosed('browser URL', browserUrl)
+    bounds.signal?.throwIfAborted()
+    const metadata = await stat(owned.senderEvidencePath)
+    if (!metadata.isFile() || metadata.size > MAXIMUM_SENDER_EVIDENCE_BYTES) {
+      throw new Error('Sender evidence cannot prove catalog gate privacy')
+    }
+    const evidence = await readFile(owned.senderEvidencePath, { signal: bounds.signal })
+    if (evidence.byteLength > MAXIMUM_SENDER_EVIDENCE_BYTES) {
+      throw new Error('Sender evidence grew beyond the catalog gate privacy byte limit')
+    }
+    owned.controller.assertNotDisclosed('sender evidence artifact', evidence)
+  }
+
+  private async startShare(
+    filePath: string,
+    frontUrl: string,
+    catalogGateEnabled: boolean,
+    bounds: FixtureOperationBounds,
+  ): Promise<SplitShare | ProgressiveSplitShare> {
     bounds.signal?.throwIfAborted()
     const evidenceDirectory = await mkdtemp(join(tmpdir(), 'windshare-sender-evidence-'))
     this.#temporaryDirectories.push(evidenceDirectory)
     bounds.signal?.throwIfAborted()
     const senderEvidencePath = join(evidenceDirectory, 'attempts.jsonl')
-    const sender = this.track(new ManagedProcess(this.#binaries.windshare, [
+    const sender = this.track(this.directProcess('sender', this.#binaries.windshare, [
       '--test-ice-topology',
       this.#topologyProfilePath,
       '--test-ice-topology-resolution',
@@ -327,6 +435,7 @@ export class V2RealStack {
       this.#topologyResolutionSha256,
       '--sender-evidence',
       senderEvidencePath,
+      ...(catalogGateEnabled ? ['--catalog-enumeration-gate'] : []),
       'share',
       filePath,
       '--relay',
@@ -336,8 +445,34 @@ export class V2RealStack {
       '--block-size',
       String(E2E_BLOCK_BYTES),
       '--split-key',
-    ], { redactStdout: true }))
+    ], {
+      redactDiagnostics: catalogGateEnabled,
+      redactStdout: true,
+      maximumEvents: SENDER_MAXIMUM_PROCESS_EVENTS,
+    }))
     const readinessTimeout = operationTimeout(bounds, REAL_STACK_READY_TIMEOUT_MILLISECONDS)
+    let controller: CatalogEnumerationGateController | undefined
+    if (catalogGateEnabled) {
+      const ready = await sender.waitForEvent(
+        {
+          component: SENDER_COMPONENT,
+          milestone: CATALOG_GATE_READY_MILESTONE,
+          outcome: PROCESS_EVENT_SUCCEEDED,
+        },
+        readinessTimeout,
+        bounds.signal,
+      )
+      controller = CatalogEnumerationGateController.fromPrivateReadyEvent(ready)
+    }
+    await sender.waitForEvent(
+      {
+        component: SENDER_COMPONENT,
+        milestone: SENDER_READY_MILESTONE,
+        outcome: PROCESS_EVENT_SUCCEEDED,
+      },
+      readinessTimeout,
+      bounds.signal,
+    )
     const bare = await sender.waitFor(
       'stdout',
       /^Bare link: (.+)$/mu,
@@ -345,13 +480,37 @@ export class V2RealStack {
       bounds.signal,
     )
     const key = await sender.waitFor('stdout', /^Key: (.+)$/mu, readinessTimeout, bounds.signal)
-    const split = Object.freeze({
-      bareLink: requiredCapture(bare, 1, 'bare share link'),
-      key: requiredCapture(key, 1, 'separate key'),
-      senderEvidencePath,
-    })
+    const bareLink = requiredCapture(bare, 1, 'bare share link')
+    const separateKey = requiredCapture(key, 1, 'separate key')
+    if (controller === undefined) {
+      sender.forgetCapturedStdout()
+      return Object.freeze({
+        bareLink,
+        key: separateKey,
+        senderEvidencePath,
+      })
+    }
+    await sender.waitForEvent(
+      {
+        component: SENDER_COMPONENT,
+        milestone: CATALOG_SCAN_WAITING_MILESTONE,
+        outcome: PROCESS_EVENT_STARTED,
+      },
+      readinessTimeout,
+      bounds.signal,
+    )
+    controller.assertNotCapturedBy(sender)
+    controller.assertNotDisclosed('share link', bareLink)
+    controller.assertNotDisclosed('separate key', separateKey)
+    const catalogGate: ProgressiveCatalogGate = controller
+    this.#catalogGates.set(catalogGate, { controller, sender, senderEvidencePath })
     sender.forgetCapturedStdout()
-    return split
+    return Object.freeze({
+      bareLink,
+      key: separateKey,
+      senderEvidencePath,
+      catalogGate,
+    })
   }
 
   async dispose(bounds: FixtureOperationBounds = {}): Promise<void> {
@@ -380,11 +539,54 @@ export class V2RealStack {
   }
 
   private track(child: ManagedProcess): ManagedProcess {
-    // Local ownership must precede the fallible external guard registration.
-    // A guard-loss race kills the child and throws, but dispose can still drain it.
+    // The fixture owns orderly shutdown; Browsergate's out-of-process supervisor
+    // remains the crash/timeout authority for the complete Playwright tree.
     this.#processes.push(child)
-    this.#runner?.track(child)
     return child
+  }
+
+  private directProcess(
+    component: string,
+    command: string,
+    arguments_: readonly string[],
+    options: {
+      readonly redactDiagnostics?: boolean
+      readonly redactStdout?: boolean
+      readonly maximumEvents: number
+    },
+  ): ManagedProcess {
+    this.#processSequence += 1
+    const operationId = [
+      this.#context.suite,
+      this.#context.browser,
+      String(this.#context.sampleIndex),
+      component,
+      String(this.#processSequence),
+    ].join('-')
+    const scenario = `${this.#context.suite}-real-stack-${component}`
+    const identity = Object.freeze({
+      runId: this.#context.runId,
+      operationId,
+      scenario,
+    })
+    const environment = sampleProcessEnvironment({}, {
+      WINDSHARE_TEST_RUN_ID: this.#context.runId,
+      WINDSHARE_TEST_OPERATION_ID: operationId,
+      WINDSHARE_TEST_SCENARIO: scenario,
+    })
+    return new ManagedProcess(command, arguments_, {
+      ...(options.redactDiagnostics === undefined
+        ? {}
+        : { redactDiagnostics: options.redactDiagnostics }),
+      ...(options.redactStdout === undefined ? {} : { redactStdout: options.redactStdout }),
+      backend: this.#processBackend,
+      identity,
+      environment,
+      events: Object.freeze({
+        minimumEvents: 1,
+        maximumEvents: options.maximumEvents,
+      }),
+    })
   }
 }
 
@@ -443,7 +645,7 @@ async function build(
   signal?.throwIfAborted()
   await mkdir(dirname(output), { recursive: true })
   signal?.throwIfAborted()
-  await execFileAsync('go', ['build', '-o', output, packagePath], {
+  await execFileAsync(process.env.WINDSHARE_GO_EXECUTABLE ?? 'go', ['build', '-o', output, packagePath], {
     cwd: REPOSITORY_ROOT,
     env: { ...process.env, GOWORK: 'auto' },
     timeout: BUILD_TIMEOUT_MILLISECONDS,
@@ -498,8 +700,8 @@ function closeServerLocally(server: Server): void {
   }
 }
 
-function executableName(name: string): string {
-  return process.platform === 'win32' ? `${name}.exe` : name
+function executableName(name: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === 'win32' ? `${name}.exe` : name
 }
 
 function requiredCapture(match: RegExpMatchArray, index: number, label: string): string {
@@ -508,6 +710,18 @@ function requiredCapture(match: RegExpMatchArray, index: number, label: string):
     throw new Error(`${label} readiness output did not contain a value`)
   }
   return value
+}
+
+function listenerAddress(payload: unknown, label: string): string {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload) ||
+      Object.keys(payload).length !== 1 || !Object.hasOwn(payload, 'address')) {
+    throw new Error(`${label} event payload is invalid`)
+  }
+  const address = (payload as { readonly address?: unknown }).address
+  if (typeof address !== 'string' || address.length === 0) {
+    throw new Error(`${label} event payload does not contain an address`)
+  }
+  return address
 }
 
 function requireAbsolutePath(path: string, label: string): void {

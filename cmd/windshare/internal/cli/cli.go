@@ -12,6 +12,8 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+
+	"github.com/windshare/windshare/core/liveshare"
 )
 
 // 退出码语义(§6.9 工程要求):脚本据此区分"该重试"(网络)与"该改命令"
@@ -46,6 +48,8 @@ type App struct {
 	senderPeerEvidence  io.Writer
 	resumeSource        resumeStateSource
 	resumeInteractive   func(io.Reader, io.Writer) bool
+	processTrace        *processTrace
+	scanAdmission       liveshare.DirectoryScanAdmission
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
@@ -54,28 +58,72 @@ func Main() int {
 	return RunProcess(os.Args[1:], ProcessConfig{})
 }
 
-// ProcessConfig contains the only process-level injection used by the dedicated
-// browser-test entry. Production Main always supplies the zero value, which has
-// no path, environment, or profile field capable of changing peer topology.
+// ProcessConfig carries capability-shaped dependencies for the dedicated
+// browser-test entry. Production Main always supplies the inert zero value; no
+// scalar path, address, environment, or profile knob crosses the CLI boundary.
 type ProcessConfig struct {
 	SenderPeerFactories SenderPeerFactoryProvider
 	SenderPeerEvidence  io.Writer
+	CatalogGate         CatalogEnumerationGate
 }
 
 func RunProcess(args []string, config ProcessConfig) int {
+	trace, err := newProcessTrace(os.LookupEnv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, settleCatalogGateSetupFailure(err, config.CatalogGate, nil))
+		return ExitFailure
+	}
+	scanGate, err := prepareCatalogEnumerationGate(trace, config.CatalogGate, args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, settleCatalogGateSetupFailure(err, config.CatalogGate, trace))
+		return ExitFailure
+	}
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
+	var control *testLifecycleControl
+	if trace != nil && len(args) > 0 && args[0] == "share" {
+		control, err = startTestLifecycleControl(trace, interrupts)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, settleCatalogGateSetupFailure(err, config.CatalogGate, trace))
+			return ExitFailure
+		}
+	}
 	app := &App{
 		Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
 		senderPeerFactories: config.SenderPeerFactories,
 		senderPeerEvidence:  config.SenderPeerEvidence,
+		processTrace:        trace,
+		scanAdmission:       scanGate,
 	}
-	return runCLIWithInterruptEscalation(
+	code := runCLIWithInterruptEscalation(
 		interrupts,
 		os.Exit,
 		func(ctx context.Context) int { return app.Run(ctx, args) },
 	)
+	if control != nil {
+		if err := control.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "windshare: close test lifecycle control:", err)
+			if code == ExitOK {
+				code = ExitFailure
+			}
+		}
+	}
+	if config.CatalogGate != nil {
+		if err := config.CatalogGate.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "windshare: close catalog enumeration gate:", err)
+			if code == ExitOK {
+				code = ExitFailure
+			}
+		}
+	}
+	if err := trace.close(); err != nil {
+		fmt.Fprintln(os.Stderr, "windshare: publish test trace:", err)
+		if code == ExitOK {
+			code = ExitFailure
+		}
+	}
+	return code
 }
 
 // Run 分派子命令。stdlib flag 不认子命令,这里手工分派(§6.9 工程要求:
@@ -108,8 +156,9 @@ func (a *App) usage() {
 	      Commit selected roots, wait for relay registration, print a suite-02 link, and scan descendants on demand.
 	      --split-key prints a bare link and key string for delivery over separate channels.
 
-	  windshare get <link> [-o <directory>] [--only <path>]... [--key <key-string>]
+	  windshare get <link> [-o <directory>] [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only]
 	      Authenticate the descriptor, browse the progressive catalog, and publish files through a durable output session.
+	      relay-only skips direct peer setup and transfers content through the configured relay.
 	      If the link has no key, use --key or enter the key interactively.
 
 	  windshare resume list [-o <directory>]

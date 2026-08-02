@@ -21,6 +21,7 @@ import {
   FixtureInfrastructureError,
   ManagedProcess,
   containsFixtureInfrastructureFailure,
+  type ManagedProcessOptions,
 } from '../../e2e/fixtures/managed-process'
 import { acquireTestIceTopology } from '../../e2e/fixtures/test-ice-topology-runtime'
 import {
@@ -28,6 +29,17 @@ import {
   readSenderAttemptEvidenceSnapshot,
 } from '../../e2e/fixtures/v2-real-stack'
 import type { AttemptEvidence } from '../../scripts/browser-evidence/attempt-evidence'
+import type {
+  InheritedChildLaunchRequest,
+  InheritedChildExecution,
+  InheritedChildProcessBackend,
+  InheritedChildTerminal,
+} from '../../scripts/browser-evidence/process/inherited-child-process.mjs'
+import {
+  createOwnedByteChannel,
+  createOwnedEventChannel,
+} from '../../scripts/browser-evidence/process/owned-process-channel.mjs'
+import type { TestEvent } from '../../scripts/browser-evidence/process/test-event-channel.mjs'
 import {
   parseTestIceTopologyJson,
   parseTestIceTopologyResolutionJson,
@@ -56,6 +68,7 @@ const TOPOLOGY_ENV_NAMES = Object.freeze({
 // Context-only cases must not inherit the alternate full-suite authority from
 // the process that happens to run Vitest.
 const NO_PUBLISHED_TOPOLOGY_ENVIRONMENT = Object.freeze({})
+let managedProcessOperationSequence = 0
 
 describe('published product topology lock', () => {
   const cleanup: string[] = []
@@ -526,7 +539,14 @@ describe('bounded sample authority', () => {
       'writeSync(1, Buffer.alloc(2 * 1024 * 1024, 65))',
       'writeSync(1, "TAIL")',
     ].join('; ')
-    const child = new ManagedProcess(process.execPath, ['-e', writeTail])
+    const child = new ManagedProcess(
+      process.execPath,
+      ['-e', writeTail],
+      managedProcessOptions('diagnostic-drain', [
+        Buffer.alloc(2 * 1024 * 1024, 65),
+        Buffer.from('TAIL'),
+      ]),
+    )
 
     await expect(child.waitFor('stdout', /TAIL/u, 2_000)).resolves.toBeDefined()
     await expect(child.stop()).resolves.toBeUndefined()
@@ -536,7 +556,7 @@ describe('bounded sample authority', () => {
     const child = new ManagedProcess(process.execPath, [
       '-e',
       'setInterval(() => undefined, 1000)',
-    ])
+    ], managedProcessOptions('readiness-cutoff'))
     const cutoff = new AbortController()
     const reason = new Error('simulated work cutoff')
     const readiness = child.waitFor('stdout', /NEVER/u, 30_000, cutoff.signal)
@@ -547,11 +567,11 @@ describe('bounded sample authority', () => {
     await expect(child.stop()).resolves.toBeUndefined()
   })
 
-  it('kills an owned child even when cleanup is already out of time', async () => {
+  it('requests direct child stop even when cleanup is already out of time', async () => {
     const child = new ManagedProcess(process.execPath, [
       '-e',
       'process.stdout.write("READY\\n"); setInterval(() => undefined, 1000)',
-    ])
+    ], managedProcessOptions('cleanup-cutoff', [Buffer.from('READY\n')]))
     await child.waitFor('stdout', /^READY$/mu)
     const cutoff = new AbortController()
     const reason = new Error('simulated cleanup cutoff')
@@ -561,6 +581,82 @@ describe('bounded sample authority', () => {
     await expect(child.waitForExit()).resolves.toBeUndefined()
   })
 })
+
+function managedProcessOptions(
+  label: string,
+  stdout: readonly Uint8Array[] = [],
+): ManagedProcessOptions {
+  managedProcessOperationSequence++
+  return Object.freeze({
+    backend: createManagedProcessBackend(stdout),
+    identity: Object.freeze({
+      runId: `managed-process-contract-${process.pid}`,
+      operationId: `${label}-${managedProcessOperationSequence}`,
+      scenario: 'managed-process-contract',
+    }),
+    environment: Object.freeze({}),
+  })
+}
+
+function createManagedProcessBackend(
+  stdout: readonly Uint8Array[],
+): InheritedChildProcessBackend {
+  return Object.freeze({
+    kind: 'inherited-descendant' as const,
+    launch(request: InheritedChildLaunchRequest) {
+      const terminal = deferred<InheritedChildTerminal>()
+      const completion = deferred<InheritedChildExecution>()
+      const capturedStdout = createOwnedByteChannel(request.capture.stdoutBytes, 'fake child stdout')
+      const capturedStderr = createOwnedByteChannel(request.capture.stderrBytes, 'fake child stderr')
+      const events = createOwnedEventChannel<TestEvent>(0, 'fake child events')
+      events.finish()
+      let stopRequested = false
+      queueMicrotask(() => {
+        for (const chunk of stdout) capturedStdout.append(chunk)
+      })
+      return Object.freeze({
+        kind: 'inherited-descendant' as const,
+        platform: process.platform === 'win32' ? 'win32' as const : 'linux' as const,
+        terminal: terminal.promise,
+        stdout: capturedStdout.view,
+        stderr: capturedStderr.view,
+        events: events.view,
+        completion: completion.promise,
+        requestStop() {
+          if (stopRequested) return
+          stopRequested = true
+          const terminalEvidence = Object.freeze({ terminal: 'signaled' as const, signal: 'SIGTERM' })
+          capturedStdout.finish()
+          capturedStderr.finish()
+          terminal.resolve(terminalEvidence)
+          completion.resolve(Object.freeze({
+            terminal: terminalEvidence,
+            output: Object.freeze({
+              stdout: capturedStdout.view.snapshot(),
+              stderr: capturedStderr.view.snapshot(),
+            }),
+            events: events.view.snapshot(),
+          }))
+        },
+      })
+    },
+  })
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>
+  readonly resolve: (value: T) => void
+} {
+  let resolvePromise: ((value: T) => void) | undefined
+  const promise = new Promise<T>((resolve) => { resolvePromise = resolve })
+  return Object.freeze({
+    promise,
+    resolve(value: T) {
+      if (resolvePromise === undefined) throw new Error('Deferred resolver was not initialized')
+      resolvePromise(value)
+    },
+  })
+}
 
 const WHOLE_SAMPLE_TIMING: WholeSampleDeadlineTiming = Object.freeze({
   totalTimeoutMs: 1_000,

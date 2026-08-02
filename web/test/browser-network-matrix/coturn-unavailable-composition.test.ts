@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { BrowserSampleContainmentBackend } from '../../scripts/browser-evidence/process/containment.ts'
-import { runNetworkMatrix } from '../../scripts/browser-network-matrix/runner.ts'
+import { startNetworkMatrix } from '../../scripts/browser-network-matrix/runner.ts'
 import {
   EXTERNAL_FIXTURE_CONFIG_SCHEMA,
   parseNetworkMatrixExternalFixtureConfig,
@@ -36,7 +36,6 @@ describe('unavailable Coturn production composition', () => {
         publicStun: null,
         restrictedUdp: null,
         coturn: null,
-        manualRealNat: null,
       }),
       controlCredentials: credentials,
       containment,
@@ -59,13 +58,20 @@ describe('unavailable Coturn production composition', () => {
       executionMode: 'scheduled',
     }).result
 
-    const run = await runNetworkMatrix({
+    const execution = startNetworkMatrix({
       registry,
       runId: 'coturn-unavailable-composition-run',
       executionMode: 'scheduled',
       authorities: runtime.authorities,
       samples: runtime.samples,
-      trace: () => undefined,
+    })
+    const run = await execution.result
+    expect(execution.traces.snapshot()).toMatchObject({
+      completed: true,
+      truncated: false,
+      failure: null,
+      observedEvents: execution.traces.snapshot().capturedEvents,
+      observedBytes: execution.traces.snapshot().capturedBytes,
     })
 
     expect(run.samples).toEqual([])

@@ -252,6 +252,7 @@ func TestSortRecordFramingHandlesPartialWriters(t *testing.T) {
 }
 
 func TestExternalSorterCompactsRunMetadataWhileStreaming(t *testing.T) {
+	requireCatalogScaleScenario(t)
 	const recordCount = 2_048
 	hierarchy, meter := sorterBudget(t, 1<<20, 64<<20)
 	defer meter.Close()

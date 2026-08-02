@@ -27,7 +27,7 @@ import {
 export interface NetworkMatrixAuthorityRequirement {
   readonly authorityId: NetworkMatrixAuthorityId
   readonly authorityKind: NetworkMatrixAuthorityKind
-  readonly availabilityExpectation: 'not-assumed'
+  readonly availabilityExpectation: 'required'
   readonly attestationPublicKeySha256: string
 }
 
@@ -76,7 +76,7 @@ export function parseNetworkTopologyProfile(value: unknown): NetworkTopologyProf
       : 'connectivity-established',
     'network topology connectivity expectation',
   )
-  const candidatePolicy = parseCandidatePolicy(record.candidatePolicy, connectivityExpectation)
+  const candidatePolicy = parseNetworkCandidatePolicy(record.candidatePolicy, connectivityExpectation)
   return Object.freeze({
     schemaVersion: requireLiteral(
       record.schemaVersion,
@@ -139,7 +139,7 @@ export function parseNetworkMatrixAuthorityRequirement(
   })
 }
 
-function parseCandidatePolicy(
+export function parseNetworkCandidatePolicy(
   value: unknown,
   connectivityExpectation: NetworkMatrixConnectivityExpectation,
 ): NetworkMatrixCandidatePolicy {

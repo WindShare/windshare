@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/internal/testrun"
 )
 
 const receiverRelayAdmissionWindow = 8 * time.Second
@@ -453,5 +454,12 @@ func (a *App) logReceiverAdmissionTraces(sessionID []byte, admission *relayConte
 			trace.TerminalOwner,
 			trace.Result,
 		)
+		if trace.Result == receiverAdmissionAuthoritySettled {
+			a.recordProcessTrace(
+				processTraceGetComponent,
+				processTraceReceiverRelayContent,
+				testrun.OutcomeSucceeded,
+			)
+		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -30,9 +31,10 @@ const (
 )
 
 type getRequest struct {
-	outDir string
-	only   []string
-	link   link.Link
+	outDir       string
+	only         []string
+	link         link.Link
+	connectivity ConnectivityPolicy
 }
 
 func (a *App) runGet(ctx context.Context, args []string) int {
@@ -110,7 +112,9 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 		}
 	}
 	peer, rules, err := beginReceiverPlanning(
+		request.connectivity,
 		func() *activeReceiverPeer { return a.startReceiverPeer(ctx, runtime, observePeer) },
+		func() { observePeer(receiverPeerFailed) },
 		func() (transfer.SelectionRules, error) { return selectionRules(request.only) },
 	)
 	if peer != nil {
@@ -193,10 +197,49 @@ func outputTraceIdentity(raw []byte) string {
 	return hex.EncodeToString(raw)
 }
 
+type capabilityInputErrorKind uint8
+
+const (
+	capabilityInputInvalid capabilityInputErrorKind = iota + 1
+	capabilityInputKeyMissing
+)
+
+const (
+	invalidCapabilityDiagnostic    = "invalid capability link"
+	missingCapabilityKeyDiagnostic = "key string is required"
+)
+
+type capabilityInputError struct {
+	kind  capabilityInputErrorKind
+	cause error
+}
+
+func (failure *capabilityInputError) Error() string {
+	if failure.kind == capabilityInputKeyMissing {
+		return missingCapabilityKeyDiagnostic
+	}
+	return invalidCapabilityDiagnostic
+}
+
+func (failure *capabilityInputError) Unwrap() error { return failure.cause }
+
+func invalidCapabilityInput(cause error) error {
+	return &capabilityInputError{kind: capabilityInputInvalid, cause: cause}
+}
+
+func missingCapabilityKey(cause error) error {
+	return &capabilityInputError{kind: capabilityInputKeyMissing, cause: cause}
+}
+
 func (a *App) parseGetRequest(args []string) (getRequest, int) {
 	flags := a.newFlagSet("get")
 	outDir := flags.String("o", ".", "output directory")
 	keyString := flags.String("key", "", "separate key string when the link has no fragment")
+	connectivityName := flags.String(
+		"connectivity",
+		ConnectivityAuto.String(),
+		"content connectivity policy: auto or relay-only",
+	)
 	var only repeatedFlag
 	flags.Var(&only, "only", "download only this catalog path; repeatable, directories include descendants")
 	positional, err := parseInterleaved(flags, args)
@@ -205,6 +248,11 @@ func (a *App) parseGetRequest(args []string) (getRequest, int) {
 	}
 	if len(positional) != 1 {
 		a.logf("get: exactly one link argument is required")
+		return getRequest{}, ExitUsage
+	}
+	connectivity, err := ParseConnectivityPolicy(*connectivityName)
+	if err != nil {
+		a.logf("get: %v", err)
 		return getRequest{}, ExitUsage
 	}
 	capability, err := a.resolveLink(positional[0], *keyString)
@@ -220,27 +268,40 @@ func (a *App) parseGetRequest(args []string) (getRequest, int) {
 		a.logf("get: link has no relay address (?r=)")
 		return getRequest{}, ExitUsage
 	}
-	return getRequest{outDir: *outDir, only: append([]string(nil), only...), link: capability}, ExitOK
+	return getRequest{
+		outDir: *outDir, only: append([]string(nil), only...), link: capability, connectivity: connectivity,
+	}, ExitOK
 }
 
 func (a *App) resolveLink(raw, keyString string) (link.Link, error) {
 	if keyString != "" {
-		return link.Merge(raw, keyString)
+		capability, err := link.Merge(raw, keyString)
+		if err != nil {
+			return link.Link{}, invalidCapabilityInput(err)
+		}
+		return capability, nil
 	}
 	capability, err := link.Parse(raw)
 	if !errors.Is(err, link.ErrMissingFragment) {
-		return capability, err
+		if err != nil {
+			return link.Link{}, invalidCapabilityInput(err)
+		}
+		return capability, nil
 	}
 	_, _ = fmt.Fprint(a.stderrWriter(), "Link has no key; enter the key string: ")
 	line, readErr := bufio.NewReader(a.Stdin).ReadString('\n')
 	line = strings.TrimSpace(line)
 	if line == "" {
 		if readErr != nil {
-			return link.Link{}, fmt.Errorf("read key string: %w", readErr)
+			return link.Link{}, missingCapabilityKey(fmt.Errorf("read key string: %w", readErr))
 		}
-		return link.Link{}, errors.New("no key string was provided")
+		return link.Link{}, missingCapabilityKey(errors.New("no key string was provided"))
 	}
-	return link.Merge(raw, line)
+	capability, err = link.Merge(raw, line)
+	if err != nil {
+		return link.Link{}, invalidCapabilityInput(err)
+	}
+	return capability, nil
 }
 
 func (a *App) dialV2Receiver(ctx context.Context, capability link.Link) (*relayv2.ReceiverConnection, int) {
@@ -265,6 +326,13 @@ func (a *App) dialV2Receiver(ctx context.Context, capability link.Link) (*relayv
 		}
 		var relayError *relayv2.RelayError
 		if !errors.As(err, &relayError) || relayError.Code != v2.ErrorStarting {
+			if errors.As(err, &relayError) && relayError.Code == v2.ErrorStopped {
+				a.recordProcessTrace(
+					processTraceGetComponent,
+					processTraceReceiverJoinStopped,
+					testrun.OutcomeFailed,
+				)
+			}
 			if ctx.Err() != nil {
 				a.logf("get: interrupted")
 				return nil, ExitFailure

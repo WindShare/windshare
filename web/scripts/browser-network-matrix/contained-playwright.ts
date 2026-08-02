@@ -1,6 +1,6 @@
 import {
-  mapOwnedOperation,
-  type NetworkMatrixOwnedOperation,
+  mapTracedOwnedOperation,
+  type NetworkMatrixTracedOwnedOperation,
 } from './owned-operation.ts'
 import {
   NetworkMatrixSampleExecutionError,
@@ -25,24 +25,24 @@ export interface ContainedPlaywrightCandidateEvidence {
  * run result files, so a page cannot overwrite the parent ledger. The broker
  * is the sole boundary that joins private browser stats with remote Pion proof.
  */
-export interface NetworkMatrixContainedPlaywrightProcessBroker {
+export interface NetworkMatrixContainedPlaywrightProcessBroker<TraceChannel> {
   start(
     context: NetworkMatrixSampleExecutionContext,
-  ): NetworkMatrixOwnedOperation<ContainedPlaywrightCandidateEvidence>
+  ): NetworkMatrixTracedOwnedOperation<ContainedPlaywrightCandidateEvidence, TraceChannel>
 }
 
-export class ContainedPlaywrightNetworkMatrixSampleExecutor
+export class ContainedPlaywrightNetworkMatrixSampleExecutor<TraceChannel>
 implements NetworkMatrixSampleExecutor {
-  readonly #broker: NetworkMatrixContainedPlaywrightProcessBroker
+  readonly #broker: NetworkMatrixContainedPlaywrightProcessBroker<TraceChannel>
 
-  constructor(broker: NetworkMatrixContainedPlaywrightProcessBroker) {
+  constructor(broker: NetworkMatrixContainedPlaywrightProcessBroker<TraceChannel>) {
     this.#broker = broker
   }
 
   execute(
     context: NetworkMatrixSampleExecutionContext,
-  ): NetworkMatrixOwnedOperation<NetworkMatrixSampleExecution> {
-    return mapOwnedOperation(this.#broker.start(context), (evidence) => {
+  ): NetworkMatrixTracedOwnedOperation<NetworkMatrixSampleExecution, TraceChannel> {
+    return mapTracedOwnedOperation(this.#broker.start(context), (evidence) => {
       try {
         return Object.freeze({
           processInstanceId: evidence.processInstanceId,

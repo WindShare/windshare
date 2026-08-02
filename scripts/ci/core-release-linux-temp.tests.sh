@@ -102,17 +102,17 @@ release_root=""
 echo "-- core-first release orchestration and no-replace invariant"
 assert_contains ".github/workflows/ci.yml" '- "core/v*"'
 assert_contains ".github/workflows/ci.yml" '- "core-candidate/v*/**"'
-assert_contains ".github/workflows/ci.yml" 'CORE_ARTIFACT_VERSION: "v0.0.0-ci"'
-assert_contains ".github/workflows/ci.yml" 'run: bash scripts/ci/core-release.sh "$CORE_ARTIFACT_VERSION" "$GITHUB_SHA" linux-ext4'
-assert_not_contains ".github/workflows/ci.yml" 'core-release.sh v0.3.0'
-assert_contains ".github/workflows/ci.yml" 'gowork-off-root:'
+assert_contains ".github/workflows/current-commit.yml" 'CORE_ARTIFACT_VERSION: "v0.0.0-ci"'
+assert_contains ".github/workflows/current-commit.yml" 'run: bash scripts/ci/linux/core-release.sh "$CORE_ARTIFACT_VERSION" "$GITHUB_SHA" linux-ext4'
+assert_not_contains ".github/workflows/current-commit.yml" 'core-release.sh v0.3.0'
+assert_contains ".github/workflows/current-commit.yml" 'gowork-off-root:'
 assert_contains ".github/workflows/core-release.yml" 'uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7'
 assert_contains ".github/workflows/core-release.yml" 'uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6'
 assert_contains ".github/workflows/core-release.yml" '- "!core/v0.3.0"'
 assert_contains ".github/workflows/core-release.yml" '- "!core-candidate/v0.3.0/**"'
 assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/core-release-ref.tests.sh'
 assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/core-release-ref.sh'
-assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/core-release.sh "$CORE_RELEASE_VERSION" "$CORE_RELEASE_COMMIT_SHA" linux-ext4'
+assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/linux/core-release.sh "$CORE_RELEASE_VERSION" "$CORE_RELEASE_COMMIT_SHA" linux-ext4'
 manual_version_input="$(sed -n '/^      version:$/,/^        type: string$/p' .github/workflows/core-release.yml)"
 if [ -z "$manual_version_input" ] ||
    ! grep -Fq -- 'required: true' <<<"$manual_version_input" ||
@@ -133,7 +133,7 @@ if [ "$(grep -Fc -- 'go-version-file: core/go.mod' .github/workflows/core-releas
    grep -Fq -- 'go-version-file: go.work' .github/workflows/core-release.yml; then
   fail "core release jobs do not derive an uncached toolchain from core/go.mod"
 fi
-ordinary_release_job="$(sed -n '/^  core-release:$/,/^  gowork-off-root:$/p' .github/workflows/ci.yml)"
+ordinary_release_job="$(sed -n '/^  core-release:$/,/^  gowork-off-root:$/p' .github/workflows/current-commit.yml)"
 if ! grep -Fq -- 'go-version-file: core/go.mod' <<<"$ordinary_release_job" ||
    ! grep -Fq -- 'cache: false' <<<"$ordinary_release_job" ||
    ! grep -Fq -- 'timeout-minutes: 60' <<<"$ordinary_release_job" ||
@@ -143,16 +143,16 @@ fi
 assert_contains "scripts/ci/core-release-ref.sh" 'object_type" != "commit"'
 assert_contains "scripts/ci/core-release-ref.sh" 'require_direct_commit_ref "$candidate_ref" "$commit_sha"'
 assert_contains "Makefile" 'override CORE_ARTIFACT_VERSION := v0.0.0-ci'
-assert_contains "Makefile" 'bash scripts/ci/core-release.sh "$(CORE_ARTIFACT_VERSION)" "$(CORE_ARTIFACT_COMMIT_SHA)"'
+assert_contains "Makefile" 'bash scripts/ci/linux/core-release.sh "$(CORE_ARTIFACT_VERSION)" "$(CORE_ARTIFACT_COMMIT_SHA)"'
 assert_not_contains "Makefile" 'CORE_RELEASE_VERSION'
 make_preview="$(make -n core-release CORE_ARTIFACT_VERSION=v0.3.0)"
 if ! grep -Fq -- 'v0.0.0-ci' <<<"$make_preview" ||
    grep -Fq -- 'v0.3.0' <<<"$make_preview"; then
   fail "core-release make target allows its synthetic artifact version to be overridden"
 fi
-assert_contains "scripts/ci/core-release.sh" 'native_profile="linux-ext4"'
-assert_contains "scripts/ci/core-release.sh" 'unset WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION'
-assert_contains "scripts/ci/core-release.sh" 'bash scripts/ci/core-release-linux-native.sh "$artifact_root" "$temporary_root"'
+assert_contains "scripts/ci/linux/core-release.sh" 'native_profile="linux-ext4"'
+assert_contains "scripts/ci/linux/core-release.sh" 'unset WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION'
+assert_contains "scripts/ci/linux/core-release.sh" 'bash scripts/ci/core-release-linux-native.sh "$artifact_root" "$temporary_root"'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'compile_static_test_binary ./osfs "$osfs_test_binary"'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'compile_static_test_binary ./osfs/internal/outputlinux "$outputlinux_test_binary"'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'mkfs.ext4 -q -F -N 1024 -I 256 -m 0'
@@ -173,17 +173,17 @@ assert_contains "scripts/ci/core-release-linux-native-root.sh" '/test/outputlinu
 if grep -Fq -- 'losetup -d --' scripts/ci/core-release-linux-native.sh; then
   fail "Linux native certification passes an option terminator as a loop device"
 fi
-assert_contains "scripts/ci/core-release.sh" 'windshare_prepare_core_release_go_environment "$temporary_root"'
-assert_contains "scripts/ci/core-release.sh" 'bash scripts/ci/core-release-checkout.tests.sh'
-assert_contains "scripts/ci/core-release.sh" 'windshare_create_exact_release_checkout'
-assert_contains "scripts/ci/core-release.sh" 'cd "$release_repository"'
-assert_contains "scripts/ci/core-release.sh" '-commit "$release_commit"'
-assert_contains "scripts/ci/core-release.ps1" 'Enter-CoreReleaseGoEnvironment -ReleaseRoot $temporaryRoot'
-assert_contains "scripts/ci/core-release.ps1" "(Join-Path \$PSScriptRoot 'core-release-checkout.tests.ps1')"
-assert_contains "scripts/ci/core-release.ps1" 'New-ExactCoreReleaseCheckout'
-assert_contains "scripts/ci/core-release.ps1" 'Set-Location $releaseRepository'
-assert_contains "scripts/ci/core-release.ps1" 'Assert-ExactCoreReleaseFileProjection'
-assert_contains "scripts/ci/core-release.ps1" '-commit $CommitSHA'
+assert_contains "scripts/ci/linux/core-release.sh" 'windshare_prepare_core_release_go_environment "$temporary_root"'
+assert_contains "scripts/ci/linux/core-release.sh" 'bash scripts/ci/core-release-checkout.tests.sh'
+assert_contains "scripts/ci/linux/core-release.sh" 'windshare_create_exact_release_checkout'
+assert_contains "scripts/ci/linux/core-release.sh" 'cd "$release_repository"'
+assert_contains "scripts/ci/linux/core-release.sh" '-commit "$release_commit"'
+assert_contains "scripts/ci/windows/core-release.ps1" 'Enter-CoreReleaseGoEnvironment -ReleaseRoot $temporaryRoot'
+assert_contains "scripts/ci/windows/core-release.ps1" "(Join-Path \$ciRoot 'core-release-checkout.tests.ps1')"
+assert_contains "scripts/ci/windows/core-release.ps1" 'New-ExactCoreReleaseCheckout'
+assert_contains "scripts/ci/windows/core-release.ps1" 'Set-Location $releaseRepository'
+assert_contains "scripts/ci/windows/core-release.ps1" 'Assert-ExactCoreReleaseFileProjection'
+assert_contains "scripts/ci/windows/core-release.ps1" '-commit $CommitSHA'
 assert_contains "scripts/ci/core-release-checkout.sh" 'GIT_*) unset "$variable_name"'
 assert_contains "scripts/ci/core-release-checkout.sh" 'hash-object --no-filters'
 assert_contains "scripts/ci/core-release-checkout.sh" 'scripts/ci/core-release-linux-native.sh'
@@ -192,22 +192,22 @@ assert_contains "scripts/ci/core-release-checkout.psm1" "StartsWith('GIT_', [Str
 assert_contains "scripts/ci/core-release-checkout.psm1" "'hash-object', '--no-filters'"
 assert_contains "scripts/ci/_coremodulezip/main.go" '"ls-tree", "-r", "-z", "--full-tree", commitSHA'
 assert_contains "scripts/ci/_coremodulezip/main.go" '"cat-file", "blob", objectID'
-assert_contains "scripts/ci/core-release.sh" 'go run ./scripts/ci/_corevulnerability'
-assert_contains "scripts/ci/core-release.sh" '-module "$artifact_root"'
-assert_contains "scripts/ci/core-release.sh" '-cache "$temporary_root/vulnerability-cache"'
-assert_contains "scripts/ci/core-release.ps1" 'go run ./scripts/ci/_corevulnerability'
-assert_contains "scripts/ci/core-release.ps1" '-module $artifactRoot'
-assert_contains "scripts/ci/core-release.ps1" "-cache (Join-Path \$temporaryRoot 'vulnerability-cache')"
+assert_contains "scripts/ci/linux/core-release.sh" 'go run ./scripts/ci/_corevulnerability'
+assert_contains "scripts/ci/linux/core-release.sh" '-module "$artifact_root"'
+assert_contains "scripts/ci/linux/core-release.sh" '-cache "$temporary_root/vulnerability-cache"'
+assert_contains "scripts/ci/windows/core-release.ps1" 'go run ./scripts/ci/_corevulnerability'
+assert_contains "scripts/ci/windows/core-release.ps1" '-module $artifactRoot'
+assert_contains "scripts/ci/windows/core-release.ps1" "-cache (Join-Path \$temporaryRoot 'vulnerability-cache')"
 assert_contains "scripts/ci/_corevulnerability/main.go" 'golang.org/x/vuln/cmd/govulncheck@v1.6.0'
 assert_contains "scripts/ci/_corevulnerability/main.go" '"GOPROXY=" + publicGoProxy'
 assert_contains "scripts/ci/_corevulnerability/main.go" '"GOSUMDB=" + publicGoChecksumDatabase'
-assert_contains "scripts/ci/core-release.sh" 'coverage_tool="github.com/vladopajic/go-test-coverage/v2@v2.18.8"'
-assert_contains "scripts/ci/core-release.sh" 'core_suite_test_timeout="30m"'
-assert_contains "scripts/ci/core-release.sh" 'go test -count=1 -timeout="$core_suite_test_timeout" ./...'
-assert_contains "scripts/ci/core-release.sh" 'go test -race -count=1 -timeout="$core_suite_test_timeout" ./...'
-assert_contains "scripts/ci/core-release.sh" 'go test -count=1 -timeout="$core_suite_test_timeout" ./... -covermode=atomic'
-assert_contains "scripts/ci/core-release.ps1" "\$coverageTool = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'"
-if grep -Fq -- 'GO_TEST_COVERAGE' scripts/ci/core-release.sh scripts/ci/core-release.ps1; then
+assert_contains "scripts/ci/linux/core-release.sh" 'core_suite_test_timeout="30m"'
+assert_contains "scripts/ci/linux/core-release.sh" 'go test -count=1 -timeout="$core_suite_test_timeout" ./...'
+if grep -Eq -- 'go test -race|-covermode=atomic|go-test-coverage' \
+  scripts/ci/linux/core-release.sh scripts/ci/windows/core-release.ps1; then
+  fail "core release duplicates the race or coverage instrumentation authorities"
+fi
+if grep -Fq -- 'GO_TEST_COVERAGE' scripts/ci/linux/core-release.sh scripts/ci/windows/core-release.ps1; then
   fail "core release coverage verifier still accepts a caller override"
 fi
 if grep -Fq -- '--autoclear' scripts/ci/core-release-linux-native.sh; then

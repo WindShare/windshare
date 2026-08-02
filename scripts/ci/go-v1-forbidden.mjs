@@ -136,7 +136,7 @@ const forbiddenProductionDependencies = new Set([
 
 for (const tagArguments of [[], ['-tags=v1fixtures']]) {
   const result = spawnSync(
-    'go',
+    process.env.WINDSHARE_GO_EXECUTABLE ?? 'go',
     ['list', ...tagArguments, '-deps', '-f', '{{.ImportPath}}', './cmd/windshare', './relay/cmd/wsrelay'],
     { cwd: REPOSITORY_ROOT, encoding: 'utf8' },
   )
@@ -163,7 +163,7 @@ const requiredSenderDependencies = new Set([
 
 for (const tagArguments of [[], ['-tags=v1fixtures']]) {
   const result = spawnSync(
-    'go',
+    process.env.WINDSHARE_GO_EXECUTABLE ?? 'go',
     ['list', ...tagArguments, '-deps', '-f', '{{.ImportPath}}', './cmd/windshare'],
     { cwd: REPOSITORY_ROOT, encoding: 'utf8' },
   )

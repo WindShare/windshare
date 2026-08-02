@@ -9,13 +9,13 @@ import {
   readChildEvidenceContext,
 } from '../../scripts/browser-evidence/child-evidence.ts'
 import {
-  runBrowserSample,
-  type BrowserSampleTrace,
+  startBrowserSample,
 } from '../../scripts/browser-evidence/sample-runner.ts'
 import { browserRunPolicy } from '../../scripts/browser-evidence/run-policy.ts'
-import type {
-  BrowserSampleContainmentBackend,
-  BrowserSampleContainmentRequest,
+import {
+  BrowserSampleContainmentError,
+  type BrowserSampleContainmentBackend,
+  type BrowserSampleContainmentRequest,
 } from '../../scripts/browser-evidence/process/containment.ts'
 import { createProcessTestContainmentBackend } from './process-test-containment.ts'
 import {
@@ -26,14 +26,18 @@ import {
   loadFrameworkTopology,
   removeFrameworkWorkspace,
   runSyntheticSample as runFrameworkSyntheticSample,
+  startSyntheticSample as startFrameworkSyntheticSample,
   type FrameworkTopology,
   type SyntheticSampleOptions,
 } from './framework-fixtures.ts'
-import { runNativeWindowsSyntheticSample } from './windows-process-fixtures.ts'
+import {
+  runNativeOwnedSyntheticSample,
+  startNativeOwnedSyntheticSample,
+} from './process-owner-fixtures.ts'
 
 let topology: FrameworkTopology
 const workspaces: string[] = []
-const windowsIt = process.platform === 'win32' ? it : it.skip
+const nativeOwnerIt = process.platform === 'win32' || process.platform === 'linux' ? it : it.skip
 
 beforeAll(async () => { topology = await loadFrameworkTopology() })
 afterEach(async () => {
@@ -48,6 +52,8 @@ describe('process-isolated browser evidence runner', () => {
     expect(() => readChildEvidenceContext({
       [CHILD_EVIDENCE_CONTEXT_ENV]: JSON.stringify({
         runId: FRAMEWORK_RUN_ID,
+        operationId: 'main-chromium-sample-4',
+        scenario: 'synthetic-browser-evidence',
         runPolicy: browserRunPolicy('closure'),
         suite: 'main',
         browser: 'chromium',
@@ -121,8 +127,10 @@ describe('process-isolated browser evidence runner', () => {
 
   it('records spawn failure without inventing capability, attempt, delivery, or crash evidence', async () => {
     const workspace = await trackedWorkspace()
-    const outcome = await runBrowserSample({
+    const execution = startBrowserSample({
       runId: FRAMEWORK_RUN_ID,
+      operationId: 'main-chromium-sample-1',
+      scenario: 'synthetic-browser-evidence',
       runPolicy: browserRunPolicy('closure'),
       suite: 'main',
       browser: 'chromium',
@@ -139,7 +147,12 @@ describe('process-isolated browser evidence runner', () => {
       // This process-gate contract owns spawn-failure classification without
       // selecting a platform production backend.
       containmentBackend: createProcessTestContainmentBackend(),
-      trace: () => undefined,
+    })
+    const outcome = await execution.result
+    expect(execution.traces.snapshot()).toMatchObject({
+      completed: true,
+      truncated: false,
+      observedEvents: execution.traces.snapshot().capturedEvents,
     })
     expect(outcome.result).toMatchObject({
       resultStatus: 'final-invalid',
@@ -271,30 +284,30 @@ describe('process-isolated browser evidence containment boundary', () => {
     })
   })
 
-  windowsIt('terminates the timed-out process tree before publishing its terminal result', async () => {
+  nativeOwnerIt('terminates the timed-out process tree before publishing its terminal result', async () => {
     const workspace = await trackedWorkspace()
-    const traces: BrowserSampleTrace[] = []
-    const outcome = await runNativeWindowsSyntheticSample({
+    const execution = await startNativeOwnedSyntheticSample({
       workspace,
       topology,
       suite: 'main',
       mode: 'descendant-timeout',
       delayMs: 30_000,
       processDeadlineMs: 100,
-      trace: (event) => traces.push(event),
     })
+    const outcome = await execution.result
+    const traces = execution.traces.snapshot().events
     await new Promise((resolve) => setTimeout(resolve, 800))
     expect(JSON.parse(await readFile(outcome.resultPath, 'utf8'))).toMatchObject({
       resultStatus: 'final-invalid',
     })
     await expect(access(join(artifactRootForOutcome(outcome), 'descendant-ran.txt'))).rejects.toThrow()
     expect(traces.find(({ milestone }) => milestone === 'containment-preflight-started'))
-      .toMatchObject({ context: { backend: 'windows-job' } })
+      .toMatchObject({ context: { backend: 'test-process-owner' } })
   })
 
-  windowsIt('waits for its Job-owned detached descendant before replacing provisional', async () => {
+  nativeOwnerIt('waits for its owner-held detached descendant before replacing provisional', async () => {
     const workspace = await trackedWorkspace()
-    const outcome = await runNativeWindowsSyntheticSample({
+    const outcome = await runNativeOwnedSyntheticSample({
       workspace,
       topology,
       suite: 'main',
@@ -349,6 +362,66 @@ describe('process-isolated browser evidence containment boundary', () => {
       .filter((name) => name.includes('child-attachments'))).toEqual([])
   })
 
+  it('preserves the deadline workflow milestone when containment cleanup also fails', async () => {
+    const workspace = await trackedWorkspace()
+    const containmentFailure = new Error('synthetic containment deadline cleanup failure')
+    const failingContainment: BrowserSampleContainmentBackend = Object.freeze({
+      kind: 'test',
+      preflight: async () => undefined,
+      execute: async () => {
+        throw new BrowserSampleContainmentError(
+          containmentFailure.message,
+          Object.freeze({
+            events: Object.freeze([
+              Object.freeze({
+                milestone: 'test-process-owner-failed',
+                outcome: 'failed' as const,
+                context: Object.freeze({
+                  terminationReason: 'deadline',
+                  cleanupOutcome: 'failed',
+                }),
+              }),
+            ]),
+            observedEvents: 1,
+            capturedEvents: 1,
+            truncated: false,
+            completed: true,
+          }),
+          undefined,
+          containmentFailure,
+        )
+      },
+    })
+
+    const execution = startSyntheticSample({
+      workspace,
+      topology,
+      suite: 'main',
+      mode: 'main-pass',
+      containmentBackend: failingContainment,
+    })
+    await expect(execution.result).rejects.toThrow(containmentFailure.message)
+
+    const snapshot = execution.traces.snapshot()
+    expect(snapshot).toMatchObject({
+      completed: true,
+      truncated: false,
+      observedEvents: snapshot.capturedEvents,
+    })
+    expect(snapshot.events.find(({ milestone }) => milestone === 'operation-terminal'))
+      .toMatchObject({
+        outcome: 'failed',
+        context: {
+          cleanupOutcome: 'failed',
+          lastMilestone: 'containment-test-process-owner-failed',
+        },
+      })
+    expect(snapshot.events.map(({ milestone }) => milestone)).toEqual(expect.arrayContaining([
+      'containment-test-process-owner-failed',
+      'attachment-rollback-completed',
+    ]))
+  })
+
   it('captures stdout, stderr, and nonzero assertion exits without misclassifying healthy execution', async () => {
     const workspace = await trackedWorkspace()
     const outcome = await runSyntheticSample({
@@ -374,16 +447,17 @@ describe('process-isolated browser evidence containment boundary', () => {
     ]))
   })
 
-  it('keeps result authority independent from a failing trace observer', async () => {
+  it('keeps result authority independent from an unconsumed trace journal', async () => {
     const workspace = await trackedWorkspace()
-    const outcome = await runSyntheticSample({
+    const execution = startSyntheticSample({
       workspace,
       topology,
       suite: 'main',
       mode: 'main-pass',
-      trace: () => { throw new Error('synthetic trace sink failure') },
     })
+    const outcome = await execution.result
     expect(outcome.acceptedBeforeGuard).toBe(true)
+    expect(execution.traces.snapshot()).toMatchObject({ completed: true, truncated: false })
     expect(outcome.result.resultStatus).toBe('final-valid')
     expect(JSON.parse(await readFile(outcome.resultPath, 'utf8'))).toMatchObject({
       resultStatus: 'final-valid',
@@ -399,6 +473,13 @@ async function trackedWorkspace(): Promise<string> {
 
 function runSyntheticSample(options: SyntheticSampleOptions) {
   return runFrameworkSyntheticSample({
+    ...options,
+    containmentBackend: options.containmentBackend ?? createProcessTestContainmentBackend(),
+  })
+}
+
+function startSyntheticSample(options: SyntheticSampleOptions) {
+  return startFrameworkSyntheticSample({
     ...options,
     containmentBackend: options.containmentBackend ?? createProcessTestContainmentBackend(),
   })

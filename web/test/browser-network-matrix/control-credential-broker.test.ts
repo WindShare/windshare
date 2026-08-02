@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   EXTERNAL_FIXTURE_CREDENTIAL_BROKER_PROTOCOL,
@@ -18,6 +18,8 @@ import {
   PARENT_WORKLOAD_IDENTITY_PROTOCOL,
   type ParentWorkloadIdentityAuthority,
 } from '../../scripts/browser-network-matrix/linux-topology/parent-workload-identity.ts'
+import { CredentialBrokerProcessOwner } from '../../scripts/browser-network-matrix/linux-topology/credential-broker/process-owner.ts'
+import { requireCompleteLinuxTopologyTrace } from '../../scripts/browser-network-matrix/linux-topology/trace/index.ts'
 import {
   EXTERNAL_FIXTURE_CONFIG_SCHEMA,
   type NetworkMatrixExternalFixtureConfig,
@@ -91,6 +93,93 @@ describe('process external fixture credential broker ownership', () => {
     await expect(authority.closeAndWait()).resolves.toEqual({ terminal: 'closed' })
     expect(identity.closeCalls).toBe(1)
     expect(identity.forceCalls).toBe(0)
+    expect(authority.traces).not.toHaveProperty('append')
+    const traces = authority.traces.snapshot()
+    requireCompleteLinuxTopologyTrace(traces)
+    expect(traces.events.filter(({ milestone }) => milestone === 'credential-broker-started'))
+      .toHaveLength(3)
+    expect(traces.events.filter(({ milestone }) => milestone === 'credential-broker-terminal'))
+      .toHaveLength(3)
+    expect(traces.events.at(-1)).toMatchObject({
+      milestone: 'credential-broker-terminal',
+      outcome: 'succeeded',
+      context: {
+        cleanupOutcome: 'not-required',
+        lastMilestone: 'broker-response-accepted',
+      },
+    })
+  })
+
+  it('returns one complete pull-only channel for each helper exchange', async () => {
+    const fixture = await createFixture()
+    const identity = new FakeIdentity()
+    const owner = new CredentialBrokerProcessOwner({
+      helperPath: resolve('testdata', 'credential-broker-client.exe'),
+      workingDirectory: resolve('.'),
+      platform: 'win32',
+      processOwner: Object.freeze({
+        path: resolve('testdata', 'testprocessowner.exe'),
+        byteLength: 1,
+        sha256: 'c'.repeat(64),
+      }),
+      config: fixture.config,
+      workloadIdentity: identity,
+      pipeExchange: {
+        exchange: async () => Uint8Array.from([1, 2, 3]),
+      },
+    })
+
+    expect(owner.exchange).toHaveLength(3)
+    const throwingLegacyCallback = vi.fn(() => {
+      throw new Error('legacy callback must not execute')
+    })
+    const stallingLegacyCallback = vi.fn(() => new Promise<void>(() => undefined))
+    const legacyExchange = owner.exchange as unknown as (...input: readonly unknown[]) => unknown
+    for (const callback of [throwingLegacyCallback, stallingLegacyCallback]) {
+      expect(() => legacyExchange(
+        Object.freeze({ operation: 'legacy-exchange' }),
+        Object.freeze({ sampleAuthority: SAMPLE_AUTHORITY, probeNonce: PROBE_NONCE }),
+        new AbortController().signal,
+        callback,
+      )).toThrow('does not accept callback authority')
+      expect(callback).not.toHaveBeenCalled()
+    }
+
+    const aborted = new AbortController()
+    aborted.abort()
+    const notDispatched = owner.exchange(
+      Object.freeze({ operation: 'aborted-exchange' }),
+      Object.freeze({ sampleAuthority: SAMPLE_AUTHORITY, probeNonce: PROBE_NONCE }),
+      aborted.signal,
+    )
+    await expect(notDispatched.result).rejects.toThrow('terminated')
+    await expect(notDispatched.dispatchOutcome).resolves.toBe('not-dispatched')
+
+    const execution = owner.exchange(
+      Object.freeze({ operation: 'test-exchange' }),
+      Object.freeze({ sampleAuthority: SAMPLE_AUTHORITY, probeNonce: PROBE_NONCE }),
+      new AbortController().signal,
+    )
+    expect(execution.traces).not.toHaveProperty('append')
+    await expect(execution.dispatchOutcome).resolves.toBe('dispatched')
+
+    const response = await execution.result
+    expect([...response]).toEqual([1, 2, 3])
+    response.fill(0)
+    const operationTrace = execution.traces.snapshot()
+    requireCompleteLinuxTopologyTrace(operationTrace)
+    expect(operationTrace.events.at(-1)).toMatchObject({
+      milestone: 'credential-broker-terminal',
+      outcome: 'succeeded',
+      context: {
+        cleanupOutcome: 'not-required',
+        lastMilestone: 'broker-response-accepted',
+      },
+    })
+
+    expect(owner.traces.snapshot().completed).toBe(false)
+    await owner.closeIdentity(false)
+    requireCompleteLinuxTopologyTrace(owner.traces.snapshot())
   })
 
   it('fences close against an in-flight acquire and replays the exact request before revoking', async () => {
@@ -338,6 +427,7 @@ class FakePipe implements CredentialBrokerPipeExchange {
 }
 
 async function createFixture(): Promise<{
+  readonly config: NetworkMatrixExternalFixtureConfig
   readonly authority: (
     identity: ParentWorkloadIdentityAuthority,
     pipe: CredentialBrokerPipeExchange,
@@ -363,9 +453,9 @@ async function createFixture(): Promise<{
     }),
     restrictedUdp: null,
     coturn: null,
-    manualRealNat: null,
   })
   return Object.freeze({
+    config,
     authority: (
       identity: ParentWorkloadIdentityAuthority,
       pipe: CredentialBrokerPipeExchange,
@@ -373,7 +463,11 @@ async function createFixture(): Promise<{
       helperPath: resolve(root, 'broker-client.exe'),
       workingDirectory: root,
       platform: 'win32',
-      windowsJobHelperPath: resolve(root, 'windows-job-helper.exe'),
+      processOwner: Object.freeze({
+        path: resolve(root, 'testprocessowner.exe'),
+        byteLength: 1,
+        sha256: 'c'.repeat(64),
+      }),
       config,
       workloadIdentity: identity,
       pipeExchange: pipe,

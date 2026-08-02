@@ -39,15 +39,15 @@ import {
 let registry: LoadedNetworkMatrixRegistry
 
 const SHARED_RUN_VECTOR_PATH = fileURLToPath(new URL(
-  '../../../testdata/browser-network-matrix/vectors/manual-not-executed.run.v1.json',
+  '../../../testdata/browser-network-matrix/vectors/scheduled-not-executed.run.v2.json',
   import.meta.url,
 ))
 const SHARED_OBSERVED_SAMPLE_VECTOR_PATH = fileURLToPath(new URL(
-  '../../../testdata/browser-network-matrix/vectors/public-observed.sample.v1.json',
+  '../../../testdata/browser-network-matrix/vectors/public-observed.sample.v2.json',
   import.meta.url,
 ))
 const SHARED_AGGREGATE_VECTOR_PATH = fileURLToPath(new URL(
-  '../../../testdata/browser-network-matrix/vectors/manual-only.aggregate.v1.json',
+  '../../../testdata/browser-network-matrix/vectors/scheduled-incomplete.verdict.v2.json',
   import.meta.url,
 ))
 
@@ -118,13 +118,10 @@ describe('browser network matrix candidate-path policy', () => {
 })
 
 describe('browser network matrix run result', () => {
-  it('derives completed runs from exact 45 scheduled and 15 manual identities', () => {
+  it('derives a completed run from the exact 45 scheduled identities', () => {
     const scheduled = makeRun(registry, 'scheduled', { runId: 'scheduled-complete-run' })
-    const manual = makeRun(registry, 'manual', { runId: 'manual-complete-run' })
     expect(scheduled).toMatchObject({ runOutcome: 'completed', orchestrationOutcome: 'healthy' })
-    expect(manual).toMatchObject({ runOutcome: 'completed', orchestrationOutcome: 'healthy' })
     expect([scheduled.expectedIdentities.length, scheduled.samples.length]).toEqual([45, 45])
-    expect([manual.expectedIdentities.length, manual.samples.length]).toEqual([15, 15])
     expect(scheduled.profileResults).toEqual([
       expect.objectContaining({
         profileId: 'scheduled-public-stun',
@@ -333,7 +330,7 @@ describe('browser network matrix run result', () => {
   })
 
   it('keeps canonical run bytes exact and rejects unknown or alternate encodings', () => {
-    const run = makeRun(registry, 'manual', { runId: 'canonical-manual-run' })
+    const run = makeRun(registry, 'scheduled', { runId: 'canonical-scheduled-run' })
     const encoded = canonicalNetworkRunResultJson(run, registry)
     expect(parseNetworkRunResultJson(encoded, registry)).toEqual(run)
     expect(() => parseNetworkRunResultJson(`\n${encoded}`, registry))
@@ -365,10 +362,10 @@ describe('browser network matrix run result', () => {
   })
 })
 
-describe('browser network matrix observational aggregate', () => {
+describe('browser network matrix scheduled hard verdict', () => {
   it('parses the same canonical execution-mode vectors as the Go contract', async () => {
     const sampleEncoded = await readFile(SHARED_OBSERVED_SAMPLE_VECTOR_PATH, 'utf8')
-    expect(sha256(sampleEncoded)).toBe('7f308602aacf39a132715c46e4602155bbacf85835981c6e3d51df8a68745949')
+    expect(sha256(sampleEncoded)).toBe('ab497cc8b0fd9352fc4bf085ffbccf6201c199b02ccd66e2f37a864520012f62')
     const observedRun = makeRun(registry, 'scheduled', {
       runId: 'shared-observed-sample-run',
     })
@@ -390,56 +387,52 @@ describe('browser network matrix observational aggregate', () => {
     })
 
     const runEncoded = await readFile(SHARED_RUN_VECTOR_PATH, 'utf8')
-    expect(sha256(runEncoded)).toBe('09525e1b511ed0691688c04cb3b2b7a020d86d28e65de70077833e53aa503ce2')
+    expect(sha256(runEncoded)).toBe('b80b7b6569385a288097a0a111a581e8cf8b723c8d54a0819a7eb23b3bca3eb5')
     const run = parseNetworkRunResultJson(runEncoded, registry)
     expect(run).toMatchObject({
-      executionMode: 'manual',
+      executionMode: 'scheduled',
       samples: [],
-      profileResults: [{ profileOutcome: 'not-executed' }],
+      profileResults: [
+        { profileOutcome: 'not-executed' },
+        { profileOutcome: 'not-executed' },
+        { profileOutcome: 'not-executed' },
+      ],
       runOutcome: 'not-executed',
     })
 
     const aggregateEncoded = await readFile(SHARED_AGGREGATE_VECTOR_PATH, 'utf8')
     expect(sha256(aggregateEncoded))
-      .toBe('d8aa746fee51ca8d8d1fa5fff19d77146be204926c7bfdc2f5a319672797053d')
+      .toBe('879aaa1fa7a35f3a232df4c5f3e5e7f1f956e2950eff94181dc409218e1336e3')
     expect(parseNetworkMatrixAggregateJson(aggregateEncoded, registry, [run])).toMatchObject({
-      runs: [{ executionMode: 'manual', runId: run.runId }],
-      counts: { expectedIdentities: 60, observedSamples: 0 },
+      runs: [{ executionMode: 'scheduled', runId: run.runId }],
+      counts: { expectedIdentities: 45, observedSamples: 0 },
       evidenceOutcome: 'incomplete',
     })
   })
 
-  it('publishes one real mode ledger as incomplete without fabricating the other mode', () => {
+  it('publishes exactly one real scheduled ledger without fabricating supplemental evidence', () => {
     const scheduled = makeRun(registry, 'scheduled', { runId: 'scheduled-only-ledger-run' })
     const scheduledAggregate = aggregateNetworkMatrix(registry, [scheduled])
     expect(scheduledAggregate.runs).toEqual([
       expect.objectContaining({ executionMode: 'scheduled', runId: scheduled.runId }),
     ])
     expect(scheduledAggregate.counts).toMatchObject({
-      expectedIdentities: 60,
+      expectedIdentities: 45,
       observedSamples: 45,
       matched: 45,
     })
-    expect(scheduledAggregate.evidenceOutcome).toBe('incomplete')
-
-    const manual = makeRun(registry, 'manual', { runId: 'manual-only-ledger-run' })
-    const manualAggregate = aggregateNetworkMatrix(registry, [manual])
-    expect(manualAggregate.runs).toEqual([
-      expect.objectContaining({ executionMode: 'manual', runId: manual.runId }),
-    ])
-    expect(manualAggregate.counts.observedSamples).toBe(15)
-    expect(manualAggregate.evidenceOutcome).toBe('incomplete')
+    expect(scheduledAggregate.evidenceOutcome).toBe('complete')
   })
 
-  it('reports complete evidence for all identities without producing a blocking verdict', () => {
+  it('reports complete evidence only for all 45 matched scheduled identities', () => {
     const runs = completeRuns()
     const aggregate = aggregateNetworkMatrix(registry, runs)
     expect(aggregate).toMatchObject({
-      reportingSemantics: 'observational-nonblocking',
+      reportingSemantics: 'scheduled-hard-fail-closed',
       counts: {
-        expectedIdentities: 60,
-        observedSamples: 60,
-        matched: 60,
+        expectedIdentities: 45,
+        observedSamples: 45,
+        matched: 45,
         mismatched: 0,
         notEvaluated: 0,
         sampleInfrastructureFailures: 0,
@@ -449,38 +442,35 @@ describe('browser network matrix observational aggregate', () => {
     expect(Object.hasOwn(aggregate, 'verdict')).toBe(false)
   })
 
-  it('keeps candidate mismatch observational while counting its exact rationale-derived outcome', () => {
+  it('fails closed on a candidate mismatch while preserving its exact derived count', () => {
     const scheduled = makeRun(registry, 'scheduled', {
       runId: 'scheduled-mismatch-run',
       sampleMutator: applyLegitimateMismatch,
     })
-    const manual = makeRun(registry, 'manual', { runId: 'manual-mismatch-pair-run' })
-    const aggregate = aggregateNetworkMatrix(registry, [scheduled, manual])
-    expect(aggregate.evidenceOutcome).toBe('complete')
-    expect(aggregate.counts).toMatchObject({ matched: 59, mismatched: 1 })
+    const aggregate = aggregateNetworkMatrix(registry, [scheduled])
+    expect(aggregate.evidenceOutcome).toBe('incomplete')
+    expect(aggregate.counts).toMatchObject({ matched: 44, mismatched: 1 })
   })
 
   it('distinguishes incomplete prerequisites from sample and orchestration infrastructure failure', () => {
     const incomplete = aggregateNetworkMatrix(registry, [
-      makeRun(registry, 'scheduled', { runId: 'scheduled-incomplete-pair-run' }),
-      makeRun(registry, 'manual', {
-        runId: 'manual-unavailable-run',
-        prerequisiteOutcomes: { 'manual-real-nat': 'unavailable' },
+      makeRun(registry, 'scheduled', {
+        runId: 'scheduled-unavailable-run',
+        prerequisiteOutcomes: { 'scheduled-coturn': 'unavailable' },
       }),
     ])
     expect(incomplete.evidenceOutcome).toBe('incomplete')
-    expect(incomplete.counts.observedSamples).toBe(45)
+    expect(incomplete.counts.observedSamples).toBe(30)
 
     const sampleFailure = aggregateNetworkMatrix(registry, [
       makeRun(registry, 'scheduled', {
         runId: 'scheduled-sample-failure-run',
         sampleMutator: applySampleInfrastructureFailure,
       }),
-      makeRun(registry, 'manual', { runId: 'manual-sample-failure-pair-run' }),
     ])
     expect(sampleFailure.evidenceOutcome).toBe('infrastructure-failed')
     expect(sampleFailure.counts).toMatchObject({
-      observedSamples: 60,
+      observedSamples: 45,
       notEvaluated: 1,
       sampleInfrastructureFailures: 1,
     })
@@ -491,10 +481,9 @@ describe('browser network matrix observational aggregate', () => {
         orchestrationOutcome: 'failed',
         sampleFilter: ({ sampleOrdinal }) => sampleOrdinal === 1,
       }),
-      makeRun(registry, 'manual', { runId: 'manual-orchestration-pair-run' }),
     ])
     expect(orchestrationFailure.evidenceOutcome).toBe('infrastructure-failed')
-    expect(orchestrationFailure.counts.observedSamples).toBe(24)
+    expect(orchestrationFailure.counts.observedSamples).toBe(9)
   })
 
   it('canonicalizes real run order and rejects absent, duplicate, forged, or alternate inputs', () => {
@@ -503,22 +492,13 @@ describe('browser network matrix observational aggregate', () => {
     const forged = cloneJson(aggregate)
     forged.counts.matched = 59
     expect(() => parseNetworkMatrixAggregate(forged, registry, runs)).toThrow(/matched count/u)
-    expect(aggregateNetworkMatrix(registry, [runs[1]!, runs[0]!]).runs.map(
-      ({ executionMode }) => executionMode,
-    )).toEqual(['scheduled', 'manual'])
-    expect(() => aggregateNetworkMatrix(registry, [])).toThrow(/one or two real/u)
+    expect(() => aggregateNetworkMatrix(registry, [])).toThrow(/exactly one real/u)
 
     const duplicateModeRuns = [
       runs[0]!,
       makeRun(registry, 'scheduled', { runId: 'second-scheduled-run' }),
     ] as const
-    expect(() => aggregateNetworkMatrix(registry, duplicateModeRuns)).toThrow(/modes must be distinct/u)
-
-    const duplicateIdRuns = [
-      runs[0]!,
-      makeRun(registry, 'manual', { runId: runs[0]!.runId }),
-    ] as const
-    expect(() => aggregateNetworkMatrix(registry, duplicateIdRuns)).toThrow(/must be distinct/u)
+    expect(() => aggregateNetworkMatrix(registry, duplicateModeRuns)).toThrow(/exactly one real/u)
 
     const encoded = canonicalNetworkMatrixAggregateJson(aggregate, registry, runs)
     expect(parseNetworkMatrixAggregateJson(encoded, registry, runs)).toEqual(aggregate)
@@ -530,7 +510,6 @@ describe('browser network matrix observational aggregate', () => {
 function completeRuns() {
   return Object.freeze([
     makeRun(registry, 'scheduled', { runId: 'scheduled-aggregate-run' }),
-    makeRun(registry, 'manual', { runId: 'manual-aggregate-run' }),
   ] as const)
 }
 

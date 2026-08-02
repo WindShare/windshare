@@ -2,8 +2,8 @@ export const HELPER_BUILD_MANIFEST_SCHEMA_VERSION:
   'windshare.browser-network-matrix.helper-build/v1'
 
 export interface HelperBuildOperation {
-  readonly operation: 'artifact-publisher' | 'windows-job-supervisor'
-  readonly role: 'artifact-publisher' | 'windows-job'
+  readonly operation: 'artifact-publisher' | 'test-process-owner'
+  readonly role: 'artifact-publisher' | 'test-process-owner'
   readonly cwd: string
   readonly packagePath: string
   readonly outputPath: string
@@ -19,7 +19,7 @@ export interface HelperBuildManifest {
   readonly platform: 'win32' | 'linux'
   readonly architecture: 'amd64' | 'arm64'
   readonly helpers: readonly Readonly<{
-    role: 'artifact-publisher' | 'windows-job'
+    role: 'artifact-publisher' | 'test-process-owner'
     path: string
     sha256: string
   }>[]

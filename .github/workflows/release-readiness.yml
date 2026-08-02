@@ -1,0 +1,61 @@
+# Historical stability and the reusable current-commit DAG are independent
+# release authorities. Missing history is non-blocking, while unresolved
+# reproduced findings and reducer infrastructure failures remain fatal.
+name: Release Readiness
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+
+jobs:
+  stability-history:
+    name: Scheduled stability history report
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - id: reducer
+        name: reduce the latest 100 scheduled integration runs
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          node scripts/ci/stability/release-reducer.mjs
+          --repository "$GITHUB_REPOSITORY"
+          --workflow stability.yml
+          --required-runs 100
+          --output test-results/stability/release-verdict.json
+      - name: upload release stability verdict
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stability-release-verdict-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/stability/release-verdict.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: preserve reducer infrastructure failure after publication
+        if: ${{ always() && steps.reducer.outcome != 'success' }}
+        run: node -e "process.exit(1)"
+
+  current-commit:
+    needs: stability-history
+    # Current correctness authority must execute even when historical evidence
+    # independently blocks release or its reducer cannot publish a trusted report.
+    if: ${{ always() }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/current-commit.yml
+    with:
+      browser-authority: full

@@ -17,7 +17,7 @@
 - Use English as much as possible to make it easier for international developers.
 
 ### Go Specifics
-- **Accept Interfaces, Return Structs**: Define interfaces where they are used (consumer side), not where they are implemented.
+- **Accept Interfaces, Return Structs**: Define interfaces where they are used (consumer side), not where they are implemented. The bigger the interface, the weaker the abstraction.
 - **Hard Requirement**: CI enforces coverage with go-test-coverage (per-module `.testcoverage.yml`): **core total ≥90%, root total ≥80%, every package ≥70%**.
 
 ### Validation

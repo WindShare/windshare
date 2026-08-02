@@ -10,7 +10,7 @@ import (
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/core/framechannel"
-	"github.com/windshare/windshare/internal/testnetwork"
+	"github.com/windshare/windshare/internal/testloopback"
 )
 
 const pionLoopbackTimeout = 10 * time.Second
@@ -25,7 +25,6 @@ type pionChannelPair struct {
 }
 
 func TestPionLoopbackPreservesMaximumFramesAndTerminal(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
 	pair := newPionChannelPair(t)
 
 	leftFrame := patternedLoopbackFrame(0x31, framechannel.MaxFrameSize)
@@ -62,7 +61,6 @@ func TestPionLoopbackPreservesMaximumFramesAndTerminal(t *testing.T) {
 }
 
 func TestPionLoopbackBackpressureCancellationAndRecovery(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
 	pair := newPionBlockedPeerPair(t)
 	frame := patternedLoopbackFrame(0x41, framechannel.MaxFrameSize)
 	if err := pair.channel.Send(context.Background(), frame); err != nil {
@@ -110,7 +108,6 @@ func TestPionLoopbackBackpressureCancellationAndRecovery(t *testing.T) {
 }
 
 func TestPionLoopbackRemoteCloseWakesBackpressure(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
 	pair := newPionBlockedPeerPair(t)
 	frame := patternedLoopbackFrame(0x51, framechannel.MaxFrameSize)
 	if err := pair.channel.Send(context.Background(), frame); err != nil {
@@ -140,12 +137,9 @@ func TestPionLoopbackRemoteCloseWakesBackpressure(t *testing.T) {
 
 func newPionChannelPair(t *testing.T) pionChannelPair {
 	t.Helper()
-	leftPeer := newPeerConnection(t)
-	rightPeer := newPeerConnection(t)
-	t.Cleanup(func() {
-		_ = leftPeer.Close()
-		_ = rightPeer.Close()
-	})
+	loopback := testloopback.New(t)
+	leftPeer := newPeerConnection(t, loopback.NewPionAPI())
+	rightPeer := newPeerConnection(t, loopback.NewPionAPI())
 
 	type remoteResult struct {
 		channel *Channel
@@ -207,8 +201,9 @@ type pionBlockedPeerPair struct {
 
 func newPionBlockedPeerPair(t *testing.T) *pionBlockedPeerPair {
 	t.Helper()
-	leftPeer := newPeerConnection(t)
-	rightPeer := newPeerConnection(t)
+	loopback := testloopback.New(t)
+	leftPeer := newPeerConnection(t, loopback.NewPionAPI())
+	rightPeer := newPeerConnection(t, loopback.NewPionAPI())
 	pair := &pionBlockedPeerPair{
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
@@ -218,8 +213,6 @@ func newPionBlockedPeerPair(t *testing.T) *pionBlockedPeerPair {
 		if pair.channel != nil {
 			_ = pair.channel.Close()
 		}
-		_ = leftPeer.Close()
-		_ = rightPeer.Close()
 	})
 
 	type remoteResult struct {
@@ -302,10 +295,9 @@ func (p *pionBlockedPeerPair) releaseHandler() {
 	p.releaseOnce.Do(func() { close(p.release) })
 }
 
-func newPeerConnection(t *testing.T) *pion.PeerConnection {
+func newPeerConnection(t *testing.T, api *testloopback.PionAPI) *pion.PeerConnection {
 	t.Helper()
-	testnetwork.RequireOSNetwork(t)
-	peer, err := pion.NewPeerConnection(pion.Configuration{})
+	peer, err := api.NewPeerConnection(pion.Configuration{})
 	if err != nil {
 		t.Fatalf("create PeerConnection: %v", err)
 	}

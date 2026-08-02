@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  GitHubActionsOidcBootstrapLease,
   GitHubActionsOidcIdentityAuthority,
+  MINTED_GITHUB_ACTIONS_OIDC_PROTOCOL,
   PARENT_WORKLOAD_IDENTITY_PROTOCOL,
 } from '../../scripts/browser-network-matrix/linux-topology/parent-workload-identity.ts'
 
@@ -16,6 +18,76 @@ const WORKFLOW_REF = 'windshare/windshare/.github/workflows/browser-network-matr
 const BOOTSTRAP_TOKEN = 'runner-bootstrap-token'
 
 describe('GitHub Actions parent workload identity authority', () => {
+  it('binds one copied minted assertion to the exact audience and erases it on lease close', async () => {
+    const sourceAssertion = Buffer.from('header.payload.signature', 'ascii')
+    const lease = GitHubActionsOidcBootstrapLease.fromMintedEnvelope({
+      protocolVersion: MINTED_GITHUB_ACTIONS_OIDC_PROTOCOL,
+      audience: AUDIENCE,
+      requestOrigin: REQUEST_ORIGIN,
+      requestPath: REQUEST_PATH,
+      requestQuery: '?api-version=2.0',
+      assertion: sourceAssertion,
+    })
+    const authority = lease.consume(authorityOptions())
+
+    const issued = await authority.issue(issueScope())
+    expect(Buffer.from(issued).toString('ascii')).toBe('header.payload.signature')
+    issued.fill(0)
+    await lease.closeAndWait()
+
+    await expect(authority.issue(issueScope())).rejects.toThrow(
+      'parent workload identity request was terminated',
+    )
+    expect(Buffer.from(sourceAssertion).toString('ascii')).toBe('header.payload.signature')
+    sourceAssertion.fill(0)
+  })
+
+  it('rejects a minted assertion whose audience does not match the sealed runtime binding', () => {
+    const lease = GitHubActionsOidcBootstrapLease.fromMintedEnvelope({
+      protocolVersion: MINTED_GITHUB_ACTIONS_OIDC_PROTOCOL,
+      audience: 'different-browser-network-audience',
+      requestOrigin: REQUEST_ORIGIN,
+      requestPath: REQUEST_PATH,
+      requestQuery: '?api-version=2.0',
+      assertion: Buffer.from('header.payload.signature', 'ascii'),
+    })
+
+    expect(() => lease.consume(authorityOptions())).toThrow(
+      'minted GitHub Actions OIDC endpoint binding is invalid',
+    )
+  })
+
+  it('rejects active and proxied minted envelopes without invoking hostile hooks', () => {
+    let getterCalls = 0
+    const active = {
+      protocolVersion: MINTED_GITHUB_ACTIONS_OIDC_PROTOCOL,
+      audience: AUDIENCE,
+      requestOrigin: REQUEST_ORIGIN,
+      requestPath: REQUEST_PATH,
+      requestQuery: '?api-version=2.0',
+      get assertion() {
+        getterCalls += 1
+        return Buffer.from('header.payload.signature', 'ascii')
+      },
+    }
+    expect(() => GitHubActionsOidcBootstrapLease.fromMintedEnvelope(active)).toThrow(
+      'minted GitHub Actions OIDC envelope is active',
+    )
+    expect(getterCalls).toBe(0)
+
+    let trapCalls = 0
+    const proxied = new Proxy(active, {
+      ownKeys() {
+        trapCalls += 1
+        return []
+      },
+    })
+    expect(() => GitHubActionsOidcBootstrapLease.fromMintedEnvelope(proxied)).toThrow(
+      'minted GitHub Actions OIDC envelope is invalid',
+    )
+    expect(trapCalls).toBe(0)
+  })
+
   it('removes runner bootstrap environment, pins its authority, and zeroes on close', async () => {
     const environment: NodeJS.ProcessEnv = {
       ACTIONS_ID_TOKEN_REQUEST_URL: REQUEST_URL,

@@ -15,12 +15,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/windshare/windshare/internal/testnetwork"
 )
 
 func TestClientRejects307And308WithoutDispatchingRedirectTarget(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
 	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
 		var targetRequests atomic.Int64
 		target := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -51,7 +48,6 @@ func TestClientRejects307And308WithoutDispatchingRedirectTarget(t *testing.T) {
 }
 
 func TestProductionClientPinsTLSAndReadsExactEOF(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
 	responseCredential := bytes.Repeat([]byte{'C'}, minimumCredentialBytes)
 	responseFrame, err := encodeLeaseFrame(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, ed25519.SeedSize)), LeasePayload{
 		ProtocolVersion: RemotePionProtocolVersion, RequestID: testAcquireRequestID,

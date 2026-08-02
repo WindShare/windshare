@@ -6,10 +6,8 @@ export default defineConfig({
     exclude: [
       'test/browser-evidence/artifact-guard-clean-bootstrap.integration.test.ts',
       'test/browser-evidence/native-directory-publisher.test.ts',
-      'test/browser-evidence/native-process-group-backend.test.ts',
       'test/browser-evidence/process-runner.test.ts',
-      'test/browser-evidence/windows-job-backend.test.ts',
-      'test/browser-evidence/windows-job-client.test.ts',
+      'test/browser-evidence/test-process-owner-client.test.ts',
     ],
     setupFiles: ['test/browser-evidence/contract-child-process-guard.ts'],
   },

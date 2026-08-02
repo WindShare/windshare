@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { lstat, readFile } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
+import { isProxy } from 'node:util/types'
 
 import { createProductionContainmentBackend } from '../../browser-evidence/process/containment-factory.ts'
 import type {
@@ -25,11 +26,10 @@ import type {
 import {
   createExternalFixtureNetworkMatrixRuntimeBootstrap,
 } from './external-fixture-runtime-bootstrap.ts'
-import type { ManualOperatorTopologyIdentity } from './external-fixture-attestation.ts'
 import type { ContainedBrowserTopologyFiles } from './contained-browser-input.ts'
 
 export const PRODUCTION_NETWORK_MATRIX_RUNTIME_SCHEMA =
-  'windshare.browser-network-matrix.production-runtime/v1' as const
+  'windshare.browser-network-matrix.production-runtime/v2' as const
 
 const MAXIMUM_RUNTIME_CONFIG_BYTES = 1_048_576
 const PROCESS_DEADLINE_MS = 180_000
@@ -40,7 +40,7 @@ const RESULT_DEADLINE_MS = 40_000
 const CHALLENGE_DEADLINE_MS = 15_000
 const CLEANUP_DEADLINE_MS = 10_000
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u
-const CHECKOUT_SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u
+const CHECKOUT_SHA_PATTERN = /^[a-f0-9]{40}$/u
 
 type ProductionTopologyFiles = ContainedBrowserTopologyFiles
 
@@ -62,45 +62,78 @@ interface ProductionRuntimeConfig {
   readonly repositoryRoot: string
   readonly nodeExecutable: string
   readonly checkoutSha: string
-  readonly containment:
-    | { readonly kind: 'posix-process-group'; readonly windowsJobHelperFile: null }
-    | { readonly kind: 'windows-job'; readonly windowsJobHelperFile: string }
   readonly topologyFiles: Readonly<Record<NetworkMatrixProfileId, ProductionTopologyFiles | null>>
-  readonly manualOperatorIdentity: ManualOperatorTopologyIdentity | null
 }
 
 export interface ProductionNetworkMatrixCliRuntime {
   readonly platform: 'linux' | 'win32'
-  readonly windowsJobHelperPath?: string
   bindWorkloadIdentityBootstrap(
     lease: GitHubActionsOidcBootstrapLease,
+    processOwnerPath: string,
   ): NetworkMatrixRuntimeBootstrap
+}
+
+export interface CurrentCheckoutAuthority {
+  readonly checkoutSha: string
+  readonly repositoryRoot: string
 }
 
 export async function loadProductionNetworkMatrixCliRuntime(
   configPath: string,
+  currentCheckout: CurrentCheckoutAuthority,
   platform: NodeJS.Platform = process.platform,
 ): Promise<ProductionNetworkMatrixCliRuntime> {
   const canonicalConfigPath = requireAbsolutePath(configPath)
+  const config = await loadProductionRuntimeConfig(canonicalConfigPath)
+  return productionNetworkMatrixCliRuntime(config, currentCheckout, platform)
+}
+
+export function loadProductionNetworkMatrixCliRuntimeFromBytes(
+  configBytes: Uint8Array,
+  currentCheckout: CurrentCheckoutAuthority,
+  platform: NodeJS.Platform = process.platform,
+): ProductionNetworkMatrixCliRuntime {
+  return productionNetworkMatrixCliRuntime(
+    parseProductionRuntimeConfigBytes(configBytes),
+    currentCheckout,
+    platform,
+  )
+}
+
+function productionNetworkMatrixCliRuntime(
+  config: ProductionRuntimeConfig,
+  currentCheckout: CurrentCheckoutAuthority,
+  platform: NodeJS.Platform,
+): ProductionNetworkMatrixCliRuntime {
   const concretePlatform = requirePlatform(platform)
+  assertCurrentCheckout(config, currentCheckout)
   return Object.freeze({
     platform: concretePlatform,
-    bindWorkloadIdentityBootstrap: (lease: GitHubActionsOidcBootstrapLease) =>
-      productionRuntimeBootstrap(canonicalConfigPath, concretePlatform, lease),
+    bindWorkloadIdentityBootstrap: (
+      lease: GitHubActionsOidcBootstrapLease,
+      processOwnerPath: string,
+    ) => productionRuntimeBootstrap(
+      config,
+      concretePlatform,
+      lease,
+      requireAbsolutePath(processOwnerPath),
+    ),
   })
 }
 
 function productionRuntimeBootstrap(
-  configPath: string,
+  config: ProductionRuntimeConfig,
   platform: 'linux' | 'win32',
   workloadIdentityBootstrap: GitHubActionsOidcBootstrapLease,
+  processOwnerPath: string,
 ): NetworkMatrixRuntimeBootstrap {
   return Object.freeze({
     bootstrap: (context: NetworkMatrixRuntimeBootstrapContext) => new ProductionRuntimeBootstrapOperation(
-      configPath,
+      config,
       platform,
       context,
       workloadIdentityBootstrap,
+      processOwnerPath,
     ).ownedOperation,
   })
 }
@@ -116,13 +149,14 @@ class ProductionRuntimeBootstrapOperation {
   #forceOperation: Promise<void> | undefined
 
   constructor(
-    configPath: string,
+    config: ProductionRuntimeConfig,
     platform: 'linux' | 'win32',
     context: NetworkMatrixRuntimeBootstrapContext,
     workloadIdentityBootstrap: GitHubActionsOidcBootstrapLease,
+    processOwnerPath: string,
   ) {
     this.#workloadIdentityBootstrap = workloadIdentityBootstrap
-    this.#result = this.#bootstrap(configPath, platform, context)
+    this.#result = this.#bootstrap(config, platform, context, processOwnerPath)
   }
 
   get ownedOperation(): NetworkMatrixOwnedOperation<NetworkMatrixExecutionRuntime> {
@@ -133,25 +167,20 @@ class ProductionRuntimeBootstrapOperation {
   }
 
   async #bootstrap(
-    configPath: string,
+    config: ProductionRuntimeConfig,
     platform: 'linux' | 'win32',
     context: NetworkMatrixRuntimeBootstrapContext,
+    processOwnerPath: string,
   ): Promise<NetworkMatrixExecutionRuntime> {
-    const config = await loadProductionRuntimeConfig(configPath)
     this.#requireActive()
-    requireContainmentPlatform(config, platform)
     const externalFixtureConfig = await loadNetworkMatrixExternalFixtureConfig(
       config.externalFixtureTrustConfigFile,
     )
     this.#requireActive()
-    await verifyOperationalFiles(config, externalFixtureConfig)
+    await verifyOperationalFiles(config, externalFixtureConfig, processOwnerPath)
     this.#requireActive()
-    const windowsJobHelperPath = config.containment.kind === 'windows-job'
-      ? config.containment.windowsJobHelperFile
-      : undefined
-    const containment = createProductionContainmentBackend(
-      windowsJobHelperPath === undefined ? {} : { windowsJobHelperPath },
-    )
+    const processOwner = await processOwnerFixture(processOwnerPath)
+    const containment = createProductionContainmentBackend({ processOwner })
     this.#requireActive()
     const workloadIdentity = this.#workloadIdentityBootstrap.consume({
       ...config.credentialBrokerWorkloadIdentity,
@@ -162,7 +191,7 @@ class ProductionRuntimeBootstrapOperation {
       helperPath: config.credentialBrokerHelperFile,
       workingDirectory: config.repositoryRoot,
       platform,
-      ...(windowsJobHelperPath === undefined ? {} : { windowsJobHelperPath }),
+      processOwner,
       config: externalFixtureConfig,
       workloadIdentity,
     })
@@ -183,9 +212,6 @@ class ProductionRuntimeBootstrapOperation {
       resultDeadlineMs: RESULT_DEADLINE_MS,
       challengeDeadlineMs: CHALLENGE_DEADLINE_MS,
       cleanupDeadlineMs: CLEANUP_DEADLINE_MS,
-      ...(config.manualOperatorIdentity === null
-        ? {}
-        : { manualOperatorIdentity: config.manualOperatorIdentity }),
     })
     const nestedOperation = bootstrap.bootstrap(context)
     this.#nestedOperation = nestedOperation
@@ -242,6 +268,15 @@ class ProductionRuntimeBootstrapOperation {
   }
 }
 
+function assertCurrentCheckout(
+  config: ProductionRuntimeConfig,
+  currentCheckout: CurrentCheckoutAuthority,
+): void {
+  const checkoutSha = requireCheckoutSha(currentCheckout.checkoutSha)
+  const repositoryRoot = requireAbsolutePath(currentCheckout.repositoryRoot)
+  if (config.checkoutSha !== checkoutSha || config.repositoryRoot !== repositoryRoot) invalidConfig()
+}
+
 function requireClosedReceipt(value: unknown): void {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) invalidConfig()
   const receipt = value as Record<string, unknown>
@@ -252,12 +287,23 @@ function requireClosedReceipt(value: unknown): void {
 async function loadProductionRuntimeConfig(path: string): Promise<ProductionRuntimeConfig> {
   const canonicalPath = requireAbsolutePath(path)
   const bytes = await readFile(canonicalPath)
-  if (bytes.byteLength === 0 || bytes.byteLength > MAXIMUM_RUNTIME_CONFIG_BYTES) invalidConfig()
+  return parseProductionRuntimeConfigBytes(bytes)
+}
+
+function parseProductionRuntimeConfigBytes(input: Uint8Array): ProductionRuntimeConfig {
+  if (isProxy(input) || !(input instanceof Uint8Array)) invalidConfig()
+  const bytes = Uint8Array.from(input)
+  if (bytes.byteLength === 0 || bytes.byteLength > MAXIMUM_RUNTIME_CONFIG_BYTES) {
+    bytes.fill(0)
+    invalidConfig()
+  }
   let value: unknown
   try {
     value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
   } catch {
     invalidConfig()
+  } finally {
+    bytes.fill(0)
   }
   return parseProductionRuntimeConfig(value)
 }
@@ -266,8 +312,7 @@ function parseProductionRuntimeConfig(value: unknown): ProductionRuntimeConfig {
   const config = exactRecord(value, [
     'schemaVersion', 'externalFixtureTrustConfigFile', 'credentialBrokerHelperFile',
     'credentialBrokerWorkloadIdentity',
-    'repositoryRoot', 'nodeExecutable', 'checkoutSha', 'containment', 'topologyFiles',
-    'manualOperatorIdentity',
+    'repositoryRoot', 'nodeExecutable', 'checkoutSha', 'topologyFiles',
   ])
   if (
     config.schemaVersion !== PRODUCTION_NETWORK_MATRIX_RUNTIME_SCHEMA ||
@@ -283,9 +328,7 @@ function parseProductionRuntimeConfig(value: unknown): ProductionRuntimeConfig {
     repositoryRoot: requireAbsolutePath(config.repositoryRoot),
     nodeExecutable: requireAbsolutePath(config.nodeExecutable),
     checkoutSha: config.checkoutSha,
-    containment: parseContainment(config.containment),
     topologyFiles: parseTopologyFiles(config.topologyFiles),
-    manualOperatorIdentity: parseManualOperatorIdentity(config.manualOperatorIdentity),
   })
 }
 
@@ -320,30 +363,16 @@ function parseWorkloadIdentity(
   })
 }
 
-function parseContainment(value: unknown): ProductionRuntimeConfig['containment'] {
-  const containment = exactRecord(value, ['kind', 'windowsJobHelperFile'])
-  if (containment.kind === 'posix-process-group') {
-    if (containment.windowsJobHelperFile !== null) invalidConfig()
-    return Object.freeze({ kind: 'posix-process-group', windowsJobHelperFile: null })
-  }
-  if (containment.kind !== 'windows-job') invalidConfig()
-  return Object.freeze({
-    kind: 'windows-job',
-    windowsJobHelperFile: requireAbsolutePath(containment.windowsJobHelperFile),
-  })
-}
-
 function parseTopologyFiles(
   value: unknown,
 ): Readonly<Record<NetworkMatrixProfileId, ProductionTopologyFiles | null>> {
   const files = exactRecord(value, [
-    'scheduled-public-stun', 'scheduled-restricted-udp', 'scheduled-coturn', 'manual-real-nat',
+    'scheduled-public-stun', 'scheduled-restricted-udp', 'scheduled-coturn',
   ])
   return Object.freeze({
     'scheduled-public-stun': parseOptionalTopologyFiles(files['scheduled-public-stun']),
     'scheduled-restricted-udp': parseOptionalTopologyFiles(files['scheduled-restricted-udp']),
     'scheduled-coturn': parseOptionalTopologyFiles(files['scheduled-coturn']),
-    'manual-real-nat': parseOptionalTopologyFiles(files['manual-real-nat']),
   })
 }
 
@@ -364,26 +393,16 @@ function parseOptionalTopologyFiles(value: unknown): ProductionTopologyFiles | n
   })
 }
 
-function parseManualOperatorIdentity(value: unknown): ManualOperatorTopologyIdentity | null {
-  if (value === null) return null
-  const identity = exactRecord(value, ['senderHostId', 'senderNetworkBoundaryId'])
-  return Object.freeze({
-    senderHostId: requireCanonicalId(identity.senderHostId),
-    senderNetworkBoundaryId: requireCanonicalId(identity.senderNetworkBoundaryId),
-  })
-}
-
 async function verifyOperationalFiles(
   config: ProductionRuntimeConfig,
   fixtures: NetworkMatrixExternalFixtureConfig,
+  processOwnerPath: string,
 ): Promise<void> {
   const paths = [
     config.credentialBrokerHelperFile,
     config.repositoryRoot,
     config.nodeExecutable,
-    ...(config.containment.kind === 'windows-job'
-      ? [config.containment.windowsJobHelperFile]
-      : []),
+    processOwnerPath,
   ]
   await Promise.all(paths.map(async (path) => {
     const status = await lstat(path)
@@ -399,8 +418,6 @@ async function verifyOperationalFiles(
       verifyFileDigest(topology.topologyResolutionPath, topology.topologyResolutionSha256),
     ])
   }
-  const manualProvisioned = fixtures.manualRealNat !== null
-  if (manualProvisioned !== (config.manualOperatorIdentity !== null)) invalidConfig()
 }
 
 async function verifyFileDigest(path: string, expected: string): Promise<void> {
@@ -419,14 +436,10 @@ function topologyFilesFor(
   return files
 }
 
-function requireContainmentPlatform(
-  config: ProductionRuntimeConfig,
-  platform: 'linux' | 'win32',
-): void {
-  if (
-    platform === 'linux' && config.containment.kind !== 'posix-process-group' ||
-    platform === 'win32' && config.containment.kind !== 'windows-job'
-  ) invalidConfig()
+async function processOwnerFixture(path: string) {
+  const status = await lstat(path)
+  if (!status.isFile() || status.isSymbolicLink() || status.size < 1) invalidConfig()
+  return Object.freeze({ path })
 }
 
 function fixtureForProfile(config: NetworkMatrixExternalFixtureConfig, profileId: NetworkMatrixProfileId) {
@@ -434,13 +447,12 @@ function fixtureForProfile(config: NetworkMatrixExternalFixtureConfig, profileId
     'scheduled-public-stun': config.publicStun,
     'scheduled-restricted-udp': config.restrictedUdp,
     'scheduled-coturn': config.coturn,
-    'manual-real-nat': config.manualRealNat,
   }[profileId]
 }
 
 function profileIds(): readonly NetworkMatrixProfileId[] {
   return Object.freeze([
-    'scheduled-public-stun', 'scheduled-restricted-udp', 'scheduled-coturn', 'manual-real-nat',
+    'scheduled-public-stun', 'scheduled-restricted-udp', 'scheduled-coturn',
   ])
 }
 
@@ -470,6 +482,11 @@ function requireAbsolutePath(value: unknown): string {
 
 function requireSha256(value: unknown): string {
   if (typeof value !== 'string' || !SHA256_PATTERN.test(value)) invalidConfig()
+  return value
+}
+
+function requireCheckoutSha(value: unknown): string {
+  if (typeof value !== 'string' || !CHECKOUT_SHA_PATTERN.test(value)) invalidConfig()
   return value
 }
 
@@ -506,14 +523,6 @@ function requireCanonicalRequestQuery(value: unknown): string {
   ) invalidConfig()
   const endpoint = new URL(`https://authority.invalid/${value}`)
   if (endpoint.search !== value) invalidConfig()
-  return value
-}
-
-function requireCanonicalId(value: unknown): string {
-  if (
-    typeof value !== 'string' || value.length > 96 ||
-    !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(value)
-  ) invalidConfig()
   return value
 }
 

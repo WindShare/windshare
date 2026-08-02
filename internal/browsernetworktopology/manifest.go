@@ -27,7 +27,6 @@ type ProfileReference struct {
 type IdentityCounts struct {
 	Total     int `json:"total"`
 	Scheduled int `json:"scheduled"`
-	Manual    int `json:"manual"`
 }
 
 type Manifest struct {
@@ -74,7 +73,7 @@ func ParseManifest(encoded []byte) (Manifest, error) {
 
 func (manifest Manifest) Validate() error {
 	if manifest.SchemaVersion != ManifestSchemaVersion || manifest.MatrixID != MatrixID ||
-		manifest.ReportingSemantics != ObservationalNonblocking {
+		manifest.ReportingSemantics != ScheduledHardFailClosed {
 		return fmt.Errorf("%w: schema, matrix identity, or reporting semantics differs", ErrInvalidManifest)
 	}
 	if !exactBrowsers(manifest.Browsers, frozenBrowsers) ||
@@ -88,7 +87,7 @@ func (manifest Manifest) Validate() error {
 	for index, spec := range frozenProfileSpecs {
 		authority := manifest.Authorities[index]
 		if authority.AuthorityID != spec.authorityID || authority.AuthorityKind != spec.authorityKind ||
-			authority.AvailabilityExpectation != AvailabilityNotAssumed ||
+			authority.AvailabilityExpectation != AvailabilityRequired ||
 			!isCanonicalSHA256(authority.AttestationPublicKeySHA256) {
 			return fmt.Errorf("%w: authority %d differs from its fixed identity", ErrInvalidManifest, index)
 		}
@@ -106,7 +105,7 @@ func (manifest Manifest) Validate() error {
 		seenProfileDigests[profile.ProfileSHA256] = struct{}{}
 	}
 	if manifest.IdentityCounts != (IdentityCounts{
-		Total: TotalIdentityCount, Scheduled: ScheduledIdentityCount, Manual: ManualIdentityCount,
+		Total: TotalIdentityCount, Scheduled: ScheduledIdentityCount,
 	}) {
 		return fmt.Errorf("%w: identity counts differ", ErrInvalidManifest)
 	}
@@ -221,15 +220,7 @@ func (contract Contract) ExpectedIdentities(mode ExecutionMode) ([]SampleIdentit
 }
 
 func (contract Contract) AllExpectedIdentities() ([]SampleIdentity, error) {
-	scheduled, err := contract.ExpectedIdentities(ModeScheduled)
-	if err != nil {
-		return nil, err
-	}
-	manual, err := contract.ExpectedIdentities(ModeManual)
-	if err != nil {
-		return nil, err
-	}
-	return append(scheduled, manual...), nil
+	return contract.ExpectedIdentities(ModeScheduled)
 }
 
 func (contract Contract) profileIDs(mode ExecutionMode) []string {
@@ -245,9 +236,6 @@ func (contract Contract) profileIDs(mode ExecutionMode) []string {
 func identitiesForMode(mode ExecutionMode) int {
 	if mode == ModeScheduled {
 		return ScheduledIdentityCount
-	}
-	if mode == ModeManual {
-		return ManualIdentityCount
 	}
 	return 0
 }

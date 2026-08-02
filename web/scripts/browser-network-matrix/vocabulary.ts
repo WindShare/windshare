@@ -1,18 +1,23 @@
 export const NETWORK_MATRIX_MANIFEST_SCHEMA =
-  'windshare.browser-network-matrix.manifest/v1' as const
+  'windshare.browser-network-matrix.manifest/v2' as const
 export const NETWORK_TOPOLOGY_PROFILE_SCHEMA =
-  'windshare.browser-network-matrix.profile/v1' as const
+  'windshare.browser-network-matrix.scheduled-profile/v2' as const
 export const NETWORK_RUNTIME_ATTESTATION_SCHEMA =
-  'windshare.browser-network-matrix.runtime-attestation/v2' as const
+  'windshare.browser-network-matrix.runtime-attestation/v3' as const
 export const NETWORK_SAMPLE_RESULT_SCHEMA =
-  'windshare.browser-network-matrix.sample-result/v1' as const
+  'windshare.browser-network-matrix.scheduled-sample/v2' as const
 export const NETWORK_RUN_RESULT_SCHEMA =
-  'windshare.browser-network-matrix.run-result/v1' as const
+  'windshare.browser-network-matrix.scheduled-run/v2' as const
 export const NETWORK_MATRIX_AGGREGATE_SCHEMA =
-  'windshare.browser-network-matrix.aggregate/v1' as const
+  'windshare.browser-network-matrix.scheduled-verdict/v2' as const
+export const NETWORK_MANUAL_SUPPLEMENT_PROFILE_SCHEMA =
+  'windshare.browser-network-matrix.manual-supplement-profile/v1' as const
 
-export const NETWORK_MATRIX_ID = 'phase3-observational-browser-network-v1' as const
-export const NETWORK_MATRIX_REPORTING_SEMANTICS = 'observational-nonblocking' as const
+export const NETWORK_MATRIX_ID = 'scheduled-hard-browser-network-v1' as const
+export const NETWORK_MATRIX_REPORTING_SEMANTICS = 'scheduled-hard-fail-closed' as const
+export const NETWORK_MANUAL_SUPPLEMENT_ID = 'manual-real-nat-supplement-v1' as const
+export const NETWORK_MANUAL_SUPPLEMENT_REPORTING_SEMANTICS =
+  'manual-supplemental-non-authoritative' as const
 
 export const NETWORK_MATRIX_BROWSERS = Object.freeze([
   'chromium',
@@ -20,23 +25,21 @@ export const NETWORK_MATRIX_BROWSERS = Object.freeze([
   'webkit',
 ] as const)
 export const NETWORK_MATRIX_SAMPLE_ORDINALS = Object.freeze([1, 2, 3, 4, 5] as const)
-export const NETWORK_MATRIX_EXECUTION_MODES = Object.freeze(['scheduled', 'manual'] as const)
+export const NETWORK_MATRIX_EXECUTION_MODES = Object.freeze(['scheduled'] as const)
 export const NETWORK_MATRIX_PROFILE_IDS = Object.freeze([
   'scheduled-public-stun',
   'scheduled-restricted-udp',
   'scheduled-coturn',
-  'manual-real-nat',
 ] as const)
 export const NETWORK_MATRIX_AUTHORITY_IDS = Object.freeze([
   'public-stun-external-fixture',
   'restricted-udp-external-fixture',
   'coturn-external-fixture',
-  'real-nat-external-fixture',
 ] as const)
 export const NETWORK_MATRIX_AUTHORITY_KINDS = Object.freeze([
   'external-fixture',
 ] as const)
-export const NETWORK_MATRIX_AVAILABILITY_EXPECTATIONS = Object.freeze(['not-assumed'] as const)
+export const NETWORK_MATRIX_AVAILABILITY_EXPECTATIONS = Object.freeze(['required'] as const)
 export const NETWORK_MATRIX_CONNECTIVITY_EXPECTATIONS = Object.freeze([
   'connectivity-established',
   'connectivity-blocked',
@@ -133,11 +136,11 @@ export const NETWORK_MATRIX_EVIDENCE_OUTCOMES = Object.freeze([
 ] as const)
 
 export const NETWORK_MATRIX_IDENTITY_COUNTS = Object.freeze({
-  total: 60,
+  total: 45,
   scheduled: 45,
-  manual: 15,
 } as const)
 export const NETWORK_MATRIX_IDENTITIES_PER_PROFILE = 15 as const
+export const NETWORK_MATRIX_SAMPLE_RETRY_COUNT = 0 as const
 
 export const NETWORK_MATRIX_PROFILE_REGISTRY = Object.freeze([
   Object.freeze({
@@ -146,7 +149,7 @@ export const NETWORK_MATRIX_PROFILE_REGISTRY = Object.freeze([
     executionMode: 'scheduled',
     authorityId: 'public-stun-external-fixture',
     authorityKind: 'external-fixture',
-    profilePath: 'profiles/scheduled-public-stun.v1.json',
+    profilePath: 'profiles/scheduled-public-stun.v2.json',
   }),
   Object.freeze({
     profileId: 'scheduled-restricted-udp',
@@ -154,7 +157,7 @@ export const NETWORK_MATRIX_PROFILE_REGISTRY = Object.freeze([
     executionMode: 'scheduled',
     authorityId: 'restricted-udp-external-fixture',
     authorityKind: 'external-fixture',
-    profilePath: 'profiles/scheduled-restricted-udp.v1.json',
+    profilePath: 'profiles/scheduled-restricted-udp.v2.json',
   }),
   Object.freeze({
     profileId: 'scheduled-coturn',
@@ -162,15 +165,7 @@ export const NETWORK_MATRIX_PROFILE_REGISTRY = Object.freeze([
     executionMode: 'scheduled',
     authorityId: 'coturn-external-fixture',
     authorityKind: 'external-fixture',
-    profilePath: 'profiles/scheduled-coturn.v1.json',
-  }),
-  Object.freeze({
-    profileId: 'manual-real-nat',
-    profileKind: 'manual-real-nat',
-    executionMode: 'manual',
-    authorityId: 'real-nat-external-fixture',
-    authorityKind: 'external-fixture',
-    profilePath: 'profiles/manual-real-nat.v1.json',
+    profilePath: 'profiles/scheduled-coturn.v2.json',
   }),
 ] as const)
 

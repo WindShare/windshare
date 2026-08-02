@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/windshare/windshare/internal/testrun"
+	"github.com/windshare/windshare/internal/testtrace"
 	"github.com/windshare/windshare/relay/connectionlimit"
 	"github.com/windshare/windshare/relay/httpapi"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -26,20 +28,21 @@ import (
 )
 
 const (
-	defaultListenAddress              = ":8484"
-	defaultMaximumRoutes              = 1_024
-	defaultMaximumSessions            = 4_096
-	defaultMaximumSessionsPerShare    = 64
-	defaultChallengeCapacity          = 4_096
-	defaultHTTPReadHeaderTimeout      = 5 * time.Second
-	defaultHTTPReadTimeout            = 15 * time.Second
-	defaultHTTPIdleTimeout            = 60 * time.Second
-	defaultMaximumHTTPHeaderBytes     = 1 << 20
-	defaultEndpointWriteTimeout       = 15 * time.Second
-	shutdownTimeout                   = 5 * time.Second
-	tombstoneFilename                 = "stopped-shares.bin"
-	defaultRelayStateDirectoryName    = "WindShare"
-	defaultRelayStateSubdirectoryName = "relay"
+	defaultListenAddress                                = ":8484"
+	defaultMaximumRoutes                                = 1_024
+	defaultMaximumSessions                              = 4_096
+	defaultMaximumSessionsPerShare                      = 64
+	defaultChallengeCapacity                            = 4_096
+	defaultHTTPReadHeaderTimeout                        = 5 * time.Second
+	defaultHTTPReadTimeout                              = 15 * time.Second
+	defaultHTTPIdleTimeout                              = 60 * time.Second
+	defaultMaximumHTTPHeaderBytes                       = 1 << 20
+	defaultEndpointWriteTimeout                         = 15 * time.Second
+	shutdownTimeout                                     = 5 * time.Second
+	tombstoneFilename                                   = "stopped-shares.bin"
+	defaultRelayStateDirectoryName                      = "WindShare"
+	defaultRelayStateSubdirectoryName                   = "relay"
+	relayTraceComponent               testrun.Component = "wsrelay"
 )
 
 type serverPolicy struct {
@@ -48,6 +51,13 @@ type serverPolicy struct {
 	idleTimeout       time.Duration
 	maximumHeader     int
 }
+
+type relayReadySink interface {
+	testrun.EventSink
+	Close() error
+}
+
+type relayReadySinkFactory func(testrun.Identity) (relayReadySink, error)
 
 func (policy serverPolicy) validate() error {
 	switch {
@@ -73,14 +83,67 @@ func (policy serverPolicy) newServer(handler http.Handler) *http.Server {
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err := run(ctx, os.Args[1:], nil, log.Printf)
+	onReady, err := relayReadyReporter(
+		os.LookupEnv,
+		func(identity testrun.Identity) (relayReadySink, error) {
+			return testtrace.OpenEventSink(identity)
+		},
+	)
+	if err == nil {
+		err = run(ctx, os.Args[1:], onReady, log.Printf)
+	}
 	stop()
 	if err != nil && !errors.Is(err, flag.ErrHelp) {
 		log.Fatal(err)
 	}
 }
 
-func run(ctx context.Context, args []string, onReady func(net.Addr), logf func(string, ...any)) error {
+func relayReadyReporter(
+	lookup testrun.EnvironmentLookup,
+	openSink relayReadySinkFactory,
+) (func(net.Addr) error, error) {
+	operation, present, err := testrun.OperationFromEnvironment(lookup)
+	if err != nil {
+		return nil, fmt.Errorf("wsrelay: load test trace context: %w", err)
+	}
+	if !present {
+		return nil, nil
+	}
+	if openSink == nil {
+		return nil, errors.New("wsrelay: test event sink factory is nil")
+	}
+	return func(address net.Addr) error {
+		if address == nil {
+			return errors.New("wsrelay: ready listener address is nil")
+		}
+		sink, err := openSink(operation.EventIdentity())
+		if err != nil {
+			return fmt.Errorf("wsrelay: open private ready event sink: %w", err)
+		}
+		if sink == nil {
+			return errors.New("wsrelay: private ready event sink factory returned nil")
+		}
+		recorder, recorderErr := testrun.NewRecorder(operation, relayTraceComponent, sink)
+		if recorderErr != nil {
+			return errors.Join(
+				fmt.Errorf("wsrelay: create private ready event recorder: %w", recorderErr),
+				sink.Close(),
+			)
+		}
+		emitErr := recorder.Record(
+			testrun.ListenerReadyMilestone,
+			testrun.OutcomeSucceeded,
+			&testrun.ListenerReadyContext{Address: address.String()},
+		)
+		closeErr := sink.Close()
+		if err := errors.Join(emitErr, closeErr); err != nil {
+			return fmt.Errorf("wsrelay: publish private ready event: %w", err)
+		}
+		return nil
+	}, nil
+}
+
+func run(ctx context.Context, args []string, onReady func(net.Addr) error, logf func(string, ...any)) error {
 	flags := flag.NewFlagSet("wsrelay", flag.ContinueOnError)
 	var (
 		listenAddress  = flags.String("listen", defaultListenAddress, "listen address in host:port form")
@@ -202,7 +265,16 @@ func run(ctx context.Context, args []string, onReady func(net.Addr), logf func(s
 	listenerOwned = false
 	logf("wsrelay: listening on %s (protocol v2, identity %s)", listener.Addr(), endpoint.IdentityURL)
 	if onReady != nil {
-		onReady(listener.Addr())
+		if err := onReady(listener.Addr()); err != nil {
+			// A test child that cannot publish its actual ephemeral address is not
+			// ready. Closing both owners prevents a half-started process from
+			// outliving the orchestration failure.
+			closeErr := server.Close()
+			shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			endpointErr := endpointServer.Shutdown(shutdownContext)
+			cancel()
+			return fmt.Errorf("wsrelay: readiness callback: %w", errors.Join(err, closeErr, endpointErr))
+		}
 	}
 
 	select {

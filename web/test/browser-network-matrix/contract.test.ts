@@ -27,6 +27,10 @@ import {
   parseNetworkTopologyProfile,
   parseNetworkTopologyProfileJson,
 } from '../../scripts/browser-network-matrix/profile.ts'
+import {
+  canonicalManualSupplementProfileJson,
+  parseManualSupplementProfileJson,
+} from '../../scripts/browser-network-matrix/supplement/manual-profile.ts'
 import { cloneJson, loadRegistry, MANIFEST_PATH, rawAttestation } from './fixtures.ts'
 import {
   canonicalTestContainedBrowserSampleOutputJson,
@@ -40,12 +44,11 @@ import {
   testNetworkMatrixExecutionAuthority,
 } from './signed-fixture.ts'
 
-const MANIFEST_SHA256 = '4e57f971941aef9667f42531fdb4f903d89fbded9753afe660273efe0f6f4379'
+const MANIFEST_SHA256 = '98f4d23f7029b84512a3307e7ed503a1c57e1a246ad86e3bb4f354f06e7a26bc'
 const PROFILE_SHA256 = Object.freeze({
-  'scheduled-public-stun': 'c4a10d8d5712307e29cde26ec26dadcec2ff89da293a4aa467ef656f2cb2b7e5',
-  'scheduled-restricted-udp': '01f59210b0e92ee8b327714afe3daad86ee1ae167bbb792ade1f7b593b744e31',
-  'scheduled-coturn': '1777486737a8e7e4f4286d788689ea6b9d50c2a60b0a54021815a43a7df96a90',
-  'manual-real-nat': '2689011b60e2b16549725c13188abeadef106590f47829309c8c2099a9cc432f',
+  'scheduled-public-stun': 'b25de62281b8f73757f15554f9d313457414784715623bae3ca1eb16eed62ade',
+  'scheduled-restricted-udp': '71bc3f49d1386a97e200a0f73c3e0757d3bb23452b6bef201ff0a9bc5477a46a',
+  'scheduled-coturn': '07e86e7fa9d197bd746f7360a06c25865d59cf246dc547a572e99e7787540b92',
 })
 
 let registry: LoadedNetworkMatrixRegistry
@@ -146,27 +149,26 @@ describe('browser network matrix registry contract', () => {
     }
   })
 
-  it('freezes four profile authorities and exactly 60 canonical identities', () => {
+  it('freezes three required scheduled authorities and exactly 45 canonical identities', () => {
     expect(registry.manifestSha256).toBe(MANIFEST_SHA256)
     expect(Object.fromEntries(registry.manifest.profiles.map(({ profileId, profileSha256 }) => [
       profileId,
       profileSha256,
     ]))).toEqual(PROFILE_SHA256)
-    expect(registry.manifest.reportingSemantics).toBe('observational-nonblocking')
+    expect(registry.manifest.reportingSemantics).toBe('scheduled-hard-fail-closed')
 
     const all = networkMatrixIdentities(registry.manifest)
     const scheduled = networkMatrixIdentities(registry.manifest, 'scheduled')
-    const manual = networkMatrixIdentities(registry.manifest, 'manual')
-    expect([all.length, scheduled.length, manual.length]).toEqual([60, 45, 15])
+    expect([all.length, scheduled.length]).toEqual([45, 45])
     expect(new Set(all.map(({ profileId, browser, sampleOrdinal }) =>
-      `${profileId}/${browser}/${sampleOrdinal}`))).toHaveLength(60)
+      `${profileId}/${browser}/${sampleOrdinal}`))).toHaveLength(45)
     expect(all[0]).toEqual({
       profileId: 'scheduled-public-stun',
       browser: 'chromium',
       sampleOrdinal: 1,
     })
     expect(all.at(-1)).toEqual({
-      profileId: 'manual-real-nat',
+      profileId: 'scheduled-coturn',
       browser: 'webkit',
       sampleOrdinal: 5,
     })
@@ -176,6 +178,38 @@ describe('browser network matrix registry contract', () => {
       mode: string,
     ) => readonly unknown[]
     expect(() => hostileIdentities(registry.manifest, 'nightly')).toThrow(/frozen vocabulary/u)
+    expect(() => hostileIdentities(registry.manifest, 'manual')).toThrow(/frozen vocabulary/u)
+  })
+
+  it('keeps the manual real-NAT profile supplemental and outside every hard count', async () => {
+    const supplementalPath = join(
+      dirname(MANIFEST_PATH),
+      'supplemental',
+      'manual-real-nat.profile.v1.json',
+    )
+    const encoded = await readFile(supplementalPath, 'utf8')
+    const supplemental = parseManualSupplementProfileJson(encoded)
+    expect(Object.keys(supplemental)).toEqual([
+      'schemaVersion',
+      'supplementId',
+      'reportingSemantics',
+      'profileId',
+      'authority',
+      'connectivityExpectation',
+      'candidatePolicy',
+    ])
+    expect(supplemental).toMatchObject({
+      schemaVersion: 'windshare.browser-network-matrix.manual-supplement-profile/v1',
+      supplementId: 'manual-real-nat-supplement-v1',
+      reportingSemantics: 'manual-supplemental-non-authoritative',
+      profileId: 'manual-real-nat',
+    })
+    expect(registry.manifest.profiles).not.toContainEqual(
+      expect.objectContaining({ profileId: 'manual-real-nat' }),
+    )
+    expect(registry.manifest.identityCounts).toEqual({ total: 45, scheduled: 45 })
+    expect(() => parseNetworkTopologyProfile(supplemental)).toThrow()
+    expect(canonicalManualSupplementProfileJson(supplemental)).toBe(encoded)
   })
 
   it('rejects ambiguous bytes, duplicate members, unknown fields, and repeated profile digests', async () => {
@@ -227,8 +261,8 @@ describe('browser network matrix registry contract', () => {
     temporaryRoots.push(root)
     const copiedRegistry = join(root, 'registry')
     await cp(dirname(MANIFEST_PATH), copiedRegistry, { recursive: true })
-    const copiedManifest = join(copiedRegistry, 'manifest.v1.json')
-    const profilePath = join(copiedRegistry, 'profiles', 'scheduled-public-stun.v1.json')
+    const copiedManifest = join(copiedRegistry, 'scheduled-hard.manifest.v2.json')
+    const profilePath = join(copiedRegistry, 'profiles', 'scheduled-public-stun.v2.json')
     await writeFile(profilePath, `${await readFile(profilePath, 'utf8')}\n`, 'utf8')
 
     await expect(loadNetworkMatrixRegistry(copiedManifest)).rejects.toThrow(/manifest digest/u)
@@ -309,7 +343,7 @@ describe('browser network matrix runtime attestation contract', () => {
   })
 
   it('rejects mutations that invalidate the pinned local fixture trust proof', () => {
-    const raw = cloneJson(rawAttestation(registry, runId, 'manual-real-nat', 'satisfied'))
+    const raw = cloneJson(rawAttestation(registry, runId, 'scheduled-coturn', 'satisfied'))
     const proof = raw.proof as Record<string, unknown>
     const externalFixtureTrust = proof.externalFixtureTrust as Record<string, unknown>
     externalFixtureTrust.attestationPublicKeySha256 = '0'.repeat(64)
@@ -319,7 +353,7 @@ describe('browser network matrix runtime attestation contract', () => {
     const extraClaim = cloneJson(rawAttestation(
       registry,
       runId,
-      'manual-real-nat',
+      'scheduled-coturn',
       'satisfied',
     ))
     const extraProof = extraClaim.proof as Record<string, unknown>
@@ -340,7 +374,7 @@ describe('browser network matrix runtime attestation contract', () => {
       const mutated = cloneJson(rawAttestation(
         registry,
         runId,
-        'manual-real-nat',
+        'scheduled-coturn',
         'satisfied',
       ))
       const mutatedTrust = ((mutated.proof as Record<string, unknown>)
@@ -352,7 +386,7 @@ describe('browser network matrix runtime attestation contract', () => {
     const wrongAuthority = rawAttestation(
       registry,
       runId,
-      'manual-real-nat',
+      'scheduled-coturn',
       'satisfied',
     )
     wrongAuthority.authorityId = 'public-stun-endpoint'

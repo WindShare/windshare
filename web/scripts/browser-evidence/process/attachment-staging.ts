@@ -9,6 +9,7 @@ import {
   rename,
   rm,
   mkdir,
+  writeFile,
 } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -19,6 +20,27 @@ const CHILD_STAGING_SEPARATOR = '-child-attachments-'
 const RUNNER_STAGING_PREFIX = 'windshare-browser-runner-'
 const CLEANUP_NONCE_BYTES = 16
 const MKTEMP_SUFFIX_LENGTH = 6
+const STAGING_FAULT_BACKUP_SUFFIX = '.fault-owned'
+const STAGING_FAULT_MARKER_NAME = 'foreign.txt'
+const STAGING_FAULT_MARKER_TEXT = 'declarative staging fault replacement'
+const STAGING_PARTIAL_COLLECTION_NAME = 'partial-collection.txt'
+
+export const BROWSER_SAMPLE_STAGING_FAULT_EVIDENCE = Object.freeze({
+  backupSuffix: STAGING_FAULT_BACKUP_SUFFIX,
+  markerName: STAGING_FAULT_MARKER_NAME,
+  markerText: STAGING_FAULT_MARKER_TEXT,
+  partialCollectionName: STAGING_PARTIAL_COLLECTION_NAME,
+})
+
+export const BROWSER_SAMPLE_STAGING_FAULT_CUTS = Object.freeze([
+  'replace-root-before-finalize',
+  'replace-root-before-rollback',
+  'fail-after-finalize',
+  'replace-root-and-fail-after-finalize',
+] as const)
+
+export type BrowserSampleStagingFaultCut =
+  (typeof BROWSER_SAMPLE_STAGING_FAULT_CUTS)[number]
 
 type StagingState = 'active' | 'finalizing' | 'finalized' | 'committed' | 'disposed'
 
@@ -29,16 +51,6 @@ export interface FinalizedArtifactCollection {
 export interface StagingLifecycleSettlement {
   readonly phase: 'ownership-transfer'
   readonly failures: readonly unknown[]
-}
-
-export interface BrowserSampleStagingHooks {
-  readonly beforeFinalize?: () => void | Promise<void>
-  readonly afterFinalize?: (
-    collection: FinalizedArtifactCollection,
-  ) => void | Promise<void>
-  readonly beforeRollback?: (
-    collection: FinalizedArtifactCollection | null,
-  ) => void | Promise<void>
 }
 
 export function requireFinalizedArtifactCollectionRoot(
@@ -73,7 +85,7 @@ export class BrowserSampleStaging {
   readonly #sampleHandle: FileHandle
   readonly #childHandle: FileHandle
   readonly #runnerHandle: FileHandle
-  readonly #hooks: BrowserSampleStagingHooks
+  readonly #faultCut: BrowserSampleStagingFaultCut | undefined
   #state: StagingState = 'active'
   #collection: FinalizedArtifactCollection | null = null
   #runnerStagingRemoved = false
@@ -85,7 +97,7 @@ export class BrowserSampleStaging {
     sampleHandle: FileHandle,
     childHandle: FileHandle,
     runnerHandle: FileHandle,
-    hooks: BrowserSampleStagingHooks,
+    faultCut: BrowserSampleStagingFaultCut | undefined,
   ) {
     this.sampleDirectory = sampleDirectory
     this.childAttachmentRoot = childAttachmentRoot
@@ -93,13 +105,17 @@ export class BrowserSampleStaging {
     this.#sampleHandle = sampleHandle
     this.#childHandle = childHandle
     this.#runnerHandle = runnerHandle
-    this.#hooks = hooks
+    this.#faultCut = faultCut
   }
 
   static async create(
     sampleDirectory: string,
-    hooks: BrowserSampleStagingHooks = {},
+    faultCut?: BrowserSampleStagingFaultCut,
   ): Promise<BrowserSampleStaging> {
+    if (
+      faultCut !== undefined &&
+      !BROWSER_SAMPLE_STAGING_FAULT_CUTS.includes(faultCut)
+    ) throw new Error('browser sample staging fault cut is invalid')
     const canonicalSampleDirectory = resolve(sampleDirectory)
     const childPrefix = join(
       dirname(canonicalSampleDirectory),
@@ -123,7 +139,7 @@ export class BrowserSampleStaging {
         sampleHandle,
         childHandle,
         runnerHandle,
-        hooks,
+        faultCut,
       )
     } catch (cause) {
       const cleanupFailures = await settleOperations([
@@ -169,7 +185,7 @@ export class BrowserSampleStaging {
       join(this.childAttachmentRoot, RUNNER_ARTIFACTS_DIRECTORY),
       'child attachment staging must not claim the reserved runner namespace',
     )
-    await this.#hooks.beforeFinalize?.()
+    await this.#applyFaultCut('replace-root-before-finalize')
     const runnerRoot = join(this.childAttachmentRoot, RUNNER_ARTIFACTS_DIRECTORY)
     await mkdir(runnerRoot, { mode: 0o700 })
     await requireAllSettled([
@@ -199,7 +215,8 @@ export class BrowserSampleStaging {
       ),
     })
     this.#state = 'finalized'
-    await this.#hooks.afterFinalize?.(this.#collection)
+    await this.#applyFaultCut('fail-after-finalize')
+    await this.#applyFaultCut('replace-root-and-fail-after-finalize')
     return this.#collection
   }
 
@@ -221,7 +238,7 @@ export class BrowserSampleStaging {
     if (this.#state === 'committed') {
       throw new Error('committed artifact collection cannot be rolled back')
     }
-    await this.#hooks.beforeRollback?.(this.#collection)
+    await this.#applyFaultCut('replace-root-before-rollback')
     const failures = await settleOperations([
       removeOwnedDirectory(
         this.childAttachmentRoot,
@@ -244,6 +261,30 @@ export class BrowserSampleStaging {
     this.#state = 'disposed'
     if (failures.length > 0) {
       throw new AggregateError(failures, 'browser sample staging cleanup did not fully settle')
+    }
+  }
+
+  async #applyFaultCut(expected: BrowserSampleStagingFaultCut): Promise<void> {
+    if (this.#faultCut !== expected) return
+    if (expected === 'fail-after-finalize') {
+      await writeFile(
+        join(this.childAttachmentRoot, STAGING_PARTIAL_COLLECTION_NAME),
+        'partial',
+        { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+      )
+      throw new Error('declarative staging failure after finalization')
+    }
+
+    const ownedBackup = `${this.childAttachmentRoot}${STAGING_FAULT_BACKUP_SUFFIX}`
+    await rename(this.childAttachmentRoot, ownedBackup)
+    await mkdir(this.childAttachmentRoot, { mode: 0o700 })
+    await writeFile(
+      join(this.childAttachmentRoot, STAGING_FAULT_MARKER_NAME),
+      STAGING_FAULT_MARKER_TEXT,
+      { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+    )
+    if (expected === 'replace-root-and-fail-after-finalize') {
+      throw new Error('declarative staging path replacement after finalization')
     }
   }
 

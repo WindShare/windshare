@@ -19,11 +19,9 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/internal/browsermatrixbroker"
-	"github.com/windshare/windshare/internal/testnetwork"
 )
 
 func TestExecuteUsesFixedConfigAndExactAnonymousPipes(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
 	response := []byte("authenticated-public-proof")
 	var requests atomic.Int64
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

@@ -16,6 +16,10 @@ export const GUARD_UPLOAD_TOPOLOGY_DIRECTORY = 'topology' as const
 export const GUARD_UPLOAD_TOPOLOGY_PROFILE_PATH = 'topology/profile.json' as const
 export const GUARD_UPLOAD_TOPOLOGY_RESOLUTION_PATH = 'topology/resolution.json' as const
 export const GUARD_UPLOAD_OUTPUT_NAME = 'sealed' as const
+export const GUARD_UPLOAD_FAULT_ACTIONS = Object.freeze([
+  'add-foreign-file-before-publication',
+  'fail-before-artifact-copy',
+] as const)
 
 export const MAXIMUM_UPLOAD_MANIFEST_BYTES = 8 * 1_024 * 1_024
 export const MAXIMUM_SAMPLE_RESULT_BYTES = 16 * 1_024 * 1_024
@@ -104,6 +108,17 @@ export interface GuardUploadSampleInput {
   readonly commandSha256: string
 }
 
+export type GuardUploadFaultCut =
+  | Readonly<{
+      action: 'add-foreign-file-before-publication'
+    }>
+  | Readonly<{
+      action: 'fail-before-artifact-copy'
+      browser: BrowserEngine
+      sampleIndex: number
+      relativePath: string
+    }>
+
 export interface SealGuardUploadSuiteOptions {
   readonly uploadParent: string
   readonly runId: string
@@ -116,15 +131,5 @@ export interface SealGuardUploadSuiteOptions {
   readonly settlementInvocationId: string
   readonly directoryPublisher: GuardUploadDirectoryPublisher
   readonly executionLease?: GuardExecutionLease
-  readonly hooks?: GuardUploadHooks
-}
-
-export interface GuardUploadHooks {
-  readonly beforeArtifactCopy?: (
-    sample: BrowserSampleResult,
-    artifact: ArtifactIndexEntry,
-    sourcePath: string,
-    destinationPath: string,
-  ) => void | Promise<void>
-  readonly beforeSeal?: (privateStagingRoot: string) => void | Promise<void>
+  readonly faultCuts?: readonly GuardUploadFaultCut[]
 }

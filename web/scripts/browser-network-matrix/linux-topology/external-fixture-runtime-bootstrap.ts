@@ -17,17 +17,13 @@ import {
   type ExternalFixtureTrustConfig,
   type NetworkMatrixExternalFixtureConfig,
 } from './concrete-runtime-config.ts'
-import {
-  ConcreteContainedBrowserProcessBroker,
-  type ConcreteContainedBrowserProcessBrokerOptions,
-} from './contained-browser-broker.ts'
+import { ConcreteContainedBrowserProcessBroker } from './contained-browser-broker.ts'
 import {
   FilesystemContainedBrowserSampleInputAuthorityFactory,
   type ContainedBrowserPionControlFiles,
   type ContainedBrowserTopologyFiles,
 } from './contained-browser-input.ts'
 import { FilesystemExternalFixtureTrustInspector } from './remote-pion-probe-authority.ts'
-import type { ManualOperatorTopologyIdentity } from './external-fixture-attestation.ts'
 import type { ExternalFixtureControlCredentialAuthority } from './control-credential.ts'
 import { REMOTE_PION_MAXIMUM_ATTEMPT_LEASE_MS } from './remote-pion.ts'
 
@@ -51,8 +47,6 @@ export interface ExternalFixtureNetworkMatrixRuntimeBootstrapOptions {
   readonly temporaryRoot?: string
   readonly maximumCaptureBytes?: number
   readonly childPath?: string
-  readonly trace?: ConcreteContainedBrowserProcessBrokerOptions['trace']
-  readonly manualOperatorIdentity?: ManualOperatorTopologyIdentity
 }
 
 /**
@@ -68,9 +62,6 @@ export function createExternalFixtureNetworkMatrixRuntimeBootstrap(
     !Number.isSafeInteger(options.attemptLeaseMs) || options.attemptLeaseMs < 1 ||
     options.attemptLeaseMs > REMOTE_PION_MAXIMUM_ATTEMPT_LEASE_MS
   ) throw new Error('external fixture attempt lease exceeds the protocol policy')
-  if (config.manualRealNat !== null && options.manualOperatorIdentity === undefined) {
-    throw new Error('manual real-NAT runtime requires a separate local operator topology identity')
-  }
   return Object.freeze({
     bootstrap: (
       bootstrapContext: NetworkMatrixRuntimeBootstrapContext,
@@ -86,12 +77,7 @@ export function createExternalFixtureNetworkMatrixRuntimeBootstrap(
         checkoutSha: options.checkoutSha,
         ...(options.temporaryRoot === undefined ? {} : { temporaryRoot: options.temporaryRoot }),
         topologyFiles: options.topologyFiles,
-        controlFiles: (context, signal) => controlFiles(
-          config,
-          options.manualOperatorIdentity,
-          context,
-          signal,
-        ),
+        controlFiles: (context, signal) => controlFiles(config, context, signal),
         controlCredentials: options.controlCredentials,
         attemptLeaseMs: options.attemptLeaseMs,
         resultPollIntervalMs: options.resultPollIntervalMs,
@@ -110,7 +96,6 @@ export function createExternalFixtureNetworkMatrixRuntimeBootstrap(
           ? {}
           : { maximumCaptureBytes: options.maximumCaptureBytes }),
         ...(options.childPath === undefined ? {} : { childPath: options.childPath }),
-        ...(options.trace === undefined ? {} : { trace: options.trace }),
       })
       const settlement = createRuntimeSettlement(options.controlCredentials)
       const runtime: NetworkMatrixExecutionRuntime = Object.freeze({
@@ -201,7 +186,6 @@ function exactClosedReceipt(value: unknown): value is { readonly terminal: 'clos
 
 async function controlFiles(
   config: NetworkMatrixExternalFixtureConfig,
-  manualOperatorIdentity: ManualOperatorTopologyIdentity | undefined,
   context: NetworkMatrixSampleExecutionContext,
   signal: AbortSignal,
 ): Promise<ContainedBrowserPionControlFiles> {
@@ -216,9 +200,6 @@ async function controlFiles(
     tlsCertificateSha256: fixture.control.tlsCertificateSha256,
     tlsCertificateAuthorityFile: fixture.control.tlsCertificateAuthorityFile,
     attestationPublicKeyFile: fixture.control.attestationPublicKeyFile,
-    manualOperatorIdentity: profileId === 'manual-real-nat'
-      ? manualOperatorIdentity ?? null
-      : null,
   })
 }
 
@@ -230,6 +211,5 @@ function fixtureForProfile(
     'scheduled-public-stun': config.publicStun,
     'scheduled-restricted-udp': config.restrictedUdp,
     'scheduled-coturn': config.coturn,
-    'manual-real-nat': config.manualRealNat,
   }[profileId]
 }

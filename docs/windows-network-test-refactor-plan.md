@@ -36,8 +36,9 @@
 - `testing.Short()` 只表达运行成本和真实资源边界，不承担平台授权；不得仅因使用 socket
   就跳过快速测试。
 - E2E 二进制由按需、suite 级 fixture 构建；`TestMain` 不得在测试筛选前无条件构建。
-- 每个场景必须记录唯一 owner、oracle、目标 OS、instrumentation、timeout 和 cleanup
-  owner，删除旧路径前必须已有等价新 oracle。
+- 迁移开始时冻结阻断切换的场景清单。每个条目记录稳定 `scenario_id`、所属 suite、
+  oracle、目标 OS、instrumentation、timeout 和 cleanup owner。删除旧路径前，替代 oracle
+  必须覆盖清单中命名的不变量；清单外新增测试不追溯扩大本次验收范围。
 
 ## 资源与进程架构
 
@@ -47,18 +48,28 @@
 - 确定性 Pion 集成测试通过注入的 API/`SettingEngine` 限制 loopback candidate、
   local/remote IP 和 network type；完整浏览器拓扑矩阵保留独立的非 loopback profile。
   两者都不得改变生产默认值。
-- 进程 fixture 与网络 fixture 分离，并由测试进程外的监督者持有进程树。Windows
-  后端在目标执行前完成 kill-on-close Job Object containment；Linux 后端使用 process
-  group、父存活控制管道和 subreaper。抽取复用现有 Browsergate owner 的平台机制，
-  不维护第二套 containment。超时、测试退出和父 runner 异常都必须终止并回收整棵树。
+- 进程 fixture 与网络 fixture 分离。统一的 process-owner 深模块定义行为契约：目标执行前
+  已进入 containment；正常退出、取消、超时和客户端 EOF 都会终止并回收该 run 登记的
+  全部后代，清理失败是硬门禁。
+- 异常回收采用受支持的单故障模型：runner 或 process owner 单独失效，且已建立的平台
+  containment authority 或 guardian 仍有效。同一 PID namespace 内、可追踪且无特权的
+  后代仍受约束，包括创建新 session 的后代。containment authority/guardian 失效、多个
+  监督组件同时失效、主机或内核失效及特权逃逸不在保证范围内，不递归增加 guardian。
+- Windows 可使用 kill-on-close Job Object，Linux 可使用 process group、父存活控制管道和
+  subreaper；验收依据上述行为契约，不依据具体实现或 supervisor 进程是否复用。
+- Go 与 Browsergate 优先共享平台后端；跨 runtime 必须使用独立 adapter 时，共享协议、
+  测试向量和同一组行为契约，不重复定义 OS containment 语义。
 - Job Object、Named Pipe 等 Windows 语义保留专门集成测试，但其 runtime 后端仍可
   被所有 Windows 进程测试用于 containment。
-- 测试不查询或修改 Firewall/WBEM，也不以防火墙提示或主机策略决定结果。
+- 仓库维护的测试和验证脚本不查询或修改 Firewall/WBEM，也不以防火墙提示或主机策略
+  决定结果。
 
 Make/CI 为每次 integration/E2E 调用生成唯一 run ID；直接 `go test` 时由包进程生成
 fallback run ID。每个场景生成 operation ID，并传递给 Go、Node、浏览器及子进程。
 结构化日志至少包含 `run_id`、`operation_id`、`scenario`、`component`、`milestone`
-和 `outcome`。
+和 `outcome`。每个 operation 恰有一个 start 和 terminal 事件；terminal 记录 cleanup
+outcome，超时记录最后一个 milestone。上述约束由测试验证，不以人工判断“能否还原”为
+验收条件。
 
 ## Instrumentation
 
@@ -98,39 +109,58 @@ D5 代码、命名、文档和 R8 活跃数值基线。
 
 ## 迁移步骤
 
-1. 盘点所有 gated 场景，建立 owner/oracle/suite/OS/instrumentation/timeout/cleanup 映射，
-   记录冷热耗时及不稳定情况。
+1. 盘点 gated 场景并冻结本次切换清单，建立
+   `scenario_id`/oracle/suite/OS/instrumentation/timeout/cleanup 映射，记录冷热耗时及
+   不稳定情况。
 2. 建立 `testing.Short()` 边界、按需 E2E build fixture、loopback socket owner 和跨平台
    process-tree fixture。
 3. 迁移 relay、WebRTC、CLI、E2E 和 Browsergate；Pion 使用注入式 loopback 配置，
    race 模式向子二进制传播。
-4. 在 Windows/Linux 各以独立进程、`-count=1`、无重试连续运行 20 次 integration 和
-   Go E2E，并各完整运行一次 race、coverage 和 Browsergate process；Windows 再运行
-   Chromium 关键路径。通过后将直接 Windows 执行切换为本地和托管 CI 权威。
+4. 在同一候选提交上，Windows/Linux 各以独立进程和 `-count=1` 为 integration 与 Go
+   E2E 累积 20 个有效样本，不自动重试产品测试。已开始执行产品测试的失败计为正确性
+   失败；runner、依赖获取或证据上传失败计为无效基础设施样本，必须记录但不计入 20 次。
+   各完整运行一次 race、coverage 和 Browsergate process，Windows 再运行 Chromium
+   关键路径。任何可复现的正确性失败在修复前阻断切换。
 5. 简化 race、coverage 和 CI DAG；抽取性能工具，归档 R8 并建立新基线。
 6. 删除 D5 正确性子系统、旧清单、skip 标签、过期文档和兼容路径。
 
 ## 验收标准
 
 - Relay、P2P、回退、重连、停止、CLI 文件夹传输和代表性浏览器下载继续拥有真实栈
-  oracle。
+  oracle。Browsergate 矩阵合同及缺少受保护配置时的 fail-closed 行为属于代码验收；真实
+  45 项矩阵执行只属于 nightly/release 运营证据。
 - Windows `go test ./...` 不再出现 D5 OS-network 跳过；core 通过独立命令完整运行。
 - Windows CI 实际执行原生 integration、Go 进程 E2E 和 Chromium 冒烟路径。
 - race E2E 启动的 WindShare 与 relay 子二进制同样经过 race instrumentation。
 - 覆盖率继续满足 core 总计 >=90%、root 总计 >=80%、每个包 >=70%。
-- 参考机记录 OS、CPU、RAM、Go、Node、pnpm 和 Playwright 版本；至少 20 次独立热运行
+- 参考机记录 OS、CPU、RAM、Go、Node、pnpm 和 Playwright 版本；至少 20 个有效独立热运行
   记录 p95，目标为 `check <=60s`、`integration <=2m`、`e2e <=3m`。完整本地 CI 记录
   迁移前后同口径基线；超限只产生趋势告警。
-- Windows/Linux 的 integration 和 Go E2E 切换烟测各连续 20 次无重试通过。Nightly
-  发布包含 run、commit、OS、suite 和 outcome 的版本化 JSON artifact；release reducer
-  通过 CI API 校验最近 100 次无重试 integration 结果并执行完整浏览器矩阵。缺失或
-  非法结果使验收失败，任何可复现的正确性失败阻断 release。
-- 每次运行都确认进程树为空且 fixture 持有的 listener/`PacketConn` 已关闭；不得以重新
-  绑定端口作为清理 oracle，清理失败直接使测试失败。
+- 同一候选提交上的 Windows/Linux integration 和 Go E2E 各取得 20 个有效独立样本；
+  产品测试失败阻断验收，无效基础设施样本不伪装为通过，也不重置已取得的有效样本。
+- 每个场景结束时确认该 run 登记的后代集合和 fixture 资源登记表为空；每个平台另以专门
+  集成测试验证受支持的单故障模型。不得以重新绑定端口作为清理 oracle，清理失败直接使
+  测试失败。
 - 正确性测试不再以静态分析器、包注册表、固定路径、二进制哈希或全局环境变量作为
   网络运行授权。
-- 永不查询或修改 Firewall/WBEM 状态；超时日志能够由 run/operation ID 还原场景、
-  里程碑和清理边界。
+- 仓库维护的验证代码不查询或修改 Firewall/WBEM 状态；日志满足 start/terminal、最后
+  milestone 和 cleanup outcome 的结构化事件约束。
+
+## 长期发布稳定性策略
+
+本节不阻塞本次重构验收。
+
+- Nightly 在 Windows/Linux 各独立运行一次 integration，不自动重试产品测试，并发布
+  包含 contract version、run、commit、OS、suite、outcome 和 failure class 的版本化
+  JSON artifact。缺失或非法证据记为基础设施失败，不记为产品通过。
+- Release reducer 通过 CI API 汇总最近 100 个有效样本；样本不足报告
+  `insufficient-history`，不否定已经完成的重构。有效产品失败必须形成可跟踪 finding；
+  未解决且可复现的正确性失败阻断 release，已修复的历史失败保留为趋势记录。
+- 历史兼容性使用显式语义 contract version。workflow 或入口脚本的注释、空白和其他不
+  改变执行语义的修改不得重置历史。
+- Reducer 只校验 CI 身份与摘要以及 JSON schema，不把 ZIP 布局、JSON 字段顺序、精确
+  artifact 数量或整个 workflow/入口文件的字节哈希作为通过条件。Release 仍须对当前
+  提交执行完整 PR 等价门禁和浏览器矩阵。
 
 ## 非目标
 

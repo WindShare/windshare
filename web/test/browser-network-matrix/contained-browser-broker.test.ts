@@ -4,15 +4,18 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type {
   BrowserSampleContainmentBackend,
+  BrowserSampleContainmentExecution,
   BrowserSampleContainmentRequest,
 } from '../../scripts/browser-evidence/process/containment.ts'
 import { completedOwnedOperation } from '../../scripts/browser-network-matrix/owned-operation.ts'
 import type { NetworkMatrixSampleExecutionContext } from '../../scripts/browser-network-matrix/runner.ts'
+import { networkMatrixSampleOperationId } from '../../scripts/browser-network-matrix/sample-authority.ts'
 import type { NetworkMatrixProfileId } from '../../scripts/browser-network-matrix/vocabulary.ts'
 import {
   ConcreteContainedBrowserProcessBroker,
   type ContainedBrowserSampleInputAuthority,
 } from '../../scripts/browser-network-matrix/linux-topology/contained-browser-broker.ts'
+import { requireCompleteLinuxTopologyTrace } from '../../scripts/browser-network-matrix/linux-topology/trace/index.ts'
 import { cloneJson, loadRegistry } from './fixtures.ts'
 import {
   TEST_REMOTE_PEER_PUBLIC_IP,
@@ -30,7 +33,9 @@ describe('concrete contained browser process broker', () => {
     const backend = successfulBackend(output)
     const broker = createBroker(backend, authority)
 
-    const evidence = await broker.start(await sampleContext()).result
+    const operation = broker.start(await sampleContext())
+    const evidence = await operation.result
+    const traces = operation.traces.snapshot()
 
     const request = vi.mocked(backend.execute).mock.calls[0]?.[0]
     expect(request?.command.stdin).toBe(authority.secretFrame)
@@ -38,6 +43,27 @@ describe('concrete contained browser process broker', () => {
     expect(request?.command.environment).toBeUndefined()
     expect(request?.readOnlyInputRoots).toEqual([])
     expect(request?.terminationSignal).toBeInstanceOf(AbortSignal)
+    expect(request?.capture).toEqual({ stdoutBytes: 4_194_304, stderrBytes: 4_194_304 })
+    expect(request).not.toHaveProperty('stdout')
+    expect(request).not.toHaveProperty('stderr')
+    expect(request).not.toHaveProperty('trace')
+    requireCompleteLinuxTopologyTrace(traces)
+    expect(traces.events.filter(({ milestone }) => milestone === 'contained-browser-started'))
+      .toHaveLength(1)
+    expect(traces.events).toContainEqual(expect.objectContaining({
+      operationId: request?.operationId,
+      milestone: 'test-containment-settled',
+      context: { operationId: request?.operationId },
+    }))
+    expect(traces.events.at(-1)).toMatchObject({
+      operationId: request?.operationId,
+      milestone: 'contained-browser-terminal',
+      outcome: 'succeeded',
+      context: {
+        cleanupOutcome: 'completed',
+        lastMilestone: 'contained-evidence-accepted',
+      },
+    })
     expect(evidence).toMatchObject({
       processInstanceId: output.processInstanceId,
       attemptEvidence: {
@@ -62,21 +88,81 @@ describe('concrete contained browser process broker', () => {
     expect(authority.close).toHaveBeenCalledOnce()
   })
 
+  it('publishes failed cleanup without replacing the last workflow milestone', async () => {
+    const authority = inputAuthority()
+    authority.close.mockImplementation(() => Object.freeze({
+      result: Promise.reject(new Error('input cleanup failed')),
+      forceTerminateAndWait: vi.fn().mockResolvedValue(undefined),
+    }))
+    const operation = createBroker(successfulBackend(validOutput()), authority)
+      .start(await sampleContext())
+
+    await expect(operation.result).rejects.toThrow('input cleanup failed')
+
+    const traces = operation.traces.snapshot()
+    requireCompleteLinuxTopologyTrace(traces)
+    expect(traces.events.at(-1)).toMatchObject({
+      milestone: 'contained-browser-terminal',
+      outcome: 'failed',
+      context: {
+        cleanupOutcome: 'failed',
+        lastMilestone: 'contained-evidence-accepted',
+      },
+    })
+  })
+
+  it('retains a hostile failure opaquely without invoking its proxy traps', async () => {
+    const authority = inputAuthority()
+    let trapCalls = 0
+    const hostile = new Proxy(new Error('must remain opaque'), {
+      get() {
+        trapCalls += 1
+        throw new Error('hostile failure was inspected')
+      },
+      getPrototypeOf() {
+        trapCalls += 1
+        throw new Error('hostile failure prototype was inspected')
+      },
+    })
+    const backend: BrowserSampleContainmentBackend = {
+      kind: 'test',
+      preflight: vi.fn().mockResolvedValue(undefined),
+      execute: vi.fn().mockRejectedValue(hostile),
+    }
+    const operation = createBroker(backend, authority).start(await sampleContext())
+
+    const settlement = await operation.result.then(
+      () => Object.freeze({ cause: undefined }),
+      (cause: unknown) => Object.freeze({ cause }),
+    )
+
+    expect(settlement.cause).toBe(hostile)
+    expect(trapCalls).toBe(0)
+    requireCompleteLinuxTopologyTrace(operation.traces.snapshot())
+    expect(operation.traces.snapshot().events.at(-1)).toMatchObject({
+      milestone: 'contained-browser-terminal',
+      outcome: 'failed',
+      context: {
+        cleanupOutcome: 'completed',
+        lastMilestone: 'contained-process-started',
+      },
+    })
+  })
+
   it('independently aborts the backend signal and awaits terminal reaping', async () => {
     const authority = inputAuthority()
     let request: BrowserSampleContainmentRequest | undefined
     const backend: BrowserSampleContainmentBackend = {
       kind: 'test',
       preflight: vi.fn().mockResolvedValue(undefined),
-      execute: vi.fn((value: BrowserSampleContainmentRequest): Promise<{
-        readonly processEvidence: { readonly terminal: 'signaled'; readonly signal: string }
-        readonly timedOut: boolean
-      }> => {
+      execute: vi.fn((value: BrowserSampleContainmentRequest): Promise<BrowserSampleContainmentExecution> => {
         request = value
         return new Promise((resolveExecution) => {
           value.terminationSignal?.addEventListener('abort', () => resolveExecution({
             processEvidence: { terminal: 'signaled', signal: 'SIGTERM' },
-            timedOut: true,
+            terminationReason: 'stop',
+            output: outputSnapshots('', ''),
+            traces: eventSnapshot([]),
           }), { once: true })
         })
       }),
@@ -114,6 +200,37 @@ describe('concrete contained browser process broker', () => {
 
     expect(failure).toBeInstanceOf(Error)
     expect(String(failure)).not.toContain(SENSITIVE_VALUE)
+    expect(authority.close).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a deadline settlement even when the root exits zero', async () => {
+    const authority = inputAuthority()
+    const backend = successfulBackend(validOutput(), false, (execution) => Object.freeze({
+      ...execution,
+      terminationReason: 'deadline',
+    }))
+
+    await expect(createBroker(backend, authority).start(await sampleContext()).result)
+      .rejects.toThrow('one bounded authoritative result')
+    expect(authority.close).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a truncated pull snapshot without parsing its retained prefix', async () => {
+    const authority = inputAuthority()
+    const backend = successfulBackend(validOutput(), false, (execution) => Object.freeze({
+      ...execution,
+      output: Object.freeze({
+        ...execution.output,
+        stdout: Object.freeze({
+          ...execution.output.stdout,
+          observedBytes: execution.output.stdout.observedBytes + 1,
+          truncated: true,
+        }),
+      }),
+    }))
+
+    await expect(createBroker(backend, authority).start(await sampleContext()).result)
+      .rejects.toThrow('one bounded authoritative result')
     expect(authority.close).toHaveBeenCalledOnce()
   })
 
@@ -178,20 +295,54 @@ function createBroker(
 function successfulBackend(
   output: Record<string, unknown> | string,
   encoded = false,
+  projectExecution: (
+    execution: BrowserSampleContainmentExecution,
+  ) => BrowserSampleContainmentExecution = (execution) => execution,
 ): BrowserSampleContainmentBackend {
   return {
     kind: 'test',
     preflight: vi.fn().mockResolvedValue(undefined),
     execute: vi.fn(async (request: BrowserSampleContainmentRequest) => {
-      request.stdout(new TextEncoder().encode(
-        encoded ? output as string : `${JSON.stringify(output)}\n`,
-      ))
-      return {
+      const stdout = encoded ? output as string : `${JSON.stringify(output)}\n`
+      return projectExecution(Object.freeze({
         processEvidence: { terminal: 'exited' as const, exitCode: 0 },
-        timedOut: false,
-      }
+        terminationReason: 'natural' as const,
+        output: outputSnapshots(stdout, ''),
+        traces: eventSnapshot([{
+          milestone: 'test-containment-settled',
+          outcome: 'succeeded',
+          context: { operationId: request.operationId },
+        }]),
+      }))
     }),
   }
+}
+
+function outputSnapshots(stdout: string, stderr: string): BrowserSampleContainmentExecution['output'] {
+  return Object.freeze({ stdout: byteSnapshot(stdout), stderr: byteSnapshot(stderr) })
+}
+
+function byteSnapshot(encoded: string): BrowserSampleContainmentExecution['output']['stdout'] {
+  const retained = new TextEncoder().encode(encoded)
+  return Object.freeze({
+    observedBytes: retained.byteLength,
+    capturedBytes: retained.byteLength,
+    truncated: false,
+    completed: true,
+    bytes: () => Uint8Array.from(retained),
+  })
+}
+
+function eventSnapshot(
+  events: BrowserSampleContainmentExecution['traces']['events'],
+): BrowserSampleContainmentExecution['traces'] {
+  return Object.freeze({
+    events: Object.freeze([...events]),
+    observedEvents: events.length,
+    capturedEvents: events.length,
+    truncated: false,
+    completed: true,
+  })
 }
 
 function inputAuthority(): ContainedBrowserSampleInputAuthority & {
@@ -229,7 +380,11 @@ async function sampleContext(
     }),
     profile,
     authority: testNetworkMatrixExecutionAuthority(profileId),
-    operationId: `${RUN_ID}-${profileId}-chromium-1`,
+    operationId: networkMatrixSampleOperationId(RUN_ID, {
+      profileId,
+      browser: 'chromium',
+      sampleOrdinal: 1,
+    }),
   })
 }
 

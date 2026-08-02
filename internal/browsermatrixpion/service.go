@@ -254,8 +254,7 @@ func NewService(config ServiceConfig) (*Service, error) {
 		challengeSource = rand.Reader
 	}
 	stunEndpoint := ""
-	if fixture.NetworkSemantics.Kind == NetworkSemanticsPublicSTUN ||
-		fixture.NetworkSemantics.Kind == NetworkSemanticsManualRealNAT {
+	if fixture.NetworkSemantics.Kind == NetworkSemanticsPublicSTUN {
 		stunEndpoint = fixture.NetworkSemantics.STUNEndpoint
 	}
 	controlCredentials, err := NewControlCredentialAuthority(ControlCredentialAuthorityConfig{

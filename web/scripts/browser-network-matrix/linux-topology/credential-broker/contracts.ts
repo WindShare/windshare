@@ -1,10 +1,12 @@
 import type { NetworkMatrixSampleAuthority } from '../../sample-authority.ts'
+import type { LinuxTopologyTraceChannel } from '../trace/index.ts'
 import type { NetworkMatrixExternalFixtureConfig } from '../concrete-runtime-config.ts'
 import type {
   ExternalFixtureControlCredentialLeasePayload,
   SignedExternalFixtureControlCredentialLease,
 } from '../control-credential.ts'
 import type { ParentWorkloadIdentityAuthority } from '../parent-workload-identity.ts'
+import type { TestProcessOwnerArtifact } from '../../../browser-evidence/process/test-process-owner-client.mjs'
 
 export const EXTERNAL_FIXTURE_CREDENTIAL_BROKER_PROTOCOL =
   'windshare.browser-network-matrix.credential-broker/v2' as const
@@ -26,10 +28,9 @@ export interface CredentialBrokerOptions {
   readonly helperPath: string
   readonly workingDirectory: string
   readonly platform: NodeJS.Platform
-  readonly windowsJobHelperPath?: string
+  readonly processOwner: TestProcessOwnerArtifact
   readonly config: NetworkMatrixExternalFixtureConfig
   readonly workloadIdentity: ParentWorkloadIdentityAuthority
-  readonly trace?: (event: Readonly<Record<string, unknown>>) => void
 }
 
 export interface CredentialBrokerTestHarnessOptions extends CredentialBrokerOptions {
@@ -53,9 +54,16 @@ export interface CredentialBrokerScope {
   readonly probeNonce: string
 }
 
+export type CredentialBrokerDispatchOutcome = 'not-dispatched' | 'dispatched'
+
+export interface CredentialBrokerExchangeExecution {
+  readonly result: Promise<Buffer>
+  readonly traces: LinuxTopologyTraceChannel
+  readonly dispatchOutcome: Promise<CredentialBrokerDispatchOutcome>
+}
+
 export type CredentialBrokerExchange = (
   request: Readonly<Record<string, unknown>>,
   scope: CredentialBrokerScope,
   signal: AbortSignal,
-  onDispatch?: () => void,
-) => Promise<Buffer>
+) => CredentialBrokerExchangeExecution

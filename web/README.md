@@ -7,6 +7,8 @@ on demand, and reads file-local encrypted ranges over relay or WebRTC lanes.
 The protocol authority is [`docs/协议规范.md`](../docs/协议规范.md); product and
 phase semantics are in
 [`docs/即时分享与文件浏览重构计划.md`](../docs/即时分享与文件浏览重构计划.md).
+Validation entry points are in [`docs/validation.md`](../docs/validation.md), and
+manual performance publication is in [`docs/performance.md`](../docs/performance.md).
 
 ## Source layout
 
@@ -32,7 +34,7 @@ pnpm -C web lint
 pnpm -C web exec tsc -b --force
 pnpm -C web build
 pnpm -C web forbidden
-pnpm -C web test
+pnpm -C web run test:unit:remainder
 ```
 
 `make web` runs the same sequence. The forbidden gate walks the production
@@ -40,9 +42,10 @@ dependency graph, scans all Web source/tests, and checks the built bundle.
 
 ## Browser evidence
 
-Linux CI runs the retained Playwright safety, storage/output, and dedicated
-WebRTC adapter suites. Windows real-socket execution must use
-`scripts/d5-windows-performance.ps1 -Mode BrowserTests`; direct invocation is
-rejected. Chromium is the currently installed matrix. Firefox/WebKit and a new
-v2 real-process sender/relay experience suite remain acceptance work and are not
-claimed by the unit or component gates.
+`pnpm -C web test:browser:smoke` runs the single Chromium product path used by
+the Windows PR gate. `pnpm -C web test:browser` (or `make browser`) runs the full
+three-browser main/Pion matrix. Both commands allocate invocation-private
+loopback listeners and run under the cross-platform process-tree owner; retries
+are disabled, and cleanup evidence is part of the verdict. Direct tests never
+inspect Firewall or WBEM state. See the validation document for PR, nightly,
+and release scope.

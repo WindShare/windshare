@@ -40,6 +40,7 @@ import {
   NETWORK_MATRIX_CONTROL_AUTHORITY_SCHEMA,
   NETWORK_MATRIX_SAMPLE_AUTHORITY_SCHEMA,
   networkMatrixAttemptAuthoritySha256,
+  networkMatrixSampleOperationId,
   type NetworkMatrixAttemptAuthority,
   type NetworkMatrixControlAuthority,
 } from '../../scripts/browser-network-matrix/sample-authority.ts'
@@ -115,6 +116,7 @@ export interface GeneratedTestNetworkMatrixRegistry {
 
 export interface TestNetworkMatrixAttemptOptions {
   readonly attemptId?: string
+  readonly candidatePolicyMismatch?: boolean
   readonly challenge?: string
   readonly processInstanceId?: string
 }
@@ -136,7 +138,7 @@ export function generateTestNetworkMatrixRegistry(): GeneratedTestNetworkMatrixR
   const authorities = NETWORK_MATRIX_PROFILE_REGISTRY.map((reference) => ({
     authorityId: reference.authorityId,
     authorityKind: reference.authorityKind,
-    availabilityExpectation: 'not-assumed',
+    availabilityExpectation: 'required',
     attestationPublicKeySha256: TEST_FIXTURE_ATTESTATION_PUBLIC_KEY_SHA256,
   }))
   const profileReferences = NETWORK_MATRIX_PROFILE_REGISTRY.map((reference) => ({
@@ -425,7 +427,7 @@ export function testNetworkMatrixAttemptEvidence(
           browser: identity.browser,
           sampleOrdinal: identity.sampleOrdinal,
           processInstanceId,
-          operationId: `${runId}-${identity.profileId}-${identity.browser}-${identity.sampleOrdinal}`,
+          operationId: networkMatrixSampleOperationId(runId, identity),
         }),
         controlLeaseId: attemptId.replace('attempt-', 'control-'),
       }),
@@ -443,7 +445,10 @@ export function testNetworkMatrixAttemptEvidence(
   })
   const challengeBindingSha256 = networkMatrixAttemptAuthoritySha256(attemptAuthority)
   const established = identity.profileId !== 'scheduled-restricted-udp'
-  const localCandidateType = identity.profileId === 'scheduled-coturn' ? 'relay' : 'srflx'
+  const localCandidateType = testLocalCandidateType(
+    identity.profileId,
+    options.candidatePolicyMismatch,
+  )
   const browserSelectedPair = established
     ? Object.freeze({
         selectedPair: 'present' as const,
@@ -600,6 +605,15 @@ function terminalCandidate(
   return Object.freeze({ candidateType, protocol, address, port, addressFamily: 'ipv4' })
 }
 
+function testLocalCandidateType(
+  profileId: NetworkMatrixProfileId,
+  candidatePolicyMismatch: boolean,
+) {
+  if (candidatePolicyMismatch) return 'host' as const
+  if (profileId === 'scheduled-coturn') return 'relay' as const
+  return 'srflx' as const
+}
+
 function absentBrowserPair() {
   return Object.freeze({
     selectedPair: 'absent' as const,
@@ -665,7 +679,7 @@ function testProfile(profileId: NetworkMatrixProfileId): Record<string, unknown>
     authority: {
       authorityId: reference.authorityId,
       authorityKind: reference.authorityKind,
-      availabilityExpectation: 'not-assumed',
+      availabilityExpectation: 'required',
       attestationPublicKeySha256: TEST_FIXTURE_ATTESTATION_PUBLIC_KEY_SHA256,
     },
     connectivityExpectation: profileId === 'scheduled-restricted-udp'
@@ -720,14 +734,13 @@ function testCandidatePolicy(profileId: NetworkMatrixProfileId): Record<string, 
 function testExternalFixtureDeclaration(
   profileId: NetworkMatrixProfileId,
 ): ExternalFixtureDeclaration {
-  const identity = profileId.replace(/^scheduled-/u, '').replace(/^manual-/u, '')
+  const identity = profileId.replace(/^scheduled-/u, '')
   const base = {
     schemaVersion: EXTERNAL_FIXTURE_DECLARATION_SCHEMA,
     deploymentId: `${identity}-deployment`,
     revision: 1,
     profileId,
     authorityInstanceId: `${identity}-authority`,
-    implementationSha256: sha256(`implementation:${profileId}`),
     remoteServiceInstanceId: `${identity}-remote-pion`,
     operatorId: 'windshare-test-operator',
     fixtureHostId: `${identity}-fixture-host`,
@@ -778,17 +791,7 @@ function testExternalFixtureDeclaration(
       }),
     })
   }
-  return Object.freeze({
-    ...base,
-    networkSemantics: Object.freeze({
-      kind: 'operator-real-nat',
-      policyId: 'operator-real-nat-policy',
-      policyVersion: 1,
-      senderHostId: 'manual-sender-host',
-      senderNetworkBoundaryId: 'manual-sender-network',
-      stunEndpoint: 'stun:stun.cloudflare.com:3478',
-    }),
-  })
+  throw new Error(`unknown test external fixture profile ${profileId}`)
 }
 
 function canonicalJson(value: unknown): string {

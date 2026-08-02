@@ -22,7 +22,6 @@ describe('external browser network matrix authorities', () => {
     'scheduled-public-stun',
     'scheduled-restricted-udp',
     'scheduled-coturn',
-    'manual-real-nat',
   ] as const)('prepares %s from pinned local trust without inventing a sample authority', async (
     profileId,
   ) => {
@@ -199,7 +198,6 @@ function runtimeInputs(): NetworkMatrixRuntimeInputs {
       'scheduled-public-stun': Object.freeze({ profileId: 'scheduled-public-stun' }),
       'scheduled-restricted-udp': Object.freeze({ profileId: 'scheduled-restricted-udp' }),
       'scheduled-coturn': Object.freeze({ profileId: 'scheduled-coturn' }),
-      'manual-real-nat': Object.freeze({ profileId: 'manual-real-nat' }),
     }),
   })
 }

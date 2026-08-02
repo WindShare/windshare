@@ -164,7 +164,7 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 
 	t.Run("empty entered key", func(t *testing.T) {
 		app, _, _ := newSemanticTestApp(strings.NewReader("\n"))
-		if _, err := app.resolveLink(bare, ""); err == nil || !strings.Contains(err.Error(), "no key string") {
+		if _, err := app.resolveLink(bare, ""); err == nil || err.Error() != missingCapabilityKeyDiagnostic {
 			t.Fatalf("error=%v", err)
 		}
 	})
@@ -173,6 +173,21 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 		app, _, _ := newSemanticTestApp(strings.NewReader(""))
 		if _, err := app.resolveLink(bare, ""); !errors.Is(err, io.EOF) {
 			t.Fatalf("error=%v want wrapped EOF", err)
+		}
+	})
+
+	t.Run("invalid link has a stable typed usage diagnostic", func(t *testing.T) {
+		app, _, stderr := newSemanticTestApp(strings.NewReader(""))
+		if _, code := app.parseGetRequest([]string{"not-a-link"}); code != ExitUsage {
+			t.Fatalf("exit=%d want=%d", code, ExitUsage)
+		}
+		if stderr.String() != "get: "+invalidCapabilityDiagnostic+"\n" {
+			t.Fatalf("stderr=%q", stderr.String())
+		}
+		_, err := app.resolveLink("not-a-link", "")
+		var typed *capabilityInputError
+		if !errors.As(err, &typed) || typed.kind != capabilityInputInvalid {
+			t.Fatalf("error=%#v", err)
 		}
 	})
 
