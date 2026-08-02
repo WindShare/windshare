@@ -1,5 +1,6 @@
 export {
   GUARD_UPLOAD_ATTACHMENTS_DIRECTORY,
+  GUARD_UPLOAD_FAULT_ACTIONS,
   GUARD_UPLOAD_GUARD_FILENAME,
   GUARD_UPLOAD_MANIFEST_FILENAME,
   GUARD_UPLOAD_MANIFEST_SCHEMA_VERSION,
@@ -10,8 +11,8 @@ export {
   GUARD_UPLOAD_TOPOLOGY_PROFILE_PATH,
   GUARD_UPLOAD_TOPOLOGY_RESOLUTION_PATH,
   type GuardUploadArtifactManifest,
+  type GuardUploadFaultCut,
   type GuardUploadFileAuthority,
-  type GuardUploadHooks,
   type GuardUploadManifest,
   type GuardUploadSampleContractPaths,
   type GuardUploadSampleInput,

@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   appendFileSync,
   existsSync,
@@ -14,11 +15,15 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { guardArtifactSuite } from '../../../web/scripts/browser-evidence/artifact/guard.ts'
+import {
+  guardArtifactSuite,
+  requireCompleteArtifactGuardTrace,
+} from '../../../web/scripts/browser-evidence/artifact/guard.ts'
 import { finalizeParentOwnedBrowserSampleResult } from '../../../web/scripts/browser-evidence/contract/atomic-json.ts'
 import { createNativeDirectoryPublisher } from '../../../web/scripts/browser-evidence/filesystem/native-directory-publisher.ts'
 import { readStableRegularFileSnapshot } from '../../../web/scripts/browser-evidence/filesystem/snapshot.ts'
 import { BROWSER_SAMPLE_DRIVER_SCHEMA_VERSION } from '../../../web/scripts/browser-evidence/sample-driver.ts'
+import { BROWSER_SAMPLE_TRACE_SCHEMA_VERSION } from '../../../web/scripts/browser-evidence/sample-runner.ts'
 import {
   assertBrowserRunPolicyEqual,
   browserRunPolicy,
@@ -26,10 +31,7 @@ import {
   parseBrowserRunPolicyId,
 } from '../../../web/scripts/browser-evidence/run-policy.ts'
 import { sampleProcessEnvironment } from '../../../web/scripts/browser-evidence/process/sample-environment.ts'
-import { d5SettlementOwnershipEnvironment } from '../../../web/scripts/browser-evidence/process/d5-ownership.ts'
 import { requireFinalizedArtifactCollectionRoot } from '../../../web/scripts/browser-evidence/process/attachment-staging.ts'
-import { executeNativeProcessGroupCommand } from '../../../web/scripts/browser-evidence/process/native-process-group-backend.ts'
-import { executeWindowsJob } from '../../../web/scripts/browser-evidence/process/windows-job-client.ts'
 import { parseCanonicalJsonText } from '../../../web/scripts/browser-evidence/contract/strict-json.ts'
 import {
   parseTestIceTopologyJson,
@@ -58,7 +60,6 @@ import {
 } from './local-gate-runner.mjs'
 import {
   BROWSERGATE_RUNTIME_MANIFEST_ENV,
-  BROWSERGATE_RUNTIME_MANIFEST_SHA256_ENV,
   buildBrowsergateRuntime,
   disposeBrowsergateRuntime,
   loadBrowsergateRuntime,
@@ -67,19 +68,17 @@ import {
   executeOwnedRuntimeCommand,
   resolveHostExecutable,
 } from './process/runtime-command-owner.mjs'
-import {
-  BOOTSTRAP_BUILD_RECEIPT_SCHEMA_VERSION,
-  buildBootstrapProcessOwner,
-} from './process/bootstrap-build-authority.mjs'
+import { consumeOwnedRuntimeCommandExecution } from './process/runtime-command-consumer.mjs'
+import { buildTestProcessOwnerFixture } from './process/test-process-owner-fixture.mjs'
 import { createProcessSettlementSigner } from './process/settlement-signer.mjs'
+import { createBrowsergateTraceEvent } from './trace-event.mjs'
 import {
-  createD5SettlementTrustHandoff,
-  readD5SettlementTrustHandoff,
-  writeD5SettlementTrustHandoff,
-} from './process/settlement-trust-handoff.mjs'
+  createOwnedTraceJournal,
+  requireCompleteOwnedTraceSnapshot,
+} from './owned-trace-journal.mjs'
 import {
   canonicalSampleCommandSha256,
-  sampleDriverCommand,
+  sampleDriverOwnedRuntimeOperation,
 } from './process/sample-command-authority.mjs'
 import { readPinnedNodeVersion } from '../node-version.mjs'
 import { createGeneratedSemanticEnvironment } from './generated-semantic/build/environment.mjs'
@@ -94,14 +93,6 @@ import {
 } from './generated-semantic/runtime-preflight.mjs'
 
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
-const PLAYWRIGHT_CLI = join(
-  REPOSITORY_ROOT,
-  'web',
-  'node_modules',
-  '@playwright',
-  'test',
-  'cli.js',
-)
 const VITEST_CLI = join(REPOSITORY_ROOT, 'web', 'node_modules', 'vitest', 'vitest.mjs')
 const PLAYWRIGHT_SUITE_DISCOVERY = join(
   REPOSITORY_ROOT,
@@ -130,9 +121,6 @@ const GENERATED_SEMANTIC_ARTIFACT = join(
 )
 const CLEAN_BOOTSTRAP_INTEGRATION_TEST =
   'test/browser-evidence/artifact-guard-clean-bootstrap.integration.test.ts'
-const NATIVE_PROCESS_GROUP_INTEGRATION_TEST =
-  'test/browser-evidence/native-process-group-backend.test.ts'
-const WINDOWS_D5_SCRIPT = join(REPOSITORY_ROOT, 'scripts', 'd5-windows-performance.ps1')
 const VERDICT_CLI = join(REPOSITORY_ROOT, 'scripts', 'ci', 'browsergate', 'verdict.mjs')
 const DEFAULT_TOPOLOGY_PROFILE = join(
   REPOSITORY_ROOT,
@@ -148,7 +136,6 @@ const CONTEXT_RESOLUTION_RELATIVE_PATH = 'topology/resolution.json'
 const GUARD_INPUT_RELATIVE_PATH = 'orchestration/guard-input.json'
 const GUARD_UPLOAD_PARENT = '.guard-uploads'
 const MAXIMUM_CONTRACT_BYTES = 16 * 1024 * 1024
-const MAXIMUM_RUNTIME_EXECUTABLE_BYTES = 512 * 1024 * 1024
 const MAXIMUM_RUNTIME_MANIFEST_BYTES = 1 * 1024 * 1024
 const SUITE_PHASE_PROCESS_DEADLINE_MS = 540_000
 const OWNED_PROCESS_TERMINATION_GRACE_MS = 10_000
@@ -156,52 +143,34 @@ const RUNTIME_PROCESS_CLEANUP_RESERVE_MS = 30_000
 const BOOTSTRAP_RUNTIME_DIRECTORY_PREFIX = 'windshare-browsergate-bootstrap-'
 const BOOTSTRAP_OWNER_SPECS = Object.freeze({
   linux: Object.freeze({
-    kind: 'linux-process-owner',
-    packagePath: './web/scripts/browser-evidence/linuxprocessowner',
-    filename: 'browser-evidence-linux-process-owner',
+    kind: 'test-process-owner',
+    filename: 'testprocessowner',
   }),
   win32: Object.freeze({
-    kind: 'windows-job',
-    packagePath: './web/scripts/browser-evidence/windowsjob',
-    filename: 'browser-evidence-windowsjob.exe',
+    kind: 'test-process-owner',
+    filename: 'testprocessowner.exe',
   }),
-})
-const SILENT_OWNED_RUNTIME_OPERATION_LIFECYCLE = Object.freeze({
-  emit: () => undefined,
-  trace: () => undefined,
 })
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const CHECKOUT_SHA_PATTERN = /^[0-9a-f]{40}$/u
 const PORTABLE_TOKEN_PATTERN = /^[A-Za-z0-9._-]+$/u
-const WINDOWS_PATH_DELIMITER = ';'
-const D5_FORWARD_ENVIRONMENT_NAMES = Object.freeze([
-  'WINDSHARE_WINDOWS_OS_NETWORK',
-  'WINDSHARE_D5_E2E_LEASE_TOKEN',
-  'WINDSHARE_D5_RUNNER_PIPE',
-  'WINDSHARE_D5_CHILD_MANIFEST',
-  BROWSERGATE_RUNTIME_MANIFEST_ENV,
-  BROWSERGATE_RUNTIME_MANIFEST_SHA256_ENV,
-])
+const ORCHESTRATOR_MAXIMUM_TRACE_EVENTS = 4_096
+const ORCHESTRATOR_MAXIMUM_TRACE_BYTES = 8 * 1024 * 1024
+const GENERATED_SEMANTIC_MAXIMUM_TRACE_EVENTS = 8
+const GENERATED_SEMANTIC_MAXIMUM_TRACE_BYTES = 64 * 1024
+const OWNED_RUNTIME_OPERATION_MAXIMUM_TRACE_EVENTS = 4
+const OWNED_RUNTIME_OPERATION_MAXIMUM_TRACE_BYTES = 256 * 1024
+const RUNTIME_COMMAND_CONTRACT_FAILURE_KIND = 'runtime-command-contract-failed'
+const ORCHESTRATOR_TRACE_CONTEXT = new AsyncLocalStorage()
 
-export function localOperationPlan(
-  platform = process.platform,
-  { skipDependencyInstall = false } = {},
-) {
-  const dependencyOperations = localDependencyAcquisitionPlan({ skipDependencyInstall })
-  const mainOperations = platform === 'win32'
-    ? [
-        'main-pre-execution-discovery',
-        'main-preflight-integration',
-        'main-d5-focused-and-exclusive-remainder',
-      ]
-    : [
-        'main-pre-execution-discovery',
-        'main-preflight-integration',
-        'main-focused-samples',
-        'main-exclusive-remainder',
-      ]
+export function localOperationPlan(platform = process.platform) {
+  const mainOperations = [
+    'main-pre-execution-discovery',
+    'main-preflight-integration',
+    'main-focused-samples',
+    'main-exclusive-remainder',
+  ]
   return localGateOperationPlan({
-    dependencyInstallReused: dependencyOperations[0] === 'dependency-install-reuse',
     mainProductOperations: mainOperations,
     pionProductOperations: [
       'pion-pre-execution-discovery',
@@ -209,15 +178,6 @@ export function localOperationPlan(
       'pion-exclusive-remainder',
     ],
   })
-}
-
-export function localDependencyAcquisitionPlan({ skipDependencyInstall = false } = {}) {
-  if (typeof skipDependencyInstall !== 'boolean') {
-    throw new Error('dependency-install reuse selection must be boolean')
-  }
-  return Object.freeze([
-    skipDependencyInstall ? 'dependency-install-reuse' : 'dependency-install',
-  ])
 }
 
 /**
@@ -247,13 +207,8 @@ export function suiteExecutionPlan(suite, platform = process.platform) {
     ? Object.freeze({
         kind: 'vitest-integration',
         operationId: 'main-preflight-integration',
-        testFiles: Object.freeze([
-          CLEAN_BOOTSTRAP_INTEGRATION_TEST,
-          ...(platform === 'win32' ? [] : [NATIVE_PROCESS_GROUP_INTEGRATION_TEST]),
-        ]),
-        processBackendAuthority: platform === 'win32'
-          ? 'external-windows-process-gate'
-          : 'owned-native-process-group-test',
+        testFiles: Object.freeze([CLEAN_BOOTSTRAP_INTEGRATION_TEST]),
+        processBackendAuthority: 'external-test-process-owner',
       })
     : null
   return Object.freeze({
@@ -268,6 +223,7 @@ export function suiteExecutionPlan(suite, platform = process.platform) {
     remainder: Object.freeze({
       kind: 'playwright-remainder',
       operationId: suite + '-exclusive-remainder',
+      suite,
       configPath: suite === 'main'
         ? 'playwright.remainder.config.ts'
         : 'test/transport/webrtc/browser.remainder.playwright.config.ts',
@@ -291,9 +247,12 @@ export function expectedSampleIdentities(suite, runPolicy, browsers = BROWSER_EN
   requireSuite(suite)
   const policy = parseBrowserRunPolicy(runPolicy)
   if (
-    browsers.length !== BROWSER_ENGINES.length ||
-    browsers.some((browser, index) => browser !== BROWSER_ENGINES[index])
-  ) throw new Error('browser samples require the canonical ordered engine set')
+    !Array.isArray(browsers) || browsers.length < 1 ||
+    new Set(browsers).size !== browsers.length ||
+    browsers.some((browser) => !BROWSER_ENGINES.includes(browser)) ||
+    browsers.some((browser, index) => index > 0 &&
+      BROWSER_ENGINES.indexOf(browser) <= BROWSER_ENGINES.indexOf(browsers[index - 1]))
+  ) throw new Error('browser samples require a canonical ordered engine subset')
   return Object.freeze(browsers.flatMap((browser) =>
     Array.from({ length: policy.sampleCount }, (_, index) => Object.freeze({
       suite,
@@ -306,34 +265,45 @@ export function sampleChildCommand({
   suite,
   browser,
   platform,
-  insideWindowsD5,
   commandCapability,
+  focusedConfigPath,
 }) {
   requireSuite(suite)
   requireBrowser(browser)
-  if (typeof platform !== 'string' || typeof insideWindowsD5 !== 'boolean') {
+  if (typeof platform !== 'string') {
     throw new Error('sample child ownership context must be explicit')
   }
   if (commandCapability === null || typeof commandCapability !== 'object') {
-    throw new Error('sample child requires an authenticated runtime command capability')
+    throw new Error('sample child requires a runtime command contract')
   }
   const nodeExecutable = requireCanonicalAbsolutePath(
-    commandCapability.node?.path,
+    commandCapability.node,
     'sample runtime Node executable',
   )
   const playwrightCli = requireCanonicalAbsolutePath(
-    commandCapability.playwrightCli?.path,
+    commandCapability.playwrightCli,
     'sample runtime Playwright CLI',
   )
-  if (suite === 'main' && platform === 'win32' && !insideWindowsD5) {
-    throw new Error('Windows main samples must execute inside the leased D5 BrowserTests run')
-  }
+  const playwrightRunner = requireCanonicalAbsolutePath(
+    commandCapability.playwrightRunner,
+    'sample owned Playwright runner',
+  )
   const plan = suiteExecutionPlan(suite, platform)
+  const configPath = focusedConfigPath ?? plan.focused.configPath
+  if (
+    configPath !== plan.focused.configPath &&
+    !(suite === 'main' && browser === 'chromium' && configPath === 'playwright.smoke.config.ts')
+  ) throw new Error('sample focused config is outside its product-path authority')
   const arguments_ = [
+    playwrightRunner,
+    '--suite',
+    suite,
+    '--playwright-cli',
     playwrightCli,
+    '--',
     'test',
     '--config',
-    plan.focused.configPath,
+    configPath,
     plan.focused.specPath,
     '--project=' + browser,
     '--workers=1',
@@ -346,8 +316,58 @@ export function sampleChildCommand({
 }
 
 export async function runBrowserGateCommand(command, optionArguments) {
+  const journal = createOwnedTraceJournal({
+    label: 'browsergate orchestration trace',
+    maximumEvents: ORCHESTRATOR_MAXIMUM_TRACE_EVENTS,
+    maximumBytes: ORCHESTRATOR_MAXIMUM_TRACE_BYTES,
+  })
+  let exitCode
+  let primaryFailure
+  try {
+    exitCode = await ORCHESTRATOR_TRACE_CONTEXT.run(
+      journal,
+      () => dispatchBrowserGateCommand(command, optionArguments),
+    )
+  } catch (cause) {
+    primaryFailure = cause
+  } finally {
+    journal.finish()
+  }
+  let traces = journal.view.snapshot()
+  let traceFailure
+  try {
+    traces = requireCompleteOwnedTraceSnapshot(traces, 'browsergate orchestration trace')
+  } catch (cause) {
+    traceFailure = cause
+  }
+  if (primaryFailure !== undefined) {
+    throw new BrowserGateCommandError(primaryFailure, traces, traceFailure)
+  }
+  if (!Number.isSafeInteger(exitCode) || exitCode < 0 || exitCode > 255) {
+    throw new Error('browsergate command returned an invalid exit code')
+  }
+  return Object.freeze({
+    exitCode: traceFailure === undefined ? exitCode : 1,
+    traces,
+  })
+}
+
+export class BrowserGateCommandError extends Error {
+  constructor(primaryFailure, traces, traceFailure) {
+    super('browsergate command failed', {
+      cause: traceFailure === undefined
+        ? primaryFailure
+        : new AggregateError([primaryFailure, traceFailure], 'command and trace settlement failed'),
+    })
+    this.name = 'BrowserGateCommandError'
+    this.traces = traces
+  }
+}
+
+async function dispatchBrowserGateCommand(command, optionArguments) {
   const options = parseOptions(optionArguments)
   if (command === 'local') return localCommand(options)
+  if (command === 'smoke') return smokeCommand(options)
   if (command === 'build-runtime') return buildRuntimeCommand(options)
   if (command === 'dispose-runtime') return disposeRuntimeCommand(options)
   if (command === 'hosted-produce') return hostedProduceCommand(options)
@@ -395,7 +415,6 @@ async function buildRuntimeCommand(options) {
     process.stdout.write(JSON.stringify({
       command: 'build-runtime',
       manifestPath: runtime.manifestPath,
-      manifestSha256: runtime.manifestSha256,
       suites,
       artifacts: runtime.manifest.artifacts,
     }) + '\n')
@@ -408,7 +427,6 @@ async function buildRuntimeCommand(options) {
 function disposeRuntimeCommand(options) {
   assertOnlyOptions(options, [
     'runtime-manifest',
-    'runtime-manifest-sha256',
     'suite',
     'run-id',
     'checkout-sha',
@@ -438,7 +456,6 @@ function disposeRuntimeCommand(options) {
       requiredOption(options, 'runtime-manifest'),
       'browsergate runtime manifest',
     ),
-    manifestSha256: requiredOption(options, 'runtime-manifest-sha256'),
   })
   process.stdout.write(JSON.stringify({
     command: 'dispose-runtime',
@@ -457,15 +474,13 @@ async function localCommand(options) {
     'run-policy',
     'secret-env',
     'plan',
-    'skip-dependency-install',
   ])
   const policy = selectedRunPolicy(options, 'blocking')
-  const skipDependencyInstall = flagOption(options, 'skip-dependency-install')
   if (flagOption(options, 'plan')) {
     process.stdout.write(JSON.stringify({
       platform: process.platform,
       runPolicy: policy,
-      operations: localOperationPlan(process.platform, { skipDependencyInstall }),
+      operations: localOperationPlan(process.platform),
     }) + '\n')
     return 0
   }
@@ -477,11 +492,7 @@ async function localCommand(options) {
   requireCheckoutSha(checkoutSha)
   const runId = optionalOption(options, 'run-id') ?? localRunId(checkoutSha)
   requirePortableToken(runId, 'browser run ID')
-  const entryDeadlinePolicy = createLocalBrowsergateDeadlinePolicy(
-    policy,
-    process.platform,
-    { dependencyInstallReused: skipDependencyInstall },
-  )
+  const entryDeadlinePolicy = createLocalBrowsergateDeadlinePolicy(policy, process.platform)
   const deadlineAuthority = bootstrapDeadlineAuthority.handoff({
     grant: bootstrapQueryGrant,
     queryOutcome: 'succeeded',
@@ -499,19 +510,8 @@ async function localCommand(options) {
   const contexts = localSuiteContextPaths(outputRoot)
   const suiteSetupGrants = new Map()
   const secretNames = localGuardSecretNames(optionValues(options, 'secret-env'))
-  const projectionTrace = []
 
   const result = await runLocalBrowserGatePipeline({
-    dependencyInstallReused: skipDependencyInstall,
-    acquireDependencies: async () => Object.freeze({
-       exitCode: runOperation(
-         'dependency-install',
-         'local/dependency-install',
-         BROWSERGATE_OPERATION_CLASS.DEPENDENCY_INSTALL,
-         commandSpec(pnpmExecutable(), ['-C', 'web', 'install', '--frozen-lockfile']),
-         deadlineAuthority,
-       ),
-    }),
     runContract: async () => Object.freeze({
        exitCode: runOperation(
          'browser-contract',
@@ -537,6 +537,7 @@ async function localCommand(options) {
     }),
     buildRuntime: () => buildInvocationRuntime({
       suites: BROWSER_SUITES,
+      runId,
       deadlineAuthority,
       buildLeaseId: 'runtime/batch-build',
       preflightLeaseId: 'runtime/manifest-preflight',
@@ -588,7 +589,6 @@ async function localCommand(options) {
     runProduct: ({ runtime, suite }) => runSuiteProduction({
       contextPath: contexts[suite],
       suite,
-      insideWindowsD5: false,
       runtime,
       deadlineAuthority,
       suiteSetupGrant: suiteSetupGrants.get(suite),
@@ -602,7 +602,7 @@ async function localCommand(options) {
         suite,
         secretNames,
         settlementTrust: suiteOutcome.settlementTrust,
-        publisherHelper: runtime.artifact('artifact-publisher'),
+        publisherHelper: runtime.artifactCapability('artifact-publisher'),
         runtime,
         deadlineAuthority,
         leaseId: `${suite}/guard-seal`,
@@ -652,22 +652,98 @@ async function localCommand(options) {
         },
       )
     },
-    trace: (event) => {
-      projectionTrace.push(event)
-      const { operationId, outcome, ...context } = event
-      emit('local-hosted-projection', outcome, { operationId, ...context })
-    },
   })
 
+  for (const event of result.traces.events) {
+    const { operationId, outcome, ...context } = event
+    emit('local-hosted-projection', outcome, {
+      runId,
+      scenario: 'local-hosted-projection',
+      projectedOperationId: operationId,
+      ...context,
+    })
+  }
+
   emit('local', result.exitCode === 0 ? 'passed' : 'failed', {
+    runId,
+    scenario: 'local-browsergate',
     outputRoot,
     runPolicy: policy.policyId,
     contractJobOutcome: result.projection.contractJobOutcome,
     mainJobOutcome: result.projection.verdictDependencies.main,
     pionJobOutcome: result.projection.verdictDependencies.pion,
-    failedOperationCount: projectionTrace.filter(({ outcome }) => outcome === 'failure').length,
+    failedOperationCount: result.traces.events.filter(({ outcome }) => outcome === 'failure').length,
   })
   return result.exitCode
+}
+
+async function smokeCommand(options) {
+  assertOnlyOptions(options, ['output-root', 'run-id', 'checkout-sha', 'profile'])
+  const policy = browserRunPolicy('blocking')
+  const bootstrapDeadlineAuthority = createBootstrapDeadlineAuthority({ entryId: 'smoke/chromium' })
+  const bootstrapQueryGrant = bootstrapDeadlineAuthority.grantQuery()
+  const checkoutSha = optionalOption(options, 'checkout-sha') ?? gitCheckoutSha(bootstrapQueryGrant)
+  requireCheckoutSha(checkoutSha)
+  const runId = optionalOption(options, 'run-id') ?? localRunId(checkoutSha)
+  requirePortableToken(runId, 'browser smoke run ID')
+  const deadlineAuthority = bootstrapDeadlineAuthority.handoff({
+    grant: bootstrapQueryGrant,
+    queryOutcome: 'succeeded',
+    checkoutSha,
+    contextId: runId,
+    policy: createLocalBrowsergateDeadlinePolicy(policy, process.platform),
+  })
+  const outputRoot = resolve(optionalOption(options, 'output-root') ?? join(
+    REPOSITORY_ROOT,
+    'test-results',
+    'browser-smoke',
+    runId,
+  ))
+  const contextPath = join(outputRoot, 'main', 'context.json')
+  let runtime
+  try {
+    runtime = await buildInvocationRuntime({
+      suites: Object.freeze(['main']),
+      runId,
+      deadlineAuthority,
+      buildLeaseId: 'runtime/batch-build',
+      preflightLeaseId: 'runtime/manifest-preflight',
+    })
+    const topologyGrant = requireDeadlineGrant(
+      deadlineAuthority,
+      'main/topology',
+      BROWSERGATE_OPERATION_CLASS.TOPOLOGY_MATERIALIZATION,
+    )
+    await prepareEvidenceContext({
+      contextPath,
+      runId,
+      checkoutSha,
+      runPolicy: policy,
+      profilePath: resolve(optionalOption(options, 'profile') ?? DEFAULT_TOPOLOGY_PROFILE),
+      runtime,
+      authorizedTopologyGrant: topologyGrant,
+    })
+    const outcome = await runSamples({
+      contextPath,
+      suite: 'main',
+      runtime,
+      deadlineAuthority,
+      browsers: Object.freeze(['chromium']),
+      focusedConfigPath: 'playwright.smoke.config.ts',
+    })
+    emit('smoke', outcome.exitCode === 0 ? 'passed' : 'failed', {
+      runId,
+      checkoutSha,
+      suite: 'main',
+      browser: 'chromium',
+      expectedSampleCount: 1,
+      retryCount: 0,
+      outputRoot,
+    })
+    return outcome.exitCode
+  } finally {
+    runtime?.dispose()
+  }
 }
 async function hostedProduceCommand(options) {
   assertOnlyOptions(options, [
@@ -680,7 +756,6 @@ async function hostedProduceCommand(options) {
     'profile',
     'github-output',
     'runtime-manifest',
-    'runtime-manifest-sha256',
   ])
   const suite = requireSuite(requiredOption(options, 'suite'))
   const outputRoot = resolve(requiredOption(options, 'output-root'))
@@ -717,7 +792,6 @@ async function hostedProduceCommand(options) {
   const outcome = await runSuiteProduction({
     contextPath,
     suite,
-    insideWindowsD5: false,
     runtime,
     deadlineAuthority,
     suiteSetupGrant,
@@ -749,7 +823,6 @@ async function prepareCommand(options) {
     'run-policy',
     'profile',
     'runtime-manifest',
-    'runtime-manifest-sha256',
   ])
   const runtime = loadRuntimeFromOptions(options, BROWSER_SUITES)
   try {
@@ -771,54 +844,27 @@ async function samplesCommand(options) {
   assertOnlyOptions(options, [
     'context',
     'suite',
-    'inside-windows-d5',
     'runtime-manifest',
-    'runtime-manifest-sha256',
-    'settlement-handoff-path',
     'settlement-invocation-id',
   ])
   const suite = requireSuite(requiredOption(options, 'suite'))
   const runtime = loadRuntimeFromOptions(options, [suite], true)
   const contextPath = resolve(requiredOption(options, 'context'))
-  const insideWindowsD5 = flagOption(options, 'inside-windows-d5')
-  const handoffPath = optionalOption(options, 'settlement-handoff-path')
   const settlementInvocationId = optionalOption(options, 'settlement-invocation-id')
   try {
   const context = await readEvidenceContext(contextPath)
   const deadlineAuthority = createSuiteCommandDeadlineAuthority({
     context,
     suite,
-    entryId: insideWindowsD5 ? `windows-d5/${suite}/focused` : `command/${suite}/focused`,
+    entryId: `command/${suite}/focused`,
   })
-  let handoff = null
-  if (handoffPath !== undefined || settlementInvocationId !== undefined) {
-    if (!insideWindowsD5 || suite !== 'main') {
-      throw new Error('settlement handoff is valid only inside Windows D5 main')
-    }
-    if (handoffPath === undefined || settlementInvocationId === undefined) {
-      throw new Error('settlement handoff path and invocation ID must be provided together')
-    }
-    handoff = createD5SettlementTrustHandoff({
-      contextRoot: context.root,
-      runId: context.runId,
-      checkoutSha: context.checkoutSha,
-      runtimeManifestSha256: runtime.manifestSha256,
-      invocationId: settlementInvocationId,
-    })
-    if (handoff.outputPath !== requireCanonicalAbsolutePath(
-      resolve(handoffPath),
-      'D5 settlement handoff path',
-    )) throw new Error('D5 settlement handoff path differs from its outer invocation authority')
-  }
   const outcome = await runSamples({
     contextPath,
     suite,
-    insideWindowsD5,
     runtime,
     deadlineAuthority,
-    ...(handoff === null ? {} : { settlementInvocationId: handoff.invocationId }),
+    ...(settlementInvocationId === undefined ? {} : { settlementInvocationId }),
   })
-  if (handoff !== null) writeD5SettlementTrustHandoff(handoff, outcome.settlementTrust)
   return outcome.exitCode
   } finally {
     runtime.dispose()
@@ -833,26 +879,21 @@ export async function fullCommand(options, {
   assertOnlyOptions(options, [
     'context',
     'suite',
-    'inside-windows-d5',
     'runtime-manifest',
-    'runtime-manifest-sha256',
   ])
   const suite = requireSuite(requiredOption(options, 'suite'))
   const runtime = loadRuntime(options, [suite], true)
   try {
     const contextPath = resolve(requiredOption(options, 'context'))
     const context = await readContext(contextPath)
-    const insideWindowsD5 = flagOption(options, 'inside-windows-d5')
     return await runRemainder({
       contextPath,
       suite,
-      insideWindowsD5,
-      windowsJobHelper: windowsJobHelperFromRuntime(runtime),
       runtime,
       deadlineAuthority: createSuiteCommandDeadlineAuthority({
         context,
         suite,
-        entryId: insideWindowsD5 ? `windows-d5/${suite}/remainder` : `command/${suite}/remainder`,
+        entryId: `command/${suite}/remainder`,
       }),
     })
   } finally {
@@ -867,9 +908,7 @@ async function guardSuiteCommand(options) {
     'secret-env',
     'github-output',
     'runtime-manifest',
-    'runtime-manifest-sha256',
     'settlement-invocation-id',
-    'settlement-runtime-manifest-sha256',
     'settlement-public-key-spki-base64',
     'settlement-public-key-sha256',
   ])
@@ -890,7 +929,7 @@ async function guardSuiteCommand(options) {
       suite,
       secretNames: optionValues(options, 'secret-env'),
       settlementTrust: settlementTrustFromOptions(options),
-      publisherHelper: runtime.artifact('artifact-publisher'),
+      publisherHelper: runtime.artifactCapability('artifact-publisher'),
       runtime,
       deadlineAuthority,
       leaseId: `${suite}/guard-seal`,
@@ -1000,7 +1039,7 @@ export async function prepareEvidenceContext({
     'topology-materialization-' + basename(root),
     topologyLeaseId,
     BROWSERGATE_OPERATION_CLASS.TOPOLOGY_MATERIALIZATION,
-    commandSpec(runtime.artifact('topology-materializer').path, [
+    commandSpec(runtime.artifactCapability('topology-materializer').path, [
       '--profile',
       copiedProfilePath,
       '--output',
@@ -1102,7 +1141,6 @@ export async function readEvidenceContext(contextPath) {
 export async function runSuiteProduction({
   contextPath,
   suite,
-  insideWindowsD5,
   runtime,
   platform = process.platform,
   deadlineAuthority,
@@ -1111,13 +1149,9 @@ export async function runSuiteProduction({
   runPreflightIntegration = runSuitePreflightIntegration,
   runFocused = runSamples,
   runRemainder = runRemainderSuite,
-  runWindowsD5 = executeOwnedWindowsD5,
 }) {
   requireSuite(suite)
   const plan = suiteExecutionPlan(suite, platform)
-  const windowsJobHelper = platform === 'win32'
-    ? windowsJobHelperFromRuntime(runtime)
-    : null
   const phaseOutcomes = {
     preExecutionDiscovery: pendingPhaseOutcome(plan.preExecutionDiscovery),
     preflightIntegration: plan.preflightIntegration === null
@@ -1134,8 +1168,6 @@ export async function runSuiteProduction({
     execute: () => runPreExecutionDiscovery({
       contextPath,
       suite,
-      insideWindowsD5,
-      windowsJobHelper,
       runtime,
       platform,
       authorizedGrant: suiteSetupGrant,
@@ -1150,8 +1182,6 @@ export async function runSuiteProduction({
       execute: () => runPreflightIntegration({
         contextPath,
         suite,
-        insideWindowsD5,
-        windowsJobHelper,
         runtime,
         platform,
         authorizedGrant: suiteSetupGrant,
@@ -1160,36 +1190,10 @@ export async function runSuiteProduction({
     })
   }
 
-  if (suite === 'main' && platform === 'win32' && !insideWindowsD5) {
-    let d5 = Object.freeze({ exitCode: 1, settlementTrust: null })
-    try {
-      d5 = await runWindowsD5({
-        contextPath,
-        windowsJobHelper,
-        runtime,
-        ...optionalDeadlineAuthority(deadlineAuthority),
-      })
-    } catch (cause) {
-      emit('main-d5-focused-and-exclusive-remainder', 'failed', {
-        error: errorMessage(cause),
-      })
-    }
-    phaseOutcomes.focused = phaseOutcome(plan.focused, d5.exitCode, {
-      executionAuthority: 'main-d5-focused-and-exclusive-remainder',
-    })
-    phaseOutcomes.remainder = phaseOutcome(plan.remainder, d5.exitCode, {
-      executionAuthority: 'main-d5-focused-and-exclusive-remainder',
-    })
-    settlementTrust = d5.settlementTrust
-    return productionOutcome(phaseOutcomes, settlementTrust)
-  }
-
   try {
     const focused = await runFocused({
       contextPath,
       suite,
-      insideWindowsD5,
-      windowsJobHelper,
       runtime,
       platform,
       ...optionalDeadlineAuthority(deadlineAuthority),
@@ -1204,8 +1208,6 @@ export async function runSuiteProduction({
     const remainderExitCode = await runRemainder({
       contextPath,
       suite,
-      insideWindowsD5,
-      windowsJobHelper,
       runtime,
       platform,
       ...optionalDeadlineAuthority(deadlineAuthority),
@@ -1295,136 +1297,30 @@ function createSuiteCommandDeadlineAuthority({ context, suite, entryId }) {
   })
 }
 
-export async function executeOwnedWindowsD5({
-  contextPath,
-  executeHarness = executeD5Harness,
-  powershellExecutable = null,
-  runtime,
-  prepareSettlementHandoff = prepareD5SettlementTrustHandoff,
-  readSettlementHandoff = readD5SettlementTrustHandoff,
-  readContext = readEvidenceContext,
-}) {
-  const operationId = 'main-d5-focused-and-exclusive-remainder'
-  const context = await readContext(contextPath)
-  const harnessDeadlineMs = createSuiteDeadlinePolicy('main', context.runPolicy).normalWorkBudgetMs
-  const settlementHandoff = await prepareSettlementHandoff({
-    contextPath,
-    runtimeManifestSha256: runtime.manifestSha256,
-  })
-
-  const command = Object.freeze({
-    executable: requireCanonicalAbsolutePath(
-      powershellExecutable ?? resolveWindowsPowerShellExecutable(),
-      'D5 PowerShell executable',
-    ),
-    arguments: Object.freeze([
-      '-NoLogo',
-      '-NoProfile',
-      '-File',
-      WINDOWS_D5_SCRIPT,
-      '-Mode',
-      'BrowserTests',
-      '-BrowserEvidenceContext',
-      requireCanonicalAbsolutePath(contextPath, 'browser evidence context'),
-      '-BrowserSettlementTrustPath',
-      settlementHandoff.outputPath,
-      '-BrowserSettlementInvocationId',
-      settlementHandoff.invocationId,
-    ]),
-    cwd: REPOSITORY_ROOT,
-    environment: sampleProcessEnvironment({
-      ...d5ChildEnvironment(),
-      ...runtime.environmentForSuite('main'),
-    }, {}, process.env),
-  })
-  emit(operationId, 'started', {
-    containmentBackend: 'd5-harness-with-leaf-windows-jobs',
-    deadlineMs: harnessDeadlineMs,
-  })
-  const execution = await executeHarness({
-    operationId,
-    command,
-    deadlineMs: harnessDeadlineMs,
-  })
-  const exitCode = runnerProcessExitCode(execution.processEvidence, execution.timedOut)
-  if (execution.launched !== true) {
-    throw new Error('D5 harness did not launch')
-  }
-  const settlementTrust = await readSettlementHandoff(settlementHandoff)
-  emit(operationId, exitCode === 0 ? 'completed' : 'failed', {
-    timedOut: execution.timedOut,
-    processTerminal: execution.processEvidence.terminal,
-    exitCode,
-  })
-  return Object.freeze({ exitCode, settlementTrust })
-}
-
-function executeD5Harness({ command, deadlineMs }) {
-  const result = spawnSync(command.executable, command.arguments, {
-    cwd: command.cwd,
-    env: command.environment,
-    shell: false,
-    stdio: 'inherit',
-    timeout: deadlineMs,
-    killSignal: 'SIGKILL',
-  })
-  const timedOut = result.error?.code === 'ETIMEDOUT'
-  const processEvidence = Number.isInteger(result.status)
-    ? Object.freeze({ terminal: 'exited', exitCode: result.status })
-    : typeof result.signal === 'string'
-      ? Object.freeze({ terminal: 'signaled', signal: result.signal })
-      : Object.freeze({
-          terminal: 'spawn-failed',
-          errorCode: result.error?.code ?? 'UNKNOWN',
-          errorMessage: errorMessage(result.error ?? new Error('D5 harness did not report a terminal')),
-        })
-  return Object.freeze({
-    processEvidence,
-    timedOut,
-    launched: result.error?.code !== 'ENOENT',
-  })
-}
-
-export async function prepareD5SettlementTrustHandoff({
-  contextPath,
-  runtimeManifestSha256,
-}) {
-  const context = await readEvidenceContext(contextPath)
-  return createD5SettlementTrustHandoff({
-    contextRoot: context.root,
-    runId: context.runId,
-    checkoutSha: context.checkoutSha,
-    runtimeManifestSha256,
-  })
-}
-
 export async function runSamples({
   contextPath,
   suite,
-  insideWindowsD5 = false,
-  windowsJobHelper = null,
   runtime,
   settlementInvocationId,
   createSettlementSigner = createProcessSettlementSigner,
   executeOwnedCommand = executeOwnedRuntimeCommand,
   deadlineAuthority,
   platform = process.platform,
+  browsers = BROWSER_ENGINES,
+  focusedConfigPath,
 }) {
   requireSuite(suite)
-  if (insideWindowsD5) assertInsideWindowsD5(suite)
   const context = await readEvidenceContext(contextPath)
   const suiteRoot = context.root
   if (basename(suiteRoot) !== suite) {
     throw new Error('suite context root name must equal its suite identity')
   }
   const sampleOutputRoot = dirname(suiteRoot)
-  const identities = expectedSampleIdentities(suite, context.runPolicy)
+  const identities = expectedSampleIdentities(suite, context.runPolicy, browsers)
   const ledgerSamples = []
   const failures = []
-  const ownershipEnvironment = d5SettlementOwnershipEnvironment(insideWindowsD5, process.env)
   const signer = createSettlementSigner({
     invocationId: settlementInvocationId,
-    runtimeManifestSha256: runtime.manifestSha256,
   })
   try {
     for (const identity of identities) {
@@ -1433,7 +1329,6 @@ export async function runSamples({
         identity.browser,
         'sample-' + identity.sampleIndex,
       )
-      const operationId = suite + '-' + identity.browser + '-sample-' + identity.sampleIndex
       let exitCode = 1
       try {
         const authority = await createSampleCommandAuthority({
@@ -1442,50 +1337,31 @@ export async function runSamples({
           suite,
           sampleOutputRoot,
           sampleDirectory,
-          insideWindowsD5,
           platform,
           runtime,
+          focusedConfigPath,
         })
+        const operationId = authority.identity.operationId
+        const scenario = authority.identity.scenario
         const commandSha256 = canonicalSampleCommandSha256(authority)
-        const command = sampleDriverCommand(authority, { ownershipEnvironment })
-        const authenticatedWindowsHelper = platform === 'win32'
-          ? windowsJobHelper ?? Object.freeze({
-              path: authority.runtime.processOwner.path,
-              byteLength: authority.runtime.processOwner.byteLength,
-              sha256: authority.runtime.processOwner.sha256,
-            })
-          : null
-        if (
-          authenticatedWindowsHelper !== null &&
-          (
-            authenticatedWindowsHelper.path !== authority.runtime.processOwner.path ||
-            authenticatedWindowsHelper.byteLength !== authority.runtime.processOwner.byteLength ||
-            authenticatedWindowsHelper.sha256 !== authority.runtime.processOwner.sha256
-          )
-        ) throw new Error('sample Windows Job helper differs from its signed command authority')
+        const runtimeOperation = sampleDriverOwnedRuntimeOperation(authority)
+        const processOwner = Object.freeze({
+          path: authority.runtime.processOwner.path,
+        })
         const execution = await executeOwnedRuntimeOperation({
           operationId,
           leaseId: `${suite}/focused/${identity.browser}/sample-${identity.sampleIndex}`,
           operationClass: BROWSERGATE_OPERATION_CLASS.BROWSER_SAMPLE,
-          command,
+          command: runtimeOperation.command,
           platform,
-          inheritedEnvironment: command.environment,
-          ...(platform === 'win32'
-            ? { windowsJobHelper: authenticatedWindowsHelper }
-            : {}),
-          ...(platform === 'linux'
-            ? {
-                linuxProcessOwner: Object.freeze({
-                  path: authority.runtime.processOwner.path,
-                  byteLength: authority.runtime.processOwner.byteLength,
-                  sha256: authority.runtime.processOwner.sha256,
-                }),
-              }
-            : {}),
+          runId: context.runId,
+          scenario,
+          inheritedEnvironment: runtimeOperation.inheritedEnvironment,
+          processOwner,
           deadlineAuthority,
           executeOwnedCommand,
         })
-        exitCode = runnerProcessExitCode(execution.processEvidence, execution.timedOut)
+        exitCode = runnerProcessExitCode(execution)
         requireSettledSampleExecution(execution)
         const postExecutionAuthority = await createSampleCommandAuthority({
           context,
@@ -1493,14 +1369,14 @@ export async function runSamples({
           suite,
           sampleOutputRoot,
           sampleDirectory,
-          insideWindowsD5,
           platform,
           runtime,
+          focusedConfigPath,
         })
         if (JSON.stringify(postExecutionAuthority) !== JSON.stringify(authority)) {
           throw new Error('sample command authority changed across its owned execution')
         }
-        const record = parseSampleRunnerRecord(execution.stdout, identity, sampleDirectory)
+        const record = parseSampleRunnerRecord(execution.stdout, authority.identity, sampleDirectory)
         if (exitCode !== (record.acceptedBeforeGuard ? 0 : 1)) {
           throw new Error('sample driver exit code differs from its terminal candidate')
         }
@@ -1522,7 +1398,7 @@ export async function runSamples({
           resultBytes: finalized.bytes,
           commandSha256,
           execution,
-          ownershipBackend: authority.ownership.backend,
+          ownershipBackend: authority.ownership.outerAuthority.backend,
         })
         ledgerSamples.push(Object.freeze({
           browser: identity.browser,
@@ -1577,16 +1453,11 @@ export async function runSamples({
 export async function runRemainderSuite({
   contextPath,
   suite,
-  insideWindowsD5 = false,
-  windowsJobHelper = null,
   runtime,
   platform = process.platform,
   deadlineAuthority,
 }) {
   requireSuite(suite)
-  if (suite === 'main' && platform === 'win32' && !insideWindowsD5) {
-    throw new Error('Windows main remainder must execute within the single D5 production operation')
-  }
   const context = await readEvidenceContext(contextPath)
   const plan = suiteExecutionPlan(suite, platform)
   return executeOwnedSuitePhase({
@@ -1594,10 +1465,10 @@ export async function runRemainderSuite({
     leaseId: `${suite}/remainder`,
     environment: {
       ...topologyEnvironment(context),
-      ...(insideWindowsD5 ? d5ChildEnvironment() : {}),
       ...runtime.environmentForSuite(suite),
     },
-    windowsJobHelper,
+    runtime,
+    runId: context.runId,
     platform,
     ...optionalDeadlineAuthority(deadlineAuthority),
   })
@@ -1606,8 +1477,6 @@ export async function runRemainderSuite({
 export async function runSuitePreExecutionDiscovery({
   contextPath,
   suite,
-  insideWindowsD5 = false,
-  windowsJobHelper = null,
   runtime,
   platform = process.platform,
   deadlineAuthority,
@@ -1621,10 +1490,10 @@ export async function runSuitePreExecutionDiscovery({
     authorizedGrant,
     environment: {
       ...topologyEnvironment(context),
-      ...(insideWindowsD5 ? d5ChildEnvironment() : {}),
       ...runtime.environmentForSuite(suite),
     },
-    windowsJobHelper,
+    runtime,
+    runId: context.runId,
     platform,
     ...optionalDeadlineAuthority(deadlineAuthority),
   })
@@ -1633,8 +1502,6 @@ export async function runSuitePreExecutionDiscovery({
 export async function runSuitePreflightIntegration({
   contextPath,
   suite,
-  insideWindowsD5 = false,
-  windowsJobHelper = null,
   runtime,
   platform = process.platform,
   deadlineAuthority,
@@ -1650,10 +1517,10 @@ export async function runSuitePreflightIntegration({
     authorizedGrant,
     environment: {
       ...topologyEnvironment(context),
-      ...(insideWindowsD5 ? d5ChildEnvironment() : {}),
       ...runtime.environmentForSuite(suite),
     },
-    windowsJobHelper,
+    runtime,
+    runId: context.runId,
     platform,
     ...optionalDeadlineAuthority(deadlineAuthority),
   })
@@ -1663,12 +1530,12 @@ export async function executeOwnedSuitePhase({
   phase,
   leaseId,
   environment,
-  windowsJobHelper,
+  runtime,
+  runId,
   deadlineAuthority,
   authorizedGrant,
   platform = process.platform,
-  executeNative = executeNativeProcessGroupCommand,
-  executeJob = executeWindowsJob,
+  executeOwnedCommand = executeOwnedRuntimeCommand,
 }) {
   const canonicalPhase = requireSuitePhase(phase)
   const operationId = canonicalPhase.operationId
@@ -1686,62 +1553,55 @@ export async function executeOwnedSuitePhase({
     })
     return 1
   }
-  const command = Object.freeze({
-    ...suitePhaseCommand(canonicalPhase),
-    environment: sampleProcessEnvironment(environment, {}, process.env),
-  })
+  const commandCapability = runtime.sampleCommandCapability()
+  // Identity is an immediate-child authority injected by testprocessowner from
+  // the request fields below. Repeating it in the command environment would
+  // create a second, unauthenticated identity channel.
+  const commandEnvironment = sampleProcessEnvironment(environment, {}, process.env)
+  const command = suitePhaseCommand(canonicalPhase, commandCapability)
   emit(operationId, 'started', {
     operationClass,
-    containmentBackend: platform === 'win32' ? 'windows-job' : 'native-process-group',
+    containmentBackend: 'test-process-owner',
     phaseKind: canonicalPhase.kind,
     deadlineMs: Math.min(SUITE_PHASE_PROCESS_DEADLINE_MS, grant.timeoutMs),
   })
-  const trace = ({ milestone, context: traceContext = {} }) => {
-    emit(operationId, milestone, traceContext)
-  }
   const processDeadlineMs = Math.min(SUITE_PHASE_PROCESS_DEADLINE_MS, grant.timeoutMs)
-  const execution = platform === 'win32'
-    ? await executeJob({
-        helperPath: requireWindowsJobHelper(windowsJobHelper),
-        operationId,
-        command,
-        inheritedEnvironment: Object.freeze({}),
-        injectedEnvironment: Object.freeze({}),
-        deadlineMs: processDeadlineMs,
-        terminationGraceMs: OWNED_PROCESS_TERMINATION_GRACE_MS,
-        stdout: (chunk) => process.stdout.write(chunk),
-        stderr: (chunk) => process.stderr.write(chunk),
-      })
-    : await executeNative({
-        command,
-        environment: command.environment,
-        deadlineMs: processDeadlineMs,
-        terminationGraceMs: OWNED_PROCESS_TERMINATION_GRACE_MS,
-        stdout: (chunk) => process.stdout.write(chunk),
-        stderr: (chunk) => process.stderr.write(chunk),
-        trace,
-      })
-  const exitCode = runnerProcessExitCode(execution.processEvidence, execution.timedOut)
+  const execution = await executeOwnedCommand({
+    operationId,
+    runId,
+    scenario: `${canonicalPhase.suite ?? 'main'}-${canonicalPhase.kind}`,
+    command,
+    platform,
+    inheritedEnvironment: commandEnvironment,
+    deadlineMs: processDeadlineMs,
+    terminationGraceMs: OWNED_PROCESS_TERMINATION_GRACE_MS,
+    processOwner: runtime.artifactCapability('test-process-owner'),
+  })
+  process.stdout.write(execution.stdout)
+  process.stderr.write(execution.stderr)
+  requireSettledOwnedTree(execution, operationId)
+  const exitCode = runnerProcessExitCode(execution)
   emit(operationId, exitCode === 0 ? 'completed' : 'failed', {
     operationClass,
-    timedOut: execution.timedOut,
+    terminationReason: execution.ownershipEvidence.terminationReason,
     processTerminal: execution.processEvidence.terminal,
     exitCode,
   })
   return exitCode
 }
 
-function suitePhaseCommand(phase) {
+function suitePhaseCommand(phase, commandCapability) {
+  const node = commandCapability.node
   if (phase.kind === 'playwright-discovery') {
     return Object.freeze({
-      executable: process.execPath,
+      executable: node,
       arguments: Object.freeze([PLAYWRIGHT_SUITE_DISCOVERY, phase.suite]),
       cwd: REPOSITORY_ROOT,
     })
   }
   if (phase.kind === 'vitest-integration') {
     return Object.freeze({
-      executable: process.execPath,
+      executable: node,
       arguments: Object.freeze([
         VITEST_CLI,
         'run',
@@ -1753,12 +1613,19 @@ function suitePhaseCommand(phase) {
   }
   if (phase.kind === 'playwright-remainder') {
     return Object.freeze({
-      executable: process.execPath,
+      executable: node,
       arguments: Object.freeze([
-        PLAYWRIGHT_CLI,
+        commandCapability.playwrightRunner,
+        '--suite',
+        phase.suite,
+        '--playwright-cli',
+        commandCapability.playwrightCli,
+        '--',
         'test',
         '--config',
         phase.configPath,
+        '--workers=1',
+        '--retries=0',
       ]),
       cwd: join(REPOSITORY_ROOT, 'web'),
     })
@@ -1805,10 +1672,9 @@ export async function runGuardSuite({
     throw new Error('guard suite deadline lease is unavailable')
   }
   const guardPublisherPhase = suiteExecutionPlan(suite, platform).guardPublisher
-  if (
-    settlementTrust === null || typeof settlementTrust !== 'object' ||
-    settlementTrust.runtimeManifestSha256 !== runtime.manifestSha256
-  ) throw new Error('guard settlement trust differs from its authenticated runtime')
+  if (settlementTrust === null || typeof settlementTrust !== 'object') {
+    throw new Error('guard settlement trust is required')
+  }
   const context = await readEvidenceContext(contextPath)
   if (basename(context.root) !== suite) {
     throw new Error('guard suite context root name must equal its suite identity')
@@ -1897,7 +1763,6 @@ export async function runGuardSuite({
       suite,
       sampleOutputRoot: dirname(context.root),
       sampleDirectory,
-      insideWindowsD5: suite === 'main' && platform === 'win32',
       platform,
       runtime,
     })
@@ -1935,6 +1800,11 @@ export async function runGuardSuite({
     directoryPublisher: createNativeDirectoryPublisher(publisherHelper),
     explicitSecrets: Object.freeze(explicitSecrets),
   })
+  requireCompleteArtifactGuardTrace(
+    guarded.traces,
+    `browsergate ${suite} artifact guard trace`,
+  )
+  const artifactGuardTraces = guarded.traces
   const guardOutcome = aggregateGuardOutcome(guarded.guards, guarded.upload)
   const sampleOutcomes = Object.freeze(guarded.guards.map((guard) => Object.freeze({
     browser: guard.browser,
@@ -1948,6 +1818,7 @@ export async function runGuardSuite({
     manifestSha256: guarded.upload?.manifestSha256 ?? null,
     manifestByteLength: guarded.upload?.manifestByteLength ?? null,
     sampleOutcomes,
+    artifactGuardTraces,
     phaseOutcomes: Object.freeze({
       guardPublisher: phaseOutcome(
         guardPublisherPhase,
@@ -1963,6 +1834,7 @@ export async function runGuardSuite({
     suite,
     guardOutcome,
     sampleOutcomes,
+    artifactGuardTraces,
     phaseOutcomes: outcome.phaseOutcomes,
   })
   emit(guardPublisherPhase.operationId, guardOutcome, {
@@ -2034,11 +1906,11 @@ function aggregateGuardOutcome(guards, upload) {
 
 export async function buildInvocationRuntime({
   suites,
+  runId = 'browsergate',
   outputParent = tmpdir(),
   preserveRuntimeRoot = false,
   executeBuild,
   executePreflight,
-  trace = runtimeBuildTrace,
   platform = process.platform,
   inheritedEnvironment = process.env,
   deadlineAuthority,
@@ -2047,7 +1919,6 @@ export async function buildInvocationRuntime({
   executeOwnedCommand = executeOwnedRuntimeCommand,
   resolveExecutable = resolveHostExecutable,
   createBootstrapOwner = createBootstrapProcessOwnerAuthority,
-  generatedSemanticTrace = runtimeGeneratedSemanticTrace,
   authenticateRuntimeFile = authenticatedFileAuthority,
   readRuntimeNodeVersion = readPinnedNodeVersion,
 } = {}) {
@@ -2055,6 +1926,7 @@ export async function buildInvocationRuntime({
   const defaults = executeBuild === undefined || executePreflight === undefined
     ? await createRuntimeExecutionExecutors({
         platform,
+        runId,
         outputParent: outputParentPath,
         inheritedEnvironment,
         deadlineAuthority,
@@ -2063,13 +1935,12 @@ export async function buildInvocationRuntime({
         executeOwnedCommand,
         resolveExecutable,
         createBootstrapOwner,
-        generatedSemanticTrace,
         authenticateRuntimeFile,
         readRuntimeNodeVersion,
       })
     : undefined
   if (defaults === undefined) {
-    return buildBrowsergateRuntime({
+    const runtime = await buildBrowsergateRuntime({
       repositoryRoot: REPOSITORY_ROOT,
       suites: canonicalRequestedSuites(suites),
       platform,
@@ -2079,8 +1950,9 @@ export async function buildInvocationRuntime({
       nodeExecutable: process.execPath,
       executeBuild,
       executePreflight,
-      trace,
     })
+    replayRuntimeBuildTraces(runtime.traces)
+    return runtime
   }
 
   let runtime
@@ -2097,7 +1969,6 @@ export async function buildInvocationRuntime({
       nodeExecutable: process.execPath,
       executeBuild: defaults.executeBuild,
       executePreflight: defaults.executePreflight,
-      trace,
     })
     await defaults.verifyHandoff(runtime)
   } catch (cause) {
@@ -2108,6 +1979,8 @@ export async function buildInvocationRuntime({
   } catch (cause) {
     failures.push(cause)
   }
+  const generatedSemanticTraces = defaults.generatedSemanticTraces.snapshot()
+  replayGeneratedSemanticTraces(generatedSemanticTraces)
   if (failures.length > 0) {
     if (runtime !== undefined) {
       try {
@@ -2116,14 +1989,37 @@ export async function buildInvocationRuntime({
         failures.push(cause)
       }
     }
-    if (failures.length === 1) throw failures[0]
-    throw new AggregateError(failures, 'browser runtime bootstrap handoff did not settle cleanly')
+    throw new BrowserRuntimeBootstrapError(failures, generatedSemanticTraces)
   }
-  return runtime
+  replayRuntimeBuildTraces(runtime.traces)
+  return Object.freeze({ ...runtime, generatedSemanticTraces })
+}
+
+export class BrowserRuntimeBootstrapError extends Error {
+  constructor(failures, generatedSemanticTraces) {
+    const cause = failures.length === 1
+      ? failures[0]
+      : new AggregateError(failures, 'browser runtime bootstrap handoff did not settle cleanly')
+    super(
+      failures.length === 1 && failures[0] instanceof Error
+        ? failures[0].message
+        : 'browser runtime bootstrap handoff did not settle cleanly',
+      { cause },
+    )
+    this.name = 'BrowserRuntimeBootstrapError'
+    this.generatedSemanticTraces = generatedSemanticTraces
+  }
+}
+
+function replayRuntimeBuildTraces(snapshot) {
+  for (const { milestone, context = {} } of snapshot.events) {
+    emit('browser-runtime-build', milestone.replace(/^runtime-build-/u, ''), context)
+  }
 }
 
 function createRuntimeExecutionExecutors({
   platform,
+  runId,
   outputParent,
   inheritedEnvironment,
   deadlineAuthority,
@@ -2132,11 +2028,13 @@ function createRuntimeExecutionExecutors({
   executeOwnedCommand,
   resolveExecutable,
   createBootstrapOwner,
-  generatedSemanticTrace,
   authenticateRuntimeFile,
   readRuntimeNodeVersion,
 }) {
-  const goExecutable = resolveExecutable('go', { platform, environment: inheritedEnvironment })
+  // Platform entrypoints retain one verified Go application. Nested runtime
+  // builds consume that exact handle instead of resolving mutable PATH state.
+  const goExecutable = inheritedEnvironment.WINDSHARE_GO_EXECUTABLE
+    ?? resolveExecutable('go', { platform, environment: inheritedEnvironment })
   const buildGrant = requireDeadlineGrant(
     deadlineAuthority,
     buildLeaseId,
@@ -2158,6 +2056,11 @@ function createRuntimeExecutionExecutors({
   let bootstrap = null
   let bootstrapPromise
   let adoptedFinalOwner = null
+  const generatedSemanticJournal = createOwnedTraceJournal({
+    label: 'generated semantic runtime preflight trace',
+    maximumEvents: GENERATED_SEMANTIC_MAXIMUM_TRACE_EVENTS,
+    maximumBytes: GENERATED_SEMANTIC_MAXIMUM_TRACE_BYTES,
+  })
 
   async function acquireBootstrapOwner() {
     if (blockedGrant !== null) return null
@@ -2173,6 +2076,8 @@ function createRuntimeExecutionExecutors({
 
   function unavailableBootstrapExecution(operationId, operationClass) {
     emit(operationId, 'not-run', {
+      runId,
+      scenario: 'browsergate-runtime-command',
       operationClass,
       phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
       reason: blockedGrant.reason,
@@ -2180,7 +2085,7 @@ function createRuntimeExecutionExecutors({
       remainingBudgetMs: blockedGrant.remainingBudgetMs,
       bootstrapOperationClass: blockedGrant.operationClass,
     })
-    return failedOwnedExecution()
+    return failedOwnedExecution(platform)
   }
 
   function selectedOwner(availableArtifacts) {
@@ -2189,15 +2094,18 @@ function createRuntimeExecutionExecutors({
   }
 
   return Object.freeze({
+    generatedSemanticTraces: generatedSemanticJournal.view,
     async verifyGeneratedSemantic() {
       const startedAtMs = Date.now()
-      let nodeExecutableAuthority
       let result
-      traceGeneratedSemanticPreflight(generatedSemanticTrace, 'started', {
+      let execution
+      appendGeneratedSemanticTrace(generatedSemanticJournal, 'started', {
+        runId,
+        scenario: 'generated-semantic-runtime-preflight',
         mode: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_MODE,
         operationClass: BROWSERGATE_OPERATION_CLASS.PREFLIGHT,
         phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
-        owner: platform === 'win32' ? 'windows-job' : 'linux-subreaper',
+        owner: 'test-process-owner',
       })
       try {
         if (await acquireBootstrapOwner() === null) {
@@ -2206,24 +2114,19 @@ function createRuntimeExecutionExecutors({
             'generated semantic verifier bootstrap owner lease is unavailable',
           )
         }
-        nodeExecutableAuthority = await authenticateRuntimeFile(
-          process.execPath,
-          MAXIMUM_RUNTIME_EXECUTABLE_BYTES,
-          'generated semantic Node executable',
-        )
         const verifierEnvironment = createGeneratedSemanticEnvironment({
           platform,
           temporaryRoot: dirname(bootstrap.artifact.path),
           inheritedEnvironment,
         })
-        const execution = await executeOwnedRuntimeOperation({
+        execution = await executeOwnedRuntimeOperation({
           operationId: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID,
+          runId,
+          scenario: 'generated-semantic-runtime-preflight',
           authorizedGrant: preflightGrant,
           operationClass: BROWSERGATE_OPERATION_CLASS.PREFLIGHT,
           command: Object.freeze({
-            executable: nodeExecutableAuthority.path,
-            executableByteLength: nodeExecutableAuthority.byteLength,
-            executableSha256: nodeExecutableAuthority.sha256,
+            executable: process.execPath,
             arguments: Object.freeze([GENERATED_SEMANTIC_VERIFIER]),
             cwd: REPOSITORY_ROOT,
           }),
@@ -2232,7 +2135,6 @@ function createRuntimeExecutionExecutors({
           ...runtimeOwnerRequest(platform, bootstrap.artifact),
           deadlineAuthority,
           executeOwnedCommand,
-          operationLifecycle: SILENT_OWNED_RUNTIME_OPERATION_LIFECYCLE,
         })
         result = requireGeneratedSemanticRuntimeExecution({ execution, platform })
         const expectedArtifact = await authenticateRuntimeFile(
@@ -2246,31 +2148,52 @@ function createRuntimeExecutionExecutors({
           expectedArtifact,
         })
         const evidence = {
+          runId,
+          scenario: 'generated-semantic-runtime-preflight',
           mode: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_MODE,
           outcome: result.outcome,
-          nodeExecutableByteLength: nodeExecutableAuthority.byteLength,
-          nodeExecutableSha256: nodeExecutableAuthority.sha256,
+          cleanupOutcome: execution.cleanupOutcome,
+          treeEmpty: execution.treeEmpty,
           ...generatedSemanticResultTraceContext(result),
         }
-        traceGeneratedSemanticPreflight(generatedSemanticTrace, 'artifact-validated', evidence)
-        traceGeneratedSemanticPreflight(generatedSemanticTrace, 'settled', {
+        appendGeneratedSemanticTrace(generatedSemanticJournal, 'artifact-validated', evidence)
+        appendGeneratedSemanticTrace(generatedSemanticJournal, 'settled', {
+          runId,
+          scenario: 'generated-semantic-runtime-preflight',
           ...evidence,
           elapsedMs: Date.now() - startedAtMs,
         })
+        generatedSemanticJournal.finish()
+        requireCompleteOwnedTraceSnapshot(
+          generatedSemanticJournal.view.snapshot(),
+          'generated semantic runtime preflight trace',
+        )
         return execution
       } catch (cause) {
-        traceGeneratedSemanticPreflight(generatedSemanticTrace, 'settled', {
+        if (!generatedSemanticJournal.view.snapshot().completed) {
+          appendGeneratedSemanticTrace(generatedSemanticJournal, 'settled', {
+          runId,
+          scenario: 'generated-semantic-runtime-preflight',
           mode: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_MODE,
           outcome: 'failed',
+          cleanupOutcome: execution?.cleanupOutcome ?? 'not-observed',
+          treeEmpty: execution?.treeEmpty ?? false,
           elapsedMs: Date.now() - startedAtMs,
-          ...(nodeExecutableAuthority === undefined
-            ? {}
-            : {
-                nodeExecutableByteLength: nodeExecutableAuthority.byteLength,
-                nodeExecutableSha256: nodeExecutableAuthority.sha256,
-              }),
           ...generatedSemanticPreflightFailureContext(cause),
-        })
+          })
+          generatedSemanticJournal.finish()
+        }
+        try {
+          requireCompleteOwnedTraceSnapshot(
+            generatedSemanticJournal.view.snapshot(),
+            'generated semantic runtime preflight trace',
+          )
+        } catch (traceFailure) {
+          throw new AggregateError(
+            [cause, traceFailure],
+            'generated semantic verifier and trace settlement failed',
+          )
+        }
         throw new Error('generated semantic verifier failed before runtime batch build', { cause })
       }
     },
@@ -2284,6 +2207,8 @@ function createRuntimeExecutionExecutors({
       const owner = selectedOwner(build.availableArtifacts)
       return executeOwnedRuntimeOperation({
         operationId: 'browser-runtime-build-' + build.kind,
+        runId,
+        scenario: 'browser-runtime-build',
         authorizedGrant: buildGrant,
         operationClass: BROWSERGATE_OPERATION_CLASS.RUNTIME_BUILD,
         command: Object.freeze({
@@ -2316,12 +2241,12 @@ function createRuntimeExecutionExecutors({
       const owner = selectedOwner(preflight.availableArtifacts)
       const execution = await executeOwnedRuntimeOperation({
         operationId: 'browser-runtime-preflight-' + preflight.kind,
+        runId,
+        scenario: 'browser-runtime-preflight',
         authorizedGrant: preflightGrant,
         operationClass: BROWSERGATE_OPERATION_CLASS.PREFLIGHT,
         command: Object.freeze({
           executable: preflight.executablePath,
-          executableByteLength: preflight.executableByteLength,
-          executableSha256: preflight.executableSha256,
           arguments: preflight.arguments,
           cwd: preflight.cwd,
         }),
@@ -2341,12 +2266,10 @@ function createRuntimeExecutionExecutors({
         throw new Error('final runtime process owner did not complete its owned handoff preflight')
       }
       await bootstrap.assertLive()
-      const finalOwner = runtime.artifact(ownerSpec.kind)
+      const finalOwner = runtime.artifactCapability(ownerSpec.kind)
       if (
         finalOwner.path === bootstrap.artifact.path ||
-        finalOwner.path !== adoptedFinalOwner.path ||
-        finalOwner.byteLength !== adoptedFinalOwner.byteLength ||
-        finalOwner.sha256 !== adoptedFinalOwner.sha256
+        finalOwner.path !== adoptedFinalOwner.path
       ) throw new Error('final runtime process owner differs from its handoff evidence')
       await bootstrap.assertLive()
     },
@@ -2361,7 +2284,7 @@ export async function createBootstrapProcessOwnerAuthority({
   outputParent,
   platform,
   goExecutable,
-  buildOwner = buildBootstrapProcessOwner,
+  buildOwner = buildTestProcessOwnerFixture,
 }) {
   const ownerSpec = BOOTSTRAP_OWNER_SPECS[platform]
   if (ownerSpec === undefined) {
@@ -2371,48 +2294,37 @@ export async function createBootstrapProcessOwnerAuthority({
   mkdirSync(parent, { recursive: true, mode: 0o700 })
   const root = resolve(mkdtempSync(join(parent, BOOTSTRAP_RUNTIME_DIRECTORY_PREFIX)))
   const outputPath = join(root, ownerSpec.filename)
-  let held
   try {
-    held = await buildOwner({
+    const built = await buildOwner({
       repositoryRoot: requireCanonicalAbsolutePath(
         resolve(repositoryRoot),
         'bootstrap repository root',
       ),
-      runtimeRoot: root,
-      platform,
       goExecutable: requireCanonicalAbsolutePath(
         resolve(goExecutable),
         'bootstrap Go executable',
       ),
       outputPath,
-      packagePath: ownerSpec.packagePath,
-      cwd: resolve(repositoryRoot),
     })
-    const receipt = requireBootstrapOwnerReceipt(held?.receipt, ownerSpec, outputPath, platform)
-    await held.assertLive()
+    if (built?.path !== outputPath) {
+      throw new Error('process owner fixture builder returned a different output path')
+    }
+    assertNonemptyRegularFile(outputPath, 'bootstrap process owner fixture')
     const artifact = Object.freeze({
       kind: ownerSpec.kind,
-      path: receipt.output.path,
-      byteLength: receipt.output.byteLength,
-      sha256: receipt.output.sha256,
+      path: outputPath,
     })
     let closed = false
     return Object.freeze({
       artifact,
-      receipt,
       async assertLive() {
         if (closed) throw new Error('bootstrap process owner authority is closed')
-        await held.assertLive()
+        assertNonemptyRegularFile(outputPath, 'bootstrap process owner fixture')
       },
       async close() {
         if (closed) return
         closed = true
         const failures = []
-        try {
-          await held.close()
-        } catch (cause) {
-          failures.push(cause)
-        }
         try {
           rmSync(root, { recursive: true, force: true })
         } catch (cause) {
@@ -2426,13 +2338,6 @@ export async function createBootstrapProcessOwnerAuthority({
     })
   } catch (cause) {
     const failures = [cause]
-    if (held !== undefined && typeof held.close === 'function') {
-      try {
-        await held.close()
-      } catch (cleanupCause) {
-        failures.push(cleanupCause)
-      }
-    }
     try {
       rmSync(root, { recursive: true, force: true })
     } catch (cleanupCause) {
@@ -2468,48 +2373,25 @@ function runtimeOwnerRequest(platform, artifact) {
   if (artifact === undefined || artifact === null) {
     throw new Error('runtime process owner authority is unavailable')
   }
-  if (platform === 'win32') return Object.freeze({ windowsJobHelper: artifact })
-  if (platform === 'linux') return Object.freeze({ linuxProcessOwner: artifact })
+  if (platform === 'win32' || platform === 'linux') {
+    if (artifact.kind !== 'test-process-owner' || typeof artifact.path !== 'string') {
+      throw new Error('runtime process owner artifact is invalid')
+    }
+    // The runtime manifest's kind authenticates artifact selection, but it is
+    // not launch authority. Project only the held path into the process-owner
+    // client so metadata cannot silently widen that client's capability shape.
+    return Object.freeze({
+      processOwner: Object.freeze({ path: artifact.path }),
+    })
+  }
   throw new Error(`runtime process owner is unsupported on ${JSON.stringify(platform)}`)
 }
 
 function successfulOwnedExecution(execution) {
-  return execution.launched === true && execution.timedOut === false &&
-    execution.treeEmpty === true && execution.processEvidence?.terminal === 'exited' &&
+  return execution.treeEmpty === true && execution.cleanupOutcome === 'completed' &&
+    execution.ownershipEvidence.terminationReason === 'natural' &&
+    execution.processEvidence.terminal === 'exited' &&
     execution.processEvidence.exitCode === 0
-}
-
-function requireBootstrapOwnerReceipt(value, ownerSpec, outputPath, platform) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('bootstrap process owner receipt is invalid')
-  }
-  if (
-    value.schemaVersion !== BOOTSTRAP_BUILD_RECEIPT_SCHEMA_VERSION ||
-    value.kind !== ownerSpec.kind || value.platform !== platform ||
-    value.process?.terminal !== 'exited' || value.process.exitCode !== 0 ||
-    value.process.timedOut !== false || containsNamedProperty(value, 'treeEmpty')
-  ) throw new Error('bootstrap process owner receipt violates its authority contract')
-  if (
-    value.output === null || typeof value.output !== 'object' ||
-    value.output.path !== outputPath ||
-    !Number.isSafeInteger(value.output.byteLength) || value.output.byteLength < 1 ||
-    typeof value.output.sha256 !== 'string' || !SHA256_PATTERN.test(value.output.sha256)
-  ) throw new Error('bootstrap process owner receipt has invalid output authority')
-  return value
-}
-
-function containsNamedProperty(value, expectedName) {
-  if (Array.isArray(value)) return value.some((entry) => containsNamedProperty(entry, expectedName))
-  if (value === null || typeof value !== 'object') return false
-  return Object.entries(value).some(([name, child]) =>
-    name === expectedName || containsNamedProperty(child, expectedName))
-}
-
-function createOwnedRuntimeOperationLifecycle(operationId) {
-  return Object.freeze({
-    emit: (milestone, context) => emit(operationId, milestone, context),
-    trace: ({ milestone, context }) => emit(operationId, milestone, context),
-  })
 }
 
 async function executeOwnedRuntimeOperation({
@@ -2519,13 +2401,18 @@ async function executeOwnedRuntimeOperation({
   operationClass,
   command,
   platform,
+  runId = 'browsergate',
+  scenario = 'browsergate-runtime-command',
   inheritedEnvironment,
-  windowsJobHelper,
-  linuxProcessOwner,
+  processOwner,
   deadlineAuthority,
   executeOwnedCommand,
-  operationLifecycle = createOwnedRuntimeOperationLifecycle(operationId),
 }) {
+  const operationJournal = createOwnedTraceJournal({
+    label: 'owned runtime operation trace',
+    maximumEvents: OWNED_RUNTIME_OPERATION_MAXIMUM_TRACE_EVENTS,
+    maximumBytes: OWNED_RUNTIME_OPERATION_MAXIMUM_TRACE_BYTES,
+  })
   const grant = authorizedGrant ?? requireDeadlineGrant(
     deadlineAuthority,
     leaseId,
@@ -2533,7 +2420,9 @@ async function executeOwnedRuntimeOperation({
   )
   const requiredLeaseMs = operationClassDeadlineMs(operationClass)
   if (grant.outcome !== 'authorized' || grant.timeoutMs < requiredLeaseMs) {
-    operationLifecycle.emit('not-run', {
+    const traces = settleOwnedRuntimeOperationTrace(operationJournal, operationId, 'not-run', {
+      runId,
+      scenario,
       operationClass,
       phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
       reason: grant.outcome === 'authorized'
@@ -2542,120 +2431,224 @@ async function executeOwnedRuntimeOperation({
       requiredLeaseMs,
       remainingBudgetMs: grant.remainingBudgetMs,
     })
-    return failedOwnedExecution()
+    replayOwnedRuntimeOperationTraces(traces)
+    return Object.freeze({
+      ...failedOwnedExecution(platform),
+      traces,
+      runtimeCommandTraces: null,
+    })
   }
   const processDeadlineMs = grant.timeoutMs - RUNTIME_PROCESS_CLEANUP_RESERVE_MS
   if (processDeadlineMs < 1) {
-    operationLifecycle.emit('not-run', {
+    const traces = settleOwnedRuntimeOperationTrace(operationJournal, operationId, 'not-run', {
+      runId,
+      scenario,
       operationClass,
       phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
       reason: 'insufficient-process-cleanup-reserve',
       cleanupReserveMs: RUNTIME_PROCESS_CLEANUP_RESERVE_MS,
     })
-    return failedOwnedExecution()
+    replayOwnedRuntimeOperationTraces(traces)
+    return Object.freeze({
+      ...failedOwnedExecution(platform),
+      traces,
+      runtimeCommandTraces: null,
+    })
   }
   const startedAtMs = Date.now()
-  operationLifecycle.emit('started', {
+  appendOwnedRuntimeOperationTrace(operationJournal, operationId, 'started', {
+    runId,
+    scenario,
     operationClass,
     phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
     timeoutMs: processDeadlineMs,
     cleanupReserveMs: RUNTIME_PROCESS_CLEANUP_RESERVE_MS,
-    owner: platform === 'win32'
-      ? 'windows-job'
-      : platform === 'linux'
-        ? 'linux-subreaper'
-        : 'unsupported',
+    owner: 'test-process-owner',
   })
+  let consumption
   try {
-    const execution = await executeOwnedCommand({
+    const channel = executeOwnedCommand({
       operationId,
+      runId,
+      scenario,
       command,
       platform,
       inheritedEnvironment,
       deadlineMs: processDeadlineMs,
       terminationGraceMs: OWNED_PROCESS_TERMINATION_GRACE_MS,
-      ...(windowsJobHelper === undefined ? {} : { windowsJobHelper }),
-      ...(linuxProcessOwner === undefined ? {} : { linuxProcessOwner }),
-      trace: operationLifecycle.trace,
+      processOwner,
     })
-    const passed = execution.launched === true && execution.timedOut === false &&
-      execution.treeEmpty === true && execution.processEvidence.terminal === 'exited' &&
-      execution.processEvidence.exitCode === 0
-    operationLifecycle.emit(passed ? 'completed' : 'failed', {
+    consumption = await consumeOwnedRuntimeCommandExecution(
+      channel,
+      Object.freeze({ operationId, platform }),
+    )
+  } catch (cause) {
+    consumption = Object.freeze({
+      outcome: 'rejected',
+      execution: null,
+      traces: null,
+      failure: opaqueRuntimeOperationFailure(
+        cause,
+        'runtime command consumer failed before settlement',
+      ),
+      failureKind: RUNTIME_COMMAND_CONTRACT_FAILURE_KIND,
+    })
+  }
+
+  const runtimeCommandTraces = consumption.traces
+  if (consumption.outcome === 'rejected') {
+    const traces = settleOwnedRuntimeOperationTrace(operationJournal, operationId, 'failed', {
+      runId,
+      scenario,
       operationClass,
       phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
       elapsedMs: Date.now() - startedAtMs,
-      timedOut: execution.timedOut,
-      launched: execution.launched,
+      failureKind: consumption.failureKind,
+    })
+    if (runtimeCommandTraces !== null) {
+      replayRuntimeCommandOwnerTraces(runtimeCommandTraces, runId, scenario)
+    }
+    replayOwnedRuntimeOperationTraces(traces)
+    throw ownedRuntimeOperationFailure({
+      operationFailure: consumption.failure,
+      operationTraces: traces,
+      runtimeCommandTraces,
+    })
+  }
+
+  const execution = consumption.execution
+  const passed = successfulOwnedExecution(execution)
+  const traces = settleOwnedRuntimeOperationTrace(
+    operationJournal,
+    operationId,
+    passed ? 'completed' : 'failed',
+    {
+      runId,
+      scenario,
+      operationClass,
+      phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
+      elapsedMs: Date.now() - startedAtMs,
+      terminationReason: execution.ownershipEvidence.terminationReason,
       treeEmpty: execution.treeEmpty,
+      cleanupOutcome: execution.cleanupOutcome,
       terminal: execution.processEvidence.terminal,
       ...(execution.processEvidence.terminal === 'exited'
         ? { exitCode: execution.processEvidence.exitCode }
         : {}),
-    })
-    return execution
-  } catch (cause) {
-    operationLifecycle.emit('failed', {
-      operationClass,
-      phase: BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
-      elapsedMs: Date.now() - startedAtMs,
-      error: errorMessage(cause),
-    })
-    throw cause
+    },
+  )
+  replayRuntimeCommandOwnerTraces(runtimeCommandTraces, runId, scenario)
+  replayOwnedRuntimeOperationTraces(traces)
+  return Object.freeze({ ...execution, traces, runtimeCommandTraces })
+}
+
+function appendOwnedRuntimeOperationTrace(journal, operationId, milestone, context) {
+  if (!journal.append({ operationId, milestone, context })) {
+    journal.finish()
+    requireCompleteOwnedTraceSnapshot(journal.view.snapshot(), 'owned runtime operation trace')
   }
+}
+
+function settleOwnedRuntimeOperationTrace(journal, operationId, milestone, context) {
+  appendOwnedRuntimeOperationTrace(journal, operationId, milestone, context)
+  journal.finish()
+  return requireCompleteOwnedTraceSnapshot(
+    journal.view.snapshot(),
+    'owned runtime operation trace',
+  )
+}
+
+function replayOwnedRuntimeOperationTraces(snapshot) {
+  for (const { operationId, milestone, context } of snapshot.events) {
+    emit(operationId, milestone, context)
+  }
+}
+
+function replayRuntimeCommandOwnerTraces(snapshot, runId, scenario) {
+  for (const { milestone, context } of snapshot.events) {
+    emit(context.operationId, milestone, { runId, scenario, ...context })
+  }
+}
+
+function opaqueRuntimeOperationFailure(cause, message) {
+  return Object.freeze(new Error(message, { cause }))
+}
+
+function ownedRuntimeOperationFailure({
+  operationFailure,
+  operationTraces,
+  runtimeCommandTraces,
+}) {
+  const failure = new Error('owned runtime operation failed', { cause: operationFailure })
+  Object.defineProperties(failure, {
+    operationTraces: {
+      value: operationTraces,
+      enumerable: true,
+      writable: false,
+      configurable: false,
+    },
+    runtimeCommandTraces: {
+      value: runtimeCommandTraces,
+      enumerable: true,
+      writable: false,
+      configurable: false,
+    },
+  })
+  return Object.freeze(failure)
 }
 
 function runtimeArtifact(artifacts, kind) {
   return artifacts.find((artifact) => artifact.kind === kind)
 }
 
-function failedOwnedExecution() {
+function failedOwnedExecution(platform = process.platform) {
+  const backend = platform === 'win32' ? 'windows_job' : 'linux_subreaper'
   return Object.freeze({
     processEvidence: Object.freeze({
       terminal: 'spawn-failed',
       errorCode: 'NOT_AUTHORIZED',
       errorMessage: 'runtime operation did not receive a full process-ownership lease',
     }),
-    timedOut: false,
-    launched: false,
     treeEmpty: false,
+    cleanupOutcome: 'failed',
+    inputEvidence: Object.freeze({
+      outcome: 'not_started',
+      failureCode: 'NOT_AUTHORIZED',
+      failureMessage: 'runtime operation did not receive a full process-ownership lease',
+    }),
+    ownershipEvidence: Object.freeze({
+      kind: 'test-process-owner',
+      backend,
+      terminationReason: 'owner_failure',
+      platform: Object.freeze({ kind: backend }),
+    }),
     stdout: '',
     stderr: '',
   })
 }
 
-function runtimeGeneratedSemanticTrace({ operationId, milestone, context }) {
-  emit(operationId, milestone, context)
+function appendGeneratedSemanticTrace(journal, milestone, context) {
+  journal.append(Object.freeze({
+    operationId: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID,
+    milestone,
+    context: Object.freeze({ ...context }),
+  }))
 }
 
-function traceGeneratedSemanticPreflight(trace, milestone, context) {
-  try {
-    trace(Object.freeze({
-      operationId: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID,
-      milestone,
-      context: Object.freeze({ ...context }),
-    }))
-  } catch {
-    // Process settlement and artifact authority must not depend on an observability transport.
+function replayGeneratedSemanticTraces(snapshot) {
+  for (const { operationId, milestone, context } of snapshot.events) {
+    emit(operationId, milestone, context)
   }
-}
-
-function runtimeBuildTrace({ milestone, context = {} }) {
-  emit('browser-runtime-build', milestone.replace(/^runtime-build-/u, ''), context)
 }
 
 function loadRuntimeFromOptions(options, suites, allowEnvironment = false) {
   const manifestPath = optionalOption(options, 'runtime-manifest') ??
     (allowEnvironment ? process.env[BROWSERGATE_RUNTIME_MANIFEST_ENV] : undefined)
-  const manifestSha256 = optionalOption(options, 'runtime-manifest-sha256') ??
-    (allowEnvironment ? process.env[BROWSERGATE_RUNTIME_MANIFEST_SHA256_ENV] : undefined)
-  if (
-    manifestPath === undefined || manifestPath === '' ||
-    manifestSha256 === undefined || manifestSha256 === ''
-  ) throw new Error('browsergate runtime manifest path and SHA-256 are required')
+  if (manifestPath === undefined || manifestPath === '') {
+    throw new Error('browsergate runtime manifest path is required')
+  }
   const runtime = loadBrowsergateRuntime({
     manifestPath: requireCanonicalAbsolutePath(manifestPath, 'browsergate runtime manifest'),
-    manifestSha256,
   })
   try {
     assertRuntimeSuiteCoverage(runtime.manifest.suites, suites)
@@ -2675,15 +2668,6 @@ export function assertRuntimeSuiteCoverage(authorizedSuites, requestedSuites) {
   return requested
 }
 
-function windowsJobHelperFromRuntime(runtime) {
-  const artifact = runtime.artifact('windows-job')
-  return Object.freeze({
-    path: artifact.path,
-    byteLength: artifact.byteLength,
-    sha256: artifact.sha256,
-  })
-}
-
 function canonicalRequestedSuites(suites) {
   if (!Array.isArray(suites) || suites.length < 1) {
     throw new Error('at least one browsergate runtime suite is required')
@@ -2699,7 +2683,6 @@ function canonicalRequestedSuites(suites) {
 function writeRuntimeGithubOutputs(path, runtime) {
   const values = {
     runtime_manifest_path: runtime.manifestPath,
-    runtime_manifest_sha256: runtime.manifestSha256,
   }
   for (const [name, value] of Object.entries(values)) {
     if (typeof value !== 'string' || value === '' || /[\r\n]/u.test(value)) {
@@ -2710,33 +2693,12 @@ function writeRuntimeGithubOutputs(path, runtime) {
     name + '=' + value + '\n').join(''), 'utf8')
 }
 
-function requireWindowsJobHelper(helper) {
+function runnerProcessExitCode(execution) {
   if (
-    helper === null || helper === undefined ||
-    typeof helper.path !== 'string' || !isRegularNoFollowFile(helper.path)
-  ) throw new Error('Windows remainder requires one invocation-owned Job helper')
-  return requireCanonicalAbsolutePath(helper.path, 'Windows Job helper')
-}
-
-function resolveWindowsPowerShellExecutable(environment = process.env) {
-  const pathValue = Object.entries(environment).find(
-    ([name]) => name.toUpperCase() === 'PATH',
-  )?.[1]
-  if (typeof pathValue !== 'string' || pathValue === '') {
-    throw new Error('D5 requires an absolute pwsh.exe resolved from PATH')
-  }
-  for (const rawDirectory of pathValue.split(WINDOWS_PATH_DELIMITER)) {
-    const directory = rawDirectory.trim().replace(/^"|"$/gu, '')
-    if (directory === '') continue
-    const candidate = resolve(directory, 'pwsh.exe')
-    if (isRegularNoFollowFile(candidate)) return candidate
-  }
-  throw new Error('D5 requires an absolute pwsh.exe resolved from PATH')
-}
-
-function runnerProcessExitCode(processEvidence, timedOut) {
-  if (timedOut || processEvidence.terminal !== 'exited') return 1
-  return processEvidence.exitCode
+    execution.ownershipEvidence?.terminationReason !== 'natural' ||
+    execution.processEvidence?.terminal !== 'exited'
+  ) return 1
+  return execution.processEvidence.exitCode
 }
 
 export async function createSampleCommandAuthority({
@@ -2745,32 +2707,31 @@ export async function createSampleCommandAuthority({
   suite,
   sampleOutputRoot,
   sampleDirectory,
-  insideWindowsD5,
   platform,
   runtime,
+  focusedConfigPath,
 }) {
   requireSuite(suite)
   requireBrowser(identity.browser)
   if (identity.suite !== suite) throw new Error('sample command identity differs from its suite')
-  const ownerKind = platform === 'linux'
-    ? 'linux-process-owner'
-    : platform === 'win32'
-      ? 'windows-job'
-      : null
-  if (ownerKind === null) {
+  if (!['linux', 'win32'].includes(platform)) {
     throw new Error(`sample command authority does not support platform ${JSON.stringify(platform)}`)
   }
+  const ownerKind = 'test-process-owner'
   const commandCapability = runtime.sampleCommandCapability()
   if (commandCapability.repositoryRoot !== REPOSITORY_ROOT) {
     throw new Error('sample runtime repository capability differs from the orchestrator root')
   }
+  const ownerArtifact = runtime.artifactCapability(ownerKind)
   const child = sampleChildCommand({
     suite,
     browser: identity.browser,
     platform,
-    insideWindowsD5,
     commandCapability,
+    focusedConfigPath,
   })
+  const operationId = `${suite}-${identity.browser}-sample-${identity.sampleIndex}`
+  const scenario = `${suite}-focused-product`
   const semanticEnvironment = Object.freeze({
     ...topologyEnvironment(context),
     ...runtime.environmentForSuite(suite),
@@ -2781,15 +2742,7 @@ export async function createSampleCommandAuthority({
     {},
     commandCapability.environment,
   )
-  const ownerArtifact = runtime.artifact(ownerKind)
-  const runtimeManifest = await authenticatedFileAuthority(
-    runtime.manifestPath,
-    MAXIMUM_RUNTIME_MANIFEST_BYTES,
-    'sample runtime manifest',
-  )
-  if (runtimeManifest.sha256 !== runtime.manifestSha256) {
-    throw new Error('sample runtime manifest differs from its held runtime authority')
-  }
+  const runtimeManifest = runtime.manifestPath
   return Object.freeze({
     repository: Object.freeze({
       root: commandCapability.repositoryRoot,
@@ -2803,6 +2756,8 @@ export async function createSampleCommandAuthority({
     }),
     identity: Object.freeze({
       runId: context.runId,
+      operationId,
+      scenario,
       runPolicy: context.runPolicy,
       suite,
       browser: identity.browser,
@@ -2821,8 +2776,6 @@ export async function createSampleCommandAuthority({
       processOwner: Object.freeze({
         kind: ownerKind,
         path: ownerArtifact.path,
-        byteLength: ownerArtifact.byteLength,
-        sha256: ownerArtifact.sha256,
       }),
     }),
     output: Object.freeze({
@@ -2832,15 +2785,19 @@ export async function createSampleCommandAuthority({
     }),
     ownership: Object.freeze({
       platform,
-      insideWindowsD5,
-      backend: platform === 'linux' ? 'linux-subreaper' : 'windows-job',
+      backend: 'inherited',
+      outerAuthority: Object.freeze({
+        kind: 'test-process-owner',
+        backend: platform === 'linux' ? 'linux_subreaper' : 'windows_job',
+        operationId,
+      }),
       operationClass: BROWSERGATE_OPERATION_CLASS.BROWSER_SAMPLE,
       classDeadlineMs: operationClassDeadlineMs(BROWSERGATE_OPERATION_CLASS.BROWSER_SAMPLE),
       childDeadlineMs: BROWSER_SAMPLE_PROCESS_DEADLINE_MS,
     }),
     leaf: Object.freeze({
       executable: commandCapability.node,
-      entrypoint: commandCapability.playwrightCli,
+      entrypoint: commandCapability.playwrightRunner,
       arguments: child.arguments,
       cwd: join(commandCapability.repositoryRoot, 'web'),
       environment: leafEnvironment,
@@ -2849,39 +2806,22 @@ export async function createSampleCommandAuthority({
 }
 
 function requireSettledSampleExecution(execution) {
+  requireSettledOwnedTree(execution, 'sample driver')
   if (
-    execution.launched !== true || execution.timedOut !== false || execution.treeEmpty !== true ||
     execution.processEvidence?.terminal !== 'exited' ||
     ![0, 1].includes(execution.processEvidence.exitCode)
   ) throw new Error('sample driver did not prove an exited process and empty descendant tree')
-  if (execution.inputEvidence !== undefined && execution.inputEvidence.outcome !== 'delivered') {
+  if (execution.inputEvidence?.outcome !== 'delivered') {
     throw new Error('sample driver request was not delivered through its exact input channel')
   }
+}
+
+function requireSettledOwnedTree(execution, label) {
   if (
-    execution.clientIoEvidence !== undefined &&
-    (
-      execution.clientIoEvidence.requestOutcome !== 'delivered' ||
-      execution.clientIoEvidence.rawInputOutcome !== 'delivered' ||
-      execution.clientIoEvidence.controlOutcome !== 'not-requested' ||
-      execution.clientIoEvidence.outputOutcome !== 'delivered' ||
-      execution.clientIoEvidence.failureCode !== '' ||
-      execution.clientIoEvidence.failureMessage !== ''
-    )
-  ) throw new Error('sample process owner completed with a client I/O failure')
-  if (execution.ownershipEvidence?.ownerPid !== undefined) {
-    if (
-      execution.ownershipEvidence.controlOutcome !== 'target-terminal' ||
-      execution.ownershipEvidence.cleanupOutcome !== 'completed' ||
-      execution.ownershipEvidence.failureCode !== '' ||
-      execution.ownershipEvidence.failureMessage !== ''
-    ) throw new Error('sample process owner did not retain exact ownership through target settlement')
-  } else if (execution.ownershipEvidence !== undefined && (
-    execution.ownershipEvidence.supervisionOutcome !== 'tree-empty' ||
-    execution.ownershipEvidence.terminationReason !== 'natural' ||
-    execution.ownershipEvidence.activeProcessCount !== 0 ||
-    execution.ownershipEvidence.root === null ||
-    execution.ownershipEvidence.spawnFailure !== null
-  )) throw new Error('sample Windows Job did not retain exact ownership through target settlement')
+    execution?.treeEmpty !== true || execution.cleanupOutcome !== 'completed' ||
+    execution.ownershipEvidence?.kind !== 'test-process-owner' ||
+    execution.ownershipEvidence.terminationReason !== 'natural'
+  ) throw new Error(`${label} did not prove completed cleanup of an empty owned process tree`)
 }
 
 async function authenticatedFileAuthority(path, maximumBytes, label) {
@@ -2895,21 +2835,37 @@ async function authenticatedFileAuthority(path, maximumBytes, label) {
   })
 }
 
+function assertNonemptyRegularFile(path, label) {
+  const metadata = lstatSync(path)
+  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size < 1) {
+    throw new Error(`${label} is not a non-empty regular file`)
+  }
+}
+
 export function parseSampleRunnerRecord(stdout, identity, sampleDirectory) {
   const lines = stdout.split(/\r?\n/u).filter((line) => line !== '')
   if (lines.length !== 1) throw new Error('sample driver must emit exactly one result record')
   const value = parseCanonicalJsonText(lines[0], 'sample driver result')
   requireExactKeys(value, [
     'schemaVersion',
+    'runId',
+    'operationId',
+    'scenario',
+    'outcome',
     'resultPath',
     'artifactRoot',
     'candidate',
     'acceptedBeforeGuard',
+    'traces',
   ], 'sample driver result')
   if (
     value.schemaVersion !== BROWSER_SAMPLE_DRIVER_SCHEMA_VERSION ||
+    value.runId !== identity.runId || value.operationId !== identity.operationId ||
+    value.scenario !== identity.scenario ||
+    value.outcome !== (value.acceptedBeforeGuard === true ? 'succeeded' : 'failed') ||
     typeof value.acceptedBeforeGuard !== 'boolean'
   ) throw new Error('sample driver emitted an invalid terminal record')
+  const traces = requireCompleteSampleDriverTraces(value.traces, identity)
   const expectedResultPath = join(sampleDirectory, 'result.json')
   const resultPath = requireCanonicalAbsolutePath(value.resultPath, 'sample driver result path')
   if (resultPath !== expectedResultPath) {
@@ -2917,7 +2873,66 @@ export function parseSampleRunnerRecord(stdout, identity, sampleDirectory) {
   }
   const artifactRoot = requireCanonicalAbsolutePath(value.artifactRoot, 'sample artifact root')
   requirePrivateSampleArtifactSibling(sampleDirectory, artifactRoot, 'sample artifact root')
-  return Object.freeze({ ...value, resultPath, artifactRoot, identity })
+  return Object.freeze({ ...value, traces, resultPath, artifactRoot, identity })
+}
+
+function requireCompleteSampleDriverTraces(value, identity) {
+  requireExactKeys(value, [
+    'events',
+    'observedEvents',
+    'capturedEvents',
+    'truncated',
+    'completed',
+  ], 'sample driver lifecycle traces')
+  if (
+    !Array.isArray(value.events) ||
+    !Number.isSafeInteger(value.observedEvents) ||
+    !Number.isSafeInteger(value.capturedEvents) ||
+    value.observedEvents < 2 ||
+    value.observedEvents !== value.capturedEvents ||
+    value.capturedEvents !== value.events.length ||
+    value.truncated !== false ||
+    value.completed !== true
+  ) throw new Error('sample driver lifecycle traces are incomplete')
+  const events = value.events.map((event, index) => requireSampleDriverTrace(event, identity, index))
+  if (
+    events[0].milestone !== 'operation-started' || events[0].outcome !== 'started' ||
+    events.at(-1).milestone !== 'operation-terminal' || events.at(-1).outcome !== 'succeeded'
+  ) throw new Error('sample driver lifecycle traces lack exact start and terminal events')
+  return Object.freeze({ ...value, events: Object.freeze(events) })
+}
+
+function requireSampleDriverTrace(value, identity, index) {
+  const fields = [
+    'schemaVersion',
+    'component',
+    'runId',
+    'operationId',
+    'scenario',
+    'outcome',
+    'milestone',
+    'suite',
+    'browser',
+    'sampleIndex',
+  ]
+  if (value !== null && typeof value === 'object' && Object.hasOwn(value, 'context')) {
+    fields.push('context')
+  }
+  requireExactKeys(value, fields, `sample driver lifecycle trace ${index + 1}`)
+  if (
+    value.schemaVersion !== BROWSER_SAMPLE_TRACE_SCHEMA_VERSION ||
+    value.component !== 'browser-evidence-runner' ||
+    value.runId !== identity.runId || value.operationId !== identity.operationId ||
+    value.scenario !== identity.scenario || value.suite !== identity.suite ||
+    value.browser !== identity.browser || value.sampleIndex !== identity.sampleIndex ||
+    !['started', 'succeeded', 'failed'].includes(value.outcome) ||
+    typeof value.milestone !== 'string' || value.milestone.length < 1
+  ) throw new Error(`sample driver lifecycle trace ${index + 1} has invalid identity or semantics`)
+  if (
+    Object.hasOwn(value, 'context') &&
+    (value.context === null || typeof value.context !== 'object' || Array.isArray(value.context))
+  ) throw new Error(`sample driver lifecycle trace ${index + 1} has invalid context`)
+  return Object.freeze(value)
 }
 
 function parseMaterializationRecord(stdout) {
@@ -2959,33 +2974,6 @@ function topologyEnvironment(context) {
     WINDSHARE_TEST_ICE_TOPOLOGY_PROFILE_SHA256: context.topologyProfileSha256,
     WINDSHARE_TEST_ICE_TOPOLOGY_RESOLUTION_SHA256: context.topologyResolutionSha256,
   })
-}
-
-function d5ChildEnvironment() {
-  const environment = {}
-  for (const name of D5_FORWARD_ENVIRONMENT_NAMES) {
-    const value = process.env[name]
-    if (value !== undefined && value !== '') environment[name] = value
-  }
-  return Object.freeze(environment)
-}
-
-function assertInsideWindowsD5(suite) {
-  if (process.platform !== 'win32' || suite !== 'main') {
-    throw new Error('--inside-windows-d5 is valid only for the Windows main suite')
-  }
-  for (const name of [
-    'WINDSHARE_WINDOWS_OS_NETWORK',
-    'WINDSHARE_D5_E2E_LEASE_TOKEN',
-    'WINDSHARE_D5_RUNNER_PIPE',
-    'WINDSHARE_D5_CHILD_MANIFEST',
-    BROWSERGATE_RUNTIME_MANIFEST_ENV,
-    BROWSERGATE_RUNTIME_MANIFEST_SHA256_ENV,
-  ]) {
-    if ((process.env[name] ?? '') === '') {
-      throw new Error('--inside-windows-d5 requires ' + name)
-    }
-  }
 }
 
 function verdictArguments({
@@ -3059,13 +3047,11 @@ function writeGuardGithubOutputs(path, outcome) {
 function writeSettlementGithubOutputs(path, trust) {
   requireExactKeys(trust, [
     'invocationId',
-    'runtimeManifestSha256',
     'publicKeySpkiBase64',
     'publicKeySha256',
   ], 'process settlement trust anchor')
   const values = {
     settlement_invocation_id: trust.invocationId,
-    settlement_runtime_manifest_sha256: trust.runtimeManifestSha256,
     settlement_public_key_spki_base64: trust.publicKeySpkiBase64,
     settlement_public_key_sha256: trust.publicKeySha256,
   }
@@ -3081,10 +3067,6 @@ function writeSettlementGithubOutputs(path, trust) {
 function settlementTrustFromOptions(options) {
   return Object.freeze({
     invocationId: requiredOption(options, 'settlement-invocation-id'),
-    runtimeManifestSha256: requiredOption(
-      options,
-      'settlement-runtime-manifest-sha256',
-    ),
     publicKeySpkiBase64: requiredOption(options, 'settlement-public-key-spki-base64'),
     publicKeySha256: requiredOption(options, 'settlement-public-key-sha256'),
   })
@@ -3445,14 +3427,29 @@ function optionValues(options, name) {
 }
 
 function emit(operationId, milestone, context = {}) {
-  process.stdout.write(JSON.stringify({
-    component: 'browser-orchestration',
+  const {
+    runId,
+    operationId: contextualOperationId,
+    scenario,
+    outcome: reportedOutcome,
+    ...payload
+  } = context
+  if (contextualOperationId !== undefined && contextualOperationId !== operationId) {
+    throw new Error('browsergate trace context operation identity differs from its event')
+  }
+  const event = createBrowsergateTraceEvent({
+    ...(runId === undefined ? {} : { runId }),
     operationId,
+    ...(scenario === undefined ? {} : { scenario }),
     milestone,
-    ...context,
-  }) + '\n')
+    ...(reportedOutcome === undefined ? {} : { reportedOutcome }),
+    payload,
+  })
+  ORCHESTRATOR_TRACE_CONTEXT.getStore()?.append(event)
 }
 
-function errorMessage(cause) {
-  return cause instanceof Error ? cause.message : String(cause)
+function errorMessage() {
+  // Dependency causes are opaque at lifecycle publication boundaries. Reading
+  // message/toString can execute hostile code and suppress the terminal event.
+  return 'dependency-operation-failed'
 }

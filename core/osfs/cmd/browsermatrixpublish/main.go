@@ -413,8 +413,8 @@ func existingPublishedResult(result artifactpublish.ExistingDirectoryResult) pub
 }
 
 func writeSelfCheck(output io.Writer) int {
-	// A frozen, mutation-free record lets the runtime manifest bind executable
-	// behavior without asking preflight to create a disposable filesystem tree.
+	// Self-check exercises the helper's protocol encoder without creating a
+	// disposable publication tree or mutating caller-owned filesystem state.
 	record := struct {
 		SchemaVersion string `json:"schemaVersion"`
 		Outcome       string `json:"outcome"`

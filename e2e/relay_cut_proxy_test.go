@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/windshare/windshare/internal/testnetwork"
+	"github.com/windshare/windshare/internal/testloopback"
 )
 
 type relayCutProxy struct {
@@ -22,23 +22,26 @@ type relayCutProxy struct {
 	target      string
 	targetReady chan struct{}
 	connections map[net.Conn]struct{}
+	active      int
+	changed     chan struct{}
 	stopping    bool
 	firstErr    error
 
 	acceptDone chan struct{}
-	handlers   sync.WaitGroup
 	downstream atomic.Uint64
 	cutOnce    sync.Once
-	stopped    chan struct{}
+	waitOnce   sync.Once
+	waitBytes  uint64
+	waitErr    error
 }
 
-func startRelayCutProxy(t *testing.T) *relayCutProxy {
+func startRelayCutProxy(t *testing.T, scenario *v2Scenario) *relayCutProxy {
 	t.Helper()
-	testnetwork.RequireOSNetwork(t)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("start relay cut proxy: %v", err)
-	}
+	loopback := testloopback.New(t)
+	scenario.trace.RequireCleanup(t, "relay cut proxy loopback sockets", func(context.Context) error {
+		return loopback.Close()
+	})
+	listener := loopback.ListenTCP()
 	ctx, cancel := context.WithCancel(context.Background())
 	proxy := &relayCutProxy{
 		listener:    listener,
@@ -46,15 +49,22 @@ func startRelayCutProxy(t *testing.T) *relayCutProxy {
 		cancel:      cancel,
 		targetReady: make(chan struct{}),
 		connections: make(map[net.Conn]struct{}),
+		changed:     make(chan struct{}),
 		acceptDone:  make(chan struct{}),
-		stopped:     make(chan struct{}),
 	}
 	go proxy.accept()
+	cleanup := func(ctx context.Context) error {
+		_, err := proxy.CutAndWait(ctx)
+		return err
+	}
 	t.Cleanup(func() {
-		if _, err := proxy.CutAndWait(); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), v2ProcessTerminationGrace)
+		defer cancel()
+		if err := cleanup(ctx); err != nil {
 			t.Errorf("stop relay cut proxy: %v", err)
 		}
 	})
+	scenario.trace.RequireCleanup(t, "relay cut proxy", cleanup)
 	return proxy
 }
 
@@ -79,7 +89,7 @@ func (proxy *relayCutProxy) ForwardTo(address string) error {
 	return nil
 }
 
-func (proxy *relayCutProxy) CutAndWait() (uint64, error) {
+func (proxy *relayCutProxy) CutAndWait(ctx context.Context) (uint64, error) {
 	proxy.cutOnce.Do(func() {
 		proxy.mu.Lock()
 		proxy.stopping = true
@@ -94,16 +104,12 @@ func (proxy *relayCutProxy) CutAndWait() (uint64, error) {
 		for _, connection := range connections {
 			_ = connection.Close()
 		}
-		<-proxy.acceptDone
-		proxy.handlers.Wait()
-		close(proxy.stopped)
 	})
-	<-proxy.stopped
-
-	proxy.mu.Lock()
-	err := proxy.firstErr
-	proxy.mu.Unlock()
-	return proxy.downstream.Load(), err
+	proxy.waitOnce.Do(func() {
+		proxy.waitErr = waitRelayProxyQuiescence(ctx, proxy.acceptDone, proxy.activitySnapshot)
+		proxy.waitBytes = proxy.downstream.Load()
+	})
+	return proxy.waitBytes, proxy.waitErr
 }
 
 func (proxy *relayCutProxy) accept() {
@@ -116,19 +122,16 @@ func (proxy *relayCutProxy) accept() {
 			}
 			return
 		}
-		if !proxy.retain(connection) {
+		if !proxy.retainFront(connection) {
 			_ = connection.Close()
 			return
 		}
-		proxy.handlers.Add(1)
 		go proxy.serve(connection)
 	}
 }
 
 func (proxy *relayCutProxy) serve(front net.Conn) {
-	testnetwork.AssertOSNetwork()
-	defer proxy.handlers.Done()
-	defer proxy.release(front)
+	defer proxy.releaseFront(front)
 
 	target, ok := proxy.awaitTarget()
 	if !ok {
@@ -141,27 +144,36 @@ func (proxy *relayCutProxy) serve(front net.Conn) {
 		}
 		return
 	}
-	if !proxy.retain(backend) {
+	if !proxy.retainBackend(backend) {
 		_ = backend.Close()
 		return
 	}
-	defer proxy.release(backend)
+	defer proxy.releaseConnection(backend)
 
 	results := make(chan error, 2)
+	proxy.addActivities(2)
 	go func() {
+		defer proxy.finishActivity()
 		_, copyErr := io.Copy(backend, front)
 		results <- copyErr
 	}()
 	go func() {
+		defer proxy.finishActivity()
 		_, copyErr := io.Copy(relayDownstreamWriter{target: front, bytes: &proxy.downstream}, backend)
 		results <- copyErr
 	}()
-	<-results
+	select {
+	case <-results:
+	case <-proxy.ctx.Done():
+	}
 	// A WebSocket is one full-duplex authority. Once either half ends, retaining
 	// the other half could let a cut race leave a hidden relay path alive.
 	_ = front.Close()
 	_ = backend.Close()
-	<-results
+	select {
+	case <-results:
+	case <-proxy.ctx.Done():
+	}
 }
 
 func (proxy *relayCutProxy) awaitTarget() (string, bool) {
@@ -176,7 +188,19 @@ func (proxy *relayCutProxy) awaitTarget() (string, bool) {
 	}
 }
 
-func (proxy *relayCutProxy) retain(connection net.Conn) bool {
+func (proxy *relayCutProxy) retainFront(connection net.Conn) bool {
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	if proxy.stopping {
+		return false
+	}
+	proxy.connections[connection] = struct{}{}
+	proxy.active++
+	proxy.notifyLocked()
+	return true
+}
+
+func (proxy *relayCutProxy) retainBackend(connection net.Conn) bool {
 	proxy.mu.Lock()
 	defer proxy.mu.Unlock()
 	if proxy.stopping {
@@ -186,11 +210,45 @@ func (proxy *relayCutProxy) retain(connection net.Conn) bool {
 	return true
 }
 
-func (proxy *relayCutProxy) release(connection net.Conn) {
+func (proxy *relayCutProxy) releaseFront(connection net.Conn) {
+	proxy.mu.Lock()
+	delete(proxy.connections, connection)
+	proxy.active--
+	proxy.notifyLocked()
+	proxy.mu.Unlock()
+	_ = connection.Close()
+}
+
+func (proxy *relayCutProxy) releaseConnection(connection net.Conn) {
 	proxy.mu.Lock()
 	delete(proxy.connections, connection)
 	proxy.mu.Unlock()
 	_ = connection.Close()
+}
+
+func (proxy *relayCutProxy) addActivities(count int) {
+	proxy.mu.Lock()
+	proxy.active += count
+	proxy.notifyLocked()
+	proxy.mu.Unlock()
+}
+
+func (proxy *relayCutProxy) finishActivity() {
+	proxy.mu.Lock()
+	proxy.active--
+	proxy.notifyLocked()
+	proxy.mu.Unlock()
+}
+
+func (proxy *relayCutProxy) activitySnapshot() (int, <-chan struct{}, error) {
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	return proxy.active, proxy.changed, proxy.firstErr
+}
+
+func (proxy *relayCutProxy) notifyLocked() {
+	close(proxy.changed)
+	proxy.changed = make(chan struct{})
 }
 
 func (proxy *relayCutProxy) isStopping() bool {

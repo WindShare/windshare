@@ -15,9 +15,6 @@ export function createContainedBrowserPionControl(
     attestationPublicKey: secret.control.attestationPublicKey,
     controlCredential: secret.control.credential,
     controlLease: secret.control.controlLease,
-    ...(secret.control.manualOperatorIdentity === null
-      ? {}
-      : { manualOperatorIdentity: secret.control.manualOperatorIdentity }),
   })
   return Object.freeze({
     probeFixture: async (signal: AbortSignal): Promise<ExternalFixtureProbeResult> => {

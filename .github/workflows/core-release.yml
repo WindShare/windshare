@@ -79,7 +79,7 @@ jobs:
         env:
           CORE_RELEASE_VERSION: ${{ needs.candidate.outputs.version }}
           CORE_RELEASE_COMMIT_SHA: ${{ needs.candidate.outputs.commit_sha }}
-        run: bash scripts/ci/core-release.sh "$CORE_RELEASE_VERSION" "$CORE_RELEASE_COMMIT_SHA" linux-ext4
+        run: bash scripts/ci/linux/core-release.sh "$CORE_RELEASE_VERSION" "$CORE_RELEASE_COMMIT_SHA" linux-ext4
 
   windows-ntfs:
     name: Windows NTFS extracted core and process-restart certification
@@ -119,4 +119,4 @@ jobs:
         env:
           CORE_RELEASE_VERSION: ${{ needs.candidate.outputs.version }}
           CORE_RELEASE_COMMIT_SHA: ${{ needs.candidate.outputs.commit_sha }}
-        run: ./scripts/ci/core-release.ps1 -Version $env:CORE_RELEASE_VERSION -CommitSHA $env:CORE_RELEASE_COMMIT_SHA -NativeProfile windows-ntfs
+        run: ./scripts/ci/windows/core-release.ps1 -Version $env:CORE_RELEASE_VERSION -CommitSHA $env:CORE_RELEASE_COMMIT_SHA -NativeProfile windows-ntfs

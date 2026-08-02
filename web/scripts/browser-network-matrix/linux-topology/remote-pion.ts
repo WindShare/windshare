@@ -96,7 +96,6 @@ export class RemotePionControlClient implements SampleExternalFixtureProbe {
   readonly #attestationPublicKey: string | Buffer
   readonly #attestationPublicKeySpki: string
   readonly #controlLease: RemotePionControlLeaseBinding
-  readonly #manualOperatorIdentity: RemotePionControlOptions['manualOperatorIdentity']
   readonly #now: () => number
   readonly #channel: RemotePionControlChannel
   readonly #liveAuthorityByRun = new Map<string, LiveRemotePionAuthority>()
@@ -136,7 +135,6 @@ export class RemotePionControlClient implements SampleExternalFixtureProbe {
       ...options.controlLease,
       controlAuthority: parseNetworkMatrixControlAuthority(options.controlLease.controlAuthority),
     })
-    this.#manualOperatorIdentity = options.manualOperatorIdentity
     this.#now = options.now ?? Date.now
     this.#channel = new RemotePionControlChannel({
       endpoint,
@@ -434,7 +432,6 @@ export class RemotePionControlClient implements SampleExternalFixtureProbe {
         tlsCertificateSha256: this.#certificateSha256,
         attestationPublicKey: this.#attestationPublicKey,
         attestationPublicKeySpki: this.#attestationPublicKeySpki,
-        manualOperatorIdentity: this.#manualOperatorIdentity,
         now: this.#now,
       })
       this.#liveAuthorityByRun.set(runId, state)

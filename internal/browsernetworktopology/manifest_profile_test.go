@@ -38,18 +38,15 @@ func TestCanonicalFixturesBindExactMatrixUniverse(t *testing.T) {
 	if err != nil || len(scheduled) != ScheduledIdentityCount {
 		t.Fatalf("scheduled identities = %d, err=%v", len(scheduled), err)
 	}
-	manual, err := contract.ExpectedIdentities(ModeManual)
-	if err != nil || len(manual) != ManualIdentityCount {
-		t.Fatalf("manual identities = %d, err=%v", len(manual), err)
+	if _, err := contract.ExpectedIdentities(ExecutionMode("manual")); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("supplemental mode entered the hard contract: %v", err)
 	}
 	all, err := contract.AllExpectedIdentities()
 	if err != nil || len(all) != TotalIdentityCount {
 		t.Fatalf("all identities = %d, err=%v", len(all), err)
 	}
 	if scheduled[0] != (SampleIdentity{ProfileID: string(ProfileScheduledPublicSTUN), Browser: BrowserChromium, SampleOrdinal: 1}) ||
-		scheduled[len(scheduled)-1] != (SampleIdentity{ProfileID: string(ProfileScheduledCoturn), Browser: BrowserWebKit, SampleOrdinal: 5}) ||
-		manual[0] != (SampleIdentity{ProfileID: string(ProfileManualRealNAT), Browser: BrowserChromium, SampleOrdinal: 1}) ||
-		manual[len(manual)-1].Browser != BrowserWebKit || manual[len(manual)-1].SampleOrdinal != 5 {
+		scheduled[len(scheduled)-1] != (SampleIdentity{ProfileID: string(ProfileScheduledCoturn), Browser: BrowserWebKit, SampleOrdinal: 5}) {
 		t.Fatal("identity universe is not in topology x browser x ordinal canonical order")
 	}
 }
@@ -140,7 +137,7 @@ func TestContractRejectsDigestPathAndAuthorityMismatches(t *testing.T) {
 	}
 
 	badPathDocuments := append([]ProfileDocument(nil), documents...)
-	badPathDocuments[0].Path = `profiles\scheduled-public-stun.v1.json`
+	badPathDocuments[0].Path = `profiles\scheduled-public-stun.v2.json`
 	if _, err := ParseContract(manifestJSON, badPathDocuments); !errors.Is(err, ErrInvalidManifest) {
 		t.Fatalf("non-POSIX path error = %v", err)
 	}
@@ -295,8 +292,8 @@ func TestCanonicalContractRejectsWithdrawnSchedulerSchema(t *testing.T) {
 	}
 	oldLabels := bytes.Replace(
 		manifestJSON,
-		[]byte(`"availabilityExpectation":"not-assumed"`),
-		[]byte(`"availabilityExpectation":"not-assumed","requiredRunnerLabels":[]`),
+		[]byte(`"availabilityExpectation":"required"`),
+		[]byte(`"availabilityExpectation":"required","requiredRunnerLabels":[]`),
 		1,
 	)
 	if _, err := ParseManifest(oldLabels); !errors.Is(err, ErrInvalidManifest) {

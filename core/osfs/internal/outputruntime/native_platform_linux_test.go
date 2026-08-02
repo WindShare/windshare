@@ -16,6 +16,7 @@ func openOutputRuntimeTestPlatform(path string, create bool) (outputcap.Platform
 
 func newRuntimeTestRootSpec(t testing.TB) runtimeTestRootSpec {
 	t.Helper()
+	requireDurableFilesystemScenario(t)
 	fixture := testoutputroot.New(t)
 	return runtimeTestRootSpec{path: fixture.RootPath, create: fixture.CreateRoot}
 }

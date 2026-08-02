@@ -2,7 +2,6 @@ import type { NetworkMatrixProfileId } from '../../vocabulary.ts'
 import {
   parseSignedExternalFixtureAttestation,
   verifyExternalFixtureAttestation,
-  type ManualOperatorTopologyIdentity,
 } from '../external-fixture-attestation.ts'
 import {
   REMOTE_PION_PROTOCOL_VERSION,
@@ -23,7 +22,6 @@ export function authenticateRemotePionAuthority(input: {
   readonly tlsCertificateSha256: string
   readonly attestationPublicKey: string | Buffer
   readonly attestationPublicKeySpki: string
-  readonly manualOperatorIdentity: ManualOperatorTopologyIdentity | undefined
   readonly now: () => number
 }): LiveRemotePionAuthority {
   const signed = parseSignedExternalFixtureAttestation(
@@ -41,9 +39,6 @@ export function authenticateRemotePionAuthority(input: {
     observedControllerIp: input.call.observedRemoteAddress,
     observedTlsCertificateSha256: input.call.observedTlsCertificateSha256,
     attestationPublicKey: input.attestationPublicKey,
-    ...(input.manualOperatorIdentity === undefined
-      ? {}
-      : { manualOperatorIdentity: input.manualOperatorIdentity }),
     now: input.now,
   })
   const fixture = verified.attestation.fixture

@@ -4,10 +4,10 @@ import { evaluateBrowserGate } from '../../verdict.mjs'
 import { runLocalBrowserGatePipeline } from '../../local-gate-runner.mjs'
 
 await verifyCanonicalTraceAndOpaquePayloads()
-await verifyDependencyReuseIsAnExplicitSuccessfulAuthority()
 await verifyContractFailureSkipsSuiteWorkAndStillRunsVerdict()
 await verifyEveryPrerequisiteFailureProjectsHostedStatus()
 await verifyRuntimeRetirementPrecedesVerdictAndFailsBothSuites()
+await verifyHostileFailureCannotBlockTraceSettlement()
 
 process.stdout.write('local browser gate DI/trace contracts: PASS\n')
 
@@ -17,7 +17,6 @@ async function verifyCanonicalTraceAndOpaquePayloads() {
 
   assert.equal(result.exitCode, 0)
   assert.deepEqual(harness.calls, [
-    'dependency-install',
     'browser-contract',
     'generated-semantic-process',
     'browser-runtime-build',
@@ -33,9 +32,8 @@ async function verifyCanonicalTraceAndOpaquePayloads() {
     'browser-verdict',
   ])
   assert.deepEqual(
-    harness.trace.map(({ operationId, outcome }) => [operationId, outcome]),
+    result.traces.events.map(({ operationId, outcome }) => [operationId, outcome]),
     [
-      ['dependency-install', 'success'],
       ['browser-contract', 'success'],
       ['generated-semantic-process', 'success'],
       ['browser-runtime-build', 'success'],
@@ -53,6 +51,11 @@ async function verifyCanonicalTraceAndOpaquePayloads() {
       ['browser-verdict', 'success'],
     ],
   )
+  assert.equal(result.traces.completed, true)
+  assert.equal(result.traces.failure, null)
+  assert.equal(result.traces.observedEvents, result.traces.capturedEvents)
+  assert.equal(result.traces.observedBytes, result.traces.capturedBytes)
+  assert.equal(result.projection.contractJobOutcome, 'success')
   assert.equal(harness.retirementCount, 1)
   for (const suite of ['main', 'pion']) {
     assert.strictEqual(result.suiteOutcomes[suite], harness.productOutcomes[suite])
@@ -62,26 +65,11 @@ async function verifyCanonicalTraceAndOpaquePayloads() {
   }
 }
 
-async function verifyDependencyReuseIsAnExplicitSuccessfulAuthority() {
-  const harness = createHarness({ dependencyInstallReused: true })
-  const result = await runLocalBrowserGatePipeline(harness.ports)
-
-  assert.equal(result.exitCode, 0)
-  assert.equal(harness.calls.includes('dependency-install'), false)
-  assert.deepEqual(harness.trace[0], {
-    operationId: 'dependency-install-reuse',
-    outcome: 'success',
-    authority: 'reused',
-  })
-  assert.equal(result.projection.contractJobOutcome, 'success')
-}
-
 async function verifyContractFailureSkipsSuiteWorkAndStillRunsVerdict() {
   const harness = createHarness({ fault: 'browser-contract', useStandardLibraryVerdict: true })
   const result = await runLocalBrowserGatePipeline(harness.ports)
 
   assert.deepEqual(harness.calls, [
-    'dependency-install',
     'browser-contract',
     'browser-verdict',
   ])
@@ -93,7 +81,7 @@ async function verifyContractFailureSkipsSuiteWorkAndStillRunsVerdict() {
   assert.equal(result.exitCode, 1)
   assert.equal(harness.standardLibraryVerdict.verdict, 'failed')
   assert.deepEqual(
-    harness.trace.filter(({ outcome }) => outcome === 'skipped').map(({ operationId }) => operationId),
+    result.traces.events.filter(({ outcome }) => outcome === 'skipped').map(({ operationId }) => operationId),
     [
       'generated-semantic-process',
       'browser-runtime-build',
@@ -114,7 +102,6 @@ async function verifyContractFailureSkipsSuiteWorkAndStillRunsVerdict() {
 
 async function verifyEveryPrerequisiteFailureProjectsHostedStatus() {
   const cases = [
-    ['dependency-install', 'failure', 'skipped', 'skipped', 'skipped'],
     ['browser-contract', 'failure', 'skipped', 'skipped', 'skipped'],
     ['generated-semantic-process', 'success', 'failure', 'failure', 'failure'],
     ['browser-runtime-build', 'success', 'success', 'failure', 'failure'],
@@ -165,13 +152,36 @@ async function verifyRuntimeRetirementPrecedesVerdictAndFailsBothSuites() {
   }
 }
 
+async function verifyHostileFailureCannotBlockTraceSettlement() {
+  let messageReads = 0
+  const hostileCause = new Error('opaque')
+  Object.defineProperty(hostileCause, 'message', {
+    get() {
+      messageReads += 1
+      throw new Error('message accessor entered')
+    },
+  })
+  const harness = createHarness({
+    fault: 'browser-contract',
+    faultCause: hostileCause,
+    useStandardLibraryVerdict: true,
+  })
+  const result = await runLocalBrowserGatePipeline(harness.ports)
+  assert.equal(result.exitCode, 1)
+  assert.equal(result.traces.completed, true)
+  assert.equal(result.traces.truncated, false)
+  assert.equal(result.traces.failure, null)
+  assert.equal(messageReads, 0)
+  assert.equal(harness.calls.at(-1), 'browser-verdict')
+}
+
 function createHarness({
   fault = null,
+  faultMessage = null,
+  faultCause = null,
   useStandardLibraryVerdict = false,
-  dependencyInstallReused = false,
 } = {}) {
   const calls = []
-  const trace = []
   const runtime = Object.freeze({ authorityId: 'local-runtime-authority' })
   const productOutcomes = Object.freeze(Object.fromEntries(['main', 'pion'].map((suite) => [
     suite,
@@ -199,16 +209,11 @@ function createHarness({
   function enter(operationId) {
     calls.push(operationId)
     if (fault === operationId && !operationId.endsWith('-sealed-evidence')) {
-      throw new Error(`injected ${operationId} failure`)
+      throw faultCause ?? new Error(faultMessage ?? `injected ${operationId} failure`)
     }
   }
 
   const ports = {
-    dependencyInstallReused,
-    async acquireDependencies() {
-      enter('dependency-install')
-      return Object.freeze({ exitCode: 0 })
-    },
     async runContract() {
       enter('browser-contract')
       return Object.freeze({ exitCode: 0 })
@@ -275,14 +280,10 @@ function createHarness({
       }
       return Object.freeze({ exitCode: 0 })
     },
-    trace(event) {
-      trace.push(event)
-    },
   }
 
   return {
     calls,
-    trace,
     ports,
     productOutcomes,
     guardOutcomes,

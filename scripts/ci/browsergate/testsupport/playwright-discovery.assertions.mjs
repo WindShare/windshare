@@ -44,10 +44,7 @@ export const HOSTILE_DISCOVERY_ENVIRONMENT = Object.freeze({
   NO_PROXY: 'forbidden-no-proxy-sentinel.invalid',
   REPOSITORY_SECRET: 'forbidden-repository-secret-sentinel',
   WINDSHARE_BROWSER_EVIDENCE_CONTEXT: 'forbidden-browser-context-sentinel',
-  WINDSHARE_D5_E2E_LEASE_TOKEN: 'forbidden-d5-lease-sentinel',
   WINDSHARE_REPOSITORY_SECRET: 'forbidden-windshare-repository-secret-sentinel',
-  WINDSHARE_R8_PERFORMANCE_SAMPLES: 'forbidden-performance-state-sentinel',
-  WINDSHARE_WINDOWS_OS_NETWORK: 'forbidden-windows-network-authority-sentinel',
 })
 const HOSTILE_DISCOVERY_SENTINELS = Object.freeze(
   Object.values(HOSTILE_DISCOVERY_ENVIRONMENT),
@@ -75,7 +72,10 @@ export function verifyProductionConfigBoundary(productionPartitionPlan) {
   assert.match(mainConfig, /createPlaywrightSuiteDeclarations/u)
   assert.match(pionConfig, /createPlaywrightSuiteDeclarations/u)
   assert(!mainConfig.includes('playwright.discovery'))
-  assert.match(mainConfig, /process\.platform === 'win32'/u)
+  assert.match(mainConfig, /WINDSHARE_WEB_BASE_URL/u)
+  assert.match(pionConfig, /WINDSHARE_WEB_BASE_URL/u)
+  assert.doesNotMatch(mainConfig, /webServer|127\.0\.0\.1:4173|process\.platform/u)
+  assert.doesNotMatch(pionConfig, /webServer|127\.0\.0\.1:4173|process\.platform/u)
 
   const remainderSources = {
     main: readFileSync(join(PLAYWRIGHT_WEB_ROOT, 'playwright.remainder.config.ts'), 'utf8'),

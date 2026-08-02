@@ -378,10 +378,12 @@ func TestReceiverPeerStartsBeforeBlockingSelectionPlanning(t *testing.T) {
 	go func() {
 		defer close(done)
 		_, _, _ = beginReceiverPlanning(
+			ConnectivityAuto,
 			func() *activeReceiverPeer {
 				close(peerStarted)
 				return nil
 			},
+			func() { t.Error("auto planning resumed relay-only path") },
 			func() (transfer.SelectionRules, error) {
 				close(selectionEntered)
 				<-releaseSelection
@@ -401,4 +403,35 @@ func TestReceiverPeerStartsBeforeBlockingSelectionPlanning(t *testing.T) {
 	}
 	close(releaseSelection)
 	<-done
+}
+
+func TestReceiverRelayOnlyPlanningNeverCreatesPeerAttempt(t *testing.T) {
+	peerStarts := 0
+	relayResumes := 0
+	_, _, err := beginReceiverPlanning(
+		ConnectivityRelayOnly,
+		func() *activeReceiverPeer {
+			peerStarts++
+			return nil
+		},
+		func() { relayResumes++ },
+		func() (transfer.SelectionRules, error) { return transfer.SelectionRules{}, nil },
+	)
+	if err != nil || peerStarts != 0 || relayResumes != 1 {
+		t.Fatalf("relay-only planning: err=%v peer_starts=%d relay_resumes=%d", err, peerStarts, relayResumes)
+	}
+}
+
+func TestConnectivityPolicyRejectsUnknownValues(t *testing.T) {
+	for name, want := range map[string]ConnectivityPolicy{
+		"auto": ConnectivityAuto, "relay-only": ConnectivityRelayOnly,
+	} {
+		got, err := ParseConnectivityPolicy(name)
+		if err != nil || got != want || got.String() != name {
+			t.Fatalf("parse %q = %v, %v", name, got, err)
+		}
+	}
+	if _, err := ParseConnectivityPolicy("relay"); !errors.Is(err, ErrInvalidConnectivityPolicy) {
+		t.Fatalf("unknown policy error = %v", err)
+	}
 }

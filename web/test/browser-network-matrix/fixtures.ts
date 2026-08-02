@@ -24,7 +24,12 @@ import type {
   NetworkMatrixPrerequisiteOutcome,
   NetworkMatrixProfileId,
 } from '../../scripts/browser-network-matrix/vocabulary.ts'
-import { NETWORK_MATRIX_IDENTITIES_PER_PROFILE } from '../../scripts/browser-network-matrix/vocabulary.ts'
+import {
+  NETWORK_MATRIX_IDENTITIES_PER_PROFILE,
+  NETWORK_RUN_RESULT_SCHEMA,
+  NETWORK_RUNTIME_ATTESTATION_SCHEMA,
+  NETWORK_SAMPLE_RESULT_SCHEMA,
+} from '../../scripts/browser-network-matrix/vocabulary.ts'
 import {
   testExternalFixtureTrustProof,
   testNetworkMatrixAttemptEvidence,
@@ -32,7 +37,7 @@ import {
 } from './signed-fixture.ts'
 
 export const MANIFEST_PATH = fileURLToPath(new URL(
-  '../../../testdata/browser-network-matrix/manifest.v1.json',
+  '../../../testdata/browser-network-matrix/scheduled-hard.manifest.v2.json',
   import.meta.url,
 ))
 
@@ -123,7 +128,7 @@ export function makeRunRaw(
     }
   })
   return {
-    schemaVersion: 'windshare.browser-network-matrix.run-result/v1',
+    schemaVersion: NETWORK_RUN_RESULT_SCHEMA,
     runId,
     manifestSha256: registry.manifestSha256,
     executionMode: mode,
@@ -156,7 +161,7 @@ export function rawAttestation(
   const reference = registry.manifest.profiles.find((profile) => profile.profileId === profileId)
   if (reference === undefined) throw new Error(`test fixture lacks profile ${profileId}`)
   return {
-    schemaVersion: 'windshare.browser-network-matrix.runtime-attestation/v2',
+    schemaVersion: NETWORK_RUNTIME_ATTESTATION_SCHEMA,
     runId,
     manifestSha256: registry.manifestSha256,
     profileId,
@@ -183,7 +188,7 @@ function rawSample(
   const attemptEvidence = cloneJson(matchedAttemptEvidence(identity, context.runId))
   const evaluation = evaluateNetworkCandidatePolicy(attemptEvidence.browserSelectedPair, profile)
   return {
-    schemaVersion: 'windshare.browser-network-matrix.sample-result/v1',
+    schemaVersion: NETWORK_SAMPLE_RESULT_SCHEMA,
     runId: context.runId,
     manifestSha256: context.manifestSha256,
     identity,

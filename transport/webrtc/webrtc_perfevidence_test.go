@@ -1,0 +1,374 @@
+package webrtc
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pion/ice/v4"
+	"github.com/pion/logging"
+	"github.com/pion/transport/v4/vnet"
+	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/core/framechannel"
+)
+
+const (
+	benchmarkPeerTimeout                    = 10 * time.Second
+	benchmarkTransferTimeout                = 2 * time.Minute
+	benchmarkKiB                            = 1024
+	benchmarkMiB                            = 1024 * benchmarkKiB
+	benchmarkExpectedLowWaterBytes          = 256 * benchmarkKiB
+	benchmarkExpectedHighWaterBytes         = benchmarkMiB
+	benchmarkExpectedSendAdmissionHighWater = benchmarkExpectedHighWaterBytes - 1
+	benchmarkExpectedMaxFrameBytes          = 64 * benchmarkKiB
+	benchmarkVirtualNetworkCIDR             = "192.0.2.0/24"
+	benchmarkLeftVirtualIP                  = "192.0.2.10"
+	benchmarkRightVirtualIP                 = "192.0.2.20"
+)
+
+var benchmarkChunkSizes = [...]int{
+	benchmarkKiB,
+	64 * benchmarkKiB,
+	benchmarkMiB,
+	4 * benchmarkMiB,
+}
+
+// BenchmarkPionChunkTransfer measures the production adapter rather than raw
+// Pion. Each chunk is split at WindShare's frame boundary so the 1 KiB..4 MiB
+// geometry exercises the same bufferedAmount hysteresis used by real sessions.
+func BenchmarkPionChunkTransfer(b *testing.B) {
+	for _, chunkBytes := range benchmarkChunkSizes {
+		b.Run(fmt.Sprintf("chunk_%dKiB", chunkBytes/benchmarkKiB), func(b *testing.B) {
+			benchmarkPionChunkTransfer(b, chunkBytes)
+		})
+	}
+}
+
+func benchmarkPionChunkTransfer(b *testing.B, chunkBytes int) {
+	if defaultLowWaterBytes != benchmarkExpectedLowWaterBytes ||
+		defaultHighWaterBytes != benchmarkExpectedHighWaterBytes ||
+		defaultFlowControl.highWaterBytes != benchmarkExpectedSendAdmissionHighWater ||
+		framechannel.MaxFrameSize != benchmarkExpectedMaxFrameBytes {
+		b.Fatalf(
+			"production buffering constants changed: low=%d/%d high=%d/%d admission=%d/%d frame=%d/%d",
+			defaultLowWaterBytes,
+			benchmarkExpectedLowWaterBytes,
+			defaultHighWaterBytes,
+			benchmarkExpectedHighWaterBytes,
+			defaultFlowControl.highWaterBytes,
+			benchmarkExpectedSendAdmissionHighWater,
+			framechannel.MaxFrameSize,
+			benchmarkExpectedMaxFrameBytes,
+		)
+	}
+	left, right, raw := newBenchmarkPionPair(b)
+
+	frames, err := benchmarkChunkFrames(chunkBytes)
+	if err != nil {
+		b.Fatalf("construct benchmark chunk frames: %v", err)
+	}
+	wireBytes := benchmarkFrameBytes(frames)
+	totalFrames := b.N * len(frames)
+	received := make(chan benchmarkReceiveResult, 1)
+	go receiveBenchmarkFrames(right, totalFrames, received)
+
+	ctx, cancel := context.WithTimeout(context.Background(), benchmarkTransferTimeout)
+	defer cancel()
+	var peakBuffered uint64
+
+	b.ReportAllocs()
+	b.SetBytes(int64(chunkBytes))
+	b.ResetTimer()
+	for range b.N {
+		for _, frame := range frames {
+			if err := left.Send(ctx, frame); err != nil {
+				b.Fatalf("send benchmark frame: %v", err)
+			}
+			peakBuffered = max(peakBuffered, raw.BufferedAmount())
+		}
+	}
+	var result benchmarkReceiveResult
+	select {
+	case result = <-received:
+	case <-ctx.Done():
+		b.Fatalf("receive benchmark frames: %v", ctx.Err())
+	}
+	b.StopTimer()
+	if result.err != nil {
+		b.Fatal(result.err)
+	}
+	wantBytes := int64(b.N) * int64(wireBytes)
+	if result.bytes != wantBytes {
+		b.Fatalf("received bytes = %d, want %d", result.bytes, wantBytes)
+	}
+	peakExclusiveLimitBytes := uint64(benchmarkExpectedHighWaterBytes + benchmarkExpectedMaxFrameBytes)
+	if peakBuffered >= peakExclusiveLimitBytes {
+		b.Fatalf(
+			"peak buffered bytes = %d, must be below one-frame high-water limit %d",
+			peakBuffered,
+			peakExclusiveLimitBytes,
+		)
+	}
+	b.ReportMetric(float64(len(frames)), "frames/chunk")
+	b.ReportMetric(float64(wireBytes), "wire-B/chunk")
+	b.ReportMetric(float64(peakBuffered), "peak-buffered-B")
+	b.ReportMetric(float64(defaultLowWaterBytes), "low-water-B")
+	b.ReportMetric(float64(defaultHighWaterBytes), "high-water-B")
+	b.ReportMetric(float64(defaultFlowControl.highWaterBytes), "send-admission-high-water-B")
+	b.ReportMetric(float64(framechannel.MaxFrameSize), "max-frame-B")
+}
+
+type benchmarkReceiveResult struct {
+	bytes int64
+	err   error
+}
+
+func receiveBenchmarkFrames(channel *Channel, frames int, result chan<- benchmarkReceiveResult) {
+	var received int64
+	for range frames {
+		frame, ok := <-channel.Recv()
+		if !ok {
+			result <- benchmarkReceiveResult{err: fmt.Errorf(
+				"benchmark receive closed after %d bytes: %w",
+				received,
+				channel.Err(),
+			)}
+			return
+		}
+		received += int64(len(frame))
+	}
+	result <- benchmarkReceiveResult{bytes: received}
+}
+
+func benchmarkChunkFrames(chunkBytes int) ([]framechannel.Frame, error) {
+	if chunkBytes <= 0 {
+		return nil, errors.New("benchmark chunk size must be positive")
+	}
+	block := make([]byte, chunkBytes)
+	for index := range block {
+		block[index] = byte((index*31 + chunkBytes) % 251)
+	}
+	frameCount := (len(block) + framechannel.MaxFrameSize - 1) / framechannel.MaxFrameSize
+	frames := make([]framechannel.Frame, 0, frameCount)
+	for offset := 0; offset < len(block); offset += framechannel.MaxFrameSize {
+		end := min(offset+framechannel.MaxFrameSize, len(block))
+		frames = append(frames, append(framechannel.Frame(nil), block[offset:end]...))
+	}
+	return frames, nil
+}
+
+func benchmarkFrameBytes(frames []framechannel.Frame) int {
+	total := 0
+	for _, frame := range frames {
+		total += len(frame)
+	}
+	return total
+}
+
+type benchmarkRemoteChannel struct {
+	channel *Channel
+	err     error
+}
+
+func newBenchmarkPionPair(b *testing.B) (
+	*Channel,
+	*Channel,
+	*pion.DataChannel,
+) {
+	b.Helper()
+	leftAPI, rightAPI := benchmarkVirtualNetworkAPIs(b)
+	leftPeer := benchmarkPeerConnection(b, leftAPI)
+	rightPeer := benchmarkPeerConnection(b, rightAPI)
+
+	remoteReady := make(chan benchmarkRemoteChannel, 1)
+	rightPeer.OnDataChannel(func(raw *pion.DataChannel) {
+		channel, err := NewChannel(raw)
+		remoteReady <- benchmarkRemoteChannel{channel: channel, err: err}
+	})
+
+	leftRaw, err := leftPeer.CreateDataChannel(ChannelLabel, DefaultDataChannelInit())
+	if err != nil {
+		b.Fatalf("create benchmark DataChannel: %v", err)
+	}
+	left, err := NewChannel(leftRaw)
+	if err != nil {
+		b.Fatalf("wrap benchmark DataChannel: %v", err)
+	}
+	benchmarkNegotiatePeers(b, leftPeer, rightPeer)
+
+	var remote benchmarkRemoteChannel
+	select {
+	case remote = <-remoteReady:
+	case <-time.After(benchmarkPeerTimeout):
+		b.Fatal("timeout waiting for benchmark remote DataChannel")
+	}
+	if remote.err != nil {
+		b.Fatalf("wrap benchmark remote DataChannel: %v", remote.err)
+	}
+	benchmarkWaitOpened(b, left)
+	benchmarkWaitOpened(b, remote.channel)
+	return left, remote.channel, leftRaw
+}
+
+func benchmarkVirtualNetworkAPIs(b *testing.B) (*pion.API, *pion.API) {
+	b.Helper()
+	loggerFactory := logging.NewDefaultLoggerFactory()
+	loggerFactory.DefaultLogLevel = logging.LogLevelDisabled
+	loggerFactory.ScopeLevels = map[string]logging.LogLevel{}
+	loggerFactory.Writer = io.Discard
+	router, err := vnet.NewRouter(&vnet.RouterConfig{
+		CIDR:          benchmarkVirtualNetworkCIDR,
+		LoggerFactory: loggerFactory,
+	})
+	if err != nil {
+		b.Fatalf("create benchmark virtual router: %v", err)
+	}
+	leftNetwork, err := vnet.NewNet(&vnet.NetConfig{StaticIPs: []string{benchmarkLeftVirtualIP}})
+	if err != nil {
+		b.Fatalf("create left benchmark virtual network: %v", err)
+	}
+	rightNetwork, err := vnet.NewNet(&vnet.NetConfig{StaticIPs: []string{benchmarkRightVirtualIP}})
+	if err != nil {
+		b.Fatalf("create right benchmark virtual network: %v", err)
+	}
+	if err := router.AddNet(leftNetwork); err != nil {
+		b.Fatalf("attach left benchmark virtual network: %v", err)
+	}
+	if err := router.AddNet(rightNetwork); err != nil {
+		b.Fatalf("attach right benchmark virtual network: %v", err)
+	}
+	if err := router.Start(); err != nil {
+		b.Fatalf("start benchmark virtual router: %v", err)
+	}
+	b.Cleanup(func() {
+		if err := router.Stop(); err != nil {
+			b.Errorf("stop benchmark virtual router: %v", err)
+		}
+	})
+
+	// Separate Pion APIs ensure every peer is confined to its own userspace net.
+	// This preserves the real ICE/DTLS/SCTP/DataChannel stack without granting
+	// either performance sandbox access to a host network namespace or socket.
+	return benchmarkVirtualNetworkAPI(leftNetwork), benchmarkVirtualNetworkAPI(rightNetwork)
+}
+
+func benchmarkVirtualNetworkAPI(network *vnet.Net) *pion.API {
+	var setting pion.SettingEngine
+	setting.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+	setting.SetNetworkTypes([]pion.NetworkType{pion.NetworkTypeUDP4})
+	setting.SetNet(network)
+	return pion.NewAPI(pion.WithSettingEngine(setting))
+}
+
+func benchmarkPeerConnection(b *testing.B, api *pion.API) *pion.PeerConnection {
+	b.Helper()
+	peer, err := api.NewPeerConnection(pion.Configuration{})
+	if err != nil {
+		b.Fatalf("create benchmark PeerConnection: %v", err)
+	}
+	b.Cleanup(func() {
+		if err := peer.Close(); err != nil {
+			b.Errorf("close benchmark PeerConnection: %v", err)
+		}
+	})
+	return peer
+}
+
+func benchmarkNegotiatePeers(
+	b *testing.B,
+	offerer *pion.PeerConnection,
+	answerer *pion.PeerConnection,
+) {
+	b.Helper()
+	offer, err := offerer.CreateOffer(nil)
+	if err != nil {
+		b.Fatalf("create benchmark offer: %v", err)
+	}
+	offerGathered := pion.GatheringCompletePromise(offerer)
+	if err := offerer.SetLocalDescription(offer); err != nil {
+		b.Fatalf("set benchmark local offer: %v", err)
+	}
+	benchmarkWaitGathering(b, offerGathered)
+	benchmarkRequireVirtualCandidates(b, "offer", offerer.LocalDescription(), benchmarkLeftVirtualIP)
+	if err := answerer.SetRemoteDescription(*offerer.LocalDescription()); err != nil {
+		b.Fatalf("set benchmark remote offer: %v", err)
+	}
+
+	answer, err := answerer.CreateAnswer(nil)
+	if err != nil {
+		b.Fatalf("create benchmark answer: %v", err)
+	}
+	answerGathered := pion.GatheringCompletePromise(answerer)
+	if err := answerer.SetLocalDescription(answer); err != nil {
+		b.Fatalf("set benchmark local answer: %v", err)
+	}
+	benchmarkWaitGathering(b, answerGathered)
+	benchmarkRequireVirtualCandidates(b, "answer", answerer.LocalDescription(), benchmarkRightVirtualIP)
+	if err := offerer.SetRemoteDescription(*answerer.LocalDescription()); err != nil {
+		b.Fatalf("set benchmark remote answer: %v", err)
+	}
+}
+
+func benchmarkRequireVirtualCandidates(
+	b *testing.B,
+	label string,
+	description *pion.SessionDescription,
+	expectedAddress string,
+) {
+	b.Helper()
+	if description == nil {
+		b.Fatalf("benchmark %s description is unavailable", label)
+		return
+	}
+	found := false
+	for line := range strings.SplitSeq(description.SDP, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "a=candidate:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 6 {
+			b.Fatalf("benchmark %s candidate is malformed: %q", label, line)
+			return
+		}
+		address := net.ParseIP(fields[4])
+		if address == nil || !address.Equal(net.ParseIP(expectedAddress)) {
+			b.Fatalf(
+				"benchmark %s candidate address %q differs from virtual endpoint %q",
+				label,
+				fields[4],
+				expectedAddress,
+			)
+			return
+		}
+		found = true
+	}
+	if !found {
+		b.Fatalf("benchmark %s has no virtual-network ICE candidate", label)
+	}
+}
+
+func benchmarkWaitGathering(b *testing.B, done <-chan struct{}) {
+	b.Helper()
+	select {
+	case <-done:
+	case <-time.After(benchmarkPeerTimeout):
+		b.Fatal("timeout waiting for benchmark ICE gathering")
+	}
+}
+
+func benchmarkWaitOpened(b *testing.B, channel *Channel) {
+	b.Helper()
+	select {
+	case <-channel.Opened():
+	case <-channel.Done():
+		b.Fatalf("benchmark channel closed before Open: %v", channel.Err())
+	case <-time.After(benchmarkPeerTimeout):
+		b.Fatal("timeout waiting for benchmark channel Open")
+	}
+}

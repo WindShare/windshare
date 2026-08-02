@@ -332,7 +332,7 @@ func validOpaqueID(value string) bool { return opaqueIDPattern.MatchString(value
 
 func validProfileID(value string) bool {
 	return value == "scheduled-public-stun" || value == "scheduled-restricted-udp" ||
-		value == "scheduled-coturn" || value == "manual-real-nat"
+		value == "scheduled-coturn"
 }
 
 func parseTimestamp(value string) (time.Time, error) {

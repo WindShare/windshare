@@ -8,8 +8,9 @@ import {
   type BrowserRunPolicy,
 } from './run-policy.ts'
 import {
-  runBrowserSample,
+  startBrowserSample,
   type BrowserSampleCommand,
+  type BrowserSampleRunExecution,
 } from './sample-runner.ts'
 import {
   parseTestIceTopologyJson,
@@ -37,11 +38,11 @@ export async function browserEvidenceCli(arguments_: readonly string[]): Promise
 
 async function runSampleCommand(options: CliOptions): Promise<number> {
   assertOnlyOptions(options, [
-    'run-id', 'suite', 'browser', 'sample', 'checkout-sha', 'output-root',
+    'run-id', 'operation-id', 'scenario', 'suite', 'browser', 'sample', 'checkout-sha', 'output-root',
     'run-policy',
     'profile', 'profile-sha256', 'resolution', 'resolution-sha256',
     'executable', 'arg', 'cwd', 'env', 'capture-bytes', 'deadline-ms',
-    'windows-job-helper',
+    'process-owner',
   ])
   const topology = await loadTopologyLock(options)
   const suite = browserSuite(requiredOption(options, 'suite'))
@@ -50,9 +51,13 @@ async function runSampleCommand(options: CliOptions): Promise<number> {
   const sampleIndex = policySampleIndex(requiredOption(options, 'sample'), runPolicy)
   const outputRoot = resolve(requiredOption(options, 'output-root'))
   const command = childCommand(options)
-  const windowsJobHelper = optionalOption(options, 'windows-job-helper')
-  const outcome = await runBrowserSample({
+  const processOwner = Object.freeze({
+    path: resolve(requiredOption(options, 'process-owner')),
+  })
+  const execution = startBrowserSample({
     runId: requiredOption(options, 'run-id'),
+    operationId: requiredOption(options, 'operation-id'),
+    scenario: requiredOption(options, 'scenario'),
     runPolicy,
     suite,
     browser,
@@ -63,7 +68,7 @@ async function runSampleCommand(options: CliOptions): Promise<number> {
     topologyProfilePath: topology.profilePath,
     topologyResolutionPath: topology.resolutionPath,
     command,
-    ...(windowsJobHelper === undefined ? {} : { windowsJobHelperPath: resolve(windowsJobHelper) }),
+    processOwner,
     ...(optionalOption(options, 'capture-bytes') === undefined
       ? {}
       : { maximumCapturedStreamBytes: positiveInteger(requiredOption(options, 'capture-bytes'), 'capture-bytes') }),
@@ -71,7 +76,18 @@ async function runSampleCommand(options: CliOptions): Promise<number> {
       ? {}
       : { processDeadlineMs: positiveInteger(requiredOption(options, 'deadline-ms'), 'deadline-ms') }),
   })
+  let outcome
+  try {
+    outcome = await execution.result
+  } finally {
+    emitSettledBrowserSampleTraces(execution)
+  }
   process.stdout.write(`${JSON.stringify({
+    component: 'browser-evidence-cli',
+    run_id: requiredOption(options, 'run-id'),
+    operation_id: requiredOption(options, 'operation-id'),
+    scenario: requiredOption(options, 'scenario'),
+    outcome: outcome.acceptedBeforeGuard ? 'succeeded' : 'failed',
     command: 'run-sample',
     resultPath: outcome.resultPath,
     artifactRoot: outcome.artifactRoot,
@@ -79,6 +95,18 @@ async function runSampleCommand(options: CliOptions): Promise<number> {
     acceptedBeforeGuard: outcome.acceptedBeforeGuard,
   })}\n`)
   return outcome.acceptedBeforeGuard ? 0 : 1
+}
+
+function emitSettledBrowserSampleTraces(execution: BrowserSampleRunExecution): void {
+  const snapshot = execution.traces.snapshot()
+  if (
+    !snapshot.completed ||
+    snapshot.truncated ||
+    snapshot.observedEvents !== snapshot.capturedEvents
+  ) throw new Error('browser sample CLI received incomplete lifecycle trace evidence')
+  for (const event of snapshot.events) {
+    process.stderr.write(`${JSON.stringify(event)}\n`)
+  }
 }
 
 function decodeUtf8(encoded: Uint8Array, label: string): string {
@@ -237,6 +265,11 @@ function positiveInteger(value: string, label: string): number {
   return parsed
 }
 
+function sha256(value: string, label: string): string {
+  if (!/^[0-9a-f]{64}$/u.test(value)) throw new Error(`${label} must be lowercase SHA-256`)
+  return value
+}
+
 function policySampleIndex(value: string, runPolicy: BrowserRunPolicy): number {
   const parsed = positiveInteger(value, 'sample')
   if (parsed > runPolicy.sampleCount) {
@@ -248,7 +281,7 @@ function policySampleIndex(value: string, runPolicy: BrowserRunPolicy): number {
 function cliUsage(): string {
   return [
     'browser evidence commands:',
-    '  run-sample --run-id ID --run-policy blocking|closure|stability --suite main|pion --browser ENGINE --sample N --checkout-sha SHA --output-root DIR --profile FILE --profile-sha256 SHA --resolution FILE --resolution-sha256 SHA --executable FILE [--arg VALUE ...] [--windows-job-helper FILE]',
+    '  run-sample --run-id ID --operation-id ID --scenario ID --run-policy blocking|closure|stability --suite main|pion --browser ENGINE --sample N --checkout-sha SHA --output-root DIR --profile FILE --profile-sha256 SHA --resolution FILE --resolution-sha256 SHA --executable FILE --process-owner FILE [--arg VALUE ...]',
   ].join('\n')
 }
 

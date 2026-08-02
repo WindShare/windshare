@@ -1,0 +1,151 @@
+{
+  "schema_version": "windshare.process-owner-start-gate-test-vectors/v1",
+  "vectors": [
+    {
+      "name": "windows",
+      "evidence": {
+        "schema_version": "windshare.process-owner-start-evidence/v1",
+        "run_id": "process-owner-vector-run",
+        "operation_id": "windows-start-gate",
+        "scenario": "process-owner-start-gate-vector",
+        "platform": "windows_job",
+        "process_id": 4242,
+        "process_instance": "18446744073709551615",
+        "executable": {
+          "volume": "0123456789abcdef",
+          "object": "00112233445566778899aabbccddeeff"
+        }
+      },
+      "accepted_decision": {
+        "schema_version": "windshare.process-owner-start-decision/v1",
+        "run_id": "process-owner-vector-run",
+        "operation_id": "windows-start-gate",
+        "scenario": "process-owner-start-gate-vector",
+        "platform": "windows_job",
+        "process_id": 4242,
+        "process_instance": "18446744073709551615",
+        "executable": {
+          "volume": "0123456789abcdef",
+          "object": "00112233445566778899aabbccddeeff"
+        },
+        "outcome": "accepted"
+      },
+      "rejected_decision": {
+        "schema_version": "windshare.process-owner-start-decision/v1",
+        "run_id": "process-owner-vector-run",
+        "operation_id": "windows-start-gate",
+        "scenario": "process-owner-start-gate-vector",
+        "platform": "windows_job",
+        "process_id": 4242,
+        "process_instance": "18446744073709551615",
+        "executable": {
+          "volume": "0123456789abcdef",
+          "object": "00112233445566778899aabbccddeeff"
+        },
+        "outcome": "rejected",
+        "failure_code": "EXECUTABLE_AUTHORITY_REJECTED",
+        "failure_message": "live executable identity was not authorized"
+      },
+      "rejected_settlement": {
+        "schema_version": "windshare.process-owner-settlement/v3",
+        "run_id": "process-owner-vector-run",
+        "operation_id": "windows-start-gate",
+        "scenario": "process-owner-start-gate-vector",
+        "termination_reason": "start_rejected",
+        "target": {
+          "outcome": "not_started",
+          "failure_code": "START_REJECTED",
+          "failure_message": "EXECUTABLE_AUTHORITY_REJECTED: live executable identity was not authorized"
+        },
+        "input": {
+          "outcome": "not_requested"
+        },
+        "tree_state": "proven_empty",
+        "cleanup": {
+          "outcome": "completed"
+        },
+        "platform": {
+          "kind": "windows_job",
+          "owner_pid": 101,
+          "active_process_count": 0
+        }
+      },
+      "evidence_frame_base64": "AAABX3sic2NoZW1hX3ZlcnNpb24iOiJ3aW5kc2hhcmUucHJvY2Vzcy1vd25lci1zdGFydC1ldmlkZW5jZS92MSIsInJ1bl9pZCI6InByb2Nlc3Mtb3duZXItdmVjdG9yLXJ1biIsIm9wZXJhdGlvbl9pZCI6IndpbmRvd3Mtc3RhcnQtZ2F0ZSIsInNjZW5hcmlvIjoicHJvY2Vzcy1vd25lci1zdGFydC1nYXRlLXZlY3RvciIsInBsYXRmb3JtIjoid2luZG93c19qb2IiLCJwcm9jZXNzX2lkIjo0MjQyLCJwcm9jZXNzX2luc3RhbmNlIjoiMTg0NDY3NDQwNzM3MDk1NTE2MTUiLCJleGVjdXRhYmxlIjp7InZvbHVtZSI6IjAxMjM0NTY3ODlhYmNkZWYiLCJvYmplY3QiOiIwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiJ9fQ==",
+      "accepted_decision_frame_base64": "AAABdHsic2NoZW1hX3ZlcnNpb24iOiJ3aW5kc2hhcmUucHJvY2Vzcy1vd25lci1zdGFydC1kZWNpc2lvbi92MSIsInJ1bl9pZCI6InByb2Nlc3Mtb3duZXItdmVjdG9yLXJ1biIsIm9wZXJhdGlvbl9pZCI6IndpbmRvd3Mtc3RhcnQtZ2F0ZSIsInNjZW5hcmlvIjoicHJvY2Vzcy1vd25lci1zdGFydC1nYXRlLXZlY3RvciIsInBsYXRmb3JtIjoid2luZG93c19qb2IiLCJwcm9jZXNzX2lkIjo0MjQyLCJwcm9jZXNzX2luc3RhbmNlIjoiMTg0NDY3NDQwNzM3MDk1NTE2MTUiLCJleGVjdXRhYmxlIjp7InZvbHVtZSI6IjAxMjM0NTY3ODlhYmNkZWYiLCJvYmplY3QiOiIwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiJ9LCJvdXRjb21lIjoiYWNjZXB0ZWQifQ==",
+      "rejected_decision_frame_base64": "AAAB43sic2NoZW1hX3ZlcnNpb24iOiJ3aW5kc2hhcmUucHJvY2Vzcy1vd25lci1zdGFydC1kZWNpc2lvbi92MSIsInJ1bl9pZCI6InByb2Nlc3Mtb3duZXItdmVjdG9yLXJ1biIsIm9wZXJhdGlvbl9pZCI6IndpbmRvd3Mtc3RhcnQtZ2F0ZSIsInNjZW5hcmlvIjoicHJvY2Vzcy1vd25lci1zdGFydC1nYXRlLXZlY3RvciIsInBsYXRmb3JtIjoid2luZG93c19qb2IiLCJwcm9jZXNzX2lkIjo0MjQyLCJwcm9jZXNzX2luc3RhbmNlIjoiMTg0NDY3NDQwNzM3MDk1NTE2MTUiLCJleGVjdXRhYmxlIjp7InZvbHVtZSI6IjAxMjM0NTY3ODlhYmNkZWYiLCJvYmplY3QiOiIwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiJ9LCJvdXRjb21lIjoicmVqZWN0ZWQiLCJmYWlsdXJlX2NvZGUiOiJFWEVDVVRBQkxFX0FVVEhPUklUWV9SRUpFQ1RFRCIsImZhaWx1cmVfbWVzc2FnZSI6ImxpdmUgZXhlY3V0YWJsZSBpZGVudGl0eSB3YXMgbm90IGF1dGhvcml6ZWQifQ=="
+    },
+    {
+      "name": "linux",
+      "evidence": {
+        "schema_version": "windshare.process-owner-start-evidence/v1",
+        "run_id": "process-owner-vector-run",
+        "operation_id": "linux-start-gate",
+        "scenario": "process-owner-start-gate-vector",
+        "platform": "linux_subreaper",
+        "process_id": 4343,
+        "process_instance": "987654321",
+        "executable": {
+          "volume": "00000000000000f1",
+          "object": "0123456789abcdef0123456789abcdef"
+        }
+      },
+      "accepted_decision": {
+        "schema_version": "windshare.process-owner-start-decision/v1",
+        "run_id": "process-owner-vector-run",
+        "operation_id": "linux-start-gate",
+        "scenario": "process-owner-start-gate-vector",
+        "platform": "linux_subreaper",
+        "process_id": 4343,
+        "process_instance": "987654321",
+        "executable": {
+          "volume": "00000000000000f1",
+          "object": "0123456789abcdef0123456789abcdef"
+        },
+        "outcome": "accepted"
+      },
+      "rejected_decision": {
+        "schema_version": "windshare.process-owner-start-decision/v1",
+        "run_id": "process-owner-vector-run",
+        "operation_id": "linux-start-gate",
+        "scenario": "process-owner-start-gate-vector",
+        "platform": "linux_subreaper",
+        "process_id": 4343,
+        "process_instance": "987654321",
+        "executable": {
+          "volume": "00000000000000f1",
+          "object": "0123456789abcdef0123456789abcdef"
+        },
+        "outcome": "rejected",
+        "failure_code": "EXECUTABLE_AUTHORITY_REJECTED",
+        "failure_message": "live executable identity was not authorized"
+      },
+      "rejected_settlement": {
+        "schema_version": "windshare.process-owner-settlement/v3",
+        "run_id": "process-owner-vector-run",
+        "operation_id": "linux-start-gate",
+        "scenario": "process-owner-start-gate-vector",
+        "termination_reason": "start_rejected",
+        "target": {
+          "outcome": "not_started",
+          "failure_code": "START_REJECTED",
+          "failure_message": "EXECUTABLE_AUTHORITY_REJECTED: live executable identity was not authorized"
+        },
+        "input": {
+          "outcome": "not_requested"
+        },
+        "tree_state": "proven_empty",
+        "cleanup": {
+          "outcome": "completed"
+        },
+        "platform": {
+          "kind": "linux_subreaper",
+          "owner_pid": 101,
+          "active_process_count": 0
+        }
+      },
+      "evidence_frame_base64": "AAABVnsic2NoZW1hX3ZlcnNpb24iOiJ3aW5kc2hhcmUucHJvY2Vzcy1vd25lci1zdGFydC1ldmlkZW5jZS92MSIsInJ1bl9pZCI6InByb2Nlc3Mtb3duZXItdmVjdG9yLXJ1biIsIm9wZXJhdGlvbl9pZCI6ImxpbnV4LXN0YXJ0LWdhdGUiLCJzY2VuYXJpbyI6InByb2Nlc3Mtb3duZXItc3RhcnQtZ2F0ZS12ZWN0b3IiLCJwbGF0Zm9ybSI6ImxpbnV4X3N1YnJlYXBlciIsInByb2Nlc3NfaWQiOjQzNDMsInByb2Nlc3NfaW5zdGFuY2UiOiI5ODc2NTQzMjEiLCJleGVjdXRhYmxlIjp7InZvbHVtZSI6IjAwMDAwMDAwMDAwMDAwZjEiLCJvYmplY3QiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZiJ9fQ==",
+      "accepted_decision_frame_base64": "AAABa3sic2NoZW1hX3ZlcnNpb24iOiJ3aW5kc2hhcmUucHJvY2Vzcy1vd25lci1zdGFydC1kZWNpc2lvbi92MSIsInJ1bl9pZCI6InByb2Nlc3Mtb3duZXItdmVjdG9yLXJ1biIsIm9wZXJhdGlvbl9pZCI6ImxpbnV4LXN0YXJ0LWdhdGUiLCJzY2VuYXJpbyI6InByb2Nlc3Mtb3duZXItc3RhcnQtZ2F0ZS12ZWN0b3IiLCJwbGF0Zm9ybSI6ImxpbnV4X3N1YnJlYXBlciIsInByb2Nlc3NfaWQiOjQzNDMsInByb2Nlc3NfaW5zdGFuY2UiOiI5ODc2NTQzMjEiLCJleGVjdXRhYmxlIjp7InZvbHVtZSI6IjAwMDAwMDAwMDAwMDAwZjEiLCJvYmplY3QiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZiJ9LCJvdXRjb21lIjoiYWNjZXB0ZWQifQ==",
+      "rejected_decision_frame_base64": "AAAB2nsic2NoZW1hX3ZlcnNpb24iOiJ3aW5kc2hhcmUucHJvY2Vzcy1vd25lci1zdGFydC1kZWNpc2lvbi92MSIsInJ1bl9pZCI6InByb2Nlc3Mtb3duZXItdmVjdG9yLXJ1biIsIm9wZXJhdGlvbl9pZCI6ImxpbnV4LXN0YXJ0LWdhdGUiLCJzY2VuYXJpbyI6InByb2Nlc3Mtb3duZXItc3RhcnQtZ2F0ZS12ZWN0b3IiLCJwbGF0Zm9ybSI6ImxpbnV4X3N1YnJlYXBlciIsInByb2Nlc3NfaWQiOjQzNDMsInByb2Nlc3NfaW5zdGFuY2UiOiI5ODc2NTQzMjEiLCJleGVjdXRhYmxlIjp7InZvbHVtZSI6IjAwMDAwMDAwMDAwMDAwZjEiLCJvYmplY3QiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZiJ9LCJvdXRjb21lIjoicmVqZWN0ZWQiLCJmYWlsdXJlX2NvZGUiOiJFWEVDVVRBQkxFX0FVVEhPUklUWV9SRUpFQ1RFRCIsImZhaWx1cmVfbWVzc2FnZSI6ImxpdmUgZXhlY3V0YWJsZSBpZGVudGl0eSB3YXMgbm90IGF1dGhvcml6ZWQifQ=="
+    }
+  ]
+}

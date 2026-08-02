@@ -2,13 +2,10 @@ import { createHash } from 'node:crypto'
 import { isAbsolute, join, resolve } from 'node:path'
 
 import { BROWSER_SAMPLE_DRIVER_SCHEMA_VERSION } from '../../../../web/scripts/browser-evidence/sample-driver.ts'
-import { D5_SETTLEMENT_OWNERSHIP_ENVIRONMENT_NAMES } from '../../../../web/scripts/browser-evidence/process/d5-ownership.ts'
 import { parseBrowserRunPolicy } from '../../../../web/scripts/browser-evidence/run-policy.ts'
 
-export { D5_SETTLEMENT_OWNERSHIP_ENVIRONMENT_NAMES }
-
 export const PROCESS_SETTLEMENT_COMMAND_SCHEMA_VERSION =
-  'windshare.sample-command-authority/v4'
+  'windshare.sample-command-authority/v7'
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u
 const CHECKOUT_SHA_PATTERN = /^[a-f0-9]{40}$/u
@@ -24,33 +21,34 @@ const SAMPLE_DRIVER_RELATIVE_PATH = join(
 
 /**
  * The launched command and the guard digest share this single semantic parser.
- * D5 capability values are accepted only at launch and are replaced by stable
- * name-bound sentinels in the signed command authority.
+ * The outer tree owner identity is part of the signed semantic command so an
+ * inherited leaf can never be mistaken for a self-contained process owner.
  */
-export function sampleDriverCommand(authority, { ownershipEnvironment = {} } = {}) {
+export function sampleDriverCommand(authority) {
   const parsed = parseAuthority(authority)
-  const actualOwnership = actualOwnershipEnvironment(
-    parsed.ownership.insideWindowsD5,
-    ownershipEnvironment,
-  )
   const requestBytes = driverRequestBytes(parsed)
   return Object.freeze({
-    executable: parsed.driver.node.path,
-    executableByteLength: parsed.driver.node.byteLength,
-    executableSha256: parsed.driver.node.sha256,
-    arguments: Object.freeze([parsed.driver.source.path]),
+    executable: parsed.driver.node,
+    arguments: Object.freeze([parsed.driver.source]),
     cwd: parsed.driver.cwd,
-    environment: Object.freeze({
-      ...parsed.driver.environment,
-      ...actualOwnership,
-    }),
+    environment: parsed.driver.environment,
     stdin: requestBytes,
-    stdinAuthority: Object.freeze({
-      channelId: 'browser-sample-driver-request',
-      runId: parsed.identity.runId,
-      profileId: parsed.topology.topologyId,
-      attemptId: `${parsed.identity.suite}-${parsed.identity.browser}-${parsed.identity.sampleIndex}`,
+  })
+}
+
+export function sampleDriverOwnedRuntimeOperation(authority) {
+  const launch = sampleDriverCommand(authority)
+  // The signed launch keeps environment beside the executable, while the tree
+  // owner authenticates it as a separate input. One projection prevents either
+  // contract from growing a second, ambiguous environment channel.
+  return Object.freeze({
+    command: Object.freeze({
+      executable: launch.executable,
+      arguments: launch.arguments,
+      cwd: launch.cwd,
+      stdin: launch.stdin,
     }),
+    inheritedEnvironment: launch.environment,
   })
 }
 
@@ -72,13 +70,7 @@ export function canonicalSampleCommandComponentSha256(authority) {
 
 function canonicalSampleCommandRecord(authority) {
   const parsed = parseAuthority(authority)
-  const ownershipEnvironment = parsed.ownership.insideWindowsD5
-    ? Object.fromEntries(D5_SETTLEMENT_OWNERSHIP_ENVIRONMENT_NAMES.map((name) => [
-        name,
-        'ownership-bound',
-      ]))
-    : {}
-  const launch = sampleDriverCommand(parsed, { ownershipEnvironment })
+  const launch = sampleDriverCommand(parsed)
   const command = Object.freeze({
     schemaVersion: PROCESS_SETTLEMENT_COMMAND_SCHEMA_VERSION,
     repository: parsed.repository,
@@ -87,22 +79,14 @@ function canonicalSampleCommandRecord(authority) {
     topology: parsed.topology,
     runtime: parsed.runtime,
     output: parsed.output,
-    ownership: Object.freeze({
-      ...parsed.ownership,
-      ownershipEnvironmentNames: parsed.ownership.insideWindowsD5
-        ? D5_SETTLEMENT_OWNERSHIP_ENVIRONMENT_NAMES
-        : [],
-    }),
+    ownership: parsed.ownership,
     leaf: parsed.leaf,
     launch: Object.freeze({
       executable: launch.executable,
-      executableByteLength: launch.executableByteLength,
-      executableSha256: launch.executableSha256,
       arguments: launch.arguments,
       cwd: launch.cwd,
       environment: launch.environment,
       stdin: JSON.parse(Buffer.from(launch.stdin).toString('utf8')),
-      stdinAuthority: launch.stdinAuthority,
     }),
   })
   launch.stdin.fill(0)
@@ -143,9 +127,9 @@ function parseRepository(value) {
 
 function parseDriver(value, repository) {
   exactKeys(value, ['node', 'source', 'cwd', 'environment'], 'sample driver authority')
-  const node = parseArtifact(value.node, 'sample driver Node executable')
-  const source = parseArtifact(value.source, 'sample driver source')
-  if (source.path !== join(repository.root, SAMPLE_DRIVER_RELATIVE_PATH)) {
+  const node = canonicalAbsolutePath(value.node, 'sample driver Node executable')
+  const source = canonicalAbsolutePath(value.source, 'sample driver source')
+  if (source !== join(repository.root, SAMPLE_DRIVER_RELATIVE_PATH)) {
     throw new Error('sample driver source differs from the repository authority')
   }
   const cwd = canonicalAbsolutePath(value.cwd, 'sample driver working directory')
@@ -160,9 +144,11 @@ function parseDriver(value, repository) {
 
 function parseIdentity(value, repository) {
   exactKeys(value, [
-    'runId', 'runPolicy', 'suite', 'browser', 'sampleIndex', 'checkoutSha',
+    'runId', 'operationId', 'scenario', 'runPolicy', 'suite', 'browser', 'sampleIndex', 'checkoutSha',
   ], 'sample command identity')
   const runId = portableToken(value.runId, 'sample command run ID')
+  const operationId = portableToken(value.operationId, 'sample command operation ID')
+  const scenario = portableToken(value.scenario, 'sample command scenario')
   const runPolicy = parseBrowserRunPolicy(value.runPolicy, 'sample command run policy')
   if (!['main', 'pion'].includes(value.suite)) throw new Error('sample command suite is invalid')
   if (!['chromium', 'firefox', 'webkit'].includes(value.browser)) {
@@ -178,6 +164,8 @@ function parseIdentity(value, repository) {
   }
   return Object.freeze({
     runId,
+    operationId,
+    scenario,
     runPolicy,
     suite: value.suite,
     browser: value.browser,
@@ -201,15 +189,17 @@ function parseTopology(value) {
 
 function parseRuntime(value) {
   exactKeys(value, ['manifest', 'processOwner'], 'sample runtime authority')
-  const manifest = parseArtifact(value.manifest, 'sample runtime manifest')
-  const processOwner = parseArtifact(value.processOwner, 'sample process owner')
-  exactKeys(value.processOwner, ['kind', 'path', 'byteLength', 'sha256'], 'sample process owner')
-  if (!['linux-process-owner', 'windows-job'].includes(value.processOwner.kind)) {
+  const manifest = canonicalAbsolutePath(value.manifest, 'sample runtime manifest')
+  exactKeys(value.processOwner, ['kind', 'path'], 'sample process owner')
+  if (value.processOwner.kind !== 'test-process-owner') {
     throw new Error('sample process owner kind is invalid')
   }
   return Object.freeze({
     manifest,
-    processOwner: Object.freeze({ kind: value.processOwner.kind, ...processOwner }),
+    processOwner: Object.freeze({
+      kind: value.processOwner.kind,
+      path: canonicalAbsolutePath(value.processOwner.path, 'sample process owner'),
+    }),
   })
 }
 
@@ -226,24 +216,23 @@ function parseOutput(value, identity) {
 
 function parseOwnership(value, identity, runtime) {
   exactKeys(value, [
-    'platform', 'insideWindowsD5', 'backend', 'operationClass',
+    'platform', 'backend', 'outerAuthority', 'operationClass',
     'classDeadlineMs', 'childDeadlineMs',
   ], 'sample process ownership authority')
   if (!['linux', 'win32'].includes(value.platform)) {
     throw new Error('sample ownership platform is unsupported')
   }
-  if (typeof value.insideWindowsD5 !== 'boolean') {
-    throw new Error('sample D5 ownership evidence is invalid')
-  }
-  const expectedBackend = value.platform === 'linux' ? 'linux-subreaper' : 'windows-job'
-  const expectedOwner = value.platform === 'linux' ? 'linux-process-owner' : 'windows-job'
+  const expectedOuterBackend = value.platform === 'linux' ? 'linux_subreaper' : 'windows_job'
   if (
-    value.backend !== expectedBackend || runtime.processOwner.kind !== expectedOwner ||
+    value.backend !== 'inherited' || runtime.processOwner.kind !== 'test-process-owner' ||
     value.operationClass !== 'browser-sample'
   ) throw new Error('sample ownership backend or operation class is invalid')
-  if (value.insideWindowsD5 && (value.platform !== 'win32' || identity.suite !== 'main')) {
-    throw new Error('sample D5 ownership is valid only for Windows main')
-  }
+  exactKeys(value.outerAuthority, ['kind', 'backend', 'operationId'], 'sample outer process authority')
+  if (
+    value.outerAuthority.kind !== 'test-process-owner' ||
+    value.outerAuthority.backend !== expectedOuterBackend ||
+    value.outerAuthority.operationId !== identity.operationId
+  ) throw new Error('sample outer process authority differs from its operation identity')
   if (
     !Number.isSafeInteger(value.classDeadlineMs) ||
     !Number.isSafeInteger(value.childDeadlineMs) ||
@@ -251,8 +240,8 @@ function parseOwnership(value, identity, runtime) {
   ) throw new Error('sample owner deadline must strictly outlive its leaf deadline')
   return Object.freeze({
     platform: value.platform,
-    insideWindowsD5: value.insideWindowsD5,
     backend: value.backend,
+    outerAuthority: Object.freeze({ ...value.outerAuthority }),
     operationClass: value.operationClass,
     classDeadlineMs: value.classDeadlineMs,
     childDeadlineMs: value.childDeadlineMs,
@@ -261,15 +250,14 @@ function parseOwnership(value, identity, runtime) {
 
 function parseLeaf(value, driver) {
   exactKeys(value, ['executable', 'entrypoint', 'arguments', 'cwd', 'environment'], 'sample leaf')
-  const executable = parseArtifact(value.executable, 'sample leaf executable')
-  if (executable.path !== driver.node.path || executable.sha256 !== driver.node.sha256 ||
-      executable.byteLength !== driver.node.byteLength) {
-    throw new Error('sample leaf executable differs from the authenticated Node runtime')
+  const executable = canonicalAbsolutePath(value.executable, 'sample leaf executable')
+  if (executable !== driver.node) {
+    throw new Error('sample leaf executable must match its selected Node runtime')
   }
-  const entrypoint = parseArtifact(value.entrypoint, 'sample leaf entrypoint')
+  const entrypoint = canonicalAbsolutePath(value.entrypoint, 'sample leaf entrypoint')
   const arguments_ = canonicalArguments(value.arguments)
-  if (arguments_[0] !== entrypoint.path) {
-    throw new Error('sample leaf argv does not start with its authenticated entrypoint')
+  if (arguments_[0] !== entrypoint) {
+    throw new Error('sample leaf argv must start with its selected entrypoint')
   }
   return Object.freeze({
     executable,
@@ -292,44 +280,17 @@ function driverRequestBytes(authority) {
       resolutionSha256: authority.topology.resolutionSha256,
     }),
     ownership: Object.freeze({
-      insideWindowsD5: authority.ownership.insideWindowsD5,
+      outerAuthority: authority.ownership.outerAuthority,
       childDeadlineMs: authority.ownership.childDeadlineMs,
     }),
     leaf: Object.freeze({
-      executable: authority.leaf.executable.path,
+      executable: authority.leaf.executable,
       arguments: authority.leaf.arguments,
       cwd: authority.leaf.cwd,
       environment: authority.leaf.environment,
     }),
   })
   return Buffer.from(JSON.stringify(request), 'utf8')
-}
-
-function parseArtifact(value, label) {
-  const record = requireRecord(value, label)
-  const allowed = Object.hasOwn(record, 'kind')
-    ? ['kind', 'path', 'byteLength', 'sha256']
-    : ['path', 'byteLength', 'sha256']
-  exactKeys(record, allowed, label)
-  if (!Number.isSafeInteger(record.byteLength) || record.byteLength < 1) {
-    throw new Error(`${label} byte length is invalid`)
-  }
-  return Object.freeze({
-    path: canonicalAbsolutePath(record.path, label),
-    byteLength: record.byteLength,
-    sha256: sha256(record.sha256, `${label} digest`),
-  })
-}
-
-function actualOwnershipEnvironment(insideWindowsD5, value) {
-  const environment = canonicalEnvironment(value)
-  const names = Object.keys(environment)
-  const expected = insideWindowsD5 ? D5_SETTLEMENT_OWNERSHIP_ENVIRONMENT_NAMES : []
-  if (
-    names.length !== expected.length ||
-    expected.some((name) => !Object.hasOwn(environment, name) || environment[name] === '')
-  ) throw new Error('sample D5 ownership environment is missing, unexpected, or duplicated')
-  return environment
 }
 
 function canonicalEnvironment(value) {

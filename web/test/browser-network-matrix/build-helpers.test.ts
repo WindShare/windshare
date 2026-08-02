@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,7 +24,7 @@ describe('browser network matrix helper build contract', () => {
     const windows = helperBuildPlan('C:\\absolute\\new-helpers', 'win32', 'x64')
     expect(windows.map(({ operation, role }) => ({ operation, role }))).toEqual([
       { operation: 'artifact-publisher', role: 'artifact-publisher' },
-      { operation: 'windows-job-supervisor', role: 'windows-job' },
+      { operation: 'test-process-owner', role: 'test-process-owner' },
     ])
     for (const operation of windows) {
       expect(operation.arguments).toEqual([
@@ -43,16 +42,23 @@ describe('browser network matrix helper build contract', () => {
     }
 
     const linux = helperBuildPlan('/absolute/new-helpers', 'linux', 'arm64')
-    expect(linux).toHaveLength(1)
+    expect(linux).toHaveLength(2)
     expect(linux[0]).toMatchObject({
       role: 'artifact-publisher',
       platform: 'linux',
       goArchitecture: 'arm64',
       outputPath: join('/absolute/new-helpers', 'browsermatrixpublish'),
     })
+    expect(linux[1]).toMatchObject({
+      operation: 'test-process-owner',
+      role: 'test-process-owner',
+      platform: 'linux',
+      goArchitecture: 'arm64',
+      outputPath: join('/absolute/new-helpers', 'testprocessowner'),
+    })
   })
 
-  it('emits one strict manifest bound to actual helper paths and bytes', async () => {
+  it('emits one strict manifest for the invocation-private helper paths', async () => {
     const parent = await ownedParent()
     const output = join(parent, 'helpers')
     const helperBytes = new Map<string, Buffer>()
@@ -77,8 +83,7 @@ describe('browser network matrix helper build contract', () => {
       expect(expected).toBeDefined()
       expect(helper.path).toBe(join(output, helper.role === 'artifact-publisher'
         ? 'browsermatrixpublish.exe'
-        : 'windowsjob.exe'))
-      expect(helper.sha256).toBe(createHash('sha256').update(expected!).digest('hex'))
+        : 'testprocessowner.exe'))
       expect(await readFile(helper.path)).toEqual(expected)
     }
     const manifestBytes = await readFile(result.manifestPath, 'utf8')
@@ -117,7 +122,7 @@ describe('browser network matrix helper build contract', () => {
             await writeFile(operation.outputPath, 'completed publisher')
             return
           }
-          throw new Error('injected Job build failure')
+          throw new Error('injected process-owner build failure')
         },
       })
     } catch (cause) {
@@ -125,7 +130,7 @@ describe('browser network matrix helper build contract', () => {
     }
     expect(failure).toBeInstanceOf(HelperBuildError)
     expect(failure).toMatchObject({
-      operation: 'windows-job-supervisor',
+      operation: 'test-process-owner',
       outputDirectory: output,
       outputOwned: true,
     })
@@ -142,7 +147,7 @@ describe('browser network matrix helper build contract', () => {
     expect(exitCode).toBe(1)
     expect(JSON.parse(stderr.join(''))).toMatchObject({
       outcome: 'failed',
-      operation: 'windows-job-supervisor',
+      operation: 'test-process-owner',
       outputDirectory: output,
       partialOutputRetained: true,
     })

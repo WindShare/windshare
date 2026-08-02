@@ -18,7 +18,6 @@ export function externalFixtureRtcConfiguration(
   const semantics = fixture.networkSemantics
   switch (semantics.kind) {
     case 'public-stun':
-    case 'operator-real-nat':
       if (turnCredential !== null) invalidBinding()
       return externalStunRtcConfiguration(semantics.stunEndpoint)
     case 'restricted-udp':

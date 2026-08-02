@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,19 +14,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/internal/testnetwork"
+	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
 func TestRunServesOnlyV2AndShutsDownGracefully(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan net.Addr, 1)
 	done := make(chan error, 1)
 	go func() {
 		done <- run(ctx, []string{
 			"-listen", "127.0.0.1:0", "-state-dir", t.TempDir(),
-		}, func(address net.Addr) { ready <- address }, t.Logf)
+		}, func(address net.Addr) error {
+			ready <- address
+			return nil
+		}, t.Logf)
 	}()
 	var address net.Addr
 	select {
@@ -61,6 +65,93 @@ func TestRunServesOnlyV2AndShutsDownGracefully(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("graceful shutdown did not complete")
+	}
+}
+
+func TestRelayReadyReporterEmitsActualAddressAsStructuredTrace(t *testing.T) {
+	operation, err := testrun.NewOperation("run-1", "operation-1", "relay-readiness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment, err := operation.ChildEnvironment(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(map[string]string, len(environment))
+	for _, entry := range environment {
+		name, value, _ := strings.Cut(entry, "=")
+		values[name] = value
+	}
+	var openedIdentity testrun.Identity
+	sink := &recordingRelayReadySink{}
+	reporter, err := relayReadyReporter(func(name string) (string, bool) {
+		value, ok := values[name]
+		return value, ok
+	}, func(identity testrun.Identity) (relayReadySink, error) {
+		openedIdentity = identity
+		return sink, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reporter == nil {
+		t.Fatal("correlated child did not create a ready reporter")
+	}
+	if err := reporter(stringAddress("127.0.0.1:49231")); err != nil {
+		t.Fatal(err)
+	}
+	var payload testrun.ListenerReadyContext
+	payloadErr := json.Unmarshal(sink.event.Payload, &payload)
+	if openedIdentity.RunID != operation.RunID() || openedIdentity.OperationID != operation.ID() ||
+		openedIdentity.Scenario != operation.Scenario() || sink.event.Identity != openedIdentity ||
+		sink.event.Component != string(relayTraceComponent) || sink.event.Milestone != testrun.ListenerReadyMilestone ||
+		sink.event.Outcome != string(testrun.OutcomeSucceeded) || !sink.closed || payloadErr != nil ||
+		payload.Address != "127.0.0.1:49231" {
+		t.Fatalf("ready sink = identity=%+v sink=%+v", openedIdentity, sink)
+	}
+}
+
+func TestRelayReadyReporterIsOptInAndRejectsPartialContext(t *testing.T) {
+	reporter, err := relayReadyReporter(func(string) (string, bool) { return "", false }, nil)
+	if err != nil || reporter != nil {
+		t.Fatalf("ordinary CLI reporter present = %t, err = %v", reporter != nil, err)
+	}
+	_, err = relayReadyReporter(func(name string) (string, bool) {
+		if name == testrun.RunIDEnvironment {
+			return "run-1", true
+		}
+		return "", false
+	}, nil)
+	if err == nil {
+		t.Fatal("partial correlation context was accepted")
+	}
+}
+
+type recordingRelayReadySink struct {
+	event  testrun.Event
+	closed bool
+}
+
+func (sink *recordingRelayReadySink) WriteEvent(event testrun.Event) error {
+	sink.event = event
+	return nil
+}
+
+func (sink *recordingRelayReadySink) Close() error {
+	sink.closed = true
+	return nil
+}
+
+func TestRunFailsClosedWhenReadinessCannotBePublished(t *testing.T) {
+	publishFailure := errors.New("trace sink unavailable")
+	err := run(
+		context.Background(),
+		[]string{"-listen", "127.0.0.1:0", "-state-dir", t.TempDir()},
+		func(net.Addr) error { return publishFailure },
+		t.Logf,
+	)
+	if !errors.Is(err, publishFailure) {
+		t.Fatalf("readiness failure = %v", err)
 	}
 }
 

@@ -17,13 +17,16 @@ import (
 	"github.com/pion/ice/v4"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/internal/testrun"
+	"github.com/windshare/windshare/internal/testtrace"
 	windwebrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
 const (
-	defaultAddress  = "127.0.0.1:17846"
-	scenarioEnvName = "WINDSHARE_D1_BROWSER_SCENARIO"
-	operationLimit  = 20 * time.Second
+	defaultAddress        = "127.0.0.1:0"
+	scenarioEnvName       = "WINDSHARE_D1_BROWSER_SCENARIO"
+	operationLimit        = 20 * time.Second
+	interopReadyComponent = testrun.Component("pion-browser-interop-server")
 
 	scenarioHappy        = "happy"
 	scenarioCancellation = "cancellation"
@@ -126,6 +129,13 @@ type actionResponse struct {
 	Action string `json:"action"`
 }
 
+type interopReadySink interface {
+	testrun.EventSink
+	Close() error
+}
+
+type interopReadySinkFactory func(testrun.Identity) (interopReadySink, error)
+
 type interopServer struct {
 	peer     *pion.PeerConnection
 	config   publicConfig
@@ -149,6 +159,12 @@ func main() {
 	if len(os.Args) != 1 {
 		panic("Pion browser interop server accepts only the self-check command")
 	}
+	onReady, err := interopReadyReporter(os.LookupEnv, func(identity testrun.Identity) (interopReadySink, error) {
+		return testtrace.OpenEventSink(identity)
+	})
+	if err != nil {
+		panic(err)
+	}
 	topologyContext, cancelTopology := context.WithTimeout(context.Background(), operationLimit)
 	defer cancelTopology()
 	topology, err := loadTopologyRuntime(topologyContext)
@@ -164,15 +180,66 @@ func main() {
 	if address == "" {
 		address = defaultAddress
 	}
-	fmt.Printf("WindShare D1 browser interop listening on http://%s\n", address)
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		panic(fmt.Errorf("listen for browser interop: %w", err))
+	}
+	defer listener.Close()
+	actual, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || !actual.IP.IsLoopback() || actual.Port < 1 {
+		panic("browser interop listener did not publish a loopback TCP address")
+	}
+	if err := onReady(actual); err != nil {
+		panic(fmt.Errorf("publish browser interop readiness: %w", err))
+	}
 	httpServer := &http.Server{
-		Addr:              address,
 		Handler:           server.handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		panic(err)
 	}
+}
+
+func interopReadyReporter(
+	lookup testrun.EnvironmentLookup,
+	openSink interopReadySinkFactory,
+) (func(net.Addr) error, error) {
+	operation, present, err := testrun.OperationFromEnvironment(lookup)
+	if err != nil {
+		return nil, fmt.Errorf("browser interop: load test trace context: %w", err)
+	}
+	if !present {
+		return nil, errors.New("browser interop: process-owner test trace context is absent")
+	}
+	if openSink == nil {
+		return nil, errors.New("browser interop: private ready-event sink factory is nil")
+	}
+	return func(address net.Addr) error {
+		if address == nil {
+			return errors.New("browser interop: ready listener address is nil")
+		}
+		sink, err := openSink(operation.EventIdentity())
+		if err != nil {
+			return fmt.Errorf("browser interop: open private ready-event sink: %w", err)
+		}
+		if sink == nil {
+			return errors.New("browser interop: private ready-event sink factory returned nil")
+		}
+		recorder, recorderErr := testrun.NewRecorder(operation, interopReadyComponent, sink)
+		if recorderErr != nil {
+			return errors.Join(recorderErr, sink.Close())
+		}
+		emitErr := recorder.Record(
+			testrun.ListenerReadyMilestone,
+			testrun.OutcomeSucceeded,
+			&testrun.ListenerReadyContext{Address: address.String()},
+		)
+		if err := errors.Join(emitErr, sink.Close()); err != nil {
+			return fmt.Errorf("browser interop: publish private ready event: %w", err)
+		}
+		return nil
+	}, nil
 }
 
 // newLoopbackOnlyPeer confines ICE to loopback addresses. The interop suite
@@ -183,7 +250,7 @@ func main() {
 // the test verdict; limiting the helper to its real trust boundary also keeps
 // normal execution independent of either. mDNS is disabled because its responder
 // binds a wildcard UDP socket. Loopback-only sockets avoid that extra exposure.
-// Compare benchmarkLoopbackAPI in transport/webrtc/performance_test.go.
+// Compare benchmarkLoopbackAPI in transport/webrtc/webrtc_perfevidence_test.go.
 func newLoopbackOnlyPeer() (*pion.PeerConnection, error) {
 	var setting pion.SettingEngine
 	setting.SetIncludeLoopbackCandidate(true)

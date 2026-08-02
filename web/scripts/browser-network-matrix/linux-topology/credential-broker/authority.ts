@@ -1,6 +1,7 @@
 import { isAbsolute, resolve } from 'node:path'
 
 import type { NetworkMatrixSampleAuthority } from '../../sample-authority.ts'
+import type { LinuxTopologyTraceChannel } from '../trace/index.ts'
 import type {
   ExternalFixtureControlCredentialAuthority,
   ExternalFixtureControlCredentialAuthorityReceipt,
@@ -28,6 +29,9 @@ implements ExternalFixtureControlCredentialAuthority {
   readonly #owner: CredentialBrokerProcessOwner
   readonly #acquisitions: CredentialAcquisitionRegistry
   readonly #retirements: CredentialRetirementRegistry
+
+  readonly traces: LinuxTopologyTraceChannel
+
   #terminalReceipt: ExternalFixtureControlCredentialAuthorityReceipt | undefined
   #closeOperation: Promise<ExternalFixtureControlCredentialAuthorityReceipt> | undefined
   #forceOperation: Promise<ExternalFixtureControlCredentialAuthorityReceipt> | undefined
@@ -39,12 +43,9 @@ implements ExternalFixtureControlCredentialAuthority {
       helperPath: options.helperPath,
       workingDirectory: options.workingDirectory,
       platform: options.platform,
-      ...(options.windowsJobHelperPath === undefined
-        ? {}
-        : { windowsJobHelperPath: options.windowsJobHelperPath }),
+      processOwner: options.processOwner,
       config: options.config,
       workloadIdentity: options.workloadIdentity,
-      ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
   }
 
@@ -58,6 +59,7 @@ implements ExternalFixtureControlCredentialAuthority {
     validateComposition(options)
     const composition = Object.freeze({ ...options })
     this.#owner = new CredentialBrokerProcessOwner(composition)
+    this.traces = this.#owner.traces
     this.#retirements = new CredentialRetirementRegistry(this.#owner.exchange)
     this.#acquisitions = new CredentialAcquisitionRegistry({
       config: composition.config,
@@ -150,8 +152,7 @@ function validateComposition(options: InternalCredentialBrokerOptions): void {
     !canonicalAbsolutePath(options.helperPath) ||
     !canonicalAbsolutePath(options.workingDirectory) ||
     options.platform !== 'linux' && options.platform !== 'win32' ||
-    options.platform === 'win32' && !canonicalAbsolutePath(options.windowsJobHelperPath) ||
-    options.platform === 'linux' && options.windowsJobHelperPath !== undefined ||
+    !validProcessOwner(options.processOwner) ||
     typeof options.workloadIdentity?.issue !== 'function' ||
     typeof options.workloadIdentity?.closeAndWait !== 'function' ||
     typeof options.workloadIdentity?.forceTerminateAndWait !== 'function' ||
@@ -159,6 +160,14 @@ function validateComposition(options: InternalCredentialBrokerOptions): void {
     options.pipeExchange !== undefined && typeof options.pipeExchange.exchange !== 'function' ||
     options.secretStore !== undefined && typeof options.secretStore.adopt !== 'function'
   ) throw new Error('external fixture credential broker composition is invalid')
+}
+
+function validProcessOwner(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const owner = value as Record<string, unknown>
+  return canonicalAbsolutePath(owner.path) && Number.isSafeInteger(owner.byteLength) &&
+    (owner.byteLength as number) > 0 && typeof owner.sha256 === 'string' &&
+    /^[0-9a-f]{64}$/u.test(owner.sha256)
 }
 
 function validWorkloadIdentityBinding(value: unknown): value is ParentWorkloadIdentityBinding {

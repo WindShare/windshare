@@ -5,9 +5,14 @@ import { childEvidenceEnvironment } from '../../scripts/browser-evidence/child-e
 import type {
   BrowserSampleContainmentBackend,
   BrowserSampleContainmentRequest,
+  BrowserSampleContainmentTrace,
   ContainedSampleCommand,
 } from '../../scripts/browser-evidence/process/containment.ts'
 import type { RunnerProcessEvidence } from '../../scripts/browser-evidence/execution-evidence.ts'
+import {
+  createOwnedByteChannel,
+  createOwnedEventChannel,
+} from '../../scripts/browser-evidence/process/owned-process-channel.mjs'
 
 /** Process-backed semantics belong exclusively to the browser process gate. */
 export function createProcessTestContainmentBackend(): BrowserSampleContainmentBackend {
@@ -19,6 +24,21 @@ export function createProcessTestContainmentBackend(): BrowserSampleContainmentB
 }
 
 async function executeProcessChild(request: BrowserSampleContainmentRequest) {
+  const stdout = createOwnedByteChannel(request.capture.stdoutBytes, 'process-test child stdout')
+  const stderr = createOwnedByteChannel(request.capture.stderrBytes, 'process-test child stderr')
+  const traces = createOwnedEventChannel<BrowserSampleContainmentTrace>(
+    1,
+    'process-test containment traces',
+  )
+  const evidence = () => {
+    stdout.finish()
+    stderr.finish()
+    traces.finish()
+    return Object.freeze({
+      output: Object.freeze({ stdout: stdout.view.snapshot(), stderr: stderr.view.snapshot() }),
+      traces: traces.view.snapshot(),
+    })
+  }
   const command = mapAttachmentPaths(request)
   const environment = {
     ...process.env,
@@ -35,10 +55,14 @@ async function executeProcessChild(request: BrowserSampleContainmentRequest) {
       windowsHide: true,
     })
   } catch (cause) {
-    return Object.freeze({ processEvidence: spawnFailure(cause), timedOut: false })
+    return Object.freeze({
+      processEvidence: spawnFailure(cause),
+      terminationReason: 'initialization_failed' as const,
+      ...evidence(),
+    })
   }
-  child.stdout.on('data', (chunk: Buffer) => request.stdout(chunk))
-  child.stderr.on('data', (chunk: Buffer) => request.stderr(chunk))
+  child.stdout.on('data', (chunk: Buffer) => stdout.append(chunk))
+  child.stderr.on('data', (chunk: Buffer) => stderr.append(chunk))
   let spawnError: unknown
   child.once('error', (cause) => { spawnError = cause })
   const terminal = new Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }>(
@@ -56,14 +80,16 @@ async function executeProcessChild(request: BrowserSampleContainmentRequest) {
   if (completion.kind === 'terminal') {
     return Object.freeze({
       processEvidence: terminalEvidence(completion.value, spawnError),
-      timedOut: false,
+      terminationReason: spawnError === undefined ? 'natural' as const : 'initialization_failed' as const,
+      ...evidence(),
     })
   }
-  const intervened = child.kill('SIGKILL')
+  child.kill('SIGKILL')
   const value = await terminal
   return Object.freeze({
     processEvidence: terminalEvidence(value, spawnError),
-    timedOut: intervened,
+    terminationReason: 'deadline' as const,
+    ...evidence(),
   })
 }
 

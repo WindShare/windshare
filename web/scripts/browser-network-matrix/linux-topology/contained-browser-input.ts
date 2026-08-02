@@ -9,7 +9,6 @@ import {
   newNetworkMatrixProcessInstanceId,
   type NetworkMatrixSampleAuthority,
 } from '../sample-authority.ts'
-import type { ManualOperatorTopologyIdentity } from './external-fixture-attestation.ts'
 import {
   eraseExternalFixtureControlCredential,
   newExternalFixtureProbeNonce,
@@ -41,7 +40,6 @@ export interface ContainedBrowserPionControlFiles {
   readonly tlsCertificateSha256: string
   readonly tlsCertificateAuthorityFile: string
   readonly attestationPublicKeyFile: string
-  readonly manualOperatorIdentity: ManualOperatorTopologyIdentity | null
 }
 
 export interface FilesystemContainedBrowserSampleInputOptions {
@@ -188,7 +186,6 @@ implements ContainedBrowserSampleInputAuthorityFactory {
             tlsCertificateAuthority: certificate,
             tlsCertificateSha256: control.tlsCertificateSha256,
             attestationPublicKey,
-            manualOperatorIdentity: control.manualOperatorIdentity,
           },
           attemptLeaseMs: this.#options.attemptLeaseMs,
           resultPollIntervalMs: this.#options.resultPollIntervalMs,

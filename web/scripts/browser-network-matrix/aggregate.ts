@@ -38,7 +38,7 @@ export interface NetworkMatrixAggregateRunReference {
 }
 
 export interface NetworkMatrixAggregateCounts {
-  readonly expectedIdentities: 60
+  readonly expectedIdentities: typeof NETWORK_MATRIX_IDENTITY_COUNTS.total
   readonly observedSamples: number
   readonly matched: number
   readonly mismatched: number
@@ -90,7 +90,7 @@ export function aggregateNetworkMatrix(
     reportingSemantics: NETWORK_MATRIX_REPORTING_SEMANTICS,
     runs: references,
     counts,
-    evidenceOutcome: deriveEvidenceOutcome(runs, sampleInfrastructureFailures),
+    evidenceOutcome: deriveEvidenceOutcome(runs, counts),
   })
 }
 
@@ -206,19 +206,14 @@ function realRuns(
   registry: LoadedNetworkMatrixRegistry,
   inputs: readonly NetworkRunResult[],
 ): readonly NetworkRunResult[] {
-  if (inputs.length === 0 || inputs.length > NETWORK_MATRIX_EXECUTION_MODES.length) {
-    networkMatrixError('browser network matrix aggregate requires one or two real run inputs')
+  if (inputs.length !== 1) {
+    networkMatrixError('scheduled browser network verdict requires exactly one real run input')
   }
   const runs = inputs.map((run) => parseNetworkRunResult(run, registry))
-  if (new Set(runs.map(({ executionMode }) => executionMode)).size !== runs.length) {
-    networkMatrixError('browser network matrix aggregate execution modes must be distinct')
+  if (runs[0]?.executionMode !== NETWORK_MATRIX_EXECUTION_MODES[0]) {
+    networkMatrixError('scheduled browser network verdict received a supplemental run')
   }
-  if (new Set(runs.map(({ runId }) => runId)).size !== runs.length) {
-    networkMatrixError('browser network matrix run IDs must be distinct')
-  }
-  return Object.freeze(runs.toSorted((left, right) =>
-    NETWORK_MATRIX_EXECUTION_MODES.indexOf(left.executionMode) -
-    NETWORK_MATRIX_EXECUTION_MODES.indexOf(right.executionMode)))
+  return Object.freeze(runs)
 }
 
 function parseCounts(
@@ -241,22 +236,42 @@ function parseCounts(
       'aggregate expected identity count',
     ),
     observedSamples: requireLiteral(
-      requireSafeInteger(counts.observedSamples, 0, 60, 'aggregate observed sample count'),
+      requireSafeInteger(
+        counts.observedSamples,
+        0,
+        NETWORK_MATRIX_IDENTITY_COUNTS.total,
+        'aggregate observed sample count',
+      ),
       expected.observedSamples,
       'aggregate observed sample count',
     ),
     matched: requireLiteral(
-      requireSafeInteger(counts.matched, 0, 60, 'aggregate matched count'),
+      requireSafeInteger(
+        counts.matched,
+        0,
+        NETWORK_MATRIX_IDENTITY_COUNTS.total,
+        'aggregate matched count',
+      ),
       expected.matched,
       'aggregate matched count',
     ),
     mismatched: requireLiteral(
-      requireSafeInteger(counts.mismatched, 0, 60, 'aggregate mismatched count'),
+      requireSafeInteger(
+        counts.mismatched,
+        0,
+        NETWORK_MATRIX_IDENTITY_COUNTS.total,
+        'aggregate mismatched count',
+      ),
       expected.mismatched,
       'aggregate mismatched count',
     ),
     notEvaluated: requireLiteral(
-      requireSafeInteger(counts.notEvaluated, 0, 60, 'aggregate not-evaluated count'),
+      requireSafeInteger(
+        counts.notEvaluated,
+        0,
+        NETWORK_MATRIX_IDENTITY_COUNTS.total,
+        'aggregate not-evaluated count',
+      ),
       expected.notEvaluated,
       'aggregate not-evaluated count',
     ),
@@ -264,7 +279,7 @@ function parseCounts(
       requireSafeInteger(
         counts.sampleInfrastructureFailures,
         0,
-        60,
+          NETWORK_MATRIX_IDENTITY_COUNTS.total,
         'aggregate sample infrastructure-failure count',
       ),
       expected.sampleInfrastructureFailures,
@@ -275,14 +290,20 @@ function parseCounts(
 
 function deriveEvidenceOutcome(
   runs: readonly NetworkRunResult[],
-  sampleInfrastructureFailures: number,
+  counts: NetworkMatrixAggregateCounts,
 ): NetworkMatrixAggregate['evidenceOutcome'] {
   if (
-    sampleInfrastructureFailures !== 0 ||
+    counts.sampleInfrastructureFailures !== 0 ||
     runs.some(({ runOutcome }) => runOutcome === 'infrastructure-failed')
   ) return 'infrastructure-failed'
-  return runs.length === NETWORK_MATRIX_EXECUTION_MODES.length &&
-    runs.every(({ runOutcome }) => runOutcome === 'completed')
+  return runs.length === 1 &&
+    runs[0]?.executionMode === 'scheduled' &&
+    runs[0].orchestrationOutcome === 'healthy' &&
+    runs[0].runOutcome === 'completed' &&
+    counts.observedSamples === NETWORK_MATRIX_IDENTITY_COUNTS.scheduled &&
+    counts.matched === NETWORK_MATRIX_IDENTITY_COUNTS.scheduled &&
+    counts.mismatched === 0 &&
+    counts.notEvaluated === 0
     ? 'complete'
     : 'incomplete'
 }

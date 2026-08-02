@@ -26,6 +26,7 @@ import (
 
 	"github.com/windshare/windshare/internal/browsermatrixbroker"
 	"github.com/windshare/windshare/internal/browsermatrixpion"
+	"github.com/windshare/windshare/internal/browsermatrixturnprovider"
 )
 
 const (
@@ -59,6 +60,7 @@ type commandConfig struct {
 	shutdownTimeout         time.Duration
 	trace                   browsermatrixpion.TraceSink
 	brokerPolicy            *browsermatrixbroker.ServerPolicy
+	turnProvider            browsermatrixbroker.RevocableTURNProvider
 }
 
 type commandArguments struct {
@@ -71,6 +73,11 @@ type commandArguments struct {
 	attestationTemplateFile   string
 	attestationPrivateKeyFile string
 	brokerPolicyFile          string
+	turnProviderOrigin        string
+	turnProviderCAFile        string
+	turnProviderCertificate   string
+	turnProviderClientCert    string
+	turnProviderClientKey     string
 }
 
 func main() {
@@ -126,6 +133,11 @@ func bindCommandFlags(flags *flag.FlagSet, parsed *commandArguments) {
 	flags.StringVar(&parsed.attestationTemplateFile, "attestation-template-file", "", "required canonical external fixture declaration")
 	flags.StringVar(&parsed.attestationPrivateKeyFile, "attestation-private-key-file", "", "required Ed25519 PKCS#8 attestation private key")
 	flags.StringVar(&parsed.brokerPolicyFile, "credential-broker-policy-file", "", "optional canonical OIDC broker policy")
+	flags.StringVar(&parsed.turnProviderOrigin, "turn-provider-origin", "", "required coturn lease provider HTTPS origin")
+	flags.StringVar(&parsed.turnProviderCAFile, "turn-provider-tls-ca-file", "", "required coturn lease provider certificate authority")
+	flags.StringVar(&parsed.turnProviderCertificate, "turn-provider-server-certificate-sha256", "", "required coturn lease provider TLS leaf digest")
+	flags.StringVar(&parsed.turnProviderClientCert, "turn-provider-client-certificate-file", "", "required coturn lease provider mTLS certificate")
+	flags.StringVar(&parsed.turnProviderClientKey, "turn-provider-client-key-file", "", "required coturn lease provider mTLS private key")
 	flags.StringVar(&config.publicIP, "public-ip", "", "required authorized public IPv4 address")
 	flags.StringVar(&config.controllerPublicIP, "controller-public-ip", "", "required externally observed controller IPv4 address")
 	flags.UintVar(&parsed.udpPortMin, "udp-port-min", 0, "required ICE UDP range start")
@@ -204,8 +216,9 @@ func loadCommandConfig(parsed commandArguments) (commandConfig, error) {
 	if err != nil {
 		return commandConfig{}, err
 	}
-	if fixture.ProfileID == "scheduled-coturn" {
-		return commandConfig{}, errors.New("coturn fixture lacks a concrete revocable provider capability")
+	turnProvider, err := loadTURNProvider(parsed, fixture, brokerPolicy)
+	if err != nil {
+		return commandConfig{}, err
 	}
 
 	config := parsed.config
@@ -216,8 +229,60 @@ func loadCommandConfig(parsed commandArguments) (commandConfig, error) {
 	config.credential = credential
 	config.certificate = certificate
 	config.brokerPolicy = brokerPolicy
+	config.turnProvider = turnProvider
 	accepted = true
 	return config, nil
+}
+
+func loadTURNProvider(
+	parsed commandArguments,
+	fixture browsermatrixpion.ExternalFixture,
+	brokerPolicy *browsermatrixbroker.ServerPolicy,
+) (browsermatrixbroker.RevocableTURNProvider, error) {
+	values := [...]string{
+		parsed.turnProviderOrigin,
+		parsed.turnProviderCAFile,
+		parsed.turnProviderCertificate,
+		parsed.turnProviderClientCert,
+		parsed.turnProviderClientKey,
+	}
+	provided := 0
+	for _, value := range values {
+		if value != "" {
+			provided++
+		}
+	}
+	if fixture.ProfileID != "scheduled-coturn" {
+		if provided != 0 {
+			return nil, errors.New("TURN provider capability is unexpected for this fixture")
+		}
+		return nil, nil
+	}
+	if provided != len(values) || brokerPolicy == nil {
+		return nil, errors.New("coturn fixture lacks a concrete revocable provider capability")
+	}
+	certificateAuthority, err := readBoundedFile(parsed.turnProviderCAFile, 1<<20)
+	if err != nil {
+		return nil, errors.New("TURN provider certificate authority is unavailable")
+	}
+	defer erase(certificateAuthority)
+	clientCertificate, err := tls.LoadX509KeyPair(
+		parsed.turnProviderClientCert,
+		parsed.turnProviderClientKey,
+	)
+	if err != nil {
+		return nil, errors.New("TURN provider client identity is invalid")
+	}
+	provider, err := browsermatrixturnprovider.New(browsermatrixturnprovider.Config{
+		Origin:                  parsed.turnProviderOrigin,
+		TLSCertificateAuthority: certificateAuthority,
+		ServerCertificateSHA256: parsed.turnProviderCertificate,
+		ClientCertificate:       clientCertificate,
+	})
+	if err != nil {
+		return nil, errors.New("TURN provider trust authority is invalid")
+	}
+	return provider, nil
 }
 
 func loadExternalFixture(path string) (browsermatrixpion.ExternalFixture, error) {
@@ -253,9 +318,7 @@ func validateExternalFixtureAuthority(
 	attestationSigner ed25519.PrivateKey,
 	parsed commandArguments,
 ) error {
-	executableDigest, err := currentExecutableSHA256()
-	if err != nil || fixture.ImplementationSHA256 != executableDigest ||
-		fixture.TLSCertificateSHA256 != tlsLeafSHA256(certificate) ||
+	if fixture.TLSCertificateSHA256 != tlsLeafSHA256(certificate) ||
 		!tlsCertificateAuthorizesOrigin(certificate, fixture.ControllerOrigin, time.Now().UTC()) ||
 		!attestationKeyIsIndependentOfTLS(attestationSigner, certificate) ||
 		fixture.ControllerPublicIP != parsed.config.controllerPublicIP || fixture.RemotePeerPublicIP != parsed.config.publicIP ||
@@ -297,9 +360,14 @@ func credentialCharacterIsSafe(character byte) bool {
 }
 
 func run(ctx context.Context, config commandConfig) (resultErr error) {
+	endpoint, err := browsermatrixpion.NewPionEndpointAPI(browsermatrixpion.PionEndpointConfig{
+		PublicIP: config.fixture.RemotePeerPublicIP, UDPPortMin: config.udpPortMin, UDPPortMax: config.udpPortMax,
+	})
+	if err != nil {
+		return errors.New("remote Pion endpoint rejected its authority")
+	}
 	factory, err := browsermatrixpion.NewPionAttemptFactory(browsermatrixpion.PionAttemptFactoryConfig{
-		InstanceID: config.fixture.RemoteServiceInstanceID, PublicIP: config.fixture.RemotePeerPublicIP,
-		UDPPortMin: config.udpPortMin, UDPPortMax: config.udpPortMax, Trace: config.trace,
+		InstanceID: config.fixture.RemoteServiceInstanceID, PeerConnections: endpoint, Trace: config.trace,
 	})
 	if err != nil {
 		return errors.New("remote Pion peer factory rejected its authority")
@@ -339,7 +407,8 @@ func run(ctx context.Context, config commandConfig) (resultErr error) {
 			MaximumTombstones:  policy.MaximumTombstones,
 			MaximumOIDCReplays: policy.MaximumOIDCReplays,
 			Signer:             config.attestationSigner, Admin: service,
-			Trace: brokerTraceSink(os.Stderr),
+			TURNProvider: config.turnProvider,
+			Trace:        brokerTraceSink(os.Stderr),
 		})
 		if err != nil {
 			return errors.New("credential broker service rejected its authority")
@@ -498,23 +567,6 @@ func readAttestationPrivateKey(path string) (ed25519.PrivateKey, error) {
 		return nil, errors.New("external fixture attestation private key is invalid")
 	}
 	return append(ed25519.PrivateKey(nil), privateKey...), nil
-}
-
-func currentExecutableSHA256() (string, error) {
-	path, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close() //nolint:errcheck // Hashing failure owns the startup verdict.
-	digest := sha256.New()
-	if _, err := io.Copy(digest, file); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func tlsLeafSHA256(certificate tls.Certificate) string {

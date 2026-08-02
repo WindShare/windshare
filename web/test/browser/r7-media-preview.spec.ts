@@ -1,12 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { createFile } from 'mp4box'
 
-import {
-  r8PerformanceSampleCount,
-  reportR8Trend,
-  summarizeR8Metric,
-} from '../performance/r8-trend'
-
 const MP4_FIXTURE_BYTES = 768 * 1024
 const MP4_BLOCK_BYTES = 16 * 1024
 const MP4_SAMPLE_BYTES = 9
@@ -22,6 +16,8 @@ const MP4_FIXTURE_BASE64 = Buffer.from(buildDeterministicMp4Fixture()).toString(
 
 test('runs production image decode and bounded MP4 seek semantics in the active browser', async ({ page }) => {
   await page.goto('/')
+  const pageOrigin = new URL(page.url()).origin
+  expect(pageOrigin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/u)
   const evidence = await page.evaluate(async ({ mp4Base64, mp4BlockBytes }) => {
     const previewPath = '/src/preview/v2-preview.ts'
     const imageHeaderPath = '/src/preview/image-header.ts'
@@ -314,7 +310,7 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
     revokedAfterClose: true,
     width: HERO_WIDTH,
   })
-  expect(evidence.image.objectUrl).toMatch(/^blob:http:\/\/127\.0\.0\.1:4173\//u)
+  expectSameOriginLoopbackBlob(evidence.image.objectUrl, pageOrigin)
   expect(evidence.image.rendered).toEqual({
     complete: true,
     connected: true,
@@ -350,8 +346,8 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
     superseded: { status: 'rejected', name: 'AbortError' },
     width: MP4_WIDTH,
   })
-  expect(evidence.video.initial.objectUrl).toMatch(/^blob:http:\/\/127\.0\.0\.1:4173\//u)
-  expect(evidence.video.later.objectUrl).toMatch(/^blob:http:\/\/127\.0\.0\.1:4173\//u)
+  expectSameOriginLoopbackBlob(evidence.video.initial.objectUrl, pageOrigin)
+  expectSameOriginLoopbackBlob(evidence.video.later.objectUrl, pageOrigin)
   expect(evidence.video.initial.blobBytes).toBeGreaterThan(0)
   expect(evidence.video.later.blobBytes).toBeGreaterThan(0)
 
@@ -385,246 +381,11 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
   expect(new Set(evidence.video.upstreamBlocks).size).toBe(evidence.video.upstreamBlocks.length)
 })
 
-test('records environment-qualified production media preview trends', async ({ browserName, page }) => {
-  const trendSampleCount = r8PerformanceSampleCount()
-  await page.goto('/')
-  const trend = await page.evaluate(measureR8MediaTrend, {
-    heroHeight: HERO_HEIGHT,
-    heroWidth: HERO_WIDTH,
-    mp4Base64: MP4_FIXTURE_BASE64,
-    mp4BlockBytes: MP4_BLOCK_BYTES,
-    mp4Height: MP4_HEIGHT,
-    mp4Width: MP4_WIDTH,
-    sampleCount: trendSampleCount,
-  })
-
-  expect(trend).toHaveLength(trendSampleCount)
-  reportR8Trend({
-    browser: browserName,
-    scenario: 'media-preview',
-    workload: {
-      samples: trendSampleCount,
-      imageBytes: HERO_BYTES,
-      mp4Bytes: MP4_FIXTURE_BYTES,
-      mp4BlockBytes: MP4_BLOCK_BYTES,
-    },
-    capabilities: { imageDecode: true, mp4RangeParser: true },
-    unavailable: {},
-    metrics: {
-      imageOpenMilliseconds: summarizeR8Metric(
-        trend.map((sample) => sample.imageOpenMilliseconds),
-      ),
-      imageFirstFrameMilliseconds: summarizeR8Metric(
-        trend.map((sample) => sample.imageFirstFrameMilliseconds),
-      ),
-      videoMetadataMilliseconds: summarizeR8Metric(
-        trend.map((sample) => sample.videoMetadataMilliseconds),
-      ),
-      videoSeekMilliseconds: summarizeR8Metric(
-        trend.map((sample) => sample.videoSeekMilliseconds),
-      ),
-    },
-  })
-})
-
-async function measureR8MediaTrend(options: {
-  readonly heroHeight: number
-  readonly heroWidth: number
-  readonly mp4Base64: string
-  readonly mp4BlockBytes: number
-  readonly mp4Height: number
-  readonly mp4Width: number
-  readonly sampleCount: number
-}) {
-  const previewPath = '/src/preview/v2-preview.ts'
-  const geometryPath = '/src/content/geometry.ts'
-  const brokerPath = '/src/content/v2-broker.ts'
-  const connectivityPath = '/src/connectivity/v2-receiver-policy.ts'
-  const [previewModule, geometryModule, brokerModule, connectivityModule] = await Promise.all([
-    import(previewPath) as Promise<typeof import('../../src/preview/v2-preview')>,
-    import(geometryPath) as Promise<typeof import('../../src/content/geometry')>,
-    import(brokerPath) as Promise<typeof import('../../src/content/v2-broker')>,
-    import(connectivityPath) as Promise<typeof import('../../src/connectivity/v2-receiver-policy')>,
-  ])
-  type CatalogFile = Extract<
-    import('../../src/catalog/v2-records').V2CatalogEntry,
-    { kind: 'file' }
-  >
-  type ByteRange = import('../../src/content/geometry').ByteRange
-  type Descriptor = import('../../src/content/v2-records').V2FileRevisionDescriptor
-  type BlockLane = import('../../src/content/v2-broker').V2BlockLane
-  type RangeReader = import('../../src/content/v2-broker').V2BlockRangeReader
-  type RangeReaderOptions = import('../../src/content/v2-broker').V2BlockRangeReaderOptions
-  type RevisionReader = import('../../src/content/v2-session-services').V2RevisionReader
-
-  function identity(first: number): Uint8Array<ArrayBuffer> {
-    const value = new Uint8Array(16)
-    value.set([first])
-    return value
-  }
-
-  function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
-    if (left.byteLength !== right.byteLength) return false
-    for (let index = 0; index < left.byteLength; index += 1) {
-      if (left[index] !== right[index]) return false
-    }
-    return true
-  }
-
-  function createRuntime(
-    bytes: Uint8Array<ArrayBuffer>,
-    name: string,
-    seed: number,
-    blockBytes: number,
-  ) {
-    const descriptor: Descriptor = Object.freeze({
-      shareInstance: identity(seed),
-      shareInstanceId: `r8-share-${seed}`,
-      fileId: identity(seed + 1),
-      fileIdText: `r8-file-${seed}`,
-      fileRevision: identity(seed + 2),
-      fileRevisionText: `r8-revision-${seed}`,
-      exactSize: BigInt(bytes.byteLength),
-      geometry: new geometryModule.FileGeometry(BigInt(bytes.byteLength), BigInt(blockBytes)),
-    })
-    const leaseId = identity(seed + 3)
-    const upstream = new Set<bigint>()
-    const lane: BlockLane = {
-      id: seed,
-      async fetchBlock(demand, signal) {
-        signal.throwIfAborted()
-        if (demand.descriptor !== descriptor || !equalBytes(demand.leaseId, leaseId)) {
-          throw new Error('R8 media trend escaped its opened revision')
-        }
-        upstream.add(demand.localBlockIndex)
-        const range = descriptor.geometry.blockPlaintext(demand.localBlockIndex)
-        return Object.freeze({
-          descriptor,
-          localBlockIndex: demand.localBlockIndex,
-          data: bytes.slice(Number(range.start), Number(range.end)),
-        })
-      },
-    }
-    const lanes = new brokerModule.V2LaneSet()
-    lanes.add(lane, 'relay')
-    const rawBroker = new brokerModule.V2BlockBroker(lanes)
-    const routes = new connectivityModule.V2ConnectivityRouteAuthority()
-    routes.admitRelay()
-    // Preview stays route-neutral so only this fixture boundary can supply activation authority.
-    const broker: RangeReader = Object.freeze({
-      readRange: (
-        candidate: Descriptor,
-        candidateLease: Uint8Array,
-        range: ByteRange,
-        options: RangeReaderOptions = {},
-      ) =>
-        rawBroker.readRouteAuthorizedRange(candidate, candidateLease, range, {
-          ...options,
-          routes,
-        }),
-    })
-    const revisions: RevisionReader = {
-      async open(fileId, signal) {
-        signal?.throwIfAborted()
-        if (!equalBytes(fileId, descriptor.fileId)) {
-          throw new Error('R8 media trend opened another file')
-        }
-        return { descriptor, leaseId: leaseId.slice(), release: async () => undefined }
-      },
-    }
-    const entry: CatalogFile = Object.freeze({
-      kind: 'file',
-      id: descriptor.fileId,
-      idText: descriptor.fileIdText,
-      name,
-      expectedSize: descriptor.exactSize,
-    })
-    return {
-      broker,
-      entry,
-      revisions,
-      upstreamBytes: () => [...upstream].reduce((total, block) => {
-        const range = descriptor.geometry.blockPlaintext(block)
-        return total + Number(range.end - range.start)
-      }, 0),
-      close: () => {
-        routes.close()
-        rawBroker.close()
-        lanes.close()
-      },
-    }
-  }
-
-  const heroResponse = await fetch('/src/assets/hero.png')
-  if (!heroResponse.ok) throw new Error(`Repository PNG returned HTTP ${heroResponse.status}`)
-  const heroBytes = new Uint8Array(await heroResponse.arrayBuffer())
-  const binary = atob(options.mp4Base64)
-  const mp4Bytes = Uint8Array.from(binary, (value) => value.charCodeAt(0))
-  const trend = []
-  for (let sample = 0; sample < options.sampleCount; sample += 1) {
-    const imageRuntime = createRuntime(heroBytes, 'hero.png', 40 + sample * 4, 16 * 1024)
-    const imageStartedAt = performance.now()
-    const imagePreview = await previewModule.V2FilePreview.open(
-      imageRuntime.entry,
-      imageRuntime.revisions,
-      imageRuntime.broker,
-      new AbortController().signal,
-    )
-    const imageOpenedAt = performance.now()
-    const image = imagePreview.current
-    if (image.kind !== 'image' || image.width !== options.heroWidth ||
-        image.height !== options.heroHeight) {
-      throw new Error('R8 image trend escaped the production dimension oracle')
-    }
-    const element = new Image()
-    element.src = image.url
-    document.body.append(element)
-    await element.decode()
-    const imageFirstFrameAt = performance.now()
-    if (element.naturalWidth !== options.heroWidth || element.naturalHeight !== options.heroHeight) {
-      throw new Error('R8 image trend decoded unexpected dimensions')
-    }
-    element.remove()
-    await imagePreview.close()
-    imageRuntime.close()
-
-    const videoRuntime = createRuntime(
-      mp4Bytes,
-      'bounded-two-sample.mp4',
-      100 + sample * 4,
-      options.mp4BlockBytes,
-    )
-    const videoStartedAt = performance.now()
-    const videoPreview = await previewModule.V2FilePreview.open(
-      videoRuntime.entry,
-      videoRuntime.revisions,
-      videoRuntime.broker,
-      new AbortController().signal,
-      { supportsVideo: () => true },
-    )
-    const videoMetadataAt = performance.now()
-    const video = videoPreview.current
-    if (video.kind !== 'video' || video.width !== options.mp4Width ||
-        video.height !== options.mp4Height || video.durationSeconds !== 2) {
-      throw new Error('R8 video trend escaped the production metadata oracle')
-    }
-    const seekStartedAt = performance.now()
-    const sought = await videoPreview.seek(1.5)
-    const seekCompletedAt = performance.now()
-    if (sought.kind !== 'video' || sought.positionSeconds !== 1 ||
-        videoRuntime.upstreamBytes() >= mp4Bytes.byteLength) {
-      throw new Error('R8 video trend escaped bounded seek semantics')
-    }
-    await videoPreview.close()
-    videoRuntime.close()
-    trend.push({
-      imageOpenMilliseconds: imageOpenedAt - imageStartedAt,
-      imageFirstFrameMilliseconds: imageFirstFrameAt - imageStartedAt,
-      videoMetadataMilliseconds: videoMetadataAt - videoStartedAt,
-      videoSeekMilliseconds: seekCompletedAt - seekStartedAt,
-    })
-  }
-  return trend
+function expectSameOriginLoopbackBlob(objectUrl: string, pageOrigin: string): void {
+  expect(objectUrl).toMatch(/^blob:http:\/\/127\.0\.0\.1:\d+\//u)
+  expect(new URL(objectUrl).protocol).toBe('blob:')
+  expect(new URL(objectUrl.slice('blob:'.length)).origin).toBe(pageOrigin)
+  expect(objectUrl.startsWith(`blob:${pageOrigin}/`)).toBe(true)
 }
 
 function buildDeterministicMp4Fixture(): Uint8Array<ArrayBuffer> {

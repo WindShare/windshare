@@ -10,8 +10,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/windshare/windshare/internal/testnetwork"
 )
 
 func TestCanonicalPolicyAndClientConfigLoading(t *testing.T) {
@@ -76,7 +74,6 @@ func TestConfigLoadersRejectNoncanonicalDocuments(t *testing.T) {
 }
 
 func TestHTTPJWKSFetcherPinsExactTLSResponseAndRejectsRedirects(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
 	document := []byte(`{"keys":[]}`)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet ||

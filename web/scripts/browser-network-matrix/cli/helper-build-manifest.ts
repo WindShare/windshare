@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import type { BigIntStats } from 'node:fs'
 import { lstat, open, type FileHandle } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
@@ -9,7 +8,6 @@ import {
   requireExactKeys,
   requireLiteral,
   requireRecord,
-  requireSha256,
   requireString,
 } from '../../browser-evidence/contract/json.ts'
 import { parseCanonicalJsonText } from '../../browser-evidence/contract/strict-json.ts'
@@ -17,36 +15,35 @@ import { HELPER_BUILD_MANIFEST_SCHEMA_VERSION } from './build-helpers.mjs'
 
 const MAXIMUM_HELPER_MANIFEST_BYTES = 16 * 1024
 const MANIFEST_KEYS = Object.freeze(['schemaVersion', 'platform', 'architecture', 'helpers'])
-const HELPER_KEYS = Object.freeze(['role', 'path', 'sha256'])
+const HELPER_KEYS = Object.freeze(['role', 'path'])
 const PLATFORMS = Object.freeze(['win32', 'linux'] as const)
 const ARCHITECTURES = Object.freeze(['amd64', 'arm64'] as const)
-const ROLES = Object.freeze(['artifact-publisher', 'windows-job'] as const)
+const ROLES = Object.freeze(['artifact-publisher', 'test-process-owner'] as const)
 const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true })
 
 export type HelperBuildRole = typeof ROLES[number]
 
-export interface AuthenticatedHelperBuildEntry {
+export interface HelperBuildEntry {
   readonly role: HelperBuildRole
   readonly path: string
-  readonly sha256: string
 }
 
-export interface AuthenticatedHelperBuildManifest {
+export interface HelperBuildManifest {
   readonly platform: 'win32' | 'linux'
   readonly architecture: 'amd64' | 'arm64'
-  readonly helpers: readonly AuthenticatedHelperBuildEntry[]
+  readonly helpers: readonly HelperBuildEntry[]
 }
 
-export interface HelperBuildManifestAuthority {
-  readonly manifest: AuthenticatedHelperBuildManifest
+export interface HelperBuildManifestHandle {
+  readonly manifest: HelperBuildManifest
   assertUnchanged(): Promise<void>
   close(): Promise<void>
 }
 
-export async function openHelperBuildManifestAuthority(
+export async function openHelperBuildManifest(
   pathValue: string,
   platform: 'win32' | 'linux',
-): Promise<HelperBuildManifestAuthority> {
+): Promise<HelperBuildManifestHandle> {
   requireCanonicalAbsolutePath(pathValue, 'helper manifest')
   const named = await lstat(pathValue, { bigint: true })
   requireBoundedRegularFile(named, 'helper manifest')
@@ -55,7 +52,7 @@ export async function openHelperBuildManifestAuthority(
     const opened = await handle.stat({ bigint: true })
     requireBoundedRegularFile(opened, 'helper manifest')
     if (!sameFileRevision(named, opened)) {
-      throw new Error('helper manifest changed while its authority was opened')
+      throw new Error('helper manifest changed while it was opened')
     }
     const encoded = await readHeldFile(handle, opened, 'helper manifest')
     const manifest = parseHelperBuildManifest(encoded, platform)
@@ -66,26 +63,24 @@ export async function openHelperBuildManifestAuthority(
   }
 }
 
-class HeldHelperBuildManifest implements HelperBuildManifestAuthority {
-  readonly manifest: AuthenticatedHelperBuildManifest
+class HeldHelperBuildManifest implements HelperBuildManifestHandle {
+  readonly manifest: HelperBuildManifest
   readonly #path: string
   readonly #handle: FileHandle
   readonly #identity: BigIntStats
   readonly #encoded: Uint8Array
-  readonly #sha256: string
 
   constructor(
     path: string,
     handle: FileHandle,
     identity: BigIntStats,
     encoded: Uint8Array,
-    manifest: AuthenticatedHelperBuildManifest,
+    manifest: HelperBuildManifest,
   ) {
     this.#path = path
     this.#handle = handle
     this.#identity = identity
     this.#encoded = Uint8Array.from(encoded)
-    this.#sha256 = sha256(encoded)
     this.manifest = manifest
   }
 
@@ -100,11 +95,8 @@ class HeldHelperBuildManifest implements HelperBuildManifestAuthority {
       throw new Error('helper manifest identity or revision changed')
     }
     const actual = await readHeldFile(this.#handle, opened, 'helper manifest')
-    if (
-      sha256(actual) !== this.#sha256 ||
-      !Buffer.from(actual).equals(Buffer.from(this.#encoded))
-    ) {
-      throw new Error('helper manifest canonical bytes or SHA-256 changed')
+    if (!Buffer.from(actual).equals(Buffer.from(this.#encoded))) {
+      throw new Error('helper manifest canonical bytes changed')
     }
   }
 
@@ -116,7 +108,7 @@ class HeldHelperBuildManifest implements HelperBuildManifestAuthority {
 function parseHelperBuildManifest(
   encoded: Uint8Array,
   expectedPlatform: 'win32' | 'linux',
-): AuthenticatedHelperBuildManifest {
+): HelperBuildManifest {
   let text: string
   try {
     text = UTF8_DECODER.decode(encoded)
@@ -146,9 +138,7 @@ function parseHelperBuildManifest(
     throw new Error('helper manifest architecture differs from runtime')
   }
   const values = requireArray(parsed.helpers, 'helper manifest helpers')
-  const expectedRoles: readonly HelperBuildRole[] = platform === 'win32'
-    ? ['artifact-publisher', 'windows-job']
-    : ['artifact-publisher']
+  const expectedRoles: readonly HelperBuildRole[] = ['artifact-publisher', 'test-process-owner']
   if (values.length !== expectedRoles.length) {
     throw new Error('helper manifest has a missing or extra platform helper')
   }
@@ -164,7 +154,6 @@ function parseHelperBuildManifest(
     return Object.freeze({
       role,
       path,
-      sha256: requireSha256(entry.sha256, `${label} SHA-256`),
     })
   }))
   return Object.freeze({ platform, architecture, helpers })
@@ -180,11 +169,11 @@ async function readHeldFile(
   let offset = 0
   while (offset < length) {
     const { bytesRead } = await handle.read(encoded, offset, length - offset, offset)
-    if (bytesRead < 1) throw new Error(`${label} ended while authenticated`)
+    if (bytesRead < 1) throw new Error(`${label} ended while read`)
     offset += bytesRead
   }
   const after = await handle.stat({ bigint: true })
-  if (!sameFileRevision(metadata, after)) throw new Error(`${label} changed while authenticated`)
+  if (!sameFileRevision(metadata, after)) throw new Error(`${label} changed while read`)
   return Uint8Array.from(encoded)
 }
 
@@ -204,10 +193,6 @@ function requireCanonicalAbsolutePath(value: string, label: string): void {
 function sameFileRevision(left: BigIntStats, right: BigIntStats): boolean {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size &&
     left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs
-}
-
-function sha256(value: Uint8Array): string {
-  return createHash('sha256').update(value).digest('hex')
 }
 
 function requireKeyOrder(

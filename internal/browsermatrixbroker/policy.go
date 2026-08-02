@@ -59,7 +59,7 @@ func validateServerPolicy(policy ServerPolicy) error {
 	identity := policy.ExpectedWorkloadIdentity()
 	if policy.SchemaVersion != ServerPolicySchemaVersion ||
 		policy.Issuer != GitHubActionsOIDCIssuer || !canonicalControllerOrigin(policy.ControllerOrigin) ||
-		!validProfileID(policy.ProfileID) || policy.ProfileID == "manual-real-nat" ||
+		!validProfileID(policy.ProfileID) ||
 		!validExpectedIdentity(identity) || lease <= 0 || lease > maximumControlLease ||
 		retirementTimeout <= 0 || retirementTimeout > maximumRetirementTimeout ||
 		retention <= 0 || retention > maximumTombstoneRetention ||

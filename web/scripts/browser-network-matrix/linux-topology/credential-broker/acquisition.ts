@@ -12,6 +12,7 @@ import { authenticateLeaseResponse, readPinnedPublicKey } from './authentication
 import {
   EXTERNAL_FIXTURE_CREDENTIAL_BROKER_PROTOCOL,
   type AuthenticatedCredentialLease,
+  type CredentialBrokerDispatchOutcome,
   type CredentialBrokerExchange,
   type CredentialBrokerScope,
   type CredentialBrokerSecretStore,
@@ -32,7 +33,6 @@ interface CredentialBrokerAcquisition {
   readonly controller: AbortController
   readonly settled: Promise<void>
   settle(): void
-  dispatched: boolean
   publicKey?: string
   recoveryController?: AbortController
   recoveryWorker?: Promise<void>
@@ -83,15 +83,17 @@ export class CredentialAcquisitionRegistry {
     // acquisition that has not reached the helper process yet.
     this.#pending.set(requestId, acquisition)
     let authenticatedRemoteLease = false
+    let dispatchOutcome: Promise<CredentialBrokerDispatchOutcome> | undefined
     try {
       const publicKey = await readPinnedPublicKey(acquisition.publicKeyFile, controller.signal)
       acquisition.publicKey = publicKey
-      const response = await this.#options.exchange(
+      const exchange = this.#options.exchange(
         acquisition.request,
         scope,
         controller.signal,
-        () => { acquisition.dispatched = true },
       )
+      dispatchOutcome = exchange.dispatchOutcome
+      const response = await exchange.result
       let lease: AuthenticatedCredentialLease
       try {
         lease = authenticateLeaseResponse(response, publicKey, this.#options.secretStore)
@@ -162,7 +164,8 @@ export class CredentialAcquisitionRegistry {
         revokeAndWait: () => this.#options.retirements.retire(retirement, 'revoke-and-wait'),
       })
     } catch (cause) {
-      if (acquisition.dispatched && !authenticatedRemoteLease) {
+      const dispatched = await credentialBrokerWasDispatched(dispatchOutcome)
+      if (dispatched && !authenticatedRemoteLease) {
         this.#ambiguous.set(requestId, acquisition)
         try {
           await this.#recoverAmbiguousAcquisition(acquisition)
@@ -229,11 +232,12 @@ export class CredentialAcquisitionRegistry {
   ): Promise<void> {
     const publicKey = acquisition.publicKey
     if (publicKey === undefined) throw new Error('credential broker replay trust anchor is absent')
-    const response = await this.#options.exchange(
+    const exchange = this.#options.exchange(
       acquisition.request,
       acquisition.scope,
       signal,
     )
+    const response = await exchange.result
     let lease: AuthenticatedCredentialLease
     try {
       lease = authenticateLeaseResponse(response, publicKey, this.#options.secretStore)
@@ -313,7 +317,6 @@ function createCredentialBrokerAcquisition(input: {
     controller,
     settled,
     settle: () => settle?.(),
-    dispatched: false,
   }
 }
 
@@ -350,7 +353,6 @@ function fixtureForProfile(
     'scheduled-public-stun': config.publicStun,
     'scheduled-restricted-udp': config.restrictedUdp,
     'scheduled-coturn': config.coturn,
-    'manual-real-nat': config.manualRealNat,
   }[profileId]
 }
 
@@ -362,6 +364,12 @@ function requireBrokerScope(
   if (!OPAQUE_ID_PATTERN.test(probeNonce)) {
     throw new Error('credential broker request scope is invalid')
   }
+}
+
+async function credentialBrokerWasDispatched(
+  outcome: Promise<CredentialBrokerDispatchOutcome> | undefined,
+): Promise<boolean> {
+  return outcome !== undefined && await outcome === 'dispatched'
 }
 
 function requireActive(signal: AbortSignal): void {

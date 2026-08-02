@@ -29,7 +29,6 @@ import {
   PROCESS_SETTLEMENT_MAXIMUM_LIFETIME_MS,
   PROCESS_SETTLEMENT_SCHEMA_VERSION,
   type ProcessSettlementAttestation,
-  type ProcessSettlementClientIoEvidence,
   type ProcessSettlementEvidence,
   type ProcessSettlementInputEvidence,
   type ProcessSettlementOwnershipEvidence,
@@ -231,14 +230,12 @@ function parseProcessSettlementPayload(value: unknown): ProcessSettlementPayload
     'sampleIndex',
     'checkoutSha',
     'commandSha256',
-    'runtimeManifestSha256',
     'resultSha256',
     'resultByteLength',
     'process',
-    'launched',
     'treeEmpty',
+    'cleanupOutcome',
     'input',
-    'clientIo',
     'ownership',
     'nonce',
     'issuedAtUnixMs',
@@ -267,10 +264,6 @@ function parseProcessSettlementPayload(value: unknown): ProcessSettlementPayload
     sampleIndex,
     checkoutSha: requireCheckoutSha(record.checkoutSha, 'process settlement checkout SHA'),
     commandSha256: requireSha256(record.commandSha256, 'process settlement command digest'),
-    runtimeManifestSha256: requireSha256(
-      record.runtimeManifestSha256,
-      'process settlement runtime manifest digest',
-    ),
     resultSha256: requireSha256(record.resultSha256, 'process settlement result digest'),
     resultByteLength: requireCanonicalUnsignedDecimal(
       record.resultByteLength,
@@ -278,10 +271,13 @@ function parseProcessSettlementPayload(value: unknown): ProcessSettlementPayload
       'process settlement result byte length',
     ),
     process: parseProcessEvidence(record.process),
-    launched: requireBoolean(record.launched, 'process settlement launch evidence'),
     treeEmpty: requireBoolean(record.treeEmpty, 'process settlement tree-empty evidence'),
+    cleanupOutcome: requireEnum(
+      record.cleanupOutcome,
+      CLEANUP_OUTCOMES,
+      'process settlement cleanup outcome',
+    ),
     input: parseInputEvidence(record.input),
-    clientIo: parseClientIoEvidence(record.clientIo),
     ownership: parseOwnershipEvidence(record.ownership),
     nonce: requireNonce(record.nonce),
     issuedAtUnixMs: requireCanonicalUnsignedDecimal(
@@ -300,28 +296,25 @@ function parseProcessSettlementPayload(value: unknown): ProcessSettlementPayload
 function parseProcessEvidence(value: unknown): ProcessSettlementEvidence {
   const record = requireRecord(value, 'process settlement terminal evidence')
   const terminal = requireEnum(record.terminal, PROCESS_TERMINALS, 'process settlement terminal')
-  const timedOut = requireBoolean(record.timedOut, 'process settlement timeout evidence')
   if (terminal === 'exited') {
-    requireExactKeys(record, ['terminal', 'timedOut', 'exitCode'], [], 'process settlement terminal evidence')
+    requireExactKeys(record, ['terminal', 'exitCode'], [], 'process settlement terminal evidence')
     return freezeRecord({
       terminal,
-      timedOut,
       exitCode: requireSafeInteger(record.exitCode, 0, 0xffff_ffff, 'process settlement exit code'),
     })
   }
   if (terminal === 'signaled') {
-    requireExactKeys(record, ['terminal', 'timedOut', 'signal'], [], 'process settlement terminal evidence')
-    return freezeRecord({ terminal, timedOut, signal: requirePortableToken(record.signal, 'process signal') })
+    requireExactKeys(record, ['terminal', 'signal'], [], 'process settlement terminal evidence')
+    return freezeRecord({ terminal, signal: requirePortableToken(record.signal, 'process signal') })
   }
   requireExactKeys(
     record,
-    ['terminal', 'timedOut', 'errorCode', 'errorMessage'],
+    ['terminal', 'errorCode', 'errorMessage'],
     [],
     'process settlement terminal evidence',
   )
   return freezeRecord({
     terminal,
-    timedOut,
     errorCode: requirePortableToken(record.errorCode, 'process spawn error code'),
     errorMessage: requireString(record.errorMessage, 'process spawn error message', 512),
   })
@@ -337,7 +330,7 @@ function parseInputEvidence(value: unknown): ProcessSettlementInputEvidence {
   )
   const outcome = requireEnum(
     record.outcome,
-    ['not-started', 'not-requested', 'delivered', 'failed'] as const,
+    ['not_started', 'not_requested', 'delivered', 'failed'] as const,
     'process settlement input outcome',
   )
   const failureCode = requireOptionalPortableToken(
@@ -357,234 +350,55 @@ function parseInputEvidence(value: unknown): ProcessSettlementInputEvidence {
   return freezeRecord({ outcome, failureCode, failureMessage })
 }
 
-function parseClientIoEvidence(value: unknown): ProcessSettlementClientIoEvidence {
-  const record = requireRecord(value, 'process settlement client I/O evidence')
-  requireExactKeys(record, [
-    'requestOutcome',
-    'rawInputOutcome',
-    'controlOutcome',
-    'outputOutcome',
-    'failureCode',
-    'failureMessage',
-  ], [], 'process settlement client I/O evidence')
-  const requestOutcome = requireEnum(
-    record.requestOutcome,
-    ['delivered', 'failed'] as const,
-    'process settlement request I/O outcome',
-  )
-  const rawInputOutcome = requireEnum(
-    record.rawInputOutcome,
-    ['not-requested', 'delivered', 'failed'] as const,
-    'process settlement raw-input I/O outcome',
-  )
-  const controlOutcome = requireEnum(
-    record.controlOutcome,
-    ['not-requested', 'delivered', 'failed'] as const,
-    'process settlement control I/O outcome',
-  )
-  const outputOutcome = requireEnum(
-    record.outputOutcome,
-    ['delivered', 'failed'] as const,
-    'process settlement output I/O outcome',
-  )
-  const failureCode = requireOptionalPortableToken(
-    record.failureCode,
-    'process settlement client I/O failure code',
-  )
-  const failureMessage = requireOptionalText(
-    record.failureMessage,
-    'process settlement client I/O failure message',
-    512,
-  )
-  const failed = [requestOutcome, rawInputOutcome, controlOutcome, outputOutcome].includes('failed')
-  if (
-    failed
-      ? failureCode === '' || failureMessage === ''
-      : failureCode !== '' || failureMessage !== ''
-  ) throw new Error('process settlement client I/O outcome contradicts its failure evidence')
-  return freezeRecord({
-    requestOutcome,
-    rawInputOutcome,
-    controlOutcome,
-    outputOutcome,
-    failureCode,
-    failureMessage,
-  })
-}
-
 function parseOwnershipEvidence(value: unknown): ProcessSettlementOwnershipEvidence {
   const record = requireRecord(value, 'process settlement ownership evidence')
-  if (record.backend === 'linux-subreaper') return parseLinuxOwnershipEvidence(record)
-  if (record.backend === 'windows-job') return parseWindowsOwnershipEvidence(record)
-  throw new Error('process settlement ownership backend is invalid')
-}
-
-function parseLinuxOwnershipEvidence(
-  record: Record<string, unknown>,
-): Extract<ProcessSettlementOwnershipEvidence, { readonly backend: 'linux-subreaper' }> {
-  requireExactKeys(record, [
-    'backend',
-    'ownerPid',
-    'rootPid',
-    'rootStartTimeTicks',
-    'inventoryScans',
-    'maximumObservedDescendants',
-    'quietInventoryCount',
-    'controlOutcome',
-    'cleanupOutcome',
-    'failureCode',
-    'failureMessage',
-  ], [], 'Linux process settlement ownership evidence')
-  const rootPid = record.rootPid === null
-    ? null
-    : requireSafeInteger(record.rootPid, 1, 0x7fff_ffff, 'Linux settlement root PID')
-  const rootStartTimeTicks = requireOptionalText(
-    record.rootStartTimeTicks,
-    'Linux settlement root starttime',
-    32,
+  requireExactKeys(
+    record,
+    ['kind', 'backend', 'terminationReason'],
+    [],
+    'process settlement ownership evidence',
   )
-  if ((rootPid === null) !== (rootStartTimeTicks === '')) {
-    throw new Error('Linux settlement root identity is incomplete')
-  }
-  if (rootStartTimeTicks !== '' && !canonicalUint64(rootStartTimeTicks)) {
-    throw new Error('Linux settlement root starttime is not canonical uint64')
-  }
-  const cleanupOutcome = requireEnum(
-    record.cleanupOutcome,
-    CLEANUP_OUTCOMES,
-    'Linux settlement cleanup outcome',
-  )
-  const failureCode = requireOptionalPortableToken(
-    record.failureCode,
-    'Linux settlement ownership failure code',
-  )
-  const failureMessage = requireOptionalText(
-    record.failureMessage,
-    'Linux settlement ownership failure message',
-    512,
-  )
-  if (
-    cleanupOutcome === 'failed'
-      ? failureCode === '' || failureMessage === ''
-      : failureCode !== '' || failureMessage !== ''
-  ) throw new Error('Linux settlement cleanup contradicts its failure evidence')
   return freezeRecord({
-    backend: 'linux-subreaper' as const,
-    ownerPid: requireSafeInteger(record.ownerPid, 1, 0x7fff_ffff, 'Linux settlement owner PID'),
-    rootPid,
-    rootStartTimeTicks,
-    inventoryScans: requireSafeInteger(
-      record.inventoryScans,
-      0,
-      Number.MAX_SAFE_INTEGER,
-      'Linux settlement inventory scans',
+    kind: requireLiteral(
+      record.kind,
+      'test-process-owner' as const,
+      'process settlement owner kind',
     ),
-    maximumObservedDescendants: requireSafeInteger(
-      record.maximumObservedDescendants,
-      0,
-      Number.MAX_SAFE_INTEGER,
-      'Linux settlement maximum descendants',
-    ),
-    quietInventoryCount: requireSafeInteger(
-      record.quietInventoryCount,
-      0,
-      2,
-      'Linux settlement quiet inventory count',
-    ),
-    controlOutcome: requirePortableToken(
-      record.controlOutcome,
-      'Linux settlement control outcome',
-    ),
-    cleanupOutcome,
-    failureCode,
-    failureMessage,
-  })
-}
-
-function parseWindowsOwnershipEvidence(
-  record: Record<string, unknown>,
-): Extract<ProcessSettlementOwnershipEvidence, { readonly backend: 'windows-job' }> {
-  requireExactKeys(record, [
-    'backend',
-    'supervisionOutcome',
-    'terminationReason',
-    'activeProcessCount',
-    'root',
-    'spawnFailure',
-  ], [], 'Windows process settlement ownership evidence')
-  let root: { readonly pid: number; readonly exitCode: number } | null = null
-  if (record.root !== null) {
-    const rootRecord = requireRecord(record.root, 'Windows settlement root evidence')
-    requireExactKeys(rootRecord, ['pid', 'exitCode'], [], 'Windows settlement root evidence')
-    root = freezeRecord({
-      pid: requireSafeInteger(rootRecord.pid, 1, 0xffff_ffff, 'Windows settlement root PID'),
-      exitCode: requireSafeInteger(
-        rootRecord.exitCode,
-        0,
-        0xffff_ffff,
-        'Windows settlement root exit code',
-      ),
-    })
-  }
-  return freezeRecord({
-    backend: 'windows-job' as const,
-    supervisionOutcome: requireEnum(
-      record.supervisionOutcome,
-      ['tree-empty', 'spawn-failed'] as const,
-      'Windows settlement supervision outcome',
+    backend: requireEnum(
+      record.backend,
+      ['linux_subreaper', 'windows_job'] as const,
+      'process settlement ownership backend',
     ),
     terminationReason: requireEnum(
       record.terminationReason,
-      ['natural', 'target-spawn-failed', 'deadline', 'parent-request'] as const,
-      'Windows settlement termination reason',
+      [
+        'natural', 'deadline', 'stop', 'parent_lost', 'initialization_failed', 'start_rejected',
+        'owner_failure',
+      ] as const,
+      'process settlement termination reason',
     ),
-    activeProcessCount: requireLiteral(
-      record.activeProcessCount,
-      0,
-      'Windows settlement active process count',
-    ),
-    root,
-    spawnFailure: record.spawnFailure === null
-      ? null
-      : requireString(record.spawnFailure, 'Windows settlement spawn failure', 512),
   })
 }
 
 function isNormalAcceptedSettlement(payload: ProcessSettlementPayload): boolean {
   if (
-    payload.launched !== true || payload.treeEmpty !== true || payload.process.timedOut !== false ||
+    payload.treeEmpty !== true || payload.cleanupOutcome !== 'completed' ||
     payload.process.terminal === 'spawn-failed' ||
     payload.input.outcome !== 'delivered' || payload.input.failureCode !== '' ||
-    payload.input.failureMessage !== '' || payload.clientIo.requestOutcome !== 'delivered' ||
-    payload.clientIo.rawInputOutcome !== 'delivered' ||
-    payload.clientIo.controlOutcome !== 'not-requested' ||
-    payload.clientIo.outputOutcome !== 'delivered' || payload.clientIo.failureCode !== '' ||
-    payload.clientIo.failureMessage !== ''
+    payload.input.failureMessage !== '' || payload.ownership.kind !== 'test-process-owner' ||
+    payload.ownership.terminationReason !== 'natural'
   ) return false
-  if (payload.ownership.backend === 'linux-subreaper') {
-    return payload.ownership.rootPid !== null && payload.ownership.rootStartTimeTicks !== '' &&
-      payload.ownership.inventoryScans >= 2 && payload.ownership.quietInventoryCount === 2 &&
-      payload.ownership.controlOutcome === 'target-terminal' &&
-      payload.ownership.cleanupOutcome === 'completed' && payload.ownership.failureCode === '' &&
-      payload.ownership.failureMessage === ''
-  }
-  return payload.ownership.supervisionOutcome === 'tree-empty' &&
-    payload.ownership.terminationReason === 'natural' &&
-    payload.ownership.activeProcessCount === 0 && payload.ownership.root !== null &&
-    payload.ownership.spawnFailure === null
+  return payload.ownership.backend === 'linux_subreaper' ||
+    payload.ownership.backend === 'windows_job'
 }
 
 function parseTrustAnchor(value: ProcessSettlementTrustAnchor): ProcessSettlementTrustAnchor {
   const record = requireRecord(value, 'process settlement trust anchor')
   requireExactKeys(record, [
-    'invocationId', 'runtimeManifestSha256', 'publicKeySpkiBase64', 'publicKeySha256',
+    'invocationId', 'publicKeySpkiBase64', 'publicKeySha256',
   ], [], 'process settlement trust anchor')
   return freezeRecord({
     invocationId: requirePortableToken(record.invocationId, 'settlement invocation ID'),
-    runtimeManifestSha256: requireSha256(
-      record.runtimeManifestSha256,
-      'settlement runtime manifest digest',
-    ),
     publicKeySpkiBase64: requireString(record.publicKeySpkiBase64, 'settlement public key', 1_500),
     publicKeySha256: requireSha256(record.publicKeySha256, 'settlement public key fingerprint'),
   })
@@ -599,7 +413,6 @@ function assertPayloadIdentity(
   const resultSha256 = createHash('sha256').update(expected.resultBytes).digest('hex')
   const expectedIdentity = {
     invocationId: trust.invocationId,
-    runtimeManifestSha256: trust.runtimeManifestSha256,
     sampleId: processSettlementSampleId(sample.suite, sample.browser, sample.sampleIndex),
     runId: sample.runId,
     suite: sample.suite,
@@ -694,16 +507,6 @@ function requireOptionalText(value: unknown, label: string, maximumUtf8Bytes: nu
     Buffer.byteLength(value, 'utf8') > maximumUtf8Bytes
   ) throw new Error(`${label} must be optional bounded NFC text`)
   return value
-}
-
-function canonicalUint64(value: string): boolean {
-  if (!/^[1-9]\d*$/u.test(value)) return false
-  try {
-    const parsed = BigInt(value)
-    return parsed <= 0xffff_ffff_ffff_ffffn && parsed.toString(10) === value
-  } catch {
-    return false
-  }
 }
 
 function sampleKey(sample: Pick<BrowserSampleResult, 'suite' | 'browser' | 'sampleIndex'>): string {

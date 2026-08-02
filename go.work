@@ -1,9 +1,10 @@
-// go.work 只服务本地开发:构建/测试经 workspace 把根模块对 core 的版本 require
-// 解析到本地 ./core,改动无需发版即可联调(执行计划 §6.2)。CI 另以 GOWORK=off
-// 跑构建校验,守"根模块禁 replace、以版本 require core"的发版不变量。
+// go.work is local-development glue: root resolves core locally, while the
+// independent performance-evidence module resolves the root process owner.
+// Release validation disables the workspace and consumes tagged modules.
 go 1.26.5
 
 use (
 	.
 	./core
+	./internal/perfevidence
 )

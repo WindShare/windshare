@@ -32,7 +32,16 @@ func runE2E(
 	code := runProcess(prepared.command, cli.ProcessConfig{
 		SenderPeerFactories: prepared.provider,
 		SenderPeerEvidence:  prepared.evidence,
+		CatalogGate:         prepared.catalogGate,
 	})
+	if prepared.catalogGate != nil {
+		if err := prepared.catalogGate.Close(); err != nil {
+			fmt.Fprintln(stderr, "windshare-e2e: close catalog enumeration gate")
+			if code == cli.ExitOK {
+				code = cli.ExitFailure
+			}
+		}
+	}
 	if err := prepared.evidence.Close(); err != nil {
 		fmt.Fprintf(stderr, "windshare-e2e: close sender evidence: %v\n", err)
 		if code == cli.ExitOK {
@@ -43,5 +52,5 @@ func runE2E(
 }
 
 func writeE2EUsage(writer io.Writer) {
-	fmt.Fprintln(writer, "Usage: windshare-e2e --test-ice-topology <absolute profile.json> --test-ice-topology-resolution <absolute resolution.json> --test-ice-topology-profile-sha256 <sha256> --test-ice-topology-resolution-sha256 <sha256> --sender-evidence <absolute attempts.jsonl> <command> [args...]")
+	fmt.Fprintln(writer, "Usage: windshare-e2e --test-ice-topology <absolute profile.json> --test-ice-topology-resolution <absolute resolution.json> --test-ice-topology-profile-sha256 <sha256> --test-ice-topology-resolution-sha256 <sha256> --sender-evidence <absolute attempts.jsonl> [--catalog-enumeration-gate] <command> [args...]")
 }

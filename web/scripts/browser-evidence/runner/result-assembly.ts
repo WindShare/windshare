@@ -17,6 +17,7 @@ import {
 import type { VerifiedTestIceTopologyLock } from '../test-ice-topology.ts'
 import type { ResultStatus } from '../vocabulary.ts'
 import type { BrowserSampleIdentity } from './contract.ts'
+import type { BrowserSampleContainmentTerminationReason } from '../process/containment.ts'
 import { boundedMessage, normalizedViolations } from './diagnostic-text.ts'
 
 export interface CaptureSummary {
@@ -27,9 +28,13 @@ export interface CaptureSummary {
 
 export interface ChildProcessRun {
   readonly processEvidence: RunnerProcessEvidence
-  readonly timedOut: boolean
+  readonly terminationReason: BrowserSampleContainmentTerminationReason
   readonly stdout: CaptureSummary
   readonly stderr: CaptureSummary
+  readonly treeEmpty?: boolean
+  readonly cleanupOutcome?: 'completed' | 'failed'
+  readonly inputEvidence?: unknown
+  readonly ownershipEvidence?: unknown
 }
 
 interface FinalResultFacts {
@@ -102,7 +107,7 @@ export function deriveExecutionEvidence(
 ): ExecutionEvidence {
   const browserCrash = collection.pageCrashed || collection.targetCrashed ||
     collection.unexpectedBrowserDisconnect
-  const infrastructureFailure = collection.infrastructureFailure || child.timedOut ||
+  const infrastructureFailure = collection.infrastructureFailure || child.terminationReason === 'deadline' ||
     child.processEvidence.terminal === 'spawn-failed' ||
     (child.processEvidence.terminal === 'signaled' && !browserCrash)
   return Object.freeze({
@@ -130,7 +135,9 @@ export function collectRunnerViolations(
   const violations = [...collection.integrityViolations]
   if (child.stdout.truncated) violations.push('runner stdout exceeded its capture limit and was truncated')
   if (child.stderr.truncated) violations.push('runner stderr exceeded its capture limit and was truncated')
-  if (child.timedOut) violations.push('browser sample child exceeded the runner process deadline')
+  if (child.terminationReason === 'deadline') {
+    violations.push('browser sample child exceeded the runner process deadline')
+  }
   if (child.processEvidence.terminal === 'spawn-failed') violations.push('browser sample child failed to spawn')
   if (collection.lifecycleCompleted && collection.capabilityEvidence === null) {
     violations.push('completed browser sample omitted capability evidence')
@@ -152,7 +159,18 @@ export async function writeRunnerDiagnostic(
     runnerDiagnosticSchemaVersion: 1,
     operationId,
     processEvidence: child.processEvidence,
-    processDeadlineExceeded: child.timedOut,
+    processDeadlineExceeded: child.terminationReason === 'deadline',
+    ...(child.treeEmpty === undefined
+      ? {}
+      : {
+          ownershipSettlement: {
+            terminationReason: child.terminationReason,
+            treeEmpty: child.treeEmpty,
+            cleanupOutcome: child.cleanupOutcome,
+            inputEvidence: child.inputEvidence,
+            ownershipEvidence: child.ownershipEvidence,
+          },
+        }),
     stdout: child.stdout,
     stderr: child.stderr,
     childEvidence: {

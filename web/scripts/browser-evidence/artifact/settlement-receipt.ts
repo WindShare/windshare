@@ -4,7 +4,6 @@ export {
   PROCESS_SETTLEMENT_SCHEMA_VERSION,
   type ProcessSettlementAttestation,
   type ProcessSettlementCleanupOutcome,
-  type ProcessSettlementClientIoEvidence,
   type ProcessSettlementEvidence,
   type ProcessSettlementInputEvidence,
   type ProcessSettlementOwnershipEvidence,

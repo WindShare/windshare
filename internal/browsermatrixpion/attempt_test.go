@@ -4,24 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/pion/ice/v4"
 	pion "github.com/pion/webrtc/v4"
 
-	"github.com/windshare/windshare/internal/testnetwork"
+	"github.com/windshare/windshare/internal/testloopback"
 )
 
 func TestPionAttemptEchoesAcrossRealLoopbackSelectedPair(t *testing.T) {
-	port := reserveUDPPort(t)
+	loopback := testloopback.New(t)
+	remoteAPI := loopback.NewPionAPI()
+	localAPI := loopback.NewPionAPI()
+	port := uint16(remoteAPI.LocalAddr().Port)
 	var traceMu sync.Mutex
 	var traces []TraceEvent
 	factory, err := NewPionAttemptFactory(PionAttemptFactoryConfig{
-		InstanceID: "remote-a", PublicIP: "127.0.0.1", UDPPortMin: port, UDPPortMax: port,
+		InstanceID: "remote-a", PeerConnections: remoteAPI,
 		Trace: func(event TraceEvent) {
 			traceMu.Lock()
 			traces = append(traces, event)
@@ -39,16 +40,21 @@ func TestPionAttemptEchoesAcrossRealLoopbackSelectedPair(t *testing.T) {
 		t.Fatal(err)
 	}
 	attempt := attemptValue.(*pionAttempt)
-	defer attempt.Close() //nolint:errcheck
+	t.Cleanup(func() {
+		if err := attempt.Close(); err != nil {
+			t.Errorf("close remote Pion attempt: %v", err)
+		}
+	})
 
-	var setting pion.SettingEngine
-	setting.SetNetworkTypes([]pion.NetworkType{pion.NetworkTypeUDP4})
-	setting.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
-	local, err := pion.NewAPI(pion.WithSettingEngine(setting)).NewPeerConnection(pion.Configuration{})
+	local, err := localAPI.NewPeerConnection(pion.Configuration{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer local.Close() //nolint:errcheck
+	t.Cleanup(func() {
+		if err := local.Close(); err != nil {
+			t.Errorf("close local Pion peer: %v", err)
+		}
+	})
 	channel, err := local.CreateDataChannel("matrix-echo", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -136,18 +142,25 @@ func TestPionAttemptEchoesAcrossRealLoopbackSelectedPair(t *testing.T) {
 	}
 }
 
-func TestPionAttemptRejectsInvalidAuthorityAndOffer(t *testing.T) {
-	for _, config := range []PionAttemptFactoryConfig{
+func TestPionEndpointAPIRejectsInvalidAuthority(t *testing.T) {
+	for _, config := range []PionEndpointConfig{
 		{},
-		{InstanceID: "remote-a", PublicIP: "2001:db8::1", UDPPortMin: 1, UDPPortMax: 2},
-		{InstanceID: "remote-a", PublicIP: "127.0.0.1", UDPPortMin: 2, UDPPortMax: 1},
+		{PublicIP: "2001:db8::1", UDPPortMin: 1, UDPPortMax: 2},
+		{PublicIP: "127.0.0.1", UDPPortMin: 2, UDPPortMax: 1},
 	} {
-		if _, err := NewPionAttemptFactory(config); err == nil {
-			t.Fatalf("invalid factory authority accepted: %#v", config)
+		if _, err := NewPionEndpointAPI(config); err == nil {
+			t.Fatalf("invalid endpoint authority accepted: %#v", config)
 		}
 	}
+}
+
+func TestPionAttemptRejectsInvalidAuthorityAndOffer(t *testing.T) {
+	loopback := testloopback.New(t)
+	if _, err := NewPionAttemptFactory(PionAttemptFactoryConfig{}); err == nil {
+		t.Fatal("factory accepted an absent instance and PeerConnection API")
+	}
 	factory, err := NewPionAttemptFactory(PionAttemptFactoryConfig{
-		InstanceID: "remote-a", PublicIP: "127.0.0.1", UDPPortMin: 42000, UDPPortMax: 42010,
+		InstanceID: "remote-a", PeerConnections: loopback.NewPionAPI(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,13 +183,39 @@ func TestPionAttemptRejectsInvalidAuthorityAndOffer(t *testing.T) {
 		t.Fatal(err)
 	}
 	attempt := attemptValue.(*pionAttempt)
-	defer attempt.Close() //nolint:errcheck
+	t.Cleanup(func() {
+		if err := attempt.Close(); err != nil {
+			t.Errorf("close rejected-offer Pion attempt: %v", err)
+		}
+	})
 	if _, err := attempt.Offer(context.Background(), "not-sdp"); err == nil {
 		t.Fatal("invalid SDP accepted")
 	}
 	result := attempt.Result()
 	if result.State != attemptStateFailed || result.FailureCode == nil || *result.FailureCode != "invalid-offer" {
 		t.Fatalf("invalid offer failure is not observable: %#v", result)
+	}
+}
+
+type absentPeerConnectionAPI struct{}
+
+func (absentPeerConnectionAPI) NewPeerConnection(
+	pion.Configuration,
+) (*pion.PeerConnection, error) {
+	return nil, nil
+}
+
+func TestPionAttemptFactoryRejectsAbsentInjectedPeer(t *testing.T) {
+	factory, err := NewPionAttemptFactory(PionAttemptFactoryConfig{
+		InstanceID: "remote-a", PeerConnections: absentPeerConnectionAPI{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := factory.Create(context.Background(), testAttemptAuthority(
+		strings.Repeat("b", 22), strings.Repeat("c", 43),
+	)); err == nil {
+		t.Fatal("injected API returned no PeerConnection without failing closed")
 	}
 }
 
@@ -377,18 +416,4 @@ func TestAttemptFailureStatesAndCandidateProjection(t *testing.T) {
 			t.Fatalf("candidate projection=%#v", candidate)
 		}
 	}
-}
-
-func reserveUDPPort(t *testing.T) uint16 {
-	t.Helper()
-	testnetwork.RequireOSNetwork(t)
-	listener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := listener.LocalAddr().(*net.UDPAddr).Port
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return uint16(port)
 }

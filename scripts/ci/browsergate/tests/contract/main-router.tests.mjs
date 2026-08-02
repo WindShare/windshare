@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 
-import { runBrowserGateCli } from '../../main.mjs'
+import {
+  browserGateCliFailureEvent,
+  runBrowserGateCli,
+  settledBrowserGateFailureTraces,
+} from '../../main.mjs'
 
 let runtimeAssertionAccesses = 0
 let implementationAccesses = 0
@@ -64,12 +68,13 @@ const result = await runBrowserGateCli(
         dispatchOrder.push('invoke-handler')
         assert.equal(Object.isFrozen(optionArguments), true)
         assert.deepEqual(optionArguments, ['--platform', 'linux'])
-        return 23
+        return { exitCode: 23, traces: completeTraceSnapshot() }
       }
     },
   },
 )
-assert.equal(result, 23)
+assert.equal(result.exitCode, 23)
+assert.equal(result.traces.completed, true)
 assert.equal(runtimeAssertions, 1, 'one valid dispatch must assert the runtime exactly once')
 assert.equal(implementationLoads, 1, 'one valid dispatch must load one command implementation')
 assert.equal(handlerCalls, 1, 'one valid dispatch must invoke one command handler')
@@ -83,10 +88,10 @@ let defaultAssertionImplementationLoads = 0
 const defaultAssertionResult = await runBrowserGateCli(['plan'], {
   async loadCommand() {
     defaultAssertionImplementationLoads += 1
-    return async () => 29
+    return async () => ({ exitCode: 29, traces: completeTraceSnapshot() })
   },
 })
-assert.equal(defaultAssertionResult, 29)
+assert.equal(defaultAssertionResult.exitCode, 29)
 assert.equal(
   defaultAssertionImplementationLoads,
   1,
@@ -133,5 +138,57 @@ assert.equal(
   0,
   'an invalid runtime assertion port must fail closed before loader observation',
 )
+
+const trustedFailure = new Error('opaque')
+Object.defineProperty(trustedFailure, 'traces', {
+  enumerable: true,
+  value: completeTraceSnapshot(),
+})
+assert.equal(settledBrowserGateFailureTraces(trustedFailure)?.completed, true)
+
+let hostileReads = 0
+const messageAccessor = new Error('opaque')
+Object.defineProperty(messageAccessor, 'message', {
+  get() {
+    hostileReads += 1
+    throw new Error('message getter entered')
+  },
+})
+assert.equal(settledBrowserGateFailureTraces(messageAccessor), null)
+assert.equal(settledBrowserGateFailureTraces({
+  toString() {
+    hostileReads += 1
+    throw new Error('toString entered')
+  },
+}), null)
+const hostileProxy = new Proxy({}, {
+  getPrototypeOf() {
+    hostileReads += 1
+    throw new Error('proxy trap entered')
+  },
+  getOwnPropertyDescriptor() {
+    hostileReads += 1
+    throw new Error('proxy trap entered')
+  },
+})
+assert.equal(settledBrowserGateFailureTraces(hostileProxy), null)
+assert.equal(hostileReads, 0)
+assert.deepEqual(browserGateCliFailureEvent().payload, {
+  failureCode: 'browsergate-command-failed',
+  reportedOutcome: 'failed',
+})
+
+function completeTraceSnapshot() {
+  return Object.freeze({
+    events: Object.freeze([]),
+    observedEvents: 0,
+    capturedEvents: 0,
+    observedBytes: 0,
+    capturedBytes: 0,
+    truncated: false,
+    completed: true,
+    failure: null,
+  })
+}
 
 process.stdout.write('browsergate lazy command router contracts: PASS\n')

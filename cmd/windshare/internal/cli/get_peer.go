@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -9,7 +11,42 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/internal/testrun"
 )
+
+var ErrInvalidConnectivityPolicy = errors.New("invalid connectivity policy")
+
+// ConnectivityPolicy decides whether receiver planning may create a peer
+// attempt. Modeling the choice at the consumer boundary prevents relay-only
+// operation from depending on timing, failed ICE, or a test-only transport.
+type ConnectivityPolicy uint8
+
+const (
+	ConnectivityAuto ConnectivityPolicy = iota + 1
+	ConnectivityRelayOnly
+)
+
+func ParseConnectivityPolicy(value string) (ConnectivityPolicy, error) {
+	switch value {
+	case "auto":
+		return ConnectivityAuto, nil
+	case "relay-only":
+		return ConnectivityRelayOnly, nil
+	default:
+		return 0, fmt.Errorf("%w %q; want auto or relay-only", ErrInvalidConnectivityPolicy, value)
+	}
+}
+
+func (policy ConnectivityPolicy) String() string {
+	switch policy {
+	case ConnectivityAuto:
+		return "auto"
+	case ConnectivityRelayOnly:
+		return "relay-only"
+	default:
+		return "invalid"
+	}
+}
 
 const receiverTerminationTraceWaitTime = time.Second
 
@@ -33,13 +70,23 @@ func (a *App) monitorReceiverAdmission(
 }
 
 func beginReceiverPlanning(
+	policy ConnectivityPolicy,
 	startPeer func() *activeReceiverPeer,
+	resumeRelayOnly func(),
 	resolveSelection func() (transfer.SelectionRules, error),
 ) (*activeReceiverPeer, transfer.SelectionRules, error) {
 	// downloadT0 and its independent relay deadline are already armed. Starting
 	// the peer before bounded rule validation keeps setup concurrent; authenticated
 	// --only path traversal belongs to the transfer job and cannot shift T0.
-	peer := startPeer()
+	var peer *activeReceiverPeer
+	switch policy {
+	case ConnectivityAuto:
+		peer = startPeer()
+	case ConnectivityRelayOnly:
+		resumeRelayOnly()
+	default:
+		return nil, transfer.SelectionRules{}, ErrInvalidConnectivityPolicy
+	}
 	rules, err := resolveSelection()
 	return peer, rules, err
 }
@@ -289,6 +336,11 @@ func (a *App) monitorReceiverPeer(
 			notifyReceiverPeer(observe, receiverPeerReady)
 			if _, ok := attempt.Lane(); ok {
 				a.logf("get: direct peer lane active")
+				a.recordProcessTrace(
+					processTraceGetComponent,
+					processTraceReceiverDirectLane,
+					testrun.OutcomeSucceeded,
+				)
 			}
 		case <-attempt.Done():
 			outcome := attempt.Outcome()

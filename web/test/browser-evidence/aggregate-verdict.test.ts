@@ -125,7 +125,7 @@ describe('cross-suite browser evidence aggregation', { timeout: FRAMEWORK_AGGREG
     )
     expect(mixed.mainGuard.upload).toBeNull()
     expect(mixed.mainGuard.guards.every(({ failureMessage }) =>
-      failureMessage?.includes('topology snapshots do not bind every sample result'))).toBe(true)
+      failureMessage === 'guard suite upload sealing failed')).toBe(true)
     await expect(aggregateMatrix(mixed, mixedPionTopology))
       .rejects.toThrow(/wrong available suite upload count/u)
   })
@@ -472,15 +472,17 @@ async function guardSyntheticSuite(
     ...(failedSampleIndex === undefined
       ? {}
       : {
-          hooks: Object.freeze({
-            beforeArtifactScan: (sample: { readonly sampleIndex: number }) => {
-              if (sample.sampleIndex === failedSampleIndex) {
-                throw new Error('synthetic scanner failure')
-              }
-            },
-          }),
+          scanFaultCuts: Object.freeze(samples
+            .filter(({ sample }) => sample.sampleIndex === failedSampleIndex)
+            .map(({ sample }) => Object.freeze({
+              browser: sample.browser,
+              sampleIndex: sample.sampleIndex,
+              fault: Object.freeze({
+                action: 'fail-before-artifact-scan' as const,
+                relativePath: sample.artifacts[0]!.relativePath,
+              }),
+            }))),
         }),
-    trace: () => undefined,
   })
   return Object.freeze({ ...guarded, directoryPublisher: authority.directoryPublisher })
 }

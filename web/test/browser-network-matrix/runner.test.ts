@@ -3,14 +3,21 @@ import { describe, expect, it, vi } from 'vitest'
 import { parseNetworkRuntimeAttestation } from '../../scripts/browser-network-matrix/attestation.ts'
 import type { NetworkMatrixAttemptEvidence } from '../../scripts/browser-network-matrix/attempt-evidence.ts'
 import { networkMatrixIdentities, type NetworkMatrixIdentity } from '../../scripts/browser-network-matrix/manifest.ts'
-import { completedOwnedOperation } from '../../scripts/browser-network-matrix/owned-operation.ts'
+import {
+  completedOwnedOperation,
+  type NetworkMatrixDeadlineScheduler,
+  type NetworkMatrixOwnershipInput,
+  type NetworkMatrixOwnershipRegistrar,
+  type NetworkMatrixOwnershipRegistration,
+} from '../../scripts/browser-network-matrix/owned-operation.ts'
 import { NetworkMatrixRunCollector } from '../../scripts/browser-network-matrix/run-collector.ts'
+import { networkMatrixSampleOperationId } from '../../scripts/browser-network-matrix/sample-authority.ts'
 import {
   NetworkMatrixOrchestrationError,
   NetworkMatrixSampleExecutionError,
-  runNetworkMatrix,
+  startNetworkMatrix,
   type NetworkMatrixRunCollectorPort,
-  type NetworkMatrixRunTrace,
+  type NetworkMatrixRunnerOptions,
   type NetworkMatrixSampleExecutor,
 } from '../../scripts/browser-network-matrix/runner.ts'
 import type {
@@ -24,25 +31,49 @@ import type {
 } from '../../scripts/browser-network-matrix/vocabulary.ts'
 import { loadRegistry, matchedAttemptEvidence, rawAttestation } from './fixtures.ts'
 
+async function runNetworkMatrix(options: NetworkMatrixRunnerOptions) {
+  const execution = startNetworkMatrix(options)
+  const result = await execution.result
+  const snapshot = execution.traces.snapshot()
+  if (
+    snapshot.failure !== null ||
+    !snapshot.completed ||
+    snapshot.truncated ||
+    snapshot.observedEvents !== snapshot.capturedEvents ||
+    snapshot.observedBytes !== snapshot.capturedBytes
+  ) throw new Error('test discarded incomplete network matrix runner trace evidence')
+  return result
+}
+
 describe('browser network matrix runner', () => {
-  it('executes the exact scheduled topology × browser × five identity expansion', async () => {
+  it('executes the exact scheduled expansion at the maximum run ID boundary', async () => {
     const registry = await loadRegistry()
+    const runId = 'r'.repeat(96)
     const resolver = fakeResolver()
+    const ownedOperationIds: string[] = []
     const observed: NetworkMatrixIdentity[] = []
-    const traces: NetworkMatrixRunTrace[] = []
     const samples = sampleExecutor((identity, call, runId) => {
       observed.push(identity)
       return successfulExecution(identity, call, runId)
     })
 
-    const result = await runNetworkMatrix({
+    const execution = startNetworkMatrix({
       registry,
-      runId: 'scheduled-runner-run',
+      runId,
       executionMode: 'scheduled',
       authorities: resolver.authorities,
       samples,
-      trace: (trace) => traces.push(trace),
+      ownershipRegistrar: recordingOwnershipRegistrar(ownedOperationIds),
     })
+    const result = await execution.result
+    const traceSnapshot = execution.traces.snapshot()
+    expect(traceSnapshot).toMatchObject({
+      completed: true,
+      truncated: false,
+      failure: null,
+      observedEvents: traceSnapshot.capturedEvents,
+    })
+    const traces = traceSnapshot.events
 
     expect(observed).toEqual(networkMatrixIdentities(registry.manifest, 'scheduled'))
     expect(result.samples).toHaveLength(45)
@@ -55,11 +86,184 @@ describe('browser network matrix runner', () => {
     expect(result.runOutcome).toBe('completed')
     expect(traces.filter(({ milestone }) => milestone === 'sample-started')).toHaveLength(45)
     expect(traces.find(({ milestone }) => milestone === 'sample-started')).toMatchObject({
+      schemaVersion: 'windshare.browser-network-matrix-trace/v1',
+      component: 'browser-network-matrix-runner',
+      scenario: 'network-matrix-sample',
+      outcome: 'started',
       profileId: 'scheduled-public-stun',
       browser: 'chromium',
       sampleOrdinal: 1,
     })
+    expect(traces.filter(({ milestone }) => milestone === 'run-started')).toHaveLength(1)
+    expect(traces.filter(({ milestone }) => milestone === 'run-terminal')).toHaveLength(1)
+    expect(traces.filter(({ milestone }) => milestone === 'profile-started')).toHaveLength(3)
+    expect(traces.filter(({ milestone }) => milestone === 'profile-terminal')).toHaveLength(3)
+    expect(traces.filter(({ milestone }) => milestone === 'sample-terminal')).toHaveLength(45)
+    expect(traces.every(({ operationId }) => Buffer.byteLength(operationId, 'utf8') <= 128)).toBe(true)
+    expect(ownedOperationIds).not.toHaveLength(0)
+    expect(ownedOperationIds.every((operationId) =>
+      Buffer.byteLength(operationId, 'utf8') <= 128 &&
+      /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/u.test(operationId))).toBe(true)
+    expect(traces.find(({ milestone }) => milestone === 'run-terminal')).toMatchObject({
+      component: 'browser-network-matrix-runner',
+      scenario: 'network-matrix-run',
+      outcome: 'succeeded',
+      context: { cleanupOutcome: 'completed', lastMilestone: 'run-result-finalized' },
+    })
+    expect(traces.every(({ schemaVersion, component, scenario, outcome }) =>
+      schemaVersion === 'windshare.browser-network-matrix-trace/v1' &&
+      component === 'browser-network-matrix-runner' &&
+      ['network-matrix-run', 'network-matrix-profile', 'network-matrix-sample'].includes(scenario) &&
+      ['started', 'succeeded', 'failed', 'skipped'].includes(outcome))).toBe(true)
     expect([...resolver.closes.values()].every((close) => close.mock.calls.length === 1)).toBe(true)
+  })
+
+  it('fails a sample terminal when observed evidence violates the candidate hard oracle', async () => {
+    const registry = await loadRegistry()
+    const resolver = fakeResolver()
+    const samples = sampleExecutor((identity, call, runId) => {
+      const execution = successfulExecution(identity, call, runId)
+      if (call !== 1) return execution
+      return {
+        ...execution,
+        observation: {
+          sampleOutcome: 'observed' as const,
+          attemptEvidence: matchedAttemptEvidence(identity, runId, {
+            candidatePolicyMismatch: true,
+            processInstanceId: execution.processInstanceId,
+          }),
+        },
+      }
+    })
+    const execution = startNetworkMatrix({
+      registry,
+      runId: 'candidate-hard-oracle-run',
+      executionMode: 'scheduled',
+      authorities: resolver.authorities,
+      samples,
+    })
+
+    const result = await execution.result
+    const snapshot = execution.traces.snapshot()
+    const firstOperationId = networkMatrixSampleOperationId(
+      'candidate-hard-oracle-run',
+      networkMatrixIdentities(registry.manifest, 'scheduled')[0]!,
+    )
+    const firstTerminal = snapshot.events.find(({ operationId, milestone }) =>
+      operationId === firstOperationId && milestone === 'sample-terminal')
+
+    expect(result.samples[0]).toMatchObject({
+      sampleOutcome: 'observed',
+      candidatePolicyOutcome: 'mismatched',
+    })
+    expect(firstTerminal).toMatchObject({
+      outcome: 'failed',
+      context: {
+        cleanupOutcome: 'completed',
+        lastMilestone: 'sample-execution-completed',
+        sampleOutcome: 'observed',
+        candidatePolicyOutcome: 'mismatched',
+      },
+    })
+    expect(snapshot.failure).toBeNull()
+  })
+
+  it('binds a sample deadline to one failed terminal event after successful cleanup', async () => {
+    const registry = await loadRegistry()
+    const resolver = fakeResolver()
+    const execution = startNetworkMatrix({
+      registry,
+      runId: 'deadline-trace-run',
+      executionMode: 'scheduled',
+      authorities: resolver.authorities,
+      samples: sampleExecutor((identity, call, runId) =>
+        successfulExecution(identity, call, runId)),
+      deadlineScheduler: secondOperationDeadlineScheduler(),
+    })
+    const stalledConsumer = execution.traces[Symbol.asyncIterator]()
+    expect(await stalledConsumer.next()).toMatchObject({
+      done: false,
+      value: { milestone: 'run-started' },
+    })
+    const result = await execution.result
+    const traceSnapshot = execution.traces.snapshot()
+    expect(traceSnapshot).toMatchObject({
+      completed: true,
+      truncated: false,
+      failure: null,
+      observedEvents: traceSnapshot.capturedEvents,
+    })
+    const traces = traceSnapshot.events
+
+    expect(result.samples[0]).toMatchObject({
+      sampleOutcome: 'infrastructure-failed',
+      failure: { failureCode: 'sample-deadline-exceeded' },
+    })
+    const operationId = networkMatrixSampleOperationId(
+      'deadline-trace-run',
+      networkMatrixIdentities(registry.manifest, 'scheduled')[0]!,
+    )
+    const lifecycle = traces.filter((trace) => trace.operationId === operationId)
+    expect(lifecycle.filter(({ milestone }) => milestone === 'sample-started')).toHaveLength(1)
+    expect(lifecycle.filter(({ milestone }) => milestone === 'sample-terminal')).toHaveLength(1)
+    expect(lifecycle.find(({ milestone }) => milestone === 'sample-terminal')).toMatchObject({
+      outcome: 'failed',
+      context: {
+        cleanupOutcome: 'completed',
+        lastMilestone: 'sample-execution-deadline-exceeded',
+        failureCode: 'sample-deadline-exceeded',
+      },
+    })
+  })
+
+  it('preserves the deadline milestone when cleanup also fails', async () => {
+    const registry = await loadRegistry()
+    const resolver = fakeResolver()
+    const forceTerminateAndWait = vi.fn().mockRejectedValue(new Error('subtree remained live'))
+    const samples: NetworkMatrixSampleExecutor = {
+      execute: vi.fn().mockReturnValue({
+        result: new Promise(() => undefined),
+        forceTerminateAndWait,
+      }),
+    }
+
+    const execution = startNetworkMatrix({
+      registry,
+      runId: 'deadline-cleanup-failure-run',
+      executionMode: 'scheduled',
+      authorities: resolver.authorities,
+      samples,
+      deadlineScheduler: secondOperationDeadlineScheduler(),
+    })
+    const result = await execution.result
+    const snapshot = execution.traces.snapshot()
+    const operationId = networkMatrixSampleOperationId(
+      'deadline-cleanup-failure-run',
+      networkMatrixIdentities(registry.manifest, 'scheduled')[0]!,
+    )
+    const lifecycle = snapshot.events.filter((trace) => trace.operationId === operationId)
+
+    expect(forceTerminateAndWait).toHaveBeenCalledWith('sample-execute')
+    expect(result).toMatchObject({
+      orchestrationOutcome: 'failed',
+      orchestrationFailure: { failureCode: 'containment-cleanup-failed' },
+    })
+    expect(lifecycle.find(({ milestone }) => milestone === 'sample-cleanup-failed'))
+      .toMatchObject({ outcome: 'failed' })
+    expect(lifecycle.find(({ milestone }) => milestone === 'sample-terminal')).toMatchObject({
+      outcome: 'failed',
+      context: {
+        cleanupOutcome: 'failed',
+        lastMilestone: 'sample-execution-deadline-exceeded',
+        failureCode: 'containment-cleanup-failed',
+      },
+    })
+    expect(snapshot).toMatchObject({
+      completed: true,
+      truncated: false,
+      observedEvents: snapshot.capturedEvents,
+      observedBytes: snapshot.capturedBytes,
+    })
   })
 
   it('emits an unavailable topology attestation and zero samples for that whole topology', async () => {
@@ -77,7 +281,6 @@ describe('browser network matrix runner', () => {
       executionMode: 'scheduled',
       authorities: resolver.authorities,
       samples,
-      trace: () => undefined,
     })
 
     expect(result.runOutcome).toBe('partial')
@@ -92,7 +295,9 @@ describe('browser network matrix runner', () => {
     ])
     expect(samples.execute).toHaveBeenCalledTimes(15)
   })
+})
 
+describe('browser network matrix runner suppression and hostile failures', () => {
   it('reports not-executed without inventing samples when every prerequisite is unsatisfied', async () => {
     const registry = await loadRegistry()
     const resolver = fakeResolver({
@@ -103,18 +308,126 @@ describe('browser network matrix runner', () => {
     const samples = sampleExecutor((identity, call, runId) =>
       successfulExecution(identity, call, runId))
 
-    const result = await runNetworkMatrix({
+    const execution = startNetworkMatrix({
       registry,
       runId: 'not-executed-run',
       executionMode: 'scheduled',
       authorities: resolver.authorities,
       samples,
-      trace: () => undefined,
     })
+    const result = await execution.result
+    const snapshot = execution.traces.snapshot()
+    const sampleStarts = snapshot.events.filter(({ milestone }) => milestone === 'sample-started')
+    const sampleSkips = snapshot.events.filter(
+      ({ milestone }) => milestone === 'sample-execution-skipped',
+    )
+    const sampleTerminals = snapshot.events.filter(({ milestone }) => milestone === 'sample-terminal')
 
     expect(result.runOutcome).toBe('not-executed')
     expect(result.samples).toEqual([])
     expect(samples.execute).not.toHaveBeenCalled()
+    expect(sampleStarts).toHaveLength(45)
+    expect(sampleSkips).toHaveLength(45)
+    expect(sampleTerminals).toHaveLength(45)
+    expect(new Set(sampleStarts.map(({ operationId }) => operationId))).toHaveLength(45)
+    expect(sampleTerminals.every(({ outcome, context }) =>
+      outcome === 'skipped' &&
+      context?.cleanupOutcome === 'not-required' &&
+      context.lastMilestone === 'sample-execution-skipped')).toBe(true)
+    expect(snapshot).toMatchObject({
+      completed: true,
+      failure: null,
+      truncated: false,
+      observedEvents: snapshot.capturedEvents,
+      observedBytes: snapshot.capturedBytes,
+    })
+  })
+
+  it.each([
+    ['Error accessors', () => {
+      let traps = 0
+      const failure = new Error('opaque dependency failure')
+      Object.defineProperty(failure, 'message', {
+        configurable: true,
+        get: () => {
+          traps += 1
+          throw new Error('message getter must remain opaque')
+        },
+      })
+      Object.defineProperty(failure, 'toString', {
+        configurable: true,
+        value: () => {
+          traps += 1
+          throw new Error('toString must remain opaque')
+        },
+      })
+      return { failure, observedTraps: () => traps }
+    }],
+    ['Proxy traps', () => {
+      let traps = 0
+      const failure = new Proxy(new Error('opaque proxy failure'), {
+        get: () => {
+          traps += 1
+          throw new Error('get trap must remain opaque')
+        },
+        getPrototypeOf: () => {
+          traps += 1
+          throw new Error('prototype trap must remain opaque')
+        },
+      })
+      return { failure, observedTraps: () => traps }
+    }],
+  ])('settles sample cleanup and terminal evidence without inspecting hostile %s', async (
+    _label,
+    createFailure,
+  ) => {
+    const registry = await loadRegistry()
+    const resolver = fakeResolver()
+    const { failure, observedTraps } = createFailure()
+    const forceTerminateAndWait = vi.fn().mockResolvedValue(undefined)
+    let calls = 0
+    const samples: NetworkMatrixSampleExecutor = {
+      execute(context) {
+        calls += 1
+        if (calls === 1) {
+          return Object.freeze({
+            result: Promise.reject(failure),
+            forceTerminateAndWait,
+          })
+        }
+        return completedOwnedOperation(successfulExecution(context.identity, calls, context.runId))
+      },
+    }
+    const execution = startNetworkMatrix({
+      registry,
+      runId: `hostile-sample-cause-${_label.replaceAll(' ', '-').toLowerCase()}`,
+      executionMode: 'scheduled',
+      authorities: resolver.authorities,
+      samples,
+    })
+
+    const result = await execution.result
+    const snapshot = execution.traces.snapshot()
+
+    expect(forceTerminateAndWait).toHaveBeenCalledOnce()
+    expect(forceTerminateAndWait).toHaveBeenCalledWith('sample-execute')
+    expect(result.samples[0]).toMatchObject({
+      sampleOutcome: 'infrastructure-failed',
+      failure: { failureCode: 'sample-runner-failed' },
+    })
+    expect(snapshot).toMatchObject({
+      completed: true,
+      failure: null,
+      truncated: false,
+      observedEvents: snapshot.capturedEvents,
+      observedBytes: snapshot.capturedBytes,
+    })
+    expect(snapshot.events.find(({ milestone }) => milestone === 'sample-execution-failed'))
+      .toMatchObject({
+        outcome: 'failed',
+        context: { failureCode: 'sample-execution-failed' },
+      })
+    expect(observedTraps()).toBe(0)
   })
 
   it('keeps all real sample attempts and elevates an individual infrastructure failure', async () => {
@@ -136,7 +449,6 @@ describe('browser network matrix runner', () => {
       executionMode: 'scheduled',
       authorities: resolver.authorities,
       samples,
-      trace: () => undefined,
     })
 
     expect(samples.execute).toHaveBeenCalledTimes(45)
@@ -170,7 +482,6 @@ describe('browser network matrix runner', () => {
       executionMode: 'scheduled',
       authorities: resolver.authorities,
       samples,
-      trace: () => undefined,
     })
 
     expect(result.samples).toHaveLength(45)
@@ -221,7 +532,6 @@ describe('browser network matrix runner', () => {
       executionMode: 'scheduled',
       authorities: resolver.authorities,
       samples,
-      trace: () => undefined,
     })
 
     expect(result.samples[1]).toMatchObject({
@@ -237,7 +547,9 @@ describe('browser network matrix runner', () => {
     expect(result.samples[2]?.sampleOutcome).toBe('observed')
     expect(result.samples[4]?.sampleOutcome).toBe('observed')
   })
+})
 
+describe('browser network matrix runner evidence resilience', () => {
   it('turns malformed candidate evidence into evidence-collection failure without aborting peers', async () => {
     const registry = await loadRegistry()
     const resolver = fakeResolver()
@@ -265,7 +577,6 @@ describe('browser network matrix runner', () => {
       executionMode: 'scheduled',
       authorities: resolver.authorities,
       samples,
-      trace: () => undefined,
     })
 
     expect(samples.execute).toHaveBeenCalledTimes(45)
@@ -294,7 +605,6 @@ describe('browser network matrix runner', () => {
       executionMode: 'scheduled',
       authorities: resolver.authorities,
       samples,
-      trace: () => undefined,
     })
 
     expect(result.samples).toHaveLength(16)
@@ -320,7 +630,6 @@ describe('browser network matrix runner', () => {
       executionMode: 'scheduled',
       authorities: resolver.authorities,
       samples,
-      trace: () => undefined,
     })
 
     expect(result.runtimeAttestations[0]).toMatchObject({
@@ -354,7 +663,6 @@ describe('browser network matrix runner', () => {
       executionMode: 'scheduled',
       authorities,
       samples,
-      trace: () => undefined,
     })
 
     expect(result).toMatchObject({
@@ -390,7 +698,6 @@ describe('browser network matrix runner', () => {
       executionMode: 'scheduled',
       authorities: resolver.authorities,
       samples,
-      trace: () => undefined,
     })
 
     expect(result.samples).toHaveLength(2)
@@ -441,7 +748,6 @@ describe('browser network matrix runner lifecycle containment', () => {
       authorities,
       samples: sampleExecutor((identity, call, runId) =>
         successfulExecution(identity, call, runId)),
-      trace: () => undefined,
     })
 
     expect(lifecycle).toEqual([
@@ -479,7 +785,6 @@ describe('browser network matrix runner lifecycle containment', () => {
       samples: sampleExecutor((identity, call, runId) =>
         successfulExecution(identity, call, runId)),
       collector,
-      trace: () => undefined,
     })).rejects.toThrow('collector storage failed')
 
     expect(resolver.closes.get('scheduled-public-stun')).toHaveBeenCalledOnce()
@@ -525,7 +830,6 @@ describe('browser network matrix runner lifecycle containment', () => {
       authorities,
       samples: sampleExecutor((identity, call, runId) =>
         successfulExecution(identity, call, runId)),
-      trace: () => undefined,
     })
 
     await fallbackStarted
@@ -577,7 +881,6 @@ describe('browser network matrix runner lifecycle containment', () => {
       authorities,
       samples: sampleExecutor((identity, call, runId) =>
         successfulExecution(identity, call, runId)),
-      trace: () => undefined,
     })
 
     expect(producerFallback).toHaveBeenCalledWith('authority-prepare')
@@ -615,7 +918,6 @@ describe('browser network matrix runner lifecycle containment', () => {
       authorities,
       samples: sampleExecutor((identity, call, runId) =>
         successfulExecution(identity, call, runId)),
-      trace: () => undefined,
     })
 
     expect(result).toMatchObject({
@@ -662,6 +964,38 @@ function successfulExecution(
       attemptEvidence: matchedAttemptEvidence(identity, runId, { processInstanceId }),
     },
   }
+}
+
+function recordingOwnershipRegistrar(
+  operationIds: string[],
+): NetworkMatrixOwnershipRegistrar {
+  const registration = (): NetworkMatrixOwnershipRegistration => Object.freeze({
+    normalTerminal: () => undefined,
+    forcedTerminal: () => undefined,
+    handoff: (input: NetworkMatrixOwnershipInput) => {
+      operationIds.push(input.operationId)
+      return registration()
+    },
+  })
+  return Object.freeze({
+    register: (input: NetworkMatrixOwnershipInput) => {
+      operationIds.push(input.operationId)
+      return registration()
+    },
+  })
+}
+
+function secondOperationDeadlineScheduler(): NetworkMatrixDeadlineScheduler {
+  let operations = 0
+  return Object.freeze({
+    schedule() {
+      operations += 1
+      return Object.freeze({
+        elapsed: operations === 2 ? Promise.resolve() : new Promise<void>(() => undefined),
+        cancel: () => undefined,
+      })
+    },
+  })
 }
 
 function fakeResolver(

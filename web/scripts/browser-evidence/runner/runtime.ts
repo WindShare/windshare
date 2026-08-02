@@ -17,6 +17,11 @@ import type {
   BrowserSampleContainmentPreflight,
   BrowserSampleContainmentTrace,
 } from '../process/containment.ts'
+import { BrowserSampleContainmentError } from '../process/containment.ts'
+import {
+  createOwnedEventChannel,
+  type OwnedByteSnapshot,
+} from '../process/owned-process-channel.mjs'
 import {
   createProductionContainmentBackend,
 } from '../process/containment-factory.ts'
@@ -36,11 +41,12 @@ import {
   RUNNER_MAXIMUM_CAPTURED_STREAM_BYTES,
   RUNNER_PROCESS_TERMINATION_GRACE_MS,
   RUNNER_SAMPLE_PROCESS_DEADLINE_MS,
+  BROWSER_SAMPLE_TRACE_SCHEMA_VERSION,
   type BrowserSampleIdentity,
   type BrowserSampleRunnerOptions,
+  type BrowserSampleRunExecution,
   type BrowserSampleRunOutcome,
   type BrowserSampleTrace,
-  type BrowserSampleTraceSink,
 } from './contract.ts'
 import { boundedMessage, boundedText } from './diagnostic-text.ts'
 import {
@@ -57,21 +63,61 @@ import {
 
 const MAXIMUM_LIFECYCLE_TRACE_FAILURES = 8
 const MAXIMUM_LIFECYCLE_TRACE_CAUSES = 8
+const MAXIMUM_BROWSER_SAMPLE_TRACE_EVENTS = 64
 
-export async function runBrowserSample(
+export function startBrowserSample(
   options: BrowserSampleRunnerOptions,
+): BrowserSampleRunExecution {
+  const journal = createOwnedEventChannel<BrowserSampleTrace>(
+    MAXIMUM_BROWSER_SAMPLE_TRACE_EVENTS,
+    'browser sample lifecycle trace',
+  )
+  const lifecycle = new BrowserSampleLifecycleTraceOwner(
+    options,
+    journal.append,
+  )
+  lifecycle.start()
+  const result = runBrowserSampleOperation(options, lifecycle).then(
+    (outcome) => {
+      lifecycle.terminal('succeeded', {
+        resultStatus: outcome.result.resultStatus,
+        executionOutcome: outcome.result.executionOutcome,
+        playwrightOutcome: outcome.result.playwrightOutcome,
+      })
+      return outcome
+    },
+    (cause: unknown) => {
+      lifecycle.terminal('failed', { failure: boundedMessage(cause) })
+      throw cause
+    },
+  ).finally(() => {
+    journal.finish()
+    const snapshot = journal.view.snapshot()
+    const traceFailure = journal.failure()
+    if (traceFailure !== undefined) throw traceFailure
+    if (
+      !snapshot.completed ||
+      snapshot.truncated ||
+      snapshot.observedEvents !== snapshot.capturedEvents
+    ) throw new Error('browser sample lifecycle trace evidence is incomplete')
+  })
+  return Object.freeze({ result, traces: journal.view })
+}
+
+async function runBrowserSampleOperation(
+  options: BrowserSampleRunnerOptions,
+  lifecycle: BrowserSampleLifecycleTraceOwner,
 ): Promise<BrowserSampleRunOutcome> {
   options = normalizedRunnerOptions(options)
   const topologyLock = readVerifiedTestIceTopologyLock(options.topologyLock)
-  const trace = options.trace ?? defaultTraceSink
-  const operationId = sampleOperationId(options)
+  const operationId = options.operationId
   const containment = selectedContainmentBackend(options)
   const preflight = containmentPreflight(options, operationId)
-  emitTrace(trace, options, operationId, 'containment-preflight-started', {
+  lifecycle.emit('containment-preflight-started', 'started', {
     backend: containment.kind,
   })
   await containment.preflight(preflight)
-  emitTrace(trace, options, operationId, 'containment-preflight-completed', {
+  lifecycle.emit('containment-preflight-completed', 'succeeded', {
     backend: containment.kind,
   })
 
@@ -81,14 +127,14 @@ export async function runBrowserSample(
   const resultPath = join(sampleDirectory, 'result.json')
   const resultWriter = new BrowserSampleResultWriter(resultPath, topologyLock)
   const provisional = await resultWriter.writeProvisional(provisionalResult(options, topologyLock))
-  emitTrace(trace, options, operationId, 'provisional-result-written')
+  lifecycle.emit('provisional-result-written', 'succeeded')
 
   let staging: BrowserSampleStaging | undefined
   let finalizationStarted = false
   let finalizationCompleted = false
   let finalizationPhase = 'not-started'
   try {
-    staging = await BrowserSampleStaging.create(sampleDirectory, options.stagingHooks)
+    staging = await BrowserSampleStaging.create(sampleDirectory, options.stagingFaultCut)
     const executionContext = childContext(
       options,
       topologyLock,
@@ -102,7 +148,8 @@ export async function runBrowserSample(
       { encoding: 'utf8', flag: 'wx', mode: 0o600 },
     )
 
-    emitTrace(trace, options, operationId, 'child-process-starting', {
+    lifecycle.markCleanupPending()
+    lifecycle.emit('child-process-starting', 'started', {
       executable: basename(options.command.executable),
       containmentBackend: containment.kind,
     })
@@ -112,15 +159,18 @@ export async function runBrowserSample(
       staging,
       containment,
       preflight,
-      trace,
+      lifecycle,
     )
-    emitTrace(trace, options, operationId, 'child-process-terminal', {
+    lifecycle.markProcessSettled(containment.kind, child.cleanupOutcome)
+    lifecycle.emit('child-process-terminal', 'succeeded', {
       terminal: child.processEvidence.terminal,
-      timedOut: child.timedOut,
+      terminationReason: child.terminationReason,
+      cleanupOutcome: child.cleanupOutcome ??
+        (containment.kind === 'inherited' ? 'deferred-to-outer-owner' : 'completed'),
     })
     finalizationStarted = true
     finalizationPhase = 'assemble-parent-collection'
-    emitTrace(trace, options, operationId, 'attachment-finalization-started', {
+    lifecycle.emit('attachment-finalization-started', 'started', {
       backend: containment.kind,
       phase: finalizationPhase,
       settledFailureCount: 0,
@@ -148,7 +198,7 @@ export async function runBrowserSample(
       preIndexViolations,
     )
     const artifacts = await indexArtifacts(artifactRoot, options.suite, collection.artifactRegistrations)
-    emitTrace(trace, options, operationId, 'attachment-finalization-completed', {
+    lifecycle.emit('attachment-finalization-completed', 'succeeded', {
       backend: containment.kind,
       phase: finalizationPhase,
       artifactCount: artifacts.artifacts.length,
@@ -167,16 +217,17 @@ export async function runBrowserSample(
     })
     const ownershipTransfer = await staging.commit()
     if (ownershipTransfer.failures.length > 0) {
-      emitTrace(trace, options, operationId, 'attachment-ownership-transfer-failed',
+      lifecycle.emit('attachment-ownership-transfer-failed', 'failed',
         lifecycleFailureContext(containment.kind, ownershipTransfer.phase, ownershipTransfer.failures))
     }
     const result = options.ownershipMode === 'inherited'
       ? finalResult
       : await resultWriter.writeFinal(finalResult)
-    emitTrace(trace, options, operationId,
+    lifecycle.emit(
       options.ownershipMode === 'inherited'
         ? 'parent-finalization-candidate-ready'
-        : 'final-result-written', {
+        : 'final-result-written',
+      'succeeded', {
       resultStatus: result.resultStatus,
       executionOutcome: result.executionOutcome,
       playwrightOutcome: result.playwrightOutcome,
@@ -191,11 +242,9 @@ export async function runBrowserSample(
     })
   } catch (cause) {
     if (finalizationStarted && !finalizationCompleted) {
-      emitTrace(
-        trace,
-        options,
-        operationId,
+      lifecycle.emit(
         'attachment-finalization-failed',
+        'failed',
         lifecycleFailureContext(containment.kind, finalizationPhase, cause),
       )
     }
@@ -205,9 +254,7 @@ export async function runBrowserSample(
       cause,
       staging,
       containment.kind,
-      trace,
-      options,
-      operationId,
+      lifecycle,
     )
   }
 }
@@ -224,31 +271,32 @@ function selectedContainmentBackend(
   const ownershipMode = options.ownershipMode ?? 'owned'
   if (ownershipMode === 'inherited') {
     if (
-      options.containmentBackend !== undefined || options.windowsJobHelperPath !== undefined ||
-      options.linuxProcessOwner !== undefined
+      options.containmentBackend !== undefined || options.processOwner !== undefined
     ) {
       throw new Error(
         'inherited sample ownership cannot be combined with a nested containment backend',
       )
     }
-    return createInheritedProcessContainmentBackend()
+    if (options.outerProcessAuthority === undefined) {
+      throw new Error('inherited sample ownership requires an explicit outer process authority')
+    }
+    return createInheritedProcessContainmentBackend(options.outerProcessAuthority)
+  }
+  if (options.outerProcessAuthority !== undefined) {
+    throw new Error('owned sample containment must not claim an outer process authority')
   }
   if (options.containmentBackend !== undefined) {
-    if (options.windowsJobHelperPath !== undefined || options.linuxProcessOwner !== undefined) {
+    if (options.processOwner !== undefined) {
       throw new Error(
         'an injected containment backend cannot be combined with production containment authorities',
       )
     }
     return options.containmentBackend
   }
-  return createProductionContainmentBackend({
-    ...(options.linuxProcessOwner === undefined
-      ? {}
-      : { linuxProcessOwner: options.linuxProcessOwner }),
-    ...(options.windowsJobHelperPath === undefined
-      ? {}
-      : { windowsJobHelperPath: options.windowsJobHelperPath }),
-  })
+  if (options.processOwner === undefined) {
+    throw new Error('owned sample containment requires an authenticated test process owner')
+  }
+  return createProductionContainmentBackend({ processOwner: options.processOwner })
 }
 
 function containmentPreflight(
@@ -268,16 +316,12 @@ function containmentPreflight(
 }
 
 function emitContainmentTrace(
-  trace: BrowserSampleTraceSink,
-  identity: BrowserSampleIdentity,
-  operationId: string,
+  lifecycle: BrowserSampleLifecycleTraceOwner,
   event: BrowserSampleContainmentTrace,
 ): void {
-  emitTrace(
-    trace,
-    identity,
-    operationId,
+  lifecycle.emit(
     `containment-${event.milestone}`,
+    event.outcome,
     event.context,
   )
 }
@@ -288,9 +332,7 @@ async function restoreProvisionalAndRollback(
   cause: unknown,
   staging: BrowserSampleStaging | undefined,
   backend: BrowserSampleContainmentBackend['kind'],
-  trace: BrowserSampleTraceSink,
-  identity: BrowserSampleIdentity,
-  operationId: string,
+  lifecycle: BrowserSampleLifecycleTraceOwner,
 ): Promise<never> {
   // Containment resolves only after the child can no longer mutate staging.
   // Reasserting the parsed snapshot then erases any pre-retirement spoof before
@@ -298,6 +340,7 @@ async function restoreProvisionalAndRollback(
   try {
     await writeAtomicJson(resultPath, provisional)
   } catch (restorationCause) {
+    lifecycle.markCleanupFailed()
     throw new AggregateError(
       [cause, restorationCause],
       'failed to restore provisional browser sample authority',
@@ -305,24 +348,23 @@ async function restoreProvisionalAndRollback(
     )
   }
   if (staging !== undefined) {
-    emitTrace(trace, identity, operationId, 'attachment-rollback-started', {
+    lifecycle.emitCleanup('attachment-rollback-started', 'started', {
       backend,
       phase: 'remove-owned-staging',
       settledFailureCount: 0,
     })
     try {
       await staging.dispose()
-      emitTrace(trace, identity, operationId, 'attachment-rollback-completed', {
+      lifecycle.emitCleanup('attachment-rollback-completed', 'succeeded', {
         backend,
         phase: 'remove-owned-staging',
         settledFailureCount: 0,
       })
     } catch (cleanupCause) {
-      emitTrace(
-        trace,
-        identity,
-        operationId,
+      lifecycle.markCleanupFailed()
+      lifecycle.emitCleanup(
         'attachment-rollback-failed',
+        'failed',
         lifecycleFailureContext(backend, 'remove-owned-staging', cleanupCause),
       )
       throw new AggregateError(
@@ -343,6 +385,8 @@ function childContext(
 ): ChildEvidenceContext {
   return Object.freeze({
     runId: options.runId,
+    operationId: options.operationId,
+    scenario: options.scenario,
     runPolicy: options.runPolicy,
     suite: options.suite,
     browser: options.browser,
@@ -363,7 +407,7 @@ async function executeChild(
   staging: BrowserSampleStaging,
   containment: BrowserSampleContainmentBackend,
   preflight: BrowserSampleContainmentPreflight,
-  trace: BrowserSampleTraceSink,
+  lifecycle: BrowserSampleLifecycleTraceOwner,
 ): Promise<ChildProcessRun> {
   const maximumBytes = options.maximumCapturedStreamBytes ?? RUNNER_MAXIMUM_CAPTURED_STREAM_BYTES
   const stdout = new BoundedFileCapture(staging.runnerPath('stdout.log'), maximumBytes)
@@ -377,18 +421,62 @@ async function executeChild(
       childContext: context,
       deadlineMs: options.processDeadlineMs ?? RUNNER_SAMPLE_PROCESS_DEADLINE_MS,
       terminationGraceMs: RUNNER_PROCESS_TERMINATION_GRACE_MS,
-      stdout: (chunk) => stdout.consume(chunk),
-      stderr: (chunk) => stderr.consume(chunk),
-      trace: (event) => emitContainmentTrace(trace, options, preflight.operationId, event),
+      capture: Object.freeze({ stdoutBytes: maximumBytes, stderrBytes: maximumBytes }),
     })
+    const stdoutSummary = persistOwnedCapture(stdout, authority.output.stdout, maximumBytes, 'stdout')
+    const stderrSummary = persistOwnedCapture(stderr, authority.output.stderr, maximumBytes, 'stderr')
+    emitContainmentSnapshot(lifecycle, authority.traces)
     return Object.freeze({
       ...authority,
-      stdout: stdout.summary(),
-      stderr: stderr.summary(),
+      stdout: stdoutSummary,
+      stderr: stderrSummary,
     })
+  } catch (cause) {
+    if (cause instanceof BrowserSampleContainmentError) {
+      emitContainmentSnapshot(lifecycle, cause.traces)
+    }
+    lifecycle.markContainmentFailure()
+    throw cause
   } finally {
-    await Promise.all([stdout.close(), stderr.close()])
+    try {
+      await Promise.all([stdout.close(), stderr.close()])
+    } catch (cause) {
+      lifecycle.markCleanupFailed()
+      throw cause
+    }
   }
+}
+
+function emitContainmentSnapshot(
+  lifecycle: BrowserSampleLifecycleTraceOwner,
+  snapshot: BrowserSampleContainmentError['traces'],
+): void {
+  if (!snapshot.completed || snapshot.truncated ||
+      snapshot.observedEvents !== snapshot.capturedEvents) {
+    throw new Error('sample containment returned incomplete terminal trace evidence')
+  }
+  for (const event of snapshot.events) emitContainmentTrace(lifecycle, event)
+}
+
+function persistOwnedCapture(
+  destination: BoundedFileCapture,
+  snapshot: OwnedByteSnapshot,
+  maximumBytes: number,
+  label: string,
+): CaptureSummary {
+  const bytes = snapshot.bytes()
+  if (!snapshot.completed || !Number.isSafeInteger(snapshot.observedBytes) ||
+      !Number.isSafeInteger(snapshot.capturedBytes) || snapshot.observedBytes < snapshot.capturedBytes ||
+      snapshot.capturedBytes > maximumBytes || bytes.byteLength !== snapshot.capturedBytes ||
+      snapshot.truncated !== (snapshot.observedBytes > snapshot.capturedBytes)) {
+    throw new Error(`sample containment returned invalid ${label} capture evidence`)
+  }
+  destination.consume(bytes)
+  return Object.freeze({
+    observedBytes: snapshot.observedBytes,
+    capturedBytes: snapshot.capturedBytes,
+    truncated: snapshot.truncated,
+  })
 }
 
 class BoundedFileCapture {
@@ -432,45 +520,122 @@ class BoundedFileCapture {
   }
 }
 
-function emitTrace(
-  sink: BrowserSampleTraceSink,
-  identity: BrowserSampleIdentity,
-  operationId: string,
-  milestone: string,
-  context?: Readonly<Record<string, unknown>>,
-): void {
-  const trace = Object.freeze({
-    operationId,
-    milestone,
-    suite: identity.suite,
-    browser: identity.browser,
-    sampleIndex: identity.sampleIndex,
-    ...(context === undefined ? {} : { context }),
-  })
-  try {
-    sink(trace)
-  } catch (cause) {
-    // Observability is not evidence authority. A broken trace integration must
-    // never strand a sample at its provisional result after the child exits.
-    try {
-      defaultTraceSink(Object.freeze({
-        ...trace,
-        milestone: 'trace-sink-failed',
-        context: Object.freeze({ failedMilestone: milestone, error: boundedMessage(cause) }),
-      }))
-    } catch {
-      // stderr itself can be unavailable during process teardown; result
-      // persistence remains the higher-priority authority.
+type BrowserSampleCleanupOutcome =
+  | 'not-required'
+  | 'pending'
+  | 'completed'
+  | 'failed'
+  | 'deferred-to-outer-owner'
+
+class BrowserSampleLifecycleTraceOwner {
+  readonly #identity: BrowserSampleIdentity
+  readonly #append: (trace: BrowserSampleTrace) => void
+  readonly #ownershipMode: 'owned' | 'inherited'
+  #lastMilestone = 'operation-started'
+  #cleanupOutcome: BrowserSampleCleanupOutcome = 'not-required'
+  #terminal = false
+
+  constructor(identity: BrowserSampleRunnerOptions, append: (trace: BrowserSampleTrace) => void) {
+    this.#identity = identity
+    this.#append = append
+    this.#ownershipMode = identity.ownershipMode ?? 'owned'
+  }
+
+  start(): void {
+    this.#deliver('operation-started', 'started', {
+      ownershipMode: this.#ownershipMode,
+    })
+  }
+
+  emit(
+    milestone: string,
+    outcome: BrowserSampleTrace['outcome'],
+    context?: Readonly<Record<string, unknown>>,
+  ): void {
+    if (this.#terminal) return
+    this.#lastMilestone = milestone
+    this.#observeCleanup(context?.cleanupOutcome)
+    this.#deliver(milestone, outcome, context)
+  }
+
+  emitCleanup(
+    milestone: string,
+    outcome: BrowserSampleTrace['outcome'],
+    context?: Readonly<Record<string, unknown>>,
+  ): void {
+    if (this.#terminal) return
+    this.#observeCleanup(context?.cleanupOutcome)
+    this.#deliver(milestone, outcome, context)
+  }
+
+  markCleanupPending(): void {
+    this.#cleanupOutcome = 'pending'
+  }
+
+  markProcessSettled(
+    backend: BrowserSampleContainmentBackend['kind'],
+    outcome: 'completed' | 'failed' | undefined,
+  ): void {
+    this.#cleanupOutcome = outcome ?? (backend === 'inherited'
+      ? 'deferred-to-outer-owner'
+      : 'completed')
+  }
+
+  markContainmentFailure(): void {
+    if (this.#cleanupOutcome === 'pending') this.#cleanupOutcome = 'failed'
+  }
+
+  markCleanupFailed(): void {
+    this.#cleanupOutcome = 'failed'
+  }
+
+  terminal(
+    outcome: BrowserSampleTrace['outcome'],
+    context: Readonly<Record<string, unknown>>,
+  ): void {
+    if (this.#terminal) return
+    this.#terminal = true
+    if (this.#cleanupOutcome === 'pending') this.#cleanupOutcome = 'failed'
+    this.#deliver('operation-terminal', outcome, {
+      cleanupOutcome: this.#cleanupOutcome,
+      lastMilestone: this.#lastMilestone,
+      ...context,
+    })
+  }
+
+  #observeCleanup(value: unknown): void {
+    if (value === 'completed' || value === 'failed' || value === 'deferred-to-outer-owner') {
+      this.#cleanupOutcome = value
     }
   }
-}
 
-function defaultTraceSink(trace: BrowserSampleTrace): void {
-  process.stderr.write(`${JSON.stringify({ component: 'browser-evidence-runner', ...trace })}\n`)
-}
+  #deliver(
+    milestone: string,
+    outcome: BrowserSampleTrace['outcome'],
+    context?: Readonly<Record<string, unknown>>,
+  ): void {
+    this.#append(this.#event(milestone, outcome, context))
+  }
 
-function sampleOperationId(identity: BrowserSampleIdentity): string {
-  return `${identity.runId}/${identity.suite}/${identity.browser}/${identity.sampleIndex}`
+  #event(
+    milestone: string,
+    outcome: BrowserSampleTrace['outcome'],
+    context?: Readonly<Record<string, unknown>>,
+  ): BrowserSampleTrace {
+    return Object.freeze({
+      schemaVersion: BROWSER_SAMPLE_TRACE_SCHEMA_VERSION,
+      component: 'browser-evidence-runner',
+      runId: this.#identity.runId,
+      operationId: this.#identity.operationId,
+      scenario: this.#identity.scenario,
+      outcome,
+      milestone,
+      suite: this.#identity.suite,
+      browser: this.#identity.browser,
+      sampleIndex: this.#identity.sampleIndex,
+      ...(context === undefined ? {} : { context: Object.freeze({ ...context }) }),
+    })
+  }
 }
 
 function lifecycleFailureContext(

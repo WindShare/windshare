@@ -1,23 +1,22 @@
-import { createHash, randomBytes } from 'node:crypto'
-import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import type { BigIntStats } from 'node:fs'
 import { lstat, open, type FileHandle } from 'node:fs/promises'
-import { isAbsolute, resolve } from 'node:path'
+import { dirname, isAbsolute, resolve } from 'node:path'
 import { finished } from 'node:stream/promises'
 
 import {
-  executeWindowsJob,
-  type WindowsJobExecutionOptions,
-} from '../../browser-evidence/process/windows-job-client.ts'
+  executeTestProcessOwner,
+  type ExecuteTestProcessOwnerOptions,
+  type TestProcessOwnerArtifact,
+} from '../../browser-evidence/process/test-process-owner-client.mjs'
 import {
-  openHelperBuildManifestAuthority,
-  type AuthenticatedHelperBuildManifest,
-  type HelperBuildManifestAuthority,
+  openHelperBuildManifest,
+  type HelperBuildManifest,
+  type HelperBuildManifestHandle,
 } from './helper-build-manifest.ts'
 import { PUBLISHER_HELPER_MAXIMUM_MESSAGE_BYTES } from './publisher-helper-protocol.ts'
 
 const MAXIMUM_EXECUTABLE_BYTES = 64 * 1024 * 1024
-const EXECUTABLE_HASH_CHUNK_BYTES = 64 * 1024
 const DEFAULT_LAUNCH_DEADLINE_MS = 5_000
 const DEFAULT_RESPONSE_DEADLINE_MS = 60_000
 const DEFAULT_REAP_DEADLINE_MS = 5_000
@@ -37,11 +36,11 @@ export interface PublisherHelperProcessResult {
 export interface PublisherHelperProcessAuthorityOptions {
   readonly helperManifestPath: string
   readonly publisherHelperPath: string
-  readonly windowsJobHelperPath?: string
+  readonly processOwnerPath: string
   readonly deadlines?: Partial<PublisherHelperProcessDeadlines>
   readonly platform?: NodeJS.Platform
-  readonly executeWindowsJob?: (options: WindowsJobExecutionOptions) =>
-    ReturnType<typeof executeWindowsJob>
+  readonly executeProcessOwner?: (options: ExecuteTestProcessOwnerOptions) =>
+    ReturnType<typeof executeTestProcessOwner>
 }
 
 export interface PublisherHelperProcessAuthority {
@@ -57,121 +56,102 @@ export async function openPublisherHelperProcessAuthority(
     throw new Error(`browser network matrix publisher is unsupported on ${platform}`)
   }
   const deadlines = normalizeDeadlines(options.deadlines)
-  const manifest = await openHelperBuildManifestAuthority(options.helperManifestPath, platform)
+  const manifest = await openHelperBuildManifest(options.helperManifestPath, platform)
   let publisher: HeldExecutable | undefined
-  let windowsJob: HeldExecutable | undefined
+  let processOwner: HeldExecutable | undefined
   try {
-    const bindings = requirePlatformHelperBindings(options, manifest.manifest, platform)
+    const bindings = requirePlatformHelperBindings(options, manifest.manifest)
     publisher = await HeldExecutable.open(
       bindings.publisher.path,
       'publisher helper',
       platform,
-      bindings.publisher.sha256,
     )
-    if (bindings.windowsJob !== undefined) {
-      windowsJob = await HeldExecutable.open(
-        bindings.windowsJob.path,
-        'Windows Job helper',
-        platform,
-        bindings.windowsJob.sha256,
-      )
-    }
+    processOwner = await HeldExecutable.open(
+      bindings.processOwner.path,
+      'test process owner',
+      platform,
+    )
     await Promise.all([
       manifest.assertUnchanged(),
       publisher.assertUnchanged(),
-      windowsJob?.assertUnchanged(),
+      processOwner.assertUnchanged(),
     ])
     return new ProcessAuthority(
       platform,
       manifest,
       publisher,
-      windowsJob,
+      processOwner,
       deadlines,
-      options.executeWindowsJob ?? executeWindowsJob,
+      options.executeProcessOwner ?? executeTestProcessOwner,
     )
   } catch (cause) {
     await Promise.allSettled([
       manifest.close(),
       ...(publisher === undefined ? [] : [publisher.close()]),
-      ...(windowsJob === undefined ? [] : [windowsJob.close()]),
+      ...(processOwner === undefined ? [] : [processOwner.close()]),
     ])
     throw cause
   }
 }
 
-interface AuthenticatedHelperBinding {
+interface HelperBinding {
   readonly path: string
-  readonly sha256: string
 }
 
 function requirePlatformHelperBindings(
   options: PublisherHelperProcessAuthorityOptions,
-  manifest: AuthenticatedHelperBuildManifest,
-  platform: 'linux' | 'win32',
+  manifest: HelperBuildManifest,
 ): Readonly<{
-  publisher: AuthenticatedHelperBinding
-  windowsJob?: AuthenticatedHelperBinding
+  publisher: HelperBinding
+  processOwner: HelperBinding
 }> {
   const publisherEntry = manifest.helpers.find(({ role }) => role === 'artifact-publisher')
   if (publisherEntry === undefined) {
-    throw new Error('helper manifest does not authorize an artifact publisher')
+    throw new Error('helper manifest does not describe an artifact publisher')
   }
   requireExactManifestPath(options.publisherHelperPath, publisherEntry.path, 'publisher helper')
   const publisher = Object.freeze({
     path: options.publisherHelperPath,
-    sha256: publisherEntry.sha256,
   })
-  if (platform === 'linux') {
-    if (options.windowsJobHelperPath !== undefined) {
-      throw new Error('Linux must not receive a Windows Job helper path')
-    }
-    return Object.freeze({ publisher })
+  const processOwnerEntry = manifest.helpers.find(({ role }) => role === 'test-process-owner')
+  if (processOwnerEntry === undefined) {
+    throw new Error('helper manifest does not describe a test process owner')
   }
-
-  const windowsJobEntry = manifest.helpers.find(({ role }) => role === 'windows-job')
-  if (windowsJobEntry === undefined) {
-    throw new Error('helper manifest does not authorize a Windows Job helper')
-  }
-  const windowsJobHelperPath = options.windowsJobHelperPath
-  if (windowsJobHelperPath === undefined) {
-    throw new Error('Windows requires an explicit Windows Job helper path')
-  }
-  requireExactManifestPath(windowsJobHelperPath, windowsJobEntry.path, 'Windows Job helper')
+  requireExactManifestPath(options.processOwnerPath, processOwnerEntry.path, 'test process owner')
   return Object.freeze({
     publisher,
-    windowsJob: Object.freeze({
-      path: windowsJobHelperPath,
-      sha256: windowsJobEntry.sha256,
+    processOwner: Object.freeze({
+      path: options.processOwnerPath,
     }),
   })
 }
 
 class ProcessAuthority implements PublisherHelperProcessAuthority {
   readonly #platform: 'linux' | 'win32'
-  readonly #manifest: HelperBuildManifestAuthority
+  readonly #manifest: HelperBuildManifestHandle
   readonly #publisher: HeldExecutable
-  readonly #windowsJob: HeldExecutable | undefined
+  readonly #processOwner: HeldExecutable
   readonly #deadlines: PublisherHelperProcessDeadlines
-  readonly #executeWindowsJob: (options: WindowsJobExecutionOptions) =>
-    ReturnType<typeof executeWindowsJob>
+  readonly #executeProcessOwner: (options: ExecuteTestProcessOwnerOptions) =>
+    ReturnType<typeof executeTestProcessOwner>
   #active = false
   #closed = false
 
   constructor(
     platform: 'linux' | 'win32',
-    manifest: HelperBuildManifestAuthority,
+    manifest: HelperBuildManifestHandle,
     publisher: HeldExecutable,
-    windowsJob: HeldExecutable | undefined,
+    processOwner: HeldExecutable,
     deadlines: PublisherHelperProcessDeadlines,
-    executeWindowsJobFunction: (options: WindowsJobExecutionOptions) =>
-      ReturnType<typeof executeWindowsJob>,
+    executeProcessOwner: (options: ExecuteTestProcessOwnerOptions) =>
+      ReturnType<typeof executeTestProcessOwner>,
   ) {
     this.#platform = platform
     this.#manifest = manifest
     this.#publisher = publisher
-    this.#windowsJob = windowsJob
+    this.#processOwner = processOwner
     this.#deadlines = deadlines
-    this.#executeWindowsJob = executeWindowsJobFunction
+    this.#executeProcessOwner = executeProcessOwner
   }
 
   async execute(request: Uint8Array): Promise<PublisherHelperProcessResult> {
@@ -185,15 +165,13 @@ class ProcessAuthority implements PublisherHelperProcessAuthority {
       await Promise.all([
         this.#manifest.assertUnchanged(),
         this.#publisher.assertUnchanged(),
-        this.#windowsJob?.assertUnchanged(),
+        this.#processOwner.assertUnchanged(),
       ])
       let result: PublisherHelperProcessResult | undefined
       let primaryFailure: unknown
       let failed = false
       try {
-        result = this.#platform === 'linux'
-          ? await executeLinux(this.#publisher, request, this.#deadlines)
-          : await this.#executeWindows(request)
+        result = await this.#executeOwned(request)
       } catch (cause) {
         primaryFailure = cause
         failed = true
@@ -202,13 +180,13 @@ class ProcessAuthority implements PublisherHelperProcessAuthority {
         await Promise.all([
           this.#manifest.assertUnchanged(),
           this.#publisher.assertUnchanged(),
-          this.#windowsJob?.assertUnchanged(),
+          this.#processOwner.assertUnchanged(),
         ])
       } catch (identityFailure) {
         if (failed) {
           throw new AggregateError(
             [primaryFailure, identityFailure],
-            'publisher process and executable revalidation both failed',
+            'publisher process and helper-file revalidation both failed',
             { cause: identityFailure },
           )
         }
@@ -228,46 +206,52 @@ class ProcessAuthority implements PublisherHelperProcessAuthority {
     const failures = await Promise.allSettled([
       this.#manifest.close(),
       this.#publisher.close(),
-      ...(this.#windowsJob === undefined ? [] : [this.#windowsJob.close()]),
+      this.#processOwner.close(),
     ])
     const errors = failures
       .filter((failure): failure is PromiseRejectedResult => failure.status === 'rejected')
       .map(({ reason }) => reason)
-    if (errors.length > 0) throw new AggregateError(errors, 'close publisher executable authorities')
+    if (errors.length > 0) throw new AggregateError(errors, 'close publisher helper files')
   }
 
-  async #executeWindows(request: Uint8Array): Promise<PublisherHelperProcessResult> {
-    const windowsJob = this.#windowsJob
-    if (windowsJob === undefined) throw new Error('Windows Job helper authority is absent')
+  async #executeOwned(request: Uint8Array): Promise<PublisherHelperProcessResult> {
     const output = new BoundedOutput()
-    // The local threat model excludes a malicious same-account process replacing
-    // trusted build output in the final CreateProcess instant. Held pre/post checks
-    // still make every observed supervisor swap fail closed, while the supervised
-    // publisher target is SHA-bound and natively locked by the Job helper itself.
-    const execution = await this.#executeWindowsJob({
-      helperPath: windowsJob.path,
+    const execution = await this.#executeProcessOwner({
+      owner: this.#processOwner.artifact(),
+      runId: 'network-matrix-publisher',
       operationId: `network-matrix-publish-${randomBytes(8).toString('hex')}`,
+      scenario: 'network-matrix-publication',
       command: {
         executable: this.#publisher.path,
         arguments: Object.freeze([]),
+        cwd: dirname(this.#publisher.path),
         stdin: Uint8Array.from(request),
-        executableSha256: this.#publisher.sha256,
       },
-      // Publication is byte authority, not an ambient-process capability. The
-      // native helper needs no host environment and must not receive its secrets.
-      inheritedEnvironment: Object.freeze({}),
-      injectedEnvironment: Object.freeze({}),
+      environment: Object.freeze({}),
       deadlineMs: this.#deadlines.responseMs,
       terminationGraceMs: this.#deadlines.reapMs,
-      stdout: (chunk) => output.appendStdout(chunk),
-      stderr: (chunk) => output.appendStderr(chunk),
+      platform: this.#platform,
+      capture: Object.freeze({
+        stdoutBytes: PUBLISHER_HELPER_MAXIMUM_MESSAGE_BYTES,
+        stderrBytes: PUBLISHER_HELPER_MAXIMUM_MESSAGE_BYTES,
+      }),
     })
+    output.appendStdout(execution.output.stdout.bytes())
+    output.appendStderr(execution.output.stderr.bytes())
     output.requireWithinAuthority()
-    if (execution.timedOut) throw new Error('publisher helper response deadline exceeded')
-    if (execution.processEvidence.terminal !== 'exited') {
-      throw new Error('publisher helper failed to launch inside its Windows Job')
+    if (execution.ownershipEvidence.terminationReason === 'deadline') {
+      throw new Error('publisher helper response deadline exceeded')
     }
-    return output.result(execution.processEvidence.exitCode)
+    if (!execution.treeEmpty || execution.cleanupOutcome !== 'completed') {
+      throw new Error('publisher helper process tree did not settle cleanly')
+    }
+    if (execution.inputEvidence.outcome !== 'delivered') {
+      throw new Error('publisher helper request was not delivered exactly once')
+    }
+    if (execution.processEvidence.terminal !== 'exited') {
+      throw new Error('publisher helper failed to launch inside its process owner')
+    }
+    return output.result(execution.processEvidence.exitCode ?? 1)
   }
 }
 
@@ -275,7 +259,6 @@ class HeldExecutable {
   readonly path: string
   readonly handle: FileHandle
   readonly identity: BigIntStats
-  readonly sha256: string
   readonly #label: string
   readonly #platform: 'linux' | 'win32'
 
@@ -283,14 +266,12 @@ class HeldExecutable {
     path: string,
     handle: FileHandle,
     identity: BigIntStats,
-    sha256: string,
     label: string,
     platform: 'linux' | 'win32',
   ) {
     this.path = path
     this.handle = handle
     this.identity = identity
-    this.sha256 = sha256
     this.#label = label
     this.#platform = platform
   }
@@ -299,7 +280,6 @@ class HeldExecutable {
     pathValue: string,
     label: string,
     platform: 'linux' | 'win32',
-    expectedSHA256: string,
   ): Promise<HeldExecutable> {
     if (!isAbsolute(pathValue) || resolve(pathValue) !== pathValue || pathValue.includes('\0')) {
       throw new Error(`${label} path must be explicit, absolute, and canonical`)
@@ -311,11 +291,9 @@ class HeldExecutable {
       const opened = await handle.stat({ bigint: true })
       requireExecutable(opened, label, platform)
       if (!sameIdentity(named, opened) || !sameRevision(named, opened)) {
-        throw new Error(`${label} changed while its executable authority was opened`)
+        throw new Error(`${label} changed while it was opened`)
       }
-      const digest = await digestHeldExecutable(handle, opened, label)
-      if (digest !== expectedSHA256) throw new Error(`${label} bytes differ from the held helper manifest`)
-      return new HeldExecutable(pathValue, handle, opened, digest, label, platform)
+      return new HeldExecutable(pathValue, handle, opened, label, platform)
     } catch (cause) {
       await handle.close().catch(() => undefined)
       throw cause
@@ -333,9 +311,12 @@ class HeldExecutable {
       !sameIdentity(this.identity, named) || !sameIdentity(named, opened) ||
       !sameRevision(this.identity, named) || !sameRevision(named, opened)
     ) throw new Error(`${this.#label} identity or revision changed`)
-    if (await digestHeldExecutable(this.handle, opened, this.#label) !== this.sha256) {
-      throw new Error(`${this.#label} bytes changed`)
-    }
+  }
+
+  artifact(): TestProcessOwnerArtifact {
+    return Object.freeze({
+      path: this.path,
+    })
   }
 
   close(): Promise<void> {
@@ -347,74 +328,6 @@ function requireExactManifestPath(provided: string, authenticated: string, label
   if (provided !== authenticated) {
     throw new Error(`${label} explicit path differs from the held helper manifest`)
   }
-}
-
-async function executeLinux(
-  executable: HeldExecutable,
-  request: Uint8Array,
-  deadlines: PublisherHelperProcessDeadlines,
-): Promise<PublisherHelperProcessResult> {
-  const child = spawn('/proc/self/fd/3', [], {
-    shell: false,
-    detached: true,
-    // Publication is a byte protocol and has no ambient-process capability.
-    // An explicit empty map prevents CI tokens and caller secrets from crossing it.
-    env: Object.freeze({}),
-    windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe', executable.handle.fd],
-  })
-  const input = child.stdin
-  const stdout = child.stdout
-  const stderr = child.stderr
-  if (input === null || stdout === null || stderr === null) {
-    child.kill('SIGKILL')
-    throw new Error('publisher helper did not expose its authenticated pipe set')
-  }
-  const output = new BoundedOutput()
-  stdout.on('data', (chunk: Buffer) => output.appendStdout(chunk))
-  stderr.on('data', (chunk: Buffer) => output.appendStderr(chunk))
-  const terminal = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveClose) => {
-    child.once('close', (code, signal) => resolveClose({ code, signal }))
-  })
-  try {
-    await withDeadline(
-      new Promise<void>((resolveSpawn, rejectSpawn) => {
-        child.once('spawn', resolveSpawn)
-        child.once('error', rejectSpawn)
-      }),
-      deadlines.launchMs,
-      'publisher helper launch',
-    )
-    // The response lease starts before request delivery so a child that exits or
-    // stops reading cannot retain the authority indefinitely through pipe backpressure.
-    const settled = await withDeadline((async () => {
-      await writePublisherHelperRequestAndClose(input, request)
-      return terminal
-    })(), deadlines.responseMs, 'publisher helper response')
-    output.requireWithinAuthority()
-    if (settled.code === null || settled.signal !== null) {
-      throw new Error('publisher helper did not exit normally')
-    }
-    return output.result(settled.code)
-  } catch (cause) {
-    await terminateLinuxProcessGroupAndReap(child.pid, terminal, deadlines.reapMs)
-    throw cause
-  }
-}
-
-async function terminateLinuxProcessGroupAndReap(
-  pid: number | undefined,
-  terminal: Promise<unknown>,
-  reapDeadlineMs: number,
-): Promise<void> {
-  if (pid !== undefined) {
-    try {
-      process.kill(-pid, 'SIGKILL')
-    } catch (cause) {
-      if (!isErrno(cause, 'ESRCH')) throw cause
-    }
-  }
-  await withDeadline(terminal, reapDeadlineMs, 'publisher helper reap')
 }
 
 export async function writePublisherHelperRequestAndClose(
@@ -467,38 +380,15 @@ class BoundedOutput {
   }
 }
 
-async function digestHeldExecutable(
-  handle: FileHandle,
-  metadata: BigIntStats,
-  label: string,
-): Promise<string> {
-  if (metadata.size < 1n || metadata.size > BigInt(MAXIMUM_EXECUTABLE_BYTES)) {
-    throw new Error(`${label} size is outside the executable authority`)
-  }
-  const digest = createHash('sha256')
-  let observed = 0
-  const expectedBytes = Number(metadata.size)
-  const chunk = Buffer.allocUnsafe(Math.min(EXECUTABLE_HASH_CHUNK_BYTES, expectedBytes))
-  while (observed < expectedBytes) {
-    const requested = Math.min(chunk.byteLength, expectedBytes - observed)
-    const { bytesRead } = await handle.read(chunk, 0, requested, observed)
-    if (bytesRead < 1) throw new Error(`${label} ended while its bytes were authenticated`)
-    digest.update(chunk.subarray(0, bytesRead))
-    observed += bytesRead
-  }
-  const after = await handle.stat({ bigint: true })
-  if (!sameIdentity(metadata, after) || !sameRevision(metadata, after) || observed !== Number(after.size)) {
-    throw new Error(`${label} changed while its bytes were authenticated`)
-  }
-  return digest.digest('hex')
-}
-
 function requireExecutable(
   metadata: BigIntStats,
   label: string,
   platform: 'linux' | 'win32',
 ): void {
-  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.ino === 0n) {
+  if (
+    !metadata.isFile() || metadata.isSymbolicLink() || metadata.ino === 0n ||
+    metadata.size < 1n || metadata.size > BigInt(MAXIMUM_EXECUTABLE_BYTES)
+  ) {
     throw new Error(`${label} must be a regular file with native identity`)
   }
   if (platform === 'linux' && (metadata.mode & 0o111n) === 0n) {
@@ -528,23 +418,4 @@ function normalizeDeadlines(
     }
   }
   return deadlines
-}
-
-async function withDeadline<T>(operation: Promise<T>, milliseconds: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      operation,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} deadline exceeded`)), milliseconds)
-        timer.ref()
-      }),
-    ])
-  } finally {
-    if (timer !== undefined) clearTimeout(timer)
-  }
-}
-
-function isErrno(cause: unknown, code: string): cause is NodeJS.ErrnoException {
-  return cause instanceof Error && 'code' in cause && cause.code === code
 }

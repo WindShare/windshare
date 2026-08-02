@@ -27,6 +27,7 @@ verifyEveryProcessFailureFailsClosedAndExecutionContinues()
 verifyMalformedProcessResultsFailClosed()
 verifyAggregationRequiresAnExactResultSet()
 verifyCliRejectsArgumentsBeforeDiscovery()
+verifyHostileCausesCannotSuppressSettlement()
 
 assert.deepEqual(guardState.invocations, [])
 process.stdout.write('browser contract test runner contracts: PASS\n')
@@ -113,7 +114,7 @@ function verifyDiscoveryFailureFailsClosed() {
   assert.equal(execution.summary.durationMs, 7)
   assert.deepEqual(execution.summary.discovery, {
     errorCode: 'EACCES',
-    errorMessage: 'injected discovery denial',
+    errorMessage: 'browser contract test discovery failed',
   })
   assert.deepEqual(decodeRecords(writes), [execution.summary])
 }
@@ -227,7 +228,7 @@ function verifyEveryProcessFailureFailsClosedAndExecutionContinues() {
       process: {
         terminal: 'spawn-failed',
         errorCode: 'ENOENT',
-        errorMessage: 'injected launch throw',
+        errorMessage: 'browser contract test process launch failed',
       },
     },
     {
@@ -236,7 +237,7 @@ function verifyEveryProcessFailureFailsClosedAndExecutionContinues() {
       process: {
         terminal: 'spawn-failed',
         errorCode: 'EACCES',
-        errorMessage: 'injected launch result',
+        errorMessage: 'browser contract test process launch failed',
       },
     },
     {
@@ -333,6 +334,75 @@ function verifyCliRejectsArgumentsBeforeDiscovery() {
     /accepts no arguments/u,
   )
   assert.equal(reads, 0)
+}
+
+function verifyHostileCausesCannotSuppressSettlement() {
+  let hostileReads = 0
+  const activeError = new Error('opaque')
+  Object.defineProperty(activeError, 'code', {
+    get() {
+      hostileReads += 1
+      throw new Error('code accessor entered')
+    },
+  })
+  Object.defineProperty(activeError, 'message', {
+    get() {
+      hostileReads += 1
+      throw new Error('message accessor entered')
+    },
+  })
+  const discoveryWrites = []
+  const discovery = runBrowserContractTests({
+    readEntries() { throw activeError },
+    executeTest: forbiddenExecutor,
+    monotonicNow: incrementingClock(),
+    write: (encoded) => discoveryWrites.push(encoded),
+  })
+  assert.equal(discovery.exitCode, 1)
+  assert.equal(discovery.summary.discovery.errorCode, 'UNKNOWN')
+  assert.equal(discovery.summary.discovery.errorMessage, 'browser contract test discovery failed')
+  assert.equal(discoveryWrites.length, 1)
+
+  const activeString = {
+    toString() {
+      hostileReads += 1
+      throw new Error('toString entered')
+    },
+  }
+  const executionWrites = []
+  const execution = runBrowserContractTests({
+    readEntries: () => [fileEntry('hostile.tests.mjs')],
+    executeTest() { throw activeString },
+    monotonicNow: incrementingClock(),
+    write: (encoded) => executionWrites.push(encoded),
+  })
+  assert.equal(execution.exitCode, 1)
+  assert.equal(execution.results[0].process.errorCode, 'UNKNOWN')
+  assert.equal(
+    execution.results[0].process.errorMessage,
+    'browser contract test process launch failed',
+  )
+  assert.equal(executionWrites.length, 3)
+
+  const hostileProxy = new Proxy({}, {
+    getPrototypeOf() {
+      hostileReads += 1
+      throw new Error('proxy trap entered')
+    },
+    getOwnPropertyDescriptor() {
+      hostileReads += 1
+      throw new Error('proxy trap entered')
+    },
+  })
+  const proxy = runBrowserContractTests({
+    readEntries() { throw hostileProxy },
+    executeTest: forbiddenExecutor,
+    monotonicNow: incrementingClock(),
+    write: () => undefined,
+  })
+  assert.equal(proxy.exitCode, 1)
+  assert.equal(proxy.summary.discovery.errorCode, 'UNKNOWN')
+  assert.equal(hostileReads, 0)
 }
 
 function fileEntry(name) {

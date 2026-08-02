@@ -1,0 +1,25 @@
+export {
+  NETWORK_MATRIX_MAXIMUM_TRACE_CONTEXT_DEPTH,
+  NETWORK_MATRIX_MAXIMUM_TRACE_CONTEXT_ENTRIES,
+  NETWORK_MATRIX_MAXIMUM_TRACE_EVENT_BYTES,
+  NETWORK_MATRIX_MAXIMUM_TRACE_KEY_BYTES,
+  NETWORK_MATRIX_MAXIMUM_TRACE_STRING_BYTES,
+  NETWORK_MATRIX_TRACE_SCHEMA_VERSION,
+  networkMatrixTrace,
+  type NetworkMatrixTraceChannel,
+  type NetworkMatrixTraceComponent,
+  type NetworkMatrixTraceEvent,
+  type NetworkMatrixTraceFailure,
+  type NetworkMatrixTraceIdentity,
+  type NetworkMatrixTraceJournal,
+  type NetworkMatrixTraceOutcome,
+  type NetworkMatrixTraceScenario,
+  type NetworkMatrixTraceSnapshot,
+  type PortableTraceArray,
+  type PortableTraceRecord,
+  type PortableTraceValue,
+} from './contract.ts'
+export {
+  createNetworkMatrixTraceJournal,
+  settleNetworkMatrixTraceJournal,
+} from './journal.ts'

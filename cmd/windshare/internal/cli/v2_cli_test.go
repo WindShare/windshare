@@ -20,7 +20,6 @@ import (
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/transfer"
-	"github.com/windshare/windshare/internal/testnetwork"
 	"github.com/windshare/windshare/internal/testoutputroot"
 	"github.com/windshare/windshare/relay/httpapi"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -92,7 +91,6 @@ func TestSelectionRulesKeepWholeShareAndPathIntentDistinct(t *testing.T) {
 }
 
 func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
 	store := &memoryStopStore{}
 	server := httptest.NewUnstartedServer(nil)
 	endpointIdentity, err := v2.NormalizeRelayEndpoint("http://" + server.Listener.Addr().String())

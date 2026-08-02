@@ -121,7 +121,6 @@ function inputFactory(
       tlsCertificateSha256: '2'.repeat(64),
       tlsCertificateAuthorityFile: certificate,
       attestationPublicKeyFile: attestationPublicKey,
-      manualOperatorIdentity: null,
     }),
   })
 }

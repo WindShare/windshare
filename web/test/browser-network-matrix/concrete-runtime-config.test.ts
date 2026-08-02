@@ -50,7 +50,6 @@ describe('external network-matrix fixture config', () => {
     expect(config.publicStun).toBeNull()
     expect(config.restrictedUdp).toBeNull()
     expect(config.coturn).toBeNull()
-    expect(config.manualRealNat).toBeNull()
     expect(runtimeInputsFromExternalFixtureConfig(config).externalFixtures)
       .not.toHaveProperty('scheduled-coturn')
   })
@@ -67,17 +66,14 @@ describe('external network-matrix fixture config', () => {
     expect(message).not.toContain(secret)
   })
 
-  it('rejects non-null Coturn trust config while no revocable provider adapter is compiled', () => {
-    const marker = 'must-not-be-reflected-coturn-provider'
+  it('accepts Coturn trust only through the scheduled external-fixture authority', () => {
     const raw = completeConfig(resolve('testdata'))
-    const malformed = {
-      ...raw,
-      coturn: { control: { ...controlConfig(resolve('testdata'), 'coturn'), marker } },
-    }
-
-    const message = capturedError(() => parseNetworkMatrixExternalFixtureConfig(malformed))
-    expect(message).toContain('network matrix external fixture trust config is invalid')
-    expect(message).not.toContain(marker)
+    const parsed = parseNetworkMatrixExternalFixtureConfig(raw)
+    expect(parsed.coturn).toEqual(raw.coturn)
+    expect(runtimeInputsFromExternalFixtureConfig(parsed).externalFixtures).toHaveProperty(
+      'scheduled-coturn',
+      { profileId: 'scheduled-coturn' },
+    )
   })
 
   it('rejects a trust config that aliases TLS and attestation authorities', () => {
@@ -107,8 +103,7 @@ function completeConfig(authorityRoot: string) {
     schemaVersion: EXTERNAL_FIXTURE_CONFIG_SCHEMA,
     publicStun: { control: controlConfig(authorityRoot, 'public') },
     restrictedUdp: { control: controlConfig(authorityRoot, 'restricted') },
-    coturn: null,
-    manualRealNat: { control: controlConfig(authorityRoot, 'manual') },
+    coturn: { control: controlConfig(authorityRoot, 'coturn') },
   } as const
 }
 
@@ -118,7 +113,6 @@ function emptyConfig() {
     publicStun: null,
     restrictedUdp: null,
     coturn: null,
-    manualRealNat: null,
   } as const
 }
 
@@ -133,7 +127,7 @@ function controlConfig(authorityRoot: string, identity: string) {
 
 function certificateSha256For(identity: string): string {
   if (identity === 'public') return SHA_A
-  if (identity === 'manual') return SHA_B
+  if (identity === 'restricted') return SHA_B
   return SHA_C
 }
 

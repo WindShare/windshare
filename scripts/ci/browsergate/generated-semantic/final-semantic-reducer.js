@@ -1926,6 +1926,7 @@ Object.freeze(["explicit-secret", "github-token-pattern"]);
 var GUARD_MAXIMUM_ARTIFACT_FILE_BYTES = 536870912;
 var GUARD_UPLOAD_TOPOLOGY_PROFILE_PATH = "topology/profile.json";
 var GUARD_UPLOAD_TOPOLOGY_RESOLUTION_PATH = "topology/resolution.json";
+Object.freeze(["add-foreign-file-before-publication", "fail-before-artifact-copy"]);
 var MAXIMUM_SAMPLE_RESULT_BYTES = 16 * 1024 * 1024;
 var MAXIMUM_GUARD_RESULT_BYTES = 1 * 1024 * 1024;
 var MAXIMUM_TOPOLOGY_BYTES = 1 * 1024 * 1024;

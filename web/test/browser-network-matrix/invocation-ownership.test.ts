@@ -9,6 +9,38 @@ import {
 } from '../../scripts/browser-network-matrix/owned-operation.ts'
 
 describe('network matrix invocation ownership ledger', () => {
+  it('accepts the exact run and operation identity ceilings', () => {
+    const operationId = `A.${'b'.repeat(124)}_Z`
+    const ledger = new NetworkMatrixInvocationOwnershipLedger('r'.repeat(96), operationId)
+
+    const registration = ledger.register({
+      operationId,
+      operationClass: 'sample-execute',
+      forceTerminateAndWait: vi.fn().mockResolvedValue(undefined),
+    })
+
+    expect(ledger.retainedOperationIds).toEqual([operationId])
+    registration.normalTerminal()
+    expect(ledger.retainedCount).toBe(0)
+  })
+
+  it.each([
+    ['above byte ceiling', 'o'.repeat(129)],
+    ['leading punctuation', '.operation'],
+    ['trailing punctuation', 'operation_'],
+    ['colon', 'operation:one'],
+    ['slash', 'operation/one'],
+    ['space', 'operation one'],
+    ['non-ASCII alphabet', 'op?ration'],
+  ])('rejects an operation ID with %s', (_label, operationId) => {
+    const ledger = new NetworkMatrixInvocationOwnershipLedger('run-alpha', 'invocation-alpha')
+    expect(() => ledger.register({
+      operationId,
+      operationClass: 'sample-execute',
+      forceTerminateAndWait: vi.fn().mockResolvedValue(undefined),
+    })).toThrow()
+  })
+
   it('registers the wrapper before a resource-producing factory is allowed to run', async () => {
     const ledger = new NetworkMatrixInvocationOwnershipLedger('run-alpha', 'invocation-alpha')
     let observedDuringFactory: readonly string[] = []

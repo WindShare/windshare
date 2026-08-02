@@ -7,7 +7,6 @@ import type {
   NetworkMatrixRtcConfiguration,
 } from '../../runtime-authority.ts'
 import type { NetworkMatrixBrowser } from '../../vocabulary.ts'
-import type { ManualOperatorTopologyIdentity } from '../external-fixture-attestation.ts'
 import type { SignedExternalFixtureAttestation } from '../external-fixture-attestation.ts'
 import type { SignedExternalFixtureTerminalReceipt } from '../external-fixture-terminal-receipt.ts'
 import type {
@@ -17,7 +16,7 @@ import type {
 } from '../remote-pion.ts'
 
 export const CONTAINED_BROWSER_SAMPLE_SECRET_SCHEMA =
-  'windshare.browser-network-matrix.contained-browser-secret/v3' as const
+  'windshare.browser-network-matrix.contained-browser-secret/v4' as const
 export const CONTAINED_BROWSER_SAMPLE_OUTPUT_SCHEMA =
   'windshare.browser-network-matrix.contained-browser-output/v3' as const
 
@@ -31,7 +30,6 @@ export interface ContainedBrowserSampleSecret {
     readonly tlsCertificateSha256: string
     readonly attestationPublicKey: string
     readonly credential: Uint8Array
-    readonly manualOperatorIdentity: ManualOperatorTopologyIdentity | null
   }
   readonly attemptLeaseMs: number
   readonly resultPollIntervalMs: number

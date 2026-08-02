@@ -1,0 +1,608 @@
+# One reusable current-commit DAG prevents full and release workflows from
+# replaying OS-local Make mirrors that duplicate shared semantic authorities.
+name: Current Commit Authority
+
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+    inputs:
+      browser-authority:
+        description: Select the PR-equivalent graph or append the protected full browser authority.
+        required: true
+        type: string
+
+env:
+  # Go and Make control variables stay absent so their entry authorities can
+  # distinguish owned defaults from caller-supplied selection state.
+  CORE_SUITE_TEST_TIMEOUT: 30m
+  # Suite entrypoints append an invocation-local suffix so concurrent jobs never
+  # share an observational identity while preserving the hosted run provenance.
+  WINDSHARE_TEST_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+  BROWSER_EVIDENCE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  authority-mode:
+    name: Validate browser authority selection
+    runs-on: ubuntu-latest
+    steps:
+      - name: reject an unknown reusable-workflow mode
+        env:
+          BROWSER_AUTHORITY: ${{ inputs.browser-authority }}
+          AUTHORITY_EVENT: ${{ github.event_name }}
+          AUTHORITY_REF: ${{ github.ref }}
+          AUTHORITY_DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+          AUTHORITY_REF_PROTECTED: ${{ github.ref_protected }}
+        run: |-
+          set -eu
+          test "$BROWSER_AUTHORITY" = pr || test "$BROWSER_AUTHORITY" = full
+          if test "$BROWSER_AUTHORITY" = full; then
+            test "$AUTHORITY_EVENT" = schedule || test "$AUTHORITY_EVENT" = workflow_dispatch
+            test "$AUTHORITY_REF_PROTECTED" = true
+            test "$AUTHORITY_REF" = "$AUTHORITY_DEFAULT_REF"
+          fi
+
+  hygiene:
+    name: Hygiene (format, contracts, forbidden references, gopls)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: run repository hygiene gate
+        run: bash scripts/ci/linux/hygiene.sh
+
+  sloc:
+    name: SLOC guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: sloc-guard check
+        uses: doraemonkeys/sloc-guard/.github/action@master
+
+  lint:
+    name: Lint (workflows and both Go modules)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: actionlint and golangci-lint
+        run: bash scripts/ci/linux/lint.sh
+
+  linux-vet:
+    name: Native and cross-platform Go vet authority (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: run one platform-owned vet gate
+        run: bash scripts/ci/linux/vet.sh
+
+  linux-race:
+    name: Complete root and core race sweeps (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: run one invocation-owned race gate
+        run: bash scripts/ci/linux/race.sh
+
+  linux-coverage:
+    name: Root and core coverage authority (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: run one invocation-owned coverage gate
+        run: bash scripts/ci/linux/coverage.sh
+
+  golden-vectors:
+    name: Golden-vector idempotence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: regenerate twice and compare hashes
+        run: bash scripts/ci/linux/vectors.sh
+
+  core-release:
+    name: Core module synthetic artifact and Linux/ext4 certification
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CORE_ARTIFACT_VERSION: "v0.0.0-ci"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: core/go.mod
+          cache: false
+      - name: build and validate deterministic core module artifact
+        run: bash scripts/ci/linux/core-release.sh "$CORE_ARTIFACT_VERSION" "$GITHUB_SHA" linux-ext4
+
+  web:
+    name: Web (frozen install, lint, typecheck, build, vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: acquire frozen web dependencies
+        run: bash scripts/ci/linux/web-dependencies.sh
+      - name: run the web validation leaf
+        run: bash scripts/ci/linux/web.sh
+
+  browser-contract:
+    name: Browsergate contract
+    needs: authority-mode
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: acquire frozen web dependencies
+        run: bash scripts/ci/linux/web-dependencies.sh
+      - name: run Browsergate contract exactly once
+        run: bash scripts/ci/linux/browser-contract.sh
+
+  browser-generated:
+    name: Generated browser semantics in a fresh process
+    needs: authority-mode
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: acquire frozen web dependencies
+        run: bash scripts/ci/linux/web-dependencies.sh
+      - name: validate generated browser semantics exactly once
+        run: bash scripts/ci/linux/browser-generated.sh
+
+  linux-browser-process:
+    name: Browser process integration and ownership stack (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: acquire frozen web dependencies
+        run: bash scripts/ci/linux/web-dependencies.sh
+      - name: exercise process integration, public facade, protocol, and Linux owner
+        run: bash scripts/ci/linux/browser-process.sh
+
+  linux-integration:
+    name: Native integration (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: run native integration suite
+        run: bash scripts/ci/linux/integration.sh
+
+  linux-e2e:
+    name: Go process E2E (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: run Go process E2E suite
+        run: bash scripts/ci/linux/e2e-go.sh
+
+  windows-tests:
+    name: Windows vet and complete race sweeps
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: reject nested Windows reparse-point authorities
+        run: ./scripts/ci/makeauthority/windows-network-path.tests.ps1
+      - name: run one platform-owned vet gate
+        run: ./scripts/ci/windows/vet.ps1
+      - name: one complete root and core race sweep
+        run: ./scripts/ci/windows/race.ps1
+
+  windows-integration:
+    name: Native integration (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: run native integration suite
+        run: ./scripts/ci/windows/integration.ps1
+
+  windows-e2e:
+    name: Go process E2E (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: run Go process E2E
+        run: ./scripts/ci/windows/e2e-go.ps1
+
+  windows-browser-smoke:
+    name: Chromium critical-path sample (Windows)
+    needs: authority-mode
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: acquire frozen web dependencies
+        run: ./scripts/ci/windows/web-dependencies.ps1
+      - name: run the unique Windows Chromium critical-path sample
+        run: ./scripts/ci/windows/browser/smoke.ps1
+      - name: upload Chromium smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/browser-smoke
+          if-no-files-found: warn
+          include-hidden-files: true
+
+  windows-browser-process:
+    name: Browser process integration and ownership stack (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: acquire frozen web dependencies
+        run: ./scripts/ci/windows/web-dependencies.ps1
+      - name: exercise process integration, public facade, protocol, and Windows owner
+        run: ./scripts/ci/windows/browser-process.ps1
+
+  full-browser-network-prepare:
+    name: Prepare content-addressed browser network runtime
+    if: ${{ inputs.browser-authority == 'full' }}
+    needs:
+      - authority-mode
+      - hygiene
+      - sloc
+      - lint
+      - linux-vet
+      - linux-race
+      - linux-coverage
+      - golden-vectors
+      - core-release
+      - web
+      - browser-contract
+      - browser-generated
+      - linux-browser-process
+      - linux-integration
+      - linux-e2e
+      - windows-tests
+      - windows-integration
+      - windows-e2e
+      - windows-browser-smoke
+      - windows-browser-process
+    outputs:
+      producer-manifest-sha256: ${{ steps.prepared.outputs.producer_manifest_sha256 }}
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - windshare-network-matrix
+    timeout-minutes: 120
+    env:
+      ACTIONS_ID_TOKEN_REQUEST_URL: ''
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+      NODE_OPTIONS: ''
+      NODE_PATH: ''
+      BROWSER_NETWORK_PREPARED_DIRECTORY: ${{ github.workspace }}/test-results/browser-network-prepared
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: acquire frozen web dependencies without identity authority
+        run: make web-dependencies
+      - name: build held network helpers without identity authority
+        env:
+          BROWSER_NETWORK_HELPER_DIRECTORY: ${{ runner.temp }}/windshare-browser-network-helpers-${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash scripts/ci/linux/browser/prepare.sh
+      - name: build the exact broker, runtime, registry, and helper artifact
+        id: prepared
+        env:
+          BROWSER_NETWORK_HELPER_DIRECTORY: ${{ runner.temp }}/windshare-browser-network-helpers-${{ github.run_id }}-${{ github.run_attempt }}
+        run: node scripts/ci/browsergate/build-protected-network-inputs.mjs
+      - name: publish prepared network inputs
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-network-prepared-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/browser-network-prepared
+          if-no-files-found: error
+          include-hidden-files: true
+
+  full-browser-network:
+    name: Mint and run protected browser network authority
+    if: ${{ inputs.browser-authority == 'full' }}
+    needs: full-browser-network-prepare
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - windshare-network-matrix
+    environment: browser-network-matrix
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+          NODE_OPTIONS: ''
+          NODE_PATH: ''
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v6
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+          NODE_OPTIONS: ''
+          NODE_PATH: ''
+        with:
+          node-version: 24.16.0
+      - name: download token-free prepared network inputs
+        uses: actions/download-artifact@v8
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+          NODE_OPTIONS: ''
+          NODE_PATH: ''
+        with:
+          name: browser-network-prepared-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ github.workspace }}/.browser-network-prepared
+      # The prepared broker is the first and only custom process in this job. The
+      # artifact service provides transit integrity, while the producer-manifest
+      # job output binds every extracted byte the broker accepts before minting.
+      - name: enter the one-use OIDC network broker
+        shell: /bin/bash --noprofile --norc -p -euo pipefail {0}
+        env:
+          BROWSER_NETWORK_RUNTIME_CONFIG: ${{ vars.WINDSHARE_BROWSER_NETWORK_RUNTIME_CONFIG }}
+          BROWSER_NETWORK_PREPARED_DIRECTORY: ${{ github.workspace }}/.browser-network-prepared
+          BROWSER_NETWORK_PRODUCER_MANIFEST_SHA256: ${{ needs.full-browser-network-prepare.outputs.producer-manifest-sha256 }}
+          WINDSHARE_OIDC_AUDIENCE: ${{ vars.WINDSHARE_BROWSER_NETWORK_OIDC_AUDIENCE }}
+          BASH_ENV: ''
+          ENV: ''
+          LD_AUDIT: ''
+          LD_LIBRARY_PATH: ''
+          LD_PRELOAD: ''
+          NODE_EXTRA_CA_CERTS: ''
+          NODE_OPTIONS: ''
+          NODE_PATH: ''
+          NODE_TLS_REJECT_UNAUTHORIZED: ''
+          OPENSSL_CONF: ''
+          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          SSL_CERT_DIR: ''
+          SSL_CERT_FILE: ''
+          SSLKEYLOGFILE: ''
+        run: |-
+          exec "$RUNNER_TOOL_CACHE/node/24.16.0/x64/bin/node" \
+            --experimental-strip-types \
+            "$BROWSER_NETWORK_PREPARED_DIRECTORY/oidc-network-broker.mjs"
+      - name: publish network diagnostics after dropping request authority
+        if: always()
+        uses: actions/upload-artifact@v7
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+          NODE_OPTIONS: ''
+          NODE_PATH: ''
+        with:
+          name: browser-network-raw-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |-
+            test-results/browser-network
+            test-results/browser-network-completion.json
+            test-results/browser-network-execution-binding.json
+            test-results/browser-network-producer-manifest.json
+            test-results/browser-network-runtime-helper-manifest.json
+          if-no-files-found: error
+          include-hidden-files: true
+
+  full-browser:
+    name: Run the public full browser graph without identity authority
+    if: ${{ inputs.browser-authority == 'full' }}
+    needs: full-browser-network
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - windshare-network-matrix
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      ACTIONS_ID_TOKEN_REQUEST_URL: ''
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+      NODE_OPTIONS: ''
+      NODE_PATH: ''
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: download the protected network completion and its bound evidence
+        uses: actions/download-artifact@v8
+        with:
+          name: browser-network-raw-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results
+      - name: run browser-local and the completion consumer exactly once
+        run: node scripts/ci/makeauthority/entry.mjs browser "BROWSER_NETWORK_COMPLETION=${{ github.workspace }}/test-results/browser-network-completion.json"
+      - name: publish the final local and network diagnostic bundle
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-full-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |-
+            test-results/browser-evidence
+            test-results/browser-network
+            test-results/browser-network-completion.json
+            test-results/browser-network-execution-binding.json
+            test-results/browser-network-producer-manifest.json
+            test-results/browser-network-runtime-helper-manifest.json
+          if-no-files-found: warn
+          include-hidden-files: true

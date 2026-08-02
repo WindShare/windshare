@@ -262,7 +262,7 @@ function parseProfileReferences(
 
 function parseIdentityCounts(value: unknown): typeof NETWORK_MATRIX_IDENTITY_COUNTS {
   const counts = requireRecord(value, 'browser network matrix identity counts')
-  requireExactKeys(counts, ['total', 'scheduled', 'manual'], 'browser network matrix identity counts')
+  requireExactKeys(counts, ['total', 'scheduled'], 'browser network matrix identity counts')
   return Object.freeze({
     total: requireLiteral(counts.total, NETWORK_MATRIX_IDENTITY_COUNTS.total, 'total identity count'),
     scheduled: requireLiteral(
@@ -270,7 +270,6 @@ function parseIdentityCounts(value: unknown): typeof NETWORK_MATRIX_IDENTITY_COU
       NETWORK_MATRIX_IDENTITY_COUNTS.scheduled,
       'scheduled identity count',
     ),
-    manual: requireLiteral(counts.manual, NETWORK_MATRIX_IDENTITY_COUNTS.manual, 'manual identity count'),
   })
 }
 

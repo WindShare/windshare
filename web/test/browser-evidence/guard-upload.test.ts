@@ -1,22 +1,22 @@
 import { chmod, cp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
-
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import {
+  ArtifactGuardRecordedError,
   guardArtifactSuite,
+  startGuardArtifactSuite,
+  type GuardArtifactSuiteOptions,
   type GuardArtifactSuiteSample,
 } from '../../scripts/browser-evidence/artifact/guard.ts'
 import {
   GUARD_UPLOAD_MANIFEST_FILENAME,
   resolveGuardUpload,
 } from '../../scripts/browser-evidence/artifact/sealed-suite.ts'
+import type {
+  GuardUploadDirectoryPublisher,
+} from '../../scripts/browser-evidence/artifact/directory-publisher.ts'
 import { browserRunPolicy } from '../../scripts/browser-evidence/run-policy.ts'
-import {
-  GuardExecutionLease,
-  GuardExecutionUnsettledError,
-} from '../../scripts/browser-evidence/execution/guard-execution-lease.ts'
 import {
   BROWSER_ENGINES,
   type BrowserEngine,
@@ -49,16 +49,43 @@ describe('suite-owned guard upload transaction', () => {
     const fixture = await prepareSuite()
     const resultBytesBefore = await Promise.all(fixture.samples.map(({ sample }) =>
       readFile(join(fixture.workspace, 'main', sample.browser, 'sample-1', 'result.json'))))
-    const guarded = await guardArtifactSuite({
+    const execution = startGuardArtifactSuite({
       ...fixture.identity,
       ...fixture.authority,
       samples: fixture.samples,
       uploadParent: fixture.uploadParent,
       explicitSecrets: [],
-      trace: () => undefined,
     })
+    const consumer = execution.traces[Symbol.asyncIterator]()
+    await expect(consumer.next()).resolves.toMatchObject({
+      done: false,
+      value: { milestone: 'suite-started' },
+    })
+    const outcome = await execution.result
+    const guarded = Object.freeze({ ...outcome, traces: execution.traces.snapshot() })
 
     expect(guarded.guards).toHaveLength(BROWSER_ENGINES.length)
+    expect(guarded.traces.events.filter(({ milestone }) => milestone === 'suite-started'))
+      .toHaveLength(1)
+    expect(guarded.traces.events.filter(({ milestone }) => milestone === 'suite-terminal'))
+      .toHaveLength(1)
+    expect(guarded.traces.events.filter(({ milestone }) => milestone === 'scan-started'))
+      .toHaveLength(BROWSER_ENGINES.length)
+    expect(guarded.traces.events.filter(({ milestone }) => milestone === 'scan-terminal'))
+      .toHaveLength(BROWSER_ENGINES.length)
+    expect(guarded.traces.events.at(-1)).toMatchObject({
+      milestone: 'suite-terminal',
+      outcome: 'succeeded',
+      context: {
+        cleanupOutcome: 'completed',
+        lastMilestone: 'suite-upload-sealed',
+      },
+    })
+    expect(guarded.traces).toMatchObject({
+      completed: true,
+      truncated: false,
+      failure: null,
+    })
     expect(
       guarded.guards.every(({ guardOutcome }) => guardOutcome === 'passed'),
       JSON.stringify(guarded.guards, null, 2),
@@ -143,8 +170,7 @@ describe('suite-owned guard upload transaction', () => {
       samples: fixture.samples,
       uploadParent: fixture.uploadParent,
       explicitSecrets: [{ value: secret }],
-      trace: () => undefined,
-    })
+      })
 
     expect(guarded.upload).toBeNull()
     expect(guarded.guards.find(({ browser }) => browser === 'chromium')?.guardOutcome)
@@ -166,7 +192,7 @@ describe('suite-owned guard upload transaction', () => {
     const second = fixture.samples[1]
     if (first === undefined || second === undefined) throw new Error('suite fixture is incomplete')
 
-    await expect(guardArtifactSuite({
+    await expectGuardSuiteFailure({
       ...fixture.identity,
       ...fixture.authority,
       uploadParent: fixture.uploadParent,
@@ -175,8 +201,7 @@ describe('suite-owned guard upload transaction', () => {
         ...fixture.samples.slice(1),
       ],
       explicitSecrets: [],
-      trace: () => undefined,
-    })).rejects.toThrow(/process settlement identity differs/u)
+    }, /process settlement identity differs/u)
     expect(await readdir(fixture.uploadParent)).toEqual([])
   })
 
@@ -188,7 +213,7 @@ describe('suite-owned guard upload transaction', () => {
       readonly payload: unknown
       readonly signatureBase64: string
     }
-    await expect(guardArtifactSuite({
+    await expectGuardSuiteFailure({
       ...fixture.identity,
       ...fixture.authority,
       directoryPublisher: {
@@ -208,8 +233,7 @@ describe('suite-owned guard upload transaction', () => {
         ...fixture.samples.slice(1),
       ],
       explicitSecrets: [],
-      trace: () => undefined,
-    })).rejects.toThrow(/signature is invalid/u)
+    }, /signature is invalid/u)
     expect(await readdir(fixture.uploadParent)).toEqual([])
   })
 
@@ -221,8 +245,7 @@ describe('suite-owned guard upload transaction', () => {
       samples: fixture.samples,
       uploadParent: fixture.uploadParent,
       explicitSecrets: [],
-      trace: () => undefined,
-    })
+      })
     if (guarded.upload === null) throw new Error('passed suite did not produce an upload authority')
     let injected = false
     try {
@@ -251,15 +274,10 @@ describe('suite-owned guard upload transaction', () => {
       samples: fixture.samples,
       uploadParent: fixture.uploadParent,
       explicitSecrets: [],
-      hooks: {
-        upload: {
-          beforeSeal: async (privateRoot) => {
-            await writeFile(join(privateRoot, 'injected-before-seal.txt'), 'unauthorized', 'utf8')
-          },
-        },
-      },
-      trace: () => undefined,
-    })
+      uploadFaultCuts: Object.freeze([
+        Object.freeze({ action: 'add-foreign-file-before-publication' as const }),
+      ]),
+      })
 
     expect(guarded.upload).toBeNull()
     expect(guarded.guards.every(({ guardOutcome, failureCode }) =>
@@ -271,101 +289,155 @@ describe('suite-owned guard upload transaction', () => {
 
   it('rejects an incomplete policy slot set before scanning or staging', async () => {
     const fixture = await prepareSuite()
-    await expect(guardArtifactSuite({
+    await expectGuardSuiteFailure({
       ...fixture.identity,
       ...fixture.authority,
       samples: fixture.samples.slice(1),
       uploadParent: fixture.uploadParent,
       explicitSecrets: [],
-      trace: () => undefined,
-    })).rejects.toThrow(/every policy browser\/sample slot/u)
+    }, /every policy browser\/sample slot/u)
     expect(await readdir(fixture.uploadParent)).toEqual([])
   })
 
-  it('waits for a delayed primary hook to settle before receipt-bound cleanup uses its reserve', async () => {
+  it('cleans receipt-bound staging after a declarative artifact-copy failure cut', async () => {
     const fixture = await prepareSuite()
     const first = fixture.samples[0]
     if (first === undefined) throw new Error('suite fixture is incomplete')
-    const sourcePath = join(first.artifactRoot, 'playwright', 'diagnostic.txt')
-    let delayedMutationCompleted = false
-    const executionLease = GuardExecutionLease.start({
-      totalBudgetMs: 4_000,
-      cleanupReserveMs: 2_500,
-      nativeOperationBudgetMs: 1_500,
-    })
+    const artifact = first.sample.artifacts[0]
+    if (artifact === undefined) throw new Error('suite fixture has no artifact fault target')
     const guarded = await guardArtifactSuite({
       ...fixture.identity,
       ...fixture.authority,
       samples: fixture.samples,
       uploadParent: fixture.uploadParent,
       explicitSecrets: [],
-      executionLease,
+      uploadFaultCuts: Object.freeze([Object.freeze({
+        action: 'fail-before-artifact-copy' as const,
+        browser: first.sample.browser,
+        sampleIndex: first.sample.sampleIndex,
+        relativePath: artifact.relativePath,
+      })]),
+      })
+
+    expect(guarded.upload).toBeNull()
+    expect(await readdir(fixture.uploadParent)).toEqual([])
+  })
+
+  it('rejects a structurally smuggled lifecycle callback without invoking it', async () => {
+    const fixture = await prepareSuite()
+    let invoked = false
+    const hostileOptions: GuardArtifactSuiteOptions & {
+      readonly hooks: { readonly upload: { readonly beforeSeal: () => Promise<void> } }
+    } = {
+      ...fixture.identity,
+      ...fixture.authority,
+      samples: fixture.samples,
+      uploadParent: fixture.uploadParent,
+      explicitSecrets: [],
       hooks: {
         upload: {
-          beforeArtifactCopy: async (sample) => {
-            if (sample.browser !== first.sample.browser) return
-            await delay(1_800)
-            await writeFile(sourcePath, 'late source mutation', 'utf8')
-            delayedMutationCompleted = true
+          beforeSeal: () => {
+            invoked = true
+            return new Promise<void>(() => undefined)
           },
         },
       },
-      trace: () => undefined,
+    }
+    let recordedFailure: unknown
+    try {
+      await guardArtifactSuite(hostileOptions)
+    } catch (cause) {
+      recordedFailure = cause
+    }
+    expect(recordedFailure).toBeInstanceOf(ArtifactGuardRecordedError)
+    expect((recordedFailure as ArtifactGuardRecordedError).traces).toMatchObject({
+      completed: true,
+      truncated: false,
+      failure: null,
     })
-
-    expect(delayedMutationCompleted).toBe(true)
-    expect(guarded.upload).toBeNull()
+    expect(invoked).toBe(false)
     expect(await readdir(fixture.uploadParent)).toEqual([])
-  }, 15_000)
+  })
 
-  it('does not start cleanup concurrently with a primary hook that never settles', async () => {
+  it.each([
+    'message-getter',
+    'to-string',
+    'proxy',
+  ] as const)('settles cleanup and traces without inspecting a hostile %s rejection', async (kind) => {
     const fixture = await prepareSuite()
-    const executionLease = GuardExecutionLease.start({
-      totalBudgetMs: 5_000,
-      cleanupReserveMs: 2_000,
-      nativeOperationBudgetMs: 1_200,
-    })
+    let inspected = false
+    let hostile: unknown
+    if (kind === 'message-getter') {
+      const error = new Error('placeholder')
+      Object.defineProperty(error, 'message', {
+        enumerable: false,
+        get: () => {
+          inspected = true
+          throw new Error('hostile message getter executed')
+        },
+      })
+      hostile = error
+    } else if (kind === 'to-string') {
+      hostile = Object.freeze({
+        toString: () => {
+          inspected = true
+          throw new Error('hostile toString executed')
+        },
+      })
+    } else {
+      hostile = new Proxy(Object.create(null), {
+        get: () => {
+          inspected = true
+          throw new Error('hostile proxy getter executed')
+        },
+        getPrototypeOf: () => {
+          inspected = true
+          throw new Error('hostile proxy prototype trap executed')
+        },
+      })
+    }
+    const directoryPublisher: GuardUploadDirectoryPublisher = Object.freeze({
+      invoke: async () => { throw hostile },
+    }) as GuardUploadDirectoryPublisher
+
     const guarded = await guardArtifactSuite({
       ...fixture.identity,
       ...fixture.authority,
+      directoryPublisher,
       samples: fixture.samples,
       uploadParent: fixture.uploadParent,
       explicitSecrets: [],
-      executionLease,
-      hooks: {
-        upload: {
-          beforeSeal: () => new Promise<void>(() => undefined),
-        },
-      },
-      trace: () => undefined,
     })
 
+    expect(inspected).toBe(false)
     expect(guarded.upload).toBeNull()
     expect(guarded.guards.every(({ failureMessage }) =>
-      failureMessage?.includes('cleanup was not started concurrently'))).toBe(true)
-    const entries = await readdir(fixture.uploadParent)
-    expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatch(/^\.browser-evidence-upload-[a-f0-9]{32}$/u)
-    await expect(resolveGuardUpload({
-      suite: 'main',
-      uploadDirectory: join(fixture.uploadParent, 'sealed'),
-      manifestSha256: 'a'.repeat(64),
-      manifestByteLength: '1',
-      directoryPublisher: fixture.authority.directoryPublisher,
-      executionLease,
-    })).rejects.toBeInstanceOf(GuardExecutionUnsettledError)
-    await expect(guardArtifactSuite({
-      ...fixture.identity,
-      ...fixture.authority,
-      samples: fixture.samples,
-      uploadParent: fixture.uploadParent,
-      explicitSecrets: [],
-      executionLease,
-      trace: () => undefined,
-    })).rejects.toBeInstanceOf(GuardExecutionUnsettledError)
-    expect(await readdir(fixture.uploadParent)).toEqual(entries)
-  }, 15_000)
+      failureMessage === 'guard suite upload sealing failed')).toBe(true)
+    expect(guarded.traces).toMatchObject({ completed: true, truncated: false, failure: null })
+    expect(guarded.traces.events.at(-1)).toMatchObject({
+      milestone: 'suite-terminal',
+      outcome: 'failed',
+      context: {
+        cleanupOutcome: 'completed',
+        lastMilestone: 'suite-upload-failed',
+      },
+    })
+    expect(await readdir(fixture.uploadParent)).toEqual([])
+  })
 })
+
+async function expectGuardSuiteFailure(
+  options: GuardArtifactSuiteOptions,
+  expectedMessage: RegExp,
+): Promise<void> {
+  const execution = startGuardArtifactSuite(options)
+  await expect(execution.result).rejects.toThrow(expectedMessage)
+  expect(execution.traces.snapshot()).toMatchObject({
+    completed: true,
+    truncated: false,
+    failure: null,
+  })
+}
 
 interface SuiteFixture {
   readonly workspace: string
@@ -445,7 +517,6 @@ async function sealSuite(fixture: SuiteFixture) {
     samples: fixture.samples,
     uploadParent: fixture.uploadParent,
     explicitSecrets: [],
-    trace: () => undefined,
   })
   if (guarded.upload === null) throw new Error('passed suite did not produce an upload authority')
   return guarded.upload

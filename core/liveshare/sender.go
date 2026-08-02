@@ -26,11 +26,12 @@ import (
 const defaultSharedBlockCacheBytes = uint64(64) << 20
 
 type SenderConfig struct {
-	Paths     []string
-	Relays    []string
-	ChunkSize uint32
-	Random    io.Reader
-	Now       func() time.Time
+	Paths         []string
+	Relays        []string
+	ChunkSize     uint32
+	Random        io.Reader
+	Now           func() time.Time
+	ScanAdmission DirectoryScanAdmission
 
 	preparation senderPreparationDependencies
 }
@@ -305,7 +306,7 @@ func prepareSenderCatalog(
 	sender.catalogAccess, err = newSenderCatalogAccess(
 		authority.shareInstance,
 		sender.catalogStore,
-		sender.selectedSource,
+		directoryScannerWithAdmission(sender.selectedSource, config.ScanAdmission),
 		sender.selectedSource.SelectedRoots(),
 	)
 	if err != nil {

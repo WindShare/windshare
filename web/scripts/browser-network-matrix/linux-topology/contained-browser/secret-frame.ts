@@ -1,6 +1,4 @@
-import type { NetworkMatrixProfileId } from '../../vocabulary.ts'
 import { parseNetworkMatrixControlAuthority } from '../../sample-authority.ts'
-import type { ManualOperatorTopologyIdentity } from '../external-fixture-attestation.ts'
 import {
   REMOTE_PION_ATTESTATION_LEASE_MS,
   REMOTE_PION_MAXIMUM_ATTEMPT_LEASE_MS,
@@ -20,7 +18,6 @@ import {
   exactRecord,
   invalidSecret,
   isControlCredentialBytes,
-  requireCanonicalId,
 } from './contract-validation.ts'
 
 const SECRET_METADATA_LENGTH_BYTES = 4
@@ -122,7 +119,6 @@ function withCredential(value: unknown, credential: Uint8Array): unknown {
   const control = exactRecord(secret.control, [
     'controllerOrigin', 'controlLease',
     'tlsCertificateAuthority', 'tlsCertificateSha256', 'attestationPublicKey',
-    'manualOperatorIdentity',
   ])
   return {
     schemaVersion: secret.schemaVersion,
@@ -134,7 +130,6 @@ function withCredential(value: unknown, credential: Uint8Array): unknown {
       tlsCertificateSha256: control.tlsCertificateSha256,
       attestationPublicKey: control.attestationPublicKey,
       credential,
-      manualOperatorIdentity: control.manualOperatorIdentity,
     },
     attemptLeaseMs: secret.attemptLeaseMs,
     resultPollIntervalMs: secret.resultPollIntervalMs,
@@ -155,7 +150,6 @@ function secretFrameMetadata(secret: ContainedBrowserSampleSecret): unknown {
       tlsCertificateSha256: secret.control.tlsCertificateSha256,
       attestationPublicKey: secret.control.attestationPublicKey,
       credentialByteLength: secret.control.credential.byteLength,
-      manualOperatorIdentity: secret.control.manualOperatorIdentity,
     },
     attemptLeaseMs: secret.attemptLeaseMs,
     resultPollIntervalMs: secret.resultPollIntervalMs,
@@ -173,7 +167,7 @@ function secretFromFrameMetadata(metadataValue: unknown, credential: Uint8Array)
   const control = exactRecord(metadata.control, [
     'controllerOrigin', 'controlLease',
     'tlsCertificateAuthority', 'tlsCertificateSha256', 'attestationPublicKey',
-    'credentialByteLength', 'manualOperatorIdentity',
+    'credentialByteLength',
   ])
   if (control.credentialByteLength !== credential.byteLength) invalidSecret()
   return withCredential({
@@ -185,7 +179,6 @@ function secretFromFrameMetadata(metadataValue: unknown, credential: Uint8Array)
       tlsCertificateAuthority: control.tlsCertificateAuthority,
       tlsCertificateSha256: control.tlsCertificateSha256,
       attestationPublicKey: control.attestationPublicKey,
-      manualOperatorIdentity: control.manualOperatorIdentity,
     },
     attemptLeaseMs: metadata.attemptLeaseMs,
     resultPollIntervalMs: metadata.resultPollIntervalMs,
@@ -204,7 +197,7 @@ export function parseContainedBrowserSampleSecret(value: unknown): ContainedBrow
   const control = exactRecord(secret.control, [
     'controllerOrigin', 'controlLease',
     'tlsCertificateAuthority', 'tlsCertificateSha256', 'attestationPublicKey',
-    'credential', 'manualOperatorIdentity',
+    'credential',
   ])
   const controllerOrigin = requireOriginOnlyHttps(control.controllerOrigin)
   const controlLease = parseControlLease(control.controlLease)
@@ -224,10 +217,6 @@ export function parseContainedBrowserSampleSecret(value: unknown): ContainedBrow
     control.attestationPublicKey.length > MAXIMUM_CONTAINED_BROWSER_SECRET_BYTES ||
     !isControlCredentialBytes(control.credential)
   ) invalidSecret()
-  const manualOperatorIdentity = parseManualOperatorIdentity(
-    control.manualOperatorIdentity,
-    sampleAuthority.profileId,
-  )
   const attemptLeaseMs = boundedMilliseconds(secret.attemptLeaseMs)
   const resultPollIntervalMs = boundedMilliseconds(secret.resultPollIntervalMs)
   const resultDeadlineMs = boundedMilliseconds(secret.resultDeadlineMs)
@@ -249,7 +238,6 @@ export function parseContainedBrowserSampleSecret(value: unknown): ContainedBrow
       tlsCertificateSha256: control.tlsCertificateSha256 as string,
       attestationPublicKey: control.attestationPublicKey as string,
       credential: control.credential,
-      manualOperatorIdentity,
     }),
     attemptLeaseMs,
     resultPollIntervalMs,
@@ -281,21 +269,6 @@ function boundedMilliseconds(value: unknown): number {
     (value as number) > MAXIMUM_DURATION_MS
   ) invalidSecret()
   return value as number
-}
-
-function parseManualOperatorIdentity(
-  value: unknown,
-  profileId: NetworkMatrixProfileId,
-): ManualOperatorTopologyIdentity | null {
-  if (profileId !== 'manual-real-nat') {
-    if (value !== null) invalidSecret()
-    return null
-  }
-  const identity = exactRecord(value, ['senderHostId', 'senderNetworkBoundaryId'])
-  return Object.freeze({
-    senderHostId: requireCanonicalId(identity.senderHostId),
-    senderNetworkBoundaryId: requireCanonicalId(identity.senderNetworkBoundaryId),
-  })
 }
 
 function parseControlLease(value: unknown): RemotePionControlLeaseBinding {

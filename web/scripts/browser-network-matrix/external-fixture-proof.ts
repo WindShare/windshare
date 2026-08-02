@@ -54,7 +54,6 @@ export function signedExternalFixtureConfigurationSha256(
   const semantics = fixture.networkSemantics
   switch (semantics.kind) {
     case 'public-stun':
-    case 'operator-real-nat':
       return externalFixturePublicConfigurationSha256(
         fixture.profileId,
         attestationSha256,

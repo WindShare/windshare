@@ -69,7 +69,6 @@ const OTHER_PUBLIC_IP = '1.1.1.1'
 // eslint-disable-next-line sonarjs/no-hardcoded-ip
 const REMOTE_PEER_PUBLIC_IP = '8.8.8.8'
 const TLS_CERTIFICATE_SHA256 = '2'.repeat(64)
-const IMPLEMENTATION_SHA256 = '3'.repeat(64)
 const NOW = Date.parse('2030-01-01T00:00:00.000Z')
 const AUTHORITY_EXPIRES_AT = timestamp(NOW + REMOTE_PION_ATTESTATION_LEASE_MS)
 const ATTEMPT_EXPIRES_AT = timestamp(NOW + 1_000)
@@ -518,7 +517,6 @@ function makeFixture(
     revision: 7,
     profileId,
     authorityInstanceId: 'pion-authority-alpha',
-    implementationSha256: IMPLEMENTATION_SHA256,
     remoteServiceInstanceId: 'pion-service-alpha',
     operatorId: 'fixture-operator-alpha',
     fixtureHostId: 'fixture-host-alpha',
@@ -567,14 +565,8 @@ function networkSemanticsFor(
       turnCredentialExpiresAt,
     }
   }
-  return {
-    kind: 'operator-real-nat',
-    policyId: 'operator-real-nat-policy',
-    policyVersion: 6,
-    senderHostId: 'operator-sender-alpha',
-    senderNetworkBoundaryId: 'operator-network-alpha',
-    stunEndpoint: 'stun:stun.example.test:3478',
-  }
+  const unsupportedProfile: never = profileId
+  throw new Error(`unsupported scheduled profile: ${unsupportedProfile}`)
 }
 
 interface AttestationOptions {

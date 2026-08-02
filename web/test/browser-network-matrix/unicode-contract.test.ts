@@ -10,7 +10,7 @@ describe('browser network matrix Unicode contract', () => {
     const attestation = rawAttestation(
       registry,
       runId,
-      'manual-real-nat',
+      'scheduled-public-stun',
       'satisfied',
     )
     const proof = attestation.proof as Record<string, unknown>

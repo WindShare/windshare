@@ -24,7 +24,6 @@ import { browserRunPolicy } from '../../scripts/browser-evidence/run-policy.ts'
 const NOW = 1_800_000_000_000
 const CHECKOUT_SHA = '1'.repeat(40)
 const COMMAND_SHA256 = '2'.repeat(64)
-const RUNTIME_MANIFEST_SHA256 = '3'.repeat(64)
 const RESULT_BYTES = Buffer.from('{"result":"settled"}', 'utf8')
 
 describe('process settlement attestation verifier', () => {
@@ -61,7 +60,7 @@ describe('process settlement attestation verifier', () => {
     })).toThrow(/unknown field/u)
   })
 
-  it('rejects result, command, invocation, and runtime identity swaps', () => {
+  it('rejects result, command, and invocation identity swaps', () => {
     const fixture = settlementFixture()
     expect(() => verifyProcessSettlementAttestations({
       trust: fixture.trust,
@@ -76,12 +75,6 @@ describe('process settlement attestation verifier', () => {
       nowUnixMs: NOW,
     })).toThrow(/identity differs.*invocationId/u)
     expect(() => verifyProcessSettlementAttestations({
-      trust: { ...fixture.trust, runtimeManifestSha256: '4'.repeat(64) },
-      samples: [fixture.expected],
-      attestations: [fixture.attestation],
-      nowUnixMs: NOW,
-    })).toThrow(/identity differs.*runtimeManifestSha256/u)
-    expect(() => verifyProcessSettlementAttestations({
       trust: fixture.trust,
       samples: [{ ...fixture.expected, commandSha256: '5'.repeat(64) }],
       attestations: [fixture.attestation],
@@ -89,7 +82,7 @@ describe('process settlement attestation verifier', () => {
     })).toThrow(/identity differs.*commandSha256/u)
   })
 
-  it('binds the full owner, input, and client I/O receipt into the signature', () => {
+  it('binds the common owner, input, and cleanup receipt into the signature', () => {
     const fixture = settlementFixture()
     const mutations: readonly ProcessSettlementPayload[] = [
       {
@@ -102,20 +95,15 @@ describe('process settlement attestation verifier', () => {
       },
       {
         ...fixture.attestation.payload,
-        clientIo: {
-          ...fixture.attestation.payload.clientIo,
-          outputOutcome: 'failed',
-          failureCode: 'CLIENT_IO_FAILED',
-          failureMessage: 'mutated output evidence',
-        },
+        cleanupOutcome: 'failed',
       },
       {
         ...fixture.attestation.payload,
         ownership: {
           ...fixture.attestation.payload.ownership,
-          rootStartTimeTicks: '13',
+          terminationReason: 'stop',
         },
-      } as ProcessSettlementPayload,
+      },
     ]
     for (const payload of mutations) {
       expect(() => verifyFixture(fixture, {
@@ -156,7 +144,8 @@ describe('process settlement attestation verifier', () => {
     const fixture = settlementFixture()
     const timedOut = signedAttestation({
       ...fixture.attestation.payload,
-      process: { terminal: 'exited', timedOut: true, exitCode: 1 },
+      process: { terminal: 'exited', exitCode: 1 },
+      ownership: { ...fixture.attestation.payload.ownership, terminationReason: 'deadline' },
     }, fixture.keys.privateKey)
     expect(() => verifyFixture(fixture, timedOut)).toThrow(/quiescence/u)
   })
@@ -167,14 +156,8 @@ describe('process settlement attestation verifier', () => {
       { ...fixture.attestation.payload, treeEmpty: false },
       {
         ...fixture.attestation.payload,
-        ownership: {
-          ...fixture.attestation.payload.ownership,
-          quietInventoryCount: 0,
-          cleanupOutcome: 'failed',
-          failureCode: 'OWNERSHIP_EVIDENCE_LOST',
-          failureMessage: 'injected cleanup failure',
-        },
-      } as ProcessSettlementPayload,
+        cleanupOutcome: 'failed',
+      },
       {
         ...fixture.attestation.payload,
         issuedAtUnixMs: String(NOW - 10_000),
@@ -214,7 +197,6 @@ function settlementFixture(
   const publicKeySpkiBase64 = publicKeyBytes.toString('base64')
   const trust = inheritedTrust ?? Object.freeze({
     invocationId: 'invocation-123',
-    runtimeManifestSha256: RUNTIME_MANIFEST_SHA256,
     publicKeySpkiBase64,
     publicKeySha256: processSettlementPublicKeyFingerprint(publicKeySpkiBase64),
   })
@@ -238,33 +220,16 @@ function settlementFixture(
     sampleIndex: sample.sampleIndex,
     checkoutSha: sample.checkoutSha,
     commandSha256: COMMAND_SHA256,
-    runtimeManifestSha256: trust.runtimeManifestSha256,
     resultSha256: sha256(RESULT_BYTES),
     resultByteLength: String(RESULT_BYTES.byteLength),
-    process: Object.freeze({ terminal: 'exited', timedOut: false, exitCode: 0 }),
-    launched: true,
+    process: Object.freeze({ terminal: 'exited', exitCode: 0 }),
     treeEmpty: true,
+    cleanupOutcome: 'completed',
     input: Object.freeze({ outcome: 'delivered', failureCode: '', failureMessage: '' }),
-    clientIo: Object.freeze({
-      requestOutcome: 'delivered',
-      rawInputOutcome: 'delivered',
-      controlOutcome: 'not-requested',
-      outputOutcome: 'delivered',
-      failureCode: '',
-      failureMessage: '',
-    }),
     ownership: Object.freeze({
-      backend: 'linux-subreaper',
-      ownerPid: 10,
-      rootPid: 11,
-      rootStartTimeTicks: '12',
-      inventoryScans: 2,
-      maximumObservedDescendants: 0,
-      quietInventoryCount: 2,
-      controlOutcome: 'target-terminal',
-      cleanupOutcome: 'completed',
-      failureCode: '',
-      failureMessage: '',
+      kind: 'test-process-owner',
+      backend: 'linux_subreaper',
+      terminationReason: 'natural',
     }),
     nonce: sampleIndex.toString(16).padStart(64, '0'),
     issuedAtUnixMs: String(NOW - 1_000),

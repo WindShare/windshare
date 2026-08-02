@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -34,7 +36,8 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 	}
 
 	prepared, err := liveshare.PrepareSender(ctx, liveshare.SenderConfig{
-		Paths: request.paths, Relays: []string{request.relayURL}, ChunkSize: request.chunkSize, Random: rand.Reader,
+		Paths: request.paths, Relays: []string{request.relayURL}, ChunkSize: request.chunkSize,
+		Random: rand.Reader, ScanAdmission: a.scanAdmission,
 	})
 	if err != nil {
 		a.logf("share: prepare selected roots: %v", err)
@@ -80,6 +83,7 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 	lifecycle, err := newSenderRelayLifecycle(senderRelayLifecycleConfig{
 		relayURL: request.relayURL, fresh: register, resumeToken: resumeToken,
 		privateKey: material.SenderPrivateKey, initial: connection,
+		observe: a.observeSenderRelayRecovery,
 	})
 	if err != nil {
 		_ = connection.Close()
@@ -101,6 +105,16 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		return ExitUsage
 	}
 	prepared.StartRootPrefetch()
+	// Readiness follows successful capability publication and runtime assembly so
+	// fixtures never infer an operational sender from an earlier control listener.
+	a.recordProcessTrace(processTraceShareComponent, processTraceSenderReady, testrun.OutcomeSucceeded)
+	if err := a.processTrace.err(); err != nil {
+		stopContext, cancel := context.WithTimeout(context.Background(), shareStopTimeout)
+		stopErr := factory.Stop(stopContext, "Sender readiness publication failed")
+		cancel()
+		a.logf("share: publish private sender readiness: %v", errors.Join(err, stopErr))
+		return ExitFailure
+	}
 	a.logf("share: ready; root children warm in the background and deeper descendants remain on demand; press Ctrl-C to stop")
 
 	serveDone := make(chan error, 1)
@@ -114,7 +128,13 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		trigger = shareTriggerAfterServe(ctx.Err(), serveErr)
 	}
 	stopContext, cancelStop := context.WithTimeout(context.Background(), shareStopTimeout)
+	a.recordProcessTrace(processTraceShareComponent, processTraceSenderStop, testrun.OutcomeStarted)
 	stopErr := factory.Stop(stopContext, "Sender stopped")
+	stopOutcome := testrun.OutcomeSucceeded
+	if stopErr != nil {
+		stopOutcome = testrun.OutcomeFailed
+	}
+	a.recordProcessTrace(processTraceShareComponent, processTraceSenderStop, stopOutcome)
 	cancelStop()
 	if trigger == shareShutdownCallerInterrupted && serveErr == nil {
 		serveErr = awaitInterruptedShareServe(serveDone, shareServeJoinTimeout)
@@ -148,6 +168,20 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		a.logf("share: stopped")
 	}
 	return ExitOK
+}
+
+func (a *App) observeSenderRelayRecovery(milestone senderRelayRecoveryMilestone) {
+	outcome := testrun.OutcomeFailed
+	switch milestone {
+	case senderRelayRecoveryStarted:
+		outcome = testrun.OutcomeStarted
+	case senderRelayRecoverySucceeded:
+		outcome = testrun.OutcomeSucceeded
+	case senderRelayRecoveryFailed:
+	default:
+		return
+	}
+	a.recordProcessTrace(processTraceShareComponent, processTraceSenderRelayRecovery, outcome)
 }
 
 func (a *App) newShareRuntimeFactory(

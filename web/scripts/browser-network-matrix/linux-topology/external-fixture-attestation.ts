@@ -12,7 +12,7 @@ import {
 import type { NetworkMatrixProfileId } from '../vocabulary.ts'
 
 export const EXTERNAL_FIXTURE_DECLARATION_SCHEMA =
-  'windshare.browser-network-matrix.external-fixture-declaration/v1' as const
+  'windshare.browser-network-matrix.external-fixture-declaration/v2' as const
 export const EXTERNAL_FIXTURE_ATTESTATION_SCHEMA =
   'windshare.browser-network-matrix.external-fixture-attestation/v1' as const
 export const EXTERNAL_REMOTE_PEER_BINDING_SCHEMA =
@@ -31,7 +31,7 @@ const MAXIMUM_ATTESTATION_LEASE_MS = 300_000
 const MAXIMUM_CLOCK_SKEW_MS = 30_000
 
 interface ExternalFixtureNetworkSemanticsBase {
-  readonly kind: 'public-stun' | 'restricted-udp' | 'coturn-relay' | 'operator-real-nat'
+  readonly kind: 'public-stun' | 'restricted-udp' | 'coturn-relay'
   readonly policyId: string
   readonly policyVersion: number
 }
@@ -57,18 +57,10 @@ export interface CoturnRelayNetworkSemantics extends ExternalFixtureNetworkSeman
   readonly turnCredentialExpiresAt: string
 }
 
-export interface OperatorRealNatNetworkSemantics extends ExternalFixtureNetworkSemanticsBase {
-  readonly kind: 'operator-real-nat'
-  readonly senderHostId: string
-  readonly senderNetworkBoundaryId: string
-  readonly stunEndpoint: string
-}
-
 export type ExternalFixtureNetworkSemantics =
   | PublicStunNetworkSemantics
   | RestrictedUdpNetworkSemantics
   | CoturnRelayNetworkSemantics
-  | OperatorRealNatNetworkSemantics
 
 export interface ExternalFixtureDeclaration {
   readonly schemaVersion: typeof EXTERNAL_FIXTURE_DECLARATION_SCHEMA
@@ -76,7 +68,6 @@ export interface ExternalFixtureDeclaration {
   readonly revision: number
   readonly profileId: NetworkMatrixProfileId
   readonly authorityInstanceId: string
-  readonly implementationSha256: string
   readonly remoteServiceInstanceId: string
   readonly operatorId: string
   readonly fixtureHostId: string
@@ -124,11 +115,6 @@ export interface ExternalFixtureTurnCredential {
   readonly credential: string
 }
 
-export interface ManualOperatorTopologyIdentity {
-  readonly senderHostId: string
-  readonly senderNetworkBoundaryId: string
-}
-
 export interface ExternalFixtureTurnCredentialContext {
   readonly protocolVersion: string
   readonly controlAuthority: NetworkMatrixControlAuthority
@@ -148,7 +134,6 @@ export interface ExternalFixtureAttestationVerification {
   readonly observedControllerIp: string
   readonly observedTlsCertificateSha256: string
   readonly attestationPublicKey: string | Buffer
-  readonly manualOperatorIdentity?: ManualOperatorTopologyIdentity
   readonly now?: () => number
 }
 
@@ -200,14 +185,6 @@ export function verifyExternalFixtureAttestation(
     expiresAt - issuedAt !== attestation.leaseMillis ||
     issuedAt > now + MAXIMUM_CLOCK_SKEW_MS || expiresAt <= now
   ) expiredAttestation()
-  if (fixture.networkSemantics.kind === 'operator-real-nat') {
-    if (
-      expected.manualOperatorIdentity === undefined ||
-      expected.manualOperatorIdentity.senderHostId !== fixture.networkSemantics.senderHostId ||
-      expected.manualOperatorIdentity.senderNetworkBoundaryId !==
-        fixture.networkSemantics.senderNetworkBoundaryId
-    ) invalidBinding()
-  }
   if (
     fixture.networkSemantics.kind === 'coturn-relay' &&
     fixture.networkSemantics.turnCredentialExpiresAt !== attestation.expiresAt
@@ -343,7 +320,7 @@ function parseExternalFixtureAttestation(value: unknown): ExternalFixtureAttesta
 function parseExternalFixtureDeclaration(value: unknown): ExternalFixtureDeclaration {
   const fixture = exactRecord(value, [
     'schemaVersion', 'deploymentId', 'revision', 'profileId', 'authorityInstanceId',
-    'implementationSha256', 'remoteServiceInstanceId', 'operatorId', 'fixtureHostId',
+    'remoteServiceInstanceId', 'operatorId', 'fixtureHostId',
     'fixtureNetworkBoundaryId', 'controllerOrigin', 'controllerPublicIp',
     'tlsCertificateSha256', 'remotePeerPublicIp', 'remotePeerUdpPortMin',
     'remotePeerUdpPortMax', 'networkSemantics',
@@ -362,7 +339,6 @@ function parseExternalFixtureDeclaration(value: unknown): ExternalFixtureDeclara
     revision: requireRevision(fixture.revision),
     profileId,
     authorityInstanceId: requireCanonicalId(fixture.authorityInstanceId),
-    implementationSha256: requireSha256(fixture.implementationSha256),
     remoteServiceInstanceId: requireCanonicalId(fixture.remoteServiceInstanceId),
     operatorId: requireCanonicalId(fixture.operatorId),
     fixtureHostId: requireCanonicalId(fixture.fixtureHostId),
@@ -377,12 +353,6 @@ function parseExternalFixtureDeclaration(value: unknown): ExternalFixtureDeclara
   })
   const originHost = new URL(controllerOrigin).hostname.replace(/^\[|\]$/gu, '')
   if (isIP(originHost) !== 0 && originHost !== controllerPublicIp) invalidAttestation()
-  if (
-    declaration.networkSemantics.kind === 'operator-real-nat' && (
-      declaration.networkSemantics.senderHostId === declaration.fixtureHostId ||
-      declaration.networkSemantics.senderNetworkBoundaryId === declaration.fixtureNetworkBoundaryId
-    )
-  ) invalidAttestation()
   return declaration
 }
 
@@ -440,26 +410,12 @@ function parseNetworkSemantics(
       turnCredentialExpiresAt: requireUtcTimestamp(semantics.turnCredentialExpiresAt),
     })
   }
-  const semantics = exactRecord(value, [
-    'kind', 'policyId', 'policyVersion', 'senderHostId', 'senderNetworkBoundaryId',
-    'stunEndpoint',
-  ])
-  if (semantics.kind !== 'operator-real-nat') invalidAttestation()
-  const senderHostId = requireCanonicalId(semantics.senderHostId)
-  const senderNetworkBoundaryId = requireCanonicalId(semantics.senderNetworkBoundaryId)
-  return Object.freeze({
-    kind: 'operator-real-nat',
-    policyId: requireCanonicalId(semantics.policyId),
-    policyVersion: requireRevision(semantics.policyVersion),
-    senderHostId,
-    senderNetworkBoundaryId,
-    stunEndpoint: requireIceUri(semantics.stunEndpoint, ['stun:']),
-  })
+  return invalidAttestation()
 }
 
 function activeStunEndpointFromFixture(fixture: ExternalFixtureDeclaration): string | null {
   const semantics = fixture.networkSemantics
-  return semantics.kind === 'public-stun' || semantics.kind === 'operator-real-nat'
+  return semantics.kind === 'public-stun'
     ? semantics.stunEndpoint
     : null
 }
@@ -478,7 +434,7 @@ function exactRecord(value: unknown, keys: readonly string[]): Record<string, un
 function requireProfileId(value: unknown): NetworkMatrixProfileId {
   if (
     value !== 'scheduled-public-stun' && value !== 'scheduled-restricted-udp' &&
-    value !== 'scheduled-coturn' && value !== 'manual-real-nat'
+    value !== 'scheduled-coturn'
   ) invalidAttestation()
   return value
 }

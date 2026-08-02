@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	fixtureManifestSHA256                          = "4e57f971941aef9667f42531fdb4f903d89fbded9753afe660273efe0f6f4379"
+	fixtureManifestSHA256                          = "98f4d23f7029b84512a3307e7ed503a1c57e1a246ad86e3bb4f354f06e7a26bc"
 	testFixtureAuthoritySeedDomain                 = "windshare/browser-network-matrix/test-fixture-attestation-authority/v1\n"
 	testFixtureAttestationPublicKeySPKI            = "MCowBQYDK2VwAyEAzzdkusInBjsJpvUWGibdzr50te_7a2iquAxNqY_jJiE"
 	testFixtureAttestationPublicKeySHA256          = "dfb0a30ce0e35eae2e02434da28c14a7977eb4b966f82efee9cfd6e27c401ad8"
@@ -29,16 +29,15 @@ const (
 )
 
 var fixtureProfileSHA256 = map[string]string{
-	string(ProfileScheduledPublicSTUN):    "c4a10d8d5712307e29cde26ec26dadcec2ff89da293a4aa467ef656f2cb2b7e5",
-	string(ProfileScheduledRestrictedUDP): "01f59210b0e92ee8b327714afe3daad86ee1ae167bbb792ade1f7b593b744e31",
-	string(ProfileScheduledCoturn):        "1777486737a8e7e4f4286d788689ea6b9d50c2a60b0a54021815a43a7df96a90",
-	string(ProfileManualRealNAT):          "2689011b60e2b16549725c13188abeadef106590f47829309c8c2099a9cc432f",
+	string(ProfileScheduledPublicSTUN):    "b25de62281b8f73757f15554f9d313457414784715623bae3ca1eb16eed62ade",
+	string(ProfileScheduledRestrictedUDP): "71bc3f49d1386a97e200a0f73c3e0757d3bb23452b6bef201ff0a9bc5477a46a",
+	string(ProfileScheduledCoturn):        "07e86e7fa9d197bd746f7360a06c25865d59cf246dc547a572e99e7787540b92",
 }
 
 func loadFixtureContract(t *testing.T) (Contract, []byte, []ProfileDocument) {
 	t.Helper()
 	fixtureRoot := filepath.Join("..", "..", "testdata", "browser-network-matrix")
-	manifestJSON := mustReadFile(t, filepath.Join(fixtureRoot, "manifest.v1.json"))
+	manifestJSON := mustReadFile(t, filepath.Join(fixtureRoot, "scheduled-hard.manifest.v2.json"))
 	documents := make([]ProfileDocument, 0, len(frozenProfileSpecs))
 	for _, spec := range frozenProfileSpecs {
 		documents = append(documents, ProfileDocument{
@@ -161,8 +160,7 @@ func testSignedExternalFixtureConfigurationSHA256(
 	transportPolicy := "all"
 	iceServerURLs := make([][]string, 0)
 	switch fixture.NetworkSemantics.Kind {
-	case browsermatrixfixture.NetworkSemanticsPublicSTUN,
-		browsermatrixfixture.NetworkSemanticsManualRealNAT:
+	case browsermatrixfixture.NetworkSemanticsPublicSTUN:
 		iceServerURLs = append(iceServerURLs, []string{fixture.NetworkSemantics.STUNEndpoint})
 	case browsermatrixfixture.NetworkSemanticsRestrictedUDP:
 	case browsermatrixfixture.NetworkSemanticsCoturnRelay:
@@ -206,7 +204,7 @@ func testFixtureAttestationPrivateKey(t *testing.T) ed25519.PrivateKey {
 }
 
 func testExternalFixture(profileID string) browsermatrixfixture.ExternalFixture {
-	identity := strings.TrimPrefix(strings.TrimPrefix(profileID, "scheduled-"), "manual-")
+	identity := strings.TrimPrefix(profileID, "scheduled-")
 	semantics := browsermatrixfixture.NetworkSemantics{PolicyVersion: 1}
 	switch profileID {
 	case string(ProfileScheduledPublicSTUN):
@@ -227,12 +225,6 @@ func testExternalFixture(profileID string) browsermatrixfixture.ExternalFixture 
 		semantics.TURNUsername = "test-turn-user"
 		semantics.TURNCredentialID = "test-turn-credential"
 		semantics.TURNCredentialExpiresAt = testFixtureExpiresAt
-	case string(ProfileManualRealNAT):
-		semantics.Kind = browsermatrixfixture.NetworkSemanticsManualRealNAT
-		semantics.PolicyID = "operator-real-nat-policy"
-		semantics.SenderHostID = "manual-sender-host"
-		semantics.SenderNetworkBoundaryID = "manual-sender-network"
-		semantics.STUNEndpoint = "stun:stun.cloudflare.com:3478"
 	default:
 		panic("unknown external fixture test profile")
 	}
@@ -240,7 +232,6 @@ func testExternalFixture(profileID string) browsermatrixfixture.ExternalFixture 
 		SchemaVersion: browsermatrixfixture.ExternalFixtureSchemaVersion,
 		DeploymentID:  identity + "-deployment", Revision: 1, ProfileID: profileID,
 		AuthorityInstanceID:     identity + "-authority",
-		ImplementationSHA256:    sha256Text([]byte("implementation:" + profileID)),
 		RemoteServiceInstanceID: identity + "-remote-pion", OperatorID: "windshare-test-operator",
 		FixtureHostID: identity + "-fixture-host", FixtureNetworkBoundaryID: identity + "-fixture-network",
 		ControllerOrigin: "https://browser-matrix.test/", ControllerPublicIP: "8.8.8.8",

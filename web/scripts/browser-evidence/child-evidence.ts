@@ -37,7 +37,7 @@ import {
 } from './vocabulary.ts'
 
 export const CHILD_EVIDENCE_CONTEXT_ENV = 'WINDSHARE_BROWSER_EVIDENCE_CONTEXT' as const
-export const CHILD_EVIDENCE_SCHEMA_VERSION = 1 as const
+export const CHILD_EVIDENCE_SCHEMA_VERSION = 2 as const
 export const CHILD_EVIDENCE_MAXIMUM_EVENT_BYTES = 1_048_576 as const
 export const CHILD_EVIDENCE_MAXIMUM_LOG_BYTES = 16_777_216 as const
 
@@ -65,6 +65,8 @@ type ChildEventKind = (typeof CHILD_EVENT_KINDS)[number]
 
 export interface ChildEvidenceContext {
   readonly runId: string
+  readonly operationId: string
+  readonly scenario: string
   readonly runPolicy: BrowserRunPolicy
   readonly suite: BrowserSuite
   readonly browser: BrowserEngine
@@ -114,6 +116,8 @@ interface ChildEventEnvelope {
   readonly schemaVersion: typeof CHILD_EVIDENCE_SCHEMA_VERSION
   readonly eventSequence: number
   readonly runId: string
+  readonly operationId: string
+  readonly scenario: string
   readonly suite: BrowserSuite
   readonly browser: BrowserEngine
   readonly sampleIndex: number
@@ -159,7 +163,7 @@ export function parseChildEvidenceContext(value: unknown): ChildEvidenceContext 
   requireExactKeys(
     context,
     [
-      'runId', 'runPolicy', 'suite', 'browser', 'sampleIndex', 'checkoutSha',
+      'runId', 'operationId', 'scenario', 'runPolicy', 'suite', 'browser', 'sampleIndex', 'checkoutSha',
       'topologyProfileSha256', 'topologyResolutionSha256',
       'topologyProfilePath', 'topologyResolutionPath', 'evidencePath', 'artifactRoot',
     ],
@@ -176,6 +180,8 @@ export function parseChildEvidenceContext(value: unknown): ChildEvidenceContext 
   validatePolicySampleIndex(sampleIndex, runPolicy, 'child evidence sample index')
   return freezeRecord({
     runId: requirePortableToken(context.runId, 'child evidence run ID'),
+    operationId: requirePortableToken(context.operationId, 'child evidence operation ID'),
+    scenario: requirePortableToken(context.scenario, 'child evidence scenario'),
     runPolicy,
     suite: requireEnum(context.suite, BROWSER_SUITES, 'child evidence suite'),
     browser: requireEnum(context.browser, BROWSER_ENGINES, 'child evidence browser'),
@@ -296,6 +302,8 @@ export class ChildEvidenceReporter {
       schemaVersion: CHILD_EVIDENCE_SCHEMA_VERSION,
       eventSequence,
       runId: this.#context.runId,
+      operationId: this.#context.operationId,
+      scenario: this.#context.scenario,
       suite: this.#context.suite,
       browser: this.#context.browser,
       sampleIndex: this.#context.sampleIndex,
@@ -382,7 +390,7 @@ function parseChildEvent(
   requireExactKeys(
     event,
     [
-      'schemaVersion', 'eventSequence', 'runId', 'suite', 'browser', 'sampleIndex',
+      'schemaVersion', 'eventSequence', 'runId', 'operationId', 'scenario', 'suite', 'browser', 'sampleIndex',
       'checkoutSha', 'topologyProfileSha256', 'topologyResolutionSha256', 'kind', 'payload',
     ],
     [],
@@ -401,6 +409,8 @@ function parseChildEvent(
       'child evidence event sequence',
     ),
     runId: requirePortableToken(event.runId, 'child evidence event run ID'),
+    operationId: requirePortableToken(event.operationId, 'child evidence event operation ID'),
+    scenario: requirePortableToken(event.scenario, 'child evidence event scenario'),
     suite: requireEnum(event.suite, BROWSER_SUITES, 'child evidence event suite'),
     browser: requireEnum(event.browser, BROWSER_ENGINES, 'child evidence event browser'),
     sampleIndex: validatePolicySampleIndex(requireSafeInteger(
@@ -617,7 +627,8 @@ function decodeEvidence(encoded: Uint8Array, violations: string[]): string | nul
 
 function validateEventIdentity(event: ChildEventEnvelope, context: ChildEvidenceContext): void {
   if (
-    event.runId !== context.runId || event.suite !== context.suite ||
+    event.runId !== context.runId || event.operationId !== context.operationId ||
+    event.scenario !== context.scenario || event.suite !== context.suite ||
     event.browser !== context.browser || event.sampleIndex !== context.sampleIndex ||
     event.checkoutSha !== context.checkoutSha ||
     event.topologyProfileSha256 !== context.topologyProfileSha256 ||

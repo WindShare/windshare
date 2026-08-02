@@ -13,8 +13,6 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
-
-	"github.com/windshare/windshare/internal/testnetwork"
 )
 
 func TestConcurrentDeleteExpiryAndCloseKeepRetiringOwnerUntilCloseTerminal(t *testing.T) {
@@ -186,7 +184,6 @@ func TestOfferDeadlineForcesCloseAndWaitsForOfferTerminal(t *testing.T) {
 }
 
 func TestSlowRequestBodyIsBoundedByLiveHTTPConnectionDeadline(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
 	harness := newServiceHarness(t)
 	harness.service.bodyReadTimeout = 25 * time.Millisecond
 	server := httptest.NewTLSServer(harness.service)

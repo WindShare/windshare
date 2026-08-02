@@ -21,14 +21,13 @@ import (
 
 const (
 	ProtocolVersion                = "windshare.browser-network-matrix.remote-pion/v3"
-	ExternalFixtureSchemaVersion   = "windshare.browser-network-matrix.external-fixture-declaration/v1"
+	ExternalFixtureSchemaVersion   = "windshare.browser-network-matrix.external-fixture-declaration/v2"
 	LiveAttestationSchemaVersion   = "windshare.browser-network-matrix.external-fixture-attestation/v1"
 	RemotePeerBindingSchemaVersion = "windshare.browser-network-matrix.external-remote-peer-binding/v1"
 	AttestationSignatureAlgorithm  = "ed25519"
 	NetworkSemanticsPublicSTUN     = "public-stun"
 	NetworkSemanticsRestrictedUDP  = "restricted-udp"
 	NetworkSemanticsCoturnRelay    = "coturn-relay"
-	NetworkSemanticsManualRealNAT  = "operator-real-nat"
 	CanonicalTimestampLayout       = "2006-01-02T15:04:05.000Z"
 	MaximumClockSkew               = 30 * time.Second
 	MaximumAttestationLease        = 5 * time.Minute
@@ -46,8 +45,8 @@ var canonicalICEURIPattern = regexp.MustCompile(`^(stun|turn|turns):(\[[0-9a-f:.
 var canonicalDNSLabelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
 
 // ExternalFixture is the immutable operator declaration that gives runtime
-// observations meaning. Keeping identity, implementation, TLS, endpoint, and
-// network policy in one signed object prevents independently plausible values
+// observations meaning. Keeping deployment identity, TLS, endpoint, and network
+// policy in one signed object prevents independently plausible values
 // from being spliced across deployments.
 type ExternalFixture struct {
 	SchemaVersion            string           `json:"schemaVersion"`
@@ -55,7 +54,6 @@ type ExternalFixture struct {
 	Revision                 uint64           `json:"revision"`
 	ProfileID                string           `json:"profileId"`
 	AuthorityInstanceID      string           `json:"authorityInstanceId"`
-	ImplementationSHA256     string           `json:"implementationSha256"`
 	RemoteServiceInstanceID  string           `json:"remoteServiceInstanceId"`
 	OperatorID               string           `json:"operatorId"`
 	FixtureHostID            string           `json:"fixtureHostId"`
@@ -85,8 +83,6 @@ type NetworkSemantics struct {
 	TURNUsername            string   `json:"turnUsername,omitempty"`
 	TURNCredentialID        string   `json:"turnCredentialId,omitempty"`
 	TURNCredentialExpiresAt string   `json:"turnCredentialExpiresAt,omitempty"`
-	SenderHostID            string   `json:"senderHostId,omitempty"`
-	SenderNetworkBoundaryID string   `json:"senderNetworkBoundaryId,omitempty"`
 }
 
 func (semantics NetworkSemantics) MarshalJSON() ([]byte, error) {
@@ -121,16 +117,6 @@ func (semantics NetworkSemantics) MarshalJSON() ([]byte, error) {
 		}{semantics.Kind, semantics.PolicyID, semantics.PolicyVersion, semantics.TURNServiceOwnerID,
 			semantics.TURNURLs, semantics.TURNUsername, semantics.TURNCredentialID,
 			semantics.TURNCredentialExpiresAt})
-	case NetworkSemanticsManualRealNAT:
-		return marshalCanonicalObject(struct {
-			Kind                    string `json:"kind"`
-			PolicyID                string `json:"policyId"`
-			PolicyVersion           uint64 `json:"policyVersion"`
-			SenderHostID            string `json:"senderHostId"`
-			SenderNetworkBoundaryID string `json:"senderNetworkBoundaryId"`
-			STUNEndpoint            string `json:"stunEndpoint"`
-		}{semantics.Kind, semantics.PolicyID, semantics.PolicyVersion, semantics.SenderHostID,
-			semantics.SenderNetworkBoundaryID, semantics.STUNEndpoint})
 	default:
 		return nil, errors.New("external fixture network semantics discriminator is invalid")
 	}
@@ -179,8 +165,7 @@ type remotePeerBinding struct {
 
 func ValidateExternalFixture(fixture ExternalFixture) error {
 	if fixture.SchemaVersion != ExternalFixtureSchemaVersion || fixture.Revision == 0 || fixture.Revision > maximumSafeJSONInteger ||
-		!validProfileID(fixture.ProfileID) || !sha256Pattern.MatchString(fixture.ImplementationSHA256) ||
-		!sha256Pattern.MatchString(fixture.TLSCertificateSHA256) {
+		!validProfileID(fixture.ProfileID) || !sha256Pattern.MatchString(fixture.TLSCertificateSHA256) {
 		return errors.New("external fixture identity is invalid")
 	}
 	for label, value := range map[string]string{
@@ -207,11 +192,6 @@ func ValidateExternalFixture(fixture ExternalFixture) error {
 	}
 	if err := validateNetworkSemantics(fixture.ProfileID, fixture.NetworkSemantics); err != nil {
 		return err
-	}
-	if fixture.ProfileID == "manual-real-nat" &&
-		(fixture.NetworkSemantics.SenderHostID == fixture.FixtureHostID ||
-			fixture.NetworkSemantics.SenderNetworkBoundaryID == fixture.FixtureNetworkBoundaryID) {
-		return errors.New("manual sender identity must be independent of the remote fixture")
 	}
 	return nil
 }
@@ -380,16 +360,14 @@ func validateNetworkSemantics(profileID string, semantics NetworkSemantics) erro
 		if semantics.Kind != NetworkSemanticsPublicSTUN || !validSTUNURI(semantics.STUNEndpoint) ||
 			len(semantics.TURNURLs) != 0 || expectStringsEmpty(semantics.OutboundUDP, semantics.InboundUDP, semantics.RelayAccess,
 			semantics.TURNServiceOwnerID, semantics.TURNUsername, semantics.TURNCredentialID,
-			semantics.TURNCredentialExpiresAt,
-			semantics.SenderHostID, semantics.SenderNetworkBoundaryID) {
+			semantics.TURNCredentialExpiresAt) {
 			return errors.New("public STUN fixture semantics are invalid")
 		}
 	case "scheduled-restricted-udp":
 		if semantics.Kind != NetworkSemanticsRestrictedUDP || semantics.OutboundUDP != "denied" ||
 			semantics.InboundUDP != "denied" || semantics.RelayAccess != "denied" ||
 			len(semantics.TURNURLs) != 0 || expectStringsEmpty(semantics.STUNEndpoint, semantics.TURNServiceOwnerID, semantics.TURNUsername,
-			semantics.TURNCredentialID, semantics.TURNCredentialExpiresAt,
-			semantics.SenderHostID, semantics.SenderNetworkBoundaryID) {
+			semantics.TURNCredentialID, semantics.TURNCredentialExpiresAt) {
 			return errors.New("restricted UDP fixture semantics are invalid")
 		}
 	case "scheduled-coturn":
@@ -399,19 +377,8 @@ func validateNetworkSemantics(profileID string, semantics NetworkSemantics) erro
 			validateCanonicalID(semantics.TURNCredentialID, "TURN credential ID") != nil ||
 			validateCredentialExpiry(semantics.TURNCredentialExpiresAt) != nil ||
 			expectStringsEmpty(semantics.STUNEndpoint, semantics.OutboundUDP, semantics.InboundUDP,
-				semantics.RelayAccess, semantics.SenderHostID, semantics.SenderNetworkBoundaryID) {
+				semantics.RelayAccess) {
 			return errors.New("coturn fixture semantics are invalid")
-		}
-	case "manual-real-nat":
-		if semantics.Kind != NetworkSemanticsManualRealNAT ||
-			validateCanonicalID(semantics.SenderHostID, "sender host ID") != nil ||
-			validateCanonicalID(semantics.SenderNetworkBoundaryID, "sender network boundary ID") != nil ||
-			!validSTUNURI(semantics.STUNEndpoint) ||
-			len(semantics.TURNURLs) != 0 || expectStringsEmpty(semantics.OutboundUDP, semantics.InboundUDP, semantics.RelayAccess,
-			semantics.TURNServiceOwnerID, semantics.TURNUsername, semantics.TURNCredentialID,
-			semantics.TURNCredentialExpiresAt) ||
-			semantics.SenderHostID == "" || semantics.SenderNetworkBoundaryID == "" {
-			return errors.New("manual real-NAT fixture semantics are invalid")
 		}
 	default:
 		return errors.New("external fixture profile is invalid")
@@ -626,7 +593,7 @@ func validOpaqueID(value string) bool {
 
 func validProfileID(value string) bool {
 	switch value {
-	case "scheduled-public-stun", "scheduled-restricted-udp", "scheduled-coturn", "manual-real-nat":
+	case "scheduled-public-stun", "scheduled-restricted-udp", "scheduled-coturn":
 		return true
 	default:
 		return false
