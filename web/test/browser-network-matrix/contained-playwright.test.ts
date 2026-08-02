@@ -15,15 +15,21 @@ import { loadRegistry, matchedAttemptEvidence } from './fixtures.ts'
 describe('contained Playwright matrix sample adapter', () => {
   it('returns only parent-collected two-ended evidence from one contained OS process', async () => {
     const context = await sampleContext()
-    const broker: NetworkMatrixContainedPlaywrightProcessBroker = {
-      start: vi.fn().mockReturnValue(completedOwnedOperation({
-        processInstanceId: 'contained-browser-process',
-        attemptEvidence: matchedAttemptEvidence(context.identity, context.runId),
+    const traces = Object.freeze({ ownership: 'pull-only' as const })
+    const broker: NetworkMatrixContainedPlaywrightProcessBroker<typeof traces> = {
+      start: vi.fn().mockReturnValue(Object.freeze({
+        ...completedOwnedOperation({
+          processInstanceId: 'contained-browser-process',
+          attemptEvidence: matchedAttemptEvidence(context.identity, context.runId),
+        }),
+        traces,
       })),
     }
     const executor = new ContainedPlaywrightNetworkMatrixSampleExecutor(broker)
+    const execution = executor.execute(context)
 
-    await expect(executor.execute(context).result).resolves.toEqual({
+    expect(execution.traces).toBe(traces)
+    await expect(execution.result).resolves.toEqual({
       processInstanceId: 'contained-browser-process',
       observation: {
         sampleOutcome: 'observed',
@@ -36,7 +42,8 @@ describe('contained Playwright matrix sample adapter', () => {
   it('forwards forced subtree reaping when joined attempt evidence rejects', async () => {
     const context = await sampleContext()
     const forceTerminateAndWait = vi.fn().mockResolvedValue(undefined)
-    const broker: NetworkMatrixContainedPlaywrightProcessBroker = {
+    const traces = Object.freeze({ ownership: 'pull-only' as const })
+    const broker: NetworkMatrixContainedPlaywrightProcessBroker<typeof traces> = {
       start: () => ({
         result: Promise.resolve({
           processInstanceId: 'contained-browser-process',
@@ -46,6 +53,7 @@ describe('contained Playwright matrix sample adapter', () => {
           } as unknown as NetworkMatrixAttemptEvidence,
         }),
         forceTerminateAndWait,
+        traces,
       }),
     }
     const executor = new ContainedPlaywrightNetworkMatrixSampleExecutor(broker)

@@ -1,5 +1,4 @@
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -38,11 +37,10 @@ func main() {
 	for { time.Sleep(time.Hour) }
 }
 `, 'utf8')
-      await execFilePromise('go', ['build', '-trimpath', '-buildvcs=false', '-o', executablePath, sourcePath], {
+      await execFilePromise(process.env.WINDSHARE_GO_EXECUTABLE ?? 'go', ['build', '-trimpath', '-buildvcs=false', '-o', executablePath, sourcePath], {
         cwd: workspace,
         windowsHide: true,
       })
-      const executableBytes = await readFile(executablePath)
       const startedAt = performance.now()
       const executionLease = GuardExecutionLease.start({
         totalBudgetMs: 12_000,
@@ -51,7 +49,6 @@ func main() {
       })
       const publisher = createNativeDirectoryPublisher({
         path: executablePath,
-        sha256: createHash('sha256').update(executableBytes).digest('hex'),
       })
       const failure = await publisher.invoke({
         operation: 'prepare-existing-directory',

@@ -1,4 +1,5 @@
 import { request as httpsRequest } from 'node:https'
+import { isProxy } from 'node:util/types'
 
 import type { NetworkMatrixProfileId } from '../vocabulary.ts'
 
@@ -58,11 +59,31 @@ extends GitHubActionsOidcIdentityOptions {
   readonly request: typeof requestGithubActionsOidcToken
 }
 
-interface CapturedGitHubActionsOidcBootstrap {
+interface CapturedGitHubActionsOidcRequestBootstrap {
+  readonly kind: 'request-bootstrap'
   readonly requestUrl: string
   readonly requestToken: Uint8Array
   readonly request: typeof requestGithubActionsOidcToken
 }
+
+export const MINTED_GITHUB_ACTIONS_OIDC_PROTOCOL =
+  'windshare.browser-network-matrix.minted-oidc/v1' as const
+
+export interface MintedGitHubActionsOidcEnvelope {
+  readonly protocolVersion: typeof MINTED_GITHUB_ACTIONS_OIDC_PROTOCOL
+  readonly audience: string
+  readonly requestOrigin: string
+  readonly requestPath: string
+  readonly requestQuery: string
+  readonly assertion: Uint8Array
+}
+
+interface CapturedMintedGitHubActionsOidcBootstrap extends MintedGitHubActionsOidcEnvelope {
+  readonly kind: 'minted-bootstrap'
+}
+
+type CapturedGitHubActionsOidcBootstrap =
+  CapturedGitHubActionsOidcRequestBootstrap | CapturedMintedGitHubActionsOidcBootstrap
 
 /**
  * Captures and deletes both ambient runner sentinels as one erasable lease. The
@@ -76,22 +97,23 @@ export class GitHubActionsOidcBootstrapLease {
   #closeOperation: Promise<ParentWorkloadIdentitySettlementReceipt> | undefined
   #forceOperation: Promise<ParentWorkloadIdentitySettlementReceipt> | undefined
 
-  static capture(): GitHubActionsOidcBootstrapLease {
-    return new GitHubActionsOidcBootstrapLease(process.env, requestGithubActionsOidcToken)
+  static fromMintedEnvelope(envelope: MintedGitHubActionsOidcEnvelope): GitHubActionsOidcBootstrapLease {
+    return new GitHubActionsOidcBootstrapLease(requireMintedEnvelope(envelope))
   }
 
   static captureTestHarness(
     environment: NodeJS.ProcessEnv,
     request: typeof requestGithubActionsOidcToken,
   ): GitHubActionsOidcBootstrapLease {
-    return new GitHubActionsOidcBootstrapLease(environment, request)
+    return new GitHubActionsOidcBootstrapLease(Object.freeze({
+      kind: 'request-bootstrap',
+      ...takeOidcBootstrapEnvironment(environment),
+      request,
+    }))
   }
 
-  private constructor(
-    environment: NodeJS.ProcessEnv,
-    request: typeof requestGithubActionsOidcToken,
-  ) {
-    this.#captured = Object.freeze({ ...takeOidcBootstrapEnvironment(environment), request })
+  private constructor(captured: CapturedGitHubActionsOidcBootstrap) {
+    this.#captured = captured
   }
 
   consume(options: GitHubActionsOidcIdentityOptions): GitHubActionsOidcIdentityAuthority {
@@ -110,7 +132,7 @@ export class GitHubActionsOidcBootstrapLease {
       this.#authority = authority
       return authority
     } catch (cause) {
-      captured.requestToken.fill(0)
+      eraseCapturedBootstrap(captured)
       throw cause
     }
   }
@@ -145,7 +167,7 @@ export class GitHubActionsOidcBootstrapLease {
   async #settle(force: boolean): Promise<ParentWorkloadIdentitySettlementReceipt> {
     const captured = this.#captured
     this.#captured = undefined
-    captured?.requestToken.fill(0)
+    if (captured !== undefined) eraseCapturedBootstrap(captured)
     const authority = this.#authority
     if (authority !== undefined) {
       const receipt = force
@@ -162,8 +184,8 @@ export class GitHubActionsOidcBootstrapLease {
 
 /**
  * GitHub's bootstrap token is captured once and removed from process.env before
- * any broker or Playwright child exists. Only short-lived OIDC assertions cross
- * the broker's anonymous stdin pipe.
+ * any broker or Playwright child exists. Only a short-lived minted assertion and
+ * its exact endpoint/audience binding cross the broker's anonymous descriptor.
  */
 export class GitHubActionsOidcIdentityAuthority implements ParentWorkloadIdentityAuthority {
   readonly binding: ParentWorkloadIdentityBinding
@@ -171,6 +193,7 @@ export class GitHubActionsOidcIdentityAuthority implements ParentWorkloadIdentit
   readonly #requestUrl: string
   readonly #requestToken: Uint8Array
   readonly #request: typeof requestGithubActionsOidcToken
+  readonly #mintedAssertion: Uint8Array | undefined
   readonly #activeIssues = new Set<{
     readonly controller: AbortController
     readonly settled: Promise<void>
@@ -179,10 +202,6 @@ export class GitHubActionsOidcIdentityAuthority implements ParentWorkloadIdentit
   #terminalReceipt: ParentWorkloadIdentitySettlementReceipt | undefined
   #closeOperation: Promise<ParentWorkloadIdentitySettlementReceipt> | undefined
   #forceOperation: Promise<ParentWorkloadIdentitySettlementReceipt> | undefined
-
-  static create(options: GitHubActionsOidcIdentityOptions): GitHubActionsOidcIdentityAuthority {
-    return GitHubActionsOidcBootstrapLease.capture().consume(options)
-  }
 
   static createTestHarness(
     options: GitHubActionsOidcIdentityTestHarnessOptions,
@@ -200,7 +219,7 @@ export class GitHubActionsOidcIdentityAuthority implements ParentWorkloadIdentit
     if (authority !== IDENTITY_CONSTRUCTOR_AUTHORITY) {
       throw new Error('GitHub Actions OIDC identity construction authority is invalid')
     }
-    const { requestUrl, requestToken, request } = captured
+    let requestToken = Buffer.alloc(0)
     try {
       const audience = requireAudience(options.audience)
       const issuer = requireCanonicalHttpsOrigin(options.issuer, 'issuer')
@@ -212,12 +231,27 @@ export class GitHubActionsOidcIdentityAuthority implements ParentWorkloadIdentit
         typeof options.ref !== 'string' || !/^refs\/(?:heads|tags)\/[A-Za-z0-9_./-]+$/u.test(options.ref) ||
         typeof options.workflowRef !== 'string' || !WORKFLOW_REF_PATTERN.test(options.workflowRef)
       ) throw new Error('GitHub Actions OIDC claim authority is invalid')
-      const endpoint = new URL(requestUrl)
-      if (
-        endpoint.protocol !== 'https:' || endpoint.username !== '' || endpoint.password !== '' ||
-        endpoint.hash !== '' || endpoint.origin !== requestOrigin || endpoint.pathname !== requestPath ||
-        endpoint.search !== requestQuery
-      ) throw new Error('GitHub Actions OIDC endpoint is invalid')
+      let requestUrl = ''
+      let request: typeof requestGithubActionsOidcToken = requestGithubActionsOidcToken
+      let mintedAssertion: Uint8Array | undefined
+      if (captured.kind === 'request-bootstrap') {
+        const endpoint = new URL(captured.requestUrl)
+        if (
+          endpoint.protocol !== 'https:' || endpoint.username !== '' || endpoint.password !== '' ||
+          endpoint.hash !== '' || endpoint.origin !== requestOrigin || endpoint.pathname !== requestPath ||
+          endpoint.search !== requestQuery
+        ) throw new Error('GitHub Actions OIDC endpoint is invalid')
+        requestUrl = endpoint.toString()
+        requestToken = captured.requestToken
+        request = captured.request
+      } else {
+        if (
+          captured.audience !== audience ||
+          captured.requestOrigin !== requestOrigin || captured.requestPath !== requestPath ||
+          captured.requestQuery !== requestQuery
+        ) throw new Error('minted GitHub Actions OIDC endpoint binding is invalid')
+        mintedAssertion = captured.assertion
+      }
       this.binding = Object.freeze({
         protocolVersion: PARENT_WORKLOAD_IDENTITY_PROTOCOL,
         kind: 'github-actions-oidc',
@@ -231,11 +265,12 @@ export class GitHubActionsOidcIdentityAuthority implements ParentWorkloadIdentit
         requestQuery,
       })
       this.#audience = audience
-      this.#requestUrl = endpoint.toString()
+      this.#requestUrl = requestUrl
       this.#requestToken = requestToken
       this.#request = request
+      this.#mintedAssertion = mintedAssertion
     } catch (cause) {
-      requestToken.fill(0)
+      eraseCapturedBootstrap(captured)
       throw cause
     }
   }
@@ -249,6 +284,9 @@ export class GitHubActionsOidcIdentityAuthority implements ParentWorkloadIdentit
     requireScope(input.runId, input.profileId, input.probeNonce)
     if (!this.#accepting || input.signal.aborted) {
       throw new Error('parent workload identity request was terminated')
+    }
+    if (this.#mintedAssertion !== undefined) {
+      return Uint8Array.from(this.#mintedAssertion)
     }
     const controller = new AbortController()
     const abort = (): void => controller.abort()
@@ -300,6 +338,7 @@ export class GitHubActionsOidcIdentityAuthority implements ParentWorkloadIdentit
       await Promise.all(active.map(({ settled }) => settled))
     } finally {
       this.#requestToken.fill(0)
+      this.#mintedAssertion?.fill(0)
     }
     this.#terminalReceipt ??= Object.freeze({ terminal: 'closed' })
     return this.#terminalReceipt
@@ -313,6 +352,59 @@ function exactIdentityClosedReceipt(
   const receipt = value as Record<string, unknown>
   const keys = Object.keys(receipt)
   return keys.length === 1 && keys[0] === 'terminal' && receipt.terminal === 'closed'
+}
+
+function requireMintedEnvelope(value: unknown): CapturedMintedGitHubActionsOidcBootstrap {
+  if (
+    typeof value !== 'object' || value === null || isProxy(value) || Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) throw new Error('minted GitHub Actions OIDC envelope is invalid')
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const names = Reflect.ownKeys(descriptors)
+  const expected = [
+    'assertion', 'audience', 'protocolVersion', 'requestOrigin', 'requestPath', 'requestQuery',
+  ]
+  if (
+    names.some((name) => typeof name !== 'string') || names.length !== expected.length ||
+    !expected.every((name) => names.includes(name))
+  ) throw new Error('minted GitHub Actions OIDC envelope is invalid')
+  for (const name of expected) {
+    const descriptor = descriptors[name]
+    if (descriptor === undefined || !Object.hasOwn(descriptor, 'value') || descriptor.enumerable !== true) {
+      throw new Error('minted GitHub Actions OIDC envelope is active')
+    }
+  }
+  if (descriptors.protocolVersion?.value !== MINTED_GITHUB_ACTIONS_OIDC_PROTOCOL) {
+    throw new Error('minted GitHub Actions OIDC protocol is invalid')
+  }
+  const assertionValue: unknown = descriptors.assertion?.value
+  if (isProxy(assertionValue) || !(assertionValue instanceof Uint8Array)) {
+    throw new Error('minted GitHub Actions OIDC assertion is invalid')
+  }
+  const assertion = Uint8Array.from(assertionValue)
+  if (!isOidcAssertion(assertion)) {
+    assertion.fill(0)
+    throw new Error('minted GitHub Actions OIDC assertion is invalid')
+  }
+  try {
+    return Object.freeze({
+      kind: 'minted-bootstrap',
+      protocolVersion: MINTED_GITHUB_ACTIONS_OIDC_PROTOCOL,
+      audience: requireAudience(descriptors.audience?.value),
+      requestOrigin: requireCanonicalHttpsOrigin(descriptors.requestOrigin?.value, 'request origin'),
+      requestPath: requireAbsoluteRequestPath(descriptors.requestPath?.value),
+      requestQuery: requireCanonicalRequestQuery(descriptors.requestQuery?.value),
+      assertion,
+    })
+  } catch (cause) {
+    assertion.fill(0)
+    throw cause
+  }
+}
+
+function eraseCapturedBootstrap(captured: CapturedGitHubActionsOidcBootstrap): void {
+  if (captured.kind === 'request-bootstrap') captured.requestToken.fill(0)
+  else captured.assertion.fill(0)
 }
 
 export async function requestGithubActionsOidcToken(options: {
@@ -533,7 +625,7 @@ function requireScope(runId: string, profileId: unknown, probeNonce: string): vo
   if (
     !CANONICAL_ID_PATTERN.test(runId) || !OPAQUE_ID_PATTERN.test(probeNonce) ||
     profileId !== 'scheduled-public-stun' && profileId !== 'scheduled-restricted-udp' &&
-    profileId !== 'scheduled-coturn' && profileId !== 'manual-real-nat'
+    profileId !== 'scheduled-coturn'
   ) throw new Error('parent workload identity request scope is invalid')
 }
 

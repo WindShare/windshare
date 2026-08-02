@@ -17,6 +17,11 @@ export interface NetworkMatrixOwnedOperation<T> {
   forceTerminateAndWait(reason: NetworkMatrixOperationClass): Promise<void>
 }
 
+export interface NetworkMatrixTracedOwnedOperation<T, TraceChannel>
+extends NetworkMatrixOwnedOperation<T> {
+  readonly traces: TraceChannel
+}
+
 export interface NetworkMatrixOwnershipRegistration {
   normalTerminal(): void
   forcedTerminal(): void
@@ -272,6 +277,18 @@ export function mapOwnedOperation<Source, Target>(
 ): NetworkMatrixOwnedOperation<Target> {
   return Object.freeze({
     result: operation.result.then(map),
+    forceTerminateAndWait: (reason: NetworkMatrixOperationClass) =>
+      operation.forceTerminateAndWait(reason),
+  })
+}
+
+export function mapTracedOwnedOperation<Source, Target, TraceChannel>(
+  operation: NetworkMatrixTracedOwnedOperation<Source, TraceChannel>,
+  map: (source: Source) => Target | Promise<Target>,
+): NetworkMatrixTracedOwnedOperation<Target, TraceChannel> {
+  return Object.freeze({
+    result: operation.result.then(map),
+    traces: operation.traces,
     forceTerminateAndWait: (reason: NetworkMatrixOperationClass) =>
       operation.forceTerminateAndWait(reason),
   })

@@ -709,9 +709,10 @@ function canonicalManifestByteLength(value) {
   return value
 }
 
-function boundedError(cause) {
-  const message = cause instanceof Error ? cause.message : String(cause)
-  return message.length <= 512 ? message : message.slice(0, 512)
+function boundedError(_cause) {
+  // Verdict publication must remain total even when a dependency throws an
+  // active Error/Proxy. Detailed causes stay in the internal error chain.
+  return 'dependency-operation-failed'
 }
 
 function parseCliArguments(argv) {

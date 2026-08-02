@@ -11,7 +11,7 @@ import (
 
 func TestCanonicalPublicProtocolVectors(t *testing.T) {
 	signer := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x24}, ed25519.SeedSize))
-	credential := []byte("D5_PIPE_PAYLOAD_0123456789_abcdef")
+	credential := []byte("PRIVATE_PAYLOAD_0123456789_abcdef")
 	leaseVectors := []struct {
 		name          string
 		value         LeasePayload
@@ -70,7 +70,7 @@ func TestCanonicalPublicProtocolVectors(t *testing.T) {
 			}
 			metadata, payload, err := splitFrame(frame)
 			if err != nil || !bytes.Equal(payload, credential) || bytes.Contains(metadata, credential) {
-				t.Fatal("D5 payload crossed the public signed metadata boundary")
+				t.Fatal("private payload crossed the public signed metadata boundary")
 			}
 			var envelope leaseEnvelope
 			if !decodeCanonicalMetadata(metadata, &envelope) ||
@@ -138,7 +138,7 @@ func TestCanonicalPublicProtocolVectors(t *testing.T) {
 			}
 			metadata, payload, err := splitFrame(frame)
 			if err != nil || len(payload) != 0 {
-				t.Fatal("receipt frame unexpectedly carried D5 payload")
+				t.Fatal("receipt frame unexpectedly carried a private payload")
 			}
 			var envelope receiptEnvelope
 			if !decodeCanonicalMetadata(metadata, &envelope) ||

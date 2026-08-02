@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 
+import { requireOperationId, requireRunId } from './contract-support.ts'
 import {
   NETWORK_MATRIX_BROWSERS,
   NETWORK_MATRIX_PROFILE_IDS,
@@ -18,6 +19,8 @@ export const NETWORK_MATRIX_ATTEMPT_REQUEST_AUTHORITY_SCHEMA =
 export const NETWORK_MATRIX_ATTEMPT_AUTHORITY_SCHEMA =
   'windshare.browser-network-matrix.attempt-authority/v1' as const
 
+const NETWORK_MATRIX_SAMPLE_OPERATION_DOMAIN =
+  'windshare.browser-network-matrix.sample-operation/v1' as const
 const CANONICAL_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/u
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u
@@ -65,6 +68,30 @@ export function newNetworkMatrixProcessInstanceId(): string {
   return `browser-${randomBytes(12).toString('hex')}`
 }
 
+/**
+ * A digest-derived ID preserves the full sample identity without making the
+ * process-owner identifier ceiling depend on the caller-selected run ID length.
+ */
+export function networkMatrixSampleOperationId(
+  runIdValue: string,
+  identity: Pick<NetworkMatrixSampleAuthority, 'profileId' | 'browser' | 'sampleOrdinal'>,
+): string {
+  const runId = authorityRunId(runIdValue)
+  if (
+    !isProfileId(identity.profileId) ||
+    !isBrowser(identity.browser) ||
+    !isSampleOrdinal(identity.sampleOrdinal)
+  ) invalidAuthority()
+  const canonicalIdentity = `${JSON.stringify([
+    NETWORK_MATRIX_SAMPLE_OPERATION_DOMAIN,
+    runId,
+    identity.profileId,
+    identity.browser,
+    identity.sampleOrdinal,
+  ])}\n`
+  return canonicalId(`sample-${createHash('sha256').update(canonicalIdentity).digest('hex')}`)
+}
+
 export function parseNetworkMatrixSampleAuthority(value: unknown): NetworkMatrixSampleAuthority {
   const record = exactRecord(value, [
     'schemaVersion', 'runId', 'profileId', 'browser', 'sampleOrdinal',
@@ -77,12 +104,12 @@ export function parseNetworkMatrixSampleAuthority(value: unknown): NetworkMatrix
   ) invalidAuthority()
   return Object.freeze({
     schemaVersion: NETWORK_MATRIX_SAMPLE_AUTHORITY_SCHEMA,
-    runId: canonicalId(record.runId),
+    runId: authorityRunId(record.runId),
     profileId: record.profileId,
     browser: record.browser,
     sampleOrdinal: record.sampleOrdinal,
     processInstanceId: canonicalId(record.processInstanceId),
-    operationId: canonicalId(record.operationId),
+    operationId: authorityOperationId(record.operationId),
   })
 }
 
@@ -220,6 +247,22 @@ function exactRecord(value: unknown, expectedKeys: readonly string[]): Record<st
     return descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)
   })) invalidAuthority()
   return value as Record<string, unknown>
+}
+
+function authorityRunId(value: unknown): string {
+  try {
+    return requireRunId(value, 'network matrix sample authority run ID')
+  } catch {
+    return invalidAuthority()
+  }
+}
+
+function authorityOperationId(value: unknown): string {
+  try {
+    return requireOperationId(value, 'network matrix sample authority operation ID')
+  } catch {
+    return invalidAuthority()
+  }
 }
 
 function canonicalId(value: unknown): string {

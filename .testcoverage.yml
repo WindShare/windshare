@@ -1,10 +1,6 @@
 # go-test-coverage config for the ROOT module (github.com/windshare/windshare).
 # The core module has its own gate at core/.testcoverage.yml (total >=90).
 # https://github.com/vladopajic/go-test-coverage
-#
-# Ordinary Windows runs under-count capability-gated process tests. The local
-# coverage script routes the current network manifest through the fixed-path D5
-# runner; the ubuntu CI sweep executes those tests directly.
 
 profile: cover.out
 local-prefix: github.com/windshare/windshare
@@ -33,12 +29,3 @@ exclude:
   paths:
     # CLI entry point; all business logic lives in cmd/windshare/internal/cli.
     - ^cmd/windshare/main\.go$
-    # wsrelay daemon entry point (flag/signal/config wiring), hard to unit test.
-    - ^relay/cmd/wsrelay/main\.go$
-    # Windows capability probe fixture for internal/testnetwork forensics; no product logic.
-    - ^scripts/internal/d5capabilityprobe/
-    # Test-support package (OS-network gating constructors + D5 capability
-    # probes, 15 statements): imported only by _test files and the D5 fixture;
-    # its Windows half executes only under the local D5 runner, so no single
-    # platform can cover it. First authoritative ubuntu run: 33.3%.
-    - ^internal/testnetwork/

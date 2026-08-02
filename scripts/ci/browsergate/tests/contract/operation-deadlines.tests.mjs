@@ -29,7 +29,7 @@ const {
   createOperationDeadlineAuthority,
   createRuntimeSetupDeadlinePolicy,
   createSuiteDeadlinePolicy,
-  createWindowsProcessOwnerDeadlinePolicy,
+  createProcessOwnerDeadlinePolicy,
   evaluateBrowsergateWarmRuntimeSlo,
   operationClassDeadlineMs,
 } = deadlineModule
@@ -47,7 +47,7 @@ for (const operationClass of Object.values(BROWSERGATE_OPERATION_CLASS)) {
   assert(Number.isSafeInteger(operationClassDeadlineMs(operationClass)))
   assert(operationClassDeadlineMs(operationClass) > 0)
 }
-assert.throws(() => operationClassDeadlineMs('suite-wide-d5'), /unknown Browsergate operation class/u)
+assert.throws(() => operationClassDeadlineMs('unknown-suite-owner'), /unknown Browsergate operation class/u)
 
 const expectedSuitePolicies = Object.freeze({
   blocking: Object.freeze({
@@ -100,9 +100,9 @@ for (const [policyId, expected] of Object.entries(expectedSuitePolicies)) {
 }
 
 const expectedLocalHardBudgetMs = Object.freeze({
-  blocking: 8_760_000,
-  closure: 13_380_000,
-  stability: 18_000_000,
+  blocking: 8_160_000,
+  closure: 12_780_000,
+  stability: 17_400_000,
 })
 for (const policyId of ['blocking', 'closure', 'stability']) {
   const local = createLocalBrowsergateDeadlinePolicy(browserRunPolicy(policyId), 'linux')
@@ -122,13 +122,12 @@ for (const policyId of ['blocking', 'closure', 'stability']) {
     leaseId: 'bootstrap/source-control-context-query',
     maximumDurationMs: 30_000,
   }])
-  assert.equal(local.sharedSetup.budgetMs, 51 * 60_000)
+  assert.equal(local.sharedSetup.budgetMs, 41 * 60_000)
   assert.equal(local.hardBudgetMs, expectedLocalHardBudgetMs[policyId])
   assert.deepEqual(local.sharedSetup.leases.map(({ leaseId, maximumDurationMs }) => ({
     leaseId,
     maximumDurationMs,
   })), [
-    { leaseId: 'local/dependency-install', maximumDurationMs: 600_000 },
     { leaseId: 'local/browser-contract', maximumDurationMs: 300_000 },
     {
       leaseId: 'local/generated-semantic-process',
@@ -144,13 +143,11 @@ for (const policyId of ['blocking', 'closure', 'stability']) {
     ['batch-build', 'manifest-preflight'],
   )
 }
-const localDependencyReuse = createLocalBrowsergateDeadlinePolicy(
+const localDependencyAuthority = createLocalBrowsergateDeadlinePolicy(
   browserRunPolicy('blocking'),
   'linux',
-  { dependencyInstallReused: true },
 )
-assert.equal(localDependencyReuse.sharedSetup.budgetMs, 41 * 60_000)
-assert.equal(localDependencyReuse.hardBudgetMs, 8_160_000)
+assert.equal(localDependencyAuthority.dependencyAuthority, 'make-web-dependencies')
 assert.equal(
   BROWSERGATE_BOOTSTRAP_QUERY_DEADLINE_MS,
   30_000,
@@ -160,7 +157,7 @@ assert.equal(
   30_000,
 )
 assert.equal(
-  localDependencyReuse.sharedSetup.leases.some(
+  localDependencyAuthority.sharedSetup.leases.some(
     ({ operationClass }) => operationClass === BROWSERGATE_OPERATION_CLASS.SOURCE_CONTROL_QUERY,
   ),
   false,
@@ -186,7 +183,7 @@ const runtimePolicies = Object.freeze({
 assert.deepEqual(runtimePolicies.contract.manifestArtifacts, [])
 assert.deepEqual(runtimePolicies.contract.leases, [])
 assert.deepEqual(runtimePolicies.local.manifestArtifacts, [
-  'linux-process-owner',
+  'test-process-owner',
   'topology-materializer',
   'artifact-publisher',
   'pion-server',
@@ -226,12 +223,12 @@ assert.deepEqual(
 assert.equal(contractRunner.hardBudgetMs, 15 * 60_000)
 
 for (const [policyId, expected] of Object.entries(expectedSuitePolicies)) {
-  const windows = createWindowsProcessOwnerDeadlinePolicy('main', browserRunPolicy(policyId))
-  assert.equal(windows.focusedProcessLeaseCount, expected.focusedProcessLeaseCount)
-  assert.equal(windows.remainderProcessLeaseCount, 1)
-  assert.equal(windows.processLeases.length, expected.focusedProcessLeaseCount + 1)
-  assert.equal(windows.processLeases.some(({ leaseId }) => leaseId.includes('suite-wide')), false)
-  for (const lease of windows.processLeases) {
+  const owner = createProcessOwnerDeadlinePolicy('main', browserRunPolicy(policyId))
+  assert.equal(owner.focusedProcessLeaseCount, expected.focusedProcessLeaseCount)
+  assert.equal(owner.remainderProcessLeaseCount, 1)
+  assert.equal(owner.processLeases.length, expected.focusedProcessLeaseCount + 1)
+  assert.equal(owner.processLeases.some(({ leaseId }) => leaseId.includes('suite-wide')), false)
+  for (const lease of owner.processLeases) {
     assert.equal(lease.ownerSettlementReserveMs, BROWSERGATE_PROCESS_OWNERSHIP_OUTER_SLACK_MS)
     assert.equal(
       lease.maximumDurationMs,
@@ -245,7 +242,7 @@ for (const [policyId, expected] of Object.entries(expectedSuitePolicies)) {
     )
   }
   assert.equal(
-    windows.aggregateBudgetMs,
+    owner.aggregateBudgetMs,
     expected.focusedProcessLeaseCount * (
       BROWSER_SAMPLE_SUBPROCESS_TIMEOUT_MS + BROWSERGATE_PROCESS_OWNERSHIP_OUTER_SLACK_MS
     ) + BROWSERGATE_OPERATION_DEADLINE_MS[BROWSERGATE_OPERATION_CLASS.FULL_SUITE]

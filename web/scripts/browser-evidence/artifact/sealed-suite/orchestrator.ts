@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
 import { artifactManifestSha256, sha256Bytes } from '../manifest.ts'
@@ -8,7 +9,7 @@ import {
 import { GuardExecutionLease } from '../../execution/guard-execution-lease.ts'
 import { readStableRegularFileSnapshot } from '../../filesystem/snapshot.ts'
 import {
-  GuardUploadDirectoryPublisherUnsettledError,
+  isGuardUploadDirectoryPublisherUnsettledError,
   requireGuardUploadDirectoryPublisher,
   type GuardUploadDirectoryPublisher,
 } from '../directory-publisher.ts'
@@ -48,7 +49,7 @@ import {
   GUARD_UPLOAD_TOPOLOGY_PROFILE_PATH,
   GUARD_UPLOAD_TOPOLOGY_RESOLUTION_PATH,
   MAXIMUM_UPLOAD_MANIFEST_BYTES,
-  type GuardUploadHooks,
+  type GuardUploadFaultCut,
   type GuardUploadManifest,
   type GuardUploadSampleInput,
   type GuardUploadSampleManifest,
@@ -91,6 +92,10 @@ import {
 
 const PRIVATE_UPLOAD_PREFIX = '.browser-evidence-upload-'
 const STAGING_NAME_PATTERN = /^\.browser-evidence-upload-[a-f0-9]{32}$/u
+const MAXIMUM_UPLOAD_FAULT_CUTS = 32
+const FOREIGN_STAGING_FAULT_FILENAME = '.windshare-foreign-fault'
+const FOREIGN_STAGING_FAULT_BYTES = 'declarative foreign staging fault'
+const OWNED_UNSETTLED_PUBLICATION_FAILURES = new WeakSet<object>()
 
 interface SamplePayload {
   readonly input: GuardUploadSampleInput
@@ -118,9 +123,13 @@ export async function sealGuardUploadSuite(
 ): Promise<GuardUploadSelection> {
   const executionLease = options.executionLease ?? GuardExecutionLease.start()
   executionLease.throwIfPrimaryExpired('guard upload sealing')
+  if (Object.getOwnPropertyDescriptor(options, 'hooks') !== undefined) {
+    throw new Error('guard upload sealing rejects executable lifecycle hooks')
+  }
   requireGuardUploadDirectoryPublisher(options.directoryPublisher)
   const uploadParent = requireCanonicalAbsolutePath(options.uploadParent, 'guard upload parent')
   const samples = canonicalSuiteInputs(options)
+  const faultCuts = canonicalUploadFaultCuts(options.faultCuts, samples)
   const settlementSamples = samples.map((input) => Object.freeze({
     sample: input.sample,
     resultBytes: input.sampleResultBytes,
@@ -186,13 +195,10 @@ export async function sealGuardUploadSuite(
         manifestBytes,
         topology,
         samplePayloads,
-        options.hooks,
+        faultCuts,
         signal,
       )
-    })
-    await executionLease.runPrimary('guard upload pre-seal hook', async (signal) => {
-      await options.hooks?.beforeSeal?.(stagePath)
-      signal.throwIfAborted()
+      await applyBeforePublicationFaults(stagePath, faultCuts, signal)
     })
     const completed = await publishOrRecover(
       options.directoryPublisher,
@@ -335,11 +341,7 @@ async function publishOrRecover(
       if (recovered.outcome === 'completed') return recovered
       throw new NativePublisherFailure(recovered.failureCode, 'post-commit verify')
     } catch (recoveryFailure) {
-      throw new AggregateError(
-        [primaryFailure, recoveryFailure],
-        'native artifact publication failed and exact final recovery was not authorized',
-        { cause: recoveryFailure },
-      )
+      throw publicationRecoveryFailure(primaryFailure, recoveryFailure)
     }
   }
   throw primaryFailure
@@ -402,14 +404,124 @@ async function cleanupAfterFailure(
   throw primaryFailure
 }
 
+function publicationRecoveryFailure(
+  primaryFailure: unknown,
+  recoveryFailure: unknown,
+): AggregateError {
+  const failure = new AggregateError(
+    [primaryFailure, recoveryFailure],
+    'native artifact publication failed and exact final recovery was not authorized',
+    { cause: recoveryFailure },
+  )
+  if (
+    containsNativePublisherUnsettledFailure(primaryFailure) ||
+    containsNativePublisherUnsettledFailure(recoveryFailure)
+  ) OWNED_UNSETTLED_PUBLICATION_FAILURES.add(failure)
+  return failure
+}
+
 function containsNativePublisherUnsettledFailure(value: unknown): boolean {
-  if (value instanceof GuardUploadDirectoryPublisherUnsettledError) return true
-  if (value instanceof AggregateError) {
-    return value.errors.some(containsNativePublisherUnsettledFailure)
+  if (isGuardUploadDirectoryPublisherUnsettledError(value)) return true
+  return (typeof value === 'object' || typeof value === 'function') &&
+    value !== null &&
+    OWNED_UNSETTLED_PUBLICATION_FAILURES.has(value)
+}
+
+function canonicalUploadFaultCuts(
+  candidates: readonly GuardUploadFaultCut[] | undefined,
+  samples: readonly GuardUploadSampleInput[],
+): readonly GuardUploadFaultCut[] {
+  if (candidates === undefined) return Object.freeze([])
+  requireDenseDataArray(candidates, 'guard upload fault cuts')
+  if (candidates.length > MAXIMUM_UPLOAD_FAULT_CUTS) {
+    throw new Error('guard upload fault cuts exceed their bounded authority')
   }
-  return value instanceof Error && value.cause !== undefined
-    ? containsNativePublisherUnsettledFailure(value.cause)
-    : false
+  let foreignFileCutSeen = false
+  const targets = new Set<string>()
+  return Object.freeze(candidates.map((candidate) => {
+    requirePlainDataRecord(candidate, 'guard upload fault cut')
+    const keys = Object.keys(candidate).sort(comparePortablePaths)
+    if (candidate.action === 'add-foreign-file-before-publication') {
+      if (keys.join(',') !== 'action' || foreignFileCutSeen) {
+        throw new Error('guard upload foreign-file fault cut shape is invalid or repeated')
+      }
+      foreignFileCutSeen = true
+      return Object.freeze({ action: candidate.action })
+    }
+    if (candidate.action !== 'fail-before-artifact-copy' ||
+        keys.join(',') !== 'action,browser,relativePath,sampleIndex') {
+      throw new Error('guard upload artifact-copy fault cut shape is invalid')
+    }
+    const input = samples.find(({ sample }) =>
+      sample.browser === candidate.browser && sample.sampleIndex === candidate.sampleIndex)
+    if (input === undefined ||
+        !input.sample.artifacts.some(({ relativePath }) => relativePath === candidate.relativePath)) {
+      throw new Error('guard upload artifact-copy fault cut targets no indexed artifact')
+    }
+    const relativePath = requirePortableRelativePath(
+      candidate.relativePath,
+      'guard upload artifact-copy fault path',
+    )
+    const target = `${candidate.browser}/${candidate.sampleIndex}/${relativePath}`
+    if (targets.has(target)) throw new Error('guard upload artifact-copy fault target is repeated')
+    targets.add(target)
+    return Object.freeze({
+      action: candidate.action,
+      browser: candidate.browser,
+      sampleIndex: candidate.sampleIndex,
+      relativePath,
+    })
+  }))
+}
+
+async function applyBeforePublicationFaults(
+  stagePath: string,
+  faultCuts: readonly GuardUploadFaultCut[],
+  signal: AbortSignal,
+): Promise<void> {
+  if (!faultCuts.some(({ action }) => action === 'add-foreign-file-before-publication')) return
+  signal.throwIfAborted()
+  await writeFile(
+    join(stagePath, FOREIGN_STAGING_FAULT_FILENAME),
+    FOREIGN_STAGING_FAULT_BYTES,
+    { encoding: 'utf8', flag: 'wx' },
+  )
+  signal.throwIfAborted()
+}
+
+function hasArtifactCopyFailureCut(
+  faultCuts: readonly GuardUploadFaultCut[],
+  sample: GuardUploadSampleInput['sample'],
+  relativePath: string,
+): boolean {
+  return faultCuts.some((candidate) =>
+    candidate.action === 'fail-before-artifact-copy' &&
+    candidate.browser === sample.browser &&
+    candidate.sampleIndex === sample.sampleIndex &&
+    candidate.relativePath === relativePath)
+}
+
+function requireDenseDataArray(value: readonly unknown[], label: string): void {
+  const keys = Reflect.ownKeys(value)
+  if (keys.some((key) => typeof key !== 'string' ||
+      (key !== 'length' && !/^(?:0|[1-9][0-9]*)$/u.test(key)))) {
+    throw new Error(`${label} contains non-index properties`)
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
+      throw new Error(`${label} must be a dense data array`)
+    }
+  }
+}
+
+function requirePlainDataRecord(value: object, label: string): void {
+  if (Object.getPrototypeOf(value) !== Object.prototype) throw new Error(`${label} must be a plain object`)
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  if (Reflect.ownKeys(value).some((key) => typeof key !== 'string') ||
+      Object.values(descriptors).some((descriptor) => !descriptor.enumerable || !('value' in descriptor))) {
+    throw new Error(`${label} contains hidden or executable properties`)
+  }
 }
 
 async function materializePreparedTree(
@@ -417,7 +529,7 @@ async function materializePreparedTree(
   manifestBytes: Uint8Array,
   topology: CanonicalTopology,
   samples: readonly SamplePayload[],
-  hooks: GuardUploadHooks | undefined,
+  faultCuts: readonly GuardUploadFaultCut[],
   signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted()
@@ -459,13 +571,9 @@ async function materializePreparedTree(
       const segments = artifactPathSegments(artifact.relativePath)
       const sourcePath = join(sourceRoot, ...segments)
       const destinationPath = join(destinationRoot, ...segments)
-      await hooks?.beforeArtifactCopy?.(
-        payload.input.sample,
-        artifact,
-        sourcePath,
-        destinationPath,
-      )
-      signal.throwIfAborted()
+      if (hasArtifactCopyFailureCut(faultCuts, payload.input.sample, artifact.relativePath)) {
+        throw new Error('declarative guard upload artifact-copy failure cut reached')
+      }
       await assertDirectoryAncestry(sourceRoot, segments.slice(0, -1), 'guard artifact source', signal)
       await copyVerifiedArtifact(sourcePath, destinationPath, artifact, signal)
       await assertDirectoryAncestry(sourceRoot, segments.slice(0, -1), 'guard artifact source', signal)

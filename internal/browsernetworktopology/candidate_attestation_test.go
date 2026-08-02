@@ -212,7 +212,7 @@ func TestRuntimeUnsatisfiedOutcomesAreTypedAndCannotCarryProof(t *testing.T) {
 
 func TestExternalFixtureAttestationRequiresPinnedLocalTrust(t *testing.T) {
 	contract, _, _ := loadFixtureContract(t)
-	attestation := satisfiedAttestation(t, contract, "run-real-nat", string(ProfileManualRealNAT))
+	attestation := satisfiedAttestation(t, contract, "run-pinned-trust", string(ProfileScheduledCoturn))
 	tests := []struct {
 		name   string
 		mutate func(*ExternalFixtureTrustProof)
@@ -241,7 +241,7 @@ func TestExternalFixtureAttestationRequiresPinnedLocalTrust(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			value := satisfiedAttestation(t, contract, "run-real-nat", string(ProfileManualRealNAT))
+			value := satisfiedAttestation(t, contract, "run-pinned-trust", string(ProfileScheduledCoturn))
 			test.mutate(&value.Proof.ExternalFixtureTrust)
 			if err := value.Validate(contract); !errors.Is(err, ErrInvalidRuntimeAttestation) {
 				t.Fatalf("external fixture trust proof error = %v", err)
@@ -323,14 +323,14 @@ func TestRuntimeAttestationParserRejectsUnknownAndNoncanonicalJSON(t *testing.T)
 	if _, err := ParseRuntimeAttestation(nestedUnknown, contract); !errors.Is(err, ErrInvalidRuntimeAttestation) {
 		t.Fatalf("nested unknown field error = %v", err)
 	}
-	v1Schema := []byte(strings.Replace(
+	withdrawnSchema := []byte(strings.Replace(
 		string(encoded),
+		RuntimeAttestationSchemaVersion,
 		"windshare.browser-network-matrix.runtime-attestation/v2",
-		"windshare.browser-network-matrix.runtime-attestation/v1",
 		1,
 	))
-	if _, err := ParseRuntimeAttestation(v1Schema, contract); !errors.Is(err, ErrInvalidRuntimeAttestation) {
-		t.Fatalf("withdrawn v1 schema error = %v", err)
+	if _, err := ParseRuntimeAttestation(withdrawnSchema, contract); !errors.Is(err, ErrInvalidRuntimeAttestation) {
+		t.Fatalf("withdrawn schema error = %v", err)
 	}
 	if _, err := ParseRuntimeAttestation(encoded[:len(encoded)-1], contract); !errors.Is(err, ErrNonCanonicalJSON) {
 		t.Fatalf("noncanonical error = %v", err)
@@ -371,10 +371,10 @@ func TestExternalFixtureProofMatchesSharedDeterministicVector(t *testing.T) {
 		network       string
 		remote        string
 	}{
-		attestation:   "f4b56fb2e08f51cf093c2c9434efad56dbc1b0947fcac052ff341dad98e340eb",
-		signature:     "BKA8IGeUz3jN89uID_pQ__nKlyy-TA1A30EEhc850BrOkJJDze6t7Z1x0f6xIaHARnYXom2yWhkHDprUgNBQBg",
-		configuration: "a47097e146d4f7f129430374a37ad8763cdc109c4a020669a4d991ff47fad696",
-		network:       "e41c6ad7acaceeb8ee1840404099045d6e14fea55d220aaa32227bf686c8ef9f",
+		attestation:   "b71dbabae7a394bbef14ea3c8462dfefcfca9cc353276c3865c2801de1940de8",
+		signature:     "OPNFKGuEMYoX4r-VpvwBkKxLq-kRkSOzpHj9BgiDp2W13oUHmOTINS8k1KLxvDgPpAfUcezW0C9_aXL0hkzoBg",
+		configuration: "4a4fc5114942b1ddbb68919cf1845797f009be7444a8b129428a3603be5d311e",
+		network:       "a1dae21111d1b5a6d556e42e509f10011816eff58643e81d7bfc6ec806f9476f",
 		remote:        "faffe144e5f48beee5904adf6b76e09364819b2f933b4dc5e16e230211e93a76",
 	}
 	if proof.AttestationPublicKeySPKI != testFixtureAttestationPublicKeySPKI ||

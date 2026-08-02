@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
-import { EventEmitter } from 'node:events'
 import {
   existsSync,
   mkdirSync,
@@ -19,12 +19,9 @@ import {
   createBootstrapProcessOwnerAuthority,
 } from '../../orchestrator.mjs'
 import {
-  BOOTSTRAP_BUILD_RECEIPT_SCHEMA_VERSION,
-  assertBootstrapBuildOutput,
-  goModuleDownloadClosure,
-  runSealedBootstrapProcess,
-} from '../../process/bootstrap-build-authority.mjs'
-import { resolveHostExecutable } from '../../process/runtime-command-owner.mjs'
+  RUNTIME_COMMAND_TRACE_SCHEMA_VERSION,
+  resolveHostExecutable,
+} from '../../process/runtime-command-owner.mjs'
 import {
   GENERATED_SEMANTIC_ALLOWED_EXTERNAL_IMPORTS,
   GENERATED_SEMANTIC_DIGEST,
@@ -43,6 +40,7 @@ import {
   loadBrowsergateRuntime,
 } from '../../runtime-build.mjs'
 import { readPinnedNodeVersion } from '../../../node-version.mjs'
+import { createOwnedTraceJournal } from '../../owned-trace-journal.mjs'
 
 const root = resolve(import.meta.dirname, '..', '..', '..', '..', '..')
 const GENERATED_SEMANTIC_ARTIFACT_PATH = join(
@@ -60,28 +58,24 @@ const SELF_CHECK_BY_KIND = Object.freeze({
     '{"schemaVersion":"windshare.artifact-publisher/v2","outcome":"ready"}\n',
   'pion-server':
     '{"schemaVersion":1,"component":"pion-browser-interop-server","outcome":"ready"}\n',
-  'windows-job':
-    '{"schemaVersion":1,"component":"browser-evidence-windows-job","outcome":"ready"}\n',
-  'linux-process-owner':
-    '{"schemaVersion":1,"component":"browser-evidence-linux-process-owner","outcome":"ready"}\n',
+  'test-process-owner':
+    '{"schema_version":"windshare.process-owner-self-check/v1","component":"testprocessowner","milestone":"self_check","outcome":"ready"}\n',
 })
 
-verifyWindowsNativeExecutableAuthority()
-verifyBootstrapBuildOutputContract()
-await verifyBootstrapFailureDiagnostics()
+verifyWindowsNativeExecutableResolution()
 await exactOwnedExecutionCounts()
 await generatedSemanticFailureMatrixStopsNativeBuilds()
 await hostileGeneratedSemanticFailuresSettleOnce()
-await manifestAuthorityRejectsPlatformAndRelativePath()
-await sampleCommandManifestPinsAmbientAndFileAuthority()
+await hostileRuntimeCommandBoundariesSettleExactlyOnce()
+await manifestRejectsPlatformAndRelativePath()
+await sampleCommandManifestSelectsEnvironmentAndDynamicPaths()
 await buildEvidenceMustProveTreeEmpty()
 await preflightMustProveEmptyStderr()
 await clippedOwnershipLeaseNeverLaunches()
 await bootstrapClosesAfterRuntimeBuildFailure()
 await bootstrapFailureRemovesItsPrivateRoot()
-await bootstrapReceiptCannotClaimTreeEvidence()
 
-function verifyWindowsNativeExecutableAuthority() {
+function verifyWindowsNativeExecutableResolution() {
   const commandRoot = mkdtempSync(resolve(tmpdir(), 'windshare-host-executable-'))
   try {
     writeFileSync(resolve(commandRoot, 'pnpm.cmd'), '@exit /b 0\r\n')
@@ -91,7 +85,7 @@ function verifyWindowsNativeExecutableAuthority() {
         environment: { Path: commandRoot },
       }),
       /cannot resolve host executable pnpm/u,
-      'a shell command shim must not become native process authority',
+      'a shell command shim must not resolve as a native process executable',
     )
 
     const nativeExecutable = resolve(commandRoot, 'pnpm.exe')
@@ -106,180 +100,6 @@ function verifyWindowsNativeExecutableAuthority() {
     )
   } finally {
     rmSync(commandRoot, { recursive: true, force: true })
-  }
-}
-
-function verifyBootstrapBuildOutputContract() {
-  const allowed = goModuleDownloadClosure([
-    'example.com/dependency v1.2.3 h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
-    'example.com/dependency v1.2.3/go.mod h1:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=',
-    'example.com/transitive/module v0.0.0-20260101000000-abcdef123456 h1:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=',
-    '',
-  ].join('\n'))
-  assert.deepEqual(allowed, [
-    'example.com/dependency v1.2.3',
-    'example.com/transitive/module v0.0.0-20260101000000-abcdef123456',
-  ])
-  assert.doesNotThrow(() => assertBootstrapBuildOutput({
-    stdout: '',
-    stderr: 'go: downloading example.com/dependency v1.2.3\n',
-  }, allowed))
-  for (const stderr of [
-    'go: downloading example.com/unknown v1.2.3\n',
-    'go: downloading ../dependency v1.2.3\n',
-    'go: downloading example.com/dependency v1.2.3\u001b[31m\n',
-    'go: downloading example.com/dependency v1.2.3\ncompiler warning\n',
-    'go: downloading example.com/dependency v1.2.3',
-  ]) {
-    assert.throws(
-      () => assertBootstrapBuildOutput({ stdout: '', stderr }, allowed),
-      /unexpected output/u,
-    )
-  }
-  assert.throws(
-    () => assertBootstrapBuildOutput({ stdout: 'unexpected\n', stderr: '' }, allowed),
-    /unexpected output/u,
-  )
-}
-
-async function verifyBootstrapFailureDiagnostics() {
-  const successful = await runSealedBootstrapProcess(bootstrapFixture({
-    operation: 'bootstrap-test-success',
-    recipeIdentity: 'windshare.bootstrap-test/success/v1',
-    stdout: 'success stdout\n',
-    stderr: 'success stderr\n',
-  }))
-  assert.deepEqual(successful, {
-    stdout: 'success stdout\n',
-    stderr: 'success stderr\n',
-  }, 'valid bounded output from exit zero retains its established success contract')
-
-  const argumentSecret = 'bootstrap-argument-secret-must-not-leak'
-  const environmentSecret = 'bootstrap-environment-secret-must-not-leak'
-  const nonzero = await captureBootstrapFailure(bootstrapFixture({
-    operation: 'bootstrap-test-nonzero',
-    recipeIdentity: 'windshare.bootstrap-test/nonzero/v1',
-    stdout: 'bounded stdout\n',
-    stderr: 'bounded stderr\n',
-    exitCode: 7,
-    extraArguments: [argumentSecret],
-    environment: { WINDSHARE_BOOTSTRAP_TEST_SECRET: environmentSecret },
-  }))
-  const nonzeroDiagnostic = parseBootstrapFailure(nonzero)
-  assert.equal(nonzeroDiagnostic.operation, 'bootstrap-test-nonzero')
-  assert.equal(nonzeroDiagnostic.recipeIdentity, 'windshare.bootstrap-test/nonzero/v1')
-  assert.deepEqual(nonzeroDiagnostic.failureReasons, ['terminal-not-successful'])
-  assert.deepEqual(nonzeroDiagnostic.process, {
-    terminal: 'exited',
-    exitCode: 7,
-    timedOut: false,
-  })
-  assert.deepEqual(nonzeroDiagnostic.stdout, expectedTextDiagnostic('bounded stdout\n'))
-  assert.deepEqual(nonzeroDiagnostic.stderr, expectedTextDiagnostic('bounded stderr\n'))
-  assert.equal(nonzero.message.includes(argumentSecret), false)
-  assert.equal(nonzero.message.includes(environmentSecret), false)
-
-  const oversizedByteLength = 1_048_577
-  const oversized = await captureBootstrapFailure(bootstrapFixture({
-    operation: 'bootstrap-test-oversized',
-    recipeIdentity: 'windshare.bootstrap-test/oversized/v1',
-    stdout: Buffer.alloc(oversizedByteLength, 97),
-  }))
-  const oversizedDiagnostic = parseBootstrapFailure(oversized)
-  assert.deepEqual(oversizedDiagnostic.failureReasons, ['stdout-byte-limit-exceeded'])
-  assert.deepEqual(oversizedDiagnostic.process, {
-    terminal: 'exited',
-    exitCode: 0,
-    timedOut: false,
-  })
-  assert.equal(oversizedDiagnostic.stdout.observedByteLength, oversizedByteLength)
-  assert.equal(oversizedDiagnostic.stdout.capturedByteLength, 1_048_576)
-  assert.equal(oversizedDiagnostic.stdout.truncated, true)
-  assert.equal(oversizedDiagnostic.stdout.sha256, sha256(Buffer.alloc(oversizedByteLength, 97)))
-  assert.equal(oversizedDiagnostic.stdout.utf8, 'valid')
-  assert.equal(oversizedDiagnostic.stdout.preview, 'a'.repeat(512))
-  assert.equal(oversizedDiagnostic.stdout.previewTruncated, true)
-
-  const invalidBytes = Buffer.from([0xff, 0xfe, 0xfd])
-  const invalidUtf8 = await captureBootstrapFailure(bootstrapFixture({
-    operation: 'bootstrap-test-invalid-utf8',
-    recipeIdentity: 'windshare.bootstrap-test/invalid-utf8/v1',
-    stdout: invalidBytes,
-  }))
-  const invalidDiagnostic = parseBootstrapFailure(invalidUtf8)
-  assert.deepEqual(invalidDiagnostic.failureReasons, ['stdout-invalid-utf8'])
-  assert.equal(invalidDiagnostic.stdout.observedByteLength, invalidBytes.byteLength)
-  assert.equal(invalidDiagnostic.stdout.capturedByteLength, invalidBytes.byteLength)
-  assert.equal(invalidDiagnostic.stdout.truncated, false)
-  assert.equal(invalidDiagnostic.stdout.sha256, sha256(invalidBytes))
-  assert.equal(invalidDiagnostic.stdout.utf8, 'invalid')
-  assert.equal('preview' in invalidDiagnostic.stdout, false)
-  assert.equal('previewTruncated' in invalidDiagnostic.stdout, false)
-}
-
-function bootstrapFixture({
-  operation,
-  recipeIdentity,
-  stdout = Buffer.alloc(0),
-  stderr = Buffer.alloc(0),
-  exitCode = 0,
-  extraArguments = [],
-  environment = {},
-}) {
-  const stdoutBytes = Buffer.from(stdout)
-  const stderrBytes = Buffer.from(stderr)
-  // The contract exercises collection and settlement without competing with the
-  // gate's own process authority, which is the behavior under test elsewhere.
-  const spawnProcess = () => {
-    const child = new EventEmitter()
-    child.stdout = new EventEmitter()
-    child.stderr = new EventEmitter()
-    child.kill = () => true
-    queueMicrotask(() => {
-      if (stdoutBytes.byteLength > 0) child.stdout.emit('data', stdoutBytes)
-      if (stderrBytes.byteLength > 0) child.stderr.emit('data', stderrBytes)
-      child.emit('close', exitCode, null)
-    })
-    return child
-  }
-  return Object.freeze({
-    executable: process.execPath,
-    arguments: Object.freeze(['sealed-bootstrap-fixture', ...extraArguments]),
-    cwd: root,
-    environment: Object.freeze(environment),
-    deadlineMs: 10_000,
-    operation,
-    recipeIdentity,
-    spawnProcess,
-  })
-}
-
-async function captureBootstrapFailure(request) {
-  let failure
-  try {
-    await runSealedBootstrapProcess(request)
-  } catch (cause) {
-    failure = cause
-  }
-  assert(failure instanceof Error, 'bootstrap fixture must reject')
-  return failure
-}
-
-function parseBootstrapFailure(failure) {
-  const prefix = 'bootstrap sealed process failed: '
-  assert(failure.message.startsWith(prefix))
-  return JSON.parse(failure.message.slice(prefix.length))
-}
-
-function expectedTextDiagnostic(text) {
-  return {
-    observedByteLength: Buffer.byteLength(text),
-    capturedByteLength: Buffer.byteLength(text),
-    truncated: false,
-    sha256: sha256(Buffer.from(text, 'utf8')),
-    utf8: 'valid',
-    preview: text,
-    previewTruncated: false,
   }
 }
 
@@ -320,12 +140,23 @@ function mutateGeneratedSemanticRecord(record, changes) {
   return JSON.stringify({ ...value, ...changes }) + '\n'
 }
 
+async function captureRuntimeFailure(operation, pattern, label = 'runtime failure') {
+  try {
+    await operation()
+  } catch (cause) {
+    assert(cause instanceof Error, label)
+    assert.match(cause.message, pattern, label)
+    assert.notEqual(cause.generatedSemanticTraces, undefined, label)
+    return cause
+  }
+  assert.fail(`${label} did not reject`)
+}
+
 async function exactOwnedExecutionCounts() {
   const outputParent = mkdtempSync(join(tmpdir(), 'windshare-runtime-counts-'))
   const calls = []
   let resolveCount = 0
   const bootstrapEvents = []
-  const generatedSemanticEvents = []
   try {
     const runtime = await buildInvocationRuntime({
       suites: ['main', 'pion'],
@@ -345,42 +176,48 @@ async function exactOwnedExecutionCounts() {
       deadlineAuthority: fullLeaseAuthority(),
       buildLeaseId: 'runtime/batch-build',
       preflightLeaseId: 'runtime/manifest-preflight',
-      executeOwnedCommand: async (request) => {
+      executeOwnedCommand: (request) => {
         calls.push(request)
         if (request.operationId === GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID) {
-          request.trace({
-            milestone: 'runtime-command-started',
-            context: { operationId: request.operationId },
-          })
-          return successfulExecution(successfulGeneratedSemanticRecord())
+          return runtimeCommandChannel(
+            successfulExecution(successfulGeneratedSemanticRecord()),
+            request.operationId,
+            request.platform,
+          )
         }
         if (request.operationId.startsWith('browser-runtime-build-')) {
           const outputIndex = request.command.arguments.indexOf('-o')
           assert.notEqual(outputIndex, -1)
           writeFileSync(request.command.arguments[outputIndex + 1], request.operationId, { flag: 'wx' })
-          return successfulExecution('')
+          return runtimeCommandChannel(successfulExecution(''), request.operationId, request.platform)
         }
         const kind = request.operationId.slice('browser-runtime-preflight-'.length)
-        return successfulExecution(SELF_CHECK_BY_KIND[kind])
+        return runtimeCommandChannel(
+          successfulExecution(SELF_CHECK_BY_KIND[kind]),
+          request.operationId,
+          request.platform,
+        )
       },
-      trace: () => { throw new Error('hostile trace sink') },
-      generatedSemanticTrace: (event) => generatedSemanticEvents.push(event),
     })
+    const generatedSemanticEvents = runtime.generatedSemanticTraces.events
     assert.equal(resolveCount, 1)
     assert.deepEqual(runtime.manifest.artifacts.map(({ kind }) => kind), [
-      'windows-job',
+      'test-process-owner',
       'topology-materializer',
       'artifact-publisher',
       'pion-server',
     ])
+    const processOwnerCapability = runtime.artifactCapability('test-process-owner')
+    assert.deepEqual(Object.keys(processOwnerCapability), ['path'])
+    assert.equal(
+      processOwnerCapability.path,
+      runtime.manifest.artifacts.find(({ kind }) => kind === 'test-process-owner').path,
+    )
     assert.equal(calls.length, 9)
     assert.equal(calls.filter(({ operationId }) => operationId.includes('generated-semantic')).length, 1)
     assert.equal(calls.filter(({ operationId }) => operationId.includes('-build-')).length, 4)
     assert.equal(calls.filter(({ operationId }) => operationId.includes('-preflight-')).length, 4)
-    const nodeBytes = readFileSync(process.execPath)
     assert.equal(calls[0].command.executable, process.execPath)
-    assert.equal(calls[0].command.executableByteLength, nodeBytes.byteLength)
-    assert.equal(calls[0].command.executableSha256, sha256(nodeBytes))
     assert.deepEqual(calls[0].inheritedEnvironment, {
       NODE_ENV: 'production',
       TZ: 'UTC',
@@ -392,10 +229,11 @@ async function exactOwnedExecutionCounts() {
       SystemRoot: 'C:\\Windows',
       WINDIR: 'C:\\Windows',
     })
-    assert.equal(calls[0].windowsJobHelper.path, process.execPath)
-    assert.equal(calls[1].windowsJobHelper.path, process.execPath)
-    assert.equal(calls[2].windowsJobHelper.kind, 'windows-job')
-    assert(calls.slice(2).every(({ windowsJobHelper }) => windowsJobHelper?.kind === 'windows-job'))
+    assert.equal(calls[0].processOwner.path, process.execPath)
+    assert.equal(calls[1].processOwner.path, process.execPath)
+    for (const { processOwner } of calls) {
+      assert.deepEqual(Object.keys(processOwner), ['path'])
+    }
     assert.deepEqual(
       generatedSemanticEvents.map(({ operationId, milestone }) => ({ operationId, milestone })),
       [
@@ -414,14 +252,14 @@ async function exactOwnedExecutionCounts() {
       expectedGeneratedSemanticArtifact().sha256,
     )
     assert.equal(generatedSemanticEvents[2].context.outcome, 'current')
+    assert.equal(generatedSemanticEvents[2].context.cleanupOutcome, 'completed')
+    assert.equal(generatedSemanticEvents[2].context.treeEmpty, true)
     assert(Number.isSafeInteger(generatedSemanticEvents[2].context.elapsedMs))
     assert.deepEqual(bootstrapEvents, ['assert-live', 'assert-live', 'close'])
     const manifestPath = runtime.manifestPath
-    const manifestSha256 = runtime.manifestSha256
     runtime.dispose()
     const cleanup = disposeBrowsergateRuntime({
       manifestPath,
-      manifestSha256,
       expectedPlatform: 'win32',
     })
     assert.equal(existsSync(cleanup.runtimeRoot), false)
@@ -489,7 +327,6 @@ async function generatedSemanticFailureMatrixStopsNativeBuilds() {
     ))],
     ['spawn-failure', () => Object.freeze({
       ...successfulExecution(successfulRecord),
-      launched: false,
       treeEmpty: false,
       processEvidence: Object.freeze({
         terminal: 'spawn-failed',
@@ -499,7 +336,10 @@ async function generatedSemanticFailureMatrixStopsNativeBuilds() {
     })],
     ['deadline-failure', () => Object.freeze({
       ...successfulExecution(successfulRecord),
-      timedOut: true,
+      ownershipEvidence: Object.freeze({
+        ...successfulExecution(successfulRecord).ownershipEvidence,
+        terminationReason: 'deadline',
+      }),
     })],
     ['tree-settlement-failure', () => Object.freeze({
       ...successfulExecution(successfulRecord),
@@ -524,10 +364,9 @@ async function generatedSemanticFailureMatrixStopsNativeBuilds() {
   for (const [name, execution] of cases) {
     const outputParent = mkdtempSync(join(tmpdir(), `windshare-semantic-${name}-`))
     const operations = []
-    const events = []
     let nativeBuildCount = 0
     try {
-      await assert.rejects(
+      const failure = await captureRuntimeFailure(
         () => buildInvocationRuntime({
           suites: ['main'],
           platform: 'linux',
@@ -546,7 +385,7 @@ async function generatedSemanticFailureMatrixStopsNativeBuilds() {
             if (path === GENERATED_SEMANTIC_ARTIFACT_PATH) return artifactAuthority
             throw new Error(`unexpected runtime file authentication request ${path}`)
           },
-          executeOwnedCommand: async (request) => {
+          executeOwnedCommand: (request) => {
             operations.push(request.operationId)
             if (request.operationId === GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID) {
               assert.deepEqual(request.inheritedEnvironment, {
@@ -558,20 +397,16 @@ async function generatedSemanticFailureMatrixStopsNativeBuilds() {
                 TMP: dirname(process.execPath),
                 TEMP: dirname(process.execPath),
               })
-              request.trace({
-                milestone: 'runtime-command-tree-empty',
-                context: { operationId: request.operationId },
-              })
-              return execution()
+              return runtimeCommandChannel(execution(), request.operationId, request.platform)
             }
             nativeBuildCount += 1
-            return successfulExecution('')
+            return runtimeCommandChannel(successfulExecution(''), request.operationId, request.platform)
           },
-          generatedSemanticTrace: (event) => events.push(event),
         }),
         /generated semantic verifier failed before runtime batch build/u,
         name,
       )
+      const events = failure.generatedSemanticTraces.events
       assert.deepEqual(operations, [GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID], name)
       assert.equal(nativeBuildCount, 0, name)
       assert.deepEqual(events.map(({ operationId, milestone }) => ({ operationId, milestone })), [
@@ -580,11 +415,32 @@ async function generatedSemanticFailureMatrixStopsNativeBuilds() {
       ], name)
       assert.equal(events[1].context.mode, 'verify', name)
       assert.equal(events[1].context.outcome, 'failed', name)
+      const expectedExecution = execution()
+      const ownershipSettled = expectedExecution.treeEmpty === true &&
+        expectedExecution.cleanupOutcome === 'completed'
+      assert.equal(
+        events[1].context.cleanupOutcome,
+        ownershipSettled ? expectedExecution.cleanupOutcome : 'not-observed',
+        name,
+      )
+      assert.equal(events[1].context.treeEmpty, ownershipSettled && expectedExecution.treeEmpty, name)
       assert.equal(typeof events[1].context.failureCode, 'string', name)
       assert(Number.isSafeInteger(events[1].context.elapsedMs), name)
+      if (name === 'malformed-record') {
+        const outputEvidence = events[1].context.outputEvidence
+        assert.equal(outputEvidence.stdout.stream, 'stdout')
+        assert.equal(outputEvidence.stderr.stream, 'stderr')
+        assert.deepEqual(outputEvidence.stdout.segments.map(({ sequence, offset }) => ({ sequence, offset })), [
+          { sequence: 0, offset: 0 },
+        ])
+        assert.equal(
+          Buffer.from(outputEvidence.stdout.segments[0].base64, 'base64').toString('utf8'),
+          '{not-json}\n',
+        )
+      }
       if (name === 'typed-failure') {
         assert.equal(events[1].context.failureCode, 'reported-failure')
-        assert.deepEqual(events[1].context.failures, [{
+        assert.deepEqual(JSON.parse(JSON.stringify(events[1].context.failures)), [{
           kind: 'stale-output',
           code: 'committed-artifact-stale',
           message: 'generated final semantic reducer is stale',
@@ -597,10 +453,9 @@ async function generatedSemanticFailureMatrixStopsNativeBuilds() {
   }
 
   const outputParent = mkdtempSync(join(tmpdir(), 'windshare-semantic-bootstrap-owner-failure-'))
-  const events = []
   let launchCount = 0
   try {
-    await assert.rejects(() => buildInvocationRuntime({
+    const failure = await captureRuntimeFailure(() => buildInvocationRuntime({
       suites: ['main'],
       platform: 'linux',
       outputParent,
@@ -610,18 +465,20 @@ async function generatedSemanticFailureMatrixStopsNativeBuilds() {
       deadlineAuthority: fullLeaseAuthority(),
       buildLeaseId: 'runtime/batch-build',
       preflightLeaseId: 'runtime/manifest-preflight',
-      executeOwnedCommand: async () => {
+      executeOwnedCommand: () => {
         launchCount += 1
         return successfulExecution(successfulRecord)
       },
-      generatedSemanticTrace: (event) => events.push(event),
     }), /generated semantic verifier failed before runtime batch build/u)
+    const events = failure.generatedSemanticTraces.events
     assert.equal(launchCount, 0)
     assert.deepEqual(events.map(({ operationId, milestone }) => ({ operationId, milestone })), [
       { operationId: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID, milestone: 'started' },
       { operationId: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID, milestone: 'settled' },
     ])
     assert.equal(events[1].context.failureCode, 'unexpected-preflight-failure')
+    assert.equal(events[1].context.cleanupOutcome, 'not-observed')
+    assert.equal(events[1].context.treeEmpty, false)
     assert.deepEqual(readdirSync(outputParent), [])
   } finally {
     rmSync(outputParent, { recursive: true, force: true })
@@ -634,10 +491,9 @@ async function hostileGeneratedSemanticFailuresSettleOnce() {
     ['prototype-proxy', hostileProxyCause()],
   ]) {
     const outputParent = mkdtempSync(join(tmpdir(), `windshare-semantic-hostile-${name}-`))
-    const events = []
     let launchCount = 0
     try {
-      await assert.rejects(() => buildInvocationRuntime({
+      const failure = await captureRuntimeFailure(() => buildInvocationRuntime({
         suites: ['main'],
         platform: 'linux',
         outputParent,
@@ -647,12 +503,12 @@ async function hostileGeneratedSemanticFailuresSettleOnce() {
         deadlineAuthority: fullLeaseAuthority(),
         buildLeaseId: 'runtime/batch-build',
         preflightLeaseId: 'runtime/manifest-preflight',
-        executeOwnedCommand: async () => {
+        executeOwnedCommand: () => {
           launchCount += 1
           throw new Error('hostile bootstrap failure must not launch a verifier')
         },
-        generatedSemanticTrace: (event) => events.push(event),
       }), /generated semantic verifier failed before runtime batch build/u)
+      const events = failure.generatedSemanticTraces.events
       assert.equal(launchCount, 0, name)
       assert.deepEqual(events.map(({ operationId, milestone }) => ({ operationId, milestone })), [
         { operationId: GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID, milestone: 'started' },
@@ -671,17 +527,150 @@ async function hostileGeneratedSemanticFailuresSettleOnce() {
   }
 }
 
-async function manifestAuthorityRejectsPlatformAndRelativePath() {
+async function hostileRuntimeCommandBoundariesSettleExactlyOnce() {
+  let rejectionTraceGetterCalls = 0
+  let fulfilledEvidenceGetterCalls = 0
+  const decoratedRejection = new Error('injected owner rejection')
+  const retainedOperationTraces = Object.freeze({ retained: true })
+  Object.defineProperty(decoratedRejection, 'operationTraces', {
+    value: retainedOperationTraces,
+    enumerable: true,
+    configurable: false,
+    writable: false,
+  })
+  Object.defineProperty(decoratedRejection, 'traces', {
+    get() {
+      rejectionTraceGetterCalls += 1
+      throw new Error('arbitrary rejection trace getter executed')
+    },
+    enumerable: true,
+    configurable: false,
+  })
+
+  const { proxy: revokedRejection, revoke } = Proxy.revocable(new Error('hidden'), {})
+  revoke()
+  const fulfilledBase = successfulExecution(successfulGeneratedSemanticRecord(), 'linux')
+  const fulfilledSettlement = runtimeCommandSettlement(fulfilledBase)
+  const hostileFulfilled = { ...fulfilledBase }
+  Object.defineProperty(hostileFulfilled, 'ownershipEvidence', {
+    get() {
+      fulfilledEvidenceGetterCalls += 1
+      throw new Error('fulfilled ownership evidence getter executed')
+    },
+    enumerable: true,
+    configurable: false,
+  })
+
+  const cases = [
+    Object.freeze({
+      name: 'synchronous-revoked-rejection',
+      expectedFailureKind: 'runtime-command-contract-failed',
+      expectedRuntimeOutcome: null,
+      executeOwnedCommand() {
+        throw revokedRejection
+      },
+    }),
+    Object.freeze({
+      name: 'decorated-result-rejection',
+      expectedFailureKind: 'runtime-command-failed',
+      expectedRuntimeOutcome: 'execution-rejected',
+      executeOwnedCommand(request) {
+        const traces = runtimeCommandTraceFixture({
+          operationId: request.operationId,
+          platform: request.platform,
+          outcomeCode: 'execution-rejected',
+          settlement: emptyRuntimeCommandSettlement(),
+        })
+        return Object.freeze({
+          result: Promise.reject(decoratedRejection),
+          traces: Object.freeze({ snapshot: () => traces }),
+        })
+      },
+    }),
+    Object.freeze({
+      name: 'fulfilled-nonconfig-accessor',
+      expectedFailureKind: 'runtime-command-contract-failed',
+      expectedRuntimeOutcome: 'succeeded',
+      executeOwnedCommand(request) {
+        const traces = runtimeCommandTraceFixture({
+          operationId: request.operationId,
+          platform: request.platform,
+          outcomeCode: 'succeeded',
+          settlement: fulfilledSettlement,
+        })
+        return Object.freeze({
+          result: Promise.resolve(hostileFulfilled),
+          traces: Object.freeze({ snapshot: () => traces }),
+        })
+      },
+    }),
+  ]
+
+  for (const testCase of cases) {
+    const outputParent = mkdtempSync(join(tmpdir(), `windshare-runtime-hostile-${testCase.name}-`))
+    try {
+      const failure = await captureRuntimeFailure(() => buildInvocationRuntime({
+        suites: ['main'],
+        platform: 'linux',
+        outputParent,
+        inheritedEnvironment: Object.freeze({ PATH: '/ambient/not-authority' }),
+        resolveExecutable: () => process.execPath,
+        createBootstrapOwner: async () => fakeBootstrapOwner('linux'),
+        deadlineAuthority: fullLeaseAuthority(),
+        buildLeaseId: 'runtime/batch-build',
+        preflightLeaseId: 'runtime/manifest-preflight',
+        executeOwnedCommand: testCase.executeOwnedCommand,
+      }), /generated semantic verifier failed before runtime batch build/u, testCase.name)
+      const ownedFailure = failure.cause.cause
+      assert(ownedFailure instanceof Error, testCase.name)
+      assert.equal(ownedFailure.message, 'owned runtime operation failed', testCase.name)
+      assert.deepEqual(
+        ownedFailure.operationTraces.events.map(({ milestone }) => milestone),
+        ['started', 'failed'],
+        testCase.name,
+      )
+      assert.equal(ownedFailure.operationTraces.events.length, 2, testCase.name)
+      assert.equal(ownedFailure.operationTraces.completed, true, testCase.name)
+      assert.equal(
+        ownedFailure.operationTraces.events.at(-1).context.failureKind,
+        testCase.expectedFailureKind,
+        testCase.name,
+      )
+      assert.equal(
+        Object.getOwnPropertyDescriptor(ownedFailure, 'operationTraces').configurable,
+        false,
+        testCase.name,
+      )
+      if (testCase.expectedRuntimeOutcome === null) {
+        assert.equal(ownedFailure.runtimeCommandTraces, null, testCase.name)
+      } else {
+        assert.equal(ownedFailure.runtimeCommandTraces.events.length, 2, testCase.name)
+        assert.equal(
+          ownedFailure.runtimeCommandTraces.events.at(-1).outcomeCode,
+          testCase.expectedRuntimeOutcome,
+          testCase.name,
+        )
+      }
+      assert.deepEqual(readdirSync(outputParent), [], testCase.name)
+    } finally {
+      rmSync(outputParent, { recursive: true, force: true })
+    }
+  }
+
+  assert.equal(decoratedRejection.operationTraces, retainedOperationTraces)
+  assert.equal(rejectionTraceGetterCalls, 0)
+  assert.equal(fulfilledEvidenceGetterCalls, 0)
+}
+
+async function manifestRejectsPlatformAndRelativePath() {
   const fixture = await buildFixture('linux')
   try {
     assert.throws(() => loadBrowsergateRuntime({
       manifestPath: fixture.runtime.manifestPath,
-      manifestSha256: fixture.runtime.manifestSha256,
       expectedPlatform: 'win32',
     }), /platform differs/u)
     assert.throws(() => loadBrowsergateRuntime({
       manifestPath: basename(fixture.runtime.manifestPath),
-      manifestSha256: fixture.runtime.manifestSha256,
       expectedPlatform: 'linux',
     }), /absolute and canonical/u)
   } finally {
@@ -690,7 +679,7 @@ async function manifestAuthorityRejectsPlatformAndRelativePath() {
   }
 }
 
-async function sampleCommandManifestPinsAmbientAndFileAuthority() {
+async function sampleCommandManifestSelectsEnvironmentAndDynamicPaths() {
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'windshare-runtime-command-'))
   const repositoryRoot = join(fixtureRoot, 'repository')
   const outputParent = join(fixtureRoot, 'runtime')
@@ -709,12 +698,20 @@ async function sampleCommandManifestPinsAmbientAndFileAuthority() {
     'test',
     'cli.js',
   )
+  const playwrightRunner = join(
+    repositoryRoot,
+    'web',
+    'scripts',
+    'browser-evidence',
+    'playwright-owned-runner.mjs',
+  )
   const nodeExecutable = join(fixtureRoot, 'node.exe')
   mkdirSync(join(driverSource, '..'), { recursive: true })
   mkdirSync(join(playwrightCli, '..'), { recursive: true })
   mkdirSync(outputParent, { recursive: true })
   writeFileSync(driverSource, 'sample driver capability')
   writeFileSync(playwrightCli, 'playwright capability')
+  writeFileSync(playwrightRunner, 'playwright runner capability')
   writeFileSync(nodeExecutable, 'node capability')
   let runtime
   const previousPath = process.env.PATH
@@ -726,7 +723,7 @@ async function sampleCommandManifestPinsAmbientAndFileAuthority() {
       outputParent,
       nodeExecutable,
       inheritedEnvironment: Object.freeze({
-        PATH: '/manifest/pinned/bin',
+        PATH: '/manifest/selected/bin',
         GITHUB_TOKEN: 'ambient-credential-must-not-enter-manifest',
       }),
       executeBuild: async ({ outputPath }) => {
@@ -737,18 +734,18 @@ async function sampleCommandManifestPinsAmbientAndFileAuthority() {
         successfulExecution(SELF_CHECK_BY_KIND[kind], 'linux'),
     })
     assert.deepEqual(runtime.sampleCommandCapability().environment, {
-      PATH: '/manifest/pinned/bin',
+      PATH: '/manifest/selected/bin',
     })
     process.env.PATH = '/ambient/changed/after-build'
     assert.deepEqual(runtime.sampleCommandCapability().environment, {
-      PATH: '/manifest/pinned/bin',
+      PATH: '/manifest/selected/bin',
     })
 
     writeFileSync(driverSource, 'tampered sample driver capability')
-    assert.throws(
-      () => runtime.sampleCommandCapability(),
-      /driverSource differs from its runtime manifest capability/u,
-      'a post-build command source mutation must fail before launch or guard acceptance',
+    assert.equal(
+      runtime.sampleCommandCapability().driverSource,
+      driverSource,
+      'current-worktree helper sources remain ordinary dynamic test inputs',
     )
   } finally {
     if (previousPath === undefined) delete process.env.PATH
@@ -821,7 +818,7 @@ async function clippedOwnershipLeaseNeverLaunches() {
       }),
       buildLeaseId: 'runtime/batch-build',
       preflightLeaseId: 'runtime/manifest-preflight',
-      executeOwnedCommand: async () => {
+      executeOwnedCommand: () => {
         launchCount += 1
         return successfulExecution('')
       },
@@ -854,16 +851,20 @@ async function bootstrapClosesAfterRuntimeBuildFailure() {
       deadlineAuthority: fullLeaseAuthority(),
       buildLeaseId: 'runtime/batch-build',
       preflightLeaseId: 'runtime/manifest-preflight',
-      executeOwnedCommand: async (request) => {
+      executeOwnedCommand: (request) => {
         if (request.operationId === GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID) {
-          return successfulExecution(successfulGeneratedSemanticRecord())
+          return runtimeCommandChannel(
+            successfulExecution(successfulGeneratedSemanticRecord()),
+            request.operationId,
+            request.platform,
+          )
         }
-        return Object.freeze({
+        return runtimeCommandChannel(Object.freeze({
           ...successfulExecution(''),
           processEvidence: Object.freeze({ terminal: 'exited', exitCode: 1 }),
-        })
+        }), request.operationId, request.platform)
       },
-    }), /runtime build windows-job/u)
+    }), /runtime build test-process-owner/u)
     assert.deepEqual(bootstrapEvents, ['close'])
     assert.deepEqual(readdirSync(outputParent), [])
   } finally {
@@ -887,42 +888,6 @@ async function bootstrapFailureRemovesItsPrivateRoot() {
   }
 }
 
-async function bootstrapReceiptCannotClaimTreeEvidence() {
-  const outputParent = mkdtempSync(join(tmpdir(), 'windshare-bootstrap-tree-claim-'))
-  let closeCount = 0
-  try {
-    await assert.rejects(() => createBootstrapProcessOwnerAuthority({
-      repositoryRoot: root,
-      outputParent,
-      platform: 'win32',
-      goExecutable: process.execPath,
-      buildOwner: async ({ outputPath }) => {
-        writeFileSync(outputPath, 'bootstrap owner', { flag: 'wx' })
-        return Object.freeze({
-          receipt: Object.freeze({
-            schemaVersion: BOOTSTRAP_BUILD_RECEIPT_SCHEMA_VERSION,
-            kind: 'windows-job',
-            platform: 'win32',
-            process: Object.freeze({ terminal: 'exited', exitCode: 0, timedOut: false }),
-            output: Object.freeze({
-              path: outputPath,
-              byteLength: 15,
-              sha256: 'a'.repeat(64),
-              treeEmpty: true,
-            }),
-          }),
-          async assertLive() {},
-          async close() { closeCount += 1 },
-        })
-      },
-    }), /violates its authority contract/u)
-    assert.equal(closeCount, 1)
-    assert.deepEqual(readdirSync(outputParent), [])
-  } finally {
-    rmSync(outputParent, { recursive: true, force: true })
-  }
-}
-
 async function buildFixture(platform) {
   const outputParent = mkdtempSync(join(tmpdir(), 'windshare-runtime-fixture-'))
   const runtime = await buildBrowsergateRuntime({
@@ -940,47 +905,122 @@ async function buildFixture(platform) {
 }
 
 function successfulExecution(stdout, platform = 'win32') {
-  const ownershipEvidence = platform === 'win32'
-    ? Object.freeze({
-        supervisionOutcome: 'tree-empty',
-        terminationReason: 'natural',
-        activeProcessCount: 0,
-        root: Object.freeze({ pid: 42, exitCode: 0 }),
-        spawnFailure: null,
-      })
-    : Object.freeze({
-        ownerPid: 41,
-        rootPid: 42,
-        rootStartTimeTicks: '100',
-        inventoryScans: 2,
-        maximumObservedDescendants: 1,
-        quietInventoryCount: 1,
-        controlOutcome: 'target-terminal',
-        cleanupOutcome: 'completed',
-        failureCode: '',
-        failureMessage: '',
-      })
+  const backend = platform === 'win32' ? 'windows_job' : 'linux_subreaper'
+  const ownershipEvidence = Object.freeze({
+    kind: 'test-process-owner',
+    backend,
+    terminationReason: 'natural',
+    platform: Object.freeze({ kind: backend }),
+  })
   return Object.freeze({
     processEvidence: Object.freeze({ terminal: 'exited', exitCode: 0 }),
-    timedOut: false,
-    launched: true,
     treeEmpty: true,
+    cleanupOutcome: 'completed',
     inputEvidence: Object.freeze({
-      outcome: 'not-requested',
-      failureCode: '',
-      failureMessage: '',
-    }),
-    clientIoEvidence: Object.freeze({
-      requestOutcome: 'delivered',
-      rawInputOutcome: 'not-requested',
-      controlOutcome: 'not-requested',
-      outputOutcome: 'delivered',
+      outcome: 'not_requested',
       failureCode: '',
       failureMessage: '',
     }),
     ownershipEvidence,
     stdout,
     stderr: '',
+    traces: completeTraceSnapshot(),
+    runtimeCommandTraces: completeTraceSnapshot(),
+  })
+}
+
+function runtimeCommandChannel(execution, operationId, platform) {
+  const result = Object.freeze({
+    processEvidence: execution.processEvidence,
+    treeEmpty: execution.treeEmpty,
+    cleanupOutcome: execution.cleanupOutcome,
+    inputEvidence: execution.inputEvidence,
+    ownershipEvidence: execution.ownershipEvidence,
+    stdout: execution.stdout,
+    stderr: execution.stderr,
+  })
+  const settlement = runtimeCommandSettlement(result)
+  const ownershipSettled = result.treeEmpty === true && result.cleanupOutcome === 'completed'
+  const traces = runtimeCommandTraceFixture({
+    operationId,
+    platform,
+    outcomeCode: ownershipSettled ? 'succeeded' : 'ownership-rejected',
+    settlement,
+  })
+  return Object.freeze({
+    result: ownershipSettled
+      ? Promise.resolve(result)
+      : Promise.reject(new Error('runtime command ownership did not settle an empty tree')),
+    traces: Object.freeze({ snapshot: () => traces }),
+  })
+}
+
+function runtimeCommandSettlement(execution) {
+  return Object.freeze({
+    processEvidence: execution.processEvidence,
+    inputEvidence: execution.inputEvidence,
+    ownerFailure: null,
+    treeEmpty: execution.treeEmpty,
+    cleanupOutcome: execution.cleanupOutcome,
+    ownershipEvidence: execution.ownershipEvidence,
+    transportOutcome: 'completed',
+    controlOutcome: 'completed',
+    transportEvidence: null,
+  })
+}
+
+function emptyRuntimeCommandSettlement() {
+  return Object.freeze({
+    processEvidence: null,
+    inputEvidence: null,
+    ownerFailure: null,
+    treeEmpty: null,
+    cleanupOutcome: 'not-observed',
+    ownershipEvidence: null,
+    transportOutcome: 'not-observed',
+    controlOutcome: 'not-observed',
+    transportEvidence: null,
+  })
+}
+
+function runtimeCommandTraceFixture({ operationId, platform, outcomeCode, settlement }) {
+  const journal = createOwnedTraceJournal({
+    label: 'runtime command build fixture trace',
+    maximumEvents: 2,
+    maximumBytes: 256 * 1024,
+  })
+  assert.equal(journal.append(Object.freeze({
+    schemaVersion: RUNTIME_COMMAND_TRACE_SCHEMA_VERSION,
+    sequence: 0,
+    milestone: 'runtime-command-started',
+    outcomeCode: 'started',
+    context: Object.freeze({ operationId, platform }),
+  })), true)
+  assert.equal(journal.append(Object.freeze({
+    schemaVersion: RUNTIME_COMMAND_TRACE_SCHEMA_VERSION,
+    sequence: 1,
+    milestone: 'runtime-command-terminal',
+    outcomeCode,
+    context: Object.freeze({ operationId, platform, settlement }),
+  })), true)
+  journal.finish()
+  return journal.view.snapshot()
+}
+
+function completeTraceSnapshot(events = Object.freeze([])) {
+  const capturedBytes = events.reduce(
+    (total, event) => total + Buffer.byteLength(JSON.stringify(event), 'utf8'),
+    0,
+  )
+  return Object.freeze({
+    events,
+    observedEvents: events.length,
+    capturedEvents: events.length,
+    observedBytes: capturedBytes,
+    capturedBytes,
+    truncated: false,
+    completed: true,
+    failure: null,
   })
 }
 
@@ -1014,13 +1054,11 @@ function hostileProxyCause() {
 }
 
 function fakeBootstrapOwner(platform, events = []) {
-  const kind = platform === 'win32' ? 'windows-job' : 'linux-process-owner'
+  const kind = 'test-process-owner'
   return Object.freeze({
     artifact: Object.freeze({
       kind,
       path: process.execPath,
-      byteLength: 1,
-      sha256: 'b'.repeat(64),
     }),
     async assertLive() { events.push('assert-live') },
     async close() { events.push('close') },

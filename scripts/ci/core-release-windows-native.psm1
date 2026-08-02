@@ -477,17 +477,17 @@ function Select-WindowsNativeCoordinatorGoApplication {
 function Get-WindowsNativeCoordinatorGoToolchain {
     [CmdletBinding()]
     [OutputType([object])]
-    param()
-
-    # Get-Command may return every matching ApplicationInfo even without -All.
-    # Select the first explicit PATH-ordered candidate, which is the application
-    # PowerShell itself invokes for the bare `go` command.
-    $applicationCandidates = @(
-        Get-Command go -CommandType Application -All -ErrorAction Stop
+    param(
+        [Parameter(Mandatory)]
+        [string]$CoordinatorExecutable
     )
-    $selection = Select-WindowsNativeCoordinatorGoApplication `
-        -Candidates $applicationCandidates
-    $resolvedGoExecutable = $selection.GoExecutable
+
+    # The platform entrypoint has already locked and authenticated this file.
+    # Re-resolving PATH here would reopen toolchain selection during certification.
+    if (-not [IO.Path]::IsPathFullyQualified($CoordinatorExecutable)) {
+        throw 'coordinator Go executable must be an absolute authority path'
+    }
+    $resolvedGoExecutable = [IO.Path]::GetFullPath($CoordinatorExecutable)
     if (-not (Test-Path -LiteralPath $resolvedGoExecutable -PathType Leaf)) {
         throw 'selected coordinator Go executable is not an existing file'
     }
@@ -538,7 +538,7 @@ function Get-WindowsNativeCoordinatorGoToolchain {
 
     return [pscustomobject]@{
         PSTypeName = 'WindShare.WindowsNativeCoordinatorGoToolchain'
-        CandidateCount = $selection.CandidateCount
+        CandidateCount = 1
         SelectedVersion = $goVersionValues[0]
         GoRoot = $resolvedGoRoot
         GoExecutable = $resolvedGoExecutable

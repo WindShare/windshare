@@ -1,5 +1,6 @@
 import {
   NETWORK_MATRIX_BROWSERS,
+  NETWORK_MATRIX_EXECUTION_MODES,
   NETWORK_MATRIX_IDENTITIES_PER_PROFILE,
   NETWORK_MATRIX_ORCHESTRATION_FAILURE_CODES,
   NETWORK_MATRIX_ORCHESTRATION_OUTCOMES,
@@ -309,7 +310,7 @@ export function parseNetworkRunResult(
   )
   const executionMode = requireEnum(
     record.executionMode,
-    ['scheduled', 'manual'] as const,
+    NETWORK_MATRIX_EXECUTION_MODES,
     'browser network matrix execution mode',
   )
   const expectedIdentities = parseExpectedIdentities(

@@ -1,20 +1,20 @@
-import { access, mkdir, mkdtemp, readFile, readdir, rename, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import {
+  BROWSER_SAMPLE_STAGING_FAULT_EVIDENCE,
   BrowserSampleStaging,
   requireFinalizedArtifactCollectionRoot,
-  type BrowserSampleStagingHooks,
-  type FinalizedArtifactCollection,
+  type BrowserSampleStagingFaultCut,
 } from '../../scripts/browser-evidence/process/attachment-staging.ts'
 import { createDeterministicTestContainmentBackend } from './deterministic-containment.ts'
 import {
   loadFrameworkTopology,
   removeFrameworkWorkspace,
-  runSyntheticSample,
+  startSyntheticSample,
   type FrameworkTopology,
 } from './framework-fixtures.ts'
 
@@ -28,75 +28,56 @@ afterEach(async () => {
 
 describe('owner-fenced browser attachment collection', () => {
   it('fails closed when the collection path is swapped during finalization', async () => {
-    let ownedBackup = ''
-    const staging = await preparedStaging({
-      beforeFinalize: async () => {
-        ownedBackup = `${staging.childAttachmentRoot}.owned`
-        await rename(staging.childAttachmentRoot, ownedBackup)
-        await mkdir(staging.childAttachmentRoot)
-        await writeFile(join(staging.childAttachmentRoot, 'foreign.txt'), 'must survive rollback', 'utf8')
-      },
-    })
+    const staging = await preparedStaging('replace-root-before-finalize')
+    const ownedBackup =
+      `${staging.childAttachmentRoot}${BROWSER_SAMPLE_STAGING_FAULT_EVIDENCE.backupSuffix}`
     await expect(staging.finalize())
       .rejects.toThrow(/owner-held directory/u)
     await expect(staging.dispose()).rejects.toThrow(/cleanup did not fully settle/u)
 
-    await expect(readFile(join(staging.childAttachmentRoot, 'foreign.txt'), 'utf8'))
-      .resolves.toBe('must survive rollback')
+    await expect(readFile(
+      join(staging.childAttachmentRoot, BROWSER_SAMPLE_STAGING_FAULT_EVIDENCE.markerName),
+      'utf8',
+    )).resolves.toBe(BROWSER_SAMPLE_STAGING_FAULT_EVIDENCE.markerText)
     await expect(readFile(join(ownedBackup, 'child', 'evidence.jsonl'), 'utf8'))
       .resolves.toBe('')
   })
 
   it('never deletes a foreign directory swapped in immediately before rollback', async () => {
-    let ownedBackup = ''
-    const staging = await preparedStaging({
-      beforeRollback: async () => {
-        ownedBackup = `${staging.childAttachmentRoot}.owned`
-        await rename(staging.childAttachmentRoot, ownedBackup)
-        await mkdir(staging.childAttachmentRoot)
-        await writeFile(
-          join(staging.childAttachmentRoot, 'foreign.txt'),
-          'foreign rollback target',
-          'utf8',
-        )
-      },
-    })
+    const staging = await preparedStaging('replace-root-before-rollback')
+    const ownedBackup =
+      `${staging.childAttachmentRoot}${BROWSER_SAMPLE_STAGING_FAULT_EVIDENCE.backupSuffix}`
 
     await expect(staging.dispose()).rejects.toThrow(/cleanup did not fully settle/u)
-    await expect(readFile(join(staging.childAttachmentRoot, 'foreign.txt'), 'utf8'))
-      .resolves.toBe('foreign rollback target')
+    await expect(readFile(
+      join(staging.childAttachmentRoot, BROWSER_SAMPLE_STAGING_FAULT_EVIDENCE.markerName),
+      'utf8',
+    )).resolves.toBe(BROWSER_SAMPLE_STAGING_FAULT_EVIDENCE.markerText)
     await expect(readFile(join(ownedBackup, 'child', 'evidence.jsonl'), 'utf8'))
       .resolves.toBe('')
   })
 
   it('restores provisional authority and removes a partial collection after finalization crashes', async () => {
     const workspace = await trackedWorkspace()
-    const traces: Array<{ readonly milestone: string; readonly context?: Readonly<Record<string, unknown>> }> = []
-    let finalized: FinalizedArtifactCollection | undefined
-
-    await expect(runSyntheticSample({
+    const execution = startSyntheticSample({
       workspace,
       topology,
       suite: 'main',
       mode: 'main-pass',
       containmentBackend: createDeterministicTestContainmentBackend(),
-      stagingHooks: {
-        afterFinalize: async (collection) => {
-          finalized = collection
-          await writeFile(join(collection.absoluteRoot, 'partial-collection.txt'), 'partial', 'utf8')
-          throw new Error('synthetic finalization crash')
-        },
-      },
-      trace: (event) => { traces.push(event) },
-    })).rejects.toThrow(/synthetic finalization crash/u)
+      stagingFaultCut: 'fail-after-finalize',
+    })
+    await expect(execution.result).rejects.toThrow(/declarative staging failure/u)
+    const traces = execution.traces.snapshot().events
 
     const resultPath = join(workspace, 'main', 'chromium', 'sample-1', 'result.json')
     expect(JSON.parse(await readFile(resultPath, 'utf8'))).toMatchObject({
       resultStatus: 'provisional',
       artifacts: [],
     })
-    if (finalized === undefined) throw new Error('finalization hook did not observe the collection')
-    await expect(access(finalized.absoluteRoot)).rejects.toThrow()
+    const sampleParent = join(workspace, 'main', 'chromium')
+    expect((await readdir(sampleParent)).filter((name) =>
+      name.includes('child-attachments'))).toEqual([])
 
     const byMilestone = new Map(traces.map((trace) => [trace.milestone, trace]))
     expect(byMilestone.get('attachment-finalization-started')?.context).toMatchObject({
@@ -111,7 +92,7 @@ describe('owner-fenced browser attachment collection', () => {
       settledFailuresTruncated: false,
     })
     expect(byMilestone.get('attachment-finalization-failed')?.context?.causeChain)
-      .toContain('synthetic finalization crash')
+      .toContain('declarative staging failure after finalization')
     expect(byMilestone.get('attachment-rollback-started')?.context).toMatchObject({
       backend: 'test',
       phase: 'remove-owned-staging',
@@ -126,31 +107,30 @@ describe('owner-fenced browser attachment collection', () => {
 
   it('traces a settled rollback failure without deleting a collection-path replacement', async () => {
     const workspace = await trackedWorkspace()
-    const traces: Array<{ readonly milestone: string; readonly context?: Readonly<Record<string, unknown>> }> = []
-    let replacementRoot = ''
-    let ownedBackup = ''
-
-    await expect(runSyntheticSample({
+    const execution = startSyntheticSample({
       workspace,
       topology,
       suite: 'main',
       mode: 'main-pass',
       containmentBackend: createDeterministicTestContainmentBackend(),
-      stagingHooks: {
-        afterFinalize: async (collection) => {
-          replacementRoot = collection.absoluteRoot
-          ownedBackup = `${replacementRoot}.owned`
-          await rename(replacementRoot, ownedBackup)
-          await mkdir(replacementRoot)
-          await writeFile(join(replacementRoot, 'foreign.txt'), 'foreign publication target', 'utf8')
-          throw new Error('synthetic finalization path swap')
-        },
-      },
-      trace: (event) => { traces.push(event) },
-    })).rejects.toThrow(/staging rollback both failed/u)
+      stagingFaultCut: 'replace-root-and-fail-after-finalize',
+    })
+    await expect(execution.result).rejects.toThrow(/staging rollback both failed/u)
+    const traces = execution.traces.snapshot().events
+    const sampleParent = join(workspace, 'main', 'chromium')
+    const roots = (await readdir(sampleParent)).filter((name) =>
+      name.startsWith('.sample-1-child-attachments-'))
+    const replacementName = roots.find((name) =>
+      !name.endsWith(BROWSER_SAMPLE_STAGING_FAULT_EVIDENCE.backupSuffix))
+    if (replacementName === undefined) throw new Error('declarative replacement root is absent')
+    const replacementRoot = join(sampleParent, replacementName)
+    const ownedBackup =
+      `${replacementRoot}${BROWSER_SAMPLE_STAGING_FAULT_EVIDENCE.backupSuffix}`
 
-    await expect(readFile(join(replacementRoot, 'foreign.txt'), 'utf8'))
-      .resolves.toBe('foreign publication target')
+    await expect(readFile(
+      join(replacementRoot, BROWSER_SAMPLE_STAGING_FAULT_EVIDENCE.markerName),
+      'utf8',
+    )).resolves.toBe(BROWSER_SAMPLE_STAGING_FAULT_EVIDENCE.markerText)
     await expect(readFile(join(ownedBackup, 'child', 'evidence.jsonl'), 'utf8'))
       .resolves.not.toBe('')
     const byMilestone = new Map(traces.map((trace) => [trace.milestone, trace]))
@@ -189,12 +169,12 @@ describe('owner-fenced browser attachment collection', () => {
 })
 
 async function preparedStaging(
-  hooks: BrowserSampleStagingHooks = {},
+  faultCut?: BrowserSampleStagingFaultCut,
 ): Promise<BrowserSampleStaging> {
   const workspace = await trackedWorkspace()
   const sampleDirectory = join(workspace, 'sample-1')
   await mkdir(sampleDirectory)
-  const staging = await BrowserSampleStaging.create(sampleDirectory, hooks)
+  const staging = await BrowserSampleStaging.create(sampleDirectory, faultCut)
   await mkdir(staging.childPath('child'))
   await writeFile(staging.childPath('child', 'evidence.jsonl'), '', 'utf8')
   await writeFile(staging.runnerPath('stdout.log'), 'stdout', 'utf8')

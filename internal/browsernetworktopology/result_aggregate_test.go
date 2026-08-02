@@ -238,11 +238,6 @@ func TestRunOutcomeIsDerivedFromPrerequisitesAndObservedSubset(t *testing.T) {
 			outcomes:    []PrerequisiteOutcome{PrerequisiteUnavailable, PrerequisiteInvalid, PrerequisiteFailed},
 			wantOutcome: RunNotExecuted, wantSamples: 0,
 		},
-		{
-			name: "manual completed", mode: ModeManual,
-			outcomes:    []PrerequisiteOutcome{PrerequisiteSatisfied},
-			wantOutcome: RunCompleted, wantSamples: ManualIdentityCount,
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -504,8 +499,9 @@ func TestFailedOrchestrationKeepsUnsatisfiedProfilesNotExecuted(t *testing.T) {
 func TestSampleInfrastructureFailureDoesNotMasqueradeAsRunPartial(t *testing.T) {
 	contract, _, _ := loadFixtureContract(t)
 	run := buildRun(
-		t, contract, ModeManual, "run-sample-failure",
-		[]PrerequisiteOutcome{PrerequisiteSatisfied}, OrchestrationHealthy,
+		t, contract, ModeScheduled, "run-sample-failure",
+		[]PrerequisiteOutcome{PrerequisiteSatisfied, PrerequisiteSatisfied, PrerequisiteSatisfied},
+		OrchestrationHealthy,
 	)
 	sample := &run.Samples[0]
 	sample.SampleOutcome = SampleInfrastructureFailed
@@ -528,8 +524,9 @@ func TestSampleInfrastructureFailureDoesNotMasqueradeAsRunPartial(t *testing.T) 
 func TestRunParserRejectsUnknownAndNoncanonicalJSON(t *testing.T) {
 	contract, _, _ := loadFixtureContract(t)
 	run := buildRun(
-		t, contract, ModeManual, "run-canonical",
-		[]PrerequisiteOutcome{PrerequisiteUnavailable}, OrchestrationHealthy,
+		t, contract, ModeScheduled, "run-canonical",
+		[]PrerequisiteOutcome{PrerequisiteUnavailable, PrerequisiteUnavailable, PrerequisiteUnavailable},
+		OrchestrationHealthy,
 	)
 	encoded, err := run.CanonicalJSON(contract)
 	if err != nil {
@@ -543,18 +540,14 @@ func TestRunParserRejectsUnknownAndNoncanonicalJSON(t *testing.T) {
 	}
 }
 
-func TestAggregateIsPureObservationalAndDoesNotSynthesizeSamples(t *testing.T) {
+func TestAggregateCompletesOnlyForTheExactMatchedScheduledRun(t *testing.T) {
 	contract, _, _ := loadFixtureContract(t)
 	scheduled := buildRun(
 		t, contract, ModeScheduled, "run-scheduled-aggregate",
 		[]PrerequisiteOutcome{PrerequisiteSatisfied, PrerequisiteSatisfied, PrerequisiteSatisfied},
 		OrchestrationHealthy,
 	)
-	manual := buildRun(
-		t, contract, ModeManual, "run-manual-aggregate",
-		[]PrerequisiteOutcome{PrerequisiteUnavailable}, OrchestrationHealthy,
-	)
-	runs := []RunResult{scheduled, manual}
+	runs := []RunResult{scheduled}
 	aggregate, err := BuildAggregate(contract, runs)
 	if err != nil {
 		t.Fatalf("BuildAggregate: %v", err)
@@ -562,7 +555,8 @@ func TestAggregateIsPureObservationalAndDoesNotSynthesizeSamples(t *testing.T) {
 	if aggregate.Counts.ExpectedIdentities != TotalIdentityCount ||
 		aggregate.Counts.ObservedSamples != ScheduledIdentityCount ||
 		aggregate.Counts.Matched != ScheduledIdentityCount ||
-		aggregate.EvidenceOutcome != EvidenceIncomplete {
+		aggregate.Counts.Mismatched != 0 || aggregate.Counts.NotEvaluated != 0 ||
+		aggregate.EvidenceOutcome != EvidenceComplete {
 		t.Fatalf("aggregate = %+v", aggregate)
 	}
 	encoded, err := aggregate.CanonicalJSON(contract, runs)
@@ -574,42 +568,35 @@ func TestAggregateIsPureObservationalAndDoesNotSynthesizeSamples(t *testing.T) {
 	}
 	for _, forbidden := range []string{"pass", "passed", "success"} {
 		if bytesContains(encoded, forbidden) {
-			t.Fatalf("aggregate encoded observational work as %q", forbidden)
+			t.Fatalf("aggregate encoded an ad hoc verdict as %q", forbidden)
 		}
 	}
 }
 
-func TestAggregateAcceptsOneRealRunAndCanonicalizesTwoRunOrder(t *testing.T) {
+func TestAggregateRequiresExactlyOneScheduledRun(t *testing.T) {
 	contract, _, _ := loadFixtureContract(t)
 	scheduled := buildRun(
 		t, contract, ModeScheduled, "run-scheduled-single",
 		[]PrerequisiteOutcome{PrerequisiteSatisfied, PrerequisiteSatisfied, PrerequisiteSatisfied},
 		OrchestrationHealthy,
 	)
-	manual := buildRun(
-		t, contract, ModeManual, "run-manual-single",
-		[]PrerequisiteOutcome{PrerequisiteSatisfied}, OrchestrationHealthy,
-	)
-
-	for _, run := range []RunResult{scheduled, manual} {
-		aggregate, err := BuildAggregate(contract, []RunResult{run})
-		if err != nil {
-			t.Fatalf("single %s aggregate: %v", run.ExecutionMode, err)
-		}
-		if len(aggregate.Runs) != 1 || aggregate.Runs[0].ExecutionMode != run.ExecutionMode ||
-			aggregate.Counts.ExpectedIdentities != TotalIdentityCount ||
-			aggregate.Counts.ObservedSamples != len(run.Samples) ||
-			aggregate.EvidenceOutcome != EvidenceIncomplete {
-			t.Fatalf("single %s aggregate = %+v", run.ExecutionMode, aggregate)
-		}
-		encoded, encodeErr := aggregate.CanonicalJSON(contract, []RunResult{run})
-		if encodeErr != nil {
-			t.Fatalf("single %s canonical aggregate: %v", run.ExecutionMode, encodeErr)
-		}
-		if _, parseErr := ParseAggregate(encoded, contract, []RunResult{run}); parseErr != nil {
-			t.Fatalf("single %s parse aggregate: %v", run.ExecutionMode, parseErr)
-		}
+	aggregate, err := BuildAggregate(contract, []RunResult{scheduled})
+	if err != nil {
+		t.Fatalf("scheduled aggregate: %v", err)
 	}
+	if len(aggregate.Runs) != 1 || aggregate.Runs[0].ExecutionMode != ModeScheduled ||
+		aggregate.Counts.ExpectedIdentities != ScheduledIdentityCount ||
+		aggregate.EvidenceOutcome != EvidenceComplete {
+		t.Fatalf("scheduled aggregate = %+v", aggregate)
+	}
+	encoded, err := aggregate.CanonicalJSON(contract, []RunResult{scheduled})
+	if err != nil {
+		t.Fatalf("canonical aggregate: %v", err)
+	}
+	if _, err := ParseAggregate(encoded, contract, []RunResult{scheduled}); err != nil {
+		t.Fatalf("parse aggregate: %v", err)
+	}
+
 	failedScheduled := buildRun(
 		t, contract, ModeScheduled, "run-scheduled-single-infrastructure",
 		[]PrerequisiteOutcome{PrerequisiteSatisfied, PrerequisiteSatisfied, PrerequisiteSatisfied},
@@ -619,29 +606,19 @@ func TestAggregateAcceptsOneRealRunAndCanonicalizesTwoRunOrder(t *testing.T) {
 	if err != nil || failedAggregate.EvidenceOutcome != EvidenceInfrastructureFailed {
 		t.Fatalf("single infrastructure aggregate = %+v, err=%v", failedAggregate, err)
 	}
-
-	aggregate, err := BuildAggregate(contract, []RunResult{manual, scheduled})
-	if err != nil {
-		t.Fatalf("reverse-order aggregate: %v", err)
-	}
-	if len(aggregate.Runs) != 2 ||
-		aggregate.Runs[0].ExecutionMode != ModeScheduled ||
-		aggregate.Runs[1].ExecutionMode != ModeManual ||
-		aggregate.EvidenceOutcome != EvidenceComplete {
-		t.Fatalf("canonical aggregate order = %+v", aggregate)
+	for _, runs := range [][]RunResult{nil, {}, {scheduled, scheduled}} {
+		if _, err := BuildAggregate(contract, runs); !errors.Is(err, ErrInvalidAggregate) {
+			t.Fatalf("run count %d error = %v", len(runs), err)
+		}
 	}
 }
 
-func TestAggregateSeparatesCandidateMismatchFromEvidenceCompleteness(t *testing.T) {
+func TestAggregateTreatsCandidateMismatchAsIncompleteHardEvidence(t *testing.T) {
 	contract, _, _ := loadFixtureContract(t)
 	scheduled := buildRun(
 		t, contract, ModeScheduled, "run-scheduled-mismatch",
 		[]PrerequisiteOutcome{PrerequisiteSatisfied, PrerequisiteSatisfied, PrerequisiteSatisfied},
 		OrchestrationHealthy,
-	)
-	manual := buildRun(
-		t, contract, ModeManual, "run-manual-complete",
-		[]PrerequisiteOutcome{PrerequisiteSatisfied}, OrchestrationHealthy,
 	)
 	attemptEvidence := scheduled.Samples[0].AttemptEvidence
 	local := CandidateHost
@@ -662,12 +639,12 @@ func TestAggregateSeparatesCandidateMismatchFromEvidenceCompleteness(t *testing.
 		scheduled.ProfileResults[0].ProfileOutcome != ProfileCompleted {
 		t.Fatalf("candidate mismatch changed completion: run=%q profile=%q err=%v", scheduled.RunOutcome, scheduled.ProfileResults[0].ProfileOutcome, err)
 	}
-	aggregate, err := BuildAggregate(contract, []RunResult{scheduled, manual})
+	aggregate, err := BuildAggregate(contract, []RunResult{scheduled})
 	if err != nil {
 		t.Fatalf("BuildAggregate: %v", err)
 	}
-	if aggregate.EvidenceOutcome != EvidenceComplete || aggregate.Counts.Mismatched != 1 ||
-		aggregate.Counts.Matched != TotalIdentityCount-1 {
+	if aggregate.EvidenceOutcome != EvidenceIncomplete || aggregate.Counts.Mismatched != 1 ||
+		aggregate.Counts.Matched != ScheduledIdentityCount-1 {
 		t.Fatalf("aggregate = %+v", aggregate)
 	}
 }
@@ -679,18 +656,14 @@ func TestAggregateFailsClosedForInfrastructureAndInvalidRunSets(t *testing.T) {
 		[]PrerequisiteOutcome{PrerequisiteSatisfied, PrerequisiteSatisfied, PrerequisiteSatisfied},
 		OrchestrationHealthy,
 	)
-	manual := buildRun(
-		t, contract, ModeManual, "run-manual-infra",
-		[]PrerequisiteOutcome{PrerequisiteSatisfied}, OrchestrationHealthy,
-	)
-	manual.Samples[0].SampleOutcome = SampleInfrastructureFailed
-	manual.Samples[0].ProcessInstanceID = nil
-	manual.Samples[0].AttemptEvidence = nil
-	manual.Samples[0].CandidatePolicyOutcome = CandidatePolicyNotEvaluated
-	manual.Samples[0].RationaleCodes = []CandidateRationaleCode{}
-	manual.Samples[0].Failure = &SampleFailure{FailureCode: FailureSampleDeadline}
-	refreshRunSummary(t, &manual)
-	aggregate, err := BuildAggregate(contract, []RunResult{scheduled, manual})
+	scheduled.Samples[0].SampleOutcome = SampleInfrastructureFailed
+	scheduled.Samples[0].ProcessInstanceID = nil
+	scheduled.Samples[0].AttemptEvidence = nil
+	scheduled.Samples[0].CandidatePolicyOutcome = CandidatePolicyNotEvaluated
+	scheduled.Samples[0].RationaleCodes = []CandidateRationaleCode{}
+	scheduled.Samples[0].Failure = &SampleFailure{FailureCode: FailureSampleDeadline}
+	refreshRunSummary(t, &scheduled)
+	aggregate, err := BuildAggregate(contract, []RunResult{scheduled})
 	if err != nil || aggregate.EvidenceOutcome != EvidenceInfrastructureFailed ||
 		aggregate.Counts.SampleInfrastructureFailures != 1 {
 		t.Fatalf("infrastructure aggregate = %+v, err=%v", aggregate, err)
@@ -701,28 +674,27 @@ func TestAggregateFailsClosedForInfrastructureAndInvalidRunSets(t *testing.T) {
 		[]PrerequisiteOutcome{PrerequisiteSatisfied, PrerequisiteSatisfied, PrerequisiteSatisfied},
 		OrchestrationHealthy,
 	)
-	duplicateIDManual := buildRun(
-		t, contract, ModeManual, scheduled.RunID,
-		[]PrerequisiteOutcome{PrerequisiteSatisfied}, OrchestrationHealthy,
-	)
 	for _, runs := range [][]RunResult{
 		nil,
 		{scheduled, secondScheduled},
-		{scheduled, duplicateIDManual},
-		{scheduled, manual, manual},
+		{scheduled, scheduled},
 	} {
 		if _, err := BuildAggregate(contract, runs); !errors.Is(err, ErrInvalidAggregate) {
 			t.Fatalf("runs %d error = %v", len(runs), err)
 		}
 	}
 
-	invalidScheduled := scheduled
+	invalidScheduled := buildRun(
+		t, contract, ModeScheduled, "run-invalid-scheduled",
+		[]PrerequisiteOutcome{PrerequisiteSatisfied, PrerequisiteSatisfied, PrerequisiteSatisfied},
+		OrchestrationHealthy,
+	)
 	invalidScheduled.Samples = invalidScheduled.Samples[:len(invalidScheduled.Samples)-1]
-	if _, err := BuildAggregate(contract, []RunResult{invalidScheduled, manual}); !errors.Is(err, ErrInvalidAggregate) {
+	if _, err := BuildAggregate(contract, []RunResult{invalidScheduled}); !errors.Is(err, ErrInvalidAggregate) {
 		t.Fatalf("invalid run aggregate error = %v", err)
 	}
-	forgedProfileResult := scheduled
-	forgedProfileResult.ProfileResults = append([]ProfileRunResult(nil), scheduled.ProfileResults...)
+	forgedProfileResult := secondScheduled
+	forgedProfileResult.ProfileResults = append([]ProfileRunResult(nil), secondScheduled.ProfileResults...)
 	forgedProfileResult.ProfileResults[0].ObservedSamples--
 	if _, err := BuildAggregate(contract, []RunResult{forgedProfileResult}); !errors.Is(err, ErrInvalidAggregate) {
 		t.Fatalf("forged profile result aggregate error = %v", err)
@@ -736,10 +708,6 @@ func TestAggregateRejectsForgedCountsDigestsAndNoncanonicalJSON(t *testing.T) {
 			t, contract, ModeScheduled, "run-scheduled-forge",
 			[]PrerequisiteOutcome{PrerequisiteUnavailable, PrerequisiteUnavailable, PrerequisiteUnavailable},
 			OrchestrationHealthy,
-		),
-		buildRun(
-			t, contract, ModeManual, "run-manual-forge",
-			[]PrerequisiteOutcome{PrerequisiteUnavailable}, OrchestrationHealthy,
 		),
 	}
 	aggregate, err := BuildAggregate(contract, runs)

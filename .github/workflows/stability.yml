@@ -1,0 +1,88 @@
+# Scheduled evidence is independent from PR retries. The evidence runner owns
+# the product lifecycle so setup/action failures cannot masquerade as test results.
+name: Native Integration Stability
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Public repositories retain artifacts for at most 90 days. Two independent
+    # runs per day keep 100 valid samples per OS inside that hard window.
+    - cron: "41 2 * * *"
+    - cron: "41 14 * * *"
+
+env:
+  WINDSHARE_TEST_RUN_ID: stability-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  linux-integration-stability:
+    name: Native integration stability (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: run native integration exactly once
+        run: >-
+          node scripts/ci/stability/result.mjs run
+          --output test-results/stability/integration-linux/result.json
+          --started-output test-results/stability/integration-linux/started.json
+          --run-id "${{ github.run_id }}"
+          --run-attempt "${{ github.run_attempt }}"
+          --commit-sha "${{ github.sha }}"
+          --workflow-job "${{ github.job }}"
+          --suite integration
+          --entrypoint "bash scripts/ci/linux/integration.sh"
+      - name: publish authenticated stability evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stability-integration-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/stability/integration-linux
+          if-no-files-found: error
+          retention-days: 90
+
+  windows-integration-stability:
+    name: Native integration stability (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: run native integration exactly once
+        run: >-
+          node scripts/ci/stability/result.mjs run
+          --output test-results/stability/integration-windows/result.json
+          --started-output test-results/stability/integration-windows/started.json
+          --run-id "${{ github.run_id }}"
+          --run-attempt "${{ github.run_attempt }}"
+          --commit-sha "${{ github.sha }}"
+          --workflow-job "${{ github.job }}"
+          --suite integration
+          --entrypoint "./scripts/ci/windows/integration.ps1"
+      - name: publish authenticated stability evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stability-integration-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/stability/integration-windows
+          if-no-files-found: error
+          retention-days: 90

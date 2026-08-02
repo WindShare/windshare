@@ -2,8 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { isAbsolute, join, resolve } from 'node:path'
 
 import { readStableRegularFileSnapshot } from './filesystem/snapshot.ts'
-import { d5SettlementOwnershipEnvironment } from './process/d5-ownership.ts'
-import { runBrowserSample } from './sample-runner.ts'
+import { startBrowserSample } from './sample-runner.ts'
 import { parseBrowserRunPolicy } from './run-policy.ts'
 import { parseCanonicalJsonText } from './contract/strict-json.ts'
 import {
@@ -15,7 +14,7 @@ import {
 import { BROWSER_ENGINES, BROWSER_SUITES } from './vocabulary.ts'
 
 export const BROWSER_SAMPLE_DRIVER_SCHEMA_VERSION =
-  'windshare.browser-sample-driver/v1' as const
+  'windshare.browser-sample-driver/v4' as const
 const MAXIMUM_DRIVER_REQUEST_BYTES = 1_048_576
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u
 const CHECKOUT_SHA_PATTERN = /^[a-f0-9]{40}$/u
@@ -57,10 +56,7 @@ export async function runBrowserSampleDriver(encoded: Uint8Array): Promise<unkno
     profileSnapshot.sha256,
     resolutionSnapshot.sha256,
   )
-  const ownershipEnvironment = d5SettlementOwnershipEnvironment(
-    request.ownership.insideWindowsD5,
-  )
-  const outcome = await runBrowserSample({
+  const execution = startBrowserSample({
     ...request.identity,
     sampleDirectory: request.output.sampleDirectory,
     topologyLock,
@@ -70,20 +66,30 @@ export async function runBrowserSampleDriver(encoded: Uint8Array): Promise<unkno
       executable: request.leaf.executable,
       arguments: request.leaf.arguments,
       cwd: request.leaf.cwd,
-      environment: Object.freeze({
-        ...request.leaf.environment,
-        ...ownershipEnvironment,
-      }),
+      environment: request.leaf.environment,
     }),
     processDeadlineMs: request.ownership.childDeadlineMs,
     ownershipMode: 'inherited',
+    outerProcessAuthority: request.ownership.outerAuthority,
   })
+  const outcome = await execution.result
+  const traces = execution.traces.snapshot()
+  if (
+    !traces.completed ||
+    traces.truncated ||
+    traces.observedEvents !== traces.capturedEvents
+  ) throw new Error('browser sample driver received incomplete lifecycle trace evidence')
   return Object.freeze({
     schemaVersion: BROWSER_SAMPLE_DRIVER_SCHEMA_VERSION,
+    runId: request.identity.runId,
+    operationId: request.identity.operationId,
+    scenario: request.identity.scenario,
+    outcome: outcome.acceptedBeforeGuard ? 'succeeded' : 'failed',
     resultPath: outcome.resultPath,
     artifactRoot: outcome.artifactRoot,
     candidate: outcome.result,
     acceptedBeforeGuard: outcome.acceptedBeforeGuard,
+    traces,
   })
 }
 
@@ -115,10 +121,16 @@ function parseDriverRequest(value: unknown) {
 function parseIdentity(value: unknown) {
   const record = requireRecord(value, 'browser sample driver identity')
   exactKeys(record, [
-    'runId', 'runPolicy', 'suite', 'browser', 'sampleIndex', 'checkoutSha',
+    'runId', 'operationId', 'scenario', 'runPolicy', 'suite', 'browser', 'sampleIndex', 'checkoutSha',
   ], 'browser sample driver identity')
   if (typeof record.runId !== 'string' || !PORTABLE_TOKEN_PATTERN.test(record.runId)) {
     throw new Error('browser sample driver run ID is invalid')
+  }
+  if (typeof record.operationId !== 'string' || !PORTABLE_TOKEN_PATTERN.test(record.operationId)) {
+    throw new Error('browser sample driver operation ID is invalid')
+  }
+  if (typeof record.scenario !== 'string' || !PORTABLE_TOKEN_PATTERN.test(record.scenario)) {
+    throw new Error('browser sample driver scenario is invalid')
   }
   const runPolicy = parseBrowserRunPolicy(record.runPolicy, 'browser sample driver run policy')
   if (!BROWSER_SUITES.includes(record.suite as never)) {
@@ -136,6 +148,8 @@ function parseIdentity(value: unknown) {
   }
   return Object.freeze({
     runId: record.runId,
+    operationId: record.operationId,
+    scenario: record.scenario,
     runPolicy,
     suite: record.suite as (typeof BROWSER_SUITES)[number],
     browser: record.browser as (typeof BROWSER_ENGINES)[number],
@@ -180,18 +194,24 @@ function parseTopology(value: unknown) {
 
 function parseOwnership(value: unknown, identity: ReturnType<typeof parseIdentity>) {
   const record = requireRecord(value, 'browser sample driver ownership')
-  exactKeys(record, ['insideWindowsD5', 'childDeadlineMs'], 'browser sample driver ownership')
-  if (typeof record.insideWindowsD5 !== 'boolean') {
-    throw new Error('browser sample driver D5 ownership evidence is invalid')
-  }
-  if (record.insideWindowsD5 && identity.suite !== 'main') {
-    throw new Error('browser sample driver D5 ownership applies only to main')
-  }
+  exactKeys(record, ['outerAuthority', 'childDeadlineMs'], 'browser sample driver ownership')
+  const outer = requireRecord(record.outerAuthority, 'browser sample driver outer authority')
+  exactKeys(outer, ['kind', 'backend', 'operationId'], 'browser sample driver outer authority')
+  if (
+    outer.kind !== 'test-process-owner' ||
+    !['windows_job', 'linux_subreaper'].includes(outer.backend as string) ||
+    typeof outer.operationId !== 'string' || !PORTABLE_TOKEN_PATTERN.test(outer.operationId) ||
+    outer.operationId !== identity.operationId
+  ) throw new Error('browser sample driver outer process authority is invalid')
   if (!Number.isSafeInteger(record.childDeadlineMs) || (record.childDeadlineMs as number) < 1) {
     throw new Error('browser sample driver child deadline is invalid')
   }
   return Object.freeze({
-    insideWindowsD5: record.insideWindowsD5,
+    outerAuthority: Object.freeze({
+      kind: 'test-process-owner' as const,
+      backend: outer.backend as 'windows_job' | 'linux_subreaper',
+      operationId: outer.operationId,
+    }),
     childDeadlineMs: record.childDeadlineMs as number,
   })
 }

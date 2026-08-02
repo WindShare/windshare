@@ -21,6 +21,7 @@ func openOutputRuntimeTestPlatform(path string, create bool) (outputcap.Platform
 
 func newRuntimeTestRootSpec(t testing.TB) runtimeTestRootSpec {
 	t.Helper()
+	requireDurableFilesystemScenario(t)
 	if windowsRuntimeTestBase == "" {
 		t.Fatal("Windows output-runtime test base is not initialized")
 	}

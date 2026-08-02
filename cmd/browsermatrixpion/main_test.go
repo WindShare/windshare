@@ -162,6 +162,23 @@ func TestParseCommandRejectsCoturnWithoutRevocableProvider(t *testing.T) {
 	)); err == nil {
 		t.Fatal("OIDC policy was mistaken for a concrete revocable TURN provider")
 	}
+	providerCertificate, err := tls.LoadX509KeyPair(certificatePath, tlsKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientCertificatePath, clientKeyPath := writeTestClientTLSIdentity(t, directory)
+	providerArguments := append(append([]string(nil), arguments...),
+		"-credential-broker-policy-file="+policyPath,
+		"-turn-provider-origin=https://matrix.local:9443/",
+		"-turn-provider-tls-ca-file="+certificatePath,
+		"-turn-provider-server-certificate-sha256="+tlsLeafSHA256(providerCertificate),
+		"-turn-provider-client-certificate-file="+clientCertificatePath,
+		"-turn-provider-client-key-file="+clientKeyPath,
+	)
+	configured, err := parseCommand(providerArguments)
+	if err != nil || configured.turnProvider == nil {
+		t.Fatalf("concrete revocable TURN provider was not composed: %v", err)
+	}
 	if _, err := parseCommand(append(
 		append([]string(nil), arguments...), "-turn-credential-file="+credentialPath,
 	)); err == nil {
@@ -308,6 +325,36 @@ func writeTestTLSIdentity(t *testing.T, directory string) (string, string) {
 	return certificatePath, keyPath
 }
 
+func writeTestClientTLSIdentity(t *testing.T, directory string) (string, string) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "matrix provider client"},
+		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificatePath := filepath.Join(directory, "provider-client.crt")
+	keyPath := filepath.Join(directory, "provider-client.key")
+	if err := os.WriteFile(certificatePath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certificatePath, keyPath
+}
+
 func writeTestAttestationAuthority(
 	t *testing.T,
 	directory string,
@@ -333,10 +380,6 @@ func writeTestAttestationAuthorityProfile(
 	turnCredentialExpiresAt string,
 ) (string, string) {
 	t.Helper()
-	executableDigest, err := currentExecutableSHA256()
-	if err != nil {
-		t.Fatal(err)
-	}
 	certificate, err := tls.LoadX509KeyPair(certificatePath, tlsKeyPath)
 	if err != nil {
 		t.Fatal(err)
@@ -360,8 +403,8 @@ func writeTestAttestationAuthorityProfile(
 		SchemaVersion: browsermatrixpion.ExternalFixtureSchemaVersion,
 		DeploymentID:  "command-deployment", Revision: 1,
 		ProfileID: profileID, AuthorityInstanceID: "command-authority",
-		ImplementationSHA256: executableDigest, RemoteServiceInstanceID: "remote-a",
-		OperatorID: "command-operator", FixtureHostID: "command-host",
+		RemoteServiceInstanceID: "remote-a",
+		OperatorID:              "command-operator", FixtureHostID: "command-host",
 		FixtureNetworkBoundaryID: "command-boundary",
 		ControllerOrigin:         "https://matrix.local:8443/", ControllerPublicIP: "8.8.8.8",
 		TLSCertificateSHA256: tlsLeafSHA256(certificate), RemotePeerPublicIP: "1.1.1.1",

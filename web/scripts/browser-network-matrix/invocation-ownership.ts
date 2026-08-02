@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 
-import { requireRunId } from './contract-support.ts'
+import { requireOperationId, requireRunId } from './contract-support.ts'
 import type {
   NetworkMatrixOperationClass,
   NetworkMatrixOwnershipInput,
@@ -8,7 +8,6 @@ import type {
   NetworkMatrixOwnershipRegistration,
 } from './owned-operation.ts'
 
-const OPERATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u
 const RETRY_DELAY_MS = 1_000
 
 interface RetainedOwnership {
@@ -163,10 +162,3 @@ export function newNetworkMatrixInvocationId(): string {
 const systemOwnershipRetryWaiter: NetworkMatrixOwnershipRetryWaiter = Object.freeze({
   wait: () => new Promise<void>((resolve) => setTimeout(resolve, RETRY_DELAY_MS)),
 })
-
-function requireOperationId(value: string, label: string): string {
-  if (typeof value !== 'string' || !OPERATION_ID_PATTERN.test(value)) {
-    throw new Error(`${label} is invalid`)
-  }
-  return value
-}

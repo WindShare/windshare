@@ -204,7 +204,7 @@ export class CredentialRetirementRegistry {
     attempt: CredentialBrokerRetirementAttempt,
     signal: AbortSignal,
   ): Promise<ExternalFixtureControlCredentialRetirementReceipt> {
-    const retired = await this.#exchange(attempt.request, retirement.scope, signal)
+    const retired = await this.#exchange(attempt.request, retirement.scope, signal).result
     try {
       return authenticateRetirementResponse({
         bytes: retired,

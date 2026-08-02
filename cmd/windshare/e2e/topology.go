@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/cmd/windshare/internal/cli"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/internal/testicetopology"
+	"github.com/windshare/windshare/internal/testrun"
 )
 
 const (
@@ -21,6 +22,7 @@ const (
 	topologyProfileDigestOption    = "--test-ice-topology-profile-sha256"
 	topologyResolutionDigestOption = "--test-ice-topology-resolution-sha256"
 	senderEvidenceOption           = "--sender-evidence"
+	catalogEnumerationGateOption   = "--catalog-enumeration-gate"
 	sha256TextBytes                = 64
 )
 
@@ -30,19 +32,23 @@ type e2eArguments struct {
 	expectedProfileSHA256    string
 	expectedResolutionSHA256 string
 	evidencePath             string
+	catalogEnumerationGate   bool
 	command                  []string
 }
 
 type e2eDependencies struct {
-	loadProfile    func(string) (testicetopology.Profile, error)
-	loadResolution func(string, testicetopology.Profile, string) (testicetopology.Resolution, error)
-	openEvidence   func(string) (io.WriteCloser, error)
+	loadProfile     func(string) (testicetopology.Profile, error)
+	loadResolution  func(string, testicetopology.Profile, string) (testicetopology.Resolution, error)
+	openEvidence    func(string) (io.WriteCloser, error)
+	loadOperation   func() (testrun.Operation, bool, error)
+	openCatalogGate func(testrun.Operation) (cli.CatalogEnumerationGate, error)
 }
 
 type preparedE2E struct {
-	command  []string
-	provider *topologySenderPeerFactoryProvider
-	evidence io.WriteCloser
+	command     []string
+	provider    *topologySenderPeerFactoryProvider
+	evidence    io.WriteCloser
+	catalogGate cli.CatalogEnumerationGate
 }
 
 func defaultE2EDependencies() e2eDependencies {
@@ -50,6 +56,12 @@ func defaultE2EDependencies() e2eDependencies {
 		loadProfile:    testicetopology.Load,
 		loadResolution: testicetopology.LoadResolution,
 		openEvidence:   openEvidenceFile,
+		loadOperation: func() (testrun.Operation, bool, error) {
+			return testrun.OperationFromEnvironment(os.LookupEnv)
+		},
+		openCatalogGate: func(operation testrun.Operation) (cli.CatalogEnumerationGate, error) {
+			return newCatalogEnumerationGate(operation)
+		},
 	}
 }
 
@@ -98,8 +110,26 @@ func prepareE2E(
 	if err != nil {
 		return preparedE2E{}, fmt.Errorf("open sender evidence: %w", err)
 	}
+	var catalogGate cli.CatalogEnumerationGate
+	if parsed.catalogEnumerationGate {
+		if dependencies.loadOperation == nil || dependencies.openCatalogGate == nil {
+			_ = evidence.Close()
+			return preparedE2E{}, errors.New("catalog enumeration gate dependencies are incomplete")
+		}
+		operation, present, operationErr := dependencies.loadOperation()
+		if operationErr != nil || !present {
+			_ = evidence.Close()
+			return preparedE2E{}, errors.New("catalog enumeration gate requires an owned operation identity")
+		}
+		catalogGate, err = dependencies.openCatalogGate(operation)
+		if err != nil {
+			_ = evidence.Close()
+			return preparedE2E{}, fmt.Errorf("open catalog enumeration gate: %w", err)
+		}
+	}
 	return preparedE2E{
-		command: append([]string(nil), parsed.command...), provider: provider, evidence: evidence,
+		command: append([]string(nil), parsed.command...), provider: provider,
+		evidence: evidence, catalogGate: catalogGate,
 	}, nil
 }
 
@@ -108,6 +138,15 @@ func parseE2EArguments(args []string) (e2eArguments, error) {
 	seen := make(map[string]struct{}, 5)
 	for len(args) > 0 && len(args[0]) > 2 && args[0][:2] == "--" {
 		name := args[0]
+		if name == catalogEnumerationGateOption {
+			if _, duplicate := seen[name]; duplicate {
+				return e2eArguments{}, fmt.Errorf("test process option %q was repeated", name)
+			}
+			seen[name] = struct{}{}
+			parsed.catalogEnumerationGate = true
+			args = args[1:]
+			continue
+		}
 		switch name {
 		case topologyProfileOption, topologyResolutionOption,
 			topologyProfileDigestOption, topologyResolutionDigestOption,
@@ -143,6 +182,9 @@ func parseE2EArguments(args []string) (e2eArguments, error) {
 	}
 	if !validSHA256(parsed.expectedProfileSHA256) || !validSHA256(parsed.expectedResolutionSHA256) {
 		return e2eArguments{}, errors.New("topology digests must be 64 lowercase hexadecimal characters")
+	}
+	if parsed.catalogEnumerationGate && args[0] != "share" {
+		return e2eArguments{}, errors.New("catalog enumeration gate is valid only for the share command")
 	}
 	for _, target := range []struct {
 		label string

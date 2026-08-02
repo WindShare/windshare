@@ -147,7 +147,7 @@ function bootstrapProgram(): string {
   return [
     "const guard = await import('./web/scripts/browser-evidence/artifact/guard.ts')",
     "const archive = await import('./web/scripts/browser-evidence/archive/trusted-zip.ts')",
-    "if (typeof guard.scanSampleArtifacts !== 'function') throw new Error('guard export is absent')",
+    "if (typeof guard.startScanSampleArtifacts !== 'function') throw new Error('guard export is absent')",
     "const bytes = Buffer.from('504b0506000000000000000000000000000000000000', 'hex')",
     'const summary = await archive.scanTrustedZip({',
     '  byteLength: bytes.byteLength,',
@@ -158,7 +158,7 @@ function bootstrapProgram(): string {
     "  end() { throw new Error('empty ZIP unexpectedly ended an entry') },",
     '})',
     'process.stdout.write(JSON.stringify({',
-    "  guardExport: typeof guard.scanSampleArtifacts,",
+    "  guardExport: typeof guard.startScanSampleArtifacts,",
     '  entryCount: summary.entryCount,',
     '  expandedBytes: summary.expandedBytes,',
     '}))',

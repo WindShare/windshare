@@ -1,12 +1,16 @@
 import { resolve } from 'node:path'
+import { types as nodeTypes } from 'node:util'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { assertPinnedNodeVersion, readPinnedNodeVersion } from '../node-version.mjs'
+import { createBrowsergateTraceEvent } from './trace-event.mjs'
+import { requireCompleteOwnedTraceSnapshot } from './owned-trace-journal.mjs'
 
 const REPOSITORY_ROOT = resolve(fileURLToPath(new URL('../../../', import.meta.url)))
 
 const BROWSERGATE_COMMANDS = Object.freeze([
   'local',
+  'smoke',
   'build-runtime',
   'dispose-runtime',
   'hosted-produce',
@@ -48,7 +52,47 @@ export async function runBrowserGateCli(arguments_, ports = {}) {
   if (typeof handler !== 'function') {
     throw new Error(`browser orchestration command ${JSON.stringify(command)} has no handler`)
   }
-  return handler(optionArguments)
+  return requireBrowserGateExecution(await handler(optionArguments))
+}
+
+function requireBrowserGateExecution(value) {
+  if (
+    value === null || typeof value !== 'object' ||
+    !Number.isSafeInteger(value.exitCode) || value.exitCode < 0 || value.exitCode > 255
+  ) throw new Error('browser orchestration command returned an invalid execution result')
+  const traces = requireCompleteOwnedTraceSnapshot(
+    value.traces,
+    'browser orchestration command trace',
+  )
+  return Object.freeze({ exitCode: value.exitCode, traces })
+}
+
+export function settledBrowserGateFailureTraces(cause) {
+  if (cause === null || typeof cause !== 'object' || nodeTypes.isProxy(cause)) return null
+  const descriptor = Object.getOwnPropertyDescriptor(cause, 'traces')
+  if (descriptor === undefined || !Object.hasOwn(descriptor, 'value')) return null
+  try {
+    return requireCompleteOwnedTraceSnapshot(
+      descriptor.value,
+      'failed browser orchestration command trace',
+    )
+  } catch {
+    return null
+  }
+}
+
+export function browserGateCliFailureEvent() {
+  return createBrowsergateTraceEvent({
+    operationId: 'browsergate-cli',
+    scenario: 'browsergate-cli',
+    milestone: 'failed',
+    reportedOutcome: 'failed',
+    payload: Object.freeze({ failureCode: 'browsergate-command-failed' }),
+  })
+}
+
+function writeSettledTraces(snapshot) {
+  for (const event of snapshot.events) process.stdout.write(`${JSON.stringify(event)}\n`)
 }
 
 function assertRepositoryRuntimeNodeVersion() {
@@ -82,14 +126,15 @@ async function loadBrowserGateCommand(command) {
 function usage() {
   return [
     'browser orchestration commands:',
-    '  local [--run-policy blocking|closure|stability] [--output-root DIR] [--plan] [--skip-dependency-install]',
+    '  local [--run-policy blocking|closure|stability] [--output-root DIR] [--plan]',
+    '  smoke [--output-root DIR] [--run-id ID] [--checkout-sha SHA] [--profile FILE]',
     '  build-runtime --output-parent DIR --suite main|pion [--suite main|pion] [--github-output FILE]',
-    '  dispose-runtime --runtime-manifest FILE --runtime-manifest-sha256 SHA',
-    '  hosted-produce --output-root DIR --context FILE --run-id ID --checkout-sha SHA --run-policy blocking|closure|stability --suite main|pion --runtime-manifest FILE --runtime-manifest-sha256 SHA',
-    '  prepare --context FILE --run-id ID --checkout-sha SHA --run-policy blocking|closure|stability --runtime-manifest FILE --runtime-manifest-sha256 SHA',
-    '  samples --context FILE --suite main|pion --runtime-manifest FILE --runtime-manifest-sha256 SHA [--inside-windows-d5]',
-    '  full --context FILE --suite main|pion --runtime-manifest FILE --runtime-manifest-sha256 SHA [--inside-windows-d5]',
-    '  guard-suite --context FILE --suite main|pion --runtime-manifest FILE --runtime-manifest-sha256 SHA [--secret-env NAME] [--github-output FILE]',
+    '  dispose-runtime --runtime-manifest FILE',
+    '  hosted-produce --output-root DIR --context FILE --run-id ID --checkout-sha SHA --run-policy blocking|closure|stability --suite main|pion --runtime-manifest FILE',
+    '  prepare --context FILE --run-id ID --checkout-sha SHA --run-policy blocking|closure|stability --runtime-manifest FILE',
+    '  samples --context FILE --suite main|pion --runtime-manifest FILE',
+    '  full --context FILE --suite main|pion --runtime-manifest FILE',
+    '  guard-suite --context FILE --suite main|pion --runtime-manifest FILE [--secret-env NAME] [--github-output FILE]',
     '  context-environment --context FILE',
     '  plan [--platform win32|linux|darwin] [--run-policy blocking|closure|stability]',
   ].join('\n')
@@ -98,13 +143,15 @@ function usage() {
 const invokedPath = process.argv[1]
 if (invokedPath !== undefined && pathToFileURL(resolve(invokedPath)).href === import.meta.url) {
   try {
-    process.exitCode = await runBrowserGateCli(process.argv.slice(2))
+    const execution = await runBrowserGateCli(process.argv.slice(2))
+    writeSettledTraces(execution.traces)
+    process.exitCode = execution.exitCode
   } catch (cause) {
-    process.stderr.write(JSON.stringify({
-      component: 'browser-orchestration',
-      milestone: 'failed',
-      error: cause instanceof Error ? cause.message : String(cause),
-    }) + '\n')
+    const traces = settledBrowserGateFailureTraces(cause)
+    if (traces !== null) writeSettledTraces(traces)
+    // Arbitrary dependency causes are opaque here: inspecting message, code,
+    // or toString could prevent the one authoritative terminal record.
+    process.stderr.write(JSON.stringify(browserGateCliFailureEvent()) + '\n')
     process.exitCode = 1
   }
 }

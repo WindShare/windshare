@@ -9,7 +9,6 @@ import { verifyProcessSettlementAttestations } from '../../../../../web/scripts/
 import { browserRunPolicy } from '../../../../../web/scripts/browser-evidence/run-policy.ts'
 
 const NOW_UNIX_MS = 1_800_000_000_000
-const RUNTIME_MANIFEST_SHA256 = 'a'.repeat(64)
 const CHECKOUT_SHA = 'b'.repeat(40)
 const RESULT_BYTES = Buffer.from('{"resultStatus":"final-valid"}\n', 'utf8')
 const REPOSITORY_ROOT = resolve(import.meta.dirname, '..', '..', '..', '..', '..')
@@ -19,13 +18,15 @@ const PLAYWRIGHT_PATH = join(REPOSITORY_ROOT, 'web', 'node_modules', '@playwrigh
 const command = Object.freeze({
   repository: Object.freeze({ root: REPOSITORY_ROOT, checkoutSha: CHECKOUT_SHA }),
   driver: Object.freeze({
-    node: Object.freeze({ path: process.execPath, byteLength: 1, sha256: 'c'.repeat(64) }),
-    source: Object.freeze({ path: DRIVER_PATH, byteLength: 1, sha256: 'd'.repeat(64) }),
+    node: process.execPath,
+    source: DRIVER_PATH,
     cwd: REPOSITORY_ROOT,
     environment: Object.freeze({ LANG: 'C.UTF-8', PATH: 'injected-path' }),
   }),
   identity: Object.freeze({
     runId: 'settlement-test-run',
+    operationId: 'main-chromium-sample-1',
+    scenario: 'browser-sample-main-chromium-1',
     runPolicy: browserRunPolicy('blocking'),
     suite: 'main',
     browser: 'chromium',
@@ -40,12 +41,10 @@ const command = Object.freeze({
     resolutionSha256: 'f'.repeat(64),
   }),
   runtime: Object.freeze({
-    manifest: Object.freeze({ path: resolve('runtime.json'), byteLength: 1, sha256: RUNTIME_MANIFEST_SHA256 }),
+    manifest: resolve('runtime.json'),
     processOwner: Object.freeze({
-      kind: 'linux-process-owner',
-      path: resolve('linux-process-owner'),
-      byteLength: 1,
-      sha256: '1'.repeat(64),
+      kind: 'test-process-owner',
+      path: resolve('test-process-owner'),
     }),
   }),
   output: Object.freeze({
@@ -55,15 +54,19 @@ const command = Object.freeze({
   }),
   ownership: Object.freeze({
     platform: 'linux',
-    insideWindowsD5: false,
-    backend: 'linux-subreaper',
+    backend: 'inherited',
+    outerAuthority: Object.freeze({
+      kind: 'test-process-owner',
+      backend: 'linux_subreaper',
+      operationId: 'main-chromium-sample-1',
+    }),
     operationClass: 'browser-sample',
     classDeadlineMs: 330_000,
     childDeadlineMs: 270_000,
   }),
   leaf: Object.freeze({
-    executable: Object.freeze({ path: process.execPath, byteLength: 1, sha256: 'c'.repeat(64) }),
-    entrypoint: Object.freeze({ path: PLAYWRIGHT_PATH, byteLength: 1, sha256: '2'.repeat(64) }),
+    executable: process.execPath,
+    entrypoint: PLAYWRIGHT_PATH,
     arguments: Object.freeze([PLAYWRIGHT_PATH, 'test', '--project=chromium']),
     cwd: join(REPOSITORY_ROOT, 'web'),
     environment: Object.freeze({ LANG: 'C.UTF-8', PATH: 'injected-path' }),
@@ -72,7 +75,6 @@ const command = Object.freeze({
 const commandSha256 = canonicalSampleCommandSha256(command)
 const signer = createProcessSettlementSigner({
   invocationId: 'settlement-test-invocation',
-  runtimeManifestSha256: RUNTIME_MANIFEST_SHA256,
   now: () => NOW_UNIX_MS,
   createNonce: () => Buffer.alloc(32, 7),
 })
@@ -86,29 +88,13 @@ const sample = Object.freeze({
 })
 const execution = Object.freeze({
   processEvidence: Object.freeze({ terminal: 'exited', exitCode: 0 }),
-  timedOut: false,
-  launched: true,
   treeEmpty: true,
+  cleanupOutcome: 'completed',
   inputEvidence: Object.freeze({ outcome: 'delivered', failureCode: '', failureMessage: '' }),
-  clientIoEvidence: Object.freeze({
-    requestOutcome: 'delivered',
-    rawInputOutcome: 'delivered',
-    controlOutcome: 'not-requested',
-    outputOutcome: 'delivered',
-    failureCode: '',
-    failureMessage: '',
-  }),
   ownershipEvidence: Object.freeze({
-    ownerPid: 10,
-    rootPid: 11,
-    rootStartTimeTicks: '12',
-    inventoryScans: 2,
-    maximumObservedDescendants: 0,
-    quietInventoryCount: 2,
-    controlOutcome: 'target-terminal',
-    cleanupOutcome: 'completed',
-    failureCode: '',
-    failureMessage: '',
+    kind: 'test-process-owner',
+    backend: 'linux_subreaper',
+    terminationReason: 'natural',
   }),
 })
 const attestation = signer.signSample({
@@ -116,7 +102,7 @@ const attestation = signer.signSample({
   resultBytes: RESULT_BYTES,
   commandSha256,
   execution,
-  ownershipBackend: 'linux-subreaper',
+  ownershipBackend: 'linux_subreaper',
 })
 
 const verified = verifyProcessSettlementAttestations({
@@ -157,15 +143,9 @@ const dirtyAttestation = signer.signSample({
   execution: Object.freeze({
     ...execution,
     treeEmpty: false,
-    ownershipEvidence: Object.freeze({
-      ...execution.ownershipEvidence,
-      quietInventoryCount: 0,
-      cleanupOutcome: 'failed',
-      failureCode: 'OWNERSHIP_EVIDENCE_LOST',
-      failureMessage: 'injected cleanup failure',
-    }),
+    cleanupOutcome: 'failed',
   }),
-  ownershipBackend: 'linux-subreaper',
+  ownershipBackend: 'linux_subreaper',
 })
 assert.throws(
   () => verifyProcessSettlementAttestations({
@@ -184,7 +164,7 @@ assert.throws(
     resultBytes: RESULT_BYTES,
     commandSha256,
     execution,
-    ownershipBackend: 'linux-subreaper',
+    ownershipBackend: 'linux_subreaper',
   }),
   /signer is retired/u,
 )

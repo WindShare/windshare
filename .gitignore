@@ -13,8 +13,8 @@
 *.out
 coverage.*
 # Make coverage gate scripts are source, not generated profiles.
-!scripts/ci/coverage.ps1
-!scripts/ci/coverage.sh
+!scripts/ci/windows/coverage.ps1
+!scripts/ci/linux/coverage.sh
 *.coverprofile
 profile.cov
 

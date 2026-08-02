@@ -42,8 +42,8 @@ type Aggregate struct {
 	EvidenceOutcome    EvidenceOutcome         `json:"evidenceOutcome"`
 }
 
-// BuildAggregate is intentionally pure. A caller may ignore its observational
-// outcome for PR gating, but cannot turn missing or malformed inputs into success.
+// BuildAggregate is intentionally pure so publication cannot reinterpret an
+// incomplete or mismatched scheduled run as a successful hard verdict.
 func BuildAggregate(contract Contract, runs []RunResult) (Aggregate, error) {
 	canonicalRuns, err := validateAndOrderAggregateRuns(contract, runs)
 	if err != nil {
@@ -61,7 +61,7 @@ func BuildAggregate(contract Contract, runs []RunResult) (Aggregate, error) {
 		},
 		EvidenceOutcome: EvidenceIncomplete,
 	}
-	allCompleted := len(canonicalRuns) == 2
+	completedAndHealthy := len(canonicalRuns) == 1
 	for index, run := range canonicalRuns {
 		runDigest, err := run.SHA256(contract)
 		if err != nil {
@@ -90,13 +90,16 @@ func BuildAggregate(contract Contract, runs []RunResult) (Aggregate, error) {
 		if run.RunOutcome == RunInfrastructureFailed {
 			aggregate.EvidenceOutcome = EvidenceInfrastructureFailed
 		}
-		if run.RunOutcome != RunCompleted {
-			allCompleted = false
+		if run.RunOutcome != RunCompleted || run.OrchestrationOutcome != OrchestrationHealthy {
+			completedAndHealthy = false
 		}
 	}
 	if aggregate.Counts.SampleInfrastructureFailures > 0 {
 		aggregate.EvidenceOutcome = EvidenceInfrastructureFailed
-	} else if aggregate.EvidenceOutcome != EvidenceInfrastructureFailed && allCompleted {
+	} else if aggregate.EvidenceOutcome != EvidenceInfrastructureFailed && completedAndHealthy &&
+		aggregate.Counts.ObservedSamples == ScheduledIdentityCount &&
+		aggregate.Counts.Matched == ScheduledIdentityCount &&
+		aggregate.Counts.Mismatched == 0 && aggregate.Counts.NotEvaluated == 0 {
 		aggregate.EvidenceOutcome = EvidenceComplete
 	}
 	if aggregate.Counts.ObservedSamples != aggregate.Counts.Matched+
@@ -107,52 +110,17 @@ func BuildAggregate(contract Contract, runs []RunResult) (Aggregate, error) {
 }
 
 func validateAndOrderAggregateRuns(contract Contract, runs []RunResult) ([]RunResult, error) {
-	if len(runs) < 1 || len(runs) > 2 {
-		return nil, fmt.Errorf("%w: aggregate needs one or two real mode runs", ErrInvalidAggregate)
+	if len(runs) != 1 {
+		return nil, fmt.Errorf("%w: scheduled verdict needs exactly one real run", ErrInvalidAggregate)
 	}
-
-	var scheduled RunResult
-	var manual RunResult
-	hasScheduled := false
-	hasManual := false
-	seenRunIDs := make(map[string]struct{}, len(runs))
-	for index := range runs {
-		run := runs[index]
-		if err := run.Validate(contract); err != nil {
-			return nil, errors.Join(ErrInvalidAggregate, err)
-		}
-		if _, duplicate := seenRunIDs[run.RunID]; duplicate {
-			return nil, fmt.Errorf("%w: aggregate run identity %q repeats", ErrInvalidAggregate, run.RunID)
-		}
-		seenRunIDs[run.RunID] = struct{}{}
-		switch run.ExecutionMode {
-		case ModeScheduled:
-			if hasScheduled {
-				return nil, fmt.Errorf("%w: scheduled mode run repeats", ErrInvalidAggregate)
-			}
-			scheduled = run
-			hasScheduled = true
-		case ModeManual:
-			if hasManual {
-				return nil, fmt.Errorf("%w: manual mode run repeats", ErrInvalidAggregate)
-			}
-			manual = run
-			hasManual = true
-		default:
-			return nil, fmt.Errorf("%w: aggregate run mode is unknown", ErrInvalidAggregate)
-		}
+	run := runs[0]
+	if err := run.Validate(contract); err != nil {
+		return nil, errors.Join(ErrInvalidAggregate, err)
 	}
-
-	// Canonical mode order makes the same real run set hash identically without
-	// manufacturing a reference for a mode that did not execute.
-	ordered := make([]RunResult, 0, len(runs))
-	if hasScheduled {
-		ordered = append(ordered, scheduled)
+	if run.ExecutionMode != ModeScheduled {
+		return nil, fmt.Errorf("%w: scheduled verdict received a supplemental run", ErrInvalidAggregate)
 	}
-	if hasManual {
-		ordered = append(ordered, manual)
-	}
-	return ordered, nil
+	return []RunResult{run}, nil
 }
 
 func ParseAggregate(encoded []byte, contract Contract, runs []RunResult) (Aggregate, error) {

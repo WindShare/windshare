@@ -189,7 +189,8 @@ describe('fail-closed artifact and ZIP guard', () => {
       mode: 'main-unavailable',
     })
     const guard = await guardSyntheticSample(outcome, [], {
-      beforeArtifactScan: () => { throw new Error('synthetic scanner crash') },
+      action: 'fail-before-artifact-scan',
+      relativePath: outcome.result.artifacts[0]!.relativePath,
     })
     expect(guard).toMatchObject({
       guardOutcome: 'failed',
@@ -212,15 +213,9 @@ describe('fail-closed artifact and ZIP guard', () => {
       environment: artifactEnvironment(source, relativePath, 'process-log', 'text/plain'),
     })
     const guard = await guardSyntheticSample(outcome, ['replacement-secret'], {
-      beforeArtifactScan: async (artifact) => {
-        if (artifact.relativePath === relativePath) {
-          await writeFile(
-            join(artifactRootForOutcome(outcome), 'playwright', 'mutable.txt'),
-            'replacement-secret',
-            'utf8',
-          )
-        }
-      },
+      action: 'replace-artifact-before-scan',
+      relativePath,
+      replacementUtf8: 'replacement-secret',
     })
     expect(guard).toMatchObject({
       guardOutcome: 'failed',

@@ -1,6 +1,9 @@
 import { parseCanonicalJsonText } from '../browser-evidence/contract/strict-json.ts'
 
 const TEXT_ENCODER = new TextEncoder()
+const MAXIMUM_OPERATION_ID_BYTES = 128
+const PORTABLE_OPERATION_ID_PATTERN =
+  /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/u
 const CANONICAL_UTC_TIMESTAMP_PATTERN =
   /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}Z$/u
 // Maximal valid 45-sample ledgers exceed 64 KiB; this must remain byte-for-byte
@@ -180,6 +183,18 @@ export function requireRunId(value: unknown, label: string): string {
     networkMatrixError(`${label} is not a canonical lowercase authority identifier`)
   }
   return runId
+}
+
+/**
+ * Operation IDs cross the Node/Go process-owner boundary. Keeping this exact
+ * alphabet and byte ceiling aligned prevents a trace-only identity dialect.
+ */
+export function requireOperationId(value: unknown, label: string): string {
+  const operationId = requireString(value, label, MAXIMUM_OPERATION_ID_BYTES)
+  if (!PORTABLE_OPERATION_ID_PATTERN.test(operationId)) {
+    networkMatrixError(`${label} is not a canonical operation identifier`)
+  }
+  return operationId
 }
 
 export function requireCanonicalStringSet<T extends string>(

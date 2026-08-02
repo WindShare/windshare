@@ -1,6 +1,11 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$goAuthorityModule = Import-Module `
+    (Join-Path $PSScriptRoot 'goauthority/authority.psm1') `
+    -Force `
+    -PassThru
+$goAuthority = Enter-WindShareGoAuthority
 $windowsNativeModule = Import-Module `
     (Join-Path $PSScriptRoot 'core-release-windows-native.psm1') `
     -Force `
@@ -217,7 +222,8 @@ if (-not [string]::Equals(
 $originalGoToolchain = [Environment]::GetEnvironmentVariable('GOTOOLCHAIN', 'Process')
 try {
     $env:GOTOOLCHAIN = 'local'
-    $currentToolchain = Get-WindowsNativeCoordinatorGoToolchain
+    $currentToolchain = Get-WindowsNativeCoordinatorGoToolchain `
+        -CoordinatorExecutable $goAuthority.Executable
 } finally {
     if ($null -eq $originalGoToolchain) {
         Remove-Item Env:GOTOOLCHAIN -ErrorAction SilentlyContinue
@@ -754,13 +760,13 @@ if ([string]::IsNullOrWhiteSpace($ordinaryReleaseJob) -or
     throw 'ordinary CI core-release job lacks the fixed timeout or uncached core toolchain'
 }
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected 'go run ./scripts/ci/_corevulnerability'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected '-module $artifactRoot'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected "-cache (Join-Path `$temporaryRoot 'vulnerability-cache')"
 Assert-FileContains `
     -Path (Join-Path $repositoryRoot 'scripts\ci\_corevulnerability\main.go') `
@@ -776,27 +782,27 @@ Assert-FileContains `
     -Expected 'go-version-file: core/go.mod'
 Assert-FileContains `
     -Path $releaseWorkflowPath `
-    -Expected 'run: bash scripts/ci/core-release.sh "$CORE_RELEASE_VERSION" "$CORE_RELEASE_COMMIT_SHA" linux-ext4'
+    -Expected 'run: bash scripts/ci/linux/core-release.sh "$CORE_RELEASE_VERSION" "$CORE_RELEASE_COMMIT_SHA" linux-ext4'
 Assert-FileContains `
     -Path $releaseWorkflowPath `
-    -Expected 'run: ./scripts/ci/core-release.ps1 -Version $env:CORE_RELEASE_VERSION -CommitSHA $env:CORE_RELEASE_COMMIT_SHA -NativeProfile windows-ntfs'
+    -Expected 'run: ./scripts/ci/windows/core-release.ps1 -Version $env:CORE_RELEASE_VERSION -CommitSHA $env:CORE_RELEASE_COMMIT_SHA -NativeProfile windows-ntfs'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected 'Enter-CoreReleaseGoEnvironment -ReleaseRoot $temporaryRoot'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
-    -Expected "(Join-Path `$PSScriptRoot 'core-release-checkout.tests.ps1')"
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
+    -Expected "(Join-Path `$ciRoot 'core-release-checkout.tests.ps1')"
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected 'New-ExactCoreReleaseCheckout'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected 'Set-Location $releaseRepository'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected 'Assert-ExactCoreReleaseFileProjection'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected '-commit $CommitSHA'
 Assert-FileContains `
     -Path (Join-Path $repositoryRoot 'scripts\ci\_coremodulezip\main.go') `
@@ -811,97 +817,97 @@ Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'core-release-checkout.psm1') `
     -Expected "'hash-object', '--no-filters'"
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
-    -Expected "`$coverageTool = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'"
-Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected "`$coreSuiteTestTimeout = '30m'"
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected "`$windowsNativeWorkerTimeoutMinutes = 35"
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected '[TimeSpan]::FromMinutes('
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected 'New-WindowsNativeWorkerArgumentLine'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected '-ArgumentList $workerArgumentLine'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected '-LoadUserProfile'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected '-UseNewEnvironment'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected 'New-WindowsNativeCoordinatorReleaseRoot'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected 'Remove-WindowsNativeEphemeralUserProfile'
 Assert-FileDoesNotContain `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Forbidden 'Get-CimInstance'
 Assert-FileDoesNotContain `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Forbidden 'Remove-CimInstance'
 Assert-FileDoesNotContain `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Forbidden 'Get-WmiObject'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected "[ValidateSet('ReadExecute', 'MutableDirectory')]"
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected "'ReadExecute' { '(OI)(CI)RX' }"
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected "'MutableDirectory' { '(OI)(CI)(M,DC)' }"
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected '-AccessProfile MutableDirectory'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected 'FILE_DELETE_CHILD'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected 'Set-WindowsNativeTreeMutationDeny'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected 'Get-WindowsNativeCoordinatorGoToolchain'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected '-- selected coordinator Go application: candidates={0}, version={1}'
 Assert-FileDoesNotContain `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Forbidden '(Get-Command go -CommandType Application -ErrorAction Stop).Source'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected "-DestinationRoot (Join-Path `$temporaryRoot 'go-toolchain')"
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected '-GoExecutable $stagedToolchain.GoExecutable'
 Assert-FileDoesNotContain `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Forbidden '-EncodedCommand'
 Assert-FileDoesNotContain `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Forbidden 'ConvertTo-SingleQuotedPowerShellLiteral'
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected 'go test -count=1 "-timeout=$coreSuiteTestTimeout" ./...'
-Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
-    -Expected 'go test -race -count=1 "-timeout=$coreSuiteTestTimeout" ./...'
-Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
-    -Expected 'go test -count=1 "-timeout=$coreSuiteTestTimeout" ./... -covermode=atomic'
 Assert-FileDoesNotContain `
-    -Path (Join-Path $PSScriptRoot 'core-release.ps1') `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
+    -Forbidden 'go test -race'
+Assert-FileDoesNotContain `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
+    -Forbidden '-covermode=atomic'
+Assert-FileDoesNotContain `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
+    -Forbidden 'go-test-coverage'
+Assert-FileDoesNotContain `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Forbidden 'GO_TEST_COVERAGE'
 
-$releaseScriptPath = Join-Path $PSScriptRoot 'core-release.ps1'
+$releaseScriptPath = Join-Path $PSScriptRoot 'windows/core-release.ps1'
 $releaseScript = [IO.File]::ReadAllText($releaseScriptPath)
 $nativeGateIndex = $releaseScript.LastIndexOf(
     'Invoke-RequiredWindowsNativeTestsAsStandardUser',
@@ -915,19 +921,9 @@ $ordinaryTestIndex = $releaseScript.IndexOf(
     "Invoke-Step 'GOWORK=off go test ./... (extracted core)'",
     [StringComparison]::Ordinal
 )
-$raceTestIndex = $releaseScript.IndexOf(
-    "Invoke-Step 'GOWORK=off go test -race ./... (extracted core)'",
-    [StringComparison]::Ordinal
-)
-$coverageTestIndex = $releaseScript.IndexOf(
-    "Invoke-Step 'GOWORK=off go test with coverage (extracted core)'",
-    [StringComparison]::Ordinal
-)
 if ($vulnerabilityIndex -lt 0 -or
     $nativeGateIndex -le $vulnerabilityIndex -or
-    $ordinaryTestIndex -le $nativeGateIndex -or
-    $raceTestIndex -le $nativeGateIndex -or
-    $coverageTestIndex -le $nativeGateIndex) {
+    $ordinaryTestIndex -le $nativeGateIndex) {
     throw 'Windows native gate is not fail-fast after artifact build/vulnerability verification and before ordinary test evidence'
 }
 $profileDeleteIndex = $releaseScript.IndexOf(

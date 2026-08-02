@@ -1,13 +1,14 @@
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { isProxy } from 'node:util/types'
 
 import type { ChildEvidenceContext } from '../../browser-evidence/child-evidence.ts'
 import { browserRunPolicy } from '../../browser-evidence/run-policy.ts'
-import type {
-  BrowserSampleContainmentBackend,
-  BrowserSampleContainmentExecution,
-  BrowserSampleContainmentRequest,
-  BrowserSampleContainmentTrace,
+import {
+  BrowserSampleContainmentError,
+  type BrowserSampleContainmentBackend,
+  type BrowserSampleContainmentExecution,
+  type BrowserSampleContainmentRequest,
 } from '../../browser-evidence/process/containment.ts'
 import {
   NetworkMatrixSampleExecutionError,
@@ -30,6 +31,12 @@ import {
   parseContainedBrowserSampleOutput,
   type ContainedBrowserSampleOutput,
 } from './contained-browser-sample.ts'
+import {
+  LinuxTopologyTraceJournal,
+  settleLinuxTopologyTraceJournal,
+  type LinuxTopologyTraceChannel,
+  type LinuxTopologyTraceIdentity,
+} from './trace/index.ts'
 
 const DEFAULT_CHILD_PATH = fileURLToPath(new URL('./sample-child.ts', import.meta.url))
 const MAXIMUM_CAPTURE_BYTES = 4_194_304
@@ -65,11 +72,16 @@ export interface ConcreteContainedBrowserProcessBrokerOptions {
   readonly terminationGraceMs: number
   readonly maximumCaptureBytes?: number
   readonly childPath?: string
-  readonly trace?: (event: {
-    readonly operationId: string
-    readonly milestone: string
-    readonly context?: Readonly<Record<string, unknown>>
-  }) => void
+}
+
+export interface ContainedBrowserProcessExecution
+extends NetworkMatrixOwnedOperation<ContainedPlaywrightCandidateEvidence> {
+  readonly traces: LinuxTopologyTraceChannel
+}
+
+interface ContainedBrowserCollection {
+  readonly evidence: ContainedPlaywrightCandidateEvidence | undefined
+  readonly primaryFailure: unknown
 }
 
 interface BrokerOperationState {
@@ -82,7 +94,7 @@ interface BrokerOperationState {
 }
 
 export class ConcreteContainedBrowserProcessBroker
-implements NetworkMatrixContainedPlaywrightProcessBroker {
+implements NetworkMatrixContainedPlaywrightProcessBroker<LinuxTopologyTraceChannel> {
   readonly #options: ConcreteContainedBrowserProcessBrokerOptions
   readonly #maximumCaptureBytes: number
   readonly #childPath: string
@@ -103,7 +115,7 @@ implements NetworkMatrixContainedPlaywrightProcessBroker {
 
   start(
     context: NetworkMatrixSampleExecutionContext,
-  ): NetworkMatrixOwnedOperation<ContainedPlaywrightCandidateEvidence> {
+  ): ContainedBrowserProcessExecution {
     const state: BrokerOperationState = {
       controller: new AbortController(),
       acquisition: undefined,
@@ -112,10 +124,20 @@ implements NetworkMatrixContainedPlaywrightProcessBroker {
       result: undefined,
       force: undefined,
     }
-    const result = this.#run(context, state)
+    const journal = new LinuxTopologyTraceJournal()
+    const identity = journal.start(
+      containedBrowserTraceIdentity(context),
+      'contained-browser-started',
+      Object.freeze({ containmentBackend: this.#options.containment.kind }),
+    )
+    const result = settleLinuxTopologyTraceJournal(
+      this.#run(context, state, journal, identity),
+      journal,
+    )
     state.result = result
     return Object.freeze({
       result,
+      traces: journal.view,
       forceTerminateAndWait: (reason: NetworkMatrixOperationClass) =>
         this.#forceTerminateAndWait(state, reason),
     })
@@ -124,45 +146,67 @@ implements NetworkMatrixContainedPlaywrightProcessBroker {
   async #run(
     context: NetworkMatrixSampleExecutionContext,
     state: BrokerOperationState,
+    journal: LinuxTopologyTraceJournal,
+    identity: LinuxTopologyTraceIdentity,
   ): Promise<ContainedPlaywrightCandidateEvidence> {
-    let primaryFailure: unknown
-    let evidence: ContainedPlaywrightCandidateEvidence | undefined
-    try {
-      const acquisition = this.#options.inputs.acquire(context, state.controller.signal)
-      state.acquisition = acquisition
-      const input = await acquisition.result
-      state.input = input
-      const stdout = new BoundedCapture(this.#maximumCaptureBytes)
-      const stderr = new BoundedCapture(this.#maximumCaptureBytes)
-      const request = containmentRequest(context, input, state.controller.signal, {
-        options: this.#options,
-        childPath: this.#childPath,
-        stdout,
-        stderr,
-      })
-      await this.#options.containment.preflight(request)
-      const terminal = this.#options.containment.execute(request)
-      state.backendTerminal = terminal
-      const execution = await terminal
-      evidence = candidateEvidence(
-        context,
-        execution,
-        stdout,
-        stderr,
-        input.containsSensitiveValue,
-      )
-    } catch (cause) {
-      primaryFailure = cause
-    }
+    const collection: ContainedBrowserCollection = await this.#collectEvidence(
+      context,
+      state,
+      journal,
+      identity,
+    ).then(
+      (evidence) => Object.freeze({ evidence, primaryFailure: undefined }),
+      (cause: unknown) => Object.freeze({
+        evidence: undefined,
+        primaryFailure: retainContainmentFailure(cause, journal, identity),
+      }),
+    )
     const closeFailure = await closeInput(state.input)
-    if (closeFailure !== undefined) {
-      throw new AggregateError(
-        [...(primaryFailure === undefined ? [] : [primaryFailure]), closeFailure],
-        'contained browser sample input cleanup failed',
-      )
-    }
-    if (primaryFailure !== undefined) throw primaryFailure
-    if (evidence === undefined) throw sampleEvidenceError()
+    const cleanupOutcome = containedBrowserCleanupOutcome(state.input, closeFailure)
+    return finalizeContainedBrowserOperation(
+      collection,
+      closeFailure,
+      cleanupOutcome,
+      journal,
+      identity,
+    )
+  }
+
+  async #collectEvidence(
+    context: NetworkMatrixSampleExecutionContext,
+    state: BrokerOperationState,
+    journal: LinuxTopologyTraceJournal,
+    identity: LinuxTopologyTraceIdentity,
+  ): Promise<ContainedPlaywrightCandidateEvidence> {
+    journal.progress(identity, 'input-acquisition-started', 'started')
+    const acquisition = this.#options.inputs.acquire(context, state.controller.signal)
+    state.acquisition = acquisition
+    const input = await acquisition.result
+    state.input = input
+    journal.progress(identity, 'input-acquisition-completed', 'succeeded')
+    const request = containmentRequest(context, input, state.controller.signal, {
+      options: this.#options,
+      childPath: this.#childPath,
+      maximumCaptureBytes: this.#maximumCaptureBytes,
+    })
+    journal.progress(identity, 'containment-preflight-started', 'started')
+    await this.#options.containment.preflight(request)
+    journal.progress(identity, 'containment-preflight-completed', 'succeeded')
+    journal.progress(identity, 'contained-process-started', 'started')
+    const terminal = this.#options.containment.execute(request)
+    state.backendTerminal = terminal
+    const execution = await terminal
+    replayContainmentTraces(journal, identity, execution.traces)
+    journal.progress(identity, 'contained-process-settled', 'succeeded', {
+      terminationReason: execution.terminationReason,
+    })
+    const evidence = candidateEvidence(
+      context,
+      execution,
+      this.#maximumCaptureBytes,
+      input.containsSensitiveValue,
+    )
+    journal.progress(identity, 'contained-evidence-accepted', 'succeeded')
     return evidence
   }
 
@@ -193,6 +237,83 @@ implements NetworkMatrixContainedPlaywrightProcessBroker {
   }
 }
 
+function retainContainmentFailure(
+  cause: unknown,
+  journal: LinuxTopologyTraceJournal,
+  identity: LinuxTopologyTraceIdentity,
+): unknown {
+  if (isProxyValue(cause) || !(cause instanceof BrowserSampleContainmentError)) return cause
+  try {
+    replayContainmentTraces(journal, identity, cause.traces)
+    return cause
+  } catch (traceCause) {
+    return new AggregateError(
+      [cause, traceCause],
+      'contained browser failure trace could not be retained',
+      { cause },
+    )
+  }
+}
+
+function containedBrowserCleanupOutcome(
+  input: ContainedBrowserSampleInputAuthority | undefined,
+  closeFailure: unknown,
+): 'completed' | 'failed' | 'not-required' {
+  if (input === undefined) return 'not-required'
+  return closeFailure === undefined ? 'completed' : 'failed'
+}
+
+function finalizeContainedBrowserOperation(
+  collection: ContainedBrowserCollection,
+  closeFailure: unknown,
+  cleanupOutcome: 'completed' | 'failed' | 'not-required',
+  journal: LinuxTopologyTraceJournal,
+  identity: LinuxTopologyTraceIdentity,
+): ContainedPlaywrightCandidateEvidence {
+  const primaryFailure = containedBrowserPrimaryFailure(collection.primaryFailure, closeFailure)
+  let traceFailure = captureTraceFailure(() => journal.progress(
+    identity,
+    'input-cleanup-settled',
+    cleanupOutcome === 'failed' ? 'failed' : 'succeeded',
+    { cleanupOutcome },
+  ))
+  const outcome = primaryFailure === undefined && collection.evidence !== undefined
+    ? 'succeeded'
+    : 'failed'
+  traceFailure = combineTraceFailures(
+    traceFailure,
+    captureTraceFailure(() => journal.terminal(
+      identity,
+      'contained-browser-terminal',
+      outcome,
+      cleanupOutcome,
+    )),
+  )
+  if (primaryFailure !== undefined && traceFailure !== undefined) {
+    throw new AggregateError(
+      [primaryFailure, traceFailure],
+      'contained browser operation and lifecycle trace both failed',
+      { cause: primaryFailure },
+    )
+  }
+  if (primaryFailure !== undefined) throw primaryFailure
+  if (traceFailure !== undefined) throw traceFailure
+  if (collection.evidence === undefined) throw sampleEvidenceError()
+  return collection.evidence
+}
+
+function containedBrowserPrimaryFailure(
+  primaryFailure: unknown,
+  closeFailure: unknown,
+): unknown {
+  if (closeFailure === undefined) return primaryFailure
+  return new AggregateError(
+    [...(primaryFailure === undefined ? [] : [primaryFailure]), closeFailure],
+    'contained browser sample input cleanup failed',
+    { cause: primaryFailure ?? closeFailure },
+  )
+}
+
 function containmentRequest(
   context: NetworkMatrixSampleExecutionContext,
   input: ContainedBrowserSampleInputAuthority,
@@ -200,12 +321,13 @@ function containmentRequest(
   dependencies: {
     readonly options: ConcreteContainedBrowserProcessBrokerOptions
     readonly childPath: string
-    readonly stdout: BoundedCapture
-    readonly stderr: BoundedCapture
+    readonly maximumCaptureBytes: number
   },
 ): BrowserSampleContainmentRequest {
   const childContext: ChildEvidenceContext = Object.freeze({
     runId: context.runId,
+    operationId: context.operationId,
+    scenario: 'network-matrix-browser',
     runPolicy: NETWORK_MATRIX_PROCESS_POLICY,
     suite: 'pion',
     browser: context.identity.browser,
@@ -240,30 +362,27 @@ function containmentRequest(
     childContext,
     deadlineMs: dependencies.options.processDeadlineMs,
     terminationGraceMs: dependencies.options.terminationGraceMs,
-    stdout: (chunk: Uint8Array) => dependencies.stdout.consume(chunk),
-    stderr: (chunk: Uint8Array) => dependencies.stderr.consume(chunk),
-    trace: (event: BrowserSampleContainmentTrace) => dependencies.options.trace?.(Object.freeze({
-      operationId: context.operationId,
-      milestone: event.milestone,
-      ...(event.context === undefined ? {} : { context: event.context }),
-    })) ?? undefined,
+    capture: Object.freeze({
+      stdoutBytes: dependencies.maximumCaptureBytes,
+      stderrBytes: dependencies.maximumCaptureBytes,
+    }),
   })
 }
 
 function candidateEvidence(
   context: NetworkMatrixSampleExecutionContext,
   execution: BrowserSampleContainmentExecution,
-  stdout: BoundedCapture,
-  stderr: BoundedCapture,
+  maximumCaptureBytes: number,
   containsSensitiveValue: (encoded: string) => boolean,
 ): ContainedPlaywrightCandidateEvidence {
+  const stdout = decodeOutputSnapshot(execution.output.stdout, maximumCaptureBytes)
+  const stderr = decodeOutputSnapshot(execution.output.stderr, maximumCaptureBytes)
   if (
-    execution.timedOut || execution.processEvidence.terminal !== 'exited' ||
-    execution.processEvidence.exitCode !== 0 || stdout.truncated || stderr.truncated ||
-    containsSensitiveValue(stdout.encoded) ||
-    containsSensitiveValue(stderr.encoded)
+    execution.terminationReason !== 'natural' || execution.processEvidence.terminal !== 'exited' ||
+    execution.processEvidence.exitCode !== 0 || containsSensitiveValue(stdout) ||
+    containsSensitiveValue(stderr)
   ) throw sampleEvidenceError()
-  const output = parseSingleOutput(stdout.encoded)
+  const output = parseSingleOutput(stdout)
   if (output.browser !== context.identity.browser) throw sampleEvidenceError()
   return Object.freeze({
     processInstanceId: output.processInstanceId,
@@ -386,40 +505,170 @@ function sampleEvidenceError(): NetworkMatrixSampleExecutionError {
   )
 }
 
-class BoundedCapture {
-  readonly #maximumBytes: number
-  readonly #chunks: Uint8Array[] = []
-  #observedBytes = 0
-  #capturedBytes = 0
-
-  constructor(maximumBytes: number) {
-    this.#maximumBytes = maximumBytes
+function decodeOutputSnapshot(
+  snapshot: BrowserSampleContainmentExecution['output']['stdout'],
+  maximumCaptureBytes: number,
+): string {
+  if (
+    !snapshot.completed || snapshot.truncated ||
+    snapshot.observedBytes !== snapshot.capturedBytes ||
+    snapshot.capturedBytes > maximumCaptureBytes
+  ) throw sampleEvidenceError()
+  const bytes = snapshot.bytes()
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength !== snapshot.capturedBytes) {
+    throw sampleEvidenceError()
   }
-
-  consume(chunk: Uint8Array): void {
-    this.#observedBytes += chunk.byteLength
-    const remaining = this.#maximumBytes - this.#capturedBytes
-    if (remaining <= 0) return
-    const accepted = chunk.subarray(0, Math.min(remaining, chunk.byteLength))
-    this.#chunks.push(accepted.slice())
-    this.#capturedBytes += accepted.byteLength
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    throw sampleEvidenceError()
   }
+}
 
-  get truncated(): boolean {
-    return this.#observedBytes !== this.#capturedBytes
-  }
+function containedBrowserTraceIdentity(
+  context: NetworkMatrixSampleExecutionContext,
+): LinuxTopologyTraceIdentity {
+  return Object.freeze({
+    component: 'contained-browser-broker',
+    scenario: 'contained-browser-sample',
+    operationId: context.operationId,
+    runId: context.runId,
+    profileId: context.identity.profileId,
+    browser: context.identity.browser,
+    sampleOrdinal: context.identity.sampleOrdinal,
+  })
+}
 
-  get encoded(): string {
-    try {
-      const combined = new Uint8Array(this.#capturedBytes)
-      let offset = 0
-      for (const chunk of this.#chunks) {
-        combined.set(chunk, offset)
-        offset += chunk.byteLength
-      }
-      return new TextDecoder('utf-8', { fatal: true }).decode(combined)
-    } catch {
-      throw sampleEvidenceError()
-    }
+function replayContainmentTraces(
+  journal: LinuxTopologyTraceJournal,
+  identity: LinuxTopologyTraceIdentity,
+  snapshot: BrowserSampleContainmentExecution['traces'],
+): void {
+  if (isProxyValue(snapshot) || !plainRecord(snapshot)) throw sampleEvidenceError()
+  const descriptors = Object.getOwnPropertyDescriptors(snapshot)
+  const expected = ['events', 'observedEvents', 'capturedEvents', 'truncated', 'completed']
+  if (
+    !exactEnumerableDataKeys(snapshot, descriptors, expected) ||
+    descriptors.completed?.value !== true ||
+    descriptors.truncated?.value !== false ||
+    !Number.isSafeInteger(descriptors.observedEvents?.value) ||
+    descriptors.observedEvents?.value < 0 ||
+    descriptors.observedEvents?.value !== descriptors.capturedEvents?.value
+  ) throw sampleEvidenceError()
+  const events = descriptors.events?.value
+  if (
+    isProxyValue(events) ||
+    !Array.isArray(events) ||
+    Object.getPrototypeOf(events) !== Array.prototype ||
+    events.length !== descriptors.capturedEvents?.value
+  ) throw sampleEvidenceError()
+  for (let index = 0; index < events.length; index += 1) {
+    if (!Object.hasOwn(events, index)) throw sampleEvidenceError()
+    const projected = projectContainmentTrace(events[index])
+    journal.progress(
+      identity,
+      projected.milestone,
+      projected.outcome,
+      projected.context,
+    )
   }
+}
+
+function projectContainmentTrace(
+  value: unknown,
+): {
+  readonly milestone: string
+  readonly outcome: 'started' | 'succeeded' | 'failed'
+  readonly context: Readonly<Record<string, unknown>>
+} {
+  if (isProxyValue(value) || !plainRecord(value)) throw sampleEvidenceError()
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const keys = descriptors.context === undefined
+    ? ['milestone', 'outcome']
+    : ['milestone', 'outcome', 'context']
+  if (!exactEnumerableDataKeys(value, descriptors, keys)) throw sampleEvidenceError()
+  const milestone = descriptors.milestone?.value
+  const outcome = descriptors.outcome?.value
+  if (
+    typeof milestone !== 'string' ||
+    outcome !== 'started' && outcome !== 'succeeded' && outcome !== 'failed'
+  ) throw sampleEvidenceError()
+  return Object.freeze({
+    milestone,
+    outcome,
+    context: projectContainmentContext(descriptors.context?.value),
+  })
+}
+
+function projectContainmentContext(value: unknown): Readonly<Record<string, unknown>> {
+  if (value === undefined) return Object.freeze({})
+  if (isProxyValue(value) || !plainRecord(value)) throw sampleEvidenceError()
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  if (Reflect.ownKeys(value).some((key) => typeof key !== 'string')) throw sampleEvidenceError()
+  const projected: Record<string, unknown> = {}
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (!descriptor.enumerable || !('value' in descriptor)) throw sampleEvidenceError()
+    const entry = key === 'failure' ? 'opaque' : descriptor.value
+    if (
+      entry !== null &&
+      typeof entry !== 'string' &&
+      typeof entry !== 'boolean' &&
+      (typeof entry !== 'number' || !Number.isSafeInteger(entry))
+    ) throw sampleEvidenceError()
+    Object.defineProperty(projected, key, {
+      value: entry,
+      enumerable: true,
+      configurable: false,
+      writable: false,
+    })
+  }
+  return Object.freeze(projected)
+}
+
+function exactEnumerableDataKeys(
+  value: object,
+  descriptors: Record<string, PropertyDescriptor>,
+  expected: readonly string[],
+): boolean {
+  const keys = Reflect.ownKeys(value)
+  if (
+    keys.length !== expected.length ||
+    keys.some((key) => typeof key !== 'string' || !expected.includes(key))
+  ) return false
+  return expected.every((key) => {
+    const descriptor = descriptors[key]
+    return descriptor !== undefined && descriptor.enumerable && 'value' in descriptor
+  })
+}
+
+function plainRecord(value: unknown): value is object {
+  return typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+}
+
+function isProxyValue(value: unknown): boolean {
+  return (typeof value === 'object' || typeof value === 'function') &&
+    value !== null &&
+    isProxy(value)
+}
+
+function captureTraceFailure(action: () => void): unknown {
+  try {
+    action()
+    return undefined
+  } catch (cause) {
+    return cause
+  }
+}
+
+function combineTraceFailures(left: unknown, right: unknown): unknown {
+  if (left === undefined) return right
+  if (right === undefined) return left
+  return new AggregateError(
+    [left, right],
+    'contained browser lifecycle trace publication failed',
+    { cause: left },
+  )
 }

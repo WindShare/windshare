@@ -49,7 +49,7 @@ export function inheritedSampleEnvironment(
     const value = byCanonicalName.get(canonicalName)
     // Environment names are case-insensitive on Windows. Preserving the
     // spelling supplied by an intermediate PowerShell process made equivalent
-    // launch environments hash differently across the D5 trust handoff.
+    // launch environments hash differently across the outer-owner boundary.
     if (value !== undefined) selected[canonicalName] = value
   }
   return Object.freeze(selected)

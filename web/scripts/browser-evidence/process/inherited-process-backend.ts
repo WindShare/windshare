@@ -9,21 +9,45 @@ import type {
   BrowserSampleContainmentExecution,
   BrowserSampleContainmentPreflight,
   BrowserSampleContainmentRequest,
+  BrowserSampleContainmentTrace,
+  InheritedProcessAuthority,
 } from './containment.ts'
+import { BrowserSampleContainmentError } from './containment.ts'
+import {
+  createOwnedByteChannel,
+  createOwnedEventChannel,
+  waitForExactWritableCompletion,
+} from './owned-process-channel.mjs'
 import { sampleProcessEnvironment } from './sample-environment.ts'
+
+const MAXIMUM_CONTAINMENT_TRACE_RECORDS = 16
 
 /**
  * This backend deliberately owns only the direct leaf. Its caller must itself
- * be the sole child of a manifest-pinned OS tree owner. Keeping this module
- * incapable of claiming tree quiescence prevents a nested process group or Job
- * from hiding Playwright descendants from the settlement authority.
+ * be the sole child of the outer common tree owner. Its signed settlement is
+ * the only tree-quiescence proof, so a nested process group or Job here could
+ * hide Playwright descendants from the scenario's cleanup oracle.
  */
-export function createInheritedProcessContainmentBackend(): BrowserSampleContainmentBackend {
+export function createInheritedProcessContainmentBackend(
+  outerAuthority: InheritedProcessAuthority,
+  spawnProcess: typeof spawn = spawn,
+): BrowserSampleContainmentBackend {
+  requireOuterAuthority(outerAuthority)
   return Object.freeze({
     kind: 'inherited' as const,
+    outerAuthority,
     preflight: preflightInheritedProcess,
-    execute: executeInheritedProcess,
+    execute: (request: BrowserSampleContainmentRequest) =>
+      executeInheritedProcess(request, spawnProcess),
   })
+}
+
+function requireOuterAuthority(value: InheritedProcessAuthority): void {
+  if (
+    value === null || typeof value !== 'object' || value.kind !== 'test-process-owner' ||
+    !['windows_job', 'linux_subreaper'].includes(value.backend) ||
+    typeof value.operationId !== 'string' || !/^[A-Za-z0-9._-]{1,256}$/u.test(value.operationId)
+  ) throw new Error('inherited process containment requires an explicit outer tree authority')
 }
 
 async function preflightInheritedProcess(
@@ -39,7 +63,58 @@ async function preflightInheritedProcess(
 
 async function executeInheritedProcess(
   request: BrowserSampleContainmentRequest,
+  spawnProcess: typeof spawn,
 ): Promise<BrowserSampleContainmentExecution> {
+  const stdout = createOwnedByteChannel(request.capture.stdoutBytes, 'inherited leaf stdout')
+  const stderr = createOwnedByteChannel(request.capture.stderrBytes, 'inherited leaf stderr')
+  const traces = createOwnedEventChannel<BrowserSampleContainmentTrace>(
+    MAXIMUM_CONTAINMENT_TRACE_RECORDS,
+    'inherited leaf containment traces',
+  )
+  try {
+    const execution = await executeInheritedProcessBody(request, stdout, stderr, traces, spawnProcess)
+    const captureFailure = aggregateFailures(
+      'inherited leaf owned channels failed',
+      [stdout.failure(), stderr.failure(), traces.failure()],
+    )
+    if (captureFailure !== undefined) throw captureFailure
+    stdout.finish()
+    stderr.finish()
+    traces.finish()
+    return Object.freeze({
+      ...execution,
+      output: Object.freeze({ stdout: stdout.view.snapshot(), stderr: stderr.view.snapshot() }),
+      traces: traces.view.snapshot(),
+    })
+  } catch (cause) {
+    traces.append(Object.freeze({
+      milestone: 'inherited-leaf-failed',
+      outcome: 'failed',
+      context: Object.freeze({ failure: boundedMessage(cause instanceof Error ? cause.message : String(cause)) }),
+    }))
+    const failure = aggregateFailures(
+      'inherited leaf containment failed',
+      [cause, stdout.failure(), stderr.failure(), traces.failure()],
+    ) ?? new Error('inherited leaf containment failed')
+    stdout.finish()
+    stderr.finish()
+    traces.finish()
+    throw new BrowserSampleContainmentError(
+      'inherited leaf containment failed',
+      traces.view.snapshot(),
+      Object.freeze({ stdout: stdout.view.snapshot(), stderr: stderr.view.snapshot() }),
+      failure,
+    )
+  }
+}
+
+async function executeInheritedProcessBody(
+  request: BrowserSampleContainmentRequest,
+  stdout: ReturnType<typeof createOwnedByteChannel>,
+  stderr: ReturnType<typeof createOwnedByteChannel>,
+  traces: ReturnType<typeof createOwnedEventChannel<BrowserSampleContainmentTrace>>,
+  spawnProcess: typeof spawn,
+): Promise<Omit<BrowserSampleContainmentExecution, 'output' | 'traces'>> {
   requirePositiveInteger(request.deadlineMs, 'inherited leaf deadline')
   requirePositiveInteger(request.terminationGraceMs, 'inherited leaf termination grace')
   if (!isAbsolute(request.command.executable)) {
@@ -52,7 +127,7 @@ async function executeInheritedProcess(
     request.command.environment,
     childEvidenceEnvironment(request.childContext),
   )
-  const child = spawn(request.command.executable, [...request.command.arguments], {
+  const child = spawnProcess(request.command.executable, [...request.command.arguments], {
     cwd: request.command.cwd,
     detached: false,
     env: environment,
@@ -61,16 +136,11 @@ async function executeInheritedProcess(
     windowsHide: true,
   })
   if (child.stdout === null || child.stderr === null) {
-    child.kill('SIGKILL')
+    child.kill('SIGTERM')
     throw new Error('inherited leaf output pipes were not created')
   }
-  let sinkFailure: Error | undefined
-  const forwardStdout = nonAuthoritativeSink('stdout', request.stdout, (failure) => {
-    sinkFailure ??= failure
-  })
-  const forwardStderr = nonAuthoritativeSink('stderr', request.stderr, (failure) => {
-    sinkFailure ??= failure
-  })
+  const forwardStdout = (chunk: Uint8Array) => stdout.append(chunk)
+  const forwardStderr = (chunk: Uint8Array) => stderr.append(chunk)
   child.stdout.on('data', forwardStdout)
   child.stderr.on('data', forwardStderr)
   const stdinDelivery = request.command.stdin === undefined
@@ -80,18 +150,24 @@ async function executeInheritedProcess(
         (cause: unknown) => cause,
       )
   const terminal = childTerminal(child)
-  let timedOut = false
+  let terminationReason: BrowserSampleContainmentExecution['terminationReason'] = 'natural'
+  let terminationRequested = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let removeAbortListener = () => {}
   const termination = new Promise<void>((resolveTermination) => {
-    timer = setTimeout(() => {
-      timedOut = true
+    const requestTermination = (reason: BrowserSampleContainmentExecution['terminationReason']) => {
+      if (terminationRequested) return
+      terminationRequested = true
+      terminationReason = reason
       resolveTermination()
+    }
+    timer = setTimeout(() => {
+      requestTermination('deadline')
     }, request.deadlineMs)
     timer.ref()
     const signal = request.terminationSignal
     if (signal === undefined) return
-    const abort = () => resolveTermination()
+    const abort = () => requestTermination('stop')
     if (signal.aborted) abort()
     else {
       signal.addEventListener('abort', abort, { once: true })
@@ -106,7 +182,11 @@ async function executeInheritedProcess(
     ])
     if (first.kind === 'terminal') processEvidence = first.evidence
     else {
-      emitTrace(request, 'inherited-leaf-termination-requested', { timedOut })
+      traces.append(Object.freeze({
+        milestone: 'inherited-leaf-termination-requested',
+        outcome: 'started',
+        context: Object.freeze({ terminationReason }),
+      }))
       processEvidence = await terminateDirectLeaf(child, terminal, request.terminationGraceMs)
     }
   } finally {
@@ -126,12 +206,15 @@ async function executeInheritedProcess(
       cause: stdinFailure,
     })
   }
-  if (sinkFailure !== undefined) throw sinkFailure
-  emitTrace(request, 'inherited-leaf-root-terminal', {
-    terminal: processEvidence.terminal,
-    timedOut,
-  })
-  return Object.freeze({ processEvidence, timedOut })
+  if (processEvidence.terminal === 'spawn-failed' && terminationReason === 'natural') {
+    terminationReason = 'initialization_failed'
+  }
+  traces.append(Object.freeze({
+    milestone: 'inherited-leaf-root-terminal',
+    outcome: terminationReason === 'natural' ? 'succeeded' : 'failed',
+    context: Object.freeze({ terminal: processEvidence.terminal, terminationReason }),
+  }))
+  return Object.freeze({ processEvidence, terminationReason })
 }
 
 async function terminateDirectLeaf(
@@ -139,15 +222,12 @@ async function terminateDirectLeaf(
   terminal: Promise<RunnerProcessEvidence>,
   graceMs: number,
 ): Promise<RunnerProcessEvidence> {
-  child.kill('SIGTERM')
+  if (child.kill('SIGTERM') !== true) {
+    throw new Error('inherited leaf root rejected its direct stop request')
+  }
   const graceful = await boundedWait(terminal, graceMs)
   if (graceful !== undefined) return graceful
-  child.kill('SIGKILL')
-  const killed = await boundedWait(terminal, graceMs)
-  if (killed === undefined) {
-    throw new Error('inherited leaf root remained alive after SIGKILL')
-  }
-  return killed
+  throw new Error('inherited leaf root did not stop gracefully; outer owner retirement is required')
 }
 
 function childTerminal(child: ChildProcess): Promise<RunnerProcessEvidence> {
@@ -177,31 +257,26 @@ async function deliverAnonymousStdin(child: ChildProcess, bytes: Uint8Array): Pr
   if (bytes.byteLength === 0 || bytes.byteLength > 1_048_576 || stdin === null) {
     throw new Error('inherited leaf anonymous stdin authority is invalid')
   }
-  await new Promise<void>((resolveDelivery, rejectDelivery) => {
-    const failed = (cause: Error) => rejectDelivery(cause)
-    stdin.once('error', failed)
-    stdin.end(bytes, () => {
-      stdin.off('error', failed)
-      resolveDelivery()
-    })
-  })
+  const completion = waitForExactWritableCompletion(stdin, 'inherited leaf anonymous stdin')
+  try {
+    stdin.end(Buffer.from(bytes))
+  } catch (cause) {
+    stdin.destroy(cause instanceof Error ? cause : new Error(String(cause)))
+  }
+  await completion
 }
 
-function nonAuthoritativeSink(
-  stream: string,
-  sink: (chunk: Uint8Array) => void,
-  recordFailure: (failure: Error) => void,
-): (chunk: Uint8Array) => void {
-  let failed = false
-  return (chunk) => {
-    if (failed) return
-    try {
-      sink(chunk)
-    } catch (cause) {
-      failed = true
-      recordFailure(new Error(`inherited leaf ${stream} sink failed`, { cause }))
-    }
+function aggregateFailures(message: string, values: readonly unknown[]): Error | undefined {
+  const failures: Error[] = []
+  const observed = new Set<unknown>()
+  for (const value of values) {
+    if (value === undefined || observed.has(value)) continue
+    observed.add(value)
+    failures.push(value instanceof Error ? value : new Error(String(value)))
   }
+  if (failures.length === 0) return undefined
+  if (failures.length === 1) return failures[0]
+  return new AggregateError(failures, message)
 }
 
 async function requireRegularNoFollowPath(path: string, label: string): Promise<void> {
@@ -236,17 +311,5 @@ async function boundedWait<T>(promise: Promise<T>, milliseconds: number): Promis
     return await Promise.race([promise, timeout])
   } finally {
     if (timer !== undefined) clearTimeout(timer)
-  }
-}
-
-function emitTrace(
-  request: BrowserSampleContainmentRequest,
-  milestone: string,
-  context: Readonly<Record<string, unknown>>,
-): void {
-  try {
-    request.trace(Object.freeze({ milestone, context: Object.freeze(context) }))
-  } catch {
-    // The outer owner, not observability transport, owns retirement authority.
   }
 }

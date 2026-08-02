@@ -1,16 +1,19 @@
+import { isProxy } from 'node:util/types'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { resolve } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { loadNetworkMatrixRegistry, type LoadedNetworkMatrixRegistry } from '../manifest.ts'
-import type { NetworkMatrixRunTraceSink } from '../runner.ts'
+import type { NetworkMatrixTraceSnapshot } from '../trace/index.ts'
 import {
   NETWORK_MATRIX_EXECUTION_MODES,
+  NETWORK_MATRIX_SAMPLE_RETRY_COUNT,
   type NetworkMatrixExecutionMode,
 } from '../vocabulary.ts'
 import {
   aggregateNetworkMatrixFiles,
 } from './aggregate-files.ts'
 import {
-  executeNetworkMatrix,
+  startNetworkMatrixExecution,
+  type ExecuteNetworkMatrixResult,
   type NetworkMatrixRuntimeBootstrap,
 } from './execute.ts'
 import {
@@ -18,19 +21,23 @@ import {
   type NetworkMatrixPublisherHelperAuthority,
   type NetworkMatrixPublisherHelperOptions,
 } from './publisher-helper.ts'
-import { loadProductionNetworkMatrixCliRuntime } from '../linux-topology/production-runtime.ts'
+import {
+  loadProductionNetworkMatrixCliRuntime,
+  loadProductionNetworkMatrixCliRuntimeFromBytes,
+} from '../linux-topology/production-runtime.ts'
 import { GitHubActionsOidcBootstrapLease } from '../linux-topology/parent-workload-identity.ts'
 
 type CliOptions = ReadonlyMap<string, readonly string[]>
 
 export interface BrowserNetworkMatrixCliComposition {
   readonly runtimeBootstrap?: NetworkMatrixRuntimeBootstrap
+  readonly workloadIdentityBootstrap?: GitHubActionsOidcBootstrapLease
+  readonly productionRuntimeConfigBytes?: Uint8Array
   readonly platform?: NodeJS.Platform
   readonly openPublisherHelper?: (
     options: NetworkMatrixPublisherHelperOptions,
   ) => Promise<NetworkMatrixPublisherHelperAuthority>
   readonly loadRegistry?: (manifestPath: string) => Promise<LoadedNetworkMatrixRegistry>
-  readonly trace?: NetworkMatrixRunTraceSink
   readonly writeSummary?: (encoded: string) => void
 }
 
@@ -45,6 +52,7 @@ export async function browserNetworkMatrixCli(
   arguments_: readonly string[],
   composition: BrowserNetworkMatrixCliComposition = {},
 ): Promise<number> {
+  requireOidcRequestSentinelsAbsent()
   const [command, ...optionArguments] = arguments_
   if (command === undefined) throw new Error(cliUsage())
   const options = parseOptions(optionArguments)
@@ -59,18 +67,9 @@ async function executeCommand(
 ): Promise<number> {
   assertOnlyOptions(options, [
     'mode', 'run-id', 'manifest', 'output-root', 'helper-manifest', 'publisher-helper',
-    'windows-job-helper', 'runtime-config',
+    'process-owner', 'runtime-config', 'checkout-sha', 'repository-root',
   ])
-  const runtimeConfig = optionalOption(options, 'runtime-config')
-  if (composition.runtimeBootstrap === undefined && runtimeConfig === undefined) {
-    throw new NetworkMatrixRuntimeNotWiredError()
-  }
-  const configuredRuntime = composition.runtimeBootstrap === undefined
-    ? await loadProductionNetworkMatrixCliRuntime(resolve(runtimeConfig as string))
-    : undefined
-  if (composition.runtimeBootstrap !== undefined && runtimeConfig !== undefined) {
-    throw new Error('injected network matrix runtime cannot receive a production runtime config')
-  }
+  const configuredRuntime = await configuredProductionRuntime(options, composition)
   if (composition.runtimeBootstrap === undefined && configuredRuntime === undefined) {
     throw new NetworkMatrixRuntimeNotWiredError()
   }
@@ -78,34 +77,47 @@ async function executeCommand(
     options,
     composition,
     configuredRuntime?.platform,
-    configuredRuntime?.windowsJobHelperPath,
   )
   const mode = executionMode(requiredOption(options, 'mode'))
   let workloadIdentityBootstrap: GitHubActionsOidcBootstrapLease | undefined
-  let result: Awaited<ReturnType<typeof executeNetworkMatrix>>
+  let result: ExecuteNetworkMatrixResult | undefined
+  let traceSnapshot: NetworkMatrixTraceSnapshot | undefined
+  let runnerTraceSnapshot: NetworkMatrixTraceSnapshot | null | undefined
+  let outerFailure: unknown
   try {
     result = await withPublisherHelper(publisherOptions, composition, async (publisher) => {
       workloadIdentityBootstrap = configuredRuntime === undefined
         ? undefined
-        : GitHubActionsOidcBootstrapLease.capture()
+        : composition.workloadIdentityBootstrap
+      if (configuredRuntime !== undefined && workloadIdentityBootstrap === undefined) {
+        throw new Error('production browser network matrix requires one pre-minted OIDC bootstrap')
+      }
       const runtimeBootstrap = composition.runtimeBootstrap ?? configuredRuntime
-        ?.bindWorkloadIdentityBootstrap(workloadIdentityBootstrap as GitHubActionsOidcBootstrapLease)
+        ?.bindWorkloadIdentityBootstrap(
+          workloadIdentityBootstrap as GitHubActionsOidcBootstrapLease,
+          publisherOptions.processOwnerPath,
+        )
       if (runtimeBootstrap === undefined) throw new NetworkMatrixRuntimeNotWiredError()
-      let commandResult: Awaited<ReturnType<typeof executeNetworkMatrix>> | undefined
+      let commandResult: ExecuteNetworkMatrixResult | undefined
       let commandFailure: unknown
       try {
         const registry = await (composition.loadRegistry ?? loadNetworkMatrixRegistry)(
           resolve(requiredOption(options, 'manifest')),
         )
-        commandResult = await executeNetworkMatrix({
+        const execution = startNetworkMatrixExecution({
           registry,
           runId: requiredOption(options, 'run-id'),
           executionMode: mode,
           outputRoot: resolve(requiredOption(options, 'output-root')),
           runtimeBootstrap,
           publisher: publisher.artifactPublisher,
-          ...(composition.trace === undefined ? {} : { trace: composition.trace }),
         })
+        try {
+          commandResult = await execution.result
+        } finally {
+          traceSnapshot = execution.traces.snapshot()
+          runnerTraceSnapshot = await execution.runnerTraces
+        }
       } catch (cause) {
         commandFailure = cause
       }
@@ -126,19 +138,37 @@ async function executeCommand(
       return commandResult
     })
   } catch (primaryFailure) {
-    // Publisher authentication intentionally precedes bootstrap capture. If it
-    // fails, consume-and-erase the ambient sentinels before an exported caller
-    // can catch the rejection and continue inside the same runner process.
-    if (configuredRuntime !== undefined && workloadIdentityBootstrap === undefined) {
-      try {
-        const abandoned = GitHubActionsOidcBootstrapLease.capture()
-        await abandoned.forceTerminateAndWait()
-      } catch {
-        // Capture deletes both sentinels atomically even when one is absent or invalid.
-      }
-    }
-    throw primaryFailure
+    outerFailure = primaryFailure
   }
+
+  let tracePublicationFailure: unknown
+  if (traceSnapshot !== undefined) {
+    try {
+      if (runnerTraceSnapshot === undefined) {
+        throw new Error('browser network matrix runner trace settlement was not retained')
+      }
+      if (result !== undefined && result.runnerTraces !== runnerTraceSnapshot) {
+        throw new Error('browser network matrix runner trace settlement changed before publication')
+      }
+      if (result?.commandOutcome === 'completed' && runnerTraceSnapshot === null) {
+        throw new Error('completed browser network matrix execution lacks runner trace evidence')
+      }
+      writeSettledExecutionTraces(traceSnapshot, runnerTraceSnapshot)
+    } catch (cause) {
+      tracePublicationFailure = cause
+    }
+  }
+  if (outerFailure !== undefined && tracePublicationFailure !== undefined) {
+    throw new AggregateError(
+      [outerFailure, tracePublicationFailure],
+      'browser network matrix command and trace publication both failed',
+      { cause: outerFailure },
+    )
+  }
+  if (outerFailure !== undefined) throw outerFailure
+  if (tracePublicationFailure !== undefined) throw tracePublicationFailure
+  if (result === undefined) throw new Error('browser network matrix command returned no result')
+
   writeSummary(composition, {
     command: 'execute',
     commandOutcome: result.commandOutcome,
@@ -146,11 +176,61 @@ async function executeCommand(
     runId: result.run.runId,
     runOutcome: result.run.runOutcome,
     evidenceOutcome: result.aggregate.evidenceOutcome,
+    acceptanceOutcome: scheduledExecutionAccepted(result) ? 'passed' : 'failed',
+    retryCount: NETWORK_MATRIX_SAMPLE_RETRY_COUNT,
     outputRoot: result.publication.outputRoot,
     runPath: result.publication.runPath,
     aggregatePath: result.publication.aggregatePath,
   })
-  return result.commandOutcome === 'completed' ? 0 : 1
+  return scheduledExecutionAccepted(result) ? 0 : 1
+}
+
+function requireOidcRequestSentinelsAbsent(): void {
+  for (const name of Object.keys(process.env)) {
+    const folded = name.toUpperCase()
+    if (
+      folded === 'ACTIONS_ID_TOKEN_REQUEST_URL' ||
+      folded === 'ACTIONS_ID_TOKEN_REQUEST_TOKEN'
+    ) throw new Error('OIDC request authority reached the browser network matrix process')
+  }
+}
+
+async function configuredProductionRuntime(
+  options: CliOptions,
+  composition: BrowserNetworkMatrixCliComposition,
+): Promise<Awaited<ReturnType<typeof loadProductionNetworkMatrixCliRuntime>> | undefined> {
+  const runtimeConfig = optionalOption(options, 'runtime-config')
+  const checkoutSha = optionalOption(options, 'checkout-sha')
+  const repositoryRoot = optionalOption(options, 'repository-root')
+  if (composition.runtimeBootstrap !== undefined) {
+    if (
+      runtimeConfig !== undefined || composition.productionRuntimeConfigBytes !== undefined ||
+      checkoutSha !== undefined || repositoryRoot !== undefined
+    ) {
+      throw new Error('injected network matrix runtime cannot receive production checkout authority')
+    }
+    return undefined
+  }
+  if (composition.productionRuntimeConfigBytes !== undefined) {
+    if (runtimeConfig !== undefined) {
+      throw new Error('retained runtime config cannot be combined with a path runtime config')
+    }
+    return loadProductionNetworkMatrixCliRuntimeFromBytes(
+      composition.productionRuntimeConfigBytes,
+      currentCheckoutAuthority(
+        requiredOption(options, 'checkout-sha'),
+        requiredOption(options, 'repository-root'),
+      ),
+    )
+  }
+  if (runtimeConfig === undefined) throw new NetworkMatrixRuntimeNotWiredError()
+  return loadProductionNetworkMatrixCliRuntime(
+    resolve(runtimeConfig),
+    currentCheckoutAuthority(
+      requiredOption(options, 'checkout-sha'),
+      requiredOption(options, 'repository-root'),
+    ),
+  )
 }
 
 async function aggregateCommand(
@@ -158,7 +238,7 @@ async function aggregateCommand(
   composition: BrowserNetworkMatrixCliComposition,
 ): Promise<number> {
   assertOnlyOptions(options, [
-    'manifest', 'run', 'output', 'helper-manifest', 'publisher-helper', 'windows-job-helper',
+    'manifest', 'run', 'output', 'helper-manifest', 'publisher-helper', 'process-owner',
   ])
   const publisherOptions = publisherHelperOptions(options, composition)
   const result = await withPublisherHelper(publisherOptions, composition, async (publisher) => {
@@ -178,9 +258,76 @@ async function aggregateCommand(
     modes: result.runs.map(({ executionMode }) => executionMode),
     runIds: result.runs.map(({ runId }) => runId),
     evidenceOutcome: result.aggregate.evidenceOutcome,
+    acceptanceOutcome: result.aggregate.evidenceOutcome === 'complete' ? 'passed' : 'failed',
+    retryCount: NETWORK_MATRIX_SAMPLE_RETRY_COUNT,
     outputPath: result.publication.path,
   })
-  return 0
+  return result.aggregate.evidenceOutcome === 'complete' ? 0 : 1
+}
+
+function scheduledExecutionAccepted(
+  result: ExecuteNetworkMatrixResult,
+): boolean {
+  return result.commandOutcome === 'completed' &&
+    result.runtimeCleanupOutcome === 'completed' &&
+    result.runnerTraces !== null &&
+    result.run.executionMode === 'scheduled' &&
+    result.run.orchestrationOutcome === 'healthy' &&
+    result.run.runOutcome === 'completed' &&
+    result.aggregate.evidenceOutcome === 'complete'
+}
+
+function writeSettledExecutionTraces(
+  execution: NetworkMatrixTraceSnapshot,
+  runner: NetworkMatrixTraceSnapshot | null,
+): void {
+  const executionEvents = requireSettledTraceEvents(execution, 'execution')
+  const runnerEvents = runner === null ? Object.freeze([]) : requireSettledTraceEvents(runner, 'runner')
+  // Both journals are validated before the first byte is published, preventing a
+  // valid execution prefix from disguising rejected runner evidence.
+  for (const trace of [...executionEvents, ...runnerEvents]) {
+    process.stderr.write(`${JSON.stringify(trace)}\n`)
+  }
+}
+
+function requireSettledTraceEvents(
+  snapshot: NetworkMatrixTraceSnapshot,
+  journal: 'execution' | 'runner',
+): readonly NetworkMatrixTraceSnapshot['events'][number][] {
+  if (isProxy(snapshot)) {
+    throw new Error(`browser network matrix ${journal} trace snapshot is a Proxy`)
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(snapshot)
+  const data = (key: keyof NetworkMatrixTraceSnapshot): unknown => {
+    const descriptor = descriptors[key]
+    if (descriptor === undefined || !('value' in descriptor)) {
+      throw new Error(`browser network matrix ${journal} trace snapshot has an accessor or missing field`)
+    }
+    return descriptor.value
+  }
+  const events = data('events')
+  const observedEvents = data('observedEvents')
+  const capturedEvents = data('capturedEvents')
+  const observedBytes = data('observedBytes')
+  const capturedBytes = data('capturedBytes')
+  if (
+    isProxy(events) ||
+    !Array.isArray(events) ||
+    data('failure') !== null ||
+    data('completed') !== true ||
+    data('truncated') !== false ||
+    !Number.isSafeInteger(observedEvents) ||
+    !Number.isSafeInteger(capturedEvents) ||
+    !Number.isSafeInteger(observedBytes) ||
+    !Number.isSafeInteger(capturedBytes) ||
+    observedEvents !== capturedEvents ||
+    observedBytes !== capturedBytes ||
+    events.length !== capturedEvents ||
+    events.some((event) => isProxy(event) || !Object.isFrozen(event))
+  ) {
+    throw new Error(`browser network matrix ${journal} lifecycle trace did not settle completely`)
+  }
+  return events
 }
 
 function parseOptions(arguments_: readonly string[]): CliOptions {
@@ -258,26 +405,13 @@ function publisherHelperOptions(
   options: CliOptions,
   composition: BrowserNetworkMatrixCliComposition,
   configuredPlatform?: 'linux' | 'win32',
-  configuredWindowsJobHelperPath?: string,
 ): NetworkMatrixPublisherHelperOptions {
   const platform = publisherPlatform(configuredPlatform ?? composition.platform ?? process.platform)
-  const optionalWindowsJobHelperPath = optionalOption(options, 'windows-job-helper')
-  if (
-    configuredWindowsJobHelperPath !== undefined && optionalWindowsJobHelperPath !== undefined
-  ) throw new Error('Windows Job helper authority must come from exactly one composition boundary')
-  if (platform === 'linux' && optionalWindowsJobHelperPath !== undefined) {
-    throw new Error('browser network matrix option --windows-job-helper is only valid on Windows')
-  }
-  const windowsJobHelperPath = platform === 'win32'
-    ? configuredWindowsJobHelperPath ?? requiredOption(options, 'windows-job-helper')
-    : undefined
   return Object.freeze({
     helperManifestPath: requiredOption(options, 'helper-manifest'),
     publisherHelperPath: requiredOption(options, 'publisher-helper'),
     platform,
-    ...(windowsJobHelperPath === undefined
-      ? {}
-      : { windowsJobHelperPath }),
+    processOwnerPath: requiredOption(options, 'process-owner'),
   })
 }
 
@@ -295,6 +429,22 @@ function executionMode(value: string): NetworkMatrixExecutionMode {
   return value as NetworkMatrixExecutionMode
 }
 
+function currentCheckoutAuthority(
+  checkoutSha: string,
+  repositoryRoot: string,
+): Readonly<{ checkoutSha: string, repositoryRoot: string }> {
+  if (!/^[a-f0-9]{40}$/u.test(checkoutSha)) {
+    throw new Error('browser network matrix checkout SHA must be a lowercase 40-character Git object ID')
+  }
+  if (
+    !isAbsolute(repositoryRoot) || resolve(repositoryRoot) !== repositoryRoot ||
+    repositoryRoot.includes('\0')
+  ) {
+    throw new Error('browser network matrix repository root must be a canonical absolute path')
+  }
+  return Object.freeze({ checkoutSha, repositoryRoot })
+}
+
 function writeSummary(
   composition: BrowserNetworkMatrixCliComposition,
   value: Readonly<Record<string, unknown>>,
@@ -307,8 +457,8 @@ function writeSummary(
 function cliUsage(): string {
   return [
     'browser network matrix local commands:',
-    '  execute --mode scheduled|manual --run-id ID --manifest FILE --output-root NEW_DIR --helper-manifest FILE --publisher-helper FILE --runtime-config FILE',
-    '  aggregate --manifest FILE --run RUN_JSON [--run RUN_JSON] --output NEW_FILE --helper-manifest FILE --publisher-helper FILE [--windows-job-helper FILE on Windows]',
+    '  execute --mode scheduled --run-id ID --manifest FILE --output-root NEW_DIR --helper-manifest FILE --publisher-helper FILE --process-owner FILE --runtime-config FILE --checkout-sha SHA --repository-root DIR',
+    '  aggregate --manifest FILE --run RUN_JSON [--run RUN_JSON] --output NEW_FILE --helper-manifest FILE --publisher-helper FILE --process-owner FILE',
   ].join('\n')
 }
 
@@ -319,11 +469,11 @@ if (
 ) {
   browserNetworkMatrixCli(process.argv.slice(2)).then(
     (exitCode) => { process.exitCode = exitCode },
-    (cause: unknown) => {
+    () => {
       process.stderr.write(`${JSON.stringify({
         component: 'browser-network-matrix-cli',
         outcome: 'failed',
-        error: cause instanceof Error ? cause.message : String(cause),
+        failureCode: 'cli-command-failed',
       })}\n`)
       process.exitCode = 1
     },

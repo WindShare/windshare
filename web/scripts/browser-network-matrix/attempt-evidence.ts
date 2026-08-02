@@ -60,11 +60,6 @@ const ESTABLISHED_PION_PROFILE_POLICIES = Object.freeze({
     remote: Object.freeze(['relay'] as const),
     protocols: Object.freeze(['udp', 'tcp'] as const),
   }),
-  'manual-real-nat': Object.freeze({
-    local: Object.freeze(['host', 'srflx', 'prflx'] as const),
-    remote: Object.freeze(['host', 'srflx', 'prflx'] as const),
-    protocols: Object.freeze(['udp'] as const),
-  }),
 })
 
 export type NetworkMatrixBrowserSelectedPair = NetworkCandidatePath

@@ -91,7 +91,7 @@ export async function acquireTestIceTopology(
   const resolutionPath = join(directory, 'resolution.json')
   try {
     const { stdout } = await execFileAsync(
-      'go',
+      process.env.WINDSHARE_GO_EXECUTABLE ?? 'go',
       [
         'run',
         TOPOLOGY_MATERIALIZER,

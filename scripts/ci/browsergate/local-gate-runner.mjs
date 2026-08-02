@@ -1,17 +1,20 @@
 import { projectLocalHostedJobOutcomes } from './local-hosted-outcome-projection.mjs'
+import {
+  createOwnedTraceJournal,
+  requireCompleteOwnedTraceSnapshot,
+} from './owned-trace-journal.mjs'
 
 const SUITES = Object.freeze(['main', 'pion'])
+const LOCAL_GATE_MAXIMUM_TRACE_EVENTS = 128
+const LOCAL_GATE_MAXIMUM_TRACE_BYTES = 256 * 1024
 
 export function localGateOperationPlan({
-  dependencyInstallReused = false,
   mainProductOperations,
   pionProductOperations,
 }) {
-  requireBoolean(dependencyInstallReused, 'dependency install reuse')
   requireOperationNames(mainProductOperations, 'main product operations')
   requireOperationNames(pionProductOperations, 'Pion product operations')
   return Object.freeze([
-    dependencyInstallReused ? 'dependency-install-reuse' : 'dependency-install',
     'browser-contract',
     'generated-semantic-process',
     'browser-runtime-build',
@@ -34,9 +37,52 @@ export function localGateOperationPlan({
  * independent from browsers and native process owners while production retains
  * one invocation-scoped runtime authority.
  */
-export async function runLocalBrowserGatePipeline({
-  dependencyInstallReused = false,
-  acquireDependencies,
+export async function runLocalBrowserGatePipeline(ports) {
+  const journal = createOwnedTraceJournal({
+    label: 'local browser gate lifecycle trace',
+    maximumEvents: LOCAL_GATE_MAXIMUM_TRACE_EVENTS,
+    maximumBytes: LOCAL_GATE_MAXIMUM_TRACE_BYTES,
+  })
+  let result
+  let primaryFailure
+  try {
+    result = await runLocalBrowserGatePipelineOperation(ports, journal.append)
+  } catch (cause) {
+    primaryFailure = cause
+  } finally {
+    journal.finish()
+  }
+  const traces = journal.view.snapshot()
+  let traceFailure
+  try {
+    requireCompleteOwnedTraceSnapshot(traces, 'local browser gate lifecycle trace')
+  } catch (cause) {
+    traceFailure = cause
+  }
+  if (primaryFailure !== undefined) {
+    throw new LocalBrowserGatePipelineError(primaryFailure, traces, traceFailure)
+  }
+  if (result === undefined) throw new Error('local browser gate pipeline returned no result')
+  return Object.freeze({
+    ...result,
+    exitCode: traceFailure === undefined ? result.exitCode : 1,
+    traces,
+  })
+}
+
+export class LocalBrowserGatePipelineError extends Error {
+  constructor(primaryFailure, traces, traceFailure) {
+    super('local browser gate pipeline failed', {
+      cause: traceFailure === undefined
+        ? primaryFailure
+        : new AggregateError([primaryFailure, traceFailure], 'pipeline and trace settlement failed'),
+    })
+    this.name = 'LocalBrowserGatePipelineError'
+    this.traces = traces
+  }
+}
+
+async function runLocalBrowserGatePipelineOperation({
   runContract,
   runGeneratedSemanticProcess,
   buildRuntime,
@@ -47,11 +93,8 @@ export async function runLocalBrowserGatePipeline({
   runGuard,
   retireRuntime,
   runVerdict,
-  trace = () => undefined,
-}) {
-  requireBoolean(dependencyInstallReused, 'dependency install reuse')
+}, trace) {
   for (const [name, operation] of Object.entries({
-    acquireDependencies,
     runContract,
     runGeneratedSemanticProcess,
     buildRuntime,
@@ -65,7 +108,10 @@ export async function runLocalBrowserGatePipeline({
     trace,
   })) requireFunction(operation, name)
 
-  const projectionInput = initialProjectionInput({ dependencyInstallReused })
+  // Make has already completed the shared web-dependencies leaf. Recording that
+  // edge as successful preserves hosted/local projection parity without giving
+  // Browsergate a second dependency-acquisition authority.
+  const projectionInput = initialProjectionInput()
   const suiteOutcomes = Object.fromEntries(SUITES.map((suite) => [
     suite,
     failedProductOutcome(),
@@ -76,25 +122,11 @@ export async function runLocalBrowserGatePipeline({
   ]))
   let runtime = null
 
-  if (dependencyInstallReused) {
-    terminalTrace(trace, 'dependency-install-reuse', 'success', { authority: 'reused' })
-  } else {
-    projectionInput.contract.dependencyInstall = await exitOperation({
-      operationId: 'dependency-install',
-      operation: acquireDependencies,
-      trace,
-    })
-  }
-
-  if (projectionInput.contract.dependencyInstall === 'success') {
-    projectionInput.contract.browserContract = await exitOperation({
-      operationId: 'browser-contract',
-      operation: runContract,
-      trace,
-    })
-  } else {
-    skippedTrace(trace, 'browser-contract', 'dependency-install')
-  }
+  projectionInput.contract.browserContract = await exitOperation({
+    operationId: 'browser-contract',
+    operation: runContract,
+    trace,
+  })
 
   const contractSucceeded = projectionInput.contract.browserContract === 'success'
   if (contractSucceeded) {
@@ -235,10 +267,10 @@ export async function runLocalBrowserGatePipeline({
   })
 }
 
-function initialProjectionInput({ dependencyInstallReused }) {
+function initialProjectionInput() {
   return {
     contract: {
-      dependencyInstall: dependencyInstallReused ? 'success' : 'skipped',
+      dependencyInstall: 'success',
       browserContract: 'skipped',
     },
     process: {
@@ -274,8 +306,8 @@ async function voidOperation({ operationId, operation, trace }) {
     await operation()
     terminalTrace(trace, operationId, 'success')
     return 'success'
-  } catch (cause) {
-    terminalTrace(trace, operationId, 'failure', { error: errorMessage(cause) })
+  } catch {
+    terminalTrace(trace, operationId, 'failure', { failureCode: 'operation-rejected' })
     return 'failure'
   }
 }
@@ -294,8 +326,8 @@ async function valueOperation({
       ? { exitCode: value.exitCode }
       : {})
     return Object.freeze({ outcome, value })
-  } catch (cause) {
-    terminalTrace(trace, operationId, 'failure', { error: errorMessage(cause) })
+  } catch {
+    terminalTrace(trace, operationId, 'failure', { failureCode: 'operation-rejected' })
     return Object.freeze({ outcome: 'failure', value: null })
   }
 }
@@ -358,10 +390,6 @@ function terminalTrace(trace, operationId, outcome, context = {}) {
   trace(Object.freeze({ operationId, outcome, ...context }))
 }
 
-function requireBoolean(value, label) {
-  if (typeof value !== 'boolean') throw new Error(`${label} must be boolean`)
-}
-
 function requireFunction(value, label) {
   if (typeof value !== 'function') throw new Error(`${label} must be a function`)
 }
@@ -369,8 +397,4 @@ function requireFunction(value, label) {
 function requireOperationNames(value, label) {
   if (!Array.isArray(value) || value.length === 0 || value.some((name) =>
     typeof name !== 'string' || name === '')) throw new Error(`${label} must be nonempty names`)
-}
-
-function errorMessage(cause) {
-  return cause instanceof Error ? cause.message : String(cause)
 }

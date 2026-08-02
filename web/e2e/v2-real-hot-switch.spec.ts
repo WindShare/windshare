@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
 import { expect, test as base } from '@playwright/test'
 import type { Page, TestInfo } from '@playwright/test'
@@ -22,6 +24,11 @@ import {
   sealPageRelayCut,
   startPageTransfer,
 } from './fixtures/hot-switch-page-transfer'
+import {
+  closeProgressiveCatalog,
+  enumerateProgressiveCatalog,
+  openProgressiveCatalogDescriptor,
+} from './fixtures/progressive-catalog-page'
 import {
   acquireFixtureWork,
   aggregateFailure,
@@ -55,11 +62,12 @@ import {
   readSenderAttemptEvidenceSnapshot,
   releaseRealStackBinaries,
   replaceRelayHint,
+  type BinaryPaths,
 } from './fixtures/v2-real-stack'
 import {
   FixtureInfrastructureError,
 } from './fixtures/managed-process'
-import type { BinaryPaths } from './fixtures/windows-stable-runner'
+import { createInheritedChildProcessBackend } from '../scripts/browser-evidence/process/inherited-child-process.mjs'
 
 const TRANSFER_BYTES = MAIN_TRANSFER_BYTES
 const FIRST_RELAY_DISPATCH_DEADLINE_MS = 20_000
@@ -70,6 +78,14 @@ const SENDER_EVIDENCE_TERMINAL_DEADLINE_MS = 10_000
 const SAMPLE_TEARDOWN_HEADROOM_MS = 20_000
 const SAMPLE_EVIDENCE_PUBLICATION_HEADROOM_MS = 2_000
 const SAMPLE_PLAYWRIGHT_COMPLETION_HEADROOM_MS = 1_000
+const PROGRESSIVE_CATALOG_INVENTORY = Object.freeze([
+  'directory:tree',
+  'directory:tree/nested',
+  'directory:tree/nested/empty-dir',
+  'file:tree/nested/a.txt:5',
+  'file:tree/stable.txt:6',
+  'file:tree/zero.bin:0',
+])
 
 interface HotSwitchTestFixtures {
   readonly wholeSampleDeadline: WholeSampleDeadline
@@ -104,7 +120,7 @@ test.use({
   video: 'retain-on-failure',
 })
 
-test('proves classified product hot-switch or exact relay fallback', async ({
+test('proves focused real-stack browser contracts', async ({
   baseURL,
   browserName,
   page,
@@ -168,6 +184,14 @@ test('proves classified product hot-switch or exact relay fallback', async ({
         testInfo,
       })
       expect(sample.expectedSha256).toBe(MAIN_TRANSFER_SHA256)
+      if (browserName === 'chromium') {
+        await assertProgressiveCatalog({
+          baseURL,
+          binaries: ownedBinaries,
+          deadline,
+          page,
+        })
+      }
     } catch (error) {
       failures.push(error)
     }
@@ -192,6 +216,174 @@ test('proves classified product hot-switch or exact relay fallback', async ({
     deadline.cleanupSignal.removeEventListener('abort', abortCleanup)
   }
 })
+
+async function assertProgressiveCatalog(options: {
+  readonly baseURL: string
+  readonly binaries: BinaryPaths
+  readonly deadline: WholeSampleDeadline
+  readonly page: Page
+}): Promise<void> {
+  const { baseURL, binaries, deadline, page } = options
+  const reporter = optionalChildReporter()
+  const lateCleanupTasks: RegisteredLateCleanup[] = []
+  const registerLateCleanup: RegisterLateCleanup = (boundary, task) => {
+    lateCleanupTasks.push(Object.freeze({ boundary, settlement: settle(task) }))
+  }
+  const failures: unknown[] = []
+  let operationFailure: unknown
+  let topology: Awaited<ReturnType<typeof acquireTestIceTopology>> | undefined
+  let stack: V2RealStack | undefined
+  let browserShareOpen = false
+
+  try {
+    topology = await acquireFixtureWork(
+      deadline,
+      'Progressive catalog topology acquisition failed',
+      (signal) => acquireTestIceTopology(reporter?.context, process.env, signal),
+      'Late progressive catalog topology rollback failed',
+      (acquired) => acquired.release(),
+      registerLateCleanup,
+    )
+    stack = new V2RealStack(
+      binaries,
+      topology,
+      createInheritedChildProcessBackend(),
+    )
+    await fixtureWork(deadline, 'Progressive catalog relay startup failed', (signal) => stack?.start({
+      signal,
+      timeoutMilliseconds: deadline.remainingWork(),
+    }))
+
+    const directoryPath = await fixtureWork(
+      deadline,
+      'Progressive catalog directory fixture creation failed',
+      (signal) => stack?.createDirectory('tree', { signal }),
+    )
+    if (directoryPath === undefined) {
+      throw new Error('Progressive catalog directory fixture has no path')
+    }
+    await fixtureWork(deadline, 'Progressive catalog inventory fixture creation failed', async (signal) => {
+      const nestedPath = join(directoryPath, 'nested')
+      signal.throwIfAborted()
+      await mkdir(join(nestedPath, 'empty-dir'), { recursive: true })
+      signal.throwIfAborted()
+      await Promise.all([
+        writeFile(join(nestedPath, 'a.txt'), 'alpha', { signal }),
+        writeFile(join(directoryPath, 'stable.txt'), 'stable', { signal }),
+        writeFile(join(directoryPath, 'zero.bin'), new Uint8Array(), { signal }),
+      ])
+    })
+
+    const share = await fixtureWork(
+      deadline,
+      'Progressive catalog sender startup failed',
+      (signal) => stack?.shareWithCatalogGate(directoryPath, baseURL, {
+        signal,
+        timeoutMilliseconds: deadline.remainingWork(),
+      }),
+    )
+    if (share === undefined) throw new Error('Progressive catalog sender returned no share')
+    expect(new URL(share.bareLink).protocol).toMatch(/^https?:$/u)
+
+    await fixtureWork(deadline, 'Progressive catalog receiver navigation failed', () => page.goto(
+      baseURL,
+      { timeout: deadline.remainingWork() },
+    ))
+    const descriptor = await fixtureWork(
+      deadline,
+      'Progressive catalog descriptor authentication failed',
+      () => openProgressiveCatalogDescriptor(page, {
+        key: share.key,
+        receiverLink: share.bareLink,
+      }),
+    )
+    browserShareOpen = true
+    expect(descriptor).toMatchObject({
+      descriptorOpened: true,
+      wireVersion: 2,
+      suite: 2,
+      selectedName: 'tree',
+    })
+    expect(descriptor.shareInstanceId).not.toBe('')
+    expect(descriptor.syntheticRootId).not.toBe('')
+
+    const blocked = await fixtureWork(
+      deadline,
+      'Progressive catalog pre-release observation failed',
+      (signal) => share.catalogGate.assertBlocked({
+        signal,
+        timeoutMilliseconds: deadline.remainingWork(),
+      }),
+    )
+    expect(blocked.released).toBe(false)
+    expect(blocked.blockedRequests).toBeGreaterThanOrEqual(1)
+
+    const released = await fixtureWork(
+      deadline,
+      'Progressive catalog release failed',
+      (signal) => stack?.releaseCatalogGate(share.catalogGate, {
+        signal,
+        timeoutMilliseconds: deadline.remainingWork(),
+      }),
+    )
+    expect(released.released).toBe(true)
+    expect(released.blockedRequests).toBeGreaterThanOrEqual(blocked.blockedRequests)
+
+    const inventory = await fixtureWork(
+      deadline,
+      'Progressive catalog browser enumeration failed',
+      () => enumerateProgressiveCatalog(page),
+    )
+    expect(inventory).toEqual(PROGRESSIVE_CATALOG_INVENTORY)
+    await fixtureWork(
+      deadline,
+      'Progressive catalog capability privacy proof failed',
+      (signal) => stack?.assertCatalogGatePrivate(share.catalogGate, page.url(), { signal }),
+    )
+  } catch (error) {
+    operationFailure = error
+  } finally {
+    if (browserShareOpen && !page.isClosed()) {
+      try {
+        await fixtureCleanup(
+          deadline,
+          'Progressive catalog browser cleanup failed',
+          () => closeProgressiveCatalog(page),
+        )
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    if (stack !== undefined) {
+      try {
+        await fixtureCleanup(
+          deadline,
+          'Progressive catalog stack cleanup failed',
+          (signal) => stack?.dispose({ signal }),
+        )
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    if (topology !== undefined) {
+      try {
+        await fixtureCleanup(
+          deadline,
+          'Progressive catalog topology cleanup failed',
+          () => topology?.release(),
+        )
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    failures.push(...await drainLateCleanupTasks(deadline, lateCleanupTasks))
+  }
+
+  if (operationFailure !== undefined) failures.unshift(operationFailure)
+  if (failures.length > 0) {
+    throw aggregateFailure(failures, 'Progressive catalog sample boundary failed')
+  }
+}
 
 async function assertHotSwitchSample(options: {
   readonly baseURL: string
@@ -243,7 +435,11 @@ async function assertHotSwitchSample(options: {
     )
     stack = fixtureValue(
       'Real-stack construction failed',
-      () => new V2RealStack(options.binaries, topology),
+      () => new V2RealStack(
+        options.binaries,
+        topology,
+        createInheritedChildProcessBackend(),
+      ),
     )
   } catch (error) {
     try {

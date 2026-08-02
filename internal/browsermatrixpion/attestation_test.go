@@ -102,7 +102,7 @@ func TestSignedAttestationRejectsHostileEnvelopeExpiryAndSignature(t *testing.T)
 
 func TestExternalFixtureCanonicalizationCoversEverySemanticProfile(t *testing.T) {
 	for _, profileID := range []string{
-		"scheduled-public-stun", "scheduled-restricted-udp", "scheduled-coturn", "manual-real-nat",
+		"scheduled-public-stun", "scheduled-restricted-udp", "scheduled-coturn",
 	} {
 		t.Run(profileID, func(t *testing.T) {
 			fixture := testExternalFixture(profileID)
@@ -253,18 +253,13 @@ func testExternalFixture(profileID string) ExternalFixture {
 		semantics.TURNUsername = "matrix-user"
 		semantics.TURNCredentialID = "turn-credential-2029"
 		semantics.TURNCredentialExpiresAt = "2030-01-01T00:00:00.000Z"
-	case "manual-real-nat":
-		semantics.Kind = NetworkSemanticsManualRealNAT
-		semantics.SenderHostID = "sender-host"
-		semantics.SenderNetworkBoundaryID = "sender-boundary"
-		semantics.STUNEndpoint = "stun:stun.example:3478"
 	default:
 		panic("unknown fixture test profile")
 	}
 	return ExternalFixture{
 		SchemaVersion: ExternalFixtureSchemaVersion,
 		DeploymentID:  "fixture-deployment", Revision: 1, ProfileID: profileID,
-		AuthorityInstanceID: "fixture-authority", ImplementationSHA256: strings.Repeat("a", 64),
+		AuthorityInstanceID:     "fixture-authority",
 		RemoteServiceInstanceID: "remote-a", OperatorID: "fixture-operator",
 		FixtureHostID: "remote-host", FixtureNetworkBoundaryID: "remote-boundary",
 		ControllerOrigin: "https://matrix.example:8443/", ControllerPublicIP: "8.8.8.8",

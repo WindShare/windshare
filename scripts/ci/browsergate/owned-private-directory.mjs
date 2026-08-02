@@ -10,9 +10,15 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import {
+  createOwnedTraceJournal,
+  requireCompleteOwnedTraceSnapshot,
+} from './owned-trace-journal.mjs'
 
 const CHILD_NAME_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u
 const TOMBSTONE_SUFFIX = '.windshare-retired-'
+const PRIVATE_DIRECTORY_MAXIMUM_TRACE_EVENTS = 8
+const PRIVATE_DIRECTORY_MAXIMUM_TRACE_BYTES = 32 * 1024
 
 const DEFAULT_STORAGE = Object.freeze({
   allocateRoot(prefix) {
@@ -44,8 +50,12 @@ export function createOwnedPrivateDirectoryAuthority({
   forbiddenPaths = [],
   storage = DEFAULT_STORAGE,
   tombstoneNonceFactory = () => randomBytes(16).toString('hex'),
-  trace = () => undefined,
 } = {}) {
+  const traceJournal = createOwnedTraceJournal({
+    label: 'owned private directory lifecycle trace',
+    maximumEvents: PRIVATE_DIRECTORY_MAXIMUM_TRACE_EVENTS,
+    maximumBytes: PRIVATE_DIRECTORY_MAXIMUM_TRACE_BYTES,
+  })
   const validatedPrefix = requirePrefix(prefix)
   const children = requireChildNames(childNames)
   const io = requireStorage(storage)
@@ -55,7 +65,6 @@ export function createOwnedPrivateDirectoryAuthority({
       `owned private directory physical forbidden path ${index}`,
     )))
   requireFunction(tombstoneNonceFactory, 'owned private directory tombstone nonce factory')
-  requireFunction(trace, 'owned private directory trace sink')
 
   const allocatedPath = requireCanonicalPath(
     io.canonicalize(requireCanonicalPath(
@@ -101,7 +110,7 @@ export function createOwnedPrivateDirectoryAuthority({
       childIdentities: Object.freeze(childIdentities),
     })
     revalidate()
-    emitTrace(trace, 'private-directory-allocated', { root: state.root })
+    traceJournal.append(Object.freeze({ milestone: 'private-directory-allocated', root: state.root }))
   } catch (error) {
     if (rootIdentity === undefined) throw error
     try {
@@ -138,7 +147,7 @@ export function createOwnedPrivateDirectoryAuthority({
     return true
   }
 
-  function dispose() {
+  function disposeOwnedDirectory() {
     if (state.outcome === 'disposed') return
     if (state.outcome === 'compromised') {
       throw new Error('owned private directory cleanup previously refused a foreign replacement')
@@ -167,10 +176,46 @@ export function createOwnedPrivateDirectoryAuthority({
     requireAbsent(io, state.tombstone, 'owned private directory tombstone')
     const retiredRoot = state.root
     state = Object.freeze({ outcome: 'disposed' })
-    emitTrace(trace, 'private-directory-disposed', { root: retiredRoot })
+    return retiredRoot
   }
 
-  return Object.freeze({ dispose, paths, revalidate })
+  function dispose() {
+    if (state.outcome === 'disposed') return
+    try {
+      const retiredRoot = disposeOwnedDirectory()
+      traceJournal.append(Object.freeze({
+        milestone: 'private-directory-disposed',
+        root: retiredRoot,
+      }))
+      traceJournal.finish()
+      requireCompleteOwnedTraceSnapshot(
+        traceJournal.view.snapshot(),
+        'owned private directory lifecycle trace',
+      )
+    } catch (cause) {
+      if (!traceJournal.view.snapshot().completed) {
+        traceJournal.append(Object.freeze({
+          milestone: 'private-directory-disposal-failed',
+          failureCode: 'directory-disposal-failed',
+        }))
+        traceJournal.finish()
+      }
+      try {
+        requireCompleteOwnedTraceSnapshot(
+          traceJournal.view.snapshot(),
+          'owned private directory lifecycle trace',
+        )
+      } catch (traceFailure) {
+        throw new AggregateError(
+          [cause, traceFailure],
+          'owned private directory disposal and trace settlement failed',
+        )
+      }
+      throw cause
+    }
+  }
+
+  return Object.freeze({ dispose, paths, revalidate, traces: traceJournal.view })
 }
 
 function retireOwnedRoot(io, root, identity, tombstoneNonceFactory) {
@@ -281,14 +326,6 @@ function pathsOverlap(left, right) {
   return leftToRight === ''
     || (leftToRight !== '..' && !leftToRight.startsWith(`..${sep}`) && !isAbsolute(leftToRight))
     || (rightToLeft !== '..' && !rightToLeft.startsWith(`..${sep}`) && !isAbsolute(rightToLeft))
-}
-
-function emitTrace(trace, milestone, context) {
-  try {
-    trace(milestone, context)
-  } catch {
-    // Observers cannot strand an ownership transition or resurrect retired authority.
-  }
 }
 
 function requireFunction(value, label) {

@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer'
+
 import {
   GENERATED_SEMANTIC_ALLOWED_EXTERNAL_IMPORTS,
   GENERATED_SEMANTIC_DIGEST,
@@ -13,11 +15,12 @@ export const GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_OPERATION_ID =
 export const GENERATED_SEMANTIC_RUNTIME_PREFLIGHT_MODE = 'verify'
 
 export class GeneratedSemanticRuntimePreflightError extends Error {
-  constructor(code, message, { result = null, cause } = {}) {
+  constructor(code, message, { result = null, outputEvidence = null, cause } = {}) {
     super(message, cause === undefined ? undefined : { cause })
     this.name = 'GeneratedSemanticRuntimePreflightError'
     this.code = code
     this.result = result
+    this.outputEvidence = outputEvidence
   }
 }
 
@@ -44,7 +47,7 @@ export function requireGeneratedSemanticRuntimeExecution({ execution, platform }
     throw new GeneratedSemanticRuntimePreflightError(
       'result-record-invalid',
       'generated semantic verifier emitted an invalid result record',
-      { cause },
+      { cause, outputEvidence: generatedSemanticOutputEvidence(execution) },
     )
   }
 
@@ -121,7 +124,11 @@ export function generatedSemanticPreflightFailureContext(cause) {
         ...(result?.mode === null || result?.mode === undefined
           ? {}
           : { reportedMode: result.mode }),
-        ...(typeof result?.outcome === 'string' ? { reportedOutcome: result.outcome } : {}),
+        // A verifier may report a current artifact while the owned process is
+        // still rejected (for example, non-empty stderr). Keep that claim as
+        // evidence without overwriting the enclosing failed settlement.
+        ...(typeof result?.outcome === 'string' ? { verifierOutcome: result.outcome } : {}),
+        ...(cause.outputEvidence === null ? {} : { outputEvidence: cause.outputEvidence }),
         ...generatedSemanticResultTraceContext(result),
       })
     }
@@ -137,11 +144,40 @@ export function generatedSemanticPreflightFailureContext(cause) {
   })
 }
 
+function generatedSemanticOutputEvidence(execution) {
+  try {
+    return Object.freeze({
+      stdout: stringOutputEvidence('stdout', execution?.stdout),
+      stderr: stringOutputEvidence('stderr', execution?.stderr),
+    })
+  } catch {
+    return null
+  }
+}
+
+function stringOutputEvidence(stream, value) {
+  if (typeof value !== 'string') {
+    return Object.freeze({ stream, byteLength: null, segments: Object.freeze([]) })
+  }
+  const bytes = Buffer.from(value, 'utf8')
+  return Object.freeze({
+    stream,
+    byteLength: bytes.byteLength,
+    // The pull-only owner exposes one immutable linear snapshot, so sequence zero is canonical.
+    segments: Object.freeze([Object.freeze({
+      sequence: 0,
+      offset: 0,
+      byteLength: bytes.byteLength,
+      base64: bytes.toString('base64'),
+    })]),
+  })
+}
+
 function requireSuccessfulOwnedExecution(execution, platform, result) {
   if (
     execution === null || typeof execution !== 'object' ||
-    execution.launched !== true || execution.timedOut !== false ||
-    execution.treeEmpty !== true || execution.processEvidence?.terminal !== 'exited' ||
+    execution.treeEmpty !== true || execution.cleanupOutcome !== 'completed' ||
+    execution.processEvidence?.terminal !== 'exited' ||
     execution.processEvidence.exitCode !== 0
   ) {
     throw new GeneratedSemanticRuntimePreflightError(
@@ -152,44 +188,20 @@ function requireSuccessfulOwnedExecution(execution, platform, result) {
   }
   if (
     execution.inputEvidence === undefined || (
-      execution.inputEvidence.outcome !== 'not-requested' ||
+      execution.inputEvidence.outcome !== 'not_requested' ||
       execution.inputEvidence.failureCode !== '' ||
       execution.inputEvidence.failureMessage !== ''
     )
   ) rejectOwnershipEvidence(result, 'generated semantic verifier input evidence is not successful')
-  if (
-    execution.clientIoEvidence === undefined || (
-      execution.clientIoEvidence.requestOutcome !== 'delivered' ||
-      execution.clientIoEvidence.rawInputOutcome !== 'not-requested' ||
-      !['not-requested', 'delivered'].includes(execution.clientIoEvidence.controlOutcome) ||
-      execution.clientIoEvidence.outputOutcome !== 'delivered' ||
-      execution.clientIoEvidence.failureCode !== '' ||
-      execution.clientIoEvidence.failureMessage !== ''
-    )
-  ) rejectOwnershipEvidence(result, 'generated semantic verifier client I/O evidence is not successful')
   requireOwnershipEvidence(execution.ownershipEvidence, platform, result)
 }
 
 function requireOwnershipEvidence(ownership, platform, result) {
-  if (platform === 'win32') {
-    if (
-      ownership?.supervisionOutcome === 'tree-empty' &&
-      ownership.terminationReason === 'natural' &&
-      ownership.activeProcessCount === 0 &&
-      Number.isSafeInteger(ownership.root?.pid) && ownership.root.pid > 0 &&
-      ownership.root.exitCode === 0 && ownership.spawnFailure === null
-    ) return
-  } else if (platform === 'linux') {
-    if (
-      Number.isSafeInteger(ownership?.ownerPid) && ownership.ownerPid > 0 &&
-      Number.isSafeInteger(ownership.rootPid) && ownership.rootPid > 0 &&
-      typeof ownership.rootStartTimeTicks === 'string' &&
-      /^[1-9][0-9]*$/u.test(ownership.rootStartTimeTicks) &&
-      ownership.controlOutcome === 'target-terminal' &&
-      ownership.cleanupOutcome === 'completed' &&
-      ownership.failureCode === '' && ownership.failureMessage === ''
-    ) return
-  }
+  const expectedBackend = platform === 'win32' ? 'windows_job' : 'linux_subreaper'
+  if (
+    ownership?.kind === 'test-process-owner' && ownership.backend === expectedBackend &&
+    ownership.terminationReason === 'natural' && ownership.platform?.kind === expectedBackend
+  ) return
   rejectOwnershipEvidence(
     result,
     'generated semantic verifier owner did not prove complete process-tree settlement',

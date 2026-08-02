@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { chmod, link, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,16 +11,16 @@ import {
 } from '../../scripts/browser-network-matrix/cli/publisher-helper-process.ts'
 import { networkMatrixPublisherHelperFromProcess } from '../../scripts/browser-network-matrix/cli/publisher-helper.ts'
 import { HELPER_BUILD_MANIFEST_SCHEMA_VERSION } from '../../scripts/browser-network-matrix/cli/build-helpers.mjs'
-import type { WindowsJobExecution } from '../../scripts/browser-evidence/process/windows-job-client.ts'
+import type { TestProcessOwnerExecution } from '../../scripts/browser-evidence/process/test-process-owner-client.mjs'
+import { loadFrameworkProcessOwner } from '../browser-evidence/process-owner-fixtures.ts'
 
 const REQUEST = Buffer.from('{"request":"bounded"}', 'utf8')
 const NONCE = 'b'.repeat(32)
 const cleanupRoots: string[] = []
 
 interface TestHelperManifestEntry {
-  readonly role: 'artifact-publisher' | 'windows-job'
+  readonly role: 'artifact-publisher' | 'test-process-owner'
   readonly path: string
-  readonly sha256: string
 }
 
 interface TestHelperManifest {
@@ -37,27 +36,24 @@ afterEach(async () => {
     rm(root, { recursive: true, force: true })))
 })
 
-describe('publisher helper process authority', () => {
-  it('binds finite stdin to the held publisher digest and reports an early child exit', async () => {
+describe('publisher helper process', () => {
+  it('binds finite stdin to the selected publisher and reports an early child exit', async () => {
     const fixture = await executableFixture()
-    const executeWindowsJob = vi.fn(async (options) => {
-      expect(options.helperPath).toBe(fixture.windowsJob)
+    const executeProcessOwner = vi.fn(async (options) => {
+      expect(options.owner.path).toBe(fixture.processOwner)
       expect(options.command.executable).toBe(fixture.publisher)
-      expect(options.inheritedEnvironment).toEqual({})
-      expect(options.command.executableSha256).toBe(
-        createHash('sha256').update(fixture.publisherBytes).digest('hex'),
-      )
+      expect(options.environment).toEqual({})
       expect(Buffer.from(options.command.stdin ?? []).toString('utf8')).toContain(
         'windshare.artifact-publisher/v2',
       )
-      return windowsJobExecutionFixture(23)
+      return processOwnerExecutionFixture(23)
     })
     const authority = await openPublisherHelperProcessAuthority({
       helperManifestPath: fixture.manifest,
       publisherHelperPath: fixture.publisher,
-      windowsJobHelperPath: fixture.windowsJob,
+      processOwnerPath: fixture.processOwner,
       platform: 'win32',
-      executeWindowsJob,
+      executeProcessOwner,
     })
     try {
       const client = networkMatrixPublisherHelperFromProcess(authority, () => NONCE)
@@ -65,23 +61,23 @@ describe('publisher helper process authority', () => {
         join(fixture.root, 'must-not-exist.json'),
         '{"aggregate":true}\n',
       )).rejects.toThrow(/response exceeds its byte authority/u)
-      expect(executeWindowsJob).toHaveBeenCalledOnce()
+      expect(executeProcessOwner).toHaveBeenCalledOnce()
     } finally {
       await authority.close()
     }
   })
 
   it.each([
-    ['crash', async () => Promise.reject(new Error('Windows Job supervisor crashed'))],
-    ['timeout', async () => windowsJobExecutionFixture(137, true)],
-  ] as const)('does not convert a helper %s into publication authority', async (_case, executeWindowsJob) => {
+    ['crash', async () => Promise.reject(new Error('test process owner supervisor crashed'))],
+    ['timeout', async () => processOwnerExecutionFixture(137, true)],
+  ] as const)('does not convert a helper %s into publication authority', async (_case, executeProcessOwner) => {
     const fixture = await executableFixture()
     const authority = await openPublisherHelperProcessAuthority({
       helperManifestPath: fixture.manifest,
       publisherHelperPath: fixture.publisher,
-      windowsJobHelperPath: fixture.windowsJob,
+      processOwnerPath: fixture.processOwner,
       platform: 'win32',
-      executeWindowsJob,
+      executeProcessOwner,
     })
     try {
       await expect(authority.execute(REQUEST)).rejects.toThrow(
@@ -94,59 +90,59 @@ describe('publisher helper process authority', () => {
 
   it('rejects a named executable path swap while retaining the opened identity', async () => {
     const fixture = await executableFixture()
-    const executeWindowsJob = vi.fn()
+    const executeProcessOwner = vi.fn()
     const authority = await openPublisherHelperProcessAuthority({
       helperManifestPath: fixture.manifest,
       publisherHelperPath: fixture.publisher,
-      windowsJobHelperPath: fixture.windowsJob,
+      processOwnerPath: fixture.processOwner,
       platform: 'win32',
-      executeWindowsJob,
+      executeProcessOwner,
     })
     await rename(fixture.publisher, `${fixture.publisher}.held`)
     await writeFile(fixture.publisher, 'foreign replacement')
     try {
       await expect(authority.execute(REQUEST)).rejects.toThrow(/identity or revision changed/u)
-      expect(executeWindowsJob).not.toHaveBeenCalled()
+      expect(executeProcessOwner).not.toHaveBeenCalled()
     } finally {
       await authority.close()
     }
   })
 
-  it('requires the explicit publisher and Windows Job paths to equal the held manifest', async () => {
+  it('requires the explicit publisher and test process owner paths to equal the held manifest', async () => {
     const fixture = await executableFixture()
     const foreignPublisher = join(fixture.root, 'foreign-publisher.exe')
-    const foreignWindowsJob = join(fixture.root, 'foreign-windowsjob.exe')
+    const foreignProcessOwner = join(fixture.root, 'foreign-testprocessowner.exe')
     await Promise.all([
       writeFile(foreignPublisher, fixture.publisherBytes),
-      writeFile(foreignWindowsJob, fixture.windowsJobBytes),
+      writeFile(foreignProcessOwner, fixture.processOwnerBytes),
     ])
 
     await expect(openPublisherHelperProcessAuthority({
       helperManifestPath: fixture.manifest,
       publisherHelperPath: foreignPublisher,
-      windowsJobHelperPath: fixture.windowsJob,
+      processOwnerPath: fixture.processOwner,
       platform: 'win32',
     })).rejects.toThrow(/publisher helper explicit path differs from the held helper manifest/u)
     await expect(openPublisherHelperProcessAuthority({
       helperManifestPath: fixture.manifest,
       publisherHelperPath: fixture.publisher,
-      windowsJobHelperPath: foreignWindowsJob,
+      processOwnerPath: foreignProcessOwner,
       platform: 'win32',
-    })).rejects.toThrow(/Windows Job helper explicit path differs from the held helper manifest/u)
+    })).rejects.toThrow(/test process owner explicit path differs from the held helper manifest/u)
 
     const publisherHardlink = join(fixture.root, 'publisher-hardlink.exe')
     await link(fixture.publisher, publisherHardlink)
     await expect(openPublisherHelperProcessAuthority({
       helperManifestPath: fixture.manifest,
       publisherHelperPath: publisherHardlink,
-      windowsJobHelperPath: fixture.windowsJob,
+      processOwnerPath: fixture.processOwner,
       platform: 'win32',
     })).rejects.toThrow(/publisher helper explicit path differs from the held helper manifest/u)
 
     await expect(openPublisherHelperProcessAuthority({
       helperManifestPath: fixture.manifest,
-      publisherHelperPath: fixture.windowsJob,
-      windowsJobHelperPath: fixture.publisher,
+      publisherHelperPath: fixture.processOwner,
+      processOwnerPath: fixture.publisher,
       platform: 'win32',
     })).rejects.toThrow(/publisher helper explicit path differs from the held helper manifest/u)
   })
@@ -156,7 +152,7 @@ describe('publisher helper process authority', () => {
     const options = {
       helperManifestPath: fixture.manifest,
       publisherHelperPath: fixture.publisher,
-      windowsJobHelperPath: fixture.windowsJob,
+      processOwnerPath: fixture.processOwner,
       platform: 'win32' as const,
     }
     await writeCanonicalManifest(fixture.manifest, {
@@ -185,57 +181,35 @@ describe('publisher helper process authority', () => {
     )
   })
 
-  it('rejects non-canonical manifest bytes and helper SHA-256 mismatches', async () => {
+  it('rejects non-canonical manifest bytes', async () => {
     const fixture = await executableFixture()
     const options = {
       helperManifestPath: fixture.manifest,
       publisherHelperPath: fixture.publisher,
-      windowsJobHelperPath: fixture.windowsJob,
+      processOwnerPath: fixture.processOwner,
       platform: 'win32' as const,
     }
     await writeFile(fixture.manifest, `${JSON.stringify(fixture.manifestValue, null, 2)}\n`, 'utf8')
     await expect(openPublisherHelperProcessAuthority(options)).rejects.toThrow(/canonical JSON/u)
-
-    await writeCanonicalManifest(fixture.manifest, {
-      ...fixture.manifestValue,
-      helpers: [
-        { ...(fixture.manifestValue.helpers[0] as TestHelperManifestEntry), sha256: '0'.repeat(64) },
-        fixture.manifestValue.helpers[1] as TestHelperManifestEntry,
-      ],
-    })
-    await expect(openPublisherHelperProcessAuthority(options)).rejects.toThrow(
-      /publisher helper bytes differ from the held helper manifest/u,
-    )
-
-    await writeCanonicalManifest(fixture.manifest, {
-      ...fixture.manifestValue,
-      helpers: [
-        fixture.manifestValue.helpers[0] as TestHelperManifestEntry,
-        { ...(fixture.manifestValue.helpers[1] as TestHelperManifestEntry), sha256: '0'.repeat(64) },
-      ],
-    })
-    await expect(openPublisherHelperProcessAuthority(options)).rejects.toThrow(
-      /Windows Job helper bytes differ from the held helper manifest/u,
-    )
   })
 })
 
 describe('publisher helper held-authority revalidation', () => {
   it('rejects a named manifest swap before any helper launch', async () => {
     const fixture = await executableFixture()
-    const executeWindowsJob = vi.fn()
+    const executeProcessOwner = vi.fn()
     const authority = await openPublisherHelperProcessAuthority({
       helperManifestPath: fixture.manifest,
       publisherHelperPath: fixture.publisher,
-      windowsJobHelperPath: fixture.windowsJob,
+      processOwnerPath: fixture.processOwner,
       platform: 'win32',
-      executeWindowsJob,
+      executeProcessOwner,
     })
     await rename(fixture.manifest, `${fixture.manifest}.held`)
     await writeFile(fixture.manifest, fixture.manifestBytes, 'utf8')
     try {
       await expect(authority.execute(REQUEST)).rejects.toThrow(/manifest identity or revision changed/u)
-      expect(executeWindowsJob).not.toHaveBeenCalled()
+      expect(executeProcessOwner).not.toHaveBeenCalled()
     } finally {
       await authority.close()
     }
@@ -243,42 +217,42 @@ describe('publisher helper held-authority revalidation', () => {
 
   it('rejects a manifest mutation during launch-time TOCTOU revalidation', async () => {
     const fixture = await executableFixture()
-    const executeWindowsJob = vi.fn(async () => {
+    const executeProcessOwner = vi.fn(async () => {
       await writeFile(fixture.manifest, `${fixture.manifestBytes} `, 'utf8')
-      return windowsJobExecutionFixture(0)
+      return processOwnerExecutionFixture(0)
     })
     const authority = await openPublisherHelperProcessAuthority({
       helperManifestPath: fixture.manifest,
       publisherHelperPath: fixture.publisher,
-      windowsJobHelperPath: fixture.windowsJob,
+      processOwnerPath: fixture.processOwner,
       platform: 'win32',
-      executeWindowsJob,
+      executeProcessOwner,
     })
     try {
       await expect(authority.execute(REQUEST)).rejects.toThrow(/manifest identity or revision changed/u)
-      expect(executeWindowsJob).toHaveBeenCalledOnce()
+      expect(executeProcessOwner).toHaveBeenCalledOnce()
     } finally {
       await authority.close()
     }
   })
 
-  it('rejects a Windows Job supervisor swap before launch', async () => {
+  it('rejects a test process owner supervisor swap before launch', async () => {
     const fixture = await executableFixture()
-    const executeWindowsJob = vi.fn()
+    const executeProcessOwner = vi.fn()
     const authority = await openPublisherHelperProcessAuthority({
       helperManifestPath: fixture.manifest,
       publisherHelperPath: fixture.publisher,
-      windowsJobHelperPath: fixture.windowsJob,
+      processOwnerPath: fixture.processOwner,
       platform: 'win32',
-      executeWindowsJob,
+      executeProcessOwner,
     })
-    await rename(fixture.windowsJob, `${fixture.windowsJob}.held`)
-    await writeFile(fixture.windowsJob, fixture.windowsJobBytes)
+    await rename(fixture.processOwner, `${fixture.processOwner}.held`)
+    await writeFile(fixture.processOwner, fixture.processOwnerBytes)
     try {
       await expect(authority.execute(REQUEST)).rejects.toThrow(
-        /Windows Job helper identity or revision changed/u,
+        /test process owner identity or revision changed/u,
       )
-      expect(executeWindowsJob).not.toHaveBeenCalled()
+      expect(executeProcessOwner).not.toHaveBeenCalled()
     } finally {
       await authority.close()
     }
@@ -286,103 +260,104 @@ describe('publisher helper held-authority revalidation', () => {
 
   it('rejects publisher byte mutation before launch and during post-launch revalidation', async () => {
     const beforeFixture = await executableFixture()
-    const beforeExecuteWindowsJob = vi.fn()
+    const beforeExecuteProcessOwner = vi.fn()
     const beforeAuthority = await openPublisherHelperProcessAuthority({
       helperManifestPath: beforeFixture.manifest,
       publisherHelperPath: beforeFixture.publisher,
-      windowsJobHelperPath: beforeFixture.windowsJob,
+      processOwnerPath: beforeFixture.processOwner,
       platform: 'win32',
-      executeWindowsJob: beforeExecuteWindowsJob,
+      executeProcessOwner: beforeExecuteProcessOwner,
     })
     await writeFile(beforeFixture.publisher, 'mutated publisher bytes', 'utf8')
     try {
       await expect(beforeAuthority.execute(REQUEST)).rejects.toThrow(
         /publisher helper identity or revision changed/u,
       )
-      expect(beforeExecuteWindowsJob).not.toHaveBeenCalled()
+      expect(beforeExecuteProcessOwner).not.toHaveBeenCalled()
     } finally {
       await beforeAuthority.close()
     }
 
     const duringFixture = await executableFixture()
-    const duringExecuteWindowsJob = vi.fn(async () => {
+    const duringExecuteProcessOwner = vi.fn(async () => {
       await writeFile(duringFixture.publisher, 'mutated during execution', 'utf8')
-      return windowsJobExecutionFixture(0)
+      return processOwnerExecutionFixture(0)
     })
     const duringAuthority = await openPublisherHelperProcessAuthority({
       helperManifestPath: duringFixture.manifest,
       publisherHelperPath: duringFixture.publisher,
-      windowsJobHelperPath: duringFixture.windowsJob,
+      processOwnerPath: duringFixture.processOwner,
       platform: 'win32',
-      executeWindowsJob: duringExecuteWindowsJob,
+      executeProcessOwner: duringExecuteProcessOwner,
     })
     try {
       await expect(duringAuthority.execute(REQUEST)).rejects.toThrow(
         /publisher helper identity or revision changed/u,
       )
-      expect(duringExecuteWindowsJob).toHaveBeenCalledOnce()
+      expect(duringExecuteProcessOwner).toHaveBeenCalledOnce()
     } finally {
       await duringAuthority.close()
     }
   })
 
-  it('fails closed when the Windows Job supervisor path changes during execution', async () => {
+  it('fails closed when the test process owner supervisor path changes during execution', async () => {
     const fixture = await executableFixture()
-    const executeWindowsJob = vi.fn(async () => {
-      await rename(fixture.windowsJob, `${fixture.windowsJob}.during`)
-      await writeFile(fixture.windowsJob, fixture.windowsJobBytes)
-      return windowsJobExecutionFixture(0)
+    const executeProcessOwner = vi.fn(async () => {
+      await rename(fixture.processOwner, `${fixture.processOwner}.during`)
+      await writeFile(fixture.processOwner, fixture.processOwnerBytes)
+      return processOwnerExecutionFixture(0)
     })
     const authority = await openPublisherHelperProcessAuthority({
       helperManifestPath: fixture.manifest,
       publisherHelperPath: fixture.publisher,
-      windowsJobHelperPath: fixture.windowsJob,
+      processOwnerPath: fixture.processOwner,
       platform: 'win32',
-      executeWindowsJob,
+      executeProcessOwner,
     })
     try {
       await expect(authority.execute(REQUEST)).rejects.toThrow(
-        /Windows Job helper identity or revision changed/u,
+        /test process owner identity or revision changed/u,
       )
-      expect(executeWindowsJob).toHaveBeenCalledOnce()
+      expect(executeProcessOwner).toHaveBeenCalledOnce()
     } finally {
       await authority.close()
     }
   })
 
-  it('requires an explicit Windows Job path and rejects that role on Linux', async () => {
+  it('requires an explicit test process owner path on every supported platform', async () => {
     const windowsFixture = await executableFixture()
     await expect(openPublisherHelperProcessAuthority({
       helperManifestPath: windowsFixture.manifest,
       publisherHelperPath: windowsFixture.publisher,
+      processOwnerPath: '',
       platform: 'win32',
-    })).rejects.toThrow(/requires an explicit Windows Job helper path/u)
+    })).rejects.toThrow(/test process owner explicit path differs/u)
 
     const linuxFixture = await executableFixture('linux')
     await expect(openPublisherHelperProcessAuthority({
       helperManifestPath: linuxFixture.manifest,
       publisherHelperPath: linuxFixture.publisher,
-      windowsJobHelperPath: linuxFixture.windowsJob,
+      processOwnerPath: '',
       platform: 'linux',
-    })).rejects.toThrow(/Linux must not receive a Windows Job helper path/u)
+    })).rejects.toThrow(/test process owner explicit path differs/u)
   })
 
   it('reuses long-lived executable handles without accumulating stream listeners', async () => {
     const fixture = await executableFixture()
-    const executeWindowsJob = vi.fn(async () => windowsJobExecutionFixture(0))
+    const executeProcessOwner = vi.fn(async () => processOwnerExecutionFixture(0))
     const emitWarning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined)
     const authority = await openPublisherHelperProcessAuthority({
       helperManifestPath: fixture.manifest,
       publisherHelperPath: fixture.publisher,
-      windowsJobHelperPath: fixture.windowsJob,
+      processOwnerPath: fixture.processOwner,
       platform: 'win32',
-      executeWindowsJob,
+      executeProcessOwner,
     })
     try {
       for (let attempt = 0; attempt < 32; attempt += 1) {
         await expect(authority.execute(REQUEST)).resolves.toMatchObject({ exitCode: 0 })
       }
-      expect(executeWindowsJob).toHaveBeenCalledTimes(32)
+      expect(executeProcessOwner).toHaveBeenCalledTimes(32)
       expect(emitWarning.mock.calls.map(([warning]) => String(warning)).join('\n'))
         .not.toMatch(/MaxListenersExceeded/u)
     } finally {
@@ -397,6 +372,7 @@ describe('publisher helper held-authority revalidation', () => {
     const authority = await openPublisherHelperProcessAuthority({
       helperManifestPath: fixture.manifest,
       publisherHelperPath: fixture.publisher,
+      processOwnerPath: fixture.processOwner,
       platform: 'linux',
     })
     try {
@@ -425,37 +401,47 @@ describe('publisher helper held-authority revalidation', () => {
   })
 })
 
-const WINDOWS_JOB_FIXTURE_ROOT_PID = 4_242
-
-function windowsJobExecutionFixture(
+function processOwnerExecutionFixture(
   exitCode: number,
   timedOut = false,
-): WindowsJobExecution {
+): TestProcessOwnerExecution {
   return Object.freeze({
     processEvidence: Object.freeze({ terminal: 'exited' as const, exitCode }),
-    timedOut,
-    launched: true,
     treeEmpty: true,
+    cleanupOutcome: 'completed' as const,
     inputEvidence: Object.freeze({
       outcome: 'delivered' as const,
       failureCode: '',
       failureMessage: '',
     }),
-    clientIoEvidence: Object.freeze({
-      requestOutcome: 'delivered' as const,
-      rawInputOutcome: 'delivered' as const,
-      controlOutcome: 'not-requested' as const,
-      outputOutcome: 'delivered' as const,
-      failureCode: '',
-      failureMessage: '',
+    output: Object.freeze({
+      stdout: byteSnapshot(),
+      stderr: byteSnapshot(),
+    }),
+    events: Object.freeze({
+      events: Object.freeze([]),
+      observedEvents: 0,
+      capturedEvents: 0,
+      truncated: false,
+      completed: true,
     }),
     ownershipEvidence: Object.freeze({
-      supervisionOutcome: 'tree-empty' as const,
+      kind: 'test-process-owner' as const,
+      backend: 'windows_job' as const,
       terminationReason: timedOut ? 'deadline' as const : 'natural' as const,
-      activeProcessCount: 0 as const,
-      root: Object.freeze({ pid: WINDOWS_JOB_FIXTURE_ROOT_PID, exitCode }),
-      spawnFailure: null,
+      platform: Object.freeze({ kind: 'windows_job' }),
     }),
+  })
+}
+
+function byteSnapshot(bytes = new Uint8Array()) {
+  const retained = Uint8Array.from(bytes)
+  return Object.freeze({
+    observedBytes: retained.byteLength,
+    capturedBytes: retained.byteLength,
+    truncated: false,
+    completed: true,
+    bytes: () => Uint8Array.from(retained),
   })
 }
 
@@ -466,20 +452,22 @@ async function executableFixture(platform: 'win32' | 'linux' = 'win32'): Promise
   manifestValue: TestHelperManifest
   publisher: string
   publisherBytes: Buffer
-  windowsJob: string
-  windowsJobBytes: Buffer
+  processOwner: string
+  processOwnerBytes: Buffer
 }>> {
   const root = await mkdtemp(join(tmpdir(), 'windshare-publisher-process-test-'))
   cleanupRoots.push(root)
-  const publisher = join(root, 'browsermatrixpublish.exe')
-  const windowsJob = join(root, 'windowsjob.exe')
+  const executableSuffix = platform === 'win32' ? '.exe' : ''
+  const publisher = join(root, `browsermatrixpublish${executableSuffix}`)
+  const processOwner = join(root, `testprocessowner${executableSuffix}`)
   const manifest = join(root, 'helper-manifest.json')
   const publisherBytes = Buffer.from('publisher executable bytes')
-  const windowsJobBytes = Buffer.from('Windows Job executable bytes')
+  const processOwnerBytes = Buffer.from('test process owner executable bytes')
   await Promise.all([
     writeFile(publisher, publisherBytes),
-    writeFile(windowsJob, windowsJobBytes),
+    writeFile(processOwner, processOwnerBytes),
   ])
+  if (platform === 'linux') await Promise.all([chmod(publisher, 0o700), chmod(processOwner, 0o700)])
   const manifestValue: TestHelperManifest = Object.freeze({
     schemaVersion: HELPER_BUILD_MANIFEST_SCHEMA_VERSION,
     platform,
@@ -488,13 +476,11 @@ async function executableFixture(platform: 'win32' | 'linux' = 'win32'): Promise
       {
         role: 'artifact-publisher' as const,
         path: publisher,
-        sha256: createHash('sha256').update(publisherBytes).digest('hex'),
       },
-      ...(platform === 'win32' ? [{
-        role: 'windows-job',
-        path: windowsJob,
-        sha256: createHash('sha256').update(windowsJobBytes).digest('hex'),
-      } as const] : []),
+      {
+        role: 'test-process-owner',
+        path: processOwner,
+      } as const,
     ]),
   })
   const manifestBytes = await writeCanonicalManifest(manifest, manifestValue)
@@ -505,8 +491,8 @@ async function executableFixture(platform: 'win32' | 'linux' = 'win32'): Promise
     manifestValue,
     publisher,
     publisherBytes,
-    windowsJob,
-    windowsJobBytes,
+    processOwner,
+    processOwnerBytes,
   })
 }
 
@@ -519,6 +505,7 @@ async function writeCanonicalManifest(path: string, value: TestHelperManifest): 
 async function linuxEnvironmentFixture(): Promise<Readonly<{
   manifest: string
   publisher: string
+  processOwner: string
 }>> {
   const root = await mkdtemp(join(tmpdir(), 'windshare-linux-publisher-environment-test-'))
   cleanupRoots.push(root)
@@ -536,17 +523,23 @@ async function linuxEnvironmentFixture(): Promise<Readonly<{
   ].join('\n'), 'utf8')
   await writeFile(publisher, publisherBytes)
   await chmod(publisher, 0o700)
+  const processOwner = await loadFrameworkProcessOwner()
   await writeFile(manifest, `${JSON.stringify({
     schemaVersion: HELPER_BUILD_MANIFEST_SCHEMA_VERSION,
     platform: 'linux',
     architecture: runtimeGoArchitecture(),
-    helpers: [{
-      role: 'artifact-publisher',
-      path: publisher,
-      sha256: createHash('sha256').update(publisherBytes).digest('hex'),
-    }],
+    helpers: [
+      {
+        role: 'artifact-publisher',
+        path: publisher,
+      },
+      {
+        role: 'test-process-owner',
+        path: processOwner.path,
+      },
+    ],
   })}\n`, 'utf8')
-  return Object.freeze({ manifest, publisher })
+  return Object.freeze({ manifest, publisher, processOwner: processOwner.path })
 }
 
 function runtimeGoArchitecture(): 'amd64' | 'arm64' {

@@ -4,60 +4,68 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"debug/buildinfo"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strings"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/internal/testnetwork"
+	ownerprotocol "github.com/windshare/windshare/internal/processowner/protocol"
 	"github.com/windshare/windshare/internal/testoutputroot"
+	"github.com/windshare/windshare/internal/testprocess"
+	"github.com/windshare/windshare/internal/testrun"
 )
 
 const (
 	v2ProcessTimeout              = 30 * time.Second
-	v2DurableResumeProcessTimeout = 4 * time.Minute
+	v2DurableResumeProcessTimeout = 90 * time.Second
+	v2OwnedProcessDeadline        = 5 * time.Minute
+	v2ProcessTerminationGrace     = 10 * time.Second
 )
 
 const (
-	v2ResumeFileCount       = 128
-	v2ResumeFileBytes       = 512 << 10
-	v2FailureLogStreamBytes = 4 << 10
+	v2ResumeFileCount              = 2
+	v2ResumeFileBytes              = 8 << 20
+	v2FailureLogStreamBytes        = 4 << 10
+	v2UsageExitCode          int64 = 2
+	v2InvalidLinkDiagnostic        = "get: invalid capability link\n"
+	v2OutputControlDirectory       = ".windshare-output"
 
 	v2PionRelayCutPayloadBytes  int64 = 32 << 20
 	v2PionRelayCutBlockBytes          = 64 << 10
 	v2PionRelayCutPayloadSHA256       = "e09320c5b00b34bb704802136c599a95b3996332ba84d7c7f21112b6231b6bd0"
-	v2PionModulePath                  = "github.com/pion/webrtc/v4"
+
+	v2RelayComponent          = "wsrelay"
+	v2WindShareShareComponent = "windshare_share"
+	v2WindShareGetComponent   = "windshare_get"
 )
 
-var v2RelayAddress = regexp.MustCompile(`listening on ([^\s(]+)`)
+const (
+	v2ProgressiveCatalogScenario = "v2-progressive-catalog"
+	v2PionRelayCutScenario       = "v2-pion-relay-cut"
+	v2DurableResumeScenario      = "v2-durable-resume"
+	v2InvalidLinkScenario        = "v2-invalid-link-diagnostics"
+)
 
-type processBuffer struct {
-	mu     sync.Mutex
-	buffer bytes.Buffer
+type processOutputView struct {
+	snapshot func() testprocess.OutputSnapshot
 }
 
-func (buffer *processBuffer) Write(value []byte) (int, error) {
-	buffer.mu.Lock()
-	defer buffer.mu.Unlock()
-	return buffer.buffer.Write(value)
+func (view *processOutputView) String() string {
+	if view == nil || view.snapshot == nil {
+		return ""
+	}
+	return view.snapshot().String()
 }
 
-func (buffer *processBuffer) String() string {
-	buffer.mu.Lock()
-	defer buffer.mu.Unlock()
-	return buffer.buffer.String()
-}
-
-func (buffer *processBuffer) diagnosticString() string {
-	value := buffer.String()
+func (view *processOutputView) diagnosticString() string {
+	value := view.String()
 	if len(value) <= v2FailureLogStreamBytes {
 		return value
 	}
@@ -69,41 +77,145 @@ func (buffer *processBuffer) diagnosticString() string {
 }
 
 type v2Process struct {
-	command  *exec.Cmd
-	stdout   *processBuffer
-	stderr   *processBuffer
-	done     chan struct{}
-	err      error
-	stopOnce sync.Once
+	scenario   *v2Scenario
+	component  string
+	owner      *testprocess.Owner
+	owned      *testprocess.Process
+	stdout     *processOutputView
+	stderr     *processOutputView
+	done       chan struct{}
+	settlement ownerprotocol.Settlement
+	err        error
+	closeOnce  sync.Once
+	closeDone  chan struct{}
+	closeErr   error
 }
 
-func startV2Process(t *testing.T, binary string, arguments ...string) *v2Process {
+func startV2Process(
+	t *testing.T,
+	scenario *v2Scenario,
+	component string,
+	binary string,
+	arguments ...string,
+) *v2Process {
 	t.Helper()
-	testnetwork.RequireOSNetwork(t)
-	process := &v2Process{stdout: &processBuffer{}, stderr: &processBuffer{}, done: make(chan struct{})}
-	process.command = exec.Command(binary, arguments...)
-	process.command.Stdout, process.command.Stderr = process.stdout, process.stderr
-	if err := testnetwork.StartGuardedProcess(process.command); err != nil {
-		t.Fatalf("start %s: %v", filepath.Base(binary), err)
+	phaseContext := v2ProcessPhaseContext{Component: component}
+	phase := scenario.startPhase(t, v2ProcessStartMilestone, phaseContext)
+	environment, err := testprocess.InheritEnvironment(nil)
+	if err != nil {
+		t.Fatalf("prepare %s child environment: %v", component, err)
 	}
+	binaries := loadE2EBinaries(t)
+	owner, err := testprocess.NewOwner(binaries.processOwner)
+	if err != nil {
+		t.Fatalf("open external process owner for %s: %v", component, err)
+	}
+	process := &v2Process{
+		scenario:  scenario,
+		component: component,
+		owner:     owner,
+		done:      make(chan struct{}),
+		closeDone: make(chan struct{}),
+	}
+	cleanupName := fmt.Sprintf("%s process tree", component)
+	t.Cleanup(func() {
+		if err := process.close(); err != nil {
+			t.Errorf(
+				"clean externally owned process tree: run_id=%s operation_id=%s scenario=%s component=%s cleanup=%v",
+				scenario.operation.RunID(), scenario.operation.ID(), scenario.operation.Scenario(), component, err,
+			)
+		}
+	})
+	scenario.trace.RequireCleanup(t, cleanupName, process.closeWithContext)
+	process.owned, err = owner.Start(t.Context(), testprocess.Spec{
+		Identity: ownerprotocol.Identity{
+			RunID:       scenario.operation.RunID(),
+			OperationID: scenario.operation.ID(),
+			Scenario:    scenario.operation.Scenario(),
+		},
+		Command: testprocess.Command{
+			Executable: binary, Arguments: arguments, WorkingDirectory: repoRoot(), Environment: environment,
+		},
+		Deadline: v2OwnedProcessDeadline, TerminationGrace: v2ProcessTerminationGrace,
+	})
+	if err != nil {
+		t.Fatalf("start externally owned %s (%s): %v", component, filepath.Base(binary), err)
+	}
+	process.stdout = &processOutputView{snapshot: process.owned.Stdout}
+	process.stderr = &processOutputView{snapshot: process.owned.Stderr}
 	go func() {
-		process.err = process.command.Wait()
+		process.settlement, process.err = process.owned.Wait(context.Background())
 		close(process.done)
 	}()
-	t.Cleanup(process.stop)
+	scenario.succeedPhase(t, phase, phaseContext)
 	return process
 }
 
-func (process *v2Process) stop() {
-	process.stopOnce.Do(func() {
-		select {
-		case <-process.done:
-			return
-		default:
-		}
-		_ = process.command.Process.Kill()
-		<-process.done
+func requireV2ProcessScenario(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("real child processes and end-to-end transfer exceed the short-test budget")
+	}
+}
+
+func (process *v2Process) close() error {
+	if process == nil {
+		return nil
+	}
+	closeContext, cancel := context.WithTimeout(context.Background(), v2ProcessTerminationGrace)
+	defer cancel()
+	return process.closeWithContext(closeContext)
+}
+
+func (process *v2Process) closeWithContext(closeContext context.Context) error {
+	if process == nil {
+		return nil
+	}
+	if closeContext == nil {
+		return errors.New("close process context is nil")
+	}
+	process.closeOnce.Do(func() {
+		go process.runClose(closeContext)
 	})
+	select {
+	case <-process.closeDone:
+		return process.closeErr
+	case <-closeContext.Done():
+		return closeContext.Err()
+	}
+}
+
+func (process *v2Process) runClose(closeContext context.Context) {
+	defer close(process.closeDone)
+	var stopErr error
+	var cleanupErr error
+	if process.owned != nil {
+		settlement, err := process.owned.Stop(closeContext)
+		stopErr = err
+		if settlement.SchemaVersion != "" {
+			cleanupErr = testprocess.RequireTreeEmpty(settlement)
+		}
+	}
+	var ownerErr error
+	if process.owner != nil {
+		ownerErr = process.owner.Close()
+	}
+	process.closeErr = errors.Join(stopErr, cleanupErr, ownerErr)
+}
+
+func (process *v2Process) stop(t *testing.T) {
+	t.Helper()
+	phaseContext := v2ProcessPhaseContext{Component: process.component}
+	phase := process.scenario.startPhase(t, v2ProcessStopMilestone, phaseContext)
+	if err := process.close(); err != nil {
+		recordErr := phase.Fail(v2ActionFailureReason)
+		t.Fatalf(
+			"stop externally owned process tree: run_id=%s operation_id=%s scenario=%s component=%s cleanup=%v stdout=%q stderr=%q",
+			process.scenario.operation.RunID(), process.scenario.operation.ID(), process.scenario.operation.Scenario(), process.component,
+			errors.Join(err, recordErr), process.stdout.diagnosticString(), process.stderr.diagnosticString(),
+		)
+	}
+	process.scenario.succeedPhase(t, phase, phaseContext)
 }
 
 func (process *v2Process) wait(t *testing.T) error {
@@ -112,21 +224,44 @@ func (process *v2Process) wait(t *testing.T) error {
 
 func (process *v2Process) waitWithin(t *testing.T, timeout time.Duration) error {
 	t.Helper()
+	settlement, err := process.waitSettlementWithin(t, timeout)
+	return testprocess.RequireSuccess(settlement, err)
+}
+
+func (process *v2Process) waitSettlementWithin(
+	t *testing.T,
+	timeout time.Duration,
+) (ownerprotocol.Settlement, error) {
+	t.Helper()
+	phaseContext := v2ProcessPhaseContext{Component: process.component}
+	phase := process.scenario.startPhase(t, v2ProcessWaitMilestone, phaseContext)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case <-process.done:
-		return process.err
-	case <-time.After(timeout):
-		process.stop()
-		t.Fatalf("process timeout; stdout=%q stderr=%q", process.stdout.String(), process.stderr.String())
-		return context.DeadlineExceeded
+		if process.err != nil {
+			return process.settlement, errors.Join(process.err, phase.Fail(v2ProcessWaitFailureReason))
+		}
+		return process.settlement, phase.Succeed(phaseContext)
+	case <-timer.C:
+		cleanupErr := process.close()
+		t.Fatalf(
+			"process timeout: run_id=%s operation_id=%s scenario=%s component=%s cleanup=%v stdout=%q stderr=%q",
+			process.scenario.operation.RunID(), process.scenario.operation.ID(), process.scenario.operation.Scenario(), process.component,
+			cleanupErr, process.stdout.diagnosticString(), process.stderr.diagnosticString(),
+		)
+		return ownerprotocol.Settlement{}, context.DeadlineExceeded
 	}
 }
 
-func waitV2Match(t *testing.T, process *v2Process, expression *regexp.Regexp, stream *processBuffer) string {
+func waitV2Match(t *testing.T, process *v2Process, expression *regexp.Regexp, stream *processOutputView) string {
 	t.Helper()
+	phaseContext := v2ProcessPhaseContext{Component: process.component}
+	phase := process.scenario.startPhase(t, v2ProcessReadinessMilestone, phaseContext)
 	deadline := time.Now().Add(v2ProcessTimeout)
 	for time.Now().Before(deadline) {
 		if match := expression.FindStringSubmatch(stream.String()); match != nil {
+			process.scenario.succeedPhase(t, phase, phaseContext)
 			return match[1]
 		}
 		select {
@@ -140,8 +275,58 @@ func waitV2Match(t *testing.T, process *v2Process, expression *regexp.Regexp, st
 	return ""
 }
 
+func waitV2RelayReady(t *testing.T, process *v2Process) string {
+	t.Helper()
+	phaseContext := v2ProcessPhaseContext{Component: process.component}
+	phase := process.scenario.startPhase(t, v2ProcessReadinessMilestone, phaseContext)
+	if process.component != v2RelayComponent {
+		t.Fatalf("relay readiness requested from component %q", process.component)
+	}
+	readyContext, cancel := context.WithTimeout(t.Context(), v2ProcessTimeout)
+	defer cancel()
+	event, err := process.owned.Events().Next(readyContext)
+	if err != nil {
+		t.Fatalf(
+			"read private relay readiness event: run_id=%s operation_id=%s scenario=%s err=%v stdout=%q stderr=%q",
+			process.scenario.operation.RunID(), process.scenario.operation.ID(), process.scenario.operation.Scenario(), err,
+			process.stdout.diagnosticString(), process.stderr.diagnosticString(),
+		)
+	}
+	if event.Component != v2RelayComponent || event.Milestone != testrun.ListenerReadyMilestone ||
+		event.Outcome != string(testrun.OutcomeSucceeded) {
+		t.Fatalf("unexpected private relay readiness event: %#v", event)
+	}
+	payload, err := ownerprotocol.DecodeCanonical[testrun.ListenerReadyContext](event.Payload)
+	if err != nil {
+		t.Fatalf("decode private relay readiness payload: %v", err)
+	}
+	if err := validateV2RelayAddress(payload.Address); err != nil {
+		t.Fatal(err)
+	}
+	process.scenario.succeedPhase(t, phase, phaseContext)
+	return payload.Address
+}
+
+func validateV2RelayAddress(address string) error {
+	host, rawPort, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("listener-ready address %q: %w", address, err)
+	}
+	port, err := strconv.Atoi(rawPort)
+	if err != nil || port < 1 || port > 65_535 {
+		return fmt.Errorf("listener-ready address %q has invalid port", address)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("listener-ready address %q is not loopback", address)
+	}
+	return nil
+}
+
 func TestV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
+	requireV2ProcessScenario(t)
+	scenario := startV2Scenario(t, v2ProgressiveCatalogScenario)
+	binaries := loadE2EBinaries(t)
 	root := filepath.Join(t.TempDir(), "tree")
 	if err := os.MkdirAll(filepath.Join(root, "nested", "empty-dir"), 0o755); err != nil {
 		t.Fatal(err)
@@ -157,10 +342,13 @@ func TestV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testing.T
 	}
 
 	relayState := filepath.Join(t.TempDir(), "relay-state")
-	relay := startV2Process(t, relayBin, "-listen", "127.0.0.1:0", "-state-dir", relayState)
-	address := waitV2Match(t, relay, v2RelayAddress, relay.stderr)
+	relay := startV2Process(
+		t, scenario, v2RelayComponent, binaries.relay,
+		"-listen", "127.0.0.1:0", "-state-dir", relayState,
+	)
+	address := waitV2RelayReady(t, relay)
 	relayURL := "ws://" + address
-	share := startV2Process(t, windshareBin, "share", root, "--relay", relayURL)
+	share := startV2Process(t, scenario, v2WindShareShareComponent, binaries.windshare, "share", root, "--relay", relayURL)
 	linkExpression := regexp.MustCompile(`(?m)^Link: (\S+)$`)
 	shareLink := waitV2Match(t, share, linkExpression, share.stdout)
 	outputs := []string{
@@ -169,7 +357,9 @@ func TestV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testing.T
 	}
 	receivers := make([]*v2Process, 0, len(outputs))
 	for _, output := range outputs {
-		receivers = append(receivers, startV2Process(t, windshareBin, "get", shareLink, "-o", output))
+		receivers = append(receivers, startV2Process(
+			t, scenario, v2WindShareGetComponent, binaries.windshare, "get", shareLink, "-o", output,
+		))
 	}
 	for index, receiver := range receivers {
 		if err := receiver.wait(t); err != nil {
@@ -181,61 +371,76 @@ func TestV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testing.T
 		if info, err := os.Stat(filepath.Join(outputs[index], "tree", "nested", "empty-dir")); err != nil || !info.IsDir() {
 			t.Fatalf("receiver %d empty directory: info=%v err=%v", index, info, err)
 		}
+		assertV2OutputInventory(t, outputs[index], map[string]bool{
+			"tree":                  true,
+			"tree/nested":           true,
+			"tree/nested/empty-dir": true,
+			"tree/nested/a.txt":     false,
+			"tree/stable.txt":       false,
+			"tree/zero.bin":         false,
+		})
 	}
 
 	selectedOutput := testoutputroot.New(t).RootPath
 	selected := startV2Process(
-		t, windshareBin, "get", shareLink, "-o", selectedOutput, "--only", "tree/nested/a.txt",
+		t, scenario, v2WindShareGetComponent, binaries.windshare,
+		"get", shareLink, "-o", selectedOutput, "--only", "tree/nested/a.txt",
 	)
 	if err := selected.wait(t); err != nil {
 		t.Fatalf("selected receiver failed: %v; stdout=%q stderr=%q", err, selected.stdout.String(), selected.stderr.String())
 	}
 	assertV2File(t, filepath.Join(selectedOutput, "tree", "nested", "a.txt"), []byte("selected-content"))
-	if _, err := os.Stat(filepath.Join(selectedOutput, "tree", "mutable.txt")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("unselected file exists or returned wrong error: %v", err)
-	}
-
-	if strings.Contains(share.stderr.String(), "manifest") || strings.Contains(share.stderr.String(), "/v1") {
-		t.Fatalf("production share emitted retired vocabulary: %q", share.stderr.String())
-	}
+	assertV2OutputInventory(t, selectedOutput, map[string]bool{
+		"tree":              true,
+		"tree/nested":       true,
+		"tree/nested/a.txt": false,
+	})
+	scenario.requireSuccess(t)
 }
 
 func TestV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
-	windshareSHA256 := v2FileSHA256(t, windshareBin)
-	pionModule := v2BuildModule(t, windshareBin, v2PionModulePath)
+	requireV2ProcessScenario(t)
+	scenario := startV2Scenario(t, v2PionRelayCutScenario)
+	binaries := loadE2EBinaries(t)
 	source := filepath.Join(t.TempDir(), "pion-relay-cut.bin")
 	writeV2PatternFile(t, source, v2PionRelayCutPayloadBytes, v2PionRelayCutPayloadSHA256)
 
-	proxy := startRelayCutProxy(t)
+	proxy := startRelayCutProxy(t, scenario)
 	relay := startV2Process(
 		t,
-		relayBin,
+		scenario,
+		v2RelayComponent,
+		binaries.relay,
 		"-listen", "127.0.0.1:0",
 		"-relay-base-url", proxy.BaseURL(),
 		"-state-dir", filepath.Join(t.TempDir(), "relay-state"),
 	)
-	relayAddress := waitV2Match(t, relay, v2RelayAddress, relay.stderr)
-	if err := proxy.ForwardTo(relayAddress); err != nil {
+	relayAddress := waitV2RelayReady(t, relay)
+	if err := scenario.observe(
+		v2RelayProxyForwardMilestone,
+		nil,
+		func() error { return proxy.ForwardTo(relayAddress) },
+	); err != nil {
 		t.Fatal(err)
 	}
 
 	share := startV2Process(
 		t,
-		windshareBin,
+		scenario,
+		v2WindShareShareComponent,
+		binaries.windshare,
 		"share", source,
 		"--relay", proxy.BaseURL(),
 		"--block-size", fmt.Sprint(v2PionRelayCutBlockBytes),
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	output := testoutputroot.New(t).RootPath
-	receiver := startV2Process(t, windshareBin, "get", shareLink, "-o", output)
-	directMarker := waitV2Match(
-		t,
-		receiver,
-		regexp.MustCompile(`(?m)^(get: direct peer lane active)$`),
-		receiver.stderr,
+	receiver := startV2Process(
+		t, scenario, v2WindShareGetComponent, binaries.windshare, "get", shareLink, "-o", output,
 	)
+	// Stderr remains diagnostic output; the owner-routed event is the typed,
+	// operation-bound authority that the receiver actually adopted a direct lane.
+	waitV2ProcessTrace(t, receiver, v2ReceiverDirectLaneMilestone, testrun.OutcomeSucceeded)
 	select {
 	case <-receiver.done:
 		t.Fatalf(
@@ -246,11 +451,15 @@ func TestV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 	default:
 	}
 
-	relayDownstream, proxyErr := proxy.CutAndWait()
-	relay.stop()
+	cutPhase := scenario.startPhase(t, v2RelayProxyCutMilestone, nil)
+	cutContext, cancelCut := context.WithTimeout(context.Background(), v2ProcessTerminationGrace)
+	relayDownstream, proxyErr := proxy.CutAndWait(cutContext)
+	cancelCut()
 	if proxyErr != nil {
-		t.Fatalf("cut relay proxy: %v", proxyErr)
+		t.Fatalf("cut relay proxy: %v", errors.Join(proxyErr, cutPhase.Fail(v2ActionFailureReason)))
 	}
+	scenario.succeedPhase(t, cutPhase, nil)
+	relay.stop(t)
 	// The counter includes every downstream TCP byte, including HTTP and relay
 	// framing. Suite-02 does not compress content, so a value below plaintext
 	// size proves the relay could not have delivered the complete fixture.
@@ -271,22 +480,13 @@ func TestV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 	}
 
 	outputPath := filepath.Join(output, filepath.Base(source))
-	outputSHA256 := assertV2FileSHA256(
+	assertV2FileSHA256(
 		t,
 		outputPath,
 		v2PionRelayCutPayloadBytes,
 		v2PionRelayCutPayloadSHA256,
 	)
-	t.Logf(
-		"D5_CLI_PION_V1 windshare_sha256=%s pion_module=%s direct_lane_active=%t relay_cut=%t relay_downstream_at_cut=%d payload_bytes=%d payload_sha256=%s",
-		windshareSHA256,
-		pionModule,
-		directMarker != "",
-		true,
-		relayDownstream,
-		v2PionRelayCutPayloadBytes,
-		outputSHA256,
-	)
+	scenario.requireSuccess(t)
 }
 
 func writeV2PatternFile(t *testing.T, filename string, size int64, wantSHA256 string) {
@@ -350,29 +550,6 @@ func v2FileSHA256(t *testing.T, filename string) string {
 	return fmt.Sprintf("%x", digest.Sum(nil))
 }
 
-func v2BuildModule(t *testing.T, binary, modulePath string) string {
-	t.Helper()
-	information, err := buildinfo.ReadFile(binary)
-	if err != nil {
-		t.Fatalf("read build provenance from %s: %v", binary, err)
-	}
-	for _, dependency := range information.Deps {
-		if dependency == nil || dependency.Path != modulePath {
-			continue
-		}
-		actual := dependency
-		if dependency.Replace != nil {
-			actual = dependency.Replace
-		}
-		if actual.Version == "" {
-			t.Fatalf("%s has no version provenance in %s", modulePath, binary)
-		}
-		return modulePath + "@" + actual.Version
-	}
-	t.Fatalf("%s is absent from %s build provenance", modulePath, binary)
-	return ""
-}
-
 func assertV2File(t *testing.T, filename string, expected []byte) {
 	t.Helper()
 	actual, err := os.ReadFile(filename)
@@ -385,7 +562,9 @@ func assertV2File(t *testing.T, filename string, expected []byte) {
 }
 
 func TestV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
+	requireV2ProcessScenario(t)
+	scenario := startV2Scenario(t, v2DurableResumeScenario)
+	binaries := loadE2EBinaries(t)
 	root := filepath.Join(t.TempDir(), "resume-tree")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -398,21 +577,29 @@ func TestV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 		}
 	}
 
-	relay := startV2Process(t, relayBin, "-listen", "127.0.0.1:0", "-state-dir", filepath.Join(t.TempDir(), "relay-state"))
-	address := waitV2Match(t, relay, v2RelayAddress, relay.stderr)
-	share := startV2Process(t, windshareBin, "share", root, "--relay", "ws://"+address)
+	relay := startV2Process(
+		t, scenario, v2RelayComponent, binaries.relay,
+		"-listen", "127.0.0.1:0", "-state-dir", filepath.Join(t.TempDir(), "relay-state"),
+	)
+	address := waitV2RelayReady(t, relay)
+	share := startV2Process(
+		t, scenario, v2WindShareShareComponent, binaries.windshare, "share", root, "--relay", "ws://"+address,
+	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	output := testoutputroot.New(t).RootPath
 	firstOutput := filepath.Join(output, "resume-tree", "file-000.bin")
 
-	interrupted := startV2Process(t, windshareBin, "get", shareLink, "-o", output)
+	interrupted := startV2Process(
+		t, scenario, v2WindShareGetComponent, binaries.windshare, "get", shareLink, "-o", output,
+	)
 	waitV2PublishedFile(t, interrupted, firstOutput)
-	interrupted.stop()
+	interrupted.stop(t)
 
-	resumed := startV2Process(t, windshareBin, "get", shareLink, "-o", output)
-	// Recovery revalidates every retained native witness. Race instrumentation
-	// makes that bounded O(file-count) work much slower than ordinary process
-	// readiness, so it needs its own ceiling without weakening other fail-fast waits.
+	resumed := startV2Process(
+		t, scenario, v2WindShareGetComponent, binaries.windshare, "get", shareLink, "-o", output,
+	)
+	// Recovery performs native witness revalidation before transferring the
+	// interrupted tail, so it retains a scenario ceiling distinct from readiness.
 	if err := resumed.waitWithin(t, v2DurableResumeProcessTimeout); err != nil {
 		t.Fatalf(
 			"resumed receiver failed: %v; receiver stdout=%q stderr=%q; sender stdout=%q stderr=%q; relay stdout=%q stderr=%q",
@@ -427,10 +614,13 @@ func TestV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 	// therefore the durable-resume oracle without exposing backend reopen state.
 	assertV2File(t, firstOutput, payload)
 	assertV2File(t, filepath.Join(output, "resume-tree", fmt.Sprintf("file-%03d.bin", v2ResumeFileCount-1)), payload)
+	scenario.requireSuccess(t)
 }
 
 func waitV2PublishedFile(t *testing.T, process *v2Process, filename string) {
 	t.Helper()
+	phaseContext := v2ProcessPhaseContext{Component: process.component}
+	phase := process.scenario.startPhase(t, v2ArtifactCheckpointMilestone, phaseContext)
 	deadline := time.Now().Add(v2ProcessTimeout)
 	for time.Now().Before(deadline) {
 		if information, err := os.Stat(filename); err == nil && information.Size() == v2ResumeFileBytes {
@@ -438,6 +628,7 @@ func waitV2PublishedFile(t *testing.T, process *v2Process, filename string) {
 			case <-process.done:
 				t.Fatalf("receiver completed before the crash checkpoint; stdout=%q stderr=%q", process.stdout.String(), process.stderr.String())
 			default:
+				process.scenario.succeedPhase(t, phase, phaseContext)
 				return
 			}
 		}
@@ -451,32 +642,71 @@ func waitV2PublishedFile(t *testing.T, process *v2Process, filename string) {
 	t.Fatalf("receiver did not publish the crash checkpoint; stdout=%q stderr=%q", process.stdout.String(), process.stderr.String())
 }
 
-func TestV2ProductionSourcesDoNotImportRetiredStack(t *testing.T) {
-	root := repoRoot()
-	production := []string{
-		filepath.Join(root, "cmd", "windshare", "internal", "cli", "share.go"),
-		filepath.Join(root, "cmd", "windshare", "internal", "cli", "get.go"),
-		filepath.Join(root, "relay", "cmd", "wsrelay", "main.go"),
+func TestV2ProcessErrorIncludesDiagnostics(t *testing.T) {
+	requireV2ProcessScenario(t)
+	scenario := startV2Scenario(t, v2InvalidLinkScenario)
+	binaries := loadE2EBinaries(t)
+	process := startV2Process(
+		t, scenario, v2WindShareGetComponent, binaries.windshare, "get", "not-a-link",
+	)
+	settlement, err := process.waitSettlementWithin(t, v2ProcessTimeout)
+	if err != nil {
+		t.Fatalf("invalid-link process ownership failed: %v", err)
 	}
-	retired := []string{"core/manifest", "core/share", "transport/relay\"", "relay/protocol\"", "/v1", "max-manifest"}
-	for _, filename := range production {
-		encoded, err := os.ReadFile(filename)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, value := range retired {
-			if strings.Contains(string(encoded), value) {
-				t.Errorf("%s still contains retired production dependency %q", filename, value)
-			}
-		}
+	if err := testprocess.RequireTreeEmpty(settlement); err != nil {
+		t.Fatal(err)
 	}
+	if settlement.Target.Outcome != ownerprotocol.TargetExited ||
+		settlement.Target.ExitCode == nil || *settlement.Target.ExitCode != v2UsageExitCode ||
+		process.stdout.String() != "" || process.stderr.String() != v2InvalidLinkDiagnostic {
+		t.Fatalf(
+			"invalid link result: settlement=%#v stdout=%q stderr=%q",
+			settlement, process.stdout.String(), process.stderr.String(),
+		)
+	}
+	scenario.requireSuccess(t)
 }
 
-func TestV2ProcessErrorIncludesDiagnostics(t *testing.T) {
-	testnetwork.RequireOSNetwork(t)
-	command := exec.Command(windshareBin, "get", "not-a-link")
-	output, err := command.CombinedOutput()
-	if err == nil || len(output) == 0 {
-		t.Fatalf("invalid link result: err=%v output=%q", err, output)
+func assertV2OutputInventory(t *testing.T, root string, expected map[string]bool) {
+	t.Helper()
+	remaining := make(map[string]bool, len(expected))
+	for path, directory := range expected {
+		remaining[path] = directory
+	}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		if relative == v2OutputControlDirectory {
+			if !entry.IsDir() {
+				return fmt.Errorf("output control namespace is not a directory")
+			}
+			// Recovery metadata has its own durable-state tests. This oracle owns the
+			// complete user-visible namespace and admits only its reserved sibling.
+			return filepath.SkipDir
+		}
+		wantDirectory, ok := remaining[relative]
+		if !ok {
+			return fmt.Errorf("unexpected output artifact %q", relative)
+		}
+		if entry.IsDir() != wantDirectory {
+			return fmt.Errorf("output artifact %q directory=%t want=%t", relative, entry.IsDir(), wantDirectory)
+		}
+		delete(remaining, relative)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("output inventory is missing artifacts: %#v", remaining)
 	}
 }

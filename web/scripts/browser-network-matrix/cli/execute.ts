@@ -1,3 +1,5 @@
+import { isProxy } from 'node:util/types'
+
 import {
   aggregateNetworkMatrix,
   canonicalNetworkMatrixAggregateJson,
@@ -21,12 +23,20 @@ import {
   type NetworkRunResult,
 } from '../result.ts'
 import {
-  runNetworkMatrix,
+  startNetworkMatrix,
+  type NetworkMatrixRunExecution,
   type NetworkMatrixRunTrace,
-  type NetworkMatrixRunTraceSink,
   type NetworkMatrixRunnerDeadlines,
+  type NetworkMatrixRunnerOptions,
   type NetworkMatrixSampleExecutor,
 } from '../runner.ts'
+import {
+  createNetworkMatrixTraceJournal,
+  networkMatrixTrace,
+  settleNetworkMatrixTraceJournal,
+  type NetworkMatrixTraceChannel,
+  type NetworkMatrixTraceSnapshot,
+} from '../trace/index.ts'
 import { NetworkMatrixRunCollector } from '../run-collector.ts'
 import {
   NetworkMatrixInvocationOwnershipLedger,
@@ -47,6 +57,8 @@ import {
 
 export const NETWORK_MATRIX_RUNTIME_BOOTSTRAP_DEADLINE_MS = 30_000 as const
 export const NETWORK_MATRIX_RUNTIME_CLOSE_DEADLINE_MS = 90_000 as const
+export const NETWORK_MATRIX_EXECUTION_MAXIMUM_TRACE_EVENTS = 1_024 as const
+export const NETWORK_MATRIX_EXECUTION_MAXIMUM_TRACE_BYTES = 8_388_608 as const
 
 export interface NetworkMatrixRuntimeSettlementReceipt {
   readonly terminal: 'closed'
@@ -72,6 +84,14 @@ export interface NetworkMatrixRuntimeBootstrap {
   ): NetworkMatrixOwnedOperation<NetworkMatrixExecutionRuntime>
 }
 
+export interface NetworkMatrixRunnerStarter {
+  start(options: NetworkMatrixRunnerOptions): NetworkMatrixRunExecution
+}
+
+const SYSTEM_NETWORK_MATRIX_RUNNER: NetworkMatrixRunnerStarter = Object.freeze({
+  start: startNetworkMatrix,
+})
+
 export interface ExecuteNetworkMatrixOptions {
   readonly registry: LoadedNetworkMatrixRegistry
   readonly runId: string
@@ -83,10 +103,21 @@ export interface ExecuteNetworkMatrixOptions {
   readonly bootstrapDeadlineScheduler?: NetworkMatrixDeadlineScheduler
   readonly runtimeCloseDeadlineMs?: number
   readonly runtimeCloseDeadlineScheduler?: NetworkMatrixDeadlineScheduler
+  readonly runner?: NetworkMatrixRunnerStarter
   readonly runnerDeadlines?: NetworkMatrixRunnerDeadlines
   readonly runnerDeadlineScheduler?: NetworkMatrixDeadlineScheduler
-  readonly trace?: NetworkMatrixRunTraceSink
   readonly invocationId?: string
+}
+
+export interface ExecuteNetworkMatrixExecution {
+  readonly result: Promise<ExecuteNetworkMatrixResult>
+  readonly runnerTraces: Promise<NetworkMatrixTraceSnapshot | null>
+  readonly traces: NetworkMatrixTraceChannel
+}
+
+interface ExecutionSettlementState {
+  runtimeCleanupOutcome: ExecuteNetworkMatrixResult['runtimeCleanupOutcome']
+  runnerTraces: NetworkMatrixTraceSnapshot | null
 }
 
 export interface ExecuteNetworkMatrixResult {
@@ -95,6 +126,8 @@ export interface ExecuteNetworkMatrixResult {
     | 'runtime-bootstrap-failed'
     | 'collector-failed'
     | 'containment-cleanup-failed'
+  readonly runtimeCleanupOutcome: 'completed' | 'failed'
+  readonly runnerTraces: NetworkMatrixTraceSnapshot | null
   readonly run: NetworkRunResult
   readonly aggregate: NetworkMatrixAggregate
   readonly publication: NetworkMatrixArtifactPublication
@@ -105,8 +138,72 @@ export interface ExecuteNetworkMatrixResult {
  * derives one aggregate from the exact staged run bytes, and publishes both
  * contracts together. Browser children never receive a filesystem writer.
  */
-export async function executeNetworkMatrix(
+export function startNetworkMatrixExecution(
   options: ExecuteNetworkMatrixOptions,
+): ExecuteNetworkMatrixExecution {
+  const runId = requireRunId(options.runId, 'browser network matrix execute run ID')
+  const identity = executionTraceIdentity(runId)
+  const journal = createNetworkMatrixTraceJournal(
+    Object.freeze([identity]),
+    NETWORK_MATRIX_EXECUTION_MAXIMUM_TRACE_EVENTS,
+    NETWORK_MATRIX_EXECUTION_MAXIMUM_TRACE_BYTES,
+    'browser network matrix execution lifecycle trace',
+  )
+  journal.append(networkMatrixTrace(identity, 'execution-started', 'started', {
+    executionMode: options.executionMode,
+  }))
+  const settlementState: ExecutionSettlementState = {
+    runtimeCleanupOutcome: 'completed',
+    runnerTraces: null,
+  }
+  const operation = executeNetworkMatrixOperation(options, journal.append, settlementState).then(
+    (settled) => {
+      settlementState.runtimeCleanupOutcome = settled.runtimeCleanupOutcome
+      const acceptedByHardOracle = settled.commandOutcome === 'completed' &&
+        settled.aggregate.evidenceOutcome === 'complete'
+      emitTrace(
+        journal.append,
+        settled.run.runId,
+        'execution-terminal',
+        acceptedByHardOracle ? 'succeeded' : 'failed',
+        {
+          commandOutcome: settled.commandOutcome,
+          evidenceOutcome: settled.aggregate.evidenceOutcome,
+          aggregateHardOracleAccepted: acceptedByHardOracle,
+          cleanupOutcome: settled.runtimeCleanupOutcome,
+          lastMilestone: 'artifact-publication-completed',
+        },
+      )
+      return settled
+    },
+    (cause: unknown) => {
+      emitTrace(
+        journal.append,
+        runId,
+        'execution-failed',
+        'failed',
+        opaqueFailureContext('execution-operation-failed'),
+      )
+      emitTrace(journal.append, runId, 'execution-terminal', 'failed', {
+        cleanupOutcome: settlementState.runtimeCleanupOutcome,
+        lastMilestone: 'execution-failed',
+        ...opaqueFailureContext('execution-operation-failed'),
+      })
+      throw cause
+    },
+  )
+  const result = settleNetworkMatrixTraceJournal(operation, journal)
+  const runnerTraces = result.then(
+    (settled) => settled.runnerTraces,
+    () => settlementState.runnerTraces,
+  )
+  return Object.freeze({ result, runnerTraces, traces: journal.view })
+}
+
+async function executeNetworkMatrixOperation(
+  options: ExecuteNetworkMatrixOptions,
+  appendTrace: (trace: NetworkMatrixRunTrace) => void,
+  settlementState: ExecutionSettlementState,
 ): Promise<ExecuteNetworkMatrixResult> {
   const runId = requireRunId(options.runId, 'browser network matrix execute run ID')
   const executionMode = requireEnum(
@@ -114,12 +211,12 @@ export async function executeNetworkMatrix(
     NETWORK_MATRIX_EXECUTION_MODES,
     'browser network matrix execution mode',
   )
-  const trace = options.trace ?? defaultTraceSink
   const ownership = new NetworkMatrixInvocationOwnershipLedger(
     runId,
     options.invocationId ?? newNetworkMatrixInvocationId(),
   )
-  const collector = new NetworkMatrixRunCollector({
+  try {
+    const collector = new NetworkMatrixRunCollector({
     registry: options.registry,
     runId,
     executionMode,
@@ -130,7 +227,7 @@ export async function executeNetworkMatrix(
     executionMode,
     invocationId: ownership.binding.invocationId,
   })
-  emitTrace(trace, runId, 'runtime-bootstrap-started', { executionMode })
+  emitTrace(appendTrace, runId, 'runtime-bootstrap-started', 'started', { executionMode })
   let runtime: NetworkMatrixExecutionRuntime
   let runtimeOwnership: NetworkMatrixOwnershipRegistration | undefined
   try {
@@ -155,10 +252,16 @@ export async function executeNetworkMatrix(
       }),
     )
   } catch (cause) {
-    emitTrace(trace, runId, 'runtime-bootstrap-failed', { executionMode })
-    const commandOutcome = cause instanceof NetworkMatrixOwnershipCleanupError
+    emitTrace(appendTrace, runId, 'runtime-bootstrap-failed', 'failed', {
+      executionMode,
+      ...opaqueFailureContext('runtime-bootstrap-failed'),
+    })
+    const commandOutcome = containsCleanupFailure(cause)
       ? 'containment-cleanup-failed'
       : 'runtime-bootstrap-failed'
+    settlementState.runtimeCleanupOutcome = commandOutcome === 'containment-cleanup-failed'
+      ? 'failed'
+      : 'completed'
     const run = finalizeBootstrapFailure(
       options.registry,
       collector,
@@ -166,47 +269,91 @@ export async function executeNetworkMatrix(
       executionMode,
       commandOutcome,
     )
-    return publishRunAndRetainOwnership(options, trace, ownership, run, commandOutcome)
+    return publishRunAndRetainOwnership(
+      options,
+      appendTrace,
+      ownership,
+      run,
+      commandOutcome,
+      settlementState.runtimeCleanupOutcome,
+      null,
+    )
   }
-  emitTrace(trace, runId, 'runtime-bootstrap-completed', { executionMode })
-  if (runtimeOwnership === undefined) {
-    throw new Error('network matrix runtime ownership handoff did not publish its successor')
-  }
+  emitTrace(appendTrace, runId, 'runtime-bootstrap-completed', 'succeeded', { executionMode })
+
   let run: NetworkRunResult | undefined
+  let runnerTraces: NetworkMatrixTraceSnapshot | null = null
+  let workflowFailure: unknown
   let terminalFailure: 'collector-failed' | 'containment-cleanup-failed' | undefined
+  let settlementFailure: unknown
   try {
-    run = await runNetworkMatrix({
-      registry: options.registry,
+    if (runtimeOwnership === undefined) {
+      workflowFailure = new Error(
+        'network matrix runtime ownership handoff did not publish its successor',
+      )
+    } else {
+      const runnerExecution = (options.runner ?? SYSTEM_NETWORK_MATRIX_RUNNER).start({
+        registry: options.registry,
+        runId,
+        executionMode,
+        authorities: runtime.authorities,
+        samples: runtime.samples,
+        collector,
+        ...(options.runnerDeadlines === undefined ? {} : { deadlines: options.runnerDeadlines }),
+        ...(options.runnerDeadlineScheduler === undefined
+          ? {}
+          : { deadlineScheduler: options.runnerDeadlineScheduler }),
+        ownershipRegistrar: ownership,
+      })
+      let runnerFailure: unknown
+      try {
+        run = await runnerExecution.result
+      } catch (cause) {
+        runnerFailure = cause
+      }
+      runnerTraces = runnerExecution.traces.snapshot()
+      settlementState.runnerTraces = runnerTraces
+      let traceFailure: unknown
+      try {
+        requireCompleteRunnerTraceSnapshot(runnerTraces)
+      } catch (cause) {
+        traceFailure = cause
+      }
+      workflowFailure = combineFailures(
+        runnerFailure,
+        traceFailure,
+        'network matrix runner and trace evidence both failed',
+      )
+    }
+  } finally {
+    settlementFailure = await settleExecutionRuntime(
+      options,
+      runtime,
+      runtimeOwnership,
+      appendTrace,
       runId,
       executionMode,
-      authorities: runtime.authorities,
-      samples: runtime.samples,
-      collector,
-      ...(options.runnerDeadlines === undefined ? {} : { deadlines: options.runnerDeadlines }),
-      ...(options.runnerDeadlineScheduler === undefined
-        ? {}
-        : { deadlineScheduler: options.runnerDeadlineScheduler }),
-      trace,
-      ownershipRegistrar: ownership,
-    })
-  } catch (cause) {
-    terminalFailure = cause instanceof NetworkMatrixOwnershipCleanupError
+    )
+    settlementState.runtimeCleanupOutcome = settlementFailure === undefined
+      ? 'completed'
+      : 'failed'
+  }
+
+  workflowFailure = combineFailures(
+    workflowFailure,
+    settlementFailure,
+    'network matrix execution and runtime cleanup both failed',
+  )
+  if (workflowFailure !== undefined) {
+    terminalFailure = containsCleanupFailure(workflowFailure) || settlementFailure !== undefined
       ? 'containment-cleanup-failed'
       : 'collector-failed'
-    emitTrace(trace, runId, 'run-execution-failed', {
+    emitTrace(appendTrace, runId, 'run-execution-failed', 'failed', {
       executionMode,
       failureCode: terminalFailure,
+      ...opaqueFailureContext('run-execution-failed'),
     })
   }
-  const settlementFailure = await settleExecutionRuntime(
-    options,
-    runtime,
-    runtimeOwnership,
-    trace,
-    runId,
-    executionMode,
-  )
-  if (settlementFailure !== undefined) terminalFailure = 'containment-cleanup-failed'
   if (terminalFailure !== undefined) {
     run = run === undefined
       ? finalizeExecutionFailure(
@@ -219,24 +366,35 @@ export async function executeNetworkMatrix(
       : markRunOrchestrationFailure(options.registry, run, terminalFailure)
   }
   if (run === undefined) throw new Error('network matrix execution did not produce a terminal run')
-  return publishRunAndRetainOwnership(
-    options,
-    trace,
-    ownership,
-    run,
-    terminalFailure ?? 'completed',
-  )
+    return publishRunAndRetainOwnership(
+      options,
+      appendTrace,
+      ownership,
+      run,
+      terminalFailure ?? 'completed',
+      settlementState.runtimeCleanupOutcome,
+      runnerTraces,
+    )
+  } finally {
+    await ownership.retainUntilEmpty(undefined, (_cause, retainedOperationIds) => {
+      emitTrace(appendTrace, runId, 'ownership-retry-failed', 'failed', {
+        executionMode,
+        invocationId: ownership.binding.invocationId,
+        retainedOperationIds,
+      })
+    })
+  }
 }
 
 async function settleExecutionRuntime(
   options: ExecuteNetworkMatrixOptions,
   runtime: NetworkMatrixExecutionRuntime,
-  runtimeOwnership: NetworkMatrixOwnershipRegistration,
-  trace: NetworkMatrixRunTraceSink,
+  runtimeOwnership: NetworkMatrixOwnershipRegistration | undefined,
+  appendTrace: (trace: NetworkMatrixRunTrace) => void,
   runId: string,
   executionMode: NetworkMatrixExecutionMode,
 ): Promise<unknown | undefined> {
-  emitTrace(trace, runId, 'runtime-close-started', { executionMode })
+  emitTrace(appendTrace, runId, 'runtime-close-started', 'started', { executionMode })
   const operation: NetworkMatrixOwnedOperation<NetworkMatrixRuntimeSettlementReceipt> =
     Object.freeze({
       result: Promise.resolve()
@@ -253,14 +411,14 @@ async function settleExecutionRuntime(
       options.runtimeCloseDeadlineMs ?? NETWORK_MATRIX_RUNTIME_CLOSE_DEADLINE_MS,
       options.runtimeCloseDeadlineScheduler,
     )
-    emitTrace(trace, runId, 'runtime-close-completed', { executionMode })
-    runtimeOwnership.normalTerminal()
+    emitTrace(appendTrace, runId, 'runtime-close-completed', 'succeeded', { executionMode })
+    runtimeOwnership?.normalTerminal()
     return undefined
   } catch (cause) {
-    if (!(cause instanceof NetworkMatrixOwnershipCleanupError)) {
-      runtimeOwnership.forcedTerminal()
+    if (!isOwnershipCleanupError(cause)) {
+      runtimeOwnership?.forcedTerminal()
     }
-    emitTrace(trace, runId, 'runtime-close-failed', { executionMode })
+    emitTrace(appendTrace, runId, 'runtime-close-failed', 'failed', { executionMode })
     return cause
   }
 }
@@ -316,12 +474,21 @@ function markRunOrchestrationFailure(
 
 async function publishRunAndRetainOwnership(
   options: ExecuteNetworkMatrixOptions,
-  trace: NetworkMatrixRunTraceSink,
+  appendTrace: (trace: NetworkMatrixRunTrace) => void,
   ownership: NetworkMatrixInvocationOwnershipLedger,
   run: NetworkRunResult,
   commandOutcome: ExecuteNetworkMatrixResult['commandOutcome'],
+  runtimeCleanupOutcome: ExecuteNetworkMatrixResult['runtimeCleanupOutcome'],
+  runnerTraces: NetworkMatrixTraceSnapshot | null,
 ): Promise<ExecuteNetworkMatrixResult> {
-  const publication = publishRun(options, trace, run, commandOutcome).then(
+  const publication = publishRun(
+    options,
+    appendTrace,
+    run,
+    commandOutcome,
+    runtimeCleanupOutcome,
+    runnerTraces,
+  ).then(
     (published) => Object.freeze({ outcome: 'published' as const, published }),
     (cause: unknown) => Object.freeze({ outcome: 'failed' as const, cause }),
   )
@@ -329,7 +496,7 @@ async function publishRunAndRetainOwnership(
   // the invocation. Starting both prevents a blocked publisher from starving the
   // exact force retry that still owns a runtime, lease, or process subtree.
   const retainedSettlement = ownership.retainUntilEmpty(undefined, (_cause, retainedOperationIds) => {
-    emitTrace(trace, run.runId, 'ownership-retry-failed', {
+    emitTrace(appendTrace, run.runId, 'ownership-retry-failed', 'failed', {
       executionMode: run.executionMode,
       invocationId: ownership.binding.invocationId,
       retainedOperationIds,
@@ -342,13 +509,15 @@ async function publishRunAndRetainOwnership(
 
 async function publishRun(
   options: ExecuteNetworkMatrixOptions,
-  trace: NetworkMatrixRunTraceSink,
+  appendTrace: (trace: NetworkMatrixRunTrace) => void,
   run: NetworkRunResult,
   commandOutcome: ExecuteNetworkMatrixResult['commandOutcome'],
+  runtimeCleanupOutcome: ExecuteNetworkMatrixResult['runtimeCleanupOutcome'],
+  runnerTraces: NetworkMatrixTraceSnapshot | null,
 ): Promise<ExecuteNetworkMatrixResult> {
   const { runId, executionMode } = run
   const runJson = canonicalNetworkRunResultJson(run, options.registry)
-  emitTrace(trace, runId, 'artifact-publication-started', {
+  emitTrace(appendTrace, runId, 'artifact-publication-started', 'started', {
     executionMode,
     observedSamples: run.samples.length,
   })
@@ -364,7 +533,7 @@ async function publishRun(
       },
     })
   } catch (cause) {
-    emitTrace(trace, runId, 'artifact-publication-failed', { executionMode })
+    emitTrace(appendTrace, runId, 'artifact-publication-failed', 'failed', { executionMode })
     throw cause
   }
   if (publication.runJson !== runJson) {
@@ -376,11 +545,18 @@ async function publishRun(
     options.registry,
     [publishedRun],
   )
-  emitTrace(trace, runId, 'artifact-publication-completed', {
+  emitTrace(appendTrace, runId, 'artifact-publication-completed', 'succeeded', {
     executionMode,
     evidenceOutcome: aggregate.evidenceOutcome,
   })
-  return Object.freeze({ commandOutcome, run: publishedRun, aggregate, publication })
+  return Object.freeze({
+    commandOutcome,
+    runtimeCleanupOutcome,
+    runnerTraces,
+    run: publishedRun,
+    aggregate,
+    publication,
+  })
 }
 
 function finalizeBootstrapFailure(
@@ -408,25 +584,92 @@ function finalizeBootstrapFailure(
   return collector.finalize({ failureCode: orchestrationFailureCode })
 }
 
-function emitTrace(
-  sink: NetworkMatrixRunTraceSink,
-  runId: string,
-  milestone: string,
-  context: Readonly<Record<string, unknown>>,
+function requireCompleteRunnerTraceSnapshot(
+  snapshot: NetworkMatrixTraceSnapshot,
 ): void {
-  const event: NetworkMatrixRunTrace = Object.freeze({
-    operationId: runId,
-    milestone,
-    runId,
-    context: Object.freeze(context),
-  })
-  try {
-    sink(event)
-  } catch {
-    // Observability cannot acquire authority over evidence execution.
+  if (!snapshot.completed) {
+    throw new Error('network matrix runner trace journal is incomplete after runner settlement')
+  }
+  if (
+    snapshot.failure !== null ||
+    snapshot.truncated ||
+    snapshot.observedEvents !== snapshot.capturedEvents ||
+    snapshot.observedBytes !== snapshot.capturedBytes
+  ) {
+    throw new Error('network matrix runner trace journal exceeded or violated its evidence authority')
   }
 }
 
-function defaultTraceSink(trace: NetworkMatrixRunTrace): void {
-  process.stderr.write(`${JSON.stringify({ component: 'browser-network-matrix-execute', ...trace })}\n`)
+function emitTrace(
+  appendTrace: (trace: NetworkMatrixRunTrace) => void,
+  runId: string,
+  milestone: string,
+  outcome: NetworkMatrixRunTrace['outcome'],
+  context: Readonly<Record<string, unknown>>,
+): void {
+  appendTrace(networkMatrixTrace(executionTraceIdentity(runId), milestone, outcome, context))
+}
+
+function executionTraceIdentity(runId: string) {
+  return Object.freeze({
+    component: 'browser-network-matrix-execute' as const,
+    scenario: 'network-matrix-execution' as const,
+    operationId: `execution-${runId}`,
+    runId,
+  })
+}
+
+function combineFailures(
+  first: unknown,
+  second: unknown,
+  message: string,
+): unknown {
+  if (first === undefined) return second
+  if (second === undefined) return first
+  return new AggregateError([first, second], message, { cause: first })
+}
+
+function containsCleanupFailure(value: unknown, visited = new Set<unknown>()): boolean {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    isProxy(value) ||
+    visited.has(value)
+  ) return false
+  visited.add(value)
+  if (isOwnershipCleanupError(value)) return true
+  if (!(value instanceof AggregateError)) return false
+  const errors = Object.getOwnPropertyDescriptor(value, 'errors')
+  if (
+    errors === undefined ||
+    !('value' in errors) ||
+    isProxy(errors.value) ||
+    !Array.isArray(errors.value)
+  ) return false
+  return errors.value.some((entry: unknown) => containsCleanupFailure(entry, visited))
+}
+
+function isOwnershipCleanupError(
+  value: unknown,
+): value is NetworkMatrixOwnershipCleanupError {
+  return typeof value === 'object' &&
+    value !== null &&
+    !isProxy(value) &&
+    value instanceof NetworkMatrixOwnershipCleanupError
+}
+
+type ExecutionTraceFailureCode =
+  | 'execution-operation-failed'
+  | 'run-execution-failed'
+  | 'runtime-bootstrap-failed'
+
+/**
+ * Lifecycle evidence records a closed phase code and never introspects a thrown
+ * dependency value; cleanup and terminal publication therefore survive hostile
+ * Error accessors, toString implementations, and Proxy traps.
+ */
+function opaqueFailureContext(
+  failureCode: ExecutionTraceFailureCode,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({ failureCode })
 }

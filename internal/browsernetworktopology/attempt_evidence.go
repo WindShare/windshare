@@ -331,7 +331,7 @@ func validPionProfilePair(profileID string, pair PionSelectedPair) bool {
 	}
 	local, remote, protocol := *pair.LocalCandidateType, *pair.RemoteCandidateType, *pair.Protocol
 	switch profileID {
-	case string(ProfileScheduledPublicSTUN), string(ProfileManualRealNAT):
+	case string(ProfileScheduledPublicSTUN):
 		return local != CandidateRelay && remote != CandidateRelay && protocol == ProtocolUDP
 	case string(ProfileScheduledCoturn):
 		return local != CandidateRelay && remote == CandidateRelay &&

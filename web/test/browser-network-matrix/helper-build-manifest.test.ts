@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { HELPER_BUILD_MANIFEST_SCHEMA_VERSION } from '../../scripts/browser-network-matrix/cli/build-helpers.mjs'
-import { openHelperBuildManifestAuthority } from '../../scripts/browser-network-matrix/cli/helper-build-manifest.ts'
+import { openHelperBuildManifest } from '../../scripts/browser-network-matrix/cli/helper-build-manifest.ts'
 
 const cleanupRoots: string[] = []
 
@@ -13,14 +13,14 @@ afterEach(async () => {
   await Promise.all(cleanupRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
-describe('held helper build manifest authority', () => {
+describe('held helper build manifest', () => {
   it('accepts only the exact platform roles from canonical held bytes', async () => {
     const fixture = await manifestFixture()
-    const authority = await openHelperBuildManifestAuthority(fixture.path, 'win32')
+    const authority = await openHelperBuildManifest(fixture.path, 'win32')
     try {
       expect(authority.manifest.helpers.map(({ role }) => role)).toEqual([
         'artifact-publisher',
-        'windows-job',
+        'test-process-owner',
       ])
       await expect(authority.assertUnchanged()).resolves.toBeUndefined()
     } finally {
@@ -62,10 +62,6 @@ describe('held helper build manifest authority', () => {
       ...value,
       helpers: [{ ...value.helpers[0], path: 'browsermatrixpublish.exe' }, value.helpers[1]],
     }))],
-    ['malformed helper SHA', (value: TestManifest) => Buffer.from(canonical({
-      ...value,
-      helpers: [{ ...value.helpers[0], sha256: 'A'.repeat(64) }, value.helpers[1]],
-    }))],
     ['swapped platform roles', (value: TestManifest) => Buffer.from(canonical({
       ...value,
       helpers: [value.helpers[1], value.helpers[0]],
@@ -86,19 +82,19 @@ describe('held helper build manifest authority', () => {
   ] as const)('rejects %s', async (_case, encode) => {
     const fixture = await manifestFixture()
     await writeFile(fixture.path, encode(fixture.value))
-    await expect(openHelperBuildManifestAuthority(fixture.path, 'win32')).rejects.toThrow()
+    await expect(openHelperBuildManifest(fixture.path, 'win32')).rejects.toThrow()
   })
 
   it('rejects an oversized manifest before allocating its declared content', async () => {
     const fixture = await manifestFixture()
     await writeFile(fixture.path, Buffer.alloc(16 * 1024 + 1, 0x20))
-    await expect(openHelperBuildManifestAuthority(fixture.path, 'win32')).rejects.toThrow(
+    await expect(openHelperBuildManifest(fixture.path, 'win32')).rejects.toThrow(
       /bounded regular file/u,
     )
   })
 
   it('requires the manifest invocation path itself to be explicit and canonical', async () => {
-    await expect(openHelperBuildManifestAuthority(
+    await expect(openHelperBuildManifest(
       'helper-manifest.json',
       'win32',
     )).rejects.toThrow(/path must be explicit, absolute, and canonical/u)
@@ -108,18 +104,18 @@ describe('held helper build manifest authority', () => {
     const fixture = await manifestFixture()
     const alias = join(fixture.root, 'manifest-alias.json')
     await symlink(fixture.path, alias, 'file')
-    await expect(openHelperBuildManifestAuthority(alias, 'win32')).rejects.toThrow(
+    await expect(openHelperBuildManifest(alias, 'win32')).rejects.toThrow(
       /bounded regular file/u,
     )
   })
 
-  it('rejects in-place byte mutation through the held authority', async () => {
+  it('rejects in-place byte mutation through the held manifest', async () => {
     const fixture = await manifestFixture()
-    const authority = await openHelperBuildManifestAuthority(fixture.path, 'win32')
+    const authority = await openHelperBuildManifest(fixture.path, 'win32')
     await writeFile(fixture.path, `${fixture.encoded} `, 'utf8')
     try {
       await expect(authority.assertUnchanged()).rejects.toThrow(
-        /identity or revision changed|canonical bytes or SHA-256 changed/u,
+        /identity or revision changed|canonical bytes changed/u,
       )
     } finally {
       await authority.close()
@@ -128,7 +124,7 @@ describe('held helper build manifest authority', () => {
 
   it('rejects a named-path swap even when the replacement has identical bytes', async () => {
     const fixture = await manifestFixture()
-    const authority = await openHelperBuildManifestAuthority(fixture.path, 'win32')
+    const authority = await openHelperBuildManifest(fixture.path, 'win32')
     await rename(fixture.path, `${fixture.path}.held`)
     await writeFile(fixture.path, fixture.encoded, 'utf8')
     try {
@@ -140,9 +136,8 @@ describe('held helper build manifest authority', () => {
 })
 
 interface TestManifestEntry {
-  readonly role: 'artifact-publisher' | 'windows-job'
+  readonly role: 'artifact-publisher' | 'test-process-owner'
   readonly path: string
-  readonly sha256: string
 }
 
 interface TestManifest {
@@ -165,12 +160,10 @@ async function manifestFixture(): Promise<Readonly<{
     Object.freeze({
       role: 'artifact-publisher' as const,
       path: join(root, 'browsermatrixpublish.exe'),
-      sha256: '1'.repeat(64),
     }),
     Object.freeze({
-      role: 'windows-job' as const,
-      path: join(root, 'windowsjob.exe'),
-      sha256: '2'.repeat(64),
+      role: 'test-process-owner' as const,
+      path: join(root, 'testprocessowner.exe'),
     }),
   ])
   const value: TestManifest = Object.freeze({

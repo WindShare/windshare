@@ -12,15 +12,14 @@
     "forbidden": "node ../scripts/ci/web-forbidden.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
-    "performance:r8:web": "pwsh -NoLogo -NoProfile -File ../scripts/r8-web-performance.ps1",
     "test": "vitest run",
     "test:unit:remainder": "vitest run --exclude test/browser-evidence/**",
-    "test:browser": "playwright test",
+    "test:browser": "node ../scripts/ci/browsergate/main.mjs local",
+    "test:browser:smoke": "node ../scripts/ci/browsergate/main.mjs smoke",
     "test:browser:evidence": "node scripts/browser-evidence/cli.ts",
     "test:browser:evidence:contract": "vitest run --config vitest.browser-contract.config.ts && node ../scripts/ci/browsergate/test-runner.mjs",
     "test:browser:generated-semantic:process": "node ../scripts/ci/browsergate/tests/process/generated-semantic.tests.mjs",
-    "test:browser:process:integration": "vitest run test/browser-evidence/native-directory-publisher.test.ts test/browser-evidence/process-runner.test.ts test/browser-evidence/windows-job-backend.test.ts test/browser-evidence/windows-job-client.test.ts",
-    "test:browser:process": "pnpm run test:browser:process:integration && pnpm run test:browser:generated-semantic:process",
+    "test:browser:process:integration": "vitest run test/browser-evidence/native-directory-publisher.test.ts test/browser-evidence/process-runner.test.ts test/browser-evidence/test-process-owner-client.test.ts",
     "test:browser:preflight": "node scripts/verify-playwright-browsers.mjs"
   },
   "dependencies": {

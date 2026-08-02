@@ -1,5 +1,5 @@
 import type { BigIntStats } from 'node:fs'
-import { lstat, open } from 'node:fs/promises'
+import { lstat, open, writeFile } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 
@@ -34,20 +34,36 @@ import { assertBrowserRunPolicyEqual, parseBrowserRunPolicy } from '../../run-po
 import { parseCanonicalJsonText } from '../../contract/strict-json.ts'
 import { BROWSER_ENGINES } from '../../vocabulary.ts'
 import {
+  ArtifactGuardRecordedError,
   GuardFailure,
-  type ArtifactGuardTraceEvent,
-  type ArtifactGuardTraceSink,
+  isOwnedGuardFailure,
+  type ArtifactGuardScanFaultCut,
+  type ArtifactGuardTraceIdentity,
+  type GuardArtifactSuiteExecution,
   type GuardArtifactSuiteOptions,
+  type GuardArtifactSuiteOutcome,
   type GuardArtifactSuiteResult,
+  type ScanSampleArtifactsExecution,
   type ScanSampleArtifactsOptions,
   type ScanState,
 } from './contract.ts'
+import {
+  ArtifactGuardTraceJournal,
+  requireCompleteArtifactGuardTrace,
+} from './trace-journal.ts'
 import {
   assertControlPlaneSecretFree,
   parseExplicitSecrets,
   sameFileIdentity,
   scanArtifact,
 } from './archive-scanner.ts'
+
+const EMPTY_SHA256 = '0'.repeat(64)
+const MAXIMUM_SCAN_FAULT_REPLACEMENT_BYTES = 65_536
+const GUARD_SUITE_FAILURE_MESSAGE = 'artifact guard suite failed'
+const GUARD_UPLOAD_FAILURE_MESSAGE = 'guard suite upload sealing failed'
+const ARTIFACT_ROOT_CLEANUP_FAILURE_MESSAGE = 'artifact root cleanup failed'
+const ARTIFACT_SCANNER_FAILURE_MESSAGE = 'artifact scanner failed'
 
 interface HeldArtifactRoot {
   readonly path: string
@@ -56,128 +72,231 @@ interface HeldArtifactRoot {
 }
 
 /**
- * A suite is the upload unit because workflow artifacts are suite-owned. Guard
- * failures stay sample-specific, while the upload authority is all-or-nothing
- * so a partial browser/sample set can never reach the verdict job.
+ * A suite is the upload unit because workflow artifacts are suite-owned. The
+ * convenience boundary returns its complete journal; callers cannot accidentally
+ * accept an upload while discarding the evidence that authorized it.
  */
 export async function guardArtifactSuite(
   options: GuardArtifactSuiteOptions,
 ): Promise<GuardArtifactSuiteResult> {
-  const executionLease = options.executionLease ?? GuardExecutionLease.start()
-  executionLease.throwIfPrimaryExpired('artifact guard suite')
-  validateSuiteInputs(options)
-  const settlementSamples = options.samples.map((input) => Object.freeze({
-    sample: input.sample,
-    resultBytes: input.sampleResultBytes,
-    commandSha256: input.commandSha256,
-  }))
-  const settlement = verifyProcessSettlementAttestations({
-    trust: options.settlementTrust,
-    samples: settlementSamples,
-    attestations: options.samples.map(({ settlementAttestation }) => settlementAttestation),
-  })
-  requireVerifiedProcessSettlementSet(settlement, {
-    invocationId: options.settlementTrust.invocationId,
-    samples: settlementSamples,
-  })
-  const guards: ArtifactGuardResult[] = []
-  for (const input of options.samples) {
-    guards.push(await scanSampleArtifacts({
-      sample: input.sample,
-      sampleResultBytes: input.sampleResultBytes,
-      artifactRoot: input.artifactRoot,
-      explicitSecrets: options.explicitSecrets,
-      ...(options.hooks?.beforeArtifactScan === undefined
-        ? {}
-        : {
-            beforeArtifactScan: (artifact: ArtifactIndexEntry) =>
-              options.hooks!.beforeArtifactScan!(input.sample, artifact),
-          }),
-      ...(options.trace === undefined ? {} : { trace: options.trace }),
-      executionLease,
-    }))
-  }
-  const frozenGuards = Object.freeze(guards)
-  if (frozenGuards.some(({ guardOutcome }) => guardOutcome !== 'passed')) {
-    emitSuiteTrace(options, 'suite-upload-blocked', {
-      sampleCount: frozenGuards.length,
-      nonPassedGuardCount: frozenGuards.filter(({ guardOutcome }) => guardOutcome !== 'passed').length,
-    })
-    return Object.freeze({ guards: frozenGuards, upload: null })
-  }
+  const execution = startGuardArtifactSuite(options)
   try {
-    const guardsBySlot = new Map(frozenGuards.map((guard) => [guardSlot(guard), guard]))
-    const upload = await sealGuardUploadSuite({
-      uploadParent: options.uploadParent,
-      runId: options.runId,
-      runPolicy: options.runPolicy,
-      suite: options.suite,
-      checkoutSha: options.checkoutSha,
-      topology: options.topology,
-      settlement,
-      settlementInvocationId: options.settlementTrust.invocationId,
-      directoryPublisher: options.directoryPublisher,
-      executionLease,
-      samples: options.samples.map((input) => {
-        const guard = guardsBySlot.get(guardSlot(input.sample))
-        if (guard === undefined) throw new Error('guard suite lost a sample guard before sealing')
-        return Object.freeze({
-          sample: input.sample,
-          sampleResultBytes: input.sampleResultBytes,
-          artifactRoot: input.artifactRoot,
-          commandSha256: input.commandSha256,
-          guard,
-        })
-      }),
-      ...(options.hooks?.upload === undefined ? {} : { hooks: options.hooks.upload }),
-    })
-    emitSuiteTrace(options, 'suite-upload-sealed', {
-      sampleCount: frozenGuards.length,
-      uploadManifestSha256: upload.manifestSha256,
-    })
-    return Object.freeze({ guards: frozenGuards, upload })
+    const outcome = await execution.result
+    const traces = execution.traces.snapshot()
+    requireCompleteArtifactGuardTrace(traces)
+    return Object.freeze({ ...outcome, traces })
   } catch (cause) {
-    const failed = Object.freeze(frozenGuards.map((guard) =>
-      failedGuardAfterSuiteSeal(guard, cause)))
-    emitSuiteTrace(options, 'suite-upload-failed', {
-      sampleCount: failed.length,
-      failure: boundedMessage(cause),
-    })
-    return Object.freeze({ guards: failed, upload: null })
+    const traces = execution.traces.snapshot()
+    throw new ArtifactGuardRecordedError(GUARD_SUITE_FAILURE_MESSAGE, traces, cause)
   }
 }
 
-export async function scanSampleArtifacts(
+export function startGuardArtifactSuite(
+  options: GuardArtifactSuiteOptions,
+): GuardArtifactSuiteExecution {
+  const journal = new ArtifactGuardTraceJournal()
+  return Object.freeze({
+    result: runGuardArtifactSuite(options, journal),
+    traces: journal.view,
+  })
+}
+
+export function startScanSampleArtifacts(
   options: ScanSampleArtifactsOptions,
+): ScanSampleArtifactsExecution {
+  const journal = new ArtifactGuardTraceJournal()
+  return Object.freeze({
+    result: runSampleArtifactScan(options, journal),
+    traces: journal.view,
+  })
+}
+
+async function runGuardArtifactSuite(
+  options: GuardArtifactSuiteOptions,
+  journal: ArtifactGuardTraceJournal,
+): Promise<GuardArtifactSuiteOutcome> {
+  const identity = suiteTraceIdentity(options)
+  journal.start(identity, { sampleCount: options.samples.length })
+  let terminalOutcome: 'succeeded' | 'failed' | 'blocked' = 'failed'
+  let cleanupOutcome: 'completed' | 'failed' | 'not-required' = 'not-required'
+  let lastMilestone = 'suite-started'
+  let outcome: GuardArtifactSuiteOutcome | undefined
+  let failure: unknown
+  try {
+    const executionLease = options.executionLease ?? GuardExecutionLease.start()
+    executionLease.throwIfPrimaryExpired('artifact guard suite')
+    validateSuiteInputs(options)
+    lastMilestone = 'suite-input-validated'
+    journal.progress(identity, lastMilestone, 'succeeded', { sampleCount: options.samples.length })
+    const settlementSamples = options.samples.map((input) => Object.freeze({
+      sample: input.sample,
+      resultBytes: input.sampleResultBytes,
+      commandSha256: input.commandSha256,
+    }))
+    const settlement = verifyProcessSettlementAttestations({
+      trust: options.settlementTrust,
+      samples: settlementSamples,
+      attestations: options.samples.map(({ settlementAttestation }) => settlementAttestation),
+    })
+    requireVerifiedProcessSettlementSet(settlement, {
+      invocationId: options.settlementTrust.invocationId,
+      samples: settlementSamples,
+    })
+    lastMilestone = 'suite-settlement-verified'
+    journal.progress(identity, lastMilestone, 'succeeded', { sampleCount: options.samples.length })
+    cleanupOutcome = 'completed'
+    const guards: ArtifactGuardResult[] = []
+    for (const input of options.samples) {
+      const faultCut = scanFaultForSample(options, input.sample)
+      const execution = startScanSampleArtifacts({
+        sample: input.sample,
+        sampleResultBytes: input.sampleResultBytes,
+        artifactRoot: input.artifactRoot,
+        explicitSecrets: options.explicitSecrets,
+        ...(faultCut === undefined ? {} : { faultCut }),
+        executionLease,
+      })
+      let guard: ArtifactGuardResult
+      try {
+        guard = await execution.result
+      } finally {
+        const snapshot = execution.traces.snapshot()
+        journal.replay(snapshot)
+        if (scanCleanupFailed(snapshot)) cleanupOutcome = 'failed'
+      }
+      guards.push(guard)
+    }
+    const frozenGuards = Object.freeze(guards)
+    lastMilestone = 'suite-samples-scanned'
+    journal.progress(identity, lastMilestone, 'succeeded', { sampleCount: frozenGuards.length })
+    if (frozenGuards.some(({ guardOutcome }) => guardOutcome !== 'passed')) {
+      lastMilestone = 'suite-upload-blocked'
+      terminalOutcome = 'blocked'
+      journal.progress(identity, lastMilestone, 'blocked', {
+        sampleCount: frozenGuards.length,
+        nonPassedGuardCount: frozenGuards.filter(({ guardOutcome }) => guardOutcome !== 'passed').length,
+      })
+      outcome = Object.freeze({ guards: frozenGuards, upload: null })
+    } else {
+      try {
+        const guardsBySlot = new Map(frozenGuards.map((guard) => [guardSlot(guard), guard]))
+        const upload = await sealGuardUploadSuite({
+          uploadParent: options.uploadParent,
+          runId: options.runId,
+          runPolicy: options.runPolicy,
+          suite: options.suite,
+          checkoutSha: options.checkoutSha,
+          topology: options.topology,
+          settlement,
+          settlementInvocationId: options.settlementTrust.invocationId,
+          directoryPublisher: options.directoryPublisher,
+          executionLease,
+          samples: options.samples.map((input) => {
+            const guard = guardsBySlot.get(guardSlot(input.sample))
+            if (guard === undefined) throw new Error('guard suite lost a sample guard before sealing')
+            return Object.freeze({
+              sample: input.sample,
+              sampleResultBytes: input.sampleResultBytes,
+              artifactRoot: input.artifactRoot,
+              commandSha256: input.commandSha256,
+              guard,
+            })
+          }),
+          ...(options.uploadFaultCuts === undefined ? {} : { faultCuts: options.uploadFaultCuts }),
+        })
+        lastMilestone = 'suite-upload-sealed'
+        terminalOutcome = 'succeeded'
+        journal.progress(identity, lastMilestone, 'succeeded', {
+          sampleCount: frozenGuards.length,
+          uploadManifestSha256: upload.manifestSha256,
+        })
+        outcome = Object.freeze({ guards: frozenGuards, upload })
+      } catch {
+        const failed = Object.freeze(frozenGuards.map(failedGuardAfterSuiteSeal))
+        lastMilestone = 'suite-upload-failed'
+        terminalOutcome = 'failed'
+        journal.progress(identity, lastMilestone, 'failed', {
+          sampleCount: failed.length,
+          failure: GUARD_UPLOAD_FAILURE_MESSAGE,
+        })
+        outcome = Object.freeze({ guards: failed, upload: null })
+      }
+    }
+  } catch (cause) {
+    failure = cause
+  }
+  if (cleanupOutcome === 'failed') terminalOutcome = 'failed'
+  journal.terminal(identity, terminalOutcome, cleanupOutcome, lastMilestone, {
+    sampleCount: options.samples.length,
+  })
+  journal.finish()
+  if (journal.failure() !== undefined) {
+    throw new Error('artifact guard suite trace settlement failed', {
+      cause: failure ?? journal.failure(),
+    })
+  }
+  if (failure !== undefined) throw failure
+  if (outcome === undefined) throw new Error('artifact guard suite settled without an outcome')
+  return outcome
+}
+
+async function runSampleArtifactScan(
+  options: ScanSampleArtifactsOptions,
+  journal: ArtifactGuardTraceJournal,
 ): Promise<ArtifactGuardResult> {
-  const executionLease = options.executionLease ?? GuardExecutionLease.start()
-  const scanSignal = executionLease.primarySignal('artifact guard scan')
-  const checked = [...options.sample.artifacts].sort(compareArtifacts)
-  const sampleResultSha256 = sha256Bytes(options.sampleResultBytes)
-  const manifestSha256 = artifactManifestSha256(checked)
+  const identity = scanTraceIdentity(options.sample)
+  let checked: readonly ArtifactIndexEntry[] = Object.freeze([])
+  let sampleResultSha256 = EMPTY_SHA256
+  let manifestSha256 = EMPTY_SHA256
   const state = emptyScanState()
-  emitGuardTrace(options, 'scan-started', { artifactCount: checked.length, manifestSha256 })
-  let result: ArtifactGuardResult
+  const claimedArtifactCount = Array.isArray(options.sample.artifacts)
+    ? options.sample.artifacts.length
+    : 0
+  journal.start(identity, { artifactCount: claimedArtifactCount })
+  let cleanupOutcome: 'completed' | 'failed' | 'not-required' = 'not-required'
+  let lastMilestone = 'scan-started'
+  let result: ArtifactGuardResult | undefined
+  let scanFailure: unknown
   let artifactRoot: HeldArtifactRoot | undefined
   try {
+    const executionLease = options.executionLease ?? GuardExecutionLease.start()
+    const scanSignal = executionLease.primarySignal('artifact guard scan')
     scanSignal.throwIfAborted()
+    checked = Object.freeze([...options.sample.artifacts].sort(compareArtifacts))
+    sampleResultSha256 = sha256Bytes(options.sampleResultBytes)
+    manifestSha256 = artifactManifestSha256(checked)
     validateSampleResultSnapshot(options.sampleResultBytes, options.sample)
     validateArtifactSizeAuthority(checked)
+    const faultCut = validateScanFaultCut(options.faultCut, checked)
     const explicitSecretBytes = parseExplicitSecrets(options.explicitSecrets)
     assertControlPlaneSecretFree(options.sampleResultBytes, checked, explicitSecretBytes)
+    lastMilestone = 'scan-input-validated'
+    journal.progress(identity, lastMilestone, 'succeeded', {
+      artifactCount: checked.length,
+      manifestSha256,
+    })
     artifactRoot = await holdArtifactRoot(options.artifactRoot, scanSignal)
+    cleanupOutcome = 'completed'
+    lastMilestone = 'scan-authority-acquired'
+    journal.progress(identity, lastMilestone, 'succeeded', { artifactCount: checked.length })
     for (const artifact of checked) {
-      await executionLease.runPrimary('artifact guard pre-scan hook', async (signal) => {
-        await options.beforeArtifactScan?.(artifact)
-        signal.throwIfAborted()
-      })
       scanSignal.throwIfAborted()
       await assertHeldArtifactRoot(artifactRoot)
       await assertArtifactAncestry(artifactRoot.path, artifact.relativePath)
-      await scanArtifact(artifact, options.artifactRoot, explicitSecretBytes, state, scanSignal)
+      if (faultCut?.relativePath === artifact.relativePath) {
+        lastMilestone = 'scan-fault-cut-reached'
+        journal.progress(identity, lastMilestone, 'succeeded', { action: faultCut.action })
+        await applyScanFaultCut(faultCut, artifactRoot.path)
+      }
+      await scanArtifact(artifact, artifactRoot.path, explicitSecretBytes, state, scanSignal)
       await assertArtifactAncestry(artifactRoot.path, artifact.relativePath)
     }
     await assertHeldArtifactRoot(artifactRoot)
+    lastMilestone = 'scan-artifacts-processed'
+    journal.progress(identity, lastMilestone, 'succeeded', {
+      scannedFileCount: state.scannedFileCount,
+      scannedArchiveEntryCount: state.scannedArchiveEntryCount,
+    })
     result = completedGuardResult(
       options.sample,
       sampleResultSha256,
@@ -187,22 +306,57 @@ export async function scanSampleArtifacts(
       uniqueMatchedArtifactIds(state.matches),
     )
   } catch (cause) {
-    result = failedGuardResult(
-      options.sample,
-      sampleResultSha256,
-      manifestSha256,
-      checked,
-      state,
-      guardFailure(cause),
-    )
-  } finally {
-    await artifactRoot?.handle.close().catch(() => undefined)
+    scanFailure = cause
   }
-  const parsed = parseArtifactGuardResult(result)
-  if (parsed.guardOutcome === 'passed') {
-    validateArtifactGuardForSample(parsed, options.sample, sampleResultSha256)
+  if (artifactRoot !== undefined) {
+    try {
+      await artifactRoot.handle.close()
+      cleanupOutcome = 'completed'
+    } catch (cause) {
+      cleanupOutcome = 'failed'
+      scanFailure = new GuardFailure(
+        'scanner-crashed',
+        ARTIFACT_ROOT_CLEANUP_FAILURE_MESSAGE,
+        { cause: scanFailure ?? cause },
+      )
+    }
   }
-  emitGuardTrace(options, parsed.guardOutcome === 'failed' ? 'scan-failed' : 'scan-completed', {
+  let parsed: ArtifactGuardResult
+  try {
+    if (scanFailure !== undefined || result === undefined) {
+      result = failedGuardResult(
+        options.sample,
+        sampleResultSha256,
+        manifestSha256,
+        checked,
+        state,
+        guardFailure(scanFailure ?? new Error('artifact scan settled without a result')),
+      )
+    }
+    parsed = parseArtifactGuardResult(result)
+    if (parsed.guardOutcome === 'passed') {
+      validateArtifactGuardForSample(parsed, options.sample, sampleResultSha256)
+    }
+  } catch (cause) {
+    journal.terminal(identity, 'failed', cleanupOutcome, lastMilestone, {
+      guardOutcome: 'failed',
+      scannedFileCount: state.scannedFileCount,
+      scannedArchiveEntryCount: state.scannedArchiveEntryCount,
+      observedArchiveBytes: state.observedArchiveBytes,
+      expandedArchiveBytes: state.expandedArchiveBytes,
+      quarantinedArtifactCount: checked.length,
+      failureCode: 'contract',
+    })
+    journal.finish()
+    if (journal.failure() !== undefined) {
+      throw new Error('artifact scan trace settlement failed', { cause })
+    }
+    throw cause
+  }
+  const terminalOutcome = parsed.guardOutcome === 'passed'
+    ? 'succeeded'
+    : parsed.guardOutcome === 'quarantined' ? 'blocked' : 'failed'
+  journal.terminal(identity, terminalOutcome, cleanupOutcome, lastMilestone, {
     guardOutcome: parsed.guardOutcome,
     scannedFileCount: parsed.scanEvidence.scannedFileCount,
     scannedArchiveEntryCount: parsed.scanEvidence.scannedArchiveEntryCount,
@@ -211,6 +365,10 @@ export async function scanSampleArtifacts(
     quarantinedArtifactCount: parsed.quarantinedArtifactIds.length,
     failureCode: parsed.failureCode ?? null,
   })
+  journal.finish()
+  if (journal.failure() !== undefined) {
+    throw new Error('artifact scan trace settlement failed', { cause: journal.failure() })
+  }
   return parsed
 }
 
@@ -244,6 +402,22 @@ function validateSuiteInputs(options: GuardArtifactSuiteOptions): void {
     Array.from({ length: policy.sampleCount }, (_, index) => `${browser}/${index + 1}`))
   if (slots.size !== expected.length || expected.some((slot) => !slots.has(slot))) {
     throw new Error('guard suite does not contain every policy browser/sample slot exactly once')
+  }
+  if (Object.getOwnPropertyDescriptor(options, 'hooks') !== undefined) {
+    throw new Error('artifact guard suite rejects executable lifecycle hooks')
+  }
+  const faultSlots = new Set<string>()
+  for (const candidate of options.scanFaultCuts ?? []) {
+    requirePlainEnumerableRecord(candidate, 'artifact guard suite scan fault')
+    if (Object.keys(candidate).sort(compareStrings).join(',') !== 'browser,fault,sampleIndex') {
+      throw new Error('artifact guard suite scan fault shape is invalid')
+    }
+    const slot = guardSlot(candidate)
+    if (faultSlots.has(slot)) throw new Error('artifact guard suite repeats a scan fault slot')
+    const input = options.samples.find(({ sample }) => guardSlot(sample) === slot)
+    if (input === undefined) throw new Error('artifact guard suite scan fault targets an absent sample')
+    validateScanFaultCut(candidate.fault, input.sample.artifacts)
+    faultSlots.add(slot)
   }
 }
 
@@ -378,7 +552,7 @@ function failedGuardResult(
     quarantinedArtifactIds: checkedIds,
     matches: normalizedMatches(state.matches),
     failureCode: failure.code,
-    failureMessage: boundedMessage(failure.message),
+    failureMessage: boundedFrameworkMessage(failure.message),
   }
 }
 
@@ -415,53 +589,100 @@ function scanEvidence(state: ScanState, terminal: 'completed' | 'failed') {
   }
 }
 
-function guardScanOperationId(sample: BrowserSampleResult): string {
-  return `${sample.runId}/${sample.suite}/${sample.browser}/${sample.sampleIndex}/guard-scan`
-}
-
-function emitGuardTrace(
-  options: {
-    readonly sample: BrowserSampleResult
-    readonly trace?: ArtifactGuardTraceSink
-  },
-  milestone: string,
-  context: ArtifactGuardTraceEvent['context'],
-): void {
-  const event = Object.freeze({
-    component: 'artifact-guard' as const,
-    operationId: guardScanOperationId(options.sample),
-    milestone,
-    context: Object.freeze({ ...context }),
-  })
-  try {
-    const sink = options.trace ?? defaultGuardTraceSink
-    sink(event)
-  } catch {
-    // Diagnostics must not become authority over whether attachments are safe.
-  }
-}
-
-function emitSuiteTrace(
-  options: GuardArtifactSuiteOptions,
-  milestone: string,
-  context: ArtifactGuardTraceEvent['context'],
-): void {
-  const event = Object.freeze({
-    component: 'artifact-guard' as const,
+function suiteTraceIdentity(options: GuardArtifactSuiteOptions): ArtifactGuardTraceIdentity {
+  return Object.freeze({
     operationId: `${options.runId}/${options.suite}/guard-suite`,
-    milestone,
-    context: Object.freeze({ ...context }),
+    runId: options.runId,
+    scenario: 'guard-suite',
+    suite: options.suite,
   })
-  try {
-    const sink = options.trace ?? defaultGuardTraceSink
-    sink(event)
-  } catch {
-    // Diagnostics must not become authority over whether attachments are safe.
-  }
 }
 
-function defaultGuardTraceSink(event: ArtifactGuardTraceEvent): void {
-  process.stderr.write(`${JSON.stringify(event)}\n`)
+function scanTraceIdentity(sample: BrowserSampleResult): ArtifactGuardTraceIdentity {
+  return Object.freeze({
+    operationId: `${sample.runId}/${sample.suite}/${sample.browser}/${sample.sampleIndex}/guard-scan`,
+    runId: sample.runId,
+    scenario: 'artifact-scan',
+    suite: sample.suite,
+    browser: sample.browser,
+    sampleIndex: sample.sampleIndex,
+  })
+}
+
+function scanFaultForSample(
+  options: GuardArtifactSuiteOptions,
+  sample: BrowserSampleResult,
+): ArtifactGuardScanFaultCut | undefined {
+  return options.scanFaultCuts?.find((candidate) =>
+    candidate.browser === sample.browser && candidate.sampleIndex === sample.sampleIndex)?.fault
+}
+
+function scanCleanupFailed(snapshot: ReturnType<ScanSampleArtifactsExecution['traces']['snapshot']>): boolean {
+  const terminal = snapshot.events.findLast(({ milestone }) => milestone === 'scan-terminal')
+  return terminal?.context.cleanupOutcome === 'failed'
+}
+
+function validateScanFaultCut(
+  candidate: ArtifactGuardScanFaultCut | undefined,
+  artifacts: readonly ArtifactIndexEntry[],
+): ArtifactGuardScanFaultCut | undefined {
+  if (candidate === undefined) return undefined
+  requirePlainEnumerableRecord(candidate, 'artifact guard scan fault cut')
+  const keys = Object.keys(candidate).sort(compareStrings)
+  if (candidate.action === 'fail-before-artifact-scan') {
+    if (keys.join(',') !== 'action,relativePath') {
+      throw new GuardFailure('contract', 'artifact guard failure cut shape is invalid')
+    }
+  } else if (candidate.action === 'replace-artifact-before-scan') {
+    if (keys.join(',') !== 'action,relativePath,replacementUtf8') {
+      throw new GuardFailure('contract', 'artifact guard replacement cut shape is invalid')
+    }
+    if (
+      typeof candidate.replacementUtf8 !== 'string' ||
+      Buffer.byteLength(candidate.replacementUtf8, 'utf8') > MAXIMUM_SCAN_FAULT_REPLACEMENT_BYTES
+    ) throw new GuardFailure('contract', 'artifact guard replacement cut exceeds its byte authority')
+  } else {
+    throw new GuardFailure('contract', 'artifact guard scan fault action is invalid')
+  }
+  if (
+    typeof candidate.relativePath !== 'string' ||
+    !artifacts.some(({ relativePath }) => relativePath === candidate.relativePath)
+  ) throw new GuardFailure('contract', 'artifact guard scan fault target is not indexed')
+  return Object.freeze(
+    candidate.action === 'fail-before-artifact-scan'
+      ? { action: candidate.action, relativePath: candidate.relativePath }
+      : {
+          action: candidate.action,
+          relativePath: candidate.relativePath,
+          replacementUtf8: candidate.replacementUtf8,
+        },
+  )
+}
+
+async function applyScanFaultCut(
+  fault: ArtifactGuardScanFaultCut,
+  artifactRoot: string,
+): Promise<void> {
+  if (fault.action === 'fail-before-artifact-scan') {
+    throw new GuardFailure(
+      'scanner-crashed',
+      `declarative artifact scan failure cut reached for ${fault.relativePath}`,
+    )
+  }
+  await writeFile(
+    join(artifactRoot, ...fault.relativePath.split('/')),
+    fault.replacementUtf8,
+    { encoding: 'utf8', flag: 'r+' },
+  )
+}
+
+function requirePlainEnumerableRecord(value: object, label: string): void {
+  if (Object.getPrototypeOf(value) !== Object.prototype) throw new Error(`${label} must be a plain object`)
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  if (
+    Reflect.ownKeys(value).some((key) => typeof key !== 'string') ||
+    Object.values(descriptors).some((descriptor) => !descriptor.enumerable || !('value' in descriptor))
+  ) throw new Error(`${label} contains hidden or executable properties`)
 }
 
 function uniqueMatchedArtifactIds(matches: readonly GuardMatchEvidence[]): readonly string[] {
@@ -490,7 +711,6 @@ function emptyScanState(): ScanState {
 
 function failedGuardAfterSuiteSeal(
   guard: ArtifactGuardResult,
-  cause: unknown,
 ): ArtifactGuardResult {
   return parseArtifactGuardResult({
     schemaVersion: guard.schemaVersion,
@@ -509,7 +729,7 @@ function failedGuardAfterSuiteSeal(
     quarantinedArtifactIds: guard.checkedArtifactIds,
     matches: guard.matches,
     failureCode: 'unexpected',
-    failureMessage: boundedMessage(`guard suite upload sealing failed: ${boundedMessage(cause)}`),
+    failureMessage: GUARD_UPLOAD_FAILURE_MESSAGE,
   })
 }
 
@@ -518,12 +738,11 @@ function guardSlot(value: Pick<BrowserSampleResult, 'browser' | 'sampleIndex'>):
 }
 
 function guardFailure(cause: unknown): GuardFailure {
-  if (cause instanceof GuardFailure) return cause
-  return new GuardFailure('scanner-crashed', boundedMessage(cause), { cause })
+  if (isOwnedGuardFailure(cause)) return cause
+  return new GuardFailure('scanner-crashed', ARTIFACT_SCANNER_FAILURE_MESSAGE, { cause })
 }
 
-function boundedMessage(value: unknown): string {
-  const source = value instanceof Error ? value.message : String(value)
+function boundedFrameworkMessage(source: string): string {
   const normalized = source.normalize('NFC') || 'artifact guard failed'
   let result = ''
   let bytes = 0

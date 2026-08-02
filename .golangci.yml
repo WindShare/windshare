@@ -48,10 +48,9 @@ linters:
       # exemption). Rationale: table-driven tests legitimately exceed
       # funlen/dupl budgets, sloc-guard separately caps *_test.go at 1100
       # lines, and `go vet` plus the hygiene gate's gopls check still analyze
-      # test files. The reference config's broader bare `test` path pattern
-      # is deliberately not carried over — this repo has production packages
-      # with "test" in their import paths (internal/testnetwork) that must
-      # stay linted.
+      # test files. The reference config's broader bare `test` path pattern is
+      # deliberately not carried over because production package names may
+      # legitimately contain that substring and must stay linted.
       - _test\.go$
     rules:
       # `defer x.Close()` on read paths: the error is unactionable and Go
@@ -69,30 +68,10 @@ linters:
       - linters:
           - bodyclose
         source: "websocket\\.Dial\\("
-      # The D5 SSA fixed-point analyzer's complexity is intrinsic to its
-      # domain (control-flow dominance and termination proofs), and its
-      # sources are pinned by D5 source-fingerprint fixtures — style-driven
-      # rewrites would churn frozen hashes for zero correctness gain.
-      # Correctness linters (errcheck, staticcheck, errorlint, bodyclose)
-      # stay on for it.
-      - path: scripts/internal/d5networkpolicy/
-        linters:
-          - funlen
-          - gocognit
-          - gocritic
-          - nestif
-          - prealloc
-      # Test-support packages, mirroring their coverage-gate exemptions:
       # channeltest's Run is a conformance-suite driver whose sequential
-      # scenario walk is inherently long, and testnetwork wraps OS-gated
-      # socket/process plumbing; neither is product logic. funlen is exempted
-      # with the complexity caps — same length-vs-suite-driver trade-off.
+      # scenario walk is inherently long. funlen is exempted with the
+      # complexity caps because splitting it would obscure protocol ordering.
       - path: session/channeltest/
-        linters:
-          - funlen
-          - gocognit
-          - nestif
-      - path: internal/testnetwork/
         linters:
           - funlen
           - gocognit

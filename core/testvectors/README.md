@@ -13,7 +13,7 @@ The v2 protocol vectors are generated deterministically by
 go test -count=1 ./internal/protocolcontract -update
 ```
 
-The repository's `scripts/ci/vectors.ps1` and `scripts/ci/vectors.sh` also
+The repository's `scripts/ci/windows/vectors.ps1` and `scripts/ci/linux/vectors.sh` also
 regenerate the peer-signaling family and enforce idempotence plus committed drift.
 `inventory.txt` is the single authoritative filename allowlist. Keeping this
 directory inside the independent core module lets released Go tests and root

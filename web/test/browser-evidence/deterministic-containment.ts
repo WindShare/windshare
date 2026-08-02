@@ -1,8 +1,13 @@
 import type {
   BrowserSampleContainmentBackend,
   BrowserSampleContainmentRequest,
+  BrowserSampleContainmentTrace,
 } from '../../scripts/browser-evidence/process/containment.ts'
 import type { RunnerProcessEvidence } from '../../scripts/browser-evidence/execution-evidence.ts'
+import {
+  createOwnedByteChannel,
+  createOwnedEventChannel,
+} from '../../scripts/browser-evidence/process/owned-process-channel.mjs'
 import { runSyntheticScenario } from './synthetic-scenario.ts'
 
 export function createDeterministicTestContainmentBackend(): BrowserSampleContainmentBackend {
@@ -19,10 +24,26 @@ export function createDeterministicTestContainmentBackend(): BrowserSampleContai
  * still projects the same spawn-failure contract without invoking the OS.
  */
 async function executeDeterministicScenario(request: BrowserSampleContainmentRequest) {
+  const stdout = createOwnedByteChannel(request.capture.stdoutBytes, 'deterministic child stdout')
+  const stderr = createOwnedByteChannel(request.capture.stderrBytes, 'deterministic child stderr')
+  const traces = createOwnedEventChannel<BrowserSampleContainmentTrace>(
+    1,
+    'deterministic containment traces',
+  )
+  const evidence = () => {
+    stdout.finish()
+    stderr.finish()
+    traces.finish()
+    return Object.freeze({
+      output: Object.freeze({ stdout: stdout.view.snapshot(), stderr: stderr.view.snapshot() }),
+      traces: traces.view.snapshot(),
+    })
+  }
   if (request.command.executable !== process.execPath) {
     return Object.freeze({
       processEvidence: spawnFailure(request.command.executable),
-      timedOut: false,
+      terminationReason: 'initialization_failed' as const,
+      ...evidence(),
     })
   }
   const mode = request.command.environment?.SYNTHETIC_CHILD_MODE
@@ -32,7 +53,8 @@ async function executeDeterministicScenario(request: BrowserSampleContainmentReq
   if (delayMs > request.deadlineMs) {
     return Object.freeze({
       processEvidence: Object.freeze({ terminal: 'signaled' as const, signal: 'SIGKILL' }),
-      timedOut: true,
+      terminationReason: 'deadline' as const,
+      ...evidence(),
     })
   }
   const outcome = await runSyntheticScenario({
@@ -42,12 +64,13 @@ async function executeDeterministicScenario(request: BrowserSampleContainmentReq
     ...(request.command.environment === undefined
       ? {}
       : { environment: request.command.environment }),
-    stdout: request.stdout,
-    stderr: request.stderr,
+    stdout: (chunk) => stdout.append(chunk),
+    stderr: (chunk) => stderr.append(chunk),
   })
   return Object.freeze({
     processEvidence: Object.freeze({ terminal: 'exited' as const, exitCode: outcome.exitCode }),
-    timedOut: false,
+    terminationReason: 'natural' as const,
+    ...evidence(),
   })
 }
 

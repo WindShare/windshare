@@ -30,7 +30,6 @@ export interface NetworkMatrixExternalFixtureConfig {
   readonly publicStun: ExternalFixtureTrustConfig | null
   readonly restrictedUdp: ExternalFixtureTrustConfig | null
   readonly coturn: ExternalFixtureTrustConfig | null
-  readonly manualRealNat: ExternalFixtureTrustConfig | null
 }
 
 export async function loadNetworkMatrixExternalFixtureConfig(
@@ -57,20 +56,14 @@ export function parseNetworkMatrixExternalFixtureConfig(
   value: unknown,
 ): NetworkMatrixExternalFixtureConfig {
   const root = exactRecord(value, [
-    'schemaVersion', 'publicStun', 'restrictedUdp', 'coturn', 'manualRealNat',
+    'schemaVersion', 'publicStun', 'restrictedUdp', 'coturn',
   ])
-  if (root.schemaVersion !== EXTERNAL_FIXTURE_CONFIG_SCHEMA || root.coturn !== null) {
-    // A trust policy is not a revocable TURN provider. Production composition
-    // stays unavailable until a provider adapter can prove one-shot delivery
-    // and joined revocation; accepting config here would fabricate readiness.
-    invalidConfig()
-  }
+  if (root.schemaVersion !== EXTERNAL_FIXTURE_CONFIG_SCHEMA) invalidConfig()
   return Object.freeze({
     schemaVersion: EXTERNAL_FIXTURE_CONFIG_SCHEMA,
     publicStun: parseOptionalFixtureTrust(root.publicStun),
     restrictedUdp: parseOptionalFixtureTrust(root.restrictedUdp),
-    coturn: null,
-    manualRealNat: parseOptionalFixtureTrust(root.manualRealNat),
+    coturn: parseOptionalFixtureTrust(root.coturn),
   })
 }
 
@@ -90,9 +83,9 @@ export function runtimeInputsFromExternalFixtureConfig(
       profileId: 'scheduled-restricted-udp',
     })
   }
-  if (config.manualRealNat !== null) {
-    externalFixtures['manual-real-nat'] = Object.freeze({
-      profileId: 'manual-real-nat',
+  if (config.coturn !== null) {
+    externalFixtures['scheduled-coturn'] = Object.freeze({
+      profileId: 'scheduled-coturn',
     })
   }
   return Object.freeze({ externalFixtures: Object.freeze(externalFixtures) })

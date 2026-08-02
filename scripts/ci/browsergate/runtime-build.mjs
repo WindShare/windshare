@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import {
   chmodSync,
   closeSync,
@@ -15,25 +14,33 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 
 import { sampleProcessEnvironment } from '../../../web/scripts/browser-evidence/process/sample-environment.ts'
+import {
+  createOwnedTraceJournal,
+  requireCompleteOwnedTraceSnapshot,
+} from './owned-trace-journal.mjs'
 
 export const BROWSERGATE_RUNTIME_MANIFEST_ENV = 'WINDSHARE_BROWSERGATE_RUNTIME_MANIFEST'
-export const BROWSERGATE_RUNTIME_MANIFEST_SHA256_ENV =
-  'WINDSHARE_BROWSERGATE_RUNTIME_MANIFEST_SHA256'
 export const PION_SERVER_EXECUTABLE_ENV = 'WINDSHARE_PION_SERVER_EXECUTABLE'
-export const PION_SERVER_EXECUTABLE_SHA256_ENV = 'WINDSHARE_PION_SERVER_EXECUTABLE_SHA256'
 
-const RUNTIME_SCHEMA_VERSION = 2
+const RUNTIME_SCHEMA_VERSION = 4
 const RUNTIME_MANIFEST_FILENAME = 'runtime-manifest.json'
 const RUNTIME_DIRECTORY_PREFIX = 'windshare-browsergate-runtime-'
 const RUNTIME_DIRECTORY_PATTERN = /^windshare-browsergate-runtime-[A-Za-z0-9]{6}$/u
-const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const SUITES = Object.freeze(['main', 'pion'])
 const SUPPORTED_PLATFORMS = Object.freeze(['darwin', 'linux', 'win32'])
+const RUNTIME_BUILD_MAXIMUM_TRACE_EVENTS = 64
+const RUNTIME_BUILD_MAXIMUM_TRACE_BYTES = 128 * 1024
 const SAMPLE_DRIVER_RELATIVE_PATH = join(
   'web',
   'scripts',
   'browser-evidence',
   'sample-driver.ts',
+)
+const PLAYWRIGHT_RUNNER_RELATIVE_PATH = join(
+  'web',
+  'scripts',
+  'browser-evidence',
+  'playwright-owned-runner.mjs',
 )
 const PLAYWRIGHT_CLI_RELATIVE_PATH = join(
   'web',
@@ -42,8 +49,6 @@ const PLAYWRIGHT_CLI_RELATIVE_PATH = join(
   'test',
   'cli.js',
 )
-const MAXIMUM_SAMPLE_SOURCE_BYTES = 16 * 1_024 * 1_024
-const MAXIMUM_SAMPLE_EXECUTABLE_BYTES = 512 * 1_024 * 1_024
 const ARTIFACT_SPECS = Object.freeze({
   'topology-materializer': Object.freeze({
     packagePath: './web/scripts/browser-evidence/topology-resolution',
@@ -58,13 +63,9 @@ const ARTIFACT_SPECS = Object.freeze({
     packagePath: './transport/webrtc/testdata/browser/server',
     filename: 'pion-browser-server',
   }),
-  'windows-job': Object.freeze({
-    packagePath: './web/scripts/browser-evidence/windowsjob',
-    filename: 'browser-evidence-windowsjob',
-  }),
-  'linux-process-owner': Object.freeze({
-    packagePath: './web/scripts/browser-evidence/linuxprocessowner',
-    filename: 'browser-evidence-linux-process-owner',
+  'test-process-owner': Object.freeze({
+    packagePath: './cmd/testprocessowner',
+    filename: 'testprocessowner',
   }),
 })
 const SELF_CHECK_LINES = Object.freeze({
@@ -74,49 +75,23 @@ const SELF_CHECK_LINES = Object.freeze({
     '{"schemaVersion":"windshare.artifact-publisher/v2","outcome":"ready"}\n',
   'pion-server':
     '{"schemaVersion":1,"component":"pion-browser-interop-server","outcome":"ready"}\n',
-  'windows-job':
-    '{"schemaVersion":1,"component":"browser-evidence-windows-job","outcome":"ready"}\n',
-  'linux-process-owner':
-    '{"schemaVersion":1,"component":"browser-evidence-linux-process-owner","outcome":"ready"}\n',
+  'test-process-owner':
+    '{"schema_version":"windshare.process-owner-self-check/v1","component":"testprocessowner","milestone":"self_check","outcome":"ready"}\n',
 })
 const OWNED_EXECUTION_KEYS = Object.freeze([
   'processEvidence',
-  'timedOut',
-  'launched',
   'treeEmpty',
+  'cleanupOutcome',
   'inputEvidence',
-  'clientIoEvidence',
   'ownershipEvidence',
   'stdout',
   'stderr',
+  'traces',
+  'runtimeCommandTraces',
 ])
 const INPUT_EVIDENCE_KEYS = Object.freeze(['outcome', 'failureCode', 'failureMessage'])
-const CLIENT_IO_EVIDENCE_KEYS = Object.freeze([
-  'requestOutcome',
-  'rawInputOutcome',
-  'controlOutcome',
-  'outputOutcome',
-  'failureCode',
-  'failureMessage',
-])
-const WINDOWS_OWNERSHIP_EVIDENCE_KEYS = Object.freeze([
-  'supervisionOutcome',
-  'terminationReason',
-  'activeProcessCount',
-  'root',
-  'spawnFailure',
-])
-const LINUX_OWNERSHIP_EVIDENCE_KEYS = Object.freeze([
-  'ownerPid',
-  'rootPid',
-  'rootStartTimeTicks',
-  'inventoryScans',
-  'maximumObservedDescendants',
-  'quietInventoryCount',
-  'controlOutcome',
-  'cleanupOutcome',
-  'failureCode',
-  'failureMessage',
+const OWNERSHIP_EVIDENCE_KEYS = Object.freeze([
+  'kind', 'backend', 'terminationReason', 'platform',
 ])
 
 export async function buildBrowsergateRuntime({
@@ -128,9 +103,13 @@ export async function buildBrowsergateRuntime({
   nodeExecutable = process.execPath,
   executeBuild,
   executePreflight,
-  trace = () => undefined,
   preserveRuntimeRoot = false,
 }) {
+  const traceJournal = createOwnedTraceJournal({
+    label: 'browsergate runtime build trace',
+    maximumEvents: RUNTIME_BUILD_MAXIMUM_TRACE_EVENTS,
+    maximumBytes: RUNTIME_BUILD_MAXIMUM_TRACE_BYTES,
+  })
   const root = requireCanonicalAbsolutePath(repositoryRoot, 'repository root')
   const runtimePlatform = requirePlatform(platform, 'runtime build platform')
   const canonicalOutputParent = requireCanonicalAbsolutePath(outputParent, 'runtime output parent')
@@ -146,16 +125,16 @@ export async function buildBrowsergateRuntime({
   mkdirSync(canonicalOutputParent, { recursive: true, mode: 0o700 })
   const runtimeRoot = resolve(mkdtempSync(join(canonicalOutputParent, RUNTIME_DIRECTORY_PREFIX)))
   const kinds = [
-    ...(runtimePlatform === 'win32' ? ['windows-job'] : []),
-    ...(runtimePlatform === 'linux' ? ['linux-process-owner'] : []),
+    ...(['win32', 'linux'].includes(runtimePlatform) ? ['test-process-owner'] : []),
     'topology-materializer',
     'artifact-publisher',
     ...(selectedSuites.includes('pion') ? ['pion-server'] : []),
   ]
   const startedAtMs = Date.now()
   try {
-    emitTrace(trace, Object.freeze({ milestone: 'runtime-build-started', context: { kinds } }))
+    traceJournal.append(Object.freeze({ milestone: 'runtime-build-started', context: { kinds } }))
     const artifacts = []
+    const ownedExecutionTraces = []
     for (const kind of kinds) {
       const spec = ARTIFACT_SPECS[kind]
       const executablePath = join(
@@ -171,31 +150,39 @@ export async function buildBrowsergateRuntime({
         platform: runtimePlatform,
         availableArtifacts: Object.freeze([...artifacts]),
       }))
-      requireSuccessfulOwnedExecution(buildExecution, `runtime build ${kind}`, '', runtimePlatform)
-      const snapshot = executableSnapshot(executablePath, `runtime ${kind}`)
+      ownedExecutionTraces.push(Object.freeze({
+        kind,
+        phase: 'build',
+        ...requireSuccessfulOwnedExecution(
+          buildExecution,
+          `runtime build ${kind}`,
+          '',
+          runtimePlatform,
+        ),
+      }))
+      assertRuntimeArtifactPath(executablePath, `runtime ${kind}`)
       const artifact = Object.freeze({
         kind,
         path: executablePath,
-        byteLength: snapshot.byteLength,
-        sha256: snapshot.sha256,
-        preflightSha256: sha256Bytes(Buffer.from(SELF_CHECK_LINES[kind], 'utf8')),
       })
       const preflight = await executePreflight(Object.freeze({
         kind,
         executablePath,
-        executableByteLength: snapshot.byteLength,
-        executableSha256: snapshot.sha256,
         arguments: Object.freeze(['self-check']),
         cwd: spec.moduleDirectory === undefined ? root : join(root, spec.moduleDirectory),
         platform: runtimePlatform,
         availableArtifacts: Object.freeze([...artifacts, artifact]),
       }))
-      requireSuccessfulOwnedExecution(
-        preflight,
-        `runtime preflight ${kind}`,
-        SELF_CHECK_LINES[kind],
-        runtimePlatform,
-      )
+      ownedExecutionTraces.push(Object.freeze({
+        kind,
+        phase: 'preflight',
+        ...requireSuccessfulOwnedExecution(
+          preflight,
+          `runtime preflight ${kind}`,
+          SELF_CHECK_LINES[kind],
+          runtimePlatform,
+        ),
+      }))
       artifacts.push(artifact)
     }
     const manifest = Object.freeze({
@@ -209,40 +196,60 @@ export async function buildBrowsergateRuntime({
     const manifestBytes = Buffer.from(JSON.stringify(manifest), 'utf8')
     writeFileSync(manifestPath, manifestBytes, { flag: 'wx', mode: 0o400 })
     chmodSync(manifestPath, 0o400)
-    const manifestSha256 = sha256Bytes(manifestBytes)
-    emitTrace(trace, Object.freeze({
+    traceJournal.append(Object.freeze({
       milestone: 'runtime-build-completed',
       context: {
         kinds,
         elapsedMs: Date.now() - startedAtMs,
         manifestPath,
-        manifestSha256,
       },
     }))
-    return openRuntimeAuthority({
+    traceJournal.finish()
+    const traces = requireCompleteOwnedTraceSnapshot(
+      traceJournal.view.snapshot(),
+      'browsergate runtime build trace',
+    )
+    const runtime = openBrowsergateRuntime({
       manifestPath,
-      expectedManifestSha256: manifestSha256,
       ownsRuntimeRoot: !preserveRuntimeRoot,
       expectedPlatform: runtimePlatform,
     })
+    return Object.freeze({
+      ...runtime,
+      traces,
+      ownedExecutionTraces: Object.freeze(ownedExecutionTraces),
+    })
   } catch (cause) {
-    emitTrace(trace, Object.freeze({
-      milestone: 'runtime-build-failed',
-      context: { elapsedMs: Date.now() - startedAtMs, error: errorMessage(cause) },
-    }))
+    if (!traceJournal.view.snapshot().completed) {
+      traceJournal.append(Object.freeze({
+        milestone: 'runtime-build-failed',
+        context: {
+          elapsedMs: Date.now() - startedAtMs,
+          failureCode: 'runtime-build-rejected',
+        },
+      }))
+      traceJournal.finish()
+    }
+    const traces = traceJournal.view.snapshot()
     rmSync(runtimeRoot, { force: true, recursive: true })
+    try {
+      requireCompleteOwnedTraceSnapshot(traces, 'browsergate runtime build trace')
+    } catch (traceFailure) {
+      throw new AggregateError(
+        [cause, traceFailure],
+        'browsergate runtime build and lifecycle trace settlement failed',
+      )
+    }
     throw cause
   }
 }
 
 export function loadBrowsergateRuntime({
   manifestPath,
-  manifestSha256,
   expectedPlatform = process.platform,
 }) {
-  return openRuntimeAuthority({
+  return openBrowsergateRuntime({
     manifestPath,
-    expectedManifestSha256: manifestSha256,
     ownsRuntimeRoot: false,
     expectedPlatform,
   })
@@ -250,7 +257,6 @@ export function loadBrowsergateRuntime({
 
 export function disposeBrowsergateRuntime({
   manifestPath,
-  manifestSha256,
   expectedPlatform = process.platform,
 }) {
   const canonicalManifestPath = requireCanonicalAbsolutePath(
@@ -266,19 +272,17 @@ export function disposeBrowsergateRuntime({
     !runtimeRootMetadata.isDirectory() || runtimeRootMetadata.isSymbolicLink() ||
     !RUNTIME_DIRECTORY_PATTERN.test(basename(runtimeRoot))
   ) throw new Error('browsergate runtime cleanup root is not an invocation-private runtime directory')
-  const authority = openRuntimeAuthority({
+  const runtime = openBrowsergateRuntime({
     manifestPath: canonicalManifestPath,
-    expectedManifestSha256: manifestSha256,
     ownsRuntimeRoot: true,
     expectedPlatform,
   })
-  authority.dispose()
+  runtime.dispose()
   return Object.freeze({ runtimeRoot })
 }
 
-function openRuntimeAuthority({
+function openBrowsergateRuntime({
   manifestPath,
-  expectedManifestSha256,
   ownsRuntimeRoot,
   expectedPlatform,
 }) {
@@ -287,67 +291,61 @@ function openRuntimeAuthority({
     'browsergate runtime manifest',
   )
   const runtimePlatform = requirePlatform(expectedPlatform, 'expected runtime platform')
-  requireSha256(expectedManifestSha256, 'browsergate runtime manifest SHA-256')
-  const manifestSnapshot = regularFileSnapshot(
+  const manifestSnapshot = openRegularFileSnapshot(
     canonicalManifestPath,
     1_048_576,
     'browsergate runtime manifest',
   )
-  if (manifestSnapshot.sha256 !== expectedManifestSha256) {
-    throw new Error('browsergate runtime manifest differs from its injected digest')
-  }
   const encoded = manifestSnapshot.bytes.toString('utf8')
-  const manifest = parseRuntimeManifest(
-    encoded,
-    dirname(canonicalManifestPath),
-    runtimePlatform,
-  )
-  const descriptor = openSync(canonicalManifestPath, 'r')
-  const heldIdentity = fstatSync(descriptor, { bigint: true })
+  let manifest
+  try {
+    manifest = parseRuntimeManifest(
+      encoded,
+      dirname(canonicalManifestPath),
+      runtimePlatform,
+    )
+  } catch (cause) {
+    closeSync(manifestSnapshot.descriptor)
+    throw cause
+  }
+  const descriptor = manifestSnapshot.descriptor
+  const heldRevision = manifestSnapshot.metadata
   let disposed = false
 
   function assertAuthorityLive() {
-    if (disposed) throw new Error('browsergate runtime authority is disposed')
+    if (disposed) throw new Error('browsergate runtime is disposed')
     const named = lstatSync(canonicalManifestPath, { bigint: true })
     const opened = fstatSync(descriptor, { bigint: true })
-    if (!sameIdentity(heldIdentity, opened) || !sameIdentity(opened, named)) {
-      throw new Error('browsergate runtime manifest identity changed while held')
-    }
-    const current = regularFileSnapshot(
-      canonicalManifestPath,
-      1_048_576,
-      'browsergate runtime manifest',
-    )
-    if (current.sha256 !== expectedManifestSha256) {
+    if (
+      !sameIdentity(heldRevision, opened) || !sameIdentity(opened, named) ||
+      !sameRevision(heldRevision, opened) || !sameRevision(opened, named)
+    ) {
       throw new Error('browsergate runtime manifest changed while held')
     }
   }
 
   return Object.freeze({
     manifestPath: canonicalManifestPath,
-    manifestSha256: expectedManifestSha256,
     manifest,
-    artifact(kind) {
+    artifactCapability(kind) {
       assertAuthorityLive()
       const artifact = manifest.artifacts.find((candidate) => candidate.kind === kind)
       if (artifact === undefined) throw new Error(`browsergate runtime lacks ${kind}`)
-      const current = executableSnapshot(artifact.path, `runtime ${kind}`)
-      if (current.byteLength !== artifact.byteLength || current.sha256 !== artifact.sha256) {
-        throw new Error(`browsergate runtime ${kind} differs from its manifest`)
-      }
-      return artifact
+      assertRuntimeArtifactPath(artifact.path, `runtime ${kind}`)
+      // Manifest metadata authenticates which artifact was selected. Consumers
+      // receive only the path capability they need, keeping kind metadata from
+      // accidentally becoming part of an unrelated launch protocol.
+      return Object.freeze({ path: artifact.path })
     },
     environmentForSuite(suite) {
       requireSuite(suite)
       assertAuthorityLive()
       const environment = {
         [BROWSERGATE_RUNTIME_MANIFEST_ENV]: canonicalManifestPath,
-        [BROWSERGATE_RUNTIME_MANIFEST_SHA256_ENV]: expectedManifestSha256,
       }
       if (suite === 'pion') {
-        const pion = this.artifact('pion-server')
+        const pion = this.artifactCapability('pion-server')
         environment[PION_SERVER_EXECUTABLE_ENV] = pion.path
-        environment[PION_SERVER_EXECUTABLE_SHA256_ENV] = pion.sha256
       }
       return Object.freeze(environment)
     },
@@ -397,7 +395,7 @@ function parseRuntimeManifest(encoded, runtimeRoot, expectedPlatform) {
   const artifacts = value.artifacts.map((artifact, index) => {
     exactKeys(
       artifact,
-      ['kind', 'path', 'byteLength', 'sha256', 'preflightSha256'],
+      ['kind', 'path'],
       `runtime artifact ${index}`,
     )
     if (!Object.hasOwn(ARTIFACT_SPECS, artifact.kind) || kinds.has(artifact.kind)) {
@@ -407,21 +405,12 @@ function parseRuntimeManifest(encoded, runtimeRoot, expectedPlatform) {
     if (dirname(path) !== runtimeRoot || paths.has(path)) {
       throw new Error('runtime artifact path escapes or repeats its private root')
     }
-    if (!Number.isSafeInteger(artifact.byteLength) || artifact.byteLength < 1) {
-      throw new Error('runtime artifact byte length is invalid')
-    }
-    requireSha256(artifact.sha256, `runtime artifact ${index} SHA-256`)
-    requireSha256(artifact.preflightSha256, `runtime artifact ${index} preflight SHA-256`)
-    if (
-      artifact.preflightSha256 !== sha256Bytes(Buffer.from(SELF_CHECK_LINES[artifact.kind], 'utf8'))
-    ) throw new Error('runtime artifact preflight proof is invalid')
     kinds.add(artifact.kind)
     paths.add(path)
     return Object.freeze({ ...artifact, path })
   })
   const expectedKinds = [
-    ...(platform === 'win32' ? ['windows-job'] : []),
-    ...(platform === 'linux' ? ['linux-process-owner'] : []),
+    ...(['win32', 'linux'].includes(platform) ? ['test-process-owner'] : []),
     'topology-materializer',
     'artifact-publisher',
     ...(suites.includes('pion') ? ['pion-server'] : []),
@@ -447,70 +436,49 @@ function buildSampleCommandCapability({
 }) {
   const nodePath = requireCanonicalAbsolutePath(nodeExecutable, 'sample command Node executable')
   const driverSourcePath = join(repositoryRoot, SAMPLE_DRIVER_RELATIVE_PATH)
+  const playwrightRunnerPath = join(repositoryRoot, PLAYWRIGHT_RUNNER_RELATIVE_PATH)
   const playwrightCliPath = join(repositoryRoot, PLAYWRIGHT_CLI_RELATIVE_PATH)
   return Object.freeze({
     repositoryRoot,
-    node: fileAuthority(
-      nodePath,
-      MAXIMUM_SAMPLE_EXECUTABLE_BYTES,
-      'sample command Node executable',
+    node: requireRuntimeInputPath(nodePath, 'sample command Node executable'),
+    driverSource: requireRuntimeInputPath(driverSourcePath, 'sample command driver source'),
+    playwrightRunner: requireRuntimeInputPath(
+      playwrightRunnerPath,
+      'sample command owned Playwright runner',
     ),
-    driverSource: fileAuthority(
-      driverSourcePath,
-      MAXIMUM_SAMPLE_SOURCE_BYTES,
-      'sample command driver source',
-    ),
-    playwrightCli: fileAuthority(
-      playwrightCliPath,
-      MAXIMUM_SAMPLE_SOURCE_BYTES,
-      'sample command Playwright CLI',
-    ),
+    playwrightCli: requireRuntimeInputPath(playwrightCliPath, 'sample command Playwright CLI'),
     environment: sampleProcessEnvironment({}, {}, inheritedEnvironment, platform),
   })
 }
 
 function parseSampleCommandCapability(value, platform) {
   exactKeys(value, [
-    'repositoryRoot', 'node', 'driverSource', 'playwrightCli', 'environment',
+    'repositoryRoot', 'node', 'driverSource', 'playwrightRunner', 'playwrightCli', 'environment',
   ], 'sample command runtime capability')
   const repositoryRoot = requireCanonicalAbsolutePath(
     value.repositoryRoot,
     'sample command repository root',
   )
-  const node = parseCapabilityFile(
-    value.node,
-    'sample command Node executable',
-    MAXIMUM_SAMPLE_EXECUTABLE_BYTES,
+  const node = requireRuntimeInputPath(value.node, 'sample command Node executable')
+  const driverSource = requireRuntimeInputPath(value.driverSource, 'sample command driver source')
+  const playwrightCli = requireRuntimeInputPath(value.playwrightCli, 'sample command Playwright CLI')
+  const playwrightRunner = requireRuntimeInputPath(
+    value.playwrightRunner,
+    'sample command owned Playwright runner',
   )
-  const driverSource = parseCapabilityFile(
-    value.driverSource,
-    'sample command driver source',
-    MAXIMUM_SAMPLE_SOURCE_BYTES,
-  )
-  const playwrightCli = parseCapabilityFile(
-    value.playwrightCli,
-    'sample command Playwright CLI',
-    MAXIMUM_SAMPLE_SOURCE_BYTES,
-  )
-  if (driverSource.path !== join(repositoryRoot, SAMPLE_DRIVER_RELATIVE_PATH)) {
+  if (driverSource !== join(repositoryRoot, SAMPLE_DRIVER_RELATIVE_PATH)) {
     throw new Error('sample command driver source escapes its repository capability')
   }
-  if (playwrightCli.path !== join(repositoryRoot, PLAYWRIGHT_CLI_RELATIVE_PATH)) {
+  if (playwrightCli !== join(repositoryRoot, PLAYWRIGHT_CLI_RELATIVE_PATH)) {
     throw new Error('sample command Playwright CLI escapes its repository capability')
   }
+  if (playwrightRunner !== join(repositoryRoot, PLAYWRIGHT_RUNNER_RELATIVE_PATH)) {
+    throw new Error('sample command owned Playwright runner escapes its repository capability')
+  }
   const environment = canonicalSampleEnvironment(value.environment, platform)
-  return Object.freeze({ repositoryRoot, node, driverSource, playwrightCli, environment })
-}
-
-function parseCapabilityFile(value, label, maximumBytes) {
-  exactKeys(value, ['path', 'byteLength', 'sha256'], label)
-  const path = requireCanonicalAbsolutePath(value.path, label)
-  if (
-    !Number.isSafeInteger(value.byteLength) || value.byteLength < 1 ||
-    value.byteLength > maximumBytes
-  ) throw new Error(`${label} byte length is invalid`)
-  requireSha256(value.sha256, `${label} SHA-256`)
-  return Object.freeze({ path, byteLength: value.byteLength, sha256: value.sha256 })
+  return Object.freeze({
+    repositoryRoot, node, driverSource, playwrightRunner, playwrightCli, environment,
+  })
 }
 
 function canonicalSampleEnvironment(value, platform) {
@@ -526,27 +494,15 @@ function canonicalSampleEnvironment(value, platform) {
 }
 
 function assertSampleCommandCapabilityLive(capability) {
-  for (const [name, maximumBytes] of [
-    ['node', MAXIMUM_SAMPLE_EXECUTABLE_BYTES],
-    ['driverSource', MAXIMUM_SAMPLE_SOURCE_BYTES],
-    ['playwrightCli', MAXIMUM_SAMPLE_SOURCE_BYTES],
-  ]) {
-    const expected = capability[name]
-    const current = regularFileSnapshot(
-      expected.path,
-      maximumBytes,
-      `sample command ${name}`,
-    )
-    if (current.byteLength !== expected.byteLength || current.sha256 !== expected.sha256) {
-      throw new Error(`sample command ${name} differs from its runtime manifest capability`)
-    }
+  for (const name of ['node', 'driverSource', 'playwrightRunner', 'playwrightCli']) {
+    assertRuntimeArtifactPath(capability[name], `sample command ${name}`)
   }
 }
 
-function fileAuthority(path, maximumBytes, label) {
-  const snapshot = regularFileSnapshot(path, maximumBytes, label)
-  if (snapshot.byteLength < 1) throw new Error(`${label} is empty`)
-  return Object.freeze({ path, byteLength: snapshot.byteLength, sha256: snapshot.sha256 })
+function requireRuntimeInputPath(path, label) {
+  const canonical = requireCanonicalAbsolutePath(path, label)
+  assertRuntimeArtifactPath(canonical, label)
+  return canonical
 }
 
 function canonicalSuites(value) {
@@ -574,81 +530,77 @@ function requireSuccessfulOwnedExecution(execution, label, expectedStdout, platf
   if (!isRecord(execution)) throw new Error(`${label} lacks process ownership evidence`)
   exactKeys(execution, OWNED_EXECUTION_KEYS, `${label} execution`)
   if (
-    execution.launched !== true || execution.timedOut !== false || execution.treeEmpty !== true ||
+    execution.treeEmpty !== true || execution.cleanupOutcome !== 'completed' ||
     !isRecord(execution.processEvidence) || execution.processEvidence.terminal !== 'exited' ||
     execution.processEvidence.exitCode !== 0
   ) throw new Error(`${label} did not prove a successful empty process tree`)
   requireSuccessfulInputEvidence(execution.inputEvidence, label)
-  requireSuccessfulClientIoEvidence(execution.clientIoEvidence, label)
   requireSuccessfulOwnershipEvidence(execution.ownershipEvidence, platform, label)
   if (execution.stdout !== expectedStdout) throw new Error(`${label} emitted unexpected stdout`)
   if (execution.stderr !== '') throw new Error(`${label} emitted unexpected stderr`)
+  return Object.freeze({
+    traces: requireCompleteOwnedTraceSnapshot(execution.traces, `${label} operation trace`),
+    runtimeCommandTraces: requireCompleteOwnedTraceSnapshot(
+      execution.runtimeCommandTraces,
+      `${label} runtime command trace`,
+    ),
+  })
 }
 
 function requireSuccessfulInputEvidence(input, label) {
   exactKeys(input, INPUT_EVIDENCE_KEYS, `${label} input evidence`)
-  if (input.outcome !== 'not-requested' || input.failureCode !== '' || input.failureMessage !== '') {
+  if (input.outcome !== 'not_requested' || input.failureCode !== '' || input.failureMessage !== '') {
     throw new Error(`${label} input evidence is not a successful no-input execution`)
   }
 }
 
-function requireSuccessfulClientIoEvidence(clientIo, label) {
-  exactKeys(clientIo, CLIENT_IO_EVIDENCE_KEYS, `${label} client I/O evidence`)
-  if (
-    clientIo.requestOutcome !== 'delivered' || clientIo.rawInputOutcome !== 'not-requested' ||
-    !['not-requested', 'delivered'].includes(clientIo.controlOutcome) ||
-    clientIo.outputOutcome !== 'delivered' || clientIo.failureCode !== '' ||
-    clientIo.failureMessage !== ''
-  ) throw new Error(`${label} client I/O evidence is not successful`)
-}
-
 function requireSuccessfulOwnershipEvidence(ownership, platform, label) {
-  if (platform === 'win32') {
-    exactKeys(ownership, WINDOWS_OWNERSHIP_EVIDENCE_KEYS, `${label} Windows ownership evidence`)
-    exactKeys(ownership.root, ['pid', 'exitCode'], `${label} Windows root evidence`)
-    if (
-      ownership.supervisionOutcome !== 'tree-empty' || ownership.terminationReason !== 'natural' ||
-      ownership.activeProcessCount !== 0 || !Number.isSafeInteger(ownership.root.pid) ||
-      ownership.root.pid < 1 || ownership.root.exitCode !== 0 || ownership.spawnFailure !== null
-    ) throw new Error(`${label} Windows ownership evidence is not successful`)
-    return
-  }
-  if (platform === 'linux') {
-    exactKeys(ownership, LINUX_OWNERSHIP_EVIDENCE_KEYS, `${label} Linux ownership evidence`)
-    if (
-      !Number.isSafeInteger(ownership.ownerPid) || ownership.ownerPid < 1 ||
-      !Number.isSafeInteger(ownership.rootPid) || ownership.rootPid < 1 ||
-      typeof ownership.rootStartTimeTicks !== 'string' || !/^[1-9][0-9]*$/u.test(ownership.rootStartTimeTicks) ||
-      ownership.cleanupOutcome !== 'completed' || ownership.failureCode !== '' ||
-      ownership.failureMessage !== ''
-    ) throw new Error(`${label} Linux ownership evidence is not successful`)
-    return
-  }
-  throw new Error(`${label} process ownership platform is unsupported`)
-}
-
-function executableSnapshot(path, label) {
-  const snapshot = regularFileSnapshot(path, 512 * 1_024 * 1_024, label)
-  if (snapshot.byteLength < 1) throw new Error(`${label} is empty`)
-  return snapshot
-}
-
-function regularFileSnapshot(path, maximumBytes, label) {
-  const metadataBefore = lstatSync(path, { bigint: true })
+  exactKeys(ownership, OWNERSHIP_EVIDENCE_KEYS, `${label} ownership evidence`)
+  const expectedBackend = platform === 'win32' ? 'windows_job' : 'linux_subreaper'
   if (
-    !metadataBefore.isFile() || metadataBefore.isSymbolicLink() ||
-    metadataBefore.size < 0n || metadataBefore.size > BigInt(maximumBytes)
-  ) throw new Error(`${label} is not a bounded regular file`)
-  const bytes = readFileSync(path)
-  const metadataAfter = lstatSync(path, { bigint: true })
-  if (!sameIdentity(metadataBefore, metadataAfter) || !sameRevision(metadataBefore, metadataAfter)) {
-    throw new Error(`${label} changed while read`)
+    ownership.kind !== 'test-process-owner' || ownership.backend !== expectedBackend ||
+    ownership.terminationReason !== 'natural' || !isRecord(ownership.platform) ||
+    ownership.platform.kind !== expectedBackend
+  ) throw new Error(`${label} process ownership evidence is not successful`)
+}
+
+function assertRuntimeArtifactPath(path, label) {
+  const metadata = lstatSync(path)
+  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size < 1) {
+    throw new Error(`${label} is not a non-empty regular file`)
   }
-  return Object.freeze({
-    bytes,
-    byteLength: bytes.byteLength,
-    sha256: sha256Bytes(bytes),
-  })
+}
+
+function openRegularFileSnapshot(path, maximumBytes, label) {
+  const namedBefore = lstatSync(path, { bigint: true })
+  if (
+    !namedBefore.isFile() || namedBefore.isSymbolicLink() ||
+    namedBefore.size < 0n || namedBefore.size > BigInt(maximumBytes)
+  ) throw new Error(`${label} is not a bounded regular file`)
+  const descriptor = openSync(path, 'r')
+  try {
+    const openedBefore = fstatSync(descriptor, { bigint: true })
+    if (
+      !openedBefore.isFile() || !sameIdentity(namedBefore, openedBefore) ||
+      !sameRevision(namedBefore, openedBefore)
+    ) throw new Error(`${label} changed before it could be held`)
+    const bytes = readFileSync(descriptor)
+    const openedAfter = fstatSync(descriptor, { bigint: true })
+    const namedAfter = lstatSync(path, { bigint: true })
+    if (
+      bytes.byteLength !== Number(openedAfter.size) ||
+      !sameIdentity(openedBefore, openedAfter) || !sameIdentity(openedAfter, namedAfter) ||
+      !sameRevision(openedBefore, openedAfter) || !sameRevision(openedAfter, namedAfter)
+    ) throw new Error(`${label} changed while read`)
+    return Object.freeze({
+      bytes,
+      descriptor,
+      metadata: openedAfter,
+    })
+  } catch (cause) {
+    closeSync(descriptor)
+    throw cause
+  }
 }
 
 function sameIdentity(left, right) {
@@ -675,29 +627,6 @@ function requireCanonicalAbsolutePath(value, label) {
   return value
 }
 
-function requireSha256(value, label) {
-  if (typeof value !== 'string' || !SHA256_PATTERN.test(value)) {
-    throw new Error(`${label} must be lowercase 64-hex`)
-  }
-  return value
-}
-
-function sha256Bytes(value) {
-  return createHash('sha256').update(value).digest('hex')
-}
-
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function errorMessage(cause) {
-  return cause instanceof Error ? cause.message : String(cause)
-}
-
-function emitTrace(trace, event) {
-  try {
-    trace(event)
-  } catch {
-    // Observability cannot outrank cleanup of a private runtime build root.
-  }
 }

@@ -3,11 +3,6 @@ import { createHash } from 'node:crypto'
 import { types as nodeTypes } from 'node:util'
 
 import { GUARD_SUITE_TOTAL_BUDGET_MS } from '../../../web/scripts/browser-evidence/execution/guard-execution-lease.ts'
-import {
-  WINDOWS_JOB_MAXIMUM_TERMINATION_GRACE_MS,
-  WINDOWS_JOB_POST_KILL_LEASE_MS,
-  WINDOWS_JOB_WATCHDOG_SLACK_MS,
-} from '../../../web/scripts/browser-evidence/process/windows-job-client.ts'
 import { parseBrowserRunPolicy } from '../../../web/scripts/browser-evidence/run-policy.ts'
 import {
   BROWSER_ENGINES,
@@ -19,6 +14,9 @@ const DEADLINE_POLICY_SCHEMA_VERSION = 1
 const DEADLINE_POLICY_VERSION = 1
 const MAXIMUM_ENTRY_ID_BYTES = 256
 const MAXIMUM_CONTEXT_ID_BYTES = 256
+const PROCESS_OWNER_MAXIMUM_TERMINATION_GRACE_MS = 60_000
+const PROCESS_OWNER_WATCHDOG_SLACK_MS = 5_000
+const PROCESS_OWNER_POST_TERMINATION_SETTLEMENT_MS = 5_000
 const CHECKOUT_SHA_PATTERN = /^[0-9a-f]{40}$/u
 const BOOTSTRAP_QUERY_LEASE_ID = 'bootstrap/source-control-context-query'
 const SYSTEM_MONOTONIC_CLOCK = Object.freeze({ now: () => performance.now() })
@@ -126,16 +124,16 @@ export const BROWSERGATE_GITHUB_RUNNER_ACTION_DEADLINE_MS = Object.freeze({
 export const BROWSERGATE_GITHUB_ARTIFACT_UPLOAD_DEADLINE_MS = 300_000
 export const BROWSERGATE_GITHUB_SUITE_JOB_SETTLEMENT_RESERVE_MS = 600_000
 
-const WINDOWS_JOB_SUBPROCESS_LIFECYCLE_OVERHEAD_MS =
-  WINDOWS_JOB_MAXIMUM_TERMINATION_GRACE_MS
-  + WINDOWS_JOB_WATCHDOG_SLACK_MS
-  + WINDOWS_JOB_POST_KILL_LEASE_MS
+const PROCESS_OWNER_SUBPROCESS_LIFECYCLE_OVERHEAD_MS =
+  PROCESS_OWNER_MAXIMUM_TERMINATION_GRACE_MS
+  + PROCESS_OWNER_WATCHDOG_SLACK_MS
+  + PROCESS_OWNER_POST_TERMINATION_SETTLEMENT_MS
 
 // A leaf owner must retain time to prove handle and process-tree settlement
 // after the browser child reaches its own deadline.
 export const BROWSER_SAMPLE_SUBPROCESS_TIMEOUT_MS =
   BROWSER_SAMPLE_PROCESS_DEADLINE_MS
-  + WINDOWS_JOB_SUBPROCESS_LIFECYCLE_OVERHEAD_MS
+  + PROCESS_OWNER_SUBPROCESS_LIFECYCLE_OVERHEAD_MS
   + BROWSERGATE_PROCESS_OWNERSHIP_OUTER_SLACK_MS
 
 export const BROWSERGATE_OPERATION_DEADLINE_MS = Object.freeze({
@@ -259,12 +257,12 @@ export function createSuiteDeadlinePolicy(suite, runPolicy) {
   })
 }
 
-export function createWindowsProcessOwnerDeadlinePolicy(suite, runPolicy) {
+export function createProcessOwnerDeadlinePolicy(suite, runPolicy) {
   const suitePolicy = createSuiteDeadlinePolicy(suite, runPolicy)
   const processLeases = suitePolicy.leases
     .filter(({ processRole }) => processRole !== undefined)
     .map((leaf) => Object.freeze({
-      leaseId: `${leaf.leaseId}/windows-job-owner`,
+      leaseId: `${leaf.leaseId}/process-owner`,
       sourceLeaseId: leaf.leaseId,
       processRole: leaf.processRole,
       childDeadlineMs: leaf.maximumDurationMs,
@@ -275,14 +273,14 @@ export function createWindowsProcessOwnerDeadlinePolicy(suite, runPolicy) {
   return Object.freeze({
     schemaVersion: DEADLINE_POLICY_SCHEMA_VERSION,
     policyVersion: DEADLINE_POLICY_VERSION,
-    policyId: `windows-process-owner-${suitePolicy.runPolicy.policyId}`,
+    policyId: `process-owner-${suitePolicy.runPolicy.policyId}`,
     suite: suitePolicy.suite,
     runPolicy: suitePolicy.runPolicy,
     focusedProcessLeaseCount: suitePolicy.focusedProcessLeaseCount,
     remainderProcessLeaseCount: suitePolicy.remainderProcessLeaseCount,
     processLeases: Object.freeze(processLeases),
     aggregateBudgetMs: processLeases.reduce(
-      (sum, lease) => safeAdd(sum, lease.maximumDurationMs, 'Windows process-owner budget'),
+      (sum, lease) => safeAdd(sum, lease.maximumDurationMs, 'process-owner budget'),
       0,
     ),
   })
@@ -310,7 +308,7 @@ export function createRuntimeSetupDeadlinePolicy({
     throw new Error('local runtime setup is shared and cannot bind one suite')
   }
   const manifestArtifacts = Object.freeze([
-    canonicalPlatform === 'win32' ? 'windows-job' : 'linux-process-owner',
+    'test-process-owner',
     'topology-materializer',
     'artifact-publisher',
     ...(canonicalRunner === BROWSERGATE_RUNTIME_RUNNER.LOCAL || canonicalSuite === 'pion'
@@ -352,11 +350,7 @@ export function createContractRunnerDeadlinePolicy() {
 export function createLocalBrowsergateDeadlinePolicy(
   runPolicy,
   platform = process.platform,
-  { dependencyInstallReused = false } = {},
 ) {
-  if (typeof dependencyInstallReused !== 'boolean') {
-    throw new Error('local dependency-install reuse selection must be boolean')
-  }
   const canonicalRunPolicy = parseBrowserRunPolicy(runPolicy, 'local Browsergate run policy')
   const runtimeSetup = createRuntimeSetupDeadlinePolicy({
     runner: BROWSERGATE_RUNTIME_RUNNER.LOCAL,
@@ -370,13 +364,6 @@ export function createLocalBrowsergateDeadlinePolicy(
     ),
   ])
   const sharedSetupLeases = Object.freeze([
-    ...(dependencyInstallReused
-      ? []
-      : [operationLease(
-          'local/dependency-install',
-          BROWSERGATE_OPERATION_CLASS.DEPENDENCY_INSTALL,
-          BROWSERGATE_OPERATION_PHASE.NORMAL_WORK,
-        )]),
     operationLease(
       'local/browser-contract',
       BROWSERGATE_OPERATION_CLASS.CONTRACT_TEST,
@@ -447,11 +434,9 @@ export function createLocalBrowsergateDeadlinePolicy(
   return Object.freeze({
     schemaVersion: DEADLINE_POLICY_SCHEMA_VERSION,
     policyVersion: DEADLINE_POLICY_VERSION,
-    policyId: `local-browsergate-${canonicalRunPolicy.policyId}-${dependencyInstallReused
-      ? 'dependency-reuse'
-      : 'dependency-acquire'}`,
+    policyId: `local-browsergate-${canonicalRunPolicy.policyId}-make-dependencies`,
     runPolicy: canonicalRunPolicy,
-    dependencyInstallReused,
+    dependencyAuthority: 'make-web-dependencies',
     bootstrap: Object.freeze({
       leases: bootstrapLeases,
       budgetMs: bootstrapBudgetMs,
