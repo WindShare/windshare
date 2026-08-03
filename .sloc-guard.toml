@@ -82,7 +82,15 @@ reason = "Shared test fixtures and golden vectors"
 warn_threshold = 0.8                      # Warn at 80% of limits (inherited by rules)
 # Test suites grow by scenario rather than module responsibility, so they do not
 # indicate production-module sprawl. Content limits above still apply.
-count_exclude = ["*_test.go", "*.test.ts", "*.test.tsx", "*.spec.ts", "*.spec.tsx"]
+count_exclude = [
+  "*_test.go",
+  "*.test.ts",
+  "*.test.tsx",
+  "*.spec.ts",
+  "*.spec.tsx",
+  "go.mod",
+  "go.sum",
+]
 
 # Repository source roots (exact-match globs don't cover the root dir via "/**").
 # Keeping connectivity and internal runtime packages in scope prevents test

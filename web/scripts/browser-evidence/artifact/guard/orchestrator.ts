@@ -1,7 +1,5 @@
-import type { BigIntStats } from 'node:fs'
-import { lstat, open, writeFile } from 'node:fs/promises'
-import type { FileHandle } from 'node:fs/promises'
-import { isAbsolute, join, resolve } from 'node:path'
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
 import { artifactManifestSha256, sha256Bytes } from '../manifest.ts'
 import {
@@ -54,9 +52,13 @@ import {
 import {
   assertControlPlaneSecretFree,
   parseExplicitSecrets,
-  sameFileIdentity,
   scanArtifact,
 } from './archive-scanner.ts'
+import {
+  holdArtifactRoot,
+  requireCanonicalArtifactRoot,
+  type ArtifactRootLease,
+} from './artifact-root-lease.ts'
 
 const EMPTY_SHA256 = '0'.repeat(64)
 const MAXIMUM_SCAN_FAULT_REPLACEMENT_BYTES = 65_536
@@ -64,12 +66,6 @@ const GUARD_SUITE_FAILURE_MESSAGE = 'artifact guard suite failed'
 const GUARD_UPLOAD_FAILURE_MESSAGE = 'guard suite upload sealing failed'
 const ARTIFACT_ROOT_CLEANUP_FAILURE_MESSAGE = 'artifact root cleanup failed'
 const ARTIFACT_SCANNER_FAILURE_MESSAGE = 'artifact scanner failed'
-
-interface HeldArtifactRoot {
-  readonly path: string
-  readonly handle: FileHandle
-  readonly identity: BigIntStats
-}
 
 /**
  * A suite is the upload unit because workflow artifacts are suite-owned. The
@@ -257,7 +253,7 @@ async function runSampleArtifactScan(
   let lastMilestone = 'scan-started'
   let result: ArtifactGuardResult | undefined
   let scanFailure: unknown
-  let artifactRoot: HeldArtifactRoot | undefined
+  let artifactRoot: ArtifactRootLease | undefined
   try {
     const executionLease = options.executionLease ?? GuardExecutionLease.start()
     const scanSignal = executionLease.primarySignal('artifact guard scan')
@@ -281,17 +277,17 @@ async function runSampleArtifactScan(
     journal.progress(identity, lastMilestone, 'succeeded', { artifactCount: checked.length })
     for (const artifact of checked) {
       scanSignal.throwIfAborted()
-      await assertHeldArtifactRoot(artifactRoot)
-      await assertArtifactAncestry(artifactRoot.path, artifact.relativePath)
+      await artifactRoot.assertStable()
+      await artifactRoot.assertAncestry(artifact.relativePath)
       if (faultCut?.relativePath === artifact.relativePath) {
         lastMilestone = 'scan-fault-cut-reached'
         journal.progress(identity, lastMilestone, 'succeeded', { action: faultCut.action })
         await applyScanFaultCut(faultCut, artifactRoot.path)
       }
       await scanArtifact(artifact, artifactRoot.path, explicitSecretBytes, state, scanSignal)
-      await assertArtifactAncestry(artifactRoot.path, artifact.relativePath)
+      await artifactRoot.assertAncestry(artifact.relativePath)
     }
-    await assertHeldArtifactRoot(artifactRoot)
+    await artifactRoot.assertStable()
     lastMilestone = 'scan-artifacts-processed'
     journal.progress(identity, lastMilestone, 'succeeded', {
       scannedFileCount: state.scannedFileCount,
@@ -310,7 +306,7 @@ async function runSampleArtifactScan(
   }
   if (artifactRoot !== undefined) {
     try {
-      await artifactRoot.handle.close()
+      await artifactRoot.close()
       cleanupOutcome = 'completed'
     } catch (cause) {
       cleanupOutcome = 'failed'
@@ -438,61 +434,6 @@ function validateArtifactSizeAuthority(artifacts: readonly ArtifactIndexEntry[])
       throw new GuardFailure('contract', 'artifact bytes exceed the frozen total guard limit')
     }
   }
-}
-
-async function holdArtifactRoot(path: string, signal: AbortSignal): Promise<HeldArtifactRoot> {
-  signal.throwIfAborted()
-  const canonicalPath = requireCanonicalArtifactRoot(path)
-  const namedBefore = await lstat(canonicalPath, { bigint: true })
-  requireArtifactDirectory(namedBefore, 'artifact root')
-  const handle = await open(canonicalPath, 'r')
-  try {
-    const identity = await handle.stat({ bigint: true })
-    const namedAfter = await lstat(canonicalPath, { bigint: true })
-    requireArtifactDirectory(identity, 'artifact root')
-    requireArtifactDirectory(namedAfter, 'artifact root')
-    if (!sameFileIdentity(namedBefore, identity) || !sameFileIdentity(identity, namedAfter)) {
-      throw new GuardFailure('contract', 'artifact root changed while its authority was acquired')
-    }
-    return Object.freeze({ path: canonicalPath, handle, identity })
-  } catch (cause) {
-    await handle.close().catch(() => undefined)
-    throw cause
-  }
-}
-
-async function assertHeldArtifactRoot(root: HeldArtifactRoot): Promise<void> {
-  const [opened, named] = await Promise.all([
-    root.handle.stat({ bigint: true }),
-    lstat(root.path, { bigint: true }),
-  ])
-  requireArtifactDirectory(opened, 'artifact root')
-  requireArtifactDirectory(named, 'artifact root')
-  if (!sameFileIdentity(root.identity, opened) || !sameFileIdentity(opened, named)) {
-    throw new GuardFailure('contract', 'artifact root no longer names its owner-held directory')
-  }
-}
-
-async function assertArtifactAncestry(root: string, relativePath: string): Promise<void> {
-  const segments = relativePath.split('/')
-  let current = root
-  for (const segment of segments.slice(0, -1)) {
-    current = join(current, segment)
-    requireArtifactDirectory(await lstat(current, { bigint: true }), `artifact directory ${segment}`)
-  }
-}
-
-function requireArtifactDirectory(metadata: BigIntStats, label: string): void {
-  if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
-    throw new GuardFailure('contract', `${label} is not a regular no-follow directory`)
-  }
-}
-
-function requireCanonicalArtifactRoot(path: string): string {
-  if (!isAbsolute(path) || resolve(path) !== path) {
-    throw new GuardFailure('contract', 'artifact root must be canonical and absolute')
-  }
-  return path
 }
 
 function validateSampleResultSnapshot(encoded: Uint8Array, sample: BrowserSampleResult): void {

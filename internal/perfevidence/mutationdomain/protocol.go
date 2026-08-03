@@ -2,11 +2,7 @@ package mutationdomain
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,13 +10,14 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/internal/perfevidence"
+	mutationwire "github.com/windshare/windshare/internal/perfevidence/mutationdomain/wire"
 )
 
 const (
 	helperArgument            = "--perfevidence-mutation-helper"
 	helperRoleEnvironment     = "WINDSHARE_PERFEVIDENCE_MUTATION_HELPER"
-	maximumProtocolLine       = 1 << 20
-	maximumCapturedBytes      = 32 << 20
+	maximumProtocolLine       = mutationwire.MaximumProtocolLine
+	maximumCapturedBytes      = mutationwire.MaximumCapturedBytes
 	privateInputDirectory     = "inputs"
 	privateOutputDirectory    = "outputs"
 	privateCacheDirectory     = "build-cache"
@@ -29,79 +26,51 @@ const (
 	sessionShutdownTimeout    = 5 * time.Second
 	maximumSinkOperationTime  = 5 * time.Minute
 	captureSettlementTimeout  = 5 * time.Second
-	targetStartedEvent        = "target-started"
-	targetFinishedEvent       = "target-finished"
-	targetSettledEvent        = "target-settled"
+	targetStartedEvent        = mutationwire.TargetStartedEvent
+	targetFinishedEvent       = mutationwire.TargetFinishedEvent
+	targetSettledEvent        = mutationwire.TargetSettledEvent
 )
 
-type initialization struct {
-	RuntimeRoot       string     `json:"runtimeRoot"`
-	PrivateRoot       string     `json:"privateRoot,omitempty"`
-	BootstrapManifest string     `json:"bootstrapManifest,omitempty"`
-	Roots             []rootSpec `json:"roots"`
-}
-
-type rootSpec struct {
-	Name             string `json:"name"`
-	HostPath         string `json:"hostPath"`
-	SHA256           string `json:"sha256"`
-	SourceDescriptor int    `json:"sourceDescriptor,omitempty"`
-}
-
-type request struct {
-	Shutdown              bool                               `json:"shutdown,omitempty"`
-	ProcessIDAcknowledged bool                               `json:"processIdAcknowledged,omitempty"`
-	Command               perfevidence.MutationDomainCommand `json:"command"`
-}
-
-type frame struct {
-	Name   string `json:"name"`
-	Bytes  int64  `json:"bytes"`
-	SHA256 string `json:"sha256"`
-}
-
-type response struct {
-	Event              string    `json:"event,omitempty"`
-	Error              string    `json:"error,omitempty"`
-	Fatal              bool      `json:"fatal,omitempty"`
-	NamespaceProcessID int       `json:"namespaceProcessId,omitempty"`
-	ExitCode           int       `json:"exitCode"`
-	StartedAt          time.Time `json:"startedAt,omitzero"`
-	FinishedAt         time.Time `json:"finishedAt,omitzero"`
-	Frames             []frame   `json:"frames,omitempty"`
-}
+type initialization = mutationwire.Initialization
+type rootSpec = mutationwire.RootSpec
+type request = mutationwire.Request
+type frame = mutationwire.Frame
+type response = mutationwire.Response
 
 type limitedBuffer struct {
-	mu       sync.Mutex
-	buffer   bytes.Buffer
-	limit    int
-	overflow bool
+	mu      sync.Mutex
+	limit   int
+	capture *mutationwire.BoundedCapture
 }
 
 func (buffer *limitedBuffer) Write(content []byte) (int, error) {
 	buffer.mu.Lock()
-	defer buffer.mu.Unlock()
-	remaining := buffer.limit - buffer.buffer.Len()
-	if remaining > 0 {
-		kept := min(len(content), remaining)
-		_, _ = buffer.buffer.Write(content[:kept])
+	if buffer.capture == nil {
+		buffer.capture = mutationwire.NewBoundedCapture(buffer.limit)
 	}
-	if len(content) > remaining {
-		buffer.overflow = true
-	}
-	return len(content), nil
+	capture := buffer.capture
+	buffer.mu.Unlock()
+	return capture.Write(content)
 }
 
 func (buffer *limitedBuffer) snapshot() []byte {
 	buffer.mu.Lock()
-	defer buffer.mu.Unlock()
-	return bytes.Clone(buffer.buffer.Bytes())
+	capture := buffer.capture
+	buffer.mu.Unlock()
+	if capture == nil {
+		return nil
+	}
+	return capture.Snapshot()
 }
 
 func (buffer *limitedBuffer) exceeded() bool {
 	buffer.mu.Lock()
-	defer buffer.mu.Unlock()
-	return buffer.overflow
+	capture := buffer.capture
+	buffer.mu.Unlock()
+	if capture == nil {
+		return false
+	}
+	return capture.Exceeded()
 }
 
 type session struct {
@@ -538,24 +507,11 @@ func (session *session) sinkContext(
 }
 
 func writeJSONLine(writer io.Writer, value any) error {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	encoded = append(encoded, '\n')
-	_, err = io.Copy(writer, bytes.NewReader(encoded))
-	return err
+	return mutationwire.WriteJSONLine(writer, value)
 }
 
 func readJSONLine(reader *bufio.Reader, destination any) error {
-	line, err := reader.ReadSlice('\n')
-	if errors.Is(err, bufio.ErrBufferFull) || len(line) > maximumProtocolLine {
-		return errors.New("private mutation protocol header exceeded its bound")
-	}
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(line, destination)
+	return mutationwire.ReadJSONLine(reader, destination)
 }
 
 func readBoundedFrame(
@@ -564,28 +520,9 @@ func readBoundedFrame(
 	maximum int64,
 	destination io.Writer,
 ) ([]byte, error) {
-	if description.Bytes < 0 || description.Bytes > maximum || len(description.SHA256) != 64 {
-		return nil, errors.New("private mutation frame exceeded its declared bound")
-	}
-	hasher := sha256.New()
-	var captured bytes.Buffer
-	writers := []io.Writer{hasher}
-	if destination == nil {
-		writers = append(writers, &captured)
-	} else {
-		writers = append(writers, destination)
-	}
-	written, err := io.CopyN(io.MultiWriter(writers...), reader, description.Bytes)
-	if err != nil || written != description.Bytes {
-		return nil, errors.Join(fmt.Errorf("read %d of %d framed bytes", written, description.Bytes), err)
-	}
-	if observed := hex.EncodeToString(hasher.Sum(nil)); observed != description.SHA256 {
-		return nil, fmt.Errorf("private mutation frame hash mismatch: got %s, want %s", observed, description.SHA256)
-	}
-	return captured.Bytes(), nil
+	return mutationwire.ReadBoundedFrame(reader, description, maximum, destination)
 }
 
 func hashBytes(content []byte) string {
-	digest := sha256.Sum256(content)
-	return hex.EncodeToString(digest[:])
+	return mutationwire.HashBytes(content)
 }
