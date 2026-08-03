@@ -251,15 +251,3 @@ func newTestSettlementSink(t *testing.T, request supervisionRequest) (*settlemen
 	}
 	return sink, output
 }
-
-func decodeTestSettlement(t *testing.T, output *bytes.Buffer) ownerprotocol.Settlement {
-	t.Helper()
-	settlement, err := ownerprotocol.DecodeLine[ownerprotocol.Settlement](output.Bytes())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ownerprotocol.ValidateSettlement(settlement); err != nil {
-		t.Fatal(err)
-	}
-	return settlement
-}

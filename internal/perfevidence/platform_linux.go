@@ -24,7 +24,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const cleanupMutationLimit = 64
+const (
+	cleanupMutationLimit   = 64
+	evidenceStoreReadBatch = 128
+)
 
 type outputRootAuthority struct {
 	path     string
@@ -39,6 +42,68 @@ type stageDirectoryAuthority struct {
 	fd         int
 	transition func(relative, phase string) error
 	leaseHeld  bool
+}
+
+func evidenceFileClass(relative string) evidenceStoreFileClass {
+	switch filepath.ToSlash(relative) {
+	case manifestName, stageOwnerName:
+		return evidenceMetadataFile
+	case payloadName:
+		return evidencePayloadFile
+	default:
+		return evidenceArtifactFile
+	}
+}
+
+func defaultEvidenceStoreMeter() *evidenceStoreMeter {
+	meter, err := newEvidenceStoreMeter(DefaultEvidenceStoreBudget())
+	if err != nil {
+		panic(err)
+	}
+	return meter
+}
+
+func (meter *evidenceStoreMeter) observeDirectory(relative string, depth int) error {
+	return meter.observeObject(relative, depth, 0, evidenceArtifactFile)
+}
+
+func evidenceRelativeDepth(relative string) int {
+	clean := filepath.ToSlash(filepath.Clean(relative))
+	if clean == "." || clean == "" {
+		return 1
+	}
+	return strings.Count(clean, "/") + 1
+}
+
+func requireDirectChildName(name string) error {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return fmt.Errorf("filesystem authority child %q is not a direct name", name)
+	}
+	return nil
+}
+
+func (walk *evidenceStoreWalk) observeDirectory(relative string) error {
+	if walk == nil || walk.meter == nil {
+		return errors.New("evidence store walk has no shared meter")
+	}
+	return walk.meter.observeDirectory(relative, evidenceRelativeDepth(relative))
+}
+
+func (walk *evidenceStoreWalk) observeFile(relative string, file *os.File, info os.FileInfo) error {
+	if walk == nil || walk.meter == nil {
+		return errors.New("evidence store walk has no shared meter")
+	}
+	if _, alreadyCounted := walk.skipFiles[relative]; !alreadyCounted {
+		if err := walk.meter.observeFile(
+			relative, evidenceRelativeDepth(relative), info.Size(), evidenceFileClass(relative),
+		); err != nil {
+			return err
+		}
+	}
+	if walk.visitor != nil {
+		return walk.visitor(relative, file, info)
+	}
+	return nil
 }
 
 type protectedLinuxFile struct {
@@ -1120,7 +1185,7 @@ func (authority *outputRootAuthority) removeChild(name string, transition func(s
 }
 
 func removeLinuxEntryAt(parent int, name, relative string, transition func(string) error) error {
-	for attempt := 0; attempt < cleanupMutationLimit; attempt++ {
+	for range cleanupMutationLimit {
 		var stat unix.Stat_t
 		err := unix.Fstatat(parent, name, &stat, unix.AT_SYMLINK_NOFOLLOW)
 		if errors.Is(err, unix.ENOENT) {
@@ -1169,7 +1234,7 @@ func emptyLinuxDirectory(fd int, relative string, transition func(string) error)
 	if err := unix.Fchmod(fd, 0o700); err != nil {
 		return err
 	}
-	for pass := 0; pass < cleanupMutationLimit; pass++ {
+	for range cleanupMutationLimit {
 		entries, err := readLinuxDirectory(fd, relative)
 		if err != nil {
 			return err
@@ -1218,7 +1283,7 @@ func platformPathKey(path string) string {
 	return filepath.Clean(path)
 }
 
-func platformPathAlias(left, right string) bool {
+func platformPathAlias(_, _ string) bool {
 	return false
 }
 
@@ -1267,7 +1332,7 @@ func osDescription() string {
 	if err != nil {
 		return "Linux"
 	}
-	for _, line := range strings.Split(string(encoded), "\n") {
+	for line := range strings.SplitSeq(string(encoded), "\n") {
 		if value, found := strings.CutPrefix(line, "PRETTY_NAME="); found {
 			return strings.Trim(strings.TrimSpace(value), `"`)
 		}

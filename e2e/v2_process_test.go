@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -670,9 +671,7 @@ func TestV2ProcessErrorIncludesDiagnostics(t *testing.T) {
 func assertV2OutputInventory(t *testing.T, root string, expected map[string]bool) {
 	t.Helper()
 	remaining := make(map[string]bool, len(expected))
-	for path, directory := range expected {
-		remaining[path] = directory
-	}
+	maps.Copy(remaining, expected)
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr

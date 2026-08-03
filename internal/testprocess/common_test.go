@@ -396,7 +396,7 @@ func TestEventReaderOverflowIsBoundedAndTerminal(t *testing.T) {
 	<-reader.Done()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	for index := 0; index < maximumPendingEvents; index++ {
+	for index := range maximumPendingEvents {
 		if _, err := reader.Next(ctx); err != nil {
 			t.Fatalf("event %d: %v", index, err)
 		}

@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/windshare/windshare/internal/browsermatrixbroker"
@@ -175,12 +176,7 @@ func certificateAllowsClientAuthentication(certificate *x509.Certificate, now ti
 	if now.Before(certificate.NotBefore) || !now.Before(certificate.NotAfter) {
 		return false
 	}
-	for _, usage := range certificate.ExtKeyUsage {
-		if usage == x509.ExtKeyUsageClientAuth {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(certificate.ExtKeyUsage, x509.ExtKeyUsageClientAuth)
 }
 
 func (client *Client) Acquire(

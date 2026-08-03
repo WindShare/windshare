@@ -37,7 +37,6 @@ func TestLifecycleControlAcceptsOnlyCanonicalCorrelatedStop(t *testing.T) {
 		"oversized":       []byte(strings.Repeat("x", testLifecycleControlMaxBytes+1)),
 	}
 	for name, document := range tests {
-		name, document := name, document
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if err := validateTestLifecycleControl(document, expected); err == nil {

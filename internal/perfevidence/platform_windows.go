@@ -27,6 +27,7 @@ import (
 
 const (
 	cleanupMutationLimit   = 64
+	evidenceStoreReadBatch = 128
 	windowsFileDeleteChild = 0x00000040
 	windowsMutationAccess  = windows.ACCESS_MASK(
 		windows.FILE_WRITE_DATA |
@@ -59,6 +60,68 @@ type stageDirectoryAuthority struct {
 	transition  func(relative, phase string) error
 	leaseHandle windows.Handle
 	liveLease   bool
+}
+
+func evidenceFileClass(relative string) evidenceStoreFileClass {
+	switch filepath.ToSlash(relative) {
+	case manifestName, stageOwnerName:
+		return evidenceMetadataFile
+	case payloadName:
+		return evidencePayloadFile
+	default:
+		return evidenceArtifactFile
+	}
+}
+
+func defaultEvidenceStoreMeter() *evidenceStoreMeter {
+	meter, err := newEvidenceStoreMeter(DefaultEvidenceStoreBudget())
+	if err != nil {
+		panic(err)
+	}
+	return meter
+}
+
+func (meter *evidenceStoreMeter) observeDirectory(relative string, depth int) error {
+	return meter.observeObject(relative, depth, 0, evidenceArtifactFile)
+}
+
+func evidenceRelativeDepth(relative string) int {
+	clean := filepath.ToSlash(filepath.Clean(relative))
+	if clean == "." || clean == "" {
+		return 1
+	}
+	return strings.Count(clean, "/") + 1
+}
+
+func requireDirectChildName(name string) error {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return fmt.Errorf("filesystem authority child %q is not a direct name", name)
+	}
+	return nil
+}
+
+func (walk *evidenceStoreWalk) observeDirectory(relative string) error {
+	if walk == nil || walk.meter == nil {
+		return errors.New("evidence store walk has no shared meter")
+	}
+	return walk.meter.observeDirectory(relative, evidenceRelativeDepth(relative))
+}
+
+func (walk *evidenceStoreWalk) observeFile(relative string, file *os.File, info os.FileInfo) error {
+	if walk == nil || walk.meter == nil {
+		return errors.New("evidence store walk has no shared meter")
+	}
+	if _, alreadyCounted := walk.skipFiles[relative]; !alreadyCounted {
+		if err := walk.meter.observeFile(
+			relative, evidenceRelativeDepth(relative), info.Size(), evidenceFileClass(relative),
+		); err != nil {
+			return err
+		}
+	}
+	if walk.visitor != nil {
+		return walk.visitor(relative, file, info)
+	}
+	return nil
 }
 
 type protectedWindowsFile struct {
@@ -967,8 +1030,8 @@ func openOrCreateWindowsOutputRoot(path string) (windows.Handle, bool, error) {
 		return windows.InvalidHandle, false, err
 	}
 	ntPath := `\??\` + path
-	if strings.HasPrefix(path, `\\`) {
-		ntPath = `\??\UNC\` + strings.TrimPrefix(path, `\\`)
+	if uncPath, found := strings.CutPrefix(path, `\\`); found {
+		ntPath = `\??\UNC\` + uncPath
 	}
 	objectName, err := windows.NewNTUnicodeString(ntPath)
 	if err != nil {
@@ -1318,8 +1381,7 @@ func (stage *stageDirectoryAuthority) tryAcquireRecoveryLease(
 }
 
 func windowsSharingViolation(err error) bool {
-	var status windows.NTStatus
-	if errors.As(err, &status) {
+	if status, ok := errors.AsType[windows.NTStatus](err); ok {
 		err = status.Errno()
 	}
 	return errors.Is(err, windows.ERROR_SHARING_VIOLATION)
@@ -1754,7 +1816,7 @@ func removeWindowsEntryAt(
 	relative string,
 	transition func(string) error,
 ) error {
-	for attempt := 0; attempt < cleanupMutationLimit; attempt++ {
+	for range cleanupMutationLimit {
 		handle, err := openWindowsRelative(
 			parent, name, windows.FILE_OPEN,
 			windows.FILE_OPEN_REPARSE_POINT|windows.FILE_OPEN_FOR_BACKUP_INTENT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
@@ -1870,8 +1932,7 @@ func reopenWindowsDirectory(handle windows.Handle) (windows.Handle, error) {
 }
 
 func windowsDirectoryNotEmpty(err error) bool {
-	var status windows.NTStatus
-	if errors.As(err, &status) {
+	if status, ok := errors.AsType[windows.NTStatus](err); ok {
 		err = status.Errno()
 	}
 	return errors.Is(err, windows.ERROR_DIR_NOT_EMPTY)
@@ -1892,8 +1953,7 @@ func windowsPathAbsent(err error) bool {
 	if err == nil {
 		return false
 	}
-	var status windows.NTStatus
-	if errors.As(err, &status) {
+	if status, ok := errors.AsType[windows.NTStatus](err); ok {
 		err = status.Errno()
 	}
 	return errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND)

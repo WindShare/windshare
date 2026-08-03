@@ -179,10 +179,7 @@ func readTerminationControl(
 			if remaining <= 0 {
 				return ownerprotocol.Control{}, false, errors.New("termination control exceeds its bounded frame")
 			}
-			readSize := int(available)
-			if readSize > remaining {
-				readSize = remaining
-			}
+			readSize := min(int(available), remaining)
 			chunk := make([]byte, readSize)
 			count, readErr := file.Read(chunk)
 			encoded = append(encoded, chunk[:count]...)

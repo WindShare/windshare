@@ -34,4 +34,33 @@ function New-WindShareTestRunID {
     return $runID
 }
 
-Export-ModuleMember -Function New-WindShareTestRunID
+function Invoke-WithWindShareTestRunID {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[a-z0-9-]+$')]
+        [string]$Suite,
+
+        [Parameter(Mandatory)]
+        [scriptblock]$Body
+    )
+
+    $hadRunID = Test-Path Env:WINDSHARE_TEST_RUN_ID
+    $previousRunID = $env:WINDSHARE_TEST_RUN_ID
+    $runID = New-WindShareTestRunID -Suite $Suite
+    try {
+        $env:WINDSHARE_TEST_RUN_ID = $runID
+        & $Body $runID
+    } finally {
+        if ($hadRunID) {
+            $env:WINDSHARE_TEST_RUN_ID = $previousRunID
+        } else {
+            Remove-Item Env:WINDSHARE_TEST_RUN_ID -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Export-ModuleMember -Function @(
+    'New-WindShareTestRunID',
+    'Invoke-WithWindShareTestRunID'
+)

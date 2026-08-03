@@ -95,7 +95,7 @@ func platformPathKey(path string) string {
 	return filepath.Clean(path)
 }
 
-func platformPathAlias(left, right string) bool {
+func platformPathAlias(_, _ string) bool {
 	return false
 }
 
@@ -115,7 +115,7 @@ func currentProcessToken() (string, error) {
 	return "", errUnsupportedPublicationPlatform
 }
 
-func processMatches(processID int, token string) (bool, error) {
+func processMatches(_ int, _ string) (bool, error) {
 	return false, errUnsupportedPublicationPlatform
 }
 

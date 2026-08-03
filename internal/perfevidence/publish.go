@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -23,9 +24,7 @@ const (
 	manifestName             = "manifest.json"
 	stageOwnerName           = "owner.json"
 	abandonedStageMinimumAge = 24 * time.Hour
-	evidenceStoreReadBatch   = 128
 	evidenceFileReadBatch    = 64 << 10
-	rollbackNameAttempts     = 4
 )
 
 // EvidenceStoreBudget is the single resource contract for untrusted evidence
@@ -75,45 +74,6 @@ type evidenceStoreWalk struct {
 	skipFiles map[string]struct{}
 }
 
-func (walk *evidenceStoreWalk) observeDirectory(relative string) error {
-	if walk == nil || walk.meter == nil {
-		return errors.New("evidence store walk has no shared meter")
-	}
-	return walk.meter.observeDirectory(relative, evidenceRelativeDepth(relative))
-}
-
-func (walk *evidenceStoreWalk) observeFile(
-	relative string,
-	file *os.File,
-	info os.FileInfo,
-) error {
-	if walk == nil || walk.meter == nil {
-		return errors.New("evidence store walk has no shared meter")
-	}
-	if _, alreadyCounted := walk.skipFiles[relative]; !alreadyCounted {
-		if err := walk.meter.observeFile(
-			relative, evidenceRelativeDepth(relative), info.Size(), evidenceFileClass(relative),
-		); err != nil {
-			return err
-		}
-	}
-	if walk.visitor != nil {
-		return walk.visitor(relative, file, info)
-	}
-	return nil
-}
-
-func evidenceFileClass(relative string) evidenceStoreFileClass {
-	switch filepath.ToSlash(relative) {
-	case manifestName, stageOwnerName:
-		return evidenceMetadataFile
-	case payloadName:
-		return evidencePayloadFile
-	default:
-		return evidenceArtifactFile
-	}
-}
-
 func newEvidenceStoreMeter(budget EvidenceStoreBudget) (*evidenceStoreMeter, error) {
 	if budget.MaxRootEntries <= 0 || budget.MaxObjects <= 0 || budget.MaxDepth <= 0 ||
 		budget.MaxMetadataBytes <= 0 || budget.MaxPayloadBytes <= 0 || budget.MaxTotalBytes <= 0 {
@@ -125,24 +85,12 @@ func newEvidenceStoreMeter(budget EvidenceStoreBudget) (*evidenceStoreMeter, err
 	return &evidenceStoreMeter{budget: budget}, nil
 }
 
-func defaultEvidenceStoreMeter() *evidenceStoreMeter {
-	meter, err := newEvidenceStoreMeter(DefaultEvidenceStoreBudget())
-	if err != nil {
-		panic(err)
-	}
-	return meter
-}
-
 func (meter *evidenceStoreMeter) observeRootEntries(count int) error {
 	if count < 0 || meter.rootEntries > meter.budget.MaxRootEntries-count {
 		return fmt.Errorf("evidence root exceeds %d entries", meter.budget.MaxRootEntries)
 	}
 	meter.rootEntries += count
 	return nil
-}
-
-func (meter *evidenceStoreMeter) observeDirectory(relative string, depth int) error {
-	return meter.observeObject(relative, depth, 0, evidenceArtifactFile)
 }
 
 func (meter *evidenceStoreMeter) observeFile(
@@ -188,14 +136,6 @@ func (meter *evidenceStoreMeter) observeObject(
 	meter.objects++
 	meter.totalBytes += bytes
 	return nil
-}
-
-func evidenceRelativeDepth(relative string) int {
-	clean := filepath.ToSlash(filepath.Clean(relative))
-	if clean == "." || clean == "" {
-		return 1
-	}
-	return strings.Count(clean, "/") + 1
 }
 
 var ErrAlreadyPublished = errors.New("performance evidence already exists")
@@ -1143,10 +1083,6 @@ func VerifyPublicationWithBudget(path, expectedID string, budget EvidenceStoreBu
 	return errors.Join(verifyPublicationAuthorityWithBudget(authority, expectedID, budget), authority.close())
 }
 
-func verifyPublicationAuthority(authority *stageDirectoryAuthority, expectedID string) error {
-	return verifyPublicationAuthorityWithBudget(authority, expectedID, DefaultEvidenceStoreBudget())
-}
-
 func verifyPublicationAuthorityWithBudget(
 	authority *stageDirectoryAuthority,
 	expectedID string,
@@ -1362,12 +1298,7 @@ func verifyBoundArtifact(
 }
 
 func commandClaimsArtifact(command CommandEvidence, identity ArtifactFile) bool {
-	for _, produced := range command.Artifacts {
-		if produced == identity {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(command.Artifacts, identity)
 }
 
 func validSHA256(value string) bool {
@@ -1428,14 +1359,6 @@ func inspectArtifactsAuthorityWithMeter(
 	return artifacts, nil
 }
 
-func readAuthorityFile(
-	authority *stageDirectoryAuthority,
-	name string,
-) (content []byte, resultErr error) {
-	meter := defaultEvidenceStoreMeter()
-	return readAuthorityFileWithMeter(authority, name, evidenceMetadataFile, meter)
-}
-
 func readAuthorityFileWithMeter(
 	authority *stageDirectoryAuthority,
 	name string,
@@ -1462,10 +1385,7 @@ func readAuthorityFileWithMeter(
 	}
 	buffer := make([]byte, evidenceFileReadBatch)
 	for offset := 0; offset < len(first); {
-		length := len(first) - offset
-		if length > len(buffer) {
-			length = len(buffer)
-		}
+		length := min(len(first)-offset, len(buffer))
 		chunk := buffer[:length]
 		if _, err := io.ReadFull(file, chunk); err != nil {
 			return nil, err
@@ -1504,7 +1424,7 @@ func artifactIdentityFromOpenFile(file *os.File, info os.FileInfo, relative stri
 		return ArtifactFile{}, fmt.Errorf("artifact %s has a negative size", relative)
 	}
 	hashes := make([]string, 0, 2)
-	for pass := 0; pass < 2; pass++ {
+	for range 2 {
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			return ArtifactFile{}, err
 		}

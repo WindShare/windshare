@@ -569,7 +569,7 @@ func linuxNamespaceProcessMatches(hostID, namespaceID int, namespaceDevice, name
 	if err := errors.Join(readErr, closeErr); err != nil {
 		return false, err
 	}
-	for _, line := range strings.Split(string(content), "\n") {
+	for line := range strings.SplitSeq(string(content), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 || fields[0] != "NSpid:" {
 			continue
@@ -881,14 +881,6 @@ func (input *platformPromotedInput) close() error {
 	return errors.Join(closeErr, unmountErr, writableErr, removeErr, resealErr)
 }
 
-func linuxTreeSHA256(rootFD int) (string, error) {
-	budget := productionMutationTraversalBudget()
-	if err := budget.admitCandidate("source"); err != nil {
-		return "", err
-	}
-	return linuxTreeSHA256WithBudget(rootFD, budget)
-}
-
 func linuxTreeSHA256WithBudget(rootFD int, budget *mutationTraversalBudget) (string, error) {
 	records, err := walkLinuxTree(rootFD, "", "", budget, 0)
 	if err != nil {
@@ -896,14 +888,6 @@ func linuxTreeSHA256WithBudget(rootFD int, budget *mutationTraversalBudget) (str
 	}
 	sort.Strings(records)
 	return hashBytes([]byte(strings.Join(records, "\n"))), nil
-}
-
-func copyLinuxTree(rootFD int, destination string) (string, error) {
-	budget := productionMutationTraversalBudget()
-	if err := budget.admitCandidate("source"); err != nil {
-		return "", err
-	}
-	return copyLinuxTreeWithBudget(rootFD, destination, budget)
 }
 
 func copyLinuxTreeWithBudget(rootFD int, destination string, budget *mutationTraversalBudget) (string, error) {

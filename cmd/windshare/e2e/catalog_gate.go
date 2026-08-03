@@ -142,7 +142,7 @@ func (gate *catalogEnumerationGate) AdmitDirectoryScan(
 
 func (gate *catalogEnumerationGate) serve() {
 	defer close(gate.done)
-	for attempt := 0; attempt < catalogGateMaximumAttempts; attempt++ {
+	for range catalogGateMaximumAttempts {
 		connection, err := gate.listener.Accept()
 		if err != nil {
 			gate.mu.Lock()

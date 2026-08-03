@@ -145,7 +145,7 @@ func TestWindowsAuthorityDirectoryInventoryDeduplicatesLargeTargetSets(t *testin
 	}
 	const targetCount = 20_000
 	targets := make([]snapshotValidationTarget, 0, targetCount)
-	for index := 0; index < targetCount; index++ {
+	for index := range targetCount {
 		targets = append(targets, snapshotValidationTarget{
 			LogicalPath:  fmt.Sprintf("target-%d", index),
 			PhysicalPath: filepath.Join(nested, fmt.Sprintf("target-%d", index)),

@@ -5,12 +5,12 @@
 set -euo pipefail
 
 if (( $# != 0 )); then
-  echo 'network-completion.sh does not accept positional operands' >&2
+  echo 'browser-network.sh does not accept positional operands' >&2
   exit 2
 fi
 
 script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-repository_root="$(cd -- "$script_directory/../../../.." && pwd -P)"
+repository_root="$(cd -- "$script_directory/../../.." && pwd -P)"
 cd "$repository_root"
 if [[ -z "${BROWSER_NETWORK_COMPLETION:-}" ]]; then
   # Public Make owns the canonical local path. Hosted full validation replaces

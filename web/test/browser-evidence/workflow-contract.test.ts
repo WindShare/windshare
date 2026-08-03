@@ -51,10 +51,10 @@ const platformScripts = Object.freeze(Object.fromEntries([
     ].map((name) => [
       `${platform}/${name}`,
       repositoryFile(`scripts/ci/${platform}/${name}.${platform === 'windows' ? 'ps1' : 'sh'}`),
-    ])),
+  ])),
   ['windows/browser-smoke', repositoryFile('scripts/ci/windows/browser/smoke.ps1')],
   ['windows/browser-network', repositoryFile('scripts/ci/windows/browser-network.ps1')],
-  ['linux/browser-network', repositoryFile('scripts/ci/linux/browser/network-completion.sh')],
+  ['linux/browser-network', repositoryFile('scripts/ci/linux/browser-network.sh')],
   ['linux/browser-network-prepare', repositoryFile('scripts/ci/linux/browser/prepare.sh')],
 ]))
 const fullBrowserOperationPlan = readFullBrowserOperationPlan(orchestratorModule)

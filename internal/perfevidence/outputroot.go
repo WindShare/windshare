@@ -16,13 +16,6 @@ type directoryIdentity struct {
 	object uint64
 }
 
-func requireDirectChildName(name string) error {
-	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
-		return fmt.Errorf("filesystem authority child %q is not a direct name", name)
-	}
-	return nil
-}
-
 func validateEvidenceOutputRoot(
 	ctx context.Context,
 	runner CommandRunner,

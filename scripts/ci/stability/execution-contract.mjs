@@ -449,8 +449,7 @@ function validateIntegrationAuthority(source, operatingSystem, authority) {
         "Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force",
         '$null = Enter-WindShareGoAuthority',
         "Import-Module (Join-Path $ciRoot 'test-run-id.psm1') -Force",
-        "$runID = New-WindShareTestRunID -Suite 'integration'",
-        '$env:WINDSHARE_TEST_RUN_ID = $runID',
+        "Invoke-WithWindShareTestRunID -Suite 'integration' -Body {",
         'node scripts/ci/stability/result.mjs started',
         authority.integrationCommand,
       ]

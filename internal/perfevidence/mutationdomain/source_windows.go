@@ -134,14 +134,6 @@ func stageSealedInputs(
 	return filepath.Join(privateRootPath, manifestLeaf), nil
 }
 
-func acquireRetainedWindowsSource(path string) (*retainedWindowsSource, error) {
-	budget := productionMutationTraversalBudget()
-	if err := budget.admitCandidate("source"); err != nil {
-		return nil, err
-	}
-	return acquireRetainedWindowsSourceWithBudget(path, budget)
-}
-
 func acquireRetainedWindowsSourceWithBudget(path string, budget *mutationTraversalBudget) (*retainedWindowsSource, error) {
 	root, information, err := openRetainedWindowsSourceObject(0, windowsNTPath(path), true)
 	if err != nil {
@@ -307,19 +299,6 @@ func (source *retainedWindowsSource) close() error {
 	source.directories = nil
 	source.root = 0
 	return errors.Join(errs...)
-}
-
-func copySealedFileAbsolute(
-	source io.Reader,
-	path string,
-	creator sealedObjectCreator,
-	retain bool,
-) (*os.File, string, error) {
-	handle, err := creator.create(0, windowsNTPath(path), false)
-	if err != nil {
-		return nil, "", err
-	}
-	return copySealedFileHandle(source, handle, path, retain)
 }
 
 func copySealedFile(

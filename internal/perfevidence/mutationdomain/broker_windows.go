@@ -728,30 +728,6 @@ func createPrivateAppContainer(configuration initialization, retainedImage *os.F
 	return authority, nil
 }
 
-func openSealedHelperImage(path string) (windows.Handle, error) {
-	name, err := windows.NewNTUnicodeString(windowsNTPath(path))
-	if err != nil {
-		return windows.InvalidHandle, err
-	}
-	attributes := &windows.OBJECT_ATTRIBUTES{
-		Length: uint32(unsafe.Sizeof(windows.OBJECT_ATTRIBUTES{})), ObjectName: name,
-		Attributes: windows.OBJ_CASE_INSENSITIVE | windows.OBJ_DONT_REPARSE,
-	}
-	desired := uint32(
-		windows.FILE_READ_DATA | windows.FILE_READ_ATTRIBUTES | windows.FILE_READ_EA |
-			windows.FILE_EXECUTE | windows.SYNCHRONIZE,
-	)
-	var handle windows.Handle
-	var status windows.IO_STATUS_BLOCK
-	err = windows.NtCreateFile(
-		&handle, desired, attributes, &status, nil, 0, windows.FILE_SHARE_READ,
-		windows.FILE_OPEN,
-		windows.FILE_NON_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
-		0, 0,
-	)
-	return handle, err
-}
-
 func appContainerFolderPath(packageSID *windows.SID) (string, error) {
 	encodedSID, err := windows.UTF16PtrFromString(packageSID.String())
 	if err != nil {
@@ -1067,13 +1043,6 @@ func sealWindowsKernelHandleDACL(handle windows.Handle, descriptorText string) e
 	)
 }
 
-func sealWindowsFileDACL(file *os.File, descriptorText string) error {
-	if file == nil {
-		return errors.New("file DACL authority is unavailable")
-	}
-	return sealWindowsHandleDACL(windows.Handle(file.Fd()), descriptorText)
-}
-
 func sealWindowsHandleDACL(handle windows.Handle, descriptorText string) error {
 	if handle == 0 || handle == windows.InvalidHandle {
 		return errors.New("DACL authority handle is unavailable")
@@ -1135,18 +1104,6 @@ func verifyPrivateAppContainerProcess(process windows.Handle, identity appContai
 		return fmt.Errorf("open AppContainer process token: %w", err)
 	}
 	return errors.Join(verifyPrivateAppContainerToken(token, identity), token.Close())
-}
-
-func appContainerProcessClaimForProcess(process windows.Handle) (appContainerProcessClaim, error) {
-	if process == 0 || process == windows.InvalidHandle {
-		return appContainerProcessClaim{}, errors.New("AppContainer process handle is unavailable")
-	}
-	var token windows.Token
-	if err := windows.OpenProcessToken(process, windows.TOKEN_QUERY, &token); err != nil {
-		return appContainerProcessClaim{}, err
-	}
-	claim, claimErr := appContainerProcessClaimForToken(token)
-	return claim, errors.Join(claimErr, token.Close())
 }
 
 func verifyPrivateAppContainerToken(token windows.Token, identity appContainerIdentity) error {
@@ -1812,8 +1769,8 @@ func finalWindowsHandlePath(handle windows.Handle) (string, error) {
 
 func normalizeWindowsPath(path string) string {
 	clean := filepath.Clean(path)
-	if strings.HasPrefix(clean, `\\?\UNC\`) {
-		return `\\` + strings.TrimPrefix(clean, `\\?\UNC\`)
+	if uncPath, found := strings.CutPrefix(clean, `\\?\UNC\`); found {
+		return `\\` + uncPath
 	}
 	return strings.TrimPrefix(clean, `\\?\`)
 }

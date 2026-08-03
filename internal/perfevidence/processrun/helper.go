@@ -5,6 +5,10 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/windshare/windshare/internal/processowner/protocol"
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -31,13 +35,20 @@ func MaybeRunHelper(arguments []string, input io.Reader) (bool, int) {
 	return true, 0
 }
 
-func ownerHelperEnvironment(environment []string) []string {
-	result := make([]string, 0, len(environment)+1)
-	prefix := helperRoleEnvironment + "="
-	for _, entry := range environment {
-		if !strings.EqualFold(strings.SplitN(entry, "=", 2)[0], helperRoleEnvironment) {
-			result = append(result, entry)
+func boundedDiagnostic(err error) string {
+	message := "start authority rejected"
+	if err != nil {
+		message = strings.ReplaceAll(err.Error(), "\x00", " ")
+		message = norm.NFC.String(message)
+	}
+	if message == "" {
+		message = "start authority rejected"
+	}
+	if len(message) > protocol.MaximumDiagnosticBytes {
+		message = message[:protocol.MaximumDiagnosticBytes]
+		for !utf8.ValidString(message) {
+			message = message[:len(message)-1]
 		}
 	}
-	return append(result, prefix+helperRoleValue)
+	return message
 }

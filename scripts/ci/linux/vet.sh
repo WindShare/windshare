@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# CI-parity vet gate (Linux). Mirrors:
-#  - the vet analysis of ci.yml go-root and go-core (native GOOS=linux — the
-#    ubuntu analysis path of work-plan §10.2).
-#  - ci.yml windows-tests' vet steps via a GOOS=windows cross-vet of both
-#    modules, so Windows-tagged files are analyzed, not just compiled.
-#  - ci.yml gowork-off-root: the released-core consumer build. The stronger
+# CI-parity vet gate (Linux). Mirrors the current-commit Linux authority:
+#  - native GOOS=linux vet analysis of both modules.
+#  - the Windows authority via a GOOS=windows cross-vet of both modules, so
+#    Windows-tagged files are analyzed, not just compiled.
+#  - the released-core consumer build formerly isolated in its own workflow job. The stronger
 #    core invariant lives in the separate extracted-artifact `core-release`
 #    gate, where no parent repository or go.work can mask a missing file.
 #
