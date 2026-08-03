@@ -312,12 +312,18 @@ function testIntegrationEntrypointModes(root) {
       '',
     ].join('\n'))
     writeFileSync(join(ciRoot, 'test-run-id.psm1'), [
-      'function New-WindShareTestRunID {',
-      '    param([Parameter(Mandatory)][string]$Suite)',
+      'function Invoke-WithWindShareTestRunID {',
+      '    param([Parameter(Mandatory)][string]$Suite, [Parameter(Mandatory)][scriptblock]$Body)',
       "    if ($Suite -cne 'integration') { throw 'unexpected integration probe suite' }",
-      "    return 'integration-probe'",
+      '    $previous = $env:WINDSHARE_TEST_RUN_ID',
+      '    try {',
+      "        $env:WINDSHARE_TEST_RUN_ID = 'integration-probe'",
+      "        & $Body 'integration-probe'",
+      '    } finally {',
+      '        $env:WINDSHARE_TEST_RUN_ID = $previous',
+      '    }',
       '}',
-      "Export-ModuleMember -Function 'New-WindShareTestRunID'",
+      "Export-ModuleMember -Function 'Invoke-WithWindShareTestRunID'",
       '',
     ].join('\n'))
     command = 'pwsh.exe'

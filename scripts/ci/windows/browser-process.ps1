@@ -10,13 +10,10 @@ Set-Location $repositoryRoot
 Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
 $null = Enter-WindShareGoAuthority
 Import-Module (Join-Path $ciRoot 'test-run-id.psm1') -Force
-$hadRunID = Test-Path Env:WINDSHARE_TEST_RUN_ID
-$previousRunID = $env:WINDSHARE_TEST_RUN_ID
-$runID = New-WindShareTestRunID -Suite 'browser-process'
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
-try {
-    $env:WINDSHARE_TEST_RUN_ID = $runID
+Invoke-WithWindShareTestRunID -Suite 'browser-process' -Body {
+    param([string]$RunID)
     Write-Output "== browser-process: run_id=$runID =="
     Invoke-WindShareGoConsumer pnpm -C web run test:browser:process:integration
     if ($LASTEXITCODE -ne 0) {
@@ -27,10 +24,4 @@ try {
         throw "Windows process ownership stack tests exited with code $LASTEXITCODE"
     }
     Write-Output ('== browser-process: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)
-} finally {
-    if ($hadRunID) {
-        $env:WINDSHARE_TEST_RUN_ID = $previousRunID
-    } else {
-        Remove-Item Env:WINDSHARE_TEST_RUN_ID -ErrorAction SilentlyContinue
-    }
 }

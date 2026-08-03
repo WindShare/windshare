@@ -24,15 +24,6 @@ func treeSHA256WithBudget(root string, budget *mutationTraversalBudget) (string,
 	return walkPathTree(root, "", budget)
 }
 
-func copyTree(source, destination string) error {
-	budget := productionMutationTraversalBudget()
-	if err := budget.admitCandidate("source"); err != nil {
-		return err
-	}
-	_, err := copyTreeWithBudget(source, destination, budget)
-	return err
-}
-
 func copyTreeWithBudget(source, destination string, budget *mutationTraversalBudget) (string, error) {
 	if err := os.MkdirAll(destination, 0o700); err != nil {
 		return "", err

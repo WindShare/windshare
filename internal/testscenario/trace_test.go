@@ -172,7 +172,7 @@ func TestMarkFunctionalSuccessLinearizesAgainstConcurrentPhaseStart(t *testing.T
 		phase *Phase
 		err   error
 	}
-	for attempt := 0; attempt < attempts; attempt++ {
+	for attempt := range attempts {
 		trace, events := newRecordedTrace(t)
 		start := make(chan struct{})
 		started := make(chan startResult, 1)
@@ -260,7 +260,7 @@ func TestMarkFunctionalSuccessLinearizesAgainstConcurrentPointMutations(t *testi
 	}
 	for _, mutation := range mutations {
 		t.Run(mutation.name, func(t *testing.T) {
-			for attempt := 0; attempt < attempts; attempt++ {
+			for attempt := range attempts {
 				trace, _ := newRecordedTrace(t)
 				cleanupCalled := false
 				mutate := mutation.build(&cleanupCalled)
@@ -301,7 +301,7 @@ func TestMarkFunctionalSuccessLinearizesAgainstConcurrentPointMutations(t *testi
 
 func TestMarkFunctionalSuccessLinearizesAgainstConcurrentPhaseSettlement(t *testing.T) {
 	const attempts = 256
-	for attempt := 0; attempt < attempts; attempt++ {
+	for attempt := range attempts {
 		trace, events := newRecordedTrace(t)
 		phase, err := trace.StartPhase(testPhaseMilestone, nil)
 		if err != nil {

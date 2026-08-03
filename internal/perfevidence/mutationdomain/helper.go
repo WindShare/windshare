@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -453,7 +454,7 @@ func (state *helperState) rewriteCommand(command perfevidence.MutationDomainComm
 		}
 		isolated := filepath.Join(
 			state.privateRoot, privateOutputDirectory,
-			hashBytes([]byte(fmt.Sprintf("%s\x00%d", hostPath, state.generation))),
+			hashBytes(fmt.Appendf(nil, "%s\x00%d", hostPath, state.generation)),
 		)
 		state.generation++
 		if _, exists := commandOutputs[hostPath]; exists {
@@ -499,9 +500,7 @@ func (state *helperState) rewriteCommand(command perfevidence.MutationDomainComm
 		}
 	}
 	sort.Strings(result.Environment)
-	for hostPath, isolated := range commandOutputs {
-		state.outputs[hostPath] = isolated
-	}
+	maps.Copy(state.outputs, commandOutputs)
 	return result, nil
 }
 
@@ -794,21 +793,6 @@ func (state *helperState) outputFrame(output perfevidence.MutationOutput) (frame
 			)
 		},
 	}, nil
-}
-
-func promotedArtifactName(semanticPath string) string {
-	extension := filepath.Ext(filepath.Base(semanticPath))
-	if len(extension) > 16 {
-		return "artifact"
-	}
-	for _, character := range extension {
-		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
-			(character >= '0' && character <= '9') || character == '.' || character == '_' || character == '-' {
-			continue
-		}
-		return "artifact"
-	}
-	return "artifact" + extension
 }
 
 func bytesFrame(name string, content []byte) frameSource {

@@ -72,16 +72,14 @@ func TestRunGeneratesUniqueOperationsConcurrently(t *testing.T) {
 	failures := make(chan error, operations)
 	var wait sync.WaitGroup
 	for range operations {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			operation, err := run.NewOperation("concurrent-scenario")
 			if err != nil {
 				failures <- err
 				return
 			}
 			identities <- operation.ID()
-		}()
+		})
 	}
 	wait.Wait()
 	close(failures)

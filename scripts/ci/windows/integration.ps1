@@ -39,13 +39,10 @@ Set-Location $repositoryRoot
 Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
 $null = Enter-WindShareGoAuthority
 Import-Module (Join-Path $ciRoot 'test-run-id.psm1') -Force
-$hadRunID = Test-Path Env:WINDSHARE_TEST_RUN_ID
-$previousRunID = $env:WINDSHARE_TEST_RUN_ID
-$runID = New-WindShareTestRunID -Suite 'integration'
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
-try {
-    $env:WINDSHARE_TEST_RUN_ID = $runID
+Invoke-WithWindShareTestRunID -Suite 'integration' -Body {
+    param([string]$RunID)
     Write-Output "== integration: run_id=$runID stability_evidence=$stabilityEvidenceMode =="
     # Stability evidence begins only after retained Go and run identity have settled.
     if ($stabilityEvidenceMode -eq 'authenticated') {
@@ -60,10 +57,4 @@ try {
         throw "integration tests exited with code $LASTEXITCODE"
     }
     Write-Output ('== integration: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)
-} finally {
-    if ($hadRunID) {
-        $env:WINDSHARE_TEST_RUN_ID = $previousRunID
-    } else {
-        Remove-Item Env:WINDSHARE_TEST_RUN_ID -ErrorAction SilentlyContinue
-    }
 }

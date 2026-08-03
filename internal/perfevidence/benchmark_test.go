@@ -16,10 +16,10 @@ func TestParseValidateAndAggregateBenchmarkSamples(t *testing.T) {
 	}
 	var samples []BenchmarkSample
 	for index, duration := range []int{9, 1, 7, 3, 5} {
-		output := []byte(fmt.Sprintf(
+		output := fmt.Appendf(nil,
 			"goos: windows\nBenchmarkUnit/size=1-16 100 %d ns/op 8 B/op 2 allocs/op 1 objects/op\nPASS\n",
 			duration,
-		))
+		)
 		rows, err := ParseBenchmarkOutput(output)
 		if err != nil {
 			t.Fatal(err)

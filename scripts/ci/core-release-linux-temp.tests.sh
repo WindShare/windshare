@@ -46,6 +46,16 @@ assert_not_contains() {
   fi
 }
 
+workflow_job_source() {
+  local path="$1"
+  local job="$2"
+  awk -v header="  ${job}:" '
+    $0 == header { capture = 1 }
+    capture && $0 != header && $0 ~ /^  [a-z0-9][a-z0-9-]*:$/ { exit }
+    capture { print }
+  ' "$path"
+}
+
 echo "-- Linux private release-root lifecycle"
 windshare_linux_prepare_release_environment "$repository_root"
 release_root="$WINDSHARE_LINUX_RELEASE_TEMP_ROOT"
@@ -105,7 +115,8 @@ assert_contains ".github/workflows/ci.yml" '- "core-candidate/v*/**"'
 assert_contains ".github/workflows/current-commit.yml" 'CORE_ARTIFACT_VERSION: "v0.0.0-ci"'
 assert_contains ".github/workflows/current-commit.yml" 'run: bash scripts/ci/linux/core-release.sh "$CORE_ARTIFACT_VERSION" "$GITHUB_SHA" linux-ext4'
 assert_not_contains ".github/workflows/current-commit.yml" 'core-release.sh v0.3.0'
-assert_contains ".github/workflows/current-commit.yml" 'gowork-off-root:'
+assert_not_contains ".github/workflows/current-commit.yml" 'gowork-off-root:'
+assert_contains "scripts/ci/linux/vet.sh" 'GOWORK=off windshare_go build ./...'
 assert_contains ".github/workflows/core-release.yml" 'uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7'
 assert_contains ".github/workflows/core-release.yml" 'uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6'
 assert_contains ".github/workflows/core-release.yml" '- "!core/v0.3.0"'
@@ -133,7 +144,7 @@ if [ "$(grep -Fc -- 'go-version-file: core/go.mod' .github/workflows/core-releas
    grep -Fq -- 'go-version-file: go.work' .github/workflows/core-release.yml; then
   fail "core release jobs do not derive an uncached toolchain from core/go.mod"
 fi
-ordinary_release_job="$(sed -n '/^  core-release:$/,/^  gowork-off-root:$/p' .github/workflows/current-commit.yml)"
+ordinary_release_job="$(workflow_job_source .github/workflows/current-commit.yml core-release)"
 if ! grep -Fq -- 'go-version-file: core/go.mod' <<<"$ordinary_release_job" ||
    ! grep -Fq -- 'cache: false' <<<"$ordinary_release_job" ||
    ! grep -Fq -- 'timeout-minutes: 60' <<<"$ordinary_release_job" ||
@@ -143,7 +154,7 @@ fi
 assert_contains "scripts/ci/core-release-ref.sh" 'object_type" != "commit"'
 assert_contains "scripts/ci/core-release-ref.sh" 'require_direct_commit_ref "$candidate_ref" "$commit_sha"'
 assert_contains "Makefile" 'override CORE_ARTIFACT_VERSION := v0.0.0-ci'
-assert_contains "Makefile" 'bash scripts/ci/linux/core-release.sh "$(CORE_ARTIFACT_VERSION)" "$(CORE_ARTIFACT_COMMIT_SHA)"'
+assert_contains "Makefile" '"$(WINDSHARE_BASH_EXECUTABLE)" scripts/ci/linux/core-release.sh "$(CORE_ARTIFACT_VERSION)" "$(CORE_ARTIFACT_COMMIT_SHA)"'
 assert_not_contains "Makefile" 'CORE_RELEASE_VERSION'
 make_preview="$(make -n core-release CORE_ARTIFACT_VERSION=v0.3.0)"
 if ! grep -Fq -- 'v0.0.0-ci' <<<"$make_preview" ||
@@ -157,7 +168,7 @@ assert_contains "scripts/ci/core-release-linux-native.sh" 'compile_static_test_b
 assert_contains "scripts/ci/core-release-linux-native.sh" 'compile_static_test_binary ./osfs/internal/outputlinux "$outputlinux_test_binary"'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'mkfs.ext4 -q -F -N 1024 -I 256 -m 0'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'sudo -n unshare --mount --propagation private --fork --kill-child'
-assert_contains "scripts/ci/core-release-linux-native.sh" 'go tool test2json -t -p github.com/windshare/windshare/core/osfs'
+assert_contains "scripts/ci/core-release-linux-native.sh" '"$WINDSHARE_GO_EXECUTABLE" tool test2json -t -p github.com/windshare/windshare/core/osfs'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'TestLinuxExt4RestartIdentityRejectsForcedInodeReuse'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'TestLinuxExt4NativeCertification'
 assert_contains "scripts/ci/core-release-linux-native.sh" 'TestLinuxExt4ProcessRestartRecovery'
@@ -192,10 +203,10 @@ assert_contains "scripts/ci/core-release-checkout.psm1" "StartsWith('GIT_', [Str
 assert_contains "scripts/ci/core-release-checkout.psm1" "'hash-object', '--no-filters'"
 assert_contains "scripts/ci/_coremodulezip/main.go" '"ls-tree", "-r", "-z", "--full-tree", commitSHA'
 assert_contains "scripts/ci/_coremodulezip/main.go" '"cat-file", "blob", objectID'
-assert_contains "scripts/ci/linux/core-release.sh" 'go run ./scripts/ci/_corevulnerability'
+assert_contains "scripts/ci/linux/core-release.sh" 'GOWORK=off windshare_go run ./scripts/ci/_corevulnerability'
 assert_contains "scripts/ci/linux/core-release.sh" '-module "$artifact_root"'
 assert_contains "scripts/ci/linux/core-release.sh" '-cache "$temporary_root/vulnerability-cache"'
-assert_contains "scripts/ci/windows/core-release.ps1" 'go run ./scripts/ci/_corevulnerability'
+assert_contains "scripts/ci/windows/core-release.ps1" 'Invoke-WindShareGo run ./scripts/ci/_corevulnerability'
 assert_contains "scripts/ci/windows/core-release.ps1" '-module $artifactRoot'
 assert_contains "scripts/ci/windows/core-release.ps1" "-cache (Join-Path \$temporaryRoot 'vulnerability-cache')"
 assert_contains "scripts/ci/_corevulnerability/main.go" 'golang.org/x/vuln/cmd/govulncheck@v1.6.0'

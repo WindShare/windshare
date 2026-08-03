@@ -1,3 +1,5 @@
+//go:build linux || windows
+
 package processrun
 
 import (
@@ -6,21 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/windshare/windshare/internal/processowner/protocol"
-	"golang.org/x/text/unicode/norm"
 )
 
 const startAuthorityFailureCode = "start_authority_rejected"
 
 var errStartEvidenceUnavailable = errors.New("process-owner start evidence is unavailable")
-
-type startGateResult struct {
-	evidence *protocol.StartEvidence
-	err      error
-}
 
 func completeStartGate(
 	evidenceReader *os.File,
@@ -76,24 +70,6 @@ func completeStartGate(
 		}
 	}
 	return startGateResult{evidence: &evidence}
-}
-
-func boundedDiagnostic(err error) string {
-	message := "start authority rejected"
-	if err != nil {
-		message = strings.ReplaceAll(err.Error(), "\x00", " ")
-		message = norm.NFC.String(message)
-	}
-	if message == "" {
-		message = "start authority rejected"
-	}
-	if len(message) > protocol.MaximumDiagnosticBytes {
-		message = message[:protocol.MaximumDiagnosticBytes]
-		for !utf8.ValidString(message) {
-			message = message[:len(message)-1]
-		}
-	}
-	return message
 }
 
 func closeStartEndpoint(file *os.File) error {

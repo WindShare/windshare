@@ -15,9 +15,6 @@ Set-Location $repositoryRoot
 Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
 $null = Enter-WindShareGoAuthority
 Import-Module (Join-Path $ciRoot 'test-run-id.psm1') -Force
-$hadRunID = Test-Path Env:WINDSHARE_TEST_RUN_ID
-$previousRunID = $env:WINDSHARE_TEST_RUN_ID
-$runID = New-WindShareTestRunID -Suite 'coverage'
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 $coverageTool = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'
 # A fixed native-suite budget keeps platform parity independent of caller state.
@@ -41,8 +38,8 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
     }
 }
 
-try {
-    $env:WINDSHARE_TEST_RUN_ID = $runID
+Invoke-WithWindShareTestRunID -Suite 'coverage' -Body {
+    param([string]$RunID)
     Write-Output "== coverage: run_id=$runID =="
     try {
         Invoke-Step 'root module coverage tests' {
@@ -68,11 +65,5 @@ try {
         if (Test-Path -LiteralPath $profileDirectory -PathType Container) {
             Remove-Item -LiteralPath $profileDirectory -Recurse -Force
         }
-    }
-} finally {
-    if ($hadRunID) {
-        $env:WINDSHARE_TEST_RUN_ID = $previousRunID
-    } else {
-        Remove-Item Env:WINDSHARE_TEST_RUN_ID -ErrorAction SilentlyContinue
     }
 }

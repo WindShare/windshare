@@ -223,7 +223,7 @@ browser-network: authority-context
 ifeq ($(HOST_GOOS),windows)
 	"$(WINDSHARE_PWSH_EXECUTABLE)" -NoLogo -NoProfile -NonInteractive -File scripts/ci/windows/browser-network.ps1
 else
-	"$(WINDSHARE_BASH_EXECUTABLE)" scripts/ci/linux/browser/network-completion.sh
+	"$(WINDSHARE_BASH_EXECUTABLE)" scripts/ci/linux/browser-network.sh
 endif
 
 # Plan targets expose graph membership without GNU Make's execution-suppressing

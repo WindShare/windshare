@@ -21,7 +21,6 @@ const (
 	helperRoleEnvironment     = "WINDSHARE_PERFEVIDENCE_MUTATION_HELPER"
 	maximumProtocolLine       = 1 << 20
 	maximumCapturedBytes      = 32 << 20
-	privateRootDirectory      = "private-mutation-domain"
 	privateInputDirectory     = "inputs"
 	privateOutputDirectory    = "outputs"
 	privateCacheDirectory     = "build-cache"
@@ -67,8 +66,8 @@ type response struct {
 	Fatal              bool      `json:"fatal,omitempty"`
 	NamespaceProcessID int       `json:"namespaceProcessId,omitempty"`
 	ExitCode           int       `json:"exitCode"`
-	StartedAt          time.Time `json:"startedAt,omitempty"`
-	FinishedAt         time.Time `json:"finishedAt,omitempty"`
+	StartedAt          time.Time `json:"startedAt,omitzero"`
+	FinishedAt         time.Time `json:"finishedAt,omitzero"`
 	Frames             []frame   `json:"frames,omitempty"`
 }
 
@@ -84,10 +83,7 @@ func (buffer *limitedBuffer) Write(content []byte) (int, error) {
 	defer buffer.mu.Unlock()
 	remaining := buffer.limit - buffer.buffer.Len()
 	if remaining > 0 {
-		kept := len(content)
-		if kept > remaining {
-			kept = remaining
-		}
+		kept := min(len(content), remaining)
 		_, _ = buffer.buffer.Write(content[:kept])
 	}
 	if len(content) > remaining {

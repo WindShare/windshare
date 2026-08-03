@@ -357,7 +357,7 @@ func discoverAndPrefetchWorkloads(
 		// Network access is confined to dependency acquisition; every identity
 		// traversal below is offline and starts only after module verification.
 		if _, err := listWorkloadGraph(
-			ctx, runner, environment, repositoryRoot, repositoryRoot, workload, overlay, true,
+			ctx, runner, environment, repositoryRoot, workload, overlay, true,
 		); err != nil {
 			return nil, fmt.Errorf("prefetch workload %s dependencies: %w", workload.ID, err)
 		}
@@ -379,7 +379,7 @@ func inventoryLiveWorkloads(
 	inventories := make(map[string]workloadInventory, len(workloads))
 	for _, workload := range workloads {
 		inventory, err := listWorkloadGraph(
-			ctx, runner, environment, repositoryRoot, repositoryRoot,
+			ctx, runner, environment, repositoryRoot,
 			workload, overlays[workload.ID], false,
 		)
 		if err != nil {
@@ -409,7 +409,7 @@ func materializeSnapshotWorkloads(
 	if err := os.MkdirAll(workspaceRoot, 0o700); err != nil {
 		return "", "", nil, nil, nil, fmt.Errorf("create source snapshot: %w", err)
 	}
-	union, err := materializeWorkspace(repositoryRoot, workspaceRoot, liveInventories)
+	union, err := materializeWorkspace(workspaceRoot, liveInventories)
 	if err != nil {
 		return "", "", nil, nil, nil, err
 	}
@@ -447,7 +447,7 @@ func verifyLiveClosuresUnchanged(
 ) error {
 	for _, workload := range workloads {
 		after, err := listWorkloadGraph(
-			ctx, runner, environment, repositoryRoot, repositoryRoot,
+			ctx, runner, environment, repositoryRoot,
 			workload, overlays[workload.ID], false,
 		)
 		if err != nil {
@@ -517,7 +517,6 @@ func listWorkloadGraph(
 	ctx context.Context,
 	runner CommandRunner,
 	environment controlledGoEnvironment,
-	repositoryRoot string,
 	workspaceRoot string,
 	workload Workload,
 	overlay workloadOverlay,
@@ -914,7 +913,6 @@ func effectiveModuleLocation(module *goListModule) (string, string, string) {
 }
 
 func materializeWorkspace(
-	repositoryRoot string,
 	workspaceRoot string,
 	inventories map[string]workloadInventory,
 ) ([]inventoryFile, error) {
@@ -1282,7 +1280,7 @@ func classifyCommittedInputs(
 
 func parseGitTree(encoded []byte) (map[string]string, error) {
 	result := make(map[string]string)
-	for _, record := range strings.Split(string(encoded), "\x00") {
+	for record := range strings.SplitSeq(string(encoded), "\x00") {
 		if record == "" {
 			continue
 		}
