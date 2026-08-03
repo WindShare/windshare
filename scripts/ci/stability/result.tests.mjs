@@ -204,6 +204,13 @@ assert.throws(() => createStabilityExecutionContract({
   sources: replaceSource(linuxSources, 'go-executable-authority', (source) =>
     `${source}\ngo() { :; }\n`),
 }), /must not redefine Go/u)
+assert.throws(() => createStabilityExecutionContract({
+  operatingSystem: 'linux',
+  sources: replaceSource(linuxSources, 'go-executable-authority', (source) => source.replace(
+    '/proc/$BASHPID/fd/$WINDSHARE_GO_DESCRIPTOR',
+    '/proc/$$/fd/$WINDSHARE_GO_DESCRIPTOR',
+  )),
+}), /missing retained-executable semantics/u)
 
 for (const { role, path } of linuxSources) {
   const comment = path.endsWith('.mjs') ? '// maintenance note' : '# maintenance note'
