@@ -344,6 +344,9 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
       - uses: pnpm/action-setup@v6
         with:
           package_json_file: web/package.json
