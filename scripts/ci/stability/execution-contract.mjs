@@ -540,7 +540,7 @@ function validateGoAuthority(source, operatingSystem) {
     ? [
         'windshare_enter_go_authority() {',
         'exec {WINDSHARE_GO_DESCRIPTOR}<"$candidate"',
-        'retained_executable="/proc/$$/fd/$WINDSHARE_GO_DESCRIPTOR"',
+        'retained_executable="/proc/$BASHPID/fd/$WINDSHARE_GO_DESCRIPTOR"',
         'GOENV=off GOTOOLCHAIN=local "$retained_executable"',
         'windshare_assert_go_authority_active() {',
         'windshare_go() {',
