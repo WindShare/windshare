@@ -26,7 +26,10 @@
 - During iteration: `make <gate>` (see `Makefile`).
 - Local CI: `make ci`.
 
-工具链不准固定版本，尽量使用大版本的latest，Golang使用最新latest。也包括所有 github action。本地直接使用本地工具链就行。尤其要拒绝为了版本问题写了一堆兜底代码，难以维护。
+### 其他
+
+- 工具链不准固定版本，尽量使用大版本的latest，Golang使用最新latest。也包括所有 github action。本地直接使用本地工具链就行。尤其要拒绝为了版本问题写了一堆兜底代码，难以维护。
+- 写计划文档的时候禁止写在文档里边写一堆验收条件，不准出现验收条件标题块，这导致实现了太多无关紧要的东西而忽略的产品真正的需求。
 
 ## Project Overview
 
