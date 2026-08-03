@@ -71,6 +71,15 @@ for name in GOFLAGS GOWORK GOOS GOARCH GOENV GOTOOLCHAIN GOROOT \
   WINDSHARE_GO_HOST_OS WINDSHARE_GO_HOST_ARCH; do
   unset "$name" || true
 done
+
+# Bash deliberately keeps $$ stable across ( ... ), so this boundary proves
+# descriptor retention follows the executing subshell rather than its parent.
+(
+  source "$authority_path"
+  windshare_enter_go_authority
+  windshare_go version >/dev/null
+)
+
 source "$authority_path"
 windshare_enter_go_authority
 baseline_version="$(windshare_go version)"

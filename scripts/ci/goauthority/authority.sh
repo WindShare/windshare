@@ -105,7 +105,9 @@ windshare_enter_go_authority() {
 
   exec {WINDSHARE_GO_DESCRIPTOR}<"$candidate"
   declare -gr WINDSHARE_GO_DESCRIPTOR
-  retained_executable="/proc/$$/fd/$WINDSHARE_GO_DESCRIPTOR"
+  # A parent-stable $$ addresses the wrong descriptor table when callers settle
+  # authority inside a Bash subshell; BASHPID identifies the actual FD owner.
+  retained_executable="/proc/$BASHPID/fd/$WINDSHARE_GO_DESCRIPTOR"
   if [[ ! -r "$retained_executable" ]]; then
     echo 'WindShare Go authority could not retain its Go application' >&2
     return 1
