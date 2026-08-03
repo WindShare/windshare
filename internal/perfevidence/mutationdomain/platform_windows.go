@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/windshare/windshare/internal/perfevidence/mutationdomain/windowsbroker"
 	"golang.org/x/sys/windows"
 )
 
@@ -77,7 +78,7 @@ func maybeRunPlatformBroker(arguments []string, stdin io.Reader, stdout, stderr 
 		if image == nil {
 			err = errors.New("retained broker image handle is unavailable")
 		} else {
-			err = runWindowsBroker(stdin, stdout, image)
+			err = windowsbroker.Run(stdin, stdout, image, stageSealedInputs)
 		}
 	}
 	if err != nil {
@@ -104,7 +105,7 @@ func preparePlatformTarget(process *exec.Cmd) (func() error, func() error, func(
 	if process.SysProcAttr == nil {
 		process.SysProcAttr = helperTargetProcessAttributes()
 	}
-	job, err := newKillOnCloseJob()
+	job, err := windowsbroker.NewKillOnCloseJob()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("create per-command Windows job: %w", err)
 	}
@@ -126,14 +127,14 @@ func preparePlatformTarget(process *exec.Cmd) (func() error, func() error, func(
 		var operationErr error
 		handleErr := process.Process.WithHandle(func(raw uintptr) {
 			handle := windows.Handle(raw)
-			if err := sealWindowsKernelHandleDACL(handle, appContainerProcessDescriptor(
+			if err := windowsbroker.SealKernelHandleDACL(handle, windowsbroker.AppContainerProcessDescriptor(
 				lifecycle.identity.traditionalUserSID,
 				lifecycle.identity.isolationCapabilitySID,
 			)); err != nil {
 				operationErr = fmt.Errorf("seal suspended Windows target process DACL: %w", err)
 				return
 			}
-			if err := verifyPrivateAppContainerProcess(handle, lifecycle.identity); err != nil {
+			if err := windowsbroker.VerifyPrivateProcess(handle, windowsBrokerIdentity(lifecycle.identity)); err != nil {
 				operationErr = fmt.Errorf("attest suspended Windows target token: %w", err)
 				return
 			}
@@ -145,7 +146,7 @@ func preparePlatformTarget(process *exec.Cmd) (func() error, func() error, func(
 				operationErr = err
 				return
 			}
-			if err := verifyWindowsLauncherReopenDenied(uint32(process.Process.Pid)); err != nil {
+			if err := windowsbroker.VerifyLauncherReopenDenied(uint32(process.Process.Pid)); err != nil {
 				operationErr = err
 				return
 			}
@@ -193,7 +194,7 @@ func settleRegisteredWindowsTarget(expected *windowsTargetLifecycle) error {
 	}
 	windowsTarget.active = nil
 	windowsTarget.Unlock()
-	jobErr := settleWindowsJob(expected.job)
+	jobErr := windowsbroker.SettleJob(expected.job)
 	expected.job = 0
 	expected.identity = appContainerIdentity{}
 	return jobErr
@@ -207,7 +208,7 @@ func openPlatformSession(ctx context.Context, configuration initialization) (*se
 	if err := profileLedger.recover(); err != nil {
 		return nil, errors.Join(err, profileLedger.close())
 	}
-	brokerImage, err := createRetainedBrokerImage(configuration.RuntimeRoot)
+	brokerImage, err := windowsbroker.CreateRetainedImage(configuration.RuntimeRoot)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("create retained private mutation broker: %w", err), profileLedger.close())
 	}
@@ -215,11 +216,11 @@ func openPlatformSession(ctx context.Context, configuration initialization) (*se
 	var closePlatformErr error
 	closeImage := func() error {
 		closePlatformOnce.Do(func() {
-			closePlatformErr = errors.Join(brokerImage.close(), profileLedger.recover(), profileLedger.close())
+			closePlatformErr = errors.Join(brokerImage.Close(), profileLedger.recover(), profileLedger.close())
 		})
 		return closePlatformErr
 	}
-	inherited, err := duplicateInheritableHandle(windows.Handle(brokerImage.file.Fd()))
+	inherited, err := windowsbroker.DuplicateInheritableHandle(windows.Handle(brokerImage.File().Fd()))
 	if err != nil {
 		return nil, errors.Join(err, closeImage())
 	}
@@ -231,24 +232,24 @@ func openPlatformSession(ctx context.Context, configuration initialization) (*se
 	for _, name := range []string{"SystemRoot", "WINDIR", "USERPROFILE", "LOCALAPPDATA", "APPDATA"} {
 		environment = append(environment, name+"="+os.Getenv(name))
 	}
-	started, err := createSealedWindowsProcess(windowsProcessSpec{
-		executable:        brokerImage.path,
-		arguments:         arguments,
-		environment:       environment,
-		directory:         configuration.RuntimeRoot,
-		processDescriptor: brokerProcessDescriptor,
-		threadDescriptor:  brokerThreadDescriptor,
-		inherited:         []windows.Handle{inherited},
-		ownJob:            true,
-		suspended:         true,
+	started, err := windowsbroker.StartProcess(windowsbroker.ProcessSpec{
+		Executable:        brokerImage.Path(),
+		Arguments:         arguments,
+		Environment:       environment,
+		Directory:         configuration.RuntimeRoot,
+		ProcessDescriptor: windowsbroker.BrokerProcessDescriptor,
+		ThreadDescriptor:  windowsbroker.BrokerThreadDescriptor,
+		Inherited:         []windows.Handle{inherited},
+		OwnJob:            true,
+		Suspended:         true,
 	})
 	inheritedCloseErr := windows.CloseHandle(inherited)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("start sealed private mutation broker: %w", err), inheritedCloseErr, closeImage())
 	}
 	fail := func(operationErr error) (*session, error) {
-		cleanupErr := errors.Join(started.kill(), started.closePipes(), started.wait(), closeImage())
-		stderrText := started.stderr.snapshot()
+		cleanupErr := errors.Join(started.Kill(), started.ClosePipes(), started.Wait(), closeImage())
+		stderrText := started.Stderr().Snapshot()
 		var stderrErr error
 		if len(stderrText) > 0 {
 			stderrErr = errors.New(string(stderrText))
@@ -258,25 +259,25 @@ func openPlatformSession(ctx context.Context, configuration initialization) (*se
 	if inheritedCloseErr != nil {
 		return fail(inheritedCloseErr)
 	}
-	if err := verifyWindowsProcessImage(started.control.handleValue(), brokerImage.file, brokerImage.path, true); err != nil {
+	if err := windowsbroker.VerifyProcessImage(started.Handle(), brokerImage.File(), brokerImage.Path(), true); err != nil {
 		return fail(fmt.Errorf("verify retained private mutation broker image: %w", err))
 	}
-	if err := started.resume(); err != nil {
+	if err := started.Resume(); err != nil {
 		return fail(fmt.Errorf("resume sealed private mutation broker: %w", err))
 	}
 	initializationDone := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = started.kill()
+			_ = started.Kill()
 		case <-initializationDone:
 		}
 	}()
 	defer close(initializationDone)
-	if err := writeJSONLine(started.stdin, configuration); err != nil {
+	if err := writeJSONLine(started.Stdin(), configuration); err != nil {
 		return fail(err)
 	}
-	reader := bufio.NewReaderSize(started.stdout, maximumProtocolLine)
+	reader := bufio.NewReaderSize(started.Stdout(), maximumProtocolLine)
 	var ready response
 	if err := readJSONLine(reader, &ready); err != nil {
 		return fail(errors.Join(err, ctx.Err()))
@@ -284,11 +285,12 @@ func openPlatformSession(ctx context.Context, configuration initialization) (*se
 	if ready.Error != "" {
 		return fail(errors.New(ready.Error))
 	}
+	stderrCapture := &limitedBuffer{limit: maximumCapturedBytes, capture: started.Stderr()}
 	return &session{
-		stdin: started.stdin, stdout: reader, stdoutPipe: started.stdout, stderr: started.stderr,
-		kill: started.kill, wait: started.wait, closePlatform: closeImage,
+		stdin: started.Stdin(), stdout: reader, stdoutPipe: started.Stdout(), stderr: stderrCapture,
+		kill: started.Kill, wait: started.Wait, closePlatform: closeImage,
 		resolveProcessID: func(processID int) (int, error) {
-			return resolvePlatformProcessID(int(started.control.pid), processID)
+			return resolvePlatformProcessID(int(started.ProcessID()), processID)
 		},
 	}, nil
 }

@@ -9,10 +9,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/windshare/windshare/internal/perfevidence/processrun"
+	"github.com/windshare/windshare/internal/processowner/protocol"
 )
 
 const (
@@ -27,7 +32,6 @@ type RunConfig struct {
 	WorkloadIDs    []string
 	ProfileIDs     []string
 }
-
 type Application struct {
 	Commands        CommandRunner
 	Logger          EventLogger
@@ -36,13 +40,11 @@ type Application struct {
 	Snapshots       SnapshotPreparer
 	MutationDomains MutationDomainFactory
 }
-
 type SnapshotPreparer interface {
 	Prepare(
 		context.Context, CommandRunner, string, string, string, []Workload,
 	) (PreparedSnapshot, error)
 }
-
 type SnapshotPreparerFunc func(
 	context.Context, CommandRunner, string, string, string, []Workload,
 ) (PreparedSnapshot, error)
@@ -462,4 +464,119 @@ func (application Application) log(runID, milestone, outcome, detail string) err
 		Scenario: "performance-evidence", Component: "perfevidence",
 		Milestone: milestone, Outcome: outcome, Detail: detail,
 	})
+}
+
+func InspectHost(ctx context.Context, runner CommandRunner, repositoryRoot string) HostMetadata {
+	memoryBytes, memoryProbe, memoryErr := physicalMemory()
+	if memoryErr != nil {
+		memoryProbe = memoryProbe + ": " + memoryErr.Error()
+	}
+	cpu, cpuErr := cpuModel()
+	metadata := HostMetadata{
+		OS: runtime.GOOS, OSVersion: osDescription(), Architecture: runtime.GOARCH, LogicalProcessors: runtime.NumCPU(),
+		CPUModel: cpu, PhysicalMemoryBytes: memoryBytes, MemoryProbe: memoryProbe,
+		Tools: make(map[string]ToolVersion, 4),
+	}
+	if memoryErr != nil {
+		metadata.RequiredErrors = append(metadata.RequiredErrors, "physical-memory-probe-failed")
+	}
+	if cpuErr != nil {
+		metadata.RequiredErrors = append(metadata.RequiredErrors, "cpu-model-probe-failed")
+	} else if strings.TrimSpace(metadata.CPUModel) == "" {
+		metadata.RequiredErrors = append(metadata.RequiredErrors, "cpu-model-missing")
+	}
+	if metadata.OS == "" || metadata.OSVersion == "" || metadata.Architecture == "" || metadata.LogicalProcessors < 1 {
+		metadata.RequiredErrors = append(metadata.RequiredErrors, "operating-system-identity-incomplete")
+	}
+	probes := []struct {
+		name       string
+		executable string
+		arguments  []string
+		directory  string
+	}{
+		{name: "go", executable: hostGoExecutable(), arguments: []string{"version"}},
+		{name: "node", executable: "node", arguments: []string{"--version"}},
+		{name: "pnpm", executable: "pnpm", arguments: []string{"--version"}},
+		{name: "playwright", executable: "pnpm", arguments: []string{"exec", "playwright", "--version"}, directory: filepath.Join(repositoryRoot, "web")},
+	}
+	for _, probe := range probes {
+		result, err := runner.Run(ctx, Command{
+			Executable: probe.executable, Arguments: probe.arguments, Directory: probe.directory,
+		})
+		version := ToolVersion{Value: strings.TrimSpace(string(result.Output))}
+		if err != nil || result.ExitCode != 0 {
+			version.Value = ""
+			version.Error = fmt.Sprintf("exit %d: %v: %s", result.ExitCode, err, strings.TrimSpace(string(result.Output)))
+		}
+		metadata.Tools[probe.name] = version
+	}
+	return metadata
+}
+
+func hostGoExecutable() string {
+	if executable := os.Getenv(goExecutableEnvironment); executable != "" {
+		return executable
+	}
+	return "go"
+}
+
+func (runner ProcessRunner) Run(ctx context.Context, command Command) (CommandResult, error) {
+	switch command.mutationIntent {
+	case mutationIntentVerification, mutationIntentArtifactProduction:
+		return runner.runPrivateMutation(ctx, command)
+	case mutationIntentNone:
+	default:
+		return CommandResult{ExitCode: -1}, errors.New("command mutation intent is unsupported")
+	}
+	result := CommandResult{ExitCode: -1}
+	if ctx == nil {
+		return result, errors.New("command context is nil")
+	}
+	now := runner.Now
+	if now == nil {
+		now = time.Now
+	}
+	if err := verifyConsumptionAuthorities(command.authorities); err != nil {
+		result.FinishedAt = now().UTC()
+		return result, fmt.Errorf("verify command byte authority before launch: %w", err)
+	}
+	executable, directory, environment, err := prepareOwnedCommand(command)
+	if err != nil {
+		result.FinishedAt = now().UTC()
+		return result, errors.Join(err, verifyConsumptionAuthorities(command.authorities))
+	}
+	identity, err := processrun.NewIdentity()
+	if err != nil {
+		result.FinishedAt = now().UTC()
+		return result, errors.Join(err, verifyConsumptionAuthorities(command.authorities))
+	}
+	deadline, err := ownedCommandDeadline(ctx)
+	if err != nil {
+		result.FinishedAt = now().UTC()
+		return result, errors.Join(err, verifyConsumptionAuthorities(command.authorities))
+	}
+	ownedRunner := runner.OwnedCommands
+	if ownedRunner == nil {
+		ownedRunner = processrun.Runner{MaximumOutput: maximumCommandOutputBytes}
+	}
+	result.StartedAt = now().UTC()
+	owned, runErr := ownedRunner.Run(ctx, processrun.Spec{
+		Identity:         identity,
+		Executable:       executable,
+		Arguments:        append([]string(nil), command.Arguments...),
+		WorkingDirectory: directory,
+		Environment:      environment,
+		Deadline:         deadline,
+		TerminationGrace: processrun.DefaultTerminationGrace,
+		AuthorizeStart: func(evidence protocol.StartEvidence) error {
+			return verifyOwnedProcessStart(command.authorities, evidence, executable)
+		},
+	})
+	result.FinishedAt = now().UTC()
+	result.Stdout = append([]byte(nil), owned.Stdout...)
+	result.Stderr = append([]byte(nil), owned.Stderr...)
+	result.Output = append(append([]byte(nil), result.Stdout...), result.Stderr...)
+	result.ProcessID = owned.ProcessID
+	result.ExitCode = owned.ExitCode
+	return result, errors.Join(runErr, verifyConsumptionAuthorities(command.authorities))
 }

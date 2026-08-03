@@ -125,3 +125,7 @@ func (*outputRootAuthority) sync() error {
 func (*outputRootAuthority) renameChildNoReplace(*stageDirectoryAuthority, string) error {
 	return errUnsupportedPublicationPlatform
 }
+
+func isReparsePointInfo(info os.FileInfo) bool {
+	return info != nil && info.Mode()&os.ModeSymlink != 0
+}
