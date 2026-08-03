@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/windshare/windshare/internal/perfevidence/mutationdomain/windowsbroker"
 	"golang.org/x/sys/windows"
 )
 
@@ -92,19 +93,19 @@ func platformPromoteProtectedOutput(
 	if authority == nil || authority.closed {
 		return nil, errors.New("Windows promotion root authority is unavailable")
 	}
-	entropy, err := randomBytes(16)
+	entropy, err := windowsbroker.RandomBytes(16)
 	if err != nil {
 		return nil, err
 	}
 	generationLeaf := "generation-" + fmt.Sprintf("%x", entropy)
-	mutableDescriptor, err := windows.SecurityDescriptorFromString(appContainerObjectDescriptor(
+	mutableDescriptor, err := windows.SecurityDescriptorFromString(windowsbroker.AppContainerObjectDescriptor(
 		authority.identity.traditionalUserSID,
 		authority.identity.isolationCapabilitySID,
 	))
 	if err != nil {
 		return nil, err
 	}
-	generation, err := createSealedObject(authority.handle, generationLeaf, true, mutableDescriptor)
+	generation, err := windowsbroker.CreateSealedObject(authority.handle, generationLeaf, true, mutableDescriptor)
 	if err != nil {
 		return nil, fmt.Errorf("create retained Windows output generation: %w", err)
 	}
@@ -119,9 +120,13 @@ func platformPromoteProtectedOutput(
 	if _, err := source.Seek(0, 0); err != nil {
 		return fail(err)
 	}
-	artifact, observedSHA256, err := copySealedFile(source, generation, artifactLeaf, sealedObjectCreator{
-		descriptor: mutableDescriptor,
-	}, true)
+	artifact, observedSHA256, err := copySealedFile(
+		source,
+		generation,
+		artifactLeaf,
+		windowsbroker.NewObjectCreator(0, mutableDescriptor, ""),
+		true,
+	)
 	if err != nil {
 		return fail(fmt.Errorf("copy retained Windows output generation: %w", err))
 	}
@@ -147,12 +152,12 @@ func platformPromoteProtectedOutput(
 	if _, err := artifact.Seek(0, 0); err != nil {
 		return fail(err)
 	}
-	readOnlyDescriptor := appContainerReadOnlyObjectDescriptor(
+	readOnlyDescriptor := windowsbroker.AppContainerReadOnlyObjectDescriptor(
 		authority.identity.traditionalUserSID,
 		authority.identity.isolationCapabilitySID,
 	)
 	result.file = nil
-	retained, securityAuthority, err := finalizeWindowsExecutableFile(
+	retained, securityAuthority, err := windowsbroker.FinalizeExecutableFile(
 		artifact,
 		generation,
 		artifactLeaf,
@@ -193,7 +198,7 @@ func (input *platformPromotedInput) close() error {
 	input.closed = true
 	var fileErrs []error
 	if input.security != 0 && input.security != windows.InvalidHandle && input.identity.traditionalUserSID != nil {
-		if err := sealWindowsHandleDACL(input.security, appContainerObjectDescriptor(
+		if err := windowsbroker.SealHandleDACL(input.security, windowsbroker.AppContainerObjectDescriptor(
 			input.identity.traditionalUserSID,
 			input.identity.isolationCapabilitySID,
 		)); err != nil {
@@ -202,15 +207,15 @@ func (input *platformPromotedInput) close() error {
 	}
 	if input.file != nil {
 		if input.security == 0 || input.security == windows.InvalidHandle {
-			fileErrs = append(fileErrs, markWindowsHandleForDeletion(windows.Handle(input.file.Fd())))
+			fileErrs = append(fileErrs, windowsbroker.MarkHandleForDeletion(windows.Handle(input.file.Fd())))
 		}
 		fileErrs = append(fileErrs, input.file.Close())
 		input.file = nil
 	}
 	if input.security != 0 && input.security != windows.InvalidHandle {
-		artifact, err := openWindowsObjectForDeletion(input.directory, input.artifactLeaf, false)
+		artifact, err := windowsbroker.OpenObjectForDeletion(input.directory, input.artifactLeaf, false)
 		if err == nil {
-			err = errors.Join(markWindowsHandleForDeletion(artifact), windows.CloseHandle(artifact))
+			err = errors.Join(windowsbroker.MarkHandleForDeletion(artifact), windows.CloseHandle(artifact))
 		}
 		if err != nil {
 			fileErrs = append(fileErrs, fmt.Errorf("unlink retained promoted artifact: %w", err))
@@ -221,7 +226,7 @@ func (input *platformPromotedInput) close() error {
 	var directoryErr error
 	if input.directory != 0 && input.directory != windows.InvalidHandle {
 		directoryErr = errors.Join(
-			markWindowsHandleForDeletion(input.directory),
+			windowsbroker.MarkHandleForDeletion(input.directory),
 			windows.CloseHandle(input.directory),
 		)
 		input.directory = 0

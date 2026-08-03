@@ -1,6 +1,7 @@
 package perfevidence
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -8,12 +9,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/windshare/windshare/internal/perfevidence/processrun"
 	"github.com/windshare/windshare/internal/processowner/protocol"
 )
 
 const consumptionAuthorityDirectoryName = "consumption-authority"
-
 const (
 	maximumSnapshotInputObjects    = 250_000
 	maximumSnapshotInputBytes      = int64(8 << 30)
@@ -163,7 +165,6 @@ type byteConsumptionAuthority interface {
 	VerifyProcessStart(evidence protocol.StartEvidence, executable string) (bool, error)
 	Close() error
 }
-
 type combinedConsumptionAuthority struct {
 	authorities []byteConsumptionAuthority
 }
@@ -303,7 +304,6 @@ func isolateControlledGoEnvironment(
 	if !executableInside || !toolDirInside {
 		return controlledGoEnvironment{}, errors.New("Go executable and tool directory must be contained by GOROOT")
 	}
-
 	authorityRoot := filepath.Join(runtimeRoot, consumptionAuthorityDirectoryName)
 	goRoot := filepath.Join(authorityRoot, "goroot")
 	goModCache := filepath.Join(authorityRoot, "gomodcache")
@@ -316,7 +316,6 @@ func isolateControlledGoEnvironment(
 	if err := os.Rename(environment.GoModCache, goModCache); err != nil {
 		return controlledGoEnvironment{}, fmt.Errorf("isolate verified module cache: %w", err)
 	}
-
 	environment.GoExecutable = filepath.Join(goRoot, goExecutableRelative)
 	environment.GoModCache = goModCache
 	environment.ToolchainLocations = ToolchainDiagnostics{
@@ -436,4 +435,203 @@ func artifactValidationTarget(stageRoot string, artifact ArtifactFile) (snapshot
 	return snapshotValidationTarget{
 		LogicalPath: artifact.Path, PhysicalPath: path, Bytes: artifact.Bytes, SHA256: artifact.SHA256,
 	}, nil
+}
+
+const (
+	maximumCommandOutputBytes            = 32 << 20
+	maximumBinaryBytes                   = 512 << 20
+	maximumProfileBytes                  = 1 << 30
+	maximumProtectedOutputBytes          = maximumProfileBytes
+	maximumProtectedOutputAggregateBytes = 2 * maximumProfileBytes
+	// Profile capture is the widest artifact-producing command: one CPU and one
+	// memory profile. A larger group cannot describe any supported operation.
+	maximumProtectedOutputCount           = 2
+	protectedOutputAbortSettlementTimeout = 5 * time.Second
+)
+
+type MutationRoot struct {
+	HostPath string
+	Name     string
+}
+type MutationDomainSpec struct {
+	RuntimeRoot string
+	Roots       []MutationRoot
+}
+type MutationDomainCommand struct {
+	Executable   string
+	Arguments    []string
+	Directory    string
+	Environment  []string
+	Outputs      []MutationOutput
+	RestorePaths bool
+}
+type MutationOutput struct {
+	HostPath string
+	MaxBytes int64
+}
+type mutationIntent uint8
+
+const (
+	mutationIntentNone mutationIntent = iota
+	mutationIntentVerification
+	mutationIntentArtifactProduction
+)
+
+type MutationDomainResult struct {
+	Stdout     []byte
+	Stderr     []byte
+	ProcessID  int
+	ExitCode   int
+	StartedAt  time.Time
+	FinishedAt time.Time
+}
+type MutationOutputSink interface {
+	// Implementations must treat cancellation as a settlement request: a method
+	// may not return until it can prove that no late write, seal, or group adoption can occur.
+	WriteContext(context.Context, []byte) (int, error)
+	// Seal fixes one output against its framed byte identity. Publication is a
+	// separate group transition so a later output failure can still roll it back.
+	Seal(context.Context, int64, string) error
+	Abort(context.Context) error
+}
+type mutationOutputSink interface {
+	MutationOutputSink
+	adopt() (byteConsumptionAuthority, error)
+	finalize()
+}
+
+// MutationDomain is defined at its consumer boundary so the measurement
+// runner remains testable without importing an OS isolation implementation.
+type MutationDomain interface {
+	Run(context.Context, MutationDomainCommand, map[string]MutationOutputSink) (MutationDomainResult, error)
+	Close() error
+}
+type MutationDomainFactory interface {
+	Open(context.Context, MutationDomainSpec) (MutationDomain, error)
+}
+type Command struct {
+	Executable  string
+	Arguments   []string
+	Directory   string
+	Environment []string
+	// ReplaceEnvironment is required for provenance-sensitive commands. Merely
+	// appending overrides leaves GOENV/GOFLAGS and platform aliases able to alter
+	// the build before the explicit values are interpreted.
+	ReplaceEnvironment bool
+	authorities        []byteConsumptionAuthority
+	mutationIntent     mutationIntent
+	protectedOutputs   []MutationOutput
+	restorePaths       bool
+}
+type CommandResult struct {
+	Output            []byte
+	Stdout            []byte
+	Stderr            []byte
+	ProcessID         int
+	ExitCode          int
+	StartedAt         time.Time
+	FinishedAt        time.Time
+	outputAuthorities map[string]byteConsumptionAuthority
+}
+type CommandRunner interface {
+	Run(context.Context, Command) (CommandResult, error)
+}
+type OwnedCommandRunner interface {
+	Run(context.Context, processrun.Spec) (processrun.Result, error)
+}
+type ProcessRunner struct {
+	Now                         func() time.Time
+	MutationDomain              MutationDomain
+	OwnedCommands               OwnedCommandRunner
+	prepareOutput               func(string) (mutationOutputSink, error)
+	protectedOutputAbortTimeout time.Duration
+}
+
+func (runner ProcessRunner) runPrivateMutation(ctx context.Context, command Command) (
+	result CommandResult,
+	resultErr error,
+) {
+	if runner.MutationDomain == nil {
+		return CommandResult{ExitCode: -1}, errors.New("provenance-sensitive command has no private mutation domain")
+	}
+	if ctx == nil {
+		return CommandResult{ExitCode: -1}, errors.New("command context is nil")
+	}
+	if err := verifyConsumptionAuthorities(command.authorities); err != nil {
+		return CommandResult{ExitCode: -1}, fmt.Errorf("verify command byte authority before isolation: %w", err)
+	}
+	if err := validateMutationOutputs(command.mutationIntent, command.protectedOutputs); err != nil {
+		return CommandResult{ExitCode: -1}, fmt.Errorf("validate protected command outputs: %w", err)
+	}
+	prepareOutput := runner.prepareOutput
+	if prepareOutput == nil {
+		prepareOutput = prepareMutationOutput
+	}
+	sinks := make(map[string]MutationOutputSink, len(command.protectedOutputs))
+	prepared := make([]preparedMutationOutput, 0, len(command.protectedOutputs))
+	for _, output := range command.protectedOutputs {
+		sink, err := prepareOutput(output.HostPath)
+		if err != nil {
+			resultErr = fmt.Errorf("prepare protected command output %s: %w", output.HostPath, err)
+			break
+		}
+		sinks[output.HostPath] = sink
+		prepared = append(prepared, preparedMutationOutput{path: output.HostPath, sink: sink})
+	}
+	defer func() {
+		abortTimeout := runner.protectedOutputAbortTimeout
+		if abortTimeout <= 0 {
+			abortTimeout = protectedOutputAbortSettlementTimeout
+		}
+		abortContext, cancel := context.WithTimeout(context.Background(), abortTimeout)
+		defer cancel()
+		for index := len(prepared) - 1; index >= 0; index-- {
+			resultErr = errors.Join(resultErr, prepared[index].sink.Abort(abortContext))
+		}
+	}()
+	if resultErr != nil {
+		return CommandResult{ExitCode: -1}, resultErr
+	}
+	isolated, err := runner.MutationDomain.Run(ctx, MutationDomainCommand{
+		Executable: command.Executable, Arguments: append([]string(nil), command.Arguments...),
+		Directory: command.Directory, Environment: append([]string(nil), command.Environment...),
+		Outputs:      append([]MutationOutput(nil), command.protectedOutputs...),
+		RestorePaths: command.restorePaths,
+	}, sinks)
+	result = CommandResult{
+		Stdout: isolated.Stdout, Stderr: isolated.Stderr, ProcessID: isolated.ProcessID,
+		ExitCode: isolated.ExitCode, StartedAt: isolated.StartedAt, FinishedAt: isolated.FinishedAt,
+	}
+	result.Output = append(append([]byte(nil), result.Stdout...), result.Stderr...)
+	if err == nil {
+		err = verifyConsumptionAuthorities(command.authorities)
+	} else {
+		err = errors.Join(err, verifyConsumptionAuthorities(command.authorities))
+	}
+	if err == nil && result.ExitCode == 0 && command.mutationIntent == mutationIntentArtifactProduction {
+		result.outputAuthorities, err = adoptMutationOutputGroup(prepared)
+	}
+	return result, err
+}
+
+func ownedCommandDeadline(ctx context.Context) (time.Duration, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, context.Cause(ctx)
+	}
+	deadline := processrun.DefaultCommandDeadline
+	if contextDeadline, present := ctx.Deadline(); present {
+		remaining := time.Until(contextDeadline)
+		if remaining <= 0 {
+			return 0, context.DeadlineExceeded
+		}
+		remaining = ((remaining + time.Millisecond - 1) / time.Millisecond) * time.Millisecond
+		if remaining < deadline {
+			deadline = remaining
+		}
+	}
+	maximum := time.Duration(protocol.MaximumDeadlineMilliseconds) * time.Millisecond
+	if deadline > maximum {
+		deadline = maximum
+	}
+	return deadline, nil
 }
