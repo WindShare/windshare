@@ -1,34 +1,389 @@
-# Pull requests invoke the same reusable cross-OS authority DAG as full and
-# release validation, selecting only the fast Windows Chromium sample.
+# Ordinary CI stays unprivileged so pull requests cannot reach capability-bearing
+# infrastructure through a condition.
 name: CI
+
+on:
+  pull_request:
+  push:
+    # GitHub does not allow expressions in trigger branch filters; main is the
+    # repository default branch and is the only push authority for ordinary CI.
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-on:
-  push:
-    branches:
-      - "**"
-    tags-ignore:
-      - "core/v*"
-      - "core-candidate/v*/**"
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
-  pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
+# PR numbers survive merge-ref changes, while branch and manual runs cancel only
+# older work for the same ref.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CORE_SUITE_TEST_TIMEOUT: 30m
+  WINDSHARE_TEST_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+  BROWSER_EVIDENCE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
-  current-commit:
-    # Reusable-workflow calls must advertise the maximum permission any
-    # conditionally reachable child job may request. current-commit.yml still
-    # narrows ordinary jobs to contents: read and grants this capability only
-    # to the protected broker when full mode is selected.
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/current-commit.yml
-    with:
-      browser-authority: pr
+  changes:
+    name: Select ordinary validation range
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      target_sha: ${{ steps.detect.outputs.target_sha }}
+      diff_base_sha: ${{ steps.detect.outputs.diff_base_sha }}
+      diff_head_sha: ${{ steps.detect.outputs.diff_head_sha }}
+      range_kind: ${{ steps.detect.outputs.range_kind }}
+      documentation_only: ${{ steps.detect.outputs.documentation_only }}
+      validation_required: ${{ steps.detect.outputs.validation_required }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: classify the trusted event-specific change range
+        id: detect
+        env:
+          CI_EVENT_NAME: ${{ github.event_name }}
+          CI_TARGET_SHA: ${{ github.sha }}
+          CI_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: node scripts/ci/workflow/changes.mjs
+
+  linux-preflight:
+    name: Linux preflight (format, lint, compile, vet)
+    if: ${{ needs.changes.outputs.validation_required == 'true' }}
+    needs:
+      - changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.target_sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: verify ordinary workflow decisions
+        run: node --test scripts/ci/workflow/changes.tests.mjs scripts/ci/workflow/required-verdict.tests.mjs
+      - name: verify formatting and repository hygiene
+        run: make hygiene
+      - name: enforce the repository size budget
+        uses: doraemonkeys/sloc-guard/.github/action@master
+      - name: lint workflow structure
+        run: make workflow-lint
+      - name: lint Go source
+        run: make lint
+      - name: compile, vet, and verify the released-core consumer
+        run: make vet
+
+  windows-preflight:
+    name: Windows preflight (native compile and vet)
+    if: ${{ needs.changes.outputs.validation_required == 'true' }}
+    needs:
+      - changes
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.target_sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: compile and vet the native Windows source set
+        run: make vet
+
+  linux-race:
+    name: Complete root and core race sweeps (Linux)
+    if: ${{ needs.changes.outputs.validation_required == 'true' }}
+    needs:
+      - changes
+      - linux-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.target_sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: run the native Linux race boundary
+        run: make race
+
+  windows-race:
+    name: Complete root and core race sweeps (Windows)
+    if: ${{ needs.changes.outputs.validation_required == 'true' }}
+    needs:
+      - changes
+      - windows-preflight
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.target_sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: run the native Windows race boundary
+        run: make race
+
+  linux-coverage:
+    name: Root and core coverage (Linux)
+    if: ${{ needs.changes.outputs.validation_required == 'true' }}
+    needs:
+      - changes
+      - linux-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.target_sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: enforce root, core, and package coverage floors
+        run: make coverage
+
+  golden-vectors:
+    name: Golden-vector idempotence
+    if: ${{ needs.changes.outputs.validation_required == 'true' }}
+    needs:
+      - changes
+      - linux-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.target_sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: regenerate canonical vectors twice
+        run: make vectors
+
+  core-release:
+    name: Core module synthetic artifact and Linux/ext4 certification
+    if: ${{ needs.changes.outputs.validation_required == 'true' }}
+    needs:
+      - changes
+      - linux-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.target_sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: core/go.mod
+          cache: false
+      - name: build and validate the deterministic core module artifact
+        run: make core-release
+
+  web:
+    name: Web (frozen install, lint, typecheck, build, vitest)
+    if: ${{ needs.changes.outputs.validation_required == 'true' }}
+    needs:
+      - changes
+      - linux-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.target_sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: validate the Web application once
+        run: make web
+
+  browser-preflight:
+    name: Browser contract and generated semantics
+    if: ${{ needs.changes.outputs.validation_required == 'true' }}
+    needs:
+      - changes
+      - linux-preflight
+      - web
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.target_sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: reduce browser contract and generated validation once
+        run: make browser-preflight
+
+  linux-browser-process:
+    name: Browser process integration and ownership stack (Linux)
+    if: ${{ needs.changes.outputs.validation_required == 'true' }}
+    needs:
+      - changes
+      - linux-preflight
+      - browser-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.target_sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: exercise process integration and the Linux owner
+        run: make browser-process
+
+  windows-browser-process:
+    name: Browser process integration and ownership stack (Windows)
+    if: ${{ needs.changes.outputs.validation_required == 'true' }}
+    needs:
+      - changes
+      - windows-preflight
+      - browser-preflight
+    runs-on: windows-latest
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.target_sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: exercise process integration and the Windows owner
+        run: make browser-process
+
+  windows-browser-smoke:
+    name: Chromium critical-path sample (Windows)
+    if: ${{ needs.changes.outputs.validation_required == 'true' }}
+    needs:
+      - changes
+      - windows-preflight
+      - browser-preflight
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.target_sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: exercise the critical Windows Chromium path
+        run: make browser-smoke
+      - name: upload Chromium smoke diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-smoke-${{ needs.changes.outputs.target_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/browser-smoke
+          if-no-files-found: warn
+          include-hidden-files: true
+
+  required-verdict:
+    name: CI Required Verdict
+    if: ${{ always() }}
+    needs:
+      - changes
+      - linux-preflight
+      - windows-preflight
+      - linux-race
+      - windows-race
+      - linux-coverage
+      - golden-vectors
+      - core-release
+      - web
+      - browser-preflight
+      - linux-browser-process
+      - windows-browser-process
+      - windows-browser-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: require the exact selected or intentionally skipped graph
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          VALIDATION_REQUIRED: ${{ needs.changes.outputs.validation_required }}
+          VALIDATION_RESULTS_JSON: >-
+            {"linux-preflight":"${{ needs.linux-preflight.result }}",
+            "windows-preflight":"${{ needs.windows-preflight.result }}",
+            "linux-race":"${{ needs.linux-race.result }}",
+            "windows-race":"${{ needs.windows-race.result }}",
+            "linux-coverage":"${{ needs.linux-coverage.result }}",
+            "golden-vectors":"${{ needs.golden-vectors.result }}",
+            "core-release":"${{ needs.core-release.result }}",
+            "web":"${{ needs.web.result }}",
+            "browser-preflight":"${{ needs.browser-preflight.result }}",
+            "linux-browser-process":"${{ needs.linux-browser-process.result }}",
+            "windows-browser-process":"${{ needs.windows-browser-process.result }}",
+            "windows-browser-smoke":"${{ needs.windows-browser-smoke.result }}"}
+        run: node scripts/ci/workflow/required-verdict.mjs

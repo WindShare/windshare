@@ -10,19 +10,17 @@ $actionlint = 'github.com/rhysd/actionlint/cmd/actionlint@v1.7.12'
 $ciRoot = Split-Path -Parent $PSScriptRoot
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $ciRoot)
 Set-Location $repositoryRoot
-Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
-$goAuthority = Enter-WindShareGoAuthority
 
 function Get-GoEnv([string]$Name) {
-    $value = Invoke-WindShareGo env $Name
+    $value = go env $Name
     if ($LASTEXITCODE -ne 0) {
         throw "go env $Name exited with code $LASTEXITCODE"
     }
     return $value.Trim()
 }
 
-$hostOperatingSystem = $goAuthority.HostOS
-$hostArchitecture = $goAuthority.HostArchitecture
+$hostOperatingSystem = Get-GoEnv 'GOHOSTOS'
+$hostArchitecture = Get-GoEnv 'GOHOSTARCH'
 $originalTargetOperatingSystem = [Environment]::GetEnvironmentVariable('GOOS', 'Process')
 $originalTargetArchitecture = [Environment]::GetEnvironmentVariable('GOARCH', 'Process')
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
@@ -35,7 +33,7 @@ try {
     $env:GOOS = $hostOperatingSystem
     $env:GOARCH = $hostArchitecture
     $global:LASTEXITCODE = 0
-    Invoke-WindShareGo run $actionlint '-shellcheck=' '-pyflakes='
+    go run $actionlint '-shellcheck=' '-pyflakes='
     if ($LASTEXITCODE -ne 0) {
         throw "actionlint exited with code $LASTEXITCODE"
     }

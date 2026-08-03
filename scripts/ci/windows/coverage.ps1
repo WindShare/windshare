@@ -12,8 +12,6 @@ $ErrorActionPreference = 'Stop'
 $ciRoot = Split-Path -Parent $PSScriptRoot
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $ciRoot)
 Set-Location $repositoryRoot
-Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
-$null = Enter-WindShareGoAuthority
 Import-Module (Join-Path $ciRoot 'test-run-id.psm1') -Force
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 $coverageTool = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'
@@ -43,19 +41,19 @@ Invoke-WithWindShareTestRunID -Suite 'coverage' -Body {
     Write-Output "== coverage: run_id=$runID =="
     try {
         Invoke-Step 'root module coverage tests' {
-            Invoke-WindShareGoTestJSON -count=1 ./... -covermode=atomic "-coverprofile=$rootProfile"
+            go test -json -count=1 ./... -covermode=atomic "-coverprofile=$rootProfile"
         }
         Invoke-Step 'root coverage gate (total >=80%, package >=70%)' {
-            Invoke-WindShareGo run $coverageTool --config=.testcoverage.yml "--profile=$rootProfile"
+            go run $coverageTool --config=.testcoverage.yml "--profile=$rootProfile"
         }
         Invoke-Step 'core module coverage tests' {
-            Invoke-WindShareGo -C core test -count=1 "-timeout=$coreSuiteTestTimeout" ./... `
+            go -C core test -count=1 "-timeout=$coreSuiteTestTimeout" ./... `
                 -covermode=atomic "-coverprofile=$coreProfile"
         }
         Invoke-Step 'core coverage gate (total >=90%, package >=70%)' {
             Push-Location core
             try {
-                Invoke-WindShareGo run $coverageTool --config=.testcoverage.yml "--profile=$coreProfile"
+                go run $coverageTool --config=.testcoverage.yml "--profile=$coreProfile"
             } finally {
                 Pop-Location
             }

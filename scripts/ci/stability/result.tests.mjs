@@ -3,7 +3,6 @@ import { createHmac } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import {
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -12,8 +11,14 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { crc32 } from 'node:zlib'
 
 import {
+  MAXIMUM_ARTIFACT_ARCHIVE_BYTES,
+  parseStabilityResultArchive,
+} from './artifact.mjs'
+import {
+  STABILITY_EVIDENCE_EPOCH,
   STABILITY_PRODUCT_VERDICT_SCHEMA_VERSION,
   STABILITY_RESULT_SCHEMA_VERSION,
   STABILITY_STARTED_EVENT_SCHEMA_VERSION,
@@ -24,28 +29,13 @@ import {
   detectRuntimeOperatingSystem,
   parseStabilityResult,
   parseStabilityStartedEvent,
+  runStabilityIntegration,
   stabilityEvidenceDigest,
   writeCanonicalJSON,
 } from './result.mjs'
-import {
-  createStabilityExecutionContract,
-  executionContractEvidenceEqual,
-  executionContractsEqual,
-  loadCurrentStabilityExecutionContract,
-  loadCurrentStabilityExecutionSources,
-} from './execution-contract.mjs'
 
 const repositoryRoot = resolve('.')
-const STABILITY_HANDSHAKE_VARIABLES = Object.freeze([
-  'WINDSHARE_STABILITY_START_REQUEST',
-  'WINDSHARE_STABILITY_STARTED_OUTPUT',
-  'WINDSHARE_STABILITY_START_SECRET',
-])
 const operatingSystem = 'windows'
-const executionContract = loadCurrentStabilityExecutionContract({
-  operatingSystem,
-  repositoryRoot,
-})
 const identity = {
   workflowRunId: '123456789',
   workflowRunAttempt: 1,
@@ -58,10 +48,18 @@ const invocationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const started = createStabilityStartedEvent({
   ...identity,
   invocationId,
-  executionContractSemanticSha256: executionContract.semantic_contract_sha256,
 })
-assert.equal(started.schema_version, STABILITY_STARTED_EVENT_SCHEMA_VERSION)
 const startedDocument = `${JSON.stringify(started)}\n`
+
+assert.equal(STABILITY_EVIDENCE_EPOCH, 'windshare.stability-evidence-epoch/v1')
+assert.equal(
+  STABILITY_STARTED_EVENT_SCHEMA_VERSION,
+  'windshare.stability-integration-started/v2',
+)
+assert.equal(STABILITY_RESULT_SCHEMA_VERSION, 'windshare.stability-result/v4')
+assert.equal(started.schema_version, STABILITY_STARTED_EVENT_SCHEMA_VERSION)
+assert.equal(started.evidence_epoch, STABILITY_EVIDENCE_EPOCH)
+assert.equal('execution_contract_semantic_sha256' in started, false)
 
 const passedVerdict = createProductVerdictForTermination(0, null)
 assert.deepEqual(passedVerdict, {
@@ -76,12 +74,12 @@ const passed = createStabilityResult({
   ...identity,
   invocationId,
   startedEventSha256: stabilityEvidenceDigest(startedDocument),
-  startedExecutionContractSemanticSha256: started.execution_contract_semantic_sha256,
   productVerdict: passedVerdict,
-  executionContract,
 })
 assert.equal(passed.schema_version, STABILITY_RESULT_SCHEMA_VERSION)
+assert.equal(passed.evidence_epoch, STABILITY_EVIDENCE_EPOCH)
 assert.equal(passed.retry_count, 0)
+assert.equal('execution_contract' in passed, false)
 assert.deepEqual(parseStabilityResult(JSON.stringify(passed)), passed)
 
 const productFailure = createStabilityResult({
@@ -89,7 +87,6 @@ const productFailure = createStabilityResult({
   invocationId,
   startedEventSha256: stabilityEvidenceDigest(startedDocument),
   productVerdict: createProductVerdictForTermination(17, null),
-  executionContract,
 })
 assert.equal(productFailure.product_verdict.outcome, 'failed')
 assert.equal(productFailure.product_verdict.failure_class, 'product')
@@ -100,7 +97,6 @@ const signalFailure = createStabilityResult({
   invocationId,
   startedEventSha256: stabilityEvidenceDigest(startedDocument),
   productVerdict: createProductVerdictForTermination(null, 'SIGTERM'),
-  executionContract,
 })
 assert.equal(signalFailure.product_verdict.outcome, 'failed')
 assert.equal(signalFailure.product_verdict.failure_class, 'product')
@@ -111,10 +107,6 @@ assert.throws(() => createProductVerdictForTermination(null, null), /canonical p
 const reordered = reverseRecordOrder({
   ...passed,
   product_verdict: reverseRecordOrder(passed.product_verdict),
-  execution_contract: reverseRecordOrder({
-    ...passed.execution_contract,
-    sources: passed.execution_contract.sources.map(reverseRecordOrder),
-  }),
 })
 assert.deepEqual(
   parseStabilityResult(`\n  ${JSON.stringify(reordered, null, 2)}\n`),
@@ -138,12 +130,45 @@ for (const mutation of [
   assert.throws(() => createStabilityStartedEvent({
     ...identity,
     invocationId,
-    executionContractSemanticSha256: executionContract.semantic_contract_sha256,
     ...mutation,
   }))
 }
 assert.throws(
-  () => parseStabilityResult(JSON.stringify({ ...passed, retry_count: 1 })),
+  () => parseStabilityStartedEvent(JSON.stringify({
+    ...started,
+    evidence_epoch: 'windshare.stability-evidence-epoch/older',
+  })),
+  /evidence epoch is unsupported/u,
+)
+assert.throws(
+  () => parseStabilityResult(JSON.stringify({
+    ...passed,
+    evidence_epoch: 'windshare.stability-evidence-epoch/older',
+  })),
+  /evidence epoch is unsupported/u,
+)
+assert.throws(
+  () => parseStabilityResult(JSON.stringify({
+    ...passed,
+    schema_version: 'windshare.stability-result/v3',
+  })),
+  /schema version is unsupported/u,
+)
+assert.throws(
+  () => parseStabilityResult(JSON.stringify({ ...passed, execution_contract: {} })),
+  /fields are invalid/u,
+)
+
+const retry = createStabilityResult({
+  ...identity,
+  workflowRunAttempt: 3,
+  invocationId,
+  startedEventSha256: stabilityEvidenceDigest(startedDocument),
+  productVerdict: passedVerdict,
+})
+assert.equal(retry.retry_count, 2)
+assert.throws(
+  () => parseStabilityResult(JSON.stringify({ ...retry, retry_count: 1 })),
   /retry count disagrees/u,
 )
 assert.throws(() => parseStabilityResult(JSON.stringify({ ...passed, unexpected: true })))
@@ -155,81 +180,7 @@ assert.throws(() => createStabilityResult({
     ...passedVerdict,
     outcome: 'failed',
   },
-  executionContract,
 }), /disagree/u)
-
-const linuxSources = loadCurrentStabilityExecutionSources({
-  operatingSystem: 'linux',
-  repositoryRoot,
-})
-const linuxContract = loadCurrentStabilityExecutionContract({
-  operatingSystem: 'linux',
-  repositoryRoot,
-})
-assert.throws(() => createStabilityExecutionContract({
-  operatingSystem: 'linux',
-  sources: replaceSource(linuxSources, 'integration-entrypoint', (source) => source.replace(
-    'windshare_go_test_json -count=1 ./integration/...',
-    'for attempt in 1 2; do\n  windshare_go_test_json -count=1 ./integration/...\ndone',
-  )),
-}), /internal retry construct/u)
-assert.throws(() => createStabilityExecutionContract({
-  operatingSystem: 'linux',
-  sources: replaceSource(linuxSources, 'workflow', (source) => source.replace(
-    '--entrypoint "bash scripts/ci/linux/integration.sh"',
-    '--entrypoint "bash scripts/ci/linux/not-integration.sh"',
-  )),
-}), /must bind|ambiguous/u)
-assert.throws(() => createStabilityExecutionContract({
-  operatingSystem: 'linux',
-  sources: replaceSource(linuxSources, 'integration-entrypoint', (source) => source.replace(
-    [
-      'if [[ "$stability_evidence_mode" == authenticated ]]; then',
-      '  node scripts/ci/stability/result.mjs started',
-      '  unset WINDSHARE_STABILITY_START_REQUEST WINDSHARE_STABILITY_STARTED_OUTPUT WINDSHARE_STABILITY_START_SECRET',
-      'fi',
-      'windshare_go_test_json -count=1 ./integration/...',
-    ].join('\n'),
-    [
-      'windshare_go_test_json -count=1 ./integration/...',
-      'if [[ "$stability_evidence_mode" == authenticated ]]; then',
-      '  node scripts/ci/stability/result.mjs started',
-      '  unset WINDSHARE_STABILITY_START_REQUEST WINDSHARE_STABILITY_STARTED_OUTPUT WINDSHARE_STABILITY_START_SECRET',
-      'fi',
-    ].join('\n'),
-  )),
-}), /authenticated mode immediately before Go|ordered incorrectly/u)
-assert.throws(() => createStabilityExecutionContract({
-  operatingSystem: 'linux',
-  sources: replaceSource(linuxSources, 'go-executable-authority', (source) =>
-    `${source}\ngo() { :; }\n`),
-}), /must not redefine Go/u)
-assert.throws(() => createStabilityExecutionContract({
-  operatingSystem: 'linux',
-  sources: replaceSource(linuxSources, 'go-executable-authority', (source) => source.replace(
-    '/proc/$BASHPID/fd/$WINDSHARE_GO_DESCRIPTOR',
-    '/proc/$$/fd/$WINDSHARE_GO_DESCRIPTOR',
-  )),
-}), /missing retained-executable semantics/u)
-
-for (const { role, path } of linuxSources) {
-  const comment = path.endsWith('.mjs') ? '// maintenance note' : '# maintenance note'
-  const commentOnly = createStabilityExecutionContract({
-    operatingSystem: 'linux',
-    sources: replaceSource(linuxSources, role, (source) => `${comment}\n${source}\n${comment}\n`),
-  })
-  assert.notEqual(commentOnly.contract_sha256, linuxContract.contract_sha256)
-  assert.equal(executionContractsEqual(commentOnly, linuxContract), true)
-  assert.equal(executionContractEvidenceEqual(commentOnly, linuxContract), false)
-}
-
-for (const role of linuxSources.map(({ role }) => role)) {
-  const changed = createStabilityExecutionContract({
-    operatingSystem: 'linux',
-    sources: replaceSource(linuxSources, role, behaviorMutation(role)),
-  })
-  assert.equal(executionContractsEqual(changed, linuxContract), false, `${role} behavior must reset history`)
-}
 
 assert.equal(detectRuntimeOperatingSystem({ runnerOS: 'Linux', platform: 'linux' }), 'linux')
 assert.equal(detectRuntimeOperatingSystem({ runnerOS: 'Windows', platform: 'win32' }), 'windows')
@@ -238,10 +189,72 @@ assert.throws(
   /disagrees/u,
 )
 
+const validArchive = evidenceArchive(started, passed)
+assert.deepEqual(parseStabilityResultArchive(validArchive), passed)
+
+const mismatchResults = [
+  createStabilityResult({
+    ...identity,
+    workflowRunId: '987654321',
+    invocationId,
+    startedEventSha256: stabilityEvidenceDigest(startedDocument),
+    productVerdict: passedVerdict,
+  }),
+  createStabilityResult({
+    ...identity,
+    workflowRunAttempt: 2,
+    invocationId,
+    startedEventSha256: stabilityEvidenceDigest(startedDocument),
+    productVerdict: passedVerdict,
+  }),
+  createStabilityResult({
+    ...identity,
+    commitSha: 'b'.repeat(40),
+    invocationId,
+    startedEventSha256: stabilityEvidenceDigest(startedDocument),
+    productVerdict: passedVerdict,
+  }),
+  createStabilityResult({
+    ...identity,
+    operatingSystem: 'linux',
+    workflowJob: STABILITY_WORKFLOW_JOBS.linux.workflowJob,
+    invocationId,
+    startedEventSha256: stabilityEvidenceDigest(startedDocument),
+    productVerdict: passedVerdict,
+  }),
+  createStabilityResult({
+    ...identity,
+    invocationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    startedEventSha256: stabilityEvidenceDigest(startedDocument),
+    productVerdict: passedVerdict,
+  }),
+  createStabilityResult({
+    ...identity,
+    invocationId,
+    startedEventSha256: 'b'.repeat(64),
+    productVerdict: passedVerdict,
+  }),
+]
+for (const mismatched of mismatchResults) {
+  assert.throws(
+    () => parseStabilityResultArchive(evidenceArchive(started, mismatched)),
+    /started and finished evidence disagree/u,
+  )
+}
+assert.throws(
+  () => parseStabilityResultArchive(zipArchive([
+    { name: 'started.json', content: startedDocument },
+    { name: 'result.json', content: `${JSON.stringify(passed)}\n` },
+    { name: 'result-copy.json', content: `${JSON.stringify(passed)}\n` },
+  ])),
+  /duplicate structured finished results/u,
+)
+
 const root = mkdtempSync(join(tmpdir(), 'windshare-stability-result-'))
 try {
   const output = join(root, 'nested', 'result.json')
   writeCanonicalJSON(output, passed)
+  assert.equal(readFileSync(output, 'utf8'), `${JSON.stringify(passed)}\n`)
   assert.deepEqual(parseStabilityResult(readFileSync(output, 'utf8')), passed)
   assert.throws(() => writeCanonicalJSON(output, passed), /refusing to overwrite/u)
 
@@ -256,188 +269,163 @@ try {
     event: reverseRecordOrder(started),
     authentication_tag: authenticationTag,
   }))
-  const handshake = spawnSync(process.execPath, [
-    fileURLToPath(new URL('./result.mjs', import.meta.url)),
-    'started',
-  ], {
-    cwd: repositoryRoot,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      WINDSHARE_STABILITY_START_REQUEST: requestPath,
-      WINDSHARE_STABILITY_STARTED_OUTPUT: startedOutput,
-      WINDSHARE_STABILITY_START_SECRET: secret,
-    },
-  })
+  const handshake = spawnStartedPublisher(requestPath, startedOutput, secret)
   assert.equal(handshake.status, 0, handshake.stderr)
   assert.equal(readFileSync(startedOutput, 'utf8'), startedDocument)
 
+  const tamperedRequestPath = join(root, 'tampered-request.json')
   const rejectedOutput = join(root, 'handshake', 'rejected.json')
-  const rejected = spawnSync(process.execPath, [
-    fileURLToPath(new URL('./result.mjs', import.meta.url)),
-    'started',
-  ], {
-    cwd: repositoryRoot,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      WINDSHARE_STABILITY_START_REQUEST: requestPath,
-      WINDSHARE_STABILITY_STARTED_OUTPUT: rejectedOutput,
-      WINDSHARE_STABILITY_START_SECRET: 'cd'.repeat(32),
+  writeFileSync(tamperedRequestPath, JSON.stringify({
+    schema_version: 'windshare.stability-start-request/v1',
+    event: {
+      ...started,
+      commit_sha: 'b'.repeat(40),
     },
-  })
+    authentication_tag: authenticationTag,
+  }))
+  const rejected = spawnStartedPublisher(tamperedRequestPath, rejectedOutput, secret)
   assert.equal(rejected.status, 1)
   assert.match(rejected.stderr, /authentication failed/u)
+  assert.equal(existsSync(rejectedOutput), false)
 
-  testIntegrationEntrypointModes(root)
+  const runtimeOperatingSystem = detectRuntimeOperatingSystem()
+  const runtimeJob = STABILITY_WORKFLOW_JOBS[runtimeOperatingSystem]
+  const processOutput = join(root, 'process', 'failed-result.json')
+  const processStartedOutput = join(root, 'process', 'failed-started.json')
+  const propagatedExit = runStabilityIntegration([
+    '--output', processOutput,
+    '--started-output', processStartedOutput,
+    '--run-id', '24680',
+    '--run-attempt', '3',
+    '--commit-sha', 'c'.repeat(40),
+    '--workflow-job', runtimeJob.workflowJob,
+    '--suite', 'integration',
+    '--entrypoint', runtimeJob.entrypoint,
+  ], {
+    spawnIntegration: authenticatedProductProcess(runtimeOperatingSystem, 23, null),
+  })
+  assert.equal(propagatedExit, 23)
+  const failedResult = parseStabilityResult(readFileSync(processOutput, 'utf8'))
+  assert.equal(failedResult.product_verdict.exit_code, 23)
+  assert.equal(failedResult.retry_count, 2)
+  assert.equal(
+    failedResult.started_event_sha256,
+    stabilityEvidenceDigest(readFileSync(processStartedOutput)),
+  )
+
+  const signalOutput = join(root, 'process', 'signal-result.json')
+  const signalStartedOutput = join(root, 'process', 'signal-started.json')
+  const propagatedSignal = runStabilityIntegration([
+    '--output', signalOutput,
+    '--started-output', signalStartedOutput,
+    '--run-id', '24681',
+    '--run-attempt', '1',
+    '--commit-sha', 'd'.repeat(40),
+    '--workflow-job', runtimeJob.workflowJob,
+    '--suite', 'integration',
+    '--entrypoint', runtimeJob.entrypoint,
+  ], {
+    spawnIntegration: authenticatedProductProcess(runtimeOperatingSystem, null, 'SIGTERM'),
+  })
+  assert.equal(propagatedSignal, 1)
+  assert.equal(
+    parseStabilityResult(readFileSync(signalOutput, 'utf8')).product_verdict.signal,
+    'SIGTERM',
+  )
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
 
 console.log('stability-result tests: PASS')
 
-function testIntegrationEntrypointModes(root) {
-  const fixtureRoot = join(root, 'integration-entrypoint')
-  const ciRoot = join(fixtureRoot, 'scripts', 'ci')
-  const probePath = join(fixtureRoot, 'go-invocation.txt')
-  let command
-  let commandArguments
-
-  if (process.platform === 'win32') {
-    const platformRoot = join(ciRoot, 'windows')
-    mkdirSync(join(ciRoot, 'goauthority'), { recursive: true })
-    mkdirSync(platformRoot, { recursive: true })
-    const entrypoint = join(platformRoot, 'integration.ps1')
-    writeFileSync(entrypoint, readFileSync(resolve('scripts/ci/windows/integration.ps1')))
-    writeFileSync(join(ciRoot, 'goauthority', 'authority.psm1'), [
-      'function Enter-WindShareGoAuthority { return [pscustomobject]@{ Active = $true } }',
-      'function Invoke-WindShareGoTestJSON {',
-      '    [IO.File]::WriteAllText($env:WINDSHARE_INTEGRATION_ENTRY_PROBE, ($args -join " "))',
-      '    $global:LASTEXITCODE = 0',
-      '}',
-      "Export-ModuleMember -Function @('Enter-WindShareGoAuthority', 'Invoke-WindShareGoTestJSON')",
-      '',
-    ].join('\n'))
-    writeFileSync(join(ciRoot, 'test-run-id.psm1'), [
-      'function Invoke-WithWindShareTestRunID {',
-      '    param([Parameter(Mandatory)][string]$Suite, [Parameter(Mandatory)][scriptblock]$Body)',
-      "    if ($Suite -cne 'integration') { throw 'unexpected integration probe suite' }",
-      '    $previous = $env:WINDSHARE_TEST_RUN_ID',
-      '    try {',
-      "        $env:WINDSHARE_TEST_RUN_ID = 'integration-probe'",
-      "        & $Body 'integration-probe'",
-      '    } finally {',
-      '        $env:WINDSHARE_TEST_RUN_ID = $previous',
-      '    }',
-      '}',
-      "Export-ModuleMember -Function 'Invoke-WithWindShareTestRunID'",
-      '',
-    ].join('\n'))
-    command = 'pwsh.exe'
-    commandArguments = ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', entrypoint]
-  } else {
-    mkdirSync(join(ciRoot, 'linux'), { recursive: true })
-    mkdirSync(join(ciRoot, 'goauthority'), { recursive: true })
-    const entrypoint = join(ciRoot, 'linux', 'integration.sh')
-    writeFileSync(entrypoint, readFileSync(resolve('scripts/ci/linux/integration.sh')))
-    writeFileSync(join(ciRoot, 'goauthority', 'authority.sh'), [
-      'windshare_enter_go_authority() { :; }',
-      'windshare_go_test_json() {',
-      '  printf "%s" "$*" >"$WINDSHARE_INTEGRATION_ENTRY_PROBE"',
-      '}',
-      '',
-    ].join('\n'))
-    writeFileSync(join(ciRoot, 'test-run-id.sh'), [
-      'new_windshare_test_run_id() {',
-      "  printf '%s\\n' 'integration-probe'",
-      '}',
-      '',
-    ].join('\n'))
-    command = 'bash'
-    commandArguments = [entrypoint]
-  }
-
-  const ordinary = spawnSync(command, commandArguments, {
+function spawnStartedPublisher(requestPath, outputPath, secret) {
+  return spawnSync(process.execPath, [
+    fileURLToPath(new URL('./result.mjs', import.meta.url)),
+    'started',
+  ], {
     cwd: repositoryRoot,
     encoding: 'utf8',
-    env: integrationEntrypointEnvironment(probePath),
+    env: {
+      ...process.env,
+      WINDSHARE_STABILITY_START_REQUEST: requestPath,
+      WINDSHARE_STABILITY_STARTED_OUTPUT: outputPath,
+      WINDSHARE_STABILITY_START_SECRET: secret,
+    },
   })
-  assert.equal(ordinary.status, 0, spawnDiagnostic(ordinary))
-  assert.match(ordinary.stdout, /stability_evidence=ordinary/u)
-  assert.equal(readFileSync(probePath, 'utf8'), '-count=1 ./integration/...')
+}
 
-  const partialStates = [
-    { WINDSHARE_STABILITY_START_REQUEST: 'request' },
-    { WINDSHARE_STABILITY_STARTED_OUTPUT: 'output' },
-    { WINDSHARE_STABILITY_START_SECRET: '' },
-    {
-      WINDSHARE_STABILITY_START_REQUEST: 'request',
-      WINDSHARE_STABILITY_STARTED_OUTPUT: 'output',
-    },
-    {
-      WINDSHARE_STABILITY_START_REQUEST: 'request',
-      WINDSHARE_STABILITY_START_SECRET: 'secret',
-    },
-    {
-      WINDSHARE_STABILITY_STARTED_OUTPUT: 'output',
-      WINDSHARE_STABILITY_START_SECRET: 'secret',
-    },
-  ]
-  for (const partialState of partialStates) {
-    const expectedPresenceCount = Object.keys(partialState).length
-    rmSync(probePath, { force: true })
-    const partial = spawnSync(command, commandArguments, {
-      cwd: repositoryRoot,
-      encoding: 'utf8',
-      env: integrationEntrypointEnvironment(probePath, partialState),
-    })
-    assert.notEqual(partial.status, 0, spawnDiagnostic(partial))
-    assert.equal(existsSync(probePath), false)
-    assert.match(
-      `${partial.stdout}\n${partial.stderr}`,
-      new RegExp(
-        `stability handshake is partial \\(present=${expectedPresenceCount} required=3\\)`,
-        'u',
-      ),
+function authenticatedProductProcess(expectedOperatingSystem, status, signal) {
+  return (actualOperatingSystem, environment) => {
+    assert.equal(actualOperatingSystem, expectedOperatingSystem)
+    const request = JSON.parse(readFileSync(environment.WINDSHARE_STABILITY_START_REQUEST, 'utf8'))
+    const event = parseStabilityStartedEvent(request.event)
+    const document = `${JSON.stringify(event)}\n`
+    const expectedTag = createHmac(
+      'sha256',
+      Buffer.from(environment.WINDSHARE_STABILITY_START_SECRET, 'hex'),
     )
+      .update(document, 'utf8')
+      .digest('hex')
+    assert.equal(request.authentication_tag, expectedTag)
+    writeCanonicalJSON(environment.WINDSHARE_STABILITY_STARTED_OUTPUT, event)
+    return { status, signal }
   }
 }
 
-function integrationEntrypointEnvironment(probePath, overrides = {}) {
-  const environment = { ...process.env }
-  for (const name of STABILITY_HANDSHAKE_VARIABLES) delete environment[name]
-  return {
-    ...environment,
-    WINDSHARE_INTEGRATION_ENTRY_PROBE: probePath,
-    NODE_OPTIONS: '--windshare-integration-entrypoint-probe-must-not-run',
-    ...overrides,
-  }
+function evidenceArchive(startedEvent, result) {
+  return zipArchive([
+    { name: 'arbitrary/start.payload', content: `${JSON.stringify(startedEvent)}\n` },
+    { name: 'arbitrary/finish.payload', content: `${JSON.stringify(result)}\n` },
+  ])
 }
 
-function spawnDiagnostic(result) {
-  return [
-    result.error?.message,
-    result.stdout,
-    result.stderr,
-  ].filter((value) => typeof value === 'string' && value !== '').join('\n')
-}
+function zipArchive(entries) {
+  const locals = []
+  const centrals = []
+  let localOffset = 0
+  for (const entry of entries) {
+    const nameBytes = Buffer.from(entry.name, 'utf8')
+    const data = Buffer.from(entry.content, 'utf8')
+    const checksum = crc32(data) >>> 0
+    const flags = 1 << 11
 
-function replaceSource(sources, role, replace) {
-  return sources.map((source) => source.role === role
-    ? { role: source.role, path: source.path, source: replace(source.source.toString('utf8')) }
-    : source)
-}
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(flags, 6)
+    local.writeUInt32LE(checksum, 14)
+    local.writeUInt32LE(data.length, 18)
+    local.writeUInt32LE(data.length, 22)
+    local.writeUInt16LE(nameBytes.length, 26)
 
-function behaviorMutation(role) {
-  if (role === 'workflow') {
-    return (source) => source.replace('timeout-minutes: 15', 'timeout-minutes: 16')
+    const central = Buffer.alloc(46)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(20, 4)
+    central.writeUInt16LE(20, 6)
+    central.writeUInt16LE(flags, 8)
+    central.writeUInt32LE(checksum, 16)
+    central.writeUInt32LE(data.length, 20)
+    central.writeUInt32LE(data.length, 24)
+    central.writeUInt16LE(nameBytes.length, 28)
+    central.writeUInt32LE(localOffset, 42)
+
+    const localRecord = Buffer.concat([local, nameBytes, data])
+    locals.push(localRecord)
+    centrals.push(Buffer.concat([central, nameBytes]))
+    localOffset += localRecord.length
   }
-  return (source) => {
-    const changed = source.replace(/"revision":(\d+)/u, (_, revision) =>
-      `"revision":${Number(revision) + 1}`)
-    assert.notEqual(changed, source, `${role} semantic manifest must be present`)
-    return changed
-  }
+
+  const localBytes = Buffer.concat(locals)
+  const centralBytes = Buffer.concat(centrals)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(entries.length, 8)
+  end.writeUInt16LE(entries.length, 10)
+  end.writeUInt32LE(centralBytes.length, 12)
+  end.writeUInt32LE(localBytes.length, 16)
+  const archive = Buffer.concat([localBytes, centralBytes, end])
+  assert.ok(archive.length <= MAXIMUM_ARTIFACT_ARCHIVE_BYTES)
+  return archive
 }
 
 function reverseRecordOrder(value) {

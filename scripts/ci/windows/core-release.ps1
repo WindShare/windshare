@@ -45,8 +45,10 @@ $releaseRepository = ''
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 $releaseEnvironmentState = $null
 
-Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
-$goAuthority = Enter-WindShareGoAuthority
+# The native worker must copy the same local GOROOT used by the coordinator,
+# so resolve the developer/runner toolchain once before crossing that token boundary.
+$goApplication = @(Get-Command go -CommandType Application -ErrorAction Stop)[0]
+$goExecutable = [IO.Path]::GetFullPath($goApplication.Path)
 Import-Module (Join-Path $ciRoot 'core-release-environment.psm1') -Force
 Import-Module (Join-Path $ciRoot 'core-release-checkout.psm1') -Force
 Import-Module (Join-Path $ciRoot 'core-release-windows-native.psm1') -Force
@@ -212,7 +214,7 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
         }
 
         $coordinatorToolchain = Get-WindowsNativeCoordinatorGoToolchain `
-            -CoordinatorExecutable $goAuthority.Executable
+            -CoordinatorExecutable $goExecutable
         Write-Output ('-- selected coordinator Go application: candidates={0}, version={1}' -f @(
             $coordinatorToolchain.CandidateCount,
             $coordinatorToolchain.SelectedVersion
@@ -371,10 +373,10 @@ try {
             (Join-Path $ciRoot 'core-release-archive.tests.ps1')
     }
     Invoke-Step 'GOWORK=off go vet release helpers' {
-        Invoke-WindShareGo vet ./scripts/ci/_coremodulezip ./scripts/ci/_corevulnerability
+        & $goExecutable vet ./scripts/ci/_coremodulezip ./scripts/ci/_corevulnerability
     }
     Invoke-Step 'GOWORK=off go test release helpers' {
-        Invoke-WindShareGo test -count=1 ./scripts/ci/_coremodulezip ./scripts/ci/_corevulnerability
+        & $goExecutable test -count=1 ./scripts/ci/_coremodulezip ./scripts/ci/_corevulnerability
     }
     # Helper tests execute repository code. Re-proving the clean exact checkout
     # prevents a test from replacing the later archive builder in place.
@@ -388,7 +390,7 @@ try {
     }
     Invoke-Step "construct deterministic core module zip ($Version at $CommitSHA)" {
         Set-Location $releaseRepository
-        Invoke-WindShareGo run ./scripts/ci/_coremodulezip/main.go `
+        & $goExecutable run ./scripts/ci/_coremodulezip/main.go `
             -repo $releaseRepository `
             -commit $CommitSHA `
             -stage $stageDirectory `
@@ -409,11 +411,11 @@ try {
     }
 
     Set-Location $artifactRoot
-    Invoke-Step 'GOWORK=off go mod tidy -diff (extracted core)' { Invoke-WindShareGo mod tidy -diff }
-    Invoke-Step 'GOWORK=off go mod verify (extracted core)' { Invoke-WindShareGo mod verify }
-    Invoke-Step 'GOWORK=off go list ./... (extracted core)' { Invoke-WindShareGo list ./... }
-    Invoke-Step 'GOWORK=off go vet ./... (extracted core)' { Invoke-WindShareGo vet ./... }
-    Invoke-Step 'GOWORK=off go build ./... (extracted core)' { Invoke-WindShareGo build ./... }
+    Invoke-Step 'GOWORK=off go mod tidy -diff (extracted core)' { & $goExecutable mod tidy -diff }
+    Invoke-Step 'GOWORK=off go mod verify (extracted core)' { & $goExecutable mod verify }
+    Invoke-Step 'GOWORK=off go list ./... (extracted core)' { & $goExecutable list ./... }
+    Invoke-Step 'GOWORK=off go vet ./... (extracted core)' { & $goExecutable vet ./... }
+    Invoke-Step 'GOWORK=off go build ./... (extracted core)' { & $goExecutable build ./... }
     Invoke-Step 'version-pinned govulncheck (extracted core)' {
         Assert-ExactCoreReleaseFileProjection `
             -RepositoryRoot $releaseRepository `
@@ -425,7 +427,7 @@ try {
             )
         Set-Location $releaseRepository
         try {
-            Invoke-WindShareGo run ./scripts/ci/_corevulnerability `
+            & $goExecutable run ./scripts/ci/_corevulnerability `
                 -module $artifactRoot `
                 -cache (Join-Path $temporaryRoot 'vulnerability-cache')
         } finally {
@@ -436,7 +438,7 @@ try {
         Invoke-RequiredWindowsNativeTestsAsStandardUser
     }
     Invoke-Step 'GOWORK=off go test ./... (extracted core)' {
-        Invoke-WindShareGo test -count=1 "-timeout=$coreSuiteTestTimeout" ./...
+        & $goExecutable test -count=1 "-timeout=$coreSuiteTestTimeout" ./...
     }
 } finally {
     $cleanupErrors = [Collections.Generic.List[string]]::new()

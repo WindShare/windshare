@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CI-parity web gate (Linux). Dependency acquisition is a shared Make leaf;
-# this gate owns lint, forced typecheck, build, the v1-forbidden production
-# graph, and vitest (which consumes every retained golden-vector family).
+# `pnpm build` owns the single TypeScript compilation before Vite bundles the
+# application, avoiding a second forced project build in this wrapper.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 
@@ -11,10 +11,7 @@ echo "== web =="
 echo "-- pnpm lint"
 pnpm -C web lint
 
-echo "-- forced typecheck (tsc -b --force)"
-pnpm -C web exec tsc -b --force
-
-echo "-- pnpm build"
+echo "-- pnpm build (single TypeScript compile and Vite bundle)"
 pnpm -C web build
 
 echo "-- v1 forbidden production graph and bundle"

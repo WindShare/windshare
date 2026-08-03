@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	goAuthorityExecutableEnvironment = "WINDSHARE_GO_EXECUTABLE"
-	publicGoProxy                    = "https://proxy.golang.org"
-	publicGoSumDB                    = "sum.golang.org"
-	goAssemblyIncludeRelativePath    = "pkg/include"
-	maximumGoToolBinaries            = 256
+	goExecutableEnvironment       = "WINDSHARE_GO_EXECUTABLE"
+	publicGoProxy                 = "https://proxy.golang.org"
+	publicGoSumDB                 = "sum.golang.org"
+	goAssemblyIncludeRelativePath = "pkg/include"
+	maximumGoToolBinaries         = 256
 )
 
 type controlledGoEnvironment struct {
@@ -43,7 +43,7 @@ func prepareControlledGoEnvironment(
 	repositoryRoot string,
 	runtimeRoot string,
 ) (result controlledGoEnvironment, resultErr error) {
-	goExecutable := os.Getenv(goAuthorityExecutableEnvironment)
+	goExecutable := os.Getenv(goExecutableEnvironment)
 	var err error
 	if goExecutable == "" {
 		goExecutable, err = exec.LookPath("go")

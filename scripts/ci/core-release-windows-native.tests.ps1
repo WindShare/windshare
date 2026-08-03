@@ -1,15 +1,12 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$goAuthorityModule = Import-Module `
-    (Join-Path $PSScriptRoot 'goauthority/authority.psm1') `
-    -Force `
-    -PassThru
-$goAuthority = Enter-WindShareGoAuthority
 $windowsNativeModule = Import-Module `
     (Join-Path $PSScriptRoot 'core-release-windows-native.psm1') `
     -Force `
     -PassThru
+$coordinatorGoApplication = @(Get-Command go -CommandType Application -ErrorAction Stop)[0]
+$coordinatorGoExecutable = [IO.Path]::GetFullPath($coordinatorGoApplication.Path)
 
 function Assert-Throws([string]$Label, [scriptblock]$Body) {
     $threw = $false
@@ -229,7 +226,7 @@ $originalGoToolchain = [Environment]::GetEnvironmentVariable('GOTOOLCHAIN', 'Pro
 try {
     $env:GOTOOLCHAIN = 'local'
     $currentToolchain = Get-WindowsNativeCoordinatorGoToolchain `
-        -CoordinatorExecutable $goAuthority.Executable
+        -CoordinatorExecutable $coordinatorGoExecutable
 } finally {
     if ($null -eq $originalGoToolchain) {
         Remove-Item Env:GOTOOLCHAIN -ErrorAction SilentlyContinue
@@ -752,21 +749,33 @@ if ([string]::IsNullOrWhiteSpace($linuxReleaseJob) -or
     -not $windowsReleaseJob.Contains('timeout-minutes: 90', [StringComparison]::Ordinal)) {
     throw 'core release workflow job timeouts do not preserve the platform-specific evidence budgets'
 }
-$currentCommitWorkflowPath = Join-Path $repositoryRoot '.github\workflows\current-commit.yml'
-$currentCommitWorkflow = [IO.File]::ReadAllText($currentCommitWorkflowPath)
+$ciWorkflowPath = Join-Path $repositoryRoot '.github\workflows\ci.yml'
+$ciWorkflow = [IO.File]::ReadAllText($ciWorkflowPath)
+foreach ($tagTrigger in @('- "core/v*"', '- "core-candidate/v*/**"')) {
+    if (-not $releaseWorkflow.Contains($tagTrigger, [StringComparison]::Ordinal)) {
+        throw "core release workflow is missing tag trigger: $tagTrigger"
+    }
+    if ($ciWorkflow.Contains($tagTrigger, [StringComparison]::Ordinal)) {
+        throw "ordinary CI must not own core release tag trigger: $tagTrigger"
+    }
+}
 $ordinaryReleaseJob = Select-WorkflowJobSource `
-    -Workflow $currentCommitWorkflow `
+    -Workflow $ciWorkflow `
     -Job 'core-release'
 if ([string]::IsNullOrWhiteSpace($ordinaryReleaseJob) -or
     -not $ordinaryReleaseJob.Contains('timeout-minutes: 60', [StringComparison]::Ordinal) -or
     -not $ordinaryReleaseJob.Contains('go-version-file: core/go.mod', [StringComparison]::Ordinal) -or
     -not $ordinaryReleaseJob.Contains('cache: false', [StringComparison]::Ordinal) -or
+    -not $ordinaryReleaseJob.Contains('run: make core-release', [StringComparison]::Ordinal) -or
     $ordinaryReleaseJob.Contains('go-version-file: go.work', [StringComparison]::Ordinal)) {
-    throw 'ordinary CI core-release job lacks the fixed timeout or uncached core toolchain'
+    throw 'ordinary CI core-release job lacks the fixed timeout, synthetic gate, or uncached core toolchain'
 }
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
-    -Expected 'Invoke-WindShareGo run ./scripts/ci/_corevulnerability'
+    -Expected '& $goExecutable run ./scripts/ci/_corevulnerability'
+Assert-FileDoesNotContain `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
+    -Forbidden 'Invoke-WindShareGo'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected '-module $artifactRoot'
@@ -877,10 +886,16 @@ Assert-FileContains `
     -Expected 'Set-WindowsNativeTreeMutationDeny'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
+    -Expected '$goApplication = @(Get-Command go -CommandType Application -ErrorAction Stop)[0]'
+Assert-FileContains `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected 'Get-WindowsNativeCoordinatorGoToolchain'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected '-- selected coordinator Go application: candidates={0}, version={1}'
+Assert-FileDoesNotContain `
+    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
+    -Forbidden 'goauthority'
 Assert-FileDoesNotContain `
     -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Forbidden '(Get-Command go -CommandType Application -ErrorAction Stop).Source'
@@ -898,7 +913,7 @@ Assert-FileDoesNotContain `
     -Forbidden 'ConvertTo-SingleQuotedPowerShellLiteral'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
-    -Expected 'go test -count=1 "-timeout=$coreSuiteTestTimeout" ./...'
+    -Expected '& $goExecutable test -count=1 "-timeout=$coreSuiteTestTimeout" ./...'
 Assert-FileDoesNotContain `
     -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Forbidden 'go test -race'
@@ -978,7 +993,6 @@ foreach ($requiredModuleText in @(
     '[Environment+SpecialFolder]::CommonApplicationData',
     'CoordinatorReleaseRootLeafPattern',
     'Assert-WindowsNativeCoordinatorReleaseRoot -Ownership $Ownership',
-    'Get-Command go -CommandType Application -All -ErrorAction Stop',
     '$selectedPath = [string]$selected.Path',
     '& $resolvedGoExecutable env GOROOT',
     'Copying into the already protected release root',

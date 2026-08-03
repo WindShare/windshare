@@ -17,15 +17,37 @@ env:
   WINDSHARE_TEST_RUN_ID: stability-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
+  validate-target:
+    name: Validate default-branch target
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      target_sha: ${{ steps.target.outputs.target_sha }}
+    steps:
+      - name: bind the stability run to the default-branch SHA
+        id: target
+        shell: bash
+        env:
+          TARGET_REF: ${{ github.ref }}
+          TARGET_DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |-
+          set -euo pipefail
+          [[ "$TARGET_REF" == "$TARGET_DEFAULT_REF" ]]
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          printf 'target_sha=%s\n' "$TARGET_SHA" >> "$GITHUB_OUTPUT"
+
   linux-integration-stability:
     name: Native integration stability (Linux)
+    needs: validate-target
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          ref: ${{ github.sha }}
+          ref: ${{ needs.validate-target.outputs.target_sha }}
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
@@ -39,7 +61,7 @@ jobs:
           --started-output test-results/stability/integration-linux/started.json
           --run-id "${{ github.run_id }}"
           --run-attempt "${{ github.run_attempt }}"
-          --commit-sha "${{ github.sha }}"
+          --commit-sha "${{ needs.validate-target.outputs.target_sha }}"
           --workflow-job "${{ github.job }}"
           --suite integration
           --entrypoint "bash scripts/ci/linux/integration.sh"
@@ -47,20 +69,21 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: stability-integration-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          name: stability-integration-linux-${{ needs.validate-target.outputs.target_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/stability/integration-linux
           if-no-files-found: error
           retention-days: 90
 
   windows-integration-stability:
     name: Native integration stability (Windows)
+    needs: validate-target
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          ref: ${{ github.sha }}
+          ref: ${{ needs.validate-target.outputs.target_sha }}
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
@@ -74,7 +97,7 @@ jobs:
           --started-output test-results/stability/integration-windows/started.json
           --run-id "${{ github.run_id }}"
           --run-attempt "${{ github.run_attempt }}"
-          --commit-sha "${{ github.sha }}"
+          --commit-sha "${{ needs.validate-target.outputs.target_sha }}"
           --workflow-job "${{ github.job }}"
           --suite integration
           --entrypoint "./scripts/ci/windows/integration.ps1"
@@ -82,7 +105,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: stability-integration-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          name: stability-integration-windows-${{ needs.validate-target.outputs.target_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/stability/integration-windows
           if-no-files-found: error
           retention-days: 90

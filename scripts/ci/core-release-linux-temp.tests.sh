@@ -110,17 +110,15 @@ windshare_linux_cleanup_release_environment
 release_root=""
 
 echo "-- core-first release orchestration and no-replace invariant"
-assert_contains ".github/workflows/ci.yml" '- "core/v*"'
-assert_contains ".github/workflows/ci.yml" '- "core-candidate/v*/**"'
-assert_contains ".github/workflows/current-commit.yml" 'CORE_ARTIFACT_VERSION: "v0.0.0-ci"'
-assert_contains ".github/workflows/current-commit.yml" 'run: bash scripts/ci/linux/core-release.sh "$CORE_ARTIFACT_VERSION" "$GITHUB_SHA" linux-ext4'
-assert_not_contains ".github/workflows/current-commit.yml" 'core-release.sh v0.3.0'
-assert_not_contains ".github/workflows/current-commit.yml" 'gowork-off-root:'
-assert_contains "scripts/ci/linux/vet.sh" 'GOWORK=off windshare_go build ./...'
+assert_not_contains ".github/workflows/ci.yml" '- "core/v*"'
+assert_not_contains ".github/workflows/ci.yml" '- "core-candidate/v*/**"'
+assert_contains ".github/workflows/core-release.yml" '- "core/v*"'
+assert_contains ".github/workflows/core-release.yml" '- "core-candidate/v*/**"'
 assert_contains ".github/workflows/core-release.yml" 'uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7'
 assert_contains ".github/workflows/core-release.yml" 'uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6'
 assert_contains ".github/workflows/core-release.yml" '- "!core/v0.3.0"'
 assert_contains ".github/workflows/core-release.yml" '- "!core-candidate/v0.3.0/**"'
+assert_contains "scripts/ci/linux/vet.sh" 'GOWORK=off go build ./...'
 assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/core-release-ref.tests.sh'
 assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/core-release-ref.sh'
 assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/linux/core-release.sh "$CORE_RELEASE_VERSION" "$CORE_RELEASE_COMMIT_SHA" linux-ext4'
@@ -144,19 +142,20 @@ if [ "$(grep -Fc -- 'go-version-file: core/go.mod' .github/workflows/core-releas
    grep -Fq -- 'go-version-file: go.work' .github/workflows/core-release.yml; then
   fail "core release jobs do not derive an uncached toolchain from core/go.mod"
 fi
-ordinary_release_job="$(workflow_job_source .github/workflows/current-commit.yml core-release)"
+ordinary_release_job="$(workflow_job_source .github/workflows/ci.yml core-release)"
 if ! grep -Fq -- 'go-version-file: core/go.mod' <<<"$ordinary_release_job" ||
    ! grep -Fq -- 'cache: false' <<<"$ordinary_release_job" ||
    ! grep -Fq -- 'timeout-minutes: 60' <<<"$ordinary_release_job" ||
+   ! grep -Fq -- 'run: make core-release' <<<"$ordinary_release_job" ||
    grep -Fq -- 'go-version-file: go.work' <<<"$ordinary_release_job"; then
-  fail "ordinary CI core-release job lacks the fixed timeout or uncached core toolchain"
+  fail "ordinary CI core-release job lacks the fixed timeout, synthetic gate, or uncached core toolchain"
 fi
 assert_contains "scripts/ci/core-release-ref.sh" 'object_type" != "commit"'
 assert_contains "scripts/ci/core-release-ref.sh" 'require_direct_commit_ref "$candidate_ref" "$commit_sha"'
-assert_contains "Makefile" 'override CORE_ARTIFACT_VERSION := v0.0.0-ci'
-assert_contains "Makefile" '"$(WINDSHARE_BASH_EXECUTABLE)" scripts/ci/linux/core-release.sh "$(CORE_ARTIFACT_VERSION)" "$(CORE_ARTIFACT_COMMIT_SHA)"'
-assert_not_contains "Makefile" 'CORE_RELEASE_VERSION'
-make_preview="$(make -n core-release CORE_ARTIFACT_VERSION=v0.3.0)"
+assert_contains "Makefile" 'override CORE_RELEASE_VERSION := v0.0.0-ci'
+assert_contains "Makefile" 'bash scripts/ci/linux/core-release.sh "$(CORE_RELEASE_VERSION)" "$(CORE_RELEASE_COMMIT)"'
+assert_not_contains "Makefile" 'CORE_ARTIFACT_VERSION'
+make_preview="$(make -n core-release CORE_RELEASE_VERSION=v0.3.0)"
 if ! grep -Fq -- 'v0.0.0-ci' <<<"$make_preview" ||
    grep -Fq -- 'v0.3.0' <<<"$make_preview"; then
   fail "core-release make target allows its synthetic artifact version to be overridden"
@@ -203,10 +202,12 @@ assert_contains "scripts/ci/core-release-checkout.psm1" "StartsWith('GIT_', [Str
 assert_contains "scripts/ci/core-release-checkout.psm1" "'hash-object', '--no-filters'"
 assert_contains "scripts/ci/_coremodulezip/main.go" '"ls-tree", "-r", "-z", "--full-tree", commitSHA'
 assert_contains "scripts/ci/_coremodulezip/main.go" '"cat-file", "blob", objectID'
-assert_contains "scripts/ci/linux/core-release.sh" 'GOWORK=off windshare_go run ./scripts/ci/_corevulnerability'
+assert_contains "scripts/ci/linux/core-release.sh" 'GOWORK=off go run ./scripts/ci/_corevulnerability'
+assert_not_contains "scripts/ci/linux/core-release.sh" 'windshare_go'
 assert_contains "scripts/ci/linux/core-release.sh" '-module "$artifact_root"'
 assert_contains "scripts/ci/linux/core-release.sh" '-cache "$temporary_root/vulnerability-cache"'
-assert_contains "scripts/ci/windows/core-release.ps1" 'Invoke-WindShareGo run ./scripts/ci/_corevulnerability'
+assert_contains "scripts/ci/windows/core-release.ps1" '& $goExecutable run ./scripts/ci/_corevulnerability'
+assert_not_contains "scripts/ci/windows/core-release.ps1" 'Invoke-WindShareGo'
 assert_contains "scripts/ci/windows/core-release.ps1" '-module $artifactRoot'
 assert_contains "scripts/ci/windows/core-release.ps1" "-cache (Join-Path \$temporaryRoot 'vulnerability-cache')"
 assert_contains "scripts/ci/_corevulnerability/main.go" 'golang.org/x/vuln/cmd/govulncheck@v1.6.0'
@@ -216,7 +217,7 @@ assert_contains "scripts/ci/linux/core-release.sh" 'core_suite_test_timeout="30m
 assert_contains "scripts/ci/linux/core-release.sh" 'go test -count=1 -timeout="$core_suite_test_timeout" ./...'
 if grep -Eq -- 'go test -race|-covermode=atomic|go-test-coverage' \
   scripts/ci/linux/core-release.sh scripts/ci/windows/core-release.ps1; then
-  fail "core release duplicates the race or coverage instrumentation authorities"
+  fail "core release duplicates the race or coverage instrumentation owners"
 fi
 if grep -Fq -- 'GO_TEST_COVERAGE' scripts/ci/linux/core-release.sh scripts/ci/windows/core-release.ps1; then
   fail "core release coverage verifier still accepts a caller override"

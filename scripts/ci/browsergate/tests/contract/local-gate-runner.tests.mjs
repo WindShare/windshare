@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict'
 
 import { evaluateBrowserGate } from '../../verdict.mjs'
-import { runLocalBrowserGatePipeline } from '../../local-gate-runner.mjs'
+import {
+  runBrowserPreflightPipeline,
+  runLocalBrowserGatePipeline,
+} from '../../local-gate-runner.mjs'
 
+await verifyPreflightOwnsAndReducesBothEvidenceOperations()
+await verifyPreflightDoesNotMaskIndependentEvidence()
 await verifyCanonicalTraceAndOpaquePayloads()
 await verifyContractFailureSkipsSuiteWorkAndStillRunsVerdict()
 await verifyEveryPrerequisiteFailureProjectsHostedStatus()
@@ -10,6 +15,51 @@ await verifyRuntimeRetirementPrecedesVerdictAndFailsBothSuites()
 await verifyHostileFailureCannotBlockTraceSettlement()
 
 process.stdout.write('local browser gate DI/trace contracts: PASS\n')
+
+async function verifyPreflightOwnsAndReducesBothEvidenceOperations() {
+  const calls = []
+  const result = await runBrowserPreflightPipeline({
+    async runContract() {
+      calls.push('browser-contract')
+      return Object.freeze({ exitCode: 0 })
+    },
+    async runGeneratedSemanticProcess() {
+      calls.push('generated-semantic-process')
+      return Object.freeze({ exitCode: 0 })
+    },
+  })
+
+  assert.deepEqual(calls, ['browser-contract', 'generated-semantic-process'])
+  assert.equal(result.exitCode, 0)
+  assert.deepEqual(result.outcomes, { contract: 'success', generatedSemantic: 'success' })
+  assert.deepEqual(
+    result.traces.events.map(({ operationId, outcome }) => [operationId, outcome]),
+    [
+      ['browser-contract', 'success'],
+      ['generated-semantic-process', 'success'],
+    ],
+  )
+  assert.equal(result.traces.completed, true)
+}
+
+async function verifyPreflightDoesNotMaskIndependentEvidence() {
+  const calls = []
+  const result = await runBrowserPreflightPipeline({
+    async runContract() {
+      calls.push('browser-contract')
+      throw new Error('injected contract failure')
+    },
+    async runGeneratedSemanticProcess() {
+      calls.push('generated-semantic-process')
+      return Object.freeze({ exitCode: 0 })
+    },
+  })
+
+  assert.deepEqual(calls, ['browser-contract', 'generated-semantic-process'])
+  assert.equal(result.exitCode, 1)
+  assert.deepEqual(result.outcomes, { contract: 'failure', generatedSemantic: 'success' })
+  assert.equal(result.traces.completed, true)
+}
 
 async function verifyCanonicalTraceAndOpaquePayloads() {
   const harness = createHarness()

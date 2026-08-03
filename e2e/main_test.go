@@ -15,9 +15,9 @@ import (
 type e2eBuildProfile string
 
 const (
-	goAuthorityExecutableEnvironment                 = "WINDSHARE_GO_EXECUTABLE"
-	e2eBuildProfilePlain             e2eBuildProfile = "plain"
-	e2eBuildProfileRace              e2eBuildProfile = "race"
+	goExecutableEnvironment                 = "WINDSHARE_GO_EXECUTABLE"
+	e2eBuildProfilePlain    e2eBuildProfile = "plain"
+	e2eBuildProfileRace     e2eBuildProfile = "race"
 )
 
 type e2eBinaries struct {
@@ -143,9 +143,9 @@ func buildE2EBinaries(outDir string, profile e2eBuildProfile) (e2eBinaries, erro
 }
 
 func e2eGoExecutable() string {
-	// Hosted entrypoints retain their selected Go application across every
-	// nested build; direct developer test runs keep conventional PATH behavior.
-	if executable := os.Getenv(goAuthorityExecutableEnvironment); executable != "" {
+	// Nested test builds honor an explicitly selected Go executable, while
+	// direct developer runs keep conventional PATH behavior.
+	if executable := os.Getenv(goExecutableEnvironment); executable != "" {
 		return executable
 	}
 	return "go"

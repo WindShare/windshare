@@ -6,10 +6,6 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Historical byte evidence remains exact, while this reviewed plan keeps
-# maintenance-only edits from resetting the stability window.
-$script:WindShareStabilityHelperSemantics = '{"schema_version":"windshare.stability-helper-semantics/v1","operating_system":"windows","role":"integration-entrypoint","revision":3,"command_plan":["select-stability-evidence-mode","settle-go-authority","settle-run-identity","conditionally-publish-authenticated-product-start","invoke-retained-go-test-once"]}'
-
 $stabilityHandshakeVariableCount = 3
 $stabilityHandshakePresenceCount = 0
 $processEnvironment = [Environment]::GetEnvironmentVariables(
@@ -36,15 +32,13 @@ if ($stabilityHandshakePresenceCount -eq $stabilityHandshakeVariableCount) {
 $ciRoot = Split-Path -Parent $PSScriptRoot
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $ciRoot)
 Set-Location $repositoryRoot
-Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
-$null = Enter-WindShareGoAuthority
 Import-Module (Join-Path $ciRoot 'test-run-id.psm1') -Force
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
 Invoke-WithWindShareTestRunID -Suite 'integration' -Body {
     param([string]$RunID)
     Write-Output "== integration: run_id=$runID stability_evidence=$stabilityEvidenceMode =="
-    # Stability evidence begins only after retained Go and run identity have settled.
+    # Stability evidence begins only after the invocation run identity has settled.
     if ($stabilityEvidenceMode -eq 'authenticated') {
         node scripts/ci/stability/result.mjs started
         if ($LASTEXITCODE -ne 0) {
@@ -52,7 +46,7 @@ Invoke-WithWindShareTestRunID -Suite 'integration' -Body {
         }
         Remove-Item Env:WINDSHARE_STABILITY_START_REQUEST, Env:WINDSHARE_STABILITY_STARTED_OUTPUT, Env:WINDSHARE_STABILITY_START_SECRET -ErrorAction SilentlyContinue
     }
-    Invoke-WindShareGoTestJSON -count=1 ./integration/...
+    go test -json -count=1 ./integration/...
     if ($LASTEXITCODE -ne 0) {
         throw "integration tests exited with code $LASTEXITCODE"
     }

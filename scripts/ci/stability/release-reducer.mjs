@@ -8,26 +8,21 @@ import {
   sha256ArtifactDigest,
 } from './artifact.mjs'
 import {
+  STABILITY_EVIDENCE_EPOCH,
   STABILITY_WORKFLOW_JOBS,
   writeCanonicalJSON,
 } from './result.mjs'
-import {
-  createStabilityExecutionContract,
-  executionContractEvidenceEqual,
-  executionContractsEqual,
-  loadCurrentStabilityExecutionContract,
-} from './execution-contract.mjs'
 
 export const STABILITY_RELEASE_VERDICT_SCHEMA_VERSION =
-  'windshare.stability-release-verdict/v6'
+  'windshare.stability-release-verdict/v7'
 
 const STABILITY_FINDING_POLICY_SCHEMA_VERSION =
   'windshare.stability-finding-policy/v2'
 const STABILITY_FINDING_KEY_SCHEMA_VERSION =
-  'windshare.stability-finding-key/v1'
+  'windshare.stability-finding-key/v2'
 // Reproduction needs two independently published observations. Resolution uses
-// the same 20-sample correction authority as the refactor acceptance plan, so a
-// single green current commit can never erase a historical correctness failure.
+// the same 20-sample correction authority as the refactor acceptance plan, so
+// one green sample can never erase a historical correctness failure.
 export const REQUIRED_REPRODUCTION_OBSERVATIONS = 2
 export const REQUIRED_RESOLUTION_PASS_SAMPLES = 20
 const FINDING_POLICY = Object.freeze({
@@ -40,7 +35,7 @@ const FINDING_POLICY = Object.freeze({
   unresolved_reproduced_disposition: 'release-blocking',
   resolved_disposition: 'trend-only',
   insufficient_history_disposition: 'non-blocking-resolution-not-evaluated',
-  release_blocking_authority: 'historical-findings-and-current-commit-validation',
+  release_blocking_authority: 'historical-findings-and-sha-bound-current-evidence',
 })
 
 const GITHUB_API_VERSION = '2026-03-10'
@@ -49,7 +44,6 @@ const MAXIMUM_REQUIRED_SAMPLES = 100
 const PAGE_SIZE = 100
 const MAXIMUM_LIST_PAGES = 100
 const HISTORY_QUERY_CONCURRENCY = 8
-const MAXIMUM_SOURCE_BYTES = 1_048_576
 const INTEGRATION_STEP_NAME = 'run native integration exactly once'
 const UPLOAD_STEP_NAME = 'publish authenticated stability evidence'
 const INFRASTRUCTURE_JOB_CONCLUSIONS = new Set([
@@ -98,20 +92,15 @@ class GitHubRequestError extends Error {
 export async function reduceStabilityHistory({
   repository,
   workflow,
+  targetSha,
   requiredRuns,
   token,
   fetchImpl = globalThis.fetch,
-  repositoryRoot = process.cwd(),
 }) {
   const repositoryPath = requireRepository(repository)
   requireWorkflow(workflow)
-  if (
-    !Number.isSafeInteger(requiredRuns) ||
-    requiredRuns < 1 ||
-    requiredRuns > MAXIMUM_REQUIRED_SAMPLES
-  ) {
-    throw new Error(`required sample count must be between 1 and ${MAXIMUM_REQUIRED_SAMPLES}`)
-  }
+  const canonicalTargetSha = requireTargetSHA(targetSha)
+  requireRequiredSampleCount(requiredRuns)
   if (typeof token !== 'string' || token.trim() === '' || token.trim() !== token) {
     throw new Error('GitHub API token is missing or non-canonical')
   }
@@ -121,20 +110,10 @@ export async function reduceStabilityHistory({
 
   const repositoryMetadata = await getJSON(fetchImpl, token, `/repos/${repositoryPath}`)
   const defaultBranch = requireDefaultBranch(repositoryMetadata.default_branch)
-  const currentContracts = new Map(OPERATING_SYSTEMS.map((operatingSystem) => [
-    operatingSystem,
-    loadCurrentStabilityExecutionContract({ operatingSystem, repositoryRoot }),
-  ]))
   const context = {
     repositoryPath,
-    workflow,
-    requiredSamples: requiredRuns,
     token,
     fetchImpl,
-    defaultBranch,
-    currentContracts,
-    contractCache: new Map(),
-    sourceCache: new Map(),
     compareCache: new Map(),
   }
   const samples = new Map(OPERATING_SYSTEMS.map((operatingSystem) => [operatingSystem, []]))
@@ -301,6 +280,7 @@ export async function reduceStabilityHistory({
     schema_version: STABILITY_RELEASE_VERDICT_SCHEMA_VERSION,
     repository,
     workflow,
+    target_sha: canonicalTargetSha,
     required_sample_count: requiredRuns,
     observed_run_count: observedRunCount,
     history_exhausted: historyExhausted,
@@ -371,11 +351,11 @@ async function reduceHistoricalFindings(context, samplesByOperatingSystem, evalu
 function findingKey(sample) {
   const verdict = sample.product_verdict
   // Volatile paths, timestamps, commit IDs, and diagnostics stay in observations.
-  // The key changes only when the tested semantics or stable failure signature does.
+  // The epoch makes comparability explicit while the product termination tuple
+  // remains stable across independent runs.
   return Object.freeze({
     schema_version: STABILITY_FINDING_KEY_SCHEMA_VERSION,
-    execution_contract_schema_version: sample.execution_contract_schema_version,
-    execution_contract_semantic_sha256: sample.execution_contract_semantic_sha256,
+    evidence_epoch: sample.evidence_epoch,
     operating_system: sample.operating_system,
     suite: sample.suite,
     failure_class: verdict.failure_class,
@@ -549,12 +529,7 @@ async function evaluateOperatingSystemSample(context, run, operatingSystem, jobs
       { cause },
     )
   }
-  const historicalContract = await historicalExecutionContract(
-    context,
-    run,
-    operatingSystem,
-  )
-  validateArtifactResult(result, run, operatingSystem, authority, historicalContract)
+  validateArtifactResult(result, run, operatingSystem, authority)
   validateJobSettlement(job, result, run)
 
   return Object.freeze({
@@ -571,11 +546,10 @@ async function evaluateOperatingSystemSample(context, run, operatingSystem, jobs
     artifact_id: String(artifact.id),
     artifact_name: artifact.name,
     artifact_digest: artifact.digest,
+    evidence_epoch: result.evidence_epoch,
     operating_system: operatingSystem,
     suite: 'integration',
     product_verdict: result.product_verdict,
-    execution_contract_schema_version: result.execution_contract.schema_version,
-    execution_contract_semantic_sha256: result.execution_contract.semantic_contract_sha256,
   })
 }
 
@@ -620,7 +594,7 @@ function selectJobCandidate(jobs, run, operatingSystem, authority) {
 
 function selectArtifactCandidate(artifacts, run, operatingSystem) {
   const expectedName =
-    `stability-integration-${operatingSystem}-${run.workflow_run_id}-${run.workflow_run_attempt}`
+    `stability-integration-${operatingSystem}-${run.commit_sha}-${run.workflow_run_id}-${run.workflow_run_attempt}`
   const candidates = artifacts.filter((artifact) =>
     artifact !== null &&
     typeof artifact === 'object' &&
@@ -666,8 +640,9 @@ function selectArtifactCandidate(artifacts, run, operatingSystem) {
   })
 }
 
-function validateArtifactResult(result, run, operatingSystem, authority, historicalContract) {
+function validateArtifactResult(result, run, operatingSystem, authority) {
   const matches =
+    result.evidence_epoch === STABILITY_EVIDENCE_EPOCH &&
     result.workflow_run_id === run.workflow_run_id &&
     result.workflow_run_attempt === run.workflow_run_attempt &&
     result.commit_sha === run.commit_sha &&
@@ -675,8 +650,7 @@ function validateArtifactResult(result, run, operatingSystem, authority, histori
     result.operating_system === operatingSystem &&
     result.suite === 'integration' &&
     result.retry_count === run.workflow_run_attempt - 1 &&
-    result.retry_count === 0 &&
-    executionContractEvidenceEqual(result.execution_contract, historicalContract)
+    result.retry_count === 0
   if (!matches) {
     throw new EvidenceInvalidError(
       'result-identity-mismatch',
@@ -844,128 +818,6 @@ function invalidObservation(run, operatingSystem, cause) {
   })
 }
 
-async function historicalExecutionContract(context, run, operatingSystem) {
-  const key = `${run.commit_sha}\0${operatingSystem}`
-  let operation = context.contractCache.get(key)
-  if (operation === undefined) {
-    operation = loadHistoricalExecutionContract(context, run.commit_sha, operatingSystem)
-      .catch((cause) => {
-        if (context.contractCache.get(key) === operation) context.contractCache.delete(key)
-        throw cause
-      })
-    context.contractCache.set(key, operation)
-  }
-  return operation
-}
-
-async function loadHistoricalExecutionContract(context, commitSha, operatingSystem) {
-  const current = context.currentContracts.get(operatingSystem)
-  if (current === undefined) throw new Error(`current ${operatingSystem} stability contract is missing`)
-  const sources = await Promise.all(current.sources.map(async ({ role, path }) => {
-    const historical = await historicalSource(context, commitSha, path)
-    return Object.freeze({
-      role,
-      path,
-      source: historical.bytes,
-      gitBlobSha1: historical.gitBlobSha1,
-    })
-  }))
-  let historical
-  try {
-    historical = createStabilityExecutionContract({ operatingSystem, sources })
-  } catch (cause) {
-    throw new EvidenceInvalidError(
-      'invalid-execution-contract',
-      `stability history commit ${commitSha} has an invalid ${operatingSystem} execution contract`,
-      { cause },
-    )
-  }
-  if (!executionContractsEqual(historical, current)) {
-    throw new EvidenceInvalidError(
-      'execution-contract-drift',
-      `stability history commit ${commitSha} does not use the current ${operatingSystem} execution contract`,
-    )
-  }
-  return historical
-}
-
-async function historicalSource(context, commitSha, path) {
-  const key = `${commitSha}\0${path}`
-  let operation = context.sourceCache.get(key)
-  if (operation === undefined) {
-    operation = getRepositoryFile(
-      context.fetchImpl,
-      context.token,
-      context.repositoryPath,
-      commitSha,
-      path,
-    ).catch((cause) => {
-      if (context.sourceCache.get(key) === operation) context.sourceCache.delete(key)
-      throw cause
-    })
-    context.sourceCache.set(key, operation)
-  }
-  return operation
-}
-
-async function getRepositoryFile(fetchImpl, token, repositoryPath, commitSha, path) {
-  if (!/^[a-f0-9]{40}$/u.test(commitSha)) {
-    throw new EvidenceInvalidError('invalid-source-identity', 'historical source commit SHA is invalid')
-  }
-  const encodedPath = path.split('/').map(encodeURIComponent).join('/')
-  let response
-  try {
-    response = await getJSON(
-      fetchImpl,
-      token,
-      `/repos/${repositoryPath}/contents/${encodedPath}?ref=${commitSha}`,
-    )
-  } catch (cause) {
-    if (cause instanceof GitHubRequestError && cause.status === 404) {
-      throw new EvidenceInvalidError(
-        'missing-execution-source',
-        `historical source ${path} is missing at ${commitSha}`,
-        { cause },
-      )
-    }
-    throw cause
-  }
-  if (
-    response === null ||
-    typeof response !== 'object' ||
-    Array.isArray(response) ||
-    response.type !== 'file' ||
-    response.path !== path ||
-    response.encoding !== 'base64' ||
-    !Number.isSafeInteger(response.size) ||
-    response.size < 1 ||
-    response.size > MAXIMUM_SOURCE_BYTES ||
-    typeof response.sha !== 'string' ||
-    !/^[a-f0-9]{40}$/u.test(response.sha) ||
-    typeof response.content !== 'string' ||
-    !/^[A-Za-z0-9+/=\n]+$/u.test(response.content)
-  ) {
-    throw new EvidenceInvalidError(
-      'invalid-execution-source',
-      `historical source ${path} at ${commitSha} is malformed`,
-    )
-  }
-  const canonicalBase64 = response.content.replace(/\n/gu, '')
-  const bytes = Buffer.from(canonicalBase64, 'base64')
-  if (
-    bytes.byteLength !== response.size ||
-    bytes.byteLength > MAXIMUM_SOURCE_BYTES ||
-    bytes.toString('base64') !== canonicalBase64 ||
-    gitBlobSha(bytes) !== response.sha
-  ) {
-    throw new EvidenceInvalidError(
-      'invalid-execution-source-binding',
-      `historical source ${path} at ${commitSha} failed content binding`,
-    )
-  }
-  return Object.freeze({ bytes, gitBlobSha1: response.sha })
-}
-
 async function listRunJobs(context, run) {
   return listRunCollection({
     context,
@@ -1029,13 +881,6 @@ async function listRunCollection({ context, run, kind, path, field }) {
     `${kind}-pagination-limit`,
     `stability ${kind} pagination exceeded its safety limit for run ${run.workflow_run_id}`,
   )
-}
-
-function gitBlobSha(bytes) {
-  return createHash('sha1')
-    .update(Buffer.from(`blob ${bytes.byteLength}\0`, 'utf8'))
-    .update(bytes)
-    .digest('hex')
 }
 
 async function getJSON(fetchImpl, token, path) {
@@ -1189,6 +1034,24 @@ function requireWorkflow(value) {
   }
 }
 
+function requireTargetSHA(value) {
+  if (typeof value !== 'string' || !/^[a-f0-9]{40}$/u.test(value)) {
+    throw new Error('release target SHA must be a canonical lowercase SHA-1 object ID')
+  }
+  return value
+}
+
+function requireRequiredSampleCount(value) {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > MAXIMUM_REQUIRED_SAMPLES
+  ) {
+    throw new Error(`required sample count must be between 1 and ${MAXIMUM_REQUIRED_SAMPLES}`)
+  }
+  return value
+}
+
 function requireDefaultBranch(value) {
   if (
     typeof value !== 'string' ||
@@ -1227,23 +1090,38 @@ function requiredOption(options, name) {
 
 async function main() {
   const options = parseOptions(process.argv.slice(2))
-  const allowed = new Set(['--repository', '--workflow', '--required-runs', '--output'])
+  const allowed = new Set([
+    '--repository',
+    '--workflow',
+    '--target-sha',
+    '--required-runs',
+    '--output',
+  ])
   for (const name of options.keys()) if (!allowed.has(name)) throw new Error(`unsupported option ${name}`)
-  const requiredRuns = Number(requiredOption(options, '--required-runs'))
+  const requiredRuns = requireRequiredSampleCount(
+    Number(requiredOption(options, '--required-runs')),
+  )
   const repository = requiredOption(options, '--repository')
   const workflow = requiredOption(options, '--workflow')
+  const targetSha = requireTargetSHA(requiredOption(options, '--target-sha'))
   const output = requiredOption(options, '--output')
+
+  // Terminal v7 verdicts are emitted only after every schema-bearing invocation
+  // field is canonical, so reducer failures cannot publish malformed evidence.
+  requireRepository(repository)
+  requireWorkflow(workflow)
 
   let verdict
   try {
     verdict = await reduceStabilityHistory({
       repository,
       workflow,
+      targetSha,
       requiredRuns,
       token: process.env.GITHUB_TOKEN,
     })
   } catch (cause) {
-    verdict = terminalReducerFailure(repository, workflow, requiredRuns, cause)
+    verdict = terminalReducerFailure(repository, workflow, targetSha, requiredRuns, cause)
     try {
       writeCanonicalJSON(output, verdict)
     } catch (writeFailure) {
@@ -1275,7 +1153,7 @@ export function releaseReducerProcessResult(verdict) {
     return Object.freeze({
       exitCode: 0,
       stream: 'stdout',
-      message: `stability-release-reducer: INSUFFICIENT HISTORY (${counts}; finding resolution not evaluated; current-commit validation still executes)`,
+      message: `stability-release-reducer: INSUFFICIENT HISTORY (${counts}; finding resolution not evaluated; SHA-bound current evidence is still required)`,
     })
   }
   if (verdict.outcome !== 'passed') throw new Error('stability release verdict outcome is unsupported')
@@ -1286,11 +1164,11 @@ export function releaseReducerProcessResult(verdict) {
     stream: 'stdout',
     message: `stability-release-reducer: PASS (${verdict.required_sample_count} valid samples per OS; ` +
       `${resolvedFindings} resolved trend finding(s); ${trackedFindings} tracked nonblocking finding(s); ` +
-      'current-commit validation remains required)',
+      'SHA-bound current evidence remains required)',
   })
 }
 
-function terminalReducerFailure(repository, workflow, requiredRuns, cause) {
+function terminalReducerFailure(repository, workflow, targetSha, requiredRuns, cause) {
   const emptyByOS = Object.freeze(Object.fromEntries(OPERATING_SYSTEMS.map(
     (operatingSystem) => [operatingSystem, Object.freeze([])],
   )))
@@ -1301,6 +1179,7 @@ function terminalReducerFailure(repository, workflow, requiredRuns, cause) {
     schema_version: STABILITY_RELEASE_VERDICT_SCHEMA_VERSION,
     repository,
     workflow,
+    target_sha: targetSha,
     required_sample_count: requiredRuns,
     observed_run_count: 0,
     history_exhausted: false,

@@ -31,7 +31,6 @@ identity, or v1 receiver fallback.
 ```powershell
 pnpm -C web install --frozen-lockfile
 pnpm -C web lint
-pnpm -C web exec tsc -b --force
 pnpm -C web build
 pnpm -C web forbidden
 pnpm -C web run test:unit:remainder
@@ -41,6 +40,9 @@ pnpm -C web run test:unit:remainder
 dependency graph, scans all Web source/tests, and checks the built bundle.
 
 ## Browser evidence
+
+`make browser-preflight` runs the browser contract and generated-semantic check
+through one reducer, matching the ordinary CI owner.
 
 `pnpm -C web test:browser:smoke` runs the single Chromium product path used by
 the Windows PR gate. `pnpm -C web test:browser` (or `make browser`) runs the full

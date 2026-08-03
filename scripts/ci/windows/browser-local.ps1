@@ -1,7 +1,5 @@
-# The cross-platform orchestrator owns ordering and final-status reduction so a
-# failed main suite cannot prevent Pion evidence, guards, or the verdict.
-# Firewall prompts and WBEM state are never inspected because neither is
-# evidence about browser correctness.
+# Browsergate owns orchestration and final reduction; this file is only the
+# native Make boundary and deliberately forwards the supported local options.
 [CmdletBinding()]
 param(
     [switch]$Plan,
@@ -15,8 +13,6 @@ $ErrorActionPreference = 'Stop'
 $ciRoot = Split-Path -Parent $PSScriptRoot
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $ciRoot)
 Set-Location $repositoryRoot
-Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
-$null = Enter-WindShareGoAuthority
 
 $arguments = @(
     (Join-Path $repositoryRoot 'scripts\ci\browsergate\main.mjs'),
@@ -32,5 +28,5 @@ if (-not [string]::IsNullOrWhiteSpace($Profile)) {
     $arguments += @('--profile', [IO.Path]::GetFullPath($Profile))
 }
 
-Invoke-WindShareGoConsumer node @arguments
+& node @arguments
 exit $LASTEXITCODE

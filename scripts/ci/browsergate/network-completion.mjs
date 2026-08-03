@@ -808,17 +808,25 @@ function rejectAmbientOidc(environment) {
   }
 }
 
+export function takeNetworkCompletionConsumerInputs(environment) {
+  rejectAmbientOidc(environment)
+  // Completion verification has its own commit identity; coupling it to the
+  // core-release variable made an unrelated local gate the browser trust root.
+  return Object.freeze({
+    completionPath: takeEnvironment(environment, 'BROWSER_NETWORK_COMPLETION'),
+    checkoutSha: takeEnvironment(environment, 'WINDSHARE_TARGET_SHA'),
+  })
+}
+
 const invokedPath = process.argv[1] === undefined ? undefined : pathToFileURL(resolve(process.argv[1])).href
 if (invokedPath === import.meta.url) {
   try {
     if (process.argv.length !== 3 || process.argv[2] !== 'consume') {
       throw new Error('browser network completion accepts only the consume command')
     }
-    rejectAmbientOidc(process.env)
-    const completionPath = takeEnvironment(process.env, 'BROWSER_NETWORK_COMPLETION')
-    const checkoutSha = takeEnvironment(process.env, 'WINDSHARE_CORE_ARTIFACT_COMMIT_SHA')
+    const consumerInputs = takeNetworkCompletionConsumerInputs(process.env)
     const repositoryRoot = resolve(import.meta.dirname, '..', '..', '..')
-    const result = await consumeNetworkCompletion({ completionPath, checkoutSha, repositoryRoot })
+    const result = await consumeNetworkCompletion({ ...consumerInputs, repositoryRoot })
     process.stdout.write(`${JSON.stringify(result)}\n`)
   } catch {
     process.stderr.write(`${JSON.stringify({

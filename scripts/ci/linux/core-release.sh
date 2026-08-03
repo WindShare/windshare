@@ -8,8 +8,14 @@ set -euo pipefail
 cd "$(dirname "$0")/../../.."
 
 repository_root="$(pwd -P)"
-source scripts/ci/goauthority/authority.sh
-windshare_enter_go_authority
+if ! command -v go >/dev/null 2>&1; then
+  echo "core release requires the local Go toolchain on PATH" >&2
+  exit 1
+fi
+# Native certification and the vulnerability helper need the same coordinator
+# toolchain path; publish the locally resolved Go command without retaining it.
+WINDSHARE_GO_EXECUTABLE="$(command -v go)"
+export WINDSHARE_GO_EXECUTABLE
 source scripts/ci/core-release-checkout.sh
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
   echo "usage: scripts/ci/linux/core-release.sh <version> <commit-sha> [linux-ext4]" >&2
@@ -112,9 +118,9 @@ echo "-- commit-bound archive contract"
 bash scripts/ci/core-release-archive.tests.sh
 
 echo "-- GOWORK=off go vet release helpers"
-windshare_go vet ./scripts/ci/_coremodulezip ./scripts/ci/_corevulnerability
+go vet ./scripts/ci/_coremodulezip ./scripts/ci/_corevulnerability
 echo "-- GOWORK=off go test release helpers"
-windshare_go test -count=1 ./scripts/ci/_coremodulezip ./scripts/ci/_corevulnerability
+go test -count=1 ./scripts/ci/_coremodulezip ./scripts/ci/_corevulnerability
 # Helper tests are allowed to execute code, so re-prove the verifier checkout
 # before compiling the archive builder that supplies release evidence.
 windshare_assert_exact_release_checkout "$repository_root" "$release_commit"
@@ -129,7 +135,7 @@ windshare_create_exact_release_checkout \
 echo "-- construct deterministic core module zip ($release_version at $release_commit)"
 (
   cd "$release_repository"
-  windshare_go run ./scripts/ci/_coremodulezip/main.go \
+  go run ./scripts/ci/_coremodulezip/main.go \
     -repo "$release_repository" \
     -commit "$release_commit" \
     -stage "$stage_directory" \
@@ -154,15 +160,15 @@ fi
   export GOWORK=off
 
   echo "-- GOWORK=off go mod tidy -diff (extracted core)"
-  windshare_go mod tidy -diff
+  go mod tidy -diff
   echo "-- GOWORK=off go mod verify (extracted core)"
-  windshare_go mod verify
+  go mod verify
   echo "-- GOWORK=off go list ./... (extracted core)"
-  windshare_go list ./...
+  go list ./...
   echo "-- GOWORK=off go vet ./... (extracted core)"
-  windshare_go vet ./...
+  go vet ./...
   echo "-- GOWORK=off go build ./... (extracted core)"
-  windshare_go build ./...
+  go build ./...
   echo "-- version-pinned govulncheck (extracted core)"
   (
     windshare_assert_exact_release_file_projection \
@@ -172,12 +178,12 @@ fi
       go.sum \
       scripts/ci/_corevulnerability/main.go
     cd "$release_repository"
-    GOWORK=off windshare_go run ./scripts/ci/_corevulnerability \
+    GOWORK=off go run ./scripts/ci/_corevulnerability \
       -module "$artifact_root" \
       -cache "$temporary_root/vulnerability-cache"
   )
   echo "-- GOWORK=off go test ./... (extracted core)"
-  windshare_go test -count=1 -timeout="$core_suite_test_timeout" ./...
+  go test -count=1 -timeout="$core_suite_test_timeout" ./...
 )
 
 if [ "$native_profile" = "linux-ext4" ]; then
@@ -186,7 +192,7 @@ if [ "$native_profile" = "linux-ext4" ]; then
     "$release_commit" \
     scripts/ci/core-release-linux-native.sh \
     scripts/ci/core-release-linux-native-root.sh
-  windshare_go_consumer bash scripts/ci/core-release-linux-native.sh "$artifact_root" "$temporary_root"
+  bash scripts/ci/core-release-linux-native.sh "$artifact_root" "$temporary_root"
 fi
 
 echo "== core-release: PASS in ${SECONDS}s =="

@@ -5,9 +5,6 @@
 # committed core/testvectors/. Hashes stage in a mktemp dir (CI uses RUNNER_TEMP).
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
-source scripts/ci/goauthority/authority.sh
-windshare_enter_go_authority
-
 SECONDS=0
 echo "== vectors =="
 vector_root="core/testvectors"
@@ -26,14 +23,14 @@ assert_vector_inventory() {
 }
 
 echo "-- regenerate all vector families (first pass)"
-windshare_go -C core test -count=1 ./internal/protocolcontract -update
-windshare_go test -count=1 ./connectivity/v2signal -update
+go -C core test -count=1 ./internal/protocolcontract -update
+go test -count=1 ./connectivity/v2signal -update
 assert_vector_inventory "first pass"
 sha256sum "$vector_root"/*.json | sort > "$hash_dir/vectors-first.sha256"
 
 echo "-- regenerate all vector families (second pass)"
-windshare_go -C core test -count=1 ./internal/protocolcontract -update
-windshare_go test -count=1 ./connectivity/v2signal -update
+go -C core test -count=1 ./internal/protocolcontract -update
+go test -count=1 ./connectivity/v2signal -update
 assert_vector_inventory "second pass"
 sha256sum "$vector_root"/*.json | sort > "$hash_dir/vectors-second.sha256"
 
