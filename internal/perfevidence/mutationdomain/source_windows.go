@@ -3,7 +3,6 @@
 package mutationdomain
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +14,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/windshare/windshare/internal/perfevidence/mutationdomain/windowsbroker"
 	"golang.org/x/sys/windows"
 )
 
@@ -62,9 +62,9 @@ func stageSealedInputs(
 	privateRootPath string,
 	privateRoot windows.Handle,
 	roots []rootSpec,
-	creator sealedObjectCreator,
+	creator windowsbroker.ObjectCreator,
 ) (string, error) {
-	entropy, err := randomBytes(16)
+	entropy, err := windowsbroker.RandomBytes(16)
 	if err != nil {
 		return "", err
 	}
@@ -135,7 +135,7 @@ func stageSealedInputs(
 }
 
 func acquireRetainedWindowsSourceWithBudget(path string, budget *mutationTraversalBudget) (*retainedWindowsSource, error) {
-	root, information, err := openRetainedWindowsSourceObject(0, windowsNTPath(path), true)
+	root, information, err := openRetainedWindowsSourceObject(0, windowsbroker.NTPath(path), true)
 	if err != nil {
 		return nil, err
 	}
@@ -146,11 +146,11 @@ func acquireRetainedWindowsSourceWithBudget(path string, budget *mutationTravers
 	if information.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		return fail(errors.New("Windows source root is a reparse point"))
 	}
-	finalPath, err := finalWindowsHandlePath(root)
+	finalPath, err := windowsbroker.FinalHandlePath(root)
 	if err != nil {
 		return fail(err)
 	}
-	if !strings.EqualFold(normalizeWindowsPath(finalPath), normalizeWindowsPath(path)) {
+	if !strings.EqualFold(windowsbroker.NormalizePath(finalPath), windowsbroker.NormalizePath(path)) {
 		return fail(fmt.Errorf("Windows source root resolved to %s, want %s", finalPath, path))
 	}
 	if err := source.acquireDirectory(root, "", 0, budget); err != nil {
@@ -305,33 +305,8 @@ func copySealedFile(
 	source io.Reader,
 	parent windows.Handle,
 	name string,
-	creator sealedObjectCreator,
+	creator windowsbroker.ObjectCreator,
 	retain bool,
 ) (*os.File, string, error) {
-	handle, err := creator.create(parent, name, false)
-	if err != nil {
-		return nil, "", err
-	}
-	return copySealedFileHandle(source, handle, name, retain)
-}
-
-func copySealedFileHandle(
-	source io.Reader,
-	handle windows.Handle,
-	name string,
-	retain bool,
-) (*os.File, string, error) {
-	file := os.NewFile(uintptr(handle), name)
-	hasher := sha256.New()
-	_, copyErr := io.Copy(io.MultiWriter(file, hasher), source)
-	flushErr := windows.FlushFileBuffers(handle)
-	_, seekErr := file.Seek(0, io.SeekStart)
-	if err := errors.Join(copyErr, flushErr, seekErr); err != nil {
-		return nil, "", errors.Join(err, file.Close())
-	}
-	digest := hex.EncodeToString(hasher.Sum(nil))
-	if retain {
-		return file, digest, nil
-	}
-	return nil, digest, file.Close()
+	return windowsbroker.CopySealedFile(source, parent, name, creator, retain)
 }

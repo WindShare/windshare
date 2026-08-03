@@ -11,23 +11,21 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"unsafe"
 
+	"github.com/windshare/windshare/internal/perfevidence/mutationdomain/windowsbroker"
 	"golang.org/x/sys/windows"
 )
 
 const (
-	appContainerProfilePrefix          = "WindShare.Performance."
-	appContainerProfileEntropyBytes    = 16
-	appContainerProfileEntropyHexBytes = appContainerProfileEntropyBytes * 2
+	appContainerProfilePrefix          = windowsbroker.ProfileNamePrefix
+	appContainerProfileEntropyBytes    = windowsbroker.ProfileEntropyBytes
+	appContainerProfileEntropyHexBytes = windowsbroker.ProfileEntropyHexBytes
 	appContainerLedgerDirectory        = ".windshare-appcontainer-profiles"
 	appContainerLedgerLock             = "ledger.lock"
 	appContainerMarkerSuffix           = ".pending"
 	appContainerMarkerMaximumBytes     = 256
 	appContainerLedgerMaximumEntries   = 1024
 	appContainerLedgerReadBatch        = 64
-	hresultFileNotFound                = 0x80070002
-	hresultNotFound                    = 0x80070490
 )
 
 type windowsProfileLedger struct {
@@ -155,88 +153,23 @@ func (ledger *windowsProfileLedger) close() error {
 }
 
 func createAppContainerRecoveryMarker(runtimeRoot, profileName string) (string, error) {
-	if !validEphemeralAppContainerProfileName(profileName) {
-		return "", fmt.Errorf("refuse recovery marker for unreserved AppContainer profile %q", profileName)
-	}
-	directory := filepath.Join(runtimeRoot, appContainerLedgerDirectory)
-	marker := filepath.Join(directory, profileName+appContainerMarkerSuffix)
-	file, err := os.OpenFile(marker, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return "", fmt.Errorf("create AppContainer recovery marker: %w", err)
-	}
-	_, writeErr := file.WriteString(profileName + "\n")
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
-		return "", errors.Join(err, os.Remove(marker))
-	}
-	return marker, nil
+	return windowsbroker.CreateRecoveryMarker(runtimeRoot, profileName)
 }
 
 func createEphemeralAppContainerProfile(profileName string) (*windows.SID, error) {
-	if !validEphemeralAppContainerProfileName(profileName) {
-		return nil, fmt.Errorf("refuse creation of unreserved AppContainer profile %q", profileName)
-	}
-	encodedName, err := windows.UTF16PtrFromString(profileName)
-	if err != nil {
-		return nil, err
-	}
-	display, _ := windows.UTF16PtrFromString("WindShare private performance mutation domain")
-	description, _ := windows.UTF16PtrFromString("Ephemeral no-network performance evidence helper")
-	var packageSID *windows.SID
-	result, _, _ := createAppContainerProfile.Call(
-		uintptr(unsafe.Pointer(encodedName)),
-		uintptr(unsafe.Pointer(display)),
-		uintptr(unsafe.Pointer(description)),
-		0,
-		0,
-		uintptr(unsafe.Pointer(&packageSID)),
-	)
-	if int32(result) < 0 {
-		return nil, fmt.Errorf("create AppContainer profile: HRESULT 0x%08x", uint32(result))
-	}
-	if packageSID == nil {
-		return nil, errors.New("created AppContainer profile returned no package SID")
-	}
-	return packageSID, nil
+	return windowsbroker.CreateProfile(profileName)
 }
 
 func releaseNativeAppContainerSID(packageSID *windows.SID) error {
-	if packageSID == nil {
-		return nil
-	}
-	// CreateAppContainerProfile transfers a native SID allocation to its caller.
-	// Token SID copies use Go memory and deliberately never enter this function.
-	return windows.FreeSid(packageSID)
+	return windowsbroker.ReleaseProfileSID(packageSID)
 }
 
 func deleteEphemeralAppContainerProfile(profileName string) error {
-	if !validEphemeralAppContainerProfileName(profileName) {
-		return fmt.Errorf("refuse deletion of unreserved AppContainer profile %q", profileName)
-	}
-	encoded, err := windows.UTF16PtrFromString(profileName)
-	if err != nil {
-		return err
-	}
-	result, _, _ := deleteAppContainerProfile.Call(uintptr(unsafe.Pointer(encoded)))
-	hresult := uint32(result)
-	if int32(result) >= 0 || hresult == hresultFileNotFound || hresult == hresultNotFound {
-		return nil
-	}
-	return fmt.Errorf("delete AppContainer profile: HRESULT 0x%08x", hresult)
+	return windowsbroker.DeleteProfile(profileName)
 }
 
 func validEphemeralAppContainerProfileName(profileName string) bool {
-	if !strings.HasPrefix(profileName, appContainerProfilePrefix) ||
-		len(profileName) != len(appContainerProfilePrefix)+appContainerProfileEntropyHexBytes {
-		return false
-	}
-	for _, character := range profileName[len(appContainerProfilePrefix):] {
-		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
-			return false
-		}
-	}
-	return true
+	return windowsbroker.ValidProfileName(profileName)
 }
 
 func profileNameFromMarker(marker string) (string, bool) {

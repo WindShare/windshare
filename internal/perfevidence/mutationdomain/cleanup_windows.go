@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"unsafe"
 
+	"github.com/windshare/windshare/internal/perfevidence/mutationdomain/windowsbroker"
 	"golang.org/x/sys/windows"
 )
 
@@ -114,7 +115,7 @@ func removeWindowsTreeAt(
 			}
 		}
 	}
-	return markWindowsHandleForDeletion(handle)
+	return windowsbroker.MarkHandleForDeletion(handle)
 }
 
 func openWindowsCleanupObject(
