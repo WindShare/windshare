@@ -186,7 +186,6 @@ func (profile e2eBuildProfile) validate() error {
 func TestE2EBuildPlanAppliesProfileToEveryChild(t *testing.T) {
 	t.Parallel()
 	for _, profile := range []e2eBuildProfile{e2eBuildProfilePlain, e2eBuildProfileRace} {
-		profile := profile
 		t.Run(string(profile), func(t *testing.T) {
 			t.Parallel()
 			plan, err := e2eBuildPlan(t.TempDir(), profile)
@@ -223,7 +222,6 @@ func TestE2EChildBuildProfileMatchesParentInstrumentation(t *testing.T) {
 		"windshare":        binaries.windshare,
 		"testprocessowner": binaries.processOwner,
 	} {
-		component, filename := component, filename
 		t.Run(component, func(t *testing.T) {
 			hasRace, err := binaryUsesRaceInstrumentation(filename)
 			if err != nil {

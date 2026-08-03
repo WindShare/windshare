@@ -217,8 +217,7 @@ func startPlatform(
 			waitResult,
 			windowsOwnerForcedJoinWait,
 		)
-		var exitErr *exec.ExitError
-		if errors.As(startupState.waitErr, &exitErr) {
+		if _, ok := errors.AsType[*exec.ExitError](startupState.waitErr); ok {
 			killErr = nil
 		}
 		var joinErr error

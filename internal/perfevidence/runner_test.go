@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -719,10 +720,5 @@ func (runner *fixtureCommandRunner) Run(_ context.Context, command Command) (Com
 }
 
 func slicesContain(values []string, wanted string) bool {
-	for _, value := range values {
-		if value == wanted {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, wanted)
 }

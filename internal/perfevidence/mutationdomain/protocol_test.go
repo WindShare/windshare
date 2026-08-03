@@ -481,7 +481,7 @@ func TestCapturedPathRewriteIsCanonicalAndTokenBounded(t *testing.T) {
 	}
 	input := nested + string(filepath.Separator) + "file " + root + string(filepath.Separator) + "file buildid=prefix" + root + "suffix"
 	want := "HOST_NESTED" + string(filepath.Separator) + "file HOST_ROOT" + string(filepath.Separator) + "file buildid=prefix" + root + "suffix"
-	for iteration := 0; iteration < 10; iteration++ {
+	for range 10 {
 		observed, err := rewritePathMappings(input, mappings, 0)
 		if err != nil {
 			t.Fatal(err)

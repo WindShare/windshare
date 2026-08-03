@@ -211,8 +211,8 @@ type CommandEvidence struct {
 	Directory  string          `json:"directory,omitempty"`
 	ProcessID  int             `json:"processId,omitempty"`
 	ExitCode   int             `json:"exitCode"`
-	StartedAt  time.Time       `json:"startedAt,omitempty"`
-	FinishedAt time.Time       `json:"finishedAt,omitempty"`
+	StartedAt  time.Time       `json:"startedAt,omitzero"`
+	FinishedAt time.Time       `json:"finishedAt,omitzero"`
 	Artifacts  []ArtifactFile  `json:"artifacts,omitempty"`
 }
 

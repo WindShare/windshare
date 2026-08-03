@@ -51,6 +51,11 @@ type Runner struct {
 	ValidateCleanup func(protocol.Settlement, protocol.Request) error
 }
 
+type startGateResult struct {
+	evidence *protocol.StartEvidence
+	err      error
+}
+
 type sessionResult struct {
 	settlement protocol.Settlement
 	start      startGateResult

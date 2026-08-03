@@ -121,7 +121,7 @@ const FULL_AUTHORITY_EXPRESSION = "${{ inputs.browser-authority == 'full' }}"
 const WINDOWS_NETWORK_MAKE_COMMAND =
   '"$(WINDSHARE_PWSH_EXECUTABLE)" -NoLogo -NoProfile -NonInteractive -File scripts/ci/windows/browser-network.ps1'
 const LINUX_NETWORK_MAKE_COMMAND =
-  '"$(WINDSHARE_BASH_EXECUTABLE)" scripts/ci/linux/browser/network-completion.sh'
+  '"$(WINDSHARE_BASH_EXECUTABLE)" scripts/ci/linux/browser-network.sh'
 const OCI_RUNTIME_PATTERN = /\b(?:docker|podman|oci)\b/iu
 const SECRET_EXPRESSION_PATTERN = /\bsecrets\.\w+\b/iu
 const NODE_ENTRYPOINT_PATTERN =

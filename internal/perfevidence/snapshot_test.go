@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -273,7 +273,7 @@ func TestPerformanceDependencyDeltaRejectsRenamedTestOnlyRepositoryPackage(t *te
 		},
 		{Dir: filepath.Join(workspace, "production"), ImportPath: productionImport},
 		{Dir: filepath.Join(workspace, "internal", "scenario"), ImportPath: renamedFixtureImport},
-		{Dir: filepath.Join(runtime.GOROOT(), "src", "fmt"), ImportPath: "fmt", Standard: true},
+		{Dir: filepath.Join(workspace, "standard-library", "fmt"), ImportPath: "fmt", Standard: true},
 	}
 	context := inventoryContext{
 		WorkspaceRoot: workspace,
@@ -696,10 +696,5 @@ func containsCanonicalPath(value, path string) bool {
 }
 
 func containsString(values []string, wanted string) bool {
-	for _, value := range values {
-		if value == wanted {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, wanted)
 }

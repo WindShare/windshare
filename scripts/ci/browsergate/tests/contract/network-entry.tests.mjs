@@ -130,7 +130,7 @@ assert.equal(fullGates.filter((gate) => gate === 'browser').length, 1)
 assert.equal(fullGates.includes('browser-network'), false)
 assert.match(makefile, /^browser: authority-context browser-local browser-network$/mu)
 assert.match(makefile, /^browser-network: authority-context$/mu)
-assert.match(makefile, /network-completion\.sh/u)
+assert.match(makefile, /scripts\/ci\/linux\/browser-network\.sh/u)
 assert.doesNotMatch(makefile, /BROWSER_NETWORK_RUNTIME_CONFIG|BROWSER_NETWORK_HELPER_PARENT/u)
 assert.doesNotMatch(makefile, /^network\s*:/mu)
 

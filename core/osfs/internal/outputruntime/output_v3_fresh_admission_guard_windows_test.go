@@ -21,116 +21,126 @@ const windowsRuntimeFreshAdmissionHoldTimeout = 15 * time.Second
 
 func TestWindowsV3FreshSelectedDirectoryMaterializationRetainsPlacementGuard(t *testing.T) {
 	t.Parallel()
-	base := v3RecoveryRoot(t)
-	externalPath := filepath.Join(base, "external")
-	rootPath := filepath.Join(externalPath, "output")
-	rootDecoyPath := filepath.Join(externalPath, "output-decoy")
-	externalDecoyRootPath := filepath.Join(base, "external-decoy", "output")
-	for _, path := range []string{rootPath, rootDecoyPath, externalDecoyRootPath} {
-		if err := os.MkdirAll(path, 0o700); err != nil {
-			t.Fatal(err)
-		}
+	placementScopes := []struct {
+		name      string
+		movePaths func(basePath, externalPath, rootPath string) (string, string)
+	}{
+		{
+			name: "output root",
+			movePaths: func(_ string, externalPath string, rootPath string) (string, string) {
+				return rootPath, filepath.Join(externalPath, "output-displaced")
+			},
+		},
+		{
+			name: "external parent",
+			movePaths: func(basePath string, externalPath string, _ string) (string, string) {
+				return externalPath, filepath.Join(basePath, "external-displaced")
+			},
+		},
 	}
+	for _, scope := range placementScopes {
+		t.Run(scope.name, func(t *testing.T) {
+			t.Parallel()
+			base := v3RecoveryRoot(t)
+			externalPath := filepath.Join(base, "external")
+			rootPath := filepath.Join(externalPath, "output")
+			rootDecoyPath := filepath.Join(externalPath, "output-decoy")
+			externalDecoyRootPath := filepath.Join(base, "external-decoy", "output")
+			for _, path := range []string{rootPath, rootDecoyPath, externalDecoyRootPath} {
+				if err := os.MkdirAll(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	gate := newWindowsV3FreshAdmissionGuardGate()
-	t.Cleanup(gate.unblock)
-	var guardedPlatform *windowsV3FreshAdmissionHoldPlatform
-	authority := v3RecoveryAuthority(t, rootPath, nil)
-	authority.platformFactory = func(path string, create bool) (outputcap.Platform, error) {
-		platform, err := openOutputRuntimeTestPlatform(path, create)
-		if err != nil {
-			return nil, err
-		}
-		guardedPlatform = &windowsV3FreshAdmissionHoldPlatform{
-			Platform: platform,
-			gate:     gate,
-		}
-		return guardedPlatform, nil
-	}
-	selection := outputV3DirectoryAuthoritySelection(t, "scoped")
-	type openResult struct {
-		opened v3OpenedSelection
-		err    error
-	}
-	result := make(chan openResult, 1)
-	go func() {
-		opened, err := v3OpenSelection(context.Background(), authority, selection)
-		result <- openResult{opened: opened, err: err}
-	}()
+			gate := newWindowsV3FreshAdmissionGuardGate()
+			t.Cleanup(gate.unblock)
+			var guardedPlatform *windowsV3FreshAdmissionHoldPlatform
+			authority := v3RecoveryAuthority(t, rootPath, nil)
+			authority.platformFactory = func(path string, create bool) (outputcap.Platform, error) {
+				platform, err := openOutputRuntimeTestPlatform(path, create)
+				if err != nil {
+					return nil, err
+				}
+				guardedPlatform = &windowsV3FreshAdmissionHoldPlatform{
+					Platform: platform,
+					gate:     gate,
+				}
+				return guardedPlatform, nil
+			}
+			selection := outputV3DirectoryAuthoritySelection(t, "scoped")
+			type openResult struct {
+				opened v3OpenedSelection
+				err    error
+			}
+			result := make(chan openResult, 1)
+			go func() {
+				opened, err := v3OpenSelection(context.Background(), authority, selection)
+				result <- openResult{opened: opened, err: err}
+			}()
 
-	select {
-	case <-gate.entered:
-	case <-time.After(windowsRuntimeFreshAdmissionHoldTimeout):
-		gate.unblock()
-		t.Fatal("fresh admission did not reach the guarded pre-materialization cut")
-	}
-	if guardedPlatform == nil {
-		t.Error("guarded platform was not installed before the admission cut")
-	} else if guardedPlatform.guardAcquires.Load() != 1 || guardedPlatform.guardCloses.Load() != 0 {
-		t.Errorf(
-			"pre-materialization guard lifecycle = (platform=%v, acquires=%d, closes=%d)",
-			guardedPlatform,
-			guardedPlatform.guardAcquires.Load(),
-			guardedPlatform.guardCloses.Load(),
-		)
-	}
+			select {
+			case <-gate.entered:
+			case <-time.After(windowsRuntimeFreshAdmissionHoldTimeout):
+				gate.unblock()
+				t.Fatal("fresh admission did not reach the guarded pre-materialization cut")
+			}
+			if guardedPlatform == nil {
+				t.Error("guarded platform was not installed before the admission cut")
+			} else if guardedPlatform.guardAcquires.Load() != 1 || guardedPlatform.guardCloses.Load() != 0 {
+				t.Errorf(
+					"pre-materialization guard lifecycle = (platform=%v, acquires=%d, closes=%d)",
+					guardedPlatform,
+					guardedPlatform.guardAcquires.Load(),
+					guardedPlatform.guardCloses.Load(),
+				)
+			}
 
-	rootMovedPath := filepath.Join(externalPath, "output-displaced")
-	externalMovedPath := filepath.Join(base, "external-displaced")
-	rootMoveErr := windowsRuntimeAttemptPinnedMove(rootPath, rootMovedPath)
-	externalMoveErr := windowsRuntimeAttemptPinnedMove(externalPath, externalMovedPath)
-	if !windowsRuntimeBlockedAncestorReplacement(rootMoveErr) {
-		t.Errorf("output-root displacement during fresh admission = %v, want placement denial", rootMoveErr)
-	}
-	if !windowsRuntimeBlockedAncestorReplacement(externalMoveErr) {
-		t.Errorf("external-parent displacement during fresh admission = %v, want placement denial", externalMoveErr)
-	}
-	for _, candidate := range []string{rootPath, rootDecoyPath, externalDecoyRootPath} {
-		if _, err := os.Stat(filepath.Join(candidate, "scoped")); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("pre-materialization selected directory under %q = %v", candidate, err)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(rootPath, resumestate.ControlDirectoryName)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("pre-materialization admission wrote resume state: %v", err)
-	}
+			movePath, movedPath := scope.movePaths(base, externalPath, rootPath)
+			moveErr := windowsRuntimeAttemptPinnedMove(movePath, movedPath)
+			if !windowsRuntimeBlockedAncestorReplacement(moveErr) {
+				t.Errorf("%s displacement during fresh admission = %v, want placement denial", scope.name, moveErr)
+			}
+			for _, candidate := range []string{rootPath, rootDecoyPath, externalDecoyRootPath} {
+				if _, err := os.Stat(filepath.Join(candidate, "scoped")); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("pre-materialization selected directory under %q = %v", candidate, err)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(rootPath, resumestate.ControlDirectoryName)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("pre-materialization admission wrote resume state: %v", err)
+			}
 
-	gate.unblock()
-	var completed openResult
-	select {
-	case completed = <-result:
-	case <-time.After(windowsRuntimeFreshAdmissionHoldTimeout):
-		t.Fatal("fresh admission did not finish after releasing the placement guard")
-	}
-	if completed.err != nil || completed.opened.Session == nil {
-		t.Fatalf("guarded fresh admission = (%+v, %v), want created session", completed.opened, completed.err)
-	}
-	if guardedPlatform.guardAcquires.Load() != 1 || guardedPlatform.guardCloses.Load() != 1 {
-		t.Fatalf(
-			"fresh admission guard lifecycle = (%d acquires, %d closes), want (1, 1)",
-			guardedPlatform.guardAcquires.Load(), guardedPlatform.guardCloses.Load(),
-		)
-	}
-	if info, err := os.Stat(filepath.Join(rootPath, "scoped")); err != nil || !info.IsDir() {
-		t.Fatalf("canonical selected directory = (%v, %v)", info, err)
-	}
-	for _, decoy := range []string{rootDecoyPath, externalDecoyRootPath} {
-		if _, err := os.Stat(filepath.Join(decoy, "scoped")); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("selected directory escaped into decoy root %q: %v", decoy, err)
-		}
-	}
-	v3RecoveryCloseSession(t, completed.opened.Session)
+			gate.unblock()
+			var completed openResult
+			select {
+			case completed = <-result:
+			case <-time.After(windowsRuntimeFreshAdmissionHoldTimeout):
+				t.Fatal("fresh admission did not finish after releasing the placement guard")
+			}
+			if completed.err != nil || completed.opened.Session == nil {
+				t.Fatalf("guarded fresh admission = (%+v, %v), want created session", completed.opened, completed.err)
+			}
+			if guardedPlatform.guardAcquires.Load() != 1 || guardedPlatform.guardCloses.Load() != 1 {
+				t.Fatalf(
+					"fresh admission guard lifecycle = (%d acquires, %d closes), want (1, 1)",
+					guardedPlatform.guardAcquires.Load(), guardedPlatform.guardCloses.Load(),
+				)
+			}
+			if info, err := os.Stat(filepath.Join(rootPath, "scoped")); err != nil || !info.IsDir() {
+				t.Fatalf("canonical selected directory = (%v, %v)", info, err)
+			}
+			for _, decoy := range []string{rootDecoyPath, externalDecoyRootPath} {
+				if _, err := os.Stat(filepath.Join(decoy, "scoped")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("selected directory escaped into decoy root %q: %v", decoy, err)
+				}
+			}
+			v3RecoveryCloseSession(t, completed.opened.Session)
 
-	if err := os.Rename(rootPath, rootMovedPath); err != nil {
-		t.Fatalf("output-root displacement remained blocked after guard cleanup: %v", err)
-	}
-	if err := os.Rename(rootMovedPath, rootPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(externalPath, externalMovedPath); err != nil {
-		t.Fatalf("external-parent displacement remained blocked after guard cleanup: %v", err)
-	}
-	if err := os.Rename(externalMovedPath, externalPath); err != nil {
-		t.Fatal(err)
+			// Each scope owns an independent tree because an inverse rename is cleanup,
+			// not authority evidence, and can race Windows observers after a successful move.
+			if err := os.Rename(movePath, movedPath); err != nil {
+				t.Fatalf("%s displacement remained blocked after guard cleanup: %v", scope.name, err)
+			}
+		})
 	}
 }
 

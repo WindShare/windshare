@@ -191,7 +191,7 @@ func TestLinuxForkProbeTarget(t *testing.T) {
 			time.Sleep(time.Hour)
 		}
 	case "root":
-		for index := 0; index < linuxForkProbeChildren; index++ {
+		for index := range linuxForkProbeChildren {
 			child := exec.Command(os.Args[0], "-test.run=^TestLinuxForkProbeTarget$")
 			child.Env = []string{linuxForkProbeEnvironment + "=child"}
 			child.Stdout = os.Stdout

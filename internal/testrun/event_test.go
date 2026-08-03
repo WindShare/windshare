@@ -265,9 +265,7 @@ func TestJSONLineSinkSerializesConcurrentRecordsAtomically(t *testing.T) {
 	var wait sync.WaitGroup
 	errorsFound := make(chan error, recordCount)
 	for index := range recordCount {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			selected := recorder
 			if index%2 == 1 {
 				selected = secondRecorder
@@ -275,7 +273,7 @@ func TestJSONLineSinkSerializesConcurrentRecordsAtomically(t *testing.T) {
 			errorsFound <- selected.Record("concurrent_record", OutcomeSucceeded, struct {
 				Index int `json:"index"`
 			}{Index: index})
-		}()
+		})
 	}
 	wait.Wait()
 	close(errorsFound)

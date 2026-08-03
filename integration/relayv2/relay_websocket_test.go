@@ -77,6 +77,11 @@ func (err *relayFrameExchangeError) Unwrap() error { return err.cause }
 
 func (err *relayFrameExchangeError) FailureReason() string { return string(err.reason) }
 
+type relayFrameExchangeFailure interface {
+	error
+	FailureReason() string
+}
+
 type relayConnectionOwner interface {
 	Close() error
 	Done() <-chan struct{}
@@ -198,8 +203,7 @@ func observeRelayFrameExchange(
 	}
 	if err := exchange(); err != nil {
 		reason := unexpectedExchangeFailureReason
-		var failure interface{ FailureReason() string }
-		if errors.As(err, &failure) {
+		if failure, ok := errors.AsType[relayFrameExchangeFailure](err); ok {
 			reason = failure.FailureReason()
 		}
 		recordErr := phase.Fail(reason)

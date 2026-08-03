@@ -86,10 +86,7 @@ type fixedFailureWriter struct {
 }
 
 func (writer fixedFailureWriter) Write(value []byte) (int, error) {
-	written := writer.written
-	if written > len(value) {
-		written = len(value)
-	}
+	written := min(writer.written, len(value))
 	return written, writer.err
 }
 

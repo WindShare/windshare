@@ -111,6 +111,12 @@ function Assert-FileDoesNotContain([string]$Path, [string]$Forbidden) {
     }
 }
 
+function Select-WorkflowJobSource([string]$Workflow, [string]$Job) {
+    $pattern = '(?ms)^  {0}:\r?\n.*?(?=^  [a-z0-9][a-z0-9-]*:\r?$|\z)' -f
+        [regex]::Escape($Job)
+    return [regex]::Match($Workflow, $pattern).Value
+}
+
 $requiredTests = @(Get-WindowsNativeRequiredTestNames)
 $expectedExpression = '^(TestWindowsNTFSNativeCertification|TestWindowsNTFSProcessRestartRecovery|TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment)$'
 if ((Get-WindowsNativeRequiredTestExpression) -cne $expectedExpression) {
@@ -746,12 +752,11 @@ if ([string]::IsNullOrWhiteSpace($linuxReleaseJob) -or
     -not $windowsReleaseJob.Contains('timeout-minutes: 90', [StringComparison]::Ordinal)) {
     throw 'core release workflow job timeouts do not preserve the platform-specific evidence budgets'
 }
-$ciWorkflowPath = Join-Path $repositoryRoot '.github\workflows\ci.yml'
-$ciWorkflow = [IO.File]::ReadAllText($ciWorkflowPath)
-$ordinaryReleaseJob = [regex]::Match(
-    $ciWorkflow,
-    '(?ms)^  core-release:\r?\n.*?(?=^  gowork-off-root:\r?$)'
-).Value
+$currentCommitWorkflowPath = Join-Path $repositoryRoot '.github\workflows\current-commit.yml'
+$currentCommitWorkflow = [IO.File]::ReadAllText($currentCommitWorkflowPath)
+$ordinaryReleaseJob = Select-WorkflowJobSource `
+    -Workflow $currentCommitWorkflow `
+    -Job 'core-release'
 if ([string]::IsNullOrWhiteSpace($ordinaryReleaseJob) -or
     -not $ordinaryReleaseJob.Contains('timeout-minutes: 60', [StringComparison]::Ordinal) -or
     -not $ordinaryReleaseJob.Contains('go-version-file: core/go.mod', [StringComparison]::Ordinal) -or
@@ -761,7 +766,7 @@ if ([string]::IsNullOrWhiteSpace($ordinaryReleaseJob) -or
 }
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
-    -Expected 'go run ./scripts/ci/_corevulnerability'
+    -Expected 'Invoke-WindShareGo run ./scripts/ci/_corevulnerability'
 Assert-FileContains `
     -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
     -Expected '-module $artifactRoot'

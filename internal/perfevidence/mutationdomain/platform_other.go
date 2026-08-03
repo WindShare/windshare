@@ -43,10 +43,7 @@ func preparePlatformHelper(initialization) (string, map[string]string, func() er
 }
 
 func helperTargetProcessAttributes() *syscall.SysProcAttr { return nil }
-func resolvePlatformProcessID(_ int, processID int) (int, error) {
-	return processID, nil
-}
-func settlePlatformTarget() error { return nil }
+func settlePlatformTarget() error                         { return nil }
 func openPlatformOutputAuthority(path string) (*platformOutputAuthority, error) {
 	return &platformOutputAuthority{path: path}, nil
 }
