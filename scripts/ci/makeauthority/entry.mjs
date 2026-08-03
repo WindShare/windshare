@@ -89,7 +89,7 @@ export function validateMakeInvocation(arguments_, environment = process.env) {
     throw new Error('validation Make authority requires at least one explicit target')
   }
   for (const name of FORBIDDEN_ENVIRONMENT) {
-    if (hasEnvironmentName(environment, name)) {
+    if (hasEnvironmentName(environment, name) && !isOwnedGoDefaultSelection(environment, name)) {
       throw new Error(`${name} must be absent before validation Make authority`)
     }
   }
@@ -441,6 +441,16 @@ function isInternalAuthorityName(name) {
 function hasEnvironmentName(environment, expected) {
   const folded = expected.toUpperCase()
   return Object.keys(environment).some((name) => name.toUpperCase() === folded)
+}
+
+// Hosted runners export GOTOOLCHAIN=local through actions/setup-go, and the Go
+// authority always invokes the retained Go with that same value. The exact
+// owned default is accepted on the already-unique snapshot; every other value
+// stays rejected as caller selection.
+function isOwnedGoDefaultSelection(environment, name) {
+  if (name.toUpperCase() !== 'GOTOOLCHAIN') return false
+  const key = Object.keys(environment).find((entry) => entry.toUpperCase() === 'GOTOOLCHAIN')
+  return key !== undefined && environment[key] === 'local'
 }
 
 function snapshotInvocationArguments(value) {

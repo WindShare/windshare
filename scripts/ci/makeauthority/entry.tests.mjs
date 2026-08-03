@@ -106,6 +106,17 @@ try {
       name,
     )
   }
+
+  // actions/setup-go exports GOTOOLCHAIN=local on hosted runners; it equals the
+  // owned Go default and must pass, while any other value must fail closed.
+  assert.deepEqual(
+    validateMakeInvocation(['integration'], { ...cleanEnvironment, GOTOOLCHAIN: 'local' }).targets,
+    ['integration'],
+  )
+  assert.throws(
+    () => validateMakeInvocation(['integration'], { ...cleanEnvironment, GOTOOLCHAIN: 'auto' }),
+    /must be absent/u,
+  )
   assert.throws(
     () => validateMakeInvocation(['integration'], { Path: 'a', PATH: 'b' }),
     /case-insensitive duplicate/u,

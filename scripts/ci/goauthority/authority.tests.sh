@@ -26,11 +26,27 @@ assert_rejected() {
   fi
 }
 
+assert_settled() {
+  local label="$1"
+  shift
+  if ! env "${clean_authority_environment[@]}" "$@" bash -c \
+    'source "$1"; windshare_enter_go_authority' bash "$authority_path" \
+    >"$temporary_root/stdout" 2>"$temporary_root/stderr"; then
+    echo "$label did not settle the Go authority" >&2
+    exit 1
+  fi
+}
+
 for name in GOFLAGS GOWORK GOOS GOARCH GOENV GOTOOLCHAIN GOROOT \
   WINDSHARE_GO_EXECUTABLE WINDSHARE_GO_AUTHORITY_ACTIVE \
   WINDSHARE_GO_HOST_OS WINDSHARE_GO_HOST_ARCH; do
   assert_rejected "ambient $name" "$name="
 done
+
+# actions/setup-go exports GOTOOLCHAIN=local on hosted runners; it equals the
+# owned default and must settle the authority, while any other value must not.
+assert_settled 'ambient GOTOOLCHAIN=local' GOTOOLCHAIN=local
+assert_rejected 'ambient GOTOOLCHAIN=auto' GOTOOLCHAIN=auto
 
 persisted_root="$temporary_root/persisted"
 mkdir -p -- "$persisted_root/go"
@@ -38,6 +54,11 @@ for name in GOFLAGS GOWORK GOOS GOARCH GOENV GOTOOLCHAIN GOROOT; do
   printf '%s=hostile\n' "$name" >"$persisted_root/go/env"
   assert_rejected "persisted $name" XDG_CONFIG_HOME="$persisted_root"
 done
+printf '%s\n' 'GOTOOLCHAIN=local' >"$persisted_root/go/env"
+assert_settled 'persisted GOTOOLCHAIN=local' XDG_CONFIG_HOME="$persisted_root"
+printf '%s\n' 'GOTOOLCHAIN=auto' >"$persisted_root/go/env"
+assert_rejected 'persisted GOTOOLCHAIN=auto' XDG_CONFIG_HOME="$persisted_root"
+rm -- "$persisted_root/go/env"
 
 fake_bin="$temporary_root/fake-bin"
 mkdir -- "$fake_bin"
