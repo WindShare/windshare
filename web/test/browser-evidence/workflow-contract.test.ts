@@ -209,7 +209,10 @@ describe('GNU Make authority masking', () => {
     for (const mutation of [
       [`override CI_GATES := ${PR_GATES.join(' ')}`, 'override CI_GATES :='],
       ['override HOST_GOOS := $(WINDSHARE_HOST_GOOS)', 'override HOST_GOOS := windows'],
-      ['ifneq ($(origin SHELL),default)', 'ifeq ($(origin SHELL),never)'],
+      [
+        'ifneq ($(filter default environment,$(origin SHELL)),$(origin SHELL))',
+        'ifeq ($(filter default environment,$(origin SHELL)),$(origin SHELL))',
+      ],
       ['$(words $(MAKEFILE_LIST))', '1'],
     ] as const) {
       expect(() => validateMakefileContract(

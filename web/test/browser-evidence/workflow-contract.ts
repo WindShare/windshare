@@ -643,8 +643,10 @@ export function validateMakefileContract(
       `${variable} must reject every external origin`)
   }
   for (const literal of [
-    'ifneq ($(origin SHELL),default)',
+    'ifneq ($(filter default environment,$(origin SHELL)),$(origin SHELL))',
+    'ifneq ($(origin SHELL):$(SHELL),file:/bin/sh)',
     'ifneq ($(origin .SHELLFLAGS),default)',
+    'override SHELL := /bin/sh',
     'ifneq ($(strip $(MFLAGS)),)',
     'ifneq ($(strip $(GNUMAKEFLAGS)),)',
     'ifneq ($(strip $(MAKEFILES)),)',
