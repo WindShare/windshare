@@ -13,6 +13,16 @@ windshare_go_selection_ambient() {
   [[ "$1" != GOTOOLCHAIN ]] || [[ "${!1}" != local ]]
 }
 
+# A settled entrypoint exports the owned bindings, so a subprocess that
+# re-enters the authority sees them as ordinary environment variables, while an
+# in-process re-entry finds the readonly bindings of this shell. Only the
+# former may re-settle: the retained descriptor is process-private, so every
+# entrypoint must re-validate its own Go application from PATH.
+windshare_go_authority_inherited() {
+  [[ "${WINDSHARE_GO_AUTHORITY_ACTIVE:-}" == 1 ]] &&
+    ( WINDSHARE_GO_AUTHORITY_ACTIVE=1 ) 2>/dev/null
+}
+
 windshare_enter_go_authority() {
   local candidate
   local candidate_identity
@@ -29,7 +39,8 @@ windshare_enter_go_authority() {
   local name
   local retained_executable
 
-  if [[ "${WINDSHARE_GO_AUTHORITY_ACTIVE:-}" == 1 ]]; then
+  if [[ "${WINDSHARE_GO_AUTHORITY_ACTIVE:-}" == 1 ]] &&
+    ! windshare_go_authority_inherited; then
     echo 'WindShare Go authority may be settled only once per entrypoint' >&2
     return 1
   fi
@@ -37,6 +48,11 @@ windshare_enter_go_authority() {
   for name in GOFLAGS GOWORK GOOS GOARCH GOENV GOTOOLCHAIN GOROOT \
     WINDSHARE_GO_EXECUTABLE WINDSHARE_GO_AUTHORITY_ACTIVE \
     WINDSHARE_GO_HOST_OS WINDSHARE_GO_HOST_ARCH; do
+    if windshare_go_authority_inherited && [[ "$name" == WINDSHARE_GO_* ]]; then
+      # Owned exports of an ancestor authority, replaced by this re-settlement
+      # before any consumer runs; only truly ambient selection must fail.
+      continue
+    fi
     if [[ -v "$name" ]] && windshare_go_selection_ambient "$name"; then
       echo "$name must be absent until WindShare Go authority is settled" >&2
       return 1
@@ -136,7 +152,7 @@ windshare_enter_go_authority() {
   declare -gr WINDSHARE_GO_HOST_OS="$host_os"
   declare -gr WINDSHARE_GO_HOST_ARCH="$host_arch"
   declare -gr WINDSHARE_GO_AUTHORITY_ACTIVE=1
-  export WINDSHARE_GO_EXECUTABLE WINDSHARE_GO_HOST_OS WINDSHARE_GO_HOST_ARCH
+  export WINDSHARE_GO_EXECUTABLE WINDSHARE_GO_HOST_OS WINDSHARE_GO_HOST_ARCH WINDSHARE_GO_AUTHORITY_ACTIVE
 }
 
 windshare_assert_go_authority_active() {

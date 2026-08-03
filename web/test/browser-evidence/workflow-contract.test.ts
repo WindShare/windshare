@@ -254,11 +254,15 @@ describe('GNU Make authority masking', () => {
       ['GOOS', 'linux'],
       ['GOARCH', 'wasm'],
       ['GOENV', 'hostile-go.env'],
-      ['GOTOOLCHAIN', 'local'],
+      ['GOTOOLCHAIN', 'auto'],
       ['GOROOT', 'hostile-root'],
     ] as const)) {
       expect(() => validateMake(['ci'], { [name]: value }), `${name}=${value}`).toThrow()
     }
+
+    // actions/setup-go exports GOTOOLCHAIN=local on hosted runners; it equals
+    // the owned Go default and must settle, while any other value fails closed.
+    expect(() => validateMake(['ci'], { GOTOOLCHAIN: 'local' })).not.toThrow()
 
     expect(() => validateMake(['-f', 'Makefile', '-f', 'injected.mk', 'ci'])).toThrow()
   }, 20_000)
