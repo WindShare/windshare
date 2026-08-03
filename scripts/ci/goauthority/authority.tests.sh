@@ -79,6 +79,20 @@ if [[ ! "$baseline_version" =~ ^go[[:space:]]version[[:space:]]go ]]; then
   exit 1
 fi
 
+# A settled authority exports its owned bindings; a subprocess that re-enters
+# must re-settle from PATH with the full validation chain, while an in-process
+# re-entry of the same shell stays rejected.
+if ! bash -c 'source "$1"; windshare_enter_go_authority && windshare_go version >/dev/null' \
+  bash "$authority_path" >"$temporary_root/reentry-out" 2>"$temporary_root/reentry-err"; then
+  echo 'subprocess Go authority re-entry did not re-settle' >&2
+  exit 1
+fi
+if bash -c 'source "$1"; windshare_enter_go_authority && windshare_enter_go_authority' \
+  bash "$authority_path" >/dev/null 2>&1; then
+  echo 'in-process Go authority re-entry was not rejected' >&2
+  exit 1
+fi
+
 candidate_directory="$(dirname -- "$WINDSHARE_GO_CANDIDATE")"
 if [[ -w "$candidate_directory" ]]; then
   backup="$candidate_directory/.windshare-go-authority-${PPID}-$$"
