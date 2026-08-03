@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	goAuthorityExecutableEnvironment = "WINDSHARE_GO_EXECUTABLE"
-	helperCommandPackage             = "./cmd/testprocessowner"
-	helperSelfCheck                  = "{\"schema_version\":\"windshare.process-owner-self-check/v1\",\"component\":\"testprocessowner\",\"milestone\":\"self_check\",\"outcome\":\"ready\"}\n"
+	goExecutableEnvironment = "WINDSHARE_GO_EXECUTABLE"
+	helperCommandPackage    = "./cmd/testprocessowner"
+	helperSelfCheck         = "{\"schema_version\":\"windshare.process-owner-self-check/v1\",\"component\":\"testprocessowner\",\"milestone\":\"self_check\",\"outcome\":\"ready\"}\n"
 )
 
 type Command struct {
@@ -116,9 +116,9 @@ func BuildOwner(ctx context.Context, repositoryRoot string) (_ *Owner, resultErr
 }
 
 func goExecutable() string {
-	// CI retains one verified executable; honoring its descriptor prevents a
-	// nested helper build from resolving a different PATH entry mid-gate.
-	if executable := os.Getenv(goAuthorityExecutableEnvironment); executable != "" {
+	// Nested helper builds honor an explicitly selected Go executable, while
+	// direct developer runs keep conventional PATH behavior.
+	if executable := os.Getenv(goExecutableEnvironment); executable != "" {
 		return executable
 	}
 	return "go"

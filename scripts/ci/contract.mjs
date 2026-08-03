@@ -1,137 +1,116 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const DEFAULT_REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const PLATFORM_ENTRYPOINT_ASSIGNMENT = 'PLATFORM_ENTRYPOINTS'
-const ENTRYPOINT_PLATFORMS = Object.freeze([
-  Object.freeze({ directory: 'windows', extension: 'ps1' }),
-  Object.freeze({ directory: 'linux', extension: 'sh' }),
-])
 const MAXIMUM_CODE_FILES_PER_DIRECTORY = 20
+const PLATFORM_ENTRYPOINT_ASSIGNMENT = 'PLATFORM_ENTRYPOINTS'
+const COMPOSITE_TARGETS = new Set(['ci', 'e2e', 'browser-smoke', 'browser'])
 const CODE_FILE_EXTENSIONS = new Set([
   '.c', '.cc', '.cpp', '.cjs', '.cs', '.go', '.h', '.hpp', '.java', '.js', '.jsx',
   '.kt', '.kts', '.mjs', '.php', '.ps1', '.psm1', '.py', '.rb', '.rs', '.sh',
   '.swift', '.ts', '.tsx',
 ])
 const TEST_CODE_FILE_PATTERN = /(?:_test\.go|(?:^|[._-])(?:spec|specs|test|tests)\.[^.]+)$/u
-const WORKFLOW_EXTENSIONS = new Set(['.yaml', '.yml'])
-const BARE_SHELL_INVOCATION =
-  /(?:^|\brun:\s*|&&\s*|\|\|\s*|;\s*|\bthen\s+|\bdo\s+)["']?(?:\.\/)?(scripts\/ci\/[A-Za-z0-9._/-]+\.sh)["']?(?=\s|$)/u
-const STATIC_SHELL_CONTENT_ASSERTION =
-  /^\s*assert_(not_)?contains\s+"([^"$`]+)"(?:\s|$)/u
-const STATIC_SHELL_LITERAL_CONTENT_ASSERTION =
-  /^\s*assert_(not_)?contains\s+"([^"$`]+)"\s+'([^']*)'(?:\s|$)/u
+
+export const PUBLIC_LOCAL_TARGETS = Object.freeze(
+  'ci check hygiene sloc lint workflow-lint vet race coverage vectors core-release web web-dependencies integration e2e-go e2e browser-preflight browser-process browser-smoke browser-local browser-network browser-stability browser'.split(' '),
+)
+
+export const LOCAL_CI_GATES = Object.freeze(
+  'hygiene sloc workflow-lint lint vet race coverage vectors core-release web browser-preflight browser-process'.split(' '),
+)
+
+export const REQUIRED_PLATFORM_ENTRYPOINTS = Object.freeze(
+  PUBLIC_LOCAL_TARGETS.filter((target) => !COMPOSITE_TARGETS.has(target)),
+)
 
 /**
- * The zero-dependency contract owns only filesystem and Make boundaries. YAML
- * semantics live in the strict parser exercised by the browser contract gate;
- * keeping them out of this module prevents a second, weaker workflow language.
+ * Keep this contract intentionally shallow: semantic target names and their native
+ * leaves are stable APIs, while Make flags, parsers, shells, PATH, and descriptors
+ * are ordinary caller/toolchain state rather than evidence authority.
  */
-export function inspectCIContract(
-  repositoryRoot,
-  { requireTracked = process.env.GITHUB_ACTIONS === 'true' } = {},
-) {
+export function inspectCIContract(repositoryRoot) {
   const violations = []
-  let entrypoints = []
+  let makefile
   try {
-    const makefile = readFileSync(resolve(repositoryRoot, 'Makefile'), 'utf8')
-    entrypoints = parsePlatformEntrypointNames(makefile)
+    makefile = readFileSync(resolve(repositoryRoot, 'Makefile'), 'utf8')
   } catch (error) {
-    violations.push(`cannot read Makefile ${PLATFORM_ENTRYPOINT_ASSIGNMENT}: ${error.message}`)
+    return {
+      publicTargets: [],
+      entrypoints: [],
+      ciGates: [],
+      violations: [`cannot read Makefile: ${error.message}`],
+    }
   }
 
-  const expectedScripts = entrypoints.flatMap((entrypoint) =>
-    ENTRYPOINT_PLATFORMS.map((platform) => entrypointScriptPath(entrypoint, platform)),
-  )
-  const ignored = ignoredFiles(repositoryRoot, expectedScripts, violations)
-  const tracked = requireTracked ? trackedFiles(repositoryRoot, violations) : undefined
+  const publicTargets = readNames(makefile, 'PUBLIC_TARGETS', violations)
+  const entrypoints = readNames(makefile, PLATFORM_ENTRYPOINT_ASSIGNMENT, violations)
+  const ciGates = readNames(makefile, 'CI_GATES', violations)
+
+  validateExactWords('PUBLIC_TARGETS', publicTargets, PUBLIC_LOCAL_TARGETS, violations)
+  validateExactWords('CI_GATES', ciGates, LOCAL_CI_GATES, violations)
+  validatePlatformEntrypoints(entrypoints, violations)
 
   for (const entrypoint of entrypoints) {
-    for (const platform of ENTRYPOINT_PLATFORMS) {
-      const script = entrypointScriptPath(entrypoint, platform)
-      if (!existsSync(resolve(repositoryRoot, script))) {
+    for (const [directory, extension] of [['windows', 'ps1'], ['linux', 'sh']]) {
+      const script = `scripts/ci/${directory}/${entrypoint}.${extension}`
+      if (!isRegularFile(resolve(repositoryRoot, script))) {
         violations.push(`Makefile entrypoint ${entrypoint} requires existing ${script}`)
-      } else if (ignored.has(script)) {
-        violations.push(`Makefile entrypoint ${entrypoint} requires non-ignored ${script}`)
-      } else if (tracked !== undefined && !tracked.has(script)) {
-        violations.push(`Makefile entrypoint ${entrypoint} requires tracked ${script} in GitHub Actions`)
-      }
-
-      const legacyPath = `scripts/ci/${entrypoint}.${platform.extension}`
-      if (existsSync(resolve(repositoryRoot, legacyPath))) {
-        violations.push(`Makefile entrypoint ${entrypoint} forbids legacy wrapper ${legacyPath}`)
       }
     }
   }
-  validateExactPlatformEntrypointSet(repositoryRoot, entrypoints, violations)
+
+  const browserSmoke = 'scripts/ci/windows/browser/smoke.ps1'
+  if (!isRegularFile(resolve(repositoryRoot, browserSmoke))) {
+    violations.push(`Makefile target browser-smoke requires existing ${browserSmoke}`)
+  }
+
   violations.push(...inspectCodeDirectoryBoundaries(repositoryRoot))
+  return { publicTargets, entrypoints, ciGates, violations }
+}
 
-  const workflowDirectory = resolve(repositoryRoot, '.github', 'workflows')
-  const workflows = readdirSync(workflowDirectory, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && WORKFLOW_EXTENSIONS.has(extensionOf(entry.name)))
-    .map((entry) => entry.name)
-    .sort()
-  for (const workflow of workflows) {
-    const source = readFileSync(resolve(workflowDirectory, workflow), 'utf8')
-    for (const invocation of findBareShellInvocations(source)) {
-      // Explicit bash invocation makes checkout file modes irrelevant on both
-      // Windows-authored commits and Linux runners.
-      violations.push(
-        `.github/workflows/${workflow}:${invocation.line} invokes ${invocation.path} without an explicit shell`,
-      )
-    }
-  }
-
-  const ciDirectory = resolve(repositoryRoot, 'scripts', 'ci')
-  const shellContracts = readdirSync(ciDirectory, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.sh'))
-    .map((entry) => entry.name)
-    .sort()
-  for (const shellContract of shellContracts) {
-    const contractPath = `scripts/ci/${shellContract}`
-    const source = readFileSync(resolve(ciDirectory, shellContract), 'utf8')
-    for (const assertion of findStaticShellContentAssertions(source)) {
-      const assertedPath = resolve(repositoryRoot, assertion.path)
-      const repositoryRelative = relative(repositoryRoot, assertedPath)
-      const escapesRepository = repositoryRelative === '..'
-        || repositoryRelative.startsWith(`..${sep}`) || isAbsolute(repositoryRelative)
-      if (escapesRepository || !isRegularFile(assertedPath)) {
-        violations.push(
-          `${contractPath}:${assertion.line} asserts content of missing repository file ${assertion.path}`,
-        )
-        continue
-      }
-      if (assertion.literal === undefined) continue
-
-      const assertedSource = readFileSync(assertedPath, 'utf8')
-      const containsLiteral = assertedSource.includes(assertion.literal)
-      if (assertion.negated ? containsLiteral : !containsLiteral) {
-        const expectation = assertion.negated ? 'not contain' : 'contain'
-        violations.push(
-          `${contractPath}:${assertion.line} expects ${assertion.path} to ${expectation} literal ${JSON.stringify(assertion.literal)}`,
-        )
-      }
-    }
-  }
-
-  return { entrypoints, workflows, violations }
+export function parsePublicLocalTargetNames(makefile) {
+  return parseMakeWordNames(makefile, 'PUBLIC_TARGETS')
 }
 
 export function parsePlatformEntrypointNames(makefile) {
-  const value = parseMakeAssignment(makefile, PLATFORM_ENTRYPOINT_ASSIGNMENT)
-  const entrypoints = value.length === 0 ? [] : value.split(/\s+/u)
-  if (entrypoints.length === 0) throw new Error(`${PLATFORM_ENTRYPOINT_ASSIGNMENT} assignment is empty`)
-  for (const entrypoint of entrypoints) {
-    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(entrypoint)) {
-      throw new Error(`unsupported platform entrypoint name ${entrypoint}`)
+  return parseMakeWordNames(makefile, PLATFORM_ENTRYPOINT_ASSIGNMENT)
+}
+
+export function parseMakeWordNames(makefile, assignment) {
+  const value = parseMakeAssignment(makefile, assignment)
+  const names = value.length === 0 ? [] : value.split(/\s+/u)
+  if (names.length === 0) throw new Error(`${assignment} assignment is empty`)
+  for (const name of names) {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name)) {
+      throw new Error(`unsupported ${assignment} name ${name}`)
     }
   }
-  if (new Set(entrypoints).size !== entrypoints.length) {
-    throw new Error(`${PLATFORM_ENTRYPOINT_ASSIGNMENT} contains duplicate names`)
+  if (new Set(names).size !== names.length) {
+    throw new Error(`${assignment} contains duplicate names`)
   }
-  return entrypoints
+  return names
+}
+
+export function parseMakeAssignment(makefile, name) {
+  const escapedName = name.replace(/[.*+?^$()|[\]\\]/gu, '\\$&')
+  const lines = makefile.split(/\r?\n/u)
+  const assignment = new RegExp(`^(?:override\\s+)?${escapedName}\\s*:?=`, 'u')
+  const index = lines.findIndex((line) => assignment.test(line))
+  if (index < 0) throw new Error(`${name} assignment is missing`)
+
+  let value = lines[index].replace(
+    new RegExp(`^(?:override\\s+)?${escapedName}\\s*:?=\\s*`, 'u'),
+    '',
+  )
+  let next = index + 1
+  while (/\\\s*$/u.test(value) && next < lines.length) {
+    value = `${value.replace(/\\\s*$/u, '')} ${lines[next].trim()}`
+    next += 1
+  }
+  return value.replace(/\s+#.*$/u, '').trim()
 }
 
 export function inspectCodeDirectoryBoundaries(
@@ -160,7 +139,6 @@ export function inspectCodeDirectoryBoundaries(
     const separator = path.lastIndexOf('/')
     const name = separator < 0 ? path : path.slice(separator + 1)
     if (!CODE_FILE_EXTENSIONS.has(extensionOf(name)) || TEST_CODE_FILE_PATTERN.test(name)) continue
-
     const directory = separator < 0 ? '.' : path.slice(0, separator)
     counts.set(directory, (counts.get(directory) ?? 0) + 1)
   }
@@ -173,110 +151,39 @@ export function inspectCodeDirectoryBoundaries(
     )
 }
 
-export function parseMakeAssignment(makefile, name) {
-  const lines = makefile.split(/\r?\n/u)
-  const assignmentPattern = new RegExp(`^(?:override\\s+)?${name}\\s*:?=`, 'u')
-  const assignmentIndex = lines.findIndex((line) => assignmentPattern.test(line))
-  if (assignmentIndex < 0) throw new Error(`${name} assignment is missing`)
+function readNames(makefile, assignment, violations) {
+  try {
+    return parseMakeWordNames(makefile, assignment)
+  } catch (error) {
+    violations.push(`cannot read Makefile ${assignment}: ${error.message}`)
+    return []
+  }
+}
 
-  let value = lines[assignmentIndex].replace(
-    new RegExp(`^(?:override\\s+)?${name}\\s*:?=\\s*`, 'u'),
-    '',
+function validateExactWords(assignment, actual, expected, violations) {
+  if (actual.length === 0) return
+  if (actual.length === expected.length && actual.every((value, index) => value === expected[index])) {
+    return
+  }
+  violations.push(
+    `Makefile ${assignment} must be ${expected.join(' ')}; got ${actual.join(' ')}`,
   )
-  let nextLine = assignmentIndex + 1
-  while (/\\\s*$/u.test(value) && nextLine < lines.length) {
-    value = `${value.replace(/\\\s*$/u, '')} ${lines[nextLine].trim()}`
-    nextLine += 1
-  }
-  return value.replace(/\s+#.*$/u, '').trim()
 }
 
-export function parseMakeTargetPrerequisites(makefile, target) {
-  const targetPattern = new RegExp(`^${target}:\\s*(.*)$`, 'u')
-  for (const line of makefile.split(/\r?\n/u)) {
-    const match = targetPattern.exec(line)
-    if (match !== null) {
-      const prerequisites = match[1].replace(/\s+#.*$/u, '').trim()
-      return prerequisites.length === 0 ? [] : prerequisites.split(/\s+/u)
+function validatePlatformEntrypoints(entrypoints, violations) {
+  if (entrypoints.length === 0) return
+  const actual = new Set(entrypoints)
+  for (const required of REQUIRED_PLATFORM_ENTRYPOINTS) {
+    if (!actual.has(required)) {
+      violations.push(`Makefile ${PLATFORM_ENTRYPOINT_ASSIGNMENT} must include public gate ${required}`)
     }
   }
-  throw new Error(`${target} target is missing`)
-}
-
-export function findBareShellInvocations(workflow) {
-  const invocations = []
-  for (const [index, line] of workflow.split(/\r?\n/u).entries()) {
-    const match = BARE_SHELL_INVOCATION.exec(line.trimStart())
-    if (match !== null) invocations.push({ line: index + 1, path: match[1] })
-  }
-  return invocations
-}
-
-export function findStaticShellContentAssertions(source) {
-  const assertions = []
-  for (const [index, line] of source.split(/\r?\n/u).entries()) {
-    const match = STATIC_SHELL_LITERAL_CONTENT_ASSERTION.exec(line)
-      ?? STATIC_SHELL_CONTENT_ASSERTION.exec(line)
-    if (match !== null) {
-      assertions.push({
-        line: index + 1,
-        path: match[2],
-        literal: match[3],
-        negated: match[1] !== undefined,
-      })
+  const allowed = new Set(REQUIRED_PLATFORM_ENTRYPOINTS)
+  for (const entrypoint of entrypoints) {
+    if (!allowed.has(entrypoint)) {
+      violations.push(`Makefile ${PLATFORM_ENTRYPOINT_ASSIGNMENT} contains unknown gate ${entrypoint}`)
     }
   }
-  return assertions
-}
-
-function validateExactPlatformEntrypointSet(repositoryRoot, entrypoints, violations) {
-  const declared = new Set(entrypoints)
-  for (const platform of ENTRYPOINT_PLATFORMS) {
-    const directory = resolve(repositoryRoot, 'scripts', 'ci', platform.directory)
-    const actual = readdirSync(directory, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && extensionOf(entry.name) === `.${platform.extension}`)
-      .map((entry) => entry.name.slice(0, -(platform.extension.length + 1)))
-      .sort()
-    for (const entrypoint of actual) {
-      if (!declared.has(entrypoint)) {
-        violations.push(
-          `Makefile ${PLATFORM_ENTRYPOINT_ASSIGNMENT} must declare ${entrypointScriptPath(entrypoint, platform)}`,
-        )
-      }
-    }
-  }
-}
-
-function entrypointScriptPath(entrypoint, platform) {
-  return `scripts/ci/${platform.directory}/${entrypoint}.${platform.extension}`
-}
-
-function trackedFiles(repositoryRoot, violations) {
-  const result = spawnSync('git', ['ls-files', '-z', '--', 'scripts/ci'], {
-    cwd: repositoryRoot,
-    encoding: 'utf8',
-  })
-  if (result.error !== undefined || result.status !== 0) {
-    const detail = result.error?.message ?? result.stderr.trim() ?? `exit ${result.status}`
-    violations.push(`cannot inspect tracked CI scripts: ${detail}`)
-    return new Set()
-  }
-  return new Set(result.stdout.split('\0').filter(Boolean).map((path) => path.replaceAll('\\', '/')))
-}
-
-function ignoredFiles(repositoryRoot, paths, violations) {
-  if (paths.length === 0) return new Set()
-  const result = spawnSync('git', ['check-ignore', '-z', '--stdin'], {
-    cwd: repositoryRoot,
-    encoding: 'utf8',
-    input: `${paths.join('\0')}\0`,
-  })
-  if (result.error !== undefined || (result.status !== 0 && result.status !== 1)) {
-    const detail = result.error?.message ?? result.stderr.trim() ?? `exit ${result.status}`
-    violations.push(`cannot inspect ignored CI scripts: ${detail}`)
-    return new Set()
-  }
-  return new Set(result.stdout.split('\0').filter(Boolean).map((path) => path.replaceAll('\\', '/')))
 }
 
 function extensionOf(name) {
@@ -300,7 +207,7 @@ function main() {
     return
   }
   console.log(
-    `ci-contract: PASS (${result.entrypoints.length} platform entrypoints, ${result.workflows.length} workflows)`,
+    `ci-contract: PASS (${result.publicTargets.length} public targets, ${result.entrypoints.length} platform entrypoints)`,
   )
 }
 

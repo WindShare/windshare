@@ -6,8 +6,6 @@
 # integration/E2E scenario events.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
-source scripts/ci/goauthority/authority.sh
-windshare_enter_go_authority
 source scripts/ci/test-run-id.sh
 
 SECONDS=0
@@ -17,9 +15,9 @@ export WINDSHARE_TEST_RUN_ID="$generated_run_id"
 echo "== race: run_id=$WINDSHARE_TEST_RUN_ID =="
 
 echo "-- go test -race (root)"
-windshare_go_test_json -race -count=1 ./...
+go test -json -race -count=1 ./...
 
 echo "-- go test -race (core)"
-windshare_go -C core test -race -count=1 -timeout="$core_suite_test_timeout" ./...
+go -C core test -race -count=1 -timeout="$core_suite_test_timeout" ./...
 
 echo "== race: PASS in ${SECONDS}s =="

@@ -9,8 +9,6 @@
 # sweep instead of rerunning the packages without coverage.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
-source scripts/ci/goauthority/authority.sh
-windshare_enter_go_authority
 source scripts/ci/test-run-id.sh
 
 # Same pinned gate tool as ci.yml (env GO_TEST_COVERAGE).
@@ -26,14 +24,14 @@ profile_dir="$(mktemp -d)"
 trap 'rm -rf "$profile_dir"' EXIT
 
 echo "-- root module coverage tests"
-windshare_go_test_json -count=1 ./... -covermode=atomic -coverprofile="$profile_dir/root.cover.out"
+go test -json -count=1 ./... -covermode=atomic -coverprofile="$profile_dir/root.cover.out"
 echo "-- root coverage gate (total >=80%, package >=70%)"
-windshare_go run "$GO_TEST_COVERAGE" --config=.testcoverage.yml --profile="$profile_dir/root.cover.out"
+go run "$GO_TEST_COVERAGE" --config=.testcoverage.yml --profile="$profile_dir/root.cover.out"
 
 echo "-- core module coverage tests"
-windshare_go -C core test -count=1 -timeout="$core_suite_test_timeout" ./... \
+go -C core test -count=1 -timeout="$core_suite_test_timeout" ./... \
   -covermode=atomic -coverprofile="$profile_dir/core.cover.out"
 echo "-- core coverage gate (total >=90%, package >=70%)"
-(cd core && windshare_go run "$GO_TEST_COVERAGE" --config=.testcoverage.yml --profile="$profile_dir/core.cover.out")
+(cd core && go run "$GO_TEST_COVERAGE" --config=.testcoverage.yml --profile="$profile_dir/core.cover.out")
 
 echo "== coverage: PASS in ${SECONDS}s =="

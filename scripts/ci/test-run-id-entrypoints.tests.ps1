@@ -6,6 +6,8 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $repositoryRoot
+$helperPath = Join-Path $PSScriptRoot 'test-run-id.psm1'
+$helperSource = [IO.File]::ReadAllText($helperPath)
 $callerRunID = 'entrypoint-contract-seed'
 $hadRunID = Test-Path Env:WINDSHARE_TEST_RUN_ID
 $previousRunID = $env:WINDSHARE_TEST_RUN_ID
@@ -20,9 +22,54 @@ $entrypoints = @(
     [pscustomobject]@{ Suite = 'browser-smoke'; Path = 'scripts/ci/windows/browser/smoke.ps1' }
 )
 
+function Assert-Fails {
+    param(
+        [Parameter(Mandatory)][scriptblock]$Action,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    $failed = $false
+    try {
+        & $Action
+    } catch {
+        $failed = $true
+    }
+    if (-not $failed) {
+        throw "$Label did not fail"
+    }
+}
+
 try {
-    function global:Assert-WindShareGoAuthorityActive {}
-    Import-Module (Join-Path $PSScriptRoot 'test-run-id.psm1') -Force
+    foreach ($retiredToken in @(
+        'WindShareStabilityHelperSemantics',
+        'stability-helper-semantics',
+        'Assert-WindShareGoAuthorityActive'
+    )) {
+        if ($helperSource.Contains($retiredToken, [StringComparison]::Ordinal)) {
+            throw "test-run-id.psm1 retains retired control-plane coupling: $retiredToken"
+        }
+    }
+
+    Import-Module $helperPath -Force
+    $env:WINDSHARE_TEST_RUN_ID = $callerRunID
+
+    $directRunID = New-WindShareTestRunID -Suite 'check'
+    if ($directRunID -notmatch "^$callerRunID-check-[a-f0-9]{32}$") {
+        throw 'direct run-ID construction did not preserve the validated seed and 128-bit suffix'
+    }
+    if ($env:WINDSHARE_TEST_RUN_ID -cne $callerRunID) {
+        throw 'pure run-ID construction mutated the caller environment'
+    }
+
+    $env:WINDSHARE_TEST_RUN_ID = 'x'
+    $singleCharacterSeedRunID = New-WindShareTestRunID -Suite 'check'
+    if ($singleCharacterSeedRunID -notmatch '^x-check-[a-f0-9]{32}$') {
+        throw 'a one-character portable seed was rejected or rewritten'
+    }
+    $env:WINDSHARE_TEST_RUN_ID = '.invalid'
+    Assert-Fails -Label 'edge-punctuation seed' -Action {
+        New-WindShareTestRunID -Suite 'check' | Out-Null
+    }
     $env:WINDSHARE_TEST_RUN_ID = $callerRunID
 
     foreach ($entrypoint in $entrypoints) {
@@ -32,7 +79,16 @@ try {
             throw "$($entrypoint.Path) must enter exactly one run-ID scope for $($entrypoint.Suite)"
         }
         if ($source.Contains('New-WindShareTestRunID', [StringComparison]::Ordinal)) {
-            throw "$($entrypoint.Path) must not duplicate run-ID construction outside its scope authority"
+            throw "$($entrypoint.Path) must not duplicate run-ID construction outside the shared helper"
+        }
+        foreach ($retiredToken in @(
+            'goauthority/authority.psm1',
+            'Enter-WindShareGoAuthority',
+            'Invoke-WindShareGo'
+        )) {
+            if ($source.Contains($retiredToken, [StringComparison]::Ordinal)) {
+                throw "$($entrypoint.Path) retains retired Go control-plane coupling: $retiredToken"
+            }
         }
 
         $observedRunIDs.Clear()
@@ -51,24 +107,64 @@ try {
             throw "$($entrypoint.Suite) did not propagate one invocation-owned run ID"
         }
 
-        $failed = $false
-        try {
+        Assert-Fails -Label "$($entrypoint.Suite) child failure" -Action {
             Invoke-WithWindShareTestRunID -Suite $entrypoint.Suite -Body {
                 throw 'synthetic child failure'
             }
-        } catch {
-            $failed = $true
-        }
-        if (-not $failed) {
-            throw "$($entrypoint.Suite) did not surface a child failure"
         }
         if ($env:WINDSHARE_TEST_RUN_ID -cne $callerRunID) {
             throw "$($entrypoint.Suite) did not restore the caller run ID after failure"
         }
     }
+
+    $integrationSource = [IO.File]::ReadAllText(
+        (Join-Path $repositoryRoot 'scripts/ci/windows/integration.ps1')
+    )
+    $integrationTest = 'go test -json -count=1 ./integration/...'
+    if ([regex]::Matches(
+        $integrationSource,
+        '(?m)^\s*go\s+test\s+-json\b'
+    ).Count -ne 1 -or
+        [regex]::Matches($integrationSource, [regex]::Escape($integrationTest)).Count -ne 1) {
+        throw 'Windows integration must invoke exactly one local go test -json execution'
+    }
+    $scopeIndex = $integrationSource.IndexOf(
+        "Invoke-WithWindShareTestRunID -Suite 'integration'",
+        [StringComparison]::Ordinal
+    )
+    $startedIndex = $integrationSource.IndexOf(
+        'node scripts/ci/stability/result.mjs started',
+        [StringComparison]::Ordinal
+    )
+    $secretCleanupIndex = $integrationSource.IndexOf(
+        'Remove-Item Env:WINDSHARE_STABILITY_START_REQUEST',
+        [StringComparison]::Ordinal
+    )
+    $testIndex = $integrationSource.IndexOf($integrationTest, [StringComparison]::Ordinal)
+    if ($scopeIndex -lt 0 -or $startedIndex -le $scopeIndex -or
+        $secretCleanupIndex -le $startedIndex -or $testIndex -le $secretCleanupIndex) {
+        throw 'Windows integration must settle run identity before publishing the authenticated start event'
+    }
+
+    Remove-Item Env:WINDSHARE_TEST_RUN_ID
+    Invoke-WithWindShareTestRunID -Suite 'check' -Body {
+        if ($env:WINDSHARE_TEST_RUN_ID -notmatch '^local-check-[a-f0-9]{32}$') {
+            throw 'unset caller scope did not receive a local run ID'
+        }
+    }
+    if (Test-Path Env:WINDSHARE_TEST_RUN_ID) {
+        throw 'successful local scope did not restore an unset caller run ID'
+    }
+    Assert-Fails -Label 'unset caller child failure' -Action {
+        Invoke-WithWindShareTestRunID -Suite 'check' -Body {
+            throw 'synthetic child failure'
+        }
+    }
+    if (Test-Path Env:WINDSHARE_TEST_RUN_ID) {
+        throw 'failed local scope did not restore an unset caller run ID'
+    }
 } finally {
     Remove-Module test-run-id -ErrorAction SilentlyContinue
-    Remove-Item Function:Assert-WindShareGoAuthorityActive -ErrorAction SilentlyContinue
     if ($hadRunID) {
         $env:WINDSHARE_TEST_RUN_ID = $previousRunID
     } else {
@@ -76,4 +172,4 @@ try {
     }
 }
 
-Write-Output 'test run-ID entrypoint contracts: PASS'
+Write-Output 'test run-ID PowerShell entrypoint contracts: PASS'

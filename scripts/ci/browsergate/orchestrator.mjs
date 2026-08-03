@@ -56,6 +56,7 @@ import {
 } from './operation-deadlines.mjs'
 import {
   localGateOperationPlan,
+  runBrowserPreflightPipeline,
   runLocalBrowserGatePipeline,
 } from './local-gate-runner.mjs'
 import {
@@ -367,6 +368,7 @@ export class BrowserGateCommandError extends Error {
 async function dispatchBrowserGateCommand(command, optionArguments) {
   const options = parseOptions(optionArguments)
   if (command === 'local') return localCommand(options)
+  if (command === 'preflight') return preflightCommand(options)
   if (command === 'smoke') return smokeCommand(options)
   if (command === 'build-runtime') return buildRuntimeCommand(options)
   if (command === 'dispose-runtime') return disposeRuntimeCommand(options)
@@ -463,6 +465,78 @@ function disposeRuntimeCommand(options) {
     runtimeRoot: outcome.runtimeRoot,
   }) + '\n')
   return 0
+}
+
+export function preflightReductionTraceEvent(event, runId) {
+  if (event === null || typeof event !== 'object') {
+    throw new Error('preflight reduction requires one settled operation event')
+  }
+  const { operationId, outcome, ...context } = event
+  if (typeof operationId !== 'string' || !['success', 'failure'].includes(outcome)) {
+    throw new Error('preflight reduction operation identity or outcome is invalid')
+  }
+  return createBrowsergateTraceEvent({
+    runId,
+    operationId: 'preflight-reduction',
+    scenario: 'browser-preflight-reduction',
+    milestone: 'settled',
+    reportedOutcome: outcome,
+    payload: Object.freeze({ projectedOperationId: operationId, ...context }),
+  })
+}
+
+async function preflightCommand(options) {
+  assertOnlyOptions(options, [])
+  const policy = browserRunPolicy('blocking')
+  const bootstrapDeadlineAuthority = createBootstrapDeadlineAuthority({ entryId: 'preflight' })
+  const bootstrapQueryGrant = bootstrapDeadlineAuthority.grantQuery()
+  const checkoutSha = gitCheckoutSha(bootstrapQueryGrant)
+  const runId = localRunId(checkoutSha)
+  const deadlineAuthority = bootstrapDeadlineAuthority.handoff({
+    grant: bootstrapQueryGrant,
+    queryOutcome: 'succeeded',
+    checkoutSha,
+    contextId: runId,
+    policy: createLocalBrowsergateDeadlinePolicy(policy, process.platform),
+  })
+
+  const result = await runBrowserPreflightPipeline({
+    runContract: async () => Object.freeze({
+      exitCode: runOperation(
+        'browser-contract',
+        'local/browser-contract',
+        BROWSERGATE_OPERATION_CLASS.CONTRACT_TEST,
+        commandSpec(pnpmExecutable(), ['-C', 'web', 'run', 'test:browser:evidence:contract']),
+        deadlineAuthority,
+      ),
+    }),
+    runGeneratedSemanticProcess: async () => Object.freeze({
+      exitCode: runOperation(
+        'generated-semantic-process',
+        'local/generated-semantic-process',
+        BROWSERGATE_OPERATION_CLASS.GENERATED_SEMANTIC_PROCESS,
+        commandSpec(pnpmExecutable(), [
+          '-C',
+          'web',
+          'run',
+          'test:browser:generated-semantic:process',
+        ]),
+        deadlineAuthority,
+      ),
+    }),
+  })
+
+  for (const event of result.traces.events) {
+    ORCHESTRATOR_TRACE_CONTEXT.getStore()?.append(preflightReductionTraceEvent(event, runId))
+  }
+  emit('preflight', result.exitCode === 0 ? 'passed' : 'failed', {
+    runId,
+    scenario: 'browser-preflight',
+    checkoutSha,
+    contractOutcome: result.outcomes.contract,
+    generatedSemanticOutcome: result.outcomes.generatedSemantic,
+  })
+  return result.exitCode
 }
 
 async function localCommand(options) {
@@ -2031,8 +2105,8 @@ function createRuntimeExecutionExecutors({
   authenticateRuntimeFile,
   readRuntimeNodeVersion,
 }) {
-  // Platform entrypoints retain one verified Go application. Nested runtime
-  // builds consume that exact handle instead of resolving mutable PATH state.
+  // Preserve an injected Go application for deterministic nested builds;
+  // standalone entrypoints resolve PATH only when no caller supplied one.
   const goExecutable = inheritedEnvironment.WINDSHARE_GO_EXECUTABLE
     ?? resolveExecutable('go', { platform, environment: inheritedEnvironment })
   const buildGrant = requireDeadlineGrant(

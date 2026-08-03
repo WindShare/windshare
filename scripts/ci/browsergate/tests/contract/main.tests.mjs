@@ -13,6 +13,7 @@ import {
   localOperationPlan,
   localSuiteContextPaths,
   parseSampleRunnerRecord,
+  preflightReductionTraceEvent,
   runSuiteProduction,
   sampleChildCommand,
   suiteExecutionPlan,
@@ -64,6 +65,7 @@ const RUNTIME = Object.freeze({
 })
 
 verifyOperationPlans()
+verifyPreflightReductionTraceProjection()
 verifyRuntimeSuiteCoverage()
 verifyPolicySampleIdentities()
 verifyFocusedAndSmokeCommands()
@@ -75,6 +77,32 @@ await verifyDynamicSampleCommandContract()
 verifySampleRecordCapabilityBoundary()
 
 process.stdout.write('browsergate orchestration contracts: PASS\n')
+
+function verifyPreflightReductionTraceProjection() {
+  const passed = preflightReductionTraceEvent(Object.freeze({
+    operationId: 'browser-contract',
+    outcome: 'success',
+  }), 'preflight-contract')
+  assert.equal(passed.milestone, 'settled')
+  assert.equal(passed.outcome, 'succeeded')
+  assert.deepEqual(passed.payload, {
+    projectedOperationId: 'browser-contract',
+    reportedOutcome: 'success',
+  })
+
+  const failed = preflightReductionTraceEvent(Object.freeze({
+    operationId: 'generated-semantic-process',
+    outcome: 'failure',
+    failureCode: 'operation-rejected',
+  }), 'preflight-contract')
+  assert.equal(failed.milestone, 'settled')
+  assert.equal(failed.outcome, 'failed')
+  assert.deepEqual(failed.payload, {
+    projectedOperationId: 'generated-semantic-process',
+    failureCode: 'operation-rejected',
+    reportedOutcome: 'failure',
+  })
+}
 
 function verifyOperationPlans() {
   const linux = localOperationPlan('linux')

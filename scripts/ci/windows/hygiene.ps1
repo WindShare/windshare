@@ -1,21 +1,8 @@
 # CI-parity hygiene gate (Windows). Mirrors ci.yml job `hygiene`
-# (sloc-guard lives in the standalone `sloc` gate since 2026-07-14):
-#  - gofmt over tracked AND untracked Go files (work-plan §10.1: pre-commit
-#    runs must catch new sources; CI checks tracked only because a clean
-#    checkout has no untracked files).
-#  - whitespace: `git diff --check` against the empty tree, so every tracked
-#    file's worktree content is inspected — on a clean tree this equals CI's
-#    committed-tree diff.
-#  - checkout contract: every Makefile gate has clone-visible platform scripts,
-#    workflows use an explicit shell instead of depending on executable bits,
-#    and static shell assertions cannot retain paths removed by a refactor.
-#  - Windows native argument batching, which keeps repository-wide tools below
-#    the CreateProcess command-line ceiling without losing file coverage.
-#  - source-only Go/Web v1 forbidden-reference scans (the Web gate also checks
-#    the built bundle).
-#  - short PowerShell contracts for shared benchmark parsing and coverage helpers.
-#  - gopls check -severity=hint over tracked Go files, using the same version as
-#    CI so analyzer drift cannot make the local verdict disagree with GitHub.
+# (sloc-guard is standalone): formatting, thin dispatch, native run identity,
+# stability and exact-SHA release-readiness contracts, argument batching,
+# source-only product/security scans, and gopls diagnostics.
+# Local gofmt also inspects untracked Go files so pre-commit runs catch new sources.
 [CmdletBinding()]
 param()
 
@@ -23,8 +10,6 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ciRoot = Split-Path -Parent $PSScriptRoot
 Import-Module (Join-Path $ciRoot 'hygiene/native-argument-batches.psm1') -Force
-Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
-$null = Enter-WindShareGoAuthority
 
 function Invoke-HygieneNativeStep {
     [CmdletBinding()]
@@ -97,23 +82,13 @@ if ($LASTEXITCODE -ne 0) {
     throw 'git diff --check reported whitespace errors'
 }
 
-Write-Output '-- CI checkout contract'
+Write-Output '-- thin CI dispatch contract'
 Invoke-HygieneNativeStep -Step 'ci-contract-tests' -Action { node scripts/ci/contract.tests.mjs }
 Invoke-HygieneNativeStep -Step 'ci-contract' -Action { node scripts/ci/contract.mjs }
-Invoke-HygieneNativeStep -Step 'make-entry-contracts' -Action {
-    node scripts/ci/makeauthority/entry.tests.mjs
-}
-Invoke-HygieneNativeStep -Step 'make-authority-adversaries' -Action {
-    pwsh -NoProfile -File scripts/ci/makeauthority/authority.tests.ps1
-}
-Invoke-HygieneNativeStep -Step 'go-authority-inventory' -Action {
-    node scripts/ci/goauthority/inventory.tests.mjs
-}
-Invoke-HygieneNativeStep -Step 'go-json-entrypoint-contracts' -Action {
-    node scripts/ci/goauthority/test-json-entrypoints.tests.mjs
-}
-Invoke-HygieneNativeStep -Step 'go-authority-adversaries' -Action {
-    pwsh -NoProfile -File scripts/ci/goauthority/authority.tests.ps1
+
+Write-Output '-- native run-ID contract'
+Invoke-HygieneNativeStep -Step 'test-run-id-entrypoint-contracts' -Action {
+    pwsh -NoProfile -File scripts/ci/test-run-id-entrypoints.tests.ps1
 }
 
 Write-Output '-- stability evidence contracts'
@@ -123,8 +98,19 @@ Invoke-HygieneNativeStep -Step 'stability-result-contracts' -Action {
 Invoke-HygieneNativeStep -Step 'stability-release-reducer-contracts' -Action {
     node scripts/ci/stability/release-reducer.tests.mjs
 }
-Invoke-HygieneNativeStep -Step 'test-run-id-entrypoint-contracts' -Action {
-    pwsh -NoProfile -File scripts/ci/test-run-id-entrypoints.tests.ps1
+Invoke-HygieneNativeStep -Step 'stability-workflow-contracts' -Action {
+    node --test scripts/ci/stability/workflow.tests.mjs
+}
+
+Write-Output '-- exact-SHA release-readiness contracts'
+Invoke-HygieneNativeStep -Step 'release-readiness-resolver-contracts' -Action {
+    node --test scripts/ci/release-readiness/resolver.tests.mjs
+}
+Invoke-HygieneNativeStep -Step 'release-readiness-verifier-contracts' -Action {
+    node --test scripts/ci/release-readiness/verifier.tests.mjs
+}
+Invoke-HygieneNativeStep -Step 'release-readiness-workflow-contracts' -Action {
+    node --test scripts/ci/release-readiness/workflow.tests.mjs
 }
 
 Write-Output '-- Windows native argument batching contract'
@@ -139,7 +125,7 @@ Invoke-HygieneNativeStep -Step 'web-v1-forbidden' -Action {
 
 Write-Output '-- Go v1 forbidden roots and production dependencies'
 Invoke-HygieneNativeStep -Step 'go-v1-forbidden' -Action {
-    Invoke-WindShareGoConsumer node scripts/ci/go-v1-forbidden.mjs
+    node scripts/ci/go-v1-forbidden.mjs
 }
 
 $trackedGoFiles = @(
@@ -161,7 +147,7 @@ $goplsBatchIndex = 0
 foreach ($batch in $goplsBatches) {
     $goplsBatchIndex++
     $batchArguments = @($batch.Arguments)
-    $batchDiagnostics = @(Invoke-WindShareGo run $goplsModule check -severity=hint @batchArguments)
+    $batchDiagnostics = @(go run $goplsModule check -severity=hint @batchArguments)
     $goplsExitCode = $LASTEXITCODE
     $batchDiagnostics | Write-Output
     $goplsDiagnosticCount += $batchDiagnostics.Count

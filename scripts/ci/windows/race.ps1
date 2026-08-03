@@ -12,8 +12,6 @@ $ErrorActionPreference = 'Stop'
 $ciRoot = Split-Path -Parent $PSScriptRoot
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $ciRoot)
 Set-Location $repositoryRoot
-Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
-$null = Enter-WindShareGoAuthority
 Import-Module (Join-Path $ciRoot 'test-run-id.psm1') -Force
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 # A fixed native-suite budget keeps platform parity independent of caller state.
@@ -30,9 +28,9 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 Invoke-WithWindShareTestRunID -Suite 'race' -Body {
     param([string]$RunID)
     Write-Output "== race: run_id=$runID =="
-    Invoke-Step 'go test -race (root)' { Invoke-WindShareGoTestJSON -race -count=1 ./... }
+    Invoke-Step 'go test -race (root)' { go test -json -race -count=1 ./... }
     Invoke-Step 'go test -race (core)' {
-        Invoke-WindShareGo -C core test -race -count=1 "-timeout=$coreSuiteTestTimeout" ./...
+        go -C core test -race -count=1 "-timeout=$coreSuiteTestTimeout" ./...
     }
     Write-Output ('== race: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)
 }

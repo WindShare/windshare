@@ -13,22 +13,14 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import {
-  loadCurrentStabilityExecutionContract,
-  parseStabilityExecutionContract,
-} from './execution-contract.mjs'
-
+export const STABILITY_EVIDENCE_EPOCH = 'windshare.stability-evidence-epoch/v1'
 export const STABILITY_STARTED_EVENT_SCHEMA_VERSION =
-  'windshare.stability-integration-started/v1'
+  'windshare.stability-integration-started/v2'
 export const STABILITY_PRODUCT_VERDICT_SCHEMA_VERSION =
   'windshare.stability-product-verdict/v1'
-export const STABILITY_RESULT_SCHEMA_VERSION = 'windshare.stability-result/v3'
+export const STABILITY_RESULT_SCHEMA_VERSION = 'windshare.stability-result/v4'
 
 const STABILITY_START_REQUEST_SCHEMA_VERSION = 'windshare.stability-start-request/v1'
-
-// This reviewed manifest lets the execution contract distinguish behavioral
-// runner changes from comments without trusting an unversioned wrapper.
-export const STABILITY_RESULT_RUNNER_SEMANTICS = '{"schema_version":"windshare.stability-helper-semantics/v1","operating_system":"cross-platform","role":"evidence-runner","revision":2,"command_plan":["prepare-authenticated-start-request","invoke-canonical-entrypoint-once","require-post-setup-start","publish-product-verdict","propagate-product-exit"]}'
 
 export const STABILITY_WORKFLOW_JOBS = Object.freeze({
   linux: Object.freeze({
@@ -80,15 +72,11 @@ export function detectRuntimeOperatingSystem({
 export function createStabilityStartedEvent(input) {
   const identity = validateEvidenceIdentity(input)
   const invocationID = requireInvocationID(input.invocationId)
-  const semanticContractSha256 = requireSHA256(
-    input.executionContractSemanticSha256,
-    'execution contract semantic digest',
-  )
   return Object.freeze({
     schema_version: STABILITY_STARTED_EVENT_SCHEMA_VERSION,
+    evidence_epoch: STABILITY_EVIDENCE_EPOCH,
     ...identity,
     invocation_id: invocationID,
-    execution_contract_semantic_sha256: semanticContractSha256,
   })
 }
 
@@ -96,6 +84,7 @@ export function parseStabilityStartedEvent(encoded) {
   const value = parseJSONObject(encoded, 'stability started event')
   requireExactFields(value, [
     'schema_version',
+    'evidence_epoch',
     'workflow_run_id',
     'workflow_run_attempt',
     'commit_sha',
@@ -103,11 +92,11 @@ export function parseStabilityStartedEvent(encoded) {
     'operating_system',
     'suite',
     'invocation_id',
-    'execution_contract_semantic_sha256',
   ], 'stability started event')
   if (value.schema_version !== STABILITY_STARTED_EVENT_SCHEMA_VERSION) {
     throw new Error('stability started event schema version is unsupported')
   }
+  requireEvidenceEpoch(value.evidence_epoch, 'stability started event')
   return createStabilityStartedEvent({
     workflowRunId: value.workflow_run_id,
     workflowRunAttempt: value.workflow_run_attempt,
@@ -116,7 +105,6 @@ export function parseStabilityStartedEvent(encoded) {
     operatingSystem: value.operating_system,
     suite: value.suite,
     invocationId: value.invocation_id,
-    executionContractSemanticSha256: value.execution_contract_semantic_sha256,
   })
 }
 
@@ -125,24 +113,14 @@ export function createStabilityResult(input) {
   const invocationID = requireInvocationID(input.invocationId)
   const startedEventSha256 = requireSHA256(input.startedEventSha256, 'started event digest')
   const productVerdict = createProductVerdict(input.productVerdict)
-  const executionContract = parseExecutionContractWithoutFieldOrder(input.executionContract)
-  if (executionContract.operating_system !== identity.operating_system) {
-    throw new Error('stability result execution contract disagrees with its operating system')
-  }
-  if (
-    input.startedExecutionContractSemanticSha256 !== undefined &&
-    input.startedExecutionContractSemanticSha256 !== executionContract.semantic_contract_sha256
-  ) {
-    throw new Error('stability result execution contract disagrees with its started event')
-  }
   return Object.freeze({
     schema_version: STABILITY_RESULT_SCHEMA_VERSION,
+    evidence_epoch: STABILITY_EVIDENCE_EPOCH,
     ...identity,
     invocation_id: invocationID,
     started_event_sha256: startedEventSha256,
     product_verdict: productVerdict,
     retry_count: identity.workflow_run_attempt - 1,
-    execution_contract: executionContract,
   })
 }
 
@@ -150,6 +128,7 @@ export function parseStabilityResult(encoded) {
   const value = parseJSONObject(encoded, 'stability result')
   requireExactFields(value, [
     'schema_version',
+    'evidence_epoch',
     'workflow_run_id',
     'workflow_run_attempt',
     'commit_sha',
@@ -160,11 +139,11 @@ export function parseStabilityResult(encoded) {
     'started_event_sha256',
     'product_verdict',
     'retry_count',
-    'execution_contract',
   ], 'stability result')
   if (value.schema_version !== STABILITY_RESULT_SCHEMA_VERSION) {
     throw new Error('stability result schema version is unsupported')
   }
+  requireEvidenceEpoch(value.evidence_epoch, 'stability result')
   const result = createStabilityResult({
     workflowRunId: value.workflow_run_id,
     workflowRunAttempt: value.workflow_run_attempt,
@@ -175,7 +154,6 @@ export function parseStabilityResult(encoded) {
     invocationId: value.invocation_id,
     startedEventSha256: value.started_event_sha256,
     productVerdict: value.product_verdict,
-    executionContract: value.execution_contract,
   })
   if (value.retry_count !== result.retry_count) {
     throw new Error('stability result retry count disagrees with its workflow attempt')
@@ -300,50 +278,6 @@ export function createProductVerdictForTermination(status, signal) {
   })
 }
 
-function parseExecutionContractWithoutFieldOrder(value) {
-  requireExactFields(value, [
-    'schema_version',
-    'operating_system',
-    'workflow_command',
-    'integration_command',
-    'invocation_count',
-    'retry_policy',
-    'sources',
-    'semantic_contract_sha256',
-    'contract_sha256',
-  ], 'stability execution contract')
-  if (!Array.isArray(value.sources)) {
-    throw new Error('stability execution contract source closure is invalid')
-  }
-  const sources = value.sources.map((source) => {
-    requireExactFields(source, [
-      'role',
-      'path',
-      'git_blob_sha1',
-      'content_sha256',
-      'semantic_sha256',
-    ], 'stability execution contract source descriptor')
-    return {
-      role: source.role,
-      path: source.path,
-      git_blob_sha1: source.git_blob_sha1,
-      content_sha256: source.content_sha256,
-      semantic_sha256: source.semantic_sha256,
-    }
-  })
-  return parseStabilityExecutionContract({
-    schema_version: value.schema_version,
-    operating_system: value.operating_system,
-    workflow_command: value.workflow_command,
-    integration_command: value.integration_command,
-    invocation_count: value.invocation_count,
-    retry_policy: value.retry_policy,
-    sources,
-    semantic_contract_sha256: value.semantic_contract_sha256,
-    contract_sha256: value.contract_sha256,
-  })
-}
-
 function parseJSONObject(encoded, label) {
   let value
   try {
@@ -404,6 +338,13 @@ function requireSHA256(value, label) {
   return value
 }
 
+function requireEvidenceEpoch(value, label) {
+  if (value !== STABILITY_EVIDENCE_EPOCH) {
+    throw new Error(`${label} evidence epoch is unsupported`)
+  }
+  return value
+}
+
 function requireExitCode(value) {
   if (!Number.isSafeInteger(value) || value < 0 || value > 255) {
     throw new Error('product exit code must be an integer between 0 and 255')
@@ -436,7 +377,10 @@ function requiredOption(options, name) {
   return value
 }
 
-function runIntegration(arguments_) {
+export function runStabilityIntegration(
+  arguments_,
+  { spawnIntegration = spawnCanonicalIntegration } = {},
+) {
   const options = parseOptions(arguments_)
   const allowed = new Set([
     '--output',
@@ -463,10 +407,6 @@ function runIntegration(arguments_) {
   if (entrypoint !== authority.entrypoint) {
     throw new Error('stability integration entrypoint is not canonical for the runtime operating system')
   }
-  const executionContract = loadCurrentStabilityExecutionContract({
-    operatingSystem,
-    repositoryRoot: process.cwd(),
-  })
   const identity = {
     workflowRunId: requiredOption(options, '--run-id'),
     workflowRunAttempt: requiredOption(options, '--run-attempt'),
@@ -479,7 +419,6 @@ function runIntegration(arguments_) {
   const started = createStabilityStartedEvent({
     ...identity,
     invocationId,
-    executionContractSemanticSha256: executionContract.semantic_contract_sha256,
   })
   const startedDocument = `${JSON.stringify(started)}\n`
   const requestRoot = mkdtempSync(join(tmpdir(), 'windshare-stability-start-'))
@@ -493,7 +432,7 @@ function runIntegration(arguments_) {
 
   try {
     writeCanonicalJSON(requestPath, request)
-    const product = spawnCanonicalIntegration(operatingSystem, {
+    const product = spawnIntegration(operatingSystem, {
       ...process.env,
       WINDSHARE_STABILITY_START_REQUEST: requestPath,
       WINDSHARE_STABILITY_STARTED_OUTPUT: startedOutput,
@@ -504,8 +443,8 @@ function runIntegration(arguments_) {
     }
 
     if (!existsSync(startedOutput)) {
-      // Setup, retained-executable settlement, and start-marker publication are
-      // infrastructure prerequisites. Without their handshake no product sample exists.
+      // Setup and authenticated start publication are infrastructure
+      // prerequisites. Without their handshake no product sample exists.
       return Number.isSafeInteger(product.status) && product.status !== 0 ? product.status : 1
     }
     const observedStartedDocument = readFileSync(startedOutput, 'utf8')
@@ -517,9 +456,7 @@ function runIntegration(arguments_) {
       ...identity,
       invocationId,
       startedEventSha256: stabilityEvidenceDigest(observedStartedDocument),
-      startedExecutionContractSemanticSha256: started.execution_contract_semantic_sha256,
       productVerdict: createProductVerdictForTermination(product.status, product.signal),
-      executionContract,
     })
     writeCanonicalJSON(output, result)
     process.stdout.write(`stability-result-event: ${JSON.stringify(result)}\n`)
@@ -612,7 +549,7 @@ function asBuffer(value) {
 function main() {
   const [command, ...arguments_] = process.argv.slice(2)
   if (command === 'run') {
-    process.exitCode = runIntegration(arguments_)
+    process.exitCode = runStabilityIntegration(arguments_)
     return
   }
   if (command === 'started' && arguments_.length === 0) {

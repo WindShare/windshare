@@ -11,8 +11,6 @@ $ErrorActionPreference = 'Stop'
 $ciRoot = Split-Path -Parent $PSScriptRoot
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $ciRoot)
 Set-Location $repositoryRoot
-Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
-$null = Enter-WindShareGoAuthority
 $vectorRoot = 'core/testvectors'
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 Write-Output '== vectors =='
@@ -48,8 +46,8 @@ function Assert-VectorInventory([string]$Pass) {
 }
 
 function Update-VectorFamilies([string]$Pass) {
-    Invoke-Step "regenerate v2 protocol-contract vectors ($Pass)" { Invoke-WindShareGo -C core test -count=1 ./internal/protocolcontract -update }
-    Invoke-Step "regenerate v2 peer-signaling vector ($Pass)" { Invoke-WindShareGo test -count=1 ./connectivity/v2signal -update }
+    Invoke-Step "regenerate v2 protocol-contract vectors ($Pass)" { go -C core test -count=1 ./internal/protocolcontract -update }
+    Invoke-Step "regenerate v2 peer-signaling vector ($Pass)" { go test -count=1 ./connectivity/v2signal -update }
     Assert-VectorInventory $Pass
 }
 

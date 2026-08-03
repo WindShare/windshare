@@ -1,5 +1,6 @@
-# Scheduled full validation calls the same cross-OS current-commit DAG as PR and
-# release, replacing only the PR Chromium sample with protected browser authority.
+# Protected full-browser evidence is intentionally isolated from ordinary CI.
+# Only the broker job receives OIDC authority; every byte it executes is prepared
+# without identity authority and bound to the tested SHA.
 name: Full Browser
 
 permissions:
@@ -10,11 +11,226 @@ on:
   schedule:
     - cron: "17 3 * * *"
 
+concurrency:
+  group: full-browser-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WINDSHARE_TEST_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+  BROWSER_EVIDENCE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+
 jobs:
-  current-commit:
+  validate-target:
+    name: Validate protected default-branch target
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: fail closed outside the protected default branch
+        shell: bash
+        env:
+          TARGET_EVENT: ${{ github.event_name }}
+          TARGET_REF: ${{ github.ref }}
+          TARGET_DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+          TARGET_REF_PROTECTED: ${{ github.ref_protected }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |-
+          set -euo pipefail
+          [[ "$TARGET_EVENT" == "schedule" || "$TARGET_EVENT" == "workflow_dispatch" ]]
+          [[ "$TARGET_REF" == "$TARGET_DEFAULT_REF" ]]
+          [[ "$TARGET_REF_PROTECTED" == "true" ]]
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+  full-browser-network-prepare:
+    name: Prepare content-addressed browser network runtime
+    needs: validate-target
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ACTIONS_ID_TOKEN_REQUEST_URL: ''
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+      NODE_OPTIONS: ''
+      NODE_PATH: ''
+      BROWSER_NETWORK_PREPARED_DIRECTORY: ${{ github.workspace }}/test-results/browser-network-prepared
+    outputs:
+      producer-manifest-sha256: ${{ steps.prepared.outputs.producer_manifest_sha256 }}
+    steps:
+      # Preparation chooses every executable byte the broker later runs with a
+      # minted assertion, so its acquisition actions share the pinned boundary.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.work
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: acquire frozen web dependencies without identity authority
+        run: make web-dependencies
+      - name: build held network helpers without identity authority
+        env:
+          BROWSER_NETWORK_HELPER_DIRECTORY: ${{ runner.temp }}/windshare-browser-network-helpers-${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash scripts/ci/linux/browser/prepare.sh
+      - name: bind the broker, runtime, registry, and helpers to the target SHA
+        id: prepared
+        env:
+          BROWSER_NETWORK_HELPER_DIRECTORY: ${{ runner.temp }}/windshare-browser-network-helpers-${{ github.run_id }}-${{ github.run_attempt }}
+        run: node scripts/ci/browsergate/build-protected-network-inputs.mjs
+      - name: publish token-free prepared network inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: browser-network-prepared-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/browser-network-prepared
+          if-no-files-found: error
+          include-hidden-files: true
+
+  full-browser-network:
+    name: Mint and run protected browser network authority
+    needs: full-browser-network-prepare
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - windshare-network-matrix
+    environment: browser-network-matrix
+    timeout-minutes: 360
     permissions:
       contents: read
       id-token: write
-    uses: ./.github/workflows/current-commit.yml
-    with:
-      browser-authority: full
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+          NODE_OPTIONS: ''
+          NODE_PATH: ''
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+          NODE_OPTIONS: ''
+          NODE_PATH: ''
+        with:
+          node-version: 24.16.0
+      - name: download target-bound prepared network inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+          NODE_OPTIONS: ''
+          NODE_PATH: ''
+        with:
+          name: browser-network-prepared-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ github.workspace }}/.browser-network-prepared
+      # The manifest digest comes from the token-free producer job. The broker
+      # verifies that digest and every listed byte before minting one assertion.
+      - name: enter the one-use OIDC network broker
+        shell: /bin/bash --noprofile --norc -p -euo pipefail {0}
+        env:
+          BROWSER_NETWORK_RUNTIME_CONFIG: ${{ vars.WINDSHARE_BROWSER_NETWORK_RUNTIME_CONFIG }}
+          BROWSER_NETWORK_PREPARED_DIRECTORY: ${{ github.workspace }}/.browser-network-prepared
+          BROWSER_NETWORK_PRODUCER_MANIFEST_SHA256: ${{ needs.full-browser-network-prepare.outputs.producer-manifest-sha256 }}
+          WINDSHARE_OIDC_AUDIENCE: ${{ vars.WINDSHARE_BROWSER_NETWORK_OIDC_AUDIENCE }}
+          BASH_ENV: ''
+          ENV: ''
+          LD_AUDIT: ''
+          LD_LIBRARY_PATH: ''
+          LD_PRELOAD: ''
+          NODE_EXTRA_CA_CERTS: ''
+          NODE_OPTIONS: ''
+          NODE_PATH: ''
+          NODE_TLS_REJECT_UNAUTHORIZED: ''
+          OPENSSL_CONF: ''
+          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          SSL_CERT_DIR: ''
+          SSL_CERT_FILE: ''
+          SSLKEYLOGFILE: ''
+        run: |-
+          exec "$RUNNER_TOOL_CACHE/node/24.16.0/x64/bin/node" \
+            --experimental-strip-types \
+            "$BROWSER_NETWORK_PREPARED_DIRECTORY/oidc-network-broker.mjs"
+      - name: publish diagnostics after dropping request authority
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+          NODE_OPTIONS: ''
+          NODE_PATH: ''
+        with:
+          name: browser-network-raw-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |-
+            test-results/browser-network
+            test-results/browser-network-completion.json
+            test-results/browser-network-execution-binding.json
+            test-results/browser-network-producer-manifest.json
+            test-results/browser-network-runtime-helper-manifest.json
+          if-no-files-found: error
+          include-hidden-files: true
+
+  full-browser:
+    name: Run the token-free full browser orchestrator
+    needs: full-browser-network
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - windshare-network-matrix
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      ACTIONS_ID_TOKEN_REQUEST_URL: ''
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+      NODE_OPTIONS: ''
+      NODE_PATH: ''
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: download the protected network completion and bound evidence
+        uses: actions/download-artifact@v8
+        with:
+          name: browser-network-raw-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results
+      - name: run the full browser orchestrator exactly once
+        env:
+          BROWSER_NETWORK_COMPLETION: ${{ github.workspace }}/test-results/browser-network-completion.json
+          WINDSHARE_TARGET_SHA: ${{ github.sha }}
+        run: make browser
+      - name: publish target-bound full browser evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-full-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |-
+            test-results/browser-evidence
+            test-results/browser-network
+            test-results/browser-network-completion.json
+            test-results/browser-network-execution-binding.json
+            test-results/browser-network-producer-manifest.json
+            test-results/browser-network-runtime-helper-manifest.json
+          if-no-files-found: error
+          include-hidden-files: true

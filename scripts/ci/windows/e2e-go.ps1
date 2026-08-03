@@ -10,15 +10,13 @@ $ErrorActionPreference = 'Stop'
 $ciRoot = Split-Path -Parent $PSScriptRoot
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $ciRoot)
 Set-Location $repositoryRoot
-Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
-$null = Enter-WindShareGoAuthority
 Import-Module (Join-Path $ciRoot 'test-run-id.psm1') -Force
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
 Invoke-WithWindShareTestRunID -Suite 'e2e-go' -Body {
     param([string]$RunID)
     Write-Output "== e2e-go: run_id=$runID =="
-    Invoke-WindShareGoTestJSON -count=1 ./e2e
+    go test -json -count=1 ./e2e
     if ($LASTEXITCODE -ne 0) {
         throw "Go E2E tests exited with code $LASTEXITCODE"
     }

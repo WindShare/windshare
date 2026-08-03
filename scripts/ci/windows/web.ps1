@@ -1,6 +1,6 @@
 # CI-parity web gate (Windows). Dependency acquisition is a shared Make leaf;
-# this gate owns only lint, forced typecheck, build, the v1-forbidden production
-# graph, and vitest (which consumes every retained golden-vector family).
+# `pnpm build` owns the single TypeScript compilation before Vite bundles the
+# application, avoiding a second forced project build in this wrapper.
 [CmdletBinding()]
 param()
 
@@ -23,8 +23,7 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 }
 
 Invoke-Step 'pnpm lint' { pnpm -C web lint }
-Invoke-Step 'forced typecheck (tsc -b --force)' { pnpm -C web exec tsc -b --force }
-Invoke-Step 'pnpm build' { pnpm -C web build }
+Invoke-Step 'pnpm build (single TypeScript compile and Vite bundle)' { pnpm -C web build }
 Invoke-Step 'v1 forbidden production graph and bundle' { pnpm -C web forbidden }
 Invoke-Step 'vitest remainder (browser contracts have one dedicated owner)' {
     pnpm -C web run test:unit:remainder
