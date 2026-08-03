@@ -30,7 +30,9 @@ windshare_enter_make_authority() {
   fi
   exec {WINDSHARE_MAKE_DESCRIPTOR}<"$candidate"
   declare -gr WINDSHARE_MAKE_DESCRIPTOR
-  declare -gr WINDSHARE_MAKE_EXECUTABLE="/proc/$$/fd/$WINDSHARE_MAKE_DESCRIPTOR"
+  # $$ remains the parent shell PID inside a Bash subshell; BASHPID names the
+  # process that actually owns this descriptor.
+  declare -gr WINDSHARE_MAKE_EXECUTABLE="/proc/$BASHPID/fd/$WINDSHARE_MAKE_DESCRIPTOR"
   if ! LC_ALL=C IFS= read -r -N 4 executable_header < "$WINDSHARE_MAKE_EXECUTABLE" ||
     [[ "$executable_header" != $'\x7fELF' ]]; then
     echo 'WindShare Make authority accepts only a retained native ELF application' >&2
@@ -88,7 +90,7 @@ windshare_enter_makefile_authority() {
   fi
   exec {WINDSHARE_MAKEFILE_DESCRIPTOR}<"$candidate"
   declare -gr WINDSHARE_MAKEFILE_DESCRIPTOR
-  declare -gr WINDSHARE_RETAINED_MAKEFILE="/proc/$$/fd/$WINDSHARE_MAKEFILE_DESCRIPTOR"
+  declare -gr WINDSHARE_RETAINED_MAKEFILE="/proc/$BASHPID/fd/$WINDSHARE_MAKEFILE_DESCRIPTOR"
   # The entry process exposes an unlinked snapshot descriptor. Reopening that
   # descriptor here transfers the same immutable parser object into this owner.
   declare -gr WINDSHARE_MAKEFILE_SHA256="$expected_sha256"
@@ -113,7 +115,7 @@ windshare_enter_git_authority() {
   fi
   exec {WINDSHARE_GIT_DESCRIPTOR}<"$candidate"
   declare -gr WINDSHARE_GIT_DESCRIPTOR
-  declare -gr WINDSHARE_GIT_EXECUTABLE="/proc/$$/fd/$WINDSHARE_GIT_DESCRIPTOR"
+  declare -gr WINDSHARE_GIT_EXECUTABLE="/proc/$BASHPID/fd/$WINDSHARE_GIT_DESCRIPTOR"
   if ! LC_ALL=C IFS= read -r -N 4 executable_header < "$WINDSHARE_GIT_EXECUTABLE" ||
     [[ "$executable_header" != $'\x7fELF' ]]; then
     echo 'WindShare Git authority accepts only a retained native ELF application' >&2

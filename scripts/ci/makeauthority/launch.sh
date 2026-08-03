@@ -10,11 +10,11 @@ expected_makefile_sha256="$2"
 repository_root="$3"
 shift 3
 source "${BASH_SOURCE[0]%/*}/authority.sh"
-if [[ ! "${BASH_VERSION:-}" =~ ^[0-9]+\.[0-9]+ ]] || [[ ! -x "/proc/$$/exe" ]]; then
+if [[ ! "${BASH_VERSION:-}" =~ ^[0-9]+\.[0-9]+ ]] || [[ ! -x "/proc/$BASHPID/exe" ]]; then
   echo 'WindShare Make launcher requires its retained Bash interpreter' >&2
   exit 1
 fi
-readonly retained_bash="/proc/$$/exe"
+readonly retained_bash="/proc/$BASHPID/exe"
 windshare_enter_make_authority
 windshare_enter_makefile_authority "$retained_makefile" "$expected_makefile_sha256"
 windshare_enter_git_authority
