@@ -23,7 +23,7 @@ import {
 
 const forbiddenEnvironment = new Set([
   'MAKEFLAGS', 'MFLAGS', 'GNUMAKEFLAGS', 'MAKEFILES', 'MAKEOVERRIDES',
-  'MAKE_RESTARTS', 'MAKELEVEL', 'MAKESHELL', 'BASH_ENV', 'ENV',
+  'MAKE_RESTARTS', 'MAKELEVEL', 'MAKESHELL', 'SHELL', 'BASH_ENV', 'ENV',
   'GOFLAGS', 'GOWORK', 'GOOS', 'GOARCH', 'GOENV', 'GOTOOLCHAIN', 'GOROOT',
   'BROWSER_NETWORK_COMPLETION',
 ])
@@ -34,10 +34,17 @@ const cleanEnvironment = Object.fromEntries(Object.entries(process.env).filter((
     !['WINDSHARE_HOST_GOOS', 'WINDSHARE_CORE_ARTIFACT_COMMIT_SHA',
       'WINDSHARE_RECIPE_SHELL', 'WINDSHARE_BASH_EXECUTABLE', 'WINDSHARE_PWSH_EXECUTABLE'].includes(folded)
 }))
+const ambientShellEnvironment = Object.freeze({
+  ...cleanEnvironment,
+  // A nonexistent value proves Make neutralizes login-shell metadata before
+  // any parser expansion or recipe can mistake it for executable authority.
+  SHELL: resolve(tmpdir(), 'windshare-ambient-login-shell-must-not-run'),
+})
 
-// The real host environment is a Node-owned exotic object on Windows. Its exact
-// identity is accepted, while all attacker-supplied records below remain inert.
-assert.deepEqual(validateMakeInvocation(['integration']).targets, ['integration'])
+// Parent Make state is not an entry-authority input. Child invocations below
+// still exercise Node's host-owned process.env object after this test-owned
+// snapshot has removed inherited Make control variables.
+assert.deepEqual(validateMakeInvocation(['integration'], cleanEnvironment).targets, ['integration'])
 
 const fixture = mkdtempSync(join(tmpdir(), 'windshare-make-authority-'))
 const completionPath = resolve('test-results/browser-network-completion.json')
@@ -116,6 +123,10 @@ try {
   assert.throws(
     () => validateMakeInvocation(['integration'], { ...cleanEnvironment, GOTOOLCHAIN: 'auto' }),
     /must be absent/u,
+  )
+  assert.deepEqual(
+    validateMakeInvocation(['integration'], ambientShellEnvironment).targets,
+    ['integration'],
   )
   assert.throws(
     () => validateMakeInvocation(['integration'], { Path: 'a', PATH: 'b' }),
@@ -250,6 +261,9 @@ try {
   })
   assert.notEqual(fakeNativeResult.status, 0, fakeNativeResult.stdout)
 
+  const ambientShellResult = runEntry(['plan-browser'], ambientShellEnvironment)
+  assert.equal(ambientShellResult.status, 0, ambientShellResult.stderr)
+
   if (process.platform === 'win32') {
     const hostileSystemRoot = resolve(fixture, 'hostile-system-root')
     mkdirSync(hostileSystemRoot)
@@ -264,7 +278,7 @@ try {
   }
 
   const directMake = spawnSync('make', ['plan-ci', 'plan-ci-full', 'plan-browser'], {
-    cwd: resolve('.'), env: cleanEnvironment, encoding: 'utf8', shell: false,
+    cwd: resolve('.'), env: ambientShellEnvironment, encoding: 'utf8', shell: false,
   })
   assert.equal(directMake.status, 0, directMake.stderr)
   const publicPlan = directMake.stdout.trim().split(/\r?\n/u)
