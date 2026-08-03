@@ -147,35 +147,6 @@ func readExecResult(reader io.Reader) execResult {
 	return execResult{failure: &failure}
 }
 
-func failedSettlement(request ownerprotocol.Request, errorCode string, cause error) ownerprotocol.Settlement {
-	message := "linux process owner could not initialize"
-	if cause != nil {
-		message = boundedDiagnostic(cause)
-	}
-	active := uint32(0)
-	return ownerprotocol.Settlement{
-		SchemaVersion:     ownerprotocol.SettlementSchemaVersion,
-		Identity:          request.Identity,
-		TerminationReason: ownerprotocol.TerminationInitializationFailed,
-		Target: ownerprotocol.TargetEvidence{
-			Outcome: ownerprotocol.TargetNotStarted, FailureCode: errorCode, FailureMessage: message,
-		},
-		Input:     ownerprotocol.InputEvidence{Outcome: unstartedInputOutcome(request.Command.Stdin)},
-		TreeState: ownerprotocol.TreeProvenEmpty,
-		Cleanup:   ownerprotocol.CleanupEvidence{Outcome: ownerprotocol.CleanupCompleted},
-		Platform: ownerprotocol.PlatformEvidence{
-			Kind: ownerprotocol.PlatformLinuxSubreaper, OwnerPID: os.Getpid(), ActiveProcessCount: &active,
-		},
-	}
-}
-
-func unstartedInputOutcome(input *ownerprotocol.Stdin) string {
-	if input == nil {
-		return ownerprotocol.InputNotRequested
-	}
-	return ownerprotocol.InputNotStarted
-}
-
 func boundedDiagnostic(cause error) string {
 	if cause == nil {
 		return "unknown linux process owner failure"
@@ -191,9 +162,24 @@ func boundedDiagnostic(cause error) string {
 	return message
 }
 
-func validateSettlement(settlement ownerprotocol.Settlement, request ownerprotocol.Request) error {
-	if err := ownerprotocol.ValidateSettlementForRequest(settlement, request); err != nil {
-		return errors.New("linux process owner produced invalid settlement: " + err.Error())
+func watchControl(control io.Reader, identity ownerprotocol.Identity, result chan<- string) {
+	buffered := bufio.NewReaderSize(control, ownerprotocol.MaximumDocumentBytes+4)
+	controlRecord, err := ownerprotocol.ReadFrame[ownerprotocol.Control](buffered)
+	if errors.Is(err, io.EOF) {
+		result <- ownerprotocol.TerminationParentLost
+		return
 	}
-	return nil
+	if err != nil {
+		result <- ownerprotocol.TerminationOwnerFailure
+		return
+	}
+	if err := ownerprotocol.ValidateControl(controlRecord, identity); err != nil {
+		result <- ownerprotocol.TerminationOwnerFailure
+		return
+	}
+	if trailing, trailingErr := buffered.ReadByte(); !errors.Is(trailingErr, io.EOF) || trailing != 0 {
+		result <- ownerprotocol.TerminationOwnerFailure
+		return
+	}
+	result <- controlRecord.Reason
 }

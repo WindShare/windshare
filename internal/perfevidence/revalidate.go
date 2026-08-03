@@ -1,17 +1,19 @@
 package perfevidence
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+	"time"
 )
 
 type snapshotRevalidator interface {
 	Revalidate() error
 }
-
 type snapshotRevalidatorFunc func() error
 
 func (function snapshotRevalidatorFunc) Revalidate() error {
@@ -24,7 +26,6 @@ type snapshotValidationTarget struct {
 	Bytes        int64
 	SHA256       string
 }
-
 type snapshotValidationPlan struct {
 	ArtifactRoot string
 	Identity     SnapshotIdentity
@@ -297,4 +298,334 @@ func revalidateSemanticOverlays(artifactRoot string, graphs []BuildGraphIdentity
 		}
 	}
 	return nil
+}
+
+func publicationPaths(outputRoot, stage string) (rootResult, stageResult string, resultErr error) {
+	authority, err := openOutputRootAuthority(outputRoot)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve evidence output root: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, authority.close()) }()
+	stagePath, err := filepath.Abs(stage)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve evidence stage: %w", err)
+	}
+	if !samePath(filepath.Dir(stagePath), authority.path) {
+		return "", "", errors.New("evidence stage must be a direct staging child of its output root")
+	}
+	info, err := os.Lstat(stagePath)
+	if err != nil {
+		return "", "", err
+	}
+	if !strings.HasPrefix(filepath.Base(stagePath), ".staging-") || isReparsePointInfo(info) || !info.IsDir() {
+		return "", "", errors.New("evidence stage must be a real direct staging child of its output root")
+	}
+	return authority.path, stagePath, nil
+}
+
+func publicationPathsWithAuthority(
+	authority *outputRootAuthority,
+	artifactDir *stageDirectoryAuthority,
+) (string, string, error) {
+	if authority == nil {
+		return "", "", errors.New("evidence output authority is nil")
+	}
+	if err := authority.verifyPath(); err != nil {
+		return "", "", err
+	}
+	if artifactDir == nil {
+		return "", "", errors.New("evidence stage authority is nil")
+	}
+	artifactName := artifactDir.name
+	if !strings.HasPrefix(artifactName, ".staging-") || filepath.Base(artifactName) != artifactName {
+		return "", "", errors.New("evidence stage must be a direct staging child of its output root")
+	}
+	if err := artifactDir.verifyName(authority); err != nil {
+		return "", "", err
+	}
+	stagePath := artifactDir.path
+	info, err := os.Lstat(stagePath)
+	if err != nil {
+		return "", "", fmt.Errorf("inspect evidence stage: %w", err)
+	}
+	if isReparsePointInfo(info) || !info.IsDir() {
+		return "", "", errors.New("evidence stage must be a real directory")
+	}
+	return authority.path, stagePath, nil
+}
+
+func resolveDirectoryAuthority(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%s is not a directory", resolved)
+	}
+	return filepath.Clean(resolved), nil
+}
+
+func validRunID(runID string) bool {
+	if len(runID) == 0 || len(runID) > 64 {
+		return false
+	}
+	for _, character := range runID {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func recoverAbandonedStages(root string, now time.Time) error {
+	return recoverAbandonedStagesWithBudget(root, now, DefaultEvidenceStoreBudget())
+}
+
+func recoverAbandonedStagesWithBudget(root string, now time.Time, budget EvidenceStoreBudget) error {
+	authority, err := openOutputRootAuthority(root)
+	if err != nil {
+		return err
+	}
+	recoveryErr := recoverAbandonedStagesWithAuthorityAndBudget(authority, now, budget)
+	return errors.Join(recoveryErr, authority.close())
+}
+
+func recoverAbandonedStagesWithAuthority(authority *outputRootAuthority, now time.Time) error {
+	return recoverAbandonedStagesWithAuthorityAndBudget(authority, now, DefaultEvidenceStoreBudget())
+}
+
+func recoverAbandonedStagesWithAuthorityAndBudget(
+	authority *outputRootAuthority,
+	now time.Time,
+	budget EvidenceStoreBudget,
+) error {
+	entries, err := authority.readDir()
+	if err != nil {
+		return fmt.Errorf("scan evidence stages: %w", err)
+	}
+	if err := preflightEvidenceRecovery(authority, entries, budget); err != nil {
+		return fmt.Errorf("preflight evidence recovery: %w", err)
+	}
+	for _, entry := range entries {
+		if err := recoverRuntimeStage(authority, entry.Name(), now, budget); err != nil {
+			return err
+		}
+	}
+	for _, entry := range entries {
+		if err := recoverOrphanArtifactStage(authority, entry.Name(), now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func preflightEvidenceRecovery(
+	authority *outputRootAuthority,
+	entries []os.DirEntry,
+	budget EvidenceStoreBudget,
+) error {
+	meter, err := newEvidenceStoreMeter(budget)
+	if err != nil {
+		return err
+	}
+	if err := meter.observeRootEntries(len(entries)); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		owned := strings.HasPrefix(name, ".runtime-") || strings.HasPrefix(name, ".staging-")
+		if !owned {
+			continue
+		}
+		directory, err := authority.openRecoveryChildAuthority(name)
+		if authorityChildAbsent(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("retain evidence recovery candidate %s: %w", name, err)
+		}
+		walkErr := directory.walkEvidenceStore(&evidenceStoreWalk{meter: meter})
+		if err := errors.Join(walkErr, directory.close()); err != nil {
+			return fmt.Errorf("inventory evidence recovery candidate %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func recoverRuntimeStage(
+	authority *outputRootAuthority,
+	name string,
+	now time.Time,
+	budget EvidenceStoreBudget,
+) (resultErr error) {
+	if !strings.HasPrefix(name, ".runtime-") {
+		return nil
+	}
+	runtimeDir, err := authority.openRecoveryChildAuthority(name)
+	if err != nil {
+		return fmt.Errorf("retain evidence runtime %s: %w", name, err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, runtimeDir.close()) }()
+	leased, err := runtimeDir.tryAcquireRecoveryLease(authority)
+	if err != nil {
+		return fmt.Errorf("lease evidence runtime %s: %w", name, err)
+	}
+	if !leased {
+		return nil
+	}
+	modifiedAt, err := runtimeDir.modTime()
+	if err != nil {
+		return fmt.Errorf("inspect evidence runtime %s: %w", name, err)
+	}
+	runID := strings.TrimPrefix(name, ".runtime-")
+	owner, validOwner, err := readStageOwnerAuthority(runtimeDir, runID, budget)
+	if err != nil {
+		return fmt.Errorf("read evidence runtime owner %s: %w", name, err)
+	}
+	if validOwner {
+		matches, matchErr := processMatches(owner.ProcessID, owner.ProcessToken)
+		if matchErr != nil || matches {
+			// An unprovable owner is retained: cleanup must never trade disk
+			// reclamation for deletion of another process's live stage.
+			return nil
+		}
+	} else if now.Sub(modifiedAt) < abandonedStageMinimumAge {
+		return nil
+	}
+	artifactName := ".staging-" + runID
+	artifactDir, err := authority.openRecoveryChildAuthority(artifactName)
+	if err == nil {
+		defer func() { resultErr = errors.Join(resultErr, artifactDir.close()) }()
+		artifactLeased, leaseErr := artifactDir.tryAcquireRecoveryLease(authority)
+		if leaseErr != nil {
+			return fmt.Errorf("lease evidence artifact %s: %w", artifactName, leaseErr)
+		}
+		if !artifactLeased {
+			// The owner pathname can be forged or swapped. The artifact's own
+			// kernel lease is the deletion authority for a live run.
+			return nil
+		}
+		if err := authority.removeRetainedChild(artifactDir, nil); err != nil {
+			return fmt.Errorf("recover abandoned artifact stage %s: %w", runID, err)
+		}
+	} else if !authorityChildAbsent(err) {
+		return fmt.Errorf("retain evidence artifact %s: %w", artifactName, err)
+	}
+	if err := authority.removeRetainedChild(runtimeDir, nil); err != nil {
+		return fmt.Errorf("recover abandoned runtime stage %s: %w", runID, err)
+	}
+	return nil
+}
+
+func readStageOwnerAuthority(
+	runtimeDir *stageDirectoryAuthority,
+	runID string,
+	budget EvidenceStoreBudget,
+) (stageOwner, bool, error) {
+	meter, meterErr := newEvidenceStoreMeter(budget)
+	if meterErr != nil {
+		return stageOwner{}, false, meterErr
+	}
+	encoded, err := readAuthorityFileWithMeter(runtimeDir, stageOwnerName, evidenceMetadataFile, meter)
+	if err != nil {
+		if authorityChildAbsent(err) {
+			return stageOwner{}, false, nil
+		}
+		return stageOwner{}, false, err
+	}
+	var owner stageOwner
+	if json.Unmarshal(encoded, &owner) != nil {
+		return stageOwner{}, false, nil
+	}
+	valid := owner.SchemaVersion == SchemaVersion && owner.RunID == runID && validRunID(owner.RunID) &&
+		owner.ProcessID > 0 && owner.ProcessToken != "" && !owner.CreatedAt.IsZero()
+	return owner, valid, nil
+}
+
+func recoverOrphanArtifactStage(
+	authority *outputRootAuthority,
+	name string,
+	now time.Time,
+) (resultErr error) {
+	if !strings.HasPrefix(name, ".staging-") {
+		return nil
+	}
+	artifactDir, err := authority.openRecoveryChildAuthority(name)
+	if err != nil {
+		if authorityChildAbsent(err) {
+			return nil
+		}
+		return fmt.Errorf("retain orphan evidence stage %s: %w", name, err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, artifactDir.close()) }()
+	leased, err := artifactDir.tryAcquireRecoveryLease(authority)
+	if err != nil {
+		return fmt.Errorf("lease orphan evidence stage %s: %w", name, err)
+	}
+	if !leased {
+		return nil
+	}
+	runID := strings.TrimPrefix(name, ".staging-")
+	runtimeDir, err := authority.openRecoveryChildAuthority(".runtime-" + runID)
+	if err == nil {
+		return runtimeDir.close()
+	}
+	if !authorityChildAbsent(err) {
+		return fmt.Errorf("retain orphan stage owner for %s: %w", runID, err)
+	}
+	modifiedAt, err := artifactDir.modTime()
+	if err != nil {
+		return fmt.Errorf("inspect orphan evidence stage %s: %w", name, err)
+	}
+	if now.Sub(modifiedAt) < abandonedStageMinimumAge {
+		return nil
+	}
+	if err := authority.removeRetainedChild(artifactDir, nil); err != nil {
+		return fmt.Errorf("recover orphan stage %s: %w", runID, err)
+	}
+	return nil
+}
+
+func removeOwnedTree(root, path string) error {
+	authority, err := openOutputRootAuthority(root)
+	if err != nil {
+		return err
+	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return errors.Join(err, authority.close())
+	}
+	if !samePath(filepath.Dir(path), authority.path) {
+		return errors.Join(
+			fmt.Errorf("refusing to remove unowned performance path %s", path), authority.close(),
+		)
+	}
+	removeErr := removeOwnedTreeAuthority(authority, filepath.Base(path), nil)
+	return errors.Join(removeErr, authority.close())
+}
+
+func removeOwnedTreeAuthority(
+	authority *outputRootAuthority,
+	name string,
+	transition func(string) error,
+) error {
+	if authority == nil {
+		return errors.New("evidence output authority is nil")
+	}
+	owned := strings.HasPrefix(name, ".staging-") || strings.HasPrefix(name, ".runtime-")
+	if filepath.Base(name) != name || !owned {
+		return fmt.Errorf("refusing to remove unowned performance child %s", name)
+	}
+	return authority.removeChild(name, transition)
 }

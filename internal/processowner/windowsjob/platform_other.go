@@ -16,6 +16,10 @@ func makeLauncherHandlePrivate(uintptr, string) error {
 
 func closeUntransferredLauncherHandle(uintptr) {}
 
+func openSuperviseEndpoints(superviseOptions) (superviseEndpoints, error) {
+	return superviseEndpoints{}, errors.New("windows process-owner endpoints are unavailable on this platform")
+}
+
 func runSupervisorPlatform(supervisionRequest, *settlementSink, *os.File, *os.File, *startGate, io.Writer) error {
 	return errors.New("windowsjob supervision is available only on Windows")
 }
