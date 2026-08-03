@@ -7,13 +7,15 @@ import {
 
 describe('browser sample process environment', () => {
   it('inherits only runtime prerequisites and excludes ambient credentials', () => {
+    // Pin win32 canonicalization so the mixed-case spellings above are
+    // exercised identically on every host instead of passing by accident.
     expect(inheritedSampleEnvironment({
       Path: '/runtime/bin',
       home: '/runtime/home',
       GITHUB_TOKEN: 'github-secret',
       REPOSITORY_DEPLOY_SECRET: 'repository-secret',
       NODE_OPTIONS: '--require hostile.js',
-    })).toEqual({
+    }, 'win32')).toEqual({
       PATH: '/runtime/bin',
       HOME: '/runtime/home',
     })

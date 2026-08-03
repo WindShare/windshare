@@ -10,6 +10,16 @@ $script:GoAuthorityVariables = @(
     'WINDSHARE_GO_HOST_ARCH'
 )
 
+# Hosted runners export GOTOOLCHAIN=local through actions/setup-go for every
+# step, and the retained Go is always invoked with that same value. Ambient
+# local is therefore the owned default rather than caller selection; any other
+# GOTOOLCHAIN value remains rejected alongside every other selection variable.
+function Test-OwnedGoSelectionDefault {
+    param([Parameter(Mandatory)][string]$Name)
+
+    return ($Name -ceq 'GOTOOLCHAIN') -and (Test-Path 'Env:GOTOOLCHAIN') -and ($env:GOTOOLCHAIN -ceq 'local')
+}
+
 function Clear-ProcessEnvironmentVariable {
     param([Parameter(Mandatory)][string]$Name)
 
@@ -34,7 +44,11 @@ function Assert-NoPersistedGoSelection {
     }
     foreach ($line in [IO.File]::ReadAllLines($Path)) {
         if ($line -match '^(GOFLAGS|GOWORK|GOOS|GOARCH|GOENV|GOTOOLCHAIN|GOROOT)=') {
-            throw "$($Matches[1]) must not be persisted outside WindShare Go authority"
+            $name = $Matches[1]
+            if ($name -ceq 'GOTOOLCHAIN' -and $line -cmatch '^GOTOOLCHAIN=local$') {
+                continue
+            }
+            throw "$name must not be persisted outside WindShare Go authority"
         }
     }
 }
@@ -79,7 +93,7 @@ function Enter-WindShareGoAuthority {
         throw 'WindShare Go authority may be settled only once per entrypoint'
     }
     foreach ($name in @($script:GoSelectionVariables) + @($script:GoAuthorityVariables)) {
-        if (Test-Path "Env:$name") {
+        if ((Test-Path "Env:$name") -and -not (Test-OwnedGoSelectionDefault $name)) {
             throw "$name must be absent until WindShare Go authority is settled"
         }
     }
@@ -196,7 +210,7 @@ function Invoke-WindShareGo {
 function Invoke-WindShareGoTestJSON {
     $testArguments = @($args)
     foreach ($name in $script:GoSelectionVariables) {
-        if (Test-Path "Env:$name") {
+        if ((Test-Path "Env:$name") -and -not (Test-OwnedGoSelectionDefault $name)) {
             throw "$name must be absent when invoking Go JSON tests"
         }
     }

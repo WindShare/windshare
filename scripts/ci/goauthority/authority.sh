@@ -4,6 +4,15 @@
 # platform selection. The open descriptor makes the selected application the
 # authority for the lifetime of the entrypoint, even if its PATH entry changes.
 readonly WINDSHARE_STABILITY_GO_AUTHORITY_SEMANTICS='{"schema_version":"windshare.stability-helper-semantics/v1","operating_system":"linux","role":"go-executable-authority","revision":1,"command_plan":["reject-ambient-and-persisted-selection","retain-native-cmd-go","invoke-retained-go-with-owned-environment"]}'
+
+# Hosted runners export GOTOOLCHAIN=local through actions/setup-go for every
+# step, and the retained Go is always invoked with that same value. Ambient
+# local is therefore the owned default rather than caller selection; any other
+# GOTOOLCHAIN value remains rejected alongside every other selection variable.
+windshare_go_selection_ambient() {
+  [[ "$1" != GOTOOLCHAIN ]] || [[ "${!1}" != local ]]
+}
+
 windshare_enter_go_authority() {
   local candidate
   local candidate_identity
@@ -28,7 +37,7 @@ windshare_enter_go_authority() {
   for name in GOFLAGS GOWORK GOOS GOARCH GOENV GOTOOLCHAIN GOROOT \
     WINDSHARE_GO_EXECUTABLE WINDSHARE_GO_AUTHORITY_ACTIVE \
     WINDSHARE_GO_HOST_OS WINDSHARE_GO_HOST_ARCH; do
-    if [[ -v "$name" ]]; then
+    if [[ -v "$name" ]] && windshare_go_selection_ambient "$name"; then
       echo "$name must be absent until WindShare Go authority is settled" >&2
       return 1
     fi
@@ -44,12 +53,19 @@ windshare_enter_go_authority() {
   fi
   config_path="$config_directory/go/env"
   if [[ -f "$config_path" ]]; then
-    while IFS='=' read -r changed_name _; do
+    while IFS='=' read -r changed_name changed_value; do
       changed_name="${changed_name//$'\r'/}"
+      changed_value="${changed_value//$'\r'/}"
       case "$changed_name" in
-        GOFLAGS|GOWORK|GOOS|GOARCH|GOENV|GOTOOLCHAIN|GOROOT)
+        GOFLAGS|GOWORK|GOOS|GOARCH|GOENV|GOROOT)
           echo "$changed_name must not be persisted outside WindShare Go authority" >&2
           return 1
+          ;;
+        GOTOOLCHAIN)
+          if [[ "$changed_value" != local ]]; then
+            echo 'GOTOOLCHAIN must not be persisted outside WindShare Go authority (owned default: local)' >&2
+            return 1
+          fi
           ;;
       esac
     done <"$config_path"
@@ -149,7 +165,7 @@ windshare_go_test_json() {
   local name
   local normalized
   for name in GOFLAGS GOWORK GOOS GOARCH GOENV GOTOOLCHAIN GOROOT; do
-    if [[ -v "$name" ]]; then
+    if [[ -v "$name" ]] && windshare_go_selection_ambient "$name"; then
       echo "$name must be absent when invoking Go JSON tests" >&2
       return 2
     fi

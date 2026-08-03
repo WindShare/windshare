@@ -58,6 +58,18 @@ try {
         }
     }
 
+    # actions/setup-go exports GOTOOLCHAIN=local on hosted runners; it equals
+    # the owned default and must settle the authority, while any other value
+    # must fail closed.
+    $ownedDefault = Invoke-IsolatedAuthority -Environment @{ GOTOOLCHAIN = 'local' }
+    if ($ownedDefault.ExitCode -ne 0) {
+        throw "ambient GOTOOLCHAIN=local did not settle the Go authority: $($ownedDefault.Stderr)"
+    }
+    $hostileToolchain = Invoke-IsolatedAuthority -Environment @{ GOTOOLCHAIN = 'auto' }
+    if ($hostileToolchain.ExitCode -eq 0 -or -not $hostileToolchain.Stderr.Contains('GOTOOLCHAIN must be absent')) {
+        throw 'ambient GOTOOLCHAIN=auto did not fail closed'
+    }
+
     $fakeBin = Join-Path $temporaryRoot 'fake-bin'
     New-Item -ItemType Directory -Path $fakeBin | Out-Null
     [IO.File]::WriteAllText((Join-Path $fakeBin 'go.exe'), 'not-a-pe-application')
@@ -81,6 +93,21 @@ try {
         if (-not $rejected) {
             throw "persisted $name did not fail closed"
         }
+    }
+
+    # Persisted GOTOOLCHAIN=local is the owned default and must pass, while any
+    # other persisted value must fail closed.
+    [IO.File]::WriteAllText($persistedPath, "GOTOOLCHAIN=local`n")
+    & $module { param($Path) Assert-NoPersistedGoSelection $Path } $persistedPath
+    [IO.File]::WriteAllText($persistedPath, "GOTOOLCHAIN=auto`n")
+    $persistedToolchainRejected = $false
+    try {
+        & $module { param($Path) Assert-NoPersistedGoSelection $Path } $persistedPath
+    } catch {
+        $persistedToolchainRejected = $_.Exception.Message.Contains('GOTOOLCHAIN must not be persisted')
+    }
+    if (-not $persistedToolchainRejected) {
+        throw 'persisted GOTOOLCHAIN=auto did not fail closed'
     }
 
     $authority = Enter-WindShareGoAuthority
