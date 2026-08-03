@@ -26,6 +26,8 @@
 - During iteration: `make <gate>` (see `Makefile`).
 - Local CI: `make ci`.
 
+工具链不准固定版本，尽量使用大版本的latest，Golang使用最新latest。也包括所有 github action。本地直接使用本地工具链就行。尤其要拒绝为了版本问题写了一堆兜底代码，难以维护。
+
 ## Project Overview
 
 WindShare is an open-source E2EE file/folder sharing tool. It creates links without pre-uploading, reading, or hashing content; receivers use the browser or CLI over WebRTC with relay fallback.
