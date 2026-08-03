@@ -1,17 +1,89 @@
-# Historical stability and the reusable current-commit DAG are independent
-# release authorities. Missing history is non-blocking, while unresolved
-# reproduced findings and reducer infrastructure failures remain fatal.
+# Release readiness consumes immutable evidence instead of replaying the mixed CI graph.
+# The resolver and verifier are separate so Actions metadata access is removed before
+# producer-owned evidence parsers process downloaded bytes.
 name: Release Readiness
-
-permissions:
-  contents: read
 
 on:
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
-  stability-history:
-    name: Scheduled stability history report
+  validate-target:
+    name: Validate protected default-branch target
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      target_sha: ${{ steps.target.outputs.target_sha }}
+      default_branch: ${{ steps.target.outputs.default_branch }}
+    steps:
+      - id: target
+        name: bind release readiness to one protected default-branch SHA
+        shell: bash
+        env:
+          TARGET_EVENT: ${{ github.event_name }}
+          TARGET_REF: ${{ github.ref }}
+          TARGET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TARGET_REF_PROTECTED: ${{ github.ref_protected }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |-
+          set -euo pipefail
+          [[ "$TARGET_EVENT" == "workflow_dispatch" ]]
+          [[ -n "$TARGET_DEFAULT_BRANCH" ]]
+          [[ "$TARGET_DEFAULT_BRANCH" != *$'\n'* ]]
+          [[ "$TARGET_DEFAULT_BRANCH" != *$'\r'* ]]
+          [[ "$TARGET_REF" == "refs/heads/$TARGET_DEFAULT_BRANCH" ]]
+          [[ "$TARGET_REF_PROTECTED" == "true" ]]
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          printf 'target_sha=%s\ndefault_branch=%s\n' \
+            "$TARGET_SHA" "$TARGET_DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
+
+  resolve-evidence:
+    name: Resolve exact-SHA producer evidence
+    needs: validate-target
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      ci_run_id: ${{ steps.resolve.outputs.ci_run_id }}
+      ci_run_attempt: ${{ steps.resolve.outputs.ci_run_attempt }}
+      browser_run_id: ${{ steps.resolve.outputs.browser_run_id }}
+      browser_run_attempt: ${{ steps.resolve.outputs.browser_run_attempt }}
+      browser_artifact_id: ${{ steps.resolve.outputs.browser_artifact_id }}
+      stability_run_id: ${{ steps.resolve.outputs.stability_run_id }}
+      stability_run_attempt: ${{ steps.resolve.outputs.stability_run_attempt }}
+      stability_linux_artifact_id: ${{ steps.resolve.outputs.stability_linux_artifact_id }}
+      stability_windows_artifact_id: ${{ steps.resolve.outputs.stability_windows_artifact_id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate-target.outputs.target_sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - id: resolve
+        name: select complete producer attempts for the exact target SHA
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ needs.validate-target.outputs.default_branch }}
+          TARGET_SHA: ${{ needs.validate-target.outputs.target_sha }}
+        run: >-
+          node scripts/ci/release-readiness/resolver.mjs
+          --repository "$GITHUB_REPOSITORY"
+          --default-branch "$DEFAULT_BRANCH"
+          --target-sha "$TARGET_SHA"
+          --output "$RUNNER_TEMP/release-readiness-resolution.json"
+          --github-output "$GITHUB_OUTPUT"
+
+  verify-evidence:
+    name: Verify selected producer evidence
+    needs:
+      - validate-target
+      - resolve-evidence
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -21,7 +93,115 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          ref: ${{ github.sha }}
+          ref: ${{ needs.validate-target.outputs.target_sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      # Re-resolution keeps the rich manifest local while the expected scalar set
+      # makes any run-attempt or artifact change between jobs fail closed.
+      - name: materialize the unchanged canonical evidence selection
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ needs.validate-target.outputs.default_branch }}
+          TARGET_SHA: ${{ needs.validate-target.outputs.target_sha }}
+          RESOLUTION_PATH: ${{ runner.temp }}/release-readiness-resolution.json
+        run: >-
+          node scripts/ci/release-readiness/resolver.mjs
+          --repository "$GITHUB_REPOSITORY"
+          --default-branch "$DEFAULT_BRANCH"
+          --target-sha "$TARGET_SHA"
+          --output "$RESOLUTION_PATH"
+          --expect-ci-run-id "${{ needs.resolve-evidence.outputs.ci_run_id }}"
+          --expect-ci-run-attempt "${{ needs.resolve-evidence.outputs.ci_run_attempt }}"
+          --expect-browser-run-id "${{ needs.resolve-evidence.outputs.browser_run_id }}"
+          --expect-browser-run-attempt "${{ needs.resolve-evidence.outputs.browser_run_attempt }}"
+          --expect-browser-artifact-id "${{ needs.resolve-evidence.outputs.browser_artifact_id }}"
+          --expect-stability-run-id "${{ needs.resolve-evidence.outputs.stability_run_id }}"
+          --expect-stability-run-attempt "${{ needs.resolve-evidence.outputs.stability_run_attempt }}"
+          --expect-stability-linux-artifact-id "${{ needs.resolve-evidence.outputs.stability_linux_artifact_id }}"
+          --expect-stability-windows-artifact-id "${{ needs.resolve-evidence.outputs.stability_windows_artifact_id }}"
+      - name: download the selected final browser artifact
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.resolve-evidence.outputs.browser_artifact_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.resolve-evidence.outputs.browser_run_id }}
+          path: ${{ github.workspace }}/test-results
+          digest-mismatch: error
+      # Extraction would discard the producer ZIP identity that the existing
+      # stability archive parser validates, so these downloads remain raw bytes.
+      - name: download the selected raw stability archives
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STABILITY_LINUX_ARTIFACT_ID: ${{ needs.resolve-evidence.outputs.stability_linux_artifact_id }}
+          STABILITY_WINDOWS_ARTIFACT_ID: ${{ needs.resolve-evidence.outputs.stability_windows_artifact_id }}
+          RELEASE_READINESS_ROOT: ${{ runner.temp }}/release-readiness
+        run: |-
+          set -euo pipefail
+          readonly maximum_stability_archive_bytes=65536
+          readonly artifact_api="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts"
+
+          mkdir -p -- "$RELEASE_READINESS_ROOT"
+
+          download_archive() {
+            local artifact_id="$1"
+            local destination="$2"
+            curl --fail --location --silent --show-error \
+              --proto '=https' --proto-redir '=https' \
+              --connect-timeout 15 --max-time 120 \
+              --max-filesize "$maximum_stability_archive_bytes" \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer $GITHUB_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2026-03-10' \
+              --output "$destination" \
+              "$artifact_api/$artifact_id/zip"
+          }
+
+          download_archive \
+            "$STABILITY_LINUX_ARTIFACT_ID" \
+            "$RELEASE_READINESS_ROOT/stability-linux.zip"
+          download_archive \
+            "$STABILITY_WINDOWS_ARTIFACT_ID" \
+            "$RELEASE_READINESS_ROOT/stability-windows.zip"
+      - name: verify downloaded evidence without repository or identity tokens
+        shell: bash
+        env:
+          GITHUB_TOKEN: ''
+          GH_TOKEN: ''
+          ACTIONS_RUNTIME_TOKEN: ''
+          ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+          NODE_OPTIONS: ''
+          NODE_PATH: ''
+          TARGET_SHA: ${{ needs.validate-target.outputs.target_sha }}
+          RESOLUTION_PATH: ${{ runner.temp }}/release-readiness-resolution.json
+          BROWSER_ROOT: ${{ github.workspace }}/test-results
+          RELEASE_READINESS_ROOT: ${{ runner.temp }}/release-readiness
+        run: >-
+          node --experimental-strip-types
+          scripts/ci/release-readiness/verifier.mjs
+          --repository "$GITHUB_REPOSITORY"
+          --target-sha "$TARGET_SHA"
+          --resolution "$RESOLUTION_PATH"
+          --browser-root "$BROWSER_ROOT"
+          --stability-linux-archive "$RELEASE_READINESS_ROOT/stability-linux.zip"
+          --stability-windows-archive "$RELEASE_READINESS_ROOT/stability-windows.zip"
+
+  stability-history:
+    name: Scheduled stability history report
+    needs: validate-target
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate-target.outputs.target_sha }}
       - uses: actions/setup-node@v6
         with:
           node-version-file: .node-version
@@ -30,32 +210,121 @@ jobs:
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_SHA: ${{ needs.validate-target.outputs.target_sha }}
         run: >-
           node scripts/ci/stability/release-reducer.mjs
           --repository "$GITHUB_REPOSITORY"
           --workflow stability.yml
+          --target-sha "$TARGET_SHA"
           --required-runs 100
           --output test-results/stability/release-verdict.json
-      - name: upload release stability verdict
-        if: always()
+      - name: publish the target-bound stability verdict
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: stability-release-verdict-${{ github.run_id }}-${{ github.run_attempt }}
+          name: stability-release-verdict-${{ needs.validate-target.outputs.target_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/stability/release-verdict.json
           if-no-files-found: error
           retention-days: 90
-      - name: preserve reducer infrastructure failure after publication
+      - name: preserve reducer failure after verdict publication
         if: ${{ always() && steps.reducer.outcome != 'success' }}
-        run: node -e "process.exit(1)"
+        run: exit 1
 
-  current-commit:
-    needs: stability-history
-    # Current correctness authority must execute even when historical evidence
-    # independently blocks release or its reducer cannot publish a trusted report.
-    if: ${{ always() }}
+  core-release:
+    name: Independently verify the synthetic core artifact
+    needs: validate-target
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
-      id-token: write
-    uses: ./.github/workflows/current-commit.yml
-    with:
-      browser-authority: full
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate-target.outputs.target_sha }}
+      - name: prove the fresh checkout identity and cleanliness
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.validate-target.outputs.target_sha }}
+        run: |-
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          checkout_status="$(git status --porcelain=v1 --untracked-files=all)"
+          [[ "$actual_sha" == "$EXPECTED_SHA" ]]
+          [[ -z "$checkout_status" ]]
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: core/go.mod
+          cache: false
+      - name: build and validate the deterministic core module artifact
+        run: make core-release
+
+  release-verdict:
+    name: Release Readiness Verdict
+    if: ${{ always() }}
+    needs:
+      - validate-target
+      - resolve-evidence
+      - verify-evidence
+      - stability-history
+      - core-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: fail closed unless every independent release proof succeeded
+        shell: bash
+        env:
+          VALIDATE_TARGET_RESULT: ${{ needs.validate-target.result }}
+          RESOLVE_EVIDENCE_RESULT: ${{ needs.resolve-evidence.result }}
+          VERIFY_EVIDENCE_RESULT: ${{ needs.verify-evidence.result }}
+          STABILITY_HISTORY_RESULT: ${{ needs.stability-history.result }}
+          CORE_RELEASE_RESULT: ${{ needs.core-release.result }}
+          TARGET_SHA: ${{ needs.validate-target.outputs.target_sha }}
+          DEFAULT_BRANCH: ${{ needs.validate-target.outputs.default_branch }}
+          CI_RUN_ID: ${{ needs.resolve-evidence.outputs.ci_run_id }}
+          CI_RUN_ATTEMPT: ${{ needs.resolve-evidence.outputs.ci_run_attempt }}
+          BROWSER_RUN_ID: ${{ needs.resolve-evidence.outputs.browser_run_id }}
+          BROWSER_RUN_ATTEMPT: ${{ needs.resolve-evidence.outputs.browser_run_attempt }}
+          BROWSER_ARTIFACT_ID: ${{ needs.resolve-evidence.outputs.browser_artifact_id }}
+          STABILITY_RUN_ID: ${{ needs.resolve-evidence.outputs.stability_run_id }}
+          STABILITY_RUN_ATTEMPT: ${{ needs.resolve-evidence.outputs.stability_run_attempt }}
+          STABILITY_LINUX_ARTIFACT_ID: ${{ needs.resolve-evidence.outputs.stability_linux_artifact_id }}
+          STABILITY_WINDOWS_ARTIFACT_ID: ${{ needs.resolve-evidence.outputs.stability_windows_artifact_id }}
+        run: |-
+          set -euo pipefail
+
+          require_success() {
+            local job_id="$1"
+            local result="$2"
+            if [[ "$result" != "success" ]]; then
+              printf '{"event":"release-readiness-verdict","job":"%s","result":"%s","outcome":"rejected"}\n' \
+                "$job_id" "$result"
+              return 1
+            fi
+          }
+
+          require_success validate-target "$VALIDATE_TARGET_RESULT"
+          require_success resolve-evidence "$RESOLVE_EVIDENCE_RESULT"
+          require_success verify-evidence "$VERIFY_EVIDENCE_RESULT"
+          require_success stability-history "$STABILITY_HISTORY_RESULT"
+          require_success core-release "$CORE_RELEASE_RESULT"
+
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ -n "$DEFAULT_BRANCH" ]]
+          for selected_id in \
+            "$CI_RUN_ID" \
+            "$CI_RUN_ATTEMPT" \
+            "$BROWSER_RUN_ID" \
+            "$BROWSER_RUN_ATTEMPT" \
+            "$BROWSER_ARTIFACT_ID" \
+            "$STABILITY_RUN_ID" \
+            "$STABILITY_RUN_ATTEMPT" \
+            "$STABILITY_LINUX_ARTIFACT_ID" \
+            "$STABILITY_WINDOWS_ARTIFACT_ID"
+          do
+            [[ "$selected_id" =~ ^[1-9][0-9]*$ ]]
+          done
+
+          printf '{"event":"release-readiness-verdict","target_sha":"%s","outcome":"passed"}\n' \
+            "$TARGET_SHA"

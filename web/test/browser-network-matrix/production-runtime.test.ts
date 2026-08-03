@@ -73,7 +73,7 @@ async function runtimeConfigFixture(
       issuer: 'https://token.actions.githubusercontent.com',
       repository: 'owner/repository',
       ref: 'refs/heads/main',
-      workflowRef: 'owner/repository/.github/workflows/current-commit.yml@refs/heads/main',
+      workflowRef: 'owner/repository/.github/workflows/browser-full.yml@refs/heads/main',
       requestOrigin: 'https://actions.example.test',
       requestPath: '/oidc/token',
       requestQuery: '?api-version=2.0',

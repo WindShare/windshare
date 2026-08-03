@@ -58,7 +58,7 @@ func InspectHost(ctx context.Context, runner CommandRunner, repositoryRoot strin
 }
 
 func hostGoExecutable() string {
-	if executable := os.Getenv(goAuthorityExecutableEnvironment); executable != "" {
+	if executable := os.Getenv(goExecutableEnvironment); executable != "" {
 		return executable
 	}
 	return "go"

@@ -10,6 +10,7 @@ const REPOSITORY_ROOT = resolve(fileURLToPath(new URL('../../../', import.meta.u
 
 const BROWSERGATE_COMMANDS = Object.freeze([
   'local',
+  'preflight',
   'smoke',
   'build-runtime',
   'dispose-runtime',
@@ -127,6 +128,7 @@ function usage() {
   return [
     'browser orchestration commands:',
     '  local [--run-policy blocking|closure|stability] [--output-root DIR] [--plan]',
+    '  preflight',
     '  smoke [--output-root DIR] [--run-id ID] [--checkout-sha SHA] [--profile FILE]',
     '  build-runtime --output-parent DIR --suite main|pion [--suite main|pion] [--github-output FILE]',
     '  dispose-runtime --runtime-manifest FILE',

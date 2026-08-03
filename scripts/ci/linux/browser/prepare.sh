@@ -33,11 +33,9 @@ fi
 script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repository_root="$(cd -- "$script_directory/../../../.." && pwd -P)"
 cd "$repository_root"
-source scripts/ci/goauthority/authority.sh
-windshare_enter_go_authority
 
 echo "== browser-network-prepare: run_id=$github_run_id attempt=$github_run_attempt =="
-windshare_go_consumer pnpm -C web build:browser-network-matrix-helpers -- "$helper_directory"
+pnpm -C web build:browser-network-matrix-helpers -- "$helper_directory"
 
 if [[ ! -d "$helper_directory" || -L "$helper_directory" || "$(realpath -e -- "$helper_directory")" != "$expected_helper_directory" ]]; then
   echo 'browser network helper build replaced its directory authority' >&2

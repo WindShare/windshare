@@ -43,7 +43,7 @@ func TestControlledGoEnvironmentRetainsOneToolchainGenerationAcrossTerminals(t *
 	if err := os.WriteFile(filepath.Join(repositoryRoot, "go.work"), []byte("go 1.26\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(goAuthorityExecutableEnvironment, goExecutable)
+	t.Setenv(goExecutableEnvironment, goExecutable)
 	runner := &generationSwapRunner{
 		sourceExecutable: goExecutable,
 		sourceHelper:     helpTool,

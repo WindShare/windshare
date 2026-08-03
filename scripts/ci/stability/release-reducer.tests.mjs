@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,17 +11,13 @@ import {
   sha256ArtifactDigest,
 } from './artifact.mjs'
 import {
+  STABILITY_EVIDENCE_EPOCH,
   STABILITY_WORKFLOW_JOBS,
   createProductVerdictForTermination,
   createStabilityResult,
   createStabilityStartedEvent,
   stabilityEvidenceDigest,
 } from './result.mjs'
-import {
-  createStabilityExecutionContract,
-  loadCurrentStabilityExecutionContract,
-  loadCurrentStabilityExecutionSources,
-} from './execution-contract.mjs'
 import {
   STABILITY_RELEASE_VERDICT_SCHEMA_VERSION,
   REQUIRED_REPRODUCTION_OBSERVATIONS,
@@ -34,16 +29,10 @@ import {
 const repository = 'windshare/windshare'
 const workflow = 'stability.yml'
 const repositoryRoot = resolve('.')
+const targetSha = 'e'.repeat(40)
 const commit = 'a'.repeat(40)
 const failureCommit = 'b'.repeat(40)
 const correctedCommit = 'c'.repeat(40)
-const currentContracts = new Map(['linux', 'windows'].map((operatingSystem) => [
-  operatingSystem,
-  loadCurrentStabilityExecutionContract({ operatingSystem, repositoryRoot }),
-]))
-const currentSources = new Map(['linux', 'windows'].flatMap((operatingSystem) =>
-  loadCurrentStabilityExecutionSources({ operatingSystem, repositoryRoot })
-    .map(({ path, source }) => [path, Buffer.from(source)])))
 
 const asymmetricRuns = [workflowRun(303), workflowRun(302), workflowRun(301)]
 const asymmetric = fixture(asymmetricRuns)
@@ -52,6 +41,7 @@ asymmetric.runs[0].conclusion = 'failure'
 replaceWithInvalidEvidence(asymmetric, 302, 'windows')
 const asymmetricVerdict = await reduce(asymmetric, 2)
 assert.equal(asymmetricVerdict.schema_version, STABILITY_RELEASE_VERDICT_SCHEMA_VERSION)
+assert.equal(asymmetricVerdict.target_sha, targetSha)
 assert.equal(asymmetricVerdict.outcome, 'passed')
 assert.deepEqual(asymmetricVerdict.sample_counts, { linux: 2, windows: 2 })
 assert.deepEqual(
@@ -67,6 +57,7 @@ assert.equal(
   asymmetricVerdict.invalid_samples.windows[0].reason_code,
   'invalid-structured-evidence',
 )
+assert(asymmetric.requestedPaths.every((path) => !path.includes('/contents/')))
 
 const insufficient = fixture([workflowRun(202), workflowRun(201)])
 removeArtifact(insufficient, 202, 'windows')
@@ -74,6 +65,7 @@ insufficient.jobs.get(202).jobs.find(({ name }) =>
   name === STABILITY_WORKFLOW_JOBS.windows.jobName).steps[0].conclusion = 'failure'
 const insufficientVerdict = await reduce(insufficient, 2)
 assert.equal(insufficientVerdict.outcome, 'insufficient-history')
+assert.equal(insufficientVerdict.target_sha, targetSha)
 assert.equal(insufficientVerdict.failure, null)
 assert.deepEqual(insufficientVerdict.sample_counts, { linux: 2, windows: 1 })
 assert.deepEqual(insufficientVerdict.insufficient_history, [{
@@ -84,7 +76,10 @@ assert.deepEqual(insufficientVerdict.insufficient_history, [{
 const insufficientProcess = releaseReducerProcessResult(insufficientVerdict)
 assert.equal(insufficientProcess.exitCode, 0)
 assert.equal(insufficientProcess.stream, 'stdout')
-assert.match(insufficientProcess.message, /INSUFFICIENT HISTORY.*resolution not evaluated.*current-commit/u)
+assert.match(
+  insufficientProcess.message,
+  /INSUFFICIENT HISTORY.*resolution not evaluated.*SHA-bound current evidence/u,
+)
 
 const productFailure = fixture([workflowRun(401, { conclusion: 'failure' })])
 setProductFailure(productFailure, 401, 'linux', 23)
@@ -93,7 +88,7 @@ assert.equal(productFailureVerdict.outcome, 'passed')
 assert.equal(productFailureVerdict.failure, null)
 assert.deepEqual(productFailureVerdict.finding_policy, {
   schema_version: 'windshare.stability-finding-policy/v2',
-  finding_key_schema_version: 'windshare.stability-finding-key/v1',
+  finding_key_schema_version: 'windshare.stability-finding-key/v2',
   reproducibility_observation_count: REQUIRED_REPRODUCTION_OBSERVATIONS,
   resolution_pass_count: REQUIRED_RESOLUTION_PASS_SAMPLES,
   reproducibility_authority: 'distinct-valid-run-artifact-observations',
@@ -101,9 +96,11 @@ assert.deepEqual(productFailureVerdict.finding_policy, {
   unresolved_reproduced_disposition: 'release-blocking',
   resolved_disposition: 'trend-only',
   insufficient_history_disposition: 'non-blocking-resolution-not-evaluated',
-  release_blocking_authority: 'historical-findings-and-current-commit-validation',
+  release_blocking_authority: 'historical-findings-and-sha-bound-current-evidence',
 })
 assert.deepEqual(productFailureVerdict.sample_counts, { linux: 1, windows: 1 })
+assert.equal(productFailureVerdict.samples.linux[0].commit_sha, commit)
+assert.notEqual(productFailureVerdict.samples.linux[0].commit_sha, productFailureVerdict.target_sha)
 assert.equal(productFailureVerdict.findings.length, 1)
 assert.equal(productFailureVerdict.findings[0].operating_system, 'linux')
 assert.equal(productFailureVerdict.findings[0].failure_class, 'product')
@@ -131,14 +128,14 @@ setProductFailure(reproducedFailure, 481, 'linux', 23)
 setProductFailure(reproducedFailure, 480, 'linux', 23)
 const reproducedFailureVerdict = await reduce(reproducedFailure, 2)
 assert.equal(reproducedFailureVerdict.outcome, 'failed')
+assert.equal(reproducedFailureVerdict.target_sha, targetSha)
 assert.equal(reproducedFailureVerdict.failure.code, 'unresolved-reproducible-correctness-findings')
 assert.deepEqual(reproducedFailureVerdict.failure.operating_systems, ['linux'])
 const [blockingFinding] = reproducedFailureVerdict.findings
 assert.match(blockingFinding.finding_id, /^[a-f0-9]{64}$/u)
 assert.deepEqual(blockingFinding.finding_key, {
-  schema_version: 'windshare.stability-finding-key/v1',
-  execution_contract_schema_version: currentContracts.get('linux').schema_version,
-  execution_contract_semantic_sha256: currentContracts.get('linux').semantic_contract_sha256,
+  schema_version: 'windshare.stability-finding-key/v2',
+  evidence_epoch: STABILITY_EVIDENCE_EPOCH,
   operating_system: 'linux',
   suite: 'integration',
   failure_class: 'product',
@@ -221,7 +218,10 @@ assert(resolvedFinding.resolution_passes.every(
   ({ commit_sha: commitSha }) => commitSha === correctedCommit,
 ))
 assert.deepEqual(resolvedFailure.compareRequests, [compareKey(failureCommit, correctedCommit)])
-assert.match(releaseReducerProcessResult(resolvedFailureVerdict).message, /1 resolved trend finding/u)
+assert.match(
+  releaseReducerProcessResult(resolvedFailureVerdict).message,
+  /1 resolved trend finding.*SHA-bound current evidence/u,
+)
 
 const unverifiedResolution = fixture(resolutionRuns)
 setProductFailure(unverifiedResolution, 580, 'linux', 23)
@@ -502,6 +502,15 @@ assert.equal(
   'invalid-structured-evidence',
 )
 
+const legacyArtifactName = fixture([workflowRun(708), workflowRun(707)])
+artifactFor(legacyArtifactName, 708, 'linux').name = 'stability-integration-linux-708-1'
+const legacyArtifactNameVerdict = await reduce(legacyArtifactName, 1)
+assert.equal(legacyArtifactNameVerdict.samples.linux[0].workflow_run_id, '707')
+assert.equal(
+  legacyArtifactNameVerdict.invalid_samples.linux[0].reason_code,
+  'missing-artifact',
+)
+
 const duplicateJob = fixture([workflowRun(711), workflowRun(710)])
 duplicateJob.jobs.get(711).jobs.push({
   ...jobFor(duplicateJob, 711, 'windows'),
@@ -525,25 +534,73 @@ assert.equal(
   'artifact-digest-mismatch',
 )
 
-const contractDrift = fixture([workflowRun(801)])
-const linuxIntegrationPath = currentContracts.get('linux').sources
-  .find(({ role }) => role === 'integration-entrypoint').path
-contractDrift.sources.set(
-  linuxIntegrationPath,
-  Buffer.from(contractDrift.sources.get(linuxIntegrationPath).toString('utf8').replace(
-    '"revision":3',
-    '"revision":4',
-  )),
-)
-const driftContract = contractFromFixtureSources(contractDrift, 'linux')
-replaceEvidenceArchive(contractDrift, 801, 'linux', { executionContract: driftContract })
-const contractDriftVerdict = await reduce(contractDrift, 1)
-assert.equal(contractDriftVerdict.sample_counts.linux, 0)
-assert.equal(contractDriftVerdict.sample_counts.windows, 1)
+const sizeMismatch = fixture([workflowRun(723), workflowRun(722)])
+artifactFor(sizeMismatch, 723, 'windows').size_in_bytes += 1
+const sizeMismatchVerdict = await reduce(sizeMismatch, 1)
+assert.equal(sizeMismatchVerdict.samples.windows[0].workflow_run_id, '722')
 assert.equal(
-  contractDriftVerdict.invalid_samples.linux[0].reason_code,
-  'execution-contract-drift',
+  sizeMismatchVerdict.invalid_samples.windows[0].reason_code,
+  'artifact-size-mismatch',
 )
+
+const artifactHeadMismatch = fixture([workflowRun(725), workflowRun(724)])
+artifactFor(artifactHeadMismatch, 725, 'linux').workflow_run.head_sha = targetSha
+const artifactHeadMismatchVerdict = await reduce(artifactHeadMismatch, 1)
+assert.equal(artifactHeadMismatchVerdict.samples.linux[0].workflow_run_id, '724')
+assert.equal(
+  artifactHeadMismatchVerdict.invalid_samples.linux[0].reason_code,
+  'invalid-artifact-identity',
+)
+
+const legacyEpoch = fixture([workflowRun(801)])
+replaceEvidenceArchive(legacyEpoch, 801, 'linux', {
+  transformStarted: (started) => {
+    const legacy = Object.fromEntries(
+      Object.entries(started).filter(([key]) => key !== 'evidence_epoch'),
+    )
+    return {
+      ...legacy,
+      schema_version: 'windshare.stability-integration-started/v1',
+      execution_contract_semantic_sha256: 'f'.repeat(64),
+    }
+  },
+  transformResult: (result) => {
+    const legacy = Object.fromEntries(
+      Object.entries(result).filter(([key]) => key !== 'evidence_epoch'),
+    )
+    return {
+      ...legacy,
+      schema_version: 'windshare.stability-result/v3',
+      execution_contract: { schema_version: 'retired-test-fixture' },
+    }
+  },
+})
+const legacyEpochVerdict = await reduce(legacyEpoch, 1)
+assert.equal(legacyEpochVerdict.outcome, 'insufficient-history')
+assert.equal(legacyEpochVerdict.failure, null)
+assert.equal(legacyEpochVerdict.sample_counts.linux, 0)
+assert.equal(legacyEpochVerdict.sample_counts.windows, 1)
+assert.equal(
+  legacyEpochVerdict.invalid_samples.linux[0].reason_code,
+  'invalid-structured-evidence',
+)
+assert(legacyEpoch.requestedPaths.every((path) => !path.includes('/contents/')))
+
+const malformedCurrentEpoch = fixture([workflowRun(811), workflowRun(810)])
+replaceEvidenceArchive(malformedCurrentEpoch, 811, 'windows', {
+  transformResult: (result) => ({
+    ...result,
+    evidence_epoch: 'windshare.stability-evidence-epoch/unsupported',
+  }),
+})
+const malformedCurrentEpochVerdict = await reduce(malformedCurrentEpoch, 1)
+assert.equal(malformedCurrentEpochVerdict.outcome, 'passed')
+assert.equal(malformedCurrentEpochVerdict.samples.windows[0].workflow_run_id, '810')
+assert.equal(
+  malformedCurrentEpochVerdict.invalid_samples.windows[0].reason_code,
+  'invalid-structured-evidence',
+)
+assert(malformedCurrentEpoch.requestedPaths.every((path) => !path.includes('/contents/')))
 
 const independentRuns = Array.from({ length: 101 }, (_, index) => workflowRun(2_000 - index))
 const independent = fixture(independentRuns)
@@ -572,18 +629,55 @@ assert.throws(() => releaseReducerProcessResult({ outcome: 'unknown' }), /unsupp
 await assert.rejects(() => reduceStabilityHistory({
   repository,
   workflow,
+  targetSha,
   requiredRuns: 1,
   token: 'test-token',
   fetchImpl: async () => jsonResponse({}, 503),
 }), /status 503/u)
 
+for (const invalidTargetSha of [undefined, targetSha.toUpperCase(), targetSha.slice(1)]) {
+  await assert.rejects(() => reduceStabilityHistory({
+    repository,
+    workflow,
+    targetSha: invalidTargetSha,
+    requiredRuns: 1,
+    token: 'test-token',
+    fetchImpl: async () => {
+      throw new Error('invalid target SHA must fail before API access')
+    },
+  }), /canonical lowercase SHA-1 object ID/u)
+}
+
 const terminalRoot = mkdtempSync(join(tmpdir(), 'windshare-stability-reducer-'))
 try {
+  const reducerPath = fileURLToPath(new URL('./release-reducer.mjs', import.meta.url))
+  for (const [index, invocationArguments] of [
+    [0, ['--required-runs', '100']],
+    [1, ['--target-sha', targetSha.toUpperCase(), '--required-runs', '100']],
+    [2, ['--target-sha', targetSha, '--required-runs', 'not-a-number']],
+  ]) {
+    const invalidOutput = join(terminalRoot, `invalid-${index}.json`)
+    const invalidChild = spawnSync(process.execPath, [
+      reducerPath,
+      '--repository', repository,
+      '--workflow', workflow,
+      ...invocationArguments,
+      '--output', invalidOutput,
+    ], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      env: { ...process.env, GITHUB_TOKEN: '' },
+    })
+    assert.equal(invalidChild.status, 1)
+    assert.equal(existsSync(invalidOutput), false)
+  }
+
   const output = join(terminalRoot, 'verdict.json')
   const child = spawnSync(process.execPath, [
-    fileURLToPath(new URL('./release-reducer.mjs', import.meta.url)),
+    reducerPath,
     '--repository', repository,
     '--workflow', workflow,
+    '--target-sha', targetSha,
     '--required-runs', '100',
     '--output', output,
   ], {
@@ -594,11 +688,12 @@ try {
   assert.equal(child.status, 1)
   const verdict = JSON.parse(readFileSync(output, 'utf8'))
   assert.equal(verdict.schema_version, STABILITY_RELEASE_VERDICT_SCHEMA_VERSION)
+  assert.equal(verdict.target_sha, targetSha)
   assert.equal(verdict.failure.code, 'stability-reducer-error')
   assert.equal(verdict.finding_policy.resolved_disposition, 'trend-only')
   assert.equal(
     verdict.finding_policy.release_blocking_authority,
-    'historical-findings-and-current-commit-validation',
+    'historical-findings-and-sha-bound-current-evidence',
   )
 } finally {
   rmSync(terminalRoot, { recursive: true, force: true })
@@ -630,8 +725,7 @@ function fixture(runs) {
     jobs: new Map(),
     artifacts: new Map(),
     downloads: new Map(),
-    sources: new Map([...currentSources].map(([path, bytes]) => [path, Buffer.from(bytes)])),
-    commits: new Set(runs.map(({ head_sha: headSha }) => headSha)),
+    requestedPaths: [],
     strictDescendants: new Set(),
     compareOverrides: new Map(),
     compareRequests: [],
@@ -691,11 +785,12 @@ function stabilityJob(run, operatingSystem, verdict = createProductVerdictForTer
 }
 
 function evidenceArchive(run, operatingSystem, {
-  executionContract = currentContracts.get(operatingSystem),
   verdict = createProductVerdictForTermination(0, null),
   includeFinished = true,
   duplicateFinished = false,
   invocationId = invocationID(run.id, operatingSystem),
+  transformStarted = identity,
+  transformResult = identity,
 } = {}) {
   const authority = STABILITY_WORKFLOW_JOBS[operatingSystem]
   const identity = {
@@ -706,11 +801,10 @@ function evidenceArchive(run, operatingSystem, {
     operatingSystem,
     suite: 'integration',
   }
-  const started = createStabilityStartedEvent({
+  const started = transformStarted(createStabilityStartedEvent({
     ...identity,
     invocationId,
-    executionContractSemanticSha256: executionContract.semantic_contract_sha256,
-  })
+  }))
   // Pretty/reordered documents prove neither JSON layout nor entry names are authorities.
   const startedDocument = `${JSON.stringify(reverseRecordOrder(started), null, 2)}\n`
   const entries = [
@@ -727,20 +821,15 @@ function evidenceArchive(run, operatingSystem, {
     },
   ]
   if (includeFinished) {
-    const result = createStabilityResult({
+    const result = transformResult(createStabilityResult({
       ...identity,
       invocationId,
       startedEventSha256: stabilityEvidenceDigest(startedDocument),
       productVerdict: verdict,
-      executionContract,
-    })
+    }))
     const reorderedResult = reverseRecordOrder({
       ...result,
       product_verdict: reverseRecordOrder(result.product_verdict),
-      execution_contract: reverseRecordOrder({
-        ...result.execution_contract,
-        sources: result.execution_contract.sources.map(reverseRecordOrder),
-      }),
     })
     const finishedDocument = `${JSON.stringify(reorderedResult, null, 2)}\n`
     entries.push({
@@ -810,7 +899,7 @@ function jobFor(context, runID, operatingSystem) {
 }
 
 function artifactName(run, operatingSystem) {
-  return `stability-integration-${operatingSystem}-${run.id}-${run.run_attempt}`
+  return `stability-integration-${operatingSystem}-${run.head_sha}-${run.id}-${run.run_attempt}`
 }
 
 function artifactID(runID, operatingSystem) {
@@ -824,32 +913,21 @@ function invocationID(runID, operatingSystem) {
   return `00000000-0000-4000-8000-${suffix}`
 }
 
-function contractFromFixtureSources(context, operatingSystem) {
-  const current = currentContracts.get(operatingSystem)
-  return createStabilityExecutionContract({
-    operatingSystem,
-    sources: current.sources.map(({ role, path }) => ({
-      role,
-      path,
-      source: context.sources.get(path),
-    })),
-  })
-}
-
 async function reduce(context, requiredRuns) {
   return reduceStabilityHistory({
     repository,
     workflow,
+    targetSha,
     requiredRuns,
     token: 'test-token',
     fetchImpl: mockGitHubAPI(context),
-    repositoryRoot,
   })
 }
 
 function mockGitHubAPI(context) {
   return async (requestURL) => {
     const url = new URL(requestURL)
+    context.requestedPaths.push(`${url.pathname}${url.search}`)
     if (url.pathname === `/repos/${repository}`) {
       return jsonResponse({ default_branch: 'main' })
     }
@@ -896,22 +974,6 @@ function mockGitHubAPI(context) {
         merge_base_commit: { sha: strictDescendant ? baseCommit : 'f'.repeat(40) },
       })
     }
-    match = /\/contents\/(.+)$/u.exec(url.pathname)
-    if (match !== null) {
-      const path = match[1].split('/').map(decodeURIComponent).join('/')
-      const bytes = context.sources.get(path)
-      if (bytes === undefined || !context.commits.has(url.searchParams.get('ref'))) {
-        return jsonResponse({}, 404)
-      }
-      return jsonResponse({
-        type: 'file',
-        path,
-        encoding: 'base64',
-        size: bytes.byteLength,
-        sha: gitBlobSha(bytes),
-        content: bytes.toString('base64'),
-      })
-    }
     match = /\/actions\/artifacts\/(\d+)\/zip$/u.exec(url.pathname)
     if (match !== null) {
       return byteResponse(context.downloads.get(Number(match[1])) ?? Buffer.alloc(0))
@@ -926,13 +988,6 @@ function compareKey(baseCommit, headCommit) {
 
 function markStrictDescendant(context, baseCommit, headCommit) {
   context.strictDescendants.add(compareKey(baseCommit, headCommit))
-}
-
-function gitBlobSha(bytes) {
-  return createHash('sha1')
-    .update(Buffer.from(`blob ${bytes.byteLength}\0`, 'utf8'))
-    .update(bytes)
-    .digest('hex')
 }
 
 function jsonResponse(value, status = 200) {
@@ -1038,4 +1093,8 @@ function zipArchive(entries) {
 
 function reverseRecordOrder(value) {
   return Object.fromEntries(Object.entries(value).reverse())
+}
+
+function identity(value) {
+  return value
 }

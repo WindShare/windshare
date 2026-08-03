@@ -87,8 +87,7 @@ export function parseStabilityResultArchive(value) {
     started.operating_system === result.operating_system &&
     started.suite === result.suite &&
     started.invocation_id === result.invocation_id &&
-    started.execution_contract_semantic_sha256 ===
-      result.execution_contract.semantic_contract_sha256 &&
+    started.evidence_epoch === result.evidence_epoch &&
     result.started_event_sha256 === digest
   if (!identityMatches) {
     throw new Error('stability artifact started and finished evidence disagree')

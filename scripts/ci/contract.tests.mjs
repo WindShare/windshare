@@ -2,24 +2,61 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   inspectCIContract,
   inspectCodeDirectoryBoundaries,
+  LOCAL_CI_GATES,
   parsePlatformEntrypointNames,
+  parsePublicLocalTargetNames,
+  PUBLIC_LOCAL_TARGETS,
+  REQUIRED_PLATFORM_ENTRYPOINTS,
 } from './contract.mjs'
 
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const fixtureRoots = []
 
 try {
   const root = createFixture()
-  assert.deepEqual(inspectLocal(root), [])
-  assert.deepEqual(parsePlatformEntrypointNames('PLATFORM_ENTRYPOINTS := alpha beta'), ['alpha', 'beta'])
+  assert.deepEqual(inspectCIContract(root).violations, [])
+  assert.deepEqual(
+    parsePublicLocalTargetNames(`PUBLIC_TARGETS := ${PUBLIC_LOCAL_TARGETS.join(' ')}`),
+    PUBLIC_LOCAL_TARGETS,
+  )
   assert.throws(
     () => parsePlatformEntrypointNames('PLATFORM_ENTRYPOINTS := alpha alpha'),
     /duplicate names/u,
   )
+
+  writeFixtureMakefile(root, {
+    publicTargets: PUBLIC_LOCAL_TARGETS.slice(1),
+  })
+  assert(findViolation(root, /PUBLIC_TARGETS must be/u))
+
+  writeFixtureMakefile(root, {
+    ciGates: [...LOCAL_CI_GATES, 'integration'],
+  })
+  assert(findViolation(root, /CI_GATES must be/u))
+
+  writeFixtureMakefile(root, {
+    entrypoints: REQUIRED_PLATFORM_ENTRYPOINTS.filter((name) => name !== 'browser-preflight'),
+  })
+  assert(findViolation(root, /must include public gate browser-preflight/u))
+
+  writeFixtureMakefile(root, {
+    entrypoints: [...REQUIRED_PLATFORM_ENTRYPOINTS, 'browser-contract'],
+  })
+  assert(findViolation(root, /contains unknown gate browser-contract/u))
+
+  writeFixtureMakefile(root)
+  rmSync(resolve(root, 'scripts/ci/windows/browser-preflight.ps1'))
+  assert(findViolation(
+    root,
+    /browser-preflight requires existing scripts\/ci\/windows\/browser-preflight\.ps1/u,
+  ))
+  createPlatformScripts(root, ['browser-preflight'])
 
   const boundaryDirectory = resolve(root, 'bounded-module')
   mkdirSync(boundaryDirectory)
@@ -29,106 +66,11 @@ try {
   }
   assert.deepEqual(inspectCodeDirectoryBoundaries(root), [])
   writeFileSync(resolve(boundaryDirectory, 'source-21.mjs'), '')
-  const boundaryViolation = 'bounded-module contains 21 non-test code files; maximum is 20'
-  assert.deepEqual(inspectCodeDirectoryBoundaries(root), [boundaryViolation])
-  assert(inspectLocal(root).includes(boundaryViolation))
-  rmSync(boundaryDirectory, { recursive: true })
-
-  writeFileSync(resolve(root, 'scripts/ci/alpha.sh'), '#!/usr/bin/env bash\n')
-  assert(
-    inspectLocal(root).includes('Makefile entrypoint alpha forbids legacy wrapper scripts/ci/alpha.sh'),
-  )
-  rmSync(resolve(root, 'scripts/ci/alpha.sh'))
-
-  writeFileSync(resolve(root, 'scripts/ci/windows/undeclared.ps1'), '')
-  writeFileSync(resolve(root, 'scripts/ci/linux/undeclared.sh'), '#!/usr/bin/env bash\n')
-  const undeclared = inspectLocal(root)
-  assert(undeclared.includes(
-    'Makefile PLATFORM_ENTRYPOINTS must declare scripts/ci/windows/undeclared.ps1',
-  ))
-  assert(undeclared.includes(
-    'Makefile PLATFORM_ENTRYPOINTS must declare scripts/ci/linux/undeclared.sh',
-  ))
-  rmSync(resolve(root, 'scripts/ci/windows/undeclared.ps1'))
-  rmSync(resolve(root, 'scripts/ci/linux/undeclared.sh'))
-
-  writeFileSync(resolve(root, 'Makefile'), 'PLATFORM_ENTRYPOINTS := alpha missing\n')
-  const missing = inspectLocal(root)
-  assert(missing.includes(
-    'Makefile entrypoint missing requires existing scripts/ci/windows/missing.ps1',
-  ))
-  assert(missing.includes(
-    'Makefile entrypoint missing requires existing scripts/ci/linux/missing.sh',
-  ))
-
-  writeFileSync(resolve(root, 'Makefile'), 'PLATFORM_ENTRYPOINTS := alpha coverage\n')
-  writeFileSync(resolve(root, 'scripts/ci/windows/coverage.ps1'), '')
-  writeFileSync(resolve(root, 'scripts/ci/linux/coverage.sh'), '#!/usr/bin/env bash\n')
-  writeFileSync(resolve(root, '.gitignore'), 'coverage.*\n')
-  const ignored = inspectLocal(root)
-  assert(ignored.includes(
-    'Makefile entrypoint coverage requires non-ignored scripts/ci/windows/coverage.ps1',
-  ))
-  assert(ignored.includes(
-    'Makefile entrypoint coverage requires non-ignored scripts/ci/linux/coverage.sh',
-  ))
-
-  writeFileSync(
-    resolve(root, '.gitignore'),
-    'coverage.*\n!scripts/ci/windows/coverage.ps1\n!scripts/ci/linux/coverage.sh\n',
-  )
-  assert.deepEqual(inspectLocal(root), [])
-  const actions = inspectCIContract(root, { requireTracked: true }).violations
-  assert(actions.includes(
-    'Makefile entrypoint coverage requires tracked scripts/ci/windows/coverage.ps1 in GitHub Actions',
-  ))
-  assert(actions.includes(
-    'Makefile entrypoint coverage requires tracked scripts/ci/linux/coverage.sh in GitHub Actions',
-  ))
-
-  rmSync(resolve(root, 'scripts/ci/windows/coverage.ps1'))
-  rmSync(resolve(root, 'scripts/ci/linux/coverage.sh'))
-  writeFileSync(resolve(root, 'Makefile'), 'PLATFORM_ENTRYPOINTS := alpha\n')
-  const workflow = resolve(root, '.github/workflows/ci.yml')
-  writeFileSync(workflow, 'steps:\n  - run: scripts/ci/linux/alpha.sh\n')
-  assert.deepEqual(inspectLocal(root), [
-    '.github/workflows/ci.yml:2 invokes scripts/ci/linux/alpha.sh without an explicit shell',
+  assert.deepEqual(inspectCodeDirectoryBoundaries(root), [
+    'bounded-module contains 21 non-test code files; maximum is 20',
   ])
 
-  writeFileSync(workflow, 'steps:\n  - run: |\n      ./scripts/ci/linux/alpha.sh --verify\n')
-  assert.deepEqual(inspectLocal(root), [
-    '.github/workflows/ci.yml:3 invokes scripts/ci/linux/alpha.sh without an explicit shell',
-  ])
-
-  writeFileSync(workflow, 'steps:\n  - run: bash scripts/ci/linux/alpha.sh\n')
-  assert.deepEqual(inspectLocal(root), [])
-
-  const shellContract = resolve(root, 'scripts/ci/content-contract.tests.sh')
-  writeFileSync(
-    shellContract,
-    '#!/usr/bin/env bash\nassert_contains "moved/source.go" \'required contract\'\n',
-  )
-  assert.deepEqual(inspectLocal(root), [
-    'scripts/ci/content-contract.tests.sh:2 asserts content of missing repository file moved/source.go',
-  ])
-  mkdirSync(resolve(root, 'moved'))
-  writeFileSync(resolve(root, 'moved/source.go'), 'required contract\n')
-  assert.deepEqual(inspectLocal(root), [])
-
-  writeFileSync(resolve(root, 'moved/source.go'), 'drifted contract\n')
-  assert.deepEqual(inspectLocal(root), [
-    'scripts/ci/content-contract.tests.sh:2 expects moved/source.go to contain literal "required contract"',
-  ])
-
-  writeFileSync(
-    shellContract,
-    '#!/usr/bin/env bash\nassert_not_contains "moved/source.go" \'forbidden contract\'\n',
-  )
-  writeFileSync(resolve(root, 'moved/source.go'), 'forbidden contract\n')
-  assert.deepEqual(inspectLocal(root), [
-    'scripts/ci/content-contract.tests.sh:2 expects moved/source.go to not contain literal "forbidden contract"',
-  ])
-
+  verifyMakePlans()
   console.log('ci-contract tests: PASS')
 } finally {
   for (const root of fixtureRoots) rmSync(root, { recursive: true, force: true })
@@ -137,23 +79,107 @@ try {
 function createFixture() {
   const root = mkdtempSync(join(tmpdir(), 'windshare-ci-contract-'))
   fixtureRoots.push(root)
-  mkdirSync(resolve(root, 'scripts/ci/windows'), { recursive: true })
+  mkdirSync(resolve(root, 'scripts/ci/windows/browser'), { recursive: true })
   mkdirSync(resolve(root, 'scripts/ci/linux'), { recursive: true })
-  mkdirSync(resolve(root, '.github/workflows'), { recursive: true })
-  writeFileSync(resolve(root, 'Makefile'), 'PLATFORM_ENTRYPOINTS := alpha\n')
-  writeFileSync(resolve(root, 'scripts/ci/windows/alpha.ps1'), '')
-  writeFileSync(resolve(root, 'scripts/ci/linux/alpha.sh'), '#!/usr/bin/env bash\n')
-  writeFileSync(
-    resolve(root, '.github/workflows/ci.yml'),
-    'steps:\n  - run: bash scripts/ci/linux/alpha.sh\n',
-  )
+  createPlatformScripts(root, REQUIRED_PLATFORM_ENTRYPOINTS)
+  writeFileSync(resolve(root, 'scripts/ci/windows/browser/smoke.ps1'), '')
+  writeFixtureMakefile(root)
   runGit(root, ['init', '--quiet'])
-  runGit(root, ['add', '--', 'Makefile', 'scripts/ci', '.github/workflows'])
   return root
 }
 
-function inspectLocal(root) {
-  return inspectCIContract(root, { requireTracked: false }).violations
+function writeFixtureMakefile(root, {
+  publicTargets = PUBLIC_LOCAL_TARGETS,
+  entrypoints = REQUIRED_PLATFORM_ENTRYPOINTS,
+  ciGates = LOCAL_CI_GATES,
+} = {}) {
+  writeFileSync(
+    resolve(root, 'Makefile'),
+    [
+      `PUBLIC_TARGETS := ${publicTargets.join(' ')}`,
+      `PLATFORM_ENTRYPOINTS := ${entrypoints.join(' ')}`,
+      `CI_GATES := ${ciGates.join(' ')}`,
+      '',
+    ].join('\n'),
+  )
+}
+
+function createPlatformScripts(root, entrypoints) {
+  for (const entrypoint of entrypoints) {
+    writeFileSync(resolve(root, `scripts/ci/windows/${entrypoint}.ps1`), '')
+    writeFileSync(resolve(root, `scripts/ci/linux/${entrypoint}.sh`), '')
+  }
+}
+
+function findViolation(root, pattern) {
+  return inspectCIContract(root).violations.some((violation) => pattern.test(violation))
+}
+
+function verifyMakePlans() {
+  const windowsCI = makePlan('ci', 'Windows_NT')
+  assert.match(windowsCI, /scripts\/ci\/windows\/hygiene\.ps1/u)
+  assert.match(windowsCI, /scripts\/ci\/windows\/browser-preflight\.ps1/u)
+  assert.match(windowsCI, /scripts\/ci\/windows\/browser\/smoke\.ps1/u)
+  assert.equal(literalCount(windowsCI, 'scripts/ci/windows/web-dependencies.ps1'), 1)
+
+  const linuxCI = makePlan('ci')
+  assert.match(linuxCI, /scripts\/ci\/linux\/hygiene\.sh/u)
+  assert.match(linuxCI, /scripts\/ci\/linux\/browser-preflight\.sh/u)
+  assert.doesNotMatch(linuxCI, /browser\/smoke/u)
+  assert.equal(literalCount(linuxCI, 'scripts/ci/linux/web-dependencies.sh'), 1)
+
+  for (const plan of [windowsCI, linuxCI]) {
+    for (const replay of [
+      '/integration.', '/e2e-go.', '/browser-contract.', '/browser-generated.',
+      '/browser-local.', '/browser-network.',
+    ]) {
+      assert(!plan.includes(replay), `make ci must not replay ${replay}`)
+    }
+  }
+
+  const windowsE2E = makePlan('e2e', 'Windows_NT')
+  assert.match(windowsE2E, /scripts\/ci\/windows\/e2e-go\.ps1/u)
+  assert.match(windowsE2E, /scripts\/ci\/windows\/browser\/smoke\.ps1/u)
+
+  const linuxE2E = makePlan('e2e')
+  assert.match(linuxE2E, /scripts\/ci\/linux\/e2e-go\.sh/u)
+  assert.doesNotMatch(linuxE2E, /browser\/smoke/u)
+
+  const browser = makePlan('browser', 'Windows_NT')
+  assert.match(browser, /scripts\/ci\/windows\/browser-local\.ps1/u)
+  assert.match(browser, /scripts\/ci\/windows\/browser-network\.ps1/u)
+
+  for (const retired of ['ci-full', 'authority-context', 'plan-ci', 'plan-ci-full', 'plan-browser']) {
+    const result = runMake(['-n', retired], 'Windows_NT')
+    assert.notEqual(result.status, 0, `${retired} must not remain a Make target`)
+  }
+}
+
+function makePlan(target, operatingSystem = undefined) {
+  const result = runMake(['-n', target], operatingSystem)
+  if (result.error !== undefined || result.status !== 0) {
+    const detail = result.error?.message ?? result.stderr.trim() ?? `exit ${result.status}`
+    throw new Error(`make -n ${target} failed: ${detail}`)
+  }
+  return result.stdout.replaceAll('\\', '/')
+}
+
+function runMake(arguments_, operatingSystem) {
+  const environment = { ...process.env }
+  if (operatingSystem === undefined) {
+    delete environment.OS
+  } else {
+    environment.OS = operatingSystem
+  }
+  return spawnSync('make', arguments_, {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    env: environment,
+  })
+}
+
+function literalCount(source, literal) {
+  return source.split(literal).length - 1
 }
 
 function runGit(root, arguments_) {

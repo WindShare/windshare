@@ -1,6 +1,5 @@
 Set-StrictMode -Version Latest
 
-$script:WindShareStabilityHelperSemantics = '{"schema_version":"windshare.stability-helper-semantics/v1","operating_system":"windows","role":"test-run-identity-authority","revision":1,"command_plan":["require-settled-go-authority","bind-caller-seed","append-csprng-entropy"]}'
 function New-WindShareTestRunID {
     [CmdletBinding()]
     param(
@@ -9,7 +8,6 @@ function New-WindShareTestRunID {
         [string]$Suite
     )
 
-    Assert-WindShareGoAuthorityActive
     $maximumPortableTokenBytes = 128
     $entropyByteCount = 16
     $portableTokenPattern = '^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$'

@@ -29,10 +29,12 @@ import {
   parseNetworkCompletion,
   parseNetworkCompletionJson,
   publishNetworkCompletion,
+  takeNetworkCompletionConsumerInputs,
 } from '../../../scripts/ci/browsergate/network-completion.mjs'
 import { makeRun, makeRunRaw } from './fixtures.ts'
 
 const SOURCE_ROOT = resolve(import.meta.dirname, '..', '..', '..')
+const COMPLETION_PATH = join(SOURCE_ROOT, 'test-results', 'browser-network-completion.json')
 const CHECKOUT_SHA = '0123456789abcdef0123456789abcdef01234567'
 const RUN_ID = 'gha-123-1-browser-network'
 const PROFILE_NAMES = [
@@ -48,6 +50,33 @@ afterEach(() => {
 })
 
 describe('browser network completion', () => {
+  test('takes a dedicated target identity without inheriting OIDC authority', () => {
+    const environment = {
+      BROWSER_NETWORK_COMPLETION: COMPLETION_PATH,
+      WINDSHARE_TARGET_SHA: CHECKOUT_SHA,
+      WINDSHARE_CORE_ARTIFACT_COMMIT_SHA: 'f'.repeat(40),
+      ACTIONS_ID_TOKEN_REQUEST_URL: '',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: '',
+    }
+    expect(takeNetworkCompletionConsumerInputs(environment)).toEqual({
+      completionPath: COMPLETION_PATH,
+      checkoutSha: CHECKOUT_SHA,
+    })
+    expect(environment).toEqual({
+      WINDSHARE_CORE_ARTIFACT_COMMIT_SHA: 'f'.repeat(40),
+    })
+
+    expect(() => takeNetworkCompletionConsumerInputs({
+      BROWSER_NETWORK_COMPLETION: COMPLETION_PATH,
+      WINDSHARE_CORE_ARTIFACT_COMMIT_SHA: CHECKOUT_SHA,
+    })).toThrow(/WINDSHARE_TARGET_SHA is unavailable/u)
+    expect(() => takeNetworkCompletionConsumerInputs({
+      BROWSER_NETWORK_COMPLETION: COMPLETION_PATH,
+      WINDSHARE_TARGET_SHA: CHECKOUT_SHA,
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'ambient-authority',
+    })).toThrow(/OIDC request authority/u)
+  })
+
   test('publishes and independently consumes the exact 45-identity evidence', async () => {
     const fixture = await createFixture()
     const completion = await publishFixture(fixture)

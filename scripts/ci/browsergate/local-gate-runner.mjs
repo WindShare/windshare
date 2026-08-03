@@ -5,8 +5,79 @@ import {
 } from './owned-trace-journal.mjs'
 
 const SUITES = Object.freeze(['main', 'pion'])
+const PREFLIGHT_MAXIMUM_TRACE_EVENTS = 8
+const PREFLIGHT_MAXIMUM_TRACE_BYTES = 32 * 1024
 const LOCAL_GATE_MAXIMUM_TRACE_EVENTS = 128
 const LOCAL_GATE_MAXIMUM_TRACE_BYTES = 256 * 1024
+
+/**
+ * Contract tests and generated-semantic verification are independent evidence.
+ * Running both before reduction prevents one failure from hiding the state of
+ * the other while retaining one PR orchestration owner and one exit status.
+ */
+export async function runBrowserPreflightPipeline({
+  runContract,
+  runGeneratedSemanticProcess,
+}) {
+  requireFunction(runContract, 'runContract')
+  requireFunction(runGeneratedSemanticProcess, 'runGeneratedSemanticProcess')
+  const journal = createOwnedTraceJournal({
+    label: 'browser preflight lifecycle trace',
+    maximumEvents: PREFLIGHT_MAXIMUM_TRACE_EVENTS,
+    maximumBytes: PREFLIGHT_MAXIMUM_TRACE_BYTES,
+  })
+  let result
+  let primaryFailure
+  try {
+    const contract = await exitOperation({
+      operationId: 'browser-contract',
+      operation: runContract,
+      trace: journal.append,
+    })
+    const generatedSemantic = await exitOperation({
+      operationId: 'generated-semantic-process',
+      operation: runGeneratedSemanticProcess,
+      trace: journal.append,
+    })
+    result = Object.freeze({
+      exitCode: contract === 'success' && generatedSemantic === 'success' ? 0 : 1,
+      outcomes: Object.freeze({ contract, generatedSemantic }),
+    })
+  } catch (cause) {
+    primaryFailure = cause
+  } finally {
+    journal.finish()
+  }
+
+  const traces = journal.view.snapshot()
+  let traceFailure
+  try {
+    requireCompleteOwnedTraceSnapshot(traces, 'browser preflight lifecycle trace')
+  } catch (cause) {
+    traceFailure = cause
+  }
+  if (primaryFailure !== undefined) {
+    throw new BrowserPreflightPipelineError(primaryFailure, traces, traceFailure)
+  }
+  if (result === undefined) throw new Error('browser preflight pipeline returned no result')
+  return Object.freeze({
+    ...result,
+    exitCode: traceFailure === undefined ? result.exitCode : 1,
+    traces,
+  })
+}
+
+export class BrowserPreflightPipelineError extends Error {
+  constructor(primaryFailure, traces, traceFailure) {
+    super('browser preflight pipeline failed', {
+      cause: traceFailure === undefined
+        ? primaryFailure
+        : new AggregateError([primaryFailure, traceFailure], 'pipeline and trace settlement failed'),
+    })
+    this.name = 'BrowserPreflightPipelineError'
+    this.traces = traces
+  }
+}
 
 export function localGateOperationPlan({
   mainProductOperations,

@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
-# The Node orchestrator is the single semantic authority for sample isolation,
-# suite continuation, guarding, and final reduction. This wrapper remains the
-# thin Makefile/host boundary and deliberately forwards a safe --plan mode.
-set -uo pipefail
-cd "$(dirname "$0")/../../.." || exit 1
-source scripts/ci/goauthority/authority.sh
-windshare_enter_go_authority || exit 1
+# Browsergate owns orchestration and final reduction; this file is only the
+# native Make boundary and deliberately forwards the supported local options.
+set -euo pipefail
+cd "$(dirname "$0")/../../.."
 
-windshare_go_consumer node scripts/ci/browsergate/main.mjs local "$@"
-exit $?
+exec node scripts/ci/browsergate/main.mjs local "$@"

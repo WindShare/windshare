@@ -15,8 +15,6 @@ $targetOperatingSystems = @('linux', 'windows')
 $ciRoot = Split-Path -Parent $PSScriptRoot
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $ciRoot)
 Set-Location $repositoryRoot
-$null = Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
-$goAuthority = Enter-WindShareGoAuthority
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 Write-Output '== lint =='
 
@@ -30,7 +28,7 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 }
 
 function Get-GoEnv([string]$Name) {
-    $value = Invoke-WindShareGo env $Name
+    $value = go env $Name
     if ($LASTEXITCODE -ne 0) {
         throw "go env $Name exited with code $LASTEXITCODE"
     }
@@ -41,8 +39,8 @@ Invoke-Step 'GitHub Actions workflow lint' {
     & (Join-Path $PSScriptRoot 'workflow-lint.ps1')
 }
 
-$hostOperatingSystem = $goAuthority.HostOS
-$hostArchitecture = $goAuthority.HostArchitecture
+$hostOperatingSystem = Get-GoEnv 'GOHOSTOS'
+$hostArchitecture = Get-GoEnv 'GOHOSTARCH'
 $goBin = Get-GoEnv 'GOBIN'
 if ([string]::IsNullOrWhiteSpace($goBin)) {
     $goPath = Get-GoEnv 'GOPATH'
@@ -64,7 +62,7 @@ try {
     # later invocations select target-specific source files through GOOS.
     $env:GOOS = $hostOperatingSystem
     $env:GOARCH = $hostArchitecture
-    Invoke-Step 'install golangci-lint (host)' { Invoke-WindShareGo install $golangciLint }
+    Invoke-Step 'install golangci-lint (host)' { go install $golangciLint }
     if (-not (Test-Path -LiteralPath $linterPath -PathType Leaf)) {
         throw "golangci-lint was not installed at $linterPath"
     }
