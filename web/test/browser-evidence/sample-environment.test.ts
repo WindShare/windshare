@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   inheritedSampleEnvironment,
+  inheritedSampleEnvironmentIsWindowsCased,
   sampleProcessEnvironment,
 } from '../../scripts/browser-evidence/process/sample-environment.ts'
 
@@ -30,6 +31,15 @@ describe('browser sample process environment', () => {
       COMSPEC: 'C:\\Windows\\System32\\cmd.exe',
     }, 'win32'))
     expect(inheritedSampleEnvironment({ Path: '/not-a-linux-path' }, 'linux')).toEqual({})
+  })
+
+  it('detects Windows-cased canonical spellings for host-independent projection', () => {
+    expect(inheritedSampleEnvironmentIsWindowsCased({
+      Path: 'C:\\runtime\\bin',
+      ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+    })).toBe(true)
+    expect(inheritedSampleEnvironmentIsWindowsCased({ PATH: '/runtime/bin' })).toBe(false)
+    expect(inheritedSampleEnvironmentIsWindowsCased({})).toBe(false)
   })
 
   it('merges explicit synthetic inputs while rejecting known credential channels', () => {

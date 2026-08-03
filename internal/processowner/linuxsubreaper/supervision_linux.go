@@ -297,10 +297,11 @@ func awaitLaunchDecision(
 		closeLateLaunchAuthority(preflight)
 		failureCode := "CONTROL_BEFORE_LAUNCH"
 		failureMessage := "owner control prevented target launch"
-		if outcome == ownerprotocol.TerminationParentLost {
+		switch outcome {
+		case ownerprotocol.TerminationParentLost:
 			failureCode = "PARENT_LOST_BEFORE_LAUNCH"
 			failureMessage = "parent authority ended before target launch"
-		} else if outcome == ownerprotocol.TerminationDeadline {
+		case ownerprotocol.TerminationDeadline:
 			failureCode = "DEADLINE_BEFORE_LAUNCH"
 			failureMessage = "owner deadline expired before target launch"
 		}

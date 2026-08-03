@@ -1409,6 +1409,13 @@ func environmentValue(environment []ownerprotocol.EnvironmentEntry, name string)
 	return ""
 }
 
+func settledInputOutcome(request supervisionRequest) string {
+	if request.Stdin == nil {
+		return ownerprotocol.InputNotRequested
+	}
+	return ownerprotocol.InputDelivered
+}
+
 func assertTreeStatus(t *testing.T, status ownerprotocol.Settlement, request supervisionRequest, reason string, timedOut bool, exitCode uint32) {
 	t.Helper()
 	if status.SchemaVersion != ownerprotocol.SettlementSchemaVersion || status.Identity != request.Identity {

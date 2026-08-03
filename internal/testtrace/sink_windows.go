@@ -207,7 +207,7 @@ func (operations windowsEventOperations) validate() error {
 		operations.setHandleInformation == nil || operations.getFileType == nil ||
 		operations.duplicateHandle == nil || operations.currentProcess == nil ||
 		operations.closeHandle == nil || operations.newFile == nil {
-		return errors.New("Windows test-event operations are incomplete")
+		return errors.New("windows test-event operations are incomplete")
 	}
 	return nil
 }

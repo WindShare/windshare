@@ -312,11 +312,9 @@ func (session *linuxSession) wait() (protocol.Settlement, error) {
 			_ = session.closeInput()
 			if !inputReady {
 				input = <-inputChannel
-				inputReady = true
 			}
 			if !startReady {
 				start = <-startChannel
-				startReady = true
 			}
 			return status.settlement, errors.Join(
 				status.err,

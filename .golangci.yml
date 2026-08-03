@@ -53,12 +53,13 @@ linters:
       # legitimately contain that substring and must stay linted.
       - _test\.go$
     rules:
-      # `defer x.Close()` on read paths: the error is unactionable and Go
-      # convention ignores it; write paths must check Close explicitly (not
-      # via defer) and remain covered by errcheck.
+      # `defer x.Close()` (and the named close-equivalent cleanups startGate.
+      # close, EventReader.closeSource) on read paths: the error is
+      # unactionable and Go convention ignores it; write paths must check
+      # Close explicitly (not via defer) and remain covered by errcheck.
       - linters:
           - errcheck
-        source: "defer.*\\.Close\\(\\)"
+        source: "defer.*\\.(Close|close|closeSource)\\(\\)"
       # False positive by library contract: coder/websocket's Dial documents
       # "You never need to close resp.Body yourself" — it closes the real
       # body on error paths itself (substituting nil or an in-memory
@@ -76,6 +77,15 @@ linters:
           - funlen
           - gocognit
           - nestif
+      # Helper commands (linuxsubreaper, windowsjob) are built by the
+      # browsergate harness at test runtime, never linked by `go build
+      # ./...`; the unused analyzer therefore cannot recognize their main
+      # entry point and reports it in every platform pass. main is the
+      # declared command entry — exclude the exact artifact, not the
+      # package, which must stay fully linted.
+      - linters:
+          - unused
+        text: "func main is unused"
   settings:
     errcheck:
       # CLI terminal writes: a failed write to the user's own stdout/stderr
@@ -85,6 +95,9 @@ linters:
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln
+        # Windows kernel-handle release in a defer: the launcher process is
+        # exiting and no recovery exists for a failed handle close.
+        - golang.org/x/sys/windows.CloseHandle
     funlen:
       lines: 150
       statements: 75
