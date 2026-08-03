@@ -97,7 +97,8 @@ func peekPipe(handle windows.Handle) (uint32, error) {
 		uintptr(handle), 0, 0, 0, uintptr(unsafe.Pointer(&available)), 0,
 	)
 	if succeeded == 0 {
-		if errno, ok := callErr.(syscall.Errno); ok && errno != 0 {
+		var errno syscall.Errno
+		if errors.As(callErr, &errno) && errno != 0 {
 			return 0, errno
 		}
 		return 0, errors.New("PeekNamedPipe failed without an error code")

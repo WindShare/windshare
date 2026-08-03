@@ -262,7 +262,7 @@ func (trace *Trace) Record(
 		return ErrInvalid
 	}
 	if err := testrun.ValidateMilestone(milestone); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalid, err)
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if outcome != testrun.OutcomeSucceeded && outcome != testrun.OutcomeFailed {
 		return ErrInvalid
@@ -301,7 +301,7 @@ func (trace *Trace) StartPhase(milestone testrun.Milestone, payload any) (*Phase
 		return nil, ErrInvalid
 	}
 	if err := testrun.ValidateMilestone(milestone); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	trace.mu.Lock()
 	defer trace.mu.Unlock()
@@ -554,7 +554,7 @@ func (trace *Trace) runCleanupOwner(
 	case err := <-result:
 		return err
 	case <-ownerContext.Done():
-		return fmt.Errorf("%w: %v", ErrCleanupTimeout, ownerContext.Err())
+		return fmt.Errorf("%w: %w", ErrCleanupTimeout, ownerContext.Err())
 	}
 }
 

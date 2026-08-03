@@ -1,4 +1,4 @@
-const INHERITED_SAMPLE_ENVIRONMENT_NAMES = Object.freeze([
+export const INHERITED_SAMPLE_ENVIRONMENT_NAMES: readonly string[] = Object.freeze([
   'APPDATA',
   'COMSPEC',
   'DBUS_SESSION_BUS_ADDRESS',
@@ -53,6 +53,19 @@ export function inheritedSampleEnvironment(
     if (value !== undefined) selected[canonicalName] = value
   }
   return Object.freeze(selected)
+}
+
+// A Windows process spells canonical names in its own mixed case (Path,
+// Temp, SystemRoot). When such a source is sampled on any host its names
+// must project case-insensitively; all-caps spellings are already the
+// canonical projection and need no remapping.
+export function inheritedSampleEnvironmentIsWindowsCased(
+  source: Readonly<Record<string, string | undefined>>,
+): boolean {
+  return Object.keys(source).some((name) => {
+    const canonical = name.toUpperCase()
+    return name !== canonical && INHERITED_SAMPLE_ENVIRONMENT_NAMES.includes(canonical)
+  })
 }
 
 export function sampleProcessEnvironment(

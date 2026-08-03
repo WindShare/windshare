@@ -207,7 +207,7 @@ func (authority *executableAuthority) startEvidence(
 		Platform:        ownerprotocol.PlatformLinuxSubreaper,
 		ProcessID:       root.PID,
 		ProcessInstance: strconv.FormatUint(root.StartTimeTicks, 10),
-		Executable:      ownerprotocol.NewObjectIdentity64(uint64(metadata.Dev), metadata.Ino),
+		Executable:      ownerprotocol.NewObjectIdentity64(metadata.Dev, metadata.Ino),
 	}, nil
 }
 

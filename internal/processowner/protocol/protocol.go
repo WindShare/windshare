@@ -364,7 +364,7 @@ func validateObjectIdentity(identity ObjectIdentity) error {
 	for _, value := range []string{identity.Volume, identity.Object} {
 		for index := range len(value) {
 			character := value[index]
-			if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 				return errors.New("executable object identity must be lowercase hexadecimal")
 			}
 		}
@@ -626,20 +626,20 @@ func validatePlatformEvidence(settlement Settlement) error {
 	case PlatformWindowsJob:
 		if platform.RootStartTimeTicks != "" || platform.InventoryScans != 0 ||
 			platform.MaximumObservedDescendants != 0 || platform.QuietInventoryCount != 0 {
-			return errors.New("Windows Job evidence contains Linux-only fields")
+			return errors.New("windows Job evidence contains Linux-only fields")
 		}
 		if settlement.Target.Outcome == TargetSignaled || (platform.Root != nil && platform.Root.State == RootSignaled) {
-			return errors.New("Windows Job evidence cannot report POSIX signal termination")
+			return errors.New("windows Job evidence cannot report POSIX signal termination")
 		}
 		if platform.Root != nil && settlement.Target.Outcome == TargetSpawnFailed {
-			return errors.New("Windows root creation contradicts target spawn-failure evidence")
+			return errors.New("windows root creation contradicts target spawn-failure evidence")
 		}
 		if settlement.Target.ExitCode != nil && (*settlement.Target.ExitCode < 0 || *settlement.Target.ExitCode > int64(^uint32(0))) {
-			return errors.New("Windows target exit code is outside the DWORD range")
+			return errors.New("windows target exit code is outside the DWORD range")
 		}
 		if platform.Root != nil && platform.Root.ExitCode != nil &&
 			(*platform.Root.ExitCode < 0 || *platform.Root.ExitCode > int64(^uint32(0))) {
-			return errors.New("Windows root exit code is outside the DWORD range")
+			return errors.New("windows root exit code is outside the DWORD range")
 		}
 	case PlatformLinuxSubreaper:
 		if platform.Root != nil {
@@ -650,7 +650,7 @@ func validatePlatformEvidence(settlement Settlement) error {
 				}
 			}
 		} else if platform.RootStartTimeTicks != "" {
-			return errors.New("Linux evidence without a root excludes root start-time ticks")
+			return errors.New("linux evidence without a root excludes root start-time ticks")
 		}
 		if settlement.TreeState == TreeProvenEmpty && platform.Root != nil {
 			const minimumQuietInventoryProof = 2

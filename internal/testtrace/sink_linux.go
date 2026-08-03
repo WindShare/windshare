@@ -111,7 +111,7 @@ func (operations linuxEventOperations) validate() error {
 	if operations.lookupEnvironment == nil || operations.unsetEnvironment == nil ||
 		operations.fstat == nil || operations.fcntlInt == nil ||
 		operations.closeDescriptor == nil || operations.newFile == nil {
-		return errors.New("Linux test-event operations are incomplete")
+		return errors.New("linux test-event operations are incomplete")
 	}
 	return nil
 }

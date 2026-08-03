@@ -22,6 +22,22 @@ type pendingLauncherSupervision struct {
 	executable  *windowsExecutableAuthority
 }
 
+const ownerReadyByte byte = 0xa5
+
+func writeAll(writer io.Writer, encoded []byte) error {
+	for len(encoded) > 0 {
+		written, err := writer.Write(encoded)
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+		encoded = encoded[written:]
+	}
+	return nil
+}
+
 func runSupervisorPlatform(
 	request supervisionRequest,
 	settlements *settlementSink,
