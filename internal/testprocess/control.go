@@ -1,6 +1,7 @@
 package testprocess
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -42,6 +43,6 @@ func publishControl(writer io.Writer, control protocol.Control) error {
 }
 
 func retryableControlPublication(err error) bool {
-	failure, ok := err.(*controlPublicationError)
-	return ok && failure.retryable()
+	var failure *controlPublicationError
+	return errors.As(err, &failure) && failure.retryable()
 }

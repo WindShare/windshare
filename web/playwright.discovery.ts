@@ -15,7 +15,10 @@ import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { types as nodeTypes } from 'node:util'
 
-import { inheritedSampleEnvironment } from './scripts/browser-evidence/process/sample-environment.ts'
+import {
+  inheritedSampleEnvironment,
+  inheritedSampleEnvironmentIsWindowsCased,
+} from './scripts/browser-evidence/process/sample-environment.ts'
 import {
   playwrightDiscoveryProjectPattern,
   PLAYWRIGHT_SUITE_PARTITIONS,
@@ -97,14 +100,26 @@ export function launchPlaywrightDiscovery(
 ): PlaywrightDiscoveryExecution {
   const command = snapshotDiscoveryCommand(callerCommand)
   validateRawDiscoveryCommand(command)
-  const environment = inheritedSampleEnvironment(hostEnvironment)
+  const environment = sampleDiscoveryEnvironment(hostEnvironment)
   return launchWithOneShotConfig(command, environment, spawn)
 }
 
 export function playwrightDiscoveryEnvironment(
   hostEnvironment: Readonly<Record<string, string | undefined>>,
 ): Readonly<Record<string, string>> {
-  return inheritedSampleEnvironment(hostEnvironment)
+  return sampleDiscoveryEnvironment(hostEnvironment)
+}
+
+function sampleDiscoveryEnvironment(
+  hostEnvironment: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string>> {
+  // Windows-cased spellings (Path, SystemRoot) mean the source is a Windows
+  // environment whatever host runs the orchestration; its names are
+  // case-insensitive and must project that way in every pass.
+  return inheritedSampleEnvironment(
+    hostEnvironment,
+    inheritedSampleEnvironmentIsWindowsCased(hostEnvironment) ? 'win32' : process.platform,
+  )
 }
 
 function createPlaywrightDiscoveryCommand(

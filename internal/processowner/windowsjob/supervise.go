@@ -13,8 +13,6 @@ import (
 	ownerprotocol "github.com/windshare/windshare/internal/processowner/protocol"
 )
 
-const ownerReadyByte byte = 0xa5
-
 type superviseOptions struct {
 	statusHandle        uintptr
 	statusPipe          string
@@ -67,10 +65,10 @@ func runSupervise(arguments []string, input io.Reader, ready io.Writer) (resultE
 		return err
 	}
 	if (request.Command.Stdin != nil) != (endpoints.input != nil) {
-		return errors.New("Windows raw-input endpoint does not match the request stdin declaration")
+		return errors.New("windows raw-input endpoint does not match the request stdin declaration")
 	}
-	owned := newSupervisionRequest(request, uintptr(endpoints.event.Fd()))
-	owned.ParentHandle = uintptr(endpoints.parent.Fd())
+	owned := newSupervisionRequest(request, endpoints.event.Fd())
+	owned.ParentHandle = endpoints.parent.Fd()
 	settlements, err := newSettlementSink(endpoints.status, request)
 	if err != nil {
 		return err
@@ -99,13 +97,13 @@ func runSupervise(arguments []string, input io.Reader, ready io.Writer) (resultE
 func parseSuperviseOptions(arguments []string) (superviseOptions, error) {
 	var options superviseOptions
 	if len(arguments) == 0 || arguments[0] != commandSupervise {
-		return options, errors.New("Windows process owner requires supervise")
+		return options, errors.New("windows process owner requires supervise")
 	}
 	seen := make(map[string]bool)
 	for index := 1; index < len(arguments); {
 		option := arguments[index]
 		if seen[option] {
-			return superviseOptions{}, fmt.Errorf("Windows process owner option %s is duplicated", option)
+			return superviseOptions{}, fmt.Errorf("windows process owner option %s is duplicated", option)
 		}
 		seen[option] = true
 		if option == "--ready-stdout" {
@@ -114,7 +112,7 @@ func parseSuperviseOptions(arguments []string) (superviseOptions, error) {
 			continue
 		}
 		if index+1 >= len(arguments) || arguments[index+1] == "" {
-			return superviseOptions{}, fmt.Errorf("Windows process owner option %s requires a value", option)
+			return superviseOptions{}, fmt.Errorf("windows process owner option %s requires a value", option)
 		}
 		value := arguments[index+1]
 		index += 2
@@ -180,7 +178,7 @@ func parseSuperviseOptions(arguments []string) (superviseOptions, error) {
 		}
 	}
 	if !options.readyStdout {
-		return superviseOptions{}, errors.New("Windows process owner requires --ready-stdout")
+		return superviseOptions{}, errors.New("windows process owner requires --ready-stdout")
 	}
 	if (options.statusHandle != 0) == (options.statusPipe != "") ||
 		(options.controlHandle != 0) == (options.controlPipe != "") ||
@@ -188,12 +186,12 @@ func parseSuperviseOptions(arguments []string) (superviseOptions, error) {
 		(options.startEvidenceHandle != 0) == (options.startEvidencePipe != "") ||
 		(options.startDecisionHandle != 0) == (options.startDecisionPipe != "") {
 		return superviseOptions{}, errors.New(
-			"Windows status, control, parent, start-evidence, and start-decision endpoints each require exactly one handle or named pipe",
+			"windows status, control, parent, start-evidence, and start-decision endpoints each require exactly one handle or named pipe",
 		)
 	}
 	if (options.inputHandle != 0 && options.inputPipe != "") ||
 		(options.eventHandle != 0 && options.eventPipe != "") {
-		return superviseOptions{}, errors.New("Windows handle and named-pipe endpoint options are mutually exclusive")
+		return superviseOptions{}, errors.New("windows handle and named-pipe endpoint options are mutually exclusive")
 	}
 	for label, path := range map[string]string{
 		"status":         options.statusPipe,
@@ -205,7 +203,7 @@ func parseSuperviseOptions(arguments []string) (superviseOptions, error) {
 		"start decision": options.startDecisionPipe,
 	} {
 		if path != "" && !validNamedPipePath(path) {
-			return superviseOptions{}, fmt.Errorf("Windows %s pipe path is invalid", label)
+			return superviseOptions{}, fmt.Errorf("windows %s pipe path is invalid", label)
 		}
 	}
 	return options, nil
@@ -214,7 +212,7 @@ func parseSuperviseOptions(arguments []string) (superviseOptions, error) {
 func parseSuperviseHandle(value, label string) (uintptr, error) {
 	parsed, err := strconv.ParseUint(value, 10, strconv.IntSize)
 	if err != nil || parsed == 0 || uintptr(parsed) == ^uintptr(0) || strconv.FormatUint(parsed, 10) != value {
-		return 0, fmt.Errorf("Windows %s handle is invalid", label)
+		return 0, fmt.Errorf("windows %s handle is invalid", label)
 	}
 	return uintptr(parsed), nil
 }

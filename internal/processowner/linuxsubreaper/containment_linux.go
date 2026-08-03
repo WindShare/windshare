@@ -167,14 +167,6 @@ func pidfdProcessID(pidfd int) (int, error) {
 	return 0, errors.New("pidfd metadata omitted its process id")
 }
 
-func (authority *inventoryAuthority) signalAll(signal unix.Signal) error {
-	inventory, err := authority.refresh()
-	if err != nil {
-		return err
-	}
-	return authority.signalInventory(inventory, signal)
-}
-
 func (authority *inventoryAuthority) signalTracked(signal unix.Signal) error {
 	_, err := authority.signalTrackedWithWitness(signal)
 	return err

@@ -5,5 +5,5 @@ package windowsjob
 import "errors"
 
 func openSuperviseEndpoints(superviseOptions) (superviseEndpoints, error) {
-	return superviseEndpoints{}, errors.New("Windows process-owner endpoints are unavailable on this platform")
+	return superviseEndpoints{}, errors.New("windows process-owner endpoints are unavailable on this platform")
 }

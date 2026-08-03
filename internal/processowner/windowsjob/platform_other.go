@@ -11,7 +11,7 @@ import (
 )
 
 func makeLauncherHandlePrivate(uintptr, string) error {
-	return errors.New("Windows Job Object process ownership is unavailable on this platform")
+	return errors.New("windows Job Object process ownership is unavailable on this platform")
 }
 
 func closeUntransferredLauncherHandle(uintptr) {}
