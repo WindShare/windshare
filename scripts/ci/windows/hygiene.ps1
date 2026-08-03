@@ -26,6 +26,20 @@ Import-Module (Join-Path $ciRoot 'hygiene/native-argument-batches.psm1') -Force
 Import-Module (Join-Path $ciRoot 'goauthority/authority.psm1') -Force
 $null = Enter-WindShareGoAuthority
 
+function Invoke-HygieneNativeStep {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Step,
+        [Parameter(Mandatory)][scriptblock]$Action
+    )
+
+    & $Action
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw "hygiene native step failed (step=$Step; exit_code=$exitCode)"
+    }
+}
+
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $ciRoot)
 Set-Location $repositoryRoot
 $goplsVersion = (Get-Content -LiteralPath (Join-Path $ciRoot 'gopls.version') -Raw).Trim()
@@ -84,62 +98,48 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Output '-- CI checkout contract'
-node scripts/ci/contract.tests.mjs
-if ($LASTEXITCODE -ne 0) {
-    throw 'CI checkout contract tests failed'
+Invoke-HygieneNativeStep -Step 'ci-contract-tests' -Action { node scripts/ci/contract.tests.mjs }
+Invoke-HygieneNativeStep -Step 'ci-contract' -Action { node scripts/ci/contract.mjs }
+Invoke-HygieneNativeStep -Step 'make-entry-contracts' -Action {
+    node scripts/ci/makeauthority/entry.tests.mjs
 }
-node scripts/ci/contract.mjs
-if ($LASTEXITCODE -ne 0) {
-    throw 'CI checkout contract failed'
+Invoke-HygieneNativeStep -Step 'make-authority-adversaries' -Action {
+    pwsh -NoProfile -File scripts/ci/makeauthority/authority.tests.ps1
 }
-node scripts/ci/makeauthority/entry.tests.mjs
-& ./scripts/ci/makeauthority/authority.tests.ps1
-if ($LASTEXITCODE -ne 0) {
-    throw 'Make invocation authority tests failed'
+Invoke-HygieneNativeStep -Step 'go-authority-inventory' -Action {
+    node scripts/ci/goauthority/inventory.tests.mjs
 }
-node scripts/ci/goauthority/inventory.tests.mjs
-if ($LASTEXITCODE -ne 0) {
-    throw 'Go authority inventory tests failed'
+Invoke-HygieneNativeStep -Step 'go-json-entrypoint-contracts' -Action {
+    node scripts/ci/goauthority/test-json-entrypoints.tests.mjs
 }
-node scripts/ci/goauthority/test-json-entrypoints.tests.mjs
-if ($LASTEXITCODE -ne 0) {
-    throw 'Go JSON test entrypoint contracts failed'
-}
-& pwsh -NoProfile -File scripts/ci/goauthority/authority.tests.ps1
-if ($LASTEXITCODE -ne 0) {
-    throw 'Go authority adversary tests failed'
+Invoke-HygieneNativeStep -Step 'go-authority-adversaries' -Action {
+    pwsh -NoProfile -File scripts/ci/goauthority/authority.tests.ps1
 }
 
 Write-Output '-- stability evidence contracts'
-node scripts/ci/stability/result.tests.mjs
-if ($LASTEXITCODE -ne 0) {
-    throw 'Stability result contract tests failed'
+Invoke-HygieneNativeStep -Step 'stability-result-contracts' -Action {
+    node scripts/ci/stability/result.tests.mjs
 }
-node scripts/ci/stability/release-reducer.tests.mjs
-if ($LASTEXITCODE -ne 0) {
-    throw 'Stability release reducer contract tests failed'
+Invoke-HygieneNativeStep -Step 'stability-release-reducer-contracts' -Action {
+    node scripts/ci/stability/release-reducer.tests.mjs
 }
-& pwsh -NoProfile -File scripts/ci/test-run-id-entrypoints.tests.ps1
-if ($LASTEXITCODE -ne 0) {
-    throw 'Test run-ID entrypoint contract tests failed'
+Invoke-HygieneNativeStep -Step 'test-run-id-entrypoint-contracts' -Action {
+    pwsh -NoProfile -File scripts/ci/test-run-id-entrypoints.tests.ps1
 }
 
 Write-Output '-- Windows native argument batching contract'
-& pwsh -NoProfile -File scripts/ci/hygiene/native-argument-batches.tests.ps1
-if ($LASTEXITCODE -ne 0) {
-    throw 'Windows native argument batching contract failed'
+Invoke-HygieneNativeStep -Step 'windows-native-argument-contracts' -Action {
+    pwsh -NoProfile -File scripts/ci/hygiene/native-argument-batches.tests.ps1
 }
 
 Write-Output '-- Web v1 forbidden references (source-only)'
-node scripts/ci/web-forbidden.mjs --source-only
-if ($LASTEXITCODE -ne 0) {
-    throw 'Web v1 forbidden-reference gate failed'
+Invoke-HygieneNativeStep -Step 'web-v1-forbidden' -Action {
+    node scripts/ci/web-forbidden.mjs --source-only
 }
 
 Write-Output '-- Go v1 forbidden roots and production dependencies'
-Invoke-WindShareGoConsumer node scripts/ci/go-v1-forbidden.mjs
-if ($LASTEXITCODE -ne 0) {
-    throw 'Go v1 forbidden-reference gate failed'
+Invoke-HygieneNativeStep -Step 'go-v1-forbidden' -Action {
+    Invoke-WindShareGoConsumer node scripts/ci/go-v1-forbidden.mjs
 }
 
 $trackedGoFiles = @(

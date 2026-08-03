@@ -16,15 +16,22 @@
 
 # Public Make owns its graph and accepts only target names. The retained launcher
 # activates a separate mode for CI inputs whose exact file and interpreter
-# identities have already been locked. GNU Make does not expose a dedicated
-# "effective dry-run" bit, so both modes reject parser, shell, and control flags
-# before a recipe can dispatch.
-ifneq ($(origin SHELL),default)
+# identities have already been locked. An exported login-shell hint is ambient
+# host metadata rather than recipe authority, so normalize it to the canonical
+# POSIX shell before any expansion can consume it. Cygwin Make represents that
+# same inherited default as file-owned /bin/sh; no other file-owned shell is
+# default-equivalent. Parser- and caller-controlled shell origins still fail
+# closed before a recipe can dispatch.
+ifneq ($(filter default environment,$(origin SHELL)),$(origin SHELL))
+ifneq ($(origin SHELL):$(SHELL),file:/bin/sh)
 $(error SHELL is Makefile-owned and cannot be supplied)
+endif
 endif
 ifneq ($(origin .SHELLFLAGS),default)
 $(error .SHELLFLAGS is Makefile-owned and cannot be supplied)
 endif
+override SHELL := /bin/sh
+override .SHELLFLAGS := -eu -c
 ifneq ($(origin VALIDATION_COMMAND_LINE_VARIABLES),undefined)
 $(error VALIDATION_COMMAND_LINE_VARIABLES is Makefile-owned and cannot be supplied)
 endif
@@ -112,7 +119,6 @@ ifeq ($(strip $(WINDSHARE_RECIPE_SHELL)),)
 $(error retained Make launcher supplied an empty recipe shell authority)
 endif
 override SHELL := $(WINDSHARE_RECIPE_SHELL)
-override .SHELLFLAGS := -eu -c
 ifeq ($(HOST_GOOS),windows)
 ifneq ($(origin WINDSHARE_PWSH_EXECUTABLE),command line)
 $(error Windows validation must receive its pwsh interpreter from the retained Make launcher)
