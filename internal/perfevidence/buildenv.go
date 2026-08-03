@@ -12,6 +12,9 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/windshare/windshare/internal/perfevidence/processrun"
+	"github.com/windshare/windshare/internal/processowner/protocol"
 )
 
 const (
@@ -77,7 +80,6 @@ func prepareControlledGoEnvironment(
 	if _, err := os.Stat(goWork); err != nil {
 		return controlledGoEnvironment{}, fmt.Errorf("inspect workspace file: %w", err)
 	}
-
 	controlled := map[string]string{
 		"CGO_ENABLED":  "0",
 		"GOCACHE":      goCache,
@@ -110,7 +112,6 @@ func prepareControlledGoEnvironment(
 	prefetchValues["GOSUMDB"] = publicGoSumDB
 	prefetchValues["GOVCS"] = "public:git|hg,private:off"
 	prefetch := exactProcessEnvironment(prefetchValues)
-
 	version, err := runControlled(ctx, runner, Command{
 		Executable: goExecutable, Arguments: []string{"version"}, Directory: repositoryRoot,
 		Environment: offline, ReplaceEnvironment: true,
@@ -452,4 +453,174 @@ func cloneStrings(values map[string]string) map[string]string {
 	result := make(map[string]string, len(values))
 	maps.Copy(result, values)
 	return result
+}
+
+func verifyDownloadedModules(
+	ctx context.Context,
+	runner CommandRunner,
+	environment controlledGoEnvironment,
+	repositoryRoot string,
+	workloads []Workload,
+) error {
+	modules := make(map[string]struct{}, len(workloads))
+	for _, workload := range workloads {
+		modules[filepath.Clean(filepath.FromSlash(workload.ModuleDir))] = struct{}{}
+	}
+	moduleDirectories := make([]string, 0, len(modules))
+	for module := range modules {
+		moduleDirectories = append(moduleDirectories, module)
+	}
+	sort.Strings(moduleDirectories)
+	for _, module := range moduleDirectories {
+		directory := filepath.Join(repositoryRoot, filepath.FromSlash(module))
+		_, err := runControlled(ctx, runner, Command{
+			Executable: environment.GoExecutable,
+			Arguments:  []string{"mod", "verify"}, Directory: directory,
+			Environment:        environment.withWorkspace(filepath.Join(repositoryRoot, "go.work"), false),
+			ReplaceEnvironment: true,
+		})
+		if err != nil {
+			return fmt.Errorf("verify downloaded modules for %s: %w", module, err)
+		}
+	}
+	return nil
+}
+
+func verifyDownloadedModulesUnderAuthority(
+	ctx context.Context,
+	runner CommandRunner,
+	environment controlledGoEnvironment,
+	repositoryRoot string,
+	workloads []Workload,
+	authority byteConsumptionAuthority,
+) error {
+	if authority == nil {
+		return errors.New("authoritative module verification requires live byte authority")
+	}
+	if err := authority.Verify(); err != nil {
+		return fmt.Errorf("verify module bytes before final module verification: %w", err)
+	}
+	verifyErr := verifyDownloadedModules(ctx, runner, environment, repositoryRoot, workloads)
+	authorityErr := authority.Verify()
+	if verifyErr != nil || authorityErr != nil {
+		return errors.Join(
+			verifyErr,
+			wrapError("verify module bytes after final module verification", authorityErr),
+		)
+	}
+	return nil
+}
+
+func wrapError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func moduleIdentity(module *goListModule, workspaceRoot string) ModuleIdentity {
+	identity := ModuleIdentity{
+		Path: module.Path, Version: module.Version, Sum: module.Sum, GoModSum: module.GoModSum,
+	}
+	effective := module
+	if module.Replace != nil {
+		identity.ReplacementPath = module.Replace.Path
+		identity.Replacement = module.Replace.Version
+		effective = module.Replace
+	}
+	_, identity.Local = relativeWithin(workspaceRoot, effective.Dir)
+	return identity
+}
+
+func moduleIdentityKey(module ModuleIdentity) string {
+	return strings.Join([]string{
+		module.Path, module.Version, module.Sum, module.GoModSum,
+		module.ReplacementPath, module.Replacement, fmt.Sprintf("%t", module.Local),
+	}, "\x00")
+}
+
+func closureSHA(
+	files []inventoryFile,
+	modules []ModuleIdentity,
+	packages []string,
+	overlay workloadOverlay,
+) (string, error) {
+	type closureFile struct {
+		Path string `json:"path"`
+		SHA  string `json:"sha256"`
+	}
+	encodedFiles := make([]closureFile, 0, len(files))
+	for _, file := range files {
+		path := file.Logical
+		if file.Origin == "overlay" {
+			path = "overlay-target/" + filepath.ToSlash(file.WorkspaceRelative)
+		}
+		encodedFiles = append(encodedFiles, closureFile{Path: path, SHA: file.SHA256})
+	}
+	input := struct {
+		Files                    []closureFile    `json:"files"`
+		Modules                  []ModuleIdentity `json:"modules"`
+		Packages                 []string         `json:"packages"`
+		Performance              []string         `json:"performanceTests"`
+		Suppressed               []string         `json:"suppressedTests"`
+		BenchmarkHarnessPackages []string         `json:"benchmarkHarnessPackages"`
+	}{
+		encodedFiles, modules, packages, overlay.PerformanceTests, overlay.SuppressedTests,
+		overlay.BenchmarkHarnessPackages,
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return "", fmt.Errorf("encode build closure: %w", err)
+	}
+	return hashBytes(encoded), nil
+}
+
+func prepareOwnedCommand(command Command) (
+	string,
+	string,
+	[]protocol.EnvironmentEntry,
+	error,
+) {
+	executable, err := exec.LookPath(command.Executable)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("resolve owned command executable: %w", err)
+	}
+	executable, err = filepath.Abs(executable)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("resolve owned command executable path: %w", err)
+	}
+	executable = filepath.Clean(executable)
+	info, err := os.Stat(executable)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", "", nil, errors.Join(
+			errors.New("owned command executable is not a regular file"),
+			err,
+		)
+	}
+	directory := command.Directory
+	if directory == "" {
+		directory, err = os.Getwd()
+	} else {
+		directory, err = filepath.Abs(directory)
+	}
+	if err != nil {
+		return "", "", nil, fmt.Errorf("resolve owned command working directory: %w", err)
+	}
+	directory = filepath.Clean(directory)
+	info, err = os.Stat(directory)
+	if err != nil || !info.IsDir() {
+		return "", "", nil, errors.Join(
+			errors.New("owned command working directory is not a directory"),
+			err,
+		)
+	}
+	var base []string
+	if !command.ReplaceEnvironment {
+		base = os.Environ()
+	}
+	environment, err := processrun.CanonicalEnvironment(base, command.Environment)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("canonicalize owned command environment: %w", err)
+	}
+	return executable, directory, environment, nil
 }
