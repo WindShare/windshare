@@ -73,22 +73,17 @@ func startProcess(
 			resultErr = errors.Join(resultErr, platform.closeAll())
 		}
 	}()
-	stdoutPipe, err := platform.command.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	stderrPipe, err := platform.command.StderrPipe()
-	if err != nil {
-		return nil, err
-	}
+	stdout := newBoundedOutput()
+	stderr := newBoundedOutput()
+	// Giving Cmd the destinations keeps pipe reads and descriptor closure under
+	// one lifecycle owner. Wait joins the copy goroutines before closing their
+	// pipes, while WaitDelay still bounds descriptors leaked by descendants.
+	platform.command.Stdout = stdout
+	platform.command.Stderr = stderr
 	if err := platform.command.Start(); err != nil {
 		return nil, fmt.Errorf("start external process owner: %w", err)
 	}
 	childCloseErr := platform.closeChildEnds()
-	stdout := newBoundedOutput()
-	stderr := newBoundedOutput()
-	stdoutDone := drainOutput(stdoutPipe, stdout)
-	stderrDone := drainOutput(stderrPipe, stderr)
 	events := newEventReader(platform.events)
 	decoder := processowner.NewStatusDecoder(platform.status)
 	startup := make(chan startupResult, 1)
@@ -113,14 +108,14 @@ func startProcess(
 	if first.err != nil {
 		_ = platform.command.Process.Kill()
 		waitErr := platform.command.Wait()
-		return nil, errors.Join(first.err, waitErr, <-stdoutDone, <-stderrDone, childCloseErr)
+		return nil, errors.Join(first.err, waitErr, childCloseErr)
 	}
 	if first.status.State == processowner.StatusFinished {
 		waitErr := platform.command.Wait()
 		result := first.status.Result
 		return nil, errors.Join(
 			fmt.Errorf("start owned process: %s", result.Error),
-			waitErr, <-stdoutDone, <-stderrDone, childCloseErr,
+			waitErr, childCloseErr,
 		)
 	}
 	process := &Process{
@@ -129,23 +124,13 @@ func startProcess(
 		control: platform.control, done: make(chan struct{}),
 	}
 	started = true
-	go process.finish(platform, decoder, stdoutDone, stderrDone, childCloseErr, released, cancelLifetime)
+	go process.finish(platform, decoder, childCloseErr, released, cancelLifetime)
 	return process, nil
-}
-
-func drainOutput(source io.Reader, destination io.Writer) <-chan error {
-	done := make(chan error, 1)
-	go func() {
-		_, err := io.Copy(destination, source)
-		done <- err
-	}()
-	return done
 }
 
 func (process *Process) finish(
 	platform *platformCommand,
 	decoder *processowner.StatusDecoder,
-	stdoutDone, stderrDone <-chan error,
 	initialErr error,
 	released func(),
 	cancelLifetime context.CancelFunc,
@@ -175,8 +160,6 @@ func (process *Process) finish(
 		initialErr,
 		statusErr,
 		waitErr,
-		<-stdoutDone,
-		<-stderrDone,
 		eventJoinErr,
 		closeErr,
 	)
