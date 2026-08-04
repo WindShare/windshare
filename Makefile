@@ -7,7 +7,7 @@ PUBLIC_TARGETS := ci check hygiene sloc workflow-lint lint vet short-go race cov
 CI_GATES := hygiene sloc workflow-lint lint vet short-go vectors web e2e browser gopls
 PLATFORM_TARGETS := $(filter-out ci core-release,$(PUBLIC_TARGETS))
 
-CORE_RELEASE_VERSION ?= v0.0.0-ci
+override CORE_RELEASE_VERSION := v0.0.0-ci
 CORE_RELEASE_COMMIT ?= $(shell git rev-parse --verify HEAD)
 
 ifeq ($(OS),Windows_NT)
