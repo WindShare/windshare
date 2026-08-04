@@ -272,6 +272,14 @@ func (b *FileCatalogBackend) Destroy() error {
 	return nil
 }
 
+// CatalogSpillRoot keeps committed pages and their transient sort runs under the
+// same lifecycle-owned storage authority without exposing backend internals.
+func (b *FileCatalogBackend) CatalogSpillRoot() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return filepath.Join(b.root, "sort")
+}
+
 func (b *FileCatalogBackend) pagePath(directory DirectoryID, index uint32) string {
 	return filepath.Join(b.directoryPath(directory), "pages", fmt.Sprintf("%08x.page", index))
 }

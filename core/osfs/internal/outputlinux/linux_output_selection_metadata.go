@@ -27,7 +27,11 @@ func (platform *linuxV3Platform) ValidateSelectionMetadata(selection transfer.Ou
 	// The policy becomes immutable before materialization. This lets the existing
 	// post-probe authority boundary prove the layout of each exact directory inode
 	// without widening the transport-neutral output interface.
-	platform.root.metadataPolicy = linuxSelectionMetadataPolicyFor(selection)
+	policy, err := linuxSelectionMetadataPolicyFor(selection)
+	if err != nil {
+		return linuxV3Error(err)
+	}
+	platform.root.metadataPolicy = policy
 	return nil
 }
 
@@ -35,15 +39,20 @@ type linuxSelectionMetadataPolicy struct {
 	extendedTimestampDirectories []string
 }
 
-func linuxSelectionMetadataPolicyFor(selection transfer.OutputSelection) *linuxSelectionMetadataPolicy {
-	paths := make([]string, 0, len(selection.Directories()))
-	for _, directory := range selection.Directories() {
+func linuxSelectionMetadataPolicyFor(
+	selection transfer.OutputSelection,
+) (*linuxSelectionMetadataPolicy, error) {
+	var paths []string
+	if err := selection.VisitDirectories(func(directory transfer.OutputSelectionDirectory) error {
 		if linuxModifiedTimeRequiresExtendedInodeFields(directory.ModifiedTime) {
 			paths = append(paths, directory.Path)
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	sort.Strings(paths)
-	return &linuxSelectionMetadataPolicy{extendedTimestampDirectories: paths}
+	return &linuxSelectionMetadataPolicy{extendedTimestampDirectories: paths}, nil
 }
 
 func (policy *linuxSelectionMetadataPolicy) requiresExtendedTimestamp(path string) bool {
@@ -69,14 +78,14 @@ func linuxSelectionMetadataRequirementsFor(
 	requirements := linuxSelectionMetadataRequirements{
 		timeBounds: make(map[catalog.TimePrecision]linuxModifiedTimeBounds, 3),
 	}
-	for _, directory := range selection.Directories() {
-		if err := requirements.observeModifiedTime(directory.ModifiedTime); err != nil {
-			return linuxSelectionMetadataRequirements{}, err
-		}
+	if err := selection.VisitDirectories(func(directory transfer.OutputSelectionDirectory) error {
+		return requirements.observeModifiedTime(directory.ModifiedTime)
+	}); err != nil {
+		return linuxSelectionMetadataRequirements{}, err
 	}
-	for _, file := range selection.Files() {
+	if err := selection.VisitFiles(func(file transfer.OutputSelectionFile) error {
 		if file.ExpectedSize > math.MaxInt64 {
-			return linuxSelectionMetadataRequirements{}, linuxUnsupported(
+			return linuxUnsupported(
 				operation, "selected file size exceeds the native truncate ABI", nil,
 			)
 		}
@@ -85,8 +94,11 @@ func linuxSelectionMetadataRequirementsFor(
 			requirements.hasSize = true
 		}
 		if err := requirements.observeModifiedTime(file.ModifiedTime); err != nil {
-			return linuxSelectionMetadataRequirements{}, err
+			return err
 		}
+		return nil
+	}); err != nil {
+		return linuxSelectionMetadataRequirements{}, err
 	}
 	return requirements, nil
 }

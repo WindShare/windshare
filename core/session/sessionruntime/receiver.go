@@ -407,6 +407,36 @@ type receiverTransferDependencies struct {
 	runtime *ReceiverRuntime
 }
 
+func (dependencies receiverTransferDependencies) OpenDirectoryPages(
+	ctx context.Context,
+	directory catalog.DirectoryID,
+) (catalog.DirectoryPageCursor, error) {
+	cursor, err := dependencies.runtime.catalog.OpenDirectoryPages(ctx, directory)
+	if err != nil {
+		return nil, dependencies.classify(err)
+	}
+	if cursor == nil {
+		return nil, transfer.NewJobDependencyContractError(transfer.ErrCatalogCursorContract)
+	}
+	return receiverDirectoryPageCursor{cursor: cursor, dependencies: dependencies}, nil
+}
+
+type receiverDirectoryPageCursor struct {
+	cursor       catalog.DirectoryPageCursor
+	dependencies receiverTransferDependencies
+}
+
+func (cursor receiverDirectoryPageCursor) Next(
+	ctx context.Context,
+) (catalog.CatalogPage, bool, error) {
+	page, ok, err := cursor.cursor.Next(ctx)
+	return page, ok, cursor.dependencies.classify(err)
+}
+
+func (cursor receiverDirectoryPageCursor) Close() error {
+	return cursor.dependencies.classify(cursor.cursor.Close())
+}
+
 func (dependencies receiverTransferDependencies) AcquireDirectory(
 	ctx context.Context,
 	directory catalog.DirectoryID,

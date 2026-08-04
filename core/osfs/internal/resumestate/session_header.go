@@ -83,16 +83,16 @@ type Header struct {
 }
 
 func NewHeader(spec HeaderSpec) (Header, error) {
-	directories := spec.Selection.Directories()
-	files := spec.Selection.Files()
-	if len(files) > MaxFilesPerSession || len(directories)+len(files) > MaxSelectedEntriesPerSession {
+	directories := spec.Selection.DirectoryCount()
+	files := spec.Selection.FileCount()
+	if files > MaxFilesPerSession || directories+files > MaxSelectedEntriesPerSession {
 		return Header{}, fmt.Errorf("%w: selected plan exceeds session bound", ErrInvalidState)
 	}
 	return newHeaderFromClaims(headerClaims{
 		backend: spec.Backend, sessionID: spec.SessionID,
 		shareInstance: spec.Selection.ShareInstance(), syntheticRoot: spec.Selection.SyntheticRoot(),
 		resumeIntent: spec.Selection.ResumeIntent(), selectionIdentity: spec.Selection.Identity(),
-		selectedDirectoryCount: uint32(len(directories)), selectedFileCount: uint32(len(files)),
+		selectedDirectoryCount: uint32(directories), selectedFileCount: uint32(files),
 		outputRoot: spec.OutputRoot, outputAncestry: spec.OutputAncestry,
 		lifecycle: SessionActive, stateGeneration: 1,
 	})

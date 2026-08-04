@@ -165,6 +165,40 @@ func (source outputV3StateInstallJobCatalog) AcquireDirectory(
 	return source.snapshot, func() {}, nil
 }
 
+func (source outputV3StateInstallJobCatalog) OpenDirectoryPages(
+	ctx context.Context,
+	directory catalog.DirectoryID,
+) (catalog.DirectoryPageCursor, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if directory != source.directory {
+		return nil, fmt.Errorf("unexpected catalog directory %x", directory)
+	}
+	return &outputV3StateInstallPageCursor{snapshot: source.snapshot}, nil
+}
+
+type outputV3StateInstallPageCursor struct {
+	snapshot catalog.DirectorySnapshot
+	index    uint32
+}
+
+func (cursor *outputV3StateInstallPageCursor) Next(
+	ctx context.Context,
+) (catalog.CatalogPage, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return catalog.CatalogPage{}, false, err
+	}
+	page, found := cursor.snapshot.Page(cursor.index)
+	if !found {
+		return catalog.CatalogPage{}, false, nil
+	}
+	cursor.index++
+	return page, true, nil
+}
+
+func (*outputV3StateInstallPageCursor) Close() error { return nil }
+
 type outputV3StateInstallJobRevisions struct {
 	opened map[catalog.FileID]transfer.OpenedRevision
 }

@@ -60,8 +60,30 @@ type OutputSelection struct {
 	share          catalog.ShareInstance
 	root           catalog.DirectoryID
 	rootGeneration catalog.DirectoryGeneration
-	directories    []OutputSelectionDirectory
-	files          []OutputSelectionFile
+	plan           outputSelectionPlan
+}
+
+type outputSelectionPlan interface {
+	DirectoryCount() uint64
+	FileCount() uint64
+	VisitRecords(func(selectionPlanRecord) error) error
+}
+
+type memoryOutputSelectionPlan struct {
+	records     []selectionPlanRecord
+	directories uint64
+	files       uint64
+}
+
+func (plan *memoryOutputSelectionPlan) DirectoryCount() uint64 { return plan.directories }
+func (plan *memoryOutputSelectionPlan) FileCount() uint64      { return plan.files }
+func (plan *memoryOutputSelectionPlan) VisitRecords(visit func(selectionPlanRecord) error) error {
+	for _, record := range plan.records {
+		if err := visit(record); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func NewOutputSelection(
@@ -72,7 +94,7 @@ func NewOutputSelection(
 	files []OutputSelectionFile,
 ) (OutputSelection, error) {
 	if share.IsZero() || root.IsZero() || rootGeneration.IsZero() ||
-		len(directories)+len(files) > maxSelectionIdentityClaims {
+		uint64(len(directories))+uint64(len(files)) > maximumSelectionClaims {
 		return OutputSelection{}, ErrInvalidOutputSelection
 	}
 	ownedDirectories := slices.Clone(directories)
@@ -86,10 +108,15 @@ func NewOutputSelection(
 
 	paths := make(map[string]struct{}, len(ownedDirectories)+len(ownedFiles))
 	directoryByPath := make(map[string]OutputSelectionDirectory, len(ownedDirectories))
+	nodeClaims := map[catalog.NodeID]struct{}{root.NodeID(): {}}
 	for _, directory := range ownedDirectories {
 		if !validSelectionPath(directory.Path) || directory.DirectoryID.IsZero() || directory.Generation.IsZero() {
 			return OutputSelection{}, ErrInvalidOutputSelection
 		}
+		if _, duplicate := nodeClaims[directory.DirectoryID.NodeID()]; duplicate {
+			return OutputSelection{}, ErrInvalidOutputSelection
+		}
+		nodeClaims[directory.DirectoryID.NodeID()] = struct{}{}
 		if _, duplicate := paths[directory.Path]; duplicate {
 			return OutputSelection{}, ErrInvalidOutputSelection
 		}
@@ -101,6 +128,10 @@ func NewOutputSelection(
 			file.ParentGeneration.IsZero() || file.ExpectedSize > catalog.MaxFileSize {
 			return OutputSelection{}, ErrInvalidOutputSelection
 		}
+		if _, duplicate := nodeClaims[file.FileID.NodeID()]; duplicate {
+			return OutputSelection{}, ErrInvalidOutputSelection
+		}
+		nodeClaims[file.FileID.NodeID()] = struct{}{}
 		if _, duplicate := paths[file.Path]; duplicate {
 			return OutputSelection{}, ErrInvalidOutputSelection
 		}
@@ -127,12 +158,132 @@ func NewOutputSelection(
 		}
 	}
 
-	selection := OutputSelection{
-		share: share, root: root, rootGeneration: rootGeneration,
-		directories: ownedDirectories, files: ownedFiles,
+	records := make([]selectionPlanRecord, 0, len(ownedDirectories)+len(ownedFiles))
+	for _, directory := range ownedDirectories {
+		records = append(records, selectionPlanRecord{
+			kind: selectionPlanDirectoryKind, active: true, path: directory.Path,
+			directory: plannedDirectory{
+				directory: directory.DirectoryID, generation: directory.Generation,
+				path: directory.Path, modified: directory.ModifiedTime,
+			},
+		})
 	}
-	selection.identity = hashOutputSelection(selection)
+	for _, file := range ownedFiles {
+		records = append(records, selectionPlanRecord{
+			kind: selectionPlanFileKind, active: true, path: file.Path,
+			file: plannedFile{
+				file: file.FileID, path: file.Path, expectedSize: file.ExpectedSize,
+				modified: file.ModifiedTime, parentDirectory: file.ParentDirectoryID,
+				parentGeneration: file.ParentGeneration,
+			},
+		})
+	}
+	sort.Slice(records, func(left, right int) bool {
+		if records[left].path != records[right].path {
+			return records[left].path < records[right].path
+		}
+		return records[left].kind < records[right].kind
+	})
+	return newOutputSelectionFromPlan(
+		share, root, rootGeneration,
+		&memoryOutputSelectionPlan{
+			records: records, directories: uint64(len(ownedDirectories)), files: uint64(len(ownedFiles)),
+		},
+	)
+}
+
+func newOutputSelectionFromPlan(
+	share catalog.ShareInstance,
+	root catalog.DirectoryID,
+	rootGeneration catalog.DirectoryGeneration,
+	plan outputSelectionPlan,
+) (OutputSelection, error) {
+	if share.IsZero() || root.IsZero() || rootGeneration.IsZero() || plan == nil ||
+		plan.DirectoryCount()+plan.FileCount() > maximumSelectionClaims {
+		return OutputSelection{}, ErrInvalidOutputSelection
+	}
+	if err := validateOutputSelectionPlan(root, rootGeneration, plan); err != nil {
+		return OutputSelection{}, err
+	}
+	selection := OutputSelection{
+		share: share, root: root, rootGeneration: rootGeneration, plan: plan,
+	}
+	identity, err := hashOutputSelection(selection)
+	if err != nil {
+		return OutputSelection{}, err
+	}
+	selection.identity = identity
 	return selection, nil
+}
+
+type outputSelectionDirectoryAuthority struct {
+	path       string
+	directory  catalog.DirectoryID
+	generation catalog.DirectoryGeneration
+}
+
+func validateOutputSelectionPlan(
+	root catalog.DirectoryID,
+	rootGeneration catalog.DirectoryGeneration,
+	plan outputSelectionPlan,
+) error {
+	var directories, files uint64
+	var previousPath string
+	var ancestry []outputSelectionDirectoryAuthority
+	err := plan.VisitRecords(func(record selectionPlanRecord) error {
+		if !record.active || !validSelectionPath(record.path) ||
+			(previousPath != "" && record.path <= previousPath) {
+			return ErrInvalidOutputSelection
+		}
+		previousPath = record.path
+		parentPath := selectionParentPath(record.path)
+		for len(ancestry) > 0 && ancestry[len(ancestry)-1].path != parentPath {
+			ancestry = ancestry[:len(ancestry)-1]
+		}
+		if parentPath != "" && len(ancestry) == 0 {
+			return ErrInvalidOutputSelection
+		}
+		switch record.kind {
+		case selectionPlanDirectoryKind:
+			if record.directory.path != record.path || record.directory.directory.IsZero() ||
+				record.directory.generation.IsZero() {
+				return ErrInvalidOutputSelection
+			}
+			directories++
+			ancestry = append(ancestry, outputSelectionDirectoryAuthority{
+				path: record.path, directory: record.directory.directory,
+				generation: record.directory.generation,
+			})
+		case selectionPlanFileKind:
+			if record.file.path != record.path || record.file.file.IsZero() ||
+				record.file.parentDirectory.IsZero() || record.file.parentGeneration.IsZero() ||
+				record.file.expectedSize > catalog.MaxFileSize {
+				return ErrInvalidOutputSelection
+			}
+			if parentPath == "" {
+				if record.file.parentDirectory != root || record.file.parentGeneration != rootGeneration {
+					return ErrInvalidOutputSelection
+				}
+			} else {
+				parent := ancestry[len(ancestry)-1]
+				if record.file.parentDirectory != parent.directory ||
+					record.file.parentGeneration != parent.generation {
+					return ErrInvalidOutputSelection
+				}
+			}
+			files++
+		default:
+			return ErrInvalidOutputSelection
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if directories != plan.DirectoryCount() || files != plan.FileCount() {
+		return ErrInvalidOutputSelection
+	}
+	return nil
 }
 
 func (selection OutputSelection) Identity() SelectionIdentity { return selection.identity }
@@ -146,10 +297,79 @@ func (selection OutputSelection) RootGeneration() catalog.DirectoryGeneration {
 	return selection.rootGeneration
 }
 func (selection OutputSelection) Directories() []OutputSelectionDirectory {
-	return slices.Clone(selection.directories)
+	result := make([]OutputSelectionDirectory, 0, boundedSelectionCapacity(selection.DirectoryCount()))
+	if err := selection.VisitDirectories(func(directory OutputSelectionDirectory) error {
+		result = append(result, directory)
+		return nil
+	}); err != nil {
+		panic(err)
+	}
+	return result
 }
 func (selection OutputSelection) Files() []OutputSelectionFile {
-	return slices.Clone(selection.files)
+	result := make([]OutputSelectionFile, 0, boundedSelectionCapacity(selection.FileCount()))
+	if err := selection.VisitFiles(func(file OutputSelectionFile) error {
+		result = append(result, file)
+		return nil
+	}); err != nil {
+		panic(err)
+	}
+	return result
+}
+
+func (selection OutputSelection) DirectoryCount() uint64 {
+	if selection.plan == nil {
+		return 0
+	}
+	return selection.plan.DirectoryCount()
+}
+
+func (selection OutputSelection) FileCount() uint64 {
+	if selection.plan == nil {
+		return 0
+	}
+	return selection.plan.FileCount()
+}
+
+func (selection OutputSelection) VisitDirectories(
+	visit func(OutputSelectionDirectory) error,
+) error {
+	if selection.plan == nil || visit == nil {
+		return ErrInvalidOutputSelection
+	}
+	return selection.plan.VisitRecords(func(record selectionPlanRecord) error {
+		if record.kind != selectionPlanDirectoryKind {
+			return nil
+		}
+		return visit(OutputSelectionDirectory{
+			Path: record.path, DirectoryID: record.directory.directory,
+			Generation: record.directory.generation, ModifiedTime: record.directory.modified,
+		})
+	})
+}
+
+func (selection OutputSelection) VisitFiles(visit func(OutputSelectionFile) error) error {
+	if selection.plan == nil || visit == nil {
+		return ErrInvalidOutputSelection
+	}
+	return selection.plan.VisitRecords(func(record selectionPlanRecord) error {
+		if record.kind != selectionPlanFileKind {
+			return nil
+		}
+		return visit(OutputSelectionFile{
+			Path: record.path, FileID: record.file.file,
+			ParentDirectoryID: record.file.parentDirectory,
+			ParentGeneration:  record.file.parentGeneration,
+			ExpectedSize:      record.file.expectedSize, ModifiedTime: record.file.modified,
+		})
+	})
+}
+
+func boundedSelectionCapacity(count uint64) int {
+	if count > uint64(^uint(0)>>1) {
+		return 0
+	}
+	return int(count)
 }
 
 func validSelectionPath(path string) bool {
@@ -168,60 +388,41 @@ func selectionParentPath(path string) string {
 	return path[:index]
 }
 
-type selectionIdentityRecord struct {
-	path      string
-	directory *OutputSelectionDirectory
-	file      *OutputSelectionFile
-}
-
-func hashOutputSelection(selection OutputSelection) SelectionIdentity {
+func hashOutputSelection(selection OutputSelection) (SelectionIdentity, error) {
 	hash := sha256.New()
 	writeSelectionBytes(hash, []byte("windshare/output-selection/v1"))
 	writeSelectionBytes(hash, selection.share.Bytes())
 	writeSelectionBytes(hash, selection.root.Bytes())
 	writeSelectionBytes(hash, selection.rootGeneration.Bytes())
-	records := make([]selectionIdentityRecord, 0, len(selection.directories)+len(selection.files))
-	for index := range selection.directories {
-		records = append(records, selectionIdentityRecord{
-			path: selection.directories[index].Path, directory: &selection.directories[index],
-		})
-	}
-	for index := range selection.files {
-		records = append(records, selectionIdentityRecord{
-			path: selection.files[index].Path, file: &selection.files[index],
-		})
-	}
-	sort.Slice(records, func(left, right int) bool {
-		if records[left].path != records[right].path {
-			return records[left].path < records[right].path
-		}
-		return records[left].directory != nil
-	})
 	var count [8]byte
-	binary.BigEndian.PutUint64(count[:], uint64(len(records)))
+	binary.BigEndian.PutUint64(count[:], selection.DirectoryCount()+selection.FileCount())
 	_, _ = hash.Write(count[:])
-	for _, record := range records {
-		if record.directory != nil {
+	err := selection.plan.VisitRecords(func(record selectionPlanRecord) error {
+		if record.kind == selectionPlanDirectoryKind {
 			_, _ = hash.Write([]byte{1})
-			writeSelectionBytes(hash, []byte(record.directory.Path))
-			writeSelectionBytes(hash, record.directory.DirectoryID.Bytes())
-			writeSelectionBytes(hash, record.directory.Generation.Bytes())
-			writeSelectionModifiedTime(hash, record.directory.ModifiedTime)
-			continue
+			writeSelectionBytes(hash, []byte(record.path))
+			writeSelectionBytes(hash, record.directory.directory.Bytes())
+			writeSelectionBytes(hash, record.directory.generation.Bytes())
+			writeSelectionModifiedTime(hash, record.directory.modified)
+			return nil
 		}
 		_, _ = hash.Write([]byte{2})
-		writeSelectionBytes(hash, []byte(record.file.Path))
-		writeSelectionBytes(hash, record.file.FileID.Bytes())
-		writeSelectionBytes(hash, record.file.ParentDirectoryID.Bytes())
-		writeSelectionBytes(hash, record.file.ParentGeneration.Bytes())
+		writeSelectionBytes(hash, []byte(record.path))
+		writeSelectionBytes(hash, record.file.file.Bytes())
+		writeSelectionBytes(hash, record.file.parentDirectory.Bytes())
+		writeSelectionBytes(hash, record.file.parentGeneration.Bytes())
 		var size [8]byte
-		binary.BigEndian.PutUint64(size[:], record.file.ExpectedSize)
+		binary.BigEndian.PutUint64(size[:], record.file.expectedSize)
 		_, _ = hash.Write(size[:])
-		writeSelectionModifiedTime(hash, record.file.ModifiedTime)
+		writeSelectionModifiedTime(hash, record.file.modified)
+		return nil
+	})
+	if err != nil {
+		return SelectionIdentity{}, err
 	}
 	var identity SelectionIdentity
 	copy(identity[:], hash.Sum(nil))
-	return identity
+	return identity, nil
 }
 
 type selectionHash interface {

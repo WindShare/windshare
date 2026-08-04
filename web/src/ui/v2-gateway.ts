@@ -29,7 +29,7 @@ import type {
 } from '../content/v2-broker'
 import { V2FilePreview } from '../preview/v2-preview'
 import { V2TransferJob, type V2TransferJobOptions } from '../transfer/v2-job'
-import type { OutputSession } from '../transfer/output-session'
+import type { V2OutputAuthority } from '../transfer/output-session'
 import { dialV2RelayReceiver, type V2RelayReceiverConnection } from '../transport/relay/v2-receiver'
 
 export interface V2BrowseDirectory {
@@ -142,7 +142,7 @@ export class V2JoinedBrowserShare {
   }
 
   transferJob(
-    output: OutputSession,
+    output: V2OutputAuthority,
     connectivity: V2ConnectivityActivation,
     callbacks: Pick<V2TransferJobOptions, 'onProgress' | 'onMeasure'> = {},
   ): V2TransferJob {

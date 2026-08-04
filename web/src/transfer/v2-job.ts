@@ -1,12 +1,18 @@
 import { directoryId, fileId } from '../catalog/model'
+import { encodeBase64Url, equalBytes } from '../crypto/bytes'
 import {
   snapshotPortableCatalogPath,
   V2_CATALOG_PATH_DEPTH,
 } from '../catalog/path-policy'
 import { V2CatalogClient, V2DirectoryFailureError } from '../catalog/v2-client'
 import type { V2CommittedDirectory } from '../catalog/v2-page-store'
-import type { V2CatalogEntry, V2CatalogModifiedTime, V2ShareDescriptor } from '../catalog/v2-records'
-import { V2SelectionPolicy } from '../catalog/v2-selection'
+import type {
+  V2CatalogEntry,
+  V2CatalogModifiedTime,
+  V2CatalogPage,
+  V2ShareDescriptor,
+} from '../catalog/v2-records'
+import { V2SelectionPolicy, type V2FrozenSelectionPolicy } from '../catalog/v2-selection'
 import { ByteRangeSet, byteRange } from '../content/geometry'
 import {
   V2BlockLaneAttemptsError,
@@ -35,7 +41,14 @@ import {
   OutputSessionSuspendedError,
   type OutputFile,
   type OutputSession,
+  type V2OutputAuthority,
 } from './output-session'
+import {
+  V2OutputSelectionPlan,
+  type V2OutputSelection,
+  type V2OutputSelectionDirectory,
+  type V2OutputSelectionFile,
+} from './output-selection'
 
 export const V2_MAXIMUM_CONCURRENT_FILES = 4
 
@@ -91,7 +104,7 @@ export interface V2TransferJobOptions {
   readonly revisions: V2RevisionReader
   readonly broker: V2BlockRangeReader
   readonly lanes: V2ContentLaneStatus
-  readonly output: OutputSession
+  readonly output: V2OutputAuthority
   readonly onProgress?: (progress: V2TransferProgress) => void
   readonly onMeasure?: (measure: SelectionMeasure) => void
   readonly maximumConcurrentFiles?: number
@@ -102,6 +115,7 @@ interface DirectoryCursor {
   readonly idText: string
   readonly path: readonly string[]
   readonly ancestry: readonly string[]
+  readonly selected: boolean
   readonly modifiedTime?: V2CatalogModifiedTime
 }
 
@@ -113,8 +127,10 @@ export interface V2TransferJobResult {
 /** Page cursors, rather than full directory arrays, bound memory during recursive discovery. */
 export class V2TransferJob {
   readonly #options: V2TransferJobOptions
+  readonly #selection: V2FrozenSelectionPolicy
   readonly #lifetime = new AbortController()
   readonly #pool: BoundedTaskPool
+  readonly #plan = new V2OutputSelectionPlan()
   readonly #measure = new SelectionMeasureTracker()
   readonly #failures = new TransferFailureAccumulator()
   readonly #directoryAncestry = new V2DirectoryAncestry()
@@ -122,6 +138,8 @@ export class V2TransferJob {
   #completedFiles = 0
   #discoveryComplete = false
   #externalAbortCleanup: (() => void) | undefined
+  #output: OutputSession | undefined
+  #rootGeneration: Uint8Array<ArrayBuffer> | undefined
   #started = false
 
   constructor(options: V2TransferJobOptions) {
@@ -131,6 +149,7 @@ export class V2TransferJob {
       throw new RangeError('v2 transfer file concurrency exceeds its output-safe limit')
     }
     this.#options = options
+    this.#selection = options.selection.snapshot()
     this.#pool = new BoundedTaskPool(concurrency)
   }
 
@@ -143,30 +162,50 @@ export class V2TransferJob {
       idText: this.#options.descriptor.syntheticRootId,
       path: Object.freeze([]),
       ancestry: Object.freeze([this.#options.descriptor.syntheticRootId]),
+      selected: this.#selection.defaultSelected,
     }
     try {
+      this.#claimCatalogNode(root.id)
       await this.#discoverDirectory(root)
+      const rootGeneration = this.#rootGeneration
+      if (rootGeneration === undefined) {
+        throw new V2CatalogTraversalError(
+          'Root catalog discovery did not establish an authenticated generation',
+        )
+      }
       this.#discoveryComplete = true
       const measure = this.#failures.hasDirectoryFailures
         ? this.#measure.fail()
         : this.#measure.complete()
       this.#options.onMeasure?.(measure)
       this.#emitProgress()
+      const selection = await this.#plan.freeze(
+        this.#options.descriptor,
+        this.#selection,
+        rootGeneration,
+      )
+      const output = await this.#options.output.openSelection(selection, this.#lifetime.signal)
+      this.#output = output
+      for (const file of selection.files) await this.#scheduleFile(file, output)
       await this.#pool.drain()
       this.#lifetime.signal.throwIfAborted()
+      await this.#finalizeDirectories(selection, output)
       const outcome = this.#failures.failureCount === 0
         ? jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
         : jobOutcome('CompletedWithErrors', this.#failures.snapshot())
-      await this.#options.output.finishJob(outcome, this.#lifetime.signal)
+      await output.finishJob(outcome, this.#lifetime.signal)
       return Object.freeze({ outcome, measure })
     } catch (error) {
       if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
       await this.#pool.settle()
+      const output = this.#output
       if (this.#lifetime.signal.reason instanceof OutputSessionSuspendedError &&
-          this.#options.output.suspendJob !== undefined) {
-        await this.#options.output.suspendJob(error)
+          output?.suspendJob !== undefined) {
+        await output.suspendJob(error)
+      } else if (output !== undefined) {
+        await output.abortJob(error)
       } else {
-        await this.#options.output.abortJob(error)
+        await this.#options.output.abort(error)
       }
       const measure = this.#measure.snapshot()
       return Object.freeze({
@@ -178,7 +217,7 @@ export class V2TransferJob {
     }
   }
 
-  async #discoverDirectory(cursor: DirectoryCursor): Promise<void> {
+  async #discoverDirectory(cursor: DirectoryCursor): Promise<boolean> {
     this.#lifetime.signal.throwIfAborted()
     if (cursor.path.length > V2_CATALOG_PATH_DEPTH) {
       throw new V2CatalogTraversalError('Catalog traversal exceeded the protocol path depth')
@@ -186,16 +225,26 @@ export class V2TransferJob {
     const leaveDirectory = this.#directoryAncestry.enter(cursor.idText)
     try {
       const directory = await this.#loadDirectory(cursor)
-      if (directory === undefined) return
-      // A failed authenticated scan must not leave a directory that falsely looks
-      // complete; successful empty directories are materialized before traversal.
-      if (cursor.path.length > 0) {
-        await this.#options.output.ensureDirectory(this.#outputDirectory(cursor))
-      }
+      if (directory === undefined) return false
+      let generation: Uint8Array<ArrayBuffer> | undefined
+      let selectedSubtree = cursor.selected
+      let pageIndex = 0
       for await (const page of this.#options.catalog.pages(directory, this.#lifetime.signal)) {
+        generation = authenticatedPageGeneration(
+          this.#options.descriptor,
+          cursor,
+          page,
+          generation,
+          pageIndex,
+        )
+        if (cursor.path.length === 0) this.#rootGeneration ??= generation.slice()
         for (const entry of page.entries) {
-          await this.#discoverEntry(cursor, entry)
+          selectedSubtree = await this.#discoverEntry(cursor, generation, entry) || selectedSubtree
         }
+        pageIndex += 1
+      }
+      if (generation === undefined || pageIndex !== directory.pageCount) {
+        throw new V2CatalogTraversalError('Committed catalog directory has an incomplete page cursor')
       }
       if (directory.omittedCount > 0n) {
         this.#recordDirectoryFailure(
@@ -203,13 +252,15 @@ export class V2TransferJob {
           new Error(`Directory omitted ${directory.omittedCount} entries`),
         )
       }
-      await this.#pool.drain()
-      if (cursor.path.length > 0) {
-        await this.#options.output.finalizeDirectory(
-          this.#outputDirectory(cursor),
-          this.#lifetime.signal,
-        )
+      if (cursor.path.length > 0 && selectedSubtree) {
+        this.#plan.addDirectory({
+          path: cursor.path,
+          directoryId: cursor.id,
+          generation,
+          ...(cursor.modifiedTime === undefined ? {} : { modifiedTime: cursor.modifiedTime }),
+        })
       }
+      return selectedSubtree
     } finally {
       leaveDirectory()
     }
@@ -233,7 +284,11 @@ export class V2TransferJob {
     }
   }
 
-  async #discoverEntry(cursor: DirectoryCursor, entry: V2CatalogEntry): Promise<void> {
+  async #discoverEntry(
+    cursor: DirectoryCursor,
+    parentGeneration: Uint8Array<ArrayBuffer>,
+    entry: V2CatalogEntry,
+  ): Promise<boolean> {
     this.#lifetime.signal.throwIfAborted()
     let path: readonly string[]
     try {
@@ -241,29 +296,42 @@ export class V2TransferJob {
     } catch (cause) {
       throw new V2CatalogTraversalError('Catalog entry exceeded the protocol path policy', { cause })
     }
+    this.#claimCatalogNode(entry.id)
     if (entry.kind === 'file') {
-      if (this.#options.selection.selected(entry, cursor.ancestry)) {
-        await this.#scheduleFile(entry, path)
-      }
-      return
-    }
-    if (this.#options.selection.shouldDiscover(entry.idText, cursor.ancestry)) {
-      await this.#discoverDirectory({
-        id: entry.id,
-        idText: entry.idText,
+      if (!this.#selection.selected(entry, cursor.ancestry)) return false
+      this.#plan.addFile({
         path,
-        ancestry: Object.freeze([...cursor.ancestry, entry.idText]),
+        fileId: entry.id,
+        parentDirectoryId: cursor.id,
+        parentGeneration,
+        expectedSize: entry.expectedSize,
         ...(entry.modifiedTime === undefined ? {} : { modifiedTime: entry.modifiedTime }),
       })
+      const measure = this.#measure.observeUniqueFile(entry.expectedSize)
+      this.#options.onMeasure?.(measure)
+      this.#emitProgress()
+      return true
     }
+    const selected = this.#selection.selected(entry, cursor.ancestry)
+    if (!this.#selection.shouldDiscover(entry.idText, cursor.ancestry)) return false
+    return this.#discoverDirectory({
+      id: entry.id,
+      idText: entry.idText,
+      path,
+      ancestry: Object.freeze([...cursor.ancestry, entry.idText]),
+      selected,
+      ...(entry.modifiedTime === undefined ? {} : { modifiedTime: entry.modifiedTime }),
+    })
   }
 
-  #outputDirectory(cursor: DirectoryCursor) {
-    return {
-      path: cursor.path,
-      ...(cursor.modifiedTime === undefined || !this.#options.output.capabilities.modificationTime
-        ? {}
-        : { modifiedTimeMilliseconds: cursor.modifiedTime.milliseconds }),
+  #claimCatalogNode(nodeId: Uint8Array): void {
+    try {
+      this.#plan.claimNode(nodeId)
+    } catch (cause) {
+      throw new V2CatalogTraversalError(
+        'Catalog traversal could not claim a unique bounded node identity',
+        { cause },
+      )
     }
   }
 
@@ -276,16 +344,15 @@ export class V2TransferJob {
   }
 
   async #scheduleFile(
-    entry: Extract<V2CatalogEntry, { kind: 'file' }>,
-    path: readonly string[],
+    file: V2OutputSelectionFile,
+    output: OutputSession,
   ): Promise<void> {
+    this.#lifetime.signal.throwIfAborted()
     await this.#pool.waitForCapacity()
-    const measure = this.#measure.observeUniqueFile(entry.expectedSize)
-    this.#options.onMeasure?.(measure)
-    this.#emitProgress()
+    this.#lifetime.signal.throwIfAborted()
     this.#pool.run(async () => {
       try {
-        await this.#transferFile(entry, path)
+        await this.#transferFile(file, output)
       } catch (error) {
         if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
         throw error
@@ -294,14 +361,14 @@ export class V2TransferJob {
   }
 
   async #transferFile(
-    entry: Extract<V2CatalogEntry, { kind: 'file' }>,
-    path: readonly string[],
+    file: V2OutputSelectionFile,
+    output: OutputSession,
   ): Promise<void> {
     let opened: V2OpenedRevision | undefined
     let transaction: ReturnType<typeof bindOutputFileTransaction>['transaction'] | undefined
     try {
-      opened = await this.#options.revisions.open(entry.id, this.#lifetime.signal)
-      if (opened.descriptor.exactSize !== entry.expectedSize) {
+      opened = await this.#options.revisions.open(file.fileId, this.#lifetime.signal)
+      if (opened.descriptor.exactSize !== file.expectedSize) {
         throw new V2FileRevisionChangedError(
           'Opened revision size changed from its committed catalog entry',
         )
@@ -312,19 +379,19 @@ export class V2TransferJob {
           fileId: opened.descriptor.fileIdText,
           fileRevision: opened.descriptor.fileRevisionText,
         },
-        path,
+        path: file.path,
         exactSize: opened.descriptor.exactSize,
-        ...(entry.modifiedTime === undefined || !this.#options.output.capabilities.modificationTime
+        ...(file.modifiedTime === undefined || !output.capabilities.modificationTime
           ? {}
-          : { modifiedTimeMilliseconds: entry.modifiedTime.milliseconds }),
+          : { modifiedTimeMilliseconds: file.modifiedTime.milliseconds }),
       }
       const bound = bindOutputFileTransaction(
         await this.#fileOutputOperation(
           'Unable to begin the output file transaction',
-          () => this.#options.output.beginFile(outputFile),
+          () => output.beginFile(outputFile),
         ),
         outputFile,
-        this.#options.output.identity,
+        output.identity,
       )
       transaction = bound.transaction
       const wanted = new ByteRangeSet(outputFile.exactSize, [byteRange(0n, outputFile.exactSize)])
@@ -360,13 +427,36 @@ export class V2TransferJob {
           !isV2FileScopedTransferFailure(error)) throw error
       this.#failures.record(Object.freeze({
         kind: 'file',
-        fileId: fileId(entry.idText),
+        fileId: fileId(encodeBase64Url(file.fileId)),
         reason: error,
       }))
     } finally {
       await opened?.release().catch((error: unknown) => {
         if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
       })
+    }
+  }
+
+  async #finalizeDirectories(
+    selection: V2OutputSelection,
+    output: OutputSession,
+  ): Promise<void> {
+    for (let index = selection.directories.length - 1; index >= 0; index -= 1) {
+      const directory = selection.directories[index]
+      if (directory === undefined) continue
+      await output.finalizeDirectory(
+        this.#outputDirectory(directory, output),
+        this.#lifetime.signal,
+      )
+    }
+  }
+
+  #outputDirectory(directory: V2OutputSelectionDirectory, output: OutputSession) {
+    return {
+      path: directory.path,
+      ...(directory.modifiedTime === undefined || !output.capabilities.modificationTime
+        ? {}
+        : { modifiedTimeMilliseconds: directory.modifiedTime.milliseconds }),
     }
   }
 
@@ -402,6 +492,22 @@ export class V2TransferJob {
       discoveryComplete: this.#discoveryComplete,
     }))
   }
+}
+
+function authenticatedPageGeneration(
+  descriptor: V2ShareDescriptor,
+  cursor: DirectoryCursor,
+  page: V2CatalogPage,
+  generation: Uint8Array<ArrayBuffer> | undefined,
+  pageIndex: number,
+): Uint8Array<ArrayBuffer> {
+  if (page.pageIndex !== pageIndex ||
+      !equalBytes(page.shareInstance, descriptor.shareInstance) ||
+      !equalBytes(page.directoryId, cursor.id) ||
+      (generation !== undefined && !equalBytes(page.generation, generation))) {
+    throw new V2CatalogTraversalError('Catalog page cursor changed authenticated authority')
+  }
+  return generation ?? page.generation.slice()
 }
 
 export function isV2FileScopedTransferFailure(error: unknown): boolean {

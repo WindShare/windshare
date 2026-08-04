@@ -22,11 +22,12 @@ var (
 	ErrRevisionIdentity      = errors.New("opened revision does not match the selected catalog file")
 	ErrOutputContract        = errors.New("output session violated its file transaction contract")
 	ErrCatalogEntriesOmitted = errors.New("catalog directory omitted children")
-	ErrCatalogLeaseContract  = errors.New("catalog reader returned no release callback")
+	ErrCatalogCursorContract = errors.New("catalog reader returned no page cursor")
 	ErrOutputPublishBlocked  = errors.New("output publication is blocked by an existing final path")
 	ErrOutputQuarantined     = errors.New("output file needs manual ownership review")
 	ErrOutputRetired         = errors.New("output file retirement completed without content transfer")
 	errRangeReaderContract   = errors.New("range reader violated its requested output interval")
+	errStopFileIteration     = errors.New("transfer file iteration settled")
 )
 
 type JobOutcome uint8
@@ -81,11 +82,9 @@ type JobResult struct {
 }
 
 type CatalogReader interface {
-	// Implementations must be safe for concurrent calls. The release callback is
-	// mandatory even when err is a typed directory failure, because authenticated
-	// failures also consume bounded cache memory. Returned immutable values remain
-	// valid after release; release relinquishes source-cache accounting only.
-	AcquireDirectory(context.Context, catalog.DirectoryID) (catalog.DirectorySnapshot, func(), error)
+	// A cursor owns one authenticated generation and releases every page before
+	// advancing. Implementations must be safe for concurrent directory cursors.
+	OpenDirectoryPages(context.Context, catalog.DirectoryID) (catalog.DirectoryPageCursor, error)
 }
 
 type DirectoryDiscoveryFailure interface {
@@ -183,7 +182,16 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 
 	runContext, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	state := newJobRun(j)
+	state, err := newJobRun(j)
+	if err != nil {
+		j.tracker.failDiscovery()
+		j.tracker.finishDiscovery()
+		j.tracker.closeUpdates()
+		return JobResult{
+			Outcome: JobPausedOutcome, Measure: j.Measure(), TerminationCause: err,
+		}
+	}
+	defer state.close()
 	if cause := context.Cause(runContext); cause != nil {
 		state.terminationCause = cause
 		j.tracker.failDiscovery()
@@ -237,21 +245,19 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 		Stage: TransferAdmissionCompleted, OutputSessionID: output.SessionID(),
 		SelectionIdentity: selection.Identity(), ResumeIntent: selection.ResumeIntent(),
 	})
-	for index := range state.plannedFiles {
+	if err := state.spool.VisitFiles(func(file plannedFile) error {
 		if cause := context.Cause(runContext); cause != nil {
-			state.terminationCause = cause
-			break
+			return cause
 		}
-		file := state.plannedFiles[index]
 		if err := state.transferPlannedFile(runContext, file); err != nil {
-			if state.terminationCause == nil {
-				state.terminationCause = err
-			}
-			break
+			return err
 		}
 		if state.settlementFailure != nil {
-			break
+			return errStopFileIteration
 		}
+		return nil
+	}); err != nil && !errors.Is(err, errStopFileIteration) && state.terminationCause == nil {
+		state.terminationCause = err
 	}
 	if state.terminationCause == nil && state.settlementFailure == nil {
 		if err := state.finalizeSelectionDirectories(runContext); err != nil {
@@ -304,7 +310,7 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 		return r.rejectUnstartedFile(ctx, plan, opened, NewJobDependencyContractError(err))
 	}
 	start, err := r.output.BeginFile(ctx, OutputFile{
-		Path: plan.path, ExpectedSize: plan.entry.ExpectedSize(), Descriptor: opened.Descriptor, Target: target,
+		Path: plan.path, ExpectedSize: plan.expectedSize, Descriptor: opened.Descriptor, Target: target,
 	})
 	if err != nil {
 		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
@@ -380,7 +386,9 @@ func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (Op
 		})
 		return OpenedRevision{}, false, nil
 	}
-	if err := validateOpenedFile(r.job.share, plan.entry, opened); err != nil {
+	if err := validateOpenedPlanFile(
+		r.job.share, plan.file, plan.expectedSize, plan.modified, opened,
+	); err != nil {
 		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 		r.files = append(r.files, FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureRevisionIdentity,

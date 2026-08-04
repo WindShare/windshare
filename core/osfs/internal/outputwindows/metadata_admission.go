@@ -129,14 +129,14 @@ func windowsV3PlanSelectionMetadata(selection transfer.OutputSelection) (windows
 	}
 
 	plan := windowsV3MetadataProbePlan{times: make([]windowsV3MetadataTimeWitness, 0, len(bounds)*2)}
-	for _, directory := range selection.Directories() {
-		if err := addTime(directory.Path, directory.ModifiedTime); err != nil {
-			return windowsV3MetadataProbePlan{}, err
-		}
+	if err := selection.VisitDirectories(func(directory transfer.OutputSelectionDirectory) error {
+		return addTime(directory.Path, directory.ModifiedTime)
+	}); err != nil {
+		return windowsV3MetadataProbePlan{}, err
 	}
-	for _, file := range selection.Files() {
+	if err := selection.VisitFiles(func(file transfer.OutputSelectionFile) error {
 		if file.ExpectedSize > math.MaxInt64 {
-			return windowsV3MetadataProbePlan{}, windowsV3Failure(operation, file.Path, errWindowsV3OutputUnsupported,
+			return windowsV3Failure(operation, file.Path, errWindowsV3OutputUnsupported,
 				errors.New("logical size exceeds the native signed file-offset range"))
 		}
 		plan.hasSize = true
@@ -144,8 +144,11 @@ func windowsV3PlanSelectionMetadata(selection transfer.OutputSelection) (windows
 			plan.maximumSize = file.ExpectedSize
 		}
 		if err := addTime(file.Path, file.ModifiedTime); err != nil {
-			return windowsV3MetadataProbePlan{}, err
+			return err
 		}
+		return nil
+	}); err != nil {
+		return windowsV3MetadataProbePlan{}, err
 	}
 	for _, current := range bounds {
 		if !current.present {

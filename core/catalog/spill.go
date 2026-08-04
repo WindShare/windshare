@@ -53,8 +53,8 @@ func NewFileSpillFactory(root string) *FileSpillFactory {
 }
 
 func defaultCatalogSpillFactory(backend CatalogBackend) (*FileSpillFactory, error) {
-	if durable, ok := backend.(*FileCatalogBackend); ok {
-		return NewFileSpillFactory(filepath.Join(durable.root, "sort")), nil
+	if durable, ok := backend.(interface{ CatalogSpillRoot() string }); ok {
+		return NewFileSpillFactory(durable.CatalogSpillRoot()), nil
 	}
 	root, err := os.MkdirTemp("", "windshare-catalog-store-")
 	if err != nil {

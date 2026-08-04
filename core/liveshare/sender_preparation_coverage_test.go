@@ -135,6 +135,12 @@ func newSenderPreparationHarness(t *testing.T) senderPreparationHarness {
 		config: SenderConfig{
 			ChunkSize: catalog.MinChunkSize,
 			Now:       func() time.Time { return time.Unix(1_700_000_000, 0) },
+			CatalogStorage: CatalogStorageFactoryFunc(func(
+				context.Context,
+				catalog.ShareInstance,
+			) (catalog.CatalogBackend, error) {
+				return catalog.NewMemoryCatalogBackend(), nil
+			}),
 		},
 		random:       &lockedReader{reader: mathrand.New(mathrand.NewSource(17))},
 		dependencies: productionSenderPreparationDependencies(),
