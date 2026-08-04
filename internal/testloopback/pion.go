@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 
 	"github.com/pion/ice/v4"
@@ -108,7 +109,7 @@ func (api *PionAPI) Close() error {
 		api.mu.Unlock()
 
 		var failures []error
-		for index := len(peers) - 1; index >= 0; index-- {
+		for index := range slices.Backward(peers) {
 			if err := peers[index].Close(); err != nil {
 				failures = append(failures, fmt.Errorf("close Pion peer %d: %w", index, err))
 			}

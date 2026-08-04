@@ -42,6 +42,15 @@ type rootResult struct {
 	err      error
 }
 
+type rootWaiter func(rootProcess, time.Duration) (rootResult, bool)
+
+type lifecycleDecision struct {
+	outcome     rootResult
+	reason      string
+	controlErr  error
+	rootSettled bool
+}
+
 type jobObjectBasicAccountingInformation struct {
 	TotalUserTime             int64
 	TotalKernelTime           int64
@@ -98,40 +107,28 @@ func Run(
 		return fmt.Errorf("publish Windows process readiness: %w", err)
 	}
 
-	waited := make(chan rootResult, 1)
-	go func() { waited <- waitRoot(root) }()
 	controls := make(chan trigger, 1)
 	go readControl(control, controls)
-	deadline := time.NewTimer(time.Duration(config.DeadlineMilliseconds) * time.Millisecond)
-	defer deadline.Stop()
-
-	reason := processowner.ReasonNatural
-	var controlErr error
-	var outcome rootResult
-	select {
-	case outcome = <-waited:
-	case requested := <-controls:
-		reason, controlErr = requested.reason, requested.err
-		outcome, err = interruptThenWait(
-			job,
-			root,
-			waited,
-			time.Duration(config.TerminationGraceMilliseconds)*time.Millisecond,
-		)
+	decision := awaitInitialOutcome(
+		root,
+		controls,
+		time.Now().Add(time.Duration(config.DeadlineMilliseconds)*time.Millisecond),
+		waitRootFor,
+		time.Now,
+	)
+	grace := time.Duration(config.TerminationGraceMilliseconds) * time.Millisecond
+	outcome := decision.outcome
+	controlErr := decision.controlErr
+	var cleanupErr error
+	if decision.rootSettled {
+		cleanupErr = retireJob(job, grace)
+	} else {
+		outcome, err, cleanupErr = interruptThenRetire(job, root, grace)
 		controlErr = errors.Join(controlErr, err)
-	case <-deadline.C:
-		reason = processowner.ReasonDeadline
-		outcome, controlErr = interruptThenWait(
-			job,
-			root,
-			waited,
-			time.Duration(config.TerminationGraceMilliseconds)*time.Millisecond,
-		)
 	}
-	cleanupErr := retireJob(job, time.Duration(config.TerminationGraceMilliseconds)*time.Millisecond)
 	result := processowner.Result{
 		ExitCode:     &outcome.exitCode,
-		Reason:       reason,
+		Reason:       decision.reason,
 		Error:        diagnostic(errors.Join(outcome.err, controlErr)),
 		CleanupError: diagnostic(cleanupErr),
 	}
@@ -276,34 +273,150 @@ func makeHandlesPrivate(handles []windows.Handle) error {
 	return result
 }
 
-func waitRoot(root rootProcess) rootResult {
-	if event, err := windows.WaitForSingleObject(root.handle, windows.INFINITE); err != nil {
-		return rootResult{exitCode: -1, err: fmt.Errorf("wait for Windows target: %w", err)}
-	} else if event != windows.WAIT_OBJECT_0 {
-		return rootResult{exitCode: -1, err: fmt.Errorf("wait for Windows target returned %#x", event)}
+func waitRootFor(root rootProcess, maximum time.Duration) (rootResult, bool) {
+	event, err := windows.WaitForSingleObject(root.handle, waitMilliseconds(maximum))
+	if err != nil {
+		return rootResult{exitCode: -1, err: fmt.Errorf("wait for Windows target: %w", err)}, true
+	}
+	if event == uint32(windows.WAIT_TIMEOUT) {
+		return rootResult{}, false
+	}
+	if event != windows.WAIT_OBJECT_0 {
+		return rootResult{
+			exitCode: -1,
+			err:      fmt.Errorf("wait for Windows target returned %#x", event),
+		}, true
 	}
 	var exitCode uint32
 	if err := windows.GetExitCodeProcess(root.handle, &exitCode); err != nil {
-		return rootResult{exitCode: -1, err: fmt.Errorf("read Windows target exit code: %w", err)}
+		return rootResult{exitCode: -1, err: fmt.Errorf("read Windows target exit code: %w", err)}, true
 	}
-	return rootResult{exitCode: int64(exitCode)}
+	return rootResult{exitCode: int64(exitCode)}, true
 }
 
-func interruptThenWait(
+func waitMilliseconds(maximum time.Duration) uint32 {
+	if maximum <= 0 {
+		return 0
+	}
+	milliseconds := maximum.Milliseconds()
+	if milliseconds == 0 {
+		return 1
+	}
+	return uint32(milliseconds)
+}
+
+func awaitInitialOutcome(
+	root rootProcess,
+	controls <-chan trigger,
+	deadline time.Time,
+	waitRoot rootWaiter,
+	now func() time.Time,
+) lifecycleDecision {
+	var poll *time.Timer
+	defer func() {
+		if poll != nil {
+			poll.Stop()
+		}
+	}()
+	for {
+		// The process handle is the source of truth. Observing it before queued
+		// Go signals prevents scheduler delay from reclassifying an earlier exit.
+		if outcome, settled := waitRoot(root, 0); settled {
+			return lifecycleDecision{
+				outcome: outcome, reason: processowner.ReasonNatural, rootSettled: true,
+			}
+		}
+		select {
+		case requested := <-controls:
+			return lifecycleDecision{reason: requested.reason, controlErr: requested.err}
+		default:
+		}
+		remaining := deadline.Sub(now())
+		if remaining <= 0 {
+			return lifecycleDecision{reason: processowner.ReasonDeadline}
+		}
+		if remaining > jobPollInterval {
+			remaining = jobPollInterval
+		}
+		if poll == nil {
+			poll = time.NewTimer(remaining)
+		} else {
+			poll.Reset(remaining)
+		}
+		select {
+		case requested := <-controls:
+			if !poll.Stop() {
+				select {
+				case <-poll.C:
+				default:
+				}
+			}
+			return lifecycleDecision{reason: requested.reason, controlErr: requested.err}
+		case <-poll.C:
+		}
+	}
+}
+
+func interruptThenRetire(
 	job windows.Handle,
 	root rootProcess,
-	waited <-chan rootResult,
 	grace time.Duration,
-) (rootResult, error) {
+) (rootResult, error, error) {
 	interruptErr := windows.GenerateConsoleCtrlEvent(windows.CTRL_BREAK_EVENT, root.id)
-	timer := time.NewTimer(grace)
-	defer timer.Stop()
-	select {
-	case result := <-waited:
-		return result, interruptErr
-	case <-timer.C:
-		terminateErr := windows.TerminateJobObject(job, forcedTerminationCode)
-		return <-waited, errors.Join(interruptErr, terminateErr)
+	if outcome, settled := waitRootFor(root, grace); settled {
+		return outcome, interruptErr, retireJob(job, grace)
+	}
+	terminateErr := windows.TerminateJobObject(job, forcedTerminationCode)
+	outcome, cleanupErr := retireForcedJob(job, root, grace)
+	return outcome, errors.Join(interruptErr, terminateErr), cleanupErr
+}
+
+func retireForcedJob(job windows.Handle, root rootProcess, maximum time.Duration) (rootResult, error) {
+	deadline := time.Now().Add(maximum)
+	outcome := rootResult{exitCode: -1}
+	rootSettled := false
+	emptyPolls := 0
+	var active uint32
+	for {
+		if !rootSettled {
+			if observed, settled := waitRootFor(root, 0); settled {
+				outcome, rootSettled = observed, true
+			}
+		}
+		observedActive, err := activeProcessCount(job)
+		if err != nil {
+			if !rootSettled {
+				outcome.err = errors.Join(outcome.err, errors.New(
+					"windows target state was not observable during forced retirement",
+				))
+			}
+			return outcome, err
+		}
+		active = observedActive
+		if active == 0 {
+			emptyPolls++
+		} else {
+			emptyPolls = 0
+		}
+		if rootSettled && emptyPolls >= jobEmptyConfirmationPolls {
+			return outcome, nil
+		}
+		if !time.Now().Before(deadline) {
+			if !rootSettled {
+				outcome.err = errors.Join(outcome.err, errors.New(
+					"windows target did not signal during forced retirement",
+				))
+			}
+			if emptyPolls >= jobEmptyConfirmationPolls {
+				return outcome, nil
+			}
+			return outcome, fmt.Errorf(
+				"windows Job Object did not become stably empty during forced retirement: active_processes=%d stable_empty_polls=%d",
+				active,
+				emptyPolls,
+			)
+		}
+		time.Sleep(jobPollInterval)
 	}
 }
 
@@ -333,7 +446,11 @@ func retireJob(job windows.Handle, maximum time.Duration) error {
 			}
 		}
 		if !time.Now().Before(deadline) {
-			return errors.Join(terminateErr, errors.New("windows Job Object did not become empty"))
+			return errors.Join(terminateErr, fmt.Errorf(
+				"windows Job Object did not become stably empty: active_processes=%d stable_empty_polls=%d",
+				active,
+				emptyPolls,
+			))
 		}
 		time.Sleep(jobPollInterval)
 	}

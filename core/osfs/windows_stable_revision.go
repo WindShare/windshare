@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -224,7 +225,7 @@ func (b *WindowsStabilityBinder) ValidateRoots(roots []*os.Root) error {
 
 func closeWindowsRevisionRoots(roots []windowsRevisionRoot) error {
 	var result error
-	for index := len(roots) - 1; index >= 0; index-- {
+	for index := range slices.Backward(roots) {
 		result = errors.Join(result, roots[index].Close())
 	}
 	return result

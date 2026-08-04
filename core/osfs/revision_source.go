@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -102,7 +103,7 @@ func closeOwnedBinder(closer io.Closer) error {
 
 func closeRoots(roots []*os.Root) error {
 	var result error
-	for index := len(roots) - 1; index >= 0; index-- {
+	for index := range slices.Backward(roots) {
 		result = errors.Join(result, roots[index].Close())
 	}
 	return result
@@ -204,7 +205,7 @@ func (s *RootedRevisionSource) Close() error {
 	s.closer = nil
 	s.mu.Unlock()
 	var result error
-	for index := len(roots) - 1; index >= 0; index-- {
+	for index := range slices.Backward(roots) {
 		result = errors.Join(result, roots[index].Close())
 	}
 	result = errors.Join(result, closeOwnedBinder(closer))

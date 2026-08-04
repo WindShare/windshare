@@ -319,8 +319,7 @@ func TestReceiverRevisionFailureAndDuplicateLeasePaths(t *testing.T) {
 	if _, err := receiver.OpenRevision(context.Background(), fixture.fileID); err == nil {
 		t.Fatal("duplicate lease was accepted")
 	} else {
-		var remote RemoteOperationError
-		if !errors.As(err, &remote) {
+		if _, ok := errors.AsType[RemoteOperationError](err); !ok {
 			t.Fatalf("duplicate lease error = %v", err)
 		}
 	}
