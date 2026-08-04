@@ -1,13 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import {
-  parseAttemptEvidence,
-  type BrowserAttemptEvidence,
-  type BrowserSelectedPairEvidence,
-  type CandidateCounts,
-} from '../../scripts/browser-evidence/attempt-evidence'
-
 import { V2LaneSet, type V2BlockLane } from '../../src/content/v2-broker'
 import type { V2BlockRecord } from '../../src/content/v2-records'
+import type {
+  V2BrowserConnectivityAttemptDiagnostic,
+  V2BrowserSelectedPairDiagnostic,
+  V2CandidateCounts,
+} from '../../src/connectivity/diagnostics'
 import type {
   OfferChannelFactory,
   V2PeerOfferAttemptObserver,
@@ -163,7 +161,7 @@ class ObservedSuccessfulOffers implements OfferChannelFactory {
     observer?: V2PeerOfferAttemptObserver,
   ): Promise<PeerChannel> {
     this.calls += 1
-    const counts: CandidateCounts = Object.freeze({ localEmitted: 1, remoteAccepted: 1 })
+    const counts: V2CandidateCounts = Object.freeze({ localEmitted: 1, remoteAccepted: 1 })
     observer?.offerCreated(counts)
     observer?.offerSent(counts)
     observer?.answerReceived(counts)
@@ -178,7 +176,7 @@ class PostOpenSignalingOffers implements OfferChannelFactory {
     signal: AbortSignal,
     observer?: V2PeerOfferAttemptObserver,
   ): Promise<PeerChannel> {
-    const counts: CandidateCounts = Object.freeze({ localEmitted: 1, remoteAccepted: 1 })
+    const counts: V2CandidateCounts = Object.freeze({ localEmitted: 1, remoteAccepted: 1 })
     observer?.offerCreated(counts)
     await route.send({
       kind: SIGNAL_KIND_OFFER,
@@ -191,7 +189,7 @@ class PostOpenSignalingOffers implements OfferChannelFactory {
   }
 }
 
-const SELECTED_PAIR: BrowserSelectedPairEvidence = Object.freeze({
+const SELECTED_PAIR: V2BrowserSelectedPairDiagnostic = Object.freeze({
   candidatePairId: 'pair-1',
   local: Object.freeze({ candidateId: 'local-1', candidateType: 'host', protocol: 'udp' }),
   remote: Object.freeze({ candidateId: 'remote-1', candidateType: 'host', protocol: 'udp' }),
@@ -275,7 +273,7 @@ function fixture(
   onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void,
   options: {
     readonly rtcApiPresent?: () => boolean
-    readonly connectivityObserver?: (evidence: BrowserAttemptEvidence) => void
+    readonly connectivityObserver?: (diagnostic: V2BrowserConnectivityAttemptDiagnostic) => void
     readonly randomBytes?: (length: number) => Uint8Array
     readonly onContentLaneDetached?: (observation: V2ContentLaneDetachmentObservation) => void
     readonly onPeerError?: (error: unknown) => void
@@ -324,7 +322,7 @@ describe('v2 receiver content activation policy', () => {
   it('falls back without allocating a binding when the native API is absent', async () => {
     vi.useFakeTimers()
     const offers = new SuccessfulOffers()
-    const evidence: BrowserAttemptEvidence[] = []
+    const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
     let randomCalls = 0
     const { connectivity, lanes } = fixture(offers, undefined, {
       rtcApiPresent: () => false,
@@ -332,7 +330,7 @@ describe('v2 receiver content activation policy', () => {
         randomCalls += 1
         return new Uint8Array(length).fill(8)
       },
-      connectivityObserver: (event) => evidence.push(event),
+      connectivityObserver: (event) => diagnostics.push(event),
     })
 
     const preview = connectivity.begin('preview')
@@ -340,7 +338,7 @@ describe('v2 receiver content activation policy', () => {
 
     expect(offers.calls).toBe(0)
     expect(randomCalls).toBe(0)
-    expect(evidence).toEqual([])
+    expect(diagnostics).toEqual([])
     expect(lanes.laneIds()).toEqual([1])
     expect(preview.routes.allows('relay')).toBe(true)
 
@@ -376,16 +374,16 @@ describe('v2 receiver content activation policy', () => {
 
   it('emits one schema-valid lifecycle and does not fail it during normal cleanup', async () => {
     vi.useFakeTimers()
-    const evidence: BrowserAttemptEvidence[] = []
+    const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
     const { connectivity, lanes } = fixture(new ObservedSuccessfulOffers(), undefined, {
-      connectivityObserver: (event) => evidence.push(parseAttemptEvidence(event) as BrowserAttemptEvidence),
+      connectivityObserver: (event) => diagnostics.push(event),
     })
 
     const preview = connectivity.begin('preview')
     await turn()
 
     expect(lanes.laneIds()).toEqual([2])
-    expect(evidence.map((event) => event.stage)).toEqual([
+    expect(diagnostics.map((event) => event.stage)).toEqual([
       'started',
       'offer-created',
       'offer-sent',
@@ -395,8 +393,8 @@ describe('v2 receiver content activation policy', () => {
       'lane-attached',
       'admitted',
     ])
-    expect(evidence.map((event) => event.sideSequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
-    expect(evidence.at(-1)).toMatchObject({
+    expect(diagnostics.map((event) => event.sideSequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+    expect(diagnostics.at(-1)).toMatchObject({
       stage: 'admitted',
       lane: { laneId: 2, laneEpoch: 1 },
       selectedPair: SELECTED_PAIR,
@@ -404,7 +402,7 @@ describe('v2 receiver content activation policy', () => {
 
     preview.close()
     await connectivity.close()
-    expect(evidence.filter((event) => event.stage === 'failed')).toEqual([])
+    expect(diagnostics.filter((event) => event.stage === 'failed')).toEqual([])
   })
 
   it('isolates observer exceptions from authenticated lane admission', async () => {
@@ -413,7 +411,7 @@ describe('v2 receiver content activation policy', () => {
     const { connectivity, lanes, errors } = fixture(new ObservedSuccessfulOffers(), undefined, {
       connectivityObserver: (event) => {
         stages.push(event.stage)
-        throw new Error('synthetic evidence consumer failure')
+        throw new Error('synthetic diagnostic observer failure')
       },
     })
 
@@ -430,9 +428,9 @@ describe('v2 receiver content activation policy', () => {
 
   it('blocks grant, attach, and admission after a post-Open authenticated failure', async () => {
     vi.useFakeTimers()
-    const evidence: BrowserAttemptEvidence[] = []
+    const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
     const { connectivity, lanes, session } = fixture(new PostOpenSignalingOffers(), undefined, {
-      connectivityObserver: (event) => evidence.push(parseAttemptEvidence(event) as BrowserAttemptEvidence),
+      connectivityObserver: (event) => diagnostics.push(event),
     })
     session.grantGate = new Promise<void>(() => undefined)
     const preview = connectivity.begin('preview')
@@ -448,7 +446,7 @@ describe('v2 receiver content activation policy', () => {
     }))
     await turn()
 
-    expect(evidence.map((event) => event.stage)).toEqual([
+    expect(diagnostics.map((event) => event.stage)).toEqual([
       'started',
       'offer-created',
       'offer-sent',
@@ -456,7 +454,7 @@ describe('v2 receiver content activation policy', () => {
       'datachannel-open',
       'failed',
     ])
-    expect(evidence.at(-1)).toMatchObject({
+    expect(diagnostics.at(-1)).toMatchObject({
       failedAtStage: 'lane-granted',
       typedErrorCode: 'peer-admission',
       failureMessage: 'sender rejected lane admission',
@@ -471,24 +469,24 @@ describe('v2 receiver content activation policy', () => {
 
     preview.close()
     await connectivity.close()
-    expect(evidence.filter((event) => event.stage === 'failed')).toHaveLength(1)
+    expect(diagnostics.filter((event) => event.stage === 'failed')).toHaveLength(1)
   })
 
   it('starts and terminalizes an API-present attempt even when negotiation fails', async () => {
     vi.useFakeTimers()
-    const evidence: BrowserAttemptEvidence[] = []
+    const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
     const { connectivity, lanes } = fixture({
       offer: async () => { throw new Error('independent probe did not control this attempt') },
     }, undefined, {
-      connectivityObserver: (event) => evidence.push(parseAttemptEvidence(event) as BrowserAttemptEvidence),
+      connectivityObserver: (event) => diagnostics.push(event),
       onPeerError: () => { throw new Error('synthetic peer diagnostic failure') },
     })
 
     const preview = connectivity.begin('preview')
     await turn()
 
-    expect(evidence.map((event) => event.stage)).toEqual(['started', 'failed'])
-    expect(evidence.at(-1)).toMatchObject({
+    expect(diagnostics.map((event) => event.stage)).toEqual(['started', 'failed'])
+    expect(diagnostics.at(-1)).toMatchObject({
       failedAtStage: 'offer-created',
       failureScope: 'attempt',
       typedErrorCode: 'unexpected',
@@ -498,22 +496,22 @@ describe('v2 receiver content activation policy', () => {
 
     preview.close()
     await connectivity.close()
-    expect(evidence.filter((event) => event.stage === 'failed')).toHaveLength(1)
+    expect(diagnostics.filter((event) => event.stage === 'failed')).toHaveLength(1)
   })
 
   it('terminalizes a pending attempt exactly once when the runtime stops', async () => {
     vi.useFakeTimers()
-    const evidence: BrowserAttemptEvidence[] = []
+    const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
     const { connectivity } = fixture(new PendingOffers(), undefined, {
-      connectivityObserver: (event) => evidence.push(parseAttemptEvidence(event) as BrowserAttemptEvidence),
+      connectivityObserver: (event) => diagnostics.push(event),
     })
     connectivity.begin('preview')
     await turn()
 
     await connectivity.close()
 
-    expect(evidence.map((event) => event.stage)).toEqual(['started', 'failed'])
-    expect(evidence.at(-1)).toMatchObject({
+    expect(diagnostics.map((event) => event.stage)).toEqual(['started', 'failed'])
+    expect(diagnostics.at(-1)).toMatchObject({
       failedAtStage: 'offer-created',
       typedErrorCode: 'runtime-stopped',
     })

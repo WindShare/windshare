@@ -12,8 +12,6 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
-
-	"github.com/windshare/windshare/core/liveshare"
 )
 
 // 退出码语义(§6.9 工程要求):脚本据此区分"该重试"(网络)与"该改命令"
@@ -44,79 +42,31 @@ type App struct {
 	stderrMu            sync.Mutex
 	receiverPeerFactory func() (receiverPeerStarter, error)
 	receiverClock       receiverAdmissionClock
-	senderPeerFactories SenderPeerFactoryProvider
-	senderPeerEvidence  io.Writer
 	resumeSource        resumeStateSource
 	resumeInteractive   func(io.Reader, io.Writer) bool
 	processTrace        *processTrace
-	scanAdmission       liveshare.DirectoryScanAdmission
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
 // /"中断下载"语义,§6.9)。
 func Main() int {
-	return RunProcess(os.Args[1:], ProcessConfig{})
-}
-
-// ProcessConfig carries capability-shaped dependencies for the dedicated
-// browser-test entry. Production Main always supplies the inert zero value; no
-// scalar path, address, environment, or profile knob crosses the CLI boundary.
-type ProcessConfig struct {
-	SenderPeerFactories SenderPeerFactoryProvider
-	SenderPeerEvidence  io.Writer
-	CatalogGate         CatalogEnumerationGate
-}
-
-func RunProcess(args []string, config ProcessConfig) int {
 	trace, err := newProcessTrace(os.LookupEnv)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, settleCatalogGateSetupFailure(err, config.CatalogGate, nil))
-		return ExitFailure
-	}
-	scanGate, err := prepareCatalogEnumerationGate(trace, config.CatalogGate, args)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, settleCatalogGateSetupFailure(err, config.CatalogGate, trace))
+		fmt.Fprintln(os.Stderr, err)
 		return ExitFailure
 	}
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
-	var control *testLifecycleControl
-	if trace != nil && len(args) > 0 && args[0] == "share" {
-		control, err = startTestLifecycleControl(trace, interrupts)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, settleCatalogGateSetupFailure(err, config.CatalogGate, trace))
-			return ExitFailure
-		}
-	}
 	app := &App{
 		Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
-		senderPeerFactories: config.SenderPeerFactories,
-		senderPeerEvidence:  config.SenderPeerEvidence,
-		processTrace:        trace,
-		scanAdmission:       scanGate,
+		processTrace: trace,
 	}
 	code := runCLIWithInterruptEscalation(
 		interrupts,
 		os.Exit,
-		func(ctx context.Context) int { return app.Run(ctx, args) },
+		func(ctx context.Context) int { return app.Run(ctx, os.Args[1:]) },
 	)
-	if control != nil {
-		if err := control.Close(); err != nil {
-			fmt.Fprintln(os.Stderr, "windshare: close test lifecycle control:", err)
-			if code == ExitOK {
-				code = ExitFailure
-			}
-		}
-	}
-	if config.CatalogGate != nil {
-		if err := config.CatalogGate.Close(); err != nil {
-			fmt.Fprintln(os.Stderr, "windshare: close catalog enumeration gate:", err)
-			if code == ExitOK {
-				code = ExitFailure
-			}
-		}
-	}
 	if err := trace.close(); err != nil {
 		fmt.Fprintln(os.Stderr, "windshare: publish test trace:", err)
 		if code == ExitOK {

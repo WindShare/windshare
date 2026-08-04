@@ -1,7 +1,0 @@
-self-hosted-runner:
-  labels:
-    - windshare-network-matrix
-
-config-variables:
-  - WINDSHARE_BROWSER_NETWORK_RUNTIME_CONFIG
-  - WINDSHARE_BROWSER_NETWORK_OIDC_AUDIENCE

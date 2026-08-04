@@ -9,11 +9,11 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 )
 
-func openOutputRuntimeTestPlatform(string, bool) (outputcap.Platform, error) {
+func openNativeOutputRuntimeTestPlatform(string, bool) (outputcap.Platform, error) {
 	return nil, outputcap.ErrRecoverableOutputUnsupported
 }
 
-func newRuntimeTestRootSpec(t testing.TB) runtimeTestRootSpec {
+func newNativeRuntimeTestRootSpec(t testing.TB) runtimeTestRootSpec {
 	t.Helper()
 	t.Skipf("certified durable-output test roots are unsupported on %s", runtime.GOOS)
 	return runtimeTestRootSpec{}

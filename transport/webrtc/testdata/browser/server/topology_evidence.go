@@ -32,14 +32,14 @@ func (runtime *topologyRuntime) selectedPairEvidence(
 	}
 	if peer == nil || peer.SCTP() == nil || peer.SCTP().Transport() == nil ||
 		peer.SCTP().Transport().ICETransport() == nil {
-		return pionSelectedPairEvidence{}, fmt.Errorf("Pion ICE transport is unavailable")
+		return pionSelectedPairEvidence{}, fmt.Errorf("pion ICE transport is unavailable")
 	}
 	pair, err := peer.SCTP().Transport().ICETransport().GetSelectedCandidatePair()
 	if err != nil {
 		return pionSelectedPairEvidence{}, fmt.Errorf("read Pion selected candidate pair: %w", err)
 	}
 	if pair == nil || pair.Local == nil || pair.Remote == nil {
-		return pionSelectedPairEvidence{}, fmt.Errorf("Pion selected candidate pair is unavailable")
+		return pionSelectedPairEvidence{}, fmt.Errorf("pion selected candidate pair is unavailable")
 	}
 	evidence := pionSelectedPairEvidence{
 		Local:  pionCandidateFromICE(pair.Local),
@@ -80,7 +80,7 @@ func (runtime *topologyRuntime) validateSelectedPair(pair pionSelectedPairEviden
 	}
 	if pair.Local.Address == pair.Remote.Address && pair.Local.Port == pair.Remote.Port &&
 		pair.Local.Protocol == pair.Remote.Protocol {
-		return fmt.Errorf("Pion selected pair does not identify distinct transport endpoints")
+		return fmt.Errorf("pion selected pair does not identify distinct transport endpoints")
 	}
 	return nil
 }

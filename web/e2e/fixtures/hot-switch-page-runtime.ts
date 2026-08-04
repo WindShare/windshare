@@ -1,9 +1,9 @@
-import type { BrowserAttemptEvidence } from '../../scripts/browser-evidence/attempt-evidence'
+import type { V2BrowserConnectivityAttemptDiagnostic } from '../../src/connectivity/diagnostics'
 import type {
   HotSwitchLaneObservation,
   HotSwitchPageEvent,
   ObservedTransferFailure,
-} from './hot-switch-evidence'
+} from './hot-switch-contract'
 
 const GATEWAY_MODULE_PATH = '/src/ui/v2-gateway.ts'
 const OFFER_MODULE_PATH = '/src/connectivity/peer-offer.ts'
@@ -311,8 +311,8 @@ function createGateway(
   }
   return new modules.gateway.V2BrowserReceiverGateway({
     offersFactory: () => gatedOffers,
-    connectivityObserver: (evidence: BrowserAttemptEvidence) => {
-      bridge.publish({ kind: 'attempt', evidence }).catch(() => undefined)
+    connectivityObserver: (diagnostic: V2BrowserConnectivityAttemptDiagnostic) => {
+      bridge.publish({ kind: 'attempt', evidence: diagnostic }).catch(() => undefined)
     },
     onBlockDispatched: (observation) => {
       bridge.publish({

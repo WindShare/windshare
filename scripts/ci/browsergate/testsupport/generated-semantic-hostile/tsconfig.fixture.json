@@ -1,4 +1,0 @@
-{
-  "_why": "A missing base makes accidental Rolldown tsconfig discovery fail instead of silently changing transforms.",
-  "extends": "./hostile-generated-semantic-base-must-not-exist.json"
-}

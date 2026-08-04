@@ -1,37 +1,36 @@
-name: Core Release Verification
+name: Core Candidate Release
 
 on:
   push:
     tags:
-      - "core/v*"
-      - "!core/v0.3.0"
       - "core-candidate/v*/**"
-      - "!core-candidate/v0.3.0/**"
   workflow_dispatch:
     inputs:
       commit_sha:
-        description: Exact 40-character commit SHA to verify
+        description: Exact 40-character commit SHA to diagnose
         required: true
         type: string
       version:
-        description: Explicit new core module version represented by the candidate
+        description: Core version to diagnose (vX.Y.Z)
         required: true
         type: string
 
-# Candidate code needs repository contents only. In particular, this workflow
-# cannot create a release, move a tag, publish a package, or mint an OIDC token.
 permissions:
   contents: read
+
+env:
+  GOTOOLCHAIN: local
 
 jobs:
   candidate:
     name: Resolve exact candidate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       commit_sha: ${{ steps.candidate.outputs.commit_sha }}
       version: ${{ steps.candidate.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -51,15 +50,20 @@ jobs:
           EVENT_SHA: ${{ github.sha }}
           INPUT_COMMIT_SHA: ${{ inputs.commit_sha }}
           INPUT_VERSION: ${{ inputs.version }}
-        run: bash scripts/ci/core-release-ref.sh
+        run: bash scripts/ci/core-release-ref.sh resolve
 
   linux-ext4:
     name: Linux ext4 extracted core and process-restart certification
     needs: candidate
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Per-version lanes serialize competing candidates without making the two
+    # platform certifications wait for one another.
+    concurrency:
+      group: core-release-linux-${{ needs.candidate.outputs.version }}
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.candidate.outputs.commit_sha }}
           fetch-depth: 1
@@ -71,10 +75,18 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/setup-go@v7
         with:
-          go-version-file: core/go.mod
+          go-version: stable
+          check-latest: true
           cache: false
+      - name: Install latest govulncheck
+        env:
+          GOBIN: ${{ runner.temp }}/go-tools
+        run: |
+          mkdir -p "$GOBIN"
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          echo "$GOBIN" >> "$GITHUB_PATH"
       - name: Extract and verify Linux/ext4 candidate
         env:
           CORE_RELEASE_VERSION: ${{ needs.candidate.outputs.version }}
@@ -85,11 +97,12 @@ jobs:
     name: Windows NTFS extracted core and process-restart certification
     needs: candidate
     runs-on: windows-latest
-    # Standard, race, coverage, and standard-user NTFS certification are four
-    # independent evidence runs; their package-level bounds remain 30m each.
     timeout-minutes: 90
+    concurrency:
+      group: core-release-windows-${{ needs.candidate.outputs.version }}
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.candidate.outputs.commit_sha }}
           fetch-depth: 1
@@ -107,10 +120,22 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $status.Count -ne 0) {
               throw "candidate checkout is not clean: $($status -join '; ')"
           }
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/setup-go@v7
         with:
-          go-version-file: core/go.mod
+          go-version: stable
+          check-latest: true
           cache: false
+      - name: Install latest govulncheck
+        shell: pwsh
+        env:
+          GOBIN: ${{ runner.temp }}/go-tools
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:GOBIN | Out-Null
+          & go install golang.org/x/vuln/cmd/govulncheck@latest
+          if ($LASTEXITCODE -ne 0) {
+              throw "govulncheck installation exited with code $LASTEXITCODE"
+          }
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $env:GOBIN -Encoding utf8
       - name: Verify standard-user native gate helper contract
         shell: pwsh
         run: ./scripts/ci/core-release-windows-native.tests.ps1
@@ -120,3 +145,29 @@ jobs:
           CORE_RELEASE_VERSION: ${{ needs.candidate.outputs.version }}
           CORE_RELEASE_COMMIT_SHA: ${{ needs.candidate.outputs.commit_sha }}
         run: ./scripts/ci/windows/core-release.ps1 -Version $env:CORE_RELEASE_VERSION -CommitSHA $env:CORE_RELEASE_COMMIT_SHA -NativeProfile windows-ntfs
+
+  publish:
+    name: Publish immutable core tag
+    if: github.event_name == 'push'
+    needs:
+      - candidate
+      - linux-ext4
+      - windows-ntfs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: core-release-publish-${{ needs.candidate.outputs.version }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.candidate.outputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Create immutable core release tag
+        env:
+          CORE_RELEASE_VERSION: ${{ needs.candidate.outputs.version }}
+          CORE_RELEASE_COMMIT_SHA: ${{ needs.candidate.outputs.commit_sha }}
+        run: bash scripts/ci/core-release-ref.sh publish

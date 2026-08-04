@@ -136,10 +136,10 @@ export class IndexedDbV2CatalogPageStore implements V2CatalogPageStore {
   async loadDirectory(directoryIdText: string): Promise<V2CommittedDirectory | undefined> {
     this.#requireOpen()
     const transaction = this.#database.transaction(CATALOG_DIRECTORY_STORE, 'readonly')
-    const record = await requestResult<StoredDirectoryState | undefined>(
+    const record = await readTransactionResult<StoredDirectoryState | undefined>(
+      transaction,
       transaction.objectStore(CATALOG_DIRECTORY_STORE).get(this.#directoryKey(directoryIdText)),
     )
-    await waitForIndexedDbTransaction(transaction)
     return record === undefined || record.kind !== 'committed' || record.pathPolicy !== V2_PATH_POLICY
       ? undefined
       : snapshotDirectory(record)
@@ -148,10 +148,10 @@ export class IndexedDbV2CatalogPageStore implements V2CatalogPageStore {
   async loadFailure(directoryIdText: string): Promise<V2CachedDirectoryFailure | undefined> {
     this.#requireOpen()
     const transaction = this.#database.transaction(CATALOG_DIRECTORY_STORE, 'readonly')
-    const record = await requestResult<StoredDirectoryState | undefined>(
+    const record = await readTransactionResult<StoredDirectoryState | undefined>(
+      transaction,
       transaction.objectStore(CATALOG_DIRECTORY_STORE).get(this.#directoryKey(directoryIdText)),
     )
-    await waitForIndexedDbTransaction(transaction)
     return record?.kind === 'failure' && record.pathPolicy === V2_PATH_POLICY
       ? snapshotCachedFailure(record)
       : undefined
@@ -163,12 +163,12 @@ export class IndexedDbV2CatalogPageStore implements V2CatalogPageStore {
   ): Promise<V2CatalogPage | undefined> {
     this.#requireOpen()
     const transaction = this.#database.transaction(CATALOG_PAGE_STORE, 'readonly')
-    const record = await requestResult<StoredPage | undefined>(
+    const record = await readTransactionResult<StoredPage | undefined>(
+      transaction,
       transaction.objectStore(CATALOG_PAGE_STORE).get(
         this.#pageKey(directory.directoryIdText, directory.generationText, pageIndex),
       ),
     )
-    await waitForIndexedDbTransaction(transaction)
     return record?.page
   }
 
@@ -447,6 +447,24 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
     request.addEventListener('success', () => resolve(request.result), { once: true })
     request.addEventListener('error', () => reject(request.error), { once: true })
   })
+}
+
+async function readTransactionResult<T>(
+  transaction: IDBTransaction,
+  request: IDBRequest<T>,
+): Promise<T> {
+  // IndexedDB may complete a read transaction in the microtask that resolves
+  // its final request. Registering first prevents fast cached reads from missing
+  // the only completion event and hanging their caller indefinitely.
+  const completion = waitForIndexedDbTransaction(transaction)
+  try {
+    const result = await requestResult(request)
+    await completion
+    return result
+  } catch (error) {
+    await completion.catch(() => undefined)
+    throw error
+  }
 }
 
 function databaseOpenResult(request: IDBOpenDBRequest): Promise<IDBDatabase> {

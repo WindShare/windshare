@@ -28,9 +28,10 @@ func TestParseValidateAndAggregateBenchmarkSamples(t *testing.T) {
 			t.Fatal(err)
 		}
 		samples = append(samples, BenchmarkSample{
-			Index: index + 1,
-			Command: CommandEvidence{
-				ProcessID: index + 10, StartedAt: time.Unix(int64(index), 0), FinishedAt: time.Unix(int64(index), 1),
+			Index: index + 1, Status: OutcomeSucceeded,
+			Command: CommandDiagnostic{
+				ProcessID: index + 10, Outcome: OutcomeSucceeded,
+				StartedAt: time.Unix(int64(index), 0), FinishedAt: time.Unix(int64(index), 1),
 			},
 			Rows: rows,
 		})
@@ -53,7 +54,7 @@ func TestParseValidateAndAggregateBenchmarkSamples(t *testing.T) {
 	}
 }
 
-func TestBenchmarkContractRejectsMalformedOrIncompleteEvidence(t *testing.T) {
+func TestBenchmarkContractRejectsMalformedOrIncompleteOutput(t *testing.T) {
 	tests := []struct {
 		name   string
 		output string
@@ -90,9 +91,12 @@ func TestMetricOracleFailuresAreExplicit(t *testing.T) {
 		},
 	}
 	samples := []BenchmarkSample{{
-		Index:   1,
-		Command: CommandEvidence{ProcessID: 1, StartedAt: time.Unix(1, 0), FinishedAt: time.Unix(1, 1)},
-		Rows:    []BenchmarkReading{{Name: "BenchmarkUnit", Metrics: map[string]float64{"peak": 10}}},
+		Index: 1, Status: OutcomeSucceeded,
+		Command: CommandDiagnostic{
+			ProcessID: 1, Outcome: OutcomeSucceeded,
+			StartedAt: time.Unix(1, 0), FinishedAt: time.Unix(1, 1),
+		},
+		Rows: []BenchmarkReading{{Name: "BenchmarkUnit", Metrics: map[string]float64{"peak": 10}}},
 	}}
 	results := EvaluateOracles(workload, samples)
 	if OraclesPassed(results) || results[1].Passed || results[2].Passed {
@@ -106,9 +110,10 @@ func TestMetricOracleFailuresAreExplicit(t *testing.T) {
 func TestPionOraclesPreserveProductionGeometryAndBufferPolicy(t *testing.T) {
 	workload := pionTransferWorkload()
 	sample := BenchmarkSample{
-		Index: 1,
-		Command: CommandEvidence{
-			ProcessID: 1, StartedAt: time.Unix(1, 0), FinishedAt: time.Unix(1, 1),
+		Index: 1, Status: OutcomeSucceeded,
+		Command: CommandDiagnostic{
+			ProcessID: 1, Outcome: OutcomeSucceeded,
+			StartedAt: time.Unix(1, 0), FinishedAt: time.Unix(1, 1),
 		},
 	}
 	for _, chunkBytes := range []int{1 << 10, 64 << 10, 1 << 20, 4 << 20} {
@@ -125,7 +130,7 @@ func TestPionOraclesPreserveProductionGeometryAndBufferPolicy(t *testing.T) {
 		})
 	}
 	if results := EvaluateOracles(workload, []BenchmarkSample{sample}); !OraclesPassed(results) {
-		t.Fatalf("valid Pion evidence failed: %+v", results)
+		t.Fatalf("valid Pion readings failed: %+v", results)
 	}
 
 	tests := []struct {

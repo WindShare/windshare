@@ -77,12 +77,9 @@ linters:
           - funlen
           - gocognit
           - nestif
-      # Helper commands (linuxsubreaper, windowsjob) are built by the
-      # browsergate harness at test runtime, never linked by `go build
-      # ./...`; the unused analyzer therefore cannot recognize their main
-      # entry point and reports it in every platform pass. main is the
-      # declared command entry — exclude the exact artifact, not the
-      # package, which must stay fully linted.
+      # Runtime helper commands are exercised through focused process tests,
+      # where the unused analyzer cannot recognize the command entry point.
+      # Exclude only that exact diagnostic; the packages remain fully linted.
       - linters:
           - unused
         text: "func main is unused"

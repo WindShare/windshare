@@ -268,7 +268,9 @@ func TestCatalogStorageContractsRejectInvalidFactoriesAndAdmission(t *testing.T)
 
 	production := productionCatalogStorageFactory(nil)
 	fileFactory, ok := production.(*fileCatalogStorageFactory)
-	if !ok || fileFactory.registry != filepath.Join(os.TempDir(), liveCatalogRegistryName) {
+	if !ok ||
+		fileFactory.registry != filepath.Join(os.TempDir(), liveCatalogRegistryName) ||
+		fileFactory.tracer == nil {
 		t.Fatalf("production factory = %#v", production)
 	}
 	factory := &fileCatalogStorageFactory{registry: t.TempDir()}

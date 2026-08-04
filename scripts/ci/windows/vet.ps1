@@ -1,17 +1,12 @@
-# Windows preflight proves the native source set can both link and pass vet.
-# Linux owns its own tagged source set and the sole released-core consumer build,
-# so keeping those checks here would create duplicate owners rather than evidence.
 [CmdletBinding()]
 param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ciRoot = Split-Path -Parent $PSScriptRoot
-$repositoryRoot = Split-Path -Parent (Split-Path -Parent $ciRoot)
+$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
 Set-Location $repositoryRoot
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
-Write-Output '== vet =='
 
 function Invoke-Step([string]$Label, [scriptblock]$Body) {
     Write-Output "-- $Label"
@@ -22,9 +17,22 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
     }
 }
 
-Invoke-Step 'go build (root, native)' { go build ./... }
-Invoke-Step 'go build (core, native)' { go -C core build ./... }
-Invoke-Step 'go vet (root, native)' { go vet ./... }
-Invoke-Step 'go vet (core, native)' { go -C core vet ./... }
+Write-Output '== vet =='
+Invoke-Step 'go vet (root)' { go vet ./... }
+Invoke-Step 'go vet (core)' { go -C core vet ./... }
+
+# This is the one build that tests a different dependency graph: disabling the
+# workspace proves the root module consumes the released core module cleanly.
+$originalGoWork = [Environment]::GetEnvironmentVariable('GOWORK', 'Process')
+try {
+    $env:GOWORK = 'off'
+    Invoke-Step 'GOWORK=off released-core consumer build' { go build ./... }
+} finally {
+    if ($null -eq $originalGoWork) {
+        Remove-Item Env:GOWORK -ErrorAction SilentlyContinue
+    } else {
+        $env:GOWORK = $originalGoWork
+    }
+}
 
 Write-Output ('== vet: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

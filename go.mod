@@ -32,7 +32,6 @@ require golang.org/x/sys v0.47.0
 require (
 	github.com/pion/ice/v4 v4.2.7
 	github.com/pion/logging v0.2.4
-	github.com/pion/stun/v3 v3.1.6
 	github.com/pion/transport/v4 v4.0.2
 	golang.org/x/mod v0.38.0
 	golang.org/x/text v0.40.0
@@ -50,6 +49,7 @@ require (
 	github.com/pion/sctp v1.10.3 // indirect
 	github.com/pion/sdp/v3 v3.0.19 // indirect
 	github.com/pion/srtp/v3 v3.0.12 // indirect
+	github.com/pion/stun/v3 v3.1.6 // indirect
 	github.com/pion/turn/v5 v5.0.10 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect

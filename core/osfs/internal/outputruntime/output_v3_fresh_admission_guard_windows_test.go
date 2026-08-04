@@ -19,7 +19,8 @@ import (
 
 const windowsRuntimeFreshAdmissionHoldTimeout = 15 * time.Second
 
-func TestWindowsV3FreshSelectedDirectoryMaterializationRetainsPlacementGuard(t *testing.T) {
+func TestLongWindowsV3FreshSelectedDirectoryMaterializationRetainsPlacementGuard(t *testing.T) {
+	requireDurableFilesystemScenario(t)
 	t.Parallel()
 	placementScopes := []struct {
 		name      string
@@ -41,7 +42,7 @@ func TestWindowsV3FreshSelectedDirectoryMaterializationRetainsPlacementGuard(t *
 	for _, scope := range placementScopes {
 		t.Run(scope.name, func(t *testing.T) {
 			t.Parallel()
-			base := v3RecoveryRoot(t)
+			base := newNativeRuntimeTestRoot(t)
 			externalPath := filepath.Join(base, "external")
 			rootPath := filepath.Join(externalPath, "output")
 			rootDecoyPath := filepath.Join(externalPath, "output-decoy")
@@ -57,7 +58,7 @@ func TestWindowsV3FreshSelectedDirectoryMaterializationRetainsPlacementGuard(t *
 			var guardedPlatform *windowsV3FreshAdmissionHoldPlatform
 			authority := v3RecoveryAuthority(t, rootPath, nil)
 			authority.platformFactory = func(path string, create bool) (outputcap.Platform, error) {
-				platform, err := openOutputRuntimeTestPlatform(path, create)
+				platform, err := openNativeOutputRuntimeTestPlatform(path, create)
 				if err != nil {
 					return nil, err
 				}

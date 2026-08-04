@@ -1,0 +1,257 @@
+name: Weekly Product Stability
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * 0"
+
+permissions:
+  contents: read
+
+# A manual diagnostic rerun supersedes an older run for the same ref without
+# coupling any of the independent product suites below.
+concurrency:
+  group: weekly-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  integration-linux:
+    name: Integration stability (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: |
+            go.sum
+            core/go.sum
+      - name: Run integration packages
+        run: go test -count=1 ./integration/...
+
+  integration-windows:
+    name: Integration stability (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: |
+            go.sum
+            core/go.sum
+      - name: Run integration packages
+        run: go test -count=1 ./integration/...
+
+  named-go-long:
+    name: Named process and catalog long suites (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: |
+            go.sum
+            core/go.sum
+      - name: Run process and relay-cut suites
+        run: go test -count=1 ./e2e -run '^TestLong'
+      - name: Run catalog scale suites
+        run: go -C core test -count=1 ./catalog -run '^TestLong'
+
+  durable-output:
+    name: Durable output runtime (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: core/go.sum
+      - name: Run native durability suites
+        run: go -C core test -count=1 ./osfs/internal/outputruntime -run '^TestLong'
+
+  durable-output-windows:
+    name: Durable output runtime (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: core/go.sum
+      - name: Run native durability suites
+        run: go -C core test -count=1 ./osfs/internal/outputruntime -run '^TestLong'
+
+  browser-progressive:
+    name: Progressive catalog browser scenario (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: |
+            go.sum
+            core/go.sum
+      - uses: pnpm/action-setup@v6
+        with:
+          version: latest
+      - uses: actions/setup-node@v7
+        with:
+          node-version: latest
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install frozen web dependencies
+        run: pnpm -C web install --frozen-lockfile
+      - name: Install Chromium runtime
+        run: pnpm -C web exec playwright install --with-deps chromium
+      - name: Run progressive catalog paging
+        run: pnpm -C web test:browser:progressive
+
+  browser-network:
+    name: Direct and TURN relay-cut routes (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: |
+            go.sum
+            core/go.sum
+      - uses: pnpm/action-setup@v6
+        with:
+          version: latest
+      - uses: actions/setup-node@v7
+        with:
+          node-version: latest
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install frozen web dependencies
+        run: pnpm -C web install --frozen-lockfile
+      - name: Install Chromium runtime
+        run: pnpm -C web exec playwright install --with-deps chromium
+      - name: Run direct and TURN relay-cut routes
+        run: pnpm -C web test:browser:network
+
+  browser-interop:
+    name: D1/D2 browser-Pion interop (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: |
+            go.sum
+            core/go.sum
+      - uses: pnpm/action-setup@v6
+        with:
+          version: latest
+      - uses: actions/setup-node@v7
+        with:
+          node-version: latest
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install frozen web dependencies
+        run: pnpm -C web install --frozen-lockfile
+      - name: Install Chromium runtime
+        run: pnpm -C web exec playwright install --with-deps chromium
+      - name: Run D1/D2 Pion interop
+        run: pnpm -C web test:browser:interop
+
+  cross-browser:
+    name: Firefox and WebKit product smoke (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: |
+            go.sum
+            core/go.sum
+      - uses: pnpm/action-setup@v6
+        with:
+          version: latest
+      - uses: actions/setup-node@v7
+        with:
+          node-version: latest
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install frozen web dependencies
+        run: pnpm -C web install --frozen-lockfile
+      - name: Install Firefox and WebKit runtimes
+        run: pnpm -C web exec playwright install --with-deps firefox webkit
+      - name: Run cross-browser smoke
+        run: pnpm -C web test:browser:cross
+
+  windows-browser:
+    name: Browser and process smoke (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: |
+            go.sum
+            core/go.sum
+      - uses: pnpm/action-setup@v6
+        with:
+          version: latest
+      - uses: actions/setup-node@v7
+        with:
+          node-version: latest
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install frozen web dependencies
+        run: pnpm -C web install --frozen-lockfile
+      - name: Install Chromium runtime
+        run: pnpm -C web exec playwright install chromium
+      - name: Run the Windows browser and process smoke
+        run: pnpm -C web test:browser:smoke

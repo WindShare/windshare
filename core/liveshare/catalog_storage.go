@@ -97,7 +97,7 @@ type fileCatalogStorageFactory struct {
 func productionCatalogStorageFactory(tracer CatalogStorageTracer) CatalogStorageFactory {
 	return &fileCatalogStorageFactory{
 		registry: filepath.Join(os.TempDir(), liveCatalogRegistryName),
-		tracer:   tracer,
+		tracer:   catalogStorageTracerOrDefault(tracer),
 	}
 }
 

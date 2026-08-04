@@ -29,81 +29,123 @@ type shareRequest struct {
 	splitKey  bool
 }
 
+type activeShare struct {
+	lifecycle      *senderRelayLifecycle
+	factory        *sessionruntime.SenderFactory
+	terminalLedger *shareTerminalLedger
+	shareID        v2.ShareID
+}
+
 func (a *App) runShare(ctx context.Context, args []string) int {
 	request, code := a.parseShareRequest(args)
 	if code != ExitOK {
 		return code
 	}
-
-	prepared, err := liveshare.PrepareSender(ctx, liveshare.SenderConfig{
-		Paths: request.paths, Relays: []string{request.relayURL}, ChunkSize: request.chunkSize,
-		Random: rand.Reader, ScanAdmission: a.scanAdmission,
-		CatalogTracer: liveshare.CatalogStorageTraceFunc(a.traceCatalogStorage),
-	})
-	if err != nil {
-		a.logf("share: prepare selected roots: %v", err)
-		return ExitUsage
+	prepared, code := a.prepareShareSender(ctx, request)
+	if code != ExitOK {
+		return code
 	}
 	defer func() {
 		if err := prepared.Close(); err != nil {
 			a.logf("share: release local authority: %v", err)
 		}
 	}()
-	if err := prepared.AuthorizeRegistration(); err != nil {
-		a.logf("share: catalog root is not ready: %v", err)
-		return ExitFailure
+	lifecycle, shareID, code := a.connectShareRelay(ctx, prepared, request.relayURL)
+	if code != ExitOK {
+		return code
 	}
+	active, code := a.activateShare(prepared, lifecycle, shareID, request)
+	if code != ExitOK {
+		return code
+	}
+	return a.serveActiveShare(ctx, active)
+}
+
+func (a *App) prepareShareSender(
+	ctx context.Context,
+	request shareRequest,
+) (*liveshare.PreparedSender, int) {
+	prepared, err := liveshare.PrepareSender(ctx, liveshare.SenderConfig{
+		Paths: request.paths, Relays: []string{request.relayURL}, ChunkSize: request.chunkSize,
+		Random: rand.Reader,
+	})
+	if err != nil {
+		a.logf("share: prepare selected roots: %v", err)
+		return nil, ExitUsage
+	}
+	if err := prepared.AuthorizeRegistration(); err != nil {
+		closeErr := prepared.Close()
+		a.logf("share: catalog root is not ready: %v", errors.Join(err, closeErr))
+		return nil, ExitFailure
+	}
+	return prepared, ExitOK
+}
+
+func (a *App) connectShareRelay(
+	ctx context.Context,
+	prepared *liveshare.PreparedSender,
+	relayURL string,
+) (*senderRelayLifecycle, v2.ShareID, int) {
 	material := prepared.Registration()
 	shareID, shareInstance, pkHash, err := relayRegistrationIdentity(material)
 	if err != nil {
 		a.logf("share: build relay identity: %v", err)
-		return ExitFailure
+		return nil, v2.ShareID{}, ExitFailure
 	}
 	var resumeToken v2.ResumeToken
 	if _, err := rand.Read(resumeToken[:]); err != nil {
 		a.logf("share: generate relay resume credential: %v", err)
-		return ExitFailure
+		return nil, v2.ShareID{}, ExitFailure
 	}
 	register, err := relayv2.NewFreshRegisterInit(shareID, shareInstance, pkHash, material.Descriptor, resumeToken)
 	if err != nil {
 		a.logf("share: build relay registration: %v", err)
-		return ExitFailure
+		return nil, v2.ShareID{}, ExitFailure
 	}
 	connection, err := relayv2.DialSender(ctx, relayv2.SenderConfig{
-		RelayBaseURL: request.relayURL, Init: register, SenderPrivateKey: material.SenderPrivateKey,
+		RelayBaseURL: relayURL, Init: register, SenderPrivateKey: material.SenderPrivateKey,
 		Descriptor: material.Descriptor,
 	})
 	if err != nil {
 		if ctx.Err() != nil {
 			a.logf("share: interrupted before relay registration")
-			return ExitFailure
+			return nil, v2.ShareID{}, ExitFailure
 		}
 		a.logf("share: relay registration failed: %v", err)
-		return ExitNetwork
+		return nil, v2.ShareID{}, ExitNetwork
 	}
 	lifecycle, err := newSenderRelayLifecycle(senderRelayLifecycleConfig{
-		relayURL: request.relayURL, fresh: register, resumeToken: resumeToken,
+		relayURL: relayURL, fresh: register, resumeToken: resumeToken,
 		privateKey: material.SenderPrivateKey, initial: connection,
 		observe: a.observeSenderRelayRecovery,
 	})
 	if err != nil {
 		_ = connection.Close()
 		a.logf("share: initialize relay lifecycle: %v", err)
-		return ExitFailure
+		return nil, v2.ShareID{}, ExitFailure
 	}
+	return lifecycle, shareID, ExitOK
+}
+
+func (a *App) activateShare(
+	prepared *liveshare.PreparedSender,
+	lifecycle *senderRelayLifecycle,
+	shareID v2.ShareID,
+	request shareRequest,
+) (*activeShare, int) {
 	terminalLedger := newShareTerminalLedger()
 	factory, err := a.newShareRuntimeFactory(prepared, lifecycle, terminalLedger)
 	if err != nil {
 		_ = lifecycle.Cleanup(context.Background())
 		a.logf("share: initialize session runtime: %v", err)
-		return ExitFailure
+		return nil, ExitFailure
 	}
 	if err := a.printShareLink(prepared, request.frontURL, request.splitKey); err != nil {
 		stopContext, cancel := context.WithTimeout(context.Background(), shareStopTimeout)
 		_ = factory.Stop(stopContext, "Sender stopped")
 		cancel()
 		a.logf("share: build link: %v", err)
-		return ExitUsage
+		return nil, ExitUsage
 	}
 	prepared.StartRootPrefetch()
 	// Readiness follows successful capability publication and runtime assembly so
@@ -114,12 +156,17 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		stopErr := factory.Stop(stopContext, "Sender readiness publication failed")
 		cancel()
 		a.logf("share: publish private sender readiness: %v", errors.Join(err, stopErr))
-		return ExitFailure
+		return nil, ExitFailure
 	}
 	a.logf("share: ready; root children warm in the background and deeper descendants remain on demand; press Ctrl-C to stop")
+	return &activeShare{
+		lifecycle: lifecycle, factory: factory, terminalLedger: terminalLedger, shareID: shareID,
+	}, ExitOK
+}
 
+func (a *App) serveActiveShare(ctx context.Context, active *activeShare) int {
 	serveDone := make(chan error, 1)
-	go func() { serveDone <- a.serveSessions(ctx, factory, lifecycle) }()
+	go func() { serveDone <- a.serveSessions(ctx, active.factory, active.lifecycle) }()
 	trigger := shareShutdownServeEnded
 	var serveErr error
 	select {
@@ -130,7 +177,7 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 	}
 	stopContext, cancelStop := context.WithTimeout(context.Background(), shareStopTimeout)
 	a.recordProcessTrace(processTraceShareComponent, processTraceSenderStop, testrun.OutcomeStarted)
-	stopErr := factory.Stop(stopContext, "Sender stopped")
+	stopErr := active.factory.Stop(stopContext, "Sender stopped")
 	stopOutcome := testrun.OutcomeSucceeded
 	if stopErr != nil {
 		stopOutcome = testrun.OutcomeFailed
@@ -145,11 +192,11 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		ctx.Err(),
 		serveErr,
 		stopErr,
-		terminalLedger.Snapshot(),
+		active.terminalLedger.Snapshot(),
 	)
 	a.logf(
 		"share: shutdown share_id=%x trigger=%s serve=%s stop=%s terminal_observations=%d terminal_sessions=%d terminal_delivered_sessions=%d terminal_retired_sessions=%d terminal_failed_sessions=%d terminal_accepted_failed_lanes=%d decision=%s",
-		shareID[:],
+		active.shareID[:],
 		settlement.trigger,
 		settlement.serve.outcome,
 		settlement.stop.outcome,
@@ -169,19 +216,6 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		a.logf("share: stopped")
 	}
 	return ExitOK
-}
-
-func (a *App) traceCatalogStorage(event liveshare.CatalogStorageTrace) {
-	cause := "-"
-	if event.Cause != nil {
-		cause = event.Cause.Error()
-	}
-	a.logf(
-		"share: catalog storage operation=%s share_instance=%x recovered_entries=%d recovered_memory_bytes=%d recovered_spill_bytes=%d legacy_roots_removed=%d failed=%t cause=%q",
-		event.Operation, event.ShareInstance.Bytes(), event.RecoveredUsage.Entries,
-		event.RecoveredUsage.MemoryBytes, event.RecoveredUsage.SpillBytes,
-		event.LegacyRootsRemoved, event.Failed, cause,
-	)
 }
 
 func (a *App) observeSenderRelayRecovery(milestone senderRelayRecoveryMilestone) {

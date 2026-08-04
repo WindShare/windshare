@@ -9,8 +9,13 @@ func runtimeMakePrivateEnvelopeUnsafe(path string) error {
 	if err != nil {
 		return err
 	}
+	mode := os.FileMode(0o644)
 	if info.IsDir() {
-		return os.Chmod(path, 0o755)
+		mode = 0o755
 	}
-	return os.Chmod(path, 0o644)
+	if err := os.Chmod(path, mode); err != nil {
+		return err
+	}
+	markPortableRuntimePrivateEnvelopeUnsafe(path)
+	return nil
 }

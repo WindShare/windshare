@@ -11,22 +11,25 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"sync"
 	"time"
 
 	"github.com/pion/ice/v4"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/core/framechannel"
-	"github.com/windshare/windshare/internal/testrun"
-	"github.com/windshare/windshare/internal/testtrace"
 	windwebrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
 const (
 	defaultAddress        = "127.0.0.1:0"
 	scenarioEnvName       = "WINDSHARE_D1_BROWSER_SCENARIO"
+	traceScenarioEnvName  = "WINDSHARE_TEST_SCENARIO"
+	traceOperationEnvName = "WINDSHARE_TEST_OPERATION_ID"
 	operationLimit        = 20 * time.Second
-	interopReadyComponent = testrun.Component("pion-browser-interop-server")
+	interopReadyComponent = "pion-browser-interop-server"
+	defaultTraceScenario  = "browser-pion-interop"
+	defaultTraceOperation = "pion-browser-server"
 
 	scenarioHappy        = "happy"
 	scenarioCancellation = "cancellation"
@@ -51,6 +54,8 @@ const (
 	remoteCloseMarker    = 0x77
 	terminalFrameBytes   = 257
 )
+
+var traceIdentityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
 //go:embed web/*
 var assets embed.FS
@@ -129,12 +134,13 @@ type actionResponse struct {
 	Action string `json:"action"`
 }
 
-type interopReadySink interface {
-	testrun.EventSink
-	Close() error
+type interopReadyRecord struct {
+	Component   string `json:"component"`
+	ScenarioID  string `json:"scenarioId"`
+	OperationID string `json:"operationId"`
+	Milestone   string `json:"milestone"`
+	Address     string `json:"address"`
 }
-
-type interopReadySinkFactory func(testrun.Identity) (interopReadySink, error)
 
 type interopServer struct {
 	peer     *pion.PeerConnection
@@ -159,9 +165,7 @@ func main() {
 	if len(os.Args) != 1 {
 		panic("Pion browser interop server accepts only the self-check command")
 	}
-	onReady, err := interopReadyReporter(os.LookupEnv, func(identity testrun.Identity) (interopReadySink, error) {
-		return testtrace.OpenEventSink(identity)
-	})
+	onReady, err := interopReadyReporter(os.Stdout, os.Getenv)
 	if err != nil {
 		panic(err)
 	}
@@ -202,44 +206,43 @@ func main() {
 }
 
 func interopReadyReporter(
-	lookup testrun.EnvironmentLookup,
-	openSink interopReadySinkFactory,
+	writer io.Writer,
+	lookup func(string) string,
 ) (func(net.Addr) error, error) {
-	operation, present, err := testrun.OperationFromEnvironment(lookup)
-	if err != nil {
-		return nil, fmt.Errorf("browser interop: load test trace context: %w", err)
+	if writer == nil || lookup == nil {
+		return nil, errors.New("browser interop readiness dependencies are required")
 	}
-	if !present {
-		return nil, errors.New("browser interop: process-owner test trace context is absent")
-	}
-	if openSink == nil {
-		return nil, errors.New("browser interop: private ready-event sink factory is nil")
+	scenarioID := traceIdentity(lookup(traceScenarioEnvName), defaultTraceScenario)
+	operationID := traceIdentity(lookup(traceOperationEnvName), defaultTraceOperation)
+	if scenarioID == "" || operationID == "" {
+		return nil, errors.New("browser interop trace identity is invalid")
 	}
 	return func(address net.Addr) error {
-		if address == nil {
-			return errors.New("browser interop: ready listener address is nil")
+		tcp, ok := address.(*net.TCPAddr)
+		if !ok || tcp == nil || !tcp.IP.Equal(net.IPv4(127, 0, 0, 1)) || tcp.Port < 1 || tcp.Port > 65_535 {
+			return errors.New("browser interop readiness requires an IPv4 loopback listener")
 		}
-		sink, err := openSink(operation.EventIdentity())
-		if err != nil {
-			return fmt.Errorf("browser interop: open private ready-event sink: %w", err)
-		}
-		if sink == nil {
-			return errors.New("browser interop: private ready-event sink factory returned nil")
-		}
-		recorder, recorderErr := testrun.NewRecorder(operation, interopReadyComponent, sink)
-		if recorderErr != nil {
-			return errors.Join(recorderErr, sink.Close())
-		}
-		emitErr := recorder.Record(
-			testrun.ListenerReadyMilestone,
-			testrun.OutcomeSucceeded,
-			&testrun.ListenerReadyContext{Address: address.String()},
-		)
-		if err := errors.Join(emitErr, sink.Close()); err != nil {
-			return fmt.Errorf("browser interop: publish private ready event: %w", err)
+		if err := json.NewEncoder(writer).Encode(interopReadyRecord{
+			Component:   interopReadyComponent,
+			ScenarioID:  scenarioID,
+			OperationID: operationID,
+			Milestone:   "listener-ready",
+			Address:     address.String(),
+		}); err != nil {
+			return fmt.Errorf("browser interop: publish readiness: %w", err)
 		}
 		return nil
 	}, nil
+}
+
+func traceIdentity(value string, fallback string) string {
+	if value == "" {
+		value = fallback
+	}
+	if !traceIdentityPattern.MatchString(value) {
+		return ""
+	}
+	return value
 }
 
 // newLoopbackOnlyPeer confines ICE to loopback addresses. The interop suite

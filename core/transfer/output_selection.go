@@ -97,6 +97,46 @@ func NewOutputSelection(
 		uint64(len(directories))+uint64(len(files)) > maximumSelectionClaims {
 		return OutputSelection{}, ErrInvalidOutputSelection
 	}
+	plan, err := buildMemoryOutputSelectionPlan(root, rootGeneration, directories, files)
+	if err != nil {
+		return OutputSelection{}, err
+	}
+	return newOutputSelectionFromPlan(share, root, rootGeneration, plan)
+}
+
+type outputSelectionClaimSet struct {
+	paths map[string]struct{}
+	nodes map[catalog.NodeID]struct{}
+}
+
+func newOutputSelectionClaimSet(root catalog.DirectoryID, capacity int) outputSelectionClaimSet {
+	return outputSelectionClaimSet{
+		paths: make(map[string]struct{}, capacity),
+		nodes: map[catalog.NodeID]struct{}{root.NodeID(): {}},
+	}
+}
+
+func (claims *outputSelectionClaimSet) add(path string, node catalog.NodeID) error {
+	if !validSelectionPath(path) || node.IsZero() {
+		return ErrInvalidOutputSelection
+	}
+	if _, duplicate := claims.nodes[node]; duplicate {
+		return ErrInvalidOutputSelection
+	}
+	if _, duplicate := claims.paths[path]; duplicate {
+		return ErrInvalidOutputSelection
+	}
+	claims.nodes[node] = struct{}{}
+	claims.paths[path] = struct{}{}
+	return nil
+}
+
+func buildMemoryOutputSelectionPlan(
+	root catalog.DirectoryID,
+	rootGeneration catalog.DirectoryGeneration,
+	directories []OutputSelectionDirectory,
+	files []OutputSelectionFile,
+) (*memoryOutputSelectionPlan, error) {
 	ownedDirectories := slices.Clone(directories)
 	ownedFiles := slices.Clone(files)
 	sort.Slice(ownedDirectories, func(left, right int) bool {
@@ -105,61 +145,108 @@ func NewOutputSelection(
 	sort.Slice(ownedFiles, func(left, right int) bool {
 		return ownedFiles[left].Path < ownedFiles[right].Path
 	})
+	claims := newOutputSelectionClaimSet(root, len(ownedDirectories)+len(ownedFiles))
+	directoryByPath, err := indexOutputSelectionDirectories(ownedDirectories, &claims)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateOutputSelectionFiles(
+		root, rootGeneration, ownedFiles, directoryByPath, &claims,
+	); err != nil {
+		return nil, err
+	}
+	if err := validateOutputSelectionDirectoryParents(ownedDirectories, directoryByPath); err != nil {
+		return nil, err
+	}
+	return &memoryOutputSelectionPlan{
+		records:     buildOutputSelectionRecords(ownedDirectories, ownedFiles),
+		directories: uint64(len(ownedDirectories)), files: uint64(len(ownedFiles)),
+	}, nil
+}
 
-	paths := make(map[string]struct{}, len(ownedDirectories)+len(ownedFiles))
-	directoryByPath := make(map[string]OutputSelectionDirectory, len(ownedDirectories))
-	nodeClaims := map[catalog.NodeID]struct{}{root.NodeID(): {}}
-	for _, directory := range ownedDirectories {
-		if !validSelectionPath(directory.Path) || directory.DirectoryID.IsZero() || directory.Generation.IsZero() {
-			return OutputSelection{}, ErrInvalidOutputSelection
+func indexOutputSelectionDirectories(
+	directories []OutputSelectionDirectory,
+	claims *outputSelectionClaimSet,
+) (map[string]OutputSelectionDirectory, error) {
+	directoryByPath := make(map[string]OutputSelectionDirectory, len(directories))
+	for _, directory := range directories {
+		if directory.Generation.IsZero() {
+			return nil, ErrInvalidOutputSelection
 		}
-		if _, duplicate := nodeClaims[directory.DirectoryID.NodeID()]; duplicate {
-			return OutputSelection{}, ErrInvalidOutputSelection
+		if err := claims.add(directory.Path, directory.DirectoryID.NodeID()); err != nil {
+			return nil, err
 		}
-		nodeClaims[directory.DirectoryID.NodeID()] = struct{}{}
-		if _, duplicate := paths[directory.Path]; duplicate {
-			return OutputSelection{}, ErrInvalidOutputSelection
-		}
-		paths[directory.Path] = struct{}{}
 		directoryByPath[directory.Path] = directory
 	}
-	for _, file := range ownedFiles {
-		if !validSelectionPath(file.Path) || file.FileID.IsZero() || file.ParentDirectoryID.IsZero() ||
-			file.ParentGeneration.IsZero() || file.ExpectedSize > catalog.MaxFileSize {
-			return OutputSelection{}, ErrInvalidOutputSelection
+	return directoryByPath, nil
+}
+
+func validateOutputSelectionFiles(
+	root catalog.DirectoryID,
+	rootGeneration catalog.DirectoryGeneration,
+	files []OutputSelectionFile,
+	directoryByPath map[string]OutputSelectionDirectory,
+	claims *outputSelectionClaimSet,
+) error {
+	for _, file := range files {
+		if file.ParentDirectoryID.IsZero() || file.ParentGeneration.IsZero() ||
+			file.ExpectedSize > catalog.MaxFileSize {
+			return ErrInvalidOutputSelection
 		}
-		if _, duplicate := nodeClaims[file.FileID.NodeID()]; duplicate {
-			return OutputSelection{}, ErrInvalidOutputSelection
+		if err := claims.add(file.Path, file.FileID.NodeID()); err != nil {
+			return err
 		}
-		nodeClaims[file.FileID.NodeID()] = struct{}{}
-		if _, duplicate := paths[file.Path]; duplicate {
-			return OutputSelection{}, ErrInvalidOutputSelection
-		}
-		paths[file.Path] = struct{}{}
-		parentPath := selectionParentPath(file.Path)
-		if parentPath == "" {
-			if file.ParentDirectoryID != root || file.ParentGeneration != rootGeneration {
-				return OutputSelection{}, ErrInvalidOutputSelection
-			}
-			continue
-		}
-		parent, ok := directoryByPath[parentPath]
-		if !ok || parent.DirectoryID != file.ParentDirectoryID || parent.Generation != file.ParentGeneration {
-			return OutputSelection{}, ErrInvalidOutputSelection
+		if err := validateOutputSelectionFileParent(
+			root, rootGeneration, file, directoryByPath,
+		); err != nil {
+			return err
 		}
 	}
-	for _, directory := range ownedDirectories {
+	return nil
+}
+
+func validateOutputSelectionFileParent(
+	root catalog.DirectoryID,
+	rootGeneration catalog.DirectoryGeneration,
+	file OutputSelectionFile,
+	directoryByPath map[string]OutputSelectionDirectory,
+) error {
+	parentPath := selectionParentPath(file.Path)
+	if parentPath == "" {
+		if file.ParentDirectoryID != root || file.ParentGeneration != rootGeneration {
+			return ErrInvalidOutputSelection
+		}
+		return nil
+	}
+	parent, ok := directoryByPath[parentPath]
+	if !ok || parent.DirectoryID != file.ParentDirectoryID || parent.Generation != file.ParentGeneration {
+		return ErrInvalidOutputSelection
+	}
+	return nil
+}
+
+func validateOutputSelectionDirectoryParents(
+	directories []OutputSelectionDirectory,
+	directoryByPath map[string]OutputSelectionDirectory,
+) error {
+	for _, directory := range directories {
 		parentPath := selectionParentPath(directory.Path)
 		if parentPath == "" {
 			continue
 		}
 		if _, ok := directoryByPath[parentPath]; !ok {
-			return OutputSelection{}, ErrInvalidOutputSelection
+			return ErrInvalidOutputSelection
 		}
 	}
+	return nil
+}
 
-	records := make([]selectionPlanRecord, 0, len(ownedDirectories)+len(ownedFiles))
-	for _, directory := range ownedDirectories {
+func buildOutputSelectionRecords(
+	directories []OutputSelectionDirectory,
+	files []OutputSelectionFile,
+) []selectionPlanRecord {
+	records := make([]selectionPlanRecord, 0, len(directories)+len(files))
+	for _, directory := range directories {
 		records = append(records, selectionPlanRecord{
 			kind: selectionPlanDirectoryKind, active: true, path: directory.Path,
 			directory: plannedDirectory{
@@ -168,7 +255,7 @@ func NewOutputSelection(
 			},
 		})
 	}
-	for _, file := range ownedFiles {
+	for _, file := range files {
 		records = append(records, selectionPlanRecord{
 			kind: selectionPlanFileKind, active: true, path: file.Path,
 			file: plannedFile{
@@ -184,12 +271,7 @@ func NewOutputSelection(
 		}
 		return records[left].kind < records[right].kind
 	})
-	return newOutputSelectionFromPlan(
-		share, root, rootGeneration,
-		&memoryOutputSelectionPlan{
-			records: records, directories: uint64(len(ownedDirectories)), files: uint64(len(ownedFiles)),
-		},
-	)
+	return records
 }
 
 func newOutputSelectionFromPlan(
@@ -222,65 +304,107 @@ type outputSelectionDirectoryAuthority struct {
 	generation catalog.DirectoryGeneration
 }
 
+type outputSelectionPlanValidation struct {
+	root           catalog.DirectoryID
+	rootGeneration catalog.DirectoryGeneration
+	directories    uint64
+	files          uint64
+	previousPath   string
+	ancestry       []outputSelectionDirectoryAuthority
+}
+
 func validateOutputSelectionPlan(
 	root catalog.DirectoryID,
 	rootGeneration catalog.DirectoryGeneration,
 	plan outputSelectionPlan,
 ) error {
-	var directories, files uint64
-	var previousPath string
-	var ancestry []outputSelectionDirectoryAuthority
-	err := plan.VisitRecords(func(record selectionPlanRecord) error {
-		if !record.active || !validSelectionPath(record.path) ||
-			(previousPath != "" && record.path <= previousPath) {
-			return ErrInvalidOutputSelection
-		}
-		previousPath = record.path
-		parentPath := selectionParentPath(record.path)
-		for len(ancestry) > 0 && ancestry[len(ancestry)-1].path != parentPath {
-			ancestry = ancestry[:len(ancestry)-1]
-		}
-		if parentPath != "" && len(ancestry) == 0 {
-			return ErrInvalidOutputSelection
-		}
-		switch record.kind {
-		case selectionPlanDirectoryKind:
-			if record.directory.path != record.path || record.directory.directory.IsZero() ||
-				record.directory.generation.IsZero() {
-				return ErrInvalidOutputSelection
-			}
-			directories++
-			ancestry = append(ancestry, outputSelectionDirectoryAuthority{
-				path: record.path, directory: record.directory.directory,
-				generation: record.directory.generation,
-			})
-		case selectionPlanFileKind:
-			if record.file.path != record.path || record.file.file.IsZero() ||
-				record.file.parentDirectory.IsZero() || record.file.parentGeneration.IsZero() ||
-				record.file.expectedSize > catalog.MaxFileSize {
-				return ErrInvalidOutputSelection
-			}
-			if parentPath == "" {
-				if record.file.parentDirectory != root || record.file.parentGeneration != rootGeneration {
-					return ErrInvalidOutputSelection
-				}
-			} else {
-				parent := ancestry[len(ancestry)-1]
-				if record.file.parentDirectory != parent.directory ||
-					record.file.parentGeneration != parent.generation {
-					return ErrInvalidOutputSelection
-				}
-			}
-			files++
-		default:
-			return ErrInvalidOutputSelection
-		}
-		return nil
-	})
+	validation := outputSelectionPlanValidation{root: root, rootGeneration: rootGeneration}
+	if err := plan.VisitRecords(validation.validateRecord); err != nil {
+		return err
+	}
+	if validation.directories != plan.DirectoryCount() || validation.files != plan.FileCount() {
+		return ErrInvalidOutputSelection
+	}
+	return nil
+}
+
+func (validation *outputSelectionPlanValidation) validateRecord(record selectionPlanRecord) error {
+	parentPath, err := validation.acceptRecordPath(record)
 	if err != nil {
 		return err
 	}
-	if directories != plan.DirectoryCount() || files != plan.FileCount() {
+	switch record.kind {
+	case selectionPlanDirectoryKind:
+		return validation.validateDirectory(record)
+	case selectionPlanFileKind:
+		return validation.validateFile(record, parentPath)
+	default:
+		return ErrInvalidOutputSelection
+	}
+}
+
+func (validation *outputSelectionPlanValidation) acceptRecordPath(
+	record selectionPlanRecord,
+) (string, error) {
+	if !record.active || !validSelectionPath(record.path) ||
+		(validation.previousPath != "" && record.path <= validation.previousPath) {
+		return "", ErrInvalidOutputSelection
+	}
+	validation.previousPath = record.path
+	parentPath := selectionParentPath(record.path)
+	for len(validation.ancestry) > 0 &&
+		validation.ancestry[len(validation.ancestry)-1].path != parentPath {
+		validation.ancestry = validation.ancestry[:len(validation.ancestry)-1]
+	}
+	if parentPath != "" && len(validation.ancestry) == 0 {
+		return "", ErrInvalidOutputSelection
+	}
+	return parentPath, nil
+}
+
+func (validation *outputSelectionPlanValidation) validateDirectory(
+	record selectionPlanRecord,
+) error {
+	if record.directory.path != record.path || record.directory.directory.IsZero() ||
+		record.directory.generation.IsZero() {
+		return ErrInvalidOutputSelection
+	}
+	validation.directories++
+	validation.ancestry = append(validation.ancestry, outputSelectionDirectoryAuthority{
+		path: record.path, directory: record.directory.directory,
+		generation: record.directory.generation,
+	})
+	return nil
+}
+
+func (validation *outputSelectionPlanValidation) validateFile(
+	record selectionPlanRecord,
+	parentPath string,
+) error {
+	if record.file.path != record.path || record.file.file.IsZero() ||
+		record.file.parentDirectory.IsZero() || record.file.parentGeneration.IsZero() ||
+		record.file.expectedSize > catalog.MaxFileSize {
+		return ErrInvalidOutputSelection
+	}
+	if err := validation.validateFileParent(record.file, parentPath); err != nil {
+		return err
+	}
+	validation.files++
+	return nil
+}
+
+func (validation *outputSelectionPlanValidation) validateFileParent(
+	file plannedFile,
+	parentPath string,
+) error {
+	if parentPath == "" {
+		if file.parentDirectory != validation.root || file.parentGeneration != validation.rootGeneration {
+			return ErrInvalidOutputSelection
+		}
+		return nil
+	}
+	parent := validation.ancestry[len(validation.ancestry)-1]
+	if file.parentDirectory != parent.directory || file.parentGeneration != parent.generation {
 		return ErrInvalidOutputSelection
 	}
 	return nil

@@ -2,77 +2,89 @@ package testprocess
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 
-	"github.com/windshare/windshare/internal/processowner/protocol"
+	"github.com/windshare/windshare/internal/testrun"
 )
 
-const maximumPendingEvents = 128
+const MaximumCapturedEvents = 1024
 
-// EventReader separates the consumer-visible terminal state from ownership of
-// the transport. A malformed stream fails consumers immediately, while the one
-// tracked reader goroutine keeps draining so target logging cannot deadlock
-// process-tree settlement.
+type Event = testrun.Event
+
 type EventReader struct {
-	events chan protocol.Event
+	events chan Event
 	done   chan struct{}
-	source io.ReadCloser
 
-	terminalOnce sync.Once
-	closeOnce    sync.Once
-	mu           sync.Mutex
-	err          error
-	closeErr     error
+	mu  sync.Mutex
+	err error
 }
 
-func newEventReader(source io.ReadCloser, identity protocol.Identity) *EventReader {
-	reader := &EventReader{
-		events: make(chan protocol.Event, maximumPendingEvents),
-		done:   make(chan struct{}),
-		source: source,
-	}
-	go reader.read(identity)
+func newEventReader(source io.ReadCloser) *EventReader {
+	reader := &EventReader{events: make(chan Event, MaximumCapturedEvents), done: make(chan struct{})}
+	go reader.consume(source)
 	return reader
 }
 
-func (reader *EventReader) Next(ctx context.Context) (protocol.Event, error) {
-	if event, terminal, ready := reader.nextReady(); ready {
-		return event, terminal
-	}
-	select {
-	case event, open := <-reader.events:
-		return reader.eventResult(event, open)
-	case <-ctx.Done():
-		// Buffered or terminal event evidence wins a simultaneous cancellation.
-		if event, terminal, ready := reader.nextReady(); ready {
-			return event, terminal
+func (reader *EventReader) consume(source io.ReadCloser) {
+	defer close(reader.done)
+	defer close(reader.events)
+	defer func() { reader.setError(source.Close()) }()
+	scanner := bufio.NewScanner(source)
+	scanner.Buffer(make([]byte, 4096), testrun.MaximumEventDocumentBytes+1)
+	for scanner.Scan() {
+		event, err := decodeEvent(scanner.Bytes())
+		if err != nil {
+			reader.setError(err)
+			continue
 		}
-		return protocol.Event{}, ctx.Err()
+		select {
+		case reader.events <- event:
+		default:
+			reader.setError(errors.New("test process event history exceeded its bound"))
+		}
 	}
+	reader.setError(scanner.Err())
 }
 
-func (reader *EventReader) nextReady() (protocol.Event, error, bool) {
+func decodeEvent(encoded []byte) (Event, error) {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	var event Event
+	if err := decoder.Decode(&event); err != nil {
+		return Event{}, fmt.Errorf("decode test process event: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return Event{}, errors.New("test process event contains trailing data")
+	}
+	if err := testrun.ValidateEvent(event); err != nil {
+		return Event{}, fmt.Errorf("validate test process event: %w", err)
+	}
+	event.Payload = bytes.Clone(event.Payload)
+	return event, nil
+}
+
+func (reader *EventReader) Next(ctx context.Context) (Event, error) {
 	select {
 	case event, open := <-reader.events:
-		value, err := reader.eventResult(event, open)
-		return value, err, true
-	default:
-		return protocol.Event{}, nil, false
+		if open {
+			event.Payload = bytes.Clone(event.Payload)
+			return event, nil
+		}
+		if err := reader.Err(); err != nil {
+			return Event{}, err
+		}
+		return Event{}, io.EOF
+	case <-ctx.Done():
+		return Event{}, ctx.Err()
 	}
-}
-
-func (reader *EventReader) eventResult(event protocol.Event, open bool) (protocol.Event, error) {
-	if open {
-		return event, nil
-	}
-	if err := reader.Err(); err != nil {
-		return protocol.Event{}, err
-	}
-	return protocol.Event{}, io.EOF
 }
 
 func (reader *EventReader) Done() <-chan struct{} { return reader.done }
@@ -83,62 +95,13 @@ func (reader *EventReader) Err() error {
 	return reader.err
 }
 
-func (reader *EventReader) read(identity protocol.Identity) {
-	defer close(reader.done)
-	defer reader.closeSource()
-	defer reader.closeEvents()
-
-	buffered := bufio.NewReaderSize(reader.source, protocol.MaximumDocumentBytes+1)
-	for {
-		line, err := buffered.ReadSlice('\n')
-		if errors.Is(err, io.EOF) && len(line) == 0 {
-			return
-		}
-		if err != nil {
-			reader.fail(fmt.Errorf("read test event: %w", err))
-			_, _ = io.Copy(io.Discard, buffered)
-			return
-		}
-		event, err := protocol.DecodeLine[protocol.Event](line)
-		if err == nil {
-			err = protocol.ValidateEvent(event)
-		}
-		if err == nil && event.Identity != identity {
-			err = errors.New("test event identity does not match its owned process")
-		}
-		if err != nil {
-			reader.fail(fmt.Errorf("validate test event: %w", err))
-			_, _ = io.Copy(io.Discard, buffered)
-			return
-		}
-		select {
-		case reader.events <- event:
-		default:
-			reader.fail(errors.New("test event consumer exceeded its bounded queue"))
-			_, _ = io.Copy(io.Discard, buffered)
-			return
-		}
+func (reader *EventReader) setError(err error) {
+	// The lifecycle join closes a stalled event endpoint to preserve its bound;
+	// that expected cancellation must not obscure the causal timeout diagnostic.
+	if err == nil || errors.Is(err, os.ErrClosed) {
+		return
 	}
-}
-
-func (reader *EventReader) fail(err error) {
 	reader.mu.Lock()
-	if reader.err == nil {
-		reader.err = err
-	}
+	reader.err = errors.Join(reader.err, err)
 	reader.mu.Unlock()
-	reader.closeEvents()
-}
-
-func (reader *EventReader) closeEvents() {
-	reader.terminalOnce.Do(func() { close(reader.events) })
-}
-
-func (reader *EventReader) closeSource() error {
-	reader.closeOnce.Do(func() {
-		if reader.source != nil {
-			reader.closeErr = reader.source.Close()
-		}
-	})
-	return reader.closeErr
 }

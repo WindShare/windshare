@@ -108,12 +108,6 @@ function Assert-FileDoesNotContain([string]$Path, [string]$Forbidden) {
     }
 }
 
-function Select-WorkflowJobSource([string]$Workflow, [string]$Job) {
-    $pattern = '(?ms)^  {0}:\r?\n.*?(?=^  [a-z0-9][a-z0-9-]*:\r?$|\z)' -f
-        [regex]::Escape($Job)
-    return [regex]::Match($Workflow, $pattern).Value
-}
-
 $requiredTests = @(Get-WindowsNativeRequiredTestNames)
 $expectedExpression = '^(TestWindowsNTFSNativeCertification|TestWindowsNTFSProcessRestartRecovery|TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment)$'
 if ((Get-WindowsNativeRequiredTestExpression) -cne $expectedExpression) {
@@ -726,14 +720,21 @@ $releaseWorkflowPath = Join-Path $repositoryRoot '.github\workflows\core-release
 $releaseWorkflow = [IO.File]::ReadAllText($releaseWorkflowPath)
 $actionLines = [regex]::Matches($releaseWorkflow, '(?m)^[ \t]*-[ \t]+uses:[^\r\n]+')
 foreach ($actionLine in $actionLines) {
-    if ($actionLine.Value -cnotmatch '^[ \t]*-[ \t]+uses:[ \t]+[^\s#]+@[0-9a-f]{40}[ \t]+#[ \t]+v[0-9]+(?:\.[0-9]+){0,2}[ \t]*$') {
-        throw "core release workflow action is not pinned to a full SHA: $($actionLine.Value)"
+    if ($actionLine.Value.Trim() -cnotmatch '^- uses: actions/(?:checkout@v7|setup-go@v7)$') {
+        throw "core release workflow action does not use an approved current major: $($actionLine.Value)"
     }
 }
-if ([regex]::Matches($releaseWorkflow, 'go-version-file:[ \t]+core/go\.mod').Count -ne 2 -or
+if ([regex]::Matches($releaseWorkflow, 'go-version:[ \t]+stable').Count -ne 2 -or
+    [regex]::Matches($releaseWorkflow, 'check-latest:[ \t]+true').Count -ne 2 -or
     [regex]::Matches($releaseWorkflow, 'cache:[ \t]+false').Count -ne 2 -or
-    $releaseWorkflow.Contains('go-version-file: go.work', [StringComparison]::Ordinal)) {
-    throw 'core release jobs do not derive an uncached toolchain from core/go.mod'
+    $releaseWorkflow.Contains('go-version-file:', [StringComparison]::Ordinal)) {
+    throw 'core release jobs do not use the latest stable uncached Go toolchain'
+}
+if ([regex]::Matches(
+    $releaseWorkflow,
+    'go install golang\.org/x/vuln/cmd/govulncheck@latest'
+).Count -ne 2 -or [regex]::IsMatch($releaseWorkflow, 'govulncheck@v[0-9]')) {
+    throw 'hosted release jobs do not exclusively provision the latest govulncheck'
 }
 $linuxReleaseJob = [regex]::Match(
     $releaseWorkflow,
@@ -741,59 +742,86 @@ $linuxReleaseJob = [regex]::Match(
 ).Value
 $windowsReleaseJob = [regex]::Match(
     $releaseWorkflow,
-    '(?ms)^  windows-ntfs:\r?\n.*\z'
+    '(?ms)^  windows-ntfs:\r?\n.*?(?=^  publish:\r?$)'
+).Value
+$publishJob = [regex]::Match(
+    $releaseWorkflow,
+    '(?ms)^  publish:\r?\n.*\z'
 ).Value
 if ([string]::IsNullOrWhiteSpace($linuxReleaseJob) -or
     -not $linuxReleaseJob.Contains('timeout-minutes: 60', [StringComparison]::Ordinal) -or
     [string]::IsNullOrWhiteSpace($windowsReleaseJob) -or
     -not $windowsReleaseJob.Contains('timeout-minutes: 90', [StringComparison]::Ordinal)) {
-    throw 'core release workflow job timeouts do not preserve the platform-specific evidence budgets'
+    throw 'core release workflow job timeouts do not preserve the platform-specific hang bounds'
 }
 $ciWorkflowPath = Join-Path $repositoryRoot '.github\workflows\ci.yml'
 $ciWorkflow = [IO.File]::ReadAllText($ciWorkflowPath)
-foreach ($tagTrigger in @('- "core/v*"', '- "core-candidate/v*/**"')) {
-    if (-not $releaseWorkflow.Contains($tagTrigger, [StringComparison]::Ordinal)) {
-        throw "core release workflow is missing tag trigger: $tagTrigger"
-    }
-    if ($ciWorkflow.Contains($tagTrigger, [StringComparison]::Ordinal)) {
-        throw "ordinary CI must not own core release tag trigger: $tagTrigger"
+$candidateTagTrigger = '- "core-candidate/v*/**"'
+if (-not $releaseWorkflow.Contains($candidateTagTrigger, [StringComparison]::Ordinal)) {
+    throw "core release workflow is missing its candidate tag trigger"
+}
+if ($ciWorkflow.Contains($candidateTagTrigger, [StringComparison]::Ordinal)) {
+    throw 'ordinary CI must not own the core candidate trigger'
+}
+if ($releaseWorkflow.Contains('- "core/v*"', [StringComparison]::Ordinal) -or
+    $releaseWorkflow.Contains('core-candidate/v0.3.0', [StringComparison]::Ordinal)) {
+    throw 'core release workflow retains a formal-tag trigger or historical version exclusion'
+}
+if ([regex]::Matches($releaseWorkflow, '(?m)^[ \t]+contents:[ \t]+write[ \t]*$').Count -ne 1) {
+    throw 'exactly one core release job must receive contents: write'
+}
+if ([string]::IsNullOrWhiteSpace($publishJob) -or
+    -not $publishJob.Contains("if: github.event_name == 'push'", [StringComparison]::Ordinal) -or
+    -not $publishJob.Contains('contents: write', [StringComparison]::Ordinal) -or
+    -not $publishJob.Contains('run: bash scripts/ci/core-release-ref.sh publish', [StringComparison]::Ordinal)) {
+    throw 'the final publish job does not isolate write permission from manual diagnostics'
+}
+foreach ($requiredText in @(
+    'group: core-release-linux-${{ needs.candidate.outputs.version }}',
+    'group: core-release-windows-${{ needs.candidate.outputs.version }}',
+    'group: core-release-publish-${{ needs.candidate.outputs.version }}',
+    'run: bash scripts/ci/core-release-ref.sh publish'
+)) {
+    if (-not $releaseWorkflow.Contains($requiredText, [StringComparison]::Ordinal)) {
+        throw "core release workflow is missing candidate publication contract text: $requiredText"
     }
 }
-$ordinaryReleaseJob = Select-WorkflowJobSource `
-    -Workflow $ciWorkflow `
-    -Job 'core-release'
-if ([string]::IsNullOrWhiteSpace($ordinaryReleaseJob) -or
-    -not $ordinaryReleaseJob.Contains('timeout-minutes: 60', [StringComparison]::Ordinal) -or
-    -not $ordinaryReleaseJob.Contains('go-version-file: core/go.mod', [StringComparison]::Ordinal) -or
-    -not $ordinaryReleaseJob.Contains('cache: false', [StringComparison]::Ordinal) -or
-    -not $ordinaryReleaseJob.Contains('run: make core-release', [StringComparison]::Ordinal) -or
-    $ordinaryReleaseJob.Contains('go-version-file: go.work', [StringComparison]::Ordinal)) {
-    throw 'ordinary CI core-release job lacks the fixed timeout, synthetic gate, or uncached core toolchain'
+$linuxReleaseScriptPath = Join-Path $PSScriptRoot 'linux/core-release.sh'
+$windowsReleaseScriptPath = Join-Path $PSScriptRoot 'windows/core-release.ps1'
+Assert-FileContains `
+    -Path $linuxReleaseScriptPath `
+    -Expected 'command -v govulncheck'
+Assert-FileContains `
+    -Path $linuxReleaseScriptPath `
+    -Expected '"$govulncheck_executable" ./...'
+Assert-FileContains `
+    -Path $windowsReleaseScriptPath `
+    -Expected 'Get-Command govulncheck -CommandType Application'
+Assert-FileContains `
+    -Path $windowsReleaseScriptPath `
+    -Expected '& $govulncheckExecutable ./...'
+foreach ($releaseScriptPath in @($linuxReleaseScriptPath, $windowsReleaseScriptPath)) {
+    Assert-FileDoesNotContain -Path $releaseScriptPath -Forbidden 'go install'
+    Assert-FileDoesNotContain -Path $releaseScriptPath -Forbidden 'govulncheck@v'
+}
+if (Test-Path -LiteralPath (Join-Path $repositoryRoot 'scripts\ci\_corevulnerability')) {
+    throw 'retired repository-owned vulnerability scanner wrapper still exists'
 }
 Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
-    -Expected '& $goExecutable run ./scripts/ci/_corevulnerability'
-Assert-FileDoesNotContain `
-    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
-    -Forbidden 'Invoke-WindShareGo'
-Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
-    -Expected '-module $artifactRoot'
-Assert-FileContains `
-    -Path (Join-Path $PSScriptRoot 'windows/core-release.ps1') `
-    -Expected "-cache (Join-Path `$temporaryRoot 'vulnerability-cache')"
-Assert-FileContains `
-    -Path (Join-Path $repositoryRoot 'scripts\ci\_corevulnerability\main.go') `
-    -Expected 'golang.org/x/vuln/cmd/govulncheck@v1.6.0'
+    -Path $releaseWorkflowPath `
+    -Expected 'actions/checkout@v7'
 Assert-FileContains `
     -Path $releaseWorkflowPath `
-    -Expected 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7'
+    -Expected 'actions/setup-go@v7'
 Assert-FileContains `
     -Path $releaseWorkflowPath `
-    -Expected 'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6'
+    -Expected 'go-version: stable'
 Assert-FileContains `
     -Path $releaseWorkflowPath `
-    -Expected 'go-version-file: core/go.mod'
+    -Expected 'check-latest: true'
+Assert-FileContains `
+    -Path $releaseWorkflowPath `
+    -Expected 'go install golang.org/x/vuln/cmd/govulncheck@latest'
 Assert-FileContains `
     -Path $releaseWorkflowPath `
     -Expected 'run: bash scripts/ci/linux/core-release.sh "$CORE_RELEASE_VERSION" "$CORE_RELEASE_COMMIT_SHA" linux-ext4'
@@ -934,7 +962,7 @@ $nativeGateIndex = $releaseScript.LastIndexOf(
     [StringComparison]::Ordinal
 )
 $vulnerabilityIndex = $releaseScript.IndexOf(
-    "Invoke-Step 'version-pinned govulncheck (extracted core)'",
+    "Invoke-Step 'govulncheck (extracted core)'",
     [StringComparison]::Ordinal
 )
 $ordinaryTestIndex = $releaseScript.IndexOf(

@@ -34,6 +34,13 @@ var integrationTraceOutput struct {
 	err  error
 }
 
+func requireLongPionIntegration(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("real Pion network integration is owned by the long integration gate")
+	}
+}
+
 func startIntegrationScenario(
 	t *testing.T,
 	scenarioName string,

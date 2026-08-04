@@ -263,6 +263,7 @@ describe('v2 catalog traversal authority', () => {
     expect(loads).toBe(1)
     expect(output.abortReasons).toHaveLength(1)
     expect(output.abortReasons[0]).toBeInstanceOf(V2CatalogTraversalError)
+    expect(result.abortReason).toBe(output.abortReasons[0])
   })
 
   it('rejects repeated sibling identity even when neither file is selected', async () => {
