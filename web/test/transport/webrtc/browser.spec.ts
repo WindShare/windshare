@@ -86,7 +86,7 @@ const DATA_CHANNEL_PROTOCOL = 'windshare-v2'
 
 async function nativeAdapterApplicable(page: Page, testInfo: TestInfo): Promise<boolean> {
   const capability = await classifyNativePeerConnection(page)
-  await testInfo.attach('rtc-capability-evidence', {
+  await testInfo.attach('rtc-capability', {
     body: JSON.stringify(capability),
     contentType: 'application/json',
   })

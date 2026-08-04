@@ -3,24 +3,18 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "packageManager": "pnpm@11.8.0",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:browser-network-matrix-helpers": "node scripts/browser-network-matrix/cli/build-helpers.mjs",
-    "build:browser-evidence-semantic": "node ../scripts/ci/browsergate/generated-semantic/verify-generated.mjs --write",
     "forbidden": "node ../scripts/ci/web-forbidden.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:unit:remainder": "vitest run --exclude test/browser-evidence/**",
-    "test:browser": "node ../scripts/ci/browsergate/main.mjs local",
-    "test:browser:smoke": "node ../scripts/ci/browsergate/main.mjs smoke",
-    "test:browser:evidence": "node scripts/browser-evidence/cli.ts",
-    "test:browser:evidence:contract": "vitest run --config vitest.browser-contract.config.ts && node ../scripts/ci/browsergate/test-runner.mjs",
-    "test:browser:generated-semantic:process": "node ../scripts/ci/browsergate/tests/process/generated-semantic.tests.mjs",
-    "test:browser:process:integration": "vitest run test/browser-evidence/native-directory-publisher.test.ts test/browser-evidence/process-runner.test.ts test/browser-evidence/test-process-owner-client.test.ts",
-    "test:browser:preflight": "node scripts/verify-playwright-browsers.mjs"
+    "test:browser:network": "playwright test --config playwright.network.config.ts --project chromium",
+    "test:browser:interop": "node scripts/browser-network-matrix/run-interop.mjs",
+    "test:browser:cross": "playwright test --config playwright.cross-browser.config.ts",
+    "test:browser:smoke": "playwright test --config playwright.smoke.config.ts --project chromium",
+    "test:browser:progressive": "playwright test --config playwright.progressive.config.ts --project chromium"
   },
   "dependencies": {
     "@noble/curves": "2.2.0",
@@ -45,7 +39,6 @@
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.63.0",
     "vite": "^8.1.1",
-    "vitest": "^4.1.10",
-    "yaml": "2.9.0"
+    "vitest": "^4.1.10"
   }
 }

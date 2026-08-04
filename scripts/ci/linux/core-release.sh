@@ -12,8 +12,13 @@ if ! command -v go >/dev/null 2>&1; then
   echo "core release requires the local Go toolchain on PATH" >&2
   exit 1
 fi
-# Native certification and the vulnerability helper need the same coordinator
-# toolchain path; publish the locally resolved Go command without retaining it.
+if ! govulncheck_executable="$(command -v govulncheck)" ||
+  [ ! -x "$govulncheck_executable" ]; then
+  echo "core release requires developer-installed govulncheck on PATH" >&2
+  exit 1
+fi
+# Native certification needs the same coordinator toolchain path; publish the
+# locally resolved Go command without retaining it.
 WINDSHARE_GO_EXECUTABLE="$(command -v go)"
 export WINDSHARE_GO_EXECUTABLE
 source scripts/ci/core-release-checkout.sh
@@ -117,10 +122,10 @@ bash scripts/ci/core-release-environment.tests.sh
 echo "-- commit-bound archive contract"
 bash scripts/ci/core-release-archive.tests.sh
 
-echo "-- GOWORK=off go vet release helpers"
-go vet ./scripts/ci/_coremodulezip ./scripts/ci/_corevulnerability
-echo "-- GOWORK=off go test release helpers"
-go test -count=1 ./scripts/ci/_coremodulezip ./scripts/ci/_corevulnerability
+echo "-- GOWORK=off go vet release helper"
+go vet ./scripts/ci/_coremodulezip
+echo "-- GOWORK=off go test release helper"
+go test -count=1 ./scripts/ci/_coremodulezip
 # Helper tests are allowed to execute code, so re-prove the verifier checkout
 # before compiling the archive builder that supplies release evidence.
 windshare_assert_exact_release_checkout "$repository_root" "$release_commit"
@@ -169,19 +174,10 @@ fi
   go vet ./...
   echo "-- GOWORK=off go build ./... (extracted core)"
   go build ./...
-  echo "-- version-pinned govulncheck (extracted core)"
-  (
-    windshare_assert_exact_release_file_projection \
-      "$release_repository" \
-      "$release_commit" \
-      go.mod \
-      go.sum \
-      scripts/ci/_corevulnerability/main.go
-    cd "$release_repository"
-    GOWORK=off go run ./scripts/ci/_corevulnerability \
-      -module "$artifact_root" \
-      -cache "$temporary_root/vulnerability-cache"
-  )
+  echo "-- govulncheck (extracted core)"
+  # The setup boundary owns scanner upgrades; the repository depends only on
+  # govulncheck's stable source-scan package-pattern contract.
+  "$govulncheck_executable" ./...
   echo "-- GOWORK=off go test ./... (extracted core)"
   go test -count=1 -timeout="$core_suite_test_timeout" ./...
 )

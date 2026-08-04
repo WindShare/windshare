@@ -261,7 +261,8 @@ func TestSessionWriterTerminalAdmissionIsImmediateAndOutOfBand(t *testing.T) {
 }
 
 func TestSessionWriterBoundedQueuesClassesAndStopReceipts(t *testing.T) {
-	controlMessage := mustMessage(t, MessageListChildren, new(testOperationID(80)), map[uint64]any{0: uint64(1)})
+	controlOperationID := testOperationID(80)
+	controlMessage := mustMessage(t, MessageListChildren, &controlOperationID, map[uint64]any{0: uint64(1)})
 	controlWriter, _ := NewSessionWriter(newRuntimeChannel(0), &passthroughSealer{}, &permissivePolicy{direction: DirectionReceiverToSender})
 	receipts := make([]SendReceipt, 0, ControlQueueFrameLimit)
 	for range ControlQueueFrameLimit {

@@ -1,4 +1,5 @@
 export * from './clock'
+export * from './diagnostics'
 export * from './errors'
 export * from './peer-channel'
 export * from './peer-offer'

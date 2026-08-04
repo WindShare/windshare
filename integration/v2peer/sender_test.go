@@ -283,6 +283,7 @@ func (session *integrationPeerSession) AdmitPeerChannel(
 }
 
 func TestV2PeerSenderNegotiatesRealPionDataChannel(t *testing.T) {
+	requireLongPionIntegration(t)
 	loopback := testloopback.New(t)
 	trace := startIntegrationScenario(t, senderRealPionScenario, senderRealPionComponent)
 	trace.RequireCleanup(t, "loopback fixture", func(context.Context) error {

@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import {
-  parseAttemptEvidence,
-  type BrowserAttemptEvidence,
-} from '../../scripts/browser-evidence/attempt-evidence'
-
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import type { ChannelState, FrameChannel } from '../../src/contracts/channel'
+import type { V2BrowserConnectivityAttemptDiagnostic } from '../../src/connectivity/diagnostics'
 import {
   decodeV2PeerCandidate,
   decodeV2PeerOffer,
@@ -366,12 +362,12 @@ describe('v2 authenticated session signaling', () => {
     })
     const session = new SignalingSessionFacade(router, operationId)
     const traces: V2SessionSignalingTrace[] = []
-    const attemptEvidence: BrowserAttemptEvidence[] = []
+    const attemptDiagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
     const route = new V2SessionSignalingRoute(
       session as unknown as V2ReceiverSessionRuntime,
       binding,
       (event) => traces.push(event),
-      (event) => attemptEvidence.push(parseAttemptEvidence(event) as BrowserAttemptEvidence),
+      (event) => attemptDiagnostics.push(event),
     )
     const incoming = route.messages.getReader()
     route.offerCreated({ localEmitted: 0, remoteAccepted: 0 })
@@ -408,13 +404,13 @@ describe('v2 authenticated session signaling', () => {
       failureScope: 'attempt',
       reason: peerFailure,
     }))
-    expect(attemptEvidence.map((event) => event.stage)).toEqual([
+    expect(attemptDiagnostics.map((event) => event.stage)).toEqual([
       'started',
       'offer-created',
       'offer-sent',
       'failed',
     ])
-    expect(attemptEvidence.at(-1)).toMatchObject({
+    expect(attemptDiagnostics.at(-1)).toMatchObject({
       failedAtStage: 'answer-received',
       failureScope: 'attempt',
       typedErrorCode: 'peer-negotiation',

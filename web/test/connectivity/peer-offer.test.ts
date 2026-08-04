@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type {
-  BrowserSelectedPairEvidence,
-  CandidateCounts,
-} from '../../scripts/browser-evidence/attempt-evidence'
+  V2BrowserSelectedPairDiagnostic,
+  V2CandidateCounts,
+} from '../../src/connectivity/diagnostics'
 
 import {
   BrowserOfferChannelFactory,
@@ -155,8 +155,8 @@ describe('browser offer negotiation', () => {
 
   it('reports isolated negotiation milestones and a public selected-pair snapshot', async () => {
     const fixture = negotiationFixture()
-    const milestones: Array<{ readonly stage: string; readonly counts: CandidateCounts }> = []
-    let readSelectedPair: (() => Promise<BrowserSelectedPairEvidence | null>) | undefined
+    const milestones: Array<{ readonly stage: string; readonly counts: V2CandidateCounts }> = []
+    let readSelectedPair: (() => Promise<V2BrowserSelectedPairDiagnostic | null>) | undefined
     const observer: V2PeerOfferAttemptObserver = {
       offerCreated: (counts) => milestones.push({ stage: 'offer-created', counts }),
       offerSent: (counts) => {

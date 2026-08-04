@@ -49,6 +49,11 @@ $releaseEnvironmentState = $null
 # so resolve the developer/runner toolchain once before crossing that token boundary.
 $goApplication = @(Get-Command go -CommandType Application -ErrorAction Stop)[0]
 $goExecutable = [IO.Path]::GetFullPath($goApplication.Path)
+$govulncheckApplications = @(Get-Command govulncheck -CommandType Application -All -ErrorAction Ignore)
+if ($govulncheckApplications.Count -eq 0) {
+    throw 'core release requires developer-installed govulncheck on PATH'
+}
+$govulncheckExecutable = [IO.Path]::GetFullPath($govulncheckApplications[0].Path)
 Import-Module (Join-Path $ciRoot 'core-release-environment.psm1') -Force
 Import-Module (Join-Path $ciRoot 'core-release-checkout.psm1') -Force
 Import-Module (Join-Path $ciRoot 'core-release-windows-native.psm1') -Force
@@ -372,11 +377,11 @@ try {
         & $currentPowerShell -NoLogo -NoProfile -NonInteractive -File `
             (Join-Path $ciRoot 'core-release-archive.tests.ps1')
     }
-    Invoke-Step 'GOWORK=off go vet release helpers' {
-        & $goExecutable vet ./scripts/ci/_coremodulezip ./scripts/ci/_corevulnerability
+    Invoke-Step 'GOWORK=off go vet release helper' {
+        & $goExecutable vet ./scripts/ci/_coremodulezip
     }
-    Invoke-Step 'GOWORK=off go test release helpers' {
-        & $goExecutable test -count=1 ./scripts/ci/_coremodulezip ./scripts/ci/_corevulnerability
+    Invoke-Step 'GOWORK=off go test release helper' {
+        & $goExecutable test -count=1 ./scripts/ci/_coremodulezip
     }
     # Helper tests execute repository code. Re-proving the clean exact checkout
     # prevents a test from replacing the later archive builder in place.
@@ -416,23 +421,10 @@ try {
     Invoke-Step 'GOWORK=off go list ./... (extracted core)' { & $goExecutable list ./... }
     Invoke-Step 'GOWORK=off go vet ./... (extracted core)' { & $goExecutable vet ./... }
     Invoke-Step 'GOWORK=off go build ./... (extracted core)' { & $goExecutable build ./... }
-    Invoke-Step 'version-pinned govulncheck (extracted core)' {
-        Assert-ExactCoreReleaseFileProjection `
-            -RepositoryRoot $releaseRepository `
-            -ExpectedCommit $CommitSHA `
-            -VerifierPaths @(
-                'go.mod',
-                'go.sum',
-                'scripts/ci/_corevulnerability/main.go'
-            )
-        Set-Location $releaseRepository
-        try {
-            & $goExecutable run ./scripts/ci/_corevulnerability `
-                -module $artifactRoot `
-                -cache (Join-Path $temporaryRoot 'vulnerability-cache')
-        } finally {
-            Set-Location $artifactRoot
-        }
+    Invoke-Step 'govulncheck (extracted core)' {
+        # The setup boundary owns scanner upgrades; the repository depends only
+        # on govulncheck's stable source-scan package-pattern contract.
+        & $govulncheckExecutable ./...
     }
     if ($NativeProfile -ceq 'windows-ntfs') {
         Invoke-RequiredWindowsNativeTestsAsStandardUser

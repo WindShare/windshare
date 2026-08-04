@@ -12,8 +12,8 @@ import (
 	"github.com/windshare/windshare/core/session/sessionruntime"
 )
 
-// SenderAttemptStage is the sender half of the frozen browser-evidence v1
-// lifecycle. A failed terminal names the next stage that could not complete.
+// SenderAttemptStage orders product diagnostics for one sender-side peer attempt.
+// A failed terminal names the next stage that could not complete.
 type SenderAttemptStage string
 
 const (

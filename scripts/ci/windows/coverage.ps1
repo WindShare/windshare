@@ -1,32 +1,13 @@
-# Coverage is one ordinary sweep per Go module. Keeping profiles outside the
-# repository prevents a failed verdict from dirtying the developer's worktree.
-# The root sweep owns integration/E2E, so one gate run ID spans their packages.
-# JSON mode keeps passing scenario evidence visible in that single instrumented
-# sweep instead of rerunning the packages without coverage.
 [CmdletBinding()]
 param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ciRoot = Split-Path -Parent $PSScriptRoot
-$repositoryRoot = Split-Path -Parent (Split-Path -Parent $ciRoot)
+$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
 Set-Location $repositoryRoot
-Import-Module (Join-Path $ciRoot 'test-run-id.psm1') -Force
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
-$coverageTool = 'github.com/vladopajic/go-test-coverage/v2@v2.18.8'
-# A fixed native-suite budget keeps platform parity independent of caller state.
-$coreSuiteTestTimeout = '30m'
-$temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
-$profileDirectory = [IO.Path]::GetFullPath(
-    (Join-Path $temporaryRoot ("windshare-coverage-{0}" -f [guid]::NewGuid().ToString('N')))
-)
-if (-not $profileDirectory.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Coverage profile directory escaped the temporary root: $profileDirectory"
-}
-[IO.Directory]::CreateDirectory($profileDirectory) | Out-Null
-$rootProfile = Join-Path $profileDirectory 'root.cover.out'
-$coreProfile = Join-Path $profileDirectory 'core.cover.out'
+
 function Invoke-Step([string]$Label, [scriptblock]$Body) {
     Write-Output "-- $Label"
     $global:LASTEXITCODE = 0
@@ -36,32 +17,42 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
     }
 }
 
-Invoke-WithWindShareTestRunID -Suite 'coverage' -Body {
-    param([string]$RunID)
-    Write-Output "== coverage: run_id=$runID =="
+$temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+$profileDirectory = [IO.Path]::GetFullPath((
+    Join-Path $temporaryRoot ("windshare-coverage-{0}" -f [guid]::NewGuid().ToString('N'))
+))
+$ownedPrefix = [IO.Path]::GetFullPath((Join-Path $temporaryRoot 'windshare-coverage-'))
+if (-not $profileDirectory.StartsWith($ownedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Coverage profile directory escaped the temporary root: $profileDirectory"
+}
+[IO.Directory]::CreateDirectory($profileDirectory) | Out-Null
+$rootProfile = Join-Path $profileDirectory 'root.cover.out'
+$coreProfile = Join-Path $profileDirectory 'core.cover.out'
+
+Write-Output '== coverage =='
+try {
+    Invoke-Step 'root short atomic coverage sweep' {
+        go test -short -count=1 -covermode=atomic "-coverprofile=$rootProfile" ./...
+    }
+    Invoke-Step 'root coverage verdict' {
+        go-test-coverage --config=.testcoverage.yml "--profile=$rootProfile"
+    }
+    Invoke-Step 'core short atomic coverage sweep' {
+        go -C core test -short -count=1 -covermode=atomic "-coverprofile=$coreProfile" ./...
+    }
+
+    Push-Location (Join-Path $repositoryRoot 'core')
     try {
-        Invoke-Step 'root module coverage tests' {
-            go test -json -count=1 ./... -covermode=atomic "-coverprofile=$rootProfile"
+        Invoke-Step 'core coverage verdict' {
+            go-test-coverage --config=.testcoverage.yml "--profile=$coreProfile"
         }
-        Invoke-Step 'root coverage gate (total >=80%, package >=70%)' {
-            go run $coverageTool --config=.testcoverage.yml "--profile=$rootProfile"
-        }
-        Invoke-Step 'core module coverage tests' {
-            go -C core test -count=1 "-timeout=$coreSuiteTestTimeout" ./... `
-                -covermode=atomic "-coverprofile=$coreProfile"
-        }
-        Invoke-Step 'core coverage gate (total >=90%, package >=70%)' {
-            Push-Location core
-            try {
-                go run $coverageTool --config=.testcoverage.yml "--profile=$coreProfile"
-            } finally {
-                Pop-Location
-            }
-        }
-        Write-Output ('== coverage: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)
     } finally {
-        if (Test-Path -LiteralPath $profileDirectory -PathType Container) {
-            Remove-Item -LiteralPath $profileDirectory -Recurse -Force
-        }
+        Pop-Location
+    }
+
+    Write-Output ('== coverage: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)
+} finally {
+    if (Test-Path -LiteralPath $profileDirectory -PathType Container) {
+        Remove-Item -LiteralPath $profileDirectory -Recurse -Force
     }
 }

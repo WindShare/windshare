@@ -122,6 +122,8 @@ interface DirectoryCursor {
 export interface V2TransferJobResult {
   readonly outcome: JobOutcome
   readonly measure: SelectionMeasure
+  /** Preserves the terminal cause so callers can distinguish a user stop from a failed transfer. */
+  readonly abortReason?: unknown
 }
 
 /** Page cursors, rather than full directory arrays, bound memory during recursive discovery. */
@@ -211,6 +213,7 @@ export class V2TransferJob {
       return Object.freeze({
         outcome: jobOutcome('Aborted', this.#failures.snapshot()),
         measure: measure.discovery === 'open' ? this.#measure.fail() : measure,
+        abortReason: error,
       })
     } finally {
       this.#externalAbortCleanup?.()

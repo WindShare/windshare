@@ -1,42 +1,32 @@
-import { join } from 'node:path'
 import { defineConfig } from '@playwright/test'
 
-import { createPlaywrightSuiteDeclarations } from '../../../playwright.suite-config.ts'
-import {
-  CHILD_EVIDENCE_CONTEXT_ENV,
-  readChildEvidenceContext,
-  type ChildEvidenceContext,
-} from '../../../scripts/browser-evidence/child-evidence.js'
-
-const WEB_BASE_URL = ownedWebBaseURL()
-const EVIDENCE_CONTEXT = optionalEvidenceContext()
-const SUITE_DECLARATIONS = createPlaywrightSuiteDeclarations('pion')
+const INTEROP_TEST_TIMEOUT_MILLISECONDS = 60_000
+const INTEROP_HARD_TIMEOUT_MILLISECONDS = 120_000
 
 export default defineConfig({
-  ...SUITE_DECLARATIONS,
-  outputDir: EVIDENCE_CONTEXT === null
-    ? '../../../test-results/d2-webrtc'
-    : join(EVIDENCE_CONTEXT.artifactRoot, 'playwright'),
+  testDir: '.',
+  testMatch: ['browser.spec.ts', 'pion-interop.spec.ts'],
+  outputDir: '../../../test-results/pion-interop',
   fullyParallel: false,
   forbidOnly: true,
   retries: 0,
   workers: 1,
   reporter: 'line',
-  timeout: 120_000,
+  timeout: INTEROP_TEST_TIMEOUT_MILLISECONDS,
+  globalTimeout: INTEROP_HARD_TIMEOUT_MILLISECONDS,
+  projects: [{
+    name: 'chromium',
+    use: { browserName: 'chromium' },
+  }],
   use: {
-    baseURL: WEB_BASE_URL,
+    baseURL: ownedWebBaseURL(),
     locale: 'en-US',
     timezoneId: 'UTC',
-    trace: 'retain-on-failure',
+    trace: 'off',
     screenshot: 'only-on-failure',
     video: 'off',
   },
 })
-
-function optionalEvidenceContext(): ChildEvidenceContext | null {
-  const encoded = process.env[CHILD_EVIDENCE_CONTEXT_ENV]
-  return encoded === undefined || encoded === '' ? null : readChildEvidenceContext()
-}
 
 function ownedWebBaseURL(): string {
   const encoded = process.env.WINDSHARE_WEB_BASE_URL ?? 'http://127.0.0.1:1'

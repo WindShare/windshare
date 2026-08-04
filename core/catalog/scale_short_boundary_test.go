@@ -6,8 +6,8 @@ func requireCatalogScaleScenario(t *testing.T) {
 	t.Helper()
 	if !catalogScaleScenariosEnabled(testing.Short()) {
 		// These cases intentionally materialize thousands of spill records and
-		// durable pages. Ordinary/race/coverage sweeps retain that scale evidence;
-		// the short loop keeps the smaller semantic and fault contracts.
+		// durable pages. Their TestLong names give the weekly gate a direct owner,
+		// while short sweeps retain the smaller semantic and fault contracts.
 		t.Skip("skipping large on-disk catalog scenario in short mode")
 	}
 }

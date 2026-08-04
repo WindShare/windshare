@@ -1,5 +1,5 @@
-// Package testprocess runs correctness-test children through the repository's
-// sole external process-tree owner.
+// Package testprocess launches correctness-test children through a bounded,
+// platform-native process-tree owner.
 package testprocess
 
 import (
@@ -11,37 +11,33 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/windshare/windshare/internal/processowner/protocol"
+	"github.com/windshare/windshare/internal/processowner"
+	"github.com/windshare/windshare/internal/testrun"
 )
 
 const (
-	goExecutableEnvironment = "WINDSHARE_GO_EXECUTABLE"
-	helperCommandPackage    = "./cmd/testprocessowner"
-	helperSelfCheck         = "{\"schema_version\":\"windshare.process-owner-self-check/v1\",\"component\":\"testprocessowner\",\"milestone\":\"self_check\",\"outcome\":\"ready\"}\n"
+	helperCommandPackage = "./cmd/testprocessowner"
+	helperSelfCheck      = "testprocessowner ready\n"
+	maximumBuildOutput   = 64 << 10
 )
 
 type Command struct {
 	Executable       string
 	Arguments        []string
 	WorkingDirectory string
-	Environment      []protocol.EnvironmentEntry
-	Stdin            []byte
+	Environment      []string
 }
 
 type Spec struct {
-	Identity         protocol.Identity
+	Identity         testrun.Identity
 	Command          Command
 	Deadline         time.Duration
 	TerminationGrace time.Duration
 }
 
-// Owner names an explicit helper binary so suites can build it once and share
-// it without relying on a fixed installation path.
 type Owner struct {
 	helperPath     string
 	ownedDirectory string
@@ -56,52 +52,40 @@ func NewOwner(helperPath string) (*Owner, error) {
 	if !filepath.IsAbs(helperPath) || filepath.Clean(helperPath) != helperPath {
 		return nil, errors.New("process-owner helper path must be absolute and canonical")
 	}
-	info, err := os.Stat(helperPath)
+	metadata, err := os.Stat(helperPath)
 	if err != nil {
 		return nil, fmt.Errorf("inspect process-owner helper: %w", err)
 	}
-	if !info.Mode().IsRegular() {
+	if !metadata.Mode().IsRegular() {
 		return nil, errors.New("process-owner helper must be a regular file")
 	}
 	return &Owner{helperPath: helperPath}, nil
 }
 
-// HelperExecutable exposes the already-validated suite artifact for an outer
-// parent-death harness. Normal target execution must still enter through Start;
-// the exceptional harness needs to launch a client which then owns its own tree.
-func (owner *Owner) HelperExecutable() string {
-	if owner == nil {
-		return ""
-	}
-	return owner.helperPath
-}
-
-// BuildOwner creates a suite-scoped helper from the checked-out repository.
-// The returned Owner removes only its private build directory when closed.
 func BuildOwner(ctx context.Context, repositoryRoot string) (_ *Owner, resultErr error) {
 	if !filepath.IsAbs(repositoryRoot) || filepath.Clean(repositoryRoot) != repositoryRoot {
 		return nil, errors.New("repository root must be absolute and canonical")
 	}
-	buildDirectory, err := os.MkdirTemp("", "windshare-testprocessowner-*")
+	directory, err := os.MkdirTemp("", "windshare-testprocessowner-")
 	if err != nil {
 		return nil, fmt.Errorf("create process-owner build directory: %w", err)
 	}
-	keepDirectory := false
+	keep := false
 	defer func() {
-		if !keepDirectory {
-			resultErr = errors.Join(resultErr, removeOwnedDirectory(buildDirectory))
+		if !keep {
+			resultErr = errors.Join(resultErr, os.RemoveAll(directory))
 		}
 	}()
-	helperName := "testprocessowner"
+	name := "testprocessowner"
 	if runtime.GOOS == "windows" {
-		helperName += ".exe"
+		name += ".exe"
 	}
-	helperPath := filepath.Join(buildDirectory, helperName)
+	helperPath := filepath.Join(directory, name)
 	command := exec.CommandContext(ctx, goExecutable(), "build", "-trimpath", "-o", helperPath, helperCommandPackage)
 	command.Dir = repositoryRoot
 	output, err := command.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("build process-owner helper: %w: %s", err, boundedText(output))
+		return nil, fmt.Errorf("build process-owner helper: %w: %s", err, boundedBuildOutput(output))
 	}
 	owner, err := NewOwner(helperPath)
 	if err != nil {
@@ -110,45 +94,45 @@ func BuildOwner(ctx context.Context, repositoryRoot string) (_ *Owner, resultErr
 	if err := owner.SelfCheck(ctx); err != nil {
 		return nil, err
 	}
-	owner.ownedDirectory = buildDirectory
-	keepDirectory = true
+	owner.ownedDirectory = directory
+	keep = true
 	return owner, nil
 }
 
 func goExecutable() string {
-	// Nested helper builds honor an explicitly selected Go executable, while
-	// direct developer runs keep conventional PATH behavior.
-	if executable := os.Getenv(goExecutableEnvironment); executable != "" {
+	if executable := os.Getenv("WINDSHARE_GO_EXECUTABLE"); executable != "" {
 		return executable
 	}
 	return "go"
 }
 
-func (owner *Owner) SelfCheck(ctx context.Context) error {
-	command := exec.CommandContext(ctx, owner.helperPath, "self-check")
-	output, err := command.Output()
-	if err != nil {
-		return fmt.Errorf("run process-owner self-check: %w", err)
+func boundedBuildOutput(output []byte) string {
+	if len(output) > maximumBuildOutput {
+		output = output[len(output)-maximumBuildOutput:]
 	}
-	if string(output) != helperSelfCheck {
-		return fmt.Errorf("process-owner self-check returned an unexpected contract: %q", boundedText(output))
+	return string(output)
+}
+
+func (owner *Owner) SelfCheck(ctx context.Context) error {
+	if owner == nil {
+		return errors.New("process owner is nil")
+	}
+	command := exec.CommandContext(ctx, owner.helperPath, "self-check")
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("run process-owner self-check: %w: %s", err, boundedBuildOutput(output.Bytes()))
+	}
+	if output.String() != helperSelfCheck {
+		return fmt.Errorf("unexpected process-owner self-check output %q", output.String())
 	}
 	return nil
 }
 
 func (owner *Owner) Start(ctx context.Context, spec Spec) (*Process, error) {
-	if ctx == nil {
-		return nil, errors.New("owned process context is nil")
-	}
-	// The process session outlives Start. Freezing caller-owned buffers here keeps
-	// later mutations from changing the authenticated request or streamed input.
-	frozen := spec
-	frozen.Command.Arguments = slices.Clone(spec.Command.Arguments)
-	frozen.Command.Environment = slices.Clone(spec.Command.Environment)
-	frozen.Command.Stdin = bytes.Clone(spec.Command.Stdin)
-	request, err := requestFromSpec(frozen)
-	if err != nil {
-		return nil, err
+	if owner == nil {
+		return nil, errors.New("process owner is nil")
 	}
 	owner.mu.Lock()
 	if owner.closed {
@@ -157,83 +141,61 @@ func (owner *Owner) Start(ctx context.Context, spec Spec) (*Process, error) {
 	}
 	owner.active++
 	owner.mu.Unlock()
-	output := newProcessOutput()
-	session, err := startPlatform(ctx, owner.helperPath, frozen, request, output)
+	releaseOnce := sync.Once{}
+	release := func() {
+		releaseOnce.Do(func() {
+			owner.mu.Lock()
+			owner.active--
+			owner.mu.Unlock()
+		})
+	}
+	process, err := startProcess(ctx, owner.helperPath, spec, release)
 	if err != nil {
-		owner.releaseProcess()
+		release()
 		return nil, err
 	}
-	process := newProcessWithOutput(&request, request.Identity, session, owner.releaseProcess, output)
-	go process.stopWhenDone(ctx)
 	return process, nil
 }
 
 func (owner *Owner) Close() error {
+	if owner == nil {
+		return nil
+	}
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	if owner.closed {
 		return owner.closeErr
 	}
 	if owner.active != 0 {
-		return fmt.Errorf("cannot close process owner with %d active processes", owner.active)
+		return fmt.Errorf("process owner still has %d active process trees", owner.active)
 	}
 	owner.closed = true
-	if owner.ownedDirectory == "" {
-		return nil
+	if owner.ownedDirectory != "" {
+		owner.closeErr = os.RemoveAll(owner.ownedDirectory)
 	}
-	owner.closeErr = removeOwnedDirectory(owner.ownedDirectory)
 	return owner.closeErr
 }
 
-func (owner *Owner) releaseProcess() {
-	owner.mu.Lock()
-	defer owner.mu.Unlock()
-	owner.active--
-}
-
-func requestFromSpec(spec Spec) (protocol.Request, error) {
-	deadline, err := durationMilliseconds("deadline", spec.Deadline)
+func configForSpec(spec Spec) (processowner.Config, error) {
+	if err := testrun.ValidateIdentity(spec.Identity); err != nil {
+		return processowner.Config{}, fmt.Errorf("test process identity: %w", err)
+	}
+	operation, err := testrun.NewOperation(spec.Identity.RunID, spec.Identity.OperationID, spec.Identity.Scenario)
 	if err != nil {
-		return protocol.Request{}, err
+		return processowner.Config{}, err
 	}
-	grace, err := durationMilliseconds("termination grace", spec.TerminationGrace)
+	environment, err := operation.ChildEnvironment(spec.Command.Environment)
 	if err != nil {
-		return protocol.Request{}, err
+		return processowner.Config{}, err
 	}
-	var stdin *protocol.Stdin
-	if len(spec.Command.Stdin) > 0 {
-		stdin = &protocol.Stdin{ByteLength: int64(len(spec.Command.Stdin))}
+	config := processowner.Config{
+		Executable: spec.Command.Executable, Arguments: append([]string(nil), spec.Command.Arguments...),
+		WorkingDirectory: spec.Command.WorkingDirectory, Environment: environment,
+		DeadlineMilliseconds:         spec.Deadline.Milliseconds(),
+		TerminationGraceMilliseconds: spec.TerminationGrace.Milliseconds(),
 	}
-	request := protocol.NewRequest(spec.Identity, protocol.Command{
-		Executable: spec.Command.Executable, Arguments: spec.Command.Arguments,
-		WorkingDirectory: spec.Command.WorkingDirectory,
-		Environment:      spec.Command.Environment,
-		Stdin:            stdin,
-	}, deadline, grace)
-	if err := protocol.ValidateRequest(request); err != nil {
-		return protocol.Request{}, fmt.Errorf("validate owned process: %w", err)
+	if err := processowner.ValidateConfig(config); err != nil {
+		return processowner.Config{}, err
 	}
-	return request, nil
-}
-
-func durationMilliseconds(label string, duration time.Duration) (int64, error) {
-	if duration <= 0 || duration%time.Millisecond != 0 {
-		return 0, fmt.Errorf("%s must be a positive whole number of milliseconds", label)
-	}
-	return duration.Milliseconds(), nil
-}
-
-func boundedText(value []byte) string {
-	text := strings.ToValidUTF8(string(value), "�")
-	if len(text) > protocol.MaximumDiagnosticBytes {
-		text = text[:protocol.MaximumDiagnosticBytes]
-	}
-	return text
-}
-
-func removeOwnedDirectory(path string) error {
-	if err := os.RemoveAll(path); err != nil {
-		return fmt.Errorf("remove private process-owner build directory %q: %w", path, err)
-	}
-	return nil
+	return config, nil
 }

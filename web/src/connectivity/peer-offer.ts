@@ -2,13 +2,13 @@ import {
   createWindShareFrameChannel,
   type WebRTCFrameChannel,
 } from '../transport/webrtc'
-import type {
-  BrowserIceCandidateEvidence,
-  BrowserSelectedPairEvidence,
-  CandidateCounts,
-} from '../../scripts/browser-evidence/attempt-evidence'
 import { V2_MAXIMUM_PEER_CANDIDATES } from '../session/v2-operation-continuation'
 import { abortReason } from './clock'
+import type {
+  V2BrowserIceCandidateDiagnostic,
+  V2BrowserSelectedPairDiagnostic,
+  V2CandidateCounts,
+} from './diagnostics'
 import { NegotiationEventQueue } from './negotiation-event-queue'
 import {
   CandidateLimitExceededError,
@@ -45,12 +45,12 @@ export interface OfferChannelFactory {
 
 /** Consumer-side milestone port; implementations never receive attempt authority. */
 export interface V2PeerOfferAttemptObserver {
-  offerCreated(candidateCounts: CandidateCounts): void
-  offerSent(candidateCounts: CandidateCounts): void
-  answerReceived(candidateCounts: CandidateCounts): void
+  offerCreated(candidateCounts: V2CandidateCounts): void
+  offerSent(candidateCounts: V2CandidateCounts): void
+  answerReceived(candidateCounts: V2CandidateCounts): void
   dataChannelOpened(
-    candidateCounts: CandidateCounts,
-    readSelectedPair: () => Promise<BrowserSelectedPairEvidence | null>,
+    candidateCounts: V2CandidateCounts,
+    readSelectedPair: () => Promise<V2BrowserSelectedPairDiagnostic | null>,
   ): void
 }
 
@@ -330,7 +330,7 @@ class OfferNegotiation {
     }
   }
 
-  #candidateCounts(): CandidateCounts {
+  #candidateCounts(): V2CandidateCounts {
     return Object.freeze({
       localEmitted: this.#localCandidateFingerprints.size,
       remoteAccepted: this.#remote.acceptedCandidates,
@@ -603,7 +603,7 @@ function candidateIdentity(candidate: RTCIceCandidateInit): string {
 
 async function readBrowserSelectedPair(
   peer: RTCPeerConnection,
-): Promise<BrowserSelectedPairEvidence | null> {
+): Promise<V2BrowserSelectedPairDiagnostic | null> {
   let report: RTCStatsReport
   try {
     report = await peer.getStats()
@@ -649,7 +649,7 @@ function selectedCandidatePairId(
 function browserCandidateEvidence(
   candidate: Record<string, unknown> | undefined,
   candidateId: string,
-): BrowserIceCandidateEvidence | null {
+): V2BrowserIceCandidateDiagnostic | null {
   if (candidate === undefined) return null
   const candidateType = candidate.candidateType
   const protocol = candidate.protocol
@@ -672,11 +672,11 @@ function stringField(record: Record<string, unknown>, field: string): string | u
   return typeof value === 'string' && value !== '' ? value : undefined
 }
 
-function isIceCandidateType(value: unknown): value is BrowserIceCandidateEvidence['candidateType'] {
+function isIceCandidateType(value: unknown): value is V2BrowserIceCandidateDiagnostic['candidateType'] {
   return value === 'host' || value === 'prflx' || value === 'srflx' || value === 'relay'
 }
 
-function isIceProtocol(value: unknown): value is BrowserIceCandidateEvidence['protocol'] {
+function isIceProtocol(value: unknown): value is V2BrowserIceCandidateDiagnostic['protocol'] {
   return value === 'udp' || value === 'tcp'
 }
 

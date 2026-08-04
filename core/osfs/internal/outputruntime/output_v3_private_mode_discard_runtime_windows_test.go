@@ -13,7 +13,7 @@ func runtimeMakePrivateEnvelopeUnsafe(path string) error {
 	if err != nil {
 		return err
 	}
-	return windows.SetNamedSecurityInfo(
+	if err := windows.SetNamedSecurityInfo(
 		path,
 		windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION|windows.UNPROTECTED_DACL_SECURITY_INFORMATION,
@@ -21,5 +21,9 @@ func runtimeMakePrivateEnvelopeUnsafe(path string) error {
 		nil,
 		dacl,
 		nil,
-	)
+	); err != nil {
+		return err
+	}
+	markPortableRuntimePrivateEnvelopeUnsafe(path)
+	return nil
 }

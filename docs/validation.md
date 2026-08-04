@@ -1,98 +1,92 @@
 # Validation
 
-WindShare's ordinary CI is PR-first and unprivileged. The [CI workflow](../.github/workflows/ci.yml)
-runs for pull requests, pushes to `main`, and manual dispatches; superseded work for the same PR or
-ref is cancelled. A trusted change-range selector may skip the expensive graph for documentation-only
-changes, but the stable `CI Required Verdict` is always produced. Windows Firewall and WBEM state
-never affect a verdict.
+WindShare uses direct validation gates. The local caller, host, and same-user processes are trusted to run
+tests. That trust does not make filesystem state immutable: product code still handles normal concurrent
+changes and validates remote input.
 
-## Local entry points
+## Local gates
 
-[Makefile](../Makefile) is a thin native dispatcher. Each gate invokes the local toolchain and owns its
-evidence.
+[Makefile](../Makefile) dispatches one native script per target. Developers provide Go, Node.js, pnpm,
+GNU Make, golangci-lint, gopls, sloc-guard, actionlint, govulncheck, installed Web dependencies, and the
+current-platform Chromium runtime. Gates use `GOTOOLCHAIN=local` and never install or update tools,
+packages, or browsers. A missing prerequisite fails in the command that needs it. Windows Firewall and
+WBEM state are not validation gates.
 
-| Entry point | Use |
+| Entry point | Direct responsibility |
 |---|---|
-| `make check` | Short developer feedback for root, core, and Web checks. |
-| `make integration` | Focused native diagnostics; stability invokes the matching native script once per OS. |
-| `make e2e` | Go product E2E; Windows also runs the critical Chromium smoke. |
-| `make race` | One complete native root sweep and one core sweep with race instrumentation. |
-| `make coverage` | One root and one core coverage sweep, followed by the configured floors. |
-| `make browser` | Local browser matrices plus token-free verification of protected network evidence. |
-| `make ci` | Serial current-OS composition of the ordinary local gates. |
+| `make ci` | Run the ordinary local gates in their fixed order. |
+| `make check` | Root/core short tests, Web TypeScript checks, and Vitest. |
+| `make hygiene` | gofmt verification, `git diff --check`, and retired-v1 production-reference scans. |
+| `make sloc`, `make workflow-lint` | Run local sloc-guard and actionlint directly. |
+| `make lint` | Run golangci-lint once in each Go module. |
+| `make vet` | Vet both Go modules and build the released-core consumer with `GOWORK=off`. |
+| `make gopls` | Check tracked Go files with the local language server. |
+| `make short-go` | Run each Go module once with short, race, and atomic coverage instrumentation, then enforce coverage. |
+| `make race`, `make coverage` | Run diagnostic-only short sweeps; `make ci` uses the combined `short-go` gate instead. |
+| `make vectors` | Regenerate and compare the canonical Go-to-TypeScript protocol vectors. |
+| `make web` | Run ESLint, the TypeScript/Vite build, and Vitest. |
+| `make e2e` | Run the single critical sender/relay/receiver process path. |
+| `make browser` | Run the direct current-platform Chromium micro-directory smoke. |
+| `make long-go` | Run named E2E/catalog/output-runtime long suites and native integration packages. |
+| `make core-release` | Validate an extracted, independently consumable core module. |
 
-Coverage remains blocking: core total is at least 90%, root total at least 80%, and every included
-package is at least 70%.
+`make ci` runs `hygiene sloc workflow-lint lint vet short-go vectors web e2e browser gopls` serially.
+Use `make check` or a focused target while iterating. `long-go` and `core-release` intentionally stay
+outside ordinary local CI. The local p95 goal is at most 10 minutes.
 
-## Ordinary CI ownership
+Coverage is blocking: core total >=90%, root total >=80%, and every included Go package >=70%. Product
+packages are not excluded and thresholds are not lowered to make a gate faster.
 
-The DAG keeps cheap failures ahead of expensive evidence:
+## Ordinary GitHub CI
 
-1. `changes` binds the event-specific target and comparison range.
-2. Linux preflight owns formatting and hygiene, SLOC, workflow lint, Go lint, native root/core
-   compile and vet, and the sole `GOWORK=off` released-core consumer build. Windows preflight owns
-   native Windows root/core compile and vet.
-3. After the matching preflight, Linux owns coverage, vectors, the synthetic core artifact, Web, and
-   its native race sweep; Windows owns its native race sweep. Browser preflight runs once after Web,
-   then each OS owns its process stack and Windows owns the Chromium smoke.
-4. The always-running required verdict accepts either the complete selected graph or an intentional
-   documentation-only skip; cancelled, failed, or partially skipped validation fails closed.
+The [CI workflow](../.github/workflows/ci.yml) runs on every pull request and push to `main`, cancels
+superseded work for the same ref, and starts seven fixed independent jobs:
 
-There are no separate uninstrumented integration or Go E2E jobs in the ordinary graph. The root
-`./...` sweep already contains those packages, so Linux and Windows race each exercise them once
-under native race instrumentation, while Linux coverage exercises them once under coverage
-instrumentation. The focused `make integration` and `make e2e` targets remain available for
-diagnosis without becoming duplicate PR owners.
-
-## Protected Full Browser
-
-[Full Browser](../.github/workflows/browser-full.yml) is isolated from ordinary CI. It accepts only a
-scheduled or manual run for a protected default-branch SHA. A GitHub-hosted job prepares and hashes
-all executable inputs without OIDC; the protected `browser-network-matrix` environment grants
-`id-token: write` only to the one-use network broker on the dedicated self-hosted Linux runner.
-The final token-free orchestrator verifies the 45 network identities and runs the local browser
-matrix once, then publishes `browser-full-<sha>-<run>-<attempt>`.
-
-This workflow requires repository branch protection, the protected environment, a one-use runner,
-and broker runtime configuration bound to `browser-full.yml`. It does not replay the ordinary PR
-graph.
-
-## Native integration stability
-
-[Native Integration Stability](../.github/workflows/stability.yml) runs the native integration entry
-once on Linux and Windows for one validated default-branch SHA. Artifacts bind the SHA, workflow run,
-attempt, job, OS, invocation, authenticated start event, and result.
-
-The explicit evidence contract is:
-
-| Identity | Value |
+| Job | Owner |
 |---|---|
-| Evidence epoch | `windshare.stability-evidence-epoch/v1` |
-| Started event | `windshare.stability-integration-started/v2` |
-| Result | `windshare.stability-result/v4` |
-| Release verdict | `windshare.stability-release-verdict/v7` |
-| Finding key | `windshare.stability-finding-key/v2` |
+| `static` | Hygiene, SLOC, workflow lint, Go lint, and gopls. |
+| `go-root` | Root vet, released-core consumer build, one Linux short race/coverage sweep, and its coverage verdict. |
+| `go-core` | Core vet/build, one Linux short race/coverage sweep, coverage verdict, and vectors. |
+| `web` | Frozen Web install followed by lint, build, and Vitest. |
+| `go-e2e` | The critical Linux process E2E once. |
+| `browser-chromium` | The relay-only Linux Chromium micro-directory product smoke once. |
+| `windows-native` | Windows vet/build and root/core short tests, without duplicate coverage. |
 
-The reducer considers only current-epoch evidence. It seeks 100 valid samples per OS; insufficient
-history is reported without blocking, malformed current-epoch evidence fails, two independent
-observations reproduce a product finding, and 20 newer passing strict-descendant samples resolve it.
+Every job has a 10-minute hang fuse, no dependency on another job, and reports its own result directly.
+Hosted jobs prepare their own current toolchains and frozen project dependencies. The ordinary CI p95
+goal is at most 6 minutes, measured from native GitHub Actions timestamps.
 
-## Exact-SHA release readiness
+## Automatic weekly suites
 
-[Release Readiness](../.github/workflows/release-readiness.yml) is a manual, read-only consumer for
-one protected default-branch SHA. It:
+The [weekly workflow](../.github/workflows/weekly.yml) runs automatically every Sunday at 04:23 UTC;
+manual dispatch is retained only for diagnosis. Its ten independent jobs own the expensive product
+coverage that does not belong in ordinary CI:
 
-1. selects successful `CI Required Verdict`, Full Browser, and both native stability artifacts for
-   that exact SHA;
-2. re-resolves the immutable selection and verifies producer metadata and artifact content;
-3. publishes the stability-history verdict bound to the same target SHA;
-4. checks out the target independently in a clean workspace and runs `make core-release`, without
-   reusing ordinary CI artifacts or its workspace; and
-5. runs an always-settling final verdict that fails unless every independent proof succeeded.
+- Linux and Windows integration stability;
+- named Go E2E/catalog long suites and Linux/Windows native output durability;
+- Chromium progressive catalog paging and separate direct/TURN relay-cut switching;
+- D1/D2 browser/Pion interoperability, Firefox/WebKit smoke, and one Windows Chromium process smoke.
 
-Release readiness uses only GitHub-hosted runners and has no protected environment or OIDC
-permission. It cannot pass until ordinary CI, Full Browser, and Native Integration Stability have
-matching successful evidence for the target SHA.
+Each job has a 10-minute hang fuse. Long Go tests use native `testing.Short()` boundaries and stable
+`TestLong...` names, so every short-mode skip has an automatic owner rather than a manual-only suite.
 
-Performance publication remains a separate contract in [Performance evidence](performance.md); it
-does not schedule correctness tests or grant network access.
+## Core candidate release
+
+The [core candidate workflow](../.github/workflows/core-release.yml) is separate from ordinary CI. A
+push of the candidate tag `core-candidate/vX.Y.Z/<candidate>` resolves the exact commit. Extracted-core
+checks run on Linux/ext4 and Windows/NTFS in parallel before creating `core/vX.Y.Z`. Publication is
+idempotent:
+an absent tag is created, the same commit succeeds, and a different existing commit fails without
+moving the tag. Only the publish job receives `contents: write`; manual dispatch runs diagnostics and
+does not publish.
+
+## Product safety boundary
+
+Validation simplification does not relax E2EE, capability links, remote-input validation, root
+confinement, file revision/lease semantics, resumable and crash-recoverable output, no-replace atomic
+publication, native output identity and ancestry revalidation, or relay/WebRTC switching. Stable
+session, operation, and scenario identifiers and structured milestone logs remain part of the product
+and test diagnostics.
+
+Performance measurements are ordinary local diagnostics described in
+[Performance benchmarks](performance.md); they do not gate correctness or release.

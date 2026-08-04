@@ -211,7 +211,7 @@ func TestE2EBuildPlanAppliesProfileToEveryChild(t *testing.T) {
 	}
 }
 
-func TestE2EChildBuildProfileMatchesParentInstrumentation(t *testing.T) {
+func TestLongE2EChildBuildProfileMatchesParentInstrumentation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("building both provenance fixtures exceeds the short-test budget")
 	}

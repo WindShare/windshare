@@ -343,15 +343,12 @@ func windowsV3HostileInheritedParentDescriptor(
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries := ""
-	for _, principal := range []*windows.SID{
+	entries := windowsV3InheritableFullAccessEntries([]*windows.SID{
 		policy.userSID,
 		policy.systemSID,
 		policy.administratorsSID,
-	} {
-		entries += fmt.Sprintf("(A;OICI;GA;;;%s)", principal.String())
-	}
-	entries += fmt.Sprintf("(A;OICI;GA;;;%s)", users.String())
+		users,
+	})
 	descriptor, err := windows.SecurityDescriptorFromString(
 		"O:" + policy.userSID.String() + "D:P" + entries,
 	)

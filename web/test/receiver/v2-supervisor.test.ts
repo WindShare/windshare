@@ -1,6 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import type { BrowserAttemptEvidence } from '../../scripts/browser-evidence/attempt-evidence'
-
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import { FileGeometry } from '../../src/content/geometry'
 import type {
@@ -15,6 +13,7 @@ import {
   V2ConnectivityRouteAuthority,
   type V2ContentLaneAdmissionObservation,
 } from '../../src/connectivity/v2-receiver-policy'
+import type { V2BrowserConnectivityAttemptDiagnostic } from '../../src/connectivity/diagnostics'
 import {
   V2BrowserSessionFactory,
   type V2AttachedRelay,
@@ -254,11 +253,11 @@ async function flushReconciliation(): Promise<void> {
 }
 
 describe('v2 receiver reconnect supervisor', () => {
-  it('projects connectivity attempt evidence through the generation boundary', async () => {
+  it('projects connectivity attempt diagnostics through the generation boundary', async () => {
     const session = new FakeSession([1])
     const relay = new TrackedRelay(1)
     const factory = new FakeSessionFactory()
-    const evidence: BrowserAttemptEvidence[] = []
+    const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
     const supervisor = new V2ReceiverReconnectSupervisor({
       descriptor: descriptor(),
       initial: core(session, relay),
@@ -268,14 +267,14 @@ describe('v2 receiver reconnect supervisor', () => {
         offer: async () => { throw new Error('synthetic observed peer failure') },
       }),
       rtcApiPresent: () => true,
-      connectivityObserver: (event) => evidence.push(event),
+      connectivityObserver: (event) => diagnostics.push(event),
     })
 
     const activation = supervisor.beginConnectivity('preview')
     await flushReconciliation()
 
-    expect(evidence.map((event) => event.stage)).toEqual(['started', 'failed'])
-    expect(evidence.at(-1)).toMatchObject({
+    expect(diagnostics.map((event) => event.stage)).toEqual(['started', 'failed'])
+    expect(diagnostics.at(-1)).toMatchObject({
       failedAtStage: 'offer-created',
       typedErrorCode: 'unexpected',
     })
@@ -315,7 +314,7 @@ describe('v2 receiver reconnect supervisor', () => {
     await supervisor.close()
   })
 
-  it('keeps dispatch evidence contiguous across fresh protocol generations', async () => {
+  it('keeps dispatch observations contiguous across fresh protocol generations', async () => {
     const firstSession = new FakeSession([1])
     const firstRelay = new TrackedRelay(1)
     const secondSession = new FakeSession([10])

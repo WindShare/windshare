@@ -5,7 +5,7 @@ import {
   type V2BlockTransportRoute,
 } from '../content/v2-broker'
 import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
-import type { LaneIdentity } from '../../scripts/browser-evidence/attempt-evidence'
+import type { V2LaneIdentity } from './diagnostics'
 import type { PeerChannel } from './peer-channel'
 import {
   browserPeerConnectionAvailable,
@@ -400,7 +400,7 @@ export class V2ReceiverConnectivity {
     ) throw new Error('Peer lane detached during admission')
   }
 
-  #publishPeer(peer: PeerChannel, route: V2SessionSignalingRoute, lane: LaneIdentity): void {
+  #publishPeer(peer: PeerChannel, route: V2SessionSignalingRoute, lane: V2LaneIdentity): void {
     this.#peer = peer
     this.#peerRoute = route
     this.#peerLaneId = lane.laneId
@@ -545,7 +545,7 @@ export class V2ReceiverConnectivity {
   }
 }
 
-function laneIdentity(laneId: number, laneEpoch: number): LaneIdentity {
+function laneIdentity(laneId: number, laneEpoch: number): V2LaneIdentity {
   return Object.freeze({ laneId, laneEpoch })
 }
 

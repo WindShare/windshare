@@ -78,6 +78,27 @@ describe('v2 canonical output selection', () => {
     expect(changed.resumeIntentText).not.toBe(original.resumeIntentText)
   })
 
+  it('preserves nanosecond timestamps whose millisecond projection is fractional', async () => {
+    if (vector === undefined) throw new Error('canonical selection vector is missing')
+    const fixture = vectorFixture(vector)
+    const modifiedTime: V2CatalogModifiedTime = Object.freeze({
+      seconds: 1n,
+      nanoseconds: 450_479_400,
+      precision: 3,
+      milliseconds: 1_450n,
+    })
+
+    const selection = await createV2OutputSelection(
+      fixture.descriptor,
+      fixture.policy.snapshot(),
+      fixture.rootGeneration,
+      [fixture.directory],
+      [{ ...fixture.file, modifiedTime }],
+    )
+
+    expect(selection.files[0]?.modifiedTime).toEqual(modifiedTime)
+  })
+
   it('claims catalog identities across the entire discovery tree', () => {
     if (vector === undefined) throw new Error('canonical selection vector is missing')
     const fixture = vectorFixture(vector)
@@ -105,7 +126,7 @@ describe('v2 canonical output selection', () => {
       fixture.descriptor,
       fixture.policy.snapshot(),
       fixture.rootGeneration,
-      [{ ...fixture.directory, directoryId: fixture.descriptor.syntheticRoot }],
+      [{ ...fixture.directory, directoryId: fixture.syntheticRoot }],
       [],
     )).rejects.toThrow('Selection plan repeats an opaque node identity')
   })
@@ -123,7 +144,7 @@ function vectorFixture(value: CanonicalSelectionVector) {
     nanoseconds: value.modifiedNanoseconds,
     precision: value.modifiedPrecision,
     milliseconds: BigInt(value.modifiedSeconds) * 1_000n +
-      BigInt(value.modifiedNanoseconds / 1_000_000),
+      BigInt(Math.floor(value.modifiedNanoseconds / 1_000_000)),
   })
   const directoryEntry: Extract<V2CatalogEntry, { kind: 'directory' }> = Object.freeze({
     kind: 'directory', id: directoryId, idText: 'directory', name: 'photos', modifiedTime,
@@ -151,6 +172,7 @@ function vectorFixture(value: CanonicalSelectionVector) {
   })
   return {
     descriptor: { shareInstance, syntheticRoot } as never,
+    syntheticRoot,
     policy,
     rootGeneration,
     directory,

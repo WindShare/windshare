@@ -273,15 +273,16 @@ func prepareSenderCatalog(
 	if err != nil {
 		return senderCatalog{}, err
 	}
+	tracer := catalogStorageTracerOrDefault(config.CatalogTracer)
 	storageFactory := config.CatalogStorage
 	if storageFactory == nil {
-		storageFactory = productionCatalogStorageFactory(config.CatalogTracer)
+		storageFactory = productionCatalogStorageFactory(tracer)
 	}
-	traceCatalogStorage(config.CatalogTracer, CatalogStorageTrace{
+	traceCatalogStorage(tracer, CatalogStorageTrace{
 		Operation: CatalogStorageCreating, ShareInstance: authority.shareInstance,
 	})
 	backend, err := storageFactory.Create(ctx, authority.shareInstance)
-	traceCatalogStorage(config.CatalogTracer, CatalogStorageTrace{
+	traceCatalogStorage(tracer, CatalogStorageTrace{
 		Operation: CatalogStorageCreated, ShareInstance: authority.shareInstance,
 		Failed: err != nil, Cause: err,
 	})
@@ -293,7 +294,7 @@ func prepareSenderCatalog(
 	}
 	if _, owned := backend.(*ownedCatalogBackend); !owned {
 		backend = &observedCatalogBackend{
-			CatalogBackend: backend, share: authority.shareInstance, tracer: config.CatalogTracer,
+			CatalogBackend: backend, share: authority.shareInstance, tracer: tracer,
 		}
 	}
 	sender.catalogStore, err = catalog.NewCatalogStore(catalog.StoreConfig{
@@ -302,7 +303,7 @@ func prepareSenderCatalog(
 	})
 	if err != nil {
 		if errors.Is(err, catalog.ErrBudgetExceeded) {
-			traceCatalogStorage(config.CatalogTracer, CatalogStorageTrace{
+			traceCatalogStorage(tracer, CatalogStorageTrace{
 				Operation: CatalogStorageBudgetRejected, ShareInstance: authority.shareInstance,
 				Failed: true, Cause: err,
 			})

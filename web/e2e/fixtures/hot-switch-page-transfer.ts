@@ -1,7 +1,5 @@
 import type { Page } from '@playwright/test'
 
-import { MAIN_TRANSFER_BYTES } from '../../scripts/browser-evidence/result'
-
 const FAILURE_DIAGNOSTIC_MAXIMUM_DEPTH = 4
 const PAGE_TRANSFER_RUNTIME_PATH = '/e2e/fixtures/hot-switch-page-runtime.ts'
 
@@ -11,6 +9,7 @@ export async function startPageTransfer(
     readonly expectedHash: string
     readonly key: string
     readonly rtcConfiguration: RTCConfiguration
+    readonly transferBytes: number
   },
 ): Promise<void> {
   await page.evaluate(async (runtimeInput) => {
@@ -22,7 +21,7 @@ export async function startPageTransfer(
     ...input,
     failureDiagnosticMaximumDepth: FAILURE_DIAGNOSTIC_MAXIMUM_DEPTH,
     runtimePath: PAGE_TRANSFER_RUNTIME_PATH,
-    transferBytes: MAIN_TRANSFER_BYTES,
+    transferBytes: input.transferBytes,
   })
 }
 

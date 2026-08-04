@@ -2,7 +2,7 @@ package catalog
 
 import "testing"
 
-func TestExtremeWidthCatalogSpillAndReplay(t *testing.T) {
+func TestLongExtremeWidthCatalogSpillAndReplay(t *testing.T) {
 	requireCatalogScaleScenario(t)
 	const semanticWidth = 10_003
 	metrics := exerciseCatalogWidth(t, t.TempDir(), semanticWidth, catalogSortRunBytes)

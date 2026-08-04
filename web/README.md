@@ -8,7 +8,8 @@ The protocol authority is [`docs/协议规范.md`](../docs/协议规范.md); pro
 phase semantics are in
 [`docs/即时分享与文件浏览重构计划.md`](../docs/即时分享与文件浏览重构计划.md).
 Validation entry points are in [`docs/validation.md`](../docs/validation.md), and
-manual performance publication is in [`docs/performance.md`](../docs/performance.md).
+local performance diagnostics are in
+[`docs/performance.md`](../docs/performance.md).
 
 ## Source layout
 
@@ -28,26 +29,30 @@ identity, or v1 receiver fallback.
 
 ## Local gates
 
+The developer installs Web dependencies and Playwright browser runtimes outside
+the gates. The commands below consume that environment without changing it:
+
 ```powershell
-pnpm -C web install --frozen-lockfile
 pnpm -C web lint
 pnpm -C web build
-pnpm -C web forbidden
-pnpm -C web run test:unit:remainder
+pnpm -C web test
+make web
+make browser
 ```
 
-`make web` runs the same sequence. The forbidden gate walks the production
-dependency graph, scans all Web source/tests, and checks the built bundle.
+`make web` runs ESLint, the TypeScript/Vite production build, and Vitest.
+`make browser` runs the direct current-platform Chromium product smoke.
 
-## Browser evidence
+## Browser product tests
 
-`make browser-preflight` runs the browser contract and generated-semantic check
-through one reducer, matching the ordinary CI owner.
+| Command | Product coverage |
+|---|---|
+| `pnpm -C web test:browser:smoke` | Relay-only CLI-to-Chromium micro-directory flow and exact downloaded bytes. |
+| `pnpm -C web test:browser:progressive` | Progressive catalog paging across the authenticated page boundary. |
+| `pnpm -C web test:browser:network` | Authenticated direct and TURN peer adoption after relay loss. |
+| `pnpm -C web test:browser:interop` | Direct D1/D2 browser/Pion adapter interoperability. |
+| `pnpm -C web test:browser:cross` | The relay-only product smoke in Firefox and WebKit. |
 
-`pnpm -C web test:browser:smoke` runs the single Chromium product path used by
-the Windows PR gate. `pnpm -C web test:browser` (or `make browser`) runs the full
-three-browser main/Pion matrix. Both commands allocate invocation-private
-loopback listeners and run under the cross-platform process-tree owner; retries
-are disabled, and cleanup evidence is part of the verdict. Direct tests never
-inspect Firewall or WBEM state. See the validation document for PR, nightly,
-and release scope.
+Ordinary GitHub CI runs the Chromium smoke on Linux. The weekly Windows job reuses
+that scenario entry on Windows; the scheduled workflow owns every other
+browser/network suite. Manual dispatch is only a diagnostic convenience.

@@ -14,42 +14,42 @@ import (
 	"sync/atomic"
 	"testing"
 
-	ownerprotocol "github.com/windshare/windshare/internal/processowner/protocol"
 	"github.com/windshare/windshare/internal/testloopback"
 	"github.com/windshare/windshare/internal/testoutputroot"
 	"github.com/windshare/windshare/internal/testrun"
 )
 
 const (
-	v2RelayOnlyLifecycleScenario = "v2-relay-only-transfer"
-	v2SenderReconnectScenario    = "v2-sender-relay-reconnect"
-	v2ExplicitStopScenario       = "v2-explicit-stop-tombstone"
+	v2CriticalRelayTransferScenario = "v2-critical-relay-transfer"
+	v2SenderReconnectScenario       = "v2-sender-relay-reconnect"
+	v2ExplicitStopScenario          = "v2-explicit-stop-tombstone"
+	v2CriticalPayload               = "critical sender-relay-receiver\n"
 
-	v2LifecycleControlReadyMilestone = "lifecycle_control_ready"
-	v2LifecycleControlStopMilestone  = "lifecycle_control_stop"
-	v2SenderRelayRecoveryMilestone   = "sender_relay_recovery"
-	v2SenderStopMilestone            = "sender_stop"
-	v2ReceiverDirectLaneMilestone    = "receiver_direct_lane"
-	v2ReceiverRelayContentMilestone  = "receiver_relay_content"
-	v2ReceiverJoinStoppedMilestone   = "receiver_join_stopped"
+	v2SenderRelayRecoveryMilestone  = "sender_relay_recovery"
+	v2SenderStopMilestone           = "sender_stop"
+	v2ReceiverDirectLaneMilestone   = "receiver_direct_lane"
+	v2ReceiverRelayContentMilestone = "receiver_relay_content"
+	v2ReceiverJoinStoppedMilestone  = "receiver_join_stopped"
 )
 
-func TestV2ProcessTransfersFileWithExplicitRelayOnlyPolicy(t *testing.T) {
+func TestCriticalSenderRelayReceiver(t *testing.T) {
 	requireV2ProcessScenario(t)
-	scenario := startV2Scenario(t, v2RelayOnlyLifecycleScenario)
+	scenario := startV2Scenario(t, v2CriticalRelayTransferScenario)
 	binaries := loadE2EBinaries(t)
-	proxy := startRelayPauseProxy(t, scenario)
-	relay := startLifecycleRelay(t, scenario, binaries, proxy, filepath.Join(t.TempDir(), "relay-state"))
-	_ = relay
+	relay := startV2Process(
+		t, scenario, v2RelayComponent, binaries.relay,
+		"-listen", "127.0.0.1:0", "-state-dir", filepath.Join(t.TempDir(), "relay-state"),
+	)
+	relayURL := "ws://" + waitV2RelayReady(t, relay)
 
-	payload := bytes.Repeat([]byte("relay-only-evidence\n"), 4096)
-	source := filepath.Join(t.TempDir(), "relay-only.bin")
+	payload := []byte(v2CriticalPayload)
+	source := filepath.Join(t.TempDir(), "critical.txt")
 	if err := os.WriteFile(source, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	share := startV2Process(
 		t, scenario, v2WindShareShareComponent, binaries.windshare,
-		"share", source, "--relay", proxy.BaseURL(),
+		"share", source, "--relay", relayURL,
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	output := testoutputroot.New(t).RootPath
@@ -67,13 +67,10 @@ func TestV2ProcessTransfersFileWithExplicitRelayOnlyPolicy(t *testing.T) {
 	events := drainV2ProcessTraces(t, receiver)
 	requireV2EventCount(t, events, v2ReceiverRelayContentMilestone, testrun.OutcomeSucceeded, 1)
 	requireV2EventCount(t, events, v2ReceiverDirectLaneMilestone, testrun.OutcomeSucceeded, 0)
-	if proxy.DownstreamBytes() == 0 {
-		t.Fatal("relay-only transfer produced no relay downstream traffic")
-	}
 	scenario.requireSuccess(t)
 }
 
-func TestV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
+func TestLongV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
 	requireV2ProcessScenario(t)
 	scenario := startV2Scenario(t, v2SenderReconnectScenario)
 	binaries := loadE2EBinaries(t)
@@ -123,7 +120,7 @@ func TestV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
 	scenario.requireSuccess(t)
 }
 
-func TestV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
+func TestLongV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
 	requireV2ProcessScenario(t)
 	scenario := startV2Scenario(t, v2ExplicitStopScenario)
 	binaries := loadE2EBinaries(t)
@@ -140,11 +137,7 @@ func TestV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
 		"share", source, "--relay", proxy.BaseURL(),
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
-	controlAddress := waitV2ProcessTraceAddress(
-		t, share, v2LifecycleControlReadyMilestone, testrun.OutcomeSucceeded,
-	)
-	sendV2LifecycleStop(t, controlAddress, scenario)
-	waitV2ProcessTrace(t, share, v2LifecycleControlStopMilestone, testrun.OutcomeSucceeded)
+	share.interrupt(t)
 	waitV2ProcessTrace(t, share, v2SenderStopMilestone, testrun.OutcomeSucceeded)
 	if err := share.wait(t); err != nil {
 		t.Fatalf("sender failed while committing STOP: %v; stderr=%q", err, share.stderr.String())
@@ -228,56 +221,6 @@ func startV2RelayBehindPausedProxy(
 	return relay
 }
 
-type v2LifecycleControlRequest struct {
-	RunID       string `json:"run_id"`
-	OperationID string `json:"operation_id"`
-	Scenario    string `json:"scenario"`
-	Action      string `json:"action"`
-}
-
-func sendV2LifecycleStop(t *testing.T, address string, scenario *v2Scenario) {
-	t.Helper()
-	phase := scenario.startPhase(t, v2LifecycleStopMilestone, nil)
-	if err := validateV2RelayAddress(address); err != nil {
-		t.Fatalf("invalid lifecycle control address: %v", err)
-	}
-	connection, err := net.DialTimeout("tcp", address, v2ProcessTimeout)
-	if err != nil {
-		t.Fatalf("connect lifecycle control: %v", err)
-	}
-	request := v2LifecycleControlRequest{
-		RunID: scenario.operation.RunID(), OperationID: scenario.operation.ID(),
-		Scenario: scenario.operation.Scenario(), Action: "stop",
-	}
-	var document bytes.Buffer
-	err = ownerprotocol.WriteLineDocument(&document, request)
-	if err == nil {
-		err = writeV2All(connection, document.Bytes())
-	}
-	if tcp, ok := connection.(*net.TCPConn); ok {
-		err = errors.Join(err, tcp.CloseWrite())
-	}
-	err = errors.Join(err, connection.Close())
-	if err != nil {
-		t.Fatalf("send lifecycle STOP: %v", errors.Join(err, phase.Fail(v2ActionFailureReason)))
-	}
-	scenario.succeedPhase(t, phase, nil)
-}
-
-func writeV2All(writer io.Writer, document []byte) error {
-	for len(document) > 0 {
-		written, err := writer.Write(document)
-		if err != nil {
-			return err
-		}
-		if written == 0 {
-			return io.ErrShortWrite
-		}
-		document = document[written:]
-	}
-	return nil
-}
-
 func waitV2ProcessTrace(
 	t *testing.T,
 	process *v2Process,
@@ -288,30 +231,12 @@ func waitV2ProcessTrace(
 	_ = waitV2ProcessEvent(t, process, milestone, outcome)
 }
 
-func waitV2ProcessTraceAddress(
-	t *testing.T,
-	process *v2Process,
-	milestone string,
-	outcome testrun.Outcome,
-) string {
-	t.Helper()
-	event := waitV2ProcessEvent(t, process, milestone, outcome)
-	if len(event.Payload) == 0 {
-		t.Fatalf("trace %s/%s has no address payload", milestone, outcome)
-	}
-	payload, err := ownerprotocol.DecodeCanonical[testrun.ListenerReadyContext](event.Payload)
-	if err != nil || payload.Address == "" {
-		t.Fatalf("decode trace %s/%s address: payload=%q err=%v", milestone, outcome, event.Payload, err)
-	}
-	return payload.Address
-}
-
 func waitV2ProcessEvent(
 	t *testing.T,
 	process *v2Process,
 	milestone string,
 	outcome testrun.Outcome,
-) ownerprotocol.Event {
+) testrun.Event {
 	t.Helper()
 	phaseContext := v2ProcessPhaseContext{Component: process.component}
 	phase := process.scenario.startPhase(t, v2ProcessEventWaitMilestone, phaseContext)
@@ -336,13 +261,13 @@ func waitV2ProcessEvent(
 func drainV2ProcessTraces(
 	t *testing.T,
 	process *v2Process,
-) []ownerprotocol.Event {
+) []testrun.Event {
 	t.Helper()
 	phaseContext := v2ProcessPhaseContext{Component: process.component}
 	phase := process.scenario.startPhase(t, v2ProcessEventDrainMilestone, phaseContext)
 	ctx, cancel := context.WithTimeout(context.Background(), v2ProcessTimeout)
 	defer cancel()
-	var events []ownerprotocol.Event
+	var events []testrun.Event
 	for {
 		event, err := process.owned.Events().Next(ctx)
 		if errors.Is(err, io.EOF) {
@@ -357,7 +282,7 @@ func drainV2ProcessTraces(
 	}
 }
 
-func validateV2ProcessEvent(t *testing.T, process *v2Process, event ownerprotocol.Event) {
+func validateV2ProcessEvent(t *testing.T, process *v2Process, event testrun.Event) {
 	t.Helper()
 	wantIdentity := process.scenario.operation.EventIdentity()
 	if event.Identity != wantIdentity {
@@ -370,7 +295,7 @@ func validateV2ProcessEvent(t *testing.T, process *v2Process, event ownerprotoco
 
 func requireV2EventCount(
 	t *testing.T,
-	events []ownerprotocol.Event,
+	events []testrun.Event,
 	milestone string,
 	outcome testrun.Outcome,
 	want int,

@@ -10,11 +10,11 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/outputlinux"
 )
 
-func openOutputRuntimeTestPlatform(path string, create bool) (outputcap.Platform, error) {
+func openNativeOutputRuntimeTestPlatform(path string, create bool) (outputcap.Platform, error) {
 	return outputlinux.Open(path, create)
 }
 
-func newRuntimeTestRootSpec(t testing.TB) runtimeTestRootSpec {
+func newNativeRuntimeTestRootSpec(t testing.TB) runtimeTestRootSpec {
 	t.Helper()
 	requireDurableFilesystemScenario(t)
 	fixture := testoutputroot.New(t)

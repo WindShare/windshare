@@ -6,7 +6,7 @@ import type { V2ConnectivityActivation } from '../connectivity/v2-receiver-polic
 import { V2FilePreview, type V2PreviewPresentation } from '../preview/v2-preview'
 import { SMALL_TRANSFER_BYTE_LIMIT } from '../transfer/measure'
 import { OutputSessionSuspendedError } from '../transfer/output-session'
-import type { V2TransferProgress } from '../transfer/v2-job'
+import type { V2TransferJobResult, V2TransferProgress } from '../transfer/v2-job'
 import { V2BrowserReceiverGateway, type V2BrowseDirectory, type V2BrowsePage, type V2JoinedBrowserShare } from './v2-gateway'
 import {
   acquireBrowserV2Output,
@@ -550,17 +550,7 @@ export class V2ReceiverController {
         onMeasure: (measure) => connectivity.observeSizeClass(measure.sizeClass),
       })
       const result = await job.run(this.#transfer?.signal)
-      if (result.outcome.status === 'Aborted') {
-        this.#publish({ ...this.#snapshot, phase: 'aborted', status: 'Transfer stopped.' })
-      } else if (result.outcome.status === 'CompletedWithErrors') {
-        this.#publish({
-          ...this.#snapshot,
-          phase: 'completed-errors',
-          status: `Saved with ${result.outcome.failureCount} item error(s).`,
-        })
-      } else {
-        this.#publish({ ...this.#snapshot, phase: 'completed', status: 'Transfer complete.' })
-      }
+      this.#acceptTransferTerminal(result)
     } catch (error) {
       await output.abort(error)
       if (this.#transfer?.signal.aborted) {
@@ -580,6 +570,25 @@ export class V2ReceiverController {
       connectivity.close()
       this.#transfer = undefined
     }
+  }
+
+  #acceptTransferTerminal(result: V2TransferJobResult): void {
+    if (result.outcome.status === 'Aborted') {
+      if (!this.#transfer?.signal.aborted) {
+        throw result.abortReason ?? new Error('Transfer aborted without a terminal reason')
+      }
+      this.#publish({ ...this.#snapshot, phase: 'aborted', status: 'Transfer stopped.' })
+      return
+    }
+    if (result.outcome.status === 'CompletedWithErrors') {
+      this.#publish({
+        ...this.#snapshot,
+        phase: 'completed-errors',
+        status: `Saved with ${result.outcome.failureCount} item error(s).`,
+      })
+      return
+    }
+    this.#publish({ ...this.#snapshot, phase: 'completed', status: 'Transfer complete.' })
   }
 
   #acceptProgress(progress: V2TransferProgress): void {

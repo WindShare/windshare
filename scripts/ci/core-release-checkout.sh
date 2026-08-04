@@ -7,7 +7,6 @@ WINDSHARE_CORE_RELEASE_VERIFIER_PATHS=(
   go.mod
   go.sum
   scripts/ci/_coremodulezip/main.go
-  scripts/ci/_corevulnerability/main.go
   scripts/ci/core-release-linux-native.sh
   scripts/ci/core-release-linux-native-root.sh
   scripts/ci/core-release-windows-native.psm1

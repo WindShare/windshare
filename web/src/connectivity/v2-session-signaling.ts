@@ -1,18 +1,17 @@
 import { encodeBase64Url } from '../crypto/bytes'
-import type {
-  AuthenticatedSenderOperationFailureEvidence,
-  BrowserAttemptEvidence,
-  BrowserSelectedPairEvidence,
-  CandidateCounts,
-  LaneIdentity,
-} from '../../scripts/browser-evidence/attempt-evidence'
 import {
-  BROWSER_ATTEMPT_STAGES,
-  BROWSER_EVIDENCE_SCHEMA_VERSION,
-  typedErrorForPeerOperationCode,
-  type BrowserAttemptStage,
-  type TypedPeerErrorCode,
-} from '../../scripts/browser-evidence/vocabulary'
+  V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES,
+  V2_CONNECTIVITY_DIAGNOSTIC_SCHEMA_VERSION,
+  v2TypedErrorForPeerOperationCode,
+  type V2AuthenticatedPeerOperationFailureDiagnostic,
+  type V2BrowserConnectivityAttemptDiagnostic,
+  type V2BrowserConnectivityAttemptStage,
+  type V2BrowserSelectedPairDiagnostic,
+  type V2CandidateCounts,
+  type V2ConnectivityObserver,
+  type V2LaneIdentity,
+  type V2TypedPeerErrorCode,
+} from './diagnostics'
 import {
   decodeV2OperationErrorControl,
   V2MessageError,
@@ -56,6 +55,7 @@ export {
   V2AuthenticatedPeerOperationError,
   V2SessionSignalingError,
 } from './v2-session-signaling-errors'
+export type { V2ConnectivityObserver } from './diagnostics'
 
 type V2SessionSignalingDecision = {
   readonly type: 'route-failed'
@@ -69,7 +69,6 @@ export type V2SessionSignalingTrace = V2SessionSignalingDecision & {
 }
 
 export type V2SessionSignalingObserver = (event: V2SessionSignalingTrace) => void
-export type V2ConnectivityObserver = (event: BrowserAttemptEvidence) => void
 
 /**
  * Projects one PeerConnection negotiation over a single authenticated operation.
@@ -141,41 +140,41 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
     )
   }
 
-  offerCreated(candidateCounts: CandidateCounts): void {
+  offerCreated(candidateCounts: V2CandidateCounts): void {
     this.#attempt.advance('offer-created', { candidateCounts })
   }
 
-  offerSent(candidateCounts: CandidateCounts): void {
+  offerSent(candidateCounts: V2CandidateCounts): void {
     this.#attempt.advance('offer-sent', { candidateCounts })
   }
 
-  answerReceived(candidateCounts: CandidateCounts): void {
+  answerReceived(candidateCounts: V2CandidateCounts): void {
     this.#attempt.advance('answer-received', { candidateCounts })
   }
 
   dataChannelOpened(
-    candidateCounts: CandidateCounts,
-    readSelectedPair: () => Promise<BrowserSelectedPairEvidence | null>,
+    candidateCounts: V2CandidateCounts,
+    readSelectedPair: () => Promise<V2BrowserSelectedPairDiagnostic | null>,
   ): void {
     this.#attempt.registerSelectedPairReader(readSelectedPair)
     this.#attempt.advance('datachannel-open', { candidateCounts })
   }
 
-  laneGranted(lane: LaneIdentity): void {
+  laneGranted(lane: V2LaneIdentity): void {
     this.#attempt.advance('lane-granted', {
       candidateCounts: this.#attempt.candidateCounts,
       lane,
     })
   }
 
-  laneAttached(lane: LaneIdentity): void {
+  laneAttached(lane: V2LaneIdentity): void {
     this.#attempt.advance('lane-attached', {
       candidateCounts: this.#attempt.candidateCounts,
       lane,
     })
   }
 
-  async readSelectedPair(signal?: AbortSignal): Promise<BrowserSelectedPairEvidence | null> {
+  async readSelectedPair(signal?: AbortSignal): Promise<V2BrowserSelectedPairDiagnostic | null> {
     return this.#attempt.readSelectedPair(signal)
   }
 
@@ -188,7 +187,7 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
     if (this.#failure !== undefined) throw this.#failure.reason
   }
 
-  admitted(lane: LaneIdentity, selectedPair: BrowserSelectedPairEvidence | null): void {
+  admitted(lane: V2LaneIdentity, selectedPair: V2BrowserSelectedPairDiagnostic | null): void {
     this.#attempt.admitted(lane, selectedPair)
   }
 
@@ -196,7 +195,7 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
     reason: unknown,
     options: {
       readonly failureScope?: 'attempt' | 'session'
-      readonly typedErrorCode?: TypedPeerErrorCode
+      readonly typedErrorCode?: V2TypedPeerErrorCode
     } = {},
   ): void {
     this.#attempt.failed(
@@ -360,14 +359,14 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
   }
 }
 
-const BROWSER_SUCCESS_STAGES = BROWSER_ATTEMPT_STAGES.filter(
-  (stage): stage is Exclude<BrowserAttemptStage, 'failed'> => stage !== 'failed',
+const BROWSER_SUCCESS_STAGES = V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES.filter(
+  (stage): stage is Exclude<V2BrowserConnectivityAttemptStage, 'failed'> => stage !== 'failed',
 )
 const MAXIMUM_DIAGNOSTIC_TEXT_BYTES = 512
 
 type BrowserMilestonePayload = {
-  readonly candidateCounts: CandidateCounts
-  readonly lane?: LaneIdentity
+  readonly candidateCounts: V2CandidateCounts
+  readonly lane?: V2LaneIdentity
 }
 
 class BrowserAttemptLifecycle {
@@ -381,11 +380,11 @@ class BrowserAttemptLifecycle {
   #sideSequence = 0
   #lastElapsedMs = 0
   #terminal = false
-  #candidateCounts: CandidateCounts | undefined
-  #lane: LaneIdentity | undefined
-  #selectedPairReader: (() => Promise<BrowserSelectedPairEvidence | null>) | undefined
-  #selectedPairPromise: Promise<BrowserSelectedPairEvidence | null> | undefined
-  #selectedPair: BrowserSelectedPairEvidence | null = null
+  #candidateCounts: V2CandidateCounts | undefined
+  #lane: V2LaneIdentity | undefined
+  #selectedPairReader: (() => Promise<V2BrowserSelectedPairDiagnostic | null>) | undefined
+  #selectedPairPromise: Promise<V2BrowserSelectedPairDiagnostic | null> | undefined
+  #selectedPair: V2BrowserSelectedPairDiagnostic | null = null
   #selectedPairRead = false
   #failureScope: 'attempt' | 'session' = 'attempt'
 
@@ -404,7 +403,7 @@ class BrowserAttemptLifecycle {
     if (observer !== undefined) this.#emit({ stage: 'started' })
   }
 
-  get candidateCounts(): CandidateCounts {
+  get candidateCounts(): V2CandidateCounts {
     return this.#candidateCounts ?? Object.freeze({ localEmitted: 0, remoteAccepted: 0 })
   }
 
@@ -417,7 +416,7 @@ class BrowserAttemptLifecycle {
   }
 
   advance(
-    stage: Exclude<BrowserAttemptStage, 'started' | 'admitted' | 'failed'>,
+    stage: Exclude<V2BrowserConnectivityAttemptStage, 'started' | 'admitted' | 'failed'>,
     payload: BrowserMilestonePayload,
   ): void {
     if (this.#observer === undefined || this.#terminal) return
@@ -435,12 +434,12 @@ class BrowserAttemptLifecycle {
   }
 
   registerSelectedPairReader(
-    reader: () => Promise<BrowserSelectedPairEvidence | null>,
+    reader: () => Promise<V2BrowserSelectedPairDiagnostic | null>,
   ): void {
     this.#selectedPairReader ??= reader
   }
 
-  async readSelectedPair(signal?: AbortSignal): Promise<BrowserSelectedPairEvidence | null> {
+  async readSelectedPair(signal?: AbortSignal): Promise<V2BrowserSelectedPairDiagnostic | null> {
     if (this.#selectedPairPromise === undefined) {
       this.#selectedPairPromise = this.#readSelectedPair()
     }
@@ -452,7 +451,7 @@ class BrowserAttemptLifecycle {
     return selectedPair
   }
 
-  admitted(lane: LaneIdentity, selectedPair: BrowserSelectedPairEvidence | null): void {
+  admitted(lane: V2LaneIdentity, selectedPair: V2BrowserSelectedPairDiagnostic | null): void {
     if (this.#observer === undefined || this.#terminal) return
     if (!this.#expect('admitted')) return
     const authoritativeLane = snapshotLane(lane)
@@ -480,7 +479,7 @@ class BrowserAttemptLifecycle {
   failed(
     reason: unknown,
     failureScope: 'attempt' | 'session',
-    typedErrorCode?: TypedPeerErrorCode,
+    typedErrorCode?: V2TypedPeerErrorCode,
   ): void {
     if (this.#observer === undefined || this.#terminal) return
     const failedAtStage = BROWSER_SUCCESS_STAGES[this.#nextStageIndex]
@@ -511,7 +510,7 @@ class BrowserAttemptLifecycle {
     })
   }
 
-  #expect(stage: Exclude<BrowserAttemptStage, 'started' | 'failed'>): boolean {
+  #expect(stage: Exclude<V2BrowserConnectivityAttemptStage, 'started' | 'failed'>): boolean {
     const expected = BROWSER_SUCCESS_STAGES[this.#nextStageIndex]
     if (expected === stage) return true
     this.failed(
@@ -522,7 +521,7 @@ class BrowserAttemptLifecycle {
     return false
   }
 
-  async #readSelectedPair(): Promise<BrowserSelectedPairEvidence | null> {
+  async #readSelectedPair(): Promise<V2BrowserSelectedPairDiagnostic | null> {
     if (this.#selectedPairReader === undefined) return null
     try {
       return await this.#selectedPairReader()
@@ -537,8 +536,8 @@ class BrowserAttemptLifecycle {
     if (observer === undefined) return
     const attemptElapsedMs = this.#elapsedMilliseconds()
     this.#sideSequence += 1
-    const evidence = Object.freeze({
-      schemaVersion: BROWSER_EVIDENCE_SCHEMA_VERSION,
+    const diagnostic = Object.freeze({
+      schemaVersion: V2_CONNECTIVITY_DIAGNOSTIC_SCHEMA_VERSION,
       sessionId: this.#sessionId,
       peerPathId: this.#peerPathId,
       attemptId: this.#attemptId,
@@ -546,11 +545,11 @@ class BrowserAttemptLifecycle {
       sideSequence: this.#sideSequence,
       attemptElapsedMs,
       ...payload,
-    }) as BrowserAttemptEvidence
+    }) as V2BrowserConnectivityAttemptDiagnostic
     try {
-      observer(evidence)
+      observer(diagnostic)
     } catch {
-      // Evidence consumers cannot alter authenticated connectivity or cleanup.
+      // Diagnostic consumers cannot alter authenticated connectivity or cleanup.
     }
   }
 
@@ -573,31 +572,31 @@ class BrowserAttemptLifecycle {
   }
 }
 
-function snapshotCandidateCounts(candidateCounts: CandidateCounts): CandidateCounts {
+function snapshotCandidateCounts(candidateCounts: V2CandidateCounts): V2CandidateCounts {
   return Object.freeze({
     localEmitted: candidateCounts.localEmitted,
     remoteAccepted: candidateCounts.remoteAccepted,
   })
 }
 
-function snapshotLane(lane: LaneIdentity): LaneIdentity {
+function snapshotLane(lane: V2LaneIdentity): V2LaneIdentity {
   return Object.freeze({ laneId: lane.laneId, laneEpoch: lane.laneEpoch })
 }
 
-function sameLane(left: LaneIdentity, right: LaneIdentity): boolean {
+function sameLane(left: V2LaneIdentity, right: V2LaneIdentity): boolean {
   return left.laneId === right.laneId && left.laneEpoch === right.laneEpoch
 }
 
 function authenticatedSenderFailure(
   reason: unknown,
-): AuthenticatedSenderOperationFailureEvidence | undefined {
+): V2AuthenticatedPeerOperationFailureDiagnostic | undefined {
   const error = findNestedError<V2AuthenticatedPeerOperationError>(
     reason,
     (candidate): candidate is V2AuthenticatedPeerOperationError =>
       candidate instanceof V2AuthenticatedPeerOperationError,
   )
   if (error === undefined) return undefined
-  const typed = typedErrorForPeerOperationCode(error.operationFailure.code)
+  const typed = v2TypedErrorForPeerOperationCode(error.operationFailure.code)
   if (typed === undefined) return undefined
   return Object.freeze({
     scope: 'peer',
@@ -608,16 +607,16 @@ function authenticatedSenderFailure(
 
 function classifyTypedFailure(
   reason: unknown,
-  failedAtStage: Exclude<BrowserAttemptStage, 'started' | 'failed'>,
+  failedAtStage: Exclude<V2BrowserConnectivityAttemptStage, 'started' | 'failed'>,
   failureScope: 'attempt' | 'session',
-): TypedPeerErrorCode {
+): V2TypedPeerErrorCode {
   const authenticated = findNestedError<V2AuthenticatedPeerOperationError>(
     reason,
     (candidate): candidate is V2AuthenticatedPeerOperationError =>
       candidate instanceof V2AuthenticatedPeerOperationError,
   )
   if (authenticated !== undefined) {
-    return typedErrorForPeerOperationCode(authenticated.operationFailure.code) ?? 'unexpected'
+    return v2TypedErrorForPeerOperationCode(authenticated.operationFailure.code) ?? 'unexpected'
   }
   if (failureScope === 'session') return 'signaling-contract'
   const timeout = findNestedError(reason, (candidate) =>

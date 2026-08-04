@@ -138,7 +138,7 @@ func replayPageObjects(t *testing.T, store *CatalogStore, directory CommittedDir
 	return result
 }
 
-func TestFileCatalogBackendWideSortReplayAndRecoveryAccounting(t *testing.T) {
+func TestLongFileCatalogBackendWideSortReplayAndRecoveryAccounting(t *testing.T) {
 	requireCatalogScaleScenario(t)
 	const childCount = 4_097
 	rootPath := t.TempDir()
@@ -490,7 +490,7 @@ func TestInjectedSpillFailureIsAtomicAndBudgetClean(t *testing.T) {
 	}
 }
 
-func TestExternalSortIsPermutationDeterministic(t *testing.T) {
+func TestLongExternalSortIsPermutationDeterministic(t *testing.T) {
 	requireCatalogScaleScenario(t)
 	const entries = 321
 	var reference [][]byte

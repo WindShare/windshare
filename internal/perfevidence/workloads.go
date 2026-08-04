@@ -1,16 +1,8 @@
 package perfevidence
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
-	"runtime"
 	"sort"
-	"strings"
 )
 
 const (
@@ -159,7 +151,6 @@ func relayRegistrationWorkload() Workload {
 	return Workload{
 		ID: "relay-registration-wire", ModuleDir: ".", Package: "./transport/relayv2",
 		Benchmark: "BenchmarkRelaySenderRegistration", BenchTime: defaultBenchTime,
-		BenchmarkHarnessPackages: []string{"github.com/windshare/windshare/core/liveshare"},
 		Contracts: []BenchmarkContract{contract(
 			"BenchmarkRelaySenderRegistration", "registration-wire-sent-B/op", "registration-wire-received-B/op",
 			"descriptor-bytes/op", "registration-writes/op", "registration-reads/op",
@@ -173,8 +164,7 @@ func relayRegistrationWorkload() Workload {
 
 func pionTransferWorkload() Workload {
 	contracts := make([]BenchmarkContract, 0, 4)
-	oracles := make([]MetricOracle, 0, 19)
-	oracles = append(oracles, []MetricOracle{
+	sharedOracles := []MetricOracle{
 		{ID: "pion-low-water-matches-production", Metric: "low-water-B", Comparison: Equal, Limit: pionLowWaterBytes},
 		{ID: "pion-high-water-matches-production", Metric: "high-water-B", Comparison: Equal, Limit: pionHighWaterBytes},
 		{ID: "pion-send-admission-matches-production", Metric: "send-admission-high-water-B", Comparison: Equal, Limit: pionSendAdmissionBytes},
@@ -186,8 +176,11 @@ func pionTransferWorkload() Workload {
 		{ID: "pion-nonnegative-buffered-peak", Metric: "peak-buffered-B", Comparison: GreaterThanOrEqual, Limit: 0},
 		{ID: "pion-buffer-remains-below-one-frame-high-water", Metric: "peak-buffered-B", Comparison: LessThan, Limit: pionPeakExclusiveLimitBytes},
 		{ID: "pion-buffer-respects-admission-plus-one-frame", Metric: "peak-buffered-B", Comparison: LessThanOrEqual, Limit: pionMaximumAdmittedPeakBytes},
-	}...)
-	for _, chunkBytes := range []int{1 << 10, 64 << 10, 1 << 20, 4 << 20} {
+	}
+	chunkSizes := []int{1 << 10, 64 << 10, 1 << 20, 4 << 20}
+	oracles := make([]MetricOracle, 0, len(sharedOracles)+2*len(chunkSizes))
+	oracles = append(oracles, sharedOracles...)
+	for _, chunkBytes := range chunkSizes {
 		kib := chunkBytes >> 10
 		name := fmt.Sprintf("BenchmarkPionChunkTransfer/chunk_%dKiB", kib)
 		contracts = append(contracts, contract(
@@ -223,9 +216,6 @@ func cloneWorkloads(source []Workload) []Workload {
 	result := make([]Workload, len(source))
 	for index, workload := range source {
 		result[index] = workload
-		result[index].BenchmarkHarnessPackages = append(
-			[]string(nil), workload.BenchmarkHarnessPackages...,
-		)
 		result[index].Contracts = append([]BenchmarkContract(nil), workload.Contracts...)
 		for contractIndex := range result[index].Contracts {
 			result[index].Contracts[contractIndex].RequiredMetrics = append(
@@ -234,343 +224,5 @@ func cloneWorkloads(source []Workload) []Workload {
 		}
 		result[index].HardOracles = append([]MetricOracle(nil), workload.HardOracles...)
 	}
-	return result
-}
-
-func discoverAndPrefetchWorkloads(
-	ctx context.Context,
-	runner CommandRunner,
-	environment controlledGoEnvironment,
-	repositoryRoot string,
-	runtimeRoot string,
-	workloads []Workload,
-) (map[string]workloadOverlay, error) {
-	overlays := make(map[string]workloadOverlay, len(workloads))
-	for _, workload := range workloads {
-		overlay, err := discoverWorkloadOverlay(
-			ctx, runner, environment, repositoryRoot, runtimeRoot, workload,
-		)
-		if err != nil {
-			return nil, err
-		}
-		overlays[workload.ID] = overlay
-		// Network access is confined to dependency acquisition; every identity
-		// traversal below is offline and starts only after module verification.
-		if _, err := listWorkloadGraph(
-			ctx, runner, environment, repositoryRoot, workload, overlay, true,
-		); err != nil {
-			return nil, fmt.Errorf("prefetch workload %s dependencies: %w", workload.ID, err)
-		}
-	}
-	if err := verifyDownloadedModules(ctx, runner, environment, repositoryRoot, workloads); err != nil {
-		return nil, err
-	}
-	return overlays, nil
-}
-
-func inventoryLiveWorkloads(
-	ctx context.Context,
-	runner CommandRunner,
-	environment controlledGoEnvironment,
-	repositoryRoot string,
-	workloads []Workload,
-	overlays map[string]workloadOverlay,
-) (map[string]workloadInventory, error) {
-	inventories := make(map[string]workloadInventory, len(workloads))
-	for _, workload := range workloads {
-		inventory, err := listWorkloadGraph(
-			ctx, runner, environment, repositoryRoot,
-			workload, overlays[workload.ID], false,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("inventory workload %s: %w", workload.ID, err)
-		}
-		inventories[workload.ID] = inventory
-	}
-	return inventories, nil
-}
-
-func materializeSnapshotWorkloads(
-	repositoryRoot string,
-	artifactRoot string,
-	liveInventories map[string]workloadInventory,
-	workloads []Workload,
-	overlays map[string]workloadOverlay,
-) (
-	string,
-	string,
-	[]inventoryFile,
-	map[string]PreparedWorkload,
-	map[string]workloadOverlay,
-	error,
-) {
-	snapshotRoot := filepath.Join(artifactRoot, snapshotDirectoryName)
-	workspaceRoot := filepath.Join(snapshotRoot, "workspace")
-	if err := os.MkdirAll(workspaceRoot, 0o700); err != nil {
-		return "", "", nil, nil, nil, fmt.Errorf("create source snapshot: %w", err)
-	}
-	union, err := materializeWorkspace(workspaceRoot, liveInventories)
-	if err != nil {
-		return "", "", nil, nil, nil, err
-	}
-	if err := materializeWorkspaceManifests(repositoryRoot, workspaceRoot, &union); err != nil {
-		return "", "", nil, nil, nil, err
-	}
-	prepared := make(map[string]PreparedWorkload, len(workloads))
-	finalOverlays := make(map[string]workloadOverlay, len(workloads))
-	for _, workload := range workloads {
-		finalOverlay, err := materializeOverlay(
-			repositoryRoot, workspaceRoot, snapshotRoot,
-			filepath.Join(workspaceRoot, filepath.FromSlash(workload.ModuleDir)), overlays[workload.ID],
-		)
-		if err != nil {
-			return "", "", nil, nil, nil, err
-		}
-		finalOverlays[workload.ID] = finalOverlay
-		prepared[workload.ID] = PreparedWorkload{
-			ModuleRoot:  filepath.Join(workspaceRoot, filepath.FromSlash(workload.ModuleDir)),
-			Package:     workload.Package,
-			OverlayPath: finalOverlay.OverlayPath,
-		}
-	}
-	return snapshotRoot, workspaceRoot, union, prepared, finalOverlays, nil
-}
-
-func verifyLiveClosuresUnchanged(
-	ctx context.Context,
-	runner CommandRunner,
-	environment controlledGoEnvironment,
-	repositoryRoot string,
-	workloads []Workload,
-	overlays map[string]workloadOverlay,
-	before map[string]workloadInventory,
-) error {
-	for _, workload := range workloads {
-		after, err := listWorkloadGraph(
-			ctx, runner, environment, repositoryRoot,
-			workload, overlays[workload.ID], false,
-		)
-		if err != nil {
-			return fmt.Errorf("repeat workload %s inventory: %w", workload.ID, err)
-		}
-		if after.Closure != before[workload.ID].Closure {
-			return fmt.Errorf("workload %s source closure changed while snapshotting", workload.ID)
-		}
-	}
-	return nil
-}
-
-func inventorySealedWorkloads(
-	ctx context.Context,
-	runner CommandRunner,
-	environment controlledGoEnvironment,
-	processEnvironment []string,
-	artifactRoot string,
-	workspaceRoot string,
-	workloads []Workload,
-	overlays map[string]workloadOverlay,
-	liveInventories map[string]workloadInventory,
-	prepared map[string]PreparedWorkload,
-) (map[string]PreparedWorkload, []inventoryFile, []ModuleIdentity, []BuildGraphIdentity, error) {
-	graphs := make([]BuildGraphIdentity, 0, len(workloads))
-	var files []inventoryFile
-	moduleByKey := make(map[string]ModuleIdentity)
-	for _, workload := range workloads {
-		inventory, err := listWorkloadGraphWithEnvironment(
-			ctx, runner, environment, processEnvironment, workspaceRoot,
-			workload, overlays[workload.ID],
-		)
-		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("verify sealed workload %s graph: %w", workload.ID, err)
-		}
-		if inventory.Closure != liveInventories[workload.ID].Closure {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"workload %s snapshot closure %s differs from live closure %s",
-				workload.ID, inventory.Closure, liveInventories[workload.ID].Closure,
-			)
-		}
-		files = append(files, inventory.Files...)
-		for _, module := range inventory.Modules {
-			moduleByKey[moduleIdentityKey(module)] = module
-		}
-		graph, err := buildGraphIdentity(artifactRoot, overlays[workload.ID], inventory)
-		if err != nil {
-			return nil, nil, nil, nil, err
-		}
-		graphs = append(graphs, graph)
-		plan := prepared[workload.ID]
-		plan.Graph = graph
-		prepared[workload.ID] = plan
-	}
-	modules := make([]ModuleIdentity, 0, len(moduleByKey))
-	for _, module := range moduleByKey {
-		modules = append(modules, module)
-	}
-	sort.Slice(modules, func(left, right int) bool {
-		return moduleIdentityKey(modules[left]) < moduleIdentityKey(modules[right])
-	})
-	sort.Slice(graphs, func(left, right int) bool { return graphs[left].WorkloadID < graphs[right].WorkloadID })
-	return prepared, files, modules, graphs, nil
-}
-
-func listWorkloadGraph(
-	ctx context.Context,
-	runner CommandRunner,
-	environment controlledGoEnvironment,
-	workspaceRoot string,
-	workload Workload,
-	overlay workloadOverlay,
-	prefetch bool,
-) (workloadInventory, error) {
-	return listWorkloadGraphWithEnvironment(
-		ctx, runner, environment,
-		environment.withWorkspace(filepath.Join(workspaceRoot, "go.work"), prefetch),
-		workspaceRoot, workload, overlay,
-	)
-}
-
-func listWorkloadGraphWithEnvironment(
-	ctx context.Context,
-	runner CommandRunner,
-	environment controlledGoEnvironment,
-	processEnvironment []string,
-	workspaceRoot string,
-	workload Workload,
-	overlay workloadOverlay,
-) (workloadInventory, error) {
-	moduleRoot := filepath.Join(workspaceRoot, filepath.FromSlash(workload.ModuleDir))
-	result, err := runControlled(ctx, runner, Command{
-		Executable: environment.GoExecutable,
-		Arguments: []string{
-			"list", "-mod=readonly", "-deps", "-test", "-json", "-overlay", overlay.OverlayPath, workload.Package,
-		},
-		Directory: moduleRoot, Environment: processEnvironment, ReplaceEnvironment: true,
-	})
-	if err != nil {
-		return workloadInventory{}, err
-	}
-	packages, err := decodeGoListPackages(commandStdout(result))
-	if err != nil {
-		return workloadInventory{}, err
-	}
-	context := inventoryContext{
-		RepositoryRoot: workspaceRoot, WorkspaceRoot: workspaceRoot,
-		GoRoot: environment.ToolchainLocations.GoRoot, GoModCache: environment.GoModCache,
-		GoCache: environment.GoCache, Temporary: environment.Temporary, Overlay: overlay,
-	}
-	inventory, err := inventoryPackages(packages, context)
-	if err != nil {
-		return workloadInventory{}, err
-	}
-	return includeWorkspaceManifests(inventory, workspaceRoot, overlay)
-}
-
-func includeWorkspaceManifests(
-	inventory workloadInventory,
-	workspaceRoot string,
-	overlay workloadOverlay,
-) (workloadInventory, error) {
-	byLogical := make(map[string]inventoryFile, len(inventory.Files)+6)
-	for _, file := range inventory.Files {
-		byLogical[file.Logical] = file
-	}
-	for _, relative := range []string{"go.work", "go.work.sum", "go.mod", "go.sum", "core/go.mod", "core/go.sum"} {
-		path := filepath.Join(workspaceRoot, filepath.FromSlash(relative))
-		info, err := os.Lstat(path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil || !info.Mode().IsRegular() {
-			return workloadInventory{}, fmt.Errorf("inspect workspace manifest %s: %w", relative, err)
-		}
-		sha, err := hashFileExact(path, info.Size())
-		if err != nil {
-			return workloadInventory{}, err
-		}
-		logical := "workspace/" + filepath.ToSlash(relative)
-		byLogical[logical] = inventoryFile{
-			Logical: logical, Physical: path, Origin: "workspace",
-			WorkspaceRelative: filepath.ToSlash(relative), Mode: info.Mode(), Bytes: info.Size(), SHA256: sha,
-		}
-	}
-	inventory.Files = inventory.Files[:0]
-	for _, file := range byLogical {
-		inventory.Files = append(inventory.Files, file)
-	}
-	sort.Slice(inventory.Files, func(left, right int) bool { return inventory.Files[left].Logical < inventory.Files[right].Logical })
-	closure, err := closureSHA(inventory.Files, inventory.Modules, inventory.Packages, overlay)
-	if err != nil {
-		return workloadInventory{}, err
-	}
-	inventory.Closure = closure
-	return inventory, nil
-}
-
-func decodeGoListPackages(encoded []byte) ([]goListPackage, error) {
-	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
-	var packages []goListPackage
-	for {
-		var pkg goListPackage
-		if err := decoder.Decode(&pkg); errors.Is(err, io.EOF) {
-			break
-		} else if err != nil {
-			return nil, fmt.Errorf("decode go list package: %w", err)
-		}
-		packages = append(packages, pkg)
-	}
-	if len(packages) == 0 {
-		return nil, errors.New("go list returned no packages")
-	}
-	return packages, nil
-}
-
-func requiredIdentityErrors(host HostMetadata, source SnapshotIdentity) []string {
-	errorsByID := make(map[string]struct{}, len(host.RequiredErrors)+8)
-	for _, issue := range host.RequiredErrors {
-		errorsByID[issue] = struct{}{}
-	}
-	if source.SHA256 == "" {
-		errorsByID["source-snapshot-identity-missing"] = struct{}{}
-	}
-	toolchain := source.Toolchain
-	toolchainLocations := source.Diagnostics.Toolchain
-	if len(toolchain.ExecutableSHA256) != 64 || toolchain.Version == "" || toolchain.GoVersion == "" ||
-		len(toolchain.Tools) == 0 || len(toolchain.BuildInputs) == 0 || toolchainLocations.ExecutablePath == "" ||
-		toolchainLocations.GoRoot == "" || toolchainLocations.GoToolDir == "" {
-		errorsByID["go-toolchain-identity-incomplete"] = struct{}{}
-	}
-	requiredEnvironment := map[string]string{
-		"CGO_ENABLED":  "0",
-		"GOENV":        "off",
-		"GOEXPERIMENT": "",
-		"GOFLAGS":      "",
-		"GOOS":         runtime.GOOS,
-		"GOARCH":       runtime.GOARCH,
-		"GOPROXY":      "off",
-		"GOSUMDB":      "off",
-		"GOTOOLCHAIN":  "local",
-	}
-	observed := make(map[string]string, len(source.Diagnostics.ProcessEnvironment))
-	for _, variable := range source.Diagnostics.ProcessEnvironment {
-		observed[variable.Name] = variable.Value
-	}
-	for name, expected := range requiredEnvironment {
-		if value, found := observed[name]; !found || value != expected {
-			errorsByID["controlled-go-environment-incomplete"] = struct{}{}
-		}
-	}
-	for _, required := range []string{"GOCACHE", "GOMODCACHE", "GOWORK", "TEMP"} {
-		if observed[required] == "" {
-			errorsByID["controlled-go-environment-incomplete"] = struct{}{}
-		}
-	}
-	if len(source.Diagnostics.EffectiveGoEnv) == 0 {
-		errorsByID["effective-go-environment-missing"] = struct{}{}
-	}
-	result := make([]string, 0, len(errorsByID))
-	for issue := range errorsByID {
-		result = append(result, issue)
-	}
-	sort.Strings(result)
 	return result
 }

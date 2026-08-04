@@ -11,14 +11,11 @@ version = "2"
 # =============================================================================
 [scanner]
 gitignore = true                          # Respect .gitignore (default: true)
-# This committed bundle is reproducibly checked by verify-generated.mjs;
-# its authored TypeScript remains subject to the normal limits.
 exclude = [
   ".git/**",
   "**/node_modules/**",
   "**/dist/**",
   "trash/**",
-  "scripts/ci/browsergate/generated-semantic/final-semantic-reducer.js",
 ]
 
 # =============================================================================

@@ -5,7 +5,6 @@ $script:CoreReleaseVerifierPaths = @(
     'go.mod',
     'go.sum',
     'scripts/ci/_coremodulezip/main.go',
-    'scripts/ci/_corevulnerability/main.go',
     'scripts/ci/core-release-windows-native.psm1',
     'scripts/ci/core-release-windows-native-worker.ps1'
 )
