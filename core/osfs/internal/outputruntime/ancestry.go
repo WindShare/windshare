@@ -517,18 +517,19 @@ func canonicalOutputAncestryPaths(selection transfer.OutputSelection) ([]string,
 		}
 		return nil
 	}
-	for _, directory := range selection.Directories() {
-		if err := addClosure(directory.Path); err != nil {
-			return nil, err
-		}
+	if err := selection.VisitDirectories(func(directory transfer.OutputSelectionDirectory) error {
+		return addClosure(directory.Path)
+	}); err != nil {
+		return nil, err
 	}
-	for _, file := range selection.Files() {
+	if err := selection.VisitFiles(func(file transfer.OutputSelectionFile) error {
 		separator := strings.LastIndexByte(file.Path, '/')
 		if separator >= 0 {
-			if err := addClosure(file.Path[:separator]); err != nil {
-				return nil, err
-			}
+			return addClosure(file.Path[:separator])
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	ordered := make([]string, 0, len(paths))
 	for path := range paths {

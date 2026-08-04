@@ -99,17 +99,20 @@ func BindSessionAuthority(
 	if err != nil {
 		return SessionAuthority{}, err
 	}
-	directories := selection.Directories()
-	files := selection.Files()
+	directories := selection.DirectoryCount()
+	files := selection.FileCount()
 	if selection.ShareInstance() != header.shareInstance || selection.SyntheticRoot() != header.syntheticRoot ||
 		selection.ResumeIntent() != header.resumeIntent || selection.Identity() != header.selectionIdentity ||
-		uint64(len(directories)) != uint64(header.selectedDirectoryCount) ||
-		uint64(len(files)) != uint64(header.selectedFileCount) {
+		directories != uint64(header.selectedDirectoryCount) ||
+		files != uint64(header.selectedFileCount) {
 		return SessionAuthority{}, fmt.Errorf("%w: selected plan binding", ErrInvalidState)
 	}
-	filesByLocator := make(map[string]transfer.OutputSelectionFile, len(files))
-	for _, file := range files {
+	filesByLocator := make(map[string]transfer.OutputSelectionFile, int(files))
+	if err := selection.VisitFiles(func(file transfer.OutputSelectionFile) error {
 		filesByLocator[file.Path] = file
+		return nil
+	}); err != nil {
+		return SessionAuthority{}, err
 	}
 	authority := SessionAuthority{
 		namespace: namespace, selection: selection, filesByLocator: filesByLocator, bound: true,

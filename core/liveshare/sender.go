@@ -26,12 +26,14 @@ import (
 const defaultSharedBlockCacheBytes = uint64(64) << 20
 
 type SenderConfig struct {
-	Paths         []string
-	Relays        []string
-	ChunkSize     uint32
-	Random        io.Reader
-	Now           func() time.Time
-	ScanAdmission DirectoryScanAdmission
+	Paths          []string
+	Relays         []string
+	ChunkSize      uint32
+	Random         io.Reader
+	Now            func() time.Time
+	ScanAdmission  DirectoryScanAdmission
+	CatalogStorage CatalogStorageFactory
+	CatalogTracer  CatalogStorageTracer
 
 	preparation senderPreparationDependencies
 }
@@ -271,11 +273,41 @@ func prepareSenderCatalog(
 	if err != nil {
 		return senderCatalog{}, err
 	}
+	storageFactory := config.CatalogStorage
+	if storageFactory == nil {
+		storageFactory = productionCatalogStorageFactory(config.CatalogTracer)
+	}
+	traceCatalogStorage(config.CatalogTracer, CatalogStorageTrace{
+		Operation: CatalogStorageCreating, ShareInstance: authority.shareInstance,
+	})
+	backend, err := storageFactory.Create(ctx, authority.shareInstance)
+	traceCatalogStorage(config.CatalogTracer, CatalogStorageTrace{
+		Operation: CatalogStorageCreated, ShareInstance: authority.shareInstance,
+		Failed: err != nil, Cause: err,
+	})
+	if err != nil {
+		return senderCatalog{}, fmt.Errorf("create live catalog storage: %w", err)
+	}
+	if backend == nil {
+		return senderCatalog{}, errors.New("live catalog storage factory returned a nil backend")
+	}
+	if _, owned := backend.(*ownedCatalogBackend); !owned {
+		backend = &observedCatalogBackend{
+			CatalogBackend: backend, share: authority.shareInstance, tracer: config.CatalogTracer,
+		}
+	}
 	sender.catalogStore, err = catalog.NewCatalogStore(catalog.StoreConfig{
-		ShareInstance: authority.shareInstance, Backend: catalog.NewMemoryCatalogBackend(),
+		ShareInstance: authority.shareInstance, Backend: backend,
 		ProcessBudget: processBudget, ShareBudget: shareBudget, PageSealer: objects, SpillFactory: spillFactory,
 	})
 	if err != nil {
+		if errors.Is(err, catalog.ErrBudgetExceeded) {
+			traceCatalogStorage(config.CatalogTracer, CatalogStorageTrace{
+				Operation: CatalogStorageBudgetRejected, ShareInstance: authority.shareInstance,
+				Failed: true, Cause: err,
+			})
+		}
+		_ = backend.Close()
 		return senderCatalog{}, err
 	}
 	rootCommit, err := catalog.NewSyntheticRootCommit(catalog.SyntheticRootCommitSpec{

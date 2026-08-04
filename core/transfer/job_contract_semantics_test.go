@@ -325,7 +325,10 @@ func TestTransferJobRejectsInvalidAdmissionAndRevisionIdentityTransitions(t *tes
 			failures: make(map[catalog.FileID]error), releaseErr: NewSessionFailure(cause),
 		}
 		run := immediateSettlementJobRun(share, revisions)
-		plan := plannedFile{file: selected, path: "file.bin", entry: jobEntry(t, selected, "file.bin", 1)}
+		entry := jobEntry(t, selected, "file.bin", 1)
+		plan := plannedFile{
+			file: selected, path: "file.bin", expectedSize: entry.ExpectedSize(), modified: entry.ModifiedTime(),
+		}
 		_, ready, err := run.openSelectedRevision(context.Background(), plan)
 		if ready || !errors.Is(err, cause) || len(revisions.released) != 1 || revisions.released[0] != lease {
 			t.Fatalf("rejected revision ready=%v error=%v released=%v", ready, err, revisions.released)

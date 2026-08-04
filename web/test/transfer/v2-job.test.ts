@@ -5,12 +5,16 @@ import type { V2CommittedDirectory } from '../../src/catalog/v2-page-store'
 import { V2_CATALOG_PATH_DEPTH } from '../../src/catalog/path-policy'
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import { FileGeometry } from '../../src/content/geometry'
+import { FileGeometry, byteRange } from '../../src/content/geometry'
 import type { V2BlockRangeReader } from '../../src/content/v2-broker'
 import type { V2RevisionReader } from '../../src/content/v2-session-services'
 import { createBoundedPortableDownloadStream } from '../../src/output/portable/browser-download'
 import { SingleFileStreamOutputSession } from '../../src/output/streams/single-file'
-import type { OutputSession } from '../../src/transfer/output-session'
+import {
+  VerifiedDurableRanges,
+  type OutputSession,
+  type V2OutputAuthority,
+} from '../../src/transfer/output-session'
 import { SenderObjectError } from '../../src/crypto/sender-object'
 import { V2CborError, encodeCanonicalCbor } from '../../src/protocol/cbor'
 import {
@@ -100,7 +104,7 @@ describe('v2 portable output failure domain', () => {
     const catalog = {
       loadDirectory: async () => committed,
       pages: async function* () {
-        yield { entries: [entry] }
+        yield traversalPage(identity(2), [entry])
       },
     } as unknown as V2CatalogClient
     const revisions = {
@@ -118,6 +122,7 @@ describe('v2 portable output failure domain', () => {
 
     const result = await new V2TransferJob({
       descriptor: {
+        shareInstance: identity(1),
         syntheticRoot: identity(2),
         syntheticRootId: 'root',
       } as never,
@@ -126,7 +131,7 @@ describe('v2 portable output failure domain', () => {
       revisions,
       broker,
       lanes: { size: 1 },
-      output,
+      output: outputAuthority(output),
       maximumConcurrentFiles: 1,
     }).run()
 
@@ -138,6 +143,89 @@ describe('v2 portable output failure domain', () => {
     })
     expect(output.capabilities.durability).toBe('None')
     expect(publish).not.toHaveBeenCalled()
+  })
+})
+
+describe('v2 terminal discovery boundary', () => {
+  it('freezes the whole selected tree before output or revision I/O', async () => {
+    const root = identity(2)
+    const child = identity(3)
+    const selectedFile = identity(4)
+    let discoveryTerminal = false
+    let outputOpened = false
+    let revisionOpens = 0
+    const catalog = {
+      loadDirectory: async (id: Uint8Array) => committedDirectory(
+        id[0] === child[0] ? 'child' : 'root',
+        id[0] === child[0] ? 0 : 2,
+      ),
+      pages: async function* (directory: V2CommittedDirectory) {
+        if (directory.directoryIdText === 'root') {
+          yield traversalPage(root, [{
+            kind: 'file',
+            id: selectedFile,
+            idText: 'selected-file',
+            name: 'selected.bin',
+            expectedSize: 1n,
+          }, directoryEntry(child, 'child', 'empty')])
+          return
+        }
+        yield traversalPage(child, [])
+        discoveryTerminal = true
+      },
+    } as unknown as V2CatalogClient
+    const output = terminalBoundaryOutput()
+    const outputAuthorityForSelection: V2OutputAuthority = {
+      openSelection: async (selection) => {
+        expect(discoveryTerminal).toBe(true)
+        expect(selection.files).toHaveLength(1)
+        expect(selection.directories.map((directory) => directory.path.join('/')))
+          .toEqual(['empty'])
+        outputOpened = true
+        return output
+      },
+      abort: (reason: unknown) => output.abortJob(reason),
+    }
+    const revisions = {
+      open: async () => {
+        expect(discoveryTerminal).toBe(true)
+        expect(outputOpened).toBe(true)
+        revisionOpens += 1
+        return {
+          descriptor: {
+            shareInstance: identity(1),
+            shareInstanceId: 'share',
+            fileId: selectedFile,
+            fileIdText: 'selected-file',
+            fileRevision: identity(5),
+            fileRevisionText: 'revision',
+            exactSize: 1n,
+            geometry: new FileGeometry(1n, 1n),
+          },
+          leaseId: identity(6),
+          release: async () => undefined,
+        }
+      },
+    } as unknown as V2RevisionReader
+    const broker = {
+      readRange: async function* () {
+        yield { offset: 0n, data: Uint8Array.of(7) }
+      },
+    } as unknown as V2BlockRangeReader
+
+    const result = await new V2TransferJob({
+      descriptor: { shareInstance: identity(1), syntheticRoot: root, syntheticRootId: 'root' } as never,
+      catalog,
+      selection: new V2SelectionPolicy(),
+      revisions,
+      broker,
+      lanes: { size: 1 },
+      output: outputAuthorityForSelection,
+      maximumConcurrentFiles: 1,
+    }).run()
+
+    expect(result.outcome.status).toBe('Succeeded')
+    expect(revisionOpens).toBe(1)
   })
 })
 
@@ -164,7 +252,7 @@ describe('v2 catalog traversal authority', () => {
         return committedDirectory('root', 1)
       },
       pages: async function* () {
-        yield { entries: [directoryEntry(rootId, 'root', 'root-loop')] }
+        yield traversalPage(rootId, [directoryEntry(rootId, 'root', 'root-loop')])
       },
     } as unknown as V2CatalogClient
     const output = traversalOutput()
@@ -174,6 +262,54 @@ describe('v2 catalog traversal authority', () => {
     expect(result.outcome.status).toBe('Aborted')
     expect(loads).toBe(1)
     expect(output.abortReasons).toHaveLength(1)
+    expect(output.abortReasons[0]).toBeInstanceOf(V2CatalogTraversalError)
+  })
+
+  it('rejects repeated sibling identity even when neither file is selected', async () => {
+    const rootId = identity(2)
+    const repeatedFileId = identity(9)
+    let revisionOpens = 0
+    const catalog = {
+      loadDirectory: async () => committedDirectory('root', 2),
+      pages: async function* () {
+        yield traversalPage(rootId, [{
+          kind: 'file',
+          id: repeatedFileId,
+          idText: 'repeated-file',
+          name: 'first.bin',
+          expectedSize: 1n,
+        }, {
+          kind: 'file',
+          id: repeatedFileId.slice(),
+          idText: 'repeated-file',
+          name: 'second.bin',
+          expectedSize: 1n,
+        }])
+      },
+    } as unknown as V2CatalogClient
+    const output = traversalOutput()
+    const result = await new V2TransferJob({
+      descriptor: {
+        shareInstance: identity(1),
+        syntheticRoot: rootId,
+        syntheticRootId: 'root',
+      } as never,
+      catalog,
+      selection: new V2SelectionPolicy(false),
+      revisions: {
+        open: async () => {
+          revisionOpens += 1
+          throw new Error('Unselected duplicate reached revision I/O')
+        },
+      } as V2RevisionReader,
+      broker: {} as V2BlockRangeReader,
+      lanes: { size: 1 },
+      output: outputAuthority(output.session),
+      maximumConcurrentFiles: 1,
+    }).run()
+
+    expect(result.outcome.status).toBe('Aborted')
+    expect(revisionOpens).toBe(0)
     expect(output.abortReasons[0]).toBeInstanceOf(V2CatalogTraversalError)
   })
 
@@ -262,6 +398,69 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   return value
 }
 
+function traversalPage(
+  directoryId: Uint8Array<ArrayBuffer>,
+  entries: readonly V2CatalogEntry[],
+) {
+  return {
+    shareInstance: identity(1),
+    directoryId,
+    generation: identity(3),
+    pageIndex: 0,
+    entries,
+  }
+}
+
+function outputAuthority(session: OutputSession): V2OutputAuthority {
+  let opened = false
+  return {
+    openSelection: async () => {
+      if (opened) throw new Error('Test output authority was opened twice')
+      opened = true
+      return session
+    },
+    abort: (reason: unknown) => session.abortJob(reason),
+  }
+}
+
+function terminalBoundaryOutput(): OutputSession {
+  const identity = { backend: 'test-terminal', outputSessionId: 'selection-bound' }
+  return {
+    identity,
+    capabilities: {
+      durability: 'None',
+      randomWrite: true,
+      fileFailureIsolation: true,
+      modificationTime: false,
+    },
+    ensureDirectory: async () => undefined,
+    finalizeDirectory: async () => undefined,
+    beginFile: async (file) => {
+      const ownership = {
+        ...identity,
+        canonicalPath: file.path,
+        ownedFileIdentity: 'terminal-file',
+      }
+      return {
+        durableRanges: new VerifiedDurableRanges(ownership, file.source, file.exactSize, []),
+        transaction: {
+          writeRange: async () => undefined,
+          checkpoint: async () => new VerifiedDurableRanges(
+            ownership,
+            file.source,
+            file.exactSize,
+            [byteRange(0n, file.exactSize)],
+          ),
+          commit: async () => undefined,
+          abort: async () => 'FileIsolated' as const,
+        },
+      }
+    },
+    finishJob: async () => undefined,
+    abortJob: async () => undefined,
+  }
+}
+
 function traversalJob(
   catalog: V2CatalogClient,
   output: OutputSession,
@@ -270,13 +469,13 @@ function traversalJob(
   revisions: V2RevisionReader = {} as V2RevisionReader,
 ): V2TransferJob {
   return new V2TransferJob({
-    descriptor: { syntheticRoot, syntheticRootId } as never,
+    descriptor: { shareInstance: identity(1), syntheticRoot, syntheticRootId } as never,
     catalog,
     selection: new V2SelectionPolicy(),
     revisions,
     broker: {} as V2BlockRangeReader,
     lanes: { size: 1 },
-    output,
+    output: outputAuthority(output),
     maximumConcurrentFiles: 1,
   })
 }
@@ -342,7 +541,7 @@ function depthCatalog(leafDepth: number): {
             depthIdentityText(depth + 1),
             depthIdentityText(depth + 1),
           )]
-      yield { entries }
+      yield traversalPage(depthIdentity(depth), entries)
     },
   } as unknown as V2CatalogClient
   return { catalog, loads: () => loads }
@@ -373,7 +572,7 @@ function depthFileCatalog(parentDepth: number): {
             depthIdentityText(depth + 1),
             depthIdentityText(depth + 1),
           )]
-      yield { entries }
+      yield traversalPage(depthIdentity(depth), entries)
     },
   } as unknown as V2CatalogClient
   return { catalog, loads: () => loads }
@@ -396,7 +595,7 @@ function pathCatalog(segments: readonly string[]): {
       const entries = name === undefined
         ? []
         : [directoryEntry(depthIdentity(depth + 1), depthIdentityText(depth + 1), name)]
-      yield { entries }
+      yield traversalPage(depthIdentity(depth), entries)
     },
   } as unknown as V2CatalogClient
   return { catalog, loads: () => loads }

@@ -22,12 +22,15 @@ type immediateSmallCatalog struct {
 	root  catalog.DirectoryID
 }
 
-func (source immediateSmallCatalog) LoadDirectory(
-	_ context.Context,
+func (source immediateSmallCatalog) OpenDirectoryPages(
+	ctx context.Context,
 	directory catalog.DirectoryID,
-) (catalog.DirectorySnapshot, error) {
+) (catalog.DirectoryPageCursor, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if directory != source.root {
-		return catalog.DirectorySnapshot{}, errors.New("empty selection walked outside its synthetic root")
+		return nil, errors.New("empty selection walked outside its synthetic root")
 	}
 	var generation catalog.DirectoryGeneration
 	generation[0] = 1
@@ -39,18 +42,28 @@ func (source immediateSmallCatalog) LoadDirectory(
 		return catalog.NewPageCommitment(raw)
 	}))
 	if err != nil {
-		return catalog.DirectorySnapshot{}, err
+		return nil, err
 	}
-	return catalog.NewDirectorySnapshot([]catalog.CatalogPage{page})
+	return &immediateSmallCursor{page: page}, nil
 }
 
-func (source immediateSmallCatalog) AcquireDirectory(
-	ctx context.Context,
-	directory catalog.DirectoryID,
-) (catalog.DirectorySnapshot, func(), error) {
-	snapshot, err := source.LoadDirectory(ctx, directory)
-	return snapshot, func() {}, err
+type immediateSmallCursor struct {
+	page catalog.CatalogPage
+	done bool
 }
+
+func (cursor *immediateSmallCursor) Next(ctx context.Context) (catalog.CatalogPage, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return catalog.CatalogPage{}, false, err
+	}
+	if cursor.done {
+		return catalog.CatalogPage{}, false, nil
+	}
+	cursor.done = true
+	return cursor.page, true, nil
+}
+
+func (*immediateSmallCursor) Close() error { return nil }
 
 type immediateSmallRevisions struct{}
 
@@ -73,7 +86,7 @@ func (immediateSmallBlocks) ReadRange(
 
 func TestClassifyTransferTerminationSeparatesNetworkAndLocalFailures(t *testing.T) {
 	localOutput := errors.New("output commit failed")
-	resource := transfer.NewJobResourceBudgetError(transfer.ErrSelectionIdentityBudget)
+	resource := transfer.NewJobResourceBudgetError(transfer.ErrSelectionPlanBudget)
 	session := transfer.NewSessionFailure(errors.New("peer session ended"))
 	for name, test := range map[string]struct {
 		cause, runtimeErr, connectionErr error

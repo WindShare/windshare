@@ -3,7 +3,6 @@ package transfer
 import (
 	"context"
 	"errors"
-	"sort"
 	"strings"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -14,64 +13,95 @@ type plannedDirectory struct {
 	generation catalog.DirectoryGeneration
 	path       string
 	modified   catalog.ModifiedTime
-	selected   bool
 }
 
 type plannedFile struct {
 	file             catalog.FileID
 	path             string
-	entry            catalog.Entry
+	expectedSize     uint64
+	modified         catalog.ModifiedTime
 	parentDirectory  catalog.DirectoryID
 	parentGeneration catalog.DirectoryGeneration
 }
 
 type jobRun struct {
-	job                 *TransferJob
-	output              OutputSession
-	directories         []DirectoryJobFailure
-	files               []FileJobFailure
-	succeeded           uint64
-	terminationCause    error
-	settlementFailure   error
-	settlement          JobSettlement
-	admitted            bool
-	needsAttention      bool
-	selectionIdentity   SelectionIdentity
-	resumeIntent        ResumeIntent
-	claims              *selectionIdentityClaims
-	matchedPaths        map[string]struct{}
-	matchedDirectories  map[catalog.DirectoryID]struct{}
-	matchedFiles        map[catalog.FileID]struct{}
-	discoveryFailed     bool
-	rootGeneration      catalog.DirectoryGeneration
-	plannedDirectories  []plannedDirectory
-	plannedFiles        []plannedFile
-	requiredDirectories []plannedDirectory
+	job                *TransferJob
+	output             OutputSession
+	directories        []DirectoryJobFailure
+	files              []FileJobFailure
+	succeeded          uint64
+	terminationCause   error
+	settlementFailure  error
+	settlement         JobSettlement
+	admitted           bool
+	needsAttention     bool
+	selectionIdentity  SelectionIdentity
+	resumeIntent       ResumeIntent
+	matchedPaths       map[string]struct{}
+	matchedDirectories map[catalog.DirectoryID]struct{}
+	matchedFiles       map[catalog.FileID]struct{}
+	activeDirectories  map[catalog.DirectoryID]struct{}
+	discoveryFailed    bool
+	rootGeneration     catalog.DirectoryGeneration
+	spool              *selectionSpool
 }
 
-func newJobRun(job *TransferJob) *jobRun {
+func newJobRun(job *TransferJob) (*jobRun, error) {
+	spool, err := newSelectionSpool(job.share)
+	if err != nil {
+		return nil, err
+	}
+	if err := spool.claim(job.root.NodeID()); err != nil {
+		_ = spool.Close()
+		return nil, err
+	}
 	return &jobRun{
-		job: job, claims: newSelectionIdentityClaims(job.root),
+		job: job, spool: spool,
 		matchedPaths:       make(map[string]struct{}),
 		matchedDirectories: make(map[catalog.DirectoryID]struct{}),
 		matchedFiles:       make(map[catalog.FileID]struct{}),
+		activeDirectories:  make(map[catalog.DirectoryID]struct{}),
+	}, nil
+}
+
+func (r *jobRun) close() {
+	if r.spool != nil {
+		_ = r.spool.Close()
 	}
 }
 
 func (r *jobRun) discoverSelection(ctx context.Context) (OutputSelection, bool, error) {
 	rootSelected := r.job.rules.DirectorySelectedAt(r.job.root, "", r.job.rules.DefaultSelected())
-	if err := r.discoverDirectory(ctx, r.job.root, "", catalog.ModifiedTime{}, rootSelected); err != nil {
+	if _, err := r.discoverDirectory(ctx, r.job.root, "", catalog.ModifiedTime{}, rootSelected); err != nil {
 		return OutputSelection{}, false, err
 	}
-	if r.discoveryFailed || r.rootGeneration.IsZero() {
+	if r.rootGeneration.IsZero() {
 		return OutputSelection{}, false, nil
 	}
-	if err := r.job.rules.missingTargetsError(
-		r.matchedPaths, r.matchedDirectories, r.matchedFiles,
-	); err != nil {
+	// A failed authenticated subtree is terminal discovery with an isolated
+	// failure, but it cannot prove that an explicit target inside that subtree is
+	// missing. Failure-free walks still reject every unmatched explicit target.
+	if !r.discoveryFailed {
+		if err := r.job.rules.missingTargetsError(
+			r.matchedPaths, r.matchedDirectories, r.matchedFiles,
+		); err != nil {
+			return OutputSelection{}, false, err
+		}
+	}
+	if err := r.spool.Freeze(ctx); err != nil {
 		return OutputSelection{}, false, err
 	}
-	selection, err := r.buildOutputSelection()
+	selection, err := newOutputSelectionFromPlan(
+		r.job.share, r.job.root, r.rootGeneration, r.spool,
+	)
+	if err != nil {
+		return OutputSelection{}, false, err
+	}
+	canonical, err := NewCanonicalSelectionV1(r.job.selectionRequest, selection)
+	if err != nil {
+		return OutputSelection{}, false, err
+	}
+	selection, err = canonical.BindPlan(selection)
 	return selection, err == nil, err
 }
 
@@ -81,121 +111,144 @@ func (r *jobRun) discoverDirectory(
 	path string,
 	modified catalog.ModifiedTime,
 	selected bool,
-) error {
-	snapshot, release, err := r.job.catalog.AcquireDirectory(ctx, directory)
-	if release == nil {
-		return NewJobDependencyContractError(ErrCatalogLeaseContract)
-	}
-	release()
+) (selectedSubtree bool, resultErr error) {
+	checkpoint, err := r.spool.checkpoint()
 	if err != nil {
-		return r.recordDiscoveryFailure(directory, path, err)
+		return false, err
 	}
-	if snapshot.ShareInstance() != r.job.share || snapshot.DirectoryID() != directory ||
-		snapshot.Generation().IsZero() || snapshot.PageCount() == 0 {
-		return NewSessionFailure(ErrCatalogIdentity)
+	if _, active := r.activeDirectories[directory]; active {
+		return false, NewSessionFailure(ErrCatalogIdentity)
 	}
-	if path == "" {
-		r.rootGeneration = snapshot.Generation()
-	} else {
-		r.plannedDirectories = append(r.plannedDirectories, plannedDirectory{
-			directory: directory, generation: snapshot.Generation(), path: path,
-			modified: modified, selected: selected,
-		})
-	}
-	if r.job.rules.isSelectedDirectoryTarget(directory) {
-		r.matchedDirectories[directory] = struct{}{}
-	}
-	if snapshot.OmittedCount() != 0 {
-		r.job.tracker.failDiscovery()
-		r.discoveryFailed = true
-		r.directories = append(r.directories, DirectoryJobFailure{
-			DirectoryID: directory, Path: path, Stage: FailureDirectoryDiscovery,
-			Cause: ErrCatalogEntriesOmitted,
-		})
-	}
-	if err := r.claimSnapshotEntries(ctx, snapshot, path); err != nil {
-		return err
-	}
-	if err := r.collectSelectedFiles(ctx, snapshot, path, selected); err != nil {
-		return err
-	}
-	return r.discoverChildDirectories(ctx, snapshot, path, selected)
-}
+	r.activeDirectories[directory] = struct{}{}
+	defer delete(r.activeDirectories, directory)
 
-func (r *jobRun) claimSnapshotEntries(
-	ctx context.Context,
-	snapshot catalog.DirectorySnapshot,
-	parentPath string,
-) error {
-	return visitSnapshotEntries(ctx, snapshot, func(entry catalog.Entry) error {
-		path, err := appendOutputPath(parentPath, entry.Name())
+	cursor, err := r.job.catalog.OpenDirectoryPages(ctx, directory)
+	if err != nil {
+		return false, r.isolateDiscoveryFailure(checkpoint, directory, path, err)
+	}
+	if cursor == nil {
+		return false, NewJobDependencyContractError(ErrCatalogCursorContract)
+	}
+	defer func() { resultErr = errors.Join(resultErr, cursor.Close()) }()
+
+	var generation catalog.DirectoryGeneration
+	var reference selectionDirectoryReference
+	var haveDirectoryReference bool
+	var pageIndex uint32
+	var terminal bool
+	for {
+		page, ok, err := cursor.Next(ctx)
 		if err != nil {
-			return NewSessionFailure(ErrCatalogIdentity)
+			return false, r.isolateDiscoveryFailure(checkpoint, directory, path, err)
 		}
-		if err := r.claims.claim(entry.NodeID()); err != nil {
-			return err
+		if !ok {
+			break
 		}
-		if r.job.rules.isPathTarget(path) {
-			r.matchedPaths[path] = struct{}{}
+		if terminal || page.ShareInstance() != r.job.share || page.DirectoryID() != directory ||
+			page.PageIndex() != pageIndex || page.Generation().IsZero() ||
+			(pageIndex > 0 && page.Generation() != generation) {
+			return false, NewSessionFailure(ErrCatalogIdentity)
 		}
-		if directory, ok := entry.DirectoryID(); ok && r.job.rules.isSelectedDirectoryTarget(directory) {
-			r.matchedDirectories[directory] = struct{}{}
+		if pageIndex == 0 {
+			generation = page.Generation()
+			if path == "" {
+				r.rootGeneration = generation
+			} else {
+				reference, err = r.spool.appendDirectory(plannedDirectory{
+					directory: directory, generation: generation, path: path, modified: modified,
+				})
+				if err != nil {
+					return false, err
+				}
+				haveDirectoryReference = true
+			}
+			if r.job.rules.isSelectedDirectoryTarget(directory) {
+				r.matchedDirectories[directory] = struct{}{}
+			}
 		}
-		if file, ok := entry.FileID(); ok && r.job.rules.isSelectedFileTarget(file) {
-			r.matchedFiles[file] = struct{}{}
+		for entryIndex := 0; entryIndex < page.EntryCount(); entryIndex++ {
+			if cause := context.Cause(ctx); cause != nil {
+				return false, cause
+			}
+			entry, ok := page.Entry(uint32(entryIndex))
+			if !ok {
+				return false, NewSessionFailure(ErrCatalogIdentity)
+			}
+			entrySelected, err := r.discoverEntry(ctx, entry, directory, generation, path, selected)
+			if err != nil {
+				return false, err
+			}
+			selectedSubtree = selectedSubtree || entrySelected
 		}
-		return nil
-	})
+		if page.Terminal() && page.OmittedCount() != 0 {
+			r.job.tracker.failDiscovery()
+			r.discoveryFailed = true
+			r.directories = append(r.directories, DirectoryJobFailure{
+				DirectoryID: directory, Path: path, Stage: FailureDirectoryDiscovery,
+				Cause: ErrCatalogEntriesOmitted,
+			})
+		}
+		terminal = page.Terminal()
+		pageIndex++
+	}
+	if pageIndex == 0 || !terminal {
+		return false, NewSessionFailure(ErrCatalogIdentity)
+	}
+	selectedSubtree = selectedSubtree || selected
+	if haveDirectoryReference && selectedSubtree {
+		if err := r.spool.requireDirectory(reference); err != nil {
+			return false, err
+		}
+	}
+	return selectedSubtree, nil
 }
 
-func (r *jobRun) collectSelectedFiles(
+func (r *jobRun) discoverEntry(
 	ctx context.Context,
-	snapshot catalog.DirectorySnapshot,
-	parentPath string,
-	selected bool,
-) error {
-	return visitSnapshotEntries(ctx, snapshot, func(entry catalog.Entry) error {
-		file, isFile := entry.FileID()
-		if !isFile {
-			return nil
-		}
-		path, err := appendOutputPath(parentPath, entry.Name())
-		if err != nil {
-			return NewSessionFailure(ErrCatalogIdentity)
-		}
-		if !r.job.rules.FileSelectedAt(file, path, selected) {
-			return nil
-		}
-		r.job.tracker.addFile(entry.ExpectedSize())
-		r.plannedFiles = append(r.plannedFiles, plannedFile{
-			file: file, path: path, entry: entry,
-			parentDirectory: snapshot.DirectoryID(), parentGeneration: snapshot.Generation(),
-		})
-		return nil
-	})
-}
-
-func (r *jobRun) discoverChildDirectories(
-	ctx context.Context,
-	snapshot catalog.DirectorySnapshot,
+	entry catalog.Entry,
+	parentDirectory catalog.DirectoryID,
+	parentGeneration catalog.DirectoryGeneration,
 	parentPath string,
 	inherited bool,
-) error {
-	return visitSnapshotEntries(ctx, snapshot, func(entry catalog.Entry) error {
-		child, isDirectory := entry.DirectoryID()
-		if !isDirectory {
-			return nil
+) (bool, error) {
+	path, err := appendOutputPath(parentPath, entry.Name())
+	if err != nil {
+		return false, NewSessionFailure(ErrCatalogIdentity)
+	}
+	if err := r.spool.claim(entry.NodeID()); err != nil {
+		return false, err
+	}
+	if r.job.rules.isPathTarget(path) {
+		r.matchedPaths[path] = struct{}{}
+	}
+	if file, ok := entry.FileID(); ok {
+		if r.job.rules.isSelectedFileTarget(file) {
+			r.matchedFiles[file] = struct{}{}
 		}
-		path, err := appendOutputPath(parentPath, entry.Name())
-		if err != nil {
-			return NewSessionFailure(ErrCatalogIdentity)
+		if !r.job.rules.FileSelectedAt(file, path, inherited) {
+			return false, nil
 		}
-		selected := r.job.rules.DirectorySelectedAt(child, path, inherited)
-		if !r.job.rules.ShouldDiscoverDirectoryAt(child, path, selected) {
-			return nil
+		r.job.tracker.addFile(entry.ExpectedSize())
+		if err := r.spool.appendFile(plannedFile{
+			file: file, path: path, expectedSize: entry.ExpectedSize(), modified: entry.ModifiedTime(),
+			parentDirectory: parentDirectory, parentGeneration: parentGeneration,
+		}); err != nil {
+			return false, err
 		}
-		return r.discoverDirectory(ctx, child, path, entry.ModifiedTime(), selected)
-	})
+		return true, nil
+	}
+	child, ok := entry.DirectoryID()
+	if !ok {
+		return false, NewSessionFailure(ErrCatalogIdentity)
+	}
+	if r.job.rules.isSelectedDirectoryTarget(child) {
+		r.matchedDirectories[child] = struct{}{}
+	}
+	selected := r.job.rules.DirectorySelectedAt(child, path, inherited)
+	if !r.job.rules.ShouldDiscoverDirectoryAt(child, path, selected) {
+		return false, nil
+	}
+	return r.discoverDirectory(ctx, child, path, entry.ModifiedTime(), selected)
 }
 
 func (r *jobRun) recordDiscoveryFailure(directory catalog.DirectoryID, path string, err error) error {
@@ -210,74 +263,39 @@ func (r *jobRun) recordDiscoveryFailure(directory catalog.DirectoryID, path stri
 	return nil
 }
 
+func (r *jobRun) isolateDiscoveryFailure(
+	checkpoint selectionSpoolCheckpoint,
+	directory catalog.DirectoryID,
+	path string,
+	err error,
+) error {
+	if err := r.recordDiscoveryFailure(directory, path, err); err != nil {
+		return err
+	}
+	if directory == r.job.root && path == "" {
+		// The root generation does not exist as terminal authority until its final
+		// page arrives. A recoverable prefix failure may be reported, but it cannot
+		// open an output namespace for an unauthenticated root snapshot.
+		r.rootGeneration = catalog.DirectoryGeneration{}
+	}
+	// A terminal page is the commit evidence for a generation. Rolling the DFS
+	// suffix back preserves independent siblings without admitting authenticated
+	// prefixes whose selected parent generation never reached that evidence.
+	return r.spool.rollback(checkpoint)
+}
+
 func isDirectoryDiscoveryFailure(err error) bool {
 	var failure DirectoryDiscoveryFailure
 	return errors.As(err, &failure)
 }
 
-func (r *jobRun) buildOutputSelection() (OutputSelection, error) {
-	required := make(map[string]struct{})
-	for _, directory := range r.plannedDirectories {
-		if directory.selected {
-			markSelectionAncestors(required, directory.path)
-		}
-	}
-	for _, file := range r.plannedFiles {
-		markSelectionAncestors(required, selectionParentPath(file.path))
-	}
-
-	r.requiredDirectories = r.requiredDirectories[:0]
-	directories := make([]OutputSelectionDirectory, 0, len(required))
-	for _, directory := range r.plannedDirectories {
-		if _, needed := required[directory.path]; !needed {
-			continue
-		}
-		r.requiredDirectories = append(r.requiredDirectories, directory)
-		directories = append(directories, OutputSelectionDirectory{
-			Path: directory.path, DirectoryID: directory.directory, Generation: directory.generation,
-			ModifiedTime: directory.modified,
-		})
-	}
-	files := make([]OutputSelectionFile, 0, len(r.plannedFiles))
-	for _, file := range r.plannedFiles {
-		files = append(files, OutputSelectionFile{
-			Path: file.path, FileID: file.file, ParentDirectoryID: file.parentDirectory,
-			ParentGeneration: file.parentGeneration, ExpectedSize: file.entry.ExpectedSize(),
-			ModifiedTime: file.entry.ModifiedTime(),
-		})
-	}
-	sort.Slice(r.requiredDirectories, func(left, right int) bool {
-		return r.requiredDirectories[left].path < r.requiredDirectories[right].path
-	})
-	sort.Slice(r.plannedFiles, func(left, right int) bool {
-		return r.plannedFiles[left].path < r.plannedFiles[right].path
-	})
-	selection, err := NewOutputSelection(r.job.share, r.job.root, r.rootGeneration, directories, files)
-	if err != nil {
-		return OutputSelection{}, err
-	}
-	canonical, err := NewCanonicalSelectionV1(r.job.selectionRequest, selection)
-	if err != nil {
-		return OutputSelection{}, err
-	}
-	return canonical.BindPlan(selection)
-}
-
-func markSelectionAncestors(required map[string]struct{}, path string) {
-	for path != "" {
-		required[path] = struct{}{}
-		path = selectionParentPath(path)
-	}
-}
-
 func (r *jobRun) finalizeSelectionDirectories(ctx context.Context) error {
-	for index := len(r.requiredDirectories) - 1; index >= 0; index-- {
-		directory := r.requiredDirectories[index]
+	return r.spool.VisitDirectoriesReverse(func(directory plannedDirectory) error {
 		err := r.output.FinalizeDirectory(ctx, OutputDirectory{
 			Path: directory.path, ModifiedTime: directory.modified,
 		})
 		if err == nil {
-			continue
+			return nil
 		}
 		if isJobTerminalError(err) || outputFailureRequiresJobPause(err, r.output.Capabilities()) {
 			return err
@@ -286,37 +304,8 @@ func (r *jobRun) finalizeSelectionDirectories(ctx context.Context) error {
 			DirectoryID: directory.directory, Path: directory.path,
 			Stage: FailureDirectoryOutput, Cause: err,
 		})
-	}
-	return nil
-}
-
-func visitSnapshotEntries(
-	ctx context.Context,
-	snapshot catalog.DirectorySnapshot,
-	visit func(catalog.Entry) error,
-) error {
-	for pageIndex := 0; pageIndex < snapshot.PageCount(); pageIndex++ {
-		if cause := context.Cause(ctx); cause != nil {
-			return cause
-		}
-		page, ok := snapshot.Page(uint32(pageIndex))
-		if !ok {
-			return NewSessionFailure(ErrCatalogIdentity)
-		}
-		for entryIndex := 0; entryIndex < page.EntryCount(); entryIndex++ {
-			if cause := context.Cause(ctx); cause != nil {
-				return cause
-			}
-			entry, ok := page.Entry(uint32(entryIndex))
-			if !ok {
-				return NewSessionFailure(ErrCatalogIdentity)
-			}
-			if err := visit(entry); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func appendOutputPath(parent, name string) (string, error) {

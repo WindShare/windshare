@@ -102,7 +102,9 @@ func (request CanonicalSelectionRequest) Bytes() []byte { return slices.Clone(re
 // CanonicalSelectionV1 combines normalized request semantics and the terminal
 // authenticated plan. Neither component alone is a resume namespace.
 type CanonicalSelectionV1 struct {
-	encoded      []byte
+	request      []byte
+	root         catalog.DirectoryGeneration
+	plan         outputSelectionPlan
 	intent       ResumeIntent
 	planIdentity SelectionIdentity
 }
@@ -115,39 +117,32 @@ func NewCanonicalSelectionV1(
 		plan.ShareInstance() != request.share || plan.SyntheticRoot() != request.root || plan.Identity().IsZero() {
 		return CanonicalSelectionV1{}, ErrInvalidOutputSelection
 	}
-	encoded := slices.Clone(request.encoded)
-	encoded = appendCanonicalField(encoded, plan.RootGeneration().Bytes())
-	directories := plan.Directories()
-	encoded = appendCanonicalCount(encoded, len(directories))
-	for _, directory := range directories {
-		encoded = appendCanonicalField(encoded, []byte(directory.Path))
-		encoded = appendCanonicalField(encoded, directory.DirectoryID.Bytes())
-		encoded = appendCanonicalField(encoded, directory.Generation.Bytes())
-		encoded = appendCanonicalModifiedTime(encoded, directory.ModifiedTime)
-	}
-	files := plan.Files()
-	encoded = appendCanonicalCount(encoded, len(files))
-	for _, file := range files {
-		encoded = appendCanonicalField(encoded, []byte(file.Path))
-		encoded = appendCanonicalField(encoded, file.FileID.Bytes())
-		encoded = appendCanonicalField(encoded, file.ParentDirectoryID.Bytes())
-		encoded = appendCanonicalField(encoded, file.ParentGeneration.Bytes())
-		var size [8]byte
-		binary.BigEndian.PutUint64(size[:], file.ExpectedSize)
-		encoded = appendCanonicalField(encoded, size[:])
-		encoded = appendCanonicalModifiedTime(encoded, file.ModifiedTime)
-	}
-	encoded = appendCanonicalField(encoded, []byte("native-tree"))
-	encoded = appendCanonicalField(encoded, []byte("no-replace"))
 	hash := sha256.New()
 	_, _ = hash.Write([]byte("windshare/output-resume-intent/v3"))
-	_, _ = hash.Write(encoded)
+	if err := writeCanonicalSelectionV1(hash, request.encoded, plan.RootGeneration(), plan.plan); err != nil {
+		return CanonicalSelectionV1{}, err
+	}
 	var intent ResumeIntent
 	copy(intent[:], hash.Sum(nil))
-	return CanonicalSelectionV1{encoded: encoded, intent: intent, planIdentity: plan.Identity()}, nil
+	return CanonicalSelectionV1{
+		request: slices.Clone(request.encoded), root: plan.RootGeneration(), plan: plan.plan,
+		intent: intent, planIdentity: plan.Identity(),
+	}, nil
 }
 
-func (selection CanonicalSelectionV1) Bytes() []byte              { return slices.Clone(selection.encoded) }
+// Bytes materializes the canonical artifact only for callers that explicitly
+// need to export it. Resume admission hashes the frozen plan directly so a wide
+// selection never acquires a second in-memory representation during transfer.
+func (selection CanonicalSelectionV1) Bytes() []byte {
+	if len(selection.request) == 0 || selection.root.IsZero() || selection.plan == nil {
+		return nil
+	}
+	var encoded bytes.Buffer
+	if err := writeCanonicalSelectionV1(&encoded, selection.request, selection.root, selection.plan); err != nil {
+		panic(err)
+	}
+	return encoded.Bytes()
+}
 func (selection CanonicalSelectionV1) ResumeIntent() ResumeIntent { return selection.intent }
 
 func (selection CanonicalSelectionV1) BindPlan(plan OutputSelection) (OutputSelection, error) {
@@ -159,25 +154,78 @@ func (selection CanonicalSelectionV1) BindPlan(plan OutputSelection) (OutputSele
 	return plan, nil
 }
 
-func appendCanonicalModifiedTime(destination []byte, modified catalog.ModifiedTime) []byte {
+func writeCanonicalSelectionV1(
+	destination selectionHash,
+	request []byte,
+	root catalog.DirectoryGeneration,
+	plan outputSelectionPlan,
+) error {
+	_, _ = destination.Write(request)
+	writeSelectionBytes(destination, root.Bytes())
+	writeCanonicalCount(destination, plan.DirectoryCount())
+	if err := plan.VisitRecords(func(record selectionPlanRecord) error {
+		if record.kind != selectionPlanDirectoryKind {
+			return nil
+		}
+		writeSelectionBytes(destination, []byte(record.path))
+		writeSelectionBytes(destination, record.directory.directory.Bytes())
+		writeSelectionBytes(destination, record.directory.generation.Bytes())
+		writeCanonicalModifiedTime(destination, record.directory.modified)
+		return nil
+	}); err != nil {
+		return err
+	}
+	writeCanonicalCount(destination, plan.FileCount())
+	if err := plan.VisitRecords(func(record selectionPlanRecord) error {
+		if record.kind != selectionPlanFileKind {
+			return nil
+		}
+		writeSelectionBytes(destination, []byte(record.path))
+		writeSelectionBytes(destination, record.file.file.Bytes())
+		writeSelectionBytes(destination, record.file.parentDirectory.Bytes())
+		writeSelectionBytes(destination, record.file.parentGeneration.Bytes())
+		var size [8]byte
+		binary.BigEndian.PutUint64(size[:], record.file.expectedSize)
+		writeSelectionBytes(destination, size[:])
+		writeCanonicalModifiedTime(destination, record.file.modified)
+		return nil
+	}); err != nil {
+		return err
+	}
+	writeSelectionBytes(destination, []byte("native-tree"))
+	writeSelectionBytes(destination, []byte("no-replace"))
+	return nil
+}
+
+func writeCanonicalModifiedTime(destination selectionHash, modified catalog.ModifiedTime) {
 	present := byte(0)
 	if modified.Present() {
 		present = 1
 	}
-	destination = appendCanonicalField(destination, []byte{present})
+	writeSelectionBytes(destination, []byte{present})
 	var seconds [8]byte
 	binary.BigEndian.PutUint64(seconds[:], uint64(modified.Seconds()))
-	destination = appendCanonicalField(destination, seconds[:])
+	writeSelectionBytes(destination, seconds[:])
 	var nanoseconds [4]byte
 	binary.BigEndian.PutUint32(nanoseconds[:], modified.Nanoseconds())
-	destination = appendCanonicalField(destination, nanoseconds[:])
-	return appendCanonicalField(destination, []byte{byte(modified.Precision())})
+	writeSelectionBytes(destination, nanoseconds[:])
+	writeSelectionBytes(destination, []byte{byte(modified.Precision())})
 }
 
 func appendCanonicalCount(destination []byte, count int) []byte {
+	return appendCanonicalUint64Count(destination, uint64(count))
+}
+
+func appendCanonicalUint64Count(destination []byte, count uint64) []byte {
 	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], uint64(count))
+	binary.BigEndian.PutUint64(encoded[:], count)
 	return append(destination, encoded[:]...)
+}
+
+func writeCanonicalCount(destination selectionHash, count uint64) {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], count)
+	_, _ = destination.Write(encoded[:])
 }
 
 func appendCanonicalField(destination, value []byte) []byte {
