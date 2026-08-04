@@ -4,7 +4,9 @@ package linuxsubreaper
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,21 +17,21 @@ import (
 	"github.com/windshare/windshare/internal/processowner"
 )
 
-func TestRunSupervisesNaturalExitAndDeadline(t *testing.T) {
+func TestRunSupervisesNaturalExitDeadlineAndStop(t *testing.T) {
 	t.Run("natural", func(t *testing.T) {
-		statuses, err := runLinuxSupervisor(t, "natural", 5*time.Second, 200*time.Millisecond)
+		statuses, err := runLinuxSupervisor(t, "natural", 5*time.Second, 200*time.Millisecond, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if len(statuses) != 2 || statuses[0].State != processowner.StatusStarted ||
 			statuses[1].Result == nil || statuses[1].Result.Reason != processowner.ReasonNatural ||
 			statuses[1].Result.ExitCode == nil || *statuses[1].Result.ExitCode != 0 {
-			t.Fatalf("natural statuses = %+v", statuses)
+			t.Fatalf("natural statuses = %s", statusDiagnostics(statuses))
 		}
 	})
 
 	t.Run("deadline", func(t *testing.T) {
-		statuses, err := runLinuxSupervisor(t, "deadline", 250*time.Millisecond, 100*time.Millisecond)
+		statuses, err := runLinuxSupervisor(t, "deadline", 250*time.Millisecond, 100*time.Millisecond, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -37,7 +39,26 @@ func TestRunSupervisesNaturalExitAndDeadline(t *testing.T) {
 			statuses[1].Result.Reason != processowner.ReasonDeadline ||
 			statuses[1].Result.ExitCode == nil || *statuses[1].Result.ExitCode == 0 ||
 			statuses[1].Result.CleanupError != "" {
-			t.Fatalf("deadline statuses = %+v", statuses)
+			t.Fatalf("deadline statuses = %s", statusDiagnostics(statuses))
+		}
+	})
+
+	t.Run("stop", func(t *testing.T) {
+		statuses, err := runLinuxSupervisor(
+			t,
+			"deadline",
+			5*time.Second,
+			100*time.Millisecond,
+			[]byte{processowner.ControlStop},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(statuses) != 2 || statuses[1].Result == nil ||
+			statuses[1].Result.Reason != processowner.ReasonStop ||
+			statuses[1].Result.ExitCode == nil || *statuses[1].Result.ExitCode == 0 ||
+			statuses[1].Result.CleanupError != "" {
+			t.Fatalf("stop statuses = %s", statusDiagnostics(statuses))
 		}
 	})
 }
@@ -45,13 +66,13 @@ func TestRunSupervisesNaturalExitAndDeadline(t *testing.T) {
 func TestRunReportsSpawnFailure(t *testing.T) {
 	config := linuxSupervisorConfig(t, "natural", time.Second, 100*time.Millisecond)
 	config.Executable = filepath.Join(t.TempDir(), "missing")
-	statuses, err := collectLinuxSupervisor(config)
+	statuses, err := collectLinuxSupervisor(config, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(statuses) != 1 || statuses[0].Result == nil ||
 		statuses[0].Result.Reason != processowner.ReasonSpawnFailed || statuses[0].Result.Error == "" {
-		t.Fatalf("spawn failure statuses = %+v", statuses)
+		t.Fatalf("spawn failure statuses = %s", statusDiagnostics(statuses))
 	}
 }
 
@@ -69,9 +90,7 @@ func TestReadControlMapsCommandsAndEOF(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := make(chan trigger, 1)
-			readControl(bytes.NewReader(test.input), result)
-			got := <-result
+			got := readControl(bytes.NewReader(test.input))
 			if got.reason != test.reason || (got.err != nil) != test.failed {
 				t.Fatalf("trigger = %+v", got)
 			}
@@ -113,9 +132,10 @@ func runLinuxSupervisor(
 	mode string,
 	deadline time.Duration,
 	grace time.Duration,
+	control []byte,
 ) ([]processowner.Status, error) {
 	t.Helper()
-	return collectLinuxSupervisor(linuxSupervisorConfig(t, mode, deadline, grace))
+	return collectLinuxSupervisor(linuxSupervisorConfig(t, mode, deadline, grace), control)
 }
 
 func linuxSupervisorConfig(
@@ -141,7 +161,7 @@ func linuxSupervisorConfig(
 	}
 }
 
-func collectLinuxSupervisor(config processowner.Config) (_ []processowner.Status, resultErr error) {
+func collectLinuxSupervisor(config processowner.Config, control []byte) (_ []processowner.Status, resultErr error) {
 	statusReader, statusWriter, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -163,6 +183,11 @@ func collectLinuxSupervisor(config processowner.Config) (_ []processowner.Status
 		runErr := Run(config, statusWriter, controlReader, eventWriter)
 		done <- errors.Join(runErr, closeTestFiles(statusWriter, controlReader, eventWriter))
 	}()
+	if control != nil {
+		if _, err := controlWriter.Write(control); err != nil {
+			return nil, err
+		}
+	}
 	collected := make(chan statusCollection, 1)
 	go func() { collected <- collectStatuses(statusReader) }()
 	maximum := time.Duration(
@@ -180,7 +205,18 @@ func collectLinuxSupervisor(config processowner.Config) (_ []processowner.Status
 			done = nil
 		case <-timer.C:
 			_ = controlWriter.Close()
-			return nil, errors.New("linux supervisor did not settle within its lifecycle bound")
+			pending := make([]string, 0, 2)
+			if collected != nil {
+				pending = append(pending, "terminal_status")
+			}
+			if done != nil {
+				pending = append(pending, "run_return")
+			}
+			return nil, fmt.Errorf(
+				"linux supervisor did not settle within its lifecycle bound: pending=%s observed_statuses=%s",
+				strings.Join(pending, ","),
+				statusDiagnostics(collection.statuses),
+			)
 		}
 	}
 	if runErr != nil || collection.err != nil {
@@ -224,6 +260,14 @@ func collectStatuses(reader io.Reader) statusCollection {
 		}
 	}
 	return statusCollection{statuses: statuses}
+}
+
+func statusDiagnostics(statuses []processowner.Status) string {
+	encoded, err := json.Marshal(statuses)
+	if err != nil {
+		return fmt.Sprintf("<encode status diagnostics: %v>", err)
+	}
+	return string(encoded)
 }
 
 func TestParseParentPIDHandlesSpacesAndParentheses(t *testing.T) {
