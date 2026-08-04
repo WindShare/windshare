@@ -21,14 +21,10 @@ import (
 )
 
 const (
-	descendantPollInterval           = 10 * time.Millisecond
-	descendantEmptyConfirmationPolls = 5
+	descendantPollInterval            = 10 * time.Millisecond
+	descendantEmptyConfirmationPolls  = 5
+	descendantEmptyConfirmationWindow = (descendantEmptyConfirmationPolls - 1) * descendantPollInterval
 )
-
-type trigger struct {
-	reason string
-	err    error
-}
 
 type waitResult struct {
 	exitCode int64
@@ -79,6 +75,7 @@ func Run(
 		})
 	}
 	rootPID := command.Process.Pid
+	defer func() { _ = command.Process.Release() }()
 	if err := events.Close(); err != nil {
 		_ = forceTree(rootPID)
 		_, _ = waitCommand(command)
@@ -90,34 +87,25 @@ func Run(
 		return fmt.Errorf("publish Linux process readiness: %w", err)
 	}
 
-	waited := make(chan waitResult, 1)
-	go func() {
-		outcome, err := waitCommand(command)
-		outcome.err = err
-		waited <- outcome
-	}()
-	controls := make(chan trigger, 1)
-	go readControl(control, controls)
-	deadline := time.NewTimer(time.Duration(config.DeadlineMilliseconds) * time.Millisecond)
-	defer deadline.Stop()
-
-	reason := processowner.ReasonNatural
-	var controlErr error
+	observeRoot := func() (bool, error) { return rootExited(rootPID) }
+	decision := awaitInitialOutcome(
+		time.Now().Add(time.Duration(config.DeadlineMilliseconds)*time.Millisecond),
+		observeRoot,
+		func() (trigger, bool, error) { return observeControl(control) },
+		time.Now,
+		func(maximum time.Duration) error { return waitForControl(control, maximum) },
+	)
 	var outcome waitResult
-	select {
-	case outcome = <-waited:
-	case requested := <-controls:
-		reason, controlErr = requested.reason, requested.err
-		outcome = interruptThenWait(
+	var retirementErr error
+	if decision.rootSettled {
+		var waitErr error
+		outcome, waitErr = waitCommand(command)
+		outcome.err = waitErr
+	} else {
+		outcome, retirementErr = interruptThenWait(
+			command,
 			rootPID,
-			waited,
-			time.Duration(config.TerminationGraceMilliseconds)*time.Millisecond,
-		)
-	case <-deadline.C:
-		reason = processowner.ReasonDeadline
-		outcome = interruptThenWait(
-			rootPID,
-			waited,
+			observeRoot,
 			time.Duration(config.TerminationGraceMilliseconds)*time.Millisecond,
 		)
 	}
@@ -128,8 +116,8 @@ func Run(
 	result := processowner.Result{
 		ExitCode:     &outcome.exitCode,
 		Signal:       outcome.signal,
-		Reason:       reason,
-		Error:        diagnostic(errors.Join(outcome.err, controlErr)),
+		Reason:       decision.reason,
+		Error:        diagnostic(errors.Join(outcome.err, decision.controlErr, retirementErr)),
 		CleanupError: diagnostic(cleanupErr),
 	}
 	return processowner.WriteStatus(status, processowner.Status{
@@ -139,6 +127,9 @@ func Run(
 
 func waitCommand(command *exec.Cmd) (waitResult, error) {
 	err := command.Wait()
+	if command.ProcessState == nil {
+		return waitResult{exitCode: -1}, fmt.Errorf("wait for Linux target produced no process state: %w", err)
+	}
 	result := waitResult{exitCode: int64(command.ProcessState.ExitCode())}
 	if status, ok := command.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
 		result.signal = status.Signal().String()
@@ -150,37 +141,140 @@ func waitCommand(command *exec.Cmd) (waitResult, error) {
 	return result, nil
 }
 
-func interruptThenWait(rootPID int, waited <-chan waitResult, grace time.Duration) waitResult {
-	_ = signalProcessGroup(rootPID, syscall.SIGINT)
-	timer := time.NewTimer(grace)
-	defer timer.Stop()
-	select {
-	case result := <-waited:
-		return result
-	case <-timer.C:
-		_ = forceTree(rootPID)
-		return <-waited
+func rootExited(rootPID int) (bool, error) {
+	info := unix.Siginfo{}
+	if err := unix.Waitid(
+		unix.P_PID,
+		rootPID,
+		&info,
+		unix.WEXITED|unix.WNOHANG|unix.WNOWAIT,
+		nil,
+	); err != nil {
+		return false, fmt.Errorf("observe Linux target: pid=%d: %w", rootPID, err)
+	}
+	return info.Signo != 0, nil
+}
+
+func interruptThenWait(
+	command *exec.Cmd,
+	rootPID int,
+	observeRoot rootObserver,
+	grace time.Duration,
+) (waitResult, error) {
+	var retirementErr error
+	if err := signalProcessGroup(rootPID, syscall.SIGINT); err != nil {
+		retirementErr = errors.Join(retirementErr, fmt.Errorf(
+			"interrupt Linux target: phase=interrupt pid=%d: %w",
+			rootPID,
+			err,
+		))
+	}
+	settled, err := waitForRootExit(observeRoot, grace)
+	if err != nil {
+		retirementErr = errors.Join(retirementErr, fmt.Errorf(
+			"observe Linux target: phase=interrupt_wait pid=%d: %w",
+			rootPID,
+			err,
+		))
+	}
+	if settled {
+		outcome, waitErr := waitCommand(command)
+		outcome.err = waitErr
+		return outcome, retirementErr
+	}
+	if err := forceTree(rootPID); err != nil {
+		retirementErr = errors.Join(retirementErr, fmt.Errorf(
+			"terminate Linux process tree: phase=force pid=%d: %w",
+			rootPID,
+			err,
+		))
+	}
+	settled, err = waitForRootExit(observeRoot, grace)
+	if err != nil {
+		retirementErr = errors.Join(retirementErr, fmt.Errorf(
+			"observe Linux target: phase=forced_wait pid=%d: %w",
+			rootPID,
+			err,
+		))
+	}
+	if !settled {
+		return waitResult{
+			exitCode: -1,
+			err: fmt.Errorf(
+				"linux target did not exit after forced termination: phase=forced_wait pid=%d",
+				rootPID,
+			),
+		}, retirementErr
+	}
+	outcome, waitErr := waitCommand(command)
+	outcome.err = waitErr
+	return outcome, retirementErr
+}
+
+func waitForRootExit(observeRoot rootObserver, maximum time.Duration) (bool, error) {
+	deadline := time.Now().Add(maximum)
+	for {
+		settled, err := observeRoot()
+		if err != nil || settled {
+			return settled, err
+		}
+		now := time.Now()
+		if !now.Before(deadline) {
+			return false, nil
+		}
+		pause := min(deadline.Sub(now), lifecyclePollInterval)
+		time.Sleep(pause)
 	}
 }
 
-func readControl(reader io.Reader, result chan<- trigger) {
+func observeControl(reader *os.File) (trigger, bool, error) {
+	ready, err := controlReady(reader, 0)
+	if err != nil || !ready {
+		return trigger{}, false, err
+	}
+	return readControl(reader), true, nil
+}
+
+func waitForControl(reader *os.File, maximum time.Duration) error {
+	_, err := controlReady(reader, maximum)
+	return err
+}
+
+func controlReady(reader *os.File, maximum time.Duration) (bool, error) {
+	poll := []unix.PollFd{{
+		Fd:     int32(reader.Fd()),
+		Events: unix.POLLIN | unix.POLLHUP | unix.POLLERR,
+	}}
+	timeout := unix.NsecToTimespec(maximum.Nanoseconds())
+	observed, err := unix.Ppoll(poll, &timeout, nil)
+	if errors.Is(err, syscall.EINTR) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("poll Linux process control: fd=%d: %w", reader.Fd(), err)
+	}
+	if poll[0].Revents&unix.POLLNVAL != 0 {
+		return false, fmt.Errorf("poll Linux process control: fd=%d revents=%#x", reader.Fd(), poll[0].Revents)
+	}
+	return observed > 0 && poll[0].Revents&(unix.POLLIN|unix.POLLHUP|unix.POLLERR) != 0, nil
+}
+
+func readControl(reader io.Reader) trigger {
 	var command [1]byte
 	_, err := io.ReadFull(reader, command[:])
 	if err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			result <- trigger{reason: processowner.ReasonParentLost}
-		} else {
-			result <- trigger{reason: processowner.ReasonStop, err: fmt.Errorf("read process control: %w", err)}
+			return trigger{reason: processowner.ReasonParentLost}
 		}
-		return
+		return trigger{reason: processowner.ReasonStop, err: fmt.Errorf("read process control: %w", err)}
 	}
 	switch command[0] {
 	case processowner.ControlInterrupt:
-		result <- trigger{reason: processowner.ReasonInterrupt}
+		return trigger{reason: processowner.ReasonInterrupt}
 	case processowner.ControlStop:
-		result <- trigger{reason: processowner.ReasonStop}
+		return trigger{reason: processowner.ReasonStop}
 	default:
-		result <- trigger{reason: processowner.ReasonStop, err: errors.New("process control command is invalid")}
+		return trigger{reason: processowner.ReasonStop, err: errors.New("process control command is invalid")}
 	}
 }
 
@@ -205,44 +299,65 @@ func signalProcessGroup(rootPID int, signal syscall.Signal) error {
 }
 
 func cleanupDescendants(rootPID int, maximum time.Duration) error {
-	forceErr := forceTree(rootPID)
 	deadline := time.Now().Add(maximum)
-	emptyPolls := 0
+	stableEmpty := stableEmptyTracker{}
+	var descendants []int
+	var cleanupErr error
 	for {
-		reapAdoptedChildren()
-		descendants, err := descendantPIDs(os.Getpid())
-		if err != nil {
-			return errors.Join(forceErr, err)
+		if err := reapAdoptedChildren(); err != nil {
+			return errors.Join(cleanupErr, err)
 		}
+		observedDescendants, err := descendantPIDs(os.Getpid())
+		if err != nil {
+			return errors.Join(cleanupErr, err)
+		}
+		descendants = observedDescendants
+		now := time.Now()
 		if len(descendants) == 0 {
-			emptyPolls++
 			// Orphan reparenting and /proc visibility do not form one atomic
-			// observation. Requiring a stable-empty window keeps terminal status
-			// causally after subreaper adoption.
-			if emptyPolls >= descendantEmptyConfirmationPolls {
-				return forceErr
+			// observation. An elapsed stable-empty window keeps terminal status
+			// causally after subreaper adoption even when polling is delayed.
+			if stableEmpty.observe(true, now, descendantEmptyConfirmationWindow) {
+				return cleanupErr
 			}
 		} else {
-			emptyPolls = 0
+			stableEmpty.observe(false, now, descendantEmptyConfirmationWindow)
 			for _, processID := range descendants {
 				if err := syscall.Kill(processID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-					forceErr = errors.Join(forceErr, err)
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf(
+						"terminate Linux descendant: phase=stable_empty pid=%d: %w",
+						processID,
+						err,
+					))
 				}
 			}
 		}
-		if !time.Now().Before(deadline) {
-			return errors.Join(forceErr, fmt.Errorf("linux descendants did not exit: %v", descendants))
+		if !now.Before(deadline) {
+			return errors.Join(cleanupErr, fmt.Errorf(
+				"linux descendants did not become stably empty: phase=stable_empty root_pid=%d active_descendants=%v stable_empty_for=%s required=%s",
+				rootPID,
+				descendants,
+				stableEmpty.elapsed(now),
+				descendantEmptyConfirmationWindow,
+			))
 		}
-		time.Sleep(descendantPollInterval)
+		pause := min(deadline.Sub(now), descendantPollInterval)
+		time.Sleep(pause)
 	}
 }
 
-func reapAdoptedChildren() {
+func reapAdoptedChildren() error {
 	for {
 		var status syscall.WaitStatus
 		processID, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
-		if processID <= 0 || err != nil {
-			return
+		if err != nil {
+			if errors.Is(err, syscall.ECHILD) {
+				return nil
+			}
+			return fmt.Errorf("reap Linux descendant: phase=stable_empty: %w", err)
+		}
+		if processID <= 0 {
+			return nil
 		}
 	}
 }
