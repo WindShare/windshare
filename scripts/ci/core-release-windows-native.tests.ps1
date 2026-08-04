@@ -108,11 +108,25 @@ function Assert-FileDoesNotContain([string]$Path, [string]$Forbidden) {
     }
 }
 
-$requiredTests = @(Get-WindowsNativeRequiredTestNames)
-$expectedExpression = '^(TestWindowsNTFSNativeCertification|TestWindowsNTFSProcessRestartRecovery|TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment)$'
-if ((Get-WindowsNativeRequiredTestExpression) -cne $expectedExpression) {
-    throw 'required native test expression drifted from the release contract'
+$requiredSelectors = @(Get-WindowsNativeRequiredTestSelectors)
+if ($requiredSelectors.Count -ne 2) {
+    throw 'required native test selectors drifted from the release contract'
 }
+$coreSelector = @($requiredSelectors | Where-Object {
+    $_.PackageArgument -ceq './osfs'
+})
+$outputWindowsSelector = @($requiredSelectors | Where-Object {
+    $_.PackageArgument -ceq './osfs/internal/outputwindows'
+})
+if ($coreSelector.Count -ne 1 -or
+    $outputWindowsSelector.Count -ne 1 -or
+    (Get-WindowsNativeRequiredTestExpression -TestNames $coreSelector[0].TestNames) -cne
+        '^(TestWindowsNTFSNativeCertification|TestWindowsNTFSProcessRestartRecovery)$' -or
+    (Get-WindowsNativeRequiredTestExpression -TestNames $outputWindowsSelector[0].TestNames) -cne
+        '^(TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment)$') {
+    throw 'required native tests are not bound to their owning package selectors'
+}
+$requiredTests = @($requiredSelectors | ForEach-Object { $_.TestNames })
 
 $profilePolicySID = 'S-1-5-21-4000000001-4000000002-4000000003-4000000004'
 $profileDeleteCodes = [Collections.Generic.Queue[int]]::new()
@@ -714,6 +728,17 @@ Assert-Throws 'missing top-level pass' {
 Assert-Throws 'empty JSON event stream' {
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events @() -RequiredTests $requiredTests
 }
+Assert-ThrowsContaining 'zero-test package selector' 'selector ran zero tests: package=./osfs/internal/outputwindows' {
+    Assert-WindowsNativeTestEvents `
+        -ExitCode 0 `
+        -Events @(
+            [pscustomobject]@{ Action = 'start'; Package = 'example/outputwindows' },
+            [pscustomobject]@{ Action = 'pass'; Package = 'example/outputwindows' }
+        ) `
+        -RequiredTests @('TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment') `
+        -SelectorPackage './osfs/internal/outputwindows' `
+        -SelectorExpression '^(TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment)$'
+}
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $releaseWorkflowPath = Join-Path $repositoryRoot '.github\workflows\core-release.yml'
@@ -1081,7 +1106,11 @@ foreach ($requiredWorkerText in @(
     'Assert-WindowsNativeTreeHasNoReparsePoints',
     '& $resolvedGoExecutable env GOROOT',
     '-- standard-user Go toolchain verified:',
-    "@('GOOS', 'GOARCH', 'CGO_ENABLED', 'GOEXPERIMENT')"
+    "@('GOOS', 'GOARCH', 'CGO_ENABLED', 'GOEXPERIMENT')",
+    'Get-WindowsNativeRequiredTestSelectors',
+    '$selectorPackage = [string]$selector.PackageArgument',
+    "'-run', `$testExpression, `$selectorPackage",
+    '-SelectorPackage $selectorPackage'
 )) {
     Assert-FileContains -Path $nativeWorkerPath -Expected $requiredWorkerText
 }
