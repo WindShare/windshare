@@ -759,8 +759,7 @@ func assertLinuxUnsupported(t *testing.T, err error) {
 	if !errors.Is(err, errLinuxOutputUnsupported) {
 		t.Fatalf("expected unsupported error, got %v", err)
 	}
-	var typed *linuxOutputUnsupportedError
-	if !errors.As(err, &typed) {
+	if _, ok := errors.AsType[*linuxOutputUnsupportedError](err); !ok {
 		t.Fatalf("unsupported error is not typed: %T", err)
 	}
 }
@@ -770,8 +769,7 @@ func assertLinuxUnsafe(t *testing.T, err error) {
 	if !errors.Is(err, errLinuxOutputUnsafe) {
 		t.Fatalf("expected unsafe error, got %v", err)
 	}
-	var typed *linuxOutputUnsafeError
-	if !errors.As(err, &typed) {
+	if _, ok := errors.AsType[*linuxOutputUnsafeError](err); !ok {
 		t.Fatalf("unsafe error is not typed: %T", err)
 	}
 }

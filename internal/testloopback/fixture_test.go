@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -139,7 +140,7 @@ func TestFixtureCleanupFailureIsReportedToTheTest(t *testing.T) {
 	if err := fixture.own("failing socket", recordingCloser{order: &[]string{}, err: closeFailure}); err != nil {
 		t.Fatal(err)
 	}
-	for index := len(context.cleanups) - 1; index >= 0; index-- {
+	for index := range slices.Backward(context.cleanups) {
 		context.cleanups[index]()
 	}
 	if len(context.errors) != 1 || !strings.Contains(context.errors[0], closeFailure.Error()) {

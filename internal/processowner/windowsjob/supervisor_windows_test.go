@@ -5,6 +5,7 @@ package windowsjob
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -76,6 +77,66 @@ func TestReadControlMapsCommandsAndEOF(t *testing.T) {
 			got := <-result
 			if got.reason != test.reason || (got.err != nil) != test.failed {
 				t.Fatalf("trigger = %+v", got)
+			}
+		})
+	}
+}
+
+func TestAwaitInitialOutcomeObservesExitedRootBeforeQueuedSignals(t *testing.T) {
+	controls := make(chan trigger, 1)
+	controls <- trigger{reason: processowner.ReasonStop, err: errors.New("late control")}
+	deadline := time.Unix(1, 0)
+	waitCalls := 0
+	decision := awaitInitialOutcome(
+		rootProcess{},
+		controls,
+		deadline,
+		func(rootProcess, time.Duration) (rootResult, bool) {
+			waitCalls++
+			return rootResult{exitCode: 17}, true
+		},
+		func() time.Time { return deadline },
+	)
+	if waitCalls != 1 || !decision.rootSettled || decision.reason != processowner.ReasonNatural ||
+		decision.outcome.exitCode != 17 {
+		t.Fatalf("initial decision = %+v after %d root observations", decision, waitCalls)
+	}
+	if len(controls) != 1 {
+		t.Fatal("late control displaced an already observable root exit")
+	}
+}
+
+func TestAwaitInitialOutcomeUsesQueuedControlBeforeDeadline(t *testing.T) {
+	controlErr := errors.New("control failed")
+	controls := make(chan trigger, 1)
+	controls <- trigger{reason: processowner.ReasonStop, err: controlErr}
+	deadline := time.Unix(1, 0)
+	decision := awaitInitialOutcome(
+		rootProcess{},
+		controls,
+		deadline,
+		func(rootProcess, time.Duration) (rootResult, bool) { return rootResult{}, false },
+		func() time.Time { return deadline },
+	)
+	if decision.rootSettled || decision.reason != processowner.ReasonStop ||
+		!errors.Is(decision.controlErr, controlErr) {
+		t.Fatalf("initial decision = %+v", decision)
+	}
+}
+
+func TestWaitMillisecondsPreservesPollingBounds(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		wait time.Duration
+		want uint32
+	}{
+		{name: "expired", wait: -time.Millisecond, want: 0},
+		{name: "sub-millisecond", wait: time.Nanosecond, want: 1},
+		{name: "poll", wait: jobPollInterval, want: uint32(jobPollInterval.Milliseconds())},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := waitMilliseconds(test.wait); got != test.want {
+				t.Fatalf("wait milliseconds = %d, want %d", got, test.want)
 			}
 		})
 	}
@@ -206,7 +267,18 @@ func collectWindowsSupervisor(
 			done = nil
 		case <-timer.C:
 			_ = controlWriter.Close()
-			return nil, errors.New("windows supervisor did not settle within its lifecycle bound")
+			pending := make([]string, 0, 2)
+			if collected != nil {
+				pending = append(pending, "terminal_status")
+			}
+			if done != nil {
+				pending = append(pending, "run_return")
+			}
+			return nil, fmt.Errorf(
+				"windows supervisor did not settle within its lifecycle bound: pending=%s observed_statuses=%d",
+				strings.Join(pending, ","),
+				len(collection.statuses),
+			)
 		}
 	}
 	if runErr != nil || collection.err != nil {

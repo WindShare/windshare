@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -46,7 +47,7 @@ func (capture *lifecycleCapture) Cleanup(cleanup func()) {
 }
 
 func (capture *lifecycleCapture) runCleanups() {
-	for index := len(capture.cleanups) - 1; index >= 0; index-- {
+	for index := range slices.Backward(capture.cleanups) {
 		capture.cleanups[index]()
 	}
 }

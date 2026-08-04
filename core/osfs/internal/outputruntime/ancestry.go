@@ -551,7 +551,7 @@ func classifyOutputAncestryEvidence(err error) error {
 
 func closeOutputAncestryDirectories(directories map[string]outputcap.Directory, opened []string) error {
 	var result error
-	for index := len(opened) - 1; index >= 0; index-- {
+	for index := range slices.Backward(opened) {
 		path := opened[index]
 		if directory := directories[path]; directory != nil {
 			result = errors.Join(result, directory.Close())

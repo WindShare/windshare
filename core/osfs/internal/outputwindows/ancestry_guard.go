@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -81,7 +82,7 @@ func (guard *windowsV3PublicOperationGuard) Close() error {
 		result = errors.Join(result, guard.root.Close())
 		guard.root = nil
 	}
-	for index := len(guard.pins) - 1; index >= 0; index-- {
+	for index := range slices.Backward(guard.pins) {
 		result = errors.Join(result, guard.pins[index].Close())
 	}
 	guard.pins = nil

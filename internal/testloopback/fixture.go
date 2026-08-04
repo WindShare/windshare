@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 )
 
@@ -62,7 +63,7 @@ func (fixture *Fixture) Close() error {
 		fixture.mu.Unlock()
 
 		var failures []error
-		for index := len(resources) - 1; index >= 0; index-- {
+		for index := range slices.Backward(resources) {
 			resource := resources[index]
 			if err := resource.closer.Close(); err != nil {
 				failures = append(failures, fmt.Errorf("close %s: %w", resource.name, err))

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -304,7 +305,7 @@ func windowsCreateCertifiedOutputRootWithObserver(
 	createdAuthorities := make([]*windowsV3Directory, 0, len(missing))
 	defer func() {
 		var cleanupErr error
-		for index := len(createdAuthorities) - 1; index >= 0; index-- {
+		for index := range slices.Backward(createdAuthorities) {
 			cleanupErr = errors.Join(cleanupErr, createdAuthorities[index].Close())
 		}
 		cleanupErr = errors.Join(cleanupErr, placement.Close(), ancestor.Close())
@@ -383,7 +384,7 @@ func windowsV3CreateMissingOutputComponents(
 	observer windowsV3OutputRootCreateObserver,
 ) (*windowsV3Directory, []*windowsV3Directory, error) {
 	createdAuthorities := make([]*windowsV3Directory, 0, len(missing))
-	for index := len(missing) - 1; index >= 0; index-- {
+	for index := range slices.Backward(missing) {
 		created, err := current.openDirectory(missing[index], false, windows.FILE_CREATE)
 		if err != nil {
 			return nil, createdAuthorities, err

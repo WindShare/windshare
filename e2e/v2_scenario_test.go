@@ -24,7 +24,6 @@ const (
 	v2RelayProxyPauseMilestone    testrun.Milestone = "relay_proxy_pause"
 	v2RelayProxyResumeMilestone   testrun.Milestone = "relay_proxy_resume"
 	v2RelayProxyCutMilestone      testrun.Milestone = "relay_proxy_cut"
-	v2LifecycleStopMilestone      testrun.Milestone = "lifecycle_stop_request"
 	v2ScenarioOracleMilestone     testrun.Milestone = "scenario_oracle"
 
 	v2EvidenceStartFailureReason = "evidence_start_failed"

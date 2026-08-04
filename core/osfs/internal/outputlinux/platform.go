@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"path/filepath"
+	"slices"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
@@ -93,7 +94,7 @@ func linuxCreateCertifiedOutputRoot(path string) (_ *linuxOutputDirectory, resul
 			resultErr = errors.Join(resultErr, current.close())
 		}
 	}()
-	for index := len(missing) - 1; index >= 0; index-- {
+	for index := range slices.Backward(missing) {
 		created, err := current.createDirectoryExact(missing[index], uint32(dirPerm))
 		if err != nil {
 			return nil, err

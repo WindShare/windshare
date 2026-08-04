@@ -904,8 +904,7 @@ func (harness *blockedCatalogFetch) unblockSender() {
 
 func assertSessionFailure(t *testing.T, err error) {
 	t.Helper()
-	var failure *transfer.SessionFailureError
-	if !errors.As(err, &failure) {
+	if _, ok := errors.AsType[*transfer.SessionFailureError](err); !ok {
 		t.Fatalf("error is not session-fatal: %v", err)
 	}
 }

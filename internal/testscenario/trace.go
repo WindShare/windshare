@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -477,7 +478,7 @@ func (trace *Trace) finish() error {
 		trace.scenarioCleanupTimeout,
 	)
 	defer cancelCleanup()
-	for index := len(owners) - 1; index >= 0; index-- {
+	for index := range slices.Backward(owners) {
 		owner := owners[index]
 		if err := trace.runCleanupOwner(cleanupContext, owner, index+1); err != nil {
 			cleanupFailures = append(cleanupFailures, fmt.Errorf("%s: %w", owner.name, err))
