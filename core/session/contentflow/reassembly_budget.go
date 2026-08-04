@@ -3,6 +3,7 @@ package contentflow
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 )
 
@@ -108,7 +109,7 @@ func (r *reassemblyReservation) Release() {
 		return
 	}
 	r.once.Do(func() {
-		for index := len(r.accounts) - 1; index >= 0; index-- {
+		for index := range slices.Backward(r.accounts) {
 			r.accounts[index].release(r.bytes)
 		}
 	})

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -59,7 +60,7 @@ func TestLinuxExt4RestartIdentityRejectsForcedInodeReuse(t *testing.T) {
 		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("remove native reuse target: %v", err)
 		}
-		for index := len(createdFillers) - 1; index >= 0; index-- {
+		for index := range slices.Backward(createdFillers) {
 			if err := os.Remove(createdFillers[index]); err != nil && !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("remove inode filler %q: %v", createdFillers[index], err)
 			}

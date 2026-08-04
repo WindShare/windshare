@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 	"time"
 )
@@ -246,7 +247,7 @@ func (r *BudgetReservation) Shrink(usage ResourceUsage) error {
 		return errors.New("catalog budget shrink exceeds its reservation")
 	}
 	r.usage = subtractUsage(r.usage, usage)
-	for index := len(r.accounts) - 1; index >= 0; index-- {
+	for index := range slices.Backward(r.accounts) {
 		r.accounts[index].release(usage)
 	}
 	return nil
@@ -269,7 +270,7 @@ func (r *BudgetReservation) keep(usage ResourceUsage) error {
 	}
 	released := subtractUsage(r.usage, usage)
 	r.usage = usage
-	for index := len(r.accounts) - 1; index >= 0; index-- {
+	for index := range slices.Backward(r.accounts) {
 		r.accounts[index].release(released)
 	}
 	r.mu.Unlock()
@@ -308,7 +309,7 @@ func (r *BudgetReservation) Release() {
 	r.released = true
 	usage := r.usage
 	r.usage = ResourceUsage{}
-	for index := len(r.accounts) - 1; index >= 0; index-- {
+	for index := range slices.Backward(r.accounts) {
 		r.accounts[index].release(usage)
 	}
 	r.mu.Unlock()
