@@ -798,6 +798,19 @@ func markPortableRuntimePrivateEnvelopeUnsafe(path string) {
 	portableRuntimeUnsafePrivate.Store(filepath.Clean(absolute), struct{}{})
 }
 
+func TestPortableRuntimeTracksUnsafePrivateEnvelopes(t *testing.T) {
+	t.Parallel()
+	root := newRuntimeTestRootSpec(t)
+	path := filepath.Join(root.path, "private")
+	if !portableRuntimePrivateEnvelopeSafe(path) {
+		t.Fatal("new private envelope is unsafe")
+	}
+	markPortableRuntimePrivateEnvelopeUnsafe(path)
+	if portableRuntimePrivateEnvelopeSafe(path) {
+		t.Fatal("marked private envelope is safe")
+	}
+}
+
 func portableRuntimePrivateEnvelopeSafe(path string) bool {
 	absolute, err := filepath.Abs(path)
 	if err != nil {

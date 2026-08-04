@@ -165,25 +165,22 @@ func interruptThenWait(rootPID int, waited <-chan waitResult, grace time.Duratio
 
 func readControl(reader io.Reader, result chan<- trigger) {
 	var command [1]byte
-	for {
-		_, err := io.ReadFull(reader, command[:])
-		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				result <- trigger{reason: processowner.ReasonParentLost}
-			} else {
-				result <- trigger{reason: processowner.ReasonStop, err: fmt.Errorf("read process control: %w", err)}
-			}
-			return
-		}
-		switch command[0] {
-		case processowner.ControlInterrupt:
-			result <- trigger{reason: processowner.ReasonInterrupt}
-		case processowner.ControlStop:
-			result <- trigger{reason: processowner.ReasonStop}
-		default:
-			result <- trigger{reason: processowner.ReasonStop, err: errors.New("process control command is invalid")}
+	_, err := io.ReadFull(reader, command[:])
+	if err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			result <- trigger{reason: processowner.ReasonParentLost}
+		} else {
+			result <- trigger{reason: processowner.ReasonStop, err: fmt.Errorf("read process control: %w", err)}
 		}
 		return
+	}
+	switch command[0] {
+	case processowner.ControlInterrupt:
+		result <- trigger{reason: processowner.ReasonInterrupt}
+	case processowner.ControlStop:
+		result <- trigger{reason: processowner.ReasonStop}
+	default:
+		result <- trigger{reason: processowner.ReasonStop, err: errors.New("process control command is invalid")}
 	}
 }
 
@@ -234,7 +231,7 @@ func cleanupDescendants(rootPID int, maximum time.Duration) error {
 			}
 		}
 		if !time.Now().Before(deadline) {
-			return errors.Join(forceErr, fmt.Errorf("Linux descendants did not exit: %v", descendants))
+			return errors.Join(forceErr, fmt.Errorf("linux descendants did not exit: %v", descendants))
 		}
 		time.Sleep(descendantPollInterval)
 	}
@@ -288,15 +285,15 @@ func descendantPIDs(ownerPID int) ([]int, error) {
 func parseParentPID(stat string) (int, error) {
 	closing := strings.LastIndexByte(stat, ')')
 	if closing < 0 || closing+1 >= len(stat) {
-		return 0, errors.New("Linux process stat has no command terminator")
+		return 0, errors.New("linux process stat has no command terminator")
 	}
 	fields := strings.Fields(stat[closing+1:])
 	if len(fields) < 2 {
-		return 0, errors.New("Linux process stat has no parent PID")
+		return 0, errors.New("linux process stat has no parent PID")
 	}
 	parentPID, err := strconv.Atoi(fields[1])
 	if err != nil || parentPID < 0 {
-		return 0, errors.New("Linux process stat parent PID is invalid")
+		return 0, errors.New("linux process stat parent PID is invalid")
 	}
 	return parentPID, nil
 }

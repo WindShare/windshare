@@ -230,10 +230,7 @@ func (runner benchmarkRunner) completeSample(
 		sample.Command.OutputTail = diagnosticTail(output)
 	}
 	exitCode := sample.Command.ExitCode
-	duration := sample.Command.FinishedAt.Sub(sample.Command.StartedAt)
-	if duration < 0 {
-		duration = 0
-	}
+	duration := max(sample.Command.FinishedAt.Sub(sample.Command.StartedAt), 0)
 	logErr := runner.log(Event{
 		OperationID: sample.Command.OperationID, Scenario: sample.WorkloadID,
 		WorkloadID: sample.WorkloadID, SampleIndex: sample.Index,

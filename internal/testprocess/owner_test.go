@@ -3,6 +3,7 @@
 package testprocess
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,10 +25,13 @@ import (
 )
 
 const (
-	ownedProbeEnvironment = "WINDSHARE_TESTPROCESS_PROBE"
-	ownedProbeComponent   = testrun.Component("process_probe")
-	ownedProbeReady       = testrun.Milestone("probe_ready")
-	ownedProbeStopped     = testrun.Milestone("probe_stopped")
+	ownedProbeEnvironment         = "WINDSHARE_TESTPROCESS_PROBE"
+	ownedProbeComponent           = testrun.Component("process_probe")
+	ownedProbeReady               = testrun.Milestone("probe_ready")
+	ownedProbeStopped             = testrun.Milestone("probe_stopped")
+	ownedProbeTerminalOutputBytes = 256 << 10
+	ownedProbeStdoutTerminal      = "\nprobe stdout terminal\n"
+	ownedProbeStderrTerminal      = "\nprobe stderr terminal\n"
 )
 
 func TestOwnerSupervisesLifecycleAndDescendants(t *testing.T) {
@@ -72,6 +77,34 @@ func TestOwnerSupervisesLifecycleAndDescendants(t *testing.T) {
 		}
 		if _, err := process.Events().Next(readyContext); !errors.Is(err, io.EOF) {
 			t.Fatalf("event stream end = %v", err)
+		}
+	})
+
+	t.Run("terminal output drains before lifecycle completion", func(t *testing.T) {
+		process := startOwnedProbe(t, owner, "terminal-output", 10*time.Second, time.Second)
+		waitContext, cancelWait := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancelWait()
+		result, err := process.Wait(waitContext)
+		if err := RequireSuccess(result, err); err != nil {
+			t.Fatal(err)
+		}
+		for _, captured := range []struct {
+			stream   OutputStream
+			snapshot OutputSnapshot
+			payload  []byte
+		}{
+			{stream: Stdout, snapshot: process.Stdout(), payload: ownedProbeTerminalPayload('o', ownedProbeStdoutTerminal)},
+			{stream: Stderr, snapshot: process.Stderr(), payload: ownedProbeTerminalPayload('e', ownedProbeStderrTerminal)},
+		} {
+			if captured.snapshot.Truncated || !bytes.Contains(captured.snapshot.Bytes, captured.payload) {
+				t.Fatalf(
+					"%s output length=%d truncated=%v complete_payload=%v",
+					captured.stream,
+					len(captured.snapshot.Bytes),
+					captured.snapshot.Truncated,
+					bytes.Contains(captured.snapshot.Bytes, captured.payload),
+				)
+			}
 		}
 	})
 
@@ -203,6 +236,8 @@ func TestOwnedProcessProbe(t *testing.T) {
 		fmt.Println("probe ready")
 		_, _ = fmt.Fprintln(os.Stderr, "probe diagnostic")
 		recordOwnedProbeEvent(t, ownedProbeReady)
+	case "terminal-output":
+		writeOwnedProbeTerminalOutput(t)
 	case "interrupt":
 		interrupts := make(chan os.Signal, 1)
 		signal.Notify(interrupts, os.Interrupt)
@@ -223,6 +258,40 @@ func TestOwnedProcessProbe(t *testing.T) {
 	default:
 		t.Fatalf("unknown owned probe mode %q", mode)
 	}
+}
+
+func writeOwnedProbeTerminalOutput(t *testing.T) {
+	t.Helper()
+	stdoutPayload := ownedProbeTerminalPayload('o', ownedProbeStdoutTerminal)
+	stderrPayload := ownedProbeTerminalPayload('e', ownedProbeStderrTerminal)
+	var stdoutErr, stderrErr error
+	var writes sync.WaitGroup
+	writes.Add(2)
+	go func() {
+		defer writes.Done()
+		stdoutErr = writeOwnedProbePayload(os.Stdout, stdoutPayload)
+	}()
+	go func() {
+		defer writes.Done()
+		stderrErr = writeOwnedProbePayload(os.Stderr, stderrPayload)
+	}()
+	writes.Wait()
+	if err := errors.Join(stdoutErr, stderrErr); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func ownedProbeTerminalPayload(fill byte, terminal string) []byte {
+	payload := bytes.Repeat([]byte{fill}, ownedProbeTerminalOutputBytes)
+	return append(payload, terminal...)
+}
+
+func writeOwnedProbePayload(destination io.Writer, payload []byte) error {
+	written, err := destination.Write(payload)
+	if err == nil && written != len(payload) {
+		return io.ErrShortWrite
+	}
+	return err
 }
 
 func recordOwnedProbeEvent(t *testing.T, milestone testrun.Milestone) {
