@@ -46,16 +46,6 @@ assert_not_contains() {
   fi
 }
 
-workflow_job_source() {
-  local path="$1"
-  local job="$2"
-  awk -v header="  ${job}:" '
-    $0 == header { capture = 1 }
-    capture && $0 != header && $0 ~ /^  [a-z0-9][a-z0-9-]*:$/ { exit }
-    capture { print }
-  ' "$path"
-}
-
 echo "-- Linux private release-root lifecycle"
 windshare_linux_prepare_release_environment "$repository_root"
 release_root="$WINDSHARE_LINUX_RELEASE_TEMP_ROOT"
@@ -112,46 +102,45 @@ release_root=""
 echo "-- core-first release orchestration and no-replace invariant"
 assert_not_contains ".github/workflows/ci.yml" '- "core/v*"'
 assert_not_contains ".github/workflows/ci.yml" '- "core-candidate/v*/**"'
-assert_contains ".github/workflows/core-release.yml" '- "core/v*"'
+assert_not_contains ".github/workflows/core-release.yml" '- "core/v*"'
 assert_contains ".github/workflows/core-release.yml" '- "core-candidate/v*/**"'
-assert_contains ".github/workflows/core-release.yml" 'uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7'
-assert_contains ".github/workflows/core-release.yml" 'uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6'
-assert_contains ".github/workflows/core-release.yml" '- "!core/v0.3.0"'
-assert_contains ".github/workflows/core-release.yml" '- "!core-candidate/v0.3.0/**"'
+assert_contains ".github/workflows/core-release.yml" 'uses: actions/checkout@v7'
+assert_contains ".github/workflows/core-release.yml" 'uses: actions/setup-go@v7'
+assert_not_contains ".github/workflows/core-release.yml" 'core-candidate/v0.3.0'
 assert_contains "scripts/ci/linux/vet.sh" 'GOWORK=off go build ./...'
 assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/core-release-ref.tests.sh'
-assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/core-release-ref.sh'
+assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/core-release-ref.sh resolve'
+assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/core-release-ref.sh publish'
 assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/linux/core-release.sh "$CORE_RELEASE_VERSION" "$CORE_RELEASE_COMMIT_SHA" linux-ext4'
+assert_contains ".github/workflows/core-release.yml" "if: github.event_name == 'push'"
+assert_contains ".github/workflows/core-release.yml" 'group: core-release-linux-${{ needs.candidate.outputs.version }}'
+assert_contains ".github/workflows/core-release.yml" 'group: core-release-windows-${{ needs.candidate.outputs.version }}'
+assert_contains ".github/workflows/core-release.yml" 'group: core-release-publish-${{ needs.candidate.outputs.version }}'
 manual_version_input="$(sed -n '/^      version:$/,/^        type: string$/p' .github/workflows/core-release.yml)"
 if [ -z "$manual_version_input" ] ||
    ! grep -Fq -- 'required: true' <<<"$manual_version_input" ||
    grep -Fq -- 'default:' <<<"$manual_version_input"; then
-  fail "manual release version must be required and have no default"
+  fail "manual diagnostic version must be required and have no default"
 fi
-action_pin_pattern='^[[:space:]]*-[[:space:]]+uses:[[:space:]]+[^[:space:]#]+@[0-9a-f]{40}[[:space:]]+#[[:space:]]+v[0-9]+([.][0-9]+){0,2}[[:space:]]*$'
-while IFS= read -r action; do
-  if [[ ! "$action" =~ $action_pin_pattern ]]; then
-    fail "core release workflow action is not pinned to a full SHA with a version comment: $action"
-  fi
-done < <(grep -E '^[[:space:]]*-[[:space:]]+uses:' .github/workflows/core-release.yml)
+if grep -Eq 'uses:[[:space:]]+[^[:space:]#]+@[0-9a-f]{40}' .github/workflows/core-release.yml; then
+  fail "core release workflow retains a commit-SHA action pin"
+fi
+if [ "$(grep -Fc -- 'contents: write' .github/workflows/core-release.yml)" -ne 1 ]; then
+  fail "exactly one core release job must receive contents: write"
+fi
 if [ "$(grep -Fc -- 'needs: candidate' .github/workflows/core-release.yml)" -ne 2 ]; then
   fail "native release jobs are not both bound to the resolved core candidate"
 fi
-if [ "$(grep -Fc -- 'go-version-file: core/go.mod' .github/workflows/core-release.yml)" -ne 2 ] ||
+if [ "$(grep -Fc -- 'go-version: stable' .github/workflows/core-release.yml)" -ne 2 ] ||
+   [ "$(grep -Fc -- 'check-latest: true' .github/workflows/core-release.yml)" -ne 2 ] ||
    [ "$(grep -Fc -- 'cache: false' .github/workflows/core-release.yml)" -ne 2 ] ||
-   grep -Fq -- 'go-version-file: go.work' .github/workflows/core-release.yml; then
-  fail "core release jobs do not derive an uncached toolchain from core/go.mod"
+   grep -Fq -- 'go-version-file:' .github/workflows/core-release.yml; then
+  fail "core release jobs do not use the latest stable uncached Go toolchain"
 fi
-ordinary_release_job="$(workflow_job_source .github/workflows/ci.yml core-release)"
-if ! grep -Fq -- 'go-version-file: core/go.mod' <<<"$ordinary_release_job" ||
-   ! grep -Fq -- 'cache: false' <<<"$ordinary_release_job" ||
-   ! grep -Fq -- 'timeout-minutes: 60' <<<"$ordinary_release_job" ||
-   ! grep -Fq -- 'run: make core-release' <<<"$ordinary_release_job" ||
-   grep -Fq -- 'go-version-file: go.work' <<<"$ordinary_release_job"; then
-  fail "ordinary CI core-release job lacks the fixed timeout, synthetic gate, or uncached core toolchain"
+if [ "$(grep -Fc -- 'go install golang.org/x/vuln/cmd/govulncheck@latest' .github/workflows/core-release.yml)" -ne 2 ]; then
+  fail "hosted release jobs do not each provision the latest govulncheck"
 fi
-assert_contains "scripts/ci/core-release-ref.sh" 'object_type" != "commit"'
-assert_contains "scripts/ci/core-release-ref.sh" 'require_direct_commit_ref "$candidate_ref" "$commit_sha"'
+assert_contains "scripts/ci/core-release-ref.sh" 'git push "$remote_name" "$commit_sha:$release_ref"'
 assert_contains "Makefile" 'override CORE_RELEASE_VERSION := v0.0.0-ci'
 assert_contains "Makefile" 'bash scripts/ci/linux/core-release.sh "$(CORE_RELEASE_VERSION)" "$(CORE_RELEASE_COMMIT)"'
 assert_not_contains "Makefile" 'CORE_ARTIFACT_VERSION'
@@ -202,17 +191,21 @@ assert_contains "scripts/ci/core-release-checkout.psm1" "StartsWith('GIT_', [Str
 assert_contains "scripts/ci/core-release-checkout.psm1" "'hash-object', '--no-filters'"
 assert_contains "scripts/ci/_coremodulezip/main.go" '"ls-tree", "-r", "-z", "--full-tree", commitSHA'
 assert_contains "scripts/ci/_coremodulezip/main.go" '"cat-file", "blob", objectID'
-assert_contains "scripts/ci/linux/core-release.sh" 'GOWORK=off go run ./scripts/ci/_corevulnerability'
-assert_not_contains "scripts/ci/linux/core-release.sh" 'windshare_go'
-assert_contains "scripts/ci/linux/core-release.sh" '-module "$artifact_root"'
-assert_contains "scripts/ci/linux/core-release.sh" '-cache "$temporary_root/vulnerability-cache"'
-assert_contains "scripts/ci/windows/core-release.ps1" '& $goExecutable run ./scripts/ci/_corevulnerability'
-assert_not_contains "scripts/ci/windows/core-release.ps1" 'Invoke-WindShareGo'
-assert_contains "scripts/ci/windows/core-release.ps1" '-module $artifactRoot'
-assert_contains "scripts/ci/windows/core-release.ps1" "-cache (Join-Path \$temporaryRoot 'vulnerability-cache')"
-assert_contains "scripts/ci/_corevulnerability/main.go" 'golang.org/x/vuln/cmd/govulncheck@v1.6.0'
-assert_contains "scripts/ci/_corevulnerability/main.go" '"GOPROXY=" + publicGoProxy'
-assert_contains "scripts/ci/_corevulnerability/main.go" '"GOSUMDB=" + publicGoChecksumDatabase'
+assert_contains "scripts/ci/linux/core-release.sh" 'command -v govulncheck'
+assert_contains "scripts/ci/linux/core-release.sh" '"$govulncheck_executable" ./...'
+assert_not_contains "scripts/ci/linux/core-release.sh" 'go install'
+assert_contains "scripts/ci/windows/core-release.ps1" 'Get-Command govulncheck -CommandType Application'
+assert_contains "scripts/ci/windows/core-release.ps1" '& $govulncheckExecutable ./...'
+assert_not_contains "scripts/ci/windows/core-release.ps1" 'go install'
+if [ -e scripts/ci/_corevulnerability ]; then
+  fail "retired repository-owned vulnerability scanner wrapper still exists"
+fi
+if grep -Eq -- 'govulncheck@v[0-9]' \
+  .github/workflows/core-release.yml \
+  scripts/ci/linux/core-release.sh \
+  scripts/ci/windows/core-release.ps1; then
+  fail "core release retains an exact govulncheck version"
+fi
 assert_contains "scripts/ci/linux/core-release.sh" 'core_suite_test_timeout="30m"'
 assert_contains "scripts/ci/linux/core-release.sh" 'go test -count=1 -timeout="$core_suite_test_timeout" ./...'
 if grep -Eq -- 'go test -race|-covermode=atomic|go-test-coverage' \

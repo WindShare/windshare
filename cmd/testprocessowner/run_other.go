@@ -1,12 +1,13 @@
-//go:build !windows && !linux
+//go:build !linux && !windows
 
 package main
 
 import (
-	"fmt"
-	"runtime"
+	"errors"
+
+	"github.com/windshare/windshare/internal/processowner"
 )
 
-func runPlatform([]string) error {
-	return fmt.Errorf("testprocessowner is unsupported on %s", runtime.GOOS)
+func runPlatform([]string, processowner.Config) error {
+	return errors.New("testprocessowner supports only Linux and Windows")
 }

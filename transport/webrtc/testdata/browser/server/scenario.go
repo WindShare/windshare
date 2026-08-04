@@ -77,7 +77,7 @@ func (s *interopServer) saturateOutbound(channel *windwebrtc.Channel, raw *pion.
 		peak = max(peak, raw.BufferedAmount())
 	}
 	if peak < highWaterBytes {
-		return fmt.Errorf("Pion buffered amount peaked at %d before the safety bound", peak)
+		return fmt.Errorf("pion buffered amount peaked at %d before the safety bound", peak)
 	}
 	s.mu.Lock()
 	s.result.ServerBurstMessages = count

@@ -89,6 +89,9 @@ type relayConnectionOwner interface {
 }
 
 func TestRelayWebSocketRegistrationAndBidirectionalFrameExchange(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real relay WebSocket integration is owned by the long integration gate")
+	}
 	trace := startRelayScenario(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), relayScenarioTimeout)

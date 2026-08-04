@@ -5,12 +5,13 @@ script_dir="$(cd "$(dirname "$0")" && pwd -P)"
 resolver="$script_dir/core-release-ref.sh"
 temporary_root="$(mktemp -d "${TMPDIR:-/tmp}/windshare-core-ref.XXXXXXXX")"
 repository="$temporary_root/repository"
+remote_repository="$temporary_root/remote.git"
 output="$temporary_root/github-output"
 stdout_log="$temporary_root/stdout"
 stderr_log="$temporary_root/stderr"
 
-# Host Git policy must not silently sign a fixture tag or rewrite its bytes;
-# the tests are proving raw object type, so their repository is self-contained.
+# Isolating Git policy keeps fixture refs deterministic on developer machines
+# that sign tags or rewrite pushes by default.
 export GIT_CONFIG_NOSYSTEM=1
 export GIT_CONFIG_GLOBAL=/dev/null
 export GIT_TERMINAL_PROMPT=0
@@ -28,7 +29,7 @@ fail() {
   exit 1
 }
 
-run_push() {
+run_push_resolution() {
   local event_ref="$1"
   local event_sha="$2"
   (
@@ -42,11 +43,11 @@ run_push() {
       EVENT_REF="$event_ref" \
       EVENT_SHA="$event_sha" \
       GITHUB_OUTPUT="$output" \
-      bash "$resolver"
+      bash "$resolver" resolve
   )
 }
 
-run_moved_push() {
+run_forced_push_resolution() {
   local event_ref="$1"
   local event_sha="$2"
   (
@@ -60,11 +61,11 @@ run_moved_push() {
       EVENT_REF="$event_ref" \
       EVENT_SHA="$event_sha" \
       GITHUB_OUTPUT="$output" \
-      bash "$resolver"
+      bash "$resolver" resolve
   )
 }
 
-run_manual() {
+run_manual_resolution() {
   local version="$1"
   local candidate_sha="$2"
   (
@@ -73,7 +74,19 @@ run_manual() {
       INPUT_COMMIT_SHA="$candidate_sha" \
       INPUT_VERSION="$version" \
       GITHUB_OUTPUT="$output" \
-      bash "$resolver"
+      bash "$resolver" resolve
+  )
+}
+
+run_publish() {
+  local version="$1"
+  local candidate_sha="$2"
+  (
+    cd "$repository"
+    CORE_RELEASE_VERSION="$version" \
+      CORE_RELEASE_COMMIT_SHA="$candidate_sha" \
+      CORE_RELEASE_REMOTE=origin \
+      bash "$resolver" publish
   )
 }
 
@@ -89,118 +102,85 @@ expect_failure() {
   fi
   grep -Fq -- "$expected" "$stderr_log" ||
     fail "$label did not report the expected reason: $expected"
-  [ ! -s "$output" ] || fail "$label emitted release outputs before rejection"
-}
-
-expect_tag_version_rejected() {
-  local label="$1"
-  local version="$2"
-  local expected="$3"
-  local candidate="refs/tags/core-candidate/$version/$commit_sha"
-  local final="refs/tags/core/$version"
-
-  git -C "$repository" tag "${candidate#refs/tags/}" "$commit_sha"
-  expect_failure "$label candidate tag" "$expected" run_push "$candidate" "$commit_sha"
-  git -C "$repository" tag -d "${candidate#refs/tags/}" >/dev/null
-
-  git -C "$repository" tag "${final#refs/tags/}" "$commit_sha"
-  expect_failure "$label final tag" "$expected" run_push "$final" "$commit_sha"
-  git -C "$repository" tag -d "${final#refs/tags/}" >/dev/null
+  [ ! -s "$output" ] || fail "$label emitted candidate outputs before rejection"
 }
 
 git init -q -b main "$repository"
+git init -q --bare "$remote_repository"
 git -C "$repository" config user.name "WindShare release test"
 git -C "$repository" config user.email "release-test@invalid.example"
+git -C "$repository" remote add origin "$remote_repository"
 printf 'candidate\n' >"$repository/fixture.txt"
 git -C "$repository" add fixture.txt
 git -C "$repository" commit -q -m "candidate"
 commit_sha="$(git -C "$repository" rev-parse HEAD)"
-moved_sha="$(printf 'moved ref fixture\n' | git -C "$repository" commit-tree \
+moved_sha="$(printf 'conflicting release fixture\n' | git -C "$repository" commit-tree \
   "$(git -C "$repository" rev-parse 'HEAD^{tree}')" -p "$commit_sha")"
-test_version=v0.0.0-release-test
-artifact_only_version=v0.0.0-ci
-closed_release_version=v0.3.0
-candidate_ref="refs/tags/core-candidate/$test_version/$commit_sha"
-final_ref="refs/tags/core/$test_version"
 
+candidate_version=v0.3.0
+candidate_ref="refs/tags/core-candidate/$candidate_version/candidate-1"
 git -C "$repository" tag "${candidate_ref#refs/tags/}" "$commit_sha"
 : >"$output"
-run_push "$candidate_ref" "$commit_sha"
+run_push_resolution "$candidate_ref" "$commit_sha"
 grep -Fxq "commit_sha=$commit_sha" "$output" || fail "candidate output omitted the exact commit"
-grep -Fxq "version=$test_version" "$output" || fail "candidate output omitted the exact version"
+grep -Fxq "version=$candidate_version" "$output" || fail "candidate output omitted the exact version"
+expect_failure "forced candidate update" "accepts only a newly created, non-forced tag" \
+  run_forced_push_resolution "$candidate_ref" "$commit_sha"
 
 git -C "$repository" tag -d "${candidate_ref#refs/tags/}" >/dev/null
 git -C "$repository" tag -a -m "annotated candidate" "${candidate_ref#refs/tags/}" "$commit_sha"
-expect_failure "annotated candidate" "event tag must directly reference a commit" \
-  run_push "$candidate_ref" "$commit_sha"
-
+expect_failure "annotated candidate" "candidate tag must directly reference a commit" \
+  run_push_resolution "$candidate_ref" "$commit_sha"
 git -C "$repository" tag -d "${candidate_ref#refs/tags/}" >/dev/null
 git -C "$repository" tag "${candidate_ref#refs/tags/}" "$commit_sha"
-git -C "$repository" tag "${final_ref#refs/tags/}" "$commit_sha"
+
+missing_candidate_ref="refs/tags/core-candidate/$candidate_version/"
+expect_failure "missing candidate name" "candidate tag must have a non-empty name" \
+  run_push_resolution "$missing_candidate_ref" "$commit_sha"
+
+nested_candidate_ref="refs/tags/core-candidate/$candidate_version/nightly/candidate-2"
+git -C "$repository" tag "${nested_candidate_ref#refs/tags/}" "$commit_sha"
 : >"$output"
-run_push "$final_ref" "$commit_sha"
-grep -Fxq "commit_sha=$commit_sha" "$output" || fail "final output omitted the exact commit"
-expect_failure "moved final tag" "accepts only a newly created, non-forced tag" \
-  run_moved_push "$final_ref" "$commit_sha"
-git -C "$repository" tag -f "${final_ref#refs/tags/}" "$moved_sha" >/dev/null
-expect_failure "final ref moved before resolution" "event tag does not equal the expected commit" \
-  run_push "$final_ref" "$commit_sha"
+run_push_resolution "$nested_candidate_ref" "$commit_sha"
+grep -Fxq "commit_sha=$commit_sha" "$output" || fail "nested candidate omitted the exact commit"
+grep -Fxq "version=$candidate_version" "$output" || fail "nested candidate omitted the exact version"
 
-git -C "$repository" tag -d "${final_ref#refs/tags/}" >/dev/null
-git -C "$repository" tag -a -m "annotated final" "${final_ref#refs/tags/}" "$commit_sha"
-expect_failure "annotated final" "event tag must directly reference a commit" \
-  run_push "$final_ref" "$commit_sha"
-
-git -C "$repository" tag -d "${final_ref#refs/tags/}" >/dev/null
-git -C "$repository" tag "${final_ref#refs/tags/}" "$commit_sha"
-git -C "$repository" tag -d "${candidate_ref#refs/tags/}" >/dev/null
-git -C "$repository" tag -a -m "annotated candidate" "${candidate_ref#refs/tags/}" "$commit_sha"
-expect_failure "annotated matching candidate" "matching candidate tag must directly reference a commit" \
-  run_push "$final_ref" "$commit_sha"
-
-git -C "$repository" tag -d "${candidate_ref#refs/tags/}" >/dev/null
-git -C "$repository" tag "${candidate_ref#refs/tags/}" "$moved_sha"
-expect_failure "matching candidate moved before final resolution" \
-  "matching candidate tag does not equal the expected commit" \
-  run_push "$final_ref" "$commit_sha"
-
-git -C "$repository" tag -d "${candidate_ref#refs/tags/}" >/dev/null
-wrong_suffix=0000000000000000000000000000000000000000
-wrong_ref="refs/tags/core-candidate/$test_version/$wrong_suffix"
-git -C "$repository" tag "${wrong_ref#refs/tags/}" "$commit_sha"
-expect_failure "candidate suffix mismatch" "candidate tag SHA suffix does not match github.sha" \
-  run_push "$wrong_ref" "$commit_sha"
-
-expect_tag_version_rejected \
-  "closed version" \
-  "$closed_release_version" \
-  "release version is closed and cannot be verified again: $closed_release_version"
-expect_tag_version_rejected \
-  "artifact-only version" \
-  "$artifact_only_version" \
-  "release version is reserved for non-publishing artifact checks: $artifact_only_version"
+invalid_version=v01.2.3
+invalid_ref="refs/tags/core-candidate/$invalid_version/candidate-1"
+git -C "$repository" tag "${invalid_ref#refs/tags/}" "$commit_sha"
+expect_failure "non-canonical candidate version" "candidate version must have the form vX.Y.Z" \
+  run_push_resolution "$invalid_ref" "$commit_sha"
 
 : >"$output"
-run_manual "$test_version" "$commit_sha"
+run_manual_resolution "$candidate_version" "$commit_sha"
 grep -Fxq "commit_sha=$commit_sha" "$output" || fail "manual output omitted the exact commit"
-grep -Fxq "version=$test_version" "$output" || fail "manual output omitted the exact version"
+grep -Fxq "version=$candidate_version" "$output" || fail "manual output omitted the exact version"
+expect_failure "manual prerelease version" "candidate version must have the form vX.Y.Z" \
+  run_manual_resolution v1.2.3-rc.1 "$commit_sha"
+expect_failure "missing manual commit" "manual candidate is not an available Git object" \
+  run_manual_resolution v1.2.3 1111111111111111111111111111111111111111
 
-expect_failure \
-  "closed manual version" \
-  "release version is closed and cannot be verified again: $closed_release_version" \
-  run_manual "$closed_release_version" "$commit_sha"
-expect_failure \
-  "artifact-only manual version" \
-  "release version is reserved for non-publishing artifact checks: $artifact_only_version" \
-  run_manual "$artifact_only_version" "$commit_sha"
-expect_failure \
-  "missing manual version" \
-  "candidate version is not a safe semantic version" \
-  run_manual "" "$commit_sha"
-expect_failure \
-  "missing manual commit" \
-  "manual candidate is not an available commit object" \
-  run_manual "$test_version" 1111111111111111111111111111111111111111
+published_version=v1.2.3
+published_ref="refs/tags/core/$published_version"
+run_publish "$published_version" "$commit_sha"
+published_sha="$(git --git-dir="$remote_repository" rev-parse "$published_ref")"
+[ "$published_sha" = "$commit_sha" ] || fail "missing release was not created at the candidate commit"
+run_publish "$published_version" "$commit_sha"
+
+annotated_version=v1.2.4
+annotated_ref="refs/tags/core/$annotated_version"
+git -C "$repository" tag -a -m "existing annotated release" \
+  "${annotated_ref#refs/tags/}" "$commit_sha"
+git -C "$repository" push -q origin "$annotated_ref:$annotated_ref"
+run_publish "$annotated_version" "$commit_sha"
+
+conflict_version=v1.2.5
+conflict_ref="refs/tags/core/$conflict_version"
+git -C "$repository" push -q origin "$moved_sha:$conflict_ref"
+expect_failure "conflicting release" "refusing to move it to $commit_sha" \
+  run_publish "$conflict_version" "$commit_sha"
+conflict_sha="$(git --git-dir="$remote_repository" rev-parse "$conflict_ref")"
+[ "$conflict_sha" = "$moved_sha" ] || fail "conflicting release ref moved after rejection"
 
 trap - EXIT
 rm -rf -- "$temporary_root"

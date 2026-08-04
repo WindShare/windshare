@@ -3,6 +3,7 @@
 package outputruntime
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"testing"
@@ -15,6 +16,14 @@ const windowsRuntimeTestBasePattern = ".windshare-outputruntime-test-*"
 var windowsRuntimeTestBase string
 
 func TestMain(m *testing.M) {
+	if !flag.Parsed() {
+		flag.Parse()
+	}
+	if testing.Short() {
+		// Short semantics use the portable capability model and must not require
+		// native root enrollment merely because the package is running on Windows.
+		os.Exit(m.Run())
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolve Windows output-runtime test home: %v\n", err)

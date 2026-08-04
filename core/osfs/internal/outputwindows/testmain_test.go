@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -97,11 +98,18 @@ func windowsV3ProtectedTestDescriptor(
 	if err != nil {
 		return nil, err
 	}
-	entries := ""
-	for _, principal := range principals {
-		entries += fmt.Sprintf("(A;OICI;GA;;;%s)", principal.String())
-	}
+	entries := windowsV3InheritableFullAccessEntries(principals)
 	return windows.SecurityDescriptorFromString("O:" + owner.String() + "D:P" + entries)
+}
+
+func windowsV3InheritableFullAccessEntries(principals []*windows.SID) string {
+	var entries strings.Builder
+	for _, principal := range principals {
+		entries.WriteString("(A;OICI;GA;;;")
+		entries.WriteString(principal.String())
+		entries.WriteByte(')')
+	}
+	return entries.String()
 }
 
 func windowsV3TestDirectoryPrincipals(policy *windowsV3PrivatePolicy) ([]*windows.SID, error) {

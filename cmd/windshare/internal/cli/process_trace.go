@@ -13,14 +13,12 @@ const (
 	processTraceShareComponent testrun.Component = "windshare_share"
 	processTraceGetComponent   testrun.Component = "windshare_get"
 
-	processTraceLifecycleControlReady testrun.Milestone = "lifecycle_control_ready"
-	processTraceLifecycleControlStop  testrun.Milestone = "lifecycle_control_stop"
-	processTraceSenderReady           testrun.Milestone = "sender_ready"
-	processTraceSenderRelayRecovery   testrun.Milestone = "sender_relay_recovery"
-	processTraceSenderStop            testrun.Milestone = "sender_stop"
-	processTraceReceiverDirectLane    testrun.Milestone = "receiver_direct_lane"
-	processTraceReceiverRelayContent  testrun.Milestone = "receiver_relay_content"
-	processTraceReceiverJoinStopped   testrun.Milestone = "receiver_join_stopped"
+	processTraceSenderReady          testrun.Milestone = "sender_ready"
+	processTraceSenderRelayRecovery  testrun.Milestone = "sender_relay_recovery"
+	processTraceSenderStop           testrun.Milestone = "sender_stop"
+	processTraceReceiverDirectLane   testrun.Milestone = "receiver_direct_lane"
+	processTraceReceiverRelayContent testrun.Milestone = "receiver_relay_content"
+	processTraceReceiverJoinStopped  testrun.Milestone = "receiver_join_stopped"
 )
 
 type processTraceEventSink interface {

@@ -78,6 +78,8 @@ func TestHeaderUpdateTemporaryReducerAcceptsOnlyDeterministicGenerationCuts(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	initialHeader := namespace.Header()
+	nextHeader := next.Header()
 	for _, test := range []struct {
 		name      string
 		entry     UpdateTemporaryEntryObservation
@@ -85,8 +87,8 @@ func TestHeaderUpdateTemporaryReducerAcceptsOnlyDeterministicGenerationCuts(t *t
 		want      HeaderUpdateTemporaryAction
 	}{
 		{name: "partial-write", entry: UpdateTemporaryEntryRegular, want: HeaderUpdateTemporaryRemoveAndSyncSession},
-		{name: "initial-link", entry: UpdateTemporaryEntryRegular, candidate: new(namespace.Header()), want: HeaderUpdateTemporaryRemoveAndSyncSession},
-		{name: "pre-replace", entry: UpdateTemporaryEntryRegular, candidate: new(next.Header()), want: HeaderUpdateTemporaryRemoveAndSyncSession},
+		{name: "initial-link", entry: UpdateTemporaryEntryRegular, candidate: &initialHeader, want: HeaderUpdateTemporaryRemoveAndSyncSession},
+		{name: "pre-replace", entry: UpdateTemporaryEntryRegular, candidate: &nextHeader, want: HeaderUpdateTemporaryRemoveAndSyncSession},
 		{name: "post-replace", entry: UpdateTemporaryEntryMissing, want: HeaderUpdateTemporaryAcceptInstalledHeader},
 		{name: "wrong-type", entry: UpdateTemporaryEntryUnsafe, want: HeaderUpdateTemporaryBlockResumeNamespace},
 	} {
@@ -110,7 +112,7 @@ func TestHeaderUpdateTemporaryReducerAcceptsOnlyDeterministicGenerationCuts(t *t
 		t.Fatal(err)
 	}
 	staleDecision, err := ReduceHeaderUpdateTemporary(
-		later, classified, UpdateTemporaryEntryRegular, new(next.Header()),
+		later, classified, UpdateTemporaryEntryRegular, &nextHeader,
 	)
 	if err != nil || staleDecision.Action() != HeaderUpdateTemporaryRemoveAndSyncSession {
 		t.Fatalf("stale header decision = %+v, %v", staleDecision, err)

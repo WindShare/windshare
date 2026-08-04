@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -163,10 +164,7 @@ func TestCanonicalNameAndPathPolicy(t *testing.T) {
 			t.Fatalf("CanonicalName(%q) error = %v", name, err)
 		}
 	}
-	tooDeep := "a"
-	for range MaxPathDepth {
-		tooDeep += "/a"
-	}
+	tooDeep := "a" + strings.Repeat("/a", MaxPathDepth)
 	if _, err := CanonicalPath(tooDeep); !errors.Is(err, ErrPathTooDeep) {
 		t.Fatalf("deep path error = %v", err)
 	}

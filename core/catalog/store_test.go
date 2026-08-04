@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -339,20 +340,9 @@ func TestListChildrenSingleflightSortsStreamAndReplaysPages(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := []string{page.entries[0].name, page.entries[1].name, page.entries[2].name}
-	if fmtNames(names) != "alpha,middle,zeta" {
+	if strings.Join(names, ",") != "alpha,middle,zeta" {
 		t.Fatalf("deterministic order = %v", names)
 	}
-}
-
-func fmtNames(names []string) string {
-	var result string
-	for index, name := range names {
-		if index != 0 {
-			result += ","
-		}
-		result += name
-	}
-	return result
 }
 
 func TestListChildrenFailureAuthorityRetryAndStaleDoNotPublish(t *testing.T) {

@@ -69,7 +69,8 @@ func TestCatalogServiceReplaysExactOpaquePageAfterEvictionAndRestart(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := catalogflow.NewListRequest(directoryID, new(committed.Generation()), 0)
+	generation := committed.Generation()
+	request, err := catalogflow.NewListRequest(directoryID, &generation, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

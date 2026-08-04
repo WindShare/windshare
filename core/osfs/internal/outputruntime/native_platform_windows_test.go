@@ -15,11 +15,11 @@ import (
 
 const windowsRuntimeTestRootPattern = "case-*"
 
-func openOutputRuntimeTestPlatform(path string, create bool) (outputcap.Platform, error) {
+func openNativeOutputRuntimeTestPlatform(path string, create bool) (outputcap.Platform, error) {
 	return outputwindows.Open(path, create)
 }
 
-func newRuntimeTestRootSpec(t testing.TB) runtimeTestRootSpec {
+func newNativeRuntimeTestRootSpec(t testing.TB) runtimeTestRootSpec {
 	t.Helper()
 	requireDurableFilesystemScenario(t)
 	if windowsRuntimeTestBase == "" {

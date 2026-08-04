@@ -181,10 +181,7 @@ func TestNewOutputSelectionRejectsNodeIdentityReuse(t *testing.T) {
 	directory := OutputSelectionDirectory{
 		Path: "folder", DirectoryID: directoryID, Generation: directoryGeneration,
 	}
-	file := OutputSelectionFile{
-		Path: "folder/file.bin", FileID: transferID[catalog.FileID](0xd6),
-		ParentDirectoryID: directoryID, ParentGeneration: directoryGeneration,
-	}
+	reusedFileID := transferID[catalog.FileID](0xd6)
 	tests := []struct {
 		name        string
 		directories []OutputSelectionDirectory
@@ -208,11 +205,11 @@ func TestNewOutputSelectionRejectsNodeIdentityReuse(t *testing.T) {
 			name: "file reused by sibling",
 			files: []OutputSelectionFile{
 				{
-					Path: "first.bin", FileID: file.FileID,
+					Path: "first.bin", FileID: reusedFileID,
 					ParentDirectoryID: root, ParentGeneration: rootGeneration,
 				},
 				{
-					Path: "second.bin", FileID: file.FileID,
+					Path: "second.bin", FileID: reusedFileID,
 					ParentDirectoryID: root, ParentGeneration: rootGeneration,
 				},
 			},

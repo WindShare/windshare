@@ -23,6 +23,9 @@ const MAXIMUM_SELECTION_NODE_CLAIMS = V2_MAXIMUM_SELECTION_PLAN_ENTRIES + 1
 const DIRECTORY_KIND = 1
 const FILE_KIND = 2
 const NODE_SELECTION_MODE = 1
+const MILLISECONDS_PER_SECOND = 1_000
+const NANOSECONDS_PER_MILLISECOND = 1_000_000
+const NANOSECONDS_PER_SECOND = 1_000_000_000
 const encoder = new TextEncoder()
 
 export interface V2OutputSelectionDirectory {
@@ -318,10 +321,11 @@ function snapshotModifiedTime(modified: V2CatalogModifiedTime): V2CatalogModifie
   const validPrecision = modified.precision === 1 || modified.precision === 2 || modified.precision === 3
   if (modified.seconds < -maximumSeconds || modified.seconds > maximumSeconds ||
       !Number.isSafeInteger(modified.nanoseconds) || modified.nanoseconds < 0 ||
-      modified.nanoseconds >= 1_000_000_000 || !validPrecision ||
+      modified.nanoseconds >= NANOSECONDS_PER_SECOND || !validPrecision ||
       (modified.precision === 1 && modified.nanoseconds !== 0) ||
-      (modified.precision === 2 && modified.nanoseconds % 1_000_000 !== 0) ||
-      modified.milliseconds !== modified.seconds * 1_000n + BigInt(modified.nanoseconds / 1_000_000)) {
+      (modified.precision === 2 && modified.nanoseconds % NANOSECONDS_PER_MILLISECOND !== 0) ||
+      modified.milliseconds !== modified.seconds * BigInt(MILLISECONDS_PER_SECOND) +
+        BigInt(Math.floor(modified.nanoseconds / NANOSECONDS_PER_MILLISECOND))) {
     throw new TypeError('Selected modified time is outside its authenticated portable precision')
   }
   return Object.freeze({ ...modified })

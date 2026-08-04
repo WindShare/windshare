@@ -279,6 +279,7 @@ func integrationOperationID(seed byte) protocolsession.OperationID {
 }
 
 func TestV2PeerReceiverAndSenderFactoriesInteroperateOverRealPion(t *testing.T) {
+	requireLongPionIntegration(t)
 	loopback := testloopback.New(t)
 	trace := startIntegrationScenario(t, receiverRealPionScenario, receiverRealPionComponent)
 	trace.RequireCleanup(t, "loopback fixture", func(context.Context) error {

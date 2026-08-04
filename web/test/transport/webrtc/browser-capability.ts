@@ -2,32 +2,33 @@ import type { Page } from '@playwright/test'
 
 import {
   classifyRtcCapability,
-  parseCapabilityEvidence,
-  type CapabilityEvidence,
-} from '../../../scripts/browser-evidence/capability'
-import type { PionApplicability } from '../../../scripts/browser-evidence/result'
-import type { RtcCapability } from '../../../scripts/browser-evidence/vocabulary'
+  parseRtcCapabilityDiagnostic,
+  type RtcCapabilityDiagnostic,
+  type RtcCapabilityStatus,
+} from '../../ice-topology/rtc-capability'
 import type * as RtcCapabilityProbe from '../../ice-topology/rtc-capability'
 
 const RTC_CAPABILITY_PROBE_PATH = '/test/ice-topology/rtc-capability.ts'
 
-export interface NativeRtcCapability {
-  readonly evidence: CapabilityEvidence
-  readonly rtcCapability: RtcCapability
-  readonly pionApplicability: PionApplicability
+export interface NativeRtcCapabilityDiagnostic {
+  readonly diagnostic: RtcCapabilityDiagnostic
+  readonly rtcCapability: RtcCapabilityStatus
+  readonly pionApplicability: 'applicable' | 'not-applicable'
 }
 
-export async function classifyNativePeerConnection(page: Page): Promise<NativeRtcCapability> {
+export async function classifyNativePeerConnection(
+  page: Page,
+): Promise<NativeRtcCapabilityDiagnostic> {
   await page.goto('/')
-  const rawEvidence = await page.evaluate(async (path) => {
+  const rawDiagnostic = await page.evaluate(async (path) => {
     const capability = await import(path) as typeof RtcCapabilityProbe
     return capability.probeRtcCapability()
   }, RTC_CAPABILITY_PROBE_PATH)
-  const evidence = parseCapabilityEvidence(rawEvidence)
-  const rtcCapability = classifyRtcCapability(evidence)
+  const diagnostic = parseRtcCapabilityDiagnostic(rawDiagnostic)
+  const rtcCapability = classifyRtcCapability(diagnostic)
   return {
-    evidence,
+    diagnostic,
     rtcCapability,
-    pionApplicability: evidence.apiPresence === 'absent' ? 'not-applicable' : 'applicable',
+    pionApplicability: diagnostic.apiPresence === 'absent' ? 'not-applicable' : 'applicable',
   }
 }

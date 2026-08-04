@@ -3,24 +3,18 @@
 package main
 
 import (
-	"io"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
-func TestWindowsDispatcherCoversCommonAndLegacyBoundaries(t *testing.T) {
-	previous := ownerInput
-	ownerInput = zeroReader{}
-	t.Cleanup(func() { ownerInput = previous })
-	if err := runPlatform([]string{commandSupervise}); err == nil {
-		t.Fatal("malformed common supervise invocation was accepted")
+const ownerEndpointSuffix = "handle"
+
+func ownedTargetCommand(t *testing.T) (string, []string) {
+	t.Helper()
+	executable, err := filepath.Abs(os.Getenv("ComSpec"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := runPlatform([]string{"launcher"}); err == nil {
-		t.Fatal("malformed legacy launcher invocation was accepted")
-	}
+	return executable, []string{"/d", "/s", "/c", "exit 0"}
 }
-
-type zeroReader struct{}
-
-func (zeroReader) Read([]byte) (int, error) { return 0, io.EOF }
-
-var _ io.Reader = zeroReader{}

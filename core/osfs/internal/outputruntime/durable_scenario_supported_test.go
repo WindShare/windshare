@@ -7,9 +7,9 @@ import "testing"
 func requireDurableFilesystemScenario(t testing.TB) {
 	t.Helper()
 	if !durableFilesystemScenariosEnabled(testing.Short()) {
-		// These fixtures exercise the native durable-output backend and exhaustive
-		// sync, recovery, and namespace fault cuts. Their real disk work belongs to
-		// ordinary/race/coverage sweeps, not the sub-minute developer loop.
-		t.Skip("skipping native durable-filesystem scenario in short mode")
+		// Real native certification, sync, and placement guards are owned by
+		// stable TestLong entrypoints. Daily short coverage uses the portable
+		// capability model so runtime policy is not coupled to disk latency.
+		t.Skip("skipping named native durability scenario in short mode")
 	}
 }

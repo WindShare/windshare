@@ -22,9 +22,13 @@
 
 ### Validation
 
-- Windows Firewall/WBEM are no longer validation gates; firewall prompts do not affect test verdicts and must not block normal test execution.
-- During iteration: `make <gate>` (see `Makefile`).
-- Local CI: `make ci`.
+- Local gates consume developer-installed toolchains, Web dependencies, and browsers; they never install or update them. Go gates use `GOTOOLCHAIN=local`, and missing prerequisites fail directly.
+- During iteration use a focused `make <gate>`. `make check` is the fast feedback path; `make ci` runs `hygiene sloc workflow-lint lint vet short-go vectors web e2e browser gopls` in fixed order.
+- `make race` and `make coverage` are diagnostic. `make long-go` mirrors the automatic weekly Go owners, and `make core-release` is the candidate-release gate; none is part of ordinary `make ci`.
+- Ordinary GitHub CI has seven independent jobs: `static`, `go-root`, `go-core`, `web`, `go-e2e`, `browser-chromium`, and `windows-native`. The weekly workflow automatically owns long Go, durable, network, interop, cross-browser, and Windows browser suites.
+- Pushing the candidate tag `core-candidate/vX.Y.Z/<candidate>` runs Linux/Windows extracted-core checks and idempotently creates `core/vX.Y.Z`; a conflicting existing tag is never moved.
+- Windows Firewall/WBEM are not validation gates. Full environment responsibilities and entrypoint ownership are in `docs/validation.md`.
+- Validation simplification must not weaken E2EE, capability links, remote-input validation, root confinement, revision/lease and resumable output semantics, crash recovery, no-replace publication, native ancestry revalidation, relay/WebRTC switching, or stable structured observability.
 
 ### 其他
 
@@ -50,7 +54,7 @@ WindShare is an open-source E2EE file/folder sharing tool. It creates links with
 │   └── internal/keyderiv/        HKDF key hierarchy
 ├── cmd/
 │   ├── windshare/                CLI sender and receiver
-│   └── browsermatrix*/           Test-only browser/Pion matrix processes
+│   └── testprocessowner/         Test-only bounded process supervisor
 ├── connectivity/
 │   ├── v2signal/                 E2EE peer signaling validation
 │   └── v2peer/                   P2P attempt orchestration and lane adoption
@@ -71,11 +75,11 @@ WindShare is an open-source E2EE file/folder sharing tool. It creates links with
 │   ├── src/receiver/             Reconnect and protocol-generation supervision
 │   ├── src/transfer/, output/    Jobs, sinks, durable output sessions
 │   ├── src/preview/, ui/         Media preview and React interface
-│   ├── scripts/browser-*/        Browser evidence and network-matrix orchestration
-│   └── e2e/                      Playwright full-stack tests
-├── internal/                     Deterministic browser/Pion services and test topology
+│   ├── scripts/browser-network-matrix/ Direct browser/Pion interop runner
+│   └── e2e/                      Direct smoke and scheduled product scenarios
+├── internal/                     Process lifecycle, benchmarks, and focused network test support
 ├── e2e/                          Process-level Go end-to-end tests
-├── testdata/                     Canonical browser evidence and network-topology fixtures
+├── testdata/                     Focused test-topology fixtures
 ├── scripts/ci/                   Local CI gate implementations
 └── docs/                         Protocol and security documentation
 ```
