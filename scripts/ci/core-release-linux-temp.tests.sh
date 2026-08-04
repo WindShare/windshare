@@ -144,11 +144,19 @@ assert_contains "scripts/ci/core-release-ref.sh" 'git push "$remote_name" "$comm
 assert_contains "Makefile" 'override CORE_RELEASE_VERSION := v0.0.0-ci'
 assert_contains "Makefile" 'bash scripts/ci/linux/core-release.sh "$(CORE_RELEASE_VERSION)" "$(CORE_RELEASE_COMMIT)"'
 assert_not_contains "Makefile" 'CORE_ARTIFACT_VERSION'
-make_preview="$(make -n core-release CORE_RELEASE_VERSION=v0.3.0)"
-if ! grep -Fq -- 'v0.0.0-ci' <<<"$make_preview" ||
-   grep -Fq -- 'v0.3.0' <<<"$make_preview"; then
-  fail "core-release make target allows its synthetic artifact version to be overridden"
-fi
+assert_synthetic_release_version() {
+  local preview="$1"
+  local attempted_version="$2"
+  local source="$3"
+  if ! grep -Fq -- 'v0.0.0-ci' <<<"$preview" ||
+     grep -Fq -- "$attempted_version" <<<"$preview"; then
+    fail "core-release make target allows $source to override its synthetic artifact version"
+  fi
+}
+environment_make_preview="$(CORE_RELEASE_VERSION=v0.2.0 make -e -n core-release)"
+assert_synthetic_release_version "$environment_make_preview" 'v0.2.0' 'the environment'
+command_line_make_preview="$(make -n core-release CORE_RELEASE_VERSION=v0.3.0)"
+assert_synthetic_release_version "$command_line_make_preview" 'v0.3.0' 'the command line'
 assert_contains "scripts/ci/linux/core-release.sh" 'native_profile="linux-ext4"'
 assert_contains "scripts/ci/linux/core-release.sh" 'unset WINDSHARE_REQUIRE_NATIVE_OUTPUT_CERTIFICATION'
 assert_contains "scripts/ci/linux/core-release.sh" 'bash scripts/ci/core-release-linux-native.sh "$artifact_root" "$temporary_root"'

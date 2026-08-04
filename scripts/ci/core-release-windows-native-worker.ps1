@@ -255,27 +255,38 @@ if ($goVersionExitCode -ne 0 -or $goVersionOutput.Count -eq 0) {
 }
 Write-Output "-- standard-user Go toolchain verified: $($goVersionOutput -join ' ')"
 
-$jsonLogPath = Join-Path $resolvedWorkRoot 'native-test-events.jsonl'
-$goStderrPath = Join-Path $resolvedWorkRoot 'native-test-stderr.log'
-$testExpression = Get-WindowsNativeRequiredTestExpression
-$goArguments = @(
-    'test', '-json', '-count=1', "-timeout=$coreSuiteTestTimeout",
-    '-run', $testExpression, './osfs'
-)
 Set-Location $resolvedArtifactRoot
-$jsonLines = @(& $resolvedGoExecutable @goArguments 2> $goStderrPath)
-$nativeExitCode = $LASTEXITCODE
-$jsonLines | Set-Content -LiteralPath $jsonLogPath -Encoding utf8
-$jsonLines | ForEach-Object { Write-Output $_ }
-if (Test-Path -LiteralPath $goStderrPath) {
-    Get-Content -LiteralPath $goStderrPath | ForEach-Object {
-        Write-Output "[go test stderr] $_"
-    }
-}
+$requiredSelectors = @(Get-WindowsNativeRequiredTestSelectors)
+for ($selectorIndex = 0; $selectorIndex -lt $requiredSelectors.Count; $selectorIndex++) {
+    $selector = $requiredSelectors[$selectorIndex]
+    $selectorPackage = [string]$selector.PackageArgument
+    $selectorTests = @($selector.TestNames)
+    $testExpression = Get-WindowsNativeRequiredTestExpression -TestNames $selectorTests
+    $selectorLogID = '{0:D2}' -f ($selectorIndex + 1)
+    $jsonLogPath = Join-Path $resolvedWorkRoot "native-test-events-$selectorLogID.jsonl"
+    $goStderrPath = Join-Path $resolvedWorkRoot "native-test-stderr-$selectorLogID.log"
+    $goArguments = @(
+        'test', '-json', '-count=1', "-timeout=$coreSuiteTestTimeout",
+        '-run', $testExpression, $selectorPackage
+    )
 
-$events = @(ConvertFrom-WindowsNativeTestJSONLines -Lines $jsonLines)
-Assert-WindowsNativeTestEvents `
-    -ExitCode $nativeExitCode `
-    -Events $events `
-    -RequiredTests (Get-WindowsNativeRequiredTestNames)
+    Write-Output "-- required Windows/NTFS native selector: package=$selectorPackage expression=$testExpression"
+    $jsonLines = @(& $resolvedGoExecutable @goArguments 2> $goStderrPath)
+    $nativeExitCode = $LASTEXITCODE
+    $jsonLines | Set-Content -LiteralPath $jsonLogPath -Encoding utf8
+    $jsonLines | ForEach-Object { Write-Output $_ }
+    if (Test-Path -LiteralPath $goStderrPath) {
+        Get-Content -LiteralPath $goStderrPath | ForEach-Object {
+            Write-Output "[go test stderr] $_"
+        }
+    }
+
+    $events = @(ConvertFrom-WindowsNativeTestJSONLines -Lines $jsonLines)
+    Assert-WindowsNativeTestEvents `
+        -ExitCode $nativeExitCode `
+        -Events $events `
+        -RequiredTests $selectorTests `
+        -SelectorPackage $selectorPackage `
+        -SelectorExpression $testExpression
+}
 Write-Output '-- required Windows/NTFS certification passed under the standard-user token'

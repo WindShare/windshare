@@ -1,10 +1,20 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:RequiredWindowsNativeTests = @(
-    'TestWindowsNTFSNativeCertification',
-    'TestWindowsNTFSProcessRestartRecovery',
-    'TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment'
+$script:RequiredWindowsNativeTestSelectors = @(
+    [pscustomobject]@{
+        PackageArgument = './osfs'
+        TestNames = @(
+            'TestWindowsNTFSNativeCertification',
+            'TestWindowsNTFSProcessRestartRecovery'
+        )
+    },
+    [pscustomobject]@{
+        PackageArgument = './osfs/internal/outputwindows'
+        TestNames = @(
+            'TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment'
+        )
+    }
 )
 $script:AdministratorsSID = 'S-1-5-32-544'
 $script:UsersSID = 'S-1-5-32-545'
@@ -980,12 +990,24 @@ function New-WindowsNativeWorkerArgumentLine {
     return $argumentLine
 }
 
-function Get-WindowsNativeRequiredTestNames {
-    return @($script:RequiredWindowsNativeTests)
+function Get-WindowsNativeRequiredTestSelectors {
+    return @($script:RequiredWindowsNativeTestSelectors | ForEach-Object {
+        [pscustomobject]@{
+            PackageArgument = [string]$_.PackageArgument
+            TestNames = @($_.TestNames)
+        }
+    })
 }
 
 function Get-WindowsNativeRequiredTestExpression {
-    return '^({0})$' -f (($script:RequiredWindowsNativeTests | ForEach-Object {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string[]]$TestNames
+    )
+
+    return '^({0})$' -f (($TestNames | ForEach-Object {
         [Regex]::Escape($_)
     }) -join '|')
 }
@@ -1107,7 +1129,13 @@ function Assert-WindowsNativeTestEvents {
         [AllowEmptyCollection()]
         [object[]]$Events,
 
-        [string[]]$RequiredTests = $script:RequiredWindowsNativeTests
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string[]]$RequiredTests,
+
+        [string]$SelectorPackage = '',
+
+        [string]$SelectorExpression = ''
     )
 
     if ($ExitCode -ne 0) {
@@ -1153,6 +1181,18 @@ function Assert-WindowsNativeTestEvents {
         throw "required Windows/NTFS native test suite reported FAIL: $($failureNames -join ', ')"
     }
 
+    $selectedTopLevelRuns = @($Events | Where-Object {
+        (Get-WindowsNativeEventField $_ 'Action') -ceq 'run' -and
+            (Get-WindowsNativeEventField $_ 'Test') -cin $RequiredTests
+    })
+    if ($selectedTopLevelRuns.Count -eq 0) {
+        if (-not [string]::IsNullOrWhiteSpace($SelectorPackage) -and
+            -not [string]::IsNullOrWhiteSpace($SelectorExpression)) {
+            throw "required Windows/NTFS native selector ran zero tests: package=$SelectorPackage expression=$SelectorExpression"
+        }
+        throw 'required Windows/NTFS native selector ran zero tests'
+    }
+
     foreach ($requiredTest in $RequiredTests) {
         $topLevelRuns = @($Events | Where-Object {
             (Get-WindowsNativeEventField $_ 'Action') -ceq 'run' -and
@@ -1183,7 +1223,7 @@ Export-ModuleMember -Function @(
     'Get-WindowsNativeCoordinatorGoToolchain',
     'Get-WindowsNativeCommonApplicationDataRoot',
     'Get-WindowsNativeRequiredTestExpression',
-    'Get-WindowsNativeRequiredTestNames',
+    'Get-WindowsNativeRequiredTestSelectors',
     'New-WindowsNativeCoordinatorReleaseRoot',
     'New-WindowsNativeWorkerArgumentLine',
     'Remove-WindowsNativeEphemeralUserProfile',
