@@ -5,6 +5,7 @@ import {
   V2_CATALOG_PATH_DEPTH,
 } from '../catalog/path-policy'
 import type { JobOutcome } from './outcome'
+import type { V2OutputSelection } from './output-selection'
 
 export type DurabilityLevel = 'None' | 'ProcessRestart' | 'PowerLoss'
 export type FileAbortDisposition = 'FileIsolated' | 'JobOutputCompromised'
@@ -113,6 +114,17 @@ export interface OutputSession {
   abortJob(reason: unknown): Promise<void>
   /** Durable backends retain verified ranges while releasing live browser resources. */
   suspendJob?(reason: unknown): Promise<void>
+}
+
+/**
+ * Capability acquisition may begin under browser activation, but only terminal
+ * discovery can authorize a durable output namespace. Keeping that transition
+ * behind an authority prevents staged data from one selection being reopened by
+ * a later job that happens to share the same link and backend.
+ */
+export interface V2OutputAuthority {
+  openSelection(selection: V2OutputSelection, signal: AbortSignal): Promise<OutputSession>
+  abort(reason: unknown): Promise<void>
 }
 
 export class OutputSessionSuspendedError extends Error {

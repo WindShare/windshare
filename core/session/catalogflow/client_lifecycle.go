@@ -17,9 +17,16 @@ func (c *Client) Stop() {
 	for _, call := range c.inflight {
 		calls = append(calls, call)
 	}
+	cursorCancels := make([]func(), 0, len(c.cursorFetchCancels))
+	for _, cancel := range c.cursorFetchCancels {
+		cursorCancels = append(cursorCancels, cancel)
+	}
 	c.mu.Unlock()
 	for _, call := range calls {
 		call.cancel()
+	}
+	for _, cancel := range cursorCancels {
+		cancel()
 	}
 }
 
@@ -42,6 +49,7 @@ func (c *Client) Close() {
 		c.now = nil
 		c.cache = nil
 		c.inflight = nil
+		c.cursorFetchCancels = nil
 		c.leaseClaimsByDirectory = nil
 		c.residentEntries = 0
 		c.usedBytes = 0

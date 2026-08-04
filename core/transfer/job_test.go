@@ -177,6 +177,14 @@ func (c *countingJobCatalog) AcquireDirectory(
 	return snapshot, func() {}, err
 }
 
+func (c *countingJobCatalog) OpenDirectoryPages(
+	ctx context.Context,
+	directory catalog.DirectoryID,
+) (catalog.DirectoryPageCursor, error) {
+	snapshot, err := c.LoadDirectory(ctx, directory)
+	return snapshotPages(snapshot), err
+}
+
 func (c *countingJobCatalog) loadCount(directory catalog.DirectoryID) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -202,7 +210,18 @@ func (c failingCatalog) AcquireDirectory(
 	return snapshot, func() {}, err
 }
 
-func TestTransferJobDiscoveryFailurePreventsRevisionAndContentWork(t *testing.T) {
+func (c failingCatalog) OpenDirectoryPages(
+	ctx context.Context,
+	directory catalog.DirectoryID,
+) (catalog.DirectoryPageCursor, error) {
+	snapshot, err := c.LoadDirectory(ctx, directory)
+	if err != nil {
+		return nil, err
+	}
+	return snapshotPages(snapshot), nil
+}
+
+func TestTransferJobDiscoveryFailurePreservesIndependentContentWork(t *testing.T) {
 	share := transferID[catalog.ShareInstance](60)
 	root := transferID[catalog.DirectoryID](61)
 	failingDirectory := transferID[catalog.DirectoryID](62)
@@ -219,7 +238,7 @@ func TestTransferJobDiscoveryFailurePreventsRevisionAndContentWork(t *testing.T)
 		descriptor := jobDescriptor(t, share, file, byte(70+index), chunk)
 		revisions.opened[file], _ = NewOpenedRevision(transferID[content.LeaseID](byte(75+index)), descriptor)
 	}
-	lane := &jobLane{indices: make(map[catalog.FileID][]uint64), failFile: blockFailure, failErr: errors.New("block unavailable")}
+	lane := &jobLane{indices: make(map[catalog.FileID][]uint64)}
 	lanes, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](80), RaceWidth: 1})
 	defer lanes.Close()
 	_ = lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, lane)
@@ -234,14 +253,15 @@ func TestTransferJobDiscoveryFailurePreventsRevisionAndContentWork(t *testing.T)
 		Revisions: revisions, Blocks: broker, Output: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != JobCompletedWithErrors || result.SucceededFiles != 0 || len(result.Directories) != 1 || len(result.Files) != 0 {
+	if result.Outcome != JobCompletedWithErrors || result.SucceededFiles != 2 ||
+		len(result.Directories) != 1 || len(result.Files) != 1 {
 		t.Fatalf("result=%+v", result)
 	}
 	if result.Measure.Class() != SelectionUnknown || result.Measure.DiscoveryTerminalSuccess {
 		t.Fatalf("failed discovery measure=%+v", result.Measure)
 	}
-	if len(revisions.order) != 0 || len(output.transactions) != 0 || len(output.admitted) != 0 {
-		t.Fatalf("incomplete discovery leaked work: revisions=%v transactions=%d admissions=%d", revisions.order, len(output.transactions), len(output.admitted))
+	if len(revisions.order) != 3 || len(output.transactions) != 2 || len(output.admitted) != 1 {
+		t.Fatalf("independent discovery work missing: revisions=%v transactions=%d admissions=%d", revisions.order, len(output.transactions), len(output.admitted))
 	}
 }
 
@@ -410,6 +430,14 @@ func (source *crossCancelCatalog) AcquireDirectory(
 ) (catalog.DirectorySnapshot, func(), error) {
 	snapshot, err := source.LoadDirectory(ctx, directory)
 	return snapshot, func() {}, err
+}
+
+func (source *crossCancelCatalog) OpenDirectoryPages(
+	ctx context.Context,
+	directory catalog.DirectoryID,
+) (catalog.DirectoryPageCursor, error) {
+	snapshot, err := source.LoadDirectory(ctx, directory)
+	return snapshotPages(snapshot), err
 }
 
 type childSynchronizedFatalBlocks struct {

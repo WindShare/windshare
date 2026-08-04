@@ -428,12 +428,26 @@ func fileRetireReason(cause error) FileRetireReason {
 
 func validateOpenedFile(share catalog.ShareInstance, entry catalog.Entry, opened OpenedRevision) error {
 	file, isFile := entry.FileID()
-	descriptor := opened.Descriptor
-	if !isFile || opened.LeaseID.IsZero() || descriptor.ShareInstance() != share || descriptor.FileID() != file ||
-		descriptor.FileRevision().IsZero() || descriptor.ExactSize() != entry.ExpectedSize() {
+	if !isFile {
 		return ErrRevisionIdentity
 	}
-	if entry.ModifiedTime().Present() && descriptor.ModifiedTime() != entry.ModifiedTime() {
+	return validateOpenedPlanFile(share, file, entry.ExpectedSize(), entry.ModifiedTime(), opened)
+}
+
+func validateOpenedPlanFile(
+	share catalog.ShareInstance,
+	file catalog.FileID,
+	expectedSize uint64,
+	modified catalog.ModifiedTime,
+	opened OpenedRevision,
+) error {
+	descriptor := opened.Descriptor
+	if file.IsZero() || opened.LeaseID.IsZero() || descriptor.ShareInstance() != share ||
+		descriptor.FileID() != file || descriptor.FileRevision().IsZero() ||
+		descriptor.ExactSize() != expectedSize {
+		return ErrRevisionIdentity
+	}
+	if modified.Present() && descriptor.ModifiedTime() != modified {
 		return ErrRevisionIdentity
 	}
 	return nil

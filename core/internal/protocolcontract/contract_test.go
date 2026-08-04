@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	"github.com/fxamacker/cbor/v2"
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/transfer"
 )
 
 // This package is deliberately test-only. R0 needs one executable source for
@@ -300,7 +302,7 @@ func buildVectorFiles(t *testing.T) []vectorFile {
 		{Version: 1, Kind: "v2-sender-objects", Description: "Canonical CBOR, AES-GCM and Ed25519 transport-neutral sender objects.", Cases: objectCases},
 		{Version: 1, Kind: "v2-session", Description: "Canonical v2 relay endpoint/identity, purpose-bound register/resume/stop proofs, WS2U/D/O/F, WS2A/B/N, X25519 transcript, traffic keys and sender controls.", Cases: sessionCases(t, f, objects)},
 		{Version: 1, Kind: "v2-fragment", Description: "Authenticated BLOCK_FRAGMENT fixed layout and allocation limits.", Cases: fragmentCases(t, f, objects)},
-		{Version: 1, Kind: "v2-semantics", Description: "R0 resource, operation-final, selection/timing, ZIP member, lifecycle and crash-commit state contracts.", Cases: semanticCases()},
+		{Version: 1, Kind: "v2-semantics", Description: "R0 resource, operation-final, selection/timing, ZIP member, lifecycle and crash-commit state contracts.", Cases: semanticCases(t, f)},
 	}
 }
 
@@ -942,7 +944,96 @@ func zipMemberFailureCases() []any {
 	}
 }
 
-func semanticCases() []any {
+func canonicalSelectionCase(t *testing.T, fixture *fixture) any {
+	t.Helper()
+	share, err := catalog.ShareInstanceFromBytes(fixture.shareInstance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := catalog.DirectoryIDFromBytes(fixture.syntheticRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := catalog.DirectoryIDFromBytes(fixture.directoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := catalog.FileIDFromBytes(fixture.fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootGeneration, err := catalog.DirectoryGenerationFromBytes(fixture.generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directoryGenerationBytes := slices.Clone(fixture.generation)
+	directoryGenerationBytes[len(directoryGenerationBytes)-1] ^= 0x3f
+	directoryGeneration, err := catalog.DirectoryGenerationFromBytes(directoryGenerationBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modified, err := catalog.NewModifiedTime(
+		1_700_000_200,
+		123_000_000,
+		catalog.TimePrecisionMilliseconds,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, err := transfer.NewSelectionRules(false, []transfer.SelectionOverride{
+		{DirectoryID: directory, Selected: true, Ancestors: []catalog.DirectoryID{root}},
+		{FileID: file, Selected: true, Ancestors: []catalog.DirectoryID{root, directory}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := transfer.NewCanonicalSelectionRequest(share, root, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := transfer.NewOutputSelection(
+		share,
+		root,
+		rootGeneration,
+		[]transfer.OutputSelectionDirectory{{
+			Path: "photos", DirectoryID: directory,
+			Generation: directoryGeneration, ModifiedTime: modified,
+		}},
+		[]transfer.OutputSelectionFile{{
+			Path: "photos/readme.txt", FileID: file,
+			ParentDirectoryID: directory, ParentGeneration: directoryGeneration,
+			ExpectedSize: 2_097_175, ModifiedTime: modified,
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := transfer.NewCanonicalSelectionV1(request, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]any{
+		"name":                   "canonical-selection-v1",
+		"shareInstanceB64":       b64(fixture.shareInstance),
+		"syntheticRootB64":       b64(fixture.syntheticRoot),
+		"rootGenerationB64":      b64(fixture.generation),
+		"directoryIdB64":         b64(fixture.directoryID),
+		"directoryGenerationB64": b64(directoryGenerationBytes),
+		"fileIdB64":              b64(fixture.fileID),
+		"defaultSelected":        false,
+		"modifiedSeconds":        "1700000200",
+		"modifiedNanoseconds":    uint32(123_000_000),
+		"modifiedPrecision":      uint8(catalog.TimePrecisionMilliseconds),
+		"expectedSize":           "2097175",
+		"canonicalRequestB64":    b64(request.Bytes()),
+		"canonicalSelectionB64":  b64(canonical.Bytes()),
+		"selectionIdentityB64":   b64(plan.Identity().Bytes()),
+		"resumeIntentB64":        b64(canonical.ResumeIntent().Bytes()),
+	}
+}
+
+func semanticCases(t *testing.T, fixture *fixture) []any {
+	t.Helper()
 	limits := map[string]string{
 		"minChunkBytes": fmt.Sprint(minChunkSize), "maxChunkBytes": fmt.Sprint(maxChunkSize),
 		"segmentBytes": fmt.Sprint(segmentBytes), "maxFileBytes": fmt.Sprint(maxFileBytes),
@@ -1030,6 +1121,7 @@ func semanticCases() []any {
 			"stoppedTombstoneRetention": "until-future-authenticated-refresh",
 		},
 		map[string]any{"name": "selection-classification", "cases": selection, "fileLimitExclusive": "30", "byteLimitExclusive": fmt.Sprint(8 << 20)},
+		canonicalSelectionCase(t, fixture),
 		map[string]any{"name": "operation-final-matrix", "operations": operationFinalMatrix()},
 		map[string]any{"name": "connection-timing", "triggers": []any{
 			map[string]any{"trigger": "browse", "startsP2P": false, "p2pStartSeconds": nil, "applicationRelayDeadlineSeconds": nil, "outputPicker": "none"},

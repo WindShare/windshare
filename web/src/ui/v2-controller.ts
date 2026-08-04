@@ -10,8 +10,8 @@ import type { V2TransferProgress } from '../transfer/v2-job'
 import { V2BrowserReceiverGateway, type V2BrowseDirectory, type V2BrowsePage, type V2JoinedBrowserShare } from './v2-gateway'
 import {
   acquireBrowserV2Output,
+  browserV2OutputAuthority,
   browserV2OutputCapabilities,
-  openBrowserV2OutputSession,
   outputIntentAvailable,
   type V2OutputIntent,
 } from './v2-output'
@@ -303,8 +303,8 @@ export class V2ReceiverController {
     if (this.#disposed) return
     this.#disposed = true
     this.#navigation?.abort(new DOMException('Receiver disposed', 'AbortError'))
-	this.#unsubscribeScanProgress?.()
-	this.#unsubscribeScanProgress = undefined
+    this.#unsubscribeScanProgress?.()
+    this.#unsubscribeScanProgress = undefined
     this.#transfer?.abort(options.preserveOutputRecovery
       ? new OutputSessionSuspendedError()
       : new DOMException('Receiver disposed', 'AbortError'))
@@ -537,17 +537,12 @@ export class V2ReceiverController {
     acquired: ReturnType<typeof acquireBrowserV2Output>,
     connectivity: V2ConnectivityActivation,
   ): Promise<void> {
+    const output = browserV2OutputAuthority(acquired)
     try {
-      const capability = await acquired
-      this.#transfer?.signal.throwIfAborted()
-      const output = await openBrowserV2OutputSession(
-        capability,
-        `${joined.recoveryIdentity}:${this.#snapshot.outputIntent}`,
-      )
       this.#publish({
         ...this.#snapshot,
         phase: 'discovering',
-        status: 'Discovering the selected tree and opening content lanes…',
+        status: 'Discovering the terminal selection and opening content lanes…',
         progress: EMPTY_V2_PROGRESS,
       })
       const job = joined.transferJob(output, connectivity, {
@@ -567,6 +562,7 @@ export class V2ReceiverController {
         this.#publish({ ...this.#snapshot, phase: 'completed', status: 'Transfer complete.' })
       }
     } catch (error) {
+      await output.abort(error)
       if (this.#transfer?.signal.aborted) {
         this.#publish({ ...this.#snapshot, phase: 'aborted', status: 'Transfer stopped.' })
       } else if (this.#snapshot.phase === 'acquiring-output') {

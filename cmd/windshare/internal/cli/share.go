@@ -38,6 +38,7 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 	prepared, err := liveshare.PrepareSender(ctx, liveshare.SenderConfig{
 		Paths: request.paths, Relays: []string{request.relayURL}, ChunkSize: request.chunkSize,
 		Random: rand.Reader, ScanAdmission: a.scanAdmission,
+		CatalogTracer: liveshare.CatalogStorageTraceFunc(a.traceCatalogStorage),
 	})
 	if err != nil {
 		a.logf("share: prepare selected roots: %v", err)
@@ -168,6 +169,19 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		a.logf("share: stopped")
 	}
 	return ExitOK
+}
+
+func (a *App) traceCatalogStorage(event liveshare.CatalogStorageTrace) {
+	cause := "-"
+	if event.Cause != nil {
+		cause = event.Cause.Error()
+	}
+	a.logf(
+		"share: catalog storage operation=%s share_instance=%x recovered_entries=%d recovered_memory_bytes=%d recovered_spill_bytes=%d legacy_roots_removed=%d failed=%t cause=%q",
+		event.Operation, event.ShareInstance.Bytes(), event.RecoveredUsage.Entries,
+		event.RecoveredUsage.MemoryBytes, event.RecoveredUsage.SpillBytes,
+		event.LegacyRootsRemoved, event.Failed, cause,
+	)
 }
 
 func (a *App) observeSenderRelayRecovery(milestone senderRelayRecoveryMilestone) {

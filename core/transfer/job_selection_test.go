@@ -19,6 +19,70 @@ func (catalogSource nilReleaseCatalog) AcquireDirectory(
 	return catalog.DirectorySnapshot{}, nil, catalogSource.err
 }
 
+func (nilReleaseCatalog) OpenDirectoryPages(
+	context.Context,
+	catalog.DirectoryID,
+) (catalog.DirectoryPageCursor, error) {
+	return nil, nil
+}
+
+type prefixFailureCatalog struct {
+	root      catalog.DirectoryID
+	branch    catalog.DirectoryID
+	rootPages catalog.DirectorySnapshot
+	first     catalog.CatalogPage
+	failure   error
+}
+
+func (source prefixFailureCatalog) OpenDirectoryPages(
+	_ context.Context,
+	directory catalog.DirectoryID,
+) (catalog.DirectoryPageCursor, error) {
+	switch directory {
+	case source.root:
+		return snapshotPages(source.rootPages), nil
+	case source.branch:
+		return &prefixFailureCursor{first: source.first, failure: source.failure}, nil
+	default:
+		return nil, NewSessionFailure(ErrCatalogIdentity)
+	}
+}
+
+type prefixFailureCursor struct {
+	first   catalog.CatalogPage
+	failure error
+	step    uint8
+}
+
+func (cursor *prefixFailureCursor) Next(ctx context.Context) (catalog.CatalogPage, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return catalog.CatalogPage{}, false, err
+	}
+	if cursor.step == 0 {
+		cursor.step++
+		return cursor.first, true, nil
+	}
+	return catalog.CatalogPage{}, false, cursor.failure
+}
+
+func (*prefixFailureCursor) Close() error { return nil }
+
+type rootPrefixFailureCatalog struct {
+	directory catalog.DirectoryID
+	first     catalog.CatalogPage
+	failure   error
+}
+
+func (source rootPrefixFailureCatalog) OpenDirectoryPages(
+	_ context.Context,
+	directory catalog.DirectoryID,
+) (catalog.DirectoryPageCursor, error) {
+	if directory != source.directory {
+		return nil, NewSessionFailure(ErrCatalogIdentity)
+	}
+	return &prefixFailureCursor{first: source.first, failure: source.failure}, nil
+}
+
 func TestTransferJobRejectsMissingCatalogLeaseOnFailurePath(t *testing.T) {
 	share := transferID[catalog.ShareInstance](146)
 	root := transferID[catalog.DirectoryID](147)
@@ -32,9 +96,107 @@ func TestTransferJobRejectsMissingCatalogLeaseOnFailurePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrCatalogLeaseContract) ||
+	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrCatalogCursorContract) ||
 		!isJobTerminalError(result.TerminationCause) || isSessionFailure(result.TerminationCause) {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestTransferJobRollsBackSelectedPrefixOfFailedGeneration(t *testing.T) {
+	share := transferID[catalog.ShareInstance](140)
+	root := transferID[catalog.DirectoryID](141)
+	branch := transferID[catalog.DirectoryID](142)
+	sibling := transferID[catalog.FileID](144)
+	// Reusing the failed prefix's identity proves rollback covers both plan
+	// records and duplicate-identity claims before an independent sibling runs.
+	partial := sibling
+	first, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+		ShareInstance: share,
+		DirectoryID:   branch,
+		Generation:    transferID[catalog.DirectoryGeneration](2),
+		Entries:       []catalog.Entry{jobEntry(t, partial, "partial.bin", 0)},
+	}, jobPageCommitter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, _ := NewSelectionRules(true, nil)
+	descriptor := jobDescriptor(t, share, sibling, 1, 0)
+	opened, _ := NewOpenedRevision(transferID[content.LeaseID](145), descriptor)
+	revisions := &jobRevisionClient{
+		opened:   map[catalog.FileID]OpenedRevision{sibling: opened},
+		failures: make(map[catalog.FileID]error),
+	}
+	output := newJobOutput(share)
+	job, err := NewTransferJob(TransferJobConfig{
+		ShareInstance: share,
+		SyntheticRoot: root,
+		Rules:         rules,
+		Catalog: prefixFailureCatalog{
+			root: root, branch: branch,
+			rootPages: jobSnapshot(
+				t, share, root, 1,
+				jobDirectoryEntry(t, branch, "branch"),
+				jobEntry(t, sibling, "sibling.bin", 0),
+			),
+			first: first, failure: jobDirectoryFailure{errors.New("second page unavailable")},
+		},
+		Revisions: revisions,
+		Blocks:    scriptedRangeReader{},
+		Output:    output,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := job.Run(context.Background())
+	if result.Outcome != JobCompletedWithErrors || result.SucceededFiles != 1 ||
+		len(result.Directories) != 1 || len(result.Files) != 0 ||
+		!slices.Equal(revisions.order, []catalog.FileID{sibling}) ||
+		len(output.directories) != 0 || len(output.finalized) != 0 {
+		t.Fatalf(
+			"result=%+v revision opens=%v directories=%v finalized=%v",
+			result, revisions.order, output.directories, output.finalized,
+		)
+	}
+}
+
+func TestTransferJobDoesNotAdmitOutputForFailedRootPrefix(t *testing.T) {
+	share := transferID[catalog.ShareInstance](130)
+	root := transferID[catalog.DirectoryID](131)
+	file := transferID[catalog.FileID](132)
+	first, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+		ShareInstance: share,
+		DirectoryID:   root,
+		Generation:    transferID[catalog.DirectoryGeneration](2),
+		Entries:       []catalog.Entry{jobEntry(t, file, "prefix.bin", 0)},
+	}, jobPageCommitter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, _ := NewSelectionRules(true, nil)
+	revisions := &jobRevisionClient{opened: make(map[catalog.FileID]OpenedRevision), failures: make(map[catalog.FileID]error)}
+	output := newJobOutput(share)
+	job, err := NewTransferJob(TransferJobConfig{
+		ShareInstance: share,
+		SyntheticRoot: root,
+		Rules:         rules,
+		Catalog: rootPrefixFailureCatalog{
+			directory: root, first: first,
+			failure: jobDirectoryFailure{errors.New("root terminal page unavailable")},
+		},
+		Revisions: revisions,
+		Blocks:    scriptedRangeReader{},
+		Output:    output,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := job.Run(context.Background())
+	if result.Outcome != JobCompletedWithErrors || len(result.Directories) != 1 ||
+		!result.ResumeIntent.IsZero() || !result.SelectionIdentity.IsZero() ||
+		len(output.admitted) != 0 || len(revisions.order) != 0 {
+		t.Fatalf("result=%+v admitted=%d revision opens=%v", result, len(output.admitted), revisions.order)
 	}
 }
 
@@ -199,7 +361,8 @@ func TestTransferJobSelectedDirectoryRequiresSuccessfulGenerationBeforeOutput(t 
 	if result.Outcome != JobCompletedWithErrors || len(result.Directories) != 1 || result.Measure.Class() != SelectionUnknown {
 		t.Fatalf("result=%+v", result)
 	}
-	if len(output.directories) != 0 || len(output.finalized) != 0 {
+	if !slices.Equal(output.directories, []string{"empty"}) ||
+		!slices.Equal(output.finalized, []string{"empty"}) {
 		t.Fatalf("directories=%v finalized=%v", output.directories, output.finalized)
 	}
 }

@@ -94,6 +94,8 @@ type Client struct {
 	maxLeaseClaims          int
 	maxDirectoryLeaseClaims int
 	loads                   sync.WaitGroup
+	activeCursorFetches     int
+	cursorFetchCancels      map[*pageCursor]context.CancelFunc
 	stopped                 bool
 	cleaned                 bool
 }
@@ -161,6 +163,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 		cache:                   make(map[catalog.DirectoryID]*cachedResult),
 		inflight:                make(map[catalog.DirectoryID]*loadCall),
 		leaseClaimsByDirectory:  make(map[catalog.DirectoryID]int),
+		cursorFetchCancels:      make(map[*pageCursor]context.CancelFunc),
 		maxLeaseClaims:          config.MaxLeaseClaims,
 		maxDirectoryLeaseClaims: config.MaxDirectoryLeaseClaims,
 	}, nil

@@ -2,11 +2,16 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   acquireBrowserV2Output,
+  browserV2OutputAuthority,
   browserV2OutputCapabilities,
   openBrowserV2OutputSession,
   outputIntentAvailable,
+  type V2BrowserOutputSessionFactory,
   type V2BrowserOutputWindow,
 } from '../../src/ui/v2-output'
+import type { AcquiredOutputCapability } from '../../src/output/capability/acquisition'
+import type { OutputSession } from '../../src/transfer/output-session'
+import type { V2OutputSelection } from '../../src/transfer/output-selection'
 
 interface OutputWindowFixture {
   readonly windowPort: V2BrowserOutputWindow
@@ -146,4 +151,76 @@ describe('v2 browser output capabilities', () => {
     })
     await output.abortJob(new DOMException('test cleanup', 'AbortError'))
   })
+
+  it('isolates a changed selection after refreshing an FSA or OPFS authority', async () => {
+    const capabilities: readonly AcquiredOutputCapability[] = [
+      { kind: 'PersistentDirectory', root: {} as FileSystemDirectoryHandle },
+      {
+        kind: 'OriginPrivateStaging',
+        root: {} as FileSystemDirectoryHandle,
+        output: new WritableStream<Uint8Array>(),
+      },
+    ]
+    for (const capability of capabilities) {
+      const openedIds: string[] = []
+      const ensuredPaths: string[] = []
+      const sessions: V2BrowserOutputSessionFactory = {
+        open: async (_acquired, outputSessionId) => {
+          openedIds.push(outputSessionId)
+          return recordingOutputSession(outputSessionId, ensuredPaths)
+        },
+      }
+      const beforeRefresh = browserV2OutputAuthority(Promise.resolve(capability), sessions)
+      const afterRefresh = browserV2OutputAuthority(Promise.resolve(capability), sessions)
+
+      await beforeRefresh.openSelection(outputSelection('resume-first'), new AbortController().signal)
+      await afterRefresh.openSelection(outputSelection('resume-second'), new AbortController().signal)
+
+      expect(openedIds).toEqual(['resume-first', 'resume-second'])
+      expect(ensuredPaths).toEqual(['folder', 'folder'])
+    }
+  })
 })
+
+function outputSelection(resumeIntentText: string): V2OutputSelection {
+  const value = new Uint8Array(16)
+  value[0] = 1
+  const hash = new Uint8Array(32)
+  hash[0] = 1
+  return Object.freeze({
+    shareInstance: value,
+    syntheticRoot: value,
+    rootGeneration: value,
+    directories: Object.freeze([Object.freeze({
+      path: Object.freeze(['folder']),
+      directoryId: value,
+      generation: value,
+    })]),
+    files: Object.freeze([]),
+    selectionIdentity: hash,
+    selectionIdentityText: 'selection',
+    canonicalSelection: new Uint8Array(),
+    resumeIntent: hash,
+    resumeIntentText,
+  })
+}
+
+function recordingOutputSession(
+  outputSessionId: string,
+  ensuredPaths: string[],
+): OutputSession {
+  return {
+    identity: { backend: 'recording', outputSessionId },
+    capabilities: {
+      durability: 'ProcessRestart',
+      randomWrite: true,
+      fileFailureIsolation: true,
+      modificationTime: false,
+    },
+    ensureDirectory: async (directory) => { ensuredPaths.push(directory.path.join('/')) },
+    finalizeDirectory: async () => undefined,
+    beginFile: async () => { throw new Error('Authority test does not open files') },
+    finishJob: async () => undefined,
+    abortJob: async () => undefined,
+  }
+}

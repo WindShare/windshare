@@ -106,24 +106,6 @@ func TestPathSelectionRulesDiscoverOnlyAuthenticatedTargetAncestors(t *testing.T
 	}
 }
 
-func TestSelectionIdentityClaimsFailClosedAtNamedBudget(t *testing.T) {
-	root := transferID[catalog.DirectoryID](12)
-	claims := &selectionIdentityClaims{
-		seen: map[catalog.NodeID]struct{}{root.NodeID(): {}}, max: 2,
-	}
-	first := transferID[catalog.FileID](13).NodeID()
-	if err := claims.claim(first); err != nil {
-		t.Fatal(err)
-	}
-	if err := claims.claim(transferID[catalog.FileID](14).NodeID()); !errors.Is(err, ErrSelectionIdentityBudget) ||
-		!isJobTerminalError(err) || isSessionFailure(err) {
-		t.Fatalf("budget error=%v", err)
-	}
-	if err := claims.claim(first); !errors.Is(err, ErrCatalogIdentity) {
-		t.Fatalf("duplicate error=%v", err)
-	}
-}
-
 func TestSelectionMeasureExclusiveThresholdsAndAbsorbingLarge(t *testing.T) {
 	tests := []struct {
 		name     string

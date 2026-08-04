@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -49,6 +50,60 @@ func jobSnapshot(t *testing.T, share catalog.ShareInstance, directory catalog.Di
 		t.Fatal(err)
 	}
 	return snapshot
+}
+
+func jobSnapshotWithOmissions(
+	t *testing.T,
+	share catalog.ShareInstance,
+	directory catalog.DirectoryID,
+	generation byte,
+	omitted uint64,
+	entries ...catalog.Entry,
+) catalog.DirectorySnapshot {
+	t.Helper()
+	slices.SortFunc(entries, func(left, right catalog.Entry) int {
+		return strings.Compare(left.Name(), right.Name())
+	})
+	page, err := catalog.NewCatalogPage(catalog.CatalogPageSpec{
+		ShareInstance: share, DirectoryID: directory,
+		Generation: transferID[catalog.DirectoryGeneration](generation),
+		Entries:    entries, Terminal: true, OmittedCount: omitted,
+	}, jobPageCommitter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := catalog.NewDirectorySnapshot([]catalog.CatalogPage{page})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+type snapshotPageCursor struct {
+	snapshot catalog.DirectorySnapshot
+	index    uint32
+	closed   bool
+}
+
+func (cursor *snapshotPageCursor) Next(context.Context) (catalog.CatalogPage, bool, error) {
+	if cursor.closed {
+		return catalog.CatalogPage{}, false, errors.New("test catalog cursor is closed")
+	}
+	page, ok := cursor.snapshot.Page(cursor.index)
+	if !ok {
+		return catalog.CatalogPage{}, false, nil
+	}
+	cursor.index++
+	return page, true, nil
+}
+
+func (cursor *snapshotPageCursor) Close() error {
+	cursor.closed = true
+	return nil
+}
+
+func snapshotPages(snapshot catalog.DirectorySnapshot) catalog.DirectoryPageCursor {
+	return &snapshotPageCursor{snapshot: snapshot}
 }
 
 type jobCatalogWire struct {

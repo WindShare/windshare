@@ -42,15 +42,15 @@ func validateReservedOutputSelection(platform outputcap.Platform, selection tran
 		}
 		return nil
 	}
-	for _, directory := range selection.Directories() {
-		if err := validate(directory.Path); err != nil {
-			return frozenSelectionAdmissionFault("validate selected directory reservation", err, false)
-		}
+	if err := selection.VisitDirectories(func(directory transfer.OutputSelectionDirectory) error {
+		return validate(directory.Path)
+	}); err != nil {
+		return frozenSelectionAdmissionFault("validate selected directory reservation", err, false)
 	}
-	for _, file := range selection.Files() {
-		if err := validate(file.Path); err != nil {
-			return frozenSelectionAdmissionFault("validate selected file reservation", err, false)
-		}
+	if err := selection.VisitFiles(func(file transfer.OutputSelectionFile) error {
+		return validate(file.Path)
+	}); err != nil {
+		return frozenSelectionAdmissionFault("validate selected file reservation", err, false)
 	}
 	return nil
 }
@@ -70,53 +70,59 @@ func preflightOutputSelectionAdmission(
 	}
 	admission := outputSelectionAdmission{
 		selection: selection,
-		files:     make(map[string]transfer.OutputSelectionFile, len(selection.Files())),
-		dirs:      make(map[string]transfer.OutputSelectionDirectory, len(selection.Directories())),
+		files:     make(map[string]transfer.OutputSelectionFile, int(selection.FileCount())),
+		dirs:      make(map[string]transfer.OutputSelectionDirectory, int(selection.DirectoryCount())),
 	}
-	aliases := make(map[string]string, len(selection.Files())+len(selection.Directories()))
-	for _, directory := range selection.Directories() {
+	aliases := make(map[string]string, int(selection.FileCount()+selection.DirectoryCount()))
+	if err := selection.VisitDirectories(func(directory transfer.OutputSelectionDirectory) error {
 		key, err := platform.CanonicalLocatorKey(directory.Path)
 		if err != nil {
-			return outputSelectionAdmission{}, frozenSelectionAdmissionFault(
+			return frozenSelectionAdmissionFault(
 				"canonicalize selected directory locator", err, false,
 			)
 		}
 		if previous, exists := aliases[key]; exists && previous != directory.Path {
-			return outputSelectionAdmission{}, frozenSelectionAdmissionFault(
+			return frozenSelectionAdmissionFault(
 				"validate selected directory locator aliases",
 				fmt.Errorf("platform-equivalent output locators %q and %q", previous, directory.Path),
 				false,
 			)
 		}
 		if err := platform.ValidateModifiedTime(directory.ModifiedTime); err != nil {
-			return outputSelectionAdmission{}, frozenSelectionAdmissionFault(
+			return frozenSelectionAdmissionFault(
 				"validate selected directory modified time", err, false,
 			)
 		}
 		aliases[key] = directory.Path
 		admission.dirs[directory.Path] = directory
+		return nil
+	}); err != nil {
+		return outputSelectionAdmission{}, err
 	}
-	for _, file := range selection.Files() {
+	if err := selection.VisitFiles(func(file transfer.OutputSelectionFile) error {
 		key, err := platform.CanonicalLocatorKey(file.Path)
 		if err != nil {
-			return outputSelectionAdmission{}, frozenSelectionAdmissionFault(
+			return frozenSelectionAdmissionFault(
 				"canonicalize selected file locator", err, false,
 			)
 		}
 		if previous, exists := aliases[key]; exists && previous != file.Path {
-			return outputSelectionAdmission{}, frozenSelectionAdmissionFault(
+			return frozenSelectionAdmissionFault(
 				"validate selected file locator aliases",
 				fmt.Errorf("platform-equivalent output locators %q and %q", previous, file.Path),
 				false,
 			)
 		}
 		if err := platform.ValidateModifiedTime(file.ModifiedTime); err != nil {
-			return outputSelectionAdmission{}, frozenSelectionAdmissionFault(
+			return frozenSelectionAdmissionFault(
 				"validate selected file modified time", err, false,
 			)
 		}
 		aliases[key] = file.Path
 		admission.files[file.Path] = file
+		return nil
+	}); err != nil {
+		return outputSelectionAdmission{}, err
 	}
 	return admission, nil
 }
@@ -126,12 +132,12 @@ func preflightOutputSelectionAdmission(
 // snapshot remains live. It may create requested user directories, but it never
 // discovers a new static locator, alias, or metadata-shape failure.
 func materializeOutputSelection(root outputcap.Directory, selection transfer.OutputSelection) error {
-	for _, selected := range selection.Directories() {
-		if err := materializeSelectedOutputDirectory(root, selected); err != nil {
-			return err
-		}
+	if err := selection.VisitDirectories(func(selected transfer.OutputSelectionDirectory) error {
+		return materializeSelectedOutputDirectory(root, selected)
+	}); err != nil {
+		return err
 	}
-	for _, selected := range selection.Files() {
+	return selection.VisitFiles(func(selected transfer.OutputSelectionFile) error {
 		parent, _, err := reopenFinalParent(root, selected.Path)
 		if err != nil {
 			return frozenSelectionAdmissionFault("open selected file parent", err, false)
@@ -140,8 +146,8 @@ func materializeOutputSelection(root outputcap.Directory, selection transfer.Out
 		if err := errors.Join(authorityErr, parent.Close()); err != nil {
 			return frozenSelectionAdmissionFault("validate selected file parent mutation authority", err, false)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func materializeSelectedOutputDirectory(
@@ -228,7 +234,7 @@ func exactReopenMaterializedOutputDirectory(
 // this lets Windows reject a DOS alias of the reserved control directory using
 // the actual long leaf behind an open handle.
 func preflightOutputSelectionParents(platform outputcap.Platform, selection transfer.OutputSelection) error {
-	selectionEntries := len(selection.Directories()) + len(selection.Files())
+	selectionEntries := int(selection.DirectoryCount() + selection.FileCount())
 	seenFirstComponents := make(map[string]struct{}, selectionEntries)
 	firstComponents := make([]string, 0, selectionEntries)
 	observeFirst := func(path string) {
@@ -239,11 +245,17 @@ func preflightOutputSelectionParents(platform outputcap.Platform, selection tran
 		seenFirstComponents[first] = struct{}{}
 		firstComponents = append(firstComponents, first)
 	}
-	for _, selected := range selection.Directories() {
+	if err := selection.VisitDirectories(func(selected transfer.OutputSelectionDirectory) error {
 		observeFirst(selected.Path)
+		return nil
+	}); err != nil {
+		return err
 	}
-	for _, selected := range selection.Files() {
+	if err := selection.VisitFiles(func(selected transfer.OutputSelectionFile) error {
 		observeFirst(selected.Path)
+		return nil
+	}); err != nil {
+		return err
 	}
 	if batch, ok := platform.Root().(outputcap.PublicEntryNamesValidator); ok {
 		if err := batch.ValidatePublicEntryNames(firstComponents); err != nil {
@@ -256,19 +268,17 @@ func preflightOutputSelectionParents(platform outputcap.Platform, selection tran
 			}
 		}
 	}
-	for _, selected := range selection.Directories() {
-		if err := preflightOutputDirectoryPath(platform.Root(), selected.Path); err != nil {
-			return err
-		}
+	if err := selection.VisitDirectories(func(selected transfer.OutputSelectionDirectory) error {
+		return preflightOutputDirectoryPath(platform.Root(), selected.Path)
+	}); err != nil {
+		return err
 	}
-	for _, selected := range selection.Files() {
+	return selection.VisitFiles(func(selected transfer.OutputSelectionFile) error {
 		if index := strings.LastIndexByte(selected.Path, '/'); index >= 0 {
-			if err := preflightOutputDirectoryPath(platform.Root(), selected.Path[:index]); err != nil {
-				return err
-			}
+			return preflightOutputDirectoryPath(platform.Root(), selected.Path[:index])
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // preflightOutputSelectionAuthorities proves every selected-descendant mutation
@@ -277,23 +287,20 @@ func preflightOutputSelectionParents(platform outputcap.Platform, selection tran
 // fault scope. Missing descendants stop at the last fixed parent: materialization
 // creates the remainder and repeats these checks to close the admission race.
 func preflightOutputSelectionAuthorities(platform outputcap.Platform, selection transfer.OutputSelection) error {
-	for _, selected := range selection.Directories() {
-		if err := preflightOutputDirectoryAuthorities(
+	if err := selection.VisitDirectories(func(selected transfer.OutputSelectionDirectory) error {
+		return preflightOutputDirectoryAuthorities(
 			platform.Root(), selected.Path, false, selected.ModifiedTime.Present(),
-		); err != nil {
-			return err
-		}
+		)
+	}); err != nil {
+		return err
 	}
-	for _, selected := range selection.Files() {
+	return selection.VisitFiles(func(selected transfer.OutputSelectionFile) error {
 		parentPath := ""
 		if separator := strings.LastIndexByte(selected.Path, '/'); separator >= 0 {
 			parentPath = selected.Path[:separator]
 		}
-		if err := preflightOutputDirectoryAuthorities(platform.Root(), parentPath, true, false); err != nil {
-			return err
-		}
-	}
-	return nil
+		return preflightOutputDirectoryAuthorities(platform.Root(), parentPath, true, false)
+	})
 }
 
 func preflightOutputDirectoryAuthorities(

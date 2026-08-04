@@ -230,8 +230,12 @@ async function runTransfer(
     joined = await gateway.join(input.key, window.location.href)
     activation = joined.beginDownloadConnectivity('large')
     const output = delivery.outputSession(modules.stream, outputRelease)
+    const outputAuthority = {
+      openSelection: async () => output,
+      abort: (reason: unknown) => output.abortJob(reason),
+    }
     deliveryStarted = true
-    const result = await joined.transferJob(output, activation).run()
+    const result = await joined.transferJob(outputAuthority, activation).run()
     const received = await delivery.snapshot()
     const jobOutcome = {
       status: result.outcome.status,
