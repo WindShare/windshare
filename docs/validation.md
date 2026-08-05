@@ -38,6 +38,10 @@ the sweep so late static diagnostics do not delay test feedback. Use `make check
 iterating. `browser-weekly`, `long-go`, `ci-full`, and `core-release` intentionally stay outside ordinary
 local CI. The local p95 goal is at most 10 minutes.
 
+A dated, machine-specific diagnostic is available in the
+[local test timing snapshot](local-test-timing-2026-08-05.md). It records test ownership gaps and outliers,
+but does not replace the p95 goal or define a cross-host performance baseline.
+
 Coverage is blocking: core total >=90%, root total >=80%, and every included Go package >=70%. Product
 packages are not excluded and thresholds are not lowered to make a gate faster.
 
