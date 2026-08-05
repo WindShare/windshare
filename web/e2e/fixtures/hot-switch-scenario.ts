@@ -4,6 +4,10 @@ import { expect, type Page, type TestInfo } from '@playwright/test'
 
 import { V2_BLOCK_BROKER_PARALLEL_READS } from '../../src/content/v2-broker'
 import {
+  V2_TYPED_PEER_ERROR_CODES,
+  type V2BrowserConnectivityAttemptDiagnostic,
+} from '../../src/connectivity/diagnostics'
+import {
   classifyNativePeerConnection,
   type NativeRtcCapabilityDiagnostic,
 } from '../../test/transport/webrtc/browser-capability'
@@ -36,6 +40,21 @@ const MAXIMUM_RETAINED_EVENTS = 1_024
 
 export type HotSwitchRouteMode = 'native-capability' | 'peer' | 'relay-fallback'
 
+type ResolvedHotSwitchRoute = Exclude<HotSwitchRouteMode, 'native-capability'>
+type PeerAttemptFailure = {
+  readonly kind: 'attempt'
+  readonly evidence: Extract<
+    V2BrowserConnectivityAttemptDiagnostic,
+    { readonly stage: 'failed' }
+  >
+}
+type PeerLaneAdmission = Extract<HotSwitchPageEvent, { readonly kind: 'lane-admitted' }>
+type NativePeerOutcomeEvent = PeerAttemptFailure | PeerLaneAdmission
+
+type NativePeerOutcome =
+  | { readonly kind: 'peer'; readonly lane: PeerLaneAdmission }
+  | { readonly kind: 'relay-fallback'; readonly failure: PeerAttemptFailure }
+
 export interface HotSwitchScenarioOptions {
   readonly browserName: string
   readonly mode: HotSwitchRouteMode
@@ -64,29 +83,25 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
   })
   const events = new HotSwitchEventLog()
   let redactor: CapabilityRedactor | undefined
+  let routeMode: ResolvedHotSwitchRoute | undefined
   let capability: NativeRtcCapabilityDiagnostic | undefined
-  let routeMode: Exclude<HotSwitchRouteMode, 'native-capability'> | undefined
+  let fallbackFailure: PeerAttemptFailure | undefined
   await stack.start()
   try {
-    if (options.mode === 'native-capability') {
-      capability = await classifyNativePeerConnection(options.page, stack.baseURL)
-      await options.testInfo.attach('cross-browser-rtc-capability', {
-        body: JSON.stringify({ browserName: options.browserName, ...capability }),
-        contentType: 'application/json',
-      })
-      routeMode = nativeRouteMode(options.browserName, capability)
-    } else {
-      routeMode = options.mode
-    }
-    if (routeMode === undefined) {
-      throw new Error('Hot-switch capability branch did not resolve a route mode')
-    }
+    const routePlan = await determineRoutePlan(options, stack.baseURL)
+    capability = routePlan.capability
+    routeMode = routePlan.routeMode
+    const initialRouteMode = routePlan.routeMode
     const payload = deterministicBytes(HOT_SWITCH_TRANSFER_BYTES)
     const expectedHash = createHash('sha256').update(payload).digest('hex')
     const proxy = await stack.createRelayCutProxy()
     const path = await stack.createFile(HOT_SWITCH_FILE_NAME, payload)
     const share = await stack.share(path, {
-      blockSizeBytes: hotSwitchBlockSize(options.browserName, routeMode),
+      blockSizeBytes: hotSwitchBlockSize(
+        options.browserName,
+        initialRouteMode,
+        routePlan.dynamicWebKitNativeAttempt,
+      ),
     })
     const navigationUrl = relayReceiverUrl(share, proxy.url)
     redactor = createCapabilityRedactor({
@@ -106,7 +121,7 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
     await withCapabilityRedaction(() => startPageTransfer(options.page, {
       expectedHash,
       key: share.key,
-      nativePeerUsable: routeMode === 'peer',
+      nativePeerUsable: initialRouteMode === 'peer',
       rtcConfiguration: { iceServers: [] },
       transferBytes: HOT_SWITCH_TRANSFER_BYTES,
     }), {
@@ -120,19 +135,16 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
       (event) => event.kind === 'dispatch' && event.observation.route === 'relay',
       'first relay dispatch',
     )
-    if (routeMode === 'peer') {
-      await completePeerHotSwitch(
-        options,
-        proxy,
-        events,
-        firstRelayDispatch.observation.dispatchSequence,
-      )
-    } else {
-      // A relay-only capability branch never cuts the live relay. Releasing the
-      // output fence at the first dispatch lets the real transfer reach terminal
-      // state while preserving relay ownership for every subsequent block.
-      await releasePageOutput(options.page)
-    }
+    const settlement = await settleHotSwitchRoute(
+      options,
+      proxy,
+      events,
+      initialRouteMode,
+      routePlan.dynamicWebKitNativeAttempt,
+      firstRelayDispatch.observation.dispatchSequence,
+    )
+    routeMode = settlement.routeMode
+    fallbackFailure = settlement.fallbackFailure
 
     const delivery = await events.waitFor(
       'delivery',
@@ -148,7 +160,7 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
     assertDelivery(delivery, expectedHash)
     assertStackIdentity(stackTraces, scenarioId)
     expect(runtime.error).toBeUndefined()
-    if (routeMode === 'relay-fallback') assertRelayFallback(events)
+    if (routeMode === 'relay-fallback') assertRelayFallback(events, fallbackFailure)
   } catch (error) {
     const diagnostic = {
       browserName: options.browserName,
@@ -179,6 +191,85 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
   }
 }
 
+interface HotSwitchRoutePlan {
+  readonly capability: NativeRtcCapabilityDiagnostic | undefined
+  readonly routeMode: ResolvedHotSwitchRoute
+  readonly dynamicWebKitNativeAttempt: boolean
+}
+
+interface HotSwitchRouteSettlement {
+  readonly routeMode: ResolvedHotSwitchRoute
+  readonly fallbackFailure: PeerAttemptFailure | undefined
+}
+
+async function determineRoutePlan(
+  options: HotSwitchScenarioOptions,
+  baseURL: string,
+): Promise<HotSwitchRoutePlan> {
+  if (options.mode !== 'native-capability') {
+    return {
+      capability: undefined,
+      routeMode: options.mode,
+      dynamicWebKitNativeAttempt: false,
+    }
+  }
+
+  const capability = await classifyNativePeerConnection(options.page, baseURL)
+  await options.testInfo.attach('cross-browser-rtc-capability', {
+    body: JSON.stringify({ browserName: options.browserName, ...capability }),
+    contentType: 'application/json',
+  })
+  return {
+    capability,
+    routeMode: nativeRouteMode(options.browserName, capability),
+    dynamicWebKitNativeAttempt: options.browserName === 'webkit' &&
+      capability.rtcCapability === 'available',
+  }
+}
+
+async function settleHotSwitchRoute(
+  options: HotSwitchScenarioOptions,
+  proxy: { readonly cut: () => Promise<void> },
+  events: HotSwitchEventLog,
+  routeMode: ResolvedHotSwitchRoute,
+  dynamicWebKitNativeAttempt: boolean,
+  firstRelayDispatchSequence: number,
+): Promise<HotSwitchRouteSettlement> {
+  if (routeMode !== 'peer') {
+    await releaseRelayOutput(options.page)
+    return { routeMode: 'relay-fallback', fallbackFailure: undefined }
+  }
+
+  if (!dynamicWebKitNativeAttempt) {
+    await completePeerHotSwitch(options, proxy, events, firstRelayDispatchSequence)
+    return { routeMode: 'peer', fallbackFailure: undefined }
+  }
+
+  const outcome = await waitForNativePeerOutcome(events)
+  if (outcome.kind === 'peer') {
+    await completePeerHotSwitch(
+      options,
+      proxy,
+      events,
+      firstRelayDispatchSequence,
+      outcome.lane,
+    )
+    return { routeMode: 'peer', fallbackFailure: undefined }
+  }
+
+  // A typed attempt failure is a product route outcome, not a test failure. The
+  // relay lane remains authoritative and can drain the exact payload once the
+  // output fence is released.
+  await releaseRelayOutput(options.page)
+  return { routeMode: 'relay-fallback', fallbackFailure: outcome.failure }
+}
+
+async function releaseRelayOutput(page: Page): Promise<void> {
+  // Releasing after the first relay dispatch lets the live relay drain without
+  // introducing a second timing gate or changing the transfer contract.
+  await releasePageOutput(page)
+}
+
 function nativeRouteMode(
   browserName: string,
   capability: NativeRtcCapabilityDiagnostic,
@@ -194,11 +285,38 @@ function nativeRouteMode(
 
 function hotSwitchBlockSize(
   browserName: string,
-  routeMode: Exclude<HotSwitchRouteMode, 'native-capability'>,
+  routeMode: ResolvedHotSwitchRoute,
+  dynamicWebKitNativeAttempt: boolean,
 ): number {
-  return browserName === 'webkit' && routeMode === 'relay-fallback'
+  // A native-capability WebKit run can discover product-level peer failure only
+  // after the sender is already serving blocks. Start with the relay-safe frame
+  // geometry so that either terminal route can finish without rebuilding the
+  // sender or changing the exact payload contract.
+  return browserName === 'webkit' &&
+    (routeMode === 'relay-fallback' || dynamicWebKitNativeAttempt)
     ? DIRECT_WEBKIT_RELAY_BLOCK_BYTES
     : DIRECT_TEST_BLOCK_BYTES
+}
+
+async function waitForNativePeerOutcome(events: HotSwitchEventLog): Promise<NativePeerOutcome> {
+  const event = await events.waitForAny(
+    isNativePeerOutcomeEvent,
+    'peer lane admission or typed native attempt failure',
+  )
+  if (event.kind === 'lane-admitted') return { kind: 'peer', lane: event }
+  if (event.evidence.failureScope !== 'attempt' || event.evidence.failedAtStage === 'admitted') {
+    throw new Error(
+      `Native peer attempt failed outside the pre-admission fallback boundary ` +
+      `(scope=${event.evidence.failureScope}, stage=${event.evidence.failedAtStage})`,
+    )
+  }
+  return { kind: 'relay-fallback', failure: event }
+}
+
+function isNativePeerOutcomeEvent(event: HotSwitchPageEvent): event is NativePeerOutcomeEvent {
+  if (event.kind === 'lane-admitted') return event.observation.route === 'peer'
+  if (event.kind !== 'attempt' || event.evidence.stage !== 'failed') return false
+  return V2_TYPED_PEER_ERROR_CODES.includes(event.evidence.typedErrorCode)
 }
 
 async function completePeerHotSwitch(
@@ -206,13 +324,14 @@ async function completePeerHotSwitch(
   proxy: { readonly cut: () => Promise<void> },
   events: HotSwitchEventLog,
   firstRelayDispatchSequence: number,
+  peerLaneAdmission?: PeerLaneAdmission,
 ): Promise<void> {
   const peerAttempt = await events.waitFor(
     'attempt',
     (event) => event.kind === 'attempt' && event.evidence.stage === 'admitted',
     'authenticated peer admission',
   )
-  const peerLane = await events.waitFor(
+  const peerLane = peerLaneAdmission ?? await events.waitFor(
     'lane-admitted',
     (event) => event.kind === 'lane-admitted' && event.observation.route === 'peer',
     'peer content lane admission',
@@ -281,9 +400,24 @@ function assertDelivery(
   })
 }
 
-function assertRelayFallback(events: HotSwitchEventLog): void {
+function assertRelayFallback(
+  events: HotSwitchEventLog,
+  expectedFailure: PeerAttemptFailure | undefined,
+): void {
   const snapshot = events.snapshot()
-  expect(snapshot.some((event) => event.kind === 'attempt')).toBe(false)
+  const attempts = snapshot.filter((event) => event.kind === 'attempt')
+  if (expectedFailure === undefined) {
+    expect(attempts).toHaveLength(0)
+  } else {
+    expect(attempts.some((event) =>
+      event.kind === 'attempt' &&
+      event.evidence.stage === 'failed' &&
+      event.evidence.attemptId === expectedFailure.evidence.attemptId,
+    )).toBe(true)
+    expect(attempts.some((event) =>
+      event.kind === 'attempt' && event.evidence.stage === 'admitted',
+    )).toBe(false)
+  }
   expect(snapshot.some((event) => event.kind === 'relay-ineligible')).toBe(false)
   expect(snapshot.some((event) =>
     (event.kind === 'lane-admitted' || event.kind === 'lane-detached') &&
@@ -313,7 +447,7 @@ function deterministicBytes(length: number): Uint8Array {
 type MatchingEvent<T extends HotSwitchPageEvent['kind']> = Extract<HotSwitchPageEvent, { kind: T }>
 
 interface EventWaiter {
-  readonly kind: HotSwitchPageEvent['kind']
+  readonly kind: HotSwitchPageEvent['kind'] | undefined
   readonly predicate: (event: HotSwitchPageEvent) => boolean
   readonly resolve: (event: HotSwitchPageEvent) => void
   readonly reject: (reason: unknown) => void
@@ -331,11 +465,32 @@ export class HotSwitchEventLog {
     }
     this.#events.push(event)
     for (const waiter of [...this.#waiters]) {
-      if (event.kind !== waiter.kind || !waiter.predicate(event)) continue
+      if ((waiter.kind !== undefined && event.kind !== waiter.kind) || !waiter.predicate(event)) continue
       clearTimeout(waiter.timer)
       this.#waiters.delete(waiter)
       waiter.resolve(event)
     }
+  }
+
+  waitForAny<T extends HotSwitchPageEvent>(
+    predicate: (event: HotSwitchPageEvent) => event is T,
+    label: string,
+  ): Promise<T> {
+    const existing = this.#events.find(predicate)
+    if (existing !== undefined) return Promise.resolve(existing)
+    return new Promise<T>((resolve, reject) => {
+      const waiter: EventWaiter = {
+        kind: undefined,
+        predicate,
+        resolve: (event) => resolve(event as T),
+        reject,
+        timer: setTimeout(() => {
+          this.#waiters.delete(waiter)
+          reject(new Error(`Timed out waiting for ${label}`))
+        }, EVENT_TIMEOUT_MILLISECONDS),
+      }
+      this.#waiters.add(waiter)
+    })
   }
 
   waitFor<T extends HotSwitchPageEvent['kind']>(
