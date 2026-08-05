@@ -218,20 +218,28 @@ async function completePeerHotSwitch(
     'peer content lane admission',
   )
 
-  await proxy.cut()
-  await sealPageRelayCut(options.page)
-  await events.waitFor('relay-ineligible', () => true, 'relay ineligibility')
-  const relayCutDispatchBoundary = Math.max(
+  // The physical proxy cut is the authority boundary. Capture all dispatches
+  // already observed before it; the relay-ineligible acknowledgement arrives
+  // after the cut and must not move the boundary forward.
+  const preCutDispatchBoundary = Math.max(
     firstRelayDispatchSequence,
     events.latestDispatchSequence(),
   )
+  await proxy.cut()
+  await sealPageRelayCut(options.page)
+  await events.waitFor('relay-ineligible', () => true, 'relay ineligibility')
+  expect(events.snapshot().some((event) =>
+    event.kind === 'dispatch' &&
+    event.observation.route === 'relay' &&
+    event.observation.dispatchSequence > preCutDispatchBoundary,
+  )).toBe(false)
   await releasePageOutput(options.page)
 
   const peerDispatch = await events.waitFor(
     'dispatch',
     (event) => event.kind === 'dispatch' &&
       event.observation.route === 'peer' &&
-      event.observation.dispatchSequence > relayCutDispatchBoundary,
+      event.observation.dispatchSequence > preCutDispatchBoundary,
     'post-cut peer dispatch',
   )
 
