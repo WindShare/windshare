@@ -7,13 +7,9 @@ import {
   wrapWindShareDataChannel,
 } from '../../../src/transport/webrtc'
 
-const MAX_FRAME_BYTES = 65_536
 const MAXIMUM_BURSTS = 256
 const NATIVE_INTEROP_DEADLINE_MS = 30_000
 const HTTP_REQUEST_DEADLINE_MS = 20_000
-const TERMINAL_MARKER = 0xf0
-const CANCELED_MARKER = 0xcc
-const BARRIER_MARKER = 0xcb
 
 interface FrameSummary {
   readonly marker: number
@@ -46,31 +42,6 @@ interface PionConfig {
   readonly serverTerminalMarker: number
   readonly canceledSendMarker: number
   readonly terminalFrameBytes: number
-}
-
-export interface BrowserLoopbackResult {
-  readonly connected: boolean
-  readonly exactLeftToRight: boolean
-  readonly exactRightToLeft: boolean
-  readonly highWaterObserved: boolean
-  readonly lowWaterObserved: boolean
-  readonly cancellationWaitObserved: boolean
-  readonly cancellationError: string
-  readonly canceledMarkerReceived: boolean
-  readonly barrierReceived: boolean
-  readonly terminalLast: boolean
-  readonly terminalAcknowledged: boolean
-  readonly leftState: string
-  readonly rightState: string
-}
-
-export interface BrowserRemoteCloseResult {
-  readonly highWaterObserved: boolean
-  readonly capacityWaitObserved: boolean
-  readonly sendError: string
-  readonly leftReason: string
-  readonly rightReason: string
-  readonly lateMarkerReceived: boolean
 }
 
 export interface BrowserDataChannelCloseResult {
@@ -115,99 +86,6 @@ export interface PionInteropResult {
     readonly serverFrames: readonly FrameSummary[]
   }
   readonly server: Record<string, unknown>
-}
-
-export async function runBrowserLoopback(): Promise<BrowserLoopbackResult> {
-  const pair = await createPeerPair()
-  const leftFramesPromise = collectFrames(pair.left.channel.frames)
-  const rightFramesPromise = collectFrames(pair.right.channel.frames)
-  let lowWaterObserved = false
-  pair.left.raw.addEventListener('bufferedamountlow', () => {
-    lowWaterObserved = true
-  }, { once: true })
-
-  const leftProbe = patternedFrame(0x11, MAX_FRAME_BYTES)
-  const rightProbe = patternedFrame(0x22, MAX_FRAME_BYTES)
-  await pair.left.channel.send(leftProbe)
-  await pair.right.channel.send(rightProbe)
-
-  const burst = patternedFrame(0x33, MAX_FRAME_BYTES)
-  const burstCount = await fillToHighWater(pair.left.channel, pair.left.raw, burst)
-  const highWaterObserved = pair.left.raw.bufferedAmount >= DATA_CHANNEL_HIGH_WATER_BYTES
-  const cancellation = new AbortController()
-  let cancellationSettled = false
-  const canceledSend = pair.left.channel.send(
-    Uint8Array.of(CANCELED_MARKER),
-    cancellation.signal,
-  )
-  canceledSend.then(() => {
-    cancellationSettled = true
-  }).catch(() => undefined)
-  await Promise.resolve()
-  const cancellationWaitObserved = highWaterObserved && !cancellationSettled
-  cancellation.abort(new DOMException('browser cancellation', 'AbortError'))
-  const cancellationError = await errorName(canceledSend)
-
-  await pair.left.channel.send(Uint8Array.of(BARRIER_MARKER))
-  const terminal = patternedFrame(TERMINAL_MARKER, 257)
-  await pair.left.channel.sendTerminal(terminal)
-  await Promise.all([pair.left.channel.done, pair.right.channel.done])
-
-  const [leftFrames, rightFrames] = await Promise.all([
-    leftFramesPromise,
-    rightFramesPromise,
-  ])
-  await Promise.all([pair.left.channel.close(), pair.right.channel.close()])
-  pair.left.peer.close()
-  pair.right.peer.close()
-
-  return {
-    connected: pair.left.peer.connectionState === 'closed' &&
-      pair.right.peer.connectionState === 'closed',
-    exactLeftToRight: containsSummary(rightFrames, leftProbe),
-    exactRightToLeft: containsSummary(leftFrames, rightProbe),
-    highWaterObserved: highWaterObserved && burstCount > 0,
-    lowWaterObserved,
-    cancellationWaitObserved,
-    cancellationError,
-    canceledMarkerReceived: rightFrames.some((frame) => frame.marker === CANCELED_MARKER),
-    barrierReceived: rightFrames.some((frame) => frame.marker === BARRIER_MARKER),
-    terminalLast: summariesEndWith(rightFrames, terminal),
-    terminalAcknowledged: pair.left.channel.reason === undefined,
-    leftState: pair.left.channel.state,
-    rightState: pair.right.channel.state,
-  }
-}
-
-export async function runBrowserRemoteClose(): Promise<BrowserRemoteCloseResult> {
-  const pair = await createPeerPair()
-  const rightFramesPromise = collectFrames(pair.right.channel.frames)
-  const burst = patternedFrame(0x41, MAX_FRAME_BYTES)
-  await fillToHighWater(pair.left.channel, pair.left.raw, burst)
-  const highWaterObserved = pair.left.raw.bufferedAmount >= DATA_CHANNEL_HIGH_WATER_BYTES
-  let sendSettled = false
-  const waiting = pair.left.channel.send(Uint8Array.of(0x42))
-  waiting.then(() => {
-    sendSettled = true
-  }).catch(() => undefined)
-  await Promise.resolve()
-  const capacityWaitObserved = highWaterObserved && !sendSettled
-
-  pair.right.peer.close()
-  const sendError = await errorName(waiting)
-  await Promise.all([pair.left.channel.done, pair.right.channel.done])
-  const rightFrames = await rightFramesPromise
-  await Promise.all([pair.left.channel.close(), pair.right.channel.close()])
-  pair.left.peer.close()
-
-  return {
-    highWaterObserved,
-    capacityWaitObserved,
-    sendError,
-    leftReason: errorNameOf(pair.left.channel.reason),
-    rightReason: errorNameOf(pair.right.channel.reason),
-    lateMarkerReceived: rightFrames.some((frame) => frame.marker === 0x42),
-  }
 }
 
 export async function runBrowserDataChannelClose(): Promise<BrowserDataChannelCloseResult> {
@@ -478,17 +356,6 @@ function containsSummary(summaries: readonly FrameSummary[], frame: Uint8Array):
       candidate.size === expected.size &&
       candidate.checksum === expected.checksum,
   )
-}
-
-function summariesEndWith(
-  summaries: readonly FrameSummary[],
-  frame: Uint8Array,
-): boolean {
-  const expected = summarize(frame)
-  const last = summaries.at(-1)
-  return last?.marker === expected.marker &&
-    last.size === expected.size &&
-    last.checksum === expected.checksum
 }
 
 function requiredDescription(peer: RTCPeerConnection): RTCSessionDescription {

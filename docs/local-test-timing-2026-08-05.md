@@ -62,3 +62,21 @@ short sweep because two Windows placement-guard tests received `Access is denied
 rerun reproduced `TestWindowsV3RecoveryRetainsFullPlacementGuardThroughFinalObservation`; the companion
 `TestWindowsResumeDiscardRetainsPlacementThroughFinalRevalidation` passed on focused rerun. Therefore this
 snapshot does not establish that the full local CI was green or that its p95 goal was met.
+
+## Follow-up after browser contract ownership changes
+
+The follow-up was measured on the same host after the browser contract projects became owned by the local
+gates. No Go source, Go test, or Go module files changed in the comparison worktree, so the Go rows above
+remain the reference values.
+
+| Scope | Previous | Current | Change |
+|---|---:|---:|---:|
+| Vitest | 450 tests / 13.51 s | 459 tests / 14.21 s | +9 / +0.70 s (+5.2%) |
+| Ordinary browser owner | 1 test / 3.48 s | 31 tests / 13.78 s | +30 / +10.30 s |
+| **Ordinary test-only total** | **2,186 / 75.30 s** | **2,225 / 79.69 s** | **+39 / +4.39 s (+5.8%)** |
+| Browser weekly full sweep | 11 tests / 44.90 s | 58 tests / 101.46 s | +47 / +56.56 s (+126%) |
+
+The new weekly supplement measured 27 tests in 87.68 s. Its largest new owners were Firefox/WebKit component
+contracts (12 tests, 9.88 s) and Chromium periodic contracts (5 tests, 24.83 s); the million-member ZIP
+periodic case alone took 10.06 s and the exact-boundary case 9.03 s. The new Web gate's lint and build steps
+took 8.00 s and 5.08 s respectively, in addition to the 14.21 s Vitest run.

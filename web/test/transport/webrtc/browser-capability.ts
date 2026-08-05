@@ -18,8 +18,9 @@ export interface NativeRtcCapabilityDiagnostic {
 
 export async function classifyNativePeerConnection(
   page: Page,
+  baseURL?: string,
 ): Promise<NativeRtcCapabilityDiagnostic> {
-  await page.goto('/')
+  await page.goto(baseURL === undefined ? '/' : new URL('/', baseURL).href)
   const rawDiagnostic = await page.evaluate(async (path) => {
     const capability = await import(path) as typeof RtcCapabilityProbe
     return capability.probeRtcCapability()

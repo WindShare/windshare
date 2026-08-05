@@ -27,6 +27,30 @@ function channelFixture(): {
 }
 
 describe('WebRTC FrameChannel conformance matrix', () => {
+  it('preserves bidirectional payload and terminal ordering without native ICE', async () => {
+    const left = channelFixture()
+    const right = channelFixture()
+    linkChannels(left.raw, right.raw)
+    const leftFrames = readAll(left.channel.frames)
+    const rightFrames = readAll(right.channel.frames)
+    const leftProbe = Uint8Array.of(1, 3, 5)
+    const rightProbe = Uint8Array.of(2, 4, 6)
+    const barrier = Uint8Array.of(0xcb)
+    const terminal = Uint8Array.of(0xf0, 7)
+
+    await left.channel.send(leftProbe)
+    await right.channel.send(rightProbe)
+    await left.channel.send(barrier)
+    await left.channel.sendTerminal(terminal)
+
+    const [receivedLeft, receivedRight] = await Promise.all([leftFrames, rightFrames])
+    expect(receivedLeft).toEqual([rightProbe])
+    expect(receivedRight).toEqual([leftProbe, barrier, terminal])
+    expect(left.channel.reason).toBeUndefined()
+    expect(right.channel.reason).toBeUndefined()
+    await Promise.all([left.channel.close(), right.channel.close()])
+  })
+
   it('state-and-frame-bounds', async () => {
     const { channel } = channelFixture()
     expect(channel.state).toBe('open')
@@ -173,3 +197,13 @@ describe('WebRTC FrameChannel conformance matrix', () => {
     expect(channel.state).toBe('closed')
   })
 })
+
+function linkChannels(left: FakeRTCDataChannel, right: FakeRTCDataChannel): void {
+  left.sendHook = (data) => forward(data, right)
+  right.sendHook = (data) => forward(data, left)
+}
+
+function forward(data: string | Uint8Array, target: FakeRTCDataChannel): void {
+  if (typeof data === 'string') target.receiveText(data)
+  else target.receiveBinary(data)
+}

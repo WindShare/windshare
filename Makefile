@@ -28,8 +28,10 @@ endif
 ci: $(CI_GATES)
 	@echo "ci: all gates passed"
 
-# The ordinary CI already owns the Chromium smoke. Reusing only the weekly
-# supplement keeps the full current-host sweep complete without running it twice.
+# `browser` runs `test:browser:smoke` followed by `test:browser:contract:short`.
+# The ordinary CI therefore owns both Chromium short lanes; reusing only the
+# weekly supplement keeps the full current-host sweep complete without rerunning
+# either ordinary Chromium project.
 ci-full: ci long-go browser-weekly-supplement
 	@echo "ci-full: all gates passed"
 

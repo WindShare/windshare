@@ -24,9 +24,10 @@ export default defineConfig({
   use: {
     locale: 'en-US',
     timezoneId: 'UTC',
-    // Direct receiver setup passes capability keys through the page boundary.
+    // Direct receiver setup passes capability keys through the page boundary; keep
+    // all browser artifacts disabled at this owner boundary.
     trace: 'off',
-    screenshot: 'only-on-failure',
+    screenshot: 'off',
     video: 'off',
   },
 })

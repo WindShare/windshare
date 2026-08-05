@@ -15,6 +15,10 @@ import {
 } from './fixtures/direct-product-stack'
 import { LocalTurnServer } from './fixtures/local-turn-server'
 import { NetworkEventLog } from './fixtures/network-event-log'
+import {
+  createCapabilityRedactor,
+  withCapabilityRedaction,
+} from './fixtures/capability-redactor'
 
 const SCENARIO_ID = 'chromium-turn-route'
 const FILE_NAME = 'turn-route.bin'
@@ -25,6 +29,7 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
   const turn = new LocalTurnServer()
   const events = new NetworkEventLog()
   let primaryFailure: unknown
+  let redactor: ReturnType<typeof createCapabilityRedactor> | undefined
   try {
     const starts = await Promise.allSettled([stack.start(), turn.start()])
     const startFailures = starts.flatMap((result) => result.status === 'rejected' ? [result.reason] : [])
@@ -36,14 +41,28 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
     const proxy = await stack.createRelayCutProxy()
     const path = await stack.createFile(FILE_NAME, payload)
     const share = await stack.share(path)
+    const navigationUrl = relayReceiverUrl(share, proxy.url)
+    redactor = createCapabilityRedactor({
+      completeUrl: navigationUrl,
+      fragment: new URL(navigationUrl).hash,
+      separateKey: share.key,
+    })
 
     await page.exposeFunction('__windshareHotSwitchEvent', (event: unknown) => events.accept(event))
-    await page.goto(relayReceiverUrl(share, proxy.url))
-    await startPageTransfer(page, {
+    await withCapabilityRedaction(() => page.goto(navigationUrl), {
+      completeUrl: navigationUrl,
+      fragment: new URL(navigationUrl).hash,
+      separateKey: share.key,
+    })
+    await withCapabilityRedaction(() => startPageTransfer(page, {
       expectedHash,
       key: share.key,
       rtcConfiguration: turn.rtcConfiguration,
       transferBytes: TRANSFER_BYTES,
+    }), {
+      completeUrl: navigationUrl,
+      fragment: new URL(navigationUrl).hash,
+      separateKey: share.key,
     })
 
     await events.waitFor(
@@ -119,14 +138,15 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
       turn: turn.diagnostic(),
       processes: stack.diagnostic(),
     } as const
-    console.info(JSON.stringify({
+    const safeLog = (value: unknown): string => redactor?.text(value) ?? JSON.stringify(value)
+    console.info(safeLog({
       component: diagnostic.component,
       scenarioId: diagnostic.scenarioId,
       operationId: diagnostic.operationId,
       milestone: diagnostic.milestone,
       eventCount: diagnostic.events.length,
     }))
-    diagnostic.events.forEach((event, eventIndex) => console.info(JSON.stringify({
+    diagnostic.events.forEach((event, eventIndex) => console.info(safeLog({
       component: diagnostic.component,
       scenarioId: diagnostic.scenarioId,
       operationId: diagnostic.operationId,
@@ -134,7 +154,7 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
       eventIndex,
       event,
     })))
-    console.info(JSON.stringify({
+    console.info(safeLog({
       component: diagnostic.component,
       scenarioId: diagnostic.scenarioId,
       operationId: diagnostic.operationId,
@@ -143,7 +163,7 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
       processes: diagnostic.processes,
     }))
     await testInfo.attach('turn-route-diagnostic', {
-      body: JSON.stringify(diagnostic, null, 2),
+      body: redactor?.text(diagnostic) ?? JSON.stringify(diagnostic),
       contentType: 'application/json',
     }).catch(() => undefined)
   }
@@ -151,8 +171,25 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
   const cleanup = await Promise.allSettled([turn.dispose(), stack.dispose()])
   const failures = cleanup.flatMap((result) => result.status === 'rejected' ? [result.reason] : [])
   const allFailures = [...(primaryFailure === undefined ? [] : [primaryFailure]), ...failures]
-  if (allFailures.length === 1) throw allFailures[0]
-  if (allFailures.length > 1) throw new AggregateError(allFailures, 'TURN route failed')
+  try {
+    if (allFailures.length === 1) {
+      const failure = allFailures[0]
+      const message = failure instanceof Error ? failure.message : String(failure)
+      throw new Error(redactor?.redactText(message) ?? message, {
+        cause: redactor?.value(failure),
+      })
+    }
+    if (allFailures.length > 1) {
+      const aggregate = new AggregateError(allFailures, 'TURN route failed')
+      throw new Error(redactor?.redactText(aggregate.message) ?? aggregate.message, {
+        cause: redactor?.value(aggregate),
+      })
+    }
+  } finally {
+    // A failed test throws before the success tail; clear the actual capability
+    // values on both terminal paths rather than retaining them in the fixture.
+    redactor?.clear()
+  }
 })
 
 function deterministicBytes(length: number): Uint8Array {
