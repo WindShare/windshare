@@ -22,17 +22,11 @@
 
 ### Validation
 
-- Local gates consume developer-installed toolchains, Web dependencies, and browsers; they never install or update them. Go gates use `GOTOOLCHAIN=local`, and missing prerequisites fail directly.
-- During iteration use a focused `make <gate>`. `make check` is the fast feedback path; `make ci` runs `hygiene sloc workflow-lint lint vet short-go vectors web e2e browser gopls` in fixed order.
-- `make race` and `make coverage` are diagnostic. `make long-go` mirrors the automatic weekly Go owners, and `make core-release` is the candidate-release gate; none is part of ordinary `make ci`.
-- Ordinary GitHub CI has seven independent jobs: `static`, `go-root`, `go-core`, `web`, `go-e2e`, `browser-chromium`, and `windows-native`. The weekly workflow automatically owns long Go, durable, network, interop, cross-browser, and Windows browser suites.
-- Pushing the candidate tag `core-candidate/vX.Y.Z/<candidate>` runs Linux/Windows extracted-core checks and idempotently creates `core/vX.Y.Z`; a conflicting existing tag is never moved.
-- Windows Firewall/WBEM are not validation gates. Full environment responsibilities and entrypoint ownership are in `docs/validation.md`.
-- Validation simplification must not weaken E2EE, capability links, remote-input validation, root confinement, revision/lease and resumable output semantics, crash recovery, no-replace publication, native ancestry revalidation, relay/WebRTC switching, or stable structured observability.
+- During iteration, use a focused `make <gate>` or `make check`; run `make ci` before handoff. Local gates use installed prerequisites.
+- See `docs/validation.md` for ownership and release details.
 
 ### 其他
 
-- 工具链不准固定版本，尽量使用大版本的latest，Golang使用最新latest。也包括所有 github action。本地直接使用本地工具链就行。尤其要拒绝为了版本问题写了一堆兜底代码，难以维护。
 - 写计划文档的时候禁止写在文档里边写一堆验收条件，不准出现验收条件标题块，这导致实现了太多无关紧要的东西而忽略的产品真正的需求。
 
 ## Project Overview

@@ -4,7 +4,9 @@ override GOTOOLCHAIN := local
 export GOTOOLCHAIN
 
 PUBLIC_TARGETS := ci check hygiene sloc workflow-lint lint vet short-go race coverage vectors web e2e browser gopls long-go core-release
-CI_GATES := hygiene sloc workflow-lint lint vet short-go vectors web e2e browser gopls
+# Runtime and protocol failures carry the highest product risk, so surface them
+# before slower-to-act-on static diagnostics during iterative agent work.
+CI_GATES := short-go vectors web e2e browser hygiene workflow-lint lint vet gopls sloc
 PLATFORM_TARGETS := $(filter-out ci core-release,$(PUBLIC_TARGETS))
 
 override CORE_RELEASE_VERSION := v0.0.0-ci

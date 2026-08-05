@@ -30,9 +30,11 @@ WBEM state are not validation gates.
 | `make long-go` | Run named E2E/catalog/output-runtime long suites and native integration packages. |
 | `make core-release` | Validate an extracted, independently consumable core module. |
 
-`make ci` runs `hygiene sloc workflow-lint lint vet short-go vectors web e2e browser gopls` serially.
-Use `make check` or a focused target while iterating. `long-go` and `core-release` intentionally stay
-outside ordinary local CI. The local p95 goal is at most 10 minutes.
+`make ci` runs `short-go vectors web e2e browser hygiene workflow-lint lint vet gopls sloc` serially.
+Runtime and protocol failures run first because they carry the highest product risk; gopls and SLOC close
+the sweep so late static diagnostics do not delay test feedback. Use `make check` or a focused target while
+iterating. `long-go` and `core-release` intentionally stay outside ordinary local CI. The local p95 goal is
+at most 10 minutes.
 
 Coverage is blocking: core total >=90%, root total >=80%, and every included Go package >=70%. Product
 packages are not excluded and thresholds are not lowered to make a gate faster.
