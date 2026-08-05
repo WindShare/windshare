@@ -8,6 +8,7 @@ export async function startPageTransfer(
   input: {
     readonly expectedHash: string
     readonly key: string
+    readonly nativePeerUsable: boolean
     readonly rtcConfiguration: RTCConfiguration
     readonly transferBytes: number
   },

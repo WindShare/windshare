@@ -16,6 +16,7 @@ import {
 import {
   DIRECT_TEST_BLOCK_BYTES,
   DirectProductStack,
+  DIRECT_WEBKIT_RELAY_BLOCK_BYTES,
   type DirectStackTrace,
   relayReceiverUrl,
 } from './direct-product-stack'
@@ -84,7 +85,9 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
     const expectedHash = createHash('sha256').update(payload).digest('hex')
     const proxy = await stack.createRelayCutProxy()
     const path = await stack.createFile(HOT_SWITCH_FILE_NAME, payload)
-    const share = await stack.share(path)
+    const share = await stack.share(path, {
+      blockSizeBytes: hotSwitchBlockSize(options.browserName, routeMode),
+    })
     const navigationUrl = relayReceiverUrl(share, proxy.url)
     redactor = createCapabilityRedactor({
       completeUrl: navigationUrl,
@@ -103,6 +106,7 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
     await withCapabilityRedaction(() => startPageTransfer(options.page, {
       expectedHash,
       key: share.key,
+      nativePeerUsable: routeMode === 'peer',
       rtcConfiguration: { iceServers: [] },
       transferBytes: HOT_SWITCH_TRANSFER_BYTES,
     }), {
@@ -188,6 +192,15 @@ function nativeRouteMode(
   return capability.rtcCapability === 'available' ? 'peer' : 'relay-fallback'
 }
 
+function hotSwitchBlockSize(
+  browserName: string,
+  routeMode: Exclude<HotSwitchRouteMode, 'native-capability'>,
+): number {
+  return browserName === 'webkit' && routeMode === 'relay-fallback'
+    ? DIRECT_WEBKIT_RELAY_BLOCK_BYTES
+    : DIRECT_TEST_BLOCK_BYTES
+}
+
 async function completePeerHotSwitch(
   options: HotSwitchScenarioOptions,
   proxy: { readonly cut: () => Promise<void> },
@@ -262,6 +275,7 @@ function assertDelivery(
 
 function assertRelayFallback(events: HotSwitchEventLog): void {
   const snapshot = events.snapshot()
+  expect(snapshot.some((event) => event.kind === 'attempt')).toBe(false)
   expect(snapshot.some((event) => event.kind === 'relay-ineligible')).toBe(false)
   expect(snapshot.some((event) =>
     (event.kind === 'lane-admitted' || event.kind === 'lane-detached') &&
