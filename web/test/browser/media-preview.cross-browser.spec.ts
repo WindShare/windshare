@@ -192,7 +192,7 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
     const imageUrlBlob = await imageUrlResponse.blob()
     const imageUrlBytes = new Uint8Array(await imageUrlBlob.arrayBuffer())
     const element = new Image()
-    element.alt = 'R7 repository PNG evidence'
+    element.alt = 'WindShare repository PNG evidence'
     element.src = image.url
     document.body.append(element)
     await element.decode()

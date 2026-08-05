@@ -61,13 +61,17 @@ export class LocalTurnServer {
         cwd: REPOSITORY_ROOT,
         environment: localGoEnvironment(),
         operationId: 'chromium-turn-route-server',
-        redactStdout: true,
+        disclosure: { stdout: 'capability', stderr: 'private' },
       })
       this.#process = child
       const match = await child.waitFor('stdout', READY_LINE_PATTERN, {
         timeoutMilliseconds: READY_TIMEOUT_MILLISECONDS,
       })
       const ready = parseLocalTurnReadyRecord(requiredCapture(match, 1))
+      // TURN readiness contains a username and credential. They are copied into
+      // the owned RTC configuration, then the process capture is erased before
+      // any diagnostic or cleanup path can observe it.
+      child.consumeReadiness('stdout')
       this.#relayAddress = ready.relayAddress
       this.#configuration = Object.freeze({
         iceServers: [Object.freeze({

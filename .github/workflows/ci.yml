@@ -188,7 +188,7 @@ jobs:
         run: make e2e
 
   browser-chromium:
-    name: Chromium relay product smoke
+    name: Chromium relay smoke and short browser contracts
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -214,7 +214,7 @@ jobs:
         run: pnpm -C web install --frozen-lockfile
       - name: Install the Chromium runtime
         run: pnpm -C web exec playwright install --with-deps chromium
-      - name: Run the Chromium relay micro-directory product smoke once
+      - name: Run Chromium relay smoke and short browser contracts once
         run: make browser
 
   windows-native:

@@ -22,6 +22,24 @@ import {
   type V2ReceiverProgress,
   type V2ReceiverSnapshot,
 } from './v2-model'
+import {
+  V2CapabilityInputLifecycle,
+  type V2CapabilityJoinLease,
+  type V2CapturedLocation,
+  type V2DiagnosticFormatter,
+  type V2SecurityMilestone,
+} from './v2-capability-lifecycle'
+
+export {
+  captureV2Location,
+  formatV2PublicError,
+} from './v2-capability-lifecycle'
+export type {
+  V2CapturedLocation,
+  V2DiagnosticFormatter,
+  V2LocationCaptureOptions,
+  V2SecurityMilestone,
+} from './v2-capability-lifecycle'
 
 interface ActiveV2Preview {
   readonly id: number
@@ -38,23 +56,14 @@ interface RetryableV2BrowseRequest {
   readonly route: readonly V2BrowseDirectory[]
 }
 
-export interface V2CapturedLocation {
-  readonly capabilityInput: string | null
-  readonly pageUrl: string
-}
-
-export function captureV2Location(windowPort: Window = window): V2CapturedLocation {
-  const input = windowPort.location.href
-  const sanitized = new URL(input)
-  const capabilityInput = sanitized.hash.length > 1 ? input : null
-  sanitized.hash = ''
-  // Secret erasure precedes crypto, browser feature detection, and relay dialing.
-  windowPort.history.replaceState(windowPort.history.state, '', sanitized)
-  return Object.freeze({ capabilityInput, pageUrl: sanitized.href })
+export interface V2ReceiverControllerOptions {
+  readonly diagnosticFormatter?: V2DiagnosticFormatter
+  readonly onSecurityMilestone?: (milestone: V2SecurityMilestone) => void
 }
 
 export class V2ReceiverController {
   readonly #gateway: V2BrowserReceiverGateway
+  readonly #capabilityLifecycle: V2CapabilityInputLifecycle
   readonly #listeners = new Set<() => void>()
   #snapshot: V2ReceiverSnapshot
   #pageUrl = ''
@@ -74,8 +83,12 @@ export class V2ReceiverController {
   #nextPreviewId = 1
   #disposed = false
 
-  constructor(gateway = new V2BrowserReceiverGateway()) {
+  constructor(
+    gateway = new V2BrowserReceiverGateway(),
+    options: V2ReceiverControllerOptions = {},
+  ) {
     this.#gateway = gateway
+    this.#capabilityLifecycle = new V2CapabilityInputLifecycle(options)
     const outputCapabilities = browserV2OutputCapabilities()
     const outputIntent: V2OutputIntent = outputCapabilities.nativeDirectory ? 'directory' : 'download'
     this.#snapshot = Object.freeze({
@@ -114,12 +127,19 @@ export class V2ReceiverController {
 
   initialize(captured: V2CapturedLocation): void {
     this.#pageUrl = captured.pageUrl
-    if (captured.capabilityInput !== null) this.#join(captured.capabilityInput).catch(() => undefined)
+    this.#capabilityLifecycle.acceptCapturedLocation(captured)
+    if (captured.capabilityInput !== null) {
+      this.#join(captured.capabilityInput).catch(() => undefined)
+    }
   }
 
   submitKey(input: string): void {
     if (this.#disposed || input.trim().length === 0) return
-    this.#join(input).catch(() => undefined)
+    this.#join(input.trim()).catch(() => undefined)
+    // The form has already emptied its password field; publish the matching
+    // controller ownership milestone in the same call stack, before any join
+    // rejection can be converted into UI state.
+    this.#capabilityLifecycle.notify('key-cleared')
   }
 
   chooseOutput(intent: V2OutputIntent): void {
@@ -154,7 +174,7 @@ export class V2ReceiverController {
         ...this.#snapshot,
         phase: 'browsing',
         status: 'This directory cannot be opened safely.',
-        error: publicError(error),
+        error: this.#publicError(error),
         directoryRetryable: false,
       })
       return
@@ -233,7 +253,7 @@ export class V2ReceiverController {
           state: 'error' as const,
           fileId: active.entry.idText,
           name: active.entry.name,
-          message: publicError(error),
+          message: this.#publicError(error),
         })
         this.#closeActivePreview()
         this.#publish({
@@ -302,6 +322,7 @@ export class V2ReceiverController {
   async dispose(options: { readonly preserveOutputRecovery?: boolean } = {}): Promise<void> {
     if (this.#disposed) return
     this.#disposed = true
+    this.#capabilityLifecycle.clear()
     this.#navigation?.abort(new DOMException('Receiver disposed', 'AbortError'))
     this.#unsubscribeScanProgress?.()
     this.#unsubscribeScanProgress = undefined
@@ -314,30 +335,40 @@ export class V2ReceiverController {
     this.#listeners.clear()
   }
 
-  async #join(input: string): Promise<void> {
-    await this.#closeActivePreview()
-    this.#navigation?.abort(new DOMException('A newer join replaced this one', 'AbortError'))
-    this.#pendingNavigationKey = undefined
-    this.#loadingDirectory = undefined
-    this.#retryableBrowse = undefined
-    const navigation = new AbortController()
-    this.#navigation = navigation
-    this.#publish({
-      ...this.#snapshot,
-      phase: 'joining',
-      status: 'Authenticating the share descriptor…',
-      error: null,
-      rows: Object.freeze([]),
-      preview: EMPTY_V2_PREVIEW,
-    })
+  #join(input: string): Promise<void> {
+    const lease = this.#capabilityLifecycle.beginJoin(input, this.#pageUrl)
+    return this.#joinOwned(lease)
+  }
+
+  async #joinOwned(lease: V2CapabilityJoinLease): Promise<void> {
+    let navigation: AbortController | undefined
     try {
+      await this.#closeActivePreview()
+      this.#navigation?.abort(new DOMException('A newer join replaced this one', 'AbortError'))
+      this.#pendingNavigationKey = undefined
+      this.#loadingDirectory = undefined
+      this.#retryableBrowse = undefined
+      navigation = new AbortController()
+      this.#navigation = navigation
+      lease.activate()
+      this.#publish({
+        ...this.#snapshot,
+        phase: 'joining',
+        status: 'Authenticating the share descriptor…',
+        error: null,
+        rows: Object.freeze([]),
+        preview: EMPTY_V2_PREVIEW,
+      })
       const previous = this.#joined
 	  this.#unsubscribeScanProgress?.()
 	  this.#unsubscribeScanProgress = undefined
       await previous?.close()
       navigation.signal.throwIfAborted()
       if (this.#joined === previous) this.#joined = undefined
-      const joined = await this.#gateway.join(input, this.#pageUrl, navigation.signal)
+      const activeNavigation = navigation
+      const joinTask = lease.handoff((ownedInput) =>
+        this.#gateway.join(ownedInput, this.#pageUrl, activeNavigation.signal))
+      const joined = await joinTask
       if (this.#navigation !== navigation || navigation.signal.aborted || this.#disposed) {
         await joined.close()
         return
@@ -354,7 +385,13 @@ export class V2ReceiverController {
       this.#rootEntryCount = 0
       await this.#loadPage(root, 0, Object.freeze([root]))
     } catch (error) {
-      if (this.#navigation === navigation && !navigation.signal.aborted) this.#fail(error)
+      if (
+        navigation !== undefined &&
+        this.#navigation === navigation &&
+        !navigation.signal.aborted
+      ) this.#fail(error, lease)
+    } finally {
+      lease.release()
     }
   }
 
@@ -415,7 +452,7 @@ export class V2ReceiverController {
         ...this.#snapshot,
         phase: 'browsing',
         status: 'This directory could not be listed.',
-        error: publicError(error),
+        error: this.#publicError(error),
         breadcrumbs: this.#breadcrumbs(),
         directoryRetryable: retryable,
         canStart: this.#selectionAvailable() && this.#outputAvailable(),
@@ -515,7 +552,7 @@ export class V2ReceiverController {
           state: 'error',
           fileId: active.entry.idText,
           name: active.entry.name,
-          message: publicError(error),
+          message: this.#publicError(error),
         }),
       })
     }
@@ -560,7 +597,7 @@ export class V2ReceiverController {
           ...this.#snapshot,
           phase: 'browsing',
           status: isAbortError(error) ? 'Output selection was cancelled.' : 'Choose an output destination and try again.',
-          error: isAbortError(error) ? null : publicError(error),
+          error: isAbortError(error) ? null : this.#publicError(error),
           canStart: this.#selectionAvailable() && this.#outputAvailable(),
         })
       } else {
@@ -638,25 +675,23 @@ export class V2ReceiverController {
     ) === true
   }
 
-  #fail(error: unknown): void {
+  #fail(error: unknown, lease?: V2CapabilityJoinLease): void {
     this.#publish({
       ...this.#snapshot,
       phase: 'failed',
       status: 'The receiver stopped safely.',
-      error: publicError(error),
+      error: lease?.publicError(error) ?? this.#publicError(error),
     })
+  }
+
+  #publicError(error: unknown): string {
+    return this.#capabilityLifecycle.publicError(error)
   }
 
   #publish(snapshot: V2ReceiverSnapshot): void {
     this.#snapshot = Object.freeze(snapshot)
     for (const listener of this.#listeners) listener()
   }
-}
-
-function publicError(error: unknown): string {
-  return error instanceof Error && error.message.length > 0
-    ? error.message
-    : 'An unexpected receiver error occurred.'
 }
 
 function previewSnapshot(

@@ -27,8 +27,8 @@ WBEM state are not validation gates.
 | `make vectors` | Regenerate and compare the canonical Go-to-TypeScript protocol vectors. |
 | `make web` | Run ESLint, the TypeScript/Vite build, and Vitest. |
 | `make e2e` | Run the single critical sender/relay/receiver process path. |
-| `make browser` | Run the direct current-platform Chromium micro-directory smoke. |
-| `make browser-weekly` | Run Chromium smoke and all scheduled browser scenarios serially on the current host. |
+| `make browser` | Run the direct current-platform Chromium relay smoke, then every non-periodic browser contract in the `chromium-short` project. |
+| `make browser-weekly` | Run `make browser` once, then the Firefox/WebKit contract projects, Chromium periodic contracts, and scheduled product scenarios serially on the current host. |
 | `make long-go` | Run named E2E/catalog/output-runtime long suites and native integration packages. |
 | `make core-release` | Validate an extracted, independently consumable core module. |
 
@@ -37,6 +37,14 @@ Runtime and protocol failures run first because they carry the highest product r
 the sweep so late static diagnostics do not delay test feedback. Use `make check` or a focused target while
 iterating. `browser-weekly`, `long-go`, `ci-full`, and `core-release` intentionally stay outside ordinary
 local CI. The local p95 goal is at most 10 minutes.
+
+Browser component ownership is filename-driven by `web/playwright.contract.config.ts`: `chromium-short`
+matches non-periodic `web/test/browser/**/*.spec.ts`, Firefox/WebKit match only `*.cross-browser.spec.ts`,
+and `chromium-periodic` matches only `*.periodic.spec.ts`. The platform `browser` script invokes the
+Chromium smoke before `test:browser:contract:short`; the weekly supplement invokes the other contract
+projects plus the existing progressive, network, interop, and product cross-browser owners.
+The contract config accepts `WINDSHARE_CONTRACT_PORT` for isolated concurrent local runs; the platform
+scripts reserve separate loopback ports for short, cross-browser, and periodic projects.
 
 A dated, machine-specific diagnostic is available in the
 [local test timing snapshot](local-test-timing-2026-08-05.md). It records test ownership gaps and outliers,
@@ -57,7 +65,7 @@ superseded work for the same ref, and starts seven fixed independent jobs:
 | `go-core` | Core vet/build, one Linux short race/coverage sweep, coverage verdict, and vectors. |
 | `web` | Frozen Web install followed by lint, build, and Vitest. |
 | `go-e2e` | The critical Linux process E2E once. |
-| `browser-chromium` | The relay-only Linux Chromium micro-directory product smoke once. |
+| `browser-chromium` | The relay-only Linux Chromium smoke and `chromium-short` component contracts once. |
 | `windows-native` | Windows vet/build and root/core short tests, without duplicate coverage. |
 
 Every job has a 10-minute hang fuse, no dependency on another job, and reports its own result directly.
@@ -67,19 +75,20 @@ goal is at most 6 minutes, measured from native GitHub Actions timestamps.
 ## Automatic weekly suites
 
 The [weekly workflow](../.github/workflows/weekly.yml) runs automatically every Sunday at 04:23 UTC;
-manual dispatch is retained only for diagnosis. Its ten independent jobs own the expensive product
+manual dispatch is retained only for diagnosis. Its eleven independent jobs own the expensive product
 coverage that does not belong in ordinary CI:
 
 - Linux and Windows integration stability;
 - named Go E2E/catalog long suites and Linux/Windows native output durability;
 - Chromium progressive catalog paging and separate direct/TURN relay-cut switching;
-- D1/D2 browser/Pion interoperability, Firefox/WebKit smoke, and one Windows Chromium process smoke.
+- D1/D2 browser/Pion interoperability, Firefox/WebKit product smoke/hot-switch and component contracts,
+  Chromium periodic component contracts, and one Windows Chromium process smoke.
 
 Each job has a 10-minute hang fuse. Long Go tests use native `testing.Short()` boundaries and stable
 `TestLong...` names, so every short-mode skip has an automatic owner rather than a manual-only suite.
 `make browser-weekly` provides current-host reproduction of the browser scenarios without pretending to
 reproduce GitHub's Linux/Windows matrix. `make ci-full` combines that coverage with ordinary CI and
-`make long-go`, deduplicating the Chromium smoke already owned by ordinary CI.
+`make long-go`, deduplicating the Chromium smoke and short contracts already owned by ordinary CI.
 
 ## Core candidate release
 

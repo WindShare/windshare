@@ -1,431 +1,110 @@
-import { expect, test } from '@playwright/test'
-import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
+import { expect, test, type Page } from '@playwright/test'
 
-interface BrowserOutputWindow extends Window {
-  showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>
-  showSaveFilePicker?: (
-    options?: { readonly suggestedName?: string },
-  ) => Promise<FileSystemFileHandle>
+import {
+  requireOriginPrivateStorage,
+} from './browser-storage-support'
+
+interface DurableRecoveryHarness {
+  createCheckpoint(outputSessionId: string): Promise<readonly string[]>
+  reopenCheckpoint(outputSessionId: string): Promise<{
+    readonly ranges: readonly string[]
+    readonly coversPrefix: boolean
+    readonly durability: string
+  }>
+  createPersistentHandleCheckpoint(outputSessionId: string): Promise<readonly string[]>
+  reopenPersistentHandleCheckpoint(outputSessionId: string): Promise<readonly string[]>
+  holdOutputSession(outputSessionId: string): Promise<void>
+  competingSessionError(outputSessionId: string): Promise<string | undefined>
+  releaseOutputSession(outputSessionId: string): Promise<void>
+  completePersistentHandleOutput(outputSessionId: string): Promise<{
+    readonly bytes: readonly number[]
+    readonly metadataRetired: boolean
+  }>
+  completeOriginPrivateOutput(outputSessionId: string): Promise<{
+    readonly exported: readonly number[]
+    readonly reopenedRanges: readonly string[]
+  }>
 }
 
-const SINGLE_FILE_NAME = 'portable-matrix.bin'
-const ZIP_FILE_NAME = 'portable-matrix.zip'
-const SINGLE_BYTES = Uint8Array.of(0, 1, 2, 127, 128, 254, 255)
-const ZIP_MEMBER_BYTES = Uint8Array.of(9, 8, 7, 6, 5)
-const FULL_PORTABLE_STRESS_BYTES = 64 * 1024 * 1024
-const CROSS_ENGINE_PORTABLE_STRESS_BYTES = 4 * 1024 * 1024
+const HARNESS_PATH = '/test/browser/durable-recovery-harness.ts'
 
-test('reports all four output capabilities exactly as the active engine exposes them', async ({
+test.beforeEach(async ({ browserName, page }) => {
+  await page.goto('/')
+  await requireOriginPrivateStorage(page, browserName)
+})
+
+test('OPFS journal is revalidated after a page reload', async ({ page }) => {
+  await page.goto('/')
+  const outputSessionId = `reload-${crypto.randomUUID()}`
+  expect(await createCheckpoint(page, outputSessionId)).toEqual(['0:3'])
+
+  await page.reload()
+  expect(await reopenCheckpoint(page, outputSessionId)).toEqual({
+    ranges: ['0:3'],
+    coversPrefix: true,
+    durability: 'ProcessRestart',
+  })
+})
+
+test('a persisted FSA-like handle is reopened and identity-checked after reload', async ({ page }) => {
+  await page.goto('/')
+  const outputSessionId = `handle-${crypto.randomUUID()}`
+  const created = await callHarness<readonly string[]>(
+    page,
+    outputSessionId,
+    'createPersistentHandleCheckpoint',
+  )
+  expect(created).toEqual(['0:3'])
+
+  await page.reload()
+  const reopened = await callHarness<readonly string[]>(
+    page,
+    outputSessionId,
+    'reopenPersistentHandleCheckpoint',
+  )
+  expect(reopened).toEqual(['0:3'])
+})
+
+test('one output session cannot publish competing checkpoint heads from two pages', async ({
+  context,
   page,
 }) => {
   await page.goto('/')
-  const capabilities = await page.evaluate(async () => {
-    const modulePath = '/src/ui/v2-output.ts'
-    const output = await import(modulePath) as typeof import('../../src/ui/v2-output')
-    const runtime = window as BrowserOutputWindow
-    return {
-      reported: output.browserV2OutputCapabilities(
-        runtime as unknown as import('../../src/ui/v2-output').V2BrowserOutputWindow,
-      ),
-      nativeDirectory: typeof runtime.showDirectoryPicker === 'function',
-      nativeSave: typeof runtime.showSaveFilePicker === 'function',
-      portableDownload: typeof Blob === 'function' &&
-        typeof WritableStream === 'function' &&
-        typeof URL.createObjectURL === 'function' &&
-        typeof URL.revokeObjectURL === 'function' &&
-        document.documentElement !== null,
-      originPrivateStaging: typeof (
-        navigator.storage as (StorageManager & { getDirectory?: unknown }) | undefined
-      )?.getDirectory === 'function',
-    }
-  })
-
-  expect(capabilities.reported).toEqual({
-    nativeDirectory: capabilities.nativeDirectory,
-    nativeSave: capabilities.nativeSave,
-    portableDownload: capabilities.portableDownload,
-    originPrivateStaging: capabilities.originPrivateStaging,
-  })
-  expect(capabilities.reported.portableDownload).toBe(true)
+  const competitor = await context.newPage()
+  await competitor.goto('/')
+  const outputSessionId = `lease-${crypto.randomUUID()}`
+  await callHarness<void>(page, outputSessionId, 'holdOutputSession')
+  expect(await callHarness<string | undefined>(
+    competitor,
+    outputSessionId,
+    'competingSessionError',
+  )).toBe('InvalidStateError')
+  await callHarness<void>(page, outputSessionId, 'releaseOutputSession')
+  await competitor.close()
 })
 
-test('runs the native picker adapter synchronously inside a real browser click handler', async ({
-  page,
-}) => {
+test('completed persistent output keeps bytes but retires journal and handle metadata', async ({ page }) => {
   await page.goto('/')
-  await page.evaluate(async () => {
-    const modulePath = '/src/ui/v2-output.ts'
-    const output = await import(modulePath) as typeof import('../../src/ui/v2-output')
-    const events: string[] = []
-    Object.assign(window, { __windsharePickerEvents: events })
-
-    const button = document.createElement('button')
-    button.textContent = 'Acquire output'
-    button.addEventListener('click', () => {
-      events.push('handler')
-      const runtime = {
-        navigator: window.navigator,
-        showSaveFilePicker: async () => {
-          events.push('picker')
-          return {
-            createWritable: async () => new WritableStream<Uint8Array>(),
-          } as FileSystemFileHandle
-        },
-      } as unknown as import('../../src/ui/v2-output').V2BrowserOutputWindow
-      const acquired = output.acquireBrowserV2Output(
-        'download',
-        { kind: 'KnownSingleFile', suggestedName: 'matrix.bin', exactBytes: 1n },
-        runtime,
-      )
-      events.push('returned')
-      acquired.then(
-        () => events.push('resolved'),
-        () => events.push('rejected'),
-      )
-    })
-    document.body.append(button)
-  })
-
-  const button = page.getByRole('button', { name: 'Acquire output' })
-  await expect(button).toHaveCount(1)
-  await button.click()
-  await expect.poll(
-    () => page.evaluate(() => (
-      window as Window & { __windsharePickerEvents?: readonly string[] }
-    ).__windsharePickerEvents),
-  ).toEqual(['handler', 'picker', 'returned', 'resolved'])
-})
-
-test('downloads exact single-file bytes without a StorageManager through the production portable backend', async ({ page }) => {
-  await page.goto('/')
-  const downloadPromise = page.waitForEvent('download')
-  await page.evaluate(async ({ bytes, name }) => {
-    const modulePath = '/src/ui/v2-output.ts'
-    const output = await import(modulePath) as typeof import('../../src/ui/v2-output')
-    const portableWindow = portableWindowWithoutNativeSave()
-    const acquired = await output.acquireBrowserV2Output(
-      'download',
-      { kind: 'KnownSingleFile', suggestedName: name, exactBytes: BigInt(bytes.length) },
-      portableWindow,
-    )
-    if (acquired.kind !== 'SingleFileStream') {
-      throw new Error(`Expected portable single-file stream, received ${acquired.kind}`)
-    }
-    const session = await output.openBrowserV2OutputSession(acquired, 'portable-single')
-    const begun = await session.beginFile({
-      source: { shareInstance: 'share', fileId: 'single', fileRevision: 'revision' },
-      path: [name],
-      exactSize: BigInt(bytes.length),
-    })
-    await begun.transaction.writeRange(0n, Uint8Array.from(bytes))
-    await begun.transaction.commit()
-    await session.finishJob({
-      status: 'Succeeded',
-      failures: [],
-      failureCount: 0,
-      omittedFailureCount: 0,
-    }, new AbortController().signal)
-
-    function portableWindowWithoutNativeSave():
-    import('../../src/ui/v2-output').V2BrowserOutputWindow {
-      return {
-        Blob: window.Blob,
-        WritableStream: window.WritableStream,
-        URL: window.URL,
-        document: window.document,
-        navigator: {} as Navigator,
-        setTimeout: window.setTimeout.bind(window),
-      }
-    }
-  }, { bytes: [...SINGLE_BYTES], name: SINGLE_FILE_NAME })
-
-  const download = await downloadPromise
-  expect(download.suggestedFilename()).toBe(SINGLE_FILE_NAME)
-  expect(await readDownload(download)).toEqual(Buffer.from(SINGLE_BYTES))
-})
-
-test('downloads a valid exact-content ZIP through the production portable backend', async ({ page }) => {
-  await page.goto('/')
-  const downloadPromise = page.waitForEvent('download')
-  await page.evaluate(async ({ bytes, name }) => {
-    const modulePath = '/src/ui/v2-output.ts'
-    const output = await import(modulePath) as typeof import('../../src/ui/v2-output')
-    const acquired = await output.acquireBrowserV2Output(
-      'download',
-      {
-        kind: 'Progressive',
-        terminalBytes: BigInt(bytes.length),
-        suggestedArchiveName: name,
-      },
-      {
-        Blob: window.Blob,
-        WritableStream: window.WritableStream,
-        URL: window.URL,
-        document: window.document,
-        navigator: window.navigator,
-        setTimeout: window.setTimeout.bind(window),
-      },
-    )
-    if (acquired.kind !== 'ZipStream') {
-      throw new Error(`Expected portable ZIP stream, received ${acquired.kind}`)
-    }
-    const session = await output.openBrowserV2OutputSession(acquired, 'portable-zip')
-    const directory = { path: ['tree'] }
-    await session.ensureDirectory(directory)
-    const begun = await session.beginFile({
-      source: { shareInstance: 'share', fileId: 'zip-member', fileRevision: 'revision' },
-      path: ['tree', 'payload.bin'],
-      exactSize: BigInt(bytes.length),
-    })
-    await begun.transaction.writeRange(0n, Uint8Array.from(bytes))
-    await begun.transaction.commit()
-    const signal = new AbortController().signal
-    await session.finalizeDirectory(directory, signal)
-    await session.finishJob({
-      status: 'Succeeded',
-      failures: [],
-      failureCount: 0,
-      omittedFailureCount: 0,
-    }, signal)
-  }, { bytes: [...ZIP_MEMBER_BYTES], name: ZIP_FILE_NAME })
-
-  const download = await downloadPromise
-  expect(download.suggestedFilename()).toBe(ZIP_FILE_NAME)
-  const archiveBytes = await readDownload(download)
-  const reader = new ZipReader(new Uint8ArrayReader(archiveBytes))
-  try {
-    const entries = await reader.getEntries()
-    expect(entries.map((entry) => entry.filename).sort()).toEqual([
-      'tree/',
-      'tree/payload.bin',
-    ])
-    const member = entries.find((entry) => entry.filename === 'tree/payload.bin')
-    if (member === undefined || member.directory) {
-      throw new Error('Portable ZIP member is missing')
-    }
-    expect(await member.getData(new Uint8ArrayWriter())).toEqual(ZIP_MEMBER_BYTES)
-  } finally {
-    await reader.close()
-  }
-})
-
-test('rejects a declared portable output above the production memory bound', async ({ page }) => {
-  await page.goto('/')
-  const result = await page.evaluate(async () => {
-    const outputPath = '/src/ui/v2-output.ts'
-    const portablePath = '/src/output/portable/browser-download.ts'
-    const output = await import(outputPath) as typeof import('../../src/ui/v2-output')
-    const portable = await import(portablePath) as typeof import(
-      '../../src/output/portable/browser-download'
-    )
-    try {
-      await output.acquireBrowserV2Output(
-        'download',
-        {
-          kind: 'KnownSingleFile',
-          suggestedName: 'too-large.bin',
-          exactBytes: BigInt(portable.PORTABLE_DOWNLOAD_MAXIMUM_BYTES) + 1n,
-        },
-        {
-          Blob: window.Blob,
-          WritableStream: window.WritableStream,
-          URL: window.URL,
-          document: window.document,
-          navigator: window.navigator,
-          setTimeout: window.setTimeout.bind(window),
-        },
-      )
-      return { name: '', message: '' }
-    } catch (error) {
-      return error instanceof DOMException
-        ? { name: error.name, message: error.message }
-        : { name: 'UnexpectedError', message: String(error) }
-    }
-  })
-
-  expect(result).toEqual({
-    name: 'NotSupportedError',
-    message: 'Portable browser downloads are limited to 64 MiB',
+  const outputSessionId = `complete-${crypto.randomUUID()}`
+  expect(await callHarness<{
+    readonly bytes: readonly number[]
+    readonly metadataRetired: boolean
+  }>(page, outputSessionId, 'completePersistentHandleOutput')).toEqual({
+    bytes: [1, 2, 3, 4, 5],
+    metadataRetired: true,
   })
 })
 
-test('streams one million ZIP members through the production writer and durable spool', async ({
-  browserName,
-  page,
-}) => {
-  // Other engines run the same production quota/fencing paths below; this single
-  // structural stress avoids tripling a deliberately million-entry browser gate.
-  test.skip(browserName !== 'chromium', 'The million-member structural stress runs once in Chromium')
-  test.setTimeout(120_000)
+test('completed OPFS output exports before exact-session staging cleanup', async ({ page }) => {
   await page.goto('/')
-  const result = await page.evaluate(async () => {
-    const probePath = '/test/browser/bounded-output-probe.ts'
-    const probe = await import(probePath) as typeof import('./bounded-output-probe')
-    return probe.probeMillionMemberZipWriter()
+  const outputSessionId = `opfs-complete-${crypto.randomUUID()}`
+  expect(await callHarness<{
+    readonly exported: readonly number[]
+    readonly reopenedRanges: readonly string[]
+  }>(page, outputSessionId, 'completeOriginPrivateOutput')).toEqual({
+    exported: [1, 2, 3, 4, 5],
+    reopenedRanges: [],
   })
-
-  expect(result).toMatchObject({
-    memberCount: 1_000_000,
-    closed: true,
-    afterClose: [0, 0],
-  })
-  expect(result.beforeClose[0]).toBeGreaterThan(1_000)
-  expect(result.beforeClose[1]).toBe(1)
-  expect(result.outputBytes).toBeGreaterThan(0)
-  expect(result.outputWrites).toBeGreaterThan(result.memberCount * 2)
-  expect(result.maximumWriteBytes).toBeLessThanOrEqual(256 * 1024)
-})
-
-test('bounds production ZIP assembly and rejects at the exact portable byte', async ({
-  browserName,
-  page,
-}) => {
-  test.setTimeout(120_000)
-  await page.goto('/')
-  const maximumBytes = browserName === 'chromium'
-    ? FULL_PORTABLE_STRESS_BYTES
-    : CROSS_ENGINE_PORTABLE_STRESS_BYTES
-  const result = await page.evaluate(async (byteLimit) => {
-    const portablePath = '/src/output/portable/browser-download.ts'
-    const zipPath = '/src/output/streams/streaming-zip.ts'
-    const spoolPath = '/src/output/streams/zip-spool.ts'
-    const portable = await import(portablePath) as typeof import(
-      '../../src/output/portable/browser-download'
-    )
-    const zip = await import(zipPath) as typeof import(
-      '../../src/output/streams/streaming-zip'
-    )
-    const spoolModule = await import(spoolPath) as typeof import(
-      '../../src/output/streams/zip-spool'
-    )
-    const databaseName = `million-zip-${crypto.randomUUID()}`
-    let maximumParts = 0
-    let rejectionBufferedBytes = -1
-    let rejectedWriteBytes = -1
-    let published = false
-    const output = portable.createBoundedPortableDownloadStream('million.zip', {
-      createBlob: (parts) => new Blob([...parts]),
-      publish: () => { published = true },
-      observeAssembly: (snapshot) => {
-        maximumParts = Math.max(maximumParts, snapshot.retainedParts)
-        if (snapshot.rejectedWriteBytes > 0) {
-          rejectionBufferedBytes = snapshot.bufferedBytes
-          rejectedWriteBytes = snapshot.rejectedWriteBytes
-        }
-      },
-    }, byteLimit)
-    const archive = new zip.StreamingZipArchiveWriter(
-      output,
-      new spoolModule.IndexedDbZipCentralDirectorySpool({ databaseName }),
-    )
-    let committed = 0
-    let failureName = ''
-    try {
-      for (let index = 0; index < 1_000_000; index += 1) {
-        const member = await archive.beginFile({ path: [`f${index.toString(36)}`], exactSize: 0n })
-        await member.close()
-        committed += 1
-      }
-      await archive.close(new AbortController().signal)
-    } catch (error) {
-      failureName = error instanceof DOMException ? error.name : String(error)
-      await archive.abort(error).catch(() => undefined)
-    }
-
-    const encoder = new TextEncoder()
-    let expectedCommitted = 0
-    let expectedBufferedBytes = 0
-    let expectedRejectedWriteBytes = 0
-    for (let index = 0; index < 1_000_000; index += 1) {
-      const nameBytes = encoder.encode(`f${index.toString(36)}`).byteLength
-      const localHeaderBytes = 50 + nameBytes
-      if (localHeaderBytes > byteLimit - expectedBufferedBytes) {
-        expectedRejectedWriteBytes = localHeaderBytes
-        break
-      }
-      expectedBufferedBytes += localHeaderBytes
-      const descriptorBytes = 24
-      if (descriptorBytes > byteLimit - expectedBufferedBytes) {
-        expectedRejectedWriteBytes = descriptorBytes
-        break
-      }
-      expectedBufferedBytes += descriptorBytes
-      expectedCommitted += 1
-    }
-
-    const database = await openDatabase(databaseName)
-    const transaction = database.transaction(
-      ['central-directory-chunks', 'central-directory-namespaces'],
-      'readonly',
-    )
-    const chunkCount = await requestCount(transaction.objectStore('central-directory-chunks'))
-    const namespaceCount = await requestCount(
-      transaction.objectStore('central-directory-namespaces'),
-    )
-    await transactionDone(transaction)
-    database.close()
-    await deleteDatabase(databaseName)
-    return {
-      committed,
-      expectedCommitted,
-      failureName,
-      maximumParts,
-      maximumAllowedParts: Math.ceil(byteLimit / portable.PORTABLE_DOWNLOAD_PART_BYTES),
-      rejectionBufferedBytes,
-      expectedBufferedBytes,
-      rejectedWriteBytes,
-      expectedRejectedWriteBytes,
-      published,
-      chunkCount,
-      namespaceCount,
-      byteLimit,
-    }
-
-    function openDatabase(name: string): Promise<IDBDatabase> {
-      return new Promise((resolve, reject) => {
-        const request = indexedDB.open(name)
-        request.addEventListener('success', () => resolve(request.result), { once: true })
-        request.addEventListener('error', () => reject(request.error), { once: true })
-      })
-    }
-
-    function requestCount(store: IDBObjectStore): Promise<number> {
-      return new Promise((resolve, reject) => {
-        const request = store.count()
-        request.addEventListener('success', () => resolve(request.result), { once: true })
-        request.addEventListener('error', () => reject(request.error), { once: true })
-      })
-    }
-
-    function transactionDone(transaction: IDBTransaction): Promise<void> {
-      return new Promise((resolve, reject) => {
-        transaction.addEventListener('complete', () => resolve(), { once: true })
-        transaction.addEventListener('error', () => reject(transaction.error), { once: true })
-        transaction.addEventListener('abort', () => reject(transaction.error), { once: true })
-      })
-    }
-
-    function deleteDatabase(name: string): Promise<void> {
-      return new Promise((resolve, reject) => {
-        const request = indexedDB.deleteDatabase(name)
-        request.addEventListener('success', () => resolve(), { once: true })
-        request.addEventListener('error', () => reject(request.error), { once: true })
-      })
-    }
-  }, maximumBytes)
-
-  expect(result).toMatchObject({
-    failureName: 'QuotaExceededError',
-    published: false,
-    chunkCount: 0,
-    namespaceCount: 0,
-  })
-  expect(result.committed).toBe(result.expectedCommitted)
-  expect(result.rejectionBufferedBytes).toBe(result.expectedBufferedBytes)
-  expect(result.rejectedWriteBytes).toBe(result.expectedRejectedWriteBytes)
-  expect(result.maximumParts).toBeLessThanOrEqual(result.maximumAllowedParts)
-  expect(result.byteLimit).toBe(maximumBytes)
-  expect(result.committed).toBeLessThan(1_000_000)
 })
 
 test('serializes OPFS quota across independent realms and reclaims an expired crash lease', async ({ context, page }) => {
@@ -692,8 +371,8 @@ test('sweeps expired ZIP spool namespaces after reload without deleting a live w
 test('fails closed at IndexedDB blocked and versionchange boundaries', async ({ page }) => {
   await page.goto('/')
   const result = await page.evaluate(async () => {
-    const probePath = '/test/browser/idb-failclosed-probe.ts'
-    const probe = await import(probePath) as typeof import('./idb-failclosed-probe')
+    const probePath = '/test/browser/durable-recovery-idb-probe.ts'
+    const probe = await import(probePath) as typeof import('./durable-recovery-idb-probe')
     return probe.probeIndexedDbFailureBoundaries()
   })
 
@@ -988,30 +667,31 @@ test('converges marker-owned published OPFS staging after cleanup failure and re
   expect(recovered).toEqual({ recoveredRangeCount: 0 })
 })
 
-test('native picker permission prompt has an explicit headed-machine evidence boundary', async ({
-  browserName,
-  page,
-}) => {
-  await page.goto('/')
-  const available = await page.evaluate(
-    () => typeof (window as BrowserOutputWindow).showSaveFilePicker === 'function',
-  )
-  expect(typeof available).toBe('boolean')
-  // Unsupported engines have no native permission prompt to exercise.
-  test.skip(!available, `${browserName} does not expose showSaveFilePicker`)
-  // Native destination selection is an explicitly separate headed manual gate.
-  test.skip(
-    true,
-    'Headless Playwright cannot safely choose an external native destination; run the headed picker probe manually',
-  )
-})
+async function createCheckpoint(page: Page, outputSessionId: string): Promise<readonly string[]> {
+  return page.evaluate(async ({ path, sessionId }) => {
+    const harness = (await import(path)) as DurableRecoveryHarness
+    return harness.createCheckpoint(sessionId)
+  }, { path: HARNESS_PATH, sessionId: outputSessionId })
+}
 
-async function readDownload(
-  download: import('@playwright/test').Download,
-): Promise<Buffer> {
-  const stream = await download.createReadStream()
-  if (stream === null) throw new Error('Playwright download stream is unavailable')
-  const chunks: Buffer[] = []
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk))
-  return Buffer.concat(chunks)
+async function reopenCheckpoint(
+  page: Page,
+  outputSessionId: string,
+): Promise<Awaited<ReturnType<DurableRecoveryHarness['reopenCheckpoint']>>> {
+  return page.evaluate(async ({ path, sessionId }) => {
+    const harness = (await import(path)) as DurableRecoveryHarness
+    return harness.reopenCheckpoint(sessionId)
+  }, { path: HARNESS_PATH, sessionId: outputSessionId })
+}
+
+async function callHarness<T>(
+  page: Page,
+  outputSessionId: string,
+  operation: keyof DurableRecoveryHarness,
+): Promise<T> {
+  return page.evaluate(async ({ path, sessionId, method }) => {
+    const harness = (await import(path)) as DurableRecoveryHarness
+    const call = harness[method] as (id: string) => Promise<unknown>
+    return call(sessionId) as Promise<T>
+  }, { path: HARNESS_PATH, sessionId: outputSessionId, method: operation })
 }

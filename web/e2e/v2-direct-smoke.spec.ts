@@ -10,8 +10,11 @@ import {
   capabilityUrl,
   DirectProductStack,
 } from './fixtures/direct-product-stack'
+import {
+  createCapabilityRedactor,
+  withCapabilityRedaction,
+} from './fixtures/capability-redactor'
 
-const SCENARIO_ID = 'chromium-micro-directory'
 const DIRECTORY_NAME = 'micro-share'
 const FILE_NAME = 'pixel.png'
 const FILE_BYTES = Uint8Array.from(Buffer.from(
@@ -21,9 +24,11 @@ const FILE_BYTES = Uint8Array.from(Buffer.from(
 const COMPLETE_STATUS = 'Transfer complete.'
 const DOWNLOAD_TIMEOUT_MILLISECONDS = 20_000
 
-test('receives a tiny directory from the real sender and relay', async ({ page }, testInfo) => {
-  const stack = new DirectProductStack(SCENARIO_ID)
+test('receives a tiny directory from the real sender and relay', async ({ browserName, page }, testInfo) => {
+  const scenarioId = microDirectoryScenarioId(browserName)
+  const stack = new DirectProductStack(scenarioId)
   const pageErrors: string[] = []
+  let redactor: ReturnType<typeof createCapabilityRedactor> | undefined
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await stack.start()
   try {
@@ -49,7 +54,17 @@ test('receives a tiny directory from the real sender and relay', async ({ page }
         })
       }
     })
-    await page.goto(capabilityUrl(share))
+    const navigationUrl = capabilityUrl(share)
+    redactor = createCapabilityRedactor({
+      completeUrl: navigationUrl,
+      fragment: new URL(navigationUrl).hash,
+      separateKey: share.key,
+    })
+    await withCapabilityRedaction(() => page.goto(navigationUrl), {
+      completeUrl: navigationUrl,
+      fragment: new URL(navigationUrl).hash,
+      separateKey: share.key,
+    })
 
     await expect(page.getByRole('heading', { name: 'Browse and save shared files' })).toBeVisible()
     await expect(page.getByRole('status')).toHaveText('Choose what to receive.')
@@ -82,21 +97,45 @@ test('receives a tiny directory from the real sender and relay', async ({ page }
       error: document.querySelector('[role="alert"]')?.textContent ?? null,
     })).catch(() => ({ status: null, error: null }))
     await testInfo.attach('direct-stack-diagnostic', {
-      body: JSON.stringify({
+      body: redactor?.text({
         component: 'browser-direct-smoke',
-        scenarioId: SCENARIO_ID,
+        scenarioId,
         milestone: 'failed',
         pageErrors,
         ...pageDiagnostic,
         processes: stack.diagnostic(),
-      }, null, 2),
+      }) ?? JSON.stringify({
+        component: 'browser-direct-smoke',
+        scenarioId,
+        milestone: 'failed',
+        pageErrors,
+        ...pageDiagnostic,
+        processes: stack.diagnostic(),
+      }),
       contentType: 'application/json',
+    }).catch(() => undefined)
+    const message = error instanceof Error ? error.message : String(error)
+    // Attach only the recursively redacted snapshot; Playwright must never
+    // retain the original capability-bearing assertion as an Error.cause.
+    throw new Error(redactor?.redactText(message) ?? message, {
+      // eslint-disable-next-line preserve-caught-error -- safe cause is the only permitted boundary value
+      cause: redactor?.value(error),
     })
-    throw error
   } finally {
-    await stack.dispose()
+    try {
+      await stack.dispose()
+    } finally {
+      redactor?.clear()
+    }
   }
 })
+
+function microDirectoryScenarioId(browserName: string): string {
+  if (browserName !== 'chromium' && browserName !== 'firefox' && browserName !== 'webkit') {
+    throw new TypeError(`Unsupported browser engine for direct smoke: ${browserName}`)
+  }
+  return `${browserName}-micro-directory`
+}
 
 async function assertDirectoryDownload(download: Download): Promise<void> {
   expect(download.suggestedFilename()).toBe('windshare.zip')

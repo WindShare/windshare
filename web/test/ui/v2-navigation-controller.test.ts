@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
-import { V2ReceiverController } from '../../src/ui/v2-controller'
+import { captureV2Location, V2ReceiverController } from '../../src/ui/v2-controller'
 import type {
   V2BrowseDirectory,
   V2BrowsePage,
@@ -116,6 +116,66 @@ describe('v2 receiver child navigation publication', () => {
       'Second',
     ])
     expect(controller.getSnapshot().rows.map((item) => item.id)).toEqual(['current'])
+    await controller.dispose()
+  })
+})
+
+describe('v2 receiver capability lifecycle', () => {
+  it('erases the location before publishing the location-cleared milestone', () => {
+    const completeUrl = 'https://receiver.invalid/s/share#actual-location-key'
+    const events: string[] = []
+    const history = {
+      state: { route: 'receiver' },
+      replaceState: (_state: unknown, _unused: string, url: URL | string | null | undefined) => {
+        events.push('history-replaced')
+        expect(new URL(String(url)).hash).toBe('')
+      },
+    }
+    const windowPort = {
+      location: { href: completeUrl },
+      history,
+    } as unknown as Window
+
+    const captured = captureV2Location(windowPort, {
+      onSecurityMilestone: (milestone) => events.push(milestone),
+    })
+
+    expect(events).toEqual(['history-replaced', 'location-cleared'])
+    expect(captured).toEqual({
+      capabilityInput: completeUrl,
+      pageUrl: 'https://receiver.invalid/s/share',
+    })
+    expect(Object.isFrozen(captured)).toBe(true)
+  })
+
+  it('publishes key clearing synchronously and redacts nested gateway failures before UI state', async () => {
+    const key = 'actual-separate-key-for-this-invocation'
+    const milestones: string[] = []
+    const gatewayInputs: string[] = []
+    const gateway = {
+      join: async (input: string) => {
+        gatewayInputs.push(input)
+        throw new AggregateError(
+          [new Error(`nested capability ${input}`)],
+          `gateway rejected ${input}`,
+        )
+      },
+    } as unknown as V2BrowserReceiverGateway
+    const controller = new V2ReceiverController(gateway, {
+      onSecurityMilestone: (milestone) => milestones.push(milestone),
+    })
+    controller.initialize({ capabilityInput: null, pageUrl: 'https://receiver.invalid/s/share' })
+
+    controller.submitKey(key)
+    expect(milestones).toEqual(['key-cleared'])
+    expect(gatewayInputs).toEqual([])
+    await turns()
+
+    const failure = controller.getSnapshot()
+    expect(gatewayInputs).toEqual([key])
+    expect(failure.phase).toBe('failed')
+    expect(failure.error).toContain('[separate-key redacted]')
+    expect(failure.error).not.toContain(key)
     await controller.dispose()
   })
 })

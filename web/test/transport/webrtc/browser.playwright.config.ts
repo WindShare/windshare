@@ -5,7 +5,9 @@ const INTEROP_HARD_TIMEOUT_MILLISECONDS = 120_000
 
 export default defineConfig({
   testDir: '.',
-  testMatch: ['browser.spec.ts', 'pion-interop.spec.ts'],
+  // Native API close/configuration semantics live beside the Pion adapter
+  // contract; fake-channel protocol and backpressure semantics stay in Vitest.
+  testMatch: ['pion-interop.spec.ts'],
   outputDir: '../../../test-results/pion-interop',
   fullyParallel: false,
   forbidOnly: true,

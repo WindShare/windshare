@@ -21,10 +21,8 @@ import { createSignedRootCollisionFixture } from '../catalog/signed-root-collisi
 import { runSignedCatalogOwnershipProbe } from '../catalog/signed-catalog-ownership-probe'
 
 const LEGACY_DATABASE_VERSION = 3
-const CURRENT_DATABASE_VERSION = 5
 const DIRECTORY_STORE = 'committed-directories'
 const PAGE_STORE = 'catalog-pages'
-const BUDGET_STORE = 'catalog-budget'
 const LEGACY_NODE_STORE = 'catalog-node-owners'
 const LEGACY_NAME_STORE = 'catalog-name-owners'
 const LEGACY_SENTINEL_STORE = 'legacy-sentinel'
@@ -509,37 +507,40 @@ export async function probeEvictionLifecycleRecovery(): Promise<Readonly<Record<
   }
 }
 
-export async function probeSchemaReset(): Promise<Readonly<Record<string, unknown>>> {
-  const databaseName = uniqueDatabaseName('schema')
+export async function probeIncompatibleDatabaseRebuild(): Promise<Readonly<Record<string, boolean>>> {
+  const databaseName = uniqueDatabaseName('incompatible-rebuild')
   const legacy = await openLegacyDatabase(databaseName)
+  // The legacy stores intentionally use a different ownership model. Closing the
+  // connection lets the production opener perform its fail-closed destructive
+  // upgrade instead of trying to interpret records from that model.
   legacy.close()
-  const store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
-  store.close()
 
-  const database = await openCurrentDatabase(databaseName)
+  let store: IndexedDbV2CatalogPageStore | undefined
+  let reopened: IndexedDbV2CatalogPageStore | undefined
   try {
-    const transaction = database.transaction([DIRECTORY_STORE, PAGE_STORE, BUDGET_STORE], 'readonly')
-    const directories = transaction.objectStore(DIRECTORY_STORE)
-    const pages = transaction.objectStore(PAGE_STORE)
-    const budgets = transaction.objectStore(BUDGET_STORE)
-    const result = Object.freeze({
-      version: database.version,
-      storeNames: Array.from(database.objectStoreNames),
-      directoryKeyPath: directories.keyPath,
-      directoryIndexNames: Array.from(directories.indexNames),
-      pageKeyPath: pages.keyPath,
-      pageIndexNames: Array.from(pages.indexNames),
-      budgetKeyPath: budgets.keyPath,
-      budgetIndexNames: Array.from(budgets.indexNames),
-      directoryRecords: await requestResult(directories.count()),
-      pageRecords: await requestResult(pages.count()),
-      budgetRecords: await requestResult(budgets.count()),
-      currentVersion: CURRENT_DATABASE_VERSION,
+    store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+    const rebuiltPage = page(0, 'rebuilt-root', [entry('legacy-node', 'legacy-name')])
+    await store.stage(rebuiltPage)
+    await store.commit({ ...directory('rebuilt-root'), entryCount: 1 })
+    const committed = await store.loadDirectory('rebuilt-root')
+    const oldOwnershipNotReused = await store.loadDirectory('legacy') === undefined
+    store.close()
+    store = undefined
+
+    reopened = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+    const reopenedDirectory = await reopened.loadDirectory('rebuilt-root')
+    const reopenedPage = reopenedDirectory === undefined
+      ? undefined
+      : await reopened.loadPage(reopenedDirectory, 0)
+    return Object.freeze({
+      oldOwnershipNotReused:
+        oldOwnershipNotReused && reopenedPage?.entries[0]?.idText === 'legacy-node',
+      rebuiltTransactionCommitted: committed !== undefined,
+      rebuiltTransactionReopened: reopenedPage?.entries[0]?.name === 'legacy-name',
     })
-    await waitForIndexedDbTransaction(transaction)
-    return result
   } finally {
-    database.close()
+    reopened?.close()
+    store?.close()
     await deleteDatabase(databaseName)
   }
 }

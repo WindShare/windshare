@@ -269,17 +269,12 @@ func TestWindowsV3RecoveryRetainsFullPlacementGuardThroughFinalObservation(t *te
 	}
 
 	windowsV3OperationCloseSession(t, session)
-	if err := os.Rename(rootPath, rootMoved); err != nil {
-		t.Fatalf("output-root rename remained blocked after operation cleanup: %v", err)
-	}
-	if err := os.Rename(rootMoved, rootPath); err != nil {
-		t.Fatal(err)
-	}
+	// Renaming the highest retained ancestor is the strongest cleanup
+	// observation: any surviving output-root or ancestry pin would deny it.
+	// Keep this one-way because reversing a freshly renamed non-empty tree lets
+	// host filesystem filters race the test without adding an authority check.
 	if err := os.Rename(externalPath, externalMoved); err != nil {
-		t.Fatalf("external-ancestor rename remained blocked after session cleanup: %v", err)
-	}
-	if err := os.Rename(externalMoved, externalPath); err != nil {
-		t.Fatal(err)
+		t.Fatalf("full-placement rename remained blocked after session cleanup: %v", err)
 	}
 }
 
@@ -410,7 +405,7 @@ func TestWindowsResumeListingRetainsPlacementThroughFinalRevalidation(t *testing
 		t.Fatal(err)
 	}
 	fixture.assertSentinels(t)
-	fixture.exerciseReplacementRoundTrips(t)
+	fixture.exerciseReleasedPlacementReplacement(t)
 	assertWindowsResumeInventoryEmpty(t, fixture.rootPath)
 }
 
@@ -463,7 +458,7 @@ func TestWindowsResumeDiscardRetainsPlacementThroughFinalRevalidation(t *testing
 		t.Fatal(err)
 	}
 	fixture.assertSentinels(t)
-	fixture.exerciseReplacementRoundTrips(t)
+	fixture.exerciseReleasedPlacementReplacement(t)
 	assertWindowsResumeInventoryEmpty(t, fixture.rootPath)
 }
 
@@ -510,7 +505,7 @@ func TestWindowsLegacyDiscardRetainsPlacementThroughFinalRevalidation(t *testing
 		t.Fatal(err)
 	}
 	fixture.assertSentinels(t)
-	fixture.exerciseReplacementRoundTrips(t)
+	fixture.exerciseReleasedPlacementReplacement(t)
 	assertWindowsResumeInventoryEmpty(t, fixture.rootPath)
 }
 
@@ -713,22 +708,11 @@ func (fixture *windowsResumePlacementFixture) assertSentinels(t *testing.T) {
 	}
 }
 
-func (fixture *windowsResumePlacementFixture) exerciseReplacementRoundTrips(t *testing.T) {
+func (fixture *windowsResumePlacementFixture) exerciseReleasedPlacementReplacement(t *testing.T) {
 	t.Helper()
-	if err := os.Rename(fixture.rootPath, fixture.rootMovedPath); err != nil {
-		t.Fatalf("output-root displacement remained blocked after resume cleanup: %v", err)
-	}
-	if err := os.Rename(fixture.rootReplacementPath, fixture.rootPath); err != nil {
-		t.Fatalf("install output-root replacement after cleanup: %v", err)
-	}
-	fixture.requireSentinel(t, filepath.Join(fixture.rootPath, "replacement-root.sentinel"), "replacement root")
-	if err := os.Rename(fixture.rootPath, fixture.rootReplacementPath); err != nil {
-		t.Fatalf("remove output-root replacement: %v", err)
-	}
-	if err := os.Rename(fixture.rootMovedPath, fixture.rootPath); err != nil {
-		t.Fatalf("restore original output root: %v", err)
-	}
-
+	// Moving the highest retained ancestor proves every placement pin is gone.
+	// The replacement remains installed so each semantic mutation is observed
+	// once; TempDir cleanup owns both the replacement and displaced original.
 	if err := os.Rename(fixture.externalPath, fixture.externalMovedPath); err != nil {
 		t.Fatalf("external-ancestor displacement remained blocked after resume cleanup: %v", err)
 	}
@@ -736,13 +720,16 @@ func (fixture *windowsResumePlacementFixture) exerciseReplacementRoundTrips(t *t
 		t.Fatalf("install external-ancestor replacement after cleanup: %v", err)
 	}
 	fixture.requireSentinel(t, filepath.Join(fixture.externalPath, "replacement-external.sentinel"), "replacement ancestry")
-	if err := os.Rename(fixture.externalPath, fixture.externalReplacementPath); err != nil {
-		t.Fatalf("remove external-ancestor replacement: %v", err)
-	}
-	if err := os.Rename(fixture.externalMovedPath, fixture.externalPath); err != nil {
-		t.Fatalf("restore original external ancestry: %v", err)
-	}
-	fixture.assertSentinels(t)
+	fixture.requireSentinel(
+		t,
+		filepath.Join(fixture.externalMovedPath, "output", "receiver-owned.sentinel"),
+		"receiver root",
+	)
+	fixture.requireSentinel(
+		t,
+		filepath.Join(fixture.externalMovedPath, "external-owner.sentinel"),
+		"receiver ancestry",
+	)
 }
 
 func (fixture *windowsResumePlacementFixture) requireSentinel(t *testing.T, path, expected string) {

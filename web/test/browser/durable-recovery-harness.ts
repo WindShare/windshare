@@ -236,13 +236,13 @@ async function originPrivateRoot(): Promise<FileSystemDirectoryHandle> {
 }
 
 function handleRootName(outputSessionId: string): string {
-  return `r5-handle-${outputSessionId}`
+  return `durable-handle-${outputSessionId}`
 }
 
 async function outputStep<T>(label: string, operation: () => Promise<T>): Promise<T> {
   try {
     return await operation()
   } catch (error) {
-    throw new Error(`R5 output step failed: ${label}`, { cause: error })
+    throw new Error(`Durable recovery step failed: ${label}`, { cause: error })
   }
 }
