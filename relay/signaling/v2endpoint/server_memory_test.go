@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"testing"
 
 	"github.com/coder/websocket"
 
@@ -67,11 +68,16 @@ type memoryMessage struct {
 	data []byte
 }
 
+type memoryStream struct {
+	mu         sync.Mutex
+	messages   chan memoryMessage
+	closed     bool
+	closeError websocket.CloseError
+}
+
 type memorySocket struct {
-	inbound  chan memoryMessage
-	outbound chan memoryMessage
-	done     <-chan struct{}
-	close    func()
+	inbound  *memoryStream
+	outbound *memoryStream
 	limit    atomic.Int64
 }
 
@@ -99,44 +105,74 @@ func (socket *failNthWriteSocket) Write(
 }
 
 func newMemorySocketPair() (*memorySocket, *memorySocket) {
-	left := make(chan memoryMessage, 2_048)
-	right := make(chan memoryMessage, 2_048)
-	done := make(chan struct{})
-	var once sync.Once
-	closePair := func() { once.Do(func() { close(done) }) }
-	return &memorySocket{inbound: left, outbound: right, done: done, close: closePair},
-		&memorySocket{inbound: right, outbound: left, done: done, close: closePair}
+	left := &memoryStream{messages: make(chan memoryMessage, 2_048)}
+	right := &memoryStream{messages: make(chan memoryMessage, 2_048)}
+	return &memorySocket{inbound: left, outbound: right},
+		&memorySocket{inbound: right, outbound: left}
 }
 
 func (socket *memorySocket) Read(ctx context.Context) (websocket.MessageType, []byte, error) {
 	select {
 	case <-ctx.Done():
 		return 0, nil, ctx.Err()
-	case <-socket.done:
-		return 0, nil, websocket.CloseError{Code: websocket.StatusNormalClosure}
-	case message := <-socket.inbound:
+	case message, open := <-socket.inbound.messages:
+		if !open {
+			return 0, nil, socket.inbound.closeError
+		}
 		return message.kind, bytes.Clone(message.data), nil
 	}
 }
 
 func (socket *memorySocket) Write(ctx context.Context, kind websocket.MessageType, data []byte) error {
+	socket.outbound.mu.Lock()
+	defer socket.outbound.mu.Unlock()
+	if socket.outbound.closed {
+		return io.ErrClosedPipe
+	}
 	message := memoryMessage{kind: kind, data: bytes.Clone(data)}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-socket.done:
-		return io.ErrClosedPipe
-	case socket.outbound <- message:
+	case socket.outbound.messages <- message:
 		return nil
 	}
 }
 
-func (socket *memorySocket) Close(websocket.StatusCode, string) error {
-	socket.close()
+func (socket *memorySocket) Close(code websocket.StatusCode, reason string) error {
+	socket.outbound.mu.Lock()
+	defer socket.outbound.mu.Unlock()
+	if socket.outbound.closed {
+		return nil
+	}
+	// Channel close is ordered behind successful sends, matching the WebSocket
+	// guarantee that a close frame cannot overtake earlier data frames.
+	socket.outbound.closeError = websocket.CloseError{Code: code, Reason: reason}
+	socket.outbound.closed = true
+	close(socket.outbound.messages)
 	return nil
 }
 
 func (socket *memorySocket) SetReadLimit(limit int64) { socket.limit.Store(limit) }
+
+func TestMemorySocketDeliversQueuedFrameBeforeClose(t *testing.T) {
+	local, remote := newMemorySocketPair()
+	want := []byte("queued-before-close")
+	if err := local.Write(context.Background(), websocket.MessageBinary, want); err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Close(websocket.StatusNormalClosure, ""); err != nil {
+		t.Fatal(err)
+	}
+	kind, got, err := remote.Read(context.Background())
+	if err != nil || kind != websocket.MessageBinary || !bytes.Equal(got, want) {
+		t.Fatalf("queued frame = kind %d, data %q, error %v", kind, got, err)
+	}
+	_, _, err = remote.Read(context.Background())
+	closeError, ok := err.(websocket.CloseError)
+	if !ok || closeError.Code != websocket.StatusNormalClosure || closeError.Reason != "" {
+		t.Fatalf("close = %#v, want normal closure with empty reason", err)
+	}
+}
 
 func memoryServerDialer(server *Server) func(context.Context, string, http.Header) (relayv2.BinarySocket, error) {
 	return func(context.Context, string, http.Header) (relayv2.BinarySocket, error) {
