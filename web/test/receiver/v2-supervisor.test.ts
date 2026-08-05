@@ -266,7 +266,7 @@ describe('v2 receiver reconnect supervisor', () => {
       offersFactory: () => ({
         offer: async () => { throw new Error('synthetic observed peer failure') },
       }),
-      rtcApiPresent: () => true,
+      nativePeerUsable: () => true,
       connectivityObserver: (event) => diagnostics.push(event),
     })
 

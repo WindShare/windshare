@@ -21,6 +21,7 @@ export interface HotSwitchPageTransferRuntimeInput {
   readonly expectedHash: string
   readonly failureDiagnosticMaximumDepth: number
   readonly key: string
+  readonly nativePeerUsable: boolean
   readonly rtcConfiguration: RTCConfiguration
   readonly runtimePath: string
   readonly transferBytes: number
@@ -311,6 +312,7 @@ function createGateway(
   }
   return new modules.gateway.V2BrowserReceiverGateway({
     offersFactory: () => gatedOffers,
+    nativePeerUsable: () => input.nativePeerUsable,
     connectivityObserver: (diagnostic: V2BrowserConnectivityAttemptDiagnostic) => {
       bridge.publish({ kind: 'attempt', evidence: diagnostic }).catch(() => undefined)
     },

@@ -272,7 +272,7 @@ function fixture(
   offers: OfferChannelFactory,
   onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void,
   options: {
-    readonly rtcApiPresent?: () => boolean
+    readonly nativePeerUsable?: () => boolean
     readonly connectivityObserver?: (diagnostic: V2BrowserConnectivityAttemptDiagnostic) => void
     readonly randomBytes?: (length: number) => Uint8Array
     readonly onContentLaneDetached?: (observation: V2ContentLaneDetachmentObservation) => void
@@ -289,7 +289,7 @@ function fixture(
     createBlockLane: (laneId) => new FakeLane(laneId),
     offers,
     randomBytes: options.randomBytes ?? ((length) => new Uint8Array(length).fill(identitySeed++)),
-    rtcApiPresent: options.rtcApiPresent ?? (() => true),
+    nativePeerUsable: options.nativePeerUsable ?? (() => true),
     ...(options.connectivityObserver === undefined
       ? {}
       : { connectivityObserver: options.connectivityObserver }),
@@ -325,7 +325,7 @@ describe('v2 receiver content activation policy', () => {
     const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
     let randomCalls = 0
     const { connectivity, lanes } = fixture(offers, undefined, {
-      rtcApiPresent: () => false,
+      nativePeerUsable: () => false,
       randomBytes: (length) => {
         randomCalls += 1
         return new Uint8Array(length).fill(8)
@@ -352,7 +352,7 @@ describe('v2 receiver content activation policy', () => {
     const predicateFailure = new Error('synthetic API gate failure')
     let reportedFailures = 0
     const { connectivity, lanes } = fixture(offers, undefined, {
-      rtcApiPresent: () => { throw predicateFailure },
+      nativePeerUsable: () => { throw predicateFailure },
       onPeerError: (error) => {
         expect(error).toBe(predicateFailure)
         reportedFailures += 1
