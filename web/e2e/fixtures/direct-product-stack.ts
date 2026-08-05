@@ -126,7 +126,7 @@ export class DirectProductStack {
       cwd: REPOSITORY_ROOT,
       environment: localGoEnvironment(),
       operationId,
-      redactStdout: true,
+      disclosure: { stdout: 'capability', stderr: 'private' },
     }))
     this.#trace(operationId, 'started')
     let bare: RegExpMatchArray
@@ -146,6 +146,10 @@ export class DirectProductStack {
     }
     const bareLink = requiredCapture(bare, 1, 'bare share link')
     const separateKey = requiredCapture(key, 1, 'separate capability key')
+    // Sender stdout is a readiness-only capability channel. Once both values
+    // have been copied into the frozen share record, erase the raw capture so
+    // later cleanup diagnostics cannot retain a second capability transport.
+    sender.consumeReadiness('stdout')
     this.#trace(operationId, 'ready')
     return Object.freeze({ bareLink, key: separateKey })
   }
@@ -231,6 +235,7 @@ export class DirectProductStack {
       cwd: REPOSITORY_ROOT,
       environment: localGoEnvironment(),
       operationId,
+      disclosure: { stdout: 'private', stderr: 'safe' },
     }))
     this.#trace(operationId, 'started')
     let ready: RegExpMatchArray

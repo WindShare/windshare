@@ -16,5 +16,4 @@ Focused commands:
 
 ```text
 go test -count=1 ./spikes/r0contract
-pnpm -C web exec playwright test --config test/browser/r0-storage.playwright.config.ts
 ```

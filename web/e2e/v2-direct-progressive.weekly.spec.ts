@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import { V2_CATALOG_PAGE_ENTRIES } from '../src/catalog/v2-records'
 import { capabilityUrl, DirectProductStack } from './fixtures/direct-product-stack'
+import { withCapabilityRedaction } from './fixtures/capability-redactor'
 
 const SCENARIO_ID = 'chromium-progressive-catalog'
 const DIRECTORY_NAME = 'wide-directory'
@@ -23,7 +24,12 @@ test('browses a catalog directory across authenticated pages', async ({ page }) 
     await page.addInitScript(() => {
       Object.defineProperty(window, 'RTCPeerConnection', { configurable: true, value: undefined })
     })
-    await page.goto(capabilityUrl(share))
+    const navigationUrl = capabilityUrl(share)
+    await withCapabilityRedaction(() => page.goto(navigationUrl), {
+      completeUrl: navigationUrl,
+      fragment: new URL(navigationUrl).hash,
+      separateKey: share.key,
+    })
     await expect(page.getByText(DIRECTORY_NAME, { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Open' }).click()
 

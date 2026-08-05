@@ -22,9 +22,9 @@ export default defineConfig({
   use: {
     locale: 'en-US',
     timezoneId: 'UTC',
-    // Navigation consumes the capability fragment; traces must not outlive that secret.
+    // Navigation consumes the capability fragment; no browser artifact may outlive that secret.
     trace: 'off',
-    screenshot: 'only-on-failure',
+    screenshot: 'off',
     video: 'off',
   },
 })

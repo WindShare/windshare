@@ -27,9 +27,9 @@ export default defineConfig({
   use: {
     locale: 'en-US',
     timezoneId: 'UTC',
-    // Receiver URLs carry the capability fragment, so persistent traces are unsafe.
+    // Receiver URLs carry capability material, so no browser artifact may retain it.
     trace: 'off',
-    screenshot: 'only-on-failure',
+    screenshot: 'off',
     video: 'off',
   },
 })

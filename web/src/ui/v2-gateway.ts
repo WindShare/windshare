@@ -223,15 +223,16 @@ export class V2BrowserReceiverGateway {
 
   async join(input: string, pageUrl: string, signal?: AbortSignal): Promise<V2JoinedBrowserShare> {
     signal?.throwIfAborted()
-    const capability = await capabilityFromInput(input, pageUrl)
-    signal?.throwIfAborted()
-    const relayBase = capability.relayHints[0] ?? new URL(pageUrl).origin
+    let capability: Suite02CapabilityLink | undefined
     let relay: V2RelayReceiverConnection | undefined
     let session: V2ReceiverSessionRuntime | undefined
     let catalog: V2CatalogClient | undefined
     let supervisor: V2ReceiverReconnectSupervisor | undefined
     let sessionFactory: V2BrowserSessionFactory | undefined
     try {
+      capability = await capabilityFromInput(input, pageUrl)
+      signal?.throwIfAborted()
+      const relayBase = capability.relayHints[0] ?? new URL(pageUrl).origin
       relay = await dialV2RelayReceiver(
         relayBase,
         capability,
@@ -304,7 +305,7 @@ export class V2BrowserReceiverGateway {
       if (supervisor === undefined) sessionFactory?.close()
       throw error
     } finally {
-      capability.readSecret.fill(0)
+      capability?.readSecret.fill(0)
     }
   }
 }

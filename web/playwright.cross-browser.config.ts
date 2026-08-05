@@ -5,7 +5,7 @@ const CROSS_BROWSER_HARD_TIMEOUT_MILLISECONDS = 180_000
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['v2-direct-smoke.spec.ts'],
+  testMatch: ['v2-direct-smoke.spec.ts', 'v2-direct-hot-switch.cross-browser.spec.ts'],
   outputDir: 'test-results/cross-browser-smoke',
   fullyParallel: false,
   forbidOnly: true,
@@ -24,7 +24,7 @@ export default defineConfig({
     timezoneId: 'UTC',
     // The smoke navigates through a capability-bearing receiver URL.
     trace: 'off',
-    screenshot: 'only-on-failure',
+    screenshot: 'off',
     video: 'off',
   },
 })

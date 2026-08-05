@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-const PROBE_MODULE = '/test/browser/catalog-page-store-probe.ts'
+const PROBE_MODULE = '/test/browser/catalog-persistence-probe.ts'
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/')
@@ -8,7 +8,7 @@ test.beforeEach(async ({ page }) => {
 
 test('rejects same-page node and portable-name collisions before persistence', async ({ page }) => {
   const result = await page.evaluate(async (modulePath) => {
-    const probe = await import(modulePath) as typeof import('./catalog-page-store-probe')
+    const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')
     return probe.probeSamePageCollisions()
   }, PROBE_MODULE)
 
@@ -21,7 +21,7 @@ test('rejects same-page node and portable-name collisions before persistence', a
 
 test('enforces atomic ownership across pages, directories, and shares', async ({ page }) => {
   const result = await page.evaluate(async (modulePath) => {
-    const probe = await import(modulePath) as typeof import('./catalog-page-store-probe')
+    const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')
     return probe.probeCrossPageOwnership()
   }, PROBE_MODULE)
 
@@ -38,7 +38,7 @@ test('enforces atomic ownership across pages, directories, and shares', async ({
 
 test('preserves commits and cleans abort and crash residue after reopen', async ({ page }) => {
   const result = await page.evaluate(async (modulePath) => {
-    const probe = await import(modulePath) as typeof import('./catalog-page-store-probe')
+    const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')
     return probe.probeCommitAbortAndReopen()
   }, PROBE_MODULE)
 
@@ -53,7 +53,7 @@ test('preserves commits and cleans abort and crash residue after reopen', async 
 
 test('rejects a signed synthetic-root child before IndexedDB commit', async ({ page }) => {
   const result = await page.evaluate(async (modulePath) => {
-    const probe = await import(modulePath) as typeof import('./catalog-page-store-probe')
+    const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')
     return probe.probeSignedRootCollision()
   }, PROBE_MODULE)
 
@@ -67,7 +67,7 @@ test('rejects a signed synthetic-root child before IndexedDB commit', async ({ p
 
 test('reports signed IndexedDB ownership collisions as authenticated protocol failures', async ({ page }) => {
   const result = await page.evaluate(async (modulePath) => {
-    const probe = await import(modulePath) as typeof import('./catalog-page-store-probe')
+    const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')
     return probe.probeSignedOwnershipCollisions()
   }, PROBE_MODULE)
 
@@ -82,7 +82,7 @@ test('reports signed IndexedDB ownership collisions as authenticated protocol fa
 
 test('keeps composite scope keys isolated from delimiter aliases', async ({ page }) => {
   const result = await page.evaluate(async (modulePath) => {
-    const probe = await import(modulePath) as typeof import('./catalog-page-store-probe')
+    const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')
     return probe.probeCompositeKeyIsolation()
   }, PROBE_MODULE)
 
@@ -93,9 +93,9 @@ test('keeps composite scope keys isolated from delimiter aliases', async ({ page
   })
 })
 
-test('fails a blocked schema reset closed and closes its eventual late success', async ({ page }) => {
+test('fails a blocked catalog upgrade closed and closes its eventual late success', async ({ page }) => {
   const result = await page.evaluate(async (modulePath) => {
-    const probe = await import(modulePath) as typeof import('./catalog-page-store-probe')
+    const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')
     return probe.probeBlockedUpgrade()
   }, PROBE_MODULE)
 
@@ -108,7 +108,7 @@ test('fails a blocked schema reset closed and closes its eventual late success',
 
 test('persists permanent and retryable failure authority across reopen', async ({ page }) => {
   const result = await page.evaluate(async (modulePath) => {
-    const probe = await import(modulePath) as typeof import('./catalog-page-store-probe')
+    const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')
     return probe.probeFailurePersistence()
   }, PROBE_MODULE)
 
@@ -124,7 +124,7 @@ test('persists permanent and retryable failure authority across reopen', async (
 
 test('charges aggregate catalog budgets atomically and recovers release authority', async ({ page }) => {
   const result = await page.evaluate(async (modulePath) => {
-    const probe = await import(modulePath) as typeof import('./catalog-page-store-probe')
+    const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')
     return probe.probeAggregateBudgetAuthority()
   }, PROBE_MODULE)
 
@@ -138,7 +138,7 @@ test('charges aggregate catalog budgets atomically and recovers release authorit
 
 test('evicts only inactive share caches and keeps release idempotent', async ({ page }) => {
   const result = await page.evaluate(async (modulePath) => {
-    const probe = await import(modulePath) as typeof import('./catalog-page-store-probe')
+    const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')
     return probe.probeInactiveShareEviction()
   }, PROBE_MODULE)
 
@@ -153,7 +153,7 @@ test('evicts only inactive share caches and keeps release idempotent', async ({ 
 
 test('fails malformed durable budget charges closed without hanging cleanup', async ({ page }) => {
   const result = await page.evaluate(async (modulePath) => {
-    const probe = await import(modulePath) as typeof import('./catalog-page-store-probe')
+    const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')
     return probe.probeMalformedBudgetChargeFailsClosed()
   }, PROBE_MODULE)
 
@@ -162,7 +162,7 @@ test('fails malformed durable budget charges closed without hanging cleanup', as
 
 test('recovers activity authority after eviction failure and close races', async ({ page }) => {
   const result = await page.evaluate(async (modulePath) => {
-    const probe = await import(modulePath) as typeof import('./catalog-page-store-probe')
+    const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')
     return probe.probeEvictionLifecycleRecovery()
   }, PROBE_MODULE)
 
@@ -171,27 +171,5 @@ test('recovers activity authority after eviction failure and close races', async
     failedEvictionReacquiredProtection: true,
     closeDuringEvictionLeftStoreClosed: true,
     activityLockWasReleased: true,
-  })
-})
-
-test('resets legacy ownership stores into the exact schema-v5 authority', async ({ page }) => {
-  const result = await page.evaluate(async (modulePath) => {
-    const probe = await import(modulePath) as typeof import('./catalog-page-store-probe')
-    return probe.probeSchemaReset()
-  }, PROBE_MODULE)
-
-  expect(result).toEqual({
-    version: 5,
-    storeNames: ['catalog-budget', 'catalog-pages', 'committed-directories'],
-    directoryKeyPath: 'ownerKey',
-    directoryIndexNames: ['by-share-owner'],
-    pageKeyPath: 'pageKey',
-    pageIndexNames: ['by-directory-owner', 'by-name-owner', 'by-node-owner', 'by-share-owner'],
-    budgetKeyPath: 'budgetKey',
-    budgetIndexNames: ['by-share-owner'],
-    directoryRecords: 0,
-    pageRecords: 0,
-    budgetRecords: 1,
-    currentVersion: 5,
   })
 })
