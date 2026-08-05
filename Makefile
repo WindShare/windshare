@@ -3,11 +3,12 @@
 override GOTOOLCHAIN := local
 export GOTOOLCHAIN
 
-PUBLIC_TARGETS := ci check hygiene sloc workflow-lint lint vet short-go race coverage vectors web e2e browser gopls long-go core-release
+PUBLIC_TARGETS := ci ci-full check hygiene sloc workflow-lint lint vet short-go race coverage vectors web e2e browser browser-weekly gopls long-go core-release
+INTERNAL_TARGETS := browser-weekly-supplement
 # Runtime and protocol failures carry the highest product risk, so surface them
 # before slower-to-act-on static diagnostics during iterative agent work.
 CI_GATES := short-go vectors web e2e browser hygiene workflow-lint lint vet gopls sloc
-PLATFORM_TARGETS := $(filter-out ci core-release,$(PUBLIC_TARGETS))
+PLATFORM_TARGETS := $(filter-out ci ci-full browser-weekly core-release,$(PUBLIC_TARGETS)) $(INTERNAL_TARGETS)
 
 override CORE_RELEASE_VERSION := v0.0.0-ci
 CORE_RELEASE_COMMIT ?= $(shell git rev-parse --verify HEAD)
@@ -22,10 +23,18 @@ endif
 # shared compiler and browser state would make timings and failures surprising.
 .NOTPARALLEL:
 .DEFAULT_GOAL := ci
-.PHONY: $(PUBLIC_TARGETS)
+.PHONY: $(PUBLIC_TARGETS) $(INTERNAL_TARGETS)
 
 ci: $(CI_GATES)
 	@echo "ci: all gates passed"
+
+# The ordinary CI already owns the Chromium smoke. Reusing only the weekly
+# supplement keeps the full current-host sweep complete without running it twice.
+ci-full: ci long-go browser-weekly-supplement
+	@echo "ci-full: all gates passed"
+
+browser-weekly: browser browser-weekly-supplement
+	@echo "browser-weekly: all gates passed"
 
 core-release:
 ifeq ($(OS),Windows_NT)

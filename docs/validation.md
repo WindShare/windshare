@@ -8,13 +8,14 @@ changes and validates remote input.
 
 [Makefile](../Makefile) dispatches one native script per target. Developers provide Go, Node.js, pnpm,
 GNU Make, golangci-lint, gopls, sloc-guard, actionlint, govulncheck, installed Web dependencies, and the
-current-platform Chromium runtime. Gates use `GOTOOLCHAIN=local` and never install or update tools,
+required Playwright browser runtimes. Gates use `GOTOOLCHAIN=local` and never install or update tools,
 packages, or browsers. A missing prerequisite fails in the command that needs it. Windows Firewall and
 WBEM state are not validation gates.
 
 | Entry point | Direct responsibility |
 |---|---|
 | `make ci` | Run the ordinary local gates in their fixed order. |
+| `make ci-full` | Run ordinary CI plus all current-host equivalents of weekly suites. |
 | `make check` | Root/core short tests, Web TypeScript checks, and Vitest. |
 | `make hygiene` | gofmt verification, `git diff --check`, and retired-v1 production-reference scans. |
 | `make sloc`, `make workflow-lint` | Run local sloc-guard and actionlint directly. |
@@ -27,14 +28,15 @@ WBEM state are not validation gates.
 | `make web` | Run ESLint, the TypeScript/Vite build, and Vitest. |
 | `make e2e` | Run the single critical sender/relay/receiver process path. |
 | `make browser` | Run the direct current-platform Chromium micro-directory smoke. |
+| `make browser-weekly` | Run Chromium smoke and all scheduled browser scenarios serially on the current host. |
 | `make long-go` | Run named E2E/catalog/output-runtime long suites and native integration packages. |
 | `make core-release` | Validate an extracted, independently consumable core module. |
 
 `make ci` runs `short-go vectors web e2e browser hygiene workflow-lint lint vet gopls sloc` serially.
 Runtime and protocol failures run first because they carry the highest product risk; gopls and SLOC close
 the sweep so late static diagnostics do not delay test feedback. Use `make check` or a focused target while
-iterating. `long-go` and `core-release` intentionally stay outside ordinary local CI. The local p95 goal is
-at most 10 minutes.
+iterating. `browser-weekly`, `long-go`, `ci-full`, and `core-release` intentionally stay outside ordinary
+local CI. The local p95 goal is at most 10 minutes.
 
 Coverage is blocking: core total >=90%, root total >=80%, and every included Go package >=70%. Product
 packages are not excluded and thresholds are not lowered to make a gate faster.
@@ -71,6 +73,9 @@ coverage that does not belong in ordinary CI:
 
 Each job has a 10-minute hang fuse. Long Go tests use native `testing.Short()` boundaries and stable
 `TestLong...` names, so every short-mode skip has an automatic owner rather than a manual-only suite.
+`make browser-weekly` provides current-host reproduction of the browser scenarios without pretending to
+reproduce GitHub's Linux/Windows matrix. `make ci-full` combines that coverage with ordinary CI and
+`make long-go`, deduplicating the Chromium smoke already owned by ordinary CI.
 
 ## Core candidate release
 
