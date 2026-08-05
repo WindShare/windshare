@@ -231,7 +231,9 @@ jobs:
   browser-periodic:
     name: Chromium periodic browser contracts (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The Playwright dependency bootstrap may invoke apt on a cold runner; allow
+    # transiently slow mirrors without skipping the periodic contract suite.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
