@@ -20,7 +20,20 @@ const PROCESS_STOP_TIMEOUT_MILLISECONDS = 5_000
 const RELAY_LISTENING_PATTERN = /wsrelay: listening on ([^\s]+) /u
 const BARE_LINK_PATTERN = /^Bare link: (.+)$/mu
 const SEPARATE_KEY_PATTERN = /^Key: (.+)$/mu
+/** Default sender block geometry used by native-peer and non-WebKit routes. */
 export const DIRECT_TEST_BLOCK_BYTES = 64 * 1024
+
+/**
+ * WPE's Linux WebKit build cannot reliably process relay frames above 32 KiB.
+ * Keep this compatibility value at the fixture boundary; production defaults
+ * remain unchanged and the transfer payload is still validated end-to-end.
+ */
+export const DIRECT_WEBKIT_RELAY_BLOCK_BYTES = 32 * 1024
+
+export interface DirectShareOptions {
+  readonly blockSizeBytes?: number
+  readonly relayUrl?: string
+}
 
 export interface DirectStackTrace {
   readonly component: 'browser-direct-stack'
@@ -108,8 +121,11 @@ export class DirectProductStack {
     return directory
   }
 
-  async share(path: string, relayUrl = this.#requireRelayUrl()): Promise<DirectShare> {
+  async share(path: string, options: DirectShareOptions = {}): Promise<DirectShare> {
     const binaries = this.#requireBinaries()
+    const relayUrl = options.relayUrl ?? this.#requireRelayUrl()
+    const blockSizeBytes = options.blockSizeBytes ?? DIRECT_TEST_BLOCK_BYTES
+    validateBlockSize(blockSizeBytes)
     this.#senderSequence += 1
     const operationId = `${this.#scenarioId}-sender-${this.#senderSequence}`
     const sender = this.#track(new DirectProcess(binaries.windshare, [
@@ -120,7 +136,7 @@ export class DirectProductStack {
       '--front-url',
       this.baseURL,
       '--block-size',
-      String(DIRECT_TEST_BLOCK_BYTES),
+      String(blockSizeBytes),
       '--split-key',
     ], {
       cwd: REPOSITORY_ROOT,
@@ -414,6 +430,12 @@ function executableName(name: string, platform: NodeJS.Platform = process.platfo
 function requirePathSegment(value: string, label: string): void {
   if (value.length === 0 || value === '.' || value === '..' || value.includes('/') || value.includes('\\')) {
     throw new TypeError(`${label} name must be one path segment`)
+  }
+}
+
+function validateBlockSize(value: number): void {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError('Direct sender block size must be a positive safe integer')
   }
 }
 

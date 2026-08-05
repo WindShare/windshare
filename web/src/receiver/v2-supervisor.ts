@@ -59,7 +59,7 @@ export interface V2ReceiverSupervisorOptions {
   readonly backoffMilliseconds?: (attempt: number) => number
   readonly offersFactory?: () => OfferChannelFactory
   readonly randomBytes?: (length: number) => Uint8Array
-  readonly rtcApiPresent?: () => boolean
+  readonly nativePeerUsable?: () => boolean
   readonly connectivityObserver?: V2ConnectivityObserver
   readonly onRecoveryError?: (error: unknown) => void
   readonly onBlockDispatched?: (observation: V2BlockDispatchObservation) => void
@@ -101,7 +101,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
   readonly #backoffMilliseconds: (attempt: number) => number
   readonly #offersFactory: (() => OfferChannelFactory) | undefined
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
-  readonly #rtcApiPresent: (() => boolean) | undefined
+  readonly #nativePeerUsable: (() => boolean) | undefined
   readonly #connectivityObserver: V2ConnectivityObserver | undefined
   readonly #onRecoveryError: (error: unknown) => void
   readonly #onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined
@@ -132,7 +132,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     this.#backoffMilliseconds = options.backoffMilliseconds ?? defaultReconnectBackoff
     this.#offersFactory = options.offersFactory
     this.#randomBytes = options.randomBytes
-    this.#rtcApiPresent = options.rtcApiPresent
+    this.#nativePeerUsable = options.nativePeerUsable
     this.#connectivityObserver = options.connectivityObserver
     this.#onRecoveryError = options.onRecoveryError ?? (() => undefined)
     this.#onBlockDispatched = options.onBlockDispatched
@@ -285,7 +285,9 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
         ),
         ...(this.#offersFactory === undefined ? {} : { offers: this.#offersFactory() }),
         ...(this.#randomBytes === undefined ? {} : { randomBytes: this.#randomBytes }),
-        ...(this.#rtcApiPresent === undefined ? {} : { rtcApiPresent: this.#rtcApiPresent }),
+        ...(this.#nativePeerUsable === undefined
+          ? {}
+          : { nativePeerUsable: this.#nativePeerUsable }),
         ...(this.#connectivityObserver === undefined
           ? {}
           : { connectivityObserver: this.#connectivityObserver }),

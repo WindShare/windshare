@@ -89,7 +89,7 @@ describe('v2 browser gateway connectivity injection', () => {
 
   it('forwards connectivity diagnostics to the supervisor', async () => {
     const offersFactory = () => ({ offer: vi.fn() }) as never
-    const rtcApiPresent = () => true
+    const nativePeerUsable = () => true
     const connectivityObserver = vi.fn()
     const onBlockDispatched = vi.fn()
     const onBlockFetched = vi.fn()
@@ -97,7 +97,7 @@ describe('v2 browser gateway connectivity injection', () => {
     const onContentLaneDetached = vi.fn()
     const gateway = new V2BrowserReceiverGateway({
       offersFactory,
-      rtcApiPresent,
+      nativePeerUsable,
       connectivityObserver,
       onBlockDispatched,
       onBlockFetched,
@@ -112,7 +112,7 @@ describe('v2 browser gateway connectivity injection', () => {
     const options = captured.supervisorOptions.at(-1)
 
     expect(options?.offersFactory).toBe(offersFactory)
-    expect(options?.rtcApiPresent).toBe(rtcApiPresent)
+    expect(options?.nativePeerUsable).toBe(nativePeerUsable)
     expect(options?.connectivityObserver).toBe(connectivityObserver)
     expect(options?.onBlockDispatched).toBe(onBlockDispatched)
     expect(options?.onBlockFetched).toBe(onBlockFetched)

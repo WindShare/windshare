@@ -39,7 +39,7 @@ export interface V2ReceiverConnectivityOptions {
   readonly relayLaneId?: number
   readonly offers?: OfferChannelFactory
   readonly randomBytes?: (length: number) => Uint8Array
-  readonly rtcApiPresent?: () => boolean
+  readonly nativePeerUsable?: () => boolean
   readonly connectivityObserver?: V2ConnectivityObserver
   readonly now?: () => number
   readonly onPeerError?: (error: unknown) => void
@@ -132,7 +132,7 @@ export class V2ReceiverConnectivity {
   readonly #createBlockLane: (laneId: number) => V2BlockLane
   readonly #offers: OfferChannelFactory
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
-  readonly #rtcApiPresent: () => boolean
+  readonly #nativePeerUsable: () => boolean
   readonly #connectivityObserver: V2ConnectivityObserver | undefined
   readonly #now: () => number
   readonly #onPeerError: (error: unknown) => void
@@ -172,7 +172,7 @@ export class V2ReceiverConnectivity {
     this.#relayLaneId = options.relayLaneId ?? options.session.initialLaneId
     this.#offers = options.offers ?? new BrowserOfferChannelFactory()
     this.#randomBytes = options.randomBytes
-    this.#rtcApiPresent = options.rtcApiPresent ?? (() => browserPeerConnectionAvailable())
+    this.#nativePeerUsable = options.nativePeerUsable ?? (() => browserPeerConnectionAvailable())
     this.#connectivityObserver = options.connectivityObserver
     this.#now = options.now ?? (() => performance.now())
     this.#onPeerError = options.onPeerError ?? (() => undefined)
@@ -306,7 +306,7 @@ export class V2ReceiverConnectivity {
   }
 
   async #connectPeer(signal: AbortSignal): Promise<void> {
-    if (!this.#apiGateAllowsAttempt()) return
+    if (!this.#capabilityAllowsAttempt()) return
     const attempt = peerAttemptDeadline(signal)
     const resources: V2PeerAttemptResources = {}
     try {
@@ -318,11 +318,12 @@ export class V2ReceiverConnectivity {
     }
   }
 
-  #apiGateAllowsAttempt(): boolean {
+  #capabilityAllowsAttempt(): boolean {
     try {
-      if (this.#rtcApiPresent()) return true
-      // API absence is the only attempt-free capability branch. Probe outcomes
-      // never enter product policy, so an API-present probe failure cannot suppress this path.
+      if (this.#nativePeerUsable()) return true
+      // A caller may know more than constructor presence (for example, a local
+      // ICE/DataChannel probe). An unusable native lane must request relay
+      // directly so a doomed offer cannot pin the fallback it is meant to protect.
       if (this.#activations.size > 0) this.#requestRelayForAll()
     } catch (error) {
       if (this.#activations.size > 0) this.#requestRelayForAll()

@@ -2,6 +2,9 @@ export const RTC_CAPABILITY_DIAGNOSTIC_SCHEMA_VERSION = 1 as const
 export const RTC_CAPABILITY_PROBE_DEADLINE_MS = 5_000 as const
 export const RTC_CAPABILITY_PROBE_DATA_CHANNEL_LABEL = 'windshare-capability-probe' as const
 
+const RTC_CAPABILITY_PROBE_MESSAGE = 'windshare-capability-probe-message'
+const RTC_CAPABILITY_PROBE_ACKNOWLEDGEMENT = 'windshare-capability-probe-acknowledgement'
+
 const RTC_API_PRESENCE = Object.freeze(['unknown', 'absent', 'present'] as const)
 const RTC_CAPABILITY_PROBE_OUTCOMES = Object.freeze([
   'not-started',
@@ -13,6 +16,11 @@ const RTC_CAPABILITY_PROBE_FAILURE_CODES = Object.freeze([
   'datachannel-construction',
   'offer-creation',
   'local-description',
+  'ice-gathering',
+  'remote-description',
+  'answer-creation',
+  'datachannel-open',
+  'datachannel-roundtrip',
   'probe-deadline',
   'unexpected',
 ] as const)
@@ -20,8 +28,7 @@ const CAPABILITY_FAILURE_MESSAGE_MAXIMUM_LENGTH = 512
 
 export type RtcApiPresence = (typeof RTC_API_PRESENCE)[number]
 export type RtcCapabilityProbeOutcome = (typeof RTC_CAPABILITY_PROBE_OUTCOMES)[number]
-export type RtcCapabilityProbeFailureCode =
-  (typeof RTC_CAPABILITY_PROBE_FAILURE_CODES)[number]
+export type RtcCapabilityProbeFailureCode = (typeof RTC_CAPABILITY_PROBE_FAILURE_CODES)[number]
 export type RtcCapabilityStatus = 'unknown' | 'unavailable' | 'available' | 'unusable'
 
 export interface RtcCapabilityDiagnostic {
@@ -33,7 +40,7 @@ export interface RtcCapabilityDiagnostic {
   readonly failureMessage?: string
 }
 
-interface RtcProbeEnvironment {
+export interface RtcProbeEnvironment {
   readonly RTCPeerConnection?: typeof RTCPeerConnection
   readonly setTimeout: typeof globalThis.setTimeout
   readonly clearTimeout: typeof globalThis.clearTimeout
@@ -54,9 +61,11 @@ class RtcCapabilityProbeError extends Error {
 }
 
 /**
- * API presence and offer usability are deliberately separate facts. Keeping the
- * probe local prevents a network or topology failure from being mislabeled as a
- * missing browser API.
+ * API presence and lane usability are deliberately separate facts. A local
+ * offer only proves that a browser can serialize SDP; the product lane also
+ * needs ICE candidates and an authenticated DataChannel transport. Keeping the
+ * loopback probe local makes that distinction deterministic without depending
+ * on a remote network or a relay service.
  */
 export async function probeRtcCapability(
   environment: RtcProbeEnvironment = globalThis as unknown as RtcProbeEnvironment,
@@ -65,30 +74,83 @@ export async function probeRtcCapability(
     return rtcCapabilityDiagnostic('absent', 'not-started')
   }
 
-  let peer: RTCPeerConnection | undefined
-  let channel: RTCDataChannel | undefined
+  let offerer: RTCPeerConnection | undefined
+  let answerer: RTCPeerConnection | undefined
+  let offererChannel: RTCDataChannel | undefined
+  let answererChannel: RTCDataChannel | undefined
   let activeStage: RtcCapabilityProbeFailureCode = 'peer-construction'
+  const remoteChannel = deferred<RTCDataChannel>()
+  const onRemoteChannel = (event: Event): void => {
+    const channel = (event as RTCDataChannelEvent).channel
+    if (channel === undefined) {
+      remoteChannel.reject(new RtcCapabilityProbeError(
+        'datachannel-open',
+        'capability probe received no remote DataChannel',
+      ))
+      return
+    }
+    answererChannel = channel
+    remoteChannel.resolve(channel)
+  }
+
   try {
-    peer = new environment.RTCPeerConnection({ iceServers: [] })
+    offerer = new environment.RTCPeerConnection({ iceServers: [] })
+    answerer = new environment.RTCPeerConnection({ iceServers: [] })
+    const localOfferer = offerer
+    const localAnswerer = answerer
+    localAnswerer.addEventListener('datachannel', onRemoteChannel)
+
     activeStage = 'datachannel-construction'
-    channel = peer.createDataChannel(RTC_CAPABILITY_PROBE_DATA_CHANNEL_LABEL)
+    offererChannel = localOfferer.createDataChannel(RTC_CAPABILITY_PROBE_DATA_CHANNEL_LABEL)
+
     await withinProbeDeadline(environment, async () => {
       activeStage = 'offer-creation'
-      const offer = await peer?.createOffer()
-      if (offer?.type !== 'offer' || typeof offer.sdp !== 'string' || offer.sdp.trim() === '') {
+      const offer = await localOfferer.createOffer()
+      if (offer?.type !== 'offer' || !hasSdp(offer.sdp)) {
         throw new RtcCapabilityProbeError(
           'offer-creation',
           'capability probe created no usable SDP offer',
         )
       }
+
+      // Register ICE observers before setting the description. Some engines
+      // emit candidates synchronously while setLocalDescription is pending.
+      activeStage = 'ice-gathering'
+      const offerGathering = waitForIceGathering(localOfferer)
       activeStage = 'local-description'
-      await peer?.setLocalDescription(offer)
-      if (peer?.localDescription?.type !== 'offer' || peer.localDescription.sdp.trim() === '') {
+      await localOfferer.setLocalDescription(offer)
+      await offerGathering
+
+      activeStage = 'remote-description'
+      await localAnswerer.setRemoteDescription(requiredDescription(localOfferer))
+
+      activeStage = 'answer-creation'
+      const answer = await localAnswerer.createAnswer()
+      if (answer?.type !== 'answer' || !hasSdp(answer.sdp)) {
         throw new RtcCapabilityProbeError(
-          'local-description',
-          'capability probe did not retain a usable local offer',
+          'answer-creation',
+          'capability probe created no usable SDP answer',
         )
       }
+
+      activeStage = 'ice-gathering'
+      const answerGathering = waitForIceGathering(localAnswerer)
+      activeStage = 'local-description'
+      await localAnswerer.setLocalDescription(answer)
+      await answerGathering
+
+      activeStage = 'remote-description'
+      await localOfferer.setRemoteDescription(requiredDescription(localAnswerer))
+
+      activeStage = 'datachannel-open'
+      answererChannel = await remoteChannel.promise
+      await Promise.all([
+        waitForDataChannelOpen(offererChannel),
+        waitForDataChannelOpen(answererChannel),
+      ])
+
+      activeStage = 'datachannel-roundtrip'
+      await exchangeProbeMessage(offererChannel, answererChannel)
     })
     return rtcCapabilityDiagnostic('present', 'succeeded')
   } catch (cause) {
@@ -97,8 +159,11 @@ export async function probeRtcCapability(
       : new RtcCapabilityProbeError(activeStage, diagnosticMessage(cause), { cause })
     return rtcCapabilityDiagnostic('present', 'failed', failure)
   } finally {
-    channel?.close()
-    peer?.close()
+    answerer?.removeEventListener('datachannel', onRemoteChannel)
+    closeDataChannel(answererChannel)
+    closeDataChannel(offererChannel)
+    answerer?.close()
+    offerer?.close()
   }
 }
 
@@ -193,7 +258,8 @@ async function withinProbeDeadline(
   operation: () => Promise<void>,
 ): Promise<void> {
   const work = operation()
-  // Closing a timed-out PeerConnection can reject its outstanding promise later.
+  // Closing timed-out PeerConnections can reject their outstanding promises
+  // later; consume that rejection while cleanup closes both probe peers.
   work.catch(() => undefined)
   let timer: ReturnType<typeof globalThis.setTimeout> | undefined
   const deadline = new Promise<never>((_resolve, reject) => {
@@ -208,6 +274,155 @@ async function withinProbeDeadline(
     await Promise.race([work, deadline])
   } finally {
     if (timer !== undefined) environment.clearTimeout(timer)
+  }
+}
+
+async function waitForIceGathering(peer: RTCPeerConnection): Promise<void> {
+  if (peer.iceGatheringState === 'complete') {
+    requireGatheredCandidate(peer)
+    return
+  }
+  let changed: (() => void) | undefined
+  const gathered = new Promise<void>((resolve, reject) => {
+    changed = () => {
+      if (peer.iceGatheringState !== 'complete') return
+      try {
+        requireGatheredCandidate(peer)
+        resolve()
+      } catch (error) {
+        reject(error)
+      }
+    }
+    peer.addEventListener('icegatheringstatechange', changed)
+  })
+  try {
+    await gathered
+  } finally {
+    if (changed !== undefined) peer.removeEventListener('icegatheringstatechange', changed)
+  }
+}
+
+function requireGatheredCandidate(peer: RTCPeerConnection): void {
+  const sdp = peer.localDescription?.sdp
+  if (!hasSdp(sdp) || !/(?:^|\r?\n)a=candidate:/u.test(sdp)) {
+    throw new RtcCapabilityProbeError(
+      'ice-gathering',
+      'capability probe gathered no usable ICE candidate',
+    )
+  }
+}
+
+async function waitForDataChannelOpen(channel: RTCDataChannel | undefined): Promise<void> {
+  if (channel === undefined) {
+    throw new RtcCapabilityProbeError(
+      'datachannel-open',
+      'capability probe did not receive a DataChannel',
+    )
+  }
+  if (channel.readyState === 'open') return
+  let opened: (() => void) | undefined
+  let failed: ((event: Event) => void) | undefined
+  const ready = new Promise<void>((resolve, reject) => {
+    opened = () => resolve()
+    failed = () => reject(new RtcCapabilityProbeError(
+      'datachannel-open',
+      'capability probe DataChannel entered an error state',
+    ))
+    channel.addEventListener('open', opened)
+    channel.addEventListener('error', failed)
+    if (channel.readyState === 'open') resolve()
+  })
+  try {
+    await ready
+  } finally {
+    if (opened !== undefined) channel.removeEventListener('open', opened)
+    if (failed !== undefined) channel.removeEventListener('error', failed)
+  }
+}
+
+async function exchangeProbeMessage(
+  offerer: RTCDataChannel | undefined,
+  answerer: RTCDataChannel | undefined,
+): Promise<void> {
+  if (offerer === undefined || answerer === undefined) {
+    throw new RtcCapabilityProbeError(
+      'datachannel-roundtrip',
+      'capability probe cannot exchange a message without two DataChannels',
+    )
+  }
+  let onAnswer: ((event: MessageEvent<unknown>) => void) | undefined
+  let onOffer: ((event: MessageEvent<unknown>) => void) | undefined
+  try {
+    const acknowledgement = new Promise<void>((resolve, reject) => {
+      onAnswer = (event: MessageEvent<unknown>) => {
+        if (event.data === RTC_CAPABILITY_PROBE_ACKNOWLEDGEMENT) resolve()
+      }
+      onOffer = (event: MessageEvent<unknown>) => {
+        if (event.data !== RTC_CAPABILITY_PROBE_MESSAGE) return
+        try {
+          answerer.send(RTC_CAPABILITY_PROBE_ACKNOWLEDGEMENT)
+        } catch (cause) {
+          reject(new RtcCapabilityProbeError(
+            'datachannel-roundtrip',
+            diagnosticMessage(cause),
+            { cause },
+          ))
+        }
+      }
+      offerer.addEventListener('message', onAnswer)
+      answerer.addEventListener('message', onOffer)
+      try {
+        offerer.send(RTC_CAPABILITY_PROBE_MESSAGE)
+      } catch (cause) {
+        reject(new RtcCapabilityProbeError(
+          'datachannel-roundtrip',
+          diagnosticMessage(cause),
+          { cause },
+        ))
+      }
+    })
+    await acknowledgement
+  } finally {
+    if (onAnswer !== undefined) offerer.removeEventListener('message', onAnswer)
+    if (onOffer !== undefined) answerer.removeEventListener('message', onOffer)
+  }
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>
+  readonly resolve: (value: T) => void
+  readonly reject: (reason: unknown) => void
+} {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function requiredDescription(peer: RTCPeerConnection): RTCSessionDescriptionInit {
+  const description = peer.localDescription
+  if (description === null || !hasSdp(description.sdp)) {
+    throw new RtcCapabilityProbeError(
+      'local-description',
+      'capability probe did not retain a usable local description',
+    )
+  }
+  return { type: description.type, sdp: description.sdp }
+}
+
+function hasSdp(value: string | null | undefined): value is string {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
+function closeDataChannel(channel: RTCDataChannel | undefined): void {
+  try {
+    channel?.close()
+  } catch {
+    // Probe cleanup is best effort; the capability result already owns the
+    // diagnostic and a browser-specific close error must not replace it.
   }
 }
 

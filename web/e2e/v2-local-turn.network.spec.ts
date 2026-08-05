@@ -57,6 +57,7 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
     await withCapabilityRedaction(() => startPageTransfer(page, {
       expectedHash,
       key: share.key,
+      nativePeerUsable: true,
       rtcConfiguration: turn.rtcConfiguration,
       transferBytes: TRANSFER_BYTES,
     }), {

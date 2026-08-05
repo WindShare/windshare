@@ -190,7 +190,7 @@ export class V2JoinedBrowserShare {
 
 export interface V2BrowserReceiverGatewayOptions {
   readonly offersFactory?: () => OfferChannelFactory
-  readonly rtcApiPresent?: () => boolean
+  readonly nativePeerUsable?: () => boolean
   readonly connectivityObserver?: V2ConnectivityObserver
   readonly onBlockDispatched?: (observation: V2BlockDispatchObservation) => void
   readonly onBlockFetched?: (observation: V2BlockRouteObservation) => void
@@ -200,7 +200,7 @@ export interface V2BrowserReceiverGatewayOptions {
 
 export class V2BrowserReceiverGateway {
   readonly #offersFactory: (() => OfferChannelFactory) | undefined
-  readonly #rtcApiPresent: (() => boolean) | undefined
+  readonly #nativePeerUsable: (() => boolean) | undefined
   readonly #connectivityObserver: V2ConnectivityObserver | undefined
   readonly #onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined
   readonly #onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined
@@ -213,7 +213,7 @@ export class V2BrowserReceiverGateway {
 
   constructor(options: V2BrowserReceiverGatewayOptions = {}) {
     this.#offersFactory = options.offersFactory
-    this.#rtcApiPresent = options.rtcApiPresent
+    this.#nativePeerUsable = options.nativePeerUsable
     this.#connectivityObserver = options.connectivityObserver
     this.#onBlockDispatched = options.onBlockDispatched
     this.#onBlockFetched = options.onBlockFetched
@@ -267,7 +267,7 @@ export class V2BrowserReceiverGateway {
         sessionFactory,
         ...gatewayConnectivityOptions(
           this.#offersFactory,
-          this.#rtcApiPresent,
+          this.#nativePeerUsable,
           this.#connectivityObserver,
           this.#onBlockDispatched,
           this.#onBlockFetched,
@@ -312,7 +312,7 @@ export class V2BrowserReceiverGateway {
 
 function gatewayConnectivityOptions(
   offersFactory: (() => OfferChannelFactory) | undefined,
-  rtcApiPresent: (() => boolean) | undefined,
+  nativePeerUsable: (() => boolean) | undefined,
   connectivityObserver: V2ConnectivityObserver | undefined,
   onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined,
   onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined,
@@ -323,7 +323,7 @@ function gatewayConnectivityOptions(
 ) {
   return {
     ...(offersFactory === undefined ? {} : { offersFactory }),
-    ...(rtcApiPresent === undefined ? {} : { rtcApiPresent }),
+    ...(nativePeerUsable === undefined ? {} : { nativePeerUsable }),
     ...(connectivityObserver === undefined ? {} : { connectivityObserver }),
     ...(onBlockDispatched === undefined ? {} : { onBlockDispatched }),
     ...(onBlockFetched === undefined ? {} : { onBlockFetched }),
