@@ -4,9 +4,10 @@ The browser receiver is React 19 + TypeScript + Vite. It accepts suite-02
 capability links, authenticates a small share descriptor, browses catalog pages
 on demand, and reads file-local encrypted ranges over relay or WebRTC lanes.
 
-The protocol authority is [`docs/协议规范.md`](../docs/协议规范.md); product and
-phase semantics are in
-[`docs/即时分享与文件浏览重构计划.md`](../docs/即时分享与文件浏览重构计划.md).
+The protocol authority is [`docs/协议规范.md`](../docs/协议规范.md); product
+semantics are in [`docs/重构功能变化.md`](../docs/重构功能变化.md), and remaining
+closure work is tracked in
+[`docs/即时分享与文件浏览重构收尾计划.md`](../docs/即时分享与文件浏览重构收尾计划.md).
 Validation entry points are in [`docs/validation.md`](../docs/validation.md), and
 local performance diagnostics are in
 [`docs/performance.md`](../docs/performance.md).
