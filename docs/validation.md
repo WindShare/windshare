@@ -47,7 +47,7 @@ The contract config accepts `WINDSHARE_CONTRACT_PORT` for isolated concurrent lo
 scripts reserve separate loopback ports for short, cross-browser, and periodic projects.
 
 A dated, machine-specific diagnostic is available in the
-[local test timing snapshot](local-test-timing-2026-08-05.md). It records test ownership gaps and outliers,
+[local test timing snapshot](local-test-timing.md). It records test ownership gaps and outliers,
 but does not replace the p95 goal or define a cross-host performance baseline.
 
 Coverage is blocking: core total >=90%, root total >=80%, and every included Go package >=70%. Product
