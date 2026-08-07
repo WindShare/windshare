@@ -137,7 +137,7 @@ func TestOutputV3RejectsDecodableIntentAliasBeforeMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonical := resumestate.ResumeNamespaceName(selection.ResumeIntent())
+	canonical := resumestate.IntentNamespaceName(v3RecoveryIntentDigest(selection))
 	alias := strings.ToUpper(canonical)
 	if alias == canonical {
 		t.Fatal("test intent unexpectedly has no alphabetic hex digits")
@@ -149,7 +149,7 @@ func TestOutputV3RejectsDecodableIntentAliasBeforeMutation(t *testing.T) {
 	if err := errors.Join(created.Sync(), control.sessions.Sync(), created.Close()); err != nil {
 		t.Fatal(err)
 	}
-	if opened, err := OpenCanonicalIntent(control.sessions, selection.ResumeIntent()); !errors.Is(err, outputfault.ErrIntentUnsafe) {
+	if opened, err := OpenCanonicalIntent(control.sessions, v3RecoveryIntentDigest(selection)); !errors.Is(err, outputfault.ErrIntentUnsafe) {
 		if opened != nil {
 			_ = opened.Close()
 		}
@@ -182,7 +182,7 @@ func TestOutputV3RecoversEverySessionCandidateChildCutAndInstallsIt(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			intent, err := OpenCanonicalIntent(control.sessions, selection.ResumeIntent())
+			intent, err := OpenCanonicalIntent(control.sessions, v3RecoveryIntentDigest(selection))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -210,7 +210,7 @@ func TestOutputV3RecoversEverySessionCandidateChildCutAndInstallsIt(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			intent, err = OpenCanonicalIntent(control.sessions, selection.ResumeIntent())
+			intent, err = OpenCanonicalIntent(control.sessions, v3RecoveryIntentDigest(selection))
 			if err != nil {
 				t.Fatal(err)
 			}

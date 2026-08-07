@@ -187,7 +187,7 @@ func duplicateOutputObjectSelection(t *testing.T) (transfer.OutputSelection, []t
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonical, err := transfer.NewCanonicalSelectionV1(request, plan)
+	canonical, err := transfer.NewTerminalSelectionObservationV1(request, plan)
 	if err != nil {
 		t.Fatal(err)
 	}

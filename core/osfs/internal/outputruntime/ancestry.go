@@ -133,7 +133,7 @@ func (authority *Authority) traceOutputAncestry(
 		claimCount = 0
 	}
 	authority.trace(FilesystemOutputTrace{
-		Operation: TraceAncestryValidation, ResumeIntent: selection.ResumeIntent(),
+		Operation: TraceAncestryValidation,
 		SessionID: sessionID, LocatorDigest: outputLocatorDigestFromState(locator), SelectionIdentity: selection.Identity(),
 		OutputAncestryDigest: filesystemOutputAncestryDigestFromState(snapshot.binding), AncestryBoundary: boundary,
 		AncestryDecision: decision, AncestryClaimCount: uint32(claimCount),
@@ -149,10 +149,33 @@ func (session *Session) traceOutputAncestry(
 	if session == nil {
 		return
 	}
-	session.owner.traceOutputAncestry(
+	session.owner.traceOutputAncestryWithIntent(
+		session.intentDigest,
 		session.selection, session.sessionID, locator, session.ancestry,
 		len(session.ancestry.entries), boundary, outputAncestryTraceDecision(err),
 	)
+}
+
+func (authority *Authority) traceOutputAncestryWithIntent(
+	intentDigest transfer.TransferIntentDigest,
+	selection transfer.OutputSelection,
+	sessionID transfer.OutputSessionID,
+	locator resumestate.LocatorDigest,
+	snapshot outputAncestrySnapshot,
+	claimCount int,
+	boundary FilesystemOutputAncestryBoundary,
+	decision FilesystemOutputAncestryDecision,
+) {
+	if claimCount < 0 {
+		claimCount = 0
+	}
+	authority.trace(FilesystemOutputTrace{
+		Operation: TraceAncestryValidation, IntentDigest: intentDigest,
+		SessionID: sessionID, LocatorDigest: outputLocatorDigestFromState(locator), SelectionIdentity: selection.Identity(),
+		OutputAncestryDigest: filesystemOutputAncestryDigestFromState(snapshot.binding), AncestryBoundary: boundary,
+		AncestryDecision: decision, AncestryClaimCount: uint32(claimCount),
+		Failed: decision != FilesystemOutputAncestryPrepared && decision != FilesystemOutputAncestryMatched,
+	})
 }
 
 func (snapshot outputAncestrySnapshot) claim(path string) (outputcap.PersistentDirectoryIdentity, bool) {
@@ -276,27 +299,6 @@ func (validation *outputAncestryValidation) Close() error {
 	return closeErr
 }
 
-func prepareOutputSelectionAncestry(
-	platform outputcap.Platform,
-	selection transfer.OutputSelection,
-) (*outputAncestryValidation, error) {
-	return captureOutputSelectionAncestry(platform, selection, outputAncestryRequirement{})
-}
-
-func prepareFreshOutputSelectionAncestry(
-	platform outputcap.Platform,
-	selection transfer.OutputSelection,
-) (*outputAncestryValidation, error) {
-	return captureOutputSelectionAncestryWithGuardedPreparation(
-		platform,
-		selection,
-		outputAncestryRequirement{},
-		func(root outputcap.Directory) error {
-			return materializeOutputSelection(root, selection)
-		},
-	)
-}
-
 func validateOutputSelectionAncestry(
 	platform outputcap.Platform,
 	selection transfer.OutputSelection,
@@ -320,17 +322,24 @@ func validateOutputSelectionAncestry(
 func (session *Session) validateOutputAncestry(
 	requirement outputAncestryRequirement,
 ) (*outputAncestryValidation, error) {
-	if session == nil || session.platform == nil || session.ancestry.binding.IsZero() {
+	if session == nil {
 		return nil, errors.Join(errOutputAncestryUnsafe, transfer.ErrInvalidOutputBinding)
 	}
-	if session.stateSnapshot().Header().OutputAncestry() != session.ancestry.binding {
-		return nil, errors.Join(
-			errOutputAncestryUnsafe, errOutputAncestryMismatch,
-			errors.New("session ancestry authority changed"),
-		)
+	// Copy selection and ancestry under one lock so a file operation cannot pair
+	// one admitted generation with another generation's snapshot.
+	session.mu.Lock()
+	platform := session.platform
+	selection := session.selection
+	ancestry := session.ancestry
+	if session.incrementalAdmission {
+		selection = session.incrementalSelection
+	}
+	session.mu.Unlock()
+	if platform == nil || ancestry.binding.IsZero() || selection.Identity().IsZero() {
+		return nil, errors.Join(errOutputAncestryUnsafe, transfer.ErrInvalidOutputBinding)
 	}
 	return validateOutputSelectionAncestry(
-		session.platform, session.selection, session.ancestry, requirement,
+		platform, selection, ancestry, requirement,
 	)
 }
 
@@ -339,6 +348,34 @@ func closeOutputAncestryValidation(validation *outputAncestryValidation) error {
 		return nil
 	}
 	return validation.Close()
+}
+
+func (authority *Authority) revalidateOutputAdmissionAncestry(
+	admission outputSelectionAdmission,
+) error {
+	if admission.validation == nil {
+		err := errors.Join(errOutputAncestryUnsafe, errors.New("output ancestry admission guard is absent"))
+		authority.traceOutputAncestry(
+			admission.selection, transfer.OutputSessionID{}, resumestate.LocatorDigest{}, admission.ancestry,
+			len(admission.ancestry.entries), outputAncestryAdmissionBoundary(admission.resuming),
+			outputAncestryTraceDecision(err),
+		)
+		return outputAncestryPauseFault("revalidate output ancestry admission", err)
+	}
+	if err := admission.validation.Revalidate(outputAncestryRequirement{}); err != nil {
+		authority.traceOutputAncestry(
+			admission.selection, transfer.OutputSessionID{}, resumestate.LocatorDigest{}, admission.ancestry,
+			len(admission.ancestry.entries), outputAncestryAdmissionBoundary(admission.resuming),
+			outputAncestryTraceDecision(err),
+		)
+		return outputAncestryPauseFault("revalidate output ancestry admission", err)
+	}
+	authority.traceOutputAncestry(
+		admission.selection, transfer.OutputSessionID{}, resumestate.LocatorDigest{}, admission.ancestry,
+		len(admission.ancestry.entries), outputAncestryAdmissionBoundary(admission.resuming),
+		FilesystemOutputAncestryMatched,
+	)
+	return nil
 }
 
 func outputLocatorParentPath(locator string) string {
@@ -558,15 +595,4 @@ func closeOutputAncestryDirectories(directories map[string]outputcap.Directory, 
 		}
 	}
 	return result
-}
-
-func acquireOutputPublicOperationGuard(platform outputcap.Platform) (outputcap.PublicOperationGuard, error) {
-	guard, err := platform.AcquirePublicOperationGuard()
-	if err != nil {
-		return nil, err
-	}
-	if guard == nil {
-		return nil, errors.New("output platform returned a nil public operation guard")
-	}
-	return guard, nil
 }

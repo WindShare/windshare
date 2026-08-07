@@ -185,14 +185,25 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 	// its content-authentication resources until its own lifecycle ends.
 	receiver.Close()
 	rules, _ := transfer.NewSelectionRules(true, nil)
-	job, err := receiverRuntime.NewTransferJob(rules, output)
+	intent, err := transfer.NewPathTransferIntent(
+		receiverRuntime.Descriptor().ShareInstance(), receiverRuntime.Descriptor().SyntheticRoot(),
+		rules, outputRoot, transfer.NativeFilesystemOutputBackendID, transfer.OutputNativeTree,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID, err := transfer.NewTransferJobID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := receiverRuntime.NewTransferJob(intent, jobID, output, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
 	if result.Outcome != transfer.JobSucceeded || result.Settlement.Kind() != transfer.JobClosed ||
-		result.SucceededFiles != 1 || result.TerminationCause != nil || result.ResumeIntent.IsZero() ||
-		result.SelectionIdentity.IsZero() {
+		result.SucceededFiles != 1 || result.TerminationCause != nil ||
+		result.TransferJobID != jobID || result.IntentDigest != intent.Digest() || result.TransferIntent.IsZero() {
 		t.Fatalf("job result = %+v", result)
 	}
 	written, err := os.ReadFile(filepath.Join(outputRoot, "tree", "nested", "file.bin"))

@@ -62,6 +62,7 @@ func CanTransitionSession(from, to SessionLifecycle) bool {
 type HeaderSpec struct {
 	Backend        transfer.OutputBackendID
 	SessionID      transfer.OutputSessionID
+	IntentDigest   transfer.TransferIntentDigest
 	Selection      transfer.OutputSelection
 	OutputRoot     OutputRootBinding
 	OutputAncestry OutputAncestryBinding
@@ -72,7 +73,7 @@ type Header struct {
 	sessionID              transfer.OutputSessionID
 	shareInstance          catalog.ShareInstance
 	syntheticRoot          catalog.DirectoryID
-	resumeIntent           transfer.ResumeIntent
+	intentDigest           transfer.TransferIntentDigest
 	selectionIdentity      transfer.SelectionIdentity
 	selectedDirectoryCount uint32
 	selectedFileCount      uint32
@@ -91,7 +92,7 @@ func NewHeader(spec HeaderSpec) (Header, error) {
 	return newHeaderFromClaims(headerClaims{
 		backend: spec.Backend, sessionID: spec.SessionID,
 		shareInstance: spec.Selection.ShareInstance(), syntheticRoot: spec.Selection.SyntheticRoot(),
-		resumeIntent: spec.Selection.ResumeIntent(), selectionIdentity: spec.Selection.Identity(),
+		intentDigest: spec.IntentDigest, selectionIdentity: spec.Selection.Identity(),
 		selectedDirectoryCount: uint32(directories), selectedFileCount: uint32(files),
 		outputRoot: spec.OutputRoot, outputAncestry: spec.OutputAncestry,
 		lifecycle: SessionActive, stateGeneration: 1,
@@ -103,7 +104,7 @@ type headerClaims struct {
 	sessionID              transfer.OutputSessionID
 	shareInstance          catalog.ShareInstance
 	syntheticRoot          catalog.DirectoryID
-	resumeIntent           transfer.ResumeIntent
+	intentDigest           transfer.TransferIntentDigest
 	selectionIdentity      transfer.SelectionIdentity
 	selectedDirectoryCount uint32
 	selectedFileCount      uint32
@@ -117,7 +118,7 @@ func newHeaderFromClaims(claims headerClaims) (Header, error) {
 	_, backendErr := transfer.NewOutputBackendID(string(claims.backend))
 	selectedCount := uint64(claims.selectedDirectoryCount) + uint64(claims.selectedFileCount)
 	if backendErr != nil || claims.sessionID.IsZero() || claims.shareInstance.IsZero() || claims.syntheticRoot.IsZero() ||
-		claims.resumeIntent.IsZero() || claims.selectionIdentity.IsZero() || !claims.outputRoot.valid() ||
+		claims.intentDigest.IsZero() || claims.selectionIdentity.IsZero() || !claims.outputRoot.valid() ||
 		!claims.outputAncestry.valid() ||
 		!claims.lifecycle.Valid() || claims.stateGeneration == 0 ||
 		uint64(claims.selectedFileCount) > MaxFilesPerSession || selectedCount > MaxSelectedEntriesPerSession {
@@ -126,21 +127,20 @@ func newHeaderFromClaims(claims headerClaims) (Header, error) {
 	return Header(claims), nil
 }
 
-func (header Header) Backend() transfer.OutputBackendID    { return header.backend }
-func (header Header) SessionID() transfer.OutputSessionID  { return header.sessionID }
-func (header Header) ShareInstance() catalog.ShareInstance { return header.shareInstance }
-func (header Header) SyntheticRoot() catalog.DirectoryID   { return header.syntheticRoot }
-func (header Header) ResumeIntent() transfer.ResumeIntent  { return header.resumeIntent }
+func (header Header) Backend() transfer.OutputBackendID           { return header.backend }
+func (header Header) SessionID() transfer.OutputSessionID         { return header.sessionID }
+func (header Header) ShareInstance() catalog.ShareInstance        { return header.shareInstance }
+func (header Header) SyntheticRoot() catalog.DirectoryID          { return header.syntheticRoot }
+func (header Header) IntentDigest() transfer.TransferIntentDigest { return header.intentDigest }
 func (header Header) SelectionIdentity() transfer.SelectionIdentity {
 	return header.selectionIdentity
 }
-func (header Header) SelectedDirectoryCount() uint32         { return header.selectedDirectoryCount }
-func (header Header) SelectedFileCount() uint32              { return header.selectedFileCount }
-func (header Header) OutputRoot() OutputRootBinding          { return header.outputRoot }
-func (header Header) OutputAncestry() OutputAncestryBinding  { return header.outputAncestry }
-func (header Header) ResumeNamespace() transfer.ResumeIntent { return header.resumeIntent }
-func (header Header) Lifecycle() SessionLifecycle            { return header.lifecycle }
-func (header Header) StateGeneration() uint64                { return header.stateGeneration }
+func (header Header) SelectedDirectoryCount() uint32        { return header.selectedDirectoryCount }
+func (header Header) SelectedFileCount() uint32             { return header.selectedFileCount }
+func (header Header) OutputRoot() OutputRootBinding         { return header.outputRoot }
+func (header Header) OutputAncestry() OutputAncestryBinding { return header.outputAncestry }
+func (header Header) Lifecycle() SessionLifecycle           { return header.lifecycle }
+func (header Header) StateGeneration() uint64               { return header.stateGeneration }
 
 func (header Header) withLifecycle(next SessionLifecycle) (Header, error) {
 	if !header.valid() || !CanTransitionSession(header.lifecycle, next) || header.stateGeneration == math.MaxUint64 {

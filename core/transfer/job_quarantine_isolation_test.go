@@ -3,6 +3,7 @@ package transfer
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -22,6 +23,23 @@ func (output *pathScriptedJobOutput) OpenSelection(
 		return nil, err
 	}
 	return output, nil
+}
+
+func (output *pathScriptedJobOutput) OpenOutput(
+	ctx context.Context,
+	intent TransferIntent,
+) (OutputSession, error) {
+	if _, err := output.jobOutput.OpenOutput(ctx, intent); err != nil {
+		return nil, err
+	}
+	return output, nil
+}
+
+func (output *pathScriptedJobOutput) AdmitDirectory(
+	ctx context.Context,
+	directory OutputDirectory,
+) (DirectoryAdmission, error) {
+	return output.jobOutput.AdmitDirectory(ctx, directory)
 }
 
 func (output *pathScriptedJobOutput) BeginFile(
@@ -71,7 +89,7 @@ func TestTransferJobIsolatesTransactionQuarantineAndPublishesSibling(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := NewTransferJob(TransferJobConfig{
+	job, err := newTestTransferJob(t, TransferJobConfig{
 		ShareInstance: share,
 		SyntheticRoot: root,
 		Rules:         rules,
@@ -112,5 +130,67 @@ func TestTransferJobIsolatesTransactionQuarantineAndPublishesSibling(t *testing.
 		t.Fatalf("sibling flow = quarantined=%+v published=%+v pause=%d complete=%d",
 			base.transactions["a-quarantined.bin"], base.transactions["b-published.bin"],
 			base.pauseCalls, base.completeCalls)
+	}
+}
+
+func TestTransferJobStopsSiblingWorkOnUnsettledCommit(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		scope OutputFaultScope
+	}{
+		{name: "file", scope: OutputFaultFile},
+		{name: "session", scope: OutputFaultSession},
+		{name: "root", scope: OutputFaultRoot},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			scope := test.scope
+			share := transferID[catalog.ShareInstance](200 + byte(scope))
+			root := transferID[catalog.DirectoryID](204 + byte(scope))
+			first := transferID[catalog.FileID](208 + byte(scope))
+			second := transferID[catalog.FileID](212 + byte(scope))
+			cause := errors.New("durable publication authority was lost")
+			base := newJobOutput(share)
+			output := &pathScriptedJobOutput{
+				jobOutput: base,
+				scripts: map[string]jobTransactionScript{
+					"a-first.bin": {commitErr: NewOutputFault(scope, OutputFaultStateIO, cause)},
+				},
+			}
+			revisions := &jobRevisionClient{
+				opened: make(map[catalog.FileID]OpenedRevision), failures: make(map[catalog.FileID]error),
+			}
+			for index, file := range []catalog.FileID{first, second} {
+				descriptor := jobDescriptor(t, share, file, byte(220+index), 0)
+				revisions.opened[file], _ = NewOpenedRevision(
+					transferID[content.LeaseID](byte(224+index)), descriptor,
+				)
+			}
+			rules, _ := NewSelectionRules(true, nil)
+			job, err := newTestTransferJob(t, TransferJobConfig{
+				ShareInstance: share, SyntheticRoot: root, Rules: rules,
+				Catalog: failingCatalog{
+					snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
+						root: jobSnapshot(t, share, root, 1,
+							jobEntry(t, first, "a-first.bin", 0), jobEntry(t, second, "b-second.bin", 0),
+						),
+					},
+					failures: make(map[catalog.DirectoryID]error),
+				},
+				Revisions: revisions, Blocks: scriptedRangeReader{}, Output: output,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			result := job.Run(context.Background())
+			if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, cause) ||
+				!errors.Is(result.SettlementFailure, cause) ||
+				!slices.Equal(revisions.order, []catalog.FileID{first}) ||
+				base.transactions["a-first.bin"] == nil || base.transactions["b-second.bin"] != nil ||
+				len(base.finalized) != 0 || base.pauseCalls != 1 || base.completeCalls != 0 {
+				t.Fatalf("result=%+v revisions=%v transactions=%v finalized=%v pause=%d complete=%d",
+					result, revisions.order, base.transactions, base.finalized, base.pauseCalls, base.completeCalls)
+			}
+		})
 	}
 }

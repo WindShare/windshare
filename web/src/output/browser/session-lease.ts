@@ -1,4 +1,8 @@
-import type { OutputSessionIdentity } from '../../transfer/output-session'
+import { encodeBase64Url } from '../../crypto/bytes'
+import {
+  durableCheckpointNamespaceKey,
+  type DurableCheckpointNamespaceIdentity,
+} from '../persistence/namespace'
 
 interface LockHandle {
   readonly name: string
@@ -7,7 +11,7 @@ interface LockHandle {
 interface LockManagerRuntime {
   request(
     name: string,
-    options: { readonly mode: 'exclusive'; readonly ifAvailable: true },
+    options: { readonly mode: 'exclusive'; readonly ifAvailable?: true },
     callback: (lock: LockHandle | null) => Promise<void>,
   ): Promise<void>
 }
@@ -18,7 +22,32 @@ export interface BrowserOutputSessionLease {
 
 /** A browser lock prevents two tabs from publishing competing checkpoint heads. */
 export async function acquireBrowserOutputSessionLease(
-  identity: OutputSessionIdentity,
+  identity: DurableCheckpointNamespaceIdentity,
+): Promise<BrowserOutputSessionLease> {
+  const namespace = durableCheckpointNamespaceKey(identity)
+  return acquireBrowserLease(
+    `windshare-output:${encodeBase64Url(new TextEncoder().encode(namespace))}`,
+    true,
+    'This checkpoint namespace is already active in another page',
+  )
+}
+
+/** Serializes the one-shot legacy-store cleaner across every page in the origin. */
+export function acquireBrowserCheckpointCleanupLease(
+  databaseName: string,
+): Promise<BrowserOutputSessionLease> {
+  if (databaseName.length === 0) throw new TypeError('checkpoint database name must not be empty')
+  return acquireBrowserLease(
+    `windshare-output-cleanup:${encodeBase64Url(new TextEncoder().encode(databaseName))}`,
+    false,
+    'Checkpoint cleanup is already active in another page',
+  )
+}
+
+async function acquireBrowserLease(
+  name: string,
+  failWhenUnavailable: boolean,
+  unavailableMessage: string,
 ): Promise<BrowserOutputSessionLease> {
   const manager = (navigator as Navigator & { readonly locks?: LockManagerRuntime }).locks
   if (manager === undefined) {
@@ -34,12 +63,12 @@ export async function acquireBrowserOutputSessionLease(
   let releaseResolve!: () => void
   const held = new Promise<void>((resolve) => { releaseResolve = resolve })
   const completion = manager.request(
-    `windshare-output:${identity.backend}:${identity.outputSessionId}`,
-    { mode: 'exclusive', ifAvailable: true },
+    name,
+    failWhenUnavailable ? { mode: 'exclusive', ifAvailable: true } : { mode: 'exclusive' },
     async (lock) => {
       if (lock === null) {
         acquiredReject(new DOMException(
-          'This output session is already active in another page',
+          unavailableMessage,
           'InvalidStateError',
         ))
         return

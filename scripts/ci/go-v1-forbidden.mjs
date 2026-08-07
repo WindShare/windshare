@@ -21,6 +21,114 @@ function goFilesUnder(directory) {
   return filesUnder(directory, (name) => name.endsWith('.go'))
 }
 
+const productionGoRoots = [
+  'core',
+  'cmd',
+  'connectivity',
+  'e2e',
+  'internal',
+  'relay',
+  'transport',
+]
+
+function productionGoFiles() {
+  return productionGoRoots.flatMap((root) => {
+    const absolute = resolve(REPOSITORY_ROOT, root)
+    return existsSync(absolute) ? goFilesUnder(absolute) : []
+  })
+}
+
+function isOneShotCleaner(path) {
+  const display = relative(REPOSITORY_ROOT, path).replaceAll('\\', '/')
+  // A cleaner is deliberately allowed to name the retired namespace it removes.
+  // It is not a runtime reader: the production graph must keep it behind an
+  // ownership check and the one-shot cleanup boundary.
+  return display.startsWith('core/osfs/internal/checkpointcleaner/') && display.endsWith('.go')
+}
+
+const retiredTransferIdentifiers = [
+  /\bOpenSelection\s*\(/u,
+  /\bV2TransferJob\b/u,
+  /\bV2OutputSelectionPlan\b/u,
+  /\bV2OutputSelection\b/u,
+  /\bCanonicalSelectionV1\b/u,
+  /\bResumeIntent\b/u,
+  /\bResumeNamespaceName\b/u,
+  /\bResumeStateLegacyUntrusted\b/u,
+  /\bresumeIntentText\b/u,
+  /windshare\/output-resume-intent\/v3/u,
+  /\.wsresume-output/u,
+  /\bSchemaVersion\s*=\s*uint32\(3\)/u,
+  /\bListResumeState\b/u,
+  /\bDiscardResumeState\b/u,
+  /\bResumeState(?:Inventory|Summary|Ref|Kind)\b/u,
+  /\bResumeSessionLifecycle\b/u,
+  /\bDiscardSettlement\b/u,
+  /\bopenOutputSession\b/u,
+  /\boutputSessionOpenAttempt\b/u,
+  /\bscanOutputV3FileNamespace\b/u,
+  /\badoptFileNamespaceSnapshot\b/u,
+  /\bpreviewPrivateTree\b/u,
+  /\bresumeSessionListing\b/u,
+  /\binspectDiscardCheckpointNamespace\b/u,
+  /\bauthorizeLocklessDiscard\b/u,
+  /\brecoverTerminalSession\b/u,
+  /\bsettleTerminalCheckpointNamespace\b/u,
+]
+
+// The incremental scheduler must never regain a terminal whole-tree barrier or
+// an all-directory admission ledger. Scan tests as well as production so the
+// deleted behavior cannot become the specification for a second architecture.
+const retiredSelectionSpoolIdentifiers = [
+  /\b(?:selectionSpool(?:Checkpoint)?|newSelectionSpool)\b/u,
+  /\bselectionDirectoryReference\b/u,
+  /\bselectionPlan\w*\b/u,
+  /\bselectionClaim\w*\b/u,
+  /\bdiscoverSelection\s*\(/u,
+  /\bfinalizeSelectionDirectories\s*\(/u,
+  /\bsetSelection\s*\(/u,
+  /\bnewOutputSelectionFromPlan\s*\(/u,
+  /\boutputSelectionPlan\b/u,
+  /\bErrSelectionPlan(?:Budget|State)\b/u,
+  /\bmaximumSelectionClaims\b/u,
+  /\bplannedDirectory\b/u,
+  /\bTransfer(?:SelectionFrozen|GenerationAdmitted)\b/u,
+  /\bdirectoryAdmissionKey\b/u,
+  /\badmittedDirectories\b/u,
+  /\badmissions\s+map\s*\[string\]DirectoryAdmission\b/u,
+]
+
+const retiredTransferFiles = [
+  'core/transfer/resume_intent.go',
+  'core/transfer/selection_external_sort.go',
+  'core/transfer/selection_plan_codec.go',
+  'core/transfer/selection_spool.go',
+  'core/transfer/selection_spool_test.go',
+  'core/transfer/job_traversal_boundaries_test.go',
+  'core/transfer/output_selection_plan_test.go',
+  'core/osfs/internal/outputruntime/resume_legacy.go',
+  'core/osfs/internal/outputruntime/resume_list.go',
+  'core/osfs/internal/outputruntime/resume_discard.go',
+  'core/osfs/internal/outputruntime/namespace_recovery.go',
+  'core/osfs/internal/outputruntime/session_terminal.go',
+]
+
+for (const path of retiredTransferFiles) {
+  if (existsSync(resolve(REPOSITORY_ROOT, path))) {
+    violations.push(`retired transfer source still exists: ${path}`)
+  }
+}
+
+for (const path of goFilesUnder(resolve(REPOSITORY_ROOT, 'core', 'transfer'))) {
+  const source = readFileSync(path, 'utf8')
+  const display = relative(REPOSITORY_ROOT, path).replaceAll('\\', '/')
+  for (const identifier of retiredSelectionSpoolIdentifiers) {
+    if (identifier.test(source)) {
+      violations.push(`retired whole-tree transfer identifier ${identifier.source} in ${display}`)
+    }
+  }
+}
+
 // These packages encode the retired manifest/plan/chunk protocol. Checking the
 // physical trees prevents dead or build-tagged copies from surviving outside the
 // production dependency graph and becoming a second architecture.
@@ -120,6 +228,23 @@ for (const path of goFilesUnder(REPOSITORY_ROOT)) {
   }
 }
 
+// The incremental output contract has one production authority. Keep retired
+// terminal-selection names out of both reachable and dead production copies so
+// a build tag cannot quietly restore the old barrier. Tests may describe the
+// old contract while they are being rewritten; one-shot cleaners are the only
+// production exception because they must recognise old records in order to
+// remove them without importing their ranges.
+for (const path of productionGoFiles()) {
+  const display = relative(REPOSITORY_ROOT, path).replaceAll('\\', '/')
+  if (display.endsWith('_test.go') || isOneShotCleaner(path)) continue
+  const source = readFileSync(path, 'utf8')
+  for (const identifier of retiredTransferIdentifiers) {
+    if (identifier.test(source)) {
+      violations.push(`retired transfer identifier ${identifier.source} in ${display}`)
+    }
+  }
+}
+
 const forbiddenProductionDependencies = new Set([
   'github.com/windshare/windshare/connectivity',
   'github.com/windshare/windshare/core/chunk',
@@ -185,4 +310,4 @@ if (violations.length > 0) {
   process.exit(1)
 }
 
-console.log('go-v1-forbidden: PASS (retired roots absent; sender P2P and default/all-tag production graphs enforced)')
+console.log('go-v1-forbidden: PASS (retired roots and transfer namespaces absent; sender P2P and default/all-tag production graphs enforced)')

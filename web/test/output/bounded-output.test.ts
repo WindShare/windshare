@@ -5,6 +5,7 @@ import type { OutputFile } from '../../src/transfer/output-session'
 import { PersistentTreeOutputSession } from '../../src/output/persistent-tree/session'
 import { OUTPUT_JOURNAL_PAGE_RECORD_LIMIT } from '../../src/output/persistence/journal'
 import { MemoryOutputJournal, MemoryOutputTree } from './fakes'
+import { admittedOutputFile, testOutputIdentity } from './admission-fixture'
 
 const ACTIVE_SIGNAL = new AbortController().signal
 
@@ -20,8 +21,8 @@ describe('bounded output structure', () => {
     const first = await PersistentTreeOutputSession.open(options)
     const fileCount = OUTPUT_JOURNAL_PAGE_RECORD_LIMIT * 3
     for (let index = 0; index < fileCount; index += 1) {
-      const begun = await first.beginFile(zeroByteFile(index))
-      await begun.transaction.commit()
+      const begun = await first.beginFile(await admittedOutputFile(first, zeroByteFile(index)), ACTIVE_SIGNAL)
+      await begun.transaction.commit(ACTIVE_SIGNAL)
     }
     await first.finishJob(
       jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY),
@@ -47,9 +48,9 @@ function zeroByteFile(index: number): OutputFile {
   const identity = index.toString(36)
   return {
     source: {
-      shareInstance: 'million-share',
-      fileId: `file-${identity}`,
-      fileRevision: `revision-${identity}`,
+      shareInstance: testOutputIdentity('million-share'),
+      fileId: testOutputIdentity(`file:${identity}`),
+      fileRevision: testOutputIdentity(`revision:${identity}`),
     },
     path: [`file-${identity}`],
     exactSize: 0n,

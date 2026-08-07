@@ -1,6 +1,7 @@
 package resumestate
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -68,7 +69,7 @@ func testSelection(t *testing.T, exactSize uint64) transfer.OutputSelection {
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonical, err := transfer.NewCanonicalSelectionV1(request, plan)
+	canonical, err := transfer.NewTerminalSelectionObservationV1(request, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +78,25 @@ func testSelection(t *testing.T, exactSize uint64) transfer.OutputSelection {
 		t.Fatal(err)
 	}
 	return bound
+}
+
+func selectionIntentDigest(selection transfer.OutputSelection) transfer.TransferIntentDigest {
+	rules, err := transfer.NewSelectionRules(true, nil)
+	if err != nil {
+		panic(err)
+	}
+	target, err := transfer.NewOpaqueOutputTarget(bytes.Repeat([]byte{0x4d}, transfer.OutputRootIdentityBytes))
+	if err != nil {
+		panic(err)
+	}
+	intent, err := transfer.NewTransferIntent(
+		selection.ShareInstance(), selection.SyntheticRoot(), rules, target,
+		transfer.NativeFilesystemOutputBackendID, transfer.OutputNativeTree,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return intent.Digest()
 }
 
 func testControl(t *testing.T) Control {
@@ -137,7 +157,7 @@ func testHeaderForSelectionAndID(
 	t.Helper()
 	root := testRootBinding(t)
 	header, err := NewHeader(HeaderSpec{
-		Backend: testBackend(t), SessionID: sessionID, Selection: selection,
+		Backend: testBackend(t), SessionID: sessionID, IntentDigest: selectionIntentDigest(selection), Selection: selection,
 		OutputRoot: root, OutputAncestry: testAncestryBinding(t, root, selection),
 	})
 	if err != nil {
@@ -146,7 +166,7 @@ func testHeaderForSelectionAndID(
 	if lifecycle != SessionActive {
 		header, err = newHeaderFromClaims(headerClaims{
 			backend: header.backend, sessionID: header.sessionID, shareInstance: header.shareInstance,
-			syntheticRoot: header.syntheticRoot, resumeIntent: header.resumeIntent,
+			syntheticRoot: header.syntheticRoot, intentDigest: header.intentDigest,
 			selectionIdentity:      header.selectionIdentity,
 			selectedDirectoryCount: header.selectedDirectoryCount, selectedFileCount: header.selectedFileCount,
 			outputRoot: header.outputRoot, outputAncestry: header.outputAncestry,
@@ -179,7 +199,7 @@ func testSessionAuthorityForSelectionAndID(
 	t.Helper()
 	header := testHeaderForSelectionAndID(t, selection, lifecycle, sessionID)
 	authority, err := BindSessionAuthority(
-		testControl(t), header, selection, ResumeNamespaceName(selection.ResumeIntent()),
+		testControl(t), header, selection, IntentNamespaceName(selectionIntentDigest(selection)),
 		SessionDirectoryName(header.SessionID()),
 	)
 	if err != nil {

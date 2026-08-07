@@ -3,10 +3,16 @@ package outputruntime
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/osfs/internal/checkpointcleaner"
+	"github.com/windshare/windshare/core/osfs/internal/checkpointstore"
+	"github.com/windshare/windshare/core/osfs/internal/incrementaladmission"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/osfs/internal/outputfault"
 	"github.com/windshare/windshare/core/osfs/internal/outputnamespace"
@@ -19,6 +25,7 @@ type FilesystemOutputTraceOperation uint8
 const (
 	TraceFilesystemCertified FilesystemOutputTraceOperation = iota + 1
 	TraceFeatureProbeCompleted
+	TraceCheckpointCleanup
 	TraceControlBootstrap
 	TraceNativeLock
 	TraceSessionOpened
@@ -90,7 +97,7 @@ const (
 
 type FilesystemOutputTrace struct {
 	Operation                 FilesystemOutputTraceOperation
-	ResumeIntent              transfer.ResumeIntent
+	IntentDigest              transfer.TransferIntentDigest
 	SessionID                 transfer.OutputSessionID
 	LocatorDigest             transfer.OutputLocatorDigest
 	OutputObjectID            transfer.OutputObjectIdentity
@@ -117,6 +124,9 @@ type FilesystemOutputTrace struct {
 	NativeLockMilestone       FilesystemOutputNativeLockMilestone
 	MutationReportedFailure   bool
 	ParentSyncReportedFailure bool
+	CleanupRemoved            uint64
+	CleanupQuarantined        uint64
+	CleanupSkipped            uint64
 	Failed                    bool
 }
 
@@ -134,15 +144,7 @@ func (function FilesystemOutputTraceFunc) TraceFilesystemOutput(event Filesystem
 
 const maxFilesystemOutputTransactions = 32
 
-const filesystemOutputBackendName = "windshare/native-output/v3"
-
-var filesystemOutputBackendID = func() transfer.OutputBackendID {
-	backend, err := transfer.NewOutputBackendID(filesystemOutputBackendName)
-	if err != nil {
-		panic(err)
-	}
-	return backend
-}()
+const filesystemOutputBackendID = transfer.NativeFilesystemOutputBackendID
 
 type outputSessionIDGenerator interface {
 	NewOutputSessionID() (transfer.OutputSessionID, error)
@@ -157,28 +159,40 @@ type outputObjectIDGenerator interface {
 // directed from the public facade toward runtime policy and native capability ports.
 type PlatformFactory func(string, bool) (outputcap.Platform, error)
 
+type CheckpointCleanupFunc func(
+	context.Context,
+	checkpointcleaner.OneShotCheckpointCleanerConfig,
+) (checkpointcleaner.CheckpointCleanupReport, error)
+
 type Config struct {
-	RootPath        string
-	CreateRoot      bool
-	Tracer          FilesystemOutputTracer
-	PlatformFactory PlatformFactory
+	RootPath          string
+	CreateRoot        bool
+	Tracer            FilesystemOutputTracer
+	PlatformFactory   PlatformFactory
+	CheckpointCleanup CheckpointCleanupFunc
 }
 
 type Authority struct {
-	rootPath        string
-	createRoot      bool
-	sessionIDs      outputSessionIDGenerator
-	objectIDs       outputObjectIDGenerator
-	tracer          FilesystemOutputTracer
-	platformFactory PlatformFactory
-	random          io.Reader
+	rootPath          string
+	createRoot        bool
+	sessionIDs        outputSessionIDGenerator
+	objectIDs         outputObjectIDGenerator
+	tracer            FilesystemOutputTracer
+	platformFactory   PlatformFactory
+	checkpointCleanup CheckpointCleanupFunc
+	random            io.Reader
 }
 
 func New(config Config) (*Authority, error) {
+	cleanup := config.CheckpointCleanup
+	if cleanup == nil {
+		cleanup = checkpointcleaner.CleanOwnedNamespace
+	}
 	return &Authority{
 		rootPath: config.RootPath, createRoot: config.CreateRoot,
 		sessionIDs: cryptographicOutputSessionIDs{}, objectIDs: cryptographicOutputObjectIDs{},
-		tracer: config.Tracer, platformFactory: config.PlatformFactory, random: rand.Reader,
+		tracer: config.Tracer, platformFactory: config.PlatformFactory,
+		checkpointCleanup: cleanup, random: rand.Reader,
 	}, nil
 }
 
@@ -205,48 +219,56 @@ func (authority *Authority) trace(event FilesystemOutputTrace) {
 }
 
 type outputSelectionAdmission struct {
-	selection  transfer.OutputSelection
-	files      map[string]transfer.OutputSelectionFile
-	dirs       map[string]transfer.OutputSelectionDirectory
-	ancestry   outputAncestrySnapshot
-	validation *outputAncestryValidation
-	resuming   bool
+	selection    transfer.OutputSelection
+	intentDigest transfer.TransferIntentDigest
+	files        map[string]transfer.OutputSelectionFile
+	dirs         map[string]transfer.OutputSelectionDirectory
+	// incremental is a distinct runtime authority variant, not a flag layered on
+	// the frozen selection. It carries the live generation/file ledger through
+	// terminal reopen without pretending those claims were encoded in a durable
+	// header.
+	incremental *incrementalOutputAdmission
+	// Session-local secret authenticates incremental directory admission without
+	// becoming durable identity or leaving the output runtime.
+	admissionSecret [sha256.Size]byte
+	ancestry        outputAncestrySnapshot
+	validation      *outputAncestryValidation
+	resuming        bool
 }
 
-// OpenSelection is the post-discovery authority boundary used by transfer.
-// Keeping the output-root policy on this object prevents the transfer job from
-// constructing filesystem state before the complete canonical selection exists.
-func (authority *Authority) OpenSelection(
+// OpenOutput opens the receiver-owned root authority before catalog discovery.
+// It certifies the exact picker target, probes recoverability, bootstraps (or
+// validates) the control namespace, and retains the certified platform handle
+// for the lazy per-generation session. No user directory is materialized here;
+// only the backend's reserved control namespace may be installed.
+func (authority *Authority) OpenOutput(
 	ctx context.Context,
-	selection transfer.OutputSelection,
+	intent transfer.TransferIntent,
 ) (transfer.OutputSession, error) {
-	session, err := authority.openSelection(ctx, selection)
-	if err != nil {
-		return nil, err
+	if authority == nil || intent.IsZero() || authority.platformFactory == nil || authority.rootPath == "" ||
+		authority.sessionIDs == nil || authority.objectIDs == nil || authority.random == nil {
+		return nil, transfer.ErrInvalidTransferIntent
 	}
-	return session, nil
-}
-
-func (authority *Authority) openSelection(
-	ctx context.Context,
-	requested transfer.OutputSelection,
-) (*Session, error) {
-	if authority == nil || authority.platformFactory == nil || authority.sessionIDs == nil || authority.objectIDs == nil ||
-		authority.rootPath == "" {
+	target := intent.OutputTarget()
+	if target.Kind() != transfer.OutputFilesystemRootTarget || target.RootPath() == "" ||
+		!filepath.IsAbs(target.RootPath()) || filepath.Clean(target.RootPath()) != filepath.Clean(authority.rootPath) {
+		return nil, transfer.ErrInvalidOutputBinding
+	}
+	if intent.BackendID() != filesystemOutputBackendID || intent.Format() != transfer.OutputNativeTree {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	canonical := requested.CanonicalSelection()
-	selection, err := canonical.BindPlan(requested)
-	if err != nil || selection.ResumeIntent().IsZero() ||
-		selection.ResumeIntent() != canonical.ResumeIntent() {
-		return nil, errors.Join(transfer.ErrInvalidOutputSelection, err)
-	}
 	platform, err := authority.platformFactory(authority.rootPath, authority.createRoot)
 	if err != nil {
 		return nil, outputnamespace.RootFault("certify output filesystem", err)
+	}
+	if platform == nil || platform.Root() == nil {
+		if platform != nil {
+			_ = platform.Close()
+		}
+		return nil, outputnamespace.RootFault("certify output filesystem", transfer.ErrInvalidOutputBinding)
 	}
 	platformOwned := true
 	defer func() {
@@ -255,151 +277,112 @@ func (authority *Authority) openSelection(
 		}
 	}()
 	authority.trace(FilesystemOutputTrace{
-		Operation: TraceFilesystemCertified, ResumeIntent: selection.ResumeIntent(),
+		Operation:     TraceFilesystemCertified,
 		Certification: filesystemOutputCertificationFromState(platform.Certification()),
 	})
-	if err := validateReservedOutputSelection(platform, selection); err != nil {
-		return nil, classifyFrozenSelectionFault(platform, selection, err)
-	}
-	admission, err := preflightOutputSelectionAdmission(platform, selection)
-	if err != nil {
-		return nil, classifyFrozenSelectionFault(platform, selection, err)
-	}
-	if err := preflightOutputSelectionParents(platform, selection); err != nil {
-		return nil, classifyFrozenSelectionFault(
-			platform,
-			selection,
-			frozenSelectionAdmissionFault("preflight selected output parents", err, false),
-		)
-	}
 	if err := validateOutputCreateAuthority(platform.Root()); err != nil {
-		return nil, outputnamespace.RootFault("validate output root mutation authority", err)
-	}
-	if err := preflightOutputSelectionAuthorities(platform, selection); err != nil {
-		return nil, classifyFrozenSelectionFault(
-			platform,
-			selection,
-			frozenSelectionAdmissionFault("validate selected output mutation authority", err, false),
-		)
+		return nil, err
 	}
 	if err := platform.ProbeRecoverableFeatures(); err != nil {
-		authority.trace(FilesystemOutputTrace{
-			Operation: TraceFeatureProbeCompleted, ResumeIntent: selection.ResumeIntent(),
-			Certification: filesystemOutputCertificationFromState(platform.Certification()), Failed: true,
-		})
 		return nil, outputnamespace.RootFault("probe output filesystem", err)
 	}
 	authority.trace(FilesystemOutputTrace{
-		Operation: TraceFeatureProbeCompleted, ResumeIntent: selection.ResumeIntent(),
+		Operation:     TraceFeatureProbeCompleted,
 		Certification: filesystemOutputCertificationFromState(platform.Certification()),
 	})
-	if err := platform.ValidateSelectionMetadata(selection); err != nil {
-		return nil, classifyFrozenSelectionFault(
-			platform,
-			selection,
-			frozenSelectionAdmissionFault("validate selected output metadata representation", err, false),
-		)
+	rootBinding, err := platform.RootBinding()
+	if err != nil || rootBinding.IsZero() {
+		if err == nil {
+			err = transfer.ErrInvalidOutputBinding
+		}
+		return nil, outputnamespace.RootFault("bind output root", err)
 	}
-	resumeIntentPresent, err := matchingOutputResumeIntentExists(platform, selection.ResumeIntent())
+	capabilities, capErr := transfer.NewOutputCapabilities(transfer.OutputCapabilities{
+		Durability: transfer.DurabilityProcessRestart, Mode: transfer.OutputNativeTree,
+		RandomWrite: true, FileFailureIsolation: true, ModifiedTime: true,
+		ArchiveBoundary: transfer.ArchiveFailureNotApplicable,
+	})
+	if capErr != nil {
+		return nil, capErr
+	}
+	// Cleanup must establish ownership before the live runtime can open its
+	// checkpoint claim. Otherwise merely opening a picker target could mint the
+	// proof later used to authorize destructive retirement of unrelated data.
+	if err := authority.cleanCheckpointNamespace(ctx, platform, intent.Digest()); err != nil {
+		return nil, err
+	}
+	checkpointClaim, err := checkpointstore.Open(checkpointstore.Config{
+		Root: platform.Root(), BackendID: filesystemOutputBackendID,
+		RootIdentity: rootBinding.Bytes(), Intent: intent.Digest(),
+	})
+	if err != nil {
+		return nil, outputnamespace.RootFault("open FileCheckpointV1 namespace", err)
+	}
+	checkpointOwned := true
+	defer func() {
+		if checkpointOwned {
+			_ = checkpointClaim.Close()
+		}
+	}()
+	sessionID, err := authority.sessionIDs.NewOutputSessionID()
 	if err != nil {
 		return nil, err
 	}
-	var ancestryValidation *outputAncestryValidation
-	admission.resuming = resumeIntentPresent
-	ancestryBoundary := outputAncestryAdmissionBoundary(resumeIntentPresent)
-	// NTFS exposes persistent Object IDs through CREATE_OR_GET only. Preparing
-	// every freshly opened ancestry authority is therefore also the restart read:
-	// an existing ID is reused, while a replacement may acquire only invisible
-	// Object-ID/USN metadata before the header binding rejects it. A resume never
-	// materializes missing user directories or writes WindShare state/content here.
-	if resumeIntentPresent {
-		ancestryValidation, err = prepareOutputSelectionAncestry(platform, selection)
-	} else {
-		ancestryValidation, err = prepareFreshOutputSelectionAncestry(platform, selection)
-	}
+	secret, err := incrementaladmission.NewSecret(authority.random)
 	if err != nil {
-		claimCount := 0
-		if paths, pathErr := canonicalOutputAncestryPaths(selection); pathErr == nil {
-			claimCount = len(paths)
-		}
-		authority.traceOutputAncestry(
-			selection, transfer.OutputSessionID{}, resumestate.LocatorDigest{}, outputAncestrySnapshot{},
-			claimCount, ancestryBoundary, outputAncestryTraceDecision(err),
-		)
-		return nil, outputAncestrySessionFault(
-			"capture output ancestry", err, resumeIntentPresent,
-		)
+		return nil, err
 	}
-	admission.ancestry = ancestryValidation.snapshot
-	admission.validation = ancestryValidation
-	authority.traceOutputAncestry(
-		selection, transfer.OutputSessionID{}, resumestate.LocatorDigest{}, admission.ancestry,
-		len(admission.ancestry.entries), ancestryBoundary, FilesystemOutputAncestryPrepared,
-	)
-	controlResult, err := authority.namespaceController().OpenOrBootstrapControl(platform)
-	if err != nil {
-		return nil, errors.Join(err, authority.closeOutputAdmissionAncestry(&admission))
-	}
-	control := controlResult.Namespace
 	authority.trace(FilesystemOutputTrace{
-		Operation: TraceControlBootstrap, ResumeIntent: selection.ResumeIntent(),
+		Operation:     TraceControlBootstrap,
+		SessionID:     sessionID,
 		Certification: filesystemOutputCertificationFromState(platform.Certification()),
 	})
-	session, _, _, err := authority.openOutputSession(ctx, platform, control, admission)
-	if err != nil {
-		_ = control.Close()
-		return nil, errors.Join(err, authority.closeOutputAdmissionAncestry(&admission))
-	}
 	platformOwned = false
-	if err := authority.closeOutputAdmissionAncestry(&admission); err != nil {
-		return nil, errors.Join(err, session.closeHandles())
-	}
-	return session, nil
+	checkpointOwned = false
+	return &incrementalOutputSession{
+		authority: authority, intent: intent, backend: filesystemOutputBackendID,
+		sessionID: sessionID, capabilities: capabilities, platform: platform,
+		rootBinding: rootBinding, secret: secret, checkpoint: checkpointClaim,
+		directories: make(map[string]incrementalDirectoryRecord),
+		byID:        make(map[catalog.DirectoryID]string),
+		files:       make(map[string]incrementalFileAdmission),
+	}, nil
 }
 
-func matchingOutputResumeIntentExists(
+func (authority *Authority) cleanCheckpointNamespace(
+	ctx context.Context,
 	platform outputcap.Platform,
-	intent transfer.ResumeIntent,
-) (present bool, resultErr error) {
-	if platform == nil || intent.IsZero() {
-		return false, transfer.ErrInvalidOutputSelection
+	intentDigest transfer.TransferIntentDigest,
+) error {
+	if authority == nil || authority.checkpointCleanup == nil || platform == nil {
+		return transfer.ErrInvalidOutputBinding
 	}
-	controller := outputnamespace.NewController(outputnamespace.ControllerConfig{Backend: filesystemOutputBackendID})
-	control, err := controller.OpenInstalledControl(platform.Root(), platform)
-	if isMissing(err) {
-		return false, nil
-	}
+	report, err := authority.checkpointCleanup(ctx, checkpointcleaner.OneShotCheckpointCleanerConfig{
+		Platform: platform, BackendID: filesystemOutputBackendID,
+	})
+	failed := err != nil || report.Status != checkpointcleaner.CheckpointCleanupStatusComplete ||
+		!report.Complete || report.NeedsAttention()
+	authority.trace(FilesystemOutputTrace{
+		Operation: TraceCheckpointCleanup, IntentDigest: intentDigest,
+		CleanupRemoved: report.Removed, CleanupQuarantined: report.Quarantined,
+		CleanupSkipped: report.Skipped, Failed: failed,
+	})
 	if err != nil {
-		return false, err
+		return outputnamespace.RootFault("clean retired output namespace", err)
 	}
-	defer func() {
-		if closeErr := control.Close(); closeErr != nil {
-			present = false
-			resultErr = errors.Join(
-				resultErr,
-				outputfault.New(transfer.OutputFaultRoot, transfer.OutputFaultStateIO, closeErr),
-			)
-		}
-	}()
-	intentName := resumestate.ResumeNamespaceName(intent)
-	kind, err := outputnamespace.ObserveExactEntry(control.Sessions(), intentName)
-	if err != nil {
-		return false, intentOutputFault("inspect matching resume-intent namespace", err)
+	if failed {
+		return outputnamespace.RootFault(
+			"clean retired output namespace",
+			fmt.Errorf(
+				"%w: status=%d complete=%t attention=%q",
+				checkpointcleaner.ErrCheckpointCleanerOwnership,
+				report.Status,
+				report.Complete,
+				report.Attention,
+			),
+		)
 	}
-	if kind == outputcap.EntryAbsent {
-		return false, nil
-	}
-	if kind != outputcap.EntryDirectory {
-		return false, intentOutputFault("classify matching resume-intent namespace", outputfault.ErrIntentUnsafe)
-	}
-	directory, err := control.Sessions().OpenDirectory(intentName, true)
-	if err != nil {
-		return false, intentOutputFault("open matching resume-intent namespace", err)
-	}
-	if err := directory.Close(); err != nil {
-		return false, outputfault.New(transfer.OutputFaultSession, transfer.OutputFaultStateIO, err)
-	}
-	return true, nil
+	return nil
 }
 
 func frozenSelectionAdmissionFault(operation string, cause error, requiresPause bool) error {
@@ -409,33 +392,6 @@ func frozenSelectionAdmissionFault(operation string, cause error, requiresPause 
 		fmt.Errorf("%s: %w", operation, cause),
 	)
 	if !requiresPause {
-		return fault
-	}
-	return transfer.NewOutputSessionError(fault, true)
-}
-
-func classifyFrozenSelectionFault(
-	platform outputcap.Platform,
-	selection transfer.OutputSelection,
-	fault error,
-) error {
-	if fault == nil || selection.ResumeIntent().IsZero() || errors.Is(fault, transfer.ErrInvalidOutputSelection) {
-		return fault
-	}
-	resumeIntentPresent, stateErr := matchingOutputResumeIntentExists(platform, selection.ResumeIntent())
-	if stateErr != nil {
-		// A failed observation cannot prove this is a fresh selection. Preserve the
-		// typed state/root fault and require the caller to leave any durable intent
-		// untouched until its lifecycle can be established safely.
-		return transfer.NewOutputSessionError(
-			errors.Join(stateErr, fault),
-			true,
-		)
-	}
-	// This exact-entry observation is the lifecycle linearization point. A later
-	// concurrent creator owns its own admission; it does not retroactively turn
-	// this already-fresh rejection into a paused durable session.
-	if !resumeIntentPresent {
 		return fault
 	}
 	return transfer.NewOutputSessionError(fault, true)
@@ -458,4 +414,15 @@ func (authority *Authority) closeOutputAdmissionAncestry(
 		outputAncestryTraceDecision(errors.Join(errOutputAncestryUnsafe, err)),
 	)
 	return outputAncestryPauseFault("close output ancestry admission guard", err)
+}
+
+func acquireOutputPublicOperationGuard(platform outputcap.Platform) (outputcap.PublicOperationGuard, error) {
+	guard, err := platform.AcquirePublicOperationGuard()
+	if err != nil {
+		return nil, err
+	}
+	if guard == nil {
+		return nil, errors.New("output platform returned a nil public operation guard")
+	}
+	return guard, nil
 }

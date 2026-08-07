@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -8,26 +9,31 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 const (
 	DefaultOutputSettlementTimeout = 30 * time.Second
 	MaximumOutputSettlementTimeout = 5 * time.Minute
+	DefaultTransferQueueCapacity   = 8
+	MaximumTransferQueueCapacity   = 256
+	DefaultGenerationReplayPages   = (catalog.MaxDirectoryEntries + catalog.MaxCatalogPageEntries - 1) / catalog.MaxCatalogPageEntries
+	MaximumGenerationReplayPages   = catalog.MaxDirectoryEntries
 )
 
 var (
-	ErrInvalidTransferJob    = errors.New("transfer job configuration is invalid")
-	ErrTransferJobRun        = errors.New("transfer job may only run once")
-	ErrCatalogIdentity       = errors.New("catalog snapshot does not match the requested share and directory")
-	ErrRevisionIdentity      = errors.New("opened revision does not match the selected catalog file")
-	ErrOutputContract        = errors.New("output session violated its file transaction contract")
-	ErrCatalogEntriesOmitted = errors.New("catalog directory omitted children")
-	ErrCatalogCursorContract = errors.New("catalog reader returned no page cursor")
-	ErrOutputPublishBlocked  = errors.New("output publication is blocked by an existing final path")
-	ErrOutputQuarantined     = errors.New("output file needs manual ownership review")
-	ErrOutputRetired         = errors.New("output file retirement completed without content transfer")
-	errRangeReaderContract   = errors.New("range reader violated its requested output interval")
-	errStopFileIteration     = errors.New("transfer file iteration settled")
+	ErrInvalidTransferJob     = errors.New("transfer job configuration is invalid")
+	ErrTransferJobRun         = errors.New("transfer job may only run once")
+	ErrCatalogIdentity        = errors.New("catalog snapshot does not match the requested share and directory")
+	ErrRevisionIdentity       = errors.New("opened revision does not match the selected catalog file")
+	ErrOutputContract         = errors.New("output session violated its file transaction contract")
+	ErrCatalogEntriesOmitted  = errors.New("catalog directory omitted children")
+	ErrCatalogCursorContract  = errors.New("catalog reader returned no page cursor")
+	ErrOutputPublishBlocked   = errors.New("output publication is blocked by an existing final path")
+	ErrOutputQuarantined      = errors.New("output file needs manual ownership review")
+	ErrOutputRetired          = errors.New("output file retirement completed without content transfer")
+	ErrGenerationReplayBudget = errors.New("transfer generation replay page budget exceeded")
+	errRangeReaderContract    = errors.New("range reader violated its requested output interval")
 )
 
 type JobOutcome uint8
@@ -69,16 +75,30 @@ type FileJobFailure struct {
 }
 
 type JobResult struct {
-	Outcome           JobOutcome
-	Settlement        JobSettlement
-	ResumeIntent      ResumeIntent
-	SelectionIdentity SelectionIdentity
-	Measure           SelectionMeasure
-	Directories       []DirectoryJobFailure
-	Files             []FileJobFailure
-	SucceededFiles    uint64
-	TerminationCause  error
-	SettlementFailure error
+	Outcome        JobOutcome
+	Settlement     JobSettlement
+	TransferJobID  TransferJobID
+	IntentDigest   TransferIntentDigest
+	TransferIntent TransferIntent
+	// SelectionObservation is diagnostic only and is normally zero for the
+	// incremental path, which does not materialize a whole-tree snapshot.
+	SelectionObservation SelectionObservationV1
+	// SelectionIdentity is an in-memory catalog observation, never a checkpoint key.
+	SelectionIdentity        SelectionIdentity
+	Measure                  SelectionMeasure
+	Directories              []DirectoryJobFailure
+	Files                    []FileJobFailure
+	OmittedDirectoryFailures uint64
+	OmittedFileFailures      uint64
+	// SelectionResolutionFailure is separate from bounded diagnostics because a
+	// proven explicit miss is an authoritative job outcome, not an incidental detail.
+	SelectionResolutionFailure error
+	// SourceDriftFailure preserves the first semantic drift outcome even when its
+	// per-file or per-directory diagnostic is omitted by the retention budget.
+	SourceDriftFailure error
+	SucceededFiles     uint64
+	TerminationCause   error
+	SettlementFailure  error
 }
 
 type CatalogReader interface {
@@ -114,58 +134,102 @@ type RangeReader interface {
 }
 
 type TransferJobConfig struct {
-	ShareInstance     catalog.ShareInstance
-	SyntheticRoot     catalog.DirectoryID
-	Rules             SelectionRules
-	Catalog           CatalogReader
-	Revisions         RevisionClient
-	Blocks            RangeReader
-	Output            OutputAuthority
-	SettlementTimeout time.Duration
-	Tracer            TransferLifecycleTracer
+	ShareInstance catalog.ShareInstance
+	SyntheticRoot catalog.DirectoryID
+	Rules         SelectionRules
+	// Intent and JobID are established before construction so a job can never
+	// open an output namespace before picker confirmation or change its trace
+	// identity while running.
+	Intent TransferIntent
+	JobID  TransferJobID
+	// ProtocolSessionID correlates production transfer traces with the
+	// authenticated session. Standalone jobs may leave it zero.
+	ProtocolSessionID protocolsession.ProtocolSessionID
+	// FileQueueCapacity bounds discovery-to-output buffering. A full queue
+	// deliberately blocks the catalog walk instead of buffering an unbounded
+	// whole-tree selection.
+	FileQueueCapacity int
+	// GenerationReplayPages bounds the commitments retained while authenticating
+	// one directory before its entries are replayed through FileQueueCapacity.
+	GenerationReplayPages int
+	Catalog               CatalogReader
+	Revisions             RevisionClient
+	Blocks                RangeReader
+	Output                OutputAuthority
+	SettlementTimeout     time.Duration
+	Tracer                TransferLifecycleTracer
 }
 
 type TransferJob struct {
-	share             catalog.ShareInstance
-	root              catalog.DirectoryID
-	rules             SelectionRules
-	selectionRequest  CanonicalSelectionRequest
-	catalog           CatalogReader
-	revisions         RevisionClient
-	blocks            RangeReader
-	outputAuthority   OutputAuthority
-	settlementTimeout time.Duration
-	tracer            TransferLifecycleTracer
-	tracker           selectionTracker
+	share              catalog.ShareInstance
+	root               catalog.DirectoryID
+	rules              SelectionRules
+	intent             TransferIntent
+	jobID              TransferJobID
+	protocolSessionID  protocolsession.ProtocolSessionID
+	selectionRequest   CanonicalSelectionRequest
+	catalog            CatalogReader
+	revisions          RevisionClient
+	blocks             RangeReader
+	outputAuthority    OutputAuthority
+	settlementTimeout  time.Duration
+	queueCapacity      int
+	replayPageCapacity int
+	tracer             TransferLifecycleTracer
+	tracker            selectionTracker
 
 	mu      sync.Mutex
+	traceMu sync.Mutex
 	started bool
 }
 
 func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 	if config.ShareInstance.IsZero() || config.SyntheticRoot.IsZero() || !config.Rules.validSnapshot() ||
+		!config.Intent.valid() || config.JobID.IsZero() ||
 		config.Catalog == nil || config.Revisions == nil || config.Blocks == nil || config.Output == nil ||
-		config.SettlementTimeout < 0 || config.SettlementTimeout > MaximumOutputSettlementTimeout {
+		config.SettlementTimeout < 0 || config.SettlementTimeout > MaximumOutputSettlementTimeout ||
+		config.FileQueueCapacity < 0 || config.FileQueueCapacity > MaximumTransferQueueCapacity ||
+		config.GenerationReplayPages < 0 || config.GenerationReplayPages > MaximumGenerationReplayPages {
 		return nil, ErrInvalidTransferJob
 	}
 	timeout := config.SettlementTimeout
 	if timeout == 0 {
 		timeout = DefaultOutputSettlementTimeout
 	}
+	queueCapacity := config.FileQueueCapacity
+	if queueCapacity == 0 {
+		queueCapacity = DefaultTransferQueueCapacity
+	}
+	replayPageCapacity := config.GenerationReplayPages
+	if replayPageCapacity == 0 {
+		replayPageCapacity = DefaultGenerationReplayPages
+	}
 	selectionRequest, err := NewCanonicalSelectionRequest(config.ShareInstance, config.SyntheticRoot, config.Rules)
 	if err != nil {
 		return nil, ErrInvalidTransferJob
 	}
+	intent := config.Intent
+	intentRequest, intentErr := NewCanonicalSelectionRequest(intent.ShareInstance(), intent.SyntheticRoot(), intent.SelectionRules())
+	if intentErr != nil || intent.ShareInstance() != config.ShareInstance || intent.SyntheticRoot() != config.SyntheticRoot ||
+		!bytes.Equal(intentRequest.Bytes(), selectionRequest.Bytes()) {
+		return nil, ErrInvalidTransferJob
+	}
 	return &TransferJob{
 		share: config.ShareInstance, root: config.SyntheticRoot, rules: config.Rules,
+		intent: intent, jobID: config.JobID, protocolSessionID: config.ProtocolSessionID,
 		selectionRequest: selectionRequest,
 		catalog:          config.Catalog, revisions: config.Revisions, blocks: config.Blocks,
 		outputAuthority:   config.Output,
-		settlementTimeout: timeout, tracer: config.Tracer, tracker: newSelectionTracker(),
+		settlementTimeout: timeout, queueCapacity: queueCapacity, replayPageCapacity: replayPageCapacity,
+		tracer: config.Tracer, tracker: newSelectionTracker(),
 	}, nil
 }
 
 func (j *TransferJob) Measure() SelectionMeasure { return j.tracker.snapshot() }
+
+func (j *TransferJob) JobID() TransferJobID               { return j.jobID }
+func (j *TransferJob) Intent() TransferIntent             { return j.intent }
+func (j *TransferJob) IntentDigest() TransferIntentDigest { return j.intent.Digest() }
 
 // SelectionMeasures publishes monotonic discovery updates. Discovery now owns
 // the first job phase, so no duplicate catalog walk can race output admission.
@@ -175,7 +239,9 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 	j.mu.Lock()
 	if j.started {
 		j.mu.Unlock()
-		return JobResult{Outcome: JobPausedOutcome, Measure: j.Measure(), TerminationCause: ErrTransferJobRun}
+		return JobResult{Outcome: JobPausedOutcome, TransferJobID: j.jobID,
+			IntentDigest: j.intent.Digest(), TransferIntent: j.intent,
+			Measure: j.Measure(), TerminationCause: ErrTransferJobRun}
 	}
 	j.started = true
 	j.mu.Unlock()
@@ -188,10 +254,11 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 		j.tracker.finishDiscovery()
 		j.tracker.closeUpdates()
 		return JobResult{
-			Outcome: JobPausedOutcome, Measure: j.Measure(), TerminationCause: err,
+			Outcome: JobPausedOutcome, TransferJobID: j.jobID,
+			IntentDigest: j.intent.Digest(), TransferIntent: j.intent,
+			Measure: j.Measure(), TerminationCause: err,
 		}
 	}
-	defer state.close()
 	if cause := context.Cause(runContext); cause != nil {
 		state.terminationCause = cause
 		j.tracker.failDiscovery()
@@ -199,102 +266,87 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 		j.tracker.closeUpdates()
 		return state.finish(ctx)
 	}
-	j.trace(TransferLifecycleTrace{Stage: TransferDiscoveryStarted})
-	selection, selectionReady, discoveryErr := state.discoverSelection(runContext)
+	j.trace(TransferLifecycleTrace{
+		Stage: TransferAdmissionStarted, TransferJobID: j.jobID, IntentDigest: j.intent.Digest(),
+	})
+	output, err := j.outputAuthority.OpenOutput(runContext, j.intent)
+	if err != nil {
+		state.terminationCause = err
+		j.trace(TransferLifecycleTrace{
+			Stage: TransferAdmissionCompleted, TransferJobID: j.jobID,
+			IntentDigest: j.intent.Digest(), Failed: true,
+		})
+		j.tracker.failDiscovery()
+		j.tracker.finishDiscovery()
+		j.tracker.closeUpdates()
+		return state.finish(ctx)
+	}
+	if output != nil {
+		// OpenOutput has already created a durable namespace. Owning it before
+		// validation guarantees a contract mismatch is settled, not abandoned.
+		state.output = output
+		state.admitted = true
+	}
+	if err := validateOutputSession(j.intent, output); err != nil {
+		state.terminationCause = err
+		j.trace(TransferLifecycleTrace{
+			Stage: TransferAdmissionCompleted, TransferJobID: j.jobID,
+			IntentDigest: j.intent.Digest(), Failed: true,
+		})
+		j.tracker.failDiscovery()
+		j.tracker.finishDiscovery()
+		j.tracker.closeUpdates()
+		return state.finish(ctx)
+	}
+	j.trace(TransferLifecycleTrace{
+		Stage: TransferAdmissionCompleted, TransferJobID: j.jobID,
+		IntentDigest: j.intent.Digest(), OutputSessionID: output.SessionID(),
+	})
+	fileQueue := make(chan transferQueueItem, j.queueCapacity)
+	workerErr := make(chan error, 1)
+	workerDone := make(chan struct{})
+	go state.transferQueueWorker(runContext, fileQueue, cancel, workerErr, workerDone)
+	j.trace(TransferLifecycleTrace{
+		Stage: TransferDiscoveryStarted, TransferJobID: j.jobID, IntentDigest: j.intent.Digest(),
+		DirectoryID: j.root, Discovery: DiscoveryOpen,
+	})
+	discoveryErr := state.discoverIncremental(runContext, fileQueue)
 	if discoveryErr != nil {
 		j.tracker.failDiscovery()
 		state.terminationCause = discoveryErr
 		cancel(discoveryErr)
 	}
+	if discoveryErr == nil && !state.discoveryFailed {
+		if missingErr := j.rules.missingTargetsError(
+			state.matchedPaths, state.matchedDirectories, state.matchedFiles,
+		); missingErr != nil {
+			// Absence proven by a complete catalog is a closed selection result,
+			// not a resumable transport or output failure.
+			state.selectionResolutionFailure = missingErr
+		}
+	}
 	j.tracker.finishDiscovery()
+	j.trace(TransferLifecycleTrace{
+		Stage: TransferDiscoveryCompleted, TransferJobID: j.jobID,
+		IntentDigest: j.intent.Digest(), DirectoryID: j.root, DirectoryGeneration: state.rootGeneration,
+		Discovery: j.Measure().Discovery, SelectionClass: j.Measure().Class(),
+		Failed: discoveryErr != nil || state.discoveryFailed,
+	})
+	close(fileQueue)
+	<-workerDone
+	select {
+	case workerFailure := <-workerErr:
+		if state.terminationCause == nil {
+			state.terminationCause = workerFailure
+			cancel(workerFailure)
+		}
+	default:
+	}
 	j.tracker.closeUpdates()
-	j.trace(TransferLifecycleTrace{
-		Stage:             TransferDiscoveryCompleted,
-		SelectionIdentity: selection.Identity(), ResumeIntent: selection.ResumeIntent(),
-		Failed: discoveryErr != nil || !selectionReady,
-	})
-	if discoveryErr != nil || !selectionReady {
-		return state.finish(ctx)
-	}
-
-	state.setSelection(selection)
-	j.trace(TransferLifecycleTrace{
-		Stage:             TransferAdmissionStarted,
-		SelectionIdentity: selection.Identity(), ResumeIntent: selection.ResumeIntent(),
-	})
-	output, err := j.outputAuthority.OpenSelection(runContext, selection)
-	if err != nil {
-		state.terminationCause = err
-		j.trace(TransferLifecycleTrace{
-			Stage:             TransferAdmissionCompleted,
-			SelectionIdentity: selection.Identity(), ResumeIntent: selection.ResumeIntent(), Failed: true,
-		})
-		return state.finish(ctx)
-	}
-	if err := validateOutputSession(output); err != nil {
-		state.terminationCause = err
-		j.trace(TransferLifecycleTrace{
-			Stage: TransferAdmissionCompleted, SelectionIdentity: selection.Identity(),
-			ResumeIntent: selection.ResumeIntent(), Failed: true,
-		})
-		return state.finish(ctx)
-	}
-	state.output = output
-	state.admitted = true
-	j.trace(TransferLifecycleTrace{
-		Stage: TransferAdmissionCompleted, OutputSessionID: output.SessionID(),
-		SelectionIdentity: selection.Identity(), ResumeIntent: selection.ResumeIntent(),
-	})
-	if err := state.spool.VisitFiles(func(file plannedFile) error {
-		if cause := context.Cause(runContext); cause != nil {
-			return cause
-		}
-		if err := state.transferPlannedFile(runContext, file); err != nil {
-			return err
-		}
-		if state.settlementFailure != nil {
-			return errStopFileIteration
-		}
-		return nil
-	}); err != nil && !errors.Is(err, errStopFileIteration) && state.terminationCause == nil {
-		state.terminationCause = err
-	}
-	if state.terminationCause == nil && state.settlementFailure == nil {
-		if err := state.finalizeSelectionDirectories(runContext); err != nil {
-			state.terminationCause = err
-		}
-	}
 	return state.finish(ctx)
 }
 
-func (r *jobRun) setSelection(selection OutputSelection) {
-	r.selectionIdentity = selection.Identity()
-	r.resumeIntent = selection.ResumeIntent()
-	r.job.trace(TransferLifecycleTrace{
-		Stage:             TransferSelectionFrozen,
-		SelectionIdentity: selection.Identity(), ResumeIntent: selection.ResumeIntent(),
-	})
-}
-
-func validateOutputSession(output OutputSession) error {
-	if output == nil {
-		return outputContractFault(nil)
-	}
-	if _, err := NewOutputBackendID(string(output.BackendID())); err != nil {
-		return outputContractFault(nil)
-	}
-	capabilities := output.Capabilities()
-	if _, err := NewOutputCapabilities(capabilities); err != nil || output.SessionID().IsZero() {
-		return outputContractFault(nil)
-	}
-	return nil
-}
-
 func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) error {
-	r.job.trace(TransferLifecycleTrace{
-		Stage: TransferFileStarted, OutputSessionID: r.output.SessionID(), ResumeIntent: r.resumeIntent,
-		FileID: plan.file,
-	})
 	opened, ready, err := r.openSelectedRevision(ctx, plan)
 	if err != nil || !ready {
 		return err
@@ -309,33 +361,47 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 	if err != nil {
 		return r.rejectUnstartedFile(ctx, plan, opened, NewJobDependencyContractError(err))
 	}
+	if plan.parentAdmission.IsZero() {
+		return r.rejectUnstartedFile(ctx, plan, opened, ErrDirectoryAdmissionMismatch)
+	}
 	start, err := r.output.BeginFile(ctx, OutputFile{
 		Path: plan.path, ExpectedSize: plan.expectedSize, Descriptor: opened.Descriptor, Target: target,
+		ParentAdmission: plan.parentAdmission,
 	})
 	if err != nil {
+		r.traceFileLifecycle(TransferFileAdmitted, plan, true)
 		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
-		if isJobTerminalError(err) || outputFailureRequiresJobPause(err, r.output.Capabilities()) {
-			return errors.Join(err, releaseErr)
-		}
-		r.files = append(r.files, FileJobFailure{
+		inspection := inspectLifecycleError(err)
+		failure := FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
 			Cause: err, LeaseReleaseFailure: releaseErr,
-		})
+		}
+		if inspection.jobTerminal() || isJobTerminalError(releaseErr) ||
+			inspection.outputRequiresJobPause(r.output.Capabilities()) {
+			r.recordFileFailure(failure)
+			return errors.Join(err, releaseErr)
+		}
+		r.recordFileFailure(failure)
 		return nil
 	}
 	if settlement, immediate := start.ImmediateSettlement(); immediate {
 		if err := validateImmediateFileSettlement(target, settlement); err != nil {
+			r.traceFileLifecycle(TransferFileAdmitted, plan, true)
 			return r.rejectImmediateSettlement(ctx, plan, opened, settlement, err)
 		}
+		r.traceFileLifecycle(TransferFileAdmitted, plan, false)
 		return r.handleImmediateSettlement(ctx, plan, opened, settlement)
 	}
 	transaction, durable, transactional := start.Transaction()
 	if !transactional || !start.valid() {
+		r.traceFileLifecycle(TransferFileAdmitted, plan, true)
 		return r.rejectImmediateSettlement(ctx, plan, opened, start.settlement, ErrOutputContract)
 	}
 	if err := validateOutputTransaction(target, transaction, durable); err != nil {
+		r.traceFileLifecycle(TransferFileAdmitted, plan, true)
 		return r.settleFailedFile(ctx, plan, opened, transaction, FailureFileOutput, err, 0)
 	}
+	r.traceFileLifecycle(TransferFileAdmitted, plan, false)
 	completed, err := r.transferMissingRanges(ctx, plan, opened, transaction, durable)
 	if err != nil || !completed {
 		return err
@@ -350,7 +416,7 @@ func (r *jobRun) rejectUnstartedFile(
 	cause error,
 ) error {
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
-	r.files = append(r.files, FileJobFailure{
+	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.path, Stage: FailureFileOutput, Cause: cause,
 		LeaseReleaseFailure: releaseErr,
 	})
@@ -367,11 +433,11 @@ func (r *jobRun) rejectImmediateSettlement(
 	fault := outputContractFault(cause)
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 	r.settlementFailure = errors.Join(r.settlementFailure, fault)
-	r.files = append(r.files, FileJobFailure{
+	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.path, Stage: FailureFileOutput, Cause: fault,
 		Settlement: settlement, SettlementFailure: fault, LeaseReleaseFailure: releaseErr,
 	})
-	r.traceFileSettlement(plan.file, settlement, true)
+	r.traceFileSettlement(plan, settlement, true)
 	return fault
 }
 
@@ -381,7 +447,7 @@ func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (Op
 		if isJobTerminalError(err) {
 			return OpenedRevision{}, false, err
 		}
-		r.files = append(r.files, FileJobFailure{
+		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureRevisionOpen, Cause: err,
 		})
 		return OpenedRevision{}, false, nil
@@ -390,7 +456,7 @@ func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (Op
 		r.job.share, plan.file, plan.expectedSize, plan.modified, opened,
 	); err != nil {
 		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
-		r.files = append(r.files, FileJobFailure{
+		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureRevisionIdentity,
 			Cause: err, LeaseReleaseFailure: releaseErr,
 		})
@@ -410,12 +476,13 @@ func (r *jobRun) handleImmediateSettlement(
 ) error {
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 	r.acceptFileSettlement(settlement)
-	r.traceFileSettlement(plan.file, settlement, releaseErr != nil)
+	r.traceFileSettlement(plan, settlement, releaseErr != nil)
 	switch settlement.Kind() {
 	case FilePublished:
 		r.succeeded++
+		r.job.tracker.completeFile(plan.expectedSize)
 		if releaseErr != nil {
-			r.files = append(r.files, FileJobFailure{
+			r.recordFileFailure(FileJobFailure{
 				FileID: plan.file, Path: plan.path, Stage: FailureLeaseRelease,
 				Cause: releaseErr,
 			})
@@ -425,19 +492,19 @@ func (r *jobRun) handleImmediateSettlement(
 		}
 		return nil
 	case FileCollision:
-		r.files = append(r.files, FileJobFailure{
+		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
 			Cause: ErrOutputPublishBlocked, Settlement: settlement,
 			LeaseReleaseFailure: releaseErr,
 		})
 	case FilePublishBlocked:
-		r.files = append(r.files, FileJobFailure{
+		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
 			Cause: ErrOutputPublishBlocked, Settlement: settlement,
 			LeaseReleaseFailure: releaseErr,
 		})
 	case FileQuarantined:
-		r.files = append(r.files, FileJobFailure{
+		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
 			Cause: ErrOutputQuarantined, Settlement: settlement,
 			LeaseReleaseFailure: releaseErr,
@@ -446,7 +513,7 @@ func (r *jobRun) handleImmediateSettlement(
 		// A recovered retirement is already-authorized durable cleanup. Preserve
 		// its exact settlement without creating a transaction or attempting a
 		// second settlement whose reason this run cannot authenticate.
-		r.files = append(r.files, FileJobFailure{
+		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
 			Cause: ErrOutputRetired, Settlement: settlement,
 			LeaseReleaseFailure: releaseErr,
@@ -460,69 +527,4 @@ func (r *jobRun) handleImmediateSettlement(
 		return releaseErr
 	}
 	return nil
-}
-
-func (r *jobRun) transferMissingRanges(
-	ctx context.Context,
-	plan plannedFile,
-	opened OpenedRevision,
-	transaction FileTransaction,
-	durable VerifiedDurableRanges,
-) (bool, error) {
-	missing, err := MissingRanges(opened.Descriptor.ExactSize(), durable.Ranges())
-	if err != nil {
-		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(err), 0,
-		)
-	}
-	for _, requested := range splitAtBlockBoundaries(missing, opened.Descriptor.Geometry()) {
-		buffered, bufferErr := newAtomicRequestedRangeSink(requested, transaction)
-		if bufferErr != nil {
-			return false, r.settleFailedFile(
-				ctx, plan, opened, transaction, FailureBlockTransfer, bufferErr, 0,
-			)
-		}
-		err := r.job.blocks.ReadRange(ctx, opened.LeaseID, opened.Descriptor, requested, buffered)
-		if bufferedErr := buffered.Failure(); bufferedErr != nil {
-			err = bufferedErr
-		}
-		if err != nil {
-			if invalidator, ok := r.job.blocks.(interface {
-				InvalidateRevision(catalog.FileID, content.FileRevision)
-			}); ok && (errors.Is(err, content.ErrRevisionDrift) || errors.Is(err, ErrBlockInvalidated)) {
-				invalidator.InvalidateRevision(plan.file, opened.Descriptor.FileRevision())
-			}
-			retireReason := fileRetireReason(err)
-			return false, r.settleFailedFile(
-				ctx, plan, opened, transaction, FailureBlockTransfer, err, retireReason,
-			)
-		}
-		if err := buffered.Flush(ctx); err != nil {
-			return false, r.settleFailedFile(
-				ctx, plan, opened, transaction, FailureBlockTransfer, err, 0,
-			)
-		}
-		checkpoint, checkpointErr := transaction.Checkpoint(ctx)
-		if checkpointErr != nil {
-			return false, r.settleFailedFile(
-				ctx, plan, opened, transaction, FailureFileOutput, checkpointErr, 0,
-			)
-		}
-		if checkpoint.Binding() != transaction.Binding() ||
-			checkpoint.CheckpointGeneration() <= durable.CheckpointGeneration() ||
-			!rangeContains(checkpoint.Ranges(), requested) || !rangesContain(checkpoint.Ranges(), durable.Ranges()) {
-			return false, r.settleFailedFile(
-				ctx, plan, opened, transaction, FailureFileOutput,
-				outputContractFault(nil), 0,
-			)
-		}
-		durable = checkpoint
-	}
-	if !RangesCoverFile(opened.Descriptor.ExactSize(), durable.Ranges()) {
-		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput,
-			outputContractFault(nil), 0,
-		)
-	}
-	return true, nil
 }

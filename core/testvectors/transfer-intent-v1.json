@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "kind": "transfer-intent-v1",
+  "description": "TransferIntent canonical bytes and SHA-256 digest, excluding run identifiers.",
+  "cases": [
+    {
+      "canonicalBytesB64": "d2luZHNoYXJlL3RyYW5zZmVyLWludGVudC92MQABAAAAAAAAAJ4AAAAAAAAAEBAREhMUFRYXGBkaGxwdHh8AAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAAQEAAAAAAAAAAQAAAAAAAAAAAgAAAAAAAAABAQAAAAAAAAAQMDEyMzQ1Njc4OTo7PD0+PwAAAAAAAAABAQAAAAAAAAABAgAAAAAAAAAQQEFCQ0RFRkdISUpLTE1OTwAAAAAAAAABAAAAAAAAAAABAgAAAAAAAAAggIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8AAAAAAAAAF3dpbmRzaGFyZS9uYXRpdmUtb3V0cHV0AAAAAAAAAAEB",
+      "digestB64": "cegvMCqc7TLOqty0jh3yP1VrIu+FzCgyhuhhu44gWQ0=",
+      "name": "node-id-persistent-directory",
+      "output": {
+        "backend": "windshare/native-output",
+        "format": "directory",
+        "targetIdentityB64": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8=",
+        "targetKind": 2
+      },
+      "selection": {
+        "defaultSelected": false,
+        "mode": "node-id",
+        "rules": [
+          {
+            "idB64": "MDEyMzQ1Njc4OTo7PD0+Pw==",
+            "kind": "directory",
+            "selected": true
+          },
+          {
+            "idB64": "QEFCQ0RFRkdISUpLTE1OTw==",
+            "kind": "file",
+            "selected": false
+          }
+        ]
+      },
+      "shareInstanceB64": "EBESExQVFhcYGRobHB0eHw==",
+      "syntheticRootB64": "ICEiIyQlJicoKSorLC0uLw==",
+      "transferJobIdB64": "0NHS09TV1tfY2drb3N3e3w=="
+    },
+    {
+      "canonicalBytesB64": "d2luZHNoYXJlL3RyYW5zZmVyLWludGVudC92MQABAAAAAAAAAHEAAAAAAAAAEBAREhMUFRYXGBkaGxwdHh8AAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAAQIAAAAAAAAAAQAAAAAAAAAAAgAAAAAAAAARZG9jcy9yw6lzdW3DqS50eHQAAAAAAAAABnBob3RvcwAAAAAAAAABAgAAAAAAAAAgoKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8AAAAAAAAAF3dpbmRzaGFyZS9uYXRpdmUtb3V0cHV0AAAAAAAAAAED",
+      "digestB64": "efuAA86kQHN1fApmycnHapXTIHFWDtRNTeCxZKZ7Rjw=",
+      "name": "catalog-path-persistent-zip",
+      "output": {
+        "backend": "windshare/native-output",
+        "format": "zip",
+        "targetIdentityB64": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8=",
+        "targetKind": 2
+      },
+      "selection": {
+        "defaultSelected": false,
+        "inputPaths": [
+          "photos",
+          "docs/résumé.txt",
+          "photos",
+          "docs/résumé.txt"
+        ],
+        "mode": "catalog-path",
+        "paths": [
+          "docs/résumé.txt",
+          "photos"
+        ]
+      },
+      "shareInstanceB64": "EBESExQVFhcYGRobHB0eHw==",
+      "syntheticRootB64": "ICEiIyQlJicoKSorLC0uLw==",
+      "transferJobIdB64": "4OHi4+Tl5ufo6err7O3u7w=="
+    }
+  ]
+}

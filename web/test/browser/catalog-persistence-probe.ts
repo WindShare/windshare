@@ -573,8 +573,11 @@ function page(
 }
 
 function directory(directoryIdText: string): V2CommittedDirectory {
+  const directoryId = identity(directoryIdText.charCodeAt(0))
   return Object.freeze({
+    directoryId,
     directoryIdText,
+    generation: identity(0x33),
     generationText: 'generation',
     pageCount: 1,
     entryCount: 1,

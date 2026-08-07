@@ -26,14 +26,15 @@ import (
 const defaultSharedBlockCacheBytes = uint64(64) << 20
 
 type SenderConfig struct {
-	Paths          []string
-	Relays         []string
-	ChunkSize      uint32
-	Random         io.Reader
-	Now            func() time.Time
-	ScanAdmission  DirectoryScanAdmission
-	CatalogStorage CatalogStorageFactory
-	CatalogTracer  CatalogStorageTracer
+	Paths              []string
+	Relays             []string
+	ChunkSize          uint32
+	Random             io.Reader
+	Now                func() time.Time
+	ScanAdmission      DirectoryScanAdmission
+	CatalogStorage     CatalogStorageFactory
+	CatalogTracer      CatalogStorageTracer
+	RootPrefetchTracer RootPrefetchTracer
 
 	preparation senderPreparationDependencies
 }
@@ -341,6 +342,7 @@ func prepareSenderCatalog(
 		sender.catalogStore,
 		directoryScannerWithAdmission(sender.selectedSource, config.ScanAdmission),
 		sender.selectedSource.SelectedRoots(),
+		rootPrefetchTracerOrDefault(config.RootPrefetchTracer),
 	)
 	if err != nil {
 		return senderCatalog{}, err

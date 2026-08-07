@@ -3,7 +3,6 @@ package outputruntime
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/osfs/internal/outputfault"
@@ -14,13 +13,11 @@ import (
 type fileReducer func(
 	context.Context,
 	transfer.OutputFile,
-	resumestate.ResumableFileAuthority,
-	outputcap.Directory,
-	string,
+	resumestate.CheckpointRuntimeFile,
 ) (transfer.FileStart, error)
 
 type fileRecoveryState struct {
-	resumable    resumestate.ResumableFileAuthority
+	resumable    resumestate.CheckpointRuntimeFile
 	parentSynced bool
 }
 
@@ -38,12 +35,10 @@ type fileRecoveryActionResult struct {
 func (session *Session) reduceFile(
 	ctx context.Context,
 	file transfer.OutputFile,
-	resumable resumestate.ResumableFileAuthority,
-	recordDir outputcap.Directory,
-	recordName string,
+	resumable resumestate.CheckpointRuntimeFile,
 ) (resultStart transfer.FileStart, resultErr error) {
 	requirement := outputAncestryRequirement{}
-	locatorDigest := resumable.Bound().Record().LocatorDigest()
+	locatorDigest := resumable.BoundState().State().LocatorDigest()
 	validation, err := session.validateOutputAncestry(requirement)
 	if err != nil {
 		session.traceOutputAncestry(FilesystemOutputAncestryRecovery, locatorDigest, err)
@@ -59,17 +54,12 @@ func (session *Session) reduceFile(
 			resultErr = errors.Join(resultErr, ancestryErr)
 		}
 	}()
-	return session.runFileRecovery(
-		ctx, file, recordDir, recordName, validation,
-		fileRecoveryState{resumable: resumable},
-	)
+	return session.runFileRecovery(ctx, file, validation, fileRecoveryState{resumable: resumable})
 }
 
 func (session *Session) runFileRecovery(
 	ctx context.Context,
 	file transfer.OutputFile,
-	recordDir outputcap.Directory,
-	recordName string,
 	validation *outputAncestryValidation,
 	state fileRecoveryState,
 ) (transfer.FileStart, error) {
@@ -81,7 +71,7 @@ func (session *Session) runFileRecovery(
 		if err != nil {
 			return transfer.FileStart{}, err
 		}
-		result, err := session.applyFileRecoveryAction(file, recordDir, recordName, state, iteration)
+		result, err := session.applyFileRecoveryAction(file, state, iteration)
 		if err != nil {
 			return transfer.FileStart{}, err
 		}
@@ -96,14 +86,14 @@ func (session *Session) nextFileRecoveryIteration(
 	validation *outputAncestryValidation,
 	state fileRecoveryState,
 ) (fileRecoveryIteration, error) {
-	record := state.resumable.Bound().Record()
+	record := state.resumable.BoundState().State()
 	observation, cleanupErr, observationErr := session.observeFile(validation, record, state.parentSynced)
 	if observationErr != nil {
 		return fileRecoveryIteration{}, pauseRequiredFileOutputFault(fileOutputFault(
 			"observe file recovery", errors.Join(observationErr, cleanupErr),
 		))
 	}
-	decision, err := resumestate.ReduceResumableFileRecovery(state.resumable, observation)
+	decision, err := resumestate.ReduceCheckpointRuntimeFileRecovery(state.resumable, observation)
 	if err != nil {
 		return fileRecoveryIteration{}, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
 	}
@@ -121,11 +111,11 @@ func recoveryActionRetainsObservationCleanup(action resumestate.RecoveryAction) 
 }
 
 func (session *Session) traceFileRecoveryDecision(
-	record resumestate.FileRecord,
+	record resumestate.CheckpointRuntimeState,
 	decision resumestate.RecoveryDecision,
 ) {
 	session.owner.trace(FilesystemOutputTrace{
-		Operation: TraceFileRecoveryDecision, ResumeIntent: session.resumeIntent,
+		Operation: TraceFileRecoveryDecision, IntentDigest: session.intentDigest,
 		SessionID: session.SessionID(), LocatorDigest: outputLocatorDigestFromState(record.LocatorDigest()),
 		OutputObjectID:   outputObjectIdentityFromState(record.OutputObject()),
 		PreviousPhase:    filesystemOutputFilePhaseFromState(record.Phase()),
@@ -134,210 +124,20 @@ func (session *Session) traceFileRecoveryDecision(
 	})
 }
 
-func (session *Session) gateFileStateTemporary(
-	file transfer.OutputFile,
-	shard outputcap.Directory,
-	recordName resumestate.ShardedName,
-	name string,
-	bound resumestate.BoundFileRecord,
-	digest resumestate.LocatorDigest,
-) (transfer.FileStart, bool, error) {
-	classified := resumestate.ClassifyFileShardEntry(recordName.Shard(), name)
-	kind, err := shard.ObserveEntry(name)
-	if err != nil {
-		start, quarantineErr := session.quarantineRecoveryStart(
-			file, shard, recordName.Name(), bound, resumestate.QuarantineUpdateTemporary,
-		)
-		return start, true, quarantineErr
-	}
-	decision, err := reduceGateTemporaryDecision(session, classified, kind)
-	if err != nil {
-		return transfer.FileStart{}, false, err
-	}
-	switch decision.Action() {
-	case resumestate.UpdateTemporaryAcceptInstalledTarget:
-		return transfer.FileStart{}, false, nil
-	case resumestate.UpdateTemporaryRemoveAndSyncShard:
-		return session.removeGateFileStateTemporary(file, shard, recordName, name, bound, decision)
-	case resumestate.UpdateTemporaryInstallFileQuarantine:
-		return session.installGateFileStateQuarantine(file, shard, recordName, bound, decision, digest)
-	default:
-		return session.quarantineFileStateStart(file, digest)
-	}
-}
-
-func reduceGateTemporaryDecision(
-	session *Session,
-	classified resumestate.ClassifiedFileShardEntry,
-	kind outputcap.EntryKind,
-) (resumestate.UpdateTemporaryDecision, error) {
-	entry := updateTemporaryEntryForGateKind(kind)
-	decision, err := resumestate.ReduceUpdateTemporary(
-		session.stateSnapshot().NamespaceAuthority(), classified, entry, resumestate.UpdateTargetValid,
-	)
-	if err != nil {
-		return resumestate.UpdateTemporaryDecision{}, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
-	}
-	return decision, nil
-}
-
-func updateTemporaryEntryForGateKind(kind outputcap.EntryKind) resumestate.UpdateTemporaryEntryObservation {
-	switch kind {
-	case outputcap.EntryAbsent:
-		return resumestate.UpdateTemporaryEntryMissing
-	case outputcap.EntryRegularFile:
-		return resumestate.UpdateTemporaryEntryRegular
-	default:
-		return resumestate.UpdateTemporaryEntryUnsafe
-	}
-}
-
-func (session *Session) removeGateFileStateTemporary(
-	file transfer.OutputFile,
-	shard outputcap.Directory,
-	recordName resumestate.ShardedName,
-	name string,
-	bound resumestate.BoundFileRecord,
-	decision resumestate.UpdateTemporaryDecision,
-) (transfer.FileStart, bool, error) {
-	temporary, err := shard.OpenFile(name, true, false)
-	if err != nil {
-		return session.handleGateTemporaryOpenFailure(file, shard, recordName, bound, temporary, err)
-	}
-	if err := decision.AuthorizeRemoval(bound, recordName.Shard(), name, resumestate.UpdateTemporaryEntryRegular); err != nil {
-		return transfer.FileStart{}, false, closeGateUnauthorizedTemporary(temporary, err)
-	}
-	if removeErr := shard.RemoveFile(name, temporary); removeErr != nil {
-		return session.handleGateTemporaryMutationFailure(file, shard, recordName, bound, temporary, removeErr)
-	}
-	return session.finishGateTemporaryRemoval(file, shard, recordName, bound, temporary)
-}
-
-func (session *Session) handleGateTemporaryOpenFailure(
-	file transfer.OutputFile,
-	shard outputcap.Directory,
-	recordName resumestate.ShardedName,
-	bound resumestate.BoundFileRecord,
-	temporary outputcap.File,
-	openErr error,
-) (transfer.FileStart, bool, error) {
-	// Names and ObserveEntry already established that this exact temporary exists.
-	// Losing the ability to classify it through a handle is namespace ambiguity,
-	// not a retryable lack of mutation authority.
-	start, quarantineErr := session.quarantineRecoveryStart(
-		file, shard, recordName.Name(), bound, resumestate.QuarantineUpdateTemporary,
-	)
-	closeErr := closeOutputV3File(temporary)
-	if quarantineErr != nil {
-		if closeErr != nil {
-			quarantineErr = pauseRequiredFileOutputFault(fileOutputFault(
-				"close ambiguous state update temporary", errors.Join(quarantineErr, openErr, closeErr),
-			))
-		}
-		return transfer.FileStart{}, true, quarantineErr
-	}
-	if closeErr != nil {
-		return transfer.FileStart{}, true, pauseRequiredFileOutputFault(fileOutputFault(
-			"close quarantined state update temporary", errors.Join(openErr, closeErr),
-		))
-	}
-	return start, true, nil
-}
-
-func closeGateUnauthorizedTemporary(temporary outputcap.File, authorizationErr error) error {
-	closeErr := temporary.Close()
-	if closeErr != nil {
-		return pauseRequiredFileOutputFault(fileOutputFault(
-			"close unauthorized state update temporary", errors.Join(authorizationErr, closeErr),
-		))
-	}
-	return outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, authorizationErr)
-}
-
-func (session *Session) handleGateTemporaryMutationFailure(
-	file transfer.OutputFile,
-	shard outputcap.Directory,
-	recordName resumestate.ShardedName,
-	bound resumestate.BoundFileRecord,
-	temporary outputcap.File,
-	operationErr error,
-) (transfer.FileStart, bool, error) {
-	closeErr := temporary.Close()
-	if classifyOutputV3RecoveryFailure(operationErr, outputV3AuthorizedMutation) == outputV3RecoveryAmbiguous {
-		start, quarantineErr := session.quarantineRecoveryStartWithCleanup(
-			file, shard, recordName.Name(), bound, resumestate.QuarantineUpdateTemporary,
-			"close quarantined state update removal", closeErr,
-		)
-		return start, true, quarantineErr
-	}
-	return transfer.FileStart{}, false, pauseRequiredFileOperationFault(
-		"remove state update temporary", operationErr, closeErr,
-	)
-}
-
-func (session *Session) finishGateTemporaryRemoval(
-	file transfer.OutputFile,
-	shard outputcap.Directory,
-	recordName resumestate.ShardedName,
-	bound resumestate.BoundFileRecord,
-	temporary outputcap.File,
-) (transfer.FileStart, bool, error) {
-	syncErr := shard.Sync()
-	closeErr := temporary.Close()
-	if syncErr != nil {
-		if classifyOutputV3RecoveryFailure(syncErr, outputV3AuthorizedMutation) == outputV3RecoveryAmbiguous {
-			start, quarantineErr := session.quarantineRecoveryStartWithCleanup(
-				file, shard, recordName.Name(), bound, resumestate.QuarantineUpdateTemporary,
-				"close quarantined state update sync", closeErr,
-			)
-			return start, true, quarantineErr
-		}
-		return transfer.FileStart{}, false, pauseRequiredFileOperationFault(
-			"sync state update temporary", syncErr, closeErr,
-		)
-	}
-	if closeErr != nil {
-		return transfer.FileStart{}, false, pauseRequiredFileOutputFault(fileOutputFault(
-			"close synced state update temporary", closeErr,
-		))
-	}
-	return transfer.FileStart{}, false, nil
-}
-
-func (session *Session) installGateFileStateQuarantine(
-	file transfer.OutputFile,
-	shard outputcap.Directory,
-	recordName resumestate.ShardedName,
-	bound resumestate.BoundFileRecord,
-	decision resumestate.UpdateTemporaryDecision,
-	digest resumestate.LocatorDigest,
-) (transfer.FileStart, bool, error) {
-	quarantined, err := resumestate.ApplyUpdateTemporaryQuarantine(bound, decision)
-	if err != nil {
-		return transfer.FileStart{}, false, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
-	}
-	if quarantined.Record().StateGeneration() != bound.Record().StateGeneration() {
-		if err := session.installFileRecord(shard, recordName.Name(), bound, quarantined); err != nil {
-			return transfer.FileStart{}, false, err
-		}
-	}
-	return session.quarantineFileStateStart(file, digest)
-}
-
 func (session *Session) createWitnessObject(
-	record resumestate.FileRecord,
+	record resumestate.CheckpointRuntimeState,
 ) (operationErr error, cleanupErr error) {
 	stageName := resumestate.StageName(record.OutputObject())
 	anchorName := resumestate.AnchorName(record.OutputObject())
 	stageDir, _, operationErr := openOutputShard(session.stagesDir, stageName.Shard(), true)
 	if operationErr != nil {
-		cleanupErr = closeOutputV3Directory(stageDir)
+		cleanupErr = closeOutputDirectory(stageDir)
 		return
 	}
 	defer func() { cleanupErr = errors.Join(cleanupErr, stageDir.Close()) }()
 	anchorDir, _, operationErr := openOutputShard(session.anchorsDir, anchorName.Shard(), true)
 	if operationErr != nil {
-		cleanupErr = closeOutputV3Directory(anchorDir)
+		cleanupErr = closeOutputDirectory(anchorDir)
 		return
 	}
 	defer func() { cleanupErr = errors.Join(cleanupErr, anchorDir.Close()) }()
@@ -387,9 +187,9 @@ type fileObservationResources struct {
 
 func (resources fileObservationResources) close() error {
 	return errors.Join(
-		closeOutputV3File(resources.final),
-		closeOutputV3File(resources.stage), closeOutputV3Directory(resources.stageDir),
-		closeOutputV3File(resources.anchor), closeOutputV3Directory(resources.anchorDir),
+		closeOutputFile(resources.final),
+		closeOutputFile(resources.stage), closeOutputDirectory(resources.stageDir),
+		closeOutputFile(resources.anchor), closeOutputDirectory(resources.anchorDir),
 	)
 }
 
@@ -402,7 +202,7 @@ type finalFileObservation struct {
 
 func (session *Session) observeFile(
 	validation *outputAncestryValidation,
-	record resumestate.FileRecord,
+	record resumestate.CheckpointRuntimeState,
 	finalParentSynced bool,
 ) (
 	observation resumestate.FileObservation,
@@ -428,7 +228,7 @@ func (session *Session) observeFile(
 	}
 
 	observation = fileObservationBeforeFinal(anchorObservation, stageObservation)
-	if record.Phase() == resumestate.FileRetiring ||
+	if record.Phase() == resumestate.CheckpointRuntimeRetiring ||
 		resumestate.InternalFileObservationRequiresQuarantine(record.Phase(), observation) {
 		return observation, nil, nil
 	}
@@ -457,7 +257,7 @@ func fileObservationBeforeFinal(
 }
 
 func fileObservationAfterStageFailure(
-	phase resumestate.FilePhase,
+	phase resumestate.CheckpointRuntimePhase,
 	anchor resumestate.AnchorObservation,
 	stageErr error,
 ) (resumestate.FileObservation, error) {
@@ -470,7 +270,7 @@ func fileObservationAfterStageFailure(
 
 func (session *Session) observeFinalFile(
 	validation *outputAncestryValidation,
-	record resumestate.FileRecord,
+	record resumestate.CheckpointRuntimeState,
 	anchor outputcap.File,
 	anchorObservation resumestate.AnchorObservation,
 	finalParentSynced bool,
@@ -505,7 +305,7 @@ func (session *Session) observeFinalFile(
 }
 
 func classifyFinalObservationFailure(err error) (finalFileObservation, error) {
-	if classifyOutputV3RecoveryFailure(err, outputV3BeforeEntryEvidence) == outputV3RecoveryPauseRequired {
+	if classifyNativeRecoveryFailure(err, nativeBeforeEntryEvidence) == nativeRecoveryPauseRequired {
 		return finalFileObservation{}, err
 	}
 	return finalFileObservation{entry: resumestate.EntryUnsafe}, nil
@@ -516,7 +316,7 @@ func observeRegularFinalFile(
 	leaf string,
 	anchor outputcap.File,
 	anchorObservation resumestate.AnchorObservation,
-	record resumestate.FileRecord,
+	record resumestate.CheckpointRuntimeState,
 	finalParentSynced bool,
 ) (finalFileObservation, error) {
 	final, err := parent.OpenFile(leaf, false, false)
@@ -542,7 +342,7 @@ func observeRegularFinalFile(
 
 func observeFinalMetadata(
 	final outputcap.File,
-	record resumestate.FileRecord,
+	record resumestate.CheckpointRuntimeState,
 ) resumestate.MetadataObservation {
 	matches, err := final.MetadataMatches(record.ExactSize(), record.ExpectedMetadata().ModifiedTime)
 	if err != nil {
@@ -554,30 +354,13 @@ func observeFinalMetadata(
 	return resumestate.MetadataDiffers
 }
 
-func finalParentSyncObservation(
-	record resumestate.FileRecord,
-	finalParentSynced bool,
-) resumestate.FinalParentObservation {
-	if finalParentSynced || record.Phase() == resumestate.FilePublished {
-		return resumestate.FinalParentSynced
-	}
-	return resumestate.FinalParentSyncRequired
-}
-
-func closeOutputV3File(file outputcap.File) error {
-	if file == nil {
-		return nil
-	}
-	return file.Close()
-}
-
 func (session *Session) observeAnchor(
-	record resumestate.FileRecord,
+	record resumestate.CheckpointRuntimeState,
 ) (outputcap.File, outputcap.Directory, resumestate.AnchorObservation, error) {
 	name := resumestate.AnchorName(record.OutputObject())
 	directory, present, err := openOutputShard(session.anchorsDir, name.Shard(), false)
 	if err != nil {
-		if classifyOutputV3RecoveryFailure(err, outputV3BeforeEntryEvidence) == outputV3RecoveryAmbiguous {
+		if classifyNativeRecoveryFailure(err, nativeBeforeEntryEvidence) == nativeRecoveryAmbiguous {
 			return nil, nil, resumestate.AnchorUnsafe, nil
 		}
 		return nil, nil, 0, err
@@ -587,7 +370,7 @@ func (session *Session) observeAnchor(
 	}
 	kind, err := directory.ObserveEntry(name.Name())
 	if err != nil {
-		if classifyOutputV3RecoveryFailure(err, outputV3BeforeEntryEvidence) == outputV3RecoveryAmbiguous {
+		if classifyNativeRecoveryFailure(err, nativeBeforeEntryEvidence) == nativeRecoveryAmbiguous {
 			return nil, directory, resumestate.AnchorUnsafe, nil
 		}
 		return nil, directory, 0, err
@@ -607,26 +390,4 @@ func (session *Session) observeAnchor(
 		return anchor, directory, resumestate.AnchorUnsafe, nil
 	}
 	return anchor, directory, resumestate.AnchorVerified, nil
-}
-
-func internalCleanupNeedsAttentionFault(operation string) error {
-	// Once publication has established the public final, ambiguous internal
-	// cleanup evidence revokes mutation authority but not ownership history.
-	return pauseRequiredFileOutputFault(fileOutputFault(
-		operation,
-		errors.Join(outputcap.ErrUnsafeNamespace, errOutputV3InternalCleanupNeedsAttention),
-	))
-}
-
-func isInternalCleanupNeedsAttentionFault(err error) bool {
-	sessionErr, found := errors.AsType[*transfer.OutputSessionError](err)
-	return found && errors.Is(sessionErr, errOutputV3InternalCleanupNeedsAttention)
-}
-
-func directoryOutputFault(operation string, cause error) error {
-	code := transfer.OutputFaultStateIO
-	if errors.Is(cause, outputcap.ErrUnsafeNamespace) {
-		code = transfer.OutputFaultOwnership
-	}
-	return outputfault.New(transfer.OutputFaultSession, code, fmt.Errorf("%s: %w", operation, cause))
 }

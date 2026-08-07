@@ -3,10 +3,14 @@ import type { V2CatalogScanProgress } from '../catalog/v2-client'
 import type { V2CatalogEntry } from '../catalog/v2-records'
 import { equalBytes } from '../crypto/bytes'
 import type { V2ConnectivityActivation } from '../connectivity/v2-receiver-policy'
-import { V2FilePreview, type V2PreviewPresentation } from '../preview/v2-preview'
 import { SMALL_TRANSFER_BYTE_LIMIT } from '../transfer/measure'
 import { OutputSessionSuspendedError } from '../transfer/output-session'
-import type { V2TransferJobResult, V2TransferProgress } from '../transfer/v2-job'
+import {
+  createTransferIntentDraft,
+  selectionRulesFromPolicy,
+  type TransferIntentDraft,
+  type TransferTraceEvent,
+} from '../transfer/intent'
 import { V2BrowserReceiverGateway, type V2BrowseDirectory, type V2BrowsePage, type V2JoinedBrowserShare } from './v2-gateway'
 import {
   acquireBrowserV2Output,
@@ -18,8 +22,6 @@ import {
 import {
   EMPTY_V2_PROGRESS,
   EMPTY_V2_PREVIEW,
-  type V2BrowseRow,
-  type V2ReceiverProgress,
   type V2ReceiverSnapshot,
 } from './v2-model'
 import {
@@ -29,6 +31,20 @@ import {
   type V2DiagnosticFormatter,
   type V2SecurityMilestone,
 } from './v2-capability-lifecycle'
+import {
+  breadcrumbsFor,
+  descriptorIdentity,
+  isAbortError,
+  knownSingleFile,
+  nowMilliseconds,
+  previewSnapshot,
+  projectBrowsePage,
+  selectionAvailable,
+  transferProgressSnapshot,
+  transferTerminalSnapshot,
+  type ActiveV2Preview,
+  type RetryableV2BrowseRequest,
+} from './v2-controller-state'
 
 export {
   captureV2Location,
@@ -41,30 +57,17 @@ export type {
   V2SecurityMilestone,
 } from './v2-capability-lifecycle'
 
-interface ActiveV2Preview {
-  readonly id: number
-  readonly entry: Extract<V2CatalogEntry, { kind: 'file' }>
-  readonly controller: AbortController
-  readonly connectivity: V2ConnectivityActivation
-  session?: V2FilePreview
-  seekId: number
-}
-
-interface RetryableV2BrowseRequest {
-  readonly directory: V2BrowseDirectory
-  readonly pageIndex: number
-  readonly route: readonly V2BrowseDirectory[]
-}
-
 export interface V2ReceiverControllerOptions {
   readonly diagnosticFormatter?: V2DiagnosticFormatter
   readonly onSecurityMilestone?: (milestone: V2SecurityMilestone) => void
+  readonly onTransferTrace?: (event: TransferTraceEvent) => void
 }
 
 export class V2ReceiverController {
   readonly #gateway: V2BrowserReceiverGateway
   readonly #capabilityLifecycle: V2CapabilityInputLifecycle
   readonly #listeners = new Set<() => void>()
+  readonly #onTransferTrace: ((event: TransferTraceEvent) => void) | undefined
   #snapshot: V2ReceiverSnapshot
   #pageUrl = ''
   #joined: V2JoinedBrowserShare | undefined
@@ -88,6 +91,7 @@ export class V2ReceiverController {
     options: V2ReceiverControllerOptions = {},
   ) {
     this.#gateway = gateway
+    this.#onTransferTrace = options.onTransferTrace
     this.#capabilityLifecycle = new V2CapabilityInputLifecycle(options)
     const outputCapabilities = browserV2OutputCapabilities()
     const outputIntent: V2OutputIntent = outputCapabilities.nativeDirectory ? 'directory' : 'download'
@@ -284,8 +288,46 @@ export class V2ReceiverController {
     if (joined === undefined || !this.#snapshot.canStart || this.#isTransferActive()) return
     // Download t0 and P2P belong to the first post-guard statement; selection
     // classification and picker acquisition remain downstream in the click stack.
+    const downloadT0Milliseconds = nowMilliseconds()
+    const shareInstanceId = descriptorIdentity(
+      joined.descriptor.shareInstanceId,
+      joined.descriptor.shareInstance,
+      joined.recoveryIdentity,
+    )
+    const syntheticRootId = descriptorIdentity(
+      joined.descriptor.syntheticRootId,
+      joined.descriptor.syntheticRoot,
+      'synthetic-root',
+    )
+    const draft = createTransferIntentDraft({
+      shareInstance: shareInstanceId,
+      syntheticRoot: syntheticRootId,
+      selection: selectionRulesFromPolicy(joined.selection.snapshot()),
+    })
+    this.#emitTransferTrace(Object.freeze({
+      name: 'download-t0',
+      atMilliseconds: downloadT0Milliseconds,
+      context: Object.freeze({
+        shareInstance: shareInstanceId,
+        transferJobId: draft.transferJobId,
+        decision: 'click-guard-passed',
+      }),
+    }))
+    this.#emitTransferTrace(Object.freeze({
+      name: 'intent-draft',
+      atMilliseconds: nowMilliseconds(),
+      context: Object.freeze({
+        shareInstance: shareInstanceId,
+        transferJobId: draft.transferJobId,
+        decision: 'picker-pending',
+      }),
+    }))
     const connectivity = joined.beginDownloadConnectivity('unknown')
-    const single = this.#knownSingleFile()
+    const single = knownSingleFile(
+      joined,
+      this.#snapshot.selectionTotalKnown,
+      this.#rootSingleFile,
+    )
     let sizeClass: 'small' | 'large' | 'unknown' = 'unknown'
     if (single !== undefined) {
       sizeClass = single.expectedSize >= SMALL_TRANSFER_BYTE_LIMIT ? 'large' : 'small'
@@ -308,9 +350,10 @@ export class V2ReceiverController {
       phase: 'acquiring-output',
       status: 'Waiting for the output destination.',
       error: null,
+      downloadT0Milliseconds,
     })
     this.#transfer = new AbortController()
-    this.#runTransfer(joined, acquired, connectivity).catch(() => undefined)
+    this.#runTransfer(joined, acquired, connectivity, draft).catch(() => undefined)
   }
 
   abortDownload(): void {
@@ -453,7 +496,7 @@ export class V2ReceiverController {
         phase: 'browsing',
         status: 'This directory could not be listed.',
         error: this.#publicError(error),
-        breadcrumbs: this.#breadcrumbs(),
+        breadcrumbs: breadcrumbsFor(this.#directories),
         directoryRetryable: retryable,
         canStart: this.#selectionAvailable() && this.#outputAvailable(),
       })
@@ -481,48 +524,26 @@ export class V2ReceiverController {
   #publishPage(page: V2BrowsePage): void {
     const joined = this.#joined
     if (joined === undefined) return
-    this.#entries = new Map(page.entries.map((entry) => [entry.idText, entry]))
-    const rootPage = page.directory.idText === joined.descriptor.syntheticRootId
-    if (rootPage) {
-      this.#rootEntryCount = page.entryCount
-      const onlyEntry = page.entryCount === 1 && page.omittedCount === 0n
-        ? page.entries[0]
-        : undefined
-      this.#rootSingleFile = onlyEntry?.kind === 'file' ? onlyEntry : undefined
+    const projection = projectBrowsePage(
+      page,
+      joined.selection,
+      joined.descriptor.syntheticRootId,
+      this.#directories,
+    )
+    this.#entries = projection.entries
+    if (projection.root !== undefined) {
+      this.#rootEntryCount = projection.root.entryCount
+      this.#rootSingleFile = projection.root.singleFile
     }
-    const rows: V2BrowseRow[] = page.entries.map((entry) => Object.freeze({
-      id: entry.idText,
-      kind: entry.kind,
-      name: entry.name,
-      ...(entry.kind === 'file' ? { expectedSize: entry.expectedSize } : {}),
-      selection: joined.selection.state(entry, page.directory.ancestry),
-    }))
-    const known = rootPage && page.pageCount === 1 && page.omittedCount === 0n &&
-      page.entries.every((entry) => entry.kind === 'file')
-    let selectedFiles = 0
-    let selectedBytes = 0n
-    for (const entry of page.entries) {
-      if (entry.kind === 'file' && joined.selection.selected(entry, page.directory.ancestry)) {
-        selectedFiles += 1
-        selectedBytes += entry.expectedSize
-      }
-    }
+    const snapshot = { ...this.#snapshot, ...projection.snapshot }
     this.#publish({
-      ...this.#snapshot,
-      phase: 'browsing',
-      status: page.entryCount === 0 ? 'This directory is empty.' : 'Choose what to receive.',
-      error: page.omittedCount === 0n ? null : `${page.omittedCount} entries were omitted by the sender.`,
-      rows: Object.freeze(rows),
-      breadcrumbs: this.#breadcrumbs(),
-      pageIndex: page.pageIndex,
-      pageCount: page.pageCount,
-      entryCount: page.entryCount,
-      omittedCount: page.omittedCount,
-      selectedVisibleFiles: selectedFiles,
-      selectedVisibleBytes: selectedBytes,
-      selectionTotalKnown: known,
-      canStart: this.#selectionAvailable() && this.#outputAvailable(),
-      directoryRetryable: false,
+      ...snapshot,
+      canStart: selectionAvailable(
+        joined,
+        this.#rootEntryCount,
+        snapshot.selectionTotalKnown,
+        page,
+      ) && this.#outputAvailable(),
     })
   }
 
@@ -573,21 +594,25 @@ export class V2ReceiverController {
     joined: V2JoinedBrowserShare,
     acquired: ReturnType<typeof acquireBrowserV2Output>,
     connectivity: V2ConnectivityActivation,
+    intent: TransferIntentDraft,
   ): Promise<void> {
     const output = browserV2OutputAuthority(acquired)
     try {
-      this.#publish({
-        ...this.#snapshot,
-        phase: 'discovering',
-        status: 'Discovering the terminal selection and opening content lanes…',
-        progress: EMPTY_V2_PROGRESS,
-      })
       const job = joined.transferJob(output, connectivity, {
-        onProgress: (progress) => this.#acceptProgress(progress),
+        onProgress: (progress) => this.#publish({
+          ...this.#snapshot,
+          ...transferProgressSnapshot(progress),
+        }),
         onMeasure: (measure) => connectivity.observeSizeClass(measure.sizeClass),
+        onTrace: (event) => this.#onTransferTrace?.(event),
+        intent,
       })
       const result = await job.run(this.#transfer?.signal)
-      this.#acceptTransferTerminal(result)
+      this.#publish(transferTerminalSnapshot(
+        this.#snapshot,
+        result,
+        this.#transfer?.signal.aborted === true,
+      ))
     } catch (error) {
       await output.abort(error)
       if (this.#transfer?.signal.aborted) {
@@ -609,70 +634,19 @@ export class V2ReceiverController {
     }
   }
 
-  #acceptTransferTerminal(result: V2TransferJobResult): void {
-    if (result.outcome.status === 'Aborted') {
-      if (!this.#transfer?.signal.aborted) {
-        throw result.abortReason ?? new Error('Transfer aborted without a terminal reason')
-      }
-      this.#publish({ ...this.#snapshot, phase: 'aborted', status: 'Transfer stopped.' })
-      return
-    }
-    if (result.outcome.status === 'CompletedWithErrors') {
-      this.#publish({
-        ...this.#snapshot,
-        phase: 'completed-errors',
-        status: `Saved with ${result.outcome.failureCount} item error(s).`,
-      })
-      return
-    }
-    this.#publish({ ...this.#snapshot, phase: 'completed', status: 'Transfer complete.' })
-  }
-
-  #acceptProgress(progress: V2TransferProgress): void {
-    const snapshot: V2ReceiverProgress = Object.freeze({ ...progress })
-    this.#publish({
-      ...this.#snapshot,
-      phase: progress.writtenBytes > 0n ? 'transferring' : 'discovering',
-      status: progress.discoveryComplete ? 'Receiving authenticated blocks…' : 'Discovering selected files…',
-      progress: snapshot,
-    })
-  }
-
-  #knownSingleFile(): Extract<V2CatalogEntry, { kind: 'file' }> | undefined {
-    const joined = this.#joined
-    if (joined === undefined || !this.#snapshot.selectionTotalKnown) return undefined
-    const ancestry = [joined.descriptor.syntheticRootId]
-    const candidate = this.#rootSingleFile
-    return candidate !== undefined && joined.selection.selected(candidate, ancestry)
-      ? candidate
-      : undefined
-  }
-
-  #breadcrumbs() {
-    return Object.freeze(this.#directories.map((directory) => Object.freeze({
-      id: directory.idText,
-      name: directory.name,
-    })))
-  }
-
-  #isTransferActive(): boolean {
-    return this.#transfer !== undefined
-  }
+  #isTransferActive(): boolean { return this.#transfer !== undefined }
 
   #outputAvailable(): boolean {
     return outputIntentAvailable(this.#snapshot.outputCapabilities, this.#snapshot.outputIntent)
   }
 
   #selectionAvailable(): boolean {
-    const joined = this.#joined
-    if (joined === undefined || this.#rootEntryCount === 0) return false
-    if (!this.#snapshot.selectionTotalKnown) {
-      return joined.selection.shouldDiscover(joined.descriptor.syntheticRootId, [])
-    }
-    const rootAncestry = [joined.descriptor.syntheticRootId]
-    return this.#page?.entries.some(
-      (entry) => joined.selection.state(entry, rootAncestry) !== 'unselected',
-    ) === true
+    return selectionAvailable(
+      this.#joined,
+      this.#rootEntryCount,
+      this.#snapshot.selectionTotalKnown,
+      this.#page,
+    )
   }
 
   #fail(error: unknown, lease?: V2CapabilityJoinLease): void {
@@ -684,45 +658,19 @@ export class V2ReceiverController {
     })
   }
 
-  #publicError(error: unknown): string {
-    return this.#capabilityLifecycle.publicError(error)
+  #publicError(error: unknown): string { return this.#capabilityLifecycle.publicError(error) }
+
+  #emitTransferTrace(event: TransferTraceEvent): void {
+    try {
+      this.#onTransferTrace?.(event)
+    } catch {
+      // Diagnostics are observational; a rejected observer must not cancel a
+      // user-activated picker or alter the connectivity/output authority path.
+    }
   }
 
   #publish(snapshot: V2ReceiverSnapshot): void {
     this.#snapshot = Object.freeze(snapshot)
     for (const listener of this.#listeners) listener()
   }
-}
-
-function previewSnapshot(
-  entry: Extract<V2CatalogEntry, { kind: 'file' }>,
-  presentation: V2PreviewPresentation,
-  seeking: boolean,
-) {
-  return Object.freeze(presentation.kind === 'image'
-    ? {
-        state: 'image' as const,
-        fileId: entry.idText,
-        name: presentation.name,
-        url: presentation.url,
-        mimeType: presentation.mimeType,
-        width: presentation.width,
-        height: presentation.height,
-      }
-    : {
-        state: 'video' as const,
-        fileId: entry.idText,
-        name: presentation.name,
-        url: presentation.url,
-        mimeType: presentation.mimeType,
-        width: presentation.width,
-        height: presentation.height,
-        durationSeconds: presentation.durationSeconds,
-        positionSeconds: presentation.positionSeconds,
-        seeking,
-      })
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === 'AbortError'
 }

@@ -3,25 +3,20 @@
 package osfs
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/osfs/internal/resumestate"
-	"github.com/windshare/windshare/core/transfer"
 	"golang.org/x/sys/windows"
 )
 
 const (
 	windowsNTFSNativeCertificationProfile = "windows-ntfs"
-	// Keep the historical probe namespace explicit at the root-native boundary:
-	// crash recovery must recognize this persisted pre-cleanup artifact.
-	windowsNativeOutputProbePrefix   = ".windshare-output.probe-"
-	windowsNativeLegacyStatePrefix   = ".wsresume-output-"
-	windowsNativeLegacyJournalSuffix = ".journal"
+	// Keep the probe namespace explicit at the root-native boundary so recovery
+	// recognizes this bounded pre-cleanup artifact.
+	windowsNativeOutputProbePrefix = ".windshare-output.probe-"
 )
 
 func TestWindowsNTFSNativeCertification(t *testing.T) {
@@ -74,55 +69,9 @@ func requireUnprivilegedWindowsNTFSCertification(t *testing.T) {
 	t.Skip("Windows/NTFS native certification is meaningful only as an ordinary receiver")
 }
 
-func TestWindowsNTFSResumeListingIsReadOnlyBeforeRootIdentityBootstrap(t *testing.T) {
-	t.Run("empty-root", func(t *testing.T) {
-		root := t.TempDir()
-		inventory, err := ListResumeState(context.Background(), FilesystemResumeRoot{RootPath: root})
-		if err != nil {
-			t.Fatalf("list unused NTFS root: %v", err)
-		}
-		if summaries := inventory.Summaries(); len(summaries) != 0 {
-			t.Errorf("unused NTFS root summaries = %+v", summaries)
-		}
-		if err := inventory.Close(); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	t.Run("legacy-only-root", func(t *testing.T) {
-		root := t.TempDir()
-		journalName := windowsNativeLegacyStatePrefix +
-			strings.Repeat("11", transfer.OutputSessionIdentityBytes) + windowsNativeLegacyJournalSuffix
-		if err := os.WriteFile(
-			filepath.Join(root, journalName), []byte("historic-v2-journal"), 0o600,
-		); err != nil {
-			t.Fatal(err)
-		}
-		inventory, err := ListResumeState(context.Background(), FilesystemResumeRoot{RootPath: root})
-		if err != nil {
-			t.Fatalf("list legacy-only NTFS root: %v", err)
-		}
-		defer inventory.Close()
-		summaries := inventory.Summaries()
-		if len(summaries) != 1 || summaries[0].Reference.Kind() != ResumeStateLegacyUntrusted ||
-			windowsNativeHasAttention(summaries[0], "legacy-v2-root-pin-unavailable") {
-			t.Fatalf("legacy-only NTFS summaries = %+v", summaries)
-		}
-	})
-}
-
-func windowsNativeHasAttention(summary ResumeStateSummary, expected string) bool {
-	for _, attention := range summary.Attention {
-		if attention.Code == expected {
-			return true
-		}
-	}
-	return false
-}
-
 func TestWindowsNTFSCreatesMissingRootThroughCertifiedHandles(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "first", "second")
-	platform, err := openOutputV3Platform(target, true)
+	platform, err := openNativeOutputPlatform(target, true)
 	if err != nil {
 		nativeOutputCertificationFailure(t, windowsNTFSNativeCertificationProfile,
 			"create missing Windows/NTFS root through certified handles", err)
@@ -149,7 +98,7 @@ func TestWindowsRootCreationDoesNotTraverseReparseAncestor(t *testing.T) {
 		t.Skipf("create Windows reparse adversary: %v", err)
 	}
 	unexpected := filepath.Join(outside, "must-not-exist")
-	platform, err := openOutputV3Platform(filepath.Join(alias, "must-not-exist"), true)
+	platform, err := openNativeOutputPlatform(filepath.Join(alias, "must-not-exist"), true)
 	if platform != nil {
 		_ = platform.Close()
 	}

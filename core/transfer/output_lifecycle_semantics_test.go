@@ -118,6 +118,38 @@ func TestOutputFailurePauseReductionCoversEntireErrorTree(t *testing.T) {
 			}
 		})
 	}
+	if isOutputFailure(falseCycle) || !isOutputFailure(trueCycle) ||
+		!isOutputFailure(errors.Join(errors.New("noise"), explicitNonPausing)) {
+		t.Fatal("bounded output classification lost cyclic or multi-error semantics")
+	}
+}
+
+func TestLifecycleInspectionFailsClosedAtEveryGraphBudgetBoundary(t *testing.T) {
+	authority := NewOutputSessionError(errors.New("output authority"), true)
+	deep := error(authority)
+	for range maxOutputFailureTreeNodes + 1 {
+		deep = &lifecycleErrorLink{next: deep}
+	}
+	deepInspection := inspectLifecycleError(deep)
+	if !deepInspection.exhausted || !deepInspection.jobTerminal() || !isOutputFailure(deep) {
+		t.Fatal("deep error authority beyond the graph budget did not fail closed")
+	}
+
+	joined := make([]error, maxOutputFailureTreeNodes+2)
+	for index := range joined {
+		joined[index] = errors.New("graph noise")
+	}
+	joined[len(joined)-1] = authority
+	joinInspection := inspectLifecycleError(errors.Join(joined...))
+	if !joinInspection.exhausted || !joinInspection.jobTerminal() {
+		t.Fatal("oversized join omitted authority without failing closed")
+	}
+
+	mostlyNil := make([]error, maxOutputFailureTreeNodes*4)
+	fanoutInspection := inspectLifecycleError(&lifecycleErrorFanout{children: mostlyNil})
+	if !fanoutInspection.exhausted || !fanoutInspection.jobTerminal() {
+		t.Fatal("oversized mostly-nil fanout did not fail closed in bounded work")
+	}
 }
 
 func TestOutputSettlementSumTypesRejectMalformedStates(t *testing.T) {
@@ -180,10 +212,10 @@ func TestOutputSettlementSumTypesRejectMalformedStates(t *testing.T) {
 }
 
 func TestOutputLifecycleReasonsAndAuthorityFunctionAreClosedDomains(t *testing.T) {
-	if FilePauseReason(0).valid() || !FilePauseInterrupted.valid() || (FilePauseOutputFailure + 1).valid() {
+	if FilePauseReason(0).valid() || !FilePauseInterrupted.valid() || (FilePauseDependencyContract + 1).valid() {
 		t.Fatal("file pause reason admitted a value outside its closed domain")
 	}
-	if JobPauseReason(0).valid() || !JobPauseInterrupted.valid() || (JobPauseOutputFailure + 1).valid() {
+	if JobPauseReason(0).valid() || !JobPauseInterrupted.valid() || (JobPauseDependencyContract + 1).valid() {
 		t.Fatal("job pause reason admitted a value outside its closed domain")
 	}
 	if _, err := NewJobSettlement(JobSettlementKind(0)); !errors.Is(err, ErrInvalidOutputSettlement) {
@@ -191,16 +223,16 @@ func TestOutputLifecycleReasonsAndAuthorityFunctionAreClosedDomains(t *testing.T
 	}
 
 	var nilAuthority OutputAuthorityFunc
-	if _, err := nilAuthority.OpenSelection(context.Background(), OutputSelection{}); !errors.Is(err, ErrInvalidOutputBinding) {
+	if _, err := nilAuthority.OpenOutput(context.Background(), TransferIntent{}); !errors.Is(err, ErrInvalidOutputBinding) {
 		t.Fatalf("nil output authority error = %v", err)
 	}
 	want := errors.New("authority invoked")
 	called := false
-	authority := OutputAuthorityFunc(func(context.Context, OutputSelection) (OutputSession, error) {
+	authority := OutputAuthorityFunc(func(context.Context, TransferIntent) (OutputSession, error) {
 		called = true
 		return nil, want
 	})
-	if _, err := authority.OpenSelection(context.Background(), OutputSelection{}); !called || !errors.Is(err, want) {
+	if _, err := authority.OpenOutput(context.Background(), TransferIntent{}); !called || !errors.Is(err, want) {
 		t.Fatalf("authority call = (%v, %v), want delegated error", called, err)
 	}
 }
@@ -245,3 +277,13 @@ type outputFailureCycle struct {
 
 func (*outputFailureCycle) Error() string           { return "cyclic output failure" }
 func (failure *outputFailureCycle) Unwrap() []error { return failure.children }
+
+type lifecycleErrorLink struct{ next error }
+
+func (*lifecycleErrorLink) Error() string      { return "lifecycle error link" }
+func (link *lifecycleErrorLink) Unwrap() error { return link.next }
+
+type lifecycleErrorFanout struct{ children []error }
+
+func (*lifecycleErrorFanout) Error() string          { return "lifecycle error fanout" }
+func (fanout *lifecycleErrorFanout) Unwrap() []error { return fanout.children }

@@ -1,4 +1,7 @@
-import { IndexedDbOutputRepository } from '../../src/output/browser/indexeddb-repository'
+import {
+  CHECKPOINT_DATABASE_VERSION,
+  IndexedDbOutputRepository,
+} from '../../src/output/browser/indexeddb-repository'
 import { IndexedDbOriginPrivateAdmissionAuthority } from '../../src/output/origin-private/admission-authority'
 import { IndexedDbZipCentralDirectorySpool } from '../../src/output/streams/zip-spool'
 
@@ -65,7 +68,7 @@ async function probeBlockedJournal(): Promise<{
   const databaseName = `journal-blocked-${crypto.randomUUID()}`
   const blocker = await openRawDatabase(databaseName, 1)
   const rejection = await rejectionName(
-    IndexedDbOutputRepository.open(databaseName, 'blocked', 'journal'),
+    IndexedDbOutputRepository.openForTest(databaseName, 'blocked', 'journal'),
   )
   blocker.close()
   return { rejection, deleted: await deleteDatabase(databaseName) }
@@ -73,8 +76,8 @@ async function probeBlockedJournal(): Promise<{
 
 async function probeJournalVersionChange(): Promise<string> {
   const databaseName = `journal-versionchange-${crypto.randomUUID()}`
-  const repository = await IndexedDbOutputRepository.open(databaseName, 'obsolete', 'journal')
-  const upgrader = await openRawDatabase(databaseName, 3)
+  const repository = await IndexedDbOutputRepository.openForTest(databaseName, 'obsolete', 'journal')
+  const upgrader = await openRawDatabase(databaseName, CHECKPOINT_DATABASE_VERSION + 1)
   const rejection = await rejectionName(repository.scanCommitted({ direction: 'ascending' }))
   upgrader.close()
   if (!await deleteDatabase(databaseName)) throw new Error('Journal versionchange leaked a connection')

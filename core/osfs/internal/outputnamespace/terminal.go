@@ -69,7 +69,7 @@ func RecoverTerminalNamespace(
 	if err := removeTerminalHeader(sessionDirectory, header); err != nil {
 		return err
 	}
-	intentName := resumestate.ResumeNamespaceName(header.ResumeIntent())
+	intentName := resumestate.IntentNamespaceName(header.IntentDigest())
 	sessionName := resumestate.SessionDirectoryName(header.SessionID())
 	return RemoveEmptySessionShell(
 		control.Sessions(), intentDirectory, sessionDirectory, intentName, sessionName,
@@ -300,7 +300,7 @@ func VerifyTerminalAuthority(
 	sessionDirectory outputcap.Directory,
 	header resumestate.Header,
 ) error {
-	intentName := resumestate.ResumeNamespaceName(header.ResumeIntent())
+	intentName := resumestate.IntentNamespaceName(header.IntentDigest())
 	if err := VerifyPinnedDirectoryEntry(control.Sessions(), intentName, intentDirectory); err != nil {
 		return intentFault("verify terminal intent binding", err)
 	}
@@ -373,6 +373,25 @@ func RemoveEmptySessionShell(
 	if err != nil {
 		return outputfault.New(transfer.OutputFaultSession, transfer.OutputFaultStateIO, err)
 	}
+	// Incremental checkpoints are intent-scoped metadata, not session children.
+	// Remove only an empty, identity-pinned namespace here; non-empty checkpoint
+	// records remain visible to resume listing until their owning V1 reducer has
+	// explicitly settled them. This keeps a terminal shell from being mistaken for
+	// an active session while preserving durable recovery evidence after a crash.
+	if len(intentChildren) == 1 && intentChildren[0] == resumestate.CheckpointsDirectoryName {
+		if err := removeEmptyIntentMetadataDirectory(
+			intentDirectory, resumestate.CheckpointsDirectoryName,
+			func() error {
+				return VerifyPinnedDirectoryEntry(sessionsDirectory, intentName, intentDirectory)
+			},
+		); err != nil {
+			return err
+		}
+		intentChildren, err = intentDirectory.Names(1)
+		if err != nil {
+			return outputfault.New(transfer.OutputFaultSession, transfer.OutputFaultStateIO, err)
+		}
+	}
 	if len(intentChildren) != 0 {
 		return nil
 	}
@@ -383,6 +402,59 @@ func RemoveEmptySessionShell(
 		return outputfault.New(transfer.OutputFaultSession, transfer.OutputFaultStateIO, err)
 	}
 	if err := sessionsDirectory.Sync(); err != nil {
+		return outputfault.New(transfer.OutputFaultSession, transfer.OutputFaultStateIO, err)
+	}
+	return nil
+}
+
+// removeEmptyIntentMetadataDirectory removes one private intent child only when
+// its live entry is still bound and the directory is empty. Callers decide which
+// metadata name is in scope; the helper never follows an unpinned pathname.
+func removeEmptyIntentMetadataDirectory(
+	intentDirectory outputcap.Directory,
+	name string,
+	verifyIntent func() error,
+) error {
+	entry, err := intentDirectory.OpenEntry(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return outputfault.New(transfer.OutputFaultSession, transfer.OutputFaultStateIO, err)
+	}
+	defer entry.Close()
+	if entry.Kind() != outputcap.EntryDirectory {
+		return intentFault("classify intent metadata child", outputfault.ErrIntentUnsafe)
+	}
+	child, err := intentDirectory.OpenPinnedDirectory(entry, false)
+	if err != nil {
+		return intentFault("open intent metadata child", err)
+	}
+	defer child.Close()
+	if err := verifyIntent(); err != nil {
+		return intentFault("verify intent metadata child", err)
+	}
+	matches, err := intentDirectory.EntryMatches(name, entry)
+	if err != nil || !matches {
+		return intentFault("verify intent metadata identity", errors.Join(outputcap.ErrUnsafeNamespace, err))
+	}
+	children, err := child.Names(1)
+	if err != nil {
+		return outputfault.New(transfer.OutputFaultSession, transfer.OutputFaultStateIO, err)
+	}
+	if len(children) != 0 {
+		return nil
+	}
+	if err := verifyIntent(); err != nil {
+		return intentFault("reverify intent metadata child", err)
+	}
+	if matches, err := intentDirectory.EntryMatches(name, entry); err != nil || !matches {
+		return intentFault("reverify intent metadata identity", errors.Join(outputcap.ErrUnsafeNamespace, err))
+	}
+	if err := intentDirectory.RemoveDirectory(name, child); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return outputfault.New(transfer.OutputFaultSession, transfer.OutputFaultStateIO, err)
+	}
+	if err := intentDirectory.Sync(); err != nil {
 		return outputfault.New(transfer.OutputFaultSession, transfer.OutputFaultStateIO, err)
 	}
 	return nil

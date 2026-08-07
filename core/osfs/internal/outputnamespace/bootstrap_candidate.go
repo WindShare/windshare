@@ -16,7 +16,7 @@ func completeBootstrapCandidate(
 	candidate outputcap.Directory,
 	control resumestate.Control,
 ) error {
-	store := controller.Store(transfer.ResumeIntent{}, transfer.OutputSessionID{})
+	store := controller.Store(transfer.TransferIntentDigest{}, transfer.OutputSessionID{})
 	names, err := candidate.Names(4)
 	if err != nil {
 		return err
@@ -191,7 +191,7 @@ func (controller Controller) ensureBootstrapControlRecord(
 	if err != nil {
 		return err
 	}
-	store := controller.Store(transfer.ResumeIntent{}, transfer.OutputSessionID{})
+	store := controller.Store(transfer.TransferIntentDigest{}, transfer.OutputSessionID{})
 	_, err = store.EnsureInitialRecord(
 		candidate, resumestate.ControlRecordName, encoded, resumestate.MaxControlStateBytes,
 	)

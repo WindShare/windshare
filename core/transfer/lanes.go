@@ -47,8 +47,7 @@ func (e *demandNotAdmittedError) Error() string {
 func (e *demandNotAdmittedError) Unwrap() error { return e.cause }
 
 func isDemandNotAdmitted(err error) bool {
-	var capability *demandNotAdmittedError
-	return errors.As(err, &capability)
+	return inspectLifecycleError(err).demandNotAdmitted
 }
 
 type LaneIdentity struct {
@@ -415,7 +414,7 @@ func (s *LaneSet) finish(state *laneState, elapsed time.Duration, err error) {
 	defer s.mu.Unlock()
 	state.inflight--
 	if err != nil {
-		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && state.failures < maximumLaneFailures {
+		if !inspectLifecycleError(err).interrupted && state.failures < maximumLaneFailures {
 			state.failures++
 		}
 		return

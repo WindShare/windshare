@@ -21,7 +21,7 @@ func newOutputV3DecoratedPublicAuthority(
 	runtimeAuthority, err := outputruntime.New(outputruntime.Config{
 		RootPath: rootPath,
 		PlatformFactory: func(path string, create bool) (outputcap.Platform, error) {
-			platform, openErr := openOutputV3Platform(path, create)
+			platform, openErr := openNativeOutputPlatform(path, create)
 			if openErr != nil {
 				return nil, openErr
 			}

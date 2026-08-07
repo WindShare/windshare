@@ -4,6 +4,8 @@ import type {
   HotSwitchPageEvent,
   ObservedTransferFailure,
 } from './hot-switch-contract'
+import { encodeBase64Url } from '../../src/crypto/bytes'
+import { freezeTransferIntent } from '../../src/transfer/intent'
 
 const GATEWAY_MODULE_PATH = '/src/ui/v2-gateway.ts'
 const OFFER_MODULE_PATH = '/src/connectivity/peer-offer.ts'
@@ -232,7 +234,16 @@ async function runTransfer(
     activation = joined.beginDownloadConnectivity('large')
     const output = delivery.outputSession(modules.stream, outputRelease)
     const outputAuthority = {
-      openSelection: async () => output,
+      confirmOutput: async (draft: Parameters<typeof freezeTransferIntent>[0]) => ({
+        intent: await freezeTransferIntent(draft, {
+          target: encodeBase64Url(Uint8Array.from({ length: 32 }, (_, index) => index + 1)),
+          targetKind: 2,
+          backend: output.identity.backend,
+          format: 'single-file',
+        }),
+        session: output,
+      }),
+      openOutput: async () => output,
       abort: (reason: unknown) => output.abortJob(reason),
     }
     deliveryStarted = true

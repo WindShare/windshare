@@ -9,7 +9,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 )
 
-func TestOutputAndResumeIdentityByteBoundariesOwnTheirInput(t *testing.T) {
+func TestOutputAndSelectionObservationByteBoundariesOwnTheirInput(t *testing.T) {
 	selectionBytes := make([]byte, SelectionIdentityBytes)
 	selectionBytes[0] = 11
 	selection, err := SelectionIdentityFromBytes(selectionBytes)
@@ -29,23 +29,23 @@ func TestOutputAndResumeIdentityByteBoundariesOwnTheirInput(t *testing.T) {
 		t.Fatalf("zero selection identity error = %v", err)
 	}
 
-	intentBytes := make([]byte, ResumeIntentBytes)
-	intentBytes[0] = 21
-	intent, err := ResumeIntentFromBytes(intentBytes)
+	observationBytes := make([]byte, SelectionObservationV1Bytes)
+	observationBytes[0] = 21
+	observation, err := SelectionObservationV1FromBytes(observationBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intentBytes[0] = 22
-	intentCopy := intent.Bytes()
-	intentCopy[0] = 23
-	if intent.Bytes()[0] != 21 {
-		t.Fatal("resume intent retained caller-owned byte storage")
+	observationBytes[0] = 22
+	observationCopy := observation.Bytes()
+	observationCopy[0] = 23
+	if observation.Bytes()[0] != 21 {
+		t.Fatal("selection observation retained caller-owned byte storage")
 	}
-	if _, err := ResumeIntentFromBytes(make([]byte, ResumeIntentBytes-1)); !errors.Is(err, ErrInvalidOutputSelection) {
-		t.Fatalf("short resume intent error = %v", err)
+	if _, err := SelectionObservationV1FromBytes(make([]byte, SelectionObservationV1Bytes-1)); !errors.Is(err, ErrInvalidOutputSelection) {
+		t.Fatalf("short selection observation error = %v", err)
 	}
-	if _, err := ResumeIntentFromBytes(make([]byte, ResumeIntentBytes)); !errors.Is(err, ErrInvalidOutputSelection) {
-		t.Fatalf("zero resume intent error = %v", err)
+	if _, err := SelectionObservationV1FromBytes(make([]byte, SelectionObservationV1Bytes)); !errors.Is(err, ErrInvalidOutputSelection) {
+		t.Fatalf("zero selection observation error = %v", err)
 	}
 }
 
@@ -93,6 +93,23 @@ func TestOutputSelectionRejectsMalformedCanonicalGraph(t *testing.T) {
 		{name: "orphan directory", share: share, directories: []OutputSelectionDirectory{{
 			Path: "missing/child", DirectoryID: directory.DirectoryID, Generation: directory.Generation,
 		}}},
+		{name: "synthetic root identity reused", share: share, directories: []OutputSelectionDirectory{{
+			Path: "root-loop", DirectoryID: root, Generation: directory.Generation,
+		}}},
+		{name: "directory identity reused as file", share: share,
+			directories: []OutputSelectionDirectory{directory},
+			files: []OutputSelectionFile{{
+				Path: "folder/file.bin", FileID: catalog.FileID(directory.DirectoryID),
+				ParentDirectoryID: directory.DirectoryID, ParentGeneration: directory.Generation,
+			}},
+		},
+		{name: "file identity reused at distinct path", share: share, files: []OutputSelectionFile{
+			file,
+			{
+				Path: "second.bin", FileID: file.FileID,
+				ParentDirectoryID: root, ParentGeneration: rootGeneration,
+			},
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -177,17 +194,17 @@ func TestCanonicalOutputIdentityIsOrderedDomainSeparatedAndImmutable(t *testing.
 		t.Fatal("canonical request exposed internal byte storage")
 	}
 
-	canonical, err := NewCanonicalSelectionV1(requestA, plan)
-	if err != nil || canonical.ResumeIntent().IsZero() {
-		t.Fatalf("canonical selection = %+v, error = %v", canonical, err)
+	observation, err := NewTerminalSelectionObservationV1(requestA, plan)
+	if err != nil || observation.Observation().IsZero() {
+		t.Fatalf("terminal selection observation = %+v, error = %v", observation, err)
 	}
-	canonicalBytes := canonical.Bytes()
-	canonicalBytes[0] ^= 0xff
-	if slices.Equal(canonicalBytes, canonical.Bytes()) {
-		t.Fatal("canonical selection exposed internal byte storage")
+	observationBytes := observation.Bytes()
+	observationBytes[0] ^= 0xff
+	if slices.Equal(observationBytes, observation.Bytes()) {
+		t.Fatal("terminal selection observation exposed internal byte storage")
 	}
-	if _, err := NewCanonicalSelectionV1(CanonicalSelectionRequest{}, plan); !errors.Is(err, ErrInvalidOutputSelection) {
-		t.Fatalf("unbound canonical request error = %v", err)
+	if _, err := NewTerminalSelectionObservationV1(CanonicalSelectionRequest{}, plan); !errors.Is(err, ErrInvalidOutputSelection) {
+		t.Fatalf("unbound observation request error = %v", err)
 	}
 	invalidRules := SelectionRules{}
 	if _, err := NewCanonicalSelectionRequest(share, root, invalidRules); !errors.Is(err, ErrInvalidSelectionRules) {

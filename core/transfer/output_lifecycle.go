@@ -61,7 +61,7 @@ func (fault *OutputFault) RequiresJobPause() bool {
 }
 
 func outputContractFault(cause error) error {
-	if cause == nil || errors.Is(cause, ErrOutputContract) {
+	if cause == nil || inspectLifecycleError(cause).outputContract {
 		cause = ErrOutputContract
 	} else {
 		cause = errors.Join(ErrOutputContract, cause)
@@ -73,9 +73,8 @@ func validateSettlementFailure(err error) error {
 	if err == nil {
 		return nil
 	}
-	var fault *OutputFault
-	if errors.As(err, &fault) && fault.Scope() >= OutputFaultFile && fault.Scope() <= OutputFaultRoot &&
-		fault.Code() >= OutputFaultStateIO && fault.Code() <= OutputFaultContract {
+	inspection := inspectLifecycleError(err)
+	if inspection.validOutputFault && !inspection.exhausted {
 		return err
 	}
 	return outputContractFault(err)
@@ -122,6 +121,18 @@ func NewRetiredFileSettlement(binding OutputFileBinding) (FileSettlement, error)
 	}
 	return FileSettlement{
 		kind: FileRetired, target: binding.Target(), binding: binding, hasBinding: true,
+	}, nil
+}
+
+// NewTransientPublishedFileSettlement represents publication whose bytes were
+// consumed sequentially but are not resumable at any declared durability level.
+// The transfer job proves full transient coverage before accepting this result.
+func NewTransientPublishedFileSettlement(binding OutputFileBinding) (FileSettlement, error) {
+	if !binding.valid() {
+		return FileSettlement{}, ErrInvalidOutputSettlement
+	}
+	return FileSettlement{
+		kind: FilePublished, target: binding.Target(), binding: binding, hasBinding: true,
 	}, nil
 }
 
@@ -233,7 +244,16 @@ func (settlement FileSettlement) valid() bool {
 		return settlement.target.valid() && settlement.hasBinding && settlement.binding.valid() &&
 			settlement.binding.Target() == settlement.target && !settlement.hasCheckpoint &&
 			settlement.stateRef.IsZero() && settlement.quarantineReason == 0
-	case FilePublished, FilePaused, FilePublishBlocked:
+	case FilePublished:
+		binding, bound := settlement.OutputBinding()
+		if !bound || !binding.valid() || settlement.target != binding.Target() ||
+			!settlement.stateRef.IsZero() || settlement.quarantineReason != 0 {
+			return false
+		}
+		checkpoint, durable := settlement.VerifiedCheckpoint()
+		return !durable || checkpoint.Binding() == binding &&
+			RangesCoverFile(checkpoint.Binding().ExactSize(), checkpoint.Ranges())
+	case FilePaused, FilePublishBlocked:
 		checkpoint, ok := settlement.VerifiedCheckpoint()
 		binding, bound := settlement.OutputBinding()
 		if !ok || !bound || !binding.valid() || checkpoint.Binding() != binding ||
@@ -261,7 +281,13 @@ func (settlement FileSettlement) matchesBinding(binding OutputFileBinding) bool 
 		return false
 	}
 	switch settlement.Kind() {
-	case FilePublished, FilePaused, FilePublishBlocked:
+	case FilePublished:
+		if checkpoint, durable := settlement.VerifiedCheckpoint(); durable {
+			return checkpoint.Binding() == binding
+		}
+		settledBinding, ok := settlement.OutputBinding()
+		return ok && settledBinding == binding
+	case FilePaused, FilePublishBlocked:
 		checkpoint, _ := settlement.VerifiedCheckpoint()
 		return checkpoint.Binding() == binding
 	case FileQuarantined, FileRetired:
@@ -272,6 +298,20 @@ func (settlement FileSettlement) matchesBinding(binding OutputFileBinding) bool 
 	}
 }
 
+func (settlement FileSettlement) matchesCommittedOutput(
+	binding OutputFileBinding,
+	capabilities OutputCapabilities,
+) bool {
+	if !settlement.matchesBinding(binding) {
+		return false
+	}
+	if settlement.Kind() != FilePublished {
+		return true
+	}
+	_, durablePublication := settlement.VerifiedCheckpoint()
+	return durablePublication == (capabilities.Durability != DurabilityNone)
+}
+
 type FilePauseReason uint8
 
 const (
@@ -280,10 +320,12 @@ const (
 	FilePauseTransportFailure
 	FilePauseSessionFailure
 	FilePauseOutputFailure
+	FilePauseResourceBudget
+	FilePauseDependencyContract
 )
 
 func (reason FilePauseReason) valid() bool {
-	return reason >= FilePauseInterrupted && reason <= FilePauseOutputFailure
+	return reason >= FilePauseInterrupted && reason <= FilePauseDependencyContract
 }
 
 type FileRetireReason uint8
@@ -306,10 +348,12 @@ const (
 	JobPauseTransportFailure
 	JobPauseSessionFailure
 	JobPauseOutputFailure
+	JobPauseResourceBudget
+	JobPauseDependencyContract
 )
 
 func (reason JobPauseReason) valid() bool {
-	return reason >= JobPauseInterrupted && reason <= JobPauseOutputFailure
+	return reason >= JobPauseInterrupted && reason <= JobPauseDependencyContract
 }
 
 type JobSettlementKind uint8
@@ -374,7 +418,8 @@ func NewFileTransactionStart(transaction FileTransaction, durable VerifiedDurabl
 func NewFileSettlementStart(settlement FileSettlement) (FileStart, error) {
 	switch settlement.Kind() {
 	case FilePublished, FileCollision, FilePublishBlocked, FileQuarantined, FileRetired:
-		if !settlement.valid() {
+		_, durablePublication := settlement.VerifiedCheckpoint()
+		if !settlement.valid() || settlement.Kind() == FilePublished && !durablePublication {
 			return FileStart{}, ErrInvalidOutputSettlement
 		}
 		return FileStart{kind: fileStartSettlement, settlement: settlement}, nil
@@ -402,31 +447,32 @@ func (start FileStart) valid() bool {
 	return ok
 }
 
-// OutputAuthority is the pre-session boundary. It receives only a terminal,
-// canonically bound selection, prepares and validates every selected parent,
-// and returns a durable session only after admission is complete.
+// OutputAuthority is the output-root boundary. It receives a confirmed intent,
+// prepares only the root/recovery namespace, and leaves descendant creation to
+// per-generation admissions after catalog terminal evidence arrives.
 type OutputAuthority interface {
-	OpenSelection(context.Context, OutputSelection) (OutputSession, error)
+	OpenOutput(context.Context, TransferIntent) (OutputSession, error)
 }
 
-type OutputAuthorityFunc func(context.Context, OutputSelection) (OutputSession, error)
+type OutputAuthorityFunc func(context.Context, TransferIntent) (OutputSession, error)
 
-func (function OutputAuthorityFunc) OpenSelection(
+func (function OutputAuthorityFunc) OpenOutput(
 	ctx context.Context,
-	selection OutputSelection,
+	intent TransferIntent,
 ) (OutputSession, error) {
 	if function == nil {
 		return nil, ErrInvalidOutputBinding
 	}
-	return function(ctx, selection)
+	return function(ctx, intent)
 }
 
-// OutputSession exists only after the exact frozen selection has been admitted.
-// A pre-open failure therefore cannot accidentally receive session settlement.
+// OutputSession exists after the confirmed intent/root namespace is admitted.
+// Descendant directories are admitted independently as generations commit.
 type OutputSession interface {
 	BackendID() OutputBackendID
 	SessionID() OutputSessionID
 	Capabilities() OutputCapabilities
+	AdmitDirectory(context.Context, OutputDirectory) (DirectoryAdmission, error)
 	FinalizeDirectory(context.Context, OutputDirectory) error
 	BeginFile(context.Context, OutputFile) (FileStart, error)
 	PauseJob(context.Context, JobPauseReason) (JobSettlement, error)

@@ -111,7 +111,7 @@ func (client *receiverRevisionClient) OpenRevision(
 		return transfer.OpenedRevision{}, err
 	}
 	if message.Kind() == protocolsession.MessageOperationError {
-		return transfer.OpenedRevision{}, remoteOperationErrorFor(message, protocolsession.OperationScopeRevision)
+		return transfer.OpenedRevision{}, remoteRevisionOperationError(message)
 	}
 	if message.Kind() != protocolsession.MessageOpenResults {
 		return transfer.OpenedRevision{}, ErrOperationMissing
@@ -125,7 +125,7 @@ func (client *receiverRevisionClient) OpenRevision(
 		return transfer.OpenedRevision{}, errors.Join(ErrOperationMissing, err)
 	}
 	if results[0].Failure != nil {
-		return transfer.OpenedRevision{}, &RemoteRevisionError{Failure: *results[0].Failure}
+		return transfer.OpenedRevision{}, remoteRevisionFailureError(*results[0].Failure)
 	}
 	if lifecycleErr := client.operationLifecycleError(ctx); lifecycleErr != nil {
 		return transfer.OpenedRevision{}, client.compensateRemoteLease(ctx, results[0].Lease.ID, lifecycleErr)
@@ -229,9 +229,14 @@ func (client *receiverRevisionClient) failRemoteLeaseCollision() error {
 	return ErrRemoteLeaseCollision
 }
 
-type RemoteRevisionError struct{ Failure contentflow.RevisionFailure }
+// RemoteRevisionError retains the authenticated OPEN_RESULTS diagnostic without
+// letting observers mutate the semantic authority already assigned to the job.
+type RemoteRevisionError struct{ failure contentflow.RevisionFailure }
 
 func (err *RemoteRevisionError) Error() string { return "sender could not open the file revision" }
+func (err *RemoteRevisionError) Failure() contentflow.RevisionFailure {
+	return err.failure
+}
 
 func (client *receiverRevisionClient) ReleaseRevision(ctx context.Context, leaseID content.LeaseID) error {
 	ctx, _, endAdmission, err := client.beginExternalOperation(ctx)
@@ -268,7 +273,7 @@ func (client *receiverRevisionClient) releaseRemoteLease(ctx context.Context, le
 		return err
 	}
 	if message.Kind() == protocolsession.MessageOperationError {
-		return remoteOperationErrorFor(message, protocolsession.OperationScopeRevision)
+		return remoteRevisionOperationError(message)
 	}
 	if message.Kind() != protocolsession.MessageOperationComplete {
 		return ErrOperationMissing
@@ -317,7 +322,7 @@ func (client *receiverRevisionClient) renew(ctx context.Context, leaseID content
 		return contentflow.RemoteLease{}, err
 	}
 	if message.Kind() == protocolsession.MessageOperationError {
-		return contentflow.RemoteLease{}, remoteOperationErrorFor(message, protocolsession.OperationScopeRevision)
+		return contentflow.RemoteLease{}, remoteRevisionOperationError(message)
 	}
 	if message.Kind() != protocolsession.MessageLeaseResult {
 		return contentflow.RemoteLease{}, ErrOperationMissing
@@ -432,7 +437,7 @@ func (lane *receiverBlockLane) FetchBlock(
 				}
 			}
 		case protocolsession.MessageOperationError:
-			return records.BlockRecord{}, remoteOperationErrorFor(message, protocolsession.OperationScopeBlock)
+			return records.BlockRecord{}, blockRequestOperationError(message)
 		case protocolsession.MessageOperationComplete:
 			unsigned, err := protocolsession.SenderControlSemanticBody(message)
 			if err != nil {

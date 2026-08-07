@@ -73,7 +73,63 @@ func TestSelectionSnapshotRejectsUnknownAuthorityMode(t *testing.T) {
 	}
 }
 
+func TestSelectionDecisionPreservesTheRuleThatAdmittedAFile(t *testing.T) {
+	file := transferID[catalog.FileID](244)
+	inherited, err := NewSelectionRules(true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := NewSelectionRules(false, []SelectionOverride{{FileID: file, Selected: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := NewPathSelectionRules([]string{"nested/file.bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		rules SelectionRules
+		path  string
+		want  FileSelectionDecision
+	}{
+		{name: "inherited", rules: inherited, want: FileSelectionInherited},
+		{name: "node override", rules: node, want: FileSelectionNodeOverride},
+		{name: "catalog path", rules: path, path: "nested/file.bin", want: FileSelectionCatalogPathTarget},
+	} {
+		if got := test.rules.selectedFileDecision(file, test.path); got != test.want {
+			t.Errorf("%s decision=%d want=%d", test.name, got, test.want)
+		}
+	}
+}
+
 func TestSelectionMeasureAndTrackerDefensiveLifecycleEdges(t *testing.T) {
+	t.Run("discovery-and-completion-counters", func(t *testing.T) {
+		tracker := newSelectionTracker()
+		initial := <-tracker.Updates()
+		if initial.Discovery != DiscoveryOpen || initial.DiscoveredFiles != 0 || initial.CompletedFiles != 0 {
+			t.Fatalf("initial measure = %+v", initial)
+		}
+		tracker.addFile(5)
+		tracker.completeFile(5)
+		open := tracker.snapshot()
+		if open.Discovery != DiscoveryOpen || open.DiscoveredFiles != 1 || open.DiscoveredBytes != 5 ||
+			open.CompletedFiles != 1 || open.CompletedBytes != 5 || open.Class() != SelectionUnknown {
+			t.Fatalf("open measure = %+v", open)
+		}
+		tracker.finishDiscovery()
+		complete := tracker.snapshot()
+		if complete.Discovery != DiscoveryComplete || !complete.DiscoveryTerminalSuccess || complete.Class() != SelectionSmall {
+			t.Fatalf("complete measure = %+v", complete)
+		}
+		// Discovery status is terminal; a late failure report from another
+		// settlement path must not rewrite a completed catalog into failed.
+		tracker.failDiscovery()
+		if got := tracker.snapshot(); got.Discovery != DiscoveryComplete || got.DiscoveryTerminalSuccess != true {
+			t.Fatalf("late failure regressed discovery status: %+v", got)
+		}
+	})
+
 	t.Run("file-count-overflow", func(t *testing.T) {
 		measure := SelectionMeasure{DiscoveredFiles: math.MaxUint64}
 		measure.addDiscoveredFile(0)

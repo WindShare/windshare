@@ -1,10 +1,14 @@
 import { ByteRangeSet, byteRange } from '../../content/geometry'
+import { DirectoryAdmissionLedger } from '../../transfer/directory-admission-ledger'
 import type { JobOutcome } from '../../transfer/outcome'
 import {
   type BeginOutputFileResult,
+  type DirectoryAdmission,
   type FileAbortDisposition,
   type OutputCapabilities,
   type OutputDirectory,
+  type OutputDirectoryAdmission,
+  OutputDirectoryMutationError,
   type OutputFile,
   type OutputSession,
   type OutputSessionIdentity,
@@ -12,68 +16,64 @@ import {
   MAXIMUM_OPEN_OUTPUT_FILES,
   outputCapabilities,
   outputSessionIdentity,
-  snapshotOutputDirectory,
-  snapshotOutputFile,
+  snapshotOutputDirectoryAdmission,
 } from '../../transfer/output-session'
 import {
   type OutputCheckpointJournal,
+  type CheckpointNamespaceBinding,
   type PersistedDirectoryRecord,
   type PersistedFileRecord,
   type PersistedOutputRecord,
   directoryRecord,
   fileRecord,
   outputRecordKey,
-  recordBelongsToSession,
   sameOutputRecord,
-  snapshotOutputRecord,
-  validateOutputJournalPage,
 } from '../persistence/journal'
 import type {
   CheckpointCrashHook,
   PersistentOutputTree,
   PersistentTreeFile,
 } from './contracts'
+import {
+  createPersistentFile,
+  materializePersistentDirectory,
+  reopenPersistentFile,
+  type PersistentAcquisitionContext,
+} from './acquisition'
 import { PersistentOutputError } from './errors'
 import { PersistentFileTransaction } from './file-transaction'
+import {
+  PersistentJournalView,
+  type StagedFileFootprint,
+  type StagedOutputCatalog,
+  type StagedOutputTotals,
+} from './journal-view'
 import {
   directoryKey,
   fileKey,
   fileOwnership,
   nextGeneration,
-  sameOutputSource,
   verifiedFileRanges,
 } from './record-identity'
 import { recoverOutputRecords } from './recovery'
 
 export { PersistentOutputError } from './errors'
+export type {
+  StagedFileFootprint,
+  StagedOutputCatalog,
+  StagedOutputFile,
+  StagedOutputTotals,
+} from './journal-view'
 
 export interface PersistentTreeOutputOptions {
   readonly identity: OutputSessionIdentity
+  /** Durable binding supplied by the picker-confirmed TransferIntent. */
+  readonly checkpointBinding?: Omit<CheckpointNamespaceBinding, 'backend' | 'outputSessionId'>
   readonly tree: PersistentOutputTree
   readonly journal: OutputCheckpointJournal
   readonly durability?: 'ProcessRestart' | 'PowerLoss'
   readonly maximumOpenFiles?: number
   readonly crashHook?: CheckpointCrashHook
-}
-
-export interface StagedOutputFile {
-  readonly record: PersistedFileRecord
-  read(): Promise<Blob>
-}
-
-export interface StagedOutputCatalog {
-  directories(): AsyncIterable<PersistedDirectoryRecord>
-  files(): AsyncIterable<StagedOutputFile>
-}
-
-export interface StagedFileFootprint {
-  readonly logicalBytes: bigint
-  readonly coveredBytes: bigint
-}
-
-export interface StagedOutputTotals {
-  readonly logicalBytes: bigint
-  readonly additionalBytes: bigint
 }
 
 type SessionState = 'open' | 'finished' | 'aborted' | 'suspended'
@@ -85,6 +85,7 @@ type SessionState = 'open' | 'finished' | 'aborted' | 'suspended'
  */
 export class PersistentTreeOutputSession implements OutputSession {
   readonly identity: OutputSessionIdentity
+  readonly format = 'directory' as const
   readonly capabilities: OutputCapabilities
 
   readonly #tree: PersistentOutputTree
@@ -93,6 +94,11 @@ export class PersistentTreeOutputSession implements OutputSession {
   readonly #active = new Map<string, PersistentFileTransaction>()
   readonly #opening = new Set<string>()
   readonly #maximumOpenFiles: number
+  readonly #directoryAdmissions = new DirectoryAdmissionLedger()
+  readonly #checkpointBinding: Omit<CheckpointNamespaceBinding, 'backend' | 'outputSessionId'> | undefined
+  readonly #checkpointOwner: OutputSessionIdentity & CheckpointNamespaceBinding
+  readonly #journalView: PersistentJournalView
+  readonly #acquisition: PersistentAcquisitionContext
 
   #state: SessionState = 'open'
 
@@ -100,6 +106,26 @@ export class PersistentTreeOutputSession implements OutputSession {
     this.identity = outputSessionIdentity(options.identity)
     this.#tree = options.tree
     this.#journal = options.journal
+    this.#checkpointBinding = options.checkpointBinding === undefined
+      ? undefined
+      : Object.freeze({ ...options.checkpointBinding })
+    this.#checkpointOwner = Object.freeze({
+      ...this.identity,
+      ...(this.#checkpointBinding === undefined ? {} : this.#checkpointBinding),
+    })
+    this.#journalView = new PersistentJournalView(this.#checkpointOwner, this.#journal, this.#tree)
+    this.#acquisition = {
+      identity: this.identity,
+      checkpointOwner: this.#checkpointOwner,
+      tree: this.#tree,
+      journalView: this.#journalView,
+      publish: (record) => this.#publish(record),
+      deleteRecord: (record) => this.#deleteRecord(record),
+      removeFileRecord: (record) => this.#removeFileRecord(record),
+      readCommittedRecord: (record) => this.#readCommittedRecord(record),
+      verifyDirectoryIdentity: (record) => this.#verifyDirectoryIdentity(record),
+      verifyFileIdentity: (record, exactSize) => this.#verifyFileIdentity(record, exactSize),
+    }
     this.#crashHook = options.crashHook
     this.#maximumOpenFiles = options.maximumOpenFiles ?? MAXIMUM_OPEN_OUTPUT_FILES
     if (!Number.isSafeInteger(this.#maximumOpenFiles) || this.#maximumOpenFiles <= 0 ||
@@ -120,6 +146,7 @@ export class PersistentTreeOutputSession implements OutputSession {
 
   static async open(options: PersistentTreeOutputOptions): Promise<PersistentTreeOutputSession> {
     const session = new PersistentTreeOutputSession(options)
+    session.#assertCheckpointBinding()
     try {
       await options.tree.authorize()
     } catch (error) {
@@ -133,15 +160,26 @@ export class PersistentTreeOutputSession implements OutputSession {
     return session
   }
 
-  async ensureDirectory(input: OutputDirectory): Promise<void> {
+  admitDirectory(input: OutputDirectoryAdmission, signal: AbortSignal): Promise<DirectoryAdmission> {
     this.#requireOpen()
-    const directory = snapshotOutputDirectory(input)
+    return this.#directoryAdmissions.admitDirectory(input, signal, async (directory, operationSignal) => {
+      // The empty catalog path names the already-authorized picker root; creating
+      // a child is only meaningful after an authenticated generation descends it.
+      if (directory.path.length > 0) await this.#materializeDirectory(directory, operationSignal)
+    })
+  }
+
+  async #materializeDirectory(input: OutputDirectoryAdmission, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted()
+    this.#requireOpen()
+    const directory = snapshotOutputDirectoryAdmission(input)
     const key = directoryKey(directory.path)
     await this.#requireParentDirectories(directory.path)
-    if (await this.#readRecord(fileKey(directory.path)) !== undefined) {
+    signal.throwIfAborted()
+    if (await this.#journalView.readRecord(fileKey(directory.path)) !== undefined) {
       throw this.#bindingError('A file journal record occupies an output directory path')
     }
-    const existing = await this.#readRecord(key)
+    const existing = await this.#journalView.readRecord(key)
     if (existing !== undefined) {
       if (existing.kind !== 'directory') {
         throw this.#bindingError('A file journal record occupies an output directory path')
@@ -150,25 +188,14 @@ export class PersistentTreeOutputSession implements OutputSession {
       return
     }
 
-    const materialized = await this.#tree.ensureDirectory(directory.path)
-    const record = directoryRecord(
-      this.identity,
-      directory.path,
-      materialized.identity,
-      materialized.created,
-      directory.modifiedTimeMilliseconds,
-      false,
-      1n,
-    )
-    await this.#publish(record)
-    await this.#requireDirectoryIdentity(record)
+    await materializePersistentDirectory(this.#acquisition, directory, signal)
   }
 
   async finalizeDirectory(input: OutputDirectory, signal: AbortSignal): Promise<void> {
     this.#requireOpen()
     signal.throwIfAborted()
-    const directory = snapshotOutputDirectory(input)
-    const existing = await this.#readRecord(directoryKey(directory.path))
+    const directory = this.#directoryAdmissions.validateDirectoryFinalization(input)
+    const existing = await this.#journalView.readRecord(directoryKey(directory.path))
     if (existing?.kind !== 'directory') {
       throw new PersistentOutputError(
         'output-state',
@@ -178,37 +205,47 @@ export class PersistentTreeOutputSession implements OutputSession {
     await this.#requireDirectoryIdentity(existing)
     signal.throwIfAborted()
     if (existing.createdBySession &&
-        directory.modifiedTimeMilliseconds !== undefined &&
+        directory.modifiedTime !== undefined &&
         this.#tree.setDirectoryModificationTime !== undefined) {
-      await this.#tree.setDirectoryModificationTime(
-        directory.path,
-        existing.ownedDirectoryIdentity,
-        directory.modifiedTimeMilliseconds,
-      )
+      try {
+        await this.#tree.setDirectoryModificationTime(
+          directory.path,
+          existing.ownedDirectoryIdentity,
+          directory.modifiedTime.milliseconds,
+        )
+      } catch (cause) {
+        throw new OutputDirectoryMutationError(
+          'Output backend could not apply child directory metadata',
+          false,
+          { cause },
+        )
+      }
     }
     await this.#publish(directoryRecord(
-      this.identity,
+      this.#checkpointIdentity(),
       directory.path,
       existing.ownedDirectoryIdentity,
       existing.createdBySession,
-      directory.modifiedTimeMilliseconds,
+      directory.modifiedTime?.milliseconds,
       true,
       nextGeneration(existing),
     ))
     signal.throwIfAborted()
-    const finalized = await this.#readRecord(directoryKey(directory.path))
+    const finalized = await this.#journalView.readRecord(directoryKey(directory.path))
     if (finalized?.kind !== 'directory') {
       throw this.#bindingError('Finalized output directory journal record disappeared')
     }
     await this.#requireDirectoryIdentity(finalized)
   }
 
-  async beginFile(input: OutputFile): Promise<BeginOutputFileResult> {
+  async beginFile(input: OutputFile, signal: AbortSignal): Promise<BeginOutputFileResult> {
+    signal.throwIfAborted()
     this.#requireOpen()
-    const file = snapshotOutputFile(input)
+    const file = this.#directoryAdmissions.validateFileParent(input)
     const key = fileKey(file.path)
     await this.#requireParentDirectories(file.path)
-    if (await this.#readRecord(directoryKey(file.path)) !== undefined) {
+    signal.throwIfAborted()
+    if (await this.#journalView.readRecord(directoryKey(file.path)) !== undefined) {
       throw this.#bindingError('A directory journal record occupies an output file path')
     }
     if (this.#active.has(key) || this.#opening.has(key)) {
@@ -223,8 +260,9 @@ export class PersistentTreeOutputSession implements OutputSession {
 
     this.#opening.add(key)
     try {
-      const reopened = await this.#reopenFile(file)
-      const opened = reopened ?? await this.#createFile(file)
+      const reopened = await reopenPersistentFile(this.#acquisition, file, key, signal)
+      if (reopened === undefined) signal.throwIfAborted()
+      const opened = reopened ?? await createPersistentFile(this.#acquisition, file, signal)
       const transaction = new PersistentFileTransaction(
         this,
         file,
@@ -239,6 +277,11 @@ export class PersistentTreeOutputSession implements OutputSession {
     } finally {
       this.#opening.delete(key)
     }
+  }
+
+  validateFileParent(input: OutputFile): OutputFile {
+    this.#requireOpen()
+    return this.#directoryAdmissions.validateFileParent(input)
   }
 
   async finishJob(outcome: JobOutcome, signal: AbortSignal): Promise<void> {
@@ -267,7 +310,7 @@ export class PersistentTreeOutputSession implements OutputSession {
         failures.push(error)
       }
     }
-    for await (const record of this.#recordsByKind('file', 'ascending')) {
+    for await (const record of this.#journalView.recordsByKind('file', 'ascending')) {
       try {
         await this.#removeFileRecord(record as PersistedFileRecord)
       } catch (error) {
@@ -276,7 +319,7 @@ export class PersistentTreeOutputSession implements OutputSession {
     }
     // Descending canonical keys place every child after and therefore before its
     // parent during deletion without retaining a share-wide depth-sorted array.
-    for await (const record of this.#recordsByKind('directory', 'descending')) {
+    for await (const record of this.#journalView.recordsByKind('directory', 'descending')) {
       const directory = record as PersistedDirectoryRecord
       try {
         if (directory.createdBySession) {
@@ -313,29 +356,15 @@ export class PersistentTreeOutputSession implements OutputSession {
   }
 
   stagedCatalog(): StagedOutputCatalog {
-    return Object.freeze({
-      directories: () => this.#stagedDirectories(),
-      files: () => this.#stagedFiles(),
-    })
+    return this.#journalView.catalog()
   }
 
-  async stagedOutputTotals(): Promise<StagedOutputTotals> {
-    let logicalBytes = 0n
-    let additionalBytes = 0n
-    for await (const candidate of this.#recordsByKind('file', 'ascending')) {
-      const record = candidate as PersistedFileRecord
-      const covered = coveredBytes(record)
-      logicalBytes += record.exactSize
-      additionalBytes += record.exactSize - covered
-    }
-    return Object.freeze({ logicalBytes, additionalBytes })
+  stagedOutputTotals(): Promise<StagedOutputTotals> {
+    return this.#journalView.totals()
   }
 
-  async stagedFileFootprint(path: readonly string[]): Promise<StagedFileFootprint> {
-    const record = await this.#readRecord(fileKey(path))
-    if (record === undefined) return Object.freeze({ logicalBytes: 0n, coveredBytes: 0n })
-    if (record.kind !== 'file') throw this.#bindingError('A directory occupies the staged file path')
-    return Object.freeze({ logicalBytes: record.exactSize, coveredBytes: coveredBytes(record) })
+  stagedFileFootprint(path: readonly string[]): Promise<StagedFileFootprint> {
+    return this.#journalView.fileFootprint(path)
   }
 
   async checkpointFile(
@@ -343,13 +372,16 @@ export class PersistentTreeOutputSession implements OutputSession {
     file: OutputFile,
     handle: PersistentTreeFile,
     ranges: ByteRangeSet,
+    signal: AbortSignal,
   ): Promise<VerifiedDurableRanges> {
+    signal.throwIfAborted()
     this.#requireActive(transaction, file)
     const key = fileKey(file.path)
     await handle.flush()
+    signal.throwIfAborted()
     await this.#cut('DataFlushed', key)
     const record = fileRecord(
-      this.identity,
+      this.#checkpointIdentity(),
       fileOwnership(this.identity, file.path, handle.identity),
       file,
       ranges.ranges,
@@ -357,12 +389,16 @@ export class PersistentTreeOutputSession implements OutputSession {
       transaction.nextGeneration(),
     )
     await this.#journal.writeCandidate(record)
+    signal.throwIfAborted()
     await this.#cut('JournalWritten', key)
     await this.#journal.flushCandidate(key)
+    signal.throwIfAborted()
     await this.#cut('JournalFlushed', key)
     await this.#journal.commitCandidate(key)
+    signal.throwIfAborted()
     await this.#cut('CheckpointCommitted', key)
     await this.#verifyCommittedFile(record, false)
+    signal.throwIfAborted()
     await this.#cut('CheckpointVerified', key)
     return verifiedFileRanges(record)
   }
@@ -372,7 +408,9 @@ export class PersistentTreeOutputSession implements OutputSession {
     file: OutputFile,
     handle: PersistentTreeFile,
     ranges: ByteRangeSet,
+    signal: AbortSignal,
   ): Promise<void> {
+    signal.throwIfAborted()
     this.#requireActive(transaction, file)
     const wholeFile = byteRange(0n, file.exactSize)
     if (!ranges.covers(wholeFile)) {
@@ -382,16 +420,18 @@ export class PersistentTreeOutputSession implements OutputSession {
       )
     }
     await handle.close()
-    if (file.modifiedTimeMilliseconds !== undefined &&
+    signal.throwIfAborted()
+    if (file.modifiedTime !== undefined &&
         this.#tree.setFileModificationTime !== undefined) {
       await this.#tree.setFileModificationTime(
         file.path,
         handle.identity,
-        file.modifiedTimeMilliseconds,
+        file.modifiedTime.milliseconds,
       )
+      signal.throwIfAborted()
     }
     const record = fileRecord(
-      this.identity,
+      this.#checkpointIdentity(),
       fileOwnership(this.identity, file.path, handle.identity),
       file,
       ranges.ranges,
@@ -399,6 +439,7 @@ export class PersistentTreeOutputSession implements OutputSession {
       transaction.nextGeneration(),
     )
     await this.#publish(record)
+    signal.throwIfAborted()
     await this.#verifyFileIdentity(record, true)
     this.#active.delete(fileKey(file.path))
   }
@@ -415,7 +456,7 @@ export class PersistentTreeOutputSession implements OutputSession {
     } catch (error) {
       failures.push(error)
     }
-    const record = await this.#readRecord(fileKey(file.path))
+    const record = await this.#journalView.readRecord(fileKey(file.path))
     try {
       if (record?.kind === 'file') {
         await this.#removeFileRecord(record)
@@ -451,89 +492,7 @@ export class PersistentTreeOutputSession implements OutputSession {
   }
 
   async #recoverJournal(): Promise<void> {
-    await recoverOutputRecords(this.identity, this.#tree, this.#journal)
-  }
-
-  async #reopenFile(
-    file: OutputFile,
-  ): Promise<{ readonly handle: PersistentTreeFile; readonly record: PersistedFileRecord } | undefined> {
-    const key = fileKey(file.path)
-    const existing = await this.#readRecord(key)
-    if (existing === undefined) return undefined
-    if (existing.kind !== 'file') {
-      throw this.#bindingError('A directory journal record occupies an output file path')
-    }
-    const persisted = await this.#readCommittedRecord(existing)
-    const handle = await this.#tree.openFile(file.path, persisted.ownedFileIdentity)
-    if (handle === undefined) {
-      await this.#deleteRecord(persisted)
-      throw new PersistentOutputError(
-        'output-identity',
-        'Persisted output handle no longer identifies the journal-owned file',
-      )
-    }
-    if (!sameOutputSource(persisted.source, file.source) || persisted.exactSize !== file.exactSize) {
-      await handle.close()
-      await this.#removeFileRecord(persisted)
-      return undefined
-    }
-    const actualSize = await handle.size()
-    const durableEnd = persisted.durableRanges.at(-1)?.end ?? 0n
-    if (actualSize < durableEnd || actualSize > persisted.exactSize) {
-      await handle.close()
-      await this.#removeFileRecord(persisted)
-      return undefined
-    }
-    return { handle, record: persisted }
-  }
-
-  async #createFile(
-    file: OutputFile,
-  ): Promise<{ readonly handle: PersistentTreeFile; readonly record: PersistedFileRecord }> {
-    let handle: PersistentTreeFile
-    try {
-      handle = await this.#tree.createFileExclusive(file.path)
-    } catch (error) {
-      throw new PersistentOutputError(
-        'exclusive-create',
-        'Refusing to overwrite an output file not owned by this journal',
-        error,
-      )
-    }
-    const record = fileRecord(
-      this.identity,
-      fileOwnership(this.identity, file.path, handle.identity),
-      file,
-      [],
-      false,
-      1n,
-    )
-    try {
-      await this.#publish(record)
-      await this.#verifyFileIdentity(record, false)
-      return { handle, record }
-    } catch (error) {
-      const failures: unknown[] = []
-      for (const cleanup of [
-        () => handle.close(),
-        () => this.#tree.removeFile(file.path, handle.identity),
-        () => this.#deleteRecord(record),
-      ]) {
-        try {
-          await cleanup()
-        } catch (cleanupError) {
-          failures.push(cleanupError)
-        }
-      }
-      if (failures.length > 0) {
-        throw new AggregateError(
-          [error, ...failures],
-          'File creation journal and cleanup failed',
-          { cause: error },
-        )
-      }
-      throw error
-    }
+    await recoverOutputRecords(this.#checkpointIdentity(), this.#tree, this.#journal)
   }
 
   async #publish(record: PersistedOutputRecord): Promise<void> {
@@ -560,30 +519,23 @@ export class PersistentTreeOutputSession implements OutputSession {
 
   async #requireDirectoryIdentity(record: PersistedDirectoryRecord): Promise<void> {
     const persisted = await this.#readCommittedRecord(record)
-    if (!await this.#tree.validateDirectory(
-      persisted.canonicalPath,
-      persisted.ownedDirectoryIdentity,
-    )) {
+    try {
+      await this.#verifyDirectoryIdentity(persisted)
+    } catch (error) {
       await this.#deleteRecord(persisted)
+      throw error
+    }
+  }
+
+  async #verifyDirectoryIdentity(record: PersistedDirectoryRecord): Promise<void> {
+    if (!await this.#tree.validateDirectory(
+      record.canonicalPath,
+      record.ownedDirectoryIdentity,
+    )) {
       throw new PersistentOutputError(
         'output-identity',
         'Persisted directory handle no longer identifies the journal-owned path',
       )
-    }
-  }
-
-  async #readStagedFile(record: PersistedFileRecord): Promise<Blob> {
-    const handle = await this.#tree.openFile(
-      record.canonicalPath,
-      record.ownedFileIdentity,
-    )
-    if (handle === undefined) {
-      throw new PersistentOutputError('output-identity', 'Staged file identity changed before export')
-    }
-    try {
-      return await handle.read()
-    } finally {
-      await handle.close()
     }
   }
 
@@ -628,7 +580,7 @@ export class PersistentTreeOutputSession implements OutputSession {
 
   async #requireParentDirectories(path: readonly string[]): Promise<void> {
     for (let length = 1; length < path.length; length += 1) {
-      const parent = await this.#readRecord(directoryKey(path.slice(0, length)))
+      const parent = await this.#journalView.readRecord(directoryKey(path.slice(0, length)))
       if (parent?.kind !== 'directory') {
         throw new PersistentOutputError(
           'output-state',
@@ -636,65 +588,6 @@ export class PersistentTreeOutputSession implements OutputSession {
         )
       }
     }
-  }
-
-  async *#recordsByKind(
-    kind: PersistedOutputRecord['kind'],
-    direction: 'ascending' | 'descending',
-  ): AsyncGenerator<PersistedOutputRecord> {
-    let cursor: string | undefined
-    do {
-      const scan = {
-        kind,
-        direction,
-        ...(cursor === undefined ? {} : { cursor }),
-      } as const
-      const page = validateOutputJournalPage(
-        await this.#journal.scanCommitted(scan),
-        scan,
-        this.identity,
-      )
-      for (const candidate of page.records) {
-        const record = snapshotOutputRecord(candidate)
-        if (record.kind !== kind || !recordBelongsToSession(record, this.identity)) {
-          throw this.#bindingError('Output journal scan escaped its kind or session boundary')
-        }
-        yield record
-      }
-      cursor = page.nextCursor
-    } while (cursor !== undefined)
-  }
-
-  async *#stagedDirectories(): AsyncGenerator<PersistedDirectoryRecord> {
-    for await (const record of this.#recordsByKind('directory', 'ascending')) {
-      yield record as PersistedDirectoryRecord
-    }
-  }
-
-  async *#stagedFiles(): AsyncGenerator<StagedOutputFile> {
-    for await (const candidate of this.#recordsByKind('file', 'ascending')) {
-      const record = candidate as PersistedFileRecord
-      if (!record.committed) continue
-      yield Object.freeze({
-        record,
-        read: () => this.#readStagedFile(record),
-      })
-    }
-  }
-
-  async #readRecord(key: string): Promise<PersistedOutputRecord | undefined> {
-    let candidate: PersistedOutputRecord | undefined
-    try {
-      candidate = await this.#journal.readCommitted(key)
-    } catch (error) {
-      throw this.#bindingError('Output journal record could not be read', error)
-    }
-    if (candidate === undefined) return undefined
-    const record = snapshotOutputRecord(candidate)
-    if (!recordBelongsToSession(record, this.identity) || outputRecordKey(record) !== key) {
-      throw this.#bindingError('Output journal lookup returned a different record identity')
-    }
-    return record
   }
 
   #requireActive(transaction: PersistentFileTransaction, file: OutputFile): void {
@@ -714,11 +607,22 @@ export class PersistentTreeOutputSession implements OutputSession {
     return new PersistentOutputError('journal-binding', message, cause)
   }
 
+  #checkpointIdentity(): OutputSessionIdentity & CheckpointNamespaceBinding {
+    return this.#checkpointOwner
+  }
+
+  #assertCheckpointBinding(): void {
+    const journalBinding = this.#journal.binding
+    const configured = this.#checkpointBinding
+    if (configured === undefined || journalBinding === undefined) return
+    if (journalBinding.backend !== this.identity.backend ||
+        journalBinding.transferIntentDigest !== configured.transferIntentDigest ||
+        journalBinding.rootIdentity !== configured.rootIdentity) {
+      throw this.#bindingError('Output journal binding does not match the confirmed output target')
+    }
+  }
+
   async #cut(phase: Parameters<CheckpointCrashHook>[0], key: string): Promise<void> {
     await this.#crashHook?.(phase, key)
   }
-}
-
-function coveredBytes(record: PersistedFileRecord): bigint {
-  return record.durableRanges.reduce((total, range) => total + range.end - range.start, 0n)
 }

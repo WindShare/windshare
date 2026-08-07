@@ -73,9 +73,9 @@ func TestCanonicalStateCodecGoldenDigests(t *testing.T) {
 		raw  []byte
 		want string
 	}{
-		{name: "control", raw: controlBytes, want: "5fd030a017883d1844d1edb37b73acac250b025574b7506664843c709d1813c8"},
-		{name: "header", raw: headerBytes, want: "f631a25c51c67c4bc69cab8917f8ab7db652e6c48aa1e5d87578e1f34e9de4d1"},
-		{name: "file", raw: fileBytes, want: "b55b3d670a3d8ba013b7506a367bc5be5d80c3f9467cc0fcf77ee1325307db0d"},
+		{name: "control", raw: controlBytes, want: "6327bd9b654738540de81293c2d95fe0bf0c007d149b7e6ca2889620eadcfd33"},
+		{name: "header", raw: headerBytes, want: "89cf56a2d48b68f1ce155ec186cef4610cea923da9541d5e797eaf3a318edef6"},
+		{name: "file", raw: fileBytes, want: "400a7c0f42f4c2a35e4d8d041c896ee6417e0dcf89a5aa2ee062d35c513dc63d"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := sha256.Sum256(test.raw)
@@ -170,7 +170,7 @@ func TestCanonicalDecodersRejectUnknownAndSemanticFieldsWithValidChecksums(t *te
 	header := storeHeader(testHeader(t))
 	unknownHeader := map[uint64]any{
 		0: header.Schema, 1: header.Backend, 2: header.SessionID, 3: header.ShareInstance,
-		4: header.SyntheticRoot, 5: header.ResumeIntent, 6: header.SelectionIdentity,
+		4: header.SyntheticRoot, 5: header.IntentDigest, 6: header.SelectionIdentity,
 		7: header.SelectedDirectoryCount, 8: header.SelectedFileCount, 9: header.OutputRoot,
 		10: header.Lifecycle, 11: header.StateGeneration,
 		12: header.OutputRootCertification, 13: header.OutputAncestry, 99: "unknown",
@@ -188,7 +188,7 @@ func TestCanonicalDecodersRejectUnknownAndSemanticFieldsWithValidChecksums(t *te
 		t.Fatalf("schema error = %v", err)
 	}
 	header = storeHeader(testHeader(t))
-	header.ResumeIntent = make([]byte, transfer.ResumeIntentBytes)
+	header.IntentDigest = make([]byte, transfer.TransferIntentDigestBytes)
 	wrongIntent, _ := encodeEnvelope(headerMagic, header, MaxSessionHeaderBytes)
 	if _, err := DecodeHeader(wrongIntent); !errors.Is(err, ErrCorruptState) {
 		t.Fatalf("resume intent error = %v", err)
@@ -475,7 +475,7 @@ func envelopeForPayload(magic [8]byte, payload []byte) []byte {
 func storedHeaderMap(header storedHeader) map[uint64]any {
 	return map[uint64]any{
 		0: header.Schema, 1: header.Backend, 2: header.SessionID, 3: header.ShareInstance,
-		4: header.SyntheticRoot, 5: header.ResumeIntent, 6: header.SelectionIdentity,
+		4: header.SyntheticRoot, 5: header.IntentDigest, 6: header.SelectionIdentity,
 		7: header.SelectedDirectoryCount, 8: header.SelectedFileCount, 9: header.OutputRoot,
 		10: header.Lifecycle, 11: header.StateGeneration, 12: header.OutputRootCertification,
 		13: header.OutputAncestry,

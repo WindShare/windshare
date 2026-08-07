@@ -16,6 +16,11 @@ const (
 	FilesDirectoryName       = "files"
 	AnchorsDirectoryName     = "anchors"
 	StagesDirectoryName      = "stages"
+	// CheckpointsDirectoryName is a file-local namespace. It is intentionally a
+	// sibling of the legacy v3 state directories so a restart can inspect only
+	// authenticated FileCheckpointV1 records without treating a v3 record as
+	// resume authority.
+	CheckpointsDirectoryName = "checkpoints-v1"
 	HeaderRecordName         = "header.state"
 	SessionLockName          = "session.lock"
 	CoordinatorLockName      = "coordinator.lock"
@@ -30,49 +35,51 @@ type ShardedName struct {
 	name  string
 }
 
-type ResumeNamespaceClassification uint8
+type IntentNamespaceClassification uint8
 
 const (
-	ResumeNamespaceCanonical ResumeNamespaceClassification = iota + 1
-	ResumeNamespaceDecodableAlias
-	ResumeNamespaceOpaque
+	IntentNamespaceCanonical IntentNamespaceClassification = iota + 1
+	IntentNamespaceDecodableAlias
+	IntentNamespaceOpaque
 )
 
-type ClassifiedResumeNamespace struct {
-	classification ResumeNamespaceClassification
-	intent         transfer.ResumeIntent
+type ClassifiedIntentNamespace struct {
+	classification IntentNamespaceClassification
+	intent         transfer.TransferIntentDigest
 }
 
-func (classified ClassifiedResumeNamespace) Classification() ResumeNamespaceClassification {
+func (classified ClassifiedIntentNamespace) Classification() IntentNamespaceClassification {
 	return classified.classification
 }
-func (classified ClassifiedResumeNamespace) Intent() transfer.ResumeIntent { return classified.intent }
+func (classified ClassifiedIntentNamespace) Intent() transfer.TransferIntentDigest {
+	return classified.intent
+}
 
-// ClassifyResumeNamespaceName preserves the intent behind a decodable but
+// ClassifyIntentNamespaceName preserves the intent behind a decodable but
 // non-canonical spelling. Linux must block that matching intent rather than let
 // an uppercase alias coexist with the canonical directory.
-func ClassifyResumeNamespaceName(name string) ClassifiedResumeNamespace {
-	if intent, err := ParseResumeNamespaceName(name); err == nil {
-		return ClassifiedResumeNamespace{classification: ResumeNamespaceCanonical, intent: intent}
+func ClassifyIntentNamespaceName(name string) ClassifiedIntentNamespace {
+	if intent, err := ParseIntentNamespaceName(name); err == nil {
+		return ClassifiedIntentNamespace{classification: IntentNamespaceCanonical, intent: intent}
 	}
 	if len(name) != encodedSHA256Characters {
-		return ClassifiedResumeNamespace{classification: ResumeNamespaceOpaque}
+		return ClassifiedIntentNamespace{classification: IntentNamespaceOpaque}
 	}
 	raw, err := hex.DecodeString(name)
 	if err != nil {
-		return ClassifiedResumeNamespace{classification: ResumeNamespaceOpaque}
+		return ClassifiedIntentNamespace{classification: IntentNamespaceOpaque}
 	}
-	intent, err := transfer.ResumeIntentFromBytes(raw)
+	intent, err := transfer.TransferIntentDigestFromBytes(raw)
 	if err != nil {
-		return ClassifiedResumeNamespace{classification: ResumeNamespaceOpaque}
+		return ClassifiedIntentNamespace{classification: IntentNamespaceOpaque}
 	}
-	return ClassifiedResumeNamespace{classification: ResumeNamespaceDecodableAlias, intent: intent}
+	return ClassifiedIntentNamespace{classification: IntentNamespaceDecodableAlias, intent: intent}
 }
 
 func (name ShardedName) Shard() string { return name.shard }
 func (name ShardedName) Name() string  { return name.name }
 
-func ResumeNamespaceName(intent transfer.ResumeIntent) string {
+func IntentNamespaceName(intent transfer.TransferIntentDigest) string {
 	return hex.EncodeToString(intent.Bytes())
 }
 
@@ -92,6 +99,10 @@ func FileRecordName(digest LocatorDigest) ShardedName {
 	return shardedName(digest.String(), ".state")
 }
 
+func FileCheckpointName(recordID FileCheckpointRecordID) ShardedName {
+	return shardedName(hex.EncodeToString(recordID[:]), ".checkpoint")
+}
+
 func AnchorName(id OutputObjectID) ShardedName { return shardedName(id.String(), ".anchor") }
 func StageName(id OutputObjectID) ShardedName  { return shardedName(id.String(), ".stage") }
 
@@ -102,8 +113,8 @@ func shardedName(encoded, suffix string) ShardedName {
 // SessionDirectorySegments are relative to the control directory. Returning
 // components rather than an OS path keeps callers on handle-relative APIs and
 // prevents separator interpretation from becoming part of the state format.
-func SessionDirectorySegments(intent transfer.ResumeIntent, session transfer.OutputSessionID) []string {
-	return []string{SessionsDirectoryName, ResumeNamespaceName(intent), SessionDirectoryName(session)}
+func SessionDirectorySegments(intent transfer.TransferIntentDigest, session transfer.OutputSessionID) []string {
+	return []string{SessionsDirectoryName, IntentNamespaceName(intent), SessionDirectoryName(session)}
 }
 
 func FileRecordSegments(digest LocatorDigest) []string {
@@ -121,14 +132,14 @@ func StageSegments(id OutputObjectID) []string {
 	return []string{StagesDirectoryName, name.shard, name.name}
 }
 
-func ParseResumeNamespaceName(name string) (transfer.ResumeIntent, error) {
+func ParseIntentNamespaceName(name string) (transfer.TransferIntentDigest, error) {
 	if !validLowerHex(name, encodedSHA256Characters) {
-		return transfer.ResumeIntent{}, fmt.Errorf("%w: resume namespace name", ErrInvalidState)
+		return transfer.TransferIntentDigest{}, fmt.Errorf("%w: intent namespace name", ErrInvalidState)
 	}
 	raw, _ := hex.DecodeString(name)
-	intent, err := transfer.ResumeIntentFromBytes(raw)
+	intent, err := transfer.TransferIntentDigestFromBytes(raw)
 	if err != nil {
-		return transfer.ResumeIntent{}, fmt.Errorf("%w: resume namespace identity", ErrInvalidState)
+		return transfer.TransferIntentDigest{}, fmt.Errorf("%w: intent namespace identity", ErrInvalidState)
 	}
 	return intent, nil
 }
@@ -151,6 +162,14 @@ func ParseFileRecordName(shard, name string) (LocatorDigest, error) {
 		return LocatorDigest{}, err
 	}
 	return LocatorDigestFromBytes(raw)
+}
+
+func ParseFileCheckpointName(shard, name string) (FileCheckpointRecordID, error) {
+	raw, err := parseShardedHex(shard, name, ".checkpoint", encodedSHA256Characters)
+	if err != nil {
+		return FileCheckpointRecordID{}, err
+	}
+	return FileCheckpointRecordIDFromBytes(raw)
 }
 
 func ParseAnchorName(shard, name string) (OutputObjectID, error) {
@@ -238,14 +257,14 @@ const (
 
 type CorruptionClassification struct {
 	disposition CorruptionDisposition
-	intent      transfer.ResumeIntent
+	intent      transfer.TransferIntentDigest
 	locator     LocatorDigest
 }
 
 func (classification CorruptionClassification) Disposition() CorruptionDisposition {
 	return classification.disposition
 }
-func (classification CorruptionClassification) Intent() transfer.ResumeIntent {
+func (classification CorruptionClassification) Intent() transfer.TransferIntentDigest {
 	return classification.intent
 }
 func (classification CorruptionClassification) Locator() LocatorDigest {
@@ -262,8 +281,8 @@ func ClassifyGlobalCorruption(kind RecordKind) (CorruptionClassification, error)
 }
 
 func ClassifyHeaderCorruption(intentDirectory string) CorruptionClassification {
-	namespace := ClassifyResumeNamespaceName(intentDirectory)
-	if namespace.classification == ResumeNamespaceOpaque {
+	namespace := ClassifyIntentNamespaceName(intentDirectory)
+	if namespace.classification == IntentNamespaceOpaque {
 		return CorruptionClassification{disposition: CorruptionRetainOpaque}
 	}
 	return CorruptionClassification{
@@ -329,11 +348,11 @@ func ClassifyFileCorruption(
 	switch classified.classification {
 	case FileShardEntryOpaque:
 		return CorruptionClassification{
-			disposition: CorruptionRetainOpaque, intent: namespace.header.resumeIntent,
+			disposition: CorruptionRetainOpaque, intent: namespace.header.intentDigest,
 		}, nil
 	case FileShardEntryRecord, FileShardEntryMalformedForLocator:
 		return CorruptionClassification{
-			disposition: CorruptionQuarantineFile, intent: namespace.header.resumeIntent,
+			disposition: CorruptionQuarantineFile, intent: namespace.header.intentDigest,
 			locator: classified.locator,
 		}, nil
 	case FileShardEntryUpdateTemporary:

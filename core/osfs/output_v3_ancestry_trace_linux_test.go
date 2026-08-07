@@ -44,7 +44,9 @@ func TestLinuxOutputAncestryTraceSeparatesAuthorityFromIdentityContradictions(t 
 					return &linuxAncestryTracePlatform{Platform: platform, guardErr: test.cause}
 				},
 			)
-			session, err := authority.OpenSelection(context.Background(), linuxNativeRootFileSelection(t, 1))
+			session, _, err := openOutputSelectionFixture(
+				t, authority, rootPath, linuxNativeRootFileSelection(t, 1),
+			)
 			if session != nil {
 				_, _ = session.PauseJob(context.Background(), transfer.JobPauseOutputFailure)
 				t.Fatal("ancestry failure opened an output session")

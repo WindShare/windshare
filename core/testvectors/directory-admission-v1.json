@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "kind": "directory-admission-v1",
+  "description": "Deterministic session-secret-scoped DirectoryAdmission proofs, including modified-time and parent binding.",
+  "cases": [
+    {
+      "directoryIdB64": "ICEiIyQlJicoKSorLC0uLw==",
+      "generationB64": "UFFSU1RVVldYWVpbXF1eXw==",
+      "modifiedTime": null,
+      "name": "synthetic-root",
+      "parentTokenB64": null,
+      "path": "",
+      "preimageB64": "d2luZHNoYXJlL2RpcmVjdG9yeS1hZG1pc3Npb24vc2Vzc2lvbi12MQDAwcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3yAhIiMkJSYnKCkqKywtLi9QUVJTVFVWV1hZWltcXV5fAAAAAAAAAAAAAAAAAAA=",
+      "secretB64": "wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8=",
+      "tokenB64": "2xoeb0osRcot4ls2jFggKUNCwLnYDT3/I8fIusvvml0="
+    },
+    {
+      "directoryIdB64": "MDEyMzQ1Njc4OTo7PD0+Pw==",
+      "generationB64": "YGFiY2RlZmdoaWprbG1ubw==",
+      "modifiedTime": {
+        "nanoseconds": 123000000,
+        "precision": 2,
+        "seconds": 1700000200
+      },
+      "name": "child-generation",
+      "parentTokenB64": "2xoeb0osRcot4ls2jFggKUNCwLnYDT3/I8fIusvvml0=",
+      "path": "photos",
+      "preimageB64": "d2luZHNoYXJlL2RpcmVjdG9yeS1hZG1pc3Npb24vc2Vzc2lvbi12MQDAwcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3zAxMjM0NTY3ODk6Ozw9Pj9gYWJjZGVmZ2hpamtsbW5vcGhvdG9zAQAAAABlU/HIB1TUwALbGh5vSixFyi3iWzaMWCApQ0LAudgNPf8jx8i6y++aXQ==",
+      "secretB64": "wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8=",
+      "tokenB64": "aiKGZhRoBINAcCPUw5Lp5fWkGlAzU/PSVh5oq95LGzQ="
+    }
+  ]
+}

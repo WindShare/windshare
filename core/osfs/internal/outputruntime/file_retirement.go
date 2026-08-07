@@ -19,15 +19,15 @@ type fileRetirementStep struct {
 
 func (session *Session) decideFileRetirement(
 	validation *outputAncestryValidation,
-	bound resumestate.BoundFileRecord,
+	bound resumestate.BoundCheckpointRuntimeState,
 ) (resumestate.RecoveryDecision, error, error) {
-	observation, cleanupErr, err := session.observeFile(validation, bound.Record(), false)
+	observation, cleanupErr, err := session.observeFile(validation, bound.State(), false)
 	if err != nil {
 		return resumestate.RecoveryDecision{}, nil, pauseRequiredFileOutputFault(fileOutputFault(
 			"observe file retirement", errors.Join(err, cleanupErr),
 		))
 	}
-	decision, err := resumestate.ReduceFileRecovery(bound, observation)
+	decision, err := resumestate.ReduceCheckpointRuntimeStateRecovery(bound, observation)
 	if err != nil {
 		return resumestate.RecoveryDecision{}, cleanupErr, outputfault.New(
 			transfer.OutputFaultFile, transfer.OutputFaultContract, err,
@@ -37,14 +37,14 @@ func (session *Session) decideFileRetirement(
 }
 
 func (session *Session) traceFileRetirementDecision(
-	bound resumestate.BoundFileRecord,
+	bound resumestate.BoundCheckpointRuntimeState,
 	decision resumestate.RecoveryDecision,
 ) {
 	session.owner.trace(FilesystemOutputTrace{
-		Operation: TraceFileRecoveryDecision, ResumeIntent: session.resumeIntent,
-		SessionID: session.SessionID(), LocatorDigest: outputLocatorDigestFromState(bound.Record().LocatorDigest()),
-		OutputObjectID:   outputObjectIdentityFromState(bound.Record().OutputObject()),
-		PreviousPhase:    filesystemOutputFilePhaseFromState(bound.Record().Phase()),
+		Operation: TraceFileRecoveryDecision, IntentDigest: session.intentDigest,
+		SessionID: session.SessionID(), LocatorDigest: outputLocatorDigestFromState(bound.State().LocatorDigest()),
+		OutputObjectID:   outputObjectIdentityFromState(bound.State().OutputObject()),
+		PreviousPhase:    filesystemOutputFilePhaseFromState(bound.State().Phase()),
 		RecoveryAction:   filesystemOutputRecoveryActionFromState(decision.Action()),
 		QuarantineReason: recoveryDecisionQuarantineReason(decision),
 	})
@@ -65,30 +65,28 @@ func fileRetirementObservationCleanupFault(
 }
 
 func (session *Session) applyFileRetirementDecision(
-	recordDir outputcap.Directory,
-	recordName string,
-	bound resumestate.BoundFileRecord,
+	bound resumestate.BoundCheckpointRuntimeState,
 	binding transfer.OutputFileBinding,
 	decision resumestate.RecoveryDecision,
 	observationCleanupErr error,
 ) (fileRetirementStep, error) {
 	switch decision.Action() {
 	case resumestate.RecoveryRemoveRetiringStageAndSync:
-		return fileRetirementStep{}, session.removeRetiringStage(bound.Record())
+		return fileRetirementStep{}, session.removeRetiringStage(bound.State())
 	case resumestate.RecoverySyncStageRemoveAnchorAndSync:
-		return fileRetirementStep{}, session.syncRetiringStageAndRemoveAnchor(bound.Record())
+		return fileRetirementStep{}, session.syncRetiringStageAndRemoveAnchor(bound.State())
 	case resumestate.RecoverySyncParentsRemoveRecordAndSync:
-		return session.finishRetiringRecord(recordDir, recordName, bound, binding, decision)
+		return session.finishRetiringRecord(bound, binding, decision)
 	case resumestate.RecoveryHoldRetiringCleanup:
 		return fileRetirementStep{complete: true}, internalCleanupNeedsAttentionFault(
 			"hold retiring file with ambiguous internal cleanup evidence",
 		)
 	case resumestate.RecoveryInstallQuarantine:
 		return session.installRetirementQuarantine(
-			recordDir, recordName, bound, binding, decision, observationCleanupErr,
+			bound, binding, decision, observationCleanupErr,
 		)
 	case resumestate.RecoveryHoldQuarantine:
-		return heldRetirementQuarantine(binding, bound.Record(), observationCleanupErr)
+		return heldRetirementQuarantine(binding, bound.State(), observationCleanupErr)
 	default:
 		return fileRetirementStep{complete: true}, outputfault.New(
 			transfer.OutputFaultFile, transfer.OutputFaultContract,
@@ -97,7 +95,7 @@ func (session *Session) applyFileRetirementDecision(
 	}
 }
 
-func (session *Session) removeRetiringStage(record resumestate.FileRecord) error {
+func (session *Session) removeRetiringStage(record resumestate.CheckpointRuntimeState) error {
 	operationErr, cleanupErr := session.removeStage(record)
 	if operationErr != nil {
 		return pauseRequiredFileOperationFault("remove retiring stage", operationErr, cleanupErr)
@@ -108,7 +106,7 @@ func (session *Session) removeRetiringStage(record resumestate.FileRecord) error
 	return nil
 }
 
-func (session *Session) syncRetiringStageAndRemoveAnchor(record resumestate.FileRecord) error {
+func (session *Session) syncRetiringStageAndRemoveAnchor(record resumestate.CheckpointRuntimeState) error {
 	stageName := resumestate.StageName(record.OutputObject())
 	operationErr, cleanupErr := session.syncObjectShard(session.stagesDir, stageName)
 	if operationErr != nil {
@@ -120,7 +118,7 @@ func (session *Session) syncRetiringStageAndRemoveAnchor(record resumestate.File
 	return session.removeRetiringAnchor(record)
 }
 
-func (session *Session) removeRetiringAnchor(record resumestate.FileRecord) error {
+func (session *Session) removeRetiringAnchor(record resumestate.CheckpointRuntimeState) error {
 	anchorName := resumestate.AnchorName(record.OutputObject())
 	anchorDir, present, openErr := openOutputShard(session.anchorsDir, anchorName.Shard(), false)
 	if openErr != nil || !present {
@@ -129,14 +127,14 @@ func (session *Session) removeRetiringAnchor(record resumestate.FileRecord) erro
 			operationErr = errors.Join(outputcap.ErrUnsafeNamespace, fs.ErrNotExist)
 		}
 		return pauseRequiredFileOperationFault(
-			"open retiring anchor shard", operationErr, closeOutputV3Directory(anchorDir),
+			"open retiring anchor shard", operationErr, closeOutputDirectory(anchorDir),
 		)
 	}
 	anchor, openErr := anchorDir.OpenFile(anchorName.Name(), true, false)
 	if openErr != nil {
 		return pauseRequiredFileOperationFault(
 			"open retiring anchor", openErr,
-			errors.Join(closeOutputV3File(anchor), anchorDir.Close()),
+			errors.Join(closeOutputFile(anchor), anchorDir.Close()),
 		)
 	}
 	removeErr := anchorDir.RemoveFile(anchorName.Name(), anchor)
@@ -154,25 +152,23 @@ func (session *Session) removeRetiringAnchor(record resumestate.FileRecord) erro
 }
 
 func (session *Session) finishRetiringRecord(
-	recordDir outputcap.Directory,
-	recordName string,
-	bound resumestate.BoundFileRecord,
+	bound resumestate.BoundCheckpointRuntimeState,
 	binding transfer.OutputFileBinding,
 	decision resumestate.RecoveryDecision,
 ) (fileRetirementStep, error) {
 	if err := session.syncRetirementParent(
-		session.stagesDir, resumestate.StageName(bound.Record().OutputObject()),
+		session.stagesDir, resumestate.StageName(bound.State().OutputObject()),
 		"sync retiring stage parent", "close synced retiring-stage parent",
 	); err != nil {
 		return fileRetirementStep{}, err
 	}
 	if err := session.syncRetirementParent(
-		session.anchorsDir, resumestate.AnchorName(bound.Record().OutputObject()),
+		session.anchorsDir, resumestate.AnchorName(bound.State().OutputObject()),
 		"sync retiring anchor parent", "close synced retiring-anchor parent",
 	); err != nil {
 		return fileRetirementStep{}, err
 	}
-	if err := session.removeRetiringFileRecord(recordDir, recordName, bound); err != nil {
+	if err := session.removeRetiringFileCheckpoint(bound); err != nil {
 		return fileRetirementStep{}, err
 	}
 	settlement, err := retiredFileSettlement(binding, decision)
@@ -195,22 +191,20 @@ func (session *Session) syncRetirementParent(
 	return nil
 }
 
-func (session *Session) removeRetiringFileRecord(
-	recordDir outputcap.Directory,
-	recordName string,
-	bound resumestate.BoundFileRecord,
+func (session *Session) removeRetiringFileCheckpoint(
+	bound resumestate.BoundCheckpointRuntimeState,
 ) error {
-	operationErr, cleanupErr := removeBoundFileRecord(recordDir, recordName, bound)
+	operationErr, cleanupErr := session.removeIncrementalCheckpoint(bound.State())
 	if operationErr != nil {
-		operation := "remove retiring file state"
-		if classifyOutputV3RecoveryFailure(operationErr, outputV3AuthorizedMutation) == outputV3RecoveryAmbiguous {
+		operation := "remove retiring FileCheckpointV1"
+		if classifyNativeRecoveryFailure(operationErr, nativeAuthorizedMutation) == nativeRecoveryAmbiguous {
 			session.poisonState()
-			operation = "remove retiring file state with uncertain authority"
+			operation = "remove retiring FileCheckpointV1 with uncertain authority"
 		}
 		return pauseRequiredFileOperationFault(operation, operationErr, cleanupErr)
 	}
 	if cleanupErr != nil {
-		return pauseRequiredFileOperationFault("close removed retiring file state", nil, cleanupErr)
+		return pauseRequiredFileOperationFault("close removed retiring FileCheckpointV1", nil, cleanupErr)
 	}
 	return nil
 }
@@ -238,21 +232,19 @@ func retiredFileSettlement(
 }
 
 func (session *Session) installRetirementQuarantine(
-	recordDir outputcap.Directory,
-	recordName string,
-	bound resumestate.BoundFileRecord,
+	bound resumestate.BoundCheckpointRuntimeState,
 	binding transfer.OutputFileBinding,
 	decision resumestate.RecoveryDecision,
 	observationCleanupErr error,
 ) (fileRetirementStep, error) {
 	step := fileRetirementStep{quarantined: true, complete: true}
-	next, err := resumestate.ApplyRecoveryDecision(bound, decision)
+	next, err := resumestate.ApplyCheckpointRuntimeRecoveryDecision(bound, decision)
 	if err != nil {
 		return fileRetirementStep{}, outputfault.New(
 			transfer.OutputFaultFile, transfer.OutputFaultContract, err,
 		)
 	}
-	if err := session.installFileRecord(recordDir, recordName, bound, next); err != nil {
+	if err := session.installCheckpointRuntimeState(bound, next); err != nil {
 		return fileRetirementStep{}, err
 	}
 	if observationCleanupErr != nil {
@@ -263,13 +255,13 @@ func (session *Session) installRetirementQuarantine(
 	if binding.BackendID() == "" {
 		return step, nil
 	}
-	step.settlement, err = quarantinedSettlement(binding, next.Record())
+	step.settlement, err = quarantinedSettlement(binding, next.State())
 	return step, err
 }
 
 func heldRetirementQuarantine(
 	binding transfer.OutputFileBinding,
-	record resumestate.FileRecord,
+	record resumestate.CheckpointRuntimeState,
 	observationCleanupErr error,
 ) (fileRetirementStep, error) {
 	step := fileRetirementStep{quarantined: true, complete: true}
@@ -284,4 +276,72 @@ func heldRetirementQuarantine(
 	settlement, err := quarantinedSettlement(binding, record)
 	step.settlement = settlement
 	return step, err
+}
+
+func (session *Session) removeRecoveredPublishedStage(
+	state fileRecoveryState,
+) (fileRecoveryActionResult, error) {
+	operationErr, cleanupErr := session.removeStage(state.resumable.BoundState().State())
+	if operationErr != nil {
+		return fileRecoveryActionResult{}, pauseRequiredFileOperationFault(
+			"remove published stage", operationErr, cleanupErr,
+		)
+	}
+	if cleanupErr != nil {
+		return fileRecoveryActionResult{}, pauseRequiredFileOperationFault(
+			"close removed published stage", nil, cleanupErr,
+		)
+	}
+	return continuingFileRecovery(state), nil
+}
+
+func (session *Session) syncRecoveredPublishedStage(
+	state fileRecoveryState,
+) (fileRecoveryActionResult, error) {
+	operationErr, cleanupErr := session.syncObjectShard(
+		session.stagesDir, resumestate.StageName(state.resumable.BoundState().State().OutputObject()),
+	)
+	if operationErr != nil {
+		return fileRecoveryActionResult{}, pauseRequiredFileOperationFault(
+			"sync published stage shard", operationErr, cleanupErr,
+		)
+	}
+	if cleanupErr != nil {
+		return fileRecoveryActionResult{}, pauseRequiredFileOperationFault(
+			"close synced published-stage shard", nil, cleanupErr,
+		)
+	}
+	return finishFileRecovery(session.verifiedStart(transfer.FilePublished, state.resumable))
+}
+
+func (session *Session) holdRecoveredQuarantine(
+	file transfer.OutputFile,
+	state fileRecoveryState,
+	observationCleanupErr error,
+) (fileRecoveryActionResult, error) {
+	if observationCleanupErr != nil {
+		return fileRecoveryActionResult{}, pauseRequiredFileOutputFault(fileOutputFault(
+			"close held file recovery observation", observationCleanupErr,
+		))
+	}
+	record := state.resumable.BoundState().State()
+	return finishFileRecovery(session.quarantinedStart(
+		file.Target, record.LocatorDigest(), mapQuarantineReason(record.QuarantineReason()),
+	))
+}
+
+func (session *Session) retireRecoveredFile(
+	file transfer.OutputFile,
+	state fileRecoveryState,
+) (fileRecoveryActionResult, error) {
+	bound := state.resumable.BoundState()
+	binding, err := outputBindingForRuntimeState(session.SessionID(), file.Descriptor, bound.State())
+	if err != nil {
+		return fileRecoveryActionResult{}, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
+	}
+	settlement, _, cleanupErr := session.retireBoundFile(bound, binding)
+	if cleanupErr != nil {
+		return fileRecoveryActionResult{}, cleanupErr
+	}
+	return finishFileRecovery(transfer.NewFileSettlementStart(settlement))
 }

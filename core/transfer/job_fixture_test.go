@@ -246,6 +246,50 @@ func jobDirectoryEntry(t *testing.T, directory catalog.DirectoryID, name string)
 
 var jobOutputBackend, _ = NewOutputBackendID("test/job-output")
 
+func testTransferIntent(
+	t *testing.T,
+	share catalog.ShareInstance,
+	root catalog.DirectoryID,
+	rules SelectionRules,
+	backend OutputBackendID,
+) TransferIntent {
+	t.Helper()
+	if _, err := NewOutputBackendID(string(backend)); err != nil {
+		backend = jobOutputBackend
+	}
+	identityMaterial := append(share.Bytes(), root.Bytes()...)
+	identity := sha256.Sum256(append([]byte("windshare/test-output-target/v1\x00"), identityMaterial...))
+	target, err := NewOpaqueOutputTarget(identity[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := NewTransferIntent(share, root, rules, target, backend, OutputNativeTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return intent
+}
+
+func newTestTransferJob(t *testing.T, config TransferJobConfig) (*TransferJob, error) {
+	t.Helper()
+	if config.Intent.IsZero() {
+		backend := jobOutputBackend
+		if provider, ok := config.Output.(interface{ BackendID() OutputBackendID }); ok {
+			backend = provider.BackendID()
+		}
+		config.Intent = testTransferIntent(t, config.ShareInstance, config.SyntheticRoot, config.Rules, backend)
+	}
+	if config.JobID.IsZero() {
+		digest := config.Intent.Digest()
+		jobID, err := TransferJobIDFromBytes(digest[:TransferJobIdentityBytes])
+		if err != nil {
+			t.Fatal(err)
+		}
+		config.JobID = jobID
+	}
+	return NewTransferJob(config)
+}
+
 type jobOutput struct {
 	mu                   sync.Mutex
 	share                catalog.ShareInstance
@@ -266,8 +310,11 @@ type jobOutput struct {
 	abortErr             error
 	nilTransaction       bool
 	transactionScript    jobTransactionScript
+	transactionScripts   map[string]jobTransactionScript
 	capabilitiesOverride *OutputCapabilities
+	beginHook            func(OutputFile)
 	admitted             []OutputSelection
+	intent               TransferIntent
 	events               []string
 	pauseCalls           int
 	completeCalls        int
@@ -280,6 +327,7 @@ func newJobOutput(share catalog.ShareInstance) *jobOutput {
 	return &jobOutput{
 		share: share, session: transferID[OutputSessionID](44), durable: make(map[string]content.RangeSet),
 		transactions: make(map[string]*jobFileTransaction), immediate: make(map[string]FileSettlement),
+		transactionScripts: make(map[string]jobTransactionScript),
 	}
 }
 
@@ -318,6 +366,37 @@ func (o *jobOutput) OpenSelection(_ context.Context, selection OutputSelection) 
 	return o, nil
 }
 
+func (o *jobOutput) OpenOutput(_ context.Context, intent TransferIntent) (OutputSession, error) {
+	o.mu.Lock()
+	o.intent = intent
+	o.events = append(o.events, "open")
+	o.mu.Unlock()
+	if o.admitErr != nil {
+		return nil, o.admitErr
+	}
+	return o, nil
+}
+
+func (o *jobOutput) AdmitDirectory(_ context.Context, directory OutputDirectory) (DirectoryAdmission, error) {
+	if o.admitErr != nil {
+		return DirectoryAdmission{}, o.admitErr
+	}
+	if failure := o.ensureFailures[directory.Path]; failure != nil || o.ensureErr != nil {
+		return DirectoryAdmission{}, errors.Join(failure, o.ensureErr)
+	}
+	o.mu.Lock()
+	o.directories = append(o.directories, directory.Path)
+	o.events = append(o.events, "ensure:"+directory.Path)
+	o.mu.Unlock()
+	// Test output is in-process and can mint the opaque token directly. Real
+	// backends return a token only after validating their root/ancestry handles.
+	token := sha256.Sum256([]byte(directory.Path + string(directory.DirectoryID.Bytes()) + string(directory.Generation.Bytes())))
+	return DirectoryAdmission{
+		token: token, directory: directory.DirectoryID, generation: directory.Generation,
+		parent: directory.ParentAdmission.token, path: directory.Path,
+	}, nil
+}
+
 func (o *jobOutput) FinalizeDirectory(_ context.Context, directory OutputDirectory) error {
 	o.mu.Lock()
 	o.finalized = append(o.finalized, directory.Path)
@@ -329,6 +408,9 @@ func (o *jobOutput) BeginFile(_ context.Context, file OutputFile) (FileStart, er
 	o.mu.Lock()
 	o.events = append(o.events, "begin:"+file.Path)
 	o.mu.Unlock()
+	if o.beginHook != nil {
+		o.beginHook(file)
+	}
 	if o.beginErr != nil {
 		return FileStart{}, o.beginErr
 	}
@@ -347,7 +429,11 @@ func (o *jobOutput) BeginFile(_ context.Context, file OutputFile) (FileStart, er
 	}
 	o.mu.Lock()
 	durable := o.durable[file.Path]
-	transaction := &jobFileTransaction{output: o, binding: binding, durable: durable, generation: 1, script: o.transactionScript}
+	script := o.transactionScript
+	if configured, exists := o.transactionScripts[file.Path]; exists {
+		script = configured
+	}
+	transaction := &jobFileTransaction{output: o, binding: binding, durable: durable, generation: 1, script: script}
 	o.transactions[file.Path] = transaction
 	o.mu.Unlock()
 	verified, err := VerifyDurableRanges(binding, 1, durable)
@@ -393,26 +479,30 @@ func (o *jobOutput) PauseJob(context.Context, JobPauseReason) (JobSettlement, er
 }
 
 type jobTransactionScript struct {
-	writeErr         error
-	checkpointErr    error
-	omitCheckpoint   bool
-	dropPriorRanges  bool
-	commitErr        error
-	commitSettlement FileSettlementKind
-	commitResult     *FileSettlement
-	pauseSettlement  FileSettlementKind
-	pauseErr         error
-	pauseResult      *FileSettlement
-	pauseHook        func(context.Context, FilePauseReason)
-	retireSettlement FileSettlementKind
-	retireErr        error
-	retireResult     *FileSettlement
+	writeErr            error
+	writeErrAfterWrite  error
+	checkpointErr       error
+	omitCheckpoint      bool
+	dropPriorRanges     bool
+	checkpointExtra     content.RangeSet
+	commitErr           error
+	commitSettlement    FileSettlementKind
+	commitResult        *FileSettlement
+	pauseSettlement     FileSettlementKind
+	pauseErr            error
+	pauseResult         *FileSettlement
+	pauseHook           func(context.Context, FilePauseReason)
+	retireSettlement    FileSettlementKind
+	retireErr           error
+	retireErrAfterWrite error
+	retireResult        *FileSettlement
 }
 
 type jobFileTransaction struct {
 	output        *jobOutput
 	binding       OutputFileBinding
 	durable       content.RangeSet
+	transient     content.RangeSet
 	pending       content.RangeSet
 	generation    CheckpointGeneration
 	commitCalls   int
@@ -434,6 +524,9 @@ func (t *jobFileTransaction) WriteRange(_ context.Context, offset uint64, data [
 		return err
 	}
 	t.pending, err = MergeRanges(t.pending, set)
+	if err == nil && t.script.writeErrAfterWrite != nil {
+		return t.script.writeErrAfterWrite
+	}
 	return err
 }
 
@@ -445,6 +538,19 @@ func (t *jobFileTransaction) Checkpoint(context.Context) (VerifiedDurableRanges,
 	merged, err := MergeRanges(t.durable, pending)
 	if err != nil {
 		return VerifiedDurableRanges{}, err
+	}
+	t.transient, err = MergeRanges(t.transient, pending)
+	if err != nil {
+		return VerifiedDurableRanges{}, err
+	}
+	if t.output.Capabilities().Durability == DurabilityNone {
+		empty, emptyErr := content.NewRangeSet(nil)
+		if emptyErr != nil {
+			return VerifiedDurableRanges{}, emptyErr
+		}
+		t.durable, t.pending = empty, content.RangeSet{}
+		t.generation++
+		return VerifyDurableRanges(t.binding, t.generation, empty)
 	}
 	t.durable, t.pending = merged, content.RangeSet{}
 	t.generation++
@@ -458,6 +564,13 @@ func (t *jobFileTransaction) Checkpoint(context.Context) (VerifiedDurableRanges,
 	if t.script.dropPriorRanges {
 		return VerifyDurableRanges(t.binding, t.generation, pending)
 	}
+	if !t.script.checkpointExtra.IsEmpty() {
+		claimed, mergeErr := MergeRanges(merged, t.script.checkpointExtra)
+		if mergeErr != nil {
+			return VerifiedDurableRanges{}, mergeErr
+		}
+		return VerifyDurableRanges(t.binding, t.generation, claimed)
+	}
 	return VerifyDurableRanges(t.binding, t.generation, merged)
 }
 
@@ -469,13 +582,20 @@ func (t *jobFileTransaction) Commit(context.Context) (FileSettlement, error) {
 	if t.script.commitResult != nil {
 		return *t.script.commitResult, nil
 	}
-	if !RangesCoverFile(t.binding.ExactSize(), t.durable) {
+	completed := t.durable
+	if t.output.Capabilities().Durability == DurabilityNone {
+		completed = t.transient
+	}
+	if !RangesCoverFile(t.binding.ExactSize(), completed) {
 		return FileSettlement{}, ErrIncompleteOutputFile
 	}
 	t.committed = true
 	kind := t.script.commitSettlement
 	if kind == 0 {
 		kind = FilePublished
+	}
+	if kind == FilePublished && t.output.Capabilities().Durability == DurabilityNone {
+		return NewTransientPublishedFileSettlement(t.binding)
 	}
 	checkpoint, err := VerifyDurableRanges(t.binding, t.generation, t.durable)
 	if err != nil {
@@ -512,6 +632,9 @@ func (t *jobFileTransaction) Retire(_ context.Context, reason FileRetireReason) 
 	t.retireReasons = append(t.retireReasons, reason)
 	if t.script.retireErr != nil {
 		return FileSettlement{}, t.script.retireErr
+	}
+	if t.script.retireErrAfterWrite != nil && !t.transient.IsEmpty() {
+		return FileSettlement{}, t.script.retireErrAfterWrite
 	}
 	if t.script.retireResult != nil {
 		return *t.script.retireResult, nil

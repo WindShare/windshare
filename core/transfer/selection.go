@@ -173,6 +173,16 @@ func (r SelectionRules) FileSelectedAt(id catalog.FileID, path string, inherited
 	return inherited
 }
 
+func (r SelectionRules) selectedFileDecision(id catalog.FileID, path string) FileSelectionDecision {
+	if selected, overridden := r.files[id]; overridden && selected {
+		return FileSelectionNodeOverride
+	}
+	if _, selected := r.pathTargetSet[path]; selected {
+		return FileSelectionCatalogPathTarget
+	}
+	return FileSelectionInherited
+}
+
 func (r SelectionRules) ShouldDiscoverDirectory(id catalog.DirectoryID, selected bool) bool {
 	return r.ShouldDiscoverDirectoryAt(id, "", selected)
 }
@@ -216,6 +226,21 @@ func (r SelectionRules) isSelectedDirectoryTarget(directory catalog.DirectoryID)
 func (r SelectionRules) isSelectedFileTarget(file catalog.FileID) bool {
 	selected, targeted := r.files[file]
 	return targeted && selected
+}
+
+func (r SelectionRules) selectedOpaqueTargetCount() int {
+	count := 0
+	for _, selected := range r.directories {
+		if selected {
+			count++
+		}
+	}
+	for _, selected := range r.files {
+		if selected {
+			count++
+		}
+	}
+	return count
 }
 
 func (r SelectionRules) missingPathTargets(matched map[string]struct{}) []string {
@@ -282,6 +307,13 @@ func (r SelectionRules) missingTargetsError(
 
 func (r SelectionRules) HasSelection() bool { return r.hasSelection }
 
+func (r SelectionRules) requiresOpaqueSelectionSearch() bool {
+	// Node IDs reveal no trustworthy ancestry. A selected override below an
+	// unselected branch therefore requires authenticated search before that
+	// branch can be granted output authority.
+	return r.mode == SelectionByNodeID && r.hasSelectedOverride
+}
+
 func (r SelectionRules) validSnapshot() bool {
 	if !r.valid {
 		return false
@@ -305,9 +337,20 @@ const (
 	SelectionLarge
 )
 
+type DiscoveryStatus uint8
+
+const (
+	DiscoveryOpen DiscoveryStatus = iota + 1
+	DiscoveryComplete
+	DiscoveryFailed
+)
+
 type SelectionMeasure struct {
 	DiscoveredFiles          uint64
 	DiscoveredBytes          uint64
+	CompletedFiles           uint64
+	CompletedBytes           uint64
+	Discovery                DiscoveryStatus
 	DiscoveryTerminalSuccess bool
 	overflowed               bool
 }
@@ -316,7 +359,7 @@ func (m SelectionMeasure) Class() SelectionClass {
 	if m.overflowed || m.DiscoveredFiles >= SmallTransferFileLimit || m.DiscoveredBytes >= SmallTransferByteLimit {
 		return SelectionLarge
 	}
-	if m.DiscoveryTerminalSuccess {
+	if m.Discovery == DiscoveryComplete || m.DiscoveryTerminalSuccess {
 		return SelectionSmall
 	}
 	return SelectionUnknown
@@ -336,18 +379,36 @@ func (m *SelectionMeasure) addDiscoveredFile(size uint64) {
 	}
 }
 
+func (m *SelectionMeasure) addDiscoveredSelection(selection SelectionMeasure) {
+	if selection.DiscoveredFiles > math.MaxUint64-m.DiscoveredFiles {
+		m.DiscoveredFiles = math.MaxUint64
+		m.overflowed = true
+	} else {
+		m.DiscoveredFiles += selection.DiscoveredFiles
+	}
+	if selection.DiscoveredBytes > math.MaxUint64-m.DiscoveredBytes {
+		m.DiscoveredBytes = math.MaxUint64
+		m.overflowed = true
+	} else {
+		m.DiscoveredBytes += selection.DiscoveredBytes
+	}
+	m.overflowed = m.overflowed || selection.overflowed
+}
+
 type selectionTracker struct {
-	mu      sync.RWMutex
-	measure SelectionMeasure
-	failed  bool
-	updates chan SelectionMeasure
-	closed  bool
+	mu                sync.RWMutex
+	measure           SelectionMeasure
+	failed            bool
+	discoveryFinished bool
+	updates           chan SelectionMeasure
+	closed            bool
 }
 
 func newSelectionTracker() selectionTracker {
 	updates := make(chan SelectionMeasure, 1)
-	updates <- SelectionMeasure{}
-	return selectionTracker{updates: updates}
+	initial := SelectionMeasure{Discovery: DiscoveryOpen}
+	updates <- initial
+	return selectionTracker{measure: initial, updates: updates}
 }
 
 func (t *selectionTracker) addFile(size uint64) {
@@ -357,16 +418,55 @@ func (t *selectionTracker) addFile(size uint64) {
 	t.publishLocked()
 }
 
+func (t *selectionTracker) addSelection(selection SelectionMeasure) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.measure.addDiscoveredSelection(selection)
+	t.publishLocked()
+}
+
+func (t *selectionTracker) completeFile(size uint64) {
+	t.mu.Lock()
+	if t.measure.CompletedFiles != math.MaxUint64 {
+		t.measure.CompletedFiles++
+	} else {
+		t.measure.overflowed = true
+	}
+	if size > math.MaxUint64-t.measure.CompletedBytes {
+		t.measure.CompletedBytes = math.MaxUint64
+		t.measure.overflowed = true
+	} else {
+		t.measure.CompletedBytes += size
+	}
+	t.publishLocked()
+	t.mu.Unlock()
+}
+
 func (t *selectionTracker) failDiscovery() {
 	t.mu.Lock()
+	if t.discoveryFinished {
+		t.mu.Unlock()
+		return
+	}
 	t.failed = true
+	t.measure.Discovery = DiscoveryFailed
 	t.publishLocked()
 	t.mu.Unlock()
 }
 
 func (t *selectionTracker) finishDiscovery() {
 	t.mu.Lock()
+	if t.discoveryFinished {
+		t.mu.Unlock()
+		return
+	}
+	t.discoveryFinished = true
 	t.measure.DiscoveryTerminalSuccess = !t.failed
+	if t.failed {
+		t.measure.Discovery = DiscoveryFailed
+	} else {
+		t.measure.Discovery = DiscoveryComplete
+	}
 	t.publishLocked()
 	t.mu.Unlock()
 }

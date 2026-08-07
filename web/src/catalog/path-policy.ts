@@ -11,6 +11,7 @@ export const V2_CATALOG_PATH_BYTES = 32 * 1024
 export const V2_CATALOG_PATH_DEPTH = 256
 
 const TEXT_ENCODER = new TextEncoder()
+const SNAPSHOTTED_PORTABLE_PATHS = new WeakSet<readonly string[]>()
 const RESERVED_OUTPUT_PREFIX = '.wsresume'
 const WINDOWS_ILLEGAL_CHARACTERS = new Set('<>:"|?*\\')
 const FORMAT_CHARACTER_RANGES: readonly (readonly [number, number])[] = [
@@ -86,7 +87,8 @@ export function canonicalizePortableCatalogPath(path: string): string {
 
 /** Validates an already segmented path without hiding traversal ownership in a joined string. */
 export function snapshotPortableCatalogPath(path: readonly string[]): readonly string[] {
-  if (path.length === 0 || path.length > V2_CATALOG_PATH_DEPTH) {
+  if (SNAPSHOTTED_PORTABLE_PATHS.has(path)) return path
+  if (!Array.isArray(path) || path.length === 0 || path.length > V2_CATALOG_PATH_DEPTH) {
     throw new TypeError('Catalog path violates the frozen path policy')
   }
   let pathBytes = path.length - 1
@@ -100,7 +102,9 @@ export function snapshotPortableCatalogPath(path: readonly string[]): readonly s
     pathBytes > V2_CATALOG_PATH_BYTES ||
     foldPortableName15(path[0] ?? '').startsWith(RESERVED_OUTPUT_PREFIX)
   ) throw new TypeError('Catalog path violates the frozen path policy')
-  return Object.freeze([...path])
+  const snapshot = Object.freeze([...path])
+  SNAPSHOTTED_PORTABLE_PATHS.add(snapshot)
+  return snapshot
 }
 
 export function catalogPathCollisionKey(path: string): string {

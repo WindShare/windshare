@@ -279,6 +279,8 @@ export class V2CatalogClient {
         const committed = Object.freeze({
           directoryIdText,
           generationText: page.generationText,
+          directoryId: page.directoryId.slice(),
+          generation: page.generation.slice(),
           pageCount: pageIndex + 1,
           entryCount,
           omittedCount: page.omittedCount,

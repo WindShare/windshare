@@ -8,57 +8,6 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 )
 
-// ResumeSessionLifecycle is the stable public projection of a durable resume
-// session. Persistence transitions remain private to the filesystem backend.
-type ResumeSessionLifecycle uint8
-
-const (
-	ResumeSessionActive ResumeSessionLifecycle = iota + 1
-	ResumeSessionPausing
-	ResumeSessionPaused
-	ResumeSessionPausedNeedsAttention
-	ResumeSessionCompleting
-	ResumeSessionDiscarding
-)
-
-func (lifecycle ResumeSessionLifecycle) String() string {
-	switch lifecycle {
-	case ResumeSessionActive:
-		return "active"
-	case ResumeSessionPausing:
-		return "pausing"
-	case ResumeSessionPaused:
-		return "paused"
-	case ResumeSessionPausedNeedsAttention:
-		return "paused-needs-attention"
-	case ResumeSessionCompleting:
-		return "completing"
-	case ResumeSessionDiscarding:
-		return "discarding"
-	default:
-		return "invalid"
-	}
-}
-
-func resumeSessionLifecycleFromState(lifecycle resumestate.SessionLifecycle) ResumeSessionLifecycle {
-	switch lifecycle {
-	case resumestate.SessionActive:
-		return ResumeSessionActive
-	case resumestate.SessionPausing:
-		return ResumeSessionPausing
-	case resumestate.SessionPaused:
-		return ResumeSessionPaused
-	case resumestate.SessionPausedNeedsAttention:
-		return ResumeSessionPausedNeedsAttention
-	case resumestate.SessionCompleting:
-		return ResumeSessionCompleting
-	case resumestate.SessionDiscarding:
-		return ResumeSessionDiscarding
-	default:
-		return 0
-	}
-}
-
 // FilesystemOutputFilePhase is a stable telemetry value, not durable recovery
 // authority. The internal state machine is deliberately not part of this API.
 type FilesystemOutputFilePhase uint8

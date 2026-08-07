@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 )
@@ -90,7 +91,7 @@ func TestContentClientRejectsMissingAndZeroLeaseAuthorityLocally(t *testing.T) {
 	}
 }
 
-func TestRemoteLeaseFailureRemainsOperationScoped(t *testing.T) {
+func TestRemoteLeaseFailureRemainsFileLocalAndSessionUsable(t *testing.T) {
 	fixture := newVerticalFixture(t)
 	sender, receiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
 	defer sender.Close()
@@ -101,12 +102,53 @@ func TestRemoteLeaseFailureRemainsOperationScoped(t *testing.T) {
 		t.Fatal("unknown remote lease renewed")
 	} else {
 		var remote RemoteOperationError
-		if !errors.As(err, &remote) || remote.Failure().Scope() != protocolsession.OperationScopeRevision {
+		var local interface{ IsolatedFileSourceFailure() }
+		if !errors.As(err, &remote) || !errors.As(err, &local) ||
+			remote.Failure().Scope() != protocolsession.OperationScopeRevision {
 			t.Fatalf("unknown renew failure=%#v error=%v", remote, err)
 		}
 	}
 
 	if _, err := receiver.RequestLane(context.Background(), 0); err != nil {
 		t.Fatalf("operation-scoped lease failure closed the session: %v", err)
+	}
+}
+
+func TestLiveRevisionBlockFailuresPreserveFileSettlementAuthority(t *testing.T) {
+	for name, test := range map[string]struct {
+		storeError error
+		code       uint16
+		permanent  bool
+	}{
+		"drift":     {storeError: content.ErrRevisionDrift, code: contentflow.RevisionCodeDrift},
+		"not found": {storeError: content.ErrRevisionNotFound, code: contentflow.RevisionCodeNotFound, permanent: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newVerticalFixture(t)
+			fixture.contentStore.readErr = test.storeError
+			sender, receiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
+			defer sender.Close()
+			defer receiver.Close()
+
+			opened, err := receiver.OpenRevision(context.Background(), fixture.fileID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = receiver.BlockBroker().ReadRange(
+				context.Background(), opened.LeaseID, opened.Descriptor,
+				content.Range{Offset: 0, End: 1},
+				transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
+			)
+			var remote RemoteOperationError
+			var isolated interface{ IsolatedPermanentSourceFailure() }
+			if !errors.Is(err, test.storeError) || transfer.IsSessionFailure(err) ||
+				!errors.As(err, &remote) || remote.Failure().Scope() != protocolsession.OperationScopeRevision ||
+				remote.Failure().Code() != test.code || errors.As(err, &isolated) != test.permanent {
+				t.Fatalf("live revision error=%v remote=%+v isolated=%t", err, remote, isolated != nil)
+			}
+			if _, err := receiver.RequestLane(context.Background(), 0); err != nil {
+				t.Fatalf("file-scoped failure damaged sibling session work: %v", err)
+			}
+		})
 	}
 }
