@@ -1,9 +1,11 @@
 package sessionruntime
 
 import (
+	"errors"
 	"strings"
 	"time"
 
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -118,13 +120,110 @@ func remoteOperationError(message protocolsession.Message) error {
 	return RemoteOperationError{failure: failure}
 }
 
-func remoteOperationErrorFor(message protocolsession.Message, expectedScope uint8) error {
+func remoteRevisionOperationError(message protocolsession.Message) error {
 	failure, err := decodeRemoteOperationFailure(message)
 	if err != nil {
 		return transfer.NewSessionFailure(err)
 	}
-	if failure.Scope() != expectedScope {
+	if failure.Scope() != protocolsession.OperationScopeRevision {
 		return transfer.NewSessionFailure(protocolsession.ErrInvalidOperationFailure)
 	}
-	return NewRemoteOperationError(failure)
+	return revisionOperationError(failure)
+}
+
+type directoryOperationFailure struct{ cause RemoteOperationError }
+
+func (failure *directoryOperationFailure) Error() string { return failure.cause.Error() }
+func (failure *directoryOperationFailure) Unwrap() error { return failure.cause }
+func (*directoryOperationFailure) DirectoryFailure()     {}
+
+func remoteDirectoryOperationError(message protocolsession.Message) error {
+	failure, err := decodeRemoteOperationFailure(message)
+	if err != nil {
+		return transfer.NewSessionFailure(err)
+	}
+	if failure.Scope() != protocolsession.OperationScopeDirectory {
+		return transfer.NewSessionFailure(protocolsession.ErrInvalidOperationFailure)
+	}
+	return &directoryOperationFailure{cause: NewRemoteOperationError(failure)}
+}
+
+func blockRequestOperationError(message protocolsession.Message) error {
+	failure, err := decodeRemoteOperationFailure(message)
+	if err != nil {
+		return transfer.NewSessionFailure(err)
+	}
+	remote := NewRemoteOperationError(failure)
+	switch failure.Scope() {
+	case protocolsession.OperationScopeBlock:
+		return isolatedBlockOperationError(remote)
+	case protocolsession.OperationScopeRevision:
+		return revisionOperationError(failure)
+	default:
+		return transfer.NewSessionFailure(protocolsession.ErrInvalidOperationFailure)
+	}
+}
+
+func isolatedBlockOperationError(remote RemoteOperationError) error {
+	// FetchBlock reaches this branch only after the transport operation has
+	// terminally rejected this block demand. The peer session remains valid;
+	// bind the failure to the current file so sibling revisions can continue.
+	return transfer.NewIsolatedFileSourceFailure(remote)
+}
+
+func revisionOperationError(failure RemoteOperationFailureSnapshot) error {
+	return classifyRevisionFailure(NewRemoteOperationError(failure), failure.Code(), failure.Retryable())
+}
+
+func remoteRevisionFailureError(failure contentflow.RevisionFailure) error {
+	return classifyRevisionFailure(
+		&RemoteRevisionError{failure: failure}, failure.Code, failure.Retryable,
+	)
+}
+
+func classifyRevisionFailure(diagnostic error, code uint16, retryable bool) error {
+	cause, ok := revisionOperationCause(code)
+	if !ok {
+		return transfer.NewSessionFailure(errors.Join(protocolsession.ErrInvalidOperationFailure, diagnostic))
+	}
+	revisionFailure := errors.Join(diagnostic, cause)
+	if !retryable && permanentRevisionOperationCode(code) {
+		return transfer.NewIsolatedPermanentSourceFailure(revisionFailure)
+	}
+	return transfer.NewIsolatedFileSourceFailure(revisionFailure)
+}
+
+func permanentRevisionOperationCode(code uint16) bool {
+	switch code {
+	case contentflow.RevisionCodeStale,
+		contentflow.RevisionCodeNotFound,
+		contentflow.RevisionCodeUnreadable,
+		contentflow.RevisionCodeUnsupportedStability:
+		return true
+	default:
+		return false
+	}
+}
+
+func revisionOperationCause(code uint16) (error, bool) {
+	switch code {
+	case contentflow.RevisionCodeStale:
+		return content.ErrRevisionStale, true
+	case contentflow.RevisionCodeNotFound:
+		return content.ErrRevisionNotFound, true
+	case contentflow.RevisionCodeUnreadable:
+		return content.ErrRevisionUnreadable, true
+	case contentflow.RevisionCodeUnsupportedStability:
+		return content.ErrUnsupportedStability, true
+	case contentflow.RevisionCodeQuota:
+		return content.ErrQuotaExceeded, true
+	case contentflow.RevisionCodeLeaseExpired:
+		return content.ErrLeaseExpired, true
+	case contentflow.RevisionCodeDrift:
+		return content.ErrRevisionDrift, true
+	case contentflow.RevisionCodeInvalidLease:
+		return content.ErrInvalidLease, true
+	default:
+		return nil, false
+	}
 }

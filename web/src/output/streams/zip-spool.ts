@@ -1,10 +1,18 @@
+import { OutputBudgetExceededError } from '../../transfer/output-session'
+
 const ZIP_SPOOL_DATABASE = 'windshare-zip-central-directory'
 const ZIP_SPOOL_DATABASE_VERSION = 3
 const ZIP_SPOOL_CHUNK_STORE = 'central-directory-chunks'
 const ZIP_SPOOL_NAMESPACE_STORE = 'central-directory-namespaces'
 const ZIP_SPOOL_CHUNK_MAXIMUM_BYTES = 256 * 1024
 const ZIP_SPOOL_CHUNK_MAXIMUM_RECORDS = 256
-const ZIP_SPOOL_MAXIMUM_CHUNK_INDEX = Number.MAX_SAFE_INTEGER
+// The entry ceiling follows the transfer's catalog-node authority while the
+// byte ceiling independently bounds attacker-controlled path metadata.
+export const ZIP_SPOOL_MAXIMUM_ENTRIES = 1_000_000
+export const ZIP_SPOOL_MAXIMUM_BYTES = 256 * 1024 * 1024
+const ZIP_SPOOL_MAXIMUM_CHUNKS = ZIP_SPOOL_MAXIMUM_ENTRIES
+const ZIP_SPOOL_ENTRY_BUDGET = 'zip-central-directory-entries'
+const ZIP_SPOOL_BYTE_BUDGET = 'zip-central-directory-bytes'
 export const ZIP_SPOOL_NAMESPACE_LEASE_MILLISECONDS = 300_000
 export const ZIP_SPOOL_NAMESPACE_HEARTBEAT_MILLISECONDS = 60_000
 
@@ -28,6 +36,8 @@ export interface IndexedDbZipSpoolOptions {
   readonly leaseMilliseconds?: number
   readonly heartbeatMilliseconds?: number
   readonly token?: string
+  readonly maxEntries?: number
+  readonly maxBytes?: number
 }
 
 interface StoredZipChunk {
@@ -49,6 +59,8 @@ export class IndexedDbZipCentralDirectorySpool implements ZipCentralDirectorySpo
   readonly #now: () => number
   readonly #leaseMilliseconds: number
   readonly #heartbeatMilliseconds: number
+  readonly #maxEntries: bigint
+  readonly #maxBytes: bigint
   readonly #pending: Uint8Array[] = []
   #database: Promise<IDBDatabase> | undefined
   #pendingBytes = 0
@@ -69,12 +81,18 @@ export class IndexedDbZipCentralDirectorySpool implements ZipCentralDirectorySpo
     this.#leaseMilliseconds = options.leaseMilliseconds ?? ZIP_SPOOL_NAMESPACE_LEASE_MILLISECONDS
     this.#heartbeatMilliseconds =
       options.heartbeatMilliseconds ?? ZIP_SPOOL_NAMESPACE_HEARTBEAT_MILLISECONDS
+    const maxEntries = options.maxEntries ?? ZIP_SPOOL_MAXIMUM_ENTRIES
+    const maxBytes = options.maxBytes ?? ZIP_SPOOL_MAXIMUM_BYTES
     if (this.#databaseName.length === 0) throw new TypeError('ZIP spool database name is empty')
     if (this.#namespace.length === 0 || this.#token.length === 0) {
       throw new TypeError('ZIP spool namespace identity is empty')
     }
     requirePositiveSafeInteger(this.#leaseMilliseconds, 'ZIP spool namespace lease')
     requirePositiveSafeInteger(this.#heartbeatMilliseconds, 'ZIP spool namespace heartbeat')
+    requireOperationBudget(maxEntries, ZIP_SPOOL_MAXIMUM_ENTRIES, 'ZIP spool entry budget')
+    requireOperationBudget(maxBytes, ZIP_SPOOL_MAXIMUM_BYTES, 'ZIP spool byte budget')
+    this.#maxEntries = BigInt(maxEntries)
+    this.#maxBytes = BigInt(maxBytes)
     if (this.#heartbeatMilliseconds >= this.#leaseMilliseconds) {
       throw new RangeError('ZIP spool heartbeat must be shorter than its namespace lease')
     }
@@ -88,15 +106,34 @@ export class IndexedDbZipCentralDirectorySpool implements ZipCentralDirectorySpo
     if (record.byteLength > ZIP_SPOOL_CHUNK_MAXIMUM_BYTES) {
       throw new RangeError('ZIP central-directory record exceeds the durable chunk bound')
     }
+    const nextRecordCount = this.#recordCount + 1n
+    const nextByteLength = this.#byteLength + BigInt(record.byteLength)
+    if (nextRecordCount > this.#maxEntries) {
+      throw new OutputBudgetExceededError(
+        ZIP_SPOOL_ENTRY_BUDGET,
+        this.#maxEntries,
+        nextRecordCount,
+      )
+    }
+    if (nextByteLength > this.#maxBytes) {
+      throw new OutputBudgetExceededError(
+        ZIP_SPOOL_BYTE_BUDGET,
+        this.#maxBytes,
+        nextByteLength,
+      )
+    }
+    // A preceding chunk flush can yield to caller code. Own the accepted record
+    // first so backpressure cannot change the bytes charged by this reservation.
+    const ownedRecord = record.slice()
     if (this.#pending.length > 0 &&
         (this.#pending.length >= ZIP_SPOOL_CHUNK_MAXIMUM_RECORDS ||
           this.#pendingBytes + record.byteLength > ZIP_SPOOL_CHUNK_MAXIMUM_BYTES)) {
       await this.#flush()
     }
-    this.#pending.push(record.slice())
-    this.#pendingBytes += record.byteLength
-    this.#recordCount += 1n
-    this.#byteLength += BigInt(record.byteLength)
+    this.#pending.push(ownedRecord)
+    this.#pendingBytes += ownedRecord.byteLength
+    this.#recordCount = nextRecordCount
+    this.#byteLength = nextByteLength
     if (this.#pendingBytes >= ZIP_SPOOL_CHUNK_MAXIMUM_BYTES) await this.#flush()
   }
 
@@ -174,7 +211,7 @@ export class IndexedDbZipCentralDirectorySpool implements ZipCentralDirectorySpo
     this.#requireHealthy()
     const bytes = concatenate(this.#pending, this.#pendingBytes)
     const index = this.#chunkCount
-    if (index >= ZIP_SPOOL_MAXIMUM_CHUNK_INDEX) {
+    if (index >= ZIP_SPOOL_MAXIMUM_CHUNKS) {
       throw new RangeError('ZIP central-directory spool exceeded its chunk index bound')
     }
     const database = await this.#openDatabase()
@@ -383,7 +420,7 @@ function validateChunk(
 function namespaceRange(namespace: string): IDBKeyRange {
   return IDBKeyRange.bound(
     [namespace, 0],
-    [namespace, ZIP_SPOOL_MAXIMUM_CHUNK_INDEX],
+    [namespace, ZIP_SPOOL_MAXIMUM_CHUNKS],
   )
 }
 
@@ -406,6 +443,11 @@ function randomNamespace(): string {
 
 function requirePositiveSafeInteger(value: number, label: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) throw new RangeError(`${label} must be positive`)
+}
+
+function requireOperationBudget(value: number, maximum: number, label: string): void {
+  requirePositiveSafeInteger(value, label)
+  if (value > maximum) throw new RangeError(`${label} exceeds its supported maximum`)
 }
 
 function requireSafeTime(value: number): void {

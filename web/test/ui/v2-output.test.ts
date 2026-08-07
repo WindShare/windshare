@@ -5,18 +5,91 @@ import {
   browserV2OutputAuthority,
   browserV2OutputCapabilities,
   openBrowserV2OutputSession,
+  outputLocatorForCapability,
   outputIntentAvailable,
+  type BrowserV2OutputIdentityProvider,
   type V2BrowserOutputSessionFactory,
   type V2BrowserOutputWindow,
 } from '../../src/ui/v2-output'
 import type { AcquiredOutputCapability } from '../../src/output/capability/acquisition'
+import {
+  FILE_SYSTEM_ACCESS_BACKEND,
+  ORIGIN_PRIVATE_BACKEND,
+  SINGLE_FILE_STREAM_BACKEND,
+  ZIP_STREAM_BACKEND,
+} from '../../src/output/capability/contract'
+import { DirectoryAdmissionLedger } from '../../src/transfer/directory-admission-ledger'
 import type { OutputSession } from '../../src/transfer/output-session'
-import type { V2OutputSelection } from '../../src/transfer/output-selection'
+import { encodeBase64Url } from '../../src/crypto/bytes'
+import {
+  createTransferIntentDraft,
+  freezeTransferIntent,
+  type TransferIntent,
+  type TransferOutputLocator,
+} from '../../src/transfer/intent'
 
 interface OutputWindowFixture {
   readonly windowPort: V2BrowserOutputWindow
   readonly anchorClick: ReturnType<typeof vi.fn>
   readonly createObjectURL: ReturnType<typeof vi.fn>
+}
+
+function identity(seed: number): Uint8Array<ArrayBuffer> {
+  return Uint8Array.from({ length: 32 }, (_, index) => (seed + index) & 0xff)
+}
+
+function identityText(seed: number): string {
+  return encodeBase64Url(identity(seed))
+}
+
+function directoryIdentityText(seed: number): string {
+  return encodeBase64Url(Uint8Array.from({ length: 16 }, (_, index) => (seed + index) & 0xff))
+}
+
+function testIdentityProvider(seed: number): BrowserV2OutputIdentityProvider {
+  return {
+    resolveRootIdentity: async () => identity(seed),
+    createTargetIdentity: () => identity(seed),
+  }
+}
+
+function durableCapability(
+  kind: 'PersistentDirectory' | 'OriginPrivateStaging',
+  seed: number,
+): AcquiredOutputCapability {
+  return kind === 'PersistentDirectory'
+    ? {
+        kind,
+        root: {} as FileSystemDirectoryHandle,
+        rootIdentity: identity(seed),
+        targetKind: 2,
+        backend: FILE_SYSTEM_ACCESS_BACKEND,
+        format: 'directory',
+      }
+    : {
+        kind,
+        root: {} as FileSystemDirectoryHandle,
+        output: new WritableStream<Uint8Array>(),
+        rootIdentity: identity(seed),
+        targetKind: 2,
+        backend: ORIGIN_PRIVATE_BACKEND,
+        format: 'zip',
+      }
+}
+
+function intentForCapability(
+  capability: AcquiredOutputCapability,
+  jobIdentitySeed: number,
+  overrides: Partial<TransferOutputLocator> = {},
+): Promise<TransferIntent> {
+  const locator = outputLocatorForCapability(capability)
+  const draft = createTransferIntentDraft({
+    shareInstance: directoryIdentityText(0x01),
+    syntheticRoot: directoryIdentityText(0x11),
+    selection: { mode: 'node-id', defaultSelected: true, rules: [] },
+    transferJobId: directoryIdentityText(jobIdentitySeed),
+  })
+  return freezeTransferIntent(draft, { ...locator, ...overrides })
 }
 
 function outputWindow(options: {
@@ -119,7 +192,14 @@ describe('v2 browser output capabilities', () => {
       { kind: 'KnownSingleFile', suggestedName: 'native.bin', exactBytes: 1n },
       windowPort,
     )
-    expect(acquired).toEqual({ kind: 'SingleFileStream', output: native })
+    expect(acquired).toMatchObject({
+      kind: 'SingleFileStream',
+      output: native,
+      targetKind: 2,
+      backend: SINGLE_FILE_STREAM_BACKEND,
+      format: 'single-file',
+    })
+    expect(acquired.rootIdentity).toHaveLength(32)
     expect(createObjectURL).not.toHaveBeenCalled()
   })
 
@@ -130,8 +210,16 @@ describe('v2 browser output capabilities', () => {
       'download',
       { kind: 'Progressive' },
       windowPort,
+      testIdentityProvider(0x20),
     )
-    expect(acquired).toMatchObject({ kind: 'OriginPrivateStaging', root })
+    expect(acquired).toMatchObject({
+      kind: 'OriginPrivateStaging',
+      root,
+      rootIdentity: identity(0x20),
+      targetKind: 2,
+      backend: ORIGIN_PRIVATE_BACKEND,
+      format: 'zip',
+    })
     expect(acquired.kind === 'OriginPrivateStaging' && acquired.output).toBeInstanceOf(WritableStream)
   })
 
@@ -152,72 +240,194 @@ describe('v2 browser output capabilities', () => {
     await output.abortJob(new DOMException('test cleanup', 'AbortError'))
   })
 
-  it('isolates a changed selection after refreshing an FSA or OPFS authority', async () => {
-    const capabilities: readonly AcquiredOutputCapability[] = [
-      { kind: 'PersistentDirectory', root: {} as FileSystemDirectoryHandle },
-      {
-        kind: 'OriginPrivateStaging',
-        root: {} as FileSystemDirectoryHandle,
-        output: new WritableStream<Uint8Array>(),
-      },
+  it('uses a fresh output session per run and admits only the synthetic root at open time', async () => {
+      const capabilities: readonly AcquiredOutputCapability[] = [
+      durableCapability('PersistentDirectory', 0x30),
+      durableCapability('OriginPrivateStaging', 0x40),
     ]
     for (const capability of capabilities) {
       const openedIds: string[] = []
       const ensuredPaths: string[] = []
       const sessions: V2BrowserOutputSessionFactory = {
-        open: async (_acquired, outputSessionId) => {
+        open: async (acquired, outputSessionId) => {
           openedIds.push(outputSessionId)
-          return recordingOutputSession(outputSessionId, ensuredPaths)
+          return recordingOutputSession(outputSessionId, ensuredPaths, acquired)
         },
       }
       const beforeRefresh = browserV2OutputAuthority(Promise.resolve(capability), sessions)
       const afterRefresh = browserV2OutputAuthority(Promise.resolve(capability), sessions)
 
-      await beforeRefresh.openSelection(outputSelection('resume-first'), new AbortController().signal)
-      await afterRefresh.openSelection(outputSelection('resume-second'), new AbortController().signal)
+      await beforeRefresh.openOutput(await intentForCapability(capability, 0x21), new AbortController().signal)
+      await afterRefresh.openOutput(await intentForCapability(capability, 0x22), new AbortController().signal)
 
-      expect(openedIds).toEqual(['resume-first', 'resume-second'])
-      expect(ensuredPaths).toEqual(['folder', 'folder'])
+      expect(openedIds).toHaveLength(2)
+      expect(openedIds[0]).not.toBe(openedIds[1])
+      expect(openedIds).not.toContain('resume-first')
+      expect(openedIds).not.toContain('resume-second')
+      expect(ensuredPaths).toEqual([])
     }
   })
-})
 
-function outputSelection(resumeIntentText: string): V2OutputSelection {
-  const value = new Uint8Array(16)
-  value[0] = 1
-  const hash = new Uint8Array(32)
-  hash[0] = 1
-  return Object.freeze({
-    shareInstance: value,
-    syntheticRoot: value,
-    rootGeneration: value,
-    directories: Object.freeze([Object.freeze({
-      path: Object.freeze(['folder']),
-      directoryId: value,
-      generation: value,
-    })]),
-    files: Object.freeze([]),
-    selectionIdentity: hash,
-    selectionIdentityText: 'selection',
-    canonicalSelection: new Uint8Array(),
-    resumeIntent: hash,
-    resumeIntentText,
+  it('freezes the intent only after picker confirmation and records the selected format', async () => {
+    let resolveCapability: ((capability: AcquiredOutputCapability) => void) | undefined
+    const acquired = new Promise<AcquiredOutputCapability>((resolve) => {
+      resolveCapability = resolve
+    })
+    const opened = vi.fn(async (capability: AcquiredOutputCapability, outputSessionId: string) => {
+      expect(capability.kind).toBe('SingleFileStream')
+      return recordingOutputSession(outputSessionId, [], capability)
+    })
+    const authority = browserV2OutputAuthority(acquired, { open: opened })
+    const draft = createTransferIntentDraft({
+      shareInstance: directoryIdentityText(0x01),
+      syntheticRoot: directoryIdentityText(0x11),
+      selection: { mode: 'node-id', defaultSelected: true, rules: [] },
+      transferJobId: directoryIdentityText(0x23),
+    })
+    const confirmation = authority.confirmOutput(draft, new AbortController().signal)
+    await Promise.resolve()
+    expect(opened).not.toHaveBeenCalled()
+
+    const streamIdentity = identity(0x70)
+    if (resolveCapability === undefined) throw new Error('capability resolver was not installed')
+    resolveCapability({
+      kind: 'SingleFileStream',
+      output: new WritableStream<Uint8Array>(),
+      rootIdentity: streamIdentity,
+      targetKind: 2,
+      backend: SINGLE_FILE_STREAM_BACKEND,
+      format: 'single-file',
+    })
+    const result = await confirmation
+    expect(result.intent.output).toMatchObject({
+      target: encodeBase64Url(streamIdentity),
+      targetKind: 2,
+      backend: 'single-file-stream',
+      format: 'single-file',
+    })
+    expect(opened).toHaveBeenCalledOnce()
+    await result.session.abortJob(new DOMException('test cleanup', 'AbortError'))
   })
-}
+
+  it('fails closed when a restored locator or root identity differs from the picker capability', async () => {
+    const capability = durableCapability('PersistentDirectory', 0x90)
+    const mismatches: readonly Partial<TransferOutputLocator>[] = [
+      { target: identityText(0x91) },
+      { backend: 'different-output-backend' },
+      { format: 'zip' },
+    ]
+    for (const mismatch of mismatches) {
+      const opened = vi.fn(async (acquired: AcquiredOutputCapability, outputSessionId: string) =>
+        recordingOutputSession(outputSessionId, [], acquired))
+      const authority = browserV2OutputAuthority(Promise.resolve(capability), { open: opened })
+      await expect(authority.openOutput(
+        await intentForCapability(capability, 0x24, mismatch),
+        new AbortController().signal,
+      )).rejects.toThrow(/locator does not match/u)
+      expect(opened).not.toHaveBeenCalled()
+    }
+  })
+
+  it('rejects forged final intent fields before the output factory can touch storage', async () => {
+    const capability = durableCapability('PersistentDirectory', 0x92)
+    const valid = await intentForCapability(capability, 0x25)
+    const forged = { ...valid, digest: identityText(0x93) } as TransferIntent
+    const opened = vi.fn(async (acquired: AcquiredOutputCapability, outputSessionId: string) =>
+      recordingOutputSession(outputSessionId, [], acquired))
+    const authority = browserV2OutputAuthority(Promise.resolve(capability), { open: opened })
+
+    await expect(authority.openOutput(forged, new AbortController().signal)).rejects.toThrow(/digest/u)
+    expect(opened).not.toHaveBeenCalled()
+  })
+
+  it('rejects and aborts a factory session whose backend or format violates the intent', async () => {
+    const capability = durableCapability('PersistentDirectory', 0x94)
+    const mismatches = [
+      { backend: 'wrong-backend', format: 'directory' as const },
+      { backend: capability.backend, format: 'zip' as const },
+    ]
+    for (const mismatch of mismatches) {
+      const abortJob = vi.fn(async () => undefined)
+      const opened = vi.fn(async (_acquired: AcquiredOutputCapability, outputSessionId: string) => ({
+        ...recordingOutputSession(outputSessionId, [], mismatch),
+        abortJob,
+      }))
+      const authority = browserV2OutputAuthority(Promise.resolve(capability), { open: opened })
+
+      await expect(authority.openOutput(
+        await intentForCapability(capability, 0x26),
+        new AbortController().signal,
+      )).rejects.toThrow(/backend or format/u)
+      expect(opened).toHaveBeenCalledOnce()
+      expect(abortJob).toHaveBeenCalledOnce()
+    }
+  })
+
+  it('maps every picker capability to its durable output contract', () => {
+    expect(outputLocatorForCapability({
+      kind: 'PersistentDirectory',
+      root: {} as FileSystemDirectoryHandle,
+      rootIdentity: identity(0x80),
+      targetKind: 2,
+      backend: FILE_SYSTEM_ACCESS_BACKEND,
+      format: 'directory',
+    })).toMatchObject({
+      target: identityText(0x80),
+      backend: FILE_SYSTEM_ACCESS_BACKEND,
+      format: 'directory',
+      targetKind: 2,
+    })
+    expect(outputLocatorForCapability({
+      kind: 'ZipStream',
+      output: new WritableStream<Uint8Array>(),
+      rootIdentity: identity(0x81),
+      targetKind: 2,
+      backend: ZIP_STREAM_BACKEND,
+      format: 'zip',
+    })).toMatchObject({
+      target: identityText(0x81),
+      backend: ZIP_STREAM_BACKEND,
+      format: 'zip',
+      targetKind: 2,
+    })
+    expect(outputLocatorForCapability({
+      kind: 'OriginPrivateStaging',
+      root: {} as FileSystemDirectoryHandle,
+      output: new WritableStream<Uint8Array>(),
+      rootIdentity: identity(0x82),
+      targetKind: 2,
+      backend: ORIGIN_PRIVATE_BACKEND,
+      format: 'zip',
+    })).toMatchObject({
+      target: identityText(0x82),
+      backend: ORIGIN_PRIVATE_BACKEND,
+      format: 'zip',
+      targetKind: 2,
+    })
+  })
+})
 
 function recordingOutputSession(
   outputSessionId: string,
   ensuredPaths: string[],
+  contract: Pick<AcquiredOutputCapability, 'backend' | 'format'>,
 ): OutputSession {
+  const directoryAdmissions = new DirectoryAdmissionLedger()
+  const directStream = contract.format === 'single-file'
   return {
-    identity: { backend: 'recording', outputSessionId },
+    identity: { backend: contract.backend, outputSessionId },
+    format: contract.format,
     capabilities: {
-      durability: 'ProcessRestart',
-      randomWrite: true,
-      fileFailureIsolation: true,
+      durability: directStream ? 'None' : 'ProcessRestart',
+      randomWrite: !directStream,
+      fileFailureIsolation: !directStream,
       modificationTime: false,
     },
-    ensureDirectory: async (directory) => { ensuredPaths.push(directory.path.join('/')) },
+    admitDirectory: async (directory, signal) => {
+      const admission = await directoryAdmissions.admitDirectory(directory, signal)
+      if (directory.path.length > 0) ensuredPaths.push(directory.path.join('/'))
+      return admission
+    },
     finalizeDirectory: async () => undefined,
     beginFile: async () => { throw new Error('Authority test does not open files') },
     finishJob: async () => undefined,

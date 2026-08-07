@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -30,6 +29,11 @@ type OutputSessionID [OutputSessionIdentityBytes]byte
 type OutputObjectIdentity [OutputObjectIdentityBytes]byte
 type OutputLocatorDigest [sha256.Size]byte
 type OutputBackendID string
+
+// NativeFilesystemOutputBackendID is the semantic backend identity carried by
+// TransferIntent. Journal/schema revisions belong to the physical state layout,
+// so they must not silently change the user's confirmed output contract.
+const NativeFilesystemOutputBackendID OutputBackendID = "windshare/native-output"
 
 func OutputSessionIDFromBytes(raw []byte) (OutputSessionID, error) {
 	if len(raw) != OutputSessionIdentityBytes {
@@ -73,7 +77,9 @@ type OutputLocatorKind uint8
 
 const (
 	OutputPathLocator OutputLocatorKind = iota + 1
-	OutputPersistentHandleLocator
+	// OutputObjectLocator identifies a backend-owned output object before or
+	// alongside its concrete object identity (for example a stream sink).
+	OutputObjectLocator
 )
 
 type OutputLocator struct {
@@ -91,7 +97,7 @@ func NewPathOutputLocator(path string) (OutputLocator, error) {
 	return OutputLocator{kind: OutputPathLocator, canonicalPath: canonical, digest: digest}, nil
 }
 
-func NewPersistentHandleOutputLocator(digest []byte) (OutputLocator, error) {
+func NewOutputObjectLocator(digest []byte) (OutputLocator, error) {
 	if len(digest) != sha256.Size {
 		return OutputLocator{}, ErrInvalidOutputBinding
 	}
@@ -100,7 +106,7 @@ func NewPersistentHandleOutputLocator(digest []byte) (OutputLocator, error) {
 	if owned == (OutputLocatorDigest{}) {
 		return OutputLocator{}, ErrInvalidOutputBinding
 	}
-	return OutputLocator{kind: OutputPersistentHandleLocator, digest: owned}, nil
+	return OutputLocator{kind: OutputObjectLocator, digest: owned}, nil
 }
 
 func (l OutputLocator) Kind() OutputLocatorKind     { return l.kind }
@@ -160,7 +166,7 @@ func (target OutputFileTarget) valid() bool {
 		canonical, err := catalog.CanonicalPath(target.locator.canonicalPath)
 		return err == nil && canonical == target.locator.canonicalPath
 	}
-	return target.locator.kind == OutputPersistentHandleLocator &&
+	return target.locator.kind == OutputObjectLocator &&
 		target.locator.digest != (OutputLocatorDigest{})
 }
 
@@ -385,16 +391,39 @@ func NewOutputCapabilities(capabilities OutputCapabilities) (OutputCapabilities,
 	return capabilities, nil
 }
 
+func validateOutputSession(intent TransferIntent, output OutputSession) error {
+	if output == nil {
+		return outputContractFault(nil)
+	}
+	backend, err := NewOutputBackendID(string(output.BackendID()))
+	capabilities := output.Capabilities()
+	if err != nil || backend != intent.BackendID() || output.SessionID().IsZero() ||
+		capabilities.Mode != intent.Format() {
+		return outputContractFault(nil)
+	}
+	if _, err := NewOutputCapabilities(capabilities); err != nil {
+		return outputContractFault(err)
+	}
+	return nil
+}
+
 type OutputDirectory struct {
-	Path         string
-	ModifiedTime catalog.ModifiedTime
+	// DirectoryID and Generation are authenticated catalog identity, not a
+	// filesystem inode. They let an output backend bind each mutation to the
+	// exact committed generation that made the directory visible.
+	DirectoryID     catalog.DirectoryID
+	Generation      catalog.DirectoryGeneration
+	ParentAdmission DirectoryAdmission
+	Path            string
+	ModifiedTime    catalog.ModifiedTime
 }
 
 type OutputFile struct {
-	Path         string
-	ExpectedSize uint64
-	Descriptor   content.FileRevisionDescriptor
-	Target       OutputFileTarget
+	Path            string
+	ExpectedSize    uint64
+	Descriptor      content.FileRevisionDescriptor
+	Target          OutputFileTarget
+	ParentAdmission DirectoryAdmission
 }
 
 type OutputSessionError struct {
@@ -416,10 +445,7 @@ func (e *OutputSessionError) RequiresJobPause() bool {
 }
 
 func outputFailureRequiresJobPause(err error, capabilities OutputCapabilities) bool {
-	if outputFailureExplicitlyRequiresJobPause(err) {
-		return true
-	}
-	return !capabilities.FileFailureIsolation
+	return inspectLifecycleError(err).outputRequiresJobPause(capabilities)
 }
 
 type jobPauseRequirement interface {
@@ -427,42 +453,12 @@ type jobPauseRequirement interface {
 	RequiresJobPause() bool
 }
 
-//nolint:errorlint // This walk is intentionally bounded and cycle-safe; errors.As recursively follows an attacker-controlled graph without either guarantee.
 func outputFailureExplicitlyRequiresJobPause(err error) bool {
-	if err == nil {
-		return false
-	}
-	pending := []error{err}
-	seen := make(map[error]struct{})
-	for inspected := 0; len(pending) != 0 && inspected < maxOutputFailureTreeNodes; inspected++ {
-		last := len(pending) - 1
-		current := pending[last]
-		pending = pending[:last]
-		if current == nil {
-			continue
-		}
-		// Comparable wrapper identities make ordinary cyclic Unwrap graphs finite.
-		// The node budget also bounds pathological non-comparable implementations.
-		if reflect.TypeOf(current).Comparable() {
-			if _, duplicate := seen[current]; duplicate {
-				continue
-			}
-			seen[current] = struct{}{}
-		}
-		if scoped, ok := current.(jobPauseRequirement); ok && scoped.RequiresJobPause() {
-			return true
-		}
-		switch wrapped := current.(type) {
-		case interface{ Unwrap() []error }:
-			pending = append(pending, wrapped.Unwrap()...)
-		case interface{ Unwrap() error }:
-			pending = append(pending, wrapped.Unwrap())
-		}
-	}
-	return false
+	inspection := inspectLifecycleError(err)
+	return inspection.explicitOutputPause || inspection.exhausted
 }
 
 func isOutputFailure(err error) bool {
-	_, ok := errors.AsType[jobPauseRequirement](err)
-	return ok
+	inspection := inspectLifecycleError(err)
+	return inspection.outputFailure || inspection.exhausted
 }

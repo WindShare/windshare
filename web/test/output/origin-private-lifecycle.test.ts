@@ -18,6 +18,7 @@ import {
 } from '../../src/output/persistent-tree/session'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, jobOutcome, type JobOutcome } from '../../src/transfer/outcome'
 import { MemoryOutputJournal, MemoryOutputTree } from './fakes'
+import { admittedOutputFile, testOutputIdentity } from './admission-fixture'
 
 const IDENTITY = Object.freeze({
   backend: 'origin-private-staging',
@@ -167,18 +168,18 @@ describe('origin-private output lifecycle', () => {
     )
     const file = {
       source: {
-        shareInstance: 'commit-boundary-share',
-        fileId: 'commit-boundary-file',
-        fileRevision: 'revision',
+        shareInstance: testOutputIdentity('commit-boundary-share'),
+        fileId: testOutputIdentity('commit-boundary-file'),
+        fileRevision: testOutputIdentity('commit-boundary-revision'),
       },
       path: ['commit-boundary.bin'],
       exactSize: 1n,
     }
-    const begun = await output.beginFile(file)
-    await begun.transaction.writeRange(0n, Uint8Array.of(1))
+    const begun = await output.beginFile(await admittedOutputFile(output, file), ACTIVE_SIGNAL)
+    await begun.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
     authority.failNextUpdate(new Error('admission version became obsolete'))
 
-    await expect(begun.transaction.commit()).rejects.toThrow('version became obsolete')
+    await expect(begun.transaction.commit(ACTIVE_SIGNAL)).rejects.toThrow('version became obsolete')
     await expect(begun.transaction.abort(new Error('commit rejected')))
       .resolves.toBe('FileIsolated')
     expect(tree.has(file.path)).toBe(false)
@@ -215,20 +216,107 @@ describe('origin-private output lifecycle', () => {
     )
     const file = {
       source: {
-        shareInstance: 'published-share',
-        fileId: 'published-file',
-        fileRevision: 'revision',
+        shareInstance: testOutputIdentity('published-share'),
+        fileId: testOutputIdentity('published-file'),
+        fileRevision: testOutputIdentity('published-revision'),
       },
       path: ['published.bin'],
       exactSize: 1n,
     }
-    const begun = await output.beginFile(file)
-    await begun.transaction.writeRange(0n, Uint8Array.of(1))
+    const begun = await output.beginFile(await admittedOutputFile(output, file), ACTIVE_SIGNAL)
+    await begun.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
 
-    await expect(begun.transaction.commit()).resolves.toBeUndefined()
+    await expect(begun.transaction.commit(ACTIVE_SIGNAL)).resolves.toBeUndefined()
     expect(publicationObserved).toBe(true)
     expect(tree.has(file.path)).toBe(true)
     expect(admission.snapshot().activeReservations).toBe(0)
+    await admission.release()
+  })
+
+  it('rolls back quota reserved immediately before cancellation and permits a same-size retry', async () => {
+    const authority = new MemoryAdmissionAuthority()
+    const admission = await openAdmission(authority)
+    const output = new OriginPrivateOutputSession(
+      await openInner(),
+      new ControlledExporter(false),
+      admission,
+      async () => {},
+      false,
+    )
+    const file = await admittedOutputFile(output, lifecycleFile('reserve-cancelled.bin'))
+    const controller = new AbortController()
+    const cancelled = new DOMException('cancel after quota reservation', 'AbortError')
+    authority.afterUpdates(1, () => controller.abort(cancelled))
+
+    await expect(output.beginFile(file, controller.signal)).rejects.toBe(cancelled)
+    expect(admission.snapshot().activeReservations).toBe(0)
+
+    const retry = await output.beginFile(file, ACTIVE_SIGNAL)
+    await expect(retry.transaction.abort(new Error('release retry'))).resolves.toBe('FileIsolated')
+    expect(admission.snapshot().activeReservations).toBe(0)
+    await admission.release()
+  })
+
+  it('rolls back prepared commit admission when cancellation wins before inner publication', async () => {
+    const authority = new MemoryAdmissionAuthority()
+    const admission = await openAdmission(authority)
+    const output = new OriginPrivateOutputSession(
+      await openInner(),
+      new ControlledExporter(false),
+      admission,
+      async () => {},
+      false,
+    )
+    const file = await admittedOutputFile(output, {
+      ...lifecycleFile('commit-cancelled.bin'),
+      exactSize: 2n,
+    })
+    const begun = await output.beginFile(file, ACTIVE_SIGNAL)
+    await begun.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
+    const controller = new AbortController()
+    const cancelled = new DOMException('cancel after commit admission', 'AbortError')
+    authority.afterUpdates(2, () => controller.abort(cancelled))
+
+    await expect(begun.transaction.commit(controller.signal)).rejects.toBe(cancelled)
+    expect(admission.snapshot().activeReservations).toBe(1)
+    await expect(begun.transaction.abort(new Error('rollback cancelled commit'))).resolves.toBe('FileIsolated')
+    expect(admission.snapshot().activeReservations).toBe(0)
+    await admission.release()
+  })
+
+  it('attempts and preserves both inner abort and quota-release failures', async () => {
+    const authority = new MemoryAdmissionAuthority()
+    const admission = await openAdmission(authority)
+    const tree = new MemoryOutputTree()
+    const inner = await PersistentTreeOutputSession.open({
+      identity: IDENTITY,
+      tree,
+      journal: new MemoryOutputJournal(),
+    })
+    const output = new OriginPrivateOutputSession(
+      inner,
+      new ControlledExporter(false),
+      admission,
+      async () => {},
+      false,
+    )
+    const file = await admittedOutputFile(output, lifecycleFile('dual-abort-failure.bin'))
+    const begun = await output.beginFile(file, ACTIVE_SIGNAL)
+    const removalFailure = new Error('inner file removal failed')
+    const releaseFailure = new Error('quota release failed')
+    tree.removeFileError = removalFailure
+    authority.failNextUpdate(releaseFailure)
+
+    const failure = await begun.transaction.abort(new Error('transfer failed'))
+      .then(() => undefined, (error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(AggregateError)
+    const evidence = (failure as AggregateError).errors
+    expect(evidence[0]).toBeInstanceOf(AggregateError)
+    expect((evidence[0] as AggregateError).errors).toContain(removalFailure)
+    expect(evidence[1]).toBe(releaseFailure)
+    expect(tree.has(file.path)).toBe(true)
+    expect(admission.snapshot().activeReservations).toBe(1)
     await admission.release()
   })
 })
@@ -319,6 +407,8 @@ async function openAdmission(
 class MemoryAdmissionAuthority implements OriginPrivateAdmissionAuthority {
   #record: AdmissionLeaseRecord | undefined
   #nextUpdateFailure: unknown
+  #updatesUntilHook = 0
+  #updateHook: (() => void) | undefined
 
   async claim(record: AdmissionLeaseRecord, limits: AdmissionAggregateLimits): Promise<void> {
     this.#validate(record, limits)
@@ -333,10 +423,16 @@ class MemoryAdmissionAuthority implements OriginPrivateAdmissionAuthority {
     }
     this.#validate(record, limits)
     this.#record = record
+    this.#runUpdateHook()
   }
 
   failNextUpdate(reason: unknown): void {
     this.#nextUpdateFailure = reason
+  }
+
+  afterUpdates(count: number, hook: () => void): void {
+    this.#updatesUntilHook = count
+    this.#updateHook = hook
   }
 
   async heartbeat(
@@ -356,11 +452,32 @@ class MemoryAdmissionAuthority implements OriginPrivateAdmissionAuthority {
 
   close(): void {}
 
+  #runUpdateHook(): void {
+    if (this.#updateHook === undefined) return
+    this.#updatesUntilHook -= 1
+    if (this.#updatesUntilHook > 0) return
+    const hook = this.#updateHook
+    this.#updateHook = undefined
+    hook()
+  }
+
   #validate(record: AdmissionLeaseRecord, limits: AdmissionAggregateLimits): void {
     if (record.logicalBytes > limits.jobLimit || record.logicalBytes > limits.processLimit ||
         limits.usage + record.additionalBytes + limits.reserve > limits.quota) {
       throw new DOMException('quota exceeded', 'QuotaExceededError')
     }
+  }
+}
+
+function lifecycleFile(name: string) {
+  return {
+    source: {
+      shareInstance: testOutputIdentity(`share:${name}`),
+      fileId: testOutputIdentity(`file:${name}`),
+      fileRevision: testOutputIdentity(`revision:${name}`),
+    },
+    path: [name],
+    exactSize: 1n,
   }
 }
 

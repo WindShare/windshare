@@ -14,6 +14,43 @@ import (
 
 const rootPrefetchBudgetName = "live-share-root-prefetch"
 
+type RootPrefetchDecision uint8
+
+const (
+	RootPrefetchAttemptStarted RootPrefetchDecision = iota + 1
+	RootPrefetchYieldedToDemand
+	RootPrefetchRetryScheduled
+	RootPrefetchCommitted
+	RootPrefetchBudgetFailed
+	RootPrefetchScanFailed
+	RootPrefetchStopped
+)
+
+// RootPrefetchTrace intentionally excludes paths and entry names. Stable
+// catalog identities and bounded counters are sufficient to reconstruct why an
+// optional warm-up yielded, failed, or committed.
+type RootPrefetchTrace struct {
+	Decision      RootPrefetchDecision
+	ShareInstance catalog.ShareInstance
+	DirectoryID   catalog.DirectoryID
+	Generation    catalog.DirectoryGeneration
+	Attempt       uint64
+	EntryCount    uint64
+	OmittedCount  uint64
+}
+
+type RootPrefetchTracer interface {
+	TraceRootPrefetch(RootPrefetchTrace)
+}
+
+type RootPrefetchTraceFunc func(RootPrefetchTrace)
+
+func (function RootPrefetchTraceFunc) TraceRootPrefetch(event RootPrefetchTrace) {
+	if function != nil {
+		function(event)
+	}
+}
+
 type catalogDirectoryStore interface {
 	ListChildren(
 		context.Context,
@@ -34,6 +71,7 @@ type senderCatalogAccess struct {
 	scanner catalog.DirectoryScanner
 	roots   []catalog.DirectoryID
 	budget  *catalog.BudgetAccount
+	tracer  RootPrefetchTracer
 
 	sessionSequence atomic.Uint64
 	wake            chan struct{}
@@ -55,6 +93,7 @@ func newSenderCatalogAccess(
 	store *catalog.CatalogStore,
 	scanner catalog.DirectoryScanner,
 	selected []catalog.NodeRecord,
+	tracer RootPrefetchTracer,
 ) (*senderCatalogAccess, error) {
 	if share.IsZero() || store == nil || scanner == nil {
 		return nil, errors.New("live share catalog access requires share, store, and scanner")
@@ -70,7 +109,7 @@ func newSenderCatalogAccess(
 		}
 	}
 	return &senderCatalogAccess{
-		share: share, store: store, listing: store, scanner: scanner, roots: roots, budget: budget,
+		share: share, store: store, listing: store, scanner: scanner, roots: roots, budget: budget, tracer: tracer,
 		wake: make(chan struct{}, 1),
 	}, nil
 }
@@ -175,9 +214,15 @@ func (access *senderCatalogAccess) runRootPrefetch(lifetime context.Context) {
 		for {
 			attemptContext, attempt, err := access.beginPrefetchAttempt(lifetime)
 			if err != nil {
+				access.traceRootPrefetch(RootPrefetchTrace{
+					Decision: RootPrefetchStopped, DirectoryID: directory, Attempt: attempt,
+				})
 				return
 			}
-			_, _ = access.listing.ListChildren(
+			access.traceRootPrefetch(RootPrefetchTrace{
+				Decision: RootPrefetchAttemptStarted, DirectoryID: directory, Attempt: attempt,
+			})
+			committed, listErr := access.listing.ListChildren(
 				attemptContext,
 				directory,
 				access.budget,
@@ -187,14 +232,42 @@ func (access *senderCatalogAccess) runRootPrefetch(lifetime context.Context) {
 			interruptedByDemand := attemptContext.Err() != nil && lifetime.Err() == nil
 			access.finishPrefetchAttempt(attempt)
 			if lifetime.Err() != nil {
+				access.traceRootPrefetch(RootPrefetchTrace{
+					Decision: RootPrefetchStopped, DirectoryID: directory, Attempt: attempt,
+				})
 				return
 			}
 			if interruptedByDemand {
+				access.traceRootPrefetch(RootPrefetchTrace{
+					Decision: RootPrefetchYieldedToDemand, DirectoryID: directory, Attempt: attempt,
+				})
+				access.traceRootPrefetch(RootPrefetchTrace{
+					Decision: RootPrefetchRetryScheduled, DirectoryID: directory, Attempt: attempt,
+				})
 				continue
 			}
+			if listErr != nil {
+				access.traceRootPrefetch(RootPrefetchTrace{
+					Decision: rootPrefetchFailureDecision(listErr), DirectoryID: directory, Attempt: attempt,
+				})
+				break
+			}
+			access.traceRootPrefetch(RootPrefetchTrace{
+				Decision: RootPrefetchCommitted, DirectoryID: directory,
+				Generation: committed.Generation(), Attempt: attempt,
+				EntryCount: committed.EntryCount(), OmittedCount: committed.OmittedCount(),
+			})
 			break
 		}
 	}
+}
+
+func (access *senderCatalogAccess) traceRootPrefetch(event RootPrefetchTrace) {
+	if access == nil || access.tracer == nil {
+		return
+	}
+	event.ShareInstance = access.share
+	traceRootPrefetch(access.tracer, event)
 }
 
 func (access *senderCatalogAccess) beginPrefetchAttempt(

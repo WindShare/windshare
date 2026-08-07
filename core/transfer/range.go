@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 )
 
@@ -102,4 +103,116 @@ func (b *BlockBroker) ReadRange(
 		}
 	}
 	return nil
+}
+
+func (r *jobRun) transferMissingRanges(
+	ctx context.Context,
+	plan plannedFile,
+	opened OpenedRevision,
+	transaction FileTransaction,
+	checkpoint VerifiedDurableRanges,
+) (bool, error) {
+	durableOutput := r.output.Capabilities().Durability != DurabilityNone
+	if !durableOutput && !checkpoint.Ranges().IsEmpty() {
+		return false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0,
+		)
+	}
+	missing, err := MissingRanges(opened.Descriptor.ExactSize(), checkpoint.Ranges())
+	if err != nil {
+		return false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(err), 0,
+		)
+	}
+	wrote, transientEnd := false, uint64(0)
+	chunk := uint64(opened.Descriptor.Geometry().ChunkSize())
+	for _, current := range missing.Ranges() {
+		for offset := current.Offset; offset < current.End; {
+			if cause := context.Cause(ctx); cause != nil {
+				return false, r.settleFailedFile(
+					ctx, plan, opened, transaction, FailureBlockTransfer, cause, 0,
+				)
+			}
+			next := min(current.End, ((offset/chunk)+1)*chunk)
+			requested := content.Range{Offset: offset, End: next}
+			if !durableOutput && requested.Offset != transientEnd {
+				return false, r.settleFailedFile(
+					ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0,
+				)
+			}
+			advanced, transferred, transferErr := r.transferRequestedRange(
+				ctx, plan, opened, transaction, checkpoint, requested, durableOutput,
+			)
+			if transferErr != nil || !transferred {
+				return false, transferErr
+			}
+			checkpoint = advanced
+			transientEnd = requested.End
+			if !wrote {
+				r.traceFileLifecycle(TransferFileFirstWrite, plan, false)
+				wrote = true
+			}
+			offset = next
+		}
+	}
+	complete := RangesCoverFile(opened.Descriptor.ExactSize(), checkpoint.Ranges())
+	if !durableOutput {
+		complete = transientEnd == opened.Descriptor.ExactSize()
+	}
+	if !complete {
+		return false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0,
+		)
+	}
+	return true, nil
+}
+
+func (r *jobRun) transferRequestedRange(
+	ctx context.Context,
+	plan plannedFile,
+	opened OpenedRevision,
+	transaction FileTransaction,
+	prior VerifiedDurableRanges,
+	requested content.Range,
+	durableOutput bool,
+) (VerifiedDurableRanges, bool, error) {
+	buffered, err := newAtomicRequestedRangeSink(requested, transaction)
+	if err == nil {
+		err = r.job.blocks.ReadRange(ctx, opened.LeaseID, opened.Descriptor, requested, buffered)
+	}
+	if bufferedErr := buffered.Failure(); bufferedErr != nil {
+		err = bufferedErr
+	}
+	if err != nil {
+		inspection := inspectLifecycleError(err)
+		if invalidator, ok := r.job.blocks.(interface {
+			InvalidateRevision(catalog.FileID, content.FileRevision)
+		}); ok && inspection.invalidatedRevision {
+			invalidator.InvalidateRevision(plan.file, opened.Descriptor.FileRevision())
+		}
+		return VerifiedDurableRanges{}, false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureBlockTransfer, err, inspection.retireReason(),
+		)
+	}
+	if err := buffered.Flush(ctx); err != nil {
+		return VerifiedDurableRanges{}, false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureBlockTransfer, err, 0,
+		)
+	}
+	checkpoint, err := transaction.Checkpoint(ctx)
+	if err != nil {
+		return VerifiedDurableRanges{}, false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureFileOutput, err, 0,
+		)
+	}
+	valid := checkpointExactlyAdvances(transaction, prior, requested, checkpoint)
+	if !durableOutput {
+		valid = checkpointAcknowledgesTransientWrite(transaction, prior, checkpoint)
+	}
+	if !valid {
+		return VerifiedDurableRanges{}, false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0,
+		)
+	}
+	return checkpoint, true, nil
 }

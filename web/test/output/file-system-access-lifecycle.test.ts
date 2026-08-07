@@ -6,8 +6,11 @@ import {
   type FileSystemAccessSessionLease,
   type FileSystemAccessSessionRepository,
 } from '../../src/output/file-system-access/session'
+import { DirectoryAdmissionLedger } from '../../src/transfer/directory-admission-ledger'
 import {
   type BeginOutputFileResult,
+  type DirectoryAdmission,
+  type OutputDirectoryAdmission,
   outputCapabilities,
   outputSessionIdentity,
 } from '../../src/transfer/output-session'
@@ -65,6 +68,8 @@ describe('File System Access output lifecycle', () => {
 })
 
 class DeferredInner implements FileSystemAccessInnerSession {
+  readonly #directoryAdmissions = new DirectoryAdmissionLedger()
+  readonly format = 'directory' as const
   readonly identity = outputSessionIdentity({
     backend: 'file-system-access',
     outputSessionId: 'lifecycle-test',
@@ -85,7 +90,9 @@ class DeferredInner implements FileSystemAccessInnerSession {
     this.#honorAbort = honorAbort
   }
 
-  async ensureDirectory(): Promise<void> {}
+  admitDirectory(directory: OutputDirectoryAdmission, signal: AbortSignal): Promise<DirectoryAdmission> {
+    return this.#directoryAdmissions.admitDirectory(directory, signal)
+  }
 
   async finalizeDirectory(): Promise<void> {}
 

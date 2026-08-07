@@ -27,6 +27,8 @@ interface DurableRecoveryHarness {
 }
 
 const HARNESS_PATH = '/test/browser/durable-recovery-harness.ts'
+const TEST_TRANSFER_INTENT_DIGEST = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+const TEST_ROOT_IDENTITY = 'DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 
 test.beforeEach(async ({ browserName, page }) => {
   await page.goto('/')
@@ -65,22 +67,100 @@ test('a persisted FSA-like handle is reopened and identity-checked after reload'
   expect(reopened).toEqual(['0:3'])
 })
 
-test('one output session cannot publish competing checkpoint heads from two pages', async ({
+test('one durable checkpoint namespace cannot publish competing heads from two pages or runs', async ({
   context,
   page,
 }) => {
   await page.goto('/')
   const competitor = await context.newPage()
   await competitor.goto('/')
-  const outputSessionId = `lease-${crypto.randomUUID()}`
-  await callHarness<void>(page, outputSessionId, 'holdOutputSession')
+  const runPrefix = `lease-${crypto.randomUUID()}`
+  const firstOutputSessionId = `${runPrefix}-first`
+  const competingOutputSessionId = `${runPrefix}-second`
+  await callHarness<void>(page, firstOutputSessionId, 'holdOutputSession')
   expect(await callHarness<string | undefined>(
     competitor,
-    outputSessionId,
+    competingOutputSessionId,
     'competingSessionError',
   )).toBe('InvalidStateError')
-  await callHarness<void>(page, outputSessionId, 'releaseOutputSession')
+  await callHarness<void>(page, firstOutputSessionId, 'releaseOutputSession')
   await competitor.close()
+})
+
+test('legacy IndexedDB checkpoint stores are removed once without touching published output', async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const cleanerPath = '/src/output/browser/indexeddb-legacy-cleaner.ts'
+    const cleaner = await import(cleanerPath) as typeof import(
+      '../../src/output/browser/indexeddb-legacy-cleaner'
+    )
+    const databaseName = `legacy-cleanup-${crypto.randomUUID()}`
+    const legacyStores = [
+      'checkpoint-candidates',
+      'checkpoint-committed',
+      'persistent-handles',
+      'cleanup-markers',
+    ] as const
+    const legacy = await openDatabase(databaseName, 2, (database) => {
+      for (const store of legacyStores) database.createObjectStore(store, { keyPath: 'id' })
+    })
+    const seed = legacy.transaction(legacyStores, 'readwrite')
+    for (const store of legacyStores) seed.objectStore(store).put({ id: `${store}-owned-record` })
+    await transactionDone(seed)
+    legacy.close()
+
+    const first = await cleaner.ensureOneShotIndexedDbLegacyCleanup(databaseName)
+    const inspected = await openDatabase(databaseName)
+    const scan = inspected.transaction(legacyStores, 'readonly')
+    const counts = await Promise.all(legacyStores.map((store) => count(scan.objectStore(store))))
+    await transactionDone(scan)
+    inspected.close()
+    const second = await cleaner.ensureOneShotIndexedDbLegacyCleanup(databaseName)
+    await deleteDatabase(databaseName)
+    return { first, counts, second }
+
+    function openDatabase(
+      name: string,
+      version?: number,
+      upgrade?: (database: IDBDatabase) => void,
+    ): Promise<IDBDatabase> {
+      return new Promise((resolve, reject) => {
+        const request = version === undefined ? indexedDB.open(name) : indexedDB.open(name, version)
+        request.addEventListener('upgradeneeded', () => upgrade?.(request.result), { once: true })
+        request.addEventListener('success', () => resolve(request.result), { once: true })
+        request.addEventListener('error', () => reject(request.error), { once: true })
+      })
+    }
+
+    function count(store: IDBObjectStore): Promise<number> {
+      return new Promise((resolve, reject) => {
+        const request = store.count()
+        request.addEventListener('success', () => resolve(request.result), { once: true })
+        request.addEventListener('error', () => reject(request.error), { once: true })
+      })
+    }
+
+    function transactionDone(transaction: IDBTransaction): Promise<void> {
+      return new Promise((resolve, reject) => {
+        transaction.addEventListener('complete', () => resolve(), { once: true })
+        transaction.addEventListener('abort', () => reject(transaction.error), { once: true })
+        transaction.addEventListener('error', () => reject(transaction.error), { once: true })
+      })
+    }
+
+    function deleteDatabase(name: string): Promise<void> {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.deleteDatabase(name)
+        request.addEventListener('success', () => resolve(), { once: true })
+        request.addEventListener('error', () => reject(request.error), { once: true })
+      })
+    }
+  })
+
+  expect(result).toEqual({
+    first: { status: 'completed', removed: 4 },
+    counts: [0, 0, 0, 0],
+    second: { status: 'nothing-to-clean', removed: 0 },
+  })
 })
 
 test('completed persistent output keeps bytes but retires journal and handle metadata', async ({ page }) => {
@@ -390,7 +470,7 @@ test('fails closed at IndexedDB blocked and versionchange boundaries', async ({ 
 test('reopens real IndexedDB journal pages lazily and removes a crash candidate', async ({ page }) => {
   test.setTimeout(60_000)
   await page.goto('/')
-  const result = await page.evaluate(async () => {
+  const result = await page.evaluate(async (binding) => {
     const repositoryPath = '/src/output/browser/indexeddb-repository.ts'
     const journalPath = '/src/output/persistence/journal.ts'
     const persistentPath = '/src/output/persistent-tree/session.ts'
@@ -408,12 +488,13 @@ test('reopens real IndexedDB journal pages lazily and removes a crash candidate'
     const databaseName = `journal-pages-${crypto.randomUUID()}`
     const backend = 'real-indexeddb-test'
     const outputSessionId = 'paged-session'
-    const identity = { backend, outputSessionId }
+    const identity = { backend, outputSessionId, ...binding }
     const tree = new fakes.MemoryOutputTree()
     let repository = await repositoryModule.IndexedDbOutputRepository.open(
       databaseName,
       backend,
       outputSessionId,
+      binding,
     )
     const recordCount = journal.OUTPUT_JOURNAL_PAGE_RECORD_LIMIT + 1
     for (let index = 0; index < recordCount; index += 1) {
@@ -468,9 +549,11 @@ test('reopens real IndexedDB journal pages lazily and removes a crash candidate'
       databaseName,
       backend,
       outputSessionId,
+      binding,
     )
     const session = await persistent.PersistentTreeOutputSession.open({
       identity,
+      checkpointBinding: binding,
       tree,
       journal: repository,
     })
@@ -530,6 +613,9 @@ test('reopens real IndexedDB journal pages lazily and removes a crash candidate'
       } while (cursor !== undefined)
       return { keys, pageSizes }
     }
+  }, {
+    transferIntentDigest: TEST_TRANSFER_INTENT_DIGEST,
+    rootIdentity: TEST_ROOT_IDENTITY,
   })
 
   expect(result).toMatchObject({
@@ -556,14 +642,18 @@ test('converges marker-owned published OPFS staging after cleanup failure and re
     outputSessionId: `cleanup-${crypto.randomUUID()}`,
     checkpointDatabase: `cleanup-checkpoint-${crypto.randomUUID()}`,
     admissionDatabase: `cleanup-admission-${crypto.randomUUID()}`,
+    transferIntentDigest: TEST_TRANSFER_INTENT_DIGEST,
+    rootIdentity: TEST_ROOT_IDENTITY,
   }
   const first = await page.evaluate(async (options) => {
     const outputPath = '/src/output/origin-private/session.ts'
     const outcomePath = '/src/transfer/outcome.ts'
+    const admissionPath = '/test/output/admission-fixture.ts'
     const output = await import(outputPath) as typeof import(
       '../../src/output/origin-private/session'
     )
     const outcome = await import(outcomePath) as typeof import('../../src/transfer/outcome')
+    const admission = await import(admissionPath) as typeof import('../output/admission-fixture')
     const storage = navigator.storage as StorageManager & {
       getDirectory(): Promise<FileSystemDirectoryHandle>
     }
@@ -594,6 +684,8 @@ test('converges marker-owned published OPFS staging after cleanup failure and re
     })
     const session = await output.openOriginPrivateOutputSession({
       outputSessionId: options.outputSessionId,
+      transferIntentDigest: options.transferIntentDigest,
+      rootIdentity: options.rootIdentity,
       databaseName: options.checkpointDatabase,
       storage: {
         getDirectory: async () => root,
@@ -611,19 +703,20 @@ test('converges marker-owned published OPFS staging after cleanup failure and re
     ;(globalThis as Record<string, unknown>).__failedCleanupSession = session
     const file = {
       source: {
-        shareInstance: 'cleanup-share',
-        fileId: 'cleanup-file',
-        fileRevision: 'cleanup-revision',
+        shareInstance: admission.testOutputIdentity('cleanup-share'),
+        fileId: admission.testOutputIdentity('cleanup-file'),
+        fileRevision: admission.testOutputIdentity('cleanup-revision'),
       },
       path: ['cleanup.bin'],
       exactSize: 1n,
     }
-    const begun = await session.beginFile(file)
-    await begun.transaction.writeRange(0n, Uint8Array.of(1))
-    await begun.transaction.commit()
+    const signal = new AbortController().signal
+    const begun = await session.beginFile(await admission.admittedOutputFile(session, file), signal)
+    await begun.transaction.writeRange(0n, Uint8Array.of(1), signal)
+    await begun.transaction.commit(signal)
     await session.finishJob(
       outcome.jobOutcome('Succeeded', outcome.EMPTY_TRANSFER_FAILURE_SUMMARY),
-      new AbortController().signal,
+      signal,
     )
     return {
       committed: session.finalization?.committed,
@@ -635,11 +728,15 @@ test('converges marker-owned published OPFS staging after cleanup failure and re
   await page.reload()
   const recovered = await page.evaluate(async (options) => {
     const outputPath = '/src/output/origin-private/session.ts'
+    const admissionPath = '/test/output/admission-fixture.ts'
     const output = await import(outputPath) as typeof import(
       '../../src/output/origin-private/session'
     )
+    const admission = await import(admissionPath) as typeof import('../output/admission-fixture')
     const session = await output.openOriginPrivateOutputSession({
       outputSessionId: options.outputSessionId,
+      transferIntentDigest: options.transferIntentDigest,
+      rootIdentity: options.rootIdentity,
       databaseName: options.checkpointDatabase,
       quota: {
         estimate: () => navigator.storage.estimate(),
@@ -650,15 +747,15 @@ test('converges marker-owned published OPFS staging after cleanup failure and re
       },
       exporter: { export: async () => output.ORIGIN_PRIVATE_EXPORT_COMPLETE },
     })
-    const begun = await session.beginFile({
+    const begun = await session.beginFile(await admission.admittedOutputFile(session, {
       source: {
-        shareInstance: 'cleanup-share',
-        fileId: 'cleanup-file',
-        fileRevision: 'cleanup-revision',
+        shareInstance: admission.testOutputIdentity('cleanup-share'),
+        fileId: admission.testOutputIdentity('cleanup-file'),
+        fileRevision: admission.testOutputIdentity('cleanup-revision'),
       },
       path: ['cleanup.bin'],
       exactSize: 1n,
-    })
+    }), new AbortController().signal)
     const recoveredRangeCount = begun.durableRanges.ranges.length
     await begun.transaction.abort(new DOMException('cleanup probe complete', 'AbortError'))
     await session.abortJob(new DOMException('cleanup retry', 'AbortError'))

@@ -3,22 +3,11 @@ import { useEffect, useRef, useSyncExternalStore, type FormEvent } from 'react'
 import { PORTABLE_DOWNLOAD_MAXIMUM_BYTES } from '../output/portable/browser-download'
 import type { V2BrowseRow, V2PreviewSnapshot } from './v2-model'
 import type { V2ReceiverController } from './v2-controller'
-
-const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB'] as const
-
-function formatBytes(bytes: bigint): string {
-  let value = bytes
-  let unit = 0
-  let divisor = 1n
-  while (value >= 1024n && unit < BYTE_UNITS.length - 1) {
-    value /= 1024n
-    divisor *= 1024n
-    unit += 1
-  }
-  if (unit === 0) return `${bytes} B`
-  const tenths = (bytes * 10n) / divisor
-  return `${tenths / 10n}.${tenths % 10n} ${BYTE_UNITS[unit]}`
-}
+import {
+  completionProgressDescription,
+  discoveryProgressDescription,
+  formatBytes,
+} from './v2-progress-presentation'
 
 function downloadCapabilityDescription(capabilities: {
   readonly nativeSave: boolean
@@ -196,7 +185,7 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
   useEffect(() => {
     if (snapshot.phase === 'failed') alert.current?.focus()
     else if (snapshot.phase === 'completed' || snapshot.phase === 'completed-errors' ||
-      snapshot.phase === 'aborted') status.current?.focus()
+      snapshot.phase === 'paused' || snapshot.phase === 'aborted') status.current?.focus()
   }, [snapshot.phase])
 
   return (
@@ -341,15 +330,24 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
               </fieldset>
 
               {(active || snapshot.phase === 'completed' || snapshot.phase === 'completed-errors' ||
-                snapshot.phase === 'aborted') && (
+                snapshot.phase === 'paused' || snapshot.phase === 'aborted') && (
                 <div className="progress-panel">
-                  <strong>{formatBytes(snapshot.progress.writtenBytes)} received</strong>
+                  <strong>
+                    {completionProgressDescription(snapshot.progress)}
+                  </strong>
                   <p>
-                    {snapshot.progress.discoveryComplete
-                      ? `${snapshot.progress.discoveredFiles} file(s), ${formatBytes(snapshot.progress.discoveredBytes)} total`
-                      : `${snapshot.progress.discoveredFiles} file(s) discovered; total still unknown`}
+                    {discoveryProgressDescription(snapshot.progress)}
                   </p>
                   <p>{snapshot.progress.contentLanes} authenticated content lane(s)</p>
+                  {snapshot.progress.fileErrors > 0 && (
+                    <p>{snapshot.progress.fileErrors} file error(s)</p>
+                  )}
+                  {snapshot.progress.selectionErrors > 0 && (
+                    <p>{snapshot.progress.selectionErrors} selected target(s) unavailable</p>
+                  )}
+                  {snapshot.progress.partial && snapshot.progress.discovery !== 'failed' && (
+                    <p>Some selected files could not be included.</p>
+                  )}
                 </div>
               )}
 

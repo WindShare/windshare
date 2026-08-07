@@ -52,7 +52,7 @@ func stateStoreHeaderImages(t *testing.T) (
 		t.Fatal(err)
 	}
 	header, err := resumestate.NewHeader(resumestate.HeaderSpec{
-		Backend: filesystemOutputBackendID, SessionID: sessionID, Selection: selection, OutputRoot: root,
+		Backend: filesystemOutputBackendID, SessionID: sessionID, IntentDigest: v3RecoveryIntentDigest(selection), Selection: selection, OutputRoot: root,
 		OutputAncestry: v3RecoveryAncestryBinding(t, root, selection),
 	})
 	if err != nil {
@@ -70,7 +70,7 @@ func stateStoreHeaderImages(t *testing.T) (
 	namespace, err := resumestate.BindSessionNamespaceAuthority(
 		control,
 		header,
-		resumestate.ResumeNamespaceName(selection.ResumeIntent()),
+		resumestate.IntentNamespaceName(v3RecoveryIntentDigest(selection)),
 		resumestate.SessionDirectoryName(sessionID),
 	)
 	if err != nil {

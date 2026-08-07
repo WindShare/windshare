@@ -791,7 +791,9 @@ func TestCatalogTransportRejectsHostileOperationResponses(t *testing.T) {
 		))
 		err = harness.wait()
 		var remote RemoteOperationError
-		if !errors.As(err, &remote) || remote.Failure().Scope() != protocolsession.OperationScopeDirectory {
+		var directory transfer.DirectoryDiscoveryFailure
+		if !errors.As(err, &remote) || !errors.As(err, &directory) ||
+			remote.Failure().Scope() != protocolsession.OperationScopeDirectory {
 			t.Fatalf("directory operation error = %v", err)
 		}
 	})

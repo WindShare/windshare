@@ -20,7 +20,7 @@ export interface ObservedTransferFailure {
 }
 
 export interface ObservedJobOutcome {
-  readonly status: 'Succeeded' | 'CompletedWithErrors' | 'Aborted'
+  readonly status: 'Succeeded' | 'CompletedWithErrors' | 'Paused' | 'Aborted' | 'NeedsAttention'
   readonly failures: readonly ObservedTransferFailure[]
   readonly failureCount: number
   readonly omittedFailureCount: number

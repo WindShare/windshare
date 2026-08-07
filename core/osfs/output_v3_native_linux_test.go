@@ -57,7 +57,7 @@ func requireUnprivilegedLinuxExt4Certification(t *testing.T) {
 
 func TestLinuxExt4CreatesMissingRootThroughCertifiedHandles(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "first", "second")
-	platform, err := openOutputV3Platform(target, true)
+	platform, err := openNativeOutputPlatform(target, true)
 	if err != nil {
 		nativeOutputCertificationFailure(t, linuxExt4NativeCertificationProfile,
 			"create missing Linux/ext4 root through certified handles", err)
@@ -81,7 +81,7 @@ func TestLinuxRootCreationDoesNotTraverseSymlinkAncestor(t *testing.T) {
 		t.Skipf("create Linux symlink adversary: %v", err)
 	}
 	unexpected := filepath.Join(outside, "must-not-exist")
-	platform, err := openOutputV3Platform(filepath.Join(alias, "must-not-exist"), true)
+	platform, err := openNativeOutputPlatform(filepath.Join(alias, "must-not-exist"), true)
 	if platform != nil {
 		_ = platform.Close()
 	}

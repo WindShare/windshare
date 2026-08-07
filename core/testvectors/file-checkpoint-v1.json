@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "kind": "file-checkpoint-v1",
+  "description": "FileCheckpointV1 canonical payload, storage envelope, ownership marker, and checksum.",
+  "cases": [
+    {
+      "backend": "test/native",
+      "canonicalBytesB64": "AAAAI3dpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtcmVjb3JkL3YxAQAAABx3aW5kc2hhcmUvZmlsZS1jaGVja3BvaW50L3YxAAAAIC53aW5kc2hhcmUtb3V0cHV0L2NoZWNrcG9pbnRzLXYxkilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUIQERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/AAAAD2ZvbGRlci9maWxlLmJpbgAAAAAAAABAAAAAC3Rlc3QvbmF0aXZlQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ubwAAAAAAAAABAAAAAAAAAAEAAAACAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAAEACAQAAAA==",
+      "canonicalPath": "folder/file.bin",
+      "checkpointGeneration": "1",
+      "checksumB64": "y/FmrUwcZV+I15x/gTsX56GLw/Tz2BcA4pihgSfJZpQ=",
+      "commitState": 1,
+      "encodedB64": "V1NGQ1BWMQAAAAFvAAAAI3dpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtcmVjb3JkL3YxAQAAABx3aW5kc2hhcmUvZmlsZS1jaGVja3BvaW50L3YxAAAAIC53aW5kc2hhcmUtb3V0cHV0L2NoZWNrcG9pbnRzLXYxkilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUIQERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/AAAAD2ZvbGRlci9maWxlLmJpbgAAAAAAAABAAAAAC3Rlc3QvbmF0aXZlQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ubwAAAAAAAAABAAAAAAAAAAEAAAACAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAAEACAQAAAMvxZq1MHGVfiNecf4E7F+ehi8P089gXAOKYoYEnyWaU",
+      "exactSize": "64",
+      "fileIdB64": "ICEiIyQlJicoKSorLC0uLw==",
+      "fileRevisionB64": "MDEyMzQ1Njc4OTo7PD0+Pw==",
+      "name": "candidate",
+      "namespace": ".windshare-output/checkpoints-v1",
+      "ownedOutputObjectB64": "UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8=",
+      "ownershipMarker": "windshare/file-checkpoint/v1",
+      "phase": 2,
+      "recordIdB64": "kilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUI=",
+      "rootIdentityB64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8=",
+      "stateGeneration": "1",
+      "transferIntentDigestB64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
+      "verifiedRanges": [
+        {
+          "end": "16",
+          "start": "0"
+        },
+        {
+          "end": "64",
+          "start": "32"
+        }
+      ]
+    },
+    {
+      "backend": "test/native",
+      "canonicalBytesB64": "AAAAJndpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtb3duZXJzaGlwL3YxAAAAHHdpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQvdjEAAAAgLndpbmRzaGFyZS1vdXRwdXQvY2hlY2twb2ludHMtdjEAAAALdGVzdC9uYXRpdmVAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eXw==",
+      "encodedB64": "AAAAJndpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtb3duZXJzaGlwL3YxAAAAHHdpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQvdjEAAAAgLndpbmRzaGFyZS1vdXRwdXQvY2hlY2twb2ludHMtdjEAAAALdGVzdC9uYXRpdmVAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2xMBioGS/SysKRRnsPPJbLvPK2DXWLgN81PtFz/DY95",
+      "marker": "windshare/file-checkpoint/v1",
+      "name": "ownership",
+      "namespace": ".windshare-output/checkpoints-v1",
+      "rootIdentityB64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8="
+    }
+  ]
+}

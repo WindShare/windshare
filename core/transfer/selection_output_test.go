@@ -209,7 +209,7 @@ func TestOutputBindingsDurableRangesAndCapabilities(t *testing.T) {
 	if _, err := NewPathOutputLocator("../escape"); err == nil {
 		t.Fatal("escaping output locator accepted")
 	}
-	if _, err := NewPersistentHandleOutputLocator(make([]byte, 31)); err == nil {
+	if _, err := NewOutputObjectLocator(make([]byte, 31)); err == nil {
 		t.Fatal("short handle digest accepted")
 	}
 
@@ -261,18 +261,18 @@ func TestOutputIdentityLocatorAndErrorValidationBranches(t *testing.T) {
 	}
 	handleDigest := make([]byte, 32)
 	handleDigest[0] = 3
-	handle, err := NewPersistentHandleOutputLocator(handleDigest)
-	if err != nil || handle.Kind() != OutputPersistentHandleLocator || handle.Digest() == (OutputLocatorDigest{}) || handle.CanonicalPath() != "" {
+	handle, err := NewOutputObjectLocator(handleDigest)
+	if err != nil || handle.Kind() != OutputObjectLocator || handle.Digest() == (OutputLocatorDigest{}) || handle.CanonicalPath() != "" {
 		t.Fatalf("handle=%+v err=%v", handle, err)
 	}
-	if _, err := NewPersistentHandleOutputLocator(make([]byte, 32)); err == nil {
+	if _, err := NewOutputObjectLocator(make([]byte, 32)); err == nil {
 		t.Fatal("zero handle digest accepted")
 	}
 
 	descriptor := transferDescriptor(t, 1)
 	backend, _ := NewOutputBackendID("test/backend")
 	binding, err := NewOutputFileBinding(backend, session, descriptor, handle, object)
-	if err != nil || binding.ObjectIdentity() != object || binding.Locator().Kind() != OutputPersistentHandleLocator {
+	if err != nil || binding.ObjectIdentity() != object || binding.Locator().Kind() != OutputObjectLocator {
 		t.Fatalf("binding=%+v err=%v", binding, err)
 	}
 	if _, err := NewOutputFileBinding("", session, descriptor, handle, object); err == nil {

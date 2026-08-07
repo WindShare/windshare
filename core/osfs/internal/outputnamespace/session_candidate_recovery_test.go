@@ -229,7 +229,7 @@ func TestOutputV3CanonicalIntentAndSessionAllocationPropagateDurableCuts(t *test
 	fixture := newV3RecoverySessionCandidateMatrix(t)
 	defer fixture.close(t)
 	injected := errors.New("intent allocation failed")
-	intent := fixture.selection.ResumeIntent()
+	intent := v3RecoveryIntentDigest(fixture.selection)
 
 	for index, configure := range []func(*outputV3CandidateFaultDirectory){
 		func(directory *outputV3CandidateFaultDirectory) { directory.namesErr = injected },

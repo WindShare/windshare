@@ -1,8 +1,11 @@
+import { DirectoryAdmissionLedger } from '../../transfer/directory-admission-ledger'
 import {
   type BeginOutputFileResult,
+  type DirectoryAdmission,
   type FileAbortDisposition,
   type OutputCapabilities,
   type OutputDirectory,
+  type OutputDirectoryAdmission,
   type OutputFile,
   type OutputFileTransaction,
   type OutputSession,
@@ -10,7 +13,6 @@ import {
   VerifiedDurableRanges,
   outputCapabilities,
   outputSessionIdentity,
-  snapshotOutputDirectory,
   snapshotOutputFile,
 } from '../../transfer/output-session'
 import type { JobOutcome } from '../../transfer/outcome'
@@ -21,6 +23,7 @@ type StreamState = 'open' | 'closing' | 'committed' | 'aborting' | 'aborted' | '
 
 export class SingleFileStreamOutputSession implements OutputSession {
   readonly identity: OutputSessionIdentity
+  readonly format = 'single-file' as const
   readonly capabilities: OutputCapabilities = outputCapabilities({
     durability: 'None',
     randomWrite: false,
@@ -29,6 +32,7 @@ export class SingleFileStreamOutputSession implements OutputSession {
   })
 
   readonly #writer: WritableStreamDefaultWriter<Uint8Array>
+  readonly #directoryAdmissions = new DirectoryAdmissionLedger()
   #state: StreamState = 'open'
   #transaction: SingleFileStreamTransaction | undefined
   #closePromise: Promise<void> | undefined
@@ -45,22 +49,30 @@ export class SingleFileStreamOutputSession implements OutputSession {
     this.#writer = output.getWriter()
   }
 
-  async ensureDirectory(): Promise<void> {
+  admitDirectory(input: OutputDirectoryAdmission, signal: AbortSignal): Promise<DirectoryAdmission> {
     this.#requireOpen()
+    return this.#directoryAdmissions.admitDirectory(input, signal)
   }
 
   async finalizeDirectory(directory: OutputDirectory, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted()
     this.#requireOpen()
-    snapshotOutputDirectory(directory)
+    this.#directoryAdmissions.validateDirectoryFinalization(directory)
   }
 
-  async beginFile(input: OutputFile): Promise<BeginOutputFileResult> {
+  async beginFile(input: OutputFile, signal: AbortSignal): Promise<BeginOutputFileResult> {
+    signal.throwIfAborted()
     this.#requireOpen()
     if (this.#transaction !== undefined) {
       throw new Error('Single-file output accepts exactly one file')
     }
-    const file = snapshotOutputFile(input)
+    const admitted = this.#directoryAdmissions.validateFileParent(input)
+    const file = snapshotOutputFile({
+      source: admitted.source,
+      path: admitted.path,
+      exactSize: admitted.exactSize,
+      ...(admitted.parentAdmission === undefined ? {} : { parentAdmission: admitted.parentAdmission }),
+    })
     const ownership = Object.freeze({
       ...this.identity,
       canonicalPath: file.path,
@@ -217,9 +229,10 @@ class SingleFileStreamTransaction implements OutputFileTransaction {
     return this.#settled
   }
 
-  writeRange(offset: bigint, data: Uint8Array): Promise<void> {
+  writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void> {
     const snapshot = data.slice()
     return this.#enqueue(async () => {
+      signal.throwIfAborted()
       this.#requireOpen()
       if (offset !== this.#nextOffset || offset + BigInt(snapshot.byteLength) > this.#file.exactSize) {
         throw new RangeError('Single-file stream requires contiguous ascending ranges')
@@ -229,12 +242,14 @@ class SingleFileStreamTransaction implements OutputFileTransaction {
       // if its promise later rejects, so rollback must be treated conservatively.
       this.#started = true
       await this.#session.writeOutput(snapshot)
+      signal.throwIfAborted()
       this.#nextOffset += BigInt(snapshot.byteLength)
     })
   }
 
-  checkpoint(): Promise<VerifiedDurableRanges> {
+  checkpoint(signal: AbortSignal): Promise<VerifiedDurableRanges> {
     return this.#enqueue(async () => {
+      signal.throwIfAborted()
       this.#requireOpen()
       return new VerifiedDurableRanges(
         this.#ownership,
@@ -245,14 +260,16 @@ class SingleFileStreamTransaction implements OutputFileTransaction {
     })
   }
 
-  commit(): Promise<void> {
+  commit(signal: AbortSignal): Promise<void> {
     return this.#enqueue(async () => {
+      signal.throwIfAborted()
       this.#requireOpen()
       if (this.#nextOffset !== this.#file.exactSize) {
         throw new Error('Single-file stream is incomplete')
       }
       this.#started = true
       await this.#session.commitOutput()
+      signal.throwIfAborted()
       this.#settled = true
     })
   }

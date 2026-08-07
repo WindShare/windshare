@@ -11,6 +11,7 @@ import (
 var (
 	ErrRevisionStale        = errors.New("catalog file version candidate is stale")
 	ErrRevisionNotFound     = errors.New("catalog file was not found")
+	ErrRevisionUnreadable   = errors.New("file revision is unreadable")
 	ErrUnsupportedStability = errors.New("backend cannot prove stable file reads")
 	ErrSourceDrift          = errors.New("stable file source changed")
 	ErrRevisionDrift        = errors.New("file revision drifted")

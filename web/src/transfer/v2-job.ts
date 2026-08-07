@@ -1,541 +1,737 @@
 import { directoryId, fileId } from '../catalog/model'
 import { encodeBase64Url, equalBytes } from '../crypto/bytes'
-import {
-  snapshotPortableCatalogPath,
-  V2_CATALOG_PATH_DEPTH,
-} from '../catalog/path-policy'
-import { V2CatalogClient, V2DirectoryFailureError } from '../catalog/v2-client'
 import type { V2CommittedDirectory } from '../catalog/v2-page-store'
+import { V2_CATALOG_IDENTITY_BYTES } from '../catalog/v2-records'
 import type {
   V2CatalogEntry,
-  V2CatalogModifiedTime,
-  V2CatalogPage,
-  V2ShareDescriptor,
 } from '../catalog/v2-records'
-import { V2SelectionPolicy, type V2FrozenSelectionPolicy } from '../catalog/v2-selection'
-import { ByteRangeSet, byteRange } from '../content/geometry'
-import {
-  V2BlockLaneAttemptsError,
-  type V2BlockRangeReader,
-  type V2ContentLaneStatus,
-} from '../content/v2-broker'
-import {
-  V2BlockOperationError,
-  V2RemoteOperationError,
-  V2RemoteRevisionError,
-  V2RevisionChangedDuringRecoveryError,
-  V2RevisionLeaseExpiredError,
-  type V2OpenedRevision,
-  type V2RevisionReader,
-} from '../content/v2-session-services'
-import { BoundedTaskPool } from './bounded-task-pool'
+import type { V2FrozenSelectionPolicy } from '../catalog/v2-selection'
 import { SelectionMeasureTracker, type SelectionMeasure } from './measure'
-import { bindOutputFileTransaction } from './output-file-transaction'
-import type { JobOutcome } from './outcome'
 import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,
   TransferFailureAccumulator,
   jobOutcome,
 } from './outcome'
 import {
-  OutputSessionSuspendedError,
-  type OutputFile,
+  snapshotOutputDirectoryAdmission,
+  validateDirectoryAdmissionBinding,
+  validateOutputSessionBinding,
+  type DirectoryAdmission,
+  type OutputDirectoryAdmission,
   type OutputSession,
-  type V2OutputAuthority,
 } from './output-session'
 import {
-  V2OutputSelectionPlan,
-  type V2OutputSelection,
-  type V2OutputSelectionDirectory,
-  type V2OutputSelectionFile,
-} from './output-selection'
+  validateFinalTransferIntent,
+  snapshotTransferRunId,
+  type TransferIntent,
+  type TransferIntentDraft,
+  type TransferTraceEvent,
+} from './intent'
+import {
+  V2CatalogTraversalError,
+  V2OutputPausedError,
+  V2_MAXIMUM_PENDING_DIRECTORIES,
+  type DirectoryCursor,
+  type DirectoryWork,
+  type PendingFile,
+  type TransferJobOptions,
+  type TransferJobResult,
+} from './v2-job-contract'
+import {
+  isolatedDirectoryOutputFailure,
+  isPauseReason,
+  isV2FileScopedTransferFailure,
+} from './v2-job-failures'
+import { AsyncBoundedQueue, pendingFileMetadataBytes } from './v2-job-scheduler'
+import {
+  V2ExplicitSelectionTargetLedger,
+  V2SelectionTargetMissingError,
+} from './v2-job-selection'
+import { V2CatalogTraversalGuard } from './v2-job-traversal'
+import {
+  createTransferJobId,
+  descriptorRootId,
+  transferIntentAuthority,
+} from './v2-job-identity'
+import { transferJobLimits, type TransferJobLimits } from './v2-job-limits'
+import { V2TransferObservers } from './v2-job-observers'
+import { transferV2File } from './v2-job-file-transfer'
+import { discoverV2DirectoryGeneration } from './discovery/v2-generation-replay'
+import { advanceV2DirectoryFrame } from './discovery/v2-directory-stack'
+import { V2TransferProgressLedger } from './progress/v2-ledger'
+import {
+  V2_CLOSED_OUTPUT_SETTLEMENT,
+  outputSettlementTimeoutMilliseconds,
+  settleFailedV2Output,
+  type V2OutputSettlement,
+} from './settlement/v2-output'
 
-export const V2_MAXIMUM_CONCURRENT_FILES = 4
+export {
+  V2CatalogTraversalError,
+  V2DirectoryTraversalError,
+  V2DirectoryAncestry,
+  V2OutputPausedError,
+  V2_MAXIMUM_CATALOG_NODE_CLAIMS,
+  V2_MAXIMUM_CONCURRENT_DIRECTORIES,
+  V2_MAXIMUM_CONCURRENT_FILES,
+  V2_MAXIMUM_DIRECTORY_ADMISSIONS,
+  V2_MAXIMUM_PENDING_DIRECTORIES,
+  V2_MAXIMUM_PENDING_FILES,
+  V2_MAXIMUM_PENDING_FILE_METADATA_BYTES,
+} from './v2-job-contract'
+export type {
+  TransferJobOptions,
+  TransferJobResult,
+  TransferProgress,
+} from './v2-job-contract'
+export { isV2FileScopedTransferFailure } from './v2-job-failures'
+export { V2RangeReaderContractError } from './v2-job-file-transfer'
+export {
+  V2_DEFAULT_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS,
+  V2_MAXIMUM_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS,
+  V2OutputSettlementTimeoutError,
+} from './settlement/v2-output'
+export type { V2OutputSettlement, V2OutputSettlementFailure } from './settlement/v2-output'
 
-export class V2CatalogTraversalError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options)
-    this.name = 'V2CatalogTraversalError'
-  }
-}
-
-/** Tracks only the active recursion path; sibling width must never become retained ownership. */
-export class V2DirectoryAncestry {
-  readonly #active = new Set<string>()
-  #maximumDepth = 0
-
-  get depth(): number {
-    return this.#active.size
-  }
-
-  get maximumDepth(): number {
-    return this.#maximumDepth
-  }
-
-  enter(directoryIdText: string): () => void {
-    if (this.#active.has(directoryIdText)) {
-      throw new V2CatalogTraversalError('Catalog traversal revisited an ancestor identity')
-    }
-    this.#active.add(directoryIdText)
-    this.#maximumDepth = Math.max(this.#maximumDepth, this.#active.size)
-    let active = true
-    return () => {
-      if (!active || !this.#active.delete(directoryIdText)) {
-        throw new Error('Catalog traversal ancestry ownership was released twice')
-      }
-      active = false
-    }
-  }
-}
-
-export interface V2TransferProgress {
-  readonly discoveredFiles: number
-  readonly discoveredBytes: bigint
-  readonly writtenBytes: bigint
-  readonly completedFiles: number
-  readonly contentLanes: number
-  readonly discoveryComplete: boolean
-}
-
-export interface V2TransferJobOptions {
-  readonly descriptor: V2ShareDescriptor
-  readonly catalog: V2CatalogClient
-  readonly selection: V2SelectionPolicy
-  readonly revisions: V2RevisionReader
-  readonly broker: V2BlockRangeReader
-  readonly lanes: V2ContentLaneStatus
-  readonly output: V2OutputAuthority
-  readonly onProgress?: (progress: V2TransferProgress) => void
-  readonly onMeasure?: (measure: SelectionMeasure) => void
-  readonly maximumConcurrentFiles?: number
-}
-
-interface DirectoryCursor {
-  readonly id: Uint8Array<ArrayBuffer>
-  readonly idText: string
-  readonly path: readonly string[]
-  readonly ancestry: readonly string[]
-  readonly selected: boolean
-  readonly modifiedTime?: V2CatalogModifiedTime
-}
-
-export interface V2TransferJobResult {
-  readonly outcome: JobOutcome
-  readonly measure: SelectionMeasure
-  /** Preserves the terminal cause so callers can distinguish a user stop from a failed transfer. */
-  readonly abortReason?: unknown
-}
-
-/** Page cursors, rather than full directory arrays, bound memory during recursive discovery. */
-export class V2TransferJob {
-  readonly #options: V2TransferJobOptions
+/**
+ * Incremental producer/consumer transfer scheduler. A catalog generation is
+ * admitted only after its terminal page is authenticated; files from that
+ * generation then flow through a bounded queue while sibling scans continue.
+ */
+export class TransferJob {
+  readonly #options: TransferJobOptions
   readonly #selection: V2FrozenSelectionPolicy
+  readonly #limits: TransferJobLimits
   readonly #lifetime = new AbortController()
-  readonly #pool: BoundedTaskPool
-  readonly #plan = new V2OutputSelectionPlan()
   readonly #measure = new SelectionMeasureTracker()
   readonly #failures = new TransferFailureAccumulator()
-  readonly #directoryAncestry = new V2DirectoryAncestry()
-  #writtenBytes = 0n
-  #completedFiles = 0
-  #discoveryComplete = false
+  readonly #traversal: V2CatalogTraversalGuard
+  readonly #explicitTargets: V2ExplicitSelectionTargetLedger
+  readonly #observers: V2TransferObservers
+  readonly #finalizableDirectories: Array<{
+    readonly request: OutputDirectoryAdmission
+    readonly admission: DirectoryAdmission
+  }> = []
+  readonly #failedDirectoryIds = new Set<string>()
+  readonly #transferJobId: string
+  readonly #outputSettlementTimeoutMilliseconds: number
+  readonly #progress = new V2TransferProgressLedger()
+  #directoryAdmissionClaims = 0
+  #externallyCancelled = false
   #externalAbortCleanup: (() => void) | undefined
   #output: OutputSession | undefined
-  #rootGeneration: Uint8Array<ArrayBuffer> | undefined
+  #rootAdmission: DirectoryAdmission | undefined
+  #rootCommitted: V2CommittedDirectory | undefined
   #started = false
 
-  constructor(options: V2TransferJobOptions) {
-    const concurrency = options.maximumConcurrentFiles ?? V2_MAXIMUM_CONCURRENT_FILES
-    if (!Number.isSafeInteger(concurrency) || concurrency <= 0 ||
-        concurrency > V2_MAXIMUM_CONCURRENT_FILES) {
-      throw new RangeError('v2 transfer file concurrency exceeds its output-safe limit')
-    }
+  constructor(options: TransferJobOptions) {
     this.#options = options
     this.#selection = options.selection.snapshot()
-    this.#pool = new BoundedTaskPool(concurrency)
+    this.#limits = transferJobLimits(options)
+    this.#outputSettlementTimeoutMilliseconds = outputSettlementTimeoutMilliseconds(
+      options.outputSettlementTimeoutMilliseconds,
+    )
+    this.#transferJobId = snapshotTransferRunId(options.transferJobId ??
+      (options.intent !== undefined ? options.intent.transferJobId : createTransferJobId()))
+    this.#observers = new V2TransferObservers({
+      descriptor: options.descriptor,
+      transferJobId: this.#transferJobId,
+      lanes: options.lanes,
+      ...(options.protocolSessionId === undefined ? {} : { protocolSessionId: options.protocolSessionId }),
+      ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
+      ...(options.onMeasure === undefined ? {} : { onMeasure: options.onMeasure }),
+      ...(options.onTrace === undefined ? {} : { onTrace: options.onTrace }),
+    })
+    this.#explicitTargets = new V2ExplicitSelectionTargetLedger(this.#selection, this.#lifetime.signal)
+    this.#traversal = new V2CatalogTraversalGuard(
+      options.descriptor.shareInstance,
+      this.#limits.catalogNodeClaims,
+    )
   }
 
-  async run(signal?: AbortSignal): Promise<V2TransferJobResult> {
+  async run(signal?: AbortSignal): Promise<TransferJobResult> {
     if (this.#started) throw new Error('v2 transfer job can only run once')
     this.#started = true
     this.#observeAbort(signal)
-    const root: DirectoryCursor = {
-      id: this.#options.descriptor.syntheticRoot,
-      idText: this.#options.descriptor.syntheticRootId,
-      path: Object.freeze([]),
-      ancestry: Object.freeze([this.#options.descriptor.syntheticRootId]),
-      selected: this.#selection.defaultSelected,
-    }
     try {
-      this.#claimCatalogNode(root.id)
-      await this.#discoverDirectory(root)
-      const rootGeneration = this.#rootGeneration
-      if (rootGeneration === undefined) {
-        throw new V2CatalogTraversalError(
-          'Root catalog discovery did not establish an authenticated generation',
-        )
+      const authority = await transferIntentAuthority(this.#options, this.#selection, this.#transferJobId)
+      const { input } = authority
+      if (input.transferJobId !== this.#transferJobId) {
+        throw new V2OutputPausedError('Transfer intent does not match the job identity')
       }
-      this.#discoveryComplete = true
-      const measure = this.#failures.hasDirectoryFailures
-        ? this.#measure.fail()
-        : this.#measure.complete()
-      this.#options.onMeasure?.(measure)
+      const opened = await this.#openRunOutput(input, authority.expected)
+      this.#trace('intent-frozen', { decision: 'picker-confirmed' })
+      this.#output = opened.session
+      this.#trace('output-open', { outputSessionId: this.#output.identity.outputSessionId })
+      this.#rootAdmission = await this.#admitRoot(this.#output, opened.intent)
       this.#emitProgress()
-      const selection = await this.#plan.freeze(
-        this.#options.descriptor,
-        this.#selection,
-        rootGeneration,
-      )
-      const output = await this.#options.output.openSelection(selection, this.#lifetime.signal)
-      this.#output = output
-      for (const file of selection.files) await this.#scheduleFile(file, output)
-      await this.#pool.drain()
-      this.#lifetime.signal.throwIfAborted()
-      await this.#finalizeDirectories(selection, output)
-      const outcome = this.#failures.failureCount === 0
-        ? jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
-        : jobOutcome('CompletedWithErrors', this.#failures.snapshot())
-      await output.finishJob(outcome, this.#lifetime.signal)
-      return Object.freeze({ outcome, measure })
+      const result = await this.#runIncremental()
+      return result
     } catch (error) {
-      if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
-      await this.#pool.settle()
-      const output = this.#output
-      if (this.#lifetime.signal.reason instanceof OutputSessionSuspendedError &&
-          output?.suspendJob !== undefined) {
-        await output.suspendJob(error)
-      } else if (output !== undefined) {
-        await output.abortJob(error)
-      } else {
-        await this.#options.output.abort(error)
-      }
-      const measure = this.#measure.snapshot()
-      return Object.freeze({
-        outcome: jobOutcome('Aborted', this.#failures.snapshot()),
-        measure: measure.discovery === 'open' ? this.#measure.fail() : measure,
-        abortReason: error,
-      })
+      return this.#settleRunFailure(error)
     } finally {
       this.#externalAbortCleanup?.()
     }
   }
 
-  async #discoverDirectory(cursor: DirectoryCursor): Promise<boolean> {
-    this.#lifetime.signal.throwIfAborted()
-    if (cursor.path.length > V2_CATALOG_PATH_DEPTH) {
-      throw new V2CatalogTraversalError('Catalog traversal exceeded the protocol path depth')
-    }
-    const leaveDirectory = this.#directoryAncestry.enter(cursor.idText)
-    try {
-      const directory = await this.#loadDirectory(cursor)
-      if (directory === undefined) return false
-      let generation: Uint8Array<ArrayBuffer> | undefined
-      let selectedSubtree = cursor.selected
-      let pageIndex = 0
-      for await (const page of this.#options.catalog.pages(directory, this.#lifetime.signal)) {
-        generation = authenticatedPageGeneration(
-          this.#options.descriptor,
-          cursor,
-          page,
-          generation,
-          pageIndex,
-        )
-        if (cursor.path.length === 0) this.#rootGeneration ??= generation.slice()
-        for (const entry of page.entries) {
-          selectedSubtree = await this.#discoverEntry(cursor, generation, entry) || selectedSubtree
+  async #openRunOutput(
+    input: TransferIntent | TransferIntentDraft,
+    expected: TransferIntentDraft,
+  ): Promise<{ readonly intent: TransferIntent; readonly session: OutputSession }> {
+    const opened = 'output' in input
+      ? {
+          intent: input,
+          session: await this.#options.output.openOutput(input, this.#lifetime.signal),
         }
-        pageIndex += 1
-      }
-      if (generation === undefined || pageIndex !== directory.pageCount) {
-        throw new V2CatalogTraversalError('Committed catalog directory has an incomplete page cursor')
-      }
-      if (directory.omittedCount > 0n) {
-        this.#recordDirectoryFailure(
-          cursor.idText,
-          new Error(`Directory omitted ${directory.omittedCount} entries`),
-        )
-      }
-      if (cursor.path.length > 0 && selectedSubtree) {
-        this.#plan.addDirectory({
-          path: cursor.path,
-          directoryId: cursor.id,
-          generation,
-          ...(cursor.modifiedTime === undefined ? {} : { modifiedTime: cursor.modifiedTime }),
-        })
-      }
-      return selectedSubtree
-    } finally {
-      leaveDirectory()
-    }
+      : await this.#options.output.confirmOutput(input, this.#lifetime.signal)
+    // From the moment an authority returns a session, this job owns its
+    // settlement even if the authority also returned a mismatched intent.
+    this.#output = opened.session
+    const intent = await validateFinalTransferIntent(opened.intent, expected)
+    const session = validateOutputSessionBinding(intent, opened.session)
+    return Object.freeze({ intent, session })
   }
 
-  async #loadDirectory(cursor: DirectoryCursor): Promise<V2CommittedDirectory | undefined> {
+  async #settleRunFailure(error: unknown): Promise<TransferJobResult> {
+    if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
+    const output = this.#output
+    const settlement = await settleFailedV2Output({
+      ...(output === undefined ? {} : { output }),
+      authority: this.#options.output,
+      reason: error,
+      preferRetention: isPauseReason(error) || output !== undefined,
+      timeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,
+    })
+    const discoveryWasOpen = this.#measure.snapshot().discovery === 'open'
+    let measure = this.#measure.snapshot()
+    if (discoveryWasOpen) {
+      measure = this.#measure.fail()
+      this.#observers.measure(measure)
+      this.#emitProgress()
+    }
+    const status = failedJobStatus(error, settlement, this.#externallyCancelled)
+    this.#trace(
+      failedJobTraceName(status),
+      { decision: settlement.kind },
+    )
+    return Object.freeze({
+      outcome: jobOutcome(status, this.#failures.snapshot()),
+      settlement,
+      measure,
+      abortReason: error,
+      transferJobId: this.#transferJobId,
+    })
+  }
+
+  async #runIncremental(): Promise<TransferJobResult> {
+    const rootAdmission = this.#rootAdmission
+    if (rootAdmission === undefined) throw new V2CatalogTraversalError('Synthetic root was not admitted')
+    const directoryQueue = new AsyncBoundedQueue<DirectoryWork>(
+      V2_MAXIMUM_PENDING_DIRECTORIES,
+      BigInt(V2_MAXIMUM_PENDING_DIRECTORIES),
+      () => 1n,
+      true,
+    )
+    const fileQueue = new AsyncBoundedQueue<PendingFile>(
+      this.#limits.pendingFiles,
+      this.#limits.pendingFileMetadataBytes,
+      pendingFileMetadataBytes,
+    )
+    const root: DirectoryCursor = {
+      id: this.#options.descriptor.syntheticRoot.slice(),
+      idText: descriptorRootId(this.#options.descriptor),
+      path: Object.freeze([]),
+      ancestry: Object.freeze([descriptorRootId(this.#options.descriptor)]),
+      selected: this.#selection.directorySelected(descriptorRootId(this.#options.descriptor), []),
+    }
+    this.#traversal.claimNode(root.id)
+    await directoryQueue.push({
+      cursor: root,
+      materializeParent: async () => rootAdmission,
+    }, this.#lifetime.signal)
+
+    const directoryWorkers = Array.from({ length: this.#limits.concurrentDirectories }, () =>
+      this.#directoryWorker(directoryQueue, fileQueue),
+    )
+    const fileWorkers = Array.from({ length: this.#limits.concurrentFiles }, () =>
+      this.#fileWorker(fileQueue),
+    )
     try {
-      return await this.#options.catalog.loadDirectory(cursor.id, {
-        signal: this.#lifetime.signal,
-      })
+      await Promise.all(directoryWorkers)
+      directoryQueue.close()
+      fileQueue.close()
+      this.#finishDiscovery()
+      await Promise.all(fileWorkers)
     } catch (error) {
-      if (error instanceof V2DirectoryFailureError) {
-        this.#recordDirectoryFailure(cursor.idText, error.failure)
-        return undefined
-      }
-      if (error instanceof V2RemoteOperationError && error.scope === 'directory') {
-        this.#recordDirectoryFailure(cursor.idText, error)
-        return undefined
-      }
+      // A queue failure is a job-wide failure. Abort the shared lifetime before
+      // draining workers so in-flight catalog, content, and output operations
+      // cannot outlive the authority whose failure made their work invalid.
+      if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
+      directoryQueue.abort(error)
+      fileQueue.abort(error)
+      await Promise.allSettled([...directoryWorkers, ...fileWorkers])
       throw error
     }
-  }
 
-  async #discoverEntry(
-    cursor: DirectoryCursor,
-    parentGeneration: Uint8Array<ArrayBuffer>,
-    entry: V2CatalogEntry,
-  ): Promise<boolean> {
+    const measure = this.#measure.snapshot()
+    const output = this.#output
+    if (output === undefined) throw new Error('output session disappeared before finalization')
     this.#lifetime.signal.throwIfAborted()
-    let path: readonly string[]
-    try {
-      path = snapshotPortableCatalogPath([...cursor.path, entry.name])
-    } catch (cause) {
-      throw new V2CatalogTraversalError('Catalog entry exceeded the protocol path policy', { cause })
-    }
-    this.#claimCatalogNode(entry.id)
-    if (entry.kind === 'file') {
-      if (!this.#selection.selected(entry, cursor.ancestry)) return false
-      this.#plan.addFile({
-        path,
-        fileId: entry.id,
-        parentDirectoryId: cursor.id,
-        parentGeneration,
-        expectedSize: entry.expectedSize,
-        ...(entry.modifiedTime === undefined ? {} : { modifiedTime: entry.modifiedTime }),
-      })
-      const measure = this.#measure.observeUniqueFile(entry.expectedSize)
-      this.#options.onMeasure?.(measure)
-      this.#emitProgress()
-      return true
-    }
-    const selected = this.#selection.selected(entry, cursor.ancestry)
-    if (!this.#selection.shouldDiscover(entry.idText, cursor.ancestry)) return false
-    return this.#discoverDirectory({
-      id: entry.id,
-      idText: entry.idText,
-      path,
-      ancestry: Object.freeze([...cursor.ancestry, entry.idText]),
-      selected,
-      ...(entry.modifiedTime === undefined ? {} : { modifiedTime: entry.modifiedTime }),
+    await this.#finalizeDirectories(output)
+    const outcome = this.#failures.failureCount === 0
+      ? jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
+      : jobOutcome('CompletedWithErrors', this.#failures.snapshot())
+    await output.finishJob(outcome, this.#lifetime.signal)
+    this.#trace('output-finalized', { outputSessionId: output.identity.outputSessionId })
+    return Object.freeze({
+      outcome,
+      settlement: V2_CLOSED_OUTPUT_SETTLEMENT,
+      measure,
+      transferJobId: this.#transferJobId,
     })
   }
 
-  #claimCatalogNode(nodeId: Uint8Array): void {
-    try {
-      this.#plan.claimNode(nodeId)
-    } catch (cause) {
-      throw new V2CatalogTraversalError(
-        'Catalog traversal could not claim a unique bounded node identity',
-        { cause },
-      )
+  async #directoryWorker(
+    queue: AsyncBoundedQueue<DirectoryWork>,
+    files: AsyncBoundedQueue<PendingFile>,
+  ): Promise<void> {
+    while (true) {
+      const work = await queue.pop(this.#lifetime.signal)
+      if (work === undefined) return
+      try {
+        await this.#runDirectoryStack(work, queue, files)
+      } finally {
+        queue.taskDone()
+      }
     }
   }
 
-  #recordDirectoryFailure(id: string, reason: unknown): void {
-    this.#failures.record(Object.freeze({
-      kind: 'directory',
-      directoryId: directoryId(id),
-      reason,
-    }))
+  async #runDirectoryStack(
+    initial: DirectoryWork,
+    directories: AsyncBoundedQueue<DirectoryWork>,
+    files: AsyncBoundedQueue<PendingFile>,
+  ): Promise<void> {
+    const stack: Array<{
+      readonly work: DirectoryWork
+      readonly discovery: AsyncGenerator<DirectoryWork, void>
+    }> = [{ work: initial, discovery: this.#discoverDirectory(initial, files) }]
+    try {
+      while (stack.length > 0) {
+        const frame = stack[stack.length - 1]
+        if (frame === undefined) throw new Error('Directory discovery stack lost its active frame')
+        const next = await advanceV2DirectoryFrame(frame, (directoryId, error) => {
+          this.#recordDirectoryFailure(directoryId, error)
+          this.#trace('discovery-failed', { decision: 'directory-isolated' })
+        })
+        if (next === undefined) {
+          stack.pop()
+          continue
+        }
+        if (next.done) {
+          stack.pop()
+          continue
+        }
+        if (directories.tryPush(next.value, this.#lifetime.signal)) continue
+
+        // A worker never waits for another directory worker to consume its
+        // output. An explicit depth stack preserves the bounded breadth queue
+        // without recursive calls or consumer starvation.
+        stack.push({ work: next.value, discovery: this.#discoverDirectory(next.value, files) })
+      }
+    } finally {
+      while (stack.length > 0) {
+        await stack.pop()?.discovery.return(undefined)
+      }
+    }
   }
 
-  async #scheduleFile(
-    file: V2OutputSelectionFile,
-    output: OutputSession,
-  ): Promise<void> {
-    this.#lifetime.signal.throwIfAborted()
-    await this.#pool.waitForCapacity()
-    this.#lifetime.signal.throwIfAborted()
-    this.#pool.run(async () => {
+  async #fileWorker(queue: AsyncBoundedQueue<PendingFile>): Promise<void> {
+    while (true) {
+      const file = await queue.pop(this.#lifetime.signal)
+      if (file === undefined) return
       try {
-        await this.#transferFile(file, output)
+        await file.ready
+        this.#lifetime.signal.throwIfAborted()
+        await this.#transferFile(file)
       } catch (error) {
-        if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
+        if (this.#lifetime.signal.aborted) throw error
+        if (isV2FileScopedTransferFailure(error)) {
+          this.#recordFileFailure(file.entry, error)
+          continue
+        }
         throw error
       }
+    }
+  }
+
+  async *#discoverDirectory(
+    work: DirectoryWork,
+    files: AsyncBoundedQueue<PendingFile>,
+  ): AsyncGenerator<DirectoryWork, void> {
+    const { cursor } = work
+    const validateEntireGeneration = cursor.selected ||
+      (cursor.path.length === 0 && !this.#explicitTargets.hasPendingTargets)
+    const discoverySignal = this.#explicitTargets.discoverySignal(validateEntireGeneration)
+    yield* discoverV2DirectoryGeneration({
+      cursor,
+      catalog: this.#options.catalog,
+      traversal: this.#traversal,
+      lifetimeSignal: this.#lifetime.signal,
+      discoverySignal,
+      validateEntireGeneration,
+      ...(this.#rootCommitted === undefined ? {} : { rootCommitted: this.#rootCommitted }),
+      opaqueSearchSatisfied: () => this.#explicitTargets.opaqueSearchSatisfied(validateEntireGeneration),
+      observeDirectory: (id) => this.#explicitTargets.observeDirectory(id),
+      observeEntry: (entry) => this.#observeCatalogEntry(cursor, entry),
+      generationCommitted: (committed) => {
+        if (cursor.path.length === 0) return
+        this.#trace('directory-generation-committed', {
+          directoryId: cursor.idText,
+          generation: encodeBase64Url(committed.generation),
+          decision: 'authenticated',
+        })
+      },
+      recordDirectoryFailure: (id, error) => this.#recordDirectoryFailure(id, error),
+      replayConsumer: (committed) => {
+        const materialize = this.#directoryMaterializer(work, cursor, committed)
+        return {
+          materializeSelectedDirectory: async () => { await materialize() },
+          prepare: (entry) => this.#prepareCatalogEntry(cursor, materialize, entry, files),
+        }
+      },
     })
   }
 
-  async #transferFile(
-    file: V2OutputSelectionFile,
-    output: OutputSession,
-  ): Promise<void> {
-    let opened: V2OpenedRevision | undefined
-    let transaction: ReturnType<typeof bindOutputFileTransaction>['transaction'] | undefined
-    try {
-      opened = await this.#options.revisions.open(file.fileId, this.#lifetime.signal)
-      if (opened.descriptor.exactSize !== file.expectedSize) {
-        throw new V2FileRevisionChangedError(
-          'Opened revision size changed from its committed catalog entry',
-        )
-      }
-      const outputFile: OutputFile = {
-        source: {
-          shareInstance: opened.descriptor.shareInstanceId,
-          fileId: opened.descriptor.fileIdText,
-          fileRevision: opened.descriptor.fileRevisionText,
-        },
-        path: file.path,
-        exactSize: opened.descriptor.exactSize,
-        ...(file.modifiedTime === undefined || !output.capabilities.modificationTime
-          ? {}
-          : { modifiedTimeMilliseconds: file.modifiedTime.milliseconds }),
-      }
-      const bound = bindOutputFileTransaction(
-        await this.#fileOutputOperation(
-          'Unable to begin the output file transaction',
-          () => output.beginFile(outputFile),
-        ),
-        outputFile,
-        output.identity,
-      )
-      transaction = bound.transaction
-      const wanted = new ByteRangeSet(outputFile.exactSize, [byteRange(0n, outputFile.exactSize)])
-      const missing = bound.durableRanges.asRangeSet().missingFrom(wanted)
-      for (const range of missing.ranges) {
-        for await (const slice of this.#options.broker.readRange(
-          opened.descriptor,
-          opened.leaseId,
-          range,
-          { signal: this.#lifetime.signal, priority: 'download' },
-        )) {
-          await this.#fileOutputOperation(
-            'Unable to write the output file range',
-            () => transaction?.writeRange(slice.offset, slice.data) ?? Promise.resolve(),
-          )
-          await this.#fileOutputOperation(
-            'Unable to checkpoint the output file',
-            () => transaction?.checkpoint() ?? Promise.resolve(undefined),
-          )
-          this.#writtenBytes += BigInt(slice.data.byteLength)
-          this.#emitProgress()
-        }
-      }
-      await this.#fileOutputOperation(
-        'Unable to commit the output file',
-        () => transaction?.commit() ?? Promise.resolve(),
-      )
-      this.#completedFiles += 1
+  #observeCatalogEntry(cursor: DirectoryCursor, entry: V2CatalogEntry): boolean {
+    this.#traversal.entryPath(cursor, entry)
+    this.#traversal.claimNode(entry.id)
+    this.#explicitTargets.observe(entry)
+    const selected = this.#selection.selected(entry, cursor.ancestry)
+    if (entry.kind === 'file' && selected) {
+      const measure = this.#measure.observeUniqueFile(entry.expectedSize)
+      this.#observers.measure(measure)
       this.#emitProgress()
-    } catch (error) {
-      const disposition = await transaction?.abort(error).catch(() => 'JobOutputCompromised' as const)
-      if (disposition === 'JobOutputCompromised' ||
-          !isV2FileScopedTransferFailure(error)) throw error
-      this.#failures.record(Object.freeze({
-        kind: 'file',
-        fileId: fileId(encodeBase64Url(file.fileId)),
-        reason: error,
-      }))
-    } finally {
-      await opened?.release().catch((error: unknown) => {
-        if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
-      })
     }
+    return selected
   }
 
-  async #finalizeDirectories(
-    selection: V2OutputSelection,
-    output: OutputSession,
-  ): Promise<void> {
-    for (let index = selection.directories.length - 1; index >= 0; index -= 1) {
-      const directory = selection.directories[index]
-      if (directory === undefined) continue
-      await output.finalizeDirectory(
-        this.#outputDirectory(directory, output),
-        this.#lifetime.signal,
-      )
+  async #prepareCatalogEntry(
+    cursor: DirectoryCursor,
+    materialize: () => Promise<DirectoryAdmission>,
+    entry: V2CatalogEntry,
+    files: AsyncBoundedQueue<PendingFile>,
+  ): Promise<DirectoryWork | undefined> {
+    this.#lifetime.signal.throwIfAborted()
+    const path = this.#traversal.entryPath(cursor, entry)
+    if (entry.kind === 'file') {
+      await this.#enqueueFile(cursor, materialize, entry, path, files)
+      return undefined
     }
-  }
-
-  #outputDirectory(directory: V2OutputSelectionDirectory, output: OutputSession) {
+    const selected = this.#selection.selected(entry, cursor.ancestry)
+    if (!selected && !this.#explicitTargets.hasPendingTargets) return undefined
+    if (!this.#selection.shouldDiscover(entry.idText, cursor.ancestry)) return undefined
     return {
-      path: directory.path,
-      ...(directory.modifiedTime === undefined || !output.capabilities.modificationTime
-        ? {}
-        : { modifiedTimeMilliseconds: directory.modifiedTime.milliseconds }),
+      cursor: {
+        id: entry.id.slice(),
+        idText: entry.idText,
+        path,
+        ancestry: Object.freeze([...cursor.ancestry, entry.idText]),
+        selected,
+        ...(entry.modifiedTime === undefined ? {} : { modifiedTime: entry.modifiedTime }),
+      },
+      materializeParent: materialize,
     }
   }
 
-  async #fileOutputOperation<T>(message: string, operation: () => Promise<T>): Promise<T> {
+  async #enqueueFile(
+    cursor: DirectoryCursor,
+    materialize: () => Promise<DirectoryAdmission>,
+    entry: Extract<V2CatalogEntry, { kind: 'file' }>,
+    path: readonly string[],
+    files: AsyncBoundedQueue<PendingFile>,
+  ): Promise<void> {
+    if (!this.#selection.selected(entry, cursor.ancestry)) return
+    const admission = await materialize()
+    let release: () => void = () => undefined
+    const ready = new Promise<void>((resolve) => { release = resolve })
     try {
-      return await operation()
-    } catch (cause) {
-      // Output failures are file-local only when they originate at the output
-      // boundary. Protocol/authentication failures must retain their session scope.
-      if (cause instanceof OutputSessionSuspendedError || this.#lifetime.signal.aborted) throw cause
-      throw new V2FileOutputError(message, { cause })
+      await files.push({
+        entry,
+        path,
+        parentAdmission: admission,
+        ready,
+        ...(entry.modifiedTime === undefined ? {} : { modifiedTime: entry.modifiedTime }),
+      }, this.#lifetime.signal)
+      this.#trace('file-enqueued', {
+        fileId: entry.idText,
+        selectionDecision: this.#selection.decision(entry, cursor.ancestry),
+      })
+    } finally {
+      release()
     }
   }
 
-  #observeAbort(signal?: AbortSignal): void {
-    if (signal === undefined) return
-    const abort = () => this.#lifetime.abort(
-      signal.reason ?? new DOMException('Transfer aborted', 'AbortError'),
+  async #admitRoot(output: OutputSession, intent: TransferIntent): Promise<DirectoryAdmission> {
+    const rootCommitted = await this.#options.catalog.loadDirectory(
+      this.#options.descriptor.syntheticRoot,
+      { signal: this.#lifetime.signal },
     )
-    signal.addEventListener('abort', abort, { once: true })
-    this.#externalAbortCleanup = () => signal.removeEventListener('abort', abort)
-    if (signal.aborted) abort()
+    if (rootCommitted === undefined || !equalBytes(rootCommitted.directoryId, this.#options.descriptor.syntheticRoot) ||
+        rootCommitted.generation.byteLength !== V2_CATALOG_IDENTITY_BYTES ||
+        rootCommitted.generation.every((byte) => byte === 0)) {
+      throw new V2CatalogTraversalError('Synthetic root committed generation is unavailable')
+    }
+    if (rootCommitted.omittedCount !== 0n) {
+      throw new V2CatalogTraversalError('Synthetic root committed generation omitted catalog entries')
+    }
+    this.#rootCommitted = rootCommitted
+    const request = snapshotOutputDirectoryAdmission({
+      directoryId: intent.syntheticRoot,
+      generation: encodeBase64Url(rootCommitted.generation),
+      path: Object.freeze([]),
+    })
+    this.#trace('directory-generation-committed', {
+      directoryId: request.directoryId,
+      generation: request.generation,
+      decision: 'authenticated',
+    })
+    this.#reserveDirectoryAdmission()
+    const returned = await output.admitDirectory(request, this.#lifetime.signal)
+    const admission = validateDirectoryAdmissionBinding(request, returned)
+    this.#trace('directory-admitted', {
+      directoryId: request.directoryId,
+      generation: request.generation,
+      outputSessionId: output.identity.outputSessionId,
+      decision: 'accepted',
+    })
+    return admission
+  }
+
+  #directoryMaterializer(
+    work: DirectoryWork,
+    cursor: DirectoryCursor,
+    committed: V2CommittedDirectory,
+  ): () => Promise<DirectoryAdmission> {
+    if (cursor.path.length === 0) return work.materializeParent
+    let materialized: Promise<DirectoryAdmission> | undefined
+    return () => {
+      materialized ??= (async () => {
+        const admitted = await this.#admitDirectory(
+          cursor,
+          committed,
+          await work.materializeParent(),
+        )
+        this.#finalizableDirectories.push(admitted)
+        this.#trace('directory-admitted', {
+          directoryId: cursor.idText,
+          generation: encodeBase64Url(committed.generation),
+          outputSessionId: admitted.outputSessionId,
+          decision: 'accepted',
+        })
+        return admitted.admission
+      })()
+      return materialized
+    }
+  }
+
+  async #admitDirectory(
+    cursor: DirectoryCursor,
+    committed: V2CommittedDirectory,
+    parentAdmission: DirectoryAdmission,
+  ): Promise<{
+    readonly request: OutputDirectoryAdmission
+    readonly admission: DirectoryAdmission
+    readonly outputSessionId: string
+  }> {
+    this.#reserveDirectoryAdmission()
+    const output = this.#output
+    if (output === undefined) throw new V2OutputPausedError('Output admission is unavailable')
+    const request: OutputDirectoryAdmission = snapshotOutputDirectoryAdmission({
+      directoryId: encodeBase64Url(cursor.id),
+      generation: encodeBase64Url(committed.generation),
+      path: cursor.path,
+      parentAdmission,
+      ...(cursor.modifiedTime === undefined ? {} : {
+        modifiedTime: cursor.modifiedTime,
+      }),
+    })
+    let returned: DirectoryAdmission
+    try {
+      returned = await output.admitDirectory(request, this.#lifetime.signal)
+    } catch (error) {
+      const isolated = isolatedDirectoryOutputFailure(
+        error,
+        output.capabilities.fileFailureIsolation,
+        cursor.idText,
+      )
+      throw isolated ?? error
+    }
+    const admission = validateDirectoryAdmissionBinding(request, returned)
+    return Object.freeze({
+      request,
+      admission,
+      outputSessionId: output.identity.outputSessionId,
+    })
+  }
+
+  #reserveDirectoryAdmission(): void {
+    if (this.#directoryAdmissionClaims >= this.#limits.directoryAdmissions) {
+      throw new V2OutputPausedError('Directory admission budget was exhausted')
+    }
+    this.#directoryAdmissionClaims += 1
+  }
+
+  async #transferFile(file: PendingFile): Promise<void> {
+    const output = this.#output
+    if (output === undefined) throw new Error('output session is unavailable')
+    this.#trace('file-started', { fileId: file.entry.idText, outputSessionId: output.identity.outputSessionId })
+    await transferV2File({
+      descriptor: this.#options.descriptor,
+      revisions: this.#options.revisions,
+      broker: this.#options.broker,
+      output,
+      signal: this.#lifetime.signal,
+      outputSettlementTimeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,
+      onWriteAcknowledged: (bytes, firstWrite) => {
+        this.#progress.acknowledgeWrite(bytes)
+        if (firstWrite) this.#trace('file-written', {
+          fileId: file.entry.idText,
+          outputSessionId: output.identity.outputSessionId,
+          decision: 'first-write',
+        })
+        this.#emitProgress()
+      },
+      onComplete: (exactSize) => {
+        this.#progress.completeFile(exactSize)
+        this.#trace('file-completed', {
+          fileId: file.entry.idText,
+          outputSessionId: output.identity.outputSessionId,
+        })
+        this.#emitProgress()
+      },
+    }, file)
+  }
+
+  async #finalizeDirectories(output: OutputSession): Promise<void> {
+    const signal = this.#lifetime.signal
+    const ordered = [...this.#finalizableDirectories].sort((left, right) =>
+      right.request.path.length - left.request.path.length)
+    for (const { request } of ordered) {
+      signal.throwIfAborted()
+      if (request.path.length === 0) continue
+      const parentAdmission = request.parentAdmission
+      if (parentAdmission === undefined) {
+        throw new V2CatalogTraversalError('Admitted child directory lost its parent authority')
+      }
+      try {
+        await output.finalizeDirectory({
+          path: request.path,
+          directoryId: request.directoryId,
+          generation: request.generation,
+          parentAdmission,
+          ...(request.modifiedTime === undefined ? {} : { modifiedTime: request.modifiedTime }),
+        }, signal)
+        this.#trace('directory-finalized', {
+          directoryId: request.directoryId,
+          generation: request.generation,
+          outputSessionId: output.identity.outputSessionId,
+          decision: 'accepted',
+        })
+      } catch (error) {
+        const isolated = isolatedDirectoryOutputFailure(
+          error,
+          output.capabilities.fileFailureIsolation,
+          request.directoryId,
+        )
+        if (isolated === undefined) throw error
+        this.#recordDirectoryFailure(request.directoryId, isolated)
+        this.#trace('directory-finalized', {
+          directoryId: request.directoryId,
+          generation: request.generation,
+          outputSessionId: output.identity.outputSessionId,
+          decision: 'isolated-failure',
+        })
+      }
+    }
+  }
+
+  #recordDirectoryFailure(idText: string, reason: unknown): void {
+    if (this.#failedDirectoryIds.has(idText)) return
+    this.#failedDirectoryIds.add(idText)
+    this.#progress.failDirectory()
+    this.#failures.record(Object.freeze({ kind: 'directory', directoryId: directoryId(idText), reason }))
+  }
+
+  #recordFileFailure(entry: Extract<V2CatalogEntry, { kind: 'file' }>, reason: unknown): void {
+    this.#failures.record(Object.freeze({ kind: 'file', fileId: fileId(entry.idText), reason }))
+    this.#progress.recordFileError()
+    this.#emitProgress()
+  }
+
+  #finishDiscovery(): SelectionMeasure {
+    if (this.#progress.failedDirectories === 0) {
+      for (const target of this.#explicitTargets.missing()) {
+        const reason = new V2SelectionTargetMissingError(target)
+        this.#failures.recordRepresentative(target.kind === 'directory'
+          ? Object.freeze({ kind: 'directory', directoryId: directoryId(target.idText), reason })
+          : Object.freeze({ kind: 'file', fileId: fileId(target.idText), reason }))
+        this.#progress.recordSelectionError()
+      }
+    }
+    const complete = this.#progress.failedDirectories === 0
+    const measure = complete ? this.#measure.complete() : this.#measure.fail()
+    this.#observers.measure(measure)
+    this.#emitProgress()
+    this.#trace(measure.discovery === 'failed' ? 'discovery-failed' : 'discovery-complete', {
+      decision: measure.discovery,
+    })
+    return measure
   }
 
   #emitProgress(): void {
     const measure = this.#measure.snapshot()
-    this.#options.onProgress?.(Object.freeze({
-      discoveredFiles: measure.discoveredFiles,
-      discoveredBytes: measure.discoveredBytes,
-      writtenBytes: this.#writtenBytes,
-      completedFiles: this.#completedFiles,
-      contentLanes: this.#options.lanes.size,
-      discoveryComplete: this.#discoveryComplete,
-    }))
+    this.#observers.progress(this.#progress.snapshot(measure, this.#output?.identity.outputSessionId))
+  }
+
+  #trace(
+    name: TransferTraceEvent['name'],
+    extra: Omit<
+      TransferTraceEvent['context'],
+      'shareInstance' | 'transferJobId' | 'protocolSessionId'
+    > = {},
+  ): void {
+    this.#observers.trace(name, extra)
+  }
+
+  #observeAbort(signal?: AbortSignal): void {
+    if (signal === undefined) return
+    const abort = () => {
+      if (this.#lifetime.signal.aborted) return
+      this.#externallyCancelled = true
+      this.#lifetime.abort(signal.reason ?? new DOMException('Transfer aborted', 'AbortError'))
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    this.#externalAbortCleanup = () => signal.removeEventListener('abort', abort)
+    if (signal.aborted) abort()
   }
 }
 
-function authenticatedPageGeneration(
-  descriptor: V2ShareDescriptor,
-  cursor: DirectoryCursor,
-  page: V2CatalogPage,
-  generation: Uint8Array<ArrayBuffer> | undefined,
-  pageIndex: number,
-): Uint8Array<ArrayBuffer> {
-  if (page.pageIndex !== pageIndex ||
-      !equalBytes(page.shareInstance, descriptor.shareInstance) ||
-      !equalBytes(page.directoryId, cursor.id) ||
-      (generation !== undefined && !equalBytes(page.generation, generation))) {
-    throw new V2CatalogTraversalError('Catalog page cursor changed authenticated authority')
-  }
-  return generation ?? page.generation.slice()
+type FailedJobStatus = 'Paused' | 'Aborted' | 'NeedsAttention'
+
+function failedJobStatus(
+  error: unknown,
+  settlement: V2OutputSettlement,
+  externallyCancelled: boolean,
+): FailedJobStatus {
+  if (settlement.kind === 'NeedsAttention') return 'NeedsAttention'
+  if (externallyCancelled) return 'Aborted'
+  if (isPauseReason(error)) return 'Paused'
+  if (settlement.kind === 'Discarded') return 'Aborted'
+  return 'Paused'
 }
 
-export function isV2FileScopedTransferFailure(error: unknown): boolean {
-  if (error instanceof V2RemoteOperationError) {
-    return error.scope === 'revision' || error.scope === 'block'
-  }
-  return error instanceof V2RemoteRevisionError ||
-    error instanceof V2RevisionLeaseExpiredError ||
-    error instanceof V2BlockOperationError ||
-    error instanceof V2BlockLaneAttemptsError ||
-    error instanceof V2RevisionChangedDuringRecoveryError ||
-    error instanceof V2FileRevisionChangedError ||
-    error instanceof V2FileOutputError
-}
-
-class V2FileRevisionChangedError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'V2FileRevisionChangedError'
-  }
-}
-
-class V2FileOutputError extends Error {
-  constructor(message: string, options: ErrorOptions) {
-    super(message, options)
-    this.name = 'V2FileOutputError'
-  }
+function failedJobTraceName(status: FailedJobStatus): TransferTraceEvent['name'] {
+  if (status === 'Paused') return 'job-paused'
+  if (status === 'Aborted') return 'job-cancelled'
+  return 'job-needs-attention'
 }

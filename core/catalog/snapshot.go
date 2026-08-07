@@ -395,6 +395,45 @@ type directorySequence struct {
 	terminal    bool
 }
 
+// DirectoryGenerationValidator incrementally authenticates the namespace
+// invariants that span page boundaries. Its retained collision state is bounded
+// by MaxDirectoryEntries, so callers do not need to materialize the generation.
+type DirectoryGenerationValidator struct {
+	sequence  directorySequence
+	seenNames map[[sha256.Size]byte]struct{}
+	seenNodes map[NodeID]struct{}
+}
+
+func (validator *DirectoryGenerationValidator) AcceptPage(page CatalogPage) error {
+	if err := validator.sequence.accept(page); err != nil {
+		return err
+	}
+	if validator.seenNames == nil {
+		validator.seenNames = make(map[[sha256.Size]byte]struct{})
+		validator.seenNodes = make(map[NodeID]struct{})
+	}
+	for _, entry := range page.entries {
+		// A fixed-width digest prevents a wide directory from retaining every
+		// attacker-controlled name while preserving fail-closed collision checks.
+		collisionKey := sha256.Sum256([]byte(siblingCollisionKey(entry.name)))
+		if _, exists := validator.seenNames[collisionKey]; exists {
+			return fmt.Errorf("%w: %q", ErrSiblingCollision, entry.name)
+		}
+		validator.seenNames[collisionKey] = struct{}{}
+		if _, exists := validator.seenNodes[entry.nodeID]; exists {
+			return fmt.Errorf("%w: duplicate node identity", ErrSiblingCollision)
+		}
+		validator.seenNodes[entry.nodeID] = struct{}{}
+	}
+	return nil
+}
+
+func (validator *DirectoryGenerationValidator) Finish() (CommittedDirectory, error) {
+	committed, err := validator.sequence.finish()
+	validator.seenNames, validator.seenNodes = nil, nil
+	return committed, err
+}
+
 func (s *directorySequence) accept(page CatalogPage) error {
 	if page.commitment.IsZero() {
 		return fmt.Errorf("%w: page %d has no commitment", ErrPageSequence, page.pageIndex)
@@ -451,32 +490,21 @@ func NewDirectorySnapshot(pages []CatalogPage) (DirectorySnapshot, error) {
 	if len(pages) == 0 {
 		return DirectorySnapshot{}, fmt.Errorf("%w: snapshot has no pages", ErrPageSequence)
 	}
-	var sequence directorySequence
-	seenNames := make(map[string]struct{})
-	seenNodes := make(map[NodeID]struct{})
+	var validator DirectoryGenerationValidator
 	estimatedMemoryBytes := uint64(DirectorySnapshotMemoryOverhead)
 	for index, page := range pages {
 		estimatedMemoryBytes += CatalogPageMemoryOverhead
 		if page.terminal != (index == len(pages)-1) {
 			return DirectorySnapshot{}, fmt.Errorf("%w: terminal marker at page %d", ErrPageSequence, index)
 		}
-		if err := sequence.accept(page); err != nil {
+		if err := validator.AcceptPage(page); err != nil {
 			return DirectorySnapshot{}, err
 		}
 		for _, entry := range page.entries {
 			estimatedMemoryBytes += uint64(CatalogEntryMemoryOverhead + CatalogNameMemoryOverhead + len(entry.name))
-			key := siblingCollisionKey(entry.name)
-			if _, exists := seenNames[key]; exists {
-				return DirectorySnapshot{}, fmt.Errorf("%w: %q", ErrSiblingCollision, entry.name)
-			}
-			seenNames[key] = struct{}{}
-			if _, exists := seenNodes[entry.nodeID]; exists {
-				return DirectorySnapshot{}, fmt.Errorf("%w: duplicate node identity", ErrSiblingCollision)
-			}
-			seenNodes[entry.nodeID] = struct{}{}
 		}
 	}
-	committed, err := sequence.finish()
+	committed, err := validator.Finish()
 	if err != nil {
 		return DirectorySnapshot{}, err
 	}

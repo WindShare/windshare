@@ -2,19 +2,22 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { V2CatalogClient } from '../../src/catalog/v2-client'
 import type { V2CommittedDirectory } from '../../src/catalog/v2-page-store'
-import { V2_CATALOG_PATH_DEPTH } from '../../src/catalog/path-policy'
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import { FileGeometry, byteRange } from '../../src/content/geometry'
 import type { V2BlockRangeReader } from '../../src/content/v2-broker'
-import type { V2RevisionReader } from '../../src/content/v2-session-services'
+import type { V2OpenedRevision, V2RevisionReader } from '../../src/content/v2-session-services'
 import { createBoundedPortableDownloadStream } from '../../src/output/portable/browser-download'
 import { SingleFileStreamOutputSession } from '../../src/output/streams/single-file'
+import { OutputCheckpointContractError } from '../../src/transfer/output-file-transaction'
 import {
-  VerifiedDurableRanges,
+  OutputBudgetExceededError,
+  type OutputFile,
   type OutputSession,
   type V2OutputAuthority,
 } from '../../src/transfer/output-session'
+import { createTransferIntentDraft, freezeTransferIntent } from '../../src/transfer/intent'
+import type { TransferTraceEvent } from '../../src/transfer/intent'
 import { SenderObjectError } from '../../src/crypto/sender-object'
 import { V2CborError, encodeCanonicalCbor } from '../../src/protocol/cbor'
 import {
@@ -23,12 +26,29 @@ import {
   V2RemoteRevisionError,
 } from '../../src/content/v2-session-services'
 import {
-  V2CatalogTraversalError,
-  V2DirectoryAncestry,
-  V2TransferJob,
+  TransferJob,
   isV2FileScopedTransferFailure,
 } from '../../src/transfer/v2-job'
 import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
+import {
+  catalogCommitment,
+  committedDirectory,
+  committedDirectoryFor,
+  directoryEntry,
+  fileEntry,
+  identity,
+  identityText,
+  opaqueOutputIdentityText,
+  openedRevision,
+  outputAuthority,
+  terminalBoundaryOutput,
+  traversalJob,
+  traversalOutput,
+  traversalPage,
+  wideIdentity,
+  wideIdentityNumber,
+  withTimeout,
+} from './v2-job-fixture'
 
 describe('v2 transfer failure domains', () => {
   it('keeps only typed revision and block domain errors file-local', () => {
@@ -89,10 +109,12 @@ describe('v2 portable output failure domain', () => {
     const committed = {
       directoryIdText: 'root',
       generationText: 'generation',
+      directoryId: identity(2),
+      generation: identity(3),
       pageCount: 1,
       entryCount: 1,
       omittedCount: 0n,
-      terminalCommitment: new Uint8Array(32),
+      terminalCommitment: catalogCommitment(),
     }
     const entry = {
       kind: 'file' as const,
@@ -120,11 +142,12 @@ describe('v2 portable output failure domain', () => {
       },
     } as unknown as V2BlockRangeReader
 
-    const result = await new V2TransferJob({
+    const result = await new TransferJob({
       descriptor: {
         shareInstance: identity(1),
         syntheticRoot: identity(2),
         syntheticRootId: 'root',
+        chunkSize: 4,
       } as never,
       catalog,
       selection: new V2SelectionPolicy(),
@@ -136,7 +159,7 @@ describe('v2 portable output failure domain', () => {
     }).run()
 
     expect(result.outcome).toEqual({
-      status: 'Aborted',
+      status: 'Paused',
       failures: [],
       failureCount: 0,
       omittedFailureCount: 0,
@@ -146,19 +169,29 @@ describe('v2 portable output failure domain', () => {
   })
 })
 
-describe('v2 terminal discovery boundary', () => {
-  it('freezes the whole selected tree before output or revision I/O', async () => {
+describe('v2 incremental discovery boundary', () => {
+  it('writes the first committed generation while a sibling directory is delayed', async () => {
     const root = identity(2)
-    const child = identity(3)
+    const sibling = identity(3)
     const selectedFile = identity(4)
-    let discoveryTerminal = false
     let outputOpened = false
     let revisionOpens = 0
+    let releaseSibling: () => void = () => undefined
+    let signalSiblingStarted: () => void = () => undefined
+    let resolveFirstWrite: () => void = () => undefined
+    const siblingStarted = new Promise<void>((resolve) => { signalSiblingStarted = resolve })
+    const siblingGate = new Promise<void>((resolve) => { releaseSibling = resolve })
+    const firstWrite = new Promise<void>((resolve) => { resolveFirstWrite = resolve })
+    const admittedPaths: string[][] = []
     const catalog = {
-      loadDirectory: async (id: Uint8Array) => committedDirectory(
-        id[0] === child[0] ? 'child' : 'root',
-        id[0] === child[0] ? 0 : 2,
-      ),
+      loadDirectory: async (id: Uint8Array) => {
+        if (id[0] === sibling[0]) {
+          signalSiblingStarted()
+          await siblingGate
+          return committedDirectory('child', 0)
+        }
+        return committedDirectory('root', 2)
+      },
       pages: async function* (directory: V2CommittedDirectory) {
         if (directory.directoryIdText === 'root') {
           yield traversalPage(root, [{
@@ -167,29 +200,58 @@ describe('v2 terminal discovery boundary', () => {
             idText: 'selected-file',
             name: 'selected.bin',
             expectedSize: 1n,
-          }, directoryEntry(child, 'child', 'empty')])
+          }, directoryEntry(sibling, 'child', 'delayed')])
           return
         }
-        yield traversalPage(child, [])
-        discoveryTerminal = true
+        yield traversalPage(sibling, [])
       },
     } as unknown as V2CatalogClient
     const output = terminalBoundaryOutput()
-    const outputAuthorityForSelection: V2OutputAuthority = {
-      openSelection: async (selection) => {
-        expect(discoveryTerminal).toBe(true)
-        expect(selection.files).toHaveLength(1)
-        expect(selection.directories.map((directory) => directory.path.join('/')))
-          .toEqual(['empty'])
-        outputOpened = true
-        return output
+    const outputWithAdmission: OutputSession = {
+      ...output,
+      admitDirectory: async (directory, signal) => {
+        const admission = await output.admitDirectory(directory, signal)
+        if (directory.path.length > 0) admittedPaths.push([...directory.path])
+        return admission
       },
-      abort: (reason: unknown) => output.abortJob(reason),
+      beginFile: async (file, signal) => {
+        const begun = await output.beginFile(file, signal)
+        const transaction = begun.transaction
+        return {
+          durableRanges: begun.durableRanges,
+          transaction: {
+            writeRange: async (offset, data, operationSignal) => {
+              await transaction.writeRange(offset, data, operationSignal)
+              resolveFirstWrite()
+            },
+            checkpoint: (operationSignal) => transaction.checkpoint(operationSignal),
+            commit: (operationSignal) => transaction.commit(operationSignal),
+            abort: (reason) => transaction.abort(reason),
+          },
+        }
+      },
+    }
+    const authority: V2OutputAuthority = {
+      confirmOutput: async (draft) => {
+        outputOpened = true
+        return {
+          intent: await freezeTransferIntent(draft, {
+            target: opaqueOutputIdentityText(200),
+            targetKind: 2,
+            backend: 'test-terminal',
+            format: 'directory',
+          }),
+          session: outputWithAdmission,
+        }
+      },
+      openOutput: async () => {
+        outputOpened = true
+        return outputWithAdmission
+      },
+      abort: (reason: unknown) => outputWithAdmission.abortJob(reason),
     }
     const revisions = {
       open: async () => {
-        expect(discoveryTerminal).toBe(true)
-        expect(outputOpened).toBe(true)
         revisionOpens += 1
         return {
           descriptor: {
@@ -213,418 +275,730 @@ describe('v2 terminal discovery boundary', () => {
       },
     } as unknown as V2BlockRangeReader
 
-    const result = await new V2TransferJob({
-      descriptor: { shareInstance: identity(1), syntheticRoot: root, syntheticRootId: 'root' } as never,
+    const resultPromise = new TransferJob({
+      descriptor: { shareInstance: identity(1), syntheticRoot: root, syntheticRootId: 'root', chunkSize: 1 } as never,
       catalog,
       selection: new V2SelectionPolicy(),
       revisions,
       broker,
       lanes: { size: 1 },
-      output: outputAuthorityForSelection,
+      output: authority,
       maximumConcurrentFiles: 1,
+      maximumConcurrentDirectories: 2,
     }).run()
 
-    expect(result.outcome.status).toBe('Succeeded')
+    await siblingStarted
+    await Promise.race([
+      firstWrite,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('first file write was delayed by sibling discovery')), 1_000)),
+    ])
+    expect(outputOpened).toBe(true)
     expect(revisionOpens).toBe(1)
-  })
-})
+    expect(admittedPaths).toEqual([])
 
-describe('v2 catalog traversal authority', () => {
-  it('releases a million sequential sibling identities from path-local ancestry', () => {
-    const ancestry = new V2DirectoryAncestry()
-    const leaveRoot = ancestry.enter('root')
-    for (let index = 0; index < 1_000_000; index += 1) {
-      const leaveSibling = ancestry.enter(`sibling-${index}`)
-      leaveSibling()
-    }
-    expect(ancestry.depth).toBe(1)
-    expect(ancestry.maximumDepth).toBe(2)
-    leaveRoot()
-    expect(ancestry.depth).toBe(0)
+    releaseSibling()
+    const result = await resultPromise
+    expect(result.outcome.status).toBe('Succeeded')
+    expect(admittedPaths).toEqual([['delayed']])
   })
 
-  it('aborts a corrupt cached root cycle after one directory load', async () => {
-    const rootId = identity(2)
-    let loads = 0
+  it('applies pending-file item and byte backpressure while a worker is busy', async () => {
+    const root = identity(2)
+    const files = [11, 12, 13].map((first) => ({
+      kind: 'file' as const,
+      id: identity(first),
+      idText: `file-${first}`,
+      name: `file-${first}.bin`,
+      expectedSize: 1n,
+    }))
+    let pageResumed = false
+    let openedFiles = 0
+    let signalFirstStarted: () => void = () => undefined
+    const firstStartedSignal = new Promise<void>((resolve) => { signalFirstStarted = resolve })
     const catalog = {
-      loadDirectory: async () => {
-        loads += 1
-        return committedDirectory('root', 1)
-      },
+      loadDirectory: async () => committedDirectory('root', files.length),
       pages: async function* () {
-        yield traversalPage(rootId, [directoryEntry(rootId, 'root', 'root-loop')])
+        yield traversalPage(root, files)
+        pageResumed = true
       },
     } as unknown as V2CatalogClient
-    const output = traversalOutput()
+    let firstGateResolve: () => void = () => undefined
+    const firstGate = new Promise<void>((resolve) => { firstGateResolve = resolve })
+    const revisions = {
+      open: async (fileId: Uint8Array) => {
+        openedFiles += 1
+        if (openedFiles === 1) signalFirstStarted()
+        if (openedFiles === 1) await firstGate
+        const fileNumber = fileId[0] ?? 0
+        const descriptor = {
+          shareInstance: identity(1),
+          shareInstanceId: 'share',
+          fileId,
+          fileIdText: `file-${fileNumber}`,
+          fileRevision: identity(40 + fileNumber),
+          fileRevisionText: `revision-${fileNumber}`,
+          exactSize: 1n,
+          geometry: new FileGeometry(1n, 1n),
+        }
+        return {
+          descriptor,
+          leaseId: identity(80 + fileNumber),
+          release: async () => undefined,
+        }
+      },
+    } as unknown as V2RevisionReader
+    const broker = {
+      readRange: async function* () {
+        yield { offset: 0n, data: Uint8Array.of(1) }
+      },
+    } as unknown as V2BlockRangeReader
+    const resultPromise = new TransferJob({
+      descriptor: { shareInstance: identity(1), syntheticRoot: root, syntheticRootId: 'root', chunkSize: 1 } as never,
+      catalog,
+      selection: new V2SelectionPolicy(),
+      revisions,
+      broker,
+      lanes: { size: 1 },
+      output: outputAuthority(terminalBoundaryOutput()),
+      maximumConcurrentFiles: 1,
+      maximumPendingFiles: 1,
+      maximumPendingFileMetadataBytes: 400n,
+    }).run()
 
-    const result = await traversalJob(catalog, output.session, rootId, 'root').run()
-
-    expect(result.outcome.status).toBe('Aborted')
-    expect(loads).toBe(1)
-    expect(output.abortReasons).toHaveLength(1)
-    expect(output.abortReasons[0]).toBeInstanceOf(V2CatalogTraversalError)
-    expect(result.abortReason).toBe(output.abortReasons[0])
+    await firstStartedSignal
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(pageResumed).toBe(false)
+    expect(openedFiles).toBe(1)
+    firstGateResolve()
+    const result = await resultPromise
+    expect(result.outcome.status).toBe('Succeeded')
+    expect(pageResumed).toBe(true)
+    expect(openedFiles).toBe(3)
   })
 
-  it('rejects repeated sibling identity even when neither file is selected', async () => {
-    const rootId = identity(2)
-    const repeatedFileId = identity(9)
-    let revisionOpens = 0
+  it('publishes terminal discovery while a selected file is still transferring', async () => {
+    const root = identity(2)
+    const selectedFile = identity(11)
+    let releaseRevision: () => void = () => undefined
+    let signalRevisionStarted: () => void = () => undefined
+    let signalDiscoveryComplete: () => void = () => undefined
+    const revisionGate = new Promise<void>((resolve) => { releaseRevision = resolve })
+    const revisionStarted = new Promise<void>((resolve) => { signalRevisionStarted = resolve })
+    const discoveryComplete = new Promise<void>((resolve) => { signalDiscoveryComplete = resolve })
+    const progress: Array<{ readonly discovery: string; readonly partial: boolean }> = []
     const catalog = {
-      loadDirectory: async () => committedDirectory('root', 2),
+      loadDirectory: async () => committedDirectory('root', 1),
       pages: async function* () {
-        yield traversalPage(rootId, [{
+        yield traversalPage(root, [{
           kind: 'file',
-          id: repeatedFileId,
-          idText: 'repeated-file',
-          name: 'first.bin',
-          expectedSize: 1n,
-        }, {
-          kind: 'file',
-          id: repeatedFileId.slice(),
-          idText: 'repeated-file',
-          name: 'second.bin',
+          id: selectedFile,
+          idText: 'selected-file',
+          name: 'selected.bin',
           expectedSize: 1n,
         }])
       },
     } as unknown as V2CatalogClient
-    const output = traversalOutput()
-    const result = await new V2TransferJob({
-      descriptor: {
-        shareInstance: identity(1),
-        syntheticRoot: rootId,
-        syntheticRootId: 'root',
-      } as never,
+    const revisions = {
+      open: async () => {
+        signalRevisionStarted()
+        await revisionGate
+        return {
+          descriptor: {
+            shareInstance: identity(1),
+            shareInstanceId: 'share',
+            fileId: selectedFile,
+            fileIdText: 'selected-file',
+            fileRevision: identity(12),
+            fileRevisionText: 'revision',
+            exactSize: 1n,
+            geometry: new FileGeometry(1n, 1n),
+          },
+          leaseId: identity(13),
+          release: async () => undefined,
+        }
+      },
+    } as unknown as V2RevisionReader
+    const broker = {
+      readRange: async function* () { yield { offset: 0n, data: Uint8Array.of(1) } },
+    } as unknown as V2BlockRangeReader
+    let settled = false
+    const resultPromise = new TransferJob({
+      descriptor: { shareInstance: identity(1), syntheticRoot: root, syntheticRootId: 'root', chunkSize: 1 } as never,
       catalog,
-      selection: new V2SelectionPolicy(false),
-      revisions: {
-        open: async () => {
-          revisionOpens += 1
-          throw new Error('Unselected duplicate reached revision I/O')
-        },
-      } as V2RevisionReader,
-      broker: {} as V2BlockRangeReader,
+      selection: new V2SelectionPolicy(),
+      revisions,
+      broker,
       lanes: { size: 1 },
-      output: outputAuthority(output.session),
+      output: outputAuthority(terminalBoundaryOutput()),
       maximumConcurrentFiles: 1,
-    }).run()
+      onMeasure: (measure) => {
+        if (measure.discovery === 'complete') signalDiscoveryComplete()
+      },
+      onProgress: (snapshot) => { progress.push(snapshot) },
+    }).run().finally(() => { settled = true })
 
-    expect(result.outcome.status).toBe('Aborted')
-    expect(revisionOpens).toBe(0)
-    expect(output.abortReasons[0]).toBeInstanceOf(V2CatalogTraversalError)
-  })
+    await revisionStarted
+    await discoveryComplete
+    expect(settled).toBe(false)
+    expect(progress.at(-1)).toMatchObject({ discovery: 'complete', partial: false })
 
-  it('accepts the protocol depth boundary and rejects the next child without loading it', async () => {
-    const accepted = depthCatalog(V2_CATALOG_PATH_DEPTH)
-    const acceptedOutput = traversalOutput()
-    const acceptedResult = await traversalJob(
-      accepted.catalog,
-      acceptedOutput.session,
-      depthIdentity(0),
-      depthIdentityText(0),
-    ).run()
-
-    expect(acceptedResult.outcome.status).toBe('Succeeded')
-    expect(accepted.loads()).toBe(V2_CATALOG_PATH_DEPTH + 1)
-    expect(acceptedOutput.abortReasons).toEqual([])
-
-    const rejected = depthCatalog(V2_CATALOG_PATH_DEPTH + 1)
-    const rejectedOutput = traversalOutput()
-    const rejectedResult = await traversalJob(
-      rejected.catalog,
-      rejectedOutput.session,
-      depthIdentity(0),
-      depthIdentityText(0),
-    ).run()
-
-    expect(rejectedResult.outcome.status).toBe('Aborted')
-    expect(rejected.loads()).toBe(V2_CATALOG_PATH_DEPTH + 1)
-    expect(rejectedOutput.abortReasons[0]).toBeInstanceOf(V2CatalogTraversalError)
-  })
-
-  it('rejects a file at depth 257 before revision or output I/O', async () => {
-    const fixture = depthFileCatalog(V2_CATALOG_PATH_DEPTH)
-    let revisionOpens = 0
-    const output = traversalOutput()
-    const result = await traversalJob(
-      fixture.catalog,
-      output.session,
-      depthIdentity(0),
-      depthIdentityText(0),
-      {
-        open: async () => {
-          revisionOpens += 1
-          throw new Error('Depth-invalid file reached revision I/O')
-        },
-      } as V2RevisionReader,
-    ).run()
-
-    expect(result.outcome.status).toBe('Aborted')
-    expect(fixture.loads()).toBe(V2_CATALOG_PATH_DEPTH + 1)
-    expect(revisionOpens).toBe(0)
-    expect(output.abortReasons[0]).toBeInstanceOf(V2CatalogTraversalError)
-  })
-
-  it('admits exactly 32 KiB of path bytes and rejects the next byte before child load', async () => {
-    const exactSegments = maximumBytePathSegments(252)
-    const exact = pathCatalog(exactSegments)
-    const exactOutput = traversalOutput()
-    const exactResult = await traversalJob(
-      exact.catalog,
-      exactOutput.session,
-      depthIdentity(0),
-      depthIdentityText(0),
-    ).run()
-    expect(exactResult.outcome.status).toBe('Succeeded')
-    expect(exact.loads()).toBe(exactSegments.length + 1)
-
-    const overSegments = maximumBytePathSegments(253)
-    const over = pathCatalog(overSegments)
-    const overOutput = traversalOutput()
-    const overResult = await traversalJob(
-      over.catalog,
-      overOutput.session,
-      depthIdentity(0),
-      depthIdentityText(0),
-    ).run()
-    expect(overResult.outcome.status).toBe('Aborted')
-    expect(over.loads()).toBe(overSegments.length)
-    expect(overOutput.abortReasons[0]).toBeInstanceOf(V2CatalogTraversalError)
+    releaseRevision()
+    expect((await resultPromise).outcome.status).toBe('Succeeded')
   })
 })
 
-function identity(first: number): Uint8Array<ArrayBuffer> {
-  const value = new Uint8Array(16)
-  value[0] = first
-  return value
-}
+describe('v2 incremental failure and observability boundaries', () => {
+  it('cancels in-flight workers before draining a fatal sibling failure', async () => {
+    const root = identity(2)
+    const blockedFile = identity(11)
+    const fatalFile = identity(12)
+    let signalBlockedStarted: () => void = () => undefined
+    const blockedStarted = new Promise<void>((resolve) => { signalBlockedStarted = resolve })
+    let blockedCancelled = false
+    let outputWrites = 0
+    const fatal = new SenderObjectError('authentication', 'fatal sibling authentication failure')
+    const entries: readonly V2CatalogEntry[] = [{
+      kind: 'file',
+      id: blockedFile,
+      idText: 'blocked-file',
+      name: 'blocked.bin',
+      expectedSize: 1n,
+    }, {
+      kind: 'file',
+      id: fatalFile,
+      idText: 'fatal-file',
+      name: 'fatal.bin',
+      expectedSize: 1n,
+    }]
+    const catalog = {
+      loadDirectory: async () => committedDirectory('root', entries.length),
+      pages: async function* () { yield traversalPage(root, entries) },
+    } as unknown as V2CatalogClient
+    const revisions = {
+      open: async (fileId: Uint8Array, signal?: AbortSignal) => {
+        if (fileId[0] === fatalFile[0]) {
+          await blockedStarted
+          throw fatal
+        }
+        signalBlockedStarted()
+        if (signal === undefined) throw new Error('Transfer worker omitted its lifetime signal')
+        await new Promise<never>((_resolve, reject) => {
+          const cancel = () => {
+            blockedCancelled = true
+            reject(signal.reason)
+          }
+          if (signal.aborted) {
+            cancel()
+            return
+          }
+          signal.addEventListener('abort', cancel, { once: true })
+        })
+        throw new Error('Cancelled revision unexpectedly resumed')
+      },
+    } as unknown as V2RevisionReader
+    const baseOutput = terminalBoundaryOutput()
+    const output: OutputSession = {
+      ...baseOutput,
+      beginFile: async (file, signal) => {
+        const begun = await baseOutput.beginFile(file, signal)
+        return {
+          ...begun,
+          transaction: {
+            ...begun.transaction,
+            writeRange: async (offset: bigint, data: Uint8Array<ArrayBuffer>, operationSignal: AbortSignal) => {
+              outputWrites += 1
+              await begun.transaction.writeRange(offset, data, operationSignal)
+            },
+          },
+        }
+      },
+    }
 
-function traversalPage(
-  directoryId: Uint8Array<ArrayBuffer>,
-  entries: readonly V2CatalogEntry[],
-) {
-  return {
-    shareInstance: identity(1),
-    directoryId,
-    generation: identity(3),
-    pageIndex: 0,
-    entries,
-  }
-}
+    const result = await withTimeout(new TransferJob({
+      descriptor: { shareInstance: identity(1), syntheticRoot: root, syntheticRootId: 'root', chunkSize: 1 } as never,
+      catalog,
+      selection: new V2SelectionPolicy(),
+      revisions,
+      broker: {} as V2BlockRangeReader,
+      lanes: { size: 1 },
+      output: outputAuthority(output),
+      maximumConcurrentFiles: 2,
+    }).run(), 1_000, 'Fatal worker failure did not cancel its blocked sibling')
 
-function outputAuthority(session: OutputSession): V2OutputAuthority {
-  let opened = false
-  return {
-    openSelection: async () => {
-      if (opened) throw new Error('Test output authority was opened twice')
-      opened = true
-      return session
-    },
-    abort: (reason: unknown) => session.abortJob(reason),
-  }
-}
+    expect(result.outcome.status).toBe('Paused')
+    expect(result.abortReason).toBe(fatal)
+    expect(blockedCancelled).toBe(true)
+    expect(outputWrites).toBe(0)
+  })
 
-function terminalBoundaryOutput(): OutputSession {
-  const identity = { backend: 'test-terminal', outputSessionId: 'selection-bound' }
-  return {
-    identity,
-    capabilities: {
-      durability: 'None',
-      randomWrite: true,
-      fileFailureIsolation: true,
-      modificationTime: false,
-    },
-    ensureDirectory: async () => undefined,
-    finalizeDirectory: async () => undefined,
-    beginFile: async (file) => {
-      const ownership = {
-        ...identity,
-        canonicalPath: file.path,
-        ownedFileIdentity: 'terminal-file',
-      }
-      return {
-        durableRanges: new VerifiedDurableRanges(ownership, file.source, file.exactSize, []),
-        transaction: {
-          writeRange: async () => undefined,
-          checkpoint: async () => new VerifiedDurableRanges(
-            ownership,
-            file.source,
-            file.exactSize,
-            [byteRange(0n, file.exactSize)],
-          ),
-          commit: async () => undefined,
-          abort: async () => 'FileIsolated' as const,
+  it('keeps diagnostic observers isolated and emits causally ordered correlated traces', async () => {
+    const root = identity(2)
+    const selectedFile = identity(11)
+    const traces: TransferTraceEvent[] = []
+    const catalog = {
+      loadDirectory: async () => committedDirectory('root', 1),
+      pages: async function* () {
+        yield traversalPage(root, [{
+          kind: 'file',
+          id: selectedFile,
+          idText: identityText(11),
+          name: 'selected.bin',
+          expectedSize: 1n,
+        }])
+      },
+    } as unknown as V2CatalogClient
+    const revisions = {
+      open: async () => openedRevision(selectedFile, 1n, 1n),
+    } as unknown as V2RevisionReader
+    const broker = {
+      readRange: async function* () { yield { offset: 0n, data: Uint8Array.of(1) } },
+    } as unknown as V2BlockRangeReader
+
+    const result = await new TransferJob({
+      descriptor: {
+        shareInstance: identity(1),
+        syntheticRoot: root,
+        syntheticRootId: identityText(2),
+        chunkSize: 1,
+      } as never,
+      catalog,
+      selection: new V2SelectionPolicy(),
+      revisions,
+      broker,
+      lanes: { size: 1 },
+      output: outputAuthority(terminalBoundaryOutput()),
+      maximumConcurrentFiles: 1,
+      protocolSessionId: () => identityText(31),
+      onTrace: (event) => { traces.push(event) },
+      onMeasure: () => { throw new Error('diagnostic measure observer failed') },
+      onProgress: () => { throw new Error('diagnostic progress observer failed') },
+    }).run()
+
+    expect(
+      result.outcome.status,
+      result.abortReason instanceof Error ? result.abortReason.stack : String(result.abortReason),
+    ).toBe('Succeeded')
+    const index = (name: TransferTraceEvent['name']) => traces.findIndex((trace) => trace.name === name)
+    expect(index('directory-generation-committed')).toBeLessThan(index('directory-admitted'))
+    expect(index('file-enqueued')).toBeLessThan(index('file-started'))
+    expect(index('file-written')).toBeLessThan(index('file-completed'))
+    expect(traces.filter(({ name }) => name === 'file-written')).toHaveLength(1)
+    expect(traces.find(({ name }) => name === 'file-enqueued')?.context.selectionDecision)
+      .toBe('default-rule')
+    for (const trace of traces) {
+      expect(trace.context).toMatchObject({
+        shareInstance: identityText(1),
+        transferJobId: result.transferJobId,
+        protocolSessionId: identityText(31),
+      })
+    }
+    expect(traces.find(({ name }) => name === 'file-completed')?.context.outputSessionId)
+      .toBe('selection-bound')
+  })
+})
+
+describe('v2 opened-revision authority', () => {
+  it.each([
+    ['share identity', (opened: V2OpenedRevision) => ({
+      ...opened,
+      descriptor: { ...opened.descriptor, shareInstance: identity(9) },
+    })],
+    ['file identity', (opened: V2OpenedRevision) => ({
+      ...opened,
+      descriptor: { ...opened.descriptor, fileId: identity(9) },
+    })],
+    ['exact size', (opened: V2OpenedRevision) => ({
+      ...opened,
+      descriptor: { ...opened.descriptor, exactSize: 2n, geometry: new FileGeometry(2n, 1n) },
+    })],
+    ['block geometry', (opened: V2OpenedRevision) => ({
+      ...opened,
+      descriptor: { ...opened.descriptor, geometry: new FileGeometry(1n, 2n) },
+    })],
+    ['lease identity', (opened: V2OpenedRevision) => ({
+      ...opened,
+      leaseId: new Uint8Array(16),
+    })],
+  ] as const)('rejects mismatched %s before output or content I/O', async (_name, mutate) => {
+    const root = identity(2)
+    const selectedFile = identity(11)
+    const beginFile = vi.fn()
+    const baseOutput = terminalBoundaryOutput()
+    const output = { ...baseOutput, beginFile } as OutputSession
+    const readRange = vi.fn(async function* () { yield { offset: 0n, data: Uint8Array.of(1) } })
+    const catalog = {
+      loadDirectory: async () => committedDirectory('root', 1),
+      pages: async function* () {
+        yield traversalPage(root, [{
+          kind: 'file', id: selectedFile, idText: identityText(11), name: 'file.bin', expectedSize: 1n,
+        }])
+      },
+    } as unknown as V2CatalogClient
+
+    const result = await new TransferJob({
+      descriptor: {
+        shareInstance: identity(1), syntheticRoot: root, syntheticRootId: identityText(2), chunkSize: 1,
+      } as never,
+      catalog,
+      selection: new V2SelectionPolicy(),
+      revisions: {
+        open: async () => mutate(openedRevision(selectedFile, 1n, 1n)),
+      } as unknown as V2RevisionReader,
+      broker: { readRange } as unknown as V2BlockRangeReader,
+      lanes: { size: 1 },
+      output: outputAuthority(output),
+      maximumConcurrentFiles: 1,
+    }).run()
+
+    expect(result.outcome.status).toBe('CompletedWithErrors')
+    expect(result.outcome.failureCount).toBe(1)
+    expect(beginFile).not.toHaveBeenCalled()
+    expect(readRange).not.toHaveBeenCalled()
+  })
+})
+
+describe('v2 bounded scheduler regressions', () => {
+  it('pauses before starting a sibling when a checkpoint invents future durability', async () => {
+    const root = identity(2)
+    const files = [fileEntry(identity(11), 'a.bin', 2n), fileEntry(identity(12), 'b.bin', 2n)]
+    const base = terminalBoundaryOutput()
+    const beginFile = vi.fn((file: OutputFile, signal: AbortSignal) => base.beginFile(file, signal))
+    const output = { ...base, beginFile }
+    const catalog = {
+      loadDirectory: async () => committedDirectory('root', files.length),
+      pages: async function* () { yield traversalPage(root, files) },
+    } as unknown as V2CatalogClient
+    const revisions = {
+      open: async (id: Uint8Array<ArrayBuffer>) => openedRevision(id, 2n, 1n),
+    } as unknown as V2RevisionReader
+    const broker = {
+      readRange: async function* () { yield { offset: 0n, data: Uint8Array.of(1) } },
+    } as unknown as V2BlockRangeReader
+
+    const result = await new TransferJob({
+      descriptor: {
+        shareInstance: identity(1), syntheticRoot: root, syntheticRootId: identityText(2), chunkSize: 1,
+      } as never,
+      catalog,
+      selection: new V2SelectionPolicy(),
+      revisions,
+      broker,
+      lanes: { size: 1 },
+      output: outputAuthority(output),
+      maximumConcurrentFiles: 1,
+    }).run()
+
+    expect(result.outcome.status).toBe('Paused')
+    expect(result.abortReason).toBeInstanceOf(OutputCheckpointContractError)
+    expect(beginFile).toHaveBeenCalledOnce()
+  })
+
+  it('treats a malformed adapter abort disposition as a job-wide contract failure', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'file.bin', 1n)
+    const base = terminalBoundaryOutput()
+    const output: OutputSession = {
+      ...base,
+      beginFile: async (input, signal) => {
+        const begun = await base.beginFile(input, signal)
+        return {
+          ...begun,
+          transaction: {
+            ...begun.transaction,
+            abort: async () => 'forged' as never,
+          },
+        }
+      },
+    }
+    const brokerFailure = new V2BlockOperationError(
+      'object-auth',
+      'authenticated block failure',
+      { cause: new Error('missing') },
+    )
+    const result = await new TransferJob({
+      descriptor: {
+        shareInstance: identity(1), syntheticRoot: root, syntheticRootId: identityText(2), chunkSize: 1,
+      } as never,
+      catalog: {
+        loadDirectory: async () => committedDirectory('root', 1),
+        pages: async function* () { yield traversalPage(root, [file]) },
+      } as unknown as V2CatalogClient,
+      selection: new V2SelectionPolicy(),
+      revisions: { open: async () => openedRevision(file.id, 1n, 1n) } as unknown as V2RevisionReader,
+      broker: {
+        readRange: async function* () {
+          await Promise.reject(brokerFailure)
+          yield { offset: 0n, data: Uint8Array.of(0) }
         },
-      }
-    },
-    finishJob: async () => undefined,
-    abortJob: async () => undefined,
-  }
-}
+      } as unknown as V2BlockRangeReader,
+      lanes: { size: 1 },
+      output: outputAuthority(output),
+      maximumConcurrentFiles: 1,
+    }).run()
 
-function traversalJob(
-  catalog: V2CatalogClient,
-  output: OutputSession,
-  syntheticRoot: Uint8Array<ArrayBuffer>,
-  syntheticRootId: string,
-  revisions: V2RevisionReader = {} as V2RevisionReader,
-): V2TransferJob {
-  return new V2TransferJob({
-    descriptor: { shareInstance: identity(1), syntheticRoot, syntheticRootId } as never,
-    catalog,
-    selection: new V2SelectionPolicy(),
-    revisions,
-    broker: {} as V2BlockRangeReader,
-    lanes: { size: 1 },
-    output: outputAuthority(output),
-    maximumConcurrentFiles: 1,
+    expect(result.outcome.status).toBe('Paused')
+    expect(result.abortReason).toMatchObject({ name: 'OutputTransactionContractError' })
   })
-}
 
-function traversalOutput(): {
-  readonly session: OutputSession
-  readonly abortReasons: unknown[]
-} {
-  const abortReasons: unknown[] = []
-  const session = {
-    identity: { backend: 'test', outputSessionId: 'traversal' },
-    capabilities: {
-      durability: 'None',
-      randomWrite: false,
-      fileFailureIsolation: false,
-      modificationTime: false,
-    },
-    ensureDirectory: async () => undefined,
-    finalizeDirectory: async () => undefined,
-    beginFile: async () => { throw new Error('Traversal fixture unexpectedly opened a file') },
-    finishJob: async () => undefined,
-    abortJob: async (reason: unknown) => { abortReasons.push(reason) },
-  } as unknown as OutputSession
-  return { session, abortReasons }
-}
+  it('transfers a file larger than the pending metadata budget without treating its content as queued memory', async () => {
+    const root = identity(2)
+    const largeFile = identity(11)
+    const exactSize = 65n * 1024n * 1024n
+    const requestedRanges: Array<{ readonly start: bigint; readonly end: bigint }> = []
+    const catalog = {
+      loadDirectory: async () => committedDirectory('root', 1),
+      pages: async function* () {
+        yield traversalPage(root, [{
+          kind: 'file',
+          id: largeFile,
+          idText: 'large-file',
+          name: 'large.bin',
+          expectedSize: exactSize,
+        }])
+      },
+    } as unknown as V2CatalogClient
+    const revisions = {
+      open: async () => ({
+        descriptor: {
+          shareInstance: identity(1),
+          shareInstanceId: 'share',
+          fileId: largeFile,
+          fileIdText: 'large-file',
+          fileRevision: identity(12),
+          fileRevisionText: 'revision',
+          exactSize,
+          geometry: new FileGeometry(exactSize, 1024n * 1024n),
+        },
+        leaseId: identity(13),
+        release: async () => undefined,
+      }),
+    } as unknown as V2RevisionReader
+    const broker = {
+      readRange: async function* (
+        _revision: unknown,
+        _leaseId: unknown,
+        range: { readonly start: bigint; readonly end: bigint },
+      ) {
+        requestedRanges.push({ ...range })
+        yield { offset: range.start, data: Uint8Array.of(7) }
+      },
+    } as unknown as V2BlockRangeReader
 
-function committedDirectory(directoryIdText: string, entryCount: number): V2CommittedDirectory {
-  return Object.freeze({
-    directoryIdText,
-    generationText: 'generation',
-    pageCount: 1,
-    entryCount,
-    omittedCount: 0n,
-    terminalCommitment: new Uint8Array(32),
+    const result = await new TransferJob({
+      descriptor: { shareInstance: identity(1), syntheticRoot: root, syntheticRootId: 'root', chunkSize: 1024 * 1024 } as never,
+      catalog,
+      selection: new V2SelectionPolicy(),
+      revisions,
+      broker,
+      lanes: { size: 1 },
+      output: outputAuthority(terminalBoundaryOutput(1n)),
+      maximumConcurrentFiles: 1,
+    }).run()
+
+    expect(result.outcome.status).toBe('Succeeded')
+    expect(requestedRanges).toEqual([byteRange(0n, 1n)])
   })
-}
 
-function directoryEntry(
-  id: Uint8Array<ArrayBuffer>,
-  idText: string,
-  name: string,
-): Extract<V2CatalogEntry, { kind: 'directory' }> {
-  return Object.freeze({ kind: 'directory', id, idText, name })
-}
+  it('cannot deadlock when every directory worker produces beyond the bounded breadth queue', async () => {
+    const parentCount = 4
+    const childrenPerParent = 65
+    const root = wideIdentity(1)
+    let loads = 0
+    let readyParents = 0
+    let releaseParents: () => void = () => undefined
+    const parentsReady = new Promise<void>((resolve) => { releaseParents = resolve })
+    const catalog = {
+      loadDirectory: async (id: Uint8Array<ArrayBuffer>) => {
+        loads += 1
+        const number = wideIdentityNumber(id)
+        let entryCount = 0
+        if (number === 1) entryCount = parentCount
+        else if (number <= parentCount + 1) entryCount = childrenPerParent
+        return committedDirectoryFor(id, `wide-${number}`, entryCount)
+      },
+      pages: async function* (directory: V2CommittedDirectory) {
+        const number = wideIdentityNumber(directory.directoryId)
+        if (number === 1) {
+          yield traversalPage(root, Array.from({ length: parentCount }, (_, index) => {
+            const childNumber = index + 2
+            return directoryEntry(wideIdentity(childNumber), `wide-${childNumber}`, `parent-${index}`)
+          }))
+          return
+        }
+        if (number <= parentCount + 1) {
+          readyParents += 1
+          if (readyParents === parentCount) releaseParents()
+          await parentsReady
+          const parentIndex = number - 2
+          yield traversalPage(directory.directoryId, Array.from(
+            { length: childrenPerParent },
+            (_, childIndex) => {
+              const childNumber = parentCount + 2 + parentIndex * childrenPerParent + childIndex
+              return directoryEntry(
+                wideIdentity(childNumber),
+                `wide-${childNumber}`,
+                `leaf-${parentIndex}-${childIndex}`,
+              )
+            },
+          ))
+          return
+        }
+        yield traversalPage(directory.directoryId, [])
+      },
+    } as unknown as V2CatalogClient
+    const output = traversalOutput()
 
-function depthCatalog(leafDepth: number): {
-  readonly catalog: V2CatalogClient
-  loads(): number
-} {
-  let loads = 0
-  const catalog = {
-    loadDirectory: async (id: Uint8Array) => {
-      loads += 1
-      const depth = depthFromIdentity(id)
-      return committedDirectory(depthIdentityText(depth), depth === leafDepth ? 0 : 1)
-    },
-    pages: async function* (directory: V2CommittedDirectory) {
-      const depth = Number(directory.directoryIdText.slice('directory-'.length))
-      const entries = depth === leafDepth
-        ? []
-        : [directoryEntry(
-            depthIdentity(depth + 1),
-            depthIdentityText(depth + 1),
-            depthIdentityText(depth + 1),
-          )]
-      yield traversalPage(depthIdentity(depth), entries)
-    },
-  } as unknown as V2CatalogClient
-  return { catalog, loads: () => loads }
-}
+    const result = await withTimeout(
+      traversalJob(catalog, output.session, root, 'wide-1').run(),
+      2_000,
+      'directory workers stalled while their breadth queue was saturated',
+    )
 
-function depthFileCatalog(parentDepth: number): {
-  readonly catalog: V2CatalogClient
-  loads(): number
-} {
-  let loads = 0
-  const catalog = {
-    loadDirectory: async (id: Uint8Array) => {
-      loads += 1
-      return committedDirectory(depthIdentityText(depthFromIdentity(id)), 1)
-    },
-    pages: async function* (directory: V2CommittedDirectory) {
-      const depth = Number(directory.directoryIdText.slice('directory-'.length))
-      const entries: V2CatalogEntry[] = depth === parentDepth
-        ? [{
-            kind: 'file',
-            id: depthIdentity(depth + 1),
-            idText: `file-${depth + 1}`,
-            name: `file-${depth + 1}`,
-            expectedSize: 0n,
-          }]
-        : [directoryEntry(
-            depthIdentity(depth + 1),
-            depthIdentityText(depth + 1),
-            depthIdentityText(depth + 1),
-          )]
-      yield traversalPage(depthIdentity(depth), entries)
-    },
-  } as unknown as V2CatalogClient
-  return { catalog, loads: () => loads }
-}
+    expect(result.outcome.status).toBe('Succeeded')
+    expect(loads).toBe(1 + parentCount + parentCount * childrenPerParent)
+  })
+})
 
-function pathCatalog(segments: readonly string[]): {
-  readonly catalog: V2CatalogClient
-  loads(): number
-} {
-  let loads = 0
-  const catalog = {
-    loadDirectory: async (id: Uint8Array) => {
-      loads += 1
-      const depth = depthFromIdentity(id)
-      return committedDirectory(depthIdentityText(depth), depth === segments.length ? 0 : 1)
-    },
-    pages: async function* (directory: V2CommittedDirectory) {
-      const depth = Number(directory.directoryIdText.slice('directory-'.length))
-      const name = segments[depth]
-      const entries = name === undefined
-        ? []
-        : [directoryEntry(depthIdentity(depth + 1), depthIdentityText(depth + 1), name)]
-      yield traversalPage(depthIdentity(depth), entries)
-    },
-  } as unknown as V2CatalogClient
-  return { catalog, loads: () => loads }
-}
+describe('v2 output opening boundary', () => {
+  it('does not discover a catalog when picker-confirmed OpenOutput is rejected', async () => {
+    const loadDirectory = vi.fn(async () => committedDirectory('root', 0))
+    const catalog = {
+      loadDirectory,
+      pages: async function* () {
+        yield traversalPage(identity(2), [])
+      },
+    } as unknown as V2CatalogClient
+    const pickerError = new DOMException('Output selection was cancelled.', 'AbortError')
+    const authority: V2OutputAuthority = {
+      confirmOutput: vi.fn(async () => { throw pickerError }),
+      openOutput: vi.fn(async () => { throw pickerError }),
+      abort: vi.fn(async () => undefined),
+    }
 
-function maximumBytePathSegments(penultimateWidth: number): readonly string[] {
-  return Object.freeze([
-    ...Array.from({ length: 127 }, () => 'a'.repeat(255)),
-    'a'.repeat(penultimateWidth),
-    'b',
-    'c',
-  ])
-}
+    const result = await new TransferJob({
+      descriptor: { shareInstance: identity(1), syntheticRoot: identity(2), syntheticRootId: 'root' } as never,
+      catalog,
+      selection: new V2SelectionPolicy(),
+      revisions: {} as V2RevisionReader,
+      broker: {} as V2BlockRangeReader,
+      lanes: { size: 1 },
+      output: authority,
+    }).run()
 
-function depthIdentity(depth: number): Uint8Array<ArrayBuffer> {
-  const value = new Uint8Array(16)
-  new DataView(value.buffer).setUint16(14, depth + 1, false)
-  return value
-}
+    expect(authority.confirmOutput).toHaveBeenCalledOnce()
+    expect(authority.abort).toHaveBeenCalledWith(pickerError)
+    expect(loadDirectory).not.toHaveBeenCalled()
+    expect(result.abortReason).toBe(pickerError)
+    expect(result.outcome.status).toBe('Aborted')
+  })
 
-function depthFromIdentity(identityValue: Uint8Array): number {
-  return new DataView(
-    identityValue.buffer,
-    identityValue.byteOffset,
-    identityValue.byteLength,
-  ).getUint16(14, false) - 1
-}
+  it('maps finite output-policy exhaustion to a paused job before a session opens', async () => {
+    const budgetError = new OutputBudgetExceededError('test-budget', 2n, 3n)
+    const abort = vi.fn(async () => undefined)
+    const authority: V2OutputAuthority = {
+      confirmOutput: vi.fn(async () => { throw budgetError }),
+      openOutput: vi.fn(async () => { throw budgetError }),
+      abort,
+    }
 
-function depthIdentityText(depth: number): string {
-  return `directory-${depth}`
-}
+    const result = await new TransferJob({
+      descriptor: {
+        shareInstance: identity(1),
+        syntheticRoot: identity(2),
+        syntheticRootId: 'root',
+      } as never,
+      catalog: {} as V2CatalogClient,
+      selection: new V2SelectionPolicy(),
+      revisions: {} as V2RevisionReader,
+      broker: {} as V2BlockRangeReader,
+      lanes: { size: 1 },
+      output: authority,
+    }).run()
+
+    expect(result.outcome.status).toBe('Paused')
+    expect(result.abortReason).toBe(budgetError)
+    expect(abort).toHaveBeenCalledWith(budgetError)
+  })
+
+  it('rejects a supplied final intent that disagrees with the frozen job before opening output', async () => {
+    const transferJobId = identityText(70)
+    const intent = await freezeTransferIntent(createTransferIntentDraft({
+      shareInstance: identityText(1),
+      syntheticRoot: identityText(2),
+      selection: { mode: 'node-id', defaultSelected: false, rules: [] },
+      transferJobId,
+    }), {
+      target: opaqueOutputIdentityText(44),
+      targetKind: 2,
+      backend: 'test/forged-final',
+      format: 'directory',
+    })
+    const openOutput = vi.fn(async () => terminalBoundaryOutput())
+    const abort = vi.fn(async () => undefined)
+    const loadDirectory = vi.fn()
+
+    const result = await new TransferJob({
+      descriptor: {
+        shareInstance: identity(1), syntheticRoot: identity(2), syntheticRootId: 'root',
+      } as never,
+      catalog: { loadDirectory } as unknown as V2CatalogClient,
+      selection: new V2SelectionPolicy(true),
+      revisions: {} as V2RevisionReader,
+      broker: {} as V2BlockRangeReader,
+      lanes: { size: 1 },
+      output: { confirmOutput: vi.fn(), openOutput, abort },
+      transferJobId,
+      intent,
+    }).run()
+
+    expect(result.outcome.status).toBe('Aborted')
+    expect(result.abortReason).toBeInstanceOf(TypeError)
+    expect(openOutput).not.toHaveBeenCalled()
+    expect(loadDirectory).not.toHaveBeenCalled()
+    expect(abort).toHaveBeenCalledOnce()
+  })
+
+  it('owns and suspends an authority session whose format violates the frozen intent', async () => {
+    const sessionAbort = vi.fn(async () => undefined)
+    const sessionSuspend = vi.fn(async () => undefined)
+    const mismatchedSession: OutputSession = {
+      ...terminalBoundaryOutput(),
+      format: 'zip',
+      abortJob: sessionAbort,
+      suspendJob: sessionSuspend,
+    }
+    const authorityAbort = vi.fn(async () => undefined)
+    const authority: V2OutputAuthority = {
+      confirmOutput: async (draft) => ({
+        intent: await freezeTransferIntent(draft, {
+          target: opaqueOutputIdentityText(45),
+          targetKind: 2,
+          backend: mismatchedSession.identity.backend,
+          format: 'directory',
+        }),
+        session: mismatchedSession,
+      }),
+      openOutput: vi.fn(),
+      abort: authorityAbort,
+    }
+    const loadDirectory = vi.fn()
+
+    const result = await new TransferJob({
+      descriptor: {
+        shareInstance: identity(1), syntheticRoot: identity(2), syntheticRootId: 'root',
+      } as never,
+      catalog: { loadDirectory } as unknown as V2CatalogClient,
+      selection: new V2SelectionPolicy(),
+      revisions: {} as V2RevisionReader,
+      broker: {} as V2BlockRangeReader,
+      lanes: { size: 1 },
+      output: authority,
+    }).run()
+
+    expect(result.outcome.status).toBe('Paused')
+    expect(sessionSuspend).toHaveBeenCalledOnce()
+    expect(sessionAbort).not.toHaveBeenCalled()
+    expect(authorityAbort).not.toHaveBeenCalled()
+    expect(loadDirectory).not.toHaveBeenCalled()
+  })
+})

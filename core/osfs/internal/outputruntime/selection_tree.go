@@ -14,7 +14,6 @@ import (
 
 var reservedOutputRootPrefixes = []string{
 	".windshare-output",
-	".wsresume-output",
 }
 
 func validateReservedOutputSelection(platform outputcap.Platform, selection transfer.OutputSelection) error {
@@ -55,23 +54,18 @@ func validateReservedOutputSelection(platform outputcap.Platform, selection tran
 	return nil
 }
 
-// preflightOutputSelectionAdmission builds the immutable selection authority
-// without mutating the output namespace. Keeping every pure platform-key and
-// metadata-shape rejection here guarantees probes cannot run for a selection
-// whose complete static meaning was never admissible. OpenSelection subsequently
-// routes a rejection through the exact intent observation so this function stays
-// pure while preexisting state still receives a preservation pause.
-func preflightOutputSelectionAdmission(
+func preflightOutputSelectionAdmissionWithIntent(
 	platform outputcap.Platform,
 	selection transfer.OutputSelection,
+	intentDigest transfer.TransferIntentDigest,
 ) (outputSelectionAdmission, error) {
-	if selection.Identity().IsZero() || selection.ResumeIntent().IsZero() {
+	if selection.Identity().IsZero() || intentDigest.IsZero() {
 		return outputSelectionAdmission{}, transfer.ErrInvalidOutputSelection
 	}
 	admission := outputSelectionAdmission{
-		selection: selection,
-		files:     make(map[string]transfer.OutputSelectionFile, int(selection.FileCount())),
-		dirs:      make(map[string]transfer.OutputSelectionDirectory, int(selection.DirectoryCount())),
+		selection: selection, intentDigest: intentDigest,
+		files: make(map[string]transfer.OutputSelectionFile, int(selection.FileCount())),
+		dirs:  make(map[string]transfer.OutputSelectionDirectory, int(selection.DirectoryCount())),
 	}
 	aliases := make(map[string]string, int(selection.FileCount()+selection.DirectoryCount()))
 	if err := selection.VisitDirectories(func(directory transfer.OutputSelectionDirectory) error {
@@ -210,7 +204,7 @@ func exactReopenMaterializedOutputDirectory(
 		if isMissing(err) {
 			err = errors.Join(errOutputAncestryUnsafe, errOutputAncestryMismatch, err)
 		}
-		return errors.Join(err, closeOutputV3Directory(reopened))
+		return errors.Join(err, closeOutputDirectory(reopened))
 	}
 	defer func() {
 		resultErr = errors.Join(resultErr, reopened.Close())

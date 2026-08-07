@@ -100,6 +100,12 @@ an absent tag is created, the same commit succeeds, and a different existing com
 moving the tag. Only the publish job receives `contents: write`; manual dispatch runs diagnostics and
 does not publish.
 
+A root change that consumes a new pre-v1 core API uses two commits. First, push a candidate tag at the
+coherent source commit and wait for its immutable `core/vX.Y.Z` tag. Then update the root `go.mod` to
+that released version. The workspace validates current source before publication; the `GOWORK=off`
+consumer gate validates the released graph afterward. Local `replace` directives and placeholder
+versions are not substitutes for either boundary.
+
 ## Product safety boundary
 
 Validation simplification does not relax E2EE, capability links, remote-input validation, root

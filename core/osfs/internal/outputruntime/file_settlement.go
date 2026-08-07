@@ -1,7 +1,6 @@
 package outputruntime
 
 import (
-	"bytes"
 	"context"
 	"errors"
 
@@ -13,22 +12,20 @@ import (
 )
 
 func (session *Session) retireBoundFile(
-	recordDir outputcap.Directory,
-	recordName string,
-	bound resumestate.BoundFileRecord,
+	bound resumestate.BoundCheckpointRuntimeState,
 	binding transfer.OutputFileBinding,
 ) (resultSettlement transfer.FileSettlement, resultQuarantined bool, resultErr error) {
 	requirement := outputAncestryRequirement{}
 	validation, err := session.validateOutputAncestry(requirement)
 	if err != nil {
-		session.traceOutputAncestry(FilesystemOutputAncestryRecovery, bound.Record().LocatorDigest(), err)
+		session.traceOutputAncestry(FilesystemOutputAncestryRecovery, bound.State().LocatorDigest(), err)
 		return transfer.FileSettlement{}, false,
 			outputAncestryOperationFault("validate ancestry before file retirement", err)
 	}
 	defer func() {
 		ancestryErr := finishOutputAncestryOperation(
 			session, validation, requirement, FilesystemOutputAncestryRecovery,
-			bound.Record().LocatorDigest(), "finish file retirement ancestry", nil,
+			bound.State().LocatorDigest(), "finish file retirement ancestry", nil,
 		)
 		if ancestryErr != nil {
 			resultSettlement = transfer.FileSettlement{}
@@ -46,7 +43,7 @@ func (session *Session) retireBoundFile(
 			return transfer.FileSettlement{}, false, err
 		}
 		step, err := session.applyFileRetirementDecision(
-			recordDir, recordName, bound, binding, decision, observationCleanupErr,
+			bound, binding, decision, observationCleanupErr,
 		)
 		if err != nil || step.complete {
 			return step.settlement, step.quarantined, err
@@ -54,33 +51,9 @@ func (session *Session) retireBoundFile(
 	}
 }
 
-func removeBoundFileRecord(
-	directory outputcap.Directory,
-	name string,
-	bound resumestate.BoundFileRecord,
-) (error, error) {
-	expected, err := resumestate.EncodeFileRecord(bound)
-	if err != nil {
-		return err, nil
-	}
-	file, err := directory.OpenFile(name, true, false)
-	if err != nil {
-		return err, closeOutputV3File(file)
-	}
-	actual, err := outputnamespace.ReadFile(file, resumestate.MaxFileStateBytes)
-	if err != nil || !bytes.Equal(actual, expected) {
-		return errors.Join(outputcap.ErrUnsafeNamespace, err), file.Close()
-	}
-	operationErr := directory.RemoveFile(name, file)
-	if operationErr == nil {
-		operationErr = directory.Sync()
-	}
-	return operationErr, file.Close()
-}
-
 func quarantinedSettlement(
 	binding transfer.OutputFileBinding,
-	record resumestate.FileRecord,
+	record resumestate.CheckpointRuntimeState,
 ) (transfer.FileSettlement, error) {
 	reference, err := transfer.NewOutputStateRef(binding.OutputSessionID(), record.LocatorDigest().OutputLocatorDigest())
 	if err != nil {
@@ -129,7 +102,7 @@ func (transaction *FileTransaction) Pause(
 	ctx context.Context,
 	reason transfer.FilePauseReason,
 ) (settlement transfer.FileSettlement, resultErr error) {
-	if transaction == nil || reason < transfer.FilePauseInterrupted || reason > transfer.FilePauseOutputFailure {
+	if transaction == nil || reason < transfer.FilePauseInterrupted || reason > transfer.FilePauseDependencyContract {
 		return transfer.FileSettlement{}, outputfault.New(
 			transfer.OutputFaultFile, transfer.OutputFaultContract, transfer.ErrInvalidOutputSettlement,
 		)
@@ -190,7 +163,7 @@ func (transaction *FileTransaction) pauseSettling(
 		checkpoint, checkpointErr = transaction.checkpointLocked()
 	}
 	if checkpointErr != nil {
-		record := transaction.resumable.Bound().Record()
+		record := transaction.resumable.BoundState().State()
 		checkpoint, _ = transfer.VerifyDurableRanges(
 			transaction.binding, transfer.CheckpointGeneration(record.CheckpointGeneration()), record.DurableRanges(),
 		)
@@ -241,7 +214,7 @@ func (transaction *FileTransaction) Retire(
 		ancestryErr := finishOutputAncestryOperation(
 			transaction.session, validation, outputAncestryRequirement{},
 			FilesystemOutputAncestryRecovery,
-			transaction.resumable.Bound().Record().LocatorDigest(),
+			transaction.resumable.BoundState().State().LocatorDigest(),
 			"finish retired output ancestry",
 			nil,
 		)
@@ -260,7 +233,7 @@ func (transaction *FileTransaction) Retire(
 	if err != nil {
 		transaction.session.traceOutputAncestry(
 			FilesystemOutputAncestryRecovery,
-			transaction.resumable.Bound().Record().LocatorDigest(),
+			transaction.resumable.BoundState().State().LocatorDigest(),
 			err,
 		)
 		return transfer.FileSettlement{}, outputAncestryOperationFault(
@@ -272,34 +245,34 @@ func (transaction *FileTransaction) Retire(
 
 func (transaction *FileTransaction) prepareRetirement(
 	reason transfer.FileRetireReason,
-) (resumestate.BoundFileRecord, error) {
+) (resumestate.BoundCheckpointRuntimeState, error) {
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
 	if transaction.lifecycle != FileTransactionSettling || transaction.session.operationDisabled() {
-		return resumestate.BoundFileRecord{}, outputfault.New(
+		return resumestate.BoundCheckpointRuntimeState{}, outputfault.New(
 			transfer.OutputFaultFile, transfer.OutputFaultOwnership, outputfault.ErrSessionClosed,
 		)
 	}
-	var retiring resumestate.BoundFileRecord
+	var retiring resumestate.BoundCheckpointRuntimeState
 	var err error
 	if reason == transfer.FileRetireInvalidatedRevision {
-		retiring, err = resumestate.PrepareInvalidatedRevisionRetirement(transaction.resumable.Bound())
+		retiring, err = resumestate.PrepareCheckpointRuntimeInvalidatedRevisionRetirement(transaction.resumable.BoundState())
 	} else {
-		retiring, err = resumestate.PrepareIsolatedRetirement(transaction.resumable.Bound())
+		retiring, err = resumestate.PrepareCheckpointRuntimeIsolatedRetirement(transaction.resumable.BoundState())
 	}
 	if err != nil {
-		return resumestate.BoundFileRecord{}, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
+		return resumestate.BoundCheckpointRuntimeState{}, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
 	}
-	if err := transaction.session.installFileRecord(
-		transaction.recordDir, transaction.recordName, transaction.resumable.Bound(), retiring,
+	if err := transaction.session.installCheckpointRuntimeState(
+		transaction.resumable.BoundState(), retiring,
 	); err != nil {
-		return resumestate.BoundFileRecord{}, err
+		return resumestate.BoundCheckpointRuntimeState{}, err
 	}
 	return retiring, nil
 }
 
 func (transaction *FileTransaction) retireSettling(
-	retiring resumestate.BoundFileRecord,
+	retiring resumestate.BoundCheckpointRuntimeState,
 ) (transfer.FileSettlement, error) {
 	transaction.mu.Lock()
 	closeErr := errors.Join(transaction.data.Close(), transaction.anchor.Close())
@@ -309,7 +282,7 @@ func (transaction *FileTransaction) retireSettling(
 		return transfer.FileSettlement{}, fileOutputFault("close retiring output", closeErr)
 	}
 	settlement, _, err := transaction.session.retireBoundFile(
-		transaction.recordDir, transaction.recordName, retiring, transaction.binding,
+		retiring, transaction.binding,
 	)
 	if err != nil {
 		return transfer.FileSettlement{}, err
@@ -348,20 +321,11 @@ func (transaction *FileTransaction) finishTerminalSettlement() error {
 		return outputcap.ErrUnsafeNamespace
 	}
 	transaction.lifecycle = FileTransactionClosed
-	digest := transaction.resumable.Bound().Record().LocatorDigest()
+	digest := transaction.resumable.BoundState().State().LocatorDigest()
 	closeErr := transaction.closeHandlesLocked()
 	transaction.mu.Unlock()
 	transaction.session.finishFile(digest, transaction)
 	return closeErr
-}
-
-func (transaction *FileTransaction) closeHandles() error {
-	if transaction == nil {
-		return nil
-	}
-	transaction.mu.Lock()
-	defer transaction.mu.Unlock()
-	return transaction.closeHandlesLocked()
 }
 
 func (transaction *FileTransaction) closeHandlesLocked() error {
@@ -381,10 +345,6 @@ func (transaction *FileTransaction) closeHandlesLocked() error {
 	if transaction.anchorDir != nil {
 		result = errors.Join(result, transaction.anchorDir.Close())
 		transaction.anchorDir = nil
-	}
-	if transaction.recordDir != nil {
-		result = errors.Join(result, transaction.recordDir.Close())
-		transaction.recordDir = nil
 	}
 	return result
 }

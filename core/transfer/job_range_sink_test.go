@@ -157,7 +157,7 @@ func newAtomicRangeSinkJob(t *testing.T, reader RangeReader) (*TransferJob, *job
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := NewTransferJob(TransferJobConfig{
+	job, err := newTestTransferJob(t, TransferJobConfig{
 		ShareInstance: share,
 		SyntheticRoot: root,
 		Rules:         rules,

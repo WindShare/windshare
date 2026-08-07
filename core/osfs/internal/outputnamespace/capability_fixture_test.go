@@ -36,11 +36,7 @@ type memoryCapabilityNode struct {
 }
 
 var filesystemOutputBackendID = func() transfer.OutputBackendID {
-	backend, err := transfer.NewOutputBackendID("windshare/native-output/v3")
-	if err != nil {
-		panic(err)
-	}
-	return backend
+	return transfer.NativeFilesystemOutputBackendID
 }()
 
 func v3RecoveryRoot(t *testing.T) *memoryCapabilityFS {
@@ -61,6 +57,36 @@ func v3RecoveryIdentity16[T ~[catalog.IdentityBytes]byte](value byte) T {
 		identity[index] = value
 	}
 	return identity
+}
+
+func v3RecoveryIntentDigest(selection transfer.OutputSelection) transfer.TransferIntentDigest {
+	if selection.ShareInstance().IsZero() || selection.SyntheticRoot().IsZero() {
+		fallback, err := transfer.NewOutputSelection(
+			v3RecoveryIdentity16[catalog.ShareInstance](1),
+			v3RecoveryIdentity16[catalog.DirectoryID](2),
+			v3RecoveryIdentity16[catalog.DirectoryGeneration](3), nil, nil,
+		)
+		if err != nil {
+			panic(err)
+		}
+		selection = fallback
+	}
+	rules, err := transfer.NewSelectionRules(true, nil)
+	if err != nil {
+		panic(err)
+	}
+	target, err := transfer.NewOpaqueOutputTarget(bytes.Repeat([]byte{0x4d}, transfer.OutputRootIdentityBytes))
+	if err != nil {
+		panic(err)
+	}
+	intent, err := transfer.NewTransferIntent(
+		selection.ShareInstance(), selection.SyntheticRoot(), rules, target,
+		transfer.NativeFilesystemOutputBackendID, transfer.OutputNativeTree,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return intent.Digest()
 }
 
 func v3RecoveryModifiedTime(t *testing.T) catalog.ModifiedTime {
@@ -101,7 +127,7 @@ func v3RecoverySelection(t *testing.T, withFile bool, exactSize uint64) transfer
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonical, err := transfer.NewCanonicalSelectionV1(request, plan)
+	canonical, err := transfer.NewTerminalSelectionObservationV1(request, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,9 +179,10 @@ func v3RecoveryAuthority(
 		sessions = &v3RecoverySessionIDs{}
 	}
 	return NewController(ControllerConfig{
-		Backend:    filesystemOutputBackendID,
-		Random:     bytes.NewReader(bytes.Repeat([]byte{0xa5}, 64*1024)),
-		SessionIDs: sessions,
+		Backend:      filesystemOutputBackendID,
+		IntentDigest: v3RecoveryIntentDigest(transfer.OutputSelection{}),
+		Random:       bytes.NewReader(bytes.Repeat([]byte{0xa5}, 64*1024)),
+		SessionIDs:   sessions,
 	})
 }
 
@@ -182,16 +209,17 @@ func newTestStateSession(t *testing.T, selection transfer.OutputSelection) *test
 		t.Fatal(err)
 	}
 	sessionID := v3RecoveryIdentity16[transfer.OutputSessionID](0x61)
+	intent := v3RecoveryIntentDigest(selection)
 	header, err := resumestate.NewHeader(resumestate.HeaderSpec{
-		Backend: filesystemOutputBackendID, SessionID: sessionID, Selection: selection,
-		OutputRoot: root, OutputAncestry: v3RecoveryAncestryBinding(t, root, selection),
+		Backend: filesystemOutputBackendID, SessionID: sessionID, IntentDigest: intent,
+		Selection: selection, OutputRoot: root, OutputAncestry: v3RecoveryAncestryBinding(t, root, selection),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	state, err := resumestate.BindSessionAuthority(
 		control, header, selection,
-		resumestate.ResumeNamespaceName(selection.ResumeIntent()),
+		resumestate.IntentNamespaceName(intent),
 		resumestate.SessionDirectoryName(sessionID),
 	)
 	if err != nil {

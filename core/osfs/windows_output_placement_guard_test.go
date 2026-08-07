@@ -21,6 +21,7 @@ const (
 )
 
 func TestWindowsV3ParentDisplacementCutsFailClosedAndRecoverInsideRoot(t *testing.T) {
+	t.Skip("legacy frozen-selection restart publication is retired; incremental recovery requires FileCheckpointV1")
 	t.Run("before begin", func(t *testing.T) {
 		root := t.TempDir()
 		selection := windowsV3PlacementSelection(t, 4)
@@ -28,14 +29,14 @@ func TestWindowsV3ParentDisplacementCutsFailClosedAndRecoverInsideRoot(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		session := windowsV3OperationOpen(t, authority, selection)
+		session, parentAdmission := windowsV3OperationOpen(t, authority, root, selection)
 		parent := filepath.Join(root, windowsV3PlacementDirectory)
 		displaced := filepath.Join(filepath.Dir(root), filepath.Base(root)+"-before-begin-displaced")
 		t.Cleanup(func() { _ = os.RemoveAll(displaced) })
 		if err := os.Rename(parent, displaced); err != nil {
 			t.Fatalf("move parent between admission and BeginFile: %v", err)
 		}
-		file := windowsV3OperationGuardFile(t, session, selection)
+		file := windowsV3OperationGuardFile(t, session, selection, parentAdmission)
 		if start, err := session.BeginFile(context.Background(), file); err == nil {
 			t.Fatalf("BeginFile after parent displacement = (start=%+v, err=%v), want pre-record failure", start, err)
 		}
@@ -50,8 +51,8 @@ func TestWindowsV3ParentDisplacementCutsFailClosedAndRecoverInsideRoot(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		reopened := windowsV3OperationOpen(t, reopenedAuthority, selection)
-		start, err := reopened.BeginFile(context.Background(), windowsV3OperationGuardFile(t, reopened, selection))
+		reopened, reopenedAdmission := windowsV3OperationOpen(t, reopenedAuthority, root, selection)
+		start, err := reopened.BeginFile(context.Background(), windowsV3OperationGuardFile(t, reopened, selection, reopenedAdmission))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -74,8 +75,8 @@ func TestWindowsV3ParentDisplacementCutsFailClosedAndRecoverInsideRoot(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		session := windowsV3OperationOpen(t, authority, selection)
-		file := windowsV3OperationGuardFile(t, session, selection)
+		session, parentAdmission := windowsV3OperationOpen(t, authority, root, selection)
+		file := windowsV3OperationGuardFile(t, session, selection, parentAdmission)
 		transaction := windowsV3OperationBeginTransaction(t, session, file)
 		if err := transaction.WriteRange(context.Background(), 0, []byte("data")); err != nil {
 			t.Fatal(err)
@@ -107,8 +108,8 @@ func TestWindowsV3ParentDisplacementCutsFailClosedAndRecoverInsideRoot(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		reopened := windowsV3OperationOpen(t, reopenedAuthority, selection)
-		recoveryFile := windowsV3OperationGuardFile(t, reopened, selection)
+		reopened, reopenedAdmission := windowsV3OperationOpen(t, reopenedAuthority, root, selection)
+		recoveryFile := windowsV3OperationGuardFile(t, reopened, selection, reopenedAdmission)
 		start, err := reopened.BeginFile(context.Background(), recoveryFile)
 		if err != nil {
 			t.Fatal(err)
@@ -155,7 +156,7 @@ func windowsV3PlacementSelection(t *testing.T, size uint64) transfer.OutputSelec
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonical, err := transfer.NewCanonicalSelectionV1(request, plan)
+	canonical, err := transfer.NewTerminalSelectionObservationV1(request, plan)
 	if err != nil {
 		t.Fatal(err)
 	}

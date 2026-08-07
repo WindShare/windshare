@@ -1,8 +1,11 @@
 package resumestate
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"maps"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
 )
@@ -29,9 +32,9 @@ func BindSessionNamespaceAuthority(
 	if !control.valid() || !header.valid() || control.backend != header.backend || control.outputRoot != header.outputRoot {
 		return SessionNamespaceAuthority{}, fmt.Errorf("%w: session namespace authority binding", ErrInvalidState)
 	}
-	intent, intentErr := ParseResumeNamespaceName(intentDirectory)
+	intent, intentErr := ParseIntentNamespaceName(intentDirectory)
 	session, sessionErr := ParseSessionDirectoryName(sessionDirectory)
-	if intentErr != nil || sessionErr != nil || intent != header.resumeIntent || session != header.sessionID {
+	if intentErr != nil || sessionErr != nil || intent != header.intentDigest || session != header.sessionID {
 		return SessionNamespaceAuthority{}, fmt.Errorf("%w: session namespace binding", ErrInvalidState)
 	}
 	return SessionNamespaceAuthority{
@@ -67,9 +70,9 @@ func (authority SessionNamespaceAuthority) valid() bool {
 		authority.control.outputRoot != authority.header.outputRoot {
 		return false
 	}
-	intent, intentErr := ParseResumeNamespaceName(authority.intentDirectory)
+	intent, intentErr := ParseIntentNamespaceName(authority.intentDirectory)
 	session, sessionErr := ParseSessionDirectoryName(authority.sessionDirectory)
-	return intentErr == nil && sessionErr == nil && intent == authority.header.resumeIntent &&
+	return intentErr == nil && sessionErr == nil && intent == authority.header.intentDigest &&
 		session == authority.header.sessionID
 }
 
@@ -85,7 +88,66 @@ type SessionAuthority struct {
 	namespace      SessionNamespaceAuthority
 	selection      transfer.OutputSelection
 	filesByLocator map[string]transfer.OutputSelectionFile
-	bound          bool
+	// liveFilesByLocator is an in-process admission overlay for incremental
+	// discovery. It is deliberately separate from filesByLocator: the latter is
+	// reconstructed from the durable v3 header, while the overlay is accepted only
+	// after a parent DirectoryAdmission and is never treated as restart authority.
+	liveFilesByKey    map[LiveFileKey]LiveFileSelection
+	liveKeysByLocator map[string]LiveFileKey
+	liveIntentDigest  transfer.TransferIntentDigest
+	bound             bool
+}
+
+// LiveFileSelection is the complete authority tuple for a file admitted after
+// OpenOutput. The parent receipt is retained here (rather than inferred from a
+// path) so a dynamic file cannot become writable when its directory generation
+// changes. This value is process-local; a restart must rebuild it from a verified
+// FileCheckpointV1 before any file record can be bound.
+type LiveFileSelection struct {
+	IntentDigest    transfer.TransferIntentDigest
+	Selection       transfer.OutputSelectionFile
+	Revision        content.FileRevision
+	ParentAdmission transfer.DirectoryAdmission
+}
+
+// LiveFileKey makes every immutable binding component explicit. The parent token
+// is represented by its fixed-size bytes so the key stays comparable and cannot
+// accidentally depend on future private DirectoryAdmission fields.
+type LiveFileKey struct {
+	IntentDigest  transfer.TransferIntentDigest
+	FileID        catalog.FileID
+	Revision      content.FileRevision
+	CanonicalPath string
+	ExactSize     uint64
+	ParentToken   [sha256.Size]byte
+}
+
+func (selection LiveFileSelection) Key() (LiveFileKey, error) {
+	canonical, err := catalog.CanonicalPath(selection.Selection.Path)
+	if err != nil || canonical != selection.Selection.Path || selection.IntentDigest.IsZero() ||
+		selection.Selection.FileID.IsZero() || selection.Selection.ExpectedSize > catalog.MaxFileSize ||
+		selection.Selection.ParentDirectoryID.IsZero() || selection.Selection.ParentGeneration.IsZero() ||
+		selection.Revision.IsZero() || selection.ParentAdmission.IsZero() {
+		return LiveFileKey{}, fmt.Errorf("%w: live file selection identity", ErrInvalidState)
+	}
+	var parentToken [sha256.Size]byte
+	parentBytes := selection.ParentAdmission.Bytes()
+	if len(parentBytes) != len(parentToken) {
+		return LiveFileKey{}, fmt.Errorf("%w: live file parent admission", ErrInvalidState)
+	}
+	copy(parentToken[:], parentBytes)
+	return LiveFileKey{
+		IntentDigest: selection.IntentDigest, FileID: selection.Selection.FileID,
+		Revision: selection.Revision, CanonicalPath: canonical,
+		ExactSize: selection.Selection.ExpectedSize, ParentToken: parentToken,
+	}, nil
+}
+
+func (selection LiveFileSelection) valid() bool {
+	key, err := selection.Key()
+	return err == nil && key.IntentDigest == selection.IntentDigest &&
+		key.FileID == selection.Selection.FileID && key.Revision == selection.Revision &&
+		key.CanonicalPath == selection.Selection.Path && key.ExactSize == selection.Selection.ExpectedSize
 }
 
 func BindSessionAuthority(
@@ -102,7 +164,7 @@ func BindSessionAuthority(
 	directories := selection.DirectoryCount()
 	files := selection.FileCount()
 	if selection.ShareInstance() != header.shareInstance || selection.SyntheticRoot() != header.syntheticRoot ||
-		selection.ResumeIntent() != header.resumeIntent || selection.Identity() != header.selectionIdentity ||
+		header.intentDigest.IsZero() || selection.Identity() != header.selectionIdentity ||
 		directories != uint64(header.selectedDirectoryCount) ||
 		files != uint64(header.selectedFileCount) {
 		return SessionAuthority{}, fmt.Errorf("%w: selected plan binding", ErrInvalidState)
@@ -150,34 +212,157 @@ func (authority SessionAuthority) WithLifecycle(next SessionLifecycle) (SessionA
 	return authority, nil
 }
 
+// AuthorizedFileCount returns the exact number of immutable file authorities
+// currently represented by this session. Incremental files are intentionally
+// counted even though they are absent from the frozen v3 header: namespace
+// enumeration must be bounded by authority that was actually admitted, never by
+// a process-wide maximum or by untrusted names already present on disk.
+func (authority SessionAuthority) AuthorizedFileCount() (uint32, error) {
+	if !authority.valid() {
+		return 0, fmt.Errorf("%w: authorized file count", ErrInvalidState)
+	}
+	count := uint64(len(authority.filesByLocator)) + uint64(len(authority.liveFilesByKey))
+	if count > uint64(MaxFilesPerSession) {
+		return 0, fmt.Errorf("%w: authorized file count", ErrFileStateNamespaceLimit)
+	}
+	return uint32(count), nil
+}
+
 func (authority SessionAuthority) valid() bool {
 	header := authority.namespace.header
 	if !authority.bound || !authority.namespace.valid() ||
-		uint64(len(authority.filesByLocator)) != uint64(header.selectedFileCount) {
+		uint64(len(authority.filesByLocator)) != uint64(header.selectedFileCount) ||
+		uint64(len(authority.filesByLocator))+uint64(len(authority.liveFilesByKey)) > uint64(MaxFilesPerSession) {
 		return false
 	}
-	return authority.selection.ShareInstance() == header.shareInstance &&
-		authority.selection.SyntheticRoot() == header.syntheticRoot &&
-		authority.selection.ResumeIntent() == header.resumeIntent &&
-		authority.selection.Identity() == header.selectionIdentity
+	if authority.selection.ShareInstance() != header.shareInstance {
+		return false
+	}
+	if authority.selection.SyntheticRoot() != header.syntheticRoot ||
+		authority.selection.Identity() != header.selectionIdentity {
+		return false
+	}
+	if len(authority.liveFilesByKey) != len(authority.liveKeysByLocator) {
+		return false
+	}
+	if len(authority.liveFilesByKey) == 0 && !authority.liveIntentDigest.IsZero() {
+		return false
+	}
+	for key, live := range authority.liveFilesByKey {
+		if !live.valid() {
+			return false
+		}
+		derived, err := live.Key()
+		if err != nil || derived != key || authority.liveKeysByLocator[live.Selection.Path] != key ||
+			(!authority.liveIntentDigest.IsZero() && authority.liveIntentDigest != live.IntentDigest) {
+			return false
+		}
+	}
+	return true
 }
 
 func (authority SessionAuthority) empty() bool {
 	return authority.namespace.empty() && authority.selection.Identity().IsZero() &&
-		authority.selection.ResumeIntent().IsZero() && authority.filesByLocator == nil && !authority.bound
+		authority.filesByLocator == nil &&
+		authority.liveFilesByKey == nil && authority.liveKeysByLocator == nil &&
+		authority.liveIntentDigest.IsZero() && !authority.bound
 }
 
 func (authority SessionAuthority) selectedFile(locator string) (transfer.OutputSelectionFile, bool) {
+	if key, found := authority.liveKeysByLocator[locator]; found {
+		live, liveFound := authority.liveFilesByKey[key]
+		if liveFound {
+			return live.Selection, true
+		}
+	}
 	selected, found := authority.filesByLocator[locator]
 	return selected, found
+}
+
+func (authority SessionAuthority) liveFile(locator string) (LiveFileSelection, bool) {
+	key, found := authority.liveKeysByLocator[locator]
+	if !found {
+		return LiveFileSelection{}, false
+	}
+	live, found := authority.liveFilesByKey[key]
+	return live, found
+}
+
+// WithLiveFileSelection returns a new authority carrying one dynamically admitted
+// file. The immutable header and its frozen selection are untouched; this overlay
+// therefore cannot accidentally become durable restart authority. A caller that
+// wants to resume after a restart must first reconstruct the same tuple from a
+// verified FileCheckpointV1.
+func (authority SessionAuthority) WithLiveFileSelection(
+	live LiveFileSelection,
+) (SessionAuthority, error) {
+	if !authority.valid() || !live.valid() {
+		return SessionAuthority{}, fmt.Errorf("%w: live file selection authority", ErrInvalidState)
+	}
+	key, err := live.Key()
+	if err != nil {
+		return SessionAuthority{}, err
+	}
+	if existingStatic, exists := authority.filesByLocator[live.Selection.Path]; exists {
+		if existingStatic != live.Selection {
+			return SessionAuthority{}, fmt.Errorf("%w: live file shadows frozen selection", ErrInvalidState)
+		}
+		return SessionAuthority{}, fmt.Errorf("%w: live file path already selected", ErrInvalidState)
+	}
+	if existingKey, exists := authority.liveKeysByLocator[live.Selection.Path]; exists {
+		if existingKey != key {
+			return SessionAuthority{}, fmt.Errorf("%w: live file binding changed", ErrInvalidState)
+		}
+		return authority, nil
+	}
+	if !authority.liveIntentDigest.IsZero() && authority.liveIntentDigest != live.IntentDigest {
+		return SessionAuthority{}, fmt.Errorf("%w: live file intent changed", ErrInvalidState)
+	}
+	if uint64(len(authority.filesByLocator))+uint64(len(authority.liveFilesByKey)) >= uint64(MaxFilesPerSession) {
+		return SessionAuthority{}, fmt.Errorf("%w: live file selection authority", ErrFileStateNamespaceLimit)
+	}
+	if authority.liveFilesByKey == nil {
+		authority.liveFilesByKey = make(map[LiveFileKey]LiveFileSelection)
+	}
+	if authority.liveKeysByLocator == nil {
+		authority.liveKeysByLocator = make(map[string]LiveFileKey)
+	}
+	authority.liveFilesByKey = cloneLiveFileMap(authority.liveFilesByKey)
+	authority.liveKeysByLocator = cloneLiveFileLocatorMap(authority.liveKeysByLocator)
+	authority.liveFilesByKey[key] = live
+	authority.liveKeysByLocator[live.Selection.Path] = key
+	authority.liveIntentDigest = live.IntentDigest
+	if !authority.valid() {
+		return SessionAuthority{}, fmt.Errorf("%w: live file selection authority", ErrInvalidState)
+	}
+	return authority, nil
+}
+
+func cloneLiveFileMap(source map[LiveFileKey]LiveFileSelection) map[LiveFileKey]LiveFileSelection {
+	if source == nil {
+		return nil
+	}
+	clone := make(map[LiveFileKey]LiveFileSelection, len(source))
+	maps.Copy(clone, source)
+	return clone
+}
+
+func cloneLiveFileLocatorMap(source map[string]LiveFileKey) map[string]LiveFileKey {
+	if source == nil {
+		return nil
+	}
+	clone := make(map[string]LiveFileKey, len(source))
+	maps.Copy(clone, source)
+	return clone
 }
 
 // BoundFileRecord proves the whole authority chain down to the exact sharded
 // record name and selected-file claim. Recovery reducers require this type
 // because some of their decisions authorize namespace removal.
 type BoundFileRecord struct {
-	session SessionAuthority
-	record  FileRecord
+	session           SessionAuthority
+	checkpointRuntime CheckpointRuntimeBinding
+	record            FileRecord
 }
 
 func BindFileRecord(
@@ -200,6 +385,11 @@ func BindFileRecord(
 		selected.ModifiedTime != record.expectedMetadata.ModifiedTime {
 		return BoundFileRecord{}, fmt.Errorf("%w: file record selection binding", ErrInvalidState)
 	}
+	if live, liveFound := session.liveFile(record.canonicalLocator); liveFound &&
+		(live.IntentDigest != session.liveIntentDigest || live.Revision != record.revision ||
+			live.Selection.FileID != record.fileID || live.Selection.ExpectedSize != record.exactSize) {
+		return BoundFileRecord{}, fmt.Errorf("%w: live file revision binding", ErrInvalidState)
+	}
 	return BoundFileRecord{session: session, record: record}, nil
 }
 
@@ -207,7 +397,13 @@ func (bound BoundFileRecord) Session() SessionAuthority { return bound.session }
 func (bound BoundFileRecord) Record() FileRecord        { return bound.record }
 
 func (bound BoundFileRecord) valid() bool {
-	if !bound.session.valid() || !bound.record.valid() {
+	if !bound.record.valid() {
+		return false
+	}
+	if bound.checkpointRuntime.valid() {
+		return bound.checkpointRuntime.validRecord(bound.record)
+	}
+	if !bound.session.valid() {
 		return false
 	}
 	name := FileRecordName(bound.record.locatorDigest)

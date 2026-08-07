@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -86,7 +87,7 @@ func (immediateSmallBlocks) ReadRange(
 
 func TestClassifyTransferTerminationSeparatesNetworkAndLocalFailures(t *testing.T) {
 	localOutput := errors.New("output commit failed")
-	resource := transfer.NewJobResourceBudgetError(transfer.ErrSelectionPlanBudget)
+	resource := transfer.NewJobResourceBudgetError(transfer.ErrNodeLedgerBudget)
 	session := transfer.NewSessionFailure(errors.New("peer session ended"))
 	for name, test := range map[string]struct {
 		cause, runtimeErr, connectionErr error
@@ -139,9 +140,9 @@ func newImmediateSmallOutputAuthority(t *testing.T) *immediateSmallOutputAuthori
 	}}
 }
 
-func (authority *immediateSmallOutputAuthority) OpenSelection(
+func (authority *immediateSmallOutputAuthority) OpenOutput(
 	context.Context,
-	transfer.OutputSelection,
+	transfer.TransferIntent,
 ) (transfer.OutputSession, error) {
 	return authority.session, nil
 }
@@ -154,6 +155,18 @@ func (output *immediateSmallOutputSession) SessionID() transfer.OutputSessionID 
 }
 func (output *immediateSmallOutputSession) Capabilities() transfer.OutputCapabilities {
 	return output.capabilities
+}
+func (*immediateSmallOutputSession) AdmitDirectory(
+	_ context.Context,
+	directory transfer.OutputDirectory,
+) (transfer.DirectoryAdmission, error) {
+	// The scheduler treats the returned proof as the parent capability for every
+	// descendant. Minting the same session-scoped proof keeps this empty-root
+	// fixture faithful to the production output contract without exposing any
+	// mutable authority to the test.
+	secret := make([]byte, 32)
+	secret[0] = 1
+	return transfer.NewDirectoryAdmissionWithSecret(secret, directory)
 }
 func (*immediateSmallOutputSession) FinalizeDirectory(context.Context, transfer.OutputDirectory) error {
 	return nil
@@ -321,8 +334,23 @@ func TestRunTransferJobObservesImmediateSmallWithoutSubscriptionRace(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	outputRoot, err := filepath.Abs(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := transfer.NewPathTransferIntent(
+		share, root, rules, outputRoot, "cli-admission-test", transfer.OutputNativeTree,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID, err := transfer.NewTransferJobID()
+	if err != nil {
+		t.Fatal(err)
+	}
 	job, err := transfer.NewTransferJob(transfer.TransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
+		Intent: intent, JobID: jobID,
 		Catalog: immediateSmallCatalog{share: share, root: root}, Revisions: immediateSmallRevisions{},
 		Blocks: immediateSmallBlocks{}, Output: newImmediateSmallOutputAuthority(t),
 	})

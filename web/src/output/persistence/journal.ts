@@ -6,12 +6,55 @@ import type {
   OutputSourceIdentity,
 } from '../../transfer/output-session'
 import { snapshotOutputPath } from '../../transfer/output-session'
+import {
+  FILE_CHECKPOINT_COMMIT_CANDIDATE,
+  FILE_CHECKPOINT_COMMIT_PUBLISHED,
+  FILE_CHECKPOINT_NAMESPACE,
+  FILE_CHECKPOINT_OWNERSHIP_MARKER,
+  FILE_CHECKPOINT_PHASE_ACTIVE,
+  FILE_CHECKPOINT_PHASE_PUBLISHED,
+  FILE_CHECKPOINT_V1_SCHEMA_VERSION,
+  type FileCheckpointRange,
+  type FileCheckpointV1,
+  checkpointIdentityEqual,
+  deriveCheckpointIdentity,
+  newFileCheckpointV1,
+  validateFileCheckpoint,
+} from './checkpoint'
 
-export interface PersistedDirectoryRecord extends OutputSessionIdentity {
-  readonly journalSchema: typeof OUTPUT_JOURNAL_SCHEMA
-  readonly generation: bigint
+/** The physical store may use this bounded page size without changing semantics. */
+export const OUTPUT_CHECKPOINT_PAGE_RECORD_LIMIT = 128
+export const OUTPUT_JOURNAL_PAGE_RECORD_LIMIT = OUTPUT_CHECKPOINT_PAGE_RECORD_LIMIT
+
+export interface CheckpointNamespaceBinding {
+  readonly backend: string
+  /** Stable TransferIntentDigest; never a run/session identifier. */
+  readonly transferIntentDigest?: string
+  /** Stable receiver root identity, usually derived from a picker capability. */
+  readonly rootIdentity?: string
+  readonly outputSessionId?: string
+}
+
+interface PersistedRecordBinding {
+  readonly schemaVersion: typeof FILE_CHECKPOINT_V1_SCHEMA_VERSION
+  readonly ownershipMarker: typeof FILE_CHECKPOINT_OWNERSHIP_MARKER
+  readonly namespace: typeof FILE_CHECKPOINT_NAMESPACE
+  readonly recordId: string
+  readonly backend: string
+  readonly rootIdentity: string
+  readonly transferIntentDigest: string
+  /** Runtime-only lease identity. It is intentionally omitted by adapters. */
+  readonly outputSessionId: string
+  readonly stateGeneration: bigint
+  readonly checkpointGeneration: bigint
+  readonly phase: number
+  readonly commitState: number
   readonly checksum: string
+}
+
+export interface PersistedDirectoryRecord extends PersistedRecordBinding {
   readonly kind: 'directory'
+  readonly generation: bigint
   readonly canonicalPath: readonly string[]
   readonly ownedDirectoryIdentity: string
   readonly createdBySession: boolean
@@ -19,23 +62,21 @@ export interface PersistedDirectoryRecord extends OutputSessionIdentity {
   readonly finalized: boolean
 }
 
-export interface PersistedFileRecord extends OutputFileOwnership {
-  readonly journalSchema: typeof OUTPUT_JOURNAL_SCHEMA
-  readonly generation: bigint
-  readonly checksum: string
+export interface PersistedFileRecord extends PersistedRecordBinding, OutputFileOwnership {
   readonly kind: 'file'
+  readonly generation: bigint
   readonly source: OutputSourceIdentity
   readonly exactSize: bigint
   readonly durableRanges: readonly ByteRange[]
   readonly committed: boolean
+  readonly fileCheckpoint: FileCheckpointV1
+  readonly quarantineReason: FileCheckpointV1['quarantineReason']
+  readonly quarantineOrigin: FileCheckpointV1['quarantineOrigin']
+  readonly retirementReason: FileCheckpointV1['retirementReason']
   readonly modifiedTimeMilliseconds?: bigint
 }
 
 export type PersistedOutputRecord = PersistedDirectoryRecord | PersistedFileRecord
-
-export const OUTPUT_JOURNAL_SCHEMA = 1
-
-export const OUTPUT_JOURNAL_PAGE_RECORD_LIMIT = 128
 
 export interface OutputJournalScan {
   readonly kind?: PersistedOutputRecord['kind']
@@ -52,10 +93,11 @@ export interface OutputJournalPage {
 
 /**
  * A candidate and its committed publication are deliberately separate. Browser
- * storage adapters may use different physical mechanisms, but a completed call
- * must survive a fresh adapter instance before the next phase begins.
+ * adapters may use different physical mechanisms, but every phase is reopened
+ * through FileCheckpointV1 before it grants durable ranges to a transfer.
  */
 export interface OutputCheckpointJournal {
+  readonly binding?: CheckpointNamespaceBinding
   scanCommitted(scan: OutputJournalScan): Promise<OutputJournalPage>
   scanCandidates(scan: OutputJournalScan): Promise<OutputJournalPage>
   writeCandidate(record: PersistedOutputRecord): Promise<void>
@@ -70,44 +112,30 @@ export interface OutputCheckpointJournal {
 export function validateOutputJournalPage(
   page: OutputJournalPage,
   scan: OutputJournalScan,
-  identity: OutputSessionIdentity,
+  identity: OutputSessionIdentity | CheckpointNamespaceBinding,
 ): OutputJournalPage {
-  if (page.records.length > OUTPUT_JOURNAL_PAGE_RECORD_LIMIT) {
-    throw new TypeError('Output journal page exceeds its fixed record limit')
-  }
+  if (page.records.length > OUTPUT_CHECKPOINT_PAGE_RECORD_LIMIT) throw new TypeError('Output checkpoint page exceeds its fixed record limit')
   let previous = scan.cursor
   const records = page.records.map((candidate) => {
     const record = snapshotOutputRecord(candidate)
-    if (!recordBelongsToSession(record, identity) ||
-        (scan.kind !== undefined && record.kind !== scan.kind)) {
-      throw new TypeError('Output journal page escaped its session or kind boundary')
+    if (!recordBelongsToSession(record, identity) || (scan.kind !== undefined && record.kind !== scan.kind)) {
+      throw new TypeError('Output checkpoint page escaped its namespace or kind boundary')
     }
     const key = outputRecordKey(record)
     if (previous !== undefined) {
       const order = compareRecordKeys(key, previous)
-      if ((scan.direction === 'ascending' && order <= 0) ||
-          (scan.direction === 'descending' && order >= 0)) {
-        throw new TypeError('Output journal page cursor did not advance monotonically')
-      }
+      if ((scan.direction === 'ascending' && order <= 0) || (scan.direction === 'descending' && order >= 0)) throw new TypeError('Output checkpoint cursor did not advance monotonically')
     }
     previous = key
     return record
   })
   const last = records.at(-1)
-  if (records.length === OUTPUT_JOURNAL_PAGE_RECORD_LIMIT && page.nextCursor === undefined) {
-    throw new TypeError('Output journal full page omitted its continuation cursor')
-  }
-  if (page.nextCursor !== undefined &&
-      (records.length !== OUTPUT_JOURNAL_PAGE_RECORD_LIMIT ||
-        last === undefined || page.nextCursor !== outputRecordKey(last))) {
-    throw new TypeError('Output journal next cursor does not identify the bounded page tail')
-  }
-  return Object.freeze({
-    records: Object.freeze(records),
-    ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
-  })
+  if (records.length === OUTPUT_CHECKPOINT_PAGE_RECORD_LIMIT && page.nextCursor === undefined) throw new TypeError('Output checkpoint full page omitted its continuation cursor')
+  if (page.nextCursor !== undefined && (records.length !== OUTPUT_CHECKPOINT_PAGE_RECORD_LIMIT || last === undefined || page.nextCursor !== outputRecordKey(last))) throw new TypeError('Output checkpoint next cursor does not identify the bounded page tail')
+  return Object.freeze({ records: Object.freeze(records), ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }) })
 }
 
+/** A logical index remains path-addressable; the stable V1 recordId is separate. */
 export function outputRecordKey(record: PersistedOutputRecord): string {
   return `${record.kind}:${outputPathKey(record.canonicalPath)}`
 }
@@ -124,26 +152,46 @@ export function fileRecord(
   committed: boolean,
   generation: bigint,
 ): PersistedFileRecord {
+  const binding = namespaceBinding(identity)
   requireSessionBinding(identity, ownership)
-  requireGeneration(generation)
+  if (generation <= 0n) throw new TypeError('checkpoint generation must be positive')
+  const canonicalPath = snapshotOutputPath(ownership.canonicalPath)
   const durableRanges = new ByteRangeSet(file.exactSize, ranges).ranges
+  const checkpoint = newFileCheckpointV1({
+    transferIntentDigest: binding.transferIntentDigest,
+    fileId: file.source.fileId,
+    fileRevision: file.source.fileRevision,
+    canonicalPath,
+    exactSize: file.exactSize,
+    backend: binding.backend,
+    rootIdentity: binding.rootIdentity,
+    ownedOutputObject: ownership.ownedFileIdentity,
+    stateGeneration: generation,
+    checkpointGeneration: generation,
+    verifiedRanges: durableRanges.map(toCheckpointRange),
+    phase: committed ? FILE_CHECKPOINT_PHASE_PUBLISHED : FILE_CHECKPOINT_PHASE_ACTIVE,
+    commitState: committed ? FILE_CHECKPOINT_COMMIT_PUBLISHED : FILE_CHECKPOINT_COMMIT_CANDIDATE,
+    // Existing fake adapters use readable identities. They are hashed at this
+    // compatibility boundary; production descriptors provide strict fixed IDs.
+    allowReadableIdentities: true,
+  })
   const record = {
-    journalSchema: OUTPUT_JOURNAL_SCHEMA,
+    ...runtimeBinding(identity, checkpoint),
+    kind: 'file' as const,
     generation,
-    kind: 'file',
-    backend: identity.backend,
-    outputSessionId: identity.outputSessionId,
-    canonicalPath: snapshotPath(ownership.canonicalPath),
+    canonicalPath,
     ownedFileIdentity: requirePart(ownership.ownedFileIdentity, 'owned file'),
     source: snapshotSource(file.source),
     exactSize: file.exactSize,
     durableRanges,
     committed,
-    ...(file.modifiedTimeMilliseconds === undefined
-      ? {}
-      : { modifiedTimeMilliseconds: file.modifiedTimeMilliseconds }),
-  } as const
-  return Object.freeze({ ...record, checksum: recordChecksum(record) })
+    fileCheckpoint: checkpoint,
+    quarantineReason: checkpoint.quarantineReason,
+    quarantineOrigin: checkpoint.quarantineOrigin,
+    retirementReason: checkpoint.retirementReason,
+    ...(file.modifiedTime === undefined ? {} : { modifiedTimeMilliseconds: file.modifiedTime.milliseconds }),
+  }
+  return Object.freeze({ ...record })
 }
 
 export function directoryRecord(
@@ -155,162 +203,156 @@ export function directoryRecord(
   finalized: boolean,
   generation: bigint,
 ): PersistedDirectoryRecord {
-  requireGeneration(generation)
-  const record = {
-    journalSchema: OUTPUT_JOURNAL_SCHEMA,
+  const binding = namespaceBinding(identity)
+  if (generation <= 0n) throw new TypeError('checkpoint generation must be positive')
+  const canonicalPath = snapshotOutputPath(path)
+  const recordId = deriveCheckpointIdentity(stableMetadataString([
+    'directory-admission-v1', binding.transferIntentDigest, binding.backend, binding.rootIdentity,
+    canonicalPath, ownedDirectoryIdentity,
+  ]))
+  const base = {
+    schemaVersion: FILE_CHECKPOINT_V1_SCHEMA_VERSION,
+    ownershipMarker: FILE_CHECKPOINT_OWNERSHIP_MARKER,
+    namespace: FILE_CHECKPOINT_NAMESPACE,
+    recordId,
+    backend: binding.backend,
+    rootIdentity: binding.rootIdentity,
+    transferIntentDigest: binding.transferIntentDigest,
+    outputSessionId: identity.outputSessionId,
+    stateGeneration: generation,
+    checkpointGeneration: generation,
+    phase: finalized ? FILE_CHECKPOINT_PHASE_PUBLISHED : FILE_CHECKPOINT_PHASE_ACTIVE,
+    commitState: finalized ? FILE_CHECKPOINT_COMMIT_PUBLISHED : FILE_CHECKPOINT_COMMIT_CANDIDATE,
+    kind: 'directory' as const,
     generation,
-    kind: 'directory',
-    backend: requirePart(identity.backend, 'backend'),
-    outputSessionId: requirePart(identity.outputSessionId, 'output session'),
-    canonicalPath: snapshotPath(path),
+    canonicalPath,
     ownedDirectoryIdentity: requirePart(ownedDirectoryIdentity, 'owned directory'),
     createdBySession,
-    ...(modifiedTimeMilliseconds === undefined
-      ? {}
-      : { modifiedTimeMilliseconds }),
+    ...(modifiedTimeMilliseconds === undefined ? {} : { modifiedTimeMilliseconds }),
     finalized,
-  } as const
-  return Object.freeze({ ...record, checksum: recordChecksum(record) })
+  }
+  return Object.freeze({ ...base, checksum: deriveCheckpointIdentity(directoryChecksumPayload(base)) })
 }
 
 export function snapshotOutputRecord(record: PersistedOutputRecord): PersistedOutputRecord {
-  if (record.journalSchema !== OUTPUT_JOURNAL_SCHEMA) {
-    throw new TypeError('persisted output journal schema is unsupported')
-  }
-  requireGeneration(record.generation)
-  const expectedChecksum = recordChecksum(record)
-  if (record.checksum !== expectedChecksum) {
-    throw new TypeError('persisted output journal checksum is invalid')
+  if (record.schemaVersion !== FILE_CHECKPOINT_V1_SCHEMA_VERSION ||
+      record.ownershipMarker !== FILE_CHECKPOINT_OWNERSHIP_MARKER ||
+      record.namespace !== FILE_CHECKPOINT_NAMESPACE) {
+    throw new TypeError('persisted output record ownership is invalid')
   }
   if (record.kind === 'file') {
-    return fileRecord(
-      record,
-      record,
-      {
-        source: record.source,
-        path: record.canonicalPath,
-        exactSize: record.exactSize,
-        ...(record.modifiedTimeMilliseconds === undefined
-          ? {}
-          : { modifiedTimeMilliseconds: record.modifiedTimeMilliseconds }),
-      },
-      record.durableRanges,
-      record.committed,
-      record.generation,
-    )
+    const checkpoint = record.fileCheckpoint ?? checkpointFromRecord(record)
+    validateFileCheckpoint(checkpoint)
+    const expected = checkpointFromRecord(record)
+    if (!checkpointIdentityEqual(expected, checkpoint) || expected.checksum !== checkpoint.checksum ||
+        checkpoint.recordId !== record.recordId || checkpoint.backend !== record.backend ||
+        checkpoint.quarantineReason !== record.quarantineReason ||
+        checkpoint.quarantineOrigin !== record.quarantineOrigin ||
+        checkpoint.retirementReason !== record.retirementReason ||
+        checkpoint.canonicalPath !== outputPathText(record.canonicalPath) || checkpoint.exactSize !== record.exactSize) {
+      throw new TypeError('persisted file checkpoint binding is invalid')
+    }
+    const durableRanges = new ByteRangeSet(record.exactSize, record.durableRanges).ranges
+    if (durableRanges.length !== checkpoint.verifiedRanges.length || durableRanges.some((range, index) => range.start !== checkpoint.verifiedRanges[index]!.start || range.end !== checkpoint.verifiedRanges[index]!.end)) throw new TypeError('persisted file ranges do not match FileCheckpointV1')
+    return Object.freeze({
+      ...record,
+      canonicalPath: Object.freeze([...record.canonicalPath]),
+      source: snapshotSource(record.source),
+      durableRanges,
+      fileCheckpoint: checkpoint,
+    })
   }
-  return directoryRecord(
-    record,
-    record.canonicalPath,
-    record.ownedDirectoryIdentity,
-    record.createdBySession,
-    record.modifiedTimeMilliseconds,
-    record.finalized,
-    record.generation,
-  )
+  if (record.schemaVersion !== FILE_CHECKPOINT_V1_SCHEMA_VERSION || record.ownershipMarker !== FILE_CHECKPOINT_OWNERSHIP_MARKER || record.namespace !== FILE_CHECKPOINT_NAMESPACE) throw new TypeError('persisted directory metadata ownership is invalid')
+  if (record.checksum !== deriveCheckpointIdentity(directoryChecksumPayload(record))) throw new TypeError('persisted directory metadata checksum is invalid')
+  return Object.freeze({ ...record, canonicalPath: Object.freeze([...record.canonicalPath]) })
 }
 
-export function sameOutputRecord(
-  left: PersistedOutputRecord,
-  right: PersistedOutputRecord,
-): boolean {
-  return left.checksum === right.checksum &&
-    left.kind === right.kind &&
-    left.generation === right.generation &&
-    outputRecordKey(left) === outputRecordKey(right)
+export function sameOutputRecord(left: PersistedOutputRecord, right: PersistedOutputRecord): boolean {
+  return left.checksum === right.checksum && left.kind === right.kind && left.recordId === right.recordId && left.generation === right.generation && outputRecordKey(left) === outputRecordKey(right)
 }
 
-export function recordBelongsToSession(
-  record: PersistedOutputRecord,
-  identity: OutputSessionIdentity,
-): boolean {
-  return record.backend === identity.backend &&
-    record.outputSessionId === identity.outputSessionId
+export function recordBelongsToSession(record: PersistedOutputRecord, identity: OutputSessionIdentity | CheckpointNamespaceBinding): boolean {
+  const binding = namespaceBinding(identity)
+  return record.backend === binding.backend &&
+    (binding.transferIntentDigest === undefined || record.transferIntentDigest === binding.transferIntentDigest) &&
+    (binding.rootIdentity === undefined || record.rootIdentity === binding.rootIdentity) &&
+    (record.outputSessionId === undefined || binding.outputSessionId === undefined || record.outputSessionId === binding.outputSessionId)
 }
 
-function requireSessionBinding(
-  identity: OutputSessionIdentity,
-  ownership: OutputFileOwnership,
-): void {
-  if (ownership.backend !== identity.backend ||
-      ownership.outputSessionId !== identity.outputSessionId) {
-    throw new TypeError('output ownership belongs to another session')
-  }
-}
-
-function snapshotSource(source: OutputSourceIdentity): OutputSourceIdentity {
-  return Object.freeze({
-    shareInstance: requirePart(source.shareInstance, 'share instance'),
-    fileId: requirePart(source.fileId, 'file'),
-    fileRevision: requirePart(source.fileRevision, 'file revision'),
+function checkpointFromRecord(record: PersistedFileRecord): FileCheckpointV1 {
+  return newFileCheckpointV1({
+    transferIntentDigest: record.transferIntentDigest,
+    fileId: record.source.fileId,
+    fileRevision: record.source.fileRevision,
+    canonicalPath: record.canonicalPath,
+    exactSize: record.exactSize,
+    backend: record.backend,
+    rootIdentity: record.rootIdentity,
+    ownedOutputObject: record.ownedFileIdentity,
+    stateGeneration: record.stateGeneration,
+    checkpointGeneration: record.checkpointGeneration,
+    verifiedRanges: record.durableRanges.map(toCheckpointRange),
+    phase: record.phase,
+    commitState: record.commitState,
+    quarantineReason: record.quarantineReason,
+    quarantineOrigin: record.quarantineOrigin,
+    retirementReason: record.retirementReason,
+    allowReadableIdentities: true,
   })
 }
 
-function snapshotPath(path: readonly string[]): readonly string[] {
-  return snapshotOutputPath(path)
+function namespaceBinding(identity: OutputSessionIdentity | CheckpointNamespaceBinding): Required<Pick<CheckpointNamespaceBinding, 'backend' | 'transferIntentDigest' | 'rootIdentity'>> & Pick<CheckpointNamespaceBinding, 'outputSessionId'> {
+  const source = identity as CheckpointNamespaceBinding
+  return {
+    backend: requirePart(source.backend, 'backend'),
+    transferIntentDigest: source.transferIntentDigest ?? deriveCheckpointIdentity(`windshare/compat-intent/v1\0${source.backend}`),
+    rootIdentity: source.rootIdentity ?? deriveCheckpointIdentity(`windshare/compat-root/v1\0${source.backend}`),
+    ...(source.outputSessionId === undefined ? {} : { outputSessionId: source.outputSessionId }),
+  }
+}
+
+function runtimeBinding(identity: OutputSessionIdentity, checkpoint: FileCheckpointV1): PersistedRecordBinding {
+  return {
+    schemaVersion: FILE_CHECKPOINT_V1_SCHEMA_VERSION,
+    ownershipMarker: FILE_CHECKPOINT_OWNERSHIP_MARKER,
+    namespace: FILE_CHECKPOINT_NAMESPACE,
+    recordId: checkpoint.recordId,
+    backend: checkpoint.backend,
+    rootIdentity: checkpoint.rootIdentity,
+    transferIntentDigest: checkpoint.transferIntentDigest,
+    outputSessionId: identity.outputSessionId,
+    stateGeneration: checkpoint.stateGeneration,
+    checkpointGeneration: checkpoint.checkpointGeneration,
+    phase: checkpoint.phase,
+    commitState: checkpoint.commitState,
+    checksum: checkpoint.checksum,
+  }
+}
+
+function requireSessionBinding(identity: OutputSessionIdentity, ownership: OutputFileOwnership): void {
+  if (ownership.backend !== identity.backend || ownership.outputSessionId !== identity.outputSessionId) throw new TypeError('output ownership belongs to another runtime session')
+}
+
+function snapshotSource(source: OutputSourceIdentity): OutputSourceIdentity {
+  return Object.freeze({ shareInstance: requirePart(source.shareInstance, 'share instance'), fileId: requirePart(source.fileId, 'file'), fileRevision: requirePart(source.fileRevision, 'file revision') })
 }
 
 function requirePart(value: string, label: string): string {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new TypeError(`${label} identity must not be empty`)
-  }
+  if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} identity must not be empty`)
   return value
 }
 
-function requireGeneration(generation: bigint): void {
-  if (typeof generation !== 'bigint' || generation <= 0n) {
-    throw new TypeError('persisted output generation must be positive')
-  }
+function toCheckpointRange(range: ByteRange): FileCheckpointRange { return { start: range.start, end: range.end } }
+function outputPathText(path: readonly string[]): string { return path.join('/') }
+function directoryChecksumPayload(record: Omit<PersistedDirectoryRecord, 'checksum'> | PersistedDirectoryRecord): string {
+  const durable = { ...record }
+  Reflect.deleteProperty(durable, 'checksum')
+  Reflect.deleteProperty(durable, 'outputSessionId')
+  return stableMetadataString(durable)
 }
-
-/** The checksum detects accidental local corruption; same-account tampering is out of scope. */
-type UnsealedOutputRecord =
-  | Omit<PersistedFileRecord, 'checksum'>
-  | Omit<PersistedDirectoryRecord, 'checksum'>
-
-function recordChecksum(record: UnsealedOutputRecord | PersistedOutputRecord): string {
-  const payload = record.kind === 'file'
-    ? [
-        'file',
-        String(record.journalSchema),
-        record.generation.toString(),
-        record.backend,
-        record.outputSessionId,
-        [...record.canonicalPath],
-        record.ownedFileIdentity,
-        [record.source.shareInstance, record.source.fileId, record.source.fileRevision],
-        record.exactSize.toString(),
-        record.durableRanges.map((range) => [range.start.toString(), range.end.toString()]),
-        record.committed,
-        record.modifiedTimeMilliseconds?.toString() ?? null,
-      ]
-    : [
-        'directory',
-        String(record.journalSchema),
-        record.generation.toString(),
-        record.backend,
-        record.outputSessionId,
-        [...record.canonicalPath],
-        record.ownedDirectoryIdentity,
-        record.createdBySession,
-        record.modifiedTimeMilliseconds?.toString() ?? null,
-        record.finalized,
-      ]
-  return fnv1a64(JSON.stringify(payload))
+function stableMetadataString(value: unknown): string {
+  return JSON.stringify(value, (_key, candidate: unknown) => typeof candidate === 'bigint' ? `${candidate.toString()}n` : candidate)
 }
-
-function fnv1a64(value: string): string {
-  const offsetBasis = 14_695_981_039_346_656_037n
-  const prime = 1_099_511_628_211n
-  const mask = (1n << 64n) - 1n
-  let hash = offsetBasis
-  for (const byte of new TextEncoder().encode(value)) {
-    hash ^= BigInt(byte)
-    hash = (hash * prime) & mask
-  }
-  return hash.toString(16).padStart(16, '0')
-}
-
 function compareRecordKeys(left: string, right: string): number {
   if (left === right) return 0
   return left < right ? -1 : 1

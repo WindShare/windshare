@@ -3,13 +3,10 @@ package transfer
 import (
 	"context"
 	"errors"
-	"fmt"
-	"slices"
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 type atomicRequestedRangeSink struct {
@@ -136,8 +133,8 @@ func (r *jobRun) settleFailedFile(
 	cause error,
 	retireReason FileRetireReason,
 ) error {
-	if !retireReason.valid() || isJobTerminalError(cause) || isOutputFailure(cause) ||
-		outputFailureRequiresJobPause(cause, r.output.Capabilities()) {
+	inspection := inspectLifecycleError(cause)
+	if !retireReason.valid() || inspection.jobTerminal() || inspection.outputFailure || inspection.exhausted {
 		return r.pauseFailedFile(ctx, plan, opened, transaction, stage, cause)
 	}
 	settleContext, cancel := r.job.newSettlementContext(ctx)
@@ -159,8 +156,8 @@ func (r *jobRun) settleFailedFile(
 	if settlementErr == nil {
 		r.acceptFileSettlement(settlement)
 	}
-	r.files = append(r.files, failure)
-	r.traceFileSettlement(plan.file, settlement, settlementErr != nil)
+	r.recordFileFailure(failure)
+	r.traceFileSettlement(plan, settlement, settlementErr != nil)
 	if settlementErr != nil {
 		r.settlementFailure = errors.Join(r.settlementFailure, settlementErr)
 		return cause
@@ -179,6 +176,10 @@ func (r *jobRun) pauseFailedFile(
 	stage FailureStage,
 	cause error,
 ) error {
+	inspection := inspectLifecycleError(cause)
+	isolatedOutputFailure := inspection.outputCanContinueAfterFileSettlement(r.output.Capabilities())
+	isolatedSourceFailure := inspection.isolatedFileSource && !inspection.jobTerminal() &&
+		!inspection.outputFailure
 	reason := filePauseReason(cause)
 	settleContext, cancel := r.job.newSettlementContext(ctx)
 	settlement, settlementErr := transaction.Pause(settleContext, reason)
@@ -192,16 +193,26 @@ func (r *jobRun) pauseFailedFile(
 	if settlementErr == nil {
 		r.acceptFileSettlement(settlement)
 	}
-	r.files = append(r.files, FileJobFailure{
+	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.path, Stage: stage, Cause: cause,
 		Settlement: settlement, SettlementFailure: settlementErr,
 		LeaseReleaseFailure: releaseErr,
 	})
-	r.traceFileSettlement(plan.file, settlement, settlementErr != nil)
+	r.traceFileSettlement(plan, settlement, settlementErr != nil)
 	if settlementErr != nil {
 		r.settlementFailure = errors.Join(r.settlementFailure, settlementErr)
+		return errors.Join(cause, releaseErr)
 	}
-	return cause
+	if isJobTerminalError(releaseErr) {
+		return errors.Join(cause, releaseErr)
+	}
+	// A verified file-local pause restores the output session invariant. Keeping
+	// the original fault in JobResult is sufficient; returning it here would
+	// incorrectly turn an isolated transaction into a worker-wide cancellation.
+	if isolatedOutputFailure || isolatedSourceFailure {
+		return nil
+	}
+	return errors.Join(cause, releaseErr)
 }
 
 func (r *jobRun) commitTransferredFile(
@@ -220,40 +231,41 @@ func (r *jobRun) commitTransferredFile(
 	if settlementErr != nil {
 		r.settlementFailure = errors.Join(r.settlementFailure, settlementErr)
 		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
-		r.files = append(r.files, FileJobFailure{
+		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
-			Settlement: settlement, SettlementFailure: settlementErr,
+			Cause: settlementErr, Settlement: settlement, SettlementFailure: settlementErr,
 			LeaseReleaseFailure: releaseErr,
 		})
-		r.traceFileSettlement(plan.file, settlement, true)
-		if isJobTerminalError(releaseErr) {
-			return releaseErr
-		}
-		return nil
+		r.traceFileSettlement(plan, settlement, true)
+		// Commit is the transaction's terminal publication operation. Once its
+		// settlement cannot be proven, no sibling or directory finalization may
+		// advance the same job namespace before PauseJob takes ownership.
+		return errors.Join(settlementErr, releaseErr)
 	}
-	if !settlement.matchesBinding(transaction.Binding()) || settlement.Kind() != FilePublished &&
+	if !settlement.matchesCommittedOutput(transaction.Binding(), r.output.Capabilities()) || settlement.Kind() != FilePublished &&
 		settlement.Kind() != FilePublishBlocked && settlement.Kind() != FileQuarantined {
 		return r.rejectCommitSettlement(ctx, plan, opened, settlement)
 	}
 	r.acceptFileSettlement(settlement)
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
-	r.traceFileSettlement(plan.file, settlement, releaseErr != nil)
+	r.traceFileSettlement(plan, settlement, releaseErr != nil)
 	switch settlement.Kind() {
 	case FilePublished:
 		r.succeeded++
+		r.job.tracker.completeFile(plan.expectedSize)
 		if releaseErr != nil {
-			r.files = append(r.files, FileJobFailure{
+			r.recordFileFailure(FileJobFailure{
 				FileID: plan.file, Path: plan.path, Stage: FailureLeaseRelease, Cause: releaseErr,
 			})
 		}
 	case FilePublishBlocked:
-		r.files = append(r.files, FileJobFailure{
+		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
 			Cause: ErrOutputPublishBlocked, Settlement: settlement,
 			LeaseReleaseFailure: releaseErr,
 		})
 	case FileQuarantined:
-		r.files = append(r.files, FileJobFailure{
+		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
 			Cause: ErrOutputQuarantined, Settlement: settlement,
 			LeaseReleaseFailure: releaseErr,
@@ -274,12 +286,12 @@ func (r *jobRun) rejectCommitSettlement(
 	contractFailure := outputContractFault(nil)
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 	r.settlementFailure = errors.Join(r.settlementFailure, contractFailure)
-	r.files = append(r.files, FileJobFailure{
+	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.path, Stage: FailureFileOutput, Cause: contractFailure,
 		Settlement: settlement, SettlementFailure: contractFailure,
 		LeaseReleaseFailure: releaseErr,
 	})
-	r.traceFileSettlement(plan.file, settlement, true)
+	r.traceFileSettlement(plan, settlement, true)
 	return errors.Join(contractFailure, releaseErr)
 }
 
@@ -296,16 +308,25 @@ func (r *jobRun) finish(ctx context.Context) JobResult {
 			r.terminationCause = cause
 		}
 	}
+	directories, files, omittedDirectories, omittedFiles, sourceDriftFailure := r.failureSnapshot()
+	if sourceDriftFailure == nil && isSourceDriftFailure(r.terminationCause) {
+		sourceDriftFailure = r.terminationCause
+	}
 	outcome := JobSucceeded
-	if len(r.directories) != 0 || len(r.files) != 0 {
+	if len(directories) != 0 || len(files) != 0 || omittedDirectories != 0 || omittedFiles != 0 ||
+		r.selectionResolutionFailure != nil || sourceDriftFailure != nil {
 		outcome = JobCompletedWithErrors
 	}
 	outcome = r.settleJob(ctx, outcome)
 	return JobResult{
 		Outcome: outcome, Settlement: r.settlement,
-		ResumeIntent: r.resumeIntent, SelectionIdentity: r.selectionIdentity,
-		Measure: r.job.Measure(), Directories: slices.Clone(r.directories), Files: slices.Clone(r.files),
-		SucceededFiles: r.succeeded, TerminationCause: r.terminationCause,
+		TransferJobID: r.job.jobID, IntentDigest: r.job.intent.Digest(), TransferIntent: r.job.intent,
+		SelectionObservation: r.selectionObservation, SelectionIdentity: r.selectionIdentity,
+		Measure: r.job.Measure(), Directories: directories, Files: files,
+		OmittedDirectoryFailures: omittedDirectories, OmittedFileFailures: omittedFiles,
+		SelectionResolutionFailure: r.selectionResolutionFailure,
+		SourceDriftFailure:         sourceDriftFailure,
+		SucceededFiles:             r.succeeded, TerminationCause: r.terminationCause,
 		SettlementFailure: r.settlementFailure,
 	}
 }
@@ -347,8 +368,9 @@ func (r *jobRun) pauseJob(ctx context.Context) {
 		r.settlement = settlement
 	}
 	r.job.trace(TransferLifecycleTrace{
-		Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(), ResumeIntent: r.resumeIntent,
-		JobSettlement: settlement.Kind(), Failed: err != nil,
+		Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(),
+		SelectionObservation: r.selectionObservation,
+		JobSettlement:        settlement.Kind(), Failed: err != nil,
 	})
 }
 
@@ -366,15 +388,17 @@ func (r *jobRun) completeJob(ctx context.Context, outcome JobOutcome) {
 	if err != nil {
 		r.settlementFailure = errors.Join(r.settlementFailure, err)
 		r.job.trace(TransferLifecycleTrace{
-			Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(), ResumeIntent: r.resumeIntent,
-			JobSettlement: settlement.Kind(), Failed: true,
+			Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(),
+			SelectionObservation: r.selectionObservation,
+			JobSettlement:        settlement.Kind(), Failed: true,
 		})
 		return
 	}
 	r.settlement = settlement
 	r.job.trace(TransferLifecycleTrace{
-		Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(), ResumeIntent: r.resumeIntent,
-		JobSettlement: settlement.Kind(),
+		Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(),
+		SelectionObservation: r.selectionObservation,
+		JobSettlement:        settlement.Kind(),
 	})
 }
 
@@ -383,13 +407,18 @@ func (j *TransferJob) newSettlementContext(parent context.Context) (context.Cont
 }
 
 func filePauseReason(cause error) FilePauseReason {
+	inspection := inspectLifecycleError(cause)
 	switch {
-	case errors.Is(cause, context.Canceled), errors.Is(cause, context.DeadlineExceeded):
+	case inspection.interrupted:
 		return FilePauseInterrupted
-	case isSessionFailure(cause):
+	case inspection.jobTerminalSession():
 		return FilePauseSessionFailure
-	case isOutputFailure(cause):
+	case inspection.outputFailure:
 		return FilePauseOutputFailure
+	case inspection.jobResourceBudget:
+		return FilePauseResourceBudget
+	case inspection.jobDependencyContract:
+		return FilePauseDependencyContract
 	default:
 		return FilePauseTransportFailure
 	}
@@ -399,13 +428,18 @@ func jobPauseReason(cause, settlementFailure error) JobPauseReason {
 	if settlementFailure != nil {
 		return JobPauseOutputFailure
 	}
+	inspection := inspectLifecycleError(cause)
 	switch {
-	case errors.Is(cause, context.Canceled), errors.Is(cause, context.DeadlineExceeded):
+	case inspection.interrupted:
 		return JobPauseInterrupted
-	case isSessionFailure(cause):
+	case inspection.jobTerminalSession():
 		return JobPauseSessionFailure
-	case isOutputFailure(cause):
+	case inspection.outputFailure:
 		return JobPauseOutputFailure
+	case inspection.jobResourceBudget:
+		return JobPauseResourceBudget
+	case inspection.jobDependencyContract:
+		return JobPauseDependencyContract
 	default:
 		return JobPauseTransportFailure
 	}
@@ -416,14 +450,13 @@ type isolatedPermanentSourceFailure interface {
 	IsolatedPermanentSourceFailure()
 }
 
+type isolatedFileSourceFailure interface {
+	error
+	IsolatedFileSourceFailure()
+}
+
 func fileRetireReason(cause error) FileRetireReason {
-	if errors.Is(cause, content.ErrRevisionDrift) || errors.Is(cause, ErrBlockInvalidated) {
-		return FileRetireInvalidatedRevision
-	}
-	if _, ok := errors.AsType[isolatedPermanentSourceFailure](cause); ok {
-		return FileRetireIsolatedPermanentSourceFailure
-	}
-	return 0
+	return inspectLifecycleError(cause).retireReason()
 }
 
 func validateOpenedFile(share catalog.ShareInstance, entry catalog.Entry, opened OpenedRevision) error {
@@ -491,26 +524,42 @@ func validateOutputFileBinding(
 	return nil
 }
 
-func splitAtBlockBoundaries(ranges content.RangeSet, geometry content.FileGeometry) []content.Range {
-	result := make([]content.Range, 0)
-	chunk := uint64(geometry.ChunkSize())
-	for _, current := range ranges.Ranges() {
-		for offset := current.Offset; offset < current.End; {
-			next := min(current.End, ((offset/chunk)+1)*chunk)
-			result = append(result, content.Range{Offset: offset, End: next})
-			offset = next
-		}
+func checkpointExactlyAdvances(
+	transaction FileTransaction,
+	prior VerifiedDurableRanges,
+	requested content.Range,
+	next VerifiedDurableRanges,
+) bool {
+	requestedSet, err := content.NewRangeSet([]content.Range{requested})
+	if err != nil {
+		return false
 	}
-	return result
+	expected, err := MergeRanges(prior.Ranges(), requestedSet)
+	return err == nil && next.Binding() == transaction.Binding() &&
+		next.CheckpointGeneration() > prior.CheckpointGeneration() &&
+		exactRangeSetsEqual(next.Ranges(), expected)
 }
 
-func rangeContains(ranges content.RangeSet, target content.Range) bool {
-	for _, current := range ranges.Ranges() {
-		if current.Offset <= target.Offset && current.End >= target.End {
-			return true
+func checkpointAcknowledgesTransientWrite(
+	transaction FileTransaction,
+	prior VerifiedDurableRanges,
+	next VerifiedDurableRanges,
+) bool {
+	return next.Binding() == transaction.Binding() && next.Ranges().IsEmpty() &&
+		next.CheckpointGeneration() > prior.CheckpointGeneration()
+}
+
+func exactRangeSetsEqual(left, right content.RangeSet) bool {
+	leftRanges, rightRanges := left.Ranges(), right.Ranges()
+	if len(leftRanges) != len(rightRanges) {
+		return false
+	}
+	for index := range leftRanges {
+		if leftRanges[index] != rightRanges[index] {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func rangesContain(available, required content.RangeSet) bool {
@@ -528,11 +577,15 @@ func rangesContain(available, required content.RangeSet) bool {
 	return true
 }
 
-func (r *jobRun) traceFileSettlement(file catalog.FileID, settlement FileSettlement, failed bool) {
+func (r *jobRun) traceFileSettlement(plan plannedFile, settlement FileSettlement, failed bool) {
 	r.job.trace(TransferLifecycleTrace{
-		Stage: TransferFileSettled, OutputSessionID: r.output.SessionID(), ResumeIntent: r.resumeIntent,
-		FileID:         file,
-		FileSettlement: settlement.Kind(), Failed: failed,
+		Stage: TransferFileSettled, OutputSessionID: r.output.SessionID(),
+		SelectionObservation: r.selectionObservation,
+		DirectoryID:          plan.parentDirectory,
+		DirectoryGeneration:  plan.parentGeneration,
+		FileID:               plan.file,
+		FileSelection:        plan.selectionDecision,
+		FileSettlement:       settlement.Kind(), Failed: failed,
 	})
 }
 
@@ -540,87 +593,4 @@ func (r *jobRun) acceptFileSettlement(settlement FileSettlement) {
 	if settlement.Kind() == FilePublishBlocked || settlement.Kind() == FileQuarantined {
 		r.needsAttention = true
 	}
-}
-
-type SessionFailureError struct{ cause error }
-
-// IsolatedPermanentSourceFailureError is explicit retirement authority. A raw
-// range error is intentionally insufficient because it may be retryable
-// transport failure or may have originated in the output sink.
-type IsolatedPermanentSourceFailureError struct{ cause error }
-
-func NewIsolatedPermanentSourceFailure(cause error) error {
-	if cause == nil {
-		cause = errors.New("file source failed permanently")
-	}
-	return &IsolatedPermanentSourceFailureError{cause: cause}
-}
-
-func (failure *IsolatedPermanentSourceFailureError) Error() string {
-	return fmt.Sprintf("transfer isolated permanent source failure: %v", failure.cause)
-}
-func (failure *IsolatedPermanentSourceFailureError) Unwrap() error { return failure.cause }
-func (failure *IsolatedPermanentSourceFailureError) IsolatedPermanentSourceFailure() {
-}
-
-func NewSessionFailure(cause error) error {
-	if cause == nil {
-		cause = errors.New("protocol session failed")
-	}
-	return &SessionFailureError{cause: cause}
-}
-
-func (e *SessionFailureError) Error() string   { return fmt.Sprintf("transfer session: %v", e.cause) }
-func (e *SessionFailureError) Unwrap() error   { return e.cause }
-func (e *SessionFailureError) SessionFailure() {}
-
-func isSessionFailure(err error) bool {
-	var scoped interface{ SessionFailure() }
-	return errors.As(err, &scoped) || errors.Is(err, protocolsession.ErrSessionTerminated) ||
-		errors.Is(err, protocolsession.ErrPeerSessionTerminal) || errors.Is(err, protocolsession.ErrWriterTerminal) ||
-		errors.Is(err, protocolsession.ErrWriterStopped) || errors.Is(err, ErrLaneClosed)
-}
-
-func IsSessionFailure(err error) bool { return isSessionFailure(err) }
-
-// JobResourceBudgetError terminates one transfer because a local, bounded
-// resource policy was exhausted. It must not be attributed to the peer session.
-type JobResourceBudgetError struct{ cause error }
-
-func NewJobResourceBudgetError(cause error) error {
-	if cause == nil {
-		cause = errors.New("transfer job resource budget exceeded")
-	}
-	return &JobResourceBudgetError{cause: cause}
-}
-
-func (e *JobResourceBudgetError) Error() string {
-	return fmt.Sprintf("transfer job resource budget: %v", e.cause)
-}
-func (e *JobResourceBudgetError) Unwrap() error { return e.cause }
-func (e *JobResourceBudgetError) JobFatal()     {}
-
-// JobDependencyContractError is a local collaborator breach, not peer fault.
-type JobDependencyContractError struct{ cause error }
-
-func NewJobDependencyContractError(cause error) error {
-	if cause == nil {
-		cause = errors.New("transfer job dependency contract violated")
-	}
-	return &JobDependencyContractError{cause: cause}
-}
-
-func (e *JobDependencyContractError) Error() string {
-	return fmt.Sprintf("transfer job dependency contract: %v", e.cause)
-}
-func (e *JobDependencyContractError) Unwrap() error { return e.cause }
-func (e *JobDependencyContractError) JobFatal()     {}
-
-func isJobFatal(err error) bool {
-	var fatal interface{ JobFatal() }
-	return errors.As(err, &fatal)
-}
-
-func isJobTerminalError(err error) bool {
-	return isSessionFailure(err) || isJobFatal(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

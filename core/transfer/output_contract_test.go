@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"slices"
 	"testing"
@@ -11,7 +12,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 )
 
-func TestCanonicalSelectionCombinesNormalizedRequestAndTerminalPlan(t *testing.T) {
+func TestTerminalSelectionObservationCombinesNormalizedRequestAndTerminalPlan(t *testing.T) {
 	share := transferID[catalog.ShareInstance](1)
 	root := transferID[catalog.DirectoryID](2)
 	directoryA := transferID[catalog.DirectoryID](3)
@@ -57,17 +58,17 @@ func TestCanonicalSelectionCombinesNormalizedRequestAndTerminalPlan(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonicalA, err := NewCanonicalSelectionV1(requestA, plan)
+	observationA, err := NewTerminalSelectionObservationV1(requestA, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonicalB, err := NewCanonicalSelectionV1(requestB, plan)
-	if err != nil || canonicalA.ResumeIntent() != canonicalB.ResumeIntent() {
-		t.Fatalf("equivalent selections produced different intents: err=%v", err)
+	observationB, err := NewTerminalSelectionObservationV1(requestB, plan)
+	if err != nil || observationA.Observation() != observationB.Observation() {
+		t.Fatalf("equivalent selections produced different observations: err=%v", err)
 	}
-	bound, err := canonicalA.BindPlan(plan)
-	if err != nil || bound.ResumeIntent() != canonicalA.ResumeIntent() || bound.Identity() != plan.Identity() ||
-		bound.CanonicalSelection().ResumeIntent() != canonicalA.ResumeIntent() {
+	bound, err := observationA.BindPlan(plan)
+	if err != nil || bound.SelectionObservation() != observationA.Observation() || bound.Identity() != plan.Identity() ||
+		bound.TerminalObservation().Observation() != observationA.Observation() {
 		t.Fatalf("bound plan mismatch: err=%v", err)
 	}
 	differentRules, err := NewSelectionRules(true, nil)
@@ -78,9 +79,9 @@ func TestCanonicalSelectionCombinesNormalizedRequestAndTerminalPlan(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	differentCanonical, err := NewCanonicalSelectionV1(differentRequest, plan)
-	if err != nil || differentCanonical.ResumeIntent() == canonicalA.ResumeIntent() {
-		t.Fatalf("different request semantics reused resume intent: err=%v", err)
+	differentObservation, err := NewTerminalSelectionObservationV1(differentRequest, plan)
+	if err != nil || differentObservation.Observation() == observationA.Observation() {
+		t.Fatalf("different request semantics reused selection observation: err=%v", err)
 	}
 
 	changedTime, _ := catalog.NewModifiedTime(1_700_000_001, 0, catalog.TimePrecisionSeconds)
@@ -97,12 +98,12 @@ func TestCanonicalSelectionCombinesNormalizedRequestAndTerminalPlan(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	changedCanonical, err := NewCanonicalSelectionV1(requestA, changedPlan)
-	if err != nil || changedCanonical.ResumeIntent() == canonicalA.ResumeIntent() {
-		t.Fatalf("catalog metadata change preserved resume intent: err=%v", err)
+	changedObservation, err := NewTerminalSelectionObservationV1(requestA, changedPlan)
+	if err != nil || changedObservation.Observation() == observationA.Observation() {
+		t.Fatalf("catalog metadata change preserved selection observation: err=%v", err)
 	}
-	if _, err := canonicalA.BindPlan(changedPlan); !errors.Is(err, ErrInvalidOutputSelection) {
-		t.Fatalf("canonical selection rebound to a different plan: %v", err)
+	if _, err := observationA.BindPlan(changedPlan); !errors.Is(err, ErrInvalidOutputSelection) {
+		t.Fatalf("terminal observation rebound to a different plan: %v", err)
 	}
 }
 
@@ -190,7 +191,7 @@ func TestFileStartAndSettlementPayloadsAreChecked(t *testing.T) {
 	}
 }
 
-func TestTransferJobAdmitsFrozenSelectionBeforeOpeningRevision(t *testing.T) {
+func TestTransferJobOpensOutputBeforeRevisionAndAdmitsGeneration(t *testing.T) {
 	share := transferID[catalog.ShareInstance](20)
 	output := newJobOutput(share)
 	revisions := &jobRevisionClient{}
@@ -198,12 +199,12 @@ func TestTransferJobAdmitsFrozenSelectionBeforeOpeningRevision(t *testing.T) {
 	revisions.openHook = func() {
 		output.mu.Lock()
 		defer output.mu.Unlock()
-		if len(output.admitted) != 1 || output.admitted[0].ResumeIntent().IsZero() {
-			t.Error("revision opened before terminal selection admission")
+		if output.intent.IsZero() || !slices.Equal(output.directories, []string{""}) || output.events[0] != "open" {
+			t.Errorf("revision opened before output admission: intent=%v directories=%v events=%v", !output.intent.IsZero(), output.directories, output.events)
 		}
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != JobSucceeded || result.ResumeIntent.IsZero() || result.SelectionIdentity.IsZero() {
+	if result.Outcome != JobSucceeded || result.IntentDigest.IsZero() || result.TransferIntent.IsZero() || result.SucceededFiles != 1 {
 		t.Fatalf("result=%+v", result)
 	}
 
@@ -219,7 +220,7 @@ func TestTransferJobAdmitsFrozenSelectionBeforeOpeningRevision(t *testing.T) {
 	}
 }
 
-func TestTransferJobPreparesEveryDirectoryBeforeAdmissionAndContent(t *testing.T) {
+func TestTransferJobAdmitsGenerationsIncrementallyBeforeContent(t *testing.T) {
 	share := transferID[catalog.ShareInstance](21)
 	root := transferID[catalog.DirectoryID](22)
 	folder := transferID[catalog.DirectoryID](23)
@@ -229,7 +230,7 @@ func TestTransferJobPreparesEveryDirectoryBeforeAdmissionAndContent(t *testing.T
 	opened, _ := NewOpenedRevision(transferID[content.LeaseID](26), descriptor)
 	rules, _ := NewSelectionRules(true, nil)
 	newJob := func(output *jobOutput, revisions *jobRevisionClient, blocks RangeReader) *TransferJob {
-		job, err := NewTransferJob(TransferJobConfig{
+		job, err := newTestTransferJob(t, TransferJobConfig{
 			ShareInstance: share, SyntheticRoot: root, Rules: rules,
 			Catalog: failingCatalog{
 				snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
@@ -257,14 +258,15 @@ func TestTransferJobPreparesEveryDirectoryBeforeAdmissionAndContent(t *testing.T
 		revisions.openHook = func() {
 			output.mu.Lock()
 			defer output.mu.Unlock()
-			if !slices.Equal(output.events, []string{"ensure:folder", "ensure:other", "open"}) {
-				t.Errorf("revision opened after events %v", output.events)
+			if len(output.events) == 0 || output.events[0] != "open" ||
+				!slices.Contains(output.directories, "") || !slices.Contains(output.directories, "folder") {
+				t.Errorf("revision opened without incremental output admission: events=%v directories=%v", output.events, output.directories)
 			}
 		}
 		result := newJob(output, revisions, scriptedRangeReader{}).Run(context.Background())
-		if result.Outcome != JobSucceeded || !slices.Equal(output.events, []string{
-			"ensure:folder", "ensure:other", "open", "begin:folder/file.bin", "complete",
-		}) {
+		if result.Outcome != JobSucceeded || !slices.Equal(output.directories, []string{"", "folder", "other"}) ||
+			!slices.Equal(output.finalized, []string{"folder", "other", ""}) ||
+			!slices.Contains(output.events, "begin:folder/file.bin") || output.completeCalls != 1 {
 			t.Fatalf("result=%+v events=%v", result, output.events)
 		}
 	})
@@ -277,10 +279,11 @@ func TestTransferJobPreparesEveryDirectoryBeforeAdmissionAndContent(t *testing.T
 		}
 		blocks := &countingRangeReader{}
 		result := newJob(output, revisions, blocks).Run(context.Background())
-		if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, output.ensureFailures["folder"]) ||
-			len(output.admitted) != 0 || len(revisions.order) != 0 || blocks.calls != 0 ||
-			output.pauseCalls != 0 || output.completeCalls != 0 ||
-			!slices.Equal(output.events, []string{"ensure:folder", "ensure:other"}) {
+		if result.Outcome != JobCompletedWithErrors || result.TerminationCause != nil || len(result.Directories) != 1 ||
+			result.Directories[0].Stage != FailureDirectoryOutput ||
+			len(revisions.order) != 0 || blocks.calls != 0 || output.pauseCalls != 0 || output.completeCalls != 1 ||
+			!slices.Equal(output.directories, []string{"", "other"}) ||
+			!slices.Equal(output.finalized, []string{"other", ""}) {
 			t.Fatalf("result=%+v events=%v revisions=%v blocks=%d", result, output.events, revisions.order, blocks.calls)
 		}
 	})
@@ -486,7 +489,7 @@ func TestTransferJobIsolatesImmediateCollisionAndQuarantine(t *testing.T) {
 			)
 			output.completeSettlement = JobPausedNeedsAttention
 			rules, _ := NewSelectionRules(true, nil)
-			job, err := NewTransferJob(TransferJobConfig{
+			job, err := newTestTransferJob(t, TransferJobConfig{
 				ShareInstance: share, SyntheticRoot: root, Rules: rules,
 				Catalog: failingCatalog{
 					snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{root: snapshot},
@@ -564,7 +567,7 @@ func TestTransferJobSettlementContextAndFailuresRemainIndependent(t *testing.T) 
 }
 
 func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
-	t.Run("commit failure delegates recovery to job pause", func(t *testing.T) {
+	t.Run("commit failure stops work and delegates recovery to job pause", func(t *testing.T) {
 		share := transferID[catalog.ShareInstance](91)
 		output := newJobOutput(share)
 		commitCause := errors.New("publication state could not be verified")
@@ -574,7 +577,7 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
 		result := job.Run(context.Background())
 		transaction := output.transactions["file.bin"]
-		if result.Outcome != JobPausedOutcome || result.TerminationCause != nil ||
+		if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, commitCause) ||
 			!errors.Is(result.SettlementFailure, commitCause) || transaction == nil ||
 			transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
 			len(transaction.retireReasons) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
@@ -634,26 +637,123 @@ func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
 		t.Fatalf("result=%+v", result)
 	}
 	wantStages := []TransferLifecycleStage{
-		TransferDiscoveryStarted, TransferDiscoveryCompleted, TransferSelectionFrozen,
-		TransferAdmissionStarted, TransferAdmissionCompleted, TransferFileStarted,
-		TransferFileSettled, TransferJobSettled,
+		TransferAdmissionStarted, TransferAdmissionCompleted, TransferDiscoveryStarted,
+		TransferGenerationCommitted, TransferDirectoryAdmitted, TransferDirectoryFinalized,
+		TransferFileEnqueued, TransferFileStarted, TransferFileAdmitted, TransferFileFirstWrite,
+		TransferFileSettled, TransferDiscoveryCompleted, TransferJobSettled,
 	}
 	if len(traces) != len(wantStages) {
 		t.Fatalf("traces=%+v", traces)
 	}
+	indices := make(map[TransferLifecycleStage]int, len(traces))
 	for index, trace := range traces {
-		if trace.Stage != wantStages[index] {
-			t.Fatalf("trace[%d]=%+v", index, trace)
+		indices[trace.Stage] = index
+		if trace.TransferJobID != result.TransferJobID || trace.IntentDigest != result.IntentDigest || trace.IntentDigest.IsZero() {
+			t.Fatalf("trace[%d] correlation=%+v result=(%x,%x)", index, trace, result.TransferJobID, result.IntentDigest)
 		}
-		if index < 4 && !trace.OutputSessionID.IsZero() || index >= 4 && trace.OutputSessionID != output.session {
-			t.Fatalf("trace[%d] session=%x", index, trace.OutputSessionID)
-		}
-		if index >= 1 && (trace.ResumeIntent.IsZero() || trace.SelectionIdentity.IsZero() && index < 5) {
-			t.Fatalf("uncorrelated trace[%d]=%+v", index, trace)
+		if trace.ShareInstance != share || !trace.ProtocolSessionID.IsZero() {
+			t.Fatalf("trace[%d] runtime correlation=%+v", index, trace)
 		}
 	}
-	if traces[5].FileID != file || traces[6].FileSettlement != FilePublished ||
-		traces[7].JobSettlement != JobClosed {
-		t.Fatalf("terminal traces=%+v", traces[5:])
+	for _, stage := range wantStages {
+		if _, exists := indices[stage]; !exists {
+			t.Fatalf("missing stage %d in %+v", stage, traces)
+		}
+	}
+	if !(indices[TransferAdmissionStarted] < indices[TransferAdmissionCompleted] &&
+		indices[TransferAdmissionCompleted] < indices[TransferDiscoveryStarted] &&
+		indices[TransferDiscoveryStarted] < indices[TransferGenerationCommitted] &&
+		indices[TransferGenerationCommitted] < indices[TransferDirectoryAdmitted] &&
+		indices[TransferFileEnqueued] < indices[TransferFileStarted] &&
+		indices[TransferFileStarted] < indices[TransferFileAdmitted] &&
+		indices[TransferFileAdmitted] < indices[TransferFileFirstWrite] &&
+		indices[TransferFileFirstWrite] < indices[TransferFileSettled] &&
+		indices[TransferFileSettled] < indices[TransferDirectoryFinalized] &&
+		indices[TransferDirectoryFinalized] < indices[TransferJobSettled] &&
+		indices[TransferDiscoveryStarted] < indices[TransferDiscoveryCompleted] &&
+		indices[TransferDiscoveryCompleted] < indices[TransferJobSettled]) {
+		t.Fatalf("invalid lifecycle order: indices=%v traces=%+v", indices, traces)
+	}
+	fileSettlement := traces[indices[TransferFileSettled]]
+	discovery := traces[indices[TransferDiscoveryCompleted]]
+	generation := traces[indices[TransferGenerationCommitted]]
+	admitted := traces[indices[TransferDirectoryAdmitted]]
+	finalized := traces[indices[TransferDirectoryFinalized]]
+	if fileSettlement.FileID != file || fileSettlement.FileSettlement != FilePublished ||
+		generation.DirectoryID != job.root || generation.DirectoryGeneration.IsZero() ||
+		discovery.DirectoryID != job.root || discovery.DirectoryGeneration.IsZero() ||
+		discovery.Discovery != DiscoveryComplete || discovery.SelectionClass != SelectionSmall ||
+		admitted.DirectoryID != job.root || admitted.DirectoryGeneration.IsZero() ||
+		finalized.DirectoryID != job.root || finalized.DirectoryGeneration != admitted.DirectoryGeneration ||
+		traces[indices[TransferJobSettled]].JobSettlement != JobClosed {
+		t.Fatalf("typed lifecycle context=%+v", traces)
+	}
+	for _, stage := range []TransferLifecycleStage{
+		TransferFileEnqueued, TransferFileStarted, TransferFileAdmitted, TransferFileFirstWrite,
+		TransferFileSettled,
+	} {
+		fileTrace := traces[indices[stage]]
+		if fileTrace.FileID != file || fileTrace.DirectoryID != job.root ||
+			fileTrace.DirectoryGeneration != generation.DirectoryGeneration ||
+			fileTrace.FileSelection != FileSelectionInherited {
+			t.Fatalf("file stage %d context=%+v", stage, fileTrace)
+		}
+	}
+}
+
+func TestTransferLifecycleFirstWriteRequiresNewDurableContent(t *testing.T) {
+	for _, immediate := range []bool{false, true} {
+		name := "already durable transaction"
+		if immediate {
+			name = "immediate settlement"
+		}
+		t.Run(name, func(t *testing.T) {
+			share := transferID[catalog.ShareInstance](74)
+			output := newJobOutput(share)
+			revisions := &jobRevisionClient{}
+			job, file := branchJob(t, output, revisions, scriptedRangeReader{})
+			descriptor := revisions.opened[file].Descriptor
+			full, err := content.NewRangeSet([]content.Range{{Offset: 0, End: descriptor.ExactSize()}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if immediate {
+				locator, err := NewPathOutputLocator("file.bin")
+				if err != nil {
+					t.Fatal(err)
+				}
+				target, err := NewOutputFileTarget(output.BackendID(), output.SessionID(), descriptor, locator)
+				if err != nil {
+					t.Fatal(err)
+				}
+				digest := sha256.Sum256([]byte("file.bin"))
+				var identity OutputObjectIdentity
+				copy(identity[:], digest[:])
+				binding, err := BindOutputFileTarget(target, identity)
+				if err != nil {
+					t.Fatal(err)
+				}
+				checkpoint, err := VerifyDurableRanges(binding, 1, full)
+				if err != nil {
+					t.Fatal(err)
+				}
+				output.immediate["file.bin"], err = NewVerifiedFileSettlement(FilePublished, checkpoint)
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				output.durable["file.bin"] = full
+			}
+			var stages []TransferLifecycleStage
+			job.tracer = TransferLifecycleTraceFunc(func(event TransferLifecycleTrace) {
+				stages = append(stages, event.Stage)
+			})
+			if result := job.Run(context.Background()); result.Outcome != JobSucceeded {
+				t.Fatalf("result=%+v", result)
+			}
+			if !slices.Contains(stages, TransferFileAdmitted) || slices.Contains(stages, TransferFileFirstWrite) {
+				t.Fatalf("stages=%v", stages)
+			}
+		})
 	}
 }

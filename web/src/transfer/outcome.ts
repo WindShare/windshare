@@ -13,7 +13,7 @@ export interface FileTransferFailure {
 }
 
 export type TransferFailure = DirectoryTransferFailure | FileTransferFailure
-export type JobOutcomeStatus = 'Succeeded' | 'CompletedWithErrors' | 'Aborted'
+export type JobOutcomeStatus = 'Succeeded' | 'CompletedWithErrors' | 'Paused' | 'Aborted' | 'NeedsAttention'
 export const MAXIMUM_RETAINED_TRANSFER_FAILURES = 64
 
 export interface TransferFailureSummary {
@@ -50,14 +50,29 @@ export class TransferFailureAccumulator {
   }
 
   record(failure: TransferFailure): void {
+    this.#count(failure)
+    if (this.#failures.length < MAXIMUM_RETAINED_TRANSFER_FAILURES) {
+      this.#failures.push(Object.freeze({ ...failure }))
+    }
+  }
+
+  /** Retains bounded evidence for a terminal semantic settlement even after saturation. */
+  recordRepresentative(failure: TransferFailure): void {
+    this.#count(failure)
+    const snapshot = Object.freeze({ ...failure })
+    if (this.#failures.length < MAXIMUM_RETAINED_TRANSFER_FAILURES) {
+      this.#failures.push(snapshot)
+      return
+    }
+    this.#failures[this.#failures.length - 1] = snapshot
+  }
+
+  #count(failure: TransferFailure): void {
     if (this.#failureCount === Number.MAX_SAFE_INTEGER) {
       throw new RangeError('Transfer failure count exceeds exact integer representation')
     }
     this.#failureCount += 1
     if (failure.kind === 'directory') this.#directoryFailureCount += 1
-    if (this.#failures.length < MAXIMUM_RETAINED_TRANSFER_FAILURES) {
-      this.#failures.push(Object.freeze({ ...failure }))
-    }
   }
 
   snapshot(): TransferFailureSummary {

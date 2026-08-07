@@ -19,7 +19,7 @@ func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) Fil
 	var ancestryDigest FilesystemOutputAncestryDigest
 	copy(ancestryDigest[:], event.OutputAncestryDigest.Bytes())
 	return FilesystemOutputTrace{
-		Operation: projectTraceOperation(event.Operation), ResumeIntent: event.ResumeIntent,
+		Operation: projectTraceOperation(event.Operation), IntentDigest: event.IntentDigest,
 		SessionID: event.SessionID, LocatorDigest: event.LocatorDigest, OutputObjectID: event.OutputObjectID,
 		PreviousPhase: projectFilePhase(event.PreviousPhase), NextPhase: projectFilePhase(event.NextPhase),
 		RecoveryAction: projectRecoveryAction(event.RecoveryAction), FileSettlement: event.FileSettlement,
@@ -36,7 +36,9 @@ func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) Fil
 		NativeLockScope:           projectNativeLockScope(event.NativeLockScope),
 		NativeLockMilestone:       projectNativeLockMilestone(event.NativeLockMilestone),
 		MutationReportedFailure:   event.MutationReportedFailure,
-		ParentSyncReportedFailure: event.ParentSyncReportedFailure, Failed: event.Failed,
+		ParentSyncReportedFailure: event.ParentSyncReportedFailure,
+		CleanupRemoved:            event.CleanupRemoved, CleanupQuarantined: event.CleanupQuarantined,
+		CleanupSkipped: event.CleanupSkipped, Failed: event.Failed,
 	}
 }
 
@@ -46,6 +48,8 @@ func projectTraceOperation(value outputruntime.FilesystemOutputTraceOperation) F
 		return TraceFilesystemCertified
 	case outputruntime.TraceFeatureProbeCompleted:
 		return TraceFeatureProbeCompleted
+	case outputruntime.TraceCheckpointCleanup:
+		return TraceCheckpointCleanup
 	case outputruntime.TraceControlBootstrap:
 		return TraceControlBootstrap
 	case outputruntime.TraceNativeLock:
@@ -244,53 +248,4 @@ func projectNativeLockMilestone(value outputruntime.FilesystemOutputNativeLockMi
 	default:
 		return 0
 	}
-}
-
-func resumeSessionLifecycleFromRuntime(value outputruntime.ResumeSessionLifecycle) ResumeSessionLifecycle {
-	switch value {
-	case outputruntime.ResumeSessionActive:
-		return ResumeSessionActive
-	case outputruntime.ResumeSessionPausing:
-		return ResumeSessionPausing
-	case outputruntime.ResumeSessionPaused:
-		return ResumeSessionPaused
-	case outputruntime.ResumeSessionPausedNeedsAttention:
-		return ResumeSessionPausedNeedsAttention
-	case outputruntime.ResumeSessionCompleting:
-		return ResumeSessionCompleting
-	case outputruntime.ResumeSessionDiscarding:
-		return ResumeSessionDiscarding
-	default:
-		return 0
-	}
-}
-
-func projectResumeAttention(values []outputruntime.ResumeAttention) []ResumeAttention {
-	result := make([]ResumeAttention, len(values))
-	for index, value := range values {
-		var scope ResumeAttentionScope
-		switch value.Scope {
-		case outputruntime.ResumeAttentionFile:
-			scope = ResumeAttentionFile
-		case outputruntime.ResumeAttentionIntent:
-			scope = ResumeAttentionIntent
-		case outputruntime.ResumeAttentionRoot:
-			scope = ResumeAttentionRoot
-		case outputruntime.ResumeAttentionLegacy:
-			scope = ResumeAttentionLegacy
-		}
-		result[index] = ResumeAttention{Scope: scope, Code: value.Code, State: value.State, Detail: value.Detail}
-	}
-	return result
-}
-
-func projectDiscardSettlement(value outputruntime.DiscardSettlement) DiscardSettlement {
-	var kind DiscardSettlementKind
-	switch value.Kind {
-	case outputruntime.Discarded:
-		kind = Discarded
-	case outputruntime.DiscardAlreadyAbsent:
-		kind = DiscardAlreadyAbsent
-	}
-	return DiscardSettlement{Kind: kind, RemovedBytes: value.RemovedBytes}
 }

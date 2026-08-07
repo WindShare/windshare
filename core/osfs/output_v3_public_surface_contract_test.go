@@ -26,22 +26,22 @@ func TestFilesystemOutputAuthorityExportsOnlyIntentionalSurface(t *testing.T) {
 	for method := range authorityType.Methods() {
 		methods = append(methods, method.Name)
 	}
-	want := []string{"OpenSelection"}
+	want := []string{"OpenOutput"}
 	if !slices.Equal(methods, want) {
 		t.Fatalf("public filesystem output-authority methods = %v, want %v", methods, want)
 	}
 }
 
-func TestFilesystemOutputAuthorityOpenSelectionReturnsTransferContract(t *testing.T) {
+func TestFilesystemOutputAuthorityOpenOutputReturnsTransferContract(t *testing.T) {
 	authorityType := reflect.TypeFor[*FilesystemOutputAuthority]()
-	method, found := authorityType.MethodByName("OpenSelection")
+	method, found := authorityType.MethodByName("OpenOutput")
 	if !found {
-		t.Fatal("filesystem output authority does not expose OpenSelection")
+		t.Fatal("filesystem output authority does not expose OpenOutput")
 	}
 	transferSession := reflect.TypeFor[transfer.OutputSession]()
 	if method.Type.NumOut() != 2 || method.Type.Out(0) != transferSession ||
 		method.Type.Out(1) != reflect.TypeFor[error]() {
-		t.Fatalf("OpenSelection results = (%v, %v), want (transfer.OutputSession, error)",
+		t.Fatalf("OpenOutput results = (%v, %v), want (transfer.OutputSession, error)",
 			method.Type.Out(0), method.Type.Out(1))
 	}
 }

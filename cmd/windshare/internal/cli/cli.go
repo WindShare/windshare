@@ -42,8 +42,7 @@ type App struct {
 	stderrMu            sync.Mutex
 	receiverPeerFactory func() (receiverPeerStarter, error)
 	receiverClock       receiverAdmissionClock
-	resumeSource        resumeStateSource
-	resumeInteractive   func(io.Reader, io.Writer) bool
+	checkpointCleaner   checkpointCleanupRunner
 	processTrace        *processTrace
 }
 
@@ -111,17 +110,19 @@ func (a *App) usage() {
 	      relay-only skips direct peer setup and transfers content through the configured relay.
 	      If the link has no key, use --key or enter the key interactively.
 
-	  windshare resume list [-o <directory>]
-	      List recovery state under an output root. Item numbers are valid only for that inventory.
-
-	  windshare resume discard -o <directory> --item <number>
-	      Preview one freshly listed recovery item on the terminal and require exact interactive confirmation before removal.
+	  windshare resume cleanup -o <directory>
+	      Run idempotent, ownership-scoped checkpoint cleanup and report retained attention.
 `)
 }
 
 // logf 输出运行状态到 stderr(stdout 只留给链接等机器可读产物)。
 func (a *App) logf(format string, args ...any) {
-	fmt.Fprintf(a.stderrWriter(), format+"\n", args...)
+	// Format before taking the lock so a concurrent progress callback cannot
+	// interleave the individual writes performed by fmt for Stringer values.
+	message := fmt.Sprintf(format, args...)
+	a.stderrMu.Lock()
+	defer a.stderrMu.Unlock()
+	_, _ = fmt.Fprintln(a.Stderr, message)
 }
 
 type synchronizedStderr struct{ app *App }

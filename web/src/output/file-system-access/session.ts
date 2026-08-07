@@ -1,7 +1,9 @@
 import type {
   BeginOutputFileResult,
+  DirectoryAdmission,
   OutputCapabilities,
   OutputDirectory,
+  OutputDirectoryAdmission,
   OutputFile,
   OutputSession,
   OutputSessionIdentity,
@@ -9,6 +11,7 @@ import type {
 import type { JobOutcome } from '../../transfer/outcome'
 import { outputSessionIdentity } from '../../transfer/output-session'
 import { BrowserFileSystemTree } from '../browser/filesystem-tree'
+import { ensureOneShotIndexedDbLegacyCleanup } from '../browser/indexeddb-legacy-cleaner'
 import { IndexedDbOutputRepository } from '../browser/indexeddb-repository'
 import {
   acquireBrowserOutputSessionLease,
@@ -23,6 +26,12 @@ export const FILE_SYSTEM_ACCESS_BACKEND = 'file-system-access'
 
 export interface FileSystemAccessOutputOptions {
   readonly outputSessionId: string
+  /** Stable final intent digest; never use outputSessionId as durable namespace. */
+  readonly transferIntentDigest?: string
+  /** Stable picker-root identity used to bind checkpoints to this capability. */
+  readonly rootIdentity?: string
+  /** @internal Browser probes only; production callers must provide both identities. */
+  readonly allowTestFallback?: true
   readonly databaseName?: string
   readonly crashHook?: CheckpointCrashHook
 }
@@ -60,6 +69,7 @@ type ManagedState =
 
 export class FileSystemAccessOutputSession implements OutputSession {
   readonly identity: OutputSessionIdentity
+  readonly format = 'directory' as const
   readonly capabilities: OutputCapabilities
 
   readonly #inner: FileSystemAccessInnerSession
@@ -84,9 +94,9 @@ export class FileSystemAccessOutputSession implements OutputSession {
     this.capabilities = inner.capabilities
   }
 
-  ensureDirectory(directory: OutputDirectory): Promise<void> {
+  admitDirectory(directory: OutputDirectoryAdmission, signal: AbortSignal): Promise<DirectoryAdmission> {
     this.#requireOpen()
-    return this.#inner.ensureDirectory(directory)
+    return this.#inner.admitDirectory(directory, signal)
   }
 
   finalizeDirectory(directory: OutputDirectory, signal: AbortSignal): Promise<void> {
@@ -94,9 +104,9 @@ export class FileSystemAccessOutputSession implements OutputSession {
     return this.#inner.finalizeDirectory(directory, signal)
   }
 
-  beginFile(file: OutputFile): Promise<BeginOutputFileResult> {
+  beginFile(file: OutputFile, signal: AbortSignal): Promise<BeginOutputFileResult> {
     this.#requireOpen()
-    return this.#inner.beginFile(file)
+    return this.#inner.beginFile(file, signal)
   }
 
   async finishJob(outcome: JobOutcome, signal: AbortSignal): Promise<void> {
@@ -265,8 +275,8 @@ export async function acquireFileSystemAccessOutputSession(
   const repository = await repositoryFor(options)
   let lease: BrowserOutputSessionLease | undefined
   try {
+    lease = await acquireBrowserOutputSessionLease(repository.binding)
     await bindRootHandle(repository, root)
-    lease = await acquireBrowserOutputSessionLease(sessionIdentity(options.outputSessionId))
     return await openWithRoot(root, repository, lease, options)
   } catch (error) {
     repository.close()
@@ -286,7 +296,7 @@ export async function prepareFileSystemAccessReauthorization(
       throw new DOMException('The persisted output directory handle is unavailable', 'NotFoundError')
     }
     const directory = root as FileSystemDirectoryHandle
-    lease = await acquireBrowserOutputSessionLease(sessionIdentity(options.outputSessionId))
+    lease = await acquireBrowserOutputSessionLease(repository.binding)
     const heldLease = lease
     let consumed = false
     return Object.freeze({
@@ -320,11 +330,10 @@ export async function prepareFileSystemAccessReauthorization(
 export async function discardFileSystemAccessOutputSession(
   options: FileSystemAccessOutputOptions,
 ): Promise<void> {
-  const identity = sessionIdentity(options.outputSessionId)
   const repository = await repositoryFor(options)
   let lease: BrowserOutputSessionLease | undefined
   try {
-    lease = await acquireBrowserOutputSessionLease(identity)
+    lease = await acquireBrowserOutputSessionLease(repository.binding)
     await repository.deleteSessionData()
   } finally {
     repository.close()
@@ -345,6 +354,10 @@ async function openWithRoot(
   })
   const inner = await PersistentTreeOutputSession.open({
     identity,
+    checkpointBinding: {
+      transferIntentDigest: repository.binding.transferIntentDigest,
+      rootIdentity: repository.binding.rootIdentity,
+    },
     tree,
     journal: repository,
     durability: 'ProcessRestart',
@@ -374,13 +387,31 @@ async function bindRootHandle(
   }
 }
 
-function repositoryFor(
+async function repositoryFor(
   options: FileSystemAccessOutputOptions,
 ): Promise<IndexedDbOutputRepository> {
+  const databaseName = options.databaseName ?? DEFAULT_DATABASE_NAME
+  await ensureOneShotIndexedDbLegacyCleanup(databaseName)
+  if (options.transferIntentDigest === undefined || options.rootIdentity === undefined) {
+    if (options.allowTestFallback === true) {
+      return IndexedDbOutputRepository.openForTest(
+        databaseName,
+        FILE_SYSTEM_ACCESS_BACKEND,
+        options.outputSessionId,
+      )
+    }
+    return Promise.reject(new TypeError(
+      'File System Access output requires a frozen transfer-intent digest and root identity',
+    ))
+  }
   return IndexedDbOutputRepository.open(
-    options.databaseName ?? DEFAULT_DATABASE_NAME,
+    databaseName,
     FILE_SYSTEM_ACCESS_BACKEND,
     options.outputSessionId,
+    {
+      transferIntentDigest: options.transferIntentDigest,
+      rootIdentity: options.rootIdentity,
+    },
   )
 }
 

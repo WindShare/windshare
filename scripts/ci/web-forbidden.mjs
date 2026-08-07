@@ -47,6 +47,8 @@ const FORBIDDEN_PATHS = [
   'web/src/ui/model.ts',
   'web/src/ui/ReceiverApp.tsx',
   'web/src/ui/selection-window.ts',
+  'web/src/transfer/output-selection.ts',
+  'web/src/transfer/job.ts',
   'web/test/manifest',
   'web/test/download',
   'web/test/contracts',
@@ -80,6 +82,8 @@ const FORBIDDEN_PATHS = [
   'web/test/transport/helpers.ts',
   'web/test/transport/protocol.test.ts',
   'web/test/transport/receiver.test.ts',
+  'web/test/transfer/job.test.ts',
+  'web/test/output/job-integration.test.ts',
   'web/test/ui/browser-gateway-ownership.test.ts',
   'web/test/ui/browser-gateway.test.ts',
   'web/test/ui/browser-output.test.ts',
@@ -120,6 +124,42 @@ const FORBIDDEN_SOURCE_PATTERNS = [
   /hostile-sender/u,
 ]
 
+const RETIRED_TRANSFER_PATTERNS = [
+  /\bV2TransferJob\b/u,
+  /\bV2OutputSelectionPlan\b/u,
+  /\bV2OutputSelection\b/u,
+  /\bopenSelection\s*\(/u,
+  /\bCanonicalSelectionV1\b/u,
+  /\bResumeIntent\b/u,
+  /\bresumeIntent\b/u,
+  /\bresumeIntentText\b/u,
+  /windshare\/output-resume-intent\/v3/u,
+  /\bOUTPUT_JOURNAL_SCHEMA(?:_VERSION)?\b/u,
+  /\.wsresume-output/u,
+  /checkpoint-candidates/u,
+  /checkpoint-committed/u,
+  /persistent-handles/u,
+  /cleanup-markers/u,
+  /\bwithDirectoryAdmission\b/u,
+  /\bAdmissionAwareOutputSession\b/u,
+  /\bV2_MAXIMUM_PENDING_FILE_BYTES\b/u,
+  /\bmaximumPendingFileBytes\b/u,
+]
+
+function isOneShotCleaner(file) {
+  const display = portable(file)
+  // A cleaner may recognise retired records, but it must remain a one-shot,
+  // ownership-scoped boundary rather than a second output implementation.
+  return /(?:^|\/)(?:checkpoint-cleaner|one-shot-checkpoint-cleaner|indexeddb-legacy-cleaner)\.ts$/u.test(display)
+}
+
+function isZipMetadataSpool(file) {
+  const display = portable(file)
+  // ZIP central-directory metadata is current output behaviour. Keep this
+  // explicit exemption so a future broad spool rule cannot remove it.
+  return /(?:^|\/)zip-spool\.ts$/u.test(display)
+}
+
 const FORBIDDEN_VECTOR_NAMES = [
   'chunk-seal.json',
   'frame-codec.json',
@@ -148,6 +188,11 @@ for (const path of FORBIDDEN_PATHS) {
 }
 
 const sourceFiles = filesUnder(SOURCE_ROOT).filter(isTypeScript)
+for (const file of sourceFiles) {
+  if (isOneShotCleaner(file) || isZipMetadataSpool(file)) continue
+  const source = readFileSync(file, 'utf8')
+  for (const pattern of RETIRED_TRANSFER_PATTERNS) recordMatches(file, source, pattern)
+}
 const webTypeScript = [
   ...filesUnder(resolve(WEB_ROOT, 'src')),
   ...filesUnder(resolve(WEB_ROOT, 'test')),
