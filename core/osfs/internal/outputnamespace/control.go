@@ -22,7 +22,7 @@ type SessionIDSource interface {
 
 // StateInstallEvent binds a low-level adopted cut to its resume namespace.
 type StateInstallEvent struct {
-	ResumeIntent transfer.ResumeIntent
+	IntentDigest transfer.TransferIntentDigest
 	SessionID    transfer.OutputSessionID
 	Cut          StateInstallCut
 }
@@ -43,35 +43,37 @@ func (observe ObserverFunc) ObserveStateInstall(event StateInstallEvent) {
 
 // ControllerConfig supplies policy values without granting live filesystem authority.
 type ControllerConfig struct {
-	Backend    transfer.OutputBackendID
-	Random     io.Reader
-	SessionIDs SessionIDSource
-	Observer   Observer
+	Backend      transfer.OutputBackendID
+	IntentDigest transfer.TransferIntentDigest
+	Random       io.Reader
+	SessionIDs   SessionIDSource
+	Observer     Observer
 }
 
 // Controller coordinates control and session namespace state machines.
 type Controller struct {
-	backend    transfer.OutputBackendID
-	random     io.Reader
-	sessionIDs SessionIDSource
-	observer   Observer
+	backend      transfer.OutputBackendID
+	intentDigest transfer.TransferIntentDigest
+	random       io.Reader
+	sessionIDs   SessionIDSource
+	observer     Observer
 }
 
 // NewController constructs a controller without retaining live filesystem authority.
 func NewController(config ControllerConfig) Controller {
 	return Controller{
-		backend: config.Backend, random: config.Random,
+		backend: config.Backend, intentDigest: config.IntentDigest, random: config.Random,
 		sessionIDs: config.SessionIDs, observer: config.Observer,
 	}
 }
 
 // Store returns a record store whose observations retain their namespace identity.
-func (controller Controller) Store(intent transfer.ResumeIntent, sessionID transfer.OutputSessionID) Store {
+func (controller Controller) Store(intent transfer.TransferIntentDigest, sessionID transfer.OutputSessionID) Store {
 	var observer StateInstallObserver
 	if controller.observer != nil {
 		observer = StateInstallObserverFunc(func(cut StateInstallCut) {
 			controller.observer.ObserveStateInstall(StateInstallEvent{
-				ResumeIntent: intent, SessionID: sessionID, Cut: cut,
+				IntentDigest: intent, SessionID: sessionID, Cut: cut,
 			})
 		})
 	}
@@ -85,7 +87,7 @@ func (controller Controller) newHeader(
 	sessionID transfer.OutputSessionID,
 ) (resumestate.Header, error) {
 	return resumestate.NewHeader(resumestate.HeaderSpec{
-		Backend: controller.backend, SessionID: sessionID, Selection: selection,
+		Backend: controller.backend, SessionID: sessionID, IntentDigest: controller.intentDigest, Selection: selection,
 		OutputRoot: control.OutputRoot(), OutputAncestry: ancestry,
 	})
 }

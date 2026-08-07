@@ -330,8 +330,44 @@ func TestCompositeRuntimeMultiReceiverStopAndAccessors(t *testing.T) {
 	if laneID == 0 || laneEpoch != 0 || firstReceiver.ProtocolSessionID().IsZero() {
 		t.Fatalf("receiver lane/session = %d/%d/%x", laneID, laneEpoch, firstReceiver.ProtocolSessionID())
 	}
-	if _, err := firstReceiver.NewTransferJob(transfer.SelectionRules{}, nil); err == nil {
+	rules, err := transfer.NewSelectionRules(true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := transfer.NewPathTransferIntent(
+		firstReceiver.Descriptor().ShareInstance(), firstReceiver.Descriptor().SyntheticRoot(),
+		rules, "invalid-output-test", transfer.NativeFilesystemOutputBackendID, transfer.OutputNativeTree,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := firstReceiver.NewTransferJob(intent, transfer.TransferJobID{}, nil, nil); err == nil {
 		t.Fatal("transfer job accepted a nil output authority")
+	}
+	inertOutput := transfer.OutputAuthorityFunc(func(
+		context.Context,
+		transfer.TransferIntent,
+	) (transfer.OutputSession, error) {
+		return nil, errors.New("validation-only output must not be opened")
+	})
+	if _, err := firstReceiver.NewTransferJob(intent, transfer.TransferJobID{}, inertOutput, nil); err == nil {
+		t.Fatal("transfer job accepted a missing run identity")
+	}
+	jobID, err := transfer.NewTransferJobID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherShare := firstReceiver.Descriptor().ShareInstance()
+	otherShare[0] ^= 0xff
+	mismatchedIntent, err := transfer.NewPathTransferIntent(
+		otherShare, firstReceiver.Descriptor().SyntheticRoot(), rules,
+		"invalid-output-test", transfer.NativeFilesystemOutputBackendID, transfer.OutputNativeTree,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := firstReceiver.NewTransferJob(mismatchedIntent, jobID, inertOutput, nil); err == nil {
+		t.Fatal("transfer job accepted intent from another authenticated share")
 	}
 
 	if err := fixture.senderFactory.Stop(context.Background(), "Maintenance"); err != nil {
@@ -471,14 +507,25 @@ func TestCompositeRuntimeTransferJobPublishesDurableFilesystemOutput(t *testing.
 	if _, statErr := os.Stat(outputRoot); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("output authority created its root before terminal selection: %v", statErr)
 	}
-	job, err := receiver.NewTransferJob(rules, authority)
+	intent, err := transfer.NewPathTransferIntent(
+		receiver.Descriptor().ShareInstance(), receiver.Descriptor().SyntheticRoot(),
+		rules, outputRoot, transfer.NativeFilesystemOutputBackendID, transfer.OutputNativeTree,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID, err := transfer.NewTransferJobID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := receiver.NewTransferJob(intent, jobID, authority, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
 	if result.Outcome != transfer.JobSucceeded || result.Settlement.Kind() != transfer.JobClosed ||
-		result.SucceededFiles != 1 || result.TerminationCause != nil || result.ResumeIntent.IsZero() ||
-		result.SelectionIdentity.IsZero() {
+		result.SucceededFiles != 1 || result.TerminationCause != nil ||
+		result.TransferJobID != jobID || result.IntentDigest != intent.Digest() || result.TransferIntent.IsZero() {
 		t.Fatalf("transfer result = %+v", result)
 	}
 	written, err := os.ReadFile(filepath.Join(outputRoot, "folder", "file.bin"))
@@ -487,19 +534,6 @@ func TestCompositeRuntimeTransferJobPublishesDurableFilesystemOutput(t *testing.
 	}
 	if !bytes.Equal(written, fixture.fileData) {
 		t.Fatal("durably published file changed bytes")
-	}
-	inventory, err := osfs.ListResumeState(context.Background(), osfs.FilesystemResumeRoot{RootPath: outputRoot})
-	if err != nil {
-		t.Fatalf("list completed transfer resume state: %v", err)
-	}
-	defer func() {
-		if err := inventory.Close(); err != nil {
-			t.Errorf("close completed transfer resume inventory: %v", err)
-		}
-	}()
-	resumes := inventory.Summaries()
-	if len(resumes) != 0 {
-		t.Fatalf("completed transfer retained resume sessions: %d", len(resumes))
 	}
 	if fixture.contentStore.blockReads.Load() != 3 {
 		t.Fatalf("durable job block reads = %d", fixture.contentStore.blockReads.Load())
@@ -748,6 +782,8 @@ type verticalContentStore struct {
 	descriptor content.FileRevisionDescriptor
 	lease      content.RevisionLease
 	data       []byte
+	openErr    error
+	readErr    error
 	blockReads atomic.Int32
 	renewCalls atomic.Int32
 	blockStart chan uint64
@@ -838,7 +874,9 @@ func (store *verticalContentStore) OpenRevisions(
 	results := make([]content.OpenRevisionResult, len(requests))
 	for index, request := range requests {
 		results[index] = content.OpenRevisionResult{FileID: request.FileID}
-		if request.FileID == store.descriptor.FileID() {
+		if request.FileID == store.descriptor.FileID() && store.openErr != nil {
+			results[index].Err = store.openErr
+		} else if request.FileID == store.descriptor.FileID() {
 			results[index].Lease = store.lease
 		} else {
 			results[index].Err = errors.New("not found")
@@ -882,6 +920,9 @@ func (store *verticalContentStore) ReadBlock(
 ) ([]byte, error) {
 	if id != store.lease.ID() || ref.FileRevision() != store.descriptor.FileRevision() {
 		return nil, errors.New("invalid block")
+	}
+	if store.readErr != nil {
+		return nil, store.readErr
 	}
 	offset, err := store.descriptor.Geometry().BlockOffset(ref.LocalBlockIndex())
 	if err != nil {

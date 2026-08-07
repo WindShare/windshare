@@ -8,7 +8,6 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/osfs/internal/outputfault"
-	"github.com/windshare/windshare/core/osfs/internal/outputnamespace"
 	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 )
@@ -18,10 +17,8 @@ type FileTransaction struct {
 
 	mu         sync.Mutex
 	descriptor content.FileRevisionDescriptor
-	resumable  resumestate.ResumableFileAuthority
+	resumable  resumestate.CheckpointRuntimeFile
 	binding    transfer.OutputFileBinding
-	recordDir  outputcap.Directory
-	recordName string
 	anchorDir  outputcap.Directory
 	anchorName string
 	stageDir   outputcap.Directory
@@ -33,7 +30,7 @@ type FileTransaction struct {
 	reduceFile fileReducer
 }
 
-var errOutputV3InternalCleanupNeedsAttention = errors.New(
+var errNativeInternalCleanupNeedsAttention = errors.New(
 	"osfs: verified output cleanup needs attention",
 )
 
@@ -45,17 +42,17 @@ const (
 	FileTransactionClosed
 )
 
-var errOutputV3RangeOverlap = errors.New("osfs: output write overlaps transaction-owned data")
+var errNativeRangeOverlap = errors.New("osfs: output write overlaps transaction-owned data")
 
 func (session *Session) observeStage(
-	record resumestate.FileRecord,
+	record resumestate.CheckpointRuntimeState,
 	anchor outputcap.File,
 	anchorObservation resumestate.AnchorObservation,
 ) (outputcap.File, outputcap.Directory, resumestate.EntryObservation, error) {
 	name := resumestate.StageName(record.OutputObject())
 	directory, present, err := openOutputShard(session.stagesDir, name.Shard(), false)
 	if err != nil {
-		if classifyOutputV3RecoveryFailure(err, outputV3BeforeEntryEvidence) == outputV3RecoveryAmbiguous {
+		if classifyNativeRecoveryFailure(err, nativeBeforeEntryEvidence) == nativeRecoveryAmbiguous {
 			return nil, nil, resumestate.EntryUnsafe, nil
 		}
 		return nil, nil, 0, err
@@ -65,7 +62,7 @@ func (session *Session) observeStage(
 	}
 	kind, err := directory.ObserveEntry(name.Name())
 	if err != nil {
-		if classifyOutputV3RecoveryFailure(err, outputV3BeforeEntryEvidence) == outputV3RecoveryAmbiguous {
+		if classifyNativeRecoveryFailure(err, nativeBeforeEntryEvidence) == nativeRecoveryAmbiguous {
 			return nil, directory, resumestate.EntryUnsafe, nil
 		}
 		return nil, directory, 0, err
@@ -96,94 +93,45 @@ func (session *Session) observeStage(
 	return stage, directory, resumestate.EntrySameAsAnchor, nil
 }
 
-func (session *Session) installFileRecord(
-	directory outputcap.Directory,
-	name string,
-	previous resumestate.BoundFileRecord,
-	next resumestate.BoundFileRecord,
-) error {
+func (session *Session) installCheckpointRuntimeState(
+	previous resumestate.BoundCheckpointRuntimeState,
+	next resumestate.BoundCheckpointRuntimeState,
+) (resultErr error) {
 	session.stateInstall.Lock()
-	defer session.stateInstall.Unlock()
+	commitCheckpoint := false
+	defer func() {
+		session.stateInstall.Unlock()
+		if commitCheckpoint {
+			resultErr = errors.Join(resultErr, session.syncIncrementalCheckpointState(next.State()))
+		}
+	}()
 	if session.stateWritesDisabled() {
 		return pauseRequiredFileOutputFault(outputfault.New(
 			transfer.OutputFaultFile, transfer.OutputFaultOwnership, outputfault.ErrSessionClosed,
 		))
 	}
-	if previous.Record().LocatorDigest() != next.Record().LocatorDigest() ||
-		next.Record().StateGeneration() <= previous.Record().StateGeneration() {
+	if previous.State().LocatorDigest() != next.State().LocatorDigest() ||
+		next.State().StateGeneration() <= previous.State().StateGeneration() {
 		return outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, resumestate.ErrInvalidTransition)
 	}
-	currentEncoded, err := resumestate.EncodeFileRecord(previous)
-	if err != nil {
-		return outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
-	}
-	nextEncoded, err := resumestate.EncodeFileRecord(next)
-	if err != nil {
-		return outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
-	}
-	outcome, replaceErr := session.store.ReplaceRecord(
-		directory,
-		name,
-		outputnamespace.NewRecordImage(currentEncoded, previous.Record().StateGeneration()),
-		outputnamespace.NewRecordImage(nextEncoded, next.Record().StateGeneration()),
-		resumestate.MaxFileStateBytes,
-	)
-	var resultErr error
-	switch outcome {
-	case outputnamespace.ReplaceAdopted:
-		if replaceErr != nil {
-			// The durable record is already the next generation, but the current
-			// owner cannot safely continue with handles whose close/cleanup status is
-			// unknown. A fresh process can adopt the exact installed generation.
-			session.poisonState()
-			resultErr = pauseRequiredFileOutputFault(fileOutputFault("finish adopted file-state replacement", replaceErr))
-		}
-	case outputnamespace.ReplaceUnchanged:
-		if replaceErr == nil {
-			replaceErr = outputcap.ErrUnsafeNamespace
-		}
-		return pauseRequiredFileOutputFault(fileOutputFault("replace file state", replaceErr))
-	case outputnamespace.ReplaceUncertain:
-		session.poisonState()
-		return pauseRequiredFileOutputFault(fileOutputFault(
-			"replace file state with uncertain authority", errors.Join(outputcap.ErrUnsafeNamespace, replaceErr),
-		))
-	default:
-		session.poisonState()
-		return pauseRequiredFileOutputFault(outputfault.New(
-			transfer.OutputFaultFile, transfer.OutputFaultContract, resumestate.ErrInvalidState,
-		))
-	}
+	// The runtime projection is intentionally volatile. FileCheckpointV1 is
+	// advanced after releasing the state lock and is the only durable transition.
+	commitCheckpoint = true
 	session.owner.trace(FilesystemOutputTrace{
-		Operation: TraceFilePhaseTransition, ResumeIntent: session.resumeIntent,
-		SessionID: session.SessionID(), LocatorDigest: outputLocatorDigestFromState(next.Record().LocatorDigest()),
-		OutputObjectID: outputObjectIdentityFromState(next.Record().OutputObject()),
-		PreviousPhase:  filesystemOutputFilePhaseFromState(previous.Record().Phase()),
-		NextPhase:      filesystemOutputFilePhaseFromState(next.Record().Phase()),
+		Operation: TraceFilePhaseTransition, IntentDigest: session.intentDigest,
+		SessionID: session.SessionID(), LocatorDigest: outputLocatorDigestFromState(next.State().LocatorDigest()),
+		OutputObjectID: outputObjectIdentityFromState(next.State().OutputObject()),
+		PreviousPhase:  filesystemOutputFilePhaseFromState(previous.State().Phase()),
+		NextPhase:      filesystemOutputFilePhaseFromState(next.State().Phase()),
 	})
 	return resultErr
 }
 
-func (session *Session) ensureInitialFileRecord(
-	directory outputcap.Directory,
-	name string,
-	encoded []byte,
-) (outputnamespace.CreateOutcome, error) {
-	session.stateInstall.Lock()
-	defer session.stateInstall.Unlock()
-	if session.stateWritesDisabled() {
-		return outputnamespace.CreateNotInstalled, outputfault.ErrSessionClosed
-	}
-	return session.store.EnsureInitialRecord(directory, name, encoded, resumestate.MaxFileStateBytes)
-}
-
 func (session *Session) transactionStart(
 	descriptor content.FileRevisionDescriptor,
-	resumable resumestate.ResumableFileAuthority,
-	recordDir outputcap.Directory,
-	recordName string,
+	resumable resumestate.CheckpointRuntimeFile,
 ) (resultStart transfer.FileStart, resultErr error) {
-	record := resumable.Bound().Record()
+	record := resumable.BoundState().State()
 	stageName := resumestate.StageName(record.OutputObject())
 	anchorName := resumestate.AnchorName(record.OutputObject())
 	var stageDir, anchorDir outputcap.Directory
@@ -194,8 +142,8 @@ func (session *Session) transactionStart(
 			return
 		}
 		if closeErr := errors.Join(
-			closeOutputV3File(dataFile), closeOutputV3File(anchorFile),
-			closeOutputV3Directory(stageDir), closeOutputV3Directory(anchorDir),
+			closeOutputFile(dataFile), closeOutputFile(anchorFile),
+			closeOutputDirectory(stageDir), closeOutputDirectory(anchorDir),
 		); closeErr != nil {
 			resultStart = transfer.FileStart{}
 			resultErr = pauseRequiredFileOutputFault(fileOutputFault(
@@ -209,13 +157,13 @@ func (session *Session) transactionStart(
 			return transfer.FileStart{}, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
 		}
 		quarantined, err := session.installUnsafeNamespaceQuarantine(
-			recordDir, recordName, resumable.Bound(), reason,
+			resumable.BoundState(), reason,
 		)
 		if err != nil {
 			return transfer.FileStart{}, err
 		}
 		return session.quarantinedStart(
-			target, quarantined.Record().LocatorDigest(), mapQuarantineReason(quarantined.Record().QuarantineReason()),
+			target, quarantined.State().LocatorDigest(), mapQuarantineReason(quarantined.State().QuarantineReason()),
 		)
 	}
 
@@ -241,7 +189,7 @@ func (session *Session) transactionStart(
 	if err != nil || !same {
 		return quarantine(resumestate.QuarantineStageUnsafe)
 	}
-	binding, err := outputBindingForRecord(session.SessionID(), descriptor, record)
+	binding, err := outputBindingForRuntimeState(session.SessionID(), descriptor, record)
 	if err != nil {
 		return transfer.FileStart{}, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
 	}
@@ -251,10 +199,21 @@ func (session *Session) transactionStart(
 	if err != nil {
 		return transfer.FileStart{}, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
 	}
+	if _, err := session.ensureIncrementalCheckpoint(descriptor, record); err != nil {
+		return transfer.FileStart{}, err
+	}
+	// BeginFile promises a restartable transaction even when no WriteRange ever
+	// arrives. Flush the newly owned stage and commit the empty range baseline
+	// before returning; later checkpoints advance from this verified authority.
+	if err := data.Sync(); err != nil {
+		return transfer.FileStart{}, fileOutputFault("sync initial checkpoint data", err)
+	}
+	if err := session.verifyInitialIncrementalCheckpoint(record); err != nil {
+		return transfer.FileStart{}, err
+	}
 	pending, _ := content.NewRangeSet(nil)
 	transaction := &FileTransaction{
 		session: session, descriptor: descriptor, resumable: resumable, binding: binding,
-		recordDir: recordDir, recordName: recordName,
 		anchorDir: anchorDir, anchorName: anchorName.Name(), stageDir: stageDir, stageName: stageName.Name(),
 		anchor: anchor, data: data, pending: pending,
 		lifecycle: FileTransactionOpen, reduceFile: session.reduceFile,
@@ -297,31 +256,27 @@ func (session *Session) quarantinedStart(
 
 func (session *Session) quarantineRecoveryStart(
 	file transfer.OutputFile,
-	recordDir outputcap.Directory,
-	recordName string,
-	bound resumestate.BoundFileRecord,
+	bound resumestate.BoundCheckpointRuntimeState,
 	reason resumestate.QuarantineReason,
 ) (transfer.FileStart, error) {
-	quarantined, err := session.installUnsafeNamespaceQuarantine(recordDir, recordName, bound, reason)
+	quarantined, err := session.installUnsafeNamespaceQuarantine(bound, reason)
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
 	return session.quarantinedStart(
-		file.Target, quarantined.Record().LocatorDigest(), mapQuarantineReason(quarantined.Record().QuarantineReason()),
+		file.Target, quarantined.State().LocatorDigest(), mapQuarantineReason(quarantined.State().QuarantineReason()),
 	)
 }
 
 func (session *Session) quarantineRecoveryStartWithCleanup(
 	file transfer.OutputFile,
-	recordDir outputcap.Directory,
-	recordName string,
-	bound resumestate.BoundFileRecord,
+	bound resumestate.BoundCheckpointRuntimeState,
 	reason resumestate.QuarantineReason,
 	cleanupOperation string,
 	cleanupErr error,
 ) (transfer.FileStart, error) {
 	start, quarantineErr := session.quarantineRecoveryStart(
-		file, recordDir, recordName, bound, reason,
+		file, bound, reason,
 	)
 	if quarantineErr != nil {
 		if cleanupErr != nil {
@@ -339,43 +294,41 @@ func (session *Session) quarantineRecoveryStartWithCleanup(
 }
 
 func (session *Session) installUnsafeNamespaceQuarantine(
-	recordDir outputcap.Directory,
-	recordName string,
-	bound resumestate.BoundFileRecord,
+	bound resumestate.BoundCheckpointRuntimeState,
 	reason resumestate.QuarantineReason,
-) (resumestate.BoundFileRecord, error) {
-	quarantined, err := resumestate.PrepareUnsafeNamespaceQuarantine(bound, reason)
+) (resumestate.BoundCheckpointRuntimeState, error) {
+	quarantined, err := resumestate.PrepareCheckpointRuntimeUnsafeNamespaceQuarantine(bound, reason)
 	if err != nil {
-		return resumestate.BoundFileRecord{}, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
+		return resumestate.BoundCheckpointRuntimeState{}, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
 	}
-	if err := session.installFileRecord(recordDir, recordName, bound, quarantined); err != nil {
+	if err := session.installCheckpointRuntimeState(bound, quarantined); err != nil {
 		// The original ambiguity remains unresolved until a fresh owner reopens
-		// this exact state record, so even a safely unchanged CAS must pause the job.
-		return resumestate.BoundFileRecord{}, pauseRequiredFileOutputFault(err)
+		// this exact checkpoint, so even a safely unchanged transition must pause the job.
+		return resumestate.BoundCheckpointRuntimeState{}, pauseRequiredFileOutputFault(err)
 	}
 	return quarantined, nil
 }
 
 func (session *Session) openPublicationWitness(
-	record resumestate.FileRecord,
+	record resumestate.CheckpointRuntimeState,
 	expected anchorWitness,
 ) (*publicationWitness, error, error) {
 	stageName := resumestate.StageName(record.OutputObject())
 	stageDir, present, err := openOutputShard(session.stagesDir, stageName.Shard(), false)
 	if err != nil {
-		return nil, err, closeOutputV3Directory(stageDir)
+		return nil, err, closeOutputDirectory(stageDir)
 	}
 	if !present {
-		return nil, errors.Join(outputcap.ErrUnsafeNamespace, fs.ErrNotExist), closeOutputV3Directory(stageDir)
+		return nil, errors.Join(outputcap.ErrUnsafeNamespace, fs.ErrNotExist), closeOutputDirectory(stageDir)
 	}
 	anchorName := resumestate.AnchorName(record.OutputObject())
 	anchorDir, present, err := openOutputShard(session.anchorsDir, anchorName.Shard(), false)
 	if err != nil {
-		return nil, err, errors.Join(stageDir.Close(), closeOutputV3Directory(anchorDir))
+		return nil, err, errors.Join(stageDir.Close(), closeOutputDirectory(anchorDir))
 	}
 	if !present {
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace, fs.ErrNotExist),
-			errors.Join(stageDir.Close(), closeOutputV3Directory(anchorDir))
+			errors.Join(stageDir.Close(), closeOutputDirectory(anchorDir))
 	}
 	witness, operationErr, witnessCleanupErr := openPublicationWitnessInDirectoriesResult(
 		record, stageDir, anchorDir, expected,
@@ -390,20 +343,8 @@ func (session *Session) openPublicationWitness(
 	return witness, nil, nil
 }
 
-func openPublicationWitnessInDirectories(
-	record resumestate.FileRecord,
-	stageDir outputcap.Directory,
-	anchorDir outputcap.Directory,
-	expected anchorWitness,
-) (*publicationWitness, error) {
-	witness, operationErr, cleanupErr := openPublicationWitnessInDirectoriesResult(
-		record, stageDir, anchorDir, expected,
-	)
-	return witness, errors.Join(operationErr, cleanupErr)
-}
-
 func openPublicationWitnessInDirectoriesResult(
-	record resumestate.FileRecord,
+	record resumestate.CheckpointRuntimeState,
 	stageDir outputcap.Directory,
 	anchorDir outputcap.Directory,
 	expected anchorWitness,
@@ -417,7 +358,7 @@ func openPublicationWitnessInDirectoriesResult(
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, outputcap.ErrUnsafeNamespace) {
 			err = errors.Join(outputcap.ErrUnsafeNamespace, err)
 		}
-		return nil, err, closeOutputV3File(stage)
+		return nil, err, closeOutputFile(stage)
 	}
 	witness := &publicationWitness{stage: stagedData{file: stage}}
 	fail := func(cause error, unsafe bool) (*publicationWitness, error, error) {
@@ -545,7 +486,7 @@ func (transaction *FileTransaction) preparePublicationLocked() (
 		return settlement, quarantineErr == nil, quarantineErr
 	}
 	witness, witnessErr, witnessCleanupErr := openPublicationWitnessInDirectoriesResult(
-		transaction.resumable.Bound().Record(), transaction.stageDir, transaction.anchorDir, transaction.anchor,
+		transaction.resumable.BoundState().State(), transaction.stageDir, transaction.anchorDir, transaction.anchor,
 	)
 	if witnessErr == nil && witness != nil {
 		witnessCleanupErr = errors.Join(witnessCleanupErr, witness.Close())
@@ -567,16 +508,16 @@ func (transaction *FileTransaction) preparePublicationLocked() (
 			"close reverified publication witness names", nil, witnessCleanupErr,
 		)
 	}
-	publishing, err := resumestate.PreparePublication(transaction.resumable)
+	publishing, err := resumestate.PrepareCheckpointRuntimePublication(transaction.resumable)
 	if err != nil {
 		return transfer.FileSettlement{}, false, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
 	}
-	if err := transaction.session.installFileRecord(
-		transaction.recordDir, transaction.recordName, transaction.resumable.Bound(), publishing,
+	if err := transaction.session.installCheckpointRuntimeState(
+		transaction.resumable.BoundState(), publishing,
 	); err != nil {
 		return transfer.FileSettlement{}, false, err
 	}
-	transaction.resumable, err = resumestate.BindResumableFile(publishing, transaction.descriptor)
+	transaction.resumable, err = resumestate.BindCheckpointRuntimeDescriptor(publishing, transaction.descriptor)
 	if err != nil {
 		return transfer.FileSettlement{}, false, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
 	}

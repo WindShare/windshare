@@ -11,7 +11,7 @@ import {
   jobOutcome,
   summarizeTransferFailures,
 } from '../../src/transfer/outcome'
-import type { OutputFile } from '../../src/transfer/output-session'
+import type { OutputFile, OutputSession } from '../../src/transfer/output-session'
 import {
   createBoundedPortableDownloadStream,
   PORTABLE_DOWNLOAD_MAXIMUM_BYTES,
@@ -29,6 +29,12 @@ import {
   type ZipCompletionReport,
 } from '../../src/output/streams/zip'
 import { MemoryZipCentralDirectorySpool } from './zip-spool-fake'
+import {
+  admittedOutputDirectory,
+  admittedOutputFile,
+  testOutputIdentity,
+  testOutputModifiedTime,
+} from './admission-fixture'
 
 const ACTIVE_SIGNAL = new AbortController().signal
 
@@ -36,12 +42,12 @@ describe('single-file stream output', () => {
   it('streams one file in ascending order and never advertises durable ranges', async () => {
     const output = recordingStream()
     const session = new SingleFileStreamOutputSession('single', output.stream)
-    const begun = await session.beginFile(outputFile('file', 3n))
+    const begun = await beginAdmittedFile(session, outputFile('file', 3n))
 
-    await begun.transaction.writeRange(0n, Uint8Array.of(1, 2))
-    expect((await begun.transaction.checkpoint()).ranges).toEqual([])
-    await begun.transaction.writeRange(2n, Uint8Array.of(3))
-    await begun.transaction.commit()
+    await begun.transaction.writeRange(0n, Uint8Array.of(1, 2), ACTIVE_SIGNAL)
+    expect((await begun.transaction.checkpoint(ACTIVE_SIGNAL)).ranges).toEqual([])
+    await begun.transaction.writeRange(2n, Uint8Array.of(3), ACTIVE_SIGNAL)
+    await begun.transaction.commit(ACTIVE_SIGNAL)
 
     expect(output.bytes()).toEqual(Uint8Array.of(1, 2, 3))
     expect(output.closed).toBe(true)
@@ -50,14 +56,14 @@ describe('single-file stream output', () => {
 
   it('isolates a failure before output but compromises the job after a write starts', async () => {
     const before = new SingleFileStreamOutputSession('before', recordingStream().stream)
-    const untouched = await before.beginFile(outputFile('untouched', 1n))
+    const untouched = await beginAdmittedFile(before, outputFile('untouched', 1n))
     await expect(untouched.transaction.abort(new Error('source failed')))
       .resolves.toBe('FileIsolated')
 
     const output = recordingStream()
     const after = new SingleFileStreamOutputSession('after', output.stream)
-    const started = await after.beginFile(outputFile('started', 2n))
-    await started.transaction.writeRange(0n, Uint8Array.of(1))
+    const started = await beginAdmittedFile(after, outputFile('started', 2n))
+    await started.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
     await expect(started.transaction.abort(new Error('later failure')))
       .resolves.toBe('JobOutputCompromised')
     expect(output.bytes()).toEqual(Uint8Array.of(1))
@@ -67,8 +73,8 @@ describe('single-file stream output', () => {
   it('commits an empty file without inventing a byte', async () => {
     const output = recordingStream()
     const session = new SingleFileStreamOutputSession('empty', output.stream)
-    const begun = await session.beginFile(outputFile('empty', 0n))
-    await begun.transaction.commit()
+    const begun = await beginAdmittedFile(session, outputFile('empty', 0n))
+    await begun.transaction.commit(ACTIVE_SIGNAL)
     expect(output.bytes()).toEqual(new Uint8Array())
     expect(output.closed).toBe(true)
   })
@@ -93,9 +99,9 @@ describe('single-file stream output', () => {
     })
     const session = new SingleFileStreamOutputSession('single-close-winner', output)
     race.session = session
-    const begun = await session.beginFile(outputFile('empty', 0n))
+    const begun = await beginAdmittedFile(session, outputFile('empty', 0n))
 
-    const commit = begun.transaction.commit()
+    const commit = begun.transaction.commit(ACTIVE_SIGNAL)
     await closeStarted.promise
     publish.resolve()
 
@@ -116,9 +122,9 @@ describe('single-file stream output', () => {
       },
     })
     const session = new SingleFileStreamOutputSession('single-abort-winner', output)
-    const begun = await session.beginFile(outputFile('empty', 0n))
+    const begun = await beginAdmittedFile(session, outputFile('empty', 0n))
 
-    const commit = begun.transaction.commit()
+    const commit = begun.transaction.commit(ACTIVE_SIGNAL)
     await closeStarted.promise
     const abort = session.abortJob(reason)
     close.reject(reason)
@@ -137,12 +143,12 @@ describe('ZIP stream output', () => {
       archive,
       reportCompletion: (value) => { report = value },
     })
-    const skipped = await session.beginFile(outputFile('skipped', 1n))
-    const kept = await session.beginFile(outputFile('kept', 1n))
+    const skipped = await beginAdmittedFile(session, outputFile('skipped', 1n))
+    const kept = await beginAdmittedFile(session, outputFile('kept', 1n))
     await expect(skipped.transaction.abort(new Error('source failed')))
       .resolves.toBe('FileIsolated')
-    await kept.transaction.writeRange(0n, Uint8Array.of(7))
-    await kept.transaction.commit()
+    await kept.transaction.writeRange(0n, Uint8Array.of(7), ACTIVE_SIGNAL)
+    await kept.transaction.commit(ACTIVE_SIGNAL)
     const failedId = fileId('skipped')
     await session.finishJob(jobOutcome('CompletedWithErrors', summarizeTransferFailures([{
       kind: 'file',
@@ -160,8 +166,8 @@ describe('ZIP stream output', () => {
   it('aborts the archive when a started member fails', async () => {
     const archive = new FakeArchive()
     const session = new ZipStreamOutputSession({ outputSessionId: 'zip', archive })
-    const begun = await session.beginFile(outputFile('started', 2n))
-    await begun.transaction.writeRange(0n, Uint8Array.of(1))
+    const begun = await beginAdmittedFile(session, outputFile('started', 2n))
+    await begun.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
 
     await expect(begun.transaction.abort(new Error('failed member')))
       .resolves.toBe('JobOutputCompromised')
@@ -171,16 +177,16 @@ describe('ZIP stream output', () => {
   it('serializes concurrently prepared members without buffering the archive', async () => {
     const archive = new FakeArchive()
     const session = new ZipStreamOutputSession({ outputSessionId: 'zip', archive })
-    const first = await session.beginFile(outputFile('first', 1n))
-    const second = await session.beginFile(outputFile('second', 1n))
-    const secondWrite = second.transaction.writeRange(0n, Uint8Array.of(2))
+    const first = await beginAdmittedFile(session, outputFile('first', 1n))
+    const second = await beginAdmittedFile(session, outputFile('second', 1n))
+    const secondWrite = second.transaction.writeRange(0n, Uint8Array.of(2), ACTIVE_SIGNAL)
     await Promise.resolve()
     expect(archive.files).toHaveLength(0)
 
-    await first.transaction.writeRange(0n, Uint8Array.of(1))
-    await first.transaction.commit()
+    await first.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
+    await first.transaction.commit(ACTIVE_SIGNAL)
     await secondWrite
-    await second.transaction.commit()
+    await second.transaction.commit(ACTIVE_SIGNAL)
 
     expect(archive.files.map((file) => file.path.join('/'))).toEqual(['first', 'second'])
   })
@@ -188,25 +194,31 @@ describe('ZIP stream output', () => {
   it('preserves empty entries without claiming unsupported browser mtime restoration', async () => {
     const archive = new FakeArchive()
     const session = new ZipStreamOutputSession({ outputSessionId: 'zip', archive })
-    await session.ensureDirectory({ path: ['empty-dir'], modifiedTimeMilliseconds: 10n })
+    const directory = await admittedOutputDirectory(
+      session,
+      { path: ['empty-dir'], modifiedTime: testOutputModifiedTime(10n) },
+    )
     await session.finalizeDirectory(
-      { path: ['empty-dir'], modifiedTimeMilliseconds: 10n },
+      directory,
       ACTIVE_SIGNAL,
     )
-    const empty = await session.beginFile({
+    const empty = await beginAdmittedFile(session, {
       ...outputFile('empty-file', 0n),
-      modifiedTimeMilliseconds: 20n,
+      modifiedTime: testOutputModifiedTime(20n),
     })
-    await empty.transaction.commit()
+    await empty.transaction.commit(ACTIVE_SIGNAL)
     await session.finishJob(jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY), ACTIVE_SIGNAL)
 
     expect(session.capabilities.modificationTime).toBe(false)
-    expect(archive.directories).toEqual([{ path: ['empty-dir'] }])
+    expect(archive.directories).toEqual([{
+      path: ['empty-dir'],
+      modifiedTimeMilliseconds: 10n,
+    }])
     expect(archive.files[0]).toMatchObject({
       path: ['empty-file'],
       bytes: [],
     })
-    expect(archive.files[0]).not.toHaveProperty('modifiedTimeMilliseconds')
+    expect(archive.files[0]).toHaveProperty('modifiedTimeMilliseconds', 20n)
   })
 
   it('reports the canonical job outcome without retaining a second FileID authority', async () => {
@@ -218,9 +230,9 @@ describe('ZIP stream output', () => {
       reportCompletion: (value) => { report = value },
     })
     const committedId = fileId('committed')
-    const begun = await session.beginFile(outputFile('committed', 1n))
-    await begun.transaction.writeRange(0n, Uint8Array.of(1))
-    await begun.transaction.commit()
+    const begun = await beginAdmittedFile(session, outputFile('committed', 1n))
+    await begun.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
+    await begun.transaction.commit(ACTIVE_SIGNAL)
     const outcome = jobOutcome('CompletedWithErrors', summarizeTransferFailures([{
       kind: 'file',
       fileId: committedId,
@@ -550,9 +562,17 @@ class FailingClearSpool extends MemoryZipCentralDirectorySpool {
   }
 }
 
+async function beginAdmittedFile(session: OutputSession, file: OutputFile) {
+  return session.beginFile(await admittedOutputFile(session, file), ACTIVE_SIGNAL)
+}
+
 function outputFile(name: string, exactSize: bigint): OutputFile {
   return {
-    source: { shareInstance: 'share', fileId: name, fileRevision: `revision-${name}` },
+    source: {
+      shareInstance: testOutputIdentity('share'),
+      fileId: testOutputIdentity(`file:${name}`),
+      fileRevision: testOutputIdentity(`revision:${name}`),
+    },
     path: [name],
     exactSize,
   }

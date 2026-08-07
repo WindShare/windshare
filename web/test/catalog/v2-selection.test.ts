@@ -41,6 +41,17 @@ describe('v2 progressive selection rules', () => {
     expect(policy.shouldDiscover('folder', ['root'])).toBe(true)
   })
 
+  it('does not treat caller-captured ancestry as pruning authority for opaque targets', () => {
+    const policy = new V2SelectionPolicy(true)
+    const excluded = directory('excluded')
+    const selected = file('selected')
+    policy.toggle(excluded, ['root'])
+    policy.toggle(selected, ['root', 'excluded'])
+
+    const frozen = policy.snapshot()
+    expect(frozen.shouldDiscover('candidate', ['root', 'unrelated-hint'])).toBe(true)
+  })
+
   it('retains only explicit rules while evaluating a million sibling identities', () => {
     const policy = new V2SelectionPolicy(true)
     let selectedSiblings = 0

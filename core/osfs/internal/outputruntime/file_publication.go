@@ -13,22 +13,11 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 )
 
-func (session *Session) linkFinalNoReplace(
-	bound resumestate.BoundFileRecord,
-	witness *publicationWitness,
-) (resumestate.PublishResult, error) {
-	result, operationErr, cleanupErr := session.linkFinalNoReplaceResult(bound, witness)
-	if errors.Is(operationErr, errOutputAncestryUnsafe) {
-		return 0, outputAncestryPauseFault("revalidate final publication", operationErr)
-	}
-	return result, errors.Join(operationErr, cleanupErr)
-}
-
 func (session *Session) linkFinalNoReplaceResult(
-	bound resumestate.BoundFileRecord,
+	bound resumestate.BoundCheckpointRuntimeState,
 	retained *publicationWitness,
 ) (result resumestate.PublishResult, operationErr error, cleanupErr error) {
-	record := bound.Record()
+	record := bound.State()
 	if retained == nil || !retained.stage.valid() || !retained.anchor.valid() {
 		return 0, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("publication source handle is absent")), nil
 	}
@@ -89,15 +78,15 @@ func (session *Session) linkFinalNoReplaceResult(
 		}
 		return resumestate.PublishLinkCreated, parent.Sync(), linked.Close()
 	}
-	linkedCloseErr := closeOutputV3File(linked)
+	linkedCloseErr := closeOutputFile(linked)
 	if !errors.Is(err, outputcap.ErrNamespaceCollision) {
 		return 0, err, linkedCloseErr
 	}
 	kind, observeErr := parent.ObserveEntry(leaf)
 	if observeErr != nil {
-		if classifyOutputV3RecoveryFailure(
-			observeErr, outputV3ExistingEntryUnclassified,
-		) == outputV3RecoveryAmbiguous {
+		if classifyNativeRecoveryFailure(
+			observeErr, nativeExistingEntryUnclassified,
+		) == nativeRecoveryAmbiguous {
 			return resumestate.PublishExistingAmbiguous, nil, linkedCloseErr
 		}
 	}
@@ -109,7 +98,7 @@ func (session *Session) linkFinalNoReplaceResult(
 	}
 	final, openErr := parent.OpenFile(leaf, false, false)
 	if openErr != nil {
-		return resumestate.PublishExistingAmbiguous, nil, errors.Join(linkedCloseErr, closeOutputV3File(final))
+		return resumestate.PublishExistingAmbiguous, nil, errors.Join(linkedCloseErr, closeOutputFile(final))
 	}
 	defer func() { cleanupErr = errors.Join(cleanupErr, final.Close()) }()
 	same, sameErr := final.SameFile(witness.anchor.file)
@@ -167,12 +156,10 @@ func (session *Session) syncFinalParent(
 // publishing cut for retry.
 func (session *Session) recoverFinalParentSync(
 	file transfer.OutputFile,
-	recordDir outputcap.Directory,
-	recordName string,
-	bound resumestate.BoundFileRecord,
+	bound resumestate.BoundCheckpointRuntimeState,
 	operation string,
 ) (transfer.FileStart, bool, error) {
-	operationErr, cleanupErr := session.syncFinalParent(bound.Record().CanonicalLocator())
+	operationErr, cleanupErr := session.syncFinalParent(bound.State().CanonicalLocator())
 	if errors.Is(operationErr, errOutputAncestryUnsafe) {
 		return transfer.FileStart{}, true, pauseRequiredFileOperationFault(operation, operationErr, cleanupErr)
 	}
@@ -182,14 +169,14 @@ func (session *Session) recoverFinalParentSync(
 		}
 		return transfer.FileStart{}, false, nil
 	}
-	if classifyOutputV3RecoveryFailure(
-		operationErr, outputV3AuthorizedMutation,
-	) == outputV3RecoveryPauseRequired {
+	if classifyNativeRecoveryFailure(
+		operationErr, nativeAuthorizedMutation,
+	) == nativeRecoveryPauseRequired {
 		return transfer.FileStart{}, true, pauseRequiredFileOperationFault(operation, operationErr, cleanupErr)
 	}
 
 	start, quarantineErr := session.quarantineRecoveryStart(
-		file, recordDir, recordName, bound, resumestate.QuarantineFinalUnsafe,
+		file, bound, resumestate.QuarantineFinalUnsafe,
 	)
 	if quarantineErr != nil {
 		return transfer.FileStart{}, true, errors.Join(
@@ -205,19 +192,19 @@ func (session *Session) recoverFinalParentSync(
 	return start, true, nil
 }
 
-func (session *Session) removeStage(record resumestate.FileRecord) (error, error) {
+func (session *Session) removeStage(record resumestate.CheckpointRuntimeState) (error, error) {
 	stageName := resumestate.StageName(record.OutputObject())
 	directory, present, err := openOutputShard(session.stagesDir, stageName.Shard(), false)
 	if err != nil {
-		return errors.Join(outputnamespace.ErrPositiveEntryEvidence, err), closeOutputV3Directory(directory)
+		return errors.Join(outputnamespace.ErrPositiveEntryEvidence, err), closeOutputDirectory(directory)
 	}
 	if !present {
-		return errors.Join(outputcap.ErrUnsafeNamespace, fs.ErrNotExist), closeOutputV3Directory(directory)
+		return errors.Join(outputcap.ErrUnsafeNamespace, fs.ErrNotExist), closeOutputDirectory(directory)
 	}
 	stage, err := directory.OpenFile(stageName.Name(), true, false)
 	if err != nil {
 		return errors.Join(outputnamespace.ErrPositiveEntryEvidence, err),
-			errors.Join(closeOutputV3File(stage), directory.Close())
+			errors.Join(closeOutputFile(stage), directory.Close())
 	}
 	operationErr := directory.RemoveFile(stageName.Name(), stage)
 	if operationErr == nil {
@@ -232,10 +219,10 @@ func (session *Session) syncObjectShard(
 ) (error, error) {
 	directory, present, err := openOutputShard(parent, name.Shard(), false)
 	if err != nil {
-		return err, closeOutputV3Directory(directory)
+		return err, closeOutputDirectory(directory)
 	}
 	if !present {
-		return parent.Sync(), closeOutputV3Directory(directory)
+		return parent.Sync(), closeOutputDirectory(directory)
 	}
 	return directory.Sync(), directory.Close()
 }
@@ -278,7 +265,7 @@ func (transaction *FileTransaction) checkpointLocked() (transfer.VerifiedDurable
 			transfer.OutputFaultFile, transfer.OutputFaultOwnership, outputfault.ErrSessionClosed,
 		)
 	}
-	record := transaction.resumable.Bound().Record()
+	record := transaction.resumable.BoundState().State()
 	if transaction.pending.IsEmpty() {
 		return transfer.VerifyDurableRanges(
 			transaction.binding, transfer.CheckpointGeneration(record.CheckpointGeneration()), record.DurableRanges(),
@@ -321,15 +308,23 @@ func (transaction *FileTransaction) checkpointLocked() (transfer.VerifiedDurable
 	if err != nil {
 		return transfer.VerifiedDurableRanges{}, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
 	}
-	if err := transaction.session.installFileRecord(
-		transaction.recordDir, transaction.recordName, transaction.resumable.Bound(), candidate.Bound(),
+	if _, err := transaction.session.advanceIncrementalCheckpoint(
+		candidate.BoundState().State(), transaction.descriptor, merged,
 	); err != nil {
 		return transfer.VerifiedDurableRanges{}, err
 	}
+	if err := transaction.session.installCheckpointRuntimeState(
+		transaction.resumable.BoundState(), candidate.BoundState(),
+	); err != nil {
+		return transfer.VerifiedDurableRanges{}, err
+	}
+	// The V1 image is the commit point. Retaining both the old runtime projection
+	// and pending ranges until that install succeeds prevents a later retry from
+	// authenticating bytes that exist only in volatile memory.
 	transaction.resumable = candidate
 	transaction.pending, _ = content.NewRangeSet(nil)
 	return transfer.VerifyDurableRanges(
-		transaction.binding, transfer.CheckpointGeneration(candidate.Bound().Record().CheckpointGeneration()), merged,
+		transaction.binding, transfer.CheckpointGeneration(candidate.BoundState().State().CheckpointGeneration()), merged,
 	)
 }
 
@@ -337,16 +332,16 @@ func (transaction *FileTransaction) installWitnessQuarantineLocked(
 	reason resumestate.QuarantineReason,
 ) (transfer.FileSettlement, error) {
 	quarantined, err := transaction.session.installUnsafeNamespaceQuarantine(
-		transaction.recordDir, transaction.recordName, transaction.resumable.Bound(), reason,
+		transaction.resumable.BoundState(), reason,
 	)
 	if err != nil {
 		return transfer.FileSettlement{}, err
 	}
-	transaction.resumable, err = resumestate.BindResumableFile(quarantined, transaction.descriptor)
+	transaction.resumable, err = resumestate.BindCheckpointRuntimeDescriptor(quarantined, transaction.descriptor)
 	if err != nil {
 		return transfer.FileSettlement{}, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, err)
 	}
-	return quarantinedSettlement(transaction.binding, quarantined.Record())
+	return quarantinedSettlement(transaction.binding, quarantined.State())
 }
 
 func (transaction *FileTransaction) installWitnessQuarantineWithCleanupLocked(
@@ -408,7 +403,7 @@ func (transaction *FileTransaction) Commit(
 				authority: outputAncestryCreateAuthority,
 			},
 			FilesystemOutputAncestryPublicationPost,
-			transaction.resumable.Bound().Record().LocatorDigest(),
+			transaction.resumable.BoundState().State().LocatorDigest(),
 			"finish committed output ancestry",
 			nil,
 		)
@@ -428,7 +423,7 @@ func (transaction *FileTransaction) Commit(
 	if err != nil {
 		transaction.session.traceOutputAncestry(
 			FilesystemOutputAncestryPublicationPre,
-			transaction.resumable.Bound().Record().LocatorDigest(),
+			transaction.resumable.BoundState().State().LocatorDigest(),
 			err,
 		)
 		return transfer.FileSettlement{}, outputAncestryOperationFault(
@@ -459,7 +454,7 @@ func (transaction *FileTransaction) commitSettling(
 			Path: transaction.binding.Locator().CanonicalPath(), ExpectedSize: transaction.binding.ExactSize(),
 			Descriptor: transaction.descriptor, Target: transaction.binding.Target(),
 		},
-		transaction.resumable, transaction.recordDir, transaction.recordName,
+		transaction.resumable,
 	)
 	if err != nil {
 		return transfer.FileSettlement{}, err
@@ -501,13 +496,13 @@ func (transaction *FileTransaction) publishPreparedLocked() (
 	error,
 ) {
 	witness, witnessErr, witnessCleanupErr := transaction.session.openPublicationWitness(
-		transaction.resumable.Bound().Record(), transaction.anchor,
+		transaction.resumable.BoundState().State(), transaction.anchor,
 	)
 	var publishResult resumestate.PublishResult
 	linkErr, linkCleanupErr := witnessErr, witnessCleanupErr
 	if witnessErr == nil && witnessCleanupErr == nil {
 		publishResult, linkErr, linkCleanupErr = transaction.session.linkFinalNoReplaceResult(
-			transaction.resumable.Bound(), witness,
+			transaction.resumable.BoundState(), witness,
 		)
 		linkCleanupErr = errors.Join(linkCleanupErr, witness.Close())
 	}
@@ -523,7 +518,7 @@ func (transaction *FileTransaction) publishPreparedLocked() (
 		)
 	}
 	if publishResult == 0 && linkErr != nil {
-		if classifyOutputV3RecoveryFailure(linkErr, outputV3AuthorizedMutation) == outputV3RecoveryAmbiguous {
+		if classifyNativeRecoveryFailure(linkErr, nativeAuthorizedMutation) == nativeRecoveryAmbiguous {
 			return transaction.installWitnessQuarantineWithCleanupLocked(
 				resumestate.QuarantinePublicationHistory,
 				"close quarantined final-link evidence",
@@ -547,22 +542,22 @@ func (transaction *FileTransaction) publishPreparedLocked() (
 		}
 		return transfer.FileSettlement{}, false, nil
 	}
-	decision, reduceErr := resumestate.ReducePublishResult(
-		transaction.resumable.Bound(), publishResult,
+	decision, reduceErr := resumestate.ReduceCheckpointRuntimePublishResult(
+		transaction.resumable.BoundState(), publishResult,
 	)
 	if reduceErr != nil {
 		return transfer.FileSettlement{}, false, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, reduceErr)
 	}
-	publishBlocked, applyErr := resumestate.ApplyRecoveryDecision(transaction.resumable.Bound(), decision)
+	publishBlocked, applyErr := resumestate.ApplyCheckpointRuntimeRecoveryDecision(transaction.resumable.BoundState(), decision)
 	if applyErr != nil {
 		return transfer.FileSettlement{}, false, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, applyErr)
 	}
-	if err := transaction.session.installFileRecord(
-		transaction.recordDir, transaction.recordName, transaction.resumable.Bound(), publishBlocked,
+	if err := transaction.session.installCheckpointRuntimeState(
+		transaction.resumable.BoundState(), publishBlocked,
 	); err != nil {
 		return transfer.FileSettlement{}, false, err
 	}
-	resumable, bindErr := resumestate.BindResumableFile(publishBlocked, transaction.descriptor)
+	resumable, bindErr := resumestate.BindCheckpointRuntimeDescriptor(publishBlocked, transaction.descriptor)
 	if bindErr != nil {
 		return transfer.FileSettlement{}, false, outputfault.New(transfer.OutputFaultFile, transfer.OutputFaultContract, bindErr)
 	}
@@ -578,7 +573,7 @@ func (transaction *FileTransaction) publishPreparedLocked() (
 		)
 	}
 	if publishResult == resumestate.PublishExistingAmbiguous {
-		settlement, settleErr := quarantinedSettlement(transaction.binding, publishBlocked.Record())
+		settlement, settleErr := quarantinedSettlement(transaction.binding, publishBlocked.State())
 		return settlement, true, settleErr
 	}
 	start, startErr := transaction.session.verifiedStart(transfer.FilePublishBlocked, transaction.resumable)

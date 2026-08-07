@@ -211,7 +211,7 @@ func validateCommittedContents(
 ) ([sha256.Size]byte, error) {
 	digest := sha256.New()
 	hashCatalogObject(digest, 1, directoryBytes)
-	var sequence directorySequence
+	var sequence DirectoryGenerationValidator
 	for index := uint32(0); index < meta.pageCount; index++ {
 		if err := ctx.Err(); err != nil {
 			return [sha256.Size]byte{}, err
@@ -223,7 +223,7 @@ func validateCommittedContents(
 	if _, ok, err := readNodeFrame(children); err != nil || ok {
 		return [sha256.Size]byte{}, ErrCorruptCatalogStorage
 	}
-	committed, err := sequence.finish()
+	committed, err := sequence.Finish()
 	if err != nil || committed != meta.committed() {
 		return [sha256.Size]byte{}, ErrCorruptCatalogStorage
 	}
@@ -238,7 +238,7 @@ func validateCommittedPage(
 	index uint32,
 	children io.Reader,
 	digest hash.Hash,
-	sequence *directorySequence,
+	sequence *DirectoryGenerationValidator,
 ) error {
 	pageBytes, err := readCatalogObject(filepath.Join(path, "pages", fmt.Sprintf("%08x.page", index)))
 	if err != nil {
@@ -267,7 +267,7 @@ func validateCommittedPage(
 		}
 		hashCatalogObject(digest, 2, nodeBytes)
 	}
-	if err := sequence.accept(page); err != nil {
+	if err := sequence.AcceptPage(page); err != nil {
 		return err
 	}
 	hashCatalogObject(digest, 3, pageBytes)

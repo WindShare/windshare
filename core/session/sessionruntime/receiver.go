@@ -388,14 +388,31 @@ func (runtime *ReceiverRuntime) ReleaseRevision(ctx context.Context, lease conte
 	return (receiverTransferDependencies{runtime: runtime}).ReleaseRevision(ctx, lease)
 }
 
+// NewTransferJob binds one picker-confirmed intent to a single transfer run.
+// Keeping this boundary intent-shaped prevents a live protocol session from
+// accidentally deriving durable resume identity from terminal discovery state.
+// The output target is already part of intent; output is only the backend
+// authority that will open the corresponding session.
 func (runtime *ReceiverRuntime) NewTransferJob(
-	rules transfer.SelectionRules,
+	intent transfer.TransferIntent,
+	jobID transfer.TransferJobID,
 	output transfer.OutputAuthority,
+	tracer transfer.TransferLifecycleTracer,
 ) (*transfer.TransferJob, error) {
+	if runtime == nil || intent.IsZero() || jobID.IsZero() || output == nil {
+		return nil, transfer.ErrInvalidTransferJob
+	}
+	descriptor := runtime.descriptor
+	if intent.ShareInstance() != descriptor.ShareInstance() ||
+		intent.SyntheticRoot() != descriptor.SyntheticRoot() {
+		return nil, transfer.ErrInvalidTransferJob
+	}
 	dependencies := receiverTransferDependencies{runtime: runtime}
 	return transfer.NewTransferJob(transfer.TransferJobConfig{
-		ShareInstance: runtime.descriptor.ShareInstance(), SyntheticRoot: runtime.descriptor.SyntheticRoot(),
-		Rules: rules, Catalog: dependencies, Revisions: dependencies, Blocks: dependencies, Output: output,
+		ShareInstance: intent.ShareInstance(), SyntheticRoot: intent.SyntheticRoot(),
+		Rules: intent.SelectionRules(), Intent: intent, JobID: jobID,
+		ProtocolSessionID: runtime.ProtocolSessionID(), Tracer: tracer,
+		Catalog: dependencies, Revisions: dependencies, Blocks: dependencies, Output: output,
 	})
 }
 
@@ -608,7 +625,7 @@ func (transport rpcCatalogTransport) FetchPage(ctx context.Context, request cata
 			}
 			continue
 		case protocolsession.MessageOperationError:
-			return nil, remoteOperationErrorFor(message, protocolsession.OperationScopeDirectory)
+			return nil, remoteDirectoryOperationError(message)
 		case protocolsession.MessageCatalogResult:
 			unsigned, err := protocolsession.SenderControlSemanticBody(message)
 			if err != nil {

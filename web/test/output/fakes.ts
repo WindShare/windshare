@@ -36,9 +36,18 @@ export class MemoryOutputTree implements PersistentOutputTree {
   readonly directoryModificationTimes = new Map<string, bigint>()
   readonly #nodes = new Map<string, MemoryNode>()
   #nextIdentity = 1
+  #activeFileHandles = 0
 
   authorizationError: unknown
   writeError: unknown
+  sizeError: unknown
+  closeError: unknown
+  openFileError: unknown
+  validateDirectoryError: unknown
+  removeFileError: unknown
+  removeDirectoryError: unknown
+  afterCreateFile: (() => void) | undefined
+  afterEnsureDirectory: (() => void) | undefined
 
   constructor(events: string[] = []) {
     this.events = events
@@ -62,6 +71,7 @@ export class MemoryOutputTree implements PersistentOutputTree {
       created: true,
     }
     this.#nodes.set(key, node)
+    this.afterEnsureDirectory?.()
     return { identity: node.identity, created: true }
   }
 
@@ -74,6 +84,9 @@ export class MemoryOutputTree implements PersistentOutputTree {
   }
 
   async validateDirectory(path: readonly string[], identity: string): Promise<boolean> {
+    const error = this.validateDirectoryError
+    this.validateDirectoryError = undefined
+    if (error !== undefined) throw error
     const node = this.#nodes.get(pathKey(path))
     return node?.kind === 'directory' && node.identity === identity
   }
@@ -88,20 +101,25 @@ export class MemoryOutputTree implements PersistentOutputTree {
       durable: new Uint8Array(),
     }
     this.#nodes.set(key, node)
-    return new MemoryTreeFile(node, this)
+    this.afterCreateFile?.()
+    return this.#openHandle(node)
   }
 
   async openFile(
     path: readonly string[],
     identity: string,
   ): Promise<PersistentTreeFile | undefined> {
+    const error = this.openFileError
+    this.openFileError = undefined
+    if (error !== undefined) throw error
     const node = this.#nodes.get(pathKey(path))
     return node?.kind === 'file' && node.identity === identity
-      ? new MemoryTreeFile(node, this)
+      ? this.#openHandle(node)
       : undefined
   }
 
   async removeFile(path: readonly string[], identity: string): Promise<void> {
+    if (this.removeFileError !== undefined) throw this.removeFileError
     const key = pathKey(path)
     const node = this.#nodes.get(key)
     if (node === undefined) return
@@ -112,6 +130,7 @@ export class MemoryOutputTree implements PersistentOutputTree {
   }
 
   async removeDirectory(path: readonly string[], identity: string): Promise<void> {
+    if (this.removeDirectoryError !== undefined) throw this.removeDirectoryError
     const key = pathKey(path)
     const node = this.#nodes.get(key)
     if (node === undefined) return
@@ -162,6 +181,10 @@ export class MemoryOutputTree implements PersistentOutputTree {
     return node?.kind === 'file' ? node.identity : undefined
   }
 
+  get activeFileHandles(): number {
+    return this.#activeFileHandles
+  }
+
   crash(): void {
     for (const node of this.#nodes.values()) {
       if (node.kind === 'file') node.working = node.durable.slice()
@@ -172,6 +195,27 @@ export class MemoryOutputTree implements PersistentOutputTree {
     const error = this.writeError
     this.writeError = undefined
     return error
+  }
+
+  consumeSizeError(): unknown {
+    const error = this.sizeError
+    this.sizeError = undefined
+    return error
+  }
+
+  consumeCloseError(): unknown {
+    const error = this.closeError
+    this.closeError = undefined
+    return error
+  }
+
+  noteFileHandleClosed(): void {
+    this.#activeFileHandles -= 1
+  }
+
+  #openHandle(node: MemoryFileNode): PersistentTreeFile {
+    this.#activeFileHandles += 1
+    return new MemoryTreeFile(node, this)
   }
 
   #identity(): string {
@@ -186,6 +230,7 @@ class MemoryTreeFile implements PersistentTreeFile {
   readonly #node: MemoryFileNode
   readonly #tree: MemoryOutputTree
   #dirty = false
+  #closed = false
 
   constructor(node: MemoryFileNode, tree: MemoryOutputTree) {
     this.identity = node.identity
@@ -217,11 +262,18 @@ class MemoryTreeFile implements PersistentTreeFile {
   }
 
   async size(): Promise<bigint> {
+    const error = this.#tree.consumeSizeError()
+    if (error !== undefined) throw error
     return BigInt(this.#node.working.byteLength)
   }
 
   async close(): Promise<void> {
+    if (this.#closed) return
+    const error = this.#tree.consumeCloseError()
+    if (error !== undefined) throw error
     await this.flush()
+    this.#closed = true
+    this.#tree.noteFileHandleClosed()
   }
 
   async read(): Promise<Blob> {
@@ -235,6 +287,7 @@ export class MemoryOutputJournal implements OutputCheckpointJournal {
   #candidates = new Map<string, PersistedOutputRecord>()
   #flushedCandidates = new Map<string, PersistedOutputRecord>()
   maximumScanPageRecords = 0
+  commitError: unknown
 
   constructor(events: string[] = []) {
     this.events = events
@@ -262,6 +315,9 @@ export class MemoryOutputJournal implements OutputCheckpointJournal {
 
   async commitCandidate(key: string): Promise<void> {
     this.events.push('journal-commit')
+    const error = this.commitError
+    this.commitError = undefined
+    if (error !== undefined) throw error
     const record = this.#flushedCandidates.get(key)
     if (record === undefined) throw new Error('flushed candidate missing')
     this.#committed.set(key, snapshotOutputRecord(record))
@@ -282,6 +338,10 @@ export class MemoryOutputJournal implements OutputCheckpointJournal {
 
   async deleteCommitted(key: string): Promise<void> {
     this.#committed.delete(key)
+  }
+
+  hasCommitted(key: string): boolean {
+    return this.#committed.has(key)
   }
 
   corruptCommitted(

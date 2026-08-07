@@ -38,7 +38,10 @@ import {
   type V2CommittedDirectory,
 } from './v2-page-store-contracts'
 
-const DATABASE_VERSION = 5
+// Raw authenticated directory identities are now mandatory in committed
+// records. A schema bump deliberately rebuilds older caches instead of
+// interpreting readable projections as authority.
+const DATABASE_VERSION = 6
 const NODE_OWNER_INDEX = 'by-node-owner'
 const NAME_OWNER_INDEX = 'by-name-owner'
 

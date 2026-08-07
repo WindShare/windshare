@@ -39,7 +39,7 @@ func newTerminalNamespaceFixture(
 		t.Fatal(err)
 	}
 	selection := v3RecoverySelection(t, false, 0)
-	intent, err := OpenCanonicalIntent(opened.Namespace.Sessions(), selection.ResumeIntent())
+	intent, err := OpenCanonicalIntent(opened.Namespace.Sessions(), v3RecoveryIntentDigest(selection))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func newTerminalNamespaceFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	intentName := resumestate.ResumeNamespaceName(header.ResumeIntent())
+	intentName := resumestate.IntentNamespaceName(header.IntentDigest())
 	sessionName := resumestate.SessionDirectoryName(header.SessionID())
 	if lifecycle != resumestate.SessionActive {
 		header = installTerminalLifecycle(
@@ -117,7 +117,7 @@ func installTerminalLifecycle(
 	if err != nil {
 		t.Fatal(err)
 	}
-	outcome, err := controller.Store(header.ResumeIntent(), header.SessionID()).ReplaceRecord(
+	outcome, err := controller.Store(header.IntentDigest(), header.SessionID()).ReplaceRecord(
 		directory,
 		resumestate.HeaderRecordName,
 		NewRecordImage(currentEncoded, header.StateGeneration()),

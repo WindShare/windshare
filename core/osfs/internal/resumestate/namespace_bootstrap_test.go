@@ -10,12 +10,12 @@ import (
 )
 
 func TestNamespaceNamesAreCanonicalShardedAndRoundTrip(t *testing.T) {
-	namespace := identity32[transfer.ResumeIntent](0xab)
+	namespace := identity32[transfer.TransferIntentDigest](0xab)
 	session := identity16[transfer.OutputSessionID](0xcd)
 	object := identity32[OutputObjectID](0xef)
 	digest := identity32[LocatorDigest](0x12)
 	if got, want := SessionDirectorySegments(namespace, session), []string{
-		SessionsDirectoryName, ResumeNamespaceName(namespace), strings.Repeat("cd", transfer.OutputSessionIdentityBytes),
+		SessionsDirectoryName, IntentNamespaceName(namespace), strings.Repeat("cd", transfer.OutputSessionIdentityBytes),
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("session segments = %v, want %v", got, want)
 	}
@@ -42,7 +42,7 @@ func TestNamespaceNamesAreCanonicalShardedAndRoundTrip(t *testing.T) {
 	if got := StageSegments(object); !reflect.DeepEqual(got, []string{StagesDirectoryName, "ef", object.String() + ".stage"}) {
 		t.Fatalf("stage segments = %v", got)
 	}
-	parsedNamespace, namespaceErr := ParseResumeNamespaceName(ResumeNamespaceName(namespace))
+	parsedNamespace, namespaceErr := ParseIntentNamespaceName(IntentNamespaceName(namespace))
 	parsedSession, sessionErr := ParseSessionDirectoryName(strings.Repeat("cd", transfer.OutputSessionIdentityBytes))
 	parsedFile, fileErr := ParseFileRecordName(fileName.Shard(), fileName.Name())
 	parsedAnchor, anchorErr := ParseAnchorName(anchorName.Shard(), anchorName.Name())
@@ -76,18 +76,18 @@ func TestNamespaceParsingRejectsAliasesMisShardingAndTraversal(t *testing.T) {
 			}
 		})
 	}
-	intent := identity32[transfer.ResumeIntent](0xab)
-	canonicalName := ResumeNamespaceName(intent)
+	intent := identity32[transfer.TransferIntentDigest](0xab)
+	canonicalName := IntentNamespaceName(intent)
 	aliasName := strings.ToUpper(canonicalName)
-	if _, err := ParseResumeNamespaceName(aliasName); !errors.Is(err, ErrInvalidState) {
+	if _, err := ParseIntentNamespaceName(aliasName); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("uppercase namespace error = %v", err)
 	}
-	canonical := ClassifyResumeNamespaceName(canonicalName)
-	alias := ClassifyResumeNamespaceName(aliasName)
-	opaque := ClassifyResumeNamespaceName("not-a-resume-intent")
-	if canonical.Classification() != ResumeNamespaceCanonical || canonical.Intent() != intent ||
-		alias.Classification() != ResumeNamespaceDecodableAlias || alias.Intent() != intent ||
-		opaque.Classification() != ResumeNamespaceOpaque || !opaque.Intent().IsZero() {
+	canonical := ClassifyIntentNamespaceName(canonicalName)
+	alias := ClassifyIntentNamespaceName(aliasName)
+	opaque := ClassifyIntentNamespaceName("not-a-resume-intent")
+	if canonical.Classification() != IntentNamespaceCanonical || canonical.Intent() != intent ||
+		alias.Classification() != IntentNamespaceDecodableAlias || alias.Intent() != intent ||
+		opaque.Classification() != IntentNamespaceOpaque || !opaque.Intent().IsZero() {
 		t.Fatalf("namespace classifications = %+v %+v %+v", canonical, alias, opaque)
 	}
 	if _, err := ParseSessionDirectoryName(strings.Repeat("00", transfer.OutputSessionIdentityBytes)); !errors.Is(err, ErrInvalidState) {
@@ -137,8 +137,8 @@ func TestCorruptionClassificationRequiresEnoughNamespaceAuthorityForIsolation(t 
 		t.Fatalf("invalid global kind error = %v", err)
 	}
 
-	intent := identity32[transfer.ResumeIntent](0xab)
-	canonicalIntent := ResumeNamespaceName(intent)
+	intent := identity32[transfer.TransferIntentDigest](0xab)
+	canonicalIntent := IntentNamespaceName(intent)
 	for _, name := range []string{canonicalIntent, strings.ToUpper(canonicalIntent)} {
 		classification := ClassifyHeaderCorruption(name)
 		if classification.Disposition() != CorruptionBlockResumeNamespace ||
@@ -168,7 +168,7 @@ func TestCorruptionClassificationRequiresEnoughNamespaceAuthorityForIsolation(t 
 		entry := ClassifyFileShardEntry(test.shard, test.name)
 		classification, err := ClassifyFileCorruption(namespace, entry)
 		if err != nil || classification.Disposition() != test.disposition ||
-			classification.Intent() != namespace.Header().ResumeIntent() || classification.Locator() != test.locator {
+			classification.Intent() != namespace.Header().IntentDigest() || classification.Locator() != test.locator {
 			t.Fatalf("file corruption %q/%q = %+v, %v", test.shard, test.name, classification, err)
 		}
 	}

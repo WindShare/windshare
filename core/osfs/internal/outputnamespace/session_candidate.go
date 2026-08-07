@@ -60,20 +60,20 @@ func (mismatch *AncestryMismatchError) SessionID() transfer.OutputSessionID {
 
 func OpenCanonicalIntent(
 	sessions outputcap.Directory,
-	intent transfer.ResumeIntent,
+	intent transfer.TransferIntentDigest,
 ) (outputcap.Directory, error) {
 	names, err := sessions.Names(RootInspectionLimit)
 	if err != nil {
 		return nil, err
 	}
-	canonicalName := resumestate.ResumeNamespaceName(intent)
+	canonicalName := resumestate.IntentNamespaceName(intent)
 	canonicalPresent := false
 	for _, name := range names {
-		classified := resumestate.ClassifyResumeNamespaceName(name)
-		if classified.Classification() == resumestate.ResumeNamespaceOpaque || classified.Intent() != intent {
+		classified := resumestate.ClassifyIntentNamespaceName(name)
+		if classified.Classification() == resumestate.IntentNamespaceOpaque || classified.Intent() != intent {
 			continue
 		}
-		if classified.Classification() != resumestate.ResumeNamespaceCanonical || name != canonicalName {
+		if classified.Classification() != resumestate.IntentNamespaceCanonical || name != canonicalName {
 			return nil, outputfault.ErrIntentUnsafe
 		}
 		canonicalPresent = true
@@ -97,13 +97,24 @@ func (controller Controller) OpenOrCreateSession(
 	selection transfer.OutputSelection,
 	ancestry resumestate.OutputAncestryBinding,
 ) (SessionOpenResult, error) {
-	names, err := intent.Names(resumestate.MaxSessionsPerIntent + 1)
+	// The intent directory owns one metadata child (the V1 checkpoint namespace)
+	// in addition to its bounded session children. Inspect that child here so a
+	// checkpoint tree cannot be mistaken for a session or silently widen the
+	// namespace scan.
+	names, err := intent.Names(resumestate.MaxSessionsPerIntent + 2)
 	if err != nil {
 		return SessionOpenResult{}, err
 	}
 	var installedNames []string
 	var candidateNames []string
 	for _, name := range names {
+		if name == resumestate.CheckpointsDirectoryName {
+			kind, observeErr := intent.ObserveEntry(name)
+			if observeErr != nil || kind != outputcap.EntryDirectory {
+				return SessionOpenResult{}, errors.Join(outputfault.ErrIntentUnsafe, observeErr)
+			}
+			continue
+		}
 		if _, parseErr := resumestate.ParseSessionDirectoryName(name); parseErr == nil {
 			installedNames = append(installedNames, name)
 			continue
@@ -246,7 +257,7 @@ func (controller Controller) completeOutputSessionCandidate(
 	if err != nil {
 		return err
 	}
-	store := controller.Store(header.ResumeIntent(), header.SessionID())
+	store := controller.Store(header.IntentDigest(), header.SessionID())
 	if _, err := store.EnsureInitialRecord(
 		candidate, resumestate.HeaderRecordName, encoded, resumestate.MaxSessionHeaderBytes,
 	); err != nil {

@@ -13,6 +13,24 @@ describe('v2 production entry boundary', () => {
     expect([...graph].some((file) => file.endsWith(normalize('preview/v2-preview.ts')))).toBe(true)
     expect([...graph].some((file) => file.endsWith(normalize('preview/mp4-range.ts')))).toBe(true)
   })
+
+  it('opens the picker-backed output authority before any production transfer job can discover', () => {
+    const gateway = readFileSync(resolve(SOURCE_ROOT, 'ui/v2-gateway.ts'), 'utf8')
+    const controller = readFileSync(resolve(SOURCE_ROOT, 'ui/v2-controller.ts'), 'utf8')
+    expect(gateway).toContain('new TransferJob(')
+    expect(gateway).not.toContain('V2TransferJob')
+    expect(controller).not.toContain('openSelection(')
+    expect(controller.indexOf('acquireBrowserV2Output')).toBeGreaterThanOrEqual(0)
+    expect(controller.indexOf('acquireBrowserV2Output')).toBeLessThan(controller.indexOf('joined.transferJob'))
+    expect(controller).toContain("phase: 'acquiring-output'")
+  })
+
+  it('keeps retired terminal-selection names out of the reachable production graph', () => {
+    const retired = /V2TransferJob|V2OutputSelection|openSelection\(|resumeIntentText/u
+    for (const file of productionGraph(resolve(SOURCE_ROOT, 'main.tsx'))) {
+      expect(readFileSync(file, 'utf8')).not.toMatch(retired)
+    }
+  })
 })
 
 function productionGraph(entry: string): ReadonlySet<string> {

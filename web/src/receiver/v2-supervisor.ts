@@ -26,6 +26,7 @@ import {
 } from '../content/v2-session-services'
 import { V2SessionRuntimeError, type V2LaneChange } from '../session/v2-runtime-types'
 import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
+import { encodeBase64Url } from '../crypto/bytes'
 import {
   V2RelayReceiverError,
   type V2RelayReceiverConnection,
@@ -154,6 +155,10 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
 
   get generationId(): number {
     return this.#current.id
+  }
+
+  get protocolSessionId(): string {
+    return encodeBase64Url(this.#current.session.keys.protocolSessionId)
   }
 
   get isStopped(): boolean {

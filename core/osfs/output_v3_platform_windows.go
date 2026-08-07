@@ -7,6 +7,6 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/outputwindows"
 )
 
-func openOutputV3Platform(path string, create bool) (outputcap.Platform, error) {
+func openNativeOutputPlatform(path string, create bool) (outputcap.Platform, error) {
 	return outputwindows.Open(path, create)
 }

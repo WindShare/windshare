@@ -32,6 +32,24 @@ func (output *backendIDAdmissionOutput) OpenSelection(
 	return output, nil
 }
 
+func (output *backendIDAdmissionOutput) OpenOutput(
+	ctx context.Context,
+	intent TransferIntent,
+) (OutputSession, error) {
+	output.openSelectionCalls++
+	if _, err := output.jobOutput.OpenOutput(ctx, intent); err != nil {
+		return nil, err
+	}
+	return output, nil
+}
+
+func (output *backendIDAdmissionOutput) AdmitDirectory(
+	ctx context.Context,
+	directory OutputDirectory,
+) (DirectoryAdmission, error) {
+	return output.jobOutput.AdmitDirectory(ctx, directory)
+}
+
 func (output *backendIDAdmissionOutput) BeginFile(
 	ctx context.Context,
 	file OutputFile,
@@ -117,7 +135,7 @@ func newBackendIDAdmissionFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := NewTransferJob(TransferJobConfig{
+	job, err := newTestTransferJob(t, TransferJobConfig{
 		ShareInstance: share,
 		SyntheticRoot: root,
 		Rules:         rules,
@@ -164,7 +182,7 @@ func TestTransferJobRejectsMalformedBackendIDBeforeDownstreamWork(t *testing.T) 
 				t.Fatalf("OpenSelection calls = %d", fixture.output.openSelectionCalls)
 			}
 			if fixture.output.beginFileCalls != 0 || fixture.output.finalizeDirectoryCalls != 0 ||
-				fixture.output.pauseJobCalls != 0 || fixture.output.completeJobCalls != 0 {
+				fixture.output.pauseJobCalls != 1 || fixture.output.completeJobCalls != 0 {
 				t.Fatalf(
 					"downstream output calls: begin=%d finalize=%d pause=%d complete=%d",
 					fixture.output.beginFileCalls,
@@ -223,5 +241,24 @@ func TestTransferJobAcceptsCanonicalBackendIDWithoutChangingWorkflow(t *testing.
 			fixture.revisions.released,
 			fixture.blocks.calls,
 		)
+	}
+}
+
+func TestTransferJobRejectsOutputModeOutsideConfirmedIntentAndSettlesNamespace(t *testing.T) {
+	fixture := newBackendIDAdmissionFixture(t, jobOutputBackend)
+	stream, err := NewOutputCapabilities(OutputCapabilities{
+		Durability: DurabilityNone, Mode: OutputSingleFileStream,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.output.capabilitiesOverride = &stream
+
+	result := fixture.job.Run(context.Background())
+	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrOutputContract) ||
+		fixture.output.pauseJobCalls != 1 || fixture.output.completeJobCalls != 0 ||
+		fixture.output.beginFileCalls != 0 || fixture.output.finalizeDirectoryCalls != 0 ||
+		len(fixture.revisions.order) != 0 || fixture.blocks.calls != 0 {
+		t.Fatalf("result=%+v output=%+v revisions=%v reads=%d", result, fixture.output, fixture.revisions.order, fixture.blocks.calls)
 	}
 }

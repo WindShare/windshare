@@ -46,18 +46,30 @@ func TestTransferJobFailureTaxonomyPreservesScopeAndCause(t *testing.T) {
 		t.Fatalf("dependency contract failure = %v", dependency)
 	}
 	dependencyFailure.JobFatal()
+	if filePauseReason(budget) != FilePauseResourceBudget ||
+		jobPauseReason(budget, nil) != JobPauseResourceBudget {
+		t.Fatal("resource budget failure was persisted as a foreign failure class")
+	}
+	if filePauseReason(dependency) != FilePauseDependencyContract ||
+		jobPauseReason(dependency, nil) != JobPauseDependencyContract {
+		t.Fatal("dependency contract failure was persisted as a foreign failure class")
+	}
 }
 
 func TestTransferJobOutputSessionAndFileValidatorsFailClosed(t *testing.T) {
-	if err := validateOutputSession(nil); !errors.Is(err, ErrOutputContract) {
+	share := transferID[catalog.ShareInstance](161)
+	root := transferID[catalog.DirectoryID](162)
+	rules, _ := NewSelectionRules(true, nil)
+	intent := testTransferIntent(t, share, root, rules, jobOutputBackend)
+	if err := validateOutputSession(intent, nil); !errors.Is(err, ErrOutputContract) {
 		t.Fatalf("nil output session error = %v", err)
 	}
-	output := newJobOutput(transferID[catalog.ShareInstance](161))
-	if err := validateOutputSession(output); err != nil {
+	output := newJobOutput(share)
+	if err := validateOutputSession(intent, output); err != nil {
 		t.Fatalf("valid output session error = %v", err)
 	}
 	output.session = OutputSessionID{}
-	if err := validateOutputSession(output); !errors.Is(err, ErrOutputContract) {
+	if err := validateOutputSession(intent, output); !errors.Is(err, ErrOutputContract) {
 		t.Fatalf("zero output session identity error = %v", err)
 	}
 
@@ -270,7 +282,7 @@ func TestTransferJobRejectsInvalidAdmissionAndRevisionIdentityTransitions(t *tes
 		job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
 		result := job.Run(context.Background())
 		if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrOutputContract) ||
-			output.pauseCalls != 0 || output.completeCalls != 0 {
+			output.pauseCalls != 1 || output.completeCalls != 0 {
 			t.Fatalf("invalid admission result=%+v pause=%d complete=%d", result, output.pauseCalls, output.completeCalls)
 		}
 	})

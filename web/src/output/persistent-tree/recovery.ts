@@ -1,4 +1,5 @@
 import type { OutputSessionIdentity } from '../../transfer/output-session'
+import type { CheckpointNamespaceBinding } from '../persistence/journal'
 import type {
   OutputCheckpointJournal,
   PersistedOutputRecord,
@@ -16,7 +17,7 @@ import type { PersistentOutputTree } from './contracts'
 import { PersistentOutputError } from './errors'
 
 export async function recoverOutputRecords(
-  identity: OutputSessionIdentity,
+  identity: OutputSessionIdentity & CheckpointNamespaceBinding,
   tree: PersistentOutputTree,
   journal: OutputCheckpointJournal,
 ): Promise<void> {
@@ -58,7 +59,7 @@ export async function recoverOutputRecords(
 }
 
 async function scanJournal(
-  identity: OutputSessionIdentity,
+  identity: OutputSessionIdentity & CheckpointNamespaceBinding,
   scan: (options: OutputJournalScan) => Promise<OutputJournalPage>,
   visit: (record: PersistedOutputRecord) => Promise<void>,
 ): Promise<void> {
@@ -81,7 +82,7 @@ async function scanJournal(
 
 function validatedRecord(
   candidate: PersistedOutputRecord,
-  identity: OutputSessionIdentity,
+  identity: OutputSessionIdentity & CheckpointNamespaceBinding,
 ): PersistedOutputRecord {
   let record: PersistedOutputRecord
   try {
@@ -90,7 +91,7 @@ function validatedRecord(
     throw bindingError('Output journal contains a corrupt record', error)
   }
   if (!recordBelongsToSession(record, identity)) {
-    throw bindingError('Output journal contains a record for another session')
+    throw bindingError('Output journal contains a record for another checkpoint namespace')
   }
   return record
 }

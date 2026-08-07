@@ -52,7 +52,9 @@ test('downloads exact single-file bytes without a StorageManager through the pro
   const downloadPromise = page.waitForEvent('download')
   await page.evaluate(async ({ bytes, name }) => {
     const modulePath = '/src/ui/v2-output.ts'
+    const admissionPath = '/test/output/admission-fixture.ts'
     const output = await import(modulePath) as typeof import('../../src/ui/v2-output')
+    const admission = await import(admissionPath) as typeof import('../output/admission-fixture')
     const portableWindow = portableWindowWithoutNativeSave()
     const acquired = await output.acquireBrowserV2Output(
       'download',
@@ -63,19 +65,24 @@ test('downloads exact single-file bytes without a StorageManager through the pro
       throw new Error(`Expected portable single-file stream, received ${acquired.kind}`)
     }
     const session = await output.openBrowserV2OutputSession(acquired, 'portable-single')
-    const begun = await session.beginFile({
-      source: { shareInstance: 'share', fileId: 'single', fileRevision: 'revision' },
+    const signal = new AbortController().signal
+    const begun = await session.beginFile(await admission.admittedOutputFile(session, {
+      source: {
+        shareInstance: admission.testOutputIdentity('portable-share'),
+        fileId: admission.testOutputIdentity('portable-single'),
+        fileRevision: admission.testOutputIdentity('portable-single-revision'),
+      },
       path: [name],
       exactSize: BigInt(bytes.length),
-    })
-    await begun.transaction.writeRange(0n, Uint8Array.from(bytes))
-    await begun.transaction.commit()
+    }), signal)
+    await begun.transaction.writeRange(0n, Uint8Array.from(bytes), signal)
+    await begun.transaction.commit(signal)
     await session.finishJob({
       status: 'Succeeded',
       failures: [],
       failureCount: 0,
       omittedFailureCount: 0,
-    }, new AbortController().signal)
+    }, signal)
 
     function portableWindowWithoutNativeSave():
     import('../../src/ui/v2-output').V2BrowserOutputWindow {
@@ -100,7 +107,9 @@ test('downloads a valid exact-content ZIP through the production portable backen
   const downloadPromise = page.waitForEvent('download')
   await page.evaluate(async ({ bytes, name }) => {
     const modulePath = '/src/ui/v2-output.ts'
+    const admissionPath = '/test/output/admission-fixture.ts'
     const output = await import(modulePath) as typeof import('../../src/ui/v2-output')
+    const admission = await import(admissionPath) as typeof import('../output/admission-fixture')
     const acquired = await output.acquireBrowserV2Output(
       'download',
       {
@@ -121,16 +130,19 @@ test('downloads a valid exact-content ZIP through the production portable backen
       throw new Error(`Expected portable ZIP stream, received ${acquired.kind}`)
     }
     const session = await output.openBrowserV2OutputSession(acquired, 'portable-zip')
-    const directory = { path: ['tree'] }
-    await session.ensureDirectory(directory)
-    const begun = await session.beginFile({
-      source: { shareInstance: 'share', fileId: 'zip-member', fileRevision: 'revision' },
+    const directory = await admission.admittedOutputDirectory(session, { path: ['tree'] })
+    const signal = new AbortController().signal
+    const begun = await session.beginFile(await admission.admittedOutputFile(session, {
+      source: {
+        shareInstance: admission.testOutputIdentity('portable-share'),
+        fileId: admission.testOutputIdentity('portable-zip-member'),
+        fileRevision: admission.testOutputIdentity('portable-zip-revision'),
+      },
       path: ['tree', 'payload.bin'],
       exactSize: BigInt(bytes.length),
-    })
-    await begun.transaction.writeRange(0n, Uint8Array.from(bytes))
-    await begun.transaction.commit()
-    const signal = new AbortController().signal
+    }), signal)
+    await begun.transaction.writeRange(0n, Uint8Array.from(bytes), signal)
+    await begun.transaction.commit(signal)
     await session.finalizeDirectory(directory, signal)
     await session.finishJob({
       status: 'Succeeded',

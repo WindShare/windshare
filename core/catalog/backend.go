@@ -242,7 +242,7 @@ type memoryCatalogTransaction struct {
 	pendingMemory   uint64
 	pages           map[uint32][]byte
 	pageObjects     map[uint32][]byte
-	sequence        directorySequence
+	sequence        DirectoryGenerationValidator
 	digest          hash.Hash
 	usage           ResourceUsage
 	preparation     BackendPreparation
@@ -352,7 +352,7 @@ func (t *memoryCatalogTransaction) PutPage(page CatalogPage, object SealedPageOb
 			return errors.New("catalog transaction page changed a private child record")
 		}
 	}
-	if err := t.sequence.accept(page); err != nil {
+	if err := t.sequence.AcceptPage(page); err != nil {
 		return err
 	}
 	temporary := ResourceUsage{MemoryBytes: page.EstimatedMemoryBytes()}
@@ -397,7 +397,7 @@ func (t *memoryCatalogTransaction) Prepare(ctx context.Context) (BackendPreparat
 	if !t.directoryRecord.valid() || len(t.pending) != 0 {
 		return BackendPreparation{}, errors.New("catalog transaction is incomplete")
 	}
-	committed, err := t.sequence.finish()
+	committed, err := t.sequence.Finish()
 	if err != nil {
 		return BackendPreparation{}, err
 	}

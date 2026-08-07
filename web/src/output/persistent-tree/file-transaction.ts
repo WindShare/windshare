@@ -32,35 +32,40 @@ export class PersistentFileTransaction implements OutputFileTransaction {
     this.#generation = record.generation
   }
 
-  writeRange(offset: bigint, data: Uint8Array): Promise<void> {
+  writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void> {
     const snapshot = data.slice()
     return this.#enqueue(async () => {
+      signal.throwIfAborted()
       this.#requireActive()
       const end = offset + BigInt(snapshot.byteLength)
       if (offset < 0n || end > this.#file.exactSize) {
         throw new RangeError('Persistent output write exceeds its file')
       }
       await this.#handle.writeAt(offset, snapshot)
+      signal.throwIfAborted()
       this.#ranges = this.#ranges.union(new ByteRangeSet(
         this.#file.exactSize,
         [byteRange(offset, end)],
       ))
       await this.#session.noteDataWritten(this.#file)
+      signal.throwIfAborted()
     })
   }
 
-  checkpoint(): Promise<VerifiedDurableRanges> {
+  checkpoint(signal: AbortSignal): Promise<VerifiedDurableRanges> {
     return this.#enqueue(async () => {
+      signal.throwIfAborted()
       this.#requireActive()
-      return this.#session.checkpointFile(this, this.#file, this.#handle, this.#ranges)
+      return this.#session.checkpointFile(this, this.#file, this.#handle, this.#ranges, signal)
     })
   }
 
-  commit(): Promise<void> {
+  commit(signal: AbortSignal): Promise<void> {
     return this.#enqueue(async () => {
+      signal.throwIfAborted()
       this.#requireActive()
-      await this.#session.checkpointFile(this, this.#file, this.#handle, this.#ranges)
-      await this.#session.commitFile(this, this.#file, this.#handle, this.#ranges)
+      await this.#session.checkpointFile(this, this.#file, this.#handle, this.#ranges, signal)
+      await this.#session.commitFile(this, this.#file, this.#handle, this.#ranges, signal)
       this.#settled = true
     })
   }

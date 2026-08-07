@@ -9,31 +9,6 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 )
 
-func TestResumeSessionLifecycleMappingIsExhaustiveAndStable(t *testing.T) {
-	tests := []struct {
-		internal resumestate.SessionLifecycle
-		public   ResumeSessionLifecycle
-		code     string
-	}{
-		{resumestate.SessionActive, ResumeSessionActive, "active"},
-		{resumestate.SessionPausing, ResumeSessionPausing, "pausing"},
-		{resumestate.SessionPaused, ResumeSessionPaused, "paused"},
-		{resumestate.SessionPausedNeedsAttention, ResumeSessionPausedNeedsAttention, "paused-needs-attention"},
-		{resumestate.SessionCompleting, ResumeSessionCompleting, "completing"},
-		{resumestate.SessionDiscarding, ResumeSessionDiscarding, "discarding"},
-	}
-	for _, test := range tests {
-		actual := resumeSessionLifecycleFromState(test.internal)
-		if actual != test.public || uint8(actual) != uint8(test.internal) || actual.String() != test.code {
-			t.Errorf("lifecycle %d maps to (%d, %q), want (%d, %q)",
-				test.internal, actual, actual.String(), test.public, test.code)
-		}
-	}
-	if actual := resumeSessionLifecycleFromState(0xff); actual != 0 || actual.String() != "invalid" {
-		t.Fatalf("unknown lifecycle maps to (%d, %q), want zero/invalid", actual, actual.String())
-	}
-}
-
 func TestFilesystemOutputFilePhaseMappingIsExhaustiveAndStable(t *testing.T) {
 	tests := []struct {
 		internal resumestate.FilePhase
@@ -181,7 +156,7 @@ func publicValuesSelection(t *testing.T) transfer.OutputSelection {
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonical, err := transfer.NewCanonicalSelectionV1(request, plan)
+	canonical, err := transfer.NewTerminalSelectionObservationV1(request, plan)
 	if err != nil {
 		t.Fatal(err)
 	}

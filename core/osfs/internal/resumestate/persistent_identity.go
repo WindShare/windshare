@@ -17,7 +17,10 @@ import (
 )
 
 const (
-	SchemaVersion                 = uint32(3)
+	// SchemaVersion identifies the current durable output namespace. The former
+	// selection-shaped journal is intentionally not decoded: FileCheckpointV1 is
+	// the only resumable file state that a reopened output may trust.
+	SchemaVersion                 = uint32(1)
 	OutputObjectIDBytes           = sha256.Size
 	OutputRootBindingBytes        = sha256.Size
 	OutputAncestryBindingBytes    = sha256.Size
@@ -81,7 +84,7 @@ func NewOutputAncestryBinding(
 		return OutputAncestryBinding{}, fmt.Errorf("%w: output ancestry root claim", ErrInvalidState)
 	}
 	hash := sha256.New()
-	writeAncestryBindingBytes(hash, []byte("windshare/output-ancestry-binding/v3"))
+	writeAncestryBindingBytes(hash, []byte("windshare/output-ancestry-binding/v1"))
 	writeAncestryBindingBytes(hash, root.Bytes())
 	writeAncestryBindingBytes(hash, selection.Bytes())
 	var count [8]byte
@@ -155,7 +158,7 @@ func NewOutputRootBinding(
 		return OutputRootBinding{}, fmt.Errorf("%w: output root identity claims", ErrInvalidState)
 	}
 	hash := sha256.New()
-	writeRootBindingClaim(hash, []byte("windshare/output-root-binding/v3"))
+	writeRootBindingClaim(hash, []byte("windshare/output-root-binding/v1"))
 	writeRootBindingClaim(hash, []byte(validatedCertification))
 	writeRootBindingClaim(hash, volumeIdentity)
 	writeRootBindingClaim(hash, objectIdentity)

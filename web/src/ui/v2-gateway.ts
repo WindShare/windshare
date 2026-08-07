@@ -28,7 +28,7 @@ import type {
   V2BlockRouteObservation,
 } from '../content/v2-broker'
 import { V2FilePreview } from '../preview/v2-preview'
-import { V2TransferJob, type V2TransferJobOptions } from '../transfer/v2-job'
+import { TransferJob, type TransferJobOptions } from '../transfer/v2-job'
 import type { V2OutputAuthority } from '../transfer/output-session'
 import { dialV2RelayReceiver, type V2RelayReceiverConnection } from '../transport/relay/v2-receiver'
 
@@ -144,10 +144,10 @@ export class V2JoinedBrowserShare {
   transferJob(
     output: V2OutputAuthority,
     connectivity: V2ConnectivityActivation,
-    callbacks: Pick<V2TransferJobOptions, 'onProgress' | 'onMeasure'> = {},
-  ): V2TransferJob {
+    callbacks: Partial<Pick<TransferJobOptions, 'onProgress' | 'onMeasure' | 'onTrace' | 'intent'>> = {},
+  ): TransferJob {
     const content = this.#supervisor.content.forRoutes(connectivity.routes)
-    return new V2TransferJob({
+    return new TransferJob({
       descriptor: this.descriptor,
       catalog: this.#catalog,
       selection: this.selection,
@@ -155,6 +155,7 @@ export class V2JoinedBrowserShare {
       broker: content.broker,
       lanes: content.lanes,
       output,
+      protocolSessionId: () => this.#supervisor.protocolSessionId,
       ...callbacks,
     })
   }

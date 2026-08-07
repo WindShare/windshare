@@ -65,7 +65,7 @@ func TestTransferResultDriftClassification(t *testing.T) {
 		content.ErrRevisionDrift,
 		transfer.ErrBlockInvalidated,
 	} {
-		if !transferResultDrifted(transfer.JobResult{TerminationCause: cause}) {
+		if !transferResultDrifted(transfer.JobResult{SourceDriftFailure: cause}) {
 			t.Fatalf("drift %v was not classified", cause)
 		}
 	}

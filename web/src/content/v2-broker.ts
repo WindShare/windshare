@@ -349,6 +349,7 @@ export interface V2BlockRangeReaderOptions {
 
 // Function-property variance prevents a route-authorized method from masquerading as this scoped port.
 export interface V2BlockRangeReader {
+  /** Slices are non-empty, contiguous, ascending, and cover the requested half-open range exactly. */
   readonly readRange: (
     descriptor: V2FileRevisionDescriptor,
     leaseId: Uint8Array,

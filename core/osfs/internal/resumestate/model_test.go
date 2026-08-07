@@ -187,10 +187,10 @@ func TestOutputAncestryBindingCommitsToExactCanonicalClosure(t *testing.T) {
 	}
 }
 
-func TestHeaderCarriesCanonicalSelectionScopedResumeIdentity(t *testing.T) {
+func TestHeaderCarriesCanonicalSelectionScopedIntentIdentity(t *testing.T) {
 	selection := testSelection(t, 10)
 	header := testHeader(t)
-	if header.ResumeNamespace() != header.ResumeIntent() || header.ResumeIntent().IsZero() ||
+	if header.IntentDigest().IsZero() ||
 		header.SelectionIdentity() != selection.Identity() || header.ShareInstance() != selection.ShareInstance() ||
 		header.SyntheticRoot() != selection.SyntheticRoot() || header.SelectedDirectoryCount() != 1 ||
 		header.SelectedFileCount() != 1 || header.OutputAncestry().IsZero() {
@@ -203,7 +203,7 @@ func TestHeaderCarriesCanonicalSelectionScopedResumeIdentity(t *testing.T) {
 	}
 	claims := headerClaims{
 		backend: header.backend, sessionID: header.sessionID, shareInstance: header.shareInstance,
-		syntheticRoot: header.syntheticRoot, resumeIntent: header.resumeIntent,
+		syntheticRoot: header.syntheticRoot, intentDigest: header.intentDigest,
 		selectionIdentity:      header.selectionIdentity,
 		selectedDirectoryCount: header.selectedDirectoryCount, selectedFileCount: header.selectedFileCount,
 		outputRoot: header.outputRoot, outputAncestry: header.outputAncestry,
@@ -349,7 +349,7 @@ func phases(values ...FilePhase) map[FilePhase]bool {
 func TestSessionNamespaceAuthoritySupportsSelectionIndependentLifecycleRecovery(t *testing.T) {
 	header := testHeader(t)
 	control := testControl(t)
-	segments := SessionDirectorySegments(header.ResumeIntent(), header.SessionID())
+	segments := SessionDirectorySegments(header.IntentDigest(), header.SessionID())
 	authority, err := BindSessionNamespaceAuthority(control, header, segments[1], segments[2])
 	if err != nil || authority.Control() != control || authority.Header() != header ||
 		authority.IntentDirectory() != segments[1] || authority.SessionDirectory() != segments[2] {
@@ -384,7 +384,7 @@ func TestSessionNamespaceAuthoritySupportsSelectionIndependentLifecycleRecovery(
 		session string
 	}{
 		{control: wrongControl, intent: segments[1], session: segments[2]},
-		{control: control, intent: ResumeNamespaceName(identity32[transfer.ResumeIntent](0xee)), session: segments[2]},
+		{control: control, intent: IntentNamespaceName(identity32[transfer.TransferIntentDigest](0xee)), session: segments[2]},
 		{control: control, intent: segments[1], session: "not-a-session"},
 	} {
 		if _, err := BindSessionNamespaceAuthority(invalid.control, header, invalid.intent, invalid.session); !errors.Is(err, ErrInvalidState) {

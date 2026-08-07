@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
+import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { V2CatalogScanProgressListener } from '../../src/catalog/v2-client'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import {
@@ -18,13 +19,18 @@ import type {
 const entry: Extract<V2CatalogEntry, { kind: 'file' }> = Object.freeze({
   kind: 'file',
   id: identity(2),
-  idText: 'file',
+  idText: identityText(2),
   name: 'photo.png',
   expectedSize: 100n,
 })
 
 class FakeJoined {
-  readonly descriptor = { syntheticRootId: 'root' }
+  readonly descriptor = {
+    shareInstance: identity(7),
+    shareInstanceId: identityText(7),
+    syntheticRoot: identity(1),
+    syntheticRootId: identityText(1),
+  }
   readonly recoveryIdentity = 'share.recovery'
   readonly selection = new V2SelectionPolicy(true)
   readonly entry: Extract<V2CatalogEntry, { kind: 'file' }>
@@ -44,10 +50,10 @@ class FakeJoined {
   rootDirectory(): V2BrowseDirectory {
     return {
       id: identity(1),
-      idText: 'root',
+      idText: identityText(1),
       name: 'Shared files',
       path: [],
-      ancestry: ['root'],
+      ancestry: [identityText(1)],
     }
   }
 
@@ -144,6 +150,10 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   const value = new Uint8Array(16)
   value[0] = first
   return value
+}
+
+function identityText(first: number): string {
+  return encodeBase64Url(identity(first))
 }
 
 async function turn(): Promise<void> {

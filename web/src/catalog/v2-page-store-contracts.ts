@@ -1,8 +1,15 @@
-import type { V2CatalogPage, V2DirectoryFailure } from './v2-records'
+import {
+  V2_CATALOG_IDENTITY_BYTES,
+  type V2CatalogPage,
+  type V2DirectoryFailure,
+} from './v2-records'
 
 export interface V2CommittedDirectory {
   readonly directoryIdText: string
   readonly generationText: string
+  /** Raw authenticated identities are the authority; text is only a display/key projection. */
+  readonly directoryId: Uint8Array<ArrayBuffer>
+  readonly generation: Uint8Array<ArrayBuffer>
   readonly pageCount: number
   readonly entryCount: number
   readonly omittedCount: bigint
@@ -52,14 +59,32 @@ export class V2CatalogPageStoreError extends Error {
 }
 
 export function snapshotDirectory(directory: V2CommittedDirectory): V2CommittedDirectory {
+  const directoryId = requireCatalogIdentity(directory.directoryId, 'directory ID')
+  const generation = requireCatalogIdentity(directory.generation, 'directory generation')
   return Object.freeze({
     directoryIdText: directory.directoryIdText,
     generationText: directory.generationText,
+    directoryId,
+    generation,
     pageCount: directory.pageCount,
     entryCount: directory.entryCount,
     omittedCount: directory.omittedCount,
     terminalCommitment: directory.terminalCommitment.slice(),
   })
+}
+
+function requireCatalogIdentity(
+  value: Uint8Array<ArrayBuffer>,
+  label: string,
+): Uint8Array<ArrayBuffer> {
+  if (!(value instanceof Uint8Array) || value.byteLength !== V2_CATALOG_IDENTITY_BYTES ||
+      value.every((byte) => byte === 0)) {
+    throw new V2CatalogPageStoreError(
+      'authenticated-ownership',
+      `${label} is not a non-zero ${V2_CATALOG_IDENTITY_BYTES}-byte identity`,
+    )
+  }
+  return value.slice()
 }
 
 export function snapshotCachedFailure(cached: V2CachedDirectoryFailure): V2CachedDirectoryFailure {

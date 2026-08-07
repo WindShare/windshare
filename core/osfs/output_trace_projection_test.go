@@ -210,7 +210,7 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 func TestOutputTraceProjectionCopiesPayloadAndLifecycleValues(t *testing.T) {
 	event := outputruntime.FilesystemOutputTrace{
 		Operation:    outputruntime.TraceAncestryValidation,
-		ResumeIntent: transfer.ResumeIntent{1}, SessionID: transfer.OutputSessionID{2},
+		IntentDigest: transfer.TransferIntentDigest{1}, SessionID: transfer.OutputSessionID{2},
 		LocatorDigest: transfer.OutputLocatorDigest{3}, OutputObjectID: transfer.OutputObjectIdentity{4},
 		PreviousPhase:          outputruntime.FilesystemOutputFileWitnessed,
 		NextPhase:              outputruntime.FilesystemOutputFilePublished,
@@ -226,7 +226,7 @@ func TestOutputTraceProjectionCopiesPayloadAndLifecycleValues(t *testing.T) {
 		MutationReportedFailure: true, ParentSyncReportedFailure: true, Failed: true,
 	}
 	projected := projectFilesystemOutputTrace(event)
-	if projected.Operation != TraceAncestryValidation || projected.ResumeIntent != (transfer.ResumeIntent{1}) ||
+	if projected.Operation != TraceAncestryValidation || projected.IntentDigest != (transfer.TransferIntentDigest{1}) ||
 		projected.SessionID != (transfer.OutputSessionID{2}) || projected.LocatorDigest != (transfer.OutputLocatorDigest{3}) ||
 		projected.OutputObjectID != (transfer.OutputObjectIdentity{4}) || projected.PreviousPhase != FilesystemOutputFileWitnessed ||
 		projected.NextPhase != FilesystemOutputFilePublished || projected.RecoveryAction != FilesystemOutputRecoveryInstallPublished ||
@@ -246,54 +246,4 @@ func TestOutputTraceProjectionCopiesPayloadAndLifecycleValues(t *testing.T) {
 		t.Fatalf("tracer captured %+v, want %+v", captured, projected)
 	}
 	outputRuntimeTracer{}.TraceFilesystemOutput(event)
-}
-
-func TestOutputTraceProjectionCopiesAttentionAndSettlement(t *testing.T) {
-	attention := projectResumeAttention([]outputruntime.ResumeAttention{
-		{Scope: outputruntime.ResumeAttentionFile, Code: "file", State: "state", Detail: "detail"},
-		{Scope: outputruntime.ResumeAttentionIntent, Code: "intent"},
-		{Scope: outputruntime.ResumeAttentionRoot, Code: "root"},
-		{Scope: outputruntime.ResumeAttentionLegacy, Code: "legacy"},
-		{Scope: 0xff, Code: "unknown"},
-	})
-	if len(attention) != 5 || attention[0].Scope != ResumeAttentionFile || attention[1].Scope != ResumeAttentionIntent ||
-		attention[2].Scope != ResumeAttentionRoot || attention[3].Scope != ResumeAttentionLegacy || attention[4].Scope != 0 ||
-		attention[0].Code != "file" || attention[0].State != "state" || attention[0].Detail != "detail" {
-		t.Fatalf("attention projection = %+v", attention)
-	}
-	if empty := projectResumeAttention(nil); empty == nil || len(empty) != 0 {
-		t.Fatalf("nil attention projection = %#v, want empty slice", empty)
-	}
-	for _, test := range []struct {
-		value outputruntime.ResumeSessionLifecycle
-		want  ResumeSessionLifecycle
-	}{
-		{outputruntime.ResumeSessionActive, ResumeSessionActive},
-		{outputruntime.ResumeSessionPausing, ResumeSessionPausing},
-		{outputruntime.ResumeSessionPaused, ResumeSessionPaused},
-		{outputruntime.ResumeSessionPausedNeedsAttention, ResumeSessionPausedNeedsAttention},
-		{outputruntime.ResumeSessionCompleting, ResumeSessionCompleting},
-		{outputruntime.ResumeSessionDiscarding, ResumeSessionDiscarding},
-	} {
-		if got := resumeSessionLifecycleFromRuntime(test.value); got != test.want {
-			t.Errorf("lifecycle %d = %d, want %d", test.value, got, test.want)
-		}
-	}
-	if got := resumeSessionLifecycleFromRuntime(0xff); got != 0 {
-		t.Fatalf("unknown lifecycle = %d, want zero", got)
-	}
-	for _, test := range []struct {
-		value outputruntime.DiscardSettlementKind
-		want  DiscardSettlementKind
-	}{
-		{outputruntime.Discarded, Discarded},
-		{outputruntime.DiscardAlreadyAbsent, DiscardAlreadyAbsent},
-	} {
-		if got := projectDiscardSettlement(outputruntime.DiscardSettlement{Kind: test.value, RemovedBytes: 12}); got.Kind != test.want || got.RemovedBytes != 12 {
-			t.Errorf("discard settlement %d = %+v, want kind %d/12", test.value, got, test.want)
-		}
-	}
-	if got := projectDiscardSettlement(outputruntime.DiscardSettlement{Kind: 0xff}); got.Kind != 0 || got.RemovedBytes != 0 {
-		t.Fatalf("unknown discard settlement = %+v", got)
-	}
 }

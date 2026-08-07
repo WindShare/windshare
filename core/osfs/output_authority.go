@@ -11,118 +11,12 @@ type FilesystemResumeRoot struct {
 	RootPath string
 }
 
-type ResumeAttentionScope uint8
-
-const (
-	ResumeAttentionFile ResumeAttentionScope = iota + 1
-	ResumeAttentionIntent
-	ResumeAttentionRoot
-	ResumeAttentionLegacy
-)
-
-type ResumeAttention struct {
-	Scope  ResumeAttentionScope
-	Code   string
-	State  string
-	Detail string
-}
-
-type ResumeStateKind uint8
-
-const (
-	ResumeStateRecoverable ResumeStateKind = iota + 1
-	ResumeStateNeedsAttention
-	ResumeStateLegacyUntrusted
-	ResumeStateOpaqueUnsafe
-)
-
-// ResumeStateRef is an opaque, inventory-scoped authority token. The runtime
-// value is intentionally wrapped instead of aliased so native pins and private
-// namespace identities cannot escape the osfs facade.
-type ResumeStateRef struct {
-	authority outputruntime.ResumeStateRef
-}
-
-func (reference ResumeStateRef) ResumeIntent() transfer.ResumeIntent {
-	return reference.authority.ResumeIntent()
-}
-
-func (reference ResumeStateRef) SessionID() transfer.OutputSessionID {
-	return reference.authority.SessionID()
-}
-
-func (reference ResumeStateRef) Kind() ResumeStateKind {
-	switch reference.authority.Kind() {
-	case outputruntime.ResumeStateRecoverable:
-		return ResumeStateRecoverable
-	case outputruntime.ResumeStateNeedsAttention:
-		return ResumeStateNeedsAttention
-	case outputruntime.ResumeStateLegacyUntrusted:
-		return ResumeStateLegacyUntrusted
-	case outputruntime.ResumeStateOpaqueUnsafe:
-		return ResumeStateOpaqueUnsafe
-	default:
-		return 0
-	}
-}
-
-type ResumeStateSummary struct {
-	Reference      ResumeStateRef
-	Lifecycle      ResumeSessionLifecycle
-	FileRecords    uint64
-	AllocatedBytes uint64
-	Attention      []ResumeAttention
-}
-
-// ResumeStateInventory owns runtime-native handles until each projected
-// reference is consumed or the inventory is closed. Its zero value is inert.
-type ResumeStateInventory struct {
-	authority *outputruntime.ResumeStateInventory
-}
-
-func (inventory *ResumeStateInventory) Summaries() []ResumeStateSummary {
-	if inventory == nil || inventory.authority == nil {
-		return nil
-	}
-	runtimeSummaries := inventory.authority.Summaries()
-	result := make([]ResumeStateSummary, len(runtimeSummaries))
-	for index, summary := range runtimeSummaries {
-		result[index] = ResumeStateSummary{
-			Reference:   ResumeStateRef{authority: summary.Reference},
-			Lifecycle:   resumeSessionLifecycleFromRuntime(summary.Lifecycle),
-			FileRecords: summary.FileRecords, AllocatedBytes: summary.AllocatedBytes,
-			Attention: projectResumeAttention(summary.Attention),
-		}
-	}
-	return result
-}
-
-func (inventory *ResumeStateInventory) Close() error {
-	if inventory == nil || inventory.authority == nil {
-		return nil
-	}
-	authority := inventory.authority
-	inventory.authority = nil
-	return authority.Close()
-}
-
-type DiscardSettlementKind uint8
-
-const (
-	Discarded DiscardSettlementKind = iota + 1
-	DiscardAlreadyAbsent
-)
-
-type DiscardSettlement struct {
-	Kind         DiscardSettlementKind
-	RemovedBytes uint64
-}
-
 type FilesystemOutputTraceOperation uint8
 
 const (
 	TraceFilesystemCertified FilesystemOutputTraceOperation = iota + 1
 	TraceFeatureProbeCompleted
+	TraceCheckpointCleanup
 	TraceControlBootstrap
 	TraceNativeLock
 	TraceSessionOpened
@@ -194,7 +88,7 @@ const (
 
 type FilesystemOutputTrace struct {
 	Operation                 FilesystemOutputTraceOperation
-	ResumeIntent              transfer.ResumeIntent
+	IntentDigest              transfer.TransferIntentDigest
 	SessionID                 transfer.OutputSessionID
 	LocatorDigest             transfer.OutputLocatorDigest
 	OutputObjectID            transfer.OutputObjectIdentity
@@ -221,6 +115,9 @@ type FilesystemOutputTrace struct {
 	NativeLockMilestone       FilesystemOutputNativeLockMilestone
 	MutationReportedFailure   bool
 	ParentSyncReportedFailure bool
+	CleanupRemoved            uint64
+	CleanupQuarantined        uint64
+	CleanupSkipped            uint64
 	Failed                    bool
 }
 
@@ -254,38 +151,14 @@ func NewFilesystemOutputAuthority(config FilesystemOutputAuthorityConfig) (*File
 	return &FilesystemOutputAuthority{authority: runtimeAuthority}, nil
 }
 
-func (authority *FilesystemOutputAuthority) OpenSelection(
+func (authority *FilesystemOutputAuthority) OpenOutput(
 	ctx context.Context,
-	selection transfer.OutputSelection,
+	intent transfer.TransferIntent,
 ) (transfer.OutputSession, error) {
 	if authority == nil || authority.authority == nil {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
-	return authority.authority.OpenSelection(ctx, selection)
-}
-
-func ListResumeState(ctx context.Context, root FilesystemResumeRoot) (*ResumeStateInventory, error) {
-	authority, err := newOutputRuntime(root.RootPath, false, nil)
-	if err != nil {
-		return nil, err
-	}
-	inventory, err := authority.ListResumeState(ctx, root.RootPath)
-	if err != nil {
-		return nil, err
-	}
-	return &ResumeStateInventory{authority: inventory}, nil
-}
-
-func DiscardResumeState(ctx context.Context, reference ResumeStateRef) (DiscardSettlement, error) {
-	authority, err := newOutputRuntime("", false, nil)
-	if err != nil {
-		return DiscardSettlement{}, err
-	}
-	settlement, err := authority.DiscardResumeState(ctx, reference.authority)
-	if err != nil {
-		return DiscardSettlement{}, err
-	}
-	return projectDiscardSettlement(settlement), nil
+	return authority.authority.OpenOutput(ctx, intent)
 }
 
 func newOutputRuntime(rootPath string, createRoot bool, tracer FilesystemOutputTracer) (*outputruntime.Authority, error) {
@@ -295,6 +168,6 @@ func newOutputRuntime(rootPath string, createRoot bool, tracer FilesystemOutputT
 	}
 	return outputruntime.New(outputruntime.Config{
 		RootPath: rootPath, CreateRoot: createRoot, Tracer: projected,
-		PlatformFactory: openOutputV3Platform,
+		PlatformFactory: openNativeOutputPlatform,
 	})
 }

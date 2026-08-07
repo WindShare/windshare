@@ -35,4 +35,18 @@ describe('bounded transfer failure evidence', () => {
       omittedFailureCount: MILLION_FAILURE_OBSERVATIONS - MAXIMUM_RETAINED_TRANSFER_FAILURES,
     })
   })
+
+  it('retains terminal missing-target evidence after ordinary failures saturate the detail budget', () => {
+    const failures = new TransferFailureAccumulator()
+    for (let index = 0; index < MAXIMUM_RETAINED_TRANSFER_FAILURES; index += 1) {
+      failures.record({ kind: 'file', fileId: fileId(`failed-${index}`), reason: index })
+    }
+    const missing = new Error('explicit selection target was not observed')
+    failures.recordRepresentative({ kind: 'file', fileId: fileId('missing'), reason: missing })
+
+    const summary = failures.snapshot()
+    expect(summary.failureCount).toBe(MAXIMUM_RETAINED_TRANSFER_FAILURES + 1)
+    expect(summary.omittedFailureCount).toBe(1)
+    expect(summary.failures.at(-1)?.reason).toBe(missing)
+  })
 })

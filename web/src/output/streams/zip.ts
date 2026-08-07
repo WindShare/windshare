@@ -1,9 +1,12 @@
 import type { JobOutcome } from '../../transfer/outcome'
+import { DirectoryAdmissionLedger } from '../../transfer/directory-admission-ledger'
 import {
   type BeginOutputFileResult,
+  type DirectoryAdmission,
   type FileAbortDisposition,
   type OutputCapabilities,
   type OutputDirectory,
+  type OutputDirectoryAdmission,
   type OutputFile,
   type OutputFileTransaction,
   type OutputSession,
@@ -12,10 +15,9 @@ import {
   VerifiedDurableRanges,
   outputCapabilities,
   outputSessionIdentity,
-  snapshotOutputDirectory,
   snapshotOutputFile,
 } from '../../transfer/output-session'
-import type { ZipArchiveMember, ZipArchiveWriter } from './zip-archive'
+import type { ZipArchiveFileEntry, ZipArchiveMember, ZipArchiveWriter } from './zip-archive'
 
 export const ZIP_STREAM_BACKEND = 'zip-stream'
 
@@ -39,6 +41,7 @@ type ZipSessionState =
 
 export class ZipStreamOutputSession implements OutputSession {
   readonly identity: OutputSessionIdentity
+  readonly format = 'zip' as const
   readonly capabilities: OutputCapabilities = outputCapabilities({
     durability: 'None',
     randomWrite: false,
@@ -49,6 +52,7 @@ export class ZipStreamOutputSession implements OutputSession {
   readonly #archive: ZipArchiveWriter
   readonly #reportCompletion: ZipStreamOutputOptions['reportCompletion']
   readonly #active = new Set<ZipMemberTransaction>()
+  readonly #directoryAdmissions = new DirectoryAdmissionLedger()
 
   #state: ZipSessionState = 'open'
   #memberTail: Promise<void> = Promise.resolve()
@@ -64,37 +68,50 @@ export class ZipStreamOutputSession implements OutputSession {
     this.#reportCompletion = options.reportCompletion
   }
 
-  async ensureDirectory(input: OutputDirectory): Promise<void> {
+  admitDirectory(input: OutputDirectoryAdmission, signal: AbortSignal): Promise<DirectoryAdmission> {
     this.#requireOpen()
-    const directory = snapshotOutputDirectory({ path: input.path })
-    const turn = this.#reserveMemberTurn()
-    await turn.ready
-    try {
-      this.#requireOpen()
-      await this.#archive.addDirectory(directory)
-    } finally {
-      turn.release()
-    }
+    return this.#directoryAdmissions.admitDirectory(input, signal, async (directory, operationSignal) => {
+      operationSignal.throwIfAborted()
+      if (directory.path.length === 0) return
+      const materialized = Object.freeze({
+        path: directory.path,
+        ...(directory.modifiedTime === undefined
+          ? {}
+          : { modifiedTimeMilliseconds: directory.modifiedTime.milliseconds }),
+      })
+      const turn = this.#reserveMemberTurn()
+      await turn.ready
+      operationSignal.throwIfAborted()
+      try {
+        this.#requireOpen()
+        await this.#archive.addDirectory(materialized)
+        operationSignal.throwIfAborted()
+      } finally {
+        turn.release()
+      }
+    })
   }
 
   async finalizeDirectory(input: OutputDirectory, signal: AbortSignal): Promise<void> {
     this.#requireOpen()
     signal.throwIfAborted()
-    // Catalog authentication owns path uniqueness and traversal order. Retaining
-    // every directory here would duplicate that authority solely for validation.
-    snapshotOutputDirectory({ path: input.path })
+    this.#directoryAdmissions.validateDirectoryFinalization(input)
   }
 
-  async beginFile(input: OutputFile): Promise<BeginOutputFileResult> {
+  async beginFile(input: OutputFile, signal: AbortSignal): Promise<BeginOutputFileResult> {
+    signal.throwIfAborted()
     this.#requireOpen()
+    const admitted = this.#directoryAdmissions.validateFileParent(input)
+    const file = snapshotOutputFile({
+      source: admitted.source,
+      path: admitted.path,
+      exactSize: admitted.exactSize,
+      ...(admitted.parentAdmission === undefined ? {} : { parentAdmission: admitted.parentAdmission }),
+      ...(admitted.modifiedTime === undefined ? {} : { modifiedTime: admitted.modifiedTime }),
+    })
     if (this.#active.size >= MAXIMUM_OPEN_OUTPUT_FILES) {
       throw new RangeError('ZIP output has reached its open member limit')
     }
-    const file = snapshotOutputFile({
-      source: input.source,
-      path: input.path,
-      exactSize: input.exactSize,
-    })
     const turn = this.#reserveMemberTurn()
     const transaction = new ZipMemberTransaction(this, this.#archive, file, turn)
     this.#active.add(transaction)
@@ -222,22 +239,26 @@ class ZipMemberTransaction implements OutputFileTransaction {
     })
   }
 
-  writeRange(offset: bigint, data: Uint8Array): Promise<void> {
+  writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void> {
     const snapshot = data.slice()
     return this.#enqueue(async () => {
+      signal.throwIfAborted()
       this.#requireActive()
       if (offset !== this.#nextOffset || offset + BigInt(snapshot.byteLength) > this.#file.exactSize) {
         throw new RangeError('ZIP member requires contiguous ascending ranges')
       }
       if (snapshot.byteLength === 0) return
       const member = await this.#startMember()
+      signal.throwIfAborted()
       await member.write(snapshot)
+      signal.throwIfAborted()
       this.#nextOffset += BigInt(snapshot.byteLength)
     })
   }
 
-  checkpoint(): Promise<VerifiedDurableRanges> {
+  checkpoint(signal: AbortSignal): Promise<VerifiedDurableRanges> {
     return this.#enqueue(async () => {
+      signal.throwIfAborted()
       this.#requireActive()
       return new VerifiedDurableRanges(
         this.#ownership,
@@ -248,12 +269,15 @@ class ZipMemberTransaction implements OutputFileTransaction {
     })
   }
 
-  commit(): Promise<void> {
+  commit(signal: AbortSignal): Promise<void> {
     return this.#enqueue(async () => {
+      signal.throwIfAborted()
       this.#requireActive()
       if (this.#nextOffset !== this.#file.exactSize) throw new Error('ZIP member is incomplete')
       const member = await this.#startMember()
+      signal.throwIfAborted()
       await member.close()
+      signal.throwIfAborted()
       this.#settle()
     })
   }
@@ -284,7 +308,7 @@ class ZipMemberTransaction implements OutputFileTransaction {
     this.#session.requireOpen()
     // Creating a member may emit its local header before rejecting.
     this.#started = true
-    this.#member = await this.#archive.beginFile(this.#file)
+    this.#member = await this.#archive.beginFile(zipArchiveFile(this.#file))
     return this.#member
   }
 
@@ -304,6 +328,16 @@ class ZipMemberTransaction implements OutputFileTransaction {
   #requireActive(): void {
     if (this.#settled) throw new Error('ZIP member transaction is settled')
   }
+}
+
+function zipArchiveFile(file: OutputFile): ZipArchiveFileEntry {
+  return Object.freeze({
+    path: file.path,
+    exactSize: file.exactSize,
+    ...(file.modifiedTime === undefined
+      ? {}
+      : { modifiedTimeMilliseconds: file.modifiedTime.milliseconds }),
+  })
 }
 
 function once(action: () => void): () => void {

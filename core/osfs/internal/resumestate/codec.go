@@ -28,9 +28,9 @@ const (
 )
 
 var (
-	headerMagic  = [8]byte{'W', 'S', 'O', 'H', 'D', 'R', '0', '3'}
-	controlMagic = [8]byte{'W', 'S', 'O', 'C', 'T', 'L', '0', '3'}
-	fileMagic    = [8]byte{'W', 'S', 'O', 'F', 'I', 'L', '0', '3'}
+	headerMagic  = [8]byte{'W', 'S', 'O', 'H', 'D', 'R', '0', '1'}
+	controlMagic = [8]byte{'W', 'S', 'O', 'C', 'T', 'L', '0', '1'}
+	fileMagic    = [8]byte{'W', 'S', 'O', 'F', 'I', 'L', '0', '1'}
 
 	stateEnc = func() cbor.EncMode {
 		options := cbor.CoreDetEncOptions()
@@ -61,7 +61,7 @@ type storedHeader struct {
 	SessionID               []byte `cbor:"2,keyasint"`
 	ShareInstance           []byte `cbor:"3,keyasint"`
 	SyntheticRoot           []byte `cbor:"4,keyasint"`
-	ResumeIntent            []byte `cbor:"5,keyasint"`
+	IntentDigest            []byte `cbor:"5,keyasint"`
 	SelectionIdentity       []byte `cbor:"6,keyasint"`
 	SelectedDirectoryCount  uint32 `cbor:"7,keyasint"`
 	SelectedFileCount       uint32 `cbor:"8,keyasint"`
@@ -186,7 +186,7 @@ func storeHeader(header Header) storedHeader {
 	return storedHeader{
 		Schema: SchemaVersion, Backend: string(header.backend), SessionID: header.sessionID.Bytes(),
 		ShareInstance: header.shareInstance.Bytes(), SyntheticRoot: header.syntheticRoot.Bytes(),
-		ResumeIntent: header.resumeIntent.Bytes(), SelectionIdentity: header.selectionIdentity.Bytes(),
+		IntentDigest: header.intentDigest.Bytes(), SelectionIdentity: header.selectionIdentity.Bytes(),
 		SelectedDirectoryCount: header.selectedDirectoryCount, SelectedFileCount: header.selectedFileCount,
 		OutputRoot: header.outputRoot.Bytes(), Lifecycle: uint8(header.lifecycle), StateGeneration: header.stateGeneration,
 		OutputRootCertification: string(header.outputRoot.Certification()),
@@ -202,7 +202,7 @@ func restoreHeader(stored storedHeader) (Header, error) {
 	session, sessionErr := transfer.OutputSessionIDFromBytes(stored.SessionID)
 	share, shareErr := catalog.ShareInstanceFromBytes(stored.ShareInstance)
 	syntheticRoot, syntheticRootErr := catalog.DirectoryIDFromBytes(stored.SyntheticRoot)
-	intent, intentErr := transfer.ResumeIntentFromBytes(stored.ResumeIntent)
+	intent, intentErr := transfer.TransferIntentDigestFromBytes(stored.IntentDigest)
 	selection, selectionErr := transfer.SelectionIdentityFromBytes(stored.SelectionIdentity)
 	certification, certificationErr := NewCertificationID(stored.OutputRootCertification)
 	root, rootErr := outputRootBindingFromBytes(certification, stored.OutputRoot)
@@ -215,7 +215,7 @@ func restoreHeader(stored storedHeader) (Header, error) {
 	}
 	header, err := newHeaderFromClaims(headerClaims{
 		backend: backend, sessionID: session, shareInstance: share, syntheticRoot: syntheticRoot,
-		resumeIntent: intent, selectionIdentity: selection,
+		intentDigest: intent, selectionIdentity: selection,
 		selectedDirectoryCount: stored.SelectedDirectoryCount, selectedFileCount: stored.SelectedFileCount,
 		outputRoot: root, outputAncestry: ancestry,
 		lifecycle: SessionLifecycle(stored.Lifecycle), stateGeneration: stored.StateGeneration,

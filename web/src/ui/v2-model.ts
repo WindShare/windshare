@@ -9,6 +9,7 @@ export type V2ReceiverPhase =
   | 'transferring'
   | 'completed'
   | 'completed-errors'
+  | 'paused'
   | 'aborting'
   | 'aborted'
   | 'failed'
@@ -31,8 +32,15 @@ export interface V2ReceiverProgress {
   readonly discoveredBytes: bigint
   readonly writtenBytes: bigint
   readonly completedFiles: number
+  readonly completedBytes: bigint
+  readonly fileErrors: number
+  readonly selectionErrors: number
   readonly contentLanes: number
-  readonly discoveryComplete: boolean
+  readonly discovery: 'open' | 'complete' | 'failed'
+  readonly failedDirectories: number
+  readonly partial: boolean
+  readonly transferJobId: string
+  readonly outputSessionId?: string
 }
 
 export type V2PreviewSnapshot =
@@ -88,6 +96,7 @@ export interface V2ReceiverSnapshot {
   readonly canStart: boolean
   readonly directoryRetryable: boolean
   readonly progress: V2ReceiverProgress
+  readonly downloadT0Milliseconds?: number
   readonly preview: V2PreviewSnapshot
 }
 
@@ -96,8 +105,14 @@ export const EMPTY_V2_PROGRESS: V2ReceiverProgress = Object.freeze({
   discoveredBytes: 0n,
   writtenBytes: 0n,
   completedFiles: 0,
+  completedBytes: 0n,
+  fileErrors: 0,
+  selectionErrors: 0,
   contentLanes: 0,
-  discoveryComplete: false,
+  discovery: 'open',
+  failedDirectories: 0,
+  partial: false,
+  transferJobId: '',
 })
 
 export const EMPTY_V2_PREVIEW: V2PreviewSnapshot = Object.freeze({ state: 'idle' })

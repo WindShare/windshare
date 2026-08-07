@@ -2,6 +2,7 @@ import type { V2CatalogEntry } from './v2-records'
 import { V2_CATALOG_PATH_DEPTH } from './path-policy'
 
 export type V2SelectionState = 'selected' | 'unselected' | 'mixed'
+export type V2SelectionDecision = 'explicit-node-rule' | 'ancestor-directory-rule' | 'default-rule'
 
 interface SelectionOverride {
   readonly selected: boolean
@@ -21,6 +22,8 @@ export interface V2FrozenSelectionPolicy {
   readonly defaultSelected: boolean
   readonly canonicalRules: readonly V2CanonicalSelectionRule[]
   selected(entry: V2CatalogEntry, directoryAncestry: readonly string[]): boolean
+  directorySelected(directoryId: string, directoryAncestry: readonly string[]): boolean
+  decision(entry: V2CatalogEntry, directoryAncestry: readonly string[]): V2SelectionDecision
   shouldDiscover(directoryId: string, directoryAncestry: readonly string[]): boolean
 }
 
@@ -32,6 +35,7 @@ class SelectionPolicyEvaluator {
   readonly defaultSelected: boolean
   protected readonly directoryOverrides: Map<string, SelectionOverride>
   protected readonly fileOverrides: Map<string, SelectionOverride>
+  protected selectedOverrideCount: number
 
   constructor(
     defaultSelected: boolean,
@@ -41,6 +45,8 @@ class SelectionPolicyEvaluator {
     this.defaultSelected = defaultSelected
     this.directoryOverrides = directoryOverrides
     this.fileOverrides = fileOverrides
+    this.selectedOverrideCount = [...directoryOverrides.values(), ...fileOverrides.values()]
+      .filter((override) => override.selected).length
   }
 
   selected(entry: V2CatalogEntry, directoryAncestry: readonly string[]): boolean {
@@ -48,22 +54,35 @@ class SelectionPolicyEvaluator {
       const file = this.fileOverrides.get(entry.idText)
       if (file !== undefined) return file.selected
     }
-    return this.selectedByDirectories(
-      entry.kind === 'directory'
-        ? [...directoryAncestry, entry.idText]
-        : directoryAncestry,
-    )
+    return entry.kind === 'directory'
+      ? this.directorySelected(entry.idText, directoryAncestry)
+      : this.selectedByDirectories(directoryAncestry)
+  }
+
+  directorySelected(directoryId: string, directoryAncestry: readonly string[]): boolean {
+    return this.selectedByDirectories([...directoryAncestry, directoryId])
+  }
+
+  decision(entry: V2CatalogEntry, directoryAncestry: readonly string[]): V2SelectionDecision {
+    if ((entry.kind === 'file' && this.fileOverrides.has(entry.idText)) ||
+        (entry.kind === 'directory' && this.directoryOverrides.has(entry.idText))) {
+      return 'explicit-node-rule'
+    }
+    for (let index = directoryAncestry.length - 1; index >= 0; index -= 1) {
+      const identity = directoryAncestry[index]
+      if (identity !== undefined && this.directoryOverrides.has(identity)) {
+        return 'ancestor-directory-rule'
+      }
+    }
+    return 'default-rule'
   }
 
   shouldDiscover(directoryId: string, directoryAncestry: readonly string[]): boolean {
-    if (this.selectedByDirectories([...directoryAncestry, directoryId])) return true
-    for (const override of this.directoryOverrides.values()) {
-      if (override.selected && override.ancestry.includes(directoryId)) return true
-    }
-    for (const override of this.fileOverrides.values()) {
-      if (override.selected && override.ancestry.includes(directoryId)) return true
-    }
-    return false
+    if (this.directorySelected(directoryId, directoryAncestry)) return true
+    // Opaque node identities cannot authenticate a caller-captured ancestry
+    // chain. Keep that chain for UI presentation, but never use it to prune a
+    // selected target that may live below this directory.
+    return this.selectedOverrideCount > 0
   }
 
   protected selectedByDirectories(directoryAncestry: readonly string[]): boolean {
@@ -111,18 +130,29 @@ export class V2SelectionPolicy extends SelectionPolicyEvaluator {
       throw new RangeError('Catalog selection rule count exceeds the protocol limit')
     }
     if (entry.kind === 'directory') {
-      this.directoryOverrides.set(entry.idText, Object.freeze({
+      this.replaceOverride(this.directoryOverrides, entry.idText, Object.freeze({
         selected: next,
         ancestry: snapshotSelectionAncestry([...directoryAncestry, entry.idText]),
         id: entry.id.slice(),
       }))
     } else {
-      this.fileOverrides.set(entry.idText, Object.freeze({
+      this.replaceOverride(this.fileOverrides, entry.idText, Object.freeze({
         selected: next,
         ancestry: snapshotSelectionAncestry(directoryAncestry),
         id: entry.id.slice(),
       }))
     }
+  }
+
+  private replaceOverride(
+    overrides: Map<string, SelectionOverride>,
+    identity: string,
+    replacement: SelectionOverride,
+  ): void {
+    const previous = overrides.get(identity)
+    if (previous?.selected === true) this.selectedOverrideCount -= 1
+    if (replacement.selected) this.selectedOverrideCount += 1
+    overrides.set(identity, replacement)
   }
 
   snapshot(): V2FrozenSelectionPolicy {

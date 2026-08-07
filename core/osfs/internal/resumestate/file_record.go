@@ -140,6 +140,11 @@ func NewFileRecord(spec FileRecordSpec) (ResumableFileAuthority, error) {
 		spec.Descriptor.ModifiedTime() != selected.ModifiedTime {
 		return ResumableFileAuthority{}, fmt.Errorf("%w: file record descriptor binding", ErrInvalidState)
 	}
+	if live, liveFound := spec.Session.liveFile(canonical); liveFound &&
+		(live.IntentDigest != spec.Session.liveIntentDigest || live.Revision != spec.Descriptor.FileRevision() ||
+			live.Selection.FileID != spec.Descriptor.FileID() || live.Selection.ExpectedSize != spec.Descriptor.ExactSize()) {
+		return ResumableFileAuthority{}, fmt.Errorf("%w: live file revision binding", ErrInvalidState)
+	}
 	record, err := newFileRecordFromClaims(fileRecordClaims{
 		sessionID: header.sessionID, shareInstance: spec.Descriptor.ShareInstance(),
 		fileID: spec.Descriptor.FileID(), revision: spec.Descriptor.FileRevision(),

@@ -25,7 +25,7 @@ type fileCatalogTransaction struct {
 	directoryRecord NodeRecord
 	pending         []NodeRecord
 	pendingMemory   uint64
-	sequence        directorySequence
+	sequence        DirectoryGenerationValidator
 	digest          hash.Hash
 	stagedBytes     uint64
 	preparation     BackendPreparation
@@ -160,7 +160,7 @@ func (t *fileCatalogTransaction) PutPage(page CatalogPage, object SealedPageObje
 			return errors.New("catalog transaction page changed a private child record")
 		}
 	}
-	if err := t.sequence.accept(page); err != nil {
+	if err := t.sequence.AcceptPage(page); err != nil {
 		return err
 	}
 	temporary := ResourceUsage{MemoryBytes: page.EstimatedMemoryBytes()}
@@ -211,7 +211,7 @@ func (t *fileCatalogTransaction) Prepare(ctx context.Context) (BackendPreparatio
 	if !t.directoryRecord.valid() || len(t.pending) != 0 {
 		return BackendPreparation{}, errors.New("catalog transaction is incomplete")
 	}
-	committed, err := t.sequence.finish()
+	committed, err := t.sequence.Finish()
 	if err != nil {
 		return BackendPreparation{}, err
 	}

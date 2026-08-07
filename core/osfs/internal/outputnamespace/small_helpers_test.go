@@ -13,11 +13,11 @@ func TestObserverAdaptersIgnoreNilAndForwardCuts(t *testing.T) {
 
 	var got StateInstallEvent
 	ObserverFunc(func(event StateInstallEvent) { got = event }).ObserveStateInstall(StateInstallEvent{
-		ResumeIntent: transfer.ResumeIntent{1},
+		IntentDigest: transfer.TransferIntentDigest{1},
 		SessionID:    transfer.OutputSessionID{2},
 		Cut:          StateInstallCut{stage: StateInstallCreate, targetName: resumestate.HeaderRecordName},
 	})
-	if got.ResumeIntent.IsZero() || got.SessionID.IsZero() || got.Cut.Stage() != StateInstallCreate {
+	if got.IntentDigest.IsZero() || got.SessionID.IsZero() || got.Cut.Stage() != StateInstallCreate {
 		t.Fatalf("observer did not receive event: %+v", got)
 	}
 

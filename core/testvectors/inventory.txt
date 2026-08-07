@@ -1,9 +1,14 @@
+directory-admission-v1.json
 envelope-sample.json
+file-checkpoint-v1.json
 path-policy.json
 portable-path-vectors.json
+transfer-intent-v1.json
 v2-fragment.json
 v2-identity.json
 v2-peer-signaling.json
 v2-semantics.json
 v2-sender-objects.json
 v2-session.json
+# TransferIntent, DirectoryAdmission, and FileCheckpointV1 are generated from
+# the shared Go codecs and replayed by the Web vector tests.

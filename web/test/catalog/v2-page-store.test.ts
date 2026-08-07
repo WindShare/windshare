@@ -101,6 +101,8 @@ describe('v2 catalog page store', () => {
     await expect(store.loadPage({
       directoryIdText: 'root',
       generationText: 'generation',
+      directoryId: new Uint8Array(16).fill(1),
+      generation: new Uint8Array(16).fill(2),
       pageCount: 1,
       entryCount: 1,
       omittedCount: 0n,
@@ -123,6 +125,8 @@ describe('v2 catalog page store', () => {
     await expect(store.loadPage({
       directoryIdText: 'a\0b',
       generationText: 'c',
+      directoryId: new Uint8Array(16).fill(1),
+      generation: new Uint8Array(16).fill(2),
       pageCount: 1,
       entryCount: 1,
       omittedCount: 0n,

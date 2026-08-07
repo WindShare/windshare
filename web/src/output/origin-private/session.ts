@@ -1,17 +1,20 @@
 import type { JobOutcome } from '../../transfer/outcome'
 import type {
   BeginOutputFileResult,
+  DirectoryAdmission,
   FileAbortDisposition,
   OutputCapabilities,
   OutputDirectory,
+  OutputDirectoryAdmission,
   OutputFile,
   OutputFileTransaction,
   OutputSession,
   OutputSessionIdentity,
   VerifiedDurableRanges,
 } from '../../transfer/output-session'
-import { outputSessionIdentity, snapshotOutputFile } from '../../transfer/output-session'
+import { OutputSessionCompromisedError, outputSessionIdentity } from '../../transfer/output-session'
 import { BrowserFileSystemTree } from '../browser/filesystem-tree'
+import { ensureOneShotIndexedDbLegacyCleanup } from '../browser/indexeddb-legacy-cleaner'
 import { IndexedDbOutputRepository } from '../browser/indexeddb-repository'
 import {
   acquireBrowserOutputSessionLease,
@@ -64,6 +67,12 @@ export const ORIGIN_PRIVATE_EXPORT_COMPLETE: OriginPrivateExportResult = Object.
 
 export interface OriginPrivateOutputOptions {
   readonly outputSessionId: string
+  /** Stable final intent identity; outputSessionId remains runtime-only. */
+  readonly transferIntentDigest?: string
+  /** Stable origin-private root identity for checkpoint ownership. */
+  readonly rootIdentity?: string
+  /** @internal Browser probes only; production callers must provide both identities. */
+  readonly allowTestFallback?: true
   readonly exporter: OriginPrivateOutputExporter
   readonly storage?: OriginPrivateStorage
   readonly quota?: OriginPrivateQuotaOptions
@@ -85,6 +94,7 @@ type OriginPrivateState =
 
 export class OriginPrivateOutputSession implements OutputSession {
   readonly identity: OutputSessionIdentity
+  readonly format = 'zip' as const
   readonly capabilities: OutputCapabilities
 
   readonly #inner: PersistentTreeOutputSession
@@ -119,17 +129,19 @@ export class OriginPrivateOutputSession implements OutputSession {
     this.capabilities = inner.capabilities
   }
 
-  ensureDirectory(directory: OutputDirectory): Promise<void> {
-    return this.#inner.ensureDirectory(directory)
+  admitDirectory(directory: OutputDirectoryAdmission, signal: AbortSignal): Promise<DirectoryAdmission> {
+    return this.#inner.admitDirectory(directory, signal)
   }
 
   finalizeDirectory(directory: OutputDirectory, signal: AbortSignal): Promise<void> {
     return this.#inner.finalizeDirectory(directory, signal)
   }
 
-  async beginFile(file: OutputFile): Promise<BeginOutputFileResult> {
-    const stagedFile = snapshotOutputFile(file)
+  async beginFile(file: OutputFile, signal: AbortSignal): Promise<BeginOutputFileResult> {
+    signal.throwIfAborted()
+    const stagedFile = this.#inner.validateFileParent(file)
     const previousFootprint = await this.#inner.stagedFileFootprint(stagedFile.path)
+    signal.throwIfAborted()
     const rollbackReservation = await this.#admission.reserve(
       stagedFile.path,
       stagedFile.exactSize,
@@ -137,9 +149,19 @@ export class OriginPrivateOutputSession implements OutputSession {
     )
     let begun: BeginOutputFileResult
     try {
-      begun = await this.#inner.beginFile(stagedFile)
+      signal.throwIfAborted()
+      begun = await this.#inner.beginFile(stagedFile, signal)
     } catch (error) {
-      await rollbackReservation()
+      try {
+        await rollbackReservation()
+      } catch (rollbackFailure) {
+        throw new OutputSessionCompromisedError('Origin-private file acquisition and quota rollback failed', {
+          cause: new AggregateError(
+            [error, rollbackFailure],
+            'Origin-private file acquisition and quota rollback failed',
+          ),
+        })
+      }
       throw error
     }
     return Object.freeze({
@@ -362,33 +384,36 @@ class QuotaTrackedTransaction implements OutputFileTransaction {
     this.#admission = admission
   }
 
-  writeRange(offset: bigint, data: Uint8Array): Promise<void> {
-    return this.#inner.writeRange(offset, data)
+  writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void> {
+    return this.#inner.writeRange(offset, data, signal)
   }
 
-  async checkpoint(): Promise<VerifiedDurableRanges> {
-    const ranges = await this.#inner.checkpoint()
+  async checkpoint(signal: AbortSignal): Promise<VerifiedDurableRanges> {
+    const ranges = await this.#inner.checkpoint(signal)
+    signal.throwIfAborted()
     await this.#admission.updateFile(this.#file.path, coveredBytes(ranges))
+    signal.throwIfAborted()
     return ranges
   }
 
-  async commit(): Promise<void> {
-    const ranges = await this.#inner.checkpoint()
+  async commit(signal: AbortSignal): Promise<void> {
+    const ranges = await this.#inner.checkpoint(signal)
+    signal.throwIfAborted()
     // Admission can fail closed on quota or cross-tab authority changes. Resolve
     // that fallible boundary before the inner commit becomes irreversible.
     await this.#admission.updateFile(this.#file.path, coveredBytes(ranges))
+    signal.throwIfAborted()
     const admission = await this.#admission.prepareFileCommit(this.#file.path)
     try {
-      await this.#inner.commit()
+      signal.throwIfAborted()
+      await this.#inner.commit(signal)
     } catch (error) {
       try {
         await admission.rollback()
       } catch (rollbackError) {
-        throw new AggregateError(
-          [error, rollbackError],
-          'Output commit and admission rollback failed',
-          { cause: rollbackError },
-        )
+        throw new OutputSessionCompromisedError('Output commit and admission rollback failed', {
+          cause: new AggregateError([error, rollbackError], 'Output commit and admission rollback failed'),
+        })
       }
       throw error
     }
@@ -396,8 +421,27 @@ class QuotaTrackedTransaction implements OutputFileTransaction {
   }
 
   async abort(reason: unknown): Promise<FileAbortDisposition> {
-    const disposition = await this.#inner.abort(reason)
-    await this.#admission.releaseFile(this.#file.path)
+    let disposition: FileAbortDisposition | undefined
+    let abortFailure: unknown
+    try {
+      disposition = await this.#inner.abort(reason)
+    } catch (error) {
+      abortFailure = error
+    }
+    let releaseFailure: unknown
+    try {
+      await this.#admission.releaseFile(this.#file.path)
+    } catch (error) {
+      releaseFailure = error
+    }
+    if (abortFailure !== undefined && releaseFailure !== undefined) {
+      throw new AggregateError([abortFailure, releaseFailure], 'Output abort and quota release failed', {
+        cause: abortFailure,
+      })
+    }
+    if (abortFailure !== undefined) throw abortFailure
+    if (releaseFailure !== undefined) throw releaseFailure
+    if (disposition === undefined) throw new Error('Output abort completed without a disposition')
     return disposition
   }
 }
@@ -409,24 +453,48 @@ export async function openOriginPrivateOutputSession(
     backend: ORIGIN_PRIVATE_BACKEND,
     outputSessionId: options.outputSessionId,
   })
-  const lease = await acquireBrowserOutputSessionLease(identity)
+  let lease: BrowserOutputSessionLease | undefined
   let repository: IndexedDbOutputRepository | undefined
   let admission: OriginPrivateStagingAdmission | undefined
   try {
     const storage = options.storage ?? defaultStorage()
     const originRoot = await storage.getDirectory()
+    const databaseName = options.databaseName ?? DEFAULT_DATABASE_NAME
+    await ensureOneShotIndexedDbLegacyCleanup(databaseName)
+    if (options.transferIntentDigest === undefined || options.rootIdentity === undefined) {
+      if (options.allowTestFallback !== true) {
+        throw new TypeError(
+          'Origin-private output requires a frozen transfer-intent digest and root identity',
+        )
+      }
+      repository = await IndexedDbOutputRepository.openForTest(
+        databaseName,
+        ORIGIN_PRIVATE_BACKEND,
+        options.outputSessionId,
+      )
+    } else {
+      repository = await IndexedDbOutputRepository.open(
+        databaseName,
+        ORIGIN_PRIVATE_BACKEND,
+        options.outputSessionId,
+        {
+          transferIntentDigest: options.transferIntentDigest,
+          rootIdentity: options.rootIdentity,
+        },
+      )
+    }
+    lease = await acquireBrowserOutputSessionLease(repository.binding)
     const stagingRoot = await originRoot.getDirectoryHandle(STAGING_ROOT_NAME, { create: true })
-    const sessionName = await privateSessionName(options.outputSessionId)
-    repository = await IndexedDbOutputRepository.open(
-      options.databaseName ?? DEFAULT_DATABASE_NAME,
-      ORIGIN_PRIVATE_BACKEND,
-      options.outputSessionId,
-    )
+    const sessionName = await privateSessionName(repository.binding.transferIntentDigest)
     await convergeCleanup(stagingRoot, sessionName, repository)
     const sessionRoot = await stagingRoot.getDirectoryHandle(sessionName, { create: true })
     const tree = new BrowserFileSystemTree({ root: sessionRoot, handles: repository })
     const inner = await PersistentTreeOutputSession.open({
       identity,
+      checkpointBinding: {
+        transferIntentDigest: repository.binding.transferIntentDigest,
+        rootIdentity: repository.binding.rootIdentity,
+      },
       tree,
       journal: repository,
       durability: 'ProcessRestart',
@@ -456,7 +524,7 @@ export async function openOriginPrivateOutputSession(
   } catch (error) {
     await admission?.release()
     repository?.close()
-    await lease.release().catch(() => undefined)
+    await lease?.release().catch(() => undefined)
     throw error
   }
 }

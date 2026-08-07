@@ -36,7 +36,7 @@ func TestOutputV3PublicTestDecoratorsPreserveDirectoryAuthority(t *testing.T) {
 			if err := os.Mkdir(rootPath, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			platform, err := openOutputV3Platform(rootPath, false)
+			platform, err := openNativeOutputPlatform(rootPath, false)
 			if err != nil {
 				t.Fatal(err)
 			}
