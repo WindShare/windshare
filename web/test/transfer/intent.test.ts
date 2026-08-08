@@ -6,7 +6,9 @@ import {
   MAX_OUTPUT_BACKEND_ID_BYTES,
   canonicalTransferIntentBytes,
   createTransferIntentDraft,
+  createTransferRun,
   freezeTransferIntent,
+  snapshotTransferRun,
   transferIntentDigest,
   validateFinalTransferIntent,
 } from '../../src/transfer/intent'
@@ -34,7 +36,6 @@ function draft(selection: TransferSelectionRules) {
     shareInstance: identity(1),
     syntheticRoot: identity(2),
     selection,
-    transferJobId: identity(3),
   })
 }
 
@@ -43,18 +44,25 @@ function nodeSelection(): TransferSelectionRules {
 }
 
 describe('transfer intent authority', () => {
-  it('requires a canonical non-zero 16-byte transfer job identity', () => {
-    const selection = nodeSelection()
-    expect(() => createTransferIntentDraft({
-      shareInstance: identity(1), syntheticRoot: identity(2), selection, transferJobId: 'run',
+  it('keeps independently validated run identities outside durable intent', async () => {
+    expect(() => snapshotTransferRun({
+      transferJobId: 'run',
+      outputSessionId: identity(4),
     })).toThrow(/non-zero 16-byte/)
-    expect(() => createTransferIntentDraft({
-      shareInstance: identity(1), syntheticRoot: identity(2), selection, transferJobId: identity(0, 17),
+    expect(() => snapshotTransferRun({
+      transferJobId: identity(3),
+      outputSessionId: identity(0, 17),
     })).toThrow(/non-zero 16-byte/)
-    expect(() => createTransferIntentDraft({
-      shareInstance: identity(1), syntheticRoot: identity(2), selection,
-      transferJobId: encodeBase64Url(new Uint8Array(16)),
-    })).toThrow(/non-zero 16-byte/)
+    expect(() => snapshotTransferRun({
+      transferJobId: identity(3),
+      outputSessionId: identity(3),
+    })).toThrow(/independent/)
+
+    const run = createTransferRun()
+    expect(run.transferJobId).not.toBe(run.outputSessionId)
+    const intent = await freezeTransferIntent(draft(nodeSelection()), OUTPUT)
+    expect(Object.hasOwn(intent, 'transferJobId')).toBe(false)
+    expect(Object.hasOwn(intent, 'outputSessionId')).toBe(false)
   })
 
   it('normalizes, deduplicates, and UTF-8 sorts catalog-path targets like Go', () => {

@@ -9,327 +9,542 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/transfer/fault"
 )
 
-type SessionFailureError struct{ cause error }
+type cancellationKind uint8
 
-// IsolatedPermanentSourceFailureError is explicit retirement authority. A raw
-// range error is intentionally insufficient because it may be retryable
-// transport failure or may have originated in the output sink.
-type IsolatedPermanentSourceFailureError struct{ cause error }
+const (
+	cancellationNone cancellationKind = iota
+	cancellationCanceled
+	cancellationDeadline
+)
 
-// IsolatedFileSourceFailureError authorizes a verified file-local pause while
-// preserving retryable source state. It does not authorize retirement.
-type IsolatedFileSourceFailureError struct{ cause error }
+// lifecycleFailure keeps the closed policy state distinct from its raw
+// diagnostic. It deliberately has no Unwrap method, so code outside the
+// immediate boundary cannot reinterpret the diagnostic graph as authority.
+type lifecycleFailure struct {
+	policy       lifecyclePolicy
+	cancellation cancellationKind
+	diagnostic   error
+}
 
-func NewIsolatedFileSourceFailure(cause error) error {
-	if cause == nil {
-		cause = errors.New("file source operation failed")
+var lifecycleFailureType = reflect.TypeFor[*lifecycleFailure]()
+
+func (failure *lifecycleFailure) Error() string {
+	if failure == nil {
+		return "transfer lifecycle failure is invalid"
 	}
-	return &IsolatedFileSourceFailureError{cause: cause}
-}
-
-func (failure *IsolatedFileSourceFailureError) Error() string {
-	return fmt.Sprintf("transfer isolated file source failure: %v", failure.cause)
-}
-func (failure *IsolatedFileSourceFailureError) Unwrap() error      { return failure.cause }
-func (*IsolatedFileSourceFailureError) IsolatedFileSourceFailure() {}
-
-func NewIsolatedPermanentSourceFailure(cause error) error {
-	if cause == nil {
-		cause = errors.New("file source failed permanently")
+	switch {
+	case failure.policy.canceled && failure.policy.value.Valid() && failure.diagnostic != nil:
+		return fmt.Sprintf("transfer canceled with fault %s: %v", failure.policy.value, failure.diagnostic)
+	case failure.policy.canceled && failure.diagnostic != nil:
+		return fmt.Sprintf("transfer canceled: %v", failure.diagnostic)
+	case failure.policy.canceled:
+		return "transfer canceled"
+	case failure.policy.value.Valid() && failure.diagnostic != nil:
+		return fmt.Sprintf("transfer fault %s: %v", failure.policy.value, failure.diagnostic)
+	case failure.policy.value.Valid():
+		return fmt.Sprintf("transfer fault %s", failure.policy.value)
+	default:
+		return "transfer lifecycle failure is invalid"
 	}
-	return &IsolatedPermanentSourceFailureError{cause: cause}
 }
 
-func (failure *IsolatedPermanentSourceFailureError) Error() string {
-	return fmt.Sprintf("transfer isolated permanent source failure: %v", failure.cause)
+// Is exposes only the closed cancellation signal. Native diagnostic causes are
+// intentionally not searchable after normalization.
+func (failure *lifecycleFailure) Is(target error) bool {
+	return failure != nil && failure.policy.canceled && failure.cancellation.matches(target)
 }
-func (failure *IsolatedPermanentSourceFailureError) Unwrap() error { return failure.cause }
-func (failure *IsolatedPermanentSourceFailureError) IsolatedPermanentSourceFailure() {
-}
-func (*IsolatedPermanentSourceFailureError) IsolatedFileSourceFailure() {}
 
-func NewSessionFailure(cause error) error {
-	if cause == nil {
-		cause = errors.New("protocol session failed")
+// admitLifecycleFailure accepts only the direct concrete carrier produced by
+// this package. The dynamic-type gate prevents errors.As from granting policy
+// authority to an arbitrary wrapper while still using the standard admission
+// API after that exactness proof.
+func admitLifecycleFailure(err error) (*lifecycleFailure, bool) {
+	if err == nil || reflect.TypeOf(err) != lifecycleFailureType {
+		return nil, false
 	}
-	return &SessionFailureError{cause: cause}
-}
-
-func (e *SessionFailureError) Error() string   { return fmt.Sprintf("transfer session: %v", e.cause) }
-func (e *SessionFailureError) Unwrap() error   { return e.cause }
-func (e *SessionFailureError) SessionFailure() {}
-
-func isSessionFailure(err error) bool {
-	return inspectLifecycleError(err).jobTerminalSession()
-}
-
-func IsSessionFailure(err error) bool { return isSessionFailure(err) }
-
-func isSourceDriftFailure(err error) bool {
-	return inspectLifecycleError(err).sourceDrift
-}
-
-// JobResourceBudgetError terminates one transfer because a local, bounded
-// resource policy was exhausted. It must not be attributed to the peer session.
-type JobResourceBudgetError struct{ cause error }
-
-func NewJobResourceBudgetError(cause error) error {
-	if cause == nil {
-		cause = errors.New("transfer job resource budget exceeded")
+	var failure *lifecycleFailure
+	if !errors.As(err, &failure) || failure == nil {
+		return nil, false
 	}
-	return &JobResourceBudgetError{cause: cause}
+	return failure, true
 }
 
-func (e *JobResourceBudgetError) Error() string {
-	return fmt.Sprintf("transfer job resource budget: %v", e.cause)
-}
-func (e *JobResourceBudgetError) Unwrap() error { return e.cause }
-func (e *JobResourceBudgetError) JobFatal()     {}
-
-// JobDependencyContractError is a local collaborator breach, not peer fault.
-type JobDependencyContractError struct{ cause error }
-
-func NewJobDependencyContractError(cause error) error {
-	if cause == nil {
-		cause = errors.New("transfer job dependency contract violated")
+func admitInternalFailure(err error) *lifecycleFailure {
+	if err == nil {
+		return nil
 	}
-	return &JobDependencyContractError{cause: cause}
+	if failure, ok := admitLifecycleFailure(err); ok {
+		return failure
+	}
+	return dependencyContractFailure(err)
 }
 
-func (e *JobDependencyContractError) Error() string {
-	return fmt.Sprintf("transfer job dependency contract: %v", e.cause)
+func lifecycleError(failure *lifecycleFailure) error {
+	if failure == nil {
+		return nil
+	}
+	return failure
 }
-func (e *JobDependencyContractError) Unwrap() error { return e.cause }
-func (e *JobDependencyContractError) JobFatal()     {}
 
-func isJobFatal(err error) bool {
-	inspection := inspectLifecycleError(err)
-	return inspection.jobFatal || inspection.exhausted
+func (kind cancellationKind) cause() error {
+	switch kind {
+	case cancellationCanceled:
+		return context.Canceled
+	case cancellationDeadline:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (kind cancellationKind) matches(target error) bool {
+	return kind != cancellationNone && errors.Is(kind.cause(), target)
+}
+
+func joinCancellation(left, right cancellationKind) cancellationKind {
+	if right > left {
+		return right
+	}
+	return left
+}
+
+var (
+	contextCanceledType = reflect.TypeOf(context.Canceled)
+	contextDeadlineType = reflect.TypeOf(context.DeadlineExceeded)
+)
+
+// exactCancellation admits only the standard sentinel itself. Internal joins
+// must not let an arbitrary wrapper graph acquire cancellation authority after
+// the collaborator boundary has already normalized it.
+func exactCancellation(err error) cancellationKind {
+	dynamicType := reflect.TypeOf(err)
+	switch {
+	case dynamicType == contextDeadlineType && errors.Is(err, context.DeadlineExceeded):
+		return cancellationDeadline
+	case dynamicType == contextCanceledType && errors.Is(err, context.Canceled):
+		return cancellationCanceled
+	default:
+		return cancellationNone
+	}
+}
+
+func normalizeCatalogBoundary(ctx context.Context, err error) error {
+	return lifecycleError(normalizeCollaboratorBoundary(ctx, err, catalogBoundaryFault))
+}
+
+func normalizeSourceBoundary(ctx context.Context, err error) error {
+	return lifecycleError(normalizeCollaboratorBoundary(ctx, err, sourceBoundaryFault))
+}
+
+func normalizeOutputBoundary(ctx context.Context, err error) error {
+	return lifecycleError(normalizeCollaboratorBoundary(ctx, err, nil))
+}
+
+type boundaryFaultClassifier func(error) (fault.Fault, bool)
+
+// normalizeCollaboratorBoundary is the only place TransferJob uses errors.Is/As
+// on a collaborator result. Policy code receives lifecycleFailure and therefore
+// cannot recover authority from wrapping shape or joined error topology.
+func normalizeCollaboratorBoundary(
+	ctx context.Context,
+	err error,
+	classify boundaryFaultClassifier,
+) *lifecycleFailure {
+	if existing := closedContextCause(ctx); existing != nil {
+		return existing
+	}
+	if cancellation := boundaryCancellation(ctx, err); cancellation != cancellationNone {
+		diagnostic := err
+		if diagnostic == nil && ctx != nil {
+			diagnostic = context.Cause(ctx)
+		}
+		return &lifecycleFailure{
+			policy: lifecyclePolicy{canceled: true}, cancellation: cancellation, diagnostic: diagnostic,
+		}
+	}
+	if existing, ok := admitLifecycleFailure(err); ok {
+		return existing
+	}
+	if err == nil {
+		return nil
+	}
+	var normalized *fault.BoundaryError
+	if errors.As(err, &normalized) && normalized != nil && normalized.Fault().Valid() {
+		return newFaultFailure(normalized.Fault(), err)
+	}
+	if classify != nil {
+		if value, known := classify(err); known {
+			return newFaultFailure(value, err)
+		}
+	}
+	return newFaultFailure(fault.DependencyContractFault(), err)
+}
+
+func boundaryCancellation(ctx context.Context, err error) cancellationKind {
+	if ctx != nil {
+		switch ctx.Err() {
+		case context.Canceled:
+			return cancellationCanceled
+		case context.DeadlineExceeded:
+			return cancellationDeadline
+		}
+	}
+	if err == nil {
+		return cancellationNone
+	}
+	if errors.Is(err, context.Canceled) {
+		return cancellationCanceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return cancellationDeadline
+	}
+	return cancellationNone
+}
+
+func catalogBoundaryFault(err error) (fault.Fault, bool) {
+	switch {
+	case errors.Is(err, catalog.ErrDirectoryStale):
+		return mustCatalogFault(fault.ScopeDirectoryLocal, fault.CatalogDirectoryStale), true
+	case isRawSessionTerminal(err):
+		return mustSessionFault(fault.ScopeSessionTerminal, fault.SessionTransport), true
+	default:
+		return fault.Fault{}, false
+	}
+}
+
+func sourceBoundaryFault(err error) (fault.Fault, bool) {
+	switch {
+	case errors.Is(err, content.ErrRevisionDrift), errors.Is(err, ErrBlockInvalidated):
+		return mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionInvalidated), true
+	case errors.Is(err, content.ErrRevisionStale), errors.Is(err, content.ErrSourceDrift):
+		return mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionChanged), true
+	case errors.Is(err, content.ErrRevisionNotFound), errors.Is(err, content.ErrRevisionUnreadable),
+		errors.Is(err, content.ErrUnsupportedStability):
+		return mustSourceFault(fault.ScopeFileLocal, fault.SourcePermanent), true
+	case errors.Is(err, content.ErrQuotaExceeded), errors.Is(err, content.ErrLeaseExpired),
+		errors.Is(err, content.ErrInvalidLease):
+		return mustSourceFault(fault.ScopeFileLocal, fault.SourceUnavailable), true
+	case errors.Is(err, ErrBlockIdentity):
+		return mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol), true
+	case errors.Is(err, ErrBrokerClosed), errors.Is(err, ErrLaneClosed), isRawSessionTerminal(err):
+		return mustSessionFault(fault.ScopeSessionTerminal, fault.SessionTransport), true
+	default:
+		return fault.Fault{}, false
+	}
+}
+
+func isRawSessionTerminal(err error) bool {
+	return errors.Is(err, protocolsession.ErrSessionTerminated) ||
+		errors.Is(err, protocolsession.ErrPeerSessionTerminal) ||
+		errors.Is(err, protocolsession.ErrWriterTerminal) ||
+		errors.Is(err, protocolsession.ErrWriterStopped)
+}
+
+func newFaultFailure(value fault.Fault, diagnostic error) *lifecycleFailure {
+	if !value.Valid() {
+		value = fault.DependencyContractFault()
+	}
+	return &lifecycleFailure{
+		policy:     lifecyclePolicy{value: value},
+		diagnostic: diagnostic,
+	}
+}
+
+func cancellationFailure(ctx context.Context, diagnostic error) *lifecycleFailure {
+	if existing, ok := admitLifecycleFailure(diagnostic); ok {
+		return existing
+	}
+	if existing := closedContextCause(ctx); existing != nil {
+		return existing
+	}
+	cancellation := boundaryCancellation(ctx, diagnostic)
+	if cancellation == cancellationNone {
+		return dependencyContractFailure(diagnostic)
+	}
+	if diagnostic == nil && ctx != nil {
+		diagnostic = context.Cause(ctx)
+	}
+	return &lifecycleFailure{
+		policy: lifecyclePolicy{canceled: true}, cancellation: cancellation, diagnostic: diagnostic,
+	}
+}
+
+func closedContextCause(ctx context.Context) *lifecycleFailure {
+	if ctx == nil {
+		return nil
+	}
+	failure, _ := admitLifecycleFailure(context.Cause(ctx))
+	return failure
+}
+
+func dependencyContractFailure(cause error) *lifecycleFailure {
+	return newFaultFailure(fault.DependencyContractFault(), cause)
+}
+
+func resourceBudgetFailure(cause error) *lifecycleFailure {
+	return newFaultFailure(
+		mustSessionFault(fault.ScopeOutputPause, fault.SessionResourceBudget), cause,
+	)
+}
+
+func sessionProtocolFailure(cause error) *lifecycleFailure {
+	return newFaultFailure(
+		mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol), cause,
+	)
+}
+
+func sessionTransportFailure(cause error) *lifecycleFailure {
+	return newFaultFailure(
+		mustSessionFault(fault.ScopeSessionTerminal, fault.SessionTransport), cause,
+	)
+}
+
+func catalogDirectoryFailure(code fault.CatalogCode, cause error) *lifecycleFailure {
+	return newFaultFailure(mustCatalogFault(fault.ScopeDirectoryLocal, code), cause)
+}
+
+func catalogIntegrityFailure(cause error) *lifecycleFailure {
+	return newFaultFailure(
+		mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration), cause,
+	)
+}
+
+func sourceUnavailableFailure(cause error) *lifecycleFailure {
+	return newFaultFailure(
+		mustSourceFault(fault.ScopeFileLocal, fault.SourceUnavailable), cause,
+	)
+}
+
+func sourceChangedFailure(cause error) *lifecycleFailure {
+	return newFaultFailure(
+		mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionChanged), cause,
+	)
+}
+
+func sourcePermanentFailure(cause error) *lifecycleFailure {
+	return newFaultFailure(
+		mustSourceFault(fault.ScopeFileLocal, fault.SourcePermanent), cause,
+	)
+}
+
+func sourceInvalidatedFailure(cause error) *lifecycleFailure {
+	return newFaultFailure(
+		mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionInvalidated), cause,
+	)
+}
+
+func outputFailure(scope fault.Scope, code fault.OutputCode, cause error) *lifecycleFailure {
+	value, err := fault.NewOutput(scope, code)
+	if err != nil {
+		return dependencyContractFailure(errors.Join(err, cause))
+	}
+	return newFaultFailure(value, cause)
+}
+
+func outputContractFault(cause error) *lifecycleFailure {
+	if cause == nil {
+		cause = ErrOutputContract
+	}
+	return outputFailure(fault.ScopeOutputPause, fault.OutputContract, cause)
+}
+
+func requireOutputPause(err error) *lifecycleFailure {
+	failure, ok := admitLifecycleFailure(err)
+	if !ok {
+		return dependencyContractFailure(err)
+	}
+	if failure.policy.canceled || failure.policy.value.Scope() >= fault.ScopeOutputPause {
+		return failure
+	}
+	value := faultWithScope(failure.policy.value, fault.ScopeOutputPause)
+	return &lifecycleFailure{
+		policy:     lifecyclePolicy{value: value},
+		diagnostic: failure.diagnostic,
+	}
+}
+
+func faultWithScope(value fault.Fault, scope fault.Scope) fault.Fault {
+	switch value.Domain() {
+	case fault.DomainSource:
+		code, ok := value.SourceCode()
+		if ok {
+			return mustSourceFault(scope, code)
+		}
+	case fault.DomainCatalog:
+		code, ok := value.CatalogCode()
+		if ok {
+			return mustCatalogFault(scope, code)
+		}
+	case fault.DomainSession:
+		code, ok := value.SessionCode()
+		if ok {
+			return mustSessionFault(scope, code)
+		}
+	case fault.DomainOutput:
+		code, ok := value.OutputCode()
+		if ok {
+			projected, _ := fault.NewOutput(scope, code)
+			return projected
+		}
+	case fault.DomainCheckpoint:
+		code, ok := value.CheckpointCode()
+		if ok {
+			projected, _ := fault.NewCheckpoint(scope, code)
+			return projected
+		}
+	}
+	return fault.DependencyContractFault()
+}
+
+func joinLifecycleFailures(candidates ...error) error {
+	return lifecycleError(reduceLifecycleFailures(candidates...))
+}
+
+func joinClosedLifecycleFailures(candidates ...*lifecycleFailure) *lifecycleFailure {
+	errorsToReduce := make([]error, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate != nil {
+			errorsToReduce = append(errorsToReduce, candidate)
+		}
+	}
+	return reduceLifecycleFailures(errorsToReduce...)
+}
+
+func mergeLifecycleFailures(
+	current *lifecycleFailure,
+	candidates ...error,
+) *lifecycleFailure {
+	reduced := reduceLifecycleFailures(candidates...)
+	switch {
+	case current == nil:
+		return reduced
+	case reduced == nil:
+		return current
+	default:
+		return joinClosedLifecycleFailures(current, reduced)
+	}
+}
+
+func reduceLifecycleFailures(candidates ...error) *lifecycleFailure {
+	var joined fault.Fault
+	var cancellation cancellationKind
+	var soleDirect *lifecycleFailure
+	candidateCount := 0
+	diagnostics := make([]error, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		candidateCount++
+		failure, ok := admitLifecycleFailure(candidate)
+		if candidateCount == 1 && ok {
+			soleDirect = failure
+		} else {
+			soleDirect = nil
+		}
+		if !ok {
+			if exact := exactCancellation(candidate); exact != cancellationNone {
+				failure = &lifecycleFailure{
+					policy: lifecyclePolicy{canceled: true}, cancellation: exact, diagnostic: candidate,
+				}
+			} else {
+				failure = dependencyContractFailure(candidate)
+			}
+		}
+		joined = fault.Join(joined, failure.policy.value)
+		if failure.policy.canceled {
+			cancellation = joinCancellation(cancellation, failure.cancellation)
+		}
+		if failure.diagnostic != nil {
+			diagnostics = append(diagnostics, failure.diagnostic)
+		}
+	}
+	if candidateCount == 1 && soleDirect != nil {
+		// Keeping a singleton carrier intact preserves the internal provenance of a
+		// cancel cause. A reduction is necessary only when more than one closed
+		// policy value must actually be joined.
+		return soleDirect
+	}
+	if !joined.Valid() && cancellation == cancellationNone {
+		return nil
+	}
+	return &lifecycleFailure{
+		policy:       lifecyclePolicy{value: joined, canceled: cancellation != cancellationNone},
+		cancellation: cancellation,
+		diagnostic:   errors.Join(diagnostics...),
+	}
+}
+
+// collaboratorError projects an internal normalized reduction back across an
+// error-returning port without exposing lifecycleFailure outside TransferJob.
+func collaboratorError(failure *lifecycleFailure, diagnostic error) error {
+	if failure == nil {
+		return fault.Wrap(fault.DependencyContractFault(), diagnostic)
+	}
+	if failure.policy.canceled {
+		if cancellation := failure.cancellation.cause(); cancellation != nil {
+			return cancellation
+		}
+		return context.Canceled
+	}
+	return fault.Wrap(failure.policy.value, diagnostic)
+}
+
+func normalizedFault(err error) fault.Fault {
+	return lifecyclePolicyFor(err).value
+}
+
+func closedFault(err error) fault.Fault {
+	failure, ok := admitLifecycleFailure(err)
+	if !ok {
+		return fault.Fault{}
+	}
+	return failure.policy.value
+}
+
+func closedLifecycleFault(failure *lifecycleFailure) fault.Fault {
+	if failure == nil {
+		return fault.Fault{}
+	}
+	return failure.policy.value
+}
+
+func lifecycleDiagnostic(err error) error {
+	failure, ok := admitLifecycleFailure(err)
+	if !ok {
+		return err
+	}
+	return failure.diagnostic
+}
+
+func isSessionCode(value fault.Fault, expected fault.SessionCode) bool {
+	code, ok := value.SessionCode()
+	return ok && code == expected
 }
 
 func isJobTerminalError(err error) bool {
-	return inspectLifecycleError(err).jobTerminal()
+	return lifecyclePolicyFor(err).jobTerminal()
 }
 
-type lifecycleErrorInspection struct {
-	sessionFailure             bool
-	jobFatal                   bool
-	jobResourceBudget          bool
-	jobDependencyContract      bool
-	directoryDiscovery         bool
-	demandNotAdmitted          bool
-	interrupted                bool
-	outputFailure              bool
-	explicitOutputPause        bool
-	sourceDrift                bool
-	invalidatedRevision        bool
-	isolatedPermanent          bool
-	isolatedFileSource         bool
-	outputContract             bool
-	directoryAdmissionMismatch bool
-	validOutputFault           bool
-	fileOutputFault            bool
-	nonFileOutputFault         bool
-	exhausted                  bool
+func mustSourceFault(scope fault.Scope, code fault.SourceCode) fault.Fault {
+	value, _ := fault.NewSource(scope, code)
+	return value
 }
 
-func (inspection lifecycleErrorInspection) jobTerminalSession() bool {
-	return inspection.sessionFailure || inspection.exhausted
+func mustCatalogFault(scope fault.Scope, code fault.CatalogCode) fault.Fault {
+	value, _ := fault.NewCatalog(scope, code)
+	return value
 }
 
-func (inspection lifecycleErrorInspection) jobTerminal() bool {
-	return inspection.sessionFailure || inspection.jobFatal || inspection.interrupted || inspection.exhausted
+func mustSessionFault(scope fault.Scope, code fault.SessionCode) fault.Fault {
+	value, _ := fault.NewSession(scope, code)
+	return value
 }
 
-func (inspection lifecycleErrorInspection) outputRequiresJobPause(capabilities OutputCapabilities) bool {
-	return inspection.explicitOutputPause || inspection.exhausted || !capabilities.FileFailureIsolation
-}
-
-func (inspection lifecycleErrorInspection) outputCanContinueAfterFileSettlement(
-	capabilities OutputCapabilities,
-) bool {
-	if !inspection.outputFailure || inspection.jobTerminal() || inspection.explicitOutputPause || inspection.exhausted {
-		return false
-	}
-	if capabilities.FileFailureIsolation {
-		return true
-	}
-	// A ZIP stream cannot promise file isolation statically because an active
-	// member may already have changed the archive. At the member-start boundary,
-	// however, a purely file-scoped fault can be isolated when Pause proves that
-	// this transaction never crossed that boundary.
-	return capabilities.Mode == OutputZIPStream &&
-		capabilities.ArchiveBoundary == ArchiveFailureAtMemberStart &&
-		inspection.fileOutputFault && !inspection.nonFileOutputFault
-}
-
-func (inspection lifecycleErrorInspection) retireReason() FileRetireReason {
-	if inspection.invalidatedRevision {
-		return FileRetireInvalidatedRevision
-	}
-	if inspection.isolatedPermanent {
-		return FileRetireIsolatedPermanentSourceFailure
-	}
-	return 0
-}
-
-// inspectLifecycleError is the sole settlement-path traversal of collaborator
-// error graphs. Exact sentinel nodes and typed authorities are recognized while
-// the cycle set and frontier budget prevent hostile Unwrap implementations from
-// hanging cancellation or durable settlement.
-//
-//nolint:errorlint // Recursive errors.Is/As cannot provide this walk's cycle or work bounds.
-func inspectLifecycleError(root error) lifecycleErrorInspection {
-	var inspection lifecycleErrorInspection
-	if root == nil {
-		return inspection
-	}
-	pending := []error{root}
-	seen := make(map[error]struct{})
-	inspected := 0
-	budgetOmitted := false
-	for len(pending) != 0 && inspected < maxOutputFailureTreeNodes {
-		last := len(pending) - 1
-		current := pending[last]
-		pending = pending[:last]
-		if current == nil {
-			continue
-		}
-		inspected++
-		duplicate, invalid := inspection.visitLifecycleNode(current, seen)
-		if invalid {
-			inspection.exhausted = true
-			return inspection
-		}
-		if duplicate {
-			continue
-		}
-		remaining := maxOutputFailureTreeNodes - inspected - len(pending)
-		var omitted bool
-		pending, omitted = appendLifecycleChildren(pending, current, remaining)
-		budgetOmitted = budgetOmitted || omitted
-	}
-	inspection.exhausted = budgetOmitted || len(pending) != 0
-	return inspection
-}
-
-func (inspection *lifecycleErrorInspection) visitLifecycleNode(
-	current error,
-	seen map[error]struct{},
-) (duplicate bool, invalid bool) {
-	currentValue := reflect.ValueOf(current)
-	if isNilableErrorValue(currentValue) && currentValue.IsNil() {
-		return false, true
-	}
-	if reflect.TypeOf(current).Comparable() {
-		if _, exists := seen[current]; exists {
-			return true, false
-		}
-		seen[current] = struct{}{}
-		inspection.acceptComparable(current)
-	}
-	inspection.acceptLifecycleAuthorities(current)
-	return false, false
-}
-
-//nolint:errorlint // The bounded walker already exposes each exact graph node.
-func (inspection *lifecycleErrorInspection) acceptLifecycleAuthorities(current error) {
-	if _, ok := current.(interface{ SessionFailure() }); ok {
-		inspection.sessionFailure = true
-	}
-	if _, ok := current.(interface{ JobFatal() }); ok {
-		inspection.jobFatal = true
-	}
-	if _, ok := current.(*JobResourceBudgetError); ok {
-		inspection.jobResourceBudget = true
-	}
-	if _, ok := current.(*JobDependencyContractError); ok {
-		inspection.jobDependencyContract = true
-	}
-	if _, ok := current.(DirectoryDiscoveryFailure); ok {
-		inspection.directoryDiscovery = true
-	}
-	if _, ok := current.(*demandNotAdmittedError); ok {
-		inspection.demandNotAdmitted = true
-	}
-	if scoped, ok := current.(jobPauseRequirement); ok {
-		inspection.outputFailure = true
-		inspection.explicitOutputPause = inspection.explicitOutputPause || scoped.RequiresJobPause()
-	}
-	if _, ok := current.(isolatedPermanentSourceFailure); ok {
-		inspection.isolatedPermanent = true
-	}
-	if _, ok := current.(isolatedFileSourceFailure); ok {
-		inspection.isolatedFileSource = true
-	}
-	inspection.acceptOutputFault(current)
-}
-
-//nolint:errorlint // The bounded walker already exposes each exact graph node.
-func (inspection *lifecycleErrorInspection) acceptOutputFault(current error) {
-	fault, ok := current.(*OutputFault)
-	if !ok || fault.Scope() < OutputFaultFile || fault.Scope() > OutputFaultRoot ||
-		fault.Code() < OutputFaultStateIO || fault.Code() > OutputFaultContract {
-		return
-	}
-	inspection.validOutputFault = true
-	if fault.Scope() == OutputFaultFile {
-		inspection.fileOutputFault = true
-		return
-	}
-	inspection.nonFileOutputFault = true
-}
-
-//nolint:errorlint // Recursive errors.As cannot provide cycle or work bounds.
-func appendLifecycleChildren(pending []error, current error, remaining int) ([]error, bool) {
-	switch wrapped := current.(type) {
-	case interface{ Unwrap() []error }:
-		children := wrapped.Unwrap()
-		if remaining <= 0 {
-			return pending, len(children) != 0
-		}
-		if len(children) > remaining {
-			return append(pending, children[:remaining]...), true
-		}
-		return append(pending, children...), false
-	case interface{ Unwrap() error }:
-		child := wrapped.Unwrap()
-		if remaining <= 0 {
-			return pending, child != nil
-		}
-		return append(pending, child), false
-	default:
-		return pending, false
-	}
-}
-
-func isNilableErrorValue(value reflect.Value) bool {
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return true
-	default:
-		return false
-	}
-}
-
-//nolint:errorlint // The bounded walker already exposes each exact graph node.
-func (inspection *lifecycleErrorInspection) acceptComparable(current error) {
-	switch current {
-	case context.Canceled, context.DeadlineExceeded:
-		inspection.interrupted = true
-	case protocolsession.ErrSessionTerminated, protocolsession.ErrPeerSessionTerminal,
-		protocolsession.ErrWriterTerminal, protocolsession.ErrWriterStopped, ErrLaneClosed:
-		inspection.sessionFailure = true
-	case catalog.ErrDirectoryStale, content.ErrRevisionStale, content.ErrSourceDrift:
-		inspection.sourceDrift = true
-	case content.ErrRevisionDrift, ErrBlockInvalidated:
-		inspection.sourceDrift = true
-		inspection.invalidatedRevision = true
-	case ErrOutputContract:
-		inspection.outputContract = true
-	case ErrDirectoryAdmissionMismatch:
-		inspection.directoryAdmissionMismatch = true
-	}
+func mustOutputFault(scope fault.Scope, code fault.OutputCode) fault.Fault {
+	value, _ := fault.NewOutput(scope, code)
+	return value
 }

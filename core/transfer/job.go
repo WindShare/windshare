@@ -1,3 +1,5 @@
+// Package transfer coordinates receiver-scoped file-local block demand across
+// authenticated protocol lanes.
 package transfer
 
 import (
@@ -10,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/transfer/fault"
 )
 
 const (
@@ -62,6 +65,9 @@ type DirectoryJobFailure struct {
 	Path        string
 	Stage       FailureStage
 	Cause       error
+	// Fault is the policy value captured when the collaborator returned. Cause is
+	// diagnostic only and cannot be reinterpreted as settlement authority.
+	Fault fault.Fault
 }
 
 type FileJobFailure struct {
@@ -69,9 +75,12 @@ type FileJobFailure struct {
 	Path                string
 	Stage               FailureStage
 	Cause               error
+	Fault               fault.Fault
 	Settlement          FileSettlement
 	SettlementFailure   error
+	SettlementFault     fault.Fault
 	LeaseReleaseFailure error
+	LeaseReleaseFault   fault.Fault
 }
 
 type JobResult struct {
@@ -82,9 +91,7 @@ type JobResult struct {
 	TransferIntent TransferIntent
 	// SelectionObservation is diagnostic only and is normally zero for the
 	// incremental path, which does not materialize a whole-tree snapshot.
-	SelectionObservation SelectionObservationV1
-	// SelectionIdentity is an in-memory catalog observation, never a checkpoint key.
-	SelectionIdentity        SelectionIdentity
+	SelectionObservation     SelectionObservationV1
 	Measure                  SelectionMeasure
 	Directories              []DirectoryJobFailure
 	Files                    []FileJobFailure
@@ -96,20 +103,18 @@ type JobResult struct {
 	// SourceDriftFailure preserves the first semantic drift outcome even when its
 	// per-file or per-directory diagnostic is omitted by the retention budget.
 	SourceDriftFailure error
+	SourceDriftFault   fault.Fault
 	SucceededFiles     uint64
 	TerminationCause   error
+	TerminationFault   fault.Fault
 	SettlementFailure  error
+	SettlementFault    fault.Fault
 }
 
 type CatalogReader interface {
 	// A cursor owns one authenticated generation and releases every page before
 	// advancing. Implementations must be safe for concurrent directory cursors.
 	OpenDirectoryPages(context.Context, catalog.DirectoryID) (catalog.DirectoryPageCursor, error)
-}
-
-type DirectoryDiscoveryFailure interface {
-	error
-	DirectoryFailure()
 }
 
 type OpenedRevision struct {
@@ -239,9 +244,11 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 	j.mu.Lock()
 	if j.started {
 		j.mu.Unlock()
+		failure := dependencyContractFailure(ErrTransferJobRun)
 		return JobResult{Outcome: JobPausedOutcome, TransferJobID: j.jobID,
 			IntentDigest: j.intent.Digest(), TransferIntent: j.intent,
-			Measure: j.Measure(), TerminationCause: ErrTransferJobRun}
+			Measure: j.Measure(), TerminationCause: failure,
+			TerminationFault: closedLifecycleFault(failure)}
 	}
 	j.started = true
 	j.mu.Unlock()
@@ -250,100 +257,147 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 	defer cancel(nil)
 	state, err := newJobRun(j)
 	if err != nil {
-		j.tracker.failDiscovery()
-		j.tracker.finishDiscovery()
-		j.tracker.closeUpdates()
+		failure := dependencyContractFailure(err)
+		j.failUnstartedDiscovery()
 		return JobResult{
 			Outcome: JobPausedOutcome, TransferJobID: j.jobID,
 			IntentDigest: j.intent.Digest(), TransferIntent: j.intent,
-			Measure: j.Measure(), TerminationCause: err,
+			Measure: j.Measure(), TerminationCause: failure,
+			TerminationFault: closedLifecycleFault(failure),
 		}
 	}
 	if cause := context.Cause(runContext); cause != nil {
-		state.terminationCause = cause
-		j.tracker.failDiscovery()
-		j.tracker.finishDiscovery()
-		j.tracker.closeUpdates()
+		state.terminationCause = cancellationFailure(runContext, cause)
+		j.failUnstartedDiscovery()
 		return state.finish(ctx)
 	}
-	j.trace(TransferLifecycleTrace{
-		Stage: TransferAdmissionStarted, TransferJobID: j.jobID, IntentDigest: j.intent.Digest(),
-	})
-	output, err := j.outputAuthority.OpenOutput(runContext, j.intent)
-	if err != nil {
-		state.terminationCause = err
-		j.trace(TransferLifecycleTrace{
-			Stage: TransferAdmissionCompleted, TransferJobID: j.jobID,
-			IntentDigest: j.intent.Digest(), Failed: true,
-		})
-		j.tracker.failDiscovery()
-		j.tracker.finishDiscovery()
-		j.tracker.closeUpdates()
+	if failure := j.admitRunOutput(runContext, state); failure != nil {
+		state.terminationCause = failure
+		j.failUnstartedDiscovery()
 		return state.finish(ctx)
 	}
-	if output != nil {
-		// OpenOutput has already created a durable namespace. Owning it before
-		// validation guarantees a contract mismatch is settled, not abandoned.
-		state.output = output
-		state.admitted = true
-	}
-	if err := validateOutputSession(j.intent, output); err != nil {
-		state.terminationCause = err
-		j.trace(TransferLifecycleTrace{
-			Stage: TransferAdmissionCompleted, TransferJobID: j.jobID,
-			IntentDigest: j.intent.Digest(), Failed: true,
-		})
-		j.tracker.failDiscovery()
-		j.tracker.finishDiscovery()
-		j.tracker.closeUpdates()
-		return state.finish(ctx)
-	}
-	j.trace(TransferLifecycleTrace{
-		Stage: TransferAdmissionCompleted, TransferJobID: j.jobID,
-		IntentDigest: j.intent.Digest(), OutputSessionID: output.SessionID(),
-	})
+
 	fileQueue := make(chan transferQueueItem, j.queueCapacity)
-	workerErr := make(chan error, 1)
+	workerErr := make(chan *lifecycleFailure, 1)
 	workerDone := make(chan struct{})
 	go state.transferQueueWorker(runContext, fileQueue, cancel, workerErr, workerDone)
 	j.trace(TransferLifecycleTrace{
 		Stage: TransferDiscoveryStarted, TransferJobID: j.jobID, IntentDigest: j.intent.Digest(),
 		DirectoryID: j.root, Discovery: DiscoveryOpen,
 	})
-	discoveryErr := state.discoverIncremental(runContext, fileQueue)
-	if discoveryErr != nil {
-		j.tracker.failDiscovery()
-		state.terminationCause = discoveryErr
-		cancel(discoveryErr)
+	discoveryFailure := admitInternalFailure(state.discoverIncremental(runContext, fileQueue))
+	return state.completeDiscovery(ctx, runContext, cancel, fileQueue, workerErr, workerDone, discoveryFailure)
+}
+
+func (j *TransferJob) admitRunOutput(ctx context.Context, state *jobRun) *lifecycleFailure {
+	j.trace(TransferLifecycleTrace{
+		Stage: TransferAdmissionStarted, TransferJobID: j.jobID, IntentDigest: j.intent.Digest(),
+	})
+	output, rawOutputErr := j.outputAuthority.OpenOutput(ctx, j.intent)
+	failure := admitInternalFailure(normalizeOutputBoundary(ctx, rawOutputErr))
+	if output != nil {
+		// A collaborator can cross a durable mutation boundary before reporting an
+		// error. Retaining the returned capability lets finish request a stable
+		// pause instead of abandoning that namespace.
+		state.output = output
+		state.admitted = true
 	}
-	if discoveryErr == nil && !state.discoveryFailed {
-		if missingErr := j.rules.missingTargetsError(
-			state.matchedPaths, state.matchedDirectories, state.matchedFiles,
+	if failure == nil {
+		failure = admitInternalFailure(validateOutputSession(j.intent, output))
+	}
+	if failure == nil {
+		admissionScope, err := NewDirectoryAdmissionScope(j.intent)
+		if err != nil {
+			// Intent validation precedes OpenOutput, so failure to project its receipt
+			// scope is an internal boundary violation rather than backend authority.
+			failure = dependencyContractFailure(err)
+		} else {
+			state.directoryAdmissionScope = admissionScope
+		}
+	}
+	if failure != nil {
+		j.trace(TransferLifecycleTrace{
+			Stage: TransferAdmissionCompleted, TransferJobID: j.jobID,
+			IntentDigest: j.intent.Digest(), Fault: closedLifecycleFault(failure), Failed: true,
+		})
+		return failure
+	}
+	j.trace(TransferLifecycleTrace{
+		Stage: TransferAdmissionCompleted, TransferJobID: j.jobID,
+		IntentDigest: j.intent.Digest(), OutputSessionID: output.SessionID(),
+	})
+	return nil
+}
+
+func (j *TransferJob) failUnstartedDiscovery() {
+	// Consumers must observe one terminal discovery transition even when output
+	// admission fails before the catalog can safely be opened.
+	j.tracker.failDiscovery()
+	j.tracker.finishDiscovery()
+	j.tracker.closeUpdates()
+}
+
+func (r *jobRun) completeDiscovery(
+	ctx context.Context,
+	runContext context.Context,
+	cancel context.CancelCauseFunc,
+	fileQueue chan transferQueueItem,
+	workerErr <-chan *lifecycleFailure,
+	workerDone <-chan struct{},
+	discoveryFailure *lifecycleFailure,
+) JobResult {
+	workerCause := closedContextCause(runContext)
+	workerInterruptedDiscovery := workerCause != nil && workerCause == discoveryFailure
+	discoveryIncomplete := discoveryFailure != nil &&
+		(!workerInterruptedDiscovery || !r.catalogTraversalComplete)
+	if discoveryFailure != nil {
+		if discoveryIncomplete {
+			r.job.tracker.failDiscovery()
+		}
+		r.terminationCause = discoveryFailure
+		cancel(discoveryFailure)
+	}
+	if !discoveryIncomplete && !r.discoveryFailed {
+		if missingErr := r.job.rules.missingTargetsError(
+			r.matchedPaths, r.matchedDirectories, r.matchedFiles,
 		); missingErr != nil {
 			// Absence proven by a complete catalog is a closed selection result,
 			// not a resumable transport or output failure.
-			state.selectionResolutionFailure = missingErr
+			r.selectionResolutionFailure = missingErr
 		}
 	}
-	j.tracker.finishDiscovery()
-	j.trace(TransferLifecycleTrace{
-		Stage: TransferDiscoveryCompleted, TransferJobID: j.jobID,
-		IntentDigest: j.intent.Digest(), DirectoryID: j.root, DirectoryGeneration: state.rootGeneration,
-		Discovery: j.Measure().Discovery, SelectionClass: j.Measure().Class(),
-		Failed: discoveryErr != nil || state.discoveryFailed,
+	r.job.tracker.finishDiscovery()
+	r.job.trace(TransferLifecycleTrace{
+		Stage: TransferDiscoveryCompleted, TransferJobID: r.job.jobID,
+		IntentDigest: r.job.intent.Digest(), DirectoryID: r.job.root, DirectoryGeneration: r.rootGeneration,
+		Discovery: r.job.Measure().Discovery, SelectionClass: r.job.Measure().Class(),
+		Fault: fault.Join(
+			discoveryCompletionFault(discoveryFailure, discoveryIncomplete), r.discoveryFaultSnapshot(),
+		),
+		Failed: discoveryIncomplete || r.discoveryFailed,
 	})
 	close(fileQueue)
 	<-workerDone
 	select {
 	case workerFailure := <-workerErr:
-		if state.terminationCause == nil {
-			state.terminationCause = workerFailure
+		if r.terminationCause == nil || workerInterruptedDiscovery {
+			r.terminationCause = workerFailure
 			cancel(workerFailure)
 		}
 	default:
 	}
-	j.tracker.closeUpdates()
-	return state.finish(ctx)
+	r.job.tracker.closeUpdates()
+	return r.finish(ctx)
+}
+
+func discoveryCompletionFault(
+	failure *lifecycleFailure,
+	incomplete bool,
+) fault.Fault {
+	if !incomplete {
+		return fault.Fault{}
+	}
+	return closedLifecycleFault(failure)
 }
 
 func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) error {
@@ -353,55 +407,58 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 	}
 	locator, err := NewPathOutputLocator(plan.path)
 	if err != nil {
-		return r.rejectUnstartedFile(ctx, plan, opened, NewJobDependencyContractError(err))
+		return r.rejectUnstartedFile(ctx, plan, opened, dependencyContractFailure(err))
 	}
 	target, err := NewOutputFileTarget(
 		r.output.BackendID(), r.output.SessionID(), opened.Descriptor, locator,
 	)
 	if err != nil {
-		return r.rejectUnstartedFile(ctx, plan, opened, NewJobDependencyContractError(err))
+		return r.rejectUnstartedFile(ctx, plan, opened, dependencyContractFailure(err))
 	}
 	if plan.parentAdmission.IsZero() {
-		return r.rejectUnstartedFile(ctx, plan, opened, ErrDirectoryAdmissionMismatch)
+		return r.rejectUnstartedFile(ctx, plan, opened, dependencyContractFailure(ErrDirectoryAdmissionMismatch))
 	}
 	start, err := r.output.BeginFile(ctx, OutputFile{
 		Path: plan.path, ExpectedSize: plan.expectedSize, Descriptor: opened.Descriptor, Target: target,
 		ParentAdmission: plan.parentAdmission,
 	})
+	err = normalizeOutputBoundary(ctx, err)
 	if err != nil {
-		r.traceFileLifecycle(TransferFileAdmitted, plan, true)
+		r.traceFileLifecycle(TransferFileAdmitted, plan, err)
 		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
-		inspection := inspectLifecycleError(err)
+		policy := lifecyclePolicyFor(err)
 		failure := FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
 			Cause: err, LeaseReleaseFailure: releaseErr,
 		}
-		if inspection.jobTerminal() || isJobTerminalError(releaseErr) ||
-			inspection.outputRequiresJobPause(r.output.Capabilities()) {
+		if policy.jobTerminal() || isJobTerminalError(releaseErr) ||
+			policy.outputRequiresJobPause(r.output.Capabilities()) {
 			r.recordFileFailure(failure)
-			return errors.Join(err, releaseErr)
+			return joinLifecycleFailures(err, releaseErr)
 		}
 		r.recordFileFailure(failure)
 		return nil
 	}
 	if settlement, immediate := start.ImmediateSettlement(); immediate {
 		if err := validateImmediateFileSettlement(target, settlement); err != nil {
-			r.traceFileLifecycle(TransferFileAdmitted, plan, true)
-			return r.rejectImmediateSettlement(ctx, plan, opened, settlement, err)
+			contractFailure := outputContractFault(err)
+			r.traceFileLifecycle(TransferFileAdmitted, plan, contractFailure)
+			return r.rejectImmediateSettlement(ctx, plan, opened, settlement, contractFailure)
 		}
-		r.traceFileLifecycle(TransferFileAdmitted, plan, false)
+		r.traceFileLifecycle(TransferFileAdmitted, plan, nil)
 		return r.handleImmediateSettlement(ctx, plan, opened, settlement)
 	}
 	transaction, durable, transactional := start.Transaction()
 	if !transactional || !start.valid() {
-		r.traceFileLifecycle(TransferFileAdmitted, plan, true)
-		return r.rejectImmediateSettlement(ctx, plan, opened, start.settlement, ErrOutputContract)
+		contractFailure := outputContractFault(ErrOutputContract)
+		r.traceFileLifecycle(TransferFileAdmitted, plan, contractFailure)
+		return r.rejectImmediateSettlement(ctx, plan, opened, start.settlement, contractFailure)
 	}
 	if err := validateOutputTransaction(target, transaction, durable); err != nil {
-		r.traceFileLifecycle(TransferFileAdmitted, plan, true)
+		r.traceFileLifecycle(TransferFileAdmitted, plan, err)
 		return r.settleFailedFile(ctx, plan, opened, transaction, FailureFileOutput, err, 0)
 	}
-	r.traceFileLifecycle(TransferFileAdmitted, plan, false)
+	r.traceFileLifecycle(TransferFileAdmitted, plan, nil)
 	completed, err := r.transferMissingRanges(ctx, plan, opened, transaction, durable)
 	if err != nil || !completed {
 		return err
@@ -420,7 +477,7 @@ func (r *jobRun) rejectUnstartedFile(
 		FileID: plan.file, Path: plan.path, Stage: FailureFileOutput, Cause: cause,
 		LeaseReleaseFailure: releaseErr,
 	})
-	return errors.Join(cause, releaseErr)
+	return joinLifecycleFailures(cause, releaseErr)
 }
 
 func (r *jobRun) rejectImmediateSettlement(
@@ -430,31 +487,41 @@ func (r *jobRun) rejectImmediateSettlement(
 	settlement FileSettlement,
 	cause error,
 ) error {
-	fault := outputContractFault(cause)
+	fault := cause
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
-	r.settlementFailure = errors.Join(r.settlementFailure, fault)
+	r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, fault)
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.path, Stage: FailureFileOutput, Cause: fault,
 		Settlement: settlement, SettlementFailure: fault, LeaseReleaseFailure: releaseErr,
 	})
-	r.traceFileSettlement(plan, settlement, true)
+	r.traceFileSettlement(plan, settlement, joinLifecycleFailures(fault, releaseErr))
 	return fault
 }
 
 func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (OpenedRevision, bool, error) {
-	opened, err := r.job.revisions.OpenRevision(ctx, plan.file)
+	opened, rawOpenErr := r.job.revisions.OpenRevision(ctx, plan.file)
+	err := normalizeSourceBoundary(ctx, rawOpenErr)
 	if err != nil {
+		var releaseErr error
+		if !opened.LeaseID.IsZero() {
+			releaseErr = r.releaseRevision(ctx, opened.LeaseID)
+		}
 		if isJobTerminalError(err) {
-			return OpenedRevision{}, false, err
+			return OpenedRevision{}, false, joinLifecycleFailures(err, releaseErr)
 		}
 		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureRevisionOpen, Cause: err,
+			LeaseReleaseFailure: releaseErr,
 		})
+		if isJobTerminalError(releaseErr) {
+			return OpenedRevision{}, false, releaseErr
+		}
 		return OpenedRevision{}, false, nil
 	}
 	if err := validateOpenedPlanFile(
 		r.job.share, plan.file, plan.expectedSize, plan.modified, opened,
 	); err != nil {
+		err = sourceChangedFailure(err)
 		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.path, Stage: FailureRevisionIdentity,
@@ -476,7 +543,7 @@ func (r *jobRun) handleImmediateSettlement(
 ) error {
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 	r.acceptFileSettlement(settlement)
-	r.traceFileSettlement(plan, settlement, releaseErr != nil)
+	r.traceFileSettlement(plan, settlement, releaseErr)
 	switch settlement.Kind() {
 	case FilePublished:
 		r.succeeded++
@@ -519,9 +586,9 @@ func (r *jobRun) handleImmediateSettlement(
 			LeaseReleaseFailure: releaseErr,
 		})
 	default:
-		fault := outputContractFault(nil)
-		r.settlementFailure = errors.Join(r.settlementFailure, fault)
-		return fault
+		contractFailure := outputContractFault(nil)
+		r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, contractFailure)
+		return contractFailure
 	}
 	if isJobTerminalError(releaseErr) {
 		return releaseErr

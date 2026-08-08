@@ -4,6 +4,10 @@ import {
   type OutputSelectionShape,
 } from '../output/capability/acquisition'
 import {
+  IndexedDbBrowserPausedTaskLifecycle,
+  type BrowserPausedTaskLifecycle,
+} from '../output/browser/paused-task-lifecycle'
+import {
   DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
   resolveIndexedDbRootIdentity,
 } from '../output/browser/indexeddb-repository'
@@ -35,11 +39,14 @@ import { StreamingZipArchiveWriter } from '../output/streams/streaming-zip'
 import { ZIP_STREAM_BACKEND, ZipStreamOutputSession } from '../output/streams/zip'
 import { IndexedDbZipCentralDirectorySpool } from '../output/streams/zip-spool'
 import {
+  directoryAdmissionScope,
   validateOutputSessionBinding,
+  type DirectoryAdmissionScope,
   type OutputSession,
   type V2OutputAuthority,
 } from '../transfer/output-session'
 import {
+  createOutputSessionId,
   freezeTransferIntent,
   validateFinalTransferIntent,
   type TransferIntent,
@@ -154,19 +161,44 @@ const DEFAULT_BROWSER_V2_OUTPUT_IDENTITY_PROVIDER: BrowserV2OutputIdentityProvid
 export function browserV2OutputAuthority(
   acquired: Promise<AcquiredOutputCapability>,
   sessions: V2BrowserOutputSessionFactory = DEFAULT_V2_BROWSER_OUTPUT_SESSION_FACTORY,
+  pausedTasks: BrowserPausedTaskLifecycle = DEFAULT_BROWSER_PAUSED_TASK_LIFECYCLE,
 ): V2OutputAuthority {
-  return new BrowserV2OutputAuthority(acquired, sessions)
+  return new BrowserV2OutputAuthority(acquired, sessions, pausedTasks)
+}
+
+/** A reconstructed durable session is already capability-gated and may be opened once. */
+export function resumedBrowserV2OutputAuthority(
+  intent: TransferIntent,
+  session: OutputSession,
+): V2OutputAuthority {
+  return new ReconstructedBrowserV2OutputAuthority(intent, session)
+}
+
+export function acquireBrowserResumeZipOutput(
+  suggestedName: string,
+  windowPort: V2BrowserOutputWindow = window as unknown as V2BrowserOutputWindow,
+): Promise<WritableStream<Uint8Array>> {
+  if (windowPort.showSaveFilePicker !== undefined) {
+    // Picker invocation remains synchronous; only conversion to a stream awaits.
+    return windowPort.showSaveFilePicker({ suggestedName }).then((handle) => handle.createWritable())
+  }
+  try {
+    return Promise.resolve(createPortableBrowserDownload(suggestedName, 0n, windowPort))
+  } catch (error) {
+    return Promise.reject(error)
+  }
 }
 
 export interface V2BrowserOutputSessionFactory {
   /**
    * Durable browser targets must receive the frozen intent binding at the
-   * production boundary. Stream targets do not persist checkpoints and may
-   * leave the binding undefined.
+   * production boundary. Every target receives the runtime-only directory
+   * receipt scope; stream targets do not persist checkpoints.
    */
   open(
     capability: AcquiredOutputCapability,
     outputSessionId: string,
+    admissionScope: DirectoryAdmissionScope,
     binding?: V2OutputCheckpointBinding,
   ): Promise<OutputSession>
 }
@@ -179,10 +211,12 @@ export interface V2OutputCheckpointBinding {
 const DEFAULT_V2_BROWSER_OUTPUT_SESSION_FACTORY: V2BrowserOutputSessionFactory = Object.freeze({
   open: openBrowserV2OutputSession,
 })
+const DEFAULT_BROWSER_PAUSED_TASK_LIFECYCLE = new IndexedDbBrowserPausedTaskLifecycle()
 
 class BrowserV2OutputAuthority implements V2OutputAuthority {
   readonly #acquired: Promise<AcquiredOutputCapability>
   readonly #sessions: V2BrowserOutputSessionFactory
+  readonly #pausedTasks: BrowserPausedTaskLifecycle
   #state: 'pending' | 'opening' | 'opened' | 'aborted' = 'pending'
   #abortReason: unknown
   #capabilityCleanup: Promise<void> | undefined
@@ -190,9 +224,11 @@ class BrowserV2OutputAuthority implements V2OutputAuthority {
   constructor(
     acquired: Promise<AcquiredOutputCapability>,
     sessions: V2BrowserOutputSessionFactory,
+    pausedTasks: BrowserPausedTaskLifecycle,
   ) {
     this.#acquired = acquired
     this.#sessions = sessions
+    this.#pausedTasks = pausedTasks
   }
 
   async confirmOutput(
@@ -255,21 +291,27 @@ class BrowserV2OutputAuthority implements V2OutputAuthority {
     // OutputSessionID is per run. The final intent digest, rather than a
     // terminal selection text, owns durable recovery identity.
     const binding = checkpointBindingFor(intent, capability)
+    const admissionScope = directoryAdmissionScope(intent)
     const output = await this.#sessions.open(
       capability,
-      outputSessionId(intent.transferJobId),
+      freshOutputSessionId(),
+      admissionScope,
       binding,
     )
+    let validated: OutputSession
     try {
       signal.throwIfAborted()
       // Root admission belongs to the transfer job because only authenticated
       // catalog discovery knows the committed root generation. Opening a picker
       // must never manufacture that generation from the directory identity.
-      return validateOutputSessionBinding(intent, output)
+      validated = validateOutputSessionBinding(intent, output)
     } catch (error) {
-      await output.abortJob(error).catch(() => undefined)
+      await output.pauseJob(error).catch(() => undefined)
       throw error
     }
+    // Persistence runs only after the exact durable namespace is open. Its
+    // failure path suspends the session and never acquires discard authority.
+    return this.#pausedTasks.track(intent, capability, validated)
   }
 
   async #cleanup(
@@ -280,7 +322,7 @@ class BrowserV2OutputAuthority implements V2OutputAuthority {
     this.#state = 'aborted'
     this.#abortReason = reason
     if (output !== undefined) {
-      await output.abortJob(reason).catch(() => undefined)
+      await output.pauseJob(reason).catch(() => undefined)
     } else if (capability !== undefined) {
       await abortOutputCapability(capability, reason)
     } else {
@@ -308,6 +350,62 @@ class BrowserV2OutputAuthority implements V2OutputAuthority {
       (capability) => abortOutputCapability(capability, reason),
       () => undefined,
     ).then(() => undefined, () => undefined)
+  }
+}
+
+class ReconstructedBrowserV2OutputAuthority implements V2OutputAuthority {
+  readonly #intent: TransferIntent
+  readonly #session: OutputSession
+  #state: 'pending' | 'opening' | 'opened' | 'paused' = 'pending'
+
+  constructor(intent: TransferIntent, session: OutputSession) {
+    this.#intent = intent
+    this.#session = session
+  }
+
+  confirmOutput(): Promise<{ readonly intent: TransferIntent; readonly session: OutputSession }> {
+    return Promise.reject(new Error('A resumed transfer already has a frozen output authority'))
+  }
+
+  async openOutput(intent: TransferIntent, signal: AbortSignal): Promise<OutputSession> {
+    if (this.#state !== 'pending') {
+      throw new Error('Reconstructed output authority can only be opened once')
+    }
+    this.#state = 'opening'
+    try {
+      signal.throwIfAborted()
+      const [expected, requested] = await Promise.all([
+        validateFinalTransferIntent(this.#intent),
+        validateFinalTransferIntent(intent),
+      ])
+      if (requested.digest !== expected.digest) {
+        throw new TypeError('Resumed transfer intent does not match its reconstructed output')
+      }
+      signal.throwIfAborted()
+      const session = validateOutputSessionBinding(expected, this.#session)
+      this.#state = 'opened'
+      return session
+    } catch (error) {
+      // Reconstruction already holds the namespace lease, so any failed open must
+      // reach a stable pause instead of relying on a later authority abort.
+      this.#state = 'paused'
+      try {
+        await this.#session.pauseJob(error)
+      } catch (pauseError) {
+        throw new AggregateError(
+          [error, pauseError],
+          'Reconstructed output validation and stable pause both failed',
+          { cause: pauseError },
+        )
+      }
+      throw error
+    }
+  }
+
+  async abort(reason: unknown): Promise<void> {
+    if (this.#state !== 'pending') return
+    this.#state = 'paused'
+    await this.#session.pauseJob(reason)
   }
 }
 
@@ -379,14 +477,14 @@ function assertIntentMatchesCapability(
   }
 }
 
-function outputSessionId(transferJobId: string): string {
-  const random = globalThis.crypto?.randomUUID?.()
-  return random === undefined ? `${transferJobId}:run` : random
+function freshOutputSessionId(): string {
+  return createOutputSessionId()
 }
 
 export async function openBrowserV2OutputSession(
   capability: AcquiredOutputCapability,
   outputSessionId: string,
+  admissionScope: DirectoryAdmissionScope,
   binding?: V2OutputCheckpointBinding,
 ): Promise<OutputSession> {
   validateCapabilityDescriptor(capability)
@@ -396,15 +494,17 @@ export async function openBrowserV2OutputSession(
       assertBindingMatchesCapability(durableBinding, capability)
       return acquireFileSystemAccessOutputSession(capability.root, {
         outputSessionId,
+        directoryAdmissionScope: admissionScope,
         transferIntentDigest: durableBinding.transferIntentDigest,
         rootIdentity: durableBinding.rootIdentity,
       })
     }
     case 'SingleFileStream':
-      return new SingleFileStreamOutputSession(outputSessionId, capability.output)
+      return new SingleFileStreamOutputSession(outputSessionId, admissionScope, capability.output)
     case 'ZipStream':
       return new ZipStreamOutputSession({
         outputSessionId,
+        directoryAdmissionScope: admissionScope,
         archive: new StreamingZipArchiveWriter(
           capability.output,
           new IndexedDbZipCentralDirectorySpool(),
@@ -417,6 +517,7 @@ export async function openBrowserV2OutputSession(
       try {
         return await openOriginPrivateOutputSession({
           outputSessionId,
+          directoryAdmissionScope: admissionScope,
           transferIntentDigest: durableBinding.transferIntentDigest,
           rootIdentity: durableBinding.rootIdentity,
           storage: {

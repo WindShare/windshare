@@ -11,7 +11,12 @@ import {
   jobOutcome,
   summarizeTransferFailures,
 } from '../../src/transfer/outcome'
-import type { OutputFile, OutputSession } from '../../src/transfer/output-session'
+import {
+  DirectoryAdmissionBindingError,
+  type JobSettlement,
+  type OutputFile,
+  type OutputSession,
+} from '../../src/transfer/output-session'
 import {
   createBoundedPortableDownloadStream,
   PORTABLE_DOWNLOAD_MAXIMUM_BYTES,
@@ -32,6 +37,7 @@ import { MemoryZipCentralDirectorySpool } from './zip-spool-fake'
 import {
   admittedOutputDirectory,
   admittedOutputFile,
+  TEST_DIRECTORY_ADMISSION_SCOPE,
   testOutputIdentity,
   testOutputModifiedTime,
 } from './admission-fixture'
@@ -41,7 +47,11 @@ const ACTIVE_SIGNAL = new AbortController().signal
 describe('single-file stream output', () => {
   it('streams one file in ascending order and never advertises durable ranges', async () => {
     const output = recordingStream()
-    const session = new SingleFileStreamOutputSession('single', output.stream)
+    const session = new SingleFileStreamOutputSession(
+      'single',
+      TEST_DIRECTORY_ADMISSION_SCOPE,
+      output.stream,
+    )
     const begun = await beginAdmittedFile(session, outputFile('file', 3n))
 
     await begun.transaction.writeRange(0n, Uint8Array.of(1, 2), ACTIVE_SIGNAL)
@@ -55,16 +65,24 @@ describe('single-file stream output', () => {
   })
 
   it('isolates a failure before output but compromises the job after a write starts', async () => {
-    const before = new SingleFileStreamOutputSession('before', recordingStream().stream)
+    const before = new SingleFileStreamOutputSession(
+      'before',
+      TEST_DIRECTORY_ADMISSION_SCOPE,
+      recordingStream().stream,
+    )
     const untouched = await beginAdmittedFile(before, outputFile('untouched', 1n))
-    await expect(untouched.transaction.abort(new Error('source failed')))
+    await expect(untouched.transaction.retire(new Error('source failed')))
       .resolves.toBe('FileIsolated')
 
     const output = recordingStream()
-    const after = new SingleFileStreamOutputSession('after', output.stream)
+    const after = new SingleFileStreamOutputSession(
+      'after',
+      TEST_DIRECTORY_ADMISSION_SCOPE,
+      output.stream,
+    )
     const started = await beginAdmittedFile(after, outputFile('started', 2n))
     await started.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
-    await expect(started.transaction.abort(new Error('later failure')))
+    await expect(started.transaction.retire(new Error('later failure')))
       .resolves.toBe('JobOutputCompromised')
     expect(output.bytes()).toEqual(Uint8Array.of(1))
     expect(output.aborted).toBe(true)
@@ -72,7 +90,11 @@ describe('single-file stream output', () => {
 
   it('commits an empty file without inventing a byte', async () => {
     const output = recordingStream()
-    const session = new SingleFileStreamOutputSession('empty', output.stream)
+    const session = new SingleFileStreamOutputSession(
+      'empty',
+      TEST_DIRECTORY_ADMISSION_SCOPE,
+      output.stream,
+    )
     const begun = await beginAdmittedFile(session, outputFile('empty', 0n))
     await begun.transaction.commit(ACTIVE_SIGNAL)
     expect(output.bytes()).toEqual(new Uint8Array())
@@ -85,7 +107,7 @@ describe('single-file stream output', () => {
     const reason = new DOMException('late cancellation', 'AbortError')
     const race: {
       session?: SingleFileStreamOutputSession
-      abort?: Promise<void>
+      abort?: Promise<JobSettlement>
     } = {}
     let published = false
     const output = new WritableStream<Uint8Array>({
@@ -94,10 +116,14 @@ describe('single-file stream output', () => {
         await publish.promise
         published = true
         if (race.session === undefined) throw new Error('Session is unavailable')
-        race.abort = race.session.abortJob(reason)
+        race.abort = race.session.pauseJob(reason)
       },
     })
-    const session = new SingleFileStreamOutputSession('single-close-winner', output)
+    const session = new SingleFileStreamOutputSession(
+      'single-close-winner',
+      TEST_DIRECTORY_ADMISSION_SCOPE,
+      output,
+    )
     race.session = session
     const begun = await beginAdmittedFile(session, outputFile('empty', 0n))
 
@@ -107,7 +133,7 @@ describe('single-file stream output', () => {
 
     await expect(commit).resolves.toBeUndefined()
     if (race.abort === undefined) throw new Error('Sink did not trigger the close race')
-    await expect(race.abort).resolves.toBeUndefined()
+    await expect(race.abort).resolves.toEqual({ kind: 'Paused', durability: 'None' })
     expect(published).toBe(true)
   })
 
@@ -121,36 +147,83 @@ describe('single-file stream output', () => {
         await close.promise
       },
     })
-    const session = new SingleFileStreamOutputSession('single-abort-winner', output)
+    const session = new SingleFileStreamOutputSession(
+      'single-abort-winner',
+      TEST_DIRECTORY_ADMISSION_SCOPE,
+      output,
+    )
     const begun = await beginAdmittedFile(session, outputFile('empty', 0n))
 
     const commit = begun.transaction.commit(ACTIVE_SIGNAL)
     await closeStarted.promise
-    const abort = session.abortJob(reason)
+    const abort = session.pauseJob(reason)
     close.reject(reason)
 
     await expect(commit).rejects.toBe(reason)
-    await expect(abort).resolves.toBeUndefined()
+    await expect(abort).resolves.toEqual({ kind: 'Paused', durability: 'None' })
+  })
+
+  it('keeps directory finalization behind the active file settlement', async () => {
+    const session = new SingleFileStreamOutputSession(
+      'single-directory-drain',
+      TEST_DIRECTORY_ADMISSION_SCOPE,
+      recordingStream().stream,
+    )
+    const root = await admittedOutputDirectory(session, { path: [] })
+    const begun = await session.beginFile(
+      { ...outputFile('active', 1n), parentAdmission: root },
+      ACTIVE_SIGNAL,
+    )
+
+    const finalization = session.finalizeDirectory(root, ACTIVE_SIGNAL)
+    await expectPending(finalization)
+    await begun.transaction.retire(new Error('test settlement'))
+
+    await expect(finalization).resolves.toMatchObject({ kind: 'Finalized', admission: root })
   })
 })
 
 describe('ZIP stream output', () => {
+  it('seals before waiting for an active member and rejects a late BeginFile', async () => {
+    const session = new ZipStreamOutputSession({
+      outputSessionId: 'zip-directory-drain',
+      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
+      archive: new FakeArchive(),
+    })
+    const root = await admittedOutputDirectory(session, { path: [] })
+    const begun = await session.beginFile(
+      { ...outputFile('active', 1n), parentAdmission: root },
+      ACTIVE_SIGNAL,
+    )
+
+    const finalization = session.finalizeDirectory(root, ACTIVE_SIGNAL)
+    await expectPending(finalization)
+    await expect(session.beginFile(
+      { ...outputFile('late', 1n), parentAdmission: root },
+      ACTIVE_SIGNAL,
+    )).rejects.toBeInstanceOf(DirectoryAdmissionBindingError)
+    await begun.transaction.retire(new Error('test settlement'))
+
+    await expect(finalization).resolves.toMatchObject({ kind: 'Finalized', admission: root })
+  })
+
   it('skips a not-yet-started member and reports it without corrupting later members', async () => {
     const archive = new FakeArchive()
     let report: ZipCompletionReport | undefined
     const session = new ZipStreamOutputSession({
       outputSessionId: 'zip',
+      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
       archive,
       reportCompletion: (value) => { report = value },
     })
     const skipped = await beginAdmittedFile(session, outputFile('skipped', 1n))
     const kept = await beginAdmittedFile(session, outputFile('kept', 1n))
-    await expect(skipped.transaction.abort(new Error('source failed')))
+    await expect(skipped.transaction.retire(new Error('source failed')))
       .resolves.toBe('FileIsolated')
     await kept.transaction.writeRange(0n, Uint8Array.of(7), ACTIVE_SIGNAL)
     await kept.transaction.commit(ACTIVE_SIGNAL)
     const failedId = fileId('skipped')
-    await session.finishJob(jobOutcome('CompletedWithErrors', summarizeTransferFailures([{
+    await session.completeJob(jobOutcome('CompletedWithErrors', summarizeTransferFailures([{
       kind: 'file',
       fileId: failedId,
       reason: new Error('source failed'),
@@ -165,18 +238,26 @@ describe('ZIP stream output', () => {
 
   it('aborts the archive when a started member fails', async () => {
     const archive = new FakeArchive()
-    const session = new ZipStreamOutputSession({ outputSessionId: 'zip', archive })
+    const session = new ZipStreamOutputSession({
+      outputSessionId: 'zip',
+      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
+      archive,
+    })
     const begun = await beginAdmittedFile(session, outputFile('started', 2n))
     await begun.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
 
-    await expect(begun.transaction.abort(new Error('failed member')))
+    await expect(begun.transaction.retire(new Error('failed member')))
       .resolves.toBe('JobOutputCompromised')
     expect(archive.aborted).toBe(true)
   })
 
   it('serializes concurrently prepared members without buffering the archive', async () => {
     const archive = new FakeArchive()
-    const session = new ZipStreamOutputSession({ outputSessionId: 'zip', archive })
+    const session = new ZipStreamOutputSession({
+      outputSessionId: 'zip',
+      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
+      archive,
+    })
     const first = await beginAdmittedFile(session, outputFile('first', 1n))
     const second = await beginAdmittedFile(session, outputFile('second', 1n))
     const secondWrite = second.transaction.writeRange(0n, Uint8Array.of(2), ACTIVE_SIGNAL)
@@ -193,7 +274,11 @@ describe('ZIP stream output', () => {
 
   it('preserves empty entries without claiming unsupported browser mtime restoration', async () => {
     const archive = new FakeArchive()
-    const session = new ZipStreamOutputSession({ outputSessionId: 'zip', archive })
+    const session = new ZipStreamOutputSession({
+      outputSessionId: 'zip',
+      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
+      archive,
+    })
     const directory = await admittedOutputDirectory(
       session,
       { path: ['empty-dir'], modifiedTime: testOutputModifiedTime(10n) },
@@ -207,7 +292,7 @@ describe('ZIP stream output', () => {
       modifiedTime: testOutputModifiedTime(20n),
     })
     await empty.transaction.commit(ACTIVE_SIGNAL)
-    await session.finishJob(jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY), ACTIVE_SIGNAL)
+    await session.completeJob(jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY), ACTIVE_SIGNAL)
 
     expect(session.capabilities.modificationTime).toBe(false)
     expect(archive.directories).toEqual([{
@@ -226,6 +311,7 @@ describe('ZIP stream output', () => {
     let report: ZipCompletionReport | undefined
     const session = new ZipStreamOutputSession({
       outputSessionId: 'zip-release',
+      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
       archive,
       reportCompletion: (value) => { report = value },
     })
@@ -238,7 +324,7 @@ describe('ZIP stream output', () => {
       fileId: committedId,
       reason: new Error('lease release failed'),
     }]))
-    await session.finishJob(outcome, ACTIVE_SIGNAL)
+    await session.completeJob(outcome, ACTIVE_SIGNAL)
 
     expect(report?.outcome).toBe(outcome)
     expect(archive.files.map((file) => file.path.join('/'))).toEqual(['committed'])
@@ -249,17 +335,18 @@ describe('ZIP stream output', () => {
     let report: ZipCompletionReport | undefined
     const session = new ZipStreamOutputSession({
       outputSessionId: 'zip-close-winner',
+      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
       archive,
       reportCompletion: (value) => { report = value },
     })
     const outcome = jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
-    const finish = session.finishJob(outcome, ACTIVE_SIGNAL)
+    const finish = session.completeJob(outcome, ACTIVE_SIGNAL)
     await archive.closeStarted.promise
-    const abort = session.abortJob(new DOMException('late cancellation', 'AbortError'))
+    const abort = session.pauseJob(new DOMException('late cancellation', 'AbortError'))
     archive.releaseClose()
 
-    await expect(finish).resolves.toBeUndefined()
-    await expect(abort).resolves.toBeUndefined()
+    await expect(finish).resolves.toEqual({ kind: 'Completed' })
+    await expect(abort).resolves.toEqual({ kind: 'Completed' })
     expect(report?.outcome).toBe(outcome)
   })
 
@@ -267,16 +354,17 @@ describe('ZIP stream output', () => {
     const archive = new FakeArchive()
     const session = new ZipStreamOutputSession({
       outputSessionId: 'zip-report-failure',
+      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
       archive,
       reportCompletion: () => { throw new Error('observer failed') },
     })
 
-    await expect(session.finishJob(
+    await expect(session.completeJob(
       jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY),
       ACTIVE_SIGNAL,
-    )).resolves.toBeUndefined()
-    await expect(session.abortJob(new Error('must not revoke publication')))
-      .resolves.toBeUndefined()
+    )).resolves.toEqual({ kind: 'Completed' })
+    await expect(session.pauseJob(new Error('must not revoke publication')))
+      .resolves.toEqual({ kind: 'Completed' })
     expect(archive.closed).toBe(true)
     expect(archive.aborted).toBe(false)
   })
@@ -600,4 +688,14 @@ function deferred<T>(): {
     reject = fail
   })
   return { promise, resolve, reject }
+}
+
+async function expectPending(promise: Promise<unknown>): Promise<void> {
+  const settled = Symbol('settled')
+  const pending = Symbol('pending')
+  const outcome = await Promise.race([
+    promise.then(() => settled, () => settled),
+    Promise.resolve(pending),
+  ])
+  expect(outcome).toBe(pending)
 }

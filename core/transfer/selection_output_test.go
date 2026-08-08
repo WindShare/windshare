@@ -302,14 +302,6 @@ func TestOutputIdentityLocatorAndErrorValidationBranches(t *testing.T) {
 			t.Fatalf("invalid capabilities %d accepted: %+v", index, capabilities)
 		}
 	}
-	nilCause := NewOutputSessionError(nil, false)
-	if !errors.Is(nilCause, errors.Unwrap(nilCause)) || errors.Unwrap(nilCause) == nil {
-		t.Fatal("output error did not retain its synthesized cause")
-	}
-	var outputError *OutputSessionError
-	if !errors.As(nilCause, &outputError) || outputError.RequiresJobPause() {
-		t.Fatal("nonfatal output error classification failed")
-	}
 }
 
 func rangesEqual(left, right content.RangeSet) bool {

@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
 type revisionTransferCommitter struct{}
@@ -85,6 +86,7 @@ type revisionTransferOutput struct {
 	backend      transfer.OutputBackendID
 	session      transfer.OutputSessionID
 	secret       [32]byte
+	scope        transfer.DirectoryAdmissionScope
 	settlements  map[catalog.FileID]transfer.FileSettlementKind
 	jobPauses    int
 	jobCompletes int
@@ -103,9 +105,14 @@ func newRevisionTransferOutput(t *testing.T) *revisionTransferOutput {
 }
 
 func (output *revisionTransferOutput) OpenOutput(
-	context.Context,
-	transfer.TransferIntent,
+	_ context.Context,
+	intent transfer.TransferIntent,
 ) (transfer.OutputSession, error) {
+	scope, err := transfer.NewDirectoryAdmissionScope(intent)
+	if err != nil {
+		return nil, err
+	}
+	output.scope = scope
 	return output, nil
 }
 func (output *revisionTransferOutput) BackendID() transfer.OutputBackendID { return output.backend }
@@ -121,10 +128,13 @@ func (output *revisionTransferOutput) AdmitDirectory(
 	_ context.Context,
 	directory transfer.OutputDirectory,
 ) (transfer.DirectoryAdmission, error) {
-	return transfer.NewDirectoryAdmissionWithSecret(output.secret[:], directory)
+	return transfer.NewDirectoryAdmissionWithSecret(output.secret[:], output.scope, directory)
 }
-func (*revisionTransferOutput) FinalizeDirectory(context.Context, transfer.OutputDirectory) error {
-	return nil
+func (*revisionTransferOutput) FinalizeDirectory(
+	_ context.Context,
+	admission transfer.DirectoryAdmission,
+) (transfer.DirectorySettlement, error) {
+	return transfer.NewFinalizedDirectorySettlement(admission)
 }
 func (output *revisionTransferOutput) BeginFile(
 	_ context.Context,
@@ -251,7 +261,8 @@ func TestEveryRevisionFailureDispositionSettlesOneFileAndContinuesSibling(t *tes
 				}
 				runContentTransferIsolationCase(
 					t, failure.Scope(), code, retryable, wantSettlement, revisionOperationError(failure),
-					false, code == contentflow.RevisionCodeStale || code == contentflow.RevisionCodeDrift,
+					false, code == contentflow.RevisionCodeDrift ||
+						code == contentflow.RevisionCodeStale && retryable,
 				)
 			})
 		}
@@ -292,7 +303,10 @@ func TestOpenResultRevisionDriftRemainsCLIVisibleAndContinuesSibling(t *testing.
 		true,
 		true,
 	)
-	if !errors.Is(result.SourceDriftFailure, content.ErrRevisionDrift) {
+	expected, _ := transferfault.NewSource(
+		transferfault.ScopeFileLocal, transferfault.SourceRevisionInvalidated,
+	)
+	if result.SourceDriftFault != expected {
 		t.Fatalf("CLI-visible source drift = %v", result.SourceDriftFailure)
 	}
 }
@@ -388,12 +402,12 @@ func runContentTransferIsolationCase(
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	var local interface{ IsolatedFileSourceFailure() }
+	sourceCode, sourceFault := result.Files[0].Fault.SourceCode()
 	if result.Outcome != transfer.JobCompletedWithErrors || result.TerminationCause != nil ||
 		result.SucceededFiles != 1 || len(result.Files) != 1 ||
 		output.settlements[failed] != wantSettlement || output.settlements[good] != transfer.FilePublished ||
 		output.jobPauses != 0 || output.jobCompletes != 1 ||
-		!errors.As(result.Files[0].Cause, &local) ||
+		!sourceFault || sourceCode == 0 || result.Files[0].Fault.Scope() != transferfault.ScopeFileLocal ||
 		(result.SourceDriftFailure != nil) != wantSourceDrift {
 		t.Fatalf("result=%+v settlements=%v", result, output.settlements)
 	}

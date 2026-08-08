@@ -11,8 +11,8 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   V2CatalogTraversalError,
   type DirectoryCursor,
-} from '../../src/transfer/v2-job-contract'
-import { V2CatalogPageCursor, V2CatalogTraversalGuard } from '../../src/transfer/v2-job-traversal'
+} from '../../src/transfer/job/contract'
+import { V2CatalogPageCursor, V2CatalogTraversalGuard } from '../../src/transfer/job/traversal'
 
 const SHARE = identity(1)
 const DIRECTORY = identity(2)

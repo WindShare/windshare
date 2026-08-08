@@ -266,9 +266,6 @@ func TestWindowsV3NativeMutationsRejectCollisionsAndForeignAuthorities(t *testin
 	if err := (&windowsV3PinnedEntry{}).close(); err != nil {
 		t.Fatalf("close incomplete pin: %v", err)
 	}
-	if _, err := (&windowsV3PinnedEntry{}).allocatedSize(); err == nil {
-		t.Fatal("incomplete pin exposed allocation")
-	}
 	if _, err := root.pinnedEntryMatches("missing", nil); err == nil {
 		t.Fatal("missing comparison pin was accepted")
 	}

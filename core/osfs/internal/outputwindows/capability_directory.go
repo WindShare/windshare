@@ -4,6 +4,7 @@ package outputwindows
 
 import (
 	"errors"
+	"io/fs"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
@@ -45,14 +46,6 @@ func (directory *windowsOutputV3Directory) Names(limit int) ([]string, error) {
 	return names, windowsOutputV3Error(err)
 }
 
-func (directory *windowsOutputV3Directory) NamesWithPrefix(prefix string, matchLimit int) ([]string, error) {
-	if directory == nil || directory.native == nil {
-		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows directory authority is closed"))
-	}
-	names, err := directory.native.namesWithPrefix(prefix, matchLimit)
-	return names, windowsOutputV3Error(err)
-}
-
 func (directory *windowsOutputV3Directory) ObserveEntry(name string) (outputcap.EntryKind, error) {
 	if directory == nil || directory.native == nil {
 		return outputcap.EntryAbsent, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows directory authority is closed"))
@@ -70,13 +63,6 @@ func (directory *windowsOutputV3Directory) ClassifyExactEntry(name string) (outp
 	}
 	kind, exact, err := directory.native.classifyExactEntry(name)
 	return kind, exact, windowsOutputV3Error(err)
-}
-
-func (directory *windowsOutputV3Directory) ValidatePublicEntryName(name string) error {
-	if directory == nil || directory.native == nil {
-		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows directory authority is closed"))
-	}
-	return windowsOutputV3Error(directory.native.validatePublicEntryName(name))
 }
 
 func (directory *windowsOutputV3Directory) ValidatePublicEntryNames(names []string) error {
@@ -133,54 +119,6 @@ func (directory *windowsOutputV3Directory) RemoveEntry(name string, expected out
 		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: incompatible Windows pinned entry removal"))
 	}
 	return windowsOutputV3Error(directory.native.removePinnedEntry(name, pinned.native))
-}
-
-func (directory *windowsOutputV3Directory) IdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
-	if directory == nil || directory.native == nil {
-		return outputcap.PersistentDirectoryIdentity{},
-			errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows directory authority is closed"))
-	}
-	claim, err := directory.native.identityClaim()
-	if err != nil {
-		return outputcap.PersistentDirectoryIdentity{}, windowsOutputV3Error(err)
-	}
-	return outputcap.NewPersistentDirectoryIdentity(claim), nil
-}
-
-func (directory *windowsOutputV3Directory) PrepareIdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
-	if directory == nil || directory.native == nil {
-		return outputcap.PersistentDirectoryIdentity{},
-			errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows directory authority is closed"))
-	}
-	claim, err := directory.native.prepareIdentityClaim()
-	if err != nil {
-		return outputcap.PersistentDirectoryIdentity{}, windowsOutputV3Error(err)
-	}
-	return outputcap.NewPersistentDirectoryIdentity(claim), nil
-}
-
-func (directory *windowsOutputV3Directory) PreparePrivateIdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
-	if directory == nil || directory.native == nil {
-		return outputcap.PersistentDirectoryIdentity{},
-			errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows private directory authority is closed"))
-	}
-	claim, err := directory.native.preparePrivateIdentityClaim()
-	if err != nil {
-		return outputcap.PersistentDirectoryIdentity{}, windowsOutputV3Error(err)
-	}
-	return outputcap.NewPersistentDirectoryIdentity(claim), nil
-}
-
-func (directory *windowsOutputV3Directory) PrivateIdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
-	if directory == nil || directory.native == nil {
-		return outputcap.PersistentDirectoryIdentity{},
-			errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows private directory authority is closed"))
-	}
-	claim, err := directory.native.privateIdentityClaim()
-	if err != nil {
-		return outputcap.PersistentDirectoryIdentity{}, windowsOutputV3Error(err)
-	}
-	return outputcap.NewPersistentDirectoryIdentity(claim), nil
 }
 
 func (directory *windowsOutputV3Directory) SameDirectory(other outputcap.Directory) (bool, error) {
@@ -336,14 +274,6 @@ func (entry *windowsOutputV3EntryRef) Kind() outputcap.EntryKind {
 	return entry.native.kind
 }
 
-func (entry *windowsOutputV3EntryRef) AllocatedSize() (uint64, error) {
-	if entry == nil || entry.native == nil {
-		return 0, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows pinned entry is closed"))
-	}
-	size, err := entry.native.allocatedSize()
-	return size, windowsOutputV3Error(err)
-}
-
 func (entry *windowsOutputV3EntryRef) Close() error {
 	if entry == nil || entry.native == nil {
 		return nil
@@ -381,3 +311,113 @@ func newWindowsOutputV3Lock(lock *windowsV3StableLock) *windowsOutputV3Lock {
 	}
 	return &windowsOutputV3Lock{native: lock, file: file}
 }
+
+func (file *windowsOutputV3File) ReadAt(destination []byte, offset int64) (int, error) {
+	if file == nil || file.native == nil {
+		return 0, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows file authority is closed"))
+	}
+	count, err := file.native.ReadAt(destination, offset)
+	return count, windowsOutputV3Error(err)
+}
+
+func (file *windowsOutputV3File) WriteAt(source []byte, offset int64) (int, error) {
+	if file == nil || file.native == nil {
+		return 0, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows file authority is closed"))
+	}
+	count, err := file.native.WriteAt(source, offset)
+	return count, windowsOutputV3Error(err)
+}
+
+func (file *windowsOutputV3File) Close() error {
+	if file == nil || file.borrowed || file.native == nil {
+		return nil
+	}
+	err := file.native.Close()
+	file.native = nil
+	return windowsOutputV3Error(err)
+}
+
+func (file *windowsOutputV3File) Sync() error {
+	if file == nil || file.native == nil {
+		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows file authority is closed"))
+	}
+	return windowsOutputV3Error(file.native.Sync())
+}
+
+func (file *windowsOutputV3File) Size() (uint64, error) {
+	if file == nil || file.native == nil {
+		return 0, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows file authority is closed"))
+	}
+	size, err := file.native.Size()
+	return size, windowsOutputV3Error(err)
+}
+
+func (file *windowsOutputV3File) SetModifiedTime(modified catalog.ModifiedTime) error {
+	if file == nil || file.native == nil {
+		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows file authority is closed"))
+	}
+	return windowsOutputV3Error(file.native.setModifiedTime(modified))
+}
+
+func (file *windowsOutputV3File) MetadataMatches(size uint64, modified catalog.ModifiedTime) (bool, error) {
+	if file == nil || file.native == nil {
+		return false, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows file authority is closed"))
+	}
+	matches, err := file.native.metadataMatches(size, modified)
+	return matches, windowsOutputV3Error(err)
+}
+
+func (file *windowsOutputV3File) SameFile(other outputcap.File) (bool, error) {
+	right, ok := other.(*windowsOutputV3File)
+	if !ok || file == nil || file.native == nil || right == nil || right.native == nil {
+		return false, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: incompatible Windows file authority"))
+	}
+	same, err := sameWindowsV3OpenedObject(file.native, right.native)
+	return same, windowsOutputV3Error(err)
+}
+
+func (lock *windowsOutputV3Lock) File() outputcap.File {
+	if lock == nil || lock.native == nil || lock.file == nil || lock.file.native == nil {
+		return nil
+	}
+	return lock.file
+}
+
+func (lock *windowsOutputV3Lock) Close() error {
+	if lock == nil || lock.native == nil {
+		return nil
+	}
+	err := lock.native.Close()
+	lock.native = nil
+	if lock.file != nil {
+		lock.file.native = nil
+	}
+	return windowsOutputV3Error(err)
+}
+
+func windowsOutputV3Error(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, errWindowsV3OutputUnsupported):
+		return errors.Join(outputcap.ErrRecoverableOutputUnsupported, err)
+	case errors.Is(err, errWindowsV3OutputUnsafe):
+		return errors.Join(outputcap.ErrUnsafeNamespace, err)
+	case errors.Is(err, errWindowsV3OutputCollision):
+		return errors.Join(outputcap.ErrNamespaceCollision, err)
+	case errors.Is(err, errWindowsV3OutputLockBusy):
+		return errors.Join(outputcap.ErrNamespaceLockBusy, err)
+	case errors.Is(err, fs.ErrExist):
+		return errors.Join(outputcap.ErrNamespaceCollision, err)
+	default:
+		return err
+	}
+}
+
+var (
+	_ outputcap.Platform  = (*windowsOutputV3Platform)(nil)
+	_ outputcap.Directory = (*windowsOutputV3Directory)(nil)
+	_ outputcap.File      = (*windowsOutputV3File)(nil)
+	_ outputcap.Lock      = (*windowsOutputV3Lock)(nil)
+)

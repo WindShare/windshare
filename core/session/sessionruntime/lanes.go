@@ -130,15 +130,6 @@ type laneInboundRouter struct {
 	identity LaneIdentity
 }
 
-type inboundRouteBinding struct {
-	ctx          context.Context
-	operationID  protocolsession.OperationID
-	hasOperation bool
-	reserved     *operationLaneRoute
-	bound        *operationLaneRoute
-	replay       bool
-}
-
 func (router laneInboundRouter) RouteInbound(
 	ctx context.Context,
 	message protocolsession.Message,
@@ -171,79 +162,12 @@ func (router laneInboundRouter) RouteAuthenticatedOperationViolation(
 	return router.runtime.router.RouteAuthenticatedOperationViolation(ctx, message, violation)
 }
 
-func (router laneInboundRouter) prepareInboundRoute(
-	ctx context.Context,
-	message protocolsession.Message,
-) (inboundRouteBinding, error) {
-	operationID, hasOperation := message.OperationID()
-	binding := inboundRouteBinding{ctx: ctx, operationID: operationID, hasOperation: hasOperation}
-	if !hasOperation || router.runtime.role != protocolsession.RoleSender {
-		return binding, nil
-	}
-	if receiverRequestKind(message.Kind()) {
-		return router.reserveInboundRequest(binding, message)
-	}
-	binding.bound = router.runtime.routes.current(operationID)
-	if binding.bound == nil && message.Kind() != protocolsession.MessageCancel {
-		return binding, ErrOperationMissing
-	}
-	if binding.bound != nil {
-		binding.ctx = bindOutboundRoute(ctx, operationID, binding.bound)
-	}
-	return binding, nil
-}
-
-func (router laneInboundRouter) reserveInboundRequest(
-	binding inboundRouteBinding,
-	message protocolsession.Message,
-) (inboundRouteBinding, error) {
-	// Reservation precedes queue publication so a fast dispatch worker cannot
-	// emit the first fragment before its physical-lane route becomes visible.
-	reserved, fresh, err := router.runtime.routes.reserveRequest(
-		binding.operationID, router.identity, message,
-	)
-	if err != nil {
-		return binding, err
-	}
-	binding.reserved = reserved
-	if !fresh {
-		binding.replay = true
-		return binding, nil
-	}
-	binding.bound = reserved
-	binding.ctx = bindOutboundRoute(binding.ctx, binding.operationID, reserved)
-	return binding, nil
-}
-
 func (router laneInboundRouter) TerminateLocal() error {
 	return router.runtime.router.TerminateLocal()
 }
 
 func (router laneInboundRouter) InboundDirection() protocolsession.Direction {
 	return router.runtime.router.InboundDirection()
-}
-
-func receiverRequestKind(kind protocolsession.MessageKind) bool {
-	switch kind {
-	case protocolsession.MessageListChildren, protocolsession.MessageOpenRevisions,
-		protocolsession.MessageRenewLease, protocolsession.MessageReleaseLease,
-		protocolsession.MessageRequestBlocks, protocolsession.MessageLaneAttach,
-		protocolsession.MessagePeerOffer:
-		return true
-	default:
-		return false
-	}
-}
-
-func senderResponseFinal(kind protocolsession.MessageKind) bool {
-	switch kind {
-	case protocolsession.MessageCatalogResult, protocolsession.MessageOpenResults,
-		protocolsession.MessageLeaseResult, protocolsession.MessageOperationComplete,
-		protocolsession.MessageOperationError, protocolsession.MessageLaneAttach:
-		return true
-	default:
-		return false
-	}
 }
 
 type runtimeLanes struct {

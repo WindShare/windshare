@@ -1,21 +1,28 @@
-import type {
-  BeginOutputFileResult,
-  DirectoryAdmission,
-  OutputCapabilities,
-  OutputDirectory,
-  OutputDirectoryAdmission,
-  OutputFile,
-  OutputSession,
-  OutputSessionIdentity,
+import {
+  type BeginOutputFileResult,
+  type DirectoryAdmission,
+  type DirectoryAdmissionScope,
+  type DirectorySettlement,
+  JobSettlementKind,
+  type JobSettlement,
+  type OutputCapabilities,
+  type OutputDirectoryAdmission,
+  type OutputFile,
+  type OutputSession,
+  type OutputSessionIdentity,
+  COMPLETED_JOB_SETTLEMENT,
+  needsAttentionJobSettlement,
+  outputSessionIdentity,
+  pausedJobSettlement,
 } from '../../transfer/output-session'
 import type { JobOutcome } from '../../transfer/outcome'
-import { outputSessionIdentity } from '../../transfer/output-session'
+import { FaultScope, OutputFaultCode, outputFault } from '../../transfer/fault'
 import { BrowserFileSystemTree } from '../browser/filesystem-tree'
 import { ensureOneShotIndexedDbLegacyCleanup } from '../browser/indexeddb-legacy-cleaner'
 import { IndexedDbOutputRepository } from '../browser/indexeddb-repository'
 import {
-  acquireBrowserOutputSessionLease,
-  type BrowserOutputSessionLease,
+  acquireBrowserFileSystemAccessSessionLease,
+  type BrowserFileSystemAccessSessionLease,
 } from '../browser/session-lease'
 import type { CheckpointCrashHook } from '../persistent-tree/contracts'
 import { PersistentTreeOutputSession } from '../persistent-tree/session'
@@ -26,26 +33,16 @@ export const FILE_SYSTEM_ACCESS_BACKEND = 'file-system-access'
 
 export interface FileSystemAccessOutputOptions {
   readonly outputSessionId: string
+  readonly directoryAdmissionScope: DirectoryAdmissionScope
   /** Stable final intent digest; never use outputSessionId as durable namespace. */
-  readonly transferIntentDigest?: string
+  readonly transferIntentDigest: string
   /** Stable picker-root identity used to bind checkpoints to this capability. */
-  readonly rootIdentity?: string
-  /** @internal Browser probes only; production callers must provide both identities. */
-  readonly allowTestFallback?: true
+  readonly rootIdentity: string
   readonly databaseName?: string
   readonly crashHook?: CheckpointCrashHook
 }
 
-export interface PreparedFileSystemAccessReauthorization {
-  /** Invoke directly from the user's click handler; the permission request is synchronous. */
-  authorize(): Promise<FileSystemAccessOutputSession>
-  /** Releases the prepared session lease when the user cancels the reauthorization UI. */
-  discard(): Promise<void>
-}
-
-export interface FileSystemAccessInnerSession extends OutputSession {
-  suspendJob(reason: unknown): Promise<void>
-}
+export type FileSystemAccessInnerSession = OutputSession
 
 export interface FileSystemAccessSessionRepository {
   deleteSessionData(): Promise<void>
@@ -58,14 +55,11 @@ export interface FileSystemAccessSessionLease {
 
 type ManagedState =
   | 'open'
-  | 'finishing'
-  | 'committed'
-  | 'finished'
-  | 'finish-failed'
-  | 'aborting'
-  | 'aborted'
-  | 'suspending'
-  | 'suspended'
+  | 'completing'
+  | 'completed'
+  | 'pausing'
+  | 'paused'
+  | 'needs-attention'
 
 export class FileSystemAccessOutputSession implements OutputSession {
   readonly identity: OutputSessionIdentity
@@ -76,11 +70,9 @@ export class FileSystemAccessOutputSession implements OutputSession {
   readonly #repository: FileSystemAccessSessionRepository
   readonly #lease: FileSystemAccessSessionLease
   #state: ManagedState = 'open'
-  #finishController: AbortController | undefined
-  #finishPromise: Promise<void> | undefined
-  #abortPromise: Promise<void> | undefined
-  #suspendPromise: Promise<void> | undefined
-  #resourcePromise: Promise<void> | undefined
+  #completePromise: Promise<JobSettlement> | undefined
+  #pausePromise: Promise<JobSettlement> | undefined
+  #resourcePromise: Promise<unknown> | undefined
 
   constructor(
     inner: FileSystemAccessInnerSession,
@@ -99,9 +91,12 @@ export class FileSystemAccessOutputSession implements OutputSession {
     return this.#inner.admitDirectory(directory, signal)
   }
 
-  finalizeDirectory(directory: OutputDirectory, signal: AbortSignal): Promise<void> {
+  finalizeDirectory(
+    admission: DirectoryAdmission,
+    signal: AbortSignal,
+  ): Promise<DirectorySettlement> {
     this.#requireOpen()
-    return this.#inner.finalizeDirectory(directory, signal)
+    return this.#inner.finalizeDirectory(admission, signal)
   }
 
   beginFile(file: OutputFile, signal: AbortSignal): Promise<BeginOutputFileResult> {
@@ -109,131 +104,97 @@ export class FileSystemAccessOutputSession implements OutputSession {
     return this.#inner.beginFile(file, signal)
   }
 
-  async finishJob(outcome: JobOutcome, signal: AbortSignal): Promise<void> {
-    if (this.#state === 'finished') return
-    if (this.#state === 'committed') return this.#finishPromise
-    if (this.#state !== 'open') throw new Error('File System Access output cannot start finalization')
-    signal.throwIfAborted()
-    this.#state = 'finishing'
-    const controller = new AbortController()
-    this.#finishController = controller
-    const detach = forwardAbort(signal, controller)
-    const operation = this.#finish(outcome, controller.signal).catch((error: unknown) => {
-      if (this.#state === 'finishing') this.#state = 'finish-failed'
+  completeJob(outcome: JobOutcome, signal: AbortSignal): Promise<JobSettlement> {
+    if (this.#state === 'completed') return Promise.resolve(COMPLETED_JOB_SETTLEMENT)
+    if (this.#completePromise !== undefined) return this.#completePromise
+    if (this.#state !== 'open') {
+      return Promise.reject(new Error('File System Access output cannot start completion'))
+    }
+    this.#state = 'completing'
+    const operation = this.#complete(outcome, signal).catch((error: unknown) => {
+      if (this.#state === 'completing') this.#state = 'open'
       throw error
     })
-    this.#finishPromise = operation
-    try {
-      await operation
-    } finally {
-      detach()
-      this.#finishController = undefined
-    }
-  }
-
-  abortJob(
-    reason: unknown = new DOMException('File System Access output aborted', 'AbortError'),
-  ): Promise<void> {
-    if (this.#state === 'finished' || this.#state === 'aborted') return Promise.resolve()
-    if (this.#state === 'committed') return this.#finishPromise ?? Promise.resolve()
-    if (this.#state === 'suspending' || this.#state === 'suspended') {
-      return this.#suspendPromise ?? Promise.resolve()
-    }
-    if (this.#abortPromise !== undefined) return this.#abortPromise
-    this.#state = 'aborting'
-    this.#finishController?.abort(reason)
-    const operation = this.#abort(reason).then(() => {
-      if (this.#state !== 'committed' && this.#state !== 'finished') this.#state = 'aborted'
-    })
-    this.#abortPromise = operation
+    this.#completePromise = operation
     return operation
   }
 
-  suspendJob(reason: unknown): Promise<void> {
-    if (this.#state === 'suspending' || this.#state === 'suspended') {
-      return this.#suspendPromise ?? Promise.resolve()
+  pauseJob(reason: unknown): Promise<JobSettlement> {
+    if (this.#state === 'completed') return Promise.resolve(COMPLETED_JOB_SETTLEMENT)
+    if (this.#pausePromise !== undefined) return this.#pausePromise
+    if (this.#state !== 'open') {
+      return Promise.resolve(needsAttentionJobSettlement(outputFault(
+        FaultScope.OutputPause,
+        OutputFaultCode.MutationAmbiguous,
+      )))
     }
-    if (this.#state !== 'open') return Promise.resolve()
-    this.#state = 'suspending'
-    const operation = this.#suspend(reason).then(
-      () => { this.#state = 'suspended' },
-      (error: unknown) => {
-        this.#state = 'suspended'
-        throw error
-      },
-    )
-    this.#suspendPromise = operation
+    this.#state = 'pausing'
+    const operation = this.#pause(reason)
+    this.#pausePromise = operation
     return operation
   }
 
-  async #finish(outcome: JobOutcome, signal: AbortSignal): Promise<void> {
-    await this.#inner.finishJob(outcome, signal)
-    // Inner completion is the publication boundary. Cleanup can fail afterward,
-    // but cancellation can no longer truthfully delete or relabel committed files.
-    this.#state = 'committed'
+  async #complete(outcome: JobOutcome, signal: AbortSignal): Promise<JobSettlement> {
+    const inner = await this.#inner.completeJob(outcome, signal)
+    if (inner.kind !== JobSettlementKind.Completed) {
+      const releaseFailure = await this.#releaseResources()
+      this.#state = 'needs-attention'
+      return inner.kind === JobSettlementKind.NeedsAttention && releaseFailure === undefined
+        ? inner
+        : needsAttentionJobSettlement(outputFault(
+            FaultScope.OutputPause,
+            OutputFaultCode.MutationAmbiguous,
+          ))
+    }
     let failure: unknown
     try {
-      // Once every output is committed, recovery metadata is no longer useful and
-      // retaining FSA handles would create an unbounded permission/object leak.
       await this.#repository.deleteSessionData()
     } catch (error) {
       failure = error
     }
-    await this.#releaseResources(failure)
-    this.#state = 'finished'
+    const releaseFailure = await this.#releaseResources()
+    if (releaseFailure !== undefined) {
+      failure = combinedFailure(failure, releaseFailure, 'Output completion and resource release failed')
+    }
+    this.#state = failure === undefined ? 'completed' : 'needs-attention'
+    return failure === undefined
+      ? COMPLETED_JOB_SETTLEMENT
+      : needsAttentionJobSettlement(outputFault(
+          FaultScope.OutputPause,
+          OutputFaultCode.MutationAmbiguous,
+        ))
   }
 
-  async #abort(reason: unknown): Promise<void> {
-    let finishFailure: unknown
-    if (this.#finishPromise !== undefined) {
-      try {
-        await this.#finishPromise
-      } catch (error) {
-        finishFailure = error
-      }
-      if (this.#state === 'committed' || this.#state === 'finished') {
-        if (finishFailure !== undefined) throw finishFailure
-        return
-      }
-    }
-    const failures: unknown[] = []
+  async #pause(reason: unknown): Promise<JobSettlement> {
+    let settlement: JobSettlement
     try {
-      await this.#inner.abortJob(reason)
-    } catch (error) {
-      failures.push(error)
+      settlement = await this.#inner.pauseJob(reason)
+    } catch {
+      settlement = needsAttentionJobSettlement(outputFault(
+        FaultScope.OutputPause,
+        OutputFaultCode.MutationAmbiguous,
+      ))
     }
-    if (failures.length === 0) {
-      try {
-        await this.#repository.deleteSessionData()
-      } catch (error) {
-        failures.push(error)
-      }
-    }
-    await this.#releaseResources(
-      failures.length === 0
-        ? undefined
-        : new AggregateError(failures, 'File System Access output cleanup failed'),
-    )
+    const releaseFailure = await this.#releaseResources()
+    const stable = settlement.kind === JobSettlementKind.Paused && releaseFailure === undefined
+    this.#state = stable ? 'paused' : 'needs-attention'
+    return stable
+      ? pausedJobSettlement(this.capabilities.durability)
+      : needsAttentionJobSettlement(outputFault(
+          FaultScope.OutputPause,
+          OutputFaultCode.MutationAmbiguous,
+        ))
   }
 
-  async #suspend(reason: unknown): Promise<void> {
-    let failure: unknown
-    try {
-      await this.#inner.suspendJob(reason)
-    } catch (error) {
-      failure = error
-    }
-    await this.#releaseResources(failure)
-  }
-
-  async #releaseResources(failure: unknown): Promise<void> {
+  async #releaseResources(): Promise<unknown> {
     if (this.#resourcePromise !== undefined) return this.#resourcePromise
-    const operation = this.#performResourceRelease(failure)
+    const operation = this.#performResourceRelease()
     this.#resourcePromise = operation
     return operation
   }
 
-  async #performResourceRelease(failure: unknown): Promise<void> {
+  async #performResourceRelease(): Promise<unknown> {
+    let failure: unknown
     try {
       this.#repository.close()
     } catch (closeError) {
@@ -244,24 +205,12 @@ export class FileSystemAccessOutputSession implements OutputSession {
     } catch (releaseError) {
       failure = combinedFailure(failure, releaseError, 'Output cleanup and lease release failed')
     }
-    if (failure !== undefined) throw failure
+    return failure
   }
 
   #requireOpen(): void {
     if (this.#state !== 'open') throw new Error('File System Access output session is not open')
   }
-}
-
-function forwardAbort(source: AbortSignal, target: AbortController): () => void {
-  const abort = () => target.abort(
-    source.reason ?? new DOMException('File System Access output aborted', 'AbortError'),
-  )
-  if (source.aborted) {
-    abort()
-    return () => {}
-  }
-  source.addEventListener('abort', abort, { once: true })
-  return () => source.removeEventListener('abort', abort)
 }
 
 function combinedFailure(current: unknown, next: unknown, message: string): unknown {
@@ -273,9 +222,9 @@ export async function acquireFileSystemAccessOutputSession(
   options: FileSystemAccessOutputOptions,
 ): Promise<FileSystemAccessOutputSession> {
   const repository = await repositoryFor(options)
-  let lease: BrowserOutputSessionLease | undefined
+  let lease: BrowserFileSystemAccessSessionLease | undefined
   try {
-    lease = await acquireBrowserOutputSessionLease(repository.binding)
+    lease = await acquireBrowserFileSystemAccessSessionLease(repository.binding)
     await bindRootHandle(repository, root)
     return await openWithRoot(root, repository, lease, options)
   } catch (error) {
@@ -285,79 +234,21 @@ export async function acquireFileSystemAccessOutputSession(
   }
 }
 
-export async function prepareFileSystemAccessReauthorization(
-  options: FileSystemAccessOutputOptions,
-): Promise<PreparedFileSystemAccessReauthorization> {
-  const repository = await repositoryFor(options)
-  let lease: BrowserOutputSessionLease | undefined
-  try {
-    const root = await repository.getHandle(ROOT_HANDLE_ID)
-    if (root?.kind !== 'directory') {
-      throw new DOMException('The persisted output directory handle is unavailable', 'NotFoundError')
-    }
-    const directory = root as FileSystemDirectoryHandle
-    lease = await acquireBrowserOutputSessionLease(repository.binding)
-    const heldLease = lease
-    let consumed = false
-    return Object.freeze({
-      authorize: () => {
-        if (consumed) return Promise.reject(new Error('Output reauthorization was already consumed'))
-        consumed = true
-        // Permission is requested before the first await to preserve transient activation.
-        const permission = requestWritePermission(directory)
-        return permission
-          .then(() => openWithRoot(directory, repository, heldLease, options))
-          .catch(async (error: unknown) => {
-            repository.close()
-            await heldLease.release().catch(() => undefined)
-            throw error
-          })
-      },
-      discard: async () => {
-        if (consumed) return
-        consumed = true
-        repository.close()
-        await heldLease.release()
-      },
-    })
-  } catch (error) {
-    repository.close()
-    await lease?.release().catch(() => undefined)
-    throw error
-  }
-}
-
-export async function discardFileSystemAccessOutputSession(
-  options: FileSystemAccessOutputOptions,
-): Promise<void> {
-  const repository = await repositoryFor(options)
-  let lease: BrowserOutputSessionLease | undefined
-  try {
-    lease = await acquireBrowserOutputSessionLease(repository.binding)
-    await repository.deleteSessionData()
-  } finally {
-    repository.close()
-    await lease?.release()
-  }
-}
-
 async function openWithRoot(
   root: FileSystemDirectoryHandle,
   repository: IndexedDbOutputRepository,
-  lease: BrowserOutputSessionLease,
+  lease: BrowserFileSystemAccessSessionLease,
   options: FileSystemAccessOutputOptions,
 ): Promise<FileSystemAccessOutputSession> {
   const identity = sessionIdentity(options.outputSessionId)
-  const tree = new BrowserFileSystemTree({
+  const tree = BrowserFileSystemTree.forSharedRoot({
     root,
     handles: repository,
+    mutations: lease.mutations,
   })
   const inner = await PersistentTreeOutputSession.open({
     identity,
-    checkpointBinding: {
-      transferIntentDigest: repository.binding.transferIntentDigest,
-      rootIdentity: repository.binding.rootIdentity,
-    },
+    directoryAdmissionScope: options.directoryAdmissionScope,
     tree,
     journal: repository,
     durability: 'ProcessRestart',
@@ -392,23 +283,10 @@ async function repositoryFor(
 ): Promise<IndexedDbOutputRepository> {
   const databaseName = options.databaseName ?? DEFAULT_DATABASE_NAME
   await ensureOneShotIndexedDbLegacyCleanup(databaseName)
-  if (options.transferIntentDigest === undefined || options.rootIdentity === undefined) {
-    if (options.allowTestFallback === true) {
-      return IndexedDbOutputRepository.openForTest(
-        databaseName,
-        FILE_SYSTEM_ACCESS_BACKEND,
-        options.outputSessionId,
-      )
-    }
-    return Promise.reject(new TypeError(
-      'File System Access output requires a frozen transfer-intent digest and root identity',
-    ))
-  }
   return IndexedDbOutputRepository.open(
     databaseName,
-    FILE_SYSTEM_ACCESS_BACKEND,
-    options.outputSessionId,
     {
+      backend: FILE_SYSTEM_ACCESS_BACKEND,
       transferIntentDigest: options.transferIntentDigest,
       rootIdentity: options.rootIdentity,
     },
@@ -419,20 +297,5 @@ function sessionIdentity(outputSessionId: string): OutputSessionIdentity {
   return outputSessionIdentity({
     backend: FILE_SYSTEM_ACCESS_BACKEND,
     outputSessionId,
-  })
-}
-
-function requestWritePermission(root: FileSystemDirectoryHandle): Promise<void> {
-  const permissionRoot = root as FileSystemDirectoryHandle & {
-    requestPermission?: (
-      descriptor?: { readonly mode?: 'read' | 'readwrite' },
-    ) => Promise<PermissionState>
-  }
-  if (permissionRoot.requestPermission === undefined) return Promise.resolve()
-  const requested = permissionRoot.requestPermission({ mode: 'readwrite' })
-  return requested.then((permission) => {
-    if (permission !== 'granted') {
-      throw new DOMException('Output permission was not granted', 'NotAllowedError')
-    }
   })
 }

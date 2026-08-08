@@ -4,6 +4,65 @@ import {
   requireOriginPrivateStorage,
 } from './browser-storage-support'
 
+interface PausedTaskBrowserFixture {
+  readonly databaseName: string
+  readonly backend: 'file-system-access' | 'origin-private-staging'
+  readonly rootName?: string
+  readonly initialTransferJobId: string
+  readonly initialOutputSessionId: string
+}
+
+interface PausedTaskDiscardHarnessResult {
+  readonly kind: string
+  readonly preservedCompletedFiles: number
+  readonly exportedPartialZip: boolean
+  readonly descriptorCount: number
+  readonly completedBytes: readonly number[]
+  readonly incompleteRemoved: boolean
+  readonly zipEntries: readonly string[]
+  readonly zipMagic: readonly number[]
+  readonly stagingRemoved: boolean
+  readonly permissionStartedSynchronously: boolean
+  readonly partialOutputStartedSynchronously: boolean
+}
+
+interface PausedTaskResumeHarness {
+  createPausedTaskBrowserFixture(
+    backend: PausedTaskBrowserFixture['backend'],
+  ): Promise<PausedTaskBrowserFixture>
+  createDiscardTaskBrowserFixture(
+    backend: PausedTaskBrowserFixture['backend'],
+  ): Promise<PausedTaskBrowserFixture>
+  resumePausedTaskBrowserFixture(fixture: PausedTaskBrowserFixture): Promise<{
+    readonly descriptorCount: number
+    readonly ranges: readonly string[]
+    readonly freshTransferJobId: boolean
+    readonly freshOutputSessionId: boolean
+    readonly permissionStartedSynchronously: boolean
+    readonly finalOutputStartedSynchronously: boolean
+  }>
+  discardPausedTaskBrowserFixture(
+    fixture: PausedTaskBrowserFixture,
+  ): Promise<PausedTaskDiscardHarnessResult>
+  interruptFsaDiscardAfterOwnedFileRemoval(fixture: PausedTaskBrowserFixture): Promise<void>
+  probeOriginPrivateDiscardExportFailure(): Promise<{
+    readonly firstKind: string
+    readonly firstReason: string
+    readonly retryKind: string
+    readonly retryReason: string
+    readonly outputCalls: number
+    readonly descriptorCount: number
+    readonly stagingRetained: boolean
+  }>
+  probePausedTaskPermissionAndShareAuthority(): Promise<{
+    readonly deniedFailure: string
+    readonly deniedRunCreations: number
+    readonly mismatchName: string
+    readonly mismatchPermissionCalls: number
+  }>
+  probePausedTaskStaleCapability(): Promise<string>
+}
+
 interface DurableRecoveryHarness {
   createCheckpoint(outputSessionId: string): Promise<readonly string[]>
   reopenCheckpoint(outputSessionId: string): Promise<{
@@ -27,6 +86,7 @@ interface DurableRecoveryHarness {
 }
 
 const HARNESS_PATH = '/test/browser/durable-recovery-harness.ts'
+const PAUSED_TASK_HARNESS_PATH = '/test/browser/paused-task-resume-harness.ts'
 const TEST_TRANSFER_INTENT_DIGEST = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 const TEST_ROOT_IDENTITY = 'DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 
@@ -67,6 +127,125 @@ test('a persisted FSA-like handle is reopened and identity-checked after reload'
   expect(reopened).toEqual(['0:3'])
 })
 
+test('FSA paused-task reconstruction survives reload with renewed permission and fresh run IDs', async ({ page }) => {
+  const fixture = await createPausedTaskFixture(page, 'file-system-access')
+  await page.reload()
+  expect(await resumePausedTaskFixture(page, fixture)).toEqual({
+    descriptorCount: 1,
+    ranges: ['0:3'],
+    freshTransferJobId: true,
+    freshOutputSessionId: true,
+    permissionStartedSynchronously: true,
+    finalOutputStartedSynchronously: true,
+  })
+})
+
+test('OPFS paused-task reconstruction reacquires the root and a fresh final output after reload', async ({ page }) => {
+  const fixture = await createPausedTaskFixture(page, 'origin-private-staging')
+  await page.reload()
+  expect(await resumePausedTaskFixture(page, fixture)).toEqual({
+    descriptorCount: 1,
+    ranges: ['0:3'],
+    freshTransferJobId: true,
+    freshOutputSessionId: true,
+    permissionStartedSynchronously: true,
+    finalOutputStartedSynchronously: true,
+  })
+})
+
+test('FSA cancel preserves completed files and discards only incomplete resume state after reload', async ({ page }) => {
+  const fixture = await createDiscardTaskFixture(page, 'file-system-access')
+  await page.reload()
+
+  expect(await discardPausedTaskFixture(page, fixture)).toEqual({
+    kind: 'Discarded',
+    preservedCompletedFiles: 1,
+    exportedPartialZip: false,
+    descriptorCount: 0,
+    completedBytes: [9, 8, 7, 6, 5],
+    incompleteRemoved: true,
+    zipEntries: [],
+    zipMagic: [],
+    stagingRemoved: false,
+    permissionStartedSynchronously: true,
+    partialOutputStartedSynchronously: true,
+  })
+})
+
+test('FSA cancel replays a certified physical retirement after reload', async ({ page }) => {
+  const fixture = await createDiscardTaskFixture(page, 'file-system-access')
+  await page.reload()
+  await page.evaluate(async ({ path, paused }) => {
+    const harness = (await import(path)) as PausedTaskResumeHarness
+    await harness.interruptFsaDiscardAfterOwnedFileRemoval(paused)
+  }, { path: PAUSED_TASK_HARNESS_PATH, paused: fixture })
+  await page.reload()
+
+  expect(await discardPausedTaskFixture(page, fixture)).toMatchObject({
+    kind: 'Discarded',
+    preservedCompletedFiles: 1,
+    descriptorCount: 0,
+    completedBytes: [9, 8, 7, 6, 5],
+    incompleteRemoved: true,
+  })
+})
+
+test('OPFS cancel exports committed members as a partial ZIP before discarding staging', async ({ page }) => {
+  const fixture = await createDiscardTaskFixture(page, 'origin-private-staging')
+  await page.reload()
+
+  expect(await discardPausedTaskFixture(page, fixture)).toEqual({
+    kind: 'Discarded',
+    preservedCompletedFiles: 1,
+    exportedPartialZip: true,
+    descriptorCount: 0,
+    completedBytes: [9, 8, 7, 6, 5],
+    incompleteRemoved: true,
+    zipEntries: ['completed-browser-file.bin'],
+    zipMagic: [0x50, 0x4b],
+    stagingRemoved: true,
+    permissionStartedSynchronously: true,
+    partialOutputStartedSynchronously: true,
+  })
+})
+
+test('OPFS cancel retains staging when partial ZIP publication is ambiguous', async ({ page }) => {
+  const result = await page.evaluate(async (path) => {
+    const harness = (await import(path)) as PausedTaskResumeHarness
+    return harness.probeOriginPrivateDiscardExportFailure()
+  }, PAUSED_TASK_HARNESS_PATH)
+  expect(result).toEqual({
+    firstKind: 'NeedsAttention',
+    firstReason: 'export-failed',
+    retryKind: 'NeedsAttention',
+    retryReason: 'export-failed',
+    outputCalls: 1,
+    descriptorCount: 1,
+    stagingRetained: true,
+  })
+})
+
+test('paused-task resume gates permission and run creation on exact current share authority', async ({ page }) => {
+  const result = await page.evaluate(async (path) => {
+    const harness = (await import(path)) as PausedTaskResumeHarness
+    return harness.probePausedTaskPermissionAndShareAuthority()
+  }, PAUSED_TASK_HARNESS_PATH)
+  expect(result).toEqual({
+    deniedFailure: 'permission-denied',
+    deniedRunCreations: 0,
+    mismatchName: 'PausedTaskShareAuthorityError',
+    mismatchPermissionCalls: 0,
+  })
+})
+
+test('paused-task resume rejects a capability replaced after preparation', async ({ page }) => {
+  const result = await page.evaluate(async (path) => {
+    const harness = (await import(path)) as PausedTaskResumeHarness
+    return harness.probePausedTaskStaleCapability()
+  }, PAUSED_TASK_HARNESS_PATH)
+  expect(result).toBe('stale')
+})
+
 test('one durable checkpoint namespace cannot publish competing heads from two pages or runs', async ({
   context,
   page,
@@ -85,82 +264,6 @@ test('one durable checkpoint namespace cannot publish competing heads from two p
   )).toBe('InvalidStateError')
   await callHarness<void>(page, firstOutputSessionId, 'releaseOutputSession')
   await competitor.close()
-})
-
-test('legacy IndexedDB checkpoint stores are removed once without touching published output', async ({ page }) => {
-  const result = await page.evaluate(async () => {
-    const cleanerPath = '/src/output/browser/indexeddb-legacy-cleaner.ts'
-    const cleaner = await import(cleanerPath) as typeof import(
-      '../../src/output/browser/indexeddb-legacy-cleaner'
-    )
-    const databaseName = `legacy-cleanup-${crypto.randomUUID()}`
-    const legacyStores = [
-      'checkpoint-candidates',
-      'checkpoint-committed',
-      'persistent-handles',
-      'cleanup-markers',
-    ] as const
-    const legacy = await openDatabase(databaseName, 2, (database) => {
-      for (const store of legacyStores) database.createObjectStore(store, { keyPath: 'id' })
-    })
-    const seed = legacy.transaction(legacyStores, 'readwrite')
-    for (const store of legacyStores) seed.objectStore(store).put({ id: `${store}-owned-record` })
-    await transactionDone(seed)
-    legacy.close()
-
-    const first = await cleaner.ensureOneShotIndexedDbLegacyCleanup(databaseName)
-    const inspected = await openDatabase(databaseName)
-    const scan = inspected.transaction(legacyStores, 'readonly')
-    const counts = await Promise.all(legacyStores.map((store) => count(scan.objectStore(store))))
-    await transactionDone(scan)
-    inspected.close()
-    const second = await cleaner.ensureOneShotIndexedDbLegacyCleanup(databaseName)
-    await deleteDatabase(databaseName)
-    return { first, counts, second }
-
-    function openDatabase(
-      name: string,
-      version?: number,
-      upgrade?: (database: IDBDatabase) => void,
-    ): Promise<IDBDatabase> {
-      return new Promise((resolve, reject) => {
-        const request = version === undefined ? indexedDB.open(name) : indexedDB.open(name, version)
-        request.addEventListener('upgradeneeded', () => upgrade?.(request.result), { once: true })
-        request.addEventListener('success', () => resolve(request.result), { once: true })
-        request.addEventListener('error', () => reject(request.error), { once: true })
-      })
-    }
-
-    function count(store: IDBObjectStore): Promise<number> {
-      return new Promise((resolve, reject) => {
-        const request = store.count()
-        request.addEventListener('success', () => resolve(request.result), { once: true })
-        request.addEventListener('error', () => reject(request.error), { once: true })
-      })
-    }
-
-    function transactionDone(transaction: IDBTransaction): Promise<void> {
-      return new Promise((resolve, reject) => {
-        transaction.addEventListener('complete', () => resolve(), { once: true })
-        transaction.addEventListener('abort', () => reject(transaction.error), { once: true })
-        transaction.addEventListener('error', () => reject(transaction.error), { once: true })
-      })
-    }
-
-    function deleteDatabase(name: string): Promise<void> {
-      return new Promise((resolve, reject) => {
-        const request = indexedDB.deleteDatabase(name)
-        request.addEventListener('success', () => resolve(), { once: true })
-        request.addEventListener('error', () => reject(request.error), { once: true })
-      })
-    }
-  })
-
-  expect(result).toEqual({
-    first: { status: 'completed', removed: 4 },
-    counts: [0, 0, 0, 0],
-    second: { status: 'nothing-to-clean', removed: 0 },
-  })
 })
 
 test('completed persistent output keeps bytes but retires journal and handle metadata', async ({ page }) => {
@@ -475,6 +578,7 @@ test('reopens real IndexedDB journal pages lazily and removes a crash candidate'
     const journalPath = '/src/output/persistence/journal.ts'
     const persistentPath = '/src/output/persistent-tree/session.ts'
     const fakesPath = '/test/output/fakes.ts'
+    const admissionPath = '/test/output/admission-fixture.ts'
     const repositoryModule = await import(repositoryPath) as typeof import(
       '../../src/output/browser/indexeddb-repository'
     )
@@ -485,6 +589,7 @@ test('reopens real IndexedDB journal pages lazily and removes a crash candidate'
       '../../src/output/persistent-tree/session'
     )
     const fakes = await import(fakesPath) as typeof import('../output/fakes')
+    const admission = await import(admissionPath) as typeof import('../output/admission-fixture')
     const databaseName = `journal-pages-${crypto.randomUUID()}`
     const backend = 'real-indexeddb-test'
     const outputSessionId = 'paged-session'
@@ -492,9 +597,7 @@ test('reopens real IndexedDB journal pages lazily and removes a crash candidate'
     const tree = new fakes.MemoryOutputTree()
     let repository = await repositoryModule.IndexedDbOutputRepository.open(
       databaseName,
-      backend,
-      outputSessionId,
-      binding,
+      { backend, ...binding },
     )
     const recordCount = journal.OUTPUT_JOURNAL_PAGE_RECORD_LIMIT + 1
     for (let index = 0; index < recordCount; index += 1) {
@@ -506,8 +609,8 @@ test('reopens real IndexedDB journal pages lazily and removes a crash candidate'
         {
           source: {
             shareInstance: 'paged-share',
-            fileId: `file-${index}`,
-            fileRevision: 'revision',
+            fileId: indexedIdentity(0x20, 16, index),
+            fileRevision: indexedIdentity(0x30, 16, index),
           },
           path,
           exactSize: 0n,
@@ -530,8 +633,8 @@ test('reopens real IndexedDB journal pages lazily and removes a crash candidate'
       {
         source: {
           shareInstance: 'paged-share',
-          fileId: 'crash-file',
-          fileRevision: 'revision',
+          fileId: indexedIdentity(0x40, 16, 1),
+          fileRevision: indexedIdentity(0x50, 16, 1),
         },
         path: crashPath,
         exactSize: 0n,
@@ -545,18 +648,33 @@ test('reopens real IndexedDB journal pages lazily and removes a crash candidate'
     await crashHandle.close()
     repository.close()
 
+    const alternateRootIdentity = indexedIdentity(0x60, 32, 1)
+    const alternateRepository = await repositoryModule.IndexedDbOutputRepository.open(
+      databaseName,
+      { backend, transferIntentDigest: binding.transferIntentDigest, rootIdentity: alternateRootIdentity },
+    )
+    const alternateNamespaceRecords = (await alternateRepository.scanCommitted({
+      direction: 'ascending',
+    })).records.length
+    alternateRepository.close()
+
     repository = await repositoryModule.IndexedDbOutputRepository.open(
       databaseName,
-      backend,
-      outputSessionId,
-      binding,
+      { backend, ...binding },
     )
+    const reopenedIdentity = { ...identity, outputSessionId: 'paged-session-reopened' }
     const session = await persistent.PersistentTreeOutputSession.open({
-      identity,
-      checkpointBinding: binding,
+      identity: reopenedIdentity,
+      directoryAdmissionScope: {
+        ...admission.TEST_DIRECTORY_ADMISSION_SCOPE,
+        transferIntentDigest: binding.transferIntentDigest,
+      },
       tree,
       journal: repository,
     })
+    const firstReopened = await repository.scanCommitted({ direction: 'ascending' })
+    const persistedRuntimeNeutral = firstReopened.records[0] !== undefined &&
+      !Object.hasOwn(firstReopened.records[0], 'outputSessionId')
     const ascending = await scanJournal('ascending')
     const descending = await scanJournal('descending')
     let lazilyEnumerated = 0
@@ -587,6 +705,8 @@ test('reopens real IndexedDB journal pages lazily and removes a crash candidate'
         (key, index, keys) => index === 0 || keys[index - 1]! > key,
       ),
       crashCandidateRemoved,
+      alternateNamespaceRecords,
+      persistedRuntimeNeutral,
     }
 
     async function scanJournal(direction: 'ascending' | 'descending'): Promise<{
@@ -613,6 +733,17 @@ test('reopens real IndexedDB journal pages lazily and removes a crash candidate'
       } while (cursor !== undefined)
       return { keys, pageSizes }
     }
+
+    function indexedIdentity(first: number, length: number, value: number): string {
+      const bytes = Uint8Array.from(
+        { length },
+        (_, index) => (first + index) & 0xff,
+      )
+      new DataView(bytes.buffer).setUint32(length - 4, value, false)
+      let binary = ''
+      for (const byte of bytes) binary += String.fromCharCode(byte)
+      return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+    }
   }, {
     transferIntentDigest: TEST_TRANSFER_INTENT_DIGEST,
     rootIdentity: TEST_ROOT_IDENTITY,
@@ -626,6 +757,8 @@ test('reopens real IndexedDB journal pages lazily and removes a crash candidate'
     ascendingMonotonic: true,
     descendingMonotonic: true,
     crashCandidateRemoved: true,
+    alternateNamespaceRecords: 0,
+    persistedRuntimeNeutral: true,
   })
   expect(result.pageSizes.length).toBeGreaterThan(1)
   expect(result.descendingPageSizes.length).toBeGreaterThan(1)
@@ -684,6 +817,10 @@ test('converges marker-owned published OPFS staging after cleanup failure and re
     })
     const session = await output.openOriginPrivateOutputSession({
       outputSessionId: options.outputSessionId,
+      directoryAdmissionScope: {
+        ...admission.TEST_DIRECTORY_ADMISSION_SCOPE,
+        transferIntentDigest: options.transferIntentDigest,
+      },
       transferIntentDigest: options.transferIntentDigest,
       rootIdentity: options.rootIdentity,
       databaseName: options.checkpointDatabase,
@@ -714,7 +851,7 @@ test('converges marker-owned published OPFS staging after cleanup failure and re
     const begun = await session.beginFile(await admission.admittedOutputFile(session, file), signal)
     await begun.transaction.writeRange(0n, Uint8Array.of(1), signal)
     await begun.transaction.commit(signal)
-    await session.finishJob(
+    await session.completeJob(
       outcome.jobOutcome('Succeeded', outcome.EMPTY_TRANSFER_FAILURE_SUMMARY),
       signal,
     )
@@ -728,13 +865,19 @@ test('converges marker-owned published OPFS staging after cleanup failure and re
   await page.reload()
   const recovered = await page.evaluate(async (options) => {
     const outputPath = '/src/output/origin-private/session.ts'
+    const faultPath = '/src/transfer/fault.ts'
     const admissionPath = '/test/output/admission-fixture.ts'
     const output = await import(outputPath) as typeof import(
       '../../src/output/origin-private/session'
     )
+    const fault = await import(faultPath) as typeof import('../../src/transfer/fault')
     const admission = await import(admissionPath) as typeof import('../output/admission-fixture')
     const session = await output.openOriginPrivateOutputSession({
       outputSessionId: options.outputSessionId,
+      directoryAdmissionScope: {
+        ...admission.TEST_DIRECTORY_ADMISSION_SCOPE,
+        transferIntentDigest: options.transferIntentDigest,
+      },
       transferIntentDigest: options.transferIntentDigest,
       rootIdentity: options.rootIdentity,
       databaseName: options.checkpointDatabase,
@@ -757,12 +900,57 @@ test('converges marker-owned published OPFS staging after cleanup failure and re
       exactSize: 1n,
     }), new AbortController().signal)
     const recoveredRangeCount = begun.durableRanges.ranges.length
-    await begun.transaction.abort(new DOMException('cleanup probe complete', 'AbortError'))
-    await session.abortJob(new DOMException('cleanup retry', 'AbortError'))
+    const retirement = fault.authorizeFileRetirement(fault.sourceFault(
+      fault.FaultScope.FileLocal,
+      fault.SourceFaultCode.Permanent,
+    ))
+    if (retirement === undefined) throw new Error('cleanup probe retirement was not authorized')
+    await begun.transaction.retire(retirement)
+    await session.pauseJob(new DOMException('cleanup retry', 'AbortError'))
     return { recoveredRangeCount }
   }, ids)
   expect(recovered).toEqual({ recoveredRangeCount: 0 })
 })
+
+async function createPausedTaskFixture(
+  page: Page,
+  backend: PausedTaskBrowserFixture['backend'],
+): Promise<PausedTaskBrowserFixture> {
+  return page.evaluate(async ({ path, selectedBackend }) => {
+    const harness = (await import(path)) as PausedTaskResumeHarness
+    return harness.createPausedTaskBrowserFixture(selectedBackend)
+  }, { path: PAUSED_TASK_HARNESS_PATH, selectedBackend: backend })
+}
+
+async function createDiscardTaskFixture(
+  page: Page,
+  backend: PausedTaskBrowserFixture['backend'],
+): Promise<PausedTaskBrowserFixture> {
+  return page.evaluate(async ({ path, selectedBackend }) => {
+    const harness = (await import(path)) as PausedTaskResumeHarness
+    return harness.createDiscardTaskBrowserFixture(selectedBackend)
+  }, { path: PAUSED_TASK_HARNESS_PATH, selectedBackend: backend })
+}
+
+async function discardPausedTaskFixture(
+  page: Page,
+  fixture: PausedTaskBrowserFixture,
+): Promise<PausedTaskDiscardHarnessResult> {
+  return page.evaluate(async ({ path, paused }) => {
+    const harness = (await import(path)) as PausedTaskResumeHarness
+    return harness.discardPausedTaskBrowserFixture(paused)
+  }, { path: PAUSED_TASK_HARNESS_PATH, paused: fixture })
+}
+
+async function resumePausedTaskFixture(
+  page: Page,
+  fixture: PausedTaskBrowserFixture,
+): Promise<Awaited<ReturnType<PausedTaskResumeHarness['resumePausedTaskBrowserFixture']>>> {
+  return page.evaluate(async ({ path, paused }) => {
+    const harness = (await import(path)) as PausedTaskResumeHarness
+    return harness.resumePausedTaskBrowserFixture(paused)
+  }, { path: PAUSED_TASK_HARNESS_PATH, paused: fixture })
+}
 
 async function createCheckpoint(page: Page, outputSessionId: string): Promise<readonly string[]> {
   return page.evaluate(async ({ path, sessionId }) => {

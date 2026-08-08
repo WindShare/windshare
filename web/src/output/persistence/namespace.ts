@@ -2,6 +2,7 @@ import { decodeBase64Url } from '../../crypto/bytes'
 import {
   FILE_CHECKPOINT_NAMESPACE,
   FILE_CHECKPOINT_OWNERSHIP_MARKER,
+  canonicalFileCheckpointBackend,
 } from './checkpoint'
 
 export interface DurableCheckpointNamespaceIdentity {
@@ -13,7 +14,7 @@ export interface DurableCheckpointNamespaceIdentity {
 export function durableCheckpointNamespaceIdentity(
   input: DurableCheckpointNamespaceIdentity,
 ): DurableCheckpointNamespaceIdentity {
-  const backend = requireNamespacePart(input.backend, 'backend')
+  const backend = canonicalFileCheckpointBackend(input.backend)
   return Object.freeze({
     backend,
     transferIntentDigest: requireDigest(input.transferIntentDigest, 'transfer intent digest'),
@@ -25,13 +26,6 @@ export function durableCheckpointNamespaceIdentity(
 export function durableCheckpointNamespaceKey(input: DurableCheckpointNamespaceIdentity): string {
   const identity = durableCheckpointNamespaceIdentity(input)
   return `${FILE_CHECKPOINT_OWNERSHIP_MARKER}\0${FILE_CHECKPOINT_NAMESPACE}\0${identity.backend}\0${identity.transferIntentDigest}\0${identity.rootIdentity}`
-}
-
-function requireNamespacePart(value: string, label: string): string {
-  if (typeof value !== 'string' || value.length === 0 || value.includes('\0')) {
-    throw new TypeError(`checkpoint namespace ${label} is invalid`)
-  }
-  return value
 }
 
 function requireDigest(value: string, label: string): string {

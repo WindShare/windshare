@@ -211,24 +211,6 @@ func (entry *windowsV3PinnedEntry) validate() error {
 	return nil
 }
 
-func (entry *windowsV3PinnedEntry) allocatedSize() (uint64, error) {
-	const operation = "inspect pinned output entry allocation"
-	if err := entry.validate(); err != nil {
-		return 0, err
-	}
-	var information windowsV3FileStandardInformation
-	if err := windows.GetFileInformationByHandleEx(
-		entry.handle, windows.FileStandardInfo, (*byte)(unsafe.Pointer(&information)), uint32(unsafe.Sizeof(information)),
-	); err != nil {
-		return 0, windowsV3Failure(operation, entry.name, errWindowsV3OutputUnsafe, err)
-	}
-	if information.AllocationSize < 0 {
-		return 0, windowsV3Failure(operation, entry.name, errWindowsV3OutputUnsafe,
-			errors.New("entry allocation metadata is invalid"))
-	}
-	return uint64(information.AllocationSize), nil
-}
-
 func (directory *windowsV3Directory) pinnedEntryMatches(
 	name string,
 	expected *windowsV3PinnedEntry,
@@ -334,33 +316,6 @@ func (file *windowsV3File) Size() (uint64, error) {
 		return 0, windowsV3Failure("inspect output file size", file.path, errWindowsV3OutputUnsafe, err)
 	}
 	return metadata.size, nil
-}
-
-type windowsV3FileStandardInformation struct {
-	AllocationSize int64
-	EndOfFile      int64
-	NumberOfLinks  uint32
-	DeletePending  uint8
-	Directory      uint8
-	_              [2]byte
-}
-
-func (file *windowsV3File) allocatedSize() (uint64, error) {
-	const operation = "inspect output file allocation"
-	if err := file.verify(false); err != nil {
-		return 0, err
-	}
-	var information windowsV3FileStandardInformation
-	if err := windows.GetFileInformationByHandleEx(
-		file.handle(), windows.FileStandardInfo, (*byte)(unsafe.Pointer(&information)), uint32(unsafe.Sizeof(information)),
-	); err != nil {
-		return 0, windowsV3Failure(operation, file.path, errWindowsV3OutputUnsafe, err)
-	}
-	if information.AllocationSize < 0 || information.Directory != 0 {
-		return 0, windowsV3Failure(operation, file.path, errWindowsV3OutputUnsafe,
-			errors.New("file allocation metadata is invalid"))
-	}
-	return uint64(information.AllocationSize), nil
 }
 
 type windowsV3OutputMetadata struct {

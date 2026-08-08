@@ -347,64 +347,6 @@ func TestLinuxRestartIdentityRejectsSameInodeWithDifferentBirthTime(t *testing.T
 	}
 }
 
-func TestLinuxRegularAllocationUsesLiveHandleIdentity(t *testing.T) {
-	t.Parallel()
-	const allocatedBlocks = uint64(7)
-	allocationInode := uint64(linuxTestRootInode)
-	system := linuxOutputSystem{
-		statx: func(_ int, _ string, _ int, mask int, stat *unix.Statx_t) error {
-			inode := uint64(linuxTestRootInode)
-			blocks := uint64(0)
-			if mask&unix.STATX_BLOCKS != 0 {
-				inode = allocationInode
-				blocks = allocatedBlocks
-			}
-			*stat = unix.Statx_t{
-				Mask:      uint32(mask),
-				Ino:       inode,
-				Mode:      unix.S_IFREG | 0o600,
-				Dev_major: linuxTestDeviceMajor,
-				Dev_minor: linuxTestDeviceMinor,
-				Mnt_id:    linuxTestUniqueMountID,
-				Blocks:    blocks,
-			}
-			return nil
-		},
-		fstatfs: func(_ int, stat *unix.Statfs_t) error {
-			reflect.ValueOf(stat).Elem().FieldByName("Type").SetInt(linuxExt4SuperMagic)
-			stat.Fsid.Val = [2]int32{17, 29}
-			return nil
-		},
-		getVersion: func(int) (uint32, error) { return linuxTestGeneration, nil },
-	}
-	certificate := linuxOutputCertificate{
-		mount: linuxMountIdentity{
-			uniqueMountID:       linuxTestUniqueMountID,
-			deviceMajor:         linuxTestDeviceMajor,
-			deviceMinor:         linuxTestDeviceMinor,
-			runtimeFilesystemID: [2]int32{17, 29},
-			filesystemUUID:      linuxTestFilesystemUUID,
-		},
-		durability: linuxOutputProcessRestartDurability,
-	}
-	file := linuxOutputRegularFile{
-		system: &system, fd: 12, certificate: certificate,
-		object: linuxOpenHandleIdentity{
-			mountID: linuxTestUniqueMountID, deviceMajor: linuxTestDeviceMajor,
-			deviceMinor: linuxTestDeviceMinor, inode: linuxTestRootInode,
-			kind: unix.S_IFREG,
-		},
-	}
-	allocated, err := file.allocatedSize()
-	if err != nil || allocated != allocatedBlocks*512 {
-		t.Fatalf("allocated bytes = %d, error = %v", allocated, err)
-	}
-	allocationInode++
-	if _, err := file.allocatedSize(); !errors.Is(err, errLinuxOutputUnsafe) {
-		t.Fatalf("allocation query accepted a different inode: %v", err)
-	}
-}
-
 func TestLinuxRelativeOpenUsesAllResolutionBarriers(t *testing.T) {
 	t.Parallel()
 	var captured unix.OpenHow

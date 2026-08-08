@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -244,7 +245,12 @@ func jobDirectoryEntry(t *testing.T, directory catalog.DirectoryID, name string)
 	return entry
 }
 
-var jobOutputBackend, _ = NewOutputBackendID("test/job-output")
+const jobOutputDirectorySecretDomain = "windshare/test-job-output/directory-secret/v1"
+
+var (
+	jobOutputBackend, _   = NewOutputBackendID("test/job-output")
+	jobOutputSessionNonce atomic.Uint64
+)
 
 func testTransferIntent(
 	t *testing.T,
@@ -298,7 +304,9 @@ type jobOutput struct {
 	transactions         map[string]*jobFileTransaction
 	immediate            map[string]FileSettlement
 	directories          []string
+	directoryAdmissions  []DirectoryAdmission
 	finalized            []string
+	finalizedAdmissions  []DirectoryAdmission
 	finished             JobOutcome
 	aborted              bool
 	ensureErr            error
@@ -313,7 +321,6 @@ type jobOutput struct {
 	transactionScripts   map[string]jobTransactionScript
 	capabilitiesOverride *OutputCapabilities
 	beginHook            func(OutputFile)
-	admitted             []OutputSelection
 	intent               TransferIntent
 	events               []string
 	pauseCalls           int
@@ -321,13 +328,22 @@ type jobOutput struct {
 	completeSettlement   JobSettlementKind
 	pauseSettlement      JobSettlementKind
 	rawStart             *FileStart
+	directoryAdmission   func(OutputDirectory, DirectoryAdmission) (DirectoryAdmission, error)
+	directorySettlement  func(DirectoryAdmission) (DirectorySettlement, error)
+	directorySecret      [directoryAdmissionSecretBytes]byte
 }
 
 func newJobOutput(share catalog.ShareInstance) *jobOutput {
+	// A monotonic nonce prevents independent fake sessions from sharing receipt
+	// authority while keeping the test data deterministic and failure-free.
+	directorySecret := sha256.Sum256(fmt.Appendf(nil,
+		"%s/%x/%d", jobOutputDirectorySecretDomain, share.Bytes(), jobOutputSessionNonce.Add(1),
+	))
 	return &jobOutput{
 		share: share, session: transferID[OutputSessionID](44), durable: make(map[string]content.RangeSet),
 		transactions: make(map[string]*jobFileTransaction), immediate: make(map[string]FileSettlement),
 		transactionScripts: make(map[string]jobTransactionScript),
+		directorySecret:    directorySecret,
 	}
 }
 
@@ -342,28 +358,6 @@ func (o *jobOutput) Capabilities() OutputCapabilities {
 		FileFailureIsolation: true, ModifiedTime: true,
 	})
 	return capabilities
-}
-
-func (o *jobOutput) OpenSelection(_ context.Context, selection OutputSelection) (OutputSession, error) {
-	var preparationErr error
-	for _, directory := range selection.Directories() {
-		o.mu.Lock()
-		o.directories = append(o.directories, directory.Path)
-		o.events = append(o.events, "ensure:"+directory.Path)
-		o.mu.Unlock()
-		preparationErr = errors.Join(preparationErr, o.ensureFailures[directory.Path], o.ensureErr)
-	}
-	if preparationErr != nil {
-		return nil, preparationErr
-	}
-	if o.admitErr != nil {
-		return nil, o.admitErr
-	}
-	o.mu.Lock()
-	o.admitted = append(o.admitted, selection)
-	o.events = append(o.events, "open")
-	o.mu.Unlock()
-	return o, nil
 }
 
 func (o *jobOutput) OpenOutput(_ context.Context, intent TransferIntent) (OutputSession, error) {
@@ -381,27 +375,51 @@ func (o *jobOutput) AdmitDirectory(_ context.Context, directory OutputDirectory)
 	if o.admitErr != nil {
 		return DirectoryAdmission{}, o.admitErr
 	}
-	if failure := o.ensureFailures[directory.Path]; failure != nil || o.ensureErr != nil {
-		return DirectoryAdmission{}, errors.Join(failure, o.ensureErr)
+	if failure := o.ensureFailures[directory.Path]; failure != nil {
+		return DirectoryAdmission{}, failure
+	}
+	if o.ensureErr != nil {
+		return DirectoryAdmission{}, o.ensureErr
+	}
+	o.mu.Lock()
+	intent := o.intent
+	o.mu.Unlock()
+	scope, err := NewDirectoryAdmissionScope(intent)
+	if err != nil {
+		return DirectoryAdmission{}, err
+	}
+	admission, err := NewDirectoryAdmissionWithSecret(o.directorySecret[:], scope, directory)
+	if err != nil {
+		return DirectoryAdmission{}, err
 	}
 	o.mu.Lock()
 	o.directories = append(o.directories, directory.Path)
+	o.directoryAdmissions = append(o.directoryAdmissions, admission)
 	o.events = append(o.events, "ensure:"+directory.Path)
+	result := o.directoryAdmission
 	o.mu.Unlock()
-	// Test output is in-process and can mint the opaque token directly. Real
-	// backends return a token only after validating their root/ancestry handles.
-	token := sha256.Sum256([]byte(directory.Path + string(directory.DirectoryID.Bytes()) + string(directory.Generation.Bytes())))
-	return DirectoryAdmission{
-		token: token, directory: directory.DirectoryID, generation: directory.Generation,
-		parent: directory.ParentAdmission.token, path: directory.Path,
-	}, nil
+	if result != nil {
+		return result(directory, admission)
+	}
+	return admission, nil
 }
 
-func (o *jobOutput) FinalizeDirectory(_ context.Context, directory OutputDirectory) error {
+func (o *jobOutput) FinalizeDirectory(
+	_ context.Context,
+	admission DirectoryAdmission,
+) (DirectorySettlement, error) {
 	o.mu.Lock()
-	o.finalized = append(o.finalized, directory.Path)
+	o.finalized = append(o.finalized, admission.Path())
+	o.finalizedAdmissions = append(o.finalizedAdmissions, admission)
+	settle := o.directorySettlement
 	o.mu.Unlock()
-	return o.finalizeErr
+	if settle != nil {
+		return settle(admission)
+	}
+	if o.finalizeErr != nil {
+		return DirectorySettlement{}, o.finalizeErr
+	}
+	return NewFinalizedDirectorySettlement(admission)
 }
 
 func (o *jobOutput) BeginFile(_ context.Context, file OutputFile) (FileStart, error) {

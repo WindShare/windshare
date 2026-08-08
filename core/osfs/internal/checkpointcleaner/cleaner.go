@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 )
 
@@ -15,7 +14,12 @@ const (
 	FileCheckpointCleanupLock  = "cleanup.lock"
 
 	maxCleanerEntries    = 100_000
-	maxCleanerStateBytes = resumestate.MaxSessionHeaderBytes
+	maxCleanerStateBytes = 64 << 10
+
+	cleanupDetailPublished = "published path retained"
+	cleanupDetailUnknown   = "unknown legacy path retained"
+	cleanupDetailConflict  = "conflicting path retained"
+	cleanupDetailCurrent   = "current checkpoint path retained"
 )
 
 var (
@@ -98,10 +102,6 @@ func NewOneShotCheckpointCleaner(config OneShotCheckpointCleanerConfig) (*OneSho
 	return &OneShotCheckpointCleaner{config: config}, nil
 }
 
-func NewOwnedNamespaceCleaner(config OneShotCheckpointCleanerConfig) (*OneShotCheckpointCleaner, error) {
-	return NewOneShotCheckpointCleaner(config)
-}
-
 func (cleaner *OneShotCheckpointCleaner) Run(ctx context.Context) (
 	report CheckpointCleanupReport,
 	resultErr error,
@@ -115,19 +115,25 @@ func (cleaner *OneShotCheckpointCleaner) Run(ctx context.Context) (
 	if err := ctx.Err(); err != nil {
 		return CheckpointCleanupReport{}, err
 	}
-	run, attention, err := cleaner.prepareRun(ctx)
+	run, err := cleaner.prepareRun(ctx, &report)
 	if run != nil {
 		defer func() { resultErr = errors.Join(resultErr, run.Close()) }()
 	}
 	if err != nil {
-		return CheckpointCleanupReport{}, err
+		return report, err
 	}
-	if len(attention) != 0 {
-		return attentionReport(attention), nil
+	if report.NeedsAttention() {
+		report.Status = CheckpointCleanupStatusNeedsAttention
+		return report, nil
+	}
+	if !run.maintenance {
+		report.Status = CheckpointCleanupStatusComplete
+		report.Complete = true
+		return report, nil
 	}
 	state, previousEncoded, resumed, err := run.beginState()
 	if err != nil {
-		return CheckpointCleanupReport{}, err
+		return report, err
 	}
 	report.Resumed = resumed
 	if err := run.cleanLegacyNamespace(ctx, &state, &previousEncoded, &report); err != nil {
@@ -142,27 +148,17 @@ func (cleaner *OneShotCheckpointCleaner) Run(ctx context.Context) (
 	return report, nil
 }
 
-func attentionReport(attention []string) CheckpointCleanupReport {
-	return CheckpointCleanupReport{
-		Status:    CheckpointCleanupStatusNeedsAttention,
-		Attention: append([]string(nil), attention...),
+func addRetained(report *CheckpointCleanupReport, relative, detail string) {
+	if report == nil {
+		return
 	}
+	report.Skipped++
+	report.Entries = append(report.Entries, CheckpointCleanupEntry{
+		RelativePath: relative, Disposition: CheckpointCleanupSkip, Detail: detail,
+	})
 }
 
-func RunOneShotCheckpointCleanup(
-	ctx context.Context,
-	config OneShotCheckpointCleanerConfig,
-) (CheckpointCleanupReport, error) {
-	cleaner, err := NewOneShotCheckpointCleaner(config)
-	if err != nil {
-		return CheckpointCleanupReport{}, err
-	}
-	return cleaner.Run(ctx)
-}
-
-func CleanOwnedNamespace(
-	ctx context.Context,
-	config OneShotCheckpointCleanerConfig,
-) (CheckpointCleanupReport, error) {
-	return RunOneShotCheckpointCleanup(ctx, config)
+func addAttention(report *CheckpointCleanupReport, relative, detail string) {
+	addRetained(report, relative, detail)
+	report.Attention = append(report.Attention, detail+": "+relative)
 }

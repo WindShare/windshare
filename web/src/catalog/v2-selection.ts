@@ -1,5 +1,6 @@
 import type { V2CatalogEntry } from './v2-records'
 import { V2_CATALOG_PATH_DEPTH } from './path-policy'
+import { encodeBase64Url } from '../crypto/bytes'
 
 export type V2SelectionState = 'selected' | 'unselected' | 'mixed'
 export type V2SelectionDecision = 'explicit-node-rule' | 'ancestor-directory-rule' | 'default-rule'
@@ -25,6 +26,30 @@ export interface V2FrozenSelectionPolicy {
   directorySelected(directoryId: string, directoryAncestry: readonly string[]): boolean
   decision(entry: V2CatalogEntry, directoryAncestry: readonly string[]): V2SelectionDecision
   shouldDiscover(directoryId: string, directoryAncestry: readonly string[]): boolean
+}
+
+export function frozenV2SelectionPolicy(
+  defaultSelected: boolean,
+  rules: readonly V2CanonicalSelectionRule[],
+): V2FrozenSelectionPolicy {
+  if (rules.length > V2_MAXIMUM_SELECTION_RULE_OVERRIDES) {
+    throw new RangeError('Catalog selection rule count exceeds the protocol limit')
+  }
+  const directories = new Map<string, SelectionOverride>()
+  const files = new Map<string, SelectionOverride>()
+  for (const rule of rules) {
+    const identity = encodeBase64Url(rule.id)
+    const target = rule.kind === 'directory' ? directories : files
+    if (target.has(identity) || directories.has(identity) || files.has(identity)) {
+      throw new TypeError('Catalog selection contains a duplicate node identity')
+    }
+    target.set(identity, Object.freeze({
+      selected: rule.selected,
+      ancestry: Object.freeze([]),
+      id: rule.id.slice(),
+    }))
+  }
+  return new FrozenV2SelectionPolicy(defaultSelected, directories, files)
 }
 
 /**

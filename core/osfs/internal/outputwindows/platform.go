@@ -4,24 +4,20 @@ package outputwindows
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"io/fs"
 	"path/filepath"
 	"slices"
-	"strings"
 
-	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
-	"github.com/windshare/windshare/core/transfer"
 	"golang.org/x/sys/windows"
 )
 
 type windowsOutputV3Platform struct {
-	native           *windowsV3OutputPlatform
-	root             *windowsOutputV3Directory
-	publicationGuard *windowsV3PublicOperationGuard
+	native              *windowsV3OutputPlatform
+	root                *windowsOutputV3Directory
+	rootOpenDisposition outputcap.RootOpenDisposition
+	publicationGuard    *windowsV3PublicOperationGuard
 }
 
 type windowsOutputV3Directory struct {
@@ -55,16 +51,21 @@ func Open(path string, create bool) (outputcap.Platform, error) {
 				errors.New("output root must be absolute")))
 	}
 	clean := filepath.Clean(path)
+	rootOpenDisposition := outputcap.CallerProvidedContainer
 	native, err := openWindowsV3OutputPlatform(clean)
 	if create && errors.Is(err, fs.ErrNotExist) {
 		native, err = windowsCreateCertifiedOutputRoot(clean)
+		if err == nil {
+			rootOpenDisposition = outputcap.AuthorityCreatedRoot
+		}
 	}
 	if err != nil {
 		return nil, windowsOutputV3Error(err)
 	}
 	return &windowsOutputV3Platform{
-		native: native,
-		root:   &windowsOutputV3Directory{native: native.root},
+		native:              native,
+		root:                &windowsOutputV3Directory{native: native.root},
+		rootOpenDisposition: rootOpenDisposition,
 	}, nil
 }
 
@@ -117,9 +118,10 @@ func retainWindowsV3PrivatePublicationRoot(
 		)
 	}
 	return &windowsOutputV3Platform{
-		native:           native,
-		root:             &windowsOutputV3Directory{native: root},
-		publicationGuard: guard,
+		native:              native,
+		root:                &windowsOutputV3Directory{native: root},
+		rootOpenDisposition: outputcap.CallerProvidedContainer,
+		publicationGuard:    guard,
 	}, nil
 }
 
@@ -222,6 +224,7 @@ func createWindowsV3PrivatePublicationRootWithObserver(
 	); err != nil {
 		return result, err
 	}
+	result.rootOpenDisposition = outputcap.AuthorityCreatedRoot
 	succeeded = true
 	return result, nil
 }
@@ -430,198 +433,4 @@ func finishWindowsV3OutputRootCreate(
 		resultErr = errors.Join(resultErr, closeResult())
 	}
 	return false, resultErr
-}
-
-func (platform *windowsOutputV3Platform) Root() outputcap.Directory {
-	if platform == nil || platform.native == nil || platform.root == nil || platform.root.native == nil {
-		return nil
-	}
-	return platform.root
-}
-
-func (platform *windowsOutputV3Platform) AcquirePublicOperationGuard() (
-	outputcap.PublicOperationGuard,
-	error,
-) {
-	if platform == nil || platform.native == nil {
-		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows output platform is closed"))
-	}
-	guard, err := platform.native.acquirePublicOperationGuard()
-	if err != nil {
-		return nil, windowsOutputV3Error(err)
-	}
-	root := guard.Root()
-	if root == nil {
-		return nil, errors.Join(
-			outputcap.ErrUnsafeNamespace,
-			windowsOutputV3Error(guard.Close()),
-			errors.New("osfs: Windows ancestry guard has no root authority"),
-		)
-	}
-	return &windowsOutputV3PublicOperationGuard{
-		native: guard,
-		root:   &windowsOutputV3Directory{native: root},
-	}, nil
-}
-
-func (guard *windowsOutputV3PublicOperationGuard) Root() outputcap.Directory {
-	if guard == nil || guard.native == nil || guard.root == nil || guard.root.native == nil {
-		return nil
-	}
-	return guard.root
-}
-
-func (guard *windowsOutputV3PublicOperationGuard) Close() error {
-	if guard == nil || guard.native == nil {
-		return nil
-	}
-	err := guard.native.Close()
-	guard.native = nil
-	if guard.root != nil {
-		guard.root.native = nil
-	}
-	guard.root = nil
-	return windowsOutputV3Error(err)
-}
-
-func (*windowsOutputV3Platform) Certification() resumestate.CertificationID {
-	return resumestate.CertificationWindowsNTFSProcessRestart
-}
-
-func (platform *windowsOutputV3Platform) RootBinding() (
-	_ resumestate.OutputRootBinding,
-	resultErr error,
-) {
-	if platform == nil || platform.native == nil || platform.native.root == nil {
-		return resumestate.OutputRootBinding{}, errors.Join(
-			outputcap.ErrUnsafeNamespace,
-			errors.New("osfs: Windows output platform is closed"),
-		)
-	}
-	guard, err := platform.native.acquirePublicOperationGuard()
-	if err != nil {
-		return resumestate.OutputRootBinding{}, windowsOutputV3Error(err)
-	}
-	defer func() { resultErr = errors.Join(resultErr, windowsOutputV3Error(guard.Close())) }()
-	root := guard.Root()
-	if root == nil {
-		return resumestate.OutputRootBinding{}, errors.Join(
-			outputcap.ErrUnsafeNamespace,
-			errors.New("osfs: Windows ancestry guard has no root authority"),
-		)
-	}
-	if _, err := root.prepareIdentityClaim(); err != nil {
-		return resumestate.OutputRootBinding{}, windowsOutputV3Error(err)
-	}
-	facts, err := root.inspector.Inspect(root.handle())
-	if err != nil {
-		return resumestate.OutputRootBinding{}, windowsOutputV3Error(
-			windowsV3Failure("bind output root", root.path, errWindowsV3OutputUnsafe, err),
-		)
-	}
-	if err := windowsV3ValidateOpenedObject(facts, root.volume, true); err != nil {
-		return resumestate.OutputRootBinding{}, windowsOutputV3Error(
-			windowsV3Failure("bind output root", root.path, errWindowsV3OutputUnsafe, err),
-		)
-	}
-	objectID, prepared := root.objectIDState.current()
-	if !prepared {
-		return resumestate.OutputRootBinding{}, errors.Join(
-			outputcap.ErrUnsafeNamespace,
-			errors.New("osfs: Windows output-root Object ID was not prepared"),
-		)
-	}
-	guid := strings.ToLower(facts.object.volume.guid)
-	if len(guid) == 0 || len(guid) > windowsV3VolumeGUIDClaimMaxBytes {
-		return resumestate.OutputRootBinding{}, errors.Join(
-			outputcap.ErrUnsafeNamespace,
-			errors.New("osfs: Windows volume GUID identity exceeds the bounded root-binding format"),
-		)
-	}
-	volume := make([]byte, len("windows/ntfs/volume/v1")+4+len(guid)+8)
-	copy(volume, "windows/ntfs/volume/v1")
-	offset := len("windows/ntfs/volume/v1")
-	binary.BigEndian.PutUint32(volume[offset:], uint32(len(guid)))
-	offset += 4
-	copy(volume[offset:], guid)
-	offset += len(guid)
-	binary.BigEndian.PutUint64(volume[offset:], facts.object.volume.serial)
-
-	object := make([]byte, len("windows/ntfs/directory-object/v2")+len(objectID))
-	copy(object, "windows/ntfs/directory-object/v2")
-	copy(object[len("windows/ntfs/directory-object/v2"):], objectID[:])
-	binding, err := resumestate.NewOutputRootBinding(platform.Certification(), volume, object)
-	return binding, windowsOutputV3Error(err)
-}
-
-func (*windowsOutputV3Platform) Durability() transfer.DurabilityLevel {
-	return transfer.DurabilityProcessRestart
-}
-
-func (platform *windowsOutputV3Platform) ProbeRecoverableFeatures() error {
-	if platform == nil || platform.native == nil || platform.native.root == nil {
-		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows output platform is closed"))
-	}
-	guard, err := platform.native.acquirePublicOperationGuard()
-	if err != nil {
-		return windowsOutputV3Error(err)
-	}
-	probeErr := guard.Root().probeRecoverableFeatures()
-	return errors.Join(windowsOutputV3Error(probeErr), windowsOutputV3Error(guard.Close()))
-}
-
-func (platform *windowsOutputV3Platform) ValidateSelectionMetadata(selection transfer.OutputSelection) error {
-	if platform == nil || platform.native == nil || platform.native.root == nil {
-		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows output platform is closed"))
-	}
-	guard, err := platform.native.acquirePublicOperationGuard()
-	if err != nil {
-		return windowsOutputV3Error(err)
-	}
-	root := guard.Root()
-	if root == nil {
-		return errors.Join(
-			outputcap.ErrUnsafeNamespace,
-			windowsOutputV3Error(guard.Close()),
-			errors.New("osfs: Windows metadata admission guard has no root authority"),
-		)
-	}
-	validateErr := root.validateSelectionMetadata(selection)
-	return errors.Join(windowsOutputV3Error(validateErr), windowsOutputV3Error(guard.Close()))
-}
-
-func (*windowsOutputV3Platform) ValidateModifiedTime(modified catalog.ModifiedTime) error {
-	return windowsOutputV3Error(windowsV3ValidateModifiedTime(modified))
-}
-
-func (*windowsOutputV3Platform) CanonicalLocatorKey(path string) (string, error) {
-	key, err := windowsV3OutputLocatorKey(path)
-	return key, windowsOutputV3Error(err)
-}
-
-func (*windowsOutputV3Platform) CanonicalComponentKey(name string) (string, error) {
-	native, err := windowsV3RelativePath(name, true)
-	if err != nil {
-		return "", windowsOutputV3Error(err)
-	}
-	key, err := windowsV3NTFSCaseKey(native)
-	return key, windowsOutputV3Error(err)
-}
-
-func (platform *windowsOutputV3Platform) Close() error {
-	if platform == nil || platform.native == nil {
-		return nil
-	}
-	var err error
-	if platform.publicationGuard != nil {
-		err = errors.Join(err, platform.publicationGuard.Close())
-		platform.publicationGuard = nil
-	}
-	err = errors.Join(err, platform.native.Close())
-	platform.native = nil
-	if platform.root != nil {
-		platform.root.native = nil
-	}
-	platform.root = nil
-	return windowsOutputV3Error(err)
 }

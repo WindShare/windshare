@@ -13,7 +13,7 @@ export interface FileTransferFailure {
 }
 
 export type TransferFailure = DirectoryTransferFailure | FileTransferFailure
-export type JobOutcomeStatus = 'Succeeded' | 'CompletedWithErrors' | 'Paused' | 'Aborted' | 'NeedsAttention'
+export type JobOutcomeStatus = 'Succeeded' | 'CompletedWithErrors' | 'Paused'
 export const MAXIMUM_RETAINED_TRANSFER_FAILURES = 64
 
 export interface TransferFailureSummary {

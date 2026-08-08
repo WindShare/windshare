@@ -6,19 +6,23 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import { DirectoryAdmissionLedger } from '../../src/transfer/directory-admission-ledger'
 import {
   createDirectoryAdmission,
+  COMPLETED_JOB_SETTLEMENT,
   DirectoryAdmissionBindingError,
+  DirectorySettlementKind,
+  finalizedDirectorySettlement,
+  pausedJobSettlement,
   OutputBudgetExceededError,
+  OutputDirectoryMutationError,
   VerifiedDurableRanges,
   MAXIMUM_OUTPUT_PATH_SEGMENTS,
   MAXIMUM_OUTPUT_SEGMENT_BYTES,
   outputCapabilities,
   outputSessionIdentity,
-  snapshotOutputDirectory,
+  snapshotOutputPath,
   snapshotOutputFile,
   validateOutputSessionBinding,
   validateDirectoryAdmissionBinding,
   type DirectoryAdmission,
-  type OutputDirectory,
   type OutputDirectoryAdmission,
   type OutputModifiedTime,
   type OutputFile,
@@ -44,6 +48,10 @@ const ROOT_DIRECTORY_ID = catalogIdentityText(1)
 const ROOT_GENERATION = catalogIdentityText(2)
 const CHILD_DIRECTORY_ID = catalogIdentityText(3)
 const CHILD_GENERATION = catalogIdentityText(4)
+const TEST_DIRECTORY_SCOPE = Object.freeze({
+  transferIntentDigest: admissionTokenText(9),
+  syntheticRoot: ROOT_DIRECTORY_ID,
+})
 
 describe('OutputSession value contracts', () => {
   it('binds normalized durable ranges to one source revision and exact file size', () => {
@@ -103,29 +111,27 @@ describe('OutputSession value contracts', () => {
 
   it('rejects structurally unsafe or semantically incomplete output identities', () => {
     expect(MAXIMUM_OUTPUT_SEGMENT_BYTES).toBe(V2_CATALOG_NAME_BYTES)
-    expect(() => snapshotOutputDirectory(outputDirectory(
-      ['a'.repeat(V2_CATALOG_NAME_BYTES)],
-    ))).not.toThrow()
+    expect(() => snapshotOutputPath(['a'.repeat(V2_CATALOG_NAME_BYTES)])).not.toThrow()
     expect(() => outputSessionIdentity({ backend: '', outputSessionId: 'job' }))
       .toThrow(/backend/u)
     expect(() => outputSessionIdentity({ backend: 'fsa', outputSessionId: 'x'.repeat(129) }))
       .toThrow(/at most 128 bytes/u)
-    expect(() => snapshotOutputDirectory(outputDirectory([]))).toThrow(/synthetic root/u)
-    expect(() => snapshotOutputDirectory(outputDirectory(['..']))).toThrow(/frozen path policy/u)
-    expect(() => snapshotOutputDirectory(outputDirectory(['bad/name']))).toThrow(/frozen path policy/u)
-    expect(() => snapshotOutputDirectory(outputDirectory([
+    expect(() => snapshotOutputPath([])).toThrow(/frozen path policy/u)
+    expect(() => snapshotOutputPath(['..'])).toThrow(/frozen path policy/u)
+    expect(() => snapshotOutputPath(['bad/name'])).toThrow(/frozen path policy/u)
+    expect(() => snapshotOutputPath([
       'a'.repeat(MAXIMUM_OUTPUT_SEGMENT_BYTES + 1),
-    ]))).toThrow(/frozen path policy/u)
-    expect(() => snapshotOutputDirectory(outputDirectory(
+    ])).toThrow(/frozen path policy/u)
+    expect(() => snapshotOutputPath(
       Array.from({ length: MAXIMUM_OUTPUT_PATH_SEGMENTS + 1 }, () => 'a'),
-    ))).toThrow(/segment limit/u)
-    expect(() => snapshotOutputDirectory(outputDirectory(
+    )).toThrow(/frozen path policy/u)
+    expect(() => snapshotOutputPath(
       Array.from({ length: 129 }, () => 'a'.repeat(MAXIMUM_OUTPUT_SEGMENT_BYTES)),
-    ))).toThrow(/frozen path policy/u)
-    expect(() => snapshotOutputDirectory(outputDirectory(['\ud800']))).toThrow(/frozen path policy/u)
-    expect(() => snapshotOutputDirectory(outputDirectory(['e\u0301']))).toThrow(/frozen path policy/u)
-    expect(() => snapshotOutputDirectory(outputDirectory(['CON']))).toThrow(/frozen path policy/u)
-    expect(() => snapshotOutputDirectory(outputDirectory(['.wsresume-state']))).toThrow(/frozen path policy/u)
+    )).toThrow(/frozen path policy/u)
+    expect(() => snapshotOutputPath(['\ud800'])).toThrow(/frozen path policy/u)
+    expect(() => snapshotOutputPath(['e\u0301'])).toThrow(/frozen path policy/u)
+    expect(() => snapshotOutputPath(['CON'])).toThrow(/frozen path policy/u)
+    expect(() => snapshotOutputPath(['.wsresume-state'])).toThrow(/frozen path policy/u)
     expect(() => snapshotOutputFile({
       source: { shareInstance: '', fileId: source.fileId, fileRevision: source.fileRevision },
       path: ['file'],
@@ -169,7 +175,7 @@ describe('OutputSession directory admission boundary', () => {
   const signal = new AbortController().signal
 
   it('enforces backend-owned admission count and metadata-byte budgets', async () => {
-    const countBound = new DirectoryAdmissionLedger({
+    const countBound = new DirectoryAdmissionLedger(TEST_DIRECTORY_SCOPE, {
       secret: TEST_ADMISSION_SECRET,
       maximumAdmissions: 1,
     })
@@ -178,7 +184,7 @@ describe('OutputSession directory admission boundary', () => {
     await expect(countBound.admitDirectory(childAdmissionRequest(root), signal))
       .rejects.toBeInstanceOf(OutputBudgetExceededError)
 
-    const byteBound = new DirectoryAdmissionLedger({
+    const byteBound = new DirectoryAdmissionLedger(TEST_DIRECTORY_SCOPE, {
       secret: TEST_ADMISSION_SECRET,
       maximumMetadataBytes: 1,
     })
@@ -187,7 +193,7 @@ describe('OutputSession directory admission boundary', () => {
   })
 
   it('coalesces exact duplicate admissions and rejects metadata rebinding', async () => {
-    const ledger = new DirectoryAdmissionLedger({ secret: TEST_ADMISSION_SECRET })
+    const ledger = new DirectoryAdmissionLedger(TEST_DIRECTORY_SCOPE, { secret: TEST_ADMISSION_SECRET })
     const materialize = vi.fn(async () => undefined)
     const root = await ledger.admitDirectory(rootAdmissionRequest(), signal)
     const request = childAdmissionRequest(root, 123n)
@@ -217,7 +223,7 @@ describe('OutputSession directory admission boundary', () => {
   })
 
   it('releases rejected pre-materialization reservations instead of exhausting admission budgets', async () => {
-    const ledger = new DirectoryAdmissionLedger({
+    const ledger = new DirectoryAdmissionLedger(TEST_DIRECTORY_SCOPE, {
       secret: TEST_ADMISSION_SECRET,
       maximumAdmissions: 2,
     })
@@ -235,7 +241,7 @@ describe('OutputSession directory admission boundary', () => {
   })
 
   it('commits proof when cancellation lands after successful materialization', async () => {
-    const ledger = new DirectoryAdmissionLedger({ secret: TEST_ADMISSION_SECRET })
+    const ledger = new DirectoryAdmissionLedger(TEST_DIRECTORY_SCOPE, { secret: TEST_ADMISSION_SECRET })
     const root = await ledger.admitDirectory(rootAdmissionRequest(), signal)
     const controller = new AbortController()
     const materialize = vi.fn(async () => { controller.abort(new DOMException('late cancel', 'AbortError')) })
@@ -247,7 +253,7 @@ describe('OutputSession directory admission boundary', () => {
   })
 
   it('rejects missing or forged ancestry before admitting a child or opening a file', async () => {
-    const ledger = new DirectoryAdmissionLedger({ secret: TEST_ADMISSION_SECRET })
+    const ledger = new DirectoryAdmissionLedger(TEST_DIRECTORY_SCOPE, { secret: TEST_ADMISSION_SECRET })
     const root = await ledger.admitDirectory(rootAdmissionRequest(), signal)
 
     await expect(ledger.admitDirectory({
@@ -271,35 +277,135 @@ describe('OutputSession directory admission boundary', () => {
     expect(ledger.validateFileParent(outputFile(child)).parentAdmission).toEqual(child)
   })
 
-  it('finalizes only the exact generation admitted by this session', async () => {
-    const ledger = new DirectoryAdmissionLedger({ secret: TEST_ADMISSION_SECRET })
+  it('finalizes the frozen claim by exact receipt and caches the settlement', async () => {
+    const ledger = new DirectoryAdmissionLedger(TEST_DIRECTORY_SCOPE, { secret: TEST_ADMISSION_SECRET })
     const root = await ledger.admitDirectory(rootAdmissionRequest(), signal)
     const request = childAdmissionRequest(root)
-    await ledger.admitDirectory(request, signal)
+    const child = await ledger.admitDirectory(request, signal)
+    const finalize = vi.fn(async () => undefined)
 
-    expect(ledger.validateDirectoryFinalization({ ...request, parentAdmission: root }))
-      .toMatchObject(request)
-    expect(() => ledger.validateDirectoryFinalization({
-      directoryId: catalogIdentityText(5),
-      generation: catalogIdentityText(6),
-      path: ['unadmitted'],
-      parentAdmission: root,
-    })).toThrow(/unadmitted or rebound/u)
-    expect(() => ledger.validateDirectoryFinalization({
-      ...request,
-      parentAdmission: { ...root, generation: catalogIdentityText(7) },
-    })).toThrow(/not admitted by this output session/u)
+    const first = await ledger.finalizeDirectory(child, signal, finalize)
+    const retry = await ledger.finalizeDirectory(child, signal, async () => {
+      throw new Error('cached settlement must not rerun finalization')
+    })
+
+    expect(first.kind).toBe(DirectorySettlementKind.Finalized)
+    expect(retry).toBe(first)
+    expect(finalize).toHaveBeenCalledOnce()
+    expect(finalize).toHaveBeenCalledWith(request, signal)
+    expect(() => ledger.finalizeDirectory({
+      ...child,
+      generation: catalogIdentityText(7),
+    }, signal)).toThrow(/forged or foreign/u)
+    await expect(ledger.finalizeDirectory(root, signal)).resolves.toMatchObject({
+      kind: DirectorySettlementKind.Finalized,
+      admission: root,
+    })
+  })
+
+  it('seals a receipt before finalization I/O and rejects new descendants and files', async () => {
+    const ledger = new DirectoryAdmissionLedger(TEST_DIRECTORY_SCOPE, { secret: TEST_ADMISSION_SECRET })
+    const root = await ledger.admitDirectory(rootAdmissionRequest(), signal)
+    const child = await ledger.admitDirectory(childAdmissionRequest(root), signal)
+    const started = deferred<void>()
+    const release = deferred<void>()
+    const finalize = vi.fn(async () => {
+      started.resolve()
+      await release.promise
+    })
+
+    const finalizing = ledger.finalizeDirectory(child, signal, finalize)
+    await started.promise
+
+    expect(() => ledger.acquireFileMutation(outputFile(child))).toThrow(/sealed/u)
+    await expect(ledger.admitDirectory({
+      directoryId: catalogIdentityText(40),
+      generation: catalogIdentityText(41),
+      path: Object.freeze(['child', 'late']),
+      parentAdmission: child,
+    }, signal)).rejects.toThrow(/sealed or settled/u)
+    expect(ledger.finalizeDirectory(child, signal)).toBe(finalizing)
+
+    release.resolve()
+    const settlement = await finalizing
+    await expect(ledger.finalizeDirectory(child, signal)).resolves.toBe(settlement)
+    expect(finalize).toHaveBeenCalledOnce()
+  })
+
+  it('waits for an admitted file mutation before running finalization', async () => {
+    const ledger = new DirectoryAdmissionLedger(TEST_DIRECTORY_SCOPE, { secret: TEST_ADMISSION_SECRET })
+    const root = await ledger.admitDirectory(rootAdmissionRequest(), signal)
+    const child = await ledger.admitDirectory(childAdmissionRequest(root), signal)
+    const fileMutation = ledger.acquireFileMutation(outputFile(child))
+    const finalize = vi.fn(async () => undefined)
+
+    const finalizing = ledger.finalizeDirectory(child, signal, finalize)
+    await Promise.resolve()
+    expect(finalize).not.toHaveBeenCalled()
+
+    fileMutation.release()
+    await expect(finalizing).resolves.toMatchObject({ kind: DirectorySettlementKind.Finalized })
+    expect(finalize).toHaveBeenCalledOnce()
+  })
+
+  it('waits for a direct child finalization before settling its sealed parent', async () => {
+    const ledger = new DirectoryAdmissionLedger(TEST_DIRECTORY_SCOPE, { secret: TEST_ADMISSION_SECRET })
+    const root = await ledger.admitDirectory(rootAdmissionRequest(), signal)
+    const child = await ledger.admitDirectory(childAdmissionRequest(root), signal)
+    const childStarted = deferred<void>()
+    const releaseChild = deferred<void>()
+    const finalizeRoot = vi.fn(async () => undefined)
+
+    const childFinalization = ledger.finalizeDirectory(child, signal, async () => {
+      childStarted.resolve()
+      await releaseChild.promise
+    })
+    await childStarted.promise
+    const rootFinalization = ledger.finalizeDirectory(root, signal, finalizeRoot)
+    await Promise.resolve()
+    expect(finalizeRoot).not.toHaveBeenCalled()
+
+    releaseChild.resolve()
+    await expect(childFinalization).resolves.toMatchObject({ kind: DirectorySettlementKind.Finalized })
+    await expect(rootFinalization).resolves.toMatchObject({ kind: DirectorySettlementKind.Finalized })
+    expect(finalizeRoot).toHaveBeenCalledOnce()
+  })
+
+  it('normalizes and caches only an isolated directory metadata failure', async () => {
+    const ledger = new DirectoryAdmissionLedger(TEST_DIRECTORY_SCOPE, { secret: TEST_ADMISSION_SECRET })
+    const root = await ledger.admitDirectory(rootAdmissionRequest(), signal)
+    const child = await ledger.admitDirectory(childAdmissionRequest(root), signal)
+
+    const settlement = await ledger.finalizeDirectory(child, signal, async () => {
+      throw new OutputDirectoryMutationError('metadata failed', false, {
+        cause: new Error('platform metadata failure'),
+      })
+    })
+
+    expect(settlement.kind).toBe(DirectorySettlementKind.IsolatedFailure)
+    if (settlement.kind === DirectorySettlementKind.IsolatedFailure) {
+      expect(settlement.fault).not.toHaveProperty('cause')
+    }
+    await expect(ledger.finalizeDirectory(child, signal)).resolves.toBe(settlement)
   })
 
   it('fails closed when a proof does not echo the requested generation metadata', async () => {
-    const root = await createDirectoryAdmission(rootAdmissionRequest(), TEST_ADMISSION_SECRET)
+    const root = await createDirectoryAdmission(
+      TEST_ADMISSION_SECRET,
+      TEST_DIRECTORY_SCOPE,
+      rootAdmissionRequest(),
+    )
     const request = childAdmissionRequest(root, 123n)
-    const mismatched = await createDirectoryAdmission({
-      ...request,
-      modifiedTime: modifiedTimeForMilliseconds(999n),
-    }, TEST_ADMISSION_SECRET)
+    const mismatched = await createDirectoryAdmission(
+      TEST_ADMISSION_SECRET,
+      TEST_DIRECTORY_SCOPE,
+      {
+        ...request,
+        modifiedTime: modifiedTimeForMilliseconds(999n),
+      },
+    )
 
-    expect(() => validateDirectoryAdmissionBinding(request, mismatched))
+    expect(() => validateDirectoryAdmissionBinding(TEST_DIRECTORY_SCOPE, request, mismatched))
       .toThrow(/different committed generation/u)
   })
 })
@@ -327,20 +433,6 @@ function childAdmissionRequest(
     ...(modifiedTime === undefined
       ? {}
       : { modifiedTime }),
-  })
-}
-
-function outputDirectory(path: readonly string[]): OutputDirectory {
-  return Object.freeze({
-    directoryId: CHILD_DIRECTORY_ID,
-    generation: CHILD_GENERATION,
-    path,
-    parentAdmission: Object.freeze({
-      token: admissionTokenText(1),
-      directoryId: ROOT_DIRECTORY_ID,
-      generation: ROOT_GENERATION,
-      path: Object.freeze([]),
-    }),
   })
 }
 
@@ -374,6 +466,20 @@ function outputFile(parentAdmission?: DirectoryAdmission): OutputFile {
   })
 }
 
+function deferred<T>(): {
+  readonly promise: Promise<T>
+  readonly resolve: (value: T | PromiseLike<T>) => void
+  readonly reject: (reason?: unknown) => void
+} {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined
+  let reject: (reason?: unknown) => void = () => undefined
+  const promise = new Promise<T>((complete, fail) => {
+    resolve = complete
+    reject = fail
+  })
+  return { promise, resolve, reject }
+}
+
 function outputIntent(format: TransferIntent['output']['format']): TransferIntent {
   return {
     output: { backend: 'fake', format, target: admissionTokenText(9), targetKind: 2 },
@@ -391,9 +497,9 @@ function outputSession(
     format,
     capabilities: { durability, randomWrite, fileFailureIsolation, modificationTime: false },
     admitDirectory: async () => { throw new Error('unused') },
-    finalizeDirectory: async () => undefined,
+    finalizeDirectory: async (admission) => finalizedDirectorySettlement(admission),
     beginFile: async () => { throw new Error('unused') },
-    finishJob: async () => undefined,
-    abortJob: async () => undefined,
+    completeJob: async () => COMPLETED_JOB_SETTLEMENT,
+    pauseJob: async () => pausedJobSettlement(durability),
   }
 }

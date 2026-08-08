@@ -296,7 +296,8 @@ func TestWindowsV3GuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T
 	})
 	root := guard.Root()
 	assertWindowsV3DirectoryProvenance(t, "guard root", root, false)
-	rootClaim, err := root.PrepareIdentityClaim()
+	rootNative := root.(*windowsOutputV3Directory).native
+	rootClaim, err := rootNative.prepareIdentityClaim()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,12 +308,11 @@ func TestWindowsV3GuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T
 	}
 	assertWindowsV3DirectoryProvenance(t, "duplicate", duplicate, false)
 	duplicateNative := duplicate.(*windowsOutputV3Directory).native
-	rootNative := root.(*windowsOutputV3Directory).native
 	if duplicateNative.objectIDState != rootNative.objectIDState {
 		t.Fatal("true duplicate did not share the prepared handle-local identity state")
 	}
-	if claim, claimErr := duplicate.IdentityClaim(); claimErr != nil || !claim.Equal(rootClaim) {
-		t.Fatalf("duplicate identity equal=%t error=%v", claim.Equal(rootClaim), claimErr)
+	if claim, claimErr := duplicateNative.identityClaim(); claimErr != nil || !bytes.Equal(claim, rootClaim) {
+		t.Fatalf("duplicate identity equal=%t error=%v", bytes.Equal(claim, rootClaim), claimErr)
 	}
 	if err := duplicate.Close(); err != nil {
 		t.Fatal(err)
@@ -324,7 +324,8 @@ func TestWindowsV3GuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T
 		t.Fatal(err)
 	}
 	assertWindowsV3DirectoryProvenance(t, "created public directory", created, false)
-	createdClaim, err := created.PrepareIdentityClaim()
+	createdNative := created.(*windowsOutputV3Directory).native
+	createdClaim, err := createdNative.prepareIdentityClaim()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,12 +338,13 @@ func TestWindowsV3GuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T
 		t.Fatal(err)
 	}
 	assertWindowsV3DirectoryProvenance(t, "reopened public directory", reopened, false)
-	if _, err := reopened.IdentityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	reopenedNative := reopened.(*windowsOutputV3Directory).native
+	if _, err := reopenedNative.identityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) {
 		t.Fatalf("fresh public reopen inherited prepared identity state: %v", err)
 	}
-	reopenedClaim, err := reopened.PrepareIdentityClaim()
-	if err != nil || !createdClaim.Equal(reopenedClaim) {
-		t.Fatalf("reopened public identity equal=%t error=%v", createdClaim.Equal(reopenedClaim), err)
+	reopenedClaim, err := reopenedNative.prepareIdentityClaim()
+	if err != nil || !bytes.Equal(createdClaim, reopenedClaim) {
+		t.Fatalf("reopened public identity equal=%t error=%v", bytes.Equal(createdClaim, reopenedClaim), err)
 	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
@@ -358,12 +360,13 @@ func TestWindowsV3GuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T
 		t.Fatal(err)
 	}
 	assertWindowsV3DirectoryProvenance(t, "pinned public reopen", pinned, false)
-	if _, err := pinned.IdentityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	pinnedNative := pinned.(*windowsOutputV3Directory).native
+	if _, err := pinnedNative.identityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) {
 		t.Fatalf("pinned public reopen inherited prepared identity state: %v", err)
 	}
-	pinnedClaim, err := pinned.PrepareIdentityClaim()
-	if err != nil || !createdClaim.Equal(pinnedClaim) {
-		t.Fatalf("pinned public identity equal=%t error=%v", createdClaim.Equal(pinnedClaim), err)
+	pinnedClaim, err := pinnedNative.prepareIdentityClaim()
+	if err != nil || !bytes.Equal(createdClaim, pinnedClaim) {
+		t.Fatalf("pinned public identity equal=%t error=%v", bytes.Equal(createdClaim, pinnedClaim), err)
 	}
 	if err := errors.Join(pinned.Close(), entry.Close()); err != nil {
 		t.Fatal(err)

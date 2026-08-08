@@ -10,102 +10,8 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/transfer/fault"
 )
-
-func TestTerminalSelectionObservationCombinesNormalizedRequestAndTerminalPlan(t *testing.T) {
-	share := transferID[catalog.ShareInstance](1)
-	root := transferID[catalog.DirectoryID](2)
-	directoryA := transferID[catalog.DirectoryID](3)
-	directoryB := transferID[catalog.DirectoryID](4)
-	file := transferID[catalog.FileID](5)
-	rulesA, err := NewSelectionRules(false, []SelectionOverride{
-		{FileID: file, Selected: true, Ancestors: []catalog.DirectoryID{root, directoryA}},
-		{DirectoryID: directoryB, Selected: false, Ancestors: []catalog.DirectoryID{root}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rulesB, err := NewSelectionRules(false, []SelectionOverride{
-		{DirectoryID: directoryB, Selected: false}, {FileID: file, Selected: true},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	requestA, err := NewCanonicalSelectionRequest(share, root, rulesA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	requestB, err := NewCanonicalSelectionRequest(share, root, rulesB)
-	if err != nil || !slices.Equal(requestA.Bytes(), requestB.Bytes()) {
-		t.Fatalf("normalized requests differ: err=%v", err)
-	}
-
-	modified, _ := catalog.NewModifiedTime(1_700_000_000, 123_000_000, catalog.TimePrecisionMilliseconds)
-	rootGeneration := transferID[catalog.DirectoryGeneration](6)
-	directoryGeneration := transferID[catalog.DirectoryGeneration](7)
-	plan, err := NewOutputSelection(
-		share,
-		root,
-		rootGeneration,
-		[]OutputSelectionDirectory{{
-			Path: "folder", DirectoryID: directoryA, Generation: directoryGeneration, ModifiedTime: modified,
-		}},
-		[]OutputSelectionFile{{
-			Path: "folder/file.bin", FileID: file, ParentDirectoryID: directoryA,
-			ParentGeneration: directoryGeneration, ExpectedSize: 42, ModifiedTime: modified,
-		}},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	observationA, err := NewTerminalSelectionObservationV1(requestA, plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	observationB, err := NewTerminalSelectionObservationV1(requestB, plan)
-	if err != nil || observationA.Observation() != observationB.Observation() {
-		t.Fatalf("equivalent selections produced different observations: err=%v", err)
-	}
-	bound, err := observationA.BindPlan(plan)
-	if err != nil || bound.SelectionObservation() != observationA.Observation() || bound.Identity() != plan.Identity() ||
-		bound.TerminalObservation().Observation() != observationA.Observation() {
-		t.Fatalf("bound plan mismatch: err=%v", err)
-	}
-	differentRules, err := NewSelectionRules(true, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	differentRequest, err := NewCanonicalSelectionRequest(share, root, differentRules)
-	if err != nil {
-		t.Fatal(err)
-	}
-	differentObservation, err := NewTerminalSelectionObservationV1(differentRequest, plan)
-	if err != nil || differentObservation.Observation() == observationA.Observation() {
-		t.Fatalf("different request semantics reused selection observation: err=%v", err)
-	}
-
-	changedTime, _ := catalog.NewModifiedTime(1_700_000_001, 0, catalog.TimePrecisionSeconds)
-	changedPlan, err := NewOutputSelection(
-		share,
-		root,
-		rootGeneration,
-		plan.Directories(),
-		[]OutputSelectionFile{{
-			Path: "folder/file.bin", FileID: file, ParentDirectoryID: directoryA,
-			ParentGeneration: directoryGeneration, ExpectedSize: 42, ModifiedTime: changedTime,
-		}},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	changedObservation, err := NewTerminalSelectionObservationV1(requestA, changedPlan)
-	if err != nil || changedObservation.Observation() == observationA.Observation() {
-		t.Fatalf("catalog metadata change preserved selection observation: err=%v", err)
-	}
-	if _, err := observationA.BindPlan(changedPlan); !errors.Is(err, ErrInvalidOutputSelection) {
-		t.Fatalf("terminal observation rebound to a different plan: %v", err)
-	}
-}
 
 func TestFileStartAndSettlementPayloadsAreChecked(t *testing.T) {
 	descriptor := transferDescriptor(t, 1)
@@ -183,11 +89,11 @@ func TestFileStartAndSettlementPayloadsAreChecked(t *testing.T) {
 	}
 
 	cause := errors.New("state write")
-	fault := NewOutputFault(OutputFaultSession, OutputFaultStateIO, cause)
-	var typed *OutputFault
-	if !errors.As(fault, &typed) || typed.Scope() != OutputFaultSession || typed.Code() != OutputFaultStateIO ||
-		!errors.Is(fault, cause) {
-		t.Fatalf("fault=%v typed=%+v", fault, typed)
+	value, _ := fault.NewOutput(fault.ScopeOutputPause, fault.OutputStateIO)
+	boundary := fault.Wrap(value, cause)
+	var typed *fault.BoundaryError
+	if !errors.As(boundary, &typed) || typed.Fault() != value || !errors.Is(boundary, cause) {
+		t.Fatalf("fault=%v typed=%+v", boundary, typed)
 	}
 }
 
@@ -210,11 +116,12 @@ func TestTransferJobOpensOutputBeforeRevisionAndAdmitsGeneration(t *testing.T) {
 
 	output = newJobOutput(share)
 	unsupported := errors.New("unsupported filesystem")
-	output.admitErr = NewOutputFault(OutputFaultRoot, OutputFaultUnsupportedFilesystem, unsupported)
+	output.admitErr = outputFailure(fault.ScopeOutputPause, fault.OutputUnsupportedFilesystem, unsupported)
 	revisions = &jobRevisionClient{}
 	job, _ = branchJob(t, output, revisions, scriptedRangeReader{})
 	result = job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, unsupported) ||
+	expectedUnsupported, _ := fault.NewOutput(fault.ScopeOutputPause, fault.OutputUnsupportedFilesystem)
+	if result.Outcome != JobPausedOutcome || result.TerminationFault != expectedUnsupported ||
 		len(revisions.order) != 0 || len(output.transactions) != 0 || output.pauseCalls != 0 || output.completeCalls != 0 {
 		t.Fatalf("failed admission leaked revision/content work: result=%+v revisions=%v", result, revisions.order)
 	}
@@ -273,7 +180,9 @@ func TestTransferJobAdmitsGenerationsIncrementallyBeforeContent(t *testing.T) {
 
 	t.Run("one failed directory prevents partial admission", func(t *testing.T) {
 		output := newJobOutput(share)
-		output.ensureFailures = map[string]error{"folder": errors.New("parent unavailable")}
+		output.ensureFailures = map[string]error{
+			"folder": outputFailure(fault.ScopeDirectoryLocal, fault.OutputDirectoryMetadata, errors.New("parent unavailable")),
+		}
 		revisions := &jobRevisionClient{
 			opened: map[catalog.FileID]OpenedRevision{file: opened}, failures: make(map[catalog.FileID]error),
 		}
@@ -391,12 +300,11 @@ func TestTransferJobRejectsForeignOrMissingImmediateSettlementAuthority(t *testi
 			test.configure(t, output, revisions.opened[file].Descriptor)
 
 			result := job.Run(context.Background())
-			var fault *OutputFault
+			expected := mustOutputFault(fault.ScopeOutputPause, fault.OutputContract)
 			if result.Outcome != JobPausedOutcome || result.SucceededFiles != 0 || blocks.calls != 0 ||
-				len(result.Files) != 1 || !errors.As(result.SettlementFailure, &fault) ||
-				fault.Scope() != OutputFaultSession || fault.Code() != OutputFaultContract ||
+				len(result.Files) != 1 || result.SettlementFault != expected ||
 				output.pauseCalls != 1 || output.completeCalls != 0 {
-				t.Fatalf("result=%+v fault=%+v blocks=%d pause=%d complete=%d", result, fault, blocks.calls, output.pauseCalls, output.completeCalls)
+				t.Fatalf("result=%+v blocks=%d pause=%d complete=%d", result, blocks.calls, output.pauseCalls, output.completeCalls)
 			}
 		})
 	}
@@ -532,7 +440,7 @@ func TestTransferJobRejectsClosedSessionWithQuarantinedState(t *testing.T) {
 	result := job.Run(context.Background())
 	if result.Outcome != JobPausedOutcome || len(result.Files) != 1 ||
 		!errors.Is(result.Files[0].Cause, ErrOutputQuarantined) ||
-		!errors.Is(result.SettlementFailure, ErrOutputContract) ||
+		result.SettlementFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
 		output.completeCalls != 1 || output.pauseCalls != 0 {
 		t.Fatalf("result=%+v", result)
 	}
@@ -553,15 +461,16 @@ func TestTransferJobSettlementContextAndFailuresRemainIndependent(t *testing.T) 
 			t.Errorf("settlement deadline=%v bounded=%v", deadline, bounded)
 		}
 	}
-	output.transactionScript.pauseErr = NewOutputFault(OutputFaultFile, OutputFaultStateIO, settlementCause)
+	output.transactionScript.pauseErr = outputFailure(fault.ScopeFileLocal, fault.OutputStateIO, settlementCause)
 	originalCause := errors.New("authenticated session ended")
 	revisions := &jobRevisionClient{}
-	job, _ := branchJob(t, output, revisions, sessionFailingBlocks{err: NewSessionFailure(originalCause)})
+	job, _ := branchJob(t, output, revisions, sessionFailingBlocks{err: sessionProtocolFailure(originalCause)})
 	result := job.Run(context.Background())
+	sessionFault := mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol)
+	settlementFault, _ := fault.NewOutput(fault.ScopeFileLocal, fault.OutputStateIO)
 	if !settlementObserved || result.Outcome != JobPausedOutcome ||
-		!errors.Is(result.TerminationCause, originalCause) || errors.Is(result.TerminationCause, settlementCause) ||
-		!errors.Is(result.SettlementFailure, settlementCause) || len(result.Files) != 1 ||
-		!errors.Is(result.Files[0].SettlementFailure, settlementCause) {
+		result.TerminationFault != sessionFault || result.SettlementFault != settlementFault ||
+		len(result.Files) != 1 || result.Files[0].SettlementFault != settlementFault {
 		t.Fatalf("result=%+v observed=%v", result, settlementObserved)
 	}
 }
@@ -571,14 +480,15 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		share := transferID[catalog.ShareInstance](91)
 		output := newJobOutput(share)
 		commitCause := errors.New("publication state could not be verified")
-		output.transactionScript.commitErr = NewOutputFault(
-			OutputFaultFile, OutputFaultStateIO, commitCause,
+		output.transactionScript.commitErr = outputFailure(
+			fault.ScopeFileLocal, fault.OutputStateIO, commitCause,
 		)
 		job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
 		result := job.Run(context.Background())
 		transaction := output.transactions["file.bin"]
-		if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, commitCause) ||
-			!errors.Is(result.SettlementFailure, commitCause) || transaction == nil ||
+		expected, _ := fault.NewOutput(fault.ScopeFileLocal, fault.OutputStateIO)
+		if result.Outcome != JobPausedOutcome || result.TerminationFault != expected ||
+			result.SettlementFault != expected || transaction == nil ||
 			transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
 			len(transaction.retireReasons) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
 			t.Fatalf("result=%+v transaction=%+v", result, transaction)
@@ -598,8 +508,8 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 
 		result := job.Run(context.Background())
 		transaction := output.transactions["file.bin"]
-		if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrOutputContract) ||
-			!errors.Is(result.SettlementFailure, ErrOutputContract) || transaction == nil ||
+		if result.Outcome != JobPausedOutcome || result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
+			result.SettlementFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) || transaction == nil ||
 			transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
 			len(transaction.retireReasons) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
 			t.Fatalf("result=%+v transaction=%+v", result, transaction)
@@ -610,12 +520,13 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		share := transferID[catalog.ShareInstance](93)
 		output := newJobOutput(share)
 		completeCause := errors.New("session cleanup could not be verified")
-		output.finishErr = NewOutputFault(OutputFaultSession, OutputFaultStateIO, completeCause)
+		output.finishErr = outputFailure(fault.ScopeOutputPause, fault.OutputStateIO, completeCause)
 		job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
 		result := job.Run(context.Background())
 		transaction := output.transactions["file.bin"]
+		expected, _ := fault.NewOutput(fault.ScopeOutputPause, fault.OutputStateIO)
 		if result.Outcome != JobPausedOutcome || result.TerminationCause != nil ||
-			!errors.Is(result.SettlementFailure, completeCause) || transaction == nil ||
+			result.SettlementFault != expected || transaction == nil ||
 			transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
 			output.completeCalls != 1 || output.pauseCalls != 0 {
 			t.Fatalf("result=%+v transaction=%+v", result, transaction)

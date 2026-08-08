@@ -98,12 +98,22 @@ func TestTransferWave2TargetAndIdentityEdges(t *testing.T) {
 }
 
 func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
+	share := transferID[catalog.ShareInstance](0x60)
+	root := transferID[catalog.DirectoryID](0x61)
+	rules, err := NewSelectionRules(true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := NewDirectoryAdmissionScope(testTransferIntent(t, share, root, rules, jobOutputBackend))
+	if err != nil {
+		t.Fatal(err)
+	}
 	secret := bytes.Repeat([]byte{0x71}, directoryAdmissionSecretBytes)
 	parentOutput := OutputDirectory{
-		DirectoryID: transferID[catalog.DirectoryID](0x61),
+		DirectoryID: root,
 		Generation:  transferID[catalog.DirectoryGeneration](0x62),
 	}
-	parent, err := NewDirectoryAdmissionWithSecret(secret, parentOutput)
+	parent, err := NewDirectoryAdmissionWithSecret(secret, scope, parentOutput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +123,7 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 		ParentAdmission: parent,
 		Path:            "child",
 	}
-	child, err := NewDirectoryAdmissionWithSecret(secret, childOutput)
+	child, err := NewDirectoryAdmissionWithSecret(secret, scope, childOutput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,11 +138,10 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 	if child.Bytes()[0] == token[0] {
 		t.Fatal("directory admission bytes leaked mutable storage")
 	}
-	parentProjection := child.Parent()
-	if parentProjection.IsZero() || !bytes.Equal(parentProjection.Bytes(), parent.Bytes()) || !parentProjection.Parent().IsZero() {
-		t.Fatalf("parent projection = %+v", parentProjection)
+	if !bytes.Equal(child.ParentToken(), parent.Bytes()) || parent.ParentToken() != nil {
+		t.Fatalf("parent tokens child=%x root=%x", child.ParentToken(), parent.ParentToken())
 	}
-	if err := ValidateDirectoryAdmissionBinding(child, childOutput); err != nil {
+	if err := ValidateDirectoryAdmissionBinding(scope, child, childOutput); err != nil {
 		t.Fatalf("valid admission binding = %v", err)
 	}
 	for name, invalid := range map[string]OutputDirectory{
@@ -149,13 +158,18 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 		}(),
 	} {
 		t.Run("mismatch/"+name, func(t *testing.T) {
-			if !errors.Is(ValidateDirectoryAdmissionBinding(child, invalid), ErrDirectoryAdmissionMismatch) {
+			if !errors.Is(ValidateDirectoryAdmissionBinding(scope, child, invalid), ErrDirectoryAdmissionMismatch) {
 				t.Fatalf("mismatch %s was accepted", name)
 			}
 		})
 	}
-	for _, badSecret := range [][]byte{nil, make([]byte, directoryAdmissionSecretBytes-1), make([]byte, directoryAdmissionSecretBytes+1)} {
-		if _, err := NewDirectoryAdmissionWithSecret(badSecret, parentOutput); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+	for _, badSecret := range [][]byte{
+		nil,
+		make([]byte, directoryAdmissionSecretBytes-1),
+		make([]byte, directoryAdmissionSecretBytes),
+		make([]byte, directoryAdmissionSecretBytes+1),
+	} {
+		if _, err := NewDirectoryAdmissionWithSecret(badSecret, scope, parentOutput); !errors.Is(err, ErrInvalidDirectoryAdmission) {
 			t.Fatalf("secret length %d error = %v", len(badSecret), err)
 		}
 	}
@@ -167,7 +181,7 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 		"parent on root":      {DirectoryID: parentOutput.DirectoryID, Generation: parentOutput.Generation, ParentAdmission: parent},
 	} {
 		t.Run("invalid/"+name, func(t *testing.T) {
-			if _, err := NewDirectoryAdmissionWithSecret(secret, invalid); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+			if _, err := NewDirectoryAdmissionWithSecret(secret, scope, invalid); !errors.Is(err, ErrInvalidDirectoryAdmission) {
 				t.Fatalf("invalid directory %s error = %v", name, err)
 			}
 		})

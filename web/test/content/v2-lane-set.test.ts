@@ -7,10 +7,10 @@ import {
   type V2BlockDemand,
   type V2BlockDispatchObservation,
   type V2BlockLane,
-  type V2BlockRouteEligibility,
   type V2BlockRouteObservation,
-} from '../../src/content/v2-broker'
+} from '../../src/content/v2-lane-set'
 import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
+import type { V2BlockRouteEligibility } from '../../src/content/v2-route-policy'
 import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
 
 const ALL_ROUTES: V2BlockRouteEligibility = Object.freeze({

@@ -14,7 +14,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 	"golang.org/x/sys/unix"
 )
@@ -118,7 +117,7 @@ func TestLinuxPlatformAdapterLifecycle(t *testing.T) {
 	if root == nil {
 		t.Fatal("platform returned a nil root")
 	}
-	if platform.Certification() != resumestate.CertificationLinuxExt4ProcessRestart {
+	if platform.Certification() != outputcap.CertificationLinuxExt4ProcessRestart {
 		t.Fatalf("certification = %q", platform.Certification())
 	}
 	if platform.Durability() != transfer.DurabilityProcessRestart {
@@ -140,7 +139,7 @@ func TestLinuxPlatformAdapterLifecycle(t *testing.T) {
 	}
 
 	binding, err := platform.RootBinding()
-	if err != nil || binding.IsZero() || binding.Certification() != resumestate.CertificationLinuxExt4ProcessRestart {
+	if err != nil || binding.IsZero() || binding.Certification() != outputcap.CertificationLinuxExt4ProcessRestart {
 		t.Fatalf("root binding zero=%t certification=%q error=%v", binding.IsZero(), binding.Certification(), err)
 	}
 	repeated, err := platform.RootBinding()
@@ -216,15 +215,6 @@ func TestLinuxPlatformAdapterLifecycle(t *testing.T) {
 	if err != nil || !same {
 		t.Fatalf("duplicate directory comparison same=%t error=%v", same, err)
 	}
-	claim, err := privateDirectory.PrepareIdentityClaim()
-	if err != nil || claim.IsZero() {
-		t.Fatalf("prepare private identity claim zero=%t error=%v", claim.IsZero(), err)
-	}
-	recoveryClaim, err := privateDirectory.IdentityClaim()
-	if err != nil || !claim.Equal(recoveryClaim) {
-		t.Fatalf("prepare/recovery claim equal=%t error=%v", claim.Equal(recoveryClaim), err)
-	}
-
 	stage, err := privateDirectory.CreateFile("stage", true, 0)
 	if err != nil {
 		t.Fatalf("create stage file: %v", err)
@@ -243,9 +233,6 @@ func TestLinuxPlatformAdapterLifecycle(t *testing.T) {
 	}
 	if size, err := stage.Size(); err != nil || size != uint64(len(payload)) {
 		t.Fatalf("stage size=%d error=%v", size, err)
-	}
-	if allocated, err := stage.AllocatedSize(); err != nil || allocated == 0 {
-		t.Fatalf("stage allocation=%d error=%v", allocated, err)
 	}
 	if err := stage.Sync(); err != nil {
 		t.Fatalf("sync stage: %v", err)
@@ -296,9 +283,6 @@ func TestLinuxPlatformAdapterLifecycle(t *testing.T) {
 	t.Cleanup(func() { _ = entry.Close() })
 	if entry.Kind() != outputcap.EntryRegularFile {
 		t.Fatalf("pinned anchor kind=%v", entry.Kind())
-	}
-	if allocated, err := entry.AllocatedSize(); err != nil || allocated == 0 {
-		t.Fatalf("pinned anchor allocation=%d error=%v", allocated, err)
 	}
 	if matches, err := root.EntryMatches("anchor", entry); err != nil || !matches {
 		t.Fatalf("pinned anchor match=%t error=%v", matches, err)
@@ -367,9 +351,6 @@ func TestLinuxPlatformAdapterLifecycle(t *testing.T) {
 	if names, err := root.Names(8); err != nil || len(names) != 1 || names[0] != "lock" {
 		t.Fatalf("remaining root names=%v error=%v", names, err)
 	}
-	if names, err := root.NamesWithPrefix("lo", 2); err != nil || len(names) != 1 || names[0] != "lock" {
-		t.Fatalf("prefixed root names=%v error=%v", names, err)
-	}
 	if kind, exact, err := root.ClassifyExactEntry("lock"); err != nil || kind != outputcap.EntryRegularFile || !exact {
 		t.Fatalf("lock classification kind=%v exact=%t error=%v", kind, exact, err)
 	}
@@ -422,9 +403,6 @@ func TestLinuxPlatformAdapterClosedCapabilityContracts(t *testing.T) {
 	if _, err := nilDirectory.Names(1); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("nil directory names error=%v", err)
 	}
-	if _, err := nilDirectory.NamesWithPrefix("x", 1); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Fatalf("nil directory prefixed names error=%v", err)
-	}
 	if _, err := nilDirectory.ObserveEntry("x"); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("nil directory observe error=%v", err)
 	}
@@ -433,7 +411,6 @@ func TestLinuxPlatformAdapterClosedCapabilityContracts(t *testing.T) {
 	}
 	for name, call := range map[string]func() error{
 		"sync":               func() error { return nilDirectory.Sync() },
-		"validate name":      func() error { return nilDirectory.ValidatePublicEntryName("x") },
 		"validate names":     func() error { return nilDirectory.ValidatePublicEntryNames([]string{"x"}) },
 		"create authority":   func() error { return nilDirectory.ValidateCreateAuthority() },
 		"metadata authority": func() error { return nilDirectory.ValidateMetadataAuthority() },
@@ -451,12 +428,6 @@ func TestLinuxPlatformAdapterClosedCapabilityContracts(t *testing.T) {
 	}
 	if _, err := nilDirectory.OpenPinnedDirectory(nil, false); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Errorf("nil directory open pinned error=%v", err)
-	}
-	if _, err := nilDirectory.PrepareIdentityClaim(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Errorf("nil directory prepare claim error=%v", err)
-	}
-	if _, err := nilDirectory.IdentityClaim(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Errorf("nil directory identity claim error=%v", err)
 	}
 	if _, err := nilDirectory.OpenDirectory("x", false); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Errorf("nil directory open directory error=%v", err)
@@ -495,7 +466,6 @@ func TestLinuxPlatformAdapterClosedCapabilityContracts(t *testing.T) {
 	}
 	for name, call := range map[string]func() error{
 		"sync":         func() error { return nilFile.Sync() },
-		"truncate":     func() error { return nilFile.Truncate(0) },
 		"set modified": func() error { return nilFile.SetModifiedTime(catalog.ModifiedTime{}) },
 	} {
 		if err := call(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
@@ -504,9 +474,6 @@ func TestLinuxPlatformAdapterClosedCapabilityContracts(t *testing.T) {
 	}
 	if _, err := nilFile.Size(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Errorf("nil file size error=%v", err)
-	}
-	if _, err := nilFile.AllocatedSize(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Errorf("nil file allocation error=%v", err)
 	}
 	if _, err := nilFile.MetadataMatches(0, catalog.ModifiedTime{}); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Errorf("nil file metadata error=%v", err)
@@ -518,9 +485,6 @@ func TestLinuxPlatformAdapterClosedCapabilityContracts(t *testing.T) {
 	var nilEntry *linuxV3EntryRef
 	if nilEntry.Kind() != outputcap.EntryAbsent {
 		t.Fatal("nil entry kind was not absent")
-	}
-	if _, err := nilEntry.AllocatedSize(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Errorf("nil entry allocation error=%v", err)
 	}
 	if err := nilEntry.Close(); err != nil {
 		t.Fatal(err)

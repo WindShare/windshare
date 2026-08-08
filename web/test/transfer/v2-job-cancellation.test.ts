@@ -5,8 +5,9 @@ import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import { byteRange } from '../../src/content/geometry'
 import type { V2BlockRangeReader } from '../../src/content/v2-broker'
 import type { V2RevisionReader } from '../../src/content/v2-session-services'
-import { DirectoryAdmissionLedger } from '../../src/transfer/directory-admission-ledger'
 import {
+  COMPLETED_JOB_SETTLEMENT,
+  pausedJobSettlement,
   VerifiedDurableRanges,
   type OutputDirectoryAdmission,
   type OutputFile,
@@ -16,13 +17,16 @@ import {
 import { TransferJob, type TransferProgress } from '../../src/transfer/v2-job'
 import {
   committedDirectoryFor,
+  BIND_TEST_DIRECTORY_ADMISSION_SCOPE,
   directoryEntry,
   fileEntry,
   identity,
   identityText,
   openedRevision,
   outputAuthority,
+  testDirectoryAdmissionLedgerBinding,
   traversalPage,
+  type ScopeBoundTestOutputSession,
   withTimeout,
 } from './v2-job-fixture'
 
@@ -46,9 +50,9 @@ describe('v2 cancellation-aware output mutations', () => {
     controller.abort(new DOMException(`cancel ${stage}`, 'AbortError'))
     const result = await withTimeout(running, 1_000, `${stage} did not settle after cancellation`)
 
-    expect(result.outcome.status).toBe('Aborted')
-    expect(result.settlement.kind).toBe('Retained')
-    expect(fixture.perFileAbort).not.toHaveBeenCalled()
+    expect(result.outcome.status).toBe('Paused')
+    expect(result.settlement.kind).toBe('Paused')
+    expect(fixture.perFileRetire).not.toHaveBeenCalled()
     expect(fixture.active()).toBe(false)
     expect(fixture.begunPaths).toHaveLength(stage === 'root-admission' || stage === 'child-admission' ? 0 : 1)
     expect(progress.at(-1)?.discovery).toBe(
@@ -76,13 +80,13 @@ describe('v2 cancellation-aware output mutations', () => {
     controller.abort(new DOMException('retain checkpoint', 'AbortError'))
     const result = await running
 
-    expect(result.outcome.status).toBe('Aborted')
-    expect(result.settlement.kind).toBe('Retained')
+    expect(result.outcome.status).toBe('Paused')
+    expect(result.settlement.kind).toBe('Paused')
     expect(fixture.durableRanges()).toEqual([byteRange(0n, 1n)])
-    expect(fixture.perFileAbort).not.toHaveBeenCalled()
+    expect(fixture.perFileRetire).not.toHaveBeenCalled()
   })
 
-  it('falls back from failed retention to explicit discard while preserving transaction ownership', async () => {
+  it('reports attention without acquiring destructive discard authority when pause fails', async () => {
     const fixture = cancellationOutput('write', true)
     const controller = new AbortController()
     const running = cancellationJob('write', fixture.session).run(controller.signal)
@@ -91,11 +95,10 @@ describe('v2 cancellation-aware output mutations', () => {
 
     const result = await running
 
-    expect(result.outcome.status).toBe('Aborted')
-    expect(result.settlement.kind).toBe('Discarded')
-    expect(fixture.discarded()).toBe(true)
-    expect(fixture.active()).toBe(false)
-    expect(fixture.perFileAbort).not.toHaveBeenCalled()
+    expect(result.outcome.status).toBe('Paused')
+    expect(result.settlement.kind).toBe('NeedsAttention')
+    expect(fixture.active()).toBe(true)
+    expect(fixture.perFileRetire).not.toHaveBeenCalled()
   })
 })
 
@@ -180,40 +183,39 @@ function cancellationOutput(stage?: BlockingStage, failRetention = false): {
   readonly session: OutputSession
   readonly stageStarted: Promise<void>
   readonly begunPaths: string[]
-  readonly perFileAbort: ReturnType<typeof vi.fn>
+  readonly perFileRetire: ReturnType<typeof vi.fn>
   readonly active: () => boolean
-  readonly discarded: () => boolean
   readonly durableRanges: () => readonly { readonly start: bigint; readonly end: bigint }[]
 } {
   const started = deferred<void>()
-  const admissions = new DirectoryAdmissionLedger()
+  const admissions = testDirectoryAdmissionLedgerBinding()
   const identity = Object.freeze({ backend: 'cancel-output', outputSessionId: identityText(41) })
   const begunPaths: string[] = []
-  const perFileAbort = vi.fn(async (...reasons: [unknown]) => {
-    if (reasons.length !== 1) throw new Error('file abort requires one reason')
+  const perFileRetire = vi.fn(async (...reasons: [unknown]) => {
+    if (reasons.length !== 1) throw new Error('file retirement requires one reason')
     return 'FileIsolated' as const
   })
   let active = false
-  let discarded = false
   let durable = [] as readonly { readonly start: bigint; readonly end: bigint }[]
   const block = async (candidate: BlockingStage, signal: AbortSignal) => {
     if (stage !== candidate) return
     started.resolve()
     await rejectOnAbort(signal)
   }
-  const session: OutputSession = {
+  const session: ScopeBoundTestOutputSession = {
+    [BIND_TEST_DIRECTORY_ADMISSION_SCOPE]: admissions.bind,
     identity,
     format: 'directory',
     capabilities: {
       durability: 'ProcessRestart', randomWrite: true, fileFailureIsolation: true, modificationTime: false,
     },
     admitDirectory: (request: OutputDirectoryAdmission, signal: AbortSignal) =>
-      admissions.admitDirectory(request, signal, async (directory, operationSignal) => {
+      admissions.get().admitDirectory(request, signal, async (directory, operationSignal) => {
         await block(directory.path.length === 0 ? 'root-admission' : 'child-admission', operationSignal)
       }),
-    finalizeDirectory: async (directory) => { admissions.validateDirectoryFinalization(directory) },
+    finalizeDirectory: (admission, signal) => admissions.get().finalizeDirectory(admission, signal),
     beginFile: async (input: OutputFile, signal: AbortSignal) => {
-      const file = admissions.validateFileParent(input)
+      const file = admissions.get().validateFileParent(input)
       begunPaths.push(file.path.join('/'))
       active = true
       await block('begin', signal)
@@ -237,18 +239,19 @@ function cancellationOutput(stage?: BlockingStage, failRetention = false): {
             await block('commit', operationSignal)
             active = false
           },
-          abort: async (reason: unknown) => {
+          retire: async (reason: unknown) => {
             active = false
-            return perFileAbort(reason)
+            return perFileRetire(reason)
           },
+          pause: async () => { active = false },
         }),
       })
     },
-    finishJob: async () => undefined,
-    abortJob: async () => { discarded = true; active = false },
-    suspendJob: async () => {
+    completeJob: async () => COMPLETED_JOB_SETTLEMENT,
+    pauseJob: async () => {
       if (failRetention) throw new Error('retention unavailable')
       active = false
+      return pausedJobSettlement('ProcessRestart')
     },
   }
   if (stage === undefined) started.resolve()
@@ -256,9 +259,8 @@ function cancellationOutput(stage?: BlockingStage, failRetention = false): {
     session,
     stageStarted: started.promise,
     begunPaths,
-    perFileAbort,
+    perFileRetire,
     active: () => active,
-    discarded: () => discarded,
     durableRanges: () => durable,
   }
 }

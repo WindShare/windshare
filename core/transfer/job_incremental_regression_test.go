@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/transfer/fault"
 )
 
 // duplicatePageCatalog deliberately places the same NodeID on two otherwise
@@ -25,7 +26,7 @@ func (source duplicatePageCatalog) OpenDirectoryPages(
 	directory catalog.DirectoryID,
 ) (catalog.DirectoryPageCursor, error) {
 	if directory != source.root {
-		return nil, NewSessionFailure(ErrCatalogIdentity)
+		return nil, catalogIntegrityFailure(ErrCatalogIdentity)
 	}
 	return &duplicatePageCursor{pages: source.pages}, nil
 }
@@ -115,7 +116,7 @@ func TestNodeLedgerRollbackReleasesOnlyDiscardedSuffix(t *testing.T) {
 	if err := run.claimNode(discarded); err != nil {
 		t.Fatalf("discarded suffix remained claimed: %v", err)
 	}
-	if err := run.claimNode(committed); !errors.Is(err, ErrCatalogIdentity) {
+	if err := run.claimNode(committed); normalizedFault(err) != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) {
 		t.Fatalf("committed prefix duplicate = %v", err)
 	}
 	if err := run.rollbackClaims(nodeLedgerCheckpoint(len(run.nodeLedger.order) + 1)); !errors.Is(err, ErrNodeLedgerState) {
@@ -138,7 +139,7 @@ func TestNodeIdentityLedgerFailsClosedAtConfiguredBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = ledger.claim(transferID[catalog.NodeID](196))
-	if !errors.Is(err, ErrNodeLedgerBudget) || !isJobFatal(err) {
+	if normalizedFault(err) != normalizedFault(resourceBudgetFailure(ErrNodeLedgerBudget)) || !isJobTerminalError(err) {
 		t.Fatalf("exhausted ledger = %v", err)
 	}
 }
@@ -181,7 +182,8 @@ func TestTransferJobRejectsCrossPageDuplicateNodeIDBeforeAdmission(t *testing.T)
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrCatalogIdentity) ||
+	if result.Outcome != JobPausedOutcome ||
+		result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) ||
 		len(revisions.order) != 0 || len(output.directories) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
 		t.Fatalf("duplicate node result=%+v opens=%v directories=%v", result, revisions.order, output.directories)
 	}
@@ -191,11 +193,10 @@ func TestTransferJobRejectsCrossPageNameSequenceViolationsBeforeAdmission(t *tes
 	for name, test := range map[string]struct {
 		firstName  string
 		secondName string
-		want       error
 	}{
-		"exact duplicate":    {firstName: "same", secondName: "same", want: catalog.ErrPageSequence},
-		"portable collision": {firstName: "Alpha", secondName: "alpha", want: catalog.ErrSiblingCollision},
-		"boundary order":     {firstName: "zeta", secondName: "alpha", want: catalog.ErrPageSequence},
+		"exact duplicate":    {firstName: "same", secondName: "same"},
+		"portable collision": {firstName: "Alpha", secondName: "alpha"},
+		"boundary order":     {firstName: "zeta", secondName: "alpha"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			share := transferID[catalog.ShareInstance](211)
@@ -227,8 +228,9 @@ func TestTransferJobRejectsCrossPageNameSequenceViolationsBeforeAdmission(t *tes
 				t.Fatal(err)
 			}
 			result := job.Run(context.Background())
-			if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrCatalogIdentity) ||
-				!errors.Is(result.TerminationCause, test.want) || len(output.directories) != 0 {
+			if result.Outcome != JobPausedOutcome ||
+				result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) ||
+				len(output.directories) != 0 {
 				t.Fatalf("cross-page validation result=%+v directories=%v", result, output.directories)
 			}
 		})
@@ -274,15 +276,17 @@ func TestTransferJobDoesNotAdmitOrQueueOmittedChildGeneration(t *testing.T) {
 func TestTransferJobCombinesBeginAndTerminalReleaseFailures(t *testing.T) {
 	share := transferID[catalog.ShareInstance](210)
 	output := newJobOutput(share)
-	output.beginErr = NewOutputSessionError(errors.New("file create"), false)
-	releaseCause := NewSessionFailure(errors.New("revision session closed"))
+	output.beginErr = outputFailure(fault.ScopeFileLocal, fault.OutputStateIO, errors.New("file create"))
+	releaseCause := sessionProtocolFailure(errors.New("revision session closed"))
 	revisions := &jobRevisionClient{releaseErr: releaseCause}
 	job, _ := branchJob(t, output, revisions, scriptedRangeReader{})
 
 	result := job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, releaseCause) ||
-		len(result.Files) != 1 || !errors.Is(result.Files[0].Cause, output.beginErr) ||
-		!errors.Is(result.Files[0].LeaseReleaseFailure, releaseCause) || output.pauseCalls != 1 || output.completeCalls != 0 {
+	if result.Outcome != JobPausedOutcome ||
+		result.TerminationFault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
+		len(result.Files) != 1 || result.Files[0].Fault != mustOutputFault(fault.ScopeFileLocal, fault.OutputStateIO) ||
+		result.Files[0].LeaseReleaseFault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
+		output.pauseCalls != 1 || output.completeCalls != 0 {
 		t.Fatalf("begin/release result=%+v", result)
 	}
 }
@@ -433,7 +437,7 @@ func TestZIPRetirementSkipsBeforeMemberStartButPausesAfterMemberBytes(t *testing
 		}
 		reader := &fileScriptedRangeReader{
 			failFile: failed, failAt: 1,
-			failure: NewIsolatedPermanentSourceFailure(errors.New("source denied member")),
+			failure: sourcePermanentFailure(errors.New("source denied member")),
 			calls:   make(map[catalog.FileID]int),
 		}
 		job, err := newTestTransferJob(t, TransferJobConfig{
@@ -467,15 +471,15 @@ func TestZIPRetirementSkipsBeforeMemberStartButPausesAfterMemberBytes(t *testing
 		size := uint64(catalog.MinChunkSize) * 2
 		rules, _ := NewSelectionRules(true, nil)
 		output, intent := newZIPJobOutput(t, share, root, rules)
-		archiveCompromised := NewOutputFault(
-			OutputFaultSession, OutputFaultStateIO, errors.New("archive member already started"),
+		archiveCompromised := outputFailure(
+			fault.ScopeOutputPause, fault.OutputStateIO, errors.New("archive member already started"),
 		)
 		output.transactionScript.retireErrAfterWrite = archiveCompromised
 		descriptor := jobDescriptor(t, share, file, 1, size)
 		opened, _ := NewOpenedRevision(transferID[content.LeaseID](253), descriptor)
 		reader := &fileScriptedRangeReader{
 			failFile: file, failAt: 2,
-			failure: NewIsolatedPermanentSourceFailure(errors.New("source denied remaining member bytes")),
+			failure: sourcePermanentFailure(errors.New("source denied remaining member bytes")),
 			calls:   make(map[catalog.FileID]int),
 		}
 		job, err := newTestTransferJob(t, TransferJobConfig{
@@ -497,15 +501,15 @@ func TestZIPRetirementSkipsBeforeMemberStartButPausesAfterMemberBytes(t *testing
 		transaction := output.transactions["member.bin"]
 		if result.Outcome != JobPausedOutcome || result.Settlement.Kind() != JobPaused ||
 			transaction == nil || len(transaction.retireReasons) != 1 || transaction.transient.IsEmpty() ||
-			!errors.Is(result.SettlementFailure, archiveCompromised) || output.pauseCalls != 1 {
+			result.SettlementFault != normalizedFault(archiveCompromised) || output.pauseCalls != 1 {
 			t.Fatalf("result=%+v transaction=%+v", result, transaction)
 		}
 	})
 }
 
 func TestZIPFileOutputFaultUsesTransactionMemberBoundary(t *testing.T) {
-	fileFault := NewOutputFault(
-		OutputFaultFile, OutputFaultStateIO, errors.New("member output rejected"),
+	fileFault := outputFailure(
+		fault.ScopeFileLocal, fault.OutputStateIO, errors.New("member output rejected"),
 	)
 	t.Run("pause proves member never started", func(t *testing.T) {
 		base, intent, failed, good, revisions, catalogClient := newZIPBoundaryJobFixture(t, 1)
@@ -536,8 +540,8 @@ func TestZIPFileOutputFaultUsesTransactionMemberBoundary(t *testing.T) {
 
 	t.Run("pause reports member bytes compromised archive", func(t *testing.T) {
 		base, intent, failed, _, revisions, catalogClient := newZIPBoundaryJobFixture(t, 20)
-		archiveCompromised := NewOutputFault(
-			OutputFaultSession, OutputFaultStateIO, errors.New("member bytes compromised archive"),
+		archiveCompromised := outputFailure(
+			fault.ScopeOutputPause, fault.OutputStateIO, errors.New("member bytes compromised archive"),
 		)
 		output := &pathScriptedJobOutput{
 			jobOutput: base,
@@ -558,7 +562,7 @@ func TestZIPFileOutputFaultUsesTransactionMemberBoundary(t *testing.T) {
 		if result.Outcome != JobPausedOutcome || result.Settlement.Kind() != JobPaused ||
 			failedTransaction == nil || failedTransaction.pending.IsEmpty() ||
 			base.transactions["b-good.bin"] != nil || base.pauseCalls != 1 || base.completeCalls != 0 ||
-			!errors.Is(result.SettlementFailure, archiveCompromised) ||
+			result.SettlementFault != normalizedFault(archiveCompromised) ||
 			!slices.Equal(revisions.order, []catalog.FileID{failed}) {
 			t.Fatalf("result=%+v transactions=%v revision order=%v", result, base.transactions, revisions.order)
 		}
@@ -626,50 +630,4 @@ func modeName(mode OutputMode) string {
 		return "zip"
 	}
 	return "single"
-}
-
-func TestLifecycleErrorGraphsCannotHangOrBypassProductionSettlement(t *testing.T) {
-	t.Run("cyclic begin failure remains file local", func(t *testing.T) {
-		cycle := &outputFailureCycle{}
-		cycle.children = []error{cycle}
-		output := newJobOutput(transferID[catalog.ShareInstance](180))
-		output.beginErr = cycle
-		job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
-		result := job.Run(context.Background())
-		if result.Outcome != JobCompletedWithErrors || result.TerminationCause != nil ||
-			output.pauseCalls != 0 || output.completeCalls != 1 {
-			t.Fatalf("outcome=%d termination=%t pauses=%d completes=%d", result.Outcome,
-				result.TerminationCause != nil, output.pauseCalls, output.completeCalls)
-		}
-	})
-
-	t.Run("budget exhaustion pauses admitted output", func(t *testing.T) {
-		deep := error(errors.New("authority beyond budget"))
-		for range maxOutputFailureTreeNodes + 1 {
-			deep = &lifecycleErrorLink{next: deep}
-		}
-		output := newJobOutput(transferID[catalog.ShareInstance](181))
-		output.beginErr = deep
-		job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
-		result := job.Run(context.Background())
-		if result.Outcome != JobPausedOutcome || result.TerminationCause == nil || output.pauseCalls != 1 {
-			t.Fatalf("outcome=%d termination=%t pauses=%d", result.Outcome,
-				result.TerminationCause != nil, output.pauseCalls)
-		}
-	})
-
-	t.Run("cyclic settlement failure becomes output contract fault", func(t *testing.T) {
-		cycle := &outputFailureCycle{}
-		cycle.children = []error{cycle}
-		output := newJobOutput(transferID[catalog.ShareInstance](182))
-		output.transactionScript.pauseErr = cycle
-		job, _ := branchJob(
-			t, output, &jobRevisionClient{}, scriptedRangeReader{err: errors.New("temporary source failure")},
-		)
-		result := job.Run(context.Background())
-		if result.Outcome != JobPausedOutcome || result.SettlementFailure == nil || output.pauseCalls != 1 {
-			t.Fatalf("outcome=%d settlement failure=%t pauses=%d", result.Outcome,
-				result.SettlementFailure != nil, output.pauseCalls)
-		}
-	})
 }

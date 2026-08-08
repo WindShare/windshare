@@ -6,6 +6,7 @@ import {
 import { describe, expect, it } from 'vitest'
 
 import { byteRange } from '../../src/content/geometry'
+import { encodeBase64Url } from '../../src/crypto/bytes'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, jobOutcome } from '../../src/transfer/outcome'
 import {
   directoryRecord,
@@ -21,6 +22,8 @@ import { MemoryZipCentralDirectorySpool } from './zip-spool-fake'
 const identity = Object.freeze({
   backend: 'origin-private-staging',
   outputSessionId: 'export-session',
+  transferIntentDigest: fixtureIdentity('intent', 32),
+  rootIdentity: fixtureIdentity('root', 32),
 })
 const OUTCOME = jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
 const ACTIVE_SIGNAL = new AbortController().signal
@@ -116,7 +119,15 @@ function stagedCatalog(): StagedOutputCatalog {
     'regular-file',
   )
   const directories = [
-    directoryRecord(identity, ['empty-directory'], 'empty-directory', true, undefined, true, 1n),
+    directoryRecord(
+      identity,
+      ['empty-directory'],
+      fixtureIdentity('empty-directory', 32),
+      true,
+      undefined,
+      true,
+      1n,
+    ),
   ]
   const files: StagedOutputFile[] = [
     Object.freeze({ record: emptyRecord, read: async () => new Blob([]) }),
@@ -141,12 +152,16 @@ function stagedFileRecord(
   const canonicalPath = path.split('/')
   return fileRecord(
     identity,
-    { ...identity, canonicalPath, ownedFileIdentity },
+    {
+      ...identity,
+      canonicalPath,
+      ownedFileIdentity: fixtureIdentity(ownedFileIdentity, 32),
+    },
     {
       source: {
         shareInstance: 'share',
-        fileId: path,
-        fileRevision: `revision-${path}`,
+        fileId: fixtureIdentity(path, 16),
+        fileRevision: fixtureIdentity(`revision-${path}`, 16),
       },
       path: canonicalPath,
       exactSize,
@@ -155,6 +170,16 @@ function stagedFileRecord(
     true,
     1n,
   )
+}
+
+function fixtureIdentity(label: string, length: number): string {
+  const bytes = new Uint8Array(length)
+  bytes[0] = 0xa5
+  for (const [index, character] of [...label].entries()) {
+    const offset = (index % (length - 1)) + 1
+    bytes[offset] = ((bytes[offset] ?? 0) + (character.codePointAt(0) ?? 0) + index) & 0xff
+  }
+  return encodeBase64Url(bytes)
 }
 
 function recordedOutput(): {

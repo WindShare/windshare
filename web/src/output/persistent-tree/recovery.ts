@@ -9,7 +9,7 @@ import {
   type OutputJournalScan,
   outputPathKey,
   outputRecordKey,
-  recordBelongsToSession,
+  recordBelongsToCheckpointNamespace,
   snapshotOutputRecord,
   validateOutputJournalPage,
 } from '../persistence/journal'
@@ -90,7 +90,7 @@ function validatedRecord(
   } catch (error) {
     throw bindingError('Output journal contains a corrupt record', error)
   }
-  if (!recordBelongsToSession(record, identity)) {
+  if (!recordBelongsToCheckpointNamespace(record, identity)) {
     throw bindingError('Output journal contains a record for another checkpoint namespace')
   }
   return record
@@ -98,7 +98,7 @@ function validatedRecord(
 
 function validatedRecordKey(
   candidate: PersistedOutputRecord,
-  identity: OutputSessionIdentity,
+  identity: OutputSessionIdentity & CheckpointNamespaceBinding,
 ): string {
   return outputRecordKey(validatedRecord(candidate, identity))
 }

@@ -13,6 +13,14 @@ import (
 // cannot turn waiting feedback into scan-wide backpressure.
 const ScanProgressEntryInterval = uint64(MaxCatalogPageEntries)
 
+// DirectoryPageCursor owns one forward-only authenticated generation walk.
+// Keeping the cursor contract in catalog lets transports stream pages without
+// forcing consumers to retain a DirectorySnapshot or depend on a wire adapter.
+type DirectoryPageCursor interface {
+	Next(context.Context) (CatalogPage, bool, error)
+	Close() error
+}
+
 type ScanWork interface {
 	Consume(uint64) error
 }
@@ -300,4 +308,85 @@ func (s *CatalogStore) publishAttemptProgress(attempt *scanAttempt, count uint64
 	for subscription := range attempt.observers {
 		subscription.enqueueLatest(progress)
 	}
+}
+
+type scanWorkMeter struct {
+	store     *CatalogStore
+	resources *attemptResourceMeter
+}
+
+func (m scanWorkMeter) Consume(units uint64) error {
+	if units == 0 {
+		return nil
+	}
+	m.store.mu.Lock()
+	defer m.store.mu.Unlock()
+	if m.store.closed {
+		return ErrCatalogClosed
+	}
+	return m.resources.Consume(ResourceUsage{ScanWork: units})
+}
+
+type scanChildCollector struct {
+	mu       sync.Mutex
+	ctx      context.Context
+	work     ScanWork
+	sorter   *directorySorter
+	count    uint64
+	closed   bool
+	progress func(uint64)
+}
+
+func (c *scanChildCollector) Add(ctx context.Context, child ScannedChild) error {
+	if ctx == nil {
+		return errors.New("catalog scan child sink requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return ErrScanSinkClosed
+	}
+	bound := c.ctx
+	if bound == nil {
+		bound = ctx
+	}
+	if err := bound.Err(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	if c.count == MaxDirectoryEntries {
+		c.mu.Unlock()
+		return ErrPageLimit
+	}
+	if err := c.work.Consume(1); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	if err := c.sorter.Add(bound, child); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	c.count++
+	count := c.count
+	progress := c.progress
+	c.mu.Unlock()
+	if progress != nil {
+		progress(count)
+	}
+	return nil
+}
+
+func (c *scanChildCollector) Close() {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+}
+
+func (c *scanChildCollector) Count() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.count
 }

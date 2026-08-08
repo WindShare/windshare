@@ -1,9 +1,11 @@
 import {
   V2LaneSet,
   type V2BlockLane,
-  type V2BlockRouteEligibility,
-  type V2BlockTransportRoute,
-} from '../content/v2-broker'
+} from '../content/v2-lane-set'
+import type {
+  V2BlockRouteEligibility,
+  V2BlockTransportRoute,
+} from '../content/v2-route-policy'
 import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
 import type { V2LaneIdentity } from './diagnostics'
 import type { PeerChannel } from './peer-channel'

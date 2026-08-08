@@ -128,9 +128,9 @@ func TestLaneFetchTerminatesAfterEveryIdentityRejectsAdmission(t *testing.T) {
 func TestLaneLatencyAccountingClampsClockRegressionAndSmoothsSamples(t *testing.T) {
 	lanes := newBoundaryLaneSet(t, 8)
 	state := &laneState{inflight: 3}
-	lanes.finish(state, -time.Second, nil)
-	lanes.finish(state, time.Second, nil)
-	lanes.finish(state, 3*time.Second, nil)
+	lanes.finish(state, -time.Second, nil, false)
+	lanes.finish(state, time.Second, nil, false)
+	lanes.finish(state, 3*time.Second, nil, false)
 	if state.inflight != 0 || state.latency != 1500*time.Millisecond {
 		t.Fatalf("lane accounting = inflight %d, latency %v", state.inflight, state.latency)
 	}

@@ -3,6 +3,7 @@ package sessionruntime
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"slices"
 	"sync"
 
@@ -276,6 +277,147 @@ func strongerReceiverPeerTerminalSeverity(
 	default:
 		return false
 	}
+}
+
+// SenderPeerSession is the transport-neutral authority granted to one
+func receiverPeerTerminalResult(terminal ReceiverPeerTermination) ReceiverPeerReceiveResult {
+	return ReceiverPeerReceiveResult{kind: receiverPeerReceiveResultTermination, termination: terminal}
+}
+
+func (operation *ReceiverPeerOperation) classifyReceiveError(
+	ctx context.Context,
+	err error,
+) receiverPeerTerminalEvidence {
+	operation.mu.Lock()
+	hasTransition := operation.terminalTransition.authority != receiverPeerTerminalAuthorityInvalid
+	operation.mu.Unlock()
+	runtimeTrigger := err
+	if hasTransition && isExactReceiverPeerCause(err, ErrOperationMissing) {
+		// An established owner closes the exact response sink to wake Receive. A
+		// concurrent runtime stop remains relevant, but that synthetic wakeup does not.
+		runtimeTrigger = nil
+	}
+	if evidence, stopping := operation.runtimeTerminalEvidence(runtimeTrigger); stopping {
+		// Runtime lifecycle cancellation precedes Done publication because finalizers
+		// run in between. Observing the lifecycle avoids attributing a call-close
+		// wakeup to the caller during that intentional shutdown window.
+		return evidence
+	}
+	if hasTransition && isExactReceiverPeerCause(err, ErrOperationMissing) {
+		// Closing the exact call is only the wakeup for an already-owned terminal
+		// transition; it is not a second failure cause.
+		return receiverPeerTerminalEvidence{}
+	}
+	if isExactReceiverPeerCause(err, ErrRuntimeClosed) {
+		return receiverPeerRuntimeEvidence(err)
+	}
+	if ctx != nil && ctx.Err() != nil && isExactReceiverPeerCause(err, ctx.Err()) {
+		return receiverPeerLocalEvidence(ReceiverPeerProvenanceLocalContextEnded, err)
+	}
+	return receiverPeerLocalEvidence(ReceiverPeerProvenanceLocalOperationContract, err)
+}
+
+func (operation *ReceiverPeerOperation) runtimeTerminalEvidence(
+	trigger error,
+) (receiverPeerTerminalEvidence, bool) {
+	if operation == nil || operation.rpc == nil || operation.rpc.runtime == nil {
+		return receiverPeerRuntimeEvidence(trigger), true
+	}
+	runtime := operation.rpc.runtime
+	if runtime.ctx == nil || runtime.done == nil {
+		return receiverPeerRuntimeEvidence(trigger), true
+	}
+	if runtime.ctx.Err() != nil {
+		return receiverPeerRuntimeEvidence(trigger), true
+	}
+	select {
+	case <-runtime.Done():
+		return receiverPeerRuntimeEvidence(trigger), true
+	default:
+		return receiverPeerTerminalEvidence{}, false
+	}
+}
+
+func receiverPeerLocalEvidence(
+	provenance ReceiverPeerTerminalProvenance,
+	cause error,
+) receiverPeerTerminalEvidence {
+	evidence := newReceiverPeerTerminalEvidence(
+		ReceiverPeerTerminalAuthorityLocal,
+		provenance,
+		ReceiverPeerTerminalOperationOnly,
+	)
+	evidence.diagnostics.append(receiverPeerDiagnosticForCause(cause, ReceiverPeerDiagnosticOpaqueFailure))
+	return evidence
+}
+
+func receiverPeerRuntimeEvidence(trigger error) receiverPeerTerminalEvidence {
+	evidence := newReceiverPeerTerminalEvidence(
+		ReceiverPeerTerminalAuthorityRuntime,
+		ReceiverPeerProvenanceRuntimeStopping,
+		ReceiverPeerTerminalSessionUnavailable,
+		receiverPeerDiagnostic(ReceiverPeerDiagnosticRuntimeClosed),
+	)
+	evidence.diagnostics.append(receiverPeerDiagnosticForCause(trigger, ReceiverPeerDiagnosticOpaqueFailure))
+	return evidence
+}
+
+func receiverPeerRemoteFailureEvidence(
+	message protocolsession.Message,
+) receiverPeerTerminalEvidence {
+	failure, err := decodeRemoteOperationFailure(message)
+	if err != nil {
+		return newReceiverPeerTerminalEvidence(
+			ReceiverPeerTerminalAuthorityRemote,
+			ReceiverPeerProvenanceRemoteFailureMalformed,
+			ReceiverPeerTerminalSessionUnsafe,
+			receiverPeerDiagnostic(ReceiverPeerDiagnosticRemoteFailureMalformed),
+		)
+	}
+	if failure.Scope() != protocolsession.OperationScopePeer {
+		return newReceiverPeerTerminalEvidence(
+			ReceiverPeerTerminalAuthorityRemote,
+			ReceiverPeerProvenanceRemoteFailureScopeViolation,
+			ReceiverPeerTerminalSessionUnsafe,
+			receiverPeerRemoteDiagnostic(ReceiverPeerDiagnosticRemoteFailureScopeViolation, failure),
+		)
+	}
+	return newReceiverPeerTerminalEvidence(
+		ReceiverPeerTerminalAuthorityRemote,
+		ReceiverPeerProvenanceRemoteOperationRejected,
+		ReceiverPeerTerminalOperationOnly,
+		receiverPeerRemoteDiagnostic(ReceiverPeerDiagnosticRemoteOperationRejected, failure),
+	)
+}
+
+func receiverPeerDiagnosticForCause(
+	cause error,
+	fallback ReceiverPeerDiagnosticCode,
+) ReceiverPeerDiagnostic {
+	switch {
+	case cause == nil:
+		return ReceiverPeerDiagnostic{}
+	case isExactReceiverPeerCause(cause, context.Canceled):
+		return receiverPeerDiagnostic(ReceiverPeerDiagnosticContextCanceled)
+	case isExactReceiverPeerCause(cause, ErrOperationMissing):
+		return receiverPeerDiagnostic(ReceiverPeerDiagnosticOperationMissing)
+	case isExactReceiverPeerCause(cause, ErrRuntimeClosed):
+		return receiverPeerDiagnostic(ReceiverPeerDiagnosticRuntimeClosed)
+	case isExactReceiverPeerCause(cause, ErrOperationOverflow):
+		return receiverPeerDiagnostic(ReceiverPeerDiagnosticOperationOverflow)
+	case isExactReceiverPeerCause(cause, protocolsession.ErrUnknownMessageKind):
+		return receiverPeerDiagnostic(ReceiverPeerDiagnosticUnknownControl)
+	default:
+		return receiverPeerDiagnostic(fallback)
+	}
+}
+
+func isExactReceiverPeerCause(cause, sentinel error) bool {
+	causeValue := reflect.ValueOf(cause)
+	sentinelValue := reflect.ValueOf(sentinel)
+	return causeValue.IsValid() && sentinelValue.IsValid() &&
+		causeValue.Type() == sentinelValue.Type() &&
+		causeValue.Comparable() && causeValue.Equal(sentinelValue)
 }
 
 // SenderPeerSession is the transport-neutral authority granted to one

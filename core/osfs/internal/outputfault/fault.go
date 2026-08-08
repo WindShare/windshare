@@ -1,10 +1,6 @@
 package outputfault
 
-import (
-	"errors"
-
-	"github.com/windshare/windshare/core/transfer"
-)
+import "errors"
 
 var (
 	ErrUnsupportedVolume       = errors.New("osfs: output root is not on a certified filesystem")
@@ -21,7 +17,3 @@ var (
 	ErrPathEscape              = errors.New("osfs: path escapes the output root")
 	ErrAncestryAuthorityDenied = errors.New("osfs: output ancestry authority denied")
 )
-
-func New(scope transfer.OutputFaultScope, code transfer.OutputFaultCode, cause error) error {
-	return transfer.NewOutputFault(scope, code, cause)
-}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"math"
 
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"golang.org/x/sys/unix"
@@ -78,42 +77,6 @@ func (entry *linuxOutputPinnedEntry) close() error {
 	err := entry.system.close(entry.fd)
 	entry.fd = -1
 	return err
-}
-
-func (entry *linuxOutputPinnedEntry) allocatedSize() (uint64, error) {
-	const operation = "inspect pinned output entry allocation"
-	if entry == nil || entry.system == nil || entry.fd < 0 {
-		return 0, linuxUnsafe(operation, "entry handle is closed or absent", nil)
-	}
-	current, err := linuxVerifyOpenObject(entry.system, entry.fd, entry.certificate)
-	if err != nil {
-		return 0, err
-	}
-	if !entry.object.sameObject(current.identity) || entry.object.kind != current.identity.kind {
-		return 0, linuxUnsafe(operation, "entry handle changed after it was pinned", nil)
-	}
-	requested := unix.STATX_TYPE | unix.STATX_INO | unix.STATX_BLOCKS | unix.STATX_MNT_ID_UNIQUE
-	var stat unix.Statx_t
-	if err := entry.system.statx(
-		entry.fd, "", unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW, requested, &stat,
-	); err != nil {
-		return 0, fmt.Errorf("%s: %w", operation, err)
-	}
-	if stat.Mask&uint32(requested) != uint32(requested) {
-		return 0, linuxUnsupported(operation, "filesystem omitted allocation or identity", nil)
-	}
-	observed := linuxOpenHandleIdentity{
-		mountID: stat.Mnt_id, deviceMajor: stat.Dev_major, deviceMinor: stat.Dev_minor,
-		inode: stat.Ino, kind: linuxFileType(stat.Mode),
-	}
-	if !entry.object.sameObject(observed) {
-		return 0, linuxUnsafe(operation, "allocation metadata differs from the pinned object", nil)
-	}
-	const statBlockBytes = uint64(512)
-	if stat.Blocks > math.MaxUint64/statBlockBytes {
-		return 0, linuxUnsafe(operation, "allocated byte count overflows", nil)
-	}
-	return stat.Blocks * statBlockBytes, nil
 }
 
 func (directory *linuxOutputDirectory) pinnedEntryMatches(

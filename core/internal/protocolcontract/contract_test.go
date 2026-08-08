@@ -26,7 +26,8 @@ import (
 var update = flag.Bool("update", false, "regenerate R0 v2 contract vectors")
 
 const (
-	vectorsDir = "../../testvectors"
+	vectorsDir           = "../../testvectors"
+	updateVectorsCommand = "make vectors-update"
 
 	wireVersion                         = 2
 	suite                               = 2
@@ -209,10 +210,10 @@ func TestR0VectorFilesUpToDate(t *testing.T) {
 		}
 		committed, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("read %s (run go test ./internal/protocolcontract -update): %v", path, err)
+			t.Fatalf("read %s (run %s from the repository root): %v", path, updateVectorsCommand, err)
 		}
 		if !bytes.Equal(committed, encoded) {
-			t.Fatalf("%s is stale; run go test ./internal/protocolcontract -update", path)
+			t.Fatalf("%s is stale; run %s from the repository root", path, updateVectorsCommand)
 		}
 	}
 }
