@@ -14,21 +14,33 @@ type linuxAuthorityHarness struct {
 	ownerUID      uint32
 }
 
+const (
+	linuxAuthorityRootFD        = 10
+	linuxAuthorityRegularFileFD = 11
+)
+
 func newLinuxAuthorityRoot(t *testing.T) (*linuxOutputDirectory, *linuxAuthorityHarness) {
 	t.Helper()
-	const rootFD = 10
 	harness := &linuxAuthorityHarness{}
 	filesystemID := [2]int32{17, 29}
 	system := &linuxOutputSystem{}
-	system.statx = func(_ int, _ string, _ int, mask int, stat *unix.Statx_t) error {
-		mode := harness.directoryMode
-		if mode == 0 {
-			mode = uint16(unix.S_IFDIR | 0o755)
+	system.statx = func(fd int, _ string, _ int, mask int, stat *unix.Statx_t) error {
+		mode := uint16(unix.S_IFREG | linuxOutputStateFileMode)
+		inode := uint64(linuxTestRootInode + 1)
+		if fd == linuxAuthorityRootFD {
+			mode = harness.directoryMode
+			if mode == 0 {
+				mode = uint16(unix.S_IFDIR | 0o755)
+			}
+			inode = linuxTestRootInode
+		} else if fd != linuxAuthorityRegularFileFD {
+			t.Fatalf("authority harness statx fd=%d", fd)
+			return unix.EBADF
 		}
 		*stat = unix.Statx_t{
 			Mask:      uint32(mask),
 			Mode:      mode,
-			Ino:       linuxTestRootInode,
+			Ino:       inode,
 			Dev_major: linuxTestDeviceMajor,
 			Dev_minor: linuxTestDeviceMinor,
 			Mnt_id:    linuxTestUniqueMountID,
@@ -78,7 +90,7 @@ func newLinuxAuthorityRoot(t *testing.T) (*linuxOutputDirectory, *linuxAuthority
 	}
 	return &linuxOutputDirectory{
 		system:      system,
-		fd:          rootFD,
+		fd:          linuxAuthorityRootFD,
 		certificate: certificate,
 		object:      certificate.rootObject,
 	}, harness

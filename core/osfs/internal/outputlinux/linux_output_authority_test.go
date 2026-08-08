@@ -111,7 +111,7 @@ func TestLinuxExactPrivateAuthorityRejectsForeignOwnedObjects(t *testing.T) {
 	}
 
 	file := &linuxOutputRegularFile{
-		system: root.system, fd: 11, certificate: root.certificate,
+		system: root.system, fd: linuxAuthorityRegularFileFD, certificate: root.certificate,
 		object: linuxOpenHandleIdentity{
 			mountID: linuxTestUniqueMountID, deviceMajor: linuxTestDeviceMajor,
 			deviceMinor: linuxTestDeviceMinor, inode: linuxTestRootInode + 1,
