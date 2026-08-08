@@ -115,6 +115,129 @@ function Invoke-CoreReleaseGit {
     }
 }
 
+function Read-CoreReleaseGitValue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$Arguments,
+
+        [Parameter(Mandatory)]
+        [string]$Label
+    )
+
+    $values = @(Invoke-CoreReleaseGit -Arguments $Arguments)
+    if ($values.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$values[0])) {
+        throw "release checkout Git $Label resolution was not singular"
+    }
+    return ([string]$values[0]).Trim()
+}
+
+function Resolve-CoreReleaseNoFollowDirectory([string]$Path, [string]$Label) {
+    if (-not [IO.Path]::IsPathFullyQualified($Path) -or
+        -not (Test-Path -LiteralPath $Path -PathType Container)) {
+        throw "release checkout $Label is not an existing absolute directory: $Path"
+    }
+    $normalized = [IO.Path]::GetFullPath($Path)
+    $info = Get-Item -LiteralPath $normalized -Force
+    if (($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "release checkout $Label must not be a reparse point: $normalized"
+    }
+    return [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $normalized).Path)
+}
+
+function Resolve-CoreReleaseNoFollowFile([string]$Path, [string]$Label) {
+    if (-not [IO.Path]::IsPathFullyQualified($Path) -or
+        -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "release checkout $Label is not an existing absolute file: $Path"
+    }
+    $normalized = [IO.Path]::GetFullPath($Path)
+    $info = Get-Item -LiteralPath $normalized -Force
+    if (($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "release checkout $Label must not be a reparse point: $normalized"
+    }
+    return [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $normalized).Path)
+}
+
+function Resolve-CoreReleaseRepositoryIdentity {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepositoryRoot
+    )
+
+    if (-not [IO.Path]::IsPathFullyQualified($RepositoryRoot) -or
+        -not (Test-Path -LiteralPath $RepositoryRoot -PathType Container)) {
+        throw 'release checkout requires an existing absolute repository root'
+    }
+    $normalizedRoot = [IO.Path]::GetFullPath($RepositoryRoot)
+    $rootInfo = Get-Item -LiteralPath $normalizedRoot -Force
+    if (($rootInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'release checkout repository root must not be a reparse point'
+    }
+    $resolvedRoot = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $normalizedRoot).Path)
+
+    $gitEntry = Join-Path $resolvedRoot '.git'
+    if (-not (Test-Path -LiteralPath $gitEntry -PathType Container) -and
+        -not (Test-Path -LiteralPath $gitEntry -PathType Leaf)) {
+        throw 'release checkout requires a Git metadata entry'
+    }
+    $gitInfo = Get-Item -LiteralPath $gitEntry -Force
+    if (($gitInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'release checkout Git metadata must not be a reparse point'
+    }
+
+    $discoveryArguments = @(
+        '-C', $resolvedRoot,
+        '-c', 'core.fsmonitor=false',
+        '-c', 'core.untrackedCache=false'
+    )
+    $insideWorkTree = Read-CoreReleaseGitValue `
+        -Arguments ($discoveryArguments + @('rev-parse', '--is-inside-work-tree')) `
+        -Label 'worktree membership'
+    if ($insideWorkTree -cne 'true') {
+        throw 'release checkout repository root is not inside a Git worktree'
+    }
+
+    $topLevel = Read-CoreReleaseGitValue `
+        -Arguments ($discoveryArguments + @('rev-parse', '--show-toplevel')) `
+        -Label 'top-level'
+    $resolvedTopLevel = Resolve-CoreReleaseNoFollowDirectory $topLevel 'top-level'
+    if (-not [string]::Equals(
+        $resolvedTopLevel,
+        $resolvedRoot,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "release checkout top-level is $resolvedTopLevel instead of $resolvedRoot"
+    }
+
+    $gitDirectory = Resolve-CoreReleaseNoFollowDirectory `
+        (Read-CoreReleaseGitValue `
+            -Arguments ($discoveryArguments + @('rev-parse', '--absolute-git-dir')) `
+            -Label 'Git directory') `
+        'Git directory'
+    $commonDirectory = Resolve-CoreReleaseNoFollowDirectory `
+        (Read-CoreReleaseGitValue `
+            -Arguments ($discoveryArguments + @(
+                'rev-parse', '--path-format=absolute', '--git-common-dir'
+            )) `
+            -Label 'common Git directory') `
+        'common Git directory'
+    $indexPath = Resolve-CoreReleaseNoFollowFile `
+        (Read-CoreReleaseGitValue `
+            -Arguments ($discoveryArguments + @(
+                'rev-parse', '--path-format=absolute', '--git-path', 'index'
+            )) `
+            -Label 'index') `
+        'index'
+
+    return [pscustomobject]@{
+        RepositoryRoot = $resolvedRoot
+        GitDirectory = $gitDirectory
+        CommonDirectory = $commonDirectory
+        IndexPath = $indexPath
+    }
+}
+
 function Assert-ExactCoreReleaseCheckout {
     [CmdletBinding()]
     param(
@@ -128,26 +251,12 @@ function Assert-ExactCoreReleaseCheckout {
     if ($ExpectedCommit -cnotmatch '^[0-9a-f]{40}$') {
         throw 'release checkout requires an exact lowercase 40-character SHA'
     }
-    if (-not [IO.Path]::IsPathFullyQualified($RepositoryRoot) -or
-        -not (Test-Path -LiteralPath $RepositoryRoot -PathType Container)) {
-        throw 'release checkout requires an existing absolute repository root'
-    }
-    $resolvedRoot = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $RepositoryRoot).Path)
-    $rootInfo = Get-Item -LiteralPath $resolvedRoot -Force
-    if (($rootInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw 'release checkout repository root must not be a reparse point'
-    }
-    $gitDirectory = Join-Path $resolvedRoot '.git'
-    if (-not (Test-Path -LiteralPath $gitDirectory -PathType Container)) {
-        throw 'release checkout requires a standalone Git directory'
-    }
-    $gitInfo = Get-Item -LiteralPath $gitDirectory -Force
-    if (($gitInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw 'release checkout Git directory must not be a reparse point'
-    }
+    $repository = Resolve-CoreReleaseRepositoryIdentity -RepositoryRoot $RepositoryRoot
+    # The resolved per-worktree Git directory binds every check to the index that
+    # was inspected above; the common object store is validated but never guessed.
     $gitArguments = @(
-        "--git-dir=$gitDirectory",
-        "--work-tree=$resolvedRoot",
+        "--git-dir=$($repository.GitDirectory)",
+        "--work-tree=$($repository.RepositoryRoot)",
         '-c', 'core.fsmonitor=false',
         '-c', 'core.untrackedCache=false'
     )
@@ -198,6 +307,7 @@ function Assert-ExactCoreReleaseFileProjection {
         [string[]]$VerifierPaths
     )
 
+    $repository = Resolve-CoreReleaseRepositoryIdentity -RepositoryRoot $RepositoryRoot
     foreach ($relativePath in $VerifierPaths) {
         $segments = @($relativePath.Split('/'))
         if ([IO.Path]::IsPathRooted($relativePath) -or
@@ -206,7 +316,7 @@ function Assert-ExactCoreReleaseFileProjection {
             @($segments | Where-Object { $_ -ceq '' -or $_ -ceq '.' -or $_ -ceq '..' }).Count -ne 0) {
             throw "invalid exact release verifier path: $relativePath"
         }
-        $filePath = Join-Path $RepositoryRoot $relativePath.Replace('/', [IO.Path]::DirectorySeparatorChar)
+        $filePath = Join-Path $repository.RepositoryRoot $relativePath.Replace('/', [IO.Path]::DirectorySeparatorChar)
         if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
             throw "exact release verifier input is not a regular file: $relativePath"
         }
@@ -215,7 +325,7 @@ function Assert-ExactCoreReleaseFileProjection {
             throw "exact release verifier input is a reparse point: $relativePath"
         }
         $expectedObject = [string](Invoke-CoreReleaseGit -Arguments @(
-            "--git-dir=$(Join-Path $RepositoryRoot '.git')",
+            "--git-dir=$($repository.GitDirectory)",
             'rev-parse', '--verify', "${ExpectedCommit}:$relativePath"
         ))
         $actualObject = [string](Invoke-CoreReleaseGit -Arguments @(
@@ -251,9 +361,10 @@ function New-ExactCoreReleaseCheckout {
         (Test-Path -LiteralPath $Destination)) {
         throw "exact release checkout destination must be an absent absolute path: $Destination"
     }
+    $source = Resolve-CoreReleaseRepositoryIdentity -RepositoryRoot $SourceRepository
     Invoke-CoreReleaseGit -Arguments @(
         'clone', '--quiet', '--no-hardlinks', '--no-checkout', '--',
-        $SourceRepository, $Destination
+        $source.RepositoryRoot, $Destination
     ) | Out-Null
     $destinationGit = Join-Path $Destination '.git'
     Invoke-CoreReleaseGit -Arguments @(
