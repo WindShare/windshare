@@ -29,6 +29,75 @@ windshare_run_isolated_git() (
   git "$@"
 )
 
+windshare_resolve_release_repository() {
+  local repository_root="$1"
+  local git_entry
+  local inside_worktree
+  local top_level
+  local git_directory
+  local common_directory
+  local index_path
+  local index_parent
+
+  if [ -z "$repository_root" ] || [ ! -d "$repository_root" ] || [ -L "$repository_root" ]; then
+    echo "release checkout requires an existing no-follow repository root" >&2
+    return 1
+  fi
+  repository_root="$(cd -- "$repository_root" && pwd -P)" || return 1
+  git_entry="$repository_root/.git"
+  if [ -L "$git_entry" ] || { [ ! -d "$git_entry" ] && [ ! -f "$git_entry" ]; }; then
+    echo "release checkout requires a no-follow Git metadata entry" >&2
+    return 1
+  fi
+
+  inside_worktree="$(windshare_run_isolated_git -C "$repository_root" \
+    -c core.fsmonitor=false -c core.untrackedCache=false \
+    rev-parse --is-inside-work-tree)" || return 1
+  if [ "$inside_worktree" != true ]; then
+    echo "release checkout repository root is not inside a Git worktree" >&2
+    return 1
+  fi
+  top_level="$(windshare_run_isolated_git -C "$repository_root" \
+    -c core.fsmonitor=false -c core.untrackedCache=false \
+    rev-parse --show-toplevel)" || return 1
+  if [ -z "$top_level" ] || [ ! -d "$top_level" ] || [ -L "$top_level" ]; then
+    echo "release checkout Git top-level is not an existing no-follow directory" >&2
+    return 1
+  fi
+  top_level="$(cd -- "$top_level" && pwd -P)" || return 1
+  if [ "$top_level" != "$repository_root" ]; then
+    echo "release checkout top-level is $top_level instead of $repository_root" >&2
+    return 1
+  fi
+
+  git_directory="$(windshare_run_isolated_git -C "$repository_root" \
+    rev-parse --absolute-git-dir)" || return 1
+  if [ -z "$git_directory" ] || [ ! -d "$git_directory" ] || [ -L "$git_directory" ]; then
+    echo "release checkout Git directory is not an existing no-follow directory" >&2
+    return 1
+  fi
+  git_directory="$(cd -- "$git_directory" && pwd -P)" || return 1
+  common_directory="$(windshare_run_isolated_git -C "$repository_root" \
+    rev-parse --path-format=absolute --git-common-dir)" || return 1
+  if [ -z "$common_directory" ] || [ ! -d "$common_directory" ] || [ -L "$common_directory" ]; then
+    echo "release checkout common Git directory is not an existing no-follow directory" >&2
+    return 1
+  fi
+  common_directory="$(cd -- "$common_directory" && pwd -P)" || return 1
+  index_path="$(windshare_run_isolated_git -C "$repository_root" \
+    rev-parse --path-format=absolute --git-path index)" || return 1
+  if [ -z "$index_path" ] || [ ! -f "$index_path" ] || [ -L "$index_path" ]; then
+    echo "release checkout index is not an existing no-follow file" >&2
+    return 1
+  fi
+  index_parent="$(cd -- "$(dirname -- "$index_path")" && pwd -P)" || return 1
+
+  WINDSHARE_CORE_RELEASE_REPOSITORY_ROOT="$repository_root"
+  WINDSHARE_CORE_RELEASE_GIT_DIRECTORY="$git_directory"
+  WINDSHARE_CORE_RELEASE_COMMON_DIRECTORY="$common_directory"
+  WINDSHARE_CORE_RELEASE_INDEX_PATH="$index_parent/$(basename -- "$index_path")"
+}
+
 windshare_assert_exact_release_checkout() {
   local repository_root="$1"
   local expected_commit="$2"
@@ -45,16 +114,11 @@ windshare_assert_exact_release_checkout() {
     echo "release checkout requires an exact lowercase 40-character SHA" >&2
     return 1
   fi
-  if [ -z "$repository_root" ] || [ ! -d "$repository_root" ] || [ -L "$repository_root" ]; then
-    echo "release checkout requires an existing no-follow repository root" >&2
-    return 1
-  fi
-  repository_root="$(cd -- "$repository_root" && pwd -P)" || return 1
-  git_directory="$repository_root/.git"
-  if [ ! -d "$git_directory" ] || [ -L "$git_directory" ]; then
-    echo "release checkout requires a standalone no-follow Git directory" >&2
-    return 1
-  fi
+  windshare_resolve_release_repository "$repository_root" || return 1
+  repository_root="$WINDSHARE_CORE_RELEASE_REPOSITORY_ROOT"
+  git_directory="$WINDSHARE_CORE_RELEASE_GIT_DIRECTORY"
+  # The resolved per-worktree Git directory binds every check to the index that
+  # was inspected above; the common object store is validated but never guessed.
   git_arguments=(
     --git-dir="$git_directory"
     --work-tree="$repository_root"
@@ -100,8 +164,12 @@ windshare_assert_exact_release_file_projection() {
   local relative_path
   local expected_object
   local actual_object
+  local git_directory
 
   shift 2
+  windshare_resolve_release_repository "$repository_root" || return 1
+  repository_root="$WINDSHARE_CORE_RELEASE_REPOSITORY_ROOT"
+  git_directory="$WINDSHARE_CORE_RELEASE_GIT_DIRECTORY"
   if [ "$#" -eq 0 ]; then
     echo "exact release projection requires at least one verifier path" >&2
     return 1
@@ -118,7 +186,7 @@ windshare_assert_exact_release_file_projection() {
       return 1
     fi
     expected_object="$(windshare_run_isolated_git \
-      --git-dir="$repository_root/.git" \
+      --git-dir="$git_directory" \
       rev-parse --verify "$expected_commit:$relative_path")" || return 1
     actual_object="$(windshare_run_isolated_git hash-object --no-filters -- \
       "$repository_root/$relative_path")" || return 1
@@ -147,6 +215,8 @@ windshare_create_exact_release_checkout() {
     echo "exact release checkout destination must not exist: $destination" >&2
     return 1
   fi
+  windshare_resolve_release_repository "$source_repository" || return 1
+  source_repository="$WINDSHARE_CORE_RELEASE_REPOSITORY_ROOT"
   windshare_run_isolated_git clone --quiet --no-hardlinks --no-checkout -- \
     "$source_repository" "$destination" || return 1
   windshare_run_isolated_git \
