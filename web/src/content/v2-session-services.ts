@@ -11,9 +11,9 @@ import {
 import type {
   V2BlockDemand,
   V2BlockLane,
-  V2BlockRouteEligibility,
   V2LaneSet,
-} from './v2-broker'
+} from './v2-lane-set'
+import type { V2BlockRouteEligibility } from './v2-route-policy'
 import {
   decodeV2LeaseResult,
   decodeV2OpenResults,

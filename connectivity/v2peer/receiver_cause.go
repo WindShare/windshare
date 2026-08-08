@@ -9,7 +9,7 @@ import (
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
 const (
@@ -29,7 +29,7 @@ var (
 	receiverTrustedJoinType      = reflect.TypeOf(errors.Join(errReceiverStructuralProbe, errReceiverStructuralProbe))
 	receiverTrustedWrapType      = reflect.TypeOf(fmt.Errorf("receiver structural wrapper: %w", errReceiverStructuralProbe))
 	receiverTrustedMultiWrapType = reflect.TypeOf(fmt.Errorf("receiver structural wrappers: %w %w", errReceiverStructuralProbe, errReceiverStructuralProbe))
-	receiverSessionFailureType   = reflect.TypeFor[*transfer.SessionFailureError]()
+	receiverBoundaryFailureType  = reflect.TypeFor[*transferfault.BoundaryError]()
 	receiverRemoteFailureType    = reflect.TypeFor[sessionruntime.RemoteOperationError]()
 	receiverSafeDiagnosticType   = reflect.TypeFor[*receiverSafeDiagnosticError]()
 	receiverOwnedJoinType        = reflect.TypeFor[*receiverOwnedJoinError]()
@@ -137,7 +137,7 @@ func classifyReceiverCauseAtDepth(
 	if classified, terminal := classifyReceiverCauseBoundary(cause, policy, depth, traversal); terminal {
 		return classified
 	}
-	if classified, sessionFailure := classifyReceiverSessionCause(cause, depth, traversal); sessionFailure {
+	if classified, boundaryFailure := classifyReceiverBoundaryCause(cause, depth, traversal); boundaryFailure {
 		return classified
 	}
 	if class, known := directReceiverCauseClass(cause); known {
@@ -187,26 +187,30 @@ func classifyReceiverCauseBoundary(
 	return receiverCauseClassification{}, false
 }
 
-func classifyReceiverSessionCause(
+func classifyReceiverBoundaryCause(
 	cause error,
 	depth int,
 	traversal *receiverErrorTreeTraversal,
 ) (receiverCauseClassification, bool) {
-	if reflect.TypeOf(cause) != receiverSessionFailureType {
+	if reflect.TypeOf(cause) != receiverBoundaryFailureType {
 		return receiverCauseClassification{}, false
+	}
+	var boundary *transferfault.BoundaryError
+	if !errors.As(cause, &boundary) || boundary == nil || !boundary.Fault().Valid() {
+		return opaqueReceiverCauseClassification(), true
 	}
 	child, ok := unwrapReceiverTrustedSingle(cause)
 	if !ok || child == nil {
-		return receiverSessionFailureClassification(incompleteReceiverCauseClassification()), true
+		return receiverBoundaryFailureClassification(
+			boundary.Fault(), incompleteReceiverCauseClassification(),
+		), true
 	}
-	// SessionFailureError is a semantic boundary owned by core. Its child is
-	// diagnostic context, so local benign filtering must not erase it.
-	return receiverSessionFailureClassification(classifyReceiverCauseAtDepth(
-		child,
-		receiverCausePolicy{},
-		depth+1,
-		traversal,
-	)), true
+	// The normalized value is the only lifecycle authority. The child remains
+	// diagnostic context and local benign filtering must not erase it.
+	return receiverBoundaryFailureClassification(
+		boundary.Fault(),
+		classifyReceiverCauseAtDepth(child, receiverCausePolicy{}, depth+1, traversal),
+	), true
 }
 
 func classifyReceiverMultiCause(
@@ -311,12 +315,15 @@ func classifyReceiverLeafCause(cause error) receiverCauseClassification {
 	}
 }
 
-func receiverSessionFailureClassification(
+func receiverBoundaryFailureClassification(
+	value transferfault.Fault,
 	child receiverCauseClassification,
 ) receiverCauseClassification {
-	// The exact core wrapper is useful diagnostic context only. Session lifetime
-	// comes from sealed producer evidence and is never reconstructed here.
-	child.classes = append([]ReceiverCauseClass{ReceiverCauseProtocol}, child.classes...)
+	// Session lifetime comes from sealed producer evidence and is never
+	// reconstructed from either the fault or its diagnostic child.
+	if value.Scope() == transferfault.ScopeSessionTerminal || value.Domain() == transferfault.DomainSession {
+		child.classes = append([]ReceiverCauseClass{ReceiverCauseProtocol}, child.classes...)
+	}
 	return child
 }
 

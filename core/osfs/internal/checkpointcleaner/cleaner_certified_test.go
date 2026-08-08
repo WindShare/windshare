@@ -1,166 +1,184 @@
 package checkpointcleaner
 
 import (
-	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"sync"
+	"strings"
 	"testing"
-	"time"
 
+	"github.com/fxamacker/cbor/v2"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointstore"
+	"github.com/windshare/windshare/core/osfs/internal/legacyresume"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 )
 
-const (
-	cleanerCrashHelperEnv = "WINDSHARE_TEST_CLEANER_CRASH_HELPER"
-	cleanerCrashRootEnv   = "WINDSHARE_TEST_CLEANER_CRASH_ROOT"
-)
+func cleanOwnedNamespace(
+	ctx context.Context,
+	config OneShotCheckpointCleanerConfig,
+) (CheckpointCleanupReport, error) {
+	cleaner, err := NewOneShotCheckpointCleaner(config)
+	if err != nil {
+		return CheckpointCleanupReport{}, err
+	}
+	return cleaner.Run(ctx)
+}
 
-func TestCleanerRejectsUnownedRootPrefixWithoutManufacturingOwnership(t *testing.T) {
+func TestCleanerRemovesOnlyOwnedLegacyControlState(t *testing.T) {
 	platform, rootPath := newCleanerPlatform(t)
-	foreign := filepath.Join(rootPath, legacyRootPrefix+"foreign.journal")
-	if err := os.WriteFile(foreign, []byte("not WindShare-owned"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	report, err := CleanOwnedNamespace(context.Background(), cleanerConfig(platform))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !report.NeedsAttention() || report.Status != CheckpointCleanupStatusNeedsAttention {
-		t.Fatalf("foreign root entry report = %+v", report)
-	}
-	if _, err := os.Stat(foreign); err != nil {
-		t.Fatalf("foreign root entry was mutated: %v", err)
-	}
-	status, err := inspectCleanerOwnership(platform)
-	if err != nil || status != checkpointstore.OwnershipAbsent {
-		t.Fatalf("cleanup manufactured ownership: status=%d err=%v", status, err)
-	}
-}
-
-func TestCleanerBindsOwnershipToCertifiedRootAndRescansCompletedState(t *testing.T) {
-	t.Run("mismatched marker", func(t *testing.T) {
-		platform, _ := newCleanerPlatform(t)
-		if err := checkpointstore.BootstrapOwnership(checkpointstore.NamespaceConfig{
-			Root: platform.Root(), BackendID: transfer.NativeFilesystemOutputBackendID,
-			RootIdentity: bytes.Repeat([]byte{0x7a}, resumestate.OutputRootBindingBytes),
-		}); err != nil {
-			t.Fatal(err)
-		}
-		report, err := CleanOwnedNamespace(context.Background(), cleanerConfig(platform))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !report.NeedsAttention() {
-			t.Fatalf("mismatched certified-root marker report = %+v", report)
-		}
-	})
-
-	t.Run("completed state is not a scan cache", func(t *testing.T) {
-		platform, rootPath := newCleanerPlatform(t)
-		first, err := CleanOwnedNamespace(context.Background(), cleanerConfig(platform))
-		if err != nil || !first.Complete {
-			t.Fatalf("initial cleanup = %+v, %v", first, err)
-		}
-		foreign := filepath.Join(rootPath, legacyRootPrefix+"arrived-later")
-		if err := os.WriteFile(foreign, []byte("foreign"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		second, err := CleanOwnedNamespace(context.Background(), cleanerConfig(platform))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !second.NeedsAttention() || second.Complete {
-			t.Fatalf("completed cleanup skipped rescan: %+v", second)
-		}
-	})
-}
-
-func TestCleanerResumesExactOwnershipCandidate(t *testing.T) {
-	platform, _ := newCleanerPlatform(t)
-	binding, err := platform.RootBinding()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ownership, err := resumestate.NewFileCheckpointOwnership(
-		string(transfer.NativeFilesystemOutputBackendID), binding.Bytes(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := resumestate.EncodeFileCheckpointOwnership(ownership)
-	if err != nil {
-		t.Fatal(err)
-	}
-	control, err := platform.Root().CreateDirectory(resumestate.ControlDirectoryName, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer control.Close()
-	checkpointRoot, err := control.CreateDirectory(resumestate.CheckpointsDirectoryName, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer checkpointRoot.Close()
-	candidate := checkpointstore.TemporaryName(checkpointstore.OwnershipFile, encoded, 0)
-	writeCapabilityFile(t, checkpointRoot, candidate, encoded)
-	if err := errors.Join(checkpointRoot.Sync(), control.Sync(), platform.Root().Sync()); err != nil {
-		t.Fatal(err)
-	}
-
-	status, err := inspectCleanerOwnership(platform)
-	if err != nil || status != checkpointstore.OwnershipRecoverable {
-		t.Fatalf("ownership candidate status = %d, %v", status, err)
-	}
-	report, err := CleanOwnedNamespace(context.Background(), cleanerConfig(platform))
-	if err != nil || !report.Complete || report.NeedsAttention() {
-		t.Fatalf("ownership candidate cleanup = %+v, %v", report, err)
-	}
-	status, err = inspectCleanerOwnership(platform)
-	if err != nil || status != checkpointstore.OwnershipMatched {
-		t.Fatalf("recovered ownership status = %d, %v", status, err)
-	}
-}
-
-func TestCleanerCrashCutResumesUnderCoordinatorAndSessionExclusion(t *testing.T) {
-	platform, rootPath := newCleanerPlatform(t)
-	bootstrapCleaner(t, platform)
+	installCurrentNamespaceSentinels(t, platform)
 	legacy := installLegacyNamespace(t, platform)
-	injected := errors.New("injected cleanup crash cut")
-	faulted := cleanerConfig(platform)
-	faulted.Fault = func(step CheckpointCleanupStep) error {
-		if step.Index == 0 {
-			return injected
-		}
-		return nil
-	}
-	if _, err := CleanOwnedNamespace(context.Background(), faulted); !errors.Is(err, injected) {
-		t.Fatalf("faulted cleanup = %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(rootPath, legacy.payload)); err != nil {
-		t.Fatalf("fault cut mutated payload: %v", err)
+	published := filepath.Join(rootPath, "published.txt")
+	if err := os.WriteFile(published, []byte("published"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
-	resumed, err := CleanOwnedNamespace(context.Background(), cleanerConfig(platform))
-	if err != nil || !resumed.Complete || !resumed.Resumed || resumed.Removed == 0 {
-		t.Fatalf("resumed cleanup = %+v, %v", resumed, err)
+	report, err := cleanOwnedNamespace(context.Background(), cleanerConfig(platform))
+	if err != nil || !report.Complete || report.NeedsAttention() || report.Removed == 0 {
+		t.Fatalf("cleanup = %+v, %v", report, err)
 	}
 	if _, err := os.Stat(filepath.Join(rootPath, legacy.session)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("retired session remains after resume: %v", err)
+		t.Fatalf("legacy session remains: %v", err)
+	}
+	if _, err := os.Stat(published); err != nil {
+		t.Fatalf("published output was removed: %v", err)
+	}
+	for _, relative := range []string{
+		filepath.Join(legacyresume.ControlDirectory, legacyresume.CheckpointDirectory, checkpointstore.OwnershipFile),
+		filepath.Join(legacyresume.ControlDirectory, legacyresume.CheckpointDirectory, checkpointstore.LeasesDirectory),
+		filepath.Join(legacyresume.ControlDirectory, legacyresume.CheckpointDirectory, checkpointstore.IntentsDirectory),
+		filepath.Join(legacyresume.ControlDirectory, legacyresume.CheckpointDirectory, FileCheckpointCleanupState),
+		filepath.Join(legacyresume.ControlDirectory, legacyresume.CheckpointDirectory, FileCheckpointCleanupLock),
+	} {
+		if _, err := os.Stat(filepath.Join(rootPath, relative)); err != nil {
+			t.Fatalf("retained state %q = %v", relative, err)
+		}
+	}
+	currentCheckpoint := filepath.Join(
+		rootPath, legacyresume.ControlDirectory, legacyresume.CheckpointDirectory,
+		checkpointstore.IntentsDirectory, "current.checkpoint",
+	)
+	if _, err := os.Stat(currentCheckpoint); err != nil {
+		t.Fatalf("current checkpoint payload was removed: %v", err)
+	}
+	if !reportHasDetail(report, cleanupDetailPublished) {
+		t.Fatalf("published path was not reported: %+v", report.Entries)
 	}
 }
 
-func TestCleanerRefusesActiveLegacyWriters(t *testing.T) {
+func TestCleanerRejectsUnknownAndConflictingLegacyPathsWithoutMutation(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, outputcap.Platform, legacyFixture) string
+		detail string
+	}{
+		{
+			name: "unknown session child",
+			mutate: func(t *testing.T, platform outputcap.Platform, fixture legacyFixture) string {
+				session := openLegacySession(t, platform, fixture)
+				defer session.Close()
+				writeCapabilityFile(t, session, "foreign.bin", []byte("foreign"))
+				return filepath.Join(fixture.session, "foreign.bin")
+			},
+			detail: cleanupDetailUnknown,
+		},
+		{
+			name: "conflicting session lock kind",
+			mutate: func(t *testing.T, platform outputcap.Platform, fixture legacyFixture) string {
+				session := openLegacySession(t, platform, fixture)
+				defer session.Close()
+				lock, err := session.OpenFile(legacyresume.SessionLock, true, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := errors.Join(session.RemoveFile(legacyresume.SessionLock, lock), lock.Close(), session.Sync()); err != nil {
+					t.Fatal(err)
+				}
+				conflict, err := session.CreateDirectory(legacyresume.SessionLock, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := errors.Join(conflict.Sync(), conflict.Close(), session.Sync()); err != nil {
+					t.Fatal(err)
+				}
+				return filepath.Join(fixture.session, legacyresume.SessionLock)
+			},
+			detail: cleanupDetailConflict,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			platform, rootPath := newCleanerPlatform(t)
+			legacy := installLegacyNamespace(t, platform)
+			retained := test.mutate(t, platform, legacy)
+			report, err := cleanOwnedNamespace(context.Background(), cleanerConfig(platform))
+			if err != nil || !report.NeedsAttention() || report.Complete || report.Removed != 0 {
+				t.Fatalf("ambiguous cleanup = %+v, %v", report, err)
+			}
+			if _, err := os.Stat(filepath.Join(rootPath, retained)); err != nil {
+				t.Fatalf("ambiguous path was mutated: %v", err)
+			}
+			if !reportHasDetail(report, test.detail) {
+				t.Fatalf("missing %q report: %+v", test.detail, report.Entries)
+			}
+		})
+	}
+}
+
+func TestCleanerRejectsUnknownOwnerAndPreservesLegacyTree(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		replace func(*testing.T, outputcap.Platform, []byte) []byte
+	}{
+		{
+			name: "corrupt checksum",
+			replace: func(_ *testing.T, _ outputcap.Platform, encoded []byte) []byte {
+				encoded[len(encoded)-1] ^= 0xff
+				return encoded
+			},
+		},
+		{
+			name: "foreign certified root",
+			replace: func(t *testing.T, platform outputcap.Platform, _ []byte) []byte {
+				return encodeLegacyOwnershipFixture(t, legacyOwnershipFixture{
+					Backend:       string(transfer.NativeFilesystemOutputBackendID),
+					RootIdentity:  bytes.Repeat([]byte{0x91}, legacyresume.RootIdentityBytes),
+					Certification: string(platform.Certification()), Durability: 1, Generation: 2,
+				})
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			platform, rootPath := newCleanerPlatform(t)
+			legacy := installLegacyNamespace(t, platform)
+			control := openLegacyControl(t, platform)
+			encoded, err := readBoundedRecord(control, legacyresume.ControlRecord, legacyresume.MaxOwnershipRecordBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded = test.replace(t, platform, encoded)
+			replaceCapabilityFile(t, control, legacyresume.ControlRecord, encoded)
+			if err := control.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			report, err := cleanOwnedNamespace(context.Background(), cleanerConfig(platform))
+			if err != nil || !report.NeedsAttention() || report.Removed != 0 {
+				t.Fatalf("unknown-owner cleanup = %+v, %v", report, err)
+			}
+			if _, err := os.Stat(filepath.Join(rootPath, legacy.payload)); err != nil {
+				t.Fatalf("unknown-owner state was mutated: %v", err)
+			}
+		})
+	}
+}
+
+func TestCleanerRefusesActiveLegacyAndMaintenanceLocks(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		lock func(*testing.T, outputcap.Platform, legacyFixture) outputcap.Lock
@@ -170,11 +188,10 @@ func TestCleanerRefusesActiveLegacyWriters(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			platform, rootPath := newCleanerPlatform(t)
-			bootstrapCleaner(t, platform)
 			legacy := installLegacyNamespace(t, platform)
 			lock := test.lock(t, platform, legacy)
 			defer lock.Close()
-			if _, err := CleanOwnedNamespace(context.Background(), cleanerConfig(platform)); !errors.Is(err, ErrCheckpointCleanerBusy) {
+			if _, err := cleanOwnedNamespace(context.Background(), cleanerConfig(platform)); !errors.Is(err, ErrCheckpointCleanerBusy) {
 				t.Fatalf("cleanup with active %s = %v", test.name, err)
 			}
 			if _, err := os.Stat(filepath.Join(rootPath, legacy.payload)); err != nil {
@@ -182,76 +199,192 @@ func TestCleanerRefusesActiveLegacyWriters(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("maintenance", func(t *testing.T) {
+		platform, rootPath := newCleanerPlatform(t)
+		legacy := installLegacyNamespace(t, platform)
+		faulted := cleanerConfig(platform)
+		faulted.Fault = func(CheckpointCleanupStep) error { return errors.New("pause after cleaner state") }
+		_, _ = cleanOwnedNamespace(context.Background(), faulted)
+		namespace := openCheckpointNamespace(t, platform)
+		defer namespace.Close()
+		lock, _, err := namespace.AcquireLock(FileCheckpointCleanupLock, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lock.Close()
+		if _, err := cleanOwnedNamespace(context.Background(), cleanerConfig(platform)); !errors.Is(err, ErrCheckpointCleanerBusy) {
+			t.Fatalf("cleanup with active maintenance lock = %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(rootPath, legacy.payload)); err != nil {
+			t.Fatalf("cleanup crossed maintenance lock: %v", err)
+		}
+	})
 }
 
-func TestCleanerRevalidatesCertifiedRootBeforeEveryRemoval(t *testing.T) {
+func TestCleanerResumesOnlyItsExactIncompleteState(t *testing.T) {
 	platform, rootPath := newCleanerPlatform(t)
-	bootstrapCleaner(t, platform)
 	legacy := installLegacyNamespace(t, platform)
-	replaced := errors.New("certified root changed")
-	changing := &changingBindingPlatform{Platform: platform, failAt: 4, failure: replaced}
-	if _, err := CleanOwnedNamespace(context.Background(), cleanerConfig(changing)); !errors.Is(err, ErrCheckpointCleanerOwnership) || !errors.Is(err, replaced) {
-		t.Fatalf("root replacement cleanup = %v", err)
+	injected := errors.New("injected cleanup interruption")
+	faulted := cleanerConfig(platform)
+	faulted.Fault = func(step CheckpointCleanupStep) error {
+		if step.Index == 0 {
+			return injected
+		}
+		return nil
+	}
+	if _, err := cleanOwnedNamespace(context.Background(), faulted); !errors.Is(err, injected) {
+		t.Fatalf("faulted cleanup = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(rootPath, legacy.payload)); err != nil {
-		t.Fatalf("mutation occurred after root replacement: %v", err)
+		t.Fatalf("fault cut mutated payload: %v", err)
+	}
+
+	report, err := cleanOwnedNamespace(context.Background(), cleanerConfig(platform))
+	if err != nil || !report.Complete || !report.Resumed || report.Removed == 0 {
+		t.Fatalf("resumed cleanup = %+v, %v", report, err)
+	}
+	if _, err := os.Stat(filepath.Join(rootPath, legacy.session)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy session remains after resume: %v", err)
 	}
 }
 
-func TestCleanupLockReleasedAfterProcessCrash(t *testing.T) {
-	if os.Getenv(cleanerCrashHelperEnv) == "1" {
-		runCleanerLockCrashHelper(t, os.Getenv(cleanerCrashRootEnv))
-		return
-	}
-	platform, rootPath := newCleanerPlatform(t)
-	bootstrapCleaner(t, platform)
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	command := exec.Command(executable, "-test.run=^TestCleanupLockReleasedAfterProcessCrash$")
-	command.Env = append(os.Environ(), cleanerCrashHelperEnv+"=1", cleanerCrashRootEnv+"="+rootPath)
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	command.Stderr = command.Stdout
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	locked := make(chan struct{})
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			if scanner.Text() == "cleaner-lock-acquired" {
-				close(locked)
-				return
+func TestCleanerRejectsImpossibleAndNonCanonicalResumeState(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, outputcap.Platform)
+	}{
+		{
+			name: "legacy tree without ownership record",
+			mutate: func(t *testing.T, platform outputcap.Platform) {
+				control := openLegacyControl(t, platform)
+				defer control.Close()
+				entry, err := control.OpenEntry(legacyresume.ControlRecord)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := errors.Join(control.RemoveEntry(legacyresume.ControlRecord, entry), entry.Close(), control.Sync()); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "non-canonical cleaner state",
+			mutate: func(t *testing.T, platform outputcap.Platform) {
+				namespace := openCheckpointNamespace(t, platform)
+				defer namespace.Close()
+				encoded, err := readBoundedRecord(namespace, FileCheckpointCleanupState, maxCleanerStateBytes)
+				if err != nil {
+					t.Fatal(err)
+				}
+				replaceCapabilityFile(t, namespace, FileCheckpointCleanupState, append(encoded, ' '))
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			platform, rootPath := newCleanerPlatform(t)
+			legacy := installLegacyNamespace(t, platform)
+			injected := errors.New("stop before first mutation")
+			faulted := cleanerConfig(platform)
+			faulted.Fault = func(CheckpointCleanupStep) error { return injected }
+			if _, err := cleanOwnedNamespace(context.Background(), faulted); !errors.Is(err, injected) {
+				t.Fatalf("create incomplete state = %v", err)
 			}
+			test.mutate(t, platform)
+
+			report, err := cleanOwnedNamespace(context.Background(), cleanerConfig(platform))
+			if test.name == "non-canonical cleaner state" {
+				if !errors.Is(err, ErrCheckpointCleanerState) {
+					t.Fatalf("non-canonical state error = %v", err)
+				}
+			} else if err != nil || !report.NeedsAttention() || report.Removed != 0 {
+				t.Fatalf("impossible resume report = %+v, %v", report, err)
+			}
+			if _, err := os.Stat(filepath.Join(rootPath, legacy.payload)); err != nil {
+				t.Fatalf("invalid resume state mutated legacy payload: %v", err)
+			}
+		})
+	}
+}
+
+func TestCleanerRevalidatesOwnershipProofImmediatelyBeforeMutation(t *testing.T) {
+	platform, rootPath := newCleanerPlatform(t)
+	legacy := installLegacyNamespace(t, platform)
+	faulted := cleanerConfig(platform)
+	replaced := false
+	faulted.Fault = func(CheckpointCleanupStep) error {
+		if replaced {
+			return nil
 		}
-	}()
-	select {
-	case <-locked:
-	case <-time.After(10 * time.Second):
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		t.Fatal("crash helper did not acquire cleanup lock")
+		replaced = true
+		control := openLegacyControl(t, platform)
+		defer control.Close()
+		foreign := encodeLegacyOwnershipFixture(t, legacyOwnershipFixture{
+			Backend:       string(transfer.NativeFilesystemOutputBackendID),
+			RootIdentity:  bytes.Repeat([]byte{0x72}, legacyresume.RootIdentityBytes),
+			Certification: string(platform.Certification()), Durability: 1, Generation: 4,
+		})
+		replaceCapabilityFile(t, control, legacyresume.ControlRecord, foreign)
+		return nil
 	}
-	if _, err := CleanOwnedNamespace(context.Background(), cleanerConfig(platform)); !errors.Is(err, ErrCheckpointCleanerBusy) {
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		t.Fatalf("live helper cleanup = %v", err)
+	report, err := cleanOwnedNamespace(context.Background(), faulted)
+	if !errors.Is(err, ErrCheckpointCleanerOwnership) || report.Removed != 0 {
+		t.Fatalf("replaced ownership proof cleanup = %+v, %v", report, err)
 	}
-	if err := command.Process.Kill(); err != nil {
+	if _, err := os.Stat(filepath.Join(rootPath, legacy.payload)); err != nil {
+		t.Fatalf("ownership proof replacement mutated payload: %v", err)
+	}
+}
+
+func TestCleanerNeverDeletesAPathIntroducedAfterClassification(t *testing.T) {
+	platform, rootPath := newCleanerPlatform(t)
+	legacy := installLegacyNamespace(t, platform)
+	faulted := cleanerConfig(platform)
+	introduced := false
+	faulted.Fault = func(CheckpointCleanupStep) error {
+		if introduced {
+			return nil
+		}
+		introduced = true
+		session := openLegacySession(t, platform, legacy)
+		defer session.Close()
+		writeCapabilityFile(t, session, "introduced-after-scan", []byte("must survive"))
+		return nil
+	}
+	if _, err := cleanOwnedNamespace(context.Background(), faulted); !errors.Is(err, ErrCheckpointCleanerOwnership) {
+		t.Fatalf("changed cleanup tree error = %v", err)
+	}
+	introducedPath := filepath.Join(rootPath, legacy.session, "introduced-after-scan")
+	if encoded, err := os.ReadFile(introducedPath); err != nil || string(encoded) != "must survive" {
+		t.Fatalf("introduced path was not preserved: %q, %v", encoded, err)
+	}
+}
+
+func TestCleanerReportsCurrentCheckpointStateInsteadOfDeletingIt(t *testing.T) {
+	platform, rootPath := newCleanerPlatform(t)
+	legacy := installLegacyNamespace(t, platform)
+	intent := openLegacyIntent(t, platform, legacy)
+	current, err := intent.CreateDirectory(legacyresume.CheckpointDirectory, true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_ = command.Wait()
-	recovered, err := CleanOwnedNamespace(context.Background(), cleanerConfig(platform))
-	if err != nil || !recovered.Complete {
-		t.Fatalf("cleanup after process crash = %+v, %v", recovered, err)
+	writeCapabilityFile(t, current, "current.checkpoint", []byte("current"))
+	if err := errors.Join(current.Close(), intent.Close()); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := cleanOwnedNamespace(context.Background(), cleanerConfig(platform))
+	if err != nil || !report.NeedsAttention() || report.Removed != 0 || !reportHasDetail(report, cleanupDetailCurrent) {
+		t.Fatalf("current-state cleanup = %+v, %v", report, err)
+	}
+	currentPath := filepath.Join(rootPath, legacy.intent, legacyresume.CheckpointDirectory, "current.checkpoint")
+	if _, err := os.Stat(currentPath); err != nil {
+		t.Fatalf("current checkpoint was mutated: %v", err)
 	}
 }
 
 type legacyFixture struct {
+	intent  string
 	session string
 	payload string
 }
@@ -273,51 +406,143 @@ func cleanerConfig(platform outputcap.Platform) OneShotCheckpointCleanerConfig {
 	}
 }
 
-func inspectCleanerOwnership(platform outputcap.Platform) (checkpointstore.OwnershipStatus, error) {
-	binding, err := platform.RootBinding()
-	if err != nil {
-		return 0, err
-	}
-	return checkpointstore.InspectOwnership(checkpointstore.NamespaceConfig{
-		Root: platform.Root(), BackendID: transfer.NativeFilesystemOutputBackendID,
-		RootIdentity: binding.Bytes(),
-	})
-}
-
-func bootstrapCleaner(t *testing.T, platform outputcap.Platform) {
+func installCurrentNamespaceSentinels(t *testing.T, platform outputcap.Platform) {
 	t.Helper()
-	report, err := CleanOwnedNamespace(context.Background(), cleanerConfig(platform))
-	if err != nil || !report.Complete {
-		t.Fatalf("bootstrap cleaner = %+v, %v", report, err)
+	control := ensureTestDirectory(t, platform.Root(), legacyresume.ControlDirectory)
+	defer control.Close()
+	namespace := ensureTestDirectory(t, control, legacyresume.CheckpointDirectory)
+	defer namespace.Close()
+	writeCapabilityFile(t, namespace, checkpointstore.OwnershipFile, []byte("current marker sentinel"))
+	for _, name := range []string{checkpointstore.LeasesDirectory, checkpointstore.IntentsDirectory} {
+		directory := ensureTestDirectory(t, namespace, name)
+		if name == checkpointstore.IntentsDirectory {
+			writeCapabilityFile(t, directory, "current.checkpoint", []byte("current checkpoint sentinel"))
+		}
+		if err := directory.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func installLegacyNamespace(t *testing.T, platform outputcap.Platform) legacyFixture {
 	t.Helper()
-	control, err := platform.Root().OpenDirectory(resumestate.ControlDirectoryName, true)
+	control := ensureTestDirectory(t, platform.Root(), legacyresume.ControlDirectory)
+	defer control.Close()
+	binding, err := platform.RootBinding()
 	if err != nil {
 		t.Fatal(err)
 	}
+	encoded := encodeLegacyOwnershipFixture(t, legacyOwnershipFixture{
+		Backend: string(transfer.NativeFilesystemOutputBackendID), RootIdentity: binding.Bytes(),
+		Certification: string(platform.Certification()), Durability: 1, Generation: 1,
+	})
+	writeCapabilityFile(t, control, legacyresume.ControlRecord, encoded)
+	installUnlockedLock(t, control, legacyresume.CoordinatorLock)
+	sessions := ensureTestDirectory(t, control, legacyresume.SessionsDirectory)
+	defer sessions.Close()
+	intentName := strings.Repeat("a", 64)
+	intent := ensureTestDirectory(t, sessions, intentName)
+	defer intent.Close()
+	sessionName := strings.Repeat("b", 32)
+	session := ensureTestDirectory(t, intent, sessionName)
+	defer session.Close()
+	installUnlockedLock(t, session, legacyresume.SessionLock)
+	writeCapabilityFile(t, session, legacyresume.HeaderRecord, []byte("opaque retired header"))
+	for _, directoryName := range []string{
+		legacyresume.FilesDirectory, legacyresume.AnchorsDirectory, legacyresume.StagesDirectory,
+	} {
+		directory := ensureTestDirectory(t, session, directoryName)
+		shard := ensureTestDirectory(t, directory, "aa")
+		base := strings.Repeat("a", 64)
+		suffix := ".state"
+		switch directoryName {
+		case legacyresume.AnchorsDirectory:
+			suffix = ".anchor"
+		case legacyresume.StagesDirectory:
+			suffix = ".stage"
+		}
+		writeCapabilityFile(t, shard, base+suffix, []byte("owned legacy state"))
+		if err := errors.Join(shard.Close(), directory.Close()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := filepath.Join(legacyresume.ControlDirectory, legacyresume.SessionsDirectory, intentName)
+	sessionPath := filepath.Join(base, sessionName)
+	payload := filepath.Join(sessionPath, legacyresume.StagesDirectory, "aa", strings.Repeat("a", 64)+".stage")
+	return legacyFixture{intent: base, session: sessionPath, payload: payload}
+}
+
+func openLegacyControl(t *testing.T, platform outputcap.Platform) outputcap.Directory {
+	t.Helper()
+	control, err := platform.Root().OpenDirectory(legacyresume.ControlDirectory, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return control
+}
+
+func openLegacyIntent(t *testing.T, platform outputcap.Platform, fixture legacyFixture) outputcap.Directory {
+	t.Helper()
+	control := openLegacyControl(t, platform)
 	defer control.Close()
-	installUnlockedLock(t, control, resumestate.CoordinatorLockName)
-	sessions, err := control.CreateDirectory(resumestate.SessionsDirectoryName, true)
+	sessions, err := control.OpenDirectory(legacyresume.SessionsDirectory, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sessions.Close()
-	sessionName := "retired-session"
-	session, err := sessions.CreateDirectory(sessionName, true)
+	intent, err := sessions.OpenDirectory(filepath.Base(fixture.intent), true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
-	installUnlockedLock(t, session, resumestate.SessionLockName)
-	writeCapabilityFile(t, session, "payload.bin", []byte("retired"))
-	if err := errors.Join(session.Sync(), sessions.Sync(), control.Sync()); err != nil {
+	return intent
+}
+
+func openLegacySession(t *testing.T, platform outputcap.Platform, fixture legacyFixture) outputcap.Directory {
+	t.Helper()
+	intent := openLegacyIntent(t, platform, fixture)
+	defer intent.Close()
+	session, err := intent.OpenDirectory(filepath.Base(fixture.session), true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	base := filepath.Join(resumestate.ControlDirectoryName, resumestate.SessionsDirectoryName, sessionName)
-	return legacyFixture{session: base, payload: filepath.Join(base, "payload.bin")}
+	return session
+}
+
+func openCheckpointNamespace(t *testing.T, platform outputcap.Platform) outputcap.Directory {
+	t.Helper()
+	control := openLegacyControl(t, platform)
+	defer control.Close()
+	namespace, err := control.OpenDirectory(legacyresume.CheckpointDirectory, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return namespace
+}
+
+func ensureTestDirectory(t *testing.T, parent outputcap.Directory, name string) outputcap.Directory {
+	t.Helper()
+	kind, exact, err := parent.ClassifyExactEntry(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind != outputcap.EntryAbsent {
+		if !exact || kind != outputcap.EntryDirectory {
+			t.Fatalf("test directory %q conflicts", name)
+		}
+		directory, err := parent.OpenDirectory(name, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return directory
+	}
+	directory, err := parent.CreateDirectory(name, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(directory.Sync(), parent.Sync()); err != nil {
+		t.Fatal(err)
+	}
+	return directory
 }
 
 func installUnlockedLock(t *testing.T, directory outputcap.Directory, name string) {
@@ -326,7 +551,7 @@ func installUnlockedLock(t *testing.T, directory outputcap.Directory, name strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := lock.Close(); err != nil {
+	if err := errors.Join(directory.Sync(), lock.Close()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -349,14 +574,32 @@ func writeCapabilityFile(t *testing.T, directory outputcap.Directory, name strin
 	}
 }
 
-func lockLegacyCoordinator(t *testing.T, platform outputcap.Platform, _ legacyFixture) outputcap.Lock {
+func replaceCapabilityFile(t *testing.T, directory outputcap.Directory, name string, payload []byte) {
 	t.Helper()
-	control, err := platform.Root().OpenDirectory(resumestate.ControlDirectoryName, true)
+	file, err := directory.CreateFile("replacement", true, int64(len(payload)))
 	if err != nil {
 		t.Fatal(err)
 	}
+	written, err := file.WriteAt(payload, 0)
+	if err != nil || written != len(payload) {
+		t.Fatalf("write replacement = %d, %v", written, err)
+	}
+	if err := file.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := directory.ReplacePrivateFile(file, name); err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(directory.Sync(), file.Close()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func lockLegacyCoordinator(t *testing.T, platform outputcap.Platform, _ legacyFixture) outputcap.Lock {
+	t.Helper()
+	control := openLegacyControl(t, platform)
 	defer control.Close()
-	lock, created, err := control.AcquireLock(resumestate.CoordinatorLockName, true)
+	lock, created, err := control.AcquireLock(legacyresume.CoordinatorLock, true)
 	if err != nil || created {
 		t.Fatalf("acquire coordinator fixture: created=%t err=%v", created, err)
 	}
@@ -365,72 +608,63 @@ func lockLegacyCoordinator(t *testing.T, platform outputcap.Platform, _ legacyFi
 
 func lockLegacySession(t *testing.T, platform outputcap.Platform, fixture legacyFixture) outputcap.Lock {
 	t.Helper()
-	control, err := platform.Root().OpenDirectory(resumestate.ControlDirectoryName, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer control.Close()
-	sessions, err := control.OpenDirectory(resumestate.SessionsDirectoryName, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sessions.Close()
-	session, err := sessions.OpenDirectory(filepath.Base(fixture.session), true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	session := openLegacySession(t, platform, fixture)
 	defer session.Close()
-	lock, created, err := session.AcquireLock(resumestate.SessionLockName, true)
+	lock, created, err := session.AcquireLock(legacyresume.SessionLock, true)
 	if err != nil || created {
 		t.Fatalf("acquire session fixture: created=%t err=%v", created, err)
 	}
 	return lock
 }
 
-type changingBindingPlatform struct {
-	outputcap.Platform
-	mu      sync.Mutex
-	calls   int
-	failAt  int
-	failure error
-}
-
-func (platform *changingBindingPlatform) RootBinding() (resumestate.OutputRootBinding, error) {
-	platform.mu.Lock()
-	defer platform.mu.Unlock()
-	platform.calls++
-	if platform.calls >= platform.failAt {
-		return resumestate.OutputRootBinding{}, platform.failure
+func reportHasDetail(report CheckpointCleanupReport, detail string) bool {
+	for _, entry := range report.Entries {
+		if entry.Detail == detail || strings.Contains(entry.Detail, detail) {
+			return true
+		}
 	}
-	return platform.Platform.RootBinding()
+	return false
 }
 
-func runCleanerLockCrashHelper(t *testing.T, rootPath string) {
+type legacyOwnershipFixture struct {
+	Schema        uint32 `cbor:"0,keyasint"`
+	Backend       string `cbor:"1,keyasint"`
+	RootIdentity  []byte `cbor:"2,keyasint"`
+	Certification string `cbor:"3,keyasint"`
+	Durability    uint8  `cbor:"4,keyasint"`
+	Generation    uint64 `cbor:"5,keyasint"`
+}
+
+func encodeLegacyOwnershipFixture(t *testing.T, fixture legacyOwnershipFixture) []byte {
 	t.Helper()
-	platform, err := openCleanerTestPlatform(rootPath, false)
+	fixture.Schema = 1
+	options := cbor.CoreDetEncOptions()
+	options.NilContainers = cbor.NilContainerAsEmpty
+	encoder, err := options.EncMode()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer platform.Close()
-	binding, err := platform.RootBinding()
+	payload, err := encoder.Marshal(fixture)
 	if err != nil {
 		t.Fatal(err)
 	}
-	namespace, err := checkpointstore.OpenOwnedNamespace(checkpointstore.NamespaceConfig{
-		Root: platform.Root(), BackendID: transfer.NativeFilesystemOutputBackendID,
-		RootIdentity: binding.Bytes(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer namespace.Close()
-	lock, _, err := namespace.AcquireLock(FileCheckpointCleanupLock, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lock.Close()
-	fmt.Fprintln(os.Stdout, "cleaner-lock-acquired")
-	for {
-		time.Sleep(time.Hour)
+	magic := []byte{'W', 'S', 'O', 'C', 'T', 'L', '0', '1'}
+	encoded := append([]byte(nil), magic...)
+	var length [4]byte
+	binary.BigEndian.PutUint32(length[:], uint32(len(payload)))
+	encoded = append(encoded, length[:]...)
+	encoded = append(encoded, payload...)
+	checksum := sha256.Sum256(encoded)
+	return append(encoded, checksum[:]...)
+}
+
+func TestLegacyOwnershipFixtureIsBounded(t *testing.T) {
+	if len(encodeLegacyOwnershipFixture(t, legacyOwnershipFixture{
+		Backend:       string(transfer.NativeFilesystemOutputBackendID),
+		RootIdentity:  bytes.Repeat([]byte{1}, legacyresume.RootIdentityBytes),
+		Certification: legacyresume.CertificationWindowsNTFSProcessRestart,
+		Durability:    1, Generation: 1,
+	})) > legacyresume.MaxOwnershipRecordBytes {
+		t.Fatal("legacy ownership fixture exceeds decoder bound")
 	}
 }

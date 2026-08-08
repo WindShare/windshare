@@ -9,9 +9,13 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import { DirectoryAdmissionLedger } from '../../src/transfer/directory-admission-ledger'
 import { freezeTransferIntent } from '../../src/transfer/intent'
 import {
+  COMPLETED_JOB_SETTLEMENT,
+  directoryAdmissionScope,
   VerifiedDurableRanges,
+  pausedJobSettlement,
+  type DirectoryAdmission,
+  type DirectoryAdmissionScope,
   type OutputDirectoryAdmission,
-  type OutputDirectory,
   type OutputFile,
   type OutputSession,
   type V2OutputAuthority,
@@ -111,31 +115,57 @@ export function compareUtf8(left: string, right: string): number {
   return leftBytes.byteLength - rightBytes.byteLength
 }
 
-export function outputAuthority(session: OutputSession): V2OutputAuthority {
+export const BIND_TEST_DIRECTORY_ADMISSION_SCOPE = Symbol('bind-test-directory-admission-scope')
+
+export interface ScopeBoundTestOutputSession extends OutputSession {
+  readonly [BIND_TEST_DIRECTORY_ADMISSION_SCOPE]?: (scope: DirectoryAdmissionScope) => void
+}
+
+export interface TestOutputSessionFactory {
+  readonly backend: string
+  readonly format: OutputSession['format']
+  open(scope: DirectoryAdmissionScope): OutputSession
+}
+
+export type TestOutputSessionSource = ScopeBoundTestOutputSession | TestOutputSessionFactory
+
+export function outputAuthority(source: TestOutputSessionSource): V2OutputAuthority {
   let opened = false
+  let openedSession: OutputSession | undefined
+  const openSession = (intent: Awaited<ReturnType<typeof freezeTransferIntent>>): OutputSession => {
+    const scope = directoryAdmissionScope(intent)
+    const session = 'open' in source ? source.open(scope) : source
+    ;(session as ScopeBoundTestOutputSession)[BIND_TEST_DIRECTORY_ADMISSION_SCOPE]?.(scope)
+    openedSession = session
+    return session
+  }
   return {
-    confirmOutput: async (draft) => ({
-      intent: await freezeTransferIntent(draft, {
+    confirmOutput: async (draft) => {
+      const intent = await freezeTransferIntent(draft, {
         target: opaqueOutputIdentityText(201),
         targetKind: 2,
-        backend: session.identity.backend,
-        format: session.format,
-      }),
-      session,
-    }),
-    openOutput: async () => {
+        backend: 'open' in source ? source.backend : source.identity.backend,
+        format: source.format,
+      })
+      return { intent, session: openSession(intent) }
+    },
+    openOutput: async (intent) => {
       if (opened) throw new Error('Test output authority was opened twice')
       opened = true
-      return session
+      return openSession(intent)
     },
-    abort: (reason: unknown) => session.abortJob(reason),
+    abort: async (reason: unknown) => {
+      const session = openedSession ?? ('open' in source ? undefined : source)
+      if (session !== undefined) await session.pauseJob(reason)
+    },
   }
 }
 
-export function terminalBoundaryOutput(initialDurableStart?: bigint): OutputSession {
+export function terminalBoundaryOutput(initialDurableStart?: bigint): ScopeBoundTestOutputSession {
   const identity = { backend: 'test-terminal', outputSessionId: 'selection-bound' }
-  const directoryAdmissions = new DirectoryAdmissionLedger()
+  const directoryAdmissions = testDirectoryAdmissionLedgerBinding()
   return {
+    [BIND_TEST_DIRECTORY_ADMISSION_SCOPE]: directoryAdmissions.bind,
     identity,
     format: 'directory',
     capabilities: {
@@ -145,12 +175,11 @@ export function terminalBoundaryOutput(initialDurableStart?: bigint): OutputSess
       modificationTime: false,
     },
     admitDirectory: (directory: OutputDirectoryAdmission, signal: AbortSignal) =>
-      directoryAdmissions.admitDirectory(directory, signal),
-    finalizeDirectory: async (directory) => {
-      directoryAdmissions.validateDirectoryFinalization(directory)
-    },
+      directoryAdmissions.get().admitDirectory(directory, signal),
+    finalizeDirectory: (admission: DirectoryAdmission, signal: AbortSignal) =>
+      directoryAdmissions.get().finalizeDirectory(admission, signal),
     beginFile: async (input) => {
-      const file = directoryAdmissions.validateFileParent(input)
+      const file = directoryAdmissions.get().validateFileParent(input)
       const ownership = {
         ...identity,
         canonicalPath: file.path,
@@ -174,13 +203,13 @@ export function terminalBoundaryOutput(initialDurableStart?: bigint): OutputSess
             [byteRange(0n, file.exactSize)],
           ),
           commit: async () => undefined,
-          abort: async () => 'FileIsolated' as const,
+          retire: async () => 'FileIsolated' as const,
+          pause: async () => undefined,
         },
       }
     },
-    finishJob: async () => undefined,
-    abortJob: async () => undefined,
-    suspendJob: async () => undefined,
+    completeJob: async () => COMPLETED_JOB_SETTLEMENT,
+    pauseJob: async () => pausedJobSettlement('ProcessRestart'),
   }
 }
 
@@ -203,7 +232,9 @@ export function traversalJob(
   })
 }
 
-export function traversalOutput(): {
+export function traversalOutput(options?: {
+  readonly beforeFinalizeDirectory?: (directory: OutputDirectoryAdmission) => void | Promise<void>
+}): {
   readonly session: OutputSession
   readonly abortReasons: unknown[]
   readonly suspendReasons: unknown[]
@@ -214,8 +245,9 @@ export function traversalOutput(): {
   const suspendReasons: unknown[] = []
   const finalizedPaths: string[][] = []
   const begunFilePaths: string[][] = []
-  const directoryAdmissions = new DirectoryAdmissionLedger()
+  const directoryAdmissions = testDirectoryAdmissionLedgerBinding()
   const session = {
+    [BIND_TEST_DIRECTORY_ADMISSION_SCOPE]: directoryAdmissions.bind,
     identity: { backend: 'test', outputSessionId: 'traversal' },
     format: 'directory',
     capabilities: {
@@ -225,20 +257,42 @@ export function traversalOutput(): {
       modificationTime: false,
     },
     admitDirectory: (directory: OutputDirectoryAdmission, signal: AbortSignal) =>
-      directoryAdmissions.admitDirectory(directory, signal),
-    finalizeDirectory: async (directory: OutputDirectory) => {
-      const admitted = directoryAdmissions.validateDirectoryFinalization(directory)
-      finalizedPaths.push([...admitted.path])
-    },
+      directoryAdmissions.get().admitDirectory(directory, signal),
+    finalizeDirectory: (admission: DirectoryAdmission, signal: AbortSignal) =>
+      directoryAdmissions.get().finalizeDirectory(admission, signal, async (directory) => {
+        await options?.beforeFinalizeDirectory?.(directory)
+        finalizedPaths.push([...directory.path])
+      }),
     beginFile: async (file: OutputFile) => {
       begunFilePaths.push([...file.path])
       throw new Error('Traversal fixture unexpectedly opened a file')
     },
-    finishJob: async () => undefined,
-    abortJob: async (reason: unknown) => { abortReasons.push(reason) },
-    suspendJob: async (reason: unknown) => { suspendReasons.push(reason) },
+    completeJob: async () => COMPLETED_JOB_SETTLEMENT,
+    pauseJob: async (reason: unknown) => {
+      suspendReasons.push(reason)
+      return pausedJobSettlement('None')
+    },
   } as unknown as OutputSession
   return { session, abortReasons, suspendReasons, finalizedPaths, begunFilePaths }
+}
+
+export function testDirectoryAdmissionLedgerBinding(): {
+  readonly bind: (scope: DirectoryAdmissionScope) => void
+  readonly get: () => DirectoryAdmissionLedger
+} {
+  let ledger: DirectoryAdmissionLedger | undefined
+  return Object.freeze({
+    bind: (scope: DirectoryAdmissionScope) => {
+      if (ledger !== undefined) return
+      ledger = new DirectoryAdmissionLedger(scope)
+    },
+    get: () => {
+      if (ledger === undefined) {
+        throw new Error('Test output session used directory authority before intent validation')
+      }
+      return ledger
+    },
+  })
 }
 
 export function committedDirectory(

@@ -22,9 +22,12 @@ export function fileOwnership(
   })
 }
 
-export function verifiedFileRanges(record: PersistedFileRecord): VerifiedDurableRanges {
+export function verifiedFileRanges(
+  identity: OutputSessionIdentity,
+  record: PersistedFileRecord,
+): VerifiedDurableRanges {
   return new VerifiedDurableRanges(
-    record,
+    fileOwnership(identity, record.canonicalPath, record.ownedFileIdentity),
     record.source,
     record.exactSize,
     record.durableRanges,

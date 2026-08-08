@@ -1,5 +1,5 @@
-import type { DirectoryWork } from '../v2-job-contract'
-import { V2DirectoryOutputError, isDirectoryScopedFailure } from '../v2-job-failures'
+import type { DirectoryWork } from '../job/contract'
+import { V2DirectoryOutputError, isDirectoryScopedFailure } from '../job/failures'
 
 export interface V2DirectoryStackFrame {
   readonly work: DirectoryWork

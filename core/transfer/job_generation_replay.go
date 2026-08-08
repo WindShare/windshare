@@ -67,29 +67,37 @@ func (discovery *incrementalDirectoryDiscovery) replayGenerationPhase(
 	ctx context.Context,
 	admission DirectoryAdmission,
 	phase generationReplayPhase,
-) (bool, error) {
-	cursor, err := discovery.run.job.catalog.OpenDirectoryPages(ctx, discovery.request.directory)
+) (selected bool, resultErr error) {
+	cursor, rawOpenErr := discovery.run.job.catalog.OpenDirectoryPages(ctx, discovery.request.directory)
+	err := normalizeCatalogBoundary(ctx, rawOpenErr)
 	if err != nil {
 		return false, discovery.handleReplayFailure(err)
 	}
 	if cursor == nil {
-		return false, NewJobDependencyContractError(ErrCatalogCursorContract)
+		return false, dependencyContractFailure(ErrCatalogCursorContract)
 	}
-	defer func() { _ = cursor.Close() }()
+	defer func() {
+		closeErr := normalizeCatalogBoundary(context.Background(), cursor.Close())
+		if closeErr != nil {
+			closeErr = discovery.handleReplayFailure(closeErr)
+		}
+		resultErr = joinLifecycleFailures(resultErr, closeErr)
+	}()
 
 	selectedSubtree := false
 	for index, commitment := range discovery.commitments {
-		page, ok, err := cursor.Next(ctx)
+		page, ok, rawNextErr := cursor.Next(ctx)
+		err := normalizeCatalogBoundary(ctx, rawNextErr)
 		if err != nil {
 			return false, discovery.handleReplayFailure(err)
 		}
 		terminal := index == len(discovery.commitments)-1
 		if !ok || !discovery.matchesReplayPage(page, uint32(index), commitment, terminal) {
-			return false, NewSessionFailure(ErrCatalogIdentity)
+			return false, catalogIntegrityFailure(ErrCatalogIdentity)
 		}
-		pageSelected, err := discovery.replayPage(ctx, page, admission, phase)
-		if err != nil {
-			return false, err
+		pageSelected, replayErr := discovery.replayPage(ctx, page, admission, phase)
+		if replayErr != nil {
+			return false, replayErr
 		}
 		selectedSubtree = selectedSubtree || pageSelected
 		if discovery.request.mode == incrementalDiscoveryOpaqueProbe &&
@@ -123,11 +131,11 @@ func (discovery *incrementalDirectoryDiscovery) replayPage(
 	selectedSubtree := false
 	for entryIndex := 0; entryIndex < page.EntryCount(); entryIndex++ {
 		if err := context.Cause(ctx); err != nil {
-			return false, err
+			return false, cancellationFailure(ctx, err)
 		}
 		entry, exists := page.Entry(uint32(entryIndex))
 		if !exists {
-			return false, NewSessionFailure(ErrCatalogIdentity)
+			return false, catalogIntegrityFailure(ErrCatalogIdentity)
 		}
 		selected, err := discovery.replayEntry(ctx, entry, admission, phase)
 		if err != nil {
@@ -150,7 +158,7 @@ func (discovery *incrementalDirectoryDiscovery) replayEntry(
 ) (bool, error) {
 	path, err := appendOutputPath(discovery.request.path, entry.Name())
 	if err != nil {
-		return false, NewSessionFailure(ErrCatalogIdentity)
+		return false, catalogIntegrityFailure(ErrCatalogIdentity)
 	}
 	if file, isFile := entry.FileID(); isFile {
 		if phase != replayGenerationFiles {
@@ -163,7 +171,7 @@ func (discovery *incrementalDirectoryDiscovery) replayEntry(
 	}
 	directory, isDirectory := entry.DirectoryID()
 	if !isDirectory {
-		return false, NewSessionFailure(ErrCatalogIdentity)
+		return false, catalogIntegrityFailure(ErrCatalogIdentity)
 	}
 	if phase != replayGenerationDirectories {
 		return false, nil
@@ -214,7 +222,7 @@ func (discovery *incrementalDirectoryDiscovery) enqueueReplayFile(
 	admission DirectoryAdmission,
 ) error {
 	if admission.IsZero() {
-		return NewJobDependencyContractError(ErrDirectoryAdmissionMismatch)
+		return dependencyContractFailure(ErrDirectoryAdmissionMismatch)
 	}
 	plan := plannedFile{
 		file: file, path: path, expectedSize: entry.ExpectedSize(), modified: entry.ModifiedTime(),
@@ -224,11 +232,11 @@ func (discovery *incrementalDirectoryDiscovery) enqueueReplayFile(
 	enqueued := make(chan struct{})
 	select {
 	case discovery.queue <- transferQueueItem{kind: transferQueueFile, file: plan, enqueued: enqueued}:
-		discovery.run.traceFileLifecycle(TransferFileEnqueued, plan, false)
+		discovery.run.traceFileLifecycle(TransferFileEnqueued, plan, nil)
 		close(enqueued)
 		return nil
 	case <-ctx.Done():
-		return context.Cause(ctx)
+		return cancellationFailure(ctx, context.Cause(ctx))
 	}
 }
 
@@ -238,12 +246,12 @@ func (discovery *incrementalDirectoryDiscovery) handleReplayFailure(err error) e
 	)
 	if recorded != nil {
 		if discovery.request.path == "" && !isJobTerminalError(recorded) {
-			return NewSessionFailure(err)
+			return catalogIntegrityFailure(err)
 		}
 		return recorded
 	}
 	if discovery.request.path == "" {
-		return NewSessionFailure(err)
+		return catalogIntegrityFailure(err)
 	}
 	// Authentication already committed the ledger claims. A replay-only branch
 	// failure must not release identities that queued prefix work still owns.

@@ -98,9 +98,7 @@ jobs:
       # Disabling the workspace exercises the released-core dependency graph;
       # the ordinary workspace build is already performed by the test sweep.
       - name: Build the released-core consumer
-        env:
-          GOWORK: "off"
-        run: go build ./...
+        run: make root-release-graph
       - name: Run root short race and atomic coverage once
         run: >-
           go test -short -race -count=1 -covermode=atomic
@@ -145,7 +143,7 @@ jobs:
         run: >-
           go-test-coverage --config=.testcoverage.yml
           --profile="$RUNNER_TEMP/core.cover.out"
-      - name: Regenerate and compare protocol vectors once
+      - name: Verify protocol vectors once
         run: make vectors
 
   web:
@@ -232,8 +230,12 @@ jobs:
           cache-dependency-path: |
             go.sum
             core/go.sum
-      - name: Build and vet the native Windows source set
+      - name: Vet the native Windows source set
         run: make vet
+      # Windows build tags make this an independent check of the same published
+      # module boundary rather than a duplicate of the Linux root build.
+      - name: Build the released-core consumer
+        run: make root-release-graph
       # The measured Windows race path exceeded the six-minute workflow goal;
       # Linux owns race/coverage while this lane keeps Windows-native behavior.
       - name: Run root short tests once

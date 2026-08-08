@@ -24,10 +24,10 @@ fi
 echo "-- whitespace"
 git --no-pager diff --check
 
-echo "-- Web v1 production references"
-node scripts/ci/web-forbidden.mjs --source-only
+echo "-- Web retired paths and production graph"
+node scripts/ci/web-forbidden.mjs
 
-echo "-- Go v1 production references"
+echo "-- Go retired paths and production graph"
 node scripts/ci/go-v1-forbidden.mjs
 
 echo "== hygiene: PASS in ${SECONDS}s =="

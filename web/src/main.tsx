@@ -17,7 +17,7 @@ window.addEventListener('pagehide', (event) => {
   if (event.persisted) {
     return
   }
-  controller.dispose({ preserveOutputRecovery: true }).catch(() => undefined)
+  controller.dispose().catch(() => undefined)
 })
 
 createRoot(document.getElementById('root')!).render(

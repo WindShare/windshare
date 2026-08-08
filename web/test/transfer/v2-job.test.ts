@@ -8,10 +8,15 @@ import { FileGeometry, byteRange } from '../../src/content/geometry'
 import type { V2BlockRangeReader } from '../../src/content/v2-broker'
 import type { V2OpenedRevision, V2RevisionReader } from '../../src/content/v2-session-services'
 import { createBoundedPortableDownloadStream } from '../../src/output/portable/browser-download'
-import { SingleFileStreamOutputSession } from '../../src/output/streams/single-file'
+import {
+  SINGLE_FILE_STREAM_BACKEND,
+  SingleFileStreamOutputSession,
+} from '../../src/output/streams/single-file'
 import { OutputCheckpointContractError } from '../../src/transfer/output-file-transaction'
 import {
   OutputBudgetExceededError,
+  directoryAdmissionScope,
+  pausedJobSettlement,
   type OutputFile,
   type OutputSession,
   type V2OutputAuthority,
@@ -24,13 +29,24 @@ import {
   V2BlockOperationError,
   V2RemoteOperationError,
   V2RemoteRevisionError,
+  V2RevisionChangedDuringRecoveryError,
 } from '../../src/content/v2-session-services'
 import {
   TransferJob,
   isV2FileScopedTransferFailure,
 } from '../../src/transfer/v2-job'
+import {
+  normalizeV2FileTransferFailure,
+} from '../../src/transfer/job/failures'
+import {
+  FaultDomain,
+  FaultScope,
+  OutputFaultCode,
+  SessionFaultCode,
+} from '../../src/transfer/fault'
 import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
 import {
+  BIND_TEST_DIRECTORY_ADMISSION_SCOPE,
   catalogCommitment,
   committedDirectory,
   committedDirectoryFor,
@@ -48,10 +64,12 @@ import {
   wideIdentity,
   wideIdentityNumber,
   withTimeout,
+  type ScopeBoundTestOutputSession,
+  type TestOutputSessionFactory,
 } from './v2-job-fixture'
 
 describe('v2 transfer failure domains', () => {
-  it('keeps only typed revision and block domain errors file-local', () => {
+  it('recognizes file scope only after one closed boundary normalization', () => {
     const revisionError = new V2RemoteOperationError(encodeCanonicalCbor(
       new Map<number, unknown>([
         [0, 1], [1, 3], [2, 0x3001], [3, false], [4, null], [5, 'changed'],
@@ -63,17 +81,31 @@ describe('v2 transfer failure domains', () => {
       ]),
     ))
 
-    expect(isV2FileScopedTransferFailure(revisionError)).toBe(true)
-    expect(isV2FileScopedTransferFailure(blockError)).toBe(true)
-    expect(isV2FileScopedTransferFailure(new V2RemoteRevisionError({
+    const remoteRevision = new V2RemoteRevisionError({
       code: 0x3002,
       retryable: false,
-    }))).toBe(true)
-    expect(isV2FileScopedTransferFailure(new V2BlockOperationError(
+    })
+    const authenticatedBlockFailure = new V2BlockOperationError(
       'object-auth',
       'block sender object failed authentication',
       { cause: new Error('invalid signature') },
-    ))).toBe(true)
+    )
+
+    for (const raw of [revisionError, blockError, remoteRevision, authenticatedBlockFailure]) {
+      expect(isV2FileScopedTransferFailure(raw)).toBe(false)
+    }
+    expect(isV2FileScopedTransferFailure(
+      normalizeV2FileTransferFailure(revisionError).diagnostic,
+    )).toBe(true)
+    expect(isV2FileScopedTransferFailure(
+      normalizeV2FileTransferFailure(blockError).diagnostic,
+    )).toBe(true)
+    expect(isV2FileScopedTransferFailure(
+      normalizeV2FileTransferFailure(remoteRevision).diagnostic,
+    )).toBe(true)
+    expect(isV2FileScopedTransferFailure(
+      normalizeV2FileTransferFailure(authenticatedBlockFailure).diagnostic,
+    )).toBe(false)
   })
 
   it('promotes sender-object, wire, and session failures out of the file domain', () => {
@@ -94,7 +126,15 @@ describe('v2 portable output failure domain', () => {
       createBlob: (parts) => new Blob([...parts]),
       publish,
     }, 3)
-    const output = new SingleFileStreamOutputSession('portable-overflow', stream)
+    let output: SingleFileStreamOutputSession | undefined
+    const outputFactory: TestOutputSessionFactory = {
+      backend: SINGLE_FILE_STREAM_BACKEND,
+      format: 'single-file',
+      open: (scope) => {
+        output = new SingleFileStreamOutputSession('portable-overflow', scope, stream)
+        return output
+      },
+    }
     const fileId = identity(11)
     const revision = {
       shareInstance: identity(1),
@@ -154,7 +194,7 @@ describe('v2 portable output failure domain', () => {
       revisions,
       broker,
       lanes: { size: 1 },
-      output: outputAuthority(output),
+      output: outputAuthority(outputFactory),
       maximumConcurrentFiles: 1,
     }).run()
 
@@ -164,7 +204,7 @@ describe('v2 portable output failure domain', () => {
       failureCount: 0,
       omittedFailureCount: 0,
     })
-    expect(output.capabilities.durability).toBe('None')
+    expect(output?.capabilities.durability).toBe('None')
     expect(publish).not.toHaveBeenCalled()
   })
 })
@@ -226,7 +266,8 @@ describe('v2 incremental discovery boundary', () => {
             },
             checkpoint: (operationSignal) => transaction.checkpoint(operationSignal),
             commit: (operationSignal) => transaction.commit(operationSignal),
-            abort: (reason) => transaction.abort(reason),
+            retire: (reason: unknown) => transaction.retire(reason),
+            pause: (reason: unknown) => transaction.pause(reason),
           },
         }
       },
@@ -234,21 +275,27 @@ describe('v2 incremental discovery boundary', () => {
     const authority: V2OutputAuthority = {
       confirmOutput: async (draft) => {
         outputOpened = true
-        return {
-          intent: await freezeTransferIntent(draft, {
-            target: opaqueOutputIdentityText(200),
-            targetKind: 2,
-            backend: 'test-terminal',
-            format: 'directory',
-          }),
-          session: outputWithAdmission,
-        }
+        const intent = await freezeTransferIntent(draft, {
+          target: opaqueOutputIdentityText(200),
+          targetKind: 2,
+          backend: 'test-terminal',
+          format: 'directory',
+        })
+        ;(outputWithAdmission as ScopeBoundTestOutputSession)[
+          BIND_TEST_DIRECTORY_ADMISSION_SCOPE
+        ]?.(directoryAdmissionScope(intent))
+        return { intent, session: outputWithAdmission }
       },
-      openOutput: async () => {
+      openOutput: async (intent) => {
         outputOpened = true
+        ;(outputWithAdmission as ScopeBoundTestOutputSession)[
+          BIND_TEST_DIRECTORY_ADMISSION_SCOPE
+        ]?.(directoryAdmissionScope(intent))
         return outputWithAdmission
       },
-      abort: (reason: unknown) => outputWithAdmission.abortJob(reason),
+      abort: async (reason: unknown) => {
+        await outputWithAdmission.pauseJob(reason)
+      },
     }
     const revisions = {
       open: async () => {
@@ -526,7 +573,14 @@ describe('v2 incremental failure and observability boundaries', () => {
     }).run(), 1_000, 'Fatal worker failure did not cancel its blocked sibling')
 
     expect(result.outcome.status).toBe('Paused')
-    expect(result.abortReason).toBe(fatal)
+    expect(result.abortReason).toMatchObject({
+      fault: {
+        domain: FaultDomain.Session,
+        scope: FaultScope.OutputPause,
+        code: SessionFaultCode.DependencyContract,
+      },
+      cause: fatal,
+    })
     expect(blockedCancelled).toBe(true)
     expect(outputWrites).toBe(0)
   })
@@ -689,11 +743,18 @@ describe('v2 bounded scheduler regressions', () => {
     }).run()
 
     expect(result.outcome.status).toBe('Paused')
-    expect(result.abortReason).toBeInstanceOf(OutputCheckpointContractError)
+    expect(result.abortReason).toMatchObject({
+      fault: {
+        domain: FaultDomain.Output,
+        scope: FaultScope.OutputPause,
+        code: OutputFaultCode.Contract,
+      },
+      cause: expect.any(OutputCheckpointContractError),
+    })
     expect(beginFile).toHaveBeenCalledOnce()
   })
 
-  it('treats a malformed adapter abort disposition as a job-wide contract failure', async () => {
+  it('treats a malformed adapter retirement disposition as a job-wide contract failure', async () => {
     const root = identity(2)
     const file = fileEntry(identity(11), 'file.bin', 1n)
     const base = terminalBoundaryOutput()
@@ -705,16 +766,12 @@ describe('v2 bounded scheduler regressions', () => {
           ...begun,
           transaction: {
             ...begun.transaction,
-            abort: async () => 'forged' as never,
+            retire: async () => 'forged' as never,
           },
         }
       },
     }
-    const brokerFailure = new V2BlockOperationError(
-      'object-auth',
-      'authenticated block failure',
-      { cause: new Error('missing') },
-    )
+    const brokerFailure = new V2RevisionChangedDuringRecoveryError()
     const result = await new TransferJob({
       descriptor: {
         shareInstance: identity(1), syntheticRoot: root, syntheticRootId: identityText(2), chunkSize: 1,
@@ -737,7 +794,13 @@ describe('v2 bounded scheduler regressions', () => {
     }).run()
 
     expect(result.outcome.status).toBe('Paused')
-    expect(result.abortReason).toMatchObject({ name: 'OutputTransactionContractError' })
+    expect(result.abortReason).toMatchObject({
+      fault: {
+        domain: FaultDomain.Output,
+        scope: FaultScope.OutputPause,
+        code: OutputFaultCode.MutationAmbiguous,
+      },
+    })
   })
 
   it('transfers a file larger than the pending metadata budget without treating its content as queued memory', async () => {
@@ -889,7 +952,7 @@ describe('v2 output opening boundary', () => {
     expect(authority.abort).toHaveBeenCalledWith(pickerError)
     expect(loadDirectory).not.toHaveBeenCalled()
     expect(result.abortReason).toBe(pickerError)
-    expect(result.outcome.status).toBe('Aborted')
+    expect(result.outcome.status).toBe('Paused')
   })
 
   it('maps finite output-policy exhaustion to a paused job before a session opens', async () => {
@@ -926,7 +989,6 @@ describe('v2 output opening boundary', () => {
       shareInstance: identityText(1),
       syntheticRoot: identityText(2),
       selection: { mode: 'node-id', defaultSelected: false, rules: [] },
-      transferJobId,
     }), {
       target: opaqueOutputIdentityText(44),
       targetKind: 2,
@@ -951,21 +1013,19 @@ describe('v2 output opening boundary', () => {
       intent,
     }).run()
 
-    expect(result.outcome.status).toBe('Aborted')
+    expect(result.outcome.status).toBe('Paused')
     expect(result.abortReason).toBeInstanceOf(TypeError)
     expect(openOutput).not.toHaveBeenCalled()
     expect(loadDirectory).not.toHaveBeenCalled()
     expect(abort).toHaveBeenCalledOnce()
   })
 
-  it('owns and suspends an authority session whose format violates the frozen intent', async () => {
-    const sessionAbort = vi.fn(async () => undefined)
-    const sessionSuspend = vi.fn(async () => undefined)
+  it('owns and pauses an authority session whose format violates the frozen intent', async () => {
+    const sessionPause = vi.fn(async () => pausedJobSettlement('ProcessRestart'))
     const mismatchedSession: OutputSession = {
       ...terminalBoundaryOutput(),
       format: 'zip',
-      abortJob: sessionAbort,
-      suspendJob: sessionSuspend,
+      pauseJob: sessionPause,
     }
     const authorityAbort = vi.fn(async () => undefined)
     const authority: V2OutputAuthority = {
@@ -996,8 +1056,7 @@ describe('v2 output opening boundary', () => {
     }).run()
 
     expect(result.outcome.status).toBe('Paused')
-    expect(sessionSuspend).toHaveBeenCalledOnce()
-    expect(sessionAbort).not.toHaveBeenCalled()
+    expect(sessionPause).toHaveBeenCalledOnce()
     expect(authorityAbort).not.toHaveBeenCalled()
     expect(loadDirectory).not.toHaveBeenCalled()
   })

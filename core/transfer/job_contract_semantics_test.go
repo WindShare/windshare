@@ -3,49 +3,40 @@ package transfer
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/transfer/fault"
 )
 
 func TestTransferJobFailureTaxonomyPreservesScopeAndCause(t *testing.T) {
-	permanent := NewIsolatedPermanentSourceFailure(nil)
-	var permanentFailure *IsolatedPermanentSourceFailureError
-	if !errors.As(permanent, &permanentFailure) || errors.Unwrap(permanent) == nil ||
-		!strings.Contains(permanent.Error(), "file source failed permanently") {
-		t.Fatalf("permanent source failure = %v", permanent)
+	permanent := sourcePermanentFailure(errors.New("file source failed permanently"))
+	if got := normalizedFault(permanent); got.Domain() != fault.DomainSource ||
+		got.Scope() != fault.ScopeFileLocal {
+		t.Fatalf("permanent source failure = %v", got)
 	}
-	permanentFailure.IsolatedPermanentSourceFailure()
 	if fileRetireReason(permanent) != FileRetireIsolatedPermanentSourceFailure {
 		t.Fatal("isolated permanent source failure did not authorize retirement")
 	}
 
-	session := NewSessionFailure(nil)
-	var sessionFailure *SessionFailureError
-	if !errors.As(session, &sessionFailure) || errors.Unwrap(session) == nil || !IsSessionFailure(session) ||
-		!strings.Contains(session.Error(), "protocol session failed") {
-		t.Fatalf("session failure = %v", session)
+	session := sessionProtocolFailure(errors.New("protocol session failed"))
+	if got := normalizedFault(session); got.Domain() != fault.DomainSession ||
+		got.Scope() != fault.ScopeSessionTerminal || !isJobTerminalError(session) {
+		t.Fatalf("session failure = %v", got)
 	}
-	sessionFailure.SessionFailure()
 
-	budget := NewJobResourceBudgetError(nil)
-	var budgetFailure *JobResourceBudgetError
-	if !errors.As(budget, &budgetFailure) || errors.Unwrap(budget) == nil || !isJobFatal(budget) ||
-		!strings.Contains(budget.Error(), "resource budget exceeded") {
-		t.Fatalf("resource budget failure = %v", budget)
+	budget := resourceBudgetFailure(errors.New("resource budget exceeded"))
+	if got := normalizedFault(budget); got.Domain() != fault.DomainSession ||
+		got.Scope() != fault.ScopeOutputPause || !isJobTerminalError(budget) {
+		t.Fatalf("resource budget failure = %v", got)
 	}
-	budgetFailure.JobFatal()
 
-	dependency := NewJobDependencyContractError(nil)
-	var dependencyFailure *JobDependencyContractError
-	if !errors.As(dependency, &dependencyFailure) || errors.Unwrap(dependency) == nil || !isJobFatal(dependency) ||
-		!strings.Contains(dependency.Error(), "dependency contract violated") {
-		t.Fatalf("dependency contract failure = %v", dependency)
+	dependency := dependencyContractFailure(errors.New("dependency contract violated"))
+	if got := normalizedFault(dependency); got != fault.DependencyContractFault() || !isJobTerminalError(dependency) {
+		t.Fatalf("dependency contract failure = %v", got)
 	}
-	dependencyFailure.JobFatal()
 	if filePauseReason(budget) != FilePauseResourceBudget ||
 		jobPauseReason(budget, nil) != JobPauseResourceBudget {
 		t.Fatal("resource budget failure was persisted as a foreign failure class")
@@ -61,7 +52,7 @@ func TestTransferJobOutputSessionAndFileValidatorsFailClosed(t *testing.T) {
 	root := transferID[catalog.DirectoryID](162)
 	rules, _ := NewSelectionRules(true, nil)
 	intent := testTransferIntent(t, share, root, rules, jobOutputBackend)
-	if err := validateOutputSession(intent, nil); !errors.Is(err, ErrOutputContract) {
+	if err := validateOutputSession(intent, nil); normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
 		t.Fatalf("nil output session error = %v", err)
 	}
 	output := newJobOutput(share)
@@ -69,14 +60,14 @@ func TestTransferJobOutputSessionAndFileValidatorsFailClosed(t *testing.T) {
 		t.Fatalf("valid output session error = %v", err)
 	}
 	output.session = OutputSessionID{}
-	if err := validateOutputSession(intent, output); !errors.Is(err, ErrOutputContract) {
+	if err := validateOutputSession(intent, output); normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
 		t.Fatalf("zero output session identity error = %v", err)
 	}
 
 	binding, checkpoint := outputLifecycleFixture(t)
 	target := binding.Target()
 	transaction := &jobFileTransaction{binding: binding}
-	if err := validateOutputTransaction(target, nil, checkpoint); !errors.Is(err, ErrOutputContract) {
+	if err := validateOutputTransaction(target, nil, checkpoint); normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
 		t.Fatalf("nil output transaction error = %v", err)
 	}
 	if err := validateOutputTransaction(target, transaction, checkpoint); err != nil {
@@ -92,7 +83,7 @@ func TestTransferJobOutputSessionAndFileValidatorsFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateOutputTransaction(target, transaction, otherCheckpoint); !errors.Is(err, ErrOutputContract) {
+	if err := validateOutputTransaction(target, transaction, otherCheckpoint); normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
 		t.Fatalf("transaction with foreign checkpoint error = %v", err)
 	}
 	if err := validateOutputFileBinding(OutputFileTarget{}, binding); !errors.Is(err, ErrOutputContract) {
@@ -118,6 +109,77 @@ func TestTransferJobOutputSessionAndFileValidatorsFailClosed(t *testing.T) {
 	}
 	if err := validateImmediateFileSettlement(target, paused); !errors.Is(err, ErrOutputContract) {
 		t.Fatalf("paused immediate settlement error = %v", err)
+	}
+}
+
+func TestTransferJobDirectorySettlementValidatorRequiresExactAdmission(t *testing.T) {
+	share := transferID[catalog.ShareInstance](0xa1)
+	root := transferID[catalog.DirectoryID](0xa2)
+	rules, err := NewSelectionRules(true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := NewDirectoryAdmissionScope(testTransferIntent(t, share, root, rules, jobOutputBackend))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := make([]byte, directoryAdmissionSecretBytes)
+	secret[0] = 1
+	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, OutputDirectory{
+		DirectoryID: root,
+		Generation:  transferID[catalog.DirectoryGeneration](0xa3),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, OutputDirectory{
+		DirectoryID:     transferID[catalog.DirectoryID](0xa4),
+		Generation:      transferID[catalog.DirectoryGeneration](0xa5),
+		ParentAdmission: rootAdmission,
+		Path:            "child",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalized, err := NewFinalizedDirectorySettlement(childAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDirectorySettlement(childAdmission, finalized); err != nil {
+		t.Fatalf("exact finalized settlement = %v", err)
+	}
+	metadataFault, err := fault.NewOutput(fault.ScopeDirectoryLocal, fault.OutputDirectoryMetadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolated, err := NewIsolatedDirectorySettlement(childAdmission, metadataFault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDirectorySettlement(childAdmission, isolated); err != nil {
+		t.Fatalf("exact isolated settlement = %v", err)
+	}
+
+	foreign, err := NewFinalizedDirectorySettlement(rootAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tamperedAdmission := childAdmission
+	tamperedAdmission.path = "other"
+	tampered, err := NewFinalizedDirectorySettlement(tamperedAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, settlement := range map[string]DirectorySettlement{
+		"zero":                {},
+		"foreign receipt":     foreign,
+		"tampered projection": tampered,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateDirectorySettlement(childAdmission, settlement); normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
+				t.Fatalf("settlement error = %v", err)
+			}
+		})
 	}
 }
 
@@ -160,11 +222,12 @@ func TestTransferJobImmediateSettlementsPreserveOutcomeAndReleaseFailures(t *tes
 
 	t.Run("terminal lease release", func(t *testing.T) {
 		cause := errors.New("session ended during release")
-		revisions := &jobRevisionClient{releaseErr: NewSessionFailure(cause)}
+		revisions := &jobRevisionClient{releaseErr: sessionProtocolFailure(cause)}
 		run := immediateSettlementJobRun(binding.ShareInstance(), revisions)
 		published := immediateJobSettlements(t, binding, checkpoint)["published"]
 		err := run.handleImmediateSettlement(context.Background(), plan, opened, published)
-		if !errors.Is(err, cause) || run.succeeded != 1 || len(run.files) != 1 ||
+		if normalizedFault(err) != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
+			run.succeeded != 1 || len(run.files) != 1 ||
 			run.files[0].Stage != FailureLeaseRelease {
 			t.Fatalf("terminal release result error=%v succeeded=%d failures=%+v", err, run.succeeded, run.files)
 		}
@@ -172,11 +235,11 @@ func TestTransferJobImmediateSettlementsPreserveOutcomeAndReleaseFailures(t *tes
 
 	t.Run("terminal lease release after collision", func(t *testing.T) {
 		cause := errors.New("session ended during collision release")
-		revisions := &jobRevisionClient{releaseErr: NewSessionFailure(cause)}
+		revisions := &jobRevisionClient{releaseErr: sessionProtocolFailure(cause)}
 		run := immediateSettlementJobRun(binding.ShareInstance(), revisions)
 		collision := immediateJobSettlements(t, binding, checkpoint)["collision"]
 		err := run.handleImmediateSettlement(context.Background(), plan, opened, collision)
-		if !errors.Is(err, cause) || len(run.files) != 1 ||
+		if normalizedFault(err) != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) || len(run.files) != 1 ||
 			!errors.Is(run.files[0].Cause, ErrOutputPublishBlocked) {
 			t.Fatalf("terminal collision release error=%v failures=%+v", err, run.files)
 		}
@@ -190,7 +253,8 @@ func TestTransferJobImmediateSettlementsPreserveOutcomeAndReleaseFailures(t *tes
 			opened,
 			FileSettlement{kind: FilePaused, target: binding.Target()},
 		)
-		if !errors.Is(err, ErrOutputContract) || run.settlementFailure == nil {
+		if normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
+			normalizedFault(run.settlementFailure) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
 			t.Fatalf("unknown immediate settlement error = %v, settlement failure = %v", err, run.settlementFailure)
 		}
 	})
@@ -203,19 +267,22 @@ func TestTransferJobRejectsUnstartedFileWithoutLeakingRevisionLease(t *testing.T
 	run := immediateSettlementJobRun(transferID[catalog.ShareInstance](163), revisions)
 	lease := transferID[content.LeaseID](164)
 	plan := plannedFile{file: transferID[catalog.FileID](165), path: "file.bin"}
-	err := run.rejectUnstartedFile(context.Background(), plan, OpenedRevision{LeaseID: lease}, cause)
-	if !errors.Is(err, cause) || !errors.Is(err, releaseCause) || len(revisions.released) != 1 ||
-		revisions.released[0] != lease || len(run.files) != 1 || run.files[0].LeaseReleaseFailure != releaseCause {
+	err := run.rejectUnstartedFile(
+		context.Background(), plan, OpenedRevision{LeaseID: lease}, dependencyContractFailure(cause),
+	)
+	if normalizedFault(err) != fault.DependencyContractFault() || len(revisions.released) != 1 ||
+		revisions.released[0] != lease || len(run.files) != 1 ||
+		run.files[0].LeaseReleaseFault != fault.DependencyContractFault() {
 		t.Fatalf("unstarted file rejection error=%v released=%v failures=%+v", err, revisions.released, run.files)
 	}
 }
 
 func TestAtomicRequestedRangeSinkCancellationAndTerminalStateFailClosed(t *testing.T) {
 	var nilSink *atomicRequestedRangeSink
-	if err := nilSink.Flush(context.Background()); !errors.Is(err, errRangeReaderContract) || !isJobFatal(err) {
+	if err := nilSink.Flush(context.Background()); normalizedFault(err) != fault.DependencyContractFault() || !isJobTerminalError(err) {
 		t.Fatalf("nil atomic sink flush error = %v", err)
 	}
-	if err := nilSink.Failure(); !errors.Is(err, errRangeReaderContract) || !isJobFatal(err) {
+	if err := nilSink.Failure(); normalizedFault(err) != fault.DependencyContractFault() || !isJobTerminalError(err) {
 		t.Fatalf("nil atomic sink failure = %v", err)
 	}
 
@@ -263,13 +330,13 @@ func TestAtomicRequestedRangeSinkCancellationAndTerminalStateFailClosed(t *testi
 	if err := postFlush.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := postFlush.WriteRange(context.Background(), 30, []byte{1, 2}); !errors.Is(err, errRangeReaderContract) || !isJobFatal(err) {
+	if err := postFlush.WriteRange(context.Background(), 30, []byte{1, 2}); normalizedFault(err) != fault.DependencyContractFault() || !isJobTerminalError(err) {
 		t.Fatalf("post-flush atomic write error = %v", err)
 	}
-	if err := sealed.Flush(context.Background()); !errors.Is(err, errRangeReaderContract) || !isJobFatal(err) {
+	if err := sealed.Flush(context.Background()); normalizedFault(err) != fault.DependencyContractFault() || !isJobTerminalError(err) {
 		t.Fatalf("duplicate atomic flush error = %v", err)
 	}
-	if err := sealed.WriteRange(context.Background(), 20, []byte{1, 2}); !errors.Is(err, errRangeReaderContract) {
+	if err := sealed.WriteRange(context.Background(), 20, []byte{1, 2}); normalizedFault(err) != fault.DependencyContractFault() {
 		t.Fatalf("post-flush atomic write error = %v", err)
 	}
 }
@@ -281,7 +348,8 @@ func TestTransferJobRejectsInvalidAdmissionAndRevisionIdentityTransitions(t *tes
 		output.session = OutputSessionID{}
 		job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
 		result := job.Run(context.Background())
-		if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrOutputContract) ||
+		if result.Outcome != JobPausedOutcome ||
+			result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
 			output.pauseCalls != 1 || output.completeCalls != 0 {
 			t.Fatalf("invalid admission result=%+v pause=%d complete=%d", result, output.pauseCalls, output.completeCalls)
 		}
@@ -334,7 +402,7 @@ func TestTransferJobRejectsInvalidAdmissionAndRevisionIdentityTransitions(t *tes
 		cause := errors.New("session ended while releasing rejected revision")
 		revisions := &jobRevisionClient{
 			opened:   map[catalog.FileID]OpenedRevision{selected: opened},
-			failures: make(map[catalog.FileID]error), releaseErr: NewSessionFailure(cause),
+			failures: make(map[catalog.FileID]error), releaseErr: sessionProtocolFailure(cause),
 		}
 		run := immediateSettlementJobRun(share, revisions)
 		entry := jobEntry(t, selected, "file.bin", 1)
@@ -342,7 +410,8 @@ func TestTransferJobRejectsInvalidAdmissionAndRevisionIdentityTransitions(t *tes
 			file: selected, path: "file.bin", expectedSize: entry.ExpectedSize(), modified: entry.ModifiedTime(),
 		}
 		_, ready, err := run.openSelectedRevision(context.Background(), plan)
-		if ready || !errors.Is(err, cause) || len(revisions.released) != 1 || revisions.released[0] != lease {
+		if ready || normalizedFault(err) != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
+			len(revisions.released) != 1 || revisions.released[0] != lease {
 			t.Fatalf("rejected revision ready=%v error=%v released=%v", ready, err, revisions.released)
 		}
 	})

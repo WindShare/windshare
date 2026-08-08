@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 )
 
@@ -17,11 +17,15 @@ func TestOwnershipInspectionAuthenticatesCandidatesAndClassifiesContention(t *te
 		t.Fatal(err)
 	}
 	rootIdentity := bytes.Repeat([]byte{0x92}, sha256.Size)
-	ownership, err := resumestate.NewFileCheckpointOwnership(string(backend), rootIdentity)
+	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
+		Backend: backend, Certification: checkpointmodel.CertificationWindowsNTFSProcessRestart,
+		RootIdentity:        rootIdentity,
+		RootOpenDisposition: checkpointmodel.CallerProvidedContainer,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := resumestate.EncodeFileCheckpointOwnership(ownership)
+	encoded, err := checkpointmodel.EncodeOwnership(ownership)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +35,7 @@ func TestOwnershipInspectionAuthenticatesCandidatesAndClassifiesContention(t *te
 		directory := newMemoryDirectory()
 		writeMemoryFile(t, directory, candidate, []byte("foreign-image"))
 		status, err := inspectOwnership(directory, ownership)
-		if status != OwnershipMismatch || !errors.Is(err, resumestate.ErrFileCheckpointOwnership) {
+		if status != OwnershipMismatch || !errors.Is(err, checkpointmodel.ErrInvalidOwnership) {
 			t.Fatalf("foreign ownership candidate = status:%d error:%v", status, err)
 		}
 	})
@@ -42,7 +46,7 @@ func TestOwnershipInspectionAuthenticatesCandidatesAndClassifiesContention(t *te
 			t.Fatal(err)
 		}
 		status, err := inspectOwnership(directory, ownership)
-		if status != OwnershipMismatch || !errors.Is(err, resumestate.ErrFileCheckpointOwnership) {
+		if status != OwnershipMismatch || !errors.Is(err, checkpointmodel.ErrInvalidOwnership) {
 			t.Fatalf("non-file ownership candidate = status:%d error:%v", status, err)
 		}
 	})
@@ -52,7 +56,7 @@ func TestOwnershipInspectionAuthenticatesCandidatesAndClassifiesContention(t *te
 		writeMemoryFile(t, directory, candidate, encoded)
 		writeMemoryFile(t, directory, "foreign-entry", []byte("foreign"))
 		status, err := inspectOwnership(directory, ownership)
-		if status != OwnershipMismatch || !errors.Is(err, resumestate.ErrFileCheckpointOwnership) {
+		if status != OwnershipMismatch || !errors.Is(err, checkpointmodel.ErrInvalidOwnership) {
 			t.Fatalf("ownership candidate with sibling = status:%d error:%v", status, err)
 		}
 	})
@@ -90,7 +94,7 @@ func TestOwnershipInspectionAuthenticatesCandidatesAndClassifiesContention(t *te
 		}
 		status, err := inspectOwnership(directory, ownership)
 		if status != OwnershipMismatch || !errors.Is(err, outputcap.ErrNamespaceLockBusy) ||
-			errors.Is(err, resumestate.ErrFileCheckpointOwnership) {
+			errors.Is(err, checkpointmodel.ErrInvalidOwnership) {
 			t.Fatalf("in-flight ownership candidate = status:%d error:%v", status, err)
 		}
 	})
@@ -115,9 +119,18 @@ func TestOwnershipInspectionAuthenticatesCandidatesAndClassifiesContention(t *te
 		}
 		status, err := inspectOwnership(directory, ownership)
 		if status != OwnershipMismatch || !errors.Is(err, outputcap.ErrNamespaceLockBusy) ||
-			errors.Is(err, resumestate.ErrFileCheckpointOwnership) ||
-			errors.Is(err, resumestate.ErrFileCheckpointBinding) {
+			errors.Is(err, checkpointmodel.ErrInvalidOwnership) {
 			t.Fatalf("in-flight ownership candidate read = status:%d error:%v", status, err)
+		}
+	})
+
+	t.Run("preallocated-candidate-before-first-write", func(t *testing.T) {
+		directory := newMemoryDirectory()
+		writeMemoryFile(t, directory, candidate, make([]byte, len(encoded)))
+		status, err := inspectOwnership(directory, ownership)
+		if status != OwnershipMismatch || !errors.Is(err, outputcap.ErrNamespaceLockBusy) ||
+			errors.Is(err, checkpointmodel.ErrInvalidOwnership) {
+			t.Fatalf("preallocated ownership candidate = status:%d error:%v", status, err)
 		}
 	})
 

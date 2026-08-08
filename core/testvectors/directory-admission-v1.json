@@ -1,33 +1,52 @@
 {
   "version": 1,
   "kind": "directory-admission-v1",
-  "description": "Deterministic session-secret-scoped DirectoryAdmission proofs, including modified-time and parent binding.",
+  "description": "HMAC-SHA256 DirectoryAdmission V1 receipts and their immutable receipt-bound settlements.",
   "cases": [
     {
       "directoryIdB64": "ICEiIyQlJicoKSorLC0uLw==",
       "generationB64": "UFFSU1RVVldYWVpbXF1eXw==",
+      "intentDigestB64": "cegvMCqc7TLOqty0jh3yP1VrIu+FzCgyhuhhu44gWQ0=",
+      "messageB64": "AAAAHXdpbmRzaGFyZS9kaXJlY3RvcnktYWRtaXNzaW9uAAEAAAAgcegvMCqc7TLOqty0jh3yP1VrIu+FzCgyhuhhu44gWQ0AAAAQICEiIyQlJicoKSorLC0uLwAAABBQUVJTVFVWV1hZWltcXV5fAAAAAAAAAAAAAAABAA==",
       "modifiedTime": null,
       "name": "synthetic-root",
       "parentTokenB64": null,
       "path": "",
-      "preimageB64": "d2luZHNoYXJlL2RpcmVjdG9yeS1hZG1pc3Npb24vc2Vzc2lvbi12MQDAwcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3yAhIiMkJSYnKCkqKywtLi9QUVJTVFVWV1hZWltcXV5fAAAAAAAAAAAAAAAAAAA=",
+      "schemaVersion": 1,
       "secretB64": "wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8=",
-      "tokenB64": "2xoeb0osRcot4ls2jFggKUNCwLnYDT3/I8fIusvvml0="
+      "settlement": {
+        "admissionTokenB64": "jzVpUeOgE+znaIv57RBoOP6/Rb7yO0FBVdte0oLMsyM=",
+        "kind": "Finalized"
+      },
+      "syntheticRootB64": "ICEiIyQlJicoKSorLC0uLw==",
+      "tokenB64": "jzVpUeOgE+znaIv57RBoOP6/Rb7yO0FBVdte0oLMsyM="
     },
     {
       "directoryIdB64": "MDEyMzQ1Njc4OTo7PD0+Pw==",
       "generationB64": "YGFiY2RlZmdoaWprbG1ubw==",
+      "intentDigestB64": "cegvMCqc7TLOqty0jh3yP1VrIu+FzCgyhuhhu44gWQ0=",
+      "messageB64": "AAAAHXdpbmRzaGFyZS9kaXJlY3RvcnktYWRtaXNzaW9uAAEAAAAgcegvMCqc7TLOqty0jh3yP1VrIu+FzCgyhuhhu44gWQ0AAAAQMDEyMzQ1Njc4OTo7PD0+PwAAABBgYWJjZGVmZ2hpamtsbW5vAAAAII81aVHjoBPs52iL+e0QaDj+v0W+8jtBQVXbXtKCzLMjAAAABnBob3RvcwAAAA4BAAAAAGVT8cgHVNTAAg==",
       "modifiedTime": {
         "nanoseconds": 123000000,
         "precision": 2,
         "seconds": 1700000200
       },
       "name": "child-generation",
-      "parentTokenB64": "2xoeb0osRcot4ls2jFggKUNCwLnYDT3/I8fIusvvml0=",
+      "parentTokenB64": "jzVpUeOgE+znaIv57RBoOP6/Rb7yO0FBVdte0oLMsyM=",
       "path": "photos",
-      "preimageB64": "d2luZHNoYXJlL2RpcmVjdG9yeS1hZG1pc3Npb24vc2Vzc2lvbi12MQDAwcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3zAxMjM0NTY3ODk6Ozw9Pj9gYWJjZGVmZ2hpamtsbW5vcGhvdG9zAQAAAABlU/HIB1TUwALbGh5vSixFyi3iWzaMWCApQ0LAudgNPf8jx8i6y++aXQ==",
+      "schemaVersion": 1,
       "secretB64": "wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8=",
-      "tokenB64": "aiKGZhRoBINAcCPUw5Lp5fWkGlAzU/PSVh5oq95LGzQ="
+      "settlement": {
+        "admissionTokenB64": "p0PTKOY19yM7RJslYa0RwpTbgB0//vl4suegaPdabd8=",
+        "fault": {
+          "code": "directory-metadata",
+          "domain": "output",
+          "scope": "directory-local"
+        },
+        "kind": "IsolatedFailure"
+      },
+      "syntheticRootB64": "ICEiIyQlJicoKSorLC0uLw==",
+      "tokenB64": "p0PTKOY19yM7RJslYa0RwpTbgB0//vl4suegaPdabd8="
     }
   ]
 }

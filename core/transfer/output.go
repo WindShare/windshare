@@ -3,7 +3,7 @@ package transfer
 import (
 	"crypto/sha256"
 	"errors"
-	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -16,7 +16,6 @@ const (
 	OutputSessionIdentityBytes = catalog.IdentityBytes
 	OutputObjectIdentityBytes  = 32
 	MaxOutputBackendIDBytes    = 128
-	maxOutputFailureTreeNodes  = 4096
 )
 
 var (
@@ -426,39 +425,163 @@ type OutputFile struct {
 	ParentAdmission DirectoryAdmission
 }
 
-type OutputSessionError struct {
-	cause            error
-	requiresJobPause bool
+// OutputTargetKind identifies the user-owned namespace selected by the picker.
+// A catalog OutputLocator is deliberately a different type: catalog paths are
+// relative sender names, whereas an output target is a receiver-side root or
+// backend-owned opaque capability.
+type OutputTargetKind uint8
+
+const (
+	OutputFilesystemRootTarget OutputTargetKind = iota + 1
+	OutputOpaqueTarget
+)
+
+const outputTargetIdentityDomain = "windshare/output-root/v1\x00"
+
+const OutputRootIdentityBytes = sha256.Size
+
+// OutputRootIdentity is the stable identity of a receiver-owned output root.
+// It is not an authority by itself; the output backend must still revalidate
+// ownership and confinement when OpenOutput is called.
+type OutputRootIdentity [sha256.Size]byte
+
+func (identity OutputRootIdentity) Bytes() []byte { return append([]byte(nil), identity[:]...) }
+func (identity OutputRootIdentity) IsZero() bool  { return identity == (OutputRootIdentity{}) }
+
+// OutputTarget is an immutable, picker-confirmed destination. Filesystem roots
+// retain their canonical absolute path for the native authority, while an
+// opaque backend capability carries only its identity.
+type OutputTarget struct {
+	kind     OutputTargetKind
+	rootPath string
+	identity OutputRootIdentity
 }
 
-func NewOutputSessionError(cause error, requiresJobPause bool) error {
-	if cause == nil {
-		cause = errors.New("output operation failed")
+// NewFilesystemOutputRootTarget accepts only an absolute path. Requiring the
+// caller to resolve relative input at the UI/CLI boundary prevents the same
+// intent from silently referring to different roots when the process cwd
+// changes; the authority still performs its own root ownership checks.
+func NewFilesystemOutputRootTarget(rootPath string) (OutputTarget, error) {
+	canonical, err := canonicalOutputRootPath(rootPath)
+	if err != nil {
+		return OutputTarget{}, err
 	}
-	return &OutputSessionError{cause: cause, requiresJobPause: requiresJobPause}
+	identity := sha256.Sum256(append([]byte(outputTargetIdentityDomain), []byte(canonical)...))
+	return OutputTarget{kind: OutputFilesystemRootTarget, rootPath: canonical, identity: identity}, nil
 }
 
-func (e *OutputSessionError) Error() string { return fmt.Sprintf("output session: %v", e.cause) }
-func (e *OutputSessionError) Unwrap() error { return e.cause }
-func (e *OutputSessionError) RequiresJobPause() bool {
-	return e.requiresJobPause
+// NewOpaqueOutputTarget creates a target for a backend-owned capability. The
+// bytes may identify an FSA/OPFS handle, stream sink, or output object; transfer
+// never interprets them and only the issuing backend can authenticate them.
+func NewOpaqueOutputTarget(raw []byte) (OutputTarget, error) {
+	if len(raw) != sha256.Size {
+		return OutputTarget{}, ErrInvalidOutputBinding
+	}
+	var identity OutputRootIdentity
+	copy(identity[:], raw)
+	if identity == (OutputRootIdentity{}) {
+		return OutputTarget{}, ErrInvalidOutputBinding
+	}
+	return OutputTarget{kind: OutputOpaqueTarget, identity: identity}, nil
 }
 
-func outputFailureRequiresJobPause(err error, capabilities OutputCapabilities) bool {
-	return inspectLifecycleError(err).outputRequiresJobPause(capabilities)
+func canonicalOutputRootPath(rootPath string) (string, error) {
+	if rootPath == "" || !utf8.ValidString(rootPath) || strings.ContainsRune(rootPath, '\x00') || !filepath.IsAbs(rootPath) {
+		return "", ErrInvalidOutputBinding
+	}
+	clean := filepath.Clean(rootPath)
+	if clean == "." || !filepath.IsAbs(clean) {
+		return "", ErrInvalidOutputBinding
+	}
+	return clean, nil
 }
 
-type jobPauseRequirement interface {
-	error
-	RequiresJobPause() bool
+func (target OutputTarget) Kind() OutputTargetKind { return target.kind }
+func (target OutputTarget) RootPath() string       { return target.rootPath }
+func (target OutputTarget) Identity() OutputRootIdentity {
+	return target.identity
+}
+func (target OutputTarget) IsZero() bool {
+	return target.kind == 0 || target.identity == (OutputRootIdentity{})
 }
 
-func outputFailureExplicitlyRequiresJobPause(err error) bool {
-	inspection := inspectLifecycleError(err)
-	return inspection.explicitOutputPause || inspection.exhausted
+func (target OutputTarget) Equal(other OutputTarget) bool {
+	return target.kind == other.kind && target.rootPath == other.rootPath && target.identity == other.identity
 }
 
-func isOutputFailure(err error) bool {
-	inspection := inspectLifecycleError(err)
-	return inspection.outputFailure || inspection.exhausted
+func (target OutputTarget) valid() bool {
+	switch target.kind {
+	case OutputFilesystemRootTarget:
+		canonical, err := canonicalOutputRootPath(target.rootPath)
+		return err == nil && canonical == target.rootPath && target.identity != (OutputRootIdentity{})
+	case OutputOpaqueTarget:
+		return target.rootPath == "" && target.identity != (OutputRootIdentity{})
+	default:
+		return false
+	}
+}
+
+func validateOpenedFile(share catalog.ShareInstance, entry catalog.Entry, opened OpenedRevision) error {
+	file, isFile := entry.FileID()
+	if !isFile {
+		return ErrRevisionIdentity
+	}
+	return validateOpenedPlanFile(share, file, entry.ExpectedSize(), entry.ModifiedTime(), opened)
+}
+
+func validateOpenedPlanFile(
+	share catalog.ShareInstance,
+	file catalog.FileID,
+	expectedSize uint64,
+	modified catalog.ModifiedTime,
+	opened OpenedRevision,
+) error {
+	descriptor := opened.Descriptor
+	if file.IsZero() || opened.LeaseID.IsZero() || descriptor.ShareInstance() != share ||
+		descriptor.FileID() != file || descriptor.FileRevision().IsZero() ||
+		descriptor.ExactSize() != expectedSize {
+		return ErrRevisionIdentity
+	}
+	if modified.Present() && descriptor.ModifiedTime() != modified {
+		return ErrRevisionIdentity
+	}
+	return nil
+}
+
+func validateOutputTransaction(
+	target OutputFileTarget,
+	transaction FileTransaction,
+	durable VerifiedDurableRanges,
+) error {
+	if transaction == nil {
+		return outputContractFault(nil)
+	}
+	binding := transaction.Binding()
+	if validateOutputFileBinding(target, binding) != nil || durable.Binding() != binding {
+		return outputContractFault(nil)
+	}
+	return nil
+}
+
+func validateImmediateFileSettlement(
+	target OutputFileTarget,
+	settlement FileSettlement,
+) error {
+	// matchesTarget already proves the settlement's kind-specific binding and
+	// quarantine invariants. Immediate pause remains forbidden because it would
+	// bypass the transaction that owns resumable progress.
+	if !settlement.matchesTarget(target) || settlement.Kind() == FilePaused {
+		return ErrOutputContract
+	}
+	return nil
+}
+
+func validateOutputFileBinding(
+	target OutputFileTarget,
+	binding OutputFileBinding,
+) error {
+	if !target.valid() || !binding.valid() || binding.Target() != target {
+		return ErrOutputContract
+	}
+	return nil
 }

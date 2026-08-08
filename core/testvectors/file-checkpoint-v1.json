@@ -1,7 +1,7 @@
 {
   "version": 1,
   "kind": "file-checkpoint-v1",
-  "description": "FileCheckpointV1 canonical payload, storage envelope, ownership marker, and checksum.",
+  "description": "Canonical FileCheckpointV1 bindings, phase transitions, certified ownership, and supported crash cuts.",
   "cases": [
     {
       "backend": "test/native",
@@ -19,8 +19,12 @@
       "ownedOutputObjectB64": "UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8=",
       "ownershipMarker": "windshare/file-checkpoint/v1",
       "phase": 2,
+      "quarantineOrigin": 0,
+      "quarantineReason": 0,
       "recordIdB64": "kilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUI=",
+      "retirementReason": 0,
       "rootIdentityB64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8=",
+      "schemaVersion": 1,
       "stateGeneration": "1",
       "transferIntentDigestB64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
       "verifiedRanges": [
@@ -36,12 +40,207 @@
     },
     {
       "backend": "test/native",
-      "canonicalBytesB64": "AAAAJndpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtb3duZXJzaGlwL3YxAAAAHHdpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQvdjEAAAAgLndpbmRzaGFyZS1vdXRwdXQvY2hlY2twb2ludHMtdjEAAAALdGVzdC9uYXRpdmVAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eXw==",
-      "encodedB64": "AAAAJndpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtb3duZXJzaGlwL3YxAAAAHHdpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQvdjEAAAAgLndpbmRzaGFyZS1vdXRwdXQvY2hlY2twb2ludHMtdjEAAAALdGVzdC9uYXRpdmVAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2xMBioGS/SysKRRnsPPJbLvPK2DXWLgN81PtFz/DY95",
+      "canonicalBytesB64": "AAAAI3dpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtcmVjb3JkL3YxAQAAABx3aW5kc2hhcmUvZmlsZS1jaGVja3BvaW50L3YxAAAAIC53aW5kc2hhcmUtb3V0cHV0L2NoZWNrcG9pbnRzLXYxkilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUIQERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/AAAAD2ZvbGRlci9maWxlLmJpbgAAAAAAAABAAAAAC3Rlc3QvbmF0aXZlQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ubwAAAAAAAAABAAAAAAAAAAEAAAACAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAAEACAgAAAA==",
+      "canonicalPath": "folder/file.bin",
+      "checkpointGeneration": "1",
+      "checksumB64": "PWJs6c013v3TIEPmc7Bg2tWSBvvjqvXll4rDaDbZ/r8=",
+      "commitState": 2,
+      "encodedB64": "V1NGQ1BWMQAAAAFvAAAAI3dpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtcmVjb3JkL3YxAQAAABx3aW5kc2hhcmUvZmlsZS1jaGVja3BvaW50L3YxAAAAIC53aW5kc2hhcmUtb3V0cHV0L2NoZWNrcG9pbnRzLXYxkilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUIQERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/AAAAD2ZvbGRlci9maWxlLmJpbgAAAAAAAABAAAAAC3Rlc3QvbmF0aXZlQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ubwAAAAAAAAABAAAAAAAAAAEAAAACAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAAEACAgAAAD1ibOnNNd790yBD5nOwYNrVkgb746r15ZeKw2g22f6/",
+      "exactSize": "64",
+      "fileIdB64": "ICEiIyQlJicoKSorLC0uLw==",
+      "fileRevisionB64": "MDEyMzQ1Njc4OTo7PD0+Pw==",
+      "name": "verified",
+      "namespace": ".windshare-output/checkpoints-v1",
+      "ownedOutputObjectB64": "UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8=",
+      "ownershipMarker": "windshare/file-checkpoint/v1",
+      "phase": 2,
+      "quarantineOrigin": 0,
+      "quarantineReason": 0,
+      "recordIdB64": "kilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUI=",
+      "retirementReason": 0,
+      "rootIdentityB64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8=",
+      "schemaVersion": 1,
+      "stateGeneration": "1",
+      "transferIntentDigestB64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
+      "verifiedRanges": [
+        {
+          "end": "16",
+          "start": "0"
+        },
+        {
+          "end": "64",
+          "start": "32"
+        }
+      ]
+    },
+    {
+      "backend": "test/native",
+      "canonicalBytesB64": "AAAAI3dpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtcmVjb3JkL3YxAQAAABx3aW5kc2hhcmUvZmlsZS1jaGVja3BvaW50L3YxAAAAIC53aW5kc2hhcmUtb3V0cHV0L2NoZWNrcG9pbnRzLXYxkilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUIQERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/AAAAD2ZvbGRlci9maWxlLmJpbgAAAAAAAABAAAAAC3Rlc3QvbmF0aXZlQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ubwAAAAAAAAACAAAAAAAAAAEAAAACAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAAEADAgAAAA==",
+      "canonicalPath": "folder/file.bin",
+      "checkpointGeneration": "1",
+      "checksumB64": "o1eIi+m8gOZeBoODulNuk7IVD7hYkbYS+8YjAu0Nu5A=",
+      "commitState": 2,
+      "encodedB64": "V1NGQ1BWMQAAAAFvAAAAI3dpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtcmVjb3JkL3YxAQAAABx3aW5kc2hhcmUvZmlsZS1jaGVja3BvaW50L3YxAAAAIC53aW5kc2hhcmUtb3V0cHV0L2NoZWNrcG9pbnRzLXYxkilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUIQERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/AAAAD2ZvbGRlci9maWxlLmJpbgAAAAAAAABAAAAAC3Rlc3QvbmF0aXZlQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ubwAAAAAAAAACAAAAAAAAAAEAAAACAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAAEADAgAAAKNXiIvpvIDmXgaDg7pTbpOyFQ+4WJG2EvvGIwLtDbuQ",
+      "exactSize": "64",
+      "fileIdB64": "ICEiIyQlJicoKSorLC0uLw==",
+      "fileRevisionB64": "MDEyMzQ1Njc4OTo7PD0+Pw==",
+      "name": "paused",
+      "namespace": ".windshare-output/checkpoints-v1",
+      "ownedOutputObjectB64": "UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8=",
+      "ownershipMarker": "windshare/file-checkpoint/v1",
+      "phase": 3,
+      "quarantineOrigin": 0,
+      "quarantineReason": 0,
+      "recordIdB64": "kilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUI=",
+      "retirementReason": 0,
+      "rootIdentityB64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8=",
+      "schemaVersion": 1,
+      "stateGeneration": "2",
+      "transferIntentDigestB64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
+      "verifiedRanges": [
+        {
+          "end": "16",
+          "start": "0"
+        },
+        {
+          "end": "64",
+          "start": "32"
+        }
+      ]
+    },
+    {
+      "backend": "test/native",
+      "canonicalBytesB64": "AAAAI3dpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtcmVjb3JkL3YxAQAAABx3aW5kc2hhcmUvZmlsZS1jaGVja3BvaW50L3YxAAAAIC53aW5kc2hhcmUtb3V0cHV0L2NoZWNrcG9pbnRzLXYxkilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUIQERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/AAAAD2ZvbGRlci9maWxlLmJpbgAAAAAAAABAAAAAC3Rlc3QvbmF0aXZlQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ubwAAAAAAAAACAAAAAAAAAAIAAAACAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAYAAAAAAAAAEACAQAAAA==",
+      "canonicalPath": "folder/file.bin",
+      "checkpointGeneration": "2",
+      "checksumB64": "FyLOVwTgvKT9zlS9vpu92RwXu+MgxlrA7ESuwVOCKW8=",
+      "commitState": 1,
+      "encodedB64": "V1NGQ1BWMQAAAAFvAAAAI3dpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtcmVjb3JkL3YxAQAAABx3aW5kc2hhcmUvZmlsZS1jaGVja3BvaW50L3YxAAAAIC53aW5kc2hhcmUtb3V0cHV0L2NoZWNrcG9pbnRzLXYxkilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUIQERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/AAAAD2ZvbGRlci9maWxlLmJpbgAAAAAAAABAAAAAC3Rlc3QvbmF0aXZlQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ubwAAAAAAAAACAAAAAAAAAAIAAAACAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAYAAAAAAAAAEACAQAAABcizlcE4Lyk/c5Uvb6bvdkcF7vjIMZawOxErsFTgilv",
+      "exactSize": "64",
+      "fileIdB64": "ICEiIyQlJicoKSorLC0uLw==",
+      "fileRevisionB64": "MDEyMzQ1Njc4OTo7PD0+Pw==",
+      "name": "next-candidate",
+      "namespace": ".windshare-output/checkpoints-v1",
+      "ownedOutputObjectB64": "UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8=",
+      "ownershipMarker": "windshare/file-checkpoint/v1",
+      "phase": 2,
+      "quarantineOrigin": 0,
+      "quarantineReason": 0,
+      "recordIdB64": "kilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUI=",
+      "retirementReason": 0,
+      "rootIdentityB64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8=",
+      "schemaVersion": 1,
+      "stateGeneration": "2",
+      "transferIntentDigestB64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
+      "verifiedRanges": [
+        {
+          "end": "16",
+          "start": "0"
+        },
+        {
+          "end": "64",
+          "start": "24"
+        }
+      ]
+    },
+    {
+      "backend": "test/native",
+      "canonicalBytesB64": "AAAAI3dpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtcmVjb3JkL3YxAQAAABx3aW5kc2hhcmUvZmlsZS1jaGVja3BvaW50L3YxAAAAIC53aW5kc2hhcmUtb3V0cHV0L2NoZWNrcG9pbnRzLXYxkilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUIQERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/AAAAD2ZvbGRlci9maWxlLmJpbgAAAAAAAABAAAAAC3Rlc3QvbmF0aXZlQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ubwAAAAAAAAACAAAAAAAAAAIAAAACAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAYAAAAAAAAAEACAgAAAA==",
+      "canonicalPath": "folder/file.bin",
+      "checkpointGeneration": "2",
+      "checksumB64": "VXjCZ+ArfX4xJTmetsPCO2c+ukKaZta3X7ZacQJkp9E=",
+      "commitState": 2,
+      "encodedB64": "V1NGQ1BWMQAAAAFvAAAAI3dpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtcmVjb3JkL3YxAQAAABx3aW5kc2hhcmUvZmlsZS1jaGVja3BvaW50L3YxAAAAIC53aW5kc2hhcmUtb3V0cHV0L2NoZWNrcG9pbnRzLXYxkilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUIQERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/AAAAD2ZvbGRlci9maWxlLmJpbgAAAAAAAABAAAAAC3Rlc3QvbmF0aXZlQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ubwAAAAAAAAACAAAAAAAAAAIAAAACAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAYAAAAAAAAAEACAgAAAFV4wmfgK31+MSU5nrbDwjtnPrpCmmbWt1+2WnECZKfR",
+      "exactSize": "64",
+      "fileIdB64": "ICEiIyQlJicoKSorLC0uLw==",
+      "fileRevisionB64": "MDEyMzQ1Njc4OTo7PD0+Pw==",
+      "name": "next-verified",
+      "namespace": ".windshare-output/checkpoints-v1",
+      "ownedOutputObjectB64": "UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8=",
+      "ownershipMarker": "windshare/file-checkpoint/v1",
+      "phase": 2,
+      "quarantineOrigin": 0,
+      "quarantineReason": 0,
+      "recordIdB64": "kilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUI=",
+      "retirementReason": 0,
+      "rootIdentityB64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8=",
+      "schemaVersion": 1,
+      "stateGeneration": "2",
+      "transferIntentDigestB64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
+      "verifiedRanges": [
+        {
+          "end": "16",
+          "start": "0"
+        },
+        {
+          "end": "64",
+          "start": "24"
+        }
+      ]
+    },
+    {
+      "backend": "test/native",
+      "canonicalBytesB64": "AAAAI3dpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtcmVjb3JkL3YxAQAAABx3aW5kc2hhcmUvZmlsZS1jaGVja3BvaW50L3YxAAAAIC53aW5kc2hhcmUtb3V0cHV0L2NoZWNrcG9pbnRzLXYxikJvbsyP/PB4FK3QI1D9/a+iAFlO04+4vI/Kztu7lD0QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/AAAAD2ZvbGRlci9maWxlLmJpbgAAAAAAAABAAAAAC3Rlc3QvbmF0aXZlQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BQUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ubwAAAAAAAAABAAAAAAAAAAEAAAACAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAAEACAQAAAA==",
+      "canonicalPath": "folder/file.bin",
+      "checkpointGeneration": "1",
+      "checksumB64": "HAzYxSy6+xWkmJeVEZAYVhX4RpV9T0XjvgZun0Oxk8A=",
+      "commitState": 1,
+      "encodedB64": "V1NGQ1BWMQAAAAFvAAAAI3dpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtcmVjb3JkL3YxAQAAABx3aW5kc2hhcmUvZmlsZS1jaGVja3BvaW50L3YxAAAAIC53aW5kc2hhcmUtb3V0cHV0L2NoZWNrcG9pbnRzLXYxikJvbsyP/PB4FK3QI1D9/a+iAFlO04+4vI/Kztu7lD0QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/AAAAD2ZvbGRlci9maWxlLmJpbgAAAAAAAABAAAAAC3Rlc3QvbmF0aXZlQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BQUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ubwAAAAAAAAABAAAAAAAAAAEAAAACAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAAEACAQAAABwM2MUsuvsVpJiXlRGQGFYV+EaVfU9F474Gbp9DsZPA",
+      "exactSize": "64",
+      "fileIdB64": "ICEiIyQlJicoKSorLC0uLw==",
+      "fileRevisionB64": "MDEyMzQ1Njc4OTo7PD0+Pw==",
+      "name": "foreign-root",
+      "namespace": ".windshare-output/checkpoints-v1",
+      "ownedOutputObjectB64": "UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8=",
+      "ownershipMarker": "windshare/file-checkpoint/v1",
+      "phase": 2,
+      "quarantineOrigin": 0,
+      "quarantineReason": 0,
+      "recordIdB64": "ikJvbsyP/PB4FK3QI1D9/a+iAFlO04+4vI/Kztu7lD0=",
+      "retirementReason": 0,
+      "rootIdentityB64": "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2A=",
+      "schemaVersion": 1,
+      "stateGeneration": "1",
+      "transferIntentDigestB64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
+      "verifiedRanges": [
+        {
+          "end": "16",
+          "start": "0"
+        },
+        {
+          "end": "64",
+          "start": "32"
+        }
+      ]
+    },
+    {
+      "backend": "test/native",
+      "canonicalBytesB64": "AAAAJndpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtb3duZXJzaGlwL3YxAAAAHHdpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQvdjEAAAAgLndpbmRzaGFyZS1vdXRwdXQvY2hlY2twb2ludHMtdjEAAAALdGVzdC9uYXRpdmUAAAAfd2luZG93cy9udGZzL3Byb2Nlc3MtcmVzdGFydC92MUBBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fAAAAGWNhbGxlci1wcm92aWRlZC1jb250YWluZXI=",
+      "certification": "windows/ntfs/process-restart/v1",
+      "encodedB64": "AAAAJndpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtb3duZXJzaGlwL3YxAAAAHHdpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQvdjEAAAAgLndpbmRzaGFyZS1vdXRwdXQvY2hlY2twb2ludHMtdjEAAAALdGVzdC9uYXRpdmUAAAAfd2luZG93cy9udGZzL3Byb2Nlc3MtcmVzdGFydC92MUBBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fAAAAGWNhbGxlci1wcm92aWRlZC1jb250YWluZXKap2BZ6BLFJXPKnztg+YdI8aUuTSIgLxt7/xMrTcv1Ww==",
       "marker": "windshare/file-checkpoint/v1",
       "name": "ownership",
       "namespace": ".windshare-output/checkpoints-v1",
-      "rootIdentityB64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8="
+      "rootIdentityB64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8=",
+      "rootOpenDisposition": "caller-provided-container"
+    },
+    {
+      "backend": "test/native",
+      "canonicalBytesB64": "AAAAJndpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtb3duZXJzaGlwL3YxAAAAHHdpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQvdjEAAAAgLndpbmRzaGFyZS1vdXRwdXQvY2hlY2twb2ludHMtdjEAAAALdGVzdC9uYXRpdmUAAAAfd2luZG93cy9udGZzL3Byb2Nlc3MtcmVzdGFydC92MUBBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fAAAAFmF1dGhvcml0eS1jcmVhdGVkLXJvb3Q=",
+      "certification": "windows/ntfs/process-restart/v1",
+      "encodedB64": "AAAAJndpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQtb3duZXJzaGlwL3YxAAAAHHdpbmRzaGFyZS9maWxlLWNoZWNrcG9pbnQvdjEAAAAgLndpbmRzaGFyZS1vdXRwdXQvY2hlY2twb2ludHMtdjEAAAALdGVzdC9uYXRpdmUAAAAfd2luZG93cy9udGZzL3Byb2Nlc3MtcmVzdGFydC92MUBBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fAAAAFmF1dGhvcml0eS1jcmVhdGVkLXJvb3RA2TLlXeUHqb7sY2CnioKHcV7Natns71LCIDjhE3QyYA==",
+      "marker": "windshare/file-checkpoint/v1",
+      "name": "ownership-mismatch",
+      "namespace": ".windshare-output/checkpoints-v1",
+      "rootIdentityB64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8=",
+      "rootOpenDisposition": "authority-created-root"
+    },
+    {
+      "afterCommitCheckpointGeneration": "2",
+      "afterCommitRecordIdB64": "kilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUI=",
+      "beforeCommitCheckpointGeneration": "1",
+      "beforeCommitRecordIdB64": "kilEPt/MY8L6PxB2nW4S4s/0SpigsWUWbSTtDIimRUI=",
+      "name": "crash-cuts"
     }
   ]
 }

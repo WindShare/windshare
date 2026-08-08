@@ -3,8 +3,23 @@ package osfs
 import (
 	"context"
 
+	"github.com/windshare/windshare/core/osfs/internal/outputfault"
 	"github.com/windshare/windshare/core/osfs/internal/outputruntime"
+	"github.com/windshare/windshare/core/osfs/internal/pathfailure"
 	"github.com/windshare/windshare/core/transfer"
+)
+
+var (
+	ErrOutOfRange  = outputfault.ErrOutOfRange
+	ErrPathEscape  = outputfault.ErrPathEscape
+	ErrPathTooLong = pathfailure.ErrTooLong
+)
+
+type FilesystemOutputCertificationID string
+
+const (
+	FilesystemOutputCertificationLinuxExt4ProcessRestart   FilesystemOutputCertificationID = "linux/ext4/process-restart/v2"
+	FilesystemOutputCertificationWindowsNTFSProcessRestart FilesystemOutputCertificationID = "windows/ntfs/process-restart/v1"
 )
 
 type FilesystemResumeRoot struct {
@@ -16,35 +31,78 @@ type FilesystemOutputTraceOperation uint8
 const (
 	TraceFilesystemCertified FilesystemOutputTraceOperation = iota + 1
 	TraceFeatureProbeCompleted
-	TraceCheckpointCleanup
-	TraceControlBootstrap
+	TraceCheckpointNamespaceOpened
 	TraceNativeLock
 	TraceSessionOpened
-	TraceFilePhaseTransition
-	TraceFileRecoveryDecision
-	TraceFileSettlement
-	TraceSessionSettlement
-	TraceStateInstallCutAdopted
-	TraceAncestryValidation
+	TraceCheckpointReconciled
+	TraceRuntimeDecision
 )
 
-type FilesystemOutputFileSettlementBoundary uint8
+type FilesystemOutputRootDisposition string
 
 const (
-	FilesystemOutputSettlementBeginFile FilesystemOutputFileSettlementBoundary = iota + 1
-	FilesystemOutputSettlementCommit
-	FilesystemOutputSettlementPause
-	FilesystemOutputSettlementJobPause
-	FilesystemOutputSettlementBeginFileCleanup
-	FilesystemOutputSettlementRetire
+	FilesystemOutputCallerProvidedContainer FilesystemOutputRootDisposition = "caller-provided-container"
+	FilesystemOutputAuthorityCreatedRoot    FilesystemOutputRootDisposition = "authority-created-root"
+)
+
+type FilesystemOutputRuntimeComponent uint8
+
+const (
+	FilesystemOutputRuntimeSession FilesystemOutputRuntimeComponent = iota + 1
+	FilesystemOutputRuntimeDirectory
+	FilesystemOutputRuntimeFile
+	FilesystemOutputRuntimeCheckpoint
+)
+
+type FilesystemOutputRuntimeOperation uint8
+
+const (
+	FilesystemOutputRuntimeOpenOutput FilesystemOutputRuntimeOperation = iota + 1
+	FilesystemOutputRuntimeAcquireIntentLease
+	FilesystemOutputRuntimeReconcileCheckpoints
+	FilesystemOutputRuntimeAdmitDirectory
+	FilesystemOutputRuntimeFinalizeDirectory
+	FilesystemOutputRuntimeBeginFile
+	FilesystemOutputRuntimeWriteRange
+	FilesystemOutputRuntimeCheckpointFile
+	FilesystemOutputRuntimeCommitFile
+	FilesystemOutputRuntimePauseFile
+	FilesystemOutputRuntimeRetireFile
+	FilesystemOutputRuntimePauseJob
+	FilesystemOutputRuntimeCompleteJob
+	FilesystemOutputRuntimeMaterializeDirectory
+	FilesystemOutputRuntimeCreateOwnedFile
+	FilesystemOutputRuntimeRecoverFile
+	FilesystemOutputRuntimePublishFile
+	FilesystemOutputRuntimeQuarantineFile
+)
+
+type FilesystemOutputRuntimeDecision uint8
+
+const (
+	FilesystemOutputRuntimeValidated FilesystemOutputRuntimeDecision = iota + 1
+	FilesystemOutputRuntimeReserved
+	FilesystemOutputRuntimeCoalesced
+	FilesystemOutputRuntimeRejected
+	FilesystemOutputRuntimeRolledBack
+	FilesystemOutputRuntimeAdmitted
+	FilesystemOutputRuntimeActive
+	FilesystemOutputRuntimeSealed
+	FilesystemOutputRuntimeSettled
+	FilesystemOutputRuntimeAmbiguous
+	FilesystemOutputRuntimeDraining
+	FilesystemOutputRuntimeClosed
+	FilesystemOutputRuntimeSucceeded
+	FilesystemOutputRuntimeReconciled
+	FilesystemOutputRuntimeCollision
+	FilesystemOutputRuntimeNoChange
+	FilesystemOutputRuntimeNeedsAttention
+	FilesystemOutputRuntimeIsolatedFailure
 )
 
 type FilesystemOutputNativeLockScope uint8
 
-const (
-	FilesystemOutputNativeLockCoordinator FilesystemOutputNativeLockScope = iota + 1
-	FilesystemOutputNativeLockSession
-)
+const FilesystemOutputNativeLockSession FilesystemOutputNativeLockScope = 1
 
 type FilesystemOutputNativeLockMilestone uint8
 
@@ -56,69 +114,33 @@ const (
 	FilesystemOutputNativeLockReleaseReportedFailure
 )
 
-type FilesystemOutputAncestryBoundary uint8
-
-const (
-	FilesystemOutputAncestryAdmission FilesystemOutputAncestryBoundary = iota + 1
-	FilesystemOutputAncestryRestart
-	FilesystemOutputAncestryBeginFile
-	FilesystemOutputAncestryRecovery
-	FilesystemOutputAncestryPublicationPre
-	FilesystemOutputAncestryPublicationPost
-	FilesystemOutputAncestryDirectoryFinalize
-	FilesystemOutputAncestrySessionFinalize
-)
-
-type FilesystemOutputAncestryDecision uint8
-
-const (
-	FilesystemOutputAncestryPrepared FilesystemOutputAncestryDecision = iota + 1
-	FilesystemOutputAncestryMatched
-	FilesystemOutputAncestryMismatch
-	FilesystemOutputAncestryAuthorityDenied
-	FilesystemOutputAncestryStructuralUnsafe
-)
-
-type FilesystemOutputStateInstallStage uint8
-
-const (
-	FilesystemOutputStateCreate FilesystemOutputStateInstallStage = iota + 1
-	FilesystemOutputStateReplace
-)
-
+// FilesystemOutputTrace projects only milestones emitted by the native
+// output-session graph. Durable recovery authority remains inside checkpointstore
+// and resumeauthority rather than leaking through telemetry values.
 type FilesystemOutputTrace struct {
-	Operation                 FilesystemOutputTraceOperation
-	IntentDigest              transfer.TransferIntentDigest
-	SessionID                 transfer.OutputSessionID
-	LocatorDigest             transfer.OutputLocatorDigest
-	OutputObjectID            transfer.OutputObjectIdentity
-	PreviousPhase             FilesystemOutputFilePhase
-	NextPhase                 FilesystemOutputFilePhase
-	RecoveryAction            FilesystemOutputRecoveryAction
-	FileSettlement            transfer.FileSettlementKind
-	FileSettlementBoundary    FilesystemOutputFileSettlementBoundary
-	FilePauseReason           transfer.FilePauseReason
-	FileRetireReason          transfer.FileRetireReason
-	QuarantineReason          transfer.QuarantineReason
-	JobSettlement             transfer.JobSettlementKind
-	FailureScope              transfer.OutputFaultScope
-	FailureCode               transfer.OutputFaultCode
-	Certification             FilesystemOutputCertificationID
-	StateGeneration           uint64
-	StateInstallStage         FilesystemOutputStateInstallStage
-	SelectionIdentity         transfer.SelectionIdentity
-	OutputAncestryDigest      FilesystemOutputAncestryDigest
-	AncestryBoundary          FilesystemOutputAncestryBoundary
-	AncestryDecision          FilesystemOutputAncestryDecision
-	AncestryClaimCount        uint32
-	NativeLockScope           FilesystemOutputNativeLockScope
-	NativeLockMilestone       FilesystemOutputNativeLockMilestone
-	MutationReportedFailure   bool
-	ParentSyncReportedFailure bool
-	CleanupRemoved            uint64
-	CleanupQuarantined        uint64
-	CleanupSkipped            uint64
-	Failed                    bool
+	Operation              FilesystemOutputTraceOperation
+	IntentDigest           transfer.TransferIntentDigest
+	SessionID              transfer.OutputSessionID
+	Certification          FilesystemOutputCertificationID
+	NativeLockScope        FilesystemOutputNativeLockScope
+	NativeLockMilestone    FilesystemOutputNativeLockMilestone
+	RootOpenDisposition    FilesystemOutputRootDisposition
+	RuntimeComponent       FilesystemOutputRuntimeComponent
+	RuntimeOperation       FilesystemOutputRuntimeOperation
+	RuntimeDecision        FilesystemOutputRuntimeDecision
+	OperationID            uint64
+	ClaimID                uint64
+	FaultDomain            uint8
+	NormalizedFaultScope   uint8
+	NormalizedFaultCode    uint16
+	NodeClaimCount         uint64
+	DirectoryClaimCount    uint64
+	FileClaimCount         uint64
+	ActiveFileClaimCount   uint64
+	ReservedFileSlotCount  uint64
+	DirectoryMetadataBytes uint64
+	CheckpointRecordCount  uint64
+	Failed                 bool
 }
 
 type FilesystemOutputTracer interface {

@@ -47,7 +47,7 @@ if ($unformatted.Count -ne 0) {
 }
 
 Invoke-Step 'whitespace' { git --no-pager diff --check }
-Invoke-Step 'Web v1 production references' { node scripts/ci/web-forbidden.mjs --source-only }
-Invoke-Step 'Go v1 production references' { node scripts/ci/go-v1-forbidden.mjs }
+Invoke-Step 'Web retired paths and production graph' { node scripts/ci/web-forbidden.mjs }
+Invoke-Step 'Go retired paths and production graph' { node scripts/ci/go-v1-forbidden.mjs }
 
 Write-Output ('== hygiene: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

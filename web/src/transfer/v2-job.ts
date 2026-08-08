@@ -13,11 +13,17 @@ import {
   jobOutcome,
 } from './outcome'
 import {
+  DirectorySettlementKind,
+  directoryAdmissionScope,
   snapshotOutputDirectoryAdmission,
   validateDirectoryAdmissionBinding,
-  validateOutputSessionBinding,
   type DirectoryAdmission,
+  type DirectoryAdmissionScope,
   type OutputDirectoryAdmission,
+} from './directory-admission'
+import {
+  validateOutputSessionBinding,
+  JobSettlementKind,
   type OutputSession,
 } from './output-session'
 import {
@@ -36,34 +42,35 @@ import {
   type PendingFile,
   type TransferJobOptions,
   type TransferJobResult,
-} from './v2-job-contract'
+} from './job/contract'
 import {
   isolatedDirectoryOutputFailure,
-  isPauseReason,
   isV2FileScopedTransferFailure,
-} from './v2-job-failures'
-import { AsyncBoundedQueue, pendingFileMetadataBytes } from './v2-job-scheduler'
+} from './job/failures'
+import { AsyncBoundedQueue, pendingFileMetadataBytes } from './job/scheduler'
 import {
   V2ExplicitSelectionTargetLedger,
   V2SelectionTargetMissingError,
-} from './v2-job-selection'
-import { V2CatalogTraversalGuard } from './v2-job-traversal'
+} from './job/selection'
+import { V2CatalogTraversalGuard } from './job/traversal'
 import {
   createTransferJobId,
   descriptorRootId,
   transferIntentAuthority,
-} from './v2-job-identity'
-import { transferJobLimits, type TransferJobLimits } from './v2-job-limits'
-import { V2TransferObservers } from './v2-job-observers'
-import { transferV2File } from './v2-job-file-transfer'
+} from './job/identity'
+import { transferJobLimits, type TransferJobLimits } from './job/limits'
+import { V2TransferObservers } from './job/observers'
+import { transferV2File } from './job/file-transfer'
+import {
+  directorySettlementDecision,
+  finalizeV2Directories,
+  runV2DirectoryTransferWorker,
+} from './job/directory-transfer'
 import { discoverV2DirectoryGeneration } from './discovery/v2-generation-replay'
-import { advanceV2DirectoryFrame } from './discovery/v2-directory-stack'
 import { V2TransferProgressLedger } from './progress/v2-ledger'
 import {
-  V2_CLOSED_OUTPUT_SETTLEMENT,
   outputSettlementTimeoutMilliseconds,
-  settleFailedV2Output,
-  type V2OutputSettlement,
+  pauseFailedV2Output,
 } from './settlement/v2-output'
 
 export {
@@ -78,20 +85,19 @@ export {
   V2_MAXIMUM_PENDING_DIRECTORIES,
   V2_MAXIMUM_PENDING_FILES,
   V2_MAXIMUM_PENDING_FILE_METADATA_BYTES,
-} from './v2-job-contract'
+} from './job/contract'
 export type {
   TransferJobOptions,
   TransferJobResult,
   TransferProgress,
-} from './v2-job-contract'
-export { isV2FileScopedTransferFailure } from './v2-job-failures'
-export { V2RangeReaderContractError } from './v2-job-file-transfer'
+} from './job/contract'
+export { isV2FileScopedTransferFailure } from './job/failures'
+export { V2RangeReaderContractError } from './job/file-transfer'
 export {
   V2_DEFAULT_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS,
   V2_MAXIMUM_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS,
   V2OutputSettlementTimeoutError,
 } from './settlement/v2-output'
-export type { V2OutputSettlement, V2OutputSettlementFailure } from './settlement/v2-output'
 
 /**
  * Incremental producer/consumer transfer scheduler. A catalog generation is
@@ -108,31 +114,30 @@ export class TransferJob {
   readonly #traversal: V2CatalogTraversalGuard
   readonly #explicitTargets: V2ExplicitSelectionTargetLedger
   readonly #observers: V2TransferObservers
-  readonly #finalizableDirectories: Array<{
-    readonly request: OutputDirectoryAdmission
-    readonly admission: DirectoryAdmission
-  }> = []
+  readonly #finalizableDirectories: DirectoryAdmission[] = []
   readonly #failedDirectoryIds = new Set<string>()
   readonly #transferJobId: string
   readonly #outputSettlementTimeoutMilliseconds: number
   readonly #progress = new V2TransferProgressLedger()
   #directoryAdmissionClaims = 0
-  #externallyCancelled = false
   #externalAbortCleanup: (() => void) | undefined
   #output: OutputSession | undefined
+  #directoryAdmissionScope: DirectoryAdmissionScope | undefined
   #rootAdmission: DirectoryAdmission | undefined
   #rootCommitted: V2CommittedDirectory | undefined
+  #intent: TransferIntent | undefined
   #started = false
 
   constructor(options: TransferJobOptions) {
     this.#options = options
-    this.#selection = options.selection.snapshot()
+    this.#selection = 'snapshot' in options.selection
+      ? options.selection.snapshot()
+      : options.selection
     this.#limits = transferJobLimits(options)
     this.#outputSettlementTimeoutMilliseconds = outputSettlementTimeoutMilliseconds(
       options.outputSettlementTimeoutMilliseconds,
     )
-    this.#transferJobId = snapshotTransferRunId(options.transferJobId ??
-      (options.intent !== undefined ? options.intent.transferJobId : createTransferJobId()))
+    this.#transferJobId = snapshotTransferRunId(options.transferJobId ?? createTransferJobId())
     this.#observers = new V2TransferObservers({
       descriptor: options.descriptor,
       transferJobId: this.#transferJobId,
@@ -154,16 +159,15 @@ export class TransferJob {
     this.#started = true
     this.#observeAbort(signal)
     try {
-      const authority = await transferIntentAuthority(this.#options, this.#selection, this.#transferJobId)
-      const { input } = authority
-      if (input.transferJobId !== this.#transferJobId) {
-        throw new V2OutputPausedError('Transfer intent does not match the job identity')
-      }
-      const opened = await this.#openRunOutput(input, authority.expected)
+      const authority = await transferIntentAuthority(this.#options, this.#selection)
+      const opened = await this.#openRunOutput(authority.input, authority.expected)
       this.#trace('intent-frozen', { decision: 'picker-confirmed' })
       this.#output = opened.session
+      this.#intent = opened.intent
+      this.#directoryAdmissionScope = directoryAdmissionScope(opened.intent)
       this.#trace('output-open', { outputSessionId: this.#output.identity.outputSessionId })
       this.#rootAdmission = await this.#admitRoot(this.#output, opened.intent)
+      this.#finalizableDirectories.push(this.#rootAdmission)
       this.#emitProgress()
       const result = await this.#runIncremental()
       return result
@@ -195,11 +199,10 @@ export class TransferJob {
   async #settleRunFailure(error: unknown): Promise<TransferJobResult> {
     if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
     const output = this.#output
-    const settlement = await settleFailedV2Output({
+    const settlement = await pauseFailedV2Output({
       ...(output === undefined ? {} : { output }),
       authority: this.#options.output,
       reason: error,
-      preferRetention: isPauseReason(error) || output !== undefined,
       timeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,
     })
     const discoveryWasOpen = this.#measure.snapshot().discovery === 'open'
@@ -209,17 +212,18 @@ export class TransferJob {
       this.#observers.measure(measure)
       this.#emitProgress()
     }
-    const status = failedJobStatus(error, settlement, this.#externallyCancelled)
     this.#trace(
-      failedJobTraceName(status),
+      settlement.kind === JobSettlementKind.NeedsAttention ? 'job-needs-attention' : 'job-paused',
       { decision: settlement.kind },
     )
     return Object.freeze({
-      outcome: jobOutcome(status, this.#failures.snapshot()),
+      outcome: jobOutcome('Paused', this.#failures.snapshot()),
       settlement,
       measure,
       abortReason: error,
       transferJobId: this.#transferJobId,
+      ...(this.#intent === undefined ? {} : { intent: this.#intent }),
+      ...(output === undefined ? {} : { outputDurability: output.capabilities.durability }),
     })
   }
 
@@ -251,7 +255,14 @@ export class TransferJob {
     }, this.#lifetime.signal)
 
     const directoryWorkers = Array.from({ length: this.#limits.concurrentDirectories }, () =>
-      this.#directoryWorker(directoryQueue, fileQueue),
+      runV2DirectoryTransferWorker(directoryQueue, fileQueue, {
+        signal: this.#lifetime.signal,
+        discoverDirectory: (work, files) => this.#discoverDirectory(work, files),
+        isolateDirectory: (directoryId, error) => {
+          this.#recordDirectoryFailure(directoryId, error)
+          this.#trace('discovery-failed', { decision: 'directory-isolated' })
+        },
+      }),
     )
     const fileWorkers = Array.from({ length: this.#limits.concurrentFiles }, () =>
       this.#fileWorker(fileQueue),
@@ -277,72 +288,38 @@ export class TransferJob {
     const output = this.#output
     if (output === undefined) throw new Error('output session disappeared before finalization')
     this.#lifetime.signal.throwIfAborted()
-    await this.#finalizeDirectories(output)
+    await finalizeV2Directories({
+      admissions: this.#finalizableDirectories,
+      output,
+      signal: this.#lifetime.signal,
+      settled: (admission, settlement) => {
+        if (settlement.kind === DirectorySettlementKind.IsolatedFailure) {
+          this.#recordDirectoryFailure(admission.directoryId, settlement.fault)
+        }
+        this.#trace('directory-finalized', {
+          directoryId: admission.directoryId,
+          generation: admission.generation,
+          outputSessionId: output.identity.outputSessionId,
+          decision: directorySettlementDecision(settlement),
+        })
+      },
+    })
     const outcome = this.#failures.failureCount === 0
       ? jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
       : jobOutcome('CompletedWithErrors', this.#failures.snapshot())
-    await output.finishJob(outcome, this.#lifetime.signal)
+    const settlement = await output.completeJob(outcome, this.#lifetime.signal)
+    if (settlement.kind === JobSettlementKind.Paused) {
+      throw new Error('Output completion returned a paused settlement')
+    }
     this.#trace('output-finalized', { outputSessionId: output.identity.outputSessionId })
     return Object.freeze({
       outcome,
-      settlement: V2_CLOSED_OUTPUT_SETTLEMENT,
+      settlement,
       measure,
       transferJobId: this.#transferJobId,
+      ...(this.#intent === undefined ? {} : { intent: this.#intent }),
+      outputDurability: output.capabilities.durability,
     })
-  }
-
-  async #directoryWorker(
-    queue: AsyncBoundedQueue<DirectoryWork>,
-    files: AsyncBoundedQueue<PendingFile>,
-  ): Promise<void> {
-    while (true) {
-      const work = await queue.pop(this.#lifetime.signal)
-      if (work === undefined) return
-      try {
-        await this.#runDirectoryStack(work, queue, files)
-      } finally {
-        queue.taskDone()
-      }
-    }
-  }
-
-  async #runDirectoryStack(
-    initial: DirectoryWork,
-    directories: AsyncBoundedQueue<DirectoryWork>,
-    files: AsyncBoundedQueue<PendingFile>,
-  ): Promise<void> {
-    const stack: Array<{
-      readonly work: DirectoryWork
-      readonly discovery: AsyncGenerator<DirectoryWork, void>
-    }> = [{ work: initial, discovery: this.#discoverDirectory(initial, files) }]
-    try {
-      while (stack.length > 0) {
-        const frame = stack[stack.length - 1]
-        if (frame === undefined) throw new Error('Directory discovery stack lost its active frame')
-        const next = await advanceV2DirectoryFrame(frame, (directoryId, error) => {
-          this.#recordDirectoryFailure(directoryId, error)
-          this.#trace('discovery-failed', { decision: 'directory-isolated' })
-        })
-        if (next === undefined) {
-          stack.pop()
-          continue
-        }
-        if (next.done) {
-          stack.pop()
-          continue
-        }
-        if (directories.tryPush(next.value, this.#lifetime.signal)) continue
-
-        // A worker never waits for another directory worker to consume its
-        // output. An explicit depth stack preserves the bounded breadth queue
-        // without recursive calls or consumer starvation.
-        stack.push({ work: next.value, discovery: this.#discoverDirectory(next.value, files) })
-      }
-    } finally {
-      while (stack.length > 0) {
-        await stack.pop()?.discovery.return(undefined)
-      }
-    }
   }
 
   async #fileWorker(queue: AsyncBoundedQueue<PendingFile>): Promise<void> {
@@ -497,7 +474,11 @@ export class TransferJob {
     })
     this.#reserveDirectoryAdmission()
     const returned = await output.admitDirectory(request, this.#lifetime.signal)
-    const admission = validateDirectoryAdmissionBinding(request, returned)
+    const admission = validateDirectoryAdmissionBinding(
+      this.#requireDirectoryAdmissionScope(),
+      request,
+      returned,
+    )
     this.#trace('directory-admitted', {
       directoryId: request.directoryId,
       generation: request.generation,
@@ -516,19 +497,23 @@ export class TransferJob {
     let materialized: Promise<DirectoryAdmission> | undefined
     return () => {
       materialized ??= (async () => {
-        const admitted = await this.#admitDirectory(
+        const admission = await this.#admitDirectory(
           cursor,
           committed,
           await work.materializeParent(),
         )
-        this.#finalizableDirectories.push(admitted)
+        this.#finalizableDirectories.push(admission)
+        const outputSessionId = this.#output?.identity.outputSessionId
+        if (outputSessionId === undefined) {
+          throw new V2OutputPausedError('Output session disappeared after directory admission')
+        }
         this.#trace('directory-admitted', {
           directoryId: cursor.idText,
           generation: encodeBase64Url(committed.generation),
-          outputSessionId: admitted.outputSessionId,
+          outputSessionId,
           decision: 'accepted',
         })
-        return admitted.admission
+        return admission
       })()
       return materialized
     }
@@ -538,11 +523,7 @@ export class TransferJob {
     cursor: DirectoryCursor,
     committed: V2CommittedDirectory,
     parentAdmission: DirectoryAdmission,
-  ): Promise<{
-    readonly request: OutputDirectoryAdmission
-    readonly admission: DirectoryAdmission
-    readonly outputSessionId: string
-  }> {
+  ): Promise<DirectoryAdmission> {
     this.#reserveDirectoryAdmission()
     const output = this.#output
     if (output === undefined) throw new V2OutputPausedError('Output admission is unavailable')
@@ -566,12 +547,11 @@ export class TransferJob {
       )
       throw isolated ?? error
     }
-    const admission = validateDirectoryAdmissionBinding(request, returned)
-    return Object.freeze({
+    return validateDirectoryAdmissionBinding(
+      this.#requireDirectoryAdmissionScope(),
       request,
-      admission,
-      outputSessionId: output.identity.outputSessionId,
-    })
+      returned,
+    )
   }
 
   #reserveDirectoryAdmission(): void {
@@ -612,47 +592,11 @@ export class TransferJob {
     }, file)
   }
 
-  async #finalizeDirectories(output: OutputSession): Promise<void> {
-    const signal = this.#lifetime.signal
-    const ordered = [...this.#finalizableDirectories].sort((left, right) =>
-      right.request.path.length - left.request.path.length)
-    for (const { request } of ordered) {
-      signal.throwIfAborted()
-      if (request.path.length === 0) continue
-      const parentAdmission = request.parentAdmission
-      if (parentAdmission === undefined) {
-        throw new V2CatalogTraversalError('Admitted child directory lost its parent authority')
-      }
-      try {
-        await output.finalizeDirectory({
-          path: request.path,
-          directoryId: request.directoryId,
-          generation: request.generation,
-          parentAdmission,
-          ...(request.modifiedTime === undefined ? {} : { modifiedTime: request.modifiedTime }),
-        }, signal)
-        this.#trace('directory-finalized', {
-          directoryId: request.directoryId,
-          generation: request.generation,
-          outputSessionId: output.identity.outputSessionId,
-          decision: 'accepted',
-        })
-      } catch (error) {
-        const isolated = isolatedDirectoryOutputFailure(
-          error,
-          output.capabilities.fileFailureIsolation,
-          request.directoryId,
-        )
-        if (isolated === undefined) throw error
-        this.#recordDirectoryFailure(request.directoryId, isolated)
-        this.#trace('directory-finalized', {
-          directoryId: request.directoryId,
-          generation: request.generation,
-          outputSessionId: output.identity.outputSessionId,
-          decision: 'isolated-failure',
-        })
-      }
+  #requireDirectoryAdmissionScope(): DirectoryAdmissionScope {
+    if (this.#directoryAdmissionScope === undefined) {
+      throw new V2OutputPausedError('Directory admission scope is unavailable')
     }
+    return this.#directoryAdmissionScope
   }
 
   #recordDirectoryFailure(idText: string, reason: unknown): void {
@@ -707,31 +651,10 @@ export class TransferJob {
     if (signal === undefined) return
     const abort = () => {
       if (this.#lifetime.signal.aborted) return
-      this.#externallyCancelled = true
       this.#lifetime.abort(signal.reason ?? new DOMException('Transfer aborted', 'AbortError'))
     }
     signal.addEventListener('abort', abort, { once: true })
     this.#externalAbortCleanup = () => signal.removeEventListener('abort', abort)
     if (signal.aborted) abort()
   }
-}
-
-type FailedJobStatus = 'Paused' | 'Aborted' | 'NeedsAttention'
-
-function failedJobStatus(
-  error: unknown,
-  settlement: V2OutputSettlement,
-  externallyCancelled: boolean,
-): FailedJobStatus {
-  if (settlement.kind === 'NeedsAttention') return 'NeedsAttention'
-  if (externallyCancelled) return 'Aborted'
-  if (isPauseReason(error)) return 'Paused'
-  if (settlement.kind === 'Discarded') return 'Aborted'
-  return 'Paused'
-}
-
-function failedJobTraceName(status: FailedJobStatus): TransferTraceEvent['name'] {
-  if (status === 'Paused') return 'job-paused'
-  if (status === 'Aborted') return 'job-cancelled'
-  return 'job-needs-attention'
 }

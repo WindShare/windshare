@@ -8,8 +8,8 @@ import {
   V2CatalogTraversalError,
   V2DirectoryTraversalError,
   type DirectoryCursor,
-} from '../v2-job-contract'
-import type { V2CatalogTraversalGuard } from '../v2-job-traversal'
+} from '../job/contract'
+import type { V2CatalogTraversalGuard } from '../job/traversal'
 
 export interface V2GenerationReplayConsumer<T> {
   readonly materializeSelectedDirectory: () => Promise<void>

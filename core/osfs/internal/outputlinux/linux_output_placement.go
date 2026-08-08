@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"golang.org/x/sys/unix"
 )
 
@@ -24,6 +23,7 @@ const (
 	linuxAnchoredDirectoryClaimDomain     = "linux/ext4/anchored-directory-sha256/v2"
 	linuxMaximumPlacementComponents       = 4096
 	linuxMaximumAbsolutePlacementClaimLen = 1 << 20
+	linuxMaximumAnchoredDirectoryClaimLen = 256
 	linuxClaimUint16Bytes                 = 2
 	linuxClaimUint32Bytes                 = 4
 	linuxClaimUint64Bytes                 = 8
@@ -343,7 +343,7 @@ func linuxEncodeAnchoredDirectoryClaim(placement, object []byte) ([]byte, error)
 	claim = append(claim, placementDigest[:]...)
 	claim = linuxAppendUint32(claim, uint32(len(object)))
 	claim = append(claim, object...)
-	if len(claim) > resumestate.MaxAncestryIdentityClaimBytes {
+	if len(claim) > linuxMaximumAnchoredDirectoryClaimLen {
 		return nil, linuxUnsupported(operation,
 			"anchored directory claim exceeds the resume-state identity bound", nil)
 	}

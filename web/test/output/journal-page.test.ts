@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   OUTPUT_JOURNAL_PAGE_RECORD_LIMIT,
   fileRecord,
@@ -7,7 +8,12 @@ import {
   validateOutputJournalPage,
 } from '../../src/output/persistence/journal'
 
-const identity = Object.freeze({ backend: 'page-test', outputSessionId: 'page-session' })
+const identity = Object.freeze({
+  backend: 'page-test',
+  outputSessionId: 'page-session',
+  transferIntentDigest: fixedIdentity(0x10, 32),
+  rootIdentity: fixedIdentity(0x40, 32),
+})
 
 describe('output journal page validation', () => {
   it('rejects oversized pages and a full page that truncates continuation', () => {
@@ -62,18 +68,38 @@ describe('output journal page validation', () => {
       identity,
     )).toThrow('did not advance')
   })
+
+  it('keeps runtime session identity out of durable records and requires the exact namespace', () => {
+    const persisted = record(7)
+    const legacyRuntimeBound = { ...persisted, outputSessionId: 'legacy-run' } as typeof persisted
+    expect(persisted).not.toHaveProperty('outputSessionId')
+    expect(() => validateOutputJournalPage(
+      { records: [legacyRuntimeBound] },
+      { kind: 'file', direction: 'ascending' },
+      identity,
+    )).toThrow('runtime session identity')
+    expect(() => validateOutputJournalPage(
+      { records: [persisted] },
+      { kind: 'file', direction: 'ascending' },
+      { ...identity, rootIdentity: fixedIdentity(0x60, 32) },
+    )).toThrow('escaped its namespace')
+  })
 })
 
 function record(index: number) {
   const name = `f-${index.toString().padStart(6, '0')}`
   return fileRecord(
     identity,
-    { ...identity, canonicalPath: [name], ownedFileIdentity: `owned-${name}` },
+    {
+      ...identity,
+      canonicalPath: [name],
+      ownedFileIdentity: indexedIdentity(0x50, 32, index),
+    },
     {
       source: {
         shareInstance: 'share',
-        fileId: name,
-        fileRevision: 'revision',
+        fileId: indexedIdentity(0x20, 16, index),
+        fileRevision: fixedIdentity(0x30, 16),
       },
       path: [name],
       exactSize: 0n,
@@ -82,4 +108,20 @@ function record(index: number) {
     true,
     1n,
   )
+}
+
+function fixedIdentity(first: number, length: number): string {
+  return encodeBase64Url(Uint8Array.from(
+    { length },
+    (_, index) => (first + index) & 0xff,
+  ))
+}
+
+function indexedIdentity(first: number, length: number, value: number): string {
+  const bytes = Uint8Array.from(
+    { length },
+    (_, index) => (first + index) & 0xff,
+  )
+  new DataView(bytes.buffer).setUint32(length - 4, value, false)
+  return encodeBase64Url(bytes)
 }

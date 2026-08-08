@@ -78,7 +78,7 @@ describe('bound output transaction durability evidence', () => {
     const begun = adapter([], [], 'forged')
     const bound = bindOutputFileTransaction(begun, file, durableSession)
 
-    await expect(bound.transaction.abort(new Error('stop'))).rejects
+    await expect(bound.transaction.retire(new Error('stop'))).rejects
       .toBeInstanceOf(OutputTransactionContractError)
   })
 
@@ -109,7 +109,7 @@ describe('bound output transaction durability evidence', () => {
 function adapter(
   initial: readonly ByteRange[],
   checkpoint: readonly ByteRange[],
-  abortDisposition: unknown = 'FileIsolated',
+  retirementDisposition: unknown = 'FileIsolated',
 ): BeginOutputFileResult {
   return Object.freeze({
     durableRanges: durable(initial),
@@ -117,7 +117,8 @@ function adapter(
       writeRange: vi.fn(async () => undefined),
       checkpoint: vi.fn(async () => durable(checkpoint)),
       commit: vi.fn(async () => undefined),
-      abort: vi.fn(async () => abortDisposition) as never,
+      retire: vi.fn(async () => retirementDisposition) as never,
+      pause: vi.fn(async () => undefined),
     }),
   })
 }

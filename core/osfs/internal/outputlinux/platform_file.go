@@ -16,14 +16,6 @@ func (entry *linuxV3EntryRef) Kind() outputcap.EntryKind {
 	return entry.native.kind
 }
 
-func (entry *linuxV3EntryRef) AllocatedSize() (uint64, error) {
-	if entry == nil || entry.native == nil {
-		return 0, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux pinned entry is closed"))
-	}
-	size, err := entry.native.allocatedSize()
-	return size, linuxV3Error(err)
-}
-
 func (entry *linuxV3EntryRef) Close() error {
 	if entry == nil || entry.native == nil {
 		return nil
@@ -84,26 +76,11 @@ func (file *linuxV3File) Sync() error {
 	return linuxV3Error(file.native.sync())
 }
 
-func (file *linuxV3File) Truncate(size int64) error {
-	if file == nil || file.native == nil {
-		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux file authority is closed"))
-	}
-	return linuxV3Error(file.native.truncate(size))
-}
-
 func (file *linuxV3File) Size() (uint64, error) {
 	if file == nil || file.native == nil {
 		return 0, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux file authority is closed"))
 	}
 	size, err := file.native.Size()
-	return size, linuxV3Error(err)
-}
-
-func (file *linuxV3File) AllocatedSize() (uint64, error) {
-	if file == nil || file.native == nil {
-		return 0, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux file authority is closed"))
-	}
-	size, err := file.native.allocatedSize()
 	return size, linuxV3Error(err)
 }
 

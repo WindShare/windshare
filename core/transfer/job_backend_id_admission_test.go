@@ -2,18 +2,18 @@ package transfer
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/transfer/fault"
 )
 
 type backendIDAdmissionOutput struct {
 	*jobOutput
 	backend                OutputBackendID
-	openSelectionCalls     int
+	openOutputCalls        int
 	beginFileCalls         int
 	finalizeDirectoryCalls int
 	pauseJobCalls          int
@@ -24,19 +24,11 @@ func (output *backendIDAdmissionOutput) BackendID() OutputBackendID {
 	return output.backend
 }
 
-func (output *backendIDAdmissionOutput) OpenSelection(
-	context.Context,
-	OutputSelection,
-) (OutputSession, error) {
-	output.openSelectionCalls++
-	return output, nil
-}
-
 func (output *backendIDAdmissionOutput) OpenOutput(
 	ctx context.Context,
 	intent TransferIntent,
 ) (OutputSession, error) {
-	output.openSelectionCalls++
+	output.openOutputCalls++
 	if _, err := output.jobOutput.OpenOutput(ctx, intent); err != nil {
 		return nil, err
 	}
@@ -60,10 +52,10 @@ func (output *backendIDAdmissionOutput) BeginFile(
 
 func (output *backendIDAdmissionOutput) FinalizeDirectory(
 	ctx context.Context,
-	directory OutputDirectory,
-) error {
+	admission DirectoryAdmission,
+) (DirectorySettlement, error) {
 	output.finalizeDirectoryCalls++
-	return output.jobOutput.FinalizeDirectory(ctx, directory)
+	return output.jobOutput.FinalizeDirectory(ctx, admission)
 }
 
 func (output *backendIDAdmissionOutput) PauseJob(
@@ -175,11 +167,12 @@ func TestTransferJobRejectsMalformedBackendIDBeforeDownstreamWork(t *testing.T) 
 			fixture := newBackendIDAdmissionFixture(t, OutputBackendID(test.backend))
 			result := fixture.job.Run(context.Background())
 
-			if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrOutputContract) {
+			if result.Outcome != JobPausedOutcome ||
+				result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
 				t.Fatalf("result = %+v", result)
 			}
-			if fixture.output.openSelectionCalls != 1 {
-				t.Fatalf("OpenSelection calls = %d", fixture.output.openSelectionCalls)
+			if fixture.output.openOutputCalls != 1 {
+				t.Fatalf("OpenOutput calls = %d", fixture.output.openOutputCalls)
 			}
 			if fixture.output.beginFileCalls != 0 || fixture.output.finalizeDirectoryCalls != 0 ||
 				fixture.output.pauseJobCalls != 1 || fixture.output.completeJobCalls != 0 {
@@ -222,11 +215,11 @@ func TestTransferJobAcceptsCanonicalBackendIDWithoutChangingWorkflow(t *testing.
 	if result.Outcome != JobSucceeded || result.TerminationCause != nil || result.SucceededFiles != 1 {
 		t.Fatalf("result = %+v", result)
 	}
-	if fixture.output.openSelectionCalls != 1 || fixture.output.beginFileCalls != 1 ||
+	if fixture.output.openOutputCalls != 1 || fixture.output.beginFileCalls != 1 ||
 		fixture.output.completeJobCalls != 1 || fixture.output.pauseJobCalls != 0 {
 		t.Fatalf(
 			"output calls: open=%d begin=%d complete=%d pause=%d",
-			fixture.output.openSelectionCalls,
+			fixture.output.openOutputCalls,
 			fixture.output.beginFileCalls,
 			fixture.output.completeJobCalls,
 			fixture.output.pauseJobCalls,
@@ -255,7 +248,8 @@ func TestTransferJobRejectsOutputModeOutsideConfirmedIntentAndSettlesNamespace(t
 	fixture.output.capabilitiesOverride = &stream
 
 	result := fixture.job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrOutputContract) ||
+	if result.Outcome != JobPausedOutcome ||
+		result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
 		fixture.output.pauseJobCalls != 1 || fixture.output.completeJobCalls != 0 ||
 		fixture.output.beginFileCalls != 0 || fixture.output.finalizeDirectoryCalls != 0 ||
 		len(fixture.revisions.order) != 0 || fixture.blocks.calls != 0 {

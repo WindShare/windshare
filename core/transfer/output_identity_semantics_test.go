@@ -9,26 +9,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 )
 
-func TestOutputAndSelectionObservationByteBoundariesOwnTheirInput(t *testing.T) {
-	selectionBytes := make([]byte, SelectionIdentityBytes)
-	selectionBytes[0] = 11
-	selection, err := SelectionIdentityFromBytes(selectionBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	selectionBytes[0] = 12
-	selectionCopy := selection.Bytes()
-	selectionCopy[0] = 13
-	if selection.Bytes()[0] != 11 {
-		t.Fatal("selection identity retained caller-owned byte storage")
-	}
-	if _, err := SelectionIdentityFromBytes(make([]byte, SelectionIdentityBytes-1)); !errors.Is(err, ErrInvalidOutputSelection) {
-		t.Fatalf("short selection identity error = %v", err)
-	}
-	if _, err := SelectionIdentityFromBytes(make([]byte, SelectionIdentityBytes)); !errors.Is(err, ErrInvalidOutputSelection) {
-		t.Fatalf("zero selection identity error = %v", err)
-	}
-
+func TestSelectionObservationByteBoundaryOwnsItsInput(t *testing.T) {
 	observationBytes := make([]byte, SelectionObservationV1Bytes)
 	observationBytes[0] = 21
 	observation, err := SelectionObservationV1FromBytes(observationBytes)
@@ -41,137 +22,17 @@ func TestOutputAndSelectionObservationByteBoundariesOwnTheirInput(t *testing.T) 
 	if observation.Bytes()[0] != 21 {
 		t.Fatal("selection observation retained caller-owned byte storage")
 	}
-	if _, err := SelectionObservationV1FromBytes(make([]byte, SelectionObservationV1Bytes-1)); !errors.Is(err, ErrInvalidOutputSelection) {
+	if _, err := SelectionObservationV1FromBytes(make([]byte, SelectionObservationV1Bytes-1)); !errors.Is(err, ErrInvalidSelectionObservation) {
 		t.Fatalf("short selection observation error = %v", err)
 	}
-	if _, err := SelectionObservationV1FromBytes(make([]byte, SelectionObservationV1Bytes)); !errors.Is(err, ErrInvalidOutputSelection) {
+	if _, err := SelectionObservationV1FromBytes(make([]byte, SelectionObservationV1Bytes)); !errors.Is(err, ErrInvalidSelectionObservation) {
 		t.Fatalf("zero selection observation error = %v", err)
 	}
 }
 
-func TestOutputSelectionRejectsMalformedCanonicalGraph(t *testing.T) {
-	share := transferID[catalog.ShareInstance](31)
-	root := transferID[catalog.DirectoryID](32)
-	rootGeneration := transferID[catalog.DirectoryGeneration](33)
-	directory := OutputSelectionDirectory{
-		Path: "folder", DirectoryID: transferID[catalog.DirectoryID](34),
-		Generation: transferID[catalog.DirectoryGeneration](35),
-	}
-	file := OutputSelectionFile{
-		Path: "file.bin", FileID: transferID[catalog.FileID](36),
-		ParentDirectoryID: root, ParentGeneration: rootGeneration, ExpectedSize: 1,
-	}
-
-	tests := []struct {
-		name        string
-		share       catalog.ShareInstance
-		directories []OutputSelectionDirectory
-		files       []OutputSelectionFile
-	}{
-		{name: "missing share authority", directories: []OutputSelectionDirectory{directory}},
-		{name: "invalid directory path", share: share, directories: []OutputSelectionDirectory{{
-			DirectoryID: directory.DirectoryID, Generation: directory.Generation,
-		}}},
-		{name: "duplicate directory path", share: share, directories: []OutputSelectionDirectory{directory, directory}},
-		{name: "invalid file payload", share: share, files: []OutputSelectionFile{{
-			Path: "file.bin", FileID: file.FileID, ParentDirectoryID: root,
-			ParentGeneration: rootGeneration, ExpectedSize: catalog.MaxFileSize + 1,
-		}}},
-		{name: "duplicate file path", share: share, files: []OutputSelectionFile{file, file}},
-		{name: "foreign root binding", share: share, files: []OutputSelectionFile{{
-			Path: "file.bin", FileID: file.FileID,
-			ParentDirectoryID: transferID[catalog.DirectoryID](37), ParentGeneration: rootGeneration,
-		}}},
-		{name: "missing nested parent", share: share, files: []OutputSelectionFile{{
-			Path: "folder/file.bin", FileID: file.FileID,
-			ParentDirectoryID: directory.DirectoryID, ParentGeneration: directory.Generation,
-		}}},
-		{name: "mismatched nested parent", share: share, directories: []OutputSelectionDirectory{directory}, files: []OutputSelectionFile{{
-			Path: "folder/file.bin", FileID: file.FileID,
-			ParentDirectoryID: transferID[catalog.DirectoryID](38), ParentGeneration: directory.Generation,
-		}}},
-		{name: "orphan directory", share: share, directories: []OutputSelectionDirectory{{
-			Path: "missing/child", DirectoryID: directory.DirectoryID, Generation: directory.Generation,
-		}}},
-		{name: "synthetic root identity reused", share: share, directories: []OutputSelectionDirectory{{
-			Path: "root-loop", DirectoryID: root, Generation: directory.Generation,
-		}}},
-		{name: "directory identity reused as file", share: share,
-			directories: []OutputSelectionDirectory{directory},
-			files: []OutputSelectionFile{{
-				Path: "folder/file.bin", FileID: catalog.FileID(directory.DirectoryID),
-				ParentDirectoryID: directory.DirectoryID, ParentGeneration: directory.Generation,
-			}},
-		},
-		{name: "file identity reused at distinct path", share: share, files: []OutputSelectionFile{
-			file,
-			{
-				Path: "second.bin", FileID: file.FileID,
-				ParentDirectoryID: root, ParentGeneration: rootGeneration,
-			},
-		}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := NewOutputSelection(
-				test.share,
-				root,
-				rootGeneration,
-				test.directories,
-				test.files,
-			)
-			if !errors.Is(err, ErrInvalidOutputSelection) {
-				t.Fatalf("malformed graph error = %v", err)
-			}
-		})
-	}
-}
-
-func TestCanonicalOutputIdentityIsOrderedDomainSeparatedAndImmutable(t *testing.T) {
+func TestCanonicalSelectionRequestIsOrderedAndImmutable(t *testing.T) {
 	share := transferID[catalog.ShareInstance](41)
 	root := transferID[catalog.DirectoryID](42)
-	rootGeneration := transferID[catalog.DirectoryGeneration](43)
-	directories := []OutputSelectionDirectory{
-		{Path: "zeta", DirectoryID: transferID[catalog.DirectoryID](44), Generation: transferID[catalog.DirectoryGeneration](45)},
-		{Path: "alpha", DirectoryID: transferID[catalog.DirectoryID](46), Generation: transferID[catalog.DirectoryGeneration](47)},
-	}
-	files := []OutputSelectionFile{
-		{Path: "z.bin", FileID: transferID[catalog.FileID](48), ParentDirectoryID: root, ParentGeneration: rootGeneration, ExpectedSize: 2},
-		{Path: "a.bin", FileID: transferID[catalog.FileID](49), ParentDirectoryID: root, ParentGeneration: rootGeneration, ExpectedSize: 1},
-	}
-	plan, err := NewOutputSelection(share, root, rootGeneration, directories, files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reorderedPlan, err := NewOutputSelection(
-		share,
-		root,
-		rootGeneration,
-		[]OutputSelectionDirectory{directories[1], directories[0]},
-		[]OutputSelectionFile{files[1], files[0]},
-	)
-	if err != nil || reorderedPlan.Identity() != plan.Identity() {
-		t.Fatalf("reordered plan identity = %x, want %x; error = %v", reorderedPlan.Identity(), plan.Identity(), err)
-	}
-
-	directories[0].Path = "mutated"
-	files[0].Path = "mutated.bin"
-	returnedDirectories := plan.Directories()
-	returnedFiles := plan.Files()
-	if returnedDirectories[0].Path != "alpha" || returnedFiles[0].Path != "a.bin" {
-		t.Fatalf("canonical order = (%v, %v)", returnedDirectories, returnedFiles)
-	}
-	returnedDirectories[0].Path = "caller-mutated"
-	returnedFiles[0].Path = "caller-mutated.bin"
-	if plan.Directories()[0].Path != "alpha" || plan.Files()[0].Path != "a.bin" {
-		t.Fatal("selection accessors exposed internal slice storage")
-	}
-	identityBytes := plan.Identity().Bytes()
-	identityBytes[0] ^= 0xff
-	if slices.Equal(identityBytes, plan.Identity().Bytes()) {
-		t.Fatal("selection identity accessor exposed internal byte storage")
-	}
-
 	rulesA, err := NewPathSelectionRules([]string{"z.bin", "a.bin"})
 	if err != nil {
 		t.Fatal(err)
@@ -194,18 +55,6 @@ func TestCanonicalOutputIdentityIsOrderedDomainSeparatedAndImmutable(t *testing.
 		t.Fatal("canonical request exposed internal byte storage")
 	}
 
-	observation, err := NewTerminalSelectionObservationV1(requestA, plan)
-	if err != nil || observation.Observation().IsZero() {
-		t.Fatalf("terminal selection observation = %+v, error = %v", observation, err)
-	}
-	observationBytes := observation.Bytes()
-	observationBytes[0] ^= 0xff
-	if slices.Equal(observationBytes, observation.Bytes()) {
-		t.Fatal("terminal selection observation exposed internal byte storage")
-	}
-	if _, err := NewTerminalSelectionObservationV1(CanonicalSelectionRequest{}, plan); !errors.Is(err, ErrInvalidOutputSelection) {
-		t.Fatalf("unbound observation request error = %v", err)
-	}
 	invalidRules := SelectionRules{}
 	if _, err := NewCanonicalSelectionRequest(share, root, invalidRules); !errors.Is(err, ErrInvalidSelectionRules) {
 		t.Fatalf("invalid canonical rules error = %v", err)

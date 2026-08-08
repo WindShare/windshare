@@ -4,7 +4,11 @@ import {
 } from '../catalog/v2-client'
 import { IndexedDbV2CatalogPageStore } from '../catalog/v2-page-store'
 import { openV2ShareDescriptor, type V2CatalogEntry, type V2ShareDescriptor } from '../catalog/v2-records'
-import { V2SelectionPolicy } from '../catalog/v2-selection'
+import {
+  frozenV2SelectionPolicy,
+  V2SelectionPolicy,
+  type V2FrozenSelectionPolicy,
+} from '../catalog/v2-selection'
 import { snapshotPortableCatalogPath } from '../catalog/path-policy'
 import type { OfferChannelFactory } from '../connectivity/peer-offer'
 import type {
@@ -19,7 +23,7 @@ import {
   parseSuite02CapabilityLink,
   type Suite02CapabilityLink,
 } from '../crypto/suite02-link'
-import { encodeBase64Url } from '../crypto/bytes'
+import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
 import { V2BrowserSessionFactory } from '../receiver/v2-session-factory'
 import { V2ReceiverReconnectSupervisor } from '../receiver/v2-supervisor'
 import { V2ReceiverSessionRuntime } from '../session/v2-runtime'
@@ -29,6 +33,7 @@ import type {
 } from '../content/v2-broker'
 import { V2FilePreview } from '../preview/v2-preview'
 import { TransferJob, type TransferJobOptions } from '../transfer/v2-job'
+import type { TransferIntent } from '../transfer/intent'
 import type { V2OutputAuthority } from '../transfer/output-session'
 import { dialV2RelayReceiver, type V2RelayReceiverConnection } from '../transport/relay/v2-receiver'
 
@@ -54,6 +59,22 @@ export class V2BrowseNavigationError extends Error {
     super(message, options)
     this.name = 'V2BrowseNavigationError'
   }
+}
+
+export function v2SelectionPolicyFromIntent(
+  intent: TransferIntent,
+): V2FrozenSelectionPolicy {
+  if (intent.selection.mode !== 'node-id') {
+    throw new TypeError('Browser resume requires node-identity selection authority')
+  }
+  return frozenV2SelectionPolicy(
+    intent.selection.defaultSelected,
+    intent.selection.rules.map((rule) => {
+      const id = decodeBase64Url(rule.id)
+      if (id === undefined) throw new TypeError('Resumed selection rule identity is invalid')
+      return Object.freeze({ kind: rule.kind, id, selected: rule.selected })
+    }),
+  )
 }
 
 export class V2JoinedBrowserShare {
@@ -144,19 +165,22 @@ export class V2JoinedBrowserShare {
   transferJob(
     output: V2OutputAuthority,
     connectivity: V2ConnectivityActivation,
-    callbacks: Partial<Pick<TransferJobOptions, 'onProgress' | 'onMeasure' | 'onTrace' | 'intent'>> = {},
+    callbacks: Partial<Pick<TransferJobOptions, 'onProgress' | 'onMeasure' | 'onTrace' | 'intent' | 'transferJobId'>> & {
+      readonly selection?: V2FrozenSelectionPolicy
+    } = {},
   ): TransferJob {
     const content = this.#supervisor.content.forRoutes(connectivity.routes)
+    const { selection = this.selection.snapshot(), ...jobCallbacks } = callbacks
     return new TransferJob({
       descriptor: this.descriptor,
       catalog: this.#catalog,
-      selection: this.selection,
+      selection,
       revisions: content.revisions,
       broker: content.broker,
       lanes: content.lanes,
       output,
       protocolSessionId: () => this.#supervisor.protocolSessionId,
-      ...callbacks,
+      ...jobCallbacks,
     })
   }
 

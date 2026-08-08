@@ -4,46 +4,64 @@ import type { V2CatalogClient } from '../../src/catalog/v2-client'
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import { ByteRangeSet, byteRange, type ByteRange } from '../../src/content/geometry'
-import type { V2BlockRangeReader } from '../../src/content/v2-broker'
+import { V2BlockLaneAttemptsError, type V2BlockRangeReader } from '../../src/content/v2-broker'
 import {
   V2BlockOperationError,
+  V2RemoteRevisionError,
+  V2RevisionChangedDuringRecoveryError,
   V2RevisionLeaseExpiredError,
   type V2OpenedRevision,
   type V2RevisionReader,
 } from '../../src/content/v2-session-services'
-import { SingleFileStreamOutputSession } from '../../src/output/streams/single-file'
-import { ZipStreamOutputSession } from '../../src/output/streams/zip'
+import {
+  SINGLE_FILE_STREAM_BACKEND,
+  SingleFileStreamOutputSession,
+} from '../../src/output/streams/single-file'
+import { ZIP_STREAM_BACKEND, ZipStreamOutputSession } from '../../src/output/streams/zip'
 import type {
   ZipArchiveFileEntry,
   ZipArchiveMember,
   ZipArchiveWriter,
 } from '../../src/output/streams/zip-archive'
-import { DirectoryAdmissionLedger } from '../../src/transfer/directory-admission-ledger'
-import { OutputTransactionContractError } from '../../src/transfer/output-file-transaction'
 import {
+  COMPLETED_JOB_SETTLEMENT,
   OutputBudgetExceededError,
   VerifiedDurableRanges,
+  pausedJobSettlement,
   type BeginOutputFileResult,
   type OutputFile,
   type OutputFileOwnership,
   type OutputSession,
 } from '../../src/transfer/output-session'
 import {
+  BoundaryFaultError,
+  FaultDomain,
+  FaultRetirement,
+  FaultScope,
+  OutputFaultCode,
+  SessionFaultCode,
+  SourceFaultCode,
+  type FileRetirementAuthorization,
+} from '../../src/transfer/fault'
+import {
   TransferJob,
-  V2OutputPausedError,
   V2OutputSettlementTimeoutError,
   V2RangeReaderContractError,
   type TransferProgress,
 } from '../../src/transfer/v2-job'
-import { V2FileLeaseSettlementError } from '../../src/transfer/v2-job-failures'
 import {
   committedDirectoryFor,
+  BIND_TEST_DIRECTORY_ADMISSION_SCOPE,
   fileEntry,
   identity,
   identityText,
   openedRevision,
   outputAuthority,
+  testDirectoryAdmissionLedgerBinding,
   traversalPage,
+  type ScopeBoundTestOutputSession,
+  type TestOutputSessionFactory,
+  type TestOutputSessionSource,
   withTimeout,
 } from './v2-job-fixture'
 
@@ -55,7 +73,11 @@ describe('v2 file transfer output semantics', () => {
       write: (chunk) => { bytes.push(...chunk) },
       close: () => { closed = true },
     })
-    const session = new SingleFileStreamOutputSession(identityText(31), output)
+    const session: TestOutputSessionFactory = {
+      backend: SINGLE_FILE_STREAM_BACKEND,
+      format: 'single-file',
+      open: (scope) => new SingleFileStreamOutputSession(identityText(31), scope, output),
+    }
 
     const result = await runJob(
       [fileEntry(identity(11), 'single.bin', 3n)],
@@ -72,7 +94,7 @@ describe('v2 file transfer output semantics', () => {
 
   it('runs a real ZIP transient session through member commit and archive publication', async () => {
     const archive = new RecordingArchive()
-    const session = new ZipStreamOutputSession({ outputSessionId: identityText(32), archive })
+    const session = zipOutputFactory(identityText(32), archive)
 
     const result = await runJob(
       [fileEntry(identity(11), 'archive.bin', 3n)],
@@ -86,28 +108,44 @@ describe('v2 file transfer output semantics', () => {
     expect(archive.files).toEqual([{ path: ['archive.bin'], bytes: [4, 5, 6] }])
   })
 
-  it('isolates a ZIP begin rejection before member ownership and transfers the next file', async () => {
+  it('pauses on an unknown ZIP begin rejection without granting retirement authority', async () => {
     const archive = new RecordingArchive()
-    const base = new ZipStreamOutputSession({ outputSessionId: identityText(33), archive })
-    const session = delegateOutput(base, async (file, signal) => {
-      if (file.path.at(-1) === 'bad.bin') throw new Error('member rejected before acquisition')
-      return base.beginFile(file, signal)
-    })
+    const session: TestOutputSessionFactory = {
+      backend: ZIP_STREAM_BACKEND,
+      format: 'zip',
+      open: (scope) => {
+        const base = new ZipStreamOutputSession({
+          outputSessionId: identityText(33),
+          directoryAdmissionScope: scope,
+          archive,
+        })
+        return delegateOutput(base, async (file, signal) => {
+          if (file.path.at(-1) === 'bad.bin') throw new Error('member rejected before acquisition')
+          return base.beginFile(file, signal)
+        })
+      },
+    }
 
     const result = await runJob([
       fileEntry(identity(11), 'bad.bin', 1n),
       fileEntry(identity(12), 'good.bin', 1n),
     ], session, contiguousBroker(Uint8Array.of(7)), 1n)
 
-    expect(result.outcome.status).toBe('CompletedWithErrors')
-    expect(result.outcome.failureCount).toBe(1)
-    expect(archive.aborted).toBe(false)
-    expect(archive.files).toEqual([{ path: ['good.bin'], bytes: [7] }])
+    expect(result.outcome.status).toBe('Paused')
+    expect(result.abortReason).toMatchObject({
+      fault: {
+        domain: FaultDomain.Output,
+        scope: FaultScope.OutputPause,
+        code: OutputFaultCode.StateIO,
+      },
+    })
+    expect(archive.aborted).toBe(true)
+    expect(archive.files).toEqual([])
   })
 
   it('pauses a real ZIP session when a later block fails after member emission starts', async () => {
     const archive = new RecordingArchive()
-    const session = new ZipStreamOutputSession({ outputSessionId: identityText(34), archive })
+    const session = zipOutputFactory(identityText(34), archive)
     const failure = new V2BlockOperationError('object-auth', 'later block failed', {
       cause: new Error('bad block'),
     })
@@ -130,7 +168,7 @@ describe('v2 file transfer output semantics', () => {
     )
 
     expect(result.outcome.status).toBe('Paused')
-    expect(result.settlement.kind).toBe('Discarded')
+    expect(result.settlement.kind).toBe('Paused')
     expect(archive.aborted).toBe(true)
     expect(archive.closed).toBe(false)
   })
@@ -163,7 +201,14 @@ describe('v2 file transfer output semantics', () => {
     )
 
     expect(result.outcome.status).toBe('Paused')
-    expect(result.abortReason).toBeInstanceOf(V2RangeReaderContractError)
+    expect(result.abortReason).toMatchObject({
+      fault: {
+        domain: FaultDomain.Session,
+        scope: FaultScope.OutputPause,
+        code: SessionFaultCode.DependencyContract,
+      },
+      cause: expect.any(V2RangeReaderContractError),
+    })
     expect(output.writes).toEqual([])
     expect(output.suspendReasons).toHaveLength(1)
   })
@@ -206,12 +251,19 @@ describe('v2 file transfer output semantics', () => {
       )
 
       expect(result.outcome.status).toBe('Paused')
-      expect(result.abortReason).toBe(budget)
-      expect(output.suspendReasons).toEqual([budget])
+      expect(result.abortReason).toMatchObject({
+        fault: {
+          domain: FaultDomain.Output,
+          scope: FaultScope.OutputPause,
+          code: OutputFaultCode.ResourceBudget,
+        },
+        cause: budget,
+      })
+      expect(output.suspendReasons).toEqual([result.abortReason])
     },
   )
 
-  it('keeps acknowledged bytes separate from committed bytes after a partial file failure', async () => {
+  it('preserves a verified prefix and pauses after a protocol-level block failure', async () => {
     const progress: TransferProgress[] = []
     const output = durableOutput([])
     const failure = new V2BlockOperationError('object-auth', 'second block failed', {
@@ -234,8 +286,63 @@ describe('v2 file transfer output semantics', () => {
       { onProgress: (value) => progress.push(value) },
     )
 
-    expect(result.outcome.status).toBe('CompletedWithErrors')
-    expect(progress.at(-1)).toMatchObject({ writtenBytes: 1n, completedBytes: 0n, completedFiles: 0, fileErrors: 1 })
+    expect(result.outcome.status).toBe('Paused')
+    expect(result.abortReason).toMatchObject({
+      fault: {
+        domain: FaultDomain.Session,
+        scope: FaultScope.SessionTerminal,
+        code: SessionFaultCode.Protocol,
+      },
+    })
+    expect(output.checkpoints).toEqual([[byteRange(0n, 1n)]])
+    expect(output.retirementReasons).toEqual([])
+    expect(progress.at(-1)).toMatchObject({ writtenBytes: 1n, completedBytes: 0n, completedFiles: 0, fileErrors: 0 })
+  })
+
+  it.each([
+    [
+      'transient all-lane outage',
+      () => new V2BlockLaneAttemptsError([new Error('relay and peer lanes changed')]),
+      SessionFaultCode.Transport,
+    ],
+    [
+      'unknown collaborator failure',
+      () => new Error('untyped broker failure'),
+      SessionFaultCode.DependencyContract,
+    ],
+    [
+      'unknown wrapper around a permanent source cause',
+      () => new Error('untyped broker wrapper', {
+        cause: new V2RemoteRevisionError({ code: 0x3002, retryable: false }),
+      }),
+      SessionFaultCode.DependencyContract,
+    ],
+  ] as const)('keeps durable ranges on %s', async (_name, failure, code) => {
+    const output = durableOutput([])
+    const broker = {
+      readRange: async function* (_descriptor: unknown, _lease: Uint8Array, range: ByteRange) {
+        if (range.start === 0n) yield { offset: 0n, data: Uint8Array.of(1) }
+        else throw failure()
+      },
+    } as unknown as V2BlockRangeReader
+
+    const result = await runJob(
+      [fileEntry(identity(11), 'preserved.bin', 2n)],
+      output.session,
+      broker,
+      1n,
+    )
+
+    expect(result.outcome.status).toBe('Paused')
+    expect(result.abortReason).toMatchObject({
+      fault: {
+        domain: FaultDomain.Session,
+        scope: FaultScope.OutputPause,
+        code,
+      },
+    })
+    expect(output.checkpoints).toEqual([[byteRange(0n, 1n)]])
+    expect(output.retirementReasons).toEqual([])
   })
 
   it('counts the exact logical size after a resumed file commits', async () => {
@@ -289,6 +396,36 @@ describe('v2 file transfer output semantics', () => {
     expect(releases[1]).toHaveBeenCalledOnce()
     expect(output.begunPaths).toEqual(['good.bin'])
   })
+})
+
+describe('v2 file transfer fault retirement authority', () => {
+  it('retires only an explicitly permanent source failure and continues its sibling', async () => {
+    const entries = [
+      fileEntry(identity(11), 'permanent.bin', 1n),
+      fileEntry(identity(12), 'good.bin', 1n),
+    ]
+    const output = durableOutput([])
+    const broker = {
+      readRange: async function* (
+        descriptor: { readonly fileId: Uint8Array },
+        _lease: Uint8Array,
+        range: ByteRange,
+      ) {
+        if (descriptor.fileId[0] === entries[0]?.id[0]) {
+          throw new V2RemoteRevisionError({ code: 0x3002, retryable: false })
+        }
+        yield { offset: range.start, data: Uint8Array.of(9) }
+      },
+    } as unknown as V2BlockRangeReader
+
+    const result = await runJob(entries, output.session, broker, 1n)
+
+    expect(result.outcome.status).toBe('CompletedWithErrors')
+    expect([...output.begunPaths].sort()).toEqual(['good.bin', 'permanent.bin'])
+    expect(output.retirementReasons).toHaveLength(1)
+    expect((output.retirementReasons[0] as FileRetirementAuthorization).retirement)
+      .toBe(FaultRetirement.PermanentSource)
+  })
 
   it('records a revision-scoped release failure after commit without losing completion', async () => {
     const entries = [
@@ -313,7 +450,14 @@ describe('v2 file transfer output semantics', () => {
     )
 
     expect(result.outcome.status).toBe('CompletedWithErrors')
-    expect(result.outcome.failures[0]?.reason).toBeInstanceOf(V2FileLeaseSettlementError)
+    expect(result.outcome.failures[0]?.reason).toMatchObject({
+      fault: {
+        domain: FaultDomain.Source,
+        scope: FaultScope.FileLocal,
+        code: SourceFaultCode.Unavailable,
+      },
+      cause: releaseFailure,
+    })
     expect(progress.at(-1)).toMatchObject({ completedFiles: 2, completedBytes: 2n, fileErrors: 1 })
     expect([...output.begunPaths].sort()).toEqual(['good.bin', 'released-late.bin'])
   })
@@ -341,38 +485,49 @@ describe('v2 file transfer output semantics', () => {
     const result = await runJob(entries, output.session, broker, 1n, undefined, undefined, { revisions })
 
     expect(result.outcome.status).toBe('Paused')
-    expect(result.abortReason).toBeInstanceOf(V2OutputPausedError)
-    const evidence = (result.abortReason as Error).cause
+    expect(result.abortReason).toMatchObject({
+      fault: {
+        domain: FaultDomain.Session,
+        scope: FaultScope.SessionTerminal,
+        code: SessionFaultCode.Protocol,
+      },
+    })
+    const evidence = (result.abortReason as BoundaryFaultError).cause
     expect(evidence).toBeInstanceOf(AggregateError)
-    expect((evidence as AggregateError).errors).toEqual([primaryFailure, releaseFailure])
+    expect((evidence as AggregateError).errors).toEqual([
+      expect.objectContaining({ cause: primaryFailure }),
+      expect.objectContaining({ cause: releaseFailure }),
+    ])
     expect(output.begunPaths).toEqual(['bad.bin'])
   })
 
   it.each(['foreign-binding', 'transient-ranges'] as const)(
-    'settles the raw transaction before pausing a %s BeginFile contract failure',
+    'pauses a %s BeginFile contract failure without invoking raw retirement',
     async (failure) => {
       const output = bindingFailureOutput(failure)
-      const job = runJob([
+      const result = await runJob([
         fileEntry(identity(11), 'bad.bin', 1n),
         fileEntry(identity(12), 'must-not-start.bin', 1n),
       ], output.session, contiguousBroker(Uint8Array.of(1)), 1n)
 
-      await output.abortStarted
-      expect(output.begunPaths).toEqual(['bad.bin'])
-      expect(output.events).toEqual(['abort-started'])
-      output.releaseAbort()
-      const result = await job
-
       expect(result.outcome.status).toBe('Paused')
-      expect(result.abortReason).toBeInstanceOf(OutputTransactionContractError)
+      expect(result.abortReason).toMatchObject({
+        fault: {
+          domain: FaultDomain.Output,
+          scope: FaultScope.OutputPause,
+          code: OutputFaultCode.Contract,
+        },
+      })
       expect(output.begunPaths).toEqual(['bad.bin'])
-      expect(output.events).toEqual(['abort-started', 'abort-finished', 'suspended'])
+      expect(output.events).toEqual(['paused'])
     },
   )
 
-  it('checks cancellation between fragmented range slices before copying or writing more bytes', async () => {
+  it('keeps fragmented-read cancellation distinct from a concurrent lease settlement fault', async () => {
     const controller = new AbortController()
     const cancelled = new DOMException('cancel fragmented read', 'AbortError')
+    const entries = [fileEntry(identity(11), 'cancel.bin', 4_096n)]
+    const releaseFailure = new Error('concurrent lease release failure')
     const output = durableOutput([])
     let yielded = 0
     const broker = {
@@ -388,43 +543,66 @@ describe('v2 file transfer output semantics', () => {
     } as unknown as V2BlockRangeReader
 
     const result = await runJob(
-      [fileEntry(identity(11), 'cancel.bin', 4_096n)],
+      entries,
       output.session,
       broker,
       4_096n,
       controller.signal,
+      undefined,
+      { revisions: revisionReader(entries, 4_096n, async () => { throw releaseFailure }) },
     )
 
-    expect(result.outcome.status).toBe('Aborted')
+    expect(result.outcome.status).toBe('Paused')
     expect(result.abortReason).toBe(cancelled)
     expect(yielded).toBe(2)
     expect(output.writes).toEqual([])
+    expect(output.retirementReasons).toEqual([])
   })
 
-  it('bounds a raw transaction abort that never returns and prevents sibling continuation', async () => {
-    const output = bindingFailureOutput('foreign-binding')
+  it('bounds an authorized retirement that never returns and preserves job-wide ambiguity', async () => {
+    const output = durableOutput([], undefined, async () => new Promise(() => undefined))
+    const broker = {
+      readRange: async function* () {
+        await Promise.reject(new V2RevisionChangedDuringRecoveryError())
+        yield { offset: 0n, data: Uint8Array.of(0) }
+      },
+    } as unknown as V2BlockRangeReader
     const result = await withTimeout(runJob([
       fileEntry(identity(11), 'bad.bin', 1n),
       fileEntry(identity(12), 'must-not-start.bin', 1n),
-    ], output.session, contiguousBroker(Uint8Array.of(1)), 1n, undefined, 10), 500,
-    'raw transaction abort exceeded its settlement deadline')
+    ], output.session, broker, 1n, undefined, 10), 500,
+    'authorized transaction retirement exceeded its settlement deadline')
 
     expect(result.outcome.status).toBe('Paused')
-    expect(result.abortReason).toBeInstanceOf(V2OutputPausedError)
-    const evidence = (result.abortReason as Error).cause
+    expect(result.abortReason).toMatchObject({
+      fault: {
+        domain: FaultDomain.Output,
+        scope: FaultScope.OutputPause,
+        code: OutputFaultCode.MutationAmbiguous,
+      },
+    })
+    const evidence = (result.abortReason as BoundaryFaultError).cause
     expect(evidence).toBeInstanceOf(AggregateError)
     expect((evidence as AggregateError).errors).toEqual([
-      expect.any(OutputTransactionContractError),
+      expect.objectContaining({
+        fault: {
+          domain: FaultDomain.Source,
+          scope: FaultScope.FileLocal,
+          code: SourceFaultCode.RevisionInvalidated,
+        },
+      }),
       expect.any(V2OutputSettlementTimeoutError),
     ])
     expect(output.begunPaths).toEqual(['bad.bin'])
-    expect(output.events).toEqual(['abort-started', 'suspended'])
+    expect(output.retirementReasons).toHaveLength(1)
+    expect((output.retirementReasons[0] as FileRetirementAuthorization).retirement)
+      .toBe(FaultRetirement.InvalidatedRevision)
   })
 })
 
 async function runJob(
   entries: readonly Extract<V2CatalogEntry, { kind: 'file' }>[],
-  output: OutputSession,
+  output: TestOutputSessionSource,
   broker: V2BlockRangeReader,
   blockSize: bigint,
   signal?: AbortSignal,
@@ -460,6 +638,21 @@ async function runJob(
     ...(overrides.onProgress === undefined ? {} : { onProgress: overrides.onProgress }),
     ...(outputSettlementTimeoutMilliseconds === undefined ? {} : { outputSettlementTimeoutMilliseconds }),
   }).run(signal)
+}
+
+function zipOutputFactory(
+  outputSessionId: string,
+  archive: ZipArchiveWriter,
+): TestOutputSessionFactory {
+  return {
+    backend: ZIP_STREAM_BACKEND,
+    format: 'zip',
+    open: (scope) => new ZipStreamOutputSession({
+      outputSessionId,
+      directoryAdmissionScope: scope,
+      archive,
+    }),
+  }
 }
 
 function revisionReader(
@@ -498,36 +691,42 @@ function delegateOutput(
     admitDirectory: (directory, signal) => base.admitDirectory(directory, signal),
     finalizeDirectory: (directory, signal) => base.finalizeDirectory(directory, signal),
     beginFile,
-    finishJob: (outcome, signal) => base.finishJob(outcome, signal),
-    abortJob: (reason) => base.abortJob(reason),
+    completeJob: (outcome, signal) => base.completeJob(outcome, signal),
+    pauseJob: (reason) => base.pauseJob(reason),
   }
 }
 
 function durableOutput(
   initialRanges: readonly ByteRange[],
   fault?: { readonly stage: 'begin' | 'write' | 'checkpoint'; readonly error: Error },
+  retirement?: (reason: unknown) => Promise<'FileIsolated' | 'JobOutputCompromised'>,
 ): {
   readonly session: OutputSession
   readonly writes: Array<{ readonly offset: bigint; readonly data: Uint8Array<ArrayBuffer> }>
   readonly suspendReasons: unknown[]
   readonly begunPaths: string[]
+  readonly retirementReasons: unknown[]
+  readonly checkpoints: readonly (readonly ByteRange[])[]
 } {
   const identity = Object.freeze({ backend: 'test-durable', outputSessionId: identityText(41) })
-  const admissions = new DirectoryAdmissionLedger()
+  const admissions = testDirectoryAdmissionLedgerBinding()
   const writes: Array<{ offset: bigint; data: Uint8Array<ArrayBuffer> }> = []
   const suspendReasons: unknown[] = []
   const begunPaths: string[] = []
-  const session: OutputSession = {
+  const retirementReasons: unknown[] = []
+  const checkpoints: Array<readonly ByteRange[]> = []
+  const session: ScopeBoundTestOutputSession = {
+    [BIND_TEST_DIRECTORY_ADMISSION_SCOPE]: admissions.bind,
     identity,
     format: 'directory',
     capabilities: {
       durability: 'ProcessRestart', randomWrite: true, fileFailureIsolation: true, modificationTime: false,
     },
-    admitDirectory: (directory, signal) => admissions.admitDirectory(directory, signal),
-    finalizeDirectory: async (directory) => { admissions.validateDirectoryFinalization(directory) },
+    admitDirectory: (directory, signal) => admissions.get().admitDirectory(directory, signal),
+    finalizeDirectory: (admission, signal) => admissions.get().finalizeDirectory(admission, signal),
     beginFile: async (input) => {
       if (fault?.stage === 'begin') throw fault.error
-      const file = admissions.validateFileParent(input)
+      const file = admissions.get().validateFileParent(input)
       begunPaths.push(file.path.at(-1) ?? '')
       const ownership: OutputFileOwnership = Object.freeze({
         ...identity,
@@ -551,18 +750,25 @@ function durableOutput(
             if (fault?.stage === 'checkpoint') throw fault.error
             durable = durable.union(pending)
             pending = new ByteRangeSet(file.exactSize, [])
+            checkpoints.push(durable.ranges)
             return ranges(ownership, file, durable)
           },
           commit: vi.fn(async () => undefined),
-          abort: vi.fn(async () => 'FileIsolated' as const),
+          retire: vi.fn(async (reason: unknown) => {
+            retirementReasons.push(reason)
+            return retirement?.(reason) ?? 'FileIsolated' as const
+          }),
+          pause: vi.fn(async () => undefined),
         }),
       })
     },
-    finishJob: async () => undefined,
-    abortJob: async () => undefined,
-    suspendJob: async (reason) => { suspendReasons.push(reason) },
+    completeJob: async () => COMPLETED_JOB_SETTLEMENT,
+    pauseJob: async (reason) => {
+      suspendReasons.push(reason)
+      return pausedJobSettlement('ProcessRestart')
+    },
   }
-  return { session, writes, suspendReasons, begunPaths }
+  return { session, writes, suspendReasons, begunPaths, retirementReasons, checkpoints }
 }
 
 function ranges(
@@ -577,27 +783,22 @@ function bindingFailureOutput(failure: 'foreign-binding' | 'transient-ranges'): 
   readonly session: OutputSession
   readonly begunPaths: string[]
   readonly events: string[]
-  readonly abortStarted: Promise<void>
-  readonly releaseAbort: () => void
 } {
   const identity = Object.freeze({ backend: 'binding-failure', outputSessionId: identityText(51) })
-  const admissions = new DirectoryAdmissionLedger()
+  const admissions = testDirectoryAdmissionLedgerBinding()
   const begunPaths: string[] = []
   const events: string[] = []
-  let signalAbortStarted: (() => void) | undefined
-  const abortStarted = new Promise<void>((resolve) => { signalAbortStarted = resolve })
-  let signalAbortRelease: (() => void) | undefined
-  const abortRelease = new Promise<void>((resolve) => { signalAbortRelease = resolve })
-  const session: OutputSession = {
+  const session: ScopeBoundTestOutputSession = {
+    [BIND_TEST_DIRECTORY_ADMISSION_SCOPE]: admissions.bind,
     identity,
     format: 'directory',
     capabilities: failure === 'foreign-binding'
       ? { durability: 'ProcessRestart', randomWrite: true, fileFailureIsolation: true, modificationTime: false }
       : { durability: 'None', randomWrite: false, fileFailureIsolation: true, modificationTime: false },
-    admitDirectory: (directory, signal) => admissions.admitDirectory(directory, signal),
-    finalizeDirectory: async (directory) => { admissions.validateDirectoryFinalization(directory) },
+    admitDirectory: (directory, signal) => admissions.get().admitDirectory(directory, signal),
+    finalizeDirectory: (admission, signal) => admissions.get().finalizeDirectory(admission, signal),
     beginFile: async (input) => {
-      const file = admissions.validateFileParent(input)
+      const file = admissions.get().validateFileParent(input)
       begunPaths.push(file.path.at(-1) ?? '')
       const ownership: OutputFileOwnership = Object.freeze({
         ...identity,
@@ -618,26 +819,24 @@ function bindingFailureOutput(failure: 'foreign-binding' | 'transient-ranges'): 
           writeRange: async () => undefined,
           checkpoint: async () => new VerifiedDurableRanges(ownership, file.source, file.exactSize, []),
           commit: async () => undefined,
-          abort: async () => {
-            events.push('abort-started')
-            signalAbortStarted?.()
-            await abortRelease
-            events.push('abort-finished')
+          retire: async () => {
+            events.push('retirement-called')
             return 'FileIsolated' as const
           },
+          pause: async () => undefined,
         }),
       })
     },
-    finishJob: async () => undefined,
-    abortJob: async () => undefined,
-    suspendJob: async () => { events.push('suspended') },
+    completeJob: async () => COMPLETED_JOB_SETTLEMENT,
+    pauseJob: async () => {
+      events.push('paused')
+      return pausedJobSettlement(session.capabilities.durability)
+    },
   }
   return {
     session,
     begunPaths,
     events,
-    abortStarted,
-    releaseAbort: () => signalAbortRelease?.(),
   }
 }
 

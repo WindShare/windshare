@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -64,24 +65,24 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	)
 }
 
-// Native output emits dense per-file lifecycle traces. The CLI keeps recovery,
-// attention, and failure boundaries while suppressing routine publish noise so
-// diagnostics stay reconstructable without turning a large transfer into a log.
+// Native output emits dense runtime decisions. The CLI keeps authority
+// milestones and exceptional decisions while suppressing routine file progress.
 func (a *App) traceFilesystemOutput(event osfs.FilesystemOutputTrace) {
 	if !shouldLogFilesystemOutputTrace(event) {
 		return
 	}
 	session := outputTraceIdentity(event.SessionID.Bytes())
-	locator := outputTraceIdentity(event.LocatorDigest[:])
-	object := outputTraceIdentity(event.OutputObjectID.Bytes())
+	intent := outputTraceIdentity(event.IntentDigest.Bytes())
 	a.logf(
-		"get: output trace operation=%d session=%s locator=%s output_object=%s certification=%q recovery_action=%q file_settlement=%s job_settlement=%s quarantine_reason=%d ancestry_boundary=%d ancestry_decision=%d ancestry_claims=%d native_lock_scope=%d native_lock_milestone=%d state_install_stage=%d state_generation=%d failure_scope=%d failure_code=%d mutation_failure=%t parent_sync_failure=%t failed=%t",
-		event.Operation, session, locator, object, event.Certification, event.RecoveryAction.String(),
-		fileSettlementName(event.FileSettlement), jobSettlementName(event.JobSettlement), event.QuarantineReason,
-		event.AncestryBoundary, event.AncestryDecision, event.AncestryClaimCount,
-		event.NativeLockScope, event.NativeLockMilestone, event.StateInstallStage, event.StateGeneration,
-		event.FailureScope, event.FailureCode, event.MutationReportedFailure,
-		event.ParentSyncReportedFailure, event.Failed,
+		"get: output trace operation=%d session=%s intent=%s certification=%q root_disposition=%q native_lock_scope=%d native_lock_milestone=%d runtime_component=%d runtime_operation=%d runtime_decision=%d operation_id=%d claim_id=%d fault_domain=%d normalized_fault_scope=%d normalized_fault_code=%d node_claims=%d directory_claims=%d file_claims=%d active_file_claims=%d reserved_file_slots=%d directory_metadata_bytes=%d checkpoint_records=%d failed=%t",
+		event.Operation, session, intent, event.Certification, event.RootOpenDisposition,
+		event.NativeLockScope, event.NativeLockMilestone,
+		event.RuntimeComponent, event.RuntimeOperation, event.RuntimeDecision,
+		event.OperationID, event.ClaimID, event.FaultDomain,
+		event.NormalizedFaultScope, event.NormalizedFaultCode,
+		event.NodeClaimCount, event.DirectoryClaimCount, event.FileClaimCount,
+		event.ActiveFileClaimCount, event.ReservedFileSlotCount,
+		event.DirectoryMetadataBytes, event.CheckpointRecordCount, event.Failed,
 	)
 }
 
@@ -107,17 +108,21 @@ func shouldLogFilesystemOutputTrace(event osfs.FilesystemOutputTrace) bool {
 		return true
 	}
 	switch event.Operation {
-	case osfs.TraceFilesystemCertified, osfs.TraceSessionOpened,
-		osfs.TraceSessionSettlement, osfs.TraceStateInstallCutAdopted:
+	case osfs.TraceFilesystemCertified, osfs.TraceFeatureProbeCompleted,
+		osfs.TraceCheckpointNamespaceOpened, osfs.TraceSessionOpened,
+		osfs.TraceCheckpointReconciled:
 		return true
-	case osfs.TraceFileRecoveryDecision:
-		return event.RecoveryAction == osfs.FilesystemOutputRecoveryResumeContent ||
-			event.RecoveryAction == osfs.FilesystemOutputRecoveryInstallQuarantine ||
-			event.RecoveryAction == osfs.FilesystemOutputRecoveryHoldQuarantine
-	case osfs.TraceFileSettlement:
-		return event.FileSettlement != transfer.FilePublished
 	case osfs.TraceNativeLock:
-		return event.NativeLockMilestone == osfs.FilesystemOutputNativeLockContended
+		return event.NativeLockMilestone == osfs.FilesystemOutputNativeLockContended ||
+			event.NativeLockMilestone == osfs.FilesystemOutputNativeLockAcquireFailed ||
+			event.NativeLockMilestone == osfs.FilesystemOutputNativeLockReleaseReportedFailure
+	case osfs.TraceRuntimeDecision:
+		return event.RuntimeDecision == osfs.FilesystemOutputRuntimeRejected ||
+			event.RuntimeDecision == osfs.FilesystemOutputRuntimeRolledBack ||
+			event.RuntimeDecision == osfs.FilesystemOutputRuntimeAmbiguous ||
+			event.RuntimeDecision == osfs.FilesystemOutputRuntimeCollision ||
+			event.RuntimeDecision == osfs.FilesystemOutputRuntimeNeedsAttention ||
+			event.RuntimeDecision == osfs.FilesystemOutputRuntimeIsolatedFailure
 	default:
 		return false
 	}
@@ -479,7 +484,7 @@ func (a *App) reportPausedTransfer(
 	runtimeErr, connectionErr := receiverTerminationErrors(runtime, connection)
 	runtimeErr = errors.Join(runtimeErr, admissionErr)
 	err := errors.Join(result.TerminationCause, result.SettlementFailure, runtimeErr, connectionErr)
-	if classifyTransferTermination(result.TerminationCause, runtimeErr, connectionErr) == ExitNetwork {
+	if classifyTransferTermination(result.TerminationFault, runtimeErr, connectionErr) == ExitNetwork {
 		a.logf("get: transfer stopped: %v", err)
 		return ExitNetwork
 	}
@@ -520,15 +525,16 @@ func receiverTerminationErrors(
 	return runtimeErr, connectionErr
 }
 
-func classifyTransferTermination(cause, runtimeErr, connectionErr error) int {
-	if runtimeErr != nil || connectionErr != nil || transfer.IsSessionFailure(cause) {
+func classifyTransferTermination(value transferfault.Fault, runtimeErr, connectionErr error) int {
+	if runtimeErr != nil || connectionErr != nil ||
+		value.Domain() == transferfault.DomainSession && value.Scope() == transferfault.ScopeSessionTerminal {
 		return ExitNetwork
 	}
 	return ExitFailure
 }
 
 func transferResultDrifted(result transfer.JobResult) bool {
-	return result.SourceDriftFailure != nil
+	return result.SourceDriftFault.Valid()
 }
 
 func fileSettlementName(kind transfer.FileSettlementKind) string {

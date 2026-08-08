@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
 func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallback(t *testing.T) {
@@ -38,14 +39,19 @@ func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallba
 		t.Fatal("queued admission has no owned worker")
 	}
 
-	sessionFailure := transfer.NewSessionFailure(protocolsession.ErrInvalidOperationFailure)
+	sessionFailure := transferfault.Wrap(
+		mustCLIFault(transferfault.NewSession(
+			transferfault.ScopeSessionTerminal, transferfault.SessionProtocol,
+		)),
+		protocolsession.ErrInvalidOperationFailure,
+	)
 	classes := v2peer.ReceiverCauseClasses(sessionFailure)
 	if len(classes) == 0 {
-		t.Fatal("exact core SessionFailure produced no diagnostic classes")
+		t.Fatal("exact closed session fault produced no diagnostic classes")
 	}
 	attempt := newCLIReceiverPeerAttempt()
 	// The CLI seam begins after v2peer's sealed validation boundary: the typed
-	// disposition supplies authority, while SessionFailure remains diagnostic only.
+	// disposition supplies authority, while the closed session fault remains diagnostic only.
 	attempt.finishOutcome(receiverPeerMonitorOutcome{
 		disposition:   receiverPeerSessionUnsafe,
 		retainedCause: sessionFailure,

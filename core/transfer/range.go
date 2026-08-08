@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
@@ -23,6 +24,121 @@ type RangeSinkFunc func(context.Context, uint64, []byte) error
 
 func (function RangeSinkFunc) WriteRange(ctx context.Context, offset uint64, data []byte) error {
 	return function(ctx, offset, data)
+}
+
+type atomicRequestedRangeSink struct {
+	mu        sync.Mutex
+	target    RangeSink
+	requested content.Range
+	data      []byte
+	covered   []uint64
+	count     uint64
+	failure   error
+	sealed    bool
+}
+
+func newAtomicRequestedRangeSink(
+	requested content.Range,
+	target RangeSink,
+) (*atomicRequestedRangeSink, error) {
+	if target == nil || requested.Offset >= requested.End {
+		return nil, rangeReaderContractError(errors.New("requested range is empty or has no output sink"))
+	}
+	length := requested.End - requested.Offset
+	maxInt := uint64(^uint(0) >> 1)
+	if length > uint64(catalog.MaxChunkSize) || length > maxInt {
+		return nil, rangeReaderContractError(errors.New("requested range exceeds the atomic protocol bound"))
+	}
+	return &atomicRequestedRangeSink{
+		target: target, requested: requested,
+		data: make([]byte, int(length)), covered: make([]uint64, (length+63)/64),
+	}, nil
+}
+
+func (sink *atomicRequestedRangeSink) WriteRange(
+	ctx context.Context,
+	offset uint64,
+	data []byte,
+) error {
+	if err := ctx.Err(); err != nil {
+		sink.mu.Lock()
+		if sink.failure == nil {
+			sink.failure = err
+		}
+		sink.mu.Unlock()
+		return err
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.failure != nil {
+		return sink.failure
+	}
+	if sink.sealed {
+		return sink.failContractLocked(errors.New("range reader wrote after returning"))
+	}
+	if len(data) == 0 || offset < sink.requested.Offset || offset >= sink.requested.End ||
+		uint64(len(data)) > sink.requested.End-offset {
+		return sink.failContractLocked(errors.New("range write escapes the requested interval"))
+	}
+	start := offset - sink.requested.Offset
+	end := start + uint64(len(data))
+	for index := start; index < end; index++ {
+		if sink.covered[index/64]&(uint64(1)<<(index%64)) != 0 {
+			return sink.failContractLocked(errors.New("range write overlaps bytes already supplied"))
+		}
+	}
+	copy(sink.data[int(start):int(end)], data)
+	for index := start; index < end; index++ {
+		sink.covered[index/64] |= uint64(1) << (index % 64)
+	}
+	sink.count += uint64(len(data))
+	return nil
+}
+
+func (sink *atomicRequestedRangeSink) Flush(ctx context.Context) error {
+	if sink == nil {
+		return rangeReaderContractError(errors.New("range reader returned no atomic sink"))
+	}
+	sink.mu.Lock()
+	if sink.failure != nil {
+		err := sink.failure
+		sink.mu.Unlock()
+		return err
+	}
+	if sink.sealed {
+		err := sink.failContractLocked(errors.New("requested range was flushed more than once"))
+		sink.mu.Unlock()
+		return err
+	}
+	if sink.count != uint64(len(sink.data)) {
+		err := sink.failContractLocked(errors.New("range reader returned before covering the requested interval"))
+		sink.mu.Unlock()
+		return err
+	}
+	sink.sealed = true
+	target, offset, data := sink.target, sink.requested.Offset, sink.data
+	sink.mu.Unlock()
+	return normalizeOutputBoundary(ctx, target.WriteRange(ctx, offset, data))
+}
+
+func (sink *atomicRequestedRangeSink) Failure() error {
+	if sink == nil {
+		return rangeReaderContractError(errors.New("range reader returned no atomic sink"))
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	return sink.failure
+}
+
+func (sink *atomicRequestedRangeSink) failContractLocked(cause error) error {
+	if sink.failure == nil {
+		sink.failure = rangeReaderContractError(cause)
+	}
+	return sink.failure
+}
+
+func rangeReaderContractError(cause error) error {
+	return dependencyContractFailure(errors.Join(errRangeReaderContract, cause))
 }
 
 // ReadRange requests only the file-local blocks intersecting requested. The
@@ -130,7 +246,8 @@ func (r *jobRun) transferMissingRanges(
 		for offset := current.Offset; offset < current.End; {
 			if cause := context.Cause(ctx); cause != nil {
 				return false, r.settleFailedFile(
-					ctx, plan, opened, transaction, FailureBlockTransfer, cause, 0,
+					ctx, plan, opened, transaction, FailureBlockTransfer,
+					cancellationFailure(ctx, cause), 0,
 				)
 			}
 			next := min(current.End, ((offset/chunk)+1)*chunk)
@@ -149,7 +266,7 @@ func (r *jobRun) transferMissingRanges(
 			checkpoint = advanced
 			transientEnd = requested.End
 			if !wrote {
-				r.traceFileLifecycle(TransferFileFirstWrite, plan, false)
+				r.traceFileLifecycle(TransferFileFirstWrite, plan, nil)
 				wrote = true
 			}
 			offset = next
@@ -178,20 +295,21 @@ func (r *jobRun) transferRequestedRange(
 ) (VerifiedDurableRanges, bool, error) {
 	buffered, err := newAtomicRequestedRangeSink(requested, transaction)
 	if err == nil {
-		err = r.job.blocks.ReadRange(ctx, opened.LeaseID, opened.Descriptor, requested, buffered)
+		rawReadErr := r.job.blocks.ReadRange(ctx, opened.LeaseID, opened.Descriptor, requested, buffered)
+		err = normalizeSourceBoundary(ctx, rawReadErr)
 	}
 	if bufferedErr := buffered.Failure(); bufferedErr != nil {
 		err = bufferedErr
 	}
 	if err != nil {
-		inspection := inspectLifecycleError(err)
+		policy := lifecyclePolicyFor(err)
 		if invalidator, ok := r.job.blocks.(interface {
 			InvalidateRevision(catalog.FileID, content.FileRevision)
-		}); ok && inspection.invalidatedRevision {
+		}); ok && policy.invalidatedRevision() {
 			invalidator.InvalidateRevision(plan.file, opened.Descriptor.FileRevision())
 		}
 		return VerifiedDurableRanges{}, false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureBlockTransfer, err, inspection.retireReason(),
+			ctx, plan, opened, transaction, FailureBlockTransfer, err, policy.retireReason(),
 		)
 	}
 	if err := buffered.Flush(ctx); err != nil {
@@ -199,7 +317,8 @@ func (r *jobRun) transferRequestedRange(
 			ctx, plan, opened, transaction, FailureBlockTransfer, err, 0,
 		)
 	}
-	checkpoint, err := transaction.Checkpoint(ctx)
+	checkpoint, rawCheckpointErr := transaction.Checkpoint(ctx)
+	err = normalizeOutputBoundary(ctx, rawCheckpointErr)
 	if err != nil {
 		return VerifiedDurableRanges{}, false, r.settleFailedFile(
 			ctx, plan, opened, transaction, FailureFileOutput, err, 0,
@@ -215,4 +334,57 @@ func (r *jobRun) transferRequestedRange(
 		)
 	}
 	return checkpoint, true, nil
+}
+
+func checkpointExactlyAdvances(
+	transaction FileTransaction,
+	prior VerifiedDurableRanges,
+	requested content.Range,
+	next VerifiedDurableRanges,
+) bool {
+	requestedSet, err := content.NewRangeSet([]content.Range{requested})
+	if err != nil {
+		return false
+	}
+	expected, err := MergeRanges(prior.Ranges(), requestedSet)
+	return err == nil && next.Binding() == transaction.Binding() &&
+		next.CheckpointGeneration() > prior.CheckpointGeneration() &&
+		exactRangeSetsEqual(next.Ranges(), expected)
+}
+
+func checkpointAcknowledgesTransientWrite(
+	transaction FileTransaction,
+	prior VerifiedDurableRanges,
+	next VerifiedDurableRanges,
+) bool {
+	return next.Binding() == transaction.Binding() && next.Ranges().IsEmpty() &&
+		next.CheckpointGeneration() > prior.CheckpointGeneration()
+}
+
+func exactRangeSetsEqual(left, right content.RangeSet) bool {
+	leftRanges, rightRanges := left.Ranges(), right.Ranges()
+	if len(leftRanges) != len(rightRanges) {
+		return false
+	}
+	for index := range leftRanges {
+		if leftRanges[index] != rightRanges[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func rangesContain(available, required content.RangeSet) bool {
+	availableRanges := available.Ranges()
+	availableIndex := 0
+	for _, requiredRange := range required.Ranges() {
+		for availableIndex < len(availableRanges) && availableRanges[availableIndex].End < requiredRange.End {
+			availableIndex++
+		}
+		if availableIndex == len(availableRanges) || availableRanges[availableIndex].Offset > requiredRange.Offset ||
+			availableRanges[availableIndex].End < requiredRange.End {
+			return false
+		}
+	}
+	return true
 }

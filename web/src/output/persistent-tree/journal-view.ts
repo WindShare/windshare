@@ -1,4 +1,3 @@
-import type { OutputSessionIdentity } from '../../transfer/output-session'
 import {
   type CheckpointNamespaceBinding,
   type OutputCheckpointJournal,
@@ -6,7 +5,7 @@ import {
   type PersistedFileRecord,
   type PersistedOutputRecord,
   outputRecordKey,
-  recordBelongsToSession,
+  recordBelongsToCheckpointNamespace,
   snapshotOutputRecord,
   validateOutputJournalPage,
 } from '../persistence/journal'
@@ -34,7 +33,6 @@ export interface StagedOutputTotals {
   readonly additionalBytes: bigint
 }
 
-type CheckpointOwner = OutputSessionIdentity & CheckpointNamespaceBinding
 type StagedOutputTree = Pick<PersistentOutputTree, 'openFile'>
 
 /**
@@ -43,12 +41,12 @@ type StagedOutputTree = Pick<PersistentOutputTree, 'openFile'>
  * cleanup authority over the persistent output session.
  */
 export class PersistentJournalView {
-  readonly #owner: CheckpointOwner
+  readonly #binding: CheckpointNamespaceBinding
   readonly #journal: OutputCheckpointJournal
   readonly #tree: StagedOutputTree
 
-  constructor(owner: CheckpointOwner, journal: OutputCheckpointJournal, tree: StagedOutputTree) {
-    this.#owner = owner
+  constructor(binding: CheckpointNamespaceBinding, journal: OutputCheckpointJournal, tree: StagedOutputTree) {
+    this.#binding = binding
     this.#journal = journal
     this.#tree = tree
   }
@@ -93,11 +91,12 @@ export class PersistentJournalView {
       const page = validateOutputJournalPage(
         await this.#journal.scanCommitted(scan),
         scan,
-        this.#owner,
+        this.#binding,
       )
       for (const candidate of page.records) {
         const record = snapshotOutputRecord(candidate)
-        if (record.kind !== kind || !recordBelongsToSession(record, this.#owner)) {
+        if (record.kind !== kind ||
+            !recordBelongsToCheckpointNamespace(record, this.#binding)) {
           throw this.#bindingError('Output journal scan escaped its kind or session boundary')
         }
         yield record
@@ -115,7 +114,8 @@ export class PersistentJournalView {
     }
     if (candidate === undefined) return undefined
     const record = snapshotOutputRecord(candidate)
-    if (!recordBelongsToSession(record, this.#owner) || outputRecordKey(record) !== key) {
+    if (!recordBelongsToCheckpointNamespace(record, this.#binding) ||
+        outputRecordKey(record) !== key) {
       throw this.#bindingError('Output journal lookup returned a different record identity')
     }
     return record

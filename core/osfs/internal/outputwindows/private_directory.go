@@ -248,3 +248,142 @@ func windowsV3CommitDeleteOnClose(handle windows.Handle) error {
 		uint32(unsafe.Sizeof(information)),
 	)
 }
+
+type windowsV3PrivatePolicy struct {
+	userSID             *windows.SID
+	systemSID           *windows.SID
+	administratorsSID   *windows.SID
+	trustedInstallerSID *windows.SID
+}
+
+const windowsV3TrustedInstallerSID = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+
+func newWindowsV3PrivatePolicy() (*windowsV3PrivatePolicy, error) {
+	user, err := windows.GetCurrentThreadEffectiveToken().GetTokenUser()
+	if err != nil {
+		return nil, err
+	}
+	// Copy the token-owned SID so the policy cannot outlive its backing token
+	// information buffer.
+	userSID, err := windows.StringToSid(user.User.Sid.String())
+	if err != nil {
+		return nil, err
+	}
+	systemSID, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return nil, err
+	}
+	administratorsSID, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return nil, err
+	}
+	trustedInstallerSID, err := windows.StringToSid(windowsV3TrustedInstallerSID)
+	if err != nil {
+		return nil, err
+	}
+	return &windowsV3PrivatePolicy{
+		userSID: userSID, systemSID: systemSID,
+		administratorsSID: administratorsSID, trustedInstallerSID: trustedInstallerSID,
+	}, nil
+}
+
+func (policy *windowsV3PrivatePolicy) descriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, error) {
+	if policy == nil || policy.userSID == nil || policy.systemSID == nil {
+		return nil, errors.New("windows private ACL policy is unavailable")
+	}
+	inheritance := ""
+	if directory {
+		inheritance = "OICI"
+	}
+	entries := fmt.Sprintf("(A;%s;GA;;;%s)", inheritance, policy.userSID.String())
+	if !policy.userSID.Equals(policy.systemSID) {
+		entries += fmt.Sprintf("(A;%s;GA;;;%s)", inheritance, policy.systemSID.String())
+	}
+	// P protects the DACL from parent inheritance. Only the effective user and
+	// LocalSystem retain access; inherited broad desktop ACLs never enter the
+	// recovery namespace.
+	return windows.SecurityDescriptorFromString("O:" + policy.userSID.String() + "D:P" + entries)
+}
+
+func (policy *windowsV3PrivatePolicy) verify(handle windows.Handle, directory bool) error {
+	expectedFlags := uint8(0)
+	if directory {
+		expectedFlags = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
+	}
+	return policy.verifyObjectPolicy(
+		handle, windows.SE_FILE_OBJECT, windowsV3FileAllAccess, expectedFlags,
+	)
+}
+
+func (policy *windowsV3PrivatePolicy) verifyKernelMutex(handle windows.Handle) error {
+	return policy.verifyObjectPolicy(handle, windows.SE_KERNEL_OBJECT, windows.MUTEX_ALL_ACCESS, 0)
+}
+
+func (policy *windowsV3PrivatePolicy) verifyObjectPolicy(
+	handle windows.Handle,
+	objectType windows.SE_OBJECT_TYPE,
+	expectedMask windows.ACCESS_MASK,
+	expectedFlags uint8,
+) error {
+	if policy == nil || policy.userSID == nil || policy.systemSID == nil {
+		return errors.New("windows private ACL policy is unavailable")
+	}
+	descriptor, err := windows.GetSecurityInfo(
+		handle, objectType, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION,
+	)
+	if err != nil {
+		return err
+	}
+	control, _, err := descriptor.Control()
+	if err != nil {
+		return err
+	}
+	if control&windows.SE_DACL_PROTECTED == 0 {
+		return errors.New("private DACL is not protected from inheritance")
+	}
+	owner, _, err := descriptor.Owner()
+	if err != nil || owner == nil || !owner.Equals(policy.userSID) {
+		return errors.Join(errors.New("private object owner differs from the effective user"), err)
+	}
+	dacl, defaulted, err := descriptor.DACL()
+	if err != nil || dacl == nil || defaulted {
+		return errors.Join(errors.New("private object DACL is absent or defaulted"), err)
+	}
+
+	expectedCount := uint16(2)
+	if policy.userSID.Equals(policy.systemSID) {
+		expectedCount = 1
+	}
+	if dacl.AceCount != expectedCount {
+		return fmt.Errorf("private DACL contains %d entries; expected %d", dacl.AceCount, expectedCount)
+	}
+	userFound, systemFound := false, policy.userSID.Equals(policy.systemSID)
+	for index := uint32(0); index < uint32(dacl.AceCount); index++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, index, &ace); err != nil {
+			return err
+		}
+		if ace == nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE ||
+			ace.Header.AceFlags != expectedFlags || ace.Mask != expectedMask {
+			if ace == nil {
+				return errors.New("private DACL contains a nil access entry")
+			}
+			return fmt.Errorf("private DACL access entry type=%d flags=%#x mask=%#x; expected type=%d flags=%#x mask=%#x",
+				ace.Header.AceType, ace.Header.AceFlags, ace.Mask,
+				windows.ACCESS_ALLOWED_ACE_TYPE, expectedFlags, expectedMask)
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		switch {
+		case sid.Equals(policy.userSID) && !userFound:
+			userFound = true
+		case sid.Equals(policy.systemSID) && !systemFound:
+			systemFound = true
+		default:
+			return errors.New("private DACL grants an unexpected or duplicate principal")
+		}
+	}
+	if !userFound || !systemFound {
+		return errors.New("private DACL omits a required principal")
+	}
+	return nil
+}

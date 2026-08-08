@@ -1,21 +1,17 @@
-import type { OutputSession, V2OutputAuthority } from '../output-session'
+import {
+  COMPLETED_JOB_SETTLEMENT,
+  needsAttentionJobSettlement,
+  pausedJobSettlement,
+  type JobSettlement,
+  type OutputSession,
+  type V2OutputAuthority,
+} from '../output-session'
+import { FaultScope, OutputFaultCode, outputFault } from '../fault'
 
 export const V2_DEFAULT_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS = 30_000
 export const V2_MAXIMUM_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS = 5 * 60_000
 
-export interface V2OutputSettlementFailure {
-  readonly requested: 'retain' | 'discard'
-  readonly retentionFailure?: unknown
-  readonly cleanupFailure: unknown
-}
-
-export type V2OutputSettlement =
-  | { readonly kind: 'Closed' }
-  | { readonly kind: 'Retained' }
-  | { readonly kind: 'Discarded'; readonly retentionFailure?: unknown }
-  | { readonly kind: 'NeedsAttention'; readonly failure: V2OutputSettlementFailure }
-
-export const V2_CLOSED_OUTPUT_SETTLEMENT: V2OutputSettlement = Object.freeze({ kind: 'Closed' })
+export { COMPLETED_JOB_SETTLEMENT }
 
 export interface V2OutputSettlementClock {
   now(): number
@@ -49,58 +45,38 @@ export async function withOutputSettlementTimeout<T>(
   return settleWithin(operation, new SettlementBudget(timeoutMilliseconds, clock), settle)
 }
 
-export async function settleFailedV2Output(options: {
+/**
+ * Transfer faults own only stable-pause authority. Current resume state is
+ * discarded exclusively by the user-confirmed ResumeStateAuthority workflow.
+ */
+export async function pauseFailedV2Output(options: {
   readonly output?: OutputSession
   readonly authority: V2OutputAuthority
   readonly reason: unknown
-  readonly preferRetention: boolean
   readonly timeoutMilliseconds: number
   readonly clock?: V2OutputSettlementClock
-}): Promise<V2OutputSettlement> {
+}): Promise<JobSettlement> {
   const budget = new SettlementBudget(options.timeoutMilliseconds, options.clock)
-  let retentionFailure: unknown
-  if (options.preferRetention && options.output?.suspendJob !== undefined) {
-    try {
-      await settleWithin('retain output checkpoints', budget, () => options.output!.suspendJob!(options.reason))
-      return Object.freeze({ kind: 'Retained' })
-    } catch (error) {
-      retentionFailure = error
-      // A timed-out collaborator still owns an unresolved mutation. Starting a
-      // concurrent cleanup would make namespace state ambiguous rather than safe.
-      if (error instanceof V2OutputSettlementTimeoutError) {
-        return needsAttention('retain', retentionFailure, error)
-      }
-    }
-  }
-
   try {
     if (options.output === undefined) {
-      await settleWithin('discard unopened output', budget, () => options.authority.abort(options.reason))
-    } else {
-      await settleWithin('discard opened output', budget, () => options.output!.abortJob(options.reason))
+      await settleWithin(
+        'abandon unopened output capability',
+        budget,
+        () => options.authority.abort(options.reason),
+      )
+      return pausedJobSettlement('None')
     }
-    return Object.freeze({
-      kind: 'Discarded',
-      ...(retentionFailure === undefined ? {} : { retentionFailure }),
-    })
-  } catch (cleanupFailure) {
-    return needsAttention(options.preferRetention ? 'retain' : 'discard', retentionFailure, cleanupFailure)
+    return await settleWithin(
+      'pause output at a stable cut',
+      budget,
+      () => options.output!.pauseJob(options.reason),
+    )
+  } catch {
+    return needsAttentionJobSettlement(outputFault(
+      FaultScope.OutputPause,
+      OutputFaultCode.MutationAmbiguous,
+    ))
   }
-}
-
-function needsAttention(
-  requested: V2OutputSettlementFailure['requested'],
-  retentionFailure: unknown,
-  cleanupFailure: unknown,
-): V2OutputSettlement {
-  return Object.freeze({
-    kind: 'NeedsAttention',
-    failure: Object.freeze({
-      requested,
-      ...(retentionFailure === undefined ? {} : { retentionFailure }),
-      cleanupFailure,
-    }),
-  })
 }
 
 class SettlementBudget {
@@ -117,7 +93,6 @@ class SettlementBudget {
   remainingMilliseconds(): number {
     const reading = this.#clock.now()
     const elapsed = Math.max(0, reading - this.#latestReading)
-    // A clock rollback must never replenish a terminal mutation budget.
     this.#remainingMilliseconds = Math.max(0, this.#remainingMilliseconds - elapsed)
     this.#latestReading = Math.max(this.#latestReading, reading)
     return this.#remainingMilliseconds

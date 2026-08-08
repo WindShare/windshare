@@ -8,187 +8,127 @@ import (
 )
 
 func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
-	for _, test := range []struct {
+	traceOperations := []struct {
 		value outputruntime.FilesystemOutputTraceOperation
 		want  FilesystemOutputTraceOperation
 	}{
 		{outputruntime.TraceFilesystemCertified, TraceFilesystemCertified},
 		{outputruntime.TraceFeatureProbeCompleted, TraceFeatureProbeCompleted},
-		{outputruntime.TraceControlBootstrap, TraceControlBootstrap},
+		{outputruntime.TraceCheckpointNamespaceOpened, TraceCheckpointNamespaceOpened},
 		{outputruntime.TraceNativeLock, TraceNativeLock},
 		{outputruntime.TraceSessionOpened, TraceSessionOpened},
-		{outputruntime.TraceFilePhaseTransition, TraceFilePhaseTransition},
-		{outputruntime.TraceFileRecoveryDecision, TraceFileRecoveryDecision},
-		{outputruntime.TraceFileSettlement, TraceFileSettlement},
-		{outputruntime.TraceSessionSettlement, TraceSessionSettlement},
-		{outputruntime.TraceStateInstallCutAdopted, TraceStateInstallCutAdopted},
-		{outputruntime.TraceAncestryValidation, TraceAncestryValidation},
-	} {
-		if got := projectTraceOperation(test.value); got != test.want {
-			t.Errorf("operation %d = %d, want %d", test.value, got, test.want)
+		{outputruntime.TraceCheckpointReconciled, TraceCheckpointReconciled},
+		{outputruntime.TraceRuntimeDecision, TraceRuntimeDecision},
+	}
+	for _, test := range traceOperations {
+		if actual := projectTraceOperation(test.value); actual != test.want {
+			t.Fatalf("trace operation %d projected as %d, want %d", test.value, actual, test.want)
 		}
 	}
-	if got := projectTraceOperation(0xff); got != 0 {
-		t.Fatalf("unknown operation = %d, want zero", got)
-	}
 
-	for _, test := range []struct {
-		value outputruntime.FilesystemOutputFilePhase
-		want  FilesystemOutputFilePhase
+	rootDispositions := []struct {
+		value outputruntime.FilesystemOutputRootDisposition
+		want  FilesystemOutputRootDisposition
 	}{
-		{outputruntime.FilesystemOutputFileReserved, FilesystemOutputFileReserved},
-		{outputruntime.FilesystemOutputFileWitnessed, FilesystemOutputFileWitnessed},
-		{outputruntime.FilesystemOutputFilePublishing, FilesystemOutputFilePublishing},
-		{outputruntime.FilesystemOutputFilePublishBlocked, FilesystemOutputFilePublishBlocked},
-		{outputruntime.FilesystemOutputFilePublished, FilesystemOutputFilePublished},
-		{outputruntime.FilesystemOutputFileRetiring, FilesystemOutputFileRetiring},
-		{outputruntime.FilesystemOutputFileQuarantined, FilesystemOutputFileQuarantined},
-	} {
-		if got := projectFilePhase(test.value); got != test.want {
-			t.Errorf("file phase %d = %d, want %d", test.value, got, test.want)
+		{outputruntime.FilesystemOutputCallerProvidedContainer, FilesystemOutputCallerProvidedContainer},
+		{outputruntime.FilesystemOutputAuthorityCreatedRoot, FilesystemOutputAuthorityCreatedRoot},
+	}
+	for _, test := range rootDispositions {
+		if actual := projectRootOpenDisposition(test.value); actual != test.want {
+			t.Fatalf("root disposition %q projected as %q, want %q", test.value, actual, test.want)
 		}
 	}
-	if got := projectFilePhase(0xff); got != 0 {
-		t.Fatalf("unknown file phase = %d, want zero", got)
-	}
 
-	for _, test := range []struct {
-		value outputruntime.FilesystemOutputRecoveryAction
-		want  FilesystemOutputRecoveryAction
+	runtimeComponents := []struct {
+		value outputruntime.FilesystemOutputRuntimeComponent
+		want  FilesystemOutputRuntimeComponent
 	}{
-		{outputruntime.FilesystemOutputRecoveryRetryObjectCreation, FilesystemOutputRecoveryRetryObjectCreation},
-		{outputruntime.FilesystemOutputRecoveryInstallWitness, FilesystemOutputRecoveryInstallWitness},
-		{outputruntime.FilesystemOutputRecoveryRequireRevisionBinding, FilesystemOutputRecoveryRequireRevisionBinding},
-		{outputruntime.FilesystemOutputRecoveryResumeContent, FilesystemOutputRecoveryResumeContent},
-		{outputruntime.FilesystemOutputRecoveryInstallPublishing, FilesystemOutputRecoveryInstallPublishing},
-		{outputruntime.FilesystemOutputRecoveryLinkFinalNoReplace, FilesystemOutputRecoveryLinkFinalNoReplace},
-		{outputruntime.FilesystemOutputRecoverySyncFinalParent, FilesystemOutputRecoverySyncFinalParent},
-		{outputruntime.FilesystemOutputRecoveryInstallPublished, FilesystemOutputRecoveryInstallPublished},
-		{outputruntime.FilesystemOutputRecoveryInstallPublishBlocked, FilesystemOutputRecoveryInstallPublishBlocked},
-		{outputruntime.FilesystemOutputRecoveryHoldPublishBlocked, FilesystemOutputRecoveryHoldPublishBlocked},
-		{outputruntime.FilesystemOutputRecoveryRemovePublishedStageAndSync, FilesystemOutputRecoveryRemovePublishedStageAndSync},
-		{outputruntime.FilesystemOutputRecoverySyncPublishedStageParent, FilesystemOutputRecoverySyncPublishedStageParent},
-		{outputruntime.FilesystemOutputRecoveryRemoveRetiringStageAndSync, FilesystemOutputRecoveryRemoveRetiringStageAndSync},
-		{outputruntime.FilesystemOutputRecoverySyncStageRemoveAnchorAndSync, FilesystemOutputRecoverySyncStageRemoveAnchorAndSync},
-		{outputruntime.FilesystemOutputRecoverySyncParentsRemoveRecordAndSync, FilesystemOutputRecoverySyncParentsRemoveRecordAndSync},
-		{outputruntime.FilesystemOutputRecoveryInstallRetiring, FilesystemOutputRecoveryInstallRetiring},
-		{outputruntime.FilesystemOutputRecoveryInstallQuarantine, FilesystemOutputRecoveryInstallQuarantine},
-		{outputruntime.FilesystemOutputRecoveryHoldQuarantine, FilesystemOutputRecoveryHoldQuarantine},
-		{outputruntime.FilesystemOutputRecoveryHoldPublishedCleanup, FilesystemOutputRecoveryHoldPublishedCleanup},
-		{outputruntime.FilesystemOutputRecoveryHoldRetiringCleanup, FilesystemOutputRecoveryHoldRetiringCleanup},
-	} {
-		if got := projectRecoveryAction(test.value); got != test.want {
-			t.Errorf("recovery action %d = %d, want %d", test.value, got, test.want)
+		{outputruntime.FilesystemOutputRuntimeSession, FilesystemOutputRuntimeSession},
+		{outputruntime.FilesystemOutputRuntimeDirectory, FilesystemOutputRuntimeDirectory},
+		{outputruntime.FilesystemOutputRuntimeFile, FilesystemOutputRuntimeFile},
+		{outputruntime.FilesystemOutputRuntimeCheckpoint, FilesystemOutputRuntimeCheckpoint},
+	}
+	for _, test := range runtimeComponents {
+		if actual := projectRuntimeComponent(test.value); actual != test.want {
+			t.Fatalf("runtime component %d projected as %d, want %d", test.value, actual, test.want)
 		}
 	}
-	if got := projectRecoveryAction(0xff); got != 0 {
-		t.Fatalf("unknown recovery action = %d, want zero", got)
-	}
 
-	for _, test := range []struct {
-		value outputruntime.FilesystemOutputFileSettlementBoundary
-		want  FilesystemOutputFileSettlementBoundary
+	runtimeOperations := []struct {
+		value outputruntime.FilesystemOutputRuntimeOperation
+		want  FilesystemOutputRuntimeOperation
 	}{
-		{outputruntime.FilesystemOutputSettlementBeginFile, FilesystemOutputSettlementBeginFile},
-		{outputruntime.FilesystemOutputSettlementCommit, FilesystemOutputSettlementCommit},
-		{outputruntime.FilesystemOutputSettlementPause, FilesystemOutputSettlementPause},
-		{outputruntime.FilesystemOutputSettlementJobPause, FilesystemOutputSettlementJobPause},
-		{outputruntime.FilesystemOutputSettlementBeginFileCleanup, FilesystemOutputSettlementBeginFileCleanup},
-		{outputruntime.FilesystemOutputSettlementRetire, FilesystemOutputSettlementRetire},
-	} {
-		if got := projectFileSettlementBoundary(test.value); got != test.want {
-			t.Errorf("settlement boundary %d = %d, want %d", test.value, got, test.want)
+		{outputruntime.FilesystemOutputRuntimeOpenOutput, FilesystemOutputRuntimeOpenOutput},
+		{outputruntime.FilesystemOutputRuntimeAcquireIntentLease, FilesystemOutputRuntimeAcquireIntentLease},
+		{outputruntime.FilesystemOutputRuntimeReconcileCheckpoints, FilesystemOutputRuntimeReconcileCheckpoints},
+		{outputruntime.FilesystemOutputRuntimeAdmitDirectory, FilesystemOutputRuntimeAdmitDirectory},
+		{outputruntime.FilesystemOutputRuntimeFinalizeDirectory, FilesystemOutputRuntimeFinalizeDirectory},
+		{outputruntime.FilesystemOutputRuntimeBeginFile, FilesystemOutputRuntimeBeginFile},
+		{outputruntime.FilesystemOutputRuntimeWriteRange, FilesystemOutputRuntimeWriteRange},
+		{outputruntime.FilesystemOutputRuntimeCheckpointFile, FilesystemOutputRuntimeCheckpointFile},
+		{outputruntime.FilesystemOutputRuntimeCommitFile, FilesystemOutputRuntimeCommitFile},
+		{outputruntime.FilesystemOutputRuntimePauseFile, FilesystemOutputRuntimePauseFile},
+		{outputruntime.FilesystemOutputRuntimeRetireFile, FilesystemOutputRuntimeRetireFile},
+		{outputruntime.FilesystemOutputRuntimePauseJob, FilesystemOutputRuntimePauseJob},
+		{outputruntime.FilesystemOutputRuntimeCompleteJob, FilesystemOutputRuntimeCompleteJob},
+		{outputruntime.FilesystemOutputRuntimeMaterializeDirectory, FilesystemOutputRuntimeMaterializeDirectory},
+		{outputruntime.FilesystemOutputRuntimeCreateOwnedFile, FilesystemOutputRuntimeCreateOwnedFile},
+		{outputruntime.FilesystemOutputRuntimeRecoverFile, FilesystemOutputRuntimeRecoverFile},
+		{outputruntime.FilesystemOutputRuntimePublishFile, FilesystemOutputRuntimePublishFile},
+		{outputruntime.FilesystemOutputRuntimeQuarantineFile, FilesystemOutputRuntimeQuarantineFile},
+	}
+	for _, test := range runtimeOperations {
+		if actual := projectRuntimeOperation(test.value); actual != test.want {
+			t.Fatalf("runtime operation %d projected as %d, want %d", test.value, actual, test.want)
 		}
 	}
-	if got := projectFileSettlementBoundary(0xff); got != 0 {
-		t.Fatalf("unknown settlement boundary = %d, want zero", got)
+
+	runtimeDecisions := []struct {
+		value outputruntime.FilesystemOutputRuntimeDecision
+		want  FilesystemOutputRuntimeDecision
+	}{
+		{outputruntime.FilesystemOutputRuntimeValidated, FilesystemOutputRuntimeValidated},
+		{outputruntime.FilesystemOutputRuntimeReserved, FilesystemOutputRuntimeReserved},
+		{outputruntime.FilesystemOutputRuntimeCoalesced, FilesystemOutputRuntimeCoalesced},
+		{outputruntime.FilesystemOutputRuntimeRejected, FilesystemOutputRuntimeRejected},
+		{outputruntime.FilesystemOutputRuntimeRolledBack, FilesystemOutputRuntimeRolledBack},
+		{outputruntime.FilesystemOutputRuntimeAdmitted, FilesystemOutputRuntimeAdmitted},
+		{outputruntime.FilesystemOutputRuntimeActive, FilesystemOutputRuntimeActive},
+		{outputruntime.FilesystemOutputRuntimeSealed, FilesystemOutputRuntimeSealed},
+		{outputruntime.FilesystemOutputRuntimeSettled, FilesystemOutputRuntimeSettled},
+		{outputruntime.FilesystemOutputRuntimeAmbiguous, FilesystemOutputRuntimeAmbiguous},
+		{outputruntime.FilesystemOutputRuntimeDraining, FilesystemOutputRuntimeDraining},
+		{outputruntime.FilesystemOutputRuntimeClosed, FilesystemOutputRuntimeClosed},
+		{outputruntime.FilesystemOutputRuntimeSucceeded, FilesystemOutputRuntimeSucceeded},
+		{outputruntime.FilesystemOutputRuntimeReconciled, FilesystemOutputRuntimeReconciled},
+		{outputruntime.FilesystemOutputRuntimeCollision, FilesystemOutputRuntimeCollision},
+		{outputruntime.FilesystemOutputRuntimeNoChange, FilesystemOutputRuntimeNoChange},
+		{outputruntime.FilesystemOutputRuntimeNeedsAttention, FilesystemOutputRuntimeNeedsAttention},
+		{outputruntime.FilesystemOutputRuntimeIsolatedFailure, FilesystemOutputRuntimeIsolatedFailure},
+	}
+	for _, test := range runtimeDecisions {
+		if actual := projectRuntimeDecision(test.value); actual != test.want {
+			t.Fatalf("runtime decision %d projected as %d, want %d", test.value, actual, test.want)
+		}
 	}
 
-	for _, test := range []struct {
+	certifications := []struct {
 		value outputruntime.FilesystemOutputCertificationID
 		want  FilesystemOutputCertificationID
 	}{
 		{outputruntime.FilesystemOutputCertificationLinuxExt4ProcessRestart, FilesystemOutputCertificationLinuxExt4ProcessRestart},
 		{outputruntime.FilesystemOutputCertificationWindowsNTFSProcessRestart, FilesystemOutputCertificationWindowsNTFSProcessRestart},
-	} {
-		if got := projectCertification(test.value); got != test.want {
-			t.Errorf("certification %q = %q, want %q", test.value, got, test.want)
+	}
+	for _, test := range certifications {
+		if actual := projectCertification(test.value); actual != test.want {
+			t.Fatalf("certification %q projected as %q, want %q", test.value, actual, test.want)
 		}
 	}
-	if got := projectCertification("unknown"); got != "" {
-		t.Fatalf("unknown certification = %q, want empty", got)
-	}
 
-	for _, test := range []struct {
-		value outputruntime.FilesystemOutputStateInstallStage
-		want  FilesystemOutputStateInstallStage
-	}{
-		{outputruntime.FilesystemOutputStateCreate, FilesystemOutputStateCreate},
-		{outputruntime.FilesystemOutputStateReplace, FilesystemOutputStateReplace},
-	} {
-		if got := projectStateInstallStage(test.value); got != test.want {
-			t.Errorf("state install stage %d = %d, want %d", test.value, got, test.want)
-		}
+	if actual := projectNativeLockScope(outputruntime.FilesystemOutputNativeLockSession); actual != FilesystemOutputNativeLockSession {
+		t.Fatalf("native lock scope projected as %d", actual)
 	}
-	if got := projectStateInstallStage(0xff); got != 0 {
-		t.Fatalf("unknown state install stage = %d, want zero", got)
-	}
-
-	for _, test := range []struct {
-		value outputruntime.FilesystemOutputAncestryBoundary
-		want  FilesystemOutputAncestryBoundary
-	}{
-		{outputruntime.FilesystemOutputAncestryAdmission, FilesystemOutputAncestryAdmission},
-		{outputruntime.FilesystemOutputAncestryRestart, FilesystemOutputAncestryRestart},
-		{outputruntime.FilesystemOutputAncestryBeginFile, FilesystemOutputAncestryBeginFile},
-		{outputruntime.FilesystemOutputAncestryRecovery, FilesystemOutputAncestryRecovery},
-		{outputruntime.FilesystemOutputAncestryPublicationPre, FilesystemOutputAncestryPublicationPre},
-		{outputruntime.FilesystemOutputAncestryPublicationPost, FilesystemOutputAncestryPublicationPost},
-		{outputruntime.FilesystemOutputAncestryDirectoryFinalize, FilesystemOutputAncestryDirectoryFinalize},
-		{outputruntime.FilesystemOutputAncestrySessionFinalize, FilesystemOutputAncestrySessionFinalize},
-	} {
-		if got := projectAncestryBoundary(test.value); got != test.want {
-			t.Errorf("ancestry boundary %d = %d, want %d", test.value, got, test.want)
-		}
-	}
-	if got := projectAncestryBoundary(0xff); got != 0 {
-		t.Fatalf("unknown ancestry boundary = %d, want zero", got)
-	}
-
-	for _, test := range []struct {
-		value outputruntime.FilesystemOutputAncestryDecision
-		want  FilesystemOutputAncestryDecision
-	}{
-		{outputruntime.FilesystemOutputAncestryPrepared, FilesystemOutputAncestryPrepared},
-		{outputruntime.FilesystemOutputAncestryMatched, FilesystemOutputAncestryMatched},
-		{outputruntime.FilesystemOutputAncestryMismatch, FilesystemOutputAncestryMismatch},
-		{outputruntime.FilesystemOutputAncestryAuthorityDenied, FilesystemOutputAncestryAuthorityDenied},
-		{outputruntime.FilesystemOutputAncestryStructuralUnsafe, FilesystemOutputAncestryStructuralUnsafe},
-	} {
-		if got := projectAncestryDecision(test.value); got != test.want {
-			t.Errorf("ancestry decision %d = %d, want %d", test.value, got, test.want)
-		}
-	}
-	if got := projectAncestryDecision(0xff); got != 0 {
-		t.Fatalf("unknown ancestry decision = %d, want zero", got)
-	}
-
-	for _, test := range []struct {
-		value outputruntime.FilesystemOutputNativeLockScope
-		want  FilesystemOutputNativeLockScope
-	}{
-		{outputruntime.FilesystemOutputNativeLockCoordinator, FilesystemOutputNativeLockCoordinator},
-		{outputruntime.FilesystemOutputNativeLockSession, FilesystemOutputNativeLockSession},
-	} {
-		if got := projectNativeLockScope(test.value); got != test.want {
-			t.Errorf("native lock scope %d = %d, want %d", test.value, got, test.want)
-		}
-	}
-	if got := projectNativeLockScope(0xff); got != 0 {
-		t.Fatalf("unknown native lock scope = %d, want zero", got)
-	}
-
-	for _, test := range []struct {
+	lockMilestones := []struct {
 		value outputruntime.FilesystemOutputNativeLockMilestone
 		want  FilesystemOutputNativeLockMilestone
 	}{
@@ -197,53 +137,82 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 		{outputruntime.FilesystemOutputNativeLockAcquireFailed, FilesystemOutputNativeLockAcquireFailed},
 		{outputruntime.FilesystemOutputNativeLockReleased, FilesystemOutputNativeLockReleased},
 		{outputruntime.FilesystemOutputNativeLockReleaseReportedFailure, FilesystemOutputNativeLockReleaseReportedFailure},
-	} {
-		if got := projectNativeLockMilestone(test.value); got != test.want {
-			t.Errorf("native lock milestone %d = %d, want %d", test.value, got, test.want)
+	}
+	for _, test := range lockMilestones {
+		if actual := projectNativeLockMilestone(test.value); actual != test.want {
+			t.Fatalf("lock milestone %d projected as %d, want %d", test.value, actual, test.want)
 		}
 	}
-	if got := projectNativeLockMilestone(0xff); got != 0 {
-		t.Fatalf("unknown native lock milestone = %d, want zero", got)
+
+	if projectTraceOperation(255) != 0 || projectRootOpenDisposition("unknown") != "" ||
+		projectRuntimeComponent(255) != 0 || projectRuntimeOperation(255) != 0 ||
+		projectRuntimeDecision(255) != 0 || projectCertification("unknown") != "" ||
+		projectNativeLockScope(255) != 0 || projectNativeLockMilestone(255) != 0 {
+		t.Fatal("unknown internal trace values crossed the public projection")
 	}
 }
 
-func TestOutputTraceProjectionCopiesPayloadAndLifecycleValues(t *testing.T) {
+func TestOutputTraceProjectionCopiesNativeRuntimePayload(t *testing.T) {
 	event := outputruntime.FilesystemOutputTrace{
-		Operation:    outputruntime.TraceAncestryValidation,
-		IntentDigest: transfer.TransferIntentDigest{1}, SessionID: transfer.OutputSessionID{2},
-		LocatorDigest: transfer.OutputLocatorDigest{3}, OutputObjectID: transfer.OutputObjectIdentity{4},
-		PreviousPhase:          outputruntime.FilesystemOutputFileWitnessed,
-		NextPhase:              outputruntime.FilesystemOutputFilePublished,
-		RecoveryAction:         outputruntime.FilesystemOutputRecoveryInstallPublished,
-		FileSettlementBoundary: outputruntime.FilesystemOutputSettlementCommit,
-		Certification:          outputruntime.FilesystemOutputCertificationWindowsNTFSProcessRestart,
-		StateGeneration:        9, StateInstallStage: outputruntime.FilesystemOutputStateReplace,
-		OutputAncestryDigest: outputruntime.FilesystemOutputAncestryDigest{5},
-		AncestryBoundary:     outputruntime.FilesystemOutputAncestrySessionFinalize,
-		AncestryDecision:     outputruntime.FilesystemOutputAncestryMatched,
-		AncestryClaimCount:   7, NativeLockScope: outputruntime.FilesystemOutputNativeLockSession,
-		NativeLockMilestone:     outputruntime.FilesystemOutputNativeLockReleased,
-		MutationReportedFailure: true, ParentSyncReportedFailure: true, Failed: true,
+		Operation:              outputruntime.TraceRuntimeDecision,
+		IntentDigest:           transfer.TransferIntentDigest{1},
+		SessionID:              transfer.OutputSessionID{2},
+		Certification:          outputruntime.FilesystemOutputCertificationLinuxExt4ProcessRestart,
+		NativeLockScope:        outputruntime.FilesystemOutputNativeLockSession,
+		NativeLockMilestone:    outputruntime.FilesystemOutputNativeLockAcquired,
+		RootOpenDisposition:    outputruntime.FilesystemOutputAuthorityCreatedRoot,
+		RuntimeComponent:       outputruntime.FilesystemOutputRuntimeFile,
+		RuntimeOperation:       outputruntime.FilesystemOutputRuntimeCheckpointFile,
+		RuntimeDecision:        outputruntime.FilesystemOutputRuntimeReconciled,
+		OperationID:            3,
+		ClaimID:                4,
+		FaultDomain:            5,
+		NormalizedFaultScope:   6,
+		NormalizedFaultCode:    7,
+		NodeClaimCount:         8,
+		DirectoryClaimCount:    9,
+		FileClaimCount:         10,
+		ActiveFileClaimCount:   11,
+		ReservedFileSlotCount:  12,
+		DirectoryMetadataBytes: 13,
+		CheckpointRecordCount:  14,
+		Failed:                 true,
 	}
-	projected := projectFilesystemOutputTrace(event)
-	if projected.Operation != TraceAncestryValidation || projected.IntentDigest != (transfer.TransferIntentDigest{1}) ||
-		projected.SessionID != (transfer.OutputSessionID{2}) || projected.LocatorDigest != (transfer.OutputLocatorDigest{3}) ||
-		projected.OutputObjectID != (transfer.OutputObjectIdentity{4}) || projected.PreviousPhase != FilesystemOutputFileWitnessed ||
-		projected.NextPhase != FilesystemOutputFilePublished || projected.RecoveryAction != FilesystemOutputRecoveryInstallPublished ||
-		projected.FileSettlementBoundary != FilesystemOutputSettlementCommit || projected.Certification != FilesystemOutputCertificationWindowsNTFSProcessRestart ||
-		projected.StateGeneration != 9 || projected.StateInstallStage != FilesystemOutputStateReplace ||
-		projected.OutputAncestryDigest[0] != 5 || projected.AncestryBoundary != FilesystemOutputAncestrySessionFinalize ||
-		projected.AncestryDecision != FilesystemOutputAncestryMatched || projected.AncestryClaimCount != 7 ||
-		projected.NativeLockScope != FilesystemOutputNativeLockSession || projected.NativeLockMilestone != FilesystemOutputNativeLockReleased ||
-		!projected.MutationReportedFailure || !projected.ParentSyncReportedFailure || !projected.Failed {
-		t.Fatalf("projection lost payload: %+v", projected)
+	want := FilesystemOutputTrace{
+		Operation:              TraceRuntimeDecision,
+		IntentDigest:           event.IntentDigest,
+		SessionID:              event.SessionID,
+		Certification:          FilesystemOutputCertificationLinuxExt4ProcessRestart,
+		NativeLockScope:        FilesystemOutputNativeLockSession,
+		NativeLockMilestone:    FilesystemOutputNativeLockAcquired,
+		RootOpenDisposition:    FilesystemOutputAuthorityCreatedRoot,
+		RuntimeComponent:       FilesystemOutputRuntimeFile,
+		RuntimeOperation:       FilesystemOutputRuntimeCheckpointFile,
+		RuntimeDecision:        FilesystemOutputRuntimeReconciled,
+		OperationID:            3,
+		ClaimID:                4,
+		FaultDomain:            5,
+		NormalizedFaultScope:   6,
+		NormalizedFaultCode:    7,
+		NodeClaimCount:         8,
+		DirectoryClaimCount:    9,
+		FileClaimCount:         10,
+		ActiveFileClaimCount:   11,
+		ReservedFileSlotCount:  12,
+		DirectoryMetadataBytes: 13,
+		CheckpointRecordCount:  14,
+		Failed:                 true,
+	}
+	if actual := projectFilesystemOutputTrace(event); actual != want {
+		t.Fatalf("projected trace = %+v, want %+v", actual, want)
 	}
 
-	var captured FilesystemOutputTrace
-	outputRuntimeTracer{target: FilesystemOutputTraceFunc(func(value FilesystemOutputTrace) { captured = value })}.
-		TraceFilesystemOutput(event)
-	if captured != projected {
-		t.Fatalf("tracer captured %+v, want %+v", captured, projected)
+	var observed FilesystemOutputTrace
+	outputRuntimeTracer{target: FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+		observed = event
+	})}.TraceFilesystemOutput(event)
+	if observed != want {
+		t.Fatalf("tracer payload = %+v, want %+v", observed, want)
 	}
 	outputRuntimeTracer{}.TraceFilesystemOutput(event)
 }

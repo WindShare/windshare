@@ -1,21 +1,29 @@
 import {
   DIRECTORY_ADMISSION_SECRET_BYTES,
   DirectoryAdmissionBindingError,
-  OutputBudgetExceededError,
   createDirectoryAdmission,
   createDirectoryAdmissionSecret,
+  finalizedDirectorySettlement,
   isImmediateChildPath,
-  sameModifiedTime,
+  isolatedDirectorySettlement,
+  sameDirectoryAdmission,
   sameOutputPath,
+  snapshotDirectoryAdmission,
+  snapshotDirectoryAdmissionScope,
   snapshotOutputDirectoryAdmission,
-  snapshotOutputDirectory,
-  snapshotOutputFile,
   validateDirectoryAdmissionBinding,
   type DirectoryAdmission,
+  type DirectoryAdmissionScope,
+  type DirectorySettlement,
   type OutputDirectoryAdmission,
-  type OutputDirectory,
+} from './directory-admission'
+import {
+  OutputBudgetExceededError,
+  OutputDirectoryMutationError,
   type OutputFile,
+  snapshotOutputFile,
 } from './output-session'
+import { FaultScope, OutputFaultCode, outputFault } from './fault'
 
 export const MAXIMUM_OUTPUT_DIRECTORY_ADMISSIONS = 1_000_000
 export const MAXIMUM_OUTPUT_DIRECTORY_ADMISSION_BYTES = 64 * 1024 * 1024
@@ -33,22 +41,44 @@ export type DirectoryAdmissionMaterializer = (
   signal: AbortSignal,
 ) => Promise<void>
 
+interface DirectoryClaim {
+  readonly key: string
+  readonly request: OutputDirectoryAdmission
+  readonly admission: DirectoryAdmission
+  readonly parent: DirectoryClaim | undefined
+  state: 'admitted' | 'settling' | 'settled'
+  activeDescendants: number
+  directUnsettledChildren: number
+  change: ClaimChange
+  settlement?: DirectorySettlement
+}
+
+interface ClaimChange {
+  readonly promise: Promise<void>
+  readonly resolve: () => void
+}
+
+export interface DirectoryFileMutationLease {
+  readonly file: OutputFile
+  release(): void
+}
+
 /** Owns bounded, session-local catalog-generation authority for every output backend. */
 export class DirectoryAdmissionLedger {
+  readonly #scope: DirectoryAdmissionScope
   readonly #admissionSecret: Uint8Array<ArrayBuffer>
-  readonly #admissions = new Map<string, DirectoryAdmission>()
-  readonly #admissionsByToken = new Map<
-    string,
-    { readonly key: string; readonly admission: DirectoryAdmission }
-  >()
+  readonly #claimsByKey = new Map<string, DirectoryClaim>()
+  readonly #claimsByToken = new Map<string, DirectoryClaim>()
   readonly #pendingAdmissions = new Map<string, Promise<DirectoryAdmission>>()
+  readonly #pendingFinalizations = new Map<string, Promise<DirectorySettlement>>()
   readonly #bindingByDirectory = new Map<string, string>()
   readonly #bindingByPath = new Map<string, string>()
   readonly #maximumAdmissions: number
   readonly #maximumMetadataBytes: number
   #reservedMetadataBytes = 0
 
-  constructor(options: DirectoryAdmissionLedgerOptions = {}) {
+  constructor(scope: DirectoryAdmissionScope, options: DirectoryAdmissionLedgerOptions = {}) {
+    this.#scope = snapshotDirectoryAdmissionScope(scope)
     this.#admissionSecret = options.secret === undefined
       ? createDirectoryAdmissionSecret()
       : admissionSecret(options.secret)
@@ -71,15 +101,23 @@ export class DirectoryAdmissionLedger {
   ): Promise<DirectoryAdmission> {
     signal.throwIfAborted()
     const request = snapshotOutputDirectoryAdmission(input)
-    this.#validateParent(request)
+    const parent = this.#validateParent(request)
     const key = admissionKey(request)
-    const reservation = this.#reserveBinding(request, key)
-    const existing = this.#admissions.get(key)
-    if (existing !== undefined) return existing
+    const existing = this.#claimsByKey.get(key)
+    if (existing !== undefined) return existing.admission
     const pending = this.#pendingAdmissions.get(key)
     if (pending !== undefined) return pending
 
-    const operation = this.#admit(request, key, signal, materialize)
+    const reservation = this.#reserveBinding(request, key)
+    let mutation: { release(): void }
+    try {
+      mutation = this.#beginDescendantMutation(parent, false)
+    } catch (error) {
+      this.#releaseBindingReservation(reservation)
+      throw error
+    }
+
+    const operation = this.#admit(request, key, parent, signal, materialize)
     this.#pendingAdmissions.set(key, operation)
     try {
       return await operation
@@ -87,6 +125,7 @@ export class DirectoryAdmissionLedger {
       this.#releaseBindingReservation(reservation)
       throw error
     } finally {
+      mutation.release()
       if (this.#pendingAdmissions.get(key) === operation) this.#pendingAdmissions.delete(key)
     }
   }
@@ -94,15 +133,17 @@ export class DirectoryAdmissionLedger {
   async #admit(
     request: OutputDirectoryAdmission,
     key: string,
+    parent: DirectoryClaim | undefined,
     signal: AbortSignal,
     materialize?: DirectoryAdmissionMaterializer,
   ): Promise<DirectoryAdmission> {
     signal.throwIfAborted()
     const admission = validateDirectoryAdmissionBinding(
+      this.#scope,
       request,
-      await createDirectoryAdmission(request, this.#admissionSecret),
+      await createDirectoryAdmission(this.#admissionSecret, this.#scope, request),
     )
-    const tokenOwner = this.#admissionsByToken.get(admission.token)
+    const tokenOwner = this.#claimsByToken.get(admission.token)
     if (tokenOwner !== undefined && tokenOwner.key !== key) {
       throw new DirectoryAdmissionBindingError(
         'output session reused a directory admission token for a different binding',
@@ -113,24 +154,39 @@ export class DirectoryAdmissionLedger {
     await materialize?.(request, signal)
     // Materialization is the commit point. A late cancellation stops future
     // orchestration but cannot erase the proof for state the backend accepted.
-    this.#admissions.set(key, admission)
-    this.#admissionsByToken.set(admission.token, { key, admission })
+    const claim: DirectoryClaim = {
+      key,
+      request,
+      admission,
+      parent,
+      state: 'admitted',
+      activeDescendants: 0,
+      directUnsettledChildren: 0,
+      change: claimChange(),
+    }
+    this.#claimsByKey.set(key, claim)
+    this.#claimsByToken.set(admission.token, claim)
+    if (parent !== undefined) {
+      parent.directUnsettledChildren += 1
+      this.#notify(parent)
+    }
     return admission
   }
 
-  #validateParent(request: OutputDirectoryAdmission): void {
-    if (request.parentAdmission === undefined) return
-    const parent = this.#admissionsByToken.get(request.parentAdmission.token)?.admission
-    if (parent === undefined || !sameDirectoryAdmission(parent, request.parentAdmission)) {
+  #validateParent(request: OutputDirectoryAdmission): DirectoryClaim | undefined {
+    if (request.parentAdmission === undefined) return undefined
+    const parent = this.#claimsByToken.get(request.parentAdmission.token)
+    if (parent === undefined || !sameDirectoryAdmission(parent.admission, request.parentAdmission)) {
       throw new DirectoryAdmissionBindingError(
         'directory admission parent was not admitted by this output session',
       )
     }
-    if (!isImmediateChildPath(parent.path, request.path)) {
+    if (!isImmediateChildPath(parent.admission.path, request.path)) {
       throw new DirectoryAdmissionBindingError(
         'directory admission path is not an immediate child of its admitted parent',
       )
     }
+    return parent
   }
 
   #reserveBinding(request: OutputDirectoryAdmission, key: string): {
@@ -162,7 +218,7 @@ export class DirectoryAdmissionLedger {
     readonly pathKey: string
     readonly metadataBytes: number
   }): void {
-    if (!reservation.fresh || this.#admissions.has(reservation.key)) return
+    if (!reservation.fresh || this.#claimsByKey.has(reservation.key)) return
     for (const [directoryId, key] of this.#bindingByDirectory) {
       if (key === reservation.key) this.#bindingByDirectory.delete(directoryId)
     }
@@ -192,38 +248,223 @@ export class DirectoryAdmissionLedger {
 
   validateFileParent(file: OutputFile): OutputFile {
     const snapshot = snapshotOutputFile(file)
-    const parentAdmission = snapshot.parentAdmission
-    const parent = parentAdmission === undefined
-      ? undefined
-      : this.#admissionsByToken.get(parentAdmission.token)?.admission
-    if (parent === undefined || parentAdmission === undefined ||
-        !sameDirectoryAdmission(parent, parentAdmission) ||
-        !sameOutputPath(parent.path, snapshot.path.slice(0, -1))) {
-      throw new DirectoryAdmissionBindingError(
-        'output file references a missing, forged, or mismatched parent admission',
-      )
-    }
+    this.#fileParent(snapshot, true)
     return snapshot
   }
 
-  validateDirectoryFinalization(input: OutputDirectory): OutputDirectory {
-    const directory = snapshotOutputDirectory(input)
-    this.#validateParent(directory)
-    const admitted = this.#admissions.get(admissionKey(directory))
-    if (admitted === undefined) {
+  acquireFileMutation(file: OutputFile): DirectoryFileMutationLease {
+    const snapshot = snapshotOutputFile(file)
+    const parent = this.#fileParent(snapshot, true)
+    const mutation = this.#beginDescendantMutation(parent, false)
+    let released = false
+    return Object.freeze({
+      file: snapshot,
+      release: () => {
+        if (released) return
+        released = true
+        mutation.release()
+      },
+    })
+  }
+
+  finalizeDirectory(
+    input: DirectoryAdmission,
+    signal: AbortSignal,
+    finalize?: DirectoryAdmissionMaterializer,
+    closing?: AbortSignal,
+  ): Promise<DirectorySettlement> {
+    const claim = this.#claimForAdmission(input)
+    if (claim.settlement !== undefined) return Promise.resolve(claim.settlement)
+    const pending = this.#pendingFinalizations.get(claim.key)
+    if (pending !== undefined) return pending
+    signal.throwIfAborted()
+    if (claim.state === 'settled') {
       throw new DirectoryAdmissionBindingError(
-        'output directory finalization references an unadmitted or rebound generation',
+        'settled directory claim is missing its terminal settlement',
       )
     }
-    validateDirectoryAdmissionBinding(directory, admitted)
-    return directory
+
+    // Sealing is synchronous with receipt validation. No descendant call can
+    // slip through the first await and gain authority behind finalization.
+    claim.state = 'settling'
+    this.#notify(claim)
+    const mutation = this.#beginDescendantMutation(claim.parent, true)
+    const operation = this.#finalize(claim, signal, finalize, closing)
+    this.#pendingFinalizations.set(claim.key, operation)
+    operation.finally(() => {
+      mutation.release()
+      if (this.#pendingFinalizations.get(claim.key) === operation) {
+        this.#pendingFinalizations.delete(claim.key)
+      }
+    }).catch(() => undefined)
+    return operation
+  }
+
+  async #finalize(
+    claim: DirectoryClaim,
+    signal: AbortSignal,
+    finalize?: DirectoryAdmissionMaterializer,
+    closing?: AbortSignal,
+  ): Promise<DirectorySettlement> {
+    await this.#waitForDescendantDrain(claim, signal, closing)
+    if (claim.directUnsettledChildren !== 0) {
+      throw new DirectoryAdmissionBindingError(
+        'directory finalization requires every direct child directory to be settled',
+      )
+    }
+    let settlement: DirectorySettlement
+    try {
+      await finalize?.(claim.request, signal)
+      settlement = finalizedDirectorySettlement(claim.admission)
+    } catch (error) {
+      if (!(error instanceof OutputDirectoryMutationError) || error.sessionCompromised) throw error
+      settlement = isolatedDirectorySettlement(
+        claim.admission,
+        outputFault(FaultScope.DirectoryLocal, OutputFaultCode.DirectoryMetadata),
+      )
+    }
+    if (claim.parent !== undefined) {
+      if (claim.parent.directUnsettledChildren <= 0) {
+        throw new DirectoryAdmissionBindingError(
+          'directory settlement violated its parent child-settlement invariant',
+        )
+      }
+      claim.parent.directUnsettledChildren -= 1
+      this.#notify(claim.parent)
+    }
+    claim.state = 'settled'
+    claim.settlement = settlement
+    this.#notify(claim)
+    return settlement
+  }
+
+  async #waitForDescendantDrain(
+    claim: DirectoryClaim,
+    signal: AbortSignal,
+    closing: AbortSignal | undefined,
+  ): Promise<void> {
+    while (claim.activeDescendants !== 0) {
+      await waitForClaimChange(claim.change.promise, signal, closing)
+    }
+  }
+
+  #fileParent(file: OutputFile, requireMutable: boolean): DirectoryClaim {
+    const parentAdmission = file.parentAdmission
+    const parent = parentAdmission === undefined
+      ? undefined
+      : this.#claimsByToken.get(parentAdmission.token)
+    if (parent === undefined || parentAdmission === undefined ||
+        !sameDirectoryAdmission(parent.admission, parentAdmission) ||
+        !sameOutputPath(parent.admission.path, file.path.slice(0, -1))) {
+      throw new DirectoryAdmissionBindingError(
+        'output file references a missing, forged, or mismatched parent admission, or its parent is sealed',
+      )
+    }
+    if (requireMutable) {
+      for (let ancestor: DirectoryClaim | undefined = parent;
+        ancestor !== undefined;
+        ancestor = ancestor.parent) {
+        if (ancestor.state !== 'admitted') {
+          throw new DirectoryAdmissionBindingError(
+            'output file references a missing, forged, or mismatched parent admission, or its parent is sealed',
+          )
+        }
+      }
+    }
+    return parent
+  }
+
+  #beginDescendantMutation(
+    parent: DirectoryClaim | undefined,
+    allowSettling: boolean,
+  ): { release(): void } {
+    const ancestors: DirectoryClaim[] = []
+    for (let ancestor = parent; ancestor !== undefined; ancestor = ancestor.parent) {
+      if (ancestor.state !== 'admitted' && !(allowSettling && ancestor.state === 'settling')) {
+        throw new DirectoryAdmissionBindingError(
+          'directory descendant mutation references a sealed or settled admission',
+        )
+      }
+      ancestors.push(ancestor)
+    }
+    for (const ancestor of ancestors) {
+      ancestor.activeDescendants += 1
+      this.#notify(ancestor)
+    }
+    let released = false
+    return {
+      release: () => {
+        if (released) return
+        released = true
+        for (const ancestor of ancestors) {
+          ancestor.activeDescendants -= 1
+          this.#notify(ancestor)
+        }
+      },
+    }
+  }
+
+  #notify(claim: DirectoryClaim): void {
+    const previous = claim.change
+    claim.change = claimChange()
+    previous.resolve()
+  }
+
+  #claimForAdmission(input: DirectoryAdmission): DirectoryClaim {
+    const admission = snapshotDirectoryAdmission(input)
+    const claim = this.#claimsByToken.get(admission.token)
+    if (claim === undefined || !sameDirectoryAdmission(claim.admission, admission)) {
+      throw new DirectoryAdmissionBindingError(
+        'directory finalization references a forged or foreign admission',
+      )
+    }
+    validateDirectoryAdmissionBinding(this.#scope, claim.request, admission)
+    return claim
+  }
+}
+
+function claimChange(): ClaimChange {
+  let resolve = (): void => undefined
+  const promise = new Promise<void>((complete) => { resolve = complete })
+  return { promise, resolve }
+}
+
+async function waitForClaimChange(
+  changed: Promise<void>,
+  signal: AbortSignal,
+  closing: AbortSignal | undefined,
+): Promise<void> {
+  signal.throwIfAborted()
+  closing?.throwIfAborted()
+  const abort = abortPromise(signal)
+  const close = closing === undefined ? undefined : abortPromise(closing)
+  try {
+    await Promise.race(close === undefined ? [changed, abort.promise] : [changed, abort.promise, close.promise])
+  } finally {
+    abort.detach()
+    close?.detach()
+  }
+}
+
+function abortPromise(signal: AbortSignal): { readonly promise: Promise<never>; readonly detach: () => void } {
+  let rejectPromise: ((reason: unknown) => void) | undefined
+  const onAbort = (): void => rejectPromise?.(signal.reason ?? new DOMException('Operation aborted', 'AbortError'))
+  const promise = new Promise<never>((_resolve, reject) => {
+    rejectPromise = reject
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  if (signal.aborted) onAbort()
+  return {
+    promise,
+    detach: () => signal.removeEventListener('abort', onAbort),
   }
 }
 
 function admissionSecret(value: Uint8Array<ArrayBufferLike>): Uint8Array<ArrayBuffer> {
-  if (!(value instanceof Uint8Array) || value.byteLength !== DIRECTORY_ADMISSION_SECRET_BYTES) {
+  if (!(value instanceof Uint8Array) || value.byteLength !== DIRECTORY_ADMISSION_SECRET_BYTES ||
+      value.every((byte) => byte === 0)) {
     throw new DirectoryAdmissionBindingError(
-      `directory admission secret must be exactly ${DIRECTORY_ADMISSION_SECRET_BYTES} bytes`,
+      `directory admission secret must be a non-zero ${DIRECTORY_ADMISSION_SECRET_BYTES}-byte value`,
     )
   }
   return Uint8Array.from(value)
@@ -257,15 +498,6 @@ function admissionKey(input: OutputDirectoryAdmission): string {
     input.parentAdmission?.token ?? null,
     modifiedTimeKey(input),
   ])
-}
-
-function sameDirectoryAdmission(left: DirectoryAdmission, right: DirectoryAdmission): boolean {
-  return left.token === right.token &&
-    left.directoryId === right.directoryId &&
-    left.generation === right.generation &&
-    sameOutputPath(left.path, right.path) &&
-    left.parentToken === right.parentToken &&
-    sameModifiedTime(left, right)
 }
 
 function modifiedTimeKey(input: OutputDirectoryAdmission): readonly unknown[] | null {

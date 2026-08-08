@@ -8,8 +8,14 @@ import (
 	"slices"
 
 	"github.com/windshare/windshare/core/osfs/internal/checkpointcleaner"
-	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
+)
+
+var (
+	ErrCheckpointCleanerBusy      = errors.New("file checkpoint cleaner is already running")
+	ErrCheckpointCleanerOwnership = errors.New("file checkpoint cleaner cannot prove namespace ownership")
+	ErrCheckpointCleanerState     = errors.New("file checkpoint cleaner state is corrupt")
+	ErrCheckpointCleanerLimit     = errors.New("file checkpoint cleaner inspection limit exceeded")
 )
 
 // Public cleaner projection keeps internal cleanup authority out of the facade.
@@ -29,16 +35,6 @@ const (
 	CheckpointCleanupStatusInProgress
 )
 
-type CheckpointCleanupStep struct {
-	Index        uint32
-	RelativePath string
-	Disposition  CheckpointCleanupDisposition
-}
-type CheckpointCleanupFault func(CheckpointCleanupStep) error
-type OneShotCheckpointCleanerConfig struct {
-	RootPath string
-	Fault    CheckpointCleanupFault
-}
 type CheckpointCleanupEntry struct {
 	RelativePath string
 	Disposition  CheckpointCleanupDisposition
@@ -60,50 +56,6 @@ func (report CheckpointCleanupReport) NeedsAttention() bool {
 	return report.Status == CheckpointCleanupStatusNeedsAttention || len(report.Attention) != 0
 }
 
-type OneShotCheckpointCleaner struct {
-	config OneShotCheckpointCleanerConfig
-}
-
-func internalCleanerConfig(
-	platform outputcap.Platform,
-	config OneShotCheckpointCleanerConfig,
-) checkpointcleaner.OneShotCheckpointCleanerConfig {
-	result := checkpointcleaner.OneShotCheckpointCleanerConfig{
-		Platform: platform, BackendID: transfer.NativeFilesystemOutputBackendID,
-	}
-	if config.Fault != nil {
-		result.Fault = func(step checkpointcleaner.CheckpointCleanupStep) error {
-			return config.Fault(CheckpointCleanupStep{Index: step.Index, RelativePath: step.RelativePath, Disposition: CheckpointCleanupDisposition(step.Disposition)})
-		}
-	}
-	return result
-}
-func NewOneShotCheckpointCleaner(config OneShotCheckpointCleanerConfig) (*OneShotCheckpointCleaner, error) {
-	if config.RootPath == "" || !filepath.IsAbs(config.RootPath) || filepath.Clean(config.RootPath) != config.RootPath {
-		return nil, ErrCheckpointCleanerOwnership
-	}
-	return &OneShotCheckpointCleaner{config: config}, nil
-}
-
-func NewOwnedNamespaceCleaner(config OneShotCheckpointCleanerConfig) (*OneShotCheckpointCleaner, error) {
-	return NewOneShotCheckpointCleaner(config)
-}
-func (cleaner *OneShotCheckpointCleaner) Run(ctx context.Context) (CheckpointCleanupReport, error) {
-	if cleaner == nil {
-		return CheckpointCleanupReport{}, ErrCheckpointCleanerOwnership
-	}
-	platform, err := openNativeOutputPlatform(cleaner.config.RootPath, false)
-	if err != nil {
-		return CheckpointCleanupReport{}, err
-	}
-	defer platform.Close()
-	inner, err := checkpointcleaner.NewOneShotCheckpointCleaner(internalCleanerConfig(platform, cleaner.config))
-	if err != nil {
-		return CheckpointCleanupReport{}, wrapCleanerError(err)
-	}
-	report, err := inner.Run(ctx)
-	return projectCleanupReport(report), wrapCleanerError(err)
-}
 func projectCleanupReport(report checkpointcleaner.CheckpointCleanupReport) CheckpointCleanupReport {
 	result := CheckpointCleanupReport{Status: CheckpointCleanupStatus(report.Status), Complete: report.Complete, Resumed: report.Resumed, Scanned: report.Scanned, Removed: report.Removed, Quarantined: report.Quarantined, Skipped: report.Skipped, Attention: slices.Clone(report.Attention)}
 	result.Entries = make([]CheckpointCleanupEntry, len(report.Entries))
@@ -112,18 +64,35 @@ func projectCleanupReport(report checkpointcleaner.CheckpointCleanupReport) Chec
 	}
 	return result
 }
-func CleanLegacyResumeState(ctx context.Context, root FilesystemResumeRoot) (CheckpointCleanupReport, error) {
-	return RunOneShotCheckpointCleanup(ctx, OneShotCheckpointCleanerConfig{RootPath: root.RootPath})
-}
-func RunOneShotCheckpointCleanup(ctx context.Context, config OneShotCheckpointCleanerConfig) (CheckpointCleanupReport, error) {
-	cleaner, err := NewOneShotCheckpointCleaner(config)
+
+// CleanLegacyResumeState is intentionally the sole native cleanup entry point.
+// Requiring an explicit legacy operation keeps this maintenance path from being
+// mistaken for current checkpoint resume or discard authority.
+func CleanLegacyResumeState(
+	ctx context.Context,
+	root FilesystemResumeRoot,
+) (report CheckpointCleanupReport, resultErr error) {
+	if root.RootPath == "" || !filepath.IsAbs(root.RootPath) || filepath.Clean(root.RootPath) != root.RootPath {
+		return CheckpointCleanupReport{}, ErrCheckpointCleanerOwnership
+	}
+	platform, err := openNativeOutputPlatform(root.RootPath, false)
 	if err != nil {
 		return CheckpointCleanupReport{}, err
 	}
-	return cleaner.Run(ctx)
-}
-func CleanOwnedNamespace(ctx context.Context, config OneShotCheckpointCleanerConfig) (CheckpointCleanupReport, error) {
-	return RunOneShotCheckpointCleanup(ctx, config)
+	if platform == nil {
+		return CheckpointCleanupReport{}, ErrCheckpointCleanerOwnership
+	}
+	defer func() { resultErr = errors.Join(resultErr, platform.Close()) }()
+	cleaner, err := checkpointcleaner.NewOneShotCheckpointCleaner(
+		checkpointcleaner.OneShotCheckpointCleanerConfig{
+			Platform: platform, BackendID: transfer.NativeFilesystemOutputBackendID,
+		},
+	)
+	if err != nil {
+		return CheckpointCleanupReport{}, wrapCleanerError(err)
+	}
+	inner, err := cleaner.Run(ctx)
+	return projectCleanupReport(inner), wrapCleanerError(err)
 }
 func wrapCleanerError(err error) error {
 	if err == nil {

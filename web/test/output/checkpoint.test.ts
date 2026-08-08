@@ -4,8 +4,10 @@ import { describe, expect, it } from 'vitest'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   FILE_CHECKPOINT_CHECKSUM_DOMAIN,
+  FILE_CHECKPOINT_CALLER_PROVIDED_CONTAINER,
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
+  FILE_CHECKPOINT_CERTIFICATION_WINDOWS_NTFS_PROCESS_RESTART,
   FILE_CHECKPOINT_MAX_FILE_SIZE,
   FILE_CHECKPOINT_NAMESPACE,
   FILE_CHECKPOINT_OWNERSHIP_MARKER,
@@ -23,6 +25,7 @@ import {
   decodeFileCheckpointV1,
   encodeFileCheckpointOwnership,
   encodeFileCheckpointV1,
+  newFileCheckpointOwnership,
   newFileCheckpointV1,
   selectVerifiedCheckpoint,
   validateFileCheckpointTransition,
@@ -105,18 +108,31 @@ describe('FileCheckpointV1', () => {
   })
 
   it('encodes and verifies an ownership marker independently of file ranges', () => {
-    const encoded = encodeFileCheckpointOwnership({
-      marker: FILE_CHECKPOINT_OWNERSHIP_MARKER,
-      namespace: FILE_CHECKPOINT_NAMESPACE,
+    const ownership = newFileCheckpointOwnership({
       backend: 'test/native',
-      rootIdentity: encodeBase64Url(root),
+      certification: FILE_CHECKPOINT_CERTIFICATION_WINDOWS_NTFS_PROCESS_RESTART,
+      rootIdentity: root,
+      rootOpenDisposition: FILE_CHECKPOINT_CALLER_PROVIDED_CONTAINER,
     })
+    const encoded = encodeFileCheckpointOwnership(ownership)
     expect(decodeFileCheckpointOwnership(encoded)).toEqual({
       marker: FILE_CHECKPOINT_OWNERSHIP_MARKER,
       namespace: FILE_CHECKPOINT_NAMESPACE,
       backend: 'test/native',
+      certification: FILE_CHECKPOINT_CERTIFICATION_WINDOWS_NTFS_PROCESS_RESTART,
       rootIdentity: encodeBase64Url(root),
+      rootOpenDisposition: FILE_CHECKPOINT_CALLER_PROVIDED_CONTAINER,
     })
+    expect(() => decodeFileCheckpointOwnership(preCertificationOwnershipEnvelope()))
+      .toThrow(/ownership payload/u)
+    expect(() => newFileCheckpointOwnership({
+      ...ownership,
+      certification: 'browser/guessed-certification/v1',
+    })).toThrow(/certification/u)
+    expect(() => newFileCheckpointOwnership({
+      ...ownership,
+      rootOpenDisposition: 'inferred-from-path-existence',
+    })).toThrow(/disposition/u)
     encoded[encoded.length - 1] = (encoded.at(-1) ?? 0) ^ 1
     expect(() => decodeFileCheckpointOwnership(encoded)).toThrow(/checksum/u)
   })
@@ -136,6 +152,30 @@ describe('FileCheckpointV1', () => {
     } as const
     expect(() => newFileCheckpointV1({ ...base, verifiedRanges: [{ start: 0n, end: 8n }, { start: 8n, end: 12n }] })).toThrow()
     expect(() => newFileCheckpointV1({ ...base, verifiedRanges: [{ start: 0n, end: 8n }, { start: 4n, end: 12n }] })).toThrow()
+  })
+
+  it('rejects readable identity inference at the canonical constructor', () => {
+    const base = {
+      transferIntentDigest: intent,
+      fileId,
+      fileRevision: revision,
+      canonicalPath: 'file.bin',
+      exactSize: 0n,
+      backend: 'test/native',
+      rootIdentity: root,
+      ownedOutputObject: object,
+      stateGeneration: 1n,
+      checkpointGeneration: 0n,
+      verifiedRanges: [],
+    } as const
+    expect(() => newFileCheckpointV1({
+      ...base,
+      transferIntentDigest: 'readable-intent',
+    })).toThrow(/32 bytes/u)
+    expect(() => newFileCheckpointV1({
+      ...base,
+      ownedOutputObject: 'readable-object',
+    })).toThrow(/32 bytes/u)
   })
 
   it('fails closed when committed records disagree at one generation', () => {
@@ -249,4 +289,36 @@ describe('FileCheckpointV1', () => {
 
 function bytes(first: number, length: number): Uint8Array<ArrayBuffer> {
   return Uint8Array.from({ length }, (_, index) => (first + index) & 0xff) as Uint8Array<ArrayBuffer>
+}
+
+function preCertificationOwnershipEnvelope(): Uint8Array<ArrayBuffer> {
+  const payload = concat([
+    framed('windshare/file-checkpoint-ownership/v1'),
+    framed(FILE_CHECKPOINT_OWNERSHIP_MARKER),
+    framed(FILE_CHECKPOINT_NAMESPACE),
+    framed('test/native'),
+    root,
+  ])
+  const checksum = createHash('sha256')
+    .update(`${FILE_CHECKPOINT_CHECKSUM_DOMAIN}\0`, 'utf8')
+    .update(payload)
+    .digest()
+  return concat([payload, checksum])
+}
+
+function framed(value: string): Uint8Array<ArrayBuffer> {
+  const encoded = new TextEncoder().encode(value)
+  const length = new Uint8Array(4)
+  new DataView(length.buffer).setUint32(0, encoded.byteLength, false)
+  return concat([length, encoded])
+}
+
+function concat(parts: readonly Uint8Array[]): Uint8Array<ArrayBuffer> {
+  const output = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0))
+  let offset = 0
+  for (const part of parts) {
+    output.set(part, offset)
+    offset += part.byteLength
+  }
+  return output
 }

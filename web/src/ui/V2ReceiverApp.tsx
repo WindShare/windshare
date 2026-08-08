@@ -1,7 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore, type FormEvent } from 'react'
 
 import { PORTABLE_DOWNLOAD_MAXIMUM_BYTES } from '../output/portable/browser-download'
-import type { V2BrowseRow, V2PreviewSnapshot } from './v2-model'
+import type { V2BrowseRow, V2PausedTaskSnapshot, V2PreviewSnapshot } from './v2-model'
 import type { V2ReceiverController } from './v2-controller'
 import {
   completionProgressDescription,
@@ -169,6 +169,47 @@ function PreviewPanel(props: {
   )
 }
 
+function PausedTasksPanel(props: {
+  readonly tasks: readonly V2PausedTaskSnapshot[]
+  readonly controller: V2ReceiverController
+  readonly disabled: boolean
+}) {
+  if (props.tasks.length === 0) return null
+  return (
+    <section className="preview-panel paused-task-panel" aria-label="Resumable transfers">
+      <header><strong>Resumable transfers</strong></header>
+      <ul className="selection-list">
+        {props.tasks.map((task) => (
+          <li key={task.id}>
+            <div className="selection-row">
+              <span className="entry-name">
+                {task.format === 'directory' ? 'Folder transfer' : 'Private staged archive'}
+              </span>
+              <span className="entry-kind">
+                {task.completedFileCount} completed · {task.state}
+              </span>
+              <button
+                type="button"
+                disabled={props.disabled || !task.authorizedForCurrentShare || task.state !== 'ready'}
+                onClick={() => props.controller.resumePausedTask(task.id)}
+              >Resume</button>
+              <button
+                className="abort-action"
+                type="button"
+                disabled={props.disabled || !task.authorizedForCurrentShare || task.state !== 'ready'}
+                onClick={() => props.controller.cancelPausedTask(task.id)}
+              >Cancel</button>
+            </div>
+            {!task.authorizedForCurrentShare && (
+              <small>Open the exact current share before resuming or cancelling this task.</small>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverController }) {
   const snapshot = useSyncExternalStore(
     controller.subscribe,
@@ -177,7 +218,8 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
   )
   const active = snapshot.phase === 'acquiring-output' ||
     snapshot.phase === 'discovering' || snapshot.phase === 'transferring' ||
-    snapshot.phase === 'aborting'
+    snapshot.phase === 'pausing' || snapshot.phase === 'resuming' ||
+    snapshot.phase === 'discarding'
   const selectionLocked = active || snapshot.phase !== 'browsing'
   const status = useRef<HTMLParagraphElement>(null)
   const alert = useRef<HTMLDivElement>(null)
@@ -185,7 +227,8 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
   useEffect(() => {
     if (snapshot.phase === 'failed') alert.current?.focus()
     else if (snapshot.phase === 'completed' || snapshot.phase === 'completed-errors' ||
-      snapshot.phase === 'paused' || snapshot.phase === 'aborted') status.current?.focus()
+      snapshot.phase === 'paused' || snapshot.phase === 'retry-ready' ||
+      snapshot.phase === 'discarded' || snapshot.phase === 'needs-attention') status.current?.focus()
   }, [snapshot.phase])
 
   return (
@@ -223,6 +266,8 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
         )}
 
         {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
+
+        <PausedTasksPanel tasks={snapshot.pausedTasks} controller={controller} disabled={active} />
 
         {snapshot.breadcrumbs.length > 0 && (
           <div className="download-layout">
@@ -330,7 +375,8 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
               </fieldset>
 
               {(active || snapshot.phase === 'completed' || snapshot.phase === 'completed-errors' ||
-                snapshot.phase === 'paused' || snapshot.phase === 'aborted') && (
+                snapshot.phase === 'paused' || snapshot.phase === 'retry-ready' ||
+                snapshot.phase === 'needs-attention') && (
                 <div className="progress-panel">
                   <strong>
                     {completionProgressDescription(snapshot.progress)}
@@ -359,9 +405,9 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
                   onClick={() => controller.startDownload()}
                 >Receive selected</button>
               )}
-              {active && snapshot.phase !== 'aborting' && (
-                <button className="abort-action" type="button" onClick={() => controller.abortDownload()}>
-                  Stop transfer
+              {active && snapshot.phase !== 'pausing' && snapshot.phase !== 'discarding' && (
+                <button className="abort-action" type="button" onClick={() => controller.pauseDownload()}>
+                  Pause transfer
                 </button>
               )}
             </aside>

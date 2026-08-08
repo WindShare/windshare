@@ -20,6 +20,7 @@ import (
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
 func TestAppCommandSurfaceReportsActionableFailures(t *testing.T) {
@@ -259,7 +260,9 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 			name: "directory drift dominates isolated completion",
 			result: transfer.JobResult{
 				Outcome: transfer.JobCompletedWithErrors, Settlement: closed,
-				SourceDriftFailure: catalog.ErrDirectoryStale,
+				SourceDriftFault: mustCLIFault(transferfault.NewCatalog(
+					transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale,
+				)),
 				Directories: []transfer.DirectoryJobFailure{{
 					Path: "stale-directory", Stage: transfer.FailureDirectoryDiscovery, Cause: catalog.ErrDirectoryStale,
 				}},
@@ -270,7 +273,9 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 			name: "file drift dominates isolated completion",
 			result: transfer.JobResult{
 				Outcome: transfer.JobCompletedWithErrors, Settlement: closed,
-				SourceDriftFailure: content.ErrSourceDrift,
+				SourceDriftFault: mustCLIFault(transferfault.NewSource(
+					transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged,
+				)),
 				Files: []transfer.FileJobFailure{{
 					Path: "stale-file", Stage: transfer.FailureRevisionOpen, Cause: content.ErrSourceDrift,
 				}},
@@ -282,7 +287,9 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 			result: transfer.JobResult{
 				Outcome: transfer.JobCompletedWithErrors, Settlement: closed,
 				OmittedFileFailures: transfer.MaximumRetainedJobFailures,
-				SourceDriftFailure:  content.ErrRevisionDrift,
+				SourceDriftFault: mustCLIFault(transferfault.NewSource(
+					transferfault.ScopeFileLocal, transferfault.SourceRevisionInvalidated,
+				)),
 			},
 			wantCode: ExitDrift,
 		},
@@ -296,9 +303,12 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 			name: "session failure dominates racing caller cancellation",
 			result: transfer.JobResult{
 				Outcome: transfer.JobPausedOutcome, Settlement: paused,
-				TerminationCause: transfer.NewSessionFailure(errors.Join(
+				TerminationCause: errors.Join(
 					context.Canceled,
 					errors.New("authenticated runtime failed"),
+				),
+				TerminationFault: mustCLIFault(transferfault.NewSession(
+					transferfault.ScopeSessionTerminal, transferfault.SessionTransport,
 				)),
 			},
 			cancel: true, wantCode: ExitNetwork, wantLogs: []string{"transfer stopped"},
@@ -348,7 +358,10 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 			name: "paused drift precedes terminal transport inspection",
 			result: transfer.JobResult{
 				Outcome: transfer.JobPausedOutcome, Settlement: paused,
-				TerminationCause: content.ErrRevisionStale, SourceDriftFailure: content.ErrRevisionStale,
+				TerminationCause: content.ErrRevisionStale,
+				SourceDriftFault: mustCLIFault(transferfault.NewSource(
+					transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged,
+				)),
 			},
 			wantCode: ExitDrift,
 		},
@@ -430,30 +443,30 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 	}
 }
 
-func TestFilesystemOutputTraceKeepsTheHappyPathQuietAndFailuresStructured(t *testing.T) {
+func TestFilesystemOutputTraceKeepsNativeMilestonesAndFailuresStructured(t *testing.T) {
 	app, _, stderr := newSemanticTestApp(strings.NewReader(""))
+	var intent transfer.TransferIntentDigest
+	intent[0] = 1
 	var session transfer.OutputSessionID
 	session[0] = 2
-	var locator transfer.OutputLocatorDigest
-	locator[0] = 3
-	var object transfer.OutputObjectIdentity
-	object[0] = 4
 
 	for _, event := range []osfs.FilesystemOutputTrace{
 		{Operation: osfs.TraceFilesystemCertified, Certification: osfs.FilesystemOutputCertificationWindowsNTFSProcessRestart},
+		{Operation: osfs.TraceFeatureProbeCompleted},
+		{Operation: osfs.TraceCheckpointNamespaceOpened},
 		{Operation: osfs.TraceSessionOpened, SessionID: session},
+		{Operation: osfs.TraceCheckpointReconciled, CheckpointRecordCount: 2},
 	} {
+		event.IntentDigest = intent
 		app.traceFilesystemOutput(event)
 	}
 	quietAt := stderr.Len()
 	for _, event := range []osfs.FilesystemOutputTrace{
-		{Operation: osfs.TraceFileRecoveryDecision, RecoveryAction: osfs.FilesystemOutputRecoveryRetryObjectCreation},
-		{Operation: osfs.TraceFileSettlement, FileSettlement: transfer.FilePublished},
-		{Operation: osfs.TraceAncestryValidation, AncestryDecision: osfs.FilesystemOutputAncestryMatched},
 		{Operation: osfs.TraceNativeLock, NativeLockMilestone: osfs.FilesystemOutputNativeLockAcquired},
-		{Operation: osfs.TraceFeatureProbeCompleted},
+		{Operation: osfs.TraceRuntimeDecision, RuntimeDecision: osfs.FilesystemOutputRuntimeActive},
+		{Operation: osfs.TraceRuntimeDecision, RuntimeDecision: osfs.FilesystemOutputRuntimeSucceeded},
 	} {
-		event.SessionID, event.LocatorDigest, event.OutputObjectID = session, locator, object
+		event.SessionID, event.IntentDigest = session, intent
 		app.traceFilesystemOutput(event)
 	}
 	if stderr.Len() != quietAt {
@@ -461,31 +474,37 @@ func TestFilesystemOutputTraceKeepsTheHappyPathQuietAndFailuresStructured(t *tes
 	}
 
 	noisy := []osfs.FilesystemOutputTrace{
-		{Operation: osfs.TraceFileRecoveryDecision, RecoveryAction: osfs.FilesystemOutputRecoveryResumeContent},
-		{Operation: osfs.TraceFileRecoveryDecision, RecoveryAction: osfs.FilesystemOutputRecoveryInstallQuarantine, QuarantineReason: transfer.QuarantineOwnershipMismatch},
-		{Operation: osfs.TraceFileRecoveryDecision, RecoveryAction: osfs.FilesystemOutputRecoveryHoldQuarantine, QuarantineReason: transfer.QuarantineStateCorrupt},
-		{Operation: osfs.TraceFileSettlement, FileSettlement: transfer.FileQuarantined, QuarantineReason: transfer.QuarantineOwnershipMismatch},
-		{Operation: osfs.TraceSessionSettlement, JobSettlement: transfer.JobPausedNeedsAttention},
-		{Operation: osfs.TraceStateInstallCutAdopted, StateInstallStage: osfs.FilesystemOutputStateReplace, StateGeneration: 7, MutationReportedFailure: true},
-		{Operation: osfs.TraceAncestryValidation, AncestryBoundary: osfs.FilesystemOutputAncestryRestart, AncestryDecision: osfs.FilesystemOutputAncestryMismatch, AncestryClaimCount: 2, Failed: true},
 		{Operation: osfs.TraceNativeLock, NativeLockScope: osfs.FilesystemOutputNativeLockSession, NativeLockMilestone: osfs.FilesystemOutputNativeLockContended},
-		{Operation: osfs.TraceFeatureProbeCompleted, FailureScope: transfer.OutputFaultRoot, FailureCode: transfer.OutputFaultUnsupportedFilesystem, Failed: true},
+		{Operation: osfs.TraceNativeLock, NativeLockScope: osfs.FilesystemOutputNativeLockSession, NativeLockMilestone: osfs.FilesystemOutputNativeLockAcquireFailed},
+		{
+			Operation:        osfs.TraceRuntimeDecision,
+			RuntimeComponent: osfs.FilesystemOutputRuntimeFile,
+			RuntimeOperation: osfs.FilesystemOutputRuntimeBeginFile,
+			RuntimeDecision:  osfs.FilesystemOutputRuntimeRejected,
+			OperationID:      7, ClaimID: 8,
+			NodeClaimCount: 9, DirectoryClaimCount: 10, FileClaimCount: 11,
+		},
+		{Operation: osfs.TraceRuntimeDecision, RuntimeDecision: osfs.FilesystemOutputRuntimeNeedsAttention},
+		{Operation: osfs.TraceFeatureProbeCompleted, FaultDomain: 2, NormalizedFaultScope: 3, NormalizedFaultCode: 5, Failed: true},
 	}
 	for _, event := range noisy {
-		event.SessionID, event.LocatorDigest, event.OutputObjectID = session, locator, object
+		event.SessionID, event.IntentDigest = session, intent
 		app.traceFilesystemOutput(event)
 	}
 	for _, expected := range []string{
 		"operation=" + strconv.Itoa(int(osfs.TraceFilesystemCertified)),
+		"operation=" + strconv.Itoa(int(osfs.TraceCheckpointNamespaceOpened)),
 		"operation=" + strconv.Itoa(int(osfs.TraceSessionOpened)),
-		"recovery_action=\"resume-content\"", "file_settlement=quarantined",
-		"job_settlement=paused-needs-attention",
-		"state_install_stage=" + strconv.Itoa(int(osfs.FilesystemOutputStateReplace)) + " state_generation=7",
-		"ancestry_boundary=" + strconv.Itoa(int(osfs.FilesystemOutputAncestryRestart)) +
-			" ancestry_decision=" + strconv.Itoa(int(osfs.FilesystemOutputAncestryMismatch)) + " ancestry_claims=2",
+		"operation=" + strconv.Itoa(int(osfs.TraceCheckpointReconciled)),
 		"native_lock_scope=" + strconv.Itoa(int(osfs.FilesystemOutputNativeLockSession)) +
 			" native_lock_milestone=" + strconv.Itoa(int(osfs.FilesystemOutputNativeLockContended)),
-		"failure_scope=3 failure_code=5", "failed=true",
+		"native_lock_milestone=" + strconv.Itoa(int(osfs.FilesystemOutputNativeLockAcquireFailed)),
+		"runtime_component=" + strconv.Itoa(int(osfs.FilesystemOutputRuntimeFile)) +
+			" runtime_operation=" + strconv.Itoa(int(osfs.FilesystemOutputRuntimeBeginFile)) +
+			" runtime_decision=" + strconv.Itoa(int(osfs.FilesystemOutputRuntimeRejected)) +
+			" operation_id=7 claim_id=8",
+		"node_claims=9 directory_claims=10 file_claims=11",
+		"normalized_fault_scope=3 normalized_fault_code=5", "failed=true",
 	} {
 		if !strings.Contains(stderr.String(), expected) {
 			t.Fatalf("trace %q does not contain %q", stderr.String(), expected)

@@ -12,12 +12,18 @@ import (
 
 func TestValidateDirectoryRejectsUnboundShapes(t *testing.T) {
 	intent := testIntent(t)
+	scope, err := transfer.NewDirectoryAdmissionScope(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	generation := testGeneration(t, 0x31)
 	root := transfer.OutputDirectory{
 		DirectoryID: intent.SyntheticRoot(),
 		Generation:  generation,
 	}
-	parent, err := transfer.NewDirectoryAdmissionWithSecret(bytes.Repeat([]byte{0x41}, sha256.Size), root)
+	parent, err := transfer.NewDirectoryAdmissionWithSecret(
+		bytes.Repeat([]byte{0x41}, sha256.Size), scope, root,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +57,11 @@ func TestValidateDirectoryRejectsUnboundShapes(t *testing.T) {
 }
 
 func TestSameDirectoryComparesTheCommittedCatalogIdentity(t *testing.T) {
+	intent := testIntent(t)
+	scope, err := transfer.NewDirectoryAdmissionScope(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	modified, err := catalog.NewModifiedTime(123, 0, catalog.TimePrecisionSeconds)
 	if err != nil {
 		t.Fatal(err)
@@ -62,16 +73,16 @@ func TestSameDirectoryComparesTheCommittedCatalogIdentity(t *testing.T) {
 		ModifiedTime: modified,
 	}
 	parentDirectory := transfer.OutputDirectory{
-		DirectoryID: testDirectoryID(t, 0x54), Generation: testGeneration(t, 0x55),
+		DirectoryID: intent.SyntheticRoot(), Generation: testGeneration(t, 0x55),
 	}
 	firstParent, err := transfer.NewDirectoryAdmissionWithSecret(
-		bytes.Repeat([]byte{0x56}, sha256.Size), parentDirectory,
+		bytes.Repeat([]byte{0x56}, sha256.Size), scope, parentDirectory,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	secondParent, err := transfer.NewDirectoryAdmissionWithSecret(
-		bytes.Repeat([]byte{0x57}, sha256.Size), parentDirectory,
+		bytes.Repeat([]byte{0x57}, sha256.Size), scope, parentDirectory,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -81,13 +92,15 @@ func TestSameDirectoryComparesTheCommittedCatalogIdentity(t *testing.T) {
 		t.Fatal("identical directory commitments did not compare equal")
 	}
 	childAdmission, err := transfer.NewDirectoryAdmissionWithSecret(
-		bytes.Repeat([]byte{0x58}, sha256.Size), directory,
+		bytes.Repeat([]byte{0x58}, sha256.Size), scope, directory,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !bytes.Equal(childAdmission.ParentToken(), firstParent.Bytes()) {
+		t.Fatal("child admission omitted its exact parent token")
+	}
 	projected := directory
-	projected.ParentAdmission = childAdmission.Parent()
 	if !SameDirectory(directory, projected) {
 		t.Fatal("token-only parent projection did not preserve authority equality")
 	}

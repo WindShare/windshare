@@ -107,7 +107,24 @@ assert_contains ".github/workflows/core-release.yml" '- "core-candidate/v*/**"'
 assert_contains ".github/workflows/core-release.yml" 'uses: actions/checkout@v7'
 assert_contains ".github/workflows/core-release.yml" 'uses: actions/setup-go@v7'
 assert_not_contains ".github/workflows/core-release.yml" 'core-candidate/v0.3.0'
-assert_contains "scripts/ci/linux/vet.sh" 'GOWORK=off go build ./...'
+assert_not_contains "scripts/ci/linux/vet.sh" 'GOWORK=off'
+assert_not_contains "scripts/ci/windows/vet.ps1" '$env:GOWORK'
+assert_contains "scripts/ci/linux/root-release-graph.sh" 'GOWORK=off go build ./...'
+assert_contains "scripts/ci/windows/root-release-graph.ps1" '$env:GOWORK'
+assert_contains "scripts/ci/windows/root-release-graph.ps1" 'go build ./...'
+for source_gate in ci ci-full; do
+  source_gate_preview="$(make -n "$source_gate")"
+  if grep -Fq -- 'root-release-graph' <<<"$source_gate_preview"; then
+    fail "make $source_gate includes the published dependency graph"
+  fi
+done
+release_graph_preview="$(make -n root-release-graph)"
+if ! grep -Fq -- 'scripts/ci/linux/root-release-graph.sh' <<<"$release_graph_preview"; then
+  fail "root-release-graph does not dispatch the Linux platform gate"
+fi
+if [ "$(grep -Fc -- 'run: make root-release-graph' .github/workflows/ci.yml)" -ne 2 ]; then
+  fail "ordinary CI must run root-release-graph once on Linux and once on Windows"
+fi
 assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/core-release-ref.tests.sh'
 assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/core-release-ref.sh resolve'
 assert_contains ".github/workflows/core-release.yml" 'run: bash scripts/ci/core-release-ref.sh publish'

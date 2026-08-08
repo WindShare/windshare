@@ -1,9 +1,12 @@
+import { encodeBase64Url } from '../../src/crypto/bytes'
 import type {
+  CheckpointNamespaceBinding,
   OutputCheckpointJournal,
   OutputJournalPage,
   OutputJournalScan,
   PersistedOutputRecord,
 } from '../../src/output/persistence/journal'
+import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence/namespace'
 import {
   OUTPUT_JOURNAL_PAGE_RECORD_LIMIT,
   outputRecordKey,
@@ -14,6 +17,7 @@ import type {
   PersistentOutputTree,
   PersistentTreeFile,
 } from '../../src/output/persistent-tree/contracts'
+import { TEST_DIRECTORY_ADMISSION_SCOPE } from './admission-fixture'
 
 interface MemoryFileNode {
   readonly kind: 'file'
@@ -29,6 +33,12 @@ interface MemoryDirectoryNode {
 }
 
 type MemoryNode = MemoryFileNode | MemoryDirectoryNode
+
+export const MEMORY_CHECKPOINT_BINDING: CheckpointNamespaceBinding = Object.freeze({
+  backend: 'memory-tree',
+  transferIntentDigest: TEST_DIRECTORY_ADMISSION_SCOPE.transferIntentDigest,
+  rootIdentity: fixedTestIdentity(0x72),
+})
 
 export class MemoryOutputTree implements PersistentOutputTree {
   readonly events: string[]
@@ -48,6 +58,8 @@ export class MemoryOutputTree implements PersistentOutputTree {
   removeDirectoryError: unknown
   afterCreateFile: (() => void) | undefined
   afterEnsureDirectory: (() => void) | undefined
+  beforeCreateFile: (() => Promise<void>) | undefined
+  beforeDirectoryModification: (() => Promise<void>) | undefined
 
   constructor(events: string[] = []) {
     this.events = events
@@ -92,6 +104,7 @@ export class MemoryOutputTree implements PersistentOutputTree {
   }
 
   async createFileExclusive(path: readonly string[]): Promise<PersistentTreeFile> {
+    await this.beforeCreateFile?.()
     const key = pathKey(path)
     if (this.#nodes.has(key)) throw new Error('path already exists')
     const node: MemoryFileNode = {
@@ -158,6 +171,7 @@ export class MemoryOutputTree implements PersistentOutputTree {
     identity: string,
     milliseconds: bigint,
   ): Promise<void> {
+    await this.beforeDirectoryModification?.()
     if (!await this.validateDirectory(path, identity)) throw new Error('directory identity changed')
     this.directoryModificationTimes.set(pathKey(path), milliseconds)
   }
@@ -170,6 +184,13 @@ export class MemoryOutputTree implements PersistentOutputTree {
       working: copy,
       durable: copy.slice(),
     })
+  }
+
+  resizeOwnedFile(path: readonly string[], data: Uint8Array): void {
+    const node = this.#nodes.get(pathKey(path))
+    if (node?.kind !== 'file') throw new Error('owned file is unavailable')
+    node.working = data.slice()
+    node.durable = data.slice()
   }
 
   has(path: readonly string[]): boolean {
@@ -219,7 +240,10 @@ export class MemoryOutputTree implements PersistentOutputTree {
   }
 
   #identity(): string {
-    const identity = `memory-${this.#nextIdentity}`
+    const bytes = new Uint8Array(32)
+    bytes[0] = 0xa5
+    new DataView(bytes.buffer).setUint32(28, this.#nextIdentity, false)
+    const identity = encodeBase64Url(bytes)
     this.#nextIdentity += 1
     return identity
   }
@@ -282,6 +306,7 @@ class MemoryTreeFile implements PersistentTreeFile {
 }
 
 export class MemoryOutputJournal implements OutputCheckpointJournal {
+  readonly binding: CheckpointNamespaceBinding
   readonly events: string[]
   readonly #committed = new Map<string, PersistedOutputRecord>()
   #candidates = new Map<string, PersistedOutputRecord>()
@@ -289,8 +314,12 @@ export class MemoryOutputJournal implements OutputCheckpointJournal {
   maximumScanPageRecords = 0
   commitError: unknown
 
-  constructor(events: string[] = []) {
+  constructor(
+    events: string[] = [],
+    binding: CheckpointNamespaceBinding = MEMORY_CHECKPOINT_BINDING,
+  ) {
     this.events = events
+    this.binding = durableCheckpointNamespaceIdentity(binding)
   }
 
   async scanCommitted(scan: OutputJournalScan): Promise<OutputJournalPage> {
@@ -382,6 +411,15 @@ export class MemoryOutputJournal implements OutputCheckpointJournal {
         : {}),
     })
   }
+}
+
+function fixedTestIdentity(first: number): string {
+  const bytes = new Uint8Array(32)
+  bytes[0] = first
+  for (let index = 1; index < bytes.byteLength; index += 1) {
+    bytes[index] = (first + index) & 0xff
+  }
+  return encodeBase64Url(bytes)
 }
 
 export function pathKey(path: readonly string[]): string {

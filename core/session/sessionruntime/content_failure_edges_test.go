@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
 type invalidRevisionRecordOpener struct{}
@@ -102,8 +103,9 @@ func TestRemoteLeaseFailureRemainsFileLocalAndSessionUsable(t *testing.T) {
 		t.Fatal("unknown remote lease renewed")
 	} else {
 		var remote RemoteOperationError
-		var local interface{ IsolatedFileSourceFailure() }
-		if !errors.As(err, &remote) || !errors.As(err, &local) ||
+		value, normalized := boundaryFaultForTest(err)
+		expected, _ := transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceUnavailable)
+		if !errors.As(err, &remote) || !normalized || value != expected ||
 			remote.Failure().Scope() != protocolsession.OperationScopeRevision {
 			t.Fatalf("unknown renew failure=%#v error=%v", remote, err)
 		}
@@ -118,10 +120,12 @@ func TestLiveRevisionBlockFailuresPreserveFileSettlementAuthority(t *testing.T) 
 	for name, test := range map[string]struct {
 		storeError error
 		code       uint16
-		permanent  bool
+		faultCode  transferfault.SourceCode
 	}{
-		"drift":     {storeError: content.ErrRevisionDrift, code: contentflow.RevisionCodeDrift},
-		"not found": {storeError: content.ErrRevisionNotFound, code: contentflow.RevisionCodeNotFound, permanent: true},
+		"drift": {storeError: content.ErrRevisionDrift, code: contentflow.RevisionCodeDrift,
+			faultCode: transferfault.SourceRevisionInvalidated},
+		"not found": {storeError: content.ErrRevisionNotFound, code: contentflow.RevisionCodeNotFound,
+			faultCode: transferfault.SourcePermanent},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fixture := newVerticalFixture(t)
@@ -140,11 +144,12 @@ func TestLiveRevisionBlockFailuresPreserveFileSettlementAuthority(t *testing.T) 
 				transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
 			)
 			var remote RemoteOperationError
-			var isolated interface{ IsolatedPermanentSourceFailure() }
-			if !errors.Is(err, test.storeError) || transfer.IsSessionFailure(err) ||
+			value, normalized := boundaryFaultForTest(err)
+			expected, _ := transferfault.NewSource(transferfault.ScopeFileLocal, test.faultCode)
+			if !errors.Is(err, test.storeError) || isSessionTerminalBoundaryForTest(err) ||
 				!errors.As(err, &remote) || remote.Failure().Scope() != protocolsession.OperationScopeRevision ||
-				remote.Failure().Code() != test.code || errors.As(err, &isolated) != test.permanent {
-				t.Fatalf("live revision error=%v remote=%+v isolated=%t", err, remote, isolated != nil)
+				remote.Failure().Code() != test.code || !normalized || value != expected {
+				t.Fatalf("live revision error=%v remote=%+v fault=%v", err, remote, value)
 			}
 			if _, err := receiver.RequestLane(context.Background(), 0); err != nil {
 				t.Fatalf("file-scoped failure damaged sibling session work: %v", err)

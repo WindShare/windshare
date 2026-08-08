@@ -13,40 +13,40 @@ import (
 func TestLinuxCreateAuthorityRejectsPermissionAndCreateModeInheritance(t *testing.T) {
 	tests := []struct {
 		name      string
-		configure func(*linuxSelectionMetadataHarness, *linuxOutputSystem)
+		configure func(*linuxAuthorityHarness, *linuxOutputSystem)
 		want      error
 	}{
 		{
 			name: "effective access",
-			configure: func(_ *linuxSelectionMetadataHarness, system *linuxOutputSystem) {
+			configure: func(_ *linuxAuthorityHarness, system *linuxOutputSystem) {
 				system.faccessat2 = func(int, string, uint32, int) error { return unix.EACCES }
 			},
 			want: errLinuxOutputUnsafe,
 		},
 		{
 			name: "setgid inheritance",
-			configure: func(harness *linuxSelectionMetadataHarness, _ *linuxOutputSystem) {
+			configure: func(harness *linuxAuthorityHarness, _ *linuxOutputSystem) {
 				harness.directoryMode = uint16(unix.S_IFDIR | unix.S_ISGID | 0o770)
 			},
 			want: errLinuxOutputUnsupported,
 		},
 		{
 			name: "default ACL inheritance",
-			configure: func(_ *linuxSelectionMetadataHarness, system *linuxOutputSystem) {
+			configure: func(_ *linuxAuthorityHarness, system *linuxOutputSystem) {
 				system.fgetxattr = func(int, string, []byte) (int, error) { return 8, nil }
 			},
 			want: errLinuxOutputUnsupported,
 		},
 		{
 			name: "append-only directory",
-			configure: func(_ *linuxSelectionMetadataHarness, system *linuxOutputSystem) {
+			configure: func(_ *linuxAuthorityHarness, system *linuxOutputSystem) {
 				system.getFlags = func(int) (uint32, error) { return linuxFSAppendFlag, nil }
 			},
 			want: errLinuxOutputUnsupported,
 		},
 		{
 			name: "immutable directory",
-			configure: func(_ *linuxSelectionMetadataHarness, system *linuxOutputSystem) {
+			configure: func(_ *linuxAuthorityHarness, system *linuxOutputSystem) {
 				system.getFlags = func(int) (uint32, error) { return linuxFSImmutableFlag, nil }
 			},
 			want: errLinuxOutputUnsupported,
@@ -54,7 +54,7 @@ func TestLinuxCreateAuthorityRejectsPermissionAndCreateModeInheritance(t *testin
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			root, harness := newLinuxSelectionMetadataRoot(t)
+			root, harness := newLinuxAuthorityRoot(t)
 			installLinuxSafeAuthorityHarness(root.system)
 			test.configure(harness, root.system)
 			if err := root.validateCreateAuthority(); !errors.Is(err, test.want) {
@@ -65,7 +65,7 @@ func TestLinuxCreateAuthorityRejectsPermissionAndCreateModeInheritance(t *testin
 }
 
 func TestLinuxCreateAuthorityUsesHandleBoundEffectiveCredentials(t *testing.T) {
-	root, _ := newLinuxSelectionMetadataRoot(t)
+	root, _ := newLinuxAuthorityRoot(t)
 	installLinuxSafeAuthorityHarness(root.system)
 	called := false
 	root.system.faccessat2 = func(fd int, path string, mode uint32, flags int) error {
@@ -85,7 +85,7 @@ func TestLinuxCreateAuthorityUsesHandleBoundEffectiveCredentials(t *testing.T) {
 }
 
 func TestLinuxMetadataAuthorityRequiresExactEffectiveUID(t *testing.T) {
-	root, harness := newLinuxSelectionMetadataRoot(t)
+	root, harness := newLinuxAuthorityRoot(t)
 	installLinuxSafeAuthorityHarness(root.system)
 	harness.ownerUID = 2000
 	root.system.geteuid = func() int { return 1000 }
@@ -99,7 +99,7 @@ func TestLinuxMetadataAuthorityRequiresExactEffectiveUID(t *testing.T) {
 }
 
 func TestLinuxExactPrivateAuthorityRejectsForeignOwnedObjects(t *testing.T) {
-	root, harness := newLinuxSelectionMetadataRoot(t)
+	root, harness := newLinuxAuthorityRoot(t)
 	installLinuxSafeAuthorityHarness(root.system)
 	harness.ownerUID = 2000
 	harness.directoryMode = uint16(unix.S_IFDIR | linuxOutputDirectoryMode)
@@ -133,7 +133,7 @@ func TestLinuxExactPrivateAuthorityRejectsForeignOwnedObjects(t *testing.T) {
 }
 
 func TestLinuxOpenObjectIdentityRequiresOwnerUID(t *testing.T) {
-	root, _ := newLinuxSelectionMetadataRoot(t)
+	root, _ := newLinuxAuthorityRoot(t)
 	originalStatx := root.system.statx
 	root.system.statx = func(fd int, path string, flags int, mask int, stat *unix.Statx_t) error {
 		if err := originalStatx(fd, path, flags, mask, stat); err != nil {

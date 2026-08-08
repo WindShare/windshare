@@ -17,7 +17,10 @@ import (
 
 var updatePeerSignalingVector = flag.Bool("update", false, "regenerate the v2 peer-signaling vector")
 
-const peerSignalingVectorPath = "../../core/testvectors/v2-peer-signaling.json"
+const (
+	peerSignalingVectorPath = "../../core/testvectors/v2-peer-signaling.json"
+	updateVectorsCommand    = "make vectors-update"
+)
 
 type peerSignalingVector struct {
 	SchemaVersion      uint64                   `json:"schemaVersion"`
@@ -94,7 +97,7 @@ func TestPeerSignalingVectorUpToDate(t *testing.T) {
 		t.Fatalf("read peer-signaling vector: %v", err)
 	}
 	if !bytes.Equal(committed, encoded) {
-		t.Fatalf("%s is stale; run go test ./connectivity/v2signal -update", peerSignalingVectorPath)
+		t.Fatalf("%s is stale; run %s from the repository root", peerSignalingVectorPath, updateVectorsCommand)
 	}
 }
 

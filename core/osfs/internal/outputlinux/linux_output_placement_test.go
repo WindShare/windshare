@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"golang.org/x/sys/unix"
 )
 
@@ -156,8 +155,8 @@ func TestLinuxAnchoredDirectoryClaimFramesPlacementAndObject(t *testing.T) {
 	if offset != len(claim) {
 		t.Fatalf("claim has %d trailing bytes", len(claim)-offset)
 	}
-	if len(claim) > resumestate.MaxAncestryIdentityClaimBytes {
-		t.Fatalf("anchored claim length = %d, maximum %d", len(claim), resumestate.MaxAncestryIdentityClaimBytes)
+	if len(claim) > linuxMaximumAnchoredDirectoryClaimLen {
+		t.Fatalf("anchored claim length = %d, maximum %d", len(claim), linuxMaximumAnchoredDirectoryClaimLen)
 	}
 }
 

@@ -8,21 +8,12 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/transfer/fault"
 )
 
 type pathScriptedJobOutput struct {
 	*jobOutput
 	scripts map[string]jobTransactionScript
-}
-
-func (output *pathScriptedJobOutput) OpenSelection(
-	ctx context.Context,
-	selection OutputSelection,
-) (OutputSession, error) {
-	if _, err := output.jobOutput.OpenSelection(ctx, selection); err != nil {
-		return nil, err
-	}
-	return output, nil
 }
 
 func (output *pathScriptedJobOutput) OpenOutput(
@@ -136,11 +127,11 @@ func TestTransferJobIsolatesTransactionQuarantineAndPublishesSibling(t *testing.
 func TestTransferJobStopsSiblingWorkOnUnsettledCommit(t *testing.T) {
 	for _, test := range []struct {
 		name  string
-		scope OutputFaultScope
+		scope fault.Scope
 	}{
-		{name: "file", scope: OutputFaultFile},
-		{name: "session", scope: OutputFaultSession},
-		{name: "root", scope: OutputFaultRoot},
+		{name: "file", scope: fault.ScopeFileLocal},
+		{name: "output pause", scope: fault.ScopeOutputPause},
+		{name: "session terminal", scope: fault.ScopeSessionTerminal},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			scope := test.scope
@@ -153,7 +144,7 @@ func TestTransferJobStopsSiblingWorkOnUnsettledCommit(t *testing.T) {
 			output := &pathScriptedJobOutput{
 				jobOutput: base,
 				scripts: map[string]jobTransactionScript{
-					"a-first.bin": {commitErr: NewOutputFault(scope, OutputFaultStateIO, cause)},
+					"a-first.bin": {commitErr: outputFailure(scope, fault.OutputStateIO, cause)},
 				},
 			}
 			revisions := &jobRevisionClient{
@@ -183,8 +174,9 @@ func TestTransferJobStopsSiblingWorkOnUnsettledCommit(t *testing.T) {
 			}
 
 			result := job.Run(context.Background())
-			if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, cause) ||
-				!errors.Is(result.SettlementFailure, cause) ||
+			expected, _ := fault.NewOutput(scope, fault.OutputStateIO)
+			if result.Outcome != JobPausedOutcome || normalizedFault(result.TerminationCause) != expected ||
+				normalizedFault(result.SettlementFailure) != expected ||
 				!slices.Equal(revisions.order, []catalog.FileID{first}) ||
 				base.transactions["a-first.bin"] == nil || base.transactions["b-second.bin"] != nil ||
 				len(base.finalized) != 0 || base.pauseCalls != 1 || base.completeCalls != 0 {

@@ -64,11 +64,25 @@ export class OriginPrivateZipExporter implements OriginPrivateOutputExporter {
 
   async export(
     catalog: StagedOutputCatalog,
-    outcome: Parameters<OriginPrivateOutputExporter['export']>[1],
+    _outcome: Parameters<OriginPrivateOutputExporter['export']>[1],
+    signal: AbortSignal,
+  ): Promise<OriginPrivateExportResult> {
+    return this.#exportCatalog(catalog, signal)
+  }
+
+  /** Publishes only already committed staging members before confirmed discard. */
+  exportPartial(
+    catalog: StagedOutputCatalog,
+    signal: AbortSignal,
+  ): Promise<OriginPrivateExportResult> {
+    return this.#exportCatalog(catalog, signal)
+  }
+
+  async #exportCatalog(
+    catalog: StagedOutputCatalog,
     signal: AbortSignal,
   ): Promise<OriginPrivateExportResult> {
     if (this.#state !== 'idle') throw new Error('OPFS ZIP exporter is not idle')
-    if (outcome.status === 'Aborted') throw new Error('Cannot export an aborted output job')
     signal.throwIfAborted()
     this.#state = 'exporting'
     const controller = new AbortController()

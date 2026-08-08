@@ -6,6 +6,9 @@ import (
 	"errors"
 	"os"
 	"syscall"
+
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
+	"github.com/windshare/windshare/core/osfs/internal/outputlinux"
 )
 
 func platformMutationToken(file *os.File) (posixMutationToken, error) {
@@ -25,4 +28,8 @@ func platformMutationToken(file *os.File) (posixMutationToken, error) {
 		modifiedSec: int64(stat.Mtim.Sec), modifiedNS: int64(stat.Mtim.Nsec),
 		changedSec: int64(stat.Ctim.Sec), changedNS: int64(stat.Ctim.Nsec),
 	}, nil
+}
+
+func openNativeOutputPlatform(path string, create bool) (outputcap.Platform, error) {
+	return outputlinux.Open(path, create)
 }

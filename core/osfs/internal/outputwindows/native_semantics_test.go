@@ -167,7 +167,7 @@ func TestWindowsV3PrivatePolicyRejectsBroadProtectedACL(t *testing.T) {
 	}
 }
 
-func TestWindowsV3NativeAllocationAndFileMetadataRemainHandleBound(t *testing.T) {
+func TestWindowsV3NativeFileMetadataRemainsHandleBound(t *testing.T) {
 	platform := openWindowsV3TestPlatform(t)
 	defer platform.Close()
 	root := platform.Root()
@@ -196,19 +196,6 @@ func TestWindowsV3NativeAllocationAndFileMetadataRemainHandleBound(t *testing.T)
 	if err != nil || size != uint64(len(payload)) {
 		t.Fatalf("size = %d, error = %v", size, err)
 	}
-	allocated, err := file.allocatedSize()
-	if err != nil || allocated < size {
-		t.Fatalf("allocated size = %d for logical size %d, error = %v", allocated, size, err)
-	}
-	pinned, err := root.openPinnedEntry(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pinned.close()
-	pinnedAllocation, err := pinned.allocatedSize()
-	if err != nil || pinnedAllocation != allocated {
-		t.Fatalf("pinned allocation = %d, handle allocation = %d, error = %v", pinnedAllocation, allocated, err)
-	}
 	matches, err := file.metadataMatches(size, modified)
 	if err != nil || !matches {
 		t.Fatalf("exact metadata match = %t, error = %v", matches, err)
@@ -225,9 +212,6 @@ func TestWindowsV3NativeAllocationAndFileMetadataRemainHandleBound(t *testing.T)
 	}
 	if matches, err := file.metadataMatches(size, catalog.ModifiedTime{}); err != nil || !matches {
 		t.Fatalf("unspecified-time metadata match = %t, error = %v", matches, err)
-	}
-	if _, err := (&windowsV3File{}).allocatedSize(); !errors.Is(err, errWindowsV3OutputUnsafe) {
-		t.Fatalf("closed allocation authority = %v", err)
 	}
 	if _, err := (&windowsV3File{}).metadataMatches(0, catalog.ModifiedTime{}); !errors.Is(err, errWindowsV3OutputUnsafe) {
 		t.Fatalf("closed metadata authority = %v", err)

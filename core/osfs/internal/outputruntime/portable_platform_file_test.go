@@ -2,7 +2,6 @@ package outputruntime
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"sync"
@@ -124,14 +123,6 @@ func (file *portableRuntimeFile) Sync() error {
 	return file.usable()
 }
 
-func (file *portableRuntimeFile) Truncate(size int64) error {
-	path, err := file.currentPath()
-	if err != nil {
-		return err
-	}
-	return os.Truncate(path, size)
-}
-
 func (file *portableRuntimeFile) Size() (uint64, error) {
 	path, err := file.currentPath()
 	if err != nil {
@@ -142,10 +133,6 @@ func (file *portableRuntimeFile) Size() (uint64, error) {
 		return 0, errors.Join(err, outputcap.ErrUnsafeNamespace)
 	}
 	return uint64(info.Size()), nil
-}
-
-func (file *portableRuntimeFile) AllocatedSize() (uint64, error) {
-	return file.Size()
 }
 
 func (file *portableRuntimeFile) SetModifiedTime(modified catalog.ModifiedTime) error {
@@ -184,36 +171,14 @@ func (file *portableRuntimeFile) SameFile(other outputcap.File) (bool, error) {
 	if other == nil {
 		return false, nil
 	}
-	if candidate, ok := other.(*portableRuntimeFile); ok {
-		if err := candidate.usable(); err != nil {
-			return false, err
-		}
-		return file.filesystem == candidate.filesystem && os.SameFile(file.info, candidate.info), nil
-	}
-	provider, ok := other.(outputcap.CloseRevalidationIdentityProvider)
+	candidate, ok := other.(*portableRuntimeFile)
 	if !ok {
 		return false, outputcap.ErrUnsafeNamespace
 	}
-	otherIdentity, err := provider.CloseRevalidationIdentity()
-	if err != nil {
+	if err := candidate.usable(); err != nil {
 		return false, err
 	}
-	identity, err := file.CloseRevalidationIdentity()
-	return identity.Equal(otherIdentity), err
-}
-
-func (file *portableRuntimeFile) CloseRevalidationIdentity() (
-	outputcap.TransientFileIdentity,
-	error,
-) {
-	if err := file.usable(); err != nil {
-		return outputcap.TransientFileIdentity{}, err
-	}
-	identity := fmt.Appendf(nil, "file:%d", file.filesystem.objectID(file.info))
-	return outputcap.NewTransientFileIdentity(
-		portableRuntimeIdentityDomain+":"+file.filesystem.root,
-		identity,
-	), nil
+	return file.filesystem == candidate.filesystem && os.SameFile(file.info, candidate.info), nil
 }
 
 type portableRuntimeEntryReference struct {
@@ -231,16 +196,6 @@ func (reference *portableRuntimeEntryReference) Kind() outputcap.EntryKind {
 		return outputcap.EntryAbsent
 	}
 	return reference.kind
-}
-
-func (reference *portableRuntimeEntryReference) AllocatedSize() (uint64, error) {
-	if reference == nil || reference.info == nil || reference.isClosed() {
-		return 0, fs.ErrClosed
-	}
-	if reference.info.Size() < 0 {
-		return 0, outputcap.ErrUnsafeNamespace
-	}
-	return uint64(reference.info.Size()), nil
 }
 
 func (reference *portableRuntimeEntryReference) Close() error {

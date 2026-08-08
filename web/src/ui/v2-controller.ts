@@ -4,14 +4,20 @@ import type { V2CatalogEntry } from '../catalog/v2-records'
 import { equalBytes } from '../crypto/bytes'
 import type { V2ConnectivityActivation } from '../connectivity/v2-receiver-policy'
 import { SMALL_TRANSFER_BYTE_LIMIT } from '../transfer/measure'
-import { OutputSessionSuspendedError } from '../transfer/output-session'
+import { TransferPauseRequestedError } from '../transfer/output-session'
 import {
   createTransferIntentDraft,
+  createTransferJobId,
   selectionRulesFromPolicy,
   type TransferIntentDraft,
   type TransferTraceEvent,
 } from '../transfer/intent'
-import { V2BrowserReceiverGateway, type V2BrowseDirectory, type V2BrowsePage, type V2JoinedBrowserShare } from './v2-gateway'
+import {
+  V2BrowserReceiverGateway,
+  type V2BrowseDirectory,
+  type V2BrowsePage,
+  type V2JoinedBrowserShare,
+} from './v2-gateway'
 import {
   acquireBrowserV2Output,
   browserV2OutputAuthority,
@@ -37,14 +43,18 @@ import {
   isAbortError,
   knownSingleFile,
   nowMilliseconds,
-  previewSnapshot,
   projectBrowsePage,
   selectionAvailable,
   transferProgressSnapshot,
   transferTerminalSnapshot,
-  type ActiveV2Preview,
   type RetryableV2BrowseRequest,
 } from './v2-controller-state'
+import {
+  BrowserV2PausedTaskControlPort,
+  V2PausedTaskController,
+  type V2PausedTaskControlPort,
+} from './v2-paused-tasks'
+import { V2PreviewController } from './v2-preview-controller'
 
 export {
   captureV2Location,
@@ -61,6 +71,7 @@ export interface V2ReceiverControllerOptions {
   readonly diagnosticFormatter?: V2DiagnosticFormatter
   readonly onSecurityMilestone?: (milestone: V2SecurityMilestone) => void
   readonly onTransferTrace?: (event: TransferTraceEvent) => void
+  readonly pausedTasks?: V2PausedTaskControlPort
 }
 
 export class V2ReceiverController {
@@ -68,6 +79,8 @@ export class V2ReceiverController {
   readonly #capabilityLifecycle: V2CapabilityInputLifecycle
   readonly #listeners = new Set<() => void>()
   readonly #onTransferTrace: ((event: TransferTraceEvent) => void) | undefined
+  readonly #pausedTasks: V2PausedTaskController
+  readonly #previews: V2PreviewController
   #snapshot: V2ReceiverSnapshot
   #pageUrl = ''
   #joined: V2JoinedBrowserShare | undefined
@@ -82,8 +95,6 @@ export class V2ReceiverController {
   #retryableBrowse: RetryableV2BrowseRequest | undefined
   #unsubscribeScanProgress: (() => void) | undefined
   #transfer: AbortController | undefined
-  #preview: ActiveV2Preview | undefined
-  #nextPreviewId = 1
   #disposed = false
 
   constructor(
@@ -93,6 +104,23 @@ export class V2ReceiverController {
     this.#gateway = gateway
     this.#onTransferTrace = options.onTransferTrace
     this.#capabilityLifecycle = new V2CapabilityInputLifecycle(options)
+    this.#pausedTasks = new V2PausedTaskController(
+      options.pausedTasks ?? new BrowserV2PausedTaskControlPort(),
+      {
+        joined: () => this.#joined,
+        disposed: () => this.#disposed,
+        regularTransferActive: () => this.#transfer !== undefined,
+        snapshot: () => this.#snapshot,
+        publish: (snapshot) => this.#publish(snapshot),
+        publicError: (error) => this.#publicError(error),
+        transferTrace: (event) => this.#onTransferTrace?.(event),
+      },
+    )
+    this.#previews = new V2PreviewController({
+      snapshot: () => this.#snapshot,
+      publish: (snapshot) => this.#publish(snapshot),
+      publicError: (error) => this.#publicError(error),
+    })
     const outputCapabilities = browserV2OutputCapabilities()
     const outputIntent: V2OutputIntent = outputCapabilities.nativeDirectory ? 'directory' : 'download'
     this.#snapshot = Object.freeze({
@@ -114,6 +142,7 @@ export class V2ReceiverController {
       directoryRetryable: false,
       progress: EMPTY_V2_PROGRESS,
       preview: EMPTY_V2_PREVIEW,
+      pausedTasks: Object.freeze([]),
     })
   }
 
@@ -132,6 +161,7 @@ export class V2ReceiverController {
   initialize(captured: V2CapturedLocation): void {
     this.#pageUrl = captured.pageUrl
     this.#capabilityLifecycle.acceptCapturedLocation(captured)
+    this.#pausedTasks.refresh().catch(() => undefined)
     if (captured.capabilityInput !== null) {
       this.#join(captured.capabilityInput).catch(() => undefined)
     }
@@ -211,76 +241,19 @@ export class V2ReceiverController {
     const joined = this.#joined
     const entry = this.#entries.get(id)
     if (joined === undefined || entry?.kind !== 'file') return
-    // Connectivity is the first post-guard action. This keeps malformed or stale
-    // row identities side-effect free while preserving the user's valid click as t0.
-    const connectivity = joined.beginPreviewConnectivity()
-    this.#closeActivePreview()
-    const active: ActiveV2Preview = {
-      id: this.#nextPreviewId++,
-      entry,
-      controller: new AbortController(),
-      connectivity,
-      seekId: 0,
-    }
-    this.#preview = active
-    this.#publish({
-      ...this.#snapshot,
-      preview: Object.freeze({ state: 'loading', fileId: entry.idText, name: entry.name }),
-    })
-    this.#runPreview(joined, active).catch(() => undefined)
+    this.#previews.open(joined, entry)
   }
 
   cancelPreview(): void {
-    this.#closeActivePreview()
-    this.#publish({ ...this.#snapshot, preview: EMPTY_V2_PREVIEW })
+    this.#previews.cancel()
   }
 
   seekPreview(seconds: number): void {
-    const active = this.#preview
-    if (active?.session === undefined || this.#snapshot.preview.state !== 'video') return
-    const seekId = ++active.seekId
-    this.#publish({
-      ...this.#snapshot,
-      preview: Object.freeze({ ...this.#snapshot.preview, seeking: true }),
-    })
-    active.session.seek(seconds, active.controller.signal).then(
-      (presentation) => {
-        if (this.#preview !== active || active.seekId !== seekId) return
-        this.#publish({
-          ...this.#snapshot,
-          preview: previewSnapshot(active.entry, presentation, false),
-        })
-      },
-      (error: unknown) => {
-        if (this.#preview !== active || active.seekId !== seekId || isAbortError(error)) return
-        const failure = Object.freeze({
-          state: 'error' as const,
-          fileId: active.entry.idText,
-          name: active.entry.name,
-          message: this.#publicError(error),
-        })
-        this.#closeActivePreview()
-        this.#publish({
-          ...this.#snapshot,
-          preview: failure,
-        })
-      },
-    )
+    this.#previews.seek(seconds)
   }
 
   previewMediaFailed(url: string): void {
-    const active = this.#preview
-    const preview = this.#snapshot.preview
-    if (active === undefined || (preview.state !== 'image' && preview.state !== 'video') ||
-        preview.url !== url) return
-    const failure = Object.freeze({
-      state: 'error' as const,
-      fileId: active.entry.idText,
-      name: active.entry.name,
-      message: 'The browser could not decode this bounded media preview.',
-    })
-    this.#closeActivePreview()
-    this.#publish({ ...this.#snapshot, preview: failure })
+    this.#previews.mediaFailed(url)
   }
 
   startDownload(): void {
@@ -299,6 +272,7 @@ export class V2ReceiverController {
       joined.descriptor.syntheticRoot,
       'synthetic-root',
     )
+    const transferJobId = createTransferJobId()
     const draft = createTransferIntentDraft({
       shareInstance: shareInstanceId,
       syntheticRoot: syntheticRootId,
@@ -309,7 +283,7 @@ export class V2ReceiverController {
       atMilliseconds: downloadT0Milliseconds,
       context: Object.freeze({
         shareInstance: shareInstanceId,
-        transferJobId: draft.transferJobId,
+        transferJobId,
         decision: 'click-guard-passed',
       }),
     }))
@@ -318,7 +292,7 @@ export class V2ReceiverController {
       atMilliseconds: nowMilliseconds(),
       context: Object.freeze({
         shareInstance: shareInstanceId,
-        transferJobId: draft.transferJobId,
+        transferJobId,
         decision: 'picker-pending',
       }),
     }))
@@ -353,28 +327,41 @@ export class V2ReceiverController {
       downloadT0Milliseconds,
     })
     this.#transfer = new AbortController()
-    this.#runTransfer(joined, acquired, connectivity, draft).catch(() => undefined)
+    this.#runTransfer(joined, acquired, connectivity, draft, transferJobId).catch(() => undefined)
   }
 
-  abortDownload(): void {
+  pauseDownload(): void {
     if (!this.#isTransferActive()) return
-    this.#publish({ ...this.#snapshot, phase: 'aborting', status: 'Stopping the transfer…' })
-    this.#transfer?.abort(new DOMException('User stopped the transfer', 'AbortError'))
+    this.#publish({ ...this.#snapshot, phase: 'pausing', status: 'Pausing the transfer…' })
+    const reason = new TransferPauseRequestedError('User paused the transfer')
+    this.#transfer?.abort(reason)
+    this.#pausedTasks.abortTransfer(reason)
   }
 
-  async dispose(options: { readonly preserveOutputRecovery?: boolean } = {}): Promise<void> {
+  resumePausedTask(id: string): void {
+    this.#pausedTasks.resume(id)
+  }
+
+  cancelPausedTask(id: string): void {
+    this.#pausedTasks.discard(id)
+  }
+
+  async dispose(): Promise<void> {
     if (this.#disposed) return
     this.#disposed = true
     this.#capabilityLifecycle.clear()
     this.#navigation?.abort(new DOMException('Receiver disposed', 'AbortError'))
     this.#unsubscribeScanProgress?.()
     this.#unsubscribeScanProgress = undefined
-    this.#transfer?.abort(options.preserveOutputRecovery
-      ? new OutputSessionSuspendedError()
-      : new DOMException('Receiver disposed', 'AbortError'))
-    const previewClose = this.#closeActivePreview()
+    const reason = new TransferPauseRequestedError(
+      'Receiver disposed with durable recovery retained',
+    )
+    this.#transfer?.abort(reason)
+    this.#pausedTasks.abortTransfer(reason)
+    const previewClose = this.#previews.close()
     await previewClose
     await this.#joined?.close()
+    this.#pausedTasks.close()
     this.#listeners.clear()
   }
 
@@ -386,7 +373,7 @@ export class V2ReceiverController {
   async #joinOwned(lease: V2CapabilityJoinLease): Promise<void> {
     let navigation: AbortController | undefined
     try {
-      await this.#closeActivePreview()
+      await this.#previews.close()
       this.#navigation?.abort(new DOMException('A newer join replaced this one', 'AbortError'))
       this.#pendingNavigationKey = undefined
       this.#loadingDirectory = undefined
@@ -403,8 +390,8 @@ export class V2ReceiverController {
         preview: EMPTY_V2_PREVIEW,
       })
       const previous = this.#joined
-	  this.#unsubscribeScanProgress?.()
-	  this.#unsubscribeScanProgress = undefined
+      this.#unsubscribeScanProgress?.()
+      this.#unsubscribeScanProgress = undefined
       await previous?.close()
       navigation.signal.throwIfAborted()
       if (this.#joined === previous) this.#joined = undefined
@@ -417,9 +404,10 @@ export class V2ReceiverController {
         return
       }
       this.#joined = joined
-	  this.#unsubscribeScanProgress = joined.subscribeCatalogScanProgress(
-		(progress) => this.#catalogScanProgress(joined, progress),
-	  )
+      this.#pausedTasks.publishRows()
+      this.#unsubscribeScanProgress = joined.subscribeCatalogScanProgress(
+        (progress) => this.#catalogScanProgress(joined, progress),
+      )
       const root = joined.rootDirectory()
       this.#page = undefined
       this.#directories = []
@@ -510,15 +498,15 @@ export class V2ReceiverController {
   }
 
   #catalogScanProgress(joined: V2JoinedBrowserShare, progress: V2CatalogScanProgress): void {
-	const directory = this.#loadingDirectory
-	if (
-	  this.#joined !== joined || directory === undefined ||
-	  !equalBytes(directory.id, progress.directoryId)
-	) return
-	this.#publish({
-	  ...this.#snapshot,
-	  status: `Scanning ${directory.name}… ${progress.discoveredEntries} entries discovered; total still unknown.`,
-	})
+    const directory = this.#loadingDirectory
+    if (
+      this.#joined !== joined || directory === undefined ||
+      !equalBytes(directory.id, progress.directoryId)
+    ) return
+    this.#publish({
+      ...this.#snapshot,
+      status: `Scanning ${directory.name}… ${progress.discoveredEntries} entries discovered; total still unknown.`,
+    })
   }
 
   #publishPage(page: V2BrowsePage): void {
@@ -547,54 +535,12 @@ export class V2ReceiverController {
     })
   }
 
-  async #runPreview(joined: V2JoinedBrowserShare, active: ActiveV2Preview): Promise<void> {
-    try {
-      const session = await joined.preview(
-        active.entry,
-        active.connectivity,
-        active.controller.signal,
-      )
-      if (this.#preview !== active || active.controller.signal.aborted) {
-        await session.close().catch(() => undefined)
-        return
-      }
-      active.session = session
-      this.#publish({
-        ...this.#snapshot,
-        preview: previewSnapshot(active.entry, session.current, false),
-      })
-    } catch (error) {
-      if (this.#preview !== active || active.controller.signal.aborted) return
-      this.#preview = undefined
-      active.connectivity.close()
-      this.#publish({
-        ...this.#snapshot,
-        preview: Object.freeze({
-          state: 'error',
-          fileId: active.entry.idText,
-          name: active.entry.name,
-          message: this.#publicError(error),
-        }),
-      })
-    }
-  }
-
-  #closeActivePreview(): Promise<void> {
-    const active = this.#preview
-    if (active === undefined) return Promise.resolve()
-    this.#preview = undefined
-    active.controller.abort(new DOMException('Preview closed', 'AbortError'))
-    active.connectivity.close()
-    const close = active.session?.close() ?? Promise.resolve()
-    return close
-      .catch(() => undefined)
-  }
-
   async #runTransfer(
     joined: V2JoinedBrowserShare,
     acquired: ReturnType<typeof acquireBrowserV2Output>,
     connectivity: V2ConnectivityActivation,
     intent: TransferIntentDraft,
+    transferJobId: string,
   ): Promise<void> {
     const output = browserV2OutputAuthority(acquired)
     try {
@@ -606,17 +552,21 @@ export class V2ReceiverController {
         onMeasure: (measure) => connectivity.observeSizeClass(measure.sizeClass),
         onTrace: (event) => this.#onTransferTrace?.(event),
         intent,
+        transferJobId,
       })
       const result = await job.run(this.#transfer?.signal)
       this.#publish(transferTerminalSnapshot(
         this.#snapshot,
         result,
-        this.#transfer?.signal.aborted === true,
       ))
     } catch (error) {
       await output.abort(error)
       if (this.#transfer?.signal.aborted) {
-        this.#publish({ ...this.#snapshot, phase: 'aborted', status: 'Transfer stopped.' })
+        this.#publish({
+          ...this.#snapshot,
+          phase: 'retry-ready',
+          status: 'Transfer stopped before a resumable checkpoint opened; retry starts from byte zero.',
+        })
       } else if (this.#snapshot.phase === 'acquiring-output') {
         this.#publish({
           ...this.#snapshot,
@@ -634,7 +584,9 @@ export class V2ReceiverController {
     }
   }
 
-  #isTransferActive(): boolean { return this.#transfer !== undefined }
+  #isTransferActive(): boolean {
+    return this.#transfer !== undefined || this.#pausedTasks.active()
+  }
 
   #outputAvailable(): boolean {
     return outputIntentAvailable(this.#snapshot.outputCapabilities, this.#snapshot.outputIntent)

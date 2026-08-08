@@ -7,7 +7,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"golang.org/x/sys/unix"
 )
 
 func (directory *linuxV3Directory) Close() error {
@@ -35,9 +34,7 @@ func (directory *linuxV3Directory) Duplicate() (outputcap.Directory, error) {
 	if err != nil {
 		return nil, linuxV3Error(err)
 	}
-	result := &linuxV3Directory{
-		native: native, metadataPolicy: directory.metadataPolicy, selectionPath: directory.selectionPath,
-	}
+	result := &linuxV3Directory{native: native}
 	if directory.origin != nil {
 		parent, duplicateErr := directory.origin.parent.Duplicate()
 		if duplicateErr != nil {
@@ -63,14 +60,6 @@ func (directory *linuxV3Directory) Names(limit int) ([]string, error) {
 	return names, linuxV3Error(err)
 }
 
-func (directory *linuxV3Directory) NamesWithPrefix(prefix string, matchLimit int) ([]string, error) {
-	if directory == nil || directory.native == nil {
-		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux directory authority is closed"))
-	}
-	names, err := directory.native.namesWithPrefix(prefix, matchLimit)
-	return names, linuxV3Error(err)
-}
-
 func (directory *linuxV3Directory) ObserveEntry(name string) (outputcap.EntryKind, error) {
 	if directory == nil || directory.native == nil {
 		return outputcap.EntryAbsent, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux directory authority is closed"))
@@ -90,7 +79,7 @@ func (directory *linuxV3Directory) ClassifyExactEntry(name string) (outputcap.En
 	return kind, exact, linuxV3Error(err)
 }
 
-func (directory *linuxV3Directory) ValidatePublicEntryName(name string) error {
+func (directory *linuxV3Directory) validatePublicEntryName(name string) error {
 	if directory == nil || directory.native == nil {
 		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux directory authority is closed"))
 	}
@@ -106,7 +95,7 @@ func (directory *linuxV3Directory) ValidatePublicEntryName(name string) error {
 
 func (directory *linuxV3Directory) ValidatePublicEntryNames(names []string) error {
 	for _, name := range names {
-		if err := directory.ValidatePublicEntryName(name); err != nil {
+		if err := directory.validatePublicEntryName(name); err != nil {
 			return err
 		}
 	}
@@ -126,16 +115,6 @@ func (directory *linuxV3Directory) ValidateMetadataAuthority() error {
 	}
 	if err := directory.native.validateMetadataAuthority(); err != nil {
 		return linuxV3Error(err)
-	}
-	if directory.metadataPolicy != nil &&
-		directory.metadataPolicy.requiresExtendedTimestamp(directory.selectionPath) {
-		return linuxV3Error(linuxRequireExtendedTimestampLayout(
-			directory.native.system,
-			directory.native.fd,
-			directory.native.certificate,
-			unix.S_IFDIR,
-			"validate selected directory timestamp layout",
-		))
 	}
 	return nil
 }
@@ -180,54 +159,6 @@ func (directory *linuxV3Directory) RemoveEntry(name string, expected outputcap.C
 		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: incompatible Linux pinned entry removal"))
 	}
 	return linuxV3Error(directory.native.removePinnedEntry(name, pinned.native))
-}
-
-func (directory *linuxV3Directory) PrepareIdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
-	if directory == nil || directory.native == nil {
-		return outputcap.PersistentDirectoryIdentity{},
-			errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux directory authority is closed"))
-	}
-	claim, err := directory.native.prepareIdentityClaim()
-	if err != nil {
-		return outputcap.PersistentDirectoryIdentity{}, linuxV3Error(err)
-	}
-	return outputcap.NewPersistentDirectoryIdentity(claim), nil
-}
-
-func (directory *linuxV3Directory) IdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
-	if directory == nil || directory.native == nil {
-		return outputcap.PersistentDirectoryIdentity{},
-			errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux directory authority is closed"))
-	}
-	claim, err := directory.native.identityClaim()
-	if err != nil {
-		return outputcap.PersistentDirectoryIdentity{}, linuxV3Error(err)
-	}
-	return outputcap.NewPersistentDirectoryIdentity(claim), nil
-}
-
-func (directory *linuxV3Directory) PreparePrivateIdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
-	if directory == nil || directory.native == nil {
-		return outputcap.PersistentDirectoryIdentity{},
-			errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux private directory authority is closed"))
-	}
-	claim, err := directory.native.directoryIdentityClaim(true)
-	if err != nil {
-		return outputcap.PersistentDirectoryIdentity{}, linuxV3Error(err)
-	}
-	return outputcap.NewPersistentDirectoryIdentity(claim), nil
-}
-
-func (directory *linuxV3Directory) PrivateIdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
-	if directory == nil || directory.native == nil {
-		return outputcap.PersistentDirectoryIdentity{},
-			errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux private directory authority is closed"))
-	}
-	claim, err := directory.native.directoryIdentityClaim(false)
-	if err != nil {
-		return outputcap.PersistentDirectoryIdentity{}, linuxV3Error(err)
-	}
-	return outputcap.NewPersistentDirectoryIdentity(claim), nil
 }
 
 func (directory *linuxV3Directory) SameDirectory(other outputcap.Directory) (bool, error) {
@@ -289,18 +220,9 @@ func (directory *linuxV3Directory) bindDirectoryOrigin(
 		return nil, linuxV3Error(errors.Join(err, child.close()))
 	}
 	return &linuxV3Directory{
-		native:         child,
-		origin:         &linuxV3DirectoryOrigin{parent: parent, name: name},
-		metadataPolicy: directory.metadataPolicy,
-		selectionPath:  linuxSelectionChildPath(directory.selectionPath, name),
+		native: child,
+		origin: &linuxV3DirectoryOrigin{parent: parent, name: name},
 	}, nil
-}
-
-func linuxSelectionChildPath(parent, name string) string {
-	if parent == "" {
-		return name
-	}
-	return parent + "/" + name
 }
 
 func (directory *linuxV3Directory) InstallDirectoryNoReplace(

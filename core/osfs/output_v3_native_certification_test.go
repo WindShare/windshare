@@ -4,7 +4,6 @@ package osfs
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -14,10 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 )
 
@@ -33,16 +29,13 @@ const (
 	nativeOutputCrashPollInterval               = 10 * time.Millisecond
 	nativeOutputCrashChildMaximumWait           = 5 * time.Minute
 	nativeOutputCrashScenarioProbe              = "probe-stage"
-	nativeOutputCrashScenarioSession            = "session-checkpoint"
-	nativeOutputSessionPath                     = "received.bin"
-	nativeOutputSessionSize                     = 2 * uint64(catalog.MinChunkSize)
 )
 
 func openCertifiedNativeOutputForTest(
 	t *testing.T,
 	root string,
 	profile string,
-	expectedCertification resumestate.CertificationID,
+	expectedCertification outputcap.CertificationID,
 ) outputcap.Platform {
 	t.Helper()
 	platform, err := openNativeOutputPlatform(root, false)
@@ -100,7 +93,7 @@ func nativeOutputCertificationFailure(t *testing.T, profile, operation string, e
 func runNativeOutputProcessRestartRecoveryTest(
 	t *testing.T,
 	profile string,
-	expectedCertification resumestate.CertificationID,
+	expectedCertification outputcap.CertificationID,
 	probeName string,
 	stageSize int64,
 ) {
@@ -202,239 +195,10 @@ func killNativeOutputChildAfterReady(t *testing.T, readyPath string, environment
 	childRunning = false
 }
 
-type nativeOutputSessionFixture struct {
-	selection  transfer.OutputSelection
-	descriptor content.FileRevisionDescriptor
-	payload    []byte
-}
-
-func runNativeOutputSessionProcessRestartRecoveryTest(
-	t *testing.T,
-	profile string,
-	expectedCertification resumestate.CertificationID,
-) {
-	t.Helper()
-	t.Skip("legacy frozen-selection restart fixture retired; incremental V1 recovery is exercised in outputruntime")
-	if os.Getenv(nativeOutputCrashChildProfileEnvironment) == profile &&
-		os.Getenv(nativeOutputCrashScenarioEnvironment) == nativeOutputCrashScenarioSession {
-		runNativeOutputSessionCrashChild(t)
-		return
-	}
-	if os.Getenv(nativeOutputCrashChildProfileEnvironment) == profile {
-		return
-	}
-
-	base := t.TempDir()
-	root := filepath.Join(base, "output")
-	if err := os.Mkdir(root, 0o700); err != nil {
-		t.Fatalf("create native session output root: %v", err)
-	}
-	readyPath := filepath.Join(base, "session-child.ready")
-	killNativeOutputChildAfterReady(t, readyPath, []string{
-		nativeOutputCrashChildProfileEnvironment + "=" + profile,
-		nativeOutputCrashScenarioEnvironment + "=" + nativeOutputCrashScenarioSession,
-		nativeOutputCrashRootEnvironment + "=" + root,
-		nativeOutputCrashReadyEnvironment + "=" + readyPath,
-	})
-
-	fixture := newNativeOutputSessionFixture(t)
-	authority := newNativeOutputSessionAuthority(t, root)
-	session, admissions, err := openOutputSelectionFixture(t, authority, root, fixture.selection)
-	if err != nil {
-		t.Fatalf("reopen checkpointed native output session: %v", err)
-	}
-	file := nativeOutputFileForSession(t, session, fixture, admissions[""])
-	start, err := session.BeginFile(context.Background(), file)
-	if err != nil {
-		t.Fatalf("resume checkpointed native output file: %v", err)
-	}
-	transaction, durable, ok := start.Transaction()
-	if !ok {
-		settlement, _ := start.ImmediateSettlement()
-		t.Fatalf("checkpointed file did not resume as a transaction: settlement=%v", settlement.Kind())
-	}
-	ranges := durable.Ranges().Ranges()
-	checkpointEnd := uint64(catalog.MinChunkSize)
-	if len(ranges) != 1 || ranges[0].Offset != 0 || ranges[0].End != checkpointEnd {
-		t.Fatalf("reopened durable ranges=%v, want [0,%d)", ranges, checkpointEnd)
-	}
-	if err := transaction.WriteRange(
-		context.Background(), checkpointEnd, fixture.payload[checkpointEnd:],
-	); err != nil {
-		t.Fatalf("write remaining native output range: %v", err)
-	}
-	completed, err := transaction.Checkpoint(context.Background())
-	if err != nil || !transfer.RangesCoverFile(uint64(len(fixture.payload)), completed.Ranges()) {
-		t.Fatalf("checkpoint completed native output file: ranges=%v err=%v", completed.Ranges().Ranges(), err)
-	}
-	settlement, err := transaction.Commit(context.Background())
-	if err != nil || settlement.Kind() != transfer.FilePublished {
-		t.Fatalf("publish recovered native output file: settlement=%v err=%v", settlement.Kind(), err)
-	}
-	job, err := session.CompleteJob(context.Background(), transfer.JobSucceeded)
-	if err != nil || job.Kind() != transfer.JobClosed {
-		t.Fatalf("complete recovered native output session: settlement=%v err=%v", job.Kind(), err)
-	}
-	actual, err := os.ReadFile(filepath.Join(root, nativeOutputSessionPath))
-	if err != nil || !bytes.Equal(actual, fixture.payload) {
-		t.Fatalf("published native output differs after restart: bytes=%d err=%v", len(actual), err)
-	}
-	platform, err := openNativeOutputPlatform(root, false)
-	if err != nil {
-		t.Fatalf("reopen completed %s output root: %v", expectedCertification, err)
-	}
-	if platform.Durability() != transfer.DurabilityProcessRestart {
-		t.Errorf("completed output root changed durability: %v", platform.Durability())
-	}
-	if err := platform.Close(); err != nil {
-		t.Errorf("close completed native output root: %v", err)
-	}
-}
-
-func runNativeOutputSessionCrashChild(t *testing.T) {
-	t.Helper()
-	root := os.Getenv(nativeOutputCrashRootEnvironment)
-	readyPath := os.Getenv(nativeOutputCrashReadyEnvironment)
-	if root == "" || readyPath == "" {
-		t.Fatal("native output session crash-child parameters are invalid")
-	}
-	fixture := newNativeOutputSessionFixture(t)
-	authority := newNativeOutputSessionAuthority(t, root)
-	session, admissions, err := openOutputSelectionFixture(t, authority, root, fixture.selection)
-	if err != nil {
-		t.Fatalf("create native output session: %v", err)
-	}
-	file := nativeOutputFileForSession(t, session, fixture, admissions[""])
-	start, err := session.BeginFile(context.Background(), file)
-	if err != nil {
-		t.Fatalf("begin native output file: %v", err)
-	}
-	transaction, durable, ok := start.Transaction()
-	if !ok || len(durable.Ranges().Ranges()) != 0 {
-		t.Fatalf("new native output file did not start empty: ranges=%v", durable.Ranges().Ranges())
-	}
-	checkpointEnd := uint64(catalog.MinChunkSize)
-	if err := transaction.WriteRange(
-		context.Background(), 0, fixture.payload[:checkpointEnd],
-	); err != nil {
-		t.Fatalf("write native output checkpoint range: %v", err)
-	}
-	checkpoint, err := transaction.Checkpoint(context.Background())
-	ranges := checkpoint.Ranges().Ranges()
-	if err != nil || len(ranges) != 1 || ranges[0].Offset != 0 || ranges[0].End != checkpointEnd {
-		t.Fatalf("persist native output checkpoint: ranges=%v err=%v", ranges, err)
-	}
-	signalNativeOutputCrashCut(t, readyPath)
-	time.Sleep(nativeOutputCrashChildMaximumWait)
-	t.Fatal("native output session crash child was not terminated by its parent")
-}
-
-func newNativeOutputSessionAuthority(t *testing.T, root string) *FilesystemOutputAuthority {
-	t.Helper()
-	authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root})
-	if err != nil {
-		t.Fatalf("construct native output authority: %v", err)
-	}
-	return authority
-}
-
-func newNativeOutputSessionFixture(t *testing.T) nativeOutputSessionFixture {
-	t.Helper()
-	identity := func(seed byte) []byte { return bytes.Repeat([]byte{seed}, catalog.IdentityBytes) }
-	share, err := catalog.ShareInstanceFromBytes(identity(0x31))
-	if err != nil {
-		t.Fatal(err)
-	}
-	root, err := catalog.DirectoryIDFromBytes(identity(0x32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	generation, err := catalog.DirectoryGenerationFromBytes(identity(0x33))
-	if err != nil {
-		t.Fatal(err)
-	}
-	fileID, err := catalog.FileIDFromBytes(identity(0x34))
-	if err != nil {
-		t.Fatal(err)
-	}
-	revision, err := content.FileRevisionFromBytes(bytes.Repeat([]byte{0x35}, content.IdentityBytes))
-	if err != nil {
-		t.Fatal(err)
-	}
-	geometry, err := content.NewFileGeometry(nativeOutputSessionSize, catalog.MinChunkSize)
-	if err != nil {
-		t.Fatal(err)
-	}
-	descriptor, err := content.NewFileRevisionDescriptor(
-		share, fileID, revision, geometry, catalog.ModifiedTime{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := transfer.NewOutputSelection(
-		share,
-		root,
-		generation,
-		nil,
-		[]transfer.OutputSelectionFile{{
-			Path: nativeOutputSessionPath, FileID: fileID,
-			ParentDirectoryID: root, ParentGeneration: generation,
-			ExpectedSize: nativeOutputSessionSize,
-		}},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rules, err := transfer.NewPathSelectionRules([]string{nativeOutputSessionPath})
-	if err != nil {
-		t.Fatal(err)
-	}
-	request, err := transfer.NewCanonicalSelectionRequest(share, root, rules)
-	if err != nil {
-		t.Fatal(err)
-	}
-	canonical, err := transfer.NewTerminalSelectionObservationV1(request, plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	selection, err := canonical.BindPlan(plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload := make([]byte, nativeOutputSessionSize)
-	for index := range payload {
-		payload[index] = byte(index*31 + 7)
-	}
-	return nativeOutputSessionFixture{selection: selection, descriptor: descriptor, payload: payload}
-}
-
-func nativeOutputFileForSession(
-	t *testing.T,
-	session transfer.OutputSession,
-	fixture nativeOutputSessionFixture,
-	parentAdmission transfer.DirectoryAdmission,
-) transfer.OutputFile {
-	t.Helper()
-	locator, err := transfer.NewPathOutputLocator(nativeOutputSessionPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	target, err := transfer.NewOutputFileTarget(
-		session.BackendID(), session.SessionID(), fixture.descriptor, locator,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return transfer.OutputFile{
-		Path: nativeOutputSessionPath, ExpectedSize: nativeOutputSessionSize,
-		Descriptor: fixture.descriptor, Target: target, ParentAdmission: parentAdmission,
-	}
-}
-
 func runNativeOutputCrashChild(
 	t *testing.T,
 	profile string,
-	expectedCertification resumestate.CertificationID,
+	expectedCertification outputcap.CertificationID,
 ) {
 	t.Helper()
 	root := os.Getenv(nativeOutputCrashRootEnvironment)
