@@ -56,7 +56,7 @@ Web 接收端目前把 `Folder tree` 和 `Browser download` 作为并列选项�
 - 目录产物（包括单文件布局）允许部分可见并保留成功内容。`OriginalFile` 和 ZIP 是完整产物，只能使用 `AtomicNoReplace` 原子目标或 `BrowserHandoff`；任何所选文件或 discovery 失败都不得发布已知残缺产物。
 - 系统在不改变已展示产物与恢复语义的前提下选择直接或暂存策略。直接 ZIP 显示“接收并生成 ZIP”；暂存 ZIP 明确区分“接收”“生成 ZIP”“保存”，只有最终 ZIP 在工作区封存后才进入等待保存。发布失败时可换位置，不重新接收或重新打包已封存产物。
 - 输出选择器在接收 intent 冻结前取消时，只丢弃 draft、关闭本次连接尝试并返回产物选择。暂存已经完整、但发布选择器取消时进入“等待保存”，不伪装成暂停或失败。
-- intent 冻结后，“暂停接收”只在持久状态已复核时进入 `Resumable`；“停止接收”对目录产物保留已成功文件并进入 `PartialDirectory(stopped)`；“放弃任务并删除暂存”只删除已确认 ownership 的 workspace、package、checkpoint 与元数据后进入 `Discarded`。完整产物不得因停止或放弃发布残缺文件；归属不明时进入 `NeedsAttention`。浏览器 handoff 已开始后不能撤回。
+- intent 冻结后，“暂停接收”只在持久状态已复核时进入 `Resumable`；“停止接收”对目录产物保留已成功文件，只清理已确认 ownership 的未完成项并进入 `PartialDirectory(stopped)`；“放弃任务并清理未完成内容”只删除已确认 ownership 的未发布项、workspace、package、checkpoint 与元数据。目录已有成功文件时仍为 `PartialDirectory`，否则清理完成后为 `Discarded`。完整产物不得因停止或放弃发布残缺文件；归属不明时进入 `NeedsAttention`。浏览器 handoff 已开始后不能撤回。
 - “可保留进度”只描述输出侧能力；继续接收仍要求发送端在线、revision 未变化且目标权限可重新取得。
 - `DirectTree` 在 revision 打开前不得创建同名文件；完整产物目标不得以空文件占位。真实零字节文件仍通过正常 file transaction 成功发布。
 - 24 小时保留期只在任务稳定进入 `Resumable` 或 `WaitingToSave` 时开始。接收或发布期间没有到期时间；显式继续后若再次稳定暂停，生成新的到期时间，lease 心跳不续期。界面显示到期时间、占用空间以及与状态一致的继续或删除操作。受控目标确认 `Published` 后立即清理；workspace-backed `DownloadStarted` 保留已封存产物至原到期时间，允许再次下载或显式删除且不重置期限；portable handoff 仅按有界 URL lease 保留内存对象，不宣称恢复。到期后禁止继续并在 WindShare 下次前台运行时清理；浏览器提前回收存储时不得承诺仍可恢复。
@@ -153,7 +153,7 @@ NeedsAttention(target-ownership-unknown | publication-unknown | cleanup-unknown)
 5. 拆分 materialization、packaging 与 publication；在现有 repository 中实现 manifest digest、原始内容封存、最终产物封存、跨标签页 lease、`recoverAbandonedOperation`、等待保存、workspace-backed handoff 重试、暂停/停止/放弃、闲置 24 小时到期及前台清理。
 6. 为受限便携下载和工作区 ZIP 实现 preparation gate、manifest 预算与完整 `WorkspaceBudget` admission；共享 `ZipEncodingPolicy`、渐进 ledger 和封存 layout plan，保证预检超限时零内容请求。
 7. 用面向产物的操作、阶段进度和精确终态替换 `V2OutputIntent` 与后端文案，区分 `Published` 与 `DownloadStarted`；结构化 trace 携带稳定标识和决策上下文，不记录密钥、文件名或明文路径。
-8. 同步精简的行为摘要、产品澄清、协议表述和测试；直接删除旧适配器、启发式、向量和 UI 分支，不保留兼容路径。
+8. 同步精简的行为摘要、产品澄清、协议表述和测试；直接删除旧适配器、启发式、OPFS cancel partial-export、向量和 UI 分支，不保留兼容路径。
 
 ## 验证
 
