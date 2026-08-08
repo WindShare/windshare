@@ -4,15 +4,9 @@ import {
 } from '../persistence/checkpoint'
 import {
   INDEXEDDB_CHECKPOINT_METADATA_STORE,
-  IndexedDbOutputRepository,
   openIndexedDbCheckpointDatabase,
-  type IndexedDbCheckpointBinding,
-  type IndexedDbCleanupReport,
 } from './indexeddb-repository'
-import {
-  acquireBrowserCheckpointCleanupLease,
-  acquireBrowserOutputSessionLease,
-} from './session-lease'
+import { acquireBrowserCheckpointCleanupLease } from './session-lease'
 
 const LEGACY_STORE_NAMES = [
   'checkpoint-candidates',
@@ -20,146 +14,248 @@ const LEGACY_STORE_NAMES = [
   'persistent-handles',
   'cleanup-markers',
 ] as const
+const LEGACY_CLEANUP_SOURCE_VERSION = 2
 const LEGACY_CLEANUP_METADATA_ID =
   `${FILE_CHECKPOINT_OWNERSHIP_MARKER}\0${FILE_CHECKPOINT_NAMESPACE}\0indexeddb-v2-cleanup`
+const LEGACY_CLEANUP_METADATA_KEYS = [
+  'id',
+  'marker',
+  'namespaceName',
+  'sourceVersion',
+  'step',
+  'state',
+  'removed',
+] as const
 
-interface LegacyCleanupMetadata {
+export interface IndexedDbLegacyCleanupReport {
+  readonly status: 'nothing-to-clean' | 'completed'
+  readonly removed: number
+}
+
+export interface IndexedDbLegacyCleanupMetadata {
   readonly id: typeof LEGACY_CLEANUP_METADATA_ID
   readonly marker: typeof FILE_CHECKPOINT_OWNERSHIP_MARKER
   readonly namespaceName: typeof FILE_CHECKPOINT_NAMESPACE
-  readonly sourceVersion: 2
+  readonly sourceVersion: typeof LEGACY_CLEANUP_SOURCE_VERSION
   readonly step: number
   readonly state: 'pending' | 'completed'
   readonly removed: number
 }
 
-/** Clears only app-owned legacy stores; published filesystem objects are untouched. */
-export async function ensureOneShotIndexedDbLegacyCleanup(
-  databaseName: string,
-): Promise<IndexedDbCleanupReport> {
-  const lease = await acquireBrowserCheckpointCleanupLease(databaseName)
-  let database: IDBDatabase | undefined
+export interface IndexedDbLegacyCleanupTransition {
+  readonly step: number
+  readonly state: IndexedDbLegacyCleanupMetadata['state']
+}
+
+/**
+ * The transaction port keeps fault injection out of the production algorithm.
+ * Implementations must atomically clear the named store and persist `transition`.
+ */
+export interface IndexedDbLegacyCleanupDatabase {
+  readOrInitializeMetadata(initial: IndexedDbLegacyCleanupMetadata): Promise<unknown>
+  clearLegacyStore(
+    storeName: string,
+    expected: IndexedDbLegacyCleanupMetadata,
+    transition: IndexedDbLegacyCleanupTransition,
+  ): Promise<unknown>
+  close(): void
+}
+
+export interface IndexedDbLegacyCleanupPorts {
+  acquireLease(): Promise<{ readonly release: () => Promise<void> }>
+  openDatabase(): Promise<IndexedDbLegacyCleanupDatabase>
+}
+
+const INITIAL_LEGACY_CLEANUP_METADATA = Object.freeze({
+  id: LEGACY_CLEANUP_METADATA_ID,
+  marker: FILE_CHECKPOINT_OWNERSHIP_MARKER,
+  namespaceName: FILE_CHECKPOINT_NAMESPACE,
+  sourceVersion: LEGACY_CLEANUP_SOURCE_VERSION,
+  step: 0,
+  state: 'pending',
+  removed: 0,
+} satisfies IndexedDbLegacyCleanupMetadata)
+
+/** Clears only the four app-owned legacy stores; current state is not an input. */
+export async function cleanIndexedDbLegacyStores(
+  ports: IndexedDbLegacyCleanupPorts,
+): Promise<IndexedDbLegacyCleanupReport> {
+  const lease = await ports.acquireLease()
+  let database: IndexedDbLegacyCleanupDatabase | undefined
   try {
-    database = await openIndexedDbCheckpointDatabase(databaseName)
-    let metadata = await readOrInitializeMetadata(database)
+    database = await ports.openDatabase()
+    let metadata = snapshotMetadata(
+      await database.readOrInitializeMetadata(INITIAL_LEGACY_CLEANUP_METADATA),
+    )
     if (metadata.state === 'completed') {
       return Object.freeze({ status: 'nothing-to-clean', removed: 0 })
     }
+
     const removedBefore = metadata.removed
     while (metadata.step < LEGACY_STORE_NAMES.length) {
-      metadata = await clearLegacyStore(database, metadata)
+      const storeName = LEGACY_STORE_NAMES[metadata.step]
+      if (storeName === undefined) throw new Error('legacy cleanup step exceeds its store plan')
+      const transition = nextTransition(metadata)
+      const next = snapshotMetadata(
+        await database.clearLegacyStore(storeName, metadata, transition),
+      )
+      assertTransition(metadata, transition, next)
+      metadata = next
     }
     return Object.freeze({
       status: metadata.removed === removedBefore ? 'nothing-to-clean' : 'completed',
       removed: metadata.removed - removedBefore,
     })
   } finally {
-    database?.close()
-    await lease.release()
+    try {
+      database?.close()
+    } finally {
+      await lease.release()
+    }
   }
 }
 
-/** Explicit destructive entrypoint for a V1 namespace plus the global legacy cleanup. */
-export async function runOneShotIndexedDbCheckpointCleanup(options: {
-  readonly databaseName: string
-  readonly backend: string
-  readonly outputSessionId?: string
-  readonly binding: IndexedDbCheckpointBinding
-}): Promise<IndexedDbCleanupReport> {
-  const legacy = await ensureOneShotIndexedDbLegacyCleanup(options.databaseName)
-  const repository = await IndexedDbOutputRepository.open(
-    options.databaseName,
-    options.backend,
-    options.outputSessionId ?? `cleanup-${crypto.randomUUID?.() ?? Date.now().toString(36)}`,
-    options.binding,
-  )
-  let lease: Awaited<ReturnType<typeof acquireBrowserOutputSessionLease>> | undefined
-  try {
-    lease = await acquireBrowserOutputSessionLease(repository.binding)
-    const current = await repository.runOwnedCleanup()
-    const removed = legacy.removed + current.removed
-    return Object.freeze({ status: removed === 0 ? 'nothing-to-clean' : 'completed', removed })
-  } finally {
-    repository.close()
-    await lease?.release()
+/** Production composition supplies the only database opener used by the cleaner. */
+export function ensureOneShotIndexedDbLegacyCleanup(
+  databaseName: string,
+): Promise<IndexedDbLegacyCleanupReport> {
+  return cleanIndexedDbLegacyStores({
+    acquireLease: () => acquireBrowserCheckpointCleanupLease(databaseName),
+    openDatabase: async () => new BrowserLegacyCleanupDatabase(
+      await openIndexedDbCheckpointDatabase(databaseName),
+    ),
+  })
+}
+
+class BrowserLegacyCleanupDatabase implements IndexedDbLegacyCleanupDatabase {
+  readonly #database: IDBDatabase
+
+  constructor(database: IDBDatabase) {
+    this.#database = database
+  }
+
+  async readOrInitializeMetadata(
+    initial: IndexedDbLegacyCleanupMetadata,
+  ): Promise<unknown> {
+    const transaction = this.#database.transaction(
+      INDEXEDDB_CHECKPOINT_METADATA_STORE,
+      'readwrite',
+    )
+    const store = transaction.objectStore(INDEXEDDB_CHECKPOINT_METADATA_STORE)
+    const existing = await requestResult<unknown>(store.get(LEGACY_CLEANUP_METADATA_ID))
+    if (existing === undefined) store.put(initial)
+    await transactionCompletion(transaction)
+    return existing ?? initial
+  }
+
+  async clearLegacyStore(
+    storeName: string,
+    expected: IndexedDbLegacyCleanupMetadata,
+    transition: IndexedDbLegacyCleanupTransition,
+  ): Promise<unknown> {
+    if (!isLegacyStoreName(storeName)) throw new Error('legacy cleanup requested an unknown store')
+    const hasLegacyStore = this.#database.objectStoreNames.contains(storeName)
+    const transaction = this.#database.transaction(
+      hasLegacyStore
+        ? [INDEXEDDB_CHECKPOINT_METADATA_STORE, storeName]
+        : INDEXEDDB_CHECKPOINT_METADATA_STORE,
+      'readwrite',
+    )
+    const metadataStore = transaction.objectStore(INDEXEDDB_CHECKPOINT_METADATA_STORE)
+    const currentValue = await requestResult<unknown>(metadataStore.get(LEGACY_CLEANUP_METADATA_ID))
+    if (currentValue === undefined) {
+      transaction.abort()
+      throw new Error('legacy cleanup metadata disappeared during cleanup')
+    }
+    const current = snapshotMetadata(currentValue)
+    if (!sameMetadata(current, expected)) {
+      transaction.abort()
+      throw new Error('legacy cleanup metadata changed outside its exclusive lease')
+    }
+
+    const removed = hasLegacyStore
+      ? await requestResult<number>(transaction.objectStore(storeName).count())
+      : 0
+    if (hasLegacyStore) transaction.objectStore(storeName).clear()
+    const next = Object.freeze({
+      ...current,
+      ...transition,
+      removed: current.removed + removed,
+    }) satisfies IndexedDbLegacyCleanupMetadata
+    // Progress shares the clearing transaction so every observable cut is restartable.
+    metadataStore.put(next)
+    await transactionCompletion(transaction)
+    return next
+  }
+
+  close(): void {
+    this.#database.close()
   }
 }
 
-async function readOrInitializeMetadata(database: IDBDatabase): Promise<LegacyCleanupMetadata> {
-  const transaction = database.transaction(INDEXEDDB_CHECKPOINT_METADATA_STORE, 'readwrite')
-  const store = transaction.objectStore(INDEXEDDB_CHECKPOINT_METADATA_STORE)
-  const existing = await requestResult<LegacyCleanupMetadata | undefined>(
-    store.get(LEGACY_CLEANUP_METADATA_ID),
-  )
-  const metadata = existing ?? {
-    id: LEGACY_CLEANUP_METADATA_ID,
-    marker: FILE_CHECKPOINT_OWNERSHIP_MARKER,
-    namespaceName: FILE_CHECKPOINT_NAMESPACE,
-    sourceVersion: 2,
-    step: 0,
-    state: 'pending',
-    removed: 0,
-  } satisfies LegacyCleanupMetadata
-  validateMetadata(metadata)
-  if (existing === undefined) store.put(metadata)
-  await transactionCompletion(transaction)
-  return metadata
-}
-
-async function clearLegacyStore(
-  database: IDBDatabase,
-  expected: LegacyCleanupMetadata,
-): Promise<LegacyCleanupMetadata> {
-  const legacyStore = LEGACY_STORE_NAMES[expected.step]
-  if (legacyStore === undefined) throw new Error('legacy cleanup step exceeds its store plan')
-  const hasLegacyStore = database.objectStoreNames.contains(legacyStore)
-  const transaction = database.transaction(
-    hasLegacyStore
-      ? [INDEXEDDB_CHECKPOINT_METADATA_STORE, legacyStore]
-      : INDEXEDDB_CHECKPOINT_METADATA_STORE,
-    'readwrite',
-  )
-  const metadataStore = transaction.objectStore(INDEXEDDB_CHECKPOINT_METADATA_STORE)
-  const current = await requestResult<LegacyCleanupMetadata | undefined>(
-    metadataStore.get(LEGACY_CLEANUP_METADATA_ID),
-  )
-  if (current === undefined) {
-    transaction.abort()
-    throw new Error('legacy cleanup metadata disappeared during cleanup')
-  }
-  validateMetadata(current)
-  if (current.step !== expected.step || current.removed !== expected.removed || current.state !== 'pending') {
-    transaction.abort()
-    throw new Error('legacy cleanup metadata changed outside its exclusive lease')
-  }
-  const removed = hasLegacyStore
-    ? await requestResult<number>(transaction.objectStore(legacyStore).count())
-    : 0
-  if (hasLegacyStore) transaction.objectStore(legacyStore).clear()
-  const step = current.step + 1
-  const next: LegacyCleanupMetadata = {
-    ...current,
+function nextTransition(
+  metadata: IndexedDbLegacyCleanupMetadata,
+): IndexedDbLegacyCleanupTransition {
+  const step = metadata.step + 1
+  return Object.freeze({
     step,
     state: step === LEGACY_STORE_NAMES.length ? 'completed' : 'pending',
-    removed: current.removed + removed,
-  }
-  metadataStore.put(next)
-  await transactionCompletion(transaction)
-  return next
+  })
 }
 
-function validateMetadata(metadata: LegacyCleanupMetadata): void {
-  if (metadata.id !== LEGACY_CLEANUP_METADATA_ID ||
-      metadata.marker !== FILE_CHECKPOINT_OWNERSHIP_MARKER ||
-      metadata.namespaceName !== FILE_CHECKPOINT_NAMESPACE ||
-      metadata.sourceVersion !== 2 ||
-      !Number.isSafeInteger(metadata.step) || metadata.step < 0 ||
-      metadata.step > LEGACY_STORE_NAMES.length ||
-      !Number.isSafeInteger(metadata.removed) || metadata.removed < 0 ||
-      (metadata.state !== 'pending' && metadata.state !== 'completed') ||
-      (metadata.state === 'completed') !== (metadata.step === LEGACY_STORE_NAMES.length)) {
+function assertTransition(
+  previous: IndexedDbLegacyCleanupMetadata,
+  expected: IndexedDbLegacyCleanupTransition,
+  next: IndexedDbLegacyCleanupMetadata,
+): void {
+  if (next.step !== expected.step || next.state !== expected.state ||
+      next.removed < previous.removed) {
+    throw new Error('legacy cleanup database returned an invalid progress transition')
+  }
+}
+
+function snapshotMetadata(value: unknown): IndexedDbLegacyCleanupMetadata {
+  if (!isRecord(value) || !hasExactKeys(value, LEGACY_CLEANUP_METADATA_KEYS) ||
+      value.id !== LEGACY_CLEANUP_METADATA_ID ||
+      value.marker !== FILE_CHECKPOINT_OWNERSHIP_MARKER ||
+      value.namespaceName !== FILE_CHECKPOINT_NAMESPACE ||
+      value.sourceVersion !== LEGACY_CLEANUP_SOURCE_VERSION ||
+      !Number.isSafeInteger(value.step) || (value.step as number) < 0 ||
+      (value.step as number) > LEGACY_STORE_NAMES.length ||
+      !Number.isSafeInteger(value.removed) || (value.removed as number) < 0 ||
+      (value.state !== 'pending' && value.state !== 'completed') ||
+      (value.state === 'completed') !== (value.step === LEGACY_STORE_NAMES.length)) {
     throw new Error('legacy checkpoint cleanup metadata has unknown ownership or progress')
   }
+  return Object.freeze({
+    id: value.id,
+    marker: value.marker,
+    namespaceName: value.namespaceName,
+    sourceVersion: value.sourceVersion,
+    step: value.step as number,
+    state: value.state,
+    removed: value.removed as number,
+  })
+}
+
+function sameMetadata(
+  left: IndexedDbLegacyCleanupMetadata,
+  right: IndexedDbLegacyCleanupMetadata,
+): boolean {
+  return LEGACY_CLEANUP_METADATA_KEYS.every((key) => left[key] === right[key])
+}
+
+function isLegacyStoreName(value: string): value is (typeof LEGACY_STORE_NAMES)[number] {
+  return LEGACY_STORE_NAMES.some((storeName) => storeName === value)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value)
+  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key))
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {

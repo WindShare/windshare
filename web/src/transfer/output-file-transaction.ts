@@ -2,7 +2,7 @@ import { ByteRangeSet, byteRange } from '../content/geometry'
 import { VerifiedDurableRanges } from './output-session'
 import type {
   BeginOutputFileResult,
-  FileAbortDisposition,
+  FileRetirementDisposition,
   OutputFile,
   OutputFileOwnership,
   OutputFileTransaction,
@@ -55,7 +55,8 @@ export function ownOutputFileTransaction(begun: BeginOutputFileResult): OutputFi
     const candidate = (begun as unknown as { readonly transaction?: unknown } | null)?.transaction
     if (typeof candidate !== 'object' || candidate === null ||
         !hasFunction(candidate, 'writeRange') || !hasFunction(candidate, 'checkpoint') ||
-        !hasFunction(candidate, 'commit') || !hasFunction(candidate, 'abort')) {
+         !hasFunction(candidate, 'commit') || !hasFunction(candidate, 'retire') ||
+         !hasFunction(candidate, 'pause')) {
       throw new OutputTransactionContractError('BeginFile did not return a complete output transaction')
     }
     return candidate as OutputFileTransaction
@@ -65,13 +66,13 @@ export function ownOutputFileTransaction(begun: BeginOutputFileResult): OutputFi
   }
 }
 
-export async function abortOutputFileTransaction(
+export async function retireOutputFileTransaction(
   transaction: OutputFileTransaction,
   reason: unknown,
-): Promise<FileAbortDisposition> {
-  const disposition = await transaction.abort(reason)
+): Promise<FileRetirementDisposition> {
+  const disposition = await transaction.retire(reason)
   if (disposition !== 'FileIsolated' && disposition !== 'JobOutputCompromised') {
-    throw new OutputTransactionContractError('output transaction returned an invalid abort disposition')
+    throw new OutputTransactionContractError('output transaction returned an invalid retirement disposition')
   }
   return disposition
 }
@@ -161,8 +162,12 @@ class SourceBoundOutputTransaction implements OutputFileTransaction {
     return this.#transaction.commit(signal)
   }
 
-  async abort(reason: unknown): Promise<'FileIsolated' | 'JobOutputCompromised'> {
-    return abortOutputFileTransaction(this.#transaction, reason)
+  async retire(reason: unknown): Promise<'FileIsolated' | 'JobOutputCompromised'> {
+    return retireOutputFileTransaction(this.#transaction, reason)
+  }
+
+  pause(reason: unknown): Promise<void> {
+    return this.#transaction.pause(reason)
   }
 }
 

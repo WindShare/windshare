@@ -143,20 +143,10 @@ func TestLinuxPinnedEntryIdentityAndCleanup(t *testing.T) {
 		t.Fatalf("pin file: %v", err)
 	}
 	t.Cleanup(func() { _ = pinned.close() })
-	allocated, err := pinned.allocatedSize()
-	if err != nil || allocated%512 != 0 {
-		t.Fatalf("allocated size = %d, error = %v", allocated, err)
-	}
 	matches, err := root.pinnedEntryMatches("pinned-file", pinned)
 	if err != nil || !matches {
 		t.Fatalf("pinned match = %t, error = %v", matches, err)
 	}
-	forged := *pinned
-	forged.object.inode++
-	if _, err := forged.allocatedSize(); !errors.Is(err, errLinuxOutputUnsafe) {
-		t.Fatalf("forged allocation authority error = %v", err)
-	}
-
 	if err := root.renameRegularFile("pinned-file", file, root, "old-pinned-file", linuxRenameReplace); err != nil {
 		t.Fatalf("move pinned file: %v", err)
 	}

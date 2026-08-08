@@ -10,8 +10,12 @@ export type V2ReceiverPhase =
   | 'completed'
   | 'completed-errors'
   | 'paused'
-  | 'aborting'
-  | 'aborted'
+  | 'pausing'
+  | 'resuming'
+  | 'discarding'
+  | 'discarded'
+  | 'retry-ready'
+  | 'needs-attention'
   | 'failed'
 
 export interface V2BrowseRow {
@@ -25,6 +29,22 @@ export interface V2BrowseRow {
 export interface V2Breadcrumb {
   readonly id: string
   readonly name: string
+}
+
+export type V2PausedTaskState =
+  | 'ready'
+  | 'resuming'
+  | 'discarding'
+  | 'busy'
+  | 'needs-attention'
+
+export interface V2PausedTaskSnapshot {
+  readonly id: string
+  readonly backend: string
+  readonly format: 'directory' | 'zip'
+  readonly completedFileCount: number
+  readonly authorizedForCurrentShare: boolean
+  readonly state: V2PausedTaskState
 }
 
 export interface V2ReceiverProgress {
@@ -98,6 +118,7 @@ export interface V2ReceiverSnapshot {
   readonly progress: V2ReceiverProgress
   readonly downloadT0Milliseconds?: number
   readonly preview: V2PreviewSnapshot
+  readonly pausedTasks: readonly V2PausedTaskSnapshot[]
 }
 
 export const EMPTY_V2_PROGRESS: V2ReceiverProgress = Object.freeze({

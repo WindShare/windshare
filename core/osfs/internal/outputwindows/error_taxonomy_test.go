@@ -286,22 +286,6 @@ func TestWindowsV3RealNativeMutationFailuresRemainOperational(t *testing.T) {
 	}
 	_ = staleDirectory.file.Close()
 	staleDirectory.file = nil
-	staleProbe, err := root.CreatePrivateFile("stale-metadata-probe.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := windows.CloseHandle(staleProbe.handle()); err != nil {
-		t.Fatal(err)
-	}
-	if duplicate, err := duplicateWindowsV3MetadataProbe(staleProbe); duplicate != nil {
-		_ = duplicate.Close()
-		t.Fatal("stale metadata probe unexpectedly duplicated")
-	} else {
-		requireWindowsV3RawOperationalError(t, err, windows.ERROR_INVALID_HANDLE)
-	}
-	_ = staleProbe.file.Close()
-	staleProbe.file = nil
-
 	modified, err := catalog.NewModifiedTime(1_700_000_000, 0, catalog.TimePrecisionSeconds)
 	if err != nil {
 		t.Fatal(err)

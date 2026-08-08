@@ -12,7 +12,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/transfer"
 	"golang.org/x/sys/windows"
 )
 
@@ -283,20 +282,16 @@ func TestWindowsV3AdapterAuthoritiesFailClosedAfterClose(t *testing.T) {
 	}{
 		{name: "root binding", run: func() error { _, err := platform.RootBinding(); return err }},
 		{name: "feature probe", run: platform.ProbeRecoverableFeatures},
-		{name: "selection metadata", run: func() error { return platform.ValidateSelectionMetadata(transfer.OutputSelection{}) }},
 		{name: "duplicate directory", run: func() error { _, err := directory.Duplicate(); return err }},
 		{name: "sync directory", run: directory.Sync},
 		{name: "list names", run: func() error { _, err := directory.Names(1); return err }},
-		{name: "list prefix", run: func() error { _, err := directory.NamesWithPrefix("x", 1); return err }},
 		{name: "observe entry", run: func() error { _, err := directory.ObserveEntry("x"); return err }},
 		{name: "classify exact entry", run: func() error { _, _, err := directory.ClassifyExactEntry("x"); return err }},
-		{name: "validate public name", run: func() error { return directory.ValidatePublicEntryName("x") }},
 		{name: "validate public names", run: func() error { return directory.ValidatePublicEntryNames([]string{"x"}) }},
 		{name: "open entry", run: func() error { _, err := directory.OpenEntry("x"); return err }},
 		{name: "match entry", run: func() error { _, err := directory.EntryMatches("x", nil); return err }},
 		{name: "open pinned directory", run: func() error { _, err := directory.OpenPinnedDirectory(nil, true); return err }},
 		{name: "remove entry", run: func() error { return directory.RemoveEntry("x", nil) }},
-		{name: "directory identity", run: func() error { _, err := directory.IdentityClaim(); return err }},
 		{name: "compare directory", run: func() error { _, err := directory.SameDirectory(nil); return err }},
 		{name: "set directory time", run: func() error { return directory.SetModifiedTime(catalog.ModifiedTime{}) }},
 		{name: "open directory", run: func() error { _, err := directory.OpenDirectory("x", false); return err }},
@@ -309,13 +304,10 @@ func TestWindowsV3AdapterAuthoritiesFailClosedAfterClose(t *testing.T) {
 		{name: "replace file", run: func() error { return directory.ReplacePrivateFile(nil, "x") }},
 		{name: "remove file", run: func() error { return directory.RemoveFile("x", nil) }},
 		{name: "acquire lock", run: func() error { _, _, err := directory.AcquireLock("x", false); return err }},
-		{name: "entry allocation", run: func() error { _, err := entry.AllocatedSize(); return err }},
 		{name: "read file", run: func() error { _, err := file.ReadAt(make([]byte, 1), 0); return err }},
 		{name: "write file", run: func() error { _, err := file.WriteAt([]byte{1}, 0); return err }},
 		{name: "sync file", run: file.Sync},
-		{name: "truncate file", run: func() error { return file.Truncate(0) }},
 		{name: "file size", run: func() error { _, err := file.Size(); return err }},
-		{name: "file allocation", run: func() error { _, err := file.AllocatedSize(); return err }},
 		{name: "set file time", run: func() error { return file.SetModifiedTime(catalog.ModifiedTime{}) }},
 		{name: "match file metadata", run: func() error { _, err := file.MetadataMatches(0, catalog.ModifiedTime{}); return err }},
 		{name: "compare file", run: func() error { _, err := file.SameFile(nil); return err }},

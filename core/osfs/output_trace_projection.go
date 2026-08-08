@@ -3,8 +3,8 @@ package osfs
 import "github.com/windshare/windshare/core/osfs/internal/outputruntime"
 
 // outputRuntimeTracer is the single semantic projection from internal runtime
-// observability to the stable public event vocabulary. Each enum is mapped
-// explicitly so adding a runtime decision cannot silently acquire a public value.
+// observability to the public event vocabulary. Explicit mappings prevent new
+// internal decisions from silently becoming public API.
 type outputRuntimeTracer struct {
 	target FilesystemOutputTracer
 }
@@ -16,29 +16,30 @@ func (tracer outputRuntimeTracer) TraceFilesystemOutput(event outputruntime.File
 }
 
 func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) FilesystemOutputTrace {
-	var ancestryDigest FilesystemOutputAncestryDigest
-	copy(ancestryDigest[:], event.OutputAncestryDigest.Bytes())
 	return FilesystemOutputTrace{
-		Operation: projectTraceOperation(event.Operation), IntentDigest: event.IntentDigest,
-		SessionID: event.SessionID, LocatorDigest: event.LocatorDigest, OutputObjectID: event.OutputObjectID,
-		PreviousPhase: projectFilePhase(event.PreviousPhase), NextPhase: projectFilePhase(event.NextPhase),
-		RecoveryAction: projectRecoveryAction(event.RecoveryAction), FileSettlement: event.FileSettlement,
-		FileSettlementBoundary: projectFileSettlementBoundary(event.FileSettlementBoundary),
-		FilePauseReason:        event.FilePauseReason, FileRetireReason: event.FileRetireReason,
-		QuarantineReason: event.QuarantineReason, JobSettlement: event.JobSettlement,
-		FailureScope: event.FailureScope, FailureCode: event.FailureCode,
-		Certification: projectCertification(event.Certification), StateGeneration: event.StateGeneration,
-		StateInstallStage: projectStateInstallStage(event.StateInstallStage),
-		SelectionIdentity: event.SelectionIdentity, OutputAncestryDigest: ancestryDigest,
-		AncestryBoundary:          projectAncestryBoundary(event.AncestryBoundary),
-		AncestryDecision:          projectAncestryDecision(event.AncestryDecision),
-		AncestryClaimCount:        event.AncestryClaimCount,
-		NativeLockScope:           projectNativeLockScope(event.NativeLockScope),
-		NativeLockMilestone:       projectNativeLockMilestone(event.NativeLockMilestone),
-		MutationReportedFailure:   event.MutationReportedFailure,
-		ParentSyncReportedFailure: event.ParentSyncReportedFailure,
-		CleanupRemoved:            event.CleanupRemoved, CleanupQuarantined: event.CleanupQuarantined,
-		CleanupSkipped: event.CleanupSkipped, Failed: event.Failed,
+		Operation:              projectTraceOperation(event.Operation),
+		IntentDigest:           event.IntentDigest,
+		SessionID:              event.SessionID,
+		Certification:          projectCertification(event.Certification),
+		NativeLockScope:        projectNativeLockScope(event.NativeLockScope),
+		NativeLockMilestone:    projectNativeLockMilestone(event.NativeLockMilestone),
+		RootOpenDisposition:    projectRootOpenDisposition(event.RootOpenDisposition),
+		RuntimeComponent:       projectRuntimeComponent(event.RuntimeComponent),
+		RuntimeOperation:       projectRuntimeOperation(event.RuntimeOperation),
+		RuntimeDecision:        projectRuntimeDecision(event.RuntimeDecision),
+		OperationID:            event.OperationID,
+		ClaimID:                event.ClaimID,
+		FaultDomain:            event.FaultDomain,
+		NormalizedFaultScope:   event.NormalizedFaultScope,
+		NormalizedFaultCode:    event.NormalizedFaultCode,
+		NodeClaimCount:         event.NodeClaimCount,
+		DirectoryClaimCount:    event.DirectoryClaimCount,
+		FileClaimCount:         event.FileClaimCount,
+		ActiveFileClaimCount:   event.ActiveFileClaimCount,
+		ReservedFileSlotCount:  event.ReservedFileSlotCount,
+		DirectoryMetadataBytes: event.DirectoryMetadataBytes,
+		CheckpointRecordCount:  event.CheckpointRecordCount,
+		Failed:                 event.Failed,
 	}
 }
 
@@ -48,113 +49,136 @@ func projectTraceOperation(value outputruntime.FilesystemOutputTraceOperation) F
 		return TraceFilesystemCertified
 	case outputruntime.TraceFeatureProbeCompleted:
 		return TraceFeatureProbeCompleted
-	case outputruntime.TraceCheckpointCleanup:
-		return TraceCheckpointCleanup
-	case outputruntime.TraceControlBootstrap:
-		return TraceControlBootstrap
+	case outputruntime.TraceCheckpointNamespaceOpened:
+		return TraceCheckpointNamespaceOpened
 	case outputruntime.TraceNativeLock:
 		return TraceNativeLock
 	case outputruntime.TraceSessionOpened:
 		return TraceSessionOpened
-	case outputruntime.TraceFilePhaseTransition:
-		return TraceFilePhaseTransition
-	case outputruntime.TraceFileRecoveryDecision:
-		return TraceFileRecoveryDecision
-	case outputruntime.TraceFileSettlement:
-		return TraceFileSettlement
-	case outputruntime.TraceSessionSettlement:
-		return TraceSessionSettlement
-	case outputruntime.TraceStateInstallCutAdopted:
-		return TraceStateInstallCutAdopted
-	case outputruntime.TraceAncestryValidation:
-		return TraceAncestryValidation
+	case outputruntime.TraceCheckpointReconciled:
+		return TraceCheckpointReconciled
+	case outputruntime.TraceRuntimeDecision:
+		return TraceRuntimeDecision
 	default:
 		return 0
 	}
 }
 
-func projectFilePhase(value outputruntime.FilesystemOutputFilePhase) FilesystemOutputFilePhase {
+func projectRootOpenDisposition(
+	value outputruntime.FilesystemOutputRootDisposition,
+) FilesystemOutputRootDisposition {
 	switch value {
-	case outputruntime.FilesystemOutputFileReserved:
-		return FilesystemOutputFileReserved
-	case outputruntime.FilesystemOutputFileWitnessed:
-		return FilesystemOutputFileWitnessed
-	case outputruntime.FilesystemOutputFilePublishing:
-		return FilesystemOutputFilePublishing
-	case outputruntime.FilesystemOutputFilePublishBlocked:
-		return FilesystemOutputFilePublishBlocked
-	case outputruntime.FilesystemOutputFilePublished:
-		return FilesystemOutputFilePublished
-	case outputruntime.FilesystemOutputFileRetiring:
-		return FilesystemOutputFileRetiring
-	case outputruntime.FilesystemOutputFileQuarantined:
-		return FilesystemOutputFileQuarantined
+	case outputruntime.FilesystemOutputCallerProvidedContainer:
+		return FilesystemOutputCallerProvidedContainer
+	case outputruntime.FilesystemOutputAuthorityCreatedRoot:
+		return FilesystemOutputAuthorityCreatedRoot
+	default:
+		return ""
+	}
+}
+
+func projectRuntimeComponent(
+	value outputruntime.FilesystemOutputRuntimeComponent,
+) FilesystemOutputRuntimeComponent {
+	switch value {
+	case outputruntime.FilesystemOutputRuntimeSession:
+		return FilesystemOutputRuntimeSession
+	case outputruntime.FilesystemOutputRuntimeDirectory:
+		return FilesystemOutputRuntimeDirectory
+	case outputruntime.FilesystemOutputRuntimeFile:
+		return FilesystemOutputRuntimeFile
+	case outputruntime.FilesystemOutputRuntimeCheckpoint:
+		return FilesystemOutputRuntimeCheckpoint
 	default:
 		return 0
 	}
 }
 
-func projectRecoveryAction(value outputruntime.FilesystemOutputRecoveryAction) FilesystemOutputRecoveryAction {
+func projectRuntimeOperation(
+	value outputruntime.FilesystemOutputRuntimeOperation,
+) FilesystemOutputRuntimeOperation {
 	switch value {
-	case outputruntime.FilesystemOutputRecoveryRetryObjectCreation:
-		return FilesystemOutputRecoveryRetryObjectCreation
-	case outputruntime.FilesystemOutputRecoveryInstallWitness:
-		return FilesystemOutputRecoveryInstallWitness
-	case outputruntime.FilesystemOutputRecoveryRequireRevisionBinding:
-		return FilesystemOutputRecoveryRequireRevisionBinding
-	case outputruntime.FilesystemOutputRecoveryResumeContent:
-		return FilesystemOutputRecoveryResumeContent
-	case outputruntime.FilesystemOutputRecoveryInstallPublishing:
-		return FilesystemOutputRecoveryInstallPublishing
-	case outputruntime.FilesystemOutputRecoveryLinkFinalNoReplace:
-		return FilesystemOutputRecoveryLinkFinalNoReplace
-	case outputruntime.FilesystemOutputRecoverySyncFinalParent:
-		return FilesystemOutputRecoverySyncFinalParent
-	case outputruntime.FilesystemOutputRecoveryInstallPublished:
-		return FilesystemOutputRecoveryInstallPublished
-	case outputruntime.FilesystemOutputRecoveryInstallPublishBlocked:
-		return FilesystemOutputRecoveryInstallPublishBlocked
-	case outputruntime.FilesystemOutputRecoveryHoldPublishBlocked:
-		return FilesystemOutputRecoveryHoldPublishBlocked
-	case outputruntime.FilesystemOutputRecoveryRemovePublishedStageAndSync:
-		return FilesystemOutputRecoveryRemovePublishedStageAndSync
-	case outputruntime.FilesystemOutputRecoverySyncPublishedStageParent:
-		return FilesystemOutputRecoverySyncPublishedStageParent
-	case outputruntime.FilesystemOutputRecoveryRemoveRetiringStageAndSync:
-		return FilesystemOutputRecoveryRemoveRetiringStageAndSync
-	case outputruntime.FilesystemOutputRecoverySyncStageRemoveAnchorAndSync:
-		return FilesystemOutputRecoverySyncStageRemoveAnchorAndSync
-	case outputruntime.FilesystemOutputRecoverySyncParentsRemoveRecordAndSync:
-		return FilesystemOutputRecoverySyncParentsRemoveRecordAndSync
-	case outputruntime.FilesystemOutputRecoveryInstallRetiring:
-		return FilesystemOutputRecoveryInstallRetiring
-	case outputruntime.FilesystemOutputRecoveryInstallQuarantine:
-		return FilesystemOutputRecoveryInstallQuarantine
-	case outputruntime.FilesystemOutputRecoveryHoldQuarantine:
-		return FilesystemOutputRecoveryHoldQuarantine
-	case outputruntime.FilesystemOutputRecoveryHoldPublishedCleanup:
-		return FilesystemOutputRecoveryHoldPublishedCleanup
-	case outputruntime.FilesystemOutputRecoveryHoldRetiringCleanup:
-		return FilesystemOutputRecoveryHoldRetiringCleanup
+	case outputruntime.FilesystemOutputRuntimeOpenOutput:
+		return FilesystemOutputRuntimeOpenOutput
+	case outputruntime.FilesystemOutputRuntimeAcquireIntentLease:
+		return FilesystemOutputRuntimeAcquireIntentLease
+	case outputruntime.FilesystemOutputRuntimeReconcileCheckpoints:
+		return FilesystemOutputRuntimeReconcileCheckpoints
+	case outputruntime.FilesystemOutputRuntimeAdmitDirectory:
+		return FilesystemOutputRuntimeAdmitDirectory
+	case outputruntime.FilesystemOutputRuntimeFinalizeDirectory:
+		return FilesystemOutputRuntimeFinalizeDirectory
+	case outputruntime.FilesystemOutputRuntimeBeginFile:
+		return FilesystemOutputRuntimeBeginFile
+	case outputruntime.FilesystemOutputRuntimeWriteRange:
+		return FilesystemOutputRuntimeWriteRange
+	case outputruntime.FilesystemOutputRuntimeCheckpointFile:
+		return FilesystemOutputRuntimeCheckpointFile
+	case outputruntime.FilesystemOutputRuntimeCommitFile:
+		return FilesystemOutputRuntimeCommitFile
+	case outputruntime.FilesystemOutputRuntimePauseFile:
+		return FilesystemOutputRuntimePauseFile
+	case outputruntime.FilesystemOutputRuntimeRetireFile:
+		return FilesystemOutputRuntimeRetireFile
+	case outputruntime.FilesystemOutputRuntimePauseJob:
+		return FilesystemOutputRuntimePauseJob
+	case outputruntime.FilesystemOutputRuntimeCompleteJob:
+		return FilesystemOutputRuntimeCompleteJob
+	case outputruntime.FilesystemOutputRuntimeMaterializeDirectory:
+		return FilesystemOutputRuntimeMaterializeDirectory
+	case outputruntime.FilesystemOutputRuntimeCreateOwnedFile:
+		return FilesystemOutputRuntimeCreateOwnedFile
+	case outputruntime.FilesystemOutputRuntimeRecoverFile:
+		return FilesystemOutputRuntimeRecoverFile
+	case outputruntime.FilesystemOutputRuntimePublishFile:
+		return FilesystemOutputRuntimePublishFile
+	case outputruntime.FilesystemOutputRuntimeQuarantineFile:
+		return FilesystemOutputRuntimeQuarantineFile
 	default:
 		return 0
 	}
 }
 
-func projectFileSettlementBoundary(value outputruntime.FilesystemOutputFileSettlementBoundary) FilesystemOutputFileSettlementBoundary {
+func projectRuntimeDecision(
+	value outputruntime.FilesystemOutputRuntimeDecision,
+) FilesystemOutputRuntimeDecision {
 	switch value {
-	case outputruntime.FilesystemOutputSettlementBeginFile:
-		return FilesystemOutputSettlementBeginFile
-	case outputruntime.FilesystemOutputSettlementCommit:
-		return FilesystemOutputSettlementCommit
-	case outputruntime.FilesystemOutputSettlementPause:
-		return FilesystemOutputSettlementPause
-	case outputruntime.FilesystemOutputSettlementJobPause:
-		return FilesystemOutputSettlementJobPause
-	case outputruntime.FilesystemOutputSettlementBeginFileCleanup:
-		return FilesystemOutputSettlementBeginFileCleanup
-	case outputruntime.FilesystemOutputSettlementRetire:
-		return FilesystemOutputSettlementRetire
+	case outputruntime.FilesystemOutputRuntimeValidated:
+		return FilesystemOutputRuntimeValidated
+	case outputruntime.FilesystemOutputRuntimeReserved:
+		return FilesystemOutputRuntimeReserved
+	case outputruntime.FilesystemOutputRuntimeCoalesced:
+		return FilesystemOutputRuntimeCoalesced
+	case outputruntime.FilesystemOutputRuntimeRejected:
+		return FilesystemOutputRuntimeRejected
+	case outputruntime.FilesystemOutputRuntimeRolledBack:
+		return FilesystemOutputRuntimeRolledBack
+	case outputruntime.FilesystemOutputRuntimeAdmitted:
+		return FilesystemOutputRuntimeAdmitted
+	case outputruntime.FilesystemOutputRuntimeActive:
+		return FilesystemOutputRuntimeActive
+	case outputruntime.FilesystemOutputRuntimeSealed:
+		return FilesystemOutputRuntimeSealed
+	case outputruntime.FilesystemOutputRuntimeSettled:
+		return FilesystemOutputRuntimeSettled
+	case outputruntime.FilesystemOutputRuntimeAmbiguous:
+		return FilesystemOutputRuntimeAmbiguous
+	case outputruntime.FilesystemOutputRuntimeDraining:
+		return FilesystemOutputRuntimeDraining
+	case outputruntime.FilesystemOutputRuntimeClosed:
+		return FilesystemOutputRuntimeClosed
+	case outputruntime.FilesystemOutputRuntimeSucceeded:
+		return FilesystemOutputRuntimeSucceeded
+	case outputruntime.FilesystemOutputRuntimeReconciled:
+		return FilesystemOutputRuntimeReconciled
+	case outputruntime.FilesystemOutputRuntimeCollision:
+		return FilesystemOutputRuntimeCollision
+	case outputruntime.FilesystemOutputRuntimeNoChange:
+		return FilesystemOutputRuntimeNoChange
+	case outputruntime.FilesystemOutputRuntimeNeedsAttention:
+		return FilesystemOutputRuntimeNeedsAttention
+	case outputruntime.FilesystemOutputRuntimeIsolatedFailure:
+		return FilesystemOutputRuntimeIsolatedFailure
 	default:
 		return 0
 	}
@@ -171,61 +195,8 @@ func projectCertification(value outputruntime.FilesystemOutputCertificationID) F
 	}
 }
 
-func projectStateInstallStage(value outputruntime.FilesystemOutputStateInstallStage) FilesystemOutputStateInstallStage {
-	switch value {
-	case outputruntime.FilesystemOutputStateCreate:
-		return FilesystemOutputStateCreate
-	case outputruntime.FilesystemOutputStateReplace:
-		return FilesystemOutputStateReplace
-	default:
-		return 0
-	}
-}
-
-func projectAncestryBoundary(value outputruntime.FilesystemOutputAncestryBoundary) FilesystemOutputAncestryBoundary {
-	switch value {
-	case outputruntime.FilesystemOutputAncestryAdmission:
-		return FilesystemOutputAncestryAdmission
-	case outputruntime.FilesystemOutputAncestryRestart:
-		return FilesystemOutputAncestryRestart
-	case outputruntime.FilesystemOutputAncestryBeginFile:
-		return FilesystemOutputAncestryBeginFile
-	case outputruntime.FilesystemOutputAncestryRecovery:
-		return FilesystemOutputAncestryRecovery
-	case outputruntime.FilesystemOutputAncestryPublicationPre:
-		return FilesystemOutputAncestryPublicationPre
-	case outputruntime.FilesystemOutputAncestryPublicationPost:
-		return FilesystemOutputAncestryPublicationPost
-	case outputruntime.FilesystemOutputAncestryDirectoryFinalize:
-		return FilesystemOutputAncestryDirectoryFinalize
-	case outputruntime.FilesystemOutputAncestrySessionFinalize:
-		return FilesystemOutputAncestrySessionFinalize
-	default:
-		return 0
-	}
-}
-
-func projectAncestryDecision(value outputruntime.FilesystemOutputAncestryDecision) FilesystemOutputAncestryDecision {
-	switch value {
-	case outputruntime.FilesystemOutputAncestryPrepared:
-		return FilesystemOutputAncestryPrepared
-	case outputruntime.FilesystemOutputAncestryMatched:
-		return FilesystemOutputAncestryMatched
-	case outputruntime.FilesystemOutputAncestryMismatch:
-		return FilesystemOutputAncestryMismatch
-	case outputruntime.FilesystemOutputAncestryAuthorityDenied:
-		return FilesystemOutputAncestryAuthorityDenied
-	case outputruntime.FilesystemOutputAncestryStructuralUnsafe:
-		return FilesystemOutputAncestryStructuralUnsafe
-	default:
-		return 0
-	}
-}
-
 func projectNativeLockScope(value outputruntime.FilesystemOutputNativeLockScope) FilesystemOutputNativeLockScope {
 	switch value {
-	case outputruntime.FilesystemOutputNativeLockCoordinator:
-		return FilesystemOutputNativeLockCoordinator
 	case outputruntime.FilesystemOutputNativeLockSession:
 		return FilesystemOutputNativeLockSession
 	default:

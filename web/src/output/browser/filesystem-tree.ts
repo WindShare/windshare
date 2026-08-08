@@ -1,10 +1,21 @@
 import { bigintToSafeNumber } from '../../content/geometry'
+import { encodeBase64Url } from '../../crypto/bytes'
+import { FILE_SYSTEM_ACCESS_BACKEND } from '../capability/contract'
+import { FILE_CHECKPOINT_ID_BYTES, identityBytes } from '../persistence/checkpoint'
+import {
+  durableCheckpointNamespaceIdentity,
+  type DurableCheckpointNamespaceIdentity,
+} from '../persistence/namespace'
 import type {
   PersistentDirectoryMaterialization,
   PersistentOutputTree,
   PersistentTreeFile,
 } from '../persistent-tree/contracts'
 import type { PersistentHandleRepository } from './indexeddb-repository'
+import type {
+  BrowserFileSystemMutationAuthority,
+  BrowserFileSystemMutationKind,
+} from './namespace-mutation'
 
 const READ_WRITE_PERMISSION = Object.freeze({ mode: 'readwrite' as const })
 
@@ -13,21 +24,55 @@ interface PermissionCapableHandle extends FileSystemHandle {
   requestPermission?(descriptor?: { readonly mode?: 'read' | 'readwrite' }): Promise<PermissionState>
 }
 
+type BoundPersistentHandleRepository = PersistentHandleRepository & {
+  readonly binding: DurableCheckpointNamespaceIdentity
+}
+
 export interface BrowserFileSystemTreeOptions {
   readonly root: FileSystemDirectoryHandle
-  readonly handles: PersistentHandleRepository
+  readonly handles: BoundPersistentHandleRepository
   readonly randomIdentity?: () => string
 }
 
+export interface BrowserSharedFileSystemTreeOptions extends BrowserFileSystemTreeOptions {
+  readonly mutations: BrowserFileSystemMutationAuthority
+}
+
+export type BrowserOwnedObjectState = 'owned' | 'absent' | 'changed'
+
 export class BrowserFileSystemTree implements PersistentOutputTree {
   readonly #root: FileSystemDirectoryHandle
-  readonly #handles: PersistentHandleRepository
+  readonly #handles: BoundPersistentHandleRepository
   readonly #randomIdentity: () => string
+  readonly #mutations: BrowserFileSystemMutationAuthority | undefined
 
-  constructor(options: BrowserFileSystemTreeOptions) {
+  private constructor(
+    options: BrowserFileSystemTreeOptions,
+    mutations: BrowserFileSystemMutationAuthority | undefined,
+  ) {
     this.#root = options.root
     this.#handles = options.handles
-    this.#randomIdentity = options.randomIdentity ?? (() => crypto.randomUUID())
+    this.#randomIdentity = options.randomIdentity ?? createOwnedObjectIdentity
+    this.#mutations = mutations
+  }
+
+  static forSharedRoot(options: BrowserSharedFileSystemTreeOptions): BrowserFileSystemTree {
+    const binding = durableCheckpointNamespaceIdentity(options.handles.binding)
+    if (binding.backend !== FILE_SYSTEM_ACCESS_BACKEND) {
+      throw new TypeError('Only File System Access output may use a shared-root mutation authority')
+    }
+    if (!sameBinding(binding, options.mutations.binding)) {
+      throw new TypeError('File System Access mutation authority does not match the output namespace')
+    }
+    return new BrowserFileSystemTree(options, options.mutations)
+  }
+
+  static forIsolatedNamespace(options: BrowserFileSystemTreeOptions): BrowserFileSystemTree {
+    const binding = durableCheckpointNamespaceIdentity(options.handles.binding)
+    if (binding.backend === FILE_SYSTEM_ACCESS_BACKEND) {
+      throw new TypeError('File System Access output requires a shared-root mutation authority')
+    }
+    return new BrowserFileSystemTree(options, undefined)
   }
 
   async authorize(): Promise<void> {
@@ -45,75 +90,105 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     path: readonly string[],
   ): Promise<PersistentDirectoryMaterialization> {
     requirePath(path)
-    let current = this.#root
-    const parents = path.slice(0, -1)
-    for (const segment of parents) {
-      current = await current.getDirectoryHandle(segment)
-    }
-    const name = path.at(-1)
-    if (name === undefined) throw new TypeError('Output directory path has no name')
-    // Parent creation is forbidden here because every owned directory needs its
-    // own journal record and cleanup identity.
-    const materialized = await openOrCreateDirectory(current, name)
-    current = materialized.handle
-    const identity = this.#randomIdentity()
-    try {
-      await this.#handles.putHandle(identity, current)
-    } catch (error) {
-      if (materialized.created) {
-        try {
-          await (path.length === 1 ? this.#root : await this.#directory(parents))
-            .removeEntry(name)
-        } catch (cleanupError) {
-          throw new AggregateError(
-            [error, cleanupError],
-            'Directory handle persistence and cleanup failed',
-            { cause: cleanupError },
-          )
-        }
+    return this.#mutate('ensure-directory', path, async () => {
+      let current = this.#root
+      const parents = path.slice(0, -1)
+      for (const segment of parents) {
+        current = await current.getDirectoryHandle(segment)
       }
-      throw error
-    }
-    return Object.freeze({ identity, created: materialized.created })
+      const name = path.at(-1)
+      if (name === undefined) throw new TypeError('Output directory path has no name')
+      // Parent creation is forbidden here because every owned directory needs its
+      // own journal record and cleanup identity.
+      const materialized = await openOrCreateDirectory(current, name)
+      current = materialized.handle
+      const identity = ownedObjectIdentity(this.#randomIdentity())
+      try {
+        await this.#handles.putHandle(identity, current)
+      } catch (error) {
+        if (materialized.created) {
+          try {
+            await (path.length === 1 ? this.#root : await this.#directory(parents))
+              .removeEntry(name)
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              'Directory handle persistence and cleanup failed',
+              { cause: cleanupError },
+            )
+          }
+        }
+        throw error
+      }
+      return Object.freeze({ identity, created: materialized.created })
+    })
   }
 
   async validateDirectory(path: readonly string[], identity: string): Promise<boolean> {
+    return await this.ownedDirectoryState(path, identity) === 'owned'
+  }
+
+  async ownedDirectoryState(
+    path: readonly string[],
+    identity: string,
+  ): Promise<BrowserOwnedObjectState> {
     const persisted = await this.#handles.getHandle(identity)
-    if (persisted?.kind !== 'directory') return false
     try {
       const current = await this.#directory(path)
-      return current.isSameEntry(persisted)
+      if (persisted?.kind !== 'directory') return 'changed'
+      return await current.isSameEntry(persisted) ? 'owned' : 'changed'
     } catch (error) {
-      if (errorNamed(error, 'NotFoundError')) return false
+      if (errorNamed(error, 'NotFoundError')) return 'absent'
       throw error
     }
   }
 
   async createFileExclusive(path: readonly string[]): Promise<PersistentTreeFile> {
-    const { parent, name } = await this.#parent(path)
-    try {
-      await parent.getFileHandle(name)
-      throw new DOMException('Output file already exists', 'InvalidModificationError')
-    } catch (error) {
-      if (!errorNamed(error, 'NotFoundError')) throw error
-    }
-    const handle = await parent.getFileHandle(name, { create: true })
-    const identity = this.#randomIdentity()
-    try {
-      await this.#handles.putHandle(identity, handle)
-    } catch (error) {
+    requirePath(path)
+    return this.#mutate('create-file', path, async () => {
+      const { parent, name } = await this.#parent(path)
       try {
-        await parent.removeEntry(name)
-      } catch (cleanupError) {
-        throw new AggregateError(
-          [error, cleanupError],
-          'File handle persistence and cleanup failed',
-          { cause: cleanupError },
-        )
+        await parent.getFileHandle(name)
+        throw new DOMException('Output file already exists', 'InvalidModificationError')
+      } catch (error) {
+        if (!errorNamed(error, 'NotFoundError')) throw error
       }
+      // FSA has no exclusive-create primitive. The shared-root authority keeps
+      // observation, creation, ownership persistence, and rollback in one cut.
+      const handle = await parent.getFileHandle(name, { create: true })
+      const identity = ownedObjectIdentity(this.#randomIdentity())
+      try {
+        await this.#handles.putHandle(identity, handle)
+      } catch (error) {
+        try {
+          await parent.removeEntry(name)
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            'File handle persistence and cleanup failed',
+            { cause: cleanupError },
+          )
+        }
+        throw error
+      }
+      return new BrowserPersistentFile(identity, handle)
+    })
+  }
+
+  async ownedFileState(
+    path: readonly string[],
+    identity: string,
+  ): Promise<BrowserOwnedObjectState> {
+    const persisted = await this.#handles.getHandle(identity)
+    try {
+      const { parent, name } = await this.#parent(path)
+      const current = await parent.getFileHandle(name)
+      if (persisted?.kind !== 'file') return 'changed'
+      return await current.isSameEntry(persisted) ? 'owned' : 'changed'
+    } catch (error) {
+      if (errorNamed(error, 'NotFoundError')) return 'absent'
       throw error
     }
-    return new BrowserPersistentFile(identity, handle)
   }
 
   async openFile(
@@ -135,39 +210,47 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
   }
 
   async removeFile(path: readonly string[], identity: string): Promise<void> {
-    const persisted = await this.#handles.getHandle(identity)
-    if (persisted?.kind !== 'file') {
-      throw new DOMException('Owned output file handle is unavailable', 'InvalidStateError')
-    }
-    const { parent, name } = await this.#parent(path)
-    try {
-      const current = await parent.getFileHandle(name)
-      if (!await current.isSameEntry(persisted)) {
-        throw new DOMException('Output file identity changed', 'InvalidModificationError')
+    requirePath(path)
+    await this.#mutate('remove-file', path, async () => {
+      const persisted = await this.#handles.getHandle(identity)
+      try {
+        const { parent, name } = await this.#parent(path)
+        const current = await parent.getFileHandle(name)
+        if (persisted?.kind !== 'file') {
+          throw new DOMException('Owned output file handle is unavailable', 'InvalidStateError')
+        }
+        if (!await current.isSameEntry(persisted)) {
+          throw new DOMException('Output file identity changed', 'InvalidModificationError')
+        }
+        await parent.removeEntry(name)
+      } catch (error) {
+        if (!errorNamed(error, 'NotFoundError')) throw error
       }
-      await parent.removeEntry(name)
-    } catch (error) {
-      if (!errorNamed(error, 'NotFoundError')) throw error
-    }
-    await this.#handles.deleteHandle(identity)
+      // The missing path is success only after a discard journal has certified the
+      // object. Removing the durable handle here makes that physical step replayable.
+      await this.#handles.deleteHandle(identity)
+    })
   }
 
   async removeDirectory(path: readonly string[], identity: string): Promise<void> {
-    const persisted = await this.#handles.getHandle(identity)
-    if (persisted?.kind !== 'directory') {
-      throw new DOMException('Owned output directory handle is unavailable', 'InvalidStateError')
-    }
-    const { parent, name } = await this.#parent(path)
-    try {
-      const current = await parent.getDirectoryHandle(name)
-      if (!await current.isSameEntry(persisted)) {
-        throw new DOMException('Output directory identity changed', 'InvalidModificationError')
+    requirePath(path)
+    await this.#mutate('remove-directory', path, async () => {
+      const persisted = await this.#handles.getHandle(identity)
+      try {
+        const { parent, name } = await this.#parent(path)
+        const current = await parent.getDirectoryHandle(name)
+        if (persisted?.kind !== 'directory') {
+          throw new DOMException('Owned output directory handle is unavailable', 'InvalidStateError')
+        }
+        if (!await current.isSameEntry(persisted)) {
+          throw new DOMException('Output directory identity changed', 'InvalidModificationError')
+        }
+        await parent.removeEntry(name)
+      } catch (error) {
+        if (!errorNamed(error, 'NotFoundError')) throw error
       }
-      await parent.removeEntry(name)
-    } catch (error) {
-      if (!errorNamed(error, 'NotFoundError')) throw error
-    }
-    await this.#handles.deleteHandle(identity)
+      await this.#handles.deleteHandle(identity)
+    })
   }
 
   forgetIdentity(identity: string): Promise<void> {
@@ -189,6 +272,16 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     let current = this.#root
     for (const segment of path) current = await current.getDirectoryHandle(segment)
     return current
+  }
+
+  #mutate<T>(
+    kind: BrowserFileSystemMutationKind,
+    path: readonly string[],
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return this.#mutations === undefined
+      ? operation()
+      : this.#mutations.mutate(kind, path, operation)
   }
 }
 
@@ -256,4 +349,35 @@ function requirePath(path: readonly string[]): void {
 function errorNamed(error: unknown, name: string): boolean {
   return typeof error === 'object' && error !== null &&
     'name' in error && (error as { readonly name?: unknown }).name === name
+}
+
+function sameBinding(
+  left: DurableCheckpointNamespaceIdentity,
+  right: DurableCheckpointNamespaceIdentity,
+): boolean {
+  const canonicalRight = durableCheckpointNamespaceIdentity(right)
+  return left.backend === canonicalRight.backend &&
+    left.transferIntentDigest === canonicalRight.transferIntentDigest &&
+    left.rootIdentity === canonicalRight.rootIdentity
+}
+
+function ownedObjectIdentity(value: string): string {
+  return encodeBase64Url(identityBytes(
+    value,
+    FILE_CHECKPOINT_ID_BYTES,
+    'owned output object',
+  ))
+}
+
+function createOwnedObjectIdentity(): string {
+  const bytes = new Uint8Array(FILE_CHECKPOINT_ID_BYTES)
+  const cryptoSource = globalThis.crypto
+  if (cryptoSource?.getRandomValues === undefined) {
+    throw new DOMException(
+      'Secure owned-output identity generation is unavailable',
+      'NotSupportedError',
+    )
+  }
+  cryptoSource.getRandomValues(bytes)
+  return encodeBase64Url(bytes)
 }

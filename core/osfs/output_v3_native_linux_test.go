@@ -10,7 +10,6 @@ import (
 
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/osfs/internal/outputlinux"
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 )
 
 const linuxExt4NativeCertificationProfile = "linux-ext4"
@@ -21,7 +20,7 @@ func TestLinuxExt4NativeCertification(t *testing.T) {
 		t,
 		t.TempDir(),
 		linuxExt4NativeCertificationProfile,
-		resumestate.CertificationLinuxExt4ProcessRestart,
+		outputcap.CertificationLinuxExt4ProcessRestart,
 	)
 	if err := platform.Close(); err != nil {
 		t.Fatalf("close Linux/ext4 certification authority: %v", err)
@@ -33,14 +32,9 @@ func TestLinuxExt4ProcessRestartRecovery(t *testing.T) {
 	runNativeOutputProcessRestartRecoveryTest(
 		t,
 		linuxExt4NativeCertificationProfile,
-		resumestate.CertificationLinuxExt4ProcessRestart,
+		outputcap.CertificationLinuxExt4ProcessRestart,
 		outputlinux.ProbeNamePrefix+"31415926535897932384626433832795",
 		0,
-	)
-	runNativeOutputSessionProcessRestartRecoveryTest(
-		t,
-		linuxExt4NativeCertificationProfile,
-		resumestate.CertificationLinuxExt4ProcessRestart,
 	)
 }
 
@@ -93,30 +87,17 @@ func TestLinuxRootCreationDoesNotTraverseSymlinkAncestor(t *testing.T) {
 	}
 }
 
-func TestLinuxExt4DirectoryClaimsAndPinnedRemovalAreHandleBound(t *testing.T) {
+func TestLinuxExt4PinnedRemovalIsHandleBound(t *testing.T) {
 	requireUnprivilegedLinuxExt4Certification(t)
 	rootPath := t.TempDir()
 	platform := openCertifiedNativeOutputForTest(
 		t,
 		rootPath,
 		linuxExt4NativeCertificationProfile,
-		resumestate.CertificationLinuxExt4ProcessRestart,
+		outputcap.CertificationLinuxExt4ProcessRestart,
 	)
 	defer platform.Close()
 	root := platform.Root()
-	claim, err := root.IdentityClaim()
-	if err != nil {
-		t.Fatal(err)
-	}
-	duplicate, err := root.Duplicate()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer duplicate.Close()
-	repeated, err := duplicate.IdentityClaim()
-	if err != nil || !claim.Equal(repeated) {
-		t.Fatalf("duplicate directory claim differs: equal=%t error=%v", claim.Equal(repeated), err)
-	}
 
 	regularPath := filepath.Join(rootPath, "regular")
 	if err := os.WriteFile(regularPath, []byte("keep"), 0o600); err != nil {

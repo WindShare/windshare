@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/transfer/fault"
 )
 
 type nilReleaseCatalog struct{ err error }
@@ -44,7 +45,7 @@ func (source prefixFailureCatalog) OpenDirectoryPages(
 	case source.branch:
 		return &prefixFailureCursor{first: source.first, failure: source.failure}, nil
 	default:
-		return nil, NewSessionFailure(ErrCatalogIdentity)
+		return nil, sessionProtocolFailure(ErrCatalogIdentity)
 	}
 }
 
@@ -78,7 +79,7 @@ func (source rootPrefixFailureCatalog) OpenDirectoryPages(
 	directory catalog.DirectoryID,
 ) (catalog.DirectoryPageCursor, error) {
 	if directory != source.directory {
-		return nil, NewSessionFailure(ErrCatalogIdentity)
+		return nil, sessionProtocolFailure(ErrCatalogIdentity)
 	}
 	return &prefixFailureCursor{first: source.first, failure: source.failure}, nil
 }
@@ -89,15 +90,15 @@ func TestTransferJobRejectsMissingCatalogLeaseOnFailurePath(t *testing.T) {
 	rules, _ := NewSelectionRules(true, nil)
 	job, err := newTestTransferJob(t, TransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
-		Catalog:   nilReleaseCatalog{err: jobDirectoryFailure{errors.New("directory unavailable")}},
+		Catalog:   nilReleaseCatalog{err: catalogDirectoryFailure(fault.CatalogUnavailable, errors.New("directory unavailable"))},
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: newJobOutput(share),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, ErrCatalogCursorContract) ||
-		!isJobTerminalError(result.TerminationCause) || isSessionFailure(result.TerminationCause) {
+	if result.Outcome != JobPausedOutcome || result.TerminationFault != fault.DependencyContractFault() ||
+		!isJobTerminalError(result.TerminationCause) {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -138,7 +139,7 @@ func TestTransferJobRollsBackSelectedPrefixOfFailedGeneration(t *testing.T) {
 				jobDirectoryEntry(t, branch, "branch"),
 				jobEntry(t, sibling, "sibling.bin", 0),
 			),
-			first: first, failure: jobDirectoryFailure{errors.New("second page unavailable")},
+			first: first, failure: catalogDirectoryFailure(fault.CatalogUnavailable, errors.New("second page unavailable")),
 		},
 		Revisions: revisions,
 		Blocks:    scriptedRangeReader{},
@@ -180,7 +181,7 @@ func TestTransferJobPausesWithoutAdmittingFailedRootPrefix(t *testing.T) {
 		Rules:         rules,
 		Catalog: rootPrefixFailureCatalog{
 			directory: root, first: first,
-			failure: jobDirectoryFailure{errors.New("root terminal page unavailable")},
+			failure: catalogDirectoryFailure(fault.CatalogUnavailable, errors.New("root terminal page unavailable")),
 		},
 		Revisions: revisions,
 		Blocks:    scriptedRangeReader{},
@@ -192,10 +193,10 @@ func TestTransferJobPausesWithoutAdmittingFailedRootPrefix(t *testing.T) {
 
 	result := job.Run(context.Background())
 	if result.Outcome != JobPausedOutcome || len(result.Directories) != 1 ||
-		!result.SelectionObservation.IsZero() || !result.SelectionIdentity.IsZero() ||
-		!isSessionFailure(result.TerminationCause) || len(output.admitted) != 0 ||
+		!result.SelectionObservation.IsZero() ||
+		result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) ||
 		len(revisions.order) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
-		t.Fatalf("result=%+v admitted=%d revision opens=%v", result, len(output.admitted), revisions.order)
+		t.Fatalf("result=%+v revision opens=%v", result, revisions.order)
 	}
 }
 
@@ -281,7 +282,8 @@ func TestTransferJobPreservesParentCancellationCauseWithoutSelection(t *testing.
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(cause)
 	result := job.Run(ctx)
-	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, cause) {
+	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, context.Canceled) ||
+		result.TerminationFault.Valid() {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -341,7 +343,8 @@ func TestTransferJobMaterializesOnlyAuthenticatedSelectedOutput(t *testing.T) {
 				}, failures: make(map[catalog.DirectoryID]error),
 			},
 			Revisions: &jobRevisionClient{
-				opened: make(map[catalog.FileID]OpenedRevision), failures: map[catalog.FileID]error{file: errors.New("revision unavailable")},
+				opened:   make(map[catalog.FileID]OpenedRevision),
+				failures: map[catalog.FileID]error{file: sourceUnavailableFailure(errors.New("revision unavailable"))},
 			},
 			Blocks: scriptedRangeReader{}, Output: output,
 		})
@@ -369,7 +372,7 @@ func TestTransferJobSelectedDirectoryRequiresSuccessfulGenerationBeforeOutput(t 
 				root:  jobSnapshot(t, share, root, 1, jobDirectoryEntry(t, empty, "empty"), jobDirectoryEntry(t, failed, "failed")),
 				empty: jobSnapshot(t, share, empty, 2),
 			},
-			failures: map[catalog.DirectoryID]error{failed: jobDirectoryFailure{errors.New("directory unavailable")}},
+			failures: map[catalog.DirectoryID]error{failed: catalogDirectoryFailure(fault.CatalogUnavailable, errors.New("directory unavailable"))},
 		},
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
 	})
@@ -445,7 +448,7 @@ func TestTransferJobUnmatchedFileBelowFailedDirectoryRemainsUnknown(t *testing.T
 			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
 				root: jobSnapshot(t, share, root, 1, jobDirectoryEntry(t, branch, "branch")),
 			},
-			failures: map[catalog.DirectoryID]error{branch: jobDirectoryFailure{errors.New("branch unavailable")}},
+			failures: map[catalog.DirectoryID]error{branch: catalogDirectoryFailure(fault.CatalogUnavailable, errors.New("branch unavailable"))},
 		},
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
 	})

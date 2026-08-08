@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/transfer/fault"
 )
 
 const (
@@ -51,7 +52,7 @@ const (
 type transferQueueItem struct {
 	kind      transferQueueItemKind
 	file      plannedFile
-	directory OutputDirectory
+	admission DirectoryAdmission
 	enqueued  <-chan struct{}
 }
 
@@ -76,20 +77,20 @@ func newNodeIdentityLedger(limit int) (nodeIdentityLedger, error) {
 type jobRun struct {
 	job                        *TransferJob
 	output                     OutputSession
+	directoryAdmissionScope    DirectoryAdmissionScope
 	failureMu                  sync.Mutex
 	directories                []DirectoryJobFailure
 	files                      []FileJobFailure
 	failurePathBytes           uint64
 	omittedDirectories         uint64
 	omittedFiles               uint64
-	sourceDriftFailure         error
+	sourceDriftFailure         *lifecycleFailure
 	succeeded                  uint64
-	terminationCause           error
-	settlementFailure          error
+	terminationCause           *lifecycleFailure
+	settlementFailure          *lifecycleFailure
 	settlement                 JobSettlement
 	admitted                   bool
 	needsAttention             bool
-	selectionIdentity          SelectionIdentity
 	selectionObservation       SelectionObservationV1
 	selectionResolutionFailure error
 	matchedPaths               map[string]struct{}
@@ -98,9 +99,14 @@ type jobRun struct {
 	unmatchedOpaqueTargets     int
 	activeDirectories          map[catalog.DirectoryID]struct{}
 	discoveryFailed            bool
+	discoveryFault             fault.Fault
+	catalogTraversalComplete   bool
 	rootGeneration             catalog.DirectoryGeneration
-	nodeLedger                 nodeIdentityLedger
-	opaqueSelectionEvidence    map[catalog.DirectoryID]opaqueSelectionEvidence
+	// This sender-authenticity ledger covers every discovered catalog node,
+	// including nodes never admitted to output. Destination-mutation claims belong
+	// exclusively behind OutputSession and must never be merged into this ledger.
+	nodeLedger              nodeIdentityLedger
+	opaqueSelectionEvidence map[catalog.DirectoryID]opaqueSelectionEvidence
 }
 
 func newJobRun(job *TransferJob) (*jobRun, error) {
@@ -165,16 +171,16 @@ func (r *jobRun) retainOpaqueSelectionEvidence(
 ) error {
 	if directory.IsZero() || evidence.generation.IsZero() || evidence.terminal.IsZero() ||
 		r.opaqueSelectionEvidence == nil {
-		return NewJobDependencyContractError(ErrNodeLedgerState)
+		return dependencyContractFailure(ErrNodeLedgerState)
 	}
 	if retained, exists := r.opaqueSelectionEvidence[directory]; exists {
 		if retained != evidence {
-			return NewSessionFailure(ErrCatalogIdentity)
+			return catalogIntegrityFailure(ErrCatalogIdentity)
 		}
 		return nil
 	}
 	if len(r.opaqueSelectionEvidence) >= MaximumOpaqueSelectionEvidence {
-		return NewJobResourceBudgetError(ErrOpaqueSelectionEvidenceBudget)
+		return resourceBudgetFailure(ErrOpaqueSelectionEvidenceBudget)
 	}
 	r.opaqueSelectionEvidence[directory] = evidence
 	return nil
@@ -196,15 +202,15 @@ func (r *jobRun) claimNode(identity catalog.NodeID) error {
 
 func (ledger *nodeIdentityLedger) claim(identity catalog.NodeID) error {
 	if identity.IsZero() {
-		return NewSessionFailure(ErrCatalogIdentity)
+		return catalogIntegrityFailure(ErrCatalogIdentity)
 	}
 	if _, exists := ledger.claims[identity]; exists {
-		return NewSessionFailure(ErrCatalogIdentity)
+		return catalogIntegrityFailure(ErrCatalogIdentity)
 	}
 	if len(ledger.order) >= ledger.limit {
 		// Once the bounded ledger is full, uniqueness is no longer provable for
 		// the remaining catalog suffix and discovery must fail closed.
-		return NewJobResourceBudgetError(ErrNodeLedgerBudget)
+		return resourceBudgetFailure(ErrNodeLedgerBudget)
 	}
 	ledger.claims[identity] = struct{}{}
 	ledger.order = append(ledger.order, identity)
@@ -251,12 +257,19 @@ func (r *jobRun) recordDiscoveryFailure(directory catalog.DirectoryID, path stri
 }
 
 func isDirectoryDiscoveryFailure(err error) bool {
-	return inspectLifecycleError(err).directoryDiscovery
+	return lifecyclePolicyFor(err).directoryDiscovery()
 }
 
 func (r *jobRun) recordDirectoryFailure(failure DirectoryJobFailure) {
+	if !failure.Fault.Valid() {
+		failure.Fault = closedFault(failure.Cause)
+	}
 	r.failureMu.Lock()
 	r.retainSourceDriftFailure(failure.Cause)
+	if failure.Stage == FailureDirectoryDiscovery {
+		r.discoveryFault = fault.Join(r.discoveryFault, failure.Fault)
+	}
+	failure.Cause = lifecycleDiagnostic(failure.Cause)
 	if r.reserveFailurePath(failure.Path) {
 		r.directories = append(r.directories, failure)
 	} else if r.omittedDirectories != ^uint64(0) {
@@ -265,9 +278,27 @@ func (r *jobRun) recordDirectoryFailure(failure DirectoryJobFailure) {
 	r.failureMu.Unlock()
 }
 
+func (r *jobRun) discoveryFaultSnapshot() fault.Fault {
+	r.failureMu.Lock()
+	defer r.failureMu.Unlock()
+	return r.discoveryFault
+}
+
 func (r *jobRun) recordFileFailure(failure FileJobFailure) {
+	if !failure.Fault.Valid() {
+		failure.Fault = closedFault(failure.Cause)
+	}
+	if !failure.SettlementFault.Valid() {
+		failure.SettlementFault = closedFault(failure.SettlementFailure)
+	}
+	if !failure.LeaseReleaseFault.Valid() {
+		failure.LeaseReleaseFault = closedFault(failure.LeaseReleaseFailure)
+	}
 	r.failureMu.Lock()
 	r.retainSourceDriftFailure(failure.Cause)
+	failure.Cause = lifecycleDiagnostic(failure.Cause)
+	failure.SettlementFailure = lifecycleDiagnostic(failure.SettlementFailure)
+	failure.LeaseReleaseFailure = lifecycleDiagnostic(failure.LeaseReleaseFailure)
 	if r.reserveFailurePath(failure.Path) {
 		r.files = append(r.files, failure)
 	} else if r.omittedFiles != ^uint64(0) {
@@ -289,8 +320,9 @@ func (r *jobRun) reserveFailurePath(path string) bool {
 }
 
 func (r *jobRun) retainSourceDriftFailure(cause error) {
-	if r.sourceDriftFailure == nil && isSourceDriftFailure(cause) {
-		r.sourceDriftFailure = cause
+	failure, ok := admitLifecycleFailure(cause)
+	if r.sourceDriftFailure == nil && ok && failure.policy.sourceDrift() {
+		r.sourceDriftFailure = failure
 	}
 }
 
@@ -299,7 +331,7 @@ func (r *jobRun) failureSnapshot() (
 	files []FileJobFailure,
 	omittedDirectories uint64,
 	omittedFiles uint64,
-	sourceDriftFailure error,
+	sourceDriftFailure *lifecycleFailure,
 ) {
 	r.failureMu.Lock()
 	defer r.failureMu.Unlock()

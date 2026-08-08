@@ -478,13 +478,9 @@ func (table *OperationTable) observePeerAnswer(
 	if active.answerFingerprint == fingerprint {
 		return OperationDrop, nil
 	}
-	if direction == DirectionSenderToReceiver {
-		active.authority.recordAuthenticatedOperationViolationLocked(
-			AuthenticatedOperationViolation{
-				code: AuthenticatedOperationViolationConflictingPeerAnswer,
-			},
-		)
-	}
+	active.authority.recordSenderOperationViolationLocked(
+		direction, AuthenticatedOperationViolationConflictingPeerAnswer,
+	)
 	return OperationDrop, ErrOperationIDReused
 }
 

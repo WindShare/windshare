@@ -8,7 +8,6 @@ import type { V2BlockRangeReader } from '../../src/content/v2-broker'
 import type { V2RevisionReader } from '../../src/content/v2-session-services'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
-  createDirectoryAdmission,
   DirectoryAdmissionBindingError,
   OutputDirectoryMutationError,
   type OutputSession,
@@ -20,7 +19,7 @@ import {
   TransferJob,
   type TransferProgress,
 } from '../../src/transfer/v2-job'
-import { V2SelectionTargetMissingError } from '../../src/transfer/v2-job-selection'
+import { V2SelectionTargetMissingError } from '../../src/transfer/job/selection'
 import {
   committedDirectory,
   committedDirectoryFor,
@@ -67,8 +66,9 @@ describe('v2 catalog traversal authority', () => {
       },
     } as unknown as V2CatalogClient
     const output = traversalOutput()
-    output.session.admitDirectory = async (request) => createDirectoryAdmission({
-      ...request,
+    const admitDirectory = output.session.admitDirectory.bind(output.session)
+    output.session.admitDirectory = async (request, signal) => Object.freeze({
+      ...await admitDirectory(request, signal),
       generation: identityText(99),
     })
 
@@ -151,7 +151,13 @@ describe('v2 catalog traversal authority', () => {
       const root = identity(2)
       const bad = identity(3)
       const good = identity(4)
-      const fixture = traversalOutput()
+      const fixture = traversalOutput({
+        beforeFinalizeDirectory: (admission) => {
+          if (failurePoint === 'finalization' && admission.path.at(-1) === 'bad') {
+            throw new OutputDirectoryMutationError('bad child finalization failed', false)
+          }
+        },
+      })
       const base = fixture.session
       const output: OutputSession = {
         ...base,
@@ -162,12 +168,7 @@ describe('v2 catalog traversal authority', () => {
           }
           return base.admitDirectory(directory, signal)
         },
-        finalizeDirectory: async (directory, signal) => {
-          if (failurePoint === 'finalization' && directory.path.at(-1) === 'bad') {
-            throw new OutputDirectoryMutationError('bad child finalization failed', false)
-          }
-          return base.finalizeDirectory(directory, signal)
-        },
+        finalizeDirectory: (admission, signal) => base.finalizeDirectory(admission, signal),
       }
       const catalog = {
         loadDirectory: async (id: Uint8Array<ArrayBuffer>) => committedDirectoryFor(

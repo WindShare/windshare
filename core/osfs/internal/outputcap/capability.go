@@ -1,5 +1,5 @@
-// Package outputcap defines the native capabilities consumed by the resumable
-// output state machine. Keeping these contracts below osfs lets platform
+// Package outputcap defines the native capabilities consumed by the incremental
+// output runtime. Keeping these contracts below osfs lets platform
 // implementations depend on capability semantics without depending on the
 // state-machine package that orchestrates them.
 package outputcap
@@ -9,7 +9,7 @@ import (
 	"io"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
+	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/transfer"
 )
 
@@ -32,6 +32,16 @@ var (
 // from an unknown final-publication outcome.
 var ErrFixedLinkSourceChanged = errors.New("osfs: fixed output link source changed")
 
+// RootOpenDisposition aliases the durable ownership value so platform opens
+// and ownership-marker recovery cannot assign different meanings to the same
+// certified root fact.
+type RootOpenDisposition = checkpointmodel.RootOpenDisposition
+
+const (
+	CallerProvidedContainer = checkpointmodel.CallerProvidedContainer
+	AuthorityCreatedRoot    = checkpointmodel.AuthorityCreatedRoot
+)
+
 // EntryKind separates safe presence from object authority. Callers use it to
 // settle a pre-state final-path collision without opening or following a
 // directory, reparse point, or other non-regular object.
@@ -48,74 +58,17 @@ const (
 	EntryOther
 )
 
-// PersistentDirectoryIdentity is an opaque, restart-revalidatable directory
-// claim. It identifies an enrolled directory but never grants authority to it;
-// authority always comes from a live Directory handle.
-type PersistentDirectoryIdentity struct {
-	encoded string
-}
-
-// TransientFileIdentity is a process-local comparison token used only when a
-// platform must release an open file before an immediately following namespace
-// mutation. It is deliberately not serializable: a live handle remains the
-// stronger authority, and native file identifiers are not restart ownership
-// proofs.
-type TransientFileIdentity struct {
-	domain  string
-	encoded string
-}
-
-// NewTransientFileIdentity copies a native identity into an immutable token.
-// The domain prevents accidentally comparing encodings from different native
-// backends.
-func NewTransientFileIdentity(domain string, encoded []byte) TransientFileIdentity {
-	return TransientFileIdentity{domain: domain, encoded: string(encoded)}
-}
-
-// Equal compares the complete opaque native identities.
-func (identity TransientFileIdentity) Equal(other TransientFileIdentity) bool {
-	return identity.domain != "" && identity.encoded != "" &&
-		identity.domain == other.domain && identity.encoded == other.encoded
-}
-
-// IsZero reports whether no native identity was supplied.
-func (identity TransientFileIdentity) IsZero() bool {
-	return identity.domain == "" || identity.encoded == ""
-}
-
-// NewPersistentDirectoryIdentity copies a native identity encoding into an
-// immutable value. Native encodings stay behind this boundary so callers cannot
-// mutate a previously admitted identity through a shared byte slice.
-func NewPersistentDirectoryIdentity(encoded []byte) PersistentDirectoryIdentity {
-	return PersistentDirectoryIdentity{encoded: string(encoded)}
-}
-
-// Bytes returns an independent copy suitable for persistent state encoding.
-func (identity PersistentDirectoryIdentity) Bytes() []byte {
-	return []byte(identity.encoded)
-}
-
-// Equal compares the complete opaque native encodings.
-func (identity PersistentDirectoryIdentity) Equal(other PersistentDirectoryIdentity) bool {
-	return identity.encoded == other.encoded
-}
-
-// IsZero reports whether no native identity was supplied.
-func (identity PersistentDirectoryIdentity) IsZero() bool {
-	return identity.encoded == ""
-}
-
 // Platform is intentionally smaller than a general filesystem API. Requiring
 // every mutation through fixed directory and file handles makes it difficult
 // for the state machine to accidentally turn a persisted locator into authority.
 type Platform interface {
 	Root() Directory
+	RootOpenDisposition() RootOpenDisposition
 	AcquirePublicOperationGuard() (PublicOperationGuard, error)
-	RootBinding() (resumestate.OutputRootBinding, error)
-	Certification() resumestate.CertificationID
+	RootBinding() (OutputRootBinding, error)
+	Certification() CertificationID
 	Durability() transfer.DurabilityLevel
 	ProbeRecoverableFeatures() error
-	ValidateSelectionMetadata(transfer.OutputSelection) error
 	ValidateModifiedTime(catalog.ModifiedTime) error
 	CanonicalLocatorKey(string) (string, error)
 	CanonicalComponentKey(string) (string, error)
@@ -130,21 +83,16 @@ type PublicOperationGuard interface {
 	Close() error
 }
 
-// Directory is a live, fixed-handle directory capability. Identity methods on
-// this interface deliberately return persistent claims separately: the live
-// handle authorizes current operations, while the claim can only be revalidated
-// after restart.
+// Directory is a live, fixed-handle directory capability. Restart-stable
+// ownership is bound at platform certification boundaries rather than exposed as
+// a second, path-like authority on each directory handle.
 type Directory interface {
 	Close() error
 	Duplicate() (Directory, error)
 	Sync() error
 	Names(limit int) ([]string, error)
-	NamesWithPrefix(prefix string, matchLimit int) ([]string, error)
 	ObserveEntry(name string) (EntryKind, error)
 	ClassifyExactEntry(name string) (EntryKind, bool, error)
-	ValidatePublicEntryName(name string) error
-	PrepareIdentityClaim() (PersistentDirectoryIdentity, error)
-	IdentityClaim() (PersistentDirectoryIdentity, error)
 	OpenEntry(name string) (CurrentEntryReference, error)
 	EntryMatches(name string, expected CurrentEntryReference) (bool, error)
 	OpenPinnedDirectory(expected CurrentEntryReference, private bool) (Directory, error)
@@ -190,7 +138,6 @@ type MetadataAuthorityValidator interface {
 // restart-stable locator.
 type CurrentEntryReference interface {
 	Kind() EntryKind
-	AllocatedSize() (uint64, error)
 	Close() error
 }
 
@@ -201,28 +148,10 @@ type File interface {
 	io.WriterAt
 	Close() error
 	Sync() error
-	Truncate(int64) error
 	Size() (uint64, error)
-	AllocatedSize() (uint64, error)
 	SetModifiedTime(catalog.ModifiedTime) error
 	MetadataMatches(uint64, catalog.ModifiedTime) (bool, error)
 	SameFile(File) (bool, error)
-}
-
-// CloseRevalidationIdentityProvider is optional because most consumers should
-// retain a File handle. Windows directory rename semantics require the artifact
-// publisher to close descendant handles first, so that one consumer captures a
-// short-lived identity and revalidates it immediately after the rename.
-type CloseRevalidationIdentityProvider interface {
-	CloseRevalidationIdentity() (TransientFileIdentity, error)
-}
-
-// PrivateDirectoryIdentityProvider exposes the restart-revalidatable identity
-// of a private staging directory. It is optional because general output
-// consumers must not confuse a cleanup receipt with public placement authority.
-type PrivateDirectoryIdentityProvider interface {
-	PreparePrivateIdentityClaim() (PersistentDirectoryIdentity, error)
-	PrivateIdentityClaim() (PersistentDirectoryIdentity, error)
 }
 
 // Lock retains both the namespace lock and the fixed file capability that

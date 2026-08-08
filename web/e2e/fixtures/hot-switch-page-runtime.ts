@@ -6,6 +6,10 @@ import type {
 } from './hot-switch-contract'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { freezeTransferIntent } from '../../src/transfer/intent'
+import {
+  directoryAdmissionScope,
+  type DirectoryAdmissionScope,
+} from '../../src/transfer/output-session'
 
 const GATEWAY_MODULE_PATH = '/src/ui/v2-gateway.ts'
 const OFFER_MODULE_PATH = '/src/connectivity/peer-offer.ts'
@@ -158,10 +162,15 @@ class RelayCutEvidence {
 class DeliveryBuffer {
   readonly #chunks: Uint8Array[] = []
 
-  outputSession(stream: StreamModule, outputRelease: OneShotRelease) {
+  outputSession(
+    stream: StreamModule,
+    outputRelease: OneShotRelease,
+    admissionScope: DirectoryAdmissionScope,
+  ) {
     let outputFenceUsed = false
     return new stream.SingleFileStreamOutputSession(
       `browser-${crypto.randomUUID()}`,
+      admissionScope,
       new WritableStream<Uint8Array>({
         write: async (chunk) => {
           if (!outputFenceUsed) {
@@ -232,19 +241,29 @@ async function runTransfer(
     const gateway = createGateway(input, modules, bridge, relayCut, peerRelease)
     joined = await gateway.join(input.key, window.location.href)
     activation = joined.beginDownloadConnectivity('large')
-    const output = delivery.outputSession(modules.stream, outputRelease)
+    let output: ReturnType<DeliveryBuffer['outputSession']> | undefined
     const outputAuthority = {
-      confirmOutput: async (draft: Parameters<typeof freezeTransferIntent>[0]) => ({
-        intent: await freezeTransferIntent(draft, {
+      confirmOutput: async (draft: Parameters<typeof freezeTransferIntent>[0]) => {
+        const intent = await freezeTransferIntent(draft, {
           target: encodeBase64Url(Uint8Array.from({ length: 32 }, (_, index) => index + 1)),
           targetKind: 2,
-          backend: output.identity.backend,
+          backend: modules.stream.SINGLE_FILE_STREAM_BACKEND,
           format: 'single-file',
-        }),
-        session: output,
-      }),
-      openOutput: async () => output,
-      abort: (reason: unknown) => output.abortJob(reason),
+        })
+        output = delivery.outputSession(modules.stream, outputRelease, directoryAdmissionScope(intent))
+        return { intent, session: output }
+      },
+      openOutput: async (intent: Awaited<ReturnType<typeof freezeTransferIntent>>) => {
+        output ??= delivery.outputSession(
+          modules.stream,
+          outputRelease,
+          directoryAdmissionScope(intent),
+        )
+        return output
+      },
+      abort: async (reason: unknown) => {
+        if (output !== undefined) await output.pauseJob(reason)
+      },
     }
     deliveryStarted = true
     const result = await joined.transferJob(outputAuthority, activation).run()

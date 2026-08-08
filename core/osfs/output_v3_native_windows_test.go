@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"golang.org/x/sys/windows"
 )
 
@@ -25,7 +25,7 @@ func TestWindowsNTFSNativeCertification(t *testing.T) {
 		t,
 		t.TempDir(),
 		windowsNTFSNativeCertificationProfile,
-		resumestate.CertificationWindowsNTFSProcessRestart,
+		outputcap.CertificationWindowsNTFSProcessRestart,
 	)
 	if err := platform.Close(); err != nil {
 		t.Fatalf("close Windows/NTFS certification authority: %v", err)
@@ -37,7 +37,7 @@ func TestWindowsNTFSProcessRestartRecovery(t *testing.T) {
 	runNativeOutputProcessRestartRecoveryTest(
 		t,
 		windowsNTFSNativeCertificationProfile,
-		resumestate.CertificationWindowsNTFSProcessRestart,
+		outputcap.CertificationWindowsNTFSProcessRestart,
 		windowsNativeOutputProbePrefix+"27182818284590452353602874713526",
 		1,
 	)
@@ -47,14 +47,9 @@ func TestWindowsNTFSProcessRestartRecovery(t *testing.T) {
 	runNativeOutputProcessRestartRecoveryTest(
 		t,
 		windowsNTFSNativeCertificationProfile,
-		resumestate.CertificationWindowsNTFSProcessRestart,
+		outputcap.CertificationWindowsNTFSProcessRestart,
 		windowsNativeOutputProbePrefix+"27182818284590452353602874713526",
 		0,
-	)
-	runNativeOutputSessionProcessRestartRecoveryTest(
-		t,
-		windowsNTFSNativeCertificationProfile,
-		resumestate.CertificationWindowsNTFSProcessRestart,
 	)
 }
 

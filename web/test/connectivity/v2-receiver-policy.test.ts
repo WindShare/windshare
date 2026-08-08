@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { V2LaneSet, type V2BlockLane } from '../../src/content/v2-broker'
+import { V2LaneSet, type V2BlockLane } from '../../src/content/v2-lane-set'
 import type { V2BlockRecord } from '../../src/content/v2-records'
 import type {
   V2BrowserConnectivityAttemptDiagnostic,

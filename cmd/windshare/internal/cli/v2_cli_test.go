@@ -16,10 +16,10 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/internal/testoutputroot"
 	"github.com/windshare/windshare/relay/httpapi"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -59,19 +59,25 @@ func TestRelayRegistrationIdentityRejectsWrongWidths(t *testing.T) {
 }
 
 func TestTransferResultDriftClassification(t *testing.T) {
-	for _, cause := range []error{
-		content.ErrRevisionStale,
-		content.ErrSourceDrift,
-		content.ErrRevisionDrift,
-		transfer.ErrBlockInvalidated,
+	for _, value := range []transferfault.Fault{
+		mustCLIFault(transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged)),
+		mustCLIFault(transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionInvalidated)),
+		mustCLIFault(transferfault.NewCatalog(transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale)),
 	} {
-		if !transferResultDrifted(transfer.JobResult{SourceDriftFailure: cause}) {
-			t.Fatalf("drift %v was not classified", cause)
+		if !transferResultDrifted(transfer.JobResult{SourceDriftFault: value}) {
+			t.Fatalf("drift %v was not classified", value)
 		}
 	}
 	if transferResultDrifted(transfer.JobResult{TerminationCause: errors.New("network")}) {
 		t.Fatal("network failure was classified as drift")
 	}
+}
+
+func mustCLIFault(value transferfault.Fault, err error) transferfault.Fault {
+	if err != nil {
+		panic(err)
+	}
+	return value
 }
 
 func TestSelectionRulesKeepWholeShareAndPathIntentDistinct(t *testing.T) {

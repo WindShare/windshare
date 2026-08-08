@@ -213,11 +213,9 @@ func (table *OperationTable) reserveActiveContinuationLocked(
 	}
 	key, tracked, err := authority.continuations.classify(direction, message)
 	if err != nil || !tracked {
-		if err != nil && tracked && direction == DirectionSenderToReceiver {
-			authority.recordAuthenticatedOperationViolationLocked(
-				AuthenticatedOperationViolation{
-					code: AuthenticatedOperationViolationContinuationAuthority,
-				},
+		if err != nil && tracked {
+			authority.recordSenderOperationViolationLocked(
+				direction, AuthenticatedOperationViolationContinuationAuthority,
 			)
 		}
 		return nil, false, err
@@ -305,11 +303,9 @@ func (table *OperationTable) acceptLateContinuationLocked(
 	}
 	key, tracked, err := authority.continuations.classify(direction, message)
 	if err != nil || !tracked {
-		if err != nil && tracked && direction == DirectionSenderToReceiver {
-			authority.recordAuthenticatedOperationViolationLocked(
-				AuthenticatedOperationViolation{
-					code: AuthenticatedOperationViolationContinuationAuthority,
-				},
+		if err != nil && tracked {
+			authority.recordSenderOperationViolationLocked(
+				direction, AuthenticatedOperationViolationContinuationAuthority,
 			)
 		}
 		return tracked, err
@@ -335,11 +331,9 @@ func (table *OperationTable) acceptUnboundLateContinuationLocked(
 	}
 	scope, tracked, err := table.continuations.ClassifyUnboundOperationContinuation(message.kind, body)
 	if err != nil || !tracked {
-		if err != nil && tracked && direction == DirectionSenderToReceiver {
-			authority.recordAuthenticatedOperationViolationLocked(
-				AuthenticatedOperationViolation{
-					code: AuthenticatedOperationViolationContinuationAuthority,
-				},
+		if err != nil && tracked {
+			authority.recordSenderOperationViolationLocked(
+				direction, AuthenticatedOperationViolationContinuationAuthority,
 			)
 		}
 		return tracked, err
@@ -348,13 +342,9 @@ func (table *OperationTable) acceptUnboundLateContinuationLocked(
 		return true, ErrContinuationAuthority
 	}
 	if authority.hasDeferredContinuationScope && authority.deferredContinuationScope != scope {
-		if direction == DirectionSenderToReceiver {
-			authority.recordAuthenticatedOperationViolationLocked(
-				AuthenticatedOperationViolation{
-					code: AuthenticatedOperationViolationContinuationAuthority,
-				},
-			)
-		}
+		authority.recordSenderOperationViolationLocked(
+			direction, AuthenticatedOperationViolationContinuationAuthority,
+		)
 		return true, ErrConflictingContinuation
 	}
 	authority.deferredContinuationScope = scope

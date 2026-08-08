@@ -135,25 +135,6 @@ func (file *linuxOutputRegularFile) metadataMatches(
 	return metadata.size == exactSize && linuxModifiedTimeMatches(metadata, modified), nil
 }
 
-func (directory *linuxOutputDirectory) metadataMatches(
-	_ uint64,
-	modified catalog.ModifiedTime,
-) (bool, error) {
-	if linuxModifiedTimeRequiresExtendedInodeFields(modified) {
-		if err := linuxRequireExtendedTimestampLayout(
-			directory.system, directory.fd, directory.certificate, unix.S_IFDIR,
-			"inspect output directory metadata",
-		); err != nil {
-			return false, err
-		}
-	}
-	metadata, err := linuxReadHandleMetadata(directory.system, directory.fd, directory.certificate, unix.S_IFDIR)
-	if err != nil {
-		return false, err
-	}
-	return linuxModifiedTimeMatches(metadata, modified), nil
-}
-
 func linuxRequireExtendedTimestampLayout(
 	system *linuxOutputSystem,
 	fd int,

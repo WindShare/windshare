@@ -55,8 +55,6 @@ export interface TransferIntent {
   readonly syntheticRoot: string
   readonly selection: TransferSelectionRules
   readonly output: TransferOutputLocator
-  /** Run identity only; deliberately excluded from canonical bytes and digest. */
-  readonly transferJobId: string
   readonly digest: string
   readonly canonicalBytes: Uint8Array<ArrayBuffer>
 }
@@ -66,7 +64,12 @@ export interface TransferIntentDraft {
   readonly shareInstance: string
   readonly syntheticRoot: string
   readonly selection: TransferSelectionRules
+}
+
+/** Runtime correlation is intentionally disjoint from durable transfer semantics. */
+export interface TransferRun {
   readonly transferJobId: string
+  readonly outputSessionId: string
 }
 
 export interface TransferTraceContext {
@@ -109,19 +112,19 @@ export interface TransferTraceEvent {
 export type TransferTraceListener = (event: TransferTraceEvent) => void
 
 export function createTransferJobId(): string {
-  if (globalThis.crypto?.getRandomValues === undefined) {
-    throw new DOMException('Secure transfer-job identity generation is unavailable', 'NotSupportedError')
-  }
-  const identity = new Uint8Array(16)
-  globalThis.crypto.getRandomValues(identity)
-  if (identity.every((byte) => byte === 0)) {
-    throw new Error('Generated transfer-job identity was all zeroes')
-  }
-  return encodeBase64Url(identity)
+  return createRuntimeIdentity('transfer-job')
+}
+
+export function createOutputSessionId(): string {
+  return createRuntimeIdentity('output-session')
 }
 
 export function snapshotTransferRunId(value: string): string {
   return encodeBase64Url(identityBytes(value, 'transfer job'))
+}
+
+export function snapshotOutputSessionId(value: string): string {
+  return encodeBase64Url(identityBytes(value, 'output session'))
 }
 
 export function snapshotProtocolSessionId(value: string): string {
@@ -132,18 +135,31 @@ export function createTransferIntentDraft(options: {
   readonly shareInstance: string
   readonly syntheticRoot: string
   readonly selection: TransferSelectionRules
-  readonly transferJobId?: string
 }): TransferIntentDraft {
   const shareInstance = encodeBase64Url(identityBytes(options.shareInstance, 'share instance'))
   const syntheticRoot = encodeBase64Url(identityBytes(options.syntheticRoot, 'synthetic root'))
-  const transferJobId = snapshotTransferRunId(options.transferJobId ?? createTransferJobId())
   return Object.freeze({
     state: 'draft' as const,
     shareInstance,
     syntheticRoot,
     selection: snapshotSelectionRules(options.selection),
-    transferJobId,
   })
+}
+
+export function createTransferRun(): TransferRun {
+  const transferJobId = createTransferJobId()
+  let outputSessionId = createOutputSessionId()
+  while (outputSessionId === transferJobId) outputSessionId = createOutputSessionId()
+  return snapshotTransferRun({ transferJobId, outputSessionId })
+}
+
+export function snapshotTransferRun(input: TransferRun): TransferRun {
+  const transferJobId = snapshotTransferRunId(input.transferJobId)
+  const outputSessionId = snapshotOutputSessionId(input.outputSessionId)
+  if (transferJobId === outputSessionId) {
+    throw new TypeError('transfer job and output session identities must be independent')
+  }
+  return Object.freeze({ transferJobId, outputSessionId })
 }
 
 export function validateTransferIntentDraft(
@@ -155,13 +171,11 @@ export function validateTransferIntentDraft(
     shareInstance: input.shareInstance,
     syntheticRoot: input.syntheticRoot,
     selection: input.selection,
-    transferJobId: input.transferJobId,
   })
   if (expected !== undefined) {
     if (draft.shareInstance !== expected.shareInstance ||
-        draft.syntheticRoot !== expected.syntheticRoot ||
-        draft.transferJobId !== expected.transferJobId) {
-      throw new TypeError('transfer intent draft does not match its job descriptor')
+        draft.syntheticRoot !== expected.syntheticRoot) {
+      throw new TypeError('transfer intent draft does not match its share authority')
     }
     const share = identityBytes(draft.shareInstance, 'share instance')
     const root = identityBytes(draft.syntheticRoot, 'synthetic root')
@@ -196,7 +210,6 @@ export async function freezeTransferIntent(
     syntheticRoot: draft.syntheticRoot,
     selection: draft.selection,
     output: snapshotOutputLocator(output),
-    transferJobId: draft.transferJobId,
     digest,
     canonicalBytes,
   })
@@ -221,12 +234,10 @@ export async function validateFinalTransferIntent(
   }
   const digest = encodeBase64Url(await sha256(canonicalBytes))
   if (input.digest !== digest) throw new TypeError('transfer intent digest does not match its canonical bytes')
-  const transferJobId = snapshotTransferRunId(input.transferJobId)
   if (expected !== undefined) {
     if (input.shareInstance !== expected.shareInstance ||
-        input.syntheticRoot !== expected.syntheticRoot ||
-        input.transferJobId !== expected.transferJobId) {
-      throw new TypeError('transfer intent does not match its job descriptor')
+        input.syntheticRoot !== expected.syntheticRoot) {
+      throw new TypeError('transfer intent does not match its share authority')
     }
     const share = identityBytes(input.shareInstance, 'share instance')
     const root = identityBytes(input.syntheticRoot, 'synthetic root')
@@ -241,7 +252,6 @@ export async function validateFinalTransferIntent(
     syntheticRoot: input.syntheticRoot,
     selection,
     output,
-    transferJobId,
     digest,
     canonicalBytes,
   })
@@ -423,6 +433,22 @@ function snapshotOutputLocator(input: TransferOutputLocator): TransferOutputLoca
     format: input.format,
     targetKind: input.targetKind,
   })
+}
+
+function createRuntimeIdentity(label: 'transfer-job' | 'output-session'): string {
+  const cryptoSource = globalThis.crypto
+  if (cryptoSource?.getRandomValues === undefined) {
+    throw new DOMException(
+      `Secure ${label} identity generation is unavailable`,
+      'NotSupportedError',
+    )
+  }
+  const identity = new Uint8Array(16)
+  cryptoSource.getRandomValues(identity)
+  if (identity.every((byte) => byte === 0)) {
+    throw new Error(`Generated ${label} identity was all zeroes`)
+  }
+  return encodeBase64Url(identity)
 }
 
 function identityBytes(value: string, label: string): Uint8Array<ArrayBuffer> {

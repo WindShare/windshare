@@ -220,13 +220,13 @@ func TestReceiverTransferDependenciesPromoteClosedRuntimeToSessionFailure(t *tes
 		t.Fatal("live catalog validation omitted its mandatory release callback")
 	}
 	release()
-	if liveCatalogErr == nil || transfer.IsSessionFailure(liveCatalogErr) {
+	if liveCatalogErr == nil || isSessionTerminalBoundaryForTest(liveCatalogErr) {
 		t.Fatalf("live catalog validation error was promoted to session failure: %v", liveCatalogErr)
 	}
 	if err := dependencies.ReadRange(
 		context.Background(), opened.LeaseID, opened.Descriptor,
 		content.Range{Offset: 0, End: 1}, nil,
-	); err == nil || transfer.IsSessionFailure(err) {
+	); err == nil || isSessionTerminalBoundaryForTest(err) {
 		t.Fatalf("live range validation error was promoted to session failure: %v", err)
 	}
 
@@ -253,7 +253,8 @@ func TestReceiverTransferDependenciesPromoteClosedRuntimeToSessionFailure(t *tes
 
 func assertReceiverTransferSessionFailure(t *testing.T, name string, err, componentErr error) {
 	t.Helper()
-	if !errors.Is(err, componentErr) || !errors.Is(err, ErrRuntimeClosed) || !transfer.IsSessionFailure(err) {
+	if !errors.Is(err, componentErr) || !errors.Is(err, ErrRuntimeClosed) ||
+		!isSessionTerminalBoundaryForTest(err) {
 		t.Fatalf("closed %s error = %v, want component, runtime-closed, and session-failure identities", name, err)
 	}
 }

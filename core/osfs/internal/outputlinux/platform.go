@@ -10,12 +10,12 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 )
 
 type linuxV3Platform struct {
-	root *linuxV3Directory
+	rootOpenDisposition outputcap.RootOpenDisposition
+	root                *linuxV3Directory
 }
 
 type linuxV3DirectoryOrigin struct {
@@ -24,10 +24,8 @@ type linuxV3DirectoryOrigin struct {
 }
 
 type linuxV3Directory struct {
-	native         *linuxOutputDirectory
-	origin         *linuxV3DirectoryOrigin
-	metadataPolicy *linuxSelectionMetadataPolicy
-	selectionPath  string
+	native *linuxOutputDirectory
+	origin *linuxV3DirectoryOrigin
 }
 
 type linuxV3FileOrigin struct {
@@ -57,14 +55,21 @@ func Open(path string, create bool) (outputcap.Platform, error) {
 			linuxUnsafe("open output root", "output root must be absolute", nil))
 	}
 	clean := filepath.Clean(path)
+	rootOpenDisposition := outputcap.CallerProvidedContainer
 	root, err := linuxOpenExt4OutputRoot(clean, &linuxHostOutputSystem)
 	if create && errors.Is(err, fs.ErrNotExist) {
 		root, err = linuxCreateCertifiedOutputRoot(clean)
+		if err == nil {
+			rootOpenDisposition = outputcap.AuthorityCreatedRoot
+		}
 	}
 	if err != nil {
 		return nil, linuxV3Error(err)
 	}
-	return &linuxV3Platform{root: &linuxV3Directory{native: root}}, nil
+	return &linuxV3Platform{
+		rootOpenDisposition: rootOpenDisposition,
+		root:                &linuxV3Directory{native: root},
+	}, nil
 }
 
 func linuxCreateCertifiedOutputRoot(path string) (_ *linuxOutputDirectory, resultErr error) {
@@ -131,6 +136,13 @@ func (platform *linuxV3Platform) Root() outputcap.Directory {
 	return platform.root
 }
 
+func (platform *linuxV3Platform) RootOpenDisposition() outputcap.RootOpenDisposition {
+	if platform == nil {
+		return ""
+	}
+	return platform.rootOpenDisposition
+}
+
 // borrowedOutputPublicOperationGuard exposes the already pinned ext4 root for
 // one validated operation; Linux re-proves ancestry instead of acquiring a
 // separate namespace lock, so closing the borrowed capability is a no-op.
@@ -152,48 +164,48 @@ func (platform *linuxV3Platform) AcquirePublicOperationGuard() (outputcap.Public
 	return &borrowedOutputPublicOperationGuard{root: root}, nil
 }
 
-func (*linuxV3Platform) Certification() resumestate.CertificationID {
-	return resumestate.CertificationLinuxExt4ProcessRestart
+func (*linuxV3Platform) Certification() outputcap.CertificationID {
+	return outputcap.CertificationLinuxExt4ProcessRestart
 }
 
-func (platform *linuxV3Platform) RootBinding() (resumestate.OutputRootBinding, error) {
+func (platform *linuxV3Platform) RootBinding() (outputcap.OutputRootBinding, error) {
 	if platform == nil || platform.root == nil || platform.root.native == nil {
-		return resumestate.OutputRootBinding{}, errors.Join(
+		return outputcap.OutputRootBinding{}, errors.Join(
 			outputcap.ErrUnsafeNamespace,
 			errors.New("osfs: Linux output platform is closed"),
 		)
 	}
 	root := platform.root.native
 	if err := root.verifyHandle(); err != nil {
-		return resumestate.OutputRootBinding{}, linuxV3Error(err)
+		return outputcap.OutputRootBinding{}, linuxV3Error(err)
 	}
 	certificate := root.certificate
 	volume, err := linuxEncodeMountIdentity(certificate.mount)
 	if err != nil {
-		return resumestate.OutputRootBinding{}, linuxV3Error(err)
+		return outputcap.OutputRootBinding{}, linuxV3Error(err)
 	}
 	if root.system.restartIdentity == nil {
-		return resumestate.OutputRootBinding{}, errors.Join(
+		return outputcap.OutputRootBinding{}, errors.Join(
 			outputcap.ErrRecoverableOutputUnsupported,
 			errors.New("osfs: Linux directory restart-identity provider is unavailable"),
 		)
 	}
 	restartIdentity, err := root.system.restartIdentity.Read(root.system, root.fd, certificate.mount)
 	if err != nil {
-		return resumestate.OutputRootBinding{}, linuxV3Error(err)
+		return outputcap.OutputRootBinding{}, linuxV3Error(err)
 	}
 	if !restartIdentity.matchesHandle(root.object) ||
 		!restartIdentity.sameDirectory(certificate.rootRestartIdentity) {
-		return resumestate.OutputRootBinding{}, errors.Join(
+		return outputcap.OutputRootBinding{}, errors.Join(
 			outputcap.ErrUnsafeNamespace,
 			errors.New("osfs: Linux output-root restart identity changed"),
 		)
 	}
 	object, err := linuxEncodeDirectoryRestartIdentity(restartIdentity)
 	if err != nil {
-		return resumestate.OutputRootBinding{}, linuxV3Error(err)
+		return outputcap.OutputRootBinding{}, linuxV3Error(err)
 	}
-	binding, err := resumestate.NewOutputRootBinding(platform.Certification(), volume, object)
+	binding, err := outputcap.NewOutputRootBinding(platform.Certification(), volume, object)
 	return binding, linuxV3Error(err)
 }
 

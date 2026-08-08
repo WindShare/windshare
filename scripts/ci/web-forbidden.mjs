@@ -1,12 +1,11 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { dirname, extname, relative, resolve, sep } from 'node:path'
+import { dirname, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const WEB_ROOT = resolve(REPOSITORY_ROOT, 'web')
 const SOURCE_ROOT = resolve(WEB_ROOT, 'src')
 const PRODUCTION_ENTRY = resolve(SOURCE_ROOT, 'main.tsx')
-const SOURCE_ONLY = process.argv.includes('--source-only')
 
 const FORBIDDEN_PATHS = [
   'web/src/manifest',
@@ -84,6 +83,7 @@ const FORBIDDEN_PATHS = [
   'web/test/transport/receiver.test.ts',
   'web/test/transfer/job.test.ts',
   'web/test/output/job-integration.test.ts',
+  'web/test/protocol/v2-production-boundary.test.ts',
   'web/test/ui/browser-gateway-ownership.test.ts',
   'web/test/ui/browser-gateway.test.ts',
   'web/test/ui/browser-output.test.ts',
@@ -103,64 +103,7 @@ const FORBIDDEN_PATHS = [
   'web/e2e/streaming-zip.spec.ts',
 ]
 
-const FORBIDDEN_SOURCE_PATTERNS = [
-  /\bValidatedManifestV1\b/u,
-  /\bManifestEntry\b/u,
-  /\bPackedLayout\b/u,
-  /\bTransferPlan\b/u,
-  /\bPlanId\b/u,
-  /\bChunkSet\b/u,
-  /\bChunkIndex\b/u,
-  /\bsealedManifest\b/u,
-  /\bSelectionPageWindow\b/u,
-  /\bmanifestFingerprint\b/u,
-  /\bMAX_SEALED_MANIFEST_BYTES\b/u,
-  /\bCIPHER_SUITE_V1\b/u,
-  /\bSuiteAESGCM\b/u,
-  /\bSUITE_AES_GCM\b/u,
-  /windshare-v1/u,
-  /\/v1\/ws/u,
-  /\bhostileSender\b/u,
-  /hostile-sender/u,
-]
-
-const RETIRED_TRANSFER_PATTERNS = [
-  /\bV2TransferJob\b/u,
-  /\bV2OutputSelectionPlan\b/u,
-  /\bV2OutputSelection\b/u,
-  /\bopenSelection\s*\(/u,
-  /\bCanonicalSelectionV1\b/u,
-  /\bResumeIntent\b/u,
-  /\bresumeIntent\b/u,
-  /\bresumeIntentText\b/u,
-  /windshare\/output-resume-intent\/v3/u,
-  /\bOUTPUT_JOURNAL_SCHEMA(?:_VERSION)?\b/u,
-  /\.wsresume-output/u,
-  /checkpoint-candidates/u,
-  /checkpoint-committed/u,
-  /persistent-handles/u,
-  /cleanup-markers/u,
-  /\bwithDirectoryAdmission\b/u,
-  /\bAdmissionAwareOutputSession\b/u,
-  /\bV2_MAXIMUM_PENDING_FILE_BYTES\b/u,
-  /\bmaximumPendingFileBytes\b/u,
-]
-
-function isOneShotCleaner(file) {
-  const display = portable(file)
-  // A cleaner may recognise retired records, but it must remain a one-shot,
-  // ownership-scoped boundary rather than a second output implementation.
-  return /(?:^|\/)(?:checkpoint-cleaner|one-shot-checkpoint-cleaner|indexeddb-legacy-cleaner)\.ts$/u.test(display)
-}
-
-function isZipMetadataSpool(file) {
-  const display = portable(file)
-  // ZIP central-directory metadata is current output behaviour. Keep this
-  // explicit exemption so a future broad spool rule cannot remove it.
-  return /(?:^|\/)zip-spool\.ts$/u.test(display)
-}
-
-const FORBIDDEN_VECTOR_NAMES = [
+const RETIRED_VECTOR_PATHS = [
   'chunk-seal.json',
   'frame-codec.json',
   'geometry.json',
@@ -171,75 +114,55 @@ const FORBIDDEN_VECTOR_NAMES = [
   'relay-envelope.json',
   'relay-signaling.json',
   'transfer-plan.json',
-]
+].map((name) => `core/testvectors/${name}`)
 
-const FORBIDDEN_STYLE_PATTERNS = [
-  /\.status-planning\b/u,
-  /\.status-preparing-output\b/u,
-  /\.status-reconnecting\b/u,
-  /\.status-ready\b/u,
-  /\.reconnect-message\b/u,
-  /--entry-depth\b/u,
+// These are shipped composition edges, not symbol conventions. Requiring them
+// catches a deep module that remains tested but is no longer reachable from the
+// browser entry point.
+const REQUIRED_PRODUCTION_DEPENDENCIES = [
+  'web/src/session/v2-runtime.ts',
+  'web/src/transport/relay/v2-receiver.ts',
+  'web/src/transfer/v2-job.ts',
+  'web/src/preview/v2-preview.ts',
+  'web/src/preview/mp4-range.ts',
+  'web/src/ui/v2-output.ts',
+  'web/src/ui/v2-paused-tasks.ts',
+  'web/src/output/browser/paused-task-lifecycle.ts',
+  'web/src/output/browser/indexeddb-resume-state.ts',
+  'web/src/output/resume/authority.ts',
+  'web/src/output/resume/descriptor.ts',
+  'web/src/output/file-system-access/session.ts',
+  'web/src/output/origin-private/session.ts',
 ]
 
 const violations = []
-for (const path of FORBIDDEN_PATHS) {
-  if (obsoletePathExists(resolve(REPOSITORY_ROOT, path))) violations.push(`obsolete path exists: ${path}`)
-}
-
-const sourceFiles = filesUnder(SOURCE_ROOT).filter(isTypeScript)
-for (const file of sourceFiles) {
-  if (isOneShotCleaner(file) || isZipMetadataSpool(file)) continue
-  const source = readFileSync(file, 'utf8')
-  for (const pattern of RETIRED_TRANSFER_PATTERNS) recordMatches(file, source, pattern)
-}
-const webTypeScript = [
-  ...filesUnder(resolve(WEB_ROOT, 'src')),
-  ...filesUnder(resolve(WEB_ROOT, 'test')),
-  ...filesUnder(resolve(WEB_ROOT, 'e2e')),
-].filter(isTypeScript)
-for (const file of webTypeScript) {
-  const source = readFileSync(file, 'utf8')
-  for (const pattern of FORBIDDEN_SOURCE_PATTERNS) recordMatches(file, source, pattern)
-  for (const name of FORBIDDEN_VECTOR_NAMES) {
-    if (source.includes(name)) violations.push(`${portable(file)} references retired vector ${name}`)
+for (const path of [...FORBIDDEN_PATHS, ...RETIRED_VECTOR_PATHS]) {
+  if (obsoletePathExists(resolve(REPOSITORY_ROOT, path))) {
+    violations.push(`retired path exists: ${path}`)
   }
-}
-for (const file of filesUnder(SOURCE_ROOT).filter((path) => path.endsWith('.css'))) {
-  const source = readFileSync(file, 'utf8')
-  for (const pattern of FORBIDDEN_STYLE_PATTERNS) recordMatches(file, source, pattern)
 }
 
 const production = productionGraph(PRODUCTION_ENTRY)
-for (const file of production) {
-  const path = portable(file)
-  if (FORBIDDEN_PATHS.some((forbidden) => path === forbidden || path.startsWith(`${forbidden}/`))) {
-    violations.push(`production graph reaches obsolete path: ${path}`)
+const productionPaths = new Set([...production].map(portable))
+
+for (const forbidden of FORBIDDEN_PATHS.filter((path) => path.startsWith('web/src/'))) {
+  if ([...productionPaths].some((path) => path === forbidden || path.startsWith(`${forbidden}/`))) {
+    violations.push(`production graph reaches retired path: ${forbidden}`)
   }
 }
-
-let bundleFiles = []
-if (!SOURCE_ONLY) {
-  const distribution = resolve(WEB_ROOT, 'dist')
-  if (!existsSync(distribution)) violations.push('web/dist is missing; run the gate after the production build')
-  else {
-    bundleFiles = filesUnder(distribution).filter((file) => ['.css', '.html', '.js'].includes(extname(file)))
-    for (const file of bundleFiles) {
-      const source = readFileSync(file, 'utf8')
-      for (const pattern of FORBIDDEN_SOURCE_PATTERNS) recordMatches(file, source, pattern)
-      for (const pattern of FORBIDDEN_STYLE_PATTERNS) recordMatches(file, source, pattern)
-    }
+for (const required of REQUIRED_PRODUCTION_DEPENDENCIES) {
+  if (!productionPaths.has(required)) {
+    violations.push(`production graph does not reach ${required}`)
   }
 }
 
 if (violations.length > 0) {
-  for (const violation of [...new Set(violations)].sort()) console.error(`web-forbidden: ${violation}`)
+  for (const violation of [...new Set(violations)].sort()) console.error(`web-retired-graph: ${violation}`)
   process.exitCode = 1
 } else {
-  const bundle = SOURCE_ONLY ? 'source-only' : `${bundleFiles.length} bundle files`
   console.log(
-    `web-forbidden: PASS (${sourceFiles.length} source files, ` +
-    `${production.size} production dependencies, ${bundle})`,
+    `web-retired-graph: PASS (${FORBIDDEN_PATHS.length + RETIRED_VECTOR_PATHS.length} exact retired paths absent; ` +
+    `${production.size} production dependencies; ${REQUIRED_PRODUCTION_DEPENDENCIES.length} required edges present)`,
   )
 }
 
@@ -302,17 +225,6 @@ function filesUnder(root) {
 function obsoletePathExists(path) {
   if (!existsSync(path)) return false
   return statSync(path).isDirectory() ? filesUnder(path).length > 0 : true
-}
-
-function isTypeScript(file) {
-  return file.endsWith('.ts') || file.endsWith('.tsx')
-}
-
-function recordMatches(file, source, pattern) {
-  const match = pattern.exec(source)
-  if (match === null) return
-  const line = source.slice(0, match.index).split('\n').length
-  violations.push(`${portable(file)}:${line} contains retired ${pattern.source}`)
 }
 
 function portable(file) {

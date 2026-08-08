@@ -1,11 +1,16 @@
 import type { JobOutcome } from '../../transfer/outcome'
-import { DirectoryAdmissionLedger } from '../../transfer/directory-admission-ledger'
+import {
+  DirectoryAdmissionLedger,
+  type DirectoryFileMutationLease,
+} from '../../transfer/directory-admission-ledger'
 import {
   type BeginOutputFileResult,
   type DirectoryAdmission,
-  type FileAbortDisposition,
+  type DirectoryAdmissionScope,
+  type DirectorySettlement,
+  type FileRetirementDisposition,
+  type JobSettlement,
   type OutputCapabilities,
-  type OutputDirectory,
   type OutputDirectoryAdmission,
   type OutputFile,
   type OutputFileTransaction,
@@ -13,10 +18,14 @@ import {
   type OutputSessionIdentity,
   MAXIMUM_OPEN_OUTPUT_FILES,
   VerifiedDurableRanges,
+  COMPLETED_JOB_SETTLEMENT,
+  needsAttentionJobSettlement,
   outputCapabilities,
   outputSessionIdentity,
+  pausedJobSettlement,
   snapshotOutputFile,
 } from '../../transfer/output-session'
+import { FaultScope, OutputFaultCode, outputFault } from '../../transfer/fault'
 import type { ZipArchiveFileEntry, ZipArchiveMember, ZipArchiveWriter } from './zip-archive'
 
 export const ZIP_STREAM_BACKEND = 'zip-stream'
@@ -27,6 +36,7 @@ export interface ZipCompletionReport {
 
 export interface ZipStreamOutputOptions {
   readonly outputSessionId: string
+  readonly directoryAdmissionScope: DirectoryAdmissionScope
   readonly archive: ZipArchiveWriter
   readonly reportCompletion?: (report: ZipCompletionReport) => void
 }
@@ -52,7 +62,7 @@ export class ZipStreamOutputSession implements OutputSession {
   readonly #archive: ZipArchiveWriter
   readonly #reportCompletion: ZipStreamOutputOptions['reportCompletion']
   readonly #active = new Set<ZipMemberTransaction>()
-  readonly #directoryAdmissions = new DirectoryAdmissionLedger()
+  readonly #directoryAdmissions: DirectoryAdmissionLedger
 
   #state: ZipSessionState = 'open'
   #memberTail: Promise<void> = Promise.resolve()
@@ -64,6 +74,7 @@ export class ZipStreamOutputSession implements OutputSession {
       backend: ZIP_STREAM_BACKEND,
       outputSessionId: options.outputSessionId,
     })
+    this.#directoryAdmissions = new DirectoryAdmissionLedger(options.directoryAdmissionScope)
     this.#archive = options.archive
     this.#reportCompletion = options.reportCompletion
   }
@@ -92,16 +103,19 @@ export class ZipStreamOutputSession implements OutputSession {
     })
   }
 
-  async finalizeDirectory(input: OutputDirectory, signal: AbortSignal): Promise<void> {
+  finalizeDirectory(
+    admission: DirectoryAdmission,
+    signal: AbortSignal,
+  ): Promise<DirectorySettlement> {
     this.#requireOpen()
-    signal.throwIfAborted()
-    this.#directoryAdmissions.validateDirectoryFinalization(input)
+    return this.#directoryAdmissions.finalizeDirectory(admission, signal)
   }
 
   async beginFile(input: OutputFile, signal: AbortSignal): Promise<BeginOutputFileResult> {
     signal.throwIfAborted()
     this.#requireOpen()
-    const admitted = this.#directoryAdmissions.validateFileParent(input)
+    const mutation = this.#directoryAdmissions.acquireFileMutation(input)
+    const admitted = mutation.file
     const file = snapshotOutputFile({
       source: admitted.source,
       path: admitted.path,
@@ -109,24 +123,29 @@ export class ZipStreamOutputSession implements OutputSession {
       ...(admitted.parentAdmission === undefined ? {} : { parentAdmission: admitted.parentAdmission }),
       ...(admitted.modifiedTime === undefined ? {} : { modifiedTime: admitted.modifiedTime }),
     })
-    if (this.#active.size >= MAXIMUM_OPEN_OUTPUT_FILES) {
-      throw new RangeError('ZIP output has reached its open member limit')
+    try {
+      if (this.#active.size >= MAXIMUM_OPEN_OUTPUT_FILES) {
+        throw new RangeError('ZIP output has reached its open member limit')
+      }
+      const turn = this.#reserveMemberTurn()
+      const transaction = new ZipMemberTransaction(this, this.#archive, file, turn, mutation)
+      this.#active.add(transaction)
+      const ownership = Object.freeze({
+        ...this.identity,
+        canonicalPath: file.path,
+        ownedFileIdentity: `${this.identity.outputSessionId}:${pathKey(file.path)}`,
+      })
+      return Object.freeze({
+        transaction,
+        durableRanges: new VerifiedDurableRanges(ownership, file.source, file.exactSize, []),
+      })
+    } catch (error) {
+      mutation.release()
+      throw error
     }
-    const turn = this.#reserveMemberTurn()
-    const transaction = new ZipMemberTransaction(this, this.#archive, file, turn)
-    this.#active.add(transaction)
-    const ownership = Object.freeze({
-      ...this.identity,
-      canonicalPath: file.path,
-      ownedFileIdentity: `${this.identity.outputSessionId}:${pathKey(file.path)}`,
-    })
-    return Object.freeze({
-      transaction,
-      durableRanges: new VerifiedDurableRanges(ownership, file.source, file.exactSize, []),
-    })
   }
 
-  async finishJob(outcome: JobOutcome, signal: AbortSignal): Promise<void> {
+  async completeJob(outcome: JobOutcome, signal: AbortSignal): Promise<JobSettlement> {
     this.#requireOpen()
     signal.throwIfAborted()
     if (this.#active.size !== 0) {
@@ -141,17 +160,28 @@ export class ZipStreamOutputSession implements OutputSession {
       if (this.#state === 'finishing') this.#state = 'finish-failed'
       throw error
     }
+    return COMPLETED_JOB_SETTLEMENT
   }
 
-  abortJob(reason: unknown): Promise<void> {
-    if (this.#state === 'finished') return Promise.resolve()
-    if (this.#abortPromise !== undefined) return this.#abortPromise
-    this.#state = 'aborting'
-    const operation = this.#abort(reason).then(() => {
-      if (this.#state !== 'finished') this.#state = 'aborted'
-    })
-    this.#abortPromise = operation
-    return operation
+  async pauseJob(reason: unknown): Promise<JobSettlement> {
+    if (this.#state === 'finished') return COMPLETED_JOB_SETTLEMENT
+    try {
+      if (this.#abortPromise === undefined) {
+        this.#state = 'aborting'
+        this.#abortPromise = this.#abort(reason).then(() => {
+          if (this.#state !== 'finished') this.#state = 'aborted'
+        })
+      }
+      await this.#abortPromise
+      return this.#publicationFinished()
+        ? COMPLETED_JOB_SETTLEMENT
+        : pausedJobSettlement(this.capabilities.durability)
+    } catch {
+      return needsAttentionJobSettlement(outputFault(
+        FaultScope.OutputPause,
+        OutputFaultCode.MutationAmbiguous,
+      ))
+    }
   }
 
   memberSettled(transaction: ZipMemberTransaction): void {
@@ -162,8 +192,8 @@ export class ZipStreamOutputSession implements OutputSession {
     this.#requireOpen()
   }
 
-  async compromise(reason: unknown): Promise<void> {
-    await this.abortJob(reason)
+  async pauseAfterIrreversibleMember(reason: unknown): Promise<void> {
+    await this.pauseJob(reason)
   }
 
   async #finish(outcome: JobOutcome, signal: AbortSignal): Promise<void> {
@@ -199,6 +229,10 @@ export class ZipStreamOutputSession implements OutputSession {
     return { ready, release: once(release) }
   }
 
+  #publicationFinished(): boolean {
+    return this.#state === 'finished'
+  }
+
   #requireOpen(): void {
     if (this.#state !== 'open') throw new Error('ZIP output session is not open')
   }
@@ -214,6 +248,7 @@ class ZipMemberTransaction implements OutputFileTransaction {
   readonly #archive: ZipArchiveWriter
   readonly #file: OutputFile
   readonly #turn: MemberTurn
+  readonly #directoryMutation: DirectoryFileMutationLease
   readonly #ownership: ConstructorParameters<typeof VerifiedDurableRanges>[0]
 
   #operationTail: Promise<unknown> = Promise.resolve()
@@ -227,11 +262,13 @@ class ZipMemberTransaction implements OutputFileTransaction {
     archive: ZipArchiveWriter,
     file: OutputFile,
     turn: MemberTurn,
+    directoryMutation: DirectoryFileMutationLease,
   ) {
     this.#session = session
     this.#archive = archive
     this.#file = file
     this.#turn = turn
+    this.#directoryMutation = directoryMutation
     this.#ownership = Object.freeze({
       ...session.identity,
       canonicalPath: file.path,
@@ -282,7 +319,7 @@ class ZipMemberTransaction implements OutputFileTransaction {
     })
   }
 
-  abort(reason: unknown): Promise<FileAbortDisposition> {
+  retire(reason: unknown): Promise<FileRetirementDisposition> {
     return this.#enqueue(async () => {
       if (this.#settled) return this.#started ? 'JobOutputCompromised' : 'FileIsolated'
       if (!this.#started) {
@@ -293,12 +330,24 @@ class ZipMemberTransaction implements OutputFileTransaction {
         await this.#member?.abort(reason)
       } finally {
         try {
-          await this.#session.compromise(reason)
+          await this.#session.pauseAfterIrreversibleMember(reason)
         } finally {
           this.#settle()
         }
       }
       return 'JobOutputCompromised'
+    })
+  }
+
+  pause(reason: unknown): Promise<void> {
+    return this.#enqueue(async () => {
+      if (this.#settled) return
+      try {
+        await this.#member?.abort(reason)
+        if (this.#started) await this.#session.pauseAfterIrreversibleMember(reason)
+      } finally {
+        this.#settle()
+      }
     })
   }
 
@@ -317,6 +366,7 @@ class ZipMemberTransaction implements OutputFileTransaction {
     this.#settled = true
     this.#turn.release()
     this.#session.memberSettled(this)
+    this.#directoryMutation.release()
   }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {

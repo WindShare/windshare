@@ -2,6 +2,7 @@ import {
   CHECKPOINT_DATABASE_VERSION,
   IndexedDbOutputRepository,
 } from '../../src/output/browser/indexeddb-repository'
+import { encodeBase64Url } from '../../src/crypto/bytes'
 import { IndexedDbOriginPrivateAdmissionAuthority } from '../../src/output/origin-private/admission-authority'
 import { IndexedDbZipCentralDirectorySpool } from '../../src/output/streams/zip-spool'
 
@@ -68,7 +69,7 @@ async function probeBlockedJournal(): Promise<{
   const databaseName = `journal-blocked-${crypto.randomUUID()}`
   const blocker = await openRawDatabase(databaseName, 1)
   const rejection = await rejectionName(
-    IndexedDbOutputRepository.openForTest(databaseName, 'blocked', 'journal'),
+    IndexedDbOutputRepository.open(databaseName, checkpointBinding('blocked')),
   )
   blocker.close()
   return { rejection, deleted: await deleteDatabase(databaseName) }
@@ -76,7 +77,10 @@ async function probeBlockedJournal(): Promise<{
 
 async function probeJournalVersionChange(): Promise<string> {
   const databaseName = `journal-versionchange-${crypto.randomUUID()}`
-  const repository = await IndexedDbOutputRepository.openForTest(databaseName, 'obsolete', 'journal')
+  const repository = await IndexedDbOutputRepository.open(
+    databaseName,
+    checkpointBinding('obsolete'),
+  )
   const upgrader = await openRawDatabase(databaseName, CHECKPOINT_DATABASE_VERSION + 1)
   const rejection = await rejectionName(repository.scanCommitted({ direction: 'ascending' }))
   upgrader.close()
@@ -110,6 +114,21 @@ async function probeZipVersionChange(): Promise<string> {
 
 function openRawDatabase(name: string, version: number): Promise<IDBDatabase> {
   return requestResult(indexedDB.open(name, version))
+}
+
+function checkpointBinding(backend: string) {
+  return Object.freeze({
+    backend,
+    transferIntentDigest: fixedIdentity(0x31),
+    rootIdentity: fixedIdentity(0x51),
+  })
+}
+
+function fixedIdentity(first: number): string {
+  return encodeBase64Url(Uint8Array.from(
+    { length: 32 },
+    (_, index) => (first + index) & 0xff,
+  ))
 }
 
 async function rejectionName(operation: Promise<unknown>): Promise<string> {

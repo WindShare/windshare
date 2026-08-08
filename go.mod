@@ -29,6 +29,10 @@ require golang.org/x/net v0.57.0 // indirect
 // the OS boundary; this dependency is test-harness-only and already in the graph.
 require golang.org/x/sys v0.47.0
 
+// Destructive resume confirmation must distinguish a real terminal from pipes,
+// files, and other redirected character devices on every supported platform.
+require golang.org/x/term v0.45.0
+
 require (
 	github.com/pion/ice/v4 v4.2.7
 	github.com/pion/logging v0.2.4

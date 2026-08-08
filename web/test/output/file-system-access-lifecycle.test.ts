@@ -10,11 +10,22 @@ import { DirectoryAdmissionLedger } from '../../src/transfer/directory-admission
 import {
   type BeginOutputFileResult,
   type DirectoryAdmission,
+  type DirectorySettlement,
+  type JobSettlement,
+  COMPLETED_JOB_SETTLEMENT,
+  JobSettlementKind,
   type OutputDirectoryAdmission,
+  type OutputFile,
   outputCapabilities,
   outputSessionIdentity,
 } from '../../src/transfer/output-session'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, jobOutcome, type JobOutcome } from '../../src/transfer/outcome'
+import { PersistentTreeOutputSession } from '../../src/output/persistent-tree/session'
+import {
+  TEST_DIRECTORY_ADMISSION_SCOPE,
+  testOutputIdentity,
+} from './admission-fixture'
+import { MEMORY_CHECKPOINT_BINDING, MemoryOutputJournal, MemoryOutputTree } from './fakes'
 
 const OUTCOME = jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
 const ACTIVE_SIGNAL = new AbortController().signal
@@ -25,12 +36,12 @@ describe('File System Access output lifecycle', () => {
     const repository = new DeferredRepository(true)
     const lease = new RecordingLease()
     const output = new FileSystemAccessOutputSession(inner, repository, lease)
-    let abort: Promise<void> | undefined
+    let pause: Promise<JobSettlement> | undefined
     inner.onPublished = () => {
-      abort = output.abortJob(new DOMException('late cancellation', 'AbortError'))
+      pause = output.pauseJob(new DOMException('late pause', 'AbortError'))
     }
 
-    const finish = output.finishJob(OUTCOME, ACTIVE_SIGNAL)
+    const finish = output.completeJob(OUTCOME, ACTIVE_SIGNAL)
     await inner.finishStarted.promise
     inner.publish()
     await repository.deleteStarted.promise
@@ -39,36 +50,108 @@ describe('File System Access output lifecycle', () => {
     expect(repository.deleteCalls).toBe(1)
     expect(repository.closed).toBe(false)
     repository.releaseDelete()
-    await expect(finish).resolves.toBeUndefined()
-    if (abort === undefined) throw new Error('Inner session did not trigger the publication race')
-    await expect(abort).resolves.toBeUndefined()
+    await expect(finish).resolves.toEqual(COMPLETED_JOB_SETTLEMENT)
+    if (pause === undefined) throw new Error('Inner session did not trigger the publication race')
+    await expect(pause).resolves.toMatchObject({ kind: JobSettlementKind.NeedsAttention })
     expect(inner.abortCalls).toBe(0)
     expect(repository.closeCalls).toBe(1)
     expect(lease.releaseCalls).toBe(1)
   })
 
-  it('aborts a deferred pre-publication finish before deleting output state', async () => {
+  it('reports attention instead of letting a late pause override completion', async () => {
     const inner = new DeferredInner(true)
     const repository = new DeferredRepository(false)
     const lease = new RecordingLease()
     const output = new FileSystemAccessOutputSession(inner, repository, lease)
     const reason = new DOMException('cancelled before publication', 'AbortError')
 
-    const finish = output.finishJob(OUTCOME, ACTIVE_SIGNAL)
+    const finish = output.completeJob(OUTCOME, ACTIVE_SIGNAL)
     await inner.finishStarted.promise
-    const abort = output.abortJob(reason)
-
-    await expect(finish).rejects.toBe(reason)
-    await expect(abort).resolves.toBeUndefined()
-    expect(inner.abortCalls).toBe(1)
+    const pause = output.pauseJob(reason)
+    await expect(pause).resolves.toMatchObject({ kind: JobSettlementKind.NeedsAttention })
+    inner.publish()
+    await expect(finish).resolves.toEqual(COMPLETED_JOB_SETTLEMENT)
+    expect(inner.abortCalls).toBe(0)
     expect(repository.deleteCalls).toBe(1)
     expect(repository.closeCalls).toBe(1)
     expect(lease.releaseCalls).toBe(1)
   })
+
+  for (const race of [
+    { close: 'pause', phase: 'DataWritten' },
+    { close: 'complete', phase: 'CheckpointVerified' },
+  ] as const) {
+    it(`releases repository and namespace authority only after ${race.close} drains file mutation`, async () => {
+      const reached = deferred<void>()
+      const release = deferred<void>()
+      let blocked = false
+      const tree = new MemoryOutputTree()
+      const inner = await PersistentTreeOutputSession.open({
+        identity: outputSessionIdentity({
+          backend: 'file-system-access',
+          outputSessionId: `stable-${race.close}`,
+        }),
+        directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
+        tree,
+        journal: new MemoryOutputJournal([], {
+          ...MEMORY_CHECKPOINT_BINDING,
+          backend: 'file-system-access',
+        }),
+        crashHook: async (phase) => {
+          if (phase !== race.phase || blocked) return
+          blocked = true
+          reached.resolve()
+          await release.promise
+        },
+      })
+      const repository = new DeferredRepository(false)
+      const lease = new RecordingLease()
+      const output = new FileSystemAccessOutputSession(inner, repository, lease)
+      const root = await output.admitDirectory({
+        directoryId: TEST_DIRECTORY_ADMISSION_SCOPE.syntheticRoot,
+        generation: testOutputIdentity(`fsa-root-generation:${race.close}`),
+        path: [],
+      }, ACTIVE_SIGNAL)
+      const file: OutputFile = {
+        source: {
+          shareInstance: testOutputIdentity('fsa-share'),
+          fileId: testOutputIdentity(`fsa-file:${race.close}`),
+          fileRevision: testOutputIdentity(`fsa-revision:${race.close}`),
+        },
+        path: [`${race.close}.bin`],
+        exactSize: 1n,
+        parentAdmission: root,
+      }
+      const begun = await output.beginFile(file, ACTIVE_SIGNAL)
+      if (race.close === 'complete') {
+        await begun.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
+      }
+      const mutation = race.close === 'pause'
+        ? begun.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
+        : begun.transaction.commit(ACTIVE_SIGNAL)
+      await reached.promise
+
+      const closing = race.close === 'pause'
+        ? output.pauseJob(new Error('stable drain'))
+        : output.completeJob(OUTCOME, ACTIVE_SIGNAL)
+      await Promise.resolve()
+      expect(repository.closeCalls).toBe(0)
+      expect(lease.releaseCalls).toBe(0)
+
+      release.resolve()
+      await mutation
+      await expect(closing).resolves.toMatchObject({
+        kind: race.close === 'pause' ? JobSettlementKind.Paused : JobSettlementKind.Completed,
+      })
+      expect(repository.deleteCalls).toBe(race.close === 'complete' ? 1 : 0)
+      expect(repository.closeCalls).toBe(1)
+      expect(lease.releaseCalls).toBe(1)
+    })
+  }
 })
 
 class DeferredInner implements FileSystemAccessInnerSession {
-  readonly #directoryAdmissions = new DirectoryAdmissionLedger()
+  readonly #directoryAdmissions = new DirectoryAdmissionLedger(TEST_DIRECTORY_ADMISSION_SCOPE)
   readonly format = 'directory' as const
   readonly identity = outputSessionIdentity({
     backend: 'file-system-access',
@@ -94,13 +177,18 @@ class DeferredInner implements FileSystemAccessInnerSession {
     return this.#directoryAdmissions.admitDirectory(directory, signal)
   }
 
-  async finalizeDirectory(): Promise<void> {}
+  finalizeDirectory(
+    admission: DirectoryAdmission,
+    signal: AbortSignal,
+  ): Promise<DirectorySettlement> {
+    return this.#directoryAdmissions.finalizeDirectory(admission, signal)
+  }
 
   async beginFile(): Promise<BeginOutputFileResult> {
     throw new Error('Lifecycle test does not open files')
   }
 
-  async finishJob(_outcome: JobOutcome, signal: AbortSignal): Promise<void> {
+  async completeJob(_outcome: JobOutcome, signal: AbortSignal): Promise<JobSettlement> {
     this.finishStarted.resolve()
     if (this.#honorAbort) {
       await abortable(this.#publication.promise, signal)
@@ -108,13 +196,13 @@ class DeferredInner implements FileSystemAccessInnerSession {
       await this.#publication.promise
     }
     this.onPublished?.()
+    return COMPLETED_JOB_SETTLEMENT
   }
 
-  async abortJob(): Promise<void> {
+  async pauseJob(): Promise<JobSettlement> {
     this.abortCalls += 1
+    return Object.freeze({ kind: JobSettlementKind.Paused, durability: 'ProcessRestart' })
   }
-
-  async suspendJob(): Promise<void> {}
 
   publish(): void {
     this.#publication.resolve()

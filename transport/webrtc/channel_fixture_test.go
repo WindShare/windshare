@@ -10,6 +10,13 @@ import (
 	pion "github.com/pion/webrtc/v4"
 )
 
+const unitTimeout = 2 * time.Second
+
+type concurrentSendResult struct {
+	marker byte
+	err    error
+}
+
 func TestTerminalControlFixtureMatchesImplementation(t *testing.T) {
 	data, err := os.ReadFile("testdata/terminal-control.json")
 	if err != nil {

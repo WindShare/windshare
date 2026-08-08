@@ -64,7 +64,11 @@ test('downloads exact single-file bytes without a StorageManager through the pro
     if (acquired.kind !== 'SingleFileStream') {
       throw new Error(`Expected portable single-file stream, received ${acquired.kind}`)
     }
-    const session = await output.openBrowserV2OutputSession(acquired, 'portable-single')
+    const session = await output.openBrowserV2OutputSession(
+      acquired,
+      'portable-single',
+      admission.TEST_DIRECTORY_ADMISSION_SCOPE,
+    )
     const signal = new AbortController().signal
     const begun = await session.beginFile(await admission.admittedOutputFile(session, {
       source: {
@@ -77,7 +81,7 @@ test('downloads exact single-file bytes without a StorageManager through the pro
     }), signal)
     await begun.transaction.writeRange(0n, Uint8Array.from(bytes), signal)
     await begun.transaction.commit(signal)
-    await session.finishJob({
+    await session.completeJob({
       status: 'Succeeded',
       failures: [],
       failureCount: 0,
@@ -129,7 +133,11 @@ test('downloads a valid exact-content ZIP through the production portable backen
     if (acquired.kind !== 'ZipStream') {
       throw new Error(`Expected portable ZIP stream, received ${acquired.kind}`)
     }
-    const session = await output.openBrowserV2OutputSession(acquired, 'portable-zip')
+    const session = await output.openBrowserV2OutputSession(
+      acquired,
+      'portable-zip',
+      admission.TEST_DIRECTORY_ADMISSION_SCOPE,
+    )
     const directory = await admission.admittedOutputDirectory(session, { path: ['tree'] })
     const signal = new AbortController().signal
     const begun = await session.beginFile(await admission.admittedOutputFile(session, {
@@ -144,7 +152,7 @@ test('downloads a valid exact-content ZIP through the production portable backen
     await begun.transaction.writeRange(0n, Uint8Array.from(bytes), signal)
     await begun.transaction.commit(signal)
     await session.finalizeDirectory(directory, signal)
-    await session.finishJob({
+    await session.completeJob({
       status: 'Succeeded',
       failures: [],
       failureCount: 0,

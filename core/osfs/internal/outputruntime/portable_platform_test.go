@@ -15,16 +15,17 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 )
-
-const portableRuntimeIdentityDomain = "windshare/outputruntime/portable-test"
 
 var (
 	portableRuntimeFilesystems   sync.Map
 	portableRuntimeUnsafePrivate sync.Map
 )
+
+type runtimeTestRootSpec struct {
+	path string
+}
 
 // The portable model keeps ordinary path-level test corruption visible while
 // replacing native certification, fixed-handle, and sync costs with explicit
@@ -83,9 +84,14 @@ func openOutputRuntimeTestPlatform(path string, create bool) (outputcap.Platform
 		value, _ = portableRuntimeFilesystems.LoadOrStore(root, filesystem)
 	}
 	filesystem := value.(*portableRuntimeFilesystem)
+	_, beforeErr := os.Stat(root)
+	disposition := outputcap.CallerProvidedContainer
 	if create {
 		if err := os.Mkdir(root, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 			return nil, err
+		}
+		if errors.Is(beforeErr, fs.ErrNotExist) {
+			disposition = outputcap.AuthorityCreatedRoot
 		}
 	}
 	info, err := os.Stat(root)
@@ -95,7 +101,7 @@ func openOutputRuntimeTestPlatform(path string, create bool) (outputcap.Platform
 	if !info.IsDir() {
 		return nil, outputcap.ErrUnsafeNamespace
 	}
-	return &portableRuntimePlatform{filesystem: filesystem, rootInfo: info}, nil
+	return &portableRuntimePlatform{filesystem: filesystem, rootInfo: info, disposition: disposition}, nil
 }
 
 func (filesystem *portableRuntimeFilesystem) objectID(info os.FileInfo) uint64 {
@@ -119,11 +125,19 @@ func (filesystem *portableRuntimeFilesystem) objectIDLocked(info os.FileInfo) ui
 }
 
 type portableRuntimePlatform struct {
-	filesystem *portableRuntimeFilesystem
-	rootInfo   os.FileInfo
+	filesystem  *portableRuntimeFilesystem
+	rootInfo    os.FileInfo
+	disposition outputcap.RootOpenDisposition
 
 	mu     sync.Mutex
 	closed bool
+}
+
+func (platform *portableRuntimePlatform) RootOpenDisposition() outputcap.RootOpenDisposition {
+	if platform == nil {
+		return ""
+	}
+	return platform.disposition
 }
 
 func (platform *portableRuntimePlatform) usable() error {
@@ -152,9 +166,9 @@ func (platform *portableRuntimePlatform) AcquirePublicOperationGuard() (outputca
 	return &portableRuntimeGuard{root: platform.Root()}, nil
 }
 
-func (platform *portableRuntimePlatform) RootBinding() (resumestate.OutputRootBinding, error) {
+func (platform *portableRuntimePlatform) RootBinding() (outputcap.OutputRootBinding, error) {
 	if err := platform.usable(); err != nil {
-		return resumestate.OutputRootBinding{}, err
+		return outputcap.OutputRootBinding{}, err
 	}
 	identity := fmt.Appendf(
 		nil,
@@ -162,18 +176,18 @@ func (platform *portableRuntimePlatform) RootBinding() (resumestate.OutputRootBi
 		platform.filesystem.root,
 		platform.filesystem.objectID(platform.rootInfo),
 	)
-	return resumestate.NewOutputRootBinding(
+	return outputcap.NewOutputRootBinding(
 		platform.Certification(),
 		[]byte("portable-test-volume"),
 		identity,
 	)
 }
 
-func (*portableRuntimePlatform) Certification() resumestate.CertificationID {
+func (*portableRuntimePlatform) Certification() outputcap.CertificationID {
 	// The runtime state codec accepts only production certification IDs. The
 	// portable double reuses one valid ID solely to exercise codec/state policy;
 	// native certification itself remains owned by the long tests.
-	return resumestate.CertificationLinuxExt4ProcessRestart
+	return outputcap.CertificationLinuxExt4ProcessRestart
 }
 
 func (*portableRuntimePlatform) Durability() transfer.DurabilityLevel {
@@ -181,10 +195,6 @@ func (*portableRuntimePlatform) Durability() transfer.DurabilityLevel {
 }
 
 func (platform *portableRuntimePlatform) ProbeRecoverableFeatures() error {
-	return platform.usable()
-}
-
-func (platform *portableRuntimePlatform) ValidateSelectionMetadata(transfer.OutputSelection) error {
 	return platform.usable()
 }
 
@@ -327,23 +337,6 @@ func (directory *portableRuntimeDirectory) Names(limit int) ([]string, error) {
 	return names, nil
 }
 
-func (directory *portableRuntimeDirectory) NamesWithPrefix(prefix string, limit int) ([]string, error) {
-	names, err := directory.Names(-1)
-	if err != nil {
-		return nil, err
-	}
-	matched := names[:0]
-	for _, name := range names {
-		if strings.HasPrefix(name, prefix) {
-			matched = append(matched, name)
-		}
-	}
-	if limit >= 0 && len(matched) > limit {
-		matched = matched[:limit]
-	}
-	return matched, nil
-}
-
 func (directory *portableRuntimeDirectory) ObserveEntry(name string) (outputcap.EntryKind, error) {
 	kind, _, err := directory.ClassifyExactEntry(name)
 	return kind, err
@@ -373,13 +366,9 @@ func (directory *portableRuntimeDirectory) ClassifyExactEntry(
 	return outputcap.EntryAbsent, true, nil
 }
 
-func (*portableRuntimeDirectory) ValidatePublicEntryName(name string) error {
-	return validatePortableRuntimeName(name)
-}
-
 func (directory *portableRuntimeDirectory) ValidatePublicEntryNames(names []string) error {
 	for _, name := range names {
-		if err := directory.ValidatePublicEntryName(name); err != nil {
+		if err := validatePortableRuntimeName(name); err != nil {
 			return err
 		}
 	}
@@ -394,37 +383,6 @@ func (directory *portableRuntimeDirectory) ValidateCreateAuthority() error {
 func (directory *portableRuntimeDirectory) ValidateMetadataAuthority() error {
 	_, err := directory.currentPath()
 	return err
-}
-
-func (directory *portableRuntimeDirectory) PrepareIdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
-	return directory.IdentityClaim()
-}
-
-func (directory *portableRuntimeDirectory) IdentityClaim() (outputcap.PersistentDirectoryIdentity, error) {
-	if _, err := directory.currentPath(); err != nil {
-		return outputcap.PersistentDirectoryIdentity{}, err
-	}
-	identity := fmt.Appendf(
-		nil,
-		"directory:%s:%d",
-		directory.filesystem.root,
-		directory.filesystem.objectID(directory.info),
-	)
-	return outputcap.NewPersistentDirectoryIdentity(identity), nil
-}
-
-func (directory *portableRuntimeDirectory) PreparePrivateIdentityClaim() (
-	outputcap.PersistentDirectoryIdentity,
-	error,
-) {
-	return directory.IdentityClaim()
-}
-
-func (directory *portableRuntimeDirectory) PrivateIdentityClaim() (
-	outputcap.PersistentDirectoryIdentity,
-	error,
-) {
-	return directory.IdentityClaim()
 }
 
 func (directory *portableRuntimeDirectory) OpenEntry(name string) (outputcap.CurrentEntryReference, error) {
@@ -504,18 +462,17 @@ func (directory *portableRuntimeDirectory) RemoveEntry(
 }
 
 func (directory *portableRuntimeDirectory) SameDirectory(other outputcap.Directory) (bool, error) {
-	identity, err := directory.IdentityClaim()
-	if err != nil {
-		return false, err
-	}
-	if other == nil {
+	peer, ok := other.(*portableRuntimeDirectory)
+	if !ok || peer == nil || directory.filesystem != peer.filesystem {
 		return false, nil
 	}
-	otherIdentity, err := other.IdentityClaim()
-	if err != nil {
+	if _, err := directory.currentPath(); err != nil {
 		return false, err
 	}
-	return identity.Equal(otherIdentity), nil
+	if _, err := peer.currentPath(); err != nil {
+		return false, err
+	}
+	return os.SameFile(directory.info, peer.info), nil
 }
 
 func (directory *portableRuntimeDirectory) SetModifiedTime(modified catalog.ModifiedTime) error {
@@ -894,13 +851,11 @@ func portableRuntimeModifiedTimeMatches(actual time.Time, expected catalog.Modif
 }
 
 var (
-	_ outputcap.Platform                          = (*portableRuntimePlatform)(nil)
-	_ outputcap.Directory                         = (*portableRuntimeDirectory)(nil)
-	_ outputcap.PublicEntryNamesValidator         = (*portableRuntimeDirectory)(nil)
-	_ outputcap.CreateAuthorityValidator          = (*portableRuntimeDirectory)(nil)
-	_ outputcap.MetadataAuthorityValidator        = (*portableRuntimeDirectory)(nil)
-	_ outputcap.PrivateDirectoryIdentityProvider  = (*portableRuntimeDirectory)(nil)
-	_ outputcap.File                              = (*portableRuntimeFile)(nil)
-	_ outputcap.CloseRevalidationIdentityProvider = (*portableRuntimeFile)(nil)
-	_ io.ReaderAt                                 = (*portableRuntimeFile)(nil)
+	_ outputcap.Platform                   = (*portableRuntimePlatform)(nil)
+	_ outputcap.Directory                  = (*portableRuntimeDirectory)(nil)
+	_ outputcap.PublicEntryNamesValidator  = (*portableRuntimeDirectory)(nil)
+	_ outputcap.CreateAuthorityValidator   = (*portableRuntimeDirectory)(nil)
+	_ outputcap.MetadataAuthorityValidator = (*portableRuntimeDirectory)(nil)
+	_ outputcap.File                       = (*portableRuntimeFile)(nil)
+	_ io.ReaderAt                          = (*portableRuntimeFile)(nil)
 )

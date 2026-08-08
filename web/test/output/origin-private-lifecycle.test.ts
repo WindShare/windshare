@@ -17,8 +17,22 @@ import {
   type StagedOutputCatalog,
 } from '../../src/output/persistent-tree/session'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, jobOutcome, type JobOutcome } from '../../src/transfer/outcome'
-import { MemoryOutputJournal, MemoryOutputTree } from './fakes'
-import { admittedOutputFile, testOutputIdentity } from './admission-fixture'
+import {
+  FaultScope,
+  SourceFaultCode,
+  authorizeFileRetirement,
+  sourceFault,
+} from '../../src/transfer/fault'
+import {
+  MEMORY_CHECKPOINT_BINDING,
+  MemoryOutputJournal,
+  MemoryOutputTree,
+} from './fakes'
+import {
+  admittedOutputFile,
+  TEST_DIRECTORY_ADMISSION_SCOPE,
+  testOutputIdentity,
+} from './admission-fixture'
 
 const IDENTITY = Object.freeze({
   backend: 'origin-private-staging',
@@ -31,31 +45,31 @@ describe('origin-private output lifecycle', () => {
   it('lets cancellation interrupt a blocked export before publication', async () => {
     const exporter = new ControlledExporter(false)
     const fixture = await lifecycleFixture(exporter, false)
-    const finish = fixture.output.finishJob(OUTCOME, ACTIVE_SIGNAL)
+    const finish = fixture.output.completeJob(OUTCOME, ACTIVE_SIGNAL)
     await exporter.started.promise
     const reason = new DOMException('cancelled while exporting', 'AbortError')
-    const abort = fixture.output.abortJob(reason)
+    const abort = fixture.output.pauseJob(reason)
 
     await expect(finish).rejects.toBe(reason)
-    await expect(abort).resolves.toBeUndefined()
+    await expect(abort).resolves.toEqual({ kind: 'Paused', durability: 'ProcessRestart' })
     expect(exporter.abortReasons).toEqual([reason])
-    expect(fixture.settlements).toEqual([true])
+    expect(fixture.settlements).toEqual([false])
   })
 
   it('preserves a publication that wins the abort race', async () => {
     const exporter = new ControlledExporter(true)
     const fixture = await lifecycleFixture(exporter, true)
-    const finish = fixture.output.finishJob(OUTCOME, ACTIVE_SIGNAL)
+    const finish = fixture.output.completeJob(OUTCOME, ACTIVE_SIGNAL)
     await exporter.started.promise
-    const abort = fixture.output.abortJob(new DOMException('late cancellation', 'AbortError'))
+    const abort = fixture.output.pauseJob(new DOMException('late cancellation', 'AbortError'))
     exporter.releasePublication()
 
-    await expect(finish).resolves.toBeUndefined()
-    await expect(abort).resolves.toBeUndefined()
+    await expect(finish).resolves.toEqual({ kind: 'Completed' })
+    await expect(abort).resolves.toEqual({ kind: 'Completed' })
     expect(fixture.settlements).toEqual([false])
   })
 
-  it('reports published success while cleanup remains retryable', async () => {
+  it('reports published output needing attention until explicit cleanup succeeds', async () => {
     const admission = await openAdmission(new MemoryAdmissionAuthority())
     let cleanupAttempts = 0
     const output = new OriginPrivateOutputSession(
@@ -73,15 +87,14 @@ describe('origin-private output lifecycle', () => {
       false,
     )
 
-    await expect(output.finishJob(OUTCOME, ACTIVE_SIGNAL)).resolves.toBeUndefined()
+    await expect(output.completeJob(OUTCOME, ACTIVE_SIGNAL)).resolves.toMatchObject({ kind: 'NeedsAttention' })
     expect(output.finalization).toMatchObject({
       committed: true,
       outcome: OUTCOME,
       cleanupPending: true,
     })
 
-    await expect(output.abortJob(new DOMException('late cancellation', 'AbortError')))
-      .resolves.toBeUndefined()
+    await expect(output.retryCleanup()).resolves.toMatchObject({ cleanupPending: false })
     expect(output.finalization).toMatchObject({
       committed: true,
       outcome: OUTCOME,
@@ -90,7 +103,7 @@ describe('origin-private output lifecycle', () => {
     expect(cleanupAttempts).toBe(2)
   })
 
-  it('singleflights explicit and abort-driven cleanup retries', async () => {
+  it('singleflights explicit cleanup retries without granting pause cleanup authority', async () => {
     const retryStarted = deferred<void>()
     const releaseRetry = deferred<void>()
     let retryCalls = 0
@@ -106,20 +119,20 @@ describe('origin-private output lifecycle', () => {
       },
     }
     const fixture = await lifecycleFixture(exporter, false)
-    await fixture.output.finishJob(OUTCOME, ACTIVE_SIGNAL)
+    await fixture.output.completeJob(OUTCOME, ACTIVE_SIGNAL)
     expect(fixture.output.finalization?.cleanupPending).toBe(true)
 
     const explicit = fixture.output.retryCleanup()
     await retryStarted.promise
     const repeated = fixture.output.retryCleanup()
-    const abort = fixture.output.abortJob(new DOMException('late cancellation', 'AbortError'))
+    const abort = fixture.output.pauseJob(new DOMException('late cancellation', 'AbortError'))
 
     expect(repeated).toBe(explicit)
     expect(retryCalls).toBe(2)
     releaseRetry.resolve()
     await expect(explicit).resolves.toMatchObject({ cleanupPending: false, outcome: OUTCOME })
     await expect(repeated).resolves.toMatchObject({ cleanupPending: false, outcome: OUTCOME })
-    await expect(abort).resolves.toBeUndefined()
+    await expect(abort).resolves.toMatchObject({ kind: 'NeedsAttention' })
     expect(fixture.output.finalization).toMatchObject({
       committed: true,
       cleanupPending: false,
@@ -127,7 +140,7 @@ describe('origin-private output lifecycle', () => {
     })
   })
 
-  it('retains cleanup authority so the same session object can retry', async () => {
+  it('retains resume state when resource release cannot establish a stable pause', async () => {
     const exporter = new ControlledExporter(false)
     const authority = new MemoryAdmissionAuthority()
     const admission = await openAdmission(authority)
@@ -145,9 +158,49 @@ describe('origin-private output lifecycle', () => {
       false,
     )
 
-    await expect(output.abortJob(new Error('transfer failed'))).rejects.toThrow('cleanup failed')
-    await expect(output.abortJob(new Error('retry cleanup'))).resolves.toBeUndefined()
-    expect(cleanupAttempts).toBe(2)
+    const first = output.pauseJob(new Error('transfer failed'))
+    await expect(first).resolves.toMatchObject({ kind: 'NeedsAttention' })
+    expect(output.pauseJob(new Error('repeated pause'))).toBe(first)
+    await expect(first).resolves.toMatchObject({ kind: 'NeedsAttention' })
+    expect(cleanupAttempts).toBe(1)
+  })
+
+  it('keeps OPFS pause and resource release behind the full quota checkpoint operation', async () => {
+    const authority = new MemoryAdmissionAuthority()
+    const admission = await openAdmission(authority)
+    const quotaStarted = deferred<void>()
+    const releaseQuota = deferred<void>()
+    let resourceSettlements = 0
+    const output = new OriginPrivateOutputSession(
+      await openInner(),
+      new ControlledExporter(false),
+      admission,
+      async () => {
+        resourceSettlements += 1
+        await admission.release()
+      },
+      false,
+    )
+    const begun = await output.beginFile(
+      await admittedOutputFile(output, lifecycleFile('checkpoint-drain.bin')),
+      ACTIVE_SIGNAL,
+    )
+    await begun.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
+    authority.afterUpdates(1, async () => {
+      quotaStarted.resolve()
+      await releaseQuota.promise
+    })
+
+    const checkpointing = begun.transaction.checkpoint(ACTIVE_SIGNAL)
+    await quotaStarted.promise
+    const pausing = output.pauseJob(new Error('pause during OPFS quota update'))
+    await Promise.resolve()
+    expect(resourceSettlements).toBe(0)
+
+    releaseQuota.resolve()
+    await expect(checkpointing).resolves.toMatchObject({ ranges: [{ start: 0n, end: 1n }] })
+    await expect(pausing).resolves.toMatchObject({ kind: 'Paused' })
+    expect(resourceSettlements).toBe(1)
   })
 
   it('fails admission before commit can publish an unabortable staged file', async () => {
@@ -156,8 +209,9 @@ describe('origin-private output lifecycle', () => {
     const tree = new MemoryOutputTree()
     const inner = await PersistentTreeOutputSession.open({
       identity: IDENTITY,
+      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
       tree,
-      journal: new MemoryOutputJournal(),
+      journal: originPrivateJournal(),
     })
     const output = new OriginPrivateOutputSession(
       inner,
@@ -180,7 +234,7 @@ describe('origin-private output lifecycle', () => {
     authority.failNextUpdate(new Error('admission version became obsolete'))
 
     await expect(begun.transaction.commit(ACTIVE_SIGNAL)).rejects.toThrow('version became obsolete')
-    await expect(begun.transaction.abort(new Error('commit rejected')))
+    await expect(begun.transaction.retire(permanentSourceRetirement()))
       .resolves.toBe('FileIsolated')
     expect(tree.has(file.path)).toBe(false)
     let stagedFiles = 0
@@ -204,6 +258,7 @@ describe('origin-private output lifecycle', () => {
     })
     const inner = await PersistentTreeOutputSession.open({
       identity: IDENTITY,
+      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
       tree,
       journal,
     })
@@ -252,7 +307,7 @@ describe('origin-private output lifecycle', () => {
     expect(admission.snapshot().activeReservations).toBe(0)
 
     const retry = await output.beginFile(file, ACTIVE_SIGNAL)
-    await expect(retry.transaction.abort(new Error('release retry'))).resolves.toBe('FileIsolated')
+    await expect(retry.transaction.retire(permanentSourceRetirement())).resolves.toBe('FileIsolated')
     expect(admission.snapshot().activeReservations).toBe(0)
     await admission.release()
   })
@@ -279,7 +334,7 @@ describe('origin-private output lifecycle', () => {
 
     await expect(begun.transaction.commit(controller.signal)).rejects.toBe(cancelled)
     expect(admission.snapshot().activeReservations).toBe(1)
-    await expect(begun.transaction.abort(new Error('rollback cancelled commit'))).resolves.toBe('FileIsolated')
+    await expect(begun.transaction.retire(permanentSourceRetirement())).resolves.toBe('FileIsolated')
     expect(admission.snapshot().activeReservations).toBe(0)
     await admission.release()
   })
@@ -290,8 +345,9 @@ describe('origin-private output lifecycle', () => {
     const tree = new MemoryOutputTree()
     const inner = await PersistentTreeOutputSession.open({
       identity: IDENTITY,
+      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
       tree,
-      journal: new MemoryOutputJournal(),
+      journal: originPrivateJournal(),
     })
     const output = new OriginPrivateOutputSession(
       inner,
@@ -307,7 +363,7 @@ describe('origin-private output lifecycle', () => {
     tree.removeFileError = removalFailure
     authority.failNextUpdate(releaseFailure)
 
-    const failure = await begun.transaction.abort(new Error('transfer failed'))
+    const failure = await begun.transaction.retire(permanentSourceRetirement())
       .then(() => undefined, (error: unknown) => error)
 
     expect(failure).toBeInstanceOf(AggregateError)
@@ -320,6 +376,14 @@ describe('origin-private output lifecycle', () => {
     await admission.release()
   })
 })
+
+function permanentSourceRetirement() {
+  const authorization = authorizeFileRetirement(
+    sourceFault(FaultScope.FileLocal, SourceFaultCode.Permanent),
+  )
+  if (authorization === undefined) throw new Error('permanent source retirement was not authorized')
+  return authorization
+}
 
 class ControlledExporter implements OriginPrivateOutputExporter {
   readonly started = deferred<void>()
@@ -386,8 +450,9 @@ async function lifecycleFixture(
 async function openInner(): Promise<PersistentTreeOutputSession> {
   return PersistentTreeOutputSession.open({
     identity: IDENTITY,
+    directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
     tree: new MemoryOutputTree(),
-    journal: new MemoryOutputJournal(),
+    journal: originPrivateJournal(),
   })
 }
 
@@ -408,7 +473,7 @@ class MemoryAdmissionAuthority implements OriginPrivateAdmissionAuthority {
   #record: AdmissionLeaseRecord | undefined
   #nextUpdateFailure: unknown
   #updatesUntilHook = 0
-  #updateHook: (() => void) | undefined
+  #updateHook: (() => void | Promise<void>) | undefined
 
   async claim(record: AdmissionLeaseRecord, limits: AdmissionAggregateLimits): Promise<void> {
     this.#validate(record, limits)
@@ -423,14 +488,14 @@ class MemoryAdmissionAuthority implements OriginPrivateAdmissionAuthority {
     }
     this.#validate(record, limits)
     this.#record = record
-    this.#runUpdateHook()
+    await this.#runUpdateHook()
   }
 
   failNextUpdate(reason: unknown): void {
     this.#nextUpdateFailure = reason
   }
 
-  afterUpdates(count: number, hook: () => void): void {
+  afterUpdates(count: number, hook: () => void | Promise<void>): void {
     this.#updatesUntilHook = count
     this.#updateHook = hook
   }
@@ -452,13 +517,13 @@ class MemoryAdmissionAuthority implements OriginPrivateAdmissionAuthority {
 
   close(): void {}
 
-  #runUpdateHook(): void {
+  async #runUpdateHook(): Promise<void> {
     if (this.#updateHook === undefined) return
     this.#updatesUntilHook -= 1
     if (this.#updatesUntilHook > 0) return
     const hook = this.#updateHook
     this.#updateHook = undefined
-    hook()
+    await hook()
   }
 
   #validate(record: AdmissionLeaseRecord, limits: AdmissionAggregateLimits): void {
@@ -467,6 +532,13 @@ class MemoryAdmissionAuthority implements OriginPrivateAdmissionAuthority {
       throw new DOMException('quota exceeded', 'QuotaExceededError')
     }
   }
+}
+
+function originPrivateJournal(): MemoryOutputJournal {
+  return new MemoryOutputJournal([], {
+    ...MEMORY_CHECKPOINT_BINDING,
+    backend: IDENTITY.backend,
+  })
 }
 
 function lifecycleFile(name: string) {
@@ -485,7 +557,7 @@ class PublicationHookJournal extends MemoryOutputJournal {
   readonly #published: () => void
 
   constructor(published: () => void) {
-    super()
+    super([], { ...MEMORY_CHECKPOINT_BINDING, backend: IDENTITY.backend })
     this.#published = published
   }
 

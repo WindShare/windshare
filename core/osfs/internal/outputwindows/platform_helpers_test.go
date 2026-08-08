@@ -9,7 +9,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/osfs/internal/resumestate"
 	"github.com/windshare/windshare/core/transfer"
 	"golang.org/x/sys/windows"
 )
@@ -35,9 +34,6 @@ func TestWindowsOutputV3PlatformClosedSurfaceRejectsOperations(t *testing.T) {
 			if err := platform.ProbeRecoverableFeatures(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 				t.Fatalf("closed feature probe error = %v", err)
 			}
-			if err := platform.ValidateSelectionMetadata(transfer.OutputSelection{}); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-				t.Fatalf("closed metadata validation error = %v", err)
-			}
 			if err := platform.Close(); err != nil {
 				t.Fatalf("closed platform close = %v", err)
 			}
@@ -47,7 +43,7 @@ func TestWindowsOutputV3PlatformClosedSurfaceRejectsOperations(t *testing.T) {
 
 func TestWindowsOutputV3PlatformStaticContractAndCanonicalWrappers(t *testing.T) {
 	platform := &windowsOutputV3Platform{}
-	if got := platform.Certification(); got != resumestate.CertificationWindowsNTFSProcessRestart {
+	if got := platform.Certification(); got != outputcap.CertificationWindowsNTFSProcessRestart {
 		t.Fatalf("certification = %v", got)
 	}
 	if got := platform.Durability(); got != transfer.DurabilityProcessRestart {
@@ -157,9 +153,6 @@ func TestWindowsOutputV3DirectoryClosedSurfaceRejectsAllCapabilities(t *testing.
 	if _, err := directory.Names(1); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("names error = %v", err)
 	}
-	if _, err := directory.NamesWithPrefix("x", 1); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Fatalf("prefix names error = %v", err)
-	}
 	if _, err := directory.ObserveEntry("x"); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("observe error = %v", err)
 	}
@@ -167,7 +160,6 @@ func TestWindowsOutputV3DirectoryClosedSurfaceRejectsAllCapabilities(t *testing.
 		t.Fatalf("classify error = %v", err)
 	}
 	for name, err := range map[string]error{
-		"validate name":  directory.ValidatePublicEntryName("x"),
 		"validate names": directory.ValidatePublicEntryNames(nil),
 		"set time":       directory.SetModifiedTime(modified),
 	} {
@@ -186,12 +178,6 @@ func TestWindowsOutputV3DirectoryClosedSurfaceRejectsAllCapabilities(t *testing.
 	}
 	if err := directory.RemoveEntry("x", nil); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("remove entry error = %v", err)
-	}
-	if _, err := directory.IdentityClaim(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Fatalf("identity claim error = %v", err)
-	}
-	if _, err := directory.PrepareIdentityClaim(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Fatalf("prepare identity claim error = %v", err)
 	}
 	if _, err := directory.SameDirectory(nil); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("same directory error = %v", err)
@@ -242,14 +228,8 @@ func TestWindowsOutputV3FileEntryAndLockClosedSurfaceIsSafe(t *testing.T) {
 	if err := file.Sync(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("sync error = %v", err)
 	}
-	if err := file.Truncate(-1); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Fatalf("truncate error = %v", err)
-	}
 	if _, err := file.Size(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("size error = %v", err)
-	}
-	if _, err := file.AllocatedSize(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Fatalf("allocated size error = %v", err)
 	}
 	if err := file.SetModifiedTime(catalog.ModifiedTime{}); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("modified time error = %v", err)
@@ -264,9 +244,6 @@ func TestWindowsOutputV3FileEntryAndLockClosedSurfaceIsSafe(t *testing.T) {
 	var entry *windowsOutputV3EntryRef
 	if got := entry.Kind(); got != outputcap.EntryAbsent {
 		t.Fatalf("closed entry kind = %v", got)
-	}
-	if _, err := entry.AllocatedSize(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Fatalf("entry size error = %v", err)
 	}
 	if err := entry.Close(); err != nil {
 		t.Fatal(err)
@@ -314,9 +291,6 @@ func TestWindowsOutputV3FileLiveSurfacePreservesPinnedAuthorityThroughSettlement
 	if size, err := file.Size(); err != nil || size != uint64(len(payload)) {
 		t.Fatalf("size = %d, %v", size, err)
 	}
-	if _, err := file.AllocatedSize(); err != nil {
-		t.Fatalf("allocated size: %v", err)
-	}
 	read := make([]byte, len(payload))
 	if count, err := file.ReadAt(read, 0); err != nil || count != len(payload) || string(read) != string(payload) {
 		t.Fatalf("read = %d, %q, %v", count, read, err)
@@ -349,24 +323,8 @@ func TestWindowsOutputV3FileLiveSurfacePreservesPinnedAuthorityThroughSettlement
 	if same, err := file.SameFile(peer); err != nil || !same {
 		t.Fatalf("same file = %t, %v", same, err)
 	}
-	identity, err := file.CloseRevalidationIdentity()
-	if err != nil || identity.IsZero() {
-		t.Fatalf("primary close identity is zero: %v", err)
-	}
-	peerIdentity, err := peer.CloseRevalidationIdentity()
-	if err != nil || !identity.Equal(peerIdentity) {
-		t.Fatalf("peer close identity differs: %v", err)
-	}
 	if err := peer.Close(); err != nil {
 		t.Fatalf("close peer: %v", err)
-	}
-
-	const truncatedSize = 7
-	if err := file.Truncate(truncatedSize); err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
-	if size, err := file.Size(); err != nil || size != truncatedSize {
-		t.Fatalf("truncated size = %d, %v", size, err)
 	}
 	// Unlinking while the pinned handle remains live proves settlement does not
 	// silently exchange name authority for a later path re-resolution.

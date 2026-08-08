@@ -11,10 +11,14 @@ import {
 } from '../../src/output/origin-private/session'
 import {
   acquireFileSystemAccessOutputSession,
-  discardFileSystemAccessOutputSession,
-  prepareFileSystemAccessReauthorization,
+  FILE_SYSTEM_ACCESS_BACKEND,
 } from '../../src/output/file-system-access/session'
-import { admittedOutputFile, testOutputIdentity } from '../output/admission-fixture'
+import { IndexedDbOutputRepository } from '../../src/output/browser/indexeddb-repository'
+import {
+  admittedOutputFile,
+  TEST_DIRECTORY_ADMISSION_SCOPE,
+  testOutputIdentity,
+} from '../output/admission-fixture'
 
 const FILE = Object.freeze({
   source: Object.freeze({
@@ -26,6 +30,16 @@ const FILE = Object.freeze({
   exactSize: 5n,
 })
 const ACTIVE_SIGNAL = new AbortController().signal
+const TEST_DURABLE_BINDING = Object.freeze({
+  directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
+  transferIntentDigest: TEST_DIRECTORY_ADMISSION_SCOPE.transferIntentDigest,
+  rootIdentity: TEST_DIRECTORY_ADMISSION_SCOPE.transferIntentDigest,
+})
+const TEST_DURABLE_NAMESPACE = Object.freeze({
+  backend: FILE_SYSTEM_ACCESS_BACKEND,
+  transferIntentDigest: TEST_DURABLE_BINDING.transferIntentDigest,
+  rootIdentity: TEST_DURABLE_BINDING.rootIdentity,
+})
 
 const exporter = Object.freeze({
   export: async () => ORIGIN_PRIVATE_EXPORT_COMPLETE,
@@ -36,7 +50,7 @@ const heldSessions = new Map<string, Awaited<ReturnType<typeof openOriginPrivate
 export async function createCheckpoint(outputSessionId: string): Promise<readonly string[]> {
   const session = await openOriginPrivateOutputSession({
     outputSessionId,
-    allowTestFallback: true,
+    ...TEST_DURABLE_BINDING,
     exporter,
     retainAfterExport: true,
   })
@@ -53,7 +67,7 @@ export async function reopenCheckpoint(outputSessionId: string): Promise<{
 }> {
   const session = await openOriginPrivateOutputSession({
     outputSessionId,
-    allowTestFallback: true,
+    ...TEST_DURABLE_BINDING,
     exporter,
     retainAfterExport: true,
   })
@@ -63,7 +77,7 @@ export async function reopenCheckpoint(outputSessionId: string): Promise<{
     coversPrefix: begun.durableRanges.covers(byteRange(0n, 3n)),
     durability: session.capabilities.durability,
   }
-  await session.abortJob()
+  await session.pauseJob(new Error('recovery probe complete'))
   return result
 }
 
@@ -73,7 +87,7 @@ export async function createCrashCut(
 ): Promise<boolean> {
   const session = await openOriginPrivateOutputSession({
     outputSessionId,
-    allowTestFallback: true,
+    ...TEST_DURABLE_BINDING,
     exporter,
     retainAfterExport: true,
     crashHook: (current) => {
@@ -93,7 +107,7 @@ export async function createCrashCut(
 export async function holdOutputSession(outputSessionId: string): Promise<void> {
   const session = await openOriginPrivateOutputSession({
     outputSessionId,
-    allowTestFallback: true,
+    ...TEST_DURABLE_BINDING,
     exporter,
     retainAfterExport: true,
   })
@@ -104,7 +118,7 @@ export async function competingSessionError(outputSessionId: string): Promise<st
   try {
     await openOriginPrivateOutputSession({
       outputSessionId,
-      allowTestFallback: true,
+      ...TEST_DURABLE_BINDING,
       exporter,
       retainAfterExport: true,
     })
@@ -118,7 +132,7 @@ export async function releaseOutputSession(outputSessionId: string): Promise<voi
   const session = heldSessions.get(outputSessionId)
   if (session === undefined) return
   heldSessions.delete(outputSessionId)
-  await session.abortJob()
+  await session.pauseJob(new Error('release browser lease'))
 }
 
 export async function createPersistentHandleCheckpoint(
@@ -130,7 +144,7 @@ export async function createPersistentHandleCheckpoint(
   })
   const session = await acquireFileSystemAccessOutputSession(outputRoot, {
     outputSessionId,
-    allowTestFallback: true,
+    ...TEST_DURABLE_BINDING,
   })
   const begun = await beginTestFile(session)
   await begun.transaction.writeRange(0n, Uint8Array.of(4, 5, 6), ACTIVE_SIGNAL)
@@ -141,13 +155,21 @@ export async function createPersistentHandleCheckpoint(
 export async function reopenPersistentHandleCheckpoint(
   outputSessionId: string,
 ): Promise<readonly string[]> {
-  const prepared = await prepareFileSystemAccessReauthorization({ outputSessionId, allowTestFallback: true })
-  const session = await prepared.authorize()
+  const originRoot = await originPrivateRoot()
+  const outputRoot = await originRoot.getDirectoryHandle(handleRootName(outputSessionId))
+  const session = await acquireFileSystemAccessOutputSession(outputRoot, {
+    outputSessionId: `${outputSessionId}-resumed`,
+    ...TEST_DURABLE_BINDING,
+  })
   const begun = await beginTestFile(session)
   const ranges = begun.durableRanges.ranges.map((range) => `${range.start}:${range.end}`)
-  await session.abortJob()
-  await discardFileSystemAccessOutputSession({ outputSessionId, allowTestFallback: true })
-  const originRoot = await originPrivateRoot()
+  await session.pauseJob(new Error('recovery probe complete'))
+  const repository = await IndexedDbOutputRepository.openExisting(
+    'windshare-output-checkpoints',
+    TEST_DURABLE_NAMESPACE,
+  )
+  await repository.deleteSessionData()
+  repository.close()
   await originRoot.removeEntry(handleRootName(outputSessionId), { recursive: true })
   return ranges
 }
@@ -163,7 +185,10 @@ export async function completePersistentHandleOutput(
   )
   const session = await outputStep(
     'acquire output session',
-    () => acquireFileSystemAccessOutputSession(outputRoot, { outputSessionId, allowTestFallback: true }),
+    () => acquireFileSystemAccessOutputSession(outputRoot, {
+      outputSessionId,
+      ...TEST_DURABLE_BINDING,
+    }),
   )
   const begun = await outputStep('begin output file', () => beginTestFile(session))
   await outputStep(
@@ -171,7 +196,7 @@ export async function completePersistentHandleOutput(
     () => begun.transaction.writeRange(0n, Uint8Array.of(1, 2, 3, 4, 5), ACTIVE_SIGNAL),
   )
   await outputStep('commit output file', () => begun.transaction.commit(ACTIVE_SIGNAL))
-  await outputStep('finish output session', () => session.finishJob(
+  await outputStep('finish output session', () => session.completeJob(
     jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY),
     ACTIVE_SIGNAL,
   ))
@@ -181,12 +206,16 @@ export async function completePersistentHandleOutput(
   } catch (error) {
     throw new Error('Completed persistent output file is missing', { cause: error })
   }
-  let metadataRetired = false
-  try {
-    await prepareFileSystemAccessReauthorization({ outputSessionId, allowTestFallback: true })
-  } catch (error) {
-    metadataRetired = error instanceof DOMException && error.name === 'NotFoundError'
-  }
+  const repository = await IndexedDbOutputRepository.openExisting(
+    'windshare-output-checkpoints',
+    TEST_DURABLE_NAMESPACE,
+  )
+  const [committed, candidates] = await Promise.all([
+    repository.scanCommitted({ direction: 'ascending' }),
+    repository.scanCandidates({ direction: 'ascending' }),
+  ])
+  const metadataRetired = committed.records.length === 0 && candidates.records.length === 0
+  repository.close()
   const bytes = [...new Uint8Array(await file.arrayBuffer())]
   try {
     await originRoot.removeEntry(rootName, { recursive: true })
@@ -205,7 +234,7 @@ export async function completeOriginPrivateOutput(
   let exported: readonly number[] = []
   const session = await openOriginPrivateOutputSession({
     outputSessionId,
-    allowTestFallback: true,
+    ...TEST_DURABLE_BINDING,
     exporter: {
       export: async (snapshot) => {
         let staged
@@ -222,21 +251,21 @@ export async function completeOriginPrivateOutput(
   const begun = await beginTestFile(session)
   await begun.transaction.writeRange(0n, Uint8Array.of(1, 2, 3, 4, 5), ACTIVE_SIGNAL)
   await begun.transaction.commit(ACTIVE_SIGNAL)
-  await session.finishJob(
+  await session.completeJob(
     jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY),
     ACTIVE_SIGNAL,
   )
 
   const reopened = await openOriginPrivateOutputSession({
     outputSessionId,
-    allowTestFallback: true,
+    ...TEST_DURABLE_BINDING,
     exporter,
     retainAfterExport: true,
   })
   const fresh = await beginTestFile(reopened)
   const reopenedRanges = fresh.durableRanges.ranges
     .map((range) => `${range.start}:${range.end}`)
-  await reopened.abortJob()
+  await reopened.pauseJob(new Error('completion probe complete'))
   return { exported, reopenedRanges }
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/transfer/fault"
 )
 
 type adversarialRangeReaderMode uint8
@@ -97,13 +98,12 @@ func TestTransferJobAtomicallyRejectsMalformedRangeReaderOutput(t *testing.T) {
 				result.Settlement.Kind() != JobPaused || result.SettlementFailure != nil {
 				t.Fatalf("atomic range result = %+v", result)
 			}
-			var contract *JobDependencyContractError
 			if test.wantContract {
-				if !errors.As(result.TerminationCause, &contract) || !errors.Is(result.TerminationCause, errRangeReaderContract) {
+				if normalizedFault(result.TerminationCause) != fault.DependencyContractFault() {
 					t.Fatalf("termination cause = %v, want range-reader dependency contract", result.TerminationCause)
 				}
-			} else if !errors.Is(result.TerminationCause, test.wantCause) || errors.As(result.TerminationCause, &contract) {
-				t.Fatalf("termination cause = %v, want original reader error %v", result.TerminationCause, test.wantCause)
+			} else if normalizedFault(result.TerminationCause) != fault.DependencyContractFault() {
+				t.Fatalf("termination cause = %v, want unknown reader error to fail closed", result.TerminationCause)
 			}
 			transaction := output.transactions["file.bin"]
 			if transaction == nil || !transaction.pending.IsEmpty() || !transaction.durable.IsEmpty() ||
@@ -125,7 +125,7 @@ func TestAtomicRequestedRangeSinkEnforcesAllocationAndArithmeticBounds(t *testin
 		{Offset: 2, End: 1},
 		{Offset: 0, End: uint64(catalog.MaxChunkSize) + 1},
 	} {
-		if _, err := newAtomicRequestedRangeSink(requested, target); !isJobFatal(err) || !errors.Is(err, errRangeReaderContract) {
+		if _, err := newAtomicRequestedRangeSink(requested, target); !isJobTerminalError(err) || normalizedFault(err) != fault.DependencyContractFault() {
 			t.Fatalf("request %v error = %v, want bounded dependency contract", requested, err)
 		}
 	}
@@ -136,7 +136,7 @@ func TestAtomicRequestedRangeSinkEnforcesAllocationAndArithmeticBounds(t *testin
 	if err != nil || len(maximum.data) != catalog.MaxChunkSize {
 		t.Fatalf("maximum atomic request = (bytes=%d, err=%v)", len(maximum.data), err)
 	}
-	if err := maximum.WriteRange(context.Background(), math.MaxUint64, []byte{1}); !isJobFatal(err) || !errors.Is(err, errRangeReaderContract) {
+	if err := maximum.WriteRange(context.Background(), math.MaxUint64, []byte{1}); !isJobTerminalError(err) || normalizedFault(err) != fault.DependencyContractFault() {
 		t.Fatalf("overflowing write error = %v, want dependency contract", err)
 	}
 }

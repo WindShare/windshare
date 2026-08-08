@@ -3,7 +3,7 @@
 override GOTOOLCHAIN := local
 export GOTOOLCHAIN
 
-PUBLIC_TARGETS := ci ci-full check hygiene sloc workflow-lint lint vet short-go race coverage vectors web e2e browser browser-weekly gopls long-go core-release
+PUBLIC_TARGETS := ci ci-full check hygiene sloc workflow-lint lint vet root-release-graph short-go race coverage vectors vectors-update web e2e browser browser-weekly gopls long-go core-release
 INTERNAL_TARGETS := browser-weekly-supplement
 # Runtime and protocol failures carry the highest product risk, so surface them
 # before slower-to-act-on static diagnostics during iterative agent work.
@@ -26,14 +26,14 @@ endif
 .PHONY: $(PUBLIC_TARGETS) $(INTERNAL_TARGETS)
 
 ci: $(CI_GATES)
-	@echo "ci: all gates passed"
+	@echo "ci: all workspace source gates passed"
 
 # `browser` runs `test:browser:smoke` followed by `test:browser:contract:short`.
 # The ordinary CI therefore owns both Chromium short lanes; reusing only the
 # weekly supplement keeps the full current-host sweep complete without rerunning
 # either ordinary Chromium project.
 ci-full: ci long-go browser-weekly-supplement
-	@echo "ci-full: all gates passed"
+	@echo "ci-full: all current-host source gates passed"
 
 browser-weekly: browser browser-weekly-supplement
 	@echo "browser-weekly: all gates passed"

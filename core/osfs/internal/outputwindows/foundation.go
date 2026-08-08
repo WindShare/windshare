@@ -3,12 +3,16 @@
 package outputwindows
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"unsafe"
 
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
+	"github.com/windshare/windshare/core/transfer"
 	"golang.org/x/sys/windows"
 )
 
@@ -323,141 +327,183 @@ func validateWindowsV3DirectoryShape(
 	}
 }
 
-type windowsV3PrivatePolicy struct {
-	userSID             *windows.SID
-	systemSID           *windows.SID
-	administratorsSID   *windows.SID
-	trustedInstallerSID *windows.SID
+func (platform *windowsOutputV3Platform) Root() outputcap.Directory {
+	if platform == nil || platform.native == nil || platform.root == nil || platform.root.native == nil {
+		return nil
+	}
+	return platform.root
 }
 
-const windowsV3TrustedInstallerSID = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+func (platform *windowsOutputV3Platform) RootOpenDisposition() outputcap.RootOpenDisposition {
+	if platform == nil {
+		return ""
+	}
+	return platform.rootOpenDisposition
+}
 
-func newWindowsV3PrivatePolicy() (*windowsV3PrivatePolicy, error) {
-	user, err := windows.GetCurrentThreadEffectiveToken().GetTokenUser()
-	if err != nil {
-		return nil, err
+func (platform *windowsOutputV3Platform) AcquirePublicOperationGuard() (
+	outputcap.PublicOperationGuard,
+	error,
+) {
+	if platform == nil || platform.native == nil {
+		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows output platform is closed"))
 	}
-	// Copy the token-owned SID so the policy cannot outlive its backing token
-	// information buffer.
-	userSID, err := windows.StringToSid(user.User.Sid.String())
+	guard, err := platform.native.acquirePublicOperationGuard()
 	if err != nil {
-		return nil, err
+		return nil, windowsOutputV3Error(err)
 	}
-	systemSID, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
-	if err != nil {
-		return nil, err
+	root := guard.Root()
+	if root == nil {
+		return nil, errors.Join(
+			outputcap.ErrUnsafeNamespace,
+			windowsOutputV3Error(guard.Close()),
+			errors.New("osfs: Windows ancestry guard has no root authority"),
+		)
 	}
-	administratorsSID, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
-	if err != nil {
-		return nil, err
-	}
-	trustedInstallerSID, err := windows.StringToSid(windowsV3TrustedInstallerSID)
-	if err != nil {
-		return nil, err
-	}
-	return &windowsV3PrivatePolicy{
-		userSID: userSID, systemSID: systemSID,
-		administratorsSID: administratorsSID, trustedInstallerSID: trustedInstallerSID,
+	return &windowsOutputV3PublicOperationGuard{
+		native: guard,
+		root:   &windowsOutputV3Directory{native: root},
 	}, nil
 }
 
-func (policy *windowsV3PrivatePolicy) descriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, error) {
-	if policy == nil || policy.userSID == nil || policy.systemSID == nil {
-		return nil, errors.New("windows private ACL policy is unavailable")
+func (guard *windowsOutputV3PublicOperationGuard) Root() outputcap.Directory {
+	if guard == nil || guard.native == nil || guard.root == nil || guard.root.native == nil {
+		return nil
 	}
-	inheritance := ""
-	if directory {
-		inheritance = "OICI"
-	}
-	entries := fmt.Sprintf("(A;%s;GA;;;%s)", inheritance, policy.userSID.String())
-	if !policy.userSID.Equals(policy.systemSID) {
-		entries += fmt.Sprintf("(A;%s;GA;;;%s)", inheritance, policy.systemSID.String())
-	}
-	// P protects the DACL from parent inheritance. Only the effective user and
-	// LocalSystem retain access; inherited broad desktop ACLs never enter the
-	// recovery namespace.
-	return windows.SecurityDescriptorFromString("O:" + policy.userSID.String() + "D:P" + entries)
+	return guard.root
 }
 
-func (policy *windowsV3PrivatePolicy) verify(handle windows.Handle, directory bool) error {
-	expectedFlags := uint8(0)
-	if directory {
-		expectedFlags = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
+func (guard *windowsOutputV3PublicOperationGuard) Close() error {
+	if guard == nil || guard.native == nil {
+		return nil
 	}
-	return policy.verifyObjectPolicy(
-		handle, windows.SE_FILE_OBJECT, windowsV3FileAllAccess, expectedFlags,
-	)
+	err := guard.native.Close()
+	guard.native = nil
+	if guard.root != nil {
+		guard.root.native = nil
+	}
+	guard.root = nil
+	return windowsOutputV3Error(err)
 }
 
-func (policy *windowsV3PrivatePolicy) verifyKernelMutex(handle windows.Handle) error {
-	return policy.verifyObjectPolicy(handle, windows.SE_KERNEL_OBJECT, windows.MUTEX_ALL_ACCESS, 0)
+func (*windowsOutputV3Platform) Certification() outputcap.CertificationID {
+	return outputcap.CertificationWindowsNTFSProcessRestart
 }
 
-func (policy *windowsV3PrivatePolicy) verifyObjectPolicy(
-	handle windows.Handle,
-	objectType windows.SE_OBJECT_TYPE,
-	expectedMask windows.ACCESS_MASK,
-	expectedFlags uint8,
-) error {
-	if policy == nil || policy.userSID == nil || policy.systemSID == nil {
-		return errors.New("windows private ACL policy is unavailable")
+func (platform *windowsOutputV3Platform) RootBinding() (
+	_ outputcap.OutputRootBinding,
+	resultErr error,
+) {
+	if platform == nil || platform.native == nil || platform.native.root == nil {
+		return outputcap.OutputRootBinding{}, errors.Join(
+			outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: Windows output platform is closed"),
+		)
 	}
-	descriptor, err := windows.GetSecurityInfo(
-		handle, objectType, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION,
-	)
+	guard, err := platform.native.acquirePublicOperationGuard()
 	if err != nil {
-		return err
+		return outputcap.OutputRootBinding{}, windowsOutputV3Error(err)
 	}
-	control, _, err := descriptor.Control()
+	defer func() { resultErr = errors.Join(resultErr, windowsOutputV3Error(guard.Close())) }()
+	root := guard.Root()
+	if root == nil {
+		return outputcap.OutputRootBinding{}, errors.Join(
+			outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: Windows ancestry guard has no root authority"),
+		)
+	}
+	if _, err := root.prepareIdentityClaim(); err != nil {
+		return outputcap.OutputRootBinding{}, windowsOutputV3Error(err)
+	}
+	facts, err := root.inspector.Inspect(root.handle())
 	if err != nil {
-		return err
+		return outputcap.OutputRootBinding{}, windowsOutputV3Error(
+			windowsV3Failure("bind output root", root.path, errWindowsV3OutputUnsafe, err),
+		)
 	}
-	if control&windows.SE_DACL_PROTECTED == 0 {
-		return errors.New("private DACL is not protected from inheritance")
+	if err := windowsV3ValidateOpenedObject(facts, root.volume, true); err != nil {
+		return outputcap.OutputRootBinding{}, windowsOutputV3Error(
+			windowsV3Failure("bind output root", root.path, errWindowsV3OutputUnsafe, err),
+		)
 	}
-	owner, _, err := descriptor.Owner()
-	if err != nil || owner == nil || !owner.Equals(policy.userSID) {
-		return errors.Join(errors.New("private object owner differs from the effective user"), err)
+	objectID, prepared := root.objectIDState.current()
+	if !prepared {
+		return outputcap.OutputRootBinding{}, errors.Join(
+			outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: Windows output-root Object ID was not prepared"),
+		)
 	}
-	dacl, defaulted, err := descriptor.DACL()
-	if err != nil || dacl == nil || defaulted {
-		return errors.Join(errors.New("private object DACL is absent or defaulted"), err)
+	guid := strings.ToLower(facts.object.volume.guid)
+	if len(guid) == 0 || len(guid) > windowsV3VolumeGUIDClaimMaxBytes {
+		return outputcap.OutputRootBinding{}, errors.Join(
+			outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: Windows volume GUID identity exceeds the bounded root-binding format"),
+		)
 	}
+	volume := make([]byte, len("windows/ntfs/volume/v1")+4+len(guid)+8)
+	copy(volume, "windows/ntfs/volume/v1")
+	offset := len("windows/ntfs/volume/v1")
+	binary.BigEndian.PutUint32(volume[offset:], uint32(len(guid)))
+	offset += 4
+	copy(volume[offset:], guid)
+	offset += len(guid)
+	binary.BigEndian.PutUint64(volume[offset:], facts.object.volume.serial)
 
-	expectedCount := uint16(2)
-	if policy.userSID.Equals(policy.systemSID) {
-		expectedCount = 1
+	object := make([]byte, len("windows/ntfs/directory-object/v2")+len(objectID))
+	copy(object, "windows/ntfs/directory-object/v2")
+	copy(object[len("windows/ntfs/directory-object/v2"):], objectID[:])
+	binding, err := outputcap.NewOutputRootBinding(platform.Certification(), volume, object)
+	return binding, windowsOutputV3Error(err)
+}
+
+func (*windowsOutputV3Platform) Durability() transfer.DurabilityLevel {
+	return transfer.DurabilityProcessRestart
+}
+
+func (platform *windowsOutputV3Platform) ProbeRecoverableFeatures() error {
+	if platform == nil || platform.native == nil || platform.native.root == nil {
+		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows output platform is closed"))
 	}
-	if dacl.AceCount != expectedCount {
-		return fmt.Errorf("private DACL contains %d entries; expected %d", dacl.AceCount, expectedCount)
+	guard, err := platform.native.acquirePublicOperationGuard()
+	if err != nil {
+		return windowsOutputV3Error(err)
 	}
-	userFound, systemFound := false, policy.userSID.Equals(policy.systemSID)
-	for index := uint32(0); index < uint32(dacl.AceCount); index++ {
-		var ace *windows.ACCESS_ALLOWED_ACE
-		if err := windows.GetAce(dacl, index, &ace); err != nil {
-			return err
-		}
-		if ace == nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE ||
-			ace.Header.AceFlags != expectedFlags || ace.Mask != expectedMask {
-			if ace == nil {
-				return errors.New("private DACL contains a nil access entry")
-			}
-			return fmt.Errorf("private DACL access entry type=%d flags=%#x mask=%#x; expected type=%d flags=%#x mask=%#x",
-				ace.Header.AceType, ace.Header.AceFlags, ace.Mask,
-				windows.ACCESS_ALLOWED_ACE_TYPE, expectedFlags, expectedMask)
-		}
-		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		switch {
-		case sid.Equals(policy.userSID) && !userFound:
-			userFound = true
-		case sid.Equals(policy.systemSID) && !systemFound:
-			systemFound = true
-		default:
-			return errors.New("private DACL grants an unexpected or duplicate principal")
-		}
+	probeErr := guard.Root().probeRecoverableFeatures()
+	return errors.Join(windowsOutputV3Error(probeErr), windowsOutputV3Error(guard.Close()))
+}
+
+func (*windowsOutputV3Platform) ValidateModifiedTime(modified catalog.ModifiedTime) error {
+	return windowsOutputV3Error(windowsV3ValidateModifiedTime(modified))
+}
+
+func (*windowsOutputV3Platform) CanonicalLocatorKey(path string) (string, error) {
+	key, err := windowsV3OutputLocatorKey(path)
+	return key, windowsOutputV3Error(err)
+}
+
+func (*windowsOutputV3Platform) CanonicalComponentKey(name string) (string, error) {
+	native, err := windowsV3RelativePath(name, true)
+	if err != nil {
+		return "", windowsOutputV3Error(err)
 	}
-	if !userFound || !systemFound {
-		return errors.New("private DACL omits a required principal")
+	key, err := windowsV3NTFSCaseKey(native)
+	return key, windowsOutputV3Error(err)
+}
+
+func (platform *windowsOutputV3Platform) Close() error {
+	if platform == nil || platform.native == nil {
+		return nil
 	}
-	return nil
+	var err error
+	if platform.publicationGuard != nil {
+		err = errors.Join(err, platform.publicationGuard.Close())
+		platform.publicationGuard = nil
+	}
+	err = errors.Join(err, platform.native.Close())
+	platform.native = nil
+	if platform.root != nil {
+		platform.root.native = nil
+	}
+	platform.root = nil
+	return windowsOutputV3Error(err)
 }

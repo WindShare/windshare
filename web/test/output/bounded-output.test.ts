@@ -5,7 +5,11 @@ import type { OutputFile } from '../../src/transfer/output-session'
 import { PersistentTreeOutputSession } from '../../src/output/persistent-tree/session'
 import { OUTPUT_JOURNAL_PAGE_RECORD_LIMIT } from '../../src/output/persistence/journal'
 import { MemoryOutputJournal, MemoryOutputTree } from './fakes'
-import { admittedOutputFile, testOutputIdentity } from './admission-fixture'
+import {
+  admittedOutputFile,
+  TEST_DIRECTORY_ADMISSION_SCOPE,
+  testOutputIdentity,
+} from './admission-fixture'
 
 const ACTIVE_SIGNAL = new AbortController().signal
 
@@ -15,6 +19,7 @@ describe('bounded output structure', () => {
     const tree = new MemoryOutputTree()
     const options = {
       identity: { backend: 'memory-tree', outputSessionId: 'paged-recovery' },
+      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
       tree,
       journal,
     }
@@ -24,7 +29,7 @@ describe('bounded output structure', () => {
       const begun = await first.beginFile(await admittedOutputFile(first, zeroByteFile(index)), ACTIVE_SIGNAL)
       await begun.transaction.commit(ACTIVE_SIGNAL)
     }
-    await first.finishJob(
+    await first.completeJob(
       jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY),
       ACTIVE_SIGNAL,
     )

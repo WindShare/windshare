@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"math"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -323,42 +322,6 @@ func (file *linuxOutputRegularFile) Size() (uint64, error) {
 		return 0, err
 	}
 	return identity.size, nil
-}
-
-func (file *linuxOutputRegularFile) allocatedSize() (uint64, error) {
-	const operation = "inspect output file allocation"
-	current, err := file.currentIdentity()
-	if err != nil {
-		return 0, err
-	}
-	if !file.object.sameObject(current.identity) {
-		return 0, linuxUnsafe(operation, "open file no longer matches its fixed incarnation", nil)
-	}
-	requested := unix.STATX_TYPE | unix.STATX_MODE | unix.STATX_INO | unix.STATX_BLOCKS | unix.STATX_MNT_ID_UNIQUE
-	var stat unix.Statx_t
-	if err := file.system.statx(
-		file.fd, "", unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW, requested, &stat,
-	); err != nil {
-		return 0, fmt.Errorf("%s: %w", operation, err)
-	}
-	if stat.Mask&uint32(requested) != uint32(requested) {
-		return 0, linuxUnsupported(operation, "filesystem omitted allocation or current-object identity", nil)
-	}
-	identity := linuxOpenHandleIdentity{
-		mountID: stat.Mnt_id, deviceMajor: stat.Dev_major, deviceMinor: stat.Dev_minor,
-		inode: stat.Ino, kind: linuxFileType(stat.Mode),
-	}
-	// STATX_BLOCKS is obtained separately from the generation-bearing identity.
-	// The full handle remains live across both observations, so raw inode equality
-	// cannot be satisfied by reuse while this comparison is in progress.
-	if identity.kind != unix.S_IFREG || !identity.sameObject(current.identity) {
-		return 0, linuxUnsafe(operation, "allocation metadata is outside the fixed file authority", nil)
-	}
-	const statBlockBytes = uint64(512)
-	if stat.Blocks > math.MaxUint64/statBlockBytes {
-		return 0, linuxUnsafe(operation, "allocated byte count overflows", nil)
-	}
-	return stat.Blocks * statBlockBytes, nil
 }
 
 func linuxSameOpenDirectory(left, right *linuxOutputDirectory) (bool, error) {

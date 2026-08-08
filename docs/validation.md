@@ -14,17 +14,19 @@ WBEM state are not validation gates.
 
 | Entry point | Direct responsibility |
 |---|---|
-| `make ci` | Run the ordinary local gates in their fixed order. |
-| `make ci-full` | Run ordinary CI plus all current-host equivalents of weekly suites. |
+| `make ci` | Run the ordinary workspace-source gates in their fixed order. |
+| `make ci-full` | Run workspace-source CI plus all current-host equivalents of weekly suites. |
 | `make check` | Root/core short tests, Web TypeScript checks, and Vitest. |
-| `make hygiene` | gofmt verification, `git diff --check`, and retired-v1 production-reference scans. |
+| `make hygiene` | gofmt verification, `git diff --check`, exact retired-path checks, and production dependency-graph checks. |
 | `make sloc`, `make workflow-lint` | Run local sloc-guard and actionlint directly. |
 | `make lint` | Run golangci-lint once in each Go module. |
-| `make vet` | Vet both Go modules and build the released-core consumer with `GOWORK=off`. |
+| `make vet` | Vet both Go modules. |
+| `make root-release-graph` | Build the root module with `GOWORK=off` against its released core dependency. GitHub owns this merge gate; local use is diagnostic. |
 | `make gopls` | Check tracked Go files with the local language server. |
 | `make short-go` | Run each Go module once with short, race, and atomic coverage instrumentation, then enforce coverage. |
 | `make race`, `make coverage` | Run diagnostic-only short sweeps; `make ci` uses the combined `short-go` gate instead. |
-| `make vectors` | Regenerate and compare the canonical Go-to-TypeScript protocol vectors. |
+| `make vectors` | Verify the canonical Go-to-TypeScript protocol vectors without modifying the worktree. |
+| `make vectors-update` | Explicitly regenerate the canonical protocol vectors for review. |
 | `make web` | Run ESLint, the TypeScript/Vite build, and Vitest. |
 | `make e2e` | Run the single critical sender/relay/receiver process path. |
 | `make browser` | Run the direct current-platform Chromium relay smoke, then every non-periodic browser contract in the `chromium-short` project. |
@@ -33,6 +35,8 @@ WBEM state are not validation gates.
 | `make core-release` | Validate an extracted, independently consumable core module. |
 
 `make ci` runs `short-go vectors web e2e browser hygiene workflow-lint lint vet gopls sloc` serially.
+Both local aggregates validate current workspace source and intentionally exclude `root-release-graph`; final
+pull requests and `main` validate the published dependency graph in GitHub Actions.
 Runtime and protocol failures run first because they carry the highest product risk; gopls and SLOC close
 the sweep so late static diagnostics do not delay test feedback. Use `make check` or a focused target while
 iterating. `browser-weekly`, `long-go`, `ci-full`, and `core-release` intentionally stay outside ordinary
@@ -66,11 +70,13 @@ superseded work for the same ref, and starts seven fixed independent jobs:
 | `web` | Frozen Web install followed by lint, build, and Vitest. |
 | `go-e2e` | The critical Linux process E2E once. |
 | `browser-chromium` | The relay-only Linux Chromium smoke and `chromium-short` component contracts once. |
-| `windows-native` | Windows vet/build and root/core short tests, without duplicate coverage. |
+| `windows-native` | Windows vet, released-core consumer build, and root/core short tests, without duplicate coverage. |
 
 Every job has a 10-minute hang fuse, no dependency on another job, and reports its own result directly.
 Hosted jobs prepare their own current toolchains and frozen project dependencies. The ordinary CI p95
 goal is at most 6 minutes, measured from native GitHub Actions timestamps.
+Branch rules must require the ordinary CI results before merge; the push-to-`main` run detects regressions
+but cannot prevent an unprotected merge.
 
 ## Automatic weekly suites
 
@@ -103,7 +109,9 @@ does not publish.
 A root change that consumes a new pre-v1 core API uses two commits. First, push a candidate tag at the
 coherent source commit and wait for its immutable `core/vX.Y.Z` tag. Then update the root `go.mod` to
 that released version. The workspace validates current source before publication; the `GOWORK=off`
-consumer gate validates the released graph afterward. Local `replace` directives and placeholder
+`root-release-graph` merge gate validates the released graph afterward. Creating a candidate tag is
+release authority because the exact commit need not be merged into `main`, so that permission must be
+restricted. Local `replace` directives and placeholder
 versions are not substitutes for either boundary.
 
 ## Product safety boundary

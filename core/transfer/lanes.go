@@ -47,7 +47,8 @@ func (e *demandNotAdmittedError) Error() string {
 func (e *demandNotAdmittedError) Unwrap() error { return e.cause }
 
 func isDemandNotAdmitted(err error) bool {
-	return inspectLifecycleError(err).demandNotAdmitted
+	var notAdmitted *demandNotAdmittedError
+	return errors.As(err, &notAdmitted) && notAdmitted != nil
 }
 
 type LaneIdentity struct {
@@ -339,9 +340,31 @@ func (s *LaneSet) notifyAvailabilityLocked() {
 }
 
 type laneResult struct {
-	state  *laneState
-	record records.BlockRecord
-	err    error
+	state       *laneState
+	record      records.BlockRecord
+	err         error
+	normalized  *lifecycleFailure
+	notAdmitted bool
+}
+
+type laneRoundKind uint8
+
+const (
+	laneRoundSucceeded laneRoundKind = iota + 1
+	laneRoundFailed
+	laneRoundInterrupted
+)
+
+type laneRoundResult struct {
+	kind     laneRoundKind
+	record   records.BlockRecord
+	failures []laneResult
+	err      error
+}
+
+type laneFailureSet struct {
+	failure    *lifecycleFailure
+	diagnostic error
 }
 
 func (s *LaneSet) fetch(
@@ -353,68 +376,124 @@ func (s *LaneSet) fetch(
 		return records.BlockRecord{}, err
 	}
 	attempted := make(map[LaneIdentity]struct{}, MaxDemandLaneAttempts)
-	var combined error
+	failures := laneFailureSet{}
 	for len(attempted) < MaxDemandLaneAttempts {
 		candidates, exhausted, err := s.candidates(ctx, attempted)
 		if err != nil {
-			return records.BlockRecord{}, err
+			normalized := admitInternalFailure(normalizeSourceBoundary(ctx, err))
+			return records.BlockRecord{}, collaboratorError(normalized, err)
 		}
 		if exhausted {
-			return records.BlockRecord{}, combined
+			return records.BlockRecord{}, collaboratorError(failures.failure, failures.diagnostic)
 		}
 		for _, state := range candidates {
 			attempted[state.identity] = struct{}{}
 		}
-		raceContext, cancel := context.WithCancel(ctx)
-		stopLifecycle := context.AfterFunc(s.lifecycle, cancel)
-		results := make(chan laneResult, len(candidates))
-		for _, state := range candidates {
-			go func() {
-				defer s.attempts.Done()
-				started := s.now()
-				record, fetchErr := state.lane.FetchBlock(raceContext, demand)
-				if fetchErr == nil {
-					fetchErr = validate(record)
-				}
-				s.finish(state, s.now().Sub(started), fetchErr)
-				results <- laneResult{state: state, record: record, err: fetchErr}
-			}()
-		}
-		reassignable := true
-		for range candidates {
-			select {
-			case <-raceContext.Done():
-				stopLifecycle()
-				cancel()
-				if ctx.Err() != nil {
-					return records.BlockRecord{}, ctx.Err()
-				}
-				return records.BlockRecord{}, ErrLaneClosed
-			case result := <-results:
-				if result.err == nil {
-					stopLifecycle()
-					cancel()
-					return result.record, nil
-				}
-				reassignable = reassignable && isDemandNotAdmitted(result.err)
-				combined = errors.Join(combined, fmt.Errorf("lane %d/%d: %w", result.state.identity.ID, result.state.identity.Epoch, result.err))
+		round := s.runLaneRound(ctx, demand, validate, candidates)
+		switch round.kind {
+		case laneRoundSucceeded:
+			return round.record, nil
+		case laneRoundInterrupted:
+			return records.BlockRecord{}, round.err
+		case laneRoundFailed:
+			var reassignable bool
+			failures, reassignable = reduceLaneFailures(failures, round.failures)
+			if !reassignable {
+				return records.BlockRecord{}, collaboratorError(failures.failure, failures.diagnostic)
 			}
 		}
-		stopLifecycle()
-		cancel()
-		if !reassignable {
-			return records.BlockRecord{}, combined
-		}
 	}
-	return records.BlockRecord{}, combined
+	return records.BlockRecord{}, collaboratorError(failures.failure, failures.diagnostic)
 }
 
-func (s *LaneSet) finish(state *laneState, elapsed time.Duration, err error) {
+func (s *LaneSet) runLaneRound(
+	ctx context.Context,
+	demand BlockDemand,
+	validate func(records.BlockRecord) error,
+	candidates []*laneState,
+) laneRoundResult {
+	raceContext, cancel := context.WithCancel(ctx)
+	stopLifecycle := context.AfterFunc(s.lifecycle, cancel)
+	defer func() {
+		stopLifecycle()
+		cancel()
+	}()
+
+	results := make(chan laneResult, len(candidates))
+	for _, state := range candidates {
+		go s.fetchLane(raceContext, demand, validate, state, results)
+	}
+	failures := make([]laneResult, 0, len(candidates))
+	for range candidates {
+		select {
+		case <-raceContext.Done():
+			if ctx.Err() != nil {
+				return laneRoundResult{kind: laneRoundInterrupted, err: ctx.Err()}
+			}
+			return laneRoundResult{kind: laneRoundInterrupted, err: ErrLaneClosed}
+		case result := <-results:
+			if result.err == nil {
+				return laneRoundResult{kind: laneRoundSucceeded, record: result.record}
+			}
+			failures = append(failures, result)
+		}
+	}
+	return laneRoundResult{kind: laneRoundFailed, failures: failures}
+}
+
+func (s *LaneSet) fetchLane(
+	ctx context.Context,
+	demand BlockDemand,
+	validate func(records.BlockRecord) error,
+	state *laneState,
+	results chan<- laneResult,
+) {
+	defer s.attempts.Done()
+	started := s.now()
+	record, fetchErr := state.lane.FetchBlock(ctx, demand)
+	if fetchErr == nil {
+		fetchErr = validate(record)
+	}
+	notAdmitted := isDemandNotAdmitted(fetchErr)
+	normalized := admitInternalFailure(normalizeSourceBoundary(ctx, fetchErr))
+	canceled := normalized != nil && normalized.policy.canceled
+	s.finish(state, s.now().Sub(started), fetchErr, canceled)
+	results <- laneResult{
+		state: state, record: record, err: fetchErr,
+		normalized: normalized, notAdmitted: notAdmitted,
+	}
+}
+
+func reduceLaneFailures(current laneFailureSet, results []laneResult) (laneFailureSet, bool) {
+	ordered := slices.Clone(results)
+	slices.SortFunc(ordered, func(left, right laneResult) int {
+		if compared := cmp.Compare(left.state.identity.ID, right.state.identity.ID); compared != 0 {
+			return compared
+		}
+		return cmp.Compare(left.state.identity.Epoch, right.state.identity.Epoch)
+	})
+	reassignable := true
+	for _, result := range ordered {
+		diagnostic := fmt.Errorf(
+			"lane %d/%d: %w", result.state.identity.ID, result.state.identity.Epoch, result.err,
+		)
+		failure := result.normalized
+		if result.notAdmitted {
+			failure = sourceUnavailableFailure(diagnostic)
+		}
+		current.failure = joinClosedLifecycleFailures(current.failure, failure)
+		current.diagnostic = errors.Join(current.diagnostic, diagnostic)
+		reassignable = reassignable && result.notAdmitted
+	}
+	return current, reassignable
+}
+
+func (s *LaneSet) finish(state *laneState, elapsed time.Duration, err error, canceled bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state.inflight--
 	if err != nil {
-		if !inspectLifecycleError(err).interrupted && state.failures < maximumLaneFailures {
+		if !canceled && state.failures < maximumLaneFailures {
 			state.failures++
 		}
 		return

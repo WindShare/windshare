@@ -42,7 +42,6 @@ type App struct {
 	stderrMu            sync.Mutex
 	receiverPeerFactory func() (receiverPeerStarter, error)
 	receiverClock       receiverAdmissionClock
-	checkpointCleaner   checkpointCleanupRunner
 	processTrace        *processTrace
 }
 
@@ -110,8 +109,15 @@ func (a *App) usage() {
 	      relay-only skips direct peer setup and transfers content through the configured relay.
 	      If the link has no key, use --key or enter the key interactively.
 
+	  windshare resume list -o <directory>
+	      List current paused state without acquiring deletion authority.
+
+	  windshare resume discard -o <directory> --item <N>
+	      Re-list and confirm one live item on a terminal before discarding owned recovery artifacts.
+	      Published files are always preserved.
+
 	  windshare resume cleanup -o <directory>
-	      Run idempotent, ownership-scoped checkpoint cleanup and report retained attention.
+	      Run the isolated legacy-state cleaner; this does not discard current paused state.
 `)
 }
 

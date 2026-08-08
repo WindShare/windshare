@@ -1,21 +1,30 @@
-import { DirectoryAdmissionLedger } from '../../transfer/directory-admission-ledger'
+import {
+  DirectoryAdmissionLedger,
+  type DirectoryFileMutationLease,
+} from '../../transfer/directory-admission-ledger'
 import {
   type BeginOutputFileResult,
   type DirectoryAdmission,
-  type FileAbortDisposition,
+  type DirectoryAdmissionScope,
+  type DirectorySettlement,
+  type FileRetirementDisposition,
+  type JobSettlement,
   type OutputCapabilities,
-  type OutputDirectory,
   type OutputDirectoryAdmission,
   type OutputFile,
   type OutputFileTransaction,
   type OutputSession,
   type OutputSessionIdentity,
   VerifiedDurableRanges,
+  COMPLETED_JOB_SETTLEMENT,
+  needsAttentionJobSettlement,
   outputCapabilities,
   outputSessionIdentity,
+  pausedJobSettlement,
   snapshotOutputFile,
 } from '../../transfer/output-session'
 import type { JobOutcome } from '../../transfer/outcome'
+import { FaultScope, OutputFaultCode, outputFault } from '../../transfer/fault'
 
 export const SINGLE_FILE_STREAM_BACKEND = 'single-file-stream'
 
@@ -32,7 +41,7 @@ export class SingleFileStreamOutputSession implements OutputSession {
   })
 
   readonly #writer: WritableStreamDefaultWriter<Uint8Array>
-  readonly #directoryAdmissions = new DirectoryAdmissionLedger()
+  readonly #directoryAdmissions: DirectoryAdmissionLedger
   #state: StreamState = 'open'
   #transaction: SingleFileStreamTransaction | undefined
   #closePromise: Promise<void> | undefined
@@ -40,12 +49,17 @@ export class SingleFileStreamOutputSession implements OutputSession {
   #settlementFailure: unknown
   #writerReleased = false
 
-  constructor(outputSessionId: string, output: WritableStream<Uint8Array>) {
+  constructor(
+    outputSessionId: string,
+    directoryAdmissionScope: DirectoryAdmissionScope,
+    output: WritableStream<Uint8Array>,
+  ) {
     if (output.locked) throw new TypeError('Single-file output stream is already locked')
     this.identity = outputSessionIdentity({
       backend: SINGLE_FILE_STREAM_BACKEND,
       outputSessionId,
     })
+    this.#directoryAdmissions = new DirectoryAdmissionLedger(directoryAdmissionScope)
     this.#writer = output.getWriter()
   }
 
@@ -54,10 +68,11 @@ export class SingleFileStreamOutputSession implements OutputSession {
     return this.#directoryAdmissions.admitDirectory(input, signal)
   }
 
-  async finalizeDirectory(directory: OutputDirectory, signal: AbortSignal): Promise<void> {
-    signal.throwIfAborted()
-    this.#requireOpen()
-    this.#directoryAdmissions.validateDirectoryFinalization(directory)
+  finalizeDirectory(
+    admission: DirectoryAdmission,
+    signal: AbortSignal,
+  ): Promise<DirectorySettlement> {
+    return this.#directoryAdmissions.finalizeDirectory(admission, signal)
   }
 
   async beginFile(input: OutputFile, signal: AbortSignal): Promise<BeginOutputFileResult> {
@@ -66,7 +81,8 @@ export class SingleFileStreamOutputSession implements OutputSession {
     if (this.#transaction !== undefined) {
       throw new Error('Single-file output accepts exactly one file')
     }
-    const admitted = this.#directoryAdmissions.validateFileParent(input)
+    const mutation = this.#directoryAdmissions.acquireFileMutation(input)
+    const admitted = mutation.file
     const file = snapshotOutputFile({
       source: admitted.source,
       path: admitted.path,
@@ -78,35 +94,56 @@ export class SingleFileStreamOutputSession implements OutputSession {
       canonicalPath: file.path,
       ownedFileIdentity: `${this.identity.outputSessionId}:stream`,
     })
-    const transaction = new SingleFileStreamTransaction(this, file, ownership)
-    this.#transaction = transaction
-    return Object.freeze({
-      transaction,
-      durableRanges: new VerifiedDurableRanges(ownership, file.source, file.exactSize, []),
-    })
+    try {
+      const transaction = new SingleFileStreamTransaction(this, file, ownership, mutation)
+      this.#transaction = transaction
+      return Object.freeze({
+        transaction,
+        durableRanges: new VerifiedDurableRanges(ownership, file.source, file.exactSize, []),
+      })
+    } catch (error) {
+      mutation.release()
+      throw error
+    }
   }
 
-  async finishJob(outcome: JobOutcome, signal: AbortSignal): Promise<void> {
+  async completeJob(_outcome: JobOutcome, signal: AbortSignal): Promise<JobSettlement> {
     signal.throwIfAborted()
-    if (outcome.status === 'Aborted') throw new Error('Cannot finish an aborted output job')
-    if (this.#state === 'committed') return
-    if (this.#state === 'closing') return this.#closePromise
-    if (this.#state !== 'open') return
+    if (this.#state === 'committed') return COMPLETED_JOB_SETTLEMENT
+    if (this.#state === 'closing') {
+      await this.#closePromise
+      return COMPLETED_JOB_SETTLEMENT
+    }
+    if (this.#state !== 'open') {
+      return needsAttentionJobSettlement(outputFault(
+        FaultScope.OutputPause,
+        OutputFaultCode.MutationAmbiguous,
+      ))
+    }
     if (this.#transaction !== undefined && !this.#transaction.settled) {
       throw new Error('Cannot finish single-file output while its file is active')
     }
     if (this.#transaction === undefined) {
-      const detach = interruptOnAbort(signal, (reason) => this.abortJob(reason))
+      const detach = interruptOnAbort(signal, (reason) => this.abortOutput(reason))
       try {
         await this.commitOutput()
       } finally {
         detach()
       }
     }
+    return COMPLETED_JOB_SETTLEMENT
   }
 
-  abortJob(reason: unknown): Promise<void> {
-    return this.abortOutput(reason)
+  async pauseJob(reason: unknown): Promise<JobSettlement> {
+    try {
+      await this.abortOutput(reason)
+      return pausedJobSettlement(this.capabilities.durability)
+    } catch {
+      return needsAttentionJobSettlement(outputFault(
+        FaultScope.OutputPause,
+        OutputFaultCode.MutationAmbiguous,
+      ))
+    }
   }
 
   async writeOutput(data: Uint8Array): Promise<void> {
@@ -210,6 +247,7 @@ class SingleFileStreamTransaction implements OutputFileTransaction {
   readonly #session: SingleFileStreamOutputSession
   readonly #file: OutputFile
   readonly #ownership: ConstructorParameters<typeof VerifiedDurableRanges>[0]
+  readonly #directoryMutation: DirectoryFileMutationLease
   #tail: Promise<unknown> = Promise.resolve()
   #nextOffset = 0n
   #started = false
@@ -219,10 +257,12 @@ class SingleFileStreamTransaction implements OutputFileTransaction {
     session: SingleFileStreamOutputSession,
     file: OutputFile,
     ownership: ConstructorParameters<typeof VerifiedDurableRanges>[0],
+    directoryMutation: DirectoryFileMutationLease,
   ) {
     this.#session = session
     this.#file = file
     this.#ownership = ownership
+    this.#directoryMutation = directoryMutation
   }
 
   get settled(): boolean {
@@ -269,21 +309,32 @@ class SingleFileStreamTransaction implements OutputFileTransaction {
       }
       this.#started = true
       await this.#session.commitOutput()
+      this.#settle()
       signal.throwIfAborted()
-      this.#settled = true
     })
   }
 
-  abort(reason: unknown): Promise<FileAbortDisposition> {
+  retire(reason: unknown): Promise<FileRetirementDisposition> {
     return this.#enqueue(async () => {
       if (this.#settled) return this.#started ? 'JobOutputCompromised' : 'FileIsolated'
       const disposition = this.#started ? 'JobOutputCompromised' : 'FileIsolated'
       try {
         await this.#session.abortOutput(reason)
       } finally {
-        this.#settled = true
+        this.#settle()
       }
       return disposition
+    })
+  }
+
+  pause(reason: unknown): Promise<void> {
+    return this.#enqueue(async () => {
+      if (this.#settled) return
+      try {
+        await this.#session.abortOutput(reason)
+      } finally {
+        this.#settle()
+      }
     })
   }
 
@@ -295,6 +346,12 @@ class SingleFileStreamTransaction implements OutputFileTransaction {
 
   #requireOpen(): void {
     if (this.#settled) throw new Error('Single-file stream transaction is settled')
+  }
+
+  #settle(): void {
+    if (this.#settled) return
+    this.#settled = true
+    this.#directoryMutation.release()
   }
 }
 

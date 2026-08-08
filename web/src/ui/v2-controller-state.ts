@@ -4,6 +4,7 @@ import { encodeBase64Url } from '../crypto/bytes'
 import type { V2ConnectivityActivation } from '../connectivity/v2-receiver-policy'
 import type { V2FilePreview, V2PreviewPresentation } from '../preview/v2-preview'
 import type { TransferJobResult, TransferProgress } from '../transfer/v2-job'
+import { JobSettlementKind } from '../transfer/output-session'
 import type { V2BrowseDirectory, V2BrowsePage, V2JoinedBrowserShare } from './v2-gateway'
 import type { V2BrowseRow, V2ReceiverSnapshot } from './v2-model'
 
@@ -136,23 +137,30 @@ export function selectionAvailable(
 export function transferTerminalSnapshot(
   snapshot: V2ReceiverSnapshot,
   result: TransferJobResult,
-  locallyAborted: boolean,
 ): V2ReceiverSnapshot {
-  if (result.outcome.status === 'Paused') {
-    return { ...snapshot, phase: 'paused', status: 'Transfer paused; completed output and checkpoints were retained.' }
-  }
-  if (result.outcome.status === 'NeedsAttention') {
+  if (result.settlement.kind === JobSettlementKind.NeedsAttention) {
     return {
       ...snapshot,
-      phase: 'failed',
-      status: 'Transfer stopped, but output cleanup could not be confirmed. Manual review may be required.',
+      phase: 'needs-attention',
+      status: 'Transfer stopped, but the output boundary needs manual review.',
     }
   }
-  if (result.outcome.status === 'Aborted') {
-    if (!locallyAborted) {
-      throw result.abortReason ?? new Error('Transfer aborted without a terminal reason')
+  if (result.outcome.status === 'Paused') {
+    if (result.settlement.kind === JobSettlementKind.Completed) {
+      return {
+        ...snapshot,
+        phase: 'completed',
+        status: 'Output publication completed before the pause took effect.',
+      }
     }
-    return { ...snapshot, phase: 'aborted', status: 'Transfer stopped.' }
+    if (result.settlement.durability === 'None') {
+      return {
+        ...snapshot,
+        phase: 'retry-ready',
+        status: 'Transfer stopped. This output cannot resume; retry starts from byte zero.',
+      }
+    }
+    return { ...snapshot, phase: 'paused', status: 'Transfer paused; completed output and checkpoints were retained.' }
   }
   if (result.outcome.status === 'CompletedWithErrors') {
     return {

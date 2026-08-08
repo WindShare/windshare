@@ -5,6 +5,12 @@ import {
   type OutputFile,
   type OutputSessionIdentity,
 } from '../../transfer/output-session'
+import {
+  BoundaryFaultError,
+  CheckpointFaultCode,
+  FaultScope,
+  checkpointFault,
+} from '../../transfer/fault'
 import type {
   CheckpointNamespaceBinding,
   PersistedDirectoryRecord,
@@ -26,7 +32,6 @@ export interface PersistentAcquisitionContext {
   readonly journalView: PersistentJournalView
   readonly publish: (record: PersistedOutputRecord) => Promise<void>
   readonly deleteRecord: (record: PersistedOutputRecord) => Promise<void>
-  readonly removeFileRecord: (record: PersistedFileRecord) => Promise<void>
   readonly readCommittedRecord: <T extends PersistedOutputRecord>(record: T) => Promise<T>
   readonly verifyDirectoryIdentity: (record: PersistedDirectoryRecord) => Promise<void>
   readonly verifyFileIdentity: (record: PersistedFileRecord, exactSize: boolean) => Promise<void>
@@ -38,8 +43,9 @@ export interface AcquiredPersistentFile {
 }
 
 /**
- * Acquisition is a transaction boundary: once a physical handle exists, every
- * failure either returns an owned handle or proves cleanup before returning.
+ * New-object acquisition owns rollback until it publishes a record. Recovery is
+ * validation-only because a mismatch is evidence for ResumeStateAuthority, not
+ * permission to mutate an existing object or checkpoint.
  */
 export async function materializePersistentDirectory(
   context: PersistentAcquisitionContext,
@@ -102,9 +108,7 @@ export async function reopenPersistentFile(
   const persisted = await context.readCommittedRecord(existing)
   const handle = await context.tree.openFile(file.path, persisted.ownedFileIdentity)
   if (handle === undefined) {
-    await context.deleteRecord(persisted)
-    throw new PersistentOutputError(
-      'output-identity',
+    throw checkpointMismatch(
       'Persisted output handle no longer identifies the journal-owned file',
     )
   }
@@ -114,8 +118,7 @@ export async function reopenPersistentFile(
     if (!sameOutputSource(persisted.source, file.source) || persisted.exactSize !== file.exactSize) {
       await handle.close()
       closed = true
-      await context.removeFileRecord(persisted)
-      return undefined
+      throw checkpointMismatch('Persisted output belongs to another source revision or exact size')
     }
     const actualSize = await handle.size()
     signal.throwIfAborted()
@@ -123,8 +126,7 @@ export async function reopenPersistentFile(
     if (actualSize < durableEnd || actualSize > persisted.exactSize) {
       await handle.close()
       closed = true
-      await context.removeFileRecord(persisted)
-      return undefined
+      throw checkpointMismatch('Persisted output size contradicts its verified durable checkpoint')
     }
     return { handle, record: persisted }
   } catch (error) {
@@ -202,4 +204,11 @@ export async function createPersistentFile(
 
 function bindingError(message: string): PersistentOutputError {
   return new PersistentOutputError('journal-binding', message)
+}
+
+function checkpointMismatch(message: string): BoundaryFaultError {
+  return new BoundaryFaultError(
+    checkpointFault(FaultScope.OutputPause, CheckpointFaultCode.OwnershipMismatch),
+    message,
+  )
 }

@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
-
-	"github.com/windshare/windshare/core/catalog"
 )
 
 const (
@@ -99,12 +97,4 @@ func requireUnprivilegedLinuxExt4Certification(t *testing.T) {
 		t.Fatal("required Linux/ext4 certification must run as an ordinary unprivileged receiver")
 	}
 	t.Skip("Linux/ext4 native certification is meaningful only as an unprivileged receiver")
-}
-
-func linuxTestIdentity16[T ~[catalog.IdentityBytes]byte](value byte) T {
-	var identity T
-	for index := range identity {
-		identity[index] = value
-	}
-	return identity
 }
