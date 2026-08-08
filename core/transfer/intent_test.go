@@ -228,7 +228,8 @@ func TestTransferIntentConstructionRejectsIncompleteAuthorityAndFreezesPaths(t *
 func TestTransferIntentDraftRetainsAuthorityThroughNamedFreeze(t *testing.T) {
 	share := transferID[catalog.ShareInstance](61)
 	root := transferID[catalog.DirectoryID](62)
-	rules, err := NewSelectionRules(false, nil)
+	file := transferID[catalog.FileID](63)
+	rules, err := NewSelectionRules(false, []SelectionOverride{{FileID: file, Selected: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +281,8 @@ func TestTransferIntentDraftRetainsAuthorityThroughNamedFreeze(t *testing.T) {
 		t.Fatal(err)
 	}
 	if intent.ShareInstance() != share || intent.SyntheticRoot() != root ||
-		intent.OutputTarget() != target || intent.BackendID() != backend || intent.Format() != OutputSingleFileStream {
+		!intent.SelectionRules().FileSelected(file, false) || intent.OutputTarget() != target ||
+		intent.BackendID() != backend || intent.Format() != OutputSingleFileStream {
 		t.Fatalf("frozen draft lost authority: %+v", intent)
 	}
 
