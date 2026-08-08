@@ -13,6 +13,7 @@ $testRoot = Join-Path ([IO.Path]::GetTempPath()) (
     'windshare-core-checkout-contract-{0}' -f [Guid]::NewGuid().ToString('N')
 )
 $fixtureRepository = Join-Path $testRoot 'repository'
+$linkedWorktree = Join-Path $testRoot 'linked-worktree'
 $exactCheckout = Join-Path $testRoot 'exact-checkout'
 $commitSHA = ''
 $gitVariableNames = @('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE')
@@ -24,10 +25,14 @@ foreach ($name in $gitVariableNames) {
     )
 }
 
-function Assert-CheckoutThrows([string]$Label, [string]$ExpectedMessage) {
+function Assert-CheckoutThrows(
+    [string]$RepositoryRoot,
+    [string]$Label,
+    [string]$ExpectedMessage
+) {
     try {
         Assert-ExactCoreReleaseCheckout `
-            -RepositoryRoot $fixtureRepository `
+            -RepositoryRoot $RepositoryRoot `
             -ExpectedCommit $commitSHA
     } catch {
         if (-not $_.Exception.Message.Contains($ExpectedMessage, [StringComparison]::Ordinal)) {
@@ -132,6 +137,10 @@ try {
     if ($commitSHA -cnotmatch '^[0-9a-f]{40}$') {
         throw 'fixture commit is not an exact SHA'
     }
+    Invoke-CoreReleaseGit -Arguments @(
+        '-C', $fixtureRepository,
+        'worktree', 'add', '--quiet', '--detach', $linkedWorktree, $commitSHA
+    ) | Out-Null
 
     # -C does not override these process redirects. The checker must ignore them
     # while preserving the caller's environment after every Git invocation.
@@ -149,6 +158,12 @@ try {
     }
     Assert-ExactCoreReleaseCheckout `
         -RepositoryRoot $fixtureRepository `
+        -ExpectedCommit $commitSHA
+    Assert-ExactCoreReleaseCheckout `
+        -RepositoryRoot $linkedWorktree `
+        -ExpectedCommit $commitSHA
+    Assert-ExactCoreReleaseCheckout `
+        -RepositoryRoot $linkedWorktree.ToLowerInvariant() `
         -ExpectedCommit $commitSHA
     foreach ($entry in $hostileGitValues.GetEnumerator()) {
         $actual = [Environment]::GetEnvironmentVariable(
@@ -170,7 +185,7 @@ try {
         "ordinary tracked mutation`n",
         [Text.UTF8Encoding]::new($false)
     )
-    Assert-CheckoutThrows 'tracked mutation' 'release checkout is not clean'
+    Assert-CheckoutThrows $fixtureRepository 'tracked mutation' 'release checkout is not clean'
     Invoke-CoreReleaseGit -Arguments @('-C', $fixtureRepository, 'checkout', '--', 'tracked.txt') | Out-Null
 
     [IO.File]::WriteAllText(
@@ -178,7 +193,7 @@ try {
         "untracked mutation`n",
         [Text.UTF8Encoding]::new($false)
     )
-    Assert-CheckoutThrows 'untracked mutation' 'release checkout is not clean'
+    Assert-CheckoutThrows $fixtureRepository 'untracked mutation' 'release checkout is not clean'
     Remove-Item -LiteralPath (Join-Path $fixtureRepository 'untracked.txt')
 
     Invoke-CoreReleaseGit -Arguments @(
@@ -189,7 +204,7 @@ try {
         "assume-unchanged mutation`n",
         [Text.UTF8Encoding]::new($false)
     )
-    Assert-CheckoutThrows 'assume-unchanged mutation' 'non-default Git index state'
+    Assert-CheckoutThrows $fixtureRepository 'assume-unchanged mutation' 'non-default Git index state'
     Invoke-CoreReleaseGit -Arguments @(
         '-C', $fixtureRepository, 'update-index', '--no-assume-unchanged', 'tracked.txt'
     ) | Out-Null
@@ -203,24 +218,69 @@ try {
         "skip-worktree mutation`n",
         [Text.UTF8Encoding]::new($false)
     )
-    Assert-CheckoutThrows 'skip-worktree mutation' 'non-default Git index state'
+    Assert-CheckoutThrows $fixtureRepository 'skip-worktree mutation' 'non-default Git index state'
     Invoke-CoreReleaseGit -Arguments @(
         '-C', $fixtureRepository, 'update-index', '--no-skip-worktree', 'tracked.txt'
     ) | Out-Null
     Invoke-CoreReleaseGit -Arguments @('-C', $fixtureRepository, 'checkout', '--', 'tracked.txt') | Out-Null
 
+    Assert-ExactCoreReleaseFileProjection `
+        -RepositoryRoot $linkedWorktree `
+        -ExpectedCommit $commitSHA `
+        -VerifierPaths @('tracked.txt')
+    [IO.File]::WriteAllText(
+        (Join-Path $linkedWorktree 'tracked.txt'),
+        "linked tracked mutation`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    Assert-CheckoutThrows $linkedWorktree 'linked tracked mutation' 'release checkout is not clean'
+    Invoke-CoreReleaseGit -Arguments @('-C', $linkedWorktree, 'checkout', '--', 'tracked.txt') | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $linkedWorktree 'untracked.txt'),
+        "linked untracked mutation`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    Assert-CheckoutThrows $linkedWorktree 'linked untracked mutation' 'release checkout is not clean'
+    Remove-Item -LiteralPath (Join-Path $linkedWorktree 'untracked.txt')
+    Invoke-CoreReleaseGit -Arguments @(
+        '-C', $linkedWorktree, 'update-index', '--assume-unchanged', 'tracked.txt'
+    ) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $linkedWorktree 'tracked.txt'),
+        "linked assume-unchanged mutation`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    Assert-CheckoutThrows $linkedWorktree 'linked assume-unchanged' 'non-default Git index state'
+    Invoke-CoreReleaseGit -Arguments @(
+        '-C', $linkedWorktree, 'update-index', '--no-assume-unchanged', 'tracked.txt'
+    ) | Out-Null
+    Invoke-CoreReleaseGit -Arguments @('-C', $linkedWorktree, 'checkout', '--', 'tracked.txt') | Out-Null
+    Invoke-CoreReleaseGit -Arguments @(
+        '-C', $linkedWorktree, 'update-index', '--skip-worktree', 'tracked.txt'
+    ) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $linkedWorktree 'tracked.txt'),
+        "linked skip-worktree mutation`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    Assert-CheckoutThrows $linkedWorktree 'linked skip-worktree' 'non-default Git index state'
+    Invoke-CoreReleaseGit -Arguments @(
+        '-C', $linkedWorktree, 'update-index', '--no-skip-worktree', 'tracked.txt'
+    ) | Out-Null
+    Invoke-CoreReleaseGit -Arguments @('-C', $linkedWorktree, 'checkout', '--', 'tracked.txt') | Out-Null
+
     New-ExactCoreReleaseCheckout `
-        -SourceRepository $fixtureRepository `
+        -SourceRepository $linkedWorktree `
         -ExpectedCommit $commitSHA `
         -Destination $exactCheckout `
         -VerifierPaths @('tracked.txt')
     [IO.File]::WriteAllText(
-        (Join-Path $fixtureRepository 'tracked.txt'),
+        (Join-Path $linkedWorktree 'tracked.txt'),
         "late source mutation`n",
         [Text.UTF8Encoding]::new($false)
     )
     [IO.File]::WriteAllText(
-        (Join-Path $fixtureRepository 'untracked.txt'),
+        (Join-Path $linkedWorktree 'untracked.txt'),
         "late untracked mutation`n",
         [Text.UTF8Encoding]::new($false)
     )
@@ -260,7 +320,7 @@ try {
         throw 'post-projection mutation escaped raw revalidation'
     }
 
-    Remove-Item -LiteralPath (Join-Path $fixtureRepository 'untracked.txt')
+    Remove-Item -LiteralPath (Join-Path $linkedWorktree 'untracked.txt')
     [IO.File]::WriteAllText(
         (Join-Path $fixtureRepository 'tracked.txt'),
         "`$Id`$`n",
