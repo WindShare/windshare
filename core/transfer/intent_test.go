@@ -154,3 +154,141 @@ func TestTransferIntentOpaqueTargetSupportsStreamFormats(t *testing.T) {
 		t.Fatal("opaque target or stream format was omitted from intent identity")
 	}
 }
+
+func TestTransferIntentConstructionRejectsIncompleteAuthorityAndFreezesPaths(t *testing.T) {
+	share := transferID[catalog.ShareInstance](51)
+	root := transferID[catalog.DirectoryID](52)
+	rules, err := NewSelectionRules(true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := NewOpaqueOutputTarget(bytes.Repeat([]byte{0x6b}, OutputRootIdentityBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := NewOutputBackendID("windshare/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	invalid := []struct {
+		name      string
+		share     catalog.ShareInstance
+		root      catalog.DirectoryID
+		rules     SelectionRules
+		target    OutputTarget
+		backend   OutputBackendID
+		format    OutputMode
+		wantError error
+	}{
+		{name: "share", root: root, rules: rules, target: target, backend: backend, format: OutputNativeTree, wantError: ErrInvalidTransferIntent},
+		{name: "root", share: share, rules: rules, target: target, backend: backend, format: OutputNativeTree, wantError: ErrInvalidTransferIntent},
+		{name: "rules", share: share, root: root, target: target, backend: backend, format: OutputNativeTree, wantError: ErrInvalidTransferIntent},
+		{name: "target", share: share, root: root, rules: rules, backend: backend, format: OutputNativeTree, wantError: ErrInvalidTransferIntent},
+		{name: "backend", share: share, root: root, rules: rules, target: target, format: OutputNativeTree, wantError: ErrInvalidOutputBinding},
+		{name: "format", share: share, root: root, rules: rules, target: target, backend: backend, wantError: ErrInvalidTransferIntent},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewTransferIntent(
+				test.share, test.root, test.rules, test.target, test.backend, test.format,
+			)
+			if !errors.Is(err, test.wantError) {
+				t.Fatalf("construction error = %v, want %v", err, test.wantError)
+			}
+		})
+	}
+
+	if _, err := NewFilesystemTransferIntent(
+		share, root, rules, "relative/output", backend, OutputNativeTree,
+	); !errors.Is(err, ErrInvalidOutputBinding) {
+		t.Fatalf("relative filesystem root error = %v", err)
+	}
+	relative := filepath.Join("relative", "downloads")
+	absolute, err := filepath.Abs(relative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := NewPathTransferIntent(share, root, rules, relative, backend, OutputNativeTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.ShareInstance() != share || intent.SyntheticRoot() != root ||
+		intent.SelectionMode() != SelectionByNodeID || intent.OutputTarget().RootPath() != filepath.Clean(absolute) ||
+		intent.BackendID() != backend || intent.Format() != OutputNativeTree {
+		t.Fatalf("path intent did not freeze its complete authority: %+v", intent)
+	}
+	encoded := intent.Bytes()
+	encoded[0] ^= 0xff
+	if bytes.Equal(encoded, intent.Bytes()) {
+		t.Fatal("intent Bytes exposed mutable canonical storage")
+	}
+}
+
+func TestTransferIntentDraftRetainsAuthorityThroughNamedFreeze(t *testing.T) {
+	share := transferID[catalog.ShareInstance](61)
+	root := transferID[catalog.DirectoryID](62)
+	file := transferID[catalog.FileID](63)
+	rules, err := NewSelectionRules(false, []SelectionOverride{{FileID: file, Selected: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []struct {
+		name  string
+		share catalog.ShareInstance
+		root  catalog.DirectoryID
+		rules SelectionRules
+	}{
+		{name: "share", root: root, rules: rules},
+		{name: "root", share: share, rules: rules},
+		{name: "rules", share: share, root: root},
+	} {
+		t.Run(invalid.name, func(t *testing.T) {
+			if _, err := NewTransferIntentDraft(invalid.share, invalid.root, invalid.rules); !errors.Is(err, ErrInvalidTransferIntent) {
+				t.Fatalf("draft construction error = %v", err)
+			}
+		})
+	}
+
+	draft, err := NewTransferIntentDraft(share, root, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.ShareInstance() != share || draft.SyntheticRoot() != root ||
+		draft.SelectionRules().Mode() != rules.Mode() || draft.HasOutputTarget() {
+		t.Fatalf("draft authority = %+v", draft)
+	}
+	if _, err := draft.ConfirmOutput(OutputTarget{}); !errors.Is(err, ErrInvalidTransferIntent) {
+		t.Fatalf("zero output confirmation error = %v", err)
+	}
+	if _, err := draft.ConfirmFilesystemRoot("relative/output"); !errors.Is(err, ErrInvalidOutputBinding) {
+		t.Fatalf("relative output confirmation error = %v", err)
+	}
+	target, err := NewOpaqueOutputTarget(bytes.Repeat([]byte{0x7c}, OutputRootIdentityBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err = draft.ConfirmOutput(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := NewOutputBackendID("windshare/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := NewTransferIntentFromDraft(draft, backend, OutputSingleFileStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.ShareInstance() != share || intent.SyntheticRoot() != root ||
+		!intent.SelectionRules().FileSelected(file, false) || intent.OutputTarget() != target ||
+		intent.BackendID() != backend || intent.Format() != OutputSingleFileStream {
+		t.Fatalf("frozen draft lost authority: %+v", intent)
+	}
+
+	malformed := intent
+	malformed.backend = ""
+	if malformed.EqualCanonical(intent) {
+		t.Fatal("canonical equality accepted an invalid backend binding")
+	}
+}
