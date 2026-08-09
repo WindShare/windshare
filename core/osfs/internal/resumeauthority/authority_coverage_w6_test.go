@@ -134,8 +134,8 @@ func TestAuthorityInventoryProjectsCorruptionAndAmbiguityAsAttention(t *testing.
 	if _, err := authority.List(context.Background()); !errors.Is(err, operationErr) {
 		t.Fatalf("list failure = %v", err)
 	}
-	if _, err := authority.List(nil); !errors.Is(err, ErrInvalidContract) {
-		t.Fatalf("nil list context error = %v", err)
+	if _, err := (&Authority{}).List(context.TODO()); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("missing authority store error = %v", err)
 	}
 	if _, err := NewAttention(receivecontract.OperationID{}, checkpointmodel.AttentionCleanupUnknown); !errors.Is(err, ErrInvalidContract) {
 		t.Fatalf("zero attention operation error = %v", err)
@@ -499,8 +499,10 @@ func TestAuthorityMutationRejectsCanceledAndInvalidRequests(t *testing.T) {
 	if _, err := authority.Discard(context.Background(), fixture.intent.OperationID()); !errors.Is(err, lease.recoveryErr) {
 		t.Fatalf("discard observation error = %v", err)
 	}
-	if _, err := authority.Discard(nil, fixture.intent.OperationID()); !errors.Is(err, ErrInvalidContract) {
-		t.Fatalf("nil context error = %v", err)
+	if _, err := authority.Discard(
+		context.TODO(), receivecontract.OperationID{},
+	); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("zero operation error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

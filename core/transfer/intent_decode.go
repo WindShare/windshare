@@ -55,59 +55,7 @@ func decodeSelectionSpec(encoded []byte) (SelectionSpec, error) {
 		return SelectionSpec{}, ErrInvalidReceiveIntent
 	}
 
-	var rules SelectionRules
-	switch SelectionMode(mode) {
-	case SelectionByNodeID:
-		if ruleCount > MaxSelectionRuleOverrides {
-			return SelectionSpec{}, ErrInvalidReceiveIntent
-		}
-		overrides := make([]SelectionOverride, 0, int(ruleCount))
-		for range ruleCount {
-			kind, kindErr := cursor.framedByte()
-			identityRaw, identityErr := cursor.fixedFrame(catalog.IdentityBytes)
-			selected, selectedErr := cursor.framedBool()
-			if firstReceiveIntentDecodeError(kindErr, identityErr, selectedErr) != nil {
-				return SelectionSpec{}, ErrInvalidReceiveIntent
-			}
-			switch kind {
-			case 1:
-				directory, idErr := catalog.DirectoryIDFromBytes(identityRaw)
-				if idErr != nil {
-					return SelectionSpec{}, ErrInvalidReceiveIntent
-				}
-				overrides = append(overrides, SelectionOverride{DirectoryID: directory, Selected: selected})
-			case 2:
-				file, idErr := catalog.FileIDFromBytes(identityRaw)
-				if idErr != nil {
-					return SelectionSpec{}, ErrInvalidReceiveIntent
-				}
-				overrides = append(overrides, SelectionOverride{FileID: file, Selected: selected})
-			default:
-				return SelectionSpec{}, ErrInvalidReceiveIntent
-			}
-		}
-		rules, err = NewSelectionRules(defaultSelected, overrides)
-	case SelectionByCatalogPath:
-		if defaultSelected || ruleCount == 0 || ruleCount > MaxSelectionPathTargets {
-			return SelectionSpec{}, ErrInvalidReceiveIntent
-		}
-		paths := make([]string, 0, int(ruleCount))
-		totalBytes := uint64(0)
-		for range ruleCount {
-			pathRaw, pathErr := cursor.frame(catalog.MaxPathBytes)
-			if pathErr != nil {
-				return SelectionSpec{}, ErrInvalidReceiveIntent
-			}
-			totalBytes += uint64(len(pathRaw))
-			if totalBytes > MaxSelectionPathTargetBytes {
-				return SelectionSpec{}, ErrInvalidReceiveIntent
-			}
-			paths = append(paths, string(pathRaw))
-		}
-		rules, err = NewPathSelectionRules(paths)
-	default:
-		return SelectionSpec{}, ErrInvalidReceiveIntent
-	}
+	rules, err := decodeSelectionRules(&cursor, SelectionMode(mode), defaultSelected, ruleCount)
 	if err != nil || !cursor.done() {
 		return SelectionSpec{}, ErrInvalidReceiveIntent
 	}
@@ -116,6 +64,90 @@ func decodeSelectionSpec(encoded []byte) (SelectionSpec, error) {
 		return SelectionSpec{}, ErrInvalidReceiveIntent
 	}
 	return selection, nil
+}
+
+func decodeSelectionRules(
+	cursor *receiveIntentDecoder,
+	mode SelectionMode,
+	defaultSelected bool,
+	ruleCount uint64,
+) (SelectionRules, error) {
+	switch mode {
+	case SelectionByNodeID:
+		return decodeNodeSelectionRules(cursor, defaultSelected, ruleCount)
+	case SelectionByCatalogPath:
+		return decodePathSelectionRules(cursor, defaultSelected, ruleCount)
+	default:
+		return SelectionRules{}, ErrInvalidReceiveIntent
+	}
+}
+
+func decodeNodeSelectionRules(
+	cursor *receiveIntentDecoder,
+	defaultSelected bool,
+	ruleCount uint64,
+) (SelectionRules, error) {
+	if ruleCount > MaxSelectionRuleOverrides {
+		return SelectionRules{}, ErrInvalidReceiveIntent
+	}
+	overrides := make([]SelectionOverride, 0, int(ruleCount))
+	for range ruleCount {
+		override, err := decodeSelectionOverride(cursor)
+		if err != nil {
+			return SelectionRules{}, ErrInvalidReceiveIntent
+		}
+		overrides = append(overrides, override)
+	}
+	return NewSelectionRules(defaultSelected, overrides)
+}
+
+func decodeSelectionOverride(cursor *receiveIntentDecoder) (SelectionOverride, error) {
+	kind, kindErr := cursor.framedByte()
+	identityRaw, identityErr := cursor.fixedFrame(catalog.IdentityBytes)
+	selected, selectedErr := cursor.framedBool()
+	if firstReceiveIntentDecodeError(kindErr, identityErr, selectedErr) != nil {
+		return SelectionOverride{}, ErrInvalidReceiveIntent
+	}
+	switch kind {
+	case 1:
+		directory, err := catalog.DirectoryIDFromBytes(identityRaw)
+		if err != nil {
+			return SelectionOverride{}, ErrInvalidReceiveIntent
+		}
+		return SelectionOverride{DirectoryID: directory, Selected: selected}, nil
+	case 2:
+		file, err := catalog.FileIDFromBytes(identityRaw)
+		if err != nil {
+			return SelectionOverride{}, ErrInvalidReceiveIntent
+		}
+		return SelectionOverride{FileID: file, Selected: selected}, nil
+	default:
+		return SelectionOverride{}, ErrInvalidReceiveIntent
+	}
+}
+
+func decodePathSelectionRules(
+	cursor *receiveIntentDecoder,
+	defaultSelected bool,
+	ruleCount uint64,
+) (SelectionRules, error) {
+	if defaultSelected || ruleCount == 0 || ruleCount > MaxSelectionPathTargets {
+		return SelectionRules{}, ErrInvalidReceiveIntent
+	}
+	paths := make([]string, 0, int(ruleCount))
+	totalBytes := uint64(0)
+	for range ruleCount {
+		pathRaw, err := cursor.frame(catalog.MaxPathBytes)
+		if err != nil {
+			return SelectionRules{}, ErrInvalidReceiveIntent
+		}
+		totalBytes += uint64(len(pathRaw))
+		if totalBytes > MaxSelectionPathTargetBytes {
+			return SelectionRules{}, ErrInvalidReceiveIntent
+		}
+		paths = append(paths, string(pathRaw))
+	}
+	return NewPathSelectionRules(paths)
 }
 
 type receiveIntentDecoder struct {

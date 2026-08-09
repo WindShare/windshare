@@ -236,7 +236,7 @@ func TestCleanupStateRejectsOverflowAndOversizedPersistence(t *testing.T) {
 	}
 }
 
-func TestCleanerRunAcceptsNilContextButStillRequiresCertifiedGuard(t *testing.T) {
+func TestCleanerRunRequiresCertifiedGuardBeforeExecution(t *testing.T) {
 	acquireFailure := errors.New("guard unavailable")
 	platform := &c5ClosurePlatform{
 		root:       &c5ClosureFaultDirectory{},
@@ -245,8 +245,8 @@ func TestCleanerRunAcceptsNilContextButStillRequiresCertifiedGuard(t *testing.T)
 	cleaner := &OneShotCheckpointCleaner{config: OneShotCheckpointCleanerConfig{
 		Platform: platform, BackendID: legacyresume.NativeFilesystemBackend,
 	}}
-	if _, err := cleaner.Run(nil); !errors.Is(err, acquireFailure) {
-		t.Fatalf("nil-context cleaner error = %v", err)
+	if _, err := cleaner.Run(context.TODO()); !errors.Is(err, acquireFailure) {
+		t.Fatalf("guard acquisition error = %v", err)
 	}
 
 	nilGuardCleaner := &OneShotCheckpointCleaner{config: OneShotCheckpointCleanerConfig{
