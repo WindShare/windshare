@@ -61,9 +61,9 @@ func TestCleanupDeadlinePreservesOpenProcessWaitAsLastMilestone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	remainingRan := false
+	remainingRan := make(chan struct{})
 	if err := trace.AddCleanup("remaining owner", func(context.Context) error {
-		remainingRan = true
+		close(remainingRan)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -85,14 +85,16 @@ func TestCleanupDeadlinePreservesOpenProcessWaitAsLastMilestone(t *testing.T) {
 		t.Fatalf("Finish error = %v, want cleanup timeout and active phase", finishErr)
 	}
 	if elapsed := time.Since(startedAt); elapsed > time.Second {
-		t.Fatalf("shared cleanup deadline delayed terminal transition by %s", elapsed)
+		t.Fatalf("cleanup lease budget delayed terminal transition by %s", elapsed)
 	}
 	select {
 	case <-stalledEntered:
 	default:
 		t.Fatal("stalled cleanup owner was not invoked")
 	}
-	if !remainingRan {
+	select {
+	case <-remainingRan:
+	default:
 		t.Fatal("stalled cleanup owner prevented the remaining owner")
 	}
 
@@ -109,6 +111,56 @@ func TestCleanupDeadlinePreservesOpenProcessWaitAsLastMilestone(t *testing.T) {
 	}
 	if cleanupContext.FailureCount != 1 {
 		t.Fatalf("cleanup failure count = %d, want 1", cleanupContext.FailureCount)
+	}
+}
+
+func TestCleanupOwnerLeaseAllocationPreservesOwnerCapAndFairShare(t *testing.T) {
+	tests := []struct {
+		name            string
+		ownerTimeout    time.Duration
+		scenarioTimeout time.Duration
+		ownerCount      int
+		want            time.Duration
+	}{
+		{
+			name:            "owner cap",
+			ownerTimeout:    15 * time.Second,
+			scenarioTimeout: 60 * time.Second,
+			ownerCount:      2,
+			want:            15 * time.Second,
+		},
+		{
+			name:            "fair share",
+			ownerTimeout:    200 * time.Millisecond,
+			scenarioTimeout: 25 * time.Millisecond,
+			ownerCount:      2,
+			want:            25 * time.Millisecond / 2,
+		},
+		{
+			name:            "minimum lease",
+			ownerTimeout:    time.Second,
+			scenarioTimeout: time.Nanosecond,
+			ownerCount:      2,
+			want:            time.Nanosecond,
+		},
+		{
+			name:            "no owners",
+			ownerTimeout:    15 * time.Second,
+			scenarioTimeout: 60 * time.Second,
+			ownerCount:      0,
+			want:            15 * time.Second,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := allocateCleanupOwnerLease(
+				test.ownerTimeout,
+				test.scenarioTimeout,
+				test.ownerCount,
+			); got != test.want {
+				t.Fatalf("cleanup owner lease = %s, want %s", got, test.want)
+			}
+		})
 	}
 }
 

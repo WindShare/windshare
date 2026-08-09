@@ -17,7 +17,8 @@ const (
 	// MaximumCleanupOwnerNameBytes bounds retained labels and failure diagnostics.
 	MaximumCleanupOwnerNameBytes = 128
 	// CleanupOwnerTimeout bounds one uncooperative owner, while
-	// ScenarioCleanupTimeout bounds the complete reverse-order cleanup transition.
+	// ScenarioCleanupTimeout bounds the sum of leases allocated across one
+	// reverse-order cleanup transition.
 	CleanupOwnerTimeout    = 15 * time.Second
 	ScenarioCleanupTimeout = 60 * time.Second
 )
@@ -72,14 +73,16 @@ func (trace *Trace) RequireCleanup(t testContext, name string, cleanup CleanupFu
 func (trace *Trace) finishCleanup(owners []cleanupOwner) (testrun.Outcome, error) {
 	trace.recordFinal(testrun.CleanupMilestone, testrun.OutcomeStarted, nil)
 	var failures []error
-	cleanupContext, cancelCleanup := context.WithTimeout(
-		context.Background(),
+	// Fixed shares prevent a late timeout wake-up for one wedged owner from
+	// consuming the execution opportunity reserved for later owners.
+	ownerLease := allocateCleanupOwnerLease(
+		trace.cleanupOwnerTimeout,
 		trace.scenarioCleanupTimeout,
+		len(owners),
 	)
-	defer cancelCleanup()
 	for index := range slices.Backward(owners) {
 		owner := owners[index]
-		if err := trace.runCleanupOwner(cleanupContext, owner, index+1); err != nil {
+		if err := runCleanupOwner(owner, ownerLease); err != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", owner.name, err))
 		}
 	}
@@ -93,29 +96,37 @@ func (trace *Trace) finishCleanup(owners []cleanupOwner) (testrun.Outcome, error
 	return cleanupOutcome, cleanupErr
 }
 
-func (trace *Trace) runCleanupOwner(
-	parent context.Context,
-	owner cleanupOwner,
-	remainingOwnerCount int,
-) error {
-	ownerLease := trace.cleanupOwnerTimeout
-	if deadline, bounded := parent.Deadline(); bounded && remainingOwnerCount > 0 {
-		// A fair share keeps one wedged reverse-order owner from consuming the
-		// complete scenario budget before the remaining owners are attempted.
-		fairShare := time.Until(deadline) / time.Duration(remainingOwnerCount)
-		if fairShare < ownerLease {
-			ownerLease = fairShare
-		}
+func allocateCleanupOwnerLease(
+	ownerTimeout time.Duration,
+	scenarioTimeout time.Duration,
+	ownerCount int,
+) time.Duration {
+	if ownerCount == 0 {
+		return ownerTimeout
 	}
-	if ownerLease <= 0 {
-		ownerLease = time.Nanosecond
+	fairShare := scenarioTimeout / time.Duration(ownerCount)
+	if fairShare <= 0 {
+		fairShare = time.Nanosecond
 	}
-	ownerContext, cancelOwner := context.WithTimeout(parent, ownerLease)
-	defer cancelOwner()
+	return min(ownerTimeout, fairShare)
+}
+
+func runCleanupOwner(owner cleanupOwner, ownerLease time.Duration) error {
+	ready := make(chan struct{})
+	start := make(chan context.Context)
 	result := make(chan error, 1)
 	go func() {
+		// Timer wake-ups may be delayed on a saturated host. Starting each lease
+		// only after its runner is scheduled prevents that latency from consuming
+		// this owner's execution opportunity.
+		close(ready)
+		ownerContext := <-start
 		result <- invokeCleanup(owner.cleanup, ownerContext)
 	}()
+	<-ready
+	ownerContext, cancelOwner := context.WithTimeout(context.Background(), ownerLease)
+	defer cancelOwner()
+	start <- ownerContext
 	select {
 	case err := <-result:
 		return err
