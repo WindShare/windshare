@@ -318,8 +318,9 @@ func canonicalDirectoryAdmissionPath(path string) []byte {
 	for _, segment := range segments {
 		canonicalPath = appendCanonicalField(canonicalPath, []byte(segment))
 	}
-	encoded := []byte{2}
-	return append(encoded, appendCanonicalField(nil, canonicalPath)...)
+	encoded := make([]byte, 0, 1+8+len(canonicalPath))
+	encoded = append(encoded, 2)
+	return appendCanonicalField(encoded, canonicalPath)
 }
 
 // DirectorySettlementKind distinguishes a successful metadata seal from a

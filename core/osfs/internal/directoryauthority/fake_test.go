@@ -57,7 +57,6 @@ type fakePlatform struct {
 	guardCloseErr error
 	modifiedErr   error
 	guardCalls    int
-	openEntryHook func()
 }
 
 func newFakePlatform(disposition outputcap.RootOpenDisposition) *fakePlatform {
@@ -146,22 +145,6 @@ func (platform *fakePlatform) rootNode() *fakeNode {
 	platform.mu.Lock()
 	defer platform.mu.Unlock()
 	return platform.root
-}
-
-func (platform *fakePlatform) setOpenEntryHook(hook func()) {
-	platform.mu.Lock()
-	defer platform.mu.Unlock()
-	platform.openEntryHook = hook
-}
-
-func (platform *fakePlatform) runOpenEntryHook() {
-	platform.mu.Lock()
-	hook := platform.openEntryHook
-	platform.openEntryHook = nil
-	platform.mu.Unlock()
-	if hook != nil {
-		hook()
-	}
 }
 
 type fakeGuard struct {
@@ -263,7 +246,6 @@ func (directory *fakeDirectory) resolveLocked(name string) (fakeEntry, string, b
 }
 
 func (directory *fakeDirectory) OpenEntry(name string) (outputcap.CurrentEntryReference, error) {
-	directory.platform.runOpenEntryHook()
 	directory.platform.mu.Lock()
 	defer directory.platform.mu.Unlock()
 	entry, actual, exists := directory.resolveLocked(name)
