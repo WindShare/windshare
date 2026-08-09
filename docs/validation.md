@@ -73,8 +73,10 @@ superseded work for the same ref, and starts seven fixed independent jobs:
 | `windows-native` | Windows vet, released-core consumer build, and root/core short tests, without duplicate coverage. |
 
 Every job has a 10-minute hang fuse, no dependency on another job, and reports its own result directly.
-Hosted jobs prepare their own current toolchains and frozen project dependencies. The ordinary CI p95
-goal is at most 6 minutes, measured from native GitHub Actions timestamps.
+Hosted jobs prepare their own current toolchains and frozen project dependencies. Static analysis resolves
+each Go validation tool's `@latest` version on every run and reuses binaries only for an exact OS,
+architecture, Go version, and resolved tool set. The ordinary CI p95 goal is at most 6 minutes, measured
+from native GitHub Actions timestamps.
 Branch rules must require the ordinary CI results before merge; the push-to-`main` run detects regressions
 but cannot prevent an unprotected merge.
 
