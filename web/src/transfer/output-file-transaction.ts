@@ -1,5 +1,5 @@
 import { ByteRangeSet, byteRange } from '../content/geometry'
-import { VerifiedDurableRanges } from './output-session'
+import { snapshotOpenedOutputRevision, VerifiedDurableRanges } from './output-session'
 import type {
   BeginOutputFileResult,
   FileRetirementDisposition,
@@ -27,6 +27,12 @@ export function bindOutputFileTransaction(
 ): BoundOutputFileTransaction {
   try {
     const transaction = ownOutputFileTransaction(begun)
+    const revision = snapshotOpenedOutputRevision(begun.revision)
+    if (!sameOutputSource(revision, file.source) || revision.exactSize !== file.exactSize) {
+      throw new OutputCheckpointContractError(
+        'output transaction opened a different authenticated source revision',
+      )
+    }
     const durableRanges = requireOutputBinding(begun.durableRanges, file, session.identity)
     const resumable = session.capabilities.durability !== 'None' && session.capabilities.randomWrite
     if (!resumable && !durableRanges.asRangeSet().empty) {
@@ -211,7 +217,7 @@ function requireOutputBinding(
       durableRanges.fileSize !== file.exactSize ||
       durableRanges.ownership.backend !== session.backend ||
       durableRanges.ownership.outputSessionId !== session.outputSessionId ||
-      !samePath(durableRanges.ownership.canonicalPath, file.path) ||
+      !samePath(durableRanges.ownership.canonicalPath, file.artifactPath) ||
       (ownership !== undefined && !sameOutputOwnership(durableRanges.ownership, ownership))) {
     throw new OutputTransactionContractError(
       'output durable ranges belong to a different output or source revision',

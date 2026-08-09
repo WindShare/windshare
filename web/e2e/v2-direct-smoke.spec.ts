@@ -21,15 +21,20 @@ const FILE_BYTES = Uint8Array.from(Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
   'base64',
 ))
-const COMPLETE_STATUS = 'Transfer complete.'
+const ARCHIVE_NAME = 'windshare.zip'
+const SYNTHETIC_RESULT_ROOT_NAME = 'windshare'
 const DOWNLOAD_TIMEOUT_MILLISECONDS = 20_000
 
-test('receives a tiny directory from the real sender and relay', async ({ browserName, page }, testInfo) => {
+test('receives an explicit directory artifact from the real sender and relay', async ({ browserName, page }, testInfo) => {
   const scenarioId = microDirectoryScenarioId(browserName)
   const stack = new DirectProductStack(scenarioId)
   const pageErrors: string[] = []
   let redactor: ReturnType<typeof createCapabilityRedactor> | undefined
   page.on('pageerror', (error) => pageErrors.push(error.message))
+  page.on('console', (message) => {
+    const value = message.text()
+    if (message.type() === 'info' && value.startsWith('windshare.receive')) console.info(value)
+  })
   await stack.start()
   try {
     const directory = await stack.createDirectory(DIRECTORY_NAME, [
@@ -66,11 +71,12 @@ test('receives a tiny directory from the real sender and relay', async ({ browse
       separateKey: share.key,
     })
 
+    const browseStatus = page.locator('.status-line')
     await expect(page.getByRole('heading', { name: 'Browse and save shared files' })).toBeVisible()
-    await expect(page.getByRole('status')).toHaveText('Choose what to receive.')
+    await expect(browseStatus).toHaveText('Choose what to receive.')
     await expect(page.getByText(DIRECTORY_NAME, { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Open' }).click()
-    await expect(page.getByRole('status')).toHaveText('Choose what to receive.')
+    await expect(browseStatus).toHaveText('Choose what to receive.')
     await expect(page.getByText(FILE_NAME, { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Preview' }).click()
     const preview = page.getByRole('img', { name: `Preview of ${FILE_NAME}` })
@@ -80,15 +86,28 @@ test('receives a tiny directory from the real sender and relay', async ({ browse
       return [...new Uint8Array(await response.arrayBuffer())]
     })).toEqual([...FILE_BYTES])
     await page.getByRole('button', { name: 'Close preview' }).click()
-    await expect(page.getByRole('radio', { name: /Browser download/u })).toBeChecked()
+    const artifactAction = page.getByRole('button', { name: 'Check then download' })
+    await expect(artifactAction).toBeVisible()
+    await expect(page.getByText(
+      'Checks that the complete ZIP fits before receiving any file content. The browser takes over when the package is ready.',
+      { exact: true },
+    )).toBeVisible()
     await expect.poll(() => new URL(page.url()).hash).toBe('')
 
     const downloadStarted = page.waitForEvent('download', {
       timeout: DOWNLOAD_TIMEOUT_MILLISECONDS,
     })
-    await page.getByRole('button', { name: 'Receive selected' }).click()
+    await artifactAction.click()
     const download = await downloadStarted
-    await expect(page.getByRole('status')).toHaveText(COMPLETE_STATUS)
+    await expect(page.getByText('Download started', { exact: true })).toBeVisible({
+      timeout: DOWNLOAD_TIMEOUT_MILLISECONDS,
+    })
+    await expect(page.getByText(
+      'The browser took over the download. WindShare cannot confirm where or whether it was saved.',
+      { exact: true },
+    )).toBeVisible()
+    await expect(page.getByText('Ready to save', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('Saved', { exact: true })).toHaveCount(0)
     await expect(page.getByText(/1 file\(s\), .* total/u)).toBeVisible()
     await assertDirectoryDownload(download)
   } catch (error) {
@@ -138,13 +157,14 @@ function microDirectoryScenarioId(browserName: string): string {
 }
 
 async function assertDirectoryDownload(download: Download): Promise<void> {
-  expect(download.suggestedFilename()).toBe('windshare.zip')
+  expect(download.suggestedFilename()).toBe(ARCHIVE_NAME)
   const reader = new ZipReader(new Uint8ArrayReader(await readDownload(download)))
   try {
     const entries = await reader.getEntries()
     const file = entries.find(
       (entry): entry is FileEntry =>
-        'getData' in entry && entry.filename === `${DIRECTORY_NAME}/${FILE_NAME}`,
+        'getData' in entry && entry.filename ===
+          `${SYNTHETIC_RESULT_ROOT_NAME}/${DIRECTORY_NAME}/${FILE_NAME}`,
     )
     if (file === undefined) {
       throw new Error('Downloaded directory archive is missing the expected file')

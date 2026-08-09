@@ -27,7 +27,7 @@ func TestC5ClosureOwnershipDecoderRejectsMalformedOrNonCanonicalProofs(t *testin
 	}
 	unknownFieldPayload, err := legacyEncoder.Marshal(map[uint64]any{
 		0: legacySchemaVersion,
-		1: string(transfer.NativeFilesystemOutputBackendID),
+		1: string(NativeFilesystemBackend),
 		2: stored.RootIdentity,
 		3: stored.Certification,
 		4: legacyStoredProcessRestart,
@@ -89,7 +89,7 @@ func TestC5ClosureOwnershipDecoderRejectsInvalidCertifiedFacts(t *testing.T) {
 	}
 
 	expected := ExpectedOwnership{
-		Backend:       transfer.NativeFilesystemOutputBackendID,
+		Backend:       NativeFilesystemBackend,
 		RootIdentity:  bytes.Repeat([]byte{0x41}, RootIdentityBytes),
 		Certification: CertificationWindowsNTFSProcessRestart,
 		Durability:    transfer.DurabilityProcessRestart,
@@ -160,7 +160,7 @@ const c5ClosureRecordSuffix = ".state"
 func c5ClosureOwnership() storedOwnership {
 	return storedOwnership{
 		Schema:        legacySchemaVersion,
-		Backend:       string(transfer.NativeFilesystemOutputBackendID),
+		Backend:       string(NativeFilesystemBackend),
 		RootIdentity:  bytes.Repeat([]byte{0x41}, RootIdentityBytes),
 		Certification: CertificationWindowsNTFSProcessRestart,
 		Durability:    legacyStoredProcessRestart,

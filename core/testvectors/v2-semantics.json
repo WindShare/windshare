@@ -25,6 +25,9 @@
         "controlQueueFrames": "256",
         "dataQueueBytes": "67108864",
         "dataQueueFrames": "1024",
+        "defaultOpfsJobWorkspaceLimit": "8589934592",
+        "defaultOpfsProcessWorkspaceLimit": "17179869184",
+        "defaultPortableHandoffArtifactLimit": "67108864",
         "joinStartingSeconds": "5",
         "leaseMaximumSeconds": "7200",
         "leaseRenewWindowSeconds": "60",
@@ -46,11 +49,8 @@
         "maxSelectedRootNameBytes": "1048576",
         "maxSelectedRoots": "4096",
         "minChunkBytes": "1024",
+        "minimumOpfsQuotaReserve": "536870912",
         "operationTombstoneSeconds": "30",
-        "opfsMinimumReserveBytes": "536870912",
-        "opfsStagingJobBytes": "8589934592",
-        "opfsStagingProcessBytes": "17179869184",
-        "outputOpenTransactions": "32",
         "reassemblyOperation": "4194816",
         "reassemblyProcess": "1073741824",
         "reassemblyRecordsProcess": "256",
@@ -241,7 +241,47 @@
         }
       ],
       "fileLimitExclusive": "30",
-      "name": "selection-classification"
+      "name": "connection-size-classification"
+    },
+    {
+      "allowedTransitions": [
+        "unknown-\u003enone",
+        "unknown-\u003esingle-file",
+        "unknown-\u003etree"
+      ],
+      "finalProofImmutable": true,
+      "name": "artifact-shape-proof",
+      "noneRequires": [
+        "complete-negative-evidence"
+      ],
+      "proofs": [
+        {
+          "byte": 1,
+          "proof": "unknown"
+        },
+        {
+          "byte": 2,
+          "proof": "none"
+        },
+        {
+          "byte": 3,
+          "proof": "single-file"
+        },
+        {
+          "byte": 4,
+          "proof": "tree"
+        }
+      ],
+      "singleFileRequires": [
+        "one-authenticated-file",
+        "frozen-rule-exclusion",
+        "empty-unsettled-targets"
+      ],
+      "treeForcingFacts": [
+        "authenticated-selected-directory",
+        "explicit-empty-directory",
+        "second-authenticated-file"
+      ]
     },
     {
       "name": "operation-final-matrix",
@@ -270,34 +310,39 @@
       ]
     },
     {
-      "discoveryCannotDelay": true,
-      "independentTimers": true,
-      "name": "connection-timing",
-      "triggers": [
+      "applicationRelayDeadlineSeconds": "8",
+      "authorityValidationMayContinueAfterPickerStart": true,
+      "backgroundCompletionCannotInvokeAction": true,
+      "bindRechecks": [
+        "projection-epoch",
+        "shape-proof",
+        "artifact-offer",
+        "capability-facts"
+      ],
+      "events": [
         {
-          "applicationRelayDeadlineSeconds": null,
-          "outputPicker": "none",
-          "p2pStartSeconds": null,
-          "startsP2P": false,
-          "trigger": "browse"
+          "event": "background-projection",
+          "picker": "forbidden",
+          "startsP2P": false
         },
         {
-          "applicationRelayDeadlineSeconds": "8",
-          "outputPicker": "none",
-          "p2pStartSeconds": "0",
-          "startsP2P": true,
-          "trigger": "preview-click"
+          "event": "preview-click",
+          "picker": "none",
+          "startsP2P": true
         },
         {
-          "applicationRelayDeadlineSeconds": "8",
-          "outputPicker": "synchronous",
-          "p2pStartSeconds": "0",
-          "startsP2P": true,
-          "trigger": "download-click"
+          "event": "final-artifact-action-without-picker",
+          "picker": "none",
+          "startsP2P": true
+        },
+        {
+          "event": "final-artifact-action-with-picker",
+          "picker": "synchronous-before-click-stack-unwinds",
+          "startsP2P": true
         }
       ],
-      "turnInsertionOnly": true,
-      "unknownUsesNonSmallTiming": true
+      "name": "artifact-action-picker-timing",
+      "p2pStartSeconds": "0"
     },
     {
       "cases": [
@@ -377,98 +422,252 @@
       "cuts": [
         {
           "cut": "after-data-write",
-          "published": false
+          "newGenerationSelectable": false
         },
         {
           "cut": "after-data-flush",
-          "published": false
+          "newGenerationSelectable": false
         },
         {
-          "cut": "after-journal-write",
-          "published": false
+          "cut": "after-candidate-record-write",
+          "newGenerationSelectable": false
         },
         {
-          "cut": "after-journal-flush",
-          "published": false
+          "cut": "after-candidate-record-flush",
+          "newGenerationSelectable": false
         },
         {
-          "cut": "after-install",
-          "published": false
+          "cut": "after-verified-record-install",
+          "newGenerationSelectable": false
         },
         {
           "cut": "after-reopen-verify",
-          "published": true
+          "newGenerationSelectable": true
         }
       ],
-      "name": "output-checkpoint-crash-cuts",
+      "name": "file-checkpoint-v2-crash-cuts",
+      "namespace": ".windshare-output/checkpoints-v2",
       "order": [
         "data-write",
         "data-flush",
-        "journal-write",
-        "journal-flush",
-        "atomic-install",
+        "candidate-record-write",
+        "candidate-record-flush",
+        "verified-record-install",
         "reopen-verify"
+      ],
+      "ownershipMarker": "windshare/file-checkpoint/v2",
+      "selectionAuthority": "highest-reopened-verified-generation"
+    },
+    {
+      "name": "artifact-plan-guarantee-matrix",
+      "rows": [
+        {
+          "artifact": "directory-tree",
+          "binding": "named-container-entry",
+          "completion": "prefix-visible-partial-legal",
+          "guaranteeProfiles": [
+            "native-tree",
+            "fsa-tree"
+          ],
+          "layout": "single-file-or-result-root",
+          "plan": "direct-tree",
+          "preparation": "none"
+        },
+        {
+          "artifact": "directory-tree",
+          "binding": "container-root",
+          "completion": "prefix-visible",
+          "guaranteeProfiles": [
+            "native-tree"
+          ],
+          "layout": "catalog-root",
+          "plan": "direct-tree",
+          "preparation": "none"
+        },
+        {
+          "artifact": "original-file",
+          "binding": "atomic-target",
+          "completion": "published-after-verified-commit",
+          "guaranteeProfiles": [
+            "managed-atomic"
+          ],
+          "layout": "single-file-proof",
+          "plan": "direct-atomic",
+          "preparation": "none"
+        },
+        {
+          "artifact": "zip-archive",
+          "binding": "atomic-target",
+          "completion": "complete-only",
+          "guaranteeProfiles": [
+            "managed-atomic"
+          ],
+          "layout": "result-root",
+          "plan": "direct-atomic",
+          "preparation": "progressive-immutable-ledger"
+        },
+        {
+          "artifact": "original-file",
+          "binding": "origin-private-workspace",
+          "completion": "sealed-then-waiting-to-save",
+          "guaranteeProfiles": [
+            "managed-atomic",
+            "browser-handoff"
+          ],
+          "layout": "single-file-proof",
+          "plan": "workspace-then-publish",
+          "preparation": "none"
+        },
+        {
+          "artifact": "zip-archive",
+          "binding": "origin-private-workspace",
+          "completion": "complete-only-sealed-then-waiting-to-save",
+          "guaranteeProfiles": [
+            "managed-atomic",
+            "browser-handoff"
+          ],
+          "layout": "result-root",
+          "plan": "workspace-then-publish",
+          "preparation": "exact-zip"
+        },
+        {
+          "artifact": "original-file-or-zip-archive",
+          "binding": "portable",
+          "completion": "download-started-only",
+          "guaranteeProfiles": [
+            "browser-handoff"
+          ],
+          "layout": "explicit-artifact",
+          "plan": "portable-handoff",
+          "preparation": "exact-artifact"
+        }
       ]
     },
     {
-      "backends": [
-        {
-          "backend": "fsa",
-          "durability": "none-until-reauthorization-and-reopen-proof",
-          "fileFailureIsolation": true,
-          "mtime": false,
-          "powerLoss": false,
-          "randomWrite": true
-        },
-        {
-          "backend": "opfs-staging",
-          "durability": "process-restart",
-          "fileFailureIsolation": true,
-          "mtime": false,
-          "powerLoss": false,
-          "randomWrite": true
-        },
-        {
-          "backend": "single-file-stream",
-          "durability": "none",
-          "failureAfterFirstByte": "pause-job",
-          "fileFailureIsolation": false,
-          "mtime": false,
-          "randomWrite": false
-        },
-        {
-          "backend": "zip-stream",
-          "durability": "none",
-          "fileFailureIsolation": false,
-          "memberStart": "first-local-file-header-byte",
-          "mtime": false,
-          "randomWrite": false
-        },
-        {
-          "backend": "cli-osfs",
-          "durability": "process-restart",
-          "fileFailureIsolation": true,
-          "mtime": true,
-          "powerLoss": false,
-          "randomWrite": true
-        }
+      "admissionChecks": [
+        "job-peak",
+        "process-active-job-peaks",
+        "quota-minus-usage-minus-reserve",
+        "every-allocation"
       ],
-      "name": "output-backend-capabilities"
+      "components": [
+        "uniqueRawBytes",
+        "packageBytes",
+        "peakTemporaryBytes",
+        "durableMetadataBytes"
+      ],
+      "derivedPeak": "checked-sum-components",
+      "limits": {
+        "DEFAULT_OPFS_JOB_WORKSPACE_LIMIT": "8589934592",
+        "DEFAULT_OPFS_PROCESS_WORKSPACE_LIMIT": "17179869184",
+        "DEFAULT_PORTABLE_HANDOFF_ARTIFACT_LIMIT": "67108864",
+        "MINIMUM_OPFS_QUOTA_RESERVE": "536870912"
+      },
+      "name": "workspace-budget-v1",
+      "ownedObjectCountedOnce": true,
+      "quotaEstimateIsReservation": false
     },
     {
       "cases": [
         {
-          "action": "skip-and-report",
-          "jobOutcome": "completed-with-errors",
-          "memberStarted": false
+          "action": "abort-artifact",
+          "artifactOutcome": "failed",
+          "failure": "discovery",
+          "partialResult": false,
+          "publicationAllowed": false
         },
         {
-          "action": "pause-job",
-          "jobOutcome": "paused",
-          "memberStarted": true
+          "action": "abort-artifact",
+          "artifactOutcome": "failed",
+          "failure": "member-before-header",
+          "partialResult": false,
+          "publicationAllowed": false
+        },
+        {
+          "action": "abort-artifact",
+          "artifactOutcome": "failed",
+          "failure": "member-after-header",
+          "partialResult": false,
+          "publicationAllowed": false
         }
       ],
-      "name": "zip-member-failure"
+      "completeness": "complete-only",
+      "encoding": "store",
+      "name": "zip-complete-only"
+    },
+    {
+      "completeArtifactsExclude": [
+        "partial-directory"
+      ],
+      "deadlineWritingStates": [
+        "resumable-receive",
+        "resumable-package",
+        "waiting-to-save"
+      ],
+      "handoffNeverMeans": "published",
+      "name": "receive-lifecycle-terminal-states",
+      "publishedCleanupPendingRemains": "published",
+      "states": [
+        {
+          "byte": 14,
+          "plans": [
+            "direct-tree",
+            "direct-atomic",
+            "workspace-then-publish"
+          ],
+          "state": "published"
+        },
+        {
+          "byte": 15,
+          "plans": [
+            "workspace-then-publish",
+            "portable-handoff"
+          ],
+          "state": "download-started"
+        },
+        {
+          "byte": 16,
+          "plans": [
+            "direct-tree"
+          ],
+          "state": "partial-directory"
+        },
+        {
+          "byte": 17,
+          "plans": [
+            "direct-atomic",
+            "portable-handoff"
+          ],
+          "state": "restart-required"
+        },
+        {
+          "byte": 18,
+          "plans": [
+            "direct-tree",
+            "direct-atomic",
+            "workspace-then-publish",
+            "portable-handoff"
+          ],
+          "state": "discarded"
+        },
+        {
+          "byte": 19,
+          "plans": [
+            "direct-tree",
+            "workspace-then-publish"
+          ],
+          "state": "expired"
+        },
+        {
+          "byte": 20,
+          "plans": [
+            "direct-tree",
+            "direct-atomic",
+            "workspace-then-publish"
+          ],
+          "state": "needs-attention"
+        }
+      ]
     },
     {
       "name": "catalog-transaction",

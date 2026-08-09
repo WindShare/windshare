@@ -1,8 +1,6 @@
 package osfs
 
 import (
-	"encoding/json"
-	"errors"
 	"reflect"
 	"testing"
 
@@ -10,7 +8,7 @@ import (
 )
 
 func TestResumeStateAuthorityIsSeparateFromOutputSessionLifecycle(t *testing.T) {
-	outputSession := reflect.TypeFor[transfer.OutputSession]()
+	outputSession := reflect.TypeFor[transfer.DirectTreeSession]()
 	if _, exists := outputSession.MethodByName("Discard"); exists {
 		t.Fatal("PauseJob or CompleteJob gained resume-state deletion authority")
 	}
@@ -20,14 +18,15 @@ func TestResumeStateAuthorityIsSeparateFromOutputSessionLifecycle(t *testing.T) 
 	}
 }
 
-func TestResumeStateReferenceCannotBecomeSerializedDeletionAuthority(t *testing.T) {
-	if _, err := json.Marshal(ResumeStateRef{}); !errors.Is(err, ErrResumeStateRefNotSerializable) {
-		t.Fatalf("reference serialization error = %v", err)
+func TestResumeStateAuthorityRequiresRepositoryLeaseForMutation(t *testing.T) {
+	repository := reflect.TypeFor[ResumeStateRepository]()
+	if _, exists := repository.MethodByName("Acquire"); !exists {
+		t.Fatal("resume repository lost its fresh operation lease boundary")
 	}
-	if ResumeStateDiscarded == ResumeStateAlreadyAbsent ||
-		ResumeStateAlreadyAbsent == ResumeStateDiscardNeedsAttention ||
-		!ResumeStateDiscarded.Valid() || !ResumeStateAlreadyAbsent.Valid() ||
-		!ResumeStateDiscardNeedsAttention.Valid() {
-		t.Fatal("public discard result vocabulary is not closed")
+	lease := reflect.TypeFor[ResumeStateRepositoryLease]()
+	for _, method := range []string{"Snapshot", "ObserveRecovery", "CleanupOwned", "InstallReceipt", "ReplaceLifecycle"} {
+		if _, exists := lease.MethodByName(method); !exists {
+			t.Fatalf("resume repository lease lost %s", method)
+		}
 	}
 }

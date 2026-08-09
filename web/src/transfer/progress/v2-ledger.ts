@@ -10,6 +10,9 @@ export class V2TransferProgressLedger {
   #selectionErrors = 0
 
   get failedDirectories(): number { return this.#failedDirectories }
+  get completedFiles(): number { return this.#completedFiles }
+  get completedBytes(): bigint { return this.#completedBytes }
+  get writtenBytes(): bigint { return this.#writtenBytes }
 
   acknowledgeWrite(bytes: bigint): void { this.#writtenBytes += bytes }
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"time"
 
@@ -11,11 +12,24 @@ import (
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
+var (
+	errGetOutputOperationNeedsAttention = errors.New("get output operation needs attention")
+	errGetOutputReservationContract     = errors.New("get output operation reservation violated its contract")
+)
+
+type getDirectTreeReservationAuthority interface {
+	ReserveDirectTree(
+		context.Context,
+		transfer.SelectionSpec,
+		receivecontract.ArtifactSpec,
+	) (osfs.NativeDirectTreeReservation, error)
+}
+
 type getOutputPreparation struct {
-	root      string
 	authority *osfs.FilesystemOutputAuthority
 	clock     receiverAdmissionClock
 	startedAt time.Time
@@ -28,8 +42,9 @@ func (a *App) prepareGetOutput(request getRequest) (getOutputPreparation, int) {
 		return getOutputPreparation{}, ExitFailure
 	}
 	clock := a.admissionClock()
-	// The click starts a non-durable draft. Catalog generations remain runtime
-	// observations and can never alter the confirmed output namespace.
+	// Starting the command certifies the caller-provided container. The operation
+	// identity is resolved later, after selection is frozen, so a repeated command
+	// can reopen exactly one compatible owned reservation.
 	startedAt := clock.Now()
 	authority, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{
 		RootPath: outputRoot, CreateRoot: true,
@@ -40,7 +55,7 @@ func (a *App) prepareGetOutput(request getRequest) (getOutputPreparation, int) {
 		return getOutputPreparation{}, ExitFailure
 	}
 	return getOutputPreparation{
-		root: outputRoot, authority: authority, clock: clock, startedAt: startedAt,
+		authority: authority, clock: clock, startedAt: startedAt,
 	}, ExitOK
 }
 
@@ -171,7 +186,7 @@ func (a *App) prepareGetTransfer(
 		execution.Close()
 		return nil, ExitUsage
 	}
-	job, code := a.buildGetTransferJob(runtime, output, rules)
+	job, code := a.buildGetTransferJob(ctx, runtime, output, rules)
 	if code != ExitOK {
 		execution.Close()
 		return nil, code
@@ -181,27 +196,29 @@ func (a *App) prepareGetTransfer(
 }
 
 func (a *App) buildGetTransferJob(
+	ctx context.Context,
 	runtime *sessionruntime.ReceiverRuntime,
 	output getOutputPreparation,
 	rules transfer.SelectionRules,
 ) (*transfer.TransferJob, int) {
-	draft, err := transfer.NewTransferIntentDraft(
+	selection, err := transfer.NewSelectionSpec(
 		runtime.Descriptor().ShareInstance(), runtime.Descriptor().SyntheticRoot(), rules,
 	)
 	if err != nil {
-		a.logf("get: initialize transfer intent draft: %v", err)
+		a.logf("get: freeze selection: %v", err)
 		return nil, ExitFailure
 	}
-	// Absolute path confirmation is the authority boundary: it binds the user's
-	// chosen target into durable intent before any output session can open.
-	draft, err = draft.ConfirmFilesystemRoot(output.root)
+	intent, _, err := reserveGetOutputOperation(ctx, output.authority, selection)
 	if err != nil {
-		a.logf("get: confirm output target: %v", err)
-		return nil, ExitUsage
-	}
-	intent, err := draft.Freeze(transfer.NativeFilesystemOutputBackendID, transfer.OutputNativeTree)
-	if err != nil {
-		a.logf("get: freeze transfer intent: %v", err)
+		if errors.Is(err, errGetOutputOperationNeedsAttention) {
+			a.logf("get: output operation needs attention because ownership is ambiguous")
+			return nil, ExitFailure
+		}
+		if errors.Is(err, errGetOutputReservationContract) {
+			a.logf("get: output operation reservation violated its contract")
+			return nil, ExitFailure
+		}
+		a.logf("get: reserve output operation: %v", err)
 		return nil, ExitFailure
 	}
 	jobID, err := transfer.NewTransferJobID()
@@ -218,4 +235,32 @@ func (a *App) buildGetTransferJob(
 		return nil, ExitFailure
 	}
 	return job, ExitOK
+}
+
+func reserveGetOutputOperation(
+	ctx context.Context,
+	authority getDirectTreeReservationAuthority,
+	selection transfer.SelectionSpec,
+) (transfer.ReceiveIntent, osfs.NativeDirectTreeReservationKind, error) {
+	if authority == nil || selection.IsZero() {
+		return transfer.ReceiveIntent{}, 0, errGetOutputReservationContract
+	}
+	// Catalog-root DirectoryTree is the CLI's existing source-path-under-`-o`
+	// layout. Freezing it here keeps repeat-command lookup independent from any
+	// browser task-root or artifact-choice semantics.
+	reservation, err := authority.ReserveDirectTree(
+		ctx, selection, receivecontract.NewCatalogRootDirectoryTree(),
+	)
+	if err != nil {
+		return transfer.ReceiveIntent{}, 0, err
+	}
+	kind := reservation.Kind()
+	if kind == osfs.NativeDirectTreeNeedsAttention {
+		return transfer.ReceiveIntent{}, kind, errGetOutputOperationNeedsAttention
+	}
+	intent, ok := reservation.ReceiveIntent()
+	if !ok || (kind != osfs.NativeDirectTreeReserved && kind != osfs.NativeDirectTreeReopened) {
+		return transfer.ReceiveIntent{}, kind, errGetOutputReservationContract
+	}
+	return intent, kind, nil
 }

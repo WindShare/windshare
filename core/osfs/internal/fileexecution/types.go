@@ -1,7 +1,5 @@
-// Package fileexecution owns checkpoint-native execution for one path-local
-// native output file. It deliberately has no selection or legacy session model:
-// an outputsession FileClaim is the only runtime admission authority and a
-// checkpointmodel Record is the only durable lifecycle authority.
+// Package fileexecution owns one native DirectTree file transaction. A
+// FileCheckpointV2 is the only source of verified durable ranges.
 package fileexecution
 
 import (
@@ -11,48 +9,51 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
-	"github.com/windshare/windshare/core/osfs/internal/outputsession"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const MaximumObjectAllocationAttempts = 8
 
-// CheckpointKey is the complete durable file identity except for the owned
-// object, which is allocated only after absence at the public destination is
-// proven. A repository must fail closed if more than one record matches a key.
 type CheckpointKey struct {
-	intent    transfer.TransferIntentDigest
-	fileID    catalog.FileID
-	revision  content.FileRevision
-	path      string
-	exactSize uint64
-	backend   transfer.OutputBackendID
-	root      checkpointmodel.RootIdentity
+	operation       receivecontract.OperationID
+	intent          transfer.ReceiveIntentDigest
+	materialization receivecontract.BindingDigest
+	fileID          catalog.FileID
+	revision        content.FileRevision
+	path            string
+	exactSize       uint64
+	materializer    checkpointmodel.MaterializerKind
+	authority       receivecontract.AuthorityRef
 }
 
-func (key CheckpointKey) TransferIntentDigest() transfer.TransferIntentDigest { return key.intent }
-func (key CheckpointKey) FileID() catalog.FileID                              { return key.fileID }
-func (key CheckpointKey) FileRevision() content.FileRevision                  { return key.revision }
-func (key CheckpointKey) CanonicalPath() string                               { return key.path }
-func (key CheckpointKey) ExactSize() uint64                                   { return key.exactSize }
-func (key CheckpointKey) BackendID() transfer.OutputBackendID                 { return key.backend }
-func (key CheckpointKey) RootIdentity() checkpointmodel.RootIdentity          { return key.root }
+func (key CheckpointKey) OperationID() receivecontract.OperationID          { return key.operation }
+func (key CheckpointKey) ReceiveIntentDigest() transfer.ReceiveIntentDigest { return key.intent }
+func (key CheckpointKey) MaterializationBindingDigest() receivecontract.BindingDigest {
+	return key.materialization
+}
+func (key CheckpointKey) FileID() catalog.FileID                             { return key.fileID }
+func (key CheckpointKey) FileRevision() content.FileRevision                 { return key.revision }
+func (key CheckpointKey) CanonicalPath() string                              { return key.path }
+func (key CheckpointKey) ExactSize() uint64                                  { return key.exactSize }
+func (key CheckpointKey) MaterializerKind() checkpointmodel.MaterializerKind { return key.materializer }
+func (key CheckpointKey) AuthorityRef() receivecontract.AuthorityRef         { return key.authority }
 
 func (key CheckpointKey) valid() bool {
-	return !key.intent.IsZero() && !key.fileID.IsZero() && !key.revision.IsZero() &&
-		key.path != "" && key.exactSize <= catalog.MaxFileSize && key.backend != "" && !key.root.IsZero()
+	return !key.operation.IsZero() && !key.intent.IsZero() && !key.materialization.IsZero() &&
+		!key.fileID.IsZero() && !key.revision.IsZero() && key.path != "" &&
+		key.exactSize <= catalog.MaxFileSize && key.materializer.Valid() && !key.authority.IsZero()
 }
 
 func (key CheckpointKey) matches(record checkpointmodel.Record) bool {
-	return key.valid() && record.Valid() && record.TransferIntentDigest() == key.intent &&
+	return key.valid() && record.Valid() && record.OperationID() == key.operation &&
+		record.ReceiveIntentDigest() == key.intent &&
+		record.MaterializationBindingDigest() == key.materialization &&
 		record.FileID() == key.fileID && record.FileRevision() == key.revision &&
 		record.CanonicalPath() == key.path && record.ExactSize() == key.exactSize &&
-		record.BackendID() == key.backend && record.RootIdentity() == key.root
+		record.MaterializerKind() == key.materializer && record.AuthorityRef() == key.authority
 }
 
-// CheckpointObservation is a fresh, durable observation made after one exact
-// create-or-replace attempt. It lets the pure reconciliation reducer distinguish
-// unchanged, installed, and ambiguous cuts without interpreting error strings.
 type CheckpointObservation struct {
 	present bool
 	record  checkpointmodel.Record
@@ -92,18 +93,12 @@ func (condition OwnedCondition) valid() bool {
 	return condition >= OwnedAbsent && condition <= OwnedStageUnsafe
 }
 
-// OwnedObservation describes the exact stage/anchor relationship for one
-// checkpoint object ID. Ready means both names identify the same exact-sized
-// regular object. No other condition grants a writable handle.
 type OwnedObservation struct {
 	object    checkpointmodel.ObjectID
 	condition OwnedCondition
 }
 
-func NewOwnedObservation(
-	object checkpointmodel.ObjectID,
-	condition OwnedCondition,
-) (OwnedObservation, error) {
+func NewOwnedObservation(object checkpointmodel.ObjectID, condition OwnedCondition) (OwnedObservation, error) {
 	if object.IsZero() || !condition.valid() {
 		return OwnedObservation{}, ErrInvalidObservation
 	}
@@ -130,9 +125,7 @@ func (condition FinalCondition) valid() bool {
 	return condition >= FinalAbsent && condition <= FinalUnsafe
 }
 
-type FinalObservation struct {
-	condition FinalCondition
-}
+type FinalObservation struct{ condition FinalCondition }
 
 func ObserveFinal(condition FinalCondition) (FinalObservation, error) {
 	if !condition.valid() {
@@ -144,16 +137,14 @@ func ObserveFinal(condition FinalCondition) (FinalObservation, error) {
 func (observation FinalObservation) Condition() FinalCondition { return observation.condition }
 func (observation FinalObservation) valid() bool               { return observation.condition.valid() }
 
-// FinalExpectation carries comparison facts, never placement authority. The
-// claim-bound destination performs each actual observation under its own guard.
 type FinalExpectation struct {
-	object       transfer.OutputObjectIdentity
+	object       transfer.OwnedObjectID
 	exactSize    uint64
 	modifiedTime catalog.ModifiedTime
 }
 
 func NewFinalExpectation(
-	object transfer.OutputObjectIdentity,
+	object transfer.OwnedObjectID,
 	exactSize uint64,
 	modifiedTime catalog.ModifiedTime,
 ) (FinalExpectation, error) {
@@ -163,7 +154,7 @@ func NewFinalExpectation(
 	return FinalExpectation{object: object, exactSize: exactSize, modifiedTime: modifiedTime}, nil
 }
 
-func (expectation FinalExpectation) ObjectIdentity() transfer.OutputObjectIdentity {
+func (expectation FinalExpectation) ObjectIdentity() transfer.OwnedObjectID {
 	return expectation.object
 }
 func (expectation FinalExpectation) ExactSize() uint64 { return expectation.exactSize }
@@ -180,12 +171,8 @@ const (
 	RetirementSyncAnchorNamespace
 )
 
-// FileDestination is already bound to exactly one FileClaim. Implementations
-// must reopen and revalidate retained ancestry for every public operation; this
-// capability must never degrade into a pathname-only lookup.
 type FileDestination interface {
-	ClaimID() outputsession.ClaimID
-	Target() transfer.OutputFileTarget
+	Target() transfer.FileMaterializationTarget
 	ObserveFinal(context.Context, FinalExpectation) (FinalObservation, error)
 	ObserveFinalPresence(context.Context) (FinalObservation, error)
 	PublishNoReplace(context.Context, OwnedFile, FinalExpectation) (FinalObservation, error)
@@ -194,11 +181,9 @@ type FileDestination interface {
 }
 
 type DirectoryAuthority interface {
-	BindFile(context.Context, outputsession.FileClaim) (FileDestination, error)
+	BindFile(context.Context, transfer.MaterializationFile) (FileDestination, error)
 }
 
-// OwnedFile is the live stage capability. The platform that returns it has
-// already proved that its private stage and anchor names identify this object.
 type OwnedFile interface {
 	ObjectID() checkpointmodel.ObjectID
 	WriteAt([]byte, int64) (int, error)
@@ -208,24 +193,19 @@ type OwnedFile interface {
 	Close() error
 }
 
-// Platform owns private stage/anchor mechanics. Retirement steps are separate
-// so the engine can enforce stage -> sync -> anchor -> sync at every crash cut.
 type Platform interface {
 	CreateOwnedFile(context.Context, checkpointmodel.ObjectID, uint64) (OwnedFile, OwnedObservation, error)
 	OpenOwnedFile(context.Context, checkpointmodel.ObjectID, uint64, bool) (OwnedFile, OwnedObservation, error)
 	ApplyRetirement(context.Context, checkpointmodel.ObjectID, RetirementStep) (OwnedObservation, error)
 }
 
-// CheckpointRepository hides all native names, shards, and installation
-// temporaries. Store is exact-create when previous is nil and exact-replace
-// otherwise; it always returns a fresh durable observation of the target.
 type CheckpointRepository interface {
 	Lookup(context.Context, CheckpointKey) (checkpointmodel.Record, bool, error)
 	Store(context.Context, *checkpointmodel.Record, checkpointmodel.Record) (CheckpointObservation, error)
 }
 
 type Config struct {
-	Intent      transfer.TransferIntent
+	Intent      transfer.ReceiveIntent
 	Ownership   checkpointmodel.Ownership
 	SessionID   transfer.OutputSessionID
 	Directories DirectoryAuthority

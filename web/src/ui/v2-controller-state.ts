@@ -1,11 +1,8 @@
 import type { V2CatalogEntry } from '../catalog/v2-records'
 import type { V2SelectionPolicy } from '../catalog/v2-selection'
-import { encodeBase64Url } from '../crypto/bytes'
 import type { V2ConnectivityActivation } from '../connectivity/v2-receiver-policy'
 import type { V2FilePreview, V2PreviewPresentation } from '../preview/v2-preview'
-import type { TransferJobResult, TransferProgress } from '../transfer/v2-job'
-import { JobSettlementKind } from '../transfer/output-session'
-import type { V2BrowseDirectory, V2BrowsePage, V2JoinedBrowserShare } from './v2-gateway'
+import type { V2BrowseDirectory, V2BrowsePage } from './v2-gateway'
 import type { V2BrowseRow, V2ReceiverSnapshot } from './v2-model'
 
 export interface ActiveV2Preview {
@@ -25,10 +22,6 @@ export interface RetryableV2BrowseRequest {
 
 export interface BrowsePageProjection {
   readonly entries: Map<string, V2CatalogEntry>
-  readonly root?: {
-    readonly entryCount: number
-    readonly singleFile?: Extract<V2CatalogEntry, { kind: 'file' }>
-  }
   readonly snapshot: Pick<
     V2ReceiverSnapshot,
     | 'phase'
@@ -42,7 +35,6 @@ export interface BrowsePageProjection {
     | 'omittedCount'
     | 'selectedVisibleFiles'
     | 'selectedVisibleBytes'
-    | 'selectionTotalKnown'
     | 'directoryRetryable'
   >
 }
@@ -50,7 +42,6 @@ export interface BrowsePageProjection {
 export function projectBrowsePage(
   page: V2BrowsePage,
   selection: V2SelectionPolicy,
-  syntheticRootId: string,
   route: readonly V2BrowseDirectory[],
 ): BrowsePageProjection {
   const entries = new Map(page.entries.map((entry) => [entry.idText, entry]))
@@ -69,18 +60,8 @@ export function projectBrowsePage(
       selectedBytes += entry.expectedSize
     }
   }
-  const rootPage = page.directory.idText === syntheticRootId
-  const onlyRootEntry = rootPage && page.entryCount === 1 && page.omittedCount === 0n
-    ? page.entries[0]
-    : undefined
   return Object.freeze({
     entries,
-    ...(rootPage
-      ? { root: Object.freeze({
-          entryCount: page.entryCount,
-          ...(onlyRootEntry?.kind === 'file' ? { singleFile: onlyRootEntry } : {}),
-        }) }
-      : {}),
     snapshot: Object.freeze({
       phase: 'browsing',
       status: page.entryCount === 0 ? 'This directory is empty.' : 'Choose what to receive.',
@@ -93,8 +74,6 @@ export function projectBrowsePage(
       omittedCount: page.omittedCount,
       selectedVisibleFiles: selectedFiles,
       selectedVisibleBytes: selectedBytes,
-      selectionTotalKnown: rootPage && page.pageCount === 1 && page.omittedCount === 0n &&
-        page.entries.every((entry) => entry.kind === 'file'),
       directoryRetryable: false,
     }),
   })
@@ -105,71 +84,6 @@ export function breadcrumbsFor(route: readonly V2BrowseDirectory[]) {
     id: directory.idText,
     name: directory.name,
   })))
-}
-
-export function knownSingleFile(
-  joined: V2JoinedBrowserShare | undefined,
-  selectionTotalKnown: boolean,
-  candidate: Extract<V2CatalogEntry, { kind: 'file' }> | undefined,
-): Extract<V2CatalogEntry, { kind: 'file' }> | undefined {
-  if (joined === undefined || !selectionTotalKnown || candidate === undefined) return undefined
-  return joined.selection.selected(candidate, [joined.descriptor.syntheticRootId])
-    ? candidate
-    : undefined
-}
-
-export function selectionAvailable(
-  joined: V2JoinedBrowserShare | undefined,
-  rootEntryCount: number,
-  selectionTotalKnown: boolean,
-  page: V2BrowsePage | undefined,
-): boolean {
-  if (joined === undefined || rootEntryCount === 0) return false
-  if (!selectionTotalKnown) {
-    return joined.selection.shouldDiscover(joined.descriptor.syntheticRootId, [])
-  }
-  const rootAncestry = [joined.descriptor.syntheticRootId]
-  return page?.entries.some(
-    (entry) => joined.selection.state(entry, rootAncestry) !== 'unselected',
-  ) === true
-}
-
-export function transferTerminalSnapshot(
-  snapshot: V2ReceiverSnapshot,
-  result: TransferJobResult,
-): V2ReceiverSnapshot {
-  if (result.settlement.kind === JobSettlementKind.NeedsAttention) {
-    return {
-      ...snapshot,
-      phase: 'needs-attention',
-      status: 'Transfer stopped, but the output boundary needs manual review.',
-    }
-  }
-  if (result.outcome.status === 'Paused') {
-    if (result.settlement.kind === JobSettlementKind.Completed) {
-      return {
-        ...snapshot,
-        phase: 'completed',
-        status: 'Output publication completed before the pause took effect.',
-      }
-    }
-    if (result.settlement.durability === 'None') {
-      return {
-        ...snapshot,
-        phase: 'retry-ready',
-        status: 'Transfer stopped. This output cannot resume; retry starts from byte zero.',
-      }
-    }
-    return { ...snapshot, phase: 'paused', status: 'Transfer paused; completed output and checkpoints were retained.' }
-  }
-  if (result.outcome.status === 'CompletedWithErrors') {
-    return {
-      ...snapshot,
-      phase: 'completed-errors',
-      status: `Saved with ${result.outcome.failureCount} item error(s).`,
-    }
-  }
-  return { ...snapshot, phase: 'completed', status: 'Transfer complete.' }
 }
 
 export function previewSnapshot(
@@ -201,37 +115,6 @@ export function previewSnapshot(
       })
 }
 
-export function transferProgressSnapshot(
-  progress: TransferProgress,
-): Pick<V2ReceiverSnapshot, 'phase' | 'status' | 'progress'> {
-  const phase = progress.discovery === 'failed' || progress.writtenBytes === 0n
-    ? 'discovering'
-    : 'transferring'
-  let status: string
-  if (progress.discovery === 'complete') {
-    status = 'Receiving authenticated blocks…'
-  } else if (progress.discovery === 'failed') {
-    status = 'Discovery stopped; saving discovered files…'
-  } else {
-    status = 'Discovering selected files…'
-  }
-  return Object.freeze({ phase, status, progress: Object.freeze({ ...progress }) })
-}
-
 export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError'
-}
-
-export function nowMilliseconds(): number {
-  return typeof performance !== 'undefined' ? performance.now() : Date.now()
-}
-
-export function descriptorIdentity(
-  text: string | undefined,
-  raw: Uint8Array | undefined,
-  fallback: string,
-): string {
-  if (text !== undefined && text.length > 0) return text
-  if (raw instanceof Uint8Array && raw.byteLength > 0) return encodeBase64Url(raw)
-  return fallback
 }

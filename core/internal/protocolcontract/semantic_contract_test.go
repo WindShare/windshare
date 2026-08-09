@@ -22,19 +22,16 @@ func operationFinalMatrix() []any {
 	}
 }
 
-func zipMemberFailure(memberStarted bool) (string, string) {
-	if memberStarted {
-		return "pause-job", "paused"
-	}
-	return "skip-and-report", "completed-with-errors"
+func zipCompleteOnlyFailure() (string, string) {
+	return "abort-artifact", "failed"
 }
 
-func zipMemberFailureCases() []any {
-	notStartedAction, notStartedOutcome := zipMemberFailure(false)
-	startedAction, startedOutcome := zipMemberFailure(true)
+func zipCompleteOnlyFailureCases() []any {
+	action, outcome := zipCompleteOnlyFailure()
 	return []any{
-		map[string]any{"memberStarted": false, "action": notStartedAction, "jobOutcome": notStartedOutcome},
-		map[string]any{"memberStarted": true, "action": startedAction, "jobOutcome": startedOutcome},
+		map[string]any{"failure": "discovery", "action": action, "artifactOutcome": outcome, "publicationAllowed": false, "partialResult": false},
+		map[string]any{"failure": "member-before-header", "action": action, "artifactOutcome": outcome, "publicationAllowed": false, "partialResult": false},
+		map[string]any{"failure": "member-after-header", "action": action, "artifactOutcome": outcome, "publicationAllowed": false, "partialResult": false},
 	}
 }
 
@@ -74,12 +71,14 @@ func semanticCases(t *testing.T) []any {
 		"senderCrashGraceSeconds": fmt.Sprint(senderCrashGraceSeconds), "relayChallengeSeconds": fmt.Sprint(relayChallengeSeconds),
 		"joinStartingSeconds": fmt.Sprint(joinStartingSeconds), "clientHelloReplaySeconds": fmt.Sprint(clientHelloReplaySeconds),
 		"operationTombstoneSeconds": fmt.Sprint(operationTombstoneSeconds), "applicationRelaySeconds": fmt.Sprint(applicationRelaySeconds),
-		"relaySessionTombstoneSeconds": fmt.Sprint(relaySessionTombstoneSeconds),
-		"maxOpaqueCiphertextBytes":     fmt.Sprint(maxOpaqueCiphertextBytes),
-		"opfsStagingJobBytes":          fmt.Sprint(opfsStagingJobBytes), "opfsStagingProcessBytes": fmt.Sprint(opfsStagingProcessBytes),
-		"opfsMinimumReserveBytes": fmt.Sprint(opfsMinimumReserveBytes), "outputOpenTransactions": fmt.Sprint(outputOpenTransactions),
+		"relaySessionTombstoneSeconds":        fmt.Sprint(relaySessionTombstoneSeconds),
+		"maxOpaqueCiphertextBytes":            fmt.Sprint(maxOpaqueCiphertextBytes),
+		"defaultOpfsJobWorkspaceLimit":        fmt.Sprint(defaultOPFSJobWorkspaceLimit),
+		"defaultOpfsProcessWorkspaceLimit":    fmt.Sprint(defaultOPFSProcessWorkspaceLimit),
+		"minimumOpfsQuotaReserve":             fmt.Sprint(minimumOPFSQuotaReserve),
+		"defaultPortableHandoffArtifactLimit": fmt.Sprint(defaultPortableArtifactLimit),
 	}
-	selection := []any{
+	connectionSizes := []any{
 		map[string]any{"files": "29", "bytes": fmt.Sprint((8 << 20) - 1), "terminal": true, "failed": false, "class": "small"},
 		map[string]any{"files": "30", "bytes": "0", "terminal": true, "failed": false, "class": "large"},
 		map[string]any{"files": "1", "bytes": fmt.Sprint(8 << 20), "terminal": true, "failed": false, "class": "large"},
@@ -90,12 +89,12 @@ func semanticCases(t *testing.T) []any {
 		map[string]any{"files": "0", "bytes": "0", "terminal": true, "failed": false, "class": "small"},
 	}
 	checkpointCuts := []any{
-		map[string]any{"cut": "after-data-write", "published": false},
-		map[string]any{"cut": "after-data-flush", "published": false},
-		map[string]any{"cut": "after-journal-write", "published": false},
-		map[string]any{"cut": "after-journal-flush", "published": false},
-		map[string]any{"cut": "after-install", "published": false},
-		map[string]any{"cut": "after-reopen-verify", "published": true},
+		map[string]any{"cut": "after-data-write", "newGenerationSelectable": false},
+		map[string]any{"cut": "after-data-flush", "newGenerationSelectable": false},
+		map[string]any{"cut": "after-candidate-record-write", "newGenerationSelectable": false},
+		map[string]any{"cut": "after-candidate-record-flush", "newGenerationSelectable": false},
+		map[string]any{"cut": "after-verified-record-install", "newGenerationSelectable": false},
+		map[string]any{"cut": "after-reopen-verify", "newGenerationSelectable": true},
 	}
 	return []any{
 		map[string]any{"name": "frozen-limits", "values": limits},
@@ -126,13 +125,29 @@ func semanticCases(t *testing.T) []any {
 			"unexpectedDisconnect":      []string{"drop-sessions", "enter-bounded-crash-grace", "immediate-retirement-during-stop-commit"},
 			"stoppedTombstoneRetention": "until-future-authenticated-refresh",
 		},
-		map[string]any{"name": "selection-classification", "cases": selection, "fileLimitExclusive": "30", "byteLimitExclusive": fmt.Sprint(8 << 20)},
+		map[string]any{"name": "connection-size-classification", "cases": connectionSizes, "fileLimitExclusive": "30", "byteLimitExclusive": fmt.Sprint(8 << 20)},
+		map[string]any{
+			"name": "artifact-shape-proof",
+			"proofs": []any{
+				map[string]any{"proof": "unknown", "byte": 1},
+				map[string]any{"proof": "none", "byte": 2},
+				map[string]any{"proof": "single-file", "byte": 3},
+				map[string]any{"proof": "tree", "byte": 4},
+			},
+			"allowedTransitions": []string{"unknown->none", "unknown->single-file", "unknown->tree"},
+			"treeForcingFacts":   []string{"authenticated-selected-directory", "explicit-empty-directory", "second-authenticated-file"},
+			"singleFileRequires": []string{"one-authenticated-file", "frozen-rule-exclusion", "empty-unsettled-targets"},
+			"noneRequires":       []string{"complete-negative-evidence"}, "finalProofImmutable": true,
+		},
 		map[string]any{"name": "operation-final-matrix", "operations": operationFinalMatrix()},
-		map[string]any{"name": "connection-timing", "triggers": []any{
-			map[string]any{"trigger": "browse", "startsP2P": false, "p2pStartSeconds": nil, "applicationRelayDeadlineSeconds": nil, "outputPicker": "none"},
-			map[string]any{"trigger": "preview-click", "startsP2P": true, "p2pStartSeconds": "0", "applicationRelayDeadlineSeconds": fmt.Sprint(applicationRelaySeconds), "outputPicker": "none"},
-			map[string]any{"trigger": "download-click", "startsP2P": true, "p2pStartSeconds": "0", "applicationRelayDeadlineSeconds": fmt.Sprint(applicationRelaySeconds), "outputPicker": "synchronous"},
-		}, "independentTimers": true, "discoveryCannotDelay": true, "unknownUsesNonSmallTiming": true, "turnInsertionOnly": true},
+		map[string]any{"name": "artifact-action-picker-timing", "events": []any{
+			map[string]any{"event": "background-projection", "startsP2P": false, "picker": "forbidden"},
+			map[string]any{"event": "preview-click", "startsP2P": true, "picker": "none"},
+			map[string]any{"event": "final-artifact-action-without-picker", "startsP2P": true, "picker": "none"},
+			map[string]any{"event": "final-artifact-action-with-picker", "startsP2P": true, "picker": "synchronous-before-click-stack-unwinds"},
+		}, "p2pStartSeconds": "0", "applicationRelayDeadlineSeconds": fmt.Sprint(applicationRelaySeconds),
+			"backgroundCompletionCannotInvokeAction": true, "authorityValidationMayContinueAfterPickerStart": true,
+			"bindRechecks": []string{"projection-epoch", "shape-proof", "artifact-offer", "capability-facts"}},
 		map[string]any{"name": "strict-sequence", "cases": []any{
 			map[string]any{"epoch": uint32(0), "expected": "0", "candidate": "0", "accepted": true},
 			map[string]any{"epoch": uint32(0), "expected": "1", "candidate": "0", "accepted": false},
@@ -146,15 +161,49 @@ func semanticCases(t *testing.T) []any {
 			map[string]any{"lane": uint32(1), "lastAccepted": uint32(5), "candidate": uint32(4), "accepted": false},
 			map[string]any{"lane": uint32(2), "lastAccepted": nil, "candidate": uint32(4), "otherLaneLast": uint32(7), "accepted": true},
 		}},
-		map[string]any{"name": "output-checkpoint-crash-cuts", "order": []string{"data-write", "data-flush", "journal-write", "journal-flush", "atomic-install", "reopen-verify"}, "cuts": checkpointCuts},
-		map[string]any{"name": "output-backend-capabilities", "backends": []any{
-			map[string]any{"backend": "fsa", "durability": "none-until-reauthorization-and-reopen-proof", "randomWrite": true, "fileFailureIsolation": true, "mtime": false, "powerLoss": false},
-			map[string]any{"backend": "opfs-staging", "durability": "process-restart", "randomWrite": true, "fileFailureIsolation": true, "mtime": false, "powerLoss": false},
-			map[string]any{"backend": "single-file-stream", "durability": "none", "randomWrite": false, "fileFailureIsolation": false, "mtime": false, "failureAfterFirstByte": "pause-job"},
-			map[string]any{"backend": "zip-stream", "durability": "none", "randomWrite": false, "fileFailureIsolation": false, "mtime": false, "memberStart": "first-local-file-header-byte"},
-			map[string]any{"backend": "cli-osfs", "durability": "process-restart", "randomWrite": true, "fileFailureIsolation": true, "mtime": true, "powerLoss": false},
+		map[string]any{
+			"name": "file-checkpoint-v2-crash-cuts", "ownershipMarker": "windshare/file-checkpoint/v2",
+			"namespace": ".windshare-output/checkpoints-v2", "selectionAuthority": "highest-reopened-verified-generation",
+			"order": []string{"data-write", "data-flush", "candidate-record-write", "candidate-record-flush", "verified-record-install", "reopen-verify"},
+			"cuts":  checkpointCuts,
+		},
+		map[string]any{"name": "artifact-plan-guarantee-matrix", "rows": []any{
+			map[string]any{"artifact": "directory-tree", "layout": "single-file-or-result-root", "plan": "direct-tree", "binding": "named-container-entry", "guaranteeProfiles": []string{"native-tree", "fsa-tree"}, "preparation": "none", "completion": "prefix-visible-partial-legal"},
+			map[string]any{"artifact": "directory-tree", "layout": "catalog-root", "plan": "direct-tree", "binding": "container-root", "guaranteeProfiles": []string{"native-tree"}, "preparation": "none", "completion": "prefix-visible"},
+			map[string]any{"artifact": "original-file", "layout": "single-file-proof", "plan": "direct-atomic", "binding": "atomic-target", "guaranteeProfiles": []string{"managed-atomic"}, "preparation": "none", "completion": "published-after-verified-commit"},
+			map[string]any{"artifact": "zip-archive", "layout": "result-root", "plan": "direct-atomic", "binding": "atomic-target", "guaranteeProfiles": []string{"managed-atomic"}, "preparation": "progressive-immutable-ledger", "completion": "complete-only"},
+			map[string]any{"artifact": "original-file", "layout": "single-file-proof", "plan": "workspace-then-publish", "binding": "origin-private-workspace", "guaranteeProfiles": []string{"managed-atomic", "browser-handoff"}, "preparation": "none", "completion": "sealed-then-waiting-to-save"},
+			map[string]any{"artifact": "zip-archive", "layout": "result-root", "plan": "workspace-then-publish", "binding": "origin-private-workspace", "guaranteeProfiles": []string{"managed-atomic", "browser-handoff"}, "preparation": "exact-zip", "completion": "complete-only-sealed-then-waiting-to-save"},
+			map[string]any{"artifact": "original-file-or-zip-archive", "layout": "explicit-artifact", "plan": "portable-handoff", "binding": "portable", "guaranteeProfiles": []string{"browser-handoff"}, "preparation": "exact-artifact", "completion": "download-started-only"},
 		}},
-		map[string]any{"name": "zip-member-failure", "cases": zipMemberFailureCases()},
+		map[string]any{
+			"name":        "workspace-budget-v1",
+			"components":  []string{"uniqueRawBytes", "packageBytes", "peakTemporaryBytes", "durableMetadataBytes"},
+			"derivedPeak": "checked-sum-components", "ownedObjectCountedOnce": true, "quotaEstimateIsReservation": false,
+			"limits": map[string]string{
+				"DEFAULT_OPFS_JOB_WORKSPACE_LIMIT":        fmt.Sprint(defaultOPFSJobWorkspaceLimit),
+				"DEFAULT_OPFS_PROCESS_WORKSPACE_LIMIT":    fmt.Sprint(defaultOPFSProcessWorkspaceLimit),
+				"MINIMUM_OPFS_QUOTA_RESERVE":              fmt.Sprint(minimumOPFSQuotaReserve),
+				"DEFAULT_PORTABLE_HANDOFF_ARTIFACT_LIMIT": fmt.Sprint(defaultPortableArtifactLimit),
+			},
+			"admissionChecks": []string{"job-peak", "process-active-job-peaks", "quota-minus-usage-minus-reserve", "every-allocation"},
+		},
+		map[string]any{"name": "zip-complete-only", "encoding": "store", "completeness": "complete-only", "cases": zipCompleteOnlyFailureCases()},
+		map[string]any{
+			"name": "receive-lifecycle-terminal-states",
+			"states": []any{
+				map[string]any{"state": "published", "byte": 14, "plans": []string{"direct-tree", "direct-atomic", "workspace-then-publish"}},
+				map[string]any{"state": "download-started", "byte": 15, "plans": []string{"workspace-then-publish", "portable-handoff"}},
+				map[string]any{"state": "partial-directory", "byte": 16, "plans": []string{"direct-tree"}},
+				map[string]any{"state": "restart-required", "byte": 17, "plans": []string{"direct-atomic", "portable-handoff"}},
+				map[string]any{"state": "discarded", "byte": 18, "plans": []string{"direct-tree", "direct-atomic", "workspace-then-publish", "portable-handoff"}},
+				map[string]any{"state": "expired", "byte": 19, "plans": []string{"direct-tree", "workspace-then-publish"}},
+				map[string]any{"state": "needs-attention", "byte": 20, "plans": []string{"direct-tree", "direct-atomic", "workspace-then-publish"}},
+			},
+			"deadlineWritingStates":          []string{"resumable-receive", "resumable-package", "waiting-to-save"},
+			"publishedCleanupPendingRemains": "published", "handoffNeverMeans": "published",
+			"completeArtifactsExclude": []string{"partial-directory"},
+		},
 		map[string]any{"name": "catalog-transaction", "publishOnlyAfter": []string{"pages", "node-records", "terminal", "budget-charge", "spill-flush", "atomic-commit"}, "preCommitCrashVisible": false},
 		map[string]any{"name": "stable-source-platforms", "platforms": []any{
 			map[string]any{"platform": "windows-local-ntfs-refs", "mechanism": "deny-share-write-handle+volume-file-id", "supported": true},

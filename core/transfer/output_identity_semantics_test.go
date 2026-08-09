@@ -30,7 +30,7 @@ func TestSelectionObservationByteBoundaryOwnsItsInput(t *testing.T) {
 	}
 }
 
-func TestCanonicalSelectionRequestIsOrderedAndImmutable(t *testing.T) {
+func TestSelectionSpecIsOrderedAndImmutable(t *testing.T) {
 	share := transferID[catalog.ShareInstance](41)
 	root := transferID[catalog.DirectoryID](42)
 	rulesA, err := NewPathSelectionRules([]string{"z.bin", "a.bin"})
@@ -41,11 +41,11 @@ func TestCanonicalSelectionRequestIsOrderedAndImmutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestA, err := NewCanonicalSelectionRequest(share, root, rulesA)
+	requestA, err := NewSelectionSpec(share, root, rulesA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestB, err := NewCanonicalSelectionRequest(share, root, rulesB)
+	requestB, err := NewSelectionSpec(share, root, rulesB)
 	if err != nil || !slices.Equal(requestA.Bytes(), requestB.Bytes()) {
 		t.Fatalf("path-order normalization failed: %v", err)
 	}
@@ -56,17 +56,16 @@ func TestCanonicalSelectionRequestIsOrderedAndImmutable(t *testing.T) {
 	}
 
 	invalidRules := SelectionRules{}
-	if _, err := NewCanonicalSelectionRequest(share, root, invalidRules); !errors.Is(err, ErrInvalidSelectionRules) {
+	if _, err := NewSelectionSpec(share, root, invalidRules); !errors.Is(err, ErrInvalidSelectionRules) {
 		t.Fatalf("invalid canonical rules error = %v", err)
 	}
 }
 
-func TestOutputTargetAndBindingAccessorsPreserveCompleteAuthority(t *testing.T) {
+func TestMaterializationBindingAccessorsPreserveCompleteAuthority(t *testing.T) {
 	binding, _ := outputLifecycleFixture(t)
 	target := binding.Target()
 	descriptor := target.Descriptor()
-	if target.BackendID() != binding.BackendID() ||
-		target.OutputSessionID() != binding.OutputSessionID() ||
+	if target.OutputSessionID() != binding.OutputSessionID() ||
 		target.ShareInstance() != binding.ShareInstance() ||
 		target.FileID() != binding.FileID() ||
 		target.FileRevision() != binding.FileRevision() ||
@@ -75,7 +74,7 @@ func TestOutputTargetAndBindingAccessorsPreserveCompleteAuthority(t *testing.T) 
 		binding.Descriptor() != descriptor {
 		t.Fatalf("target/binding authority diverged: target=%+v binding=%+v", target, binding)
 	}
-	if _, err := BindOutputFileTarget(OutputFileTarget{}, binding.ObjectIdentity()); !errors.Is(err, ErrInvalidOutputBinding) {
+	if _, err := BindFileMaterializationTarget(FileMaterializationTarget{}, binding.ObjectIdentity()); !errors.Is(err, ErrInvalidOutputBinding) {
 		t.Fatalf("zero target binding error = %v", err)
 	}
 

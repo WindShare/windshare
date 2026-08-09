@@ -16,11 +16,11 @@ type pathScriptedJobOutput struct {
 	scripts map[string]jobTransactionScript
 }
 
-func (output *pathScriptedJobOutput) OpenOutput(
+func (output *pathScriptedJobOutput) OpenDirectTree(
 	ctx context.Context,
-	intent TransferIntent,
-) (OutputSession, error) {
-	if _, err := output.jobOutput.OpenOutput(ctx, intent); err != nil {
+	intent ReceiveIntent,
+) (DirectTreeSession, error) {
+	if _, err := output.jobOutput.OpenDirectTree(ctx, intent); err != nil {
 		return nil, err
 	}
 	return output, nil
@@ -28,14 +28,14 @@ func (output *pathScriptedJobOutput) OpenOutput(
 
 func (output *pathScriptedJobOutput) AdmitDirectory(
 	ctx context.Context,
-	directory OutputDirectory,
+	directory MaterializationDirectory,
 ) (DirectoryAdmission, error) {
 	return output.jobOutput.AdmitDirectory(ctx, directory)
 }
 
 func (output *pathScriptedJobOutput) BeginFile(
 	ctx context.Context,
-	file OutputFile,
+	file MaterializationFile,
 ) (FileStart, error) {
 	start, err := output.jobOutput.BeginFile(ctx, file)
 	if err != nil {
@@ -57,7 +57,7 @@ func TestTransferJobIsolatesTransactionQuarantineAndPublishesSibling(t *testing.
 	quarantinedFile := transferID[catalog.FileID](182)
 	publishedFile := transferID[catalog.FileID](183)
 	base := newJobOutput(share)
-	base.completeSettlement = JobPausedNeedsAttention
+	base.completeSettlement = DirectTreeSettlementNeedsAttention
 	output := &pathScriptedJobOutput{
 		jobOutput: base,
 		scripts: map[string]jobTransactionScript{
@@ -80,7 +80,7 @@ func TestTransferJobIsolatesTransactionQuarantineAndPublishesSibling(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := newTestTransferJob(t, TransferJobConfig{
+	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share,
 		SyntheticRoot: root,
 		Rules:         rules,
@@ -93,16 +93,16 @@ func TestTransferJobIsolatesTransactionQuarantineAndPublishesSibling(t *testing.
 			},
 			failures: make(map[catalog.DirectoryID]error),
 		},
-		Revisions: revisions,
-		Blocks:    scriptedRangeReader{},
-		Output:    output,
+		Revisions:    revisions,
+		Blocks:       scriptedRangeReader{},
+		Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	result := job.Run(context.Background())
-	if result.Outcome != JobCompletedWithErrors || result.Settlement.Kind() != JobPausedNeedsAttention ||
+	if result.Outcome != DirectTreeOutcomeNeedsAttention || result.Settlement.Kind() != DirectTreeSettlementNeedsAttention ||
 		result.SucceededFiles != 1 || result.TerminationCause != nil || result.SettlementFailure != nil {
 		t.Fatalf("quarantine-isolated result = %+v", result)
 	}
@@ -111,7 +111,7 @@ func TestTransferJobIsolatesTransactionQuarantineAndPublishesSibling(t *testing.
 		result.Files[0].Settlement.Kind() != FileQuarantined || result.Files[0].SettlementFailure != nil {
 		t.Fatalf("quarantined file failure = %+v", result.Files)
 	}
-	if binding, ok := result.Files[0].Settlement.OutputBinding(); !ok ||
+	if binding, ok := result.Files[0].Settlement.MaterializedBinding(); !ok ||
 		binding != base.transactions["a-quarantined.bin"].Binding() {
 		t.Fatalf("quarantine lost transaction binding: binding=%+v ok=%t", binding, ok)
 	}
@@ -157,7 +157,7 @@ func TestTransferJobStopsSiblingWorkOnUnsettledCommit(t *testing.T) {
 				)
 			}
 			rules, _ := NewSelectionRules(true, nil)
-			job, err := newTestTransferJob(t, TransferJobConfig{
+			job, err := newTestTransferJob(t, testTransferJobConfig{
 				ShareInstance: share, SyntheticRoot: root, Rules: rules,
 				Catalog: failingCatalog{
 					snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
@@ -167,7 +167,7 @@ func TestTransferJobStopsSiblingWorkOnUnsettledCommit(t *testing.T) {
 					},
 					failures: make(map[catalog.DirectoryID]error),
 				},
-				Revisions: revisions, Blocks: scriptedRangeReader{}, Output: output,
+				Revisions: revisions, Blocks: scriptedRangeReader{}, Materializer: output,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -175,7 +175,7 @@ func TestTransferJobStopsSiblingWorkOnUnsettledCommit(t *testing.T) {
 
 			result := job.Run(context.Background())
 			expected, _ := fault.NewOutput(scope, fault.OutputStateIO)
-			if result.Outcome != JobPausedOutcome || normalizedFault(result.TerminationCause) != expected ||
+			if result.Outcome != DirectTreeOutcomeResumable || normalizedFault(result.TerminationCause) != expected ||
 				normalizedFault(result.SettlementFailure) != expected ||
 				!slices.Equal(revisions.order, []catalog.FileID{first}) ||
 				base.transactions["a-first.bin"] == nil || base.transactions["b-second.bin"] != nil ||

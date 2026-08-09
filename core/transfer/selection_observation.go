@@ -13,13 +13,16 @@ import (
 
 const (
 	SelectionObservationV1Bytes = sha256.Size
+	SelectionSpecV1             = uint8(1)
+	SelectionSpecDigestBytes    = sha256.Size
+	selectionSpecDomain         = "windshare/selection-spec/v1"
 )
 
 var ErrInvalidSelectionObservation = errors.New("transfer selection observation is invalid")
 
 // SelectionObservationV1 is a non-durable audit digest of one terminal catalog
-// selection. It must never identify checkpoint records, output namespaces,
-// or recovery admission; TransferIntentDigest owns all durable identity.
+// selection. ReceiveIntentDigest, not an observation of one run, owns durable
+// materialization identity.
 type SelectionObservationV1 [SelectionObservationV1Bytes]byte
 
 func SelectionObservationV1FromBytes(raw []byte) (SelectionObservationV1, error) {
@@ -41,24 +44,32 @@ func (observation SelectionObservationV1) IsZero() bool {
 	return observation == SelectionObservationV1{}
 }
 
-// CanonicalSelectionRequest freezes only caller selection semantics. It cannot
-// identify durable state because output target, backend, and format belong to
-// TransferIntent, while terminal discovery remains an observation of one run.
-type CanonicalSelectionRequest struct {
+type SelectionSpecDigest [SelectionSpecDigestBytes]byte
+
+func (digest SelectionSpecDigest) Bytes() []byte { return append([]byte(nil), digest[:]...) }
+func (digest SelectionSpecDigest) IsZero() bool  { return digest == SelectionSpecDigest{} }
+
+// SelectionSpec freezes caller selection semantics without projection epoch,
+// discovery evidence, catalog generations, or runtime identities.
+type SelectionSpec struct {
 	share   catalog.ShareInstance
 	root    catalog.DirectoryID
+	rules   SelectionRules
 	encoded []byte
+	digest  SelectionSpecDigest
 }
 
-func NewCanonicalSelectionRequest(
+func NewSelectionSpec(
 	share catalog.ShareInstance,
 	root catalog.DirectoryID,
 	rules SelectionRules,
-) (CanonicalSelectionRequest, error) {
+) (SelectionSpec, error) {
 	if share.IsZero() || root.IsZero() || !rules.validSnapshot() {
-		return CanonicalSelectionRequest{}, ErrInvalidSelectionRules
+		return SelectionSpec{}, ErrInvalidSelectionRules
 	}
 	encoded := make([]byte, 0, 256)
+	encoded = append(encoded, selectionSpecDomain...)
+	encoded = append(encoded, 0, SelectionSpecV1)
 	encoded = appendCanonicalField(encoded, share.Bytes())
 	encoded = appendCanonicalField(encoded, root.Bytes())
 	encoded = appendCanonicalField(encoded, []byte{byte(rules.mode)})
@@ -105,12 +116,29 @@ func NewCanonicalSelectionRequest(
 			encoded = appendCanonicalField(encoded, []byte(path))
 		}
 	default:
-		return CanonicalSelectionRequest{}, ErrInvalidSelectionRules
+		return SelectionSpec{}, ErrInvalidSelectionRules
 	}
-	return CanonicalSelectionRequest{share: share, root: root, encoded: encoded}, nil
+	digest := sha256.Sum256(encoded)
+	return SelectionSpec{
+		share: share, root: root, rules: rules, encoded: encoded,
+		digest: SelectionSpecDigest(digest),
+	}, nil
 }
 
-func (request CanonicalSelectionRequest) Bytes() []byte { return slices.Clone(request.encoded) }
+func (selection SelectionSpec) ShareInstance() catalog.ShareInstance { return selection.share }
+func (selection SelectionSpec) SyntheticRoot() catalog.DirectoryID   { return selection.root }
+func (selection SelectionSpec) SelectionRules() SelectionRules       { return selection.rules }
+func (selection SelectionSpec) CanonicalBytes() []byte               { return slices.Clone(selection.encoded) }
+func (selection SelectionSpec) Bytes() []byte                        { return selection.CanonicalBytes() }
+func (selection SelectionSpec) Digest() SelectionSpecDigest          { return selection.digest }
+func (selection SelectionSpec) IsZero() bool {
+	if selection.share.IsZero() || selection.root.IsZero() || !selection.rules.validSnapshot() ||
+		selection.digest.IsZero() {
+		return true
+	}
+	rebuilt, err := NewSelectionSpec(selection.share, selection.root, selection.rules)
+	return err != nil || !bytes.Equal(selection.encoded, rebuilt.encoded) || selection.digest != rebuilt.digest
+}
 
 func appendCanonicalCount(destination []byte, count int) []byte {
 	return appendCanonicalUint64Count(destination, uint64(count))

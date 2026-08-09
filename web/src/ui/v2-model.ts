@@ -1,22 +1,8 @@
-import type { V2OutputCapabilities, V2OutputIntent } from './v2-output'
+import type { V2OutputPresentationSnapshot } from './v2-output'
+import type { V2RetainedReceiveOperation } from './v2-receive-runtime'
 
-export type V2ReceiverPhase =
-  | 'awaiting-key'
-  | 'joining'
-  | 'browsing'
-  | 'acquiring-output'
-  | 'discovering'
-  | 'transferring'
-  | 'completed'
-  | 'completed-errors'
-  | 'paused'
-  | 'pausing'
-  | 'resuming'
-  | 'discarding'
-  | 'discarded'
-  | 'retry-ready'
-  | 'needs-attention'
-  | 'failed'
+/** Shell navigation is separate from the receive lifecycle owned by W2-E. */
+export type V2ReceiverPhase = 'awaiting-key' | 'joining' | 'browsing' | 'failed'
 
 export interface V2BrowseRow {
   readonly id: string
@@ -31,22 +17,6 @@ export interface V2Breadcrumb {
   readonly name: string
 }
 
-export type V2PausedTaskState =
-  | 'ready'
-  | 'resuming'
-  | 'discarding'
-  | 'busy'
-  | 'needs-attention'
-
-export interface V2PausedTaskSnapshot {
-  readonly id: string
-  readonly backend: string
-  readonly format: 'directory' | 'zip'
-  readonly completedFileCount: number
-  readonly authorizedForCurrentShare: boolean
-  readonly state: V2PausedTaskState
-}
-
 export interface V2ReceiverProgress {
   readonly discoveredFiles: number
   readonly discoveredBytes: bigint
@@ -58,7 +28,6 @@ export interface V2ReceiverProgress {
   readonly contentLanes: number
   readonly discovery: 'open' | 'complete' | 'failed'
   readonly failedDirectories: number
-  readonly partial: boolean
   readonly transferJobId: string
   readonly outputSessionId?: string
 }
@@ -98,6 +67,23 @@ export type V2PreviewSnapshot =
       readonly message: string
     }
 
+export type V2RetainedReceiveInventorySnapshot =
+  | Readonly<{
+      kind: 'loading'
+      operations: readonly V2RetainedReceiveOperation[]
+      error: null
+    }>
+  | Readonly<{
+      kind: 'ready'
+      operations: readonly V2RetainedReceiveOperation[]
+      error: null
+    }>
+  | Readonly<{
+      kind: 'failed'
+      operations: readonly V2RetainedReceiveOperation[]
+      error: string
+    }>
+
 export interface V2ReceiverSnapshot {
   readonly phase: V2ReceiverPhase
   readonly status: string
@@ -110,16 +96,18 @@ export interface V2ReceiverSnapshot {
   readonly omittedCount: bigint
   readonly selectedVisibleFiles: number
   readonly selectedVisibleBytes: bigint
-  readonly selectionTotalKnown: boolean
-  readonly outputCapabilities: V2OutputCapabilities
-  readonly outputIntent: V2OutputIntent
-  readonly canStart: boolean
   readonly directoryRetryable: boolean
   readonly progress: V2ReceiverProgress
-  readonly downloadT0Milliseconds?: number
   readonly preview: V2PreviewSnapshot
-  readonly pausedTasks: readonly V2PausedTaskSnapshot[]
+  readonly output: V2OutputPresentationSnapshot
+  readonly retained: V2RetainedReceiveInventorySnapshot
 }
+
+export const EMPTY_V2_RETAINED_INVENTORY: V2RetainedReceiveInventorySnapshot = Object.freeze({
+  kind: 'loading',
+  operations: Object.freeze([]),
+  error: null,
+})
 
 export const EMPTY_V2_PROGRESS: V2ReceiverProgress = Object.freeze({
   discoveredFiles: 0,
@@ -132,7 +120,6 @@ export const EMPTY_V2_PROGRESS: V2ReceiverProgress = Object.freeze({
   contentLanes: 0,
   discovery: 'open',
   failedDirectories: 0,
-  partial: false,
   transferJobId: '',
 })
 

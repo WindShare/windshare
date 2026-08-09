@@ -10,10 +10,13 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestOpenFailsClosedAtEveryNamespaceBoundary(t *testing.T) {
-	for _, blocked := range []string{ControlDirectory, CheckpointDirectory, LeasesDirectory, IntentsDirectory} {
+	for _, blocked := range []string{
+		ControlDirectory, CheckpointDirectory, LeasesDirectory, LookupDirectory, OperationsDirectory,
+	} {
 		t.Run(blocked, func(t *testing.T) {
 			root := newMemoryDirectory()
 			config, _ := certifiedFixture(t, root, checkpointmodel.CallerProvidedContainer, 0x62)
@@ -54,17 +57,25 @@ func TestOpenFailsClosedAtEveryNamespaceBoundary(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer namespace.Close()
-			lease, err := namespace.AcquireIntent(intent)
+			lease, err := namespace.AcquireOperation(
+				intent.intent.OperationID(), intent.intent.Digest(), intent.intent.BindingDigest(),
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer lease.Close()
-			intentDirectory, err := lease.intents.CreateDirectory(intentNamespaceName(intent), true)
+			operationDirectory, err := lease.operations.CreateDirectory(
+				operationNamespaceName(intent.intent.OperationID()), true,
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			writeMemoryFile(t, intentDirectory, blocked, []byte("regular file blocks directory authority"))
-			if err := intentDirectory.Close(); err != nil {
+			checkpoints, err := operationDirectory.CreateDirectory(CheckpointsDirectory, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeMemoryFile(t, checkpoints, blocked, []byte("regular file blocks directory authority"))
+			if err := errors.Join(checkpoints.Close(), operationDirectory.Close()); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := lease.OpenOrCreateRepository(); err == nil {
@@ -73,7 +84,7 @@ func TestOpenFailsClosedAtEveryNamespaceBoundary(t *testing.T) {
 		})
 	}
 
-	t.Run("unknown intent child", func(t *testing.T) {
+	t.Run("unknown operation child", func(t *testing.T) {
 		root := newMemoryDirectory()
 		config, intent := certifiedFixture(t, root, checkpointmodel.CallerProvidedContainer, 0x73)
 		namespace, err := Initialize(config)
@@ -81,29 +92,35 @@ func TestOpenFailsClosedAtEveryNamespaceBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer namespace.Close()
-		lease, err := namespace.AcquireIntent(intent)
+		lease, err := namespace.AcquireOperation(
+			intent.intent.OperationID(), intent.intent.Digest(), intent.intent.BindingDigest(),
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer lease.Close()
-		intentDirectory, err := lease.intents.CreateDirectory(intentNamespaceName(intent), true)
+		operationDirectory, err := lease.operations.CreateDirectory(
+			operationNamespaceName(intent.intent.OperationID()), true,
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		writeMemoryFile(t, intentDirectory, "foreign-entry", []byte("preserve"))
-		if err := intentDirectory.Close(); err != nil {
+		writeMemoryFile(t, operationDirectory, "foreign-entry", []byte("preserve"))
+		if err := operationDirectory.Close(); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := lease.OpenOrCreateRepository(); errorCode(err) != ErrorUnsafeInstall {
-			t.Fatalf("repository accepted unknown intent child: %v", err)
+			t.Fatalf("repository accepted unknown operation child: %v", err)
 		}
-		intentDirectory, err = lease.intents.OpenDirectory(intentNamespaceName(intent), true)
+		operationDirectory, err = lease.operations.OpenDirectory(
+			operationNamespaceName(intent.intent.OperationID()), true,
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer intentDirectory.Close()
-		if encoded, err := ReadFile(intentDirectory, "foreign-entry"); err != nil || string(encoded) != "preserve" {
-			t.Fatalf("unknown intent child was mutated: %q, %v", encoded, err)
+		defer operationDirectory.Close()
+		if encoded, err := ReadFile(operationDirectory, "foreign-entry"); err != nil || string(encoded) != "preserve" {
+			t.Fatalf("unknown operation child was mutated: %q, %v", encoded, err)
 		}
 	})
 }
@@ -275,16 +292,20 @@ func TestOwnershipBootstrapResumesExactDeterministicCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ownershipDirectory, err := openOrCreateDirectory(checkpointRoot, OwnershipDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
 	encoded, err := checkpointmodel.EncodeOwnership(config.Ownership)
 	if err != nil {
 		t.Fatal(err)
 	}
 	candidate := TemporaryName(OwnershipFile, encoded, 0)
-	writeMemoryFile(t, checkpointRoot, candidate, encoded)
+	writeMemoryFile(t, ownershipDirectory, candidate, encoded)
 	duplicateCandidate := TemporaryName(OwnershipFile, encoded, 1)
-	writeMemoryFile(t, checkpointRoot, duplicateCandidate, encoded)
+	writeMemoryFile(t, ownershipDirectory, duplicateCandidate, encoded)
 
-	status, err := inspectOwnership(checkpointRoot, config.Ownership)
+	status, err := inspectOwnership(ownershipDirectory, config.Ownership)
 	if err != nil || status != OwnershipRecoverable {
 		t.Fatalf("candidate ownership status = %d, %v", status, err)
 	}
@@ -295,14 +316,14 @@ func TestOwnershipBootstrapResumesExactDeterministicCandidate(t *testing.T) {
 	if err := namespace.Close(); err != nil {
 		t.Fatal(err)
 	}
-	status, err = inspectOwnership(checkpointRoot, config.Ownership)
+	status, err = inspectOwnership(ownershipDirectory, config.Ownership)
 	if err != nil || status != OwnershipMatched {
 		t.Fatalf("resumed ownership status = %d, %v", status, err)
 	}
-	if _, err := ReadFile(checkpointRoot, candidate); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := ReadFile(ownershipDirectory, candidate); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("resumed ownership retained candidate: %v", err)
 	}
-	if _, err := ReadFile(checkpointRoot, duplicateCandidate); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := ReadFile(ownershipDirectory, duplicateCandidate); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("resumed ownership retained duplicate candidate: %v", err)
 	}
 }
@@ -410,13 +431,10 @@ func TestDirectoryCreationPreservesCollisionAndFailureBoundaries(t *testing.T) {
 
 func TestOwnershipMarkerRejectsAmbiguousInstallCuts(t *testing.T) {
 	failure := errors.New("marker operation failed")
-	backend, err := transfer.NewOutputBackendID("checkpointstore-test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
-		Backend: backend, Certification: checkpointmodel.CertificationWindowsNTFSProcessRestart,
-		RootIdentity:        bytes.Repeat([]byte{0x81}, sha256.Size),
+		Materializer:        checkpointmodel.MaterializerNativeTree,
+		Certification:       checkpointmodel.CertificationWindowsNTFSProcessRestart,
+		AuthorityRef:        bytes.Repeat([]byte{0x81}, receivecontract.AuthorityRefBytes),
 		RootOpenDisposition: checkpointmodel.CallerProvidedContainer,
 	})
 	if err != nil {

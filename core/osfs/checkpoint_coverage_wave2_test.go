@@ -2,188 +2,109 @@ package osfs
 
 import (
 	"bytes"
-	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-func wave2CheckpointSpec() FileCheckpointSpec {
-	var digest transfer.TransferIntentDigest
-	digest[0] = 1
+func wave2CheckpointSpec(t *testing.T) FileCheckpointSpec {
+	t.Helper()
+	operation, _ := receivecontract.OperationIDFromBytes(bytes.Repeat([]byte{0x21}, receivecontract.StableIdentityBytes))
+	intent, _ := transfer.ReceiveIntentDigestFromBytes(bytes.Repeat([]byte{0x22}, transfer.ReceiveIntentDigestBytes))
+	binding, _ := receivecontract.BindingDigestFromBytes(bytes.Repeat([]byte{0x23}, 32))
+	authority, _ := receivecontract.AuthorityRefFromBytes(bytes.Repeat([]byte{0x24}, receivecontract.AuthorityRefBytes))
 	var fileID catalog.FileID
-	fileID[0] = 2
 	var revision content.FileRevision
-	revision[0] = 3
+	fileID[0], revision[0] = 0x25, 0x26
 	return FileCheckpointSpec{
-		TransferIntentDigest: digest,
-		FileID:               fileID,
-		FileRevision:         revision,
-		CanonicalPath:        "folder/file.bin",
-		ExactSize:            64,
-		BackendID:            "test/native",
-		RootIdentity:         bytes.Repeat([]byte{4}, 32),
-		OwnedOutputObject:    bytes.Repeat([]byte{5}, 32),
-		StateGeneration:      1,
-		CheckpointGeneration: 1,
-		VerifiedRanges:       []FileCheckpointRange{{Offset: 0, End: 16}, {Offset: 32, End: 64}},
-		Phase:                FileCheckpointPhaseActive,
-		CommitState:          FileCheckpointCommitCandidate,
+		OperationID: operation, ReceiveIntentDigest: intent,
+		MaterializationBindingDigest: binding, FileID: fileID, FileRevision: revision,
+		CanonicalPath: "folder/file.bin", ExactSize: 8,
+		MaterializerKind: FileCheckpointMaterializerNativeTree,
+		AuthorityRef:     authority.Bytes(), OwnedObjectID: bytes.Repeat([]byte{0x27}, 32),
+		StateGeneration: 2, CheckpointGeneration: 1,
+		VerifiedRanges: []FileCheckpointRange{{Offset: 0, End: 4}},
+		Phase:          FileCheckpointActive, CommitState: FileCheckpointVerified,
 	}
 }
 
-func TestFileCheckpointFacadeRoundTripAndAccessors(t *testing.T) {
-	candidate, err := NewFileCheckpointV1(wave2CheckpointSpec())
+func TestFileCheckpointV2PublicBoundaryRoundTripsStableAuthority(t *testing.T) {
+	spec := wave2CheckpointSpec(t)
+	checkpoint, err := NewFileCheckpointV2(spec)
 	if err != nil {
-		t.Fatalf("construct checkpoint: %v", err)
+		t.Fatal(err)
 	}
-	if !candidate.Valid() || candidate.SchemaVersion() != FileCheckpointV1SchemaVersion ||
-		candidate.OwnershipMarker() != FileCheckpointOwnershipMarker ||
-		candidate.Namespace() != FileCheckpointNamespace {
-		t.Fatal("candidate does not expose the canonical V1 contract")
+	if !checkpoint.Valid() || checkpoint.SchemaVersion() != FileCheckpointV2SchemaVersion ||
+		checkpoint.OwnershipMarker() != FileCheckpointOwnershipMarker ||
+		checkpoint.Namespace() != FileCheckpointNamespace ||
+		checkpoint.OperationID() != spec.OperationID ||
+		checkpoint.ReceiveIntentDigest() != spec.ReceiveIntentDigest ||
+		checkpoint.MaterializationBindingDigest() != spec.MaterializationBindingDigest ||
+		checkpoint.FileID() != spec.FileID || checkpoint.FileRevision() != spec.FileRevision ||
+		checkpoint.CanonicalPath() != spec.CanonicalPath || checkpoint.ExactSize() != spec.ExactSize ||
+		checkpoint.MaterializerKind() != spec.MaterializerKind ||
+		checkpoint.OwnedObjectID().IsZero() || checkpoint.RecordID().IsZero() ||
+		checkpoint.Checksum().IsZero() || checkpoint.StateGeneration() != 2 ||
+		checkpoint.CheckpointGeneration() != 1 ||
+		checkpoint.VerifiedRanges()[0] != spec.VerifiedRanges[0] ||
+		checkpoint.Phase() != FileCheckpointActive ||
+		checkpoint.CommitState() != FileCheckpointVerified {
+		t.Fatalf("checkpoint accessors lost v2 authority: %+v", checkpoint)
 	}
-	if candidate.RecordID().IsZero() || candidate.RootIdentity().IsZero() ||
-		candidate.OwnedOutputObject().IsZero() || candidate.Checksum().IsZero() {
-		t.Fatal("checkpoint identities were not derived")
-	}
-	if candidate.TransferIntentDigest().IsZero() || candidate.FileID().IsZero() ||
-		candidate.FileRevision().IsZero() || candidate.CanonicalPath() != "folder/file.bin" ||
-		candidate.ExactSize() != 64 || candidate.BackendID() != transfer.OutputBackendID("test/native") ||
-		candidate.StateGeneration() != 1 || candidate.CheckpointGeneration() != 1 ||
-		candidate.Phase() != FileCheckpointPhaseActive ||
-		candidate.CommitState() != FileCheckpointCommitCandidate {
-		t.Fatal("checkpoint accessors changed the canonical binding")
-	}
-	ranges := candidate.VerifiedRanges()
-	if len(ranges) != 2 || ranges[0].Length() != 16 || ranges[1].Length() != 32 {
-		t.Fatalf("ranges = %+v", ranges)
-	}
-	ranges[0].End = 1
-	if candidate.VerifiedRanges()[0].End != 16 {
-		t.Fatal("range accessor leaked mutable storage")
-	}
-
-	encoded, err := EncodeFileCheckpointV1(candidate)
+	encoded, err := EncodeFileCheckpointV2(checkpoint)
 	if err != nil {
-		t.Fatalf("encode: %v", err)
+		t.Fatal(err)
 	}
-	decoded, err := DecodeFileCheckpointV1(encoded)
-	if err != nil || candidate.RecordID() != decoded.RecordID() ||
-		!bytes.Equal(candidate.CanonicalBytes(), decoded.CanonicalBytes()) {
-		t.Fatalf("decode = %v, record IDs = (%x, %x)", err, candidate.RecordID(), decoded.RecordID())
+	restored, err := DecodeFileCheckpointV2(encoded)
+	restoredEncoded, encodeErr := EncodeFileCheckpointV2(restored)
+	if err != nil || encodeErr != nil || !bytes.Equal(restoredEncoded, encoded) {
+		t.Fatalf("checkpoint round trip = %v", err)
 	}
 	tampered := append([]byte(nil), encoded...)
 	tampered[len(tampered)-1] ^= 1
-	if _, err := DecodeFileCheckpointV1(tampered); !errors.Is(err, ErrFileCheckpointChecksum) {
+	if _, err := DecodeFileCheckpointV2(tampered); !errors.Is(err, ErrFileCheckpointChecksum) {
 		t.Fatalf("tampered checkpoint error = %v", err)
 	}
-	if _, err := DecodeFileCheckpointV1(nil); !errors.Is(err, ErrInvalidFileCheckpoint) {
-		t.Fatalf("empty decode error = %v", err)
+	if _, err := DecodeFileCheckpointV2(nil); !errors.Is(err, ErrInvalidFileCheckpoint) {
+		t.Fatalf("empty checkpoint error = %v", err)
 	}
-	if _, err := EncodeFileCheckpointV1(FileCheckpointV1{}); !errors.Is(err, ErrInvalidFileCheckpoint) {
-		t.Fatalf("zero checkpoint encode error = %v", err)
-	}
-	if (FileCheckpointV1{}).Valid() || (FileCheckpointV1{}).CanonicalBytes() != nil {
-		t.Fatal("zero checkpoint was projected as valid")
+	if _, err := EncodeFileCheckpointV2(FileCheckpointV2{}); !errors.Is(err, ErrInvalidFileCheckpoint) {
+		t.Fatalf("zero checkpoint error = %v", err)
 	}
 }
 
-func TestFileCheckpointFacadeOwnershipAndEnums(t *testing.T) {
+func TestFileCheckpointOwnershipUsesMaterializerAndOpaqueAuthority(t *testing.T) {
+	authority := bytes.Repeat([]byte{0x31}, receivecontract.AuthorityRefBytes)
 	ownership, err := NewFileCheckpointOwnership(FileCheckpointOwnershipSpec{
-		BackendID:           "test/native",
+		Materializer:        FileCheckpointMaterializerNativeTree,
 		Certification:       FileCheckpointCertificationWindowsNTFSProcessRestart,
-		RootIdentity:        bytes.Repeat([]byte{9}, 32),
+		AuthorityRef:        authority,
 		RootOpenDisposition: FileCheckpointCallerProvidedContainer,
 	})
-	if err != nil || !ownership.Valid() ||
-		ownership.Certification() != FileCheckpointCertificationWindowsNTFSProcessRestart ||
-		ownership.RootOpenDisposition() != FileCheckpointCallerProvidedContainer {
-		t.Fatalf("ownership = %+v, %v", ownership, err)
-	}
-	ownershipBytes, err := EncodeFileCheckpointOwnership(ownership)
 	if err != nil {
 		t.Fatal(err)
 	}
-	decodedOwnership, err := DecodeFileCheckpointOwnership(ownershipBytes)
-	if err != nil || !bytes.Equal(ownership.CanonicalBytes(), decodedOwnership.CanonicalBytes()) {
-		t.Fatalf("ownership round trip = %+v, %v", decodedOwnership, err)
-	}
-	foreignOwnership, err := NewFileCheckpointOwnership(FileCheckpointOwnershipSpec{
-		BackendID:           "test/native",
-		Certification:       FileCheckpointCertificationWindowsNTFSProcessRestart,
-		RootIdentity:        bytes.Repeat([]byte{9}, 32),
-		RootOpenDisposition: FileCheckpointAuthorityCreatedRoot,
-	})
-	if err != nil || bytes.Equal(ownership.CanonicalBytes(), foreignOwnership.CanonicalBytes()) {
-		t.Fatal("ownership omitted the certified root disposition")
-	}
-	ownershipBytes[len(ownershipBytes)-1] ^= 1
-	if _, err := DecodeFileCheckpointOwnership(ownershipBytes); !errors.Is(err, ErrFileCheckpointOwnershipChecksum) {
-		t.Fatalf("ownership checksum error = %v", err)
-	}
-	if _, err := NewFileCheckpointOwnership(FileCheckpointOwnershipSpec{
-		BackendID:           "test/native",
-		Certification:       "future-certification",
-		RootIdentity:        bytes.Repeat([]byte{9}, 32),
-		RootOpenDisposition: FileCheckpointCallerProvidedContainer,
-	}); !errors.Is(err, ErrFileCheckpointOwnership) {
-		t.Fatalf("unknown certification error = %v", err)
-	}
-	for _, phase := range []FileCheckpointPhase{FileCheckpointPhaseReserved, FileCheckpointPhaseRetired} {
-		if !phase.Valid() {
-			t.Fatalf("phase %d reported invalid", phase)
-		}
-	}
-	if FileCheckpointPhase(0).Valid() || FileCheckpointPhase(99).Valid() ||
-		FileCheckpointCommitState(0).Valid() || FileCheckpointCommitState(99).Valid() {
-		t.Fatal("invalid phase/commit state reported valid")
-	}
-}
-
-func TestFileCheckpointFacadeCleanerProjectionAndOwnership(t *testing.T) {
-	fixture := testoutputroot.New(t)
-	if err := os.Mkdir(fixture.RootPath, 0o700); err != nil {
+	encoded, err := EncodeFileCheckpointOwnership(ownership)
+	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := CleanLegacyResumeState(
-		context.Background(), FilesystemResumeRoot{RootPath: fixture.RootPath},
-	)
-	if err != nil || !report.Complete || report.NeedsAttention() {
-		t.Fatalf("cleanup report = %+v, %v", report, err)
+	restored, err := DecodeFileCheckpointOwnership(encoded)
+	if err != nil || !restored.Valid() ||
+		restored.MaterializerKind() != FileCheckpointMaterializerNativeTree ||
+		restored.Certification() != FileCheckpointCertificationWindowsNTFSProcessRestart ||
+		!bytes.Equal(restored.AuthorityRef().Bytes(), authority) ||
+		restored.RootOpenDisposition() != FileCheckpointCallerProvidedContainer {
+		t.Fatalf("ownership round trip = (%+v, %v)", restored, err)
 	}
-	second, err := CleanLegacyResumeState(
-		context.Background(), FilesystemResumeRoot{RootPath: fixture.RootPath},
-	)
-	if err != nil || !second.Complete || second.Resumed {
-		t.Fatalf("rerun report = %+v, %v", second, err)
+	encoded[len(encoded)-1] ^= 1
+	if _, err := DecodeFileCheckpointOwnership(encoded); !errors.Is(err, ErrFileCheckpointOwnershipChecksum) {
+		t.Fatalf("tampered ownership error = %v", err)
 	}
-
-	unknownFixture := testoutputroot.New(t)
-	if err := os.Mkdir(unknownFixture.RootPath, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	foreign := filepath.Join(unknownFixture.RootPath, ".wsresume-output-foreign.journal")
-	if err := os.WriteFile(foreign, []byte("foreign"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	attention, err := CleanLegacyResumeState(
-		context.Background(), FilesystemResumeRoot{RootPath: unknownFixture.RootPath},
-	)
-	if err != nil || !attention.NeedsAttention() || attention.Status != CheckpointCleanupStatusNeedsAttention {
-		t.Fatalf("unknown owner report = %+v, %v", attention, err)
-	}
-	if _, err := os.Stat(foreign); err != nil {
-		t.Fatalf("unowned root entry was mutated: %v", err)
-	}
-	if _, err := CleanLegacyResumeState(
-		context.Background(), FilesystemResumeRoot{RootPath: "relative"},
-	); err == nil || !errors.Is(err, ErrCheckpointCleanerOwnership) {
-		t.Fatalf("relative root error = %v", err)
+	if _, err := NewFileCheckpointOwnership(FileCheckpointOwnershipSpec{}); !errors.Is(err, ErrFileCheckpointOwnership) {
+		t.Fatalf("zero ownership error = %v", err)
 	}
 }

@@ -9,11 +9,49 @@ import (
 	"github.com/windshare/windshare/core/transfer/fault"
 )
 
+type capturedTreeLifecycle struct {
+	kind     transfer.DirectTreeSettlementKind
+	outcome  transfer.DirectTreeOutcome
+	snapshot TreeSettlementSnapshot
+}
+
+func (lifecycle *capturedTreeLifecycle) RecordTreeSettlement(
+	_ context.Context,
+	kind transfer.DirectTreeSettlementKind,
+	outcome transfer.DirectTreeOutcome,
+	snapshot TreeSettlementSnapshot,
+) error {
+	lifecycle.kind = kind
+	lifecycle.outcome = outcome
+	lifecycle.snapshot = snapshot
+	return nil
+}
+
+func TestPauseLifecycleSnapshotDoesNotMisclassifyResumableFiles(t *testing.T) {
+	recorder := &capturedTreeLifecycle{}
+	fixture := newTestFixture(t, func(config *Config) { config.Lifecycle = recorder })
+	ctx := context.Background()
+	root := fixture.admitRoot(ctx)
+	if _, err := fixture.session.BeginFile(ctx, fixture.outputFile(root, 119, "resumable.bin")); err != nil {
+		t.Fatal(err)
+	}
+	settlement, err := fixture.session.PauseTree(ctx, transfer.JobPauseInterrupted)
+	if err != nil || settlement.Kind() != transfer.DirectTreeSettlementResumable {
+		t.Fatalf("pause settlement=%v err=%v", settlement.Kind(), err)
+	}
+	if recorder.kind != transfer.DirectTreeSettlementResumable || recorder.outcome != 0 ||
+		recorder.snapshot.SuccessCount != 0 || recorder.snapshot.FailureCount != 0 ||
+		len(recorder.snapshot.FileSettlements) != 1 ||
+		recorder.snapshot.FileSettlements[0].Kind() != transfer.FilePaused {
+		t.Fatalf("durable pause snapshot = kind %d outcome %d snapshot %+v", recorder.kind, recorder.outcome, recorder.snapshot)
+	}
+}
+
 func TestPauseClosesGateDrainsWriteAndSettlesActiveFileOnce(t *testing.T) {
 	traceDraining := make(chan struct{}, 1)
 	fixture := newTestFixture(t, func(config *Config) {
 		config.Trace = TraceSinkFunc(func(event TraceEvent) {
-			if event.Operation == OperationPauseJob && event.Decision == TraceDraining {
+			if event.Operation == OperationPauseTree && event.Decision == TraceDraining {
 				select {
 				case traceDraining <- struct{}{}:
 				default:
@@ -41,12 +79,12 @@ func TestPauseClosesGateDrainsWriteAndSettlesActiveFileOnce(t *testing.T) {
 	go func() { writeResult <- transaction.WriteRange(ctx, 0, []byte{1}) }()
 	mustSignal(t, writeStarted)
 	type pauseResult struct {
-		settlement transfer.JobSettlement
+		settlement transfer.DirectTreeSettlement
 		err        error
 	}
 	paused := make(chan pauseResult, 1)
 	go func() {
-		settlement, err := fixture.session.PauseJob(ctx, transfer.JobPauseInterrupted)
+		settlement, err := fixture.session.PauseTree(ctx, transfer.JobPauseInterrupted)
 		paused <- pauseResult{settlement: settlement, err: err}
 	}()
 	waitForGateCloseRequest(t, &fixture.session.gate)
@@ -68,7 +106,7 @@ func TestPauseClosesGateDrainsWriteAndSettlesActiveFileOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := mustResult(t, paused)
-	if result.err != nil || result.settlement.Kind() != transfer.JobPaused {
+	if result.err != nil || result.settlement.Kind() != transfer.DirectTreeSettlementResumable {
 		t.Fatalf("pause settlement=%v err=%v", result.settlement.Kind(), result.err)
 	}
 	executor.mu.Lock()
@@ -80,8 +118,8 @@ func TestPauseClosesGateDrainsWriteAndSettlesActiveFileOnce(t *testing.T) {
 	if pauseCalls != 1 || resourceCalls != 1 {
 		t.Fatalf("pause calls=%d resources=%d", pauseCalls, resourceCalls)
 	}
-	cached, err := fixture.session.PauseJob(ctx, transfer.JobPauseInterrupted)
-	if err != nil || cached.Kind() != transfer.JobPaused {
+	cached, err := fixture.session.PauseTree(ctx, transfer.JobPauseInterrupted)
+	if err != nil || cached.Kind() != transfer.DirectTreeSettlementResumable {
 		t.Fatalf("cached pause=%v err=%v", cached.Kind(), err)
 	}
 	fixture.resources.mu.Lock()
@@ -90,7 +128,7 @@ func TestPauseClosesGateDrainsWriteAndSettlesActiveFileOnce(t *testing.T) {
 	if resourceCalls != 1 {
 		t.Fatalf("cached pause released resources again: %d", resourceCalls)
 	}
-	if _, err := fixture.session.CompleteJob(ctx, transfer.JobSucceeded); !errors.Is(err, ErrConflictingSettlement) {
+	if _, err := fixture.session.FinalizeTree(ctx, transfer.DirectTreeOutcomePublished); !errors.Is(err, ErrConflictingSettlement) {
 		t.Fatalf("conflicting complete error=%v", err)
 	}
 }
@@ -111,19 +149,19 @@ func TestPauseInterruptsWaitingFinalizationAtNoMutationCut(t *testing.T) {
 	waitForDirectoryState(t, fixture.session, root, directorySettling)
 
 	type pauseResult struct {
-		settlement transfer.JobSettlement
+		settlement transfer.DirectTreeSettlement
 		err        error
 	}
 	paused := make(chan pauseResult, 1)
 	go func() {
-		settlement, err := fixture.session.PauseJob(ctx, transfer.JobPauseInterrupted)
+		settlement, err := fixture.session.PauseTree(ctx, transfer.JobPauseInterrupted)
 		paused <- pauseResult{settlement: settlement, err: err}
 	}()
 	if err := mustResult(t, finalized); !errors.Is(err, ErrSessionClosed) {
 		t.Fatalf("waiting finalization close error=%v", err)
 	}
 	result := mustResult(t, paused)
-	if result.err != nil || result.settlement.Kind() != transfer.JobPaused {
+	if result.err != nil || result.settlement.Kind() != transfer.DirectTreeSettlementResumable {
 		t.Fatalf("pause settlement=%v err=%v", result.settlement.Kind(), result.err)
 	}
 	_, finalizeCalls := fixture.directories.counts()
@@ -154,12 +192,12 @@ func TestCompleteDrainsInFlightWriteBeforeStableFallback(t *testing.T) {
 	mustSignal(t, writeStarted)
 
 	type closeResult struct {
-		settlement transfer.JobSettlement
+		settlement transfer.DirectTreeSettlement
 		err        error
 	}
 	closed := make(chan closeResult, 1)
 	go func() {
-		settlement, err := fixture.session.CompleteJob(ctx, transfer.JobSucceeded)
+		settlement, err := fixture.session.FinalizeTree(ctx, transfer.DirectTreeOutcomePublished)
 		closed <- closeResult{settlement: settlement, err: err}
 	}()
 	waitForGateCloseRequest(t, &fixture.session.gate)
@@ -179,7 +217,7 @@ func TestCompleteDrainsInFlightWriteBeforeStableFallback(t *testing.T) {
 	}
 	result := mustResult(t, closed)
 	if !errors.Is(result.err, ErrConflictingSettlement) ||
-		result.settlement.Kind() != transfer.JobPausedNeedsAttention {
+		result.settlement.Kind() != transfer.DirectTreeSettlementNeedsAttention {
 		t.Fatalf("complete fallback settlement=%v err=%v", result.settlement.Kind(), result.err)
 	}
 	executor.mu.Lock()
@@ -200,12 +238,12 @@ func TestCompleteRequiresSettledRootAndCachesClosedResult(t *testing.T) {
 	if _, err := fixture.session.FinalizeDirectory(ctx, root); err != nil {
 		t.Fatal(err)
 	}
-	settlement, err := fixture.session.CompleteJob(ctx, transfer.JobSucceeded)
-	if err != nil || settlement.Kind() != transfer.JobClosed {
+	settlement, err := fixture.session.FinalizeTree(ctx, transfer.DirectTreeOutcomePublished)
+	if err != nil || settlement.Kind() != transfer.DirectTreeSettlementPublished {
 		t.Fatalf("complete settlement=%v err=%v", settlement.Kind(), err)
 	}
-	cached, err := fixture.session.CompleteJob(ctx, transfer.JobSucceeded)
-	if err != nil || cached.Kind() != transfer.JobClosed {
+	cached, err := fixture.session.FinalizeTree(ctx, transfer.DirectTreeOutcomePublished)
+	if err != nil || cached.Kind() != transfer.DirectTreeSettlementPublished {
 		t.Fatalf("cached complete=%v err=%v", cached.Kind(), err)
 	}
 	fixture.resources.mu.Lock()
@@ -230,9 +268,9 @@ func TestCompleteRequiresSettledRootAndCachesClosedResult(t *testing.T) {
 func TestPublishBlockedSettlementClosesNeedsAttention(t *testing.T) {
 	tests := []struct {
 		name       string
-		settleFile func(*testing.T, testFixture, transfer.OutputFile)
+		settleFile func(*testing.T, testFixture, transfer.MaterializationFile)
 	}{
-		{name: "immediate begin settlement", settleFile: func(t *testing.T, fixture testFixture, file transfer.OutputFile) {
+		{name: "immediate begin settlement", settleFile: func(t *testing.T, fixture testFixture, file transfer.MaterializationFile) {
 			fixture.files.begin = func(_ context.Context, claim FileClaim) (FileBeginObservation, error) {
 				transaction := newFakeTransaction(t, claim.File().Target)
 				settlement, err := transfer.NewVerifiedFileSettlement(
@@ -245,7 +283,7 @@ func TestPublishBlockedSettlementClosesNeedsAttention(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{name: "transaction settlement", settleFile: func(t *testing.T, fixture testFixture, file transfer.OutputFile) {
+		{name: "transaction settlement", settleFile: func(t *testing.T, fixture testFixture, file transfer.MaterializationFile) {
 			start, err := fixture.session.BeginFile(context.Background(), file)
 			if err != nil {
 				t.Fatal(err)
@@ -272,11 +310,11 @@ func TestPublishBlockedSettlementClosesNeedsAttention(t *testing.T) {
 			if _, err := fixture.session.FinalizeDirectory(context.Background(), root); err != nil {
 				t.Fatal(err)
 			}
-			settlement, err := fixture.session.CompleteJob(
+			settlement, err := fixture.session.FinalizeTree(
 				context.Background(),
-				transfer.JobCompletedWithErrors,
+				transfer.DirectTreeOutcomePartialDirectory,
 			)
-			if err != nil || settlement.Kind() != transfer.JobPausedNeedsAttention {
+			if err != nil || settlement.Kind() != transfer.DirectTreeSettlementNeedsAttention {
 				t.Fatalf("complete settlement=%v err=%v", settlement.Kind(), err)
 			}
 		})
@@ -291,8 +329,8 @@ func TestInvalidCompleteFallsBackToStablePausedNeedsAttention(t *testing.T) {
 	if _, err := fixture.session.BeginFile(ctx, file); err != nil {
 		t.Fatal(err)
 	}
-	settlement, err := fixture.session.CompleteJob(ctx, transfer.JobSucceeded)
-	if !errors.Is(err, ErrConflictingSettlement) || settlement.Kind() != transfer.JobPausedNeedsAttention {
+	settlement, err := fixture.session.FinalizeTree(ctx, transfer.DirectTreeOutcomePublished)
+	if !errors.Is(err, ErrConflictingSettlement) || settlement.Kind() != transfer.DirectTreeSettlementNeedsAttention {
 		t.Fatalf("invalid complete settlement=%v err=%v", settlement.Kind(), err)
 	}
 	executor := fixture.files.transaction()
@@ -326,11 +364,11 @@ func TestResourceReleaseFailureIsNormalizedAndCachedWithoutRawCause(t *testing.T
 	if _, err := fixture.session.FinalizeDirectory(ctx, root); err != nil {
 		t.Fatal(err)
 	}
-	settlement, err := fixture.session.CompleteJob(ctx, transfer.JobSucceeded)
-	if err == nil || settlement.Kind() != transfer.JobPausedNeedsAttention || errors.Is(err, raw) {
+	settlement, err := fixture.session.FinalizeTree(ctx, transfer.DirectTreeOutcomePublished)
+	if err == nil || settlement.Kind() != transfer.DirectTreeSettlementNeedsAttention || errors.Is(err, raw) {
 		t.Fatalf("release settlement=%v err=%v raw-retained=%v", settlement.Kind(), err, errors.Is(err, raw))
 	}
-	cached, cachedErr := fixture.session.CompleteJob(ctx, transfer.JobSucceeded)
+	cached, cachedErr := fixture.session.FinalizeTree(ctx, transfer.DirectTreeOutcomePublished)
 	if cached != settlement || cachedErr != err {
 		t.Fatalf("cached close changed settlement/error: settlement=%v/%v err=%v/%v",
 			settlement.Kind(), cached.Kind(), err, cachedErr)

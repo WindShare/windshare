@@ -1,17 +1,15 @@
 package osfs
 
 import (
-	"crypto/sha256"
-	"errors"
-
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const (
-	FileCheckpointV1SchemaVersion = checkpointmodel.SchemaVersion
+	FileCheckpointV2SchemaVersion = checkpointmodel.SchemaVersion
 	FileCheckpointOwnershipMarker = checkpointmodel.OwnershipMarker
 	FileCheckpointNamespace       = checkpointmodel.NamespaceName
 )
@@ -27,301 +25,177 @@ var (
 )
 
 type (
-	FileCheckpointRecordID [sha256.Size]byte
-	FileCheckpointRootID   [sha256.Size]byte
-	FileCheckpointObjectID [sha256.Size]byte
-	FileCheckpointChecksum [sha256.Size]byte
+	FileCheckpointRecordID            = checkpointmodel.RecordID
+	FileCheckpointObjectID            = checkpointmodel.ObjectID
+	FileCheckpointChecksum            = checkpointmodel.Checksum
+	FileCheckpointRange               = checkpointmodel.Range
+	FileCheckpointPhase               = checkpointmodel.Phase
+	FileCheckpointCommitState         = checkpointmodel.CommitState
+	FileCheckpointQuarantineReason    = checkpointmodel.QuarantineReason
+	FileCheckpointQuarantineOrigin    = checkpointmodel.QuarantineOrigin
+	FileCheckpointRetirementReason    = checkpointmodel.RetirementReason
+	FileCheckpointMaterializerKind    = checkpointmodel.MaterializerKind
+	FileCheckpointCertification       = checkpointmodel.CertificationID
+	FileCheckpointRootOpenDisposition = checkpointmodel.RootOpenDisposition
 )
 
-func (id FileCheckpointRecordID) Bytes() []byte { return append([]byte(nil), id[:]...) }
-func (id FileCheckpointRootID) Bytes() []byte   { return append([]byte(nil), id[:]...) }
-func (id FileCheckpointObjectID) Bytes() []byte { return append([]byte(nil), id[:]...) }
-func (id FileCheckpointChecksum) Bytes() []byte { return append([]byte(nil), id[:]...) }
-func (id FileCheckpointRecordID) IsZero() bool  { return id == FileCheckpointRecordID{} }
-func (id FileCheckpointRootID) IsZero() bool    { return id == FileCheckpointRootID{} }
-func (id FileCheckpointObjectID) IsZero() bool  { return id == FileCheckpointObjectID{} }
-func (id FileCheckpointChecksum) IsZero() bool  { return id == FileCheckpointChecksum{} }
-
-type FileCheckpointRange struct {
-	Offset uint64
-	End    uint64
-}
-
-func (r FileCheckpointRange) Length() uint64 {
-	if r.End <= r.Offset {
-		return 0
-	}
-	return r.End - r.Offset
-}
-
-type FileCheckpointPhase uint8
-
 const (
-	FileCheckpointPhaseReserved FileCheckpointPhase = iota + 1
-	FileCheckpointPhaseActive
-	FileCheckpointPhasePaused
-	FileCheckpointPhasePublishing
-	FileCheckpointPhasePublished
-	FileCheckpointPhaseQuarantined
-	FileCheckpointPhaseRetired
-)
+	FileCheckpointReserved    = checkpointmodel.PhaseReserved
+	FileCheckpointActive      = checkpointmodel.PhaseActive
+	FileCheckpointPaused      = checkpointmodel.PhasePaused
+	FileCheckpointPublishing  = checkpointmodel.PhasePublishing
+	FileCheckpointPublished   = checkpointmodel.PhasePublished
+	FileCheckpointRetired     = checkpointmodel.PhaseRetired
+	FileCheckpointQuarantined = checkpointmodel.PhaseQuarantined
 
-func (phase FileCheckpointPhase) Valid() bool {
-	return checkpointmodel.Phase(phase).Valid()
-}
+	FileCheckpointCandidate         = checkpointmodel.CommitCandidate
+	FileCheckpointVerified          = checkpointmodel.CommitVerified
+	FileCheckpointCommitted         = checkpointmodel.CommitPublished
+	FileCheckpointQuarantinedCommit = checkpointmodel.CommitQuarantined
 
-type FileCheckpointCommitState uint8
+	FileCheckpointMaterializerNativeTree    = checkpointmodel.MaterializerNativeTree
+	FileCheckpointMaterializerFSATree       = checkpointmodel.MaterializerFSATree
+	FileCheckpointMaterializerOriginPrivate = checkpointmodel.MaterializerOriginPrivate
+	FileCheckpointMaterializerAtomicFile    = checkpointmodel.MaterializerAtomicFile
 
-const (
-	FileCheckpointCommitCandidate FileCheckpointCommitState = iota + 1
-	FileCheckpointCommitVerified
-	FileCheckpointCommitPublished
-	FileCheckpointCommitQuarantined
-)
+	FileCheckpointCallerProvidedContainer = checkpointmodel.CallerProvidedContainer
+	FileCheckpointAuthorityCreatedRoot    = checkpointmodel.AuthorityCreatedRoot
 
-func (state FileCheckpointCommitState) Valid() bool {
-	return checkpointmodel.CommitState(state).Valid()
-}
-
-type FileCheckpointQuarantineReason uint8
-
-const (
-	FileCheckpointQuarantineAnchorMissing FileCheckpointQuarantineReason = iota + 1
-	FileCheckpointQuarantineAnchorUnsafe
-	FileCheckpointQuarantineStageMissing
-	FileCheckpointQuarantineStageMismatch
-	FileCheckpointQuarantineStageUnsafe
-	FileCheckpointQuarantineFinalMismatch
-	FileCheckpointQuarantineFinalUnsafe
-	FileCheckpointQuarantinePartialObjectCreation
-	FileCheckpointQuarantinePublicationHistory
-	FileCheckpointQuarantineMetadataMismatch
-	FileCheckpointQuarantineUpdateTemporary
-	FileCheckpointQuarantineOutputObjectDuplicate
-)
-
-type FileCheckpointQuarantineOrigin uint8
-
-const (
-	FileCheckpointOriginReserved FileCheckpointQuarantineOrigin = iota + 1
-	FileCheckpointOriginWitnessed
-	FileCheckpointOriginPublishing
-	FileCheckpointOriginPublishBlocked
-	FileCheckpointOriginPublished
-	FileCheckpointOriginRetiring
-)
-
-type FileCheckpointRetirementReason uint8
-
-const (
-	FileCheckpointRetirementPublished FileCheckpointRetirementReason = iota + 1
-	FileCheckpointRetirementIsolatedFailure
-	FileCheckpointRetirementPreObjectCollision
-	FileCheckpointRetirementInvalidatedRevision
+	FileCheckpointCertificationLinuxExt4ProcessRestart   = checkpointmodel.CertificationLinuxExt4ProcessRestart
+	FileCheckpointCertificationWindowsNTFSProcessRestart = checkpointmodel.CertificationWindowsNTFSProcessRestart
 )
 
 type FileCheckpointSpec struct {
-	OwnershipMarker      string
-	Namespace            string
-	TransferIntentDigest transfer.TransferIntentDigest
-	FileID               catalog.FileID
-	FileRevision         content.FileRevision
-	CanonicalPath        string
-	ExactSize            uint64
-	BackendID            string
-	RootIdentity         []byte
-	OwnedOutputObject    []byte
-	StateGeneration      uint64
-	CheckpointGeneration uint64
-	VerifiedRanges       []FileCheckpointRange
-	Phase                FileCheckpointPhase
-	CommitState          FileCheckpointCommitState
-	QuarantineReason     FileCheckpointQuarantineReason
-	QuarantineOrigin     FileCheckpointQuarantineOrigin
-	RetirementReason     FileCheckpointRetirementReason
+	OperationID                  receivecontract.OperationID
+	ReceiveIntentDigest          transfer.ReceiveIntentDigest
+	MaterializationBindingDigest receivecontract.BindingDigest
+	FileID                       catalog.FileID
+	FileRevision                 content.FileRevision
+	CanonicalPath                string
+	ExactSize                    uint64
+	MaterializerKind             FileCheckpointMaterializerKind
+	AuthorityRef                 []byte
+	OwnedObjectID                []byte
+	StateGeneration              uint64
+	CheckpointGeneration         uint64
+	VerifiedRanges               []FileCheckpointRange
+	Phase                        FileCheckpointPhase
+	CommitState                  FileCheckpointCommitState
+	QuarantineReason             FileCheckpointQuarantineReason
+	QuarantineOrigin             FileCheckpointQuarantineOrigin
+	RetirementReason             FileCheckpointRetirementReason
 }
 
-// FileCheckpointV1 is opaque so only checkpointmodel can construct durable
-// state or interpret its bytes.
-type FileCheckpointV1 struct {
-	record checkpointmodel.Record
-}
+// FileCheckpointV2 stays opaque so callers cannot mutate the immutable binding
+// or verified ranges after the checkpoint reducer has admitted them.
+type FileCheckpointV2 struct{ record checkpointmodel.Record }
 
-func NewFileCheckpointV1(spec FileCheckpointSpec) (FileCheckpointV1, error) {
-	ranges := make([]checkpointmodel.Range, len(spec.VerifiedRanges))
-	for index, current := range spec.VerifiedRanges {
-		ranges[index] = checkpointmodel.Range{Offset: current.Offset, End: current.End}
-	}
+func NewFileCheckpointV2(spec FileCheckpointSpec) (FileCheckpointV2, error) {
 	record, err := checkpointmodel.NewRecord(checkpointmodel.RecordSpec{
-		OwnershipMarker:      spec.OwnershipMarker,
-		Namespace:            spec.Namespace,
-		TransferIntentDigest: spec.TransferIntentDigest,
-		FileID:               spec.FileID,
-		FileRevision:         spec.FileRevision,
-		CanonicalPath:        spec.CanonicalPath,
-		ExactSize:            spec.ExactSize,
-		BackendID:            spec.BackendID,
-		RootIdentity:         spec.RootIdentity,
-		OwnedOutputObject:    spec.OwnedOutputObject,
-		StateGeneration:      spec.StateGeneration,
-		CheckpointGeneration: spec.CheckpointGeneration,
-		VerifiedRanges:       ranges,
-		Phase:                checkpointmodel.Phase(spec.Phase),
-		CommitState:          checkpointmodel.CommitState(spec.CommitState),
-		QuarantineReason:     checkpointmodel.QuarantineReason(spec.QuarantineReason),
-		QuarantineOrigin:     checkpointmodel.QuarantineOrigin(spec.QuarantineOrigin),
-		RetirementReason:     checkpointmodel.RetirementReason(spec.RetirementReason),
+		OperationID: spec.OperationID, ReceiveIntentDigest: spec.ReceiveIntentDigest,
+		MaterializationBindingDigest: spec.MaterializationBindingDigest,
+		FileID:                       spec.FileID, FileRevision: spec.FileRevision,
+		CanonicalPath: spec.CanonicalPath, ExactSize: spec.ExactSize,
+		MaterializerKind: spec.MaterializerKind, AuthorityRef: spec.AuthorityRef,
+		OwnedObjectID: spec.OwnedObjectID, StateGeneration: spec.StateGeneration,
+		CheckpointGeneration: spec.CheckpointGeneration, VerifiedRanges: spec.VerifiedRanges,
+		Phase: spec.Phase, CommitState: spec.CommitState,
+		QuarantineReason: spec.QuarantineReason, QuarantineOrigin: spec.QuarantineOrigin,
+		RetirementReason: spec.RetirementReason,
 	})
 	if err != nil {
-		return FileCheckpointV1{}, err
+		return FileCheckpointV2{}, err
 	}
-	return FileCheckpointV1{record: record}, nil
+	return FileCheckpointV2{record: record}, nil
 }
 
-func EncodeFileCheckpointV1(checkpoint FileCheckpointV1) ([]byte, error) {
+func EncodeFileCheckpointV2(checkpoint FileCheckpointV2) ([]byte, error) {
 	return checkpointmodel.EncodeRecord(checkpoint.record)
 }
 
-func DecodeFileCheckpointV1(encoded []byte) (FileCheckpointV1, error) {
+func DecodeFileCheckpointV2(encoded []byte) (FileCheckpointV2, error) {
 	record, err := checkpointmodel.DecodeRecord(encoded)
 	if err != nil {
-		return FileCheckpointV1{}, err
+		return FileCheckpointV2{}, err
 	}
-	return FileCheckpointV1{record: record}, nil
+	return FileCheckpointV2{record: record}, nil
 }
 
-func (checkpoint FileCheckpointV1) CanonicalBytes() []byte {
-	return checkpoint.record.CanonicalBytes()
-}
-
-func (checkpoint FileCheckpointV1) Valid() bool {
-	return checkpoint.record.Valid()
-}
-
-func (checkpoint FileCheckpointV1) SchemaVersion() uint8 {
-	return checkpoint.record.SchemaVersion()
-}
-
-func (checkpoint FileCheckpointV1) OwnershipMarker() string {
+func (checkpoint FileCheckpointV2) CanonicalBytes() []byte { return checkpoint.record.CanonicalBytes() }
+func (checkpoint FileCheckpointV2) Valid() bool            { return checkpoint.record.Valid() }
+func (checkpoint FileCheckpointV2) SchemaVersion() uint8   { return checkpoint.record.SchemaVersion() }
+func (checkpoint FileCheckpointV2) OwnershipMarker() string {
 	return checkpoint.record.OwnershipMarker()
 }
-
-func (checkpoint FileCheckpointV1) Namespace() string {
-	return checkpoint.record.Namespace()
+func (checkpoint FileCheckpointV2) Namespace() string { return checkpoint.record.Namespace() }
+func (checkpoint FileCheckpointV2) RecordID() FileCheckpointRecordID {
+	return checkpoint.record.RecordID()
 }
-
-func (checkpoint FileCheckpointV1) RecordID() FileCheckpointRecordID {
-	return FileCheckpointRecordID(checkpoint.record.RecordID())
+func (checkpoint FileCheckpointV2) OperationID() receivecontract.OperationID {
+	return checkpoint.record.OperationID()
 }
-
-func (checkpoint FileCheckpointV1) TransferIntentDigest() transfer.TransferIntentDigest {
-	return checkpoint.record.TransferIntentDigest()
+func (checkpoint FileCheckpointV2) ReceiveIntentDigest() transfer.ReceiveIntentDigest {
+	return checkpoint.record.ReceiveIntentDigest()
 }
-
-func (checkpoint FileCheckpointV1) FileID() catalog.FileID {
-	return checkpoint.record.FileID()
+func (checkpoint FileCheckpointV2) MaterializationBindingDigest() receivecontract.BindingDigest {
+	return checkpoint.record.MaterializationBindingDigest()
 }
-
-func (checkpoint FileCheckpointV1) FileRevision() content.FileRevision {
+func (checkpoint FileCheckpointV2) FileID() catalog.FileID { return checkpoint.record.FileID() }
+func (checkpoint FileCheckpointV2) FileRevision() content.FileRevision {
 	return checkpoint.record.FileRevision()
 }
-
-func (checkpoint FileCheckpointV1) CanonicalPath() string {
-	return checkpoint.record.CanonicalPath()
+func (checkpoint FileCheckpointV2) CanonicalPath() string { return checkpoint.record.CanonicalPath() }
+func (checkpoint FileCheckpointV2) ExactSize() uint64     { return checkpoint.record.ExactSize() }
+func (checkpoint FileCheckpointV2) MaterializerKind() FileCheckpointMaterializerKind {
+	return checkpoint.record.MaterializerKind()
 }
-
-func (checkpoint FileCheckpointV1) ExactSize() uint64 {
-	return checkpoint.record.ExactSize()
+func (checkpoint FileCheckpointV2) AuthorityRef() receivecontract.AuthorityRef {
+	return checkpoint.record.AuthorityRef()
 }
-
-func (checkpoint FileCheckpointV1) BackendID() transfer.OutputBackendID {
-	return checkpoint.record.BackendID()
+func (checkpoint FileCheckpointV2) OwnedObjectID() FileCheckpointObjectID {
+	return checkpoint.record.OwnedObjectID()
 }
-
-func (checkpoint FileCheckpointV1) RootIdentity() FileCheckpointRootID {
-	return FileCheckpointRootID(checkpoint.record.RootIdentity())
-}
-
-func (checkpoint FileCheckpointV1) OwnedOutputObject() FileCheckpointObjectID {
-	return FileCheckpointObjectID(checkpoint.record.OwnedOutputObject())
-}
-
-func (checkpoint FileCheckpointV1) StateGeneration() uint64 {
+func (checkpoint FileCheckpointV2) StateGeneration() uint64 {
 	return checkpoint.record.StateGeneration()
 }
-
-func (checkpoint FileCheckpointV1) CheckpointGeneration() uint64 {
+func (checkpoint FileCheckpointV2) CheckpointGeneration() uint64 {
 	return checkpoint.record.CheckpointGeneration()
 }
-
-func (checkpoint FileCheckpointV1) VerifiedRanges() []FileCheckpointRange {
-	ranges := checkpoint.record.VerifiedRanges()
-	result := make([]FileCheckpointRange, len(ranges))
-	for index, current := range ranges {
-		result[index] = FileCheckpointRange{Offset: current.Offset, End: current.End}
-	}
-	return result
+func (checkpoint FileCheckpointV2) VerifiedRanges() []FileCheckpointRange {
+	return checkpoint.record.VerifiedRanges()
 }
-
-func (checkpoint FileCheckpointV1) Phase() FileCheckpointPhase {
-	return FileCheckpointPhase(checkpoint.record.Phase())
+func (checkpoint FileCheckpointV2) Phase() FileCheckpointPhase {
+	return checkpoint.record.Phase()
 }
-
-func (checkpoint FileCheckpointV1) CommitState() FileCheckpointCommitState {
-	return FileCheckpointCommitState(checkpoint.record.CommitState())
+func (checkpoint FileCheckpointV2) CommitState() FileCheckpointCommitState {
+	return checkpoint.record.CommitState()
 }
-
-func (checkpoint FileCheckpointV1) QuarantineReason() FileCheckpointQuarantineReason {
-	return FileCheckpointQuarantineReason(checkpoint.record.QuarantineReason())
+func (checkpoint FileCheckpointV2) QuarantineReason() FileCheckpointQuarantineReason {
+	return checkpoint.record.QuarantineReason()
 }
-
-func (checkpoint FileCheckpointV1) QuarantineOrigin() FileCheckpointQuarantineOrigin {
-	return FileCheckpointQuarantineOrigin(checkpoint.record.QuarantineOrigin())
+func (checkpoint FileCheckpointV2) QuarantineOrigin() FileCheckpointQuarantineOrigin {
+	return checkpoint.record.QuarantineOrigin()
 }
-
-func (checkpoint FileCheckpointV1) RetirementReason() FileCheckpointRetirementReason {
-	return FileCheckpointRetirementReason(checkpoint.record.RetirementReason())
+func (checkpoint FileCheckpointV2) RetirementReason() FileCheckpointRetirementReason {
+	return checkpoint.record.RetirementReason()
 }
-
-func (checkpoint FileCheckpointV1) Checksum() FileCheckpointChecksum {
-	return FileCheckpointChecksum(checkpoint.record.Checksum())
+func (checkpoint FileCheckpointV2) Checksum() FileCheckpointChecksum {
+	return checkpoint.record.Checksum()
 }
-
-type FileCheckpointRootOpenDisposition string
-
-const (
-	FileCheckpointCallerProvidedContainer FileCheckpointRootOpenDisposition = "caller-provided-container"
-	FileCheckpointAuthorityCreatedRoot    FileCheckpointRootOpenDisposition = "authority-created-root"
-)
-
-type FileCheckpointCertification string
-
-const (
-	FileCheckpointCertificationLinuxExt4ProcessRestart   FileCheckpointCertification = "linux/ext4/process-restart/v2"
-	FileCheckpointCertificationWindowsNTFSProcessRestart FileCheckpointCertification = "windows/ntfs/process-restart/v1"
-)
 
 type FileCheckpointOwnershipSpec struct {
-	BackendID           string
+	Materializer        FileCheckpointMaterializerKind
 	Certification       FileCheckpointCertification
-	RootIdentity        []byte
+	AuthorityRef        []byte
 	RootOpenDisposition FileCheckpointRootOpenDisposition
 }
 
-type FileCheckpointOwnership struct {
-	ownership checkpointmodel.Ownership
-}
+type FileCheckpointOwnership struct{ ownership checkpointmodel.Ownership }
 
 func NewFileCheckpointOwnership(spec FileCheckpointOwnershipSpec) (FileCheckpointOwnership, error) {
-	backend, err := transfer.NewOutputBackendID(spec.BackendID)
-	if err != nil {
-		return FileCheckpointOwnership{}, errors.Join(ErrFileCheckpointOwnership, err)
-	}
 	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
-		Backend:             backend,
-		Certification:       checkpointmodel.CertificationID(spec.Certification),
-		RootIdentity:        spec.RootIdentity,
-		RootOpenDisposition: checkpointmodel.RootOpenDisposition(spec.RootOpenDisposition),
+		Materializer: spec.Materializer, Certification: spec.Certification,
+		AuthorityRef: spec.AuthorityRef, RootOpenDisposition: spec.RootOpenDisposition,
 	})
 	if err != nil {
 		return FileCheckpointOwnership{}, err
@@ -332,7 +206,6 @@ func NewFileCheckpointOwnership(spec FileCheckpointOwnershipSpec) (FileCheckpoin
 func EncodeFileCheckpointOwnership(ownership FileCheckpointOwnership) ([]byte, error) {
 	return checkpointmodel.EncodeOwnership(ownership.ownership)
 }
-
 func DecodeFileCheckpointOwnership(encoded []byte) (FileCheckpointOwnership, error) {
 	ownership, err := checkpointmodel.DecodeOwnership(encoded)
 	if err != nil {
@@ -340,27 +213,19 @@ func DecodeFileCheckpointOwnership(encoded []byte) (FileCheckpointOwnership, err
 	}
 	return FileCheckpointOwnership{ownership: ownership}, nil
 }
-
-func (ownership FileCheckpointOwnership) Valid() bool {
-	return ownership.ownership.Valid()
-}
-
+func (ownership FileCheckpointOwnership) Valid() bool { return ownership.ownership.Valid() }
 func (ownership FileCheckpointOwnership) CanonicalBytes() []byte {
 	return ownership.ownership.CanonicalBytes()
 }
-
-func (ownership FileCheckpointOwnership) BackendID() transfer.OutputBackendID {
-	return ownership.ownership.Backend()
+func (ownership FileCheckpointOwnership) MaterializerKind() FileCheckpointMaterializerKind {
+	return ownership.ownership.MaterializerKind()
 }
-
 func (ownership FileCheckpointOwnership) Certification() FileCheckpointCertification {
-	return FileCheckpointCertification(ownership.ownership.Certification())
+	return ownership.ownership.Certification()
 }
-
-func (ownership FileCheckpointOwnership) RootIdentity() FileCheckpointRootID {
-	return FileCheckpointRootID(ownership.ownership.RootIdentity())
+func (ownership FileCheckpointOwnership) AuthorityRef() receivecontract.AuthorityRef {
+	return ownership.ownership.AuthorityRef()
 }
-
 func (ownership FileCheckpointOwnership) RootOpenDisposition() FileCheckpointRootOpenDisposition {
-	return FileCheckpointRootOpenDisposition(ownership.ownership.RootOpenDisposition())
+	return ownership.ownership.RootOpenDisposition()
 }

@@ -2,19 +2,25 @@ package checkpointmodel
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"errors"
 	"testing"
 
-	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestRecordSeamOwnsCanonicalBindingAndInitialPromotion(t *testing.T) {
-	ownership, intent := recordBindingFixture(t)
-	record := initialRecordFixture(t, ownership, intent)
-	binding, err := NewBinding(ownership, intent)
+	spec := canonicalRecordSpec(t)
+	spec.CheckpointGeneration = 0
+	spec.VerifiedRanges = nil
+	record := mustCanonicalRecord(t, spec)
+	ownership := ownershipForRecord(t, spec)
+	binding, err := NewBinding(
+		ownership,
+		spec.OperationID,
+		spec.ReceiveIntentDigest,
+		spec.MaterializationBindingDigest,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +41,7 @@ func TestRecordSeamOwnsCanonicalBindingAndInitialPromotion(t *testing.T) {
 		t.Fatal(err)
 	}
 	if restoredID != record.RecordID() || !bytes.Equal(restored.CanonicalBytes(), record.CanonicalBytes()) {
-		t.Fatal("record seam changed the canonical FileCheckpointV1 image")
+		t.Fatal("record seam changed the canonical FileCheckpointV2 image")
 	}
 
 	promoted, err := PromoteInitialCandidate(restored)
@@ -58,15 +64,32 @@ func TestRecordSeamOwnsCanonicalBindingAndInitialPromotion(t *testing.T) {
 }
 
 func TestBindingRejectsIncompleteAndDifferentRepositoryIdentities(t *testing.T) {
-	ownership, intent := recordBindingFixture(t)
-	record := initialRecordFixture(t, ownership, intent)
-	if _, err := NewBinding(Ownership{}, intent); !errors.Is(err, ErrRecordBinding) {
+	spec := canonicalRecordSpec(t)
+	record := mustCanonicalRecord(t, spec)
+	ownership := ownershipForRecord(t, spec)
+	if _, err := NewBinding(
+		Ownership{}, spec.OperationID, spec.ReceiveIntentDigest, spec.MaterializationBindingDigest,
+	); !errors.Is(err, ErrRecordBinding) {
 		t.Fatalf("zero ownership binding error = %v", err)
 	}
-	if _, err := NewBinding(ownership, transfer.TransferIntentDigest{}); !errors.Is(err, ErrRecordBinding) {
+	if _, err := NewBinding(
+		ownership, receivecontract.OperationID{}, spec.ReceiveIntentDigest, spec.MaterializationBindingDigest,
+	); !errors.Is(err, ErrRecordBinding) {
+		t.Fatalf("zero operation binding error = %v", err)
+	}
+	if _, err := NewBinding(
+		ownership, spec.OperationID, transfer.ReceiveIntentDigest{}, spec.MaterializationBindingDigest,
+	); !errors.Is(err, ErrRecordBinding) {
 		t.Fatalf("zero intent binding error = %v", err)
 	}
-	binding, err := NewBinding(ownership, intent)
+	if _, err := NewBinding(
+		ownership, spec.OperationID, spec.ReceiveIntentDigest, receivecontract.BindingDigest{},
+	); !errors.Is(err, ErrRecordBinding) {
+		t.Fatalf("zero materialization binding error = %v", err)
+	}
+	binding, err := NewBinding(
+		ownership, spec.OperationID, spec.ReceiveIntentDigest, spec.MaterializationBindingDigest,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,53 +108,28 @@ func TestBindingRejectsIncompleteAndDifferentRepositoryIdentities(t *testing.T) 
 	if _, err := NewRecord(RecordSpec{}); !errors.Is(err, ErrRecordBinding) {
 		t.Fatalf("empty record error = %v", err)
 	}
+	zeroPhase := spec
+	zeroPhase.Phase = 0
+	if _, err := NewRecord(zeroPhase); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("zero checkpoint phase error = %v", err)
+	}
+	zeroCommit := spec
+	zeroCommit.CommitState = 0
+	if _, err := NewRecord(zeroCommit); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("zero checkpoint commit state error = %v", err)
+	}
 }
 
-func recordBindingFixture(t *testing.T) (Ownership, transfer.TransferIntentDigest) {
+func ownershipForRecord(t *testing.T, spec RecordSpec) Ownership {
 	t.Helper()
-	backend, err := transfer.NewOutputBackendID("checkpointmodel-test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	ownership, err := NewOwnership(OwnershipSpec{
-		Backend: backend, Certification: CertificationWindowsNTFSProcessRestart,
-		RootIdentity:        bytes.Repeat([]byte{0x41}, sha256.Size),
+		Materializer:        spec.MaterializerKind,
+		Certification:       CertificationWindowsNTFSProcessRestart,
+		AuthorityRef:        spec.AuthorityRef,
 		RootOpenDisposition: CallerProvidedContainer,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := transfer.TransferIntentDigestFromBytes(bytes.Repeat([]byte{0x51}, sha256.Size))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return ownership, intent
-}
-
-func initialRecordFixture(t *testing.T, ownership Ownership, intent transfer.TransferIntentDigest) Record {
-	t.Helper()
-	var fileID catalog.FileID
-	var revision content.FileRevision
-	for index := range fileID {
-		fileID[index] = byte(index + 1)
-		revision[index] = byte(index + 2)
-	}
-	record, err := NewRecord(RecordSpec{
-		TransferIntentDigest: intent,
-		FileID:               fileID,
-		FileRevision:         revision,
-		CanonicalPath:        "folder/file.bin",
-		ExactSize:            64,
-		BackendID:            string(ownership.Backend()),
-		RootIdentity:         ownership.RootIdentity().Bytes(),
-		OwnedOutputObject:    bytes.Repeat([]byte{0x61}, sha256.Size),
-		StateGeneration:      1,
-		CheckpointGeneration: 0,
-		Phase:                PhaseActive,
-		CommitState:          CommitCandidate,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return record
+	return ownership
 }

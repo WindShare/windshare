@@ -94,8 +94,8 @@ func TestTransferJobAtomicallyRejectsMalformedRangeReaderOutput(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			job, output := newAtomicRangeSinkJob(t, test.reader)
 			result := job.Run(context.Background())
-			if result.Outcome != JobPausedOutcome || result.TerminationCause == nil ||
-				result.Settlement.Kind() != JobPaused || result.SettlementFailure != nil {
+			if result.Outcome != DirectTreeOutcomeResumable || result.TerminationCause == nil ||
+				result.Settlement.Kind() != DirectTreeSettlementResumable || result.SettlementFailure != nil {
 				t.Fatalf("atomic range result = %+v", result)
 			}
 			if test.wantContract {
@@ -157,7 +157,7 @@ func newAtomicRangeSinkJob(t *testing.T, reader RangeReader) (*TransferJob, *job
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := newTestTransferJob(t, TransferJobConfig{
+	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share,
 		SyntheticRoot: root,
 		Rules:         rules,
@@ -170,8 +170,8 @@ func newAtomicRangeSinkJob(t *testing.T, reader RangeReader) (*TransferJob, *job
 		Revisions: &jobRevisionClient{
 			opened: map[catalog.FileID]OpenedRevision{file: opened}, failures: make(map[catalog.FileID]error),
 		},
-		Blocks: reader,
-		Output: output,
+		Blocks:       reader,
+		Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)

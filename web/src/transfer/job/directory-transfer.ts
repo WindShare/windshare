@@ -5,7 +5,7 @@ import {
   type DirectoryAdmission,
   type DirectorySettlement,
 } from '../directory-admission'
-import type { OutputSession } from '../output-session'
+import type { IncrementalDirectoryOutput } from '../output-session'
 import type { DirectoryWork, PendingFile } from './contract'
 import type { AsyncBoundedQueue } from './scheduler'
 
@@ -73,23 +73,30 @@ async function runDirectoryStack(
 
 export interface V2DirectoryFinalization {
   readonly admissions: readonly DirectoryAdmission[]
-  readonly output: OutputSession
+  readonly output: IncrementalDirectoryOutput
   readonly signal: AbortSignal
   readonly settled: (
     admission: DirectoryAdmission,
     settlement: DirectorySettlement,
   ) => void
+  readonly failed: (admission: DirectoryAdmission, error: unknown) => void
 }
 
 export async function finalizeV2Directories(finalization: V2DirectoryFinalization): Promise<void> {
   const ordered = [...finalization.admissions].sort((left, right) =>
     right.path.length - left.path.length)
   for (const admission of ordered) {
-    finalization.signal.throwIfAborted()
-    const settlement = validateDirectorySettlement(
-      admission,
-      await finalization.output.finalizeDirectory(admission, finalization.signal),
-    )
+    let settlement: DirectorySettlement
+    try {
+      finalization.signal.throwIfAborted()
+      settlement = validateDirectorySettlement(
+        admission,
+        await finalization.output.finalizeDirectory(admission, finalization.signal),
+      )
+    } catch (error) {
+      finalization.failed(admission, error)
+      continue
+    }
     finalization.settled(admission, settlement)
   }
 }

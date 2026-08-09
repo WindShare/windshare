@@ -14,33 +14,33 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const (
-	SchemaVersion uint8 = 1
+	SchemaVersion uint8 = 2
 
-	recordDomain         = "windshare/file-checkpoint-record/v1"
-	recordChecksumDomain = "windshare/file-checkpoint-checksum/v1"
-	recordMagic          = "WSFCPV1\x00"
+	recordDomain         = "windshare/file-checkpoint-record/v2"
+	recordChecksumDomain = "windshare/file-checkpoint-checksum/v2"
+	recordMagic          = "WSFCPV2\x00"
 
-	maximumBackendBytes = transfer.MaxOutputBackendIDBytes
-	maximumPathBytes    = catalog.MaxPathBytes
-	maximumRanges       = 16_384
+	maximumPathBytes = catalog.MaxPathBytes
+	maximumRanges    = 16_384
 
-	MaxCheckpointRecordsPerIntent          = 1_048_576
-	MaxCheckpointAuxiliaryEntriesPerIntent = MaxCheckpointRecordsPerIntent
-	MaxCheckpointShardDirectories          = 256
+	MaxCheckpointRecordsPerOperation          = 1_048_576
+	MaxCheckpointAuxiliaryEntriesPerOperation = MaxCheckpointRecordsPerOperation
+	CheckpointShardBuckets                    = 256
 )
 
 var (
-	ErrInvalidRecord        = errors.New("file checkpoint v1 is invalid")
-	ErrRecordChecksum       = errors.New("file checkpoint v1 checksum is invalid")
-	ErrRecordNonCanonical   = errors.New("file checkpoint v1 encoding is not canonical")
-	ErrRecordGeneration     = errors.New("file checkpoint v1 generation is invalid")
-	ErrRecordBinding        = errors.New("file checkpoint v1 binding is invalid")
-	ErrRecordObjectConflict = errors.New("file checkpoint v1 output object has multiple owners")
-	ErrRecordRecovery       = errors.New("file checkpoint v1 has no verified committed record")
-	ErrRecordCrashBoundary  = errors.New("file checkpoint v1 crash cut is not recoverable")
+	ErrInvalidRecord        = errors.New("file checkpoint v2 is invalid")
+	ErrRecordChecksum       = errors.New("file checkpoint v2 checksum is invalid")
+	ErrRecordNonCanonical   = errors.New("file checkpoint v2 encoding is not canonical")
+	ErrRecordGeneration     = errors.New("file checkpoint v2 generation is invalid")
+	ErrRecordBinding        = errors.New("file checkpoint v2 binding is invalid")
+	ErrRecordObjectConflict = errors.New("file checkpoint v2 output object has multiple owners")
+	ErrRecordRecovery       = errors.New("file checkpoint v2 has no verified committed record")
+	ErrRecordCrashBoundary  = errors.New("file checkpoint v2 crash cut is not recoverable")
 )
 
 type (
@@ -72,13 +72,8 @@ func RecordIDFromBytes(raw []byte) (RecordID, error) {
 	return fixedID(raw, "record ID")
 }
 
-func RootIdentityFromBytes(raw []byte) (RootIdentity, error) {
-	value, err := fixedID(raw, "root identity")
-	return RootIdentity(value), err
-}
-
 func ObjectIDFromBytes(raw []byte) (ObjectID, error) {
-	return fixedID(raw, "owned output object")
+	return fixedID(raw, "owned object")
 }
 
 func ChecksumFromBytes(raw []byte) (Checksum, error) {
@@ -199,7 +194,7 @@ func (reason QuarantineReason) Valid() bool {
 }
 
 // QuarantineOrigin records the last non-quarantined runtime phase. Its numeric
-// values remain frozen because they are part of the V1 payload.
+// values remain frozen because they are part of the V2 payload.
 type QuarantineOrigin uint8
 
 const (
@@ -229,49 +224,53 @@ func (reason RetirementReason) Valid() bool {
 }
 
 type RecordSpec struct {
-	OwnershipMarker      string
-	Namespace            string
-	TransferIntentDigest transfer.TransferIntentDigest
-	FileID               catalog.FileID
-	FileRevision         content.FileRevision
-	CanonicalPath        string
-	ExactSize            uint64
-	BackendID            string
-	RootIdentity         []byte
-	OwnedOutputObject    []byte
-	StateGeneration      uint64
-	CheckpointGeneration uint64
-	VerifiedRanges       []Range
-	Phase                Phase
-	CommitState          CommitState
-	QuarantineReason     QuarantineReason
-	QuarantineOrigin     QuarantineOrigin
-	RetirementReason     RetirementReason
+	OwnershipMarker              string
+	Namespace                    string
+	OperationID                  receivecontract.OperationID
+	ReceiveIntentDigest          transfer.ReceiveIntentDigest
+	MaterializationBindingDigest receivecontract.BindingDigest
+	FileID                       catalog.FileID
+	FileRevision                 content.FileRevision
+	CanonicalPath                string
+	ExactSize                    uint64
+	MaterializerKind             MaterializerKind
+	AuthorityRef                 []byte
+	OwnedObjectID                []byte
+	StateGeneration              uint64
+	CheckpointGeneration         uint64
+	VerifiedRanges               []Range
+	Phase                        Phase
+	CommitState                  CommitState
+	QuarantineReason             QuarantineReason
+	QuarantineOrigin             QuarantineOrigin
+	RetirementReason             RetirementReason
 }
 
 // Record has private storage so an admitted immutable binding or verified range
 // set cannot be changed behind a repository's authority.
 type Record struct {
-	ownershipMarker      string
-	namespace            string
-	recordID             RecordID
-	intentDigest         transfer.TransferIntentDigest
-	fileID               catalog.FileID
-	fileRevision         content.FileRevision
-	canonicalPath        string
-	exactSize            uint64
-	backendID            transfer.OutputBackendID
-	rootIdentity         RootIdentity
-	ownedOutputObject    ObjectID
-	stateGeneration      uint64
-	checkpointGeneration uint64
-	verifiedRanges       []Range
-	phase                Phase
-	commitState          CommitState
-	quarantineReason     QuarantineReason
-	quarantineOrigin     QuarantineOrigin
-	retirementReason     RetirementReason
-	checksum             Checksum
+	ownershipMarker              string
+	namespace                    string
+	recordID                     RecordID
+	operationID                  receivecontract.OperationID
+	receiveIntentDigest          transfer.ReceiveIntentDigest
+	materializationBindingDigest receivecontract.BindingDigest
+	fileID                       catalog.FileID
+	fileRevision                 content.FileRevision
+	canonicalPath                string
+	exactSize                    uint64
+	materializerKind             MaterializerKind
+	authorityRef                 receivecontract.AuthorityRef
+	ownedObjectID                ObjectID
+	stateGeneration              uint64
+	checkpointGeneration         uint64
+	verifiedRanges               []Range
+	phase                        Phase
+	commitState                  CommitState
+	quarantineReason             QuarantineReason
+	quarantineOrigin             QuarantineOrigin
+	retirementReason             RetirementReason
+	checksum                     Checksum
 }
 
 func NewRecord(spec RecordSpec) (Record, error) {
@@ -281,24 +280,19 @@ func NewRecord(spec RecordSpec) (Record, error) {
 	if spec.Namespace == "" {
 		spec.Namespace = NamespaceName
 	}
-	if spec.Phase == 0 {
-		spec.Phase = PhaseActive
-	}
-	if spec.CommitState == 0 {
-		spec.CommitState = CommitCandidate
-	}
 	if err := validateMarkerAndNamespace(spec.OwnershipMarker, spec.Namespace); err != nil {
 		return Record{}, err
 	}
-	backend, err := transfer.NewOutputBackendID(spec.BackendID)
-	if err != nil {
-		return Record{}, fmt.Errorf("%w: backend: %w", ErrRecordBinding, err)
+	if spec.OperationID.IsZero() || spec.ReceiveIntentDigest.IsZero() ||
+		spec.MaterializationBindingDigest.IsZero() || !spec.MaterializerKind.Valid() ||
+		spec.FileID.IsZero() || spec.FileRevision.IsZero() || spec.StateGeneration == 0 {
+		return Record{}, fmt.Errorf("%w: immutable identity or generation", ErrRecordBinding)
 	}
-	root, err := RootIdentityFromBytes(spec.RootIdentity)
+	authority, err := receivecontract.AuthorityRefFromBytes(spec.AuthorityRef)
 	if err != nil {
 		return Record{}, err
 	}
-	object, err := ObjectIDFromBytes(spec.OwnedOutputObject)
+	object, err := ObjectIDFromBytes(spec.OwnedObjectID)
 	if err != nil {
 		return Record{}, err
 	}
@@ -306,9 +300,8 @@ func NewRecord(spec RecordSpec) (Record, error) {
 	if err != nil || canonical != spec.CanonicalPath {
 		return Record{}, fmt.Errorf("%w: canonical path", ErrRecordBinding)
 	}
-	if spec.TransferIntentDigest.IsZero() || spec.FileID.IsZero() || spec.FileRevision.IsZero() ||
-		spec.ExactSize > catalog.MaxFileSize || spec.StateGeneration == 0 {
-		return Record{}, fmt.Errorf("%w: immutable identity or generation", ErrRecordBinding)
+	if spec.ExactSize > catalog.MaxFileSize {
+		return Record{}, fmt.Errorf("%w: exact size", ErrRecordBinding)
 	}
 	if !spec.Phase.Valid() || !spec.CommitState.Valid() {
 		return Record{}, fmt.Errorf("%w: phase or commit state", ErrInvalidRecord)
@@ -329,24 +322,26 @@ func NewRecord(spec RecordSpec) (Record, error) {
 		return Record{}, err
 	}
 	record := Record{
-		ownershipMarker:      spec.OwnershipMarker,
-		namespace:            spec.Namespace,
-		intentDigest:         spec.TransferIntentDigest,
-		fileID:               spec.FileID,
-		fileRevision:         spec.FileRevision,
-		canonicalPath:        canonical,
-		exactSize:            spec.ExactSize,
-		backendID:            backend,
-		rootIdentity:         root,
-		ownedOutputObject:    object,
-		stateGeneration:      spec.StateGeneration,
-		checkpointGeneration: spec.CheckpointGeneration,
-		verifiedRanges:       ranges,
-		phase:                spec.Phase,
-		commitState:          spec.CommitState,
-		quarantineReason:     spec.QuarantineReason,
-		quarantineOrigin:     spec.QuarantineOrigin,
-		retirementReason:     spec.RetirementReason,
+		ownershipMarker:              spec.OwnershipMarker,
+		namespace:                    spec.Namespace,
+		operationID:                  spec.OperationID,
+		receiveIntentDigest:          spec.ReceiveIntentDigest,
+		materializationBindingDigest: spec.MaterializationBindingDigest,
+		fileID:                       spec.FileID,
+		fileRevision:                 spec.FileRevision,
+		canonicalPath:                canonical,
+		exactSize:                    spec.ExactSize,
+		materializerKind:             spec.MaterializerKind,
+		authorityRef:                 authority,
+		ownedObjectID:                object,
+		stateGeneration:              spec.StateGeneration,
+		checkpointGeneration:         spec.CheckpointGeneration,
+		verifiedRanges:               ranges,
+		phase:                        spec.Phase,
+		commitState:                  spec.CommitState,
+		quarantineReason:             spec.QuarantineReason,
+		quarantineOrigin:             spec.QuarantineOrigin,
+		retirementReason:             spec.RetirementReason,
 	}
 	record.recordID = record.derivedRecordID()
 	record.checksum = record.derivedChecksum()
@@ -384,7 +379,7 @@ func validatePhaseCommit(phase Phase, commit CommitState) error {
 }
 
 // ValidateLifecycleClaims is exported for volatile runtime projections. It owns
-// the V1 byte meanings without granting repository or filesystem authority.
+// the V2 byte meanings without granting repository or filesystem authority.
 func ValidateLifecycleClaims(
 	phase Phase,
 	quarantineReason QuarantineReason,
@@ -441,27 +436,33 @@ func validQuarantineHistory(origin QuarantineOrigin, reason QuarantineReason) bo
 	}
 }
 
-func (record Record) SchemaVersion() uint8                                { return SchemaVersion }
-func (record Record) OwnershipMarker() string                             { return record.ownershipMarker }
-func (record Record) Namespace() string                                   { return record.namespace }
-func (record Record) RecordID() RecordID                                  { return record.recordID }
-func (record Record) TransferIntentDigest() transfer.TransferIntentDigest { return record.intentDigest }
-func (record Record) FileID() catalog.FileID                              { return record.fileID }
-func (record Record) FileRevision() content.FileRevision                  { return record.fileRevision }
-func (record Record) CanonicalPath() string                               { return record.canonicalPath }
-func (record Record) ExactSize() uint64                                   { return record.exactSize }
-func (record Record) BackendID() transfer.OutputBackendID                 { return record.backendID }
-func (record Record) RootIdentity() RootIdentity                          { return record.rootIdentity }
-func (record Record) OwnedOutputObject() ObjectID                         { return record.ownedOutputObject }
-func (record Record) StateGeneration() uint64                             { return record.stateGeneration }
-func (record Record) CheckpointGeneration() uint64                        { return record.checkpointGeneration }
-func (record Record) VerifiedRanges() []Range                             { return slices.Clone(record.verifiedRanges) }
-func (record Record) Phase() Phase                                        { return record.phase }
-func (record Record) CommitState() CommitState                            { return record.commitState }
-func (record Record) QuarantineReason() QuarantineReason                  { return record.quarantineReason }
-func (record Record) QuarantineOrigin() QuarantineOrigin                  { return record.quarantineOrigin }
-func (record Record) RetirementReason() RetirementReason                  { return record.retirementReason }
-func (record Record) Checksum() Checksum                                  { return record.checksum }
+func (record Record) SchemaVersion() uint8                     { return SchemaVersion }
+func (record Record) OwnershipMarker() string                  { return record.ownershipMarker }
+func (record Record) Namespace() string                        { return record.namespace }
+func (record Record) RecordID() RecordID                       { return record.recordID }
+func (record Record) OperationID() receivecontract.OperationID { return record.operationID }
+func (record Record) ReceiveIntentDigest() transfer.ReceiveIntentDigest {
+	return record.receiveIntentDigest
+}
+func (record Record) MaterializationBindingDigest() receivecontract.BindingDigest {
+	return record.materializationBindingDigest
+}
+func (record Record) FileID() catalog.FileID                     { return record.fileID }
+func (record Record) FileRevision() content.FileRevision         { return record.fileRevision }
+func (record Record) CanonicalPath() string                      { return record.canonicalPath }
+func (record Record) ExactSize() uint64                          { return record.exactSize }
+func (record Record) MaterializerKind() MaterializerKind         { return record.materializerKind }
+func (record Record) AuthorityRef() receivecontract.AuthorityRef { return record.authorityRef }
+func (record Record) OwnedObjectID() ObjectID                    { return record.ownedObjectID }
+func (record Record) StateGeneration() uint64                    { return record.stateGeneration }
+func (record Record) CheckpointGeneration() uint64               { return record.checkpointGeneration }
+func (record Record) VerifiedRanges() []Range                    { return slices.Clone(record.verifiedRanges) }
+func (record Record) Phase() Phase                               { return record.phase }
+func (record Record) CommitState() CommitState                   { return record.commitState }
+func (record Record) QuarantineReason() QuarantineReason         { return record.quarantineReason }
+func (record Record) QuarantineOrigin() QuarantineOrigin         { return record.quarantineOrigin }
+func (record Record) RetirementReason() RetirementReason         { return record.retirementReason }
+func (record Record) Checksum() Checksum                         { return record.checksum }
 
 func (record Record) Valid() bool {
 	return record.validate() == nil
@@ -471,11 +472,10 @@ func (record Record) validate() error {
 	if err := validateMarkerAndNamespace(record.ownershipMarker, record.namespace); err != nil {
 		return err
 	}
-	if _, err := transfer.NewOutputBackendID(string(record.backendID)); err != nil {
-		return fmt.Errorf("%w: backend", ErrRecordBinding)
-	}
-	if record.intentDigest.IsZero() || record.fileID.IsZero() || record.fileRevision.IsZero() ||
-		record.rootIdentity.IsZero() || record.ownedOutputObject.IsZero() || record.recordID.IsZero() ||
+	if record.operationID.IsZero() || record.receiveIntentDigest.IsZero() ||
+		record.materializationBindingDigest.IsZero() || !record.materializerKind.Valid() ||
+		record.fileID.IsZero() || record.fileRevision.IsZero() ||
+		record.authorityRef.IsZero() || record.ownedObjectID.IsZero() || record.recordID.IsZero() ||
 		record.exactSize > catalog.MaxFileSize || record.stateGeneration == 0 {
 		return fmt.Errorf("%w: identity or generation", ErrRecordBinding)
 	}
@@ -511,18 +511,19 @@ func (record Record) validate() error {
 
 func (record Record) derivedRecordID() RecordID {
 	hash := sha256.New()
-	writeRecordBytes(hash, []byte(recordDomain))
-	writeRecordBytes(hash, []byte{SchemaVersion})
-	writeRecordBytes(hash, []byte(record.ownershipMarker))
-	writeRecordBytes(hash, []byte(record.namespace))
-	writeRecordBytes(hash, record.intentDigest.Bytes())
-	writeRecordBytes(hash, record.fileID.Bytes())
-	writeRecordBytes(hash, record.fileRevision.Bytes())
-	writeRecordBytes(hash, []byte(record.canonicalPath))
-	writeRecordU64(hash, record.exactSize)
-	writeRecordBytes(hash, []byte(record.backendID))
-	writeRecordBytes(hash, record.rootIdentity[:])
-	writeRecordBytes(hash, record.ownedOutputObject[:])
+	writeRecordPrefix(hash)
+	writeRecordFrame(hash, []byte(record.ownershipMarker))
+	writeRecordFrame(hash, []byte(record.namespace))
+	writeRecordFrame(hash, record.operationID.Bytes())
+	writeRecordFrame(hash, record.receiveIntentDigest.Bytes())
+	writeRecordFrame(hash, record.materializationBindingDigest.Bytes())
+	writeRecordFrame(hash, record.fileID.Bytes())
+	writeRecordFrame(hash, record.fileRevision.Bytes())
+	writeRecordFrame(hash, canonicalPathBytes(record.canonicalPath))
+	writeRecordFramedU64(hash, record.exactSize)
+	writeRecordFrame(hash, []byte{byte(record.materializerKind)})
+	writeRecordFrame(hash, record.authorityRef.Bytes())
+	writeRecordFrame(hash, record.ownedObjectID[:])
 	var result RecordID
 	copy(result[:], hash.Sum(nil))
 	return result
@@ -530,39 +531,40 @@ func (record Record) derivedRecordID() RecordID {
 
 func (record Record) canonicalPayload() []byte {
 	var encoded bytes.Buffer
-	writeRecordString(&encoded, recordDomain)
-	encoded.WriteByte(SchemaVersion)
-	writeRecordString(&encoded, record.ownershipMarker)
-	writeRecordString(&encoded, record.namespace)
-	encoded.Write(record.recordID[:])
-	encoded.Write(record.intentDigest.Bytes())
-	encoded.Write(record.fileID.Bytes())
-	encoded.Write(record.fileRevision.Bytes())
-	writeRecordString(&encoded, record.canonicalPath)
-	writeRecordU64(&encoded, record.exactSize)
-	writeRecordString(&encoded, string(record.backendID))
-	encoded.Write(record.rootIdentity[:])
-	encoded.Write(record.ownedOutputObject[:])
-	writeRecordU64(&encoded, record.stateGeneration)
-	writeRecordU64(&encoded, record.checkpointGeneration)
-	writeRecordU32(&encoded, uint32(len(record.verifiedRanges)))
+	writeRecordPrefix(&encoded)
+	writeRecordFrame(&encoded, []byte(record.ownershipMarker))
+	writeRecordFrame(&encoded, []byte(record.namespace))
+	writeRecordFrame(&encoded, record.recordID[:])
+	writeRecordFrame(&encoded, record.operationID.Bytes())
+	writeRecordFrame(&encoded, record.receiveIntentDigest.Bytes())
+	writeRecordFrame(&encoded, record.materializationBindingDigest.Bytes())
+	writeRecordFrame(&encoded, record.fileID.Bytes())
+	writeRecordFrame(&encoded, record.fileRevision.Bytes())
+	writeRecordFrame(&encoded, canonicalPathBytes(record.canonicalPath))
+	writeRecordFramedU64(&encoded, record.exactSize)
+	writeRecordFrame(&encoded, []byte{byte(record.materializerKind)})
+	writeRecordFrame(&encoded, record.authorityRef.Bytes())
+	writeRecordFrame(&encoded, record.ownedObjectID[:])
+	writeRecordFramedU64(&encoded, record.stateGeneration)
+	writeRecordFramedU64(&encoded, record.checkpointGeneration)
+	writeRecordU64(&encoded, uint64(len(record.verifiedRanges)))
 	for _, current := range record.verifiedRanges {
-		writeRecordU64(&encoded, current.Offset)
-		writeRecordU64(&encoded, current.End)
+		writeRecordFramedU64(&encoded, current.Offset)
+		writeRecordFramedU64(&encoded, current.End)
 	}
-	encoded.WriteByte(byte(record.phase))
-	encoded.WriteByte(byte(record.commitState))
-	encoded.WriteByte(byte(record.quarantineReason))
-	encoded.WriteByte(byte(record.quarantineOrigin))
-	encoded.WriteByte(byte(record.retirementReason))
+	writeRecordFrame(&encoded, []byte{byte(record.phase)})
+	writeRecordFrame(&encoded, []byte{byte(record.commitState)})
+	writeRecordFrame(&encoded, []byte{byte(record.quarantineReason)})
+	writeRecordFrame(&encoded, []byte{byte(record.quarantineOrigin)})
+	writeRecordFrame(&encoded, []byte{byte(record.retirementReason)})
 	return encoded.Bytes()
 }
 
 func (record Record) derivedChecksum() Checksum {
 	hash := sha256.New()
 	_, _ = hash.Write([]byte(recordChecksumDomain))
-	_, _ = hash.Write([]byte{0})
-	_, _ = hash.Write(record.canonicalPayload())
+	_, _ = hash.Write([]byte{0, SchemaVersion})
+	writeRecordFrame(hash, record.canonicalPayload())
 	var result Checksum
 	copy(result[:], hash.Sum(nil))
 	return result

@@ -2,126 +2,98 @@ import { describe, expect, it } from 'vitest'
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
-  OUTPUT_JOURNAL_PAGE_RECORD_LIMIT,
-  fileRecord,
-  outputRecordKey,
-  validateOutputJournalPage,
+  FILE_CHECKPOINT_COMMIT_VERIFIED,
+  FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
+  FILE_CHECKPOINT_PHASE_ACTIVE,
+  newFileCheckpointV2,
+  type FileCheckpointV2,
+} from '../../src/output/persistence/checkpoint'
+import {
+  finalFileCheckpointProof,
+  validateFileCheckpointPage,
 } from '../../src/output/persistence/journal'
+import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence/namespace'
+import {
+  RECEIVE_RECORD_RECEIPT,
+  createPersistedReceiveRecord,
+} from '../../src/output/workspace/records'
+import { canonicalRecord } from '../../src/output/workspace/canonical'
+import { prepareReceiveOperationTransition } from '../../src/output/workspace/repository'
 
-const identity = Object.freeze({
-  backend: 'page-test',
-  outputSessionId: 'page-session',
-  transferIntentDigest: fixedIdentity(0x10, 32),
-  rootIdentity: fixedIdentity(0x40, 32),
-})
+describe('checkpoint journal authority', () => {
+  it('requires bounded ordered pages with tail continuations', () => {
+    const first = checkpoint(4, 1n)
+    const second = checkpoint(5, 1n)
+    const binding = durableCheckpointNamespaceIdentity(first)
 
-describe('output journal page validation', () => {
-  it('rejects oversized pages and a full page that truncates continuation', () => {
-    const oversized = Array.from(
-      { length: OUTPUT_JOURNAL_PAGE_RECORD_LIMIT + 1 },
-      (_, index) => record(index),
-    )
-    expect(() => validateOutputJournalPage(
-      { records: oversized },
-      { kind: 'file', direction: 'ascending' },
-      identity,
-    )).toThrow('fixed record limit')
-    expect(() => validateOutputJournalPage(
-      { records: oversized.slice(0, OUTPUT_JOURNAL_PAGE_RECORD_LIMIT) },
-      { kind: 'file', direction: 'ascending' },
-      identity,
-    )).toThrow('omitted its continuation')
+    expect(validateFileCheckpointPage({
+      records: [first],
+      nextCursor: first.recordId,
+    }, { direction: 'ascending', limit: 1 }, binding).nextCursor).toBe(first.recordId)
+
+    expect(() => validateFileCheckpointPage({
+      records: [first],
+    }, { direction: 'ascending', limit: 1 }, binding)).toThrow('continuation')
+
+    const ordered = [first, second].sort((left, right) =>
+      left.recordId.localeCompare(right.recordId))
+    expect(() => validateFileCheckpointPage({
+      records: [...ordered].reverse(),
+    }, { direction: 'ascending', limit: 3 }, binding)).toThrow('cursor')
   })
 
-  it('rejects repeated, out-of-order, and forged tail cursors', () => {
-    const first = record(1)
-    const second = record(2)
-    const firstKey = outputRecordKey(first)
-    expect(() => validateOutputJournalPage(
-      { records: [first] },
-      { kind: 'file', direction: 'ascending', cursor: firstKey },
-      identity,
-    )).toThrow('did not advance')
-    expect(() => validateOutputJournalPage(
-      { records: [second, first] },
-      { kind: 'file', direction: 'ascending' },
-      identity,
-    )).toThrow('did not advance')
-    expect(() => validateOutputJournalPage(
-      { records: [first], nextCursor: outputRecordKey(second) },
-      { kind: 'file', direction: 'ascending' },
-      identity,
-    )).toThrow('tail')
+  it('creates aggregate proof only from one verified complete checkpoint', () => {
+    const record = checkpoint(4, 3n)
+    expect(finalFileCheckpointProof(record)).toEqual(expect.objectContaining({
+      recordId: record.recordId,
+      recordDigest: record.checksum,
+      checkpointGeneration: 3n,
+      fileId: record.fileId,
+      complete: true,
+    }))
+    expect(finalFileCheckpointProof(record)).not.toHaveProperty('verifiedRanges')
   })
 
-  it('enforces the same strict cursor order while descending', () => {
-    const first = record(1)
-    const second = record(2)
-    expect(validateOutputJournalPage(
-      { records: [second, first] },
-      { kind: 'file', direction: 'descending' },
-      identity,
-    ).records).toHaveLength(2)
-    expect(() => validateOutputJournalPage(
-      { records: [first, second] },
-      { kind: 'file', direction: 'descending' },
-      identity,
-    )).toThrow('did not advance')
-  })
+  it('rejects aggregate records that attempt to become a second range authority', async () => {
+    const operationId = identity(16, 1)
+    const canonicalBytes = canonicalRecord('windshare/receive-receipt/v1', 1, [])
+    const receipt = await createPersistedReceiveRecord({
+      operationId,
+      kind: RECEIVE_RECORD_RECEIPT,
+      canonicalBytes,
+    })
+    const contaminated = {
+      ...receipt,
+      verifiedRanges: [{ start: 0n, end: 12n }],
+    }
 
-  it('keeps runtime session identity out of durable records and requires the exact namespace', () => {
-    const persisted = record(7)
-    const legacyRuntimeBound = { ...persisted, outputSessionId: 'legacy-run' } as typeof persisted
-    expect(persisted).not.toHaveProperty('outputSessionId')
-    expect(() => validateOutputJournalPage(
-      { records: [legacyRuntimeBound] },
-      { kind: 'file', direction: 'ascending' },
-      identity,
-    )).toThrow('runtime session identity')
-    expect(() => validateOutputJournalPage(
-      { records: [persisted] },
-      { kind: 'file', direction: 'ascending' },
-      { ...identity, rootIdentity: fixedIdentity(0x60, 32) },
-    )).toThrow('escaped its namespace')
+    await expect(prepareReceiveOperationTransition({
+      operationId,
+      records: [contaminated],
+    })).rejects.toThrow('cannot own verified ranges')
   })
 })
 
-function record(index: number) {
-  const name = `f-${index.toString().padStart(6, '0')}`
-  return fileRecord(
-    identity,
-    {
-      ...identity,
-      canonicalPath: [name],
-      ownedFileIdentity: indexedIdentity(0x50, 32, index),
-    },
-    {
-      source: {
-        shareInstance: 'share',
-        fileId: indexedIdentity(0x20, 16, index),
-        fileRevision: fixedIdentity(0x30, 16),
-      },
-      path: [name],
-      exactSize: 0n,
-    },
-    [],
-    true,
-    1n,
-  )
+function checkpoint(fileByte: number, generation: bigint): FileCheckpointV2 {
+  return newFileCheckpointV2({
+    operationId: identity(16, 1),
+    receiveIntentDigest: identity(32, 2),
+    materializationBindingDigest: identity(32, 3),
+    fileId: identity(16, fileByte),
+    fileRevision: identity(16, fileByte + 10),
+    canonicalPath: [`file-${fileByte}.bin`],
+    exactSize: 12n,
+    materializerKind: FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
+    authorityRef: identity(32, 6),
+    ownedObjectId: identity(32, fileByte + 20),
+    stateGeneration: 1n,
+    checkpointGeneration: generation,
+    verifiedRanges: [{ start: 0n, end: 12n }],
+    phase: FILE_CHECKPOINT_PHASE_ACTIVE,
+    commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+  })
 }
 
-function fixedIdentity(first: number, length: number): string {
-  return encodeBase64Url(Uint8Array.from(
-    { length },
-    (_, index) => (first + index) & 0xff,
-  ))
-}
-
-function indexedIdentity(first: number, length: number, value: number): string {
-  const bytes = Uint8Array.from(
-    { length },
-    (_, index) => (first + index) & 0xff,
-  )
-  new DataView(bytes.buffer).setUint32(length - 4, value, false)
-  return encodeBase64Url(bytes)
+function identity(width: number, value: number): string {
+  return encodeBase64Url(new Uint8Array(width).fill(value))
 }

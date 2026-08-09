@@ -13,7 +13,6 @@ export interface FileTransferFailure {
 }
 
 export type TransferFailure = DirectoryTransferFailure | FileTransferFailure
-export type JobOutcomeStatus = 'Succeeded' | 'CompletedWithErrors' | 'Paused'
 export const MAXIMUM_RETAINED_TRANSFER_FAILURES = 64
 
 export interface TransferFailureSummary {
@@ -28,12 +27,26 @@ export const EMPTY_TRANSFER_FAILURE_SUMMARY: TransferFailureSummary = Object.fre
   omittedFailureCount: 0,
 })
 
-export interface JobOutcome {
-  readonly status: JobOutcomeStatus
+interface TransferWorkerSettlementBase {
   readonly failures: readonly TransferFailure[]
   readonly failureCount: number
   readonly omittedFailureCount: number
 }
+
+export type TransferWorkerSettlement =
+  | Readonly<TransferWorkerSettlementBase & { readonly status: 'Succeeded' }>
+  | Readonly<TransferWorkerSettlementBase & { readonly status: 'CompletedWithErrors' }>
+  | Readonly<TransferWorkerSettlementBase & { readonly status: 'Paused' }>
+
+export type CompletedTransferWorkerSettlement = Exclude<
+  TransferWorkerSettlement,
+  Readonly<TransferWorkerSettlementBase & { readonly status: 'Paused' }>
+>
+
+export type SuccessfulTransferWorkerSettlement = Extract<
+  TransferWorkerSettlement,
+  Readonly<{ readonly status: 'Succeeded' }>
+>
 
 /** Retains representative diagnostics while exact aggregate counts remain width-independent. */
 export class TransferFailureAccumulator {
@@ -92,23 +105,35 @@ export function summarizeTransferFailures(
   return accumulator.snapshot()
 }
 
-export function jobOutcome(
-  status: JobOutcomeStatus,
+export function transferWorkerSettlement(
+  status: 'Succeeded',
   summary: TransferFailureSummary,
-): JobOutcome {
+): Extract<TransferWorkerSettlement, { readonly status: 'Succeeded' }>
+export function transferWorkerSettlement(
+  status: 'CompletedWithErrors',
+  summary: TransferFailureSummary,
+): Extract<TransferWorkerSettlement, { readonly status: 'CompletedWithErrors' }>
+export function transferWorkerSettlement(
+  status: 'Paused',
+  summary: TransferFailureSummary,
+): Extract<TransferWorkerSettlement, { readonly status: 'Paused' }>
+export function transferWorkerSettlement(
+  status: TransferWorkerSettlement['status'],
+  summary: TransferFailureSummary,
+): TransferWorkerSettlement {
   validateFailureSummary(summary)
   if (status === 'Succeeded' && summary.failureCount !== 0) {
-    throw new TypeError('a succeeded transfer job cannot contain failures')
+    throw new TypeError('successful transfer workers cannot contain failures')
   }
   if (status === 'CompletedWithErrors' && summary.failureCount === 0) {
-    throw new TypeError('a transfer completed with errors must contain a failure')
+    throw new TypeError('transfer workers completed with errors require failure evidence')
   }
   return Object.freeze({
     status,
     failures: Object.freeze(summary.failures.map((failure) => Object.freeze({ ...failure }))),
     failureCount: summary.failureCount,
     omittedFailureCount: summary.omittedFailureCount,
-  })
+  }) as TransferWorkerSettlement
 }
 
 function validateFailureSummary(summary: TransferFailureSummary): void {

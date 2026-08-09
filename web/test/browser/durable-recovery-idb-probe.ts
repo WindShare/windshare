@@ -1,134 +1,109 @@
+import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   CHECKPOINT_DATABASE_VERSION,
-  IndexedDbOutputRepository,
+  INDEXEDDB_V6_STORE_SCHEMAS,
+} from '../../src/output/browser/indexeddb-database'
+import {
+  IndexedDbReceiveOperationRepository,
 } from '../../src/output/browser/indexeddb-repository'
-import { encodeBase64Url } from '../../src/crypto/bytes'
-import { IndexedDbOriginPrivateAdmissionAuthority } from '../../src/output/origin-private/admission-authority'
-import { IndexedDbZipCentralDirectorySpool } from '../../src/output/streams/zip-spool'
 
-const ZIP_FLUSH_BYTES = 256 * 1024
+const LEGACY_PAUSED_STORE = 'paused-task-descriptor-v1'
 
-export interface IndexedDbFailureBoundaryProbe {
-  readonly journalBlocked: string
-  readonly journalLateConnectionClosed: boolean
-  readonly journalVersionChange: string
-  readonly admissionVersionChange: string
-  readonly zipBlocked: string
-  readonly zipLateConnectionClosed: boolean
-  readonly zipVersionChange: string
+export interface IndexedDbV6Probe {
+  readonly blockedUpgrade: string
+  readonly blockedRequestClosedLate: boolean
+  readonly versionChange: string
+  readonly schemaVersion: number
+  readonly v6StoresPresent: boolean
+  readonly legacyStoreRetainedForCleanup: boolean
+  readonly legacyRowsVisibleToV6: boolean
 }
 
-export async function probeIndexedDbFailureBoundaries(): Promise<IndexedDbFailureBoundaryProbe> {
-  const journalBlocked = await probeBlockedJournal()
-  const journalVersionChange = await probeJournalVersionChange()
-  const admissionVersionChange = await probeAdmissionVersionChange()
-  const zipBlocked = await probeBlockedZipSpool()
-  const zipVersionChange = await probeZipVersionChange()
-  return {
-    journalBlocked: journalBlocked.rejection,
-    journalLateConnectionClosed: journalBlocked.deleted,
-    journalVersionChange,
-    admissionVersionChange,
-    zipBlocked: zipBlocked.rejection,
-    zipLateConnectionClosed: zipBlocked.deleted,
-    zipVersionChange,
-  }
-}
-
-async function probeAdmissionVersionChange(): Promise<string> {
-  const databaseName = `admission-versionchange-${crypto.randomUUID()}`
-  const authority = await IndexedDbOriginPrivateAdmissionAuthority.open(databaseName)
-  const record = {
-    id: 'obsolete-admission',
-    token: 'obsolete-token',
-    logicalBytes: 0n,
-    additionalBytes: 0n,
-    expiresAtMilliseconds: 1_000,
-  }
-  const limits = {
-    jobLimit: 10n,
-    processLimit: 10n,
-    quota: 10n,
-    usage: 0n,
-    reserve: 0n,
-    nowMilliseconds: 0,
-  }
-  await authority.claim(record, limits)
-  const upgrader = await openRawDatabase(databaseName, 2)
-  const rejection = await rejectionName(authority.update(record, limits))
-  authority.close()
-  upgrader.close()
-  if (!await deleteDatabase(databaseName)) throw new Error('Admission versionchange leaked a connection')
-  return rejection
-}
-
-async function probeBlockedJournal(): Promise<{
-  readonly rejection: string
-  readonly deleted: boolean
-}> {
-  const databaseName = `journal-blocked-${crypto.randomUUID()}`
-  const blocker = await openRawDatabase(databaseName, 1)
-  const rejection = await rejectionName(
-    IndexedDbOutputRepository.open(databaseName, checkpointBinding('blocked')),
-  )
-  blocker.close()
-  return { rejection, deleted: await deleteDatabase(databaseName) }
-}
-
-async function probeJournalVersionChange(): Promise<string> {
-  const databaseName = `journal-versionchange-${crypto.randomUUID()}`
-  const repository = await IndexedDbOutputRepository.open(
-    databaseName,
-    checkpointBinding('obsolete'),
-  )
-  const upgrader = await openRawDatabase(databaseName, CHECKPOINT_DATABASE_VERSION + 1)
-  const rejection = await rejectionName(repository.scanCommitted({ direction: 'ascending' }))
-  upgrader.close()
-  if (!await deleteDatabase(databaseName)) throw new Error('Journal versionchange leaked a connection')
-  return rejection
-}
-
-async function probeBlockedZipSpool(): Promise<{
-  readonly rejection: string
-  readonly deleted: boolean
-}> {
-  const databaseName = `zip-blocked-${crypto.randomUUID()}`
-  const blocker = await openRawDatabase(databaseName, 1)
-  const spool = new IndexedDbZipCentralDirectorySpool({ databaseName })
-  const rejection = await rejectionName(spool.append(new Uint8Array(ZIP_FLUSH_BYTES)))
-  blocker.close()
-  return { rejection, deleted: await deleteDatabase(databaseName) }
-}
-
-async function probeZipVersionChange(): Promise<string> {
-  const databaseName = `zip-versionchange-${crypto.randomUUID()}`
-  const spool = new IndexedDbZipCentralDirectorySpool({ databaseName })
-  await spool.append(new Uint8Array(ZIP_FLUSH_BYTES))
-  const upgrader = await openRawDatabase(databaseName, 4)
-  const rejection = await rejectionName(spool.append(Uint8Array.of(1)))
-  await spool.clear().catch(() => undefined)
-  upgrader.close()
-  if (!await deleteDatabase(databaseName)) throw new Error('ZIP versionchange leaked a connection')
-  return rejection
-}
-
-function openRawDatabase(name: string, version: number): Promise<IDBDatabase> {
-  return requestResult(indexedDB.open(name, version))
-}
-
-function checkpointBinding(backend: string) {
+export async function probeIndexedDbV6Replacement(): Promise<IndexedDbV6Probe> {
+  const blocked = await probeBlockedUpgrade()
+  const versionChange = await probeVersionChange()
+  const replacement = await probeReplacement()
   return Object.freeze({
-    backend,
-    transferIntentDigest: fixedIdentity(0x31),
-    rootIdentity: fixedIdentity(0x51),
+    blockedUpgrade: blocked.rejection,
+    blockedRequestClosedLate: blocked.deleted,
+    versionChange,
+    ...replacement,
   })
 }
 
-function fixedIdentity(first: number): string {
-  return encodeBase64Url(Uint8Array.from(
-    { length: 32 },
-    (_, index) => (first + index) & 0xff,
-  ))
+async function probeBlockedUpgrade(): Promise<{
+  readonly rejection: string
+  readonly deleted: boolean
+}> {
+  const databaseName = `w3c-v6-blocked-${crypto.randomUUID()}`
+  const blocker = await openRawDatabase(databaseName, CHECKPOINT_DATABASE_VERSION - 1, (database) => {
+    database.createObjectStore(LEGACY_PAUSED_STORE, { keyPath: 'id' })
+  })
+  const rejection = await rejectionName(IndexedDbReceiveOperationRepository.open(databaseName))
+  blocker.close()
+  return Object.freeze({ rejection, deleted: await deleteDatabase(databaseName) })
+}
+
+async function probeVersionChange(): Promise<string> {
+  const databaseName = `w3c-v6-versionchange-${crypto.randomUUID()}`
+  const repository = await IndexedDbReceiveOperationRepository.open(databaseName)
+  const upgrader = await openRawDatabase(databaseName, CHECKPOINT_DATABASE_VERSION + 1)
+  const rejection = await rejectionName(repository.listRecords(identity(16, 0x31)))
+  repository.close()
+  upgrader.close()
+  await deleteDatabase(databaseName)
+  return rejection
+}
+
+async function probeReplacement(): Promise<Pick<
+  IndexedDbV6Probe,
+  | 'schemaVersion'
+  | 'v6StoresPresent'
+  | 'legacyStoreRetainedForCleanup'
+  | 'legacyRowsVisibleToV6'
+>> {
+  const databaseName = `w3c-v6-replacement-${crypto.randomUUID()}`
+  const operationId = identity(16, 0x41)
+  const legacy = await openRawDatabase(
+    databaseName,
+    CHECKPOINT_DATABASE_VERSION - 1,
+    (database, transaction) => {
+      const store = database.createObjectStore(LEGACY_PAUSED_STORE, { keyPath: 'id' })
+      transaction.addEventListener('complete', () => undefined, { once: true })
+      store.put({ id: 'obsolete-pause', operationId })
+    },
+  )
+  legacy.close()
+  const repository = await IndexedDbReceiveOperationRepository.open(databaseName)
+  const raw = await openRawDatabase(databaseName, CHECKPOINT_DATABASE_VERSION)
+  const names = new Set(Array.from(raw.objectStoreNames))
+  const result = Object.freeze({
+    schemaVersion: raw.version,
+    v6StoresPresent: INDEXEDDB_V6_STORE_SCHEMAS.every((schema) => names.has(schema.name)),
+    legacyStoreRetainedForCleanup: names.has(LEGACY_PAUSED_STORE),
+    legacyRowsVisibleToV6: (await repository.listRecords(operationId)).length !== 0,
+  })
+  raw.close()
+  repository.close()
+  await deleteDatabase(databaseName)
+  return result
+}
+
+function openRawDatabase(
+  name: string,
+  version: number,
+  upgrade?: (database: IDBDatabase, transaction: IDBTransaction) => void,
+): Promise<IDBDatabase> {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(name, version)
+    request.addEventListener('upgradeneeded', () => {
+      const transaction = request.transaction
+      if (transaction === null) throw new Error('IndexedDB upgrade lacks a transaction')
+      upgrade?.(request.result, transaction)
+    }, { once: true })
+    request.addEventListener('success', () => resolve(request.result), { once: true })
+    request.addEventListener('error', () => reject(request.error), { once: true })
+  })
 }
 
 async function rejectionName(operation: Promise<unknown>): Promise<string> {
@@ -150,9 +125,6 @@ function deleteDatabase(name: string): Promise<boolean> {
   })
 }
 
-function requestResult<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    request.addEventListener('success', () => resolve(request.result), { once: true })
-    request.addEventListener('error', () => reject(request.error), { once: true })
-  })
+function identity(width: number, fill: number): string {
+  return encodeBase64Url(new Uint8Array(width).fill(fill))
 }

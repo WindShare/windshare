@@ -419,23 +419,23 @@ func TestConcurrentCloseRequestsSettleAndReleaseExactlyOnce(t *testing.T) {
 	}
 
 	type result struct {
-		settlement transfer.JobSettlement
+		settlement transfer.DirectTreeSettlement
 		err        error
 	}
 	owner := make(chan result, 1)
 	exactRetry := make(chan result, 1)
 	conflictingRetry := make(chan result, 1)
 	go func() {
-		settlement, err := fixture.session.CompleteJob(ctx, transfer.JobSucceeded)
+		settlement, err := fixture.session.FinalizeTree(ctx, transfer.DirectTreeOutcomePublished)
 		owner <- result{settlement: settlement, err: err}
 	}()
 	mustSignal(t, releaseStarted)
 	go func() {
-		settlement, err := fixture.session.CompleteJob(ctx, transfer.JobSucceeded)
+		settlement, err := fixture.session.FinalizeTree(ctx, transfer.DirectTreeOutcomePublished)
 		exactRetry <- result{settlement: settlement, err: err}
 	}()
 	go func() {
-		settlement, err := fixture.session.PauseJob(ctx, transfer.JobPauseShutdown)
+		settlement, err := fixture.session.PauseTree(ctx, transfer.JobPauseShutdown)
 		conflictingRetry <- result{settlement: settlement, err: err}
 	}()
 
@@ -454,7 +454,7 @@ func TestConcurrentCloseRequestsSettleAndReleaseExactlyOnce(t *testing.T) {
 	ownerResult := mustResult(t, owner)
 	exactResult := mustResult(t, exactRetry)
 	conflictResult := mustResult(t, conflictingRetry)
-	if ownerResult.err != nil || ownerResult.settlement.Kind() != transfer.JobClosed {
+	if ownerResult.err != nil || ownerResult.settlement.Kind() != transfer.DirectTreeSettlementPublished {
 		t.Fatalf("owner settlement=%v err=%v", ownerResult.settlement.Kind(), ownerResult.err)
 	}
 	if exactResult.err != nil || exactResult.settlement != ownerResult.settlement {
@@ -488,8 +488,8 @@ func TestAmbiguousActiveFileClosesWithoutReplayingItsExecutor(t *testing.T) {
 		t.Fatalf("ambiguous write error=%v", err)
 	}
 
-	settlement, err := fixture.session.PauseJob(ctx, transfer.JobPauseOutputFailure)
-	if err == nil || settlement.Kind() != transfer.JobPausedNeedsAttention {
+	settlement, err := fixture.session.PauseTree(ctx, transfer.JobPauseOutputFailure)
+	if err == nil || settlement.Kind() != transfer.DirectTreeSettlementNeedsAttention {
 		t.Fatalf("close settlement=%v err=%v", settlement.Kind(), err)
 	}
 	executor.mu.Lock()
@@ -677,8 +677,8 @@ func TestCanceledResourceReleaseSettlesAsNeedsAttention(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	settlement, err := fixture.session.CompleteJob(canceled, transfer.JobSucceeded)
-	if !errors.Is(err, context.Canceled) || settlement.Kind() != transfer.JobPausedNeedsAttention {
+	settlement, err := fixture.session.FinalizeTree(canceled, transfer.DirectTreeOutcomePublished)
+	if !errors.Is(err, context.Canceled) || settlement.Kind() != transfer.DirectTreeSettlementNeedsAttention {
 		t.Fatalf("canceled release settlement=%v err=%v", settlement.Kind(), err)
 	}
 	fixture.resources.mu.Lock()

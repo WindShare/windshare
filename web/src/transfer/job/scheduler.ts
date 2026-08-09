@@ -10,16 +10,20 @@ const PENDING_PATH_SEGMENT_METADATA_BYTES = 8n
 const UTF8_ENCODER = new TextEncoder()
 
 export function pendingFileMetadataBytes(file: PendingFile): bigint {
-  const admission = file.parentAdmission
+  const admission = file.parent.admission
   const strings = [
     file.entry.idText,
     file.entry.name,
-    ...file.path,
-    admission.token,
-    admission.directoryId,
-    admission.generation,
-    ...admission.path,
-    ...(admission.parentToken === undefined ? [] : [admission.parentToken]),
+    ...file.sourcePath,
+    ...file.artifactPath,
+    file.parent.directoryId,
+    file.parent.generation,
+    ...file.parent.sourcePath,
+    ...file.parent.artifactPath,
+    ...(admission === undefined ? [] : [
+      admission.token,
+      ...(admission.parentToken === undefined ? [] : [admission.parentToken]),
+    ]),
   ]
   let bytes = PENDING_FILE_STRUCTURAL_METADATA_BYTES +
     PENDING_FILE_EXACT_SIZE_BYTES +
@@ -27,7 +31,7 @@ export function pendingFileMetadataBytes(file: PendingFile): bigint {
     BigInt(strings.length) * PENDING_PATH_SEGMENT_METADATA_BYTES
   for (const value of strings) bytes += BigInt(UTF8_ENCODER.encode(value).byteLength)
   if (file.modifiedTime !== undefined) bytes += PENDING_FILE_TIMESTAMP_METADATA_BYTES
-  if (admission.modifiedTime !== undefined) bytes += PENDING_FILE_TIMESTAMP_METADATA_BYTES
+  if (file.parent.modifiedTime !== undefined) bytes += PENDING_FILE_TIMESTAMP_METADATA_BYTES
   return bytes
 }
 

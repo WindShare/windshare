@@ -8,73 +8,80 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const (
-	ControlDirectory       = ".windshare-output"
-	CheckpointDirectory    = "checkpoints-v1"
-	LeasesDirectory        = "leases"
-	AnchorsDirectory       = "anchors"
-	StagesDirectory        = "stages"
-	LegacyCleanupStateFile = "cleanup.state"
-	LegacyCleanupLockFile  = "cleanup.lock"
+	ControlDirectory    = ".windshare-output"
+	CheckpointDirectory = "checkpoints-v2"
+	OwnershipDirectory  = "ownership"
+	LeasesDirectory     = "leases"
+	LookupDirectory     = "lookup"
+	OperationsDirectory = "operations"
 
-	intentLockSuffix = ".runtime.lock"
+	OperationFile        = "operation"
+	ReservationFile      = "reservation"
+	CheckpointsDirectory = "checkpoints"
+	AnchorsDirectory     = "anchors"
+	StagesDirectory      = "stages"
+	ManifestsDirectory   = "manifests"
+	ReceiptsDirectory    = "receipts"
+
+	operationLockSuffix = ".lock"
 )
 
 var checkpointRootEntries = map[string]outputcap.EntryKind{
-	OwnershipFile:          outputcap.EntryRegularFile,
-	LeasesDirectory:        outputcap.EntryDirectory,
-	IntentsDirectory:       outputcap.EntryDirectory,
-	LegacyCleanupStateFile: outputcap.EntryRegularFile,
-	LegacyCleanupLockFile:  outputcap.EntryRegularFile,
+	OwnershipDirectory:  outputcap.EntryDirectory,
+	LeasesDirectory:     outputcap.EntryDirectory,
+	LookupDirectory:     outputcap.EntryDirectory,
+	OperationsDirectory: outputcap.EntryDirectory,
 }
 
-var intentEntries = map[string]outputcap.EntryKind{
+var operationEntries = map[string]outputcap.EntryKind{
+	OperationFile:        outputcap.EntryRegularFile,
+	ReservationFile:      outputcap.EntryRegularFile,
+	CheckpointsDirectory: outputcap.EntryDirectory,
+	ManifestsDirectory:   outputcap.EntryDirectory,
+	ReceiptsDirectory:    outputcap.EntryDirectory,
+}
+
+var checkpointEntries = map[string]outputcap.EntryKind{
 	RecordsDirectory: outputcap.EntryDirectory,
 	AnchorsDirectory: outputcap.EntryDirectory,
 	StagesDirectory:  outputcap.EntryDirectory,
 }
 
-// CertifiedConfig carries the already-proved native root binding. The
-// repository never derives ownership from a pathname or current path existence.
+// CertifiedConfig carries an already-proved native root. Paths are never used
+// as a substitute for the opaque authority carried by Ownership.
 type CertifiedConfig struct {
 	Root      outputcap.Directory
 	Ownership checkpointmodel.Ownership
 }
 
-// Namespace is the fixed current-state scaffold. It contains no intent lease;
-// listing this value is therefore read-only with respect to every intent.
 type Namespace struct {
 	checkpointRoot outputcap.Directory
-	intents        outputcap.Directory
+	operations     outputcap.Directory
+	lookup         outputcap.Directory
 	leases         outputcap.Directory
 	ownership      checkpointmodel.Ownership
 }
 
-// AdoptPinnedNamespace transfers already-pinned fixed-layout directories into
-// the one namespace/lease implementation. Resume inspection establishes the
-// native pins; this constructor deliberately grants no path or name selection.
 func AdoptPinnedNamespace(
 	checkpointRoot outputcap.Directory,
-	intents outputcap.Directory,
+	operations outputcap.Directory,
+	lookup outputcap.Directory,
 	leases outputcap.Directory,
 	ownership checkpointmodel.Ownership,
 ) (Namespace, error) {
-	if checkpointRoot == nil || intents == nil || leases == nil || !ownership.Valid() {
+	if checkpointRoot == nil || operations == nil || lookup == nil || leases == nil || !ownership.Valid() {
 		return Namespace{}, transfer.ErrInvalidOutputBinding
 	}
 	return Namespace{
-		checkpointRoot: checkpointRoot,
-		intents:        intents,
-		leases:         leases,
-		ownership:      ownership,
+		checkpointRoot: checkpointRoot, operations: operations, lookup: lookup,
+		leases: leases, ownership: ownership,
 	}, nil
 }
 
-// CheckpointRootEntryKind exposes the fixed allowlist without exporting its
-// mutable map. Native inspectors can classify state while checkpointstore
-// remains the sole layout authority.
 func CheckpointRootEntryKind(name string) (outputcap.EntryKind, bool) {
 	kind, known := checkpointRootEntries[name]
 	return kind, known
@@ -82,16 +89,13 @@ func CheckpointRootEntryKind(name string) (outputcap.EntryKind, bool) {
 
 func CheckpointRootEntryLimit() int { return len(checkpointRootEntries) }
 
-func IntentEntryKind(name string) (outputcap.EntryKind, bool) {
-	kind, known := intentEntries[name]
+func OperationEntryKind(name string) (outputcap.EntryKind, bool) {
+	kind, known := operationEntries[name]
 	return kind, known
 }
 
-func IntentEntryLimit() int { return len(intentEntries) }
+func OperationEntryLimit() int { return len(operationEntries) }
 
-// Initialize certifies ownership and installs only the fixed root scaffold. It
-// deliberately creates no intent child, so every intent mutation remains behind
-// AcquireIntent's exclusive lease.
 func Initialize(config CertifiedConfig) (result Namespace, resultErr error) {
 	if err := validateCertifiedConfig(config); err != nil {
 		return Namespace{}, err
@@ -112,37 +116,46 @@ func Initialize(config CertifiedConfig) (result Namespace, resultErr error) {
 			resultErr = errors.Join(resultErr, checkpointRoot.Close())
 		}
 	}()
-	if err := ensureOwnership(checkpointRoot, config.Ownership, true); err != nil {
-		return Namespace{}, repositoryError("certify checkpoint ownership", err)
+	if err := validateAllowedEntries(checkpointRoot, checkpointRootEntries); err != nil {
+		return Namespace{}, repositoryError("validate checkpoint layout", err)
+	}
+	ownershipDirectory, err := openOrCreateDirectory(checkpointRoot, OwnershipDirectory)
+	if err != nil {
+		return Namespace{}, repositoryError("initialize checkpoint ownership directory", err)
+	}
+	if err := ensureOwnership(ownershipDirectory, config.Ownership, true); err != nil {
+		return Namespace{}, repositoryError("certify checkpoint ownership", errors.Join(err, ownershipDirectory.Close()))
 	}
 	encoded, err := checkpointmodel.EncodeOwnership(config.Ownership)
 	if err != nil {
-		return Namespace{}, codedError(ErrorOwnershipMismatch, "encode checkpoint ownership", err)
+		return Namespace{}, codedError(ErrorOwnershipMismatch, "encode checkpoint ownership", errors.Join(err, ownershipDirectory.Close()))
 	}
-	if err := reconcileExactCandidates(checkpointRoot, OwnershipFile, encoded); err != nil {
-		return Namespace{}, repositoryError("reconcile checkpoint ownership", err)
+	if err := reconcileExactCandidates(ownershipDirectory, OwnershipFile, encoded); err != nil {
+		return Namespace{}, repositoryError("reconcile checkpoint ownership", errors.Join(err, ownershipDirectory.Close()))
 	}
-	if err := validateAllowedEntries(checkpointRoot, checkpointRootEntries); err != nil {
-		return Namespace{}, repositoryError("validate checkpoint layout", err)
+	if err := ownershipDirectory.Close(); err != nil {
+		return Namespace{}, repositoryError("close checkpoint ownership directory", err)
 	}
 	leases, err := openOrCreateDirectory(checkpointRoot, LeasesDirectory)
 	if err != nil {
 		return Namespace{}, repositoryError("initialize checkpoint leases", err)
 	}
-	intents, err := openOrCreateDirectory(checkpointRoot, IntentsDirectory)
+	lookup, err := openOrCreateDirectory(checkpointRoot, LookupDirectory)
 	if err != nil {
-		return Namespace{}, repositoryError("initialize checkpoint intents", errors.Join(err, leases.Close()))
+		return Namespace{}, repositoryError("initialize checkpoint lookup", errors.Join(err, leases.Close()))
+	}
+	operations, err := openOrCreateDirectory(checkpointRoot, OperationsDirectory)
+	if err != nil {
+		return Namespace{}, repositoryError("initialize checkpoint operations", errors.Join(err, lookup.Close(), leases.Close()))
 	}
 	return Namespace{
-		checkpointRoot: checkpointRoot,
-		intents:        intents,
-		leases:         leases,
-		ownership:      config.Ownership,
+		checkpointRoot: checkpointRoot, operations: operations, lookup: lookup,
+		leases: leases, ownership: config.Ownership,
 	}, nil
 }
 
-// OpenNamespace reopens a previously initialized scaffold without reconciling or
-// creating anything. Read-only resume inventory code uses this path.
+// OpenNamespace is observation-only: an incomplete or foreign scaffold is not
+// repaired during recovery because repair would turn uncertainty into authority.
 func OpenNamespace(config CertifiedConfig) (result Namespace, resultErr error) {
 	if err := validateCertifiedConfig(config); err != nil {
 		return Namespace{}, err
@@ -163,29 +176,36 @@ func OpenNamespace(config CertifiedConfig) (result Namespace, resultErr error) {
 			resultErr = errors.Join(resultErr, checkpointRoot.Close())
 		}
 	}()
-	status, err := inspectOwnership(checkpointRoot, config.Ownership)
+	if err := validateAllowedEntries(checkpointRoot, checkpointRootEntries); err != nil {
+		return Namespace{}, repositoryError("validate checkpoint layout", err)
+	}
+	ownershipDirectory, err := openExistingDirectory(checkpointRoot, OwnershipDirectory)
 	if err != nil {
-		return Namespace{}, repositoryError("verify checkpoint ownership", err)
+		return Namespace{}, repositoryError("open checkpoint ownership directory", err)
+	}
+	status, err := inspectOwnership(ownershipDirectory, config.Ownership)
+	closeOwnershipErr := ownershipDirectory.Close()
+	if err != nil || closeOwnershipErr != nil {
+		return Namespace{}, repositoryError("verify checkpoint ownership", errors.Join(err, closeOwnershipErr))
 	}
 	if status != OwnershipMatched {
 		return Namespace{}, codedError(ErrorOwnershipMismatch, "verify checkpoint ownership", checkpointmodel.ErrInvalidOwnership)
-	}
-	if err := validateAllowedEntries(checkpointRoot, checkpointRootEntries); err != nil {
-		return Namespace{}, repositoryError("validate checkpoint layout", err)
 	}
 	leases, err := openExistingDirectory(checkpointRoot, LeasesDirectory)
 	if err != nil {
 		return Namespace{}, repositoryError("open checkpoint leases", err)
 	}
-	intents, err := openExistingDirectory(checkpointRoot, IntentsDirectory)
+	lookup, err := openExistingDirectory(checkpointRoot, LookupDirectory)
 	if err != nil {
-		return Namespace{}, repositoryError("open checkpoint intents", errors.Join(err, leases.Close()))
+		return Namespace{}, repositoryError("open checkpoint lookup", errors.Join(err, leases.Close()))
+	}
+	operations, err := openExistingDirectory(checkpointRoot, OperationsDirectory)
+	if err != nil {
+		return Namespace{}, repositoryError("open checkpoint operations", errors.Join(err, lookup.Close(), leases.Close()))
 	}
 	return Namespace{
-		checkpointRoot: checkpointRoot,
-		intents:        intents,
-		leases:         leases,
-		ownership:      config.Ownership,
+		checkpointRoot: checkpointRoot, operations: operations, lookup: lookup,
+		leases: leases, ownership: config.Ownership,
 	}, nil
 }
 
@@ -194,117 +214,145 @@ func (namespace *Namespace) Close() error {
 		return nil
 	}
 	err := errors.Join(
-		closeDirectory(namespace.intents),
-		closeDirectory(namespace.leases),
-		closeDirectory(namespace.checkpointRoot),
+		closeDirectory(namespace.operations), closeDirectory(namespace.lookup),
+		closeDirectory(namespace.leases), closeDirectory(namespace.checkpointRoot),
 	)
 	*namespace = Namespace{}
 	return repositoryError("close checkpoint namespace", err)
 }
 
-// IntentLease owns the only authority allowed to inspect or mutate one intent
-// subtree. The duplicated intents handle is retained so its lifetime cannot be
-// shortened by closing the parent Namespace.
-type IntentLease struct {
-	intent  transfer.TransferIntentDigest
-	binding checkpointmodel.Binding
-	intents outputcap.Directory
-	lock    outputcap.Lock
+// OperationLease is the single mutation authority for one durable operation.
+// The operations handle is duplicated so closing Namespace cannot shorten it.
+type OperationLease struct {
+	operation  receivecontract.OperationID
+	binding    checkpointmodel.Binding
+	operations outputcap.Directory
+	lookup     outputcap.Directory
+	lock       outputcap.Lock
 }
 
-func (lease IntentLease) Binding() checkpointmodel.Binding { return lease.binding }
+func (lease OperationLease) Binding() checkpointmodel.Binding { return lease.binding }
 
-func (namespace *Namespace) AcquireIntent(intent transfer.TransferIntentDigest) (IntentLease, error) {
-	if namespace == nil || namespace.leases == nil || namespace.intents == nil || intent.IsZero() {
-		return IntentLease{}, transfer.ErrInvalidOutputBinding
+func (namespace *Namespace) AcquireOperation(
+	operation receivecontract.OperationID,
+	intent transfer.ReceiveIntentDigest,
+	materialization receivecontract.BindingDigest,
+) (OperationLease, error) {
+	if namespace == nil || namespace.leases == nil || namespace.operations == nil || namespace.lookup == nil ||
+		operation.IsZero() || intent.IsZero() || materialization.IsZero() {
+		return OperationLease{}, transfer.ErrInvalidOutputBinding
 	}
-	binding, err := checkpointmodel.NewBinding(namespace.ownership, intent)
+	binding, err := checkpointmodel.NewBinding(namespace.ownership, operation, intent, materialization)
 	if err != nil {
-		return IntentLease{}, transfer.ErrInvalidOutputBinding
+		return OperationLease{}, transfer.ErrInvalidOutputBinding
 	}
-	lock, created, err := namespace.leases.AcquireLock(intentLeaseName(intent), false)
+	lock, created, err := namespace.leases.AcquireLock(operationLeaseName(operation), false)
 	if err != nil {
-		return IntentLease{}, repositoryError("acquire intent lease", errors.Join(err, closeLock(lock)))
+		return OperationLease{}, repositoryError("acquire operation lease", errors.Join(err, closeLock(lock)))
 	}
 	if lock == nil {
-		return IntentLease{}, codedError(ErrorUnsafeInstall, "acquire intent lease", outputcap.ErrUnsafeNamespace)
+		return OperationLease{}, codedError(ErrorUnsafeInstall, "acquire operation lease", outputcap.ErrUnsafeNamespace)
 	}
 	if created {
 		if err := namespace.leases.Sync(); err != nil {
-			return IntentLease{}, repositoryError("sync intent lease", errors.Join(err, lock.Close()))
+			return OperationLease{}, repositoryError("sync operation lease", errors.Join(err, lock.Close()))
 		}
 	}
-	intents, err := namespace.intents.Duplicate()
+	operations, err := namespace.operations.Duplicate()
 	if err != nil {
-		return IntentLease{}, repositoryError("retain intent namespace", errors.Join(err, lock.Close()))
+		return OperationLease{}, repositoryError("retain operation namespace", errors.Join(err, lock.Close()))
 	}
-	if intents == nil {
-		return IntentLease{}, codedError(ErrorUnsafeInstall, "retain intent namespace",
-			errors.Join(outputcap.ErrUnsafeNamespace, lock.Close()))
+	if operations == nil {
+		return OperationLease{}, codedError(
+			ErrorUnsafeInstall, "retain operation namespace", errors.Join(outputcap.ErrUnsafeNamespace, lock.Close()),
+		)
 	}
-	return IntentLease{intent: intent, binding: binding, intents: intents, lock: lock}, nil
+	lookup, err := namespace.lookup.Duplicate()
+	if err != nil {
+		return OperationLease{}, repositoryError(
+			"retain operation lookup", errors.Join(err, operations.Close(), lock.Close()),
+		)
+	}
+	if lookup == nil {
+		return OperationLease{}, codedError(
+			ErrorUnsafeInstall, "retain operation lookup",
+			errors.Join(outputcap.ErrUnsafeNamespace, operations.Close(), lock.Close()),
+		)
+	}
+	return OperationLease{
+		operation: operation, binding: binding, operations: operations, lookup: lookup, lock: lock,
+	}, nil
 }
 
-func (lease *IntentLease) Close() error {
+func (lease *OperationLease) Close() error {
 	if lease == nil {
 		return nil
 	}
-	// The lock is released last so no second owner can observe half-closed
-	// repository capabilities from the first owner.
-	err := errors.Join(closeDirectory(lease.intents), closeLock(lease.lock))
-	*lease = IntentLease{}
-	return repositoryError("release intent lease", err)
+	// Releasing the lock last prevents another owner from observing half-closed
+	// capability handles from this owner.
+	err := errors.Join(closeDirectory(lease.operations), closeDirectory(lease.lookup), closeLock(lease.lock))
+	*lease = OperationLease{}
+	return repositoryError("release operation lease", err)
 }
 
-func (lease *IntentLease) OpenOrCreateRepository() (Repository, error) {
+func (lease *OperationLease) OpenOrCreateRepository() (Repository, error) {
 	return lease.openRepository(true)
 }
 
-func (lease *IntentLease) OpenExistingRepository() (Repository, error) {
+func (lease *OperationLease) OpenExistingRepository() (Repository, error) {
 	return lease.openRepository(false)
 }
 
-func (lease *IntentLease) openRepository(create bool) (result Repository, resultErr error) {
-	if lease == nil || lease.intents == nil || lease.lock == nil || lease.intent.IsZero() {
+func (lease *OperationLease) openRepository(create bool) (result Repository, resultErr error) {
+	if lease == nil || lease.operations == nil || lease.lock == nil || lease.operation.IsZero() {
 		return Repository{}, transfer.ErrInvalidOutputBinding
-	}
-	intentName := intentNamespaceName(lease.intent)
-	var intent outputcap.Directory
-	var err error
-	if create {
-		intent, err = openOrCreateDirectory(lease.intents, intentName)
-	} else {
-		intent, err = openExistingDirectory(lease.intents, intentName)
-	}
-	if err != nil {
-		return Repository{}, repositoryError("open leased intent", err)
-	}
-	defer func() {
-		if resultErr != nil {
-			resultErr = errors.Join(resultErr, intent.Close())
-		}
-	}()
-	if err := validateAllowedEntries(intent, intentEntries); err != nil {
-		return Repository{}, repositoryError("validate intent layout", err)
 	}
 	open := openExistingDirectory
 	if create {
 		open = openOrCreateDirectory
 	}
-	records, err := open(intent, RecordsDirectory)
+	operation, err := open(lease.operations, operationNamespaceName(lease.operation))
 	if err != nil {
-		return Repository{}, repositoryError("open checkpoint records", err)
+		return Repository{}, repositoryError("open leased operation", err)
 	}
-	anchors, err := open(intent, AnchorsDirectory)
-	if err != nil {
-		return Repository{}, repositoryError("open checkpoint anchors", errors.Join(err, records.Close()))
+	defer func() {
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, operation.Close())
+		}
+	}()
+	if err := validateAllowedEntries(operation, operationEntries); err != nil {
+		return Repository{}, repositoryError("validate operation layout", err)
 	}
-	stages, err := open(intent, StagesDirectory)
+	checkpoints, err := open(operation, CheckpointsDirectory)
 	if err != nil {
-		return Repository{}, repositoryError("open checkpoint stages", errors.Join(err, anchors.Close(), records.Close()))
+		return Repository{}, repositoryError("open operation checkpoints", err)
+	}
+	if err := validateAllowedEntries(checkpoints, checkpointEntries); err != nil {
+		return Repository{}, repositoryError("validate checkpoint layout", errors.Join(err, checkpoints.Close()))
+	}
+	records, err := open(checkpoints, RecordsDirectory)
+	if err != nil {
+		return Repository{}, repositoryError("open checkpoint records", errors.Join(err, checkpoints.Close()))
+	}
+	anchors, err := open(checkpoints, AnchorsDirectory)
+	if err != nil {
+		return Repository{}, repositoryError("open checkpoint anchors", errors.Join(err, records.Close(), checkpoints.Close()))
+	}
+	stages, err := open(checkpoints, StagesDirectory)
+	if err != nil {
+		return Repository{}, repositoryError("open checkpoint stages", errors.Join(err, anchors.Close(), records.Close(), checkpoints.Close()))
+	}
+	manifests, err := open(operation, ManifestsDirectory)
+	if err != nil {
+		return Repository{}, repositoryError("open operation manifests", errors.Join(err, stages.Close(), anchors.Close(), records.Close(), checkpoints.Close()))
+	}
+	receipts, err := open(operation, ReceiptsDirectory)
+	if err != nil {
+		return Repository{}, repositoryError("open operation receipts", errors.Join(err, manifests.Close(), stages.Close(), anchors.Close(), records.Close(), checkpoints.Close()))
 	}
 	return Repository{
-		intent: intent, records: records, anchors: anchors, stages: stages, binding: lease.binding,
+		operation: operation, checkpoints: checkpoints, records: records, anchors: anchors,
+		stages: stages, manifests: manifests, receipts: receipts, binding: lease.binding,
 	}, nil
 }
 
@@ -315,12 +363,12 @@ func validateCertifiedConfig(config CertifiedConfig) error {
 	return nil
 }
 
-func intentNamespaceName(intent transfer.TransferIntentDigest) string {
-	return hex.EncodeToString(intent.Bytes())
+func operationNamespaceName(operation receivecontract.OperationID) string {
+	return hex.EncodeToString(operation.Bytes())
 }
 
-func intentLeaseName(intent transfer.TransferIntentDigest) string {
-	return intentNamespaceName(intent) + intentLockSuffix
+func operationLeaseName(operation receivecontract.OperationID) string {
+	return operationNamespaceName(operation) + operationLockSuffix
 }
 
 func openExistingDirectory(parent outputcap.Directory, name string) (outputcap.Directory, error) {
