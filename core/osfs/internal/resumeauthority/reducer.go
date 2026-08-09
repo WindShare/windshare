@@ -1,349 +1,231 @@
 package resumeauthority
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
-	"slices"
+	"errors"
 
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 )
 
-const discardAttentionDomain = "windshare/resume-discard-attention/v1"
+type DecisionAction uint8
 
-// DiscardPlan is a pure policy result. ExpectedStatus becomes an actual
-// settlement only after an executor applies every action and honors any
-// per-action needs-attention result.
-type DiscardPlan struct {
-	actions        []Action
-	attention      []Attention
-	expectedStatus DiscardStatus
+const (
+	DecisionNoChange DecisionAction = iota + 1
+	DecisionReplace
+	DecisionCleanupRequired
+)
+
+type Decision struct {
+	action DecisionAction
+	next   checkpointmodel.ReceiveLifecycleState
 }
 
-func (plan DiscardPlan) Actions() []Action             { return slices.Clone(plan.actions) }
-func (plan DiscardPlan) Attention() []Attention        { return slices.Clone(plan.attention) }
-func (plan DiscardPlan) ExpectedStatus() DiscardStatus { return plan.expectedStatus }
+func (decision Decision) Action() DecisionAction { return decision.action }
+func (decision Decision) Next() (checkpointmodel.ReceiveLifecycleState, bool) {
+	return decision.next, decision.action == DecisionReplace && decision.next.Valid()
+}
 
-func (plan DiscardPlan) Valid() bool {
-	if !plan.expectedStatus.Valid() {
-		return false
+func ReduceRecovery(
+	state checkpointmodel.ReceiveLifecycleState,
+	evidence RecoveryEvidence,
+	nowMillis uint64,
+) (Decision, error) {
+	if !state.Valid() || !evidence.valid() {
+		return Decision{}, ErrInvalidContract
 	}
-	for _, action := range plan.actions {
-		if !action.Valid() {
-			return false
+	if state.Phase() == checkpointmodel.LifecycleNeedsAttention ||
+		state.Phase() == checkpointmodel.LifecycleDiscarded ||
+		state.Phase() == checkpointmodel.LifecyclePartialDirectory {
+		return Decision{action: DecisionNoChange}, nil
+	}
+	if state.Phase() == checkpointmodel.LifecyclePublished ||
+		state.Phase() == checkpointmodel.LifecycleExpired {
+		return reduceTerminalCleanup(state, evidence.Cleanup)
+	}
+	if state.Phase() == checkpointmodel.LifecycleResumableReceive &&
+		nowMillis >= state.ExpiresAtMillis() {
+		if evidence.Cleanup == CleanupUnknown {
+			return attentionDecision(state, checkpointmodel.AttentionCleanupUnknown)
+		}
+		if evidence.ExpiryReceipt.Valid() &&
+			evidence.ExpiryReceipt.Kind() == checkpointmodel.ReceiptExpiry {
+			return replaceDecision(state, checkpointmodel.LifecycleStateSpec{
+				OperationID: state.OperationID(), ReceiveIntent: state.ReceiveIntentDigest(),
+				StateGeneration: state.StateGeneration() + 1, Phase: checkpointmodel.LifecycleExpired,
+				CheckpointRefs: state.CheckpointReferences(), ReceiptDigest: evidence.ExpiryReceipt.Digest(),
+				ExpiresAtMillis: state.ExpiresAtMillis(), SuccessCount: state.SuccessCount(),
+				FailureCount: state.FailureCount(), CleanupState: cleanupState(evidence.Cleanup),
+				PriorStableState: checkpointmodel.LifecycleResumableReceive,
+			})
+		}
+		return Decision{}, ErrInvalidContract
+	}
+	if state.Phase() == checkpointmodel.LifecycleResumableReceive {
+		return Decision{action: DecisionNoChange}, nil
+	}
+	if evidence.TargetOwnership == EvidenceUnknown || evidence.Checkpoints == EvidenceUnknown {
+		return attentionDecision(state, checkpointmodel.AttentionTargetOwnershipUnknown)
+	}
+	if state.Phase() == checkpointmodel.LifecycleFinalizingTree &&
+		evidence.TerminalReceipt.Valid() {
+		receipt := evidence.TerminalReceipt
+		switch receipt.Kind() {
+		case checkpointmodel.ReceiptTreeCompletion:
+			return replaceDecision(state, checkpointmodel.LifecycleStateSpec{
+				OperationID: state.OperationID(), ReceiveIntent: state.ReceiveIntentDigest(),
+				StateGeneration: state.StateGeneration() + 1, Phase: checkpointmodel.LifecyclePublished,
+				CheckpointRefs: receipt.CheckpointReferences(), ReceiptDigest: receipt.Digest(),
+				SuccessCount: receipt.SuccessCount(), FailureCount: receipt.FailureCount(),
+				CleanupState: cleanupState(evidence.Cleanup),
+			})
+		case checkpointmodel.ReceiptPartialDirectory:
+			return replaceDecision(state, checkpointmodel.LifecycleStateSpec{
+				OperationID: state.OperationID(), ReceiveIntent: state.ReceiveIntentDigest(),
+				StateGeneration: state.StateGeneration() + 1, Phase: checkpointmodel.LifecyclePartialDirectory,
+				CheckpointRefs: receipt.CheckpointReferences(), ReceiptDigest: receipt.Digest(),
+				SuccessCount: receipt.SuccessCount(), FailureCount: receipt.FailureCount(),
+				PartialReason: receipt.PartialReason(),
+			})
 		}
 	}
-	for _, attention := range plan.attention {
-		if !attention.Valid() {
-			return false
+	switch state.Phase() {
+	case checkpointmodel.LifecycleReceiving, checkpointmodel.LifecycleFinalizingTree:
+		expires, err := checkpointmodel.NextStableExpiry(nowMillis)
+		if err != nil {
+			return Decision{}, errors.Join(ErrInvalidContract, err)
 		}
-	}
-	switch plan.expectedStatus {
-	case Discarded:
-		return len(plan.actions) > 0 && len(plan.attention) == 0
-	case AlreadyAbsent:
-		return len(plan.actions) == 0 && len(plan.attention) == 0
-	case DiscardNeedsAttention:
-		return len(plan.actions) == 0 && len(plan.attention) > 0
+		return replaceDecision(state, checkpointmodel.LifecycleStateSpec{
+			OperationID: state.OperationID(), ReceiveIntent: state.ReceiveIntentDigest(),
+			StateGeneration: state.StateGeneration() + 1, Phase: checkpointmodel.LifecycleResumableReceive,
+			CheckpointRefs: state.CheckpointReferences(), ExpiresAtMillis: expires,
+			SuccessCount: state.SuccessCount(), FailureCount: state.FailureCount(),
+		})
 	default:
-		return false
+		return Decision{}, ErrInvalidContract
 	}
 }
 
-// ReduceDiscard deterministically authorizes only stage -> sync -> anchor ->
-// sync -> record -> sync. It is total over malformed observations: invalid or
-// incomplete evidence becomes needs-attention and never becomes an action.
 func ReduceDiscard(
-	snapshot RepositorySnapshot,
-	publications []PublicationObservation,
-) DiscardPlan {
-	attention := append([]Attention(nil), snapshot.attention...)
-	if !snapshot.namespaceEvidence.Valid() {
-		attention = append(attention, derivedAttention(AttentionCorruptBinding, nil))
-		return attentionPlan(attention)
+	state checkpointmodel.ReceiveLifecycleState,
+	target EvidenceState,
+	cleanup DiscardEvidence,
+) (Decision, error) {
+	if !state.Valid() || !target.Valid() || !cleanup.valid() {
+		return Decision{}, ErrInvalidContract
 	}
-	if snapshot.namespaceEvidence != EvidenceExact {
-		reason := evidenceAttention(snapshot.namespaceEvidence, AttentionMissingOwnership)
-		attention = append(attention, derivedAttention(reason, nil))
-		return attentionPlan(attention)
+	switch state.Phase() {
+	case checkpointmodel.LifecyclePublished, checkpointmodel.LifecyclePartialDirectory,
+		checkpointmodel.LifecycleDiscarded, checkpointmodel.LifecycleNeedsAttention:
+		// Successful DirectTree outputs are never cleanup targets; the existing
+		// terminal projection remains the only truthful result.
+		return Decision{action: DecisionNoChange}, nil
+	case checkpointmodel.LifecycleExpired:
+		return reduceExpiredDiscard(state, target, cleanup)
 	}
-	if !snapshot.binding.Valid() {
-		attention = append(attention, derivedAttention(AttentionCorruptBinding, nil))
-		return attentionPlan(attention)
+	if target == EvidenceUnknown {
+		return attentionDecision(state, checkpointmodel.AttentionTargetOwnershipUnknown)
 	}
-
-	checkpoints := slices.Clone(snapshot.checkpoints)
-	slices.SortFunc(checkpoints, func(left, right CheckpointObservation) int {
-		return bytes.Compare(left.recordID.Bytes(), right.recordID.Bytes())
-	})
-	publicationByRecord, publicationAttention := indexPublications(publications)
-	attention = append(attention, publicationAttention...)
-	invalidRecords := duplicateRecordIDs(checkpoints)
-	for recordID := range duplicateObjectOwners(snapshot.binding, checkpoints) {
-		invalidRecords[recordID] = struct{}{}
-	}
-	knownRecords := make(map[checkpointmodel.RecordID]struct{}, len(checkpoints))
-	for _, checkpoint := range checkpoints {
-		knownRecords[checkpoint.recordID] = struct{}{}
-	}
-	for recordID := range publicationByRecord {
-		if _, known := knownRecords[recordID]; !known {
-			attention = append(attention, derivedAttention(AttentionCorruptBinding, recordID.Bytes()))
-		}
-	}
-
-	actions := make([]Action, 0, len(checkpoints)*6)
-	processed := make(map[checkpointmodel.RecordID]struct{}, len(checkpoints))
-	for _, checkpoint := range checkpoints {
-		if _, seen := processed[checkpoint.recordID]; seen {
-			continue
-		}
-		processed[checkpoint.recordID] = struct{}{}
-		if _, invalid := invalidRecords[checkpoint.recordID]; invalid {
-			attention = append(attention, derivedAttention(
-				AttentionCorruptBinding,
-				checkpoint.recordID.Bytes(),
-			))
-			continue
-		}
-		checkpointActions, checkpointAttention := reduceCheckpoint(
-			snapshot.binding,
-			checkpoint,
-			publicationByRecord[checkpoint.recordID],
-		)
-		actions = append(actions, checkpointActions...)
-		attention = append(attention, checkpointAttention...)
-	}
-
-	attention = canonicalAttention(attention)
-	switch {
-	case len(attention) > 0:
-		// Intent-level preflight is atomic. An opaque sibling could claim the
-		// same owned object as an otherwise valid record, so no deletion is
-		// authorized until the entire selected intent is unambiguous.
-		return DiscardPlan{attention: attention, expectedStatus: DiscardNeedsAttention}
-	case len(actions) == 0:
-		return DiscardPlan{expectedStatus: AlreadyAbsent}
+	switch cleanup.State {
+	case CleanupUnknown:
+		return attentionDecision(state, checkpointmodel.AttentionCleanupUnknown)
+	case CleanupPending:
+		return Decision{action: DecisionCleanupRequired}, nil
+	case CleanupComplete:
+		return replaceDecision(state, checkpointmodel.LifecycleStateSpec{
+			OperationID: state.OperationID(), ReceiveIntent: state.ReceiveIntentDigest(),
+			StateGeneration: state.StateGeneration() + 1, Phase: checkpointmodel.LifecycleDiscarded,
+			ReceiptDigest: cleanup.Receipt.Digest(), CleanupState: checkpointmodel.OwnedCleanupClean,
+		})
 	default:
-		return DiscardPlan{actions: actions, expectedStatus: Discarded}
+		return Decision{}, ErrInvalidContract
 	}
 }
 
-func reduceCheckpoint(
-	binding checkpointmodel.Binding,
-	checkpoint CheckpointObservation,
-	publications []PublicationObservation,
-) ([]Action, []Attention) {
-	recordKey := checkpoint.recordID.Bytes()
-	if !checkpoint.validShape() {
-		return nil, []Attention{derivedAttention(AttentionCorruptBinding, recordKey)}
+func reduceExpiredDiscard(
+	state checkpointmodel.ReceiveLifecycleState,
+	target EvidenceState,
+	cleanup DiscardEvidence,
+) (Decision, error) {
+	if state.CleanupState() == checkpointmodel.OwnedCleanupClean {
+		return Decision{action: DecisionNoChange}, nil
 	}
-	switch checkpoint.recordEvidence {
-	case EvidenceAbsent:
-		if checkpoint.stageEvidence == EvidenceAbsent && checkpoint.anchorEvidence == EvidenceAbsent {
-			return nil, nil
-		}
-		reason := artifactAttention(checkpoint.stageEvidence, checkpoint.anchorEvidence)
-		return nil, []Attention{derivedAttention(reason, recordKey)}
-	case EvidenceReplaced:
-		return nil, []Attention{derivedAttention(AttentionReplacement, recordKey)}
-	case EvidenceAmbiguous:
-		return nil, []Attention{derivedAttention(AttentionCorruptBinding, recordKey)}
-	case EvidenceExact:
+	if target == EvidenceUnknown {
+		return attentionDecision(state, checkpointmodel.AttentionTargetOwnershipUnknown)
+	}
+	switch cleanup.State {
+	case CleanupUnknown:
+		return attentionDecision(state, checkpointmodel.AttentionCleanupUnknown)
+	case CleanupPending:
+		return Decision{action: DecisionCleanupRequired}, nil
+	case CleanupComplete:
+		return replaceDecision(state, checkpointmodel.LifecycleStateSpec{
+			OperationID: state.OperationID(), ReceiveIntent: state.ReceiveIntentDigest(),
+			StateGeneration: state.StateGeneration() + 1, Phase: checkpointmodel.LifecycleExpired,
+			CheckpointRefs: state.CheckpointReferences(), ReceiptDigest: state.ReceiptDigest(),
+			ExpiresAtMillis: state.ExpiresAtMillis(), SuccessCount: state.SuccessCount(),
+			FailureCount: state.FailureCount(), CleanupState: checkpointmodel.OwnedCleanupClean,
+			PriorStableState: state.PriorStableState(),
+		})
 	default:
-		return nil, []Attention{derivedAttention(AttentionCorruptBinding, recordKey)}
-	}
-
-	record := checkpoint.record
-	if !record.Valid() || !checkpointmodel.Committed(record) ||
-		!binding.Matches(record, checkpoint.recordID) {
-		return nil, []Attention{derivedAttention(AttentionCorruptBinding, recordKey)}
-	}
-	if reason, unsafe := unsafeArtifactEvidence(checkpoint.stageEvidence, checkpoint.anchorEvidence); unsafe {
-		return nil, []Attention{derivedAttention(reason, recordKey)}
-	}
-	if len(publications) != 1 {
-		return nil, []Attention{derivedAttention(AttentionAmbiguousPublication, recordKey)}
-	}
-	finalEvidence := publications[0].final
-	if recordHasPublishedFinal(record) {
-		if finalEvidence != EvidenceExact {
-			reason := AttentionAmbiguousPublication
-			if finalEvidence == EvidenceReplaced {
-				reason = AttentionReplacement
-			}
-			return nil, []Attention{derivedAttention(reason, recordKey)}
-		}
-	} else if finalEvidence != EvidenceAbsent {
-		return nil, []Attention{derivedAttention(AttentionAmbiguousPublication, recordKey)}
-	}
-
-	actions := make([]Action, 0, 6)
-	if checkpoint.stageEvidence == EvidenceExact {
-		actions = append(actions, Action{kind: ActionRemoveStage, record: record})
-	}
-	actions = append(actions, Action{kind: ActionSyncStages, record: record})
-	if checkpoint.anchorEvidence == EvidenceExact {
-		actions = append(actions, Action{kind: ActionRemoveAnchor, record: record})
-	}
-	actions = append(actions,
-		Action{kind: ActionSyncAnchors, record: record},
-		Action{kind: ActionRemoveRecord, record: record},
-		Action{kind: ActionSyncRecords, record: record},
-	)
-	return actions, nil
-}
-
-func recordHasPublishedFinal(record checkpointmodel.Record) bool {
-	if record.CommitState() == checkpointmodel.CommitPublished {
-		return true
-	}
-	if record.Phase() == checkpointmodel.PhaseRetired {
-		return record.RetirementReason() == checkpointmodel.RetirementPublished
-	}
-	return record.Phase() == checkpointmodel.PhaseQuarantined &&
-		(record.QuarantineOrigin() == checkpointmodel.QuarantineOriginPublished ||
-			record.QuarantineOrigin() == checkpointmodel.QuarantineOriginRetiring &&
-				record.RetirementReason() == checkpointmodel.RetirementPublished)
-}
-
-func unsafeArtifactEvidence(stage, anchor Evidence) (AttentionReason, bool) {
-	for _, evidence := range []Evidence{stage, anchor} {
-		switch evidence {
-		case EvidenceAbsent, EvidenceExact:
-		case EvidenceReplaced:
-			return AttentionReplacement, true
-		case EvidenceAmbiguous:
-			return AttentionMissingOwnership, true
-		default:
-			return AttentionCorruptBinding, true
-		}
-	}
-	return "", false
-}
-
-func artifactAttention(evidence ...Evidence) AttentionReason {
-	if slices.Contains(evidence, EvidenceReplaced) {
-		return AttentionReplacement
-	}
-	return AttentionMissingOwnership
-}
-
-func evidenceAttention(evidence Evidence, fallback AttentionReason) AttentionReason {
-	if evidence == EvidenceReplaced {
-		return AttentionReplacement
-	}
-	if evidence == EvidenceAmbiguous || evidence == EvidenceAbsent {
-		return fallback
-	}
-	return AttentionCorruptBinding
-}
-
-func indexPublications(
-	publications []PublicationObservation,
-) (map[checkpointmodel.RecordID][]PublicationObservation, []Attention) {
-	indexed := make(map[checkpointmodel.RecordID][]PublicationObservation, len(publications))
-	attention := make([]Attention, 0)
-	for _, publication := range publications {
-		if publication.recordID.IsZero() || !publication.final.Valid() {
-			attention = append(attention, derivedAttention(AttentionAmbiguousPublication, nil))
-			continue
-		}
-		indexed[publication.recordID] = append(indexed[publication.recordID], publication)
-	}
-	for recordID, observations := range indexed {
-		if len(observations) != 1 {
-			attention = append(attention, derivedAttention(
-				AttentionAmbiguousPublication,
-				recordID.Bytes(),
-			))
-		}
-	}
-	return indexed, attention
-}
-
-func duplicateRecordIDs(
-	checkpoints []CheckpointObservation,
-) map[checkpointmodel.RecordID]struct{} {
-	counts := make(map[checkpointmodel.RecordID]uint64, len(checkpoints))
-	for _, checkpoint := range checkpoints {
-		counts[checkpoint.recordID]++
-	}
-	duplicates := make(map[checkpointmodel.RecordID]struct{})
-	for recordID, count := range counts {
-		if count > 1 {
-			duplicates[recordID] = struct{}{}
-		}
-	}
-	return duplicates
-}
-
-func duplicateObjectOwners(
-	binding checkpointmodel.Binding,
-	checkpoints []CheckpointObservation,
-) map[checkpointmodel.RecordID]struct{} {
-	owners := make(map[checkpointmodel.ObjectID][]checkpointmodel.RecordID)
-	for _, checkpoint := range checkpoints {
-		if checkpoint.recordEvidence != EvidenceExact || !checkpoint.record.Valid() ||
-			!checkpointmodel.Committed(checkpoint.record) ||
-			!binding.Matches(checkpoint.record, checkpoint.recordID) {
-			continue
-		}
-		objectID := checkpoint.record.OwnedOutputObject()
-		owners[objectID] = append(owners[objectID], checkpoint.recordID)
-	}
-	duplicates := make(map[checkpointmodel.RecordID]struct{})
-	for _, recordIDs := range owners {
-		if len(recordIDs) < 2 {
-			continue
-		}
-		for _, recordID := range recordIDs {
-			duplicates[recordID] = struct{}{}
-		}
-	}
-	return duplicates
-}
-
-func attentionPlan(attention []Attention) DiscardPlan {
-	return DiscardPlan{
-		attention: canonicalAttention(attention), expectedStatus: DiscardNeedsAttention,
+		return Decision{}, ErrInvalidContract
 	}
 }
 
-func canonicalAttention(attention []Attention) []Attention {
-	valid := make([]Attention, 0, len(attention))
-	for _, current := range attention {
-		if current.Valid() {
-			valid = append(valid, current)
-		} else {
-			valid = append(valid, derivedAttention(AttentionCorruptBinding, nil))
-		}
+func reduceTerminalCleanup(
+	state checkpointmodel.ReceiveLifecycleState,
+	cleanup CleanupEvidenceState,
+) (Decision, error) {
+	if state.CleanupState() == checkpointmodel.OwnedCleanupClean {
+		return Decision{action: DecisionNoChange}, nil
 	}
-	slices.SortFunc(valid, func(left, right Attention) int {
-		if left.reason < right.reason {
-			return -1
-		}
-		if left.reason > right.reason {
-			return 1
-		}
-		if left.reference < right.reference {
-			return -1
-		}
-		if left.reference > right.reference {
-			return 1
-		}
-		return 0
+	switch cleanup {
+	case CleanupComplete:
+		return replaceDecision(state, checkpointmodel.LifecycleStateSpec{
+			OperationID: state.OperationID(), ReceiveIntent: state.ReceiveIntentDigest(),
+			StateGeneration: state.StateGeneration() + 1, Phase: state.Phase(),
+			CheckpointRefs: state.CheckpointReferences(), ReceiptDigest: state.ReceiptDigest(),
+			ExpiresAtMillis: state.ExpiresAtMillis(), SuccessCount: state.SuccessCount(),
+			FailureCount: state.FailureCount(), CleanupState: checkpointmodel.OwnedCleanupClean,
+			PriorStableState: state.PriorStableState(),
+		})
+	case CleanupUnknown:
+		return attentionDecision(state, checkpointmodel.AttentionCleanupUnknown)
+	case CleanupPending:
+		return Decision{action: DecisionNoChange}, nil
+	default:
+		return Decision{}, ErrInvalidContract
+	}
+}
+
+func attentionDecision(
+	state checkpointmodel.ReceiveLifecycleState,
+	reason checkpointmodel.NeedsAttentionReason,
+) (Decision, error) {
+	return replaceDecision(state, checkpointmodel.LifecycleStateSpec{
+		OperationID: state.OperationID(), ReceiveIntent: state.ReceiveIntentDigest(),
+		StateGeneration: state.StateGeneration() + 1, Phase: checkpointmodel.LifecycleNeedsAttention,
+		CheckpointRefs: state.CheckpointReferences(), ReceiptDigest: state.ReceiptDigest(),
+		SuccessCount: state.SuccessCount(), FailureCount: state.FailureCount(),
+		AttentionReason: reason,
 	})
-	return slices.Compact(valid)
 }
 
-func derivedAttention(reason AttentionReason, scope []byte) Attention {
-	hash := sha256.New()
-	_, _ = hash.Write([]byte(discardAttentionDomain))
-	_, _ = hash.Write([]byte{0})
-	_, _ = hash.Write([]byte(reason))
-	_, _ = hash.Write([]byte{0})
-	_, _ = hash.Write(scope)
-	attention, _ := NewAttention(reason, hex.EncodeToString(hash.Sum(nil)))
-	return attention
+func replaceDecision(
+	previous checkpointmodel.ReceiveLifecycleState,
+	spec checkpointmodel.LifecycleStateSpec,
+) (Decision, error) {
+	next, err := checkpointmodel.NewReceiveLifecycleState(spec)
+	if err != nil {
+		return Decision{}, errors.Join(ErrInvalidContract, err)
+	}
+	if err := checkpointmodel.ValidateLifecycleTransition(previous, next); err != nil {
+		return Decision{}, errors.Join(ErrInvalidContract, err)
+	}
+	return Decision{action: DecisionReplace, next: next}, nil
+}
+
+func cleanupState(evidence CleanupEvidenceState) checkpointmodel.OwnedCleanupState {
+	if evidence == CleanupComplete {
+		return checkpointmodel.OwnedCleanupClean
+	}
+	return checkpointmodel.OwnedCleanupPending
 }

@@ -3,7 +3,6 @@
 package transfer
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -13,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const (
@@ -39,12 +39,13 @@ var (
 	errRangeReaderContract    = errors.New("range reader violated its requested output interval")
 )
 
-type JobOutcome uint8
+type DirectTreeOutcome uint8
 
 const (
-	JobSucceeded JobOutcome = iota + 1
-	JobCompletedWithErrors
-	JobPausedOutcome
+	DirectTreeOutcomePublished DirectTreeOutcome = iota + 1
+	DirectTreeOutcomePartialDirectory
+	DirectTreeOutcomeResumable
+	DirectTreeOutcomeNeedsAttention
 )
 
 type FailureStage uint8
@@ -84,11 +85,11 @@ type FileJobFailure struct {
 }
 
 type JobResult struct {
-	Outcome        JobOutcome
-	Settlement     JobSettlement
-	TransferJobID  TransferJobID
-	IntentDigest   TransferIntentDigest
-	TransferIntent TransferIntent
+	Outcome             DirectTreeOutcome
+	Settlement          DirectTreeSettlement
+	TransferJobID       TransferJobID
+	ReceiveIntentDigest ReceiveIntentDigest
+	ReceiveIntent       ReceiveIntent
 	// SelectionObservation is diagnostic only and is normally zero for the
 	// incremental path, which does not materialize a whole-tree snapshot.
 	SelectionObservation     SelectionObservationV1
@@ -139,14 +140,11 @@ type RangeReader interface {
 }
 
 type TransferJobConfig struct {
-	ShareInstance catalog.ShareInstance
-	SyntheticRoot catalog.DirectoryID
-	Rules         SelectionRules
-	// Intent and JobID are established before construction so a job can never
-	// open an output namespace before picker confirmation or change its trace
-	// identity while running.
-	Intent TransferIntent
-	JobID  TransferJobID
+	// ReceiveIntent and JobID are established before construction so a job can
+	// never open a materialization namespace before destination confirmation or
+	// change either stable operation identity or per-run trace identity.
+	ReceiveIntent ReceiveIntent
+	JobID         TransferJobID
 	// ProtocolSessionID correlates production transfer traces with the
 	// authenticated session. Standalone jobs may leave it zero.
 	ProtocolSessionID protocolsession.ProtocolSessionID
@@ -160,7 +158,7 @@ type TransferJobConfig struct {
 	Catalog               CatalogReader
 	Revisions             RevisionClient
 	Blocks                RangeReader
-	Output                OutputAuthority
+	Materializer          DirectTreeMaterializer
 	SettlementTimeout     time.Duration
 	Tracer                TransferLifecycleTracer
 }
@@ -169,14 +167,14 @@ type TransferJob struct {
 	share              catalog.ShareInstance
 	root               catalog.DirectoryID
 	rules              SelectionRules
-	intent             TransferIntent
+	intent             ReceiveIntent
 	jobID              TransferJobID
 	protocolSessionID  protocolsession.ProtocolSessionID
-	selectionRequest   CanonicalSelectionRequest
+	selectionSpec      SelectionSpec
 	catalog            CatalogReader
 	revisions          RevisionClient
 	blocks             RangeReader
-	outputAuthority    OutputAuthority
+	outputAuthority    DirectTreeMaterializer
 	settlementTimeout  time.Duration
 	queueCapacity      int
 	replayPageCapacity int
@@ -189,9 +187,10 @@ type TransferJob struct {
 }
 
 func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
-	if config.ShareInstance.IsZero() || config.SyntheticRoot.IsZero() || !config.Rules.validSnapshot() ||
-		!config.Intent.valid() || config.JobID.IsZero() ||
-		config.Catalog == nil || config.Revisions == nil || config.Blocks == nil || config.Output == nil ||
+	intent := config.ReceiveIntent
+	if !intent.valid() || intent.MaterializationPlan().Kind() != receivecontract.PlanDirectTree ||
+		config.JobID.IsZero() ||
+		config.Catalog == nil || config.Revisions == nil || config.Blocks == nil || config.Materializer == nil ||
 		config.SettlementTimeout < 0 || config.SettlementTimeout > MaximumOutputSettlementTimeout ||
 		config.FileQueueCapacity < 0 || config.FileQueueCapacity > MaximumTransferQueueCapacity ||
 		config.GenerationReplayPages < 0 || config.GenerationReplayPages > MaximumGenerationReplayPages {
@@ -209,22 +208,16 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 	if replayPageCapacity == 0 {
 		replayPageCapacity = DefaultGenerationReplayPages
 	}
-	selectionRequest, err := NewCanonicalSelectionRequest(config.ShareInstance, config.SyntheticRoot, config.Rules)
-	if err != nil {
-		return nil, ErrInvalidTransferJob
-	}
-	intent := config.Intent
-	intentRequest, intentErr := NewCanonicalSelectionRequest(intent.ShareInstance(), intent.SyntheticRoot(), intent.SelectionRules())
-	if intentErr != nil || intent.ShareInstance() != config.ShareInstance || intent.SyntheticRoot() != config.SyntheticRoot ||
-		!bytes.Equal(intentRequest.Bytes(), selectionRequest.Bytes()) {
+	selection := intent.SelectionSpec()
+	if selection.IsZero() {
 		return nil, ErrInvalidTransferJob
 	}
 	return &TransferJob{
-		share: config.ShareInstance, root: config.SyntheticRoot, rules: config.Rules,
+		share: intent.ShareInstance(), root: intent.SyntheticRoot(), rules: intent.SelectionRules(),
 		intent: intent, jobID: config.JobID, protocolSessionID: config.ProtocolSessionID,
-		selectionRequest: selectionRequest,
-		catalog:          config.Catalog, revisions: config.Revisions, blocks: config.Blocks,
-		outputAuthority:   config.Output,
+		selectionSpec: selection,
+		catalog:       config.Catalog, revisions: config.Revisions, blocks: config.Blocks,
+		outputAuthority:   config.Materializer,
 		settlementTimeout: timeout, queueCapacity: queueCapacity, replayPageCapacity: replayPageCapacity,
 		tracer: config.Tracer, tracker: newSelectionTracker(),
 	}, nil
@@ -232,9 +225,11 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 
 func (j *TransferJob) Measure() SelectionMeasure { return j.tracker.snapshot() }
 
-func (j *TransferJob) JobID() TransferJobID               { return j.jobID }
-func (j *TransferJob) Intent() TransferIntent             { return j.intent }
-func (j *TransferJob) IntentDigest() TransferIntentDigest { return j.intent.Digest() }
+func (j *TransferJob) JobID() TransferJobID         { return j.jobID }
+func (j *TransferJob) ReceiveIntent() ReceiveIntent { return j.intent }
+func (j *TransferJob) ReceiveIntentDigest() ReceiveIntentDigest {
+	return j.intent.Digest()
+}
 
 // SelectionMeasures publishes monotonic discovery updates. Discovery now owns
 // the first job phase, so no duplicate catalog walk can race output admission.
@@ -245,8 +240,8 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 	if j.started {
 		j.mu.Unlock()
 		failure := dependencyContractFailure(ErrTransferJobRun)
-		return JobResult{Outcome: JobPausedOutcome, TransferJobID: j.jobID,
-			IntentDigest: j.intent.Digest(), TransferIntent: j.intent,
+		return JobResult{Outcome: DirectTreeOutcomeResumable, TransferJobID: j.jobID,
+			ReceiveIntentDigest: j.intent.Digest(), ReceiveIntent: j.intent,
 			Measure: j.Measure(), TerminationCause: failure,
 			TerminationFault: closedLifecycleFault(failure)}
 	}
@@ -260,8 +255,8 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 		failure := dependencyContractFailure(err)
 		j.failUnstartedDiscovery()
 		return JobResult{
-			Outcome: JobPausedOutcome, TransferJobID: j.jobID,
-			IntentDigest: j.intent.Digest(), TransferIntent: j.intent,
+			Outcome: DirectTreeOutcomeResumable, TransferJobID: j.jobID,
+			ReceiveIntentDigest: j.intent.Digest(), ReceiveIntent: j.intent,
 			Measure: j.Measure(), TerminationCause: failure,
 			TerminationFault: closedLifecycleFault(failure),
 		}
@@ -282,8 +277,8 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 	workerDone := make(chan struct{})
 	go state.transferQueueWorker(runContext, fileQueue, cancel, workerErr, workerDone)
 	j.trace(TransferLifecycleTrace{
-		Stage: TransferDiscoveryStarted, TransferJobID: j.jobID, IntentDigest: j.intent.Digest(),
-		DirectoryID: j.root, Discovery: DiscoveryOpen,
+		Stage: TransferDiscoveryStarted, TransferJobID: j.jobID, ReceiveIntentDigest: j.intent.Digest(),
+		Discovery: DiscoveryOpen,
 	})
 	discoveryFailure := admitInternalFailure(state.discoverIncremental(runContext, fileQueue))
 	return state.completeDiscovery(ctx, runContext, cancel, fileQueue, workerErr, workerDone, discoveryFailure)
@@ -291,24 +286,31 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 
 func (j *TransferJob) admitRunOutput(ctx context.Context, state *jobRun) *lifecycleFailure {
 	j.trace(TransferLifecycleTrace{
-		Stage: TransferAdmissionStarted, TransferJobID: j.jobID, IntentDigest: j.intent.Digest(),
+		Stage: TransferAdmissionStarted, TransferJobID: j.jobID, ReceiveIntentDigest: j.intent.Digest(),
 	})
-	output, rawOutputErr := j.outputAuthority.OpenOutput(ctx, j.intent)
+	output, rawOutputErr := j.outputAuthority.OpenDirectTree(ctx, j.intent)
 	failure := admitInternalFailure(normalizeOutputBoundary(ctx, rawOutputErr))
 	if output != nil {
-		// A collaborator can cross a durable mutation boundary before reporting an
-		// error. Retaining the returned capability lets finish request a stable
-		// pause instead of abandoning that namespace.
-		state.output = output
-		state.admitted = true
-	}
-	if failure == nil {
-		failure = admitInternalFailure(validateOutputSession(j.intent, output))
+		bindingFailure := admitInternalFailure(validateDirectTreeSession(j.intent, output))
+		if bindingFailure != nil {
+			// A foreign session is not authority to mutate, even for cleanup or pause.
+			// Prefer the binding failure over a simultaneous adapter error because the
+			// returned capability cannot safely participate in any later settlement.
+			failure = bindingFailure
+		} else {
+			// A collaborator can cross a durable mutation boundary before reporting an
+			// error. Retaining only an exactly bound capability lets finish request a
+			// stable pause without touching another operation's namespace.
+			state.output = output
+			state.admitted = true
+		}
+	} else if failure == nil {
+		failure = admitInternalFailure(validateDirectTreeSession(j.intent, nil))
 	}
 	if failure == nil {
 		admissionScope, err := NewDirectoryAdmissionScope(j.intent)
 		if err != nil {
-			// Intent validation precedes OpenOutput, so failure to project its receipt
+			// Intent validation precedes OpenDirectTree, so failure to project its receipt
 			// scope is an internal boundary violation rather than backend authority.
 			failure = dependencyContractFailure(err)
 		} else {
@@ -318,13 +320,13 @@ func (j *TransferJob) admitRunOutput(ctx context.Context, state *jobRun) *lifecy
 	if failure != nil {
 		j.trace(TransferLifecycleTrace{
 			Stage: TransferAdmissionCompleted, TransferJobID: j.jobID,
-			IntentDigest: j.intent.Digest(), Fault: closedLifecycleFault(failure), Failed: true,
+			ReceiveIntentDigest: j.intent.Digest(), Fault: closedLifecycleFault(failure), Failed: true,
 		})
 		return failure
 	}
 	j.trace(TransferLifecycleTrace{
 		Stage: TransferAdmissionCompleted, TransferJobID: j.jobID,
-		IntentDigest: j.intent.Digest(), OutputSessionID: output.SessionID(),
+		ReceiveIntentDigest: j.intent.Digest(), OutputSessionID: output.SessionID(),
 	})
 	return nil
 }
@@ -369,8 +371,8 @@ func (r *jobRun) completeDiscovery(
 	r.job.tracker.finishDiscovery()
 	r.job.trace(TransferLifecycleTrace{
 		Stage: TransferDiscoveryCompleted, TransferJobID: r.job.jobID,
-		IntentDigest: r.job.intent.Digest(), DirectoryID: r.job.root, DirectoryGeneration: r.rootGeneration,
-		Discovery: r.job.Measure().Discovery, SelectionClass: r.job.Measure().Class(),
+		ReceiveIntentDigest: r.job.intent.Digest(),
+		Discovery:           r.job.Measure().Discovery, ConnectionSizeClass: r.job.Measure().ConnectionSizeClass(),
 		Fault: fault.Join(
 			discoveryCompletionFault(discoveryFailure, discoveryIncomplete), r.discoveryFaultSnapshot(),
 		),
@@ -405,12 +407,12 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 	if err != nil || !ready {
 		return err
 	}
-	locator, err := NewPathOutputLocator(plan.path)
+	locator, err := NewPathMaterializationLocator(plan.path)
 	if err != nil {
 		return r.rejectUnstartedFile(ctx, plan, opened, dependencyContractFailure(err))
 	}
-	target, err := NewOutputFileTarget(
-		r.output.BackendID(), r.output.SessionID(), opened.Descriptor, locator,
+	target, err := NewFileMaterializationTarget(
+		r.output.SessionID(), opened.Descriptor, locator,
 	)
 	if err != nil {
 		return r.rejectUnstartedFile(ctx, plan, opened, dependencyContractFailure(err))
@@ -418,7 +420,7 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 	if plan.parentAdmission.IsZero() {
 		return r.rejectUnstartedFile(ctx, plan, opened, dependencyContractFailure(ErrDirectoryAdmissionMismatch))
 	}
-	start, err := r.output.BeginFile(ctx, OutputFile{
+	start, err := r.output.BeginFile(ctx, MaterializationFile{
 		Path: plan.path, ExpectedSize: plan.expectedSize, Descriptor: opened.Descriptor, Target: target,
 		ParentAdmission: plan.parentAdmission,
 	})

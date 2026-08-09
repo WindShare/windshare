@@ -1,137 +1,225 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
-import type { V2CatalogClient } from '../../src/catalog/v2-client'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import type { V2BlockRangeReader } from '../../src/content/v2-broker'
-import type { V2RevisionReader } from '../../src/content/v2-session-services'
 import {
-  JobSettlementKind,
-  pausedJobSettlement,
-  type OutputSession,
-  type V2OutputAuthority,
-} from '../../src/transfer/output-session'
-import type { TransferTraceEvent, TransferTraceEventName } from '../../src/transfer/intent'
-import { TransferJob } from '../../src/transfer/v2-job'
-import { pauseFailedV2Output } from '../../src/transfer/settlement/v2-output'
-import {
+  catalogFixture,
+  directoryEntry,
+  fileEntry,
   identity,
-  identityText,
-  outputAuthority,
-  terminalBoundaryOutput,
-  withTimeout,
+  planAuthorityFixture,
+  readerFixture,
+  receiveIntentFixture,
+  selectOnlyFile,
+  transferJobFixture,
 } from './v2-job-fixture'
 
-describe('v2 output pause evidence', () => {
-  it('retains a durable output at the backend-reported stable cut', async () => {
-    const pauseJob = vi.fn(async () => pausedJobSettlement('ProcessRestart'))
-    const session: OutputSession = {
-      ...terminalBoundaryOutput(),
-      pauseJob,
-    }
-
-    const result = await failingJob(session).run()
-
-    expect(result.outcome.status).toBe('Paused')
-    expect(result.settlement).toEqual({
-      kind: JobSettlementKind.Paused,
-      durability: 'ProcessRestart',
+describe('v2 plan settlement', () => {
+  it('settles DirectTree progressively as a partial directory after a file-local failure', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 4n)
+    const selection = new V2SelectionPolicy(true)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readers = readerFixture([file], [], { failRevisionFor: file.idText })
+    const plans = planAuthorityFixture()
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      selection,
     })
-    expect(pauseJob).toHaveBeenCalledOnce()
+
+    const result = await transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans,
+      revisions: readers.revisions,
+      broker: readers.broker,
+    }).run()
+
+    expect(result.worker.status).toBe('CompletedWithErrors')
+    expect(result.worker.failureCount).toBe(1)
+    expect(result.lifecycle.kind).toBe('partial-directory')
+    expect(plans.settlements).toEqual(['direct-tree:CompletedWithErrors'])
+    expect(plans.pauses).toEqual([])
   })
 
-  it('surfaces ambiguous output ownership without attempting destructive fallback', async () => {
-    const traces: TransferTraceEvent[] = []
-    const pauseJob = vi.fn(async () => {
-      throw new Error('stable cut failed')
+  it('pauses a complete artifact instead of calling settlement after the same file-local failure', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 4n)
+    const selection = selectOnlyFile(file)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readers = readerFixture([file], [], { failRevisionFor: file.idText })
+    const plans = planAuthorityFixture()
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-atomic',
+      artifactKind: 'original-file',
+      selection,
+      file,
     })
-    const session: OutputSession = {
-      ...terminalBoundaryOutput(),
-      pauseJob,
-    }
 
-    const result = await failingJob(session, (event) => traces.push(event)).run()
+    const result = await transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans,
+      revisions: readers.revisions,
+      broker: readers.broker,
+    }).run()
 
-    expect(result.outcome.status).toBe('Paused')
-    expect(result.settlement.kind).toBe(JobSettlementKind.NeedsAttention)
-    if (result.settlement.kind !== JobSettlementKind.NeedsAttention) {
-      throw new Error('test settlement lost its discriminant')
-    }
-    expect(result.settlement.fault).toMatchObject({
-      scope: 'output-pause',
-      code: 'mutation-ambiguous',
-    })
-    expect(pauseJob).toHaveBeenCalledOnce()
-    expect(traceNames(traces)).toContain('job-needs-attention')
+    expect(result.worker.status).toBe('CompletedWithErrors')
+    expect(result.lifecycle.kind).toBe('restart-required')
+    expect(plans.settlements).toEqual([])
+    expect(plans.pauses).toEqual(['direct-atomic'])
   })
 
-  it('bounds a collaborator that never reaches a stable cut', async () => {
-    const pauseJob = vi.fn(() => new Promise<never>(() => undefined))
-    const session: OutputSession = {
-      ...terminalBoundaryOutput(),
-      pauseJob,
-    }
+  it.each([
+    {
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      lifecycle: 'partial-directory',
+      settlement: 'direct-tree:CompletedWithErrors',
+    },
+    {
+      planKind: 'direct-atomic',
+      artifactKind: 'zip-archive',
+      lifecycle: 'restart-required',
+      settlement: undefined,
+    },
+  ] as const)(
+    'isolates a child finalization failure without allowing an incomplete $planKind artifact to publish',
+    async ({ planKind, artifactKind, lifecycle, settlement }) => {
+      const root = identity(2)
+      const child = identity(3)
+      const file = fileEntry(identity(11), 'payload.bin', 2n)
+      const selection = new V2SelectionPolicy(true)
+      const catalog = catalogFixture([
+        { id: root, entries: [directoryEntry(child, 'child'), file] },
+        { id: child, entries: [] },
+      ])
+      const readers = readerFixture([file])
+      const plans = planAuthorityFixture({ failDirectoryFinalizePath: 'child' })
+      const intent = await receiveIntentFixture({ planKind, artifactKind, selection })
 
-    const result = await withTimeout(
-      failingJob(session, undefined, 10).run(),
-      500,
-      'terminal output pause exceeded its external test bound',
-    )
+      const result = await transferJobFixture({
+        catalog: catalog.catalog,
+        selection,
+        intent,
+        plans,
+        revisions: readers.revisions,
+        broker: readers.broker,
+      }).run()
 
-    expect(result.outcome.status).toBe('Paused')
-    expect(result.settlement.kind).toBe(JobSettlementKind.NeedsAttention)
-    expect(pauseJob).toHaveBeenCalledOnce()
+      expect(result.worker.status).toBe('CompletedWithErrors')
+      expect(result.lifecycle.kind).toBe(lifecycle)
+      expect(plans.output.commits).toEqual([file.idText])
+      expect(plans.settlements).toEqual(settlement === undefined ? [] : [settlement])
+      expect(plans.pauses).toEqual(planKind === 'direct-tree' ? [] : [planKind])
+    },
+  )
+
+  it('keeps successful worker evidence distinct when terminal publication settlement fails', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 2n)
+    const selection = selectOnlyFile(file)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readers = readerFixture([file])
+    const plans = planAuthorityFixture({ failSettlement: true })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-atomic',
+      artifactKind: 'original-file',
+      selection,
+      file,
+    })
+
+    const result = await transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans,
+      revisions: readers.revisions,
+      broker: readers.broker,
+    }).run()
+
+    expect(result.worker.status).toBe('Succeeded')
+    expect(result.lifecycle.kind).toBe('restart-required')
+    expect(result.abortReason).toEqual(expect.any(Error))
+    expect(plans.settlements).toEqual(['direct-atomic:Succeeded'])
+    expect(plans.pauses).toEqual(['direct-atomic'])
+    expect(plans.output.commits).toEqual([file.idText])
   })
 
-  it('abandons only an unopened capability and reports no resumable durability', async () => {
-    const abort = vi.fn(async () => undefined)
-    const authority = {
-      confirmOutput: async () => {
-        throw new Error('not used')
-      },
-      openOutput: async () => {
-        throw new Error('not used')
-      },
-      abort,
-    } as V2OutputAuthority
-    const reason = new Error('output confirmation failed')
-
-    const settlement = await pauseFailedV2Output({
-      authority,
-      reason,
-      timeoutMilliseconds: 100,
+  it('bounds a plan pause and records target ownership as unknown', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 2n)
+    const selection = selectOnlyFile(file)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readers = readerFixture([file], [], { failRevisionFor: file.idText })
+    const plans = planAuthorityFixture({ hangPause: true })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-atomic',
+      artifactKind: 'original-file',
+      selection,
+      file,
     })
 
-    expect(settlement).toEqual({
-      kind: JobSettlementKind.Paused,
-      durability: 'None',
+    const result = await withExternalBound(transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans,
+      revisions: readers.revisions,
+      broker: readers.broker,
+      outputSettlementTimeoutMilliseconds: 10,
+    }).run(), 500)
+
+    expect(result.worker.status).toBe('CompletedWithErrors')
+    expect(result.lifecycle.kind).toBe('needs-attention')
+    expect(plans.settlements).toEqual([])
+    expect(plans.pauses).toEqual(['direct-atomic'])
+    expect(plans.unknownSettlements).toEqual(['direct-atomic'])
+    expect(plans.pauseSignals).toHaveLength(1)
+    expect(plans.pauseSignals[0]?.aborted).toBe(true)
+  })
+
+  it('records ownership unknown when an adapter reports a lifecycle illegal for the plan stage', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 2n)
+    const selection = selectOnlyFile(file)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readers = readerFixture([file], [], { failRevisionFor: file.idText })
+    const plans = planAuthorityFixture({ invalidPauseLifecycle: true })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-atomic',
+      artifactKind: 'original-file',
+      selection,
+      file,
     })
-    expect(abort).toHaveBeenCalledWith(reason)
+
+    const result = await transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans,
+      revisions: readers.revisions,
+      broker: readers.broker,
+    }).run()
+
+    expect(result.worker.status).toBe('CompletedWithErrors')
+    expect(result.lifecycle.kind).toBe('needs-attention')
+    expect(plans.settlements).toEqual([])
+    expect(plans.pauses).toEqual(['direct-atomic'])
+    expect(plans.unknownSettlements).toEqual(['direct-atomic'])
   })
 })
 
-function failingJob(
-  session: OutputSession,
-  onTrace?: (event: TransferTraceEvent) => void,
-  outputSettlementTimeoutMilliseconds?: number,
-): TransferJob {
-  const failure = new Error('catalog root unavailable')
-  return new TransferJob({
-    descriptor: {
-      shareInstance: identity(1), syntheticRoot: identity(2), syntheticRootId: identityText(2), chunkSize: 1,
-    } as never,
-    catalog: {
-      loadDirectory: async () => { throw failure },
-    } as unknown as V2CatalogClient,
-    selection: new V2SelectionPolicy(),
-    revisions: {} as V2RevisionReader,
-    broker: {} as V2BlockRangeReader,
-    lanes: { size: 1 },
-    output: outputAuthority(session),
-    ...(onTrace === undefined ? {} : { onTrace }),
-    ...(outputSettlementTimeoutMilliseconds === undefined ? {} : { outputSettlementTimeoutMilliseconds }),
+async function withExternalBound<T>(operation: Promise<T>, milliseconds: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error('settlement exceeded external test bound')), milliseconds)
   })
-}
-
-function traceNames(events: readonly TransferTraceEvent[]): readonly TransferTraceEventName[] {
-  return events.map((event) => event.name)
+  try {
+    return await Promise.race([operation, timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }

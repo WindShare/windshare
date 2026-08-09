@@ -31,7 +31,7 @@ func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallba
 		admission.Wait()
 	})
 
-	if err := admission.ObserveSelection(transfer.SelectionSmall); err != nil {
+	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
 		t.Fatal(err)
 	}
 	workerDone := admission.decisionWorkerDone()
@@ -83,7 +83,7 @@ func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallba
 	if calls := runtime.calls.Load(); calls != 1 {
 		t.Fatalf("fatal monitor branch Close calls=%d, want 1", calls)
 	}
-	if err := admission.ObserveSelection(transfer.SelectionSmall); err != nil {
+	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
 		t.Fatalf("closed admission accepted follow-up selection with error: %v", err)
 	}
 

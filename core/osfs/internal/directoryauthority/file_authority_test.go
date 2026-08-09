@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"path/filepath"
 	"sync"
 	"testing"
 
@@ -316,29 +315,15 @@ func (capture *fileAuthorityClaimCapture) BeginFile(
 	claim outputsession.FileClaim,
 ) (outputsession.FileBeginObservation, error) {
 	capture.claim = claim
-	capture.destination, capture.bindErr = capture.authority.BindFile(ctx, claim)
+	capture.destination, capture.bindErr = capture.authority.BindFile(ctx, claim.File())
 	return outputsession.FileBeginObservation{Cut: outputsession.MutationNoChange},
 		errors.Join(errFileAuthorityCapture, capture.bindErr)
 }
 
-type fileAuthorityLocator struct {
-	directories *Authority
-	mismatch    string
-}
-
-func (locator fileAuthorityLocator) CanonicalLocatorKey(path string) (string, error) {
-	key, err := locator.directories.CanonicalLocatorKey(path)
-	if err == nil && path == locator.mismatch {
-		return key + ":different", nil
-	}
-	return key, err
-}
-
 type fileAuthorityFixtureOptions struct {
-	nested          bool
-	preexisting     bool
-	locatorMismatch bool
-	objectLocator   bool
+	nested        bool
+	preexisting   bool
+	objectLocator bool
 }
 
 type fileAuthorityFixture struct {
@@ -348,7 +333,7 @@ type fileAuthorityFixture struct {
 	authority   *FileAuthority
 	capture     *fileAuthorityClaimCapture
 	destination fileexecution.FileDestination
-	file        transfer.OutputFile
+	file        transfer.MaterializationFile
 	parent      *fakeNode
 	leaf        string
 	object      checkpointmodel.ObjectID
@@ -379,42 +364,23 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootPath, err := filepath.Abs(filepath.Join("testdata", "file-authority-output"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent, err := transfer.NewFilesystemTransferIntent(
-		share,
-		rootID,
-		rules,
-		rootPath,
-		transfer.NativeFilesystemOutputBackendID,
-		transfer.OutputNativeTree,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	intent := testDirectTreeIntent(t, share, rootID, rules)
 	sessionID := testIdentity[transfer.OutputSessionID](151)
-	var locator outputsession.LocatorCanonicalizer = directories
 	path := "final.bin"
 	if options.nested {
 		path = "folder/final.bin"
 	}
-	if options.locatorMismatch {
-		locator = fileAuthorityLocator{directories: directories, mismatch: path}
-	}
 	session, err := outputsession.New(outputsession.Config{
 		Intent:    intent,
 		SessionID: sessionID,
-		Capabilities: transfer.OutputCapabilities{
+		Capabilities: transfer.DirectTreeCapabilities{
 			Durability:           transfer.DurabilityPowerLoss,
-			Mode:                 transfer.OutputNativeTree,
 			RandomWrite:          true,
 			FileFailureIsolation: true,
 			ModifiedTime:         true,
 		},
 		ReceiptSecret: bytes.Repeat([]byte{0x71}, 32),
-		Locator:       locator,
+		Locator:       directories,
 		Directories:   directories,
 		Files:         capture,
 		Resources: outputsession.ResourceReleaserFunc(func(context.Context) error {
@@ -424,7 +390,7 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootAdmission, err := session.AdmitDirectory(context.Background(), transfer.OutputDirectory{
+	rootAdmission, err := session.AdmitDirectory(context.Background(), transfer.MaterializationDirectory{
 		DirectoryID: rootID,
 		Generation:  testIdentity[catalog.DirectoryGeneration](161),
 	})
@@ -434,7 +400,7 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 	parentAdmission := rootAdmission
 	parent := platform.rootNode()
 	if options.nested {
-		parentAdmission, err = session.AdmitDirectory(context.Background(), transfer.OutputDirectory{
+		parentAdmission, err = session.AdmitDirectory(context.Background(), transfer.MaterializationDirectory{
 			DirectoryID:     testIdentity[catalog.DirectoryID](171),
 			Generation:      testIdentity[catalog.DirectoryGeneration](181),
 			ParentAdmission: rootAdmission,
@@ -462,20 +428,20 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	var outputLocator transfer.OutputLocator
+	var outputLocator transfer.MaterializationLocator
 	if options.objectLocator {
-		outputLocator, err = transfer.NewOutputObjectLocator(bytes.Repeat([]byte{0x81}, 32))
+		outputLocator, err = transfer.NewMaterializationObjectLocator(bytes.Repeat([]byte{0x81}, 32))
 	} else {
-		outputLocator, err = transfer.NewPathOutputLocator(path)
+		outputLocator, err = transfer.NewPathMaterializationLocator(path)
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := transfer.NewOutputFileTarget(intent.BackendID(), sessionID, descriptor, outputLocator)
+	target, err := transfer.NewFileMaterializationTarget(sessionID, descriptor, outputLocator)
 	if err != nil {
 		t.Fatal(err)
 	}
-	file := transfer.OutputFile{
+	file := transfer.MaterializationFile{
 		Path:            path,
 		ExpectedSize:    fileAuthorityExactSize,
 		Descriptor:      descriptor,
@@ -505,14 +471,14 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 func fileAuthorityObject(
 	t *testing.T,
 	seed byte,
-) (checkpointmodel.ObjectID, transfer.OutputObjectIdentity) {
+) (checkpointmodel.ObjectID, transfer.OwnedObjectID) {
 	t.Helper()
-	raw := bytes.Repeat([]byte{seed}, transfer.OutputObjectIdentityBytes)
+	raw := bytes.Repeat([]byte{seed}, transfer.OwnedObjectIdentityBytes)
 	object, err := checkpointmodel.ObjectIDFromBytes(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity, err := transfer.OutputObjectIdentityFromBytes(raw)
+	identity, err := transfer.OwnedObjectIDFromBytes(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,28 +504,23 @@ func TestFileAuthorityBindsOnlyExactLiveSessionClaims(t *testing.T) {
 	if fixture.capture.bindErr != nil || fixture.destination == nil {
 		t.Fatalf("exact binding destination=%T error=%v", fixture.destination, fixture.capture.bindErr)
 	}
-	if fixture.destination.ClaimID() != fixture.capture.claim.ID() ||
-		fixture.destination.Target() != fixture.file.Target {
-		t.Fatalf("destination binding claim=%d target=%+v", fixture.destination.ClaimID(), fixture.destination.Target())
+	if fixture.destination.Target() != fixture.file.Target {
+		t.Fatalf("destination target=%+v", fixture.destination.Target())
 	}
-	if (*fileDestination)(nil).ClaimID() != 0 || (*fileDestination)(nil).Target() != (transfer.OutputFileTarget{}) ||
+	if (*fileDestination)(nil).Target() != (transfer.FileMaterializationTarget{}) ||
 		(*fileDestination)(nil).Close() != nil {
 		t.Fatal("nil destination accessors did not remain inert")
 	}
 
-	if _, err := (*FileAuthority)(nil).BindFile(context.Background(), outputsession.FileClaim{}); !errors.Is(err, ErrInvalidClaim) {
+	if _, err := (*FileAuthority)(nil).BindFile(context.Background(), transfer.MaterializationFile{}); !errors.Is(err, ErrInvalidClaim) {
 		t.Fatalf("nil authority error = %v", err)
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := fixture.authority.BindFile(canceled, fixture.capture.claim); !errors.Is(err, context.Canceled) {
+	if _, err := fixture.authority.BindFile(canceled, fixture.capture.claim.File()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled bind error = %v", err)
 	}
 
-	mismatched := newFileAuthorityFixture(t, fileAuthorityFixtureOptions{locatorMismatch: true})
-	if !errors.Is(mismatched.capture.bindErr, ErrInvalidClaim) || mismatched.capture.destination != nil {
-		t.Fatalf("locator mismatch destination=%T error=%v", mismatched.capture.destination, mismatched.capture.bindErr)
-	}
 	objectLocator := newFileAuthorityFixture(t, fileAuthorityFixtureOptions{objectLocator: true})
 	if !errors.Is(objectLocator.capture.bindErr, ErrInvalidClaim) || objectLocator.capture.destination != nil {
 		t.Fatalf("non-path locator destination=%T error=%v", objectLocator.capture.destination, objectLocator.capture.bindErr)
@@ -575,7 +536,7 @@ func TestFileAuthorityBindsOnlyExactLiveSessionClaims(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := foreign.BindFile(context.Background(), fixture.capture.claim); !errors.Is(err, ErrParentUnavailable) {
+	if _, err := foreign.BindFile(context.Background(), fixture.capture.claim.File()); !errors.Is(err, ErrParentUnavailable) {
 		t.Fatalf("foreign parent binding error = %v", err)
 	}
 }

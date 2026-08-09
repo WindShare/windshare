@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +15,7 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/outputfault"
 	"github.com/windshare/windshare/core/osfs/internal/outputsession"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func newTestAuthority(
@@ -810,6 +810,48 @@ func testIdentity[T identityValue](seed byte) T {
 	return value
 }
 
+func testDirectTreeIntent(
+	t *testing.T,
+	share catalog.ShareInstance,
+	root catalog.DirectoryID,
+	rules transfer.SelectionRules,
+) transfer.ReceiveIntent {
+	t.Helper()
+	selection, err := transfer.NewSelectionSpec(share, root, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := receivecontract.NewCatalogRootDirectoryTree()
+	operationRaw := testIdentity[receivecontract.OperationID](221)
+	operation, err := receivecontract.OperationIDFromBytes(operationRaw[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservationRaw := testIdentity[receivecontract.DestinationReservationID](231)
+	reservationID, err := receivecontract.DestinationReservationIDFromBytes(reservationRaw[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorityRaw := bytes.Repeat([]byte{0xd1}, receivecontract.AuthorityRefBytes)
+	authority, err := receivecontract.AuthorityRefFromBytes(authorityRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := receivecontract.NewNativeContainerRootReservation(operation, reservationID, artifact, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := receivecontract.NewDirectTreePlan(artifact, reservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := transfer.NewReceiveIntent(selection, artifact, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return intent
+}
+
 func TestOutputSessionUsesAuthorityDirectlyWithoutCompositionAdapter(t *testing.T) {
 	var authority *Authority
 	var traceCalls atomic.Int64
@@ -833,19 +875,13 @@ func TestOutputSessionUsesAuthorityDirectlyWithoutCompositionAdapter(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := transfer.NewFilesystemTransferIntent(
-		share, rootID, rules, filepath.Join(t.TempDir(), "output"),
-		transfer.NativeFilesystemOutputBackendID, transfer.OutputNativeTree,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	intent := testDirectTreeIntent(t, share, rootID, rules)
 	sessionID := testIdentity[transfer.OutputSessionID](61)
 	secret := bytes.Repeat([]byte{0x5a}, 32)
 	session, err := outputsession.New(outputsession.Config{
 		Intent: intent, SessionID: sessionID,
-		Capabilities: transfer.OutputCapabilities{
-			Durability: transfer.DurabilityPowerLoss, Mode: transfer.OutputNativeTree,
+		Capabilities: transfer.DirectTreeCapabilities{
+			Durability:  transfer.DurabilityPowerLoss,
 			RandomWrite: true, FileFailureIsolation: true, ModifiedTime: true,
 		},
 		ReceiptSecret: secret,
@@ -859,7 +895,7 @@ func TestOutputSessionUsesAuthorityDirectlyWithoutCompositionAdapter(t *testing.
 	done := make(chan error, 1)
 	go func() {
 		ctx := context.Background()
-		root := transfer.OutputDirectory{
+		root := transfer.MaterializationDirectory{
 			DirectoryID: rootID, Generation: testIdentity[catalog.DirectoryGeneration](31),
 		}
 		rootAdmission, admitErr := session.AdmitDirectory(ctx, root)
@@ -867,7 +903,7 @@ func TestOutputSessionUsesAuthorityDirectlyWithoutCompositionAdapter(t *testing.
 			done <- admitErr
 			return
 		}
-		child := transfer.OutputDirectory{
+		child := transfer.MaterializationDirectory{
 			DirectoryID:     testIdentity[catalog.DirectoryID](41),
 			Generation:      testIdentity[catalog.DirectoryGeneration](42),
 			ParentAdmission: rootAdmission, Path: "child", ModifiedTime: mustModifiedTime(t, 51),

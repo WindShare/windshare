@@ -1,78 +1,74 @@
 import { describe, expect, it } from 'vitest'
 
-import { outputFault, FaultScope, OutputFaultCode } from '../../src/transfer/fault'
-import {
-  COMPLETED_JOB_SETTLEMENT,
-  needsAttentionJobSettlement,
-  pausedJobSettlement,
-} from '../../src/transfer/output-session'
-import {
-  EMPTY_TRANSFER_FAILURE_SUMMARY,
-  jobOutcome,
-  type JobOutcomeStatus,
-} from '../../src/transfer/outcome'
-import type { TransferJobResult } from '../../src/transfer/v2-job'
-import { transferTerminalSnapshot } from '../../src/ui/v2-controller-state'
-import type { V2ReceiverSnapshot } from '../../src/ui/v2-model'
+import type { V2CatalogEntry } from '../../src/catalog/v2-records'
+import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { encodeBase64Url } from '../../src/crypto/bytes'
+import { projectBrowsePage } from '../../src/ui/v2-controller-state'
+import type { V2BrowseDirectory, V2BrowsePage } from '../../src/ui/v2-gateway'
 
-describe('v2 controller terminal presentation', () => {
-  it('presents a transient pause as retry from byte zero', () => {
-    const snapshot = transferTerminalSnapshot(
-      baseSnapshot(),
-      result('Paused', pausedJobSettlement('None')),
-    )
+describe('v2 browse page presentation', () => {
+  it('reports only visible selection facts and leaves artifact semantics to projection', () => {
+    const root = directory()
+    const selected = file(2, 'selected.txt', 1_024n)
+    const notSelected = file(3, 'other.txt', 2_048n)
+    const selection = new V2SelectionPolicy(false)
+    selection.toggle(selected, root.ancestry)
 
-    expect(snapshot.phase).toBe('retry-ready')
-    expect(snapshot.status).toContain('byte zero')
-  })
+    const projection = projectBrowsePage(page(root, [selected, notSelected]), selection, [root])
 
-  it('presents a durable pause as retained resumable state', () => {
-    const snapshot = transferTerminalSnapshot(
-      baseSnapshot(),
-      result('Paused', pausedJobSettlement('ProcessRestart')),
-    )
-
-    expect(snapshot.phase).toBe('paused')
-    expect(snapshot.status).toContain('checkpoints were retained')
-  })
-
-  it('keeps any ambiguous output boundary in needs-attention state', () => {
-    const snapshot = transferTerminalSnapshot(
-      baseSnapshot(),
-      result('Succeeded', needsAttentionJobSettlement(outputFault(
-        FaultScope.OutputPause,
-        OutputFaultCode.MutationAmbiguous,
-      ))),
-    )
-
-    expect(snapshot.phase).toBe('needs-attention')
-    expect(snapshot.status).toContain('manual review')
-  })
-
-  it('reports publication that won a pause race as completed', () => {
-    const snapshot = transferTerminalSnapshot(
-      baseSnapshot(),
-      result('Paused', COMPLETED_JOB_SETTLEMENT),
-    )
-
-    expect(snapshot.phase).toBe('completed')
-    expect(snapshot.status).toContain('completed before the pause')
+    expect(projection.snapshot).toMatchObject({
+      phase: 'browsing',
+      selectedVisibleFiles: 1,
+      selectedVisibleBytes: 1_024n,
+    })
+    expect(projection.snapshot.rows.map((row) => row.selection)).toEqual(['selected', 'unselected'])
   })
 })
 
-function baseSnapshot(): V2ReceiverSnapshot {
-  return {
-    phase: 'transferring',
-    status: 'Receiving…',
-  } as unknown as V2ReceiverSnapshot
+function directory(): V2BrowseDirectory {
+  return Object.freeze({
+    id: identity(1),
+    idText: identityText(1),
+    name: 'Shared files',
+    path: Object.freeze([]),
+    ancestry: Object.freeze([identityText(1)]),
+  })
 }
 
-function result(
-  status: JobOutcomeStatus,
-  settlement: TransferJobResult['settlement'],
-): TransferJobResult {
-  return {
-    outcome: jobOutcome(status, EMPTY_TRANSFER_FAILURE_SUMMARY),
-    settlement,
-  } as unknown as TransferJobResult
+function page(
+  root: V2BrowseDirectory,
+  entries: readonly V2CatalogEntry[],
+): V2BrowsePage {
+  return Object.freeze({
+    directory: root,
+    pageIndex: 0,
+    pageCount: 2,
+    entryCount: entries.length,
+    omittedCount: 0n,
+    entries,
+  })
+}
+
+function file(
+  first: number,
+  name: string,
+  expectedSize: bigint,
+): Extract<V2CatalogEntry, { kind: 'file' }> {
+  return Object.freeze({
+    kind: 'file',
+    id: identity(first),
+    idText: identityText(first),
+    name,
+    expectedSize,
+  })
+}
+
+function identity(first: number): Uint8Array<ArrayBuffer> {
+  const value = new Uint8Array(16)
+  value[0] = first
+  return value
+}
+
+function identityText(first: number): string {
+  return encodeBase64Url(identity(first))
 }

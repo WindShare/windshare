@@ -10,7 +10,7 @@ import (
 	"github.com/windshare/windshare/core/osfs"
 )
 
-func TestFilesystemRunnerWiresCapabilityAdaptersWithoutOpeningAuthority(t *testing.T) {
+func TestFilesystemRunnerWiresResumeFacadeAndHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runner := NewFilesystemRunner(FilesystemConfig{
 		Input:                    strings.NewReader(""),
@@ -27,7 +27,6 @@ func TestFilesystemRunnerWiresCapabilityAdaptersWithoutOpeningAuthority(t *testi
 	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "windshare resume discard") {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
-
 	if _, err := (filesystemResumeStateInventoryOpener{}).OpenResumeStateInventory(
 		context.Background(),
 		"relative-root",
@@ -40,8 +39,11 @@ func TestFilesystemProjectionFailsClosedForDetachedValues(t *testing.T) {
 	if _, err := projectResumeStateSummary(osfs.ResumeStateSummary{}); !errors.Is(err, errResumeStateContract) {
 		t.Fatalf("zero summary error=%v", err)
 	}
-	if _, err := projectResumeDiscardResult(osfs.ResumeStateDiscardResult{}); !errors.Is(err, errResumeStateContract) {
+	if _, err := projectResumeDiscardSummary(osfs.ResumeStateSummary{}); !errors.Is(err, errResumeStateContract) {
 		t.Fatalf("zero discard result error=%v", err)
+	}
+	if _, err := projectResumeStateInventory(osfs.ResumeStateInventory{}); !errors.Is(err, errResumeStateContract) {
+		t.Fatalf("zero inventory error=%v", err)
 	}
 	if _, err := projectResumeAttention([]osfs.ResumeStateAttention{{}}); !errors.Is(err, errResumeStateContract) {
 		t.Fatalf("zero attention error=%v", err)
@@ -53,9 +55,6 @@ func TestFilesystemProjectionFailsClosedForDetachedValues(t *testing.T) {
 	}
 	if _, err := detached.Discard(context.Background(), 0); !errors.Is(err, errResumeStateContract) {
 		t.Fatalf("detached discard error=%v", err)
-	}
-	if err := detached.Close(); err != nil {
-		t.Fatalf("detached close error=%v", err)
 	}
 }
 

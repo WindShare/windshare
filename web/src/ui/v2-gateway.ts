@@ -1,5 +1,6 @@
 import {
   V2CatalogClient,
+  V2DirectoryFailureError,
   type V2CatalogScanProgressListener,
 } from '../catalog/v2-client'
 import { IndexedDbV2CatalogPageStore } from '../catalog/v2-page-store'
@@ -32,9 +33,18 @@ import type {
   V2BlockRouteObservation,
 } from '../content/v2-broker'
 import { V2FilePreview } from '../preview/v2-preview'
+import { projectAuthenticatedV2Generation } from '../transfer/discovery/v2-projection-evidence'
 import { TransferJob, type TransferJobOptions } from '../transfer/v2-job'
-import type { TransferIntent } from '../transfer/intent'
-import type { V2OutputAuthority } from '../transfer/output-session'
+import type { ReceiveIntent } from '../transfer/intent'
+import type { V2PlanExecutionAuthority } from '../transfer/output-session'
+import {
+  RetryableProjectionDiscoveryError,
+  type AuthenticatedDiscoveryRequest,
+  type AuthenticatedDiscoverySource,
+  type AuthenticatedProjectionEvidence,
+  type SelectedRootFact,
+  type SettledLayoutBasisProof,
+} from '../transfer/projection'
 import { dialV2RelayReceiver, type V2RelayReceiverConnection } from '../transport/relay/v2-receiver'
 
 export interface V2BrowseDirectory {
@@ -62,14 +72,14 @@ export class V2BrowseNavigationError extends Error {
 }
 
 export function v2SelectionPolicyFromIntent(
-  intent: TransferIntent,
+  intent: ReceiveIntent,
 ): V2FrozenSelectionPolicy {
-  if (intent.selection.mode !== 'node-id') {
+  if (intent.selection.rules.mode !== 'node-id') {
     throw new TypeError('Browser resume requires node-identity selection authority')
   }
   return frozenV2SelectionPolicy(
-    intent.selection.defaultSelected,
-    intent.selection.rules.map((rule) => {
+    intent.selection.rules.defaultSelected,
+    intent.selection.rules.rules.map((rule) => {
       const id = decodeBase64Url(rule.id)
       if (id === undefined) throw new TypeError('Resumed selection rule identity is invalid')
       return Object.freeze({ kind: rule.kind, id, selected: rule.selected })
@@ -162,10 +172,28 @@ export class V2JoinedBrowserShare {
     return this.#supervisor.beginConnectivity('download', sizeClass)
   }
 
+  get protocolSessionId(): string {
+    return this.#supervisor.protocolSessionId
+  }
+
+  projectionSource(
+    selection: V2FrozenSelectionPolicy,
+    explicitRetry = false,
+  ): AuthenticatedDiscoverySource {
+    return new V2JoinedProjectionSource({
+      descriptor: this.descriptor,
+      catalog: this.#catalog,
+      selection,
+      protocolSessionId: () => this.#supervisor.protocolSessionId,
+      explicitRetry,
+    })
+  }
+
   transferJob(
-    output: V2OutputAuthority,
+    plans: V2PlanExecutionAuthority,
+    intent: ReceiveIntent,
     connectivity: V2ConnectivityActivation,
-    callbacks: Partial<Pick<TransferJobOptions, 'onProgress' | 'onMeasure' | 'onTrace' | 'intent' | 'transferJobId'>> & {
+    callbacks: Partial<Pick<TransferJobOptions, 'onProgress' | 'onMeasure' | 'onTrace' | 'transferJobId'>> & {
       readonly selection?: V2FrozenSelectionPolicy
     } = {},
   ): TransferJob {
@@ -178,7 +206,8 @@ export class V2JoinedBrowserShare {
       revisions: content.revisions,
       broker: content.broker,
       lanes: content.lanes,
-      output,
+      plans,
+      intent,
       protocolSessionId: () => this.#supervisor.protocolSessionId,
       ...jobCallbacks,
     })
@@ -210,6 +239,238 @@ export class V2JoinedBrowserShare {
       if (result.status === 'rejected') failures.push(result.reason)
     }
     if (failures.length > 0) throw new AggregateError(failures, 'Closing the joined share failed')
+  }
+}
+
+interface ProjectionDirectoryCursor {
+  readonly id: Uint8Array<ArrayBuffer>
+  readonly idText: string
+  readonly path: readonly string[]
+  readonly ancestry: readonly string[]
+  readonly selected: boolean
+  readonly selectedDirectoryRoot?: Readonly<{
+    directoryId: string
+    sourcePath: string
+  }>
+}
+
+class V2JoinedProjectionSource implements AuthenticatedDiscoverySource {
+  readonly #descriptor: V2ShareDescriptor
+  readonly #catalog: V2CatalogClient
+  readonly #selection: V2FrozenSelectionPolicy
+  readonly #protocolSessionId: () => string
+  readonly #capturedProtocolSessionId: string
+  readonly #explicitRetry: boolean
+
+  constructor(options: {
+    readonly descriptor: V2ShareDescriptor
+    readonly catalog: V2CatalogClient
+    readonly selection: V2FrozenSelectionPolicy
+    readonly protocolSessionId: () => string
+    readonly explicitRetry: boolean
+  }) {
+    this.#descriptor = options.descriptor
+    this.#catalog = options.catalog
+    this.#selection = options.selection
+    this.#protocolSessionId = options.protocolSessionId
+    this.#capturedProtocolSessionId = options.protocolSessionId()
+    this.#explicitRetry = options.explicitRetry
+  }
+
+  async *discover(request: AuthenticatedDiscoveryRequest) {
+    const rootSelected = this.#selection.directorySelected(
+      this.#descriptor.syntheticRootId,
+      [],
+    )
+    const summary = new ProjectionDiscoverySummary(rootSelected)
+    const seen = new Set<string>()
+    const root: ProjectionDirectoryCursor = Object.freeze({
+      id: this.#descriptor.syntheticRoot.slice(),
+      idText: this.#descriptor.syntheticRootId,
+      path: Object.freeze([]),
+      ancestry: Object.freeze([this.#descriptor.syntheticRootId]),
+      selected: rootSelected,
+    })
+    yield* this.#discoverDirectory(root, request, summary, seen)
+    request.signal.throwIfAborted()
+    this.#requireSameProtocolSession()
+    const layoutBasis = summary.layoutBasis()
+    // Committed generation evidence owns target settlement. Completion only
+    // closes discovery with the cross-generation layout proof; replaying the
+    // request here would claim targets whose authority was already consumed.
+    return Object.freeze({
+      ...(layoutBasis === undefined ? {} : { layoutBasis }),
+    })
+  }
+
+  async *#discoverDirectory(
+    cursor: ProjectionDirectoryCursor,
+    request: AuthenticatedDiscoveryRequest,
+    summary: ProjectionDiscoverySummary,
+    seen: Set<string>,
+  ): AsyncGenerator<AuthenticatedProjectionEvidence, void> {
+    request.signal.throwIfAborted()
+    this.#requireSameProtocolSession()
+    if (seen.has(cursor.idText)) {
+      throw new V2BrowseNavigationError('Catalog projection contains a repeated directory identity')
+    }
+    seen.add(cursor.idText)
+
+    const committed = await this.#loadCommittedDirectory(cursor, request)
+    const evidence = await this.#projectDirectory(committed, cursor, request)
+    summary.observe(evidence)
+    yield evidence
+
+    for await (const child of this.#discoverableChildren(committed, cursor, request, summary)) {
+      yield* this.#discoverDirectory(child, request, summary, seen)
+    }
+  }
+
+  async #loadCommittedDirectory(
+    cursor: ProjectionDirectoryCursor,
+    request: AuthenticatedDiscoveryRequest,
+  ) {
+    try {
+      const committed = await this.#catalog.loadDirectory(cursor.id, {
+        signal: request.signal,
+        explicitRetry: this.#explicitRetry,
+      })
+      request.signal.throwIfAborted()
+      this.#requireSameProtocolSession()
+      return committed
+    } catch (error) {
+      if (error instanceof V2DirectoryFailureError && error.failure.retryable) {
+        throw new RetryableProjectionDiscoveryError('catalog-temporarily-unavailable', {
+          cause: error,
+        })
+      }
+      throw error
+    }
+  }
+
+  #projectDirectory(
+    committed: Awaited<ReturnType<V2CatalogClient['loadDirectory']>>,
+    cursor: ProjectionDirectoryCursor,
+    request: AuthenticatedDiscoveryRequest,
+  ): Promise<AuthenticatedProjectionEvidence> {
+    return projectAuthenticatedV2Generation({
+      committed,
+      pages: this.#catalog.pages(committed, request.signal),
+      selection: this.#selection,
+      directoryAncestry: cursor.ancestry,
+      directoryPath: cursor.path,
+      containingDirectorySelected: cursor.selected,
+      unsettledTargets: request.unsettledTargets,
+      signal: request.signal,
+    })
+  }
+
+  async *#discoverableChildren(
+    committed: Awaited<ReturnType<V2CatalogClient['loadDirectory']>>,
+    cursor: ProjectionDirectoryCursor,
+    request: AuthenticatedDiscoveryRequest,
+    summary: ProjectionDiscoverySummary,
+  ): AsyncGenerator<ProjectionDirectoryCursor, void> {
+    for await (const page of this.#catalog.pages(committed, request.signal)) {
+      for (const entry of page.entries) {
+        request.signal.throwIfAborted()
+        const child = this.#projectionChild(cursor, entry, summary)
+        if (child !== undefined) yield child
+      }
+    }
+  }
+
+  #projectionChild(
+    cursor: ProjectionDirectoryCursor,
+    entry: V2CatalogEntry,
+    summary: ProjectionDiscoverySummary,
+  ): ProjectionDirectoryCursor | undefined {
+    const selected = this.#selection.selected(entry, cursor.ancestry)
+    if (cursor.selectedDirectoryRoot !== undefined && !selected) {
+      summary.markDirectoryRootPartial(cursor.selectedDirectoryRoot.directoryId)
+    }
+    if (entry.kind !== 'directory' ||
+        !this.#selection.shouldDiscover(entry.idText, cursor.ancestry)) return undefined
+
+    const path = snapshotPortableCatalogPath([...cursor.path, entry.name])
+    const selectedDirectoryRoot = projectionDirectoryRoot(cursor, entry.idText, path, selected)
+    return Object.freeze({
+      id: entry.id.slice(),
+      idText: entry.idText,
+      path,
+      ancestry: Object.freeze([...cursor.ancestry, entry.idText]),
+      selected,
+      ...(selectedDirectoryRoot === undefined ? {} : { selectedDirectoryRoot }),
+    })
+  }
+
+  #requireSameProtocolSession(): void {
+    if (this.#protocolSessionId() !== this.#capturedProtocolSessionId) {
+      throw new RetryableProjectionDiscoveryError('receiver-reconnecting')
+    }
+  }
+}
+
+function projectionDirectoryRoot(
+  cursor: ProjectionDirectoryCursor,
+  directoryId: string,
+  path: readonly string[],
+  selected: boolean,
+): ProjectionDirectoryCursor['selectedDirectoryRoot'] {
+  if (!selected) return undefined
+  if (cursor.selectedDirectoryRoot !== undefined) return cursor.selectedDirectoryRoot
+  if (cursor.selected) return undefined
+  return Object.freeze({ directoryId, sourcePath: path.join('/') })
+}
+
+class ProjectionDiscoverySummary {
+  readonly #syntheticRootSelected: boolean
+  readonly #partialDirectoryRoots = new Set<string>()
+  #selectedFileCount = 0
+  #selectedDirectoryCount = 0
+  #selectedRootCount = 0
+  #singleSelectedRoot: SelectedRootFact | undefined
+
+  constructor(syntheticRootSelected: boolean) {
+    this.#syntheticRootSelected = syntheticRootSelected
+  }
+
+  observe(evidence: AuthenticatedProjectionEvidence): void {
+    this.#selectedFileCount = Math.min(
+      2,
+      this.#selectedFileCount + evidence.metrics.fileCountLowerBound,
+    )
+    this.#selectedDirectoryCount = Math.min(
+      1,
+      this.#selectedDirectoryCount + evidence.metrics.directoryCountLowerBound,
+    )
+    if (this.#selectedRootCount === 0 && evidence.selectedRootCount === 1) {
+      this.#singleSelectedRoot = evidence.selectedRoots[0]
+    }
+    this.#selectedRootCount = Math.min(2, this.#selectedRootCount + evidence.selectedRootCount)
+    if (this.#selectedRootCount !== 1) this.#singleSelectedRoot = undefined
+  }
+
+  markDirectoryRootPartial(directoryId: string): void {
+    this.#partialDirectoryRoots.add(directoryId)
+  }
+
+  layoutBasis(): SettledLayoutBasisProof | undefined {
+    const treeRequired = this.#selectedDirectoryCount > 0 || this.#selectedFileCount > 1
+    if (!treeRequired) return undefined
+    const root = this.#singleSelectedRoot
+    if (!this.#syntheticRootSelected && this.#selectedRootCount === 1 && root?.kind === 'directory') {
+      return Object.freeze({
+        kind: this.#partialDirectoryRoots.has(root.directoryId)
+          ? 'directory-selection' as const
+          : 'complete-directory' as const,
+        anchor: Object.freeze({
+          directoryId: root.directoryId,
+          sourcePath: root.sourcePath,
+        }),
+      })
+    }
+    return Object.freeze({ kind: 'synthetic-selection' as const })
   }
 }
 

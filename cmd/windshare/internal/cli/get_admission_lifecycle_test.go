@@ -31,7 +31,7 @@ func TestRelayContentAdmissionReportsAsynchronousResumeFailure(t *testing.T) {
 	if err := admission.ObservePeer(receiverPeerFailed); err != nil {
 		t.Fatalf("peer signal replayed deadline-owned error=%v", err)
 	}
-	if err := admission.ObserveSelection(transfer.SelectionSmall); err != nil {
+	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
 		t.Fatalf("selection signal replayed deadline-owned error=%v", err)
 	}
 	if resumed := relay.count(); resumed != 1 {
@@ -134,7 +134,7 @@ func TestRelayContentAdmissionResumeMayReenterWithoutDeadlock(t *testing.T) {
 	relay := receiverContentSuspensionFunc(func() error {
 		defer close(resumeDone)
 		_ = admission.Err()
-		if err := admission.ObserveSelection(transfer.SelectionSmall); err != nil {
+		if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
 			return errors.Join(resumeErr, err)
 		}
 		if err := admission.ObservePeer(receiverPeerDetached); err != nil {
@@ -148,7 +148,7 @@ func TestRelayContentAdmissionResumeMayReenterWithoutDeadlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := admission.ObserveSelection(transfer.SelectionSmall); err != nil {
+	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -189,7 +189,7 @@ func TestRelayContentAdmissionCloseRevokesQueuedDecisionBeforeResume(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := admission.ObserveSelection(transfer.SelectionSmall); err != nil {
+			if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
 				t.Fatal(err)
 			}
 			workerDone := admission.decisionWorkerDone()
@@ -216,7 +216,7 @@ func TestRelayContentAdmissionCloseRevokesQueuedDecisionBeforeResume(t *testing.
 				t.Fatalf("authority traces=%v", traces)
 			}
 			trace := traces[0]
-			if trace.Generation != 1 || trace.Trigger != receiverAdmissionTriggerSmall ||
+			if trace.Generation != 1 || trace.Trigger != receiverAdmissionTriggerConnectionSmall ||
 				trace.TerminalOwner != test.owner || trace.Result != receiverAdmissionAuthorityRevoked {
 				t.Fatalf("revocation trace=%+v", trace)
 			}
@@ -235,7 +235,7 @@ func TestRelayContentAdmissionTerminalBeforeDecisionQueuesNoWork(t *testing.T) {
 	if err := admission.ObservePeer(receiverPeerSessionFatal); err != nil {
 		t.Fatal(err)
 	}
-	if err := admission.ObserveSelection(transfer.SelectionSmall); err != nil {
+	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
 		t.Fatal(err)
 	}
 	admission.Wait()
@@ -368,7 +368,7 @@ func TestRelayContentAdmissionHighContentionPublishesOneRevocableCapability(t *t
 			defer contendersDone.Done()
 			<-start
 			if index%2 == 0 {
-				_ = admission.ObserveSelection(transfer.SelectionSmall)
+				_ = admission.ObserveConnectionSize(transfer.ConnectionSizeSmall)
 				return
 			}
 			_ = admission.ObservePeer(receiverPeerFailed)
@@ -421,7 +421,7 @@ func TestRelayContentAdmissionContainsResumePanic(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer admission.Close()
-	if err := admission.ObserveSelection(transfer.SelectionSmall); err != nil {
+	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
 		t.Fatal(err)
 	}
 	decision := receiveReceiverAdmissionDecision(t, admission)

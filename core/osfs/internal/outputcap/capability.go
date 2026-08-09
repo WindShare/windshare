@@ -133,6 +133,22 @@ type MetadataAuthorityValidator interface {
 	ValidateMetadataAuthority() error
 }
 
+// PersistentDirectoryIdentity exposes only a bounded, opaque native identity
+// claim. Consumers hash it into OwnedObjectID; the raw claim never becomes a
+// path or a capability and therefore cannot authorize later mutation by itself.
+type PersistentDirectoryIdentity interface {
+	PersistentDirectoryIdentityClaim() ([]byte, error)
+}
+
+// PersistentDirectoryIdentityPreparer exposes the enrollment transition for a
+// restart-stable native identity. Implementations may mutate filesystem
+// metadata, so callers must hold the directory's live public-operation guard;
+// keeping this separate from PersistentDirectoryIdentity preserves a strictly
+// read-only recovery probe.
+type PersistentDirectoryIdentityPreparer interface {
+	PreparePersistentDirectoryIdentityClaim() ([]byte, error)
+}
+
 // CurrentEntryReference is a live-handle identity witness for one opened entry.
 // It is suitable for same-object checks only while retained and is never a
 // restart-stable locator.

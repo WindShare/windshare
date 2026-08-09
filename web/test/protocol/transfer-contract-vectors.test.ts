@@ -1,331 +1,565 @@
 import { describe, expect, it } from 'vitest'
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import { sha256 } from '../../src/crypto/digest'
-import { FaultDomain, FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/fault'
-import {
-  canonicalDirectoryAdmissionMessageV1,
-  createDirectoryAdmission,
-  DirectorySettlementKind,
-  deriveDirectoryAdmissionToken,
-  finalizedDirectorySettlement,
-  isolatedDirectorySettlement,
-  sameDirectoryAdmission,
-  validateDirectorySettlement,
-  verifyDirectoryAdmissionToken,
-  type DirectoryAdmission,
-  type DirectoryAdmissionScope,
-  type OutputDirectoryAdmission,
-  type OutputModifiedTime,
-} from '../../src/transfer/output-session'
-import {
-  createTransferIntentDraft,
-  freezeTransferIntent,
-  snapshotTransferRunId,
-  type TransferSelectionRules,
-} from '../../src/transfer/intent'
 import {
   FILE_CHECKPOINT_NAMESPACE,
   FILE_CHECKPOINT_OWNERSHIP_MARKER,
   canonicalFileCheckpointBytes,
   checkpointIdentityEqual,
-  decodeFileCheckpointV1,
-  decodeFileCheckpointOwnership,
-  encodeFileCheckpointOwnership,
-  encodeFileCheckpointV1,
-  newFileCheckpointV1,
+  decodeFileCheckpointV2,
+  encodeFileCheckpointV2,
+  newFileCheckpointV2,
   selectVerifiedCheckpoint,
   validateFileCheckpointTransition,
+  type FileCheckpointV2,
 } from '../../src/output/persistence/checkpoint'
+import {
+  canonicalDirectoryAdmissionMessageV2,
+  createDirectoryAdmission,
+  createDirectoryAdmissionScope,
+  deriveDirectoryAdmissionToken,
+  DirectorySettlementKind,
+  finalizedDirectorySettlement,
+  isolatedDirectorySettlement,
+  sameDirectoryAdmission,
+  validateDirectorySettlement,
+  verifyDirectoryAdmissionToken,
+  type CanonicalModifiedTime,
+  type DirectoryAdmission,
+  type DirectoryAdmissionLayout,
+  type DirectoryAdmissionScope,
+  type MaterializationDirectory,
+} from '../../src/transfer/directory-admission'
+import { FaultDomain, FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/fault'
+import {
+  createCatalogRootDirectoryTreeArtifact,
+  createCompleteDirectoryResultRoot,
+  createDirectorySelectionResultRoot,
+  createDirectAtomicPlan,
+  createDirectTreePlan,
+  createFSANamedEntryReservation,
+  createManagedAtomicReservation,
+  createNativeContainerRootReservation,
+  createNativeNamedEntryReservation,
+  createOriginalFileArtifact,
+  createPortableBinding,
+  createPortableHandoffPlan,
+  createReceiveIntent,
+  createResultRootDirectoryTreeArtifact,
+  createSelectionSpec,
+  createSingleFileDirectoryTreeArtifact,
+  createSyntheticSelectionResultRoot,
+  createWorkspaceBinding,
+  createWorkspaceThenPublishPlan,
+  createZipArchiveArtifact,
+  type ArtifactSpec,
+  type CanonicalDigestValue,
+  type DestinationReservation,
+  type MaterializationPlan,
+  type ReceiveIntent,
+  type ResultRootLayout,
+  type SelectionRulesSpec,
+} from '../../src/transfer/intent'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
-const intentVectors = loadVectorFile(new URL('../../../core/testvectors/transfer-intent-v1.json', import.meta.url))
-const admissionVectors = loadVectorFile(new URL('../../../core/testvectors/directory-admission-v1.json', import.meta.url))
-const checkpointVectors = loadVectorFile(new URL('../../../core/testvectors/file-checkpoint-v1.json', import.meta.url))
+const receiveIntentVectors = loadVectorFile(
+  new URL('../../../core/testvectors/receive-intent-v1.json', import.meta.url),
+)
+const admissionVectors = loadVectorFile(
+  new URL('../../../core/testvectors/directory-admission-v2.json', import.meta.url),
+)
+const checkpointVectors = loadVectorFile(
+  new URL('../../../core/testvectors/file-checkpoint-v2.json', import.meta.url),
+)
 
-function urlIdentity(standardBase64: string): string {
-  return encodeBase64Url(b64ToBytes(standardBase64))
-}
-
-function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
-  return Buffer.from(left).equals(Buffer.from(right))
-}
-
-function requiredString(value: unknown, label: string): string {
-  if (typeof value !== 'string') throw new Error(`${label} is not a string`)
-  return value
-}
-
-function transferSelection(value: unknown): TransferSelectionRules {
-  const selection = value as {
-    mode: 'node-id' | 'catalog-path'
-    defaultSelected: boolean
-    rules?: readonly { kind: 'directory' | 'file'; idB64: string; selected: boolean }[]
-    paths?: readonly string[]
-    inputPaths?: readonly string[]
-  }
-  if (selection.mode === 'catalog-path') {
-    if (selection.defaultSelected !== false) throw new Error('catalog-path vector default must be false')
-    return {
-      mode: 'catalog-path',
-      defaultSelected: false,
-      paths: selection.inputPaths ?? selection.paths ?? [],
-    }
-  }
-  return {
-    mode: 'node-id',
-    defaultSelected: selection.defaultSelected,
-    rules: (selection.rules ?? []).map((rule) => ({
-      kind: rule.kind,
-      id: urlIdentity(rule.idB64),
-      selected: rule.selected,
-    })),
-  }
-}
-
-describe('Go↔TypeScript TransferIntentV1 vectors', () => {
-  for (const rawCase of intentVectors.cases) {
-    const vector = rawCase as VectorCase
-    it(`replays ${requiredString(vector.name, 'intent case')}`, async () => {
-      const output = vector.output as {
-        targetKind: number
-        targetIdentityB64: string
-        backend: string
-        format: 'directory' | 'single-file' | 'zip'
-      }
-      if (output.targetKind !== 2) throw new Error('browser vector output target must be opaque')
-      const draft = createTransferIntentDraft({
-        shareInstance: urlIdentity(requiredString(vector.shareInstanceB64, 'share instance')),
-        syntheticRoot: urlIdentity(requiredString(vector.syntheticRootB64, 'synthetic root')),
-        selection: transferSelection(vector.selection),
-      })
-      const intent = await freezeTransferIntent(draft, {
-        target: urlIdentity(output.targetIdentityB64),
-        targetKind: 2,
-        backend: output.backend,
-        format: output.format,
-      })
-      expect(bytesEqual(intent.canonicalBytes, b64ToBytes(requiredString(vector.canonicalBytesB64, 'canonical bytes')))).toBe(true)
-      expect(intent.digest).toBe(urlIdentity(requiredString(vector.digestB64, 'intent digest')))
-      expect(intent.digest).toBe(encodeBase64Url(await sha256(intent.canonicalBytes)))
-      expect(snapshotTransferRunId(urlIdentity(requiredString(vector.transferJobIdB64, 'transfer job ID'))))
-        .toBe(urlIdentity(requiredString(vector.transferJobIdB64, 'transfer job ID')))
+describe('Go↔TypeScript ReceiveIntentV1 vectors', () => {
+  for (const vector of receiveIntentVectors.cases) {
+    it(`replays ${vector.name}`, async () => {
+      await replayReceiveIntent(vector)
     })
   }
 })
 
-describe('Go↔TypeScript DirectoryAdmissionV1 vectors', () => {
-  for (const rawCase of admissionVectors.cases) {
-    const vector = rawCase as VectorCase
-    it(`replays ${requiredString(vector.name, 'admission case')}`, async () => {
-      const parent = await replayParentAdmission(vector, admissionVectors.cases as readonly VectorCase[])
-      const modified = outputModifiedTime(vector.modifiedTime)
-      const input: OutputDirectoryAdmission = {
-        directoryId: urlIdentity(requiredString(vector.directoryIdB64, 'directory ID')),
-        generation: urlIdentity(requiredString(vector.generationB64, 'generation')),
-        path: requiredString(vector.path, 'path') === '' ? [] : requiredString(vector.path, 'path').split('/'),
-        ...(parent === undefined ? {} : { parentAdmission: parent }),
-        ...(modified === undefined ? {} : { modifiedTime: modified }),
-      }
-      const scope = admissionScope(vector)
-      const secret = b64ToBytes(requiredString(vector.secretB64, 'admission secret'))
-      const canonical = canonicalDirectoryAdmissionMessageV1(scope, input)
-      expect(bytesEqual(canonical, b64ToBytes(requiredString(vector.messageB64, 'admission message')))).toBe(true)
-      const token = await deriveDirectoryAdmissionToken(secret, scope, input)
-      expect(token).toBe(urlIdentity(requiredString(vector.tokenB64, 'admission token')))
-      expect(await verifyDirectoryAdmissionToken(secret, scope, input, token)).toBe(true)
-      const admission = await createDirectoryAdmission(secret, scope, input)
-      expect(admission.schemaVersion).toBe(Number(vector.schemaVersion))
-      expect(admission.transferIntentDigest).toBe(scope.transferIntentDigest)
-      expect(admission.token).toBe(token)
-      expect(admission.parentToken).toBe(
-        vector.parentTokenB64 === null ? undefined : urlIdentity(requiredString(vector.parentTokenB64, 'parent token')),
+describe('Go↔TypeScript DirectoryAdmissionV2 vectors', () => {
+  for (const vector of admissionVectors.cases) {
+    it(`replays ${vector.name}`, async () => {
+      const intentVector = receiveIntentCase(requiredString(vector.receiveIntentCase, 'receive intent case'))
+      const intent = await replayReceiveIntent(intentVector)
+      const { admission, directory, scope, secret } = await buildDirectoryAdmission(
+        vector,
+        admissionVectors.cases,
+        intent,
       )
+
+      expect(scope.receiveIntentDigest).toBe(intent.digest)
+      expect(scope.syntheticRoot).toBe(intent.syntheticRoot)
+      expect(vector.schemaVersion).toBe(2)
+      expect(encodeBase64Url(canonicalDirectoryAdmissionMessageV2(scope, directory)))
+        .toBe(requiredString(vector.messageB64Url, 'directory admission message'))
+      expect(await deriveDirectoryAdmissionToken(secret, scope, directory))
+        .toBe(requiredString(vector.token, 'directory admission token'))
+      expect(await verifyDirectoryAdmissionToken(secret, scope, directory, admission.token)).toBe(true)
+      expect(admission.token).toBe(requiredString(vector.token, 'directory admission token'))
       replayDirectorySettlement(vector, admission)
     })
   }
 })
 
-describe('Go↔TypeScript FileCheckpointV1 vectors', () => {
-  it('replays canonical bindings and storage envelopes', () => {
-    const names = ['candidate', 'verified', 'paused', 'next-candidate', 'next-verified', 'foreign-root'] as const
-    const records = new Map(names.map((name) => {
-      const vector = checkpointVectors.cases.find((candidate) => candidate.name === name) as VectorCase
+describe('Go↔TypeScript FileCheckpointV2 vectors', () => {
+  it('replays canonical bindings and storage envelopes', async () => {
+    const names = [
+      'candidate',
+      'verified',
+      'paused',
+      'next-candidate',
+      'next-verified',
+      'foreign-authority',
+    ] as const
+    const records = new Map<string, FileCheckpointV2>()
+    for (const name of names) {
+      const vector = checkpointCase(name)
       const record = checkpointRecord(vector)
-      expect(record.schemaVersion).toBe(Number(vector.schemaVersion))
-      expect(record.recordId).toBe(urlIdentity(requiredString(vector.recordIdB64, 'record ID')))
-      expect(record.checksum).toBe(urlIdentity(requiredString(vector.checksumB64, 'checksum')))
-      expect(bytesEqual(
-        canonicalFileCheckpointBytes(record),
-        b64ToBytes(requiredString(vector.canonicalBytesB64, 'checkpoint canonical bytes')),
-      )).toBe(true)
-      const encoded = encodeFileCheckpointV1(record)
-      expect(bytesEqual(encoded, b64ToBytes(requiredString(vector.encodedB64, 'checkpoint envelope')))).toBe(true)
-      expect(decodeFileCheckpointV1(encoded)).toEqual(record)
-      return [name, record] as const
-    }))
+      const intent = await replayReceiveIntent(receiveIntentCase(
+        requiredString(vector.receiveIntentCase, 'receive intent case'),
+      ))
+
+      expect(record.schemaVersion).toBe(requiredNumber(vector.schemaVersion, 'checkpoint schema version'))
+      expect(record.ownershipMarker).toBe(FILE_CHECKPOINT_OWNERSHIP_MARKER)
+      expect(record.namespace).toBe(FILE_CHECKPOINT_NAMESPACE)
+      expect(record.operationId).toBe(intent.operationId)
+      expect(record.receiveIntentDigest).toBe(intent.digest)
+      expect(record.materializationBindingDigest).toBe(intent.bindingDigest)
+      expect(record.recordId).toBe(requiredString(vector.recordId, 'checkpoint record ID'))
+      expect(record.checksum).toBe(requiredString(vector.checksum, 'checkpoint checksum'))
+      expect(encodeBase64Url(canonicalFileCheckpointBytes(record)))
+        .toBe(requiredString(vector.canonicalBytesB64Url, 'checkpoint canonical bytes'))
+      const encoded = encodeFileCheckpointV2(record)
+      expect(encodeBase64Url(encoded)).toBe(requiredString(vector.encodedB64Url, 'checkpoint envelope'))
+      expect(decodeFileCheckpointV2(encoded)).toEqual(record)
+      records.set(name, record)
+    }
 
     const candidate = records.get('candidate')!
     const verified = records.get('verified')!
     const paused = records.get('paused')!
     const nextCandidate = records.get('next-candidate')!
     const nextVerified = records.get('next-verified')!
-    const foreignRoot = records.get('foreign-root')!
+    const foreignAuthority = records.get('foreign-authority')!
     expect(() => validateFileCheckpointTransition(candidate, verified)).not.toThrow()
     expect(() => validateFileCheckpointTransition(verified, paused)).not.toThrow()
     expect(() => validateFileCheckpointTransition(verified, nextCandidate)).not.toThrow()
     expect(() => validateFileCheckpointTransition(nextCandidate, nextVerified)).not.toThrow()
-    expect(checkpointIdentityEqual(candidate, foreignRoot)).toBe(false)
+    expect(checkpointIdentityEqual(candidate, foreignAuthority)).toBe(false)
 
-    const crashCuts = checkpointVectors.cases.find((value) => value.name === 'crash-cuts') as VectorCase
+    const crashCuts = checkpointCase('crash-cuts')
     const beforeCommit = selectVerifiedCheckpoint(candidate, verified, nextCandidate)
-    expect(beforeCommit.recordId).toBe(urlIdentity(requiredString(crashCuts.beforeCommitRecordIdB64, 'before-commit record')))
+    expect(beforeCommit.recordId).toBe(requiredString(crashCuts.beforeCommitRecordId, 'before-commit record'))
     expect(beforeCommit.checkpointGeneration).toBe(BigInt(requiredString(
       crashCuts.beforeCommitCheckpointGeneration,
       'before-commit generation',
     )))
     const afterCommit = selectVerifiedCheckpoint(candidate, verified, nextCandidate, nextVerified)
-    expect(afterCommit.recordId).toBe(urlIdentity(requiredString(crashCuts.afterCommitRecordIdB64, 'after-commit record')))
+    expect(afterCommit.recordId).toBe(requiredString(crashCuts.afterCommitRecordId, 'after-commit record'))
     expect(afterCommit.checkpointGeneration).toBe(BigInt(requiredString(
       crashCuts.afterCommitCheckpointGeneration,
       'after-commit generation',
     )))
   })
-
-  it('requires certified ownership and root-open disposition in the envelope', () => {
-    const ownershipVector = checkpointVectors.cases.find((candidate) => candidate.name === 'ownership') as VectorCase
-    const mismatchVector = checkpointVectors.cases.find((candidate) => candidate.name === 'ownership-mismatch') as VectorCase
-    for (const vector of [ownershipVector, mismatchVector]) {
-      expect(requiredString(vector.marker, 'ownership marker')).toBe(FILE_CHECKPOINT_OWNERSHIP_MARKER)
-      expect(requiredString(vector.namespace, 'ownership namespace')).toBe(FILE_CHECKPOINT_NAMESPACE)
-      expect(requiredString(vector.certification, 'ownership certification')).toBe('windows/ntfs/process-restart/v1')
-      expect(['caller-provided-container', 'authority-created-root']).toContain(
-        requiredString(vector.rootOpenDisposition, 'root-open disposition'),
-      )
-      const encoded = b64ToBytes(requiredString(vector.encodedB64, 'ownership envelope'))
-      const decoded = decodeFileCheckpointOwnership(encoded)
-      expect(decoded).toEqual({
-        marker: FILE_CHECKPOINT_OWNERSHIP_MARKER,
-        namespace: FILE_CHECKPOINT_NAMESPACE,
-        backend: requiredString(vector.backend, 'ownership backend'),
-        certification: requiredString(vector.certification, 'ownership certification'),
-        rootIdentity: urlIdentity(requiredString(vector.rootIdentityB64, 'ownership root')),
-        rootOpenDisposition: requiredString(vector.rootOpenDisposition, 'root-open disposition'),
-      })
-      expect(bytesEqual(encodeFileCheckpointOwnership(decoded), encoded)).toBe(true)
-    }
-    expect(requiredString(ownershipVector.rootOpenDisposition, 'root-open disposition')).not.toBe(
-      requiredString(mismatchVector.rootOpenDisposition, 'mismatched root-open disposition'),
-    )
-    expect(requiredString(ownershipVector.canonicalBytesB64, 'ownership canonical bytes')).not.toBe(
-      requiredString(mismatchVector.canonicalBytesB64, 'mismatched ownership canonical bytes'),
-    )
-  })
 })
 
-function replayDirectorySettlement(vector: VectorCase, admission: DirectoryAdmission): void {
-  const expected = vector.settlement as {
-    kind: unknown
-    admissionTokenB64: unknown
-    fault?: { domain?: unknown; scope?: unknown; code?: unknown }
+async function replayReceiveIntent(vector: VectorCase): Promise<ReceiveIntent> {
+  const selectionInput = requiredRecord(vector.selection, 'selection')
+  const rulesInput = requiredRecord(selectionInput.rules, 'selection rules')
+  const rules = selectionRules(rulesInput)
+  const selection = await createSelectionSpec({
+    shareInstance: requiredString(selectionInput.shareInstance, 'share instance'),
+    syntheticRoot: requiredString(selectionInput.syntheticRoot, 'synthetic root'),
+    rules,
+  })
+  const artifact = await artifactSpec(requiredRecord(vector.artifact, 'artifact'))
+  const { plan, binding } = await materializationPlan(
+    requiredRecord(vector.plan, 'materialization plan'),
+    artifact,
+  )
+  const intent = await createReceiveIntent({ selection, artifact, plan })
+  const expected = requiredRecord(vector.expected, 'expected ReceiveIntent values')
+
+  expect(encodeBase64Url(selection.canonicalBytes))
+    .toBe(requiredString(expected.selectionCanonicalBytesB64Url, 'selection canonical bytes'))
+  expect(selection.digest).toBe(requiredString(expected.selectionDigest, 'selection digest'))
+  expect(encodeBase64Url(artifact.canonicalBytes))
+    .toBe(requiredString(expected.artifactCanonicalBytesB64Url, 'artifact canonical bytes'))
+  expect(artifact.digest).toBe(requiredString(expected.artifactDigest, 'artifact digest'))
+  expect(encodeBase64Url(binding.canonicalBytes))
+    .toBe(requiredString(expected.bindingCanonicalBytesB64Url, 'binding canonical bytes'))
+  expect(binding.digest).toBe(requiredString(expected.bindingDigest, 'binding digest'))
+  expect(encodeBase64Url(plan.canonicalBytes))
+    .toBe(requiredString(expected.planCanonicalBytesB64Url, 'materialization plan canonical bytes'))
+  expect(intent.operationId).toBe(requiredString(expected.operationId, 'operation ID'))
+  expect(encodeBase64Url(intent.canonicalBytes))
+    .toBe(requiredString(expected.receiveIntentCanonicalBytesB64Url, 'ReceiveIntent canonical bytes'))
+  expect(intent.digest).toBe(requiredString(expected.receiveIntentDigest, 'ReceiveIntent digest'))
+  return intent
+}
+
+function selectionRules(input: Record<string, unknown>): SelectionRulesSpec {
+  const mode = requiredString(input.mode, 'selection mode')
+  if (mode === 'catalog-path') {
+    if (input.defaultSelected !== false) throw new Error('catalog-path selection must default to false')
+    return {
+      mode,
+      defaultSelected: false,
+      paths: requiredStringArray(input.paths, 'selection paths'),
+    }
   }
-  const expectedToken = urlIdentity(requiredString(expected.admissionTokenB64, 'settlement admission token'))
+  if (mode !== 'node-id') throw new Error('selection mode is invalid')
+  if (typeof input.defaultSelected !== 'boolean') throw new Error('selection default is not boolean')
+  if (!Array.isArray(input.rules)) throw new Error('node selection rules are not an array')
+  return {
+    mode,
+    defaultSelected: input.defaultSelected,
+    rules: input.rules.map((value) => {
+      const rule = requiredRecord(value, 'node selection rule')
+      const kind = requiredString(rule.kind, 'selection rule kind')
+      if (kind !== 'directory' && kind !== 'file') throw new Error('selection rule kind is invalid')
+      if (typeof rule.selected !== 'boolean') throw new Error('selection rule decision is not boolean')
+      return { kind, id: requiredString(rule.id, 'selection rule identity'), selected: rule.selected }
+    }),
+  }
+}
+
+async function artifactSpec(input: Record<string, unknown>): Promise<ArtifactSpec> {
+  switch (requiredString(input.kind, 'artifact kind')) {
+    case 'original-file':
+      return createOriginalFileArtifact({
+        fileId: requiredString(input.fileId, 'artifact file ID'),
+        sourcePath: requiredString(input.sourcePath, 'artifact source path'),
+        suggestedName: requiredString(input.suggestedName, 'artifact suggested name'),
+      })
+    case 'directory-tree': {
+      const layout = requiredRecord(input.layout, 'directory-tree layout')
+      switch (requiredString(layout.kind, 'directory-tree layout kind')) {
+        case 'single-file':
+          return createSingleFileDirectoryTreeArtifact({
+            fileId: requiredString(layout.fileId, 'single-file ID'),
+            sourcePath: requiredString(layout.sourcePath, 'single-file source path'),
+            outputName: requiredString(layout.outputName, 'single-file output name'),
+          })
+        case 'result-root':
+          return createResultRootDirectoryTreeArtifact(resultRoot(requiredRecord(layout.root, 'result root')))
+        case 'catalog-root':
+          return createCatalogRootDirectoryTreeArtifact()
+        default:
+          throw new Error('directory-tree layout kind is invalid')
+      }
+    }
+    case 'zip-archive': {
+      if (input.encoding !== 'store' || input.completeness !== 'complete-only') {
+        throw new Error('ZIP vector does not encode the complete-only store contract')
+      }
+      const artifact = await createZipArchiveArtifact(resultRoot(requiredRecord(input.layout, 'ZIP layout')))
+      expect(artifact.suggestedName).toBe(requiredString(input.suggestedName, 'ZIP suggested name'))
+      return artifact
+    }
+    default:
+      throw new Error('artifact kind is invalid')
+  }
+}
+
+function resultRoot(input: Record<string, unknown>): ResultRootLayout {
+  const anchor = requiredRecord(input.anchor, 'result-root anchor')
+  let result: ResultRootLayout
+  switch (requiredString(input.class, 'result-root class')) {
+    case 'complete-directory':
+      result = createCompleteDirectoryResultRoot(
+        requiredString(anchor.directoryId, 'result-root directory ID'),
+        requiredString(anchor.sourcePath, 'result-root source path'),
+      )
+      break
+    case 'directory-selection':
+      result = createDirectorySelectionResultRoot(
+        requiredString(anchor.directoryId, 'result-root directory ID'),
+        requiredString(anchor.sourcePath, 'result-root source path'),
+      )
+      break
+    case 'synthetic-selection':
+      if (anchor.kind !== 'synthetic-root') throw new Error('synthetic result root has the wrong anchor')
+      result = createSyntheticSelectionResultRoot()
+      break
+    default:
+      throw new Error('result-root class is invalid')
+  }
+  expect(result.name).toBe(requiredString(input.name, 'result-root name'))
+  return result
+}
+
+async function materializationPlan(
+  input: Record<string, unknown>,
+  artifact: ArtifactSpec,
+): Promise<{ plan: MaterializationPlan; binding: CanonicalDigestValue }> {
+  switch (requiredString(input.kind, 'materialization plan kind')) {
+    case 'direct-tree': {
+      const reservation = await destinationReservation(
+        requiredRecord(input.reservation, 'destination reservation'),
+        artifact,
+      )
+      return { plan: await createDirectTreePlan(artifact, reservation), binding: reservation }
+    }
+    case 'direct-atomic': {
+      const reservation = await destinationReservation(
+        requiredRecord(input.reservation, 'destination reservation'),
+        artifact,
+      )
+      if (reservation.kind !== 'atomic-target') throw new Error('direct-atomic vector lacks an atomic target')
+      return { plan: await createDirectAtomicPlan(artifact, reservation), binding: reservation }
+    }
+    case 'workspace-then-publish': {
+      const workspaceInput = requiredRecord(input.workspace, 'workspace binding')
+      const workspace = await createWorkspaceBinding({
+        operationId: requiredString(workspaceInput.operationId, 'workspace operation ID'),
+        workspaceId: requiredString(workspaceInput.workspaceId, 'workspace ID'),
+        artifact,
+        repositoryRef: requiredString(workspaceInput.repositoryRef, 'workspace repository'),
+      })
+      return { plan: await createWorkspaceThenPublishPlan(artifact, workspace), binding: workspace }
+    }
+    case 'portable-handoff': {
+      const portableInput = requiredRecord(input.portable, 'portable binding')
+      const portable = await createPortableBinding({
+        operationId: requiredString(portableInput.operationId, 'portable operation ID'),
+        portablePlanId: requiredString(portableInput.portablePlanId, 'portable plan ID'),
+        artifact,
+      })
+      return { plan: await createPortableHandoffPlan(artifact, portable), binding: portable }
+    }
+    default:
+      throw new Error('materialization plan kind is invalid')
+  }
+}
+
+async function destinationReservation(
+  input: Record<string, unknown>,
+  artifact: ArtifactSpec,
+): Promise<DestinationReservation> {
+  const base = {
+    operationId: requiredString(input.operationId, 'reservation operation ID'),
+    reservationId: requiredString(input.reservationId, 'reservation ID'),
+    artifact,
+    authorityRef: requiredString(input.authorityRef, 'reservation authority'),
+  }
+  switch (requiredString(input.kind, 'reservation kind')) {
+    case 'container-root':
+      return createNativeContainerRootReservation(base)
+    case 'named-container-entry': {
+      const named = {
+        ...base,
+        reservedName: requiredString(input.reservedName, 'reserved name'),
+        collisionIndex: requiredNumber(input.collisionIndex, 'collision index'),
+      }
+      switch (requiredString(input.authorityKind, 'reservation authority kind')) {
+        case 'native-container': return createNativeNamedEntryReservation(named)
+        case 'fsa-container': return createFSANamedEntryReservation(named)
+        default: throw new Error('named reservation authority kind is invalid')
+      }
+    }
+    case 'atomic-target': {
+      const guarantees = requiredRecord(input.guarantees, 'atomic guarantees')
+      const nameAuthority = requiredString(guarantees.nameAuthority, 'atomic name authority')
+      if (nameAuthority !== 'application-chosen' && nameAuthority !== 'user-chosen') {
+        throw new Error('atomic name authority is invalid')
+      }
+      return createManagedAtomicReservation({
+        ...base,
+        nameAuthority,
+        requestedName: requiredString(input.requestedName, 'requested name'),
+        reservedName: requiredString(input.reservedName, 'reserved name'),
+        collisionIndex: requiredNumber(input.collisionIndex, 'collision index'),
+      })
+    }
+    default:
+      throw new Error('reservation kind is invalid')
+  }
+}
+
+async function buildDirectoryAdmission(
+  vector: VectorCase,
+  allCases: readonly VectorCase[],
+  intent: ReceiveIntent,
+): Promise<{
+  admission: DirectoryAdmission
+  directory: MaterializationDirectory
+  scope: DirectoryAdmissionScope
+  secret: Uint8Array
+}> {
+  const scopeInput = requiredRecord(vector.scope, 'directory admission scope')
+  const scope = await createDirectoryAdmissionScope(intent)
+  expect(scope).toEqual({
+    receiveIntentDigest: requiredString(scopeInput.receiveIntentDigest, 'scope ReceiveIntent digest'),
+    layoutVersion: requiredLayoutVersion(scopeInput.layoutVersion),
+    layout: directoryAdmissionLayout(scopeInput.layout),
+    syntheticRoot: requiredString(scopeInput.syntheticRoot, 'scope synthetic root'),
+  } satisfies DirectoryAdmissionScope)
+  const parentName = vector.parentCase
+  const parentAdmission = parentName === null || parentName === undefined
+    ? undefined
+    : (await buildDirectoryAdmission(
+        requiredCase(allCases, requiredString(parentName, 'parent case')),
+        allCases,
+        intent,
+      )).admission
+  const directoryInput = requiredRecord(vector.directory, 'materialization directory')
+  const modifiedTime = canonicalModifiedTime(directoryInput.modifiedTime)
+  const directory: MaterializationDirectory = {
+    directoryId: requiredString(directoryInput.directoryId, 'directory ID'),
+    generation: requiredString(directoryInput.generation, 'directory generation'),
+    path: requiredStringArray(directoryInput.path, 'directory path'),
+    ...(parentAdmission === undefined ? {} : { parentAdmission }),
+    ...(modifiedTime === undefined ? {} : { modifiedTime }),
+  }
+  const secret = b64ToBytes(requiredString(vector.secretB64Url, 'directory admission secret'))
+  return {
+    admission: await createDirectoryAdmission(secret, scope, directory),
+    directory,
+    scope,
+    secret,
+  }
+}
+
+function replayDirectorySettlement(vector: VectorCase, admission: DirectoryAdmission): void {
+  const expected = requiredRecord(vector.settlement, 'directory settlement')
   let settlement
-  switch (expected.kind) {
+  switch (requiredString(expected.kind, 'directory settlement kind')) {
     case DirectorySettlementKind.Finalized:
-      if (expected.fault !== undefined) throw new Error('finalized settlement vector must not carry a fault')
       settlement = finalizedDirectorySettlement(admission)
       break
-    case DirectorySettlementKind.IsolatedFailure:
-      if (expected.fault?.domain !== FaultDomain.Output ||
-          expected.fault.scope !== FaultScope.DirectoryLocal ||
-          expected.fault.code !== OutputFaultCode.DirectoryMetadata) {
-        throw new Error('isolated settlement vector must carry the closed directory metadata fault')
-      }
+    case DirectorySettlementKind.IsolatedFailure: {
+      const fault = requiredRecord(expected.fault, 'directory settlement fault')
+      expect(fault).toEqual({
+        domain: FaultDomain.Output,
+        scope: FaultScope.DirectoryLocal,
+        code: OutputFaultCode.DirectoryMetadata,
+      })
       settlement = isolatedDirectorySettlement(
         admission,
         outputFault(FaultScope.DirectoryLocal, OutputFaultCode.DirectoryMetadata),
       )
       break
+    }
     default:
-      throw new Error('directory settlement vector kind is invalid')
+      throw new Error('directory settlement kind is invalid')
   }
-
   const validated = validateDirectorySettlement(admission, settlement)
   expect(validated.kind).toBe(expected.kind)
-  expect(validated.admission.token).toBe(expectedToken)
+  expect(validated.admission.token).toBe(requiredString(expected.admissionToken, 'settlement admission token'))
   expect(sameDirectoryAdmission(validated.admission, admission)).toBe(true)
-  if (validated.kind === DirectorySettlementKind.IsolatedFailure) {
-    expect(validated.fault).toEqual(expected.fault)
-  } else {
-    expect(validated).not.toHaveProperty('fault')
-  }
 }
 
-function checkpointRecord(vector: VectorCase): ReturnType<typeof newFileCheckpointV1> {
-  return newFileCheckpointV1({
-    ownershipMarker: requiredString(vector.ownershipMarker, 'ownership marker'),
-    namespace: requiredString(vector.namespace, 'namespace'),
-    transferIntentDigest: b64ToBytes(requiredString(vector.transferIntentDigestB64, 'intent digest')),
-    fileId: b64ToBytes(requiredString(vector.fileIdB64, 'file ID')),
-    fileRevision: b64ToBytes(requiredString(vector.fileRevisionB64, 'file revision')),
-    canonicalPath: requiredString(vector.canonicalPath, 'checkpoint path'),
-    exactSize: BigInt(requiredString(vector.exactSize, 'exact size')),
-    backend: requiredString(vector.backend, 'checkpoint backend'),
-    rootIdentity: b64ToBytes(requiredString(vector.rootIdentityB64, 'root identity')),
-    ownedOutputObject: b64ToBytes(requiredString(vector.ownedOutputObjectB64, 'output object')),
-    stateGeneration: BigInt(requiredString(vector.stateGeneration, 'state generation')),
-    checkpointGeneration: BigInt(requiredString(vector.checkpointGeneration, 'checkpoint generation')),
-    verifiedRanges: (vector.verifiedRanges as readonly { start: string; end: string }[]).map((range) => ({
-      start: BigInt(range.start),
-      end: BigInt(range.end),
-    })),
-    phase: Number(vector.phase),
-    commitState: Number(vector.commitState),
-    quarantineReason: Number(vector.quarantineReason),
-    quarantineOrigin: Number(vector.quarantineOrigin),
-    retirementReason: Number(vector.retirementReason),
+function checkpointRecord(vector: VectorCase): FileCheckpointV2 {
+  return newFileCheckpointV2({
+    ownershipMarker: requiredString(vector.ownershipMarker, 'checkpoint ownership marker'),
+    namespace: requiredString(vector.namespace, 'checkpoint namespace'),
+    operationId: requiredString(vector.operationId, 'checkpoint operation ID'),
+    receiveIntentDigest: requiredString(vector.receiveIntentDigest, 'checkpoint ReceiveIntent digest'),
+    materializationBindingDigest: requiredString(
+      vector.materializationBindingDigest,
+      'checkpoint materialization binding digest',
+    ),
+    fileId: requiredString(vector.fileId, 'checkpoint file ID'),
+    fileRevision: requiredString(vector.fileRevision, 'checkpoint file revision'),
+    canonicalPath: requiredStringArray(vector.canonicalPath, 'checkpoint path'),
+    exactSize: BigInt(requiredString(vector.exactSize, 'checkpoint exact size')),
+    materializerKind: requiredNumber(vector.materializerKind, 'checkpoint materializer kind'),
+    authorityRef: requiredString(vector.authorityRef, 'checkpoint authority reference'),
+    ownedObjectId: requiredString(vector.ownedObjectId, 'checkpoint owned object ID'),
+    stateGeneration: BigInt(requiredString(vector.stateGeneration, 'checkpoint state generation')),
+    checkpointGeneration: BigInt(requiredString(
+      vector.checkpointGeneration,
+      'checkpoint generation',
+    )),
+    verifiedRanges: requiredArray(vector.verifiedRanges, 'checkpoint verified ranges').map((value) => {
+      const range = requiredRecord(value, 'checkpoint verified range')
+      return {
+        start: BigInt(requiredString(range.start, 'checkpoint range start')),
+        end: BigInt(requiredString(range.end, 'checkpoint range end')),
+      }
+    }),
+    phase: requiredNumber(vector.phase, 'checkpoint phase'),
+    commitState: requiredNumber(vector.commitState, 'checkpoint commit state'),
+    quarantineReason: requiredNumber(vector.quarantineReason, 'checkpoint quarantine reason'),
+    quarantineOrigin: requiredNumber(vector.quarantineOrigin, 'checkpoint quarantine origin'),
+    retirementReason: requiredNumber(vector.retirementReason, 'checkpoint retirement reason'),
   })
 }
 
-function outputModifiedTime(value: unknown): OutputModifiedTime | undefined {
+function canonicalModifiedTime(value: unknown): CanonicalModifiedTime | undefined {
   if (value === null || value === undefined) return undefined
-  const modified = value as { seconds: number; nanoseconds: number; precision: 1 | 2 | 3 }
-  const seconds = BigInt(modified.seconds)
+  const input = requiredRecord(value, 'modified time')
+  const precision = requiredNumber(input.precision, 'modified time precision')
+  if (precision !== 1 && precision !== 2 && precision !== 3) {
+    throw new Error('modified time precision is invalid')
+  }
   return {
-    seconds,
-    nanoseconds: modified.nanoseconds,
-    precision: modified.precision,
-    milliseconds: seconds * 1_000n + BigInt(Math.trunc(modified.nanoseconds / 1_000_000)),
+    seconds: BigInt(requiredString(input.seconds, 'modified time seconds')),
+    nanoseconds: requiredNumber(input.nanoseconds, 'modified time nanoseconds'),
+    precision,
   }
 }
 
-async function replayParentAdmission(
-  vector: VectorCase,
-  allCases: readonly VectorCase[],
-): Promise<DirectoryAdmission | undefined> {
-  if (vector.parentTokenB64 === null || vector.parentTokenB64 === undefined) return undefined
-  const parentVector = allCases.find((candidate) => candidate.tokenB64 === vector.parentTokenB64)
-  if (parentVector === undefined) throw new Error(`missing parent admission vector for ${String(vector.name)}`)
-  const parentModified = outputModifiedTime(parentVector.modifiedTime)
-  const parentParent = await replayParentAdmission(parentVector, allCases)
-  const parentInput: OutputDirectoryAdmission = {
-    directoryId: urlIdentity(requiredString(parentVector.directoryIdB64, 'parent directory ID')),
-    generation: urlIdentity(requiredString(parentVector.generationB64, 'parent generation')),
-    path: requiredString(parentVector.path, 'parent path') === '' ? [] : requiredString(parentVector.path, 'parent path').split('/'),
-    ...(parentParent === undefined ? {} : { parentAdmission: parentParent }),
-    ...(parentModified === undefined ? {} : { modifiedTime: parentModified }),
-  }
-  return createDirectoryAdmission(
-    b64ToBytes(requiredString(parentVector.secretB64, 'parent secret')),
-    admissionScope(parentVector),
-    parentInput,
-  )
+function requiredLayoutVersion(value: unknown): 1 {
+  if (value !== 1) throw new Error('directory admission layout version is invalid')
+  return value
 }
 
-function admissionScope(vector: VectorCase): DirectoryAdmissionScope {
-  return {
-    transferIntentDigest: urlIdentity(requiredString(vector.intentDigestB64, 'intent digest')),
-    syntheticRoot: urlIdentity(requiredString(vector.syntheticRootB64, 'synthetic root')),
+function directoryAdmissionLayout(value: unknown): DirectoryAdmissionLayout {
+  switch (value) {
+    case 'directory-tree-single-file':
+    case 'directory-tree-result-root':
+    case 'directory-tree-catalog-root':
+    case 'zip-result-root':
+      return value
+    default:
+      throw new Error('directory admission layout is invalid')
   }
+}
+
+function receiveIntentCase(name: string): VectorCase {
+  return requiredCase(receiveIntentVectors.cases, name)
+}
+
+function checkpointCase(name: string): VectorCase {
+  return requiredCase(checkpointVectors.cases, name)
+}
+
+function requiredCase(cases: readonly VectorCase[], name: string): VectorCase {
+  const vector = cases.find((candidate) => candidate.name === name)
+  if (vector === undefined) throw new Error(`missing vector case ${name}`)
+  return vector
+}
+
+function requiredRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`${label} is not an object`)
+  }
+  return value as Record<string, unknown>
+}
+
+function requiredArray(value: unknown, label: string): readonly unknown[] {
+  if (!Array.isArray(value)) throw new Error(`${label} is not an array`)
+  return value
+}
+
+function requiredStringArray(value: unknown, label: string): readonly string[] {
+  const result = requiredArray(value, label)
+  if (result.some((item) => typeof item !== 'string')) throw new Error(`${label} contains non-text`)
+  return result as readonly string[]
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== 'string') throw new Error(`${label} is not text`)
+  return value
+}
+
+function requiredNumber(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${label} is not a number`)
+  return value
 }

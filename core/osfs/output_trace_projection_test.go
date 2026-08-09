@@ -5,6 +5,7 @@ import (
 
 	"github.com/windshare/windshare/core/osfs/internal/outputruntime"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
@@ -58,8 +59,8 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 		value outputruntime.FilesystemOutputRuntimeOperation
 		want  FilesystemOutputRuntimeOperation
 	}{
-		{outputruntime.FilesystemOutputRuntimeOpenOutput, FilesystemOutputRuntimeOpenOutput},
-		{outputruntime.FilesystemOutputRuntimeAcquireIntentLease, FilesystemOutputRuntimeAcquireIntentLease},
+		{outputruntime.FilesystemOutputRuntimeOpenDirectTree, FilesystemOutputRuntimeOpenDirectTree},
+		{outputruntime.FilesystemOutputRuntimeAcquireOperationLease, FilesystemOutputRuntimeAcquireOperationLease},
 		{outputruntime.FilesystemOutputRuntimeReconcileCheckpoints, FilesystemOutputRuntimeReconcileCheckpoints},
 		{outputruntime.FilesystemOutputRuntimeAdmitDirectory, FilesystemOutputRuntimeAdmitDirectory},
 		{outputruntime.FilesystemOutputRuntimeFinalizeDirectory, FilesystemOutputRuntimeFinalizeDirectory},
@@ -69,8 +70,8 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 		{outputruntime.FilesystemOutputRuntimeCommitFile, FilesystemOutputRuntimeCommitFile},
 		{outputruntime.FilesystemOutputRuntimePauseFile, FilesystemOutputRuntimePauseFile},
 		{outputruntime.FilesystemOutputRuntimeRetireFile, FilesystemOutputRuntimeRetireFile},
-		{outputruntime.FilesystemOutputRuntimePauseJob, FilesystemOutputRuntimePauseJob},
-		{outputruntime.FilesystemOutputRuntimeCompleteJob, FilesystemOutputRuntimeCompleteJob},
+		{outputruntime.FilesystemOutputRuntimePauseTree, FilesystemOutputRuntimePauseTree},
+		{outputruntime.FilesystemOutputRuntimeFinalizeTree, FilesystemOutputRuntimeFinalizeTree},
 		{outputruntime.FilesystemOutputRuntimeMaterializeDirectory, FilesystemOutputRuntimeMaterializeDirectory},
 		{outputruntime.FilesystemOutputRuntimeCreateOwnedFile, FilesystemOutputRuntimeCreateOwnedFile},
 		{outputruntime.FilesystemOutputRuntimeRecoverFile, FilesystemOutputRuntimeRecoverFile},
@@ -155,7 +156,8 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 func TestOutputTraceProjectionCopiesNativeRuntimePayload(t *testing.T) {
 	event := outputruntime.FilesystemOutputTrace{
 		Operation:              outputruntime.TraceRuntimeDecision,
-		IntentDigest:           transfer.TransferIntentDigest{1},
+		ReceiveIntentDigest:    transfer.ReceiveIntentDigest{1},
+		ReceiveOperationID:     receivecontract.OperationID{15},
 		SessionID:              transfer.OutputSessionID{2},
 		Certification:          outputruntime.FilesystemOutputCertificationLinuxExt4ProcessRestart,
 		NativeLockScope:        outputruntime.FilesystemOutputNativeLockSession,
@@ -180,7 +182,8 @@ func TestOutputTraceProjectionCopiesNativeRuntimePayload(t *testing.T) {
 	}
 	want := FilesystemOutputTrace{
 		Operation:              TraceRuntimeDecision,
-		IntentDigest:           event.IntentDigest,
+		ReceiveIntentDigest:    event.ReceiveIntentDigest,
+		ReceiveOperationID:     event.ReceiveOperationID,
 		SessionID:              event.SessionID,
 		Certification:          FilesystemOutputCertificationLinuxExt4ProcessRestart,
 		NativeLockScope:        FilesystemOutputNativeLockSession,

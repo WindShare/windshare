@@ -114,12 +114,12 @@ func TestSelectionMeasureAndTrackerDefensiveLifecycleEdges(t *testing.T) {
 		tracker.completeFile(5)
 		open := tracker.snapshot()
 		if open.Discovery != DiscoveryOpen || open.DiscoveredFiles != 1 || open.DiscoveredBytes != 5 ||
-			open.CompletedFiles != 1 || open.CompletedBytes != 5 || open.Class() != SelectionUnknown {
+			open.CompletedFiles != 1 || open.CompletedBytes != 5 || open.ConnectionSizeClass() != ConnectionSizeUnknown {
 			t.Fatalf("open measure = %+v", open)
 		}
 		tracker.finishDiscovery()
 		complete := tracker.snapshot()
-		if complete.Discovery != DiscoveryComplete || !complete.DiscoveryTerminalSuccess || complete.Class() != SelectionSmall {
+		if complete.Discovery != DiscoveryComplete || !complete.DiscoveryTerminalSuccess || complete.ConnectionSizeClass() != ConnectionSizeSmall {
 			t.Fatalf("complete measure = %+v", complete)
 		}
 		// Discovery status is terminal; a late failure report from another
@@ -133,7 +133,7 @@ func TestSelectionMeasureAndTrackerDefensiveLifecycleEdges(t *testing.T) {
 	t.Run("file-count-overflow", func(t *testing.T) {
 		measure := SelectionMeasure{DiscoveredFiles: math.MaxUint64}
 		measure.addDiscoveredFile(0)
-		if !measure.overflowed || measure.DiscoveredFiles != math.MaxUint64 || measure.Class() != SelectionLarge {
+		if !measure.overflowed || measure.DiscoveredFiles != math.MaxUint64 || measure.ConnectionSizeClass() != ConnectionSizeLarge {
 			t.Fatalf("overflowed file measure = %+v", measure)
 		}
 	})

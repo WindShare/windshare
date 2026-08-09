@@ -2,9 +2,9 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 type immediateSmallCatalog struct {
@@ -114,59 +115,60 @@ type immediateSmallOutputAuthority struct {
 }
 
 type immediateSmallOutputSession struct {
-	backend      transfer.OutputBackendID
 	session      transfer.OutputSessionID
-	capabilities transfer.OutputCapabilities
+	capabilities transfer.DirectTreeCapabilities
 	scope        transfer.DirectoryAdmissionScope
+	binding      transfer.DirectTreeSessionBinding
 }
 
 func newImmediateSmallOutputAuthority(t *testing.T) *immediateSmallOutputAuthority {
 	t.Helper()
-	backend, err := transfer.NewOutputBackendID("cli-admission-test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	rawSession := make([]byte, transfer.OutputSessionIdentityBytes)
 	rawSession[0] = 1
 	session, err := transfer.OutputSessionIDFromBytes(rawSession)
 	if err != nil {
 		t.Fatal(err)
 	}
-	capabilities, err := transfer.NewOutputCapabilities(transfer.OutputCapabilities{
-		Mode: transfer.OutputNativeTree, FileFailureIsolation: true,
+	capabilities, err := transfer.NewDirectTreeCapabilities(transfer.DirectTreeCapabilities{
+		Durability: transfer.DurabilityPowerLoss, RandomWrite: true, FileFailureIsolation: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &immediateSmallOutputAuthority{session: &immediateSmallOutputSession{
-		backend: backend, session: session, capabilities: capabilities,
+		session: session, capabilities: capabilities,
 	}}
 }
 
-func (authority *immediateSmallOutputAuthority) OpenOutput(
+func (authority *immediateSmallOutputAuthority) OpenDirectTree(
 	_ context.Context,
-	intent transfer.TransferIntent,
-) (transfer.OutputSession, error) {
+	intent transfer.ReceiveIntent,
+) (transfer.DirectTreeSession, error) {
 	scope, err := transfer.NewDirectoryAdmissionScope(intent)
 	if err != nil {
 		return nil, err
 	}
+	binding, err := transfer.BindDirectTreeSession(intent)
+	if err != nil {
+		return nil, err
+	}
 	authority.session.scope = scope
+	authority.session.binding = binding
 	return authority.session, nil
 }
 
-func (output *immediateSmallOutputSession) BackendID() transfer.OutputBackendID {
-	return output.backend
-}
 func (output *immediateSmallOutputSession) SessionID() transfer.OutputSessionID {
 	return output.session
 }
-func (output *immediateSmallOutputSession) Capabilities() transfer.OutputCapabilities {
+func (output *immediateSmallOutputSession) Binding() transfer.DirectTreeSessionBinding {
+	return output.binding
+}
+func (output *immediateSmallOutputSession) Capabilities() transfer.DirectTreeCapabilities {
 	return output.capabilities
 }
 func (output *immediateSmallOutputSession) AdmitDirectory(
 	_ context.Context,
-	directory transfer.OutputDirectory,
+	directory transfer.MaterializationDirectory,
 ) (transfer.DirectoryAdmission, error) {
 	// The scheduler treats the returned proof as the parent capability for every
 	// descendant. Minting the same session-scoped proof keeps this empty-root
@@ -184,21 +186,72 @@ func (*immediateSmallOutputSession) FinalizeDirectory(
 }
 func (*immediateSmallOutputSession) BeginFile(
 	context.Context,
-	transfer.OutputFile,
+	transfer.MaterializationFile,
 ) (transfer.FileStart, error) {
 	return transfer.FileStart{}, errors.New("empty selection must not begin files")
 }
-func (*immediateSmallOutputSession) PauseJob(
+func (*immediateSmallOutputSession) PauseTree(
 	context.Context,
 	transfer.JobPauseReason,
-) (transfer.JobSettlement, error) {
-	return transfer.NewJobSettlement(transfer.JobPaused)
+) (transfer.DirectTreeSettlement, error) {
+	return transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementResumable)
 }
-func (*immediateSmallOutputSession) CompleteJob(
-	context.Context,
-	transfer.JobOutcome,
-) (transfer.JobSettlement, error) {
-	return transfer.NewJobSettlement(transfer.JobClosed)
+func (*immediateSmallOutputSession) FinalizeTree(
+	_ context.Context,
+	outcome transfer.DirectTreeOutcome,
+) (transfer.DirectTreeSettlement, error) {
+	kind := transfer.DirectTreeSettlementPublished
+	if outcome == transfer.DirectTreeOutcomePartialDirectory {
+		kind = transfer.DirectTreeSettlementPartialDirectory
+	}
+	return transfer.NewDirectTreeSettlement(kind)
+}
+
+func newCLIAdmissionDirectTreeIntent(
+	t *testing.T,
+	share catalog.ShareInstance,
+	root catalog.DirectoryID,
+	rules transfer.SelectionRules,
+) transfer.ReceiveIntent {
+	t.Helper()
+	selection, err := transfer.NewSelectionSpec(share, root, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := receivecontract.NewCatalogRootDirectoryTree()
+	identityMaterial := append(share.Bytes(), root.Bytes()...)
+	operationDigest := sha256.Sum256(append([]byte("cli/admission-test-operation/v1\x00"), identityMaterial...))
+	operation, err := receivecontract.OperationIDFromBytes(operationDigest[:receivecontract.StableIdentityBytes])
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservationDigest := sha256.Sum256(append([]byte("cli/admission-test-reservation/v1\x00"), identityMaterial...))
+	reservation, err := receivecontract.DestinationReservationIDFromBytes(
+		reservationDigest[:receivecontract.StableIdentityBytes],
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorityDigest := sha256.Sum256(append([]byte("cli/admission-test-authority/v1\x00"), identityMaterial...))
+	authority, err := receivecontract.AuthorityRefFromBytes(authorityDigest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootReservation, err := receivecontract.NewNativeContainerRootReservation(
+		operation, reservation, artifact, authority,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := receivecontract.NewDirectTreePlan(artifact, rootReservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := transfer.NewReceiveIntent(selection, artifact, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return intent
 }
 
 type fakeReceiverAdmissionTimer struct {
@@ -312,7 +365,7 @@ func TestRelayContentAdmissionDeadlineDoesNotWaitForSelectionMeasurement(t *test
 	go func() {
 		close(selectionEntered)
 		<-releaseSelection
-		selectionDone <- admission.ObserveSelection(transfer.SelectionSmall)
+		selectionDone <- admission.ObserveConnectionSize(transfer.ConnectionSizeSmall)
 	}()
 	<-selectionEntered
 	clock.timer.fire(downloadT0.Add(receiverRelayAdmissionWindow))
@@ -345,25 +398,15 @@ func TestRunTransferJobObservesImmediateSmallWithoutSubscriptionRace(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	outputRoot, err := filepath.Abs(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent, err := transfer.NewPathTransferIntent(
-		share, root, rules, outputRoot, "cli-admission-test", transfer.OutputNativeTree,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	intent := newCLIAdmissionDirectTreeIntent(t, share, root, rules)
 	jobID, err := transfer.NewTransferJobID()
 	if err != nil {
 		t.Fatal(err)
 	}
 	job, err := transfer.NewTransferJob(transfer.TransferJobConfig{
-		ShareInstance: share, SyntheticRoot: root, Rules: rules,
-		Intent: intent, JobID: jobID,
+		ReceiveIntent: intent, JobID: jobID,
 		Catalog: immediateSmallCatalog{share: share, root: root}, Revisions: immediateSmallRevisions{},
-		Blocks: immediateSmallBlocks{}, Output: newImmediateSmallOutputAuthority(t),
+		Blocks: immediateSmallBlocks{}, Materializer: newImmediateSmallOutputAuthority(t),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -371,9 +414,9 @@ func TestRunTransferJobObservesImmediateSmallWithoutSubscriptionRace(t *testing.
 	app := &App{Stderr: io.Discard}
 	seenSmall := false
 	result := app.runTransferJob(context.Background(), job, func(measure transfer.SelectionMeasure) {
-		seenSmall = seenSmall || measure.Class() == transfer.SelectionSmall
+		seenSmall = seenSmall || measure.ConnectionSizeClass() == transfer.ConnectionSizeSmall
 	})
-	if result.Outcome != transfer.JobSucceeded || !seenSmall {
+	if result.Outcome != transfer.DirectTreeOutcomePublished || !seenSmall {
 		t.Fatalf("result=%+v saw immediate Small=%v", result, seenSmall)
 	}
 }
@@ -408,14 +451,14 @@ func TestRelayContentAdmissionPeerFailureBeforeDeadlineAdmitsImmediately(t *test
 
 func TestRelayContentAdmissionPolicySignalsAreExact(t *testing.T) {
 	tests := []struct {
-		name      string
-		selection transfer.SelectionClass
-		peer      receiverPeerSignal
-		want      bool
+		name           string
+		connectionSize transfer.ConnectionSizeClass
+		peer           receiverPeerSignal
+		want           bool
 	}{
-		{name: "terminal small", selection: transfer.SelectionSmall, want: true},
-		{name: "unfinished unknown", selection: transfer.SelectionUnknown},
-		{name: "absorbing large", selection: transfer.SelectionLarge},
+		{name: "terminal small", connectionSize: transfer.ConnectionSizeSmall, want: true},
+		{name: "unfinished unknown", connectionSize: transfer.ConnectionSizeUnknown},
+		{name: "absorbing large", connectionSize: transfer.ConnectionSizeLarge},
 		{name: "peer ready", peer: receiverPeerReady},
 		{name: "peer detached", peer: receiverPeerDetached, want: true},
 		{name: "peer session fatal", peer: receiverPeerSessionFatal},
@@ -435,7 +478,7 @@ func TestRelayContentAdmissionPolicySignalsAreExact(t *testing.T) {
 			if test.peer != 0 {
 				err = admission.ObservePeer(test.peer)
 			} else {
-				err = admission.ObserveSelection(test.selection)
+				err = admission.ObserveConnectionSize(test.connectionSize)
 			}
 			if err != nil {
 				t.Fatal(err)

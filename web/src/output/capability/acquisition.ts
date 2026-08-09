@@ -1,222 +1,198 @@
 import {
-  FILE_SYSTEM_ACCESS_BACKEND,
-  ORIGIN_PRIVATE_BACKEND,
-  SINGLE_FILE_STREAM_BACKEND,
-  ZIP_STREAM_BACKEND,
-  createOutputCapabilityIdentity,
-  snapshotOutputCapabilityIdentity,
-  type OutputCapabilityFormat,
-  type OutputCapabilityIdentity,
-  type OutputCapabilityMetadata,
+  BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS,
+  browserHandoffGuarantees,
+  fsaTreeGuarantees,
+} from '../../transfer/intent'
+import {
+  probeBrowserHandoffCapabilities,
+  type BrowserHandoffCapabilityFacts,
+} from '../portable/packaged-handoff'
+import {
+  createEnvironmentOffers,
+  sameGuaranteeFacts,
+  type BrowserHandoffTargetOffer,
+  type EnvironmentOffersInput,
+  type FSADirectoryContainerOffer,
+} from '../planning'
+import {
+  BROWSER_HANDOFF_TARGET_OFFER_ID,
+  FSA_PARENT_DIRECTORY_OFFER_ID,
+  type AcquiredFSAParentAuthority,
+  type AuthorityAcquiredDecision,
+  type BrowserCapabilityRuntime,
+  type BrowserEnvironmentSnapshot,
+  type CapabilityTrace,
 } from './contract'
 
-const MEBIBYTE = 1024n * 1024n
-// This threshold chooses staging durability; the final sink owns its independent capacity limit.
-export const OPFS_STAGING_PREFERENCE_BYTES = 512n * MEBIBYTE
-export const DEFAULT_ARCHIVE_NAME = 'windshare.zip'
+const READ_WRITE_PERMISSION = Object.freeze({ mode: 'readwrite' as const })
 
-interface SaveFilePickerOptions {
-  readonly suggestedName?: string
+interface PermissionCapableDirectoryHandle extends FileSystemDirectoryHandle {
+  queryPermission?(descriptor?: { readonly mode?: 'read' | 'readwrite' }): Promise<PermissionState>
+  requestPermission?(descriptor?: { readonly mode?: 'read' | 'readwrite' }): Promise<PermissionState>
 }
-
-export interface KnownSingleFileSelection {
-  readonly kind: 'KnownSingleFile'
-  readonly suggestedName: string
-  readonly exactBytes: bigint
-}
-
-export interface ProgressiveSelection {
-  readonly kind: 'Progressive'
-  /** Undefined means recursive discovery has not established a terminal total. */
-  readonly terminalBytes?: bigint
-  readonly suggestedArchiveName?: string
-}
-
-export type OutputSelectionShape = KnownSingleFileSelection | ProgressiveSelection
-export type OutputAcquisitionIntent = 'DirectoryTree' | 'BrowserDownload'
-
-export type OutputRootIdentityResolver = (
-  root: FileSystemDirectoryHandle,
-  backend: string,
-) => Promise<OutputCapabilityIdentity> | OutputCapabilityIdentity
-
-export type OutputTargetIdentityFactory = (
-  backend: string,
-) => Promise<OutputCapabilityIdentity> | OutputCapabilityIdentity
-
-export interface OutputCapabilityRuntime {
-  showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>
-  showSaveFilePicker?: (
-    options?: SaveFilePickerOptions,
-  ) => Promise<FileSystemFileHandle>
-  getOriginPrivateDirectory?: () => Promise<FileSystemDirectoryHandle>
-  createDirectStream?: (
-    suggestedName: string,
-    minimumBytes: bigint,
-  ) => WritableStream<Uint8Array> | Promise<WritableStream<Uint8Array>>
-  /**
-   * Durable roots must be assigned by the owner of the root-binding store.  A
-   * missing resolver is a construction error rather than an implicit fallback.
-   */
-  resolveRootIdentity?: OutputRootIdentityResolver
-  /** Test adapters may inject deterministic stream identities. */
-  createTargetIdentity?: OutputTargetIdentityFactory
-}
-
-export type AcquiredOutputCapability =
-  | OutputCapabilityMetadata & {
-    readonly kind: 'PersistentDirectory'
-    readonly root: FileSystemDirectoryHandle
-  }
-  | OutputCapabilityMetadata & {
-    readonly kind: 'SingleFileStream'
-    readonly output: WritableStream<Uint8Array>
-  }
-  | OutputCapabilityMetadata & {
-    readonly kind: 'ZipStream'
-    readonly output: WritableStream<Uint8Array>
-  }
-  | OutputCapabilityMetadata & {
-    readonly kind: 'OriginPrivateStaging'
-    readonly root: FileSystemDirectoryHandle
-    readonly output: WritableStream<Uint8Array>
-  }
 
 /**
- * Picker and stream-factory calls occur before this function returns. Later
- * progressive discovery can await the capability without retaining activation.
+ * Capability detection reports hard browser facts only. Artifact choice remains in
+ * output/planning, so gaining or losing FSA cannot silently select a ZIP route.
  */
-export function acquireOutputCapability(
-  intent: OutputAcquisitionIntent,
-  selection: OutputSelectionShape,
-  runtime: OutputCapabilityRuntime,
-): Promise<AcquiredOutputCapability> {
-  requireSelectionShape(selection)
-  if (intent === 'DirectoryTree') {
-    const picker = runtime.showDirectoryPicker
-    if (picker === undefined) return unsupported('Directory output is unavailable')
-    const picked = picker()
-    return picked.then(async (root) => Object.freeze({
-      kind: 'PersistentDirectory' as const,
-      root,
-      rootIdentity: await resolveRootIdentity(runtime, root, FILE_SYSTEM_ACCESS_BACKEND),
-      targetKind: 2 as const,
-      backend: FILE_SYSTEM_ACCESS_BACKEND,
-      format: 'directory' as const,
-    }))
-  }
-
-  const suggestedName = selection.kind === 'KnownSingleFile'
-    ? selection.suggestedName
-    : selection.suggestedArchiveName ?? DEFAULT_ARCHIVE_NAME
-  const shouldStage = selection.kind === 'Progressive' &&
-    (selection.terminalBytes === undefined ||
-      selection.terminalBytes >= OPFS_STAGING_PREFERENCE_BYTES)
-  const savePicker = runtime.showSaveFilePicker
-  if (savePicker !== undefined) {
-    const picked = savePicker({ suggestedName })
-    if (shouldStage && runtime.getOriginPrivateDirectory !== undefined) {
-      const root = runtime.getOriginPrivateDirectory()
-      return Promise.all([picked, root])
-        .then(async ([handle, directory]) => Object.freeze({
-          kind: 'OriginPrivateStaging' as const,
-          root: directory,
-          output: await handle.createWritable(),
-          rootIdentity: await resolveRootIdentity(runtime, directory, ORIGIN_PRIVATE_BACKEND),
-          targetKind: 2 as const,
-          backend: ORIGIN_PRIVATE_BACKEND,
-          format: 'zip' as const,
-        }))
-    }
-    return picked
-      .then((handle) => handle.createWritable())
-      .then((output) => streamCapability(selection, output, runtime))
-  }
-
-  if (runtime.createDirectStream !== undefined) {
-    const minimumBytes = selection.kind === 'KnownSingleFile'
-      ? selection.exactBytes
-      : selection.terminalBytes ?? 0n
-    const output = runtime.createDirectStream(suggestedName, minimumBytes)
-    if (shouldStage && runtime.getOriginPrivateDirectory !== undefined) {
-      const root = runtime.getOriginPrivateDirectory()
-      return Promise.all([output, root]).then(async ([stream, directory]) => Object.freeze({
-        kind: 'OriginPrivateStaging' as const,
-        root: directory,
-        output: stream,
-        rootIdentity: await resolveRootIdentity(runtime, directory, ORIGIN_PRIVATE_BACKEND),
-        targetKind: 2 as const,
-        backend: ORIGIN_PRIVATE_BACKEND,
-        format: 'zip' as const,
-      }))
-    }
-    return Promise.resolve(output).then((stream) => streamCapability(selection, stream, runtime))
-  }
-  return unsupported('No browser output capability is available')
+export function probeBrowserEnvironment(
+  runtime: BrowserCapabilityRuntime,
+  supplemental: Omit<EnvironmentOffersInput, 'targets'> & {
+    readonly targets?: EnvironmentOffersInput['targets']
+  } = {},
+): BrowserEnvironmentSnapshot {
+  const fsaParent = runtime.showDirectoryPicker === undefined ? null : fsaParentOffer()
+  const handoffFacts = runtime.browserHandoff === undefined
+    ? null
+    : probeBrowserHandoffCapabilities(runtime.browserHandoff)
+  const browserHandoff = handoffFacts === null ||
+      (!handoffFacts.supportsWorkspacePackage && !handoffFacts.supportsPortableArtifact)
+    ? null
+    : browserHandoffOffer(handoffFacts)
+  const offers = createEnvironmentOffers({
+    targets: Object.freeze([
+      ...(supplemental.targets ?? []),
+      ...(fsaParent === null ? [] : [fsaParent]),
+      ...(browserHandoff === null ? [] : [browserHandoff]),
+    ]),
+    ...(supplemental.workspace === undefined ? {} : { workspace: supplemental.workspace }),
+    ...(supplemental.portable === undefined ? {} : { portable: supplemental.portable }),
+  })
+  return Object.freeze({ offers, fsaParent, browserHandoff })
 }
 
-function requireSelectionShape(selection: OutputSelectionShape): void {
-  const bytes = selection.kind === 'KnownSingleFile'
-    ? selection.exactBytes
-    : selection.terminalBytes
-  if (bytes !== undefined && bytes < 0n) {
-    throw new RangeError('Output selection bytes must not be negative')
+export function browserHandoffOffer(
+  facts: BrowserHandoffCapabilityFacts,
+  id = BROWSER_HANDOFF_TARGET_OFFER_ID,
+): BrowserHandoffTargetOffer {
+  const guarantees = browserHandoffGuarantees()
+  const offers = createEnvironmentOffers({
+    targets: [{
+      id,
+      kind: 'browser-handoff',
+      guarantees: {
+        nameAuthority: guarantees.nameAuthority,
+        replacement: guarantees.replacement,
+        delivery: guarantees.delivery,
+        visibility: guarantees.visibility,
+        rollback: guarantees.rollback,
+      },
+      persistence: 'none',
+      hardMaximumOutputBytes: null,
+      objectUrlLeaseMilliseconds: BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS,
+      supportsWorkspacePackage: facts.supportsWorkspacePackage,
+      supportsPortableArtifact: facts.supportsPortableArtifact,
+    }],
+  })
+  const target = offers.targets[0]
+  if (target?.kind !== 'browser-handoff') {
+    throw new TypeError('Browser handoff environment offer construction failed')
   }
-  if (selection.kind === 'KnownSingleFile' && selection.suggestedName.length === 0) {
-    throw new TypeError('Known single-file output requires a suggested name')
-  }
+  return target
 }
 
-function streamCapability(
-  selection: OutputSelectionShape,
-  output: WritableStream<Uint8Array>,
-  runtime: OutputCapabilityRuntime,
-): Promise<AcquiredOutputCapability> {
-  const backend = selection.kind === 'KnownSingleFile'
-    ? SINGLE_FILE_STREAM_BACKEND
-    : ZIP_STREAM_BACKEND
-  const format: OutputCapabilityFormat = selection.kind === 'KnownSingleFile'
-    ? 'single-file'
-    : 'zip'
-  return createTargetIdentity(runtime, backend).then((rootIdentity) => Object.freeze({
-    kind: selection.kind === 'KnownSingleFile'
-      ? 'SingleFileStream' as const
-      : 'ZipStream' as const,
-    output,
-    rootIdentity,
-    // Browser streams are opaque output objects too; kind 1 is reserved for
-    // canonical absolute filesystem paths owned by the native authority.
-    targetKind: 2 as const,
-    backend,
-    format,
-  }))
+export function fsaParentOffer(
+  id = FSA_PARENT_DIRECTORY_OFFER_ID,
+): FSADirectoryContainerOffer {
+  const guarantees = fsaTreeGuarantees()
+  const offers = createEnvironmentOffers({
+    targets: [{
+      id,
+      kind: 'fsa-parent-directory',
+      guarantees: {
+        nameAuthority: guarantees.nameAuthority,
+        replacement: guarantees.replacement,
+        delivery: guarantees.delivery,
+        visibility: guarantees.visibility,
+        rollback: guarantees.rollback,
+      },
+      persistence: 'durable-after-repository-commit',
+      hardMaximumOutputBytes: null,
+    }],
+  })
+  const target = offers.targets[0]
+  if (target?.kind !== 'fsa-parent-directory') {
+    throw new TypeError('FSA environment offer construction failed')
+  }
+  return target
 }
 
-function resolveRootIdentity(
-  runtime: OutputCapabilityRuntime,
-  root: FileSystemDirectoryHandle,
-  backend: string,
-): Promise<OutputCapabilityIdentity> {
-  if (runtime.resolveRootIdentity === undefined) {
-    return Promise.reject(new TypeError(
-      `Output capability ${backend} requires an owned root-identity resolver`,
+/**
+ * This function deliberately is not async: showDirectoryPicker is invoked before the
+ * first promise continuation, preserving the browser's user-activation boundary.
+ */
+export function startFSAParentPicker(
+  runtime: BrowserCapabilityRuntime,
+  offer: FSADirectoryContainerOffer,
+  trace: CapabilityTrace = () => undefined,
+): Promise<AcquiredFSAParentAuthority> {
+  assertFSAOffer(offer)
+  const picker = runtime.showDirectoryPicker
+  if (picker === undefined) {
+    return Promise.reject(new DOMException(
+      'Directory output is unavailable in this browser',
+      'NotSupportedError',
     ))
   }
-  return Promise.resolve(runtime.resolveRootIdentity(root, backend))
-    .then((identity) => snapshotOutputCapabilityIdentity(identity, `${backend} root identity`))
+  const picked = picker(READ_WRITE_PERMISSION)
+  return picked.then((parent) => {
+    if (parent.kind !== 'directory') {
+      throw new TypeError('The directory picker returned a non-directory authority')
+    }
+    emitCapabilityTrace(trace, authorityDecision())
+    return Object.freeze({
+      kind: 'fsa-parent-directory-authority' as const,
+      environmentTargetOfferId: offer.id,
+      offer,
+      parent,
+    })
+  })
 }
 
-function createTargetIdentity(
-  runtime: OutputCapabilityRuntime,
-  backend: string,
-): Promise<OutputCapabilityIdentity> {
-  const identity = runtime.createTargetIdentity === undefined
-    ? createOutputCapabilityIdentity()
-    : runtime.createTargetIdentity(backend)
-  return Promise.resolve(identity)
-    .then((value) => snapshotOutputCapabilityIdentity(value, `${backend} target identity`))
+export async function authorizeFSAParent(
+  authority: AcquiredFSAParentAuthority,
+): Promise<void> {
+  assertFSAOffer(authority.offer)
+  if (authority.environmentTargetOfferId !== authority.offer.id ||
+      authority.parent.kind !== 'directory') {
+    throw new TypeError('Acquired FSA authority does not match its environment offer')
+  }
+  const parent = authority.parent as PermissionCapableDirectoryHandle
+  if (parent.queryPermission === undefined) return
+  const current = await parent.queryPermission(READ_WRITE_PERMISSION)
+  if (current === 'granted') return
+  if (parent.requestPermission === undefined ||
+      await parent.requestPermission(READ_WRITE_PERMISSION) !== 'granted') {
+    throw new DOMException('Directory output permission was not granted', 'NotAllowedError')
+  }
 }
 
-function unsupported(message: string): Promise<never> {
-  return Promise.reject(new DOMException(message, 'NotSupportedError'))
+function assertFSAOffer(offer: FSADirectoryContainerOffer): void {
+  const expected = fsaTreeGuarantees()
+  if (offer.kind !== 'fsa-parent-directory' || offer.legalProfile !== 'fsa-tree' ||
+      offer.persistence !== 'durable-after-repository-commit' ||
+      offer.hardMaximumOutputBytes !== null || !sameGuaranteeFacts(offer.guarantees, expected)) {
+    throw new TypeError('FSA parent authority must use the frozen fsa-tree guarantees')
+  }
+}
+
+function authorityDecision(): AuthorityAcquiredDecision {
+  return Object.freeze({
+    name: 'receive.authority.acquired',
+    operation_id_present: false,
+    authority_kind: 'fsa-container',
+    name_authority: 'application-chosen',
+    replacement_guarantee: 'coordinated-no-replace',
+    delivery_mode: 'managed-target',
+    commit_visibility: 'prefix-visible',
+    rollback_guarantee: 'none',
+  })
+}
+
+function emitCapabilityTrace(trace: CapabilityTrace, decision: AuthorityAcquiredDecision): void {
+  try {
+    trace(decision)
+  } catch {
+    // Telemetry cannot revoke a user-granted authority after the picker succeeds.
+  }
 }

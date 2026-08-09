@@ -13,77 +13,74 @@ import {
   outputFault,
   type Fault,
 } from './fault'
-import type { TransferIntent } from './intent'
+import {
+  RECEIVE_INTENT_DIGEST_BYTES,
+  STABLE_IDENTITY_BYTES,
+  validateReceiveIntent,
+  type ReceiveIntent,
+} from './intent'
 
-export const MAXIMUM_OUTPUT_PATH_SEGMENTS = V2_CATALOG_PATH_DEPTH
-export const MAXIMUM_OUTPUT_SEGMENT_BYTES = V2_CATALOG_NAME_BYTES
-export const MAXIMUM_OUTPUT_PATH_BYTES = V2_CATALOG_PATH_BYTES
+type CanonicalBytes = Uint8Array<ArrayBuffer>
+
+export const DIRECTORY_ADMISSION_SCHEMA_VERSION = 2 as const
+export const DIRECTORY_ADMISSION_LAYOUT_VERSION = 1 as const
 export const DIRECTORY_ADMISSION_SECRET_BYTES = 32
 export const DIRECTORY_ADMISSION_TOKEN_BYTES = 32
-export const DIRECTORY_ADMISSION_SCHEMA_VERSION = 1 as const
+export const CATALOG_IDENTITY_BYTES = STABLE_IDENTITY_BYTES
+export const MAX_MATERIALIZATION_PATH_SEGMENTS = V2_CATALOG_PATH_DEPTH
+export const MAX_MATERIALIZATION_SEGMENT_BYTES = V2_CATALOG_NAME_BYTES
+export const MAX_MATERIALIZATION_PATH_BYTES = V2_CATALOG_PATH_BYTES
 
-export const OUTPUT_CATALOG_IDENTITY_BYTES = 16
-const TRANSFER_INTENT_DIGEST_BYTES = 32
-const MAXIMUM_PORTABLE_MODIFIED_SECONDS = 9_007_199_254_740_991n
+const DIRECTORY_ADMISSION_DOMAIN = 'windshare/directory-admission/v2'
+const TEXT_ENCODER = new TextEncoder()
+const MAX_PORTABLE_MODIFIED_SECONDS = 9_007_199_254_740_991n
 const NANOSECONDS_PER_SECOND = 1_000_000_000
-const NANOSECONDS_PER_MILLISECOND_NUMBER = 1_000_000
-const NANOSECONDS_PER_MILLISECOND = 1_000_000n
+const NANOSECONDS_PER_MILLISECOND = 1_000_000
+const VALID_SCOPES = new WeakSet<object>()
 
-const DIRECTORY_ADMISSION_DOMAIN = new TextEncoder().encode(
-  'windshare/directory-admission',
-)
+export type DirectoryAdmissionLayout =
+  | 'directory-tree-single-file'
+  | 'directory-tree-result-root'
+  | 'directory-tree-catalog-root'
+  | 'zip-result-root'
 
-/** The catalog's portable timestamp representation is part of directory identity. */
-export interface OutputModifiedTime {
+export interface CanonicalModifiedTime {
   readonly seconds: bigint
   readonly nanoseconds: number
   readonly precision: 1 | 2 | 3
-  readonly milliseconds: bigint
 }
 
-export interface OutputDirectory {
-  readonly path: readonly string[]
-  /** Authenticated catalog identity for this generation. */
-  readonly directoryId: string
-  readonly generation: string
-  /** Finalization applies only to non-root directories admitted beneath this proof. */
-  readonly parentAdmission: DirectoryAdmission
-  readonly modifiedTime?: OutputModifiedTime
-}
-
-/** Input to the per-generation output admission boundary. Root paths may be empty. */
-export interface OutputDirectoryAdmission {
+export interface MaterializationDirectory {
   readonly directoryId: string
   readonly generation: string
   readonly path: readonly string[]
   readonly parentAdmission?: DirectoryAdmission
-  readonly modifiedTime?: OutputModifiedTime
+  readonly modifiedTime?: CanonicalModifiedTime
 }
 
-/** Runtime receipt scope frozen only after TransferIntent and output authority validate. */
 export interface DirectoryAdmissionScope {
-  readonly transferIntentDigest: string
+  readonly receiveIntentDigest: string
+  readonly layoutVersion: typeof DIRECTORY_ADMISSION_LAYOUT_VERSION
+  readonly layout: DirectoryAdmissionLayout
   readonly syntheticRoot: string
 }
 
-/**
- * The token is never accepted as a substitute for its bound fields, so copying
- * a path cannot authorize another committed generation.
- */
 export interface DirectoryAdmission {
   readonly schemaVersion: typeof DIRECTORY_ADMISSION_SCHEMA_VERSION
-  readonly transferIntentDigest: string
+  readonly receiveIntentDigest: string
+  readonly layoutVersion: typeof DIRECTORY_ADMISSION_LAYOUT_VERSION
+  readonly layout: DirectoryAdmissionLayout
   readonly token: string
   readonly directoryId: string
   readonly generation: string
   readonly path: readonly string[]
   readonly parentToken?: string
-  readonly modifiedTime?: OutputModifiedTime
+  readonly modifiedTime?: CanonicalModifiedTime
 }
 
 export const DirectorySettlementKind = {
-  Finalized: 'Finalized',
-  IsolatedFailure: 'IsolatedFailure',
+  Finalized: 'finalized',
+  IsolatedFailure: 'isolated-failure',
 } as const
 
 export type DirectorySettlement =
@@ -104,337 +101,284 @@ export class DirectoryAdmissionBindingError extends Error {
   }
 }
 
-export function finalizedDirectorySettlement(admission: DirectoryAdmission): DirectorySettlement {
-  return Object.freeze({
-    kind: DirectorySettlementKind.Finalized,
-    admission: snapshotDirectoryAdmission(admission),
-  })
-}
-
-export function isolatedDirectorySettlement(
-  admission: DirectoryAdmission,
-  failure: Fault,
-): DirectorySettlement {
-  if (!isFault(failure) || failure.domain !== FaultDomain.Output ||
-      failure.scope !== FaultScope.DirectoryLocal ||
-      failure.code !== OutputFaultCode.DirectoryMetadata) {
-    throw new TypeError('Isolated directory settlement requires a directory-local metadata fault')
+export async function createDirectoryAdmissionScope(
+  input: ReceiveIntent,
+): Promise<DirectoryAdmissionScope> {
+  const intent = await validateReceiveIntent(input)
+  let layout: DirectoryAdmissionLayout
+  switch (intent.plan.kind) {
+    case 'direct-tree':
+      if (intent.artifact.kind !== 'directory-tree') {
+        throw new DirectoryAdmissionBindingError('direct-tree intent has no directory-tree artifact')
+      }
+      switch (intent.artifact.layout.kind) {
+        case 'single-file':
+          layout = 'directory-tree-single-file'
+          break
+        case 'result-root':
+          layout = 'directory-tree-result-root'
+          break
+        case 'catalog-root':
+          layout = 'directory-tree-catalog-root'
+          break
+      }
+      break
+    case 'direct-atomic':
+      if (intent.artifact.kind !== 'zip-archive') {
+        throw new DirectoryAdmissionBindingError('only direct-atomic ZIP uses directory admission')
+      }
+      layout = 'zip-result-root'
+      break
+    case 'workspace-then-publish':
+    case 'portable-handoff':
+      throw new DirectoryAdmissionBindingError(
+        'prepared materialization uses its sealed manifest rather than directory admission',
+      )
   }
-  return Object.freeze({
-    kind: DirectorySettlementKind.IsolatedFailure,
-    admission: snapshotDirectoryAdmission(admission),
-    fault: outputFault(FaultScope.DirectoryLocal, OutputFaultCode.DirectoryMetadata),
+  const scope = Object.freeze({
+    receiveIntentDigest: requireIdentity(
+      intent.digest,
+      RECEIVE_INTENT_DIGEST_BYTES,
+      'receive intent digest',
+    ),
+    layoutVersion: DIRECTORY_ADMISSION_LAYOUT_VERSION,
+    layout,
+    syntheticRoot: requireIdentity(intent.syntheticRoot, CATALOG_IDENTITY_BYTES, 'synthetic root'),
   })
-}
-
-export function validateDirectorySettlement(
-  expectedAdmission: DirectoryAdmission,
-  settlement: DirectorySettlement,
-): DirectorySettlement {
-  const expected = snapshotDirectoryAdmission(expectedAdmission)
-  let snapshot: DirectorySettlement
-  if (settlement.kind === DirectorySettlementKind.Finalized) {
-    snapshot = finalizedDirectorySettlement(settlement.admission)
-  } else if (settlement.kind === DirectorySettlementKind.IsolatedFailure) {
-    snapshot = isolatedDirectorySettlement(settlement.admission, settlement.fault)
-  } else {
-    throw new TypeError('Directory settlement kind is invalid')
-  }
-  if (!sameDirectoryAdmission(expected, snapshot.admission)) {
-    throw new DirectoryAdmissionBindingError('directory settlement belongs to another admission')
-  }
-  return snapshot
-}
-
-export function directoryAdmissionScope(
-  intent: Pick<TransferIntent, 'digest' | 'syntheticRoot'>,
-): DirectoryAdmissionScope {
-  return snapshotDirectoryAdmissionScope({
-    transferIntentDigest: intent.digest,
-    syntheticRoot: intent.syntheticRoot,
-  })
+  VALID_SCOPES.add(scope)
+  return scope
 }
 
 export function snapshotDirectoryAdmissionScope(
-  scope: DirectoryAdmissionScope,
+  input: DirectoryAdmissionScope,
 ): DirectoryAdmissionScope {
-  return Object.freeze({
-    transferIntentDigest: requireOpaqueIdentity(
-      scope.transferIntentDigest,
-      TRANSFER_INTENT_DIGEST_BYTES,
-      'transfer intent digest',
-    ),
-    syntheticRoot: requireOpaqueIdentity(
-      scope.syntheticRoot,
-      OUTPUT_CATALOG_IDENTITY_BYTES,
-      'synthetic root',
-    ),
-  })
-}
-
-export function snapshotOutputDirectory(directory: OutputDirectory): OutputDirectory {
-  const request = snapshotOutputDirectoryAdmission(directory)
-  if (request.path.length === 0 || request.parentAdmission === undefined) {
+  if (!VALID_SCOPES.has(input)) {
     throw new DirectoryAdmissionBindingError(
-      'output directory finalization requires a non-root admitted generation',
+      'directory admission scope must be derived from a validated receive intent',
     )
   }
-  return Object.freeze({
-    directoryId: request.directoryId,
-    generation: request.generation,
-    path: request.path,
-    parentAdmission: request.parentAdmission,
-    ...(request.modifiedTime === undefined ? {} : { modifiedTime: request.modifiedTime }),
-  })
+  return input
 }
 
-export function snapshotOutputDirectoryAdmission(
-  directory: OutputDirectoryAdmission,
-): OutputDirectoryAdmission {
-  if (directory.path.length > MAXIMUM_OUTPUT_PATH_SEGMENTS) {
-    throw new TypeError('output admission path exceeds its segment limit')
-  }
-  // The synthetic root has an empty in-memory path; ordinary output paths still
-  // use the stricter portable path policy.
-  const path = directory.path.length === 0
-    ? Object.freeze([])
-    : snapshotOutputPath(directory.path)
-  const parentAdmission = directory.parentAdmission === undefined
+export function snapshotMaterializationDirectory(
+  input: MaterializationDirectory,
+): MaterializationDirectory {
+  const path = snapshotMaterializationPath(input.path)
+  const parentAdmission = input.parentAdmission === undefined
     ? undefined
-    : snapshotDirectoryAdmission(directory.parentAdmission)
+    : snapshotDirectoryAdmission(input.parentAdmission)
   if (path.length === 0 && parentAdmission !== undefined) {
     throw new DirectoryAdmissionBindingError('synthetic root admission must not have a parent')
   }
   if (path.length > 0 && parentAdmission === undefined) {
-    throw new DirectoryAdmissionBindingError('child directory admission requires its parent admission')
+    throw new DirectoryAdmissionBindingError('child directory admission requires its parent receipt')
   }
   if (parentAdmission !== undefined && !isImmediateChildPath(parentAdmission.path, path)) {
-    throw new DirectoryAdmissionBindingError(
-      'child directory path does not descend directly from its parent admission',
-    )
+    throw new DirectoryAdmissionBindingError('directory is not an immediate child of its parent receipt')
   }
-  const modifiedTime = snapshotOutputModifiedTimeFields(directory)
+  const modifiedTime = input.modifiedTime === undefined
+    ? undefined
+    : snapshotCanonicalModifiedTime(input.modifiedTime)
   return Object.freeze({
-    directoryId: requireOpaqueIdentity(
-      directory.directoryId,
-      OUTPUT_CATALOG_IDENTITY_BYTES,
-      'directory',
-    ),
-    generation: requireOpaqueIdentity(
-      directory.generation,
-      OUTPUT_CATALOG_IDENTITY_BYTES,
-      'directory generation',
-    ),
+    directoryId: requireIdentity(input.directoryId, CATALOG_IDENTITY_BYTES, 'directory'),
+    generation: requireIdentity(input.generation, CATALOG_IDENTITY_BYTES, 'directory generation'),
     path,
     ...(parentAdmission === undefined ? {} : { parentAdmission }),
-    ...modifiedTime,
+    ...(modifiedTime === undefined ? {} : { modifiedTime }),
   })
 }
 
-export function snapshotDirectoryAdmission(admission: DirectoryAdmission): DirectoryAdmission {
-  if (admission.schemaVersion !== DIRECTORY_ADMISSION_SCHEMA_VERSION) {
-    throw new DirectoryAdmissionBindingError('directory admission schema version is invalid')
+export function snapshotDirectoryAdmission(input: DirectoryAdmission): DirectoryAdmission {
+  if (input.schemaVersion !== DIRECTORY_ADMISSION_SCHEMA_VERSION ||
+      input.layoutVersion !== DIRECTORY_ADMISSION_LAYOUT_VERSION) {
+    throw new DirectoryAdmissionBindingError('directory admission version is invalid')
   }
-  const path = admission.path.length === 0
-    ? Object.freeze([])
-    : snapshotOutputPath(admission.path)
-  if (path.length === 0 && admission.parentToken !== undefined) {
-    throw new DirectoryAdmissionBindingError('synthetic root proof must not have a parent token')
+  const path = snapshotMaterializationPath(input.path)
+  if (path.length === 0 && input.parentToken !== undefined) {
+    throw new DirectoryAdmissionBindingError('synthetic root receipt must not have a parent token')
   }
-  if (path.length > 0 && admission.parentToken === undefined) {
-    throw new DirectoryAdmissionBindingError('child directory proof requires a parent token')
+  if (path.length > 0 && input.parentToken === undefined) {
+    throw new DirectoryAdmissionBindingError('child receipt requires a parent token')
   }
-  const modifiedTime = snapshotOutputModifiedTimeFields(admission)
+  const modifiedTime = input.modifiedTime === undefined
+    ? undefined
+    : snapshotCanonicalModifiedTime(input.modifiedTime)
   return Object.freeze({
     schemaVersion: DIRECTORY_ADMISSION_SCHEMA_VERSION,
-    transferIntentDigest: requireOpaqueIdentity(
-      admission.transferIntentDigest,
-      TRANSFER_INTENT_DIGEST_BYTES,
-      'directory admission intent digest',
+    receiveIntentDigest: requireIdentity(
+      input.receiveIntentDigest,
+      RECEIVE_INTENT_DIGEST_BYTES,
+      'directory admission receive intent',
     ),
-    token: requireOpaqueIdentity(
-      admission.token,
-      DIRECTORY_ADMISSION_TOKEN_BYTES,
-      'directory admission',
-    ),
-    directoryId: requireOpaqueIdentity(
-      admission.directoryId,
-      OUTPUT_CATALOG_IDENTITY_BYTES,
-      'directory',
-    ),
-    generation: requireOpaqueIdentity(
-      admission.generation,
-      OUTPUT_CATALOG_IDENTITY_BYTES,
-      'directory generation',
-    ),
+    layoutVersion: DIRECTORY_ADMISSION_LAYOUT_VERSION,
+    layout: requireDirectoryAdmissionLayout(input.layout),
+    token: requireIdentity(input.token, DIRECTORY_ADMISSION_TOKEN_BYTES, 'directory admission token'),
+    directoryId: requireIdentity(input.directoryId, CATALOG_IDENTITY_BYTES, 'directory'),
+    generation: requireIdentity(input.generation, CATALOG_IDENTITY_BYTES, 'directory generation'),
     path,
-    ...(admission.parentToken === undefined
+    ...(input.parentToken === undefined
       ? {}
       : {
-          parentToken: requireOpaqueIdentity(
-            admission.parentToken,
+          parentToken: requireIdentity(
+            input.parentToken,
             DIRECTORY_ADMISSION_TOKEN_BYTES,
-            'parent admission',
+            'parent admission token',
           ),
         }),
-    ...modifiedTime,
+    ...(modifiedTime === undefined ? {} : { modifiedTime }),
   })
 }
 
-/**
- * The per-session secret stays in the admission ledger; callers receive no
- * derivation authority unless a deterministic vector secret is injected.
- */
-export function createDirectoryAdmissionSecret(): Uint8Array<ArrayBuffer> {
-  const secret = new Uint8Array(DIRECTORY_ADMISSION_SECRET_BYTES)
+export function createDirectoryAdmissionSecret(): CanonicalBytes {
   if (globalThis.crypto?.getRandomValues === undefined) {
     throw new DOMException(
       'Secure directory-admission secret generation is unavailable',
       'NotSupportedError',
     )
   }
+  const secret = new Uint8Array(DIRECTORY_ADMISSION_SECRET_BYTES)
   globalThis.crypto.getRandomValues(secret)
-  if (secret.every((value) => value === 0)) {
+  if (secret.every((byte) => byte === 0)) {
     throw new Error('Generated directory-admission secret was all zeroes')
   }
   return secret
 }
 
-/** Returns the exact HMAC message encoded by Go's DirectoryAdmission V1 codec. */
-export function canonicalDirectoryAdmissionMessageV1(
+export function canonicalDirectoryAdmissionMessageV2(
   inputScope: DirectoryAdmissionScope,
-  input: OutputDirectoryAdmission,
-): Uint8Array<ArrayBuffer> {
+  inputDirectory: MaterializationDirectory,
+): CanonicalBytes {
   const scope = snapshotDirectoryAdmissionScope(inputScope)
-  const request = snapshotOutputDirectoryAdmission(input)
-  validateDirectoryAdmissionScopeBinding(scope, request)
-  const directoryId = requireOpaqueBytes(
-    request.directoryId,
-    OUTPUT_CATALOG_IDENTITY_BYTES,
-    'directory',
-  )
-  const generation = requireOpaqueBytes(
-    request.generation,
-    OUTPUT_CATALOG_IDENTITY_BYTES,
-    'directory generation',
-  )
-  const path = new TextEncoder().encode(request.path.join('/'))
-  const parent = request.parentAdmission === undefined
+  const directory = snapshotMaterializationDirectory(inputDirectory)
+  validateDirectoryAdmissionScopeBinding(scope, directory)
+  const parent = directory.parentAdmission === undefined
     ? new Uint8Array()
-    : requireOpaqueBytes(
-        request.parentAdmission.token,
+    : requireIdentityBytes(
+        directory.parentAdmission.token,
         DIRECTORY_ADMISSION_TOKEN_BYTES,
-        'parent admission',
+        'parent admission token',
       )
-  const modified = canonicalModifiedTimeBytes(request.modifiedTime)
-  return concatOutputBytes([
-    frameDirectoryAdmissionField(DIRECTORY_ADMISSION_DOMAIN),
-    uint16DirectoryAdmissionVersion(),
-    frameDirectoryAdmissionField(requireOpaqueBytes(
-      scope.transferIntentDigest,
-      TRANSFER_INTENT_DIGEST_BYTES,
-      'transfer intent digest',
+  return concat([
+    TEXT_ENCODER.encode(DIRECTORY_ADMISSION_DOMAIN),
+    Uint8Array.of(0, DIRECTORY_ADMISSION_SCHEMA_VERSION),
+    frame(requireIdentityBytes(
+      scope.receiveIntentDigest,
+      RECEIVE_INTENT_DIGEST_BYTES,
+      'receive intent digest',
     )),
-    frameDirectoryAdmissionField(directoryId),
-    frameDirectoryAdmissionField(generation),
-    frameDirectoryAdmissionField(parent),
-    frameDirectoryAdmissionField(path),
-    frameDirectoryAdmissionField(modified),
+    frame(Uint8Array.of(scope.layoutVersion)),
+    frame(Uint8Array.of(directoryAdmissionLayoutByte(scope.layout))),
+    frame(requireIdentityBytes(directory.directoryId, CATALOG_IDENTITY_BYTES, 'directory')),
+    frame(requireIdentityBytes(directory.generation, CATALOG_IDENTITY_BYTES, 'directory generation')),
+    frame(parent),
+    frame(canonicalDirectoryAdmissionPath(directory.path)),
+    frame(canonicalModifiedTimeBytes(directory.modifiedTime)),
   ])
 }
 
-/** Derives the URL-safe, unpadded 32-byte admission token used by Go. */
-export async function deriveDirectoryAdmissionToken(
-  secret: Uint8Array<ArrayBufferLike>,
+export function directoryAdmissionRetainedMetadataBytes(
   scope: DirectoryAdmissionScope,
-  input: OutputDirectoryAdmission,
+  directory: MaterializationDirectory,
+): number {
+  return canonicalDirectoryAdmissionMessageV2(scope, directory).byteLength +
+    DIRECTORY_ADMISSION_TOKEN_BYTES
+}
+
+export async function deriveDirectoryAdmissionToken(
+  secretInput: Uint8Array<ArrayBufferLike>,
+  scope: DirectoryAdmissionScope,
+  directory: MaterializationDirectory,
 ): Promise<string> {
-  const message = canonicalDirectoryAdmissionMessageV1(scope, input)
-  const key = await importDirectoryAdmissionHmacKey(secret, ['sign'])
+  const secret = snapshotAdmissionSecret(secretInput)
+  const key = await importHMACKey(secret, ['sign'])
+  const message = canonicalDirectoryAdmissionMessageV2(scope, directory)
   return encodeBase64Url(new Uint8Array(
     await globalThis.crypto.subtle.sign('HMAC', key, message),
   ))
 }
 
-/** Tests and protocol vectors may inject a deterministic secret; production does not. */
 export async function createDirectoryAdmission(
   secret: Uint8Array<ArrayBufferLike>,
   inputScope: DirectoryAdmissionScope,
-  input: OutputDirectoryAdmission,
+  inputDirectory: MaterializationDirectory,
 ): Promise<DirectoryAdmission> {
   const scope = snapshotDirectoryAdmissionScope(inputScope)
-  const request = snapshotOutputDirectoryAdmission(input)
-  validateDirectoryAdmissionScopeBinding(scope, request)
-  const token = await deriveDirectoryAdmissionToken(secret, scope, request)
+  const directory = snapshotMaterializationDirectory(inputDirectory)
+  validateDirectoryAdmissionScopeBinding(scope, directory)
+  const token = await deriveDirectoryAdmissionToken(secret, scope, directory)
   return Object.freeze({
     schemaVersion: DIRECTORY_ADMISSION_SCHEMA_VERSION,
-    transferIntentDigest: scope.transferIntentDigest,
+    receiveIntentDigest: scope.receiveIntentDigest,
+    layoutVersion: scope.layoutVersion,
+    layout: scope.layout,
     token,
-    directoryId: request.directoryId,
-    generation: request.generation,
-    path: request.path,
-    ...(request.parentAdmission === undefined
+    directoryId: directory.directoryId,
+    generation: directory.generation,
+    path: directory.path,
+    ...(directory.parentAdmission === undefined
       ? {}
-      : { parentToken: request.parentAdmission.token }),
-    ...(request.modifiedTime === undefined ? {} : { modifiedTime: request.modifiedTime }),
+      : { parentToken: directory.parentAdmission.token }),
+    ...(directory.modifiedTime === undefined ? {} : { modifiedTime: directory.modifiedTime }),
   })
 }
 
-/** A receipt remains untrusted until every committed-generation field is exact. */
 export function validateDirectoryAdmissionBinding(
   inputScope: DirectoryAdmissionScope,
-  input: OutputDirectoryAdmission,
-  admission: DirectoryAdmission,
+  inputDirectory: MaterializationDirectory,
+  inputAdmission: DirectoryAdmission,
 ): DirectoryAdmission {
   const scope = snapshotDirectoryAdmissionScope(inputScope)
-  const request = snapshotOutputDirectoryAdmission(input)
-  validateDirectoryAdmissionScopeBinding(scope, request)
-  let proof: DirectoryAdmission
+  const directory = snapshotMaterializationDirectory(inputDirectory)
+  validateDirectoryAdmissionScopeBinding(scope, directory)
+  let admission: DirectoryAdmission
   try {
-    proof = snapshotDirectoryAdmission(admission)
+    admission = snapshotDirectoryAdmission(inputAdmission)
   } catch (cause) {
+    throw new DirectoryAdmissionBindingError('materializer returned a malformed directory receipt', {
+      cause,
+    })
+  }
+  if (admission.receiveIntentDigest !== scope.receiveIntentDigest ||
+      admission.layoutVersion !== scope.layoutVersion ||
+      admission.layout !== scope.layout ||
+      admission.directoryId !== directory.directoryId ||
+      admission.generation !== directory.generation ||
+      !sameMaterializationPath(admission.path, directory.path) ||
+      !sameDirectoryAdmissionToken(admission.parentToken, directory.parentAdmission?.token) ||
+      !sameModifiedTime(admission, directory)) {
     throw new DirectoryAdmissionBindingError(
-      'output backend returned a malformed directory admission',
-      { cause },
+      'directory receipt does not match its receive intent, layout, ancestry, or generation',
     )
   }
-  if (proof.transferIntentDigest !== scope.transferIntentDigest ||
-      proof.directoryId !== request.directoryId ||
-      proof.generation !== request.generation ||
-      !sameOutputPath(proof.path, request.path) ||
-      !sameDirectoryAdmissionToken(proof.parentToken, request.parentAdmission?.token) ||
-      !sameModifiedTime(proof, request)) {
-    throw new DirectoryAdmissionBindingError(
-      'output backend returned a directory admission for a different committed generation',
-    )
-  }
-  return proof
+  return admission
 }
 
-/** WebCrypto verifies the HMAC without a data-dependent byte-prefix comparison. */
 export async function verifyDirectoryAdmissionToken(
-  secret: Uint8Array<ArrayBufferLike>,
+  secretInput: Uint8Array<ArrayBufferLike>,
   scope: DirectoryAdmissionScope,
-  input: OutputDirectoryAdmission,
+  directory: MaterializationDirectory,
   token: string,
 ): Promise<boolean> {
-  const tokenBytes = requireOpaqueBytes(
+  const secret = snapshotAdmissionSecret(secretInput)
+  const tokenBytes = requireIdentityBytes(
     token,
     DIRECTORY_ADMISSION_TOKEN_BYTES,
-    'directory admission',
+    'directory admission token',
   )
-  const message = canonicalDirectoryAdmissionMessageV1(scope, input)
-  const key = await importDirectoryAdmissionHmacKey(secret, ['verify'])
-  return globalThis.crypto.subtle.verify('HMAC', key, tokenBytes, message)
+  const key = await importHMACKey(secret, ['verify'])
+  return globalThis.crypto.subtle.verify(
+    'HMAC',
+    key,
+    tokenBytes,
+    canonicalDirectoryAdmissionMessageV2(scope, directory),
+  )
 }
 
 export function sameDirectoryAdmissionToken(
   left: string | undefined,
   right: string | undefined,
 ): boolean {
-  if (left === undefined || right === undefined) {
-    return left === undefined && right === undefined
-  }
+  if (left === undefined || right === undefined) return left === right
   const leftBytes = decodeBase64Url(left)
   const rightBytes = decodeBase64Url(right)
   if (leftBytes === undefined || rightBytes === undefined ||
@@ -448,201 +392,258 @@ export function sameDirectoryAdmissionToken(
 }
 
 export function sameDirectoryAdmission(
-  left: DirectoryAdmission,
-  right: DirectoryAdmission,
+  leftInput: DirectoryAdmission,
+  rightInput: DirectoryAdmission,
 ): boolean {
-  const leftSnapshot = snapshotDirectoryAdmission(left)
-  const rightSnapshot = snapshotDirectoryAdmission(right)
-  return leftSnapshot.schemaVersion === rightSnapshot.schemaVersion &&
-    leftSnapshot.transferIntentDigest === rightSnapshot.transferIntentDigest &&
-    sameDirectoryAdmissionToken(leftSnapshot.token, rightSnapshot.token) &&
-    leftSnapshot.directoryId === rightSnapshot.directoryId &&
-    leftSnapshot.generation === rightSnapshot.generation &&
-    sameOutputPath(leftSnapshot.path, rightSnapshot.path) &&
-    sameDirectoryAdmissionToken(leftSnapshot.parentToken, rightSnapshot.parentToken) &&
-    sameModifiedTime(leftSnapshot, rightSnapshot)
+  const left = snapshotDirectoryAdmission(leftInput)
+  const right = snapshotDirectoryAdmission(rightInput)
+  return left.schemaVersion === right.schemaVersion &&
+    left.receiveIntentDigest === right.receiveIntentDigest &&
+    left.layoutVersion === right.layoutVersion &&
+    left.layout === right.layout &&
+    sameDirectoryAdmissionToken(left.token, right.token) &&
+    left.directoryId === right.directoryId &&
+    left.generation === right.generation &&
+    sameMaterializationPath(left.path, right.path) &&
+    sameDirectoryAdmissionToken(left.parentToken, right.parentToken) &&
+    sameModifiedTime(left, right)
 }
 
-export interface OutputModifiedTimeCarrier {
-  readonly modifiedTime?: OutputModifiedTime
+export function finalizedDirectorySettlement(
+  admission: DirectoryAdmission,
+): DirectorySettlement {
+  return Object.freeze({
+    kind: DirectorySettlementKind.Finalized,
+    admission: snapshotDirectoryAdmission(admission),
+  })
 }
 
-export function snapshotOutputModifiedTimeFields(
-  input: OutputModifiedTimeCarrier,
-): { readonly modifiedTime?: OutputModifiedTime } {
-  const modifiedTime = input.modifiedTime === undefined
-    ? undefined
-    : snapshotOutputModifiedTime(input.modifiedTime)
-  return modifiedTime === undefined ? {} : { modifiedTime }
-}
-
-export function sameModifiedTime(
-  left: OutputModifiedTimeCarrier,
-  right: OutputModifiedTimeCarrier,
-): boolean {
-  if (left.modifiedTime === undefined || right.modifiedTime === undefined) {
-    return left.modifiedTime === undefined && right.modifiedTime === undefined
+export function isolatedDirectorySettlement(
+  admission: DirectoryAdmission,
+  failure: Fault,
+): DirectorySettlement {
+  if (!isFault(failure) || failure.domain !== FaultDomain.Output ||
+      failure.scope !== FaultScope.DirectoryLocal ||
+      failure.code !== OutputFaultCode.DirectoryMetadata) {
+    throw new TypeError('isolated directory settlement requires a directory-local metadata fault')
   }
-  return left.modifiedTime.seconds === right.modifiedTime.seconds &&
-    left.modifiedTime.nanoseconds === right.modifiedTime.nanoseconds &&
-    left.modifiedTime.precision === right.modifiedTime.precision &&
-    left.modifiedTime.milliseconds === right.modifiedTime.milliseconds
+  return Object.freeze({
+    kind: DirectorySettlementKind.IsolatedFailure,
+    admission: snapshotDirectoryAdmission(admission),
+    fault: outputFault(FaultScope.DirectoryLocal, OutputFaultCode.DirectoryMetadata),
+  })
 }
 
-export function sameOutputPath(left: readonly string[], right: readonly string[]): boolean {
+export function validateDirectorySettlement(
+  expectedAdmission: DirectoryAdmission,
+  input: DirectorySettlement,
+): DirectorySettlement {
+  const expected = snapshotDirectoryAdmission(expectedAdmission)
+  let settlement: DirectorySettlement
+  switch (input.kind) {
+    case DirectorySettlementKind.Finalized:
+      settlement = finalizedDirectorySettlement(input.admission)
+      break
+    case DirectorySettlementKind.IsolatedFailure:
+      settlement = isolatedDirectorySettlement(input.admission, input.fault)
+      break
+    default:
+      throw new TypeError('directory settlement kind is invalid')
+  }
+  if (!sameDirectoryAdmission(expected, settlement.admission)) {
+    throw new DirectoryAdmissionBindingError('directory settlement belongs to another receipt')
+  }
+  return settlement
+}
+
+export function snapshotMaterializationPath(input: readonly string[]): readonly string[] {
+  if (!Array.isArray(input)) throw new TypeError('materialization path must be segmented')
+  if (input.length === 0) return Object.freeze([])
+  return snapshotPortableCatalogPath(input)
+}
+
+export function sameMaterializationPath(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
   return left.length === right.length && left.every((segment, index) => segment === right[index])
 }
 
-export function isImmediateChildPath(parent: readonly string[], child: readonly string[]): boolean {
-  return child.length === parent.length + 1 && sameOutputPath(parent, child.slice(0, -1))
+export function isImmediateChildPath(
+  parent: readonly string[],
+  child: readonly string[],
+): boolean {
+  return child.length === parent.length + 1 &&
+    parent.every((segment, index) => segment === child[index])
 }
 
-export function snapshotOutputPath(path: readonly string[]): readonly string[] {
-  return snapshotPortableCatalogPath(path)
-}
-
-function snapshotOutputModifiedTime(input: OutputModifiedTime): OutputModifiedTime {
+export function snapshotCanonicalModifiedTime(
+  input: CanonicalModifiedTime,
+): CanonicalModifiedTime {
   if (typeof input.seconds !== 'bigint' ||
-      input.seconds < -MAXIMUM_PORTABLE_MODIFIED_SECONDS ||
-      input.seconds > MAXIMUM_PORTABLE_MODIFIED_SECONDS ||
-      !Number.isSafeInteger(input.nanoseconds) ||
+      input.seconds < -MAX_PORTABLE_MODIFIED_SECONDS ||
+      input.seconds > MAX_PORTABLE_MODIFIED_SECONDS ||
+      !Number.isInteger(input.nanoseconds) ||
       input.nanoseconds < 0 ||
       input.nanoseconds >= NANOSECONDS_PER_SECOND ||
-      (input.precision !== 1 && input.precision !== 2 && input.precision !== 3)) {
-    throw new DirectoryAdmissionBindingError('modified-time tuple is outside the portable range')
-  }
-  if ((input.precision === 1 && input.nanoseconds !== 0) ||
-      (input.precision === 2 &&
-       input.nanoseconds % NANOSECONDS_PER_MILLISECOND_NUMBER !== 0)) {
-    throw new DirectoryAdmissionBindingError('modified-time tuple violates its declared precision')
-  }
-  const milliseconds = input.seconds * 1_000n +
-    BigInt(Math.trunc(input.nanoseconds / Number(NANOSECONDS_PER_MILLISECOND)))
-  if (input.milliseconds !== milliseconds) {
-    throw new DirectoryAdmissionBindingError(
-      'modified-time milliseconds do not match its seconds and nanoseconds',
-    )
+      (input.precision !== 1 && input.precision !== 2 && input.precision !== 3) ||
+      (input.precision === 1 && input.nanoseconds !== 0) ||
+      (input.precision === 2 && input.nanoseconds % NANOSECONDS_PER_MILLISECOND !== 0)) {
+    throw new TypeError('modified time violates the canonical portable representation')
   }
   return Object.freeze({
     seconds: input.seconds,
     nanoseconds: input.nanoseconds,
     precision: input.precision,
-    milliseconds,
   })
+}
+
+export function sameModifiedTime(
+  left: { readonly modifiedTime?: CanonicalModifiedTime },
+  right: { readonly modifiedTime?: CanonicalModifiedTime },
+): boolean {
+  if (left.modifiedTime === undefined || right.modifiedTime === undefined) {
+    return left.modifiedTime === right.modifiedTime
+  }
+  return left.modifiedTime.seconds === right.modifiedTime.seconds &&
+    left.modifiedTime.nanoseconds === right.modifiedTime.nanoseconds &&
+    left.modifiedTime.precision === right.modifiedTime.precision
 }
 
 function validateDirectoryAdmissionScopeBinding(
   scope: DirectoryAdmissionScope,
-  request: OutputDirectoryAdmission,
+  directory: MaterializationDirectory,
 ): void {
-  if (request.path.length === 0) {
-    if (request.directoryId !== scope.syntheticRoot || request.parentAdmission !== undefined) {
-      throw new DirectoryAdmissionBindingError(
-        'synthetic root admission must match the frozen intent root and have no parent',
-      )
+  if (directory.path.length === 0) {
+    if (directory.parentAdmission !== undefined || directory.directoryId !== scope.syntheticRoot) {
+      throw new DirectoryAdmissionBindingError('synthetic root does not match the receive intent')
     }
     return
   }
-  if (request.parentAdmission?.transferIntentDigest !== scope.transferIntentDigest) {
-    throw new DirectoryAdmissionBindingError(
-      'child directory admission belongs to another transfer intent',
-    )
+  const parent = directory.parentAdmission
+  if (parent === undefined ||
+      parent.receiveIntentDigest !== scope.receiveIntentDigest ||
+      parent.layoutVersion !== scope.layoutVersion ||
+      parent.layout !== scope.layout ||
+      !isImmediateChildPath(parent.path, directory.path)) {
+    throw new DirectoryAdmissionBindingError('child directory receipt is outside its frozen scope')
   }
 }
 
-async function importDirectoryAdmissionHmacKey(
-  input: Uint8Array<ArrayBufferLike>,
-  usages: readonly KeyUsage[],
+function canonicalDirectoryAdmissionPath(path: readonly string[]): CanonicalBytes {
+  if (path.length === 0) return Uint8Array.of(1)
+  return concat([
+    Uint8Array.of(2),
+    frame(canonicalPathBytes(path)),
+  ])
+}
+
+function canonicalPathBytes(pathInput: readonly string[]): CanonicalBytes {
+  const path = snapshotMaterializationPath(pathInput)
+  if (path.length === 0) throw new TypeError('canonical child path cannot be empty')
+  return concat([
+    uint64(BigInt(path.length)),
+    ...path.map((segment) => frame(TEXT_ENCODER.encode(segment))),
+  ])
+}
+
+function canonicalModifiedTimeBytes(
+  input: CanonicalModifiedTime | undefined,
+): CanonicalBytes {
+  if (input === undefined) return Uint8Array.of(1)
+  const modified = snapshotCanonicalModifiedTime(input)
+  const seconds = new Uint8Array(8)
+  new DataView(seconds.buffer).setBigInt64(0, modified.seconds)
+  const nanoseconds = new Uint8Array(4)
+  new DataView(nanoseconds.buffer).setUint32(0, modified.nanoseconds)
+  return concat([
+    Uint8Array.of(2),
+    frame(seconds),
+    frame(nanoseconds),
+    frame(Uint8Array.of(modified.precision)),
+  ])
+}
+
+function requireDirectoryAdmissionLayout(value: string): DirectoryAdmissionLayout {
+  switch (value) {
+    case 'directory-tree-single-file':
+    case 'directory-tree-result-root':
+    case 'directory-tree-catalog-root':
+    case 'zip-result-root':
+      return value
+    default:
+      throw new DirectoryAdmissionBindingError('directory admission layout is invalid')
+  }
+}
+
+function directoryAdmissionLayoutByte(value: DirectoryAdmissionLayout): number {
+  switch (value) {
+    case 'directory-tree-single-file': return 1
+    case 'directory-tree-result-root': return 2
+    case 'directory-tree-catalog-root': return 3
+    case 'zip-result-root': return 4
+  }
+}
+
+function snapshotAdmissionSecret(input: Uint8Array<ArrayBufferLike>): CanonicalBytes {
+  if (!(input instanceof Uint8Array) ||
+      input.byteLength !== DIRECTORY_ADMISSION_SECRET_BYTES ||
+      input.every((byte) => byte === 0)) {
+    throw new DirectoryAdmissionBindingError(
+      'directory admission secret must be a non-zero 32-byte value',
+    )
+  }
+  return Uint8Array.from(input)
+}
+
+async function importHMACKey(
+  secret: Uint8Array<ArrayBuffer>,
+  usage: readonly ('sign' | 'verify')[],
 ): Promise<CryptoKey> {
   if (globalThis.crypto?.subtle === undefined) {
-    throw new DOMException('Directory-admission HMAC is unavailable', 'NotSupportedError')
-  }
-  const secret = requireRawBytes(
-    input,
-    DIRECTORY_ADMISSION_SECRET_BYTES,
-    'directory admission secret',
-  )
-  if (secret.every((value) => value === 0)) {
-    throw new DirectoryAdmissionBindingError('directory admission secret must not be all zeroes')
+    throw new DOMException('WebCrypto HMAC is unavailable', 'NotSupportedError')
   }
   return globalThis.crypto.subtle.importKey(
     'raw',
     secret,
     { name: 'HMAC', hash: 'SHA-256' },
     false,
-    usages,
+    usage,
   )
 }
 
-function uint16DirectoryAdmissionVersion(): Uint8Array<ArrayBuffer> {
-  const encoded = new Uint8Array(2)
-  new DataView(encoded.buffer).setUint16(0, DIRECTORY_ADMISSION_SCHEMA_VERSION, false)
-  return encoded
+function requireIdentity(value: string, width: number, label: string): string {
+  return encodeBase64Url(requireIdentityBytes(value, width, label))
 }
 
-function frameDirectoryAdmissionField(value: Uint8Array): Uint8Array<ArrayBuffer> {
-  const encoded = new Uint8Array(4 + value.byteLength)
-  new DataView(encoded.buffer).setUint32(0, value.byteLength, false)
-  encoded.set(value, 4)
-  return encoded
-}
-
-function requireOpaqueIdentity(value: string, byteLength: number, label: string): string {
+function requireIdentityBytes(value: string, width: number, label: string): CanonicalBytes {
+  if (typeof value !== 'string') throw new TypeError(label + ' must be a canonical base64url identity')
   const decoded = decodeBase64Url(value)
-  if (decoded === undefined || decoded.byteLength !== byteLength ||
+  if (decoded === undefined || decoded.byteLength !== width ||
       decoded.every((byte) => byte === 0) || encodeBase64Url(decoded) !== value) {
-    throw new DirectoryAdmissionBindingError(
-      `${label} must be a non-zero ${byteLength}-byte base64url identity`,
-    )
-  }
-  return encodeBase64Url(decoded)
-}
-
-function requireRawBytes(
-  value: Uint8Array<ArrayBufferLike>,
-  byteLength: number,
-  label: string,
-): Uint8Array<ArrayBuffer> {
-  if (!(value instanceof Uint8Array) || value.byteLength !== byteLength) {
-    throw new DirectoryAdmissionBindingError(`${label} must be exactly ${byteLength} bytes`)
-  }
-  return Uint8Array.from(value)
-}
-
-function requireOpaqueBytes(
-  value: string,
-  byteLength: number,
-  label: string,
-): Uint8Array<ArrayBuffer> {
-  const decoded = decodeBase64Url(value)
-  if (decoded === undefined || decoded.byteLength !== byteLength ||
-      decoded.every((byte) => byte === 0) || encodeBase64Url(decoded) !== value) {
-    throw new DirectoryAdmissionBindingError(
-      `${label} must be a non-zero ${byteLength}-byte base64url identity`,
-    )
+    throw new TypeError(label + ' must be a non-zero canonical ' + width + '-byte identity')
   }
   return Uint8Array.from(decoded)
 }
 
-function canonicalModifiedTimeBytes(
-  modifiedTime: OutputModifiedTime | undefined,
-): Uint8Array<ArrayBuffer> {
-  if (modifiedTime === undefined) return Uint8Array.of(0)
-  const bytes = new Uint8Array(1 + 8 + 4 + 1)
-  const view = new DataView(bytes.buffer)
-  bytes[0] = 1
-  view.setBigUint64(1, BigInt.asUintN(64, modifiedTime.seconds), false)
-  view.setUint32(9, modifiedTime.nanoseconds, false)
-  bytes[13] = modifiedTime.precision
-  return bytes
+function frame(value: Uint8Array): CanonicalBytes {
+  return concat([uint64(BigInt(value.byteLength)), value])
 }
 
-function concatOutputBytes(parts: readonly Uint8Array[]): Uint8Array<ArrayBuffer> {
-  const result = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0))
+function uint64(value: bigint): CanonicalBytes {
+  if (value < 0n || value > 0xffff_ffff_ffff_ffffn) throw new RangeError('u64 is outside its range')
+  const output = new Uint8Array(8)
+  new DataView(output.buffer).setBigUint64(0, value)
+  return output
+}
+
+function concat(parts: readonly Uint8Array[]): CanonicalBytes {
+  const total = parts.reduce((sum, part) => sum + part.byteLength, 0)
+  const output = new Uint8Array(total)
   let offset = 0
   for (const part of parts) {
-    result.set(part, offset)
+    output.set(part, offset)
     offset += part.byteLength
   }
-  return result
+  return output
 }

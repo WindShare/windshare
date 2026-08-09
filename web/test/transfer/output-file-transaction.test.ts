@@ -1,134 +1,112 @@
 import { describe, expect, it, vi } from 'vitest'
-
-import { byteRange, type ByteRange } from '../../src/content/geometry'
-import { encodeBase64Url } from '../../src/crypto/bytes'
+import { byteRange } from '../../src/content/geometry'
 import {
   OutputCheckpointContractError,
-  OutputTransactionContractError,
   bindOutputFileTransaction,
 } from '../../src/transfer/output-file-transaction'
 import {
   VerifiedDurableRanges,
   type BeginOutputFileResult,
   type OutputFile,
-  type OutputFileOwnership,
   type OutputSession,
 } from '../../src/transfer/output-session'
+import { identityText } from './v2-job-fixture'
 
-const sessionIdentity = Object.freeze({ backend: 'test', outputSessionId: 'session' })
 const signal = new AbortController().signal
-const durableSession: Pick<OutputSession, 'identity' | 'capabilities'> = Object.freeze({
-  identity: sessionIdentity,
-  capabilities: Object.freeze({
-    durability: 'ProcessRestart', randomWrite: true, fileFailureIsolation: true, modificationTime: false,
-  }),
-})
-const transientSession: Pick<OutputSession, 'identity' | 'capabilities'> = Object.freeze({
-  identity: sessionIdentity,
-  capabilities: Object.freeze({
-    durability: 'None', randomWrite: false, fileFailureIsolation: false, modificationTime: false,
-  }),
-})
 const file: OutputFile = Object.freeze({
-  source: Object.freeze({
+  source: {
     shareInstance: identityText(1),
-    fileId: identityText(2),
-    fileRevision: identityText(3),
-  }),
-  path: Object.freeze(['file.bin']),
-  exactSize: 2n,
+    fileId: identityText(4),
+    fileRevision: identityText(5),
+  },
+  sourcePath: ['source.bin'],
+  artifactPath: ['result.bin'],
+  exactSize: 4n,
 })
-const ownership: OutputFileOwnership = Object.freeze({
-  ...sessionIdentity,
-  canonicalPath: file.path,
+const ownership = Object.freeze({
+  backend: 'test',
+  outputSessionId: 'session',
+  canonicalPath: file.artifactPath,
   ownedFileIdentity: 'owned-file',
 })
 
-describe('bound output transaction durability evidence', () => {
-  it('rejects a non-advancing checkpoint after a completed write', async () => {
-    const begun = adapter([byteRange(0n, 1n)], [byteRange(0n, 1n)])
-    const bound = bindOutputFileTransaction(begun, file, durableSession)
-
-    await bound.transaction.writeRange(1n, Uint8Array.of(7), signal)
-
-    await expect(bound.transaction.checkpoint(signal)).rejects
-      .toBeInstanceOf(OutputCheckpointContractError)
+describe('bound output file transaction', () => {
+  it('rejects a transaction returned for another authenticated revision', () => {
+    const begun = result({
+      ...file.source,
+      fileRevision: identityText(6),
+      exactSize: file.exactSize,
+    })
+    expect(() => bindOutputFileTransaction(begun, file, session('None')))
+      .toThrow(/different authenticated source revision/)
   })
 
-  it('does not let a partial durable snapshot reach adapter commit', async () => {
-    const begun = adapter([byteRange(0n, 1n)], [byteRange(0n, 1n)])
-    const bound = bindOutputFileTransaction(begun, file, durableSession)
-
-    await expect(bound.transaction.commit(signal)).rejects
-      .toBeInstanceOf(OutputCheckpointContractError)
-    expect(begun.transaction.commit).not.toHaveBeenCalled()
+  it('requires transient writes to remain contiguous and complete before commit', async () => {
+    const commit = vi.fn(async () => undefined)
+    const begun = result({ ...file.source, exactSize: file.exactSize }, { commit })
+    const bound = bindOutputFileTransaction(begun, file, session('None')).transaction
+    await expect(bound.writeRange(1n, new Uint8Array([1]), signal))
+      .rejects.toThrow(OutputCheckpointContractError)
+    await bound.writeRange(0n, new Uint8Array([1, 2]), signal)
+    await expect(bound.commit(signal)).rejects.toThrow(/whole-file durability/)
+    await bound.writeRange(2n, new Uint8Array([3, 4]), signal)
+    await bound.commit(signal)
+    expect(commit).toHaveBeenCalledOnce()
   })
 
-  it('rejects a checkpoint that invents unwritten future durability', async () => {
-    const begun = adapter([], [byteRange(0n, 2n)])
-    const bound = bindOutputFileTransaction(begun, file, durableSession)
-
-    await bound.transaction.writeRange(0n, Uint8Array.of(7), signal)
-
-    await expect(bound.transaction.checkpoint(signal)).rejects
-      .toBeInstanceOf(OutputCheckpointContractError)
-  })
-
-  it('rejects an adapter-authored abort disposition outside the closed contract', async () => {
-    const begun = adapter([], [], 'forged')
-    const bound = bindOutputFileTransaction(begun, file, durableSession)
-
-    await expect(bound.transaction.retire(new Error('stop'))).rejects
-      .toBeInstanceOf(OutputTransactionContractError)
-  })
-
-  it('tracks complete transient stream coverage without inventing durable ranges', async () => {
-    const begun = adapter([], [])
-    const bound = bindOutputFileTransaction(begun, file, transientSession)
-
-    await bound.transaction.writeRange(0n, Uint8Array.of(1), signal)
-    await expect(bound.transaction.checkpoint(signal)).resolves.toMatchObject({ ranges: [] })
-    await bound.transaction.writeRange(1n, Uint8Array.of(2), signal)
-    await expect(bound.transaction.checkpoint(signal)).resolves.toMatchObject({ ranges: [] })
-    await expect(bound.transaction.commit(signal)).resolves.toBeUndefined()
-    expect(begun.transaction.commit).toHaveBeenCalledOnce()
-  })
-
-  it('rejects gaps and incomplete transient streams before adapter commit', async () => {
-    const begun = adapter([], [])
-    const bound = bindOutputFileTransaction(begun, file, transientSession)
-
-    await expect(bound.transaction.writeRange(1n, Uint8Array.of(1), signal)).rejects
-      .toBeInstanceOf(OutputCheckpointContractError)
-    await bound.transaction.writeRange(0n, Uint8Array.of(1), signal)
-    await expect(bound.transaction.commit(signal)).rejects.toBeInstanceOf(OutputCheckpointContractError)
-    expect(begun.transaction.commit).not.toHaveBeenCalled()
+  it('accepts only the exact durable checkpoint union and prevents overlap', async () => {
+    let checkpoint = new VerifiedDurableRanges(
+      ownership,
+      file.source,
+      file.exactSize,
+      [byteRange(0n, 2n)],
+    )
+    const begun = result({ ...file.source, exactSize: file.exactSize }, {
+      checkpoint: async () => checkpoint,
+    }, checkpoint)
+    const bound = bindOutputFileTransaction(begun, file, session('ProcessRestart')).transaction
+    await expect(bound.writeRange(1n, new Uint8Array([9]), signal))
+      .rejects.toThrow(/overlaps bytes/)
+    await bound.writeRange(2n, new Uint8Array([3, 4]), signal)
+    await expect(bound.checkpoint(signal)).rejects.toThrow(/prior durability plus every completed write/)
+    checkpoint = new VerifiedDurableRanges(
+      ownership,
+      file.source,
+      file.exactSize,
+      [byteRange(0n, 4n)],
+    )
+    await bound.checkpoint(signal)
+    await bound.commit(signal)
   })
 })
 
-function adapter(
-  initial: readonly ByteRange[],
-  checkpoint: readonly ByteRange[],
-  retirementDisposition: unknown = 'FileIsolated',
+function session(durability: 'None' | 'ProcessRestart'): Pick<OutputSession, 'identity' | 'capabilities'> {
+  return {
+    identity: { backend: 'test', outputSessionId: 'session' },
+    capabilities: {
+      durability,
+      randomWrite: durability !== 'None',
+      fileFailureIsolation: true,
+      modificationTime: false,
+    },
+  }
+}
+
+function result(
+  revision: BeginOutputFileResult['revision'],
+  overrides: Partial<BeginOutputFileResult['transaction']> = {},
+  durableRanges = new VerifiedDurableRanges(ownership, file.source, file.exactSize, []),
 ): BeginOutputFileResult {
   return Object.freeze({
-    durableRanges: durable(initial),
-    transaction: Object.freeze({
-      writeRange: vi.fn(async () => undefined),
-      checkpoint: vi.fn(async () => durable(checkpoint)),
-      commit: vi.fn(async () => undefined),
-      retire: vi.fn(async () => retirementDisposition) as never,
-      pause: vi.fn(async () => undefined),
-    }),
+    revision,
+    durableRanges,
+    transaction: {
+      writeRange: async () => undefined,
+      checkpoint: async () => durableRanges,
+      commit: async () => undefined,
+      retire: async () => 'FileIsolated' as const,
+      pause: async () => undefined,
+      ...overrides,
+    },
   })
-}
-
-function durable(ranges: readonly ByteRange[]): VerifiedDurableRanges {
-  return new VerifiedDurableRanges(ownership, file.source, file.exactSize, ranges)
-}
-
-function identityText(first: number): string {
-  const identity = new Uint8Array(16)
-  identity[0] = first
-  return encodeBase64Url(identity)
 }

@@ -1,261 +1,196 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  INDEXEDDB_LEGACY_V5_STORES,
+} from '../../src/output/browser/indexeddb-database'
+import {
+  INDEXEDDB_LEGACY_CLEANUP_ORDER,
   cleanIndexedDbLegacyStores,
   type IndexedDbLegacyCleanupDatabase,
-  type IndexedDbLegacyCleanupMetadata,
+  type IndexedDbLegacyCleanupPage,
   type IndexedDbLegacyCleanupPorts,
-  type IndexedDbLegacyCleanupTransition,
+  type IndexedDbLegacyCleanupProgress,
+  type IndexedDbLegacyRow,
+  type IndexedDbLegacyStoreName,
+  type LegacyOwnershipDecision,
 } from '../../src/output/browser/indexeddb-legacy-cleaner'
 
-const LEGACY_STORE_NAMES = [
-  'checkpoint-candidates',
-  'checkpoint-committed',
-  'persistent-handles',
-  'cleanup-markers',
-] as const
+describe('ownership-proven IndexedDB v5 cleanup', () => {
+  it('owns the exact v5 store set and no resume-compatible legacy source', () => {
+    expect(new Set(INDEXEDDB_LEGACY_CLEANUP_ORDER)).toEqual(
+      new Set(INDEXEDDB_LEGACY_V5_STORES),
+    )
+  })
 
-interface MemoryCleanupState {
-  metadata?: unknown
-  readonly legacyRecords: Map<string, unknown[]>
-  readonly currentRecords: Map<string, unknown>
-  readonly clearedStores: string[]
-  readonly committedSteps: number[]
-  crashAfterStep: number | undefined
-  pauseAfterStep: number | undefined
-  pauseStarted?: Deferred<void>
-  pauseRelease?: Deferred<void>
-  openCount: number
-  closeCount: number
-}
-
-describe('IndexedDB legacy cleaner', () => {
-  it('clears opaque records only from the exact application-owned legacy stores', async () => {
+  it('deletes each certified record without clearing a whole legacy store', async () => {
     const state = memoryState(2)
-    const currentBefore = [...state.currentRecords.entries()]
-    const ports = memoryPorts(state)
-
-    await expect(cleanIndexedDbLegacyStores(ports)).resolves.toEqual({
+    await expect(cleanIndexedDbLegacyStores(memoryPorts(state))).resolves.toEqual({
       status: 'completed',
-      removed: LEGACY_STORE_NAMES.length * 2,
+      removed: INDEXEDDB_LEGACY_CLEANUP_ORDER.length * 2,
     })
-    expect(state.clearedStores).toEqual(LEGACY_STORE_NAMES)
-    expect([...state.legacyRecords.values()].every((records) => records.length === 0)).toBe(true)
-    expect([...state.currentRecords.entries()]).toEqual(currentBefore)
-    await expect(cleanIndexedDbLegacyStores(ports)).resolves.toEqual({
+    expect([...state.rows.values()].every((rows) => rows.size === 0)).toBe(true)
+    expect(state.deleted).toHaveLength(INDEXEDDB_LEGACY_CLEANUP_ORDER.length * 2)
+
+    await expect(cleanIndexedDbLegacyStores(memoryPorts(state))).resolves.toEqual({
       status: 'nothing-to-clean',
       removed: 0,
     })
-    expect(state.clearedStores).toEqual(LEGACY_STORE_NAMES)
   })
 
-  it.each([0, 1, 2, 3, 4])(
-    'resumes after durable step %i without replaying a committed clear',
-    async (crashAfterStep) => {
+  it('fails closed at an ownership-unknown row and never offers it for resume', async () => {
+    const state = memoryState(1)
+    const storeName = INDEXEDDB_LEGACY_CLEANUP_ORDER[2]
+    const row = state.rows.get(storeName)!.values().next().value as MemoryRow
+    row.decision = 'unknown'
+
+    await expect(cleanIndexedDbLegacyStores(memoryPorts(state))).resolves.toEqual({
+      status: 'needs-attention',
+      removed: 2,
+      storeName,
+      key: row.key,
+      decision: 'unknown',
+    })
+    expect(state.rows.get(storeName)!.has(row.key)).toBe(true)
+    expect(state.deleted).not.toContain(`${storeName}:${row.key}`)
+  })
+
+  it.each([0, 1, 4, 8, 12, 16])(
+    'resumes exactly after committed crash cut %i',
+    async (crashAfterCommit) => {
       const state = memoryState(1)
-      const ports = memoryPorts(state)
-      state.crashAfterStep = crashAfterStep
+      state.crashAfterCommit = crashAfterCommit
 
-      await expect(cleanIndexedDbLegacyStores(ports)).rejects.toThrow(
-        `simulated interruption after step ${crashAfterStep}`,
-      )
-      expect(metadataStep(state.metadata)).toBe(crashAfterStep)
+      await expect(cleanIndexedDbLegacyStores(memoryPorts(state)))
+        .rejects.toThrow(`crash-after-commit:${crashAfterCommit}`)
+      const removedAtCut = progress(state).removed
 
-      await expect(cleanIndexedDbLegacyStores(ports)).resolves.toEqual({
-        status: crashAfterStep === LEGACY_STORE_NAMES.length
+      await expect(cleanIndexedDbLegacyStores(memoryPorts(state))).resolves.toEqual({
+        status: removedAtCut === INDEXEDDB_LEGACY_CLEANUP_ORDER.length
           ? 'nothing-to-clean'
           : 'completed',
-        removed: LEGACY_STORE_NAMES.length - crashAfterStep,
+        removed: INDEXEDDB_LEGACY_CLEANUP_ORDER.length - removedAtCut,
       })
-      expect(state.clearedStores).toEqual(LEGACY_STORE_NAMES)
-      expect(state.committedSteps).toEqual([0, 1, 2, 3, 4])
-      await expect(cleanIndexedDbLegacyStores(ports)).resolves.toEqual({
-        status: 'nothing-to-clean',
-        removed: 0,
-      })
-      expect(state.clearedStores).toEqual(LEGACY_STORE_NAMES)
-      expect(state.openCount).toBe(3)
-      expect(state.closeCount).toBe(3)
+      expect(new Set(state.deleted).size).toBe(INDEXEDDB_LEGACY_CLEANUP_ORDER.length)
+      expect([...state.rows.values()].every((rows) => rows.size === 0)).toBe(true)
     },
   )
-
-  it('holds the cleanup lease until a committed pass returns', async () => {
-    const state = memoryState(1)
-    const lease = new SerialLease()
-    const ports = memoryPorts(state, lease)
-    state.pauseAfterStep = 1
-    state.pauseStarted = deferred<void>()
-    state.pauseRelease = deferred<void>()
-
-    const first = cleanIndexedDbLegacyStores(ports)
-    await state.pauseStarted.promise
-    const second = cleanIndexedDbLegacyStores(ports)
-    await Promise.resolve()
-    expect(state.openCount).toBe(1)
-    expect(lease.maximumActive).toBe(1)
-
-    state.pauseRelease.resolve()
-    await expect(Promise.all([first, second])).resolves.toEqual([
-      { status: 'completed', removed: LEGACY_STORE_NAMES.length },
-      { status: 'nothing-to-clean', removed: 0 },
-    ])
-    expect(state.openCount).toBe(2)
-    expect(lease.maximumActive).toBe(1)
-    expect(lease.active).toBe(0)
-  })
-
-  it('fails closed when the persistent marker is not the cleaner schema', async () => {
-    const state = memoryState(1)
-    state.metadata = Object.freeze({ step: 0, state: 'pending', removed: 0 })
-
-    await expect(cleanIndexedDbLegacyStores(memoryPorts(state))).rejects.toThrow(
-      'unknown ownership or progress',
-    )
-    expect(state.clearedStores).toEqual([])
-    expect([...state.legacyRecords.values()].every((records) => records.length === 1)).toBe(true)
-  })
 })
 
-class MemoryCleanupDatabase implements IndexedDbLegacyCleanupDatabase {
-  readonly #state: MemoryCleanupState
+interface MemoryRow extends IndexedDbLegacyRow {
+  decision: LegacyOwnershipDecision
+}
 
-  constructor(state: MemoryCleanupState) {
+interface MemoryState {
+  progress?: IndexedDbLegacyCleanupProgress
+  readonly rows: Map<IndexedDbLegacyStoreName, Map<string, MemoryRow>>
+  readonly deleted: string[]
+  commits: number
+  crashAfterCommit?: number
+}
+
+class MemoryDatabase implements IndexedDbLegacyCleanupDatabase {
+  readonly #state: MemoryState
+
+  constructor(state: MemoryState) {
     this.#state = state
   }
 
-  async readOrInitializeMetadata(initial: IndexedDbLegacyCleanupMetadata): Promise<unknown> {
-    if (this.#state.metadata === undefined) {
-      this.#state.metadata = cloneMetadata(initial)
-      this.#state.committedSteps.push(0)
-      this.#interruptAfter(0)
+  async readOrInitializeProgress(initial: IndexedDbLegacyCleanupProgress): Promise<unknown> {
+    if (this.#state.progress === undefined) {
+      this.#state.progress = { ...initial }
+      this.#commit()
     }
-    return cloneUnknown(this.#state.metadata)
+    return { ...this.#state.progress }
   }
 
-  async clearLegacyStore(
-    storeName: string,
-    expected: IndexedDbLegacyCleanupMetadata,
-    transition: IndexedDbLegacyCleanupTransition,
-  ): Promise<unknown> {
-    if (!sameMetadata(this.#state.metadata, expected)) {
-      throw new Error('memory cleanup metadata changed outside its lease')
+  async scan(
+    storeName: IndexedDbLegacyStoreName,
+    afterKey: string | undefined,
+    limit: number,
+  ): Promise<IndexedDbLegacyCleanupPage> {
+    const rows = [...this.#state.rows.get(storeName)!.values()]
+      .filter((row) => afterKey === undefined || row.key > afterKey)
+      .sort((left, right) => left.key.localeCompare(right.key))
+    return {
+      rows: rows.slice(0, limit),
+      done: rows.length <= limit,
     }
-    const records = this.#state.legacyRecords.get(storeName) ?? []
-    const next: IndexedDbLegacyCleanupMetadata = Object.freeze({
-      ...expected,
-      ...transition,
-      removed: expected.removed + records.length,
-    })
-    this.#state.legacyRecords.set(storeName, [])
-    this.#state.metadata = next
-    this.#state.clearedStores.push(storeName)
-    this.#state.committedSteps.push(transition.step)
-    if (this.#state.pauseAfterStep === transition.step) {
-      this.#state.pauseAfterStep = undefined
-      this.#state.pauseStarted?.resolve()
-      await this.#state.pauseRelease?.promise
+  }
+
+  async certifyAndDelete(
+    storeName: IndexedDbLegacyStoreName,
+    row: IndexedDbLegacyRow,
+    expected: IndexedDbLegacyCleanupProgress,
+    next: IndexedDbLegacyCleanupProgress,
+  ): Promise<LegacyOwnershipDecision> {
+    this.#assertProgress(expected)
+    const current = this.#state.rows.get(storeName)!.get(row.key)
+    if (current === undefined) throw new Error('missing memory legacy row')
+    if (current.decision !== 'owned') return current.decision
+    this.#state.rows.get(storeName)!.delete(row.key)
+    this.#state.deleted.push(`${storeName}:${row.key}`)
+    this.#state.progress = { ...next }
+    this.#commit()
+    return 'owned'
+  }
+
+  async advanceStore(
+    expected: IndexedDbLegacyCleanupProgress,
+    next: IndexedDbLegacyCleanupProgress,
+  ): Promise<void> {
+    this.#assertProgress(expected)
+    this.#state.progress = { ...next }
+    this.#commit()
+  }
+
+  close(): void {}
+
+  #assertProgress(expected: IndexedDbLegacyCleanupProgress): void {
+    const current = this.#state.progress
+    if (current === undefined ||
+        current.id !== expected.id ||
+        current.operationId !== expected.operationId ||
+        current.kind !== expected.kind ||
+        current.schemaVersion !== expected.schemaVersion ||
+        current.storeIndex !== expected.storeIndex ||
+        current.afterKey !== expected.afterKey ||
+        current.removed !== expected.removed ||
+        current.state !== expected.state) {
+      throw new Error('memory cleanup progress changed')
     }
-    this.#interruptAfter(transition.step)
-    return cloneMetadata(next)
   }
 
-  close(): void {
-    this.#state.closeCount += 1
-  }
-
-  #interruptAfter(step: number): void {
-    if (this.#state.crashAfterStep !== step) return
-    this.#state.crashAfterStep = undefined
-    throw new Error(`simulated interruption after step ${step}`)
+  #commit(): void {
+    const committed = this.#state.commits
+    this.#state.commits += 1
+    if (this.#state.crashAfterCommit !== committed) return
+    delete this.#state.crashAfterCommit
+    throw new Error(`crash-after-commit:${committed}`)
   }
 }
 
-class SerialLease {
-  #tail: Promise<void> = Promise.resolve()
-  active = 0
-  maximumActive = 0
-
-  async acquire(): Promise<{ readonly release: () => Promise<void> }> {
-    const predecessor = this.#tail
-    const released = deferred<void>()
-    this.#tail = predecessor.then(() => released.promise)
-    await predecessor
-    this.active += 1
-    this.maximumActive = Math.max(this.maximumActive, this.active)
-    let settled = false
-    return Object.freeze({
-      release: async () => {
-        if (settled) return
-        settled = true
-        this.active -= 1
-        released.resolve()
-      },
-    })
-  }
-}
-
-interface Deferred<T> {
-  readonly promise: Promise<T>
-  readonly resolve: (value: T | PromiseLike<T>) => void
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T | PromiseLike<T>) => void
-  const promise = new Promise<T>((complete) => { resolve = complete })
-  return { promise, resolve }
-}
-
-function memoryState(recordsPerStore: number): MemoryCleanupState {
+function memoryState(rowsPerStore: number): MemoryState {
   return {
-    legacyRecords: new Map(LEGACY_STORE_NAMES.map((storeName) => [
+    rows: new Map(INDEXEDDB_LEGACY_CLEANUP_ORDER.map((storeName) => [
       storeName,
-      Array.from({ length: recordsPerStore }, (_, index) => Object.freeze({
-        id: `${storeName}-${index}`,
-        opaquePayload: new Uint8Array([index]),
+      new Map(Array.from({ length: rowsPerStore }, (_, index) => {
+        const key = `${storeName}-${index}`
+        return [key, { key, value: { opaque: index }, decision: 'owned' as const }]
       })),
     ])),
-    currentRecords: new Map([
-      ['current-file-checkpoint-v1', Object.freeze({ published: true })],
-    ]),
-    clearedStores: [],
-    committedSteps: [],
-    crashAfterStep: undefined,
-    pauseAfterStep: undefined,
-    openCount: 0,
-    closeCount: 0,
+    deleted: [],
+    commits: 0,
   }
 }
 
-function memoryPorts(
-  state: MemoryCleanupState,
-  lease = new SerialLease(),
-): IndexedDbLegacyCleanupPorts {
+function memoryPorts(state: MemoryState): IndexedDbLegacyCleanupPorts {
   return {
-    acquireLease: () => lease.acquire(),
-    openDatabase: async () => {
-      state.openCount += 1
-      return new MemoryCleanupDatabase(state)
-    },
+    acquireLease: async () => ({ release: async () => undefined }),
+    openDatabase: async () => new MemoryDatabase(state),
   }
 }
 
-function metadataStep(value: unknown): number | undefined {
-  return typeof value === 'object' && value !== null && 'step' in value
-    ? (value as { readonly step?: number }).step
-    : undefined
-}
-
-function cloneMetadata(
-  value: IndexedDbLegacyCleanupMetadata,
-): IndexedDbLegacyCleanupMetadata {
-  return { ...value }
-}
-
-function cloneUnknown(value: unknown): unknown {
-  return typeof value === 'object' && value !== null ? { ...value } : value
-}
-
-function sameMetadata(left: unknown, right: IndexedDbLegacyCleanupMetadata): boolean {
-  if (typeof left !== 'object' || left === null) return false
-  return JSON.stringify(left) === JSON.stringify(right)
+function progress(state: MemoryState): IndexedDbLegacyCleanupProgress {
+  if (state.progress === undefined) throw new Error('cleanup progress was not initialized')
+  return state.progress
 }

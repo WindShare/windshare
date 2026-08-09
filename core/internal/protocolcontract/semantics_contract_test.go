@@ -18,11 +18,15 @@ func TestExplicitStopHasAProtocolDistinctSessionCode(t *testing.T) {
 	}
 }
 
-func TestZipFailureEscalatesOnlyAfterMemberStart(t *testing.T) {
-	if action, outcome := zipMemberFailure(false); action != "skip-and-report" || outcome != "completed-with-errors" {
-		t.Fatalf("not-started ZIP member = (%q, %q)", action, outcome)
+func TestZipFailureAlwaysPreventsACompletedArtifact(t *testing.T) {
+	action, outcome := zipCompleteOnlyFailure()
+	if action != "abort-artifact" || outcome != "failed" {
+		t.Fatalf("complete-only ZIP failure = (%q, %q)", action, outcome)
 	}
-	if action, outcome := zipMemberFailure(true); action != "pause-job" || outcome != "paused" {
-		t.Fatalf("started ZIP member = (%q, %q)", action, outcome)
+	for _, raw := range zipCompleteOnlyFailureCases() {
+		failure := raw.(map[string]any)
+		if failure["publicationAllowed"] != false || failure["partialResult"] != false {
+			t.Fatalf("ZIP failure permits an incomplete result: %v", failure)
+		}
 	}
 }

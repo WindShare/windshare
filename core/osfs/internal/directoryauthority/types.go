@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/osfs/internal/outputsession"
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
 )
 
@@ -79,6 +80,7 @@ type directoryClaim struct {
 	parentID  ClaimID
 	locator   locatorKey
 	modified  catalog.ModifiedTime
+	admission transfer.DirectoryAdmission
 }
 
 func (claim directoryClaim) valid() bool {
@@ -94,7 +96,11 @@ func (claim directoryClaim) valid() bool {
 
 func sameDirectoryClaim(left, right directoryClaim) bool {
 	return left.authority == right.authority && left.id == right.id && left.parentID == right.parentID &&
-		left.locator == right.locator && left.modified == right.modified
+		left.locator == right.locator && left.modified == right.modified && sameOptionalAdmission(left.admission, right.admission)
+}
+
+func sameOptionalAdmission(left, right transfer.DirectoryAdmission) bool {
+	return left.IsZero() && right.IsZero() || left.Equal(right)
 }
 
 type DirectoryDisposition = outputsession.DirectoryDisposition

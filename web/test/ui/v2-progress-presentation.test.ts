@@ -40,7 +40,6 @@ function receiverProgress(overrides: Partial<V2ReceiverProgress>): V2ReceiverPro
     contentLanes: 1,
     discovery: 'open',
     failedDirectories: 0,
-    partial: false,
     transferJobId: 'job',
     ...overrides,
   })

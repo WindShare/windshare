@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/outputsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestCoverageC6NativeCompositionRejectsAuthorityFreeInputs(t *testing.T) {
@@ -32,12 +33,12 @@ func TestCoverageC6NativeCompositionRejectsAuthorityFreeInputs(t *testing.T) {
 	}
 
 	var nilAuthority *Authority
-	if _, err := nilAuthority.OpenOutput(context.Background(), intent); !errors.Is(err, transfer.ErrInvalidTransferIntent) {
+	if _, err := nilAuthority.OpenDirectTree(context.Background(), intent); !errors.Is(err, transfer.ErrInvalidReceiveIntent) {
 		t.Fatalf("nil authority error = %v", err)
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := authority.OpenOutput(canceled, intent); !errors.Is(err, context.Canceled) {
+	if _, err := authority.OpenDirectTree(canceled, intent); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled open error = %v", err)
 	}
 	if opens != 0 {
@@ -137,7 +138,7 @@ func TestCoverageC6NativeCompositionNormalizesSetupFailuresAndClosesPlatform(t *
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = authority.OpenOutput(context.Background(), intent); err == nil {
+			if _, err = authority.OpenDirectTree(context.Background(), intent); err == nil {
 				t.Fatal("setup failure opened an output session")
 			}
 			if test.keepsCause && !errors.Is(err, cause) {
@@ -206,7 +207,7 @@ func TestCoverageC6NativeCompositionReleasesLeaseAfterIdentityAndReceiptFailures
 			if test.random != nil {
 				authority.random = test.random
 			}
-			if _, err := authority.OpenOutput(context.Background(), intent); err == nil {
+			if _, err := authority.OpenDirectTree(context.Background(), intent); err == nil {
 				t.Fatal("invalid identity material opened an output session")
 			} else {
 				coverageC6AssertFault(t, err, transferfault.OutputStateIO, 0)
@@ -218,7 +219,7 @@ func TestCoverageC6NativeCompositionReleasesLeaseAfterIdentityAndReceiptFailures
 			// Reacquisition proves teardown released the intent lease even though the
 			// failure occurred after the private repository had been opened.
 			reopened := openNativeCompositionSession(t, root, false, intent, nil)
-			if _, err := reopened.PauseJob(context.Background(), transfer.JobPauseInterrupted); err != nil {
+			if _, err := reopened.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
 				t.Fatalf("reopen after failed composition: %v", err)
 			}
 		})
@@ -248,11 +249,11 @@ func TestCoverageC6NativeCompositionNormalizesReleaseFailureWithoutRetainingLeas
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := authority.OpenOutput(context.Background(), intent)
+	session, err := authority.OpenDirectTree(context.Background(), intent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.PauseJob(context.Background(), transfer.JobPauseInterrupted); err == nil {
+	if _, err := session.PauseTree(context.Background(), transfer.JobPauseInterrupted); err == nil {
 		t.Fatal("platform release failure was not surfaced")
 	} else {
 		// The session boundary intentionally projects a closed fault instead of
@@ -264,7 +265,7 @@ func TestCoverageC6NativeCompositionNormalizesReleaseFailureWithoutRetainingLeas
 	}
 
 	reopened := openNativeCompositionSession(t, root, false, intent, nil)
-	if _, err := reopened.PauseJob(context.Background(), transfer.JobPauseInterrupted); err != nil {
+	if _, err := reopened.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
 		t.Fatalf("release failure retained the lease: %v", err)
 	}
 }
@@ -282,8 +283,8 @@ func TestCoverageC6DependencyTraceProjectionIsClosedAndLossless(t *testing.T) {
 		{outputsession.OperationCommitFile, FilesystemOutputRuntimeCommitFile},
 		{outputsession.OperationPauseFile, FilesystemOutputRuntimePauseFile},
 		{outputsession.OperationRetireFile, FilesystemOutputRuntimeRetireFile},
-		{outputsession.OperationPauseJob, FilesystemOutputRuntimePauseJob},
-		{outputsession.OperationCompleteJob, FilesystemOutputRuntimeCompleteJob},
+		{outputsession.OperationPauseTree, FilesystemOutputRuntimePauseTree},
+		{outputsession.OperationFinalizeTree, FilesystemOutputRuntimeFinalizeTree},
 	}
 	for _, mapping := range sessionOperations {
 		if got := runtimeSessionOperation(mapping.from); got != mapping.to {
@@ -374,13 +375,13 @@ func TestCoverageC6DependencyTraceProjectionIsClosedAndLossless(t *testing.T) {
 		projected = append(projected, event)
 	})}
 	authority.outputSessionRuntimeTrace().RecordOutputSessionTrace(outputsession.TraceEvent{
-		IntentDigest: transfer.TransferIntentDigest{1}, SessionID: transfer.OutputSessionID{2},
+		ReceiveIntentDigest: transfer.ReceiveIntentDigest{1}, SessionID: transfer.OutputSessionID{2},
 		OperationID: 3, Operation: outputsession.OperationWriteRange,
 		Decision: outputsession.TraceRejected, ClaimID: outputsession.ClaimID(4), Fault: fault,
 		NodeClaims: 5, DirectoryClaims: 6, FileClaims: 7, ActiveFileClaims: 8,
 		ReservedFileSlots: 9, DirectoryMetadataBytes: 10,
 	})
-	authority.directoryRuntimeTrace(transfer.TransferIntentDigest{11}, transfer.OutputSessionID{12})(
+	authority.directoryRuntimeTrace(transfer.ReceiveIntentDigest{11}, transfer.OutputSessionID{12})(
 		directoryauthority.TraceEvent{
 			Operation: directoryauthority.TraceFinalizeDirectory,
 			Outcome:   directoryauthority.TraceMutationAmbiguous,
@@ -388,8 +389,8 @@ func TestCoverageC6DependencyTraceProjectionIsClosedAndLossless(t *testing.T) {
 		},
 	)
 	authority.fileRuntimeTrace().TraceFileExecution(fileexecution.TraceEvent{
-		IntentDigest: transfer.TransferIntentDigest{14}, SessionID: transfer.OutputSessionID{15},
-		OperationID: 16, ClaimID: outputsession.ClaimID(17),
+		IntentDigest: transfer.ReceiveIntentDigest{14}, SessionID: transfer.OutputSessionID{15},
+		OperationID: receivecontract.OperationID{16}, Sequence: 17,
 		Operation: fileexecution.TraceQuarantine, Outcome: fileexecution.TraceNeedsAttention, Fault: fault,
 	})
 	if len(projected) != 3 {
@@ -409,8 +410,8 @@ func TestCoverageC6DependencyTraceProjectionIsClosedAndLossless(t *testing.T) {
 	}
 	if event := projected[2]; event.RuntimeComponent != FilesystemOutputRuntimeFile ||
 		event.RuntimeOperation != FilesystemOutputRuntimeQuarantineFile ||
-		event.RuntimeDecision != FilesystemOutputRuntimeNeedsAttention || event.OperationID != 16 ||
-		event.ClaimID != 17 || !event.Failed {
+		event.RuntimeDecision != FilesystemOutputRuntimeNeedsAttention || event.OperationID != 17 ||
+		event.ReceiveOperationID != (receivecontract.OperationID{16}) || event.ClaimID != 0 || !event.Failed {
 		t.Fatalf("file trace projection = %+v", event)
 	}
 }

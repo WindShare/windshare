@@ -13,10 +13,11 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/fileexecution"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const (
-	fileExecutionLookupDomain = "windshare/file-execution-checkpoint-lookup/v1"
+	fileExecutionLookupDomain = "windshare/file-execution-checkpoint-lookup/v2"
 	ownedAnchorSuffix         = ".anchor"
 	ownedStageSuffix          = ".stage"
 )
@@ -44,7 +45,7 @@ func NewFileExecutionStore(repository *Repository) (*FileExecutionStore, error) 
 		repository: repository,
 		records:    make(map[[sha256.Size]byte]checkpointmodel.Record),
 	}
-	snapshot, err := repository.Reconcile(store.initialCandidateReady)
+	snapshot, err := repository.Reconcile(store.candidateDurable)
 	if err != nil {
 		return nil, err
 	}
@@ -90,13 +91,15 @@ func (store *FileExecutionStore) Lookup(
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	record, found := store.records[checkpointLookupKey(
-		key.TransferIntentDigest(),
+		key.OperationID(),
+		key.ReceiveIntentDigest(),
+		key.MaterializationBindingDigest(),
 		key.FileID().Bytes(),
 		key.FileRevision().Bytes(),
 		key.CanonicalPath(),
 		key.ExactSize(),
-		key.BackendID(),
-		key.RootIdentity().Bytes(),
+		key.MaterializerKind(),
+		key.AuthorityRef(),
 	)]
 	if !found {
 		return checkpointmodel.Record{}, false, nil
@@ -164,36 +167,42 @@ func (store *FileExecutionStore) indexRecord(record checkpointmodel.Record) erro
 
 func checkpointRecordLookupKey(record checkpointmodel.Record) [sha256.Size]byte {
 	return checkpointLookupKey(
-		record.TransferIntentDigest(),
+		record.OperationID(),
+		record.ReceiveIntentDigest(),
+		record.MaterializationBindingDigest(),
 		record.FileID().Bytes(),
 		record.FileRevision().Bytes(),
 		record.CanonicalPath(),
 		record.ExactSize(),
-		record.BackendID(),
-		record.RootIdentity().Bytes(),
+		record.MaterializerKind(),
+		record.AuthorityRef(),
 	)
 }
 
 func checkpointLookupKey(
-	intent transfer.TransferIntentDigest,
+	operation receivecontract.OperationID,
+	intent transfer.ReceiveIntentDigest,
+	materialization receivecontract.BindingDigest,
 	fileID []byte,
 	revision []byte,
 	path string,
 	exactSize uint64,
-	backend transfer.OutputBackendID,
-	root []byte,
+	materializer checkpointmodel.MaterializerKind,
+	authority receivecontract.AuthorityRef,
 ) [sha256.Size]byte {
 	hash := sha256.New()
 	writeExecutionLookupBytes(hash, []byte(fileExecutionLookupDomain))
+	writeExecutionLookupBytes(hash, operation.Bytes())
 	writeExecutionLookupBytes(hash, intent.Bytes())
+	writeExecutionLookupBytes(hash, materialization.Bytes())
 	writeExecutionLookupBytes(hash, fileID)
 	writeExecutionLookupBytes(hash, revision)
 	writeExecutionLookupBytes(hash, []byte(path))
 	var encodedSize [8]byte
 	binary.BigEndian.PutUint64(encodedSize[:], exactSize)
 	_, _ = hash.Write(encodedSize[:])
-	writeExecutionLookupBytes(hash, []byte(backend))
-	writeExecutionLookupBytes(hash, root)
+	writeExecutionLookupBytes(hash, []byte{byte(materializer)})
+	writeExecutionLookupBytes(hash, authority.Bytes())
 	var result [sha256.Size]byte
 	copy(result[:], hash.Sum(nil))
 	return result
@@ -207,8 +216,10 @@ func writeExecutionLookupBytes(target io.Writer, value []byte) {
 }
 
 func checkpointKeyMatchesRecord(key fileexecution.CheckpointKey, record checkpointmodel.Record) bool {
-	return record.Valid() && record.TransferIntentDigest() == key.TransferIntentDigest() &&
+	return record.Valid() && record.OperationID() == key.OperationID() &&
+		record.ReceiveIntentDigest() == key.ReceiveIntentDigest() &&
+		record.MaterializationBindingDigest() == key.MaterializationBindingDigest() &&
 		record.FileID() == key.FileID() && record.FileRevision() == key.FileRevision() &&
 		record.CanonicalPath() == key.CanonicalPath() && record.ExactSize() == key.ExactSize() &&
-		record.BackendID() == key.BackendID() && record.RootIdentity() == key.RootIdentity()
+		record.MaterializerKind() == key.MaterializerKind() && record.AuthorityRef() == key.AuthorityRef()
 }

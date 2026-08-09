@@ -5,221 +5,194 @@ import {
 } from '@zip.js/zip.js'
 import { describe, expect, it } from 'vitest'
 
-import { byteRange } from '../../src/content/geometry'
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import { EMPTY_TRANSFER_FAILURE_SUMMARY, jobOutcome } from '../../src/transfer/outcome'
-import {
-  directoryRecord,
-  fileRecord,
-} from '../../src/output/persistence/journal'
-import type {
-  StagedOutputCatalog,
-  StagedOutputFile,
-} from '../../src/output/persistent-tree/session'
-import { OriginPrivateZipExporter } from '../../src/output/origin-private/zip-exporter'
+import { OriginPrivateZipPackageBuilder } from '../../src/output/origin-private/zip-exporter'
+import type { MaterializedManifestV1 } from '../../src/output/workspace/manifest'
+import { planZipLayout } from '../../src/output/zip-layout/layout'
 import { MemoryZipCentralDirectorySpool } from './zip-spool-fake'
 
-const identity = Object.freeze({
-  backend: 'origin-private-staging',
-  outputSessionId: 'export-session',
-  transferIntentDigest: fixtureIdentity('intent', 32),
-  rootIdentity: fixtureIdentity('root', 32),
-})
-const OUTCOME = jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
+const RECEIVE_INTENT_DIGEST = identity(32, 1)
+const ARTIFACT_DIGEST = identity(32, 2)
+const PREPARATION_DIGEST = identity(32, 3)
+const SEALED_MATERIALIZATION_DIGEST = identity(32, 4)
+const PACKAGE_OBJECT_ID = identity(32, 5)
+const RAW_OBJECT_ID = identity(32, 6)
 const ACTIVE_SIGNAL = new AbortController().signal
 
-describe('origin-private ZIP export', () => {
-  it('streams committed staged files and empty entries into a valid archive', async () => {
+describe('origin-private sealed ZIP packaging', () => {
+  it('writes the full sealed member set and verifies the exact closed package length', async () => {
+    const layout = await fixtureLayout()
     const output = recordedOutput()
-    const catalog = stagedCatalog()
-    await exporter(output.stream).export(catalog, OUTCOME, ACTIVE_SIGNAL)
+    const builder = new OriginPrivateZipPackageBuilder(
+      () => new MemoryZipCentralDirectorySpool(),
+    )
+    const result = await builder.build({
+      operationId: identity(16, 7),
+      receiveIntentDigest: RECEIVE_INTENT_DIGEST,
+      sealedMaterializationDigest: SEALED_MATERIALIZATION_DIGEST,
+      manifest: fixtureManifest(),
+      layout,
+      packageOwnedObjectId: PACKAGE_OBJECT_ID,
+      output: output.stream,
+      source: { readOwnedFile: async () => new Blob([Uint8Array.of(1, 2, 3)]) },
+      readPackageExactBytes: async () => BigInt(output.bytes().byteLength),
+      signal: ACTIVE_SIGNAL,
+    })
 
+    expect(result).toEqual(expect.objectContaining({
+      kind: 'sealed',
+      verification: expect.objectContaining({
+        writerCloseVerified: true,
+        exactBytes: layout.exactArchiveBytes,
+      }),
+    }))
     const reader = new ZipReader(new Uint8ArrayReader(output.bytes()))
     const entries = await reader.getEntries()
-    expect(entries.map((entry) => entry.filename)).toEqual([
-      'empty-directory/',
-      'empty.bin',
-      'tree/file.bin',
-    ])
-    const file = entries.find((entry) => entry.filename === 'tree/file.bin')
-    if (file === undefined || file.directory) throw new Error('Exported file is missing')
+    expect(entries.map((entry) => entry.filename)).toEqual(['root/', 'root/file.bin'])
+    const file = entries[1]
+    if (file === undefined || file.directory) throw new Error('packaged member is missing')
     expect(await file.getData(new Uint8ArrayWriter())).toEqual(Uint8Array.of(1, 2, 3))
     await reader.close()
-    expect(output.closed).toBe(true)
   })
 
-  it('aborts the archive when staged size no longer matches its committed record', async () => {
+  it('never seals a known-incomplete member and aborts the package writer', async () => {
+    const layout = await fixtureLayout()
     const output = recordedOutput()
-    const catalog = stagedCatalog()
-    const corrupted: StagedOutputCatalog = {
-      directories: () => catalog.directories(),
-      files: async function* () {
-        let index = 0
-        for await (const file of catalog.files()) {
-          yield index++ === 0
-            ? { ...file, read: async () => new Blob([Uint8Array.of(9)]) }
-            : file
-        }
-      },
+    const builder = new OriginPrivateZipPackageBuilder(
+      () => new MemoryZipCentralDirectorySpool(),
+    )
+
+    await expect(builder.build({
+      operationId: identity(16, 7),
+      receiveIntentDigest: RECEIVE_INTENT_DIGEST,
+      sealedMaterializationDigest: SEALED_MATERIALIZATION_DIGEST,
+      manifest: fixtureManifest(),
+      layout,
+      packageOwnedObjectId: PACKAGE_OBJECT_ID,
+      output: output.stream,
+      source: { readOwnedFile: async () => new Blob([Uint8Array.of(1)]) },
+      readPackageExactBytes: async () => BigInt(output.bytes().byteLength),
+      signal: ACTIVE_SIGNAL,
+    })).rejects.toThrow('materialized file length changed')
+    expect(output.aborted).toBe(true)
+  })
+
+  it('retries spool cleanup after writer close without rebuilding package bytes', async () => {
+    const layout = await fixtureLayout()
+    const output = recordedOutput()
+    const spool = new FailOnceClearSpool()
+    const builder = new OriginPrivateZipPackageBuilder(() => spool)
+    const input = {
+      operationId: identity(16, 7),
+      receiveIntentDigest: RECEIVE_INTENT_DIGEST,
+      sealedMaterializationDigest: SEALED_MATERIALIZATION_DIGEST,
+      manifest: fixtureManifest(),
+      layout,
+      packageOwnedObjectId: PACKAGE_OBJECT_ID,
+      output: output.stream,
+      source: { readOwnedFile: async () => new Blob([Uint8Array.of(1, 2, 3)]) },
+      readPackageExactBytes: async () => BigInt(output.bytes().byteLength),
+      signal: ACTIVE_SIGNAL,
     }
 
-    await expect(exporter(output.stream).export(corrupted, OUTCOME, ACTIVE_SIGNAL))
-      .rejects.toThrow('Staged output size changed')
-    expect(output.aborted).toBe(true)
-  })
+    const pending = await builder.build(input)
+    expect(pending.kind).toBe('cleanup-pending')
+    const packageBytes = output.bytes()
+    const sealed = await builder.retryCleanup()
 
-  it('shares one awaitable abort settlement across repeated callers', async () => {
-    const abortStarted = deferred<void>()
-    const releaseAbort = deferred<void>()
-    const abortReasons: unknown[] = []
-    const output = new WritableStream<Uint8Array>({
-      abort: async (reason) => {
-        abortReasons.push(reason)
-        abortStarted.resolve()
-        await releaseAbort.promise
-      },
-    })
-    const subject = exporter(output)
-    const reason = new DOMException('cancelled', 'AbortError')
-
-    const first = subject.abort(reason)
-    const second = subject.abort(new Error('must not replace the first reason'))
-    expect(second).toBe(first)
-    await abortStarted.promise
-    let settled = false
-    first.then(() => { settled = true }, () => { settled = true })
-    await Promise.resolve()
-    expect(settled).toBe(false)
-
-    releaseAbort.resolve()
-    await expect(first).resolves.toBeUndefined()
-    await expect(second).resolves.toBeUndefined()
-    expect(abortReasons).toEqual([reason])
-  })
-
-  it('fails closed when archive resource construction rejects', async () => {
-    const output = recordedOutput()
-    const subject = new OriginPrivateZipExporter(output.stream, () => {
-      throw new Error('spool acquisition failed')
-    })
-
-    await expect(subject.export(stagedCatalog(), OUTCOME, ACTIVE_SIGNAL))
-      .rejects.toThrow('spool acquisition failed')
-    expect(output.aborted).toBe(true)
-    await expect(subject.abort(new Error('repeated cleanup'))).resolves.toBeUndefined()
+    expect(sealed.kind).toBe('sealed')
+    expect(output.bytes()).toEqual(packageBytes)
+    expect(spool.clearAttempts).toBe(2)
   })
 })
 
-function stagedCatalog(): StagedOutputCatalog {
-  const emptyRecord = stagedFileRecord('empty.bin', 0n, [], 'empty-file')
-  const fileRecordValue = stagedFileRecord(
-    'tree/file.bin',
-    3n,
-    [byteRange(0n, 3n)],
-    'regular-file',
-  )
-  const directories = [
-    directoryRecord(
-      identity,
-      ['empty-directory'],
-      fixtureIdentity('empty-directory', 32),
-      true,
-      undefined,
-      true,
-      1n,
-    ),
-  ]
-  const files: StagedOutputFile[] = [
-    Object.freeze({ record: emptyRecord, read: async () => new Blob([]) }),
-    Object.freeze({ record: fileRecordValue, read: async () => new Blob([Uint8Array.of(1, 2, 3)]) }),
-  ]
-  return Object.freeze({
-    directories: async function* () { yield* directories },
-    files: async function* () { yield* files },
+class FailOnceClearSpool extends MemoryZipCentralDirectorySpool {
+  clearAttempts = 0
+
+  override async clear(): Promise<void> {
+    this.clearAttempts += 1
+    if (this.clearAttempts === 1) throw new Error('transient cleanup failure')
+    await super.clear()
+  }
+}
+
+async function fixtureLayout() {
+  return planZipLayout({
+    receiveIntentDigest: RECEIVE_INTENT_DIGEST,
+    artifactDigest: ARTIFACT_DIGEST,
+    preparationManifestDigest: PREPARATION_DIGEST,
+    entries: [
+      { kind: 'directory', path: ['root'] },
+      { kind: 'file', path: ['root', 'file.bin'], exactSize: 3n },
+    ],
   })
 }
 
-function exporter(output: WritableStream<Uint8Array>): OriginPrivateZipExporter {
-  return new OriginPrivateZipExporter(output, () => new MemoryZipCentralDirectorySpool())
-}
-
-function stagedFileRecord(
-  path: string,
-  exactSize: bigint,
-  ranges: readonly ReturnType<typeof byteRange>[],
-  ownedFileIdentity: string,
-) {
-  const canonicalPath = path.split('/')
-  return fileRecord(
-    identity,
-    {
-      ...identity,
-      canonicalPath,
-      ownedFileIdentity: fixtureIdentity(ownedFileIdentity, 32),
-    },
-    {
-      source: {
-        shareInstance: 'share',
-        fileId: fixtureIdentity(path, 16),
-        fileRevision: fixtureIdentity(`revision-${path}`, 16),
+function fixtureManifest(): MaterializedManifestV1 {
+  return {
+    schemaVersion: 1,
+    operationId: identity(16, 7),
+    receiveIntentDigest: RECEIVE_INTENT_DIGEST,
+    materializationBindingDigest: identity(32, 8),
+    preparationBinding: { kind: 'present', preparationDigest: PREPARATION_DIGEST },
+    generations: [],
+    entries: [
+      {
+        kind: 'directory',
+        artifactPath: ['root'],
+        directoryId: identity(16, 9),
+        generation: identity(16, 10),
+        ownedObjectId: identity(32, 11),
       },
-      path: canonicalPath,
-      exactSize,
-    },
-    ranges,
-    true,
-    1n,
-  )
-}
-
-function fixtureIdentity(label: string, length: number): string {
-  const bytes = new Uint8Array(length)
-  bytes[0] = 0xa5
-  for (const [index, character] of [...label].entries()) {
-    const offset = (index % (length - 1)) + 1
-    bytes[offset] = ((bytes[offset] ?? 0) + (character.codePointAt(0) ?? 0) + index) & 0xff
+      {
+        kind: 'file',
+        artifactPath: ['root', 'file.bin'],
+        fileId: identity(16, 12),
+        fileRevision: identity(16, 13),
+        exactSize: 3n,
+        ownedObjectId: RAW_OBJECT_ID,
+        checkpoint: {
+          recordId: 'checkpoint-record',
+          recordDigest: identity(32, 14),
+          checkpointGeneration: 1n,
+        },
+      },
+    ],
+    entryCount: 2n,
+    fileCount: 1n,
+    directoryCount: 1n,
+    rawBytes: 3n,
+    canonicalMetadataBytes: 1n,
+    canonicalBytes: Uint8Array.of(1),
+    digest: identity(32, 15),
   }
-  return encodeBase64Url(bytes)
 }
 
 function recordedOutput(): {
   readonly stream: WritableStream<Uint8Array>
-  readonly closed: boolean
   readonly aborted: boolean
   bytes(): Uint8Array
 } {
   const chunks: Uint8Array[] = []
-  const state = { closed: false, aborted: false }
+  let aborted = false
   return {
     stream: new WritableStream<Uint8Array>({
       write: (chunk) => { chunks.push(chunk.slice()) },
-      close: () => { state.closed = true },
-      abort: () => { state.aborted = true },
+      abort: () => { aborted = true },
     }),
-    get closed() { return state.closed },
-    get aborted() { return state.aborted },
+    get aborted() { return aborted },
     bytes: () => {
-      const output = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0))
+      const bytes = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.length, 0))
       let offset = 0
       for (const chunk of chunks) {
-        output.set(chunk, offset)
-        offset += chunk.byteLength
+        bytes.set(chunk, offset)
+        offset += chunk.length
       }
-      return output
+      return bytes
     },
   }
 }
 
-function deferred<T>(): {
-  readonly promise: Promise<T>
-  readonly resolve: (value: T | PromiseLike<T>) => void
-  readonly reject: (reason?: unknown) => void
-} {
-  let resolve!: (value: T | PromiseLike<T>) => void
-  let reject!: (reason?: unknown) => void
-  const promise = new Promise<T>((complete, fail) => {
-    resolve = complete
-    reject = fail
-  })
-  return { promise, resolve, reject }
+function identity(width: number, fill: number): string {
+  return encodeBase64Url(new Uint8Array(width).fill(fill))
 }

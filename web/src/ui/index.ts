@@ -1,5 +1,14 @@
 export { V2ReceiverApp } from './V2ReceiverApp'
 export { captureV2Location, V2ReceiverController } from './v2-controller'
 export { V2BrowserReceiverGateway, V2JoinedBrowserShare } from './v2-gateway'
+export {
+  createBrowserReceiveComposition,
+  type BrowserReceiveCompositionOptions,
+  type BrowserReceiveWindow,
+} from './v2-browser-receive-composition'
+export * from './v2-artifact-presentation'
+export * from './v2-lifecycle-presentation'
 export * from './v2-model'
 export * from './v2-output'
+export * from './v2-production-trace'
+export * from './v2-receive-runtime'

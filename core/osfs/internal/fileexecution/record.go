@@ -2,39 +2,39 @@ package fileexecution
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"math"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
-	"github.com/windshare/windshare/core/osfs/internal/outputsession"
 	"github.com/windshare/windshare/core/transfer"
 )
 
-func (engine *Engine) checkpointKey(claim outputsession.FileClaim) (CheckpointKey, error) {
-	if engine == nil || claim.ID() == 0 || claim.ParentID() == 0 || claim.LocatorKey() == "" {
+func (engine *Engine) checkpointKey(file transfer.MaterializationFile) (CheckpointKey, error) {
+	if engine == nil {
 		return CheckpointKey{}, ErrInvalidClaim
 	}
-	file := claim.File()
 	descriptor := file.Descriptor
 	target := file.Target
-	ownership := engine.binding.Ownership()
-	canonical, err := engine.canonicalFilePath(file.Path)
-	if err != nil || canonical != file.Path || file.Path == "" ||
+	canonical, err := catalog.CanonicalPath(file.Path)
+	if err != nil || canonical != file.Path || file.Path == "" || file.ParentAdmission.IsZero() ||
+		file.ParentAdmission.ReceiveIntentDigest() != engine.intent.Digest() ||
 		descriptor.ShareInstance() != engine.intent.ShareInstance() ||
 		descriptor.FileID().IsZero() || descriptor.FileRevision().IsZero() ||
-		file.ExpectedSize != descriptor.ExactSize() ||
-		target.OutputSessionID() != engine.sessionID || target.BackendID() != ownership.Backend() ||
+		file.ExpectedSize != descriptor.ExactSize() || target.OutputSessionID() != engine.sessionID ||
 		target.Descriptor() != descriptor || target.ExactSize() != file.ExpectedSize ||
-		target.Locator().Kind() != transfer.OutputPathLocator ||
-		target.Locator().CanonicalPath() != file.Path || file.ParentAdmission.IsZero() {
+		target.Locator().Kind() != transfer.MaterializationPathLocator ||
+		target.Locator().CanonicalPath() != file.Path {
 		return CheckpointKey{}, errors.Join(ErrInvalidClaim, err)
 	}
+	ownership := engine.binding.Ownership()
 	key := CheckpointKey{
-		intent: engine.binding.TransferIntentDigest(), fileID: descriptor.FileID(),
-		revision: descriptor.FileRevision(), path: file.Path, exactSize: file.ExpectedSize,
-		backend: ownership.Backend(), root: ownership.RootIdentity(),
+		operation: engine.binding.OperationID(), intent: engine.binding.ReceiveIntentDigest(),
+		materialization: engine.binding.MaterializationBindingDigest(),
+		fileID:          descriptor.FileID(), revision: descriptor.FileRevision(), path: file.Path,
+		exactSize: file.ExpectedSize, materializer: ownership.MaterializerKind(),
+		authority: ownership.AuthorityRef(),
 	}
 	if !key.valid() {
 		return CheckpointKey{}, ErrInvalidClaim
@@ -42,53 +42,18 @@ func (engine *Engine) checkpointKey(claim outputsession.FileClaim) (CheckpointKe
 	return key, nil
 }
 
-func (engine *Engine) canonicalFilePath(path string) (string, error) {
-	return engine.pathCanonicalizer(path)
-}
-
-func newInitialRecord(
-	key CheckpointKey,
-	object checkpointmodel.ObjectID,
-) (checkpointmodel.Record, error) {
+func newInitialRecord(key CheckpointKey, object checkpointmodel.ObjectID) (checkpointmodel.Record, error) {
 	if !key.valid() || object.IsZero() {
 		return checkpointmodel.Record{}, ErrInvalidClaim
 	}
 	return checkpointmodel.NewRecord(checkpointmodel.RecordSpec{
-		TransferIntentDigest: key.intent,
-		FileID:               key.fileID,
-		FileRevision:         key.revision,
-		CanonicalPath:        key.path,
-		ExactSize:            key.exactSize,
-		BackendID:            string(key.backend),
-		RootIdentity:         key.root.Bytes(),
-		OwnedOutputObject:    object.Bytes(),
-		StateGeneration:      1,
-		Phase:                checkpointmodel.PhaseActive,
-		CommitState:          checkpointmodel.CommitCandidate,
-	})
-}
-
-func newInitialQuarantine(
-	key CheckpointKey,
-	object checkpointmodel.ObjectID,
-) (checkpointmodel.Record, error) {
-	if !key.valid() || object.IsZero() {
-		return checkpointmodel.Record{}, ErrInvalidClaim
-	}
-	return checkpointmodel.NewRecord(checkpointmodel.RecordSpec{
-		TransferIntentDigest: key.intent,
-		FileID:               key.fileID,
-		FileRevision:         key.revision,
-		CanonicalPath:        key.path,
-		ExactSize:            key.exactSize,
-		BackendID:            string(key.backend),
-		RootIdentity:         key.root.Bytes(),
-		OwnedOutputObject:    object.Bytes(),
-		StateGeneration:      1,
-		Phase:                checkpointmodel.PhaseQuarantined,
-		CommitState:          checkpointmodel.CommitQuarantined,
-		QuarantineReason:     checkpointmodel.QuarantinePartialObjectCreation,
-		QuarantineOrigin:     checkpointmodel.QuarantineOriginReserved,
+		OperationID: key.operation, ReceiveIntentDigest: key.intent,
+		MaterializationBindingDigest: key.materialization,
+		FileID:                       key.fileID, FileRevision: key.revision, CanonicalPath: key.path,
+		ExactSize: key.exactSize, MaterializerKind: key.materializer,
+		AuthorityRef: key.authority.Bytes(), OwnedObjectID: object.Bytes(),
+		StateGeneration: 1, CheckpointGeneration: 0,
+		Phase: checkpointmodel.PhaseActive, CommitState: checkpointmodel.CommitCandidate,
 	})
 }
 
@@ -121,35 +86,33 @@ func activateRecord(record checkpointmodel.Record) (checkpointmodel.Record, erro
 	if record.Phase() == checkpointmodel.PhaseActive && record.CommitState() == checkpointmodel.CommitVerified {
 		return record, nil
 	}
-	return transitionRecord(
-		record, checkpointmodel.PhaseActive, checkpointmodel.CommitVerified, 0, 0, 0,
-	)
+	return transitionRecord(record, checkpointmodel.PhaseActive, checkpointmodel.CommitVerified, 0, 0, 0)
 }
 
 func pauseRecord(record checkpointmodel.Record) (checkpointmodel.Record, error) {
-	return transitionRecord(
-		record, checkpointmodel.PhasePaused, checkpointmodel.CommitVerified, 0, 0, 0,
-	)
+	return transitionRecord(record, checkpointmodel.PhasePaused, checkpointmodel.CommitVerified, 0, 0, 0)
 }
 
 func publishingRecord(record checkpointmodel.Record) (checkpointmodel.Record, error) {
-	return transitionRecord(
-		record, checkpointmodel.PhasePublishing, checkpointmodel.CommitVerified, 0, 0, 0,
-	)
+	return transitionRecord(record, checkpointmodel.PhasePublishing, checkpointmodel.CommitVerified, 0, 0, 0)
 }
 
 func publishedRecord(record checkpointmodel.Record) (checkpointmodel.Record, error) {
-	return transitionRecord(
-		record, checkpointmodel.PhasePublished, checkpointmodel.CommitPublished, 0, 0, 0,
-	)
+	return transitionRecord(record, checkpointmodel.PhasePublished, checkpointmodel.CommitPublished, 0, 0, 0)
 }
 
-func retiredRecord(
-	record checkpointmodel.Record,
-	reason checkpointmodel.RetirementReason,
-) (checkpointmodel.Record, error) {
+func retiredRecord(record checkpointmodel.Record, reason checkpointmodel.RetirementReason) (checkpointmodel.Record, error) {
+	return transitionRecord(record, checkpointmodel.PhaseRetired, checkpointmodel.CommitVerified, 0, 0, reason)
+}
+
+func quarantineRecord(record checkpointmodel.Record, reason checkpointmodel.QuarantineReason) (checkpointmodel.Record, error) {
+	origin := quarantineOrigin(record.Phase())
+	if origin == 0 || !reason.Valid() {
+		return checkpointmodel.Record{}, checkpointmodel.ErrRecordGeneration
+	}
 	return transitionRecord(
-		record, checkpointmodel.PhaseRetired, checkpointmodel.CommitVerified, 0, 0, reason,
+		record, checkpointmodel.PhaseQuarantined, checkpointmodel.CommitQuarantined,
+		reason, origin, record.RetirementReason(),
 	)
 }
 
@@ -168,20 +131,6 @@ func quarantineOrigin(phase checkpointmodel.Phase) checkpointmodel.QuarantineOri
 	default:
 		return 0
 	}
-}
-
-func quarantineRecord(
-	record checkpointmodel.Record,
-	reason checkpointmodel.QuarantineReason,
-) (checkpointmodel.Record, error) {
-	origin := quarantineOrigin(record.Phase())
-	if origin == 0 || !reason.Valid() {
-		return checkpointmodel.Record{}, checkpointmodel.ErrRecordGeneration
-	}
-	return transitionRecord(
-		record, checkpointmodel.PhaseQuarantined, checkpointmodel.CommitQuarantined,
-		reason, origin, record.RetirementReason(),
-	)
 }
 
 func recordEqual(left, right checkpointmodel.Record) bool {
@@ -206,23 +155,23 @@ func checkpointRanges(ranges content.RangeSet) []checkpointmodel.Range {
 	return converted
 }
 
-func outputIdentity(object checkpointmodel.ObjectID) (transfer.OutputObjectIdentity, error) {
-	return transfer.OutputObjectIdentityFromBytes(object.Bytes())
+func outputIdentity(object checkpointmodel.ObjectID) (transfer.OwnedObjectID, error) {
+	return transfer.OwnedObjectIDFromBytes(object.Bytes())
 }
 
 func outputBinding(
-	target transfer.OutputFileTarget,
+	target transfer.FileMaterializationTarget,
 	record checkpointmodel.Record,
-) (transfer.OutputFileBinding, error) {
-	identity, err := outputIdentity(record.OwnedOutputObject())
+) (transfer.MaterializedFileBinding, error) {
+	identity, err := outputIdentity(record.OwnedObjectID())
 	if err != nil {
-		return transfer.OutputFileBinding{}, err
+		return transfer.MaterializedFileBinding{}, err
 	}
-	return transfer.BindOutputFileTarget(target, identity)
+	return transfer.BindFileMaterializationTarget(target, identity)
 }
 
 func durableRanges(
-	binding transfer.OutputFileBinding,
+	binding transfer.MaterializedFileBinding,
 	record checkpointmodel.Record,
 ) (transfer.VerifiedDurableRanges, error) {
 	ranges, err := contentRanges(record)
@@ -234,80 +183,10 @@ func durableRanges(
 	)
 }
 
-func (engine *Engine) lookupRecord(
-	ctx context.Context,
-	key CheckpointKey,
-) (checkpointmodel.Record, bool, error) {
-	record, found, err := engine.checkpoints.Lookup(ctx, key)
+func recordComplete(record checkpointmodel.Record) (bool, error) {
+	ranges, err := contentRanges(record)
 	if err != nil {
-		return checkpointmodel.Record{}, false, collaboratorError(ctx, err)
+		return false, err
 	}
-	if !found {
-		if record.Valid() {
-			return checkpointmodel.Record{}, false, checkpointBindingError(ErrPortContract)
-		}
-		return checkpointmodel.Record{}, false, nil
-	}
-	if !key.matches(record) || !engine.binding.Matches(record, record.RecordID()) {
-		return checkpointmodel.Record{}, false, checkpointBindingError(ErrCheckpointBinding)
-	}
-	return record, true, nil
-}
-
-// storeRecord is the single checkpoint mutation reducer. The repository applies
-// one exact decision and reports a fresh target observation; this function alone
-// decides whether the cut is installed, unchanged, or ambiguous.
-func (engine *Engine) storeRecord(
-	ctx context.Context,
-	previous *checkpointmodel.Record,
-	next checkpointmodel.Record,
-) (outputsession.MutationCut, bool, error) {
-	if ctx == nil {
-		return outputsession.MutationNoChange, false, fileContractError(ErrInvalidConfiguration)
-	}
-	if err := ctx.Err(); err != nil {
-		return outputsession.MutationNoChange, false, err
-	}
-	if !next.Valid() || !engine.binding.Matches(next, next.RecordID()) ||
-		previous != nil && (!previous.Valid() || previous.RecordID() != next.RecordID()) {
-		return outputsession.MutationNoChange, false, checkpointBindingError(ErrCheckpointBinding)
-	}
-	observation, operationErr := engine.checkpoints.Store(ctx, previous, next)
-	normalizedErr := collaboratorError(ctx, operationErr)
-	if !observation.valid() {
-		return outputsession.MutationAmbiguous, false, joinFailures(ctx,
-			checkpointInstallError(ErrInvalidObservation), normalizedErr,
-		)
-	}
-	if current, present := observation.Record(); present && recordEqual(current, next) {
-		return outputsession.MutationStable, operationErr != nil, nil
-	}
-	if previous == nil {
-		// Exact create cannot have installed next when a fresh observation is
-		// either absent or another record. The new private object is therefore
-		// still unclaimed and may be retired instead of leaked as ambiguous.
-		if operationErr != nil {
-			return outputsession.MutationNoChange, false, normalizedErr
-		}
-		return outputsession.MutationNoChange, false, checkpointInstallError(
-			errors.Join(ErrCheckpointNotInstalled, ErrPortContract),
-		)
-	}
-	unchanged := false
-	if current, present := observation.Record(); present {
-		unchanged = recordEqual(current, *previous)
-	}
-	if unchanged {
-		if operationErr != nil {
-			return outputsession.MutationNoChange, false, normalizedErr
-		}
-		return outputsession.MutationNoChange, false, checkpointInstallError(
-			errors.Join(ErrCheckpointNotInstalled, ErrPortContract),
-		)
-	}
-	cause := errors.Join(ErrCheckpointNotInstalled, normalizedErr)
-	if operationErr == nil {
-		cause = errors.Join(cause, ErrPortContract)
-	}
-	return outputsession.MutationAmbiguous, false, checkpointInstallError(cause)
+	return transfer.RangesCoverFile(record.ExactSize(), ranges), nil
 }

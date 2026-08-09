@@ -21,13 +21,13 @@ func TestFileStartAcceptsDeterministicallyRecoveredRetirement(t *testing.T) {
 		t.Fatal("recovered retirement exposed a second content transaction")
 	}
 	immediate, ok := start.ImmediateSettlement()
-	actualBinding, bound := immediate.OutputBinding()
+	actualBinding, bound := immediate.MaterializedBinding()
 	if !ok || immediate.Kind() != FileRetired || !bound || actualBinding != binding {
 		t.Fatalf("immediate settlement = (%v, %v), want target-bound FileRetired", immediate.Kind(), ok)
 	}
 }
 
-func retiredStartTestBinding(t *testing.T) OutputFileBinding {
+func retiredStartTestBinding(t *testing.T) MaterializedFileBinding {
 	t.Helper()
 	identity16 := func(value byte) [catalog.IdentityBytes]byte {
 		var identity [catalog.IdentityBytes]byte
@@ -47,23 +47,19 @@ func retiredStartTestBinding(t *testing.T) OutputFileBinding {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend, err := NewOutputBackendID("retired-start-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	locator, err := NewPathOutputLocator("file.bin")
+	locator, err := NewPathMaterializationLocator("file.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var session OutputSessionID
-	var object OutputObjectIdentity
+	var object OwnedObjectID
 	for index := range session {
 		session[index] = 4
 	}
 	for index := range object {
 		object[index] = 5
 	}
-	binding, err := NewOutputFileBinding(backend, session, descriptor, locator, object)
+	binding, err := NewMaterializedFileBinding(session, descriptor, locator, object)
 	if err != nil {
 		t.Fatal(err)
 	}

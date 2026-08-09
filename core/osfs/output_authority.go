@@ -7,6 +7,7 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/outputruntime"
 	"github.com/windshare/windshare/core/osfs/internal/pathfailure"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 var (
@@ -57,8 +58,8 @@ const (
 type FilesystemOutputRuntimeOperation uint8
 
 const (
-	FilesystemOutputRuntimeOpenOutput FilesystemOutputRuntimeOperation = iota + 1
-	FilesystemOutputRuntimeAcquireIntentLease
+	FilesystemOutputRuntimeOpenDirectTree FilesystemOutputRuntimeOperation = iota + 1
+	FilesystemOutputRuntimeAcquireOperationLease
 	FilesystemOutputRuntimeReconcileCheckpoints
 	FilesystemOutputRuntimeAdmitDirectory
 	FilesystemOutputRuntimeFinalizeDirectory
@@ -68,8 +69,8 @@ const (
 	FilesystemOutputRuntimeCommitFile
 	FilesystemOutputRuntimePauseFile
 	FilesystemOutputRuntimeRetireFile
-	FilesystemOutputRuntimePauseJob
-	FilesystemOutputRuntimeCompleteJob
+	FilesystemOutputRuntimePauseTree
+	FilesystemOutputRuntimeFinalizeTree
 	FilesystemOutputRuntimeMaterializeDirectory
 	FilesystemOutputRuntimeCreateOwnedFile
 	FilesystemOutputRuntimeRecoverFile
@@ -119,7 +120,8 @@ const (
 // and resumeauthority rather than leaking through telemetry values.
 type FilesystemOutputTrace struct {
 	Operation              FilesystemOutputTraceOperation
-	IntentDigest           transfer.TransferIntentDigest
+	ReceiveIntentDigest    transfer.ReceiveIntentDigest
+	ReceiveOperationID     receivecontract.OperationID
 	SessionID              transfer.OutputSessionID
 	Certification          FilesystemOutputCertificationID
 	NativeLockScope        FilesystemOutputNativeLockScope
@@ -173,14 +175,58 @@ func NewFilesystemOutputAuthority(config FilesystemOutputAuthorityConfig) (*File
 	return &FilesystemOutputAuthority{authority: runtimeAuthority}, nil
 }
 
-func (authority *FilesystemOutputAuthority) OpenOutput(
+type NativeDirectTreeReservationKind uint8
+
+const (
+	NativeDirectTreeReserved NativeDirectTreeReservationKind = iota + 1
+	NativeDirectTreeReopened
+	NativeDirectTreeNeedsAttention
+)
+
+// NativeDirectTreeReservation reports whether the authority created or reopened
+// one exact receive intent. Needs-attention deliberately carries no intent so
+// callers cannot accidentally merge ambiguous destination ownership.
+type NativeDirectTreeReservation struct {
+	reservation outputruntime.NativeDirectTreeReservation
+}
+
+func (reservation NativeDirectTreeReservation) Kind() NativeDirectTreeReservationKind {
+	switch reservation.reservation.Kind() {
+	case outputruntime.NativeDirectTreeReserved:
+		return NativeDirectTreeReserved
+	case outputruntime.NativeDirectTreeReopened:
+		return NativeDirectTreeReopened
+	case outputruntime.NativeDirectTreeNeedsAttention:
+		return NativeDirectTreeNeedsAttention
+	default:
+		return 0
+	}
+}
+
+func (reservation NativeDirectTreeReservation) ReceiveIntent() (transfer.ReceiveIntent, bool) {
+	return reservation.reservation.ReceiveIntent()
+}
+
+func (authority *FilesystemOutputAuthority) ReserveDirectTree(
 	ctx context.Context,
-	intent transfer.TransferIntent,
-) (transfer.OutputSession, error) {
+	selection transfer.SelectionSpec,
+	artifact receivecontract.ArtifactSpec,
+) (NativeDirectTreeReservation, error) {
+	if authority == nil || authority.authority == nil {
+		return NativeDirectTreeReservation{}, transfer.ErrInvalidOutputBinding
+	}
+	reservation, err := authority.authority.ReserveDirectTree(ctx, selection, artifact)
+	return NativeDirectTreeReservation{reservation: reservation}, err
+}
+
+func (authority *FilesystemOutputAuthority) OpenDirectTree(
+	ctx context.Context,
+	intent transfer.ReceiveIntent,
+) (transfer.DirectTreeSession, error) {
 	if authority == nil || authority.authority == nil {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
-	return authority.authority.OpenOutput(ctx, intent)
+	return authority.authority.OpenDirectTree(ctx, intent)
 }
 
 func newOutputRuntime(rootPath string, createRoot bool, tracer FilesystemOutputTracer) (*outputruntime.Authority, error) {

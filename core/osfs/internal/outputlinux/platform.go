@@ -266,8 +266,10 @@ func linuxV3Error(err error) error {
 }
 
 var (
-	_ outputcap.Platform  = (*linuxV3Platform)(nil)
-	_ outputcap.Directory = (*linuxV3Directory)(nil)
-	_ outputcap.File      = (*linuxV3File)(nil)
-	_ outputcap.Lock      = (*linuxV3Lock)(nil)
+	_ outputcap.Platform                            = (*linuxV3Platform)(nil)
+	_ outputcap.Directory                           = (*linuxV3Directory)(nil)
+	_ outputcap.PersistentDirectoryIdentity         = (*linuxV3Directory)(nil)
+	_ outputcap.PersistentDirectoryIdentityPreparer = (*linuxV3Directory)(nil)
+	_ outputcap.File                                = (*linuxV3File)(nil)
+	_ outputcap.Lock                                = (*linuxV3Lock)(nil)
 )
