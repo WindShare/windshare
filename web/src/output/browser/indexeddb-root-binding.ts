@@ -1,223 +1,371 @@
-import { decodeBase64Url, encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import {
-  FILE_CHECKPOINT_NAMESPACE,
-  FILE_CHECKPOINT_OWNERSHIP_MARKER,
-  canonicalFileCheckpointBackend,
-} from '../persistence/checkpoint'
+  fsaTreeGuarantees,
+  validateDestinationReservation,
+  validateReceiveIntent,
+  type NamedContainerEntryReservation,
+  type ReceiveIntent,
+} from '../../transfer/intent'
+import { sameGuaranteeFacts } from '../planning'
+import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import {
-  createOutputCapabilityIdentity,
-  snapshotOutputCapabilityIdentity,
-  type OutputCapabilityIdentity,
-} from '../capability/contract'
-import {
-  DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
-  INDEXEDDB_CHECKPOINT_METADATA_STORE,
-  isIndexedDbRecord,
-  openIndexedDbCheckpointDatabase,
-  requestResult,
-  transactionCompletion,
-} from './indexeddb-database'
+  RECEIVE_RECORD_RESERVATION,
+  createPersistedReceiveRecord,
+  createReceiveOperationV1,
+  receiveOperationHandleRecord,
+  storedReceiveOperationRecord,
+  type PersistedReceiveRecord,
+  type ReceiveOperationHandleRecord,
+} from '../workspace/records'
+import type {
+  ReceiveOperationRepository,
+  ReceiveOperationTransition,
+} from '../workspace/repository'
+import { equalCanonicalBytes } from '../workspace/canonical'
 
-const ROOT_BINDING_PREFIX =
-  `${FILE_CHECKPOINT_OWNERSHIP_MARKER}\0${FILE_CHECKPOINT_NAMESPACE}\0root-binding\0`
-const ROOT_BINDING_BUCKET_LIMIT = 128
-const ROOT_BINDING_INSTALL_RETRY_LIMIT = 32
+export const FSA_OPERATION_HANDLE_PARENT = 1 as const
+export const FSA_OPERATION_HANDLE_DIRECTORY = 2 as const
+
+const FSA_PARENT_HANDLE_DOMAIN = 'windshare/fsa-parent-handle/v1'
+const FSA_DIRECTORY_HANDLE_DOMAIN = 'windshare/fsa-directory-handle/v1'
+
+export interface PersistedFSAOperationBinding {
+  readonly intent: ReceiveIntent
+  readonly reservation: NamedContainerEntryReservation
+  readonly parent: FileSystemDirectoryHandle
+  readonly parentHandleId: string
+}
+
+export type FSAOperationBindingRepository = Pick<
+  ReceiveOperationRepository,
+  'commitTransition' | 'readRecord' | 'readHandle'
+>
 
 /**
- * The lexical bucket is only an index. Every returned identity still requires
- * the browser's same-entry relation over the persisted directory capability.
+ * Operation, reservation, and parent capability share one repository transition. No
+ * namespace entry may be created until this function has verified the committed cut.
  */
-interface RootBindingEntry {
-  readonly rootIdentity: string
-  readonly handle: FileSystemDirectoryHandle
-}
-
-interface RootBindingMetadata {
-  readonly id: string
-  readonly marker: typeof FILE_CHECKPOINT_OWNERSHIP_MARKER
-  readonly namespaceName: typeof FILE_CHECKPOINT_NAMESPACE
-  readonly backend: string
-  readonly rootName: string
-  readonly revision: number
-  readonly entries: readonly RootBindingEntry[]
-}
-
-/**
- * Resolve the stable identity for a picker-issued root.  The handle comparison
- * is performed before an identity is accepted; a name, path, or caller-supplied
- * label is never treated as proof of ownership.  The first open writes the
- * binding in the WindShare metadata store, and every later open verifies the
- * persisted handle with the browser's capability relation.
- */
-export async function resolveIndexedDbRootIdentity(options: {
-  readonly databaseName?: string
-  readonly backend: string
-  readonly root: FileSystemDirectoryHandle
-}): Promise<OutputCapabilityIdentity> {
-  const databaseName = options.databaseName ?? DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME
-  const backend = canonicalFileCheckpointBackend(options.backend)
-  const database = await openIndexedDbCheckpointDatabase(databaseName)
-  try {
-    const rootName = requireRootName(options.root)
-    for (let attempt = 0; attempt < ROOT_BINDING_INSTALL_RETRY_LIMIT; attempt += 1) {
-      const existing = await readRootBindingBucket(database, backend, rootName)
-      const matched = await matchingRootBinding(existing?.entries ?? [], options.root)
-      if (matched !== undefined) return matched
-      if (existing !== undefined && existing.entries.length >= ROOT_BINDING_BUCKET_LIMIT) {
-        throw new DOMException('Too many output roots share this browser name', 'QuotaExceededError')
-      }
-
-      // A random identity is generated only after every existing binding has
-      // failed the browser's same-entry check.  The persisted handle is the
-      // durable proof used by future tabs; no lexical/path fallback is possible.
-      const identity = createOutputCapabilityIdentity()
-      const candidate: RootBindingEntry = {
-        rootIdentity: encodeBase64Url(identity),
-        handle: options.root,
-      }
-      if (!await installRootBindingEntry(database, backend, rootName, existing, candidate)) continue
-
-      // Verify the committed handle before returning its identity.  The
-      // optimistic revision check in installRootBindingEntry makes concurrent
-      // tabs converge on one bucket revision rather than minting namespaces.
-      const persisted = await readRootBindingBucket(database, backend, rootName)
-      const verified = await matchingRootBinding(persisted?.entries ?? [], options.root)
-      if (verified !== undefined) return verified
-    }
-    throw new DOMException('The output root identity could not be installed safely', 'InvalidStateError')
-  } finally {
-    database.close()
-  }
-}
-
-/** Read-only proof that a persisted capability still names the certified root. */
-export async function verifyIndexedDbRootIdentity(options: {
-  readonly databaseName?: string
-  readonly backend: string
-  readonly rootIdentity: string
-  readonly root: FileSystemDirectoryHandle
-}): Promise<void> {
-  const databaseName = options.databaseName ?? DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME
-  const backend = canonicalFileCheckpointBackend(options.backend)
-  const expected = decodeBase64Url(options.rootIdentity)
-  if (expected === undefined || encodeBase64Url(expected) !== options.rootIdentity) {
-    throw new TypeError('persisted root identity is not canonical')
-  }
-  snapshotOutputCapabilityIdentity(expected, 'persisted root identity')
-  const database = await openIndexedDbCheckpointDatabase(databaseName)
-  try {
-    const bucket = await readRootBindingBucket(database, backend, requireRootName(options.root))
-    const matched = await matchingRootBinding(bucket?.entries ?? [], options.root)
-    if (matched === undefined || !equalBytes(matched, expected)) {
-      throw new DOMException('The persisted output root capability is stale', 'InvalidStateError')
-    }
-  } finally {
-    database.close()
-  }
-}
-
-async function readRootBindingBucket(
-  database: IDBDatabase,
-  backend: string,
-  rootName: string,
-): Promise<RootBindingMetadata | undefined> {
-  const transaction = database.transaction(INDEXEDDB_CHECKPOINT_METADATA_STORE, 'readonly')
-  const raw = await requestResult<unknown>(
-    transaction.objectStore(INDEXEDDB_CHECKPOINT_METADATA_STORE).get(rootBindingKey(backend, rootName)),
+export async function persistFSAOperationBinding(input: Readonly<{
+  repository: FSAOperationBindingRepository
+  intent: ReceiveIntent
+  parent: FileSystemDirectoryHandle
+}>): Promise<PersistedFSAOperationBinding> {
+  const validated = await validatedFSAIntent(input.intent)
+  const operation = await createReceiveOperationV1({ receiveIntent: validated.intent })
+  const operationRecord = storedReceiveOperationRecord(operation)
+  const reservationRecord = await createPersistedReceiveRecord({
+    operationId: validated.intent.operationId,
+    kind: RECEIVE_RECORD_RESERVATION,
+    canonicalBytes: validated.reservation.canonicalBytes,
+  })
+  const parentHandleId = fsaParentHandleId(
+    validated.intent.operationId,
+    validated.reservation.authorityRef,
   )
-  await transactionCompletion(transaction)
-  if (raw === undefined) return undefined
-  if (!isIndexedDbRecord(raw)) throw new Error('IndexedDB root binding metadata is not an object')
-  const bucket = raw as unknown as RootBindingMetadata
-  validateRootBinding(bucket, backend, rootName)
-  return bucket
-}
+  const parentRecord = receiveOperationHandleRecord({
+    id: parentHandleId,
+    operationId: validated.intent.operationId,
+    kind: FSA_OPERATION_HANDLE_PARENT,
+    authorityRef: validated.reservation.authorityRef,
+    handle: input.parent,
+  })
 
-async function matchingRootBinding(
-  entries: readonly RootBindingEntry[],
-  root: FileSystemDirectoryHandle,
-): Promise<OutputCapabilityIdentity | undefined> {
-  for (const entry of entries) {
-    if (entry.handle.kind !== 'directory') {
-      throw new Error('IndexedDB root binding is not a directory capability')
-    }
-    if (!await root.isSameEntry(entry.handle)) continue
-    const identity = decodeBase64Url(entry.rootIdentity)
-    if (identity === undefined) throw new Error('IndexedDB root binding identity is not canonical')
-    return snapshotOutputCapabilityIdentity(identity, 'persisted root identity')
+  await assertCompatibleExistingParent(input.repository, parentRecord, input.parent)
+  await assertCompatibleExistingRecord(input.repository, operationRecord)
+  await assertCompatibleExistingRecord(input.repository, reservationRecord)
+  try {
+    await input.repository.commitTransition({
+      operationId: validated.intent.operationId,
+      records: [operationRecord, reservationRecord],
+      handles: [parentRecord],
+    })
+  } catch (cause) {
+    throw new TargetOwnershipUnknownError(
+      'reservation',
+      validated.intent.operationId,
+      { cause },
+    )
   }
-  return undefined
+  return verifyFSAOperationBinding({
+    repository: input.repository,
+    intent: validated.intent,
+    expectedParent: input.parent,
+  })
 }
 
-async function installRootBindingEntry(
-  database: IDBDatabase,
-  backend: string,
-  rootName: string,
-  expected: RootBindingMetadata | undefined,
-  candidate: RootBindingEntry,
+export async function verifyFSAOperationBinding(input: Readonly<{
+  repository: FSAOperationBindingRepository
+  intent: ReceiveIntent
+  expectedParent?: FileSystemDirectoryHandle
+}>): Promise<PersistedFSAOperationBinding> {
+  const validated = await validatedFSAIntent(input.intent)
+  const operation = storedReceiveOperationRecord(await createReceiveOperationV1({
+    receiveIntent: validated.intent,
+  }))
+  const reservationRecord = await createPersistedReceiveRecord({
+    operationId: validated.intent.operationId,
+    kind: RECEIVE_RECORD_RESERVATION,
+    canonicalBytes: validated.reservation.canonicalBytes,
+  })
+  const parentHandleId = fsaParentHandleId(
+    validated.intent.operationId,
+    validated.reservation.authorityRef,
+  )
+  let storedOperation: PersistedReceiveRecord | undefined
+  let storedReservation: PersistedReceiveRecord | undefined
+  let storedParent: ReceiveOperationHandleRecord<FileSystemDirectoryHandle> | undefined
+  try {
+    [storedOperation, storedReservation, storedParent] = await Promise.all([
+      input.repository.readRecord(operation.id),
+      input.repository.readRecord(reservationRecord.id),
+      input.repository.readHandle<FileSystemDirectoryHandle>(parentHandleId),
+    ])
+  } catch (cause) {
+    throw ownershipUnknown('reservation', validated.intent.operationId, cause)
+  }
+  const storedParentHandle = storedParent === undefined
+    ? undefined
+    : requireDirectoryHandle(
+        storedParent.handle,
+        validated.intent.operationId,
+        'parent-authority',
+      )
+  if (!samePersistedRecord(operation, storedOperation) ||
+      !samePersistedRecord(reservationRecord, storedReservation) ||
+      storedParent === undefined || storedParent.kind !== FSA_OPERATION_HANDLE_PARENT ||
+      storedParent.operationId !== validated.intent.operationId ||
+      storedParent.authorityRef !== validated.reservation.authorityRef ||
+      storedParent.ownedObjectId !== undefined || storedParentHandle === undefined) {
+    throw new TargetOwnershipUnknownError('reservation', validated.intent.operationId)
+  }
+  if (input.expectedParent !== undefined &&
+      !await sameEntry(
+        input.expectedParent,
+        storedParentHandle,
+        validated.intent.operationId,
+        'parent-authority',
+      )) {
+    throw new TargetOwnershipUnknownError('parent-authority', validated.intent.operationId)
+  }
+  return Object.freeze({
+    intent: validated.intent,
+    reservation: validated.reservation,
+    parent: storedParentHandle,
+    parentHandleId,
+  })
+}
+
+export async function persistFSAOwnedDirectory(input: Readonly<{
+  repository: FSAOperationBindingRepository
+  reservation: NamedContainerEntryReservation
+  handleId: string
+  ownedObjectId: string
+  handle: FileSystemDirectoryHandle
+}>): Promise<void> {
+  requireOwnedDirectoryHandleId(input.handleId, input.reservation.operationId)
+  const record = receiveOperationHandleRecord({
+    id: input.handleId,
+    operationId: input.reservation.operationId,
+    kind: FSA_OPERATION_HANDLE_DIRECTORY,
+    authorityRef: input.reservation.authorityRef,
+    ownedObjectId: input.ownedObjectId,
+    handle: input.handle,
+  })
+  let existing: ReceiveOperationHandleRecord<FileSystemDirectoryHandle> | undefined
+  try {
+    existing = await input.repository.readHandle<FileSystemDirectoryHandle>(input.handleId)
+  } catch (cause) {
+    throw ownershipUnknown('namespace-create', input.reservation.operationId, cause)
+  }
+  if (existing !== undefined &&
+      !await sameOwnedDirectoryRecord(existing, record, input.reservation.operationId)) {
+    throw new TargetOwnershipUnknownError('namespace-create', input.reservation.operationId)
+  }
+  try {
+    await input.repository.commitTransition({
+      operationId: input.reservation.operationId,
+      handles: [record],
+    })
+  } catch (cause) {
+    throw new TargetOwnershipUnknownError(
+      'namespace-create',
+      input.reservation.operationId,
+      { cause },
+    )
+  }
+  let committed: ReceiveOperationHandleRecord<FileSystemDirectoryHandle> | undefined
+  try {
+    committed = await input.repository.readHandle<FileSystemDirectoryHandle>(input.handleId)
+  } catch (cause) {
+    throw ownershipUnknown('namespace-create', input.reservation.operationId, cause)
+  }
+  if (committed === undefined ||
+      !await sameOwnedDirectoryRecord(committed, record, input.reservation.operationId)) {
+    throw new TargetOwnershipUnknownError('namespace-create', input.reservation.operationId)
+  }
+}
+
+export async function readFSAOwnedDirectory(input: Readonly<{
+  repository: FSAOperationBindingRepository
+  reservation: NamedContainerEntryReservation
+  handleId: string
+  ownedObjectId?: string
+}>): Promise<FileSystemDirectoryHandle | undefined> {
+  requireOwnedDirectoryHandleId(input.handleId, input.reservation.operationId)
+  let record: ReceiveOperationHandleRecord<FileSystemDirectoryHandle> | undefined
+  try {
+    record = await input.repository.readHandle<FileSystemDirectoryHandle>(input.handleId)
+  } catch (cause) {
+    throw ownershipUnknown('parent-authority', input.reservation.operationId, cause)
+  }
+  if (record === undefined) return undefined
+  const handle = requireDirectoryHandle(
+    record.handle,
+    input.reservation.operationId,
+    'parent-authority',
+  )
+  if (record.kind !== FSA_OPERATION_HANDLE_DIRECTORY ||
+      record.operationId !== input.reservation.operationId ||
+      record.authorityRef !== input.reservation.authorityRef ||
+      (input.ownedObjectId !== undefined && record.ownedObjectId !== input.ownedObjectId)) {
+    throw new TargetOwnershipUnknownError('parent-authority', input.reservation.operationId)
+  }
+  return handle
+}
+
+export function fsaParentHandleId(operationId: string, authorityRef: string): string {
+  return `${FSA_PARENT_HANDLE_DOMAIN}/${operationId}/${authorityRef}`
+}
+
+export function fsaOwnedDirectoryHandleId(
+  operationId: string,
+  opaqueLocatorDigest: string,
+): string {
+  if (typeof opaqueLocatorDigest !== 'string' || opaqueLocatorDigest.length === 0 ||
+      opaqueLocatorDigest.includes('/')) {
+    throw new TypeError('FSA owned-directory locator digest is invalid')
+  }
+  return `${FSA_DIRECTORY_HANDLE_DOMAIN}/${operationId}/${opaqueLocatorDigest}`
+}
+
+async function validatedFSAIntent(intentInput: ReceiveIntent): Promise<{
+  readonly intent: ReceiveIntent
+  readonly reservation: NamedContainerEntryReservation
+}> {
+  const intent = await validateReceiveIntent(intentInput)
+  if (intent.plan.kind !== 'direct-tree' || intent.artifact.kind !== 'directory-tree' ||
+      intent.plan.reservation.kind !== 'named-container-entry' ||
+      intent.plan.reservation.authorityKind !== 'fsa-container') {
+    throw new TypeError('FSA binding requires a named DirectTree reservation')
+  }
+  const reservation = await validateDestinationReservation(
+    intent.plan.reservation,
+    intent.artifact,
+  ) as NamedContainerEntryReservation
+  const expected = fsaTreeGuarantees()
+  if (!sameGuaranteeFacts(reservation.guarantees, expected) ||
+      reservation.guarantees.profile !== 'fsa-tree') {
+    throw new TypeError('FSA reservation does not use CoordinatedNoReplace and PrefixVisible')
+  }
+  return Object.freeze({ intent, reservation })
+}
+
+async function assertCompatibleExistingParent(
+  repository: FSAOperationBindingRepository,
+  record: ReceiveOperationHandleRecord<FileSystemDirectoryHandle>,
+  parent: FileSystemDirectoryHandle,
+): Promise<void> {
+  const existing = await repository.readHandle<FileSystemDirectoryHandle>(record.id)
+  if (existing === undefined) return
+  const existingHandle = requireDirectoryHandle(
+    existing.handle,
+    record.operationId,
+    'parent-authority',
+  )
+  if (existing.kind !== record.kind || existing.operationId !== record.operationId ||
+      existing.authorityRef !== record.authorityRef || existing.ownedObjectId !== undefined ||
+      !await sameEntry(
+        existingHandle,
+        parent,
+        record.operationId,
+        'parent-authority',
+      )) {
+    throw new TargetOwnershipUnknownError('parent-authority', record.operationId)
+  }
+}
+
+async function assertCompatibleExistingRecord(
+  repository: FSAOperationBindingRepository,
+  expected: PersistedReceiveRecord,
+): Promise<void> {
+  const existing = await repository.readRecord(expected.id)
+  if (existing !== undefined && !samePersistedRecord(expected, existing)) {
+    throw new TargetOwnershipUnknownError('reservation', expected.operationId)
+  }
+}
+
+function samePersistedRecord(
+  expected: PersistedReceiveRecord,
+  actual: PersistedReceiveRecord | undefined,
+): boolean {
+  return actual !== undefined && actual.id === expected.id && actual.kind === expected.kind &&
+    actual.operationId === expected.operationId && actual.digest === expected.digest &&
+    equalCanonicalBytes(actual.canonicalBytes, expected.canonicalBytes)
+}
+
+async function sameOwnedDirectoryRecord(
+  existing: ReceiveOperationHandleRecord<FileSystemDirectoryHandle>,
+  expected: ReceiveOperationHandleRecord<FileSystemDirectoryHandle>,
+  operationId: string,
 ): Promise<boolean> {
-  const transaction = database.transaction(INDEXEDDB_CHECKPOINT_METADATA_STORE, 'readwrite')
-  const store = transaction.objectStore(INDEXEDDB_CHECKPOINT_METADATA_STORE)
-  const currentRaw = await requestResult<unknown>(store.get(rootBindingKey(backend, rootName)))
-  if (currentRaw !== undefined && !isIndexedDbRecord(currentRaw)) {
-    transaction.abort()
-    throw new Error('IndexedDB root binding metadata is not an object')
-  }
-  const current = currentRaw === undefined ? undefined : currentRaw as unknown as RootBindingMetadata
-  if (current !== undefined) validateRootBinding(current, backend, rootName)
-  const expectedRevision = expected?.revision ?? 0
-  const currentRevision = current?.revision ?? 0
-  if (currentRevision !== expectedRevision) {
-    await transactionCompletion(transaction)
-    return false
-  }
-  const entries = current === undefined ? [] : [...current.entries]
-  entries.push(candidate)
-  const next: RootBindingMetadata = {
-    id: rootBindingKey(backend, rootName),
-    marker: FILE_CHECKPOINT_OWNERSHIP_MARKER,
-    namespaceName: FILE_CHECKPOINT_NAMESPACE,
-    backend,
-    rootName,
-    revision: currentRevision + 1,
-    entries: Object.freeze(entries),
-  }
-  store.put(next)
-  await transactionCompletion(transaction)
-  return true
+  const existingHandle = requireDirectoryHandle(existing.handle, operationId, 'namespace-create')
+  const expectedHandle = requireDirectoryHandle(expected.handle, operationId, 'namespace-create')
+  return existing.id === expected.id && existing.operationId === expected.operationId &&
+    existing.kind === expected.kind && existing.authorityRef === expected.authorityRef &&
+    existing.ownedObjectId === expected.ownedObjectId &&
+    await sameEntry(existingHandle, expectedHandle, operationId, 'namespace-create')
 }
 
-function validateRootBinding(value: RootBindingMetadata, backend: string, rootName: string): void {
-  if (value.marker !== FILE_CHECKPOINT_OWNERSHIP_MARKER ||
-      value.namespaceName !== FILE_CHECKPOINT_NAMESPACE ||
-      value.backend !== backend ||
-      value.rootName !== rootName ||
-      value.id !== rootBindingKey(backend, rootName) ||
-      !Number.isSafeInteger(value.revision) || value.revision < 1 ||
-      !Array.isArray(value.entries) || value.entries.length > ROOT_BINDING_BUCKET_LIMIT) {
-    throw new Error('IndexedDB root binding ownership is invalid')
+function requireDirectoryHandle(
+  value: unknown,
+  operationId: string,
+  stage: 'parent-authority' | 'namespace-create',
+): FileSystemDirectoryHandle {
+  if (typeof value !== 'object' || value === null ||
+      !('kind' in value) || (value as { readonly kind?: unknown }).kind !== 'directory' ||
+      !('isSameEntry' in value) ||
+      typeof (value as { readonly isSameEntry?: unknown }).isSameEntry !== 'function') {
+    throw new TargetOwnershipUnknownError(stage, operationId)
   }
-  for (const entry of value.entries) {
-    const handle = (entry as unknown as { readonly handle?: FileSystemHandle }).handle
-    if (!isIndexedDbRecord(entry) || typeof entry.rootIdentity !== 'string' ||
-        handle === undefined || handle.kind !== 'directory') {
-      throw new Error('IndexedDB root binding entry is invalid')
-    }
-    const identity = decodeBase64Url(entry.rootIdentity)
-    if (identity === undefined) throw new Error('IndexedDB root binding identity is not canonical')
-    snapshotOutputCapabilityIdentity(identity, 'persisted root identity')
+  return value as FileSystemDirectoryHandle
+}
+
+async function sameEntry(
+  left: FileSystemHandle,
+  right: FileSystemHandle,
+  operationId: string,
+  stage: 'parent-authority' | 'namespace-create',
+): Promise<boolean> {
+  try {
+    return await left.isSameEntry(right)
+  } catch (cause) {
+    throw new TargetOwnershipUnknownError(stage, operationId, { cause })
   }
 }
 
-function rootBindingPrefix(backend: string): string {
-  return `${ROOT_BINDING_PREFIX}${backend}\0`
+function ownershipUnknown(
+  stage: 'parent-authority' | 'reservation' | 'namespace-create',
+  operationId: string,
+  cause: unknown,
+): TargetOwnershipUnknownError {
+  return cause instanceof TargetOwnershipUnknownError
+    ? cause
+    : new TargetOwnershipUnknownError(stage, operationId, { cause })
 }
 
-function rootBindingKey(backend: string, rootName: string): string {
-  return `${rootBindingPrefix(backend)}${encodeBase64Url(new TextEncoder().encode(rootName))}`
+function requireOwnedDirectoryHandleId(value: string, operationId: string): void {
+  if (!value.startsWith(`${FSA_DIRECTORY_HANDLE_DOMAIN}/${operationId}/`)) {
+    throw new TypeError('FSA owned-directory handle escaped its operation')
+  }
 }
 
-function requireRootName(root: FileSystemDirectoryHandle): string {
-  if (typeof root.name !== 'string') throw new TypeError('output root handle has no stable name')
-  return root.name
-}
+export type { ReceiveOperationRepository, ReceiveOperationTransition }

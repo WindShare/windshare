@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "kind": "directory-admission-v2",
+  "description": "HMAC-SHA256 DirectoryAdmissionV2 capabilities bound to ReceiveIntentDigest, layout, ancestry, generation, canonical path, and modified time.",
+  "cases": [
+    {
+      "directory": {
+        "directoryId": "ICEiIyQlJicoKSorLC0uLw",
+        "generation": "UFFSU1RVVldYWVpbXF1eXw",
+        "modifiedTime": null,
+        "path": []
+      },
+      "messageB64Url": "d2luZHNoYXJlL2RpcmVjdG9yeS1hZG1pc3Npb24vdjIAAgAAAAAAAAAg_xac4VRxVER8Rops_2VLsX1SN-m9AendX-2DWH51ka8AAAAAAAAAAQEAAAAAAAAAAQMAAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAEFBRUlNUVVZXWFlaW1xdXl8AAAAAAAAAAAAAAAAAAAABAQAAAAAAAAABAQ",
+      "name": "synthetic-root",
+      "parentCase": null,
+      "receiveIntentCase": "catalog-root-direct-tree",
+      "schemaVersion": 2,
+      "scope": {
+        "layout": "directory-tree-catalog-root",
+        "layoutVersion": 1,
+        "receiveIntentDigest": "_xac4VRxVER8Rops_2VLsX1SN-m9AendX-2DWH51ka8",
+        "syntheticRoot": "ICEiIyQlJicoKSorLC0uLw"
+      },
+      "secretB64Url": "wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8",
+      "settlement": {
+        "admissionToken": "FtLpr7xWOambqHr3cykNfgGs_fI1wknXIRvgr0qfc3w",
+        "kind": "finalized"
+      },
+      "token": "FtLpr7xWOambqHr3cykNfgGs_fI1wknXIRvgr0qfc3w"
+    },
+    {
+      "directory": {
+        "directoryId": "MDEyMzQ1Njc4OTo7PD0-Pw",
+        "generation": "YGFiY2RlZmdoaWprbG1ubw",
+        "modifiedTime": {
+          "nanoseconds": 123000000,
+          "precision": 2,
+          "seconds": "1700000200"
+        },
+        "path": [
+          "photos"
+        ]
+      },
+      "messageB64Url": "d2luZHNoYXJlL2RpcmVjdG9yeS1hZG1pc3Npb24vdjIAAgAAAAAAAAAg_xac4VRxVER8Rops_2VLsX1SN-m9AendX-2DWH51ka8AAAAAAAAAAQEAAAAAAAAAAQMAAAAAAAAAEDAxMjM0NTY3ODk6Ozw9Pj8AAAAAAAAAEGBhYmNkZWZnaGlqa2xtbm8AAAAAAAAAIBbS6a-8Vjmpm6h693MpDX4BrP3yNcJJ1yEb4K9Kn3N8AAAAAAAAAB8CAAAAAAAAABYAAAAAAAAAAQAAAAAAAAAGcGhvdG9zAAAAAAAAACYCAAAAAAAAAAgAAAAAZVPxyAAAAAAAAAAEB1TUwAAAAAAAAAABAg",
+      "name": "child-generation",
+      "parentCase": "synthetic-root",
+      "receiveIntentCase": "catalog-root-direct-tree",
+      "schemaVersion": 2,
+      "scope": {
+        "layout": "directory-tree-catalog-root",
+        "layoutVersion": 1,
+        "receiveIntentDigest": "_xac4VRxVER8Rops_2VLsX1SN-m9AendX-2DWH51ka8",
+        "syntheticRoot": "ICEiIyQlJicoKSorLC0uLw"
+      },
+      "secretB64Url": "wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8",
+      "settlement": {
+        "admissionToken": "oWLCjr6q7hk2MzeNUAuaQP3wDY4bO0A7CZumRrD6Its",
+        "fault": {
+          "code": "directory-metadata",
+          "domain": "output",
+          "scope": "directory-local"
+        },
+        "kind": "isolated-failure"
+      },
+      "token": "oWLCjr6q7hk2MzeNUAuaQP3wDY4bO0A7CZumRrD6Its"
+    }
+  ]
+}

@@ -16,21 +16,38 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/outputsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-func nativeTestIntent(t *testing.T, root string, shareByte, rootByte byte) transfer.TransferIntent {
+func nativeTestIntent(t *testing.T, root string, shareByte, rootByte byte) transfer.ReceiveIntent {
 	t.Helper()
 	rules, err := transfer.NewSelectionRules(true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := transfer.NewFilesystemTransferIntent(
+	selection, err := transfer.NewSelectionSpec(
 		incrementalTestIdentity16[catalog.ShareInstance](shareByte),
 		incrementalTestIdentity16[catalog.DirectoryID](rootByte),
-		rules, root, filesystemOutputBackendID, transfer.OutputNativeTree,
+		rules,
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	authority, err := New(Config{
+		RootPath: root, CreateRoot: true, PlatformFactory: openOutputRuntimeTestPlatform,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := authority.ReserveDirectTree(
+		context.Background(), selection, receivecontract.NewCatalogRootDirectoryTree(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, ok := reservation.ReceiveIntent()
+	if !ok {
+		t.Fatalf("native reservation kind = %d", reservation.Kind())
 	}
 	return intent
 }
@@ -63,14 +80,14 @@ func TestNativeCompositionOwnsLeaseAndExposesOnlyOutputSession(t *testing.T) {
 		return authority
 	}
 
-	first, err := newAuthority().OpenOutput(context.Background(), intent)
+	first, err := newAuthority().OpenDirectTree(context.Background(), intent)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := first.(*outputsession.Session); !ok {
-		t.Fatalf("OpenOutput returned %T, want the single outputsession runtime", first)
+		t.Fatalf("OpenDirectTree returned %T, want the single outputsession runtime", first)
 	}
-	if _, err := newAuthority().OpenOutput(context.Background(), intent); err == nil {
+	if _, err := newAuthority().OpenDirectTree(context.Background(), intent); err == nil {
 		t.Fatal("a concurrent session acquired the same durable intent lease")
 	} else {
 		normalized := transferfault.NormalizeBoundary(context.Background(), err)
@@ -80,11 +97,11 @@ func TestNativeCompositionOwnsLeaseAndExposesOnlyOutputSession(t *testing.T) {
 			t.Fatalf("lease contention fault = %v", err)
 		}
 	}
-	if _, err := first.PauseJob(context.Background(), transfer.JobPauseInterrupted); err != nil {
+	if _, err := first.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
 		t.Fatal(err)
 	}
 
-	reopened, err := newAuthority().OpenOutput(context.Background(), intent)
+	reopened, err := newAuthority().OpenDirectTree(context.Background(), intent)
 	if err != nil {
 		t.Fatalf("lease was not released after stable pause: %v", err)
 	}
@@ -92,18 +109,20 @@ func TestNativeCompositionOwnsLeaseAndExposesOnlyOutputSession(t *testing.T) {
 	if _, err := reopened.FinalizeDirectory(context.Background(), rootAdmission); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newAuthority().OpenOutput(context.Background(), intent); err == nil {
+	if _, err := newAuthority().OpenDirectTree(context.Background(), intent); err == nil {
 		t.Fatal("intent lease was released before stable completion")
 	}
-	if _, err := reopened.CompleteJob(context.Background(), transfer.JobSucceeded); err != nil {
+	if _, err := reopened.FinalizeTree(context.Background(), transfer.DirectTreeOutcomePublished); err != nil {
 		t.Fatal(err)
 	}
-	afterComplete, err := newAuthority().OpenOutput(context.Background(), intent)
-	if err != nil {
-		t.Fatalf("lease was not released after stable completion: %v", err)
-	}
-	if _, err := afterComplete.PauseJob(context.Background(), transfer.JobPauseInterrupted); err != nil {
-		t.Fatal(err)
+	if _, err := newAuthority().OpenDirectTree(context.Background(), intent); err == nil {
+		t.Fatal("immutable published receipt reopened as a writable session")
+	} else {
+		normalized := transferfault.NormalizeBoundary(context.Background(), err)
+		value, _ := normalized.Fault()
+		if code, checkpoint := value.CheckpointCode(); checkpoint && code == transferfault.CheckpointBusy {
+			t.Fatalf("stable completion retained its operation lease: %v", err)
+		}
 	}
 	traceMu.Lock()
 	defer traceMu.Unlock()
@@ -126,20 +145,8 @@ func TestNativeCompositionOwnsLeaseAndExposesOnlyOutputSession(t *testing.T) {
 	}
 }
 
-func TestNativeCompositionRejectsStreamBeforeOpeningRootAuthority(t *testing.T) {
+func TestNativeCompositionRejectsInvalidIntentBeforeOpeningRootAuthority(t *testing.T) {
 	root := t.TempDir()
-	rules, err := transfer.NewSelectionRules(true, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent, err := transfer.NewFilesystemTransferIntent(
-		incrementalTestIdentity16[catalog.ShareInstance](0x14),
-		incrementalTestIdentity16[catalog.DirectoryID](0x15),
-		rules, root, filesystemOutputBackendID, transfer.OutputSingleFileStream,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var opens atomic.Uint32
 	authority, err := New(Config{
 		RootPath: root,
@@ -151,11 +158,11 @@ func TestNativeCompositionRejectsStreamBeforeOpeningRootAuthority(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := authority.OpenOutput(context.Background(), intent); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
-		t.Fatalf("stream intent error = %v", err)
+	if _, err := authority.OpenDirectTree(context.Background(), transfer.ReceiveIntent{}); !errors.Is(err, transfer.ErrInvalidReceiveIntent) {
+		t.Fatalf("invalid intent error = %v", err)
 	}
 	if opens.Load() != 0 {
-		t.Fatal("DurabilityNone stream fabricated native root/checkpoint authority")
+		t.Fatal("invalid intent opened native root/checkpoint authority")
 	}
 }
 
@@ -165,7 +172,7 @@ func TestNativeCompositionAdmitsDelayedSiblingAndSettlesDirectoriesByReceipt(t *
 	session := openNativeCompositionSession(t, root, false, intent, nil)
 	rootAdmission := admitNativeRoot(t, session, intent, 0x23, catalog.ModifiedTime{})
 
-	first := transfer.OutputDirectory{
+	first := transfer.MaterializationDirectory{
 		DirectoryID:     incrementalTestIdentity16[catalog.DirectoryID](0x24),
 		Generation:      incrementalTestIdentity16[catalog.DirectoryGeneration](0x25),
 		ParentAdmission: rootAdmission, Path: "first",
@@ -180,7 +187,7 @@ func TestNativeCompositionAdmitsDelayedSiblingAndSettlesDirectoriesByReceipt(t *
 
 	// A settled child cannot seal its still-open parent. Catalog discovery may
 	// therefore admit a delayed sibling without retaining a global selection.
-	second := transfer.OutputDirectory{
+	second := transfer.MaterializationDirectory{
 		DirectoryID:     incrementalTestIdentity16[catalog.DirectoryID](0x26),
 		Generation:      incrementalTestIdentity16[catalog.DirectoryGeneration](0x27),
 		ParentAdmission: rootAdmission, Path: "second",
@@ -195,7 +202,7 @@ func TestNativeCompositionAdmitsDelayedSiblingAndSettlesDirectoriesByReceipt(t *
 	if _, err := session.FinalizeDirectory(context.Background(), rootAdmission); err != nil {
 		t.Fatal(err)
 	}
-	if settlement, err := session.CompleteJob(context.Background(), transfer.JobSucceeded); err != nil || settlement.Kind() != transfer.JobClosed {
+	if settlement, err := session.FinalizeTree(context.Background(), transfer.DirectTreeOutcomePublished); err != nil || settlement.Kind() != transfer.DirectTreeSettlementPublished {
 		t.Fatalf("directory-only completion = (%d, %v)", settlement.Kind(), err)
 	}
 	for _, name := range []string{"first", "second"} {
@@ -230,7 +237,7 @@ func TestNativeCompositionResumesCheckpointAndPreservesNoReplace(t *testing.T) {
 	if _, err := transaction.Pause(context.Background(), transfer.FilePauseInterrupted); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := first.PauseJob(context.Background(), transfer.JobPauseInterrupted); err != nil {
+	if _, err := first.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
 		t.Fatal(err)
 	}
 
@@ -254,7 +261,7 @@ func TestNativeCompositionResumesCheckpointAndPreservesNoReplace(t *testing.T) {
 	if _, err := reopened.FinalizeDirectory(context.Background(), reopenedRoot); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reopened.CompleteJob(context.Background(), transfer.JobSucceeded); err != nil {
+	if _, err := reopened.FinalizeTree(context.Background(), transfer.DirectTreeOutcomePublished); err != nil {
 		t.Fatal(err)
 	}
 	if content, err := os.ReadFile(filepath.Join(root, "resume.bin")); err != nil || string(content) != "leftside" {
@@ -281,7 +288,7 @@ func TestNativeCompositionResumesCheckpointAndPreservesNoReplace(t *testing.T) {
 	if _, err := collisionSession.FinalizeDirectory(context.Background(), collisionRoot); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := collisionSession.CompleteJob(context.Background(), transfer.JobCompletedWithErrors); err != nil {
+	if _, err := collisionSession.FinalizeTree(context.Background(), transfer.DirectTreeOutcomePartialDirectory); err != nil {
 		t.Fatal(err)
 	}
 	if content, err := os.ReadFile(filepath.Join(root, "collision.bin")); err != nil || string(content) != "keep" {
@@ -296,7 +303,7 @@ func TestNativeCompositionResumesPublishedFileThroughPreexistingDescendant(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory := transfer.OutputDirectory{
+	directory := transfer.MaterializationDirectory{
 		DirectoryID:  incrementalTestIdentity16[catalog.DirectoryID](0x3d),
 		Generation:   incrementalTestIdentity16[catalog.DirectoryGeneration](0x3e),
 		ModifiedTime: modified,
@@ -327,7 +334,7 @@ func TestNativeCompositionResumesPublishedFileThroughPreexistingDescendant(t *te
 	if settlement, err := transaction.Commit(context.Background()); err != nil || settlement.Kind() != transfer.FilePublished {
 		t.Fatalf("initial publication = (%d, %v)", settlement.Kind(), err)
 	}
-	if _, err := first.PauseJob(context.Background(), transfer.JobPauseInterrupted); err != nil {
+	if _, err := first.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
 		t.Fatal(err)
 	}
 
@@ -359,7 +366,7 @@ func TestNativeCompositionResumesPublishedFileThroughPreexistingDescendant(t *te
 	if _, err := reopened.FinalizeDirectory(context.Background(), reopenedRoot); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reopened.CompleteJob(context.Background(), transfer.JobSucceeded); err != nil {
+	if _, err := reopened.FinalizeTree(context.Background(), transfer.DirectTreeOutcomePublished); err != nil {
 		t.Fatal(err)
 	}
 	if content, err := os.ReadFile(filepath.Join(nestedPath, "published.bin")); err != nil || string(content) != "kept" {
@@ -384,7 +391,7 @@ func TestNativeCompositionRecoversAuthorityCreatedRootDisposition(t *testing.T) 
 		mu.Unlock()
 	})
 	first := openNativeCompositionSession(t, root, true, intent, tracer)
-	if _, err := first.PauseJob(context.Background(), transfer.JobPauseInterrupted); err != nil {
+	if _, err := first.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
 		t.Fatal(err)
 	}
 	modified, err := catalog.NewModifiedTime(1_700_000_000, 0, catalog.TimePrecisionSeconds)
@@ -396,7 +403,7 @@ func TestNativeCompositionRecoversAuthorityCreatedRootDisposition(t *testing.T) 
 	if _, err := reopened.FinalizeDirectory(context.Background(), rootAdmission); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reopened.CompleteJob(context.Background(), transfer.JobSucceeded); err != nil {
+	if _, err := reopened.FinalizeTree(context.Background(), transfer.DirectTreeOutcomePublished); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(root)
@@ -419,9 +426,9 @@ func openNativeCompositionSession(
 	t *testing.T,
 	root string,
 	create bool,
-	intent transfer.TransferIntent,
+	intent transfer.ReceiveIntent,
 	tracer FilesystemOutputTracer,
-) transfer.OutputSession {
+) transfer.DirectTreeSession {
 	t.Helper()
 	authority, err := New(Config{
 		RootPath: root, CreateRoot: create, PlatformFactory: openOutputRuntimeTestPlatform, Tracer: tracer,
@@ -429,7 +436,7 @@ func openNativeCompositionSession(
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := authority.OpenOutput(context.Background(), intent)
+	session, err := authority.OpenDirectTree(context.Background(), intent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,13 +445,13 @@ func openNativeCompositionSession(
 
 func admitNativeRoot(
 	t *testing.T,
-	session transfer.OutputSession,
-	intent transfer.TransferIntent,
+	session transfer.DirectTreeSession,
+	intent transfer.ReceiveIntent,
 	generation byte,
 	modified catalog.ModifiedTime,
 ) transfer.DirectoryAdmission {
 	t.Helper()
-	admission, err := session.AdmitDirectory(context.Background(), transfer.OutputDirectory{
+	admission, err := session.AdmitDirectory(context.Background(), transfer.MaterializationDirectory{
 		DirectoryID:  intent.SyntheticRoot(),
 		Generation:   incrementalTestIdentity16[catalog.DirectoryGeneration](generation),
 		ModifiedTime: modified,
@@ -457,7 +464,7 @@ func admitNativeRoot(
 
 func nativeCompositionDescriptor(
 	t *testing.T,
-	intent transfer.TransferIntent,
+	intent transfer.ReceiveIntent,
 	fileID byte,
 	revision byte,
 	exactSize uint64,
@@ -479,23 +486,23 @@ func nativeCompositionDescriptor(
 
 func nativeCompositionFile(
 	t *testing.T,
-	session transfer.OutputSession,
+	session transfer.DirectTreeSession,
 	descriptor content.FileRevisionDescriptor,
 	path string,
 	parent transfer.DirectoryAdmission,
-) transfer.OutputFile {
+) transfer.MaterializationFile {
 	t.Helper()
-	locator, err := transfer.NewPathOutputLocator(path)
+	locator, err := transfer.NewPathMaterializationLocator(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := transfer.NewOutputFileTarget(
-		filesystemOutputBackendID, session.SessionID(), descriptor, locator,
+	target, err := transfer.NewFileMaterializationTarget(
+		session.SessionID(), descriptor, locator,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return transfer.OutputFile{
+	return transfer.MaterializationFile{
 		Descriptor: descriptor, ExpectedSize: descriptor.ExactSize(),
 		ParentAdmission: parent, Path: path, Target: target,
 	}

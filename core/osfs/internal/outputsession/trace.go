@@ -16,8 +16,8 @@ const (
 	OperationCommitFile
 	OperationPauseFile
 	OperationRetireFile
-	OperationPauseJob
-	OperationCompleteJob
+	OperationPauseTree
+	OperationFinalizeTree
 )
 
 type TraceDecision uint8
@@ -54,7 +54,7 @@ const (
 )
 
 type TraceEvent struct {
-	IntentDigest           transfer.TransferIntentDigest
+	ReceiveIntentDigest    transfer.ReceiveIntentDigest
 	SessionID              transfer.OutputSessionID
 	OperationID            uint64
 	Operation              OperationKind

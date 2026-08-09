@@ -81,12 +81,12 @@ func (run *cleanupRun) inspectLegacyIntent(
 			return err
 		}
 		if name == legacyresume.CheckpointDirectory {
-			// FileCheckpointV1 state belongs to the current resume authority. The
-			// legacy cleaner reports it and leaves the entire containing path alone.
+			// A nested retired checkpoint root has an independent ownership marker.
+			// This session cleanup cannot inherit authority to delete it from its path.
 			if !exact || kind != outputcap.EntryDirectory {
 				addAttention(report, entryPath, cleanupDetailConflict)
 			} else {
-				addAttention(report, entryPath, cleanupDetailCurrent)
+				addAttention(report, entryPath, cleanupDetailSeparateOwnership)
 			}
 			continue
 		}

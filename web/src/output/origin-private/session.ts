@@ -1,670 +1,568 @@
-import type { JobOutcome } from '../../transfer/outcome'
-import {
-  type BeginOutputFileResult,
-  type DirectoryAdmission,
-  type DirectoryAdmissionScope,
-  type DirectorySettlement,
-  type FileRetirementDisposition,
-  JobSettlementKind,
-  type JobSettlement,
-  type OutputCapabilities,
-  type OutputDirectoryAdmission,
-  type OutputFile,
-  type OutputFileTransaction,
-  type OutputSession,
-  type OutputSessionIdentity,
-  type VerifiedDurableRanges,
-  COMPLETED_JOB_SETTLEMENT,
-  needsAttentionJobSettlement,
-  OutputSessionCompromisedError,
-  outputSessionIdentity,
-  pausedJobSettlement,
-} from '../../transfer/output-session'
-import { FaultScope, OutputFaultCode, outputFault } from '../../transfer/fault'
-import { BrowserFileSystemTree } from '../browser/filesystem-tree'
-import { ensureOneShotIndexedDbLegacyCleanup } from '../browser/indexeddb-legacy-cleaner'
-import { IndexedDbOutputRepository } from '../browser/indexeddb-repository'
-import {
-  acquireBrowserOutputSessionLease,
-  type BrowserOutputSessionLease,
-} from '../browser/session-lease'
-import type { CheckpointCrashHook } from '../persistent-tree/contracts'
+import { validateReceiveIntent, type ReceiveIntent } from '../../transfer/intent'
+import { IndexedDbFileCheckpointRepository } from '../browser/indexeddb-repository'
+import { FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE } from '../persistence/checkpoint'
 import type {
-  PersistentFileOperation,
-  PersistentFileTransaction,
-} from '../persistent-tree/file-transaction'
+  FileCheckpointJournal,
+  FinalFileCheckpointProof,
+  PersistentHandleRepository,
+} from '../persistence/journal'
+import { finalFileCheckpointProof } from '../persistence/journal'
 import {
-  PersistentTreeOutputSession,
-  type StagedOutputCatalog,
-} from '../persistent-tree/session'
+  durableCheckpointNamespaceIdentity,
+  sameDurableCheckpointNamespace,
+} from '../persistence/namespace'
+import type {
+  PersistentDirectoryMaterialization,
+  PersistentFileRequest,
+  PersistentFileTransactionPort,
+  PersistentMaterializationPort,
+  PersistentTreeTrace,
+} from '../persistent-tree/contracts'
+import { PersistentTreeOutputSession } from '../persistent-tree/session'
+import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
+import type { ReceiveOperationRepository } from '../workspace/repository'
+import type { WorkspaceContentGate } from '../workspace/stages'
+import type {
+  FinalCheckpointReader,
+  FinalCheckpointRecoveryEvidence,
+  FinalCheckpointRecoveryReader,
+  MaterializedManifestV1,
+} from '../workspace/manifest'
+import type { PackageTemporaryCleanupReceiptV1 } from '../workspace/receipts'
+import type { OriginPrivateWorkspaceBudgetClaim } from './admission'
 import {
-  OriginPrivateStagingAdmission,
-  type OriginPrivateQuotaOptions,
-} from './admission'
+  OriginPrivateWorkspaceCleanupPort,
+  type OriginPrivateWorkspaceCleanupAuthority,
+} from './cleanup-port'
+import type { OriginPrivateWorkspaceNamespace } from './namespace'
+import {
+  OriginPrivatePackageStore,
+  type PackagedArtifactReadPort,
+} from './package-store'
+import { OriginPrivateWorkspaceRoot } from './workspace-root'
+import { OriginPrivateWorkspaceTree } from './workspace-tree'
 
-const DEFAULT_DATABASE_NAME = 'windshare-output-checkpoints'
-const STAGING_ROOT_NAME = '.windshare-receive-staging'
-export const ORIGIN_PRIVATE_BACKEND = 'origin-private-staging'
-
-export interface OriginPrivateStorage {
-  getDirectory(): Promise<FileSystemDirectoryHandle>
-  estimate?(): Promise<{ readonly usage?: number; readonly quota?: number }>
+export interface OriginPrivateCheckpointStore
+extends FileCheckpointJournal, PersistentHandleRepository {
+  close?(): void
 }
 
-export interface OriginPrivateOutputExporter {
-  export(
-    catalog: StagedOutputCatalog,
-    outcome: JobOutcome,
-    signal: AbortSignal,
-  ): Promise<OriginPrivateExportResult>
-  abort?(reason: unknown): Promise<void>
-  retryCleanup?(): Promise<OriginPrivateExportResult>
+export interface OriginPrivateDurableCheckpointStore extends OriginPrivateCheckpointStore {
+  retireOperation(): Promise<void>
 }
 
-export interface OriginPrivateExportResult {
-  readonly cleanupPending: boolean
-  readonly cleanupFailure?: unknown
+export interface OriginPrivateMaterializationOptions {
+  readonly receiveIntent: ReceiveIntent
+  readonly operationRepository: ReceiveOperationRepository
+  readonly workspaceRootHandleId: string
+  readonly workspaceRootHandle: FileSystemDirectoryHandle
+  readonly contentGate: WorkspaceContentGate
+  readonly budgetClaim: OriginPrivateWorkspaceBudgetClaim
+  readonly checkpointStore?: OriginPrivateCheckpointStore
+  readonly checkpointDatabaseName?: string
+  readonly onTrace?: PersistentTreeTrace
 }
 
-export interface OriginPrivateFinalization {
-  readonly committed: true
-  readonly outcome: JobOutcome
-  readonly cleanupPending: boolean
-  readonly cleanupFailure?: unknown
+export interface OriginPrivateWorkspaceBackend {
+  readonly materialization: PersistentMaterializationPort
+  readonly packages: OriginPrivatePackageStore
+  readonly packagedArtifacts: PackagedArtifactReadPort
+  readonly finalCheckpoints: FinalCheckpointReader
+  readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
+  close(): Promise<void>
 }
 
-export const ORIGIN_PRIVATE_EXPORT_COMPLETE: OriginPrivateExportResult = Object.freeze({
-  cleanupPending: false,
-})
-
-export interface OriginPrivateOutputOptions {
-  readonly outputSessionId: string
-  readonly directoryAdmissionScope: DirectoryAdmissionScope
-  /** Stable final intent identity; outputSessionId remains runtime-only. */
-  readonly transferIntentDigest: string
-  /** Stable origin-private root identity for checkpoint ownership. */
-  readonly rootIdentity: string
-  readonly exporter: OriginPrivateOutputExporter
-  readonly storage?: OriginPrivateStorage
-  readonly quota?: OriginPrivateQuotaOptions
-  readonly databaseName?: string
-  readonly crashHook?: CheckpointCrashHook
-  readonly retainAfterExport?: boolean
+export interface OriginPrivateRetainedArtifactBackend {
+  readonly packagedArtifacts: PackagedArtifactReadPort
+  readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
+  close(): Promise<void>
 }
 
-type OriginPrivateState =
-  | 'open'
-  | 'finishing'
-  | 'committed'
-  | 'cleanup-pending'
-  | 'finished'
-  | 'finish-failed'
-  | 'pausing'
-  | 'paused'
-  | 'needs-attention'
-
-export class OriginPrivateOutputSession implements OutputSession {
-  readonly identity: OutputSessionIdentity
-  readonly format = 'zip' as const
-  readonly capabilities: OutputCapabilities
-
-  readonly #inner: PersistentTreeOutputSession
-  readonly #exporter: OriginPrivateOutputExporter
-  readonly #admission: OriginPrivateStagingAdmission
-  readonly #settleResources: (removeStaging: boolean) => Promise<void>
-  readonly #retainAfterExport: boolean
-  #state: OriginPrivateState = 'open'
-  #finishController: AbortController | undefined
-  #finishPromise: Promise<JobSettlement> | undefined
-  #pausePromise: Promise<JobSettlement> | undefined
-  #cleanupPromise: Promise<OriginPrivateFinalization> | undefined
-  #committedOutcome: JobOutcome | undefined
-  #exportCleanupPending = false
-  #exportCleanupFailure: unknown
-  #stagingCleanupPending = false
-  #stagingCleanupFailure: unknown
-
-  constructor(
-    inner: PersistentTreeOutputSession,
-    exporter: OriginPrivateOutputExporter,
-    admission: OriginPrivateStagingAdmission,
-    settleResources: (removeStaging: boolean) => Promise<void>,
-    retainAfterExport: boolean,
-  ) {
-    this.#inner = inner
-    this.#exporter = exporter
-    this.#admission = admission
-    this.#settleResources = settleResources
-    this.#retainAfterExport = retainAfterExport
-    this.identity = inner.identity
-    this.capabilities = inner.capabilities
-  }
-
-  admitDirectory(directory: OutputDirectoryAdmission, signal: AbortSignal): Promise<DirectoryAdmission> {
-    return this.#inner.admitDirectory(directory, signal)
-  }
-
-  finalizeDirectory(
-    admission: DirectoryAdmission,
-    signal: AbortSignal,
-  ): Promise<DirectorySettlement> {
-    return this.#inner.finalizeDirectory(admission, signal)
-  }
-
-  async beginFile(file: OutputFile, signal: AbortSignal): Promise<BeginOutputFileResult> {
-    return this.#inner.runOperation(async (operation) => {
-      signal.throwIfAborted()
-      const fileMutation = operation.acquireFile(file)
-      let transferred = false
-      try {
-        const stagedFile = fileMutation.file
-        const previousFootprint = await operation.stagedFileFootprint(stagedFile.path)
-        signal.throwIfAborted()
-        const rollbackReservation = await this.#admission.reserve(
-          stagedFile.path,
-          stagedFile.exactSize,
-          previousFootprint,
-        )
-        let begun: BeginOutputFileResult & { readonly transaction: PersistentFileTransaction }
-        try {
-          signal.throwIfAborted()
-          begun = await operation.beginFile(fileMutation, signal)
-          transferred = true
-        } catch (error) {
-          try {
-            await rollbackReservation()
-          } catch (rollbackFailure) {
-            throw new OutputSessionCompromisedError('Origin-private file acquisition and quota rollback failed', {
-              cause: new AggregateError(
-                [error, rollbackFailure],
-                'Origin-private file acquisition and quota rollback failed',
-              ),
-            })
-          }
-          throw error
-        }
-        return Object.freeze({
-          durableRanges: begun.durableRanges,
-          transaction: new QuotaTrackedTransaction(
-            begun.transaction,
-            stagedFile,
-            this.#admission,
-          ),
-        })
-      } finally {
-        if (!transferred) fileMutation.release()
-      }
-    })
-  }
-
-  get finalization(): OriginPrivateFinalization | undefined {
-    if (this.#committedOutcome === undefined) return undefined
-    const cleanupFailures = [this.#exportCleanupFailure, this.#stagingCleanupFailure]
-      .filter((failure) => failure !== undefined)
-    const cleanupFailure = cleanupFailures.length < 2
-      ? cleanupFailures[0]
-      : new AggregateError(cleanupFailures, 'Published output cleanup remains pending')
-    return Object.freeze({
-      committed: true,
-      outcome: this.#committedOutcome,
-      cleanupPending: this.#exportCleanupPending || this.#stagingCleanupPending,
-      ...(cleanupFailure === undefined ? {} : { cleanupFailure }),
-    })
-  }
-
-  async completeJob(outcome: JobOutcome, signal: AbortSignal): Promise<JobSettlement> {
-    if (this.#state === 'finished') return COMPLETED_JOB_SETTLEMENT
-    if (this.#state !== 'open') throw new Error('Origin-private output cannot start finalization')
-    signal.throwIfAborted()
-    this.#state = 'finishing'
-    const controller = new AbortController()
-    this.#finishController = controller
-    const detach = forwardAbort(signal, controller)
-    const operation = this.#finish(outcome, controller.signal).catch((error: unknown) => {
-      this.#recordFinishFailure()
-      throw error
-    })
-    this.#finishPromise = operation
-    try {
-      return await operation
-    } finally {
-      detach()
-      if (this.#finishController === controller) this.#finishController = undefined
-    }
-  }
-
-  pauseJob(reason: unknown): Promise<JobSettlement> {
-    if (this.#state === 'finished') return Promise.resolve(COMPLETED_JOB_SETTLEMENT)
-    if (this.#pausePromise !== undefined) return this.#pausePromise
-    if (this.#state === 'finishing' && this.#finishPromise !== undefined) {
-      this.#finishController?.abort(reason)
-      const operation = this.#pauseAfterFinishRace(this.#finishPromise, reason)
-      this.#pausePromise = operation
-      return operation
-    }
-    if (this.#state !== 'open' && this.#state !== 'finish-failed') {
-      return Promise.resolve(needsAttentionJobSettlement(outputFault(
-        FaultScope.OutputPause,
-        OutputFaultCode.MutationAmbiguous,
-      )))
-    }
-    this.#state = 'pausing'
-    const operation = this.#pause(reason)
-    this.#pausePromise = operation
-    return operation
-  }
-
-  async #pauseAfterFinishRace(
-    finishing: Promise<JobSettlement>,
-    reason: unknown,
-  ): Promise<JobSettlement> {
-    try {
-      // Export completion is the publication boundary. If it wins, cancellation
-      // cannot truthfully relabel the already-published ZIP as merely paused.
-      return await finishing
-    } catch {
-      this.#state = 'pausing'
-      return this.#pause(reason)
-    }
-  }
-
-  async #pause(reason: unknown): Promise<JobSettlement> {
-    const failures: unknown[] = []
-    try {
-      const settlement = await this.#inner.pauseJob(reason)
-      if (settlement.kind === JobSettlementKind.NeedsAttention) failures.push(settlement)
-    } catch (error) {
-      failures.push(error)
-    }
-    try {
-      await this.#exporter.abort?.(reason)
-    } catch (error) {
-      failures.push(error)
-    }
-    try {
-      await this.#settleResources(false)
-    } catch (error) {
-      failures.push(error)
-    }
-    if (failures.length > 0) {
-      this.#state = 'needs-attention'
-      return needsAttentionJobSettlement(outputFault(
-        FaultScope.OutputPause,
-        OutputFaultCode.MutationAmbiguous,
-      ))
-    }
-    this.#state = 'paused'
-    return pausedJobSettlement(this.capabilities.durability)
-  }
-
-  retryCleanup(): Promise<OriginPrivateFinalization> {
-    if (this.#committedOutcome === undefined) {
-      return Promise.reject(new Error('Origin-private output has not crossed its publication boundary'))
-    }
-    if (this.#cleanupPromise !== undefined) return this.#cleanupPromise
-    // Deferring the operation installs the shared promise before an exporter or
-    // resource callback can reenter cleanup authority.
-    const operation = Promise.resolve().then(() => this.#performCleanup()).finally(() => {
-      if (this.#cleanupPromise === operation) this.#cleanupPromise = undefined
-    })
-    this.#cleanupPromise = operation
-    return operation
-  }
-
-  async #performCleanup(): Promise<OriginPrivateFinalization> {
-    if (this.#exportCleanupPending && this.#exporter.retryCleanup !== undefined) {
-      try {
-        const result = await this.#exporter.retryCleanup()
-        this.#exportCleanupPending = result.cleanupPending
-        this.#exportCleanupFailure = result.cleanupFailure
-      } catch (error) {
-        this.#exportCleanupPending = true
-        this.#exportCleanupFailure = error
-      }
-    }
-    if (this.#stagingCleanupPending) {
-      try {
-        await this.#settleResources(!this.#retainAfterExport)
-        this.#stagingCleanupPending = false
-        this.#stagingCleanupFailure = undefined
-      } catch (error) {
-        this.#stagingCleanupFailure = error
-      }
-    }
-    this.#state = this.#exportCleanupPending || this.#stagingCleanupPending
-      ? 'cleanup-pending'
-      : 'finished'
-    return this.finalization as OriginPrivateFinalization
-  }
-
-  async #finish(outcome: JobOutcome, signal: AbortSignal): Promise<JobSettlement> {
-    const inner = await this.#inner.completeJob(outcome, signal)
-    if (inner.kind !== JobSettlementKind.Completed) return inner
-    signal.throwIfAborted()
-    const exportResult = await this.#exporter.export(this.#inner.stagedCatalog(), outcome, signal)
-    // Export close is the irreversible publication boundary. Cancellation after
-    // this point may delay cleanup but cannot truthfully change the job outcome.
-    this.#state = 'committed'
-    this.#committedOutcome = outcome
-    this.#exportCleanupPending = exportResult.cleanupPending
-    this.#exportCleanupFailure = exportResult.cleanupFailure
-    this.#stagingCleanupPending = true
-    const finalization = await this.retryCleanup()
-    return finalization.cleanupPending
-      ? needsAttentionJobSettlement(outputFault(
-          FaultScope.OutputPause,
-          OutputFaultCode.MutationAmbiguous,
-        ))
-      : COMPLETED_JOB_SETTLEMENT
-  }
-
-  #recordFinishFailure(): void {
-    if (this.#state === 'finishing') this.#state = 'finish-failed'
-  }
-
+export interface OriginPrivatePackageContinuationBackend {
+  readonly packages: OriginPrivatePackageStore
+  readonly finalCheckpoints: FinalCheckpointRecoveryReader
+  verifyManifestOwnership(manifest: MaterializedManifestV1): Promise<void>
+  verifyTemporaryCleanup(receipt: PackageTemporaryCleanupReceiptV1): Promise<void>
+  close(): Promise<void>
 }
 
-function forwardAbort(source: AbortSignal, target: AbortController): () => void {
-  const abort = () => target.abort(abortError(source))
-  if (source.aborted) {
-    abort()
-    return () => {}
+/**
+ * Opens only after durable admission. The returned surface deliberately omits OPFS and
+ * checkpoint repositories so callers cannot bypass the shared file transaction reducer.
+ */
+export async function openOriginPrivateWorkspaceMaterialization(
+  options: OriginPrivateMaterializationOptions,
+): Promise<PersistentMaterializationPort> {
+  const intent = await validateReceiveIntent(options.receiveIntent)
+  if (intent.plan.kind !== 'workspace-then-publish' || intent.artifact.kind === 'directory-tree') {
+    throw new TypeError('origin-private materialization requires a workspace receive intent')
   }
-  source.addEventListener('abort', abort, { once: true })
-  return () => source.removeEventListener('abort', abort)
-}
-
-function abortError(signal: AbortSignal): unknown {
-  return signal.reason ?? new DOMException('Output finalization aborted', 'AbortError')
-}
-
-class QuotaTrackedTransaction implements OutputFileTransaction {
-  readonly #inner: PersistentFileTransaction
-  readonly #file: OutputFile
-  readonly #admission: OriginPrivateStagingAdmission
-
-  constructor(
-    inner: PersistentFileTransaction,
-    file: OutputFile,
-    admission: OriginPrivateStagingAdmission,
-  ) {
-    this.#inner = inner
-    this.#file = file
-    this.#admission = admission
-  }
-
-  writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void> {
-    const snapshot = data.slice()
-    return this.#inner.runOperation((operation) => operation.writeRange(offset, snapshot, signal))
-  }
-
-  checkpoint(signal: AbortSignal): Promise<VerifiedDurableRanges> {
-    return this.#inner.runOperation((operation) => this.#checkpoint(operation, signal))
-  }
-
-  commit(signal: AbortSignal): Promise<void> {
-    return this.#inner.runOperation(async (operation) => {
-      await this.#checkpoint(operation, signal)
-      signal.throwIfAborted()
-      // Admission can fail closed on quota or cross-tab authority changes. Resolve
-      // that fallible boundary before the inner commit becomes irreversible.
-      const admission = await this.#admission.prepareFileCommit(this.#file.path)
-      try {
-        signal.throwIfAborted()
-        await operation.commitCheckpointed(signal)
-      } catch (error) {
-        try {
-          await admission.rollback()
-        } catch (rollbackError) {
-          throw new OutputSessionCompromisedError('Output commit and admission rollback failed', {
-            cause: new AggregateError([error, rollbackError], 'Output commit and admission rollback failed'),
-          })
-        }
-        throw error
-      }
-      admission.publish()
-      if (!operation.settle()) throw new Error('Committed origin-private file remained active')
-    })
-  }
-
-  retire(reason: unknown): Promise<FileRetirementDisposition> {
-    return this.#inner.runOperation(async (operation) => {
-      let disposition: FileRetirementDisposition | undefined
-      let retirementFailure: unknown
-      try {
-        disposition = await operation.retire(reason)
-      } catch (error) {
-        retirementFailure = error
-      }
-      let releaseFailure: unknown
-      try {
-        await this.#admission.releaseFile(this.#file.path)
-      } catch (error) {
-        releaseFailure = error
-      } finally {
-        operation.settle()
-      }
-      if (retirementFailure !== undefined && releaseFailure !== undefined) {
-        throw new AggregateError([retirementFailure, releaseFailure], 'Output retirement and quota release failed', {
-          cause: retirementFailure,
-        })
-      }
-      if (retirementFailure !== undefined) throw retirementFailure
-      if (releaseFailure !== undefined) throw releaseFailure
-      if (disposition === undefined) throw new Error('Output retirement completed without a disposition')
-      return disposition
-    })
-  }
-
-  pause(reason: unknown): Promise<void> {
-    return this.#inner.runOperation(async (operation) => {
-      try {
-        await operation.pause(reason)
-      } finally {
-        operation.settle()
-      }
-    })
-  }
-
-  async #checkpoint(
-    operation: PersistentFileOperation,
-    signal: AbortSignal,
-  ): Promise<VerifiedDurableRanges> {
-    const ranges = await operation.checkpoint(signal)
-    signal.throwIfAborted()
-    await this.#admission.updateFile(this.#file.path, coveredBytes(ranges))
-    signal.throwIfAborted()
-    return ranges
-  }
-}
-
-export async function openOriginPrivateOutputSession(
-  options: OriginPrivateOutputOptions,
-): Promise<OriginPrivateOutputSession> {
-  const identity = outputSessionIdentity({
-    backend: ORIGIN_PRIVATE_BACKEND,
-    outputSessionId: options.outputSessionId,
+  const binding = durableCheckpointNamespaceIdentity({
+    operationId: intent.operationId,
+    receiveIntentDigest: intent.digest,
+    materializationBindingDigest: intent.plan.workspace.digest,
+    materializerKind: FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE,
+    authorityRef: intent.plan.workspace.repositoryRef,
   })
-  let lease: BrowserOutputSessionLease | undefined
-  let repository: IndexedDbOutputRepository | undefined
-  let admission: OriginPrivateStagingAdmission | undefined
+  const ownsStore = options.checkpointStore === undefined
+  const checkpoints = options.checkpointStore ?? await IndexedDbFileCheckpointRepository.open(
+    binding,
+    options.checkpointDatabaseName,
+  )
+  if (!sameDurableCheckpointNamespace(checkpoints.binding, binding)) {
+    if (ownsStore) checkpoints.close?.()
+    throw new TypeError('origin-private checkpoint store escaped the receive operation')
+  }
   try {
-    const storage = options.storage ?? defaultStorage()
-    const originRoot = await storage.getDirectory()
-    const databaseName = options.databaseName ?? DEFAULT_DATABASE_NAME
-    await ensureOneShotIndexedDbLegacyCleanup(databaseName)
-    repository = await IndexedDbOutputRepository.open(databaseName, {
-      backend: ORIGIN_PRIVATE_BACKEND,
-      transferIntentDigest: options.transferIntentDigest,
-      rootIdentity: options.rootIdentity,
+    const root = new OriginPrivateWorkspaceRoot({
+      operationId: intent.operationId,
+      receiveIntentDigest: intent.digest,
+      workspaceBindingDigest: intent.plan.workspace.digest,
+      authorityRef: intent.plan.workspace.repositoryRef,
+      workspaceRootHandleId: options.workspaceRootHandleId,
+      workspaceRootHandle: options.workspaceRootHandle,
+      repository: options.operationRepository,
+      contentGate: options.contentGate,
+      budgetClaim: options.budgetClaim,
     })
-    lease = await acquireBrowserOutputSessionLease(repository.binding)
-    const stagingRoot = await originRoot.getDirectoryHandle(STAGING_ROOT_NAME, { create: true })
-    const sessionName = await originPrivateStagingNamespaceName(
-      repository.binding.transferIntentDigest,
-    )
-    await convergeCleanup(stagingRoot, sessionName, repository)
-    const sessionRoot = await stagingRoot.getDirectoryHandle(sessionName, { create: true })
-    const tree = BrowserFileSystemTree.forIsolatedNamespace({
-      root: sessionRoot,
-      handles: repository,
+    const session = await PersistentTreeOutputSession.open({
+      tree: new OriginPrivateWorkspaceTree({ root, handles: checkpoints }),
+      checkpoints,
+      ...(options.onTrace === undefined ? {} : { trace: options.onTrace }),
     })
-    const inner = await PersistentTreeOutputSession.open({
-      identity,
-      directoryAdmissionScope: options.directoryAdmissionScope,
-      tree,
-      journal: repository,
-      durability: 'ProcessRestart',
-      ...(options.crashHook === undefined ? {} : { crashHook: options.crashHook }),
-    })
-    admission = await OriginPrivateStagingAdmission.open(
-      `${identity.backend}\0${identity.outputSessionId}`,
-      await inner.stagedOutputTotals(),
-      options.quota ?? quotaFor(storage),
-    )
-    const heldRepository = repository
-    const heldAdmission = admission
-    const settleResources = resourceSettlement(
-      stagingRoot,
-      sessionName,
-      heldRepository,
-      heldAdmission,
-      lease,
-    )
-    return new OriginPrivateOutputSession(
-      inner,
-      options.exporter,
-      heldAdmission,
-      settleResources,
-      options.retainAfterExport ?? false,
-    )
+    return new OriginPrivateMaterializationSession(session, checkpoints, ownsStore)
   } catch (error) {
-    await admission?.release()
-    repository?.close()
-    await lease?.release().catch(() => undefined)
+    if (ownsStore) checkpoints.close?.()
     throw error
   }
 }
 
-function resourceSettlement(
-  stagingRoot: FileSystemDirectoryHandle,
-  sessionName: string,
-  repository: IndexedDbOutputRepository,
-  admission: OriginPrivateStagingAdmission,
-  lease: BrowserOutputSessionLease,
-): (removeStaging: boolean) => Promise<void> {
-  let tail: Promise<void> = Promise.resolve()
-  let released = false
-  return (removeStaging) => {
-    const operation = tail.then(async () => {
-      if (released) return
-      if (removeStaging) {
-        await repository.markCleanup(sessionName)
-        await removeStagingTree(stagingRoot, sessionName)
-        await repository.deleteSessionData()
-        await repository.clearCleanup()
-      }
-      await admission.release()
-      await lease.release()
-      repository.close()
-      released = true
-    })
-    tail = operation.catch(() => undefined)
-    return operation
+/** Production composition keeps checkpoint authority alive through seal, package, and cleanup. */
+export async function openOriginPrivateWorkspaceBackend(options: {
+  readonly receiveIntent: ReceiveIntent
+  readonly operationRepository: ReceiveOperationRepository
+  readonly namespace: OriginPrivateWorkspaceNamespace
+  readonly contentGate: WorkspaceContentGate
+  readonly budgetClaim: OriginPrivateWorkspaceBudgetClaim
+  readonly checkpointStore?: OriginPrivateDurableCheckpointStore
+  readonly checkpointDatabaseName?: string
+  readonly onTrace?: PersistentTreeTrace
+}): Promise<OriginPrivateWorkspaceBackend> {
+  const intent = await validateReceiveIntent(options.receiveIntent)
+  if (intent.plan.kind !== 'workspace-then-publish' || intent.artifact.kind === 'directory-tree' ||
+      options.namespace.operationId !== intent.operationId ||
+      options.namespace.authorityRef !== intent.plan.workspace.repositoryRef) {
+    throw new TypeError('origin-private backend escaped its workspace receive intent')
   }
-}
-
-async function convergeCleanup(
-  stagingRoot: FileSystemDirectoryHandle,
-  sessionName: string,
-  repository: IndexedDbOutputRepository,
-): Promise<void> {
-  const target = await repository.cleanupTarget()
-  if (target === undefined) return
-  if (target !== sessionName) throw new Error('OPFS cleanup marker targets another staging root')
-  await removeStagingTree(stagingRoot, target)
-  await repository.deleteSessionData()
-  await repository.clearCleanup()
-}
-
-async function removeStagingTree(
-  stagingRoot: FileSystemDirectoryHandle,
-  sessionName: string,
-): Promise<void> {
-  try {
-    await stagingRoot.removeEntry(sessionName, { recursive: true })
-  } catch (error) {
-    if (!errorNamed(error, 'NotFoundError')) throw error
-  }
-}
-
-function defaultStorage(): OriginPrivateStorage {
-  const storage = navigator.storage as StorageManager & Partial<OriginPrivateStorage>
-  if (storage.getDirectory === undefined) {
-    throw new DOMException('Origin-private file storage is unavailable', 'NotSupportedError')
-  }
-  return {
-    getDirectory: () => storage.getDirectory?.() as Promise<FileSystemDirectoryHandle>,
-    estimate: () => storage.estimate(),
-  }
-}
-
-function quotaFor(storage: OriginPrivateStorage): OriginPrivateQuotaOptions {
-  if (storage.estimate === undefined) {
-    throw new DOMException('Origin-private quota information is unavailable', 'NotSupportedError')
-  }
-  return { estimate: () => storage.estimate?.() as ReturnType<NonNullable<typeof storage.estimate>> }
-}
-
-export async function originPrivateStagingNamespaceName(
-  transferIntentDigest: string,
-): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(transferIntentDigest),
+  const binding = durableCheckpointNamespaceIdentity({
+    operationId: intent.operationId,
+    receiveIntentDigest: intent.digest,
+    materializationBindingDigest: intent.plan.workspace.digest,
+    materializerKind: FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE,
+    authorityRef: intent.plan.workspace.repositoryRef,
+  })
+  const ownsStore = options.checkpointStore === undefined
+  const checkpoints = options.checkpointStore ?? await IndexedDbFileCheckpointRepository.open(
+    binding,
+    options.checkpointDatabaseName,
   )
-  return `session-${[...new Uint8Array(digest)]
-    .map((value) => value.toString(16).padStart(2, '0'))
-    .join('')}`
-}
-
-export interface OriginPrivateStagingNamespace {
-  readonly stagingRoot: FileSystemDirectoryHandle
-  readonly name: string
-  readonly root: FileSystemDirectoryHandle
-}
-
-/** Opens only the pre-existing namespace certified by the frozen intent. */
-export async function openOriginPrivateStagingNamespace(
-  originRoot: FileSystemDirectoryHandle,
-  transferIntentDigest: string,
-): Promise<OriginPrivateStagingNamespace> {
-  const stagingRoot = await originRoot.getDirectoryHandle(STAGING_ROOT_NAME)
-  const name = await originPrivateStagingNamespaceName(transferIntentDigest)
-  const root = await stagingRoot.getDirectoryHandle(name)
-  return Object.freeze({ stagingRoot, name, root })
-}
-
-/** Called only after export and exact checkpoint/object preflight have succeeded. */
-export async function removeOriginPrivateStagingNamespace(
-  namespace: OriginPrivateStagingNamespace,
-): Promise<void> {
+  if (!sameDurableCheckpointNamespace(checkpoints.binding, binding)) {
+    if (ownsStore) checkpoints.close?.()
+    throw new TypeError('origin-private checkpoint store escaped the receive operation')
+  }
   try {
-    const current = await namespace.stagingRoot.getDirectoryHandle(namespace.name)
-    if (!await current.isSameEntry(namespace.root)) {
-      throw new DOMException('OPFS staging namespace identity changed', 'InvalidModificationError')
-    }
-    await removeStagingTree(namespace.stagingRoot, namespace.name)
+    const root = new OriginPrivateWorkspaceRoot({
+      operationId: intent.operationId,
+      receiveIntentDigest: intent.digest,
+      workspaceBindingDigest: intent.plan.workspace.digest,
+      authorityRef: intent.plan.workspace.repositoryRef,
+      workspaceRootHandleId: options.namespace.rootHandleId,
+      workspaceRootHandle: options.namespace.root,
+      repository: options.operationRepository,
+      contentGate: options.contentGate,
+      budgetClaim: options.budgetClaim,
+    })
+    const treeSession = await PersistentTreeOutputSession.open({
+      tree: new OriginPrivateWorkspaceTree({ root, handles: checkpoints }),
+      checkpoints,
+      ...(options.onTrace === undefined ? {} : { trace: options.onTrace }),
+    })
+    const materialization = new OriginPrivateMaterializationSession(
+      treeSession,
+      checkpoints,
+      false,
+    )
+    const packages = new OriginPrivatePackageStore({
+      root,
+      operationRepository: options.operationRepository,
+      checkpointHandles: checkpoints,
+    })
+    const cleanup = new OriginPrivateWorkspaceCleanupPort({
+      root,
+      namespace: options.namespace,
+      operationRepository: options.operationRepository,
+      checkpoints,
+      packages,
+    })
+    const finalCheckpoints: FinalCheckpointReader = Object.freeze({
+      readFinalCheckpoint: async (recordId: string, checkpointGeneration: bigint) => {
+        try {
+          return await checkpoints.finalCheckpointProof(recordId, checkpointGeneration)
+        } catch (error) {
+          if (error instanceof DOMException && error.name === 'NotFoundError') return undefined
+          throw error
+        }
+      },
+    })
+    return new OriginPrivateWorkspaceBackendSession({
+      materialization,
+      packages,
+      finalCheckpoints,
+      cleanup,
+      checkpoints,
+      ownsStore,
+    })
   } catch (error) {
-    if (!errorNamed(error, 'NotFoundError')) throw error
+    if (ownsStore) checkpoints.close?.()
+    throw error
   }
 }
 
-function errorNamed(error: unknown, name: string): boolean {
-  return typeof error === 'object' && error !== null &&
-    'name' in error && (error as { readonly name?: unknown }).name === name
+/** Reopens a sealed package without restoring any authority to mutate raw materialization. */
+export async function openOriginPrivateRetainedArtifactBackend(options: {
+  readonly receiveIntent: ReceiveIntent
+  readonly operationRepository: ReceiveOperationRepository
+  readonly namespace: OriginPrivateWorkspaceNamespace
+  readonly checkpointStore?: OriginPrivateDurableCheckpointStore
+  readonly checkpointDatabaseName?: string
+}): Promise<OriginPrivateRetainedArtifactBackend> {
+  const intent = await validateReceiveIntent(options.receiveIntent)
+  if (intent.plan.kind !== 'workspace-then-publish' || intent.artifact.kind === 'directory-tree' ||
+      options.namespace.operationId !== intent.operationId ||
+      options.namespace.authorityRef !== intent.plan.workspace.repositoryRef) {
+    throw new TypeError('retained origin-private artifact escaped its workspace receive intent')
+  }
+  const binding = durableCheckpointNamespaceIdentity({
+    operationId: intent.operationId,
+    receiveIntentDigest: intent.digest,
+    materializationBindingDigest: intent.plan.workspace.digest,
+    materializerKind: FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE,
+    authorityRef: intent.plan.workspace.repositoryRef,
+  })
+  const ownsStore = options.checkpointStore === undefined
+  const checkpoints = options.checkpointStore ?? await IndexedDbFileCheckpointRepository.open(
+    binding,
+    options.checkpointDatabaseName,
+  )
+  if (!sameDurableCheckpointNamespace(checkpoints.binding, binding)) {
+    if (ownsStore) checkpoints.close?.()
+    throw new TypeError('retained package checkpoint store escaped the receive operation')
+  }
+  try {
+    const root = new OriginPrivateWorkspaceRoot({
+      operationId: intent.operationId,
+      receiveIntentDigest: intent.digest,
+      workspaceBindingDigest: intent.plan.workspace.digest,
+      authorityRef: intent.plan.workspace.repositoryRef,
+      workspaceRootHandleId: options.namespace.rootHandleId,
+      workspaceRootHandle: options.namespace.root,
+      repository: options.operationRepository,
+    })
+    await root.authorize()
+    const packages = new OriginPrivatePackageStore({
+      root,
+      operationRepository: options.operationRepository,
+      checkpointHandles: checkpoints,
+    })
+    const cleanup = new OriginPrivateWorkspaceCleanupPort({
+      root,
+      namespace: options.namespace,
+      operationRepository: options.operationRepository,
+      checkpoints,
+      packages,
+    })
+    return new OriginPrivateRetainedArtifactBackendSession({
+      packages,
+      cleanup,
+      checkpoints,
+      ownsStore,
+    })
+  } catch (error) {
+    if (ownsStore) checkpoints.close?.()
+    throw error
+  }
 }
 
-function coveredBytes(ranges: VerifiedDurableRanges): bigint {
-  return ranges.ranges.reduce((total, range) => total + range.end - range.start, 0n)
+/** Reopens only the sealed read/package surface; no caller can mutate or re-receive raw content. */
+export async function openOriginPrivatePackageContinuationBackend(options: {
+  readonly receiveIntent: ReceiveIntent
+  readonly operationRepository: ReceiveOperationRepository
+  readonly namespace: OriginPrivateWorkspaceNamespace
+  readonly contentGate: WorkspaceContentGate
+  readonly budgetClaim: OriginPrivateWorkspaceBudgetClaim
+  readonly checkpointStore?: OriginPrivateDurableCheckpointStore
+  readonly checkpointDatabaseName?: string
+}): Promise<OriginPrivatePackageContinuationBackend> {
+  const intent = await validateReceiveIntent(options.receiveIntent)
+  if (intent.plan.kind !== 'workspace-then-publish' || intent.artifact.kind === 'directory-tree' ||
+      options.namespace.operationId !== intent.operationId ||
+      options.namespace.authorityRef !== intent.plan.workspace.repositoryRef) {
+    throw new TypeError('package continuation escaped its workspace receive intent')
+  }
+  const binding = durableCheckpointNamespaceIdentity({
+    operationId: intent.operationId,
+    receiveIntentDigest: intent.digest,
+    materializationBindingDigest: intent.plan.workspace.digest,
+    materializerKind: FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE,
+    authorityRef: intent.plan.workspace.repositoryRef,
+  })
+  const ownsStore = options.checkpointStore === undefined
+  const checkpoints = options.checkpointStore ?? await IndexedDbFileCheckpointRepository.open(
+    binding,
+    options.checkpointDatabaseName,
+  )
+  if (!sameDurableCheckpointNamespace(checkpoints.binding, binding)) {
+    if (ownsStore) checkpoints.close?.()
+    throw new TypeError('package continuation checkpoint store escaped the receive operation')
+  }
+  try {
+    const root = new OriginPrivateWorkspaceRoot({
+      operationId: intent.operationId,
+      receiveIntentDigest: intent.digest,
+      workspaceBindingDigest: intent.plan.workspace.digest,
+      authorityRef: intent.plan.workspace.repositoryRef,
+      workspaceRootHandleId: options.namespace.rootHandleId,
+      workspaceRootHandle: options.namespace.root,
+      repository: options.operationRepository,
+      contentGate: options.contentGate,
+      budgetClaim: options.budgetClaim,
+    })
+    await root.authorize()
+    const tree = new OriginPrivateWorkspaceTree({ root, handles: checkpoints })
+    const packages = new OriginPrivatePackageStore({
+      root,
+      operationRepository: options.operationRepository,
+      checkpointHandles: checkpoints,
+    })
+    return new OriginPrivatePackageContinuationBackendSession({
+      operationId: intent.operationId,
+      tree,
+      packages,
+      checkpoints,
+      ownsStore,
+    })
+  } catch (error) {
+    if (ownsStore) checkpoints.close?.()
+    throw error
+  }
 }
+
+class OriginPrivateMaterializationSession implements PersistentMaterializationPort {
+  readonly #session: PersistentTreeOutputSession
+  readonly #checkpoints: OriginPrivateCheckpointStore
+  readonly #ownsStore: boolean
+  #closed = false
+
+  constructor(
+    session: PersistentTreeOutputSession,
+    checkpoints: OriginPrivateCheckpointStore,
+    ownsStore: boolean,
+  ) {
+    this.#session = session
+    this.#checkpoints = checkpoints
+    this.#ownsStore = ownsStore
+  }
+
+  beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
+    return this.#session.beginFile(request)
+  }
+
+  ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization> {
+    return this.#session.ensureDirectory(path)
+  }
+
+  async close(): Promise<void> {
+    if (this.#closed) return
+    this.#closed = true
+    try {
+      await this.#session.close()
+    } finally {
+      if (this.#ownsStore) this.#checkpoints.close?.()
+    }
+  }
+}
+
+class OriginPrivateWorkspaceBackendSession implements OriginPrivateWorkspaceBackend {
+  readonly materialization: PersistentMaterializationPort
+  readonly packages: OriginPrivatePackageStore
+  readonly packagedArtifacts: PackagedArtifactReadPort
+  readonly finalCheckpoints: FinalCheckpointReader
+  readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
+  readonly #checkpoints: OriginPrivateDurableCheckpointStore
+  readonly #ownsStore: boolean
+  #closed = false
+
+  constructor(input: {
+    readonly materialization: PersistentMaterializationPort
+    readonly packages: OriginPrivatePackageStore
+    readonly finalCheckpoints: FinalCheckpointReader
+    readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
+    readonly checkpoints: OriginPrivateDurableCheckpointStore
+    readonly ownsStore: boolean
+  }) {
+    this.materialization = input.materialization
+    this.packages = input.packages
+    this.packagedArtifacts = input.packages
+    this.finalCheckpoints = input.finalCheckpoints
+    this.cleanup = input.cleanup
+    this.#checkpoints = input.checkpoints
+    this.#ownsStore = input.ownsStore
+  }
+
+  async close(): Promise<void> {
+    if (this.#closed) return
+    this.#closed = true
+    try {
+      await this.materialization.close()
+    } finally {
+      if (this.#ownsStore) this.#checkpoints.close?.()
+    }
+  }
+}
+
+class OriginPrivateRetainedArtifactBackendSession implements OriginPrivateRetainedArtifactBackend {
+  readonly packagedArtifacts: PackagedArtifactReadPort
+  readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
+  readonly close: () => Promise<void>
+
+  constructor(input: {
+    readonly packages: OriginPrivatePackageStore
+    readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
+    readonly checkpoints: OriginPrivateDurableCheckpointStore
+    readonly ownsStore: boolean
+  }) {
+    this.packagedArtifacts = input.packages
+    this.cleanup = input.cleanup
+    this.close = checkpointStoreCloser(input.checkpoints, input.ownsStore)
+  }
+}
+
+class OriginPrivatePackageContinuationBackendSession
+implements OriginPrivatePackageContinuationBackend {
+  readonly packages: OriginPrivatePackageStore
+  readonly finalCheckpoints: FinalCheckpointRecoveryReader
+  readonly #operationId: string
+  readonly #tree: OriginPrivateWorkspaceTree
+  readonly close: () => Promise<void>
+
+  constructor(input: {
+    readonly operationId: string
+    readonly tree: OriginPrivateWorkspaceTree
+    readonly packages: OriginPrivatePackageStore
+    readonly checkpoints: OriginPrivateDurableCheckpointStore
+    readonly ownsStore: boolean
+  }) {
+    this.#operationId = input.operationId
+    this.#tree = input.tree
+    this.packages = input.packages
+    this.close = checkpointStoreCloser(input.checkpoints, input.ownsStore)
+    this.finalCheckpoints = Object.freeze({
+      readFinalCheckpoint: async (recordId: string, checkpointGeneration: bigint) => {
+        try {
+          return await input.checkpoints.finalCheckpointProof(recordId, checkpointGeneration)
+        } catch (error) {
+          if (error instanceof DOMException && error.name === 'NotFoundError') return undefined
+          throw error
+        }
+      },
+      recoverFinalCheckpoint: (evidence: FinalCheckpointRecoveryEvidence) =>
+        recoverFinalCheckpoint(input.checkpoints, evidence),
+    })
+  }
+
+  async verifyManifestOwnership(manifest: MaterializedManifestV1): Promise<void> {
+    if (manifest.operationId !== this.#operationId) {
+      throw new TypeError('materialized manifest escaped the package continuation')
+    }
+    for (const entry of manifest.entries) {
+      if (entry.kind === 'directory') {
+        if (!await this.#tree.validateDirectory(entry.artifactPath, entry.ownedObjectId)) {
+          throw new TargetOwnershipUnknownError('commit', this.#operationId)
+        }
+        continue
+      }
+      const file = await this.packages.readOwnedFile(entry.ownedObjectId)
+      if (BigInt(file.size) !== entry.exactSize) {
+        throw new TargetOwnershipUnknownError('commit', this.#operationId)
+      }
+    }
+  }
+
+  async verifyTemporaryCleanup(receipt: PackageTemporaryCleanupReceiptV1): Promise<void> {
+    if (receipt.operationId !== this.#operationId) {
+      throw new TypeError('temporary package cleanup escaped the package continuation')
+    }
+    const current = await this.packages.cleanupPackage(receipt.packageOwnedObjectId)
+    if (current.operationId !== receipt.operationId ||
+        current.packageOwnedObjectId !== receipt.packageOwnedObjectId ||
+        current.packageHandleId !== receipt.packageHandleId || current.result !== 'already-absent') {
+      throw new TargetOwnershipUnknownError('cleanup', this.#operationId)
+    }
+  }
+
+}
+
+function checkpointStoreCloser(
+  checkpoints: OriginPrivateDurableCheckpointStore,
+  ownsStore: boolean,
+): () => Promise<void> {
+  let closed = false
+  return async () => {
+    if (closed) return
+    closed = true
+    if (ownsStore) checkpoints.close?.()
+  }
+}
+
+async function recoverFinalCheckpoint(
+  checkpoints: OriginPrivateDurableCheckpointStore,
+  evidence: FinalCheckpointRecoveryEvidence,
+): Promise<FinalFileCheckpointProof | undefined> {
+  const matches: FinalFileCheckpointProof[] = []
+  let cursor: string | undefined
+  do {
+    const page = await checkpoints.scanCommitted({
+      direction: 'ascending',
+      fileId: evidence.fileId,
+      ...(cursor === undefined ? {} : { cursor }),
+    })
+    for (const record of page.records) {
+      let proof: FinalFileCheckpointProof
+      try {
+        proof = finalFileCheckpointProof(record)
+      } catch {
+        continue
+      }
+      if (proof.fileRevision === evidence.fileRevision &&
+          proof.exactSize === evidence.exactSize && proof.ownedObjectId === evidence.ownedObjectId &&
+          proof.recordDigest === evidence.recordDigest &&
+          proof.checkpointGeneration === evidence.checkpointGeneration &&
+          samePath(proof.canonicalPath, evidence.artifactPath)) {
+        matches.push(proof)
+      }
+    }
+    cursor = page.nextCursor
+  } while (cursor !== undefined)
+  if (matches.length > 1) throw new TypeError('final checkpoint authority is ambiguous')
+  return matches[0]
+}
+
+function samePath(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((segment, index) => segment === right[index])
+}
+
+export type {
+  PersistentFileRequest,
+  PersistentFileTransactionPort,
+  PersistentMaterializationPort,
+} from '../persistent-tree/contracts'

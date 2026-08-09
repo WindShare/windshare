@@ -5,6 +5,7 @@ import type {
   V2OpenedRevision,
   V2RevisionReader,
 } from '../../content/v2-session-services'
+import { encodeBase64Url } from '../../crypto/bytes'
 import {
   OutputTransactionContractError,
   retireOutputFileTransaction,
@@ -15,7 +16,9 @@ import {
   OutputBudgetExceededError,
   OutputSessionCompromisedError,
   TransferPauseRequestedError,
+  snapshotOpenedOutputRevision,
   snapshotOutputFile,
+  snapshotOutputFileRequest,
   type OutputFile,
   type OutputSession,
 } from '../output-session'
@@ -68,18 +71,60 @@ export async function transferV2File(
   let transaction: BoundOutputFileTransaction | undefined
   let primaryFailure: NormalizedV2FileTransferFailure | undefined
   try {
-    acquired = await options.revisions.open(pending.entry.id, options.signal)
-    opened = validateOpenedFileRevision(
-      options.descriptor,
-      pending.entry,
-      acquired,
-    )
-    const outputFile = outputFileFor(options.output, pending, opened)
+    let revisionOpenAttempted = false
+    let revisionOpenFailure: Readonly<{ readonly reason: unknown }> | undefined
+    const request = snapshotOutputFileRequest({
+      source: {
+        shareInstance: encodeBase64Url(options.descriptor.shareInstance),
+        fileId: pending.entry.idText,
+      },
+      sourcePath: pending.sourcePath,
+      artifactPath: pending.artifactPath,
+      expectedSize: pending.entry.expectedSize,
+      ...(pending.parent.admission === undefined
+        ? {}
+        : { parentAdmission: pending.parent.admission }),
+      ...(pending.modifiedTime === undefined || !options.output.capabilities.modificationTime
+        ? {}
+        : { modifiedTime: pending.modifiedTime }),
+      openRevision: async (signal) => {
+        if (revisionOpenAttempted) {
+          throw new OutputTransactionContractError(
+            'output adapter invoked the authenticated revision callback more than once',
+          )
+        }
+        revisionOpenAttempted = true
+        try {
+          acquired = await options.revisions.open(pending.entry.id, signal)
+          opened = validateOpenedFileRevision(options.descriptor, pending.entry, acquired)
+          return snapshotOpenedOutputRevision({
+            shareInstance: opened.descriptor.shareInstanceId,
+            fileId: opened.descriptor.fileIdText,
+            fileRevision: opened.descriptor.fileRevisionText,
+            exactSize: opened.descriptor.exactSize,
+          })
+        } catch (reason) {
+          // Opening happens inside the adapter call, but remains source authority.
+          // Preserve that boundary so a file-local source fault is never promoted
+          // into an output mutation fault merely because the adapter awaited it.
+          revisionOpenFailure = Object.freeze({ reason })
+          throw reason
+        }
+      },
+    })
     const begun = await outputOperation(
       options.signal,
       'Unable to begin the output file transaction',
-      () => options.output.beginFile(outputFile, options.signal),
+      'output-write-failed',
+      () => options.output.beginFile(request, options.signal),
+      () => revisionOpenFailure,
     )
+    if (opened === undefined) {
+      throw new OutputTransactionContractError(
+        'output adapter created a transaction without opening an authenticated revision',
+      )
+    }
+    const outputFile = outputFileFor(options.output, pending, opened)
     transaction = ownOutputFileTransaction(begun)
     const bound = bindOutputFileTransaction(begun, outputFile, options.output)
     transaction = bound.transaction
@@ -97,11 +142,13 @@ export async function transferV2File(
         await outputOperation(
           options.signal,
           'Unable to write the output file range',
+          'output-write-failed',
           () => transaction?.writeRange(requested.start, data, options.signal) ?? Promise.resolve(),
         )
         await outputOperation(
           options.signal,
           'Unable to checkpoint the output file',
+          'output-write-failed',
           () => transaction?.checkpoint(options.signal) ?? Promise.resolve(undefined),
         )
         options.onWriteAcknowledged(BigInt(data.byteLength), !wrote)
@@ -111,6 +158,7 @@ export async function transferV2File(
     await outputOperation(
       options.signal,
       'Unable to commit the output file',
+      'output-commit-failed',
       () => transaction?.commit(options.signal) ?? Promise.resolve(),
     )
     options.onComplete(outputFile.exactSize)
@@ -222,9 +270,12 @@ function outputFileFor(
       fileId: opened.descriptor.fileIdText,
       fileRevision: opened.descriptor.fileRevisionText,
     },
-    path: pending.path,
+    sourcePath: pending.sourcePath,
+    artifactPath: pending.artifactPath,
     exactSize: opened.descriptor.exactSize,
-    parentAdmission: pending.parentAdmission,
+    ...(pending.parent.admission === undefined
+      ? {}
+      : { parentAdmission: pending.parent.admission }),
     ...(pending.modifiedTime === undefined || !output.capabilities.modificationTime
       ? {}
       : { modifiedTime: pending.modifiedTime }),
@@ -271,11 +322,15 @@ async function readAtomicRange(
 async function outputOperation<T>(
   signal: AbortSignal,
   message: string,
+  reason: 'output-write-failed' | 'output-commit-failed',
   operation: () => Promise<T>,
+  collaboratorFailure?: () => Readonly<{ readonly reason: unknown }> | undefined,
 ): Promise<T> {
   try {
     return await operation()
   } catch (cause) {
+    const collaborator = collaboratorFailure?.()
+    if (collaborator !== undefined) throw collaborator.reason
     if (cause instanceof OutputTransactionContractError ||
         cause instanceof BoundaryFaultError ||
         cause instanceof TransferPauseRequestedError ||
@@ -283,6 +338,6 @@ async function outputOperation<T>(
         cause instanceof OutputSessionCompromisedError ||
         cause instanceof V2OutputPausedError ||
         signal.aborted) throw cause
-    throw new V2FileOutputError(message, { cause })
+    throw new V2FileOutputError(message, reason, { cause })
   }
 }

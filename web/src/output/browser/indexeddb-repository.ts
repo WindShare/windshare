@@ -1,373 +1,496 @@
-import type {
-  CheckpointNamespaceBinding,
-  OutputCheckpointJournal,
-  OutputJournalPage,
-  OutputJournalScan,
-  PersistedOutputRecord,
-} from '../persistence/journal'
 import {
-  OUTPUT_CHECKPOINT_PAGE_RECORD_LIMIT,
-  outputRecordKey,
-  recordBelongsToCheckpointNamespace,
-  snapshotOutputRecord,
-} from '../persistence/journal'
-import {
-  FILE_CHECKPOINT_NAMESPACE,
-  FILE_CHECKPOINT_OWNERSHIP_MARKER,
+  FILE_CHECKPOINT_COMMIT_CANDIDATE,
+  MAX_CHECKPOINT_AUXILIARY_ENTRIES_PER_OPERATION,
+  MAX_CHECKPOINT_RECORDS_PER_OPERATION,
+  decodeFileCheckpointV2,
+  encodeFileCheckpointV2,
+  validateFileCheckpoint,
+  validateFileCheckpointTransition,
+  type FileCheckpointV2,
 } from '../persistence/checkpoint'
 import {
-  durableCheckpointNamespaceIdentity,
-  durableCheckpointNamespaceKey,
-} from '../persistence/namespace'
+  checkpointMatchesNamespace,
+  finalFileCheckpointProof,
+  validateFileCheckpointPage,
+  type CheckpointNamespaceBinding,
+  type FileCheckpointJournal,
+  type FileCheckpointPage,
+  type FileCheckpointScan,
+  type FinalFileCheckpointProof,
+  type PersistentHandleRecord,
+  type PersistentHandleInventoryRepository,
+  type PersistentHandleRepository,
+} from '../persistence/journal'
 import {
-  INDEXEDDB_CHECKPOINT_CANDIDATE_STORE as CANDIDATE_STORE,
-  INDEXEDDB_CHECKPOINT_CLEANUP_STORE as CLEANUP_STORE,
-  INDEXEDDB_CHECKPOINT_COMMITTED_STORE as COMMITTED_STORE,
-  INDEXEDDB_CHECKPOINT_HANDLE_STORE as HANDLE_STORE,
-  INDEXEDDB_CHECKPOINT_METADATA_STORE as METADATA_STORE,
-  INDEXEDDB_CHECKPOINT_NAMESPACE_INDEX as NAMESPACE_INDEX,
-  INDEXEDDB_PAUSED_TASK_DESCRIPTOR_STORE,
-  INDEXEDDB_RESUME_STATE_DISCARD_STORE,
-  INDEXEDDB_ROOT_CAPABILITY_STORE,
+  operationRecordId,
+  RECEIVE_RECORD_LIFECYCLE_STATE,
+  validateManifestPageRecord,
+  validatePersistedReceiveRecord,
+  validateReceiveOperationHandleRecord,
+  validateReceiveOperationLeaseRecord,
+  type ManifestPageRecord,
+  type PersistedReceiveRecord,
+  type ReceiveOperationHandleRecord,
+  type ReceiveOperationLeaseRecord,
+  type ReceiveRecordKind,
+} from '../workspace/records'
+import {
+  equalCanonicalBytes,
+  snapshotIdentity,
+} from '../workspace/canonical'
+import type { ReceiveLifecycleState } from '../workspace/state'
+import { decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
+import {
+  prepareReceiveOperationTransition,
+  type PreparedReceiveOperationTransition,
+  type ReceiveOperationRepository,
+  type ReceiveOperationHandleInventoryRepository,
+  type ReceiveOperationTransition,
+} from '../workspace/repository'
+import {
+  DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
+  INDEXEDDB_BY_OPERATION_FILE_INDEX,
+  INDEXEDDB_BY_OPERATION_INDEX,
+  INDEXEDDB_BY_OPERATION_KIND_INDEX,
+  INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+  INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+  INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
+  INDEXEDDB_RECEIVE_HANDLE_STORE,
+  INDEXEDDB_RECEIVE_LEASE_STORE,
+  INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE,
+  INDEXEDDB_RECEIVE_RECORD_STORE,
+  isIndexedDbRecord,
   openIndexedDbCheckpointDatabase,
   requestResult,
   transactionCompletion,
 } from './indexeddb-database'
-import {
-  sameResumeStateDiscardMarker,
-  snapshotResumeStateDiscardMarker,
-  storedResumeStateDiscardMarker,
-  type IndexedDbResumeStateDiscardMarker,
-  type IndexedDbResumeStateDiscardPhase,
-} from './resume-state/records'
 
-export {
-  CHECKPOINT_DATABASE_VERSION,
-  DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
-  INDEXEDDB_CHECKPOINT_METADATA_STORE,
-  INDEXEDDB_PAUSED_TASK_DESCRIPTOR_STORE,
-  INDEXEDDB_RESUME_STATE_DISCARD_STORE,
-  INDEXEDDB_ROOT_CAPABILITY_STORE,
-  openIndexedDbCheckpointDatabase,
-} from './indexeddb-database'
-export {
-  resolveIndexedDbRootIdentity,
-  verifyIndexedDbRootIdentity,
-} from './indexeddb-root-binding'
-export type {
-  IndexedDbResumeStateDiscardMarker,
-  IndexedDbResumeStateDiscardPhase,
-} from './resume-state/records'
+const RECEIVE_OPERATION_RECORD_BOUND = 1_048_576
+const RECEIVE_OPERATION_PAGE_BOUND = 1_048_576
+const RECEIVE_OPERATION_HANDLE_BOUND = 1_048_576
 
-interface StoredRecord {
+interface StoredFileCheckpoint {
   readonly id: string
-  readonly namespace: string
-  readonly record: PersistedOutputRecord
+  readonly operationId: string
+  readonly fileId: string
+  readonly envelope: Uint8Array<ArrayBuffer>
 }
 
-interface StoredHandle {
-  readonly id: string
-  readonly namespace: string
-  readonly handle: FileSystemHandle
+export class IndexedDbOperationConcurrencyError extends DOMException {
+  constructor(message = 'Receive operation generation or lease changed') {
+    super(message, 'InvalidStateError')
+  }
 }
 
-interface NamespaceMetadata {
-  readonly id: string
-  readonly marker: typeof FILE_CHECKPOINT_OWNERSHIP_MARKER
-  readonly namespaceName: typeof FILE_CHECKPOINT_NAMESPACE
-  readonly backend: string
-  readonly transferIntentDigest: string
-  readonly rootIdentity: string
-  readonly state: 'active' | 'cleanup-pending'
-  readonly cleanupStep: number
-}
-
-interface StoredCleanupMarker {
-  readonly id: string
-  readonly namespace: string
-  readonly target: string
-  readonly step: number
-}
-
-export interface PersistentHandleRepository {
-  putHandle(identity: string, handle: FileSystemHandle): Promise<void>
-  getHandle(identity: string): Promise<FileSystemHandle | undefined>
-  deleteHandle(identity: string): Promise<void>
-}
-
-/** A bounded, namespace-owned IndexedDB adapter for FileCheckpointV1. */
-export class IndexedDbOutputRepository implements OutputCheckpointJournal, PersistentHandleRepository {
+export class IndexedDbFileCheckpointRepository
+implements FileCheckpointJournal, PersistentHandleRepository, PersistentHandleInventoryRepository {
   readonly binding: CheckpointNamespaceBinding
   readonly #database: IDBDatabase
-  readonly #namespace: string
   #closed = false
-  #cleanupPromise: Promise<IndexedDbCleanupReport> | undefined
 
-  private constructor(
-    database: IDBDatabase,
-    binding: CheckpointNamespaceBinding,
-  ) {
+  private constructor(database: IDBDatabase, binding: CheckpointNamespaceBinding) {
     this.#database = database
-    this.binding = durableCheckpointNamespaceIdentity(binding)
-    this.#namespace = durableCheckpointNamespaceKey(this.binding)
-    database.addEventListener('versionchange', () => {
-      this.#closed = true
-      database.close()
-    })
+    this.binding = binding
+    database.addEventListener('versionchange', () => this.close())
   }
 
   static async open(
-    databaseName: string,
     binding: CheckpointNamespaceBinding,
-  ): Promise<IndexedDbOutputRepository> {
-    return IndexedDbOutputRepository.#open(databaseName, binding, true)
+    databaseName = DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
+  ): Promise<IndexedDbFileCheckpointRepository> {
+    return new IndexedDbFileCheckpointRepository(
+      await openIndexedDbCheckpointDatabase(databaseName),
+      binding,
+    )
   }
 
-  static async openExisting(
-    databaseName: string,
-    binding: CheckpointNamespaceBinding,
-  ): Promise<IndexedDbOutputRepository> {
-    return IndexedDbOutputRepository.#open(databaseName, binding, false)
-  }
-
-  static async #open(
-    databaseName: string,
-    binding: CheckpointNamespaceBinding,
-    initialize: boolean,
-  ): Promise<IndexedDbOutputRepository> {
-    if (databaseName.length === 0) throw new TypeError('IndexedDB name must not be empty')
-    const database = await openIndexedDbCheckpointDatabase(databaseName)
-    const repository = new IndexedDbOutputRepository(database, binding)
-    try {
-      if (initialize) await repository.#ensureOwnershipMetadata()
-      else await repository.#requireOwnershipMetadata()
-      return repository
-    } catch (error) {
-      repository.close()
-      throw error
+  async putCandidate(record: FileCheckpointV2): Promise<void> {
+    this.#assertOpen()
+    this.#assertBinding(record)
+    if (record.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE) {
+      throw new TypeError('candidate store accepts only candidate checkpoints')
     }
-  }
-
-  scanCommitted(scan: OutputJournalScan): Promise<OutputJournalPage> { return this.#scan(COMMITTED_STORE, scan) }
-  scanCandidates(scan: OutputJournalScan): Promise<OutputJournalPage> { return this.#scan(CANDIDATE_STORE, scan) }
-
-  async writeCandidate(record: PersistedOutputRecord): Promise<void> {
-    this.#assertRecord(record)
-    const transaction = this.#transaction(CANDIDATE_STORE, 'readwrite')
-    transaction.objectStore(CANDIDATE_STORE).put(this.#storedRecord(record))
+    const transaction = this.#database.transaction(
+      INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+      'readwrite',
+    )
+    const store = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE)
+    const existing = await requestResult<unknown>(store.get(record.recordId))
+    if (existing === undefined) await assertCheckpointCapacity(store, record.operationId)
+    else validateFileCheckpointTransition(readStoredCheckpoint(existing), record)
+    store.put(storedCheckpoint(record))
     await transactionCompletion(transaction)
   }
 
-  async flushCandidate(key: string): Promise<void> {
-    const transaction = this.#transaction(CANDIDATE_STORE, 'readonly')
-    const candidate = await requestResult<StoredRecord | undefined>(transaction.objectStore(CANDIDATE_STORE).get(this.#key(key)))
-    await transactionCompletion(transaction)
-    if (candidate === undefined) throw new Error('Output checkpoint candidate was not durably written')
-    this.#assertStoredRecord(candidate)
-  }
-
-  async commitCandidate(key: string): Promise<void> {
-    const transaction = this.#transaction([CANDIDATE_STORE, COMMITTED_STORE], 'readwrite')
-    const candidates = transaction.objectStore(CANDIDATE_STORE)
-    const candidate = await requestResult<StoredRecord | undefined>(candidates.get(this.#key(key)))
-    if (candidate === undefined) {
-      transaction.abort()
-      throw new Error('Cannot commit a missing output checkpoint candidate')
+  async commit(record: FileCheckpointV2): Promise<void> {
+    this.#assertOpen()
+    this.#assertBinding(record)
+    if (record.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE) {
+      throw new TypeError('committed checkpoint must have verified reducer state')
     }
-    this.#assertStoredRecord(candidate)
-    transaction.objectStore(COMMITTED_STORE).put(candidate)
-    candidates.delete(candidate.id)
+    const transaction = this.#database.transaction([
+      INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+    ], 'readwrite')
+    const candidates = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE)
+    const committed = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE)
+    const [candidateValue, committedValue] = await Promise.all([
+      requestResult<unknown>(candidates.get(record.recordId)),
+      requestResult<unknown>(committed.get(record.recordId)),
+    ])
+    if (candidateValue === undefined && committedValue === undefined) {
+      abortConcurrency(transaction, 'checkpoint commit has no candidate authority')
+    }
+    if (candidateValue !== undefined) {
+      validateFileCheckpointTransition(readStoredCheckpoint(candidateValue), record)
+    }
+    if (committedValue !== undefined) {
+      validateFileCheckpointTransition(readStoredCheckpoint(committedValue), record)
+    } else {
+      await assertCheckpointCapacity(committed, record.operationId)
+    }
+    committed.put(storedCheckpoint(record))
+    candidates.delete(record.recordId)
     await transactionCompletion(transaction)
   }
 
-  async readCommitted(key: string): Promise<PersistedOutputRecord | undefined> {
-    const transaction = this.#transaction(COMMITTED_STORE, 'readonly')
-    const stored = await requestResult<StoredRecord | undefined>(transaction.objectStore(COMMITTED_STORE).get(this.#key(key)))
-    await transactionCompletion(transaction)
-    if (stored === undefined) return undefined
-    this.#assertStoredRecord(stored)
-    return snapshotOutputRecord(stored.record)
-  }
-
-  async discardCandidate(key: string): Promise<void> { await this.#delete(CANDIDATE_STORE, this.#key(key)) }
-  async deleteCommitted(key: string): Promise<void> { await this.#delete(COMMITTED_STORE, this.#key(key)) }
-
-  async putHandle(identity: string, handle: FileSystemHandle): Promise<void> {
-    const transaction = this.#transaction(HANDLE_STORE, 'readwrite')
-    transaction.objectStore(HANDLE_STORE).put({ id: this.#key(`handle:${identity}`), namespace: this.#namespace, handle } satisfies StoredHandle)
-    await transactionCompletion(transaction)
-  }
-
-  async getHandle(identity: string): Promise<FileSystemHandle | undefined> {
-    const transaction = this.#transaction(HANDLE_STORE, 'readonly')
-    const stored = await requestResult<StoredHandle | undefined>(transaction.objectStore(HANDLE_STORE).get(this.#key(`handle:${identity}`)))
-    await transactionCompletion(transaction)
-    if (stored !== undefined && stored.namespace !== this.#namespace) throw new Error('IndexedDB handle escaped its checkpoint namespace')
-    return stored?.handle
-  }
-
-  async deleteHandle(identity: string): Promise<void> { await this.#delete(HANDLE_STORE, this.#key(`handle:${identity}`)) }
-
-  async readResumeStateDiscard(): Promise<IndexedDbResumeStateDiscardMarker | undefined> {
-    const transaction = this.#transaction(INDEXEDDB_RESUME_STATE_DISCARD_STORE, 'readonly')
-    const stored = await requestResult<unknown>(
-      transaction.objectStore(INDEXEDDB_RESUME_STATE_DISCARD_STORE).get(this.#namespace),
+  async readCommitted(recordId: string): Promise<FileCheckpointV2 | undefined> {
+    this.#assertOpen()
+    const transaction = this.#database.transaction(
+      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+      'readonly',
+    )
+    const value = await requestResult<unknown>(
+      transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE).get(recordId),
     )
     await transactionCompletion(transaction)
-    return stored === undefined
-      ? undefined
-      : snapshotResumeStateDiscardMarker(stored, this.#namespace)
+    if (value === undefined) return undefined
+    const record = readStoredCheckpoint(value)
+    this.#assertBinding(record)
+    return record
   }
 
-  async beginResumeStateDiscard(
-    marker: IndexedDbResumeStateDiscardMarker,
-  ): Promise<IndexedDbResumeStateDiscardMarker> {
-    if (marker.phase === 'exported') {
-      throw new TypeError('Resume-state discard cannot begin after external publication')
+  scanCommitted(scan: FileCheckpointScan): Promise<FileCheckpointPage> {
+    return this.#scan(INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE, scan)
+  }
+
+  scanCandidates(scan: FileCheckpointScan): Promise<FileCheckpointPage> {
+    return this.#scan(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE, scan)
+  }
+
+  async finalCheckpointProof(
+    recordId: string,
+    generation: bigint,
+  ): Promise<FinalFileCheckpointProof> {
+    const record = await this.readCommitted(recordId)
+    if (record === undefined || record.checkpointGeneration !== generation) {
+      throw new DOMException('Final checkpoint generation is unavailable', 'NotFoundError')
     }
-    const requested = snapshotResumeStateDiscardMarker({
-      ...marker,
-      id: this.#namespace,
-      namespace: this.#namespace,
-      schemaVersion: 1,
-    }, this.#namespace)
-    const transaction = this.#transaction(INDEXEDDB_RESUME_STATE_DISCARD_STORE, 'readwrite')
-    const store = transaction.objectStore(INDEXEDDB_RESUME_STATE_DISCARD_STORE)
-    const existingValue = await requestResult<unknown>(store.get(this.#namespace))
-    if (existingValue === undefined) {
-      store.add(storedResumeStateDiscardMarker(requested, this.#namespace))
+    return finalFileCheckpointProof(record)
+  }
+
+  async putHandle(record: PersistentHandleRecord): Promise<void> {
+    this.#assertOpen()
+    const validated = validateCheckpointHandle(record)
+    if (validated.operationId !== this.binding.operationId) {
+      throw new TypeError('checkpoint handle escaped its operation')
+    }
+    const transaction = this.#database.transaction(
+      INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
+      'readwrite',
+    )
+    const store = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE)
+    const existing = await requestResult<unknown>(store.get(validated.id))
+    if (existing === undefined) {
+      await assertAuxiliaryCapacity(store, validated.operationId)
     } else {
-      const existing = snapshotResumeStateDiscardMarker(existingValue, this.#namespace)
-      if (!sameResumeStateDiscardMarker(existing, requested)) {
-        transaction.abort()
-        throw new Error('Resume-state discard journal conflicts with this operation')
+      try {
+        const authority = validateCheckpointHandle(existing as PersistentHandleRecord)
+        if (authority.operationId !== this.binding.operationId) {
+          throw new TypeError('handle operation mismatch')
+        }
+      } catch {
+        abortIntegrity(transaction, 'checkpoint handle overwrite escaped its operation')
+      }
+    }
+    store.put(validated)
+    await transactionCompletion(transaction)
+  }
+
+  async readHandle(id: string): Promise<PersistentHandleRecord | undefined> {
+    this.#assertOpen()
+    const transaction = this.#database.transaction(
+      INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
+      'readonly',
+    )
+    const value = await requestResult<unknown>(
+      transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE).get(id),
+    )
+    await transactionCompletion(transaction)
+    if (value === undefined) return undefined
+    const record = validateCheckpointHandle(value as PersistentHandleRecord)
+    if (record.operationId !== this.binding.operationId) {
+      throw new TypeError('checkpoint handle escaped its operation')
+    }
+    return record
+  }
+
+  async listHandles(): Promise<readonly PersistentHandleRecord[]> {
+    this.#assertOpen()
+    const transaction = this.#database.transaction(
+      INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
+      'readonly',
+    )
+    const values = await requestResult<unknown[]>(
+      transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE)
+        .index(INDEXEDDB_BY_OPERATION_INDEX)
+        .getAll(
+          IDBKeyRange.only(this.binding.operationId),
+          MAX_CHECKPOINT_AUXILIARY_ENTRIES_PER_OPERATION + 1,
+        ),
+    )
+    await transactionCompletion(transaction)
+    if (values.length > MAX_CHECKPOINT_AUXILIARY_ENTRIES_PER_OPERATION) {
+      throw new DOMException('Checkpoint handle inventory exceeds its bound', 'QuotaExceededError')
+    }
+    const handles = values.map((value) => validateCheckpointHandle(
+      value as PersistentHandleRecord,
+    ))
+    if (handles.some((handle) => handle.operationId !== this.binding.operationId)) {
+      throw new TypeError('checkpoint handle inventory escaped its operation')
+    }
+    return Object.freeze(handles.sort((left, right) => compareRecordIds(left.id, right.id)))
+  }
+
+  async deleteHandle(id: string): Promise<void> {
+    this.#assertOpen()
+    const transaction = this.#database.transaction(
+      INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
+      'readwrite',
+    )
+    const store = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE)
+    const value = await requestResult<unknown>(store.get(id))
+    if (value !== undefined) {
+      const record = validateCheckpointHandle(value as PersistentHandleRecord)
+      if (record.operationId !== this.binding.operationId) {
+        abortIntegrity(transaction, 'checkpoint handle escaped its operation')
+      }
+      store.delete(id)
+    }
+    await transactionCompletion(transaction)
+  }
+
+  async retireOperation(): Promise<void> {
+    this.#assertOpen()
+    const stores = [
+      INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
+    ] as const
+    const transaction = this.#database.transaction(stores, 'readwrite')
+    for (const name of stores) {
+      const store = transaction.objectStore(name)
+      const values = await requestResult<unknown[]>(
+        store.index(INDEXEDDB_BY_OPERATION_INDEX).getAll(
+          IDBKeyRange.only(this.binding.operationId),
+          MAX_CHECKPOINT_AUXILIARY_ENTRIES_PER_OPERATION + 1,
+        ),
+      )
+      if (values.length > MAX_CHECKPOINT_AUXILIARY_ENTRIES_PER_OPERATION) {
+        abortConcurrency(transaction, 'checkpoint cleanup inventory exceeds its bound')
+      }
+      for (const value of values) {
+        let id: string
+        try {
+          id = this.#retiredRecordId(name, value)
+        } catch {
+          abortIntegrity(transaction, 'checkpoint cleanup escaped its operation')
+        }
+        store.delete(id)
       }
     }
     await transactionCompletion(transaction)
-    return requested
   }
 
-  async advanceResumeStateDiscard(
-    expected: IndexedDbResumeStateDiscardMarker,
-    phase: IndexedDbResumeStateDiscardPhase,
-  ): Promise<IndexedDbResumeStateDiscardMarker> {
-    if (expected.phase !== 'exporting' || phase !== 'exported') {
-      throw new TypeError('Resume-state discard has no requested phase transition')
+  close(): void {
+    if (!this.#closed) {
+      this.#closed = true
+      this.#database.close()
     }
-    const currentExpected = snapshotResumeStateDiscardMarker({
-      ...expected,
-      id: this.#namespace,
-      namespace: this.#namespace,
-      schemaVersion: 1,
-    }, this.#namespace)
-    const transaction = this.#transaction(INDEXEDDB_RESUME_STATE_DISCARD_STORE, 'readwrite')
-    const store = transaction.objectStore(INDEXEDDB_RESUME_STATE_DISCARD_STORE)
-    const stored = await requestResult<unknown>(store.get(this.#namespace))
-    if (stored === undefined || !sameResumeStateDiscardMarker(
-      snapshotResumeStateDiscardMarker(stored, this.#namespace),
-      currentExpected,
-    )) {
-      transaction.abort()
-      throw new Error('Resume-state discard journal changed before its phase transition')
+  }
+
+  async #scan(
+    storeName: string,
+    scan: FileCheckpointScan,
+  ): Promise<FileCheckpointPage> {
+    this.#assertOpen()
+    const transaction = this.#database.transaction(storeName, 'readonly')
+    const store = transaction.objectStore(storeName)
+    const query = scan.fileId === undefined
+      ? IDBKeyRange.only(this.binding.operationId)
+      : IDBKeyRange.only([this.binding.operationId, scan.fileId])
+    const indexName = scan.fileId === undefined
+      ? INDEXEDDB_BY_OPERATION_INDEX
+      : INDEXEDDB_BY_OPERATION_FILE_INDEX
+    const values = await requestResult<unknown[]>(store.index(indexName).getAll(
+      query,
+      MAX_CHECKPOINT_RECORDS_PER_OPERATION + 1,
+    ))
+    await transactionCompletion(transaction)
+    if (values.length > MAX_CHECKPOINT_RECORDS_PER_OPERATION) {
+      throw new DOMException('Checkpoint scan exceeds its operation bound', 'QuotaExceededError')
     }
-    const next = Object.freeze({ ...currentExpected, phase })
-    store.put(storedResumeStateDiscardMarker(next, this.#namespace))
-    await transactionCompletion(transaction)
-    return next
+    const records = values.map(readStoredCheckpoint)
+      .sort((left, right) => compareRecordIds(left.recordId, right.recordId))
+    if (scan.direction === 'descending') records.reverse()
+    const afterCursor = scan.cursor === undefined
+      ? records
+      : records.filter((record) => scan.direction === 'ascending'
+        ? record.recordId > scan.cursor!
+        : record.recordId < scan.cursor!)
+    const limit = scan.limit ?? 128
+    const pageRecords = afterCursor.slice(0, limit)
+    const nextCursor = afterCursor.length >= limit ? pageRecords.at(-1)?.recordId : undefined
+    return validateFileCheckpointPage({
+      records: pageRecords,
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+    }, scan, this.binding)
   }
 
-  async markCleanup(target: string): Promise<void> {
-    if (target.length === 0) throw new TypeError('Output cleanup target is empty')
-    const transaction = this.#transaction([CLEANUP_STORE, METADATA_STORE], 'readwrite')
-    transaction.objectStore(CLEANUP_STORE).put({ id: this.#namespace, namespace: this.#namespace, target, step: 0 } satisfies StoredCleanupMarker)
-    const metadata = await requestResult<NamespaceMetadata | undefined>(transaction.objectStore(METADATA_STORE).get(this.#namespace))
-    if (metadata !== undefined) transaction.objectStore(METADATA_STORE).put({ ...metadata, state: 'cleanup-pending', cleanupStep: 0 })
-    await transactionCompletion(transaction)
-  }
-
-  async cleanupTarget(): Promise<string | undefined> {
-    const transaction = this.#transaction(CLEANUP_STORE, 'readonly')
-    const marker = await requestResult<StoredCleanupMarker | undefined>(transaction.objectStore(CLEANUP_STORE).get(this.#namespace))
-    await transactionCompletion(transaction)
-    if (marker !== undefined && marker.namespace !== this.#namespace) throw new Error('Output cleanup marker escaped its namespace')
-    return marker?.target
-  }
-
-  async clearCleanup(): Promise<void> {
-    const transaction = this.#transaction([CLEANUP_STORE, METADATA_STORE], 'readwrite')
-    transaction.objectStore(CLEANUP_STORE).delete(this.#namespace)
-    const metadata = await requestResult<NamespaceMetadata | undefined>(transaction.objectStore(METADATA_STORE).get(this.#namespace))
-    if (metadata !== undefined) transaction.objectStore(METADATA_STORE).put({ ...metadata, state: 'active', cleanupStep: 0 })
-    await transactionCompletion(transaction)
-  }
-
-  /**
-   * Removes only records in this V1 namespace. Legacy stores are deliberately
-   * absent from this transaction: old state is a cleaner input, never a read path.
-   */
-  async deleteSessionData(): Promise<void> {
-    const transaction = this.#transaction([CANDIDATE_STORE, COMMITTED_STORE, HANDLE_STORE], 'readwrite')
-    await Promise.all([CANDIDATE_STORE, COMMITTED_STORE, HANDLE_STORE].map((storeName) => deleteNamespaceEntries(transaction.objectStore(storeName), NAMESPACE_INDEX, this.#namespace)))
-    await transactionCompletion(transaction)
-  }
-
-  /**
-   * This is the irreversible metadata boundary for an explicit user discard.
-   * Physical output is settled first; one transaction then removes every
-   * resumable witness together with the descriptor and stored root capability.
-   */
-  async commitResumeStateDiscard(
-    descriptorKey: string,
-    rootCapabilityRef: string,
-  ): Promise<void> {
-    if (descriptorKey !== this.#namespace || rootCapabilityRef.length === 0) {
-      throw new TypeError('resume-state discard binding does not match this namespace')
+  #retiredRecordId(storeName: string, value: unknown): string {
+    if (storeName === INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE) {
+      const handle = validateCheckpointHandle(value as PersistentHandleRecord)
+      if (handle.operationId !== this.binding.operationId) {
+        throw new TypeError('handle operation mismatch')
+      }
+      return handle.id
     }
-    const stores = [
-      CANDIDATE_STORE,
-      COMMITTED_STORE,
-      HANDLE_STORE,
-      METADATA_STORE,
-      CLEANUP_STORE,
-      INDEXEDDB_PAUSED_TASK_DESCRIPTOR_STORE,
-      INDEXEDDB_ROOT_CAPABILITY_STORE,
-      INDEXEDDB_RESUME_STATE_DISCARD_STORE,
-    ] as const
-    const transaction = this.#transaction([...stores], 'readwrite')
-    await Promise.all([CANDIDATE_STORE, COMMITTED_STORE, HANDLE_STORE].map((storeName) =>
-      deleteNamespaceEntries(
-        transaction.objectStore(storeName),
-        NAMESPACE_INDEX,
-        this.#namespace,
-      )))
-    transaction.objectStore(METADATA_STORE).delete(this.#namespace)
-    transaction.objectStore(CLEANUP_STORE).delete(this.#namespace)
-    transaction.objectStore(INDEXEDDB_PAUSED_TASK_DESCRIPTOR_STORE).delete(descriptorKey)
-    transaction.objectStore(INDEXEDDB_ROOT_CAPABILITY_STORE).delete(rootCapabilityRef)
-    transaction.objectStore(INDEXEDDB_RESUME_STATE_DISCARD_STORE).delete(this.#namespace)
+    const checkpoint = readStoredCheckpoint(value)
+    this.#assertBinding(checkpoint)
+    return checkpoint.recordId
+  }
+
+  #assertBinding(record: FileCheckpointV2): void {
+    validateFileCheckpoint(record)
+    if (!checkpointMatchesNamespace(record, this.binding)) {
+      throw new TypeError('file checkpoint escaped its repository binding')
+    }
+  }
+
+  #assertOpen(): void {
+    if (this.#closed) {
+      throw new DOMException('File checkpoint repository is closed', 'InvalidStateError')
+    }
+  }
+}
+
+export class IndexedDbReceiveOperationRepository
+implements ReceiveOperationRepository, ReceiveOperationHandleInventoryRepository {
+  readonly #database: IDBDatabase
+  #closed = false
+
+  private constructor(database: IDBDatabase) {
+    this.#database = database
+    database.addEventListener('versionchange', () => this.close())
+  }
+
+  static async open(
+    databaseName = DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
+  ): Promise<IndexedDbReceiveOperationRepository> {
+    return new IndexedDbReceiveOperationRepository(
+      await openIndexedDbCheckpointDatabase(databaseName),
+    )
+  }
+
+  async commitTransition(transition: ReceiveOperationTransition): Promise<void> {
+    this.#assertOpen()
+    const prepared = await prepareReceiveOperationTransition(transition)
+    const transaction = this.#database.transaction([
+      INDEXEDDB_RECEIVE_RECORD_STORE,
+      INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE,
+      INDEXEDDB_RECEIVE_HANDLE_STORE,
+      INDEXEDDB_RECEIVE_LEASE_STORE,
+    ], 'readwrite')
+    await assertOperationConcurrency(transaction, prepared)
+    await assertOperationMutationOwnership(transaction, prepared)
+    applyOperationTransition(transaction, prepared)
     await transactionCompletion(transaction)
   }
 
-  /** One-shot cleanup metadata entrypoint; safe to call repeatedly after a crash. */
-  async runOwnedCleanup(): Promise<IndexedDbCleanupReport> {
-    if (this.#cleanupPromise !== undefined) return this.#cleanupPromise
-    const operation = this.#runOwnedCleanup()
-    const shared = operation.finally(() => {
-      if (this.#cleanupPromise === shared) this.#cleanupPromise = undefined
-    })
-    this.#cleanupPromise = shared
-    return shared
+  async readRecord(id: string): Promise<PersistedReceiveRecord | undefined> {
+    const value = await this.#read<unknown>(INDEXEDDB_RECEIVE_RECORD_STORE, id)
+    return value === undefined ? undefined : validateStoredReceiveRecord(value)
   }
 
-  async #runOwnedCleanup(): Promise<IndexedDbCleanupReport> {
-    const target = await this.cleanupTarget()
-    if (target === undefined) {
-      return Object.freeze({ status: 'nothing-to-clean', removed: 0 })
+  readLifecycle(operationId: string): Promise<PersistedReceiveRecord | undefined> {
+    return this.readRecord(operationRecordId(operationId, RECEIVE_RECORD_LIFECYCLE_STATE))
+  }
+
+  async listRecords(
+    operationId: string,
+    kind?: ReceiveRecordKind,
+  ): Promise<readonly PersistedReceiveRecord[]> {
+    const canonicalOperationId = snapshotIdentity(operationId, 16, 'operation ID')
+    const values = await this.#listByOperation<unknown>(
+      INDEXEDDB_RECEIVE_RECORD_STORE,
+      canonicalOperationId,
+      kind,
+      RECEIVE_OPERATION_RECORD_BOUND,
+    )
+    return Object.freeze(await Promise.all(values.map(validateStoredReceiveRecord)))
+  }
+
+  async listManifestPages(
+    operationId: string,
+    kind?: ReceiveRecordKind,
+  ): Promise<readonly ManifestPageRecord[]> {
+    const canonicalOperationId = snapshotIdentity(operationId, 16, 'operation ID')
+    const values = await this.#listByOperation<unknown>(
+      INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE,
+      canonicalOperationId,
+      kind,
+      RECEIVE_OPERATION_PAGE_BOUND,
+    )
+    return Object.freeze(await Promise.all(
+      values.map((value) => validateManifestPageRecord(value as ManifestPageRecord)),
+    ))
+  }
+
+  async readHandle<T = unknown>(
+    id: string,
+  ): Promise<ReceiveOperationHandleRecord<T> | undefined> {
+    const value = await this.#read<unknown>(INDEXEDDB_RECEIVE_HANDLE_STORE, id)
+    return value === undefined
+      ? undefined
+      : validateReceiveOperationHandleRecord(value as ReceiveOperationHandleRecord<T>)
+  }
+
+  async listHandles(operationId: string): Promise<readonly ReceiveOperationHandleRecord[]> {
+    const canonicalOperationId = snapshotIdentity(operationId, 16, 'operation ID')
+    const values = await this.#listByOperation<unknown>(
+      INDEXEDDB_RECEIVE_HANDLE_STORE,
+      canonicalOperationId,
+      undefined,
+      RECEIVE_OPERATION_HANDLE_BOUND,
+    )
+    const handles = values.map((value) => validateReceiveOperationHandleRecord(
+      value as ReceiveOperationHandleRecord,
+    ))
+    return Object.freeze(handles.sort((left, right) => compareRecordIds(left.id, right.id)))
+  }
+
+  async readLease(operationId: string): Promise<ReceiveOperationLeaseRecord | undefined> {
+    const canonicalOperationId = snapshotIdentity(operationId, 16, 'operation ID')
+    const value = await this.#read<unknown>(
+      INDEXEDDB_RECEIVE_LEASE_STORE,
+      `windshare/receive-operation/v1/${canonicalOperationId}/lease`,
+    )
+    if (value === undefined) return undefined
+    const record = validateReceiveOperationLeaseRecord(value as ReceiveOperationLeaseRecord)
+    if (record.operationId !== canonicalOperationId) {
+      throw new TypeError('receive lease escaped its operation')
     }
-    const removed = await this.#namespaceEntryCount()
-    await this.deleteSessionData()
-    await this.clearCleanup()
-    return Object.freeze({ status: 'completed', removed })
+    return record
   }
 
   close(): void {
@@ -376,148 +499,306 @@ export class IndexedDbOutputRepository implements OutputCheckpointJournal, Persi
     this.#database.close()
   }
 
-  #storedRecord(record: PersistedOutputRecord): StoredRecord {
-    return {
-      id: this.#key(outputRecordKey(record)),
-      namespace: this.#namespace,
-      record: snapshotOutputRecord(record),
-    }
-  }
-
-  #assertRecord(record: PersistedOutputRecord): void {
-    if (!recordBelongsToCheckpointNamespace(record, this.binding)) {
-      throw new Error('Output checkpoint belongs to another intent or root namespace')
-    }
-    snapshotOutputRecord(record)
-  }
-
-  #assertStoredRecord(entry: StoredRecord): void {
-    if (entry.namespace !== this.#namespace || entry.id !== this.#key(outputRecordKey(entry.record as PersistedOutputRecord))) throw new Error('IndexedDB checkpoint key does not match its namespace')
-    this.#assertRecord(entry.record)
-  }
-
-  #key(key: string): string { return `${this.#namespace}\0${key}` }
-
-  async #scan(storeName: string, scan: OutputJournalScan): Promise<OutputJournalPage> {
-    const transaction = this.#transaction(storeName, 'readonly')
-    const stored = await scanRecords(transaction.objectStore(storeName), recordRange(this.#namespace, scan), scan.direction === 'ascending' ? 'next' : 'prev')
-    await transactionCompletion(transaction)
-    const records = stored.map((entry) => {
-      this.#assertStoredRecord(entry)
-      return snapshotOutputRecord(entry.record)
-    })
-    validateRecordOrder(records, scan)
-    const page = Object.freeze(records)
-    const last = records.at(-1)
-    return records.length !== OUTPUT_CHECKPOINT_PAGE_RECORD_LIMIT || last === undefined
-      ? Object.freeze({ records: page })
-      : Object.freeze({ records: page, nextCursor: outputRecordKey(last) })
-  }
-
-  async #delete(storeName: string, key: string): Promise<void> {
-    const transaction = this.#transaction(storeName, 'readwrite')
-    transaction.objectStore(storeName).delete(key)
-    await transactionCompletion(transaction)
-  }
-
-  async #ensureOwnershipMetadata(): Promise<void> {
-    const transaction = this.#transaction(METADATA_STORE, 'readwrite')
-    const store = transaction.objectStore(METADATA_STORE)
-    const existing = await requestResult<NamespaceMetadata | undefined>(store.get(this.#namespace))
-    if (existing !== undefined && !this.#ownershipMetadataMatches(existing)) {
-      transaction.abort()
-      throw new Error('FileCheckpointV1 namespace ownership does not match this output root')
-    }
-    if (existing === undefined) store.put({ id: this.#namespace, marker: FILE_CHECKPOINT_OWNERSHIP_MARKER, namespaceName: FILE_CHECKPOINT_NAMESPACE, backend: this.binding.backend, transferIntentDigest: this.binding.transferIntentDigest, rootIdentity: this.binding.rootIdentity, state: 'active', cleanupStep: 0 } satisfies NamespaceMetadata)
-    await transactionCompletion(transaction)
-  }
-
-  async #requireOwnershipMetadata(): Promise<void> {
-    const transaction = this.#transaction(METADATA_STORE, 'readonly')
-    const existing = await requestResult<NamespaceMetadata | undefined>(
-      transaction.objectStore(METADATA_STORE).get(this.#namespace),
+  async #read<T>(storeName: string, id: string): Promise<T | undefined> {
+    this.#assertOpen()
+    const transaction = this.#database.transaction(storeName, 'readonly')
+    const value = await requestResult<T | undefined>(
+      transaction.objectStore(storeName).get(id),
     )
     await transactionCompletion(transaction)
-    if (existing === undefined || !this.#ownershipMetadataMatches(existing) ||
-        existing.state !== 'active' || existing.cleanupStep !== 0) {
-      throw new Error('FileCheckpointV1 namespace ownership is missing or does not match')
+    return value
+  }
+
+  async #listByOperation<T>(
+    storeName: string,
+    operationId: string,
+    kind: ReceiveRecordKind | undefined,
+    bound: number,
+  ): Promise<readonly T[]> {
+    this.#assertOpen()
+    const transaction = this.#database.transaction(storeName, 'readonly')
+    const store = transaction.objectStore(storeName)
+    const values = kind === undefined
+      ? await requestResult<T[]>(store.index(INDEXEDDB_BY_OPERATION_INDEX).getAll(
+          IDBKeyRange.only(operationId),
+          bound + 1,
+        ))
+      : await requestResult<T[]>(store.index(INDEXEDDB_BY_OPERATION_KIND_INDEX).getAll(
+          IDBKeyRange.only([operationId, kind]),
+          bound + 1,
+        ))
+    await transactionCompletion(transaction)
+    if (values.length > bound || values.some((value) =>
+      !isIndexedDbRecord(value) || value.operationId !== operationId)) {
+      throw new DOMException('Receive operation inventory exceeds its bound', 'QuotaExceededError')
+    }
+    return Object.freeze(values)
+  }
+
+  #assertOpen(): void {
+    if (this.#closed) {
+      throw new DOMException('Receive operation repository is closed', 'InvalidStateError')
+    }
+  }
+}
+
+function storedCheckpoint(record: FileCheckpointV2): StoredFileCheckpoint {
+  return Object.freeze({
+    id: record.recordId,
+    operationId: record.operationId,
+    fileId: record.fileId,
+    envelope: encodeFileCheckpointV2(record),
+  })
+}
+
+function readStoredCheckpoint(value: unknown): FileCheckpointV2 {
+  if (!isIndexedDbRecord(value) || typeof value.id !== 'string' ||
+      typeof value.operationId !== 'string' || typeof value.fileId !== 'string' ||
+      !(value.envelope instanceof Uint8Array)) {
+    throw new TypeError('IndexedDB file checkpoint row is invalid')
+  }
+  const record = decodeFileCheckpointV2(value.envelope)
+  if (record.recordId !== value.id || record.operationId !== value.operationId ||
+      record.fileId !== value.fileId) {
+    throw new TypeError('IndexedDB checkpoint projections disagree with canonical bytes')
+  }
+  return record
+}
+
+async function assertCheckpointCapacity(store: IDBObjectStore, operationId: string): Promise<void> {
+  const count = await requestResult<number>(
+    store.index(INDEXEDDB_BY_OPERATION_INDEX).count(IDBKeyRange.only(operationId)),
+  )
+  if (count >= MAX_CHECKPOINT_RECORDS_PER_OPERATION) {
+    throw new DOMException('Checkpoint operation record bound exceeded', 'QuotaExceededError')
+  }
+}
+
+async function assertAuxiliaryCapacity(store: IDBObjectStore, operationId: string): Promise<void> {
+  const count = await requestResult<number>(
+    store.index(INDEXEDDB_BY_OPERATION_INDEX).count(IDBKeyRange.only(operationId)),
+  )
+  if (count >= MAX_CHECKPOINT_AUXILIARY_ENTRIES_PER_OPERATION) {
+    throw new DOMException('Checkpoint auxiliary record bound exceeded', 'QuotaExceededError')
+  }
+}
+
+async function assertOperationConcurrency(
+  transaction: IDBTransaction,
+  transition: PreparedReceiveOperationTransition,
+): Promise<void> {
+  const records = transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE)
+  const leases = transaction.objectStore(INDEXEDDB_RECEIVE_LEASE_STORE)
+  const [lifecycleValue, leaseValue] = await Promise.all([
+    requestResult<unknown>(records.get(operationRecordId(
+      transition.operationId,
+      RECEIVE_RECORD_LIFECYCLE_STATE,
+    ))),
+    requestResult<unknown>(leases.get(
+      `windshare/receive-operation/v1/${transition.operationId}/lease`,
+    )),
+  ])
+  const lifecycle = lifecycleValue === undefined
+    ? undefined
+    : lifecycleAuthority(transaction, lifecycleValue, transition.operationId)
+  const lease = leaseValue === undefined
+    ? undefined
+    : leaseAuthority(transaction, leaseValue, transition.operationId)
+
+  if (transition.expectedLifecycleGeneration !== undefined &&
+      lifecycle?.generation !== transition.expectedLifecycleGeneration) {
+    abortConcurrency(transaction)
+  }
+  if (transition.expectedLifecycleGeneration === undefined &&
+      transition.records.some((record) => record.kind === RECEIVE_RECORD_LIFECYCLE_STATE) &&
+      lifecycle !== undefined) {
+    abortConcurrency(transaction, 'initial lifecycle record already exists')
+  }
+  if (transition.expectedLeaseId !== undefined && lease?.leaseId !== transition.expectedLeaseId) {
+    abortConcurrency(transaction)
+  }
+  if (transition.lease?.kind === 'put' && transition.expectedLeaseId === undefined &&
+      lease !== undefined) {
+    abortConcurrency(transaction, 'receive operation already has a lease')
+  }
+}
+
+async function assertOperationMutationOwnership(
+  transaction: IDBTransaction,
+  transition: PreparedReceiveOperationTransition,
+): Promise<void> {
+  const records = transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE)
+  const pages = transaction.objectStore(INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE)
+  const handles = transaction.objectStore(INDEXEDDB_RECEIVE_HANDLE_STORE)
+
+  await assertOwnedDeletions(
+    transaction,
+    records,
+    transition.deleteRecordIds,
+    transition.operationId,
+  )
+  await assertOwnedDeletions(
+    transaction,
+    pages,
+    transition.deleteManifestPageIds,
+    transition.operationId,
+  )
+  await assertOwnedDeletions(
+    transaction,
+    handles,
+    transition.deleteHandleIds,
+    transition.operationId,
+  )
+
+  for (const record of transition.records) {
+    if (record.kind === RECEIVE_RECORD_LIFECYCLE_STATE) continue
+    const existing = await requestResult<unknown>(records.get(record.id))
+    if (existing === undefined) continue
+    const row = ownedIndexedDbRow(transaction, existing, transition.operationId)
+    if (row.digest !== record.digest ||
+        !(row.canonicalBytes instanceof Uint8Array) ||
+        !equalCanonicalBytes(row.canonicalBytes, record.canonicalBytes) ||
+        row.reopenKey !== record.reopenKey) {
+      abortIntegrity(transaction, 'immutable receive record overwrite was rejected')
     }
   }
 
-  #ownershipMetadataMatches(existing: NamespaceMetadata): boolean {
-    return existing.marker === FILE_CHECKPOINT_OWNERSHIP_MARKER &&
-      existing.namespaceName === FILE_CHECKPOINT_NAMESPACE &&
-      existing.backend === this.binding.backend &&
-      existing.transferIntentDigest === this.binding.transferIntentDigest &&
-      existing.rootIdentity === this.binding.rootIdentity
+  for (const page of transition.manifestPages) {
+    const existing = await requestResult<unknown>(pages.get(page.id))
+    if (existing === undefined) continue
+    const row = ownedIndexedDbRow(transaction, existing, transition.operationId)
+    if (row.digest !== page.digest ||
+        !(row.canonicalBytes instanceof Uint8Array) ||
+        !equalCanonicalBytes(row.canonicalBytes, page.canonicalBytes)) {
+      abortIntegrity(transaction, 'immutable manifest page overwrite was rejected')
+    }
   }
 
-  async #namespaceEntryCount(): Promise<number> {
-    const stores = [CANDIDATE_STORE, COMMITTED_STORE, HANDLE_STORE] as const
-    const transaction = this.#transaction([...stores], 'readonly')
-    const counts = await Promise.all(stores.map((name) => requestResult<number>(
-      transaction.objectStore(name).index(NAMESPACE_INDEX).count(IDBKeyRange.only(this.#namespace)),
-    )))
-    await transactionCompletion(transaction)
-    return counts.reduce((total, count) => total + count, 0)
-  }
-
-  #transaction(storeNames: string | string[], mode: IDBTransactionMode): IDBTransaction {
-    if (this.#closed) throw new DOMException('Output checkpoint database is closed or version-obsolete', 'InvalidStateError')
-    return this.#database.transaction(storeNames, mode)
-  }
-
-}
-
-export interface IndexedDbCleanupReport {
-  readonly status: 'nothing-to-clean' | 'completed'
-  readonly removed: number
-}
-
-function validateRecordOrder(records: readonly PersistedOutputRecord[], scan: OutputJournalScan): void {
-  let previous = scan.cursor
-  for (const record of records) {
-    const key = outputRecordKey(record)
-    if (previous !== undefined && !isAfterCursor(key, previous, scan.direction)) throw new Error('IndexedDB checkpoint cursor order is not strictly monotonic')
-    previous = key
+  for (const handle of transition.handles) {
+    const existing = await requestResult<unknown>(handles.get(handle.id))
+    if (existing === undefined) continue
+    ownedIndexedDbRow(transaction, existing, transition.operationId)
   }
 }
-function isAfterCursor(key: string, cursor: string, direction: OutputJournalScan['direction']): boolean { return direction === 'ascending' ? key > cursor : key < cursor }
 
-function recordRange(namespace: string, scan: OutputJournalScan): IDBKeyRange {
-  const kindPrefix = scan.kind === undefined ? '' : `${scan.kind}:`
-  const prefix = `${namespace}\0${kindPrefix}`
-  const boundary = `${prefix}\uffff`
-  if (scan.direction === 'ascending') {
-    const lower = scan.cursor === undefined ? prefix : `${namespace}\0${scan.cursor}`
-    return IDBKeyRange.bound(lower, boundary, scan.cursor !== undefined, false)
+async function assertOwnedDeletions(
+  transaction: IDBTransaction,
+  store: IDBObjectStore,
+  ids: readonly string[],
+  operationId: string,
+): Promise<void> {
+  for (const id of ids) {
+    const existing = await requestResult<unknown>(store.get(id))
+    if (existing !== undefined) ownedIndexedDbRow(transaction, existing, operationId)
   }
-  const upper = scan.cursor === undefined ? boundary : `${namespace}\0${scan.cursor}`
-  return IDBKeyRange.bound(prefix, upper, false, scan.cursor !== undefined)
 }
-function scanRecords(store: IDBObjectStore, range: IDBKeyRange, direction: IDBCursorDirection): Promise<StoredRecord[]> {
-  return new Promise<StoredRecord[]>((resolve, reject) => {
-    const records: StoredRecord[] = []
-    const request = store.openCursor(range, direction)
-    request.addEventListener('error', () => reject(request.error), { once: true })
-    request.addEventListener('success', () => {
-      const cursor = request.result
-      if (cursor === null || records.length === OUTPUT_CHECKPOINT_PAGE_RECORD_LIMIT) { resolve(records); return }
-      records.push(cursor.value as StoredRecord)
-      if (records.length === OUTPUT_CHECKPOINT_PAGE_RECORD_LIMIT) { resolve(records); return }
-      cursor.continue()
-    })
+
+function ownedIndexedDbRow(
+  transaction: IDBTransaction,
+  value: unknown,
+  operationId: string,
+): Record<string, unknown> {
+  if (!isIndexedDbRecord(value) || value.operationId !== operationId) {
+    abortIntegrity(transaction, 'receive operation mutation escaped its ownership boundary')
+  }
+  return value
+}
+
+function lifecycleAuthority(
+  transaction: IDBTransaction,
+  value: unknown,
+  operationId: string,
+): ReceiveLifecycleState {
+  try {
+    if (!isIndexedDbRecord(value) ||
+        value.kind !== RECEIVE_RECORD_LIFECYCLE_STATE ||
+        !(value.canonicalBytes instanceof Uint8Array)) {
+      throw new TypeError('lifecycle row is invalid')
+    }
+    const state = decodeStoredReceiveLifecycleState(value as unknown as PersistedReceiveRecord)
+    if (state.operationId !== operationId ||
+        value.operationId !== operationId ||
+        value.id !== operationRecordId(operationId, RECEIVE_RECORD_LIFECYCLE_STATE)) {
+      throw new TypeError('lifecycle projections disagree with canonical bytes')
+    }
+    return state
+  } catch {
+    abortIntegrity(transaction, 'stored lifecycle authority is invalid')
+  }
+}
+
+function leaseAuthority(
+  transaction: IDBTransaction,
+  value: unknown,
+  operationId: string,
+): ReceiveOperationLeaseRecord {
+  try {
+    const lease = validateReceiveOperationLeaseRecord(value as ReceiveOperationLeaseRecord)
+    if (lease.operationId !== operationId) throw new TypeError('lease operation mismatch')
+    return lease
+  } catch {
+    abortIntegrity(transaction, 'stored lease authority is invalid')
+  }
+}
+
+function applyOperationTransition(
+  transaction: IDBTransaction,
+  transition: PreparedReceiveOperationTransition,
+): void {
+  const records = transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE)
+  const pages = transaction.objectStore(INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE)
+  const handles = transaction.objectStore(INDEXEDDB_RECEIVE_HANDLE_STORE)
+  const leases = transaction.objectStore(INDEXEDDB_RECEIVE_LEASE_STORE)
+  for (const id of transition.deleteRecordIds) records.delete(id)
+  for (const id of transition.deleteManifestPageIds) pages.delete(id)
+  for (const id of transition.deleteHandleIds) handles.delete(id)
+  for (const record of transition.records) records.put(record)
+  for (const page of transition.manifestPages) pages.put(page)
+  for (const handle of transition.handles) handles.put(handle)
+  if (transition.lease?.kind === 'put') leases.put(transition.lease.record)
+  else if (transition.lease?.kind === 'delete') {
+    leases.delete(`windshare/receive-operation/v1/${transition.operationId}/lease`)
+  }
+}
+
+async function validateStoredReceiveRecord(value: unknown): Promise<PersistedReceiveRecord> {
+  const record = await validatePersistedReceiveRecord(value as PersistedReceiveRecord)
+  if (record.kind === RECEIVE_RECORD_LIFECYCLE_STATE) {
+    decodeStoredReceiveLifecycleState(record)
+  }
+  return record
+}
+
+function validateCheckpointHandle(
+  record: PersistentHandleRecord,
+): PersistentHandleRecord {
+  if (typeof record.id !== 'string' || record.id.length === 0 ||
+      !Number.isInteger(record.kind) || record.kind < 1 || record.kind > 0xff) {
+    throw new TypeError('checkpoint handle identity is invalid')
+  }
+  return Object.freeze({
+    id: record.id,
+    operationId: snapshotIdentity(record.operationId, 16, 'operation ID'),
+    kind: record.kind,
+    authorityRef: snapshotIdentity(record.authorityRef, 32, 'authority reference'),
+    ownedObjectId: snapshotIdentity(record.ownedObjectId, 32, 'owned object ID'),
+    handle: record.handle,
   })
 }
-function deleteNamespaceEntries(store: IDBObjectStore, indexName: string, value: IDBValidKey): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const request = store.index(indexName).openKeyCursor(IDBKeyRange.only(value))
-    request.addEventListener('error', () => reject(request.error), { once: true })
-    request.addEventListener('success', () => {
-      const cursor = request.result
-      if (cursor === null) { resolve(); return }
-      store.delete(cursor.primaryKey)
-      cursor.continue()
-    })
-  })
+
+function abortIntegrity(transaction: IDBTransaction, message: string): never {
+  transaction.abort()
+  throw new TypeError(message)
 }
+
+function abortConcurrency(transaction: IDBTransaction, message?: string): never {
+  transaction.abort()
+  throw new IndexedDbOperationConcurrencyError(message)
+}
+
+function compareRecordIds(left: string, right: string): number {
+  if (left === right) return 0
+  return left < right ? -1 : 1
+}
+
+export type { PersistentHandleRecord }

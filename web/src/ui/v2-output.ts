@@ -1,606 +1,466 @@
 import {
-  acquireOutputCapability,
-  type AcquiredOutputCapability,
-  type OutputSelectionShape,
-} from '../output/capability/acquisition'
+  offerArtifacts,
+  type ArtifactAction,
+  type ArtifactOffers,
+  type ArtifactOperation,
+  type EnvironmentOffers,
+  type OfferComputedDecision,
+  type OfferDisabledDecision,
+} from '../output/planning'
 import {
-  IndexedDbBrowserPausedTaskLifecycle,
-  type BrowserPausedTaskLifecycle,
-} from '../output/browser/paused-task-lifecycle'
-import {
-  DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
-  resolveIndexedDbRootIdentity,
-} from '../output/browser/indexeddb-repository'
-import {
-  sameOutputCapabilityIdentity,
-  snapshotOutputCapabilityIdentity,
-  type OutputCapabilityIdentity,
-} from '../output/capability/contract'
-import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
-import {
-  acquireFileSystemAccessOutputSession,
-  FILE_SYSTEM_ACCESS_BACKEND,
-} from '../output/file-system-access/session'
-import {
-  openOriginPrivateOutputSession,
-  ORIGIN_PRIVATE_BACKEND,
-} from '../output/origin-private/session'
-import { OriginPrivateZipExporter } from '../output/origin-private/zip-exporter'
-import {
-  browserSupportsPortableDownload,
-  createPortableBrowserDownload,
-  type PortableDownloadWindow,
-} from '../output/portable/browser-download'
-import {
-  SINGLE_FILE_STREAM_BACKEND,
-  SingleFileStreamOutputSession,
-} from '../output/streams/single-file'
-import { StreamingZipArchiveWriter } from '../output/streams/streaming-zip'
-import { ZIP_STREAM_BACKEND, ZipStreamOutputSession } from '../output/streams/zip'
-import { IndexedDbZipCentralDirectorySpool } from '../output/streams/zip-spool'
-import {
-  directoryAdmissionScope,
-  validateOutputSessionBinding,
-  type DirectoryAdmissionScope,
-  type OutputSession,
-  type V2OutputAuthority,
-} from '../transfer/output-session'
-import {
-  createOutputSessionId,
-  freezeTransferIntent,
-  validateFinalTransferIntent,
-  type TransferIntent,
-  type TransferIntentDraft,
-  type TransferOutputLocator,
+  lifecycleDeadline,
+  type ReceiveLifecycleState,
+} from '../output/workspace'
+import type {
+  ArtifactSpec,
+  MaterializationPlan,
+  ReceiveIntent,
 } from '../transfer/intent'
+import type {
+  ProjectionEpoch,
+  SelectionProjectionState,
+} from '../transfer/projection'
+import {
+  presentArtifactOffers,
+  type ArtifactOfferPresentation,
+} from './v2-artifact-presentation'
+import {
+  presentReceiveLifecycle,
+  type ReceiveLifecyclePresentation,
+  type V2ActiveReceiveControl,
+  type WorkspaceUsage,
+} from './v2-lifecycle-presentation'
 
-export type V2OutputIntent = 'directory' | 'download'
-
-export interface V2BrowserOutputWindow extends PortableDownloadWindow {
-  readonly navigator: Navigator
-  showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>
-  showSaveFilePicker?: (
-    options?: { readonly suggestedName?: string },
-  ) => Promise<FileSystemFileHandle>
+export interface V2OutputPresentationSnapshot {
+  readonly projection: SelectionProjectionState | null
+  readonly offers: ArtifactOffers | null
+  readonly offerPresentation: ArtifactOfferPresentation | null
+  readonly chosenAction: ArtifactAction | null
+  readonly chosenArtifactKind: ArtifactSpec['kind'] | null
+  readonly chosenArtifact: ArtifactSpec | null
+  readonly receiveIntent: ReceiveIntent | null
+  readonly plan: MaterializationPlan | null
+  readonly lifecycle: ReceiveLifecycleState | null
+  readonly lifecyclePresentation: ReceiveLifecyclePresentation | null
+  readonly expiresAt: number | null
+  readonly workspaceUsage: WorkspaceUsage | null
+  readonly activeControls: readonly V2ActiveReceiveControl[]
 }
 
-interface OriginPrivateStorageManager {
-  getDirectory?: () => Promise<FileSystemDirectoryHandle>
+export const EMPTY_V2_OUTPUT_PRESENTATION: V2OutputPresentationSnapshot = Object.freeze({
+  projection: null,
+  offers: null,
+  offerPresentation: null,
+  chosenAction: null,
+  chosenArtifactKind: null,
+  chosenArtifact: null,
+  receiveIntent: null,
+  plan: null,
+  lifecycle: null,
+  lifecyclePresentation: null,
+  expiresAt: null,
+  workspaceUsage: null,
+  activeControls: Object.freeze([]),
+})
+
+export type V2OutputTraceEvent =
+  | OfferComputedDecision
+  | OfferDisabledDecision
+  | Readonly<{
+      name: 'receive.projection.stale_event_dropped'
+      current_projection_epoch: ProjectionEpoch
+      stale_projection_epoch: ProjectionEpoch
+      event_class: 'capability-result' | 'artifact-action' | 'authority-result'
+    }>
+
+export type ArtifactOfferPlanner = (
+  projection: SelectionProjectionState['projection'],
+  discovery: SelectionProjectionState['discovery'],
+  environment: EnvironmentOffers,
+) => Promise<ArtifactOffers>
+
+export type ArtifactAuthorityStarter<Authority> = (
+  action: ArtifactAction,
+) => Authority | PromiseLike<Authority>
+
+export type ArtifactActivationResult<Authority> =
+  | Readonly<{ kind: 'unavailable' }>
+  | Readonly<{
+      kind: 'acquired'
+      projectionEpoch: ProjectionEpoch
+      action: ArtifactAction
+      authority: Authority
+    }>
+  | Readonly<{
+      kind: 'stale'
+      projectionEpoch: ProjectionEpoch
+      action: ArtifactAction
+    }>
+
+export type ProjectionPresentationResult =
+  | Readonly<{ kind: 'applied'; offers: ArtifactOffers }>
+  | Readonly<{ kind: 'stale'; projectionEpoch: ProjectionEpoch }>
+
+export type RetryConfirmationResult =
+  | Readonly<{ kind: 'unavailable' }>
+  | Readonly<{ kind: 'completed'; projectionEpoch: ProjectionEpoch }>
+  | Readonly<{ kind: 'stale'; projectionEpoch: ProjectionEpoch }>
+
+export interface V2OutputPresentationControllerOptions<Authority> {
+  readonly planner?: ArtifactOfferPlanner
+  readonly releaseStaleAuthority?: (authority: Authority) => void | PromiseLike<void>
+  readonly onTrace?: (event: V2OutputTraceEvent) => void
 }
 
-export interface V2OutputCapabilities {
-  readonly nativeDirectory: boolean
-  readonly nativeSave: boolean
-  readonly portableDownload: boolean
-  readonly originPrivateStaging: boolean
+interface PendingActivation {
+  readonly boundary: number
+  readonly epoch: ProjectionEpoch
+  readonly action: ArtifactAction
 }
 
-export function browserV2OutputCapabilities(
-  windowPort: V2BrowserOutputWindow = window as unknown as V2BrowserOutputWindow,
-): V2OutputCapabilities {
-  const storage = windowPort.navigator.storage as unknown as
-    | OriginPrivateStorageManager
-    | undefined
-  return Object.freeze({
-    nativeDirectory: windowPort.showDirectoryPicker !== undefined,
-    nativeSave: windowPort.showSaveFilePicker !== undefined,
-    portableDownload: browserSupportsPortableDownload(windowPort),
-    originPrivateStaging: storage?.getDirectory !== undefined,
-  })
-}
+/**
+ * This controller never owns an authority callback. Requiring it at activation
+ * keeps output authority reachable only from the final rendered artifact click.
+ */
+export class V2OutputPresentationController<Authority = unknown> {
+  readonly #planner: ArtifactOfferPlanner
+  readonly #releaseStaleAuthority: ((authority: Authority) => void | PromiseLike<void>) | undefined
+  readonly #onTrace: ((event: V2OutputTraceEvent) => void) | undefined
+  readonly #listeners = new Set<() => void>()
+  #snapshot = EMPTY_V2_OUTPUT_PRESENTATION
+  #boundary = 0
+  #pendingActivation: PendingActivation | undefined
 
-export function outputIntentAvailable(
-  capabilities: V2OutputCapabilities,
-  intent: V2OutputIntent,
-): boolean {
-  return intent === 'directory'
-    ? capabilities.nativeDirectory
-    : capabilities.nativeSave || capabilities.portableDownload
-}
+  constructor(options: V2OutputPresentationControllerOptions<Authority> = {}) {
+    this.#planner = options.planner ?? offerArtifacts
+    this.#releaseStaleAuthority = options.releaseStaleAuthority
+    this.#onTrace = options.onTrace
+  }
 
-/** Picker invocation deliberately stays in this non-async function for activation ownership. */
-export function acquireBrowserV2Output(
-  intent: V2OutputIntent,
-  selection: OutputSelectionShape,
-  windowPort: V2BrowserOutputWindow = window as unknown as V2BrowserOutputWindow,
-  identityProvider: BrowserV2OutputIdentityProvider = DEFAULT_BROWSER_V2_OUTPUT_IDENTITY_PROVIDER,
-): Promise<AcquiredOutputCapability> {
-  const storage = windowPort.navigator.storage as unknown as
-    | OriginPrivateStorageManager
-    | undefined
-  const getOriginPrivateDirectory = storage?.getDirectory?.bind(storage)
-  const portable = windowPort.showSaveFilePicker === undefined &&
-    browserSupportsPortableDownload(windowPort)
-  return acquireOutputCapability(
-    intent === 'directory' ? 'DirectoryTree' : 'BrowserDownload',
-    selection,
-    {
-      ...(windowPort.showDirectoryPicker === undefined
-        ? {}
-        : { showDirectoryPicker: () => windowPort.showDirectoryPicker!() }),
-      ...(windowPort.showSaveFilePicker === undefined
-        ? {}
-        : { showSaveFilePicker: (options) => windowPort.showSaveFilePicker!(options) }),
-      ...(getOriginPrivateDirectory === undefined
-        ? {}
-        : { getOriginPrivateDirectory }),
-      ...(!portable
-        ? {}
-        : {
-            createDirectStream: (name: string, minimumBytes: bigint) =>
-              createPortableBrowserDownload(name, minimumBytes, windowPort),
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.#listeners.add(listener)
+    return () => this.#listeners.delete(listener)
+  }
+
+  readonly getSnapshot = (): V2OutputPresentationSnapshot => this.#snapshot
+
+  updateProjection(
+    state: SelectionProjectionState,
+    environment: EnvironmentOffers,
+  ): Promise<ProjectionPresentationResult> {
+    const boundary = ++this.#boundary
+    const epoch = state.projection.epoch
+    const changedEpoch = this.#snapshot.projection?.projection.epoch !== epoch
+    this.#pendingActivation = undefined
+    this.#publish(Object.freeze({
+      ...(changedEpoch ? EMPTY_V2_OUTPUT_PRESENTATION : this.#snapshot),
+      projection: state,
+      offers: null,
+      offerPresentation: null,
+      ...(changedEpoch
+        ? {
+            chosenAction: null,
+            chosenArtifactKind: null,
+            chosenArtifact: null,
+            receiveIntent: null,
+            plan: null,
+            lifecycle: null,
+            lifecyclePresentation: null,
+            expiresAt: null,
+            workspaceUsage: null,
+            activeControls: Object.freeze([]),
+          }
+        : {}),
+    }))
+
+    return this.#planner(state.projection, state.discovery, environment).then((offers) => {
+      const currentEpoch = this.#snapshot.projection?.projection.epoch
+      if (boundary !== this.#boundary || currentEpoch !== epoch) {
+        this.#traceStale(epoch, 'capability-result')
+        return Object.freeze({ kind: 'stale', projectionEpoch: epoch })
+      }
+      if (offers.projectionEpoch !== epoch) {
+        throw new TypeError('artifact offers do not belong to the current projection epoch')
+      }
+      this.#publish(Object.freeze({
+        ...this.#snapshot,
+        offers,
+        offerPresentation: presentArtifactOffers(offers),
+        chosenAction: null,
+        chosenArtifactKind: null,
+        chosenArtifact: null,
+      }))
+      this.#trace(offers.decision)
+      return Object.freeze({ kind: 'applied', offers })
+    })
+  }
+
+  /** The authority starter is invoked before this method returns to the click handler. */
+  activateArtifact(
+    operation: ArtifactOperation,
+    startAuthority: ArtifactAuthorityStarter<Authority>,
+  ): Promise<ArtifactActivationResult<Authority>> {
+    const offers = this.#snapshot.offers
+    if (offers?.kind !== 'artifact-actions' || this.#pendingActivation !== undefined ||
+        this.#snapshot.chosenAction !== null) {
+      return Promise.resolve(Object.freeze({ kind: 'unavailable' }))
+    }
+    const action = [offers.primary, ...offers.alternatives]
+      .find((candidate) => candidate.operation === operation)
+    if (action === undefined) return Promise.resolve(Object.freeze({ kind: 'unavailable' }))
+
+    const boundary = this.#boundary
+    const epoch = offers.projectionEpoch
+    let started: Authority | PromiseLike<Authority>
+    try {
+      // No state publication or asynchronous work may move ahead of this call.
+      started = startAuthority(action)
+    } catch (error) {
+      return Promise.reject(error)
+    }
+    const pending = Object.freeze({ boundary, epoch, action })
+    this.#pendingActivation = pending
+    this.#publish(Object.freeze({
+      ...this.#snapshot,
+      chosenAction: action,
+      chosenArtifactKind: action.artifactKind,
+      chosenArtifact: action.artifact,
+    }))
+
+    return Promise.resolve(started).then(async (authority): Promise<ArtifactActivationResult<Authority>> => {
+      if (this.#pendingActivation === pending) this.#pendingActivation = undefined
+      if (!this.#activationIsCurrent(pending)) {
+        await this.#releaseStaleAuthority?.(authority)
+        this.#traceStale(epoch, 'authority-result')
+        return Object.freeze({ kind: 'stale', projectionEpoch: epoch, action })
+      }
+      return Object.freeze({ kind: 'acquired', projectionEpoch: epoch, action, authority })
+    }, (error: unknown) => {
+      const remainsCurrent = this.#activationIsCurrent(pending)
+      if (this.#pendingActivation === pending) this.#pendingActivation = undefined
+      if (remainsCurrent) {
+        // Cancellation before intent freeze returns to the same offered action.
+        this.#publish(Object.freeze({
+          ...this.#snapshot,
+          chosenAction: null,
+          chosenArtifactKind: null,
+          chosenArtifact: null,
+        }))
+      }
+      throw error
+    })
+  }
+
+  retryConfirmation(
+    startRetry: (epoch: ProjectionEpoch) => void | PromiseLike<void>,
+  ): Promise<RetryConfirmationResult> {
+    const offers = this.#snapshot.offers
+    if (offers?.kind !== 'retry-confirmation') {
+      return Promise.resolve(Object.freeze({ kind: 'unavailable' }))
+    }
+    const boundary = this.#boundary
+    const epoch = offers.projectionEpoch
+    let started: void | PromiseLike<void>
+    try {
+      started = startRetry(epoch)
+    } catch (error) {
+      return Promise.reject(error)
+    }
+    return Promise.resolve(started).then(() => {
+      if (boundary !== this.#boundary || this.#snapshot.projection?.projection.epoch !== epoch) {
+        this.#traceStale(epoch, 'artifact-action')
+        return Object.freeze({ kind: 'stale', projectionEpoch: epoch })
+      }
+      return Object.freeze({ kind: 'completed', projectionEpoch: epoch })
+    })
+  }
+
+  adoptReceiveIntent(
+    projectionEpoch: ProjectionEpoch,
+    intent: ReceiveIntent,
+    lifecycle?: ReceiveLifecycleState,
+    nowMilliseconds = Date.now(),
+    workspaceUsage?: WorkspaceUsage | null,
+    activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+  ): boolean {
+    const action = this.#snapshot.chosenAction
+    if (this.#snapshot.projection?.projection.epoch !== projectionEpoch ||
+        action?.projectionEpoch !== projectionEpoch) {
+      this.#traceStale(projectionEpoch, 'artifact-action')
+      return false
+    }
+    if (action.artifactKind !== intent.artifact.kind || action.plan.kind !== intent.plan.kind ||
+        (action.artifact !== null && action.artifact.digest !== intent.artifact.digest)) {
+      throw new TypeError('bound receive intent does not match the chosen artifact action')
+    }
+    this.#publishLifecycleSnapshot({
+      ...this.#snapshot,
+      chosenArtifactKind: intent.artifact.kind,
+      chosenArtifact: intent.artifact,
+      receiveIntent: intent,
+      plan: intent.plan,
+      activeControls: Object.freeze([...activeControls]),
+    }, lifecycle ?? null, nowMilliseconds, workspaceUsage)
+    return true
+  }
+
+  adoptRetainedReceiveIntent(
+    intent: ReceiveIntent,
+    lifecycle: ReceiveLifecycleState,
+    nowMilliseconds = Date.now(),
+    workspaceUsage?: WorkspaceUsage | null,
+    activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+  ): void {
+    if (lifecycle.operationId !== intent.operationId ||
+        lifecycle.receiveIntentDigest !== intent.digest) {
+      throw new TypeError('retained lifecycle does not belong to its validated receive intent')
+    }
+    this.#boundary += 1
+    this.#pendingActivation = undefined
+    this.#publishLifecycleSnapshot({
+      ...EMPTY_V2_OUTPUT_PRESENTATION,
+      chosenArtifactKind: intent.artifact.kind,
+      chosenArtifact: intent.artifact,
+      receiveIntent: intent,
+      plan: intent.plan,
+      activeControls: Object.freeze([...activeControls]),
+    }, lifecycle, nowMilliseconds, workspaceUsage)
+  }
+
+  updateLifecycle(
+    state: ReceiveLifecycleState,
+    nowMilliseconds = Date.now(),
+    workspaceUsage?: WorkspaceUsage | null,
+    activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+  ): boolean {
+    const intent = this.#snapshot.receiveIntent
+    if (intent === null || state.operationId !== intent.operationId ||
+        state.receiveIntentDigest !== intent.digest) return false
+    const current = this.#snapshot.lifecycle
+    if (current !== null && state.generation <= current.generation) return false
+    this.#publishLifecycleSnapshot({
+      ...this.#snapshot,
+      activeControls: Object.freeze([...activeControls]),
+    }, state, nowMilliseconds, workspaceUsage)
+    return true
+  }
+
+  updateActiveControls(controls: readonly V2ActiveReceiveControl[]): boolean {
+    const lifecycle = this.#snapshot.lifecycle
+    if (lifecycle === null) return false
+    this.#publishLifecycleSnapshot({
+      ...this.#snapshot,
+      activeControls: Object.freeze([...controls]),
+    }, lifecycle, Date.now(), this.#snapshot.workspaceUsage)
+    return true
+  }
+
+  /** Revalidates the result at the controller's post-promise delivery boundary. */
+  acquiredAuthorityIsCurrent(
+    result: Extract<ArtifactActivationResult<Authority>, { kind: 'acquired' }>,
+  ): boolean {
+    const offers = this.#snapshot.offers
+    const current = this.#snapshot.projection?.projection.epoch === result.projectionEpoch &&
+      offers?.kind === 'artifact-actions' &&
+      offers.projectionEpoch === result.projectionEpoch &&
+      this.#snapshot.chosenAction === result.action
+    if (!current) this.#traceStale(result.projectionEpoch, 'authority-result')
+    return current
+  }
+
+  invalidate(): void {
+    this.#boundary += 1
+    this.#pendingActivation = undefined
+    this.#publish(EMPTY_V2_OUTPUT_PRESENTATION)
+  }
+
+  close(): void {
+    this.invalidate()
+    this.#listeners.clear()
+  }
+
+  #publishLifecycleSnapshot(
+    base: V2OutputPresentationSnapshot,
+    lifecycle: ReceiveLifecycleState | null,
+    nowMilliseconds: number,
+    workspaceUsage: WorkspaceUsage | null | undefined,
+  ): void {
+    const artifact = base.chosenArtifact
+    const plan = base.plan
+    if (lifecycle === null) {
+      this.#publish(Object.freeze({
+        ...base,
+        lifecycle: null,
+        lifecyclePresentation: null,
+        expiresAt: null,
+        workspaceUsage: null,
+        activeControls: Object.freeze([]),
+      }))
+      return
+    }
+    if (artifact === null || plan === null) {
+      throw new TypeError('lifecycle presentation requires a bound artifact and plan')
+    }
+    const lifecyclePresentation = presentReceiveLifecycle({
+      state: lifecycle,
+      artifact,
+      planKind: plan.kind,
+      nowMilliseconds,
+      ...(workspaceUsage === undefined ? {} : { workspaceUsage }),
+      activeControls: base.activeControls,
+    })
+    this.#publish(Object.freeze({
+      ...base,
+      lifecycle,
+      lifecyclePresentation,
+      expiresAt: lifecycleDeadline(lifecycle) ??
+        (lifecycle.kind === 'expired' ? lifecycle.expiresAt : null),
+      workspaceUsage: lifecyclePresentation.usage === null
+        ? null
+        : Object.freeze({
+            ownedBytes: lifecyclePresentation.usage.ownedBytes,
+            ...(lifecyclePresentation.usage.maximumBytes === undefined
+              ? {}
+              : { maximumBytes: lifecyclePresentation.usage.maximumBytes }),
           }),
-      resolveRootIdentity: identityProvider.resolveRootIdentity,
-      ...(identityProvider.createTargetIdentity === undefined
-        ? {}
-        : { createTargetIdentity: identityProvider.createTargetIdentity }),
-    },
-  )
-}
-
-/** Root identity services are infrastructure-owned; tests inject a deterministic fake. */
-export interface BrowserV2OutputIdentityProvider {
-  readonly resolveRootIdentity: (
-    root: FileSystemDirectoryHandle,
-    backend: string,
-  ) => Promise<OutputCapabilityIdentity>
-  readonly createTargetIdentity?: (backend: string) => OutputCapabilityIdentity
-}
-
-const DEFAULT_BROWSER_V2_OUTPUT_IDENTITY_PROVIDER: BrowserV2OutputIdentityProvider = Object.freeze({
-  resolveRootIdentity: (
-    root: FileSystemDirectoryHandle,
-    backend: string,
-  ) => resolveIndexedDbRootIdentity({
-    databaseName: DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
-    backend,
-    root,
-  }),
-})
-
-export function browserV2OutputAuthority(
-  acquired: Promise<AcquiredOutputCapability>,
-  sessions: V2BrowserOutputSessionFactory = DEFAULT_V2_BROWSER_OUTPUT_SESSION_FACTORY,
-  pausedTasks: BrowserPausedTaskLifecycle = DEFAULT_BROWSER_PAUSED_TASK_LIFECYCLE,
-): V2OutputAuthority {
-  return new BrowserV2OutputAuthority(acquired, sessions, pausedTasks)
-}
-
-/** A reconstructed durable session is already capability-gated and may be opened once. */
-export function resumedBrowserV2OutputAuthority(
-  intent: TransferIntent,
-  session: OutputSession,
-): V2OutputAuthority {
-  return new ReconstructedBrowserV2OutputAuthority(intent, session)
-}
-
-export function acquireBrowserResumeZipOutput(
-  suggestedName: string,
-  windowPort: V2BrowserOutputWindow = window as unknown as V2BrowserOutputWindow,
-): Promise<WritableStream<Uint8Array>> {
-  if (windowPort.showSaveFilePicker !== undefined) {
-    // Picker invocation remains synchronous; only conversion to a stream awaits.
-    return windowPort.showSaveFilePicker({ suggestedName }).then((handle) => handle.createWritable())
-  }
-  try {
-    return Promise.resolve(createPortableBrowserDownload(suggestedName, 0n, windowPort))
-  } catch (error) {
-    return Promise.reject(error)
-  }
-}
-
-export interface V2BrowserOutputSessionFactory {
-  /**
-   * Durable browser targets must receive the frozen intent binding at the
-   * production boundary. Every target receives the runtime-only directory
-   * receipt scope; stream targets do not persist checkpoints.
-   */
-  open(
-    capability: AcquiredOutputCapability,
-    outputSessionId: string,
-    admissionScope: DirectoryAdmissionScope,
-    binding?: V2OutputCheckpointBinding,
-  ): Promise<OutputSession>
-}
-
-export interface V2OutputCheckpointBinding {
-  readonly transferIntentDigest: string
-  readonly rootIdentity: string
-}
-
-const DEFAULT_V2_BROWSER_OUTPUT_SESSION_FACTORY: V2BrowserOutputSessionFactory = Object.freeze({
-  open: openBrowserV2OutputSession,
-})
-const DEFAULT_BROWSER_PAUSED_TASK_LIFECYCLE = new IndexedDbBrowserPausedTaskLifecycle()
-
-class BrowserV2OutputAuthority implements V2OutputAuthority {
-  readonly #acquired: Promise<AcquiredOutputCapability>
-  readonly #sessions: V2BrowserOutputSessionFactory
-  readonly #pausedTasks: BrowserPausedTaskLifecycle
-  #state: 'pending' | 'opening' | 'opened' | 'aborted' = 'pending'
-  #abortReason: unknown
-  #capabilityCleanup: Promise<void> | undefined
-
-  constructor(
-    acquired: Promise<AcquiredOutputCapability>,
-    sessions: V2BrowserOutputSessionFactory,
-    pausedTasks: BrowserPausedTaskLifecycle,
-  ) {
-    this.#acquired = acquired
-    this.#sessions = sessions
-    this.#pausedTasks = pausedTasks
+    }))
   }
 
-  async confirmOutput(
-    draft: TransferIntentDraft,
-    signal: AbortSignal,
-  ): Promise<{ readonly intent: TransferIntent; readonly session: OutputSession }> {
-    this.#start()
-    let capability: AcquiredOutputCapability | undefined
-    let output: OutputSession | undefined
+  #activationIsCurrent(pending: PendingActivation): boolean {
+    const offers = this.#snapshot.offers
+    return pending.boundary === this.#boundary &&
+      this.#snapshot.projection?.projection.epoch === pending.epoch &&
+      offers?.kind === 'artifact-actions' &&
+      offers.projectionEpoch === pending.epoch &&
+      this.#snapshot.chosenAction === pending.action
+  }
+
+  #traceStale(
+    staleEpoch: ProjectionEpoch,
+    eventClass: Extract<V2OutputTraceEvent, {
+      name: 'receive.projection.stale_event_dropped'
+    }>['event_class'],
+  ): void {
+    const currentEpoch = this.#snapshot.projection?.projection.epoch
+    if (currentEpoch === undefined || currentEpoch === staleEpoch) return
+    this.#trace(Object.freeze({
+      name: 'receive.projection.stale_event_dropped',
+      current_projection_epoch: currentEpoch,
+      stale_projection_epoch: staleEpoch,
+      event_class: eventClass,
+    }))
+  }
+
+  #trace(event: V2OutputTraceEvent): void {
     try {
-      capability = await awaitOutputCapability(this.#acquired, signal)
-      signal.throwIfAborted()
-      if (this.#wasAborted()) throw this.#abortReason
-      // The picker result is the authority for backend and format. The draft is
-      // intentionally not digestible until this branch has resolved.
-      const intent = await freezeTransferIntent(draft, outputLocatorForCapability(capability))
-      assertIntentMatchesCapability(intent, capability)
-      output = await this.#openConfirmed(intent, capability, signal)
-      this.#state = 'opened'
-      return Object.freeze({ intent, session: output })
-    } catch (error) {
-      await this.#cleanup(error, capability, output)
-      throw error
+      this.#onTrace?.(event)
+    } catch {
+      // Observers cannot change artifact choice, authority ownership, or epoch fencing.
     }
   }
 
-  async openOutput(
-    intent: TransferIntent,
-    signal: AbortSignal,
-  ): Promise<OutputSession> {
-    this.#start()
-    let capability: AcquiredOutputCapability | undefined
-    let output: OutputSession | undefined
-    try {
-      intent = await validateFinalTransferIntent(intent)
-      capability = await awaitOutputCapability(this.#acquired, signal)
-      signal.throwIfAborted()
-      if (this.#wasAborted()) throw this.#abortReason
-      assertIntentMatchesCapability(intent, capability)
-      output = await this.#openConfirmed(intent, capability, signal)
-      signal.throwIfAborted()
-      this.#state = 'opened'
-      return output
-    } catch (error) {
-      await this.#cleanup(error, capability, output)
-      throw error
-    }
+  #publish(snapshot: V2OutputPresentationSnapshot): void {
+    this.#snapshot = snapshot
+    for (const listener of this.#listeners) listener()
   }
-
-  #start(): void {
-    if (this.#state !== 'pending') throw new Error('Browser output authority can only be opened once')
-    this.#state = 'opening'
-  }
-
-  async #openConfirmed(
-    intent: TransferIntent,
-    capability: AcquiredOutputCapability,
-    signal: AbortSignal,
-  ): Promise<OutputSession> {
-    // OutputSessionID is per run. The final intent digest, rather than a
-    // terminal selection text, owns durable recovery identity.
-    const binding = checkpointBindingFor(intent, capability)
-    const admissionScope = directoryAdmissionScope(intent)
-    const output = await this.#sessions.open(
-      capability,
-      freshOutputSessionId(),
-      admissionScope,
-      binding,
-    )
-    let validated: OutputSession
-    try {
-      signal.throwIfAborted()
-      // Root admission belongs to the transfer job because only authenticated
-      // catalog discovery knows the committed root generation. Opening a picker
-      // must never manufacture that generation from the directory identity.
-      validated = validateOutputSessionBinding(intent, output)
-    } catch (error) {
-      await output.pauseJob(error).catch(() => undefined)
-      throw error
-    }
-    // Persistence runs only after the exact durable namespace is open. Its
-    // failure path suspends the session and never acquires discard authority.
-    return this.#pausedTasks.track(intent, capability, validated)
-  }
-
-  async #cleanup(
-    reason: unknown,
-    capability: AcquiredOutputCapability | undefined,
-    output: OutputSession | undefined,
-  ): Promise<void> {
-    this.#state = 'aborted'
-    this.#abortReason = reason
-    if (output !== undefined) {
-      await output.pauseJob(reason).catch(() => undefined)
-    } else if (capability !== undefined) {
-      await abortOutputCapability(capability, reason)
-    } else {
-      this.#scheduleCapabilityAbort(reason)
-    }
-  }
-
-  abort(reason: unknown): Promise<void> {
-    if (this.#state === 'opened' || this.#state === 'aborted') return Promise.resolve()
-    this.#state = 'aborted'
-    this.#abortReason = reason
-    // A browser picker cannot be cancelled programmatically. Arrange cleanup
-    // without making receiver cancellation wait for the user to dismiss it.
-    this.#scheduleCapabilityAbort(reason)
-    return Promise.resolve()
-  }
-
-  #wasAborted(): boolean {
-    return this.#state === 'aborted'
-  }
-
-  #scheduleCapabilityAbort(reason: unknown): void {
-    if (this.#capabilityCleanup !== undefined) return
-    this.#capabilityCleanup = this.#acquired.then(
-      (capability) => abortOutputCapability(capability, reason),
-      () => undefined,
-    ).then(() => undefined, () => undefined)
-  }
-}
-
-class ReconstructedBrowserV2OutputAuthority implements V2OutputAuthority {
-  readonly #intent: TransferIntent
-  readonly #session: OutputSession
-  #state: 'pending' | 'opening' | 'opened' | 'paused' = 'pending'
-
-  constructor(intent: TransferIntent, session: OutputSession) {
-    this.#intent = intent
-    this.#session = session
-  }
-
-  confirmOutput(): Promise<{ readonly intent: TransferIntent; readonly session: OutputSession }> {
-    return Promise.reject(new Error('A resumed transfer already has a frozen output authority'))
-  }
-
-  async openOutput(intent: TransferIntent, signal: AbortSignal): Promise<OutputSession> {
-    if (this.#state !== 'pending') {
-      throw new Error('Reconstructed output authority can only be opened once')
-    }
-    this.#state = 'opening'
-    try {
-      signal.throwIfAborted()
-      const [expected, requested] = await Promise.all([
-        validateFinalTransferIntent(this.#intent),
-        validateFinalTransferIntent(intent),
-      ])
-      if (requested.digest !== expected.digest) {
-        throw new TypeError('Resumed transfer intent does not match its reconstructed output')
-      }
-      signal.throwIfAborted()
-      const session = validateOutputSessionBinding(expected, this.#session)
-      this.#state = 'opened'
-      return session
-    } catch (error) {
-      // Reconstruction already holds the namespace lease, so any failed open must
-      // reach a stable pause instead of relying on a later authority abort.
-      this.#state = 'paused'
-      try {
-        await this.#session.pauseJob(error)
-      } catch (pauseError) {
-        throw new AggregateError(
-          [error, pauseError],
-          'Reconstructed output validation and stable pause both failed',
-          { cause: pauseError },
-        )
-      }
-      throw error
-    }
-  }
-
-  async abort(reason: unknown): Promise<void> {
-    if (this.#state !== 'pending') return
-    this.#state = 'paused'
-    await this.#session.pauseJob(reason)
-  }
-}
-
-/**
- * The picker returns a capability rather than a sender path.  Its persisted
- * root identity is the target locator; backend/format/kind are copied from the
- * same capability so a restored intent cannot select a different sink class.
- */
-export function outputLocatorForCapability(
-  capability: AcquiredOutputCapability,
-): TransferOutputLocator {
-  validateCapabilityDescriptor(capability)
-  const identity = snapshotOutputCapabilityIdentity(
-    capability.rootIdentity,
-    `${capability.kind} root identity`,
-  )
-  return Object.freeze({
-    target: encodeBase64Url(identity),
-    targetKind: 2,
-    backend: capability.backend,
-    format: capability.format,
-  })
-}
-
-function validateCapabilityDescriptor(capability: AcquiredOutputCapability): void {
-  snapshotOutputCapabilityIdentity(capability.rootIdentity, `${capability.kind} root identity`)
-  let expected: {
-    readonly backend: string
-    readonly format: 'directory' | 'single-file' | 'zip'
-    readonly targetKind: 2
-  }
-  if (capability.kind === 'PersistentDirectory') {
-    expected = { backend: FILE_SYSTEM_ACCESS_BACKEND, format: 'directory', targetKind: 2 }
-  } else if (capability.kind === 'OriginPrivateStaging') {
-    expected = { backend: ORIGIN_PRIVATE_BACKEND, format: 'zip', targetKind: 2 }
-  } else if (capability.kind === 'SingleFileStream') {
-    expected = { backend: SINGLE_FILE_STREAM_BACKEND, format: 'single-file', targetKind: 2 }
-  } else {
-    expected = { backend: ZIP_STREAM_BACKEND, format: 'zip', targetKind: 2 }
-  }
-  if (capability.backend !== expected.backend ||
-      capability.format !== expected.format ||
-      capability.targetKind !== expected.targetKind) {
-    throw new TypeError('acquired output capability metadata does not match its kind')
-  }
-}
-
-/**
- * OpenOutput and confirmOutput share this gate.  It is deliberately based on
- * the acquired capability's exact identity rather than a backend label: a
- * restored intent for another root, format, or target kind fails before the
- * session factory can touch durable state.
- */
-function assertIntentMatchesCapability(
-  intent: TransferIntent,
-  capability: AcquiredOutputCapability,
-): void {
-  const expected = outputLocatorForCapability(capability)
-  const actual = intent.output
-  const actualTargetKind = actual.targetKind
-  const target = decodeBase64Url(actual.target)
-  const expectedTarget = decodeBase64Url(expected.target)
-  if (target === undefined || expectedTarget === undefined ||
-      !sameOutputCapabilityIdentity(target, expectedTarget) ||
-      actual.backend !== expected.backend ||
-      actual.format !== expected.format ||
-      actualTargetKind !== expected.targetKind) {
-    throw new TypeError('transfer intent output locator does not match the acquired output capability')
-  }
-}
-
-function freshOutputSessionId(): string {
-  return createOutputSessionId()
-}
-
-export async function openBrowserV2OutputSession(
-  capability: AcquiredOutputCapability,
-  outputSessionId: string,
-  admissionScope: DirectoryAdmissionScope,
-  binding?: V2OutputCheckpointBinding,
-): Promise<OutputSession> {
-  validateCapabilityDescriptor(capability)
-  switch (capability.kind) {
-    case 'PersistentDirectory': {
-      const durableBinding = requireCheckpointBinding(binding, 'directory')
-      assertBindingMatchesCapability(durableBinding, capability)
-      return acquireFileSystemAccessOutputSession(capability.root, {
-        outputSessionId,
-        directoryAdmissionScope: admissionScope,
-        transferIntentDigest: durableBinding.transferIntentDigest,
-        rootIdentity: durableBinding.rootIdentity,
-      })
-    }
-    case 'SingleFileStream':
-      return new SingleFileStreamOutputSession(outputSessionId, admissionScope, capability.output)
-    case 'ZipStream':
-      return new ZipStreamOutputSession({
-        outputSessionId,
-        directoryAdmissionScope: admissionScope,
-        archive: new StreamingZipArchiveWriter(
-          capability.output,
-          new IndexedDbZipCentralDirectorySpool(),
-        ),
-      })
-    case 'OriginPrivateStaging':
-      {
-      const durableBinding = requireCheckpointBinding(binding, 'origin-private staging')
-      assertBindingMatchesCapability(durableBinding, capability)
-      try {
-        return await openOriginPrivateOutputSession({
-          outputSessionId,
-          directoryAdmissionScope: admissionScope,
-          transferIntentDigest: durableBinding.transferIntentDigest,
-          rootIdentity: durableBinding.rootIdentity,
-          storage: {
-            getDirectory: async () => capability.root,
-            estimate: () => navigator.storage.estimate(),
-          },
-          exporter: new OriginPrivateZipExporter(capability.output),
-        })
-      } catch (error) {
-        await capability.output.abort(error).catch(() => undefined)
-        throw error
-      }
-      }
-  }
-}
-
-function assertBindingMatchesCapability(
-  binding: V2OutputCheckpointBinding,
-  capability: AcquiredOutputCapability,
-): void {
-  const expected = encodeBase64Url(capability.rootIdentity)
-  if (binding.rootIdentity !== expected) {
-    throw new TypeError('checkpoint root identity does not match the acquired output capability')
-  }
-}
-
-function checkpointBindingFor(
-  intent: TransferIntent,
-  capability: AcquiredOutputCapability,
-): V2OutputCheckpointBinding | undefined {
-  if (capability.kind !== 'PersistentDirectory' && capability.kind !== 'OriginPrivateStaging') {
-    return undefined
-  }
-  // The persistent output target is the backend-issued opaque root identity.
-  // It is included in the frozen intent, so reopening with a different picker
-  // root cannot silently join an existing checkpoint namespace.
-  requireOpaqueIdentity(intent.digest, 'transfer intent digest')
-  requireOpaqueIdentity(intent.output.target, 'output root identity')
-  return {
-    transferIntentDigest: intent.digest,
-    rootIdentity: intent.output.target,
-  }
-}
-
-function requireCheckpointBinding(
-  binding: V2OutputCheckpointBinding | undefined,
-  target: string,
-): V2OutputCheckpointBinding {
-  if (binding === undefined) {
-    throw new Error(`Browser ${target} output requires a frozen transfer-intent/root binding`)
-  }
-  return {
-    transferIntentDigest: requireOpaqueIdentity(binding.transferIntentDigest, 'transfer intent digest'),
-    rootIdentity: requireOpaqueIdentity(binding.rootIdentity, 'output root identity'),
-  }
-}
-
-function requireOpaqueIdentity(value: string, label: string): string {
-  // SHA-256 identities are always unpadded base64url (32 bytes -> 43 chars).
-  if (!/^[A-Za-z0-9_-]{43}$/u.test(value) || /^A{43}$/u.test(value)) {
-    throw new TypeError(`${label} must be a non-zero 32-byte base64url identity`)
-  }
-  return value
-}
-
-function awaitOutputCapability(
-  acquired: Promise<AcquiredOutputCapability>,
-  signal: AbortSignal,
-): Promise<AcquiredOutputCapability> {
-  signal.throwIfAborted()
-  return new Promise((resolve, reject) => {
-    const aborted = () => reject(
-      signal.reason ?? new DOMException('Output acquisition aborted', 'AbortError'),
-    )
-    signal.addEventListener('abort', aborted, { once: true })
-    acquired.then(resolve, reject).finally(() => signal.removeEventListener('abort', aborted))
-  })
-}
-
-async function abortOutputCapability(
-  capability: AcquiredOutputCapability,
-  reason: unknown,
-): Promise<void> {
-  if (capability.kind === 'PersistentDirectory') return
-  await capability.output.abort(reason).catch(() => undefined)
 }

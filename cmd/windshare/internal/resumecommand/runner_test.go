@@ -57,7 +57,7 @@ func TestResumeParsersAcceptOnlyAnOutputRootAndOneLiveItem(t *testing.T) {
 
 func TestResumeListUsesFreshInventoryAndReportsNeedsAttention(t *testing.T) {
 	root := t.TempDir()
-	t.Run("available", func(t *testing.T) {
+	t.Run("resumable", func(t *testing.T) {
 		inventory := &fakeResumeStateInventory{items: []resumeStateItem{availableResumeItem()}}
 		opener := &fakeResumeStateInventoryOpener{inventory: inventory}
 		app, stdout, stderr := newResumeTestApp()
@@ -66,13 +66,15 @@ func TestResumeListUsesFreshInventoryAndReportsNeedsAttention(t *testing.T) {
 		if code := app.Run(context.Background(), []string{"resume", "list", "-o", root}); code != ResultOK {
 			t.Fatalf("code=%d stderr=%q", code, stderr.String())
 		}
-		if opener.calls != 1 || opener.rootPath != root || !inventory.closed {
+		if opener.calls != 1 || opener.rootPath != root {
 			t.Fatalf("opener=%+v inventory=%+v", opener, inventory)
 		}
 		for _, want := range []string{
-			`resume_list_status="available" items=1`,
-			`resume_item=1 status="available"`,
-			`checkpoint_records=2 recovery_artifact_bytes=4096`,
+			`resume_list_status="ready" items=1`,
+			`resume_item=1 status="resumable"`,
+			`operation_id="11111111111111111111111111111111"`,
+			`phase=4 state_generation=3 expires_at_millis=4096`,
+			`resumable=true discardable=true`,
 		} {
 			if !strings.Contains(stdout.String(), want) {
 				t.Fatalf("stdout=%q missing=%q", stdout.String(), want)
@@ -90,15 +92,15 @@ func TestResumeListUsesFreshInventoryAndReportsNeedsAttention(t *testing.T) {
 		}
 		for _, want := range []string{
 			`resume_list_status="needs-attention"`,
-			`reason="replacement"`,
-			`reference="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`,
+			`reason="cleanup-unknown"`,
+			`operation_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`,
 		} {
 			if !strings.Contains(stdout.String(), want) {
 				t.Fatalf("stdout=%q missing=%q", stdout.String(), want)
 			}
 		}
-		if !inventory.closed || !strings.Contains(stderr.String(), "no deletion authority was used") {
-			t.Fatalf("closed=%t stderr=%q", inventory.closed, stderr.String())
+		if !strings.Contains(stderr.String(), "no deletion authority was used") {
+			t.Fatalf("stderr=%q", stderr.String())
 		}
 	})
 }
@@ -123,13 +125,11 @@ func TestResumeListReportsTypedBusyWithoutOpeningLegacyCleanup(t *testing.T) {
 	}
 }
 
-func TestResumeDiscardRequiresExactTerminalIntentAndKeepsInventoryLive(t *testing.T) {
+func TestResumeDiscardRequiresExactTerminalIntentForTheFreshOperation(t *testing.T) {
 	root := t.TempDir()
 	inventory := &fakeResumeStateInventory{
-		items: []resumeStateItem{availableResumeItem()},
-		discardReport: resumeDiscardReport{
-			status: resumeDiscardStatusDiscarded, removedArtifacts: 3,
-		},
+		items:         []resumeStateItem{availableResumeItem()},
+		discardReport: settledResumeDiscardReport(),
 	}
 	terminal := &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
 	app, stdout, stderr := newResumeTestApp()
@@ -141,17 +141,18 @@ func TestResumeDiscardRequiresExactTerminalIntentAndKeepsInventoryLive(t *testin
 	}); code != ResultOK {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	if inventory.discardCalls != 1 || inventory.discardIndex != 0 || inventory.closedDuringDiscard || !inventory.closed {
+	if inventory.discardCalls != 1 || inventory.discardIndex != 0 {
 		t.Fatalf("inventory=%+v", inventory)
 	}
-	if terminal.calls != 1 || !strings.Contains(terminal.prompt, `resume_item=1 status="available"`) ||
+	if terminal.calls != 1 || !strings.Contains(terminal.prompt, `resume_item=1 status="resumable"`) ||
 		!strings.Contains(terminal.prompt, `Type "discard 1" exactly`) ||
 		!strings.Contains(terminal.prompt, "Published files are preserved") {
 		t.Fatalf("terminal=%+v", terminal)
 	}
 	for _, want := range []string{
-		`resume_discard_status="discarded"`,
-		`removed_artifacts=3`,
+		`resume_discard_status="settled"`,
+		`operation_id="11111111111111111111111111111111"`,
+		`phase=18 state_generation=4 resumable=false`,
 		`published_files="preserved"`,
 	} {
 		if !strings.Contains(stdout.String(), want) {
@@ -195,7 +196,7 @@ func TestResumeDiscardRejectsRedirectedOrInexactConfirmation(t *testing.T) {
 			}); code != ResultFailure {
 				t.Fatalf("code=%d", code)
 			}
-			if inventory.discardCalls != 0 || !inventory.closed {
+			if inventory.discardCalls != 0 {
 				t.Fatalf("inventory=%+v", inventory)
 			}
 			if !strings.Contains(stdout.String(), fmt.Sprintf(`resume_discard_status=%q`, test.status)) {
@@ -231,7 +232,7 @@ func TestResumeDiscardReportsBusyAndNeedsAttentionAsClosedOutcomes(t *testing.T)
 				t.Fatalf("stdout=%q missing=%q", stdout.String(), want)
 			}
 		}
-		if inventory.discardCalls != 1 || !inventory.closed {
+		if inventory.discardCalls != 1 {
 			t.Fatalf("inventory=%+v", inventory)
 		}
 	})
@@ -240,9 +241,10 @@ func TestResumeDiscardReportsBusyAndNeedsAttentionAsClosedOutcomes(t *testing.T)
 		inventory := &fakeResumeStateInventory{
 			items: []resumeStateItem{attentionResumeItem()},
 			discardReport: resumeDiscardReport{
-				status: resumeDiscardStatusNeedsAttention,
+				status:      resumeDiscardStatusNeedsAttention,
+				operationID: strings.Repeat("a", 32), phase: 20, stateGeneration: 5,
 				attention: []resumeStateAttention{{
-					reason: "ambiguous-publication", reference: strings.Repeat("b", 64),
+					reason: "cleanup-unknown", operationID: strings.Repeat("a", 32),
 				}},
 			},
 		}
@@ -256,17 +258,20 @@ func TestResumeDiscardReportsBusyAndNeedsAttentionAsClosedOutcomes(t *testing.T)
 			t.Fatalf("code=%d", code)
 		}
 		if !strings.Contains(stdout.String(), `resume_discard_status="needs-attention"`) ||
-			!strings.Contains(stdout.String(), `reason="ambiguous-publication"`) ||
+			!strings.Contains(stdout.String(), `reason="cleanup-unknown"`) ||
 			!strings.Contains(stdout.String(), `published_files="preserved"`) ||
 			!strings.Contains(stderr.String(), "uncertain and published objects were preserved") {
 			t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 		}
 	})
 
-	t.Run("already absent", func(t *testing.T) {
+	t.Run("published terminal record remains truthful", func(t *testing.T) {
 		inventory := &fakeResumeStateInventory{
-			items:         []resumeStateItem{availableResumeItem()},
-			discardReport: resumeDiscardReport{status: resumeDiscardStatusAlreadyAbsent},
+			items: []resumeStateItem{availableResumeItem()},
+			discardReport: resumeDiscardReport{
+				status: resumeDiscardStatusSettled, operationID: strings.Repeat("1", 32),
+				phase: 14, stateGeneration: 4,
+			},
 		}
 		app, stdout, _ := newResumeTestApp()
 		app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
@@ -276,7 +281,8 @@ func TestResumeDiscardReportsBusyAndNeedsAttentionAsClosedOutcomes(t *testing.T)
 		}); code != ResultOK {
 			t.Fatalf("code=%d", code)
 		}
-		if !strings.Contains(stdout.String(), `resume_discard_status="already-absent"`) {
+		if !strings.Contains(stdout.String(), `resume_discard_status="settled"`) ||
+			!strings.Contains(stdout.String(), `phase=14 state_generation=4 resumable=false`) {
 			t.Fatalf("stdout=%q", stdout.String())
 		}
 	})
@@ -294,8 +300,32 @@ func TestResumeDiscardValidatesCurrentOrdinalBeforePrompt(t *testing.T) {
 	}); code != ResultUsage {
 		t.Fatalf("code=%d", code)
 	}
-	if terminal.calls != 0 || inventory.discardCalls != 0 || !inventory.closed {
+	if terminal.calls != 0 || inventory.discardCalls != 0 {
 		t.Fatalf("terminal=%+v inventory=%+v", terminal, inventory)
+	}
+}
+
+func TestResumeDiscardRefusesAttentionOnlyInventoryEvidence(t *testing.T) {
+	operationID := strings.Repeat("c", 32)
+	inventory := &fakeResumeStateInventory{items: []resumeStateItem{{
+		status: resumeItemStatusNeedsAttention, operationID: operationID,
+		attention: []resumeStateAttention{{
+			reason: "target-ownership-unknown", operationID: operationID,
+		}},
+	}}}
+	terminal := &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
+	app, _, stderr := newResumeTestApp()
+	app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
+	app.resumeConfirmation = terminal
+
+	if code := app.Run(context.Background(), []string{
+		"resume", "discard", "-o", t.TempDir(), "--item", "1",
+	}); code != ResultFailure {
+		t.Fatalf("code=%d", code)
+	}
+	if terminal.calls != 0 || inventory.discardCalls != 0 ||
+		!strings.Contains(stderr.String(), "no mutation authority") {
+		t.Fatalf("terminal=%+v inventory=%+v stderr=%q", terminal, inventory, stderr.String())
 	}
 }
 
@@ -444,17 +474,28 @@ func TestResumeSurfaceExposesNoCompatibilityOrSessionDeletionCommands(t *testing
 
 func availableResumeItem() resumeStateItem {
 	return resumeStateItem{
-		status: resumeListStatusAvailable, intentDigest: strings.Repeat("1", 64),
-		backend: "native-filesystem", checkpointRecordCount: 2, recoveryArtifactBytes: 4096,
+		status: resumeItemStatusResumable, operationID: strings.Repeat("1", 32),
+		intentDigest: strings.Repeat("2", 64), phase: 4, stateGeneration: 3,
+		expiresAtMillis: 4096, successCount: 2, failureCount: 1,
+		resumable: true, discardable: true,
 	}
 }
 
 func attentionResumeItem() resumeStateItem {
 	return resumeStateItem{
-		status: resumeListStatusNeedsAttention,
+		status: resumeItemStatusNeedsAttention, operationID: strings.Repeat("a", 32),
+		intentDigest: strings.Repeat("b", 64), phase: 20, stateGeneration: 4,
+		discardable: true,
 		attention: []resumeStateAttention{{
-			reason: "replacement", reference: strings.Repeat("a", 64),
+			reason: "cleanup-unknown", operationID: strings.Repeat("a", 32),
 		}},
+	}
+}
+
+func settledResumeDiscardReport() resumeDiscardReport {
+	return resumeDiscardReport{
+		status: resumeDiscardStatusSettled, operationID: strings.Repeat("1", 32),
+		phase: 18, stateGeneration: 4,
 	}
 }
 
@@ -570,15 +611,12 @@ func (opener *fakeResumeStateInventoryOpener) OpenResumeStateInventory(
 }
 
 type fakeResumeStateInventory struct {
-	items               []resumeStateItem
-	itemsErr            error
-	discardReport       resumeDiscardReport
-	discardErr          error
-	closeErr            error
-	discardCalls        int
-	discardIndex        int
-	closedDuringDiscard bool
-	closed              bool
+	items         []resumeStateItem
+	itemsErr      error
+	discardReport resumeDiscardReport
+	discardErr    error
+	discardCalls  int
+	discardIndex  int
 }
 
 func (inventory *fakeResumeStateInventory) Items() ([]resumeStateItem, error) {
@@ -593,13 +631,7 @@ func (inventory *fakeResumeStateInventory) Discard(
 ) (resumeDiscardReport, error) {
 	inventory.discardCalls++
 	inventory.discardIndex = index
-	inventory.closedDuringDiscard = inventory.closed
 	return inventory.discardReport, inventory.discardErr
-}
-
-func (inventory *fakeResumeStateInventory) Close() error {
-	inventory.closed = true
-	return inventory.closeErr
 }
 
 type fakeResumeConfirmationTerminal struct {

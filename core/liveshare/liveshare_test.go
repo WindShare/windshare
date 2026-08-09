@@ -24,6 +24,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestPreparedSenderAndReceiverOwnSuite02Bootstrap(t *testing.T) {
@@ -185,12 +186,22 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 	// its content-authentication resources until its own lifecycle ends.
 	receiver.Close()
 	rules, _ := transfer.NewSelectionRules(true, nil)
-	intent, err := transfer.NewPathTransferIntent(
+	selection, err := transfer.NewSelectionSpec(
 		receiverRuntime.Descriptor().ShareInstance(), receiverRuntime.Descriptor().SyntheticRoot(),
-		rules, outputRoot, transfer.NativeFilesystemOutputBackendID, transfer.OutputNativeTree,
+		rules,
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	reservation, err := output.ReserveDirectTree(
+		context.Background(), selection, receivecontract.NewCatalogRootDirectoryTree(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, ok := reservation.ReceiveIntent()
+	if !ok || reservation.Kind() != osfs.NativeDirectTreeReserved {
+		t.Fatalf("native reservation = %d", reservation.Kind())
 	}
 	jobID, err := transfer.NewTransferJobID()
 	if err != nil {
@@ -201,9 +212,10 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != transfer.JobSucceeded || result.Settlement.Kind() != transfer.JobClosed ||
+	if result.Outcome != transfer.DirectTreeOutcomePublished ||
+		result.Settlement.Kind() != transfer.DirectTreeSettlementPublished ||
 		result.SucceededFiles != 1 || result.TerminationCause != nil ||
-		result.TransferJobID != jobID || result.IntentDigest != intent.Digest() || result.TransferIntent.IsZero() {
+		result.TransferJobID != jobID || result.ReceiveIntentDigest != intent.Digest() || result.ReceiveIntent.IsZero() {
 		t.Fatalf("job result = %+v", result)
 	}
 	written, err := os.ReadFile(filepath.Join(outputRoot, "tree", "nested", "file.bin"))

@@ -31,14 +31,14 @@ func TestTransferJobSessionFailureAbortsJob(t *testing.T) {
 	terminal := sessionProtocolFailure(errors.New("authenticated terminal"))
 	replayBlocked := make(chan struct{})
 	catalogSource := &sessionFailureReplayBarrierCatalog{snapshot: snapshot, replayBlocked: replayBlocked}
-	job, _ := newTestTransferJob(t, TransferJobConfig{
+	job, _ := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog: catalogSource, Revisions: revisions,
-		Blocks: replayBarrierSessionFailingBlocks{replayBlocked: replayBlocked, err: terminal}, Output: output,
+		Blocks: replayBarrierSessionFailingBlocks{replayBlocked: replayBlocked, err: terminal}, Materializer: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome || result.TerminationFault != normalizedFault(terminal) || !output.aborted || output.finished != 0 ||
-		result.Measure.Class() != SelectionSmall || !result.Measure.DiscoveryTerminalSuccess ||
+	if result.Outcome != DirectTreeOutcomeResumable || result.TerminationFault != normalizedFault(terminal) || !output.aborted || output.finished != 0 ||
+		result.Measure.ConnectionSizeClass() != ConnectionSizeSmall || !result.Measure.DiscoveryTerminalSuccess ||
 		result.Measure.DiscoveredFiles != 2 || result.Measure.DiscoveredBytes != 2*chunk {
 		t.Fatalf("result=%+v output=%+v", result, output)
 	}
@@ -50,7 +50,7 @@ func TestTransferJobSessionFailureAbortsJob(t *testing.T) {
 		transaction.commitCalls != 0 || output.transactions["later.bin"] != nil {
 		t.Fatalf("result=%+v transaction=%+v output=%+v", result, transaction, output)
 	}
-	if second := job.Run(context.Background()); second.Outcome != JobPausedOutcome || second.TerminationFault != fault.DependencyContractFault() {
+	if second := job.Run(context.Background()); second.Outcome != DirectTreeOutcomeResumable || second.TerminationFault != fault.DependencyContractFault() {
 		t.Fatalf("second run=%+v", second)
 	}
 }
@@ -142,18 +142,18 @@ func TestTransferJobAcceptsRecoveredImmediateRetirementWithoutContentOrSecondFil
 	blocks := &retiredCountingRangeReader{}
 	job, file := branchJob(t, output, revisions, blocks)
 	opened := revisions.opened[file]
-	locator, err := NewPathOutputLocator("file.bin")
+	locator, err := NewPathMaterializationLocator("file.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := NewOutputFileTarget(output.BackendID(), output.SessionID(), opened.Descriptor, locator)
+	target, err := NewFileMaterializationTarget(output.SessionID(), opened.Descriptor, locator)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var identity OutputObjectIdentity
+	var identity OwnedObjectID
 	digest := sha256.Sum256([]byte("recovered-retiring-output"))
 	copy(identity[:], digest[:])
-	binding, err := BindOutputFileTarget(target, identity)
+	binding, err := BindFileMaterializationTarget(target, identity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestTransferJobAcceptsRecoveredImmediateRetirementWithoutContentOrSecondFil
 	output.immediate["file.bin"] = retired
 
 	result := job.Run(context.Background())
-	if result.Outcome != JobCompletedWithErrors || result.Settlement.Kind() != JobClosed ||
+	if result.Outcome != DirectTreeOutcomePartialDirectory || result.Settlement.Kind() != DirectTreeSettlementPartialDirectory ||
 		result.TerminationCause != nil || result.SettlementFailure != nil || result.SucceededFiles != 0 {
 		t.Fatalf("result = %+v", result)
 	}
@@ -172,12 +172,12 @@ func TestTransferJobAcceptsRecoveredImmediateRetirementWithoutContentOrSecondFil
 		result.Files[0].SettlementFailure != nil {
 		t.Fatalf("retired file result = %+v", result.Files)
 	}
-	settledBinding, bound := result.Files[0].Settlement.OutputBinding()
+	settledBinding, bound := result.Files[0].Settlement.MaterializedBinding()
 	if result.Files[0].Settlement.Kind() != FileRetired || !bound || settledBinding != binding {
 		t.Fatalf("retired settlement = %+v", result.Files[0].Settlement)
 	}
 	if blocks.calls != 0 || len(output.transactions) != 0 || output.pauseCalls != 0 ||
-		output.completeCalls != 1 || output.finished != JobCompletedWithErrors {
+		output.completeCalls != 1 || output.finished != DirectTreeOutcomePartialDirectory {
 		t.Fatalf(
 			"range calls=%d transactions=%d pause=%d complete=%d outcome=%v",
 			blocks.calls, len(output.transactions), output.pauseCalls, output.completeCalls, output.finished,
@@ -193,14 +193,14 @@ func TestTransferJobRetiresOnlyWithTypedPermanentSourceAuthority(t *testing.T) {
 		name        string
 		blocks      RangeReader
 		configure   func(*jobOutput)
-		wantOutcome JobOutcome
+		wantOutcome DirectTreeOutcome
 		wantPause   FilePauseReason
 		wantRetire  FileRetireReason
 	}{
 		{
 			name:        "unknown range failure pauses as dependency contract",
 			blocks:      scriptedRangeReader{err: errors.New("retryable transport failure")},
-			wantOutcome: JobPausedOutcome, wantPause: FilePauseDependencyContract,
+			wantOutcome: DirectTreeOutcomeResumable, wantPause: FilePauseDependencyContract,
 		},
 		{
 			name:   "output sink failure cannot impersonate a permanent source failure",
@@ -210,25 +210,25 @@ func TestTransferJobRetiresOnlyWithTypedPermanentSourceAuthority(t *testing.T) {
 					fault.ScopeFileLocal, fault.OutputStateIO, errors.New("output temporarily unavailable"),
 				)
 			},
-			wantOutcome: JobCompletedWithErrors, wantPause: FilePauseOutputFailure,
+			wantOutcome: DirectTreeOutcomePartialDirectory, wantPause: FilePauseOutputFailure,
 		},
 		{
 			name: "closed output fault cannot acquire source retirement authority",
 			blocks: scriptedRangeReader{err: outputFailure(
 				fault.ScopeFileLocal, fault.OutputStateIO, errors.New("checkpoint unavailable"),
 			)},
-			wantOutcome: JobCompletedWithErrors, wantPause: FilePauseOutputFailure,
+			wantOutcome: DirectTreeOutcomePartialDirectory, wantPause: FilePauseOutputFailure,
 		},
 		{
 			name:        "typed permanent source failure retires",
 			blocks:      scriptedRangeReader{err: sourcePermanentFailure(errors.New("source denied file"))},
-			wantOutcome: JobCompletedWithErrors,
+			wantOutcome: DirectTreeOutcomePartialDirectory,
 			wantRetire:  FileRetireIsolatedPermanentSourceFailure,
 		},
 		{
 			name:        "invalidated revision retires with its precise reason",
 			blocks:      scriptedRangeReader{err: content.ErrRevisionDrift},
-			wantOutcome: JobCompletedWithErrors,
+			wantOutcome: DirectTreeOutcomePartialDirectory,
 			wantRetire:  FileRetireInvalidatedRevision,
 		},
 	}
@@ -291,7 +291,7 @@ func TestTransferJobContinuesSiblingAfterSettledFileOutputFault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := newTestTransferJob(t, TransferJobConfig{
+	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog: failingCatalog{
 			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
@@ -299,7 +299,7 @@ func TestTransferJobContinuesSiblingAfterSettledFileOutputFault(t *testing.T) {
 			},
 			failures: make(map[catalog.DirectoryID]error),
 		},
-		Revisions: revisions, Blocks: scriptedRangeReader{}, Output: output,
+		Revisions: revisions, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -307,7 +307,7 @@ func TestTransferJobContinuesSiblingAfterSettledFileOutputFault(t *testing.T) {
 	result := job.Run(context.Background())
 	failedTransaction := output.transactions["a-failed.bin"]
 	siblingTransaction := output.transactions["b-sibling.bin"]
-	if result.Outcome != JobCompletedWithErrors || result.TerminationCause != nil ||
+	if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil ||
 		result.SucceededFiles != 1 || len(result.Files) != 1 ||
 		result.Files[0].Fault != mustOutputFault(fault.ScopeFileLocal, fault.OutputStateIO) ||
 		failedTransaction == nil || siblingTransaction == nil ||
@@ -337,7 +337,7 @@ func TestTransferJobRevisionSessionFailureStopsBeforeNextFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := newJobOutput(share)
-	job, err := newTestTransferJob(t, TransferJobConfig{
+	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog: failingCatalog{
 			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
@@ -345,13 +345,13 @@ func TestTransferJobRevisionSessionFailureStopsBeforeNextFile(t *testing.T) {
 			},
 			failures: make(map[catalog.DirectoryID]error),
 		},
-		Revisions: revisions, Blocks: scriptedRangeReader{}, Output: output,
+		Revisions: revisions, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome || result.TerminationFault != normalizedFault(terminal) ||
+	if result.Outcome != DirectTreeOutcomeResumable || result.TerminationFault != normalizedFault(terminal) ||
 		len(result.Files) != 0 || len(revisions.order) != 1 || !output.aborted || output.finished != 0 {
 		t.Fatalf(
 			"outcome=%v abort=%v file failures=%d revision attempts=%d output aborted=%v finished=%v",
@@ -367,13 +367,13 @@ func TestTransferJobCancellationDuringDiscoveryIsAborted(t *testing.T) {
 	cancel()
 	output := newJobOutput(share)
 	rules, _ := NewSelectionRules(true, nil)
-	job, _ := newTestTransferJob(t, TransferJobConfig{
+	job, _ := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog:   failingCatalog{failures: map[catalog.DirectoryID]error{root: context.Canceled}},
-		Revisions: &jobRevisionClient{}, Blocks: sessionFailingBlocks{}, Output: output,
+		Revisions: &jobRevisionClient{}, Blocks: sessionFailingBlocks{}, Materializer: output,
 	})
 	result := job.Run(ctx)
-	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, context.Canceled) {
+	if result.Outcome != DirectTreeOutcomeResumable || !errors.Is(result.TerminationCause, context.Canceled) {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -419,10 +419,10 @@ func branchJob(t *testing.T, output *jobOutput, revisions *jobRevisionClient, bl
 		revisions.opened[file], _ = NewOpenedRevision(transferID[content.LeaseID](115), descriptor)
 	}
 	rules, _ := NewSelectionRules(true, nil)
-	job, err := newTestTransferJob(t, TransferJobConfig{
+	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog:   failingCatalog{snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{root: snapshot}, failures: make(map[catalog.DirectoryID]error)},
-		Revisions: revisions, Blocks: blocks, Output: output,
+		Revisions: revisions, Blocks: blocks, Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -441,27 +441,27 @@ func TestTransferJobValidationEmptySelectionAndFailureBranches(t *testing.T) {
 	root := transferID[catalog.DirectoryID](121)
 	emptyRules, _ := NewSelectionRules(false, nil)
 	emptyOutput := newJobOutput(share)
-	baseConfig := TransferJobConfig{
+	baseConfig := testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: emptyRules,
 		Catalog: failingCatalog{
 			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{root: jobSnapshot(t, share, root, 1)},
 			failures:  make(map[catalog.DirectoryID]error),
 		},
-		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: emptyOutput,
+		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: emptyOutput,
 	}
-	if _, err := NewTransferJob(baseConfig); !errors.Is(err, ErrInvalidTransferJob) {
+	if _, err := NewTransferJob(baseConfig.production()); !errors.Is(err, ErrInvalidTransferJob) {
 		t.Fatalf("zero intent accepted: %v", err)
 	}
-	baseConfig.Intent = testTransferIntent(t, share, root, emptyRules, jobOutputBackend)
-	if _, err := NewTransferJob(baseConfig); !errors.Is(err, ErrInvalidTransferJob) {
+	baseConfig.ReceiveIntent = testReceiveIntent(t, share, root, emptyRules)
+	if _, err := NewTransferJob(baseConfig.production()); !errors.Is(err, ErrInvalidTransferJob) {
 		t.Fatalf("zero job ID accepted: %v", err)
 	}
 	baseConfig.JobID = transferID[TransferJobID](122)
-	emptyJob, err := NewTransferJob(baseConfig)
+	emptyJob, err := NewTransferJob(baseConfig.production())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result := emptyJob.Run(context.Background()); result.Outcome != JobSucceeded || result.Measure.Class() != SelectionSmall || emptyOutput.finished != JobSucceeded {
+	if result := emptyJob.Run(context.Background()); result.Outcome != DirectTreeOutcomePublished || result.Measure.ConnectionSizeClass() != ConnectionSizeSmall || emptyOutput.finished != DirectTreeOutcomePublished {
 		t.Fatalf("empty result=%+v", result)
 	}
 
@@ -469,54 +469,54 @@ func TestTransferJobValidationEmptySelectionAndFailureBranches(t *testing.T) {
 		name             string
 		configure        func(*jobOutput, *jobRevisionClient, catalog.FileID)
 		blocks           RangeReader
-		wantOutcome      JobOutcome
+		wantOutcome      DirectTreeOutcome
 		wantFailureStage FailureStage
 	}{
 		{name: "begin file", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.beginErr = outputFailure(fault.ScopeFileLocal, fault.OutputStateIO, errors.New("file create"))
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobCompletedWithErrors, wantFailureStage: FailureFileOutput},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomePartialDirectory, wantFailureStage: FailureFileOutput},
 		{name: "fatal begin", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.beginErr = outputFailure(fault.ScopeOutputPause, fault.OutputStateIO, errors.New("journal"))
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeResumable},
 		{name: "canceled begin", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.beginErr = context.Canceled
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeResumable},
 		{name: "nil transaction contract", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.nilTransaction = true
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeResumable},
 		{name: "write", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.writeErr = errors.New("disk full")
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome, wantFailureStage: FailureBlockTransfer},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeResumable, wantFailureStage: FailureBlockTransfer},
 		{name: "checkpoint", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.checkpointErr = errors.New("sync failed")
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome, wantFailureStage: FailureFileOutput},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeResumable, wantFailureStage: FailureFileOutput},
 		{name: "fatal checkpoint cannot be skipped", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.checkpointErr = outputFailure(fault.ScopeOutputPause, fault.OutputStateIO, errors.New("backend lost"))
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeResumable},
 		{name: "canceled checkpoint", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.checkpointErr = context.Canceled
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeResumable},
 		{name: "checkpoint contract", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.omitCheckpoint = true
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeResumable},
 		{name: "commit", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.commitErr = errors.New("publish failed")
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome, wantFailureStage: FailureFileOutput},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeResumable, wantFailureStage: FailureFileOutput},
 		{name: "unknown release pauses as dependency contract", configure: func(_ *jobOutput, revisions *jobRevisionClient, _ catalog.FileID) {
 			revisions.releaseErr = errors.New("release failed")
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome, wantFailureStage: FailureLeaseRelease},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeResumable, wantFailureStage: FailureLeaseRelease},
 		{name: "canceled release", configure: func(_ *jobOutput, revisions *jobRevisionClient, _ catalog.FileID) {
 			revisions.releaseErr = context.Canceled
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeResumable},
 		{name: "finish", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.finishErr = errors.New("finalize failed")
-		}, blocks: scriptedRangeReader{}, wantOutcome: JobPausedOutcome},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeResumable},
 		{name: "invalid retire settlement", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.retireSettlement = FilePublished
-		}, blocks: scriptedRangeReader{err: sourcePermanentFailure(errors.New("block failed"))}, wantOutcome: JobPausedOutcome},
+		}, blocks: scriptedRangeReader{err: sourcePermanentFailure(errors.New("block failed"))}, wantOutcome: DirectTreeOutcomeResumable},
 		{name: "unknown retire settlement", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.retireSettlement = FileSettlementKind(99)
-		}, blocks: scriptedRangeReader{err: sourcePermanentFailure(errors.New("block failed"))}, wantOutcome: JobPausedOutcome},
+		}, blocks: scriptedRangeReader{err: sourcePermanentFailure(errors.New("block failed"))}, wantOutcome: DirectTreeOutcomeResumable},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -544,23 +544,23 @@ func TestTransferJobRevisionIdentitySessionReleaseAndStreamSkipBranches(t *testi
 	wrongDescriptor := jobDescriptor(t, share, wrongFile, 132, uint64(catalog.MinChunkSize))
 	revisions.opened[selectedFile], _ = NewOpenedRevision(transferID[content.LeaseID](133), wrongDescriptor)
 	result := job.Run(context.Background())
-	if result.Outcome != JobCompletedWithErrors || len(result.Files) != 1 || result.Files[0].Stage != FailureRevisionIdentity {
+	if result.Outcome != DirectTreeOutcomePartialDirectory || len(result.Files) != 1 || result.Files[0].Stage != FailureRevisionIdentity {
 		t.Fatalf("identity result=%+v", result)
 	}
 
 	output = newJobOutput(share)
 	revisions = &jobRevisionClient{releaseErr: sessionTransportFailure(errors.New("session closed"))}
 	job, _ = branchJob(t, output, revisions, scriptedRangeReader{})
-	if result = job.Run(context.Background()); result.Outcome != JobPausedOutcome {
+	if result = job.Run(context.Background()); result.Outcome != DirectTreeOutcomeResumable {
 		t.Fatalf("session release result=%+v", result)
 	}
 
-	streamCapabilities, _ := NewOutputCapabilities(OutputCapabilities{Durability: DurabilityNone, Mode: OutputSingleFileStream})
+	streamCapabilities, _ := NewDirectTreeCapabilities(DirectTreeCapabilities{Durability: DurabilityNone})
 	output = newJobOutput(share)
 	output.capabilitiesOverride = &streamCapabilities
 	revisions = &jobRevisionClient{}
 	job, _ = branchJob(t, output, revisions, scriptedRangeReader{err: errors.New("file unavailable")})
-	if result = job.Run(context.Background()); result.Outcome != JobPausedOutcome {
+	if result = job.Run(context.Background()); result.Outcome != DirectTreeOutcomeResumable {
 		t.Fatalf("unstarted stream result=%+v", result)
 	}
 }
@@ -576,21 +576,21 @@ func TestTransferJobDirectoryOutputAndCatalogIdentityBranches(t *testing.T) {
 		name        string
 		ensureErr   error
 		finalizeErr error
-		want        JobOutcome
+		want        DirectTreeOutcome
 	}{
-		{name: "root directory admission pauses after output open", ensureErr: errors.New("mkdir denied"), want: JobPausedOutcome},
-		{name: "root finalize pauses", finalizeErr: errors.New("mtime denied"), want: JobPausedOutcome},
-		{name: "ensure fatal", ensureErr: outputFailure(fault.ScopeOutputPause, fault.OutputStateIO, errors.New("backend lost")), want: JobPausedOutcome},
-		{name: "ensure canceled", ensureErr: context.Canceled, want: JobPausedOutcome},
-		{name: "finalize deadline", finalizeErr: context.DeadlineExceeded, want: JobPausedOutcome},
+		{name: "root directory admission pauses after output open", ensureErr: errors.New("mkdir denied"), want: DirectTreeOutcomeResumable},
+		{name: "root finalize pauses", finalizeErr: errors.New("mtime denied"), want: DirectTreeOutcomeResumable},
+		{name: "ensure fatal", ensureErr: outputFailure(fault.ScopeOutputPause, fault.OutputStateIO, errors.New("backend lost")), want: DirectTreeOutcomeResumable},
+		{name: "ensure canceled", ensureErr: context.Canceled, want: DirectTreeOutcomeResumable},
+		{name: "finalize deadline", finalizeErr: context.DeadlineExceeded, want: DirectTreeOutcomeResumable},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			output := newJobOutput(share)
 			output.ensureErr, output.finalizeErr = test.ensureErr, test.finalizeErr
-			job, _ := newTestTransferJob(t, TransferJobConfig{
+			job, _ := newTestTransferJob(t, testTransferJobConfig{
 				ShareInstance: share, SyntheticRoot: root, Rules: rules,
 				Catalog:   failingCatalog{snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{root: rootSnapshot, child: childSnapshot}, failures: make(map[catalog.DirectoryID]error)},
-				Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
+				Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 			})
 			if result := job.Run(context.Background()); result.Outcome != test.want {
 				t.Fatalf("case=%s result=%+v outputDirs=%v finalized=%v events=%v pause=%d complete=%d", test.name, result, output.directories, output.finalized, output.events, output.pauseCalls, output.completeCalls)
@@ -599,12 +599,12 @@ func TestTransferJobDirectoryOutputAndCatalogIdentityBranches(t *testing.T) {
 	}
 	foreignSnapshot := jobSnapshot(t, share, child, 145)
 	output := newJobOutput(share)
-	job, _ := newTestTransferJob(t, TransferJobConfig{
+	job, _ := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog:   failingCatalog{snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{root: foreignSnapshot}, failures: make(map[catalog.DirectoryID]error)},
-		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
+		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
-	if result := job.Run(context.Background()); result.Outcome != JobPausedOutcome || result.TerminationCause == nil {
+	if result := job.Run(context.Background()); result.Outcome != DirectTreeOutcomeResumable || result.TerminationCause == nil {
 		t.Fatalf("foreign snapshot result=%+v", result)
 	}
 }

@@ -44,7 +44,7 @@ func TestRunnerFailsClosedAtInjectedCapabilityBoundaries(t *testing.T) {
 		if result := app.Run(ctx, []string{"resume", "list", "-o", root}); result != ResultFailure {
 			t.Fatalf("result=%d", result)
 		}
-		if !inventory.closed || !strings.Contains(stderr.String(), itemErr.Error()) {
+		if !strings.Contains(stderr.String(), itemErr.Error()) {
 			t.Fatalf("inventory=%+v stderr=%q", inventory, stderr.String())
 		}
 	})
@@ -56,24 +56,8 @@ func TestRunnerFailsClosedAtInjectedCapabilityBoundaries(t *testing.T) {
 		if result := app.Run(ctx, []string{"resume", "list", "-o", root}); result != ResultFailure {
 			t.Fatalf("result=%d", result)
 		}
-		if !inventory.closed || !strings.Contains(stderr.String(), "render live inventory") {
+		if !strings.Contains(stderr.String(), "render live inventory") {
 			t.Fatalf("inventory=%+v stderr=%q", inventory, stderr.String())
-		}
-	})
-
-	t.Run("list close failure", func(t *testing.T) {
-		closeErr := errors.New("close inventory failed")
-		inventory := &fakeResumeStateInventory{
-			items:    []resumeStateItem{availableResumeItem()},
-			closeErr: closeErr,
-		}
-		app, _, stderr := newResumeTestApp()
-		app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
-		if result := app.Run(ctx, []string{"resume", "list", "-o", root}); result != ResultFailure {
-			t.Fatalf("result=%d", result)
-		}
-		if !strings.Contains(stderr.String(), closeErr.Error()) {
-			t.Fatalf("stderr=%q", stderr.String())
 		}
 	})
 
@@ -100,7 +84,7 @@ func TestRunnerFailsClosedAtInjectedCapabilityBoundaries(t *testing.T) {
 		}); result != ResultFailure {
 			t.Fatalf("result=%d", result)
 		}
-		if !inventory.closed || !strings.Contains(stderr.String(), itemErr.Error()) {
+		if !strings.Contains(stderr.String(), itemErr.Error()) {
 			t.Fatalf("inventory=%+v stderr=%q", inventory, stderr.String())
 		}
 	})
@@ -172,11 +156,8 @@ func TestRunnerFailsClosedAtInjectedCapabilityBoundaries(t *testing.T) {
 
 	t.Run("discard output failure", func(t *testing.T) {
 		inventory := &fakeResumeStateInventory{
-			items: []resumeStateItem{availableResumeItem()},
-			discardReport: resumeDiscardReport{
-				status:           resumeDiscardStatusDiscarded,
-				removedArtifacts: 1,
-			},
+			items:         []resumeStateItem{availableResumeItem()},
+			discardReport: settledResumeDiscardReport(),
 		}
 		app, _, stderr := newResumeTestApp()
 		app.Stdout = shortResumeWriter{}

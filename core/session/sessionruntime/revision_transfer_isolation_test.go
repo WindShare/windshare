@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 type revisionTransferCommitter struct{}
@@ -83,10 +84,10 @@ func (source revisionTransferRanges) ReadRange(
 }
 
 type revisionTransferOutput struct {
-	backend      transfer.OutputBackendID
 	session      transfer.OutputSessionID
 	secret       [32]byte
 	scope        transfer.DirectoryAdmissionScope
+	binding      transfer.DirectTreeSessionBinding
 	settlements  map[catalog.FileID]transfer.FileSettlementKind
 	jobPauses    int
 	jobCompletes int
@@ -94,39 +95,89 @@ type revisionTransferOutput struct {
 
 func newRevisionTransferOutput(t *testing.T) *revisionTransferOutput {
 	t.Helper()
-	backend, err := transfer.NewOutputBackendID("test/sessionruntime-revision-isolation")
-	if err != nil {
-		t.Fatal(err)
-	}
 	return &revisionTransferOutput{
-		backend: backend, session: id16[transfer.OutputSessionID](201),
-		secret: [32]byte{1}, settlements: make(map[catalog.FileID]transfer.FileSettlementKind),
+		session: id16[transfer.OutputSessionID](201),
+		secret:  [32]byte{1}, settlements: make(map[catalog.FileID]transfer.FileSettlementKind),
 	}
 }
 
-func (output *revisionTransferOutput) OpenOutput(
+func newSessionRuntimeDirectTreeIntent(
+	t *testing.T,
+	share catalog.ShareInstance,
+	root catalog.DirectoryID,
+	rules transfer.SelectionRules,
+	label string,
+) transfer.ReceiveIntent {
+	t.Helper()
+	selection, err := transfer.NewSelectionSpec(share, root, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := receivecontract.NewCatalogRootDirectoryTree()
+	identityMaterial := append(append(share.Bytes(), root.Bytes()...), label...)
+	operationDigest := sha256.Sum256(append([]byte("sessionruntime/test-operation/v1\x00"), identityMaterial...))
+	operation, err := receivecontract.OperationIDFromBytes(operationDigest[:receivecontract.StableIdentityBytes])
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservationDigest := sha256.Sum256(append([]byte("sessionruntime/test-reservation/v1\x00"), identityMaterial...))
+	reservationID, err := receivecontract.DestinationReservationIDFromBytes(
+		reservationDigest[:receivecontract.StableIdentityBytes],
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorityDigest := sha256.Sum256(append([]byte("sessionruntime/test-authority/v1\x00"), identityMaterial...))
+	authority, err := receivecontract.AuthorityRefFromBytes(authorityDigest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := receivecontract.NewNativeContainerRootReservation(
+		operation, reservationID, artifact, authority,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := receivecontract.NewDirectTreePlan(artifact, reservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := transfer.NewReceiveIntent(selection, artifact, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return intent
+}
+
+func (output *revisionTransferOutput) OpenDirectTree(
 	_ context.Context,
-	intent transfer.TransferIntent,
-) (transfer.OutputSession, error) {
+	intent transfer.ReceiveIntent,
+) (transfer.DirectTreeSession, error) {
 	scope, err := transfer.NewDirectoryAdmissionScope(intent)
 	if err != nil {
 		return nil, err
 	}
+	binding, err := transfer.BindDirectTreeSession(intent)
+	if err != nil {
+		return nil, err
+	}
 	output.scope = scope
+	output.binding = binding
 	return output, nil
 }
-func (output *revisionTransferOutput) BackendID() transfer.OutputBackendID { return output.backend }
 func (output *revisionTransferOutput) SessionID() transfer.OutputSessionID { return output.session }
-func (*revisionTransferOutput) Capabilities() transfer.OutputCapabilities {
-	capabilities, _ := transfer.NewOutputCapabilities(transfer.OutputCapabilities{
-		Durability: transfer.DurabilityPowerLoss, Mode: transfer.OutputNativeTree,
-		RandomWrite: true, FileFailureIsolation: true,
+func (output *revisionTransferOutput) Binding() transfer.DirectTreeSessionBinding {
+	return output.binding
+}
+func (*revisionTransferOutput) Capabilities() transfer.DirectTreeCapabilities {
+	capabilities, _ := transfer.NewDirectTreeCapabilities(transfer.DirectTreeCapabilities{
+		Durability: transfer.DurabilityPowerLoss, RandomWrite: true, FileFailureIsolation: true,
 	})
 	return capabilities
 }
 func (output *revisionTransferOutput) AdmitDirectory(
 	_ context.Context,
-	directory transfer.OutputDirectory,
+	directory transfer.MaterializationDirectory,
 ) (transfer.DirectoryAdmission, error) {
 	return transfer.NewDirectoryAdmissionWithSecret(output.secret[:], output.scope, directory)
 }
@@ -138,14 +189,14 @@ func (*revisionTransferOutput) FinalizeDirectory(
 }
 func (output *revisionTransferOutput) BeginFile(
 	_ context.Context,
-	file transfer.OutputFile,
+	file transfer.MaterializationFile,
 ) (transfer.FileStart, error) {
 	digest := sha256.Sum256([]byte(file.Path))
-	identity, err := transfer.OutputObjectIdentityFromBytes(digest[:])
+	identity, err := transfer.OwnedObjectIDFromBytes(digest[:])
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
-	binding, err := transfer.BindOutputFileTarget(file.Target, identity)
+	binding, err := transfer.BindFileMaterializationTarget(file.Target, identity)
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
@@ -159,28 +210,32 @@ func (output *revisionTransferOutput) BeginFile(
 	}
 	return transfer.NewFileTransactionStart(transaction, checkpoint)
 }
-func (output *revisionTransferOutput) PauseJob(
+func (output *revisionTransferOutput) PauseTree(
 	context.Context,
 	transfer.JobPauseReason,
-) (transfer.JobSettlement, error) {
+) (transfer.DirectTreeSettlement, error) {
 	output.jobPauses++
-	return transfer.NewJobSettlement(transfer.JobPaused)
+	return transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementResumable)
 }
-func (output *revisionTransferOutput) CompleteJob(
-	context.Context,
-	transfer.JobOutcome,
-) (transfer.JobSettlement, error) {
+func (output *revisionTransferOutput) FinalizeTree(
+	_ context.Context,
+	outcome transfer.DirectTreeOutcome,
+) (transfer.DirectTreeSettlement, error) {
 	output.jobCompletes++
-	return transfer.NewJobSettlement(transfer.JobClosed)
+	kind := transfer.DirectTreeSettlementPublished
+	if outcome == transfer.DirectTreeOutcomePartialDirectory {
+		kind = transfer.DirectTreeSettlementPartialDirectory
+	}
+	return transfer.NewDirectTreeSettlement(kind)
 }
 
 type revisionTransferTransaction struct {
 	output     *revisionTransferOutput
-	binding    transfer.OutputFileBinding
+	binding    transfer.MaterializedFileBinding
 	checkpoint transfer.VerifiedDurableRanges
 }
 
-func (transaction *revisionTransferTransaction) Binding() transfer.OutputFileBinding {
+func (transaction *revisionTransferTransaction) Binding() transfer.MaterializedFileBinding {
 	return transaction.binding
 }
 func (transaction *revisionTransferTransaction) WriteRange(
@@ -370,14 +425,39 @@ func runContentTransferIsolationCase(
 	}
 	rules, _ := transfer.NewSelectionRules(true, nil)
 	output := newRevisionTransferOutput(t)
-	targetDigest := sha256.Sum256([]byte("sessionruntime revision transfer output"))
-	target, err := transfer.NewOpaqueOutputTarget(targetDigest[:])
+	selection, err := transfer.NewSelectionSpec(share, root, rules)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := transfer.NewTransferIntent(
-		share, root, rules, target, output.BackendID(), transfer.OutputNativeTree,
+	artifact := receivecontract.NewCatalogRootDirectoryTree()
+	operationDigest := sha256.Sum256([]byte("sessionruntime revision transfer operation"))
+	operation, err := receivecontract.OperationIDFromBytes(operationDigest[:receivecontract.StableIdentityBytes])
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservationDigest := sha256.Sum256([]byte("sessionruntime revision transfer reservation"))
+	reservationID, err := receivecontract.DestinationReservationIDFromBytes(
+		reservationDigest[:receivecontract.StableIdentityBytes],
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorityDigest := sha256.Sum256([]byte("sessionruntime revision transfer authority"))
+	authority, err := receivecontract.AuthorityRefFromBytes(authorityDigest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := receivecontract.NewNativeContainerRootReservation(
+		operation, reservationID, artifact, authority,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := receivecontract.NewDirectTreePlan(artifact, reservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := transfer.NewReceiveIntent(selection, artifact, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,17 +473,17 @@ func runContentTransferIsolationCase(
 		ranges = revisionTransferRanges{}
 	}
 	job, err := transfer.NewTransferJob(transfer.TransferJobConfig{
-		ShareInstance: share, SyntheticRoot: root, Rules: rules, Intent: intent, JobID: jobID,
+		ReceiveIntent: intent, JobID: jobID,
 		Catalog:   revisionTransferCatalog{snapshot: snapshot},
 		Revisions: revisions,
-		Blocks:    ranges, Output: output,
+		Blocks:    ranges, Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
 	sourceCode, sourceFault := result.Files[0].Fault.SourceCode()
-	if result.Outcome != transfer.JobCompletedWithErrors || result.TerminationCause != nil ||
+	if result.Outcome != transfer.DirectTreeOutcomePartialDirectory || result.TerminationCause != nil ||
 		result.SucceededFiles != 1 || len(result.Files) != 1 ||
 		output.settlements[failed] != wantSettlement || output.settlements[good] != transfer.FilePublished ||
 		output.jobPauses != 0 || output.jobCompletes != 1 ||

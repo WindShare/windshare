@@ -1,98 +1,95 @@
 import { expect, test, type Page } from '@playwright/test'
 
 import { requireOriginPrivateStorage } from './browser-storage-support'
-import type {
-  FsaNamespaceFixture,
-  FsaNamespaceOwnership,
-} from './fsa-namespace-atomicity-harness'
+import type { FsaNamespaceFixture } from './fsa-namespace-atomicity-harness'
 
 const HARNESS_PATH = '/test/browser/fsa-namespace-atomicity-harness.ts'
-const TEST_ROOT_IDENTITY = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-const FIRST_TEST_INTENT = 'HAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-const SECOND_TEST_INTENT = 'IAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 
 interface NamespaceHarness {
-  holdFirstIntent(fixture: FsaNamespaceFixture): Promise<FsaNamespaceOwnership>
-  probeCompetingIntent(
-    fixture: FsaNamespaceFixture,
-  ): Promise<{ readonly name: string; readonly scope?: string }>
-  verifyRecoveryAndOwnership(
-    fixture: FsaNamespaceFixture,
-    ownership: FsaNamespaceOwnership,
-  ): Promise<{
-    readonly fileCreateError: string
-    readonly directoryCreated: boolean
-    readonly fileRemoveError: string
-    readonly directoryRemoveError: string
-    readonly filePreserved: boolean
-    readonly directoryPreserved: boolean
+  exerciseTaskRootRestart(fixture: FsaNamespaceFixture): Promise<{
+    firstCollisionIndex: number
+    suffixPersisted: boolean
+    rootIdentityPersisted: boolean
+    newTaskIsolated: boolean
+    directoryCount: number
   }>
+  exerciseSingleFileLayout(fixture: FsaNamespaceFixture): Promise<{
+    emptyBeforeRevision: boolean
+    revisionOpenedBeforeCreation: boolean
+    noExtraRoot: boolean
+    prefixVisible: boolean
+    restartReusedFile: boolean
+    completedBytes: number
+  }>
+  holdTaskRoot(fixture: FsaNamespaceFixture): Promise<void>
+  probeCompetingTask(fixture: FsaNamespaceFixture): Promise<{
+    busy: boolean
+    scope: string | null
+  }>
+  releaseHeldTask(fixture: FsaNamespaceFixture): Promise<void>
 }
 
-test('FSA root authority spans intents and tabs, then recovers after refresh', async ({
+test('FSA task roots keep suffix and ownership across restart', async ({ browserName, page }) => {
+  await page.goto('/')
+  await requireOriginPrivateStorage(page, browserName)
+  const fixture = testFixture('task-root')
+  expect(await callHarness(page, 'exerciseTaskRootRestart', fixture)).toEqual({
+    firstCollisionIndex: 1,
+    suffixPersisted: true,
+    rootIdentityPersisted: true,
+    newTaskIsolated: true,
+    directoryCount: 3,
+  })
+})
+
+test('single-file DirectoryTree has no extra root and resumes its visible prefix', async ({
   browserName,
-  context,
   page,
 }) => {
+  await page.goto('/')
+  await requireOriginPrivateStorage(page, browserName)
+  const fixture = testFixture('single-file')
+  expect(await callHarness(page, 'exerciseSingleFileLayout', fixture)).toEqual({
+    emptyBeforeRevision: true,
+    revisionOpenedBeforeCreation: true,
+    noExtraRoot: true,
+    prefixVisible: true,
+    restartReusedFile: true,
+    completedBytes: 4,
+  })
+})
+
+test('FSA parent Web Lock spans tabs', async ({ browserName, context, page }) => {
   await page.goto('/')
   await requireOriginPrivateStorage(page, browserName)
   const competitor = await context.newPage()
   await competitor.goto('/')
   await requireOriginPrivateStorage(competitor, browserName)
-  const nonce = crypto.randomUUID()
-  const fixture = Object.freeze({
-    databaseName: `fsa-namespace-${nonce}`,
-    rootName: `fsa-namespace-${nonce}`,
-    rootIdentity: TEST_ROOT_IDENTITY,
-    firstIntent: FIRST_TEST_INTENT,
-    secondIntent: SECOND_TEST_INTENT,
+  const fixture = testFixture('cross-tab')
+  await callHarness(page, 'holdTaskRoot', fixture)
+  expect(await callHarness(competitor, 'probeCompetingTask', fixture)).toEqual({
+    busy: true,
+    scope: 'fsa-parent',
   })
-
-  const ownership = await callHarness<FsaNamespaceOwnership>(
-    page,
-    'holdFirstIntent',
-    fixture,
-  )
-  expect(await callHarness(competitor, 'probeCompetingIntent', fixture)).toEqual({
-    name: 'InvalidStateError',
-    scope: 'file-system-root',
-  })
-
-  // Reload simulates losing the page-local opener; the browser releases both
-  // Web Locks while IndexedDB retains the two independent intent namespaces.
-  await page.reload()
-  expect(await callHarness(
-    competitor,
-    'verifyRecoveryAndOwnership',
-    fixture,
-    ownership,
-  )).toEqual({
-    fileCreateError: 'InvalidModificationError',
-    directoryCreated: false,
-    fileRemoveError: 'InvalidStateError',
-    directoryRemoveError: 'InvalidStateError',
-    filePreserved: true,
-    directoryPreserved: true,
-  })
+  await callHarness(page, 'releaseHeldTask', fixture)
   await competitor.close()
 })
+
+function testFixture(label: string): FsaNamespaceFixture {
+  const nonce = crypto.randomUUID()
+  return Object.freeze({
+    databaseName: `fsa-${label}-${nonce}`,
+    parentName: `fsa-${label}-${nonce}`,
+  })
+}
 
 async function callHarness<T>(
   page: Page,
   method: keyof NamespaceHarness,
   fixture: FsaNamespaceFixture,
-  ownership?: FsaNamespaceOwnership,
 ): Promise<T> {
-  return page.evaluate(async ({ path, operation, value, created }) => {
+  return page.evaluate(async ({ path, operation, value }) => {
     const harness = (await import(path)) as NamespaceHarness
-    if (operation === 'holdFirstIntent') return harness.holdFirstIntent(value) as Promise<T>
-    if (operation === 'probeCompetingIntent') return harness.probeCompetingIntent(value) as Promise<T>
-    if (created === undefined) throw new Error('Namespace ownership is required')
-    return harness.verifyRecoveryAndOwnership(value, created) as Promise<T>
-  }, {
-    path: HARNESS_PATH,
-    operation: method,
-    value: fixture,
-    created: ownership,
-  })
+    return harness[operation](value) as Promise<T>
+  }, { path: HARNESS_PATH, operation: method, value: fixture })
 }

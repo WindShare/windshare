@@ -1,4 +1,8 @@
-import { OutputBudgetExceededError } from '../../transfer/output-session'
+import {
+  MAX_ZIP_SPOOL_BYTES,
+  MAX_ZIP_SPOOL_ENTRIES,
+  checkedZipAdd,
+} from '../zip-layout/policy'
 
 const ZIP_SPOOL_DATABASE = 'windshare-zip-central-directory'
 const ZIP_SPOOL_DATABASE_VERSION = 3
@@ -6,10 +10,8 @@ const ZIP_SPOOL_CHUNK_STORE = 'central-directory-chunks'
 const ZIP_SPOOL_NAMESPACE_STORE = 'central-directory-namespaces'
 const ZIP_SPOOL_CHUNK_MAXIMUM_BYTES = 256 * 1024
 const ZIP_SPOOL_CHUNK_MAXIMUM_RECORDS = 256
-// The entry ceiling follows the transfer's catalog-node authority while the
-// byte ceiling independently bounds attacker-controlled path metadata.
-export const ZIP_SPOOL_MAXIMUM_ENTRIES = 1_000_000
-export const ZIP_SPOOL_MAXIMUM_BYTES = 256 * 1024 * 1024
+export const ZIP_SPOOL_MAXIMUM_ENTRIES = MAX_ZIP_SPOOL_ENTRIES
+export const ZIP_SPOOL_MAXIMUM_BYTES = Number(MAX_ZIP_SPOOL_BYTES)
 const ZIP_SPOOL_MAXIMUM_CHUNKS = ZIP_SPOOL_MAXIMUM_ENTRIES
 const ZIP_SPOOL_ENTRY_BUDGET = 'zip-central-directory-entries'
 const ZIP_SPOOL_BYTE_BUDGET = 'zip-central-directory-bytes'
@@ -38,6 +40,24 @@ export interface IndexedDbZipSpoolOptions {
   readonly token?: string
   readonly maxEntries?: number
   readonly maxBytes?: number
+}
+
+export class ZipSpoolBudgetExceededError extends Error {
+  override readonly name = 'ZipSpoolBudgetExceededError'
+  readonly budget: 'zip-central-directory-entries' | 'zip-central-directory-bytes'
+  readonly limit: bigint
+  readonly attempted: bigint
+
+  constructor(
+    budget: 'zip-central-directory-entries' | 'zip-central-directory-bytes',
+    limit: bigint,
+    attempted: bigint,
+  ) {
+    super(`ZIP output budget ${budget} exceeded`)
+    this.budget = budget
+    this.limit = limit
+    this.attempted = attempted
+  }
 }
 
 interface StoredZipChunk {
@@ -106,17 +126,17 @@ export class IndexedDbZipCentralDirectorySpool implements ZipCentralDirectorySpo
     if (record.byteLength > ZIP_SPOOL_CHUNK_MAXIMUM_BYTES) {
       throw new RangeError('ZIP central-directory record exceeds the durable chunk bound')
     }
-    const nextRecordCount = this.#recordCount + 1n
-    const nextByteLength = this.#byteLength + BigInt(record.byteLength)
+    const nextRecordCount = checkedZipAdd(this.#recordCount, 1n)
+    const nextByteLength = checkedZipAdd(this.#byteLength, BigInt(record.byteLength))
     if (nextRecordCount > this.#maxEntries) {
-      throw new OutputBudgetExceededError(
+      throw new ZipSpoolBudgetExceededError(
         ZIP_SPOOL_ENTRY_BUDGET,
         this.#maxEntries,
         nextRecordCount,
       )
     }
     if (nextByteLength > this.#maxBytes) {
-      throw new OutputBudgetExceededError(
+      throw new ZipSpoolBudgetExceededError(
         ZIP_SPOOL_BYTE_BUDGET,
         this.#maxBytes,
         nextByteLength,

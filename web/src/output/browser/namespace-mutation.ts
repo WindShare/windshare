@@ -1,11 +1,6 @@
 import { encodeBase64Url } from '../../crypto/bytes'
-import { FILE_SYSTEM_ACCESS_BACKEND } from '../capability/contract'
-import {
-  durableCheckpointNamespaceIdentity,
-  type DurableCheckpointNamespaceIdentity,
-} from '../persistence/namespace'
 
-const FILE_SYSTEM_ROOT_LOCK_DOMAIN = 'windshare-output-root'
+const FSA_ROOT_LOCK_DOMAIN = 'windshare/fsa-parent-lock/v1'
 
 export interface BrowserLockHandle {
   readonly name: string
@@ -14,74 +9,64 @@ export interface BrowserLockHandle {
 export interface BrowserLockManagerRuntime {
   request(
     name: string,
-    options: { readonly mode: 'exclusive'; readonly ifAvailable?: true },
+    options: { readonly mode: 'exclusive'; readonly ifAvailable: true },
     callback: (lock: BrowserLockHandle | null) => Promise<void>,
   ): Promise<void>
 }
 
-export type BrowserOutputSessionBusyScope = 'intent-namespace' | 'file-system-root'
+export class FSARootMutationBusyError extends DOMException {
+  readonly scope = 'fsa-parent' as const
 
-export class BrowserOutputSessionBusyError extends DOMException {
-  readonly scope: BrowserOutputSessionBusyScope
-  readonly binding: DurableCheckpointNamespaceIdentity
-
-  constructor(
-    scope: BrowserOutputSessionBusyScope,
-    binding: DurableCheckpointNamespaceIdentity,
-  ) {
-    super(busyMessage(scope), 'InvalidStateError')
-    this.scope = scope
-    this.binding = durableCheckpointNamespaceIdentity(binding)
+  constructor() {
+    super('This directory is already being changed by another WindShare task', 'InvalidStateError')
   }
 }
 
-export class BrowserFileSystemMutationClosedError extends DOMException {
-  readonly binding: DurableCheckpointNamespaceIdentity
-
-  constructor(binding: DurableCheckpointNamespaceIdentity) {
-    super('The File System Access root mutation authority is closed', 'InvalidStateError')
-    this.binding = durableCheckpointNamespaceIdentity(binding)
+export class FSARootMutationClosedError extends DOMException {
+  constructor() {
+    super('The File System Access mutation authority is closed', 'InvalidStateError')
   }
 }
 
-export type BrowserFileSystemMutationKind =
-  | 'ensure-directory'
+export type FSANamespaceMutationKind =
+  | 'reserve-name'
+  | 'create-directory'
   | 'create-file'
-  | 'remove-file'
-  | 'remove-directory'
+  | 'open-writer'
+  | 'commit-file'
+  | 'settle-operation'
+  | 'remove-entry'
 
-export interface BrowserFileSystemMutationAuthority {
-  readonly binding: DurableCheckpointNamespaceIdentity
-  mutate<T>(
-    kind: BrowserFileSystemMutationKind,
-    path: readonly string[],
-    operation: () => Promise<T>,
-  ): Promise<T>
+export interface FSARootMutationAuthority {
+  run<T>(kind: FSANamespaceMutationKind, operation: () => Promise<T>): Promise<T>
 }
 
-export interface BrowserFileSystemMutationLease {
-  readonly authority: BrowserFileSystemMutationAuthority
+export interface FSARootMutationLease {
+  readonly authority: FSARootMutationAuthority
   release(): Promise<void>
 }
 
 /**
- * The intent digest is deliberately absent: two intents may have independent
- * journals while still targeting the same mutable picker root.
+ * FSA does not expose a stable filesystem identifier before persistence. Hashing the
+ * picker-visible leaf intentionally over-serializes same-named parents: false sharing
+ * is harmless, whereas separate locks for one parent would invalidate no-replace.
  */
-export function browserFileSystemRootMutationLockName(
-  input: DurableCheckpointNamespaceIdentity,
-): string {
-  const binding = requireFileSystemAccessBinding(input)
-  const rootDomain = `${binding.backend}\0${binding.rootIdentity}`
-  return `${FILE_SYSTEM_ROOT_LOCK_DOMAIN}:${encodeBase64Url(new TextEncoder().encode(rootDomain))}`
+export async function fsaRootMutationLockName(
+  parent: FileSystemDirectoryHandle,
+): Promise<string> {
+  if (parent.kind !== 'directory' || typeof parent.name !== 'string') {
+    throw new TypeError('FSA root lock requires a named directory authority')
+  }
+  const material = new TextEncoder().encode(`${FSA_ROOT_LOCK_DOMAIN}\0${parent.name}`)
+  const digest = await crypto.subtle.digest('SHA-256', material)
+  return `${FSA_ROOT_LOCK_DOMAIN}:${encodeBase64Url(new Uint8Array(digest))}`
 }
 
-export async function acquireBrowserFileSystemMutationLease(
-  input: DurableCheckpointNamespaceIdentity,
-  manager: BrowserLockManagerRuntime,
-): Promise<BrowserFileSystemMutationLease> {
-  const binding = requireFileSystemAccessBinding(input)
-  const authority = new SerializedFileSystemMutationAuthority(binding)
+export async function acquireFSARootMutationLease(
+  parent: FileSystemDirectoryHandle,
+  manager: BrowserLockManagerRuntime = browserLockManager(),
+): Promise<FSARootMutationLease> {
+  const authority = new SerializedFSARootMutationAuthority()
   let acquiredResolve!: () => void
   let acquiredReject!: (reason: unknown) => void
   const acquired = new Promise<void>((resolve, reject) => {
@@ -91,11 +76,11 @@ export async function acquireBrowserFileSystemMutationLease(
   let releaseResolve!: () => void
   const held = new Promise<void>((resolve) => { releaseResolve = resolve })
   const completion = manager.request(
-    browserFileSystemRootMutationLockName(binding),
+    await fsaRootMutationLockName(parent),
     { mode: 'exclusive', ifAvailable: true },
     async (lock) => {
       if (lock === null) {
-        acquiredReject(new BrowserOutputSessionBusyError('file-system-root', binding))
+        acquiredReject(new FSARootMutationBusyError())
         return
       }
       acquiredResolve()
@@ -110,8 +95,6 @@ export async function acquireBrowserFileSystemMutationLease(
     authority,
     release: () => {
       releasePromise ??= (async () => {
-        // Draining accepted mutations before releasing the cross-realm lock keeps
-        // a late cleanup from crossing into the next intent's ownership window.
         await authority.close()
         releaseResolve()
         await completion
@@ -121,23 +104,16 @@ export async function acquireBrowserFileSystemMutationLease(
   })
 }
 
-class SerializedFileSystemMutationAuthority implements BrowserFileSystemMutationAuthority {
-  readonly binding: DurableCheckpointNamespaceIdentity
+class SerializedFSARootMutationAuthority implements FSARootMutationAuthority {
   #accepting = true
   #tail: Promise<void> = Promise.resolve()
 
-  constructor(binding: DurableCheckpointNamespaceIdentity) {
-    this.binding = binding
-  }
-
-  async mutate<T>(
-    kind: BrowserFileSystemMutationKind,
-    path: readonly string[],
+  async run<T>(
+    kind: FSANamespaceMutationKind,
     operation: () => Promise<T>,
   ): Promise<T> {
-    requireMutation(kind, path)
-    if (!this.#accepting) throw new BrowserFileSystemMutationClosedError(this.binding)
-
+    requireMutationKind(kind)
+    if (!this.#accepting) throw new FSARootMutationClosedError()
     const predecessor = this.#tail
     let finish!: () => void
     const current = new Promise<void>((resolve) => { finish = resolve })
@@ -156,31 +132,24 @@ class SerializedFileSystemMutationAuthority implements BrowserFileSystemMutation
   }
 }
 
-function requireFileSystemAccessBinding(
-  input: DurableCheckpointNamespaceIdentity,
-): DurableCheckpointNamespaceIdentity {
-  const binding = durableCheckpointNamespaceIdentity(input)
-  if (binding.backend !== FILE_SYSTEM_ACCESS_BACKEND) {
-    throw new TypeError('File System Access mutation authority requires the File System Access backend')
+function browserLockManager(): BrowserLockManagerRuntime {
+  const manager = globalThis.navigator?.locks
+  if (manager === undefined) {
+    throw new DOMException('Web Locks are required for coordinated FSA output', 'NotSupportedError')
   }
-  return binding
+  return manager as BrowserLockManagerRuntime
 }
 
-function requireMutation(
-  kind: BrowserFileSystemMutationKind,
-  path: readonly string[],
-): void {
-  if (kind !== 'ensure-directory' && kind !== 'create-file' &&
-      kind !== 'remove-file' && kind !== 'remove-directory') {
-    throw new TypeError('File System Access mutation kind is invalid')
+function requireMutationKind(kind: FSANamespaceMutationKind): void {
+  switch (kind) {
+    case 'reserve-name':
+    case 'create-directory':
+    case 'create-file':
+    case 'open-writer':
+    case 'commit-file':
+    case 'settle-operation':
+    case 'remove-entry':
+      return
   }
-  if (path.length === 0 || path.some((segment) => typeof segment !== 'string' || segment.length === 0)) {
-    throw new TypeError('File System Access mutation path is invalid')
-  }
-}
-
-function busyMessage(scope: BrowserOutputSessionBusyScope): string {
-  return scope === 'intent-namespace'
-    ? 'This checkpoint namespace is already active in another page'
-    : 'This File System Access root is already active in another transfer'
+  throw new TypeError('FSA namespace mutation kind is invalid')
 }

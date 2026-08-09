@@ -88,16 +88,16 @@ func TestTransferJobRejectsMissingCatalogLeaseOnFailurePath(t *testing.T) {
 	share := transferID[catalog.ShareInstance](146)
 	root := transferID[catalog.DirectoryID](147)
 	rules, _ := NewSelectionRules(true, nil)
-	job, err := newTestTransferJob(t, TransferJobConfig{
+	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog:   nilReleaseCatalog{err: catalogDirectoryFailure(fault.CatalogUnavailable, errors.New("directory unavailable"))},
-		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: newJobOutput(share),
+		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: newJobOutput(share),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome || result.TerminationFault != fault.DependencyContractFault() ||
+	if result.Outcome != DirectTreeOutcomeResumable || result.TerminationFault != fault.DependencyContractFault() ||
 		!isJobTerminalError(result.TerminationCause) {
 		t.Fatalf("result=%+v", result)
 	}
@@ -128,7 +128,7 @@ func TestTransferJobRollsBackSelectedPrefixOfFailedGeneration(t *testing.T) {
 		failures: make(map[catalog.FileID]error),
 	}
 	output := newJobOutput(share)
-	job, err := newTestTransferJob(t, TransferJobConfig{
+	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share,
 		SyntheticRoot: root,
 		Rules:         rules,
@@ -141,16 +141,16 @@ func TestTransferJobRollsBackSelectedPrefixOfFailedGeneration(t *testing.T) {
 			),
 			first: first, failure: catalogDirectoryFailure(fault.CatalogUnavailable, errors.New("second page unavailable")),
 		},
-		Revisions: revisions,
-		Blocks:    scriptedRangeReader{},
-		Output:    output,
+		Revisions:    revisions,
+		Blocks:       scriptedRangeReader{},
+		Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	result := job.Run(context.Background())
-	if result.Outcome != JobCompletedWithErrors || result.SucceededFiles != 1 ||
+	if result.Outcome != DirectTreeOutcomePartialDirectory || result.SucceededFiles != 1 ||
 		len(result.Directories) != 1 || len(result.Files) != 0 ||
 		!slices.Equal(revisions.order, []catalog.FileID{sibling}) ||
 		!slices.Equal(output.directories, []string{""}) ||
@@ -175,7 +175,7 @@ func TestTransferJobPausesWithoutAdmittingFailedRootPrefix(t *testing.T) {
 	rules, _ := NewSelectionRules(true, nil)
 	revisions := &jobRevisionClient{opened: make(map[catalog.FileID]OpenedRevision), failures: make(map[catalog.FileID]error)}
 	output := newJobOutput(share)
-	job, err := newTestTransferJob(t, TransferJobConfig{
+	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share,
 		SyntheticRoot: root,
 		Rules:         rules,
@@ -183,16 +183,16 @@ func TestTransferJobPausesWithoutAdmittingFailedRootPrefix(t *testing.T) {
 			directory: root, first: first,
 			failure: catalogDirectoryFailure(fault.CatalogUnavailable, errors.New("root terminal page unavailable")),
 		},
-		Revisions: revisions,
-		Blocks:    scriptedRangeReader{},
-		Output:    output,
+		Revisions:    revisions,
+		Blocks:       scriptedRangeReader{},
+		Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	result := job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome || len(result.Directories) != 1 ||
+	if result.Outcome != DirectTreeOutcomeResumable || len(result.Directories) != 1 ||
 		!result.SelectionObservation.IsZero() ||
 		result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) ||
 		len(revisions.order) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
@@ -208,7 +208,7 @@ func TestTransferJobPausesWhenRootAdmissionFailsEvenIfFilesAreIsolatable(t *test
 	job, _ := branchJob(t, output, revisions, scriptedRangeReader{})
 
 	result := job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome || result.TerminationCause == nil ||
+	if result.Outcome != DirectTreeOutcomeResumable || result.TerminationCause == nil ||
 		len(result.Directories) != 0 || len(result.Files) != 0 || result.SucceededFiles != 0 ||
 		len(revisions.order) != 0 || len(revisions.released) != 0 ||
 		output.pauseCalls != 1 || output.completeCalls != 0 {
@@ -235,14 +235,14 @@ func TestTransferJobAppliesSyntheticRootOverrideToProbeAndExecution(t *testing.T
 				revisions.opened[file], _ = NewOpenedRevision(transferID[content.LeaseID](173), descriptor)
 			}
 			output := newJobOutput(share)
-			job, err := newTestTransferJob(t, TransferJobConfig{
+			job, err := newTestTransferJob(t, testTransferJobConfig{
 				ShareInstance: share, SyntheticRoot: root, Rules: rules,
 				Catalog: failingCatalog{
 					snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
 						root: jobSnapshot(t, share, root, 1, jobEntry(t, file, "root.bin", 0)),
 					}, failures: make(map[catalog.DirectoryID]error),
 				},
-				Revisions: revisions, Blocks: scriptedRangeReader{}, Output: output,
+				Revisions: revisions, Blocks: scriptedRangeReader{}, Materializer: output,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -257,9 +257,9 @@ func TestTransferJobAppliesSyntheticRootOverrideToProbeAndExecution(t *testing.T
 			if selected {
 				wantFiles = 1
 			}
-			if result.Outcome != JobSucceeded || result.SucceededFiles != wantFiles ||
+			if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != wantFiles ||
 				result.Measure.DiscoveredFiles != wantFiles || admission.DiscoveredFiles != wantFiles ||
-				result.Measure.Class() != SelectionSmall || admission.Class() != SelectionSmall {
+				result.Measure.ConnectionSizeClass() != ConnectionSizeSmall || admission.ConnectionSizeClass() != ConnectionSizeSmall {
 				t.Fatalf("outcome=%v succeeded=%d want=%d term=%v settleFailure=%v settlement=%v files=%+v dirs=%+v measure=%+v admission=%+v output=%+v", result.Outcome, result.SucceededFiles, wantFiles, result.TerminationCause, result.SettlementFailure, result.Settlement, result.Files, result.Directories, result.Measure, admission, output)
 			}
 		})
@@ -270,10 +270,10 @@ func TestTransferJobPreservesParentCancellationCauseWithoutSelection(t *testing.
 	share := transferID[catalog.ShareInstance](181)
 	root := transferID[catalog.DirectoryID](182)
 	rules, _ := NewSelectionRules(false, nil)
-	job, err := newTestTransferJob(t, TransferJobConfig{
+	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog:   failingCatalog{snapshots: make(map[catalog.DirectoryID]catalog.DirectorySnapshot), failures: make(map[catalog.DirectoryID]error)},
-		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: newJobOutput(share),
+		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: newJobOutput(share),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -282,7 +282,7 @@ func TestTransferJobPreservesParentCancellationCauseWithoutSelection(t *testing.
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(cause)
 	result := job.Run(ctx)
-	if result.Outcome != JobPausedOutcome || !errors.Is(result.TerminationCause, context.Canceled) ||
+	if result.Outcome != DirectTreeOutcomeResumable || !errors.Is(result.TerminationCause, context.Canceled) ||
 		result.TerminationFault.Valid() {
 		t.Fatalf("result=%+v", result)
 	}
@@ -300,7 +300,7 @@ func TestTransferJobMaterializesOnlyAuthenticatedSelectedOutput(t *testing.T) {
 		opened, _ := NewOpenedRevision(transferID[content.LeaseID](155), descriptor)
 		output := newJobOutput(share)
 		output.ensureFailures = map[string]error{"unrelated": errors.New("unrelated output must remain virtual")}
-		job, err := newTestTransferJob(t, TransferJobConfig{
+		job, err := newTestTransferJob(t, testTransferJobConfig{
 			ShareInstance: share, SyntheticRoot: root, Rules: rules,
 			Catalog: failingCatalog{
 				snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
@@ -313,13 +313,13 @@ func TestTransferJobMaterializesOnlyAuthenticatedSelectedOutput(t *testing.T) {
 			Revisions: &jobRevisionClient{
 				opened: map[catalog.FileID]OpenedRevision{file: opened}, failures: make(map[catalog.FileID]error),
 			},
-			Blocks: scriptedRangeReader{}, Output: output,
+			Blocks: scriptedRangeReader{}, Materializer: output,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		result := job.Run(context.Background())
-		if result.Outcome != JobSucceeded || result.SucceededFiles != 1 {
+		if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != 1 {
 			t.Fatalf("result=%+v", result)
 		}
 		if !slices.Equal(output.directories, []string{"", "wanted"}) || !slices.Equal(output.finalized, []string{"wanted", ""}) {
@@ -334,7 +334,7 @@ func TestTransferJobMaterializesOnlyAuthenticatedSelectedOutput(t *testing.T) {
 		file := transferID[catalog.FileID](159)
 		rules, _ := NewSelectionRules(false, []SelectionOverride{{FileID: file, Selected: true}})
 		output := newJobOutput(share)
-		job, _ := newTestTransferJob(t, TransferJobConfig{
+		job, _ := newTestTransferJob(t, testTransferJobConfig{
 			ShareInstance: share, SyntheticRoot: root, Rules: rules,
 			Catalog: failingCatalog{
 				snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
@@ -346,10 +346,10 @@ func TestTransferJobMaterializesOnlyAuthenticatedSelectedOutput(t *testing.T) {
 				opened:   make(map[catalog.FileID]OpenedRevision),
 				failures: map[catalog.FileID]error{file: sourceUnavailableFailure(errors.New("revision unavailable"))},
 			},
-			Blocks: scriptedRangeReader{}, Output: output,
+			Blocks: scriptedRangeReader{}, Materializer: output,
 		})
 		result := job.Run(context.Background())
-		if result.Outcome != JobCompletedWithErrors || len(result.Files) != 1 ||
+		if result.Outcome != DirectTreeOutcomePartialDirectory || len(result.Files) != 1 ||
 			!slices.Equal(output.directories, []string{"", "folder"}) || !slices.Equal(output.finalized, []string{"folder", ""}) {
 			t.Fatalf("result=%+v directories=%v finalized=%v", result, output.directories, output.finalized)
 		}
@@ -365,7 +365,7 @@ func TestTransferJobSelectedDirectoryRequiresSuccessfulGenerationBeforeOutput(t 
 		{DirectoryID: empty, Selected: true}, {DirectoryID: failed, Selected: true},
 	})
 	output := newJobOutput(share)
-	job, _ := newTestTransferJob(t, TransferJobConfig{
+	job, _ := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog: failingCatalog{
 			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
@@ -374,10 +374,10 @@ func TestTransferJobSelectedDirectoryRequiresSuccessfulGenerationBeforeOutput(t 
 			},
 			failures: map[catalog.DirectoryID]error{failed: catalogDirectoryFailure(fault.CatalogUnavailable, errors.New("directory unavailable"))},
 		},
-		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
+		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != JobCompletedWithErrors || len(result.Directories) != 1 || result.Measure.Class() != SelectionUnknown {
+	if result.Outcome != DirectTreeOutcomePartialDirectory || len(result.Directories) != 1 || result.Measure.ConnectionSizeClass() != ConnectionSizeUnknown {
 		t.Fatalf("result=%+v", result)
 	}
 	if !slices.Equal(output.directories, []string{"", "empty"}) ||
@@ -393,7 +393,7 @@ func TestTransferJobMissingOpaqueTargetsRemainKindSafe(t *testing.T) {
 	collidingFile := catalog.FileID(collidingDirectory)
 	rules, _ := NewSelectionRules(false, []SelectionOverride{{FileID: collidingFile, Selected: true}})
 	output := newJobOutput(share)
-	job, _ := newTestTransferJob(t, TransferJobConfig{
+	job, _ := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog: failingCatalog{
 			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
@@ -401,10 +401,10 @@ func TestTransferJobMissingOpaqueTargetsRemainKindSafe(t *testing.T) {
 				collidingDirectory: jobSnapshot(t, share, collidingDirectory, 2),
 			}, failures: make(map[catalog.DirectoryID]error),
 		},
-		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
+		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != JobCompletedWithErrors || result.TerminationCause != nil ||
+	if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil ||
 		len(result.Directories) != 0 || !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) ||
 		output.aborted || output.pauseCalls != 0 || output.completeCalls != 1 ||
 		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
@@ -418,16 +418,16 @@ func TestTransferJobMissingOpaqueDirectoryTargetAborts(t *testing.T) {
 	missing := transferID[catalog.DirectoryID](169)
 	rules, _ := NewSelectionRules(false, []SelectionOverride{{DirectoryID: missing, Selected: true}})
 	output := newJobOutput(share)
-	job, _ := newTestTransferJob(t, TransferJobConfig{
+	job, _ := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog: failingCatalog{
 			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{root: jobSnapshot(t, share, root, 1)},
 			failures:  make(map[catalog.DirectoryID]error),
 		},
-		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
+		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != JobCompletedWithErrors || result.TerminationCause != nil ||
+	if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil ||
 		len(result.Directories) != 0 || !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) ||
 		output.aborted || output.pauseCalls != 0 || output.completeCalls != 1 ||
 		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
@@ -442,7 +442,7 @@ func TestTransferJobUnmatchedFileBelowFailedDirectoryRemainsUnknown(t *testing.T
 	file := transferID[catalog.FileID](177)
 	rules, _ := NewSelectionRules(false, []SelectionOverride{{FileID: file, Selected: true}})
 	output := newJobOutput(share)
-	job, _ := newTestTransferJob(t, TransferJobConfig{
+	job, _ := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog: failingCatalog{
 			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
@@ -450,7 +450,7 @@ func TestTransferJobUnmatchedFileBelowFailedDirectoryRemainsUnknown(t *testing.T
 			},
 			failures: map[catalog.DirectoryID]error{branch: catalogDirectoryFailure(fault.CatalogUnavailable, errors.New("branch unavailable"))},
 		},
-		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
+		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	updates := job.SelectionMeasures()
 	result := job.Run(context.Background())
@@ -458,8 +458,8 @@ func TestTransferJobUnmatchedFileBelowFailedDirectoryRemainsUnknown(t *testing.T
 	for measure := range updates {
 		admission = measure
 	}
-	if result.Outcome != JobCompletedWithErrors || result.TerminationCause != nil ||
-		result.Measure.Class() != SelectionUnknown || admission.Class() != SelectionUnknown ||
+	if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil ||
+		result.Measure.ConnectionSizeClass() != ConnectionSizeUnknown || admission.ConnectionSizeClass() != ConnectionSizeUnknown ||
 		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
 		t.Fatalf("result=%+v admission=%+v directories=%v finalized=%v", result, admission, output.directories, output.finalized)
 	}
@@ -471,7 +471,7 @@ func TestTransferJobMissingPathDescendantLeavesAncestorVirtual(t *testing.T) {
 	folder := transferID[catalog.DirectoryID](180)
 	rules, _ := NewPathSelectionRules([]string{"folder/missing.bin"})
 	output := newJobOutput(share)
-	job, _ := newTestTransferJob(t, TransferJobConfig{
+	job, _ := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog: failingCatalog{
 			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
@@ -479,10 +479,10 @@ func TestTransferJobMissingPathDescendantLeavesAncestorVirtual(t *testing.T) {
 				folder: jobSnapshot(t, share, folder, 2),
 			}, failures: make(map[catalog.DirectoryID]error),
 		},
-		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
+		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != JobCompletedWithErrors || result.TerminationCause != nil ||
+	if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil ||
 		len(result.Directories) != 0 || !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) ||
 		output.aborted || output.pauseCalls != 0 || output.completeCalls != 1 ||
 		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {

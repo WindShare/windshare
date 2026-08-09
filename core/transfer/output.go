@@ -3,36 +3,27 @@ package transfer
 import (
 	"crypto/sha256"
 	"errors"
-	"path/filepath"
 	"slices"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const (
 	OutputSessionIdentityBytes = catalog.IdentityBytes
-	OutputObjectIdentityBytes  = 32
-	MaxOutputBackendIDBytes    = 128
+	OwnedObjectIdentityBytes   = 32
 )
 
 var (
-	ErrInvalidOutputBinding = errors.New("transfer output binding is invalid")
-	ErrIncompleteOutputFile = errors.New("transfer output file is not complete")
-	ErrOutputSessionFatal   = errors.New("transfer output session cannot continue")
+	ErrInvalidOutputBinding          = errors.New("transfer output binding is invalid")
+	ErrIncompleteMaterializationFile = errors.New("transfer output file is not complete")
+	ErrDirectTreeSessionFatal        = errors.New("transfer output session cannot continue")
 )
 
 type OutputSessionID [OutputSessionIdentityBytes]byte
-type OutputObjectIdentity [OutputObjectIdentityBytes]byte
-type OutputLocatorDigest [sha256.Size]byte
-type OutputBackendID string
-
-// NativeFilesystemOutputBackendID is the semantic backend identity carried by
-// TransferIntent. Journal/schema revisions belong to the physical state layout,
-// so they must not silently change the user's confirmed output contract.
-const NativeFilesystemOutputBackendID OutputBackendID = "windshare/native-output"
+type OwnedObjectID [OwnedObjectIdentityBytes]byte
+type MaterializationLocatorDigest [sha256.Size]byte
 
 func OutputSessionIDFromBytes(raw []byte) (OutputSessionID, error) {
 	if len(raw) != OutputSessionIdentityBytes {
@@ -46,190 +37,178 @@ func OutputSessionIDFromBytes(raw []byte) (OutputSessionID, error) {
 	return id, nil
 }
 
-func OutputObjectIdentityFromBytes(raw []byte) (OutputObjectIdentity, error) {
-	if len(raw) != OutputObjectIdentityBytes {
-		return OutputObjectIdentity{}, ErrInvalidOutputBinding
+func OwnedObjectIDFromBytes(raw []byte) (OwnedObjectID, error) {
+	if len(raw) != OwnedObjectIdentityBytes {
+		return OwnedObjectID{}, ErrInvalidOutputBinding
 	}
-	var identity OutputObjectIdentity
+	var identity OwnedObjectID
 	copy(identity[:], raw)
 	if identity.IsZero() {
-		return OutputObjectIdentity{}, ErrInvalidOutputBinding
+		return OwnedObjectID{}, ErrInvalidOutputBinding
 	}
 	return identity, nil
 }
 
-func NewOutputBackendID(value string) (OutputBackendID, error) {
-	if value == "" || len(value) > MaxOutputBackendIDBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
-		return "", ErrInvalidOutputBinding
-	}
-	return OutputBackendID(value), nil
-}
-
 func (id OutputSessionID) Bytes() []byte { return append([]byte(nil), id[:]...) }
 func (id OutputSessionID) IsZero() bool  { return id == OutputSessionID{} }
-func (id OutputObjectIdentity) Bytes() []byte {
+func (id OwnedObjectID) Bytes() []byte {
 	return append([]byte(nil), id[:]...)
 }
-func (id OutputObjectIdentity) IsZero() bool { return id == OutputObjectIdentity{} }
+func (id OwnedObjectID) IsZero() bool { return id == OwnedObjectID{} }
 
-type OutputLocatorKind uint8
+type MaterializationLocatorKind uint8
 
 const (
-	OutputPathLocator OutputLocatorKind = iota + 1
-	// OutputObjectLocator identifies a backend-owned output object before or
+	MaterializationPathLocator MaterializationLocatorKind = iota + 1
+	// MaterializationObjectLocator identifies a backend-owned output object before or
 	// alongside its concrete object identity (for example a stream sink).
-	OutputObjectLocator
+	MaterializationObjectLocator
 )
 
-type OutputLocator struct {
-	kind          OutputLocatorKind
+type MaterializationLocator struct {
+	kind          MaterializationLocatorKind
 	canonicalPath string
-	digest        OutputLocatorDigest
+	digest        MaterializationLocatorDigest
 }
 
-func NewPathOutputLocator(path string) (OutputLocator, error) {
+func NewPathMaterializationLocator(path string) (MaterializationLocator, error) {
 	canonical, err := catalog.CanonicalPath(path)
 	if err != nil {
-		return OutputLocator{}, err
+		return MaterializationLocator{}, err
 	}
 	digest := sha256.Sum256(append([]byte("windshare/output-path/v1\x00"), []byte(canonical)...))
-	return OutputLocator{kind: OutputPathLocator, canonicalPath: canonical, digest: digest}, nil
+	return MaterializationLocator{kind: MaterializationPathLocator, canonicalPath: canonical, digest: digest}, nil
 }
 
-func NewOutputObjectLocator(digest []byte) (OutputLocator, error) {
+func NewMaterializationObjectLocator(digest []byte) (MaterializationLocator, error) {
 	if len(digest) != sha256.Size {
-		return OutputLocator{}, ErrInvalidOutputBinding
+		return MaterializationLocator{}, ErrInvalidOutputBinding
 	}
-	var owned OutputLocatorDigest
+	var owned MaterializationLocatorDigest
 	copy(owned[:], digest)
-	if owned == (OutputLocatorDigest{}) {
-		return OutputLocator{}, ErrInvalidOutputBinding
+	if owned == (MaterializationLocatorDigest{}) {
+		return MaterializationLocator{}, ErrInvalidOutputBinding
 	}
-	return OutputLocator{kind: OutputObjectLocator, digest: owned}, nil
+	return MaterializationLocator{kind: MaterializationObjectLocator, digest: owned}, nil
 }
 
-func (l OutputLocator) Kind() OutputLocatorKind     { return l.kind }
-func (l OutputLocator) CanonicalPath() string       { return l.canonicalPath }
-func (l OutputLocator) Digest() OutputLocatorDigest { return l.digest }
-func (l OutputLocator) IsZero() bool                { return l.kind == 0 }
+func (l MaterializationLocator) Kind() MaterializationLocatorKind     { return l.kind }
+func (l MaterializationLocator) CanonicalPath() string                { return l.canonicalPath }
+func (l MaterializationLocator) Digest() MaterializationLocatorDigest { return l.digest }
+func (l MaterializationLocator) IsZero() bool                         { return l.kind == 0 }
 
-// OutputFileTarget is the complete authority requested from an output backend.
-// It exists before WindShare owns a filesystem object, which keeps a pre-object
-// collision from fabricating an OutputObjectIdentity merely to identify itself.
-type OutputFileTarget struct {
-	backend    OutputBackendID
+// FileMaterializationTarget binds one requested file to an already-opened
+// DirectTree session. It exists before WindShare owns a filesystem object, so a
+// pre-object collision cannot fabricate an OwnedObjectID merely to identify itself.
+type FileMaterializationTarget struct {
 	session    OutputSessionID
 	descriptor content.FileRevisionDescriptor
-	locator    OutputLocator
+	locator    MaterializationLocator
 }
 
-func NewOutputFileTarget(
-	backend OutputBackendID,
+func NewFileMaterializationTarget(
 	session OutputSessionID,
 	descriptor content.FileRevisionDescriptor,
-	locator OutputLocator,
-) (OutputFileTarget, error) {
-	target := OutputFileTarget{
-		backend: backend, session: session, descriptor: descriptor, locator: locator,
+	locator MaterializationLocator,
+) (FileMaterializationTarget, error) {
+	target := FileMaterializationTarget{
+		session: session, descriptor: descriptor, locator: locator,
 	}
 	if !target.valid() {
-		return OutputFileTarget{}, ErrInvalidOutputBinding
+		return FileMaterializationTarget{}, ErrInvalidOutputBinding
 	}
 	return target, nil
 }
 
-func (target OutputFileTarget) BackendID() OutputBackendID { return target.backend }
-func (target OutputFileTarget) OutputSessionID() OutputSessionID {
+func (target FileMaterializationTarget) OutputSessionID() OutputSessionID {
 	return target.session
 }
-func (target OutputFileTarget) Descriptor() content.FileRevisionDescriptor {
+func (target FileMaterializationTarget) Descriptor() content.FileRevisionDescriptor {
 	return target.descriptor
 }
-func (target OutputFileTarget) ShareInstance() catalog.ShareInstance {
+func (target FileMaterializationTarget) ShareInstance() catalog.ShareInstance {
 	return target.descriptor.ShareInstance()
 }
-func (target OutputFileTarget) FileID() catalog.FileID { return target.descriptor.FileID() }
-func (target OutputFileTarget) FileRevision() content.FileRevision {
+func (target FileMaterializationTarget) FileID() catalog.FileID { return target.descriptor.FileID() }
+func (target FileMaterializationTarget) FileRevision() content.FileRevision {
 	return target.descriptor.FileRevision()
 }
-func (target OutputFileTarget) ExactSize() uint64      { return target.descriptor.ExactSize() }
-func (target OutputFileTarget) Locator() OutputLocator { return target.locator }
+func (target FileMaterializationTarget) ExactSize() uint64               { return target.descriptor.ExactSize() }
+func (target FileMaterializationTarget) Locator() MaterializationLocator { return target.locator }
 
-func (target OutputFileTarget) valid() bool {
-	if _, err := NewOutputBackendID(string(target.backend)); err != nil || target.session.IsZero() ||
+func (target FileMaterializationTarget) valid() bool {
+	if target.session.IsZero() ||
 		target.descriptor.ShareInstance().IsZero() || target.descriptor.FileID().IsZero() ||
 		target.descriptor.FileRevision().IsZero() || target.locator.IsZero() {
 		return false
 	}
-	if target.locator.kind == OutputPathLocator {
+	if target.locator.kind == MaterializationPathLocator {
 		canonical, err := catalog.CanonicalPath(target.locator.canonicalPath)
 		return err == nil && canonical == target.locator.canonicalPath
 	}
-	return target.locator.kind == OutputObjectLocator &&
-		target.locator.digest != (OutputLocatorDigest{})
+	return target.locator.kind == MaterializationObjectLocator &&
+		target.locator.digest != (MaterializationLocatorDigest{})
 }
 
-// OutputFileBinding adds ownership of one concrete output object to the
+// MaterializedFileBinding adds ownership of one concrete output object to the
 // immutable requested target. Durable ranges and transaction settlements use
-// this stronger identity; immediate collisions use only OutputFileTarget.
-type OutputFileBinding struct {
-	target         OutputFileTarget
-	objectIdentity OutputObjectIdentity
+// this stronger identity; immediate collisions use only FileMaterializationTarget.
+type MaterializedFileBinding struct {
+	target         FileMaterializationTarget
+	objectIdentity OwnedObjectID
 }
 
-func NewOutputFileBinding(
-	backend OutputBackendID,
+func NewMaterializedFileBinding(
 	session OutputSessionID,
 	descriptor content.FileRevisionDescriptor,
-	locator OutputLocator,
-	objectIdentity OutputObjectIdentity,
-) (OutputFileBinding, error) {
-	target, err := NewOutputFileTarget(backend, session, descriptor, locator)
+	locator MaterializationLocator,
+	objectIdentity OwnedObjectID,
+) (MaterializedFileBinding, error) {
+	target, err := NewFileMaterializationTarget(session, descriptor, locator)
 	if err != nil {
-		return OutputFileBinding{}, err
+		return MaterializedFileBinding{}, err
 	}
-	return BindOutputFileTarget(target, objectIdentity)
+	return BindFileMaterializationTarget(target, objectIdentity)
 }
 
-func BindOutputFileTarget(
-	target OutputFileTarget,
-	objectIdentity OutputObjectIdentity,
-) (OutputFileBinding, error) {
+func BindFileMaterializationTarget(
+	target FileMaterializationTarget,
+	objectIdentity OwnedObjectID,
+) (MaterializedFileBinding, error) {
 	if !target.valid() || objectIdentity.IsZero() {
-		return OutputFileBinding{}, ErrInvalidOutputBinding
+		return MaterializedFileBinding{}, ErrInvalidOutputBinding
 	}
-	return OutputFileBinding{target: target, objectIdentity: objectIdentity}, nil
+	return MaterializedFileBinding{target: target, objectIdentity: objectIdentity}, nil
 }
 
-func (binding OutputFileBinding) Target() OutputFileTarget { return binding.target }
-func (binding OutputFileBinding) BackendID() OutputBackendID {
-	return binding.target.BackendID()
-}
-func (binding OutputFileBinding) OutputSessionID() OutputSessionID {
+func (binding MaterializedFileBinding) Target() FileMaterializationTarget { return binding.target }
+func (binding MaterializedFileBinding) OutputSessionID() OutputSessionID {
 	return binding.target.OutputSessionID()
 }
-func (binding OutputFileBinding) Descriptor() content.FileRevisionDescriptor {
+func (binding MaterializedFileBinding) Descriptor() content.FileRevisionDescriptor {
 	return binding.target.Descriptor()
 }
-func (binding OutputFileBinding) ShareInstance() catalog.ShareInstance {
+func (binding MaterializedFileBinding) ShareInstance() catalog.ShareInstance {
 	return binding.target.ShareInstance()
 }
-func (binding OutputFileBinding) FileID() catalog.FileID { return binding.target.FileID() }
-func (binding OutputFileBinding) FileRevision() content.FileRevision {
+func (binding MaterializedFileBinding) FileID() catalog.FileID { return binding.target.FileID() }
+func (binding MaterializedFileBinding) FileRevision() content.FileRevision {
 	return binding.target.FileRevision()
 }
-func (binding OutputFileBinding) ExactSize() uint64      { return binding.target.ExactSize() }
-func (binding OutputFileBinding) Locator() OutputLocator { return binding.target.Locator() }
-func (binding OutputFileBinding) ObjectIdentity() OutputObjectIdentity {
+func (binding MaterializedFileBinding) ExactSize() uint64 { return binding.target.ExactSize() }
+func (binding MaterializedFileBinding) Locator() MaterializationLocator {
+	return binding.target.Locator()
+}
+func (binding MaterializedFileBinding) ObjectIdentity() OwnedObjectID {
 	return binding.objectIdentity
 }
 
-func (binding OutputFileBinding) valid() bool {
+func (binding MaterializedFileBinding) valid() bool {
 	return binding.target.valid() && !binding.objectIdentity.IsZero()
 }
 
 type VerifiedDurableRanges struct {
-	binding              OutputFileBinding
+	binding              MaterializedFileBinding
 	checkpointGeneration CheckpointGeneration
 	ranges               content.RangeSet
 }
@@ -237,7 +216,7 @@ type VerifiedDurableRanges struct {
 type CheckpointGeneration uint64
 
 func VerifyDurableRanges(
-	binding OutputFileBinding,
+	binding MaterializedFileBinding,
 	checkpointGeneration CheckpointGeneration,
 	ranges content.RangeSet,
 ) (VerifiedDurableRanges, error) {
@@ -258,7 +237,7 @@ func VerifyDurableRanges(
 	}, nil
 }
 
-func (r VerifiedDurableRanges) Binding() OutputFileBinding { return r.binding }
+func (r VerifiedDurableRanges) Binding() MaterializedFileBinding { return r.binding }
 func (r VerifiedDurableRanges) CheckpointGeneration() CheckpointGeneration {
 	return r.checkpointGeneration
 }
@@ -346,67 +325,40 @@ const (
 	DurabilityPowerLoss
 )
 
-type OutputMode uint8
-
-const (
-	OutputNativeTree OutputMode = iota + 1
-	OutputSingleFileStream
-	OutputZIPStream
-)
-
-type ArchiveFailureBoundary uint8
-
-const (
-	ArchiveFailureNotApplicable ArchiveFailureBoundary = iota
-	ArchiveFailureAtMemberStart
-)
-
-type OutputCapabilities struct {
+// DirectTreeCapabilities contain only execution facts for prefix-visible tree
+// materialization. ReceiveIntent already freezes the artifact and plan semantics.
+type DirectTreeCapabilities struct {
 	Durability           DurabilityLevel
-	Mode                 OutputMode
 	RandomWrite          bool
 	FileFailureIsolation bool
 	ModifiedTime         bool
-	ArchiveBoundary      ArchiveFailureBoundary
 }
 
-func NewOutputCapabilities(capabilities OutputCapabilities) (OutputCapabilities, error) {
-	if capabilities.Durability > DurabilityPowerLoss || capabilities.Mode < OutputNativeTree || capabilities.Mode > OutputZIPStream {
-		return OutputCapabilities{}, ErrInvalidOutputBinding
-	}
-	if capabilities.Mode == OutputZIPStream {
-		if capabilities.RandomWrite || capabilities.FileFailureIsolation || capabilities.ArchiveBoundary != ArchiveFailureAtMemberStart {
-			return OutputCapabilities{}, ErrInvalidOutputBinding
-		}
-	} else if capabilities.ArchiveBoundary != ArchiveFailureNotApplicable {
-		return OutputCapabilities{}, ErrInvalidOutputBinding
-	}
-	if capabilities.Mode != OutputNativeTree && capabilities.Durability != DurabilityNone {
-		return OutputCapabilities{}, ErrInvalidOutputBinding
-	}
-	if capabilities.Mode == OutputSingleFileStream && (capabilities.RandomWrite || capabilities.FileFailureIsolation) {
-		return OutputCapabilities{}, ErrInvalidOutputBinding
+func NewDirectTreeCapabilities(capabilities DirectTreeCapabilities) (DirectTreeCapabilities, error) {
+	if capabilities.Durability > DurabilityPowerLoss {
+		return DirectTreeCapabilities{}, ErrInvalidOutputBinding
 	}
 	return capabilities, nil
 }
 
-func validateOutputSession(intent TransferIntent, output OutputSession) error {
-	if output == nil {
+func validateDirectTreeSession(intent ReceiveIntent, output DirectTreeSession) error {
+	if output == nil || intent.MaterializationPlan().Kind() != receivecontract.PlanDirectTree ||
+		output.SessionID().IsZero() {
 		return outputContractFault(nil)
 	}
-	backend, err := NewOutputBackendID(string(output.BackendID()))
+	expectedBinding, err := BindDirectTreeSession(intent)
+	actualBinding := output.Binding()
+	if err != nil || !actualBinding.valid() || actualBinding != expectedBinding {
+		return outputContractFault(err)
+	}
 	capabilities := output.Capabilities()
-	if err != nil || backend != intent.BackendID() || output.SessionID().IsZero() ||
-		capabilities.Mode != intent.Format() {
-		return outputContractFault(nil)
-	}
-	if _, err := NewOutputCapabilities(capabilities); err != nil {
+	if _, err = NewDirectTreeCapabilities(capabilities); err != nil {
 		return outputContractFault(err)
 	}
 	return nil
 }
 
-type OutputDirectory struct {
+type MaterializationDirectory struct {
 	// DirectoryID and Generation are authenticated catalog identity, not a
 	// filesystem inode. They let an output backend bind each mutation to the
 	// exact committed generation that made the directory visible.
@@ -417,108 +369,12 @@ type OutputDirectory struct {
 	ModifiedTime    catalog.ModifiedTime
 }
 
-type OutputFile struct {
+type MaterializationFile struct {
 	Path            string
 	ExpectedSize    uint64
 	Descriptor      content.FileRevisionDescriptor
-	Target          OutputFileTarget
+	Target          FileMaterializationTarget
 	ParentAdmission DirectoryAdmission
-}
-
-// OutputTargetKind identifies the user-owned namespace selected by the picker.
-// A catalog OutputLocator is deliberately a different type: catalog paths are
-// relative sender names, whereas an output target is a receiver-side root or
-// backend-owned opaque capability.
-type OutputTargetKind uint8
-
-const (
-	OutputFilesystemRootTarget OutputTargetKind = iota + 1
-	OutputOpaqueTarget
-)
-
-const outputTargetIdentityDomain = "windshare/output-root/v1\x00"
-
-const OutputRootIdentityBytes = sha256.Size
-
-// OutputRootIdentity is the stable identity of a receiver-owned output root.
-// It is not an authority by itself; the output backend must still revalidate
-// ownership and confinement when OpenOutput is called.
-type OutputRootIdentity [sha256.Size]byte
-
-func (identity OutputRootIdentity) Bytes() []byte { return append([]byte(nil), identity[:]...) }
-func (identity OutputRootIdentity) IsZero() bool  { return identity == (OutputRootIdentity{}) }
-
-// OutputTarget is an immutable, picker-confirmed destination. Filesystem roots
-// retain their canonical absolute path for the native authority, while an
-// opaque backend capability carries only its identity.
-type OutputTarget struct {
-	kind     OutputTargetKind
-	rootPath string
-	identity OutputRootIdentity
-}
-
-// NewFilesystemOutputRootTarget accepts only an absolute path. Requiring the
-// caller to resolve relative input at the UI/CLI boundary prevents the same
-// intent from silently referring to different roots when the process cwd
-// changes; the authority still performs its own root ownership checks.
-func NewFilesystemOutputRootTarget(rootPath string) (OutputTarget, error) {
-	canonical, err := canonicalOutputRootPath(rootPath)
-	if err != nil {
-		return OutputTarget{}, err
-	}
-	identity := sha256.Sum256(append([]byte(outputTargetIdentityDomain), []byte(canonical)...))
-	return OutputTarget{kind: OutputFilesystemRootTarget, rootPath: canonical, identity: identity}, nil
-}
-
-// NewOpaqueOutputTarget creates a target for a backend-owned capability. The
-// bytes may identify an FSA/OPFS handle, stream sink, or output object; transfer
-// never interprets them and only the issuing backend can authenticate them.
-func NewOpaqueOutputTarget(raw []byte) (OutputTarget, error) {
-	if len(raw) != sha256.Size {
-		return OutputTarget{}, ErrInvalidOutputBinding
-	}
-	var identity OutputRootIdentity
-	copy(identity[:], raw)
-	if identity == (OutputRootIdentity{}) {
-		return OutputTarget{}, ErrInvalidOutputBinding
-	}
-	return OutputTarget{kind: OutputOpaqueTarget, identity: identity}, nil
-}
-
-func canonicalOutputRootPath(rootPath string) (string, error) {
-	if rootPath == "" || !utf8.ValidString(rootPath) || strings.ContainsRune(rootPath, '\x00') || !filepath.IsAbs(rootPath) {
-		return "", ErrInvalidOutputBinding
-	}
-	clean := filepath.Clean(rootPath)
-	if clean == "." || !filepath.IsAbs(clean) {
-		return "", ErrInvalidOutputBinding
-	}
-	return clean, nil
-}
-
-func (target OutputTarget) Kind() OutputTargetKind { return target.kind }
-func (target OutputTarget) RootPath() string       { return target.rootPath }
-func (target OutputTarget) Identity() OutputRootIdentity {
-	return target.identity
-}
-func (target OutputTarget) IsZero() bool {
-	return target.kind == 0 || target.identity == (OutputRootIdentity{})
-}
-
-func (target OutputTarget) Equal(other OutputTarget) bool {
-	return target.kind == other.kind && target.rootPath == other.rootPath && target.identity == other.identity
-}
-
-func (target OutputTarget) valid() bool {
-	switch target.kind {
-	case OutputFilesystemRootTarget:
-		canonical, err := canonicalOutputRootPath(target.rootPath)
-		return err == nil && canonical == target.rootPath && target.identity != (OutputRootIdentity{})
-	case OutputOpaqueTarget:
-		return target.rootPath == "" && target.identity != (OutputRootIdentity{})
-	default:
-		return false
-	}
 }
 
 func validateOpenedFile(share catalog.ShareInstance, entry catalog.Entry, opened OpenedRevision) error {
@@ -549,7 +405,7 @@ func validateOpenedPlanFile(
 }
 
 func validateOutputTransaction(
-	target OutputFileTarget,
+	target FileMaterializationTarget,
 	transaction FileTransaction,
 	durable VerifiedDurableRanges,
 ) error {
@@ -557,14 +413,14 @@ func validateOutputTransaction(
 		return outputContractFault(nil)
 	}
 	binding := transaction.Binding()
-	if validateOutputFileBinding(target, binding) != nil || durable.Binding() != binding {
+	if validateMaterializedFileBinding(target, binding) != nil || durable.Binding() != binding {
 		return outputContractFault(nil)
 	}
 	return nil
 }
 
 func validateImmediateFileSettlement(
-	target OutputFileTarget,
+	target FileMaterializationTarget,
 	settlement FileSettlement,
 ) error {
 	// matchesTarget already proves the settlement's kind-specific binding and
@@ -576,9 +432,9 @@ func validateImmediateFileSettlement(
 	return nil
 }
 
-func validateOutputFileBinding(
-	target OutputFileTarget,
-	binding OutputFileBinding,
+func validateMaterializedFileBinding(
+	target FileMaterializationTarget,
+	binding MaterializedFileBinding,
 ) error {
 	if !target.valid() || !binding.valid() || binding.Target() != target {
 		return ErrOutputContract

@@ -13,7 +13,7 @@ type textRenderer struct{}
 func (textRenderer) Usage() string {
 	return "Usage:\n" +
 		"  windshare resume list -o <directory>\n" +
-		"      List current paused state through a fresh read-only inventory.\n\n" +
+		"      List current operation and terminal state through a fresh read-only inventory.\n\n" +
 		"  windshare resume discard -o <directory> --item <N>\n" +
 		"      Re-list one current item and require the exact terminal confirmation \"discard N\".\n" +
 		"      Only owned recovery artifacts are eligible; published files are always preserved.\n\n" +
@@ -22,12 +22,12 @@ func (textRenderer) Usage() string {
 }
 
 func (textRenderer) Inventory(items []resumeStateItem) (string, bool, error) {
-	status := resumeListStatusAvailable
+	status := resumeListStatusReady
 	for _, item := range items {
 		if !item.valid() {
 			return "", false, errResumeStateContract
 		}
-		if item.status == resumeListStatusNeedsAttention {
+		if item.status == resumeItemStatusNeedsAttention {
 			status = resumeListStatusNeedsAttention
 		}
 	}
@@ -50,21 +50,26 @@ func renderResumeStateItem(itemNumber int, item resumeStateItem) (string, error)
 	var output strings.Builder
 	fmt.Fprintf(
 		&output,
-		"resume_item=%d status=%q intent_digest=%q backend=%q checkpoint_records=%d recovery_artifact_bytes=%d\n",
+		"resume_item=%d status=%q operation_id=%q intent_digest=%q phase=%d state_generation=%d expires_at_millis=%d success_count=%d failure_count=%d resumable=%t discardable=%t\n",
 		itemNumber,
 		item.status,
+		item.operationID,
 		item.intentDigest,
-		item.backend,
-		item.checkpointRecordCount,
-		item.recoveryArtifactBytes,
+		item.phase,
+		item.stateGeneration,
+		item.expiresAtMillis,
+		item.successCount,
+		item.failureCount,
+		item.resumable,
+		item.discardable,
 	)
 	for _, attention := range item.attention {
 		fmt.Fprintf(
 			&output,
-			"  resume_attention item=%d reason=%q reference=%q\n",
+			"  resume_attention item=%d reason=%q operation_id=%q\n",
 			itemNumber,
 			attention.reason,
-			attention.reference,
+			attention.operationID,
 		)
 	}
 	return output.String(), nil
@@ -80,7 +85,7 @@ func (textRenderer) DiscardPrompt(
 		return "", err
 	}
 	return fmt.Sprintf(
-		"Current paused state:\n%sPublished files are preserved; only owned recovery artifacts are eligible.\nType %q exactly to continue: ",
+		"Current resume state:\n%sPublished files are preserved; only owned recovery artifacts are eligible.\nType %q exactly to continue: ",
 		preview,
 		expected,
 	), nil
@@ -88,7 +93,7 @@ func (textRenderer) DiscardPrompt(
 
 func (textRenderer) DiscardControlStatus(status string, itemNumber int) string {
 	return fmt.Sprintf(
-		"resume_discard_status=%q item=%d removed_artifacts=0 published_files=%q\n",
+		"resume_discard_status=%q item=%d published_files=%q\n",
 		status,
 		itemNumber,
 		resumePublishedFileTreatment,
@@ -102,19 +107,22 @@ func (textRenderer) DiscardReport(itemNumber int, report resumeDiscardReport) (s
 	var output strings.Builder
 	fmt.Fprintf(
 		&output,
-		"resume_discard_status=%q item=%d removed_artifacts=%d published_files=%q\n",
+		"resume_discard_status=%q item=%d operation_id=%q phase=%d state_generation=%d resumable=%t published_files=%q\n",
 		report.status,
 		itemNumber,
-		report.removedArtifacts,
+		report.operationID,
+		report.phase,
+		report.stateGeneration,
+		report.resumable,
 		resumePublishedFileTreatment,
 	)
 	for _, attention := range report.attention {
 		fmt.Fprintf(
 			&output,
-			"  resume_attention item=%d reason=%q reference=%q\n",
+			"  resume_attention item=%d reason=%q operation_id=%q\n",
 			itemNumber,
 			attention.reason,
-			attention.reference,
+			attention.operationID,
 		)
 	}
 	return output.String(), nil

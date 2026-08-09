@@ -7,42 +7,37 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestCertifiedBindingKeepsRepositoryAndRecordAuthorityDistinct(t *testing.T) {
 	spec := canonicalRecordSpec(t)
 	record := mustCanonicalRecord(t, spec)
-	backend, err := transfer.NewOutputBackendID(spec.BackendID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	ownership, err := NewOwnership(OwnershipSpec{
-		Backend:             backend,
+		Materializer:        spec.MaterializerKind,
 		Certification:       CertificationLinuxExt4ProcessRestart,
-		RootIdentity:        spec.RootIdentity,
+		AuthorityRef:        spec.AuthorityRef,
 		RootOpenDisposition: AuthorityCreatedRoot,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, err := NewBinding(ownership, spec.TransferIntentDigest)
+	binding, err := NewBinding(
+		ownership, spec.OperationID, spec.ReceiveIntentDigest, spec.MaterializationBindingDigest,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if binding.Ownership() != ownership ||
-		binding.TransferIntentDigest() != spec.TransferIntentDigest ||
+	if binding.Ownership() != ownership || binding.OperationID() != spec.OperationID ||
+		binding.ReceiveIntentDigest() != spec.ReceiveIntentDigest ||
+		binding.MaterializationBindingDigest() != spec.MaterializationBindingDigest ||
 		binding.Ownership().Certification() != CertificationLinuxExt4ProcessRestart ||
 		binding.Ownership().RootOpenDisposition() != AuthorityCreatedRoot {
 		t.Fatal("binding lost certified repository ownership")
 	}
-	if record.FileID() != spec.FileID || record.FileRevision() != spec.FileRevision ||
-		record.QuarantineReason() != 0 || record.QuarantineOrigin() != 0 ||
-		record.RetirementReason() != 0 {
-		t.Fatal("record lost immutable file identity or introduced terminal claims")
-	}
 	if !binding.Matches(record, record.RecordID()) {
-		t.Fatal("exact record did not match its certified intent binding")
+		t.Fatal("exact record did not match its certified operation binding")
 	}
 
 	wrongID, err := RecordIDFromBytes(bytes.Repeat([]byte{0xf1}, sha256.Size))
@@ -54,19 +49,20 @@ func TestCertifiedBindingKeepsRepositoryAndRecordAuthorityDistinct(t *testing.T)
 		t.Fatal("invalid repository or record identity granted authority")
 	}
 
-	foreignIntent, err := transfer.TransferIntentDigestFromBytes(bytes.Repeat([]byte{0xe1}, sha256.Size))
+	foreignIntent, err := transfer.ReceiveIntentDigestFromBytes(bytes.Repeat([]byte{0xe1}, sha256.Size))
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignOperation, err := receivecontract.OperationIDFromBytes(bytes.Repeat([]byte{0xe2}, receivecontract.StableIdentityBytes))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*RecordSpec){
-		"intent": func(value *RecordSpec) {
-			value.TransferIntentDigest = foreignIntent
-		},
-		"root": func(value *RecordSpec) {
-			value.RootIdentity = bytes.Repeat([]byte{0xe2}, sha256.Size)
-		},
-		"backend": func(value *RecordSpec) {
-			value.BackendID = "checkpointmodel-foreign"
+		"operation": func(value *RecordSpec) { value.OperationID = foreignOperation },
+		"intent":    func(value *RecordSpec) { value.ReceiveIntentDigest = foreignIntent },
+		"authority": func(value *RecordSpec) { value.AuthorityRef = bytes.Repeat([]byte{0xe3}, sha256.Size) },
+		"materializer": func(value *RecordSpec) {
+			value.MaterializerKind = MaterializerAtomicFile
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -78,39 +74,27 @@ func TestCertifiedBindingKeepsRepositoryAndRecordAuthorityDistinct(t *testing.T)
 			}
 		})
 	}
-
-	if _, err := NewBinding(Ownership{}, spec.TransferIntentDigest); !errors.Is(err, ErrRecordBinding) {
-		t.Fatalf("zero ownership binding error = %v", err)
-	}
-	if _, err := NewBinding(ownership, transfer.TransferIntentDigest{}); !errors.Is(err, ErrRecordBinding) {
-		t.Fatalf("zero intent binding error = %v", err)
-	}
 }
 
 func TestOwnershipDecoderRejectsAuthenticatedUnknownRootDisposition(t *testing.T) {
-	backend, err := transfer.NewOutputBackendID("checkpointmodel-certified")
-	if err != nil {
-		t.Fatal(err)
-	}
 	ownership, err := NewOwnership(OwnershipSpec{
-		Backend:             backend,
+		Materializer:        MaterializerNativeTree,
 		Certification:       CertificationWindowsNTFSProcessRestart,
-		RootIdentity:        bytes.Repeat([]byte{0x91}, sha256.Size),
+		AuthorityRef:        bytes.Repeat([]byte{0x91}, sha256.Size),
 		RootOpenDisposition: CallerProvidedContainer,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// A valid checksum proves only byte integrity; the closed disposition remains
-	// an independent authority decision during restart.
+	// Byte integrity cannot promote an unknown ownership claim into authority.
 	var payload bytes.Buffer
 	writeOwnershipString(&payload, ownershipDomain)
 	writeOwnershipString(&payload, OwnershipMarker)
 	writeOwnershipString(&payload, NamespaceName)
-	writeOwnershipString(&payload, string(ownership.Backend()))
+	payload.WriteByte(byte(ownership.MaterializerKind()))
 	writeOwnershipString(&payload, string(ownership.Certification()))
-	_, _ = payload.Write(ownership.RootIdentity().Bytes())
+	_, _ = payload.Write(ownership.AuthorityRef().Bytes())
 	writeOwnershipString(&payload, "future-root-disposition")
 	checksum := ownershipChecksum(payload.Bytes())
 	encoded := append(append([]byte(nil), payload.Bytes()...), checksum[:]...)

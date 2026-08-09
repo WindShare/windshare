@@ -15,22 +15,21 @@ import (
 
 func TestFileStartAndSettlementPayloadsAreChecked(t *testing.T) {
 	descriptor := transferDescriptor(t, 1)
-	backend, _ := NewOutputBackendID("test/settlement")
 	session := transferID[OutputSessionID](8)
-	locator, _ := NewPathOutputLocator("file.bin")
-	var object OutputObjectIdentity
+	locator, _ := NewPathMaterializationLocator("file.bin")
+	var object OwnedObjectID
 	object[0] = 9
-	binding, err := NewOutputFileBinding(backend, session, descriptor, locator, object)
+	binding, err := NewMaterializedFileBinding(session, descriptor, locator, object)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if binding.Target().Descriptor() != descriptor {
 		t.Fatal("output target did not retain the complete revision descriptor")
 	}
-	if _, err := NewCollisionFileSettlement(OutputFileTarget{}); !errors.Is(err, ErrInvalidOutputSettlement) {
+	if _, err := NewCollisionFileSettlement(FileMaterializationTarget{}); !errors.Is(err, ErrInvalidOutputSettlement) {
 		t.Fatalf("unbound collision error=%v", err)
 	}
-	if _, err := NewRetiredFileSettlement(OutputFileBinding{}); !errors.Is(err, ErrInvalidOutputSettlement) {
+	if _, err := NewRetiredFileSettlement(MaterializedFileBinding{}); !errors.Is(err, ErrInvalidOutputSettlement) {
 		t.Fatalf("unbound retirement error=%v", err)
 	}
 	partialRanges, _ := content.NewRangeSet([]content.Range{{Offset: 0, End: 1}})
@@ -64,14 +63,14 @@ func TestFileStartAndSettlementPayloadsAreChecked(t *testing.T) {
 	}
 	otherObject := object
 	otherObject[0]++
-	otherBinding, err := BindOutputFileTarget(binding.Target(), otherObject)
+	otherBinding, err := BindFileMaterializationTarget(binding.Target(), otherObject)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if retired.matchesBinding(otherBinding) {
 		t.Fatal("retirement settlement matched a different owned object")
 	}
-	reference, _ := NewOutputStateRef(session, locator.Digest())
+	reference, _ := NewMaterializationStateRef(session, locator.Digest())
 	quarantined, err := NewImmediateQuarantinedFileSettlement(
 		binding.Target(), reference, QuarantineOwnershipMismatch,
 	)
@@ -110,7 +109,7 @@ func TestTransferJobOpensOutputBeforeRevisionAndAdmitsGeneration(t *testing.T) {
 		}
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != JobSucceeded || result.IntentDigest.IsZero() || result.TransferIntent.IsZero() || result.SucceededFiles != 1 {
+	if result.Outcome != DirectTreeOutcomePublished || result.ReceiveIntentDigest.IsZero() || result.ReceiveIntent.IsZero() || result.SucceededFiles != 1 {
 		t.Fatalf("result=%+v", result)
 	}
 
@@ -121,9 +120,22 @@ func TestTransferJobOpensOutputBeforeRevisionAndAdmitsGeneration(t *testing.T) {
 	job, _ = branchJob(t, output, revisions, scriptedRangeReader{})
 	result = job.Run(context.Background())
 	expectedUnsupported, _ := fault.NewOutput(fault.ScopeOutputPause, fault.OutputUnsupportedFilesystem)
-	if result.Outcome != JobPausedOutcome || result.TerminationFault != expectedUnsupported ||
+	if result.Outcome != DirectTreeOutcomeResumable || result.TerminationFault != expectedUnsupported ||
 		len(revisions.order) != 0 || len(output.transactions) != 0 || output.pauseCalls != 0 || output.completeCalls != 0 {
 		t.Fatalf("failed admission leaked revision/content work: result=%+v revisions=%v", result, revisions.order)
+	}
+
+	output = newJobOutput(share)
+	output.admitErr = outputFailure(fault.ScopeOutputPause, fault.OutputStateIO, errors.New("root opened before writer failed"))
+	output.returnSessionOnOpenError = true
+	revisions = &jobRevisionClient{}
+	job, _ = branchJob(t, output, revisions, scriptedRangeReader{})
+	result = job.Run(context.Background())
+	expectedStateIO, _ := fault.NewOutput(fault.ScopeOutputPause, fault.OutputStateIO)
+	if result.Outcome != DirectTreeOutcomeResumable || result.TerminationFault != expectedStateIO ||
+		result.Settlement.Kind() != DirectTreeSettlementResumable || output.pauseCalls != 1 ||
+		output.completeCalls != 0 || len(revisions.order) != 0 {
+		t.Fatalf("bound partial admission was not paused: result=%+v pause=%d", result, output.pauseCalls)
 	}
 }
 
@@ -137,7 +149,7 @@ func TestTransferJobAdmitsGenerationsIncrementallyBeforeContent(t *testing.T) {
 	opened, _ := NewOpenedRevision(transferID[content.LeaseID](26), descriptor)
 	rules, _ := NewSelectionRules(true, nil)
 	newJob := func(output *jobOutput, revisions *jobRevisionClient, blocks RangeReader) *TransferJob {
-		job, err := newTestTransferJob(t, TransferJobConfig{
+		job, err := newTestTransferJob(t, testTransferJobConfig{
 			ShareInstance: share, SyntheticRoot: root, Rules: rules,
 			Catalog: failingCatalog{
 				snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
@@ -149,7 +161,7 @@ func TestTransferJobAdmitsGenerationsIncrementallyBeforeContent(t *testing.T) {
 				},
 				failures: make(map[catalog.DirectoryID]error),
 			},
-			Revisions: revisions, Blocks: blocks, Output: output,
+			Revisions: revisions, Blocks: blocks, Materializer: output,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -171,7 +183,7 @@ func TestTransferJobAdmitsGenerationsIncrementallyBeforeContent(t *testing.T) {
 			}
 		}
 		result := newJob(output, revisions, scriptedRangeReader{}).Run(context.Background())
-		if result.Outcome != JobSucceeded || !slices.Equal(output.directories, []string{"", "folder", "other"}) ||
+		if result.Outcome != DirectTreeOutcomePublished || !slices.Equal(output.directories, []string{"", "folder", "other"}) ||
 			!slices.Equal(output.finalized, []string{"folder", "other", ""}) ||
 			!slices.Contains(output.events, "begin:folder/file.bin") || output.completeCalls != 1 {
 			t.Fatalf("result=%+v events=%v", result, output.events)
@@ -188,7 +200,7 @@ func TestTransferJobAdmitsGenerationsIncrementallyBeforeContent(t *testing.T) {
 		}
 		blocks := &countingRangeReader{}
 		result := newJob(output, revisions, blocks).Run(context.Background())
-		if result.Outcome != JobCompletedWithErrors || result.TerminationCause != nil || len(result.Directories) != 1 ||
+		if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil || len(result.Directories) != 1 ||
 			result.Directories[0].Stage != FailureDirectoryOutput ||
 			len(revisions.order) != 0 || blocks.calls != 0 || output.pauseCalls != 0 || output.completeCalls != 1 ||
 			!slices.Equal(output.directories, []string{"", "other"}) ||
@@ -226,12 +238,12 @@ func TestTransferJobRejectsForeignOrMissingImmediateSettlementAuthority(t *testi
 				if err != nil {
 					t.Fatal(err)
 				}
-				locator, err := NewPathOutputLocator("file.bin")
+				locator, err := NewPathMaterializationLocator("file.bin")
 				if err != nil {
 					t.Fatal(err)
 				}
-				target, err := NewOutputFileTarget(
-					output.BackendID(), output.SessionID(), wrongDescriptor, locator,
+				target, err := NewFileMaterializationTarget(
+					output.SessionID(), wrongDescriptor, locator,
 				)
 				if err != nil {
 					t.Fatal(err)
@@ -260,16 +272,16 @@ func TestTransferJobRejectsForeignOrMissingImmediateSettlementAuthority(t *testi
 		{
 			name: "foreign quarantine reference",
 			configure: func(t *testing.T, output *jobOutput, descriptor content.FileRevisionDescriptor) {
-				locator, err := NewPathOutputLocator("file.bin")
+				locator, err := NewPathMaterializationLocator("file.bin")
 				if err != nil {
 					t.Fatal(err)
 				}
 				foreignSession := transferID[OutputSessionID](202)
-				target, err := NewOutputFileTarget(output.BackendID(), foreignSession, descriptor, locator)
+				target, err := NewFileMaterializationTarget(foreignSession, descriptor, locator)
 				if err != nil {
 					t.Fatal(err)
 				}
-				reference, err := NewOutputStateRef(foreignSession, locator.Digest())
+				reference, err := NewMaterializationStateRef(foreignSession, locator.Digest())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -301,7 +313,7 @@ func TestTransferJobRejectsForeignOrMissingImmediateSettlementAuthority(t *testi
 
 			result := job.Run(context.Background())
 			expected := mustOutputFault(fault.ScopeOutputPause, fault.OutputContract)
-			if result.Outcome != JobPausedOutcome || result.SucceededFiles != 0 || blocks.calls != 0 ||
+			if result.Outcome != DirectTreeOutcomeResumable || result.SucceededFiles != 0 || blocks.calls != 0 ||
 				len(result.Files) != 1 || result.SettlementFault != expected ||
 				output.pauseCalls != 1 || output.completeCalls != 0 {
 				t.Fatalf("result=%+v blocks=%d pause=%d complete=%d", result, blocks.calls, output.pauseCalls, output.completeCalls)
@@ -318,13 +330,13 @@ func immediatePublishedSettlement(
 	session OutputSessionID,
 ) FileSettlement {
 	t.Helper()
-	locator, err := NewPathOutputLocator(path)
+	locator, err := NewPathMaterializationLocator(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var object OutputObjectIdentity
+	var object OwnedObjectID
 	object[0] = 1
-	binding, err := NewOutputFileBinding(output.BackendID(), session, descriptor, locator, object)
+	binding, err := NewMaterializedFileBinding(session, descriptor, locator, object)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,8 +364,8 @@ func TestTransferJobIsolatesImmediateCollisionAndQuarantine(t *testing.T) {
 		{
 			name: "collision",
 			settlement: func(output *jobOutput, path string, descriptor content.FileRevisionDescriptor) FileSettlement {
-				locator, _ := NewPathOutputLocator(path)
-				target, _ := NewOutputFileTarget(output.BackendID(), output.SessionID(), descriptor, locator)
+				locator, _ := NewPathMaterializationLocator(path)
+				target, _ := NewFileMaterializationTarget(output.SessionID(), descriptor, locator)
 				settlement, _ := NewCollisionFileSettlement(target)
 				return settlement
 			},
@@ -362,9 +374,9 @@ func TestTransferJobIsolatesImmediateCollisionAndQuarantine(t *testing.T) {
 		{
 			name: "quarantine",
 			settlement: func(output *jobOutput, path string, descriptor content.FileRevisionDescriptor) FileSettlement {
-				locator, _ := NewPathOutputLocator(path)
-				target, _ := NewOutputFileTarget(output.BackendID(), output.SessionID(), descriptor, locator)
-				reference, _ := NewOutputStateRef(output.session, locator.Digest())
+				locator, _ := NewPathMaterializationLocator(path)
+				target, _ := NewFileMaterializationTarget(output.SessionID(), descriptor, locator)
+				reference, _ := NewMaterializationStateRef(output.session, locator.Digest())
 				settlement, _ := NewImmediateQuarantinedFileSettlement(
 					target, reference, QuarantineOwnershipMismatch,
 				)
@@ -395,21 +407,21 @@ func TestTransferJobIsolatesImmediateCollisionAndQuarantine(t *testing.T) {
 			output.immediate[blockedPath] = test.settlement(
 				output, blockedPath, revisions.opened[blockedFile].Descriptor,
 			)
-			output.completeSettlement = JobPausedNeedsAttention
+			output.completeSettlement = DirectTreeSettlementNeedsAttention
 			rules, _ := NewSelectionRules(true, nil)
-			job, err := newTestTransferJob(t, TransferJobConfig{
+			job, err := newTestTransferJob(t, testTransferJobConfig{
 				ShareInstance: share, SyntheticRoot: root, Rules: rules,
 				Catalog: failingCatalog{
 					snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{root: snapshot},
 					failures:  make(map[catalog.DirectoryID]error),
 				},
-				Revisions: revisions, Blocks: scriptedRangeReader{}, Output: output,
+				Revisions: revisions, Blocks: scriptedRangeReader{}, Materializer: output,
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			result := job.Run(context.Background())
-			if result.Outcome != JobCompletedWithErrors || result.Settlement.Kind() != JobPausedNeedsAttention ||
+			if result.Outcome != DirectTreeOutcomeNeedsAttention || result.Settlement.Kind() != DirectTreeSettlementNeedsAttention ||
 				result.SucceededFiles != 1 || len(result.Files) != 1 || !errors.Is(result.Files[0].Cause, test.cause) {
 				t.Fatalf("result=%+v", result)
 			}
@@ -429,16 +441,16 @@ func TestTransferJobRejectsClosedSessionWithQuarantinedState(t *testing.T) {
 	revisions := &jobRevisionClient{}
 	job, file := branchJob(t, output, revisions, scriptedRangeReader{})
 	descriptor := revisions.opened[file].Descriptor
-	locator, _ := NewPathOutputLocator("file.bin")
-	target, _ := NewOutputFileTarget(output.BackendID(), output.SessionID(), descriptor, locator)
-	reference, _ := NewOutputStateRef(output.SessionID(), locator.Digest())
+	locator, _ := NewPathMaterializationLocator("file.bin")
+	target, _ := NewFileMaterializationTarget(output.SessionID(), descriptor, locator)
+	reference, _ := NewMaterializationStateRef(output.SessionID(), locator.Digest())
 	quarantined, _ := NewImmediateQuarantinedFileSettlement(
 		target, reference, QuarantineOwnershipMismatch,
 	)
 	output.immediate["file.bin"] = quarantined
 
 	result := job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome || len(result.Files) != 1 ||
+	if result.Outcome != DirectTreeOutcomeResumable || len(result.Files) != 1 ||
 		!errors.Is(result.Files[0].Cause, ErrOutputQuarantined) ||
 		result.SettlementFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
 		output.completeCalls != 1 || output.pauseCalls != 0 {
@@ -446,7 +458,7 @@ func TestTransferJobRejectsClosedSessionWithQuarantinedState(t *testing.T) {
 	}
 }
 
-func TestTransferJobSettlementContextAndFailuresRemainIndependent(t *testing.T) {
+func TestTransferDirectTreeSettlementContextAndFailuresRemainIndependent(t *testing.T) {
 	share := transferID[catalog.ShareInstance](60)
 	output := newJobOutput(share)
 	settlementCause := errors.New("checkpoint state unavailable")
@@ -468,7 +480,7 @@ func TestTransferJobSettlementContextAndFailuresRemainIndependent(t *testing.T) 
 	result := job.Run(context.Background())
 	sessionFault := mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol)
 	settlementFault, _ := fault.NewOutput(fault.ScopeFileLocal, fault.OutputStateIO)
-	if !settlementObserved || result.Outcome != JobPausedOutcome ||
+	if !settlementObserved || result.Outcome != DirectTreeOutcomeResumable ||
 		result.TerminationFault != sessionFault || result.SettlementFault != settlementFault ||
 		len(result.Files) != 1 || result.Files[0].SettlementFault != settlementFault {
 		t.Fatalf("result=%+v observed=%v", result, settlementObserved)
@@ -487,7 +499,7 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		result := job.Run(context.Background())
 		transaction := output.transactions["file.bin"]
 		expected, _ := fault.NewOutput(fault.ScopeFileLocal, fault.OutputStateIO)
-		if result.Outcome != JobPausedOutcome || result.TerminationFault != expected ||
+		if result.Outcome != DirectTreeOutcomeResumable || result.TerminationFault != expected ||
 			result.SettlementFault != expected || transaction == nil ||
 			transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
 			len(transaction.retireReasons) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
@@ -501,14 +513,14 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		revisions := &jobRevisionClient{}
 		job, file := branchJob(t, output, revisions, scriptedRangeReader{})
 		descriptor := revisions.opened[file].Descriptor
-		locator, _ := NewPathOutputLocator("file.bin")
-		target, _ := NewOutputFileTarget(output.BackendID(), output.SessionID(), descriptor, locator)
+		locator, _ := NewPathMaterializationLocator("file.bin")
+		target, _ := NewFileMaterializationTarget(output.SessionID(), descriptor, locator)
 		collision, _ := NewCollisionFileSettlement(target)
 		output.transactionScript.commitResult = &collision
 
 		result := job.Run(context.Background())
 		transaction := output.transactions["file.bin"]
-		if result.Outcome != JobPausedOutcome || result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
+		if result.Outcome != DirectTreeOutcomeResumable || result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
 			result.SettlementFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) || transaction == nil ||
 			transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
 			len(transaction.retireReasons) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
@@ -525,7 +537,7 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		result := job.Run(context.Background())
 		transaction := output.transactions["file.bin"]
 		expected, _ := fault.NewOutput(fault.ScopeOutputPause, fault.OutputStateIO)
-		if result.Outcome != JobPausedOutcome || result.TerminationCause != nil ||
+		if result.Outcome != DirectTreeOutcomeResumable || result.TerminationCause != nil ||
 			result.SettlementFault != expected || transaction == nil ||
 			transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
 			output.completeCalls != 1 || output.pauseCalls != 0 {
@@ -539,12 +551,12 @@ func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
 	output := newJobOutput(share)
 	revisions := &jobRevisionClient{}
 	var traces []TransferLifecycleTrace
-	job, file := branchJob(t, output, revisions, scriptedRangeReader{})
+	job, _ := branchJob(t, output, revisions, scriptedRangeReader{})
 	job.tracer = TransferLifecycleTraceFunc(func(event TransferLifecycleTrace) {
 		traces = append(traces, event)
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != JobSucceeded {
+	if result.Outcome != DirectTreeOutcomePublished {
 		t.Fatalf("result=%+v", result)
 	}
 	wantStages := []TransferLifecycleStage{
@@ -559,10 +571,12 @@ func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
 	indices := make(map[TransferLifecycleStage]int, len(traces))
 	for index, trace := range traces {
 		indices[trace.Stage] = index
-		if trace.TransferJobID != result.TransferJobID || trace.IntentDigest != result.IntentDigest || trace.IntentDigest.IsZero() {
-			t.Fatalf("trace[%d] correlation=%+v result=(%x,%x)", index, trace, result.TransferJobID, result.IntentDigest)
+		if trace.TransferJobID != result.TransferJobID || trace.ReceiveIntentDigest != result.ReceiveIntentDigest || trace.ReceiveIntentDigest.IsZero() {
+			t.Fatalf("trace[%d] correlation=%+v result=(%x,%x)", index, trace, result.TransferJobID, result.ReceiveIntentDigest)
 		}
-		if trace.ShareInstance != share || !trace.ProtocolSessionID.IsZero() {
+		if trace.OperationID != result.ReceiveIntent.OperationID() ||
+			trace.PlanKind != result.ReceiveIntent.MaterializationPlan().Kind() ||
+			!trace.ProtocolSessionID.IsZero() {
 			t.Fatalf("trace[%d] runtime correlation=%+v", index, trace)
 		}
 	}
@@ -587,16 +601,11 @@ func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
 	}
 	fileSettlement := traces[indices[TransferFileSettled]]
 	discovery := traces[indices[TransferDiscoveryCompleted]]
-	generation := traces[indices[TransferGenerationCommitted]]
-	admitted := traces[indices[TransferDirectoryAdmitted]]
-	finalized := traces[indices[TransferDirectoryFinalized]]
-	if fileSettlement.FileID != file || fileSettlement.FileSettlement != FilePublished ||
-		generation.DirectoryID != job.root || generation.DirectoryGeneration.IsZero() ||
-		discovery.DirectoryID != job.root || discovery.DirectoryGeneration.IsZero() ||
-		discovery.Discovery != DiscoveryComplete || discovery.SelectionClass != SelectionSmall ||
-		admitted.DirectoryID != job.root || admitted.DirectoryGeneration.IsZero() ||
-		finalized.DirectoryID != job.root || finalized.DirectoryGeneration != admitted.DirectoryGeneration ||
-		traces[indices[TransferJobSettled]].JobSettlement != JobClosed {
+	settled := traces[indices[TransferJobSettled]]
+	if fileSettlement.FileSettlement != FilePublished ||
+		discovery.Discovery != DiscoveryComplete || discovery.ConnectionSizeClass != ConnectionSizeSmall ||
+		discovery.DiscoveredFileCount != 1 || settled.CompletedFileCount != 1 ||
+		settled.DirectTreeSettlement != DirectTreeSettlementPublished {
 		t.Fatalf("typed lifecycle context=%+v", traces)
 	}
 	for _, stage := range []TransferLifecycleStage{
@@ -604,9 +613,7 @@ func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
 		TransferFileSettled,
 	} {
 		fileTrace := traces[indices[stage]]
-		if fileTrace.FileID != file || fileTrace.DirectoryID != job.root ||
-			fileTrace.DirectoryGeneration != generation.DirectoryGeneration ||
-			fileTrace.FileSelection != FileSelectionInherited {
+		if fileTrace.FileSelection != FileSelectionInherited {
 			t.Fatalf("file stage %d context=%+v", stage, fileTrace)
 		}
 	}
@@ -629,18 +636,18 @@ func TestTransferLifecycleFirstWriteRequiresNewDurableContent(t *testing.T) {
 				t.Fatal(err)
 			}
 			if immediate {
-				locator, err := NewPathOutputLocator("file.bin")
+				locator, err := NewPathMaterializationLocator("file.bin")
 				if err != nil {
 					t.Fatal(err)
 				}
-				target, err := NewOutputFileTarget(output.BackendID(), output.SessionID(), descriptor, locator)
+				target, err := NewFileMaterializationTarget(output.SessionID(), descriptor, locator)
 				if err != nil {
 					t.Fatal(err)
 				}
 				digest := sha256.Sum256([]byte("file.bin"))
-				var identity OutputObjectIdentity
+				var identity OwnedObjectID
 				copy(identity[:], digest[:])
-				binding, err := BindOutputFileTarget(target, identity)
+				binding, err := BindFileMaterializationTarget(target, identity)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -659,7 +666,7 @@ func TestTransferLifecycleFirstWriteRequiresNewDurableContent(t *testing.T) {
 			job.tracer = TransferLifecycleTraceFunc(func(event TransferLifecycleTrace) {
 				stages = append(stages, event.Stage)
 			})
-			if result := job.Run(context.Background()); result.Outcome != JobSucceeded {
+			if result := job.Run(context.Background()); result.Outcome != DirectTreeOutcomePublished {
 				t.Fatalf("result=%+v", result)
 			}
 			if !slices.Contains(stages, TransferFileAdmitted) || slices.Contains(stages, TransferFileFirstWrite) {

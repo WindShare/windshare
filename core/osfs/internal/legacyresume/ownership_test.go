@@ -11,7 +11,7 @@ import (
 func TestDecodeOwnershipAcceptsOnlyExactLegacyControlEnvelope(t *testing.T) {
 	root := bytes.Repeat([]byte{0x4a}, RootIdentityBytes)
 	encoded, err := encodeStoredOwnership(storedOwnership{
-		Schema: legacySchemaVersion, Backend: string(transfer.NativeFilesystemOutputBackendID),
+		Schema: legacySchemaVersion, Backend: string(NativeFilesystemBackend),
 		RootIdentity: root, Certification: CertificationWindowsNTFSProcessRestart,
 		Durability: legacyStoredProcessRestart, Generation: 7,
 	})
@@ -23,7 +23,7 @@ func TestDecodeOwnershipAcceptsOnlyExactLegacyControlEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := ExpectedOwnership{
-		Backend: transfer.NativeFilesystemOutputBackendID, RootIdentity: root,
+		Backend: NativeFilesystemBackend, RootIdentity: root,
 		Certification: CertificationWindowsNTFSProcessRestart,
 		Durability:    transfer.DurabilityProcessRestart,
 	}
@@ -50,7 +50,7 @@ func TestDecodeOwnershipAcceptsOnlyExactLegacyControlEnvelope(t *testing.T) {
 func TestOwnershipMatchingRequiresEveryCertifiedFact(t *testing.T) {
 	root := bytes.Repeat([]byte{0x31}, RootIdentityBytes)
 	encoded, err := encodeStoredOwnership(storedOwnership{
-		Schema: legacySchemaVersion, Backend: string(transfer.NativeFilesystemOutputBackendID),
+		Schema: legacySchemaVersion, Backend: string(NativeFilesystemBackend),
 		RootIdentity: root, Certification: CertificationLinuxExt4ProcessRestart,
 		Durability: legacyStoredProcessRestart, Generation: 1,
 	})
@@ -62,7 +62,7 @@ func TestOwnershipMatchingRequiresEveryCertifiedFact(t *testing.T) {
 		t.Fatal(err)
 	}
 	exact := ExpectedOwnership{
-		Backend: transfer.NativeFilesystemOutputBackendID, RootIdentity: root,
+		Backend: NativeFilesystemBackend, RootIdentity: root,
 		Certification: CertificationLinuxExt4ProcessRestart,
 		Durability:    transfer.DurabilityProcessRestart,
 	}

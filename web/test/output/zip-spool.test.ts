@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { OutputBudgetExceededError } from '../../src/transfer/output-session'
 import {
   IndexedDbZipCentralDirectorySpool,
+  ZipSpoolBudgetExceededError,
   ZIP_SPOOL_MAXIMUM_BYTES,
   ZIP_SPOOL_MAXIMUM_ENTRIES,
 } from '../../src/output/streams/zip-spool'
@@ -20,7 +20,7 @@ describe('IndexedDB ZIP central-directory operation budgets', () => {
     await spool.append(Uint8Array.of(0x11, 0x12))
 
     await expect(spool.append(Uint8Array.of(0x21))).rejects.toEqual(
-      new OutputBudgetExceededError('zip-central-directory-entries', 1n, 2n),
+      new ZipSpoolBudgetExceededError('zip-central-directory-entries', 1n, 2n),
     )
     await spool.clear()
   })
@@ -35,11 +35,11 @@ describe('IndexedDB ZIP central-directory operation budgets', () => {
     await spool.append(Uint8Array.of(0x31, 0x32))
 
     await expect(spool.append(Uint8Array.of(0x41, 0x42))).rejects.toEqual(
-      new OutputBudgetExceededError('zip-central-directory-bytes', 3n, 4n),
+      new ZipSpoolBudgetExceededError('zip-central-directory-bytes', 3n, 4n),
     )
     await expect(spool.append(Uint8Array.of(0x51))).resolves.toBeUndefined()
     await expect(spool.append(Uint8Array.of(0x61))).rejects.toMatchObject({
-      name: 'OutputBudgetExceededError',
+      name: 'ZipSpoolBudgetExceededError',
       budget: 'zip-central-directory-bytes',
       limit: 3n,
       attempted: 4n,

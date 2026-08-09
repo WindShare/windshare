@@ -8,7 +8,6 @@ import (
 	"slices"
 
 	"github.com/windshare/windshare/core/osfs/internal/checkpointcleaner"
-	"github.com/windshare/windshare/core/transfer"
 )
 
 var (
@@ -85,7 +84,7 @@ func CleanLegacyResumeState(
 	defer func() { resultErr = errors.Join(resultErr, platform.Close()) }()
 	cleaner, err := checkpointcleaner.NewOneShotCheckpointCleaner(
 		checkpointcleaner.OneShotCheckpointCleanerConfig{
-			Platform: platform, BackendID: transfer.NativeFilesystemOutputBackendID,
+			Platform: platform,
 		},
 	)
 	if err != nil {
