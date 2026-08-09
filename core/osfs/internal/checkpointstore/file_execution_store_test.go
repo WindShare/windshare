@@ -42,7 +42,7 @@ func TestFileExecutionStoreOwnsCheckpointAndObjectLifecycle(t *testing.T) {
 		t.Fatal("empty repository was indexed as non-empty")
 	}
 	record := checkpointRecordFixture(t, ownership, intent, 0x83)
-	object := record.OwnedOutputObject()
+	object := record.OwnedObjectID()
 
 	owned, observation, err := store.CreateOwnedFile(context.Background(), object, record.ExactSize())
 	if err != nil || owned == nil || observation.Condition() != fileexecution.OwnedReady {
@@ -101,6 +101,30 @@ func TestFileExecutionStoreOwnsCheckpointAndObjectLifecycle(t *testing.T) {
 	reconciled, err := NewFileExecutionStore(&repository)
 	if err != nil || reconciled.RecordCount() != 1 {
 		t.Fatalf("reconciled store = (%d, %v)", reconciled.RecordCount(), err)
+	}
+	promoted, err := repository.Reopen(record.RecordID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpointCandidate, err := checkpointmodel.AdvanceGeneration(
+		promoted, []checkpointmodel.Range{{Offset: 0, End: uint64(len("windshare"))}},
+		checkpointmodel.PhaseActive, checkpointmodel.CommitCandidate,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Replace(promoted, checkpointCandidate); err != nil {
+		t.Fatal(err)
+	}
+	reconciled, err = NewFileExecutionStore(&repository)
+	if err != nil {
+		t.Fatalf("range candidate crash recovery = %v", err)
+	}
+	recovered, err := repository.Reopen(record.RecordID())
+	if err != nil || recovered.CommitState() != checkpointmodel.CommitVerified ||
+		recovered.CheckpointGeneration() != checkpointCandidate.CheckpointGeneration() ||
+		len(recovered.VerifiedRanges()) != 1 {
+		t.Fatalf("recovered range candidate = (%+v, %v)", recovered, err)
 	}
 
 	final, err := reconciled.PublishOwnedNoReplace(

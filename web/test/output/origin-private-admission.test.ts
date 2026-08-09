@@ -1,220 +1,246 @@
 import { describe, expect, it } from 'vitest'
 
+import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
-  MINIMUM_OPFS_QUOTA_RESERVE,
-  OriginPrivateStagingAdmission,
+  createOriginalFileArtifact,
+  createReceiveIntent,
+  createSelectionSpec,
+  createWorkspaceBinding,
+  createWorkspaceThenPublishPlan,
+} from '../../src/transfer/intent'
+import {
+  OriginPrivateWorkspaceBudgetAuthority,
+  type OriginPrivateWorkspaceBudgetClaim,
 } from '../../src/output/origin-private/admission'
 import type {
-  AdmissionAggregateLimits,
-  AdmissionLeaseRecord,
-  OriginPrivateAdmissionAuthority,
+  OriginPrivateWorkspaceBudgetLeaseAuthority,
+  WorkspaceBudgetCapacityFacts,
+  WorkspaceBudgetLeaseDecision,
+  WorkspaceBudgetLeaseRecord,
 } from '../../src/output/origin-private/admission-authority'
+import {
+  admitWorkspaceBudget,
+  createSingleFileWorkspaceBudget,
+  type WorkspaceBudgetV1,
+} from '../../src/output/workspace/budget'
 
-const MEBIBYTE = 1024n * 1024n
-
-describe('origin-private staging admission', () => {
-  it('reserves browser headroom in addition to the job limit', async () => {
-    const database = new MemoryAdmissionDatabase()
-    const quota = MINIMUM_OPFS_QUOTA_RESERVE + 100n * MEBIBYTE
-    const admission = await OriginPrivateStagingAdmission.open('quota-session', emptyTotals(), {
-      estimate: async () => ({ quota: Number(quota), usage: 0 }),
-      authority: database.open(),
+describe('origin-private WorkspaceBudget admission', () => {
+  it('readmits against verified already-owned bytes without changing canonical budget authority', async () => {
+    const intent = await originalFileIntent()
+    const budget = await singleFileBudget(intent, 64n)
+    const authority = new MemoryLeaseAuthority()
+    const subject = await OriginPrivateWorkspaceBudgetAuthority.open(intent.operationId, {
+      authority,
+      estimate: async () => ({ usage: 10, quota: 1_000_000 }),
+      verifiedAlreadyOwnedBytes: async () => 0n,
+      jobLimitBytes: 1_000_000n,
+      processLimitBytes: 1_000_000n,
+      minimumReserveBytes: 100n,
+      now: () => 1_000,
+      leaseMilliseconds: 60_000,
+      heartbeatMilliseconds: 30_000,
+      randomToken: () => 'claim-token',
     })
-    await expect(admission.reserve(['too-large'], 101n * MEBIBYTE, emptyFootprint()))
-      .rejects.toThrow('shared browser quota reserve')
-    await expect(admission.reserve(['fits'], 100n * MEBIBYTE, emptyFootprint()))
-      .resolves.toBeTypeOf('function')
-    await admission.release()
+
+    const decision = await subject.claim(budget)
+    expect(decision.kind).toBe('accepted')
+    if (decision.kind !== 'accepted') throw new Error('test budget was rejected')
+    const claim = decision.claim as OriginPrivateWorkspaceBudgetClaim
+    const readmission = await claim.readmit(40n)
+
+    expect(readmission).toEqual(expect.objectContaining({
+      kind: 'accepted',
+      budgetDigest: budget.digest,
+      incrementalPhysicalPeakBytes: budget.peakOwnedBytes - 40n,
+    }))
+    expect(authority.facts.map((facts) => facts.verifiedAlreadyOwnedBytes)).toEqual([0n, 40n])
+    await claim.release()
+    expect(authority.released).toEqual([[intent.operationId, 'claim-token']])
   })
 
-  it('shares the process ceiling across jobs and releases failed-file reservations', async () => {
-    const estimate = async () => ({ quota: Number(2n * 1024n * MEBIBYTE), usage: 0 })
-    const database = new MemoryAdmissionDatabase()
-    const first = await OriginPrivateStagingAdmission.open('process-a', emptyTotals(), {
-      estimate,
-      jobLimit: 10n,
-      processLimit: 10n,
-      authority: database.open(),
+  it('reclaims one canonical budget under a fresh operation lease and fences the stale token', async () => {
+    const intent = await originalFileIntent()
+    const budget = await singleFileBudget(intent, 64n)
+    const leases = new MemoryLeaseAuthority()
+    const first = await budgetAuthority(intent.operationId, leases, 'old-token')
+    const original = await first.claim(budget)
+    if (original.kind !== 'accepted') throw new Error('original test claim was rejected')
+
+    const second = await budgetAuthority(intent.operationId, leases, 'fresh-token')
+    const reclaimed = await second.reclaim(budget, {
+      operationId: intent.operationId,
+      leaseId: identity(16, 10),
     })
-    const second = await OriginPrivateStagingAdmission.open('process-b', emptyTotals(), {
-      estimate,
-      jobLimit: 10n,
-      processLimit: 10n,
-      authority: database.open(),
-    })
-    await first.reserve(['a'], 6n, emptyFootprint())
-    await expect(second.reserve(['b'], 5n, emptyFootprint())).rejects.toThrow('process limit')
-    await first.releaseFile(['a'])
-    await expect(second.reserve(['b'], 5n, emptyFootprint())).resolves.toBeTypeOf('function')
-    await first.release()
-    await second.release()
+    if (reclaimed.kind !== 'accepted') throw new Error('reclaimed test budget was rejected')
+
+    await expect((original.claim as OriginPrivateWorkspaceBudgetClaim).readmit(0n))
+      .rejects.toThrow('ownership changed')
+    expect(leases.reclaimed).toBe(1)
+    await original.claim.release()
+    await reclaimed.claim.release()
+    expect(leases.released).toEqual([
+      [intent.operationId, 'old-token'],
+      [intent.operationId, 'fresh-token'],
+    ])
   })
 
-  it('can roll back a reservation when file creation never begins', async () => {
-    const database = new MemoryAdmissionDatabase()
-    const admission = await OriginPrivateStagingAdmission.open('rollback', emptyTotals(), {
-      estimate: async () => ({ quota: Number(2n * 1024n * MEBIBYTE), usage: 0 }),
-      jobLimit: 5n,
-      processLimit: 5n,
-      authority: database.open(),
-    })
-    const rollback = await admission.reserve(['first'], 5n, emptyFootprint())
-    await rollback()
-    await expect(admission.reserve(['second'], 5n, emptyFootprint())).resolves.toBeTypeOf('function')
-    await admission.release()
-  })
-
-  it('atomically fences a stale lease when the same locked session recovers', async () => {
-    const database = new MemoryAdmissionDatabase()
-    const options = {
-      estimate: async () => ({ quota: Number(2n * 1024n * MEBIBYTE), usage: 0 }),
-      jobLimit: 10n,
-      processLimit: 10n,
-    }
-    const stale = await OriginPrivateStagingAdmission.open('recovering-session', emptyTotals(), {
-      ...options,
-      authority: database.open(),
-      randomToken: () => 'stale-token',
-    })
-    const recovered = await OriginPrivateStagingAdmission.open('recovering-session', emptyTotals(), {
-      ...options,
-      authority: database.open(),
-      randomToken: () => 'recovered-token',
+  it.each([
+    ['job-workspace-limit', { jobLimitBytes: 1n, processLimitBytes: 1_000_000n, quota: 1_000_000 }],
+    ['process-workspace-limit', { jobLimitBytes: 1_000_000n, processLimitBytes: 1n, quota: 1_000_000 }],
+    ['quota-insufficient', { jobLimitBytes: 1_000_000n, processLimitBytes: 1_000_000n, quota: 100 }],
+  ] as const)('rejects exact %s capacity before a claim becomes active', async (reason, limits) => {
+    const intent = await originalFileIntent()
+    const budget = await singleFileBudget(intent, 64n)
+    const subject = await OriginPrivateWorkspaceBudgetAuthority.open(intent.operationId, {
+      authority: new MemoryLeaseAuthority(),
+      estimate: async () => ({ usage: 0, quota: limits.quota }),
+      jobLimitBytes: limits.jobLimitBytes,
+      processLimitBytes: limits.processLimitBytes,
+      minimumReserveBytes: 100n,
+      now: () => 1_000,
+      leaseMilliseconds: 60_000,
+      heartbeatMilliseconds: 30_000,
+      randomToken: () => `claim-${reason}`,
     })
 
-    await expect(stale.reserve(['stale'], 1n, emptyFootprint())).rejects.toThrow('lease changed')
-    await expect(recovered.reserve(['recovered'], 1n, emptyFootprint()))
-      .resolves.toBeTypeOf('function')
-    await stale.release()
-    await recovered.release()
-    expect(database.records.size).toBe(0)
-  })
-
-  it('rejects duplicate active paths without corrupting scalar recovery credit', async () => {
-    const database = new MemoryAdmissionDatabase()
-    const admission = await OriginPrivateStagingAdmission.open('duplicate-active', {
-      logicalBytes: 10n,
-      additionalBytes: 6n,
-    }, {
-      estimate: async () => ({ quota: Number(2n * 1024n * MEBIBYTE), usage: 4 }),
-      jobLimit: 20n,
-      processLimit: 20n,
-      authority: database.open(),
-    })
-    const rollback = await admission.reserve(['file'], 10n, {
-      logicalBytes: 10n,
-      coveredBytes: 4n,
-    })
-    await expect(admission.reserve(['file'], 10n, {
-      logicalBytes: 10n,
-      coveredBytes: 4n,
-    })).rejects.toThrow('active reservation')
-    await rollback()
-    expect(admission.snapshot()).toEqual({
-      logicalBytes: 10n,
-      additionalBytes: 6n,
-      activeReservations: 0,
-    })
-    await admission.release()
-  })
-
-  it('represents a million staged small files with scalars and only bounded active reservations', async () => {
-    const million = 1_000_000n
-    const database = new MemoryAdmissionDatabase()
-    const admission = await OriginPrivateStagingAdmission.open('million-files', {
-      logicalBytes: million,
-      additionalBytes: 0n,
-    }, {
-      estimate: async () => ({ quota: Number(2n * 1024n * MEBIBYTE), usage: Number(million) }),
-      jobLimit: 2n * million,
-      processLimit: 2n * million,
-      authority: database.open(),
-    })
-
-    expect(admission.snapshot()).toEqual({
-      logicalBytes: million,
-      additionalBytes: 0n,
-      activeReservations: 0,
-    })
-    for (let index = 0; index < 32; index += 1) {
-      await admission.reserve([`active-${index}`], 1n, emptyFootprint())
-    }
-    expect(admission.snapshot().activeReservations).toBe(32)
-    await expect(admission.reserve(['overflow'], 1n, emptyFootprint()))
-      .rejects.toThrow('active reservation limit')
-    await admission.release()
+    await expect(subject.claim(budget)).resolves.toEqual(expect.objectContaining({
+      kind: 'rejected',
+      admission: expect.objectContaining({ kind: 'rejected', reason }),
+    }))
   })
 })
 
-function emptyTotals() {
-  return { logicalBytes: 0n, additionalBytes: 0n }
+class MemoryLeaseAuthority implements OriginPrivateWorkspaceBudgetLeaseAuthority {
+  readonly facts: WorkspaceBudgetCapacityFacts[] = []
+  readonly released: [string, string][] = []
+  reclaimed = 0
+  #record: WorkspaceBudgetLeaseRecord | undefined
+
+  claim(
+    record: WorkspaceBudgetLeaseRecord,
+    budget: WorkspaceBudgetV1,
+    facts: WorkspaceBudgetCapacityFacts,
+  ): Promise<WorkspaceBudgetLeaseDecision> {
+    this.#record = record
+    return this.#decide(budget, facts)
+  }
+
+  readmit(
+    record: WorkspaceBudgetLeaseRecord,
+    budget: WorkspaceBudgetV1,
+    facts: WorkspaceBudgetCapacityFacts,
+  ): Promise<WorkspaceBudgetLeaseDecision> {
+    if (this.#record?.token !== record.token) {
+      throw new DOMException('claim ownership changed', 'InvalidStateError')
+    }
+    return this.#decide(budget, facts)
+  }
+
+  reclaim(
+    record: WorkspaceBudgetLeaseRecord,
+    budget: WorkspaceBudgetV1,
+    facts: WorkspaceBudgetCapacityFacts,
+  ): Promise<WorkspaceBudgetLeaseDecision> {
+    if (this.#record !== undefined &&
+        (this.#record.operationId !== record.operationId ||
+         this.#record.budgetDigest !== record.budgetDigest ||
+         this.#record.peakOwnedBytes !== record.peakOwnedBytes)) {
+      throw new DOMException('claim authority changed', 'InvalidStateError')
+    }
+    this.#record = record
+    this.reclaimed += 1
+    return this.#decide(budget, facts)
+  }
+
+  heartbeat(): Promise<void> {
+    return Promise.resolve()
+  }
+
+  release(id: string, token: string): Promise<void> {
+    this.released.push([id, token])
+    if (this.#record?.id === id && this.#record.token === token) this.#record = undefined
+    return Promise.resolve()
+  }
+
+  close(): void {}
+
+  #decide(
+    budget: WorkspaceBudgetV1,
+    facts: WorkspaceBudgetCapacityFacts,
+  ): Promise<WorkspaceBudgetLeaseDecision> {
+    this.facts.push(facts)
+    const capacity = Object.freeze({
+      jobLimitBytes: facts.jobLimitBytes,
+      processLimitBytes: facts.processLimitBytes,
+      otherActiveJobPeakBytes: 0n,
+      estimatedQuotaBytes: facts.estimatedQuotaBytes,
+      currentUsageBytes: facts.currentUsageBytes,
+      minimumReserveBytes: facts.minimumReserveBytes,
+      verifiedAlreadyOwnedBytes: facts.verifiedAlreadyOwnedBytes,
+    })
+    const admission = admitWorkspaceBudget(budget, capacity)
+    return Promise.resolve(admission.kind === 'accepted'
+      ? Object.freeze({ kind: 'accepted', capacity, admission })
+      : Object.freeze({ kind: 'rejected', capacity, admission }))
+  }
 }
 
-function emptyFootprint() {
-  return { logicalBytes: 0n, coveredBytes: 0n }
+function budgetAuthority(
+  operationId: string,
+  authority: OriginPrivateWorkspaceBudgetLeaseAuthority,
+  token: string,
+): Promise<OriginPrivateWorkspaceBudgetAuthority> {
+  return OriginPrivateWorkspaceBudgetAuthority.open(operationId, {
+    authority,
+    estimate: async () => ({ usage: 10, quota: 1_000_000 }),
+    verifiedAlreadyOwnedBytes: async () => 0n,
+    jobLimitBytes: 1_000_000n,
+    processLimitBytes: 1_000_000n,
+    minimumReserveBytes: 100n,
+    now: () => 1_000,
+    leaseMilliseconds: 60_000,
+    heartbeatMilliseconds: 30_000,
+    randomToken: () => token,
+  })
 }
 
-class MemoryAdmissionDatabase {
-  readonly records = new Map<string, AdmissionLeaseRecord>()
-
-  open(): OriginPrivateAdmissionAuthority {
-    return new MemoryAdmissionAuthority(this.records)
-  }
+async function originalFileIntent() {
+  const artifact = await createOriginalFileArtifact({
+    fileId: identity(16, 3),
+    sourcePath: 'root/file.bin',
+    suggestedName: 'file.bin',
+  })
+  const workspace = await createWorkspaceBinding({
+    operationId: identity(16, 4),
+    workspaceId: identity(16, 5),
+    artifact,
+    repositoryRef: identity(32, 6),
+  })
+  return createReceiveIntent({
+    selection: await createSelectionSpec({
+      shareInstance: identity(16, 1),
+      syntheticRoot: identity(16, 2),
+      rules: { mode: 'node-id', defaultSelected: true, rules: [] },
+    }),
+    artifact,
+    plan: await createWorkspaceThenPublishPlan(artifact, workspace),
+  })
 }
 
-class MemoryAdmissionAuthority implements OriginPrivateAdmissionAuthority {
-  readonly #records: Map<string, AdmissionLeaseRecord>
-  #closed = false
+async function singleFileBudget(
+  intent: Awaited<ReturnType<typeof originalFileIntent>>,
+  exactSize: bigint,
+) {
+  return createSingleFileWorkspaceBudget({
+    receiveIntent: intent,
+    fileId: intent.artifact.kind === 'original-file' ? intent.artifact.fileId : identity(16, 7),
+    containingDirectoryId: identity(16, 8),
+    generation: identity(16, 9),
+    catalogSize: exactSize,
+    durableMetadataBytes: 32n,
+  })
+}
 
-  constructor(records: Map<string, AdmissionLeaseRecord>) {
-    this.#records = records
-  }
-
-  async claim(record: AdmissionLeaseRecord, limits: AdmissionAggregateLimits): Promise<void> {
-    this.#set(record, limits)
-  }
-
-  async update(record: AdmissionLeaseRecord, limits: AdmissionAggregateLimits): Promise<void> {
-    const existing = this.#records.get(record.id)
-    if (existing?.token !== record.token) throw new Error('lease changed')
-    this.#set(record, limits)
-  }
-
-  async heartbeat(
-    id: string,
-    token: string,
-    expiresAtMilliseconds: number,
-    nowMilliseconds: number,
-  ): Promise<void> {
-    const existing = this.#records.get(id)
-    if (existing?.token !== token || existing.expiresAtMilliseconds <= nowMilliseconds) {
-      throw new Error('lease changed')
-    }
-    this.#records.set(id, { ...existing, expiresAtMilliseconds })
-  }
-
-  async release(id: string, token: string): Promise<void> {
-    if (this.#records.get(id)?.token === token) this.#records.delete(id)
-  }
-
-  close(): void {
-    this.#closed = true
-  }
-
-  #set(record: AdmissionLeaseRecord, limits: AdmissionAggregateLimits): void {
-    if (this.#closed) throw new Error('authority closed')
-    let logicalBytes = record.logicalBytes
-    let additionalBytes = record.additionalBytes
-    for (const [id, existing] of this.#records) {
-      if (id === record.id || existing.expiresAtMilliseconds <= limits.nowMilliseconds) continue
-      logicalBytes += existing.logicalBytes
-      additionalBytes += existing.additionalBytes
-    }
-    if (record.logicalBytes > limits.jobLimit) throw new DOMException('per-job limit', 'QuotaExceededError')
-    if (logicalBytes > limits.processLimit) throw new DOMException('process limit', 'QuotaExceededError')
-    if (limits.usage + additionalBytes + limits.reserve > limits.quota) {
-      throw new DOMException('shared browser quota reserve', 'QuotaExceededError')
-    }
-    this.#records.set(record.id, record)
-  }
+function identity(width: number, fill: number): string {
+  return encodeBase64Url(new Uint8Array(width).fill(fill))
 }

@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 var ErrInvalidOutputSettlement = errors.New("transfer output settlement is invalid")
@@ -27,26 +27,26 @@ const (
 
 type FileSettlement struct {
 	kind             FileSettlementKind
-	target           OutputFileTarget
-	binding          OutputFileBinding
+	target           FileMaterializationTarget
+	binding          MaterializedFileBinding
 	hasBinding       bool
 	checkpoint       VerifiedDurableRanges
 	hasCheckpoint    bool
-	stateRef         OutputStateRef
+	stateRef         MaterializationStateRef
 	quarantineReason QuarantineReason
 }
 
-func NewCollisionFileSettlement(target OutputFileTarget) (FileSettlement, error) {
+func NewCollisionFileSettlement(target FileMaterializationTarget) (FileSettlement, error) {
 	if !target.valid() {
 		return FileSettlement{}, ErrInvalidOutputSettlement
 	}
 	return FileSettlement{kind: FileCollision, target: target}, nil
 }
 
-func (s FileSettlement) Kind() FileSettlementKind { return s.kind }
-func (s FileSettlement) Target() OutputFileTarget { return s.target }
+func (s FileSettlement) Kind() FileSettlementKind          { return s.kind }
+func (s FileSettlement) Target() FileMaterializationTarget { return s.target }
 
-func NewRetiredFileSettlement(binding OutputFileBinding) (FileSettlement, error) {
+func NewRetiredFileSettlement(binding MaterializedFileBinding) (FileSettlement, error) {
 	if !binding.valid() {
 		return FileSettlement{}, ErrInvalidOutputSettlement
 	}
@@ -58,7 +58,7 @@ func NewRetiredFileSettlement(binding OutputFileBinding) (FileSettlement, error)
 // NewTransientPublishedFileSettlement represents publication whose bytes were
 // consumed sequentially but are not resumable at any declared durability level.
 // The transfer job proves full transient coverage before accepting this result.
-func NewTransientPublishedFileSettlement(binding OutputFileBinding) (FileSettlement, error) {
+func NewTransientPublishedFileSettlement(binding MaterializedFileBinding) (FileSettlement, error) {
 	if !binding.valid() {
 		return FileSettlement{}, ErrInvalidOutputSettlement
 	}
@@ -89,26 +89,30 @@ func (s FileSettlement) VerifiedCheckpoint() (VerifiedDurableRanges, bool) {
 	return s.checkpoint, s.hasCheckpoint
 }
 
-func (s FileSettlement) OutputBinding() (OutputFileBinding, bool) {
+func (s FileSettlement) MaterializedBinding() (MaterializedFileBinding, bool) {
 	return s.binding, s.hasBinding
 }
 
-type OutputStateRef struct {
+type MaterializationStateRef struct {
 	session OutputSessionID
-	locator OutputLocatorDigest
+	locator MaterializationLocatorDigest
 }
 
-func NewOutputStateRef(session OutputSessionID, locator OutputLocatorDigest) (OutputStateRef, error) {
-	if session.IsZero() || locator == (OutputLocatorDigest{}) {
-		return OutputStateRef{}, ErrInvalidOutputSettlement
+func NewMaterializationStateRef(session OutputSessionID, locator MaterializationLocatorDigest) (MaterializationStateRef, error) {
+	if session.IsZero() || locator == (MaterializationLocatorDigest{}) {
+		return MaterializationStateRef{}, ErrInvalidOutputSettlement
 	}
-	return OutputStateRef{session: session, locator: locator}, nil
+	return MaterializationStateRef{session: session, locator: locator}, nil
 }
 
-func (reference OutputStateRef) OutputSessionID() OutputSessionID   { return reference.session }
-func (reference OutputStateRef) LocatorDigest() OutputLocatorDigest { return reference.locator }
-func (reference OutputStateRef) IsZero() bool {
-	return reference.session.IsZero() || reference.locator == (OutputLocatorDigest{})
+func (reference MaterializationStateRef) OutputSessionID() OutputSessionID {
+	return reference.session
+}
+func (reference MaterializationStateRef) LocatorDigest() MaterializationLocatorDigest {
+	return reference.locator
+}
+func (reference MaterializationStateRef) IsZero() bool {
+	return reference.session.IsZero() || reference.locator == (MaterializationLocatorDigest{})
 }
 
 type QuarantineReason uint16
@@ -121,8 +125,8 @@ const (
 )
 
 func NewImmediateQuarantinedFileSettlement(
-	target OutputFileTarget,
-	reference OutputStateRef,
+	target FileMaterializationTarget,
+	reference MaterializationStateRef,
 	reason QuarantineReason,
 ) (FileSettlement, error) {
 	if !validQuarantineSettlement(target, reference, reason) {
@@ -134,8 +138,8 @@ func NewImmediateQuarantinedFileSettlement(
 }
 
 func NewTransactionQuarantinedFileSettlement(
-	binding OutputFileBinding,
-	reference OutputStateRef,
+	binding MaterializedFileBinding,
+	reference MaterializationStateRef,
 	reason QuarantineReason,
 ) (FileSettlement, error) {
 	if !binding.valid() || !validQuarantineSettlement(binding.Target(), reference, reason) {
@@ -148,8 +152,8 @@ func NewTransactionQuarantinedFileSettlement(
 }
 
 func validQuarantineSettlement(
-	target OutputFileTarget,
-	reference OutputStateRef,
+	target FileMaterializationTarget,
+	reference MaterializationStateRef,
 	reason QuarantineReason,
 ) bool {
 	return target.valid() && !reference.IsZero() &&
@@ -158,7 +162,7 @@ func validQuarantineSettlement(
 		reason >= QuarantineStateCorrupt && reason <= QuarantineRetirementMismatch
 }
 
-func (s FileSettlement) Quarantine() (OutputStateRef, QuarantineReason, bool) {
+func (s FileSettlement) Quarantine() (MaterializationStateRef, QuarantineReason, bool) {
 	return s.stateRef, s.quarantineReason, s.kind == FileQuarantined && !s.stateRef.IsZero() && s.quarantineReason != 0
 }
 
@@ -176,7 +180,7 @@ func (settlement FileSettlement) valid() bool {
 			settlement.binding.Target() == settlement.target && !settlement.hasCheckpoint &&
 			settlement.stateRef.IsZero() && settlement.quarantineReason == 0
 	case FilePublished:
-		binding, bound := settlement.OutputBinding()
+		binding, bound := settlement.MaterializedBinding()
 		if !bound || !binding.valid() || settlement.target != binding.Target() ||
 			!settlement.stateRef.IsZero() || settlement.quarantineReason != 0 {
 			return false
@@ -186,7 +190,7 @@ func (settlement FileSettlement) valid() bool {
 			RangesCoverFile(checkpoint.Binding().ExactSize(), checkpoint.Ranges())
 	case FilePaused, FilePublishBlocked:
 		checkpoint, ok := settlement.VerifiedCheckpoint()
-		binding, bound := settlement.OutputBinding()
+		binding, bound := settlement.MaterializedBinding()
 		if !ok || !bound || !binding.valid() || checkpoint.Binding() != binding ||
 			settlement.target != binding.Target() || !settlement.stateRef.IsZero() || settlement.quarantineReason != 0 {
 			return false
@@ -203,11 +207,11 @@ func (settlement FileSettlement) valid() bool {
 	}
 }
 
-func (settlement FileSettlement) matchesTarget(target OutputFileTarget) bool {
+func (settlement FileSettlement) matchesTarget(target FileMaterializationTarget) bool {
 	return settlement.valid() && target.valid() && settlement.Target() == target
 }
 
-func (settlement FileSettlement) matchesBinding(binding OutputFileBinding) bool {
+func (settlement FileSettlement) matchesBinding(binding MaterializedFileBinding) bool {
 	if !settlement.matchesTarget(binding.Target()) || !binding.valid() {
 		return false
 	}
@@ -216,13 +220,13 @@ func (settlement FileSettlement) matchesBinding(binding OutputFileBinding) bool 
 		if checkpoint, durable := settlement.VerifiedCheckpoint(); durable {
 			return checkpoint.Binding() == binding
 		}
-		settledBinding, ok := settlement.OutputBinding()
+		settledBinding, ok := settlement.MaterializedBinding()
 		return ok && settledBinding == binding
 	case FilePaused, FilePublishBlocked:
 		checkpoint, _ := settlement.VerifiedCheckpoint()
 		return checkpoint.Binding() == binding
 	case FileQuarantined, FileRetired:
-		settledBinding, ok := settlement.OutputBinding()
+		settledBinding, ok := settlement.MaterializedBinding()
 		return ok && settledBinding == binding
 	default:
 		return false
@@ -230,8 +234,8 @@ func (settlement FileSettlement) matchesBinding(binding OutputFileBinding) bool 
 }
 
 func (settlement FileSettlement) matchesCommittedOutput(
-	binding OutputFileBinding,
-	capabilities OutputCapabilities,
+	binding MaterializedFileBinding,
+	capabilities DirectTreeCapabilities,
 ) bool {
 	if !settlement.matchesBinding(binding) {
 		return false
@@ -264,11 +268,10 @@ type FileRetireReason uint8
 const (
 	FileRetireIsolatedPermanentSourceFailure FileRetireReason = iota + 1
 	FileRetireInvalidatedRevision
-	FileRetireExplicitPolicySkip
 )
 
 func (reason FileRetireReason) valid() bool {
-	return reason >= FileRetireIsolatedPermanentSourceFailure && reason <= FileRetireExplicitPolicySkip
+	return reason >= FileRetireIsolatedPermanentSourceFailure && reason <= FileRetireInvalidatedRevision
 }
 
 type JobPauseReason uint8
@@ -287,33 +290,34 @@ func (reason JobPauseReason) valid() bool {
 	return reason >= JobPauseInterrupted && reason <= JobPauseDependencyContract
 }
 
-type JobSettlementKind uint8
+type DirectTreeSettlementKind uint8
 
 const (
-	JobClosed JobSettlementKind = iota + 1
-	JobPaused
-	JobPausedNeedsAttention
+	DirectTreeSettlementPublished DirectTreeSettlementKind = iota + 1
+	DirectTreeSettlementPartialDirectory
+	DirectTreeSettlementResumable
+	DirectTreeSettlementNeedsAttention
 )
 
-type JobSettlement struct {
-	kind JobSettlementKind
+type DirectTreeSettlement struct {
+	kind DirectTreeSettlementKind
 }
 
-func NewJobSettlement(kind JobSettlementKind) (JobSettlement, error) {
+func NewDirectTreeSettlement(kind DirectTreeSettlementKind) (DirectTreeSettlement, error) {
 	if !kind.valid() {
-		return JobSettlement{}, ErrInvalidOutputSettlement
+		return DirectTreeSettlement{}, ErrInvalidOutputSettlement
 	}
-	return JobSettlement{kind: kind}, nil
+	return DirectTreeSettlement{kind: kind}, nil
 }
 
-func (s JobSettlement) Kind() JobSettlementKind { return s.kind }
+func (s DirectTreeSettlement) Kind() DirectTreeSettlementKind { return s.kind }
 
-func (kind JobSettlementKind) valid() bool {
-	return kind >= JobClosed && kind <= JobPausedNeedsAttention
+func (kind DirectTreeSettlementKind) valid() bool {
+	return kind >= DirectTreeSettlementPublished && kind <= DirectTreeSettlementNeedsAttention
 }
 
 type FileTransaction interface {
-	Binding() OutputFileBinding
+	Binding() MaterializedFileBinding
 	WriteRange(context.Context, uint64, []byte) error
 	Checkpoint(context.Context) (VerifiedDurableRanges, error)
 	Commit(context.Context) (FileSettlement, error)
@@ -378,39 +382,76 @@ func (start FileStart) valid() bool {
 	return ok
 }
 
-// OutputAuthority is the output-root boundary. It receives a confirmed intent,
+// DirectTreeMaterializer is the output-root boundary. It receives a confirmed intent,
 // prepares only the root/recovery namespace, and leaves descendant creation to
 // per-generation admissions after catalog terminal evidence arrives.
-type OutputAuthority interface {
-	OpenOutput(context.Context, TransferIntent) (OutputSession, error)
+type DirectTreeMaterializer interface {
+	OpenDirectTree(context.Context, ReceiveIntent) (DirectTreeSession, error)
 }
 
-type OutputAuthorityFunc func(context.Context, TransferIntent) (OutputSession, error)
+type DirectTreeMaterializerFunc func(context.Context, ReceiveIntent) (DirectTreeSession, error)
 
-func (function OutputAuthorityFunc) OpenOutput(
+func (function DirectTreeMaterializerFunc) OpenDirectTree(
 	ctx context.Context,
-	intent TransferIntent,
-) (OutputSession, error) {
+	intent ReceiveIntent,
+) (DirectTreeSession, error) {
 	if function == nil {
 		return nil, ErrInvalidOutputBinding
 	}
 	return function(ctx, intent)
 }
 
-// OutputSession exists after the confirmed intent/root namespace is admitted.
+// DirectTreeSessionBinding proves that an opened output namespace belongs to
+// the exact immutable receive authority passed to the materializer. Keeping the
+// three identities together prevents a backend from accidentally reusing a
+// session across an intent, operation, or destination reservation boundary.
+type DirectTreeSessionBinding struct {
+	intentDigest  ReceiveIntentDigest
+	operationID   receivecontract.OperationID
+	bindingDigest receivecontract.BindingDigest
+}
+
+func BindDirectTreeSession(intent ReceiveIntent) (DirectTreeSessionBinding, error) {
+	if intent.IsZero() || intent.MaterializationPlan().Kind() != receivecontract.PlanDirectTree {
+		return DirectTreeSessionBinding{}, ErrInvalidOutputBinding
+	}
+	return DirectTreeSessionBinding{
+		intentDigest:  intent.Digest(),
+		operationID:   intent.OperationID(),
+		bindingDigest: intent.BindingDigest(),
+	}, nil
+}
+
+func (binding DirectTreeSessionBinding) ReceiveIntentDigest() ReceiveIntentDigest {
+	return binding.intentDigest
+}
+
+func (binding DirectTreeSessionBinding) OperationID() receivecontract.OperationID {
+	return binding.operationID
+}
+
+func (binding DirectTreeSessionBinding) BindingDigest() receivecontract.BindingDigest {
+	return binding.bindingDigest
+}
+
+func (binding DirectTreeSessionBinding) valid() bool {
+	return !binding.intentDigest.IsZero() && !binding.operationID.IsZero() && !binding.bindingDigest.IsZero()
+}
+
+// DirectTreeSession exists after the confirmed intent/root namespace is admitted.
 // Descendant directories are admitted independently as generations commit.
 // Finalization seals the authenticated claim, including the synthetic root; an
 // exact settled retry returns the same cached DirectorySettlement, while a
 // foreign receipt must fail before output mutation.
-type OutputSession interface {
-	BackendID() OutputBackendID
+type DirectTreeSession interface {
 	SessionID() OutputSessionID
-	Capabilities() OutputCapabilities
-	AdmitDirectory(context.Context, OutputDirectory) (DirectoryAdmission, error)
+	Binding() DirectTreeSessionBinding
+	Capabilities() DirectTreeCapabilities
+	AdmitDirectory(context.Context, MaterializationDirectory) (DirectoryAdmission, error)
 	FinalizeDirectory(context.Context, DirectoryAdmission) (DirectorySettlement, error)
-	BeginFile(context.Context, OutputFile) (FileStart, error)
-	PauseJob(context.Context, JobPauseReason) (JobSettlement, error)
-	CompleteJob(context.Context, JobOutcome) (JobSettlement, error)
+	BeginFile(context.Context, MaterializationFile) (FileStart, error)
+	PauseTree(context.Context, JobPauseReason) (DirectTreeSettlement, error)
+	FinalizeTree(context.Context, DirectTreeOutcome) (DirectTreeSettlement, error)
 }
 
 type TransferLifecycleStage uint8
@@ -441,25 +482,26 @@ const (
 	FileSelectionCatalogPathTarget
 )
 
-// TransferLifecycleTrace is deliberately text-free. TransferJobID and
-// IntentDigest correlate the run and its durable checkpoint namespace. A
-// SelectionObservation, when present, is audit context only.
+// TransferLifecycleTrace is deliberately text-free and identity-minimal.
+// OperationID, ReceiveIntentDigest, and TransferJobID correlate stable authority
+// and one run without exposing catalog identities, names, or plaintext paths.
 type TransferLifecycleTrace struct {
 	Stage                TransferLifecycleStage
-	ShareInstance        catalog.ShareInstance
+	OperationID          receivecontract.OperationID
+	PlanKind             receivecontract.MaterializationPlanKind
 	ProtocolSessionID    protocolsession.ProtocolSessionID
 	TransferJobID        TransferJobID
-	IntentDigest         TransferIntentDigest
+	ReceiveIntentDigest  ReceiveIntentDigest
 	OutputSessionID      OutputSessionID
-	SelectionObservation SelectionObservationV1
-	DirectoryID          catalog.DirectoryID
-	DirectoryGeneration  catalog.DirectoryGeneration
-	FileID               catalog.FileID
 	Discovery            DiscoveryStatus
-	SelectionClass       SelectionClass
+	ConnectionSizeClass  ConnectionSizeClass
 	FileSelection        FileSelectionDecision
 	FileSettlement       FileSettlementKind
-	JobSettlement        JobSettlementKind
+	DirectTreeSettlement DirectTreeSettlementKind
+	DiscoveredFileCount  uint64
+	DiscoveredBytes      uint64
+	CompletedFileCount   uint64
+	CompletedBytes       uint64
 	Fault                fault.Fault
 	Failed               bool
 }
@@ -486,15 +528,23 @@ func (j *TransferJob) trace(event TransferLifecycleTrace) {
 	if event.TransferJobID.IsZero() {
 		event.TransferJobID = j.jobID
 	}
-	if event.ShareInstance.IsZero() {
-		event.ShareInstance = j.share
-	}
 	if event.ProtocolSessionID.IsZero() {
 		event.ProtocolSessionID = j.protocolSessionID
 	}
-	if event.IntentDigest.IsZero() {
-		event.IntentDigest = j.intent.Digest()
+	if event.ReceiveIntentDigest.IsZero() {
+		event.ReceiveIntentDigest = j.intent.Digest()
 	}
+	if event.OperationID.IsZero() {
+		event.OperationID = j.intent.OperationID()
+	}
+	if event.PlanKind == 0 {
+		event.PlanKind = j.intent.MaterializationPlan().Kind()
+	}
+	measure := j.Measure()
+	event.DiscoveredFileCount = measure.DiscoveredFiles
+	event.DiscoveredBytes = measure.DiscoveredBytes
+	event.CompletedFileCount = measure.CompletedFiles
+	event.CompletedBytes = measure.CompletedBytes
 	// Discovery and the file worker intentionally overlap. Serialize the
 	// callback so a tracer can append to one audit stream without having to
 	// provide its own scheduler-specific synchronization.
@@ -513,12 +563,8 @@ func traceTransferLifecycle(tracer TransferLifecycleTracer, event TransferLifecy
 func (r *jobRun) traceFileLifecycle(stage TransferLifecycleStage, plan plannedFile, failure error) {
 	r.job.trace(TransferLifecycleTrace{
 		Stage: stage, OutputSessionID: r.output.SessionID(),
-		SelectionObservation: r.selectionObservation,
-		DirectoryID:          plan.parentDirectory,
-		DirectoryGeneration:  plan.parentGeneration,
-		FileID:               plan.file,
-		FileSelection:        plan.selectionDecision,
-		Fault:                closedFault(failure),
-		Failed:               failure != nil,
+		FileSelection: plan.selectionDecision,
+		Fault:         closedFault(failure),
+		Failed:        failure != nil,
 	})
 }

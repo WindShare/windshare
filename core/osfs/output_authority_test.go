@@ -10,7 +10,7 @@ import (
 
 func TestFilesystemOutputAuthorityRejectsZeroAndNilCapabilities(t *testing.T) {
 	var authority *FilesystemOutputAuthority
-	if _, err := authority.OpenOutput(context.Background(), transfer.TransferIntent{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+	if _, err := authority.OpenDirectTree(context.Background(), transfer.ReceiveIntent{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("nil authority open = %v, want invalid binding", err)
 	}
 

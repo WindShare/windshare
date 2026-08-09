@@ -385,6 +385,15 @@ func (directory *portableRuntimeDirectory) ValidateMetadataAuthority() error {
 	return err
 }
 
+func (directory *portableRuntimeDirectory) PersistentDirectoryIdentityClaim() ([]byte, error) {
+	if _, err := directory.currentPath(); err != nil {
+		return nil, err
+	}
+	// The portable model uses SameFile-backed object numbering so rename-safe
+	// ownership tests exercise identity semantics instead of path coincidence.
+	return fmt.Appendf(nil, "portable-directory-object:%d", directory.filesystem.objectID(directory.info)), nil
+}
+
 func (directory *portableRuntimeDirectory) OpenEntry(name string) (outputcap.CurrentEntryReference, error) {
 	path, err := directory.entryPath(name)
 	if err != nil {

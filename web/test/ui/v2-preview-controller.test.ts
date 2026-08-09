@@ -9,12 +9,17 @@ import {
   V2ConnectivityRouteAuthority,
 } from '../../src/connectivity/v2-receiver-policy'
 import type { V2FilePreview } from '../../src/preview/v2-preview'
+import type {
+  AuthenticatedDiscoveryRequest,
+  AuthenticatedDiscoverySource,
+} from '../../src/transfer/projection'
 import { V2ReceiverController } from '../../src/ui/v2-controller'
 import type {
   V2BrowseDirectory,
   V2BrowserReceiverGateway,
   V2JoinedBrowserShare,
 } from '../../src/ui/v2-gateway'
+import { INERT_TEST_RECEIVE_COMPOSITION } from './v2-receive-fixture'
 
 const entry: Extract<V2CatalogEntry, { kind: 'file' }> = Object.freeze({
   kind: 'file',
@@ -32,6 +37,7 @@ class FakeJoined {
     syntheticRootId: identityText(1),
   }
   readonly recoveryIdentity = 'share.recovery'
+  readonly protocolSessionId = identityText(8)
   readonly selection = new V2SelectionPolicy(true)
   readonly entry: Extract<V2CatalogEntry, { kind: 'file' }>
   readonly events: string[] = []
@@ -83,6 +89,10 @@ class FakeJoined {
     }
   }
 
+  projectionSource(): AuthenticatedDiscoverySource {
+    return completedProjectionSource()
+  }
+
   beginPreviewConnectivity(): V2ConnectivityActivation {
     this.events.push('begin-preview-connectivity')
     let closed = false
@@ -95,19 +105,6 @@ class FakeJoined {
         closed = true
         routes.close()
         this.events.push('close-preview-connectivity')
-      },
-    }
-  }
-
-  beginDownloadConnectivity(sizeClass: 'small' | 'large' | 'unknown'): V2ConnectivityActivation {
-    this.events.push(`begin-download-${sizeClass}`)
-    const routes = new V2ConnectivityRouteAuthority()
-    return {
-      routes,
-      observeSizeClass: (observed) => this.events.push(`observe-download-${observed}`),
-      close: () => {
-        routes.close()
-        this.events.push('close-download-connectivity')
       },
     }
   }
@@ -173,7 +170,7 @@ describe('v2 preview click controller boundary', () => {
     const gateway = {
       join: async () => joined as unknown as V2JoinedBrowserShare,
     } as unknown as V2BrowserReceiverGateway
-    const controller = new V2ReceiverController(gateway)
+    const controller = new V2ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
     await turn()
     expect(controller.getSnapshot().phase).toBe('browsing')
@@ -207,33 +204,6 @@ describe('v2 preview click controller boundary', () => {
     await controller.dispose()
   })
 
-  it('records download connectivity before size classification and picker acquisition', async () => {
-    const joined = new FakeJoined()
-    vi.stubGlobal('window', {
-      navigator: { storage: {} },
-      showSaveFilePicker: () => {
-        joined.events.push('picker')
-        return Promise.reject(new DOMException('test picker stop', 'AbortError'))
-      },
-    })
-    const gateway = {
-      join: async () => joined as unknown as V2JoinedBrowserShare,
-    } as unknown as V2BrowserReceiverGateway
-    const controller = new V2ReceiverController(gateway)
-    controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
-    await turn()
-    joined.events.length = 0
-
-    controller.startDownload()
-    expect(joined.events.slice(0, 3)).toEqual([
-      'begin-download-unknown',
-      'observe-download-small',
-      'picker',
-    ])
-    await turn()
-    await controller.dispose()
-  })
-
   it('shows authenticated scan milestones without inventing an exact total', async () => {
     vi.stubGlobal('window', { navigator: { storage: {} } })
     const joined = new FakeJoined()
@@ -243,7 +213,7 @@ describe('v2 preview click controller boundary', () => {
     const gateway = {
       join: async () => joined as unknown as V2JoinedBrowserShare,
     } as unknown as V2BrowserReceiverGateway
-    const controller = new V2ReceiverController(gateway)
+    const controller = new V2ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
     await turn()
     expect(controller.getSnapshot().status).toContain('257 entries discovered')
@@ -265,7 +235,7 @@ describe('v2 preview click controller boundary', () => {
     const gateway = {
       join: () => new Promise<V2JoinedBrowserShare>((resolve) => pending.push(resolve)),
     } as unknown as V2BrowserReceiverGateway
-    const controller = new V2ReceiverController(gateway)
+    const controller = new V2ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
 
     controller.initialize({ capabilityInput: 'first-key', pageUrl: 'https://receiver.invalid/s/share' })
     await turn()
@@ -283,18 +253,24 @@ describe('v2 preview click controller boundary', () => {
     await controller.dispose()
   })
 
-  it('keeps an explicit selection actionable before every root page is visited', async () => {
+  it('keeps visible selection facts independent from unresolved artifact projection', async () => {
     vi.stubGlobal('window', {
       navigator: { storage: {} },
       showSaveFilePicker: () => Promise.reject(new DOMException('unused', 'AbortError')),
     })
     const selection = new V2SelectionPolicy(false)
     const joined = {
-      descriptor: { syntheticRootId: 'root' },
+      descriptor: {
+        shareInstance: identity(7),
+        shareInstanceId: identityText(7),
+        syntheticRoot: identity(1),
+        syntheticRootId: identityText(1),
+      },
       recoveryIdentity: 'share.recovery',
+      protocolSessionId: identityText(8),
       selection,
       rootDirectory: () => ({
-        id: identity(1), idText: 'root', name: 'Shared files', path: [], ancestry: ['root'],
+        id: identity(1), idText: identityText(1), name: 'Shared files', path: [], ancestry: [identityText(1)],
       }),
       page: async (directory: V2BrowseDirectory) => {
         return {
@@ -306,18 +282,43 @@ describe('v2 preview click controller boundary', () => {
           entries: [entry],
         }
       },
+      projectionSource: () => completedProjectionSource(),
       subscribeCatalogScanProgress: () => () => undefined,
       close: async () => undefined,
     } as unknown as V2JoinedBrowserShare
     const gateway = { join: async () => joined } as unknown as V2BrowserReceiverGateway
-    const controller = new V2ReceiverController(gateway)
+    const controller = new V2ReceiverController(gateway, {
+      receive: {
+        retained: {
+          list: () => Promise.resolve(Object.freeze({
+            operations: Object.freeze([]),
+            act: () => Promise.reject(new DOMException('No retained operation', 'InvalidStateError')),
+            close: () => undefined,
+          })),
+        },
+        environment: () => new Promise<never>(() => undefined),
+        startArtifactAuthority: () => {
+          throw new Error('output authority must not start from selection projection')
+        },
+      },
+    })
 
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
     await turn()
-    expect(controller.getSnapshot().canStart).toBe(false)
+    expect(controller.getSnapshot().output.projection).toBeNull()
     controller.toggleSelection(entry.idText)
-    expect(controller.getSnapshot().canStart).toBe(true)
-    expect(controller.getSnapshot().selectionTotalKnown).toBe(false)
+    expect(controller.getSnapshot().rows[0]?.selection).toBe('selected')
+    expect(controller.getSnapshot().selectedVisibleFiles).toBe(1)
+    expect(controller.getSnapshot().output.projection).toBeNull()
     await controller.dispose()
   })
 })
+
+function completedProjectionSource(): AuthenticatedDiscoverySource {
+  return Object.freeze({
+    discover: async function* (request: AuthenticatedDiscoveryRequest) {
+      yield* []
+      return Object.freeze({ settledTargets: request.unsettledTargets })
+    },
+  })
+}

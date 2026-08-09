@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/windshare/windshare/core/osfs/internal/legacyresume"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/transfer"
 )
 
 const (
@@ -16,10 +16,10 @@ const (
 	maxCleanerEntries    = 100_000
 	maxCleanerStateBytes = 64 << 10
 
-	cleanupDetailPublished = "published path retained"
-	cleanupDetailUnknown   = "unknown legacy path retained"
-	cleanupDetailConflict  = "conflicting path retained"
-	cleanupDetailCurrent   = "current checkpoint path retained"
+	cleanupDetailPublished         = "published path retained"
+	cleanupDetailUnknown           = "unknown legacy path retained"
+	cleanupDetailConflict          = "conflicting path retained"
+	cleanupDetailSeparateOwnership = "nested checkpoint path retained for separate ownership cleanup"
 )
 
 var (
@@ -50,7 +50,7 @@ type CheckpointCleanupFault func(CheckpointCleanupStep) error
 // neither can authorize destructive cleanup after root replacement.
 type OneShotCheckpointCleanerConfig struct {
 	Platform  outputcap.Platform
-	BackendID transfer.OutputBackendID
+	BackendID legacyresume.BackendID
 	Fault     CheckpointCleanupFault
 }
 
@@ -94,9 +94,9 @@ func NewOneShotCheckpointCleaner(config OneShotCheckpointCleanerConfig) (*OneSho
 		return nil, fmt.Errorf("%w: certified platform", ErrCheckpointCleanerOwnership)
 	}
 	if config.BackendID == "" {
-		config.BackendID = transfer.NativeFilesystemOutputBackendID
+		config.BackendID = legacyresume.NativeFilesystemBackend
 	}
-	if _, err := transfer.NewOutputBackendID(string(config.BackendID)); err != nil {
+	if config.BackendID != legacyresume.NativeFilesystemBackend {
 		return nil, fmt.Errorf("%w: backend ID", ErrCheckpointCleanerOwnership)
 	}
 	return &OneShotCheckpointCleaner{config: config}, nil

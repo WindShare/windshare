@@ -5,200 +5,210 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-// List constructs the live capability inventory over one already-open native
-// repository. Repository ownership transfers into the inventory on success.
-func List(ctx context.Context, repository Repository) (*Inventory, error) {
-	if ctx == nil || repository == nil {
+type Store interface {
+	List(context.Context) ([]Snapshot, error)
+	Acquire(context.Context, receivecontract.OperationID) (OperationLease, error)
+}
+
+type OperationLease interface {
+	Snapshot(context.Context) (Snapshot, error)
+	ObserveRecovery(context.Context) (RecoveryEvidence, error)
+	CleanupOwned(context.Context) (DiscardEvidence, error)
+	InstallReceipt(context.Context, checkpointmodel.DirectTreeReceipt) error
+	ReplaceLifecycle(
+		context.Context,
+		checkpointmodel.ReceiveLifecycleState,
+		checkpointmodel.ReceiveLifecycleState,
+	) error
+	Close() error
+}
+
+type Authority struct{ store Store }
+
+func New(store Store) (*Authority, error) {
+	if store == nil {
 		return nil, ErrInvalidContract
 	}
+	return &Authority{store: store}, nil
+}
+
+func (authority *Authority) List(ctx context.Context) (Inventory, error) {
+	if authority == nil || authority.store == nil || ctx == nil {
+		return Inventory{}, ErrInvalidContract
+	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return Inventory{}, err
 	}
-	pinned, err := repository.ListResumeState(ctx)
+	snapshots, err := authority.store.List(ctx)
 	if err != nil {
-		return nil, err
+		return Inventory{}, err
 	}
-	return NewInventory(pinned)
-}
-
-// Discard consumes one live reference, obtains the selected intent lease, and
-// keeps the canonical record as the final private witness removed. Publication
-// pins are checked on both sides of every store action so a changed public name
-// can never silently authorize subsequent cleanup.
-func Discard(ctx context.Context, reference Reference) (
-	result DiscardResult,
-	resultErr error,
-) {
-	if ctx == nil {
-		return DiscardResult{}, ErrInvalidContract
-	}
-	claim, err := consumeReference(ctx, reference)
-	if err != nil {
-		return DiscardResult{}, err
-	}
-	defer claim.Release()
-
-	leased, err := claim.Acquire(ctx)
-	if err != nil {
-		return DiscardResult{}, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, leased.Close()) }()
-
-	prepared, err := prepareDiscard(ctx, leased)
-	if err != nil {
-		return DiscardResult{}, err
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, closePinnedPublications(prepared.publications))
-	}()
-	if prepared.plan.ExpectedStatus() != Discarded {
-		return discardPlanSettlement(prepared.plan, 0)
-	}
-	return applyDiscardPlan(ctx, leased, prepared.plan, prepared.publicationByRecord)
-}
-
-type preparedDiscard struct {
-	plan                DiscardPlan
-	publications        []PinnedPublication
-	publicationByRecord map[checkpointmodel.RecordID]PinnedPublication
-}
-
-func prepareDiscard(ctx context.Context, leased LeasedRepository) (preparedDiscard, error) {
-	snapshot, err := leased.Observe(ctx)
-	if err != nil {
-		return preparedDiscard{}, err
-	}
-	if snapshot.NamespaceEvidence() != EvidenceExact || len(snapshot.Attention()) > 0 {
-		return preparedDiscard{plan: ReduceDiscard(snapshot, nil)}, nil
-	}
-	native, ok := leased.(publicationRepository)
-	if !ok {
-		return preparedDiscard{}, ErrInvalidContract
-	}
-	publications, err := native.PinPublications(ctx, snapshot)
-	if err != nil {
-		return preparedDiscard{}, errors.Join(err, closePinnedPublications(publications))
-	}
-	observations, publicationByRecord, duplicate := indexPinnedPublications(publications)
-	if duplicate.Valid() {
-		return preparedDiscard{
-			plan:                attentionPlan([]Attention{duplicate}),
-			publications:        publications,
-			publicationByRecord: publicationByRecord,
-		}, nil
-	}
-	return preparedDiscard{
-		plan:                ReduceDiscard(snapshot, observations),
-		publications:        publications,
-		publicationByRecord: publicationByRecord,
-	}, nil
-}
-
-func indexPinnedPublications(
-	publications []PinnedPublication,
-) (
-	[]PublicationObservation,
-	map[checkpointmodel.RecordID]PinnedPublication,
-	Attention,
-) {
-	observations := make([]PublicationObservation, len(publications))
-	publicationByRecord := make(map[checkpointmodel.RecordID]PinnedPublication, len(publications))
-	for index, publication := range publications {
-		if publication == nil {
-			return nil, publicationByRecord, derivedAttention(AttentionAmbiguousPublication, nil)
+	seen := make(map[receivecontract.OperationID]int)
+	summaries := make([]Summary, 0, len(snapshots))
+	attention := make([]Attention, 0)
+	for _, snapshot := range snapshots {
+		operation := snapshot.operation.OperationID()
+		if !snapshot.Valid() {
+			if !operation.IsZero() {
+				current, _ := NewAttention(operation, checkpointmodel.AttentionTargetOwnershipUnknown)
+				attention = append(attention, current)
+			}
+			continue
 		}
-		observation := publication.Observation()
-		observations[index] = observation
-		if _, duplicate := publicationByRecord[observation.RecordID()]; duplicate {
-			return nil, publicationByRecord, derivedAttention(
-				AttentionAmbiguousPublication,
-				observation.RecordID().Bytes(),
-			)
+		if prior, duplicate := seen[operation]; duplicate {
+			summaries[prior] = Summary{}
+			current, _ := NewAttention(operation, checkpointmodel.AttentionTargetOwnershipUnknown)
+			attention = append(attention, current)
+			continue
 		}
-		publicationByRecord[observation.RecordID()] = publication
+		seen[operation] = len(summaries)
+		summaries = append(summaries, summaryFromSnapshot(snapshot))
 	}
-	return observations, publicationByRecord, Attention{}
+	compacted := summaries[:0]
+	for _, summary := range summaries {
+		if !summary.operationID.IsZero() {
+			compacted = append(compacted, summary)
+		}
+	}
+	return newInventory(compacted, attention), nil
 }
 
-func applyDiscardPlan(
+func (authority *Authority) Recover(
 	ctx context.Context,
-	leased LeasedRepository,
-	plan DiscardPlan,
-	publicationByRecord map[checkpointmodel.RecordID]PinnedPublication,
-) (DiscardResult, error) {
-	var removed uint64
-	for _, action := range plan.Actions() {
-		if err := ctx.Err(); err != nil {
-			return DiscardResult{}, err
-		}
-		publication := publicationByRecord[action.RecordID()]
-		if publication == nil {
-			return DiscardResult{}, ErrInvalidContract
-		}
-		if attention, err := revalidatePublication(ctx, publication); err != nil {
-			return DiscardResult{}, err
-		} else if attention.Valid() {
-			return NewDiscardResult(DiscardNeedsAttention, removed, []Attention{attention})
-		}
-
-		applied, err := leased.Apply(ctx, action)
+	operation receivecontract.OperationID,
+	nowMillis uint64,
+) (Summary, error) {
+	return authority.mutate(ctx, operation, func(
+		ctx context.Context,
+		lease OperationLease,
+		snapshot Snapshot,
+	) (Decision, error) {
+		evidence, err := lease.ObserveRecovery(ctx)
 		if err != nil {
-			return DiscardResult{}, err
+			return Decision{}, err
 		}
-		if applied.Status() == ApplyNeedsAttention {
-			return NewDiscardResult(DiscardNeedsAttention, removed, applied.Attention())
+		if err := validateEvidenceReceipts(snapshot, evidence); err != nil {
+			return Decision{}, err
 		}
-		if applied.Status() == ApplyCompleted && removalAction(action.Kind()) {
-			removed++
+		decision, err := ReduceRecovery(snapshot.lifecycle, evidence, nowMillis)
+		if err != nil {
+			return Decision{}, err
 		}
-
-		if attention, err := revalidatePublication(ctx, publication); err != nil {
-			return DiscardResult{}, err
-		} else if attention.Valid() {
-			return NewDiscardResult(DiscardNeedsAttention, removed, []Attention{attention})
+		next, replace := decision.Next()
+		if !replace || next.ReceiptDigest().IsZero() ||
+			next.ReceiptDigest() == snapshot.lifecycle.ReceiptDigest() {
+			return decision, nil
 		}
-	}
-	if removed == 0 {
-		return NewDiscardResult(AlreadyAbsent, 0, nil)
-	}
-	return NewDiscardResult(Discarded, removed, nil)
+		// Only the receipt selected by the reducer is installed. Unrelated valid
+		// observations are not durable authority for this lifecycle transition.
+		for _, receipt := range []checkpointmodel.DirectTreeReceipt{
+			evidence.TerminalReceipt, evidence.ExpiryReceipt,
+		} {
+			if receipt.Valid() && receipt.Digest() == next.ReceiptDigest() {
+				return decision, lease.InstallReceipt(ctx, receipt)
+			}
+		}
+		return Decision{}, ErrInvalidContract
+	})
 }
 
-func revalidatePublication(
+func (authority *Authority) Discard(
 	ctx context.Context,
-	publication PinnedPublication,
-) (Attention, error) {
-	observation := publication.Observation()
-	evidence, err := publication.Revalidate(ctx)
+	operation receivecontract.OperationID,
+) (Summary, error) {
+	return authority.mutate(ctx, operation, func(
+		ctx context.Context,
+		lease OperationLease,
+		snapshot Snapshot,
+	) (Decision, error) {
+		evidence, err := lease.ObserveRecovery(ctx)
+		if err != nil {
+			return Decision{}, err
+		}
+		initial := DiscardEvidence{State: CleanupPending}
+		decision, err := ReduceDiscard(snapshot.lifecycle, evidence.TargetOwnership, initial)
+		if err != nil || decision.action != DecisionCleanupRequired {
+			return decision, err
+		}
+		cleanup, err := lease.CleanupOwned(ctx)
+		if err != nil {
+			return Decision{}, err
+		}
+		if !cleanup.valid() {
+			return Decision{}, ErrInvalidContract
+		}
+		if cleanup.Receipt.Valid() {
+			if err := validateReceipt(snapshot, cleanup.Receipt); err != nil {
+				return Decision{}, err
+			}
+			if err := lease.InstallReceipt(ctx, cleanup.Receipt); err != nil {
+				return Decision{}, err
+			}
+		}
+		return ReduceDiscard(snapshot.lifecycle, evidence.TargetOwnership, cleanup)
+	})
+}
+
+func (authority *Authority) mutate(
+	ctx context.Context,
+	operation receivecontract.OperationID,
+	reduce func(context.Context, OperationLease, Snapshot) (Decision, error),
+) (result Summary, resultErr error) {
+	if authority == nil || authority.store == nil || ctx == nil || operation.IsZero() || reduce == nil {
+		return Summary{}, ErrInvalidContract
+	}
+	if err := ctx.Err(); err != nil {
+		return Summary{}, err
+	}
+	lease, err := authority.store.Acquire(ctx, operation)
 	if err != nil {
-		return Attention{}, err
+		return Summary{}, err
 	}
-	if evidence == observation.FinalEvidence() {
-		return Attention{}, nil
+	if lease == nil {
+		return Summary{}, ErrInvalidContract
 	}
-	reason := AttentionAmbiguousPublication
-	if observation.FinalEvidence() == EvidenceExact && evidence == EvidenceReplaced {
-		reason = AttentionReplacement
+	defer func() { resultErr = errors.Join(resultErr, lease.Close()) }()
+	snapshot, err := lease.Snapshot(ctx)
+	if err != nil || !snapshot.Valid() || snapshot.operation.OperationID() != operation {
+		return Summary{}, errors.Join(ErrInvalidContract, err)
 	}
-	return derivedAttention(reason, observation.RecordID().Bytes()), nil
+	decision, err := reduce(ctx, lease, snapshot)
+	if err != nil {
+		return Summary{}, err
+	}
+	if next, replace := decision.Next(); replace {
+		if err := lease.ReplaceLifecycle(ctx, snapshot.lifecycle, next); err != nil {
+			return Summary{}, err
+		}
+		snapshot.lifecycle = next
+	}
+	return summaryFromSnapshot(snapshot), nil
 }
 
-func discardPlanSettlement(plan DiscardPlan, removed uint64) (DiscardResult, error) {
-	if !plan.Valid() {
-		return DiscardResult{}, ErrInvalidContract
+func validateEvidenceReceipts(snapshot Snapshot, evidence RecoveryEvidence) error {
+	if !evidence.valid() {
+		return ErrInvalidContract
 	}
-	switch plan.ExpectedStatus() {
-	case AlreadyAbsent:
-		return NewDiscardResult(AlreadyAbsent, 0, nil)
-	case DiscardNeedsAttention:
-		return NewDiscardResult(DiscardNeedsAttention, removed, plan.Attention())
-	default:
-		return DiscardResult{}, ErrInvalidContract
+	for _, receipt := range []checkpointmodel.DirectTreeReceipt{
+		evidence.TerminalReceipt, evidence.ExpiryReceipt,
+	} {
+		if receipt.Valid() {
+			if err := validateReceipt(snapshot, receipt); err != nil {
+				return err
+			}
+		}
 	}
+	return nil
 }
 
-func removalAction(kind ActionKind) bool {
-	return kind == ActionRemoveStage || kind == ActionRemoveAnchor || kind == ActionRemoveRecord
+func validateReceipt(snapshot Snapshot, receipt checkpointmodel.DirectTreeReceipt) error {
+	if !receipt.Valid() || receipt.OperationID() != snapshot.operation.OperationID() ||
+		receipt.ReceiveIntentDigest() != snapshot.operation.ReceiveIntentDigest() ||
+		receipt.ReservationDigest() != snapshot.operation.BindingDigest() {
+		return ErrInvalidContract
+	}
+	return nil
 }

@@ -1,26 +1,59 @@
 import type { V2CatalogClient } from '../../src/catalog/v2-client'
 import type { V2CommittedDirectory } from '../../src/catalog/v2-page-store'
-import type { V2CatalogEntry } from '../../src/catalog/v2-records'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import { FileGeometry, byteRange } from '../../src/content/geometry'
+import type { V2CatalogEntry, V2CatalogPage } from '../../src/catalog/v2-records'
+import { V2SelectionPolicy, type V2FrozenSelectionPolicy } from '../../src/catalog/v2-selection'
+import { ByteRangeSet, FileGeometry, byteRange, type ByteRange } from '../../src/content/geometry'
 import type { V2BlockRangeReader } from '../../src/content/v2-broker'
 import type { V2OpenedRevision, V2RevisionReader } from '../../src/content/v2-session-services'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
 import { DirectoryAdmissionLedger } from '../../src/transfer/directory-admission-ledger'
-import { freezeTransferIntent } from '../../src/transfer/intent'
 import {
-  COMPLETED_JOB_SETTLEMENT,
-  directoryAdmissionScope,
+  createDirectoryAdmissionScope,
+  isolatedDirectorySettlement,
+} from '../../src/transfer/directory-admission'
+import { FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/fault'
+import {
+  createCatalogRootDirectoryTreeArtifact,
+  createDestinationReservationID,
+  createDirectAtomicPlan,
+  createDirectTreePlan,
+  createManagedAtomicReservation,
+  createNativeContainerRootReservation,
+  createOperationID,
+  createOriginalFileArtifact,
+  createPortableBinding,
+  createPortableHandoffPlan,
+  createPortablePlanID,
+  createReceiveIntent,
+  createSelectionSpec,
+  createSyntheticSelectionResultRoot,
+  createWorkspaceBinding,
+  createWorkspaceID,
+  createWorkspaceThenPublishPlan,
+  createZipArchiveArtifact,
+  selectionRulesSpecFromPolicy,
+  type ReceiveIntent,
+} from '../../src/transfer/intent'
+import {
   VerifiedDurableRanges,
-  pausedJobSettlement,
-  type DirectoryAdmission,
-  type DirectoryAdmissionScope,
-  type OutputDirectoryAdmission,
-  type OutputFile,
+  outputCapabilities,
+  outputSessionIdentity,
+  snapshotOpenedOutputRevision,
+  snapshotOutputFile,
+  type DirectAtomicExecution,
+  type DirectTreeExecution,
+  type ExactPreparationEvidence,
+  type ExactSingleFileEvidence,
+  type IncrementalDirectoryOutput,
+  type OutputFileRequest,
   type OutputSession,
-  type V2OutputAuthority,
+  type PortableExecution,
+  type V2PlanExecutionAuthority,
+  type WorkspaceExecution,
 } from '../../src/transfer/output-session'
 import { TransferJob } from '../../src/transfer/v2-job'
+import { V2FileRevisionChangedError } from '../../src/transfer/job/failures'
 
 export function identity(first: number): Uint8Array<ArrayBuffer> {
   const value = new Uint8Array(16)
@@ -32,318 +65,23 @@ export function identityText(first: number): string {
   return encodeBase64Url(identity(first))
 }
 
-export function opaqueOutputIdentityText(first: number): string {
+export function digestIdentity(first: number): string {
   const value = new Uint8Array(32)
   value[0] = first
   return encodeBase64Url(value)
 }
 
-export function catalogCommitment(): Uint8Array<ArrayBuffer> {
+export function catalogCommitment(first = 1): Uint8Array<ArrayBuffer> {
   const value = new Uint8Array(32)
-  value[0] = 1
+  value[0] = first
   return value
-}
-
-export function openedRevision(
-  file: Uint8Array<ArrayBuffer>,
-  exactSize: bigint,
-  blockSize: bigint,
-): V2OpenedRevision {
-  const revision = identity(12)
-  return Object.freeze({
-    descriptor: Object.freeze({
-      shareInstance: identity(1),
-      shareInstanceId: identityText(1),
-      fileId: file,
-      fileIdText: encodeBase64Url(file),
-      fileRevision: revision,
-      fileRevisionText: encodeBase64Url(revision),
-      exactSize,
-      geometry: new FileGeometry(exactSize, blockSize),
-    }),
-    leaseId: identity(13),
-    release: async () => undefined,
-  })
-}
-
-export function traversalPage(
-  directoryId: Uint8Array<ArrayBuffer>,
-  entries: readonly V2CatalogEntry[],
-  overrides: {
-    readonly shareInstance?: Uint8Array<ArrayBuffer>
-    readonly generation?: Uint8Array<ArrayBuffer>
-    readonly pageIndex?: number
-    readonly terminal?: boolean
-    readonly previousCommitment?: Uint8Array<ArrayBuffer>
-    readonly omittedCount?: bigint
-    readonly objectCommitment?: Uint8Array<ArrayBuffer>
-    readonly preserveEntryOrder?: boolean
-  } = {},
-) {
-  const canonicalEntries = entries.map((entry) => Object.freeze({
-    ...entry,
-    idText: encodeBase64Url(entry.id),
-  }))
-  if (!overrides.preserveEntryOrder) {
-    canonicalEntries.sort((left, right) => compareUtf8(left.name, right.name))
-  }
-  return {
-    shareInstance: overrides.shareInstance ?? identity(1),
-    directoryId,
-    directoryIdText: encodeBase64Url(directoryId),
-    generation: overrides.generation ?? identity(3),
-    generationText: 'generation',
-    pageIndex: overrides.pageIndex ?? 0,
-    terminal: overrides.terminal ?? true,
-    previousCommitment: overrides.previousCommitment ?? new Uint8Array(32),
-    entries: canonicalEntries,
-    omittedCount: overrides.omittedCount ?? 0n,
-    objectCommitment: overrides.objectCommitment ?? catalogCommitment(),
-    senderObjectBytes: 1,
-  }
-}
-
-export function compareUtf8(left: string, right: string): number {
-  const encoder = new TextEncoder()
-  const leftBytes = encoder.encode(left)
-  const rightBytes = encoder.encode(right)
-  const shared = Math.min(leftBytes.byteLength, rightBytes.byteLength)
-  for (let index = 0; index < shared; index += 1) {
-    const difference = (leftBytes[index] ?? 0) - (rightBytes[index] ?? 0)
-    if (difference !== 0) return difference
-  }
-  return leftBytes.byteLength - rightBytes.byteLength
-}
-
-export const BIND_TEST_DIRECTORY_ADMISSION_SCOPE = Symbol('bind-test-directory-admission-scope')
-
-export interface ScopeBoundTestOutputSession extends OutputSession {
-  readonly [BIND_TEST_DIRECTORY_ADMISSION_SCOPE]?: (scope: DirectoryAdmissionScope) => void
-}
-
-export interface TestOutputSessionFactory {
-  readonly backend: string
-  readonly format: OutputSession['format']
-  open(scope: DirectoryAdmissionScope): OutputSession
-}
-
-export type TestOutputSessionSource = ScopeBoundTestOutputSession | TestOutputSessionFactory
-
-export function outputAuthority(source: TestOutputSessionSource): V2OutputAuthority {
-  let opened = false
-  let openedSession: OutputSession | undefined
-  const openSession = (intent: Awaited<ReturnType<typeof freezeTransferIntent>>): OutputSession => {
-    const scope = directoryAdmissionScope(intent)
-    const session = 'open' in source ? source.open(scope) : source
-    ;(session as ScopeBoundTestOutputSession)[BIND_TEST_DIRECTORY_ADMISSION_SCOPE]?.(scope)
-    openedSession = session
-    return session
-  }
-  return {
-    confirmOutput: async (draft) => {
-      const intent = await freezeTransferIntent(draft, {
-        target: opaqueOutputIdentityText(201),
-        targetKind: 2,
-        backend: 'open' in source ? source.backend : source.identity.backend,
-        format: source.format,
-      })
-      return { intent, session: openSession(intent) }
-    },
-    openOutput: async (intent) => {
-      if (opened) throw new Error('Test output authority was opened twice')
-      opened = true
-      return openSession(intent)
-    },
-    abort: async (reason: unknown) => {
-      const session = openedSession ?? ('open' in source ? undefined : source)
-      if (session !== undefined) await session.pauseJob(reason)
-    },
-  }
-}
-
-export function terminalBoundaryOutput(initialDurableStart?: bigint): ScopeBoundTestOutputSession {
-  const identity = { backend: 'test-terminal', outputSessionId: 'selection-bound' }
-  const directoryAdmissions = testDirectoryAdmissionLedgerBinding()
-  return {
-    [BIND_TEST_DIRECTORY_ADMISSION_SCOPE]: directoryAdmissions.bind,
-    identity,
-    format: 'directory',
-    capabilities: {
-      durability: 'ProcessRestart',
-      randomWrite: true,
-      fileFailureIsolation: true,
-      modificationTime: false,
-    },
-    admitDirectory: (directory: OutputDirectoryAdmission, signal: AbortSignal) =>
-      directoryAdmissions.get().admitDirectory(directory, signal),
-    finalizeDirectory: (admission: DirectoryAdmission, signal: AbortSignal) =>
-      directoryAdmissions.get().finalizeDirectory(admission, signal),
-    beginFile: async (input) => {
-      const file = directoryAdmissions.get().validateFileParent(input)
-      const ownership = {
-        ...identity,
-        canonicalPath: file.path,
-        ownedFileIdentity: 'terminal-file',
-      }
-      return {
-        durableRanges: new VerifiedDurableRanges(
-          ownership,
-          file.source,
-          file.exactSize,
-          initialDurableStart === undefined || initialDurableStart >= file.exactSize
-            ? []
-            : [byteRange(initialDurableStart, file.exactSize)],
-        ),
-        transaction: {
-          writeRange: async () => undefined,
-          checkpoint: async () => new VerifiedDurableRanges(
-            ownership,
-            file.source,
-            file.exactSize,
-            [byteRange(0n, file.exactSize)],
-          ),
-          commit: async () => undefined,
-          retire: async () => 'FileIsolated' as const,
-          pause: async () => undefined,
-        },
-      }
-    },
-    completeJob: async () => COMPLETED_JOB_SETTLEMENT,
-    pauseJob: async () => pausedJobSettlement('ProcessRestart'),
-  }
-}
-
-export function traversalJob(
-  catalog: V2CatalogClient,
-  output: OutputSession,
-  syntheticRoot: Uint8Array<ArrayBuffer>,
-  syntheticRootId: string,
-  revisions: V2RevisionReader = {} as V2RevisionReader,
-): TransferJob {
-  return new TransferJob({
-    descriptor: { shareInstance: identity(1), syntheticRoot, syntheticRootId, chunkSize: 1 } as never,
-    catalog,
-    selection: new V2SelectionPolicy(),
-    revisions,
-    broker: {} as V2BlockRangeReader,
-    lanes: { size: 1 },
-    output: outputAuthority(output),
-    maximumConcurrentFiles: 1,
-  })
-}
-
-export function traversalOutput(options?: {
-  readonly beforeFinalizeDirectory?: (directory: OutputDirectoryAdmission) => void | Promise<void>
-}): {
-  readonly session: OutputSession
-  readonly abortReasons: unknown[]
-  readonly suspendReasons: unknown[]
-  readonly finalizedPaths: readonly (readonly string[])[]
-  readonly begunFilePaths: readonly (readonly string[])[]
-} {
-  const abortReasons: unknown[] = []
-  const suspendReasons: unknown[] = []
-  const finalizedPaths: string[][] = []
-  const begunFilePaths: string[][] = []
-  const directoryAdmissions = testDirectoryAdmissionLedgerBinding()
-  const session = {
-    [BIND_TEST_DIRECTORY_ADMISSION_SCOPE]: directoryAdmissions.bind,
-    identity: { backend: 'test', outputSessionId: 'traversal' },
-    format: 'directory',
-    capabilities: {
-      durability: 'None',
-      randomWrite: false,
-      fileFailureIsolation: false,
-      modificationTime: false,
-    },
-    admitDirectory: (directory: OutputDirectoryAdmission, signal: AbortSignal) =>
-      directoryAdmissions.get().admitDirectory(directory, signal),
-    finalizeDirectory: (admission: DirectoryAdmission, signal: AbortSignal) =>
-      directoryAdmissions.get().finalizeDirectory(admission, signal, async (directory) => {
-        await options?.beforeFinalizeDirectory?.(directory)
-        finalizedPaths.push([...directory.path])
-      }),
-    beginFile: async (file: OutputFile) => {
-      begunFilePaths.push([...file.path])
-      throw new Error('Traversal fixture unexpectedly opened a file')
-    },
-    completeJob: async () => COMPLETED_JOB_SETTLEMENT,
-    pauseJob: async (reason: unknown) => {
-      suspendReasons.push(reason)
-      return pausedJobSettlement('None')
-    },
-  } as unknown as OutputSession
-  return { session, abortReasons, suspendReasons, finalizedPaths, begunFilePaths }
-}
-
-export function testDirectoryAdmissionLedgerBinding(): {
-  readonly bind: (scope: DirectoryAdmissionScope) => void
-  readonly get: () => DirectoryAdmissionLedger
-} {
-  let ledger: DirectoryAdmissionLedger | undefined
-  return Object.freeze({
-    bind: (scope: DirectoryAdmissionScope) => {
-      if (ledger !== undefined) return
-      ledger = new DirectoryAdmissionLedger(scope)
-    },
-    get: () => {
-      if (ledger === undefined) {
-        throw new Error('Test output session used directory authority before intent validation')
-      }
-      return ledger
-    },
-  })
-}
-
-export function committedDirectory(
-  directoryIdText: string,
-  entryCount: number,
-  omittedCount = 0n,
-): V2CommittedDirectory {
-  let directoryId: Uint8Array<ArrayBuffer>
-  if (directoryIdText === 'root') {
-    directoryId = identity(2)
-  } else if (directoryIdText === 'child') {
-    directoryId = identity(3)
-  } else {
-    directoryId = depthIdentity(Number(directoryIdText.slice('directory-'.length)))
-  }
-  return Object.freeze({
-    directoryId,
-    directoryIdText,
-    generationText: 'generation',
-    generation: identity(3),
-    pageCount: 1,
-    entryCount,
-    omittedCount,
-    terminalCommitment: catalogCommitment(),
-  })
-}
-
-export function committedDirectoryFor(
-  directoryId: Uint8Array<ArrayBuffer>,
-  directoryIdText: string,
-  entryCount: number,
-  omittedCount = 0n,
-): V2CommittedDirectory {
-  return Object.freeze({
-    directoryId: directoryId.slice(),
-    directoryIdText,
-    generationText: 'generation',
-    generation: identity(3),
-    pageCount: 1,
-    entryCount,
-    omittedCount,
-    terminalCommitment: catalogCommitment(),
-  })
 }
 
 export function directoryEntry(
   id: Uint8Array<ArrayBuffer>,
-  idText: string,
   name: string,
 ): Extract<V2CatalogEntry, { kind: 'directory' }> {
-  return Object.freeze({ kind: 'directory', id, idText, name })
+  return Object.freeze({ kind: 'directory', id, idText: encodeBase64Url(id), name })
 }
 
 export function fileEntry(
@@ -354,133 +92,661 @@ export function fileEntry(
   return Object.freeze({ kind: 'file', id, idText: encodeBase64Url(id), name, expectedSize })
 }
 
-export function depthCatalog(leafDepth: number): {
+export interface CatalogDirectoryFixture {
+  readonly id: Uint8Array<ArrayBuffer>
+  readonly entries: readonly V2CatalogEntry[]
+  readonly generation?: Uint8Array<ArrayBuffer>
+  readonly omittedCount?: bigint
+  readonly loadFailure?: unknown
+  readonly beforePages?: () => void | Promise<void>
+}
+
+export function catalogFixture(directories: readonly CatalogDirectoryFixture[]): {
   readonly catalog: V2CatalogClient
-  loads(): number
+  readonly loads: string[]
+  readonly pageReads: string[]
 } {
-  let loads = 0
+  const byId = new Map(directories.map(directory => [encodeBase64Url(directory.id), directory]))
+  const loads: string[] = []
+  const pageReads: string[] = []
   const catalog = {
     loadDirectory: async (id: Uint8Array) => {
-      loads += 1
-      const depth = depthFromIdentity(id)
-      return committedDirectory(depthIdentityText(depth), depth === leafDepth ? 0 : 1)
+      const idText = encodeBase64Url(id)
+      loads.push(idText)
+      const fixture = byId.get(idText)
+      if (fixture?.loadFailure !== undefined) throw fixture.loadFailure
+      if (fixture === undefined) throw new Error('catalog fixture loaded an unknown directory')
+      return committedDirectory(fixture)
     },
     pages: async function* (directory: V2CommittedDirectory) {
-      const depth = Number(directory.directoryIdText.slice('directory-'.length))
-      const entries = depth === leafDepth
-        ? []
-        : [directoryEntry(
-            depthIdentity(depth + 1),
-            depthIdentityText(depth + 1),
-            depthIdentityText(depth + 1),
-          )]
-      yield traversalPage(depthIdentity(depth), entries)
+      const fixture = byId.get(encodeBase64Url(directory.directoryId))
+      if (fixture === undefined) throw new Error('catalog fixture lost a committed directory')
+      await fixture.beforePages?.()
+      pageReads.push(encodeBase64Url(directory.directoryId))
+      yield catalogPage(fixture)
     },
   } as unknown as V2CatalogClient
-  return { catalog, loads: () => loads }
+  return { catalog, loads, pageReads }
 }
 
-export function depthFileCatalog(parentDepth: number): {
-  readonly catalog: V2CatalogClient
-  loads(): number
-} {
-  let loads = 0
-  const catalog = {
-    loadDirectory: async (id: Uint8Array) => {
-      loads += 1
-      return committedDirectory(depthIdentityText(depthFromIdentity(id)), 1)
-    },
-    pages: async function* (directory: V2CommittedDirectory) {
-      const depth = Number(directory.directoryIdText.slice('directory-'.length))
-      const entries: V2CatalogEntry[] = depth === parentDepth
-        ? [{
-            kind: 'file',
-            id: depthIdentity(depth + 1),
-            idText: `file-${depth + 1}`,
-            name: `file-${depth + 1}`,
-            expectedSize: 0n,
-          }]
-        : [directoryEntry(
-            depthIdentity(depth + 1),
-            depthIdentityText(depth + 1),
-            depthIdentityText(depth + 1),
-          )]
-      yield traversalPage(depthIdentity(depth), entries)
-    },
-  } as unknown as V2CatalogClient
-  return { catalog, loads: () => loads }
+function committedDirectory(fixture: CatalogDirectoryFixture): V2CommittedDirectory {
+  return Object.freeze({
+    directoryId: fixture.id.slice(),
+    directoryIdText: encodeBase64Url(fixture.id),
+    generation: (fixture.generation ?? identity(90)).slice(),
+    generationText: encodeBase64Url(fixture.generation ?? identity(90)),
+    pageCount: 1,
+    entryCount: fixture.entries.length,
+    omittedCount: fixture.omittedCount ?? 0n,
+    terminalCommitment: catalogCommitment(fixture.id[0] ?? 1),
+  })
 }
 
-export function pathCatalog(segments: readonly string[]): {
-  readonly catalog: V2CatalogClient
-  loads(): number
-} {
-  let loads = 0
-  const catalog = {
-    loadDirectory: async (id: Uint8Array) => {
-      loads += 1
-      const depth = depthFromIdentity(id)
-      return committedDirectory(depthIdentityText(depth), depth === segments.length ? 0 : 1)
-    },
-    pages: async function* (directory: V2CommittedDirectory) {
-      const depth = Number(directory.directoryIdText.slice('directory-'.length))
-      const name = segments[depth]
-      const entries = name === undefined
-        ? []
-        : [directoryEntry(depthIdentity(depth + 1), depthIdentityText(depth + 1), name)]
-      yield traversalPage(depthIdentity(depth), entries)
-    },
-  } as unknown as V2CatalogClient
-  return { catalog, loads: () => loads }
+function catalogPage(fixture: CatalogDirectoryFixture): V2CatalogPage {
+  const entries = [...fixture.entries]
+    .map(entry => Object.freeze({ ...entry, idText: encodeBase64Url(entry.id) }))
+    .sort((left, right) => compareUtf8(left.name, right.name))
+  return Object.freeze({
+    shareInstance: identity(1),
+    directoryId: fixture.id.slice(),
+    directoryIdText: encodeBase64Url(fixture.id),
+    generation: (fixture.generation ?? identity(90)).slice(),
+    generationText: encodeBase64Url(fixture.generation ?? identity(90)),
+    pageIndex: 0,
+    terminal: true,
+    previousCommitment: new Uint8Array(32),
+    entries: Object.freeze(entries),
+    omittedCount: fixture.omittedCount ?? 0n,
+    objectCommitment: catalogCommitment(fixture.id[0] ?? 1),
+    senderObjectBytes: 1,
+  })
 }
 
-export function maximumBytePathSegments(penultimateWidth: number): readonly string[] {
-  return Object.freeze([
-    ...Array.from({ length: 127 }, () => 'a'.repeat(255)),
-    'a'.repeat(penultimateWidth),
-    'b',
-    'c',
-  ])
+export function selectOnlyFile(file: Extract<V2CatalogEntry, { kind: 'file' }>): V2SelectionPolicy {
+  const selection = new V2SelectionPolicy(false)
+  selection.toggle(file, [identityText(2)])
+  return selection
 }
 
-export function depthIdentity(depth: number): Uint8Array<ArrayBuffer> {
-  const value = new Uint8Array(16)
-  new DataView(value.buffer).setUint16(14, depth + 1, false)
-  return value
-}
+export type TestPlanKind = ReceiveIntent['plan']['kind']
+export type TestArtifactKind = 'directory-tree' | 'original-file' | 'zip-archive'
 
-export function wideIdentity(number: number): Uint8Array<ArrayBuffer> {
-  const value = new Uint8Array(16)
-  new DataView(value.buffer).setUint32(12, number, false)
-  return value
-}
-
-export function wideIdentityNumber(value: Uint8Array): number {
-  return new DataView(value.buffer, value.byteOffset, value.byteLength).getUint32(12, false)
-}
-
-export function depthFromIdentity(identityValue: Uint8Array): number {
-  return new DataView(
-    identityValue.buffer,
-    identityValue.byteOffset,
-    identityValue.byteLength,
-  ).getUint16(14, false) - 1
-}
-
-export function depthIdentityText(depth: number): string {
-  return `directory-${depth}`
-}
-
-export async function withTimeout<T>(operation: Promise<T>, milliseconds: number, message: string): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      operation,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error(message)), milliseconds)
-      }),
-    ])
-  } finally {
-    if (timeout !== undefined) clearTimeout(timeout)
+export async function receiveIntentFixture(input: {
+  readonly planKind: TestPlanKind
+  readonly artifactKind: TestArtifactKind
+  readonly selection: V2FrozenSelectionPolicy | V2SelectionPolicy
+  readonly file?: Extract<V2CatalogEntry, { kind: 'file' }>
+}): Promise<ReceiveIntent> {
+  const selection = 'snapshot' in input.selection ? input.selection.snapshot() : input.selection
+  const selectionSpec = await createSelectionSpec({
+    shareInstance: identityText(1),
+    syntheticRoot: identityText(2),
+    rules: selectionRulesSpecFromPolicy(selection),
+  })
+  let artifact: ReceiveIntent['artifact']
+  if (input.artifactKind === 'directory-tree') {
+    artifact = await createCatalogRootDirectoryTreeArtifact()
+  } else if (input.artifactKind === 'original-file') {
+    artifact = await createOriginalFileArtifact({
+      fileId: requiredFile(input.file).idText,
+      sourcePath: requiredFile(input.file).name,
+      suggestedName: requiredFile(input.file).name,
+    })
+  } else {
+    artifact = await createZipArchiveArtifact(createSyntheticSelectionResultRoot())
   }
+  const operationId = createOperationID()
+  let plan: ReceiveIntent['plan']
+  switch (input.planKind) {
+    case 'direct-tree': {
+      const reservation = await createNativeContainerRootReservation({
+        operationId,
+        reservationId: createDestinationReservationID(),
+        artifact,
+        authorityRef: digestIdentity(41),
+      })
+      plan = await createDirectTreePlan(artifact, reservation)
+      break
+    }
+    case 'direct-atomic': {
+      let requestedName = 'invalid'
+      if (artifact.kind === 'original-file' || artifact.kind === 'zip-archive') {
+        requestedName = artifact.suggestedName
+      }
+      const reservation = await createManagedAtomicReservation({
+        operationId,
+        reservationId: createDestinationReservationID(),
+        artifact,
+        authorityRef: digestIdentity(42),
+        nameAuthority: 'application-chosen',
+        requestedName,
+        reservedName: requestedName,
+        collisionIndex: 0,
+      })
+      plan = await createDirectAtomicPlan(artifact, reservation)
+      break
+    }
+    case 'workspace-then-publish': {
+      const workspace = await createWorkspaceBinding({
+        operationId,
+        workspaceId: createWorkspaceID(),
+        artifact,
+        repositoryRef: digestIdentity(43),
+      })
+      plan = await createWorkspaceThenPublishPlan(artifact, workspace)
+      break
+    }
+    case 'portable-handoff': {
+      const portable = await createPortableBinding({
+        operationId,
+        portablePlanId: createPortablePlanID(),
+        artifact,
+      })
+      plan = await createPortableHandoffPlan(artifact, portable)
+      break
+    }
+  }
+  return createReceiveIntent({ selection: selectionSpec, artifact, plan })
+}
+
+function requiredFile(
+  file: Extract<V2CatalogEntry, { kind: 'file' }> | undefined,
+): Extract<V2CatalogEntry, { kind: 'file' }> {
+  if (file === undefined) throw new TypeError('original-file fixture requires a file')
+  return file
+}
+
+export interface ReaderFixtureOptions {
+  readonly failRevisionFor?: string
+  readonly failBlockFor?: string
+  readonly beforeOpen?: (fileId: string) => void | Promise<void>
+  readonly beforeRead?: (fileId: string) => void | Promise<void>
+}
+
+export function readerFixture(
+  files: readonly Extract<V2CatalogEntry, { kind: 'file' }>[],
+  events: string[] = [],
+  options: ReaderFixtureOptions = {},
+): {
+  readonly revisions: V2RevisionReader
+  readonly broker: V2BlockRangeReader
+  readonly revisionRequests: string[]
+  readonly blockRequests: string[]
+  readonly releases: string[]
+} {
+  const byId = new Map(files.map(file => [file.idText, file]))
+  const revisionRequests: string[] = []
+  const blockRequests: string[] = []
+  const releases: string[] = []
+  const revisions: V2RevisionReader = {
+    open: async (id, signal) => {
+      signal?.throwIfAborted()
+      const idText = encodeBase64Url(id)
+      revisionRequests.push(idText)
+      events.push(`revision:${idText}`)
+      await options.beforeOpen?.(idText)
+      if (options.failRevisionFor === idText) {
+        throw new V2FileRevisionChangedError('fixture revision failure')
+      }
+      const file = byId.get(idText)
+      if (file === undefined) throw new Error('fixture opened an unknown file')
+      return openedRevision(file, async () => { releases.push(idText) })
+    },
+  }
+  const broker: V2BlockRangeReader = {
+    readRange: async function* (descriptor, _leaseId, range, request) {
+      request?.signal?.throwIfAborted()
+      blockRequests.push(descriptor.fileIdText)
+      events.push(`block:${descriptor.fileIdText}`)
+      await options.beforeRead?.(descriptor.fileIdText)
+      if (options.failBlockFor === descriptor.fileIdText) throw new Error('fixture block failure')
+      const length = Number(range.end - range.start)
+      yield Object.freeze({ offset: range.start, data: new Uint8Array(length).fill(7) })
+    },
+  }
+  return { revisions, broker, revisionRequests, blockRequests, releases }
+}
+
+function openedRevision(
+  file: Extract<V2CatalogEntry, { kind: 'file' }>,
+  release: () => Promise<void>,
+): V2OpenedRevision {
+  const revision = identity((file.id[0] ?? 1) + 40)
+  return Object.freeze({
+    descriptor: Object.freeze({
+      shareInstance: identity(1),
+      shareInstanceId: identityText(1),
+      fileId: file.id.slice(),
+      fileIdText: file.idText,
+      fileRevision: revision,
+      fileRevisionText: encodeBase64Url(revision),
+      exactSize: file.expectedSize,
+      geometry: new FileGeometry(file.expectedSize, 2n),
+      ...(file.modifiedTime === undefined ? {} : { modifiedTime: file.modifiedTime }),
+    }),
+    leaseId: identity(13),
+    release,
+  })
+}
+
+export interface TestOutputOptions {
+  readonly durability?: 'None' | 'ProcessRestart'
+  readonly initialRanges?: readonly ByteRange[]
+  readonly failBegin?: boolean
+  readonly failWrite?: boolean
+  readonly failCommit?: boolean
+  readonly retirement?: 'FileIsolated' | 'JobOutputCompromised'
+}
+
+export interface TestOutput extends OutputSession {
+  readonly events: string[]
+  readonly requests: OutputFileRequest[]
+  readonly writes: ReadonlyArray<Readonly<{ offset: bigint; bytes: number }>>
+  readonly commits: string[]
+  readonly retirements: unknown[]
+}
+
+export function testOutput(events: string[] = [], options: TestOutputOptions = {}): TestOutput {
+  const identity = outputSessionIdentity({ backend: 'test-output', outputSessionId: 'test-session' })
+  const durability = options.durability ?? 'None'
+  const capabilities = outputCapabilities({
+    durability,
+    randomWrite: durability !== 'None',
+    fileFailureIsolation: true,
+    modificationTime: true,
+  })
+  const requests: OutputFileRequest[] = []
+  const writes: Array<Readonly<{ offset: bigint; bytes: number }>> = []
+  const commits: string[] = []
+  const retirements: unknown[] = []
+  return {
+    identity,
+    capabilities,
+    events,
+    requests,
+    writes,
+    commits,
+    retirements,
+    beginFile: async (request, signal) => {
+      requests.push(request)
+      events.push('begin-request')
+      const revision = snapshotOpenedOutputRevision(await request.openRevision(signal))
+      events.push('revision-opened')
+      if (options.failBegin === true) throw new Error('fixture begin failure')
+      const file = snapshotOutputFile({
+        source: revision,
+        sourcePath: request.sourcePath,
+        artifactPath: request.artifactPath,
+        exactSize: revision.exactSize,
+        ...(request.parentAdmission === undefined ? {} : { parentAdmission: request.parentAdmission }),
+        ...(request.modifiedTime === undefined ? {} : { modifiedTime: request.modifiedTime }),
+      })
+      const ownership = Object.freeze({
+        ...identity,
+        canonicalPath: file.artifactPath,
+        ownedFileIdentity: `owned:${file.source.fileId}`,
+      })
+      let durable = new ByteRangeSet(file.exactSize, options.initialRanges ?? [])
+      let pending = new ByteRangeSet(file.exactSize, [])
+      events.push('transaction-created')
+      return Object.freeze({
+        revision,
+        durableRanges: new VerifiedDurableRanges(
+          ownership,
+          file.source,
+          file.exactSize,
+          durable.ranges,
+        ),
+        transaction: {
+          writeRange: async (offset: bigint, data: Uint8Array, writeSignal: AbortSignal) => {
+            writeSignal.throwIfAborted()
+            events.push('write')
+            if (options.failWrite === true) throw new Error('fixture write failure')
+            writes.push(Object.freeze({ offset, bytes: data.byteLength }))
+            if (durability !== 'None') {
+              pending = pending.union(new ByteRangeSet(
+                file.exactSize,
+                [byteRange(offset, offset + BigInt(data.byteLength))],
+              ))
+            }
+          },
+          checkpoint: async () => {
+            if (durability !== 'None') {
+              durable = durable.union(pending)
+              pending = new ByteRangeSet(file.exactSize, [])
+            }
+            return new VerifiedDurableRanges(
+              ownership,
+              file.source,
+              file.exactSize,
+              durable.ranges,
+            )
+          },
+          commit: async () => {
+            events.push('commit')
+            if (options.failCommit === true) throw new Error('fixture commit failure')
+            commits.push(file.source.fileId)
+          },
+          retire: async (reason: unknown) => {
+            retirements.push(reason)
+            return options.retirement ?? 'FileIsolated'
+          },
+          pause: async () => undefined,
+        },
+      })
+    },
+  }
+}
+
+export interface TestPlanAuthority extends V2PlanExecutionAuthority {
+  readonly routes: TestPlanKind[]
+  readonly preparations: ExactPreparationEvidence[]
+  readonly singleFileAdmissions: ExactSingleFileEvidence[]
+  readonly settlements: string[]
+  readonly pauses: string[]
+  readonly aborts: unknown[]
+  readonly unknownSettlements: string[]
+  readonly pauseSignals: AbortSignal[]
+  readonly output: TestOutput
+}
+
+export function planAuthorityFixture(input: {
+  readonly output?: TestOutput
+  readonly rejectPreparation?: boolean
+  readonly failSettlement?: boolean
+  readonly failPause?: boolean
+  readonly hangPause?: boolean
+  readonly failDirectoryFinalizePath?: string
+  readonly invalidPauseLifecycle?: boolean
+  readonly onWorkspaceOriginalAdmission?: (evidence: ExactSingleFileEvidence) => void
+} = {}): TestPlanAuthority {
+  const output = input.output ?? testOutput()
+  const routes: TestPlanKind[] = []
+  const preparations: ExactPreparationEvidence[] = []
+  const singleFileAdmissions: ExactSingleFileEvidence[] = []
+  const settlements: string[] = []
+  const pauses: string[] = []
+  const aborts: unknown[] = []
+  const unknownSettlements: string[] = []
+  const pauseSignals: AbortSignal[] = []
+
+  const pause = async (intent: ReceiveIntent): Promise<ReceiveLifecycleState> => {
+    pauses.push(intent.plan.kind)
+    if (input.hangPause === true) return new Promise<never>(() => undefined)
+    if (input.failPause === true) throw new Error('fixture pause failure')
+    if (input.invalidPauseLifecycle === true) return downloadStartedState(intent)
+    return pauseState(intent)
+  }
+  const workspaceExecution = (intent: ReceiveIntent): WorkspaceExecution => ({
+    planKind: 'workspace-then-publish',
+    output,
+    settle: async ({ worker }) => {
+      settlements.push(`workspace-then-publish:${worker.status}`)
+      if (input.failSettlement === true) throw new Error('fixture settlement failure')
+      return materializationSealedState(intent)
+    },
+    pause: async (_request, signal) => {
+      pauseSignals.push(signal)
+      return pause(intent)
+    },
+  })
+  const authority: V2PlanExecutionAuthority = {
+    openDirectTree: async (intent) => {
+      routes.push('direct-tree')
+      const directories = await directoryOutput(intent, input.failDirectoryFinalizePath)
+      const execution: DirectTreeExecution = {
+        planKind: 'direct-tree',
+        output,
+        directories,
+        settle: async ({ worker }) => {
+          settlements.push(`direct-tree:${worker.status}`)
+          if (input.failSettlement === true) throw new Error('fixture settlement failure')
+          return worker.status === 'Succeeded' ? publishedState(intent) : partialState(intent, worker.failureCount)
+        },
+        pause: async (_request, signal) => {
+          pauseSignals.push(signal)
+          return pause(intent)
+        },
+      }
+      return execution
+    },
+    openDirectAtomic: async (intent) => {
+      routes.push('direct-atomic')
+      const execution: DirectAtomicExecution = {
+        planKind: 'direct-atomic',
+        output,
+        ...(intent.artifact.kind === 'zip-archive'
+          ? { directories: await directoryOutput(intent, input.failDirectoryFinalizePath) }
+          : {}),
+        settle: async ({ worker }) => {
+          settlements.push(`direct-atomic:${worker.status}`)
+          if (input.failSettlement === true) throw new Error('fixture settlement failure')
+          return publishedState(intent)
+        },
+        pause: async (_request, signal) => {
+          pauseSignals.push(signal)
+          return pause(intent)
+        },
+      }
+      return execution
+    },
+    openWorkspaceOriginal: async (intent, evidence) => {
+      routes.push('workspace-then-publish')
+      singleFileAdmissions.push(evidence)
+      input.onWorkspaceOriginalAdmission?.(evidence)
+      if (input.rejectPreparation === true) {
+        return Object.freeze({ kind: 'rejected', state: discardedState(intent) })
+      }
+      return Object.freeze({ kind: 'accepted', execution: workspaceExecution(intent) })
+    },
+    prepareWorkspaceZip: async (intent, evidence) => {
+      routes.push('workspace-then-publish')
+      preparations.push(evidence)
+      if (input.rejectPreparation === true) {
+        return Object.freeze({ kind: 'rejected', state: discardedState(intent) })
+      }
+      const execution = workspaceExecution(intent)
+      return Object.freeze({ kind: 'accepted', execution })
+    },
+    preparePortable: async (intent, evidence) => {
+      routes.push('portable-handoff')
+      preparations.push(evidence)
+      if (input.rejectPreparation === true) {
+        return Object.freeze({ kind: 'rejected', state: discardedState(intent) })
+      }
+      const execution: PortableExecution = {
+        planKind: 'portable-handoff',
+        output,
+        settle: async ({ worker }) => {
+          settlements.push(`portable-handoff:${worker.status}`)
+          if (input.failSettlement === true) throw new Error('fixture settlement failure')
+          return downloadStartedState(intent)
+        },
+        pause: async (_request, signal) => {
+          pauseSignals.push(signal)
+          return pause(intent)
+        },
+      }
+      return Object.freeze({ kind: 'accepted', execution })
+    },
+    abortUnopened: async (intent, reason) => {
+      aborts.push(reason)
+      return discardedState(intent)
+    },
+    recordSettlementUnknown: async (intent) => {
+      unknownSettlements.push(intent.plan.kind)
+      return needsAttentionState(intent)
+    },
+  }
+  return Object.assign(authority, {
+    routes,
+    preparations,
+    singleFileAdmissions,
+    settlements,
+    pauses,
+    aborts,
+    unknownSettlements,
+    pauseSignals,
+    output,
+  })
+}
+
+async function directoryOutput(
+  intent: ReceiveIntent,
+  failFinalizePath?: string,
+): Promise<IncrementalDirectoryOutput> {
+  const scope = await createDirectoryAdmissionScope(intent)
+  const ledger = new DirectoryAdmissionLedger(scope)
+  const port: IncrementalDirectoryOutput = {
+    admitDirectory: (request, signal) =>
+      ledger.admitDirectory(request.source, signal),
+    finalizeDirectory: async (admission, signal) => {
+      const settled = await ledger.finalizeDirectory(admission, signal)
+      return admission.path.join('/') === failFinalizePath
+        ? isolatedDirectorySettlement(
+            admission,
+            outputFault(FaultScope.DirectoryLocal, OutputFaultCode.DirectoryMetadata),
+          )
+        : settled
+    },
+  }
+  return Object.freeze(port)
+}
+
+export function transferJobFixture(input: {
+  readonly catalog: V2CatalogClient
+  readonly selection: V2FrozenSelectionPolicy | V2SelectionPolicy
+  readonly intent: ReceiveIntent
+  readonly plans: V2PlanExecutionAuthority
+  readonly revisions: V2RevisionReader
+  readonly broker: V2BlockRangeReader
+  readonly onTrace?: ConstructorParameters<typeof TransferJob>[0]['onTrace']
+  readonly maximumConcurrentFiles?: number
+  readonly outputSettlementTimeoutMilliseconds?: number
+}): TransferJob {
+  return new TransferJob({
+    descriptor: {
+      shareInstance: identity(1),
+      syntheticRoot: identity(2),
+      syntheticRootId: identityText(2),
+      chunkSize: 2,
+    } as never,
+    catalog: input.catalog,
+    selection: input.selection,
+    revisions: input.revisions,
+    broker: input.broker,
+    lanes: { size: 1 },
+    plans: input.plans,
+    intent: input.intent,
+    ...(input.onTrace === undefined ? {} : { onTrace: input.onTrace }),
+    ...(input.maximumConcurrentFiles === undefined
+      ? {}
+      : { maximumConcurrentFiles: input.maximumConcurrentFiles }),
+    ...(input.outputSettlementTimeoutMilliseconds === undefined
+      ? {}
+      : { outputSettlementTimeoutMilliseconds: input.outputSettlementTimeoutMilliseconds }),
+  })
+}
+
+function publishedState(intent: ReceiveIntent): ReceiveLifecycleState {
+  return Object.freeze({
+    ...stateIdentity(intent),
+    kind: 'published',
+    receiptDigest: digestIdentity(71),
+    cleanupState: 'clean',
+  })
+}
+
+function partialState(intent: ReceiveIntent, failures: number): ReceiveLifecycleState {
+  return Object.freeze({
+    ...stateIdentity(intent),
+    kind: 'partial-directory',
+    reason: 'failures',
+    successCount: 0n,
+    failureCount: BigInt(failures),
+    receiptDigest: digestIdentity(72),
+  })
+}
+
+function restartState(
+  intent: ReceiveIntent,
+  reason: Extract<ReceiveLifecycleState, { kind: 'restart-required' }>['reason'],
+): ReceiveLifecycleState {
+  return Object.freeze({
+    ...stateIdentity(intent),
+    kind: 'restart-required',
+    reason,
+    receiptDigest: digestIdentity(73),
+  })
+}
+
+function materializationSealedState(intent: ReceiveIntent): ReceiveLifecycleState {
+  return Object.freeze({
+    ...stateIdentity(intent),
+    kind: 'materialization-sealed',
+    sealedMaterializationDigest: digestIdentity(74),
+  })
+}
+
+function discardedState(intent: ReceiveIntent): ReceiveLifecycleState {
+  return Object.freeze({
+    ...stateIdentity(intent),
+    kind: 'discarded',
+    cleanupReceiptDigest: digestIdentity(78),
+  })
+}
+
+function downloadStartedState(intent: ReceiveIntent): ReceiveLifecycleState {
+  return Object.freeze({
+    ...stateIdentity(intent),
+    kind: 'download-started',
+    attemptKind: 'portable',
+    attemptId: identityText(75),
+  })
+}
+
+function needsAttentionState(intent: ReceiveIntent): Extract<ReceiveLifecycleState, { kind: 'needs-attention' }> {
+  return Object.freeze({
+    ...stateIdentity(intent),
+    kind: 'needs-attention',
+    reason: 'target-ownership-unknown',
+    lastVerifiedRecordDigest: digestIdentity(76),
+  })
+}
+
+function pauseState(intent: ReceiveIntent): ReceiveLifecycleState {
+  switch (intent.plan.kind) {
+    case 'direct-tree': return partialState(intent, 1)
+    case 'workspace-then-publish':
+      return Object.freeze({
+        ...stateIdentity(intent),
+        kind: 'resumable-receive',
+        checkpointSetDigest: digestIdentity(77),
+        completedFileCount: 0n,
+        completedBytes: 0n,
+        expiresAt: 1000,
+      })
+    case 'direct-atomic': return restartState(intent, 'direct-atomic-rolled-back')
+    case 'portable-handoff': return restartState(intent, 'portable-aborted')
+  }
+}
+
+function stateIdentity(intent: ReceiveIntent) {
+  return Object.freeze({
+    operationId: intent.operationId,
+    receiveIntentDigest: intent.digest,
+    generation: 2n,
+  })
+}
+
+function compareUtf8(left: string, right: string): number {
+  const encoder = new TextEncoder()
+  const leftBytes = encoder.encode(left)
+  const rightBytes = encoder.encode(right)
+  const shared = Math.min(leftBytes.byteLength, rightBytes.byteLength)
+  for (let index = 0; index < shared; index += 1) {
+    const difference = leftBytes[index]! - rightBytes[index]!
+    if (difference !== 0) return difference
+  }
+  return leftBytes.byteLength - rightBytes.byteLength
 }

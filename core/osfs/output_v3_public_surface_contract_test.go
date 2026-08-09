@@ -17,7 +17,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 )
 
-var _ transfer.OutputAuthority = (*FilesystemOutputAuthority)(nil)
+var _ transfer.DirectTreeMaterializer = (*FilesystemOutputAuthority)(nil)
 
 func TestFilesystemOutputAuthorityExportsOnlyIntentionalSurface(t *testing.T) {
 	authorityType := reflect.TypeFor[*FilesystemOutputAuthority]()
@@ -25,15 +25,21 @@ func TestFilesystemOutputAuthorityExportsOnlyIntentionalSurface(t *testing.T) {
 	for method := range authorityType.Methods() {
 		methods = append(methods, method.Name)
 	}
-	if want := []string{"OpenOutput"}; !slices.Equal(methods, want) {
+	if want := []string{"OpenDirectTree", "ReserveDirectTree"}; !slices.Equal(methods, want) {
 		t.Fatalf("public filesystem output-authority methods = %v, want %v", methods, want)
 	}
 
-	method, found := authorityType.MethodByName("OpenOutput")
+	method, found := authorityType.MethodByName("OpenDirectTree")
 	if !found || method.Type.NumOut() != 2 ||
-		method.Type.Out(0) != reflect.TypeFor[transfer.OutputSession]() ||
+		method.Type.Out(0) != reflect.TypeFor[transfer.DirectTreeSession]() ||
 		method.Type.Out(1) != reflect.TypeFor[error]() {
-		t.Fatalf("OpenOutput signature = %v", method.Type)
+		t.Fatalf("OpenDirectTree signature = %v", method.Type)
+	}
+	reservation, found := authorityType.MethodByName("ReserveDirectTree")
+	if !found || reservation.Type.NumOut() != 2 ||
+		reservation.Type.Out(0) != reflect.TypeFor[NativeDirectTreeReservation]() ||
+		reservation.Type.Out(1) != reflect.TypeFor[error]() {
+		t.Fatalf("ReserveDirectTree signature = %v", reservation.Type)
 	}
 }
 

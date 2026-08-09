@@ -10,6 +10,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestRecordConstructorOwnsIdentityRangesAndLifecycleClaims(t *testing.T) {
@@ -18,12 +19,14 @@ func TestRecordConstructorOwnsIdentityRangesAndLifecycleClaims(t *testing.T) {
 	if !record.Valid() || record.SchemaVersion() != SchemaVersion ||
 		record.OwnershipMarker() != OwnershipMarker || record.Namespace() != NamespaceName ||
 		record.CanonicalPath() != spec.CanonicalPath || record.ExactSize() != spec.ExactSize ||
-		record.BackendID() != transfer.OutputBackendID(spec.BackendID) ||
+		record.OperationID() != spec.OperationID || record.ReceiveIntentDigest() != spec.ReceiveIntentDigest ||
+		record.MaterializationBindingDigest() != spec.MaterializationBindingDigest ||
+		record.MaterializerKind() != spec.MaterializerKind ||
 		record.StateGeneration() != spec.StateGeneration ||
 		record.CheckpointGeneration() != spec.CheckpointGeneration ||
 		record.Phase() != spec.Phase || record.CommitState() != spec.CommitState ||
-		record.RecordID().IsZero() || record.RootIdentity().IsZero() ||
-		record.OwnedOutputObject().IsZero() || record.Checksum().IsZero() {
+		record.RecordID().IsZero() || record.AuthorityRef().IsZero() ||
+		record.OwnedObjectID().IsZero() || record.Checksum().IsZero() {
 		t.Fatal("record accessors changed the canonical state")
 	}
 	ranges := record.VerifiedRanges()
@@ -33,20 +36,22 @@ func TestRecordConstructorOwnsIdentityRangesAndLifecycleClaims(t *testing.T) {
 	}
 
 	for name, mutate := range map[string]func(*RecordSpec){
-		"marker":      func(value *RecordSpec) { value.OwnershipMarker = "foreign" },
-		"namespace":   func(value *RecordSpec) { value.Namespace = "foreign" },
-		"intent":      func(value *RecordSpec) { value.TransferIntentDigest = transfer.TransferIntentDigest{} },
-		"file":        func(value *RecordSpec) { value.FileID = catalog.FileID{} },
-		"revision":    func(value *RecordSpec) { value.FileRevision = content.FileRevision{} },
-		"path":        func(value *RecordSpec) { value.CanonicalPath = "folder/../file.bin" },
-		"size":        func(value *RecordSpec) { value.ExactSize = catalog.MaxFileSize + 1 },
-		"backend":     func(value *RecordSpec) { value.BackendID = "" },
-		"root":        func(value *RecordSpec) { value.RootIdentity = []byte{1} },
-		"object":      func(value *RecordSpec) { value.OwnedOutputObject = []byte{1} },
-		"state":       func(value *RecordSpec) { value.StateGeneration = 0 },
-		"phase":       func(value *RecordSpec) { value.Phase = Phase(99) },
-		"commit":      func(value *RecordSpec) { value.CommitState = CommitState(99) },
-		"range-order": func(value *RecordSpec) { value.VerifiedRanges = []Range{{Offset: 16, End: 32}, {Offset: 8, End: 12}} },
+		"marker":       func(value *RecordSpec) { value.OwnershipMarker = "foreign" },
+		"namespace":    func(value *RecordSpec) { value.Namespace = "foreign" },
+		"operation":    func(value *RecordSpec) { value.OperationID = receivecontract.OperationID{} },
+		"intent":       func(value *RecordSpec) { value.ReceiveIntentDigest = transfer.ReceiveIntentDigest{} },
+		"binding":      func(value *RecordSpec) { value.MaterializationBindingDigest = receivecontract.BindingDigest{} },
+		"file":         func(value *RecordSpec) { value.FileID = catalog.FileID{} },
+		"revision":     func(value *RecordSpec) { value.FileRevision = content.FileRevision{} },
+		"path":         func(value *RecordSpec) { value.CanonicalPath = "folder/../file.bin" },
+		"size":         func(value *RecordSpec) { value.ExactSize = catalog.MaxFileSize + 1 },
+		"materializer": func(value *RecordSpec) { value.MaterializerKind = 0 },
+		"authority":    func(value *RecordSpec) { value.AuthorityRef = []byte{1} },
+		"object":       func(value *RecordSpec) { value.OwnedObjectID = []byte{1} },
+		"state":        func(value *RecordSpec) { value.StateGeneration = 0 },
+		"phase":        func(value *RecordSpec) { value.Phase = Phase(99) },
+		"commit":       func(value *RecordSpec) { value.CommitState = CommitState(99) },
+		"range-order":  func(value *RecordSpec) { value.VerifiedRanges = []Range{{Offset: 16, End: 32}, {Offset: 8, End: 12}} },
 		"range-adjacent": func(value *RecordSpec) {
 			value.VerifiedRanges = []Range{{Offset: 0, End: 16}, {Offset: 16, End: 32}}
 		},
@@ -85,7 +90,6 @@ func TestRecordConstructorOwnsIdentityRangesAndLifecycleClaims(t *testing.T) {
 
 	for name, parse := range map[string]func([]byte) error{
 		"record": func(raw []byte) error { _, err := RecordIDFromBytes(raw); return err },
-		"root":   func(raw []byte) error { _, err := RootIdentityFromBytes(raw); return err },
 		"object": func(raw []byte) error { _, err := ObjectIDFromBytes(raw); return err },
 		"sum":    func(raw []byte) error { _, err := ChecksumFromBytes(raw); return err },
 	} {
@@ -224,19 +228,19 @@ func TestRecordCodecRejectsEveryUnauthenticatedCut(t *testing.T) {
 		value []byte
 		want  error
 	}{
-		"empty":     {value: nil, want: ErrInvalidRecord},
-		"bad-magic": {value: append([]byte{0}, encoded[1:]...), want: ErrInvalidRecord},
-		"truncated": {value: encoded[:len(recordMagic)+4], want: ErrInvalidRecord},
-		"bad-checksum": {value: func() []byte {
+		"empty":     {nil, ErrInvalidRecord},
+		"bad-magic": {append([]byte{0}, encoded[1:]...), ErrInvalidRecord},
+		"truncated": {encoded[:len(recordMagic)+4], ErrInvalidRecord},
+		"bad-checksum": {func() []byte {
 			value := append([]byte(nil), encoded...)
 			value[len(value)-1] ^= 1
 			return value
-		}(), want: ErrRecordChecksum},
-		"bad-length": {value: func() []byte {
+		}(), ErrRecordChecksum},
+		"bad-length": {func() []byte {
 			value := append([]byte(nil), encoded...)
 			value[len(recordMagic)+3] ^= 1
 			return value
-		}(), want: ErrInvalidRecord},
+		}(), ErrInvalidRecord},
 	}
 	for name, test := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -248,13 +252,13 @@ func TestRecordCodecRejectsEveryUnauthenticatedCut(t *testing.T) {
 
 	payload := record.CanonicalBytes()
 	badDomain := append([]byte(nil), payload...)
-	badDomain[4] ^= 1
+	badDomain[0] ^= 1
 	if _, err := DecodeRecord(recordEnvelope(badDomain)); !errors.Is(err, ErrRecordNonCanonical) {
 		t.Fatalf("domain error = %v", err)
 	}
 	badVersion := append([]byte(nil), payload...)
-	badVersion[4+len(recordDomain)] = 99
-	if _, err := DecodeRecord(recordEnvelope(badVersion)); !errors.Is(err, ErrInvalidRecord) {
+	badVersion[len(recordDomain)+1] = 99
+	if _, err := DecodeRecord(recordEnvelope(badVersion)); !errors.Is(err, ErrRecordNonCanonical) {
 		t.Fatalf("version error = %v", err)
 	}
 	trailing := append(append([]byte(nil), payload...), 0)
@@ -262,50 +266,29 @@ func TestRecordCodecRejectsEveryUnauthenticatedCut(t *testing.T) {
 		t.Fatalf("trailing payload error = %v", err)
 	}
 
-	identityOffset := 4 + len(recordDomain) + 1 +
-		4 + len(OwnershipMarker) + 4 + len(NamespaceName)
-	for name, offset := range map[string]int{
-		"record":   identityOffset,
-		"intent":   identityOffset + sha256.Size,
-		"file":     identityOffset + 2*sha256.Size,
-		"revision": identityOffset + 2*sha256.Size + catalog.IdentityBytes,
-	} {
-		t.Run(name, func(t *testing.T) {
-			invalid := append([]byte(nil), payload...)
-			width := sha256.Size
-			if name == "file" || name == "revision" {
-				width = catalog.IdentityBytes
-			}
-			clear(invalid[offset : offset+width])
-			if _, err := DecodeRecord(recordEnvelope(invalid)); !errors.Is(err, ErrRecordBinding) {
-				t.Fatalf("identity error = %v", err)
-			}
-		})
-	}
-
 	cursor := recordCursor{}
 	if _, err := cursor.take(-1); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("negative take = %v", err)
 	}
-	if _, err := cursor.byte(); !errors.Is(err, ErrInvalidRecord) {
+	if _, err := cursor.framedByte(); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("empty byte = %v", err)
 	}
-	if _, err := cursor.u32(); !errors.Is(err, ErrInvalidRecord) {
-		t.Fatalf("empty u32 = %v", err)
-	}
-	if _, err := cursor.u64(); !errors.Is(err, ErrInvalidRecord) {
+	if _, err := cursor.rawU64(); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("empty u64 = %v", err)
 	}
-	oversized := recordCursor{bytes: []byte{0, 0, 1, 0}}
-	if _, err := oversized.string(1); !errors.Is(err, ErrInvalidRecord) {
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], 2)
+	oversized := recordCursor{bytes: append(length[:], 'a', 'b')}
+	if _, err := oversized.text(1); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("oversized string = %v", err)
 	}
-	invalidUTF8 := recordCursor{bytes: []byte{0, 0, 0, 1, 0xff}}
-	if _, err := invalidUTF8.string(1); !errors.Is(err, ErrInvalidRecord) {
+	binary.BigEndian.PutUint64(length[:], 1)
+	invalidUTF8 := recordCursor{bytes: append(length[:], 0xff)}
+	if _, err := invalidUTF8.text(1); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("invalid UTF-8 = %v", err)
 	}
-	rangeCount := make([]byte, 4)
-	binary.BigEndian.PutUint32(rangeCount, maximumRanges+1)
+	rangeCount := make([]byte, 8)
+	binary.BigEndian.PutUint64(rangeCount, maximumRanges+1)
 	if _, err := decodeRecordRanges(&recordCursor{bytes: rangeCount}); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("range count error = %v", err)
 	}
@@ -371,7 +354,7 @@ func TestRecordReducersOwnTransitionsSelectionAndCrashCuts(t *testing.T) {
 	}
 
 	foreignSpec := candidateSpec
-	foreignSpec.RootIdentity = bytes.Repeat([]byte{0x72}, sha256.Size)
+	foreignSpec.AuthorityRef = bytes.Repeat([]byte{0x72}, sha256.Size)
 	foreignSpec.CommitState = CommitVerified
 	foreign := mustCanonicalRecord(t, foreignSpec)
 	if IdentityEqual(candidate, foreign) || !errors.Is(ValidateTransition(candidate, foreign), ErrRecordBinding) {
@@ -388,6 +371,22 @@ func TestRecordReducersOwnTransitionsSelectionAndCrashCuts(t *testing.T) {
 	regressed := mustCanonicalRecord(t, regressedSpec)
 	if !errors.Is(ValidateTransition(verified, regressed), ErrRecordGeneration) {
 		t.Fatal("verified ranges regressed")
+	}
+	committedGenerationSpec := candidateSpec
+	committedGenerationSpec.StateGeneration = verified.StateGeneration() + 1
+	committedGenerationSpec.CheckpointGeneration = verified.CheckpointGeneration() + 1
+	committedGenerationSpec.CommitState = CommitVerified
+	committedGenerationSpec.VerifiedRanges = []Range{{Offset: 0, End: 16}, {Offset: 24, End: 64}}
+	committedGeneration := mustCanonicalRecord(t, committedGenerationSpec)
+	if !errors.Is(ValidateTransition(verified, committedGeneration), ErrRecordGeneration) {
+		t.Fatal("new checkpoint generation bypassed the candidate cut")
+	}
+	phaseChangingCandidateSpec := committedGenerationSpec
+	phaseChangingCandidateSpec.CommitState = CommitCandidate
+	phaseChangingCandidateSpec.Phase = PhasePaused
+	phaseChangingCandidate := mustCanonicalRecord(t, phaseChangingCandidateSpec)
+	if !errors.Is(ValidateTransition(verified, phaseChangingCandidate), ErrRecordGeneration) {
+		t.Fatal("new checkpoint generation changed lifecycle phase")
 	}
 
 	selected, err := SelectVerified(candidate, verified, nextCandidate, nextVerified)
@@ -484,24 +483,28 @@ func canonicalRecordSpec(t *testing.T) RecordSpec {
 		fileID[index] = byte(index + 1)
 		revision[index] = byte(index + 2)
 	}
-	intent, err := transfer.TransferIntentDigestFromBytes(bytes.Repeat([]byte{0x31}, sha256.Size))
+	operation, err := receivecontract.OperationIDFromBytes(bytes.Repeat([]byte{0x21}, receivecontract.StableIdentityBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := transfer.ReceiveIntentDigestFromBytes(bytes.Repeat([]byte{0x31}, sha256.Size))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := receivecontract.BindingDigestFromBytes(bytes.Repeat([]byte{0x39}, sha256.Size))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return RecordSpec{
-		TransferIntentDigest: intent,
-		FileID:               fileID,
-		FileRevision:         revision,
-		CanonicalPath:        "folder/file.bin",
-		ExactSize:            64,
-		BackendID:            "checkpointmodel-test",
-		RootIdentity:         bytes.Repeat([]byte{0x41}, sha256.Size),
-		OwnedOutputObject:    bytes.Repeat([]byte{0x51}, sha256.Size),
-		StateGeneration:      1,
-		CheckpointGeneration: 1,
-		VerifiedRanges:       []Range{{Offset: 0, End: 16}, {Offset: 32, End: 64}},
-		Phase:                PhaseActive,
-		CommitState:          CommitCandidate,
+		OperationID: operation, ReceiveIntentDigest: intent,
+		MaterializationBindingDigest: binding,
+		FileID:                       fileID, FileRevision: revision, CanonicalPath: "folder/file.bin",
+		ExactSize: 64, MaterializerKind: MaterializerNativeTree,
+		AuthorityRef:    bytes.Repeat([]byte{0x41}, sha256.Size),
+		OwnedObjectID:   bytes.Repeat([]byte{0x51}, sha256.Size),
+		StateGeneration: 1, CheckpointGeneration: 1,
+		VerifiedRanges: []Range{{Offset: 0, End: 16}, {Offset: 32, End: 64}},
+		Phase:          PhaseActive, CommitState: CommitCandidate,
 	}
 }
 
@@ -523,8 +526,8 @@ func recordEnvelope(payload []byte) []byte {
 	encoded = append(encoded, payload...)
 	hash := sha256.New()
 	_, _ = hash.Write([]byte(recordChecksumDomain))
-	_, _ = hash.Write([]byte{0})
-	_, _ = hash.Write(payload)
+	_, _ = hash.Write([]byte{0, SchemaVersion})
+	writeRecordFrame(hash, payload)
 	return append(encoded, hash.Sum(nil)...)
 }
 

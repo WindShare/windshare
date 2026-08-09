@@ -10,7 +10,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 )
 
-func ValidateDirectory(intent transfer.TransferIntent, directory transfer.OutputDirectory) error {
+func ValidateDirectory(intent transfer.ReceiveIntent, directory transfer.MaterializationDirectory) error {
 	if directory.DirectoryID.IsZero() || directory.Generation.IsZero() {
 		return transfer.ErrInvalidDirectoryAdmission
 	}
@@ -27,7 +27,7 @@ func ValidateDirectory(intent transfer.TransferIntent, directory transfer.Output
 	return nil
 }
 
-func SameDirectory(left, right transfer.OutputDirectory) bool {
+func SameDirectory(left, right transfer.MaterializationDirectory) bool {
 	return left.DirectoryID == right.DirectoryID && left.Generation == right.Generation &&
 		left.ParentAdmission.Equal(right.ParentAdmission) && left.Path == right.Path &&
 		left.ModifiedTime == right.ModifiedTime

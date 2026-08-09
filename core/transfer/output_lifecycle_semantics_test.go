@@ -14,25 +14,25 @@ func TestOutputSettlementSumTypesRejectMalformedStates(t *testing.T) {
 	if _, err := NewVerifiedFileSettlement(FilePublished, VerifiedDurableRanges{}); !errors.Is(err, ErrInvalidOutputSettlement) {
 		t.Fatalf("published settlement without a binding error = %v", err)
 	}
-	if _, err := NewOutputStateRef(OutputSessionID{}, binding.Locator().Digest()); !errors.Is(err, ErrInvalidOutputSettlement) {
+	if _, err := NewMaterializationStateRef(OutputSessionID{}, binding.Locator().Digest()); !errors.Is(err, ErrInvalidOutputSettlement) {
 		t.Fatalf("state reference without a session error = %v", err)
 	}
-	if _, err := NewOutputStateRef(binding.OutputSessionID(), OutputLocatorDigest{}); !errors.Is(err, ErrInvalidOutputSettlement) {
+	if _, err := NewMaterializationStateRef(binding.OutputSessionID(), MaterializationLocatorDigest{}); !errors.Is(err, ErrInvalidOutputSettlement) {
 		t.Fatalf("state reference without a locator error = %v", err)
 	}
 
-	reference, err := NewOutputStateRef(binding.OutputSessionID(), binding.Locator().Digest())
+	reference, err := NewMaterializationStateRef(binding.OutputSessionID(), binding.Locator().Digest())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := NewImmediateQuarantinedFileSettlement(
-		OutputFileTarget{}, reference, QuarantineOwnershipMismatch,
+		FileMaterializationTarget{}, reference, QuarantineOwnershipMismatch,
 	); !errors.Is(err, ErrInvalidOutputSettlement) {
 		t.Fatalf("unbound immediate quarantine error = %v", err)
 	}
-	var foreignLocator OutputLocatorDigest
+	var foreignLocator MaterializationLocatorDigest
 	foreignLocator[0] = 99
-	foreignReference, err := NewOutputStateRef(binding.OutputSessionID(), foreignLocator)
+	foreignReference, err := NewMaterializationStateRef(binding.OutputSessionID(), foreignLocator)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,40 +74,35 @@ func TestOutputLifecycleReasonsAndAuthorityFunctionAreClosedDomains(t *testing.T
 	if JobPauseReason(0).valid() || !JobPauseInterrupted.valid() || (JobPauseDependencyContract + 1).valid() {
 		t.Fatal("job pause reason admitted a value outside its closed domain")
 	}
-	if _, err := NewJobSettlement(JobSettlementKind(0)); !errors.Is(err, ErrInvalidOutputSettlement) {
+	if _, err := NewDirectTreeSettlement(DirectTreeSettlementKind(0)); !errors.Is(err, ErrInvalidOutputSettlement) {
 		t.Fatalf("unknown job settlement error = %v", err)
 	}
 
-	var nilAuthority OutputAuthorityFunc
-	if _, err := nilAuthority.OpenOutput(context.Background(), TransferIntent{}); !errors.Is(err, ErrInvalidOutputBinding) {
+	var nilAuthority DirectTreeMaterializerFunc
+	if _, err := nilAuthority.OpenDirectTree(context.Background(), ReceiveIntent{}); !errors.Is(err, ErrInvalidOutputBinding) {
 		t.Fatalf("nil output authority error = %v", err)
 	}
 	want := errors.New("authority invoked")
 	called := false
-	authority := OutputAuthorityFunc(func(context.Context, TransferIntent) (OutputSession, error) {
+	authority := DirectTreeMaterializerFunc(func(context.Context, ReceiveIntent) (DirectTreeSession, error) {
 		called = true
 		return nil, want
 	})
-	if _, err := authority.OpenOutput(context.Background(), TransferIntent{}); !called || !errors.Is(err, want) {
+	if _, err := authority.OpenDirectTree(context.Background(), ReceiveIntent{}); !called || !errors.Is(err, want) {
 		t.Fatalf("authority call = (%v, %v), want delegated error", called, err)
 	}
 }
 
-func outputLifecycleFixture(t *testing.T) (OutputFileBinding, VerifiedDurableRanges) {
+func outputLifecycleFixture(t *testing.T) (MaterializedFileBinding, VerifiedDurableRanges) {
 	t.Helper()
 	descriptor := transferDescriptor(t, 1)
-	backend, err := NewOutputBackendID("lifecycle/contracts")
+	locator, err := NewPathMaterializationLocator("file.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	locator, err := NewPathOutputLocator("file.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var objectIdentity OutputObjectIdentity
+	var objectIdentity OwnedObjectID
 	objectIdentity[0] = 32
-	binding, err := NewOutputFileBinding(
-		backend,
+	binding, err := NewMaterializedFileBinding(
 		transferID[OutputSessionID](31),
 		descriptor,
 		locator,

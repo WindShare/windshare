@@ -223,8 +223,7 @@ func TestFileClaimRejectsDescriptorFromForeignIntentBeforeFileIO(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreignTarget, err := transfer.NewOutputFileTarget(
-		fixture.intent.BackendID(),
+	foreignTarget, err := transfer.NewFileMaterializationTarget(
 		fixture.sessionID,
 		foreignDescriptor,
 		file.Target.Locator(),

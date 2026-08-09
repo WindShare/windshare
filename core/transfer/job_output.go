@@ -128,7 +128,7 @@ func (r *jobRun) commitTransferredFile(
 		r.traceFileSettlement(plan, settlement, joinLifecycleFailures(settlementErr, releaseErr))
 		// Commit is the transaction's terminal publication operation. Once its
 		// settlement cannot be proven, no sibling or directory finalization may
-		// advance the same job namespace before PauseJob takes ownership.
+		// advance the same job namespace before PauseTree takes ownership.
 		return joinLifecycleFailures(settlementErr, releaseErr)
 	}
 	if !settlement.matchesCommittedOutput(transaction.Binding(), r.output.Capabilities()) || settlement.Kind() != FilePublished &&
@@ -202,15 +202,15 @@ func (r *jobRun) finish(ctx context.Context) JobResult {
 	if sourceDriftFailure == nil && r.terminationCause != nil && r.terminationCause.policy.sourceDrift() {
 		sourceDriftFailure = r.terminationCause
 	}
-	outcome := JobSucceeded
+	outcome := DirectTreeOutcomePublished
 	if len(directories) != 0 || len(files) != 0 || omittedDirectories != 0 || omittedFiles != 0 ||
 		r.selectionResolutionFailure != nil || sourceDriftFailure != nil {
-		outcome = JobCompletedWithErrors
+		outcome = DirectTreeOutcomePartialDirectory
 	}
 	outcome = r.settleJob(ctx, outcome)
 	return JobResult{
 		Outcome: outcome, Settlement: r.settlement,
-		TransferJobID: r.job.jobID, IntentDigest: r.job.intent.Digest(), TransferIntent: r.job.intent,
+		TransferJobID: r.job.jobID, ReceiveIntentDigest: r.job.intent.Digest(), ReceiveIntent: r.job.intent,
 		SelectionObservation: r.selectionObservation,
 		Measure:              r.job.Measure(), Directories: directories, Files: files,
 		OmittedDirectoryFailures: omittedDirectories, OmittedFileFailures: omittedFiles,
@@ -224,21 +224,27 @@ func (r *jobRun) finish(ctx context.Context) JobResult {
 	}
 }
 
-func (r *jobRun) settleJob(ctx context.Context, outcome JobOutcome) JobOutcome {
+func (r *jobRun) settleJob(ctx context.Context, outcome DirectTreeOutcome) DirectTreeOutcome {
 	failed := r.terminationCause != nil || r.settlementFailure != nil
 	if !r.admitted {
 		if failed {
-			return JobPausedOutcome
+			return DirectTreeOutcomeResumable
 		}
 		return outcome
 	}
 	if failed {
 		r.pauseJob(ctx)
-		return JobPausedOutcome
+		if r.settlement.Kind() == DirectTreeSettlementNeedsAttention {
+			return DirectTreeOutcomeNeedsAttention
+		}
+		return DirectTreeOutcomeResumable
 	}
 	r.completeJob(ctx, outcome)
 	if r.settlementFailure != nil {
-		return JobPausedOutcome
+		return DirectTreeOutcomeResumable
+	}
+	if r.settlement.Kind() == DirectTreeSettlementNeedsAttention {
+		return DirectTreeOutcomeNeedsAttention
 	}
 	return outcome
 }
@@ -246,12 +252,12 @@ func (r *jobRun) settleJob(ctx context.Context, outcome JobOutcome) JobOutcome {
 func (r *jobRun) pauseJob(ctx context.Context) {
 	reason := jobPauseReason(r.terminationCause, r.settlementFailure)
 	settleContext, cancel := r.job.newSettlementContext(ctx)
-	settlement, rawSettlementErr := r.output.PauseJob(settleContext, reason)
+	settlement, rawSettlementErr := r.output.PauseTree(settleContext, reason)
 	err := normalizeOutputBoundary(settleContext, rawSettlementErr)
 	cancel()
 	if err == nil {
-		if settlement.Kind() != JobPaused && settlement.Kind() != JobPausedNeedsAttention ||
-			r.needsAttention && settlement.Kind() != JobPausedNeedsAttention {
+		if settlement.Kind() != DirectTreeSettlementResumable && settlement.Kind() != DirectTreeSettlementNeedsAttention ||
+			r.needsAttention && settlement.Kind() != DirectTreeSettlementNeedsAttention {
 			err = outputContractFault(nil)
 		}
 	}
@@ -262,8 +268,7 @@ func (r *jobRun) pauseJob(ctx context.Context) {
 	}
 	r.job.trace(TransferLifecycleTrace{
 		Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(),
-		SelectionObservation: r.selectionObservation,
-		JobSettlement:        settlement.Kind(),
+		DirectTreeSettlement: settlement.Kind(),
 		Fault: fault.Join(
 			closedLifecycleFault(r.terminationCause), closedLifecycleFault(r.settlementFailure),
 		),
@@ -271,14 +276,19 @@ func (r *jobRun) pauseJob(ctx context.Context) {
 	})
 }
 
-func (r *jobRun) completeJob(ctx context.Context, outcome JobOutcome) {
+func (r *jobRun) completeJob(ctx context.Context, outcome DirectTreeOutcome) {
 	settleContext, cancel := r.job.newSettlementContext(ctx)
-	settlement, rawSettlementErr := r.output.CompleteJob(settleContext, outcome)
+	settlement, rawSettlementErr := r.output.FinalizeTree(settleContext, outcome)
 	err := normalizeOutputBoundary(settleContext, rawSettlementErr)
 	cancel()
 	if err == nil {
-		if settlement.Kind() != JobClosed && settlement.Kind() != JobPausedNeedsAttention ||
-			r.needsAttention && settlement.Kind() != JobPausedNeedsAttention {
+		expected := DirectTreeSettlementPublished
+		if outcome == DirectTreeOutcomePartialDirectory {
+			expected = DirectTreeSettlementPartialDirectory
+		}
+		if outcome != DirectTreeOutcomePublished && outcome != DirectTreeOutcomePartialDirectory ||
+			settlement.Kind() != expected && settlement.Kind() != DirectTreeSettlementNeedsAttention ||
+			r.needsAttention && settlement.Kind() != DirectTreeSettlementNeedsAttention {
 			err = outputContractFault(nil)
 		}
 	}
@@ -286,16 +296,14 @@ func (r *jobRun) completeJob(ctx context.Context, outcome JobOutcome) {
 		r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, err)
 		r.job.trace(TransferLifecycleTrace{
 			Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(),
-			SelectionObservation: r.selectionObservation,
-			JobSettlement:        settlement.Kind(), Fault: closedFault(err), Failed: true,
+			DirectTreeSettlement: settlement.Kind(), Fault: closedFault(err), Failed: true,
 		})
 		return
 	}
 	r.settlement = settlement
 	r.job.trace(TransferLifecycleTrace{
 		Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(),
-		SelectionObservation: r.selectionObservation,
-		JobSettlement:        settlement.Kind(),
+		DirectTreeSettlement: settlement.Kind(),
 	})
 }
 
@@ -376,7 +384,7 @@ func (policy lifecyclePolicy) outputFailure() bool {
 	return policy.value.Domain() == fault.DomainOutput || policy.value.Domain() == fault.DomainCheckpoint
 }
 
-func (policy lifecyclePolicy) outputRequiresJobPause(capabilities OutputCapabilities) bool {
+func (policy lifecyclePolicy) outputRequiresJobPause(capabilities DirectTreeCapabilities) bool {
 	if policy.jobTerminal() {
 		return true
 	}
@@ -387,15 +395,14 @@ func (policy lifecyclePolicy) outputRequiresJobPause(capabilities OutputCapabili
 }
 
 func (policy lifecyclePolicy) outputCanContinueAfterFileSettlement(
-	capabilities OutputCapabilities,
+	capabilities DirectTreeCapabilities,
 ) bool {
 	return !policy.canceled && policy.outputFailure() &&
 		policy.value.Scope() == fault.ScopeFileLocal && outputCanIsolateFileFailure(capabilities)
 }
 
-func outputCanIsolateFileFailure(capabilities OutputCapabilities) bool {
-	return capabilities.FileFailureIsolation ||
-		capabilities.Mode == OutputZIPStream && capabilities.ArchiveBoundary == ArchiveFailureAtMemberStart
+func outputCanIsolateFileFailure(capabilities DirectTreeCapabilities) bool {
+	return capabilities.FileFailureIsolation
 }
 
 func (policy lifecyclePolicy) sourceFileLocal() bool {
@@ -440,14 +447,10 @@ func (policy lifecyclePolicy) retireReason() FileRetireReason {
 func (r *jobRun) traceFileSettlement(plan plannedFile, settlement FileSettlement, failure error) {
 	r.job.trace(TransferLifecycleTrace{
 		Stage: TransferFileSettled, OutputSessionID: r.output.SessionID(),
-		SelectionObservation: r.selectionObservation,
-		DirectoryID:          plan.parentDirectory,
-		DirectoryGeneration:  plan.parentGeneration,
-		FileID:               plan.file,
-		FileSelection:        plan.selectionDecision,
-		FileSettlement:       settlement.Kind(),
-		Fault:                closedFault(failure),
-		Failed:               failure != nil,
+		FileSelection:  plan.selectionDecision,
+		FileSettlement: settlement.Kind(),
+		Fault:          closedFault(failure),
+		Failed:         failure != nil,
 	})
 }
 

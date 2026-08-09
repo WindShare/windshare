@@ -1,70 +1,48 @@
 import { ByteRangeSet, type ByteRange } from '../content/geometry'
 import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
+import type { AuthenticatedGenerationReference } from '../output/workspace/manifest'
+import type { PreparationManifestEntry } from '../output/workspace/preparation'
+import type { ReceiveLifecycleState } from '../output/workspace/state'
 import {
   FaultScope,
   isFault,
   type Fault,
 } from './fault'
-import type { JobOutcome } from './outcome'
-import type { TransferIntent, TransferIntentDraft } from './intent'
 import {
-  MAXIMUM_OUTPUT_PATH_BYTES,
-  OUTPUT_CATALOG_IDENTITY_BYTES,
+  MAX_MATERIALIZATION_PATH_BYTES,
+  snapshotCanonicalModifiedTime,
   snapshotDirectoryAdmission,
-  snapshotOutputModifiedTimeFields,
-  snapshotOutputPath,
+  snapshotMaterializationDirectory,
+  snapshotMaterializationPath,
+  type CanonicalModifiedTime,
   type DirectoryAdmission,
   type DirectorySettlement,
-  type OutputDirectoryAdmission,
-  type OutputModifiedTime,
+  type MaterializationDirectory,
 } from './directory-admission'
-
-export {
-  DIRECTORY_ADMISSION_SCHEMA_VERSION,
-  DIRECTORY_ADMISSION_SECRET_BYTES,
-  DIRECTORY_ADMISSION_TOKEN_BYTES,
-  DirectoryAdmissionBindingError,
-  DirectorySettlementKind,
-  MAXIMUM_OUTPUT_PATH_BYTES,
-  MAXIMUM_OUTPUT_PATH_SEGMENTS,
-  MAXIMUM_OUTPUT_SEGMENT_BYTES,
-  canonicalDirectoryAdmissionMessageV1,
-  createDirectoryAdmission,
-  createDirectoryAdmissionSecret,
-  deriveDirectoryAdmissionToken,
-  directoryAdmissionScope,
-  finalizedDirectorySettlement,
-  isImmediateChildPath,
-  isolatedDirectorySettlement,
-  sameDirectoryAdmission,
-  sameDirectoryAdmissionToken,
-  sameModifiedTime,
-  sameOutputPath,
-  snapshotDirectoryAdmission,
-  snapshotDirectoryAdmissionScope,
-  snapshotOutputDirectory,
-  snapshotOutputDirectoryAdmission,
-  snapshotOutputPath,
-  validateDirectoryAdmissionBinding,
-  validateDirectorySettlement,
-  verifyDirectoryAdmissionToken,
-} from './directory-admission'
-export type {
-  DirectoryAdmission,
-  DirectoryAdmissionScope,
-  DirectorySettlement,
-  OutputDirectory,
-  OutputDirectoryAdmission,
-  OutputModifiedTime,
-} from './directory-admission'
+import type {
+  DirectAtomicPlan,
+  DirectTreePlan,
+  MaterializationPlan,
+  OriginalFileArtifact,
+  PortableHandoffPlan,
+  ReceiveIntent,
+  WorkspaceThenPublishPlan,
+  ZipArchiveArtifact,
+} from './intent'
+import type {
+  CompletedTransferWorkerSettlement,
+  SuccessfulTransferWorkerSettlement,
+  TransferWorkerSettlement,
+} from './outcome'
 
 export type DurabilityLevel = 'None' | 'ProcessRestart' | 'PowerLoss'
 export type FileRetirementDisposition = 'FileIsolated' | 'JobOutputCompromised'
 
 export const MAXIMUM_OPEN_OUTPUT_FILES = 32
 export const MAXIMUM_OUTPUT_IDENTITY_BYTES = 128
-export const MAXIMUM_OWNED_FILE_IDENTITY_BYTES = MAXIMUM_OUTPUT_PATH_BYTES + 256
+export const MAXIMUM_OWNED_FILE_IDENTITY_BYTES = MAX_MATERIALIZATION_PATH_BYTES + 256
 export const MAXIMUM_VERIFIED_DURABLE_RANGES = 16_384
+const OUTPUT_CATALOG_IDENTITY_BYTES = 16
 
 export interface OutputCapabilities {
   readonly durability: DurabilityLevel
@@ -73,10 +51,17 @@ export interface OutputCapabilities {
   readonly modificationTime: boolean
 }
 
-export interface OutputSourceIdentity {
+export interface OutputCatalogFileIdentity {
   readonly shareInstance: string
   readonly fileId: string
+}
+
+export interface OutputSourceIdentity extends OutputCatalogFileIdentity {
   readonly fileRevision: string
+}
+
+export interface OpenedOutputRevision extends OutputSourceIdentity {
+  readonly exactSize: bigint
 }
 
 export interface OutputSessionIdentity {
@@ -90,16 +75,28 @@ export interface OutputFileOwnership extends OutputSessionIdentity {
   readonly ownedFileIdentity: string
 }
 
+/**
+ * The adapter must invoke openRevision and await it before creating or opening an
+ * output object. This callback boundary keeps failed preparation/revision opens
+ * from leaving placeholders in a destination namespace.
+ */
+export interface OutputFileRequest {
+  readonly source: OutputCatalogFileIdentity
+  readonly sourcePath: readonly string[]
+  readonly artifactPath: readonly string[]
+  readonly expectedSize: bigint
+  readonly parentAdmission?: DirectoryAdmission
+  readonly modifiedTime?: CanonicalModifiedTime
+  readonly openRevision: (signal: AbortSignal) => Promise<OpenedOutputRevision>
+}
+
 export interface OutputFile {
   readonly source: OutputSourceIdentity
-  readonly path: readonly string[]
+  readonly sourcePath: readonly string[]
+  readonly artifactPath: readonly string[]
   readonly exactSize: bigint
-  /**
-   * Optional in the input shape so the output boundary can reject malformed
-   * callers explicitly. Every production BeginFile call requires this proof.
-   */
   readonly parentAdmission?: DirectoryAdmission
-  readonly modifiedTime?: OutputModifiedTime
+  readonly modifiedTime?: CanonicalModifiedTime
 }
 
 /** Only a backend may return this value after reopening and validating output. */
@@ -119,21 +116,10 @@ export class VerifiedDurableRanges {
     this.#ranges = verifiedDurableRangeSet(fileSize, ranges)
   }
 
-  get fileSize(): bigint {
-    return this.#ranges.fileSize
-  }
-
-  get ranges(): readonly ByteRange[] {
-    return this.#ranges.ranges
-  }
-
-  covers(range: ByteRange): boolean {
-    return this.#ranges.covers(range)
-  }
-
-  asRangeSet(): ByteRangeSet {
-    return new ByteRangeSet(this.fileSize, this.ranges)
-  }
+  get fileSize(): bigint { return this.#ranges.fileSize }
+  get ranges(): readonly ByteRange[] { return this.#ranges.ranges }
+  covers(range: ByteRange): boolean { return this.#ranges.covers(range) }
+  asRangeSet(): ByteRangeSet { return new ByteRangeSet(this.fileSize, this.ranges) }
 }
 
 export interface OutputFileTransaction {
@@ -148,72 +134,173 @@ export interface OutputFileTransaction {
 }
 
 export interface BeginOutputFileResult {
+  readonly revision: OpenedOutputRevision
   readonly transaction: OutputFileTransaction
   readonly durableRanges: VerifiedDurableRanges
 }
 
-export const JobSettlementKind = {
-  Completed: 'Completed',
-  Paused: 'Paused',
-  NeedsAttention: 'NeedsAttention',
-} as const
-
-export type JobSettlement =
-  | Readonly<{ kind: typeof JobSettlementKind.Completed }>
-  | Readonly<{
-      kind: typeof JobSettlementKind.Paused
-      durability: DurabilityLevel
-    }>
-  | Readonly<{
-      kind: typeof JobSettlementKind.NeedsAttention
-      fault: Fault
-    }>
-
-export const COMPLETED_JOB_SETTLEMENT: JobSettlement = Object.freeze({
-  kind: JobSettlementKind.Completed,
-})
-
-export function pausedJobSettlement(durability: DurabilityLevel): JobSettlement {
-  if (durability !== 'None' && durability !== 'ProcessRestart' && durability !== 'PowerLoss') {
-    throw new TypeError('paused job settlement durability is invalid')
-  }
-  return Object.freeze({ kind: JobSettlementKind.Paused, durability })
+/** A materializer owns bytes and checkpoints only; artifact semantics stay in the plan execution. */
+export interface OutputSession {
+  readonly identity: OutputSessionIdentity
+  readonly capabilities: OutputCapabilities
+  beginFile(file: OutputFileRequest, signal: AbortSignal): Promise<BeginOutputFileResult>
 }
 
-export function needsAttentionJobSettlement(fault: Fault): JobSettlement {
-  if (!isFault(fault) ||
-      (fault.scope !== FaultScope.OutputPause && fault.scope !== FaultScope.SessionTerminal)) {
-    throw new TypeError('needs-attention settlement requires a job-scoped fault')
-  }
-  return Object.freeze({ kind: JobSettlementKind.NeedsAttention, fault: Object.freeze({ ...fault }) })
+export interface DirectoryMaterializationRequest {
+  readonly source: MaterializationDirectory
+  readonly artifactPath: readonly string[]
+}
+
+/** Incremental directory authority is legal only for DirectTree and DirectAtomic ZIP. */
+export interface IncrementalDirectoryOutput {
+  admitDirectory(
+    directory: DirectoryMaterializationRequest,
+    signal: AbortSignal,
+  ): Promise<DirectoryAdmission>
+  finalizeDirectory(admission: DirectoryAdmission, signal: AbortSignal): Promise<DirectorySettlement>
+}
+
+export interface MaterializationSummary {
+  readonly entryCount: bigint
+  readonly fileCount: bigint
+  readonly directoryCount: bigint
+  readonly rawBytes: bigint
+}
+
+export interface PlanSettlementRequest<
+  Settlement extends TransferWorkerSettlement = TransferWorkerSettlement,
+> {
+  readonly transferJobId: string
+  readonly worker: Settlement
+  readonly materialization: MaterializationSummary
+}
+
+export interface PlanPauseRequest {
+  readonly worker: TransferWorkerSettlement
+  readonly materialization: MaterializationSummary
+  readonly reason: unknown
+}
+
+interface PlanExecutionBase<Plan extends MaterializationPlan> {
+  readonly planKind: Plan['kind']
+  readonly output: OutputSession
+  pause(request: PlanPauseRequest, signal: AbortSignal): Promise<ReceiveLifecycleState>
+}
+
+export interface DirectTreeExecution extends PlanExecutionBase<DirectTreePlan> {
+  readonly planKind: 'direct-tree'
+  readonly directories: IncrementalDirectoryOutput
+  settle(
+    request: PlanSettlementRequest<CompletedTransferWorkerSettlement>,
+    signal: AbortSignal,
+  ): Promise<ReceiveLifecycleState>
+}
+
+export interface DirectAtomicExecution extends PlanExecutionBase<DirectAtomicPlan> {
+  readonly planKind: 'direct-atomic'
+  /** Present only for the legal progressive ZIP form. */
+  readonly directories?: IncrementalDirectoryOutput
+  settle(
+    request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>,
+    signal: AbortSignal,
+  ): Promise<ReceiveLifecycleState>
+}
+
+export interface WorkspaceExecution extends PlanExecutionBase<WorkspaceThenPublishPlan> {
+  readonly planKind: 'workspace-then-publish'
+  settle(
+    request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>,
+    signal: AbortSignal,
+  ): Promise<ReceiveLifecycleState>
+}
+
+export interface PortableExecution extends PlanExecutionBase<PortableHandoffPlan> {
+  readonly planKind: 'portable-handoff'
+  settle(
+    request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>,
+    signal: AbortSignal,
+  ): Promise<ReceiveLifecycleState>
+}
+
+export type PlanExecution =
+  | DirectTreeExecution
+  | DirectAtomicExecution
+  | WorkspaceExecution
+  | PortableExecution
+
+export interface ExactPreparationEvidence {
+  readonly generations: readonly AuthenticatedGenerationReference[]
+  readonly entries: readonly PreparationManifestEntry[]
+  readonly entryCount: bigint
+  readonly fileCount: bigint
+  readonly directoryCount: bigint
+  readonly selectedRawBytes: bigint
 }
 
 /**
- * Transfer orchestration consumes this narrow interface and cannot infer that a
- * completed write is durable. Backend implementations own validation and journals.
+ * Authenticated catalog authority needed for Workspace OriginalFile admission.
+ * Resolving this one path is not a whole-selection preparation barrier and must
+ * occur before the adapter can allocate output or request the file revision.
  */
-export interface OutputSession {
-  readonly identity: OutputSessionIdentity
-  /** Exact final representation authorized by TransferIntent. */
-  readonly format: TransferIntent['output']['format']
-  readonly capabilities: OutputCapabilities
-  /**
-   * Admit one authenticated, terminal catalog generation. Implementations may
-   * reject the call when the parent token or generation binding is invalid.
-   */
-  admitDirectory(directory: OutputDirectoryAdmission, signal: AbortSignal): Promise<DirectoryAdmission>
-  /** Seals the exact receipt, including synthetic root; settled retries return the cached value. */
-  finalizeDirectory(admission: DirectoryAdmission, signal: AbortSignal): Promise<DirectorySettlement>
-  /** Rejection must leave no unowned partial output because no transaction is returned. */
-  beginFile(file: OutputFile, signal: AbortSignal): Promise<BeginOutputFileResult>
-  /**
-   * The session retains settlement ownership of every returned transaction until
-   * file settlement or job settlement. A terminal transfer fault stops invoking
-   * that transaction; PauseJob must then settle it without a race.
-   */
-  completeJob(outcome: JobOutcome, signal: AbortSignal): Promise<JobSettlement>
-  /** Releases live resources at a stable cut and never acquires deletion authority. */
-  pauseJob(reason: unknown): Promise<JobSettlement>
+export interface ExactSingleFileEvidence {
+  readonly fileId: string
+  readonly containingDirectoryId: string
+  readonly generation: string
+  readonly catalogSize: bigint
+  readonly sourcePath: readonly string[]
+  readonly modifiedTime?: CanonicalModifiedTime
+}
+
+export type ExecutionAdmissionResult<Execution extends WorkspaceExecution | PortableExecution> =
+  | Readonly<{ kind: 'accepted'; execution: Execution }>
+  | Readonly<{ kind: 'rejected'; state: ReceiveLifecycleState }>
+
+export type PreparationExecutionResult<Execution extends WorkspaceExecution | PortableExecution> =
+  ExecutionAdmissionResult<Execution>
+
+type ReceiveIntentForPlan<Plan extends MaterializationPlan> = ReceiveIntent & Readonly<{ plan: Plan }>
+type ReceiveIntentForPlanArtifact<
+  Plan extends MaterializationPlan,
+  Artifact extends ReceiveIntent['artifact'],
+> = ReceiveIntentForPlan<Plan> & Readonly<{ artifact: Artifact }>
+
+/**
+ * Controller composition supplies one explicit adapter per immutable plan. The
+ * transfer runtime cannot choose a backend, invoke a picker, or infer a format.
+ */
+export interface V2PlanExecutionAuthority {
+  openDirectTree(
+    intent: ReceiveIntentForPlan<DirectTreePlan>,
+    signal: AbortSignal,
+  ): Promise<DirectTreeExecution>
+  openDirectAtomic(
+    intent: ReceiveIntentForPlan<DirectAtomicPlan>,
+    signal: AbortSignal,
+  ): Promise<DirectAtomicExecution>
+  openWorkspaceOriginal(
+    intent: ReceiveIntentForPlanArtifact<WorkspaceThenPublishPlan, OriginalFileArtifact>,
+    evidence: ExactSingleFileEvidence,
+    signal: AbortSignal,
+  ): Promise<ExecutionAdmissionResult<WorkspaceExecution>>
+  prepareWorkspaceZip(
+    intent: ReceiveIntentForPlanArtifact<WorkspaceThenPublishPlan, ZipArchiveArtifact>,
+    evidence: ExactPreparationEvidence,
+    signal: AbortSignal,
+  ): Promise<PreparationExecutionResult<WorkspaceExecution>>
+  preparePortable(
+    intent: ReceiveIntentForPlan<PortableHandoffPlan>,
+    evidence: ExactPreparationEvidence,
+    signal: AbortSignal,
+  ): Promise<PreparationExecutionResult<PortableExecution>>
+  abortUnopened(
+    intent: ReceiveIntent,
+    reason: unknown,
+    signal: AbortSignal,
+  ): Promise<ReceiveLifecycleState>
+  recordSettlementUnknown(
+    intent: ReceiveIntent,
+    signal: AbortSignal,
+  ): Promise<Extract<ReceiveLifecycleState, { readonly kind: 'needs-attention' }>>
 }
 
 export class OutputSessionBindingError extends Error {
@@ -242,50 +329,29 @@ export class OutputSessionCompromisedError extends Error {
   }
 }
 
-/** Rejects an adapter that opens a backend or representation other than the frozen intent. */
-export function validateOutputSessionBinding(
-  intent: TransferIntent,
-  session: OutputSession,
-): OutputSession {
-  const identity = outputSessionIdentity(session.identity)
-  const capabilities = outputCapabilities(session.capabilities)
-  if (identity.backend !== intent.output.backend || session.format !== intent.output.format) {
-    throw new OutputSessionBindingError(
-      'output session backend or format does not match the frozen transfer intent',
-    )
+export function validatePlanExecutionBinding<Execution extends PlanExecution>(
+  intent: ReceiveIntent,
+  execution: Execution,
+): Execution {
+  if (execution.planKind !== intent.plan.kind) {
+    throw new OutputSessionBindingError('plan execution does not match the frozen receive intent')
   }
-  const directStream = capabilities.durability === 'None' &&
-    !capabilities.randomWrite &&
-    !capabilities.fileFailureIsolation
-  const restartableStaging = capabilities.durability === 'ProcessRestart' &&
-    capabilities.randomWrite &&
-    capabilities.fileFailureIsolation
-  if ((session.format === 'single-file' && !directStream) ||
-      (session.format === 'zip' && !directStream && !restartableStaging)) {
-    throw new OutputSessionBindingError(
-      'stream output capabilities contradict the frozen output format',
-    )
+  outputSessionIdentity(execution.output.identity)
+  outputCapabilities(execution.output.capabilities)
+  if (intent.plan.kind === 'direct-tree' && !hasDirectoryPort(execution)) {
+    throw new OutputSessionBindingError('DirectTree execution requires incremental directory authority')
   }
-  return session
+  if (intent.plan.kind === 'direct-atomic' && intent.artifact.kind === 'zip-archive' &&
+      !hasDirectoryPort(execution)) {
+    throw new OutputSessionBindingError('DirectAtomic ZIP requires incremental directory authority')
+  }
+  return execution
 }
 
-/** Picker confirmation freezes the durable namespace before generation-scoped admission begins. */
-export interface V2OutputAuthority {
-  /**
-   * Picker-backed authorities resolve the draft only after the user confirms a
-   * destination. The returned intent is therefore the first durable identity
-   * that may cross into the output session.
-   */
-  confirmOutput(
-    draft: TransferIntentDraft,
-    signal: AbortSignal,
-  ): Promise<{
-    readonly intent: TransferIntent
-    readonly session: OutputSession
-  }>
-  /** Picker-confirmed intent is the only input that can open a durable session. */
-  openOutput(intent: TransferIntent, signal: AbortSignal): Promise<OutputSession>
-  abort(reason: unknown): Promise<void>
+function hasDirectoryPort(execution: PlanExecution): boolean {
+  if (!('directories' in execution) || execution.directories === undefined) return false
+  return typeof execution.directories.admitDirectory === 'function' &&
+    typeof execution.directories.finalizeDirectory === 'function'
 }
 
 export class TransferPauseRequestedError extends Error {
@@ -295,10 +361,7 @@ export class TransferPauseRequestedError extends Error {
   }
 }
 
-/**
- * A finite output-operation budget was exhausted before the backend accepted
- * more state. Jobs treat this as resumable policy pressure, not corrupt output.
- */
+/** A finite output-operation budget was exhausted before accepting more state. */
 export class OutputBudgetExceededError extends Error {
   readonly budget: string
   readonly limit: bigint
@@ -313,9 +376,7 @@ export class OutputBudgetExceededError extends Error {
   }
 }
 
-export function outputCapabilities(
-  capabilities: OutputCapabilities,
-): OutputCapabilities {
+export function outputCapabilities(capabilities: OutputCapabilities): OutputCapabilities {
   if ((capabilities.durability !== 'None' &&
        capabilities.durability !== 'ProcessRestart' &&
        capabilities.durability !== 'PowerLoss') ||
@@ -338,24 +399,85 @@ export function outputSessionIdentity(identity: OutputSessionIdentity): OutputSe
   })
 }
 
+export function snapshotOutputFileRequest(file: OutputFileRequest): OutputFileRequest {
+  if (typeof file.expectedSize !== 'bigint' || file.expectedSize < 0n) {
+    throw new RangeError('expected output file size must not be negative')
+  }
+  if (typeof file.openRevision !== 'function') {
+    throw new TypeError('output file request requires an authenticated revision callback')
+  }
+  const sourcePath = snapshotMaterializationPath(file.sourcePath)
+  const artifactPath = snapshotMaterializationPath(file.artifactPath)
+  if (sourcePath.length === 0 || artifactPath.length === 0) {
+    throw new TypeError('output file paths must identify a file')
+  }
+  return Object.freeze({
+    source: snapshotOutputCatalogFileIdentity(file.source),
+    sourcePath,
+    artifactPath,
+    expectedSize: file.expectedSize,
+    ...(file.parentAdmission === undefined
+      ? {}
+      : { parentAdmission: snapshotDirectoryAdmission(file.parentAdmission) }),
+    ...(file.modifiedTime === undefined
+      ? {}
+      : { modifiedTime: snapshotCanonicalModifiedTime(file.modifiedTime) }),
+    openRevision: file.openRevision,
+  })
+}
+
 export function snapshotOutputFile(file: OutputFile): OutputFile {
-  if (file.exactSize < 0n) {
+  if (typeof file.exactSize !== 'bigint' || file.exactSize < 0n) {
     throw new RangeError('output file size must not be negative')
   }
-  const modifiedTime = snapshotOutputModifiedTimeFields(file)
+  const sourcePath = snapshotMaterializationPath(file.sourcePath)
+  const artifactPath = snapshotMaterializationPath(file.artifactPath)
+  if (sourcePath.length === 0 || artifactPath.length === 0) {
+    throw new TypeError('output file paths must identify a file')
+  }
   return Object.freeze({
     source: snapshotOutputSource(file.source),
-    path: snapshotOutputPath(file.path),
+    sourcePath,
+    artifactPath,
     exactSize: file.exactSize,
-    ...(file.parentAdmission === undefined ? {} : { parentAdmission: snapshotDirectoryAdmission(file.parentAdmission) }),
-    ...modifiedTime,
+    ...(file.parentAdmission === undefined
+      ? {}
+      : { parentAdmission: snapshotDirectoryAdmission(file.parentAdmission) }),
+    ...(file.modifiedTime === undefined
+      ? {}
+      : { modifiedTime: snapshotCanonicalModifiedTime(file.modifiedTime) }),
+  })
+}
+
+export function snapshotDirectoryMaterializationRequest(
+  request: DirectoryMaterializationRequest,
+): DirectoryMaterializationRequest {
+  return Object.freeze({
+    source: snapshotMaterializationDirectory(request.source),
+    artifactPath: snapshotMaterializationPath(request.artifactPath),
+  })
+}
+
+export function snapshotOpenedOutputRevision(revision: OpenedOutputRevision): OpenedOutputRevision {
+  if (typeof revision.exactSize !== 'bigint' || revision.exactSize < 0n) {
+    throw new TypeError('opened output revision size is invalid')
+  }
+  return Object.freeze({
+    ...snapshotOutputSource(revision),
+    exactSize: revision.exactSize,
+  })
+}
+
+function snapshotOutputCatalogFileIdentity(source: OutputCatalogFileIdentity): OutputCatalogFileIdentity {
+  return Object.freeze({
+    shareInstance: requireSourceIdentity(source.shareInstance, 'shareInstance'),
+    fileId: requireSourceIdentity(source.fileId, 'fileId'),
   })
 }
 
 function snapshotOutputSource(source: OutputSourceIdentity): OutputSourceIdentity {
   return Object.freeze({
-    shareInstance: requireSourceIdentity(source.shareInstance, 'shareInstance'),
-    fileId: requireSourceIdentity(source.fileId, 'fileId'),
+    ...snapshotOutputCatalogFileIdentity(source),
     fileRevision: requireSourceIdentity(source.fileRevision, 'fileRevision'),
   })
 }
@@ -364,7 +486,7 @@ function snapshotOutputOwnership(ownership: OutputFileOwnership): OutputFileOwne
   const identity = outputSessionIdentity(ownership)
   return Object.freeze({
     ...identity,
-    canonicalPath: snapshotOutputPath(ownership.canonicalPath),
+    canonicalPath: snapshotMaterializationPath(ownership.canonicalPath),
     ownedFileIdentity: requireIdentityPart(
       ownership.ownedFileIdentity,
       'owned output file',
@@ -392,7 +514,6 @@ function requireSourceIdentity(value: string, label: string): string {
   return value
 }
 
-
 function verifiedDurableRangeSet(fileSize: bigint, ranges: readonly ByteRange[]): ByteRangeSet {
   if (!Array.isArray(ranges) || ranges.length > MAXIMUM_VERIFIED_DURABLE_RANGES) {
     throw new OutputSessionBindingError('output durable ranges exceed their canonical count limit')
@@ -409,4 +530,12 @@ function verifiedDurableRangeSet(fileSize: bigint, ranges: readonly ByteRange[])
     previousEnd = range.end
   }
   return new ByteRangeSet(fileSize, ranges)
+}
+
+export function needsAttentionFault(fault: Fault): Fault {
+  if (!isFault(fault) ||
+      (fault.scope !== FaultScope.OutputPause && fault.scope !== FaultScope.SessionTerminal)) {
+    throw new TypeError('needs-attention state requires a job-scoped fault')
+  }
+  return Object.freeze({ ...fault })
 }

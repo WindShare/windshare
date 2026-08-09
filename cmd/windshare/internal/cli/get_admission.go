@@ -43,11 +43,11 @@ const (
 type receiverAdmissionTrigger string
 
 const (
-	receiverAdmissionTriggerNone         receiverAdmissionTrigger = "none"
-	receiverAdmissionTriggerDeadline     receiverAdmissionTrigger = "deadline"
-	receiverAdmissionTriggerSmall        receiverAdmissionTrigger = "small_selection"
-	receiverAdmissionTriggerPeerFailed   receiverAdmissionTrigger = "peer_failed"
-	receiverAdmissionTriggerPeerDetached receiverAdmissionTrigger = "peer_detached"
+	receiverAdmissionTriggerNone            receiverAdmissionTrigger = "none"
+	receiverAdmissionTriggerDeadline        receiverAdmissionTrigger = "deadline"
+	receiverAdmissionTriggerConnectionSmall receiverAdmissionTrigger = "small_connection_size"
+	receiverAdmissionTriggerPeerFailed      receiverAdmissionTrigger = "peer_failed"
+	receiverAdmissionTriggerPeerDetached    receiverAdmissionTrigger = "peer_detached"
 )
 
 type receiverAdmissionTerminalOwner string
@@ -196,12 +196,12 @@ func (admission *relayContentAdmission) runDeadline() {
 	}
 }
 
-func (admission *relayContentAdmission) ObserveSelection(class transfer.SelectionClass) error {
-	switch class {
-	case transfer.SelectionSmall:
-		admission.beginDecision(receiverAdmissionTriggerSmall)
+func (admission *relayContentAdmission) ObserveConnectionSize(size transfer.ConnectionSizeClass) error {
+	switch size {
+	case transfer.ConnectionSizeSmall:
+		admission.beginDecision(receiverAdmissionTriggerConnectionSmall)
 		return nil
-	case transfer.SelectionUnknown, transfer.SelectionLarge:
+	case transfer.ConnectionSizeUnknown, transfer.ConnectionSizeLarge:
 		return nil
 	default:
 		return ErrInvalidReceiverAdmission

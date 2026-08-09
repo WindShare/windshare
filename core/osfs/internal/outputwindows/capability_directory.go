@@ -11,6 +11,22 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func (directory *windowsOutputV3Directory) PersistentDirectoryIdentityClaim() ([]byte, error) {
+	if directory == nil || directory.native == nil {
+		return nil, outputcap.ErrUnsafeNamespace
+	}
+	claim, err := directory.native.identityClaim()
+	return claim, windowsOutputV3Error(err)
+}
+
+func (directory *windowsOutputV3Directory) PreparePersistentDirectoryIdentityClaim() ([]byte, error) {
+	if directory == nil || directory.native == nil {
+		return nil, outputcap.ErrUnsafeNamespace
+	}
+	claim, err := directory.native.prepareIdentityClaim()
+	return claim, windowsOutputV3Error(err)
+}
+
 func (directory *windowsOutputV3Directory) Close() error {
 	if directory == nil || directory.native == nil {
 		return nil
@@ -416,8 +432,10 @@ func windowsOutputV3Error(err error) error {
 }
 
 var (
-	_ outputcap.Platform  = (*windowsOutputV3Platform)(nil)
-	_ outputcap.Directory = (*windowsOutputV3Directory)(nil)
-	_ outputcap.File      = (*windowsOutputV3File)(nil)
-	_ outputcap.Lock      = (*windowsOutputV3Lock)(nil)
+	_ outputcap.Platform                            = (*windowsOutputV3Platform)(nil)
+	_ outputcap.Directory                           = (*windowsOutputV3Directory)(nil)
+	_ outputcap.PersistentDirectoryIdentity         = (*windowsOutputV3Directory)(nil)
+	_ outputcap.PersistentDirectoryIdentityPreparer = (*windowsOutputV3Directory)(nil)
+	_ outputcap.File                                = (*windowsOutputV3File)(nil)
+	_ outputcap.Lock                                = (*windowsOutputV3Lock)(nil)
 )

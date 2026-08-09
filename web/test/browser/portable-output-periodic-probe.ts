@@ -1,7 +1,15 @@
+import { encodeBase64Url } from '../../src/crypto/bytes'
 import { StreamingZipArchiveWriter } from '../../src/output/streams/streaming-zip'
 import { IndexedDbZipCentralDirectorySpool } from '../../src/output/streams/zip-spool'
+import { ZipLayoutLedgerV1 } from '../../src/output/zip-layout/layout'
 
 const MILLION_MEMBER_COUNT = 1_000_000
+const RESULT_ROOT_NAME = 'result'
+const MEMBER_NAME_WIDTH = (MILLION_MEMBER_COUNT - 2).toString(36).length
+const DIGEST_BYTES = 32
+const RECEIVE_INTENT_DIGEST_SEED = 1
+const ARTIFACT_DIGEST_SEED = 2
+const DISCOVERY_LEDGER_DIGEST_SEED = 3
 
 export interface MillionMemberZipProbe {
   readonly memberCount: number
@@ -27,23 +35,35 @@ export async function probeMillionMemberZipWriter(): Promise<MillionMemberZipPro
     },
     close() { closed = true },
   })
+  const ledger = new ZipLayoutLedgerV1(
+    probeDigest(RECEIVE_INTENT_DIGEST_SEED),
+    probeDigest(ARTIFACT_DIGEST_SEED),
+  )
   const archive = new StreamingZipArchiveWriter(
     output,
     new IndexedDbZipCentralDirectorySpool({ databaseName }),
+    { kind: 'progressive', ledger },
   )
-  for (let index = 0; index < MILLION_MEMBER_COUNT; index += 1) {
-    const member = await archive.beginFile({
-      path: [`f${index.toString(36)}`],
+  const root = ledger.append({ kind: 'directory', path: [RESULT_ROOT_NAME] })
+  await archive.addDirectory(root)
+  for (let index = 0; index < MILLION_MEMBER_COUNT - 1; index += 1) {
+    const name = `f${index.toString(36).padStart(MEMBER_NAME_WIDTH, '0')}`
+    const plan = ledger.append({
+      kind: 'file',
+      path: [RESULT_ROOT_NAME, name],
       exactSize: 0n,
     })
+    const member = await archive.beginFile(plan)
     await member.close()
   }
+  ledger.completeDiscovery(probeDigest(DISCOVERY_LEDGER_DIGEST_SEED))
+  const sealedPlan = await ledger.seal()
   const beforeClose = await countStores(databaseName)
-  await archive.close(new AbortController().signal)
+  await archive.close(sealedPlan, new AbortController().signal)
   const afterClose = await countStores(databaseName)
   await deleteDatabase(databaseName)
   return {
-    memberCount: MILLION_MEMBER_COUNT,
+    memberCount: Number(sealedPlan.entryCount),
     outputBytes,
     outputWrites,
     maximumWriteBytes,
@@ -51,6 +71,13 @@ export async function probeMillionMemberZipWriter(): Promise<MillionMemberZipPro
     beforeClose,
     afterClose,
   }
+}
+
+function probeDigest(seed: number): string {
+  const bytes = new Uint8Array(DIGEST_BYTES)
+  bytes[0] = seed
+  bytes[bytes.length - 1] = seed ^ 0xff
+  return encodeBase64Url(bytes)
 }
 
 async function countStores(name: string): Promise<readonly number[]> {

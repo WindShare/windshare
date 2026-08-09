@@ -3,63 +3,14 @@ package transfer
 import (
 	"bytes"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 )
 
-func TestTransferWave2TargetAndIdentityEdges(t *testing.T) {
-	raw := bytes.Repeat([]byte{0x3a}, OutputRootIdentityBytes)
-	opaque, err := NewOpaqueOutputTarget(raw)
-	if err != nil || opaque.IsZero() || opaque.Kind() != OutputOpaqueTarget || opaque.RootPath() != "" {
-		t.Fatalf("opaque target = %+v, %v", opaque, err)
-	}
-	identityBytes := opaque.Identity().Bytes()
-	identityBytes[0] ^= 0xff
-	if opaque.Identity().Bytes()[0] != 0x3a {
-		t.Fatal("output-root identity accessor leaked mutable storage")
-	}
-	if !opaque.Equal(opaque) {
-		t.Fatal("target did not equal itself")
-	}
-	for _, invalid := range [][]byte{nil, make([]byte, OutputRootIdentityBytes-1), make([]byte, OutputRootIdentityBytes+1), make([]byte, OutputRootIdentityBytes)} {
-		if len(invalid) == OutputRootIdentityBytes {
-			if _, err := NewOpaqueOutputTarget(invalid); err == nil {
-				t.Fatal("zero opaque identity accepted")
-			}
-			continue
-		}
-		if _, err := NewOpaqueOutputTarget(invalid); !errors.Is(err, ErrInvalidOutputBinding) {
-			t.Fatalf("opaque length %d error = %v", len(invalid), err)
-		}
-	}
-
-	filesystem, err := NewFilesystemOutputRootTarget(filepath.Join(t.TempDir(), "out"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if filesystem.Equal(opaque) || !filesystem.valid() {
-		t.Fatal("filesystem and opaque target kinds were conflated")
-	}
-	malformedFilesystem := filesystem
-	malformedFilesystem.rootPath = "relative"
-	if malformedFilesystem.valid() {
-		t.Fatal("relative filesystem target was accepted by the semantic validator")
-	}
-	malformedOpaque := opaque
-	malformedOpaque.rootPath = "unexpected"
-	if malformedOpaque.valid() {
-		t.Fatal("opaque target carried a filesystem path")
-	}
-	unknownKind := filesystem
-	unknownKind.kind = OutputTargetKind(255)
-	if unknownKind.valid() {
-		t.Fatal("unknown output target kind was accepted")
-	}
-
-	digestRaw := bytes.Repeat([]byte{0x4b}, TransferIntentDigestBytes)
-	digest, err := TransferIntentDigestFromBytes(digestRaw)
+func TestReceiveIntentAndRunIdentityEdges(t *testing.T) {
+	digestRaw := bytes.Repeat([]byte{0x4b}, ReceiveIntentDigestBytes)
+	digest, err := ReceiveIntentDigestFromBytes(digestRaw)
 	if err != nil || digest.IsZero() {
 		t.Fatalf("intent digest = %x, %v", digest, err)
 	}
@@ -67,14 +18,14 @@ func TestTransferWave2TargetAndIdentityEdges(t *testing.T) {
 	if digest.Bytes()[0] != 0x4b {
 		t.Fatal("intent digest accessor leaked mutable storage")
 	}
-	for _, invalid := range [][]byte{nil, make([]byte, TransferIntentDigestBytes-1), make([]byte, TransferIntentDigestBytes+1), make([]byte, TransferIntentDigestBytes)} {
-		if len(invalid) == TransferIntentDigestBytes {
-			if _, err := TransferIntentDigestFromBytes(invalid); err == nil {
+	for _, invalid := range [][]byte{nil, make([]byte, ReceiveIntentDigestBytes-1), make([]byte, ReceiveIntentDigestBytes+1), make([]byte, ReceiveIntentDigestBytes)} {
+		if len(invalid) == ReceiveIntentDigestBytes {
+			if _, err := ReceiveIntentDigestFromBytes(invalid); err == nil {
 				t.Fatal("zero intent digest accepted")
 			}
 			continue
 		}
-		if _, err := TransferIntentDigestFromBytes(invalid); !errors.Is(err, ErrInvalidTransferIntent) {
+		if _, err := ReceiveIntentDigestFromBytes(invalid); !errors.Is(err, ErrInvalidReceiveIntent) {
 			t.Fatalf("intent digest length %d error = %v", len(invalid), err)
 		}
 	}
@@ -91,7 +42,7 @@ func TestTransferWave2TargetAndIdentityEdges(t *testing.T) {
 			}
 			continue
 		}
-		if _, err := TransferJobIDFromBytes(invalid); !errors.Is(err, ErrInvalidTransferIntent) {
+		if _, err := TransferJobIDFromBytes(invalid); !errors.Is(err, ErrInvalidReceiveIntent) {
 			t.Fatalf("job ID length %d error = %v", len(invalid), err)
 		}
 	}
@@ -104,12 +55,12 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope, err := NewDirectoryAdmissionScope(testTransferIntent(t, share, root, rules, jobOutputBackend))
+	scope, err := NewDirectoryAdmissionScope(testReceiveIntent(t, share, root, rules))
 	if err != nil {
 		t.Fatal(err)
 	}
 	secret := bytes.Repeat([]byte{0x71}, directoryAdmissionSecretBytes)
-	parentOutput := OutputDirectory{
+	parentOutput := MaterializationDirectory{
 		DirectoryID: root,
 		Generation:  transferID[catalog.DirectoryGeneration](0x62),
 	}
@@ -117,7 +68,7 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	childOutput := OutputDirectory{
+	childOutput := MaterializationDirectory{
 		DirectoryID:     transferID[catalog.DirectoryID](0x63),
 		Generation:      transferID[catalog.DirectoryGeneration](0x64),
 		ParentAdmission: parent,
@@ -144,14 +95,14 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 	if err := ValidateDirectoryAdmissionBinding(scope, child, childOutput); err != nil {
 		t.Fatalf("valid admission binding = %v", err)
 	}
-	for name, invalid := range map[string]OutputDirectory{
-		"path": func() OutputDirectory { value := childOutput; value.Path = "other"; return value }(),
-		"generation": func() OutputDirectory {
+	for name, invalid := range map[string]MaterializationDirectory{
+		"path": func() MaterializationDirectory { value := childOutput; value.Path = "other"; return value }(),
+		"generation": func() MaterializationDirectory {
 			value := childOutput
 			value.Generation = transferID[catalog.DirectoryGeneration](0x65)
 			return value
 		}(),
-		"parent": func() OutputDirectory {
+		"parent": func() MaterializationDirectory {
 			value := childOutput
 			value.ParentAdmission = DirectoryAdmission{}
 			return value
@@ -173,7 +124,7 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 			t.Fatalf("secret length %d error = %v", len(badSecret), err)
 		}
 	}
-	for name, invalid := range map[string]OutputDirectory{
+	for name, invalid := range map[string]MaterializationDirectory{
 		"zero identity":       {Generation: parentOutput.Generation},
 		"zero generation":     {DirectoryID: parentOutput.DirectoryID},
 		"path without parent": {DirectoryID: parentOutput.DirectoryID, Generation: parentOutput.Generation, Path: "child"},

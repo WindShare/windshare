@@ -13,10 +13,8 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
-	"github.com/windshare/windshare/core/osfs/internal/checkpointstore"
 	"github.com/windshare/windshare/core/osfs/internal/legacyresume"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/transfer"
 )
 
 func cleanOwnedNamespace(
@@ -50,9 +48,9 @@ func TestCleanerRemovesOnlyOwnedLegacyControlState(t *testing.T) {
 		t.Fatalf("published output was removed: %v", err)
 	}
 	for _, relative := range []string{
-		filepath.Join(legacyresume.ControlDirectory, legacyresume.CheckpointDirectory, checkpointstore.OwnershipFile),
-		filepath.Join(legacyresume.ControlDirectory, legacyresume.CheckpointDirectory, checkpointstore.LeasesDirectory),
-		filepath.Join(legacyresume.ControlDirectory, legacyresume.CheckpointDirectory, checkpointstore.IntentsDirectory),
+		filepath.Join(legacyresume.ControlDirectory, legacyresume.CheckpointDirectory, legacyresume.CheckpointOwnership),
+		filepath.Join(legacyresume.ControlDirectory, legacyresume.CheckpointDirectory, legacyresume.CheckpointLeases),
+		filepath.Join(legacyresume.ControlDirectory, legacyresume.CheckpointDirectory, legacyresume.CheckpointIntents),
 		filepath.Join(legacyresume.ControlDirectory, legacyresume.CheckpointDirectory, FileCheckpointCleanupState),
 		filepath.Join(legacyresume.ControlDirectory, legacyresume.CheckpointDirectory, FileCheckpointCleanupLock),
 	} {
@@ -62,7 +60,7 @@ func TestCleanerRemovesOnlyOwnedLegacyControlState(t *testing.T) {
 	}
 	currentCheckpoint := filepath.Join(
 		rootPath, legacyresume.ControlDirectory, legacyresume.CheckpointDirectory,
-		checkpointstore.IntentsDirectory, "current.checkpoint",
+		legacyresume.CheckpointIntents, "current.checkpoint",
 	)
 	if _, err := os.Stat(currentCheckpoint); err != nil {
 		t.Fatalf("current checkpoint payload was removed: %v", err)
@@ -146,7 +144,7 @@ func TestCleanerRejectsUnknownOwnerAndPreservesLegacyTree(t *testing.T) {
 			name: "foreign certified root",
 			replace: func(t *testing.T, platform outputcap.Platform, _ []byte) []byte {
 				return encodeLegacyOwnershipFixture(t, legacyOwnershipFixture{
-					Backend:       string(transfer.NativeFilesystemOutputBackendID),
+					Backend:       string(legacyresume.NativeFilesystemBackend),
 					RootIdentity:  bytes.Repeat([]byte{0x91}, legacyresume.RootIdentityBytes),
 					Certification: string(platform.Certification()), Durability: 1, Generation: 2,
 				})
@@ -320,7 +318,7 @@ func TestCleanerRevalidatesOwnershipProofImmediatelyBeforeMutation(t *testing.T)
 		control := openLegacyControl(t, platform)
 		defer control.Close()
 		foreign := encodeLegacyOwnershipFixture(t, legacyOwnershipFixture{
-			Backend:       string(transfer.NativeFilesystemOutputBackendID),
+			Backend:       string(legacyresume.NativeFilesystemBackend),
 			RootIdentity:  bytes.Repeat([]byte{0x72}, legacyresume.RootIdentityBytes),
 			Certification: string(platform.Certification()), Durability: 1, Generation: 4,
 		})
@@ -374,7 +372,7 @@ func TestCleanerReportsCurrentCheckpointStateInsteadOfDeletingIt(t *testing.T) {
 	}
 
 	report, err := cleanOwnedNamespace(context.Background(), cleanerConfig(platform))
-	if err != nil || !report.NeedsAttention() || report.Removed != 0 || !reportHasDetail(report, cleanupDetailCurrent) {
+	if err != nil || !report.NeedsAttention() || report.Removed != 0 || !reportHasDetail(report, cleanupDetailSeparateOwnership) {
 		t.Fatalf("current-state cleanup = %+v, %v", report, err)
 	}
 	currentPath := filepath.Join(rootPath, legacy.intent, legacyresume.CheckpointDirectory, "current.checkpoint")
@@ -402,7 +400,7 @@ func newCleanerPlatform(t *testing.T) (outputcap.Platform, string) {
 
 func cleanerConfig(platform outputcap.Platform) OneShotCheckpointCleanerConfig {
 	return OneShotCheckpointCleanerConfig{
-		Platform: platform, BackendID: transfer.NativeFilesystemOutputBackendID,
+		Platform: platform, BackendID: legacyresume.NativeFilesystemBackend,
 	}
 }
 
@@ -412,10 +410,10 @@ func installCurrentNamespaceSentinels(t *testing.T, platform outputcap.Platform)
 	defer control.Close()
 	namespace := ensureTestDirectory(t, control, legacyresume.CheckpointDirectory)
 	defer namespace.Close()
-	writeCapabilityFile(t, namespace, checkpointstore.OwnershipFile, []byte("current marker sentinel"))
-	for _, name := range []string{checkpointstore.LeasesDirectory, checkpointstore.IntentsDirectory} {
+	writeCapabilityFile(t, namespace, legacyresume.CheckpointOwnership, []byte("current marker sentinel"))
+	for _, name := range []string{legacyresume.CheckpointLeases, legacyresume.CheckpointIntents} {
 		directory := ensureTestDirectory(t, namespace, name)
-		if name == checkpointstore.IntentsDirectory {
+		if name == legacyresume.CheckpointIntents {
 			writeCapabilityFile(t, directory, "current.checkpoint", []byte("current checkpoint sentinel"))
 		}
 		if err := directory.Close(); err != nil {
@@ -433,7 +431,7 @@ func installLegacyNamespace(t *testing.T, platform outputcap.Platform) legacyFix
 		t.Fatal(err)
 	}
 	encoded := encodeLegacyOwnershipFixture(t, legacyOwnershipFixture{
-		Backend: string(transfer.NativeFilesystemOutputBackendID), RootIdentity: binding.Bytes(),
+		Backend: string(legacyresume.NativeFilesystemBackend), RootIdentity: binding.Bytes(),
 		Certification: string(platform.Certification()), Durability: 1, Generation: 1,
 	})
 	writeCapabilityFile(t, control, legacyresume.ControlRecord, encoded)
@@ -660,7 +658,7 @@ func encodeLegacyOwnershipFixture(t *testing.T, fixture legacyOwnershipFixture) 
 
 func TestLegacyOwnershipFixtureIsBounded(t *testing.T) {
 	if len(encodeLegacyOwnershipFixture(t, legacyOwnershipFixture{
-		Backend:       string(transfer.NativeFilesystemOutputBackendID),
+		Backend:       string(legacyresume.NativeFilesystemBackend),
 		RootIdentity:  bytes.Repeat([]byte{1}, legacyresume.RootIdentityBytes),
 		Certification: legacyresume.CertificationWindowsNTFSProcessRestart,
 		Durability:    1, Generation: 1,

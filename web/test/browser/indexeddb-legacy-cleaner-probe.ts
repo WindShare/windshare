@@ -1,25 +1,22 @@
 import {
   ensureOneShotIndexedDbLegacyCleanup,
+  INDEXEDDB_LEGACY_CLEANUP_ORDER,
   type IndexedDbLegacyCleanupReport,
 } from '../../src/output/browser/indexeddb-legacy-cleaner'
-import { openIndexedDbCheckpointDatabase } from '../../src/output/browser/indexeddb-repository'
+import {
+  CHECKPOINT_DATABASE_VERSION,
+  INDEXEDDB_LEGACY_V5_STORES,
+  INDEXEDDB_V6_STORE_SCHEMAS,
+  openIndexedDbCheckpointDatabase,
+  requestResult,
+  transactionCompletion,
+} from '../../src/output/browser/indexeddb-database'
 
-const LEGACY_STORE_NAMES = [
-  'checkpoint-candidates',
-  'checkpoint-committed',
-  'persistent-handles',
-  'cleanup-markers',
-] as const
-const CURRENT_STORE_NAMES = [
-  'file-checkpoint-v1-candidates',
-  'file-checkpoint-v1-committed',
-  'file-checkpoint-v1-handles',
-  'file-checkpoint-v1-metadata',
-  'file-checkpoint-v1-cleanup',
-  'paused-task-descriptor-v1',
-  'root-capability-v1',
-] as const
+const LEGACY_STORE_NAMES = INDEXEDDB_LEGACY_CLEANUP_ORDER
+const CURRENT_STORE_NAMES = Object.freeze(INDEXEDDB_V6_STORE_SCHEMAS.map(({ name }) => name))
 const RECORDS_PER_LEGACY_STORE = 2
+const LEGACY_FILE_CHECKPOINT_MARKER = 'windshare/file-checkpoint/v1'
+const LEGACY_FILE_CHECKPOINT_NAMESPACE = '.windshare-output/checkpoints-v1'
 const PUBLISHED_SENTINEL_BYTES = Uint8Array.of(17, 34, 51, 68)
 
 export interface IndexedDbLegacyCleanupIsolationProbe {
@@ -57,8 +54,8 @@ export async function probeIndexedDbLegacyCleanupIsolation(
 }
 
 export async function seedIndexedDbLegacyCleanup(databaseName: string): Promise<void> {
-  const legacy = await openDatabase(databaseName, 2, (database) => {
-    for (const storeName of LEGACY_STORE_NAMES) {
+  const legacy = await openDatabase(databaseName, CHECKPOINT_DATABASE_VERSION - 1, (database) => {
+    for (const storeName of INDEXEDDB_LEGACY_V5_STORES) {
       database.createObjectStore(storeName, { keyPath: 'id' })
     }
   })
@@ -72,11 +69,7 @@ export async function seedIndexedDbLegacyCleanup(databaseName: string): Promise<
     )
     for (const storeName of LEGACY_STORE_NAMES) {
       for (let index = 0; index < RECORDS_PER_LEGACY_STORE; index += 1) {
-        transaction.objectStore(storeName).put({
-          id: `${storeName}-opaque-${index}`,
-          // These records deliberately have no legacy schema the cleaner could decode.
-          arbitrary: [storeName.length, index, { nested: true }],
-        })
+        transaction.objectStore(storeName).put(ownedLegacyRow(storeName, index))
       }
     }
     for (const storeName of CURRENT_STORE_NAMES) {
@@ -139,11 +132,29 @@ async function currentStoreSentinels(databaseName: string): Promise<readonly boo
   }
 }
 
-function currentSentinel(storeName: (typeof CURRENT_STORE_NAMES)[number]): {
+function currentSentinel(storeName: string): {
   readonly id: string
   readonly sentinel: string
 } {
   return Object.freeze({ id: `current-sentinel:${storeName}`, sentinel: storeName })
+}
+
+function ownedLegacyRow(
+  storeName: (typeof LEGACY_STORE_NAMES)[number],
+  index: number,
+): Readonly<Record<string, unknown>> {
+  const namespace = `windshare/test/legacy-owned-namespace/${index}`
+  if (storeName === 'file-checkpoint-v1-metadata') {
+    return Object.freeze({
+      id: namespace,
+      marker: LEGACY_FILE_CHECKPOINT_MARKER,
+      namespaceName: LEGACY_FILE_CHECKPOINT_NAMESPACE,
+    })
+  }
+  return Object.freeze({
+    id: `${storeName}-owned-${index}`,
+    namespace,
+  })
 }
 
 async function writePublishedSentinel(
@@ -175,20 +186,5 @@ function openDatabase(
     request.addEventListener('upgradeneeded', () => upgrade?.(request.result), { once: true })
     request.addEventListener('success', () => resolve(request.result), { once: true })
     request.addEventListener('error', () => reject(request.error), { once: true })
-  })
-}
-
-function requestResult<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.addEventListener('success', () => resolve(request.result), { once: true })
-    request.addEventListener('error', () => reject(request.error), { once: true })
-  })
-}
-
-function transactionCompletion(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.addEventListener('complete', () => resolve(), { once: true })
-    transaction.addEventListener('abort', () => reject(transaction.error), { once: true })
-    transaction.addEventListener('error', () => reject(transaction.error), { once: true })
   })
 }

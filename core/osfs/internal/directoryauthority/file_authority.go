@@ -8,7 +8,6 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/fileexecution"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/osfs/internal/outputsession"
 	"github.com/windshare/windshare/core/transfer"
 )
 
@@ -42,43 +41,44 @@ func NewFileAuthority(directories *Authority, objects OwnedObjectAuthority) (*Fi
 
 func (authority *FileAuthority) BindFile(
 	ctx context.Context,
-	claim outputsession.FileClaim,
+	file transfer.MaterializationFile,
 ) (destination fileexecution.FileDestination, resultErr error) {
 	defer func() {
 		resultErr = directoryBoundaryError(ctx, resultErr)
 	}()
 	if authority == nil || authority.directories == nil || authority.objects == nil || ctx == nil ||
-		claim.ID() == 0 || claim.ParentID() == 0 {
+		file.Path == "" || file.ParentAdmission.IsZero() {
 		return nil, ErrInvalidClaim
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	directories := authority.directories
-	locator, err := directories.canonicalLocator(claim.File().Path)
-	if err != nil || !locator.valid() || locator.isRoot() || locator.canonicalKey != claim.LocatorKey() {
+	locator, err := directories.canonicalLocator(file.Path)
+	if err != nil || !locator.valid() || locator.isRoot() {
 		return nil, errors.Join(ErrInvalidClaim, err)
 	}
 	directories.gate.RLock()
 	defer directories.gate.RUnlock()
-	lineage, err := directories.readyLineage(claim.ParentID())
+	directories.mu.Lock()
+	parentID := directories.admissions[string(file.ParentAdmission.Bytes())]
+	directories.mu.Unlock()
+	lineage, err := directories.readyLineage(parentID)
 	if err != nil || len(lineage) == 0 {
 		return nil, errors.Join(ErrParentUnavailable, err)
 	}
 	parent := lineage[len(lineage)-1].claim
-	file := claim.File()
 	if !validateImmediateChild(parent.locator.canonicalPath, locator.canonicalPath) ||
 		file.Path == "" || file.ExpectedSize != file.Descriptor.ExactSize() ||
 		file.Target.Descriptor() != file.Descriptor || file.Target.ExactSize() != file.ExpectedSize ||
-		file.Target.Locator().Kind() != transfer.OutputPathLocator ||
+		file.Target.Locator().Kind() != transfer.MaterializationPathLocator ||
 		file.Target.Locator().CanonicalPath() != file.Path {
 		return nil, ErrInvalidClaim
 	}
 	return &fileDestination{
 		authority: directories,
 		objects:   authority.objects,
-		claimID:   claim.ID(),
-		parentID:  claim.ParentID(),
+		parentID:  parentID,
 		target:    file.Target,
 		leaf:      locator.leaf,
 	}, nil
@@ -89,25 +89,17 @@ type fileDestination struct {
 
 	authority *Authority
 	objects   OwnedObjectAuthority
-	claimID   ClaimID
 	parentID  ClaimID
-	target    transfer.OutputFileTarget
+	target    transfer.FileMaterializationTarget
 	leaf      string
 	closed    bool
 }
 
 var _ fileexecution.FileDestination = (*fileDestination)(nil)
 
-func (destination *fileDestination) ClaimID() outputsession.ClaimID {
+func (destination *fileDestination) Target() transfer.FileMaterializationTarget {
 	if destination == nil {
-		return 0
-	}
-	return destination.claimID
-}
-
-func (destination *fileDestination) Target() transfer.OutputFileTarget {
-	if destination == nil {
-		return transfer.OutputFileTarget{}
+		return transfer.FileMaterializationTarget{}
 	}
 	return destination.target
 }

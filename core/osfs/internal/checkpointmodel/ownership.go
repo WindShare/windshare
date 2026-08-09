@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const (
-	OwnershipMarker = "windshare/file-checkpoint/v1"
-	NamespaceName   = ".windshare-output/checkpoints-v1"
+	OwnershipMarker = "windshare/file-checkpoint/v2"
+	NamespaceName   = ".windshare-output/checkpoints-v2"
 
 	CallerProvidedContainer RootOpenDisposition = "caller-provided-container"
 	AuthorityCreatedRoot    RootOpenDisposition = "authority-created-root"
@@ -21,7 +21,7 @@ const (
 	CertificationLinuxExt4ProcessRestart   CertificationID = "linux/ext4/process-restart/v2"
 	CertificationWindowsNTFSProcessRestart CertificationID = "windows/ntfs/process-restart/v1"
 
-	ownershipDomain           = "windshare/file-checkpoint-ownership/v1"
+	ownershipDomain           = "windshare/file-checkpoint-ownership/v2"
 	maximumMarkerBytes        = 128
 	maximumNamespaceBytes     = 256
 	maximumCertificationBytes = 128
@@ -32,6 +32,19 @@ var (
 	ErrOwnershipChecksum     = errors.New("checkpoint ownership checksum is invalid")
 	ErrOwnershipNonCanonical = errors.New("checkpoint ownership encoding is not canonical")
 )
+
+type MaterializerKind uint8
+
+const (
+	MaterializerNativeTree MaterializerKind = iota + 1
+	MaterializerFSATree
+	MaterializerOriginPrivate
+	MaterializerAtomicFile
+)
+
+func (kind MaterializerKind) Valid() bool {
+	return kind >= MaterializerNativeTree && kind <= MaterializerAtomicFile
+}
 
 type CertificationID string
 
@@ -45,83 +58,55 @@ func NewCertificationID(value string) (CertificationID, error) {
 	}
 }
 
-// RootOpenDisposition is persisted because only an authority-created root may
-// receive synthetic-root metadata after restart.
+// RootOpenDisposition is a certification fact used by native adapters. It is
+// not destination naming authority and never replaces the opaque AuthorityRef.
 type RootOpenDisposition string
 
 func (disposition RootOpenDisposition) Valid() bool {
 	return disposition == CallerProvidedContainer || disposition == AuthorityCreatedRoot
 }
 
-type RootIdentity [sha256.Size]byte
-
-func (identity RootIdentity) Bytes() []byte {
-	return append([]byte(nil), identity[:]...)
-}
-
-func (identity RootIdentity) IsZero() bool {
-	return identity == RootIdentity{}
-}
-
 type OwnershipSpec struct {
-	Backend             transfer.OutputBackendID
+	Materializer        MaterializerKind
 	Certification       CertificationID
-	RootIdentity        []byte
+	AuthorityRef        []byte
 	RootOpenDisposition RootOpenDisposition
 }
 
-// Ownership certifies only the checkpoint root binding. Intent, file, selection,
-// and deletion authority deliberately cannot enter this marker.
+// Ownership certifies the v2 repository root. Operation, intent, and file
+// identities are deliberately absent so the same root marker cannot authorize
+// cross-operation mutation.
 type Ownership struct {
-	backend             transfer.OutputBackendID
+	materializer        MaterializerKind
 	certification       CertificationID
-	rootIdentity        RootIdentity
+	authorityRef        receivecontract.AuthorityRef
 	rootOpenDisposition RootOpenDisposition
 }
 
 func NewOwnership(spec OwnershipSpec) (Ownership, error) {
-	backend, backendErr := transfer.NewOutputBackendID(string(spec.Backend))
 	certification, certificationErr := NewCertificationID(string(spec.Certification))
-	root, rootErr := RootIdentityFromBytes(spec.RootIdentity)
-	if backendErr != nil || certificationErr != nil || rootErr != nil ||
+	authority, authorityErr := receivecontract.AuthorityRefFromBytes(spec.AuthorityRef)
+	if !spec.Materializer.Valid() || certificationErr != nil || authorityErr != nil ||
 		!spec.RootOpenDisposition.Valid() {
-		return Ownership{}, errors.Join(
-			ErrInvalidOwnership,
-			backendErr,
-			certificationErr,
-			rootErr,
-		)
+		return Ownership{}, errors.Join(ErrInvalidOwnership, certificationErr, authorityErr)
 	}
 	return Ownership{
-		backend:             backend,
-		certification:       certification,
-		rootIdentity:        root,
-		rootOpenDisposition: spec.RootOpenDisposition,
+		materializer: spec.Materializer, certification: certification,
+		authorityRef: authority, rootOpenDisposition: spec.RootOpenDisposition,
 	}, nil
 }
 
-func (ownership Ownership) Backend() transfer.OutputBackendID {
-	return ownership.backend
-}
-
-func (ownership Ownership) Certification() CertificationID {
-	return ownership.certification
-}
-
-func (ownership Ownership) RootIdentity() RootIdentity {
-	return ownership.rootIdentity
-}
-
+func (ownership Ownership) MaterializerKind() MaterializerKind         { return ownership.materializer }
+func (ownership Ownership) Certification() CertificationID             { return ownership.certification }
+func (ownership Ownership) AuthorityRef() receivecontract.AuthorityRef { return ownership.authorityRef }
 func (ownership Ownership) RootOpenDisposition() RootOpenDisposition {
 	return ownership.rootOpenDisposition
 }
 
 func (ownership Ownership) Valid() bool {
 	rebuilt, err := NewOwnership(OwnershipSpec{
-		Backend:             ownership.backend,
-		Certification:       ownership.certification,
-		RootIdentity:        ownership.rootIdentity[:],
-		RootOpenDisposition: ownership.rootOpenDisposition,
+		Materializer: ownership.materializer, Certification: ownership.certification,
+		AuthorityRef: ownership.authorityRef.Bytes(), RootOpenDisposition: ownership.rootOpenDisposition,
 	})
 	return err == nil && rebuilt == ownership
 }
@@ -134,9 +119,9 @@ func (ownership Ownership) CanonicalBytes() []byte {
 	writeOwnershipString(&encoded, ownershipDomain)
 	writeOwnershipString(&encoded, OwnershipMarker)
 	writeOwnershipString(&encoded, NamespaceName)
-	writeOwnershipString(&encoded, string(ownership.backend))
+	encoded.WriteByte(byte(ownership.materializer))
 	writeOwnershipString(&encoded, string(ownership.certification))
-	_, _ = encoded.Write(ownership.rootIdentity[:])
+	_, _ = encoded.Write(ownership.authorityRef.Bytes())
 	writeOwnershipString(&encoded, string(ownership.rootOpenDisposition))
 	return encoded.Bytes()
 }
@@ -173,7 +158,7 @@ func DecodeOwnership(encoded []byte) (Ownership, error) {
 	if err != nil || namespace != NamespaceName {
 		return Ownership{}, ErrInvalidOwnership
 	}
-	backend, err := cursor.string(transfer.MaxOutputBackendIDBytes)
+	materializer, err := cursor.byte()
 	if err != nil {
 		return Ownership{}, err
 	}
@@ -181,7 +166,7 @@ func DecodeOwnership(encoded []byte) (Ownership, error) {
 	if err != nil {
 		return Ownership{}, err
 	}
-	root, err := cursor.take(sha256.Size)
+	authority, err := cursor.take(receivecontract.AuthorityRefBytes)
 	if err != nil {
 		return Ownership{}, err
 	}
@@ -189,15 +174,9 @@ func DecodeOwnership(encoded []byte) (Ownership, error) {
 	if err != nil || cursor.offset != len(payload) {
 		return Ownership{}, ErrInvalidOwnership
 	}
-	validatedBackend, err := transfer.NewOutputBackendID(backend)
-	if err != nil {
-		return Ownership{}, errors.Join(ErrInvalidOwnership, err)
-	}
 	ownership, err := NewOwnership(OwnershipSpec{
-		Backend:             validatedBackend,
-		Certification:       CertificationID(certification),
-		RootIdentity:        root,
-		RootOpenDisposition: RootOpenDisposition(disposition),
+		Materializer: MaterializerKind(materializer), Certification: CertificationID(certification),
+		AuthorityRef: authority, RootOpenDisposition: RootOpenDisposition(disposition),
 	})
 	if err != nil {
 		return Ownership{}, err
@@ -211,8 +190,8 @@ func DecodeOwnership(encoded []byte) (Ownership, error) {
 func ownershipChecksum(payload []byte) [sha256.Size]byte {
 	hash := sha256.New()
 	_, _ = hash.Write([]byte(recordChecksumDomain))
-	_, _ = hash.Write([]byte{0})
-	_, _ = hash.Write(payload)
+	_, _ = hash.Write([]byte{0, SchemaVersion})
+	writeRecordFrame(hash, payload)
 	var checksum [sha256.Size]byte
 	copy(checksum[:], hash.Sum(nil))
 	return checksum
@@ -237,6 +216,14 @@ func (cursor *ownershipCursor) take(count int) ([]byte, error) {
 	value := cursor.encoded[cursor.offset : cursor.offset+count]
 	cursor.offset += count
 	return value, nil
+}
+
+func (cursor *ownershipCursor) byte() (byte, error) {
+	value, err := cursor.take(1)
+	if err != nil {
+		return 0, err
+	}
+	return value[0], nil
 }
 
 func (cursor *ownershipCursor) string(maximum int) (string, error) {

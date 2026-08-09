@@ -18,7 +18,8 @@ func (tracer outputRuntimeTracer) TraceFilesystemOutput(event outputruntime.File
 func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) FilesystemOutputTrace {
 	return FilesystemOutputTrace{
 		Operation:              projectTraceOperation(event.Operation),
-		IntentDigest:           event.IntentDigest,
+		ReceiveIntentDigest:    event.ReceiveIntentDigest,
+		ReceiveOperationID:     event.ReceiveOperationID,
 		SessionID:              event.SessionID,
 		Certification:          projectCertification(event.Certification),
 		NativeLockScope:        projectNativeLockScope(event.NativeLockScope),
@@ -98,10 +99,10 @@ func projectRuntimeOperation(
 	value outputruntime.FilesystemOutputRuntimeOperation,
 ) FilesystemOutputRuntimeOperation {
 	switch value {
-	case outputruntime.FilesystemOutputRuntimeOpenOutput:
-		return FilesystemOutputRuntimeOpenOutput
-	case outputruntime.FilesystemOutputRuntimeAcquireIntentLease:
-		return FilesystemOutputRuntimeAcquireIntentLease
+	case outputruntime.FilesystemOutputRuntimeOpenDirectTree:
+		return FilesystemOutputRuntimeOpenDirectTree
+	case outputruntime.FilesystemOutputRuntimeAcquireOperationLease:
+		return FilesystemOutputRuntimeAcquireOperationLease
 	case outputruntime.FilesystemOutputRuntimeReconcileCheckpoints:
 		return FilesystemOutputRuntimeReconcileCheckpoints
 	case outputruntime.FilesystemOutputRuntimeAdmitDirectory:
@@ -120,10 +121,10 @@ func projectRuntimeOperation(
 		return FilesystemOutputRuntimePauseFile
 	case outputruntime.FilesystemOutputRuntimeRetireFile:
 		return FilesystemOutputRuntimeRetireFile
-	case outputruntime.FilesystemOutputRuntimePauseJob:
-		return FilesystemOutputRuntimePauseJob
-	case outputruntime.FilesystemOutputRuntimeCompleteJob:
-		return FilesystemOutputRuntimeCompleteJob
+	case outputruntime.FilesystemOutputRuntimePauseTree:
+		return FilesystemOutputRuntimePauseTree
+	case outputruntime.FilesystemOutputRuntimeFinalizeTree:
+		return FilesystemOutputRuntimeFinalizeTree
 	case outputruntime.FilesystemOutputRuntimeMaterializeDirectory:
 		return FilesystemOutputRuntimeMaterializeDirectory
 	case outputruntime.FilesystemOutputRuntimeCreateOwnedFile:

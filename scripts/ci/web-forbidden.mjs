@@ -46,8 +46,10 @@ const FORBIDDEN_PATHS = [
   'web/src/ui/model.ts',
   'web/src/ui/ReceiverApp.tsx',
   'web/src/ui/selection-window.ts',
+  'web/src/ui/v2-paused-tasks.ts',
   'web/src/transfer/output-selection.ts',
   'web/src/transfer/job.ts',
+  'web/src/output/browser/paused-task-lifecycle.ts',
   'web/test/manifest',
   'web/test/download',
   'web/test/contracts',
@@ -116,6 +118,18 @@ const RETIRED_VECTOR_PATHS = [
   'transfer-plan.json',
 ].map((name) => `core/testvectors/${name}`)
 
+const RETIRED_PRODUCTION_SYMBOLS = [
+  ['TransferIntent', /\bTransferIntent\b/u],
+  ['TransferIntentDigest', /\bTransferIntentDigest\b/u],
+  ['V2OutputIntent', /\bV2OutputIntent\b/u],
+  ['knownSingleFile', /\bknownSingleFile\b/u],
+  ['OutputSelectionShape', /\bOutputSelectionShape\b/u],
+  ['OutputAcquisitionIntent', /\bOutputAcquisitionIntent\b/u],
+  ['exportPartial', /\bexportPartial\b/u],
+  ['PausedTaskDescriptorV1', /\bPausedTaskDescriptorV1\b/u],
+  ['completed-partial', /completed-partial/u],
+]
+
 // These are shipped composition edges, not symbol conventions. Requiring them
 // catches a deep module that remains tested but is no longer reachable from the
 // browser entry point.
@@ -123,16 +137,36 @@ const REQUIRED_PRODUCTION_DEPENDENCIES = [
   'web/src/session/v2-runtime.ts',
   'web/src/transport/relay/v2-receiver.ts',
   'web/src/transfer/v2-job.ts',
+  'web/src/transfer/settlement/persistent-execution.ts',
+  'web/src/transfer/settlement/v2-plan-authority.ts',
   'web/src/preview/v2-preview.ts',
   'web/src/preview/mp4-range.ts',
   'web/src/ui/v2-output.ts',
-  'web/src/ui/v2-paused-tasks.ts',
-  'web/src/output/browser/paused-task-lifecycle.ts',
+  'web/src/ui/v2-browser-receive-composition.ts',
+  'web/src/output/browser/indexeddb-repository.ts',
   'web/src/output/browser/indexeddb-resume-state.ts',
   'web/src/output/resume/authority.ts',
   'web/src/output/resume/descriptor.ts',
+  'web/src/output/resume/reopen-authority.ts',
+  'web/src/output/resume/workspace-continuation.ts',
   'web/src/output/file-system-access/session.ts',
+  'web/src/output/file-system-access/settlement.ts',
   'web/src/output/origin-private/session.ts',
+  'web/src/output/origin-private/workflow.ts',
+  'web/src/output/origin-private/zip-exporter.ts',
+  'web/src/output/portable/preparation.ts',
+  'web/src/output/portable/packaged-handoff.ts',
+  'web/src/output/streams/zip-spool.ts',
+]
+
+// Every production file in these deep decision modules must be reachable. This
+// prevents a new policy or lifecycle authority from existing only in tests while
+// a shallower composition silently keeps the retired behavior.
+const REQUIRED_PRODUCTION_MODULE_ROOTS = [
+  'web/src/transfer/projection',
+  'web/src/output/planning',
+  'web/src/output/workspace',
+  'web/src/output/zip-layout',
 ]
 
 const violations = []
@@ -144,13 +178,34 @@ for (const path of [...FORBIDDEN_PATHS, ...RETIRED_VECTOR_PATHS]) {
 
 const production = productionGraph(PRODUCTION_ENTRY)
 const productionPaths = new Set([...production].map(portable))
+const requiredProductionPaths = new Set(REQUIRED_PRODUCTION_DEPENDENCIES)
+for (const root of REQUIRED_PRODUCTION_MODULE_ROOTS) {
+  const absoluteRoot = resolve(REPOSITORY_ROOT, root)
+  const moduleFiles = existsSync(absoluteRoot) && statSync(absoluteRoot).isDirectory()
+    ? filesUnder(absoluteRoot).filter(isProductionTypeScript)
+    : []
+  if (moduleFiles.length === 0) {
+    violations.push(`required production module has no TypeScript source: ${root}`)
+  }
+  for (const file of moduleFiles) {
+    requiredProductionPaths.add(portable(file))
+  }
+}
 
 for (const forbidden of FORBIDDEN_PATHS.filter((path) => path.startsWith('web/src/'))) {
   if ([...productionPaths].some((path) => path === forbidden || path.startsWith(`${forbidden}/`))) {
     violations.push(`production graph reaches retired path: ${forbidden}`)
   }
 }
-for (const required of REQUIRED_PRODUCTION_DEPENDENCIES) {
+for (const file of production) {
+  const source = readFileSync(file, 'utf8')
+  for (const [name, pattern] of RETIRED_PRODUCTION_SYMBOLS) {
+    if (pattern.test(source)) {
+      violations.push(`production graph contains retired symbol ${name} in ${portable(file)}`)
+    }
+  }
+}
+for (const required of requiredProductionPaths) {
   if (!productionPaths.has(required)) {
     violations.push(`production graph does not reach ${required}`)
   }
@@ -162,7 +217,8 @@ if (violations.length > 0) {
 } else {
   console.log(
     `web-retired-graph: PASS (${FORBIDDEN_PATHS.length + RETIRED_VECTOR_PATHS.length} exact retired paths absent; ` +
-    `${production.size} production dependencies; ${REQUIRED_PRODUCTION_DEPENDENCIES.length} required edges present)`,
+    `${RETIRED_PRODUCTION_SYMBOLS.length} retired symbols absent; ${production.size} production dependencies; ` +
+    `${requiredProductionPaths.size} required edges present)`,
   )
 }
 
@@ -225,6 +281,13 @@ function filesUnder(root) {
 function obsoletePathExists(path) {
   if (!existsSync(path)) return false
   return statSync(path).isDirectory() ? filesUnder(path).length > 0 : true
+}
+
+function isProductionTypeScript(file) {
+  const path = portable(file)
+  const isTypeScript = (file.endsWith('.ts') || file.endsWith('.tsx')) && !file.endsWith('.d.ts')
+  const isTest = /(?:^|\/)(?:__tests__|test|tests)\//u.test(path) || /\.(?:bench|spec|test)\.tsx?$/u.test(path)
+  return isTypeScript && !isTest
 }
 
 function portable(file) {

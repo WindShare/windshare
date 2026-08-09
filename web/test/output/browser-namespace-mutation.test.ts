@@ -1,395 +1,222 @@
 import { describe, expect, it } from 'vitest'
 
-import { encodeBase64Url } from '../../src/crypto/bytes'
-import { FILE_SYSTEM_ACCESS_BACKEND } from '../../src/output/capability/contract'
-import { BrowserFileSystemTree } from '../../src/output/browser/filesystem-tree'
 import {
-  browserFileSystemRootMutationLockName,
-  BrowserFileSystemMutationClosedError,
-  type BrowserLockHandle,
+  createDirectTreePlan,
+  createFSANamedEntryReservation,
+  createReceiveIntent,
+  createSelectionSpec,
+  createSingleFileDirectoryTreeArtifact,
+  type ReceiveIntent,
+} from '../../src/transfer/intent'
+import {
+  fsaOwnedDirectoryHandleId,
+  persistFSAOperationBinding,
+  persistFSAOwnedDirectory,
+  verifyFSAOperationBinding,
+} from '../../src/output/browser/indexeddb-root-binding'
+import {
+  FSARootMutationBusyError,
+  acquireFSARootMutationLease,
+  fsaRootMutationLockName,
   type BrowserLockManagerRuntime,
 } from '../../src/output/browser/namespace-mutation'
-import {
-  acquireBrowserFileSystemAccessSessionLease,
-  acquireBrowserOutputSessionLease,
-  BrowserOutputSessionBusyError,
-} from '../../src/output/browser/session-lease'
-import type { DurableCheckpointNamespaceIdentity } from '../../src/output/persistence/namespace'
+import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
+import type {
+  PersistedReceiveRecord,
+  ReceiveOperationHandleRecord,
+} from '../../src/output/workspace/records'
+import { RECEIVE_RECORD_RESERVATION } from '../../src/output/workspace/records'
+import type {
+  ReceiveOperationRepository,
+  ReceiveOperationTransition,
+} from '../../src/output/workspace/repository'
+import { identity } from './planning/fixture'
 
-const ROOT_IDENTITY = opaqueIdentity(0x31)
-const OTHER_ROOT_IDENTITY = opaqueIdentity(0x32)
-const FIRST_INTENT = opaqueIdentity(0x41)
-const SECOND_INTENT = opaqueIdentity(0x42)
-const FIRST_BINDING = binding(FIRST_INTENT, ROOT_IDENTITY)
-const SECOND_BINDING = binding(SECOND_INTENT, ROOT_IDENTITY)
-
-describe('browser File System Access namespace mutation authority', () => {
-  it('settles a barrier race across intents with one root owner and typed busy', async () => {
-    const manager = new DeterministicLockManager()
-    const gate = manager.gate(
-      browserFileSystemRootMutationLockName(FIRST_BINDING),
-      2,
+describe('FSA namespace and persisted parent authority', () => {
+  it('serializes same-named parents and reports a competing WindShare task as busy', async () => {
+    const manager = new MemoryLockManager()
+    const firstParent = directoryHandle('shared-parent', 'first')
+    const secondParent = directoryHandle('shared-parent', 'second')
+    expect(await fsaRootMutationLockName(firstParent)).toBe(
+      await fsaRootMutationLockName(secondParent),
     )
-    const first = acquireBrowserFileSystemAccessSessionLease(FIRST_BINDING, manager)
-    const second = acquireBrowserFileSystemAccessSessionLease(SECOND_BINDING, manager)
 
-    await gate.reached
-    gate.open()
-    const [firstResult, secondResult] = await Promise.allSettled([first, second])
-
-    expect(firstResult.status).toBe('fulfilled')
-    expect(secondResult.status).toBe('rejected')
-    if (firstResult.status !== 'fulfilled' || secondResult.status !== 'rejected') return
-    expect(secondResult.reason).toBeInstanceOf(BrowserOutputSessionBusyError)
-    expect(secondResult.reason).toMatchObject({
-      name: 'InvalidStateError',
-      scope: 'file-system-root',
-      binding: SECOND_BINDING,
-    })
-
-    // A failed root acquisition must not strand the loser's intent lock.
-    const secondIntentOnly = await acquireBrowserOutputSessionLease(SECOND_BINDING, manager)
-    await secondIntentOnly.release()
-    await firstResult.value.release()
-
-    const recovered = await acquireBrowserFileSystemAccessSessionLease(SECOND_BINDING, manager)
-    await recovered.release()
-  })
-
-  it('keeps same-intent opener exclusivity distinct from the shared-root lock', async () => {
-    const manager = new DeterministicLockManager()
-    const first = await acquireBrowserFileSystemAccessSessionLease(FIRST_BINDING, manager)
-
-    await expect(acquireBrowserFileSystemAccessSessionLease(FIRST_BINDING, manager))
-      .rejects.toMatchObject({
-        name: 'InvalidStateError',
-        scope: 'intent-namespace',
-        binding: FIRST_BINDING,
-      })
-
+    const first = await acquireFSARootMutationLease(firstParent, manager)
+    await expect(acquireFSARootMutationLease(secondParent, manager)).rejects.toBeInstanceOf(
+      FSARootMutationBusyError,
+    )
     await first.release()
-  })
-
-  it('drains accepted mutations before release and refuses late mutation', async () => {
-    const manager = new DeterministicLockManager()
-    const lease = await acquireBrowserFileSystemAccessSessionLease(FIRST_BINDING, manager)
-    const firstStarted = deferred<void>()
-    const finishFirst = deferred<void>()
-    const order: string[] = []
-    const first = lease.mutations.mutate('create-file', ['first.bin'], async () => {
-      order.push('first-started')
-      firstStarted.resolve()
-      await finishFirst.promise
-      order.push('first-finished')
-    })
-    await firstStarted.promise
-    const second = lease.mutations.mutate('remove-file', ['second.bin'], async () => {
-      order.push('second')
-    })
-    const release = lease.release()
-
-    await expect(lease.mutations.mutate('ensure-directory', ['late'], async () => undefined))
-      .rejects.toBeInstanceOf(BrowserFileSystemMutationClosedError)
-    expect(order).toEqual(['first-started'])
-
-    finishFirst.resolve()
-    await Promise.all([first, second, release])
-    expect(order).toEqual(['first-started', 'first-finished', 'second'])
-
-    const reopened = await acquireBrowserFileSystemAccessSessionLease(FIRST_BINDING, manager)
+    const reopened = await acquireFSARootMutationLease(secondParent, manager)
     await reopened.release()
   })
 
-  it('binds tree authority to intent, backend, and root', async () => {
-    const manager = new DeterministicLockManager()
-    const lease = await acquireBrowserFileSystemAccessSessionLease(FIRST_BINDING, manager)
-    const root = new MemoryDirectoryHandle('root')
+  it('persists operation, reservation, and parent handle in one verified transition', async () => {
+    const repository = new MemoryOperationRepository()
+    const parent = directoryHandle('downloads', 'parent-a')
+    const intent = await singleFileIntent()
 
-    expect(() => BrowserFileSystemTree.forSharedRoot({
-      root: root.handle,
-      handles: new MemoryHandleRepository(SECOND_BINDING),
-      mutations: lease.mutations,
-      randomIdentity: () => opaqueIdentity(0x51),
-    })).toThrow('does not match the output namespace')
-
-    await lease.release()
+    const persisted = await persistFSAOperationBinding({ repository, intent, parent })
+    expect(persisted.reservation.guarantees).toMatchObject({
+      profile: 'fsa-tree',
+      replacement: 'coordinated-no-replace',
+      delivery: 'managed-target',
+      visibility: 'prefix-visible',
+      rollback: 'none',
+    })
+    expect(repository.transitions).toHaveLength(1)
+    expect(repository.transitions[0]).toMatchObject({ operationId: intent.operationId })
+    await expect(verifyFSAOperationBinding({
+      repository,
+      intent,
+      expectedParent: parent,
+    })).resolves.toMatchObject({ parent, intent })
   })
 
-  it('preserves no-replace and denies cross-intent removal after lease recovery', async () => {
-    const manager = new DeterministicLockManager()
-    const root = new MemoryDirectoryHandle('root')
-    const firstRepository = new MemoryHandleRepository(FIRST_BINDING)
-    const firstLease = await acquireBrowserFileSystemAccessSessionLease(FIRST_BINDING, manager)
-    const firstTree = BrowserFileSystemTree.forSharedRoot({
-      root: root.handle,
-      handles: firstRepository,
-      mutations: firstLease.mutations,
-      randomIdentity: identitySequence(0x61),
-    })
-    const firstFile = await firstTree.createFileExclusive(['shared.bin'])
-    const firstDirectory = await firstTree.ensureDirectory(['shared-directory'])
-    expect(firstDirectory.created).toBe(true)
-    const originalFileHandle = root.entry('shared.bin')
-    const originalDirectoryHandle = root.entry('shared-directory')
-    await firstLease.release()
+  it('never accepts a different parent or rewritten immutable reservation on reopen', async () => {
+    const repository = new MemoryOperationRepository()
+    const parent = directoryHandle('downloads', 'parent-a')
+    const intent = await singleFileIntent()
+    const persisted = await persistFSAOperationBinding({ repository, intent, parent })
 
-    const secondRepository = new MemoryHandleRepository(SECOND_BINDING)
-    const secondLease = await acquireBrowserFileSystemAccessSessionLease(SECOND_BINDING, manager)
-    const secondTree = BrowserFileSystemTree.forSharedRoot({
-      root: root.handle,
-      handles: secondRepository,
-      mutations: secondLease.mutations,
-      randomIdentity: identitySequence(0x71),
-    })
+    await expect(verifyFSAOperationBinding({
+      repository,
+      intent,
+      expectedParent: directoryHandle('downloads', 'parent-b'),
+    })).rejects.toBeInstanceOf(TargetOwnershipUnknownError)
 
-    await expect(secondTree.createFileExclusive(['shared.bin']))
-      .rejects.toMatchObject({ name: 'InvalidModificationError' })
-    const secondDirectory = await secondTree.ensureDirectory(['shared-directory'])
-    expect(secondDirectory.created).toBe(false)
-    await expect(secondTree.removeFile(['shared.bin'], firstFile.identity))
-      .rejects.toMatchObject({ name: 'InvalidStateError' })
-    await expect(secondTree.removeDirectory(['shared-directory'], firstDirectory.identity))
-      .rejects.toMatchObject({ name: 'InvalidStateError' })
-    expect(root.entry('shared.bin')).toBe(originalFileHandle)
-    expect(root.entry('shared-directory')).toBe(originalDirectoryHandle)
-
-    await secondLease.release()
+    const reservationRecord = [...repository.records.values()].find(
+      (record) => record.kind === RECEIVE_RECORD_RESERVATION,
+    )
+    if (reservationRecord === undefined) throw new Error('reservation fixture is missing')
+    repository.records.set(
+      reservationRecord.id,
+      { bogus: true } as unknown as PersistedReceiveRecord,
+    )
+    await expect(verifyFSAOperationBinding({
+      repository,
+      intent: persisted.intent,
+    })).rejects.toBeInstanceOf(TargetOwnershipUnknownError)
   })
 
-  it('does not collide independent physical roots', async () => {
-    const manager = new DeterministicLockManager()
-    expect(browserFileSystemRootMutationLockName(FIRST_BINDING)).not.toBe(
-      browserFileSystemRootMutationLockName(binding(SECOND_INTENT, OTHER_ROOT_IDENTITY)),
-    )
-    const first = await acquireBrowserFileSystemAccessSessionLease(FIRST_BINDING, manager)
-    const second = await acquireBrowserFileSystemAccessSessionLease(
-      binding(SECOND_INTENT, OTHER_ROOT_IDENTITY),
-      manager,
-    )
-    await Promise.all([first.release(), second.release()])
+  it('reopens only the same-operation owned directory handle', async () => {
+    const repository = new MemoryOperationRepository()
+    const parent = directoryHandle('downloads', 'parent-a')
+    const intent = await singleFileIntent()
+    const persisted = await persistFSAOperationBinding({ repository, intent, parent })
+    const handleId = fsaOwnedDirectoryHandleId(intent.operationId, 'opaque-locator')
+    const first = directoryHandle('task-root', 'root-a')
+
+    await persistFSAOwnedDirectory({
+      repository,
+      reservation: persisted.reservation,
+      handleId,
+      ownedObjectId: identity(90, 32),
+      handle: first,
+    })
+    await expect(persistFSAOwnedDirectory({
+      repository,
+      reservation: persisted.reservation,
+      handleId,
+      ownedObjectId: identity(90, 32),
+      handle: directoryHandle('task-root', 'root-b'),
+    })).rejects.toBeInstanceOf(TargetOwnershipUnknownError)
   })
 })
 
-interface LockGate {
-  readonly reached: Promise<void>
-  open(): void
+async function singleFileIntent(): Promise<ReceiveIntent> {
+  const selection = await createSelectionSpec({
+    shareInstance: identity(1),
+    syntheticRoot: identity(2),
+    rules: { mode: 'node-id', defaultSelected: true, rules: [] },
+  })
+  const artifact = await createSingleFileDirectoryTreeArtifact({
+    fileId: identity(3),
+    sourcePath: 'report.bin',
+    outputName: 'report.bin',
+  })
+  const reservation = await createFSANamedEntryReservation({
+    operationId: identity(4),
+    reservationId: identity(5),
+    artifact,
+    authorityRef: identity(6, 32),
+    reservedName: 'report.bin',
+    collisionIndex: 0,
+  })
+  return createReceiveIntent({
+    selection,
+    artifact,
+    plan: await createDirectTreePlan(artifact, reservation),
+  })
 }
 
-interface PendingLockRequest {
-  readonly name: string
-  readonly options: { readonly mode: 'exclusive'; readonly ifAvailable?: true }
-  readonly callback: (lock: BrowserLockHandle | null) => Promise<void>
-  readonly resolve: () => void
-  readonly reject: (reason: unknown) => void
-}
-
-class DeterministicLockManager implements BrowserLockManagerRuntime {
+class MemoryLockManager implements BrowserLockManagerRuntime {
   readonly #held = new Set<string>()
-  readonly #waiting = new Map<string, PendingLockRequest[]>()
-  #gate: {
-    readonly name: string
-    readonly count: number
-    readonly reached: ReturnType<typeof deferred<void>>
-    readonly pending: PendingLockRequest[]
-  } | undefined
 
-  gate(name: string, count: number): LockGate {
-    if (this.#gate !== undefined) throw new Error('A lock gate is already active')
-    const reached = deferred<void>()
-    this.#gate = { name, count, reached, pending: [] }
-    return Object.freeze({
-      reached: reached.promise,
-      open: () => {
-        const gate = this.#gate
-        if (gate === undefined || gate.name !== name) throw new Error('Lock gate is not active')
-        this.#gate = undefined
-        for (const request of gate.pending) this.#start(request)
-      },
-    })
-  }
-
-  request(
+  async request(
     name: string,
-    options: { readonly mode: 'exclusive'; readonly ifAvailable?: true },
-    callback: (lock: BrowserLockHandle | null) => Promise<void>,
+    _options: { readonly mode: 'exclusive'; readonly ifAvailable: true },
+    callback: (lock: { readonly name: string } | null) => Promise<void>,
   ): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const request = { name, options, callback, resolve, reject }
-      const gate = this.#gate
-      if (gate !== undefined && gate.name === name) {
-        gate.pending.push(request)
-        if (gate.pending.length === gate.count) gate.reached.resolve()
-        return
-      }
-      this.#start(request)
-    })
-  }
-
-  #start(request: PendingLockRequest): void {
-    if (this.#held.has(request.name)) {
-      if (request.options.ifAvailable === true) {
-        request.callback(null).then(request.resolve, request.reject)
-        return
-      }
-      const waiting = this.#waiting.get(request.name) ?? []
-      waiting.push(request)
-      this.#waiting.set(request.name, waiting)
+    if (this.#held.has(name)) {
+      await callback(null)
       return
     }
-    this.#held.add(request.name)
-    request.callback(Object.freeze({ name: request.name })).then(
-      () => {
-        this.#held.delete(request.name)
-        request.resolve()
-        this.#startNext(request.name)
-      },
-      (error: unknown) => {
-        this.#held.delete(request.name)
-        request.reject(error)
-        this.#startNext(request.name)
-      },
-    )
-  }
-
-  #startNext(name: string): void {
-    const waiting = this.#waiting.get(name)
-    const next = waiting?.shift()
-    if (waiting?.length === 0) this.#waiting.delete(name)
-    if (next !== undefined) this.#start(next)
-  }
-}
-
-class MemoryHandleRepository {
-  readonly binding: DurableCheckpointNamespaceIdentity
-  readonly #handles = new Map<string, FileSystemHandle>()
-
-  constructor(bindingValue: DurableCheckpointNamespaceIdentity) {
-    this.binding = bindingValue
-  }
-
-  async putHandle(identity: string, handle: FileSystemHandle): Promise<void> {
-    this.#handles.set(identity, handle)
-  }
-
-  async getHandle(identity: string): Promise<FileSystemHandle | undefined> {
-    return this.#handles.get(identity)
-  }
-
-  async deleteHandle(identity: string): Promise<void> {
-    this.#handles.delete(identity)
-  }
-}
-
-type MemoryEntry = MemoryDirectoryHandle | MemoryFileHandle
-
-class MemoryDirectoryHandle {
-  readonly kind = 'directory' as const
-  readonly name: string
-  readonly #entries = new Map<string, MemoryEntry>()
-
-  constructor(name: string) {
-    this.name = name
-  }
-
-  get handle(): FileSystemDirectoryHandle {
-    return this as unknown as FileSystemDirectoryHandle
-  }
-
-  entry(name: string): MemoryEntry | undefined {
-    return this.#entries.get(name)
-  }
-
-  async getFileHandle(
-    name: string,
-    options?: { readonly create?: boolean },
-  ): Promise<FileSystemFileHandle> {
-    const existing = this.#entries.get(name)
-    if (existing instanceof MemoryDirectoryHandle) throw domError('TypeMismatchError')
-    if (existing !== undefined) return existing.handle
-    if (options?.create !== true) throw domError('NotFoundError')
-    const created = new MemoryFileHandle(name)
-    this.#entries.set(name, created)
-    return created.handle
-  }
-
-  async getDirectoryHandle(
-    name: string,
-    options?: { readonly create?: boolean },
-  ): Promise<FileSystemDirectoryHandle> {
-    const existing = this.#entries.get(name)
-    if (existing instanceof MemoryFileHandle) throw domError('TypeMismatchError')
-    if (existing !== undefined) return existing.handle
-    if (options?.create !== true) throw domError('NotFoundError')
-    const created = new MemoryDirectoryHandle(name)
-    this.#entries.set(name, created)
-    return created.handle
-  }
-
-  async removeEntry(name: string): Promise<void> {
-    const existing = this.#entries.get(name)
-    if (existing === undefined) throw domError('NotFoundError')
-    if (existing instanceof MemoryDirectoryHandle && existing.#entries.size > 0) {
-      throw domError('InvalidModificationError')
+    this.#held.add(name)
+    try {
+      await callback({ name })
+    } finally {
+      this.#held.delete(name)
     }
-    this.#entries.delete(name)
-  }
-
-  async isSameEntry(other: FileSystemHandle): Promise<boolean> {
-    return other === this.handle
   }
 }
 
-class MemoryFileHandle {
-  readonly kind = 'file' as const
-  readonly name: string
+class MemoryOperationRepository implements ReceiveOperationRepository {
+  readonly records = new Map<string, PersistedReceiveRecord>()
+  readonly handles = new Map<string, ReceiveOperationHandleRecord>()
+  readonly transitions: ReceiveOperationTransition[] = []
 
-  constructor(name: string) {
-    this.name = name
+  async commitTransition(transition: ReceiveOperationTransition): Promise<void> {
+    this.transitions.push(transition)
+    for (const record of transition.records ?? []) this.records.set(record.id, record)
+    for (const handle of transition.handles ?? []) this.handles.set(handle.id, handle)
+    for (const id of transition.deleteRecordIds ?? []) this.records.delete(id)
+    for (const id of transition.deleteHandleIds ?? []) this.handles.delete(id)
   }
 
-  get handle(): FileSystemFileHandle {
-    return this as unknown as FileSystemFileHandle
+  async readRecord(id: string): Promise<PersistedReceiveRecord | undefined> {
+    return this.records.get(id)
   }
 
-  async isSameEntry(other: FileSystemHandle): Promise<boolean> {
-    return other === this.handle
+  async readLifecycle(): Promise<PersistedReceiveRecord | undefined> {
+    return undefined
   }
+
+  async listRecords(operationId: string): Promise<readonly PersistedReceiveRecord[]> {
+    return [...this.records.values()].filter((record) => record.operationId === operationId)
+  }
+
+  async listManifestPages(): Promise<readonly []> {
+    return []
+  }
+
+  async readHandle<T = unknown>(id: string): Promise<ReceiveOperationHandleRecord<T> | undefined> {
+    return this.handles.get(id) as ReceiveOperationHandleRecord<T> | undefined
+  }
+
+  async readLease(): Promise<undefined> {
+    return undefined
+  }
+
+  close(): void {}
 }
 
-function binding(
-  transferIntentDigest: string,
-  rootIdentity: string,
-): DurableCheckpointNamespaceIdentity {
-  return Object.freeze({
-    backend: FILE_SYSTEM_ACCESS_BACKEND,
-    transferIntentDigest,
-    rootIdentity,
-  })
-}
-
-function opaqueIdentity(byte: number): string {
-  return encodeBase64Url(new Uint8Array(32).fill(byte))
-}
-
-function identitySequence(first: number): () => string {
-  let next = first
-  return () => opaqueIdentity(next++)
-}
-
-function domError(name: string): DOMException {
-  return new DOMException(name, name)
-}
-
-function deferred<T>(): {
-  readonly promise: Promise<T>
-  resolve(value: T): void
-  reject(reason: unknown): void
-} {
-  let resolve!: (value: T) => void
-  let reject!: (reason: unknown) => void
-  const promise = new Promise<T>((onResolve, onReject) => {
-    resolve = onResolve
-    reject = onReject
-  })
-  return { promise, resolve, reject }
+function directoryHandle(name: string, token: string): FileSystemDirectoryHandle {
+  const handle = {
+    kind: 'directory' as const,
+    name,
+    isSameEntry: async (other: FileSystemHandle) =>
+      (other as unknown as { readonly token?: string }).token === token,
+    token,
+  }
+  return handle as unknown as FileSystemDirectoryHandle
 }

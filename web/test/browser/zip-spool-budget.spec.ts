@@ -4,11 +4,9 @@ test('ZIP spool budgets reject atomically without committing the rejected record
   await page.goto('/')
   const result = await page.evaluate(async () => {
     const spoolPath = '/src/output/streams/zip-spool.ts'
-    const outputContractPath = '/src/transfer/output-session.ts'
-    const [spoolModule, outputContract] = await Promise.all([
-      import(spoolPath) as Promise<typeof import('../../src/output/streams/zip-spool')>,
-      import(outputContractPath) as Promise<typeof import('../../src/transfer/output-session')>,
-    ])
+    const spoolModule = await (
+      import(spoolPath) as Promise<typeof import('../../src/output/streams/zip-spool')>
+    )
     const entryDatabase = `zip-entry-budget-${crypto.randomUUID()}`
     const byteDatabase = `zip-byte-budget-${crypto.randomUUID()}`
     const entrySpool = new spoolModule.IndexedDbZipCentralDirectorySpool({
@@ -67,7 +65,7 @@ test('ZIP spool budgets reject atomically without committing the rejected record
       try {
         await operation
       } catch (error) {
-        if (error instanceof outputContract.OutputBudgetExceededError) {
+        if (error instanceof spoolModule.ZipSpoolBudgetExceededError) {
           return {
             name: error.name,
             budget: error.budget,
@@ -91,7 +89,7 @@ test('ZIP spool budgets reject atomically without committing the rejected record
 
   expect(result).toEqual({
     entryFailure: {
-      name: 'OutputBudgetExceededError',
+      name: 'ZipSpoolBudgetExceededError',
       budget: 'zip-central-directory-entries',
       limit: '1',
       attempted: '2',
@@ -99,7 +97,7 @@ test('ZIP spool budgets reject atomically without committing the rejected record
     entryManifest: { chunkCount: 1, recordCount: '1', byteLength: '2' },
     entryChunk: [0x11, 0x12],
     byteFailure: {
-      name: 'OutputBudgetExceededError',
+      name: 'ZipSpoolBudgetExceededError',
       budget: 'zip-central-directory-bytes',
       limit: '3',
       attempted: '4',

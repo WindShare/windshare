@@ -1,137 +1,119 @@
-import type { OutputSessionIdentity } from '../../transfer/output-session'
-import type { CheckpointNamespaceBinding } from '../persistence/journal'
-import type {
-  OutputCheckpointJournal,
-  PersistedOutputRecord,
+import {
+  checkpointMatchesNamespace,
+  validateFileCheckpointPage,
+  type CheckpointNamespaceBinding,
+  type FileCheckpointPage,
+  type FileCheckpointScan,
 } from '../persistence/journal'
 import {
-  type OutputJournalPage,
-  type OutputJournalScan,
-  outputPathKey,
-  outputRecordKey,
-  recordBelongsToCheckpointNamespace,
-  snapshotOutputRecord,
-  validateOutputJournalPage,
-} from '../persistence/journal'
-import type { PersistentOutputTree } from './contracts'
-import { PersistentOutputError } from './errors'
+  FILE_CHECKPOINT_COMMIT_QUARANTINED,
+  FILE_CHECKPOINT_COMMIT_VERIFIED,
+  validateFileCheckpoint,
+  type FileCheckpointV2,
+} from '../persistence/checkpoint'
 
-export async function recoverOutputRecords(
-  identity: OutputSessionIdentity & CheckpointNamespaceBinding,
-  tree: PersistentOutputTree,
-  journal: OutputCheckpointJournal,
-): Promise<void> {
-  await scanJournal(
-    identity,
-    (scan) => journal.scanCandidates(scan),
-    async (candidate) => {
-      const key = validatedRecordKey(candidate, identity)
-      let committed: PersistedOutputRecord | undefined
-      try {
-        committed = await journal.readCommitted(key)
-      } catch (error) {
-        throw bindingError('Committed output journal record could not be validated', error)
-      }
-      if (committed === undefined) await removeUncommittedCreation(candidate, tree)
-      await journal.discardCandidate(key)
-    },
-  )
-  await scanJournal(
-    identity,
-    (scan) => journal.scanCommitted(scan),
-    async (candidate) => {
-      const record = validatedRecord(candidate, identity)
-      const conflictingKind = record.kind === 'file' ? 'directory' : 'file'
-      if (await readRecord(journal, recordKey(conflictingKind, record.canonicalPath)) !== undefined) {
-        throw bindingError('Output journal assigns both file and directory kinds to one path')
-      }
-      for (let length = 1; length < record.canonicalPath.length; length += 1) {
-        const parent = await readRecord(
-          journal,
-          recordKey('directory', record.canonicalPath.slice(0, length)),
-        )
-        if (parent?.kind !== 'directory') {
-          throw bindingError('Output journal contains a child without its owned parent directory')
-        }
-      }
-    },
-  )
+export type FileCheckpointCandidateObservation =
+  | Readonly<{ kind: 'verified'; committed: FileCheckpointV2 }>
+  | Readonly<{ kind: 'quarantined'; checkpoint: FileCheckpointV2 }>
+  | Readonly<{ kind: 'ownership-unknown' }>
+
+export interface FileCheckpointRecoveryRepository {
+  readonly binding: CheckpointNamespaceBinding
+  scanCandidates(scan: FileCheckpointScan): Promise<FileCheckpointPage>
+  readCommitted(recordId: string): Promise<FileCheckpointV2 | undefined>
+  resolveCandidate(
+    candidate: FileCheckpointV2,
+    observation: Exclude<FileCheckpointCandidateObservation, { kind: 'ownership-unknown' }>,
+  ): Promise<void>
 }
 
-async function scanJournal(
-  identity: OutputSessionIdentity & CheckpointNamespaceBinding,
-  scan: (options: OutputJournalScan) => Promise<OutputJournalPage>,
-  visit: (record: PersistedOutputRecord) => Promise<void>,
-): Promise<void> {
+export interface FileCheckpointCandidateProbe {
+  observe(
+    candidate: FileCheckpointV2,
+    committed: FileCheckpointV2 | undefined,
+  ): Promise<FileCheckpointCandidateObservation>
+}
+
+export interface FileCheckpointRecoveryReport {
+  readonly resolved: number
+  readonly unknownRecordIds: readonly string[]
+}
+
+/**
+ * Candidate resolution is idempotent: the repository commits or quarantines a
+ * candidate atomically. A crash can replay the probe, but cannot invent range truth.
+ */
+export async function recoverFileCheckpointCandidates(
+  repository: FileCheckpointRecoveryRepository,
+  probe: FileCheckpointCandidateProbe,
+): Promise<FileCheckpointRecoveryReport> {
   let cursor: string | undefined
+  let resolved = 0
+  const unknownRecordIds: string[] = []
+
   do {
-    let page: OutputJournalPage
-    try {
-      const options: OutputJournalScan = {
-        direction: 'ascending',
-        ...(cursor === undefined ? {} : { cursor }),
-      }
-      page = validateOutputJournalPage(await scan(options), options, identity)
-    } catch (error) {
-      throw bindingError('Output journal could not be scanned', error)
+    const scan: FileCheckpointScan = {
+      direction: 'ascending',
+      ...(cursor === undefined ? {} : { cursor }),
     }
-    for (const record of page.records) await visit(record)
+    const page = validateFileCheckpointPage(
+      await repository.scanCandidates(scan),
+      scan,
+      repository.binding,
+    )
+    for (const candidate of page.records) {
+      const candidateResolved = await recoverCandidate(repository, probe, candidate)
+      if (candidateResolved) resolved += 1
+      else unknownRecordIds.push(candidate.recordId)
+    }
     cursor = page.nextCursor
   } while (cursor !== undefined)
+
+  return Object.freeze({
+    resolved,
+    unknownRecordIds: Object.freeze(unknownRecordIds),
+  })
 }
 
-function validatedRecord(
-  candidate: PersistedOutputRecord,
-  identity: OutputSessionIdentity & CheckpointNamespaceBinding,
-): PersistedOutputRecord {
-  let record: PersistedOutputRecord
-  try {
-    record = snapshotOutputRecord(candidate)
-  } catch (error) {
-    throw bindingError('Output journal contains a corrupt record', error)
+async function recoverCandidate(
+  repository: FileCheckpointRecoveryRepository,
+  probe: FileCheckpointCandidateProbe,
+  candidate: FileCheckpointV2,
+): Promise<boolean> {
+  if (!checkpointMatchesNamespace(candidate, repository.binding)) {
+    throw new TypeError('candidate checkpoint escaped its recovery namespace')
   }
-  if (!recordBelongsToCheckpointNamespace(record, identity)) {
-    throw bindingError('Output journal contains a record for another checkpoint namespace')
+  const committed = await repository.readCommitted(candidate.recordId)
+  if (committed !== undefined &&
+      !checkpointMatchesNamespace(committed, repository.binding)) {
+    throw new TypeError('committed checkpoint escaped its recovery namespace')
   }
-  return record
-}
-
-function validatedRecordKey(
-  candidate: PersistedOutputRecord,
-  identity: OutputSessionIdentity & CheckpointNamespaceBinding,
-): string {
-  return outputRecordKey(validatedRecord(candidate, identity))
-}
-
-async function removeUncommittedCreation(
-  record: PersistedOutputRecord,
-  tree: PersistentOutputTree,
-): Promise<void> {
-  if (record.kind === 'file') {
-    await tree.removeFile(record.canonicalPath, record.ownedFileIdentity)
-    return
+  const observation = await probe.observe(candidate, committed)
+  if (observation.kind === 'ownership-unknown') {
+    // The aggregate owns the frozen receive.operation.recovery trace because only it
+    // has enough operation context to report a contract-complete decision.
+    return false
   }
-  if (record.createdBySession) {
-    await tree.removeDirectory(record.canonicalPath, record.ownedDirectoryIdentity)
+  assertResolvedCandidateIdentity(candidate, observation, repository.binding)
+  await repository.resolveCandidate(candidate, observation)
+  return true
+}
+
+function assertResolvedCandidateIdentity(
+  candidate: FileCheckpointV2,
+  observation: Exclude<FileCheckpointCandidateObservation, { kind: 'ownership-unknown' }>,
+  binding: CheckpointNamespaceBinding,
+): void {
+  const resolved = observation.kind === 'verified'
+    ? observation.committed
+    : observation.checkpoint
+  validateFileCheckpoint(resolved)
+  const expectedCommitState = observation.kind === 'verified'
+    ? FILE_CHECKPOINT_COMMIT_VERIFIED
+    : FILE_CHECKPOINT_COMMIT_QUARANTINED
+  if (resolved.recordId !== candidate.recordId ||
+      resolved.commitState !== expectedCommitState ||
+      !checkpointMatchesNamespace(resolved, binding)) {
+    throw new TypeError('checkpoint probe returned a foreign resolved record')
   }
-  await tree.forgetIdentity?.(record.ownedDirectoryIdentity)
-}
-
-async function readRecord(
-  journal: OutputCheckpointJournal,
-  key: string,
-): Promise<PersistedOutputRecord | undefined> {
-  try {
-    return await journal.readCommitted(key)
-  } catch (error) {
-    throw bindingError('Output journal record could not be validated', error)
-  }
-}
-
-function recordKey(kind: PersistedOutputRecord['kind'], path: readonly string[]): string {
-  return `${kind}:${outputPathKey(path)}`
-}
-
-function bindingError(message: string, cause?: unknown): PersistentOutputError {
-  return new PersistentOutputError('journal-binding', message, cause)
 }

@@ -1,37 +1,62 @@
-import { decodeBase64Url } from '../../crypto/bytes'
+import { encodeBase64Url } from '../../crypto/bytes'
 import {
-  FILE_CHECKPOINT_NAMESPACE,
-  FILE_CHECKPOINT_OWNERSHIP_MARKER,
-  canonicalFileCheckpointBackend,
+  FILE_CHECKPOINT_ID_BYTES,
+  OPERATION_ID_BYTES,
+  checkpointMaterializerKind,
+  identityBytes,
+  type CheckpointIdentity,
+  type FileCheckpointMaterializerKind,
 } from './checkpoint'
 
 export interface DurableCheckpointNamespaceIdentity {
-  readonly backend: string
-  readonly transferIntentDigest: string
-  readonly rootIdentity: string
+  readonly operationId: string
+  readonly receiveIntentDigest: string
+  readonly materializationBindingDigest: string
+  readonly materializerKind: FileCheckpointMaterializerKind
+  readonly authorityRef: string
 }
 
-export function durableCheckpointNamespaceIdentity(
-  input: DurableCheckpointNamespaceIdentity,
-): DurableCheckpointNamespaceIdentity {
-  const backend = canonicalFileCheckpointBackend(input.backend)
+export function durableCheckpointNamespaceIdentity(input: {
+  readonly operationId: CheckpointIdentity
+  readonly receiveIntentDigest: CheckpointIdentity
+  readonly materializationBindingDigest: CheckpointIdentity
+  readonly materializerKind: FileCheckpointMaterializerKind | number
+  readonly authorityRef: CheckpointIdentity
+}): DurableCheckpointNamespaceIdentity {
   return Object.freeze({
-    backend,
-    transferIntentDigest: requireDigest(input.transferIntentDigest, 'transfer intent digest'),
-    rootIdentity: requireDigest(input.rootIdentity, 'root identity'),
+    operationId: encodeBase64Url(identityBytes(input.operationId, OPERATION_ID_BYTES, 'operation ID')),
+    receiveIntentDigest: encodeBase64Url(identityBytes(
+      input.receiveIntentDigest,
+      FILE_CHECKPOINT_ID_BYTES,
+      'receive intent digest',
+    )),
+    materializationBindingDigest: encodeBase64Url(identityBytes(
+      input.materializationBindingDigest,
+      FILE_CHECKPOINT_ID_BYTES,
+      'materialization binding digest',
+    )),
+    materializerKind: checkpointMaterializerKind(input.materializerKind),
+    authorityRef: encodeBase64Url(identityBytes(
+      input.authorityRef,
+      FILE_CHECKPOINT_ID_BYTES,
+      'authority reference',
+    )),
   })
 }
 
-/** The same key is used by storage and Web Locks, so run IDs cannot split ownership. */
-export function durableCheckpointNamespaceKey(input: DurableCheckpointNamespaceIdentity): string {
-  const identity = durableCheckpointNamespaceIdentity(input)
-  return `${FILE_CHECKPOINT_OWNERSHIP_MARKER}\0${FILE_CHECKPOINT_NAMESPACE}\0${identity.backend}\0${identity.transferIntentDigest}\0${identity.rootIdentity}`
+export function durableCheckpointNamespaceKey(
+  identity: DurableCheckpointNamespaceIdentity,
+): string {
+  const canonical = durableCheckpointNamespaceIdentity(identity)
+  return `windshare/file-checkpoint/v2/${canonical.operationId}`
 }
 
-function requireDigest(value: string, label: string): string {
-  const decoded = typeof value === 'string' ? decodeBase64Url(value) : undefined
-  if (decoded === undefined || decoded.byteLength !== 32 || decoded.every((byte) => byte === 0)) {
-    throw new TypeError(`checkpoint namespace ${label} is not a non-zero SHA-256 identity`)
-  }
-  return value
+export function sameDurableCheckpointNamespace(
+  left: DurableCheckpointNamespaceIdentity,
+  right: DurableCheckpointNamespaceIdentity,
+): boolean {
+  return left.operationId === right.operationId &&
+    left.receiveIntentDigest === right.receiveIntentDigest &&
+    left.materializationBindingDigest === right.materializationBindingDigest &&
+    left.materializerKind === right.materializerKind && left.authorityRef === right.authorityRef
 }

@@ -409,11 +409,11 @@ func (store *FileExecutionStore) ApplyRetirement(
 	return observation, errors.Join(operationErr, observeErr, closeOwnedFile(file))
 }
 
-func (store *FileExecutionStore) initialCandidateReady(record checkpointmodel.Record) (bool, error) {
+func (store *FileExecutionStore) candidateDurable(record checkpointmodel.Record) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	file, observation, err := store.openOwnedLocked(
-		record.OwnedOutputObject(), record.ExactSize(), true, false,
+		record.OwnedObjectID(), record.ExactSize(), true, false,
 	)
 	if observation.Condition() != fileexecution.OwnedReady {
 		return false, errors.Join(err, closeOwnedFile(file))
@@ -424,8 +424,8 @@ func (store *FileExecutionStore) initialCandidateReady(record checkpointmodel.Re
 	syncErr := file.Sync()
 	if syncErr == nil {
 		syncErr = errors.Join(
-			syncOwnedEntryNamespace(store.repository.stages, record.OwnedOutputObject()),
-			syncOwnedEntryNamespace(store.repository.anchors, record.OwnedOutputObject()),
+			syncOwnedEntryNamespace(store.repository.stages, record.OwnedObjectID()),
+			syncOwnedEntryNamespace(store.repository.anchors, record.OwnedObjectID()),
 		)
 	}
 	return syncErr == nil, errors.Join(syncErr, closeOwnedFile(file))

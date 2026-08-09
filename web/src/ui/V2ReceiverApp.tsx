@@ -1,29 +1,23 @@
 import { useEffect, useRef, useSyncExternalStore, type FormEvent } from 'react'
 
-import { PORTABLE_DOWNLOAD_MAXIMUM_BYTES } from '../output/portable/browser-download'
-import type { V2BrowseRow, V2PausedTaskSnapshot, V2PreviewSnapshot } from './v2-model'
+import type { PresentedArtifactAction } from './v2-artifact-presentation'
+import type { LifecycleActionPresentation } from './v2-lifecycle-presentation'
+import type {
+  V2BrowseRow,
+  V2PreviewSnapshot,
+  V2RetainedReceiveInventorySnapshot,
+} from './v2-model'
+import type {
+  V2RetainedReceiveAction,
+  V2RetainedReceiveOperation,
+} from './v2-receive-runtime'
 import type { V2ReceiverController } from './v2-controller'
+import type { V2OutputPresentationSnapshot } from './v2-output'
 import {
   completionProgressDescription,
   discoveryProgressDescription,
   formatBytes,
 } from './v2-progress-presentation'
-
-function downloadCapabilityDescription(capabilities: {
-  readonly nativeSave: boolean
-  readonly portableDownload: boolean
-  readonly originPrivateStaging: boolean
-}): string {
-  if (capabilities.nativeSave) {
-    return capabilities.originPrivateStaging
-      ? 'Native save stream; progressive archives stage privately before export.'
-      : 'Native save stream without browser-level restart recovery.'
-  }
-  if (capabilities.portableDownload) {
-    return `Buffered download up to ${formatBytes(BigInt(PORTABLE_DOWNLOAD_MAXIMUM_BYTES))}; no reload recovery.`
-  }
-  return 'Browser downloads are unavailable.'
-}
 
 function SelectionCheckbox(props: {
   readonly row: V2BrowseRow
@@ -83,14 +77,149 @@ function formatTime(seconds: number): string {
   return `${minutes}:${remainder.toString().padStart(2, '0')}`
 }
 
+function retentionTimestamp(expiresAt: number): Readonly<{
+  label: string
+  dateTime: string | null
+}> {
+  const date = new Date(expiresAt)
+  if (Number.isNaN(date.getTime())) {
+    return Object.freeze({ label: `${expiresAt} ms since Unix epoch`, dateTime: null })
+  }
+  return Object.freeze({ label: date.toLocaleString(), dateTime: date.toISOString() })
+}
+
+function retainedOperationCopy(operation: V2RetainedReceiveOperation): Readonly<{
+  title: string
+  description: string
+}> {
+  switch (operation.continuation) {
+    case 'resume-receive':
+      return Object.freeze({
+        title: 'Receive can continue',
+        description: 'File checkpoints are retained for this task.',
+      })
+    case 'resume-package':
+      return Object.freeze({
+        title: 'Packaging can continue',
+        description: 'The completed materialization is retained for packaging.',
+      })
+    case 'save-artifact':
+      return Object.freeze({
+        title: 'Ready to save',
+        description: 'The packaged result is retained and waiting for a save location.',
+      })
+    case 'retry-download':
+      return Object.freeze({
+        title: 'Ready to download again',
+        description: 'The retained package can start another browser download.',
+      })
+    case 'cleanup-expired':
+      return Object.freeze({
+        title: 'Expired task needs cleanup',
+        description: 'Its retention deadline has ended; only owned storage cleanup is safe.',
+      })
+    case 'retry-cleanup':
+      return Object.freeze({
+        title: 'Cleanup needs another attempt',
+        description: 'Publication finished, but owned temporary storage still needs cleanup.',
+      })
+    case 'needs-attention':
+      return Object.freeze({
+        title: 'Needs attention',
+        description: 'WindShare cannot safely infer target ownership or cleanup completion.',
+      })
+  }
+}
+
+function retainedActionLabel(
+  operation: V2RetainedReceiveOperation,
+  action: V2RetainedReceiveAction,
+): string {
+  switch (action) {
+    case 'continue':
+      return 'Continue'
+    case 'save':
+      return 'Save'
+    case 'redownload':
+      return 'Download again'
+    case 'discard':
+      return 'Discard task and delete retained content'
+    case 'delete':
+      if (operation.continuation === 'cleanup-expired') return 'Delete expired data'
+      if (operation.continuation === 'retry-cleanup') return 'Retry cleanup'
+      return 'Delete retained result'
+  }
+}
+
+function RetainedReceivePanel(props: {
+  readonly inventory: V2RetainedReceiveInventorySnapshot
+  readonly controller: V2ReceiverController
+}) {
+  if (props.inventory.kind === 'loading') return null
+  if (props.inventory.kind === 'failed') {
+    return (
+      <section className="retained-receive-panel" aria-live="polite">
+        <strong>Stored receive tasks are unavailable</strong>
+        <p>{props.inventory.error}</p>
+      </section>
+    )
+  }
+  if (props.inventory.operations.length === 0) return null
+  return (
+    <section className="retained-receive-panel" aria-labelledby="retained-receive-title">
+      <strong id="retained-receive-title">Stored receive tasks</strong>
+      <p>Actions reopen and verify the exact saved operation before changing owned data.</p>
+      <ul className="retained-receive-list">
+        {props.inventory.operations.map((operation) => {
+          const copy = retainedOperationCopy(operation)
+          const retention = operation.expiresAt === undefined
+            ? null
+            : retentionTimestamp(operation.expiresAt)
+          return (
+            <li key={operation.operationId} className="retained-receive-item">
+              <strong>{copy.title}</strong>
+              <p>{copy.description}</p>
+              {retention !== null && (
+                <small>
+                  {operation.continuation === 'cleanup-expired' ? 'Retention ended at ' : 'Retained until '}
+                  <time {...(retention.dateTime === null ? {} : { dateTime: retention.dateTime })}>
+                    {retention.label}
+                  </time>
+                </small>
+              )}
+              {operation.unavailableReason !== undefined && <p>{operation.unavailableReason}</p>}
+              {operation.actions.length > 0 && (
+                <div className="lifecycle-actions">
+                  {operation.actions.map((action) => (
+                    <button
+                      key={action}
+                      className={action === 'discard' || action === 'delete'
+                        ? 'abort-action'
+                        : undefined}
+                      type="button"
+                      onClick={() => props.controller.performRetainedAction(operation, action)}
+                    >
+                      {retainedActionLabel(operation, action)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  )
+}
+
 function VideoPreview(props: {
   readonly preview: Extract<V2PreviewSnapshot, { state: 'video' }>
   readonly controller: V2ReceiverController
 }) {
+  const video = useRef<HTMLVideoElement>(null)
   const position = () => {
     if (video.current !== null) video.current.currentTime = props.preview.positionSeconds
   }
-  const video = useRef<HTMLVideoElement>(null)
   return (
     <>
       <video
@@ -126,25 +255,12 @@ function VideoPreview(props: {
   )
 }
 
-function ImagePreview(props: {
-  readonly preview: Extract<V2PreviewSnapshot, { state: 'image' }>
-  readonly controller: V2ReceiverController
-}) {
-  return (
-    <img
-      className="preview-media"
-      src={props.preview.url}
-      alt={`Preview of ${props.preview.name}`}
-      onError={() => props.controller.previewMediaFailed(props.preview.url)}
-    />
-  )
-}
-
 function PreviewPanel(props: {
   readonly preview: V2PreviewSnapshot
   readonly controller: V2ReceiverController
 }) {
   if (props.preview.state === 'idle') return null
+  const imagePreview = props.preview.state === 'image' ? props.preview : null
   const details = props.preview.state === 'image' || props.preview.state === 'video'
     ? `${props.preview.width} × ${props.preview.height}`
     : undefined
@@ -159,8 +275,13 @@ function PreviewPanel(props: {
       </header>
       {props.preview.state === 'loading' && <p>Opening a bounded preview…</p>}
       {props.preview.state === 'error' && <p role="alert">{props.preview.message}</p>}
-      {props.preview.state === 'image' && (
-        <ImagePreview preview={props.preview} controller={props.controller} />
+      {imagePreview !== null && (
+        <img
+          className="preview-media"
+          src={imagePreview.url}
+          alt={`Preview of ${imagePreview.name}`}
+          onError={() => props.controller.previewMediaFailed(imagePreview.url)}
+        />
       )}
       {props.preview.state === 'video' && (
         <VideoPreview preview={props.preview} controller={props.controller} />
@@ -169,43 +290,115 @@ function PreviewPanel(props: {
   )
 }
 
-function PausedTasksPanel(props: {
-  readonly tasks: readonly V2PausedTaskSnapshot[]
+function ArtifactActionButton(props: {
+  readonly presented: PresentedArtifactAction
   readonly controller: V2ReceiverController
   readonly disabled: boolean
 }) {
-  if (props.tasks.length === 0) return null
   return (
-    <section className="preview-panel paused-task-panel" aria-label="Resumable transfers">
-      <header><strong>Resumable transfers</strong></header>
-      <ul className="selection-list">
-        {props.tasks.map((task) => (
-          <li key={task.id}>
-            <div className="selection-row">
-              <span className="entry-name">
-                {task.format === 'directory' ? 'Folder transfer' : 'Private staged archive'}
-              </span>
-              <span className="entry-kind">
-                {task.completedFileCount} completed · {task.state}
-              </span>
-              <button
-                type="button"
-                disabled={props.disabled || !task.authorizedForCurrentShare || task.state !== 'ready'}
-                onClick={() => props.controller.resumePausedTask(task.id)}
-              >Resume</button>
-              <button
-                className="abort-action"
-                type="button"
-                disabled={props.disabled || !task.authorizedForCurrentShare || task.state !== 'ready'}
-                onClick={() => props.controller.cancelPausedTask(task.id)}
-              >Cancel</button>
-            </div>
-            {!task.authorizedForCurrentShare && (
-              <small>Open the exact current share before resuming or cancelling this task.</small>
-            )}
-          </li>
-        ))}
-      </ul>
+    <li className="artifact-action-card">
+      <button
+        className={props.presented.importance === 'primary' ? 'primary-action' : undefined}
+        type="button"
+        disabled={props.disabled}
+        onClick={() => props.controller.chooseArtifact(props.presented.operation)}
+      >{props.presented.label}</button>
+      <p>{props.presented.description}</p>
+      {props.presented.packageExplanation !== null && (
+        <small>{props.presented.packageExplanation}</small>
+      )}
+    </li>
+  )
+}
+
+function ArtifactOfferPanel(props: {
+  readonly output: V2OutputPresentationSnapshot
+  readonly controller: V2ReceiverController
+}) {
+  const presentation = props.output.offerPresentation
+  if (presentation === null) {
+    return props.output.projection === null
+      ? <p className="output-guidance">Select content to see the available results.</p>
+      : <p className="output-guidance" role="status">Updating available results…</p>
+  }
+  if (presentation.kind === 'status') {
+    return (
+      <div className="output-guidance" role="status">
+        <strong>{presentation.title}</strong>
+        <p>{presentation.description}</p>
+      </div>
+    )
+  }
+  if (presentation.kind === 'retry') {
+    return (
+      <div className="output-guidance">
+        <strong>{presentation.title}</strong>
+        <p>{presentation.description}</p>
+        <button type="button" onClick={() => props.controller.retryOutputConfirmation()}>
+          {presentation.label}
+        </button>
+      </div>
+    )
+  }
+  const disabled = props.output.chosenAction !== null
+  return (
+    <ul className="artifact-action-list" aria-label="Choose the result to receive">
+      <ArtifactActionButton presented={presentation.primary} controller={props.controller} disabled={disabled} />
+      {presentation.alternatives.map((alternative) => (
+        <ArtifactActionButton
+          key={`${alternative.operation}:${alternative.action.artifactKind}`}
+          presented={alternative}
+          controller={props.controller}
+          disabled={disabled}
+        />
+      ))}
+    </ul>
+  )
+}
+
+function LifecycleActionButton(props: {
+  readonly action: LifecycleActionPresentation
+  readonly controller: V2ReceiverController
+}) {
+  return (
+    <button
+      className={props.action.destructive ? 'abort-action' : undefined}
+      type="button"
+      onClick={() => props.controller.performLifecycleAction(props.action.kind)}
+    >{props.action.label}</button>
+  )
+}
+
+function LifecyclePanel(props: {
+  readonly output: V2OutputPresentationSnapshot
+  readonly controller: V2ReceiverController
+}) {
+  const presentation = props.output.lifecyclePresentation
+  if (presentation === null) return null
+  const retention = presentation.retention
+  const timestamp = retention === null
+    ? null
+    : retentionTimestamp(retention.expiresAt)
+  return (
+    <section className={`lifecycle-panel lifecycle-${presentation.tone}`} aria-live="polite">
+      <strong>{presentation.title}</strong>
+      <p>{presentation.description}</p>
+      {retention !== null && timestamp !== null && (
+        <p>
+          {retention.elapsed ? 'Retention ended at ' : 'Available until '}
+          <time {...(timestamp.dateTime === null ? {} : { dateTime: timestamp.dateTime })}>
+            {timestamp.label}
+          </time>
+        </p>
+      )}
+      {presentation.usage !== null && <p>{presentation.usage.label}</p>}
+      {presentation.actions.length > 0 && (
+        <div className="lifecycle-actions">
+          {presentation.actions.map((action) => (
+            <LifecycleActionButton key={action.kind} action={action} controller={props.controller} />
+          ))}
+        </div>
+      )}
     </section>
   )
 }
@@ -216,19 +409,12 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
     controller.getSnapshot,
     controller.getSnapshot,
   )
-  const active = snapshot.phase === 'acquiring-output' ||
-    snapshot.phase === 'discovering' || snapshot.phase === 'transferring' ||
-    snapshot.phase === 'pausing' || snapshot.phase === 'resuming' ||
-    snapshot.phase === 'discarding'
-  const selectionLocked = active || snapshot.phase !== 'browsing'
-  const status = useRef<HTMLParagraphElement>(null)
+  const receiveLocked = snapshot.output.chosenAction !== null || snapshot.output.receiveIntent !== null
+  const selectionLocked = receiveLocked || snapshot.phase !== 'browsing'
   const alert = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (snapshot.phase === 'failed') alert.current?.focus()
-    else if (snapshot.phase === 'completed' || snapshot.phase === 'completed-errors' ||
-      snapshot.phase === 'paused' || snapshot.phase === 'retry-ready' ||
-      snapshot.phase === 'discarded' || snapshot.phase === 'needs-attention') status.current?.focus()
   }, [snapshot.phase])
 
   return (
@@ -245,13 +431,13 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
         <div className="card-heading">
           <p className="eyebrow">Receive securely</p>
           <h1 id="receiver-title">Browse and save shared files</h1>
-           <p className="intro">
-            Directory pages are authenticated on demand. Content is opened only after an explicit
-            preview or receive action.
+          <p className="intro">
+            Directory pages are authenticated on demand. Content opens only after an explicit
+            preview or artifact action.
           </p>
         </div>
 
-        <p ref={status} className="status-line" role="status" aria-live="polite" tabIndex={-1}>
+        <p className="status-line" role="status" aria-live="polite">
           <span className={`status-dot status-${snapshot.phase}`} aria-hidden="true" />
           {snapshot.status}
         </p>
@@ -265,9 +451,9 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
           </div>
         )}
 
-        {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
+        <RetainedReceivePanel inventory={snapshot.retained} controller={controller} />
 
-        <PausedTasksPanel tasks={snapshot.pausedTasks} controller={controller} disabled={active} />
+        {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
 
         {snapshot.breadcrumbs.length > 0 && (
           <div className="download-layout">
@@ -277,17 +463,13 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
                   <button
                     type="button"
                     key={crumb.id}
-                    disabled={index === snapshot.breadcrumbs.length - 1 || active}
+                    disabled={index === snapshot.breadcrumbs.length - 1 || receiveLocked}
                     onClick={() => controller.openBreadcrumb(index)}
-                  >
-                    {crumb.name}
-                  </button>
+                  >{crumb.name}</button>
                 ))}
               </nav>
               <p className="selection-summary">
-                {snapshot.selectionTotalKnown
-                  ? `${snapshot.selectedVisibleFiles} file(s), ${formatBytes(snapshot.selectedVisibleBytes)}`
-                  : `${snapshot.selectedVisibleFiles} visible file(s), at least ${formatBytes(snapshot.selectedVisibleBytes)}; recursive total unknown`}
+                {snapshot.selectedVisibleFiles} selected file(s) on this page · {formatBytes(snapshot.selectedVisibleBytes)}
               </p>
               <ul className="selection-list">
                 {snapshot.rows.map((row) => (
@@ -308,20 +490,16 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
                       {row.kind === 'directory' && (
                         <button
                           type="button"
-                          disabled={active}
+                          disabled={receiveLocked}
                           onClick={() => controller.openDirectory(row.id)}
-                        >
-                          Open
-                        </button>
+                        >Open</button>
                       )}
                       {row.kind === 'file' && (
                         <button
                           className="preview-action"
                           type="button"
                           onClick={() => controller.previewFile(row.id)}
-                        >
-                          Preview
-                        </button>
+                        >Preview</button>
                       )}
                     </div>
                   </li>
@@ -332,83 +510,34 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
                 <nav className="selection-pagination" aria-label="Directory pages">
                   <button
                     type="button"
-                    disabled={snapshot.pageIndex === 0 || active}
+                    disabled={snapshot.pageIndex === 0 || receiveLocked}
                     onClick={() => controller.showPage(snapshot.pageIndex - 1)}
                   >Previous</button>
                   <span>Page {snapshot.pageIndex + 1} of {snapshot.pageCount}</span>
                   <button
                     type="button"
-                    disabled={snapshot.pageIndex + 1 >= snapshot.pageCount || active}
+                    disabled={snapshot.pageIndex + 1 >= snapshot.pageCount || receiveLocked}
                     onClick={() => controller.showPage(snapshot.pageIndex + 1)}
                   >Next</button>
                 </nav>
               )}
             </section>
 
-            <aside className="save-panel" aria-label="Output and transfer">
-              <fieldset disabled={active || snapshot.phase !== 'browsing'}>
-                <legend>Save to</legend>
-                <label className="output-option">
-                  <input
-                    type="radio"
-                    checked={snapshot.outputIntent === 'directory'}
-                    disabled={!snapshot.outputCapabilities.nativeDirectory}
-                    onChange={() => controller.chooseOutput('directory')}
-                  />
-                  <span><strong>Folder tree</strong><small>Durable checkpoints and restart recovery.</small></span>
-                </label>
-                <label className="output-option">
-                  <input
-                    type="radio"
-                    checked={snapshot.outputIntent === 'download'}
-                    disabled={
-                      !snapshot.outputCapabilities.nativeSave &&
-                      !snapshot.outputCapabilities.portableDownload
-                    }
-                    onChange={() => controller.chooseOutput('download')}
-                  />
-                  <span>
-                    <strong>Browser download</strong>
-                    <small>{downloadCapabilityDescription(snapshot.outputCapabilities)}</small>
-                  </span>
-                </label>
-              </fieldset>
-
-              {(active || snapshot.phase === 'completed' || snapshot.phase === 'completed-errors' ||
-                snapshot.phase === 'paused' || snapshot.phase === 'retry-ready' ||
-                snapshot.phase === 'needs-attention') && (
+            <aside className="save-panel" aria-label="Result and receive status">
+              <h2>Receive as</h2>
+              <ArtifactOfferPanel output={snapshot.output} controller={controller} />
+              <LifecyclePanel output={snapshot.output} controller={controller} />
+              {snapshot.progress.transferJobId.length > 0 && (
                 <div className="progress-panel">
-                  <strong>
-                    {completionProgressDescription(snapshot.progress)}
-                  </strong>
-                  <p>
-                    {discoveryProgressDescription(snapshot.progress)}
-                  </p>
-                  <p>{snapshot.progress.contentLanes} authenticated content lane(s)</p>
+                  <strong>{completionProgressDescription(snapshot.progress)}</strong>
+                  <p>{discoveryProgressDescription(snapshot.progress)}</p>
                   {snapshot.progress.fileErrors > 0 && (
                     <p>{snapshot.progress.fileErrors} file error(s)</p>
                   )}
                   {snapshot.progress.selectionErrors > 0 && (
                     <p>{snapshot.progress.selectionErrors} selected target(s) unavailable</p>
                   )}
-                  {snapshot.progress.partial && snapshot.progress.discovery !== 'failed' && (
-                    <p>Some selected files could not be included.</p>
-                  )}
                 </div>
-              )}
-
-              {!active && snapshot.phase === 'browsing' && (
-                <button
-                  className="primary-action"
-                  type="button"
-                  disabled={!snapshot.canStart}
-                  onClick={() => controller.startDownload()}
-                >Receive selected</button>
-              )}
-              {active && snapshot.phase !== 'pausing' && snapshot.phase !== 'discarding' && (
-                <button className="abort-action" type="button" onClick={() => controller.pauseDownload()}>
-                  Pause transfer
-                </button>
               )}
             </aside>
           </div>

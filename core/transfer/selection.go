@@ -65,11 +65,11 @@ func NewPathSelectionRules(paths []string) (SelectionRules, error) {
 	var totalBytes uint64
 	for _, path := range paths {
 		canonical, err := catalog.CanonicalPath(path)
-		if err != nil {
+		if err != nil || canonical != path {
 			return SelectionRules{}, errors.Join(ErrInvalidSelectionRules, err)
 		}
 		if _, duplicate := targetSet[canonical]; duplicate {
-			continue
+			return SelectionRules{}, ErrInvalidSelectionRules
 		}
 		totalBytes += uint64(len(canonical))
 		if totalBytes > MaxSelectionPathTargetBytes {
@@ -329,12 +329,12 @@ func (r SelectionRules) validSnapshot() bool {
 	}
 }
 
-type SelectionClass uint8
+type ConnectionSizeClass uint8
 
 const (
-	SelectionUnknown SelectionClass = iota
-	SelectionSmall
-	SelectionLarge
+	ConnectionSizeUnknown ConnectionSizeClass = iota
+	ConnectionSizeSmall
+	ConnectionSizeLarge
 )
 
 type DiscoveryStatus uint8
@@ -355,14 +355,14 @@ type SelectionMeasure struct {
 	overflowed               bool
 }
 
-func (m SelectionMeasure) Class() SelectionClass {
+func (m SelectionMeasure) ConnectionSizeClass() ConnectionSizeClass {
 	if m.overflowed || m.DiscoveredFiles >= SmallTransferFileLimit || m.DiscoveredBytes >= SmallTransferByteLimit {
-		return SelectionLarge
+		return ConnectionSizeLarge
 	}
 	if m.Discovery == DiscoveryComplete || m.DiscoveryTerminalSuccess {
-		return SelectionSmall
+		return ConnectionSizeSmall
 	}
-	return SelectionUnknown
+	return ConnectionSizeUnknown
 }
 
 func (m *SelectionMeasure) addDiscoveredFile(size uint64) {
