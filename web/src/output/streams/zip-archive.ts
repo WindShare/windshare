@@ -1,11 +1,12 @@
-export interface ZipArchiveEntry {
-  readonly path: readonly string[]
-  readonly modifiedTimeMilliseconds?: bigint
-}
+import type {
+  SealedZipLayoutPlanV1,
+  ZipLayoutLedgerV1,
+} from '../zip-layout/layout'
+import type { ZipEntryPlanV1 } from '../zip-layout/policy'
 
-export interface ZipArchiveFileEntry extends ZipArchiveEntry {
-  readonly exactSize: bigint
-}
+export type ZipArchiveLayoutAuthority =
+  | Readonly<{ kind: 'sealed'; plan: SealedZipLayoutPlanV1 }>
+  | Readonly<{ kind: 'progressive'; ledger: ZipLayoutLedgerV1 }>
 
 export interface ZipArchiveMember {
   write(data: Uint8Array): Promise<void>
@@ -16,9 +17,9 @@ export interface ZipArchiveMember {
 export interface ZipArchiveWriter {
   readonly cleanupPending: boolean
   readonly cleanupFailure: unknown
-  addDirectory(entry: ZipArchiveEntry): Promise<void>
-  beginFile(entry: ZipArchiveFileEntry): Promise<ZipArchiveMember>
-  close(signal: AbortSignal): Promise<void>
+  addDirectory(entry: ZipEntryPlanV1): Promise<void>
+  beginFile(entry: ZipEntryPlanV1): Promise<ZipArchiveMember>
+  close(proof: SealedZipLayoutPlanV1, signal: AbortSignal): Promise<void>
   abort(reason: unknown): Promise<void>
   retryCleanup(): Promise<void>
 }

@@ -8,22 +8,35 @@ import (
 	"github.com/windshare/windshare/core/transfer/fault"
 )
 
-func (session *Session) PauseJob(
+func (session *Session) PauseTree(
 	ctx context.Context,
 	reason transfer.JobPauseReason,
-) (transfer.JobSettlement, error) {
+) (transfer.DirectTreeSettlement, error) {
 	if session == nil || ctx == nil || reason < transfer.JobPauseInterrupted || reason > transfer.JobPauseDependencyContract {
-		return transfer.JobSettlement{}, executorContractError(transfer.ErrInvalidOutputSettlement)
+		return transfer.DirectTreeSettlement{}, executorContractError(transfer.ErrInvalidOutputSettlement)
 	}
 	owner, drained, settlement, err := session.acquireClose(closePause, reason, 0)
 	if !owner {
 		return settlement, err
 	}
 	operationID := session.closeOperationID()
-	session.emit(session.closeTrace(operationID, OperationPauseJob, TraceDraining))
+	session.emit(session.closeTrace(operationID, OperationPauseTree, TraceDraining))
 	<-drained
 
 	errorsByClaim := session.pauseActiveFiles(ctx, operationID, filePauseReasonForJob(reason))
+	session.mu.Lock()
+	needsAttention := session.attention || session.hasUncertainClaimsLocked()
+	snapshot := session.settlementSnapshotLocked()
+	session.mu.Unlock()
+	durableKind := transfer.DirectTreeSettlementResumable
+	if needsAttention {
+		durableKind = transfer.DirectTreeSettlementNeedsAttention
+	}
+	if session.lifecycle != nil {
+		if lifecycleErr := session.lifecycle.RecordTreeSettlement(ctx, durableKind, 0, snapshot); lifecycleErr != nil {
+			errorsByClaim = append(errorsByClaim, session.closedBoundaryError(ctx, lifecycleErr, ErrSessionResourceRelease))
+		}
+	}
 	releaseErr := session.resources.ReleaseOutputSession(ctx)
 	if releaseErr != nil {
 		errorsByClaim = append(errorsByClaim, session.closedBoundaryError(ctx, releaseErr, ErrSessionResourceRelease))
@@ -31,12 +44,12 @@ func (session *Session) PauseJob(
 	stableErr := joinFailures(ctx, errorsByClaim...)
 
 	session.mu.Lock()
-	needsAttention := session.attention || stableErr != nil || session.hasUncertainClaimsLocked()
-	kind := transfer.JobPaused
+	needsAttention = session.attention || stableErr != nil || session.hasUncertainClaimsLocked()
+	kind := transfer.DirectTreeSettlementResumable
 	if needsAttention {
-		kind = transfer.JobPausedNeedsAttention
+		kind = transfer.DirectTreeSettlementNeedsAttention
 	}
-	settlement, constructorErr := transfer.NewJobSettlement(kind)
+	settlement, constructorErr := transfer.NewDirectTreeSettlement(kind)
 	if constructorErr != nil {
 		stableErr = joinFailures(ctx, stableErr, executorContractError(constructorErr))
 	}
@@ -44,7 +57,7 @@ func (session *Session) PauseJob(
 	session.close = closeRecord{
 		set: true, kind: closePause, pause: reason, settlement: settlement, err: stableErr,
 	}
-	event := session.traceLocked(operationID, OperationPauseJob, TraceClosed, 0, 0, 0, 0, session.requiredFault)
+	event := session.traceLocked(operationID, OperationPauseTree, TraceClosed, 0, 0, 0, 0, session.requiredFault)
 	session.releaseLedgerLocked()
 	session.mu.Unlock()
 	session.gate.finishClose()
@@ -52,19 +65,20 @@ func (session *Session) PauseJob(
 	return settlement, stableErr
 }
 
-func (session *Session) CompleteJob(
+func (session *Session) FinalizeTree(
 	ctx context.Context,
-	outcome transfer.JobOutcome,
-) (transfer.JobSettlement, error) {
-	if session == nil || ctx == nil || outcome < transfer.JobSucceeded || outcome > transfer.JobCompletedWithErrors {
-		return transfer.JobSettlement{}, executorContractError(transfer.ErrInvalidOutputSettlement)
+	outcome transfer.DirectTreeOutcome,
+) (transfer.DirectTreeSettlement, error) {
+	if session == nil || ctx == nil ||
+		(outcome != transfer.DirectTreeOutcomePublished && outcome != transfer.DirectTreeOutcomePartialDirectory) {
+		return transfer.DirectTreeSettlement{}, executorContractError(transfer.ErrInvalidOutputSettlement)
 	}
 	owner, drained, settlement, err := session.acquireClose(closeComplete, 0, outcome)
 	if !owner {
 		return settlement, err
 	}
 	operationID := session.closeOperationID()
-	session.emit(session.closeTrace(operationID, OperationCompleteJob, TraceDraining))
+	session.emit(session.closeTrace(operationID, OperationFinalizeTree, TraceDraining))
 	<-drained
 
 	session.mu.Lock()
@@ -82,22 +96,41 @@ func (session *Session) CompleteJob(
 			session.pauseActiveFiles(ctx, operationID, transfer.FilePauseDependencyContract)...,
 		)
 	}
+	session.mu.Lock()
+	needsAttention := session.attention || session.hasUncertainClaimsLocked()
+	snapshot := session.settlementSnapshotLocked()
+	session.mu.Unlock()
+	durableKind := transfer.DirectTreeSettlementPublished
+	if outcome == transfer.DirectTreeOutcomePartialDirectory {
+		durableKind = transfer.DirectTreeSettlementPartialDirectory
+	}
+	if needsAttention {
+		durableKind = transfer.DirectTreeSettlementNeedsAttention
+	}
+	if session.lifecycle != nil {
+		if lifecycleErr := session.lifecycle.RecordTreeSettlement(ctx, durableKind, outcome, snapshot); lifecycleErr != nil {
+			closeErrors = append(closeErrors, session.closedBoundaryError(ctx, lifecycleErr, ErrSessionResourceRelease))
+		}
+	}
 	if releaseErr := session.resources.ReleaseOutputSession(ctx); releaseErr != nil {
 		closeErrors = append(closeErrors, session.closedBoundaryError(ctx, releaseErr, ErrSessionResourceRelease))
 	}
 	stableErr := joinFailures(ctx, closeErrors...)
 
 	session.mu.Lock()
-	needsAttention := session.attention || stableErr != nil || session.hasUncertainClaimsLocked()
-	kind := transfer.JobClosed
-	if needsAttention {
-		kind = transfer.JobPausedNeedsAttention
+	needsAttention = session.attention || stableErr != nil || session.hasUncertainClaimsLocked()
+	kind := transfer.DirectTreeSettlementPublished
+	if outcome == transfer.DirectTreeOutcomePartialDirectory {
+		kind = transfer.DirectTreeSettlementPartialDirectory
 	}
-	settlement, constructorErr := transfer.NewJobSettlement(kind)
+	if needsAttention {
+		kind = transfer.DirectTreeSettlementNeedsAttention
+	}
+	settlement, constructorErr := transfer.NewDirectTreeSettlement(kind)
 	if constructorErr != nil {
 		stableErr = joinFailures(ctx, stableErr, executorContractError(constructorErr))
 	}
-	if kind == transfer.JobClosed {
+	if kind != transfer.DirectTreeSettlementNeedsAttention {
 		session.state = sessionCompleted
 	} else {
 		session.state = sessionPaused
@@ -105,7 +138,7 @@ func (session *Session) CompleteJob(
 	session.close = closeRecord{
 		set: true, kind: closeComplete, outcome: outcome, settlement: settlement, err: stableErr,
 	}
-	event := session.traceLocked(operationID, OperationCompleteJob, TraceClosed, 0, 0, 0, 0, session.requiredFault)
+	event := session.traceLocked(operationID, OperationFinalizeTree, TraceClosed, 0, 0, 0, 0, session.requiredFault)
 	session.releaseLedgerLocked()
 	session.mu.Unlock()
 	session.gate.finishClose()
@@ -116,22 +149,22 @@ func (session *Session) CompleteJob(
 func (session *Session) acquireClose(
 	kind closeKind,
 	pause transfer.JobPauseReason,
-	outcome transfer.JobOutcome,
-) (bool, <-chan struct{}, transfer.JobSettlement, error) {
+	outcome transfer.DirectTreeOutcome,
+) (bool, <-chan struct{}, transfer.DirectTreeSettlement, error) {
 	owner, drained := session.gate.requestClose()
 	if owner {
-		return true, drained, transfer.JobSettlement{}, nil
+		return true, drained, transfer.DirectTreeSettlement{}, nil
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if !session.close.set {
-		return false, nil, transfer.JobSettlement{}, sessionClosedError()
+		return false, nil, transfer.DirectTreeSettlement{}, sessionClosedError()
 	}
 	exact := session.close.kind == kind &&
 		(kind != closePause || session.close.pause == pause) &&
 		(kind != closeComplete || session.close.outcome == outcome)
 	if !exact {
-		return false, nil, transfer.JobSettlement{}, outputFault(
+		return false, nil, transfer.DirectTreeSettlement{}, outputFault(
 			fault.ScopeOutputPause, fault.OutputContract, ErrConflictingSettlement,
 		)
 	}
@@ -212,6 +245,26 @@ func (session *Session) hasUncertainClaimsLocked() bool {
 		}
 	}
 	return false
+}
+
+func (session *Session) settlementSnapshotLocked() TreeSettlementSnapshot {
+	snapshot := TreeSettlementSnapshot{FileSettlements: make([]transfer.FileSettlement, 0, len(session.fileClaims))}
+	for _, entry := range session.fileClaims {
+		if entry.state != fileSettled {
+			continue
+		}
+		snapshot.FileSettlements = append(snapshot.FileSettlements, entry.settlement)
+		switch entry.settlement.Kind() {
+		case transfer.FilePublished:
+			snapshot.SuccessCount++
+		case transfer.FilePaused:
+			// A pause retains restart authority; it is neither a terminal success
+			// nor a partial-tree failure.
+		default:
+			snapshot.FailureCount++
+		}
+	}
+	return snapshot
 }
 
 func (session *Session) closedBoundaryError(ctx context.Context, err, sentinel error) error {

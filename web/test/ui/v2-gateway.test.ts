@@ -14,17 +14,25 @@ vi.mock('../../src/crypto/suite02-link', () => ({
   })),
 }))
 
-vi.mock('../../src/crypto/bytes', () => ({
-  encodeBase64Url: vi.fn(() => 'pk-hash'),
-}))
+vi.mock('../../src/crypto/bytes', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/crypto/bytes')>()
+  return {
+    ...actual,
+    encodeBase64Url: vi.fn(actual.encodeBase64Url),
+  }
+})
 
-vi.mock('../../src/catalog/v2-records', () => ({
-  openV2ShareDescriptor: vi.fn(async () => ({
-    shareInstanceId: 'share-instance',
-    syntheticRoot: new Uint8Array(16),
-    syntheticRootId: 'root',
-  })),
-}))
+vi.mock('../../src/catalog/v2-records', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/catalog/v2-records')>()
+  return {
+    ...actual,
+    openV2ShareDescriptor: vi.fn(async () => ({
+      shareInstanceId: 'share-instance',
+      syntheticRoot: new Uint8Array(16),
+      syntheticRootId: 'root',
+    })),
+  }
+})
 
 vi.mock('../../src/catalog/v2-page-store', () => ({
   IndexedDbV2CatalogPageStore: {
@@ -75,12 +83,32 @@ vi.mock('../../src/receiver/v2-supervisor', () => ({
   },
 }))
 
+import { encodeBase64Url } from '../../src/crypto/bytes'
+import type { V2CommittedDirectory } from '../../src/catalog/v2-page-store'
+import type { V2CatalogPage } from '../../src/catalog/v2-records'
+import { offerArtifacts } from '../../src/output/planning'
+import {
+  createSelectionSpec,
+  selectionRulesSpecFromPolicy,
+} from '../../src/transfer/intent'
 import {
   V2BrowseNavigationError,
   V2BrowserReceiverGateway,
   V2JoinedBrowserShare,
   type V2BrowseDirectory,
 } from '../../src/ui/v2-gateway'
+import {
+  discoverAuthenticatedSelection,
+  nextProjectionEpoch,
+  RetryableProjectionDiscoveryError,
+  SelectionProjectionController,
+  type SelectionProjectionState,
+} from '../../src/transfer/projection'
+import {
+  environment,
+  handoffTarget,
+  workspaceOffer,
+} from '../output/planning/fixture'
 
 describe('v2 browser gateway connectivity injection', () => {
   beforeEach(() => {
@@ -161,6 +189,211 @@ describe('v2 joined-share path admission', () => {
       .toThrow(V2BrowseNavigationError)
   })
 })
+
+describe('v2 joined-share projection authority', () => {
+  it('turns a reconnect generation change into an explicit retryable projection fence', async () => {
+    const supervisor = { protocolSessionId: 'session-1' }
+    const joined = new V2JoinedBrowserShare({
+      descriptor: {
+        syntheticRoot: identity(4),
+        syntheticRootId: 'root',
+      } as never,
+      supervisor: supervisor as never,
+      catalog: {} as never,
+      recoveryIdentity: 'projection-fence',
+    })
+    const source = joined.projectionSource(joined.selection.snapshot())
+    supervisor.protocolSessionId = 'session-2'
+
+    const discovery = source.discover({
+      epoch: nextProjectionEpoch(0n),
+      selectionDigest: 'selection',
+      retainedGenerations: Object.freeze([]),
+      unsettledTargets: Object.freeze([]),
+      signal: new AbortController().signal,
+    })
+
+    await expect(discovery.next()).rejects.toMatchObject({
+      name: RetryableProjectionDiscoveryError.name,
+      reason: 'receiver-reconnecting',
+    })
+  })
+
+  it('settles a share-wide synthetic root once and offers its workspace ZIP', async () => {
+    const fixture = projectionCatalogFixture()
+    const supervisor = { protocolSessionId: 'session-1' }
+    const joined = new V2JoinedBrowserShare({
+      descriptor: {
+        shareInstance: fixture.shareInstance,
+        shareInstanceId: fixture.shareInstanceId,
+        syntheticRoot: fixture.syntheticRoot,
+        syntheticRootId: fixture.syntheticRootId,
+      } as never,
+      supervisor: supervisor as never,
+      catalog: fixture.catalog as never,
+      recoveryIdentity: 'share-wide-projection',
+    })
+    const frozenSelection = joined.selection.snapshot()
+    const selection = await createSelectionSpec({
+      shareInstance: fixture.shareInstanceId,
+      syntheticRoot: fixture.syntheticRootId,
+      rules: selectionRulesSpecFromPolicy(frozenSelection),
+    })
+    const controller = new SelectionProjectionController()
+    controller.beginSelection(selection, supervisor.protocolSessionId)
+    const states: SelectionProjectionState[] = []
+
+    for await (const state of discoverAuthenticatedSelection(
+      controller,
+      joined.projectionSource(frozenSelection),
+      new AbortController().signal,
+    )) {
+      states.push(state)
+    }
+
+    const final = states.at(-1)
+    if (final === undefined) throw new Error('projection did not publish completion')
+    expect(states.map((state) => state.projection.unsettledTargets.length)).toEqual([1, 0, 0, 0])
+    expect(final).toMatchObject({
+      discovery: { kind: 'complete' },
+      projection: {
+        unsettledTargets: [],
+        proof: {
+          kind: 'tree',
+          layoutBasis: { kind: 'synthetic-selection' },
+        },
+      },
+    })
+
+    const offered = await offerArtifacts(
+      final.projection,
+      final.discovery,
+      environment({ targets: [handoffTarget()], workspace: workspaceOffer() }),
+    )
+    if (offered.kind !== 'artifact-actions') throw new Error('share-wide ZIP was not offered')
+    expect(offered.primary).toMatchObject({
+      operation: 'download-zip',
+      artifactKind: 'zip-archive',
+      suggestedName: 'windshare.zip',
+      recovery: 'workspace-resumable',
+      plan: {
+        kind: 'workspace-then-publish',
+        workspace: { kind: 'origin-private-workspace' },
+        publicationTarget: { kind: 'browser-handoff' },
+      },
+      artifact: {
+        kind: 'zip-archive',
+        suggestedName: 'windshare.zip',
+        layout: { class: 'synthetic-selection', name: 'windshare' },
+      },
+    })
+  })
+})
+
+function projectionCatalogFixture() {
+  const shareInstance = identity(10)
+  const syntheticRoot = identity(11)
+  const childDirectory = identity(12)
+  const file = identity(13)
+  const root = committedCatalogGeneration({
+    shareInstance,
+    directoryId: syntheticRoot,
+    generation: identity(20),
+    commitmentSeed: 30,
+    entries: Object.freeze([{
+      kind: 'directory' as const,
+      id: childDirectory,
+      idText: encodeBase64Url(childDirectory),
+      name: 'shared',
+    }]),
+  })
+  const child = committedCatalogGeneration({
+    shareInstance,
+    directoryId: childDirectory,
+    generation: identity(21),
+    commitmentSeed: 31,
+    entries: Object.freeze([{
+      kind: 'file' as const,
+      id: file,
+      idText: encodeBase64Url(file),
+      name: 'report.txt',
+      expectedSize: 68n,
+    }]),
+  })
+  const generations = new Map([
+    [root.committed.directoryIdText, root],
+    [child.committed.directoryIdText, child],
+  ])
+  const catalog = Object.freeze({
+    loadDirectory: async (directoryId: Uint8Array<ArrayBuffer>) => {
+      const generation = generations.get(encodeBase64Url(directoryId))
+      if (generation === undefined) throw new Error('unexpected projection directory')
+      return generation.committed
+    },
+    pages: (committed: V2CommittedDirectory) => {
+      const generation = generations.get(committed.directoryIdText)
+      if (generation === undefined) throw new Error('unexpected committed projection generation')
+      return catalogPages(generation.page)
+    },
+  })
+  return Object.freeze({
+    shareInstance,
+    shareInstanceId: encodeBase64Url(shareInstance),
+    syntheticRoot,
+    syntheticRootId: encodeBase64Url(syntheticRoot),
+    catalog,
+  })
+}
+
+function committedCatalogGeneration(input: {
+  readonly shareInstance: Uint8Array<ArrayBuffer>
+  readonly directoryId: Uint8Array<ArrayBuffer>
+  readonly generation: Uint8Array<ArrayBuffer>
+  readonly commitmentSeed: number
+  readonly entries: V2CatalogPage['entries']
+}): Readonly<{ committed: V2CommittedDirectory; page: V2CatalogPage }> {
+  const terminalCommitment = commitment(input.commitmentSeed)
+  const directoryIdText = encodeBase64Url(input.directoryId)
+  const generationText = encodeBase64Url(input.generation)
+  const page: V2CatalogPage = Object.freeze({
+    shareInstance: input.shareInstance,
+    directoryId: input.directoryId,
+    directoryIdText,
+    generation: input.generation,
+    generationText,
+    pageIndex: 0,
+    terminal: true,
+    previousCommitment: new Uint8Array(32),
+    entries: input.entries,
+    omittedCount: 0n,
+    objectCommitment: terminalCommitment,
+    senderObjectBytes: 128,
+  })
+  return Object.freeze({
+    committed: Object.freeze({
+      directoryIdText,
+      generationText,
+      directoryId: input.directoryId,
+      generation: input.generation,
+      pageCount: 1,
+      entryCount: input.entries.length,
+      omittedCount: 0n,
+      terminalCommitment,
+    }),
+    page,
+  })
+}
+
+async function* catalogPages(page: V2CatalogPage): AsyncGenerator<V2CatalogPage> {
+  yield page
+}
+
+function commitment(seed: number): Uint8Array<ArrayBuffer> {
+  const value = new Uint8Array(32)
+  value[0] = seed
+  value[value.length - 1] = seed ^ 0xff
+  return value
+}
 
 function browseDirectory(
   idText: string,

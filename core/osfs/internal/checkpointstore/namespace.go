@@ -1,4 +1,4 @@
-// Package checkpointstore owns the native FileCheckpointV1 namespace.
+// Package checkpointstore owns the native FileCheckpointV2 and receive-operation namespace.
 //
 // The package deliberately exposes only live capability handles to the output
 // runtime. Legacy session headers never enter this module, so they cannot become
@@ -16,8 +16,7 @@ import (
 )
 
 const (
-	OwnershipFile    = "ownership.marker"
-	IntentsDirectory = "intents"
+	OwnershipFile    = "marker"
 	RecordsDirectory = "records"
 )
 

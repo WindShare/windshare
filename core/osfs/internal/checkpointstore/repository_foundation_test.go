@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestCertifiedLayoutMatchesTheDurableOwnershipNamespace(t *testing.T) {
@@ -149,12 +150,17 @@ func TestCertifiedInitializationRacesConvergeOnOneExactScaffold(t *testing.T) {
 		t.Fatal(err)
 	}
 	slices.Sort(names)
-	want := []string{IntentsDirectory, LeasesDirectory, OwnershipFile}
+	want := []string{LeasesDirectory, LookupDirectory, OperationsDirectory, OwnershipDirectory}
 	slices.Sort(want)
 	if !slices.Equal(names, want) {
 		t.Fatalf("checkpoint scaffold = %v, want %v", names, want)
 	}
-	encoded, err := ReadFile(checkpointRoot, OwnershipFile)
+	ownershipDirectory, err := checkpointRoot.OpenDirectory(OwnershipDirectory, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ownershipDirectory.Close()
+	encoded, err := ReadFile(ownershipDirectory, OwnershipFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,12 +175,15 @@ func TestCertifiedInitializationRacesConvergeOnOneExactScaffold(t *testing.T) {
 	}
 	for name, spec := range map[string]checkpointmodel.OwnershipSpec{
 		"certification": {
-			Backend: ownership.Backend(), Certification: checkpointmodel.CertificationLinuxExt4ProcessRestart,
-			RootIdentity: ownership.RootIdentity().Bytes(), RootOpenDisposition: ownership.RootOpenDisposition(),
+			Materializer:        ownership.MaterializerKind(),
+			Certification:       checkpointmodel.CertificationLinuxExt4ProcessRestart,
+			AuthorityRef:        ownership.AuthorityRef().Bytes(),
+			RootOpenDisposition: ownership.RootOpenDisposition(),
 		},
 		"root disposition": {
-			Backend: ownership.Backend(), Certification: ownership.Certification(),
-			RootIdentity: ownership.RootIdentity().Bytes(), RootOpenDisposition: checkpointmodel.CallerProvidedContainer,
+			Materializer: ownership.MaterializerKind(), Certification: ownership.Certification(),
+			AuthorityRef:        ownership.AuthorityRef().Bytes(),
+			RootOpenDisposition: checkpointmodel.CallerProvidedContainer,
 		},
 	} {
 		t.Run("reject mismatched "+name, func(t *testing.T) {
@@ -193,9 +202,7 @@ func TestCertifiedInitializationRacesConvergeOnOneExactScaffold(t *testing.T) {
 	}
 }
 
-func TestIntentContentionReturnsBusyBeforeIntentSubtreeAccess(t *testing.T) {
-	const legacyIntentLockName = "runtime.lock"
-
+func TestOperationContentionReturnsBusyBeforeOperationSubtreeAccess(t *testing.T) {
 	root := newMemoryDirectory()
 	config, intent := certifiedFixture(t, root, checkpointmodel.CallerProvidedContainer, 0x41)
 	namespace, err := Initialize(config)
@@ -204,21 +211,23 @@ func TestIntentContentionReturnsBusyBeforeIntentSubtreeAccess(t *testing.T) {
 	}
 	defer namespace.Close()
 
-	baseIntents := namespace.intents
-	intentAccesses := 0
-	spy := &faultDirectory{Directory: baseIntents}
+	baseOperations := namespace.operations
+	operationAccesses := 0
+	spy := &faultDirectory{Directory: baseOperations}
 	spy.duplicate = func() (outputcap.Directory, error) { return spy, nil }
 	spy.openDirectory = func(name string, private bool) (outputcap.Directory, error) {
-		intentAccesses++
-		return baseIntents.OpenDirectory(name, private)
+		operationAccesses++
+		return baseOperations.OpenDirectory(name, private)
 	}
 	spy.createDirectory = func(name string, private bool) (outputcap.Directory, error) {
-		intentAccesses++
-		return baseIntents.CreateDirectory(name, private)
+		operationAccesses++
+		return baseOperations.CreateDirectory(name, private)
 	}
-	namespace.intents = spy
+	namespace.operations = spy
 
-	first, err := namespace.AcquireIntent(intent)
+	first, err := namespace.AcquireOperation(
+		intent.intent.OperationID(), intent.intent.Digest(), intent.intent.BindingDigest(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,64 +237,20 @@ func TestIntentContentionReturnsBusyBeforeIntentSubtreeAccess(t *testing.T) {
 	}
 	defer repository.Close()
 	defer first.Close()
-	intentAccesses = 0
+	operationAccesses = 0
 
-	if _, err := namespace.AcquireIntent(intent); errorCode(err) != ErrorBusy {
+	if _, err := namespace.AcquireOperation(
+		intent.intent.OperationID(), intent.intent.Digest(), intent.intent.BindingDigest(),
+	); errorCode(err) != ErrorBusy {
 		t.Fatalf("contended lease error = %v", err)
 	}
-	if intentAccesses != 0 {
-		t.Fatalf("contended acquisition touched intent subtree %d times", intentAccesses)
+	if operationAccesses != 0 {
+		t.Fatalf("contended acquisition touched operation subtree %d times", operationAccesses)
 	}
-	if kind, err := repository.intent.ObserveEntry(legacyIntentLockName); err != nil || kind != outputcap.EntryAbsent {
-		t.Fatalf("legacy intent-local lock = %v, %v", kind, err)
-	}
-	if kind, err := namespace.leases.ObserveEntry(intentLeaseName(intent)); err != nil || kind != outputcap.EntryRegularFile {
+	if kind, err := namespace.leases.ObserveEntry(
+		operationLeaseName(intent.intent.OperationID()),
+	); err != nil || kind != outputcap.EntryRegularFile {
 		t.Fatalf("lease carrier = %v, %v", kind, err)
-	}
-}
-
-func TestCertifiedNamespacePreservesUnknownChildrenAndFailsClosed(t *testing.T) {
-	root := newMemoryDirectory()
-	config, _ := certifiedFixture(t, root, checkpointmodel.CallerProvidedContainer, 0x51)
-	namespace, err := Initialize(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeMemoryFile(t, namespace.checkpointRoot, LegacyCleanupStateFile, []byte("legacy-state"))
-	writeMemoryFile(t, namespace.checkpointRoot, LegacyCleanupLockFile, []byte("legacy-lock"))
-	if err := namespace.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := OpenNamespace(config)
-	if err != nil {
-		t.Fatalf("reserved legacy entries blocked current namespace: %v", err)
-	}
-	writeMemoryFile(t, reopened.checkpointRoot, "foreign-entry", []byte("preserve me"))
-	if err := reopened.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := OpenNamespace(config); errorCode(err) != ErrorUnsafeInstall {
-		t.Fatalf("unknown root child error = %v", err)
-	}
-	control, err := root.OpenDirectory(ControlDirectory, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer control.Close()
-	checkpointRoot, err := control.OpenDirectory(CheckpointDirectory, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer checkpointRoot.Close()
-	for name, want := range map[string]string{
-		LegacyCleanupStateFile: "legacy-state",
-		LegacyCleanupLockFile:  "legacy-lock",
-		"foreign-entry":        "preserve me",
-	} {
-		if encoded, err := ReadFile(checkpointRoot, name); err != nil || string(encoded) != want {
-			t.Fatalf("preserved child %q changed: %q, %v", name, encoded, err)
-		}
 	}
 }
 
@@ -294,6 +259,15 @@ func TestRepositoryCreateReplaceReopenAreOneDeterministicEngine(t *testing.T) {
 	defer namespace.Close()
 	defer lease.Close()
 	defer repository.Close()
+
+	forgedCandidate := checkpointRecordFixture(t, ownership, intent, 0x70)
+	forgedVerified, err := checkpointmodel.PromoteInitialCandidate(forgedCandidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Create(forgedVerified); errorCode(err) != ErrorUnsafeInstall {
+		t.Fatalf("predecessor-free verified create error = %v", err)
+	}
 
 	initial := checkpointRecordFixture(t, ownership, intent, 0x71)
 	if err := repository.Create(initial); err != nil {
@@ -375,16 +349,16 @@ func TestRepositoryReconcilesCandidateCrashCutsAndPreservesUnknownState(t *testi
 	}
 
 	verified := snapshot.Records()[0]
-	next, err := checkpointmodel.AdvanceGeneration(
+	nextRecordCandidate, err := checkpointmodel.AdvanceGeneration(
 		verified,
 		[]checkpointmodel.Range{{Offset: 0, End: 16}},
 		checkpointmodel.PhaseActive,
-		checkpointmodel.CommitVerified,
+		checkpointmodel.CommitCandidate,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	nextEncoded, err := checkpointmodel.EncodeRecord(next)
+	nextEncoded, err := checkpointmodel.EncodeRecord(nextRecordCandidate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,14 +388,14 @@ func TestRepositoryReconcilesCandidateCrashCutsAndPreservesUnknownState(t *testi
 	writeMemoryFile(t, repository.records, wrongKindShard, []byte("not-a-shard"))
 
 	snapshot, err = repository.Reconcile(func(checkpointmodel.Record) (bool, error) {
-		t.Fatal("verified candidate unexpectedly requested an initial witness")
+		t.Fatal("unlinked candidate unexpectedly requested a durability witness")
 		return false, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Records()) != 1 || snapshot.Records()[0].CheckpointGeneration() != next.CheckpointGeneration() {
-		t.Fatalf("replacement candidate was not adopted: %+v", snapshot.Records())
+	if len(snapshot.Records()) != 1 || snapshot.Records()[0].CheckpointGeneration() != verified.CheckpointGeneration() {
+		t.Fatalf("unlinked candidate displaced verified state: %+v", snapshot.Records())
 	}
 	codes := make(map[AttentionCode]bool)
 	for _, attention := range snapshot.Attention() {
@@ -446,7 +420,7 @@ func TestRepositoryReconcilesCandidateCrashCutsAndPreservesUnknownState(t *testi
 		t.Fatalf("wrong-kind shard was mutated: %v", err)
 	}
 	if _, err := ReadFile(shard, nextCandidate); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("adopted candidate survived: %v", err)
+		t.Fatalf("unlinked candidate survived: %v", err)
 	}
 }
 
@@ -455,31 +429,86 @@ func certifiedFixture(
 	root outputcap.Directory,
 	disposition checkpointmodel.RootOpenDisposition,
 	fill byte,
-) (CertifiedConfig, transfer.TransferIntentDigest) {
+) (CertifiedConfig, operationFixture) {
 	t.Helper()
-	backend, err := transfer.NewOutputBackendID("checkpointstore-test")
+	authority, err := receivecontract.AuthorityRefFromBytes(bytes.Repeat([]byte{fill}, receivecontract.AuthorityRefBytes))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
-		Backend: backend, Certification: checkpointmodel.CertificationWindowsNTFSProcessRestart,
-		RootIdentity:        bytes.Repeat([]byte{fill}, sha256.Size),
+		Materializer:        checkpointmodel.MaterializerNativeTree,
+		Certification:       checkpointmodel.CertificationWindowsNTFSProcessRestart,
+		AuthorityRef:        authority.Bytes(),
 		RootOpenDisposition: disposition,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := transfer.TransferIntentDigestFromBytes(bytes.Repeat([]byte{fill + 1}, sha256.Size))
+	var share catalog.ShareInstance
+	var rootID catalog.DirectoryID
+	share[0], rootID[0] = fill, fill+1
+	rules, err := transfer.NewSelectionRules(true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return CertifiedConfig{Root: root, Ownership: ownership}, intent
+	selection, err := transfer.NewSelectionSpec(share, rootID, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := receivecontract.NewCatalogRootDirectoryTree()
+	operationID, err := receivecontract.OperationIDFromBytes(
+		bytes.Repeat([]byte{fill + 2}, receivecontract.StableIdentityBytes),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservationID, err := receivecontract.DestinationReservationIDFromBytes(
+		bytes.Repeat([]byte{fill + 3}, receivecontract.StableIdentityBytes),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := receivecontract.NewNativeContainerRootReservation(
+		operationID, reservationID, artifact, authority,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := receivecontract.NewDirectTreePlan(artifact, reservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := transfer.NewReceiveIntent(selection, artifact, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := checkpointmodel.NewCLICompatibleOperationKey(selection, artifact, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopen, err := checkpointmodel.CLIReopenKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := checkpointmodel.NewReceiveOperation(intent, reopen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return CertifiedConfig{Root: root, Ownership: ownership}, operationFixture{
+		intent: intent, operation: operation, binding: reservation.CanonicalBytes(),
+	}
+}
+
+type operationFixture struct {
+	intent    transfer.ReceiveIntent
+	operation checkpointmodel.ReceiveOperation
+	binding   []byte
 }
 
 func openRepositoryFixture(
 	t *testing.T,
 	fill byte,
-) (*memoryDirectory, Namespace, IntentLease, Repository, checkpointmodel.Ownership, transfer.TransferIntentDigest) {
+) (*memoryDirectory, Namespace, OperationLease, Repository, checkpointmodel.Ownership, operationFixture) {
 	t.Helper()
 	root := newMemoryDirectory()
 	config, intent := certifiedFixture(t, root, checkpointmodel.CallerProvidedContainer, fill)
@@ -487,7 +516,9 @@ func openRepositoryFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	lease, err := namespace.AcquireIntent(intent)
+	lease, err := namespace.AcquireOperation(
+		intent.intent.OperationID(), intent.intent.Digest(), intent.intent.BindingDigest(),
+	)
 	if err != nil {
 		namespace.Close()
 		t.Fatal(err)
@@ -498,13 +529,41 @@ func openRepositoryFixture(
 		namespace.Close()
 		t.Fatal(err)
 	}
+	if err := repository.InstallOperation(intent.operation, intent.binding); err != nil {
+		repository.Close()
+		lease.Close()
+		namespace.Close()
+		t.Fatal(err)
+	}
+	frozen, err := checkpointmodel.NewReceiveLifecycleState(checkpointmodel.LifecycleStateSpec{
+		OperationID: intent.intent.OperationID(), ReceiveIntent: intent.intent.Digest(),
+		StateGeneration: 1, Phase: checkpointmodel.LifecycleIntentFrozen,
+	})
+	if err != nil {
+		repository.Close()
+		lease.Close()
+		namespace.Close()
+		t.Fatal(err)
+	}
+	if err := repository.CreateLifecycleState(frozen); err != nil {
+		repository.Close()
+		lease.Close()
+		namespace.Close()
+		t.Fatal(err)
+	}
+	if err := lease.RegisterLookup(intent.operation); err != nil {
+		repository.Close()
+		lease.Close()
+		namespace.Close()
+		t.Fatal(err)
+	}
 	return root, namespace, lease, repository, config.Ownership, intent
 }
 
 func checkpointRecordFixture(
 	t *testing.T,
 	ownership checkpointmodel.Ownership,
-	intent transfer.TransferIntentDigest,
+	intent operationFixture,
 	fill byte,
 ) checkpointmodel.Record {
 	t.Helper()
@@ -515,18 +574,20 @@ func checkpointRecordFixture(
 		revision[index] = fill + 1
 	}
 	record, err := checkpointmodel.NewRecord(checkpointmodel.RecordSpec{
-		TransferIntentDigest: intent,
-		FileID:               fileID,
-		FileRevision:         revision,
-		CanonicalPath:        "folder/file.bin",
-		ExactSize:            64,
-		BackendID:            string(ownership.Backend()),
-		RootIdentity:         ownership.RootIdentity().Bytes(),
-		OwnedOutputObject:    bytes.Repeat([]byte{fill + 2}, sha256.Size),
-		StateGeneration:      1,
-		CheckpointGeneration: 0,
-		Phase:                checkpointmodel.PhaseActive,
-		CommitState:          checkpointmodel.CommitCandidate,
+		OperationID:                  intent.intent.OperationID(),
+		ReceiveIntentDigest:          intent.intent.Digest(),
+		MaterializationBindingDigest: intent.intent.BindingDigest(),
+		FileID:                       fileID,
+		FileRevision:                 revision,
+		CanonicalPath:                "folder/file.bin",
+		ExactSize:                    64,
+		MaterializerKind:             ownership.MaterializerKind(),
+		AuthorityRef:                 ownership.AuthorityRef().Bytes(),
+		OwnedObjectID:                bytes.Repeat([]byte{fill + 2}, sha256.Size),
+		StateGeneration:              1,
+		CheckpointGeneration:         0,
+		Phase:                        checkpointmodel.PhaseActive,
+		CommitState:                  checkpointmodel.CommitCandidate,
 	})
 	if err != nil {
 		t.Fatal(err)

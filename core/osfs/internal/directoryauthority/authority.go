@@ -8,6 +8,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/osfs/internal/outputsession"
+	"github.com/windshare/windshare/core/transfer"
 )
 
 type materializationState uint8
@@ -57,6 +58,7 @@ type Authority struct {
 	closed      bool
 	rootClaimID ClaimID
 	claims      map[ClaimID]*claimRecord
+	admissions  map[string]ClaimID
 	reservedKey string
 }
 
@@ -91,7 +93,7 @@ func New(platform Platform, config Config) (*Authority, error) {
 	return &Authority{
 		platform: platform, snapshotter: snapshotter, snapshotLimit: limit,
 		rootDisposition: disposition, trace: config.Trace,
-		claims: make(map[ClaimID]*claimRecord), reservedKey: reservedKey,
+		claims: make(map[ClaimID]*claimRecord), admissions: make(map[string]ClaimID), reservedKey: reservedKey,
 	}, nil
 }
 
@@ -100,9 +102,18 @@ func (authority *Authority) newDirectoryClaim(
 	parentID ClaimID,
 	locator locatorKey,
 	modified catalog.ModifiedTime,
+	admissions ...transfer.DirectoryAdmission,
 ) (directoryClaim, error) {
+	if len(admissions) > 1 {
+		return directoryClaim{}, ErrInvalidClaim
+	}
+	var admission transfer.DirectoryAdmission
+	if len(admissions) == 1 {
+		admission = admissions[0]
+	}
 	claim := directoryClaim{
 		authority: authority, id: id, parentID: parentID, locator: locator, modified: modified,
+		admission: admission,
 	}
 	if !claim.valid() {
 		return directoryClaim{}, ErrInvalidClaim
@@ -111,7 +122,7 @@ func (authority *Authority) newDirectoryClaim(
 }
 
 func (authority *Authority) bindDirectoryClaim(claim outputsession.DirectoryClaim) (directoryClaim, error) {
-	if authority == nil {
+	if authority == nil || claim.Admission().IsZero() {
 		return directoryClaim{}, ErrInvalidClaim
 	}
 	directory := claim.Directory()
@@ -120,7 +131,7 @@ func (authority *Authority) bindDirectoryClaim(claim outputsession.DirectoryClai
 		return directoryClaim{}, errors.Join(ErrInvalidClaim, err)
 	}
 	native, err := authority.newDirectoryClaim(
-		claim.ID(), claim.ParentID(), locator, directory.ModifiedTime,
+		claim.ID(), claim.ParentID(), locator, directory.ModifiedTime, claim.Admission(),
 	)
 	if err != nil || native.locator.isRoot() != claim.IsRoot() {
 		return directoryClaim{}, errors.Join(ErrInvalidClaim, err)
@@ -219,6 +230,7 @@ func (authority *Authority) Close() error {
 		}
 	}
 	authority.claims = nil
+	authority.admissions = nil
 	authority.mu.Unlock()
 
 	var resultErr error
@@ -258,6 +270,11 @@ func (authority *Authority) beginMaterialization(
 	}
 	if !claim.valid() || claim.authority != authority {
 		return nil, false, directoryMaterialization{}, noMutation(ErrInvalidClaim)
+	}
+	if !claim.admission.IsZero() {
+		if owner, exists := authority.admissions[string(claim.admission.Bytes())]; exists && owner != claim.id {
+			return nil, false, directoryMaterialization{}, noMutation(ErrClaimConflict)
+		}
 	}
 	if existing := authority.claims[claim.id]; existing != nil {
 		if !sameDirectoryClaim(existing.claim, claim) {
@@ -303,11 +320,17 @@ func (authority *Authority) finishMaterialization(
 		record.state = materializationReady
 		record.materialization = result
 		record.retained = retained
+		if !record.claim.admission.IsZero() {
+			authority.admissions[string(record.claim.admission.Bytes())] = record.claim.id
+		}
 	case errors.Is(err, ErrMutationAmbiguous):
 		record.state = materializationAmbiguous
 		record.retained = retained
 	default:
 		delete(authority.claims, record.claim.id)
+		if !record.claim.admission.IsZero() {
+			delete(authority.admissions, string(record.claim.admission.Bytes()))
+		}
 		if record.claim.locator.isRoot() && authority.rootClaimID == record.claim.id {
 			authority.rootClaimID = 0
 		}

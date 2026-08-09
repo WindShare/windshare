@@ -173,16 +173,16 @@ func TestTransferJobRejectsCrossPageDuplicateNodeIDBeforeAdmission(t *testing.T)
 		opened:   map[catalog.FileID]OpenedRevision{file: opened},
 		failures: make(map[catalog.FileID]error),
 	}
-	job, err := newTestTransferJob(t, TransferJobConfig{
+	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog:   duplicatePageCatalog{root: root, pages: []catalog.CatalogPage{first, second}},
-		Revisions: revisions, Blocks: scriptedRangeReader{}, Output: output,
+		Revisions: revisions, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome ||
+	if result.Outcome != DirectTreeOutcomeResumable ||
 		result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) ||
 		len(revisions.order) != 0 || len(output.directories) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
 		t.Fatalf("duplicate node result=%+v opens=%v directories=%v", result, revisions.order, output.directories)
@@ -219,16 +219,16 @@ func TestTransferJobRejectsCrossPageNameSequenceViolationsBeforeAdmission(t *tes
 			}
 			rules, _ := NewSelectionRules(true, nil)
 			output := newJobOutput(share)
-			job, err := newTestTransferJob(t, TransferJobConfig{
+			job, err := newTestTransferJob(t, testTransferJobConfig{
 				ShareInstance: share, SyntheticRoot: root, Rules: rules,
 				Catalog:   duplicatePageCatalog{root: root, pages: []catalog.CatalogPage{first, second}},
-				Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Output: output,
+				Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			result := job.Run(context.Background())
-			if result.Outcome != JobPausedOutcome ||
+			if result.Outcome != DirectTreeOutcomeResumable ||
 				result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) ||
 				len(output.directories) != 0 {
 				t.Fatalf("cross-page validation result=%+v directories=%v", result, output.directories)
@@ -250,7 +250,7 @@ func TestTransferJobDoesNotAdmitOrQueueOmittedChildGeneration(t *testing.T) {
 		opened:   map[catalog.FileID]OpenedRevision{file: opened},
 		failures: make(map[catalog.FileID]error),
 	}
-	job, err := newTestTransferJob(t, TransferJobConfig{
+	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog: failingCatalog{
 			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
@@ -259,13 +259,13 @@ func TestTransferJobDoesNotAdmitOrQueueOmittedChildGeneration(t *testing.T) {
 			},
 			failures: make(map[catalog.DirectoryID]error),
 		},
-		Revisions: revisions, Blocks: scriptedRangeReader{}, Output: output,
+		Revisions: revisions, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != JobCompletedWithErrors || result.TerminationCause != nil || len(result.Directories) != 1 ||
+	if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil || len(result.Directories) != 1 ||
 		!errors.Is(result.Directories[0].Cause, ErrCatalogEntriesOmitted) || len(result.Files) != 0 ||
 		len(revisions.order) != 0 || len(output.directories) != 1 || output.directories[0] != "" ||
 		len(output.finalized) != 1 || output.finalized[0] != "" {
@@ -282,7 +282,7 @@ func TestTransferJobCombinesBeginAndTerminalReleaseFailures(t *testing.T) {
 	job, _ := branchJob(t, output, revisions, scriptedRangeReader{})
 
 	result := job.Run(context.Background())
-	if result.Outcome != JobPausedOutcome ||
+	if result.Outcome != DirectTreeOutcomeResumable ||
 		result.TerminationFault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
 		len(result.Files) != 1 || result.Files[0].Fault != mustOutputFault(fault.ScopeFileLocal, fault.OutputStateIO) ||
 		result.Files[0].LeaseReleaseFault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
@@ -328,14 +328,14 @@ func TestOpaqueSelectionBeginsBeforeDelayedUnrelatedBranchAndKeepsItVirtual(t *t
 	begin := make(chan struct{})
 	var beginOnce sync.Once
 	output := newJobOutput(share)
-	output.beginHook = func(OutputFile) { beginOnce.Do(func() { close(begin) }) }
-	job, err := newTestTransferJob(t, TransferJobConfig{
+	output.beginHook = func(MaterializationFile) { beginOnce.Do(func() { close(begin) }) }
+	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog: catalogSource,
 		Revisions: &jobRevisionClient{
 			opened: map[catalog.FileID]OpenedRevision{file: opened}, failures: make(map[catalog.FileID]error),
 		},
-		Blocks: scriptedRangeReader{}, Output: output,
+		Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -354,7 +354,7 @@ func TestOpaqueSelectionBeginsBeforeDelayedUnrelatedBranchAndKeepsItVirtual(t *t
 	}
 	close(releaseUnrelated)
 	result := <-resultChannel
-	if result.Outcome != JobSucceeded || result.SucceededFiles != 1 ||
+	if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != 1 ||
 		!slices.Equal(output.directories, []string{"", "a-wanted"}) ||
 		!slices.Equal(output.finalized, []string{"a-wanted", ""}) {
 		t.Fatalf("result=%+v directories=%v finalized=%v", result, output.directories, output.finalized)
@@ -367,267 +367,39 @@ func TestOpaqueSelectionBeginsBeforeDelayedUnrelatedBranchAndKeepsItVirtual(t *t
 }
 
 func TestNonDurableStreamPublishesWithTransientCoverageAndEmptyCheckpoints(t *testing.T) {
-	for _, mode := range []OutputMode{OutputSingleFileStream, OutputZIPStream} {
-		t.Run(modeName(mode), func(t *testing.T) {
-			share := transferID[catalog.ShareInstance](230 + byte(mode))
-			root := transferID[catalog.DirectoryID](234 + byte(mode))
-			file := transferID[catalog.FileID](238 + byte(mode))
-			size := uint64(catalog.MinChunkSize) + 1
-			rules, _ := NewSelectionRules(true, nil)
-			output := newJobOutput(share)
-			capabilities := OutputCapabilities{Durability: DurabilityNone, Mode: mode}
-			if mode == OutputZIPStream {
-				capabilities.ArchiveBoundary = ArchiveFailureAtMemberStart
-			}
-			validated, err := NewOutputCapabilities(capabilities)
-			if err != nil {
-				t.Fatal(err)
-			}
-			output.capabilitiesOverride = &validated
-			nativeIntent := testTransferIntent(t, share, root, rules, output.BackendID())
-			intent, err := NewTransferIntent(
-				share, root, rules, nativeIntent.OutputTarget(), output.BackendID(), mode,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			descriptor := jobDescriptor(t, share, file, 1, size)
-			opened, _ := NewOpenedRevision(transferID[content.LeaseID](242+byte(mode)), descriptor)
-			job, err := newTestTransferJob(t, TransferJobConfig{
-				ShareInstance: share, SyntheticRoot: root, Rules: rules, Intent: intent,
-				Catalog: failingCatalog{
-					snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
-						root: jobSnapshot(t, share, root, 1, jobEntry(t, file, "stream.bin", size)),
-					}, failures: make(map[catalog.DirectoryID]error),
-				},
-				Revisions: &jobRevisionClient{
-					opened: map[catalog.FileID]OpenedRevision{file: opened}, failures: make(map[catalog.FileID]error),
-				},
-				Blocks: scriptedRangeReader{}, Output: output,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			result := job.Run(context.Background())
-			transaction := output.transactions["stream.bin"]
-			if result.Outcome != JobSucceeded || result.SucceededFiles != 1 || transaction == nil ||
-				!transaction.durable.IsEmpty() || !RangesCoverFile(size, transaction.transient) ||
-				!transaction.committed {
-				t.Fatalf("result=%+v transaction=%+v", result, transaction)
-			}
-		})
-	}
-}
-
-func TestZIPRetirementSkipsBeforeMemberStartButPausesAfterMemberBytes(t *testing.T) {
-	t.Run("skip before member start", func(t *testing.T) {
-		share := transferID[catalog.ShareInstance](246)
-		root := transferID[catalog.DirectoryID](247)
-		failed := transferID[catalog.FileID](248)
-		good := transferID[catalog.FileID](249)
-		size := uint64(catalog.MinChunkSize)
-		rules, _ := NewSelectionRules(true, nil)
-		output, intent := newZIPJobOutput(t, share, root, rules)
-		revisions := &jobRevisionClient{
-			opened: make(map[catalog.FileID]OpenedRevision), failures: make(map[catalog.FileID]error),
-		}
-		for index, file := range []catalog.FileID{failed, good} {
-			descriptor := jobDescriptor(t, share, file, byte(index+1), size)
-			revisions.opened[file], _ = NewOpenedRevision(transferID[content.LeaseID](byte(index+1)), descriptor)
-		}
-		reader := &fileScriptedRangeReader{
-			failFile: failed, failAt: 1,
-			failure: sourcePermanentFailure(errors.New("source denied member")),
-			calls:   make(map[catalog.FileID]int),
-		}
-		job, err := newTestTransferJob(t, TransferJobConfig{
-			ShareInstance: share, SyntheticRoot: root, Rules: rules, Intent: intent,
-			Catalog: failingCatalog{
-				snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
-					root: jobSnapshot(t, share, root, 1,
-						jobEntry(t, failed, "a-failed.bin", size), jobEntry(t, good, "b-good.bin", size),
-					),
-				}, failures: make(map[catalog.DirectoryID]error),
-			},
-			Revisions: revisions, Blocks: reader, Output: output,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		result := job.Run(context.Background())
-		failedTransaction := output.transactions["a-failed.bin"]
-		if result.Outcome != JobCompletedWithErrors || result.SucceededFiles != 1 ||
-			failedTransaction == nil || len(failedTransaction.retireReasons) != 1 ||
-			failedTransaction.retireReasons[0] != FileRetireIsolatedPermanentSourceFailure ||
-			!failedTransaction.transient.IsEmpty() || output.pauseCalls != 0 || output.completeCalls != 1 {
-			t.Fatalf("result=%+v failed transaction=%+v", result, failedTransaction)
-		}
-	})
-
-	t.Run("member bytes compromise archive", func(t *testing.T) {
-		share := transferID[catalog.ShareInstance](250)
-		root := transferID[catalog.DirectoryID](251)
-		file := transferID[catalog.FileID](252)
-		size := uint64(catalog.MinChunkSize) * 2
-		rules, _ := NewSelectionRules(true, nil)
-		output, intent := newZIPJobOutput(t, share, root, rules)
-		archiveCompromised := outputFailure(
-			fault.ScopeOutputPause, fault.OutputStateIO, errors.New("archive member already started"),
-		)
-		output.transactionScript.retireErrAfterWrite = archiveCompromised
-		descriptor := jobDescriptor(t, share, file, 1, size)
-		opened, _ := NewOpenedRevision(transferID[content.LeaseID](253), descriptor)
-		reader := &fileScriptedRangeReader{
-			failFile: file, failAt: 2,
-			failure: sourcePermanentFailure(errors.New("source denied remaining member bytes")),
-			calls:   make(map[catalog.FileID]int),
-		}
-		job, err := newTestTransferJob(t, TransferJobConfig{
-			ShareInstance: share, SyntheticRoot: root, Rules: rules, Intent: intent,
-			Catalog: failingCatalog{
-				snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
-					root: jobSnapshot(t, share, root, 1, jobEntry(t, file, "member.bin", size)),
-				}, failures: make(map[catalog.DirectoryID]error),
-			},
-			Revisions: &jobRevisionClient{
-				opened: map[catalog.FileID]OpenedRevision{file: opened}, failures: make(map[catalog.FileID]error),
-			},
-			Blocks: reader, Output: output,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		result := job.Run(context.Background())
-		transaction := output.transactions["member.bin"]
-		if result.Outcome != JobPausedOutcome || result.Settlement.Kind() != JobPaused ||
-			transaction == nil || len(transaction.retireReasons) != 1 || transaction.transient.IsEmpty() ||
-			result.SettlementFault != normalizedFault(archiveCompromised) || output.pauseCalls != 1 {
-			t.Fatalf("result=%+v transaction=%+v", result, transaction)
-		}
-	})
-}
-
-func TestZIPFileOutputFaultUsesTransactionMemberBoundary(t *testing.T) {
-	fileFault := outputFailure(
-		fault.ScopeFileLocal, fault.OutputStateIO, errors.New("member output rejected"),
-	)
-	t.Run("pause proves member never started", func(t *testing.T) {
-		base, intent, failed, good, revisions, catalogClient := newZIPBoundaryJobFixture(t, 1)
-		output := &pathScriptedJobOutput{
-			jobOutput: base,
-			scripts: map[string]jobTransactionScript{
-				"a-failed.bin": {writeErr: fileFault},
-			},
-		}
-		job, err := newTestTransferJob(t, TransferJobConfig{
-			ShareInstance: intent.ShareInstance(), SyntheticRoot: intent.SyntheticRoot(),
-			Rules: intent.SelectionRules(), Intent: intent,
-			Catalog: catalogClient, Revisions: revisions, Blocks: scriptedRangeReader{}, Output: output,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		result := job.Run(context.Background())
-		failedTransaction := base.transactions["a-failed.bin"]
-		if result.Outcome != JobCompletedWithErrors || result.SucceededFiles != 1 ||
-			len(result.Files) != 1 || result.Files[0].Settlement.Kind() != FilePaused ||
-			failedTransaction == nil || !failedTransaction.pending.IsEmpty() ||
-			base.transactions["b-good.bin"] == nil || base.pauseCalls != 0 || base.completeCalls != 1 ||
-			!slices.Equal(revisions.order, []catalog.FileID{failed, good}) {
-			t.Fatalf("result=%+v transactions=%v revision order=%v", result, base.transactions, revisions.order)
-		}
-	})
-
-	t.Run("pause reports member bytes compromised archive", func(t *testing.T) {
-		base, intent, failed, _, revisions, catalogClient := newZIPBoundaryJobFixture(t, 20)
-		archiveCompromised := outputFailure(
-			fault.ScopeOutputPause, fault.OutputStateIO, errors.New("member bytes compromised archive"),
-		)
-		output := &pathScriptedJobOutput{
-			jobOutput: base,
-			scripts: map[string]jobTransactionScript{
-				"a-failed.bin": {writeErrAfterWrite: fileFault, pauseErr: archiveCompromised},
-			},
-		}
-		job, err := newTestTransferJob(t, TransferJobConfig{
-			ShareInstance: intent.ShareInstance(), SyntheticRoot: intent.SyntheticRoot(),
-			Rules: intent.SelectionRules(), Intent: intent,
-			Catalog: catalogClient, Revisions: revisions, Blocks: scriptedRangeReader{}, Output: output,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		result := job.Run(context.Background())
-		failedTransaction := base.transactions["a-failed.bin"]
-		if result.Outcome != JobPausedOutcome || result.Settlement.Kind() != JobPaused ||
-			failedTransaction == nil || failedTransaction.pending.IsEmpty() ||
-			base.transactions["b-good.bin"] != nil || base.pauseCalls != 1 || base.completeCalls != 0 ||
-			result.SettlementFault != normalizedFault(archiveCompromised) ||
-			!slices.Equal(revisions.order, []catalog.FileID{failed}) {
-			t.Fatalf("result=%+v transactions=%v revision order=%v", result, base.transactions, revisions.order)
-		}
-	})
-}
-
-func newZIPBoundaryJobFixture(
-	t *testing.T,
-	identity byte,
-) (*jobOutput, TransferIntent, catalog.FileID, catalog.FileID, *jobRevisionClient, failingCatalog) {
-	t.Helper()
-	share := transferID[catalog.ShareInstance](identity)
-	root := transferID[catalog.DirectoryID](identity + 1)
-	failed := transferID[catalog.FileID](identity + 2)
-	good := transferID[catalog.FileID](identity + 3)
-	size := uint64(catalog.MinChunkSize)
+	share := transferID[catalog.ShareInstance](230)
+	root := transferID[catalog.DirectoryID](234)
+	file := transferID[catalog.FileID](238)
+	size := uint64(catalog.MinChunkSize) + 1
 	rules, _ := NewSelectionRules(true, nil)
-	output, intent := newZIPJobOutput(t, share, root, rules)
-	revisions := &jobRevisionClient{
-		opened: make(map[catalog.FileID]OpenedRevision), failures: make(map[catalog.FileID]error),
-	}
-	for index, file := range []catalog.FileID{failed, good} {
-		descriptor := jobDescriptor(t, share, file, byte(index+1), size)
-		revisions.opened[file], _ = NewOpenedRevision(
-			transferID[content.LeaseID](identity+byte(index)+4), descriptor,
-		)
-	}
-	return output, intent, failed, good, revisions, failingCatalog{
-		snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
-			root: jobSnapshot(t, share, root, 1,
-				jobEntry(t, failed, "a-failed.bin", size), jobEntry(t, good, "b-good.bin", size),
-			),
-		},
-		failures: make(map[catalog.DirectoryID]error),
-	}
-}
-
-func newZIPJobOutput(
-	t *testing.T,
-	share catalog.ShareInstance,
-	root catalog.DirectoryID,
-	rules SelectionRules,
-) (*jobOutput, TransferIntent) {
-	t.Helper()
 	output := newJobOutput(share)
-	capabilities, err := NewOutputCapabilities(OutputCapabilities{
-		Durability: DurabilityNone, Mode: OutputZIPStream, ArchiveBoundary: ArchiveFailureAtMemberStart,
+	validated, err := NewDirectTreeCapabilities(DirectTreeCapabilities{Durability: DurabilityNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output.capabilitiesOverride = &validated
+	descriptor := jobDescriptor(t, share, file, 1, size)
+	opened, _ := NewOpenedRevision(transferID[content.LeaseID](242), descriptor)
+	job, err := newTestTransferJob(t, testTransferJobConfig{
+		ShareInstance: share, SyntheticRoot: root, Rules: rules,
+		Catalog: failingCatalog{
+			snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
+				root: jobSnapshot(t, share, root, 1, jobEntry(t, file, "stream.bin", size)),
+			}, failures: make(map[catalog.DirectoryID]error),
+		},
+		Revisions: &jobRevisionClient{
+			opened: map[catalog.FileID]OpenedRevision{file: opened}, failures: make(map[catalog.FileID]error),
+		},
+		Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	output.capabilitiesOverride = &capabilities
-	nativeIntent := testTransferIntent(t, share, root, rules, output.BackendID())
-	intent, err := NewTransferIntent(
-		share, root, rules, nativeIntent.OutputTarget(), output.BackendID(), OutputZIPStream,
-	)
-	if err != nil {
-		t.Fatal(err)
+	result := job.Run(context.Background())
+	transaction := output.transactions["stream.bin"]
+	if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != 1 || transaction == nil ||
+		!transaction.durable.IsEmpty() || !RangesCoverFile(size, transaction.transient) ||
+		!transaction.committed {
+		t.Fatalf("result=%+v transaction=%+v", result, transaction)
 	}
-	return output, intent
-}
-
-func modeName(mode OutputMode) string {
-	if mode == OutputZIPStream {
-		return "zip"
-	}
-	return "single"
 }

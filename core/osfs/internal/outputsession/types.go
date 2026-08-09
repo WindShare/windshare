@@ -81,28 +81,30 @@ func (disposition DirectoryDisposition) validFor(root bool) bool {
 // ClaimID is process-local correlation, never native or durable authority.
 type DirectoryClaim struct {
 	id         ClaimID
-	directory  transfer.OutputDirectory
+	directory  transfer.MaterializationDirectory
+	admission  transfer.DirectoryAdmission
 	locatorKey string
 	parent     ClaimID
 }
 
-func (claim DirectoryClaim) ID() ClaimID                         { return claim.id }
-func (claim DirectoryClaim) Directory() transfer.OutputDirectory { return claim.directory }
-func (claim DirectoryClaim) LocatorKey() string                  { return claim.locatorKey }
-func (claim DirectoryClaim) ParentID() ClaimID                   { return claim.parent }
-func (claim DirectoryClaim) IsRoot() bool                        { return claim.parent == 0 }
+func (claim DirectoryClaim) ID() ClaimID                                  { return claim.id }
+func (claim DirectoryClaim) Directory() transfer.MaterializationDirectory { return claim.directory }
+func (claim DirectoryClaim) Admission() transfer.DirectoryAdmission       { return claim.admission }
+func (claim DirectoryClaim) LocatorKey() string                           { return claim.locatorKey }
+func (claim DirectoryClaim) ParentID() ClaimID                            { return claim.parent }
+func (claim DirectoryClaim) IsRoot() bool                                 { return claim.parent == 0 }
 
 type FileClaim struct {
 	id         ClaimID
-	file       transfer.OutputFile
+	file       transfer.MaterializationFile
 	locatorKey string
 	parent     ClaimID
 }
 
-func (claim FileClaim) ID() ClaimID               { return claim.id }
-func (claim FileClaim) File() transfer.OutputFile { return claim.file }
-func (claim FileClaim) LocatorKey() string        { return claim.locatorKey }
-func (claim FileClaim) ParentID() ClaimID         { return claim.parent }
+func (claim FileClaim) ID() ClaimID                        { return claim.id }
+func (claim FileClaim) File() transfer.MaterializationFile { return claim.file }
+func (claim FileClaim) LocatorKey() string                 { return claim.locatorKey }
+func (claim FileClaim) ParentID() ClaimID                  { return claim.parent }
 
 type DirectoryMaterialization struct {
 	Cut         MutationCut
@@ -144,7 +146,7 @@ type FileBeginObservation struct {
 }
 
 type FileTransactionExecutor interface {
-	Binding() transfer.OutputFileBinding
+	Binding() transfer.MaterializedFileBinding
 	WriteRange(context.Context, uint64, []byte) (MutationCut, error)
 	Checkpoint(context.Context) (transfer.VerifiedDurableRanges, MutationCut, error)
 	Commit(context.Context) (transfer.FileSettlement, MutationCut, error)
@@ -181,28 +183,46 @@ func (function ResourceReleaserFunc) ReleaseOutputSession(ctx context.Context) e
 	return function(ctx)
 }
 
+// TreeSettlementSnapshot is the immutable session cut consumed by durable
+// lifecycle adapters. It carries semantic settlements, never executor handles,
+// so persistence cannot extend mutation authority beyond the session gate.
+type TreeSettlementSnapshot struct {
+	FileSettlements []transfer.FileSettlement
+	SuccessCount    uint64
+	FailureCount    uint64
+}
+
+type TreeLifecycleRecorder interface {
+	RecordTreeSettlement(
+		context.Context,
+		transfer.DirectTreeSettlementKind,
+		transfer.DirectTreeOutcome,
+		TreeSettlementSnapshot,
+	) error
+}
+
 type Config struct {
-	Intent        transfer.TransferIntent
+	Intent        transfer.ReceiveIntent
 	SessionID     transfer.OutputSessionID
-	Capabilities  transfer.OutputCapabilities
+	Capabilities  transfer.DirectTreeCapabilities
 	ReceiptSecret []byte
 	Limits        Limits
 	Locator       LocatorCanonicalizer
 	Directories   DirectoryExecutor
 	Files         FileExecutor
 	Resources     ResourceReleaser
+	Lifecycle     TreeLifecycleRecorder
 	Trace         TraceSink
 }
 
 func (config Config) validate() (transfer.DirectoryAdmissionScope, Limits, error) {
 	scope, err := transfer.NewDirectoryAdmissionScope(config.Intent)
-	if err != nil || config.SessionID.IsZero() || config.Intent.BackendID() == "" ||
+	if err != nil || config.SessionID.IsZero() ||
 		len(config.ReceiptSecret) != sha256.Size || allZero(config.ReceiptSecret) ||
 		config.Locator == nil || config.Directories == nil || config.Files == nil || config.Resources == nil {
 		return transfer.DirectoryAdmissionScope{}, Limits{}, errors.Join(ErrInvalidConfiguration, err)
 	}
-	capabilities, err := transfer.NewOutputCapabilities(config.Capabilities)
-	if err != nil || capabilities.Mode != config.Intent.Format() {
+	if _, err = transfer.NewDirectTreeCapabilities(config.Capabilities); err != nil {
 		return transfer.DirectoryAdmissionScope{}, Limits{}, errors.Join(ErrInvalidConfiguration, err)
 	}
 	limits := config.Limits
@@ -227,7 +247,7 @@ func validCanonicalLocatorKey(path, key string) bool {
 	return utf8.ValidString(key) && (path == "" || key != "")
 }
 
-func directoryBaseMetadataBytes(directory transfer.OutputDirectory) uint64 {
+func directoryBaseMetadataBytes(directory transfer.MaterializationDirectory) uint64 {
 	// This is a stable accounting contract over bytes the Go ledger retains, not
 	// a heap estimate. The claim charges its raw DirectoryID and generation, the
 	// NodeID index charges its distinct fixed key copy, and the future receipt
@@ -241,7 +261,7 @@ func directoryBaseMetadataBytes(directory transfer.OutputDirectory) uint64 {
 	return bytes
 }
 
-func directoryMetadataBytes(directory transfer.OutputDirectory, locatorKey string) uint64 {
+func directoryMetadataBytes(directory transfer.MaterializationDirectory, locatorKey string) uint64 {
 	// Path/name and locator indexes retain immutable string headers over the same
 	// backing bytes as their claims, so each UTF-8 byte sequence is charged once.
 	return directoryBaseMetadataBytes(directory) + uint64(len(locatorKey))

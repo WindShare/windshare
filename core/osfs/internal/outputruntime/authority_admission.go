@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"io"
+	"time"
 
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 type FilesystemOutputTraceOperation uint8
@@ -58,8 +60,8 @@ const (
 type FilesystemOutputRuntimeOperation uint8
 
 const (
-	FilesystemOutputRuntimeOpenOutput FilesystemOutputRuntimeOperation = iota + 1
-	FilesystemOutputRuntimeAcquireIntentLease
+	FilesystemOutputRuntimeOpenDirectTree FilesystemOutputRuntimeOperation = iota + 1
+	FilesystemOutputRuntimeAcquireOperationLease
 	FilesystemOutputRuntimeReconcileCheckpoints
 	FilesystemOutputRuntimeAdmitDirectory
 	FilesystemOutputRuntimeFinalizeDirectory
@@ -69,8 +71,8 @@ const (
 	FilesystemOutputRuntimeCommitFile
 	FilesystemOutputRuntimePauseFile
 	FilesystemOutputRuntimeRetireFile
-	FilesystemOutputRuntimePauseJob
-	FilesystemOutputRuntimeCompleteJob
+	FilesystemOutputRuntimePauseTree
+	FilesystemOutputRuntimeFinalizeTree
 	FilesystemOutputRuntimeMaterializeDirectory
 	FilesystemOutputRuntimeCreateOwnedFile
 	FilesystemOutputRuntimeRecoverFile
@@ -117,7 +119,8 @@ const (
 
 type FilesystemOutputTrace struct {
 	Operation              FilesystemOutputTraceOperation
-	IntentDigest           transfer.TransferIntentDigest
+	ReceiveIntentDigest    transfer.ReceiveIntentDigest
+	ReceiveOperationID     receivecontract.OperationID
 	SessionID              transfer.OutputSessionID
 	Certification          FilesystemOutputCertificationID
 	NativeLockScope        FilesystemOutputNativeLockScope
@@ -153,8 +156,6 @@ func (function FilesystemOutputTraceFunc) TraceFilesystemOutput(event Filesystem
 	}
 }
 
-const filesystemOutputBackendID = transfer.NativeFilesystemOutputBackendID
-
 type outputSessionIDGenerator interface {
 	NewOutputSessionID() (transfer.OutputSessionID, error)
 }
@@ -176,13 +177,14 @@ type Authority struct {
 	tracer          FilesystemOutputTracer
 	platformFactory PlatformFactory
 	random          io.Reader
+	now             func() time.Time
 }
 
 func New(config Config) (*Authority, error) {
 	return &Authority{
 		rootPath: config.RootPath, createRoot: config.CreateRoot,
 		sessionIDs: cryptographicOutputSessionIDs{}, tracer: config.Tracer,
-		platformFactory: config.PlatformFactory, random: rand.Reader,
+		platformFactory: config.PlatformFactory, random: rand.Reader, now: time.Now,
 	}, nil
 }
 
@@ -202,10 +204,40 @@ func (authority *Authority) trace(event FilesystemOutputTrace) {
 	}
 }
 
-func (authority *Authority) OpenOutput(
+type NativeDirectTreeReservationKind uint8
+
+const (
+	NativeDirectTreeReserved NativeDirectTreeReservationKind = iota + 1
+	NativeDirectTreeReopened
+	NativeDirectTreeNeedsAttention
+)
+
+type NativeDirectTreeReservation struct {
+	kind   NativeDirectTreeReservationKind
+	intent transfer.ReceiveIntent
+}
+
+func (reservation NativeDirectTreeReservation) Kind() NativeDirectTreeReservationKind {
+	return reservation.kind
+}
+
+func (reservation NativeDirectTreeReservation) ReceiveIntent() (transfer.ReceiveIntent, bool) {
+	return reservation.intent, !reservation.intent.IsZero() &&
+		(reservation.kind == NativeDirectTreeReserved || reservation.kind == NativeDirectTreeReopened)
+}
+
+func (authority *Authority) ReserveDirectTree(
 	ctx context.Context,
-	intent transfer.TransferIntent,
-) (transfer.OutputSession, error) {
+	selection transfer.SelectionSpec,
+	artifact receivecontract.ArtifactSpec,
+) (NativeDirectTreeReservation, error) {
+	return authority.reserveNativeDirectTree(ctx, selection, artifact)
+}
+
+func (authority *Authority) OpenDirectTree(
+	ctx context.Context,
+	intent transfer.ReceiveIntent,
+) (transfer.DirectTreeSession, error) {
 	return authority.openNativeOutput(ctx, intent)
 }
 

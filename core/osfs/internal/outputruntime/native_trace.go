@@ -11,7 +11,7 @@ import (
 func (authority *Authority) outputSessionRuntimeTrace() outputsession.TraceSink {
 	return outputsession.TraceSinkFunc(func(event outputsession.TraceEvent) {
 		projected := FilesystemOutputTrace{
-			Operation: TraceRuntimeDecision, IntentDigest: event.IntentDigest, SessionID: event.SessionID,
+			Operation: TraceRuntimeDecision, ReceiveIntentDigest: event.ReceiveIntentDigest, SessionID: event.SessionID,
 			RuntimeComponent: FilesystemOutputRuntimeSession,
 			RuntimeOperation: runtimeSessionOperation(event.Operation),
 			RuntimeDecision:  runtimeSessionDecision(event.Decision),
@@ -27,12 +27,12 @@ func (authority *Authority) outputSessionRuntimeTrace() outputsession.TraceSink 
 }
 
 func (authority *Authority) directoryRuntimeTrace(
-	intent transfer.TransferIntentDigest,
+	intent transfer.ReceiveIntentDigest,
 	sessionID transfer.OutputSessionID,
 ) func(directoryauthority.TraceEvent) {
 	return func(event directoryauthority.TraceEvent) {
 		authority.trace(FilesystemOutputTrace{
-			Operation: TraceRuntimeDecision, IntentDigest: intent, SessionID: sessionID,
+			Operation: TraceRuntimeDecision, ReceiveIntentDigest: intent, SessionID: sessionID,
 			RuntimeComponent: FilesystemOutputRuntimeDirectory,
 			RuntimeOperation: runtimeDirectoryOperation(event.Operation),
 			RuntimeDecision:  runtimeDirectoryDecision(event.Outcome),
@@ -44,11 +44,12 @@ func (authority *Authority) directoryRuntimeTrace(
 func (authority *Authority) fileRuntimeTrace() fileexecution.TraceSink {
 	return fileexecution.TraceSinkFunc(func(event fileexecution.TraceEvent) {
 		projected := FilesystemOutputTrace{
-			Operation: TraceRuntimeDecision, IntentDigest: event.IntentDigest, SessionID: event.SessionID,
+			Operation: TraceRuntimeDecision, ReceiveIntentDigest: event.IntentDigest,
+			ReceiveOperationID: event.OperationID, SessionID: event.SessionID,
 			RuntimeComponent: FilesystemOutputRuntimeFile,
 			RuntimeOperation: runtimeFileOperation(event.Operation),
 			RuntimeDecision:  runtimeFileDecision(event.Outcome),
-			OperationID:      event.OperationID, ClaimID: uint64(event.ClaimID),
+			OperationID:      event.Sequence,
 		}
 		applyRuntimeFault(&projected, event.Fault)
 		authority.trace(projected)
@@ -83,10 +84,10 @@ func runtimeSessionOperation(operation outputsession.OperationKind) FilesystemOu
 		return FilesystemOutputRuntimePauseFile
 	case outputsession.OperationRetireFile:
 		return FilesystemOutputRuntimeRetireFile
-	case outputsession.OperationPauseJob:
-		return FilesystemOutputRuntimePauseJob
-	case outputsession.OperationCompleteJob:
-		return FilesystemOutputRuntimeCompleteJob
+	case outputsession.OperationPauseTree:
+		return FilesystemOutputRuntimePauseTree
+	case outputsession.OperationFinalizeTree:
+		return FilesystemOutputRuntimeFinalizeTree
 	default:
 		return 0
 	}

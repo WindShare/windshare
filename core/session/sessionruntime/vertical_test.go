@@ -330,20 +330,18 @@ func TestCompositeRuntimeMultiReceiverStopAndAccessors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := transfer.NewPathTransferIntent(
+	intent := newSessionRuntimeDirectTreeIntent(
+		t,
 		firstReceiver.Descriptor().ShareInstance(), firstReceiver.Descriptor().SyntheticRoot(),
-		rules, "invalid-output-test", transfer.NativeFilesystemOutputBackendID, transfer.OutputNativeTree,
+		rules, "validation",
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if _, err := firstReceiver.NewTransferJob(intent, transfer.TransferJobID{}, nil, nil); err == nil {
-		t.Fatal("transfer job accepted a nil output authority")
+		t.Fatal("transfer job accepted a nil materializer")
 	}
-	inertOutput := transfer.OutputAuthorityFunc(func(
+	inertOutput := transfer.DirectTreeMaterializerFunc(func(
 		context.Context,
-		transfer.TransferIntent,
-	) (transfer.OutputSession, error) {
+		transfer.ReceiveIntent,
+	) (transfer.DirectTreeSession, error) {
 		return nil, errors.New("validation-only output must not be opened")
 	})
 	if _, err := firstReceiver.NewTransferJob(intent, transfer.TransferJobID{}, inertOutput, nil); err == nil {
@@ -355,13 +353,9 @@ func TestCompositeRuntimeMultiReceiverStopAndAccessors(t *testing.T) {
 	}
 	otherShare := firstReceiver.Descriptor().ShareInstance()
 	otherShare[0] ^= 0xff
-	mismatchedIntent, err := transfer.NewPathTransferIntent(
-		otherShare, firstReceiver.Descriptor().SyntheticRoot(), rules,
-		"invalid-output-test", transfer.NativeFilesystemOutputBackendID, transfer.OutputNativeTree,
+	mismatchedIntent := newSessionRuntimeDirectTreeIntent(
+		t, otherShare, firstReceiver.Descriptor().SyntheticRoot(), rules, "mismatched",
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if _, err := firstReceiver.NewTransferJob(mismatchedIntent, jobID, inertOutput, nil); err == nil {
 		t.Fatal("transfer job accepted intent from another authenticated share")
 	}

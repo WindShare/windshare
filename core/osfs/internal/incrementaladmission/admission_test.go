@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestValidateDirectoryRejectsUnboundShapes(t *testing.T) {
@@ -17,7 +18,7 @@ func TestValidateDirectoryRejectsUnboundShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	generation := testGeneration(t, 0x31)
-	root := transfer.OutputDirectory{
+	root := transfer.MaterializationDirectory{
 		DirectoryID: intent.SyntheticRoot(),
 		Generation:  generation,
 	}
@@ -27,7 +28,7 @@ func TestValidateDirectoryRejectsUnboundShapes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	child := transfer.OutputDirectory{
+	child := transfer.MaterializationDirectory{
 		DirectoryID:     testDirectoryID(t, 0x42),
 		Generation:      testGeneration(t, 0x43),
 		ParentAdmission: parent,
@@ -36,17 +37,17 @@ func TestValidateDirectoryRejectsUnboundShapes(t *testing.T) {
 
 	for _, test := range []struct {
 		name string
-		dir  transfer.OutputDirectory
+		dir  transfer.MaterializationDirectory
 		want error
 	}{
 		{name: "root", dir: root},
 		{name: "child", dir: child},
-		{name: "zero directory", dir: transfer.OutputDirectory{Generation: generation}, want: transfer.ErrInvalidDirectoryAdmission},
-		{name: "zero generation", dir: transfer.OutputDirectory{DirectoryID: root.DirectoryID}, want: transfer.ErrInvalidDirectoryAdmission},
-		{name: "root parent", dir: transfer.OutputDirectory{DirectoryID: root.DirectoryID, Generation: generation, ParentAdmission: parent}, want: transfer.ErrDirectoryAdmissionMismatch},
-		{name: "wrong root", dir: transfer.OutputDirectory{DirectoryID: child.DirectoryID, Generation: generation}, want: transfer.ErrDirectoryAdmissionMismatch},
-		{name: "child parent", dir: transfer.OutputDirectory{DirectoryID: child.DirectoryID, Generation: child.Generation, Path: child.Path}, want: transfer.ErrInvalidDirectoryAdmission},
-		{name: "child noncanonical", dir: transfer.OutputDirectory{DirectoryID: child.DirectoryID, Generation: child.Generation, ParentAdmission: parent, Path: "nested/../escape"}, want: transfer.ErrInvalidDirectoryAdmission},
+		{name: "zero directory", dir: transfer.MaterializationDirectory{Generation: generation}, want: transfer.ErrInvalidDirectoryAdmission},
+		{name: "zero generation", dir: transfer.MaterializationDirectory{DirectoryID: root.DirectoryID}, want: transfer.ErrInvalidDirectoryAdmission},
+		{name: "root parent", dir: transfer.MaterializationDirectory{DirectoryID: root.DirectoryID, Generation: generation, ParentAdmission: parent}, want: transfer.ErrDirectoryAdmissionMismatch},
+		{name: "wrong root", dir: transfer.MaterializationDirectory{DirectoryID: child.DirectoryID, Generation: generation}, want: transfer.ErrDirectoryAdmissionMismatch},
+		{name: "child parent", dir: transfer.MaterializationDirectory{DirectoryID: child.DirectoryID, Generation: child.Generation, Path: child.Path}, want: transfer.ErrInvalidDirectoryAdmission},
+		{name: "child noncanonical", dir: transfer.MaterializationDirectory{DirectoryID: child.DirectoryID, Generation: child.Generation, ParentAdmission: parent, Path: "nested/../escape"}, want: transfer.ErrInvalidDirectoryAdmission},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := ValidateDirectory(intent, test.dir); !errors.Is(err, test.want) {
@@ -66,13 +67,13 @@ func TestSameDirectoryComparesTheCommittedCatalogIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory := transfer.OutputDirectory{
+	directory := transfer.MaterializationDirectory{
 		DirectoryID:  testDirectoryID(t, 0x51),
 		Generation:   testGeneration(t, 0x52),
 		Path:         "nested",
 		ModifiedTime: modified,
 	}
-	parentDirectory := transfer.OutputDirectory{
+	parentDirectory := transfer.MaterializationDirectory{
 		DirectoryID: intent.SyntheticRoot(), Generation: testGeneration(t, 0x55),
 	}
 	firstParent, err := transfer.NewDirectoryAdmissionWithSecret(
@@ -142,7 +143,7 @@ func TestNewSecretRequiresFreshNonzeroEntropy(t *testing.T) {
 	}
 }
 
-func testIntent(t *testing.T) transfer.TransferIntent {
+func testIntent(t *testing.T) transfer.ReceiveIntent {
 	t.Helper()
 	share, err := catalog.ShareInstanceFromBytes(bytes.Repeat([]byte{0x11}, catalog.IdentityBytes))
 	if err != nil {
@@ -153,11 +154,32 @@ func testIntent(t *testing.T) transfer.TransferIntent {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend, err := transfer.NewOutputBackendID("incremental-admission-test")
+	selection, err := transfer.NewSelectionSpec(share, root, rules)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := transfer.NewFilesystemTransferIntent(share, root, rules, t.TempDir(), backend, transfer.OutputNativeTree)
+	artifact := receivecontract.NewCatalogRootDirectoryTree()
+	operation, err := receivecontract.OperationIDFromBytes(bytes.Repeat([]byte{0x31}, receivecontract.StableIdentityBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservationID, err := receivecontract.DestinationReservationIDFromBytes(bytes.Repeat([]byte{0x41}, receivecontract.StableIdentityBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := receivecontract.AuthorityRefFromBytes(bytes.Repeat([]byte{0x51}, receivecontract.AuthorityRefBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := receivecontract.NewNativeContainerRootReservation(operation, reservationID, artifact, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := receivecontract.NewDirectTreePlan(artifact, reservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := transfer.NewReceiveIntent(selection, artifact, plan)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,20 +4,14 @@ import (
 	"bytes"
 	"errors"
 	"testing"
-
-	"github.com/windshare/windshare/core/transfer"
 )
 
 func TestOwnershipRoundTripBindsRootDisposition(t *testing.T) {
-	backend, err := transfer.NewOutputBackendID("checkpointmodel-test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, disposition := range []RootOpenDisposition{CallerProvidedContainer, AuthorityCreatedRoot} {
 		t.Run(string(disposition), func(t *testing.T) {
 			ownership, err := NewOwnership(OwnershipSpec{
-				Backend: backend, Certification: CertificationWindowsNTFSProcessRestart,
-				RootIdentity:        bytes.Repeat([]byte{0x41}, 32),
+				Materializer: MaterializerNativeTree, Certification: CertificationWindowsNTFSProcessRestart,
+				AuthorityRef:        bytes.Repeat([]byte{0x41}, 32),
 				RootOpenDisposition: disposition,
 			})
 			if err != nil {
@@ -41,35 +35,31 @@ func TestOwnershipRoundTripBindsRootDisposition(t *testing.T) {
 }
 
 func TestOwnershipRejectsMissingUnknownAndTamperedCertification(t *testing.T) {
-	backend, err := transfer.NewOutputBackendID("checkpointmodel-test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	valid, err := NewOwnership(OwnershipSpec{
-		Backend: backend, Certification: CertificationLinuxExt4ProcessRestart,
-		RootIdentity:        bytes.Repeat([]byte{0x51}, 32),
+		Materializer: MaterializerNativeTree, Certification: CertificationLinuxExt4ProcessRestart,
+		AuthorityRef:        bytes.Repeat([]byte{0x51}, 32),
 		RootOpenDisposition: CallerProvidedContainer,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := NewOwnership(OwnershipSpec{
-		Backend: backend, Certification: CertificationLinuxExt4ProcessRestart,
-		RootIdentity:        bytes.Repeat([]byte{0x51}, 32),
+		Materializer: MaterializerNativeTree, Certification: CertificationLinuxExt4ProcessRestart,
+		AuthorityRef:        bytes.Repeat([]byte{0x51}, 32),
 		RootOpenDisposition: "future-value",
 	}); !errors.Is(err, ErrInvalidOwnership) {
 		t.Fatalf("unknown disposition error = %v", err)
 	}
 	if _, err := NewOwnership(OwnershipSpec{
-		Backend: backend, Certification: CertificationLinuxExt4ProcessRestart,
-		RootIdentity:        bytes.Repeat([]byte{0x51}, 31),
+		Materializer: MaterializerNativeTree, Certification: CertificationLinuxExt4ProcessRestart,
+		AuthorityRef:        bytes.Repeat([]byte{0x51}, 31),
 		RootOpenDisposition: CallerProvidedContainer,
 	}); !errors.Is(err, ErrInvalidOwnership) {
-		t.Fatalf("short root identity error = %v", err)
+		t.Fatalf("short authority reference error = %v", err)
 	}
 	if _, err := NewOwnership(OwnershipSpec{
-		Backend: backend, Certification: "future-certification",
-		RootIdentity:        bytes.Repeat([]byte{0x51}, 32),
+		Materializer: MaterializerNativeTree, Certification: "future-certification",
+		AuthorityRef:        bytes.Repeat([]byte{0x51}, 32),
 		RootOpenDisposition: CallerProvidedContainer,
 	}); !errors.Is(err, ErrInvalidOwnership) {
 		t.Fatalf("unknown certification error = %v", err)
@@ -99,8 +89,8 @@ func TestOwnershipRejectsMissingUnknownAndTamperedCertification(t *testing.T) {
 	writeOwnershipString(&preCertification, ownershipDomain)
 	writeOwnershipString(&preCertification, OwnershipMarker)
 	writeOwnershipString(&preCertification, NamespaceName)
-	writeOwnershipString(&preCertification, string(valid.Backend()))
-	_, _ = preCertification.Write(valid.RootIdentity().Bytes())
+	preCertification.WriteByte(byte(valid.MaterializerKind()))
+	_, _ = preCertification.Write(valid.AuthorityRef().Bytes())
 	writeOwnershipString(&preCertification, string(valid.RootOpenDisposition()))
 	legacyPayload = preCertification.Bytes()
 	legacyChecksum = ownershipChecksum(legacyPayload)

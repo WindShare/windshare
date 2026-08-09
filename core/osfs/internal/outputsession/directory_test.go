@@ -270,7 +270,7 @@ func TestInvalidUTF8LocatorFailsBeforeClaimReservation(t *testing.T) {
 
 func TestDirectoryMetadataBudgetChargesLocatorBeforeMaterialization(t *testing.T) {
 	rootLocator := "locator:root"
-	root := transfer.OutputDirectory{
+	root := transfer.MaterializationDirectory{
 		DirectoryID: identity[catalog.DirectoryID](21),
 		Generation:  identity[catalog.DirectoryGeneration](31),
 	}
@@ -301,7 +301,7 @@ func TestDirectoryMetadataBudgetChargesLocatorBeforeMaterialization(t *testing.T
 }
 
 func TestDirectoryMetadataBudgetAcceptsExactBoundaryAndRejectsOneByteOver(t *testing.T) {
-	root := transfer.OutputDirectory{
+	root := transfer.MaterializationDirectory{
 		DirectoryID: identity[catalog.DirectoryID](21),
 		Generation:  identity[catalog.DirectoryGeneration](31),
 	}
@@ -503,8 +503,8 @@ func TestDirectoryAdmissionAmbiguityRetainsClaimForAttention(t *testing.T) {
 	if !retained {
 		t.Fatal("ambiguous admission did not retain its full reservation")
 	}
-	settlement, err := fixture.session.PauseJob(context.Background(), transfer.JobPauseOutputFailure)
-	if err != nil || settlement.Kind() != transfer.JobPausedNeedsAttention {
+	settlement, err := fixture.session.PauseTree(context.Background(), transfer.JobPauseOutputFailure)
+	if err != nil || settlement.Kind() != transfer.DirectTreeSettlementNeedsAttention {
 		t.Fatalf("pause settlement=%v err=%v", settlement.Kind(), err)
 	}
 }

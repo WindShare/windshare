@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
+import { encodeBase64Url } from '../../src/crypto/bytes'
+import type {
+  AuthenticatedDiscoveryRequest,
+  AuthenticatedDiscoverySource,
+} from '../../src/transfer/projection'
 import { captureV2Location, V2ReceiverController } from '../../src/ui/v2-controller'
 import type {
   V2BrowseDirectory,
@@ -9,13 +14,20 @@ import type {
   V2BrowserReceiverGateway,
   V2JoinedBrowserShare,
 } from '../../src/ui/v2-gateway'
+import { INERT_TEST_RECEIVE_COMPOSITION } from './v2-receive-fixture'
 
 const firstChild = directoryEntry(2, 'first', 'First')
 const secondChild = directoryEntry(3, 'second', 'Second')
 
 class NavigableJoinedShare {
-  readonly descriptor = { syntheticRootId: 'root' }
+  readonly descriptor = {
+    shareInstance: identity(7),
+    shareInstanceId: identityText(7),
+    syntheticRoot: identity(1),
+    syntheticRootId: identityText(1),
+  }
   readonly recoveryIdentity = 'navigation-share'
+  readonly protocolSessionId = identityText(8)
   readonly selection = new V2SelectionPolicy(true)
   readonly requests: Array<{
     readonly directory: V2BrowseDirectory
@@ -55,6 +67,15 @@ class NavigableJoinedShare {
 
   subscribeCatalogScanProgress(): () => void {
     return () => undefined
+  }
+
+  projectionSource(): AuthenticatedDiscoverySource {
+    return Object.freeze({
+      discover: async function* (request: AuthenticatedDiscoveryRequest) {
+        yield* []
+        return Object.freeze({ settledTargets: request.unsettledTargets })
+      },
+    })
   }
 
   async close(): Promise<void> {}
@@ -162,6 +183,7 @@ describe('v2 receiver capability lifecycle', () => {
       },
     } as unknown as V2BrowserReceiverGateway
     const controller = new V2ReceiverController(gateway, {
+      receive: INERT_TEST_RECEIVE_COMPOSITION,
       onSecurityMilestone: (milestone) => milestones.push(milestone),
     })
     controller.initialize({ capabilityInput: null, pageUrl: 'https://receiver.invalid/s/share' })
@@ -188,7 +210,9 @@ async function readyController(): Promise<{
   const gateway = {
     join: async () => joined as unknown as V2JoinedBrowserShare,
   } as unknown as V2BrowserReceiverGateway
-  const controller = new V2ReceiverController(gateway)
+  const controller = new V2ReceiverController(gateway, {
+    receive: INERT_TEST_RECEIVE_COMPOSITION,
+  })
   controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
   await turns()
   expect(controller.getSnapshot().phase).toBe('browsing')
@@ -237,6 +261,10 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   const value = new Uint8Array(16)
   value[0] = first
   return value
+}
+
+function identityText(first: number): string {
+  return encodeBase64Url(identity(first))
 }
 
 interface Deferred<T> {

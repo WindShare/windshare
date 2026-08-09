@@ -1,17 +1,14 @@
 import type { V2ShareDescriptor } from '../../catalog/v2-records'
 import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
-import { encodeBase64Url } from '../../crypto/bytes'
+import { decodeBase64Url, encodeBase64Url } from '../../crypto/bytes'
 import {
-  createTransferIntentDraft,
-  selectionRulesFromPolicy,
-  validateFinalTransferIntent,
-  validateTransferIntentDraft,
-  type TransferIntent,
-  type TransferIntentDraft,
+  STABLE_IDENTITY_BYTES,
+  createSelectionSpec,
+  createTransferJobID,
+  selectionRulesSpecFromPolicy,
+  validateReceiveIntent,
+  type ReceiveIntent,
 } from '../intent'
-import type { TransferJobOptions } from './contract'
-
-export { createTransferJobId } from '../intent'
 
 export function descriptorShareInstanceId(descriptor: V2ShareDescriptor): string {
   return encodeBase64Url(descriptor.shareInstance)
@@ -21,29 +18,37 @@ export function descriptorRootId(descriptor: V2ShareDescriptor): string {
   return encodeBase64Url(descriptor.syntheticRoot)
 }
 
-export function transferTimestampMilliseconds(): number {
-  return typeof performance !== 'undefined' ? performance.now() : Date.now()
+export function createTransferJobId(): string {
+  return createTransferJobID()
 }
 
-export async function transferIntentAuthority(
-  options: TransferJobOptions,
-  selection: V2FrozenSelectionPolicy,
-): Promise<{
-  readonly expected: TransferIntentDraft
-  readonly input: TransferIntent | TransferIntentDraft
-}> {
-  const expected = createTransferIntentDraft({
-    shareInstance: descriptorShareInstanceId(options.descriptor),
-    syntheticRoot: descriptorRootId(options.descriptor),
-    selection: selectionRulesFromPolicy(selection),
-  })
-  let input: TransferIntent | TransferIntentDraft
-  if (options.intent === undefined) {
-    input = expected
-  } else if ('state' in options.intent) {
-    input = validateTransferIntentDraft(options.intent, expected)
-  } else {
-    input = await validateFinalTransferIntent(options.intent, expected)
+export function snapshotTransferJobId(value: string): string {
+  const decoded = decodeBase64Url(value)
+  if (decoded === undefined || decoded.byteLength !== STABLE_IDENTITY_BYTES ||
+      decoded.every(byte => byte === 0) || encodeBase64Url(decoded) !== value) {
+    throw new TypeError('transfer job ID is not a canonical non-zero identity')
   }
-  return Object.freeze({ expected, input })
+  return value
+}
+
+export async function validateTransferJobIntent(
+  input: ReceiveIntent,
+  descriptor: V2ShareDescriptor,
+  selection: V2FrozenSelectionPolicy,
+): Promise<ReceiveIntent> {
+  const intent = await validateReceiveIntent(input)
+  const shareInstance = descriptorShareInstanceId(descriptor)
+  const syntheticRoot = descriptorRootId(descriptor)
+  if (intent.shareInstance !== shareInstance || intent.syntheticRoot !== syntheticRoot) {
+    throw new TypeError('receive intent belongs to a different share descriptor')
+  }
+  const expectedSelection = await createSelectionSpec({
+    shareInstance,
+    syntheticRoot,
+    rules: selectionRulesSpecFromPolicy(selection),
+  })
+  if (intent.selection.digest !== expectedSelection.digest) {
+    throw new TypeError('receive intent selection differs from the frozen transfer selection')
+  }
+  return intent
 }

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/hex"
 	"io"
+	"sort"
 
 	"github.com/windshare/windshare/core/osfs"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 // FilesystemConfig keeps raw terminal detection separate from serialized writes;
@@ -57,33 +59,27 @@ func (filesystemResumeStateInventoryOpener) OpenResumeStateInventory(
 	if err != nil {
 		return nil, err
 	}
-	if inventory == nil {
-		return nil, errResumeStateContract
+	items, err := projectResumeStateInventory(inventory)
+	if err != nil {
+		return nil, err
 	}
 	return &filesystemResumeStateInventory{
-		authority: authority,
-		inventory: inventory,
-		summaries: inventory.Summaries(),
+		authority: authority, items: items,
 	}, nil
 }
 
 type filesystemResumeStateInventory struct {
 	authority osfs.ResumeStateAuthority
-	inventory *osfs.ResumeStateInventory
-	summaries []osfs.ResumeStateSummary
+	items     []resumeStateItem
 }
 
 func (inventory *filesystemResumeStateInventory) Items() ([]resumeStateItem, error) {
-	if inventory == nil || inventory.inventory == nil || inventory.authority == nil {
+	if inventory == nil || inventory.authority == nil {
 		return nil, errResumeStateContract
 	}
-	items := make([]resumeStateItem, len(inventory.summaries))
-	for index, summary := range inventory.summaries {
-		item, err := projectResumeStateSummary(summary)
-		if err != nil {
-			return nil, err
-		}
-		items[index] = item
+	items := append([]resumeStateItem(nil), inventory.items...)
+	for index := range items {
+		items[index].attention = append([]resumeStateAttention(nil), items[index].attention...)
 	}
 	return items, nil
 }
@@ -92,49 +88,53 @@ func (inventory *filesystemResumeStateInventory) Discard(
 	ctx context.Context,
 	index int,
 ) (resumeDiscardReport, error) {
-	if inventory == nil || inventory.inventory == nil || inventory.authority == nil ||
-		index < 0 || index >= len(inventory.summaries) {
+	if inventory == nil || inventory.authority == nil || index < 0 || index >= len(inventory.items) ||
+		!inventory.items[index].valid() || !inventory.items[index].discardable {
 		return resumeDiscardReport{}, errResumeStateContract
 	}
-	result, err := inventory.authority.Discard(ctx, inventory.summaries[index].Reference())
+	operation, err := decodeResumeOperationID(inventory.items[index].operationID)
 	if err != nil {
 		return resumeDiscardReport{}, err
 	}
-	return projectResumeDiscardResult(result)
-}
-
-func (inventory *filesystemResumeStateInventory) Close() error {
-	if inventory == nil || inventory.inventory == nil {
-		return nil
+	result, err := inventory.authority.Discard(ctx, operation)
+	if err != nil {
+		return resumeDiscardReport{}, err
 	}
-	return inventory.inventory.Close()
+	report, err := projectResumeDiscardSummary(result)
+	if err != nil || report.operationID != inventory.items[index].operationID {
+		return resumeDiscardReport{}, errResumeStateContract
+	}
+	return report, nil
 }
 
 func projectResumeStateSummary(summary osfs.ResumeStateSummary) (resumeStateItem, error) {
-	status := ""
-	switch summary.Status() {
-	case osfs.ResumeStateAvailable:
-		status = resumeListStatusAvailable
-	case osfs.ResumeStateNeedsAttention:
-		status = resumeListStatusNeedsAttention
-	default:
+	operation := summary.OperationID()
+	intent := summary.ReceiveIntentDigest()
+	if operation.IsZero() || intent.IsZero() || summary.Phase() == 0 || summary.StateGeneration() == 0 {
 		return resumeStateItem{}, errResumeStateContract
 	}
-	attention, err := projectResumeAttention(summary.Attention())
-	if err != nil {
-		return resumeStateItem{}, err
-	}
-	intentDigest := ""
-	if digest := summary.Intent(); !digest.IsZero() {
-		intentDigest = hex.EncodeToString(digest.Bytes())
-	}
 	item := resumeStateItem{
-		status:                status,
-		intentDigest:          intentDigest,
-		backend:               string(summary.Backend()),
-		checkpointRecordCount: summary.CheckpointRecordCount(),
-		recoveryArtifactBytes: summary.RecoveryArtifactBytes(),
-		attention:             attention,
+		status:          resumeItemStatusRecorded,
+		operationID:     hex.EncodeToString(operation.Bytes()),
+		intentDigest:    hex.EncodeToString(intent.Bytes()),
+		phase:           summary.Phase(),
+		stateGeneration: summary.StateGeneration(),
+		expiresAtMillis: summary.ExpiresAtMillis(),
+		successCount:    summary.SuccessCount(),
+		failureCount:    summary.FailureCount(),
+		resumable:       summary.Resumable(),
+		discardable:     true,
+	}
+	if item.resumable {
+		item.status = resumeItemStatusResumable
+	}
+	if reason := summary.NeedsAttentionReason(); reason != "" {
+		attention, err := newResumeStateAttention(operation, reason)
+		if err != nil {
+			return resumeStateItem{}, err
+		}
+		item.status = resumeItemStatusNeedsAttention
+		item.attention = []resumeStateAttention{attention}
 	}
 	if !item.valid() {
 		return resumeStateItem{}, errResumeStateContract
@@ -142,26 +142,21 @@ func projectResumeStateSummary(summary osfs.ResumeStateSummary) (resumeStateItem
 	return item, nil
 }
 
-func projectResumeDiscardResult(result osfs.ResumeStateDiscardResult) (resumeDiscardReport, error) {
-	status := ""
-	switch result.Status() {
-	case osfs.ResumeStateDiscarded:
-		status = resumeDiscardStatusDiscarded
-	case osfs.ResumeStateAlreadyAbsent:
-		status = resumeDiscardStatusAlreadyAbsent
-	case osfs.ResumeStateDiscardNeedsAttention:
-		status = resumeDiscardStatusNeedsAttention
-	default:
-		return resumeDiscardReport{}, errResumeStateContract
-	}
-	attention, err := projectResumeAttention(result.Attention())
+func projectResumeDiscardSummary(summary osfs.ResumeStateSummary) (resumeDiscardReport, error) {
+	item, err := projectResumeStateSummary(summary)
 	if err != nil {
 		return resumeDiscardReport{}, err
 	}
 	report := resumeDiscardReport{
-		status:           status,
-		removedArtifacts: result.RemovedArtifacts(),
-		attention:        attention,
+		status:          resumeDiscardStatusSettled,
+		operationID:     item.operationID,
+		phase:           item.phase,
+		stateGeneration: item.stateGeneration,
+		resumable:       item.resumable,
+		attention:       append([]resumeStateAttention(nil), item.attention...),
+	}
+	if len(report.attention) != 0 {
+		report.status = resumeDiscardStatusNeedsAttention
 	}
 	if !report.valid() {
 		return resumeDiscardReport{}, errResumeStateContract
@@ -172,27 +167,89 @@ func projectResumeDiscardResult(result osfs.ResumeStateDiscardResult) (resumeDis
 func projectResumeAttention(values []osfs.ResumeStateAttention) ([]resumeStateAttention, error) {
 	projected := make([]resumeStateAttention, len(values))
 	for index, value := range values {
-		reason := ""
-		switch value.Reason() {
-		case osfs.ResumeStateAttentionMissingOwnership:
-			reason = "missing-ownership"
-		case osfs.ResumeStateAttentionReplacement:
-			reason = "replacement"
-		case osfs.ResumeStateAttentionUnknownChildren:
-			reason = "unknown-children"
-		case osfs.ResumeStateAttentionCorruptBinding:
-			reason = "corrupt-binding"
-		case osfs.ResumeStateAttentionAmbiguousPublication:
-			reason = "ambiguous-publication"
-		default:
-			return nil, errResumeStateContract
+		attention, err := newResumeStateAttention(value.OperationID(), value.Reason())
+		if err != nil {
+			return nil, err
 		}
-		projected[index] = resumeStateAttention{
-			reason:    reason,
-			reference: value.Reference(),
-		}
+		projected[index] = attention
 	}
 	return projected, nil
+}
+
+func projectResumeStateInventory(inventory osfs.ResumeStateInventory) ([]resumeStateItem, error) {
+	switch inventory.Status() {
+	case osfs.ResumeStateListReady, osfs.ResumeStateListNeedsAttention:
+	default:
+		return nil, errResumeStateContract
+	}
+	items := make([]resumeStateItem, 0, len(inventory.Summaries())+len(inventory.Attention()))
+	byOperation := make(map[string]int)
+	for _, summary := range inventory.Summaries() {
+		item, err := projectResumeStateSummary(summary)
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := byOperation[item.operationID]; duplicate {
+			return nil, errResumeStateContract
+		}
+		byOperation[item.operationID] = len(items)
+		items = append(items, item)
+	}
+	attention, err := projectResumeAttention(inventory.Attention())
+	if err != nil {
+		return nil, err
+	}
+	if inventory.Status() == osfs.ResumeStateListReady && len(attention) != 0 {
+		return nil, errResumeStateContract
+	}
+	for _, current := range attention {
+		if index, present := byOperation[current.operationID]; present {
+			items[index].status = resumeItemStatusNeedsAttention
+			items[index].resumable = false
+			items[index].attention = append(items[index].attention, current)
+			continue
+		}
+		byOperation[current.operationID] = len(items)
+		items = append(items, resumeStateItem{
+			status: resumeItemStatusNeedsAttention, operationID: current.operationID,
+			attention: []resumeStateAttention{current},
+		})
+	}
+	if inventory.Status() == osfs.ResumeStateListNeedsAttention && len(attention) == 0 {
+		return nil, errResumeStateContract
+	}
+	sort.Slice(items, func(left, right int) bool { return items[left].operationID < items[right].operationID })
+	for _, item := range items {
+		if !item.valid() {
+			return nil, errResumeStateContract
+		}
+	}
+	return items, nil
+}
+
+func newResumeStateAttention(
+	operation receivecontract.OperationID,
+	reason string,
+) (resumeStateAttention, error) {
+	attention := resumeStateAttention{
+		reason: reason, operationID: hex.EncodeToString(operation.Bytes()),
+	}
+	if !attention.valid() {
+		return resumeStateAttention{}, errResumeStateContract
+	}
+	return attention, nil
+}
+
+func decodeResumeOperationID(encoded string) (receivecontract.OperationID, error) {
+	raw, err := hex.DecodeString(encoded)
+	if err != nil {
+		return receivecontract.OperationID{}, errResumeStateContract
+	}
+	operation, err := receivecontract.OperationIDFromBytes(raw)
+	if err != nil {
+		return receivecontract.OperationID{}, errResumeStateContract
+	}
+	return operation, nil
 }
 
 type legacyCleanupFunc func(

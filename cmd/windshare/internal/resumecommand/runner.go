@@ -41,7 +41,7 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	}
 }
 
-func (runner Runner) runList(ctx context.Context, args []string) (result Result) {
+func (runner Runner) runList(ctx context.Context, args []string) Result {
 	request, valid := runner.dependencies.parser.ParseRoot("resume list", args)
 	if !valid {
 		return ResultUsage
@@ -58,15 +58,6 @@ func (runner Runner) runList(ctx context.Context, args []string) (result Result)
 		runner.dependencies.logger.Logf("resume list: open live inventory: %v", errResumeStateContract)
 		return ResultFailure
 	}
-	defer func() {
-		if err := inventory.Close(); err != nil {
-			runner.dependencies.logger.Logf("resume list: close live inventory: %v", err)
-			if result == ResultOK {
-				result = ResultFailure
-			}
-		}
-	}()
-
 	items, err := inventory.Items()
 	if err != nil {
 		runner.dependencies.logger.Logf("resume list: project live inventory: %v", err)
@@ -82,13 +73,13 @@ func (runner Runner) runList(ctx context.Context, args []string) (result Result)
 		return ResultFailure
 	}
 	if needsAttention {
-		runner.dependencies.logger.Logf("resume list: current paused state needs attention; no deletion authority was used")
+		runner.dependencies.logger.Logf("resume list: current resume state needs attention; no deletion authority was used")
 		return ResultFailure
 	}
 	return ResultOK
 }
 
-func (runner Runner) runDiscard(ctx context.Context, args []string) (result Result) {
+func (runner Runner) runDiscard(ctx context.Context, args []string) Result {
 	request, valid := runner.dependencies.parser.ParseDiscard(args)
 	if !valid {
 		return ResultUsage
@@ -105,15 +96,6 @@ func (runner Runner) runDiscard(ctx context.Context, args []string) (result Resu
 		runner.dependencies.logger.Logf("resume discard: open live inventory: %v", errResumeStateContract)
 		return ResultFailure
 	}
-	defer func() {
-		if err := inventory.Close(); err != nil {
-			runner.dependencies.logger.Logf("resume discard: close live inventory: %v", err)
-			if result == ResultOK {
-				result = ResultFailure
-			}
-		}
-	}()
-
 	items, err := inventory.Items()
 	if err != nil {
 		runner.dependencies.logger.Logf("resume discard: project live inventory: %v", err)
@@ -130,6 +112,12 @@ func (runner Runner) runDiscard(ctx context.Context, args []string) (result Resu
 	}
 	if !items[index].valid() {
 		runner.dependencies.logger.Logf("resume discard: selected item: %v", errResumeStateContract)
+		return ResultFailure
+	}
+	if !items[index].discardable {
+		runner.dependencies.logger.Logf(
+			"resume discard: selected item has only uncertain inventory evidence; no mutation authority is available",
+		)
 		return ResultFailure
 	}
 

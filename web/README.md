@@ -4,10 +4,18 @@ The browser receiver is React 19 + TypeScript + Vite. It accepts suite-02
 capability links, authenticates a small share descriptor, browses catalog pages
 on demand, and reads file-local encrypted ranges over relay or WebRTC lanes.
 
+Receive actions name the final artifact: `original-file`, `directory-tree`, or
+`zip-archive`. The receiver-local `ReceiveIntentV1` binds that artifact to a legal
+destination/workspace plan without adding a sender or relay wire field. Directory
+output may retain successful files; ZIP uses `store` encoding and `complete-only`
+publication. `browser-handoff` ends at `download-started`, never `published`.
+
 The protocol authority is [`docs/协议规范.md`](../docs/协议规范.md); product
 semantics are in [`docs/重构功能变化.md`](../docs/重构功能变化.md), and the historical
 closure record is archived in
 [`docs/.archive/2026.08.06/即时分享与文件浏览重构收尾计划.md`](../docs/.archive/2026.08.06/即时分享与文件浏览重构收尾计划.md).
+The browser artifact and recovery decisions are recorded in
+[`docs/browser-output-ux-refactor-plan.md`](../docs/browser-output-ux-refactor-plan.md).
 Validation entry points are in [`docs/validation.md`](../docs/validation.md), and
 local performance diagnostics are in
 [`docs/performance.md`](../docs/performance.md).
@@ -20,13 +28,22 @@ local performance diagnostics are in
 | `src/content/` | File-local geometry, revisions, leases, range broker, and lane scheduling |
 | `src/session/`, `src/receiver/` | ProtocolSession runtime and receiver-scoped reconnect supervision |
 | `src/transport/`, `src/connectivity/` | v2 relay/WebRTC channels, signaling, and 0/8-second path policy |
-| `src/transfer/`, `src/output/` | Progressive jobs, durable checkpoints, FSA/OPFS, single-file, and ZIP output |
+| `src/transfer/projection/`, `src/transfer/discovery/` | Epoch-fenced selection proof and authenticated progressive discovery |
+| `src/transfer/job/`, `src/transfer/settlement/` | Plan-specific content execution, durable evidence, and settlement |
+| `src/output/planning/`, `src/output/capability/` | Pure artifact offers/binding and thin browser authority acquisition |
+| `src/output/persistent-tree/`, `src/output/file-system-access/` | Prefix-visible `directory-tree` transactions and FSA reservation/settlement |
+| `src/output/workspace/`, `src/output/origin-private/` | Manifests, budgets, lifecycle/recovery, OPFS materialization, package, and publication |
+| `src/output/zip-layout/`, `src/output/streams/`, `src/output/portable/` | Exact store-ZIP policy/writer and bounded browser handoff |
+| `src/output/browser/`, `src/output/resume/` | IndexedDB v6 repository, operation leases, and retained-operation inventory |
 | `src/preview/` | Image and MP4 range preview over the shared broker |
 | `src/ui/` | Progressive browser UI and immediate capability-fragment erasure |
 | `src/unicode/` | Pinned Unicode 15 normalization and full-fold tables |
 
-There is no manifest compatibility path, packed-stream layout, global block
-identity, or v1 receiver fallback.
+There is no silent artifact fallback, partial ZIP, global block identity, or v1
+resume path. Old app-owned records are cleanup-only and cannot create a recoverable
+operation. For `resumable-receive` and `resumable-package`, Continue invokes an
+output-owned executor that revalidates exact preparation or sealed package evidence;
+the UI never reconstructs authority. Save, redownload, discard, and expiry remain live.
 
 ## Local gates
 

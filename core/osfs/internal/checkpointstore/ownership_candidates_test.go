@@ -2,24 +2,19 @@ package checkpointstore
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"errors"
 	"testing"
 
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestOwnershipInspectionAuthenticatesCandidatesAndClassifiesContention(t *testing.T) {
-	backend, err := transfer.NewOutputBackendID("checkpointstore-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootIdentity := bytes.Repeat([]byte{0x92}, sha256.Size)
 	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
-		Backend: backend, Certification: checkpointmodel.CertificationWindowsNTFSProcessRestart,
-		RootIdentity:        rootIdentity,
+		Materializer:        checkpointmodel.MaterializerNativeTree,
+		Certification:       checkpointmodel.CertificationWindowsNTFSProcessRestart,
+		AuthorityRef:        bytes.Repeat([]byte{0x92}, receivecontract.AuthorityRefBytes),
 		RootOpenDisposition: checkpointmodel.CallerProvidedContainer,
 	})
 	if err != nil {

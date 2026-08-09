@@ -1,696 +1,405 @@
 import { describe, expect, it } from 'vitest'
 
-import { byteRange } from '../../src/content/geometry'
-import { EMPTY_TRANSFER_FAILURE_SUMMARY, jobOutcome } from '../../src/transfer/outcome'
 import {
-  OutputDirectoryMutationError,
-  OutputSessionCompromisedError,
-  type OutputFile,
-} from '../../src/transfer/output-session'
+  FILE_CHECKPOINT_COMMIT_CANDIDATE,
+  FILE_CHECKPOINT_COMMIT_VERIFIED,
+  FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
+  fileCheckpointIsComplete,
+  validateFileCheckpoint,
+  validateFileCheckpointTransition,
+  type FileCheckpointV2,
+} from '../../src/output/persistence/checkpoint'
 import {
-  BoundaryFaultError,
-  CheckpointFaultCode,
-  FaultScope,
-  SourceFaultCode,
-  authorizeFileRetirement,
-  sourceFault,
-} from '../../src/transfer/fault'
-import type { CheckpointCrashPhase } from '../../src/output/persistent-tree/contracts'
+  checkpointMatchesNamespace,
+  finalFileCheckpointProof,
+  type FileCheckpointJournal,
+  type FileCheckpointPage,
+  type FileCheckpointScan,
+  type FinalFileCheckpointProof,
+} from '../../src/output/persistence/journal'
+import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence/namespace'
+import type {
+  OpenedFileRevision,
+  PersistentDirectoryMaterialization,
+  PersistentOutputTree,
+  PersistentTreeFile,
+} from '../../src/output/persistent-tree/contracts'
+import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
 import { PersistentTreeOutputSession } from '../../src/output/persistent-tree/session'
-import { MemoryOutputJournal, MemoryOutputTree } from './fakes'
-import {
-  admitOutputDirectory,
-  admittedOutputDirectory,
-  admittedOutputFile,
-  TEST_DIRECTORY_ADMISSION_SCOPE,
-  testOutputIdentity,
-  testOutputModifiedTime,
-} from './admission-fixture'
+import { identity } from './planning/fixture'
 
-const ACTIVE_SIGNAL = new AbortController().signal
-const SUCCESS_OUTCOME = jobOutcome('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
+const FILE_ID = identity(21)
+const FILE_REVISION = identity(22)
+const NEXT_REVISION = identity(23)
 
-const IDENTITY = Object.freeze({ backend: 'memory-tree', outputSessionId: 'session' })
-
-describe('persistent tree output session', () => {
-  it('publishes checkpoints only after data and journal durability in the required order', async () => {
-    const events: string[] = []
-    const tree = new MemoryOutputTree(events)
-    const journal = new MemoryOutputJournal(events)
-    const session = await open(tree, journal, (phase) => { events.push(`cut:${phase}`) })
-    const begun = await beginAdmittedFile(session, outputFile('file', 'revision', 3n))
-    events.length = 0
-
-    await begun.transaction.writeRange(0n, Uint8Array.of(1, 2, 3), ACTIVE_SIGNAL)
-    const durable = await begun.transaction.checkpoint(ACTIVE_SIGNAL)
-
-    expect(durable.ranges).toEqual([byteRange(0n, 3n)])
-    expect(events).toEqual([
-      'data-write',
-      'cut:DataWritten',
-      'data-flush',
-      'cut:DataFlushed',
-      'journal-write',
-      'cut:JournalWritten',
-      'journal-flush',
-      'cut:JournalFlushed',
-      'journal-commit',
-      'cut:CheckpointCommitted',
-      'journal-reopen',
-      'cut:CheckpointVerified',
-    ])
-  })
-
-  for (const phase of [
-    'DataWritten',
-    'DataFlushed',
-    'JournalWritten',
-    'JournalFlushed',
-    'CheckpointCommitted',
-    'CheckpointVerified',
-  ] as const) {
-    it(`recovers conservatively after a ${phase} crash cut`, async () => {
-      const tree = new MemoryOutputTree()
-      const journal = new MemoryOutputJournal()
-      const session = await open(tree, journal, (current) => {
-        if (current === phase) throw new SimulatedCrash(phase)
-      })
-      const file = outputFile('file', 'revision', 4n)
-      const begun = await beginAdmittedFile(session, file)
-
-      if (phase === 'DataWritten') {
-        await expect(begun.transaction.writeRange(0n, Uint8Array.of(1, 2), ACTIVE_SIGNAL))
-          .rejects.toBeInstanceOf(SimulatedCrash)
-      } else {
-        await begun.transaction.writeRange(0n, Uint8Array.of(1, 2), ACTIVE_SIGNAL)
-        await expect(begun.transaction.checkpoint(ACTIVE_SIGNAL)).rejects.toBeInstanceOf(SimulatedCrash)
-      }
-      tree.crash()
-      journal.crash()
-
-      const recovered = await open(tree, journal)
-      const reopened = await beginAdmittedFile(recovered, file)
-      expect(reopened.durableRanges.ranges).toEqual(
-        phase === 'CheckpointCommitted' || phase === 'CheckpointVerified'
-          ? [byteRange(0n, 2n)]
-          : [],
-      )
-    })
-  }
-
-  it('requires reauthorization before exposing persisted ranges', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const file = outputFile('file', 'revision', 1n)
-    const first = await open(tree, journal)
-    const begun = await beginAdmittedFile(first, file)
-    await begun.transaction.writeRange(0n, Uint8Array.of(7), ACTIVE_SIGNAL)
-    await begun.transaction.checkpoint(ACTIVE_SIGNAL)
-    tree.authorizationError = new DOMException('denied', 'NotAllowedError')
-
-    await expect(open(tree, journal)).rejects.toMatchObject({
-      kind: 'authorization',
-    })
-    tree.authorizationError = undefined
-    const recovered = await open(tree, journal)
-    expect((await beginAdmittedFile(recovered, file)).durableRanges.covers(byteRange(0n, 1n))).toBe(true)
-  })
-
-  it('suspends live handles without deleting verified restart ranges', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const file = outputFile('file', 'revision', 2n)
-    const first = await open(tree, journal)
-    const begun = await beginAdmittedFile(first, file)
-    await begun.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
-    await begun.transaction.checkpoint(ACTIVE_SIGNAL)
-
-    await first.pauseJob(new Error('test pause'))
-    const recovered = await open(tree, journal)
-    expect((await beginAdmittedFile(recovered, file)).durableRanges.ranges).toEqual([byteRange(0n, 1n)])
-  })
-
-  it('rejects a revision mismatch without deleting its file or checkpoint', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const first = await open(tree, journal)
-    await checkpoint(first, outputFile('a', 'revision-a', 1n), 1)
-    await checkpoint(first, outputFile('b', 'revision-b', 1n), 2)
-    const oldA = tree.fileIdentity(['a'])
-
-    const recovered = await open(tree, journal)
-    const changed = await beginAdmittedFile(recovered, outputFile('a', 'revision-a2', 1n))
-      .then(() => undefined, (error: unknown) => error)
-    const unchanged = await beginAdmittedFile(recovered, outputFile('b', 'revision-b', 1n))
-
-    expectCheckpointAttention(changed)
-    expect(tree.fileIdentity(['a'])).toBe(oldA)
-    expect(journal.hasCommitted('file:a')).toBe(true)
-    expect(unchanged.durableRanges.ranges).toEqual([byteRange(0n, 1n)])
-  })
-
-  it('binds a checkpoint to exact durable identity while allowing a fresh runtime session', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const file = outputFile('file', 'revision', 1n)
-    await checkpoint(await open(tree, journal), file, 1)
-
-    const freshRun = await PersistentTreeOutputSession.open({
-      identity: { backend: 'memory-tree', outputSessionId: 'another-session' },
-      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
-      tree,
-      journal,
-    })
-    expect((await beginAdmittedFile(freshRun, file)).durableRanges.ranges).toEqual([
-      byteRange(0n, 1n),
-    ])
-
-    const recovered = await open(tree, journal)
-    const resized = await beginAdmittedFile(recovered, { ...file, exactSize: 2n })
-      .then(() => undefined, (error: unknown) => error)
-    expectCheckpointAttention(resized)
-    expect(journal.hasCommitted('file:file')).toBe(true)
-    expect(tree.has(file.path)).toBe(true)
-  })
-
-  it('never treats a same-path replacement as journal-owned output', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const file = outputFile('file', 'revision', 1n)
-    await checkpoint(await open(tree, journal), file, 4)
-    const replacement = Uint8Array.of(99)
-    tree.replaceFile(file.path, replacement)
-    const replacementIdentity = tree.fileIdentity(file.path)
-    const recovered = await open(tree, journal)
-
-    await expect(beginAdmittedFile(recovered, file)).rejects.toMatchObject({
-      fault: {
-        domain: 'checkpoint',
-        scope: FaultScope.OutputPause,
-        code: CheckpointFaultCode.OwnershipMismatch,
+describe('persistent DirectoryTree materialization port', () => {
+  it('opens the authenticated revision before creating a visible file', async () => {
+    const fixture = await materializationFixture()
+    const transaction = await fixture.session.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => {
+        fixture.events.push('revision-opened')
+        return revision(4n)
       },
     })
-    expect(tree.has(file.path)).toBe(true)
-    expect(tree.fileIdentity(file.path)).toBe(replacementIdentity)
-    expect(journal.hasCommitted('file:file')).toBe(true)
+
+    expect(fixture.events).toEqual([
+      'authorize',
+      'prepare-root',
+      'revision-opened',
+      'create:report.bin',
+    ])
+    expect(fixture.tree.visible(['report.bin'])).toEqual(new Uint8Array())
+    expect(transaction.verifiedRanges).toEqual([])
   })
 
-  it('rejects a forged durable range whose journal checksum no longer matches', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const file = outputFile('file', 'revision', 2n)
-    await checkpoint(await open(tree, journal), file, 1)
-    journal.corruptCommitted('file:file', (record) => ({
-      ...record,
-      durableRanges: [byteRange(0n, 2n)],
-    }) as typeof record)
-
-    await expect(open(tree, journal)).rejects.toMatchObject({ kind: 'journal-binding' })
-  })
-
-  it('bounds open transactions and rejects files without an admitted parent', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const session = await PersistentTreeOutputSession.open({
-      identity: IDENTITY,
-      directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
-      tree,
-      journal,
-      maximumOpenFiles: 1,
+  it('keeps prefix writes visible while checkpoint truth advances only after flush', async () => {
+    const fixture = await materializationFixture()
+    const transaction = await fixture.session.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(6n),
     })
-    await expect(session.beginFile({
-      ...outputFile('nested', 'revision-nested', 0n),
-      path: ['parent', 'nested'],
-    }, ACTIVE_SIGNAL)).rejects.toThrow(/missing, forged, or mismatched/u)
+    await transaction.writeRange(0n, Uint8Array.of(1, 2, 3))
 
-    const active = await beginAdmittedFile(session, outputFile('active', 'revision-active', 0n))
-    await expect(beginAdmittedFile(session, outputFile('blocked', 'revision-blocked', 0n)))
-      .rejects.toMatchObject({ kind: 'resource-limit' })
-    await expect(active.transaction.retire(new Error('release slot')))
-      .rejects.toThrow(/allowlisted authorization/u)
-    await active.transaction.retire(permanentRetirement())
-    await admitOutputDirectory(session, { path: ['parent'] })
-    const nested = await beginAdmittedFile(session, {
-      ...outputFile('nested', 'revision-nested', 0n),
-      path: ['parent', 'nested'],
+    expect(fixture.tree.visible(['report.bin'])).toEqual(Uint8Array.of(1, 2, 3))
+    expect(transaction.verifiedRanges).toEqual([])
+    await expect(transaction.checkpoint()).resolves.toEqual([{ start: 0n, end: 3n }])
+    expect(transaction.verifiedRanges).toEqual([{ start: 0n, end: 3n }])
+  })
+
+  it('reopens the same owned file after restart and completes from its persisted range', async () => {
+    const fixture = await materializationFixture()
+    const first = await fixture.session.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(6n),
     })
-    await nested.transaction.commit(ACTIVE_SIGNAL)
-  })
+    await first.writeRange(0n, Uint8Array.of(1, 2, 3))
+    await first.checkpoint()
+    await first.close()
+    await fixture.session.close()
 
-  it('preserves quota-failed output because transient errors have no retirement authority', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const session = await open(tree, journal)
-    const failed = await beginAdmittedFile(session, outputFile('failed', 'revision-failed', 1n))
-    tree.writeError = new DOMException('quota', 'QuotaExceededError')
-    await expect(failed.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL))
-      .rejects.toMatchObject({ name: 'QuotaExceededError' })
-    await expect(failed.transaction.retire(new Error('quota')))
-      .rejects.toThrow(/allowlisted authorization/u)
-    await session.pauseJob(new Error('quota pause'))
-    expect(tree.has(['failed'])).toBe(true)
-    expect(journal.hasCommitted('file:failed')).toBe(true)
-  })
-
-  it('materializes empty files and directories while applying only authorized owned mtimes', async () => {
-    const tree = new MemoryOutputTree()
-    tree.seedDirectory(['existing'])
-    const session = await open(tree, new MemoryOutputJournal())
-    const emptyDirectory = await admittedOutputDirectory(
-      session,
-      { path: ['empty'], modifiedTime: testOutputModifiedTime(10n) },
-    )
-    await session.finalizeDirectory(
-      emptyDirectory,
-      ACTIVE_SIGNAL,
-    )
-    const existingDirectory = await admittedOutputDirectory(
-      session,
-      { path: ['existing'], modifiedTime: testOutputModifiedTime(20n) },
-    )
-    await session.finalizeDirectory(
-      existingDirectory,
-      ACTIVE_SIGNAL,
-    )
-    const empty = await beginAdmittedFile(session, {
-      ...outputFile('empty-file', 'revision-empty', 0n),
-      modifiedTime: testOutputModifiedTime(30n),
+    const reopened = await PersistentTreeOutputSession.open({
+      tree: fixture.tree,
+      checkpoints: fixture.checkpoints,
     })
-    await empty.transaction.commit(ACTIVE_SIGNAL)
+    const second = await reopened.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(6n),
+    })
+    expect(second.ownedObjectId).toBe(first.ownedObjectId)
+    expect(second.verifiedRanges).toEqual([{ start: 0n, end: 3n }])
+    expect(fixture.events.filter((event) => event === 'create:report.bin')).toHaveLength(1)
 
-    expect(tree.has(['empty'])).toBe(true)
-    expect(tree.has(['empty-file'])).toBe(true)
-    expect(tree.directoryModificationTimes.get('empty')).toBe(10n)
-    expect(tree.directoryModificationTimes.has('existing')).toBe(false)
-    expect(tree.fileModificationTimes.get('empty-file')).toBe(30n)
+    await second.writeRange(3n, Uint8Array.of(4, 5, 6))
+    const proof = await second.commit()
+    expect(proof.complete).toBe(true)
+    await expect(second.commit()).resolves.toEqual(proof)
+    await expect(second.writeRange(0n, Uint8Array.of(9))).rejects.toMatchObject({
+      kind: 'output-state',
+    })
+    await expect(second.checkpoint()).rejects.toMatchObject({ kind: 'output-state' })
+    expect(fixture.tree.visible(['report.bin'])).toEqual(Uint8Array.of(1, 2, 3, 4, 5, 6))
   })
 
-  it('closes and removes a newly created file when cancellation wins acquisition', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const session = await open(tree, journal)
-    const file = await admittedOutputFile(session, outputFile('cancelled', 'revision', 1n))
-    const controller = new AbortController()
-    const cancelled = new DOMException('cancel after create', 'AbortError')
-    tree.afterCreateFile = () => controller.abort(cancelled)
+  it('publishes a genuine zero-byte revision through the ordinary file transaction', async () => {
+    const fixture = await materializationFixture()
+    const transaction = await fixture.session.beginFile({
+      artifactPath: ['empty.bin'],
+      openRevision: async () => revision(0n),
+    })
 
-    await expect(session.beginFile(file, controller.signal)).rejects.toBe(cancelled)
-
-    expect(tree.activeFileHandles).toBe(0)
-    expect(tree.has(file.path)).toBe(false)
-    expect(journal.hasCommitted('file:cancelled')).toBe(false)
+    const proof = await transaction.commit()
+    expect(proof.exactSize).toBe(0n)
+    expect(proof.complete).toBe(true)
+    expect(transaction.verifiedRanges).toEqual([])
+    expect(fixture.tree.visible(['empty.bin'])).toEqual(new Uint8Array())
   })
 
-  it('closes a reopened handle when size validation fails without deleting its retry record', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const file = outputFile('retry', 'revision', 1n)
-    const first = await open(tree, journal)
-    await checkpoint(first, file, 1)
-    await first.pauseJob(new Error('test pause'))
-    const recovered = await open(tree, journal)
-    const sizeFailure = new Error('size query failed')
-    tree.sizeError = sizeFailure
+  it('does not create a replacement when the opened revision changes', async () => {
+    const fixture = await materializationFixture()
+    const first = await fixture.session.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(1n),
+    })
+    await first.writeRange(0n, Uint8Array.of(9))
+    await first.commit()
+    await first.close()
 
-    await expect(beginAdmittedFile(recovered, file)).rejects.toBe(sizeFailure)
-
-    expect(tree.activeFileHandles).toBe(0)
-    expect(journal.hasCommitted('file:retry')).toBe(true)
+    await expect(fixture.session.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => ({
+        fileId: FILE_ID,
+        fileRevision: NEXT_REVISION,
+        exactSize: 1n,
+      }),
+    })).rejects.toMatchObject({ name: 'SourceRevisionChangedError' })
+    expect(fixture.events.filter((event) => event === 'create:report.bin')).toHaveLength(1)
   })
 
-  it('rolls back a child directory cancelled immediately after materialization', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const session = await open(tree, journal)
-    const root = await session.admitDirectory(directoryRequest([]), ACTIVE_SIGNAL)
-    const controller = new AbortController()
-    const cancelled = new DOMException('cancel directory acquisition', 'AbortError')
-    tree.afterEnsureDirectory = () => controller.abort(cancelled)
+  it('rechecks object identity before writer acquisition and after checkpoint commit', async () => {
+    const fixture = await materializationFixture()
+    const beforeWriter = await fixture.session.beginFile({
+      artifactPath: ['writer.bin'],
+      openRevision: async () => revision(1n),
+    })
+    fixture.tree.failVerification(['writer.bin'], 'writer-open', 1)
+    await expect(beforeWriter.writeRange(0n, Uint8Array.of(1))).rejects.toBeInstanceOf(
+      TargetOwnershipUnknownError,
+    )
+    expect(beforeWriter.verifiedRanges).toEqual([])
 
-    await expect(session.admitDirectory(directoryRequest(['cancelled'], root), controller.signal)).rejects.toBe(cancelled)
-
-    expect(tree.has(['cancelled'])).toBe(false)
-    expect(journal.hasCommitted('directory:cancelled')).toBe(false)
+    const afterCommit = await fixture.session.beginFile({
+      artifactPath: ['commit.bin'],
+      openRevision: async () => ({ ...revision(1n), fileId: identity(31) }),
+    })
+    await afterCommit.writeRange(0n, Uint8Array.of(7))
+    fixture.tree.failVerification(['commit.bin'], 'commit', 2)
+    await expect(afterCommit.commit()).rejects.toBeInstanceOf(TargetOwnershipUnknownError)
   })
 
-  it('rolls back a child directory when atomic journal publication fails', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const session = await open(tree, journal)
-    const root = await session.admitDirectory(directoryRequest([]), ACTIVE_SIGNAL)
-    const publicationFailure = new Error('journal commit failed')
-    journal.commitError = publicationFailure
+  it('isolates one failed file without removing another successful visible file', async () => {
+    const fixture = await materializationFixture()
+    const good = await fixture.session.beginFile({
+      artifactPath: ['good.bin'],
+      openRevision: async () => ({ ...revision(1n), fileId: identity(41) }),
+    })
+    await good.writeRange(0n, Uint8Array.of(1))
+    await good.commit()
 
-    await expect(session.admitDirectory(directoryRequest(['unpublished'], root), ACTIVE_SIGNAL))
-      .rejects.toBe(publicationFailure)
-
-    expect(tree.has(['unpublished'])).toBe(false)
-    expect(journal.hasCommitted('directory:unpublished')).toBe(false)
-  })
-
-  it('retains a committed directory record when cleanup cannot prove physical removal', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const session = await open(tree, journal)
-    const root = await session.admitDirectory(directoryRequest([]), ACTIVE_SIGNAL)
-    tree.validateDirectoryError = new Error('directory verification failed')
-    tree.removeDirectoryError = new Error('directory removal failed')
-
-    const failure = await session.admitDirectory(directoryRequest(['retained'], root), ACTIVE_SIGNAL)
-      .then(() => undefined, (error: unknown) => error)
-
-    expect(failure).toBeInstanceOf(OutputDirectoryMutationError)
-    expect(failure).toMatchObject({ sessionCompromised: true })
-    expect(tree.has(['retained'])).toBe(true)
-    expect(journal.hasCommitted('directory:retained')).toBe(true)
-  })
-
-  it('retains a committed file record when acquisition cleanup cannot remove the file', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const session = await open(tree, journal)
-    const file = await admittedOutputFile(session, outputFile('retained', 'revision', 1n))
-    tree.openFileError = new Error('file verification failed')
-    tree.removeFileError = new Error('file removal failed')
-
-    const failure = await session.beginFile(file, ACTIVE_SIGNAL)
-      .then(() => undefined, (error: unknown) => error)
-
-    expect(failure).toBeInstanceOf(OutputSessionCompromisedError)
-    expect(tree.activeFileHandles).toBe(0)
-    expect(tree.has(file.path)).toBe(true)
-    expect(journal.hasCommitted('file:retained')).toBe(true)
-  })
-
-  it('rejects paths that could escape the selected capability root', async () => {
-    const session = await open(new MemoryOutputTree(), new MemoryOutputJournal())
-    await expect(session.beginFile({
-      ...outputFile('safe', 'revision', 0n),
-      path: ['..', 'escape'],
-    }, ACTIVE_SIGNAL)).rejects.toThrow('frozen path policy')
+    const bad = await fixture.session.beginFile({
+      artifactPath: ['bad.bin'],
+      openRevision: async () => ({ ...revision(1n), fileId: identity(42) }),
+    })
+    fixture.tree.failVerification(['bad.bin'], 'writer-open', 1)
+    await expect(bad.writeRange(0n, Uint8Array.of(2))).rejects.toBeInstanceOf(
+      TargetOwnershipUnknownError,
+    )
+    expect(fixture.tree.visible(['good.bin'])).toEqual(Uint8Array.of(1))
+    expect(fixture.tree.visible(['bad.bin'])).toEqual(new Uint8Array())
   })
 })
 
-describe('persistent tree resume retirement authority', () => {
-  it.each([
-    ['below the durable high-water mark', Uint8Array.of(1)],
-    ['above the expected size', Uint8Array.of(1, 2, 3, 4)],
-  ] as const)('preserves a same-identity file whose live size is %s', async (_name, liveBytes) => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const file = outputFile('sized', 'revision', 3n)
-    const first = await open(tree, journal)
-    const begun = await beginAdmittedFile(first, file)
-    await begun.transaction.writeRange(0n, Uint8Array.of(1, 2), ACTIVE_SIGNAL)
-    await begun.transaction.checkpoint(ACTIVE_SIGNAL)
-    await first.pauseJob(new Error('restart'))
-    const ownedIdentity = tree.fileIdentity(file.path)
-    tree.resizeOwnedFile(file.path, liveBytes)
-
-    const recovered = await open(tree, journal)
-    const failure = await beginAdmittedFile(recovered, file)
-      .then(() => undefined, (error: unknown) => error)
-
-    expectCheckpointAttention(failure)
-    expect(tree.fileIdentity(file.path)).toBe(ownedIdentity)
-    expect(tree.has(file.path)).toBe(true)
-    expect(journal.hasCommitted('file:sized')).toBe(true)
-    await expect(recovered.pauseJob(failure)).resolves.toMatchObject({ kind: 'NeedsAttention' })
+async function materializationFixture() {
+  const binding = durableCheckpointNamespaceIdentity({
+    operationId: identity(1),
+    receiveIntentDigest: identity(2, 32),
+    materializationBindingDigest: identity(3, 32),
+    materializerKind: FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
+    authorityRef: identity(4, 32),
   })
+  const events: string[] = []
+  const tree = new MemoryTree(events)
+  const checkpoints = new MemoryCheckpointRepository(binding)
+  const session = await PersistentTreeOutputSession.open({ tree, checkpoints })
+  return { binding, events, tree, checkpoints, session }
+}
 
-  it('preserves published output through mismatch and typed source retirement', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const file = outputFile('published', 'revision', 1n)
-    const first = await open(tree, journal)
-    const begun = await beginAdmittedFile(first, file)
-    await begun.transaction.writeRange(0n, Uint8Array.of(7), ACTIVE_SIGNAL)
-    await begun.transaction.checkpoint(ACTIVE_SIGNAL)
-    await begun.transaction.commit(ACTIVE_SIGNAL)
-    const publishedIdentity = tree.fileIdentity(file.path)
+function revision(exactSize: bigint): OpenedFileRevision {
+  return Object.freeze({ fileId: FILE_ID, fileRevision: FILE_REVISION, exactSize })
+}
 
-    const mismatched = await open(tree, journal)
-    const mismatch = await beginAdmittedFile(
-      mismatched,
-      outputFile('published', 'another-revision', 1n),
-    ).then(() => undefined, (error: unknown) => error)
-    expectCheckpointAttention(mismatch)
-    expect(tree.fileIdentity(file.path)).toBe(publishedIdentity)
-    expect(journal.hasCommitted('file:published')).toBe(true)
+class MemoryTree implements PersistentOutputTree {
+  readonly #events: string[]
+  readonly #files = new Map<string, MemoryFile>()
+  #nextObject = 60
 
-    const recovered = await open(tree, journal)
-    const reopened = await beginAdmittedFile(recovered, file)
-    await expect(reopened.transaction.retire(permanentRetirement())).resolves.toBe('FileIsolated')
-    expect(tree.fileIdentity(file.path)).toBe(publishedIdentity)
-    expect(journal.hasCommitted('file:published')).toBe(true)
-  })
+  constructor(events: string[]) {
+    this.#events = events
+  }
 
-  it('refuses to delete a same-path replacement during authorized retirement', async () => {
-    const tree = new MemoryOutputTree()
-    const journal = new MemoryOutputJournal()
-    const file = outputFile('replacement', 'revision', 1n)
-    const session = await open(tree, journal)
-    const begun = await beginAdmittedFile(session, file)
-    await begun.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
-    await begun.transaction.checkpoint(ACTIVE_SIGNAL)
-    tree.replaceFile(file.path, Uint8Array.of(9))
-    const replacementIdentity = tree.fileIdentity(file.path)
+  async authorize(): Promise<void> {
+    this.#events.push('authorize')
+  }
 
-    await expect(begun.transaction.retire(permanentRetirement()))
-      .rejects.toThrow('Could not isolate failed persistent output file')
-    expect(tree.fileIdentity(file.path)).toBe(replacementIdentity)
-    expect(journal.hasCommitted('file:replacement')).toBe(true)
-  })
+  async prepareRoot(): Promise<void> {
+    this.#events.push('prepare-root')
+  }
 
-  it('seals directory authority while a reserved BeginFile drains to an active transaction', async () => {
-    const tree = new MemoryOutputTree()
-    const createStarted = deferred<void>()
-    const releaseCreate = deferred<void>()
-    tree.beforeCreateFile = async () => {
-      createStarted.resolve()
-      await releaseCreate.promise
+  async ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization> {
+    if (path.some((component) => component.length === 0)) throw new TypeError('empty path component')
+    return Object.freeze({ ownedObjectId: identity(this.#nextObject++, 32), created: true })
+  }
+
+  async validateDirectory(): Promise<boolean> {
+    return true
+  }
+
+  async createFileAfterRevisionOpen(
+    path: readonly string[],
+    revision: OpenedFileRevision,
+  ): Promise<PersistentTreeFile> {
+    if (revision.exactSize < 0n) throw new RangeError('negative revision size')
+    const key = path.join('/')
+    if (this.#files.has(key)) throw new DOMException('collision', 'InvalidModificationError')
+    this.#events.push(`create:${key}`)
+    const file = new MemoryFile(identity(this.#nextObject++, 32))
+    this.#files.set(key, file)
+    return file
+  }
+
+  async openFile(
+    path: readonly string[],
+    ownedObjectId: string,
+  ): Promise<PersistentTreeFile | undefined> {
+    const file = this.#files.get(path.join('/'))
+    return file?.ownedObjectId === ownedObjectId ? file : undefined
+  }
+
+  async removeFile(path: readonly string[], ownedObjectId: string): Promise<void> {
+    const key = path.join('/')
+    if (this.#files.get(key)?.ownedObjectId !== ownedObjectId) {
+      throw new TargetOwnershipUnknownError('cleanup', identity(1))
     }
-    const session = await open(tree, new MemoryOutputJournal())
-    const root = await session.admitDirectory(directoryRequest([]), ACTIVE_SIGNAL)
-    const file = { ...outputFile('reserved', 'revision', 0n), parentAdmission: root }
+    this.#files.delete(key)
+  }
 
-    const beginning = session.beginFile(file, ACTIVE_SIGNAL)
-    await createStarted.promise
-    const finalizing = session.finalizeDirectory(root, ACTIVE_SIGNAL)
+  async removeDirectory(): Promise<void> {}
 
-    await expect(session.beginFile({
-      ...outputFile('late', 'revision', 0n),
-      parentAdmission: root,
-    }, ACTIVE_SIGNAL)).rejects.toThrow(/sealed/u)
-    await expectPending(finalizing)
+  visible(path: readonly string[]): Uint8Array | undefined {
+    return this.#files.get(path.join('/'))?.snapshot()
+  }
 
-    releaseCreate.resolve()
-    const begun = await beginning
-    await expectPending(finalizing)
-    await begun.transaction.pause(new Error('settle reserved file'))
-    await expect(finalizing).resolves.toMatchObject({ kind: 'Finalized' })
-  })
+  failVerification(
+    path: readonly string[],
+    stage: 'writer-open' | 'checkpoint' | 'commit',
+    occurrence: number,
+  ): void {
+    this.#files.get(path.join('/'))?.failVerification(stage, occurrence)
+  }
+}
 
-  it('keeps the first terminal transition idempotent across complete and pause', async () => {
-    const completing = await open(new MemoryOutputTree(), new MemoryOutputJournal())
-    const completion = completing.completeJob(SUCCESS_OUTCOME, ACTIVE_SIGNAL)
-    const pauseDuringCompletion = completing.pauseJob(new Error('late pause'))
-    await expect(completion).resolves.toMatchObject({ kind: 'Completed' })
-    await expect(pauseDuringCompletion).resolves.toMatchObject({ kind: 'Completed' })
-    await expect(completing.pauseJob(new Error('settled pause')))
-      .resolves.toMatchObject({ kind: 'Completed' })
+class MemoryFile implements PersistentTreeFile {
+  readonly ownedObjectId: string
+  #bytes = new Uint8Array()
+  readonly #verificationCounts = new Map<string, number>()
+  #failure: { readonly stage: string; readonly occurrence: number } | undefined
 
-    const pausing = await open(new MemoryOutputTree(), new MemoryOutputJournal())
-    const pause = pausing.pauseJob(new Error('first pause'))
-    const completionDuringPause = pausing.completeJob(SUCCESS_OUTCOME, ACTIVE_SIGNAL)
-    await expect(pause).resolves.toMatchObject({ kind: 'Paused' })
-    await expect(completionDuringPause).resolves.toMatchObject({ kind: 'Paused' })
-    await expect(pausing.completeJob(SUCCESS_OUTCOME, ACTIVE_SIGNAL))
-      .resolves.toMatchObject({ kind: 'Paused' })
-  })
+  constructor(ownedObjectId: string) {
+    this.ownedObjectId = ownedObjectId
+  }
 
-  for (const race of [
-    { phase: 'DataWritten', operation: 'write', close: 'pause' },
-    { phase: 'DataFlushed', operation: 'checkpoint', close: 'pause' },
-    { phase: 'CheckpointVerified', operation: 'commit', close: 'complete' },
-  ] as const) {
-    it(`drains ${race.operation} through ${race.phase} before ${race.close} settles`, async () => {
-      const reached = deferred<void>()
-      const release = deferred<void>()
-      let blocked = false
-      const session = await open(
-        new MemoryOutputTree(),
-        new MemoryOutputJournal(),
-        async (phase) => {
-          if (phase !== race.phase || blocked) return
-          blocked = true
-          reached.resolve()
-          await release.promise
-        },
-      )
-      const begun = await beginAdmittedFile(session, outputFile(race.operation, 'revision', 1n))
-      if (race.operation !== 'write') {
-        await begun.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
-      }
-      let mutation: Promise<unknown>
-      if (race.operation === 'write') {
-        mutation = begun.transaction.writeRange(0n, Uint8Array.of(1), ACTIVE_SIGNAL)
-      } else if (race.operation === 'checkpoint') {
-        mutation = begun.transaction.checkpoint(ACTIVE_SIGNAL)
-      } else {
-        mutation = begun.transaction.commit(ACTIVE_SIGNAL)
-      }
-      await reached.promise
+  async writeAt(offset: bigint, data: Uint8Array): Promise<void> {
+    await this.verify('writer-open')
+    const start = Number(offset)
+    const size = Math.max(this.#bytes.byteLength, start + data.byteLength)
+    const next = new Uint8Array(size)
+    next.set(this.#bytes)
+    next.set(data, start)
+    this.#bytes = next
+  }
 
-      const closing = race.close === 'pause'
-        ? session.pauseJob(new Error('deterministic lifecycle race'))
-        : session.completeJob(SUCCESS_OUTCOME, ACTIVE_SIGNAL)
-      await expectPending(closing)
-      await expect(begun.transaction.checkpoint(ACTIVE_SIGNAL)).rejects.toThrow(/closing or closed/u)
+  async flush(): Promise<void> {}
 
-      release.resolve()
-      await mutation
-      await expect(closing).resolves.toMatchObject({
-        kind: race.close === 'pause' ? 'Paused' : 'Completed',
-      })
+  async size(): Promise<bigint> {
+    return BigInt(this.#bytes.byteLength)
+  }
+
+  async verify(stage: 'writer-open' | 'checkpoint' | 'commit'): Promise<void> {
+    const count = (this.#verificationCounts.get(stage) ?? 0) + 1
+    this.#verificationCounts.set(stage, count)
+    if (this.#failure?.stage === stage && this.#failure.occurrence === count) {
+      throw new TargetOwnershipUnknownError(stage, identity(1))
+    }
+  }
+
+  async close(): Promise<void> {}
+
+  async read(): Promise<Blob> {
+    return new Blob([this.#bytes])
+  }
+
+  snapshot(): Uint8Array {
+    return this.#bytes.slice()
+  }
+
+  failVerification(stage: string, occurrence: number): void {
+    this.#failure = { stage, occurrence }
+  }
+}
+
+class MemoryCheckpointRepository implements FileCheckpointJournal {
+  readonly binding: FileCheckpointJournal['binding']
+  readonly #candidates = new Map<string, FileCheckpointV2>()
+  readonly #committed = new Map<string, FileCheckpointV2>()
+
+  constructor(binding: FileCheckpointJournal['binding']) {
+    this.binding = binding
+  }
+
+  async putCandidate(record: FileCheckpointV2): Promise<void> {
+    validateFileCheckpoint(record)
+    if (!checkpointMatchesNamespace(record, this.binding) ||
+        record.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE) {
+      throw new TypeError('candidate escaped its checkpoint namespace')
+    }
+    const previous = this.#candidates.get(record.recordId)
+    if (previous !== undefined) validateFileCheckpointTransition(previous, record)
+    this.#candidates.set(record.recordId, record)
+  }
+
+  async commit(record: FileCheckpointV2): Promise<void> {
+    validateFileCheckpoint(record)
+    if (record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED) {
+      throw new TypeError('memory repository commits only verified checkpoints')
+    }
+    const candidate = this.#candidates.get(record.recordId)
+    if (candidate === undefined) throw new DOMException('candidate missing', 'InvalidStateError')
+    validateFileCheckpointTransition(candidate, record)
+    const previous = this.#committed.get(record.recordId)
+    if (previous !== undefined) validateFileCheckpointTransition(previous, record)
+    this.#committed.set(record.recordId, record)
+    this.#candidates.delete(record.recordId)
+  }
+
+  async readCommitted(recordId: string): Promise<FileCheckpointV2 | undefined> {
+    return this.#committed.get(recordId)
+  }
+
+  async scanCommitted(scan: FileCheckpointScan): Promise<FileCheckpointPage> {
+    return this.#scan(this.#committed, scan)
+  }
+
+  async scanCandidates(scan: FileCheckpointScan): Promise<FileCheckpointPage> {
+    return this.#scan(this.#candidates, scan)
+  }
+
+  async finalCheckpointProof(
+    recordId: string,
+    generation: bigint,
+  ): Promise<FinalFileCheckpointProof> {
+    const record = this.#committed.get(recordId)
+    if (record === undefined || record.checkpointGeneration !== generation ||
+        !fileCheckpointIsComplete(record)) {
+      throw new DOMException('final checkpoint missing', 'NotFoundError')
+    }
+    return finalFileCheckpointProof(record)
+  }
+
+  async retireOperation(): Promise<void> {
+    this.#candidates.clear()
+    this.#committed.clear()
+  }
+
+  #scan(
+    records: ReadonlyMap<string, FileCheckpointV2>,
+    scan: FileCheckpointScan,
+  ): FileCheckpointPage {
+    const sorted = [...records.values()]
+      .filter((record) => scan.fileId === undefined || record.fileId === scan.fileId)
+      .sort((left, right) => left.recordId.localeCompare(right.recordId))
+    if (scan.direction === 'descending') sorted.reverse()
+    const after = scan.cursor === undefined
+      ? sorted
+      : sorted.filter((record) => scan.direction === 'ascending'
+          ? record.recordId > scan.cursor!
+          : record.recordId < scan.cursor!)
+    const limit = scan.limit ?? 128
+    const page = after.slice(0, limit)
+    return Object.freeze({
+      records: Object.freeze(page),
+      ...(after.length >= limit && page.at(-1) !== undefined
+        ? { nextCursor: page.at(-1)!.recordId }
+        : {}),
     })
   }
-
-  it('lets close cancel a finalization wait before pausing its active descendant', async () => {
-    const session = await open(new MemoryOutputTree(), new MemoryOutputJournal())
-    const root = await session.admitDirectory(directoryRequest([]), ACTIVE_SIGNAL)
-    await session.beginFile({
-      ...outputFile('active-descendant', 'revision', 0n),
-      parentAdmission: root,
-    }, ACTIVE_SIGNAL)
-
-    const finalizing = session.finalizeDirectory(root, ACTIVE_SIGNAL)
-    await expectPending(finalizing)
-    const pausing = session.pauseJob(new Error('close finalization wait'))
-
-    await expect(finalizing).rejects.toThrow(/closing or closed/u)
-    await expect(pausing).resolves.toMatchObject({ kind: 'Paused' })
-  })
-
-  it('drains directory metadata finalization before pause reaches its stable cut', async () => {
-    const tree = new MemoryOutputTree()
-    const metadataStarted = deferred<void>()
-    const releaseMetadata = deferred<void>()
-    tree.beforeDirectoryModification = async () => {
-      metadataStarted.resolve()
-      await releaseMetadata.promise
-    }
-    const session = await open(tree, new MemoryOutputJournal())
-    const root = await session.admitDirectory(directoryRequest([]), ACTIVE_SIGNAL)
-    const child = await session.admitDirectory({
-      ...directoryRequest(['child'], root),
-      modifiedTime: testOutputModifiedTime(1n),
-    }, ACTIVE_SIGNAL)
-
-    const finalizing = session.finalizeDirectory(child, ACTIVE_SIGNAL)
-    await metadataStarted.promise
-    const pausing = session.pauseJob(new Error('pause during directory metadata'))
-    await expectPending(pausing)
-    await expect(session.admitDirectory(directoryRequest(['late'], root), ACTIVE_SIGNAL))
-      .rejects.toThrow(/closing or closed/u)
-
-    releaseMetadata.resolve()
-    await expect(finalizing).resolves.toMatchObject({ kind: 'Finalized' })
-    await expect(pausing).resolves.toMatchObject({ kind: 'Paused' })
-  })
-})
-
-async function open(
-  tree: MemoryOutputTree,
-  journal: MemoryOutputJournal,
-  crashHook?: (phase: CheckpointCrashPhase) => void | Promise<void>,
-): Promise<PersistentTreeOutputSession> {
-  return PersistentTreeOutputSession.open({
-    identity: IDENTITY,
-    directoryAdmissionScope: TEST_DIRECTORY_ADMISSION_SCOPE,
-    tree,
-    journal,
-    ...(crashHook === undefined ? {} : { crashHook }),
-  })
-}
-
-async function beginAdmittedFile(session: PersistentTreeOutputSession, file: OutputFile) {
-  return session.beginFile(await admittedOutputFile(session, file), ACTIVE_SIGNAL)
-}
-
-function outputFile(name: string, revision: string, exactSize: bigint): OutputFile {
-  return {
-    source: {
-      shareInstance: testOutputIdentity('share'),
-      fileId: testOutputIdentity(`file:${name}`),
-      fileRevision: testOutputIdentity(`revision:${revision}`),
-    },
-    path: [name],
-    exactSize,
-  }
-}
-
-function directoryRequest(path: readonly string[], parentAdmission?: Awaited<ReturnType<PersistentTreeOutputSession['admitDirectory']>>) {
-  const binding = path.join('/') || 'root'
-  return {
-    directoryId: path.length === 0
-      ? TEST_DIRECTORY_ADMISSION_SCOPE.syntheticRoot
-      : testOutputIdentity(`directory:${binding}`),
-    generation: testOutputIdentity(`generation:${binding}`),
-    path,
-    ...(parentAdmission === undefined ? {} : { parentAdmission }),
-  }
-}
-
-async function checkpoint(
-  session: PersistentTreeOutputSession,
-  file: OutputFile,
-  value: number,
-): Promise<void> {
-  const begun = await beginAdmittedFile(session, file)
-  await begun.transaction.writeRange(0n, Uint8Array.of(value), ACTIVE_SIGNAL)
-  await begun.transaction.checkpoint(ACTIVE_SIGNAL)
-}
-
-function permanentRetirement() {
-  const authorization = authorizeFileRetirement(
-    sourceFault(FaultScope.FileLocal, SourceFaultCode.Permanent),
-  )
-  if (authorization === undefined) throw new Error('permanent source retirement was not authorized')
-  return authorization
-}
-
-function expectCheckpointAttention(value: unknown): void {
-  expect(value).toBeInstanceOf(BoundaryFaultError)
-  expect(value).toMatchObject({
-    fault: {
-      domain: 'checkpoint',
-      scope: FaultScope.OutputPause,
-      code: CheckpointFaultCode.OwnershipMismatch,
-    },
-  })
-}
-
-class SimulatedCrash extends Error {
-  constructor(phase: CheckpointCrashPhase) {
-    super(`crash after ${phase}`)
-    this.name = 'SimulatedCrash'
-  }
-}
-
-function deferred<T>(): {
-  readonly promise: Promise<T>
-  readonly resolve: (value: T | PromiseLike<T>) => void
-} {
-  let resolve: (value: T | PromiseLike<T>) => void = () => undefined
-  const promise = new Promise<T>((complete) => { resolve = complete })
-  return { promise, resolve }
-}
-
-async function expectPending(promise: Promise<unknown>): Promise<void> {
-  const state = await Promise.race([
-    promise.then(() => 'settled' as const, () => 'settled' as const),
-    Promise.resolve('pending' as const),
-  ])
-  expect(state).toBe('pending')
 }

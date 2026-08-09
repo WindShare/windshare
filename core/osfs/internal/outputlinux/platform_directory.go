@@ -9,6 +9,22 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 )
 
+func (directory *linuxV3Directory) PersistentDirectoryIdentityClaim() ([]byte, error) {
+	if directory == nil || directory.native == nil {
+		return nil, outputcap.ErrUnsafeNamespace
+	}
+	claim, err := directory.native.identityClaim()
+	return claim, linuxV3Error(err)
+}
+
+func (directory *linuxV3Directory) PreparePersistentDirectoryIdentityClaim() ([]byte, error) {
+	if directory == nil || directory.native == nil {
+		return nil, outputcap.ErrUnsafeNamespace
+	}
+	claim, err := directory.native.prepareIdentityClaim()
+	return claim, linuxV3Error(err)
+}
+
 func (directory *linuxV3Directory) Close() error {
 	if directory == nil {
 		return nil

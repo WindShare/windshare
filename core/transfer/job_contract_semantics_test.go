@@ -47,20 +47,39 @@ func TestTransferJobFailureTaxonomyPreservesScopeAndCause(t *testing.T) {
 	}
 }
 
-func TestTransferJobOutputSessionAndFileValidatorsFailClosed(t *testing.T) {
+func TestTransferJobDirectTreeSessionAndFileValidatorsFailClosed(t *testing.T) {
 	share := transferID[catalog.ShareInstance](161)
 	root := transferID[catalog.DirectoryID](162)
 	rules, _ := NewSelectionRules(true, nil)
-	intent := testTransferIntent(t, share, root, rules, jobOutputBackend)
-	if err := validateOutputSession(intent, nil); normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
+	intent := testReceiveIntent(t, share, root, rules)
+	if err := validateDirectTreeSession(intent, nil); normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
 		t.Fatalf("nil output session error = %v", err)
 	}
 	output := newJobOutput(share)
-	if err := validateOutputSession(intent, output); err != nil {
+	opened, err := output.OpenDirectTree(context.Background(), intent)
+	if err != nil || opened != output {
+		t.Fatalf("open direct tree session = %T, %v", opened, err)
+	}
+	if err := validateDirectTreeSession(intent, output); err != nil {
 		t.Fatalf("valid output session error = %v", err)
 	}
+	sessionBinding := output.Binding()
+	if sessionBinding.ReceiveIntentDigest() != intent.Digest() ||
+		sessionBinding.OperationID() != intent.OperationID() ||
+		sessionBinding.BindingDigest() != intent.BindingDigest() {
+		t.Fatalf("direct tree session binding = %+v", sessionBinding)
+	}
+	if _, err := BindDirectTreeSession(ReceiveIntent{}); !errors.Is(err, ErrInvalidOutputBinding) {
+		t.Fatalf("zero intent binding error = %v", err)
+	}
+	validBinding := output.binding
+	output.binding.operationID[0] ^= 0xff
+	if err := validateDirectTreeSession(intent, output); normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
+		t.Fatalf("foreign intent binding error = %v", err)
+	}
+	output.binding = validBinding
 	output.session = OutputSessionID{}
-	if err := validateOutputSession(intent, output); normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
+	if err := validateDirectTreeSession(intent, output); normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
 		t.Fatalf("zero output session identity error = %v", err)
 	}
 
@@ -75,7 +94,7 @@ func TestTransferJobOutputSessionAndFileValidatorsFailClosed(t *testing.T) {
 	}
 	otherIdentity := binding.ObjectIdentity()
 	otherIdentity[0] ^= 0xff
-	otherBinding, err := BindOutputFileTarget(target, otherIdentity)
+	otherBinding, err := BindFileMaterializationTarget(target, otherIdentity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,14 +105,14 @@ func TestTransferJobOutputSessionAndFileValidatorsFailClosed(t *testing.T) {
 	if err := validateOutputTransaction(target, transaction, otherCheckpoint); normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
 		t.Fatalf("transaction with foreign checkpoint error = %v", err)
 	}
-	if err := validateOutputFileBinding(OutputFileTarget{}, binding); !errors.Is(err, ErrOutputContract) {
+	if err := validateMaterializedFileBinding(FileMaterializationTarget{}, binding); !errors.Is(err, ErrOutputContract) {
 		t.Fatalf("foreign output binding error = %v", err)
 	}
-	if err := validateOutputFileBinding(target, binding); err != nil {
+	if err := validateMaterializedFileBinding(target, binding); err != nil {
 		t.Fatalf("valid output binding error = %v", err)
 	}
 
-	for name, settlement := range immediateJobSettlements(t, binding, checkpoint) {
+	for name, settlement := range immediateDirectTreeSettlements(t, binding, checkpoint) {
 		t.Run(name, func(t *testing.T) {
 			if err := validateImmediateFileSettlement(target, settlement); err != nil {
 				t.Fatalf("valid immediate settlement error = %v", err)
@@ -119,20 +138,20 @@ func TestTransferJobDirectorySettlementValidatorRequiresExactAdmission(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope, err := NewDirectoryAdmissionScope(testTransferIntent(t, share, root, rules, jobOutputBackend))
+	scope, err := NewDirectoryAdmissionScope(testReceiveIntent(t, share, root, rules))
 	if err != nil {
 		t.Fatal(err)
 	}
 	secret := make([]byte, directoryAdmissionSecretBytes)
 	secret[0] = 1
-	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, OutputDirectory{
+	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, MaterializationDirectory{
 		DirectoryID: root,
 		Generation:  transferID[catalog.DirectoryGeneration](0xa3),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	childAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, OutputDirectory{
+	childAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, MaterializationDirectory{
 		DirectoryID:     transferID[catalog.DirectoryID](0xa4),
 		Generation:      transferID[catalog.DirectoryGeneration](0xa5),
 		ParentAdmission: rootAdmission,
@@ -191,7 +210,7 @@ func TestTransferJobImmediateSettlementsPreserveOutcomeAndReleaseFailures(t *tes
 	}
 	plan := plannedFile{file: binding.FileID(), path: binding.Locator().CanonicalPath()}
 
-	for name, settlement := range immediateJobSettlements(t, binding, checkpoint) {
+	for name, settlement := range immediateDirectTreeSettlements(t, binding, checkpoint) {
 		t.Run(name, func(t *testing.T) {
 			revisions := &jobRevisionClient{}
 			run := immediateSettlementJobRun(binding.ShareInstance(), revisions)
@@ -224,7 +243,7 @@ func TestTransferJobImmediateSettlementsPreserveOutcomeAndReleaseFailures(t *tes
 		cause := errors.New("session ended during release")
 		revisions := &jobRevisionClient{releaseErr: sessionProtocolFailure(cause)}
 		run := immediateSettlementJobRun(binding.ShareInstance(), revisions)
-		published := immediateJobSettlements(t, binding, checkpoint)["published"]
+		published := immediateDirectTreeSettlements(t, binding, checkpoint)["published"]
 		err := run.handleImmediateSettlement(context.Background(), plan, opened, published)
 		if normalizedFault(err) != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
 			run.succeeded != 1 || len(run.files) != 1 ||
@@ -237,7 +256,7 @@ func TestTransferJobImmediateSettlementsPreserveOutcomeAndReleaseFailures(t *tes
 		cause := errors.New("session ended during collision release")
 		revisions := &jobRevisionClient{releaseErr: sessionProtocolFailure(cause)}
 		run := immediateSettlementJobRun(binding.ShareInstance(), revisions)
-		collision := immediateJobSettlements(t, binding, checkpoint)["collision"]
+		collision := immediateDirectTreeSettlements(t, binding, checkpoint)["collision"]
 		err := run.handleImmediateSettlement(context.Background(), plan, opened, collision)
 		if normalizedFault(err) != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) || len(run.files) != 1 ||
 			!errors.Is(run.files[0].Cause, ErrOutputPublishBlocked) {
@@ -348,9 +367,9 @@ func TestTransferJobRejectsInvalidAdmissionAndRevisionIdentityTransitions(t *tes
 		output.session = OutputSessionID{}
 		job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
 		result := job.Run(context.Background())
-		if result.Outcome != JobPausedOutcome ||
+		if result.Outcome != DirectTreeOutcomeResumable ||
 			result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
-			output.pauseCalls != 1 || output.completeCalls != 0 {
+			output.pauseCalls != 0 || output.completeCalls != 0 {
 			t.Fatalf("invalid admission result=%+v pause=%d complete=%d", result, output.pauseCalls, output.completeCalls)
 		}
 	})
@@ -440,9 +459,9 @@ func immediateSettlementJobRun(share catalog.ShareInstance, revisions RevisionCl
 	}
 }
 
-func immediateJobSettlements(
+func immediateDirectTreeSettlements(
 	t *testing.T,
-	binding OutputFileBinding,
+	binding MaterializedFileBinding,
 	checkpoint VerifiedDurableRanges,
 ) map[string]FileSettlement {
 	t.Helper()
@@ -458,7 +477,7 @@ func immediateJobSettlements(
 	if err != nil {
 		t.Fatal(err)
 	}
-	reference, err := NewOutputStateRef(binding.OutputSessionID(), binding.Locator().Digest())
+	reference, err := NewMaterializationStateRef(binding.OutputSessionID(), binding.Locator().Digest())
 	if err != nil {
 		t.Fatal(err)
 	}
