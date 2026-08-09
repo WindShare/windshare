@@ -448,7 +448,7 @@ func c5ClosureStateRun(t *testing.T) (*cleanupRun, []byte) {
 	t.Helper()
 	run := &cleanupRun{
 		cleaner: &OneShotCheckpointCleaner{config: OneShotCheckpointCleanerConfig{
-			BackendID: transfer.NativeFilesystemOutputBackendID,
+			BackendID: legacyresume.NativeFilesystemBackend,
 		}},
 		rootBinding:   bytes.Repeat([]byte{0x71}, legacyresume.RootIdentityBytes),
 		certification: legacyresume.CertificationWindowsNTFSProcessRestart,
@@ -561,7 +561,7 @@ func c5ClosureAuthorizedMutation(t *testing.T) c5ClosureMutationFixture {
 	}
 	run := &cleanupRun{
 		cleaner: &OneShotCheckpointCleaner{config: OneShotCheckpointCleanerConfig{
-			Platform: platform, BackendID: transfer.NativeFilesystemOutputBackendID,
+			Platform: platform, BackendID: legacyresume.NativeFilesystemBackend,
 		}},
 		root: root, rootBinding: binding.Bytes(), certification: string(platform.certification),
 		durability: transfer.DurabilityProcessRestart, control: control, namespace: namespace,

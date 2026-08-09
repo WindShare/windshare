@@ -1,188 +1,187 @@
-import {
-  ORIGIN_PRIVATE_EXPORT_COMPLETE,
-  type OriginPrivateExportResult,
-  type OriginPrivateOutputExporter,
-} from './session'
-import type { StagedOutputCatalog, StagedOutputFile } from '../persistent-tree/session'
-import type { ZipArchiveWriter } from '../streams/zip-archive'
 import { StreamingZipArchiveWriter } from '../streams/streaming-zip'
 import {
   IndexedDbZipCentralDirectorySpool,
   type ZipCentralDirectorySpool,
 } from '../streams/zip-spool'
+import {
+  validateSealedZipLayoutPlan,
+  type SealedZipLayoutPlanV1,
+} from '../zip-layout/layout'
+import type { ZipEntryPlanV1 } from '../zip-layout/policy'
+import type { MaterializedManifestV1 } from '../workspace/manifest'
+import {
+  createZipArtifactVerificationReceipt,
+  type ZipArtifactVerificationReceiptV1,
+} from '../workspace/receipts'
 
-export class OriginPrivateZipExporter implements OriginPrivateOutputExporter {
-  readonly #output: WritableStream<Uint8Array>
+export interface OriginPrivatePackageSource {
+  readOwnedFile(ownedObjectId: string): Promise<Blob>
+}
+
+export type OriginPrivateZipPackageResult =
+  | Readonly<{
+      kind: 'sealed'
+      verification: ZipArtifactVerificationReceiptV1
+    }>
+  | Readonly<{
+      kind: 'cleanup-pending'
+      retryCleanup(): Promise<OriginPrivateZipPackageResult>
+    }>
+
+interface PendingZipPackageVerification {
+  readonly operationId: string
+  readonly receiveIntentDigest: string
+  readonly sealedMaterializationDigest: string
+  readonly layoutDigest: string
+  readonly packageOwnedObjectId: string
+  readonly exactBytes: bigint
+}
+
+/**
+ * Packaging consumes only sealed layout/member authority. It cannot discover new
+ * members or turn cancellation into a known-incomplete archive.
+ */
+export class OriginPrivateZipPackageBuilder {
   readonly #createSpool: () => ZipCentralDirectorySpool
-  #state: 'idle' | 'exporting' | 'settled' | 'aborting' | 'aborted' | 'abort-failed' = 'idle'
-  #controller: AbortController | undefined
-  #activeArchive: StreamingZipArchiveWriter | undefined
-  #activeReader: ReadableStreamDefaultReader<Uint8Array> | undefined
-  #abortPromise: Promise<void> | undefined
-  #cleanupArchive: StreamingZipArchiveWriter | undefined
+  #state: 'idle' | 'building' | 'cleanup-pending' | 'sealed' | 'failed' = 'idle'
+  #writer: StreamingZipArchiveWriter | undefined
+  #pendingVerification: PendingZipPackageVerification | undefined
+  #cleanupPromise: Promise<OriginPrivateZipPackageResult> | undefined
 
   constructor(
-    output: WritableStream<Uint8Array>,
     createSpool: () => ZipCentralDirectorySpool = () => new IndexedDbZipCentralDirectorySpool(),
   ) {
-    this.#output = output
     this.#createSpool = createSpool
   }
 
-  abort(reason: unknown): Promise<void> {
-    if (this.#state === 'settled') return Promise.resolve()
-    if (this.#abortPromise !== undefined) return this.#abortPromise
-    this.#state = 'aborting'
-    this.#controller?.abort(reason)
-    const operation = this.#performAbort(reason).then(
-      () => {
-        if (this.#state !== 'settled') this.#state = 'aborted'
-      },
-      (error: unknown) => {
-        if (this.#state !== 'settled') this.#state = 'abort-failed'
-        throw error
-      },
+  async build(input: {
+    readonly operationId: string
+    readonly receiveIntentDigest: string
+    readonly sealedMaterializationDigest: string
+    readonly manifest: MaterializedManifestV1
+    readonly layout: SealedZipLayoutPlanV1
+    readonly packageOwnedObjectId: string
+    readonly output: WritableStream<Uint8Array>
+    readonly source: OriginPrivatePackageSource
+    readonly readPackageExactBytes: () => Promise<bigint>
+    readonly signal: AbortSignal
+  }): Promise<OriginPrivateZipPackageResult> {
+    if (this.#state !== 'idle') throw new Error('origin-private ZIP package builder is not idle')
+    input.signal.throwIfAborted()
+    this.#state = 'building'
+    const layout = await validateSealedZipLayoutPlan(input.layout)
+    validatePackageAuthority(input.manifest, layout, input.receiveIntentDigest)
+    const writer = new StreamingZipArchiveWriter(
+      input.output,
+      this.#createSpool(),
+      Object.freeze({ kind: 'sealed', plan: layout }),
     )
-    this.#abortPromise = operation
-    // The signal listener can start cancellation before session authority calls
-    // abort(). Attach an observer without replacing the rejecting shared promise.
-    operation.catch(() => undefined)
-    return operation
-  }
-
-  async #performAbort(reason: unknown): Promise<void> {
-    const results = await Promise.allSettled([
-      this.#activeReader?.cancel(reason) ?? Promise.resolve(),
-      this.#activeArchive?.abort(reason) ??
-        (!this.#output.locked ? this.#output.abort(reason) : Promise.resolve()),
-    ])
-    const failures = results
-      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-      .map((result) => result.reason)
-    if (failures.length > 0) throw new AggregateError(failures, 'OPFS ZIP export abort failed')
-  }
-
-  async export(
-    catalog: StagedOutputCatalog,
-    _outcome: Parameters<OriginPrivateOutputExporter['export']>[1],
-    signal: AbortSignal,
-  ): Promise<OriginPrivateExportResult> {
-    return this.#exportCatalog(catalog, signal)
-  }
-
-  /** Publishes only already committed staging members before confirmed discard. */
-  exportPartial(
-    catalog: StagedOutputCatalog,
-    signal: AbortSignal,
-  ): Promise<OriginPrivateExportResult> {
-    return this.#exportCatalog(catalog, signal)
-  }
-
-  async #exportCatalog(
-    catalog: StagedOutputCatalog,
-    signal: AbortSignal,
-  ): Promise<OriginPrivateExportResult> {
-    if (this.#state !== 'idle') throw new Error('OPFS ZIP exporter is not idle')
-    signal.throwIfAborted()
-    this.#state = 'exporting'
-    const controller = new AbortController()
-    this.#controller = controller
-    const detach = forwardAbort(signal, controller)
-    const exportSignal = controller.signal
-    const interrupt = () => {
-      this.abort(exportSignal.reason)
-    }
+    this.#writer = writer
     try {
-      // Resource construction belongs to the same fail-closed settlement as data
-      // export; spool or writer acquisition can fail before an archive exists.
-      const archive = new StreamingZipArchiveWriter(this.#output, this.#createSpool())
-      this.#activeArchive = archive
-      exportSignal.addEventListener('abort', interrupt, { once: true })
-      for await (const directory of catalog.directories()) {
-        exportSignal.throwIfAborted()
-        await archive.addDirectory({
-          path: directory.canonicalPath,
-          ...(directory.modifiedTimeMilliseconds === undefined
-            ? {}
-            : { modifiedTimeMilliseconds: directory.modifiedTimeMilliseconds }),
-        })
+      const files = materializedFilesByPath(input.manifest)
+      for (const entry of layout.entries) {
+        input.signal.throwIfAborted()
+        if (entry.kind === 'directory') {
+          await writer.addDirectory(entry)
+          continue
+        }
+        const materialized = files.get(pathKey(entry.path))
+        if (materialized === undefined || materialized.exactSize !== entry.exactSize) {
+          throw new TypeError('sealed ZIP member escaped its materialized file authority')
+        }
+        await writeMember(
+          writer,
+          entry,
+          await input.source.readOwnedFile(materialized.ownedObjectId),
+          input.signal,
+        )
       }
-      for await (const staged of catalog.files()) {
-        exportSignal.throwIfAborted()
-        await exportFile(archive, staged, exportSignal, (reader) => {
-          this.#activeReader = reader
-        })
+      await writer.close(layout, input.signal)
+      const actualBytes = await input.readPackageExactBytes()
+      if (actualBytes !== layout.exactArchiveBytes) {
+        throw new TypeError('origin-private package length changed after writer close')
       }
-      exportSignal.throwIfAborted()
-      await archive.close(exportSignal)
-      this.#state = 'settled'
-      if (archive.cleanupPending) this.#cleanupArchive = archive
-      return archive.cleanupPending
-        ? Object.freeze({ cleanupPending: true, cleanupFailure: archive.cleanupFailure })
-        : ORIGIN_PRIVATE_EXPORT_COMPLETE
+      this.#pendingVerification = Object.freeze({
+        operationId: input.operationId,
+        receiveIntentDigest: input.receiveIntentDigest,
+        sealedMaterializationDigest: input.sealedMaterializationDigest,
+        layoutDigest: layout.digest,
+        packageOwnedObjectId: input.packageOwnedObjectId,
+        exactBytes: actualBytes,
+      })
+      if (writer.cleanupPending) {
+        this.#state = 'cleanup-pending'
+        return this.#pendingCleanupResult()
+      }
+      return this.#sealVerification()
     } catch (error) {
+      this.#state = 'failed'
       try {
-        await this.abort(error)
+        await writer.abort(error)
       } catch (abortError) {
         throw new AggregateError(
           [error, abortError],
-          'OPFS ZIP export and cleanup failed',
+          'origin-private package build and cleanup failed',
           { cause: abortError },
         )
       }
       throw error
-    } finally {
-      exportSignal.removeEventListener('abort', interrupt)
-      detach()
-      this.#controller = undefined
-      this.#activeArchive = undefined
-      this.#activeReader = undefined
     }
   }
 
-  async retryCleanup(): Promise<OriginPrivateExportResult> {
-    const archive = this.#cleanupArchive
-    if (archive === undefined) return ORIGIN_PRIVATE_EXPORT_COMPLETE
-    try {
-      await archive.retryCleanup()
-    } catch (error) {
-      return Object.freeze({ cleanupPending: true, cleanupFailure: error })
+  retryCleanup(): Promise<OriginPrivateZipPackageResult> {
+    if (this.#state === 'sealed') {
+      throw new Error('origin-private ZIP package is already sealed')
     }
-    if (archive.cleanupPending) {
-      return Object.freeze({ cleanupPending: true, cleanupFailure: archive.cleanupFailure })
+    if (this.#state !== 'cleanup-pending' || this.#writer === undefined) {
+      throw new Error('origin-private ZIP package has no retryable cleanup')
     }
-    this.#cleanupArchive = undefined
-    return ORIGIN_PRIVATE_EXPORT_COMPLETE
+    if (this.#cleanupPromise !== undefined) return this.#cleanupPromise
+    const operation = this.#writer.retryCleanup().then(() => {
+      if (this.#writer?.cleanupPending === true) return this.#pendingCleanupResult()
+      return this.#sealVerification()
+    }).finally(() => { this.#cleanupPromise = undefined })
+    this.#cleanupPromise = operation
+    return operation
+  }
+
+  #pendingCleanupResult(): OriginPrivateZipPackageResult {
+    return Object.freeze({
+      kind: 'cleanup-pending',
+      retryCleanup: () => this.retryCleanup(),
+    })
+  }
+
+  async #sealVerification(): Promise<OriginPrivateZipPackageResult> {
+    const pending = this.#pendingVerification
+    if (pending === undefined) throw new Error('ZIP package lost its close verification')
+    const verification = await createZipArtifactVerificationReceipt({
+      ...pending,
+      writerCloseVerified: true,
+    })
+    this.#state = 'sealed'
+    this.#writer = undefined
+    this.#pendingVerification = undefined
+    return Object.freeze({ kind: 'sealed', verification })
   }
 }
 
-async function exportFile(
-  archive: ZipArchiveWriter,
-  staged: StagedOutputFile,
+async function writeMember(
+  writer: StreamingZipArchiveWriter,
+  entry: ZipEntryPlanV1,
+  blob: Blob,
   signal: AbortSignal,
-  setReader: (reader: ReadableStreamDefaultReader<Uint8Array> | undefined) => void,
 ): Promise<void> {
-  signal.throwIfAborted()
-  const blob = await staged.read()
-  signal.throwIfAborted()
-  if (BigInt(blob.size) !== staged.record.exactSize) {
-    throw new Error('Staged output size changed before export')
+  if (BigInt(blob.size) !== entry.exactSize) {
+    throw new TypeError('materialized file length changed before packaging')
   }
-  const member = await archive.beginFile({
-    path: staged.record.canonicalPath,
-    exactSize: staged.record.exactSize,
-    ...(staged.record.modifiedTimeMilliseconds === undefined
-      ? {}
-      : { modifiedTimeMilliseconds: staged.record.modifiedTimeMilliseconds }),
-  })
+  const member = await writer.beginFile(entry)
   const reader = blob.stream().getReader()
-  setReader(reader)
   try {
     while (true) {
       signal.throwIfAborted()
       const chunk = await reader.read()
       if (chunk.done) break
-      signal.throwIfAborted()
       await member.write(chunk.value)
     }
     signal.throwIfAborted()
@@ -191,19 +190,42 @@ async function exportFile(
     await member.abort(error)
     throw error
   } finally {
-    setReader(undefined)
     reader.releaseLock()
   }
 }
 
-function forwardAbort(source: AbortSignal, target: AbortController): () => void {
-  const abort = () => target.abort(
-    source.reason ?? new DOMException('OPFS ZIP export aborted', 'AbortError'),
-  )
-  if (source.aborted) {
-    abort()
-    return () => {}
+function materializedFilesByPath(
+  manifest: MaterializedManifestV1,
+): ReadonlyMap<string, Extract<MaterializedManifestV1['entries'][number], { kind: 'file' }>> {
+  const files = new Map<
+    string,
+    Extract<MaterializedManifestV1['entries'][number], { kind: 'file' }>
+  >()
+  for (const entry of manifest.entries) {
+    if (entry.kind !== 'file') continue
+    const key = pathKey(entry.artifactPath)
+    if (files.has(key)) throw new TypeError('materialized manifest repeats a ZIP member path')
+    files.set(key, entry)
   }
-  source.addEventListener('abort', abort, { once: true })
-  return () => source.removeEventListener('abort', abort)
+  return files
+}
+
+function validatePackageAuthority(
+  manifest: MaterializedManifestV1,
+  layout: SealedZipLayoutPlanV1,
+  receiveIntentDigest: string,
+): void {
+  if (manifest.receiveIntentDigest !== receiveIntentDigest ||
+      layout.receiveIntentDigest !== receiveIntentDigest ||
+      manifest.preparationBinding.kind !== 'present' ||
+      layout.evidence.kind !== 'prepared' ||
+      manifest.preparationBinding.preparationDigest !==
+        layout.evidence.preparationManifestDigest ||
+      manifest.entryCount !== layout.entryCount) {
+    throw new TypeError('ZIP package authorities disagree')
+  }
+}
+
+function pathKey(path: readonly string[]): string {
+  return path.join('\0')
 }

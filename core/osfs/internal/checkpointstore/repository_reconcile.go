@@ -62,21 +62,22 @@ func (snapshot Snapshot) Attention() []Attention {
 	return slices.Clone(snapshot.attention)
 }
 
-// InitialCandidateWitness proves that an initial record's owned stage and anchor
-// reached the same durable cut. The repository owns promotion; the file engine
-// supplies only the platform observation it is uniquely able to make.
-type InitialCandidateWitness func(checkpointmodel.Record) (bool, error)
+// CandidateDurabilityWitness proves that a candidate record's owned stage and
+// anchor still name the durable file cut that preceded candidate publication.
+// The repository owns promotion; the file engine supplies only the platform
+// observation it is uniquely able to make.
+type CandidateDurabilityWitness func(checkpointmodel.Record) (bool, error)
 
-func (repository *Repository) Reconcile(witness InitialCandidateWitness) (Snapshot, error) {
+func (repository *Repository) Reconcile(witness CandidateDurabilityWitness) (Snapshot, error) {
 	budget := newRepositoryScanBudget(
-		checkpointmodel.MaxCheckpointRecordsPerIntent,
-		checkpointmodel.MaxCheckpointAuxiliaryEntriesPerIntent,
+		checkpointmodel.MaxCheckpointRecordsPerOperation,
+		checkpointmodel.MaxCheckpointAuxiliaryEntriesPerOperation,
 	)
 	return repository.reconcile(witness, &budget)
 }
 
 func (repository *Repository) reconcile(
-	witness InitialCandidateWitness,
+	witness CandidateDurabilityWitness,
 	budget *repositoryScanBudget,
 ) (Snapshot, error) {
 	if repository == nil || repository.records == nil || witness == nil || !budget.valid() {
@@ -166,7 +167,7 @@ func (budget *repositoryScanBudget) observe(shard, name string) error {
 
 func (repository *Repository) reconcileShard(
 	shardName string,
-	witness InitialCandidateWitness,
+	witness CandidateDurabilityWitness,
 	budget *repositoryScanBudget,
 	result *Snapshot,
 ) (resultErr error) {
@@ -274,7 +275,7 @@ func (repository *Repository) appendReconciledShardRecords(
 	shard outputcap.Directory,
 	shardName string,
 	stable map[string]storedRecord,
-	witness InitialCandidateWitness,
+	witness CandidateDurabilityWitness,
 	result *Snapshot,
 ) error {
 	stableNames := make([]string, 0, len(stable))
@@ -283,7 +284,7 @@ func (repository *Repository) appendReconciledShardRecords(
 	}
 	slices.Sort(stableNames)
 	for _, name := range stableNames {
-		loaded, err := reconcileInitialRecord(shard, name, stable[name], witness)
+		loaded, err := reconcileCandidateRecord(shard, name, stable[name], witness)
 		if err != nil {
 			return err
 		}
@@ -297,25 +298,27 @@ func (repository *Repository) appendReconciledShardRecords(
 	return nil
 }
 
-func reconcileInitialRecord(
+func reconcileCandidateRecord(
 	shard outputcap.Directory,
 	name string,
 	loaded storedRecord,
-	witness InitialCandidateWitness,
+	witness CandidateDurabilityWitness,
 ) (storedRecord, error) {
-	if !checkpointmodel.InitialCandidate(loaded.record) {
+	if loaded.record.CommitState() != checkpointmodel.CommitCandidate {
 		return loaded, nil
 	}
 	recoverable, err := witness(loaded.record)
 	if err != nil {
-		return storedRecord{}, repositoryError("verify initial checkpoint witness", err)
+		return storedRecord{}, repositoryError("verify checkpoint candidate witness", err)
 	}
 	if !recoverable {
 		return loaded, nil
 	}
-	promoted, err := checkpointmodel.PromoteInitialCandidate(loaded.record)
+	promoted, err := checkpointmodel.Promote(
+		loaded.record, loaded.record.Phase(), checkpointmodel.CommitVerified,
+	)
 	if err != nil {
-		return storedRecord{}, codedError(ErrorCorruptRecord, "promote initial checkpoint", err)
+		return storedRecord{}, codedError(ErrorCorruptRecord, "promote checkpoint candidate", err)
 	}
 	promotedEncoded, err := checkpointmodel.EncodeRecord(promoted)
 	if err != nil {
@@ -426,7 +429,12 @@ func (repository *Repository) reconcileCandidate(
 	}
 	if candidate.CommitState() == checkpointmodel.CommitCandidate &&
 		checkpointmodel.Committed(current.record) &&
-		checkpointmodel.ValidateTransition(candidate, current.record) == nil {
+		(checkpointmodel.ValidateTransition(candidate, current.record) == nil ||
+			checkpointmodel.ValidateTransition(current.record, candidate) == nil) {
+		// The fixed target remains the authority until replacement. A valid
+		// unlinked write-ahead image may be either the predecessor of an already
+		// promoted target or its next candidate; neither can grant have-state by
+		// its private installation name.
 		if err := RemoveExactTemporary(shard, name, encoded); err != nil {
 			return repositoryError("remove superseded checkpoint candidate", err)
 		}

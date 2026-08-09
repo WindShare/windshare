@@ -11,7 +11,7 @@ import (
 
 func (session *Session) AdmitDirectory(
 	ctx context.Context,
-	directory transfer.OutputDirectory,
+	directory transfer.MaterializationDirectory,
 ) (transfer.DirectoryAdmission, error) {
 	lease, operationID, err := session.beginOperation()
 	if err != nil {
@@ -75,7 +75,7 @@ func (session *Session) AdmitDirectory(
 
 func (session *Session) reserveDirectory(
 	operationID uint64,
-	directory transfer.OutputDirectory,
+	directory transfer.MaterializationDirectory,
 	admission transfer.DirectoryAdmission,
 	locatorKey string,
 ) (*directoryEntry, *directoryAdmissionOperation, bool, TraceEvent, error) {
@@ -129,7 +129,7 @@ func (session *Session) reserveDirectory(
 	operation := &directoryAdmissionOperation{done: make(chan struct{})}
 	entry := &directoryEntry{
 		claim: DirectoryClaim{
-			id: claimID, directory: directory, locatorKey: locatorKey, parent: parent,
+			id: claimID, directory: directory, admission: admission, locatorKey: locatorKey, parent: parent,
 		},
 		admission: admission, state: directoryPending, metadataBytes: charge,
 		changed: make(chan struct{}), admissionOperation: operation,
@@ -156,7 +156,7 @@ func (session *Session) reserveDirectory(
 func (session *Session) existingDirectoryReservationLocked(
 	operationID uint64,
 	reference claimRef,
-	directory transfer.OutputDirectory,
+	directory transfer.MaterializationDirectory,
 	admission transfer.DirectoryAdmission,
 	locatorKey string,
 ) (*directoryEntry, *directoryAdmissionOperation, bool, TraceEvent, error) {
@@ -190,7 +190,7 @@ func (session *Session) existingDirectoryReservationLocked(
 		session.operationRejectionOrInvariantLocked()
 }
 
-func (session *Session) directoryParentLocked(directory transfer.OutputDirectory) (ClaimID, error) {
+func (session *Session) directoryParentLocked(directory transfer.MaterializationDirectory) (ClaimID, error) {
 	if directory.Path == "" {
 		if session.rootClaim != 0 && session.directoryClaims[session.rootClaim] == nil {
 			return 0, ErrExecutorContract

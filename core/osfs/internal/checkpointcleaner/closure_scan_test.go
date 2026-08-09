@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/windshare/windshare/core/osfs/internal/checkpointstore"
 	"github.com/windshare/windshare/core/osfs/internal/legacyresume"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
@@ -43,12 +42,12 @@ func TestC5ClosureClassifiesRootControlAndCurrentStateWithoutDeletionAuthority(t
 
 	controlTemporary := legacyresume.ControlRecord + ".tmp-" + strings.Repeat("3", 64)
 	current := &c5ClosureDirectory{entries: map[string]c5ClosureEntry{
-		checkpointstore.OwnershipFile:          {kind: outputcap.EntryRegularFile, exact: true},
-		checkpointstore.LeasesDirectory:        {kind: outputcap.EntryDirectory, exact: true},
-		checkpointstore.IntentsDirectory:       {kind: outputcap.EntryRegularFile, exact: true},
-		checkpointstore.LegacyCleanupStateFile: {kind: outputcap.EntryRegularFile, exact: false},
-		checkpointstore.LegacyCleanupLockFile:  {kind: outputcap.EntryRegularFile, exact: true},
-		"foreign.current":                      {kind: outputcap.EntryRegularFile, exact: true},
+		legacyresume.CheckpointOwnership: {kind: outputcap.EntryRegularFile, exact: true},
+		legacyresume.CheckpointLeases:    {kind: outputcap.EntryDirectory, exact: true},
+		legacyresume.CheckpointIntents:   {kind: outputcap.EntryRegularFile, exact: true},
+		FileCheckpointCleanupState:       {kind: outputcap.EntryRegularFile, exact: false},
+		FileCheckpointCleanupLock:        {kind: outputcap.EntryRegularFile, exact: true},
+		"foreign.current":                {kind: outputcap.EntryRegularFile, exact: true},
 	}}
 	control := &c5ClosureDirectory{
 		entries: map[string]c5ClosureEntry{
@@ -121,7 +120,7 @@ func TestC5ClosurePreservesUnknownConflictingAndCurrentSessionChildren(t *testin
 		t.Fatal(err)
 	}
 	base := path.Join(legacyresume.ControlDirectory, legacyresume.SessionsDirectory, intentName)
-	if !c5ClosureHasEntry(report, path.Join(base, legacyresume.CheckpointDirectory), cleanupDetailCurrent) ||
+	if !c5ClosureHasEntry(report, path.Join(base, legacyresume.CheckpointDirectory), cleanupDetailSeparateOwnership) ||
 		!c5ClosureHasEntry(report, path.Join(base, "foreign-child"), cleanupDetailUnknown) ||
 		!c5ClosureHasEntry(report, path.Join(base, conflictingSession), cleanupDetailConflict) ||
 		!c5ClosureHasEntry(report, path.Join(legacyresume.ControlDirectory, legacyresume.SessionsDirectory, "foreign-intent"), cleanupDetailUnknown) {
@@ -275,14 +274,14 @@ func TestC5ClosureRejectsCanonicalStateBoundToDifferentAuthority(t *testing.T) {
 	rootIdentity := bytes.Repeat([]byte{0x5a}, legacyresume.RootIdentityBytes)
 	run := &cleanupRun{
 		cleaner: &OneShotCheckpointCleaner{config: OneShotCheckpointCleanerConfig{
-			BackendID: transfer.NativeFilesystemOutputBackendID,
+			BackendID: legacyresume.NativeFilesystemBackend,
 		}},
 		rootBinding:   rootIdentity,
 		certification: legacyresume.CertificationWindowsNTFSProcessRestart,
 		durability:    transfer.DurabilityProcessRestart,
 	}
 	base := cleanerState{
-		Schema: cleanerStateSchema, BackendID: string(transfer.NativeFilesystemOutputBackendID),
+		Schema: cleanerStateSchema, BackendID: string(legacyresume.NativeFilesystemBackend),
 		Certification: run.certification, RootIdentity: append([]byte(nil), rootIdentity...),
 		Durability: uint8(transfer.DurabilityProcessRestart), RunGeneration: 1, Complete: true,
 	}
@@ -336,7 +335,7 @@ func TestC5ClosureFailsClosedBeforeInspection(t *testing.T) {
 		t.Fatalf("invalid backend = %v", err)
 	}
 	cleaner, err := NewOneShotCheckpointCleaner(OneShotCheckpointCleanerConfig{Platform: platform})
-	if err != nil || cleaner.config.BackendID != transfer.NativeFilesystemOutputBackendID {
+	if err != nil || cleaner.config.BackendID != legacyresume.NativeFilesystemBackend {
 		t.Fatalf("default backend: cleaner=%+v err=%v", cleaner, err)
 	}
 	if _, err := (*OneShotCheckpointCleaner)(nil).Run(context.Background()); !errors.Is(err, ErrCheckpointCleanerOwnership) {

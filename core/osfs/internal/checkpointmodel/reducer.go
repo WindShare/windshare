@@ -7,11 +7,13 @@ import (
 )
 
 func IdentityEqual(left, right Record) bool {
-	return left.recordID == right.recordID && left.intentDigest == right.intentDigest &&
+	return left.recordID == right.recordID && left.operationID == right.operationID &&
+		left.receiveIntentDigest == right.receiveIntentDigest &&
+		left.materializationBindingDigest == right.materializationBindingDigest &&
 		left.fileID == right.fileID && left.fileRevision == right.fileRevision &&
 		left.canonicalPath == right.canonicalPath && left.exactSize == right.exactSize &&
-		left.backendID == right.backendID && left.rootIdentity == right.rootIdentity &&
-		left.ownedOutputObject == right.ownedOutputObject
+		left.materializerKind == right.materializerKind && left.authorityRef == right.authorityRef &&
+		left.ownedObjectID == right.ownedObjectID
 }
 
 // ValidateTransition prevents stale writers from changing immutable identity,
@@ -30,27 +32,8 @@ func ValidateTransition(previous, next Record) error {
 		next.checkpointGeneration < previous.checkpointGeneration {
 		return ErrRecordGeneration
 	}
-	if next.checkpointGeneration == previous.checkpointGeneration {
-		if previous.commitState == CommitCandidate {
-			// Candidate promotion is the atomic data cut, so both generations and
-			// the verified ranges remain unchanged.
-			if next.commitState <= previous.commitState ||
-				next.stateGeneration != previous.stateGeneration ||
-				!slices.Equal(previous.verifiedRanges, next.verifiedRanges) ||
-				(previous.phase != next.phase &&
-					(previous.phase != PhasePublishing || next.phase != PhasePublished)) {
-				return ErrRecordGeneration
-			}
-		} else if next.stateGeneration <= previous.stateGeneration ||
-			!slices.Equal(previous.verifiedRanges, next.verifiedRanges) ||
-			!ValidLifecycleTransition(
-				previous.phase,
-				previous.commitState,
-				next.phase,
-				next.commitState,
-			) {
-			return ErrRecordGeneration
-		}
+	if err := validateGenerationCut(previous, next); err != nil {
+		return err
 	}
 	if previous.commitState == CommitPublished || previous.phase == PhasePublished {
 		return fmt.Errorf("%w: published record is immutable", ErrRecordGeneration)
@@ -61,7 +44,57 @@ func ValidateTransition(previous, next Record) error {
 	return nil
 }
 
-// ValidLifecycleTransition is the pure V1 phase reducer used by temporary
+func validateGenerationCut(previous, next Record) error {
+	if next.checkpointGeneration == previous.checkpointGeneration {
+		return validateStateCut(previous, next)
+	}
+	return validateCheckpointCut(previous, next)
+}
+
+func validateStateCut(previous, next Record) error {
+	if previous.commitState == CommitCandidate {
+		return validateCandidatePromotion(previous, next)
+	}
+	if next.stateGeneration <= previous.stateGeneration ||
+		!slices.Equal(previous.verifiedRanges, next.verifiedRanges) ||
+		!ValidLifecycleTransition(
+			previous.phase,
+			previous.commitState,
+			next.phase,
+			next.commitState,
+		) {
+		return ErrRecordGeneration
+	}
+	return nil
+}
+
+func validateCandidatePromotion(previous, next Record) error {
+	// Promotion commits the existing write-ahead image, so it cannot create a
+	// new generation or change the bytes whose durability it is certifying.
+	phasePreserved := previous.phase == next.phase
+	publishingCommitted := previous.phase == PhasePublishing && next.phase == PhasePublished
+	if next.commitState <= previous.commitState ||
+		next.stateGeneration != previous.stateGeneration ||
+		!slices.Equal(previous.verifiedRanges, next.verifiedRanges) ||
+		(!phasePreserved && !publishingCommitted) {
+		return ErrRecordGeneration
+	}
+	return nil
+}
+
+func validateCheckpointCut(previous, next Record) error {
+	if previous.commitState != CommitVerified ||
+		next.checkpointGeneration != previous.checkpointGeneration+1 ||
+		next.stateGeneration != previous.stateGeneration+1 ||
+		next.commitState != CommitCandidate || next.phase != previous.phase {
+		// A new range generation is a write-ahead candidate at exactly one
+		// successor cut. Phase changes are separate committed state transitions.
+		return ErrRecordGeneration
+	}
+	return nil
+}
+
+// ValidLifecycleTransition is the pure v2 phase reducer used by temporary
 // runtime projections. It does not grant persistence or filesystem authority.
 func ValidLifecycleTransition(
 	previousPhase Phase,
@@ -197,24 +230,16 @@ func AdvanceGeneration(
 		return Record{}, ErrRecordGeneration
 	}
 	next, err := NewRecord(RecordSpec{
-		OwnershipMarker:      previous.ownershipMarker,
-		Namespace:            previous.namespace,
-		TransferIntentDigest: previous.intentDigest,
-		FileID:               previous.fileID,
-		FileRevision:         previous.fileRevision,
-		CanonicalPath:        previous.canonicalPath,
-		ExactSize:            previous.exactSize,
-		BackendID:            string(previous.backendID),
-		RootIdentity:         previous.rootIdentity.Bytes(),
-		OwnedOutputObject:    previous.ownedOutputObject.Bytes(),
-		StateGeneration:      previous.stateGeneration + 1,
-		CheckpointGeneration: previous.checkpointGeneration + 1,
-		VerifiedRanges:       ranges,
-		Phase:                phase,
-		CommitState:          commitState,
-		QuarantineReason:     previous.quarantineReason,
-		QuarantineOrigin:     previous.quarantineOrigin,
-		RetirementReason:     previous.retirementReason,
+		OwnershipMarker: previous.ownershipMarker, Namespace: previous.namespace,
+		OperationID: previous.operationID, ReceiveIntentDigest: previous.receiveIntentDigest,
+		MaterializationBindingDigest: previous.materializationBindingDigest,
+		FileID:                       previous.fileID, FileRevision: previous.fileRevision,
+		CanonicalPath: previous.canonicalPath, ExactSize: previous.exactSize,
+		MaterializerKind: previous.materializerKind, AuthorityRef: previous.authorityRef.Bytes(),
+		OwnedObjectID: previous.ownedObjectID.Bytes(), StateGeneration: previous.stateGeneration + 1,
+		CheckpointGeneration: previous.checkpointGeneration + 1, VerifiedRanges: ranges,
+		Phase: phase, CommitState: commitState, QuarantineReason: previous.quarantineReason,
+		QuarantineOrigin: previous.quarantineOrigin, RetirementReason: previous.retirementReason,
 	})
 	if err != nil {
 		return Record{}, err
@@ -238,24 +263,16 @@ func AdvanceState(
 		return Record{}, ErrRecordGeneration
 	}
 	next, err := NewRecord(RecordSpec{
-		OwnershipMarker:      previous.ownershipMarker,
-		Namespace:            previous.namespace,
-		TransferIntentDigest: previous.intentDigest,
-		FileID:               previous.fileID,
-		FileRevision:         previous.fileRevision,
-		CanonicalPath:        previous.canonicalPath,
-		ExactSize:            previous.exactSize,
-		BackendID:            string(previous.backendID),
-		RootIdentity:         previous.rootIdentity.Bytes(),
-		OwnedOutputObject:    previous.ownedOutputObject.Bytes(),
-		StateGeneration:      stateGeneration,
-		CheckpointGeneration: previous.checkpointGeneration,
-		VerifiedRanges:       previous.verifiedRanges,
-		Phase:                phase,
-		CommitState:          commitState,
-		QuarantineReason:     quarantineReason,
-		QuarantineOrigin:     quarantineOrigin,
-		RetirementReason:     retirementReason,
+		OwnershipMarker: previous.ownershipMarker, Namespace: previous.namespace,
+		OperationID: previous.operationID, ReceiveIntentDigest: previous.receiveIntentDigest,
+		MaterializationBindingDigest: previous.materializationBindingDigest,
+		FileID:                       previous.fileID, FileRevision: previous.fileRevision,
+		CanonicalPath: previous.canonicalPath, ExactSize: previous.exactSize,
+		MaterializerKind: previous.materializerKind, AuthorityRef: previous.authorityRef.Bytes(),
+		OwnedObjectID: previous.ownedObjectID.Bytes(), StateGeneration: stateGeneration,
+		CheckpointGeneration: previous.checkpointGeneration, VerifiedRanges: previous.verifiedRanges,
+		Phase: phase, CommitState: commitState, QuarantineReason: quarantineReason,
+		QuarantineOrigin: quarantineOrigin, RetirementReason: retirementReason,
 	})
 	if err != nil {
 		return Record{}, err
@@ -277,24 +294,16 @@ func Promote(candidate Record, phase Phase, commitState CommitState) (Record, er
 		return Record{}, ErrRecordCrashBoundary
 	}
 	next, err := NewRecord(RecordSpec{
-		OwnershipMarker:      candidate.ownershipMarker,
-		Namespace:            candidate.namespace,
-		TransferIntentDigest: candidate.intentDigest,
-		FileID:               candidate.fileID,
-		FileRevision:         candidate.fileRevision,
-		CanonicalPath:        candidate.canonicalPath,
-		ExactSize:            candidate.exactSize,
-		BackendID:            string(candidate.backendID),
-		RootIdentity:         candidate.rootIdentity.Bytes(),
-		OwnedOutputObject:    candidate.ownedOutputObject.Bytes(),
-		StateGeneration:      candidate.stateGeneration,
-		CheckpointGeneration: candidate.checkpointGeneration,
-		VerifiedRanges:       candidate.verifiedRanges,
-		Phase:                phase,
-		CommitState:          commitState,
-		QuarantineReason:     candidate.quarantineReason,
-		QuarantineOrigin:     candidate.quarantineOrigin,
-		RetirementReason:     candidate.retirementReason,
+		OwnershipMarker: candidate.ownershipMarker, Namespace: candidate.namespace,
+		OperationID: candidate.operationID, ReceiveIntentDigest: candidate.receiveIntentDigest,
+		MaterializationBindingDigest: candidate.materializationBindingDigest,
+		FileID:                       candidate.fileID, FileRevision: candidate.fileRevision,
+		CanonicalPath: candidate.canonicalPath, ExactSize: candidate.exactSize,
+		MaterializerKind: candidate.materializerKind, AuthorityRef: candidate.authorityRef.Bytes(),
+		OwnedObjectID: candidate.ownedObjectID.Bytes(), StateGeneration: candidate.stateGeneration,
+		CheckpointGeneration: candidate.checkpointGeneration, VerifiedRanges: candidate.verifiedRanges,
+		Phase: phase, CommitState: commitState, QuarantineReason: candidate.quarantineReason,
+		QuarantineOrigin: candidate.quarantineOrigin, RetirementReason: candidate.retirementReason,
 	})
 	if err != nil {
 		return Record{}, err

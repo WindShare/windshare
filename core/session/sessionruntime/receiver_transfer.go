@@ -13,18 +13,16 @@ import (
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
-// NewTransferJob binds one picker-confirmed intent to a single transfer run.
-// Keeping this boundary intent-shaped prevents a live protocol session from
-// accidentally deriving durable resume identity from terminal discovery state.
-// The output target is already part of intent; output is only the backend
-// authority that will open the corresponding session.
+// NewTransferJob binds one confirmed receive intent to a single transfer run.
+// The materializer may reopen durable state, but the live protocol session can
+// never derive OperationID from its per-run TransferJobID.
 func (runtime *ReceiverRuntime) NewTransferJob(
-	intent transfer.TransferIntent,
+	intent transfer.ReceiveIntent,
 	jobID transfer.TransferJobID,
-	output transfer.OutputAuthority,
+	materializer transfer.DirectTreeMaterializer,
 	tracer transfer.TransferLifecycleTracer,
 ) (*transfer.TransferJob, error) {
-	if runtime == nil || intent.IsZero() || jobID.IsZero() || output == nil {
+	if runtime == nil || intent.IsZero() || jobID.IsZero() || materializer == nil {
 		return nil, transfer.ErrInvalidTransferJob
 	}
 	descriptor := runtime.descriptor
@@ -34,10 +32,9 @@ func (runtime *ReceiverRuntime) NewTransferJob(
 	}
 	dependencies := receiverTransferDependencies{runtime: runtime}
 	return transfer.NewTransferJob(transfer.TransferJobConfig{
-		ShareInstance: intent.ShareInstance(), SyntheticRoot: intent.SyntheticRoot(),
-		Rules: intent.SelectionRules(), Intent: intent, JobID: jobID,
+		ReceiveIntent: intent, JobID: jobID,
 		ProtocolSessionID: runtime.ProtocolSessionID(), Tracer: tracer,
-		Catalog: dependencies, Revisions: dependencies, Blocks: dependencies, Output: output,
+		Catalog: dependencies, Revisions: dependencies, Blocks: dependencies, Materializer: materializer,
 	})
 }
 

@@ -1,38 +1,28 @@
 import {
-  DirectoryAdmissionLedger,
-  type DirectoryFileMutationLease,
-} from '../../transfer/directory-admission-ledger'
-import {
   type BeginOutputFileResult,
-  type DirectoryAdmission,
-  type DirectoryAdmissionScope,
-  type DirectorySettlement,
   type FileRetirementDisposition,
-  type JobSettlement,
+  type OpenedOutputRevision,
   type OutputCapabilities,
-  type OutputDirectoryAdmission,
-  type OutputFile,
+  type OutputFileOwnership,
+  type OutputFileRequest,
   type OutputFileTransaction,
   type OutputSession,
   type OutputSessionIdentity,
+  OutputSessionBindingError,
   VerifiedDurableRanges,
-  COMPLETED_JOB_SETTLEMENT,
-  needsAttentionJobSettlement,
   outputCapabilities,
   outputSessionIdentity,
-  pausedJobSettlement,
-  snapshotOutputFile,
+  snapshotOpenedOutputRevision,
+  snapshotOutputFileRequest,
 } from '../../transfer/output-session'
-import type { JobOutcome } from '../../transfer/outcome'
-import { FaultScope, OutputFaultCode, outputFault } from '../../transfer/fault'
 
 export const SINGLE_FILE_STREAM_BACKEND = 'single-file-stream'
 
+type SessionState = 'available' | 'opening-revision' | 'active' | 'failed'
 type StreamState = 'open' | 'closing' | 'committed' | 'aborting' | 'aborted' | 'failed'
 
 export class SingleFileStreamOutputSession implements OutputSession {
   readonly identity: OutputSessionIdentity
-  readonly format = 'single-file' as const
   readonly capabilities: OutputCapabilities = outputCapabilities({
     durability: 'None',
     randomWrite: false,
@@ -40,118 +30,163 @@ export class SingleFileStreamOutputSession implements OutputSession {
     modificationTime: false,
   })
 
+  readonly #output: WritableStream<Uint8Array>
+  #state: SessionState = 'available'
+
+  constructor(outputSessionId: string, output: WritableStream<Uint8Array>) {
+    if (output.locked) throw new TypeError('Single-file output stream is already locked')
+    this.identity = outputSessionIdentity({
+      backend: SINGLE_FILE_STREAM_BACKEND,
+      outputSessionId,
+    })
+    this.#output = output
+  }
+
+  async beginFile(input: OutputFileRequest, signal: AbortSignal): Promise<BeginOutputFileResult> {
+    signal.throwIfAborted()
+    this.#requireAvailable()
+    const request = snapshotOutputFileRequest(input)
+    this.#state = 'opening-revision'
+
+    try {
+      const revision = snapshotOpenedOutputRevision(await request.openRevision(signal))
+      signal.throwIfAborted()
+      requireMatchingRevision(request, revision)
+
+      const ownership: OutputFileOwnership = Object.freeze({
+        ...this.identity,
+        canonicalPath: request.artifactPath,
+        ownedFileIdentity: `${this.identity.outputSessionId}:stream`,
+      })
+      const durableRanges = new VerifiedDurableRanges(
+        ownership,
+        revision,
+        revision.exactSize,
+        [],
+      )
+
+      // Acquiring the writer is the first output-authority mutation. Keeping it
+      // after revision authentication prevents failed opens from locking a target.
+      if (this.#output.locked) {
+        throw new TypeError('Single-file output stream became locked before revision authentication')
+      }
+      const writer = this.#output.getWriter()
+      const transaction = new SingleFileStreamTransaction(writer, revision, ownership)
+      this.#state = 'active'
+      return Object.freeze({ revision, transaction, durableRanges })
+    } catch (error) {
+      this.#state = 'failed'
+      throw error
+    }
+  }
+
+  #requireAvailable(): void {
+    if (this.#state !== 'available') {
+      throw new Error('Single-file output accepts exactly one authenticated revision open')
+    }
+  }
+}
+
+class SingleFileStreamTransaction implements OutputFileTransaction {
   readonly #writer: WritableStreamDefaultWriter<Uint8Array>
-  readonly #directoryAdmissions: DirectoryAdmissionLedger
+  readonly #revision: OpenedOutputRevision
+  readonly #ownership: OutputFileOwnership
+  #tail: Promise<unknown> = Promise.resolve()
+  #nextOffset = 0n
+  #started = false
+  #settled = false
   #state: StreamState = 'open'
-  #transaction: SingleFileStreamTransaction | undefined
   #closePromise: Promise<void> | undefined
   #abortPromise: Promise<void> | undefined
   #settlementFailure: unknown
   #writerReleased = false
 
   constructor(
-    outputSessionId: string,
-    directoryAdmissionScope: DirectoryAdmissionScope,
-    output: WritableStream<Uint8Array>,
+    writer: WritableStreamDefaultWriter<Uint8Array>,
+    revision: OpenedOutputRevision,
+    ownership: OutputFileOwnership,
   ) {
-    if (output.locked) throw new TypeError('Single-file output stream is already locked')
-    this.identity = outputSessionIdentity({
-      backend: SINGLE_FILE_STREAM_BACKEND,
-      outputSessionId,
-    })
-    this.#directoryAdmissions = new DirectoryAdmissionLedger(directoryAdmissionScope)
-    this.#writer = output.getWriter()
+    this.#writer = writer
+    this.#revision = revision
+    this.#ownership = ownership
   }
 
-  admitDirectory(input: OutputDirectoryAdmission, signal: AbortSignal): Promise<DirectoryAdmission> {
-    this.#requireOpen()
-    return this.#directoryAdmissions.admitDirectory(input, signal)
-  }
-
-  finalizeDirectory(
-    admission: DirectoryAdmission,
-    signal: AbortSignal,
-  ): Promise<DirectorySettlement> {
-    return this.#directoryAdmissions.finalizeDirectory(admission, signal)
-  }
-
-  async beginFile(input: OutputFile, signal: AbortSignal): Promise<BeginOutputFileResult> {
-    signal.throwIfAborted()
-    this.#requireOpen()
-    if (this.#transaction !== undefined) {
-      throw new Error('Single-file output accepts exactly one file')
-    }
-    const mutation = this.#directoryAdmissions.acquireFileMutation(input)
-    const admitted = mutation.file
-    const file = snapshotOutputFile({
-      source: admitted.source,
-      path: admitted.path,
-      exactSize: admitted.exactSize,
-      ...(admitted.parentAdmission === undefined ? {} : { parentAdmission: admitted.parentAdmission }),
-    })
-    const ownership = Object.freeze({
-      ...this.identity,
-      canonicalPath: file.path,
-      ownedFileIdentity: `${this.identity.outputSessionId}:stream`,
-    })
-    try {
-      const transaction = new SingleFileStreamTransaction(this, file, ownership, mutation)
-      this.#transaction = transaction
-      return Object.freeze({
-        transaction,
-        durableRanges: new VerifiedDurableRanges(ownership, file.source, file.exactSize, []),
-      })
-    } catch (error) {
-      mutation.release()
-      throw error
-    }
-  }
-
-  async completeJob(_outcome: JobOutcome, signal: AbortSignal): Promise<JobSettlement> {
-    signal.throwIfAborted()
-    if (this.#state === 'committed') return COMPLETED_JOB_SETTLEMENT
-    if (this.#state === 'closing') {
-      await this.#closePromise
-      return COMPLETED_JOB_SETTLEMENT
-    }
-    if (this.#state !== 'open') {
-      return needsAttentionJobSettlement(outputFault(
-        FaultScope.OutputPause,
-        OutputFaultCode.MutationAmbiguous,
-      ))
-    }
-    if (this.#transaction !== undefined && !this.#transaction.settled) {
-      throw new Error('Cannot finish single-file output while its file is active')
-    }
-    if (this.#transaction === undefined) {
-      const detach = interruptOnAbort(signal, (reason) => this.abortOutput(reason))
-      try {
-        await this.commitOutput()
-      } finally {
-        detach()
+  writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void> {
+    const snapshot = data.slice()
+    return this.#enqueue(async () => {
+      signal.throwIfAborted()
+      this.#requireOpen()
+      if (offset !== this.#nextOffset || offset + BigInt(snapshot.byteLength) > this.#revision.exactSize) {
+        throw new RangeError('Single-file stream requires contiguous ascending ranges')
       }
-    }
-    return COMPLETED_JOB_SETTLEMENT
+      if (snapshot.byteLength === 0) return
+      // A rejected stream write may still have exposed a prefix, so retirement
+      // must become job-scoped as soon as the write is attempted.
+      this.#started = true
+      await this.#writer.write(snapshot)
+      signal.throwIfAborted()
+      this.#nextOffset += BigInt(snapshot.byteLength)
+    })
   }
 
-  async pauseJob(reason: unknown): Promise<JobSettlement> {
-    try {
-      await this.abortOutput(reason)
-      return pausedJobSettlement(this.capabilities.durability)
-    } catch {
-      return needsAttentionJobSettlement(outputFault(
-        FaultScope.OutputPause,
-        OutputFaultCode.MutationAmbiguous,
-      ))
-    }
+  checkpoint(signal: AbortSignal): Promise<VerifiedDurableRanges> {
+    return this.#enqueue(async () => {
+      signal.throwIfAborted()
+      this.#requireOpen()
+      return new VerifiedDurableRanges(
+        this.#ownership,
+        this.#revision,
+        this.#revision.exactSize,
+        [],
+      )
+    })
   }
 
-  async writeOutput(data: Uint8Array): Promise<void> {
-    this.#requireOpen()
-    await this.#writer.write(data)
+  commit(signal: AbortSignal): Promise<void> {
+    return this.#enqueue(async () => {
+      signal.throwIfAborted()
+      this.#requireOpen()
+      if (this.#nextOffset !== this.#revision.exactSize) {
+        throw new Error('Single-file stream is incomplete')
+      }
+      this.#started = true
+      await this.#commitOutput()
+      this.#settled = true
+      signal.throwIfAborted()
+    })
   }
 
-  commitOutput(): Promise<void> {
+  retire(reason: unknown): Promise<FileRetirementDisposition> {
+    return this.#enqueue(async () => {
+      const disposition = this.#started ? 'JobOutputCompromised' : 'FileIsolated'
+      if (this.#settled) return disposition
+      try {
+        await this.#abortOutput(reason)
+      } finally {
+        this.#settled = true
+      }
+      return disposition
+    })
+  }
+
+  pause(reason: unknown): Promise<void> {
+    return this.#enqueue(async () => {
+      if (this.#settled) return
+      try {
+        await this.#abortOutput(reason)
+      } finally {
+        this.#settled = true
+      }
+    })
+  }
+
+  #enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#tail.then(operation, operation)
+    this.#tail = result
+    return result
+  }
+
+  #commitOutput(): Promise<void> {
     if (this.#state === 'committed') return Promise.resolve()
     if (this.#closePromise !== undefined) return this.#closePromise
     if (this.#state === 'failed') return Promise.reject(this.#settlementFailure)
@@ -169,7 +204,7 @@ export class SingleFileStreamOutputSession implements OutputSession {
     return operation
   }
 
-  abortOutput(reason: unknown): Promise<void> {
+  #abortOutput(reason: unknown): Promise<void> {
     if (this.#state === 'committed' || this.#state === 'aborted') return Promise.resolve()
     if (this.#abortPromise !== undefined) return this.#abortPromise
     if (this.#state === 'failed') return Promise.reject(this.#settlementFailure)
@@ -179,8 +214,8 @@ export class SingleFileStreamOutputSession implements OutputSession {
       ? this.#abortOpenOutput(reason)
       : this.#interruptClose(reason, close)
     this.#abortPromise = operation
-    // Cancellation can be triggered by an AbortSignal listener with no direct
-    // awaiter, while later callers still need the original rejecting promise.
+    // Abort may start from a signal listener with no direct awaiter. Retaining the
+    // original promise still lets a later settlement caller observe its failure.
     operation.catch(() => undefined)
     return operation
   }
@@ -218,8 +253,8 @@ export class SingleFileStreamOutputSession implements OutputSession {
       this.#state = 'aborted'
     } catch (abortFailure) {
       if (closeFailure !== undefined && abortFailure === closeFailure) {
-        // Web Streams rejects a concurrent writer.abort() with the close error
-        // after the failed close has already made the stream terminal.
+        // Web Streams can reject concurrent abort with the close failure after
+        // the failed close has already made the stream terminal.
         this.#state = 'aborted'
         return
       }
@@ -232,139 +267,33 @@ export class SingleFileStreamOutputSession implements OutputSession {
     }
   }
 
+  #requireOpen(): void {
+    if (this.#state !== 'open') throw new Error('Single-file output transaction is not open')
+    if (this.#settled) throw new Error('Single-file output transaction is settled')
+  }
+
   #releaseWriter(): void {
     if (this.#writerReleased) return
     this.#writerReleased = true
     this.#writer.releaseLock()
   }
-
-  #requireOpen(): void {
-    if (this.#state !== 'open') throw new Error('Single-file output session is not open')
-  }
 }
 
-class SingleFileStreamTransaction implements OutputFileTransaction {
-  readonly #session: SingleFileStreamOutputSession
-  readonly #file: OutputFile
-  readonly #ownership: ConstructorParameters<typeof VerifiedDurableRanges>[0]
-  readonly #directoryMutation: DirectoryFileMutationLease
-  #tail: Promise<unknown> = Promise.resolve()
-  #nextOffset = 0n
-  #started = false
-  #settled = false
-
-  constructor(
-    session: SingleFileStreamOutputSession,
-    file: OutputFile,
-    ownership: ConstructorParameters<typeof VerifiedDurableRanges>[0],
-    directoryMutation: DirectoryFileMutationLease,
-  ) {
-    this.#session = session
-    this.#file = file
-    this.#ownership = ownership
-    this.#directoryMutation = directoryMutation
+function requireMatchingRevision(
+  request: OutputFileRequest,
+  revision: OpenedOutputRevision,
+): void {
+  if (revision.shareInstance !== request.source.shareInstance ||
+      revision.fileId !== request.source.fileId) {
+    throw new OutputSessionBindingError(
+      'authenticated revision does not belong to the requested catalog file',
+    )
   }
-
-  get settled(): boolean {
-    return this.#settled
+  if (revision.exactSize !== request.expectedSize) {
+    throw new OutputSessionBindingError(
+      'authenticated revision size does not match the requested output size',
+    )
   }
-
-  writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void> {
-    const snapshot = data.slice()
-    return this.#enqueue(async () => {
-      signal.throwIfAborted()
-      this.#requireOpen()
-      if (offset !== this.#nextOffset || offset + BigInt(snapshot.byteLength) > this.#file.exactSize) {
-        throw new RangeError('Single-file stream requires contiguous ascending ranges')
-      }
-      if (snapshot.byteLength === 0) return
-      // Once a write is attempted, a browser stream may have emitted a prefix even
-      // if its promise later rejects, so rollback must be treated conservatively.
-      this.#started = true
-      await this.#session.writeOutput(snapshot)
-      signal.throwIfAborted()
-      this.#nextOffset += BigInt(snapshot.byteLength)
-    })
-  }
-
-  checkpoint(signal: AbortSignal): Promise<VerifiedDurableRanges> {
-    return this.#enqueue(async () => {
-      signal.throwIfAborted()
-      this.#requireOpen()
-      return new VerifiedDurableRanges(
-        this.#ownership,
-        this.#file.source,
-        this.#file.exactSize,
-        [],
-      )
-    })
-  }
-
-  commit(signal: AbortSignal): Promise<void> {
-    return this.#enqueue(async () => {
-      signal.throwIfAborted()
-      this.#requireOpen()
-      if (this.#nextOffset !== this.#file.exactSize) {
-        throw new Error('Single-file stream is incomplete')
-      }
-      this.#started = true
-      await this.#session.commitOutput()
-      this.#settle()
-      signal.throwIfAborted()
-    })
-  }
-
-  retire(reason: unknown): Promise<FileRetirementDisposition> {
-    return this.#enqueue(async () => {
-      if (this.#settled) return this.#started ? 'JobOutputCompromised' : 'FileIsolated'
-      const disposition = this.#started ? 'JobOutputCompromised' : 'FileIsolated'
-      try {
-        await this.#session.abortOutput(reason)
-      } finally {
-        this.#settle()
-      }
-      return disposition
-    })
-  }
-
-  pause(reason: unknown): Promise<void> {
-    return this.#enqueue(async () => {
-      if (this.#settled) return
-      try {
-        await this.#session.abortOutput(reason)
-      } finally {
-        this.#settle()
-      }
-    })
-  }
-
-  #enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.#tail.then(operation, operation)
-    this.#tail = result
-    return result
-  }
-
-  #requireOpen(): void {
-    if (this.#settled) throw new Error('Single-file stream transaction is settled')
-  }
-
-  #settle(): void {
-    if (this.#settled) return
-    this.#settled = true
-    this.#directoryMutation.release()
-  }
-}
-
-function interruptOnAbort(
-  signal: AbortSignal,
-  interrupt: (reason: unknown) => Promise<void>,
-): () => void {
-  const abort = () => {
-    interrupt(signal.reason ?? new DOMException('Single-file output aborted', 'AbortError'))
-      .catch(() => undefined)
-  }
-  signal.addEventListener('abort', abort, { once: true })
-  return () => signal.removeEventListener('abort', abort)
 }
 
 function writerAbort(

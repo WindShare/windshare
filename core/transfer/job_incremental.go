@@ -208,8 +208,7 @@ func (r *jobRun) discoverIncrementalDirectory(
 		r.catalogTraversalComplete = true
 	}
 	r.job.trace(TransferLifecycleTrace{
-		Stage: TransferGenerationCommitted, DirectoryID: request.directory,
-		DirectoryGeneration: discovery.generation,
+		Stage: TransferGenerationCommitted,
 	})
 	if request.mode == incrementalDiscoveryOpaqueProbe {
 		return discovery.replayGeneration(ctx, DirectoryAdmission{})
@@ -499,8 +498,8 @@ func (discovery *incrementalDirectoryDiscovery) admitDirectory(
 	return DirectoryAdmission{}, false, nil
 }
 
-func (discovery *incrementalDirectoryDiscovery) outputDirectory() OutputDirectory {
-	return OutputDirectory{
+func (discovery *incrementalDirectoryDiscovery) outputDirectory() MaterializationDirectory {
+	return MaterializationDirectory{
 		DirectoryID: discovery.request.directory, Generation: discovery.generation,
 		ParentAdmission: discovery.request.parentAdmission,
 		Path:            discovery.request.path, ModifiedTime: discovery.request.modified,
@@ -522,8 +521,8 @@ func (r *jobRun) recordIncrementalAdmissionFailure(
 	})
 }
 
-func (r *jobRun) admitIncrementalDirectory(ctx context.Context, directory OutputDirectory) (DirectoryAdmission, error) {
-	if err := validateOutputDirectoryForScope(r.directoryAdmissionScope, directory); err != nil {
+func (r *jobRun) admitIncrementalDirectory(ctx context.Context, directory MaterializationDirectory) (DirectoryAdmission, error) {
+	if err := validateMaterializationDirectoryForScope(r.directoryAdmissionScope, directory); err != nil {
 		return DirectoryAdmission{}, dependencyContractFailure(err)
 	}
 	admission, rawAdmissionErr := r.output.AdmitDirectory(ctx, directory)
@@ -549,10 +548,9 @@ func (r *jobRun) admitIncrementalDirectory(ctx context.Context, directory Output
 	return admission, nil
 }
 
-func (r *jobRun) traceDirectoryAdmission(directory OutputDirectory, failure error) {
+func (r *jobRun) traceDirectoryAdmission(_ MaterializationDirectory, failure error) {
 	r.job.trace(TransferLifecycleTrace{
 		Stage: TransferDirectoryAdmitted, OutputSessionID: r.output.SessionID(),
-		DirectoryID: directory.DirectoryID, DirectoryGeneration: directory.Generation,
 		Fault: closedFault(failure), Failed: failure != nil,
 	})
 }
@@ -578,7 +576,6 @@ func (r *jobRun) finalizeIncrementalDirectory(ctx context.Context, admission Dir
 	}
 	r.job.trace(TransferLifecycleTrace{
 		Stage: TransferDirectoryFinalized, OutputSessionID: r.output.SessionID(),
-		DirectoryID: admission.DirectoryID(), DirectoryGeneration: admission.Generation(),
 		Fault: traceFault, Failed: err != nil || settlement.Kind() == DirectoryIsolatedFailure,
 	})
 	if err != nil {

@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/windshare/windshare/core/osfs/internal/checkpointstore"
 	"github.com/windshare/windshare/core/osfs/internal/legacyresume"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 )
@@ -171,11 +170,11 @@ func (run *cleanupRun) openAndInspectCheckpointNamespace(
 	}
 	run.namespace = namespace
 	allowed := map[string]outputcap.EntryKind{
-		checkpointstore.OwnershipFile:          outputcap.EntryRegularFile,
-		checkpointstore.LeasesDirectory:        outputcap.EntryDirectory,
-		checkpointstore.IntentsDirectory:       outputcap.EntryDirectory,
-		checkpointstore.LegacyCleanupStateFile: outputcap.EntryRegularFile,
-		checkpointstore.LegacyCleanupLockFile:  outputcap.EntryRegularFile,
+		legacyresume.CheckpointOwnership: outputcap.EntryRegularFile,
+		legacyresume.CheckpointLeases:    outputcap.EntryDirectory,
+		legacyresume.CheckpointIntents:   outputcap.EntryDirectory,
+		FileCheckpointCleanupState:       outputcap.EntryRegularFile,
+		FileCheckpointCleanupLock:        outputcap.EntryRegularFile,
 	}
 	names, err := boundedNames(run.namespace)
 	if err != nil {

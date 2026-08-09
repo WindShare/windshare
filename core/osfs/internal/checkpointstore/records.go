@@ -17,13 +17,13 @@ import (
 )
 
 const (
-	// A V1 record can contain 16,384 verified ranges. One MiB bounds malformed
-	// input without rejecting the protocol's maximum canonical record.
-	maxFileCheckpointBytes = 1 << 20
-	ShardLimit             = checkpointmodel.MaxCheckpointShardDirectories + 1
-	EntryLimit             = checkpointmodel.MaxCheckpointRecordsPerIntent + 1
-	installationAttempts   = 16
-	candidateReadAttempts  = installationAttempts
+	// ReceiveOperation includes the canonical intent image, whose bounded
+	// selection and artifact fields can be larger than a file checkpoint.
+	maxRepositoryRecordBytes = checkpointmodel.MaximumReceiveOperationSize
+	ShardLimit               = checkpointmodel.CheckpointShardBuckets + 1
+	EntryLimit               = checkpointmodel.MaxCheckpointRecordsPerOperation + 1
+	installationAttempts     = 16
+	candidateReadAttempts    = installationAttempts
 )
 
 func ValidShard(name string) bool {
@@ -72,7 +72,7 @@ func MatchesTemporaryName(candidate, target string, encoded []byte) bool {
 }
 
 func WriteFile(file outputcap.File, encoded []byte) error {
-	if file == nil || len(encoded) == 0 || len(encoded) > maxFileCheckpointBytes {
+	if file == nil || len(encoded) == 0 || len(encoded) > maxRepositoryRecordBytes {
 		return checkpointmodel.ErrInvalidRecord
 	}
 	written, err := file.WriteAt(encoded, 0)
@@ -115,7 +115,7 @@ func readBoundedFile(file outputcap.File) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if size == 0 || size > maxFileCheckpointBytes {
+	if size == 0 || size > maxRepositoryRecordBytes {
 		return nil, outputcap.ErrUnsafeNamespace
 	}
 	encoded := make([]byte, int(size))
@@ -133,7 +133,7 @@ func readBoundedFile(file outputcap.File) ([]byte, error) {
 // A caller holding only a record name must not be able to retire a checkpoint
 // that another recovery decision replaced after it was observed.
 func RemoveExact(directory outputcap.Directory, name string, expected []byte) (error, error) {
-	if directory == nil || name == "" || len(expected) == 0 || len(expected) > maxFileCheckpointBytes {
+	if directory == nil || name == "" || len(expected) == 0 || len(expected) > maxRepositoryRecordBytes {
 		return checkpointmodel.ErrInvalidRecord, nil
 	}
 	file, err := directory.OpenFile(name, true, false)
@@ -178,7 +178,7 @@ func RemoveExactTemporary(directory outputcap.Directory, name string, expected [
 }
 
 func InstallCreate(directory outputcap.Directory, name string, encoded []byte) error {
-	if directory == nil || name == "" || len(encoded) == 0 || len(encoded) > maxFileCheckpointBytes {
+	if directory == nil || name == "" || len(encoded) == 0 || len(encoded) > maxRepositoryRecordBytes {
 		return checkpointmodel.ErrInvalidRecord
 	}
 	installed, err := ReadFile(directory, name)
@@ -312,8 +312,8 @@ func verifyCreatedTarget(
 }
 
 func InstallReplace(directory outputcap.Directory, name string, previous, next []byte) error {
-	if directory == nil || name == "" || len(previous) == 0 || len(previous) > maxFileCheckpointBytes ||
-		len(next) == 0 || len(next) > maxFileCheckpointBytes {
+	if directory == nil || name == "" || len(previous) == 0 || len(previous) > maxRepositoryRecordBytes ||
+		len(next) == 0 || len(next) > maxRepositoryRecordBytes {
 		return checkpointmodel.ErrInvalidRecord
 	}
 	current, err := ReadFile(directory, name)
@@ -379,7 +379,7 @@ func InstallReplace(directory outputcap.Directory, name string, previous, next [
 // is already installed at the fixed target. Foreign names and foreign bytes are
 // preserved and fail closed for explicit attention.
 func reconcileExactCandidates(directory outputcap.Directory, target string, encoded []byte) error {
-	if directory == nil || target == "" || len(encoded) == 0 || len(encoded) > maxFileCheckpointBytes {
+	if directory == nil || target == "" || len(encoded) == 0 || len(encoded) > maxRepositoryRecordBytes {
 		return checkpointmodel.ErrInvalidRecord
 	}
 	for attempt := range installationAttempts {

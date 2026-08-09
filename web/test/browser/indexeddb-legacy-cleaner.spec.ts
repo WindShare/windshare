@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 import { requireOriginPrivateStorage } from './browser-storage-support'
 
 const PROBE_PATH = '/test/browser/indexeddb-legacy-cleaner-probe.ts'
-const LEGACY_RECORD_COUNT = 8
+const LEGACY_RECORD_COUNT = 16
 
 test.beforeEach(async ({ browserName, page }) => {
   await page.goto('/')
@@ -21,8 +21,8 @@ test('legacy IndexedDB cleanup preserves current state and published output', as
   expect(result).toEqual({
     first: { status: 'completed', removed: LEGACY_RECORD_COUNT },
     second: { status: 'nothing-to-clean', removed: 0 },
-    legacyCounts: [0, 0, 0, 0],
-    currentSentinelsPresent: [true, true, true, true, true, true, true],
+    legacyCounts: [0, 0, 0, 0, 0, 0, 0, 0],
+    currentSentinelsPresent: [true, true, true, true, true, true, true, true],
     publishedSentinelBytes: [17, 34, 51, 68],
   })
 })
@@ -53,7 +53,7 @@ test('concurrent legacy IndexedDB cleanup callers serialize one durable pass', a
     expect(await page.evaluate(async ({ name, path }) => {
       const probe = await import(path) as typeof import('./indexeddb-legacy-cleaner-probe')
       return probe.legacyStoreCounts(name)
-    }, { name: databaseName, path: PROBE_PATH })).toEqual([0, 0, 0, 0])
+    }, { name: databaseName, path: PROBE_PATH })).toEqual([0, 0, 0, 0, 0, 0, 0, 0])
   } finally {
     try {
       await competitor.close()

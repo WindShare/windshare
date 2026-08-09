@@ -26,14 +26,14 @@ type guardedTransaction struct {
 	session  *Session
 	claimID  ClaimID
 	executor FileTransactionExecutor
-	binding  transfer.OutputFileBinding
+	binding  transfer.MaterializedFileBinding
 }
 
 var _ transfer.FileTransaction = (*guardedTransaction)(nil)
 
-func (transaction *guardedTransaction) Binding() transfer.OutputFileBinding {
+func (transaction *guardedTransaction) Binding() transfer.MaterializedFileBinding {
 	if transaction == nil {
-		return transfer.OutputFileBinding{}
+		return transfer.MaterializedFileBinding{}
 	}
 	return transaction.binding
 }
@@ -102,7 +102,7 @@ func (transaction *guardedTransaction) Retire(
 	ctx context.Context,
 	reason transfer.FileRetireReason,
 ) (transfer.FileSettlement, error) {
-	if reason < transfer.FileRetireIsolatedPermanentSourceFailure || reason > transfer.FileRetireExplicitPolicySkip {
+	if reason < transfer.FileRetireIsolatedPermanentSourceFailure || reason > transfer.FileRetireInvalidatedRevision {
 		return transfer.FileSettlement{}, executorContractError(transfer.ErrInvalidOutputSettlement)
 	}
 	return transaction.terminalOperation(ctx, actionRetire, uint8(reason), func() (transfer.FileSettlement, MutationCut, error) {
@@ -336,10 +336,10 @@ func (transaction *guardedTransaction) finishTerminal(
 
 func validTerminalSettlement(
 	action transactionAction,
-	binding transfer.OutputFileBinding,
+	binding transfer.MaterializedFileBinding,
 	settlement transfer.FileSettlement,
 ) bool {
-	settledBinding, ok := settlement.OutputBinding()
+	settledBinding, ok := settlement.MaterializedBinding()
 	if !ok || settledBinding != binding || settlement.Target() != binding.Target() {
 		return false
 	}

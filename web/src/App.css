@@ -104,24 +104,17 @@ h1 {
   background: #6f897a;
 }
 
-.status-joining,
-.status-acquiring-output,
-.status-discovering,
-.status-aborting {
+.status-joining {
   background: #d89238;
   box-shadow: 0 0 0 4px rgb(216 146 56 / 14%);
 }
 
-.status-browsing,
-.status-transferring,
-.status-completed {
+.status-browsing {
   background: #2d9161;
   box-shadow: 0 0 0 4px rgb(45 145 97 / 14%);
 }
 
-.status-failed,
-.status-completed-errors,
-.status-aborted {
+.status-failed {
   background: #b9504b;
   box-shadow: 0 0 0 4px rgb(185 80 75 / 14%);
 }
@@ -414,53 +407,137 @@ fieldset {
   background: #f8faf8;
 }
 
-.output-options {
+.artifact-action-list {
   display: grid;
   gap: 9px;
-  margin-top: 15px;
+  margin: 15px 0 0;
+  padding: 0;
+  list-style: none;
 }
 
-.output-option {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 10px;
+.artifact-action-card {
   padding: 13px;
   border: 1px solid #d2ddd5;
   border-radius: 11px;
   background: #fff;
-  cursor: pointer;
 }
 
-.output-option:has(input:checked) {
-  border-color: #4b9b70;
-  box-shadow: 0 0 0 2px rgb(75 155 112 / 12%);
+.artifact-action-card p {
+  margin: 9px 0 0;
+  color: #4f675a;
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 
-.output-option.unavailable {
-  opacity: 0.58;
-  cursor: not-allowed;
-}
-
-.output-option input {
-  margin: 3px 0 0;
-  accent-color: #26754f;
-}
-
-.output-option strong,
-.output-option small {
+.artifact-action-card small {
   display: block;
-}
-
-.output-option strong {
-  color: #294337;
-  font-size: 0.86rem;
-}
-
-.output-option small {
-  margin-top: 4px;
+  margin-top: 7px;
   color: #6f8278;
-  font-size: 0.76rem;
   line-height: 1.4;
+}
+
+.artifact-action-card button {
+  width: 100%;
+}
+
+.artifact-action-card .primary-action {
+  margin-top: 0;
+}
+
+.output-guidance {
+  margin-top: 15px;
+  padding: 13px;
+  border: 1px solid #d2ddd5;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.output-guidance p {
+  margin: 7px 0 0;
+  color: #5f7569;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.output-guidance button {
+  margin-top: 12px;
+}
+
+.retained-receive-panel {
+  margin: 24px 40px 0;
+  padding: 15px;
+  border: 1px solid #cad9cf;
+  border-radius: 11px;
+  background: #f8fbf9;
+}
+
+.retained-receive-panel > p,
+.retained-receive-item p {
+  margin: 7px 0 0;
+  color: #526c5e;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.retained-receive-list {
+  display: grid;
+  gap: 9px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.retained-receive-item {
+  padding: 12px;
+  border: 1px solid #d7e2da;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.retained-receive-item small {
+  display: block;
+  margin-top: 8px;
+  color: #6f8278;
+}
+
+.lifecycle-panel {
+  margin-top: 18px;
+  padding: 15px;
+  border: 1px solid #cad9cf;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.lifecycle-panel p {
+  margin: 7px 0 0;
+  color: #526c5e;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.lifecycle-positive {
+  border-color: #8fc2a5;
+  background: #f5fbf7;
+}
+
+.lifecycle-warning {
+  border-color: #ddbf88;
+  background: #fffaf1;
+}
+
+.lifecycle-critical {
+  border-color: #dfa9a4;
+  background: #fff7f6;
+}
+
+.lifecycle-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 13px;
+}
+
+.lifecycle-actions .abort-action {
+  margin-top: 0;
 }
 
 .progress-panel {
@@ -522,7 +599,8 @@ footer {
     padding-left: 22px;
   }
 
-  .error-banner {
+  .error-banner,
+  .retained-receive-panel {
     margin-right: 22px;
     margin-left: 22px;
   }
@@ -543,9 +621,7 @@ footer {
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .status-joining,
-  .status-acquiring-output,
-  .status-discovering {
+  .status-joining {
     animation: status-pulse 1.8s ease-in-out infinite;
   }
 }

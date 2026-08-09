@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 const FULL_PORTABLE_STRESS_BYTES = 64 * 1024 * 1024
 const CROSS_ENGINE_PORTABLE_STRESS_BYTES = 4 * 1024 * 1024
+
 test('streams one million ZIP members through the production writer and durable spool', async ({
   browserName,
   page,
@@ -29,154 +30,100 @@ test('streams one million ZIP members through the production writer and durable 
   expect(result.maximumWriteBytes).toBeLessThanOrEqual(256 * 1024)
 })
 
-test('bounds production ZIP assembly and rejects at the exact portable byte', async ({
+test('assembles the exact portable ceiling and rejects the first over-limit admission', async ({
   browserName,
   page,
 }) => {
   test.setTimeout(120_000)
   await page.goto('/')
-  const maximumBytes = browserName === 'chromium'
+  const stressBytes = browserName === 'chromium'
     ? FULL_PORTABLE_STRESS_BYTES
     : CROSS_ENGINE_PORTABLE_STRESS_BYTES
-  const result = await page.evaluate(async (byteLimit) => {
+  const result = await page.evaluate(async (exactBytes) => {
     const portablePath = '/src/output/portable/browser-download.ts'
-    const zipPath = '/src/output/streams/streaming-zip.ts'
-    const spoolPath = '/src/output/streams/zip-spool.ts'
+    const fixturePath = '/test/browser/portable-output-fixture.ts'
     const portable = await import(portablePath) as typeof import(
       '../../src/output/portable/browser-download'
     )
-    const zip = await import(zipPath) as typeof import(
-      '../../src/output/streams/streaming-zip'
-    )
-    const spoolModule = await import(spoolPath) as typeof import(
-      '../../src/output/streams/zip-spool'
-    )
-    const databaseName = `million-zip-${crypto.randomUUID()}`
+    const fixture = await import(fixturePath) as typeof import('./portable-output-fixture')
+
     let maximumParts = 0
-    let rejectionBufferedBytes = -1
-    let rejectedWriteBytes = -1
-    let published = false
-    const output = portable.createBoundedPortableDownloadStream('million.zip', {
-      createBlob: (parts) => new Blob([...parts]),
-      publish: () => { published = true },
-      observeAssembly: (snapshot) => {
-        maximumParts = Math.max(maximumParts, snapshot.retainedParts)
-        if (snapshot.rejectedWriteBytes > 0) {
-          rejectionBufferedBytes = snapshot.bufferedBytes
-          rejectedWriteBytes = snapshot.rejectedWriteBytes
-        }
+    let publishCount = 0
+    const prepared = await fixture.createPortableBrowserFixture(
+      'portable-periodic.bin',
+      BigInt(exactBytes),
+    )
+    const session = await portable.openPortableHandoff({
+      ...prepared,
+      publisher: {
+        handoff: (request) => {
+          publishCount += 1
+          return request.context.attemptKind === 'workspace'
+            ? {
+                kind: 'download-started' as const,
+                suggestedName: request.suggestedName,
+                retryableUntil: request.context.retryableUntil,
+              }
+            : {
+                kind: 'download-started' as const,
+                suggestedName: request.suggestedName,
+              }
+        },
       },
-    }, byteLimit)
-    const archive = new zip.StreamingZipArchiveWriter(
-      output,
-      new spoolModule.IndexedDbZipCentralDirectorySpool({ databaseName }),
+      assembly: {
+        Blob: window.Blob,
+        WritableStream: window.WritableStream,
+        observeAssembly: (snapshot) => {
+          maximumParts = Math.max(maximumParts, snapshot.retainedParts)
+        },
+      },
+    })
+    const writer = session.writable.getWriter()
+    const chunk = new Uint8Array(256 * 1024)
+    let written = 0
+    while (written < exactBytes) {
+      const count = Math.min(chunk.byteLength, exactBytes - written)
+      await writer.write(count === chunk.byteLength ? chunk : chunk.slice(0, count))
+      written += count
+    }
+    await writer.close()
+    const terminal = await session.result
+
+    const overLimit = await fixture.createPortableBrowserFixture(
+      'portable-over-limit.bin',
+      BigInt(portable.PORTABLE_HANDOFF_MAXIMUM_BYTES) + 1n,
     )
-    let committed = 0
-    let failureName = ''
+    let overLimitName = ''
     try {
-      for (let index = 0; index < 1_000_000; index += 1) {
-        const member = await archive.beginFile({ path: [`f${index.toString(36)}`], exactSize: 0n })
-        await member.close()
-        committed += 1
-      }
-      await archive.close(new AbortController().signal)
+      await portable.openPortableHandoff({
+        ...overLimit,
+        publisher: {
+          handoff: () => {
+            throw new Error('over-limit admission reached publisher')
+          },
+        },
+        assembly: { Blob: window.Blob, WritableStream: window.WritableStream },
+      })
     } catch (error) {
-      failureName = error instanceof DOMException ? error.name : String(error)
-      await archive.abort(error).catch(() => undefined)
+      overLimitName = error instanceof DOMException ? error.name : String(error)
     }
 
-    const encoder = new TextEncoder()
-    let expectedCommitted = 0
-    let expectedBufferedBytes = 0
-    let expectedRejectedWriteBytes = 0
-    for (let index = 0; index < 1_000_000; index += 1) {
-      const nameBytes = encoder.encode(`f${index.toString(36)}`).byteLength
-      const localHeaderBytes = 50 + nameBytes
-      if (localHeaderBytes > byteLimit - expectedBufferedBytes) {
-        expectedRejectedWriteBytes = localHeaderBytes
-        break
-      }
-      expectedBufferedBytes += localHeaderBytes
-      const descriptorBytes = 24
-      if (descriptorBytes > byteLimit - expectedBufferedBytes) {
-        expectedRejectedWriteBytes = descriptorBytes
-        break
-      }
-      expectedBufferedBytes += descriptorBytes
-      expectedCommitted += 1
-    }
-
-    const database = await openDatabase(databaseName)
-    const transaction = database.transaction(
-      ['central-directory-chunks', 'central-directory-namespaces'],
-      'readonly',
-    )
-    const chunkCount = await requestCount(transaction.objectStore('central-directory-chunks'))
-    const namespaceCount = await requestCount(
-      transaction.objectStore('central-directory-namespaces'),
-    )
-    await transactionDone(transaction)
-    database.close()
-    await deleteDatabase(databaseName)
     return {
-      committed,
-      expectedCommitted,
-      failureName,
+      terminal,
+      publishCount,
       maximumParts,
-      maximumAllowedParts: Math.ceil(byteLimit / portable.PORTABLE_DOWNLOAD_PART_BYTES),
-      rejectionBufferedBytes,
-      expectedBufferedBytes,
-      rejectedWriteBytes,
-      expectedRejectedWriteBytes,
-      published,
-      chunkCount,
-      namespaceCount,
-      byteLimit,
+      maximumAllowedParts: Math.ceil(exactBytes / portable.PORTABLE_HANDOFF_PART_BYTES),
+      overLimitName,
+      exactBytes,
     }
+  }, stressBytes)
 
-    function openDatabase(name: string): Promise<IDBDatabase> {
-      return new Promise((resolve, reject) => {
-        const request = indexedDB.open(name)
-        request.addEventListener('success', () => resolve(request.result), { once: true })
-        request.addEventListener('error', () => reject(request.error), { once: true })
-      })
-    }
-
-    function requestCount(store: IDBObjectStore): Promise<number> {
-      return new Promise((resolve, reject) => {
-        const request = store.count()
-        request.addEventListener('success', () => resolve(request.result), { once: true })
-        request.addEventListener('error', () => reject(request.error), { once: true })
-      })
-    }
-
-    function transactionDone(transaction: IDBTransaction): Promise<void> {
-      return new Promise((resolve, reject) => {
-        transaction.addEventListener('complete', () => resolve(), { once: true })
-        transaction.addEventListener('error', () => reject(transaction.error), { once: true })
-        transaction.addEventListener('abort', () => reject(transaction.error), { once: true })
-      })
-    }
-
-    function deleteDatabase(name: string): Promise<void> {
-      return new Promise((resolve, reject) => {
-        const request = indexedDB.deleteDatabase(name)
-        request.addEventListener('success', () => resolve(), { once: true })
-        request.addEventListener('error', () => reject(request.error), { once: true })
-      })
-    }
-  }, maximumBytes)
-
-  expect(result).toMatchObject({
-    failureName: 'QuotaExceededError',
-    published: false,
-    chunkCount: 0,
-    namespaceCount: 0,
+  expect(result.terminal).toEqual({
+    kind: 'download-started',
+    suggestedName: 'portable-periodic.bin',
   })
-  expect(result.committed).toBe(result.expectedCommitted)
-  expect(result.rejectionBufferedBytes).toBe(result.expectedBufferedBytes)
-  expect(result.rejectedWriteBytes).toBe(result.expectedRejectedWriteBytes)
-  expect(result.maximumParts).toBeLessThanOrEqual(result.maximumAllowedParts)
-  expect(result.byteLimit).toBe(maximumBytes)
-  expect(result.committed).toBeLessThan(1_000_000)
+  expect(result.publishCount).toBe(1)
+  expect(result.maximumParts).toBe(result.maximumAllowedParts)
+  expect(result.overLimitName).toBe('NotSupportedError')
+  expect(result.exactBytes).toBe(stressBytes)
 })

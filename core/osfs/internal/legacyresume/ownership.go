@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	MaxOwnershipRecordBytes = 64 << 10
-	RootIdentityBytes       = sha256.Size
+	MaxOwnershipRecordBytes           = 64 << 10
+	RootIdentityBytes                 = sha256.Size
+	NativeFilesystemBackend BackendID = "windshare/native-output"
 
 	CertificationLinuxExt4ProcessRestart   = "linux/ext4/process-restart/v2"
 	CertificationWindowsNTFSProcessRestart = "windows/ntfs/process-restart/v1"
@@ -32,8 +33,10 @@ var (
 	legacyControlMagic          = [8]byte{'W', 'S', 'O', 'C', 'T', 'L', '0', '1'}
 )
 
+type BackendID string
+
 type ExpectedOwnership struct {
-	Backend       transfer.OutputBackendID
+	Backend       BackendID
 	RootIdentity  []byte
 	Certification string
 	Durability    transfer.DurabilityLevel
@@ -43,7 +46,7 @@ type ExpectedOwnership struct {
 // facts. Keeping generation private prevents callers from turning this decoder
 // into a compatibility reader for the retired runtime state machine.
 type Ownership struct {
-	backend       transfer.OutputBackendID
+	backend       BackendID
 	rootIdentity  [RootIdentityBytes]byte
 	certification string
 	durability    transfer.DurabilityLevel
@@ -91,8 +94,8 @@ func DecodeOwnership(encoded []byte) (Ownership, error) {
 	if err != nil {
 		return Ownership{}, err
 	}
-	backend, backendErr := transfer.NewOutputBackendID(stored.Backend)
-	if backendErr != nil || len(stored.RootIdentity) != RootIdentityBytes ||
+	backend := BackendID(stored.Backend)
+	if backend != NativeFilesystemBackend || len(stored.RootIdentity) != RootIdentityBytes ||
 		allZero(stored.RootIdentity) || !validCertification(stored.Certification) ||
 		stored.Durability != legacyStoredProcessRestart || stored.Generation == 0 {
 		return Ownership{}, ErrInvalidOwnershipRecord
@@ -120,8 +123,7 @@ func ValidateExpectedOwnership(expected ExpectedOwnership) error {
 }
 
 func validateExpectedOwnership(expected ExpectedOwnership) error {
-	backend, backendErr := transfer.NewOutputBackendID(string(expected.Backend))
-	if backendErr != nil || backend != expected.Backend ||
+	if expected.Backend != NativeFilesystemBackend ||
 		len(expected.RootIdentity) != RootIdentityBytes || allZero(expected.RootIdentity) ||
 		!validCertification(expected.Certification) ||
 		expected.Durability != transfer.DurabilityProcessRestart {

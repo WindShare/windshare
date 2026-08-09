@@ -76,7 +76,7 @@ func newNodeIdentityLedger(limit int) (nodeIdentityLedger, error) {
 
 type jobRun struct {
 	job                        *TransferJob
-	output                     OutputSession
+	output                     DirectTreeSession
 	directoryAdmissionScope    DirectoryAdmissionScope
 	failureMu                  sync.Mutex
 	directories                []DirectoryJobFailure
@@ -88,7 +88,7 @@ type jobRun struct {
 	succeeded                  uint64
 	terminationCause           *lifecycleFailure
 	settlementFailure          *lifecycleFailure
-	settlement                 JobSettlement
+	settlement                 DirectTreeSettlement
 	admitted                   bool
 	needsAttention             bool
 	selectionObservation       SelectionObservationV1
@@ -104,7 +104,7 @@ type jobRun struct {
 	rootGeneration             catalog.DirectoryGeneration
 	// This sender-authenticity ledger covers every discovered catalog node,
 	// including nodes never admitted to output. Destination-mutation claims belong
-	// exclusively behind OutputSession and must never be merged into this ledger.
+	// exclusively behind DirectTreeSession and must never be merged into this ledger.
 	nodeLedger              nodeIdentityLedger
 	opaqueSelectionEvidence map[catalog.DirectoryID]opaqueSelectionEvidence
 }

@@ -72,7 +72,7 @@ func TestRetirementAndIsolationRequireExplicitClosedFaults(t *testing.T) {
 	}
 
 	fileOutput := outputFailure(fault.ScopeFileLocal, fault.OutputStateIO, errors.New("one file"))
-	isolating := OutputCapabilities{FileFailureIsolation: true}
+	isolating := DirectTreeCapabilities{FileFailureIsolation: true}
 	if !lifecyclePolicyFor(fileOutput).outputCanContinueAfterFileSettlement(isolating) {
 		t.Fatal("explicit file-local output fault was not isolated")
 	}

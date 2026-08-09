@@ -30,6 +30,7 @@ import {
 import {
   V2DirectoryTraversalError,
   V2OutputPausedError,
+  type MaterializationFailureReason,
 } from './contract'
 
 const REVISION_FAILURE_STALE = 0x3001
@@ -193,8 +194,40 @@ export class V2FileRevisionChangedError extends Error {
 }
 
 export class V2FileOutputError extends Error {
-  constructor(message: string, options: ErrorOptions) {
+  readonly materializationFailureReason: Extract<
+    MaterializationFailureReason,
+    'output-write-failed' | 'output-commit-failed'
+  >
+
+  constructor(
+    message: string,
+    reason: Extract<MaterializationFailureReason, 'output-write-failed' | 'output-commit-failed'>,
+    options: ErrorOptions,
+  ) {
     super(message, options)
     this.name = 'V2FileOutputError'
+    this.materializationFailureReason = reason
   }
+}
+
+export function materializationFailureReason(
+  input: unknown,
+  fallback: MaterializationFailureReason = 'content-read-failed',
+): MaterializationFailureReason {
+  let error = input
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (error instanceof V2FileOutputError) return error.materializationFailureReason
+    if (error instanceof OutputDirectoryMutationError || error instanceof V2DirectoryOutputError) {
+      return 'directory-finalize-failed'
+    }
+    if (error instanceof V2FileRevisionChangedError ||
+        error instanceof V2RevisionChangedDuringRecoveryError) return 'source-revision-changed'
+    if (error instanceof V2RemoteRevisionError ||
+        error instanceof V2RevisionLeaseExpiredError) return 'file-open-failed'
+    if (error instanceof V2BlockLaneAttemptsError ||
+        error instanceof V2BlockOperationError) return 'content-read-failed'
+    if (!(error instanceof Error) || error.cause === undefined) return fallback
+    error = error.cause
+  }
+  return fallback
 }

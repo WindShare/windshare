@@ -13,7 +13,7 @@ func TestDirectorySettlementIsAnExactImmutableSum(t *testing.T) {
 	admission, err := NewDirectoryAdmissionWithSecret(
 		admissionTestSequence(0xa0, directoryAdmissionSecretBytes),
 		scope,
-		OutputDirectory{DirectoryID: root, Generation: admissionTestGeneration(t, 0x56)},
+		MaterializationDirectory{DirectoryID: root, Generation: admissionTestGeneration(t, 0x56)},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestDirectorySettlementRejectsNonTerminalOrWiderFaults(t *testing.T) {
 	admission, err := NewDirectoryAdmissionWithSecret(
 		admissionTestSequence(0xb0, directoryAdmissionSecretBytes),
 		scope,
-		OutputDirectory{DirectoryID: root, Generation: admissionTestGeneration(t, 0x57)},
+		MaterializationDirectory{DirectoryID: root, Generation: admissionTestGeneration(t, 0x57)},
 	)
 	if err != nil {
 		t.Fatal(err)

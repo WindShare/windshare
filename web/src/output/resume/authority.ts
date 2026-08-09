@@ -1,104 +1,71 @@
+import type { ReceiveLifecycleState } from '../workspace/state'
 import {
-  createTransferRun,
-  snapshotTransferRun,
-  type TransferIntent,
-  type TransferIntentDraft,
-  type TransferRun,
-} from '../../transfer/intent'
-import {
-  validateOutputSessionBinding,
-  type OutputSession,
-} from '../../transfer/output-session'
-import {
-  assertPausedTaskCurrentShare,
-  type PausedTaskDescriptorV1,
+  assertReceiveOperationCanContinue,
+  receiveOperationResumeDescriptor,
+  type ReceiveOperationResumeDescriptor,
 } from './descriptor'
 
-export type PausedTaskTraceName =
-  | 'paused-task-descriptor-persisted'
-  | 'paused-task-descriptors-listed'
-  | 'paused-task-resume-prepared'
-  | 'paused-task-capability-accepted'
-  | 'paused-task-capability-rejected'
-  | 'paused-task-resume-reconstructed'
-  | 'paused-task-descriptor-removed'
-  | 'paused-task-discard-started'
-  | 'paused-task-discard-completed'
-  | 'paused-task-discard-needs-attention'
-
-export interface PausedTaskTraceEvent {
-  readonly name: PausedTaskTraceName
-  readonly atMilliseconds: number
-  readonly context: {
-    readonly backend: string
-    readonly transferIntentDigest: string
-    readonly transferJobId?: string
-    readonly outputSessionId?: string
-    readonly decision?: string
-  }
+export interface ResumeOperationClock {
+  now(): number
 }
 
-export type PausedTaskTraceListener = (event: PausedTaskTraceEvent) => void
-
-export interface ReconstructedPausedTask {
-  readonly descriptor: PausedTaskDescriptorV1
-  readonly intent: TransferIntent
-  readonly run: TransferRun
-  readonly session: OutputSession
+export interface ReceiveOperationResumeSource {
+  listLifecycleStates(): Promise<readonly ReceiveLifecycleState[]>
 }
 
-export type TransferRunFactory = () => TransferRun
+export type ReceiveOperationDiscardResult =
+  | Readonly<{ kind: 'discarded'; cleanupReceiptDigest: string }>
+  | Readonly<{ kind: 'partial-directory'; receiptDigest: string }>
+  | Readonly<{
+      kind: 'cleanup-completed'
+      terminalState: 'published' | 'expired'
+      cleanupReceiptDigest: string
+    }>
+  | Readonly<{ kind: 'already-absent' }>
+  | Readonly<{
+      kind: 'needs-attention'
+      reason: 'target-ownership-unknown' | 'cleanup-unknown'
+    }>
 
-export interface ResumeStateReferenceOwner {
+export interface ReceiveOperationMutationPort<TResult = unknown> {
+  resume(descriptor: ReceiveOperationResumeDescriptor): Promise<TResult>
+  expire(descriptor: ReceiveOperationResumeDescriptor): Promise<TResult>
+  discard(descriptor: ReceiveOperationResumeDescriptor): Promise<ReceiveOperationDiscardResult>
+}
+
+interface ResumeReferenceOwner {
   open: boolean
 }
 
-/**
- * A listed task is a leased observation, not an identifier that can be replayed.
- * Consuming it once makes stale rows incapable of authorizing a second mutation.
- */
-export class ResumeStateRef {
-  readonly descriptor: PausedTaskDescriptorV1
-  readonly completedFileCount: number
-  readonly #owner: ResumeStateReferenceOwner
-  readonly #pin: unknown
+export class ReceiveOperationResumeRef {
+  readonly descriptor: ReceiveOperationResumeDescriptor
+  readonly #owner: ResumeReferenceOwner
   #consumed = false
 
-  constructor(
-    owner: ResumeStateReferenceOwner,
-    descriptor: PausedTaskDescriptorV1,
-    completedFileCount: number,
-    pin: unknown,
-  ) {
-    if (!Number.isSafeInteger(completedFileCount) || completedFileCount < 0) {
-      throw new TypeError('completed paused-task file count is invalid')
-    }
+  constructor(owner: ResumeReferenceOwner, descriptor: ReceiveOperationResumeDescriptor) {
     this.#owner = owner
     this.descriptor = descriptor
-    this.completedFileCount = completedFileCount
-    this.#pin = pin
   }
 
-  /** Authority implementations consume the opaque pin; application code cannot inspect it. */
-  consume(owner: ResumeStateReferenceOwner): unknown {
+  consume(owner: ResumeReferenceOwner): ReceiveOperationResumeDescriptor {
     if (owner !== this.#owner || !owner.open) {
-      throw new DOMException('Resume-state reference belongs to a closed inventory', 'InvalidStateError')
+      throw new DOMException('Resume reference belongs to a closed inventory', 'InvalidStateError')
     }
     if (this.#consumed) {
-      throw new DOMException('Resume-state reference was already consumed', 'InvalidStateError')
+      throw new DOMException('Resume reference was already consumed', 'InvalidStateError')
     }
     this.#consumed = true
-    return this.#pin
+    return this.descriptor
   }
 }
 
-export class ResumeStateInventory {
-  readonly tasks: readonly ResumeStateRef[]
-  readonly #owner: ResumeStateReferenceOwner
+export class ReceiveOperationResumeInventory {
+  readonly operations: readonly ReceiveOperationResumeRef[]
+  readonly #owner: ResumeReferenceOwner
 
-  constructor(owner: ResumeStateReferenceOwner, tasks: readonly ResumeStateRef[]) {
+  constructor(owner: ResumeReferenceOwner, operations: readonly ReceiveOperationResumeRef[]) {
     this.#owner = owner
-    this.tasks = Object.freeze([...tasks])
+    this.operations = Object.freeze([...operations])
   }
 
   close(): void {
@@ -106,102 +73,62 @@ export class ResumeStateInventory {
   }
 }
 
-export interface ResumeStateOperationRequest {
-  readonly currentShare: TransferIntentDraft
-  /** OPFS operations must synchronously begin a fresh user-selected export. */
-  readonly acquireOriginPrivateOutput?: () => Promise<WritableStream<Uint8Array>>
-  readonly signal?: AbortSignal
-}
+export class ReceiveOperationResumeAuthority<TResult = unknown> {
+  readonly #source: ReceiveOperationResumeSource
+  readonly #mutations: ReceiveOperationMutationPort<TResult>
+  readonly #clock: ResumeOperationClock
+  readonly #owners = new WeakMap<ReceiveOperationResumeRef, ResumeReferenceOwner>()
 
-export const ResumeStateDiscardKind = {
-  Discarded: 'Discarded',
-  AlreadyAbsent: 'AlreadyAbsent',
-  NeedsAttention: 'NeedsAttention',
-} as const
+  constructor(input: {
+    readonly source: ReceiveOperationResumeSource
+    readonly mutations: ReceiveOperationMutationPort<TResult>
+    readonly clock?: ResumeOperationClock
+  }) {
+    this.#source = input.source
+    this.#mutations = input.mutations
+    this.#clock = input.clock ?? SYSTEM_CLOCK
+  }
 
-export type ResumeStateDiscardResult =
-  | Readonly<{
-      kind: typeof ResumeStateDiscardKind.Discarded
-      preservedCompletedFiles: number
-      exportedPartialZip: boolean
-    }>
-  | Readonly<{ kind: typeof ResumeStateDiscardKind.AlreadyAbsent }>
-  | Readonly<{
-      kind: typeof ResumeStateDiscardKind.NeedsAttention
-      reason: 'checkpoint-changed' | 'output-changed' | 'export-failed' | 'discard-incomplete'
-    }>
+  async listResumeState(): Promise<ReceiveOperationResumeInventory> {
+    const now = this.#clock.now()
+    const lifecycles = await this.#source.listLifecycleStates()
+    const owner: ResumeReferenceOwner = { open: true }
+    const references: ReceiveOperationResumeRef[] = []
+    for (const lifecycle of lifecycles) {
+      const descriptor = receiveOperationResumeDescriptor(lifecycle, now)
+      if (descriptor === undefined) continue
+      const reference = new ReceiveOperationResumeRef(owner, descriptor)
+      this.#owners.set(reference, owner)
+      references.push(reference)
+    }
+    references.sort((left, right) =>
+      left.descriptor.operationId.localeCompare(right.descriptor.operationId))
+    return new ReceiveOperationResumeInventory(owner, references)
+  }
 
-export class ResumeStateBusyError extends DOMException {
-  constructor() {
-    super('This resumable task is active in another page', 'InvalidStateError')
+  async resume(reference: ReceiveOperationResumeRef): Promise<TResult> {
+    const descriptor = this.#consume(reference)
+    const now = this.#clock.now()
+    if (descriptor.expiresAt !== undefined && now >= descriptor.expiresAt) {
+      return this.#mutations.expire(descriptor)
+    }
+    assertReceiveOperationCanContinue(descriptor, now)
+    return this.#mutations.resume(descriptor)
+  }
+
+  async discard(reference: ReceiveOperationResumeRef): Promise<ReceiveOperationDiscardResult> {
+    const descriptor = this.#consume(reference)
+    return this.#mutations.discard(descriptor)
+  }
+
+  #consume(reference: ReceiveOperationResumeRef): ReceiveOperationResumeDescriptor {
+    const owner = this.#owners.get(reference)
+    if (owner === undefined) {
+      throw new DOMException('Resume reference belongs to another authority', 'InvalidStateError')
+    }
+    this.#owners.delete(reference)
+    return reference.consume(owner)
   }
 }
 
-export interface ResumeStateAuthority {
-  listResumeState(): Promise<ResumeStateInventory>
-  resume(
-    reference: ResumeStateRef,
-    request: ResumeStateOperationRequest,
-  ): Promise<ReconstructedPausedTask>
-  discard(
-    reference: ResumeStateRef,
-    request: ResumeStateOperationRequest,
-  ): Promise<ResumeStateDiscardResult>
-}
-
-export interface PausedTaskDescriptorRepository {
-  list(): Promise<readonly PausedTaskDescriptorV1[]>
-  persist(
-    intent: TransferIntent,
-    root: FileSystemDirectoryHandle,
-  ): Promise<PausedTaskDescriptorV1>
-  removeCompleted(descriptor: PausedTaskDescriptorV1): Promise<void>
-}
-
-export async function reconstructPausedTask(options: {
-  readonly descriptor: PausedTaskDescriptorV1
-  readonly currentShare: TransferIntentDraft
-  readonly openSession: (run: TransferRun) => Promise<OutputSession>
-  readonly createRun?: TransferRunFactory
-  readonly onTrace?: PausedTaskTraceListener
-}): Promise<ReconstructedPausedTask> {
-  assertPausedTaskCurrentShare(options.descriptor, options.currentShare)
-  const run = snapshotTransferRun((options.createRun ?? createTransferRun)())
-  const session = await options.openSession(run)
-  if (session.identity.outputSessionId !== run.outputSessionId) {
-    throw new TypeError('resumed output session did not use the fresh runtime identity')
-  }
-  const validated = validateOutputSessionBinding(options.descriptor.intent, session)
-  observePausedTask(options.onTrace, 'paused-task-resume-reconstructed', options.descriptor, {
-    transferJobId: run.transferJobId,
-    outputSessionId: run.outputSessionId,
-    decision: 'fresh-run',
-  })
-  return Object.freeze({
-    descriptor: options.descriptor,
-    intent: options.descriptor.intent,
-    run,
-    session: validated,
-  })
-}
-
-export function observePausedTask(
-  listener: PausedTaskTraceListener | undefined,
-  name: PausedTaskTraceName,
-  descriptor: PausedTaskDescriptorV1,
-  context: {
-    readonly transferJobId?: string
-    readonly outputSessionId?: string
-    readonly decision?: string
-  } = {},
-): void {
-  listener?.(Object.freeze({
-    name,
-    atMilliseconds: typeof performance === 'undefined' ? Date.now() : performance.now(),
-    context: Object.freeze({
-      backend: descriptor.intent.output.backend,
-      transferIntentDigest: descriptor.intent.digest,
-      ...context,
-    }),
-  }))
-}
+const SYSTEM_CLOCK: ResumeOperationClock = Object.freeze({ now: () => Date.now() })

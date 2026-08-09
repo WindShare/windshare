@@ -1,238 +1,191 @@
+// Package resumeauthority reduces durable DirectTree operations after a fresh
+// process has reacquired the operation lease and revalidated ownership.
 package resumeauthority
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"bytes"
 	"errors"
-	"fmt"
 	"slices"
 
+	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-const attentionReferenceBytes = sha256.Size
+var ErrInvalidContract = errors.New("resume authority contract is invalid")
 
-var ErrInvalidContract = errors.New("resume state authority contract is invalid")
-
-// AttentionReason is deliberately smaller than repository diagnostics. These
-// are the only uncertainty classes that may cross the discard settlement
-// boundary without accidentally turning a storage detail into deletion policy.
-type AttentionReason string
+type EvidenceState uint8
 
 const (
-	AttentionMissingOwnership     AttentionReason = "missing-ownership"
-	AttentionReplacement          AttentionReason = "replacement"
-	AttentionUnknownChildren      AttentionReason = "unknown-children"
-	AttentionCorruptBinding       AttentionReason = "corrupt-binding"
-	AttentionAmbiguousPublication AttentionReason = "ambiguous-publication"
+	EvidenceAbsent EvidenceState = iota + 1
+	EvidenceProven
+	EvidenceUnknown
 )
 
-func (reason AttentionReason) Valid() bool {
-	switch reason {
-	case AttentionMissingOwnership, AttentionReplacement, AttentionUnknownChildren,
-		AttentionCorruptBinding, AttentionAmbiguousPublication:
-		return true
-	default:
-		return false
+func (state EvidenceState) Valid() bool {
+	return state >= EvidenceAbsent && state <= EvidenceUnknown
+}
+
+type CleanupEvidenceState uint8
+
+const (
+	CleanupPending CleanupEvidenceState = iota + 1
+	CleanupComplete
+	CleanupUnknown
+)
+
+func (state CleanupEvidenceState) Valid() bool {
+	return state >= CleanupPending && state <= CleanupUnknown
+}
+
+type Snapshot struct {
+	operation checkpointmodel.ReceiveOperation
+	lifecycle checkpointmodel.ReceiveLifecycleState
+}
+
+func NewSnapshot(
+	operation checkpointmodel.ReceiveOperation,
+	lifecycle checkpointmodel.ReceiveLifecycleState,
+) (Snapshot, error) {
+	if _, err := operation.VerifyIntent(transfer.DecodeReceiveIntent); err != nil ||
+		!lifecycle.Valid() || lifecycle.OperationID() != operation.OperationID() ||
+		lifecycle.ReceiveIntentDigest() != operation.ReceiveIntentDigest() {
+		return Snapshot{}, errors.Join(ErrInvalidContract, err)
+	}
+	return Snapshot{operation: operation, lifecycle: lifecycle}, nil
+}
+
+// CorruptSnapshot preserves only a structurally decoded immutable operation ID
+// for inventory attention. It cannot be acquired or mutated as valid state.
+func CorruptSnapshot(operation checkpointmodel.ReceiveOperation) Snapshot {
+	if !operation.Valid() {
+		return Snapshot{}
+	}
+	return Snapshot{operation: operation}
+}
+
+func (snapshot Snapshot) Operation() checkpointmodel.ReceiveOperation { return snapshot.operation }
+func (snapshot Snapshot) Lifecycle() checkpointmodel.ReceiveLifecycleState {
+	return snapshot.lifecycle
+}
+func (snapshot Snapshot) Valid() bool {
+	_, err := NewSnapshot(snapshot.operation, snapshot.lifecycle)
+	return err == nil
+}
+
+type Summary struct {
+	operationID receivecontract.OperationID
+	intent      transfer.ReceiveIntentDigest
+	phase       checkpointmodel.LifecyclePhase
+	generation  uint64
+	expiresAt   uint64
+	successes   uint64
+	failures    uint64
+	reason      checkpointmodel.NeedsAttentionReason
+}
+
+func summaryFromSnapshot(snapshot Snapshot) Summary {
+	lifecycle := snapshot.lifecycle
+	return Summary{
+		operationID: snapshot.operation.OperationID(), intent: snapshot.operation.ReceiveIntentDigest(),
+		phase: lifecycle.Phase(), generation: lifecycle.StateGeneration(),
+		expiresAt: lifecycle.ExpiresAtMillis(), successes: lifecycle.SuccessCount(),
+		failures: lifecycle.FailureCount(), reason: lifecycle.AttentionReason(),
 	}
 }
 
-// Attention carries only a stable correlation token. Native identities,
-// checkpoint names, and user paths remain inside the adapter that pinned them.
-type Attention struct {
-	reason    AttentionReason
-	reference string
+func (summary Summary) OperationID() receivecontract.OperationID          { return summary.operationID }
+func (summary Summary) ReceiveIntentDigest() transfer.ReceiveIntentDigest { return summary.intent }
+func (summary Summary) Phase() checkpointmodel.LifecyclePhase             { return summary.phase }
+func (summary Summary) StateGeneration() uint64                           { return summary.generation }
+func (summary Summary) ExpiresAtMillis() uint64                           { return summary.expiresAt }
+func (summary Summary) SuccessCount() uint64                              { return summary.successes }
+func (summary Summary) FailureCount() uint64                              { return summary.failures }
+func (summary Summary) NeedsAttentionReason() checkpointmodel.NeedsAttentionReason {
+	return summary.reason
+}
+func (summary Summary) Resumable() bool {
+	return summary.phase == checkpointmodel.LifecycleResumableReceive && summary.expiresAt != 0
 }
 
-func NewAttention(reason AttentionReason, reference string) (Attention, error) {
-	if !reason.Valid() || !validAttentionReference(reference) {
+type Attention struct {
+	operationID receivecontract.OperationID
+	reason      checkpointmodel.NeedsAttentionReason
+}
+
+func NewAttention(
+	operation receivecontract.OperationID,
+	reason checkpointmodel.NeedsAttentionReason,
+) (Attention, error) {
+	if operation.IsZero() || !reason.Valid() {
 		return Attention{}, ErrInvalidContract
 	}
-	return Attention{reason: reason, reference: reference}, nil
+	return Attention{operationID: operation, reason: reason}, nil
 }
 
-func (attention Attention) Reason() AttentionReason { return attention.reason }
-func (attention Attention) Reference() string       { return attention.reference }
-
-func (attention Attention) Valid() bool {
-	return attention.reason.Valid() && validAttentionReference(attention.reference)
-}
-
-func validAttentionReference(reference string) bool {
-	if len(reference) != hex.EncodedLen(attentionReferenceBytes) {
-		return false
-	}
-	decoded, err := hex.DecodeString(reference)
-	return err == nil && hex.EncodeToString(decoded) == reference
+func (attention Attention) OperationID() receivecontract.OperationID { return attention.operationID }
+func (attention Attention) Reason() checkpointmodel.NeedsAttentionReason {
+	return attention.reason
 }
 
 type ListStatus uint8
 
 const (
-	ListAvailable ListStatus = iota + 1
+	ListReady ListStatus = iota + 1
 	ListNeedsAttention
 )
 
-func (status ListStatus) Valid() bool {
-	return status == ListAvailable || status == ListNeedsAttention
+type Inventory struct {
+	status    ListStatus
+	summaries []Summary
+	attention []Attention
 }
 
-// ListedState is the immutable semantic projection returned by a pinned
-// repository inventory. Its ordinal is intentionally absent: only Inventory
-// may bind an ordinal to a live, single-use Reference.
-type ListedState struct {
-	status                ListStatus
-	intent                transfer.TransferIntentDigest
-	backend               transfer.OutputBackendID
-	checkpointRecordCount uint64
-	recoveryArtifactBytes uint64
-	attention             []Attention
-}
-
-type ListedStateSpec struct {
-	Status                ListStatus
-	Intent                transfer.TransferIntentDigest
-	Backend               transfer.OutputBackendID
-	CheckpointRecordCount uint64
-	RecoveryArtifactBytes uint64
-	Attention             []Attention
-}
-
-func NewListedState(spec ListedStateSpec) (ListedState, error) {
-	state := ListedState{
-		status:                spec.Status,
-		intent:                spec.Intent,
-		backend:               spec.Backend,
-		checkpointRecordCount: spec.CheckpointRecordCount,
-		recoveryArtifactBytes: spec.RecoveryArtifactBytes,
-		attention:             slices.Clone(spec.Attention),
+func newInventory(summaries []Summary, attention []Attention) Inventory {
+	slices.SortFunc(summaries, func(left, right Summary) int {
+		return bytes.Compare(left.operationID.Bytes(), right.operationID.Bytes())
+	})
+	slices.SortFunc(attention, func(left, right Attention) int {
+		if compared := bytes.Compare(left.operationID.Bytes(), right.operationID.Bytes()); compared != 0 {
+			return compared
+		}
+		return int(left.reason) - int(right.reason)
+	})
+	status := ListReady
+	if len(attention) != 0 {
+		status = ListNeedsAttention
 	}
-	if !state.valid() {
-		return ListedState{}, ErrInvalidContract
+	return Inventory{
+		status: status, summaries: slices.Clone(summaries), attention: slices.Clone(attention),
 	}
-	return state, nil
 }
 
-func (state ListedState) valid() bool {
-	if !state.status.Valid() {
+func (inventory Inventory) Status() ListStatus     { return inventory.status }
+func (inventory Inventory) Summaries() []Summary   { return slices.Clone(inventory.summaries) }
+func (inventory Inventory) Attention() []Attention { return slices.Clone(inventory.attention) }
+
+type RecoveryEvidence struct {
+	TargetOwnership EvidenceState
+	Checkpoints     EvidenceState
+	Cleanup         CleanupEvidenceState
+	TerminalReceipt checkpointmodel.DirectTreeReceipt
+	ExpiryReceipt   checkpointmodel.DirectTreeReceipt
+}
+
+func (evidence RecoveryEvidence) valid() bool {
+	return evidence.TargetOwnership.Valid() && evidence.Checkpoints.Valid() &&
+		evidence.Cleanup.Valid()
+}
+
+type DiscardEvidence struct {
+	State   CleanupEvidenceState
+	Receipt checkpointmodel.DirectTreeReceipt
+}
+
+func (evidence DiscardEvidence) valid() bool {
+	if !evidence.State.Valid() {
 		return false
 	}
-	for _, attention := range state.attention {
-		if !attention.Valid() {
-			return false
-		}
-	}
-	if state.status == ListAvailable {
-		if state.intent.IsZero() || len(state.attention) != 0 {
-			return false
-		}
-		_, err := transfer.NewOutputBackendID(string(state.backend))
-		return err == nil
-	}
-	// Opaque unsafe state may not have a trustworthy intent or backend. When
-	// either is present it must still be canonical, and attention is mandatory.
-	if len(state.attention) == 0 {
-		return false
-	}
-	if state.backend != "" {
-		if _, err := transfer.NewOutputBackendID(string(state.backend)); err != nil {
-			return false
-		}
-	}
-	return true
-}
-
-type Summary struct {
-	state     ListedState
-	reference Reference
-}
-
-func (summary Summary) Status() ListStatus                    { return summary.state.status }
-func (summary Summary) Intent() transfer.TransferIntentDigest { return summary.state.intent }
-func (summary Summary) Backend() transfer.OutputBackendID     { return summary.state.backend }
-func (summary Summary) CheckpointRecordCount() uint64 {
-	return summary.state.checkpointRecordCount
-}
-func (summary Summary) RecoveryArtifactBytes() uint64 {
-	return summary.state.recoveryArtifactBytes
-}
-func (summary Summary) Attention() []Attention { return slices.Clone(summary.state.attention) }
-func (summary Summary) Reference() Reference   { return summary.reference }
-func (summary Summary) NeedsAttention() bool   { return summary.state.status == ListNeedsAttention }
-
-type DiscardStatus uint8
-
-const (
-	Discarded DiscardStatus = iota + 1
-	AlreadyAbsent
-	DiscardNeedsAttention
-)
-
-func (status DiscardStatus) Valid() bool {
-	return status == Discarded || status == AlreadyAbsent || status == DiscardNeedsAttention
-}
-
-// DiscardResult is a settlement, not an error. Needs-attention means every
-// object lacking exact deletion proof was retained.
-type DiscardResult struct {
-	status           DiscardStatus
-	removedArtifacts uint64
-	attention        []Attention
-}
-
-func NewDiscardResult(
-	status DiscardStatus,
-	removedArtifacts uint64,
-	attention []Attention,
-) (DiscardResult, error) {
-	result := DiscardResult{
-		status: status, removedArtifacts: removedArtifacts, attention: slices.Clone(attention),
-	}
-	if !result.valid() {
-		return DiscardResult{}, ErrInvalidContract
-	}
-	return result, nil
-}
-
-func (result DiscardResult) Status() DiscardStatus    { return result.status }
-func (result DiscardResult) RemovedArtifacts() uint64 { return result.removedArtifacts }
-func (result DiscardResult) Attention() []Attention   { return slices.Clone(result.attention) }
-func (result DiscardResult) NeedsAttention() bool     { return result.status == DiscardNeedsAttention }
-
-func (result DiscardResult) valid() bool {
-	if !result.status.Valid() {
-		return false
-	}
-	for _, attention := range result.attention {
-		if !attention.Valid() {
-			return false
-		}
-	}
-	switch result.status {
-	case Discarded:
-		return result.removedArtifacts > 0 && len(result.attention) == 0
-	case AlreadyAbsent:
-		return result.removedArtifacts == 0 && len(result.attention) == 0
-	case DiscardNeedsAttention:
-		return len(result.attention) > 0
-	default:
-		return false
-	}
-}
-
-func validateListedStates(states []ListedState) error {
-	seen := make(map[transfer.TransferIntentDigest]struct{}, len(states))
-	for _, state := range states {
-		if !state.valid() {
-			return ErrInvalidContract
-		}
-		if state.intent.IsZero() {
-			continue
-		}
-		if _, exists := seen[state.intent]; exists {
-			return fmt.Errorf("%w: duplicate transfer intent", ErrInvalidContract)
-		}
-		seen[state.intent] = struct{}{}
-	}
-	return nil
+	return evidence.State != CleanupComplete ||
+		evidence.Receipt.Valid() && evidence.Receipt.Kind() == checkpointmodel.ReceiptCleanup
 }

@@ -11,7 +11,7 @@ import (
 
 func (session *Session) BeginFile(
 	ctx context.Context,
-	file transfer.OutputFile,
+	file transfer.MaterializationFile,
 ) (transfer.FileStart, error) {
 	lease, operationID, err := session.beginOperation()
 	if err != nil {
@@ -76,19 +76,19 @@ func (session *Session) BeginFile(
 	return session.commitFileBegin(ctx, operationID, entry, observation)
 }
 
-func validateFileRequest(session *Session, file transfer.OutputFile) error {
+func validateFileRequest(session *Session, file transfer.MaterializationFile) error {
 	canonical, err := catalog.CanonicalPath(file.Path)
 	target := file.Target
 	descriptor := file.Descriptor
 	if err != nil || file.Path == "" || canonical != file.Path || file.ParentAdmission.IsZero() ||
 		descriptor.ShareInstance() != session.intent.ShareInstance() ||
 		descriptor.FileID().IsZero() || descriptor.FileRevision().IsZero() ||
-		file.ExpectedSize != descriptor.ExactSize() || target.BackendID() != session.BackendID() ||
-		target.OutputSessionID() != session.sessionID || target.Descriptor() != descriptor ||
+		file.ExpectedSize != descriptor.ExactSize() || target.OutputSessionID() != session.sessionID ||
+		target.Descriptor() != descriptor ||
 		target.ExactSize() != file.ExpectedSize || target.Locator().IsZero() {
 		return ErrDirectoryBinding
 	}
-	if target.Locator().Kind() == transfer.OutputPathLocator && target.Locator().CanonicalPath() != file.Path {
+	if target.Locator().Kind() == transfer.MaterializationPathLocator && target.Locator().CanonicalPath() != file.Path {
 		return ErrDirectoryBinding
 	}
 	return nil
@@ -96,7 +96,7 @@ func validateFileRequest(session *Session, file transfer.OutputFile) error {
 
 func (session *Session) reserveFile(
 	operationID uint64,
-	file transfer.OutputFile,
+	file transfer.MaterializationFile,
 	locatorKey string,
 ) (*fileEntry, *fileBeginOperation, bool, TraceEvent, error) {
 	session.mu.Lock()
@@ -223,7 +223,7 @@ func (session *Session) commitFileBegin(
 		var err error
 		start, err = transfer.NewFileSettlementStart(observation.Settlement)
 		if err != nil || observation.Settlement.Target() != entry.claim.file.Target ||
-			observation.Durable.Binding() != (transfer.OutputFileBinding{}) {
+			observation.Durable.Binding() != (transfer.MaterializedFileBinding{}) {
 			return transfer.FileStart{}, session.failFileBegin(
 				ctx, operationID, entry, MutationAmbiguous, executorContractError(err),
 			)

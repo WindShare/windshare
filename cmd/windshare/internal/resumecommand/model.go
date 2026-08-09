@@ -6,15 +6,17 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/core/osfs"
-	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const (
-	resumeListStatusAvailable      = "available"
+	resumeListStatusReady          = "ready"
 	resumeListStatusNeedsAttention = "needs-attention"
+	resumeItemStatusRecorded       = "recorded"
+	resumeItemStatusResumable      = "resumable"
+	resumeItemStatusNeedsAttention = "needs-attention"
 
-	resumeDiscardStatusDiscarded      = "discarded"
-	resumeDiscardStatusAlreadyAbsent  = "already-absent"
+	resumeDiscardStatusSettled        = "settled"
 	resumeDiscardStatusNeedsAttention = "needs-attention"
 
 	resumeBusyStatus             = "busy"
@@ -49,56 +51,65 @@ type resumeDiscardRequest struct {
 }
 
 type resumeStateAttention struct {
-	reason    string
-	reference string
+	reason      string
+	operationID string
 }
 
 func (attention resumeStateAttention) valid() bool {
 	switch attention.reason {
-	case "missing-ownership", "replacement", "unknown-children", "corrupt-binding", "ambiguous-publication":
-		return validLowerHex(attention.reference, 32)
+	case "target-ownership-unknown", "publication-unknown", "cleanup-unknown":
+		return validLowerHex(attention.operationID, receivecontract.StableIdentityBytes)
 	default:
 		return false
 	}
 }
 
 type resumeStateItem struct {
-	status                string
-	intentDigest          string
-	backend               string
-	checkpointRecordCount uint64
-	recoveryArtifactBytes uint64
-	attention             []resumeStateAttention
+	status          string
+	operationID     string
+	intentDigest    string
+	phase           uint8
+	stateGeneration uint64
+	expiresAtMillis uint64
+	successCount    uint64
+	failureCount    uint64
+	resumable       bool
+	discardable     bool
+	attention       []resumeStateAttention
 }
 
 func (item resumeStateItem) valid() bool {
 	for _, attention := range item.attention {
-		if !attention.valid() {
+		if !attention.valid() || attention.operationID != item.operationID {
 			return false
 		}
 	}
-	if item.intentDigest != "" && !validLowerHex(item.intentDigest, 32) {
+	if !validLowerHex(item.operationID, receivecontract.StableIdentityBytes) {
 		return false
 	}
-	if item.backend != "" {
-		if _, err := transfer.NewOutputBackendID(item.backend); err != nil {
-			return false
-		}
+	hasSummary := item.intentDigest != "" || item.phase != 0 || item.stateGeneration != 0 || item.discardable
+	if hasSummary && (!validLowerHex(item.intentDigest, 32) || item.phase == 0 || item.stateGeneration == 0 || !item.discardable) {
+		return false
 	}
 	switch item.status {
-	case resumeListStatusAvailable:
-		return item.intentDigest != "" && item.backend != "" && len(item.attention) == 0
-	case resumeListStatusNeedsAttention:
-		return len(item.attention) != 0
+	case resumeItemStatusRecorded:
+		return hasSummary && !item.resumable && len(item.attention) == 0
+	case resumeItemStatusResumable:
+		return hasSummary && item.resumable && item.expiresAtMillis != 0 && len(item.attention) == 0
+	case resumeItemStatusNeedsAttention:
+		return len(item.attention) != 0 && (!item.resumable || !hasSummary)
 	default:
 		return false
 	}
 }
 
 type resumeDiscardReport struct {
-	status           string
-	removedArtifacts uint64
-	attention        []resumeStateAttention
+	status          string
+	operationID     string
+	phase           uint8
+	stateGeneration uint64
+	resumable       bool
+	attention       []resumeStateAttention
 }
 
 func (report resumeDiscardReport) valid() bool {
@@ -107,13 +118,15 @@ func (report resumeDiscardReport) valid() bool {
 			return false
 		}
 	}
+	if !validLowerHex(report.operationID, receivecontract.StableIdentityBytes) ||
+		report.phase == 0 || report.stateGeneration == 0 {
+		return false
+	}
 	switch report.status {
-	case resumeDiscardStatusDiscarded:
-		return report.removedArtifacts > 0 && len(report.attention) == 0
-	case resumeDiscardStatusAlreadyAbsent:
-		return report.removedArtifacts == 0 && len(report.attention) == 0
+	case resumeDiscardStatusSettled:
+		return len(report.attention) == 0
 	case resumeDiscardStatusNeedsAttention:
-		return len(report.attention) != 0
+		return len(report.attention) != 0 && !report.resumable
 	default:
 		return false
 	}
@@ -127,12 +140,12 @@ func validLowerHex(value string, decodedBytes int) bool {
 	return err == nil && hex.EncodeToString(decoded) == value
 }
 
-// resumeStateInventory keeps the ordinal and its one-shot reference inside one
-// live capability so parsed CLI values can never become durable deletion handles.
+// resumeStateInventory keeps each displayed ordinal bound to the stable OperationID
+// from one fresh inventory. Discard then asks the core authority to reacquire and
+// revalidate that operation; parsed CLI values never become filesystem handles.
 type resumeStateInventory interface {
 	Items() ([]resumeStateItem, error)
 	Discard(context.Context, int) (resumeDiscardReport, error)
-	Close() error
 }
 
 type resumeStateInventoryOpener interface {

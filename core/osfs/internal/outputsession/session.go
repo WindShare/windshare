@@ -115,8 +115,8 @@ type closeRecord struct {
 	set        bool
 	kind       closeKind
 	pause      transfer.JobPauseReason
-	outcome    transfer.JobOutcome
-	settlement transfer.JobSettlement
+	outcome    transfer.DirectTreeOutcome
+	settlement transfer.DirectTreeSettlement
 	err        error
 }
 
@@ -131,10 +131,11 @@ type Session struct {
 	attention     bool
 	close         closeRecord
 
-	intent       transfer.TransferIntent
+	intent       transfer.ReceiveIntent
+	binding      transfer.DirectTreeSessionBinding
 	scope        transfer.DirectoryAdmissionScope
 	sessionID    transfer.OutputSessionID
-	capabilities transfer.OutputCapabilities
+	capabilities transfer.DirectTreeCapabilities
 	secret       [sha256.Size]byte
 	limits       Limits
 
@@ -142,6 +143,7 @@ type Session struct {
 	directories DirectoryExecutor
 	files       FileExecutor
 	resources   ResourceReleaser
+	lifecycle   TreeLifecycleRecorder
 	trace       TraceSink
 
 	nextClaimID     ClaimID
@@ -160,7 +162,7 @@ type Session struct {
 	receiptClaims   map[admissionReceiptKey]ClaimID
 }
 
-var _ transfer.OutputSession = (*Session)(nil)
+var _ transfer.DirectTreeSession = (*Session)(nil)
 
 func New(config Config) (*Session, error) {
 	scope, limits, err := config.validate()
@@ -179,6 +181,7 @@ func New(config Config) (*Session, error) {
 		directories:     config.Directories,
 		files:           config.Files,
 		resources:       config.Resources,
+		lifecycle:       config.Lifecycle,
 		trace:           config.Trace,
 		directoryClaims: make(map[ClaimID]*directoryEntry),
 		fileClaims:      make(map[ClaimID]*fileEntry),
@@ -188,15 +191,19 @@ func New(config Config) (*Session, error) {
 		nameClaims:      make(map[parentNameKey]claimRef),
 		receiptClaims:   make(map[admissionReceiptKey]ClaimID),
 	}
+	session.binding, err = transfer.BindDirectTreeSession(config.Intent)
+	if err != nil {
+		return nil, errors.Join(ErrInvalidConfiguration, err)
+	}
 	copy(session.secret[:], config.ReceiptSecret)
 	return session, nil
 }
 
-func (session *Session) BackendID() transfer.OutputBackendID {
+func (session *Session) Binding() transfer.DirectTreeSessionBinding {
 	if session == nil {
-		return ""
+		return transfer.DirectTreeSessionBinding{}
 	}
-	return session.intent.BackendID()
+	return session.binding
 }
 
 func (session *Session) SessionID() transfer.OutputSessionID {
@@ -206,9 +213,9 @@ func (session *Session) SessionID() transfer.OutputSessionID {
 	return session.sessionID
 }
 
-func (session *Session) Capabilities() transfer.OutputCapabilities {
+func (session *Session) Capabilities() transfer.DirectTreeCapabilities {
 	if session == nil {
-		return transfer.OutputCapabilities{}
+		return transfer.DirectTreeCapabilities{}
 	}
 	return session.capabilities
 }
@@ -325,7 +332,7 @@ func (session *Session) traceLocked(
 	value fault.Fault,
 ) TraceEvent {
 	return TraceEvent{
-		IntentDigest:           session.intent.Digest(),
+		ReceiveIntentDigest:    session.intent.Digest(),
 		SessionID:              session.sessionID,
 		OperationID:            operationID,
 		Operation:              operation,
@@ -402,7 +409,7 @@ func receiptKey(admission transfer.DirectoryAdmission) admissionReceiptKey {
 
 func sameAdmission(left, right transfer.DirectoryAdmission) bool {
 	return left.Equal(right) && left.SchemaVersion() == right.SchemaVersion() &&
-		left.IntentDigest() == right.IntentDigest() && left.DirectoryID() == right.DirectoryID() &&
+		left.ReceiveIntentDigest() == right.ReceiveIntentDigest() && left.DirectoryID() == right.DirectoryID() &&
 		left.Generation() == right.Generation() && left.Path() == right.Path() &&
 		left.ModifiedTime() == right.ModifiedTime() && string(left.ParentToken()) == string(right.ParentToken())
 }

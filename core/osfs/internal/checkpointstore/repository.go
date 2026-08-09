@@ -1,6 +1,7 @@
 package checkpointstore
 
 import (
+	"bytes"
 	"errors"
 
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
@@ -12,18 +13,20 @@ const (
 	recordSuffix      = ".checkpoint"
 	recordIDHexLength = 64
 	recordShardLength = 2
-	attentionDomain   = "windshare/checkpoint-attention/v1"
+	attentionDomain   = "windshare/checkpoint-attention/v2"
 )
 
-// Repository owns one leased intent's current FileCheckpointV1 records and its
-// owned object directories. It cannot be constructed without the intent binding
-// that every decoded record must match.
+// Repository owns one leased operation's immutable operation image, aggregate
+// records, and FileCheckpointV2 records. Aggregate records never carry ranges.
 type Repository struct {
-	intent  outputcap.Directory
-	records outputcap.Directory
-	anchors outputcap.Directory
-	stages  outputcap.Directory
-	binding checkpointmodel.Binding
+	operation   outputcap.Directory
+	checkpoints outputcap.Directory
+	records     outputcap.Directory
+	anchors     outputcap.Directory
+	stages      outputcap.Directory
+	manifests   outputcap.Directory
+	receipts    outputcap.Directory
+	binding     checkpointmodel.Binding
 }
 
 func (repository *Repository) Close() error {
@@ -34,10 +37,13 @@ func (repository *Repository) Close() error {
 		closeDirectory(repository.records),
 		closeDirectory(repository.anchors),
 		closeDirectory(repository.stages),
-		closeDirectory(repository.intent),
+		closeDirectory(repository.manifests),
+		closeDirectory(repository.receipts),
+		closeDirectory(repository.checkpoints),
+		closeDirectory(repository.operation),
 	)
 	*repository = Repository{}
-	return repositoryError("close intent repository", err)
+	return repositoryError("close operation repository", err)
 }
 
 func (repository *Repository) Create(record checkpointmodel.Record) error {
@@ -47,6 +53,26 @@ func (repository *Repository) Create(record checkpointmodel.Record) error {
 	encoded, err := checkpointmodel.EncodeRecord(record)
 	if err != nil {
 		return codedError(ErrorCorruptRecord, "encode created record", err)
+	}
+	if !checkpointmodel.InitialCandidate(record) {
+		// Only the empty generation-zero candidate can establish a new file
+		// authority. Later cuts need a predecessor transition; an exact existing
+		// image is accepted solely to make a completed create retry idempotent.
+		existing, reopenErr := repository.Reopen(record.RecordID())
+		if reopenErr != nil {
+			return codedError(
+				ErrorUnsafeInstall, "create checkpoint without predecessor",
+				errors.Join(checkpointmodel.ErrRecordGeneration, reopenErr),
+			)
+		}
+		existingEncoded, encodeErr := checkpointmodel.EncodeRecord(existing)
+		if encodeErr != nil || !bytes.Equal(existingEncoded, encoded) {
+			return codedError(
+				ErrorUnsafeInstall, "create checkpoint without predecessor",
+				errors.Join(checkpointmodel.ErrRecordGeneration, encodeErr),
+			)
+		}
+		return nil
 	}
 	shardName, recordName := recordLocation(record.RecordID())
 	shard, err := OpenShard(repository.records, shardName, true)

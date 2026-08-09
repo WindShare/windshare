@@ -2,13 +2,13 @@ package outputsession
 
 import (
 	"context"
-	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 type testIdentity interface {
@@ -120,7 +120,7 @@ func testContext() context.Context {
 
 type fakeTransactionExecutor struct {
 	mu              sync.Mutex
-	binding         transfer.OutputFileBinding
+	binding         transfer.MaterializedFileBinding
 	emptyCheckpoint transfer.VerifiedDurableRanges
 	fullCheckpoint  transfer.VerifiedDurableRanges
 	write           func(context.Context, uint64, []byte) (MutationCut, error)
@@ -135,17 +135,17 @@ type fakeTransactionExecutor struct {
 	retireCalls     int
 }
 
-func newFakeTransaction(t *testing.T, target transfer.OutputFileTarget) *fakeTransactionExecutor {
+func newFakeTransaction(t *testing.T, target transfer.FileMaterializationTarget) *fakeTransactionExecutor {
 	t.Helper()
-	rawIdentity := make([]byte, transfer.OutputObjectIdentityBytes)
+	rawIdentity := make([]byte, transfer.OwnedObjectIdentityBytes)
 	for index := range rawIdentity {
 		rawIdentity[index] = byte(0x80 + index)
 	}
-	objectIdentity, err := transfer.OutputObjectIdentityFromBytes(rawIdentity)
+	objectIdentity, err := transfer.OwnedObjectIDFromBytes(rawIdentity)
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, err := transfer.BindOutputFileTarget(target, objectIdentity)
+	binding, err := transfer.BindFileMaterializationTarget(target, objectIdentity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func newFakeTransaction(t *testing.T, target transfer.OutputFileTarget) *fakeTra
 	}
 }
 
-func (transaction *fakeTransactionExecutor) Binding() transfer.OutputFileBinding {
+func (transaction *fakeTransactionExecutor) Binding() transfer.MaterializedFileBinding {
 	return transaction.binding
 }
 
@@ -272,9 +272,9 @@ type testFixture struct {
 	directories   *fakeDirectoryAuthority
 	files         *fakeFileEngine
 	resources     *fakeResources
-	intent        transfer.TransferIntent
+	intent        transfer.ReceiveIntent
 	sessionID     transfer.OutputSessionID
-	rootDirectory transfer.OutputDirectory
+	rootDirectory transfer.MaterializationDirectory
 }
 
 func newTestFixture(t *testing.T, mutate func(*Config)) testFixture {
@@ -285,10 +285,38 @@ func newTestFixture(t *testing.T, mutate func(*Config)) testFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := transfer.NewFilesystemTransferIntent(
-		share, root, rules, filepath.Join(t.TempDir(), "output"),
-		transfer.NativeFilesystemOutputBackendID, transfer.OutputNativeTree,
-	)
+	selection, err := transfer.NewSelectionSpec(share, root, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := receivecontract.NewCatalogRootDirectoryTree()
+	operationRaw := identity[receivecontract.OperationID](41)
+	operation, err := receivecontract.OperationIDFromBytes(operationRaw[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservationRaw := identity[receivecontract.DestinationReservationID](51)
+	reservationID, err := receivecontract.DestinationReservationIDFromBytes(reservationRaw[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorityRaw := make([]byte, receivecontract.AuthorityRefBytes)
+	for index := range authorityRaw {
+		authorityRaw[index] = byte(index + 1)
+	}
+	authority, err := receivecontract.AuthorityRefFromBytes(authorityRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := receivecontract.NewNativeContainerRootReservation(operation, reservationID, artifact, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := receivecontract.NewDirectTreePlan(artifact, reservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := transfer.NewReceiveIntent(selection, artifact, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,8 +330,8 @@ func newTestFixture(t *testing.T, mutate func(*Config)) testFixture {
 	}
 	config := Config{
 		Intent: intent, SessionID: sessionID,
-		Capabilities: transfer.OutputCapabilities{
-			Durability: transfer.DurabilityPowerLoss, Mode: transfer.OutputNativeTree,
+		Capabilities: transfer.DirectTreeCapabilities{
+			Durability:  transfer.DurabilityPowerLoss,
 			RandomWrite: true, FileFailureIsolation: true, ModifiedTime: true,
 		},
 		ReceiptSecret: append([]byte(nil), secret[:]...),
@@ -319,7 +347,7 @@ func newTestFixture(t *testing.T, mutate func(*Config)) testFixture {
 	return testFixture{
 		t: t, session: session, directories: directories, files: files, resources: resources,
 		intent: intent, sessionID: sessionID,
-		rootDirectory: transfer.OutputDirectory{
+		rootDirectory: transfer.MaterializationDirectory{
 			DirectoryID: root, Generation: identity[catalog.DirectoryGeneration](31), Path: "",
 		},
 	}
@@ -338,8 +366,8 @@ func (fixture testFixture) childDirectory(
 	parent transfer.DirectoryAdmission,
 	seed byte,
 	path string,
-) transfer.OutputDirectory {
-	return transfer.OutputDirectory{
+) transfer.MaterializationDirectory {
+	return transfer.MaterializationDirectory{
 		DirectoryID:     identity[catalog.DirectoryID](seed),
 		Generation:      identity[catalog.DirectoryGeneration](seed + 1),
 		ParentAdmission: parent,
@@ -351,7 +379,7 @@ func (fixture testFixture) outputFile(
 	parent transfer.DirectoryAdmission,
 	seed byte,
 	path string,
-) transfer.OutputFile {
+) transfer.MaterializationFile {
 	fixture.t.Helper()
 	geometry, err := content.NewFileGeometry(1, catalog.MinChunkSize)
 	if err != nil {
@@ -364,17 +392,15 @@ func (fixture testFixture) outputFile(
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
-	locator, err := transfer.NewPathOutputLocator(path)
+	locator, err := transfer.NewPathMaterializationLocator(path)
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
-	target, err := transfer.NewOutputFileTarget(
-		fixture.intent.BackendID(), fixture.sessionID, descriptor, locator,
-	)
+	target, err := transfer.NewFileMaterializationTarget(fixture.sessionID, descriptor, locator)
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
-	return transfer.OutputFile{
+	return transfer.MaterializationFile{
 		Path: path, ExpectedSize: 1, Descriptor: descriptor, Target: target, ParentAdmission: parent,
 	}
 }

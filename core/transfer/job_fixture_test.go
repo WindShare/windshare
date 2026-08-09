@@ -11,11 +11,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/catalogflow"
+	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 type jobPageCommitter struct{}
@@ -245,99 +248,150 @@ func jobDirectoryEntry(t *testing.T, directory catalog.DirectoryID, name string)
 	return entry
 }
 
-const jobOutputDirectorySecretDomain = "windshare/test-job-output/directory-secret/v1"
+const jobMaterializationDirectorySecretDomain = "windshare/test-job-output/directory-secret/v1"
 
-var (
-	jobOutputBackend, _   = NewOutputBackendID("test/job-output")
-	jobOutputSessionNonce atomic.Uint64
-)
+var jobDirectTreeSessionNonce atomic.Uint64
 
-func testTransferIntent(
+func testReceiveIntent(
 	t *testing.T,
 	share catalog.ShareInstance,
 	root catalog.DirectoryID,
 	rules SelectionRules,
-	backend OutputBackendID,
-) TransferIntent {
+) ReceiveIntent {
 	t.Helper()
-	if _, err := NewOutputBackendID(string(backend)); err != nil {
-		backend = jobOutputBackend
-	}
-	identityMaterial := append(share.Bytes(), root.Bytes()...)
-	identity := sha256.Sum256(append([]byte("windshare/test-output-target/v1\x00"), identityMaterial...))
-	target, err := NewOpaqueOutputTarget(identity[:])
+	selection, err := NewSelectionSpec(share, root, rules)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := NewTransferIntent(share, root, rules, target, backend, OutputNativeTree)
+	artifact := receivecontract.NewCatalogRootDirectoryTree()
+	identityMaterial := append(share.Bytes(), root.Bytes()...)
+	operationDigest := sha256.Sum256(append([]byte("windshare/test-operation/v1\x00"), identityMaterial...))
+	reservationDigest := sha256.Sum256(append([]byte("windshare/test-reservation/v1\x00"), identityMaterial...))
+	authorityDigest := sha256.Sum256(append([]byte("windshare/test-authority/v1\x00"), identityMaterial...))
+	operation, err := receivecontract.OperationIDFromBytes(operationDigest[:receivecontract.StableIdentityBytes])
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservationID, err := receivecontract.DestinationReservationIDFromBytes(
+		reservationDigest[:receivecontract.StableIdentityBytes],
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := receivecontract.AuthorityRefFromBytes(authorityDigest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := receivecontract.NewNativeContainerRootReservation(
+		operation, reservationID, artifact, authority,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := receivecontract.NewDirectTreePlan(artifact, reservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := NewReceiveIntent(selection, artifact, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return intent
 }
 
-func newTestTransferJob(t *testing.T, config TransferJobConfig) (*TransferJob, error) {
+type testTransferJobConfig struct {
+	ShareInstance         catalog.ShareInstance
+	SyntheticRoot         catalog.DirectoryID
+	Rules                 SelectionRules
+	ReceiveIntent         ReceiveIntent
+	JobID                 TransferJobID
+	ProtocolSessionID     protocolsession.ProtocolSessionID
+	FileQueueCapacity     int
+	GenerationReplayPages int
+	Catalog               CatalogReader
+	Revisions             RevisionClient
+	Blocks                RangeReader
+	Materializer          DirectTreeMaterializer
+	SettlementTimeout     time.Duration
+	Tracer                TransferLifecycleTracer
+}
+
+func (config testTransferJobConfig) production() TransferJobConfig {
+	return TransferJobConfig{
+		ReceiveIntent:         config.ReceiveIntent,
+		JobID:                 config.JobID,
+		ProtocolSessionID:     config.ProtocolSessionID,
+		FileQueueCapacity:     config.FileQueueCapacity,
+		GenerationReplayPages: config.GenerationReplayPages,
+		Catalog:               config.Catalog,
+		Revisions:             config.Revisions,
+		Blocks:                config.Blocks,
+		Materializer:          config.Materializer,
+		SettlementTimeout:     config.SettlementTimeout,
+		Tracer:                config.Tracer,
+	}
+}
+
+func newTestTransferJob(t *testing.T, config testTransferJobConfig) (*TransferJob, error) {
 	t.Helper()
-	if config.Intent.IsZero() {
-		backend := jobOutputBackend
-		if provider, ok := config.Output.(interface{ BackendID() OutputBackendID }); ok {
-			backend = provider.BackendID()
-		}
-		config.Intent = testTransferIntent(t, config.ShareInstance, config.SyntheticRoot, config.Rules, backend)
+	if config.ReceiveIntent.IsZero() {
+		config.ReceiveIntent = testReceiveIntent(t, config.ShareInstance, config.SyntheticRoot, config.Rules)
 	}
 	if config.JobID.IsZero() {
-		digest := config.Intent.Digest()
+		digest := config.ReceiveIntent.Digest()
 		jobID, err := TransferJobIDFromBytes(digest[:TransferJobIdentityBytes])
 		if err != nil {
 			t.Fatal(err)
 		}
 		config.JobID = jobID
 	}
-	return NewTransferJob(config)
+	return NewTransferJob(config.production())
 }
 
 type jobOutput struct {
-	mu                   sync.Mutex
-	share                catalog.ShareInstance
-	session              OutputSessionID
-	durable              map[string]content.RangeSet
-	transactions         map[string]*jobFileTransaction
-	immediate            map[string]FileSettlement
-	directories          []string
-	directoryAdmissions  []DirectoryAdmission
-	finalized            []string
-	finalizedAdmissions  []DirectoryAdmission
-	finished             JobOutcome
-	aborted              bool
-	ensureErr            error
-	admitErr             error
-	ensureFailures       map[string]error
-	finalizeErr          error
-	beginErr             error
-	finishErr            error
-	abortErr             error
-	nilTransaction       bool
-	transactionScript    jobTransactionScript
-	transactionScripts   map[string]jobTransactionScript
-	capabilitiesOverride *OutputCapabilities
-	beginHook            func(OutputFile)
-	intent               TransferIntent
-	events               []string
-	pauseCalls           int
-	completeCalls        int
-	completeSettlement   JobSettlementKind
-	pauseSettlement      JobSettlementKind
-	rawStart             *FileStart
-	directoryAdmission   func(OutputDirectory, DirectoryAdmission) (DirectoryAdmission, error)
-	directorySettlement  func(DirectoryAdmission) (DirectorySettlement, error)
-	directorySecret      [directoryAdmissionSecretBytes]byte
+	mu                       sync.Mutex
+	share                    catalog.ShareInstance
+	session                  OutputSessionID
+	durable                  map[string]content.RangeSet
+	transactions             map[string]*jobFileTransaction
+	immediate                map[string]FileSettlement
+	directories              []string
+	directoryAdmissions      []DirectoryAdmission
+	finalized                []string
+	finalizedAdmissions      []DirectoryAdmission
+	finished                 DirectTreeOutcome
+	aborted                  bool
+	ensureErr                error
+	admitErr                 error
+	returnSessionOnOpenError bool
+	ensureFailures           map[string]error
+	finalizeErr              error
+	beginErr                 error
+	finishErr                error
+	abortErr                 error
+	nilTransaction           bool
+	transactionScript        jobTransactionScript
+	transactionScripts       map[string]jobTransactionScript
+	capabilitiesOverride     *DirectTreeCapabilities
+	beginHook                func(MaterializationFile)
+	intent                   ReceiveIntent
+	binding                  DirectTreeSessionBinding
+	events                   []string
+	pauseCalls               int
+	completeCalls            int
+	completeSettlement       DirectTreeSettlementKind
+	pauseSettlement          DirectTreeSettlementKind
+	rawStart                 *FileStart
+	directoryAdmission       func(MaterializationDirectory, DirectoryAdmission) (DirectoryAdmission, error)
+	directorySettlement      func(DirectoryAdmission) (DirectorySettlement, error)
+	directorySecret          [directoryAdmissionSecretBytes]byte
 }
 
 func newJobOutput(share catalog.ShareInstance) *jobOutput {
 	// A monotonic nonce prevents independent fake sessions from sharing receipt
 	// authority while keeping the test data deterministic and failure-free.
 	directorySecret := sha256.Sum256(fmt.Appendf(nil,
-		"%s/%x/%d", jobOutputDirectorySecretDomain, share.Bytes(), jobOutputSessionNonce.Add(1),
+		"%s/%x/%d", jobMaterializationDirectorySecretDomain, share.Bytes(), jobDirectTreeSessionNonce.Add(1),
 	))
 	return &jobOutput{
 		share: share, session: transferID[OutputSessionID](44), durable: make(map[string]content.RangeSet),
@@ -347,31 +401,43 @@ func newJobOutput(share catalog.ShareInstance) *jobOutput {
 	}
 }
 
-func (o *jobOutput) BackendID() OutputBackendID { return jobOutputBackend }
 func (o *jobOutput) SessionID() OutputSessionID { return o.session }
-func (o *jobOutput) Capabilities() OutputCapabilities {
+func (o *jobOutput) Binding() DirectTreeSessionBinding {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.binding
+}
+func (o *jobOutput) Capabilities() DirectTreeCapabilities {
 	if o.capabilitiesOverride != nil {
 		return *o.capabilitiesOverride
 	}
-	capabilities, _ := NewOutputCapabilities(OutputCapabilities{
-		Durability: DurabilityPowerLoss, Mode: OutputNativeTree, RandomWrite: true,
+	capabilities, _ := NewDirectTreeCapabilities(DirectTreeCapabilities{
+		Durability: DurabilityPowerLoss, RandomWrite: true,
 		FileFailureIsolation: true, ModifiedTime: true,
 	})
 	return capabilities
 }
 
-func (o *jobOutput) OpenOutput(_ context.Context, intent TransferIntent) (OutputSession, error) {
+func (o *jobOutput) OpenDirectTree(_ context.Context, intent ReceiveIntent) (DirectTreeSession, error) {
+	binding, err := BindDirectTreeSession(intent)
+	if err != nil {
+		return nil, err
+	}
 	o.mu.Lock()
 	o.intent = intent
+	o.binding = binding
 	o.events = append(o.events, "open")
 	o.mu.Unlock()
 	if o.admitErr != nil {
+		if o.returnSessionOnOpenError {
+			return o, o.admitErr
+		}
 		return nil, o.admitErr
 	}
 	return o, nil
 }
 
-func (o *jobOutput) AdmitDirectory(_ context.Context, directory OutputDirectory) (DirectoryAdmission, error) {
+func (o *jobOutput) AdmitDirectory(_ context.Context, directory MaterializationDirectory) (DirectoryAdmission, error) {
 	if o.admitErr != nil {
 		return DirectoryAdmission{}, o.admitErr
 	}
@@ -422,7 +488,7 @@ func (o *jobOutput) FinalizeDirectory(
 	return NewFinalizedDirectorySettlement(admission)
 }
 
-func (o *jobOutput) BeginFile(_ context.Context, file OutputFile) (FileStart, error) {
+func (o *jobOutput) BeginFile(_ context.Context, file MaterializationFile) (FileStart, error) {
 	o.mu.Lock()
 	o.events = append(o.events, "begin:"+file.Path)
 	o.mu.Unlock()
@@ -438,10 +504,10 @@ func (o *jobOutput) BeginFile(_ context.Context, file OutputFile) (FileStart, er
 	if settlement, ok := o.immediate[file.Path]; ok {
 		return NewFileSettlementStart(settlement)
 	}
-	var identity OutputObjectIdentity
+	var identity OwnedObjectID
 	digest := sha256.Sum256([]byte(file.Path))
 	copy(identity[:], digest[:])
-	binding, err := BindOutputFileTarget(file.Target, identity)
+	binding, err := BindFileMaterializationTarget(file.Target, identity)
 	if err != nil {
 		return FileStart{}, err
 	}
@@ -464,36 +530,39 @@ func (o *jobOutput) BeginFile(_ context.Context, file OutputFile) (FileStart, er
 	return NewFileTransactionStart(transaction, verified)
 }
 
-func (o *jobOutput) CompleteJob(_ context.Context, outcome JobOutcome) (JobSettlement, error) {
+func (o *jobOutput) FinalizeTree(_ context.Context, outcome DirectTreeOutcome) (DirectTreeSettlement, error) {
 	o.mu.Lock()
 	o.finished = outcome
 	o.completeCalls++
 	o.events = append(o.events, "complete")
 	o.mu.Unlock()
 	if o.finishErr != nil {
-		return JobSettlement{}, o.finishErr
+		return DirectTreeSettlement{}, o.finishErr
 	}
 	kind := o.completeSettlement
 	if kind == 0 {
-		kind = JobClosed
+		kind = DirectTreeSettlementPublished
+		if outcome == DirectTreeOutcomePartialDirectory {
+			kind = DirectTreeSettlementPartialDirectory
+		}
 	}
-	return NewJobSettlement(kind)
+	return NewDirectTreeSettlement(kind)
 }
 
-func (o *jobOutput) PauseJob(context.Context, JobPauseReason) (JobSettlement, error) {
+func (o *jobOutput) PauseTree(context.Context, JobPauseReason) (DirectTreeSettlement, error) {
 	o.mu.Lock()
 	o.aborted = true
 	o.pauseCalls++
 	o.events = append(o.events, "pause")
 	o.mu.Unlock()
 	if o.abortErr != nil {
-		return JobSettlement{}, o.abortErr
+		return DirectTreeSettlement{}, o.abortErr
 	}
 	kind := o.pauseSettlement
 	if kind == 0 {
-		kind = JobPaused
+		kind = DirectTreeSettlementResumable
 	}
-	return NewJobSettlement(kind)
+	return NewDirectTreeSettlement(kind)
 }
 
 type jobTransactionScript struct {
@@ -518,7 +587,7 @@ type jobTransactionScript struct {
 
 type jobFileTransaction struct {
 	output        *jobOutput
-	binding       OutputFileBinding
+	binding       MaterializedFileBinding
 	durable       content.RangeSet
 	transient     content.RangeSet
 	pending       content.RangeSet
@@ -531,7 +600,7 @@ type jobFileTransaction struct {
 	script        jobTransactionScript
 }
 
-func (t *jobFileTransaction) Binding() OutputFileBinding { return t.binding }
+func (t *jobFileTransaction) Binding() MaterializedFileBinding { return t.binding }
 
 func (t *jobFileTransaction) WriteRange(_ context.Context, offset uint64, data []byte) error {
 	if t.script.writeErr != nil {
@@ -605,7 +674,7 @@ func (t *jobFileTransaction) Commit(context.Context) (FileSettlement, error) {
 		completed = t.transient
 	}
 	if !RangesCoverFile(t.binding.ExactSize(), completed) {
-		return FileSettlement{}, ErrIncompleteOutputFile
+		return FileSettlement{}, ErrIncompleteMaterializationFile
 	}
 	t.committed = true
 	kind := t.script.commitSettlement
@@ -669,7 +738,7 @@ func (t *jobFileTransaction) Retire(_ context.Context, reason FileRetireReason) 
 }
 
 func newJobFileSettlement(
-	binding OutputFileBinding,
+	binding MaterializedFileBinding,
 	kind FileSettlementKind,
 	checkpoint VerifiedDurableRanges,
 ) (FileSettlement, error) {
@@ -677,7 +746,7 @@ func newJobFileSettlement(
 	case FilePublished, FilePaused, FilePublishBlocked:
 		return NewVerifiedFileSettlement(kind, checkpoint)
 	case FileQuarantined:
-		reference, err := NewOutputStateRef(binding.OutputSessionID(), binding.Locator().Digest())
+		reference, err := NewMaterializationStateRef(binding.OutputSessionID(), binding.Locator().Digest())
 		if err != nil {
 			return FileSettlement{}, err
 		}

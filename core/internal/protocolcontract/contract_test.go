@@ -98,10 +98,6 @@ const (
 	applicationRelaySeconds             = 8
 	relaySessionTombstoneSeconds        = 60
 	maxOpaqueCiphertextBytes            = 64 << 10
-	opfsStagingJobBytes          uint64 = 8 << 30
-	opfsStagingProcessBytes      uint64 = 16 << 30
-	opfsMinimumReserveBytes             = 512 << 20
-	outputOpenTransactions              = 32
 	sessionCodeSenderStopped            = 0x1008
 	v2RelayWebSocketPath                = "/v2/ws"
 
@@ -137,6 +133,13 @@ const (
 	labelSessionAuth = "windshare/v2 session-auth"
 	labelTrafficR2S  = "windshare/v2 traffic/receiver-to-sender"
 	labelTrafficS2R  = "windshare/v2 traffic/sender-to-receiver"
+)
+
+const (
+	defaultOPFSJobWorkspaceLimit     uint64 = 8 << 30
+	defaultOPFSProcessWorkspaceLimit uint64 = 16 << 30
+	minimumOPFSQuotaReserve                 = 512 << 20
+	defaultPortableArtifactLimit            = 64 << 20
 )
 
 type vectorFile struct {

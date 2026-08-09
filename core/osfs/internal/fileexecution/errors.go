@@ -22,6 +22,7 @@ var (
 	ErrRetirementUnauthorized = errors.New("file retirement reason is not authorized")
 	ErrPublicationAmbiguous   = errors.New("file publication did not reach a provable durable cut")
 	ErrRetirementAmbiguous    = errors.New("file retirement did not reach a provable ordered cut")
+	ErrTargetOwnershipUnknown = errors.New("file target ownership is unknown")
 )
 
 func newOutputFault(scope fault.Scope, code fault.OutputCode, cause error) error {

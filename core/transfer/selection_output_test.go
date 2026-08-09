@@ -3,7 +3,6 @@ package transfer
 import (
 	"errors"
 	"math"
-	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -70,7 +69,7 @@ func TestSelectionRulesRejectAmbiguousAndDuplicateTargets(t *testing.T) {
 }
 
 func TestPathSelectionRulesDiscoverOnlyAuthenticatedTargetAncestors(t *testing.T) {
-	rules, err := NewPathSelectionRules([]string{"folder/file.bin", "folder/file.bin"})
+	rules, err := NewPathSelectionRules([]string{"folder/file.bin"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +89,9 @@ func TestPathSelectionRulesDiscoverOnlyAuthenticatedTargetAncestors(t *testing.T
 	}
 	if _, err := NewPathSelectionRules(nil); !errors.Is(err, ErrInvalidSelectionRules) {
 		t.Fatalf("empty path rules error=%v", err)
+	}
+	if _, err := NewPathSelectionRules([]string{"folder/file.bin", "folder/file.bin"}); !errors.Is(err, ErrInvalidSelectionRules) {
+		t.Fatalf("duplicate path rules error=%v", err)
 	}
 	if _, err := NewSelectionRules(false, make([]SelectionOverride, MaxSelectionRuleOverrides+1)); !errors.Is(err, ErrInvalidSelectionRules) {
 		t.Fatalf("oversized override rules error=%v", err)
@@ -113,16 +115,16 @@ func TestSelectionMeasureExclusiveThresholdsAndAbsorbingLarge(t *testing.T) {
 		bytes    uint64
 		terminal bool
 		failed   bool
-		want     SelectionClass
+		want     ConnectionSizeClass
 	}{
-		{name: "empty terminal", terminal: true, want: SelectionSmall},
-		{name: "twenty nine", files: 29, terminal: true, want: SelectionSmall},
-		{name: "thirty", files: 30, want: SelectionLarge},
-		{name: "byte below", bytes: SmallTransferByteLimit - 1, terminal: true, want: SelectionSmall},
-		{name: "byte exact", bytes: SmallTransferByteLimit, want: SelectionLarge},
-		{name: "unfinished", files: 29, want: SelectionUnknown},
-		{name: "failed", files: 1, terminal: true, failed: true, want: SelectionUnknown},
-		{name: "failed after large", files: 30, terminal: true, failed: true, want: SelectionLarge},
+		{name: "empty terminal", terminal: true, want: ConnectionSizeSmall},
+		{name: "twenty nine", files: 29, terminal: true, want: ConnectionSizeSmall},
+		{name: "thirty", files: 30, want: ConnectionSizeLarge},
+		{name: "byte below", bytes: SmallTransferByteLimit - 1, terminal: true, want: ConnectionSizeSmall},
+		{name: "byte exact", bytes: SmallTransferByteLimit, want: ConnectionSizeLarge},
+		{name: "unfinished", files: 29, want: ConnectionSizeUnknown},
+		{name: "failed", files: 1, terminal: true, failed: true, want: ConnectionSizeUnknown},
+		{name: "failed after large", files: 30, terminal: true, failed: true, want: ConnectionSizeLarge},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -142,14 +144,14 @@ func TestSelectionMeasureExclusiveThresholdsAndAbsorbingLarge(t *testing.T) {
 			if test.terminal {
 				tracker.finishDiscovery()
 			}
-			if got := tracker.snapshot().Class(); got != test.want {
+			if got := tracker.snapshot().ConnectionSizeClass(); got != test.want {
 				t.Fatalf("class=%v measure=%+v want=%v", got, tracker.snapshot(), test.want)
 			}
 		})
 	}
 	tracker := selectionTracker{measure: SelectionMeasure{DiscoveredBytes: math.MaxUint64 - 1}}
 	tracker.addFile(2)
-	if got := tracker.snapshot(); got.Class() != SelectionLarge || got.DiscoveredBytes != math.MaxUint64 {
+	if got := tracker.snapshot(); got.ConnectionSizeClass() != ConnectionSizeLarge || got.DiscoveredBytes != math.MaxUint64 {
 		t.Fatalf("overflow measure=%+v", got)
 	}
 }
@@ -183,17 +185,16 @@ func TestRangeAlgebraProducesCanonicalSparseResume(t *testing.T) {
 	}
 }
 
-func TestOutputBindingsDurableRangesAndCapabilities(t *testing.T) {
+func TestMaterializationBindingsDurableRangesAndCapabilities(t *testing.T) {
 	descriptor := transferDescriptor(t, 1)
-	backend, _ := NewOutputBackendID("test/backend")
 	session := transferID[OutputSessionID](8)
-	locator, err := NewPathOutputLocator("folder/file.bin")
+	locator, err := NewPathMaterializationLocator("folder/file.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var identity OutputObjectIdentity
+	var identity OwnedObjectID
 	identity[0] = 9
-	binding, err := NewOutputFileBinding(backend, session, descriptor, locator, identity)
+	binding, err := NewMaterializedFileBinding(session, descriptor, locator, identity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,26 +207,22 @@ func TestOutputBindingsDurableRangesAndCapabilities(t *testing.T) {
 	if _, err := VerifyDurableRanges(binding, 0, outside); !errors.Is(err, ErrInvalidOutputBinding) {
 		t.Fatalf("outside durable error=%v", err)
 	}
-	if _, err := NewPathOutputLocator("../escape"); err == nil {
+	if _, err := NewPathMaterializationLocator("../escape"); err == nil {
 		t.Fatal("escaping output locator accepted")
 	}
-	if _, err := NewOutputObjectLocator(make([]byte, 31)); err == nil {
+	if _, err := NewMaterializationObjectLocator(make([]byte, 31)); err == nil {
 		t.Fatal("short handle digest accepted")
 	}
 
-	zip, err := NewOutputCapabilities(OutputCapabilities{
-		Durability: DurabilityNone, Mode: OutputZIPStream, ArchiveBoundary: ArchiveFailureAtMemberStart,
+	capabilities, err := NewDirectTreeCapabilities(DirectTreeCapabilities{
+		Durability: DurabilityPowerLoss, RandomWrite: true,
+		FileFailureIsolation: true, ModifiedTime: true,
 	})
-	if err != nil || zip.FileFailureIsolation || zip.RandomWrite {
-		t.Fatalf("zip capabilities=%+v err=%v", zip, err)
+	if err != nil || !capabilities.FileFailureIsolation || !capabilities.RandomWrite {
+		t.Fatalf("DirectTree capabilities=%+v err=%v", capabilities, err)
 	}
-	if _, err := NewOutputCapabilities(OutputCapabilities{
-		Mode: OutputZIPStream, FileFailureIsolation: true, ArchiveBoundary: ArchiveFailureAtMemberStart,
-	}); err == nil {
-		t.Fatal("ZIP falsely claimed file isolation")
-	}
-	if _, err := NewOutputCapabilities(OutputCapabilities{Mode: OutputNativeTree, ArchiveBoundary: ArchiveFailureAtMemberStart}); err == nil {
-		t.Fatal("native tree accepted ZIP member boundary")
+	if _, err := NewDirectTreeCapabilities(DirectTreeCapabilities{Durability: DurabilityPowerLoss + 1}); err == nil {
+		t.Fatal("unknown durability level accepted")
 	}
 }
 
@@ -242,43 +239,37 @@ func TestOutputIdentityLocatorAndErrorValidationBranches(t *testing.T) {
 	if _, err := OutputSessionIDFromBytes(make([]byte, OutputSessionIdentityBytes)); err == nil {
 		t.Fatal("zero output session identity accepted")
 	}
-	objectBytes := make([]byte, OutputObjectIdentityBytes)
+	objectBytes := make([]byte, OwnedObjectIdentityBytes)
 	objectBytes[0] = 2
-	object, err := OutputObjectIdentityFromBytes(objectBytes)
-	if err != nil || object.IsZero() || len(object.Bytes()) != OutputObjectIdentityBytes {
+	object, err := OwnedObjectIDFromBytes(objectBytes)
+	if err != nil || object.IsZero() || len(object.Bytes()) != OwnedObjectIdentityBytes {
 		t.Fatalf("object=%x err=%v", object, err)
 	}
-	if _, err := OutputObjectIdentityFromBytes(objectBytes[:8]); err == nil {
+	if _, err := OwnedObjectIDFromBytes(objectBytes[:8]); err == nil {
 		t.Fatal("short object identity accepted")
 	}
-	if _, err := OutputObjectIdentityFromBytes(make([]byte, OutputObjectIdentityBytes)); err == nil {
+	if _, err := OwnedObjectIDFromBytes(make([]byte, OwnedObjectIdentityBytes)); err == nil {
 		t.Fatal("zero object identity accepted")
-	}
-	for _, backend := range []string{"", " leading", "trailing ", strings.Repeat("x", MaxOutputBackendIDBytes+1)} {
-		if _, err := NewOutputBackendID(backend); err == nil {
-			t.Fatalf("invalid backend %q accepted", backend)
-		}
 	}
 	handleDigest := make([]byte, 32)
 	handleDigest[0] = 3
-	handle, err := NewOutputObjectLocator(handleDigest)
-	if err != nil || handle.Kind() != OutputObjectLocator || handle.Digest() == (OutputLocatorDigest{}) || handle.CanonicalPath() != "" {
+	handle, err := NewMaterializationObjectLocator(handleDigest)
+	if err != nil || handle.Kind() != MaterializationObjectLocator || handle.Digest() == (MaterializationLocatorDigest{}) || handle.CanonicalPath() != "" {
 		t.Fatalf("handle=%+v err=%v", handle, err)
 	}
-	if _, err := NewOutputObjectLocator(make([]byte, 32)); err == nil {
+	if _, err := NewMaterializationObjectLocator(make([]byte, 32)); err == nil {
 		t.Fatal("zero handle digest accepted")
 	}
 
 	descriptor := transferDescriptor(t, 1)
-	backend, _ := NewOutputBackendID("test/backend")
-	binding, err := NewOutputFileBinding(backend, session, descriptor, handle, object)
-	if err != nil || binding.ObjectIdentity() != object || binding.Locator().Kind() != OutputObjectLocator {
+	binding, err := NewMaterializedFileBinding(session, descriptor, handle, object)
+	if err != nil || binding.ObjectIdentity() != object || binding.Locator().Kind() != MaterializationObjectLocator {
 		t.Fatalf("binding=%+v err=%v", binding, err)
 	}
-	if _, err := NewOutputFileBinding("", session, descriptor, handle, object); err == nil {
-		t.Fatal("binding without backend accepted")
+	if _, err := NewMaterializedFileBinding(OutputSessionID{}, descriptor, handle, object); err == nil {
+		t.Fatal("binding without an opened DirectTree session accepted")
 	}
-	if _, err := VerifyDurableRanges(OutputFileBinding{}, 0, content.RangeSet{}); err == nil {
+	if _, err := VerifyDurableRanges(MaterializedFileBinding{}, 0, content.RangeSet{}); err == nil {
 		t.Fatal("durable ranges without binding accepted")
 	}
 	empty, err := MergeRanges()
@@ -289,16 +280,9 @@ func TestOutputIdentityLocatorAndErrorValidationBranches(t *testing.T) {
 		t.Fatal("oversized file resume accepted")
 	}
 
-	invalidCapabilities := []OutputCapabilities{
-		{Durability: DurabilityPowerLoss + 1, Mode: OutputNativeTree},
-		{Mode: 0},
-		{Mode: OutputSingleFileStream, RandomWrite: true},
-		{Mode: OutputSingleFileStream, FileFailureIsolation: true},
-		{Durability: DurabilityProcessRestart, Mode: OutputSingleFileStream},
-		{Mode: OutputZIPStream, ArchiveBoundary: ArchiveFailureNotApplicable},
-	}
+	invalidCapabilities := []DirectTreeCapabilities{{Durability: DurabilityPowerLoss + 1}}
 	for index, capabilities := range invalidCapabilities {
-		if _, err := NewOutputCapabilities(capabilities); err == nil {
+		if _, err := NewDirectTreeCapabilities(capabilities); err == nil {
 			t.Fatalf("invalid capabilities %d accepted: %+v", index, capabilities)
 		}
 	}
