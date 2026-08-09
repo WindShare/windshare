@@ -378,12 +378,6 @@ func writeRecordFramedU64(writer io.Writer, value uint64) {
 	writeRecordFrame(writer, encoded[:])
 }
 
-func writeRecordU32(writer io.Writer, value uint32) {
-	var encoded [4]byte
-	binary.BigEndian.PutUint32(encoded[:], value)
-	_, _ = writer.Write(encoded[:])
-}
-
 func writeRecordU64(writer io.Writer, value uint64) {
 	var encoded [8]byte
 	binary.BigEndian.PutUint64(encoded[:], value)

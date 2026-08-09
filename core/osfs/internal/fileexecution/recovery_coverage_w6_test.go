@@ -461,8 +461,10 @@ func TestStoreRecordCrashCutUsesObservationAsTheOnlyInstallAuthority(t *testing.
 		})
 	}
 
-	if _, err := engine.storeRecord(nil, &previous, next); !errors.Is(err, ErrCheckpointBinding) {
-		t.Fatalf("nil store context error = %v", err)
+	if _, err := engine.storeRecord(
+		context.TODO(), &previous, checkpointmodel.Record{},
+	); !errors.Is(err, ErrCheckpointBinding) {
+		t.Fatalf("invalid next record error = %v", err)
 	}
 	foreignPrevious := mustForeignExecutionRecord(t, previous)
 	if _, err := engine.storeRecord(context.Background(), &foreignPrevious, next); !errors.Is(err, ErrCheckpointBinding) {

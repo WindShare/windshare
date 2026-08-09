@@ -282,9 +282,7 @@ func (recorder *nativeLifecycleRecorder) replace(spec checkpointmodel.LifecycleS
 
 func (recorder *nativeLifecycleRecorder) nextExpiry() uint64 {
 	now := recorder.authority.now().UnixMilli()
-	if now < 0 {
-		now = 0
-	}
+	now = max(now, 0)
 	expires, err := checkpointmodel.NextStableExpiry(uint64(now))
 	if err != nil {
 		return math.MaxUint64

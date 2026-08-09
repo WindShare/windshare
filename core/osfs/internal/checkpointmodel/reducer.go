@@ -32,40 +32,64 @@ func ValidateTransition(previous, next Record) error {
 		next.checkpointGeneration < previous.checkpointGeneration {
 		return ErrRecordGeneration
 	}
-	if next.checkpointGeneration == previous.checkpointGeneration {
-		if previous.commitState == CommitCandidate {
-			// Candidate promotion is the atomic data cut, so both generations and
-			// the verified ranges remain unchanged.
-			if next.commitState <= previous.commitState ||
-				next.stateGeneration != previous.stateGeneration ||
-				!slices.Equal(previous.verifiedRanges, next.verifiedRanges) ||
-				(previous.phase != next.phase &&
-					(previous.phase != PhasePublishing || next.phase != PhasePublished)) {
-				return ErrRecordGeneration
-			}
-		} else if next.stateGeneration <= previous.stateGeneration ||
-			!slices.Equal(previous.verifiedRanges, next.verifiedRanges) ||
-			!ValidLifecycleTransition(
-				previous.phase,
-				previous.commitState,
-				next.phase,
-				next.commitState,
-			) {
-			return ErrRecordGeneration
-		}
-	} else if previous.commitState != CommitVerified ||
-		next.checkpointGeneration != previous.checkpointGeneration+1 ||
-		next.stateGeneration != previous.stateGeneration+1 ||
-		next.commitState != CommitCandidate || next.phase != previous.phase {
-		// A new range generation is a write-ahead candidate at exactly one
-		// successor cut. Phase changes are separate committed state transitions.
-		return ErrRecordGeneration
+	if err := validateGenerationCut(previous, next); err != nil {
+		return err
 	}
 	if previous.commitState == CommitPublished || previous.phase == PhasePublished {
 		return fmt.Errorf("%w: published record is immutable", ErrRecordGeneration)
 	}
 	if !rangesContain(next.verifiedRanges, previous.verifiedRanges) {
 		return fmt.Errorf("%w: verified ranges regressed", ErrRecordGeneration)
+	}
+	return nil
+}
+
+func validateGenerationCut(previous, next Record) error {
+	if next.checkpointGeneration == previous.checkpointGeneration {
+		return validateStateCut(previous, next)
+	}
+	return validateCheckpointCut(previous, next)
+}
+
+func validateStateCut(previous, next Record) error {
+	if previous.commitState == CommitCandidate {
+		return validateCandidatePromotion(previous, next)
+	}
+	if next.stateGeneration <= previous.stateGeneration ||
+		!slices.Equal(previous.verifiedRanges, next.verifiedRanges) ||
+		!ValidLifecycleTransition(
+			previous.phase,
+			previous.commitState,
+			next.phase,
+			next.commitState,
+		) {
+		return ErrRecordGeneration
+	}
+	return nil
+}
+
+func validateCandidatePromotion(previous, next Record) error {
+	// Promotion commits the existing write-ahead image, so it cannot create a
+	// new generation or change the bytes whose durability it is certifying.
+	phasePreserved := previous.phase == next.phase
+	publishingCommitted := previous.phase == PhasePublishing && next.phase == PhasePublished
+	if next.commitState <= previous.commitState ||
+		next.stateGeneration != previous.stateGeneration ||
+		!slices.Equal(previous.verifiedRanges, next.verifiedRanges) ||
+		(!phasePreserved && !publishingCommitted) {
+		return ErrRecordGeneration
+	}
+	return nil
+}
+
+func validateCheckpointCut(previous, next Record) error {
+	if previous.commitState != CommitVerified ||
+		next.checkpointGeneration != previous.checkpointGeneration+1 ||
+		next.stateGeneration != previous.stateGeneration+1 ||
+		next.commitState != CommitCandidate || next.phase != previous.phase {
+		// A new range generation is a write-ahead candidate at exactly one
+		// successor cut. Phase changes are separate committed state transitions.
+		return ErrRecordGeneration
 	}
 	return nil
 }

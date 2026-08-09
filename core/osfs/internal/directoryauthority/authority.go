@@ -272,8 +272,7 @@ func (authority *Authority) beginMaterialization(
 		return nil, false, directoryMaterialization{}, noMutation(ErrInvalidClaim)
 	}
 	if !claim.admission.IsZero() {
-		admissionKey := string(claim.admission.Bytes())
-		if owner, exists := authority.admissions[admissionKey]; exists && owner != claim.id {
+		if owner, exists := authority.admissions[string(claim.admission.Bytes())]; exists && owner != claim.id {
 			return nil, false, directoryMaterialization{}, noMutation(ErrClaimConflict)
 		}
 	}

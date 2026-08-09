@@ -325,8 +325,8 @@ func newFixtureEngine(
 ) *Engine {
 	t.Helper()
 	random := make([]byte, transfer.OwnedObjectIdentityBytes*MaximumObjectAllocationAttempts)
-	for block := 0; block < MaximumObjectAllocationAttempts; block++ {
-		for index := 0; index < transfer.OwnedObjectIdentityBytes; index++ {
+	for block := range MaximumObjectAllocationAttempts {
+		for index := range transfer.OwnedObjectIdentityBytes {
 			random[block*transfer.OwnedObjectIdentityBytes+index] = byte(block + 1)
 		}
 	}

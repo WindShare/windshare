@@ -258,14 +258,14 @@ func TestTransferJobRejectsForeignOrMissingImmediateSettlementAuthority(t *testi
 		{
 			name: "foreign published session",
 			configure: func(t *testing.T, output *jobOutput, descriptor content.FileRevisionDescriptor) {
-				settlement := immediatePublishedSettlement(t, output, descriptor, "file.bin", transferID[OutputSessionID](201))
+				settlement := immediatePublishedSettlement(t, descriptor, "file.bin", transferID[OutputSessionID](201))
 				output.immediate["file.bin"] = settlement
 			},
 		},
 		{
 			name: "noncanonical published locator",
 			configure: func(t *testing.T, output *jobOutput, descriptor content.FileRevisionDescriptor) {
-				settlement := immediatePublishedSettlement(t, output, descriptor, "other.bin", output.session)
+				settlement := immediatePublishedSettlement(t, descriptor, "other.bin", output.session)
 				output.immediate["file.bin"] = settlement
 			},
 		},
@@ -324,7 +324,6 @@ func TestTransferJobRejectsForeignOrMissingImmediateSettlementAuthority(t *testi
 
 func immediatePublishedSettlement(
 	t *testing.T,
-	output *jobOutput,
 	descriptor content.FileRevisionDescriptor,
 	path string,
 	session OutputSessionID,
