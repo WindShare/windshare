@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
+	"github.com/windshare/windshare/core/osfs/internal/outputsession"
 )
 
 type preparingIdentityDirectory struct {
@@ -66,4 +69,81 @@ func TestPersistentDirectoryIdentityClaimKeepsEnrollmentExplicit(t *testing.T) {
 			t.Fatalf("claim=%q supported=%t err=%v", claim, supported, err)
 		}
 	})
+}
+
+func TestPersistentOwnedDirectoryIDBindsTheEnrollmentClaim(t *testing.T) {
+	directory := &preparingIdentityDirectory{
+		fakeDirectory: &fakeDirectory{},
+		prepared:      []byte("stable claim"),
+		observed:      []byte("untrusted observation"),
+	}
+	first, err := PersistentOwnedDirectoryID(directory)
+	if err != nil || first.IsZero() {
+		t.Fatalf("first identity = (%x, %v)", first.Bytes(), err)
+	}
+	second, err := PersistentOwnedDirectoryID(directory)
+	if err != nil || first != second {
+		t.Fatalf("stable identity = (%x, %x, %v)", first.Bytes(), second.Bytes(), err)
+	}
+	other, err := PersistentOwnedDirectoryID(&preparingIdentityDirectory{
+		fakeDirectory: &fakeDirectory{},
+		prepared:      []byte("different claim"),
+	})
+	if err != nil || other.IsZero() || other == first {
+		t.Fatalf("distinct identity = (%x, %v)", other.Bytes(), err)
+	}
+	if directory.prepareCalls != 2 || directory.observeCalls != 0 {
+		t.Fatalf("identity calls = (prepare=%d observe=%d)", directory.prepareCalls, directory.observeCalls)
+	}
+}
+
+func TestPersistentOwnedDirectoryIDRejectsUnprovableEnrollment(t *testing.T) {
+	failure := errors.New("prepare identity")
+	tests := []struct {
+		name      string
+		directory outputcap.Directory
+		want      error
+		cause     error
+	}{
+		{name: "nil directory", want: ErrRetainedAuthorityChanged},
+		{name: "unsupported directory", directory: &fakeDirectory{}, want: outputcap.ErrRecoverableOutputUnsupported},
+		{
+			name: "preparation failure",
+			directory: &preparingIdentityDirectory{
+				fakeDirectory: &fakeDirectory{},
+				prepareErr:    failure,
+			},
+			want: ErrRetainedAuthorityChanged, cause: failure,
+		},
+		{
+			name:      "empty claim",
+			directory: &preparingIdentityDirectory{fakeDirectory: &fakeDirectory{}},
+			want:      ErrRetainedAuthorityChanged,
+		},
+		{
+			name: "oversized claim",
+			directory: &preparingIdentityDirectory{
+				fakeDirectory: &fakeDirectory{},
+				prepared:      make([]byte, outputcap.MaxRootIdentityClaimBytes+1),
+			},
+			want: ErrRetainedAuthorityChanged,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := PersistentOwnedDirectoryID(test.directory)
+			if !errors.Is(err, test.want) || test.cause != nil && !errors.Is(err, test.cause) {
+				t.Fatalf("identity error = %v", err)
+			}
+		})
+	}
+}
+
+func TestOwnedDirectoryIDRejectsMissingAuthorityBeforeOpeningNativeState(t *testing.T) {
+	claim := outputsession.DirectoryClaim{}
+	for _, authority := range []*Authority{nil, {}} {
+		if _, err := authority.OwnedDirectoryID(claim); !errors.Is(err, ErrInvalidClaim) {
+			t.Fatalf("invalid claim error = %v", err)
+		}
+	}
 }
