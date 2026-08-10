@@ -33,29 +33,32 @@
 
 ## Project Overview
 
-WindShare is an open-source E2EE file/folder sharing tool. It creates links without pre-uploading, reading, or hashing content; receivers use the browser or CLI over WebRTC with relay fallback.
+WindShare is an open-source E2EE file/folder sharing tool. It creates links without pre-uploading, reading, or hashing content; receivers use the browser or CLI over authenticated relay/WebRTC lanes, with relay retained as fallback.
+
+The root Go module assembles the CLI, connectivity, concrete transports, and relay around the independently released, network-free `core` module. Local `go.work` also includes the independent performance-evidence module; `spikes/webrtc` remains an intentionally isolated evidence module.
 
 ```text
 .
+├── .github/workflows/             Ordinary CI, weekly suites, and core candidate release
 ├── core/                         Independent Go module; network-free reusable core
 │   ├── link/, senderobject/      Capability links and sealed transport-neutral objects
-│   ├── catalog/                  Per-directory frozen generations and pages
-│   ├── content/                  File revisions, leases, file-local blocks
-│   ├── session/                  ProtocolSession, pump/router/writer, catalog/content flows
+│   ├── catalog/                  Committed directory generations/pages, durable storage/recovery
+│   ├── content/                  File revisions, ranges, leases, keys, authenticated records
+│   ├── session/                  Authenticated protocol engine, catalog/content flows, sender/receiver runtime
 │   ├── framechannel/             Transport-neutral frame contract
-│   ├── transfer/                 Selection rules, jobs, OutputSession contract
+│   ├── transfer/                 Receive intents/plans, selection, jobs, file transactions, settlement
 │   ├── liveshare/                Sender/receiver runtime assembly
-│   ├── osfs/                     Root-confined sources, resumable output, atomic artifact publication
+│   ├── osfs/                     Root-confined sources, native resumable output, checkpoints/recovery
 │   ├── testvectors/              Canonical Go↔TypeScript protocol vectors
-│   └── internal/keyderiv/        HKDF key hierarchy
+│   └── internal/                 HKDF hierarchy, protocol contracts, and test fixtures
 ├── cmd/
-│   ├── windshare/                CLI sender and receiver
+│   ├── windshare/                Share/get/resume CLI and recovery management
 │   └── testprocessowner/         Test-only bounded process supervisor
 ├── connectivity/
-│   ├── v2signal/                 E2EE peer signaling validation
+│   ├── v2signal/                 E2EE signaling codec and validation
 │   └── v2peer/                   P2P attempt orchestration and lane adoption
 ├── transport/
-│   ├── relayv2/                  WebSocket FrameChannel adapter
+│   ├── relayv2/                  WebSocket relay FrameChannel and session lifecycle
 │   └── webrtc/                   Pion DataChannel adapter
 ├── relay/
 │   ├── cmd/wsrelay/              Relay server entry point
@@ -64,18 +67,24 @@ WindShare is an open-source E2EE file/folder sharing tool. It creates links with
 │   ├── signaling/v2endpoint/     WebSocket server and connection lifecycle
 │   └── httpapi/, connectionlimit/ Operational endpoints and admission limits
 ├── web/                          React/TypeScript browser receiver
-│   ├── src/crypto/, protocol/    WebCrypto and v2 object validation
-│   ├── src/catalog/, content/    Progressive catalog and file-local ranges
-│   ├── src/session/, transport/  Browser runtime and frame channels
-│   ├── src/connectivity/         P2P/relay race and hot switching
+│   ├── src/crypto/, protocol/    Suite-02 links/key hierarchy, sealed-object auth, canonical CBOR/text
+│   ├── src/contracts/, session/  Browser FrameChannel contract and ProtocolSession runtime
+│   ├── src/catalog/, content/    Progressive catalog, revisions/ranges, leases, lane scheduling
+│   ├── src/unicode/              Pinned Unicode 15 path normalization and case folding
+│   ├── src/transport/            Relay/WebRTC channels and frame adapters
+│   ├── src/connectivity/         Signaling, path policy, and lane adoption
 │   ├── src/receiver/             Reconnect and protocol-generation supervision
-│   ├── src/transfer/, output/    Jobs, sinks, durable output sessions
-│   ├── src/preview/, ui/         Media preview and React interface
+│   ├── src/transfer/             Intent/projection, progressive discovery, jobs, settlement evidence
+│   ├── src/output/               Artifact planning/authority, materialization, publication, recovery
+│   ├── src/security/             Capability redaction and bounded diagnostics
+│   ├── src/preview/, ui/         Media preview and React receiver interface
 │   ├── scripts/browser-network-matrix/ Direct browser/Pion interop runner
+│   ├── test/                     Unit and browser component-contract tests
 │   └── e2e/                      Direct smoke and scheduled product scenarios
-├── internal/                     Process lifecycle, benchmarks, and focused network test support
+├── internal/                     Performance evidence, process ownership, test topology, and scenario/trace support
+├── integration/                  Native relayv2 and v2peer integration scenarios
 ├── e2e/                          Process-level Go end-to-end tests
+├── spikes/                       R0 feasibility and isolated Pion↔Chromium evidence
 ├── testdata/                     Focused test-topology fixtures
-├── scripts/ci/                   Local CI gate implementations
-└── docs/                         Protocol and security documentation
+└── scripts/ci/                   Local CI gate implementations
 ```
