@@ -89,11 +89,11 @@ count_exclude = [
   "go.sum",
 ]
 
-# Repository source roots (exact-match globs don't cover the root dir via "/**").
+# A trailing slash includes each selected source root and its whole subtree.
 # Keeping connectivity and internal runtime packages in scope prevents test
 # infrastructure from escaping the same module boundaries as product code.
 [[structure.rules]]
-scope = "{cmd,connectivity,core,internal,relay,transport}"
+scope = "{cmd,connectivity,core,internal,relay,transport}/"
 max_files = 20
 max_dirs = 25
 warn_dirs_at = 20
@@ -101,23 +101,7 @@ warn_files_at = 15
 reason = "Go source: keep packages small and flat"
 
 [[structure.rules]]
-scope = "{cmd,connectivity,core,internal,relay,transport}/**"
-max_files = 20
-max_dirs = 25
-warn_dirs_at = 20
-warn_files_at = 15
-reason = "Go source: keep packages small and flat"
-
-[[structure.rules]]
-scope = "web/{e2e,scripts,src,test}"
-max_files = 20
-max_dirs = 25
-warn_dirs_at = 20
-warn_files_at = 15
-reason = "Web source: keep component tree small and flat"
-
-[[structure.rules]]
-scope = "web/{e2e,scripts,src,test}/**"
+scope = "web/{e2e,scripts,src,test}/"
 max_files = 20
 max_dirs = 25
 warn_dirs_at = 20
