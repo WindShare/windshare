@@ -385,7 +385,8 @@ func (r *jobRun) completeDiscovery(
 	discoveryFailure *lifecycleFailure,
 ) JobResult {
 	workerCause := closedContextCause(runContext)
-	workerInterruptedDiscovery := workerCause != nil && workerCause == discoveryFailure
+	workerInterruptedDiscovery := (workerCause != nil && (workerCause == discoveryFailure || (discoveryFailure != nil && discoveryFailure.policy.canceled))) ||
+		(discoveryFailure != nil && discoveryFailure.policy.canceled)
 	discoveryIncomplete := discoveryFailure != nil &&
 		(!workerInterruptedDiscovery || !r.catalogTraversalComplete)
 	if discoveryFailure != nil {
@@ -416,11 +417,16 @@ func (r *jobRun) completeDiscovery(
 	})
 	close(fileQueue)
 	<-workerDone
+	// A worker error aborts runContext, which may cause active discovery to exit
+	// with a generic cancellation failure. Once the worker finishes, adopt its
+	// concrete failure as the primary root cause instead of keeping the cancellation symptom.
 	select {
 	case workerFailure := <-workerErr:
-		if r.terminationCause == nil || workerInterruptedDiscovery {
+		if r.terminationCause == nil || r.terminationCause.policy.canceled || workerInterruptedDiscovery {
 			r.terminationCause = workerFailure
 			cancel(workerFailure)
+		} else {
+			r.terminationCause = mergeLifecycleFailures(r.terminationCause, workerFailure)
 		}
 	default:
 	}
