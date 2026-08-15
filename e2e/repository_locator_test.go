@@ -15,7 +15,6 @@ import (
 
 const (
 	e2eRootModulePath            = "github.com/windshare/windshare"
-	e2eCoreModulePath            = "github.com/windshare/windshare/core"
 	e2eRelocationHelperEnv       = "WINDSHARE_E2E_RELOCATION_HELPER"
 	e2eRelocationExpectedRootEnv = "WINDSHARE_E2E_RELOCATION_EXPECTED_ROOT"
 )
@@ -39,7 +38,7 @@ func repoRoot() string {
 		})
 	})
 	if e2eRepositoryRootErr != nil {
-		panic("e2e: locate repository workspace: " + e2eRepositoryRootErr.Error())
+		panic("e2e: locate repository root: " + e2eRepositoryRootErr.Error())
 	}
 	return e2eRepositoryRoot
 }
@@ -64,33 +63,6 @@ func locateE2ERepositoryRoot(locator e2eRepositoryLocator) (string, error) {
 	if err := requireModuleIdentity(locator.readFile, filepath.Join(root, "go.mod"), e2eRootModulePath); err != nil {
 		return "", err
 	}
-	if err := requireModuleIdentity(
-		locator.readFile,
-		filepath.Join(root, "core", "go.mod"),
-		e2eCoreModulePath,
-	); err != nil {
-		return "", err
-	}
-	workPath := filepath.Join(root, "go.work")
-	workBytes, err := locator.readFile(workPath)
-	if err != nil {
-		return "", fmt.Errorf("read workspace identity %s: %w", workPath, err)
-	}
-	work, err := modfile.ParseWork(workPath, workBytes, nil)
-	if err != nil {
-		return "", fmt.Errorf("parse workspace identity %s: %w", workPath, err)
-	}
-	uses := make(map[string]bool, len(work.Use))
-	for _, use := range work.Use {
-		path := use.Path
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(root, path)
-		}
-		uses[filepath.Clean(path)] = true
-	}
-	if !uses[root] || !uses[filepath.Join(root, "core")] {
-		return "", errors.New("go.work must select the root and core module directories")
-	}
 	return root, nil
 }
 
@@ -103,28 +75,26 @@ func requireModuleIdentity(
 	if err != nil {
 		return fmt.Errorf("read module identity %s: %w", path, err)
 	}
-	if actual := modfile.ModulePath(encoded); actual != expectedModulePath {
+	parsed, err := modfile.Parse(path, encoded, nil)
+	if err != nil {
+		return fmt.Errorf("parse module identity %s: %w", path, err)
+	}
+	if parsed.Module == nil {
+		return fmt.Errorf("module identity %s has no module directive", path)
+	}
+	if actual := parsed.Module.Mod.Path; actual != expectedModulePath {
 		return fmt.Errorf("module identity %s = %q, want %q", path, actual, expectedModulePath)
 	}
 	return nil
 }
 
-func TestE2ERepositoryLocatorUsesBoundedWorkspaceIdentity(t *testing.T) {
+func TestE2ERepositoryLocatorUsesBoundedModuleIdentity(t *testing.T) {
 	root := t.TempDir()
 	packageDirectory := filepath.Join(root, "e2e")
-	if err := os.MkdirAll(filepath.Join(root, "core"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Mkdir(packageDirectory, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeRepositoryLocatorFixture(t, filepath.Join(root, "go.mod"), "module "+e2eRootModulePath+"\n")
-	writeRepositoryLocatorFixture(
-		t,
-		filepath.Join(root, "core", "go.mod"),
-		"module "+e2eCoreModulePath+"\n",
-	)
-	writeRepositoryLocatorFixture(t, filepath.Join(root, "go.work"), "go 1.26.5\n\nuse (\n\t.\n\t./core\n)\n")
 
 	located, err := locateE2ERepositoryRoot(e2eRepositoryLocator{
 		workingDirectory: func() (string, error) { return packageDirectory, nil },
@@ -135,6 +105,38 @@ func TestE2ERepositoryLocatorUsesBoundedWorkspaceIdentity(t *testing.T) {
 	}
 	if located != root {
 		t.Fatalf("located root = %q, want %q", located, root)
+	}
+}
+
+func TestE2ERepositoryLocatorRejectsInvalidRootModuleIdentity(t *testing.T) {
+	tests := []struct {
+		name      string
+		contents  string
+		writeFile bool
+		wantError string
+	}{
+		{name: "missing", wantError: "read module identity"},
+		{name: "malformed", contents: "module\n", writeFile: true, wantError: "parse module identity"},
+		{name: "wrong path", contents: "module example.com/not-windshare\n", writeFile: true, wantError: "want \"" + e2eRootModulePath + "\""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			packageDirectory := filepath.Join(root, "e2e")
+			if err := os.Mkdir(packageDirectory, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if test.writeFile {
+				writeRepositoryLocatorFixture(t, filepath.Join(root, "go.mod"), test.contents)
+			}
+			_, err := locateE2ERepositoryRoot(e2eRepositoryLocator{
+				workingDirectory: func() (string, error) { return packageDirectory, nil },
+				readFile:         os.ReadFile,
+			})
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v, want containing %q", err, test.wantError)
+			}
+		})
 	}
 }
 
@@ -154,7 +156,7 @@ func TestE2ERepositoryRootSupportsRelocatedTrimpathBinary(t *testing.T) {
 	relocatedBinary := filepath.Join(relocatedDirectory, exeName("e2e-relocation-contract"))
 	build := exec.Command(e2eGoExecutable(), "test", "-c", "-o", builtBinary, "./e2e")
 	build.Dir = root
-	build.Env = replaceEnvironment(os.Environ(), "GOFLAGS", "-trimpath")
+	build.Env = e2eChildEnvironment(replaceEnvironment(os.Environ(), "GOFLAGS", "-trimpath"))
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build trimpath relocation contract: %v\n%s", err, output)
 	}
@@ -171,6 +173,16 @@ func TestE2ERepositoryRootSupportsRelocatedTrimpathBinary(t *testing.T) {
 	)
 	if output, err := run.CombinedOutput(); err != nil {
 		t.Fatalf("run relocated trimpath contract: %v\n%s", err, output)
+	}
+}
+
+func TestE2EChildEnvironmentDisablesWorkspaceResolution(t *testing.T) {
+	environment := e2eChildEnvironment([]string{
+		"PATH=value", "GOWORK=auto", "gowork=unexpected", "OTHER=kept",
+	})
+	want := []string{"PATH=value", "OTHER=kept", "GOWORK=off"}
+	if strings.Join(environment, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("environment = %q, want %q", environment, want)
 	}
 }
 

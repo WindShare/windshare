@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/pion/webrtc/v4 v4.2.16
-	github.com/windshare/windshare/core v0.1.1
+	github.com/windshare/windshare v0.0.0
 )
 
 require (
@@ -32,5 +32,3 @@ require (
 )
 
 replace github.com/windshare/windshare => ../..
-
-replace github.com/windshare/windshare/core => ../../core

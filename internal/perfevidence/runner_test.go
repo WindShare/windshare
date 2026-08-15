@@ -121,14 +121,14 @@ func TestApplicationValidatesConfigurationBeforeLaunchingCommands(t *testing.T) 
 	}
 }
 
-func TestReplaceEnvironmentUsesOneLocalToolchainAssignment(t *testing.T) {
-	environment := replaceEnvironment(
-		[]string{"PATH=value", "gotoolchain=auto", "GOTOOLCHAIN=remote", "OTHER=kept"},
-		localToolchainEnvironment,
-		"local",
-	)
-	if !slices.Equal(environment, []string{"PATH=value", "GOTOOLCHAIN=local", "OTHER=kept"}) {
-		t.Fatalf("environment = %q", environment)
+func TestCommandEnvironmentPinsToolchainAndDisablesWorkspace(t *testing.T) {
+	environment := commandEnvironment([]string{
+		"PATH=value", "gotoolchain=auto", "GOTOOLCHAIN=remote",
+		"GOWORK=auto", "gowork=unexpected", "OTHER=kept",
+	})
+	want := []string{"PATH=value", "GOTOOLCHAIN=local", "GOWORK=off", "OTHER=kept"}
+	if !slices.Equal(environment, want) {
+		t.Fatalf("environment = %q, want %q", environment, want)
 	}
 }
 
@@ -140,6 +140,51 @@ func TestResolveRepositoryRootAcceptsExplicitWindShareRoot(t *testing.T) {
 	}
 	if resolved != filepath.Clean(repository) {
 		t.Fatalf("resolved = %q, want %q", resolved, repository)
+	}
+}
+
+func TestResolveRepositoryRootRejectsInvalidModuleIdentity(t *testing.T) {
+	tests := []struct {
+		name      string
+		contents  string
+		wantError string
+	}{
+		{name: "wrong module", contents: "module example.com/not-windshare\n", wantError: "want \"" + repositoryModulePath + "\""},
+		{name: "malformed module", contents: "module\n", wantError: "parse module identity"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(test.contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := resolveRepositoryRoot(root)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v, want containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestRepositoryLocatorDiscoversRootFromNestedDirectory(t *testing.T) {
+	root := filepath.Clean(filepath.Join(string(filepath.Separator), "windshare-locator-fixture"))
+	nested := filepath.Join(root, "internal", "perfevidence")
+	rootModule := filepath.Join(root, "go.mod")
+	located, err := locateRepositoryRoot("", repositoryLocator{
+		workingDirectory: func() (string, error) { return nested, nil },
+		absolutePath:     func(path string) (string, error) { return filepath.Clean(path), nil },
+		readFile: func(path string) ([]byte, error) {
+			if filepath.Clean(path) == rootModule {
+				return []byte("module " + repositoryModulePath + "\n"), nil
+			}
+			return nil, os.ErrNotExist
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if located != root {
+		t.Fatalf("located root = %q, want %q", located, root)
 	}
 }
 
@@ -202,14 +247,9 @@ func integerMetric(value int, unit string) string {
 func makeRepository(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, relative := range []string{"go.work", "go.mod", "core/go.mod"} {
-		path := filepath.Join(root, filepath.FromSlash(relative))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("module test\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	path := filepath.Join(root, "go.mod")
+	if err := os.WriteFile(path, []byte("module "+repositoryModulePath+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	return root
 }

@@ -6,6 +6,9 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
 Set-Location $repositoryRoot
+. scripts/ci/windows/go-package-sets.ps1
+$nonCorePackages = Get-WindShareGoPackageSet -Set non-core
+$corePackages = Get-WindShareGoPackageSet -Set core
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
 function Invoke-Step([string]$Label, [scriptblock]$Body) {
@@ -31,23 +34,17 @@ $coreProfile = Join-Path $profileDirectory 'core.cover.out'
 
 Write-Output '== coverage =='
 try {
-    Invoke-Step 'root short atomic coverage sweep' {
-        go test -short -count=1 -covermode=atomic "-coverprofile=$rootProfile" ./...
+    Invoke-Step 'non-core short atomic coverage sweep' {
+        go test -short -count=1 -covermode=atomic "-coverprofile=$rootProfile" $nonCorePackages
     }
-    Invoke-Step 'root coverage verdict' {
+    Invoke-Step 'non-core coverage verdict' {
         go-test-coverage --config=.testcoverage.yml "--profile=$rootProfile"
     }
     Invoke-Step 'core short atomic coverage sweep' {
-        go -C core test -short -count=1 -covermode=atomic "-coverprofile=$coreProfile" ./...
+        go test -short -count=1 -covermode=atomic "-coverprofile=$coreProfile" $corePackages
     }
-
-    Push-Location (Join-Path $repositoryRoot 'core')
-    try {
-        Invoke-Step 'core coverage verdict' {
-            go-test-coverage --config=.testcoverage.yml "--profile=$coreProfile"
-        }
-    } finally {
-        Pop-Location
+    Invoke-Step 'core coverage verdict' {
+        go-test-coverage --config=core/.testcoverage.yml "--profile=$coreProfile" --source-dir=core
     }
 
     Write-Output ('== coverage: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

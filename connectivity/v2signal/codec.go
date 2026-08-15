@@ -21,9 +21,10 @@ const (
 	MaximumUsernameBytes   = 256
 )
 
-// MessageKind mirrors the frozen E2E operation registry without importing the
-// independent core module. Root release builds must remain valid with GOWORK
-// disabled; the shared vector is the cross-module authority for these values.
+// MessageKind is the transport-neutral signaling codec's view of the frozen E2E
+// operation registry. Keeping the wire codec independent of the session runtime
+// lets signaling bodies be validated in isolation; canonical vectors lock these
+// duplicated values to protocolsession's registry.
 type MessageKind uint8
 
 const (

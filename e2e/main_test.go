@@ -16,6 +16,7 @@ type e2eBuildProfile string
 
 const (
 	goExecutableEnvironment                 = "WINDSHARE_GO_EXECUTABLE"
+	goWorkspaceEnvironment                  = "GOWORK"
 	e2eBuildProfilePlain    e2eBuildProfile = "plain"
 	e2eBuildProfileRace     e2eBuildProfile = "race"
 )
@@ -123,8 +124,8 @@ func loadE2EBinaries(t *testing.T) e2eBinaries {
 	return binaries
 }
 
-// buildE2EBinaries uses the repository workspace so the independently released
-// core module resolves to the source under test rather than a stale download.
+// Child builds disable ambient workspaces so developer-machine configuration
+// cannot replace the repository's single production dependency graph.
 func buildE2EBinaries(outDir string, profile e2eBuildProfile) (e2eBinaries, error) {
 	plan, err := e2eBuildPlan(outDir, profile)
 	if err != nil {
@@ -133,6 +134,7 @@ func buildE2EBinaries(outDir string, profile e2eBuildProfile) (e2eBinaries, erro
 	for _, target := range plan {
 		command := exec.Command(e2eGoExecutable(), target.arguments...)
 		command.Dir = repoRoot()
+		command.Env = e2eChildEnvironment(os.Environ())
 		if output, err := command.CombinedOutput(); err != nil {
 			return e2eBinaries{}, fmt.Errorf("build %s with %s profile: %w\n%s", target.packageID, profile, err, output)
 		}
@@ -140,6 +142,10 @@ func buildE2EBinaries(outDir string, profile e2eBuildProfile) (e2eBinaries, erro
 	return e2eBinaries{
 		relay: plan[0].output, windshare: plan[1].output, processOwner: plan[2].output,
 	}, nil
+}
+
+func e2eChildEnvironment(environment []string) []string {
+	return replaceEnvironment(environment, goWorkspaceEnvironment, "off")
 }
 
 func e2eGoExecutable() string {

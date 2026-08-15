@@ -1,0 +1,169 @@
+name: Root Module Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact 40-character commit SHA to release
+        required: true
+        type: string
+      version:
+        description: Root module version (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+  GOWORK: "off"
+
+jobs:
+  release:
+    name: Bind release authority
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      commit_sha: ${{ steps.release.outputs.commit_sha }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      # Resolution runs code from the protected default branch, not from the
+      # revision requesting promotion.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Verify release-control contracts
+        run: |
+          bash scripts/ci/release-ref.tests.sh
+          bash scripts/ci/release-workflow.tests.sh
+      - id: release
+        name: Bind version to a default-branch revision
+        env:
+          INPUT_COMMIT_SHA: ${{ inputs.commit_sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: bash scripts/ci/release-ref.sh resolve
+
+  linux-ext4:
+    name: Linux ext4 root artifact and restart certification
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: release-linux-${{ needs.release.outputs.version }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify exact clean checkout
+        env:
+          EXPECTED_SHA: ${{ needs.release.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: Install latest govulncheck
+        env:
+          GOBIN: ${{ runner.temp }}/go-tools
+        run: |
+          mkdir -p "$GOBIN"
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          echo "$GOBIN" >> "$GITHUB_PATH"
+      - name: Verify root artifact and Linux/ext4 semantics
+        env:
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+          RELEASE_COMMIT_SHA: ${{ needs.release.outputs.commit_sha }}
+        run: bash scripts/ci/linux/release.sh "$RELEASE_VERSION" "$RELEASE_COMMIT_SHA" linux-ext4
+
+  windows-ntfs:
+    name: Windows NTFS root artifact and restart certification
+    needs: release
+    runs-on: windows-latest
+    timeout-minutes: 90
+    concurrency:
+      group: release-windows-${{ needs.release.outputs.version }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify exact clean checkout
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ needs.release.outputs.commit_sha }}
+        run: |
+          $actualSHA = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actualSHA -cne $env:EXPECTED_SHA) {
+              throw "checkout resolved to $actualSHA instead of $env:EXPECTED_SHA"
+          }
+          $status = @(git status --porcelain=v1 --untracked-files=all)
+          if ($LASTEXITCODE -ne 0 -or $status.Count -ne 0) {
+              throw "release checkout is not clean: $($status -join '; ')"
+          }
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: Install latest govulncheck
+        shell: pwsh
+        env:
+          GOBIN: ${{ runner.temp }}/go-tools
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:GOBIN | Out-Null
+          & go install golang.org/x/vuln/cmd/govulncheck@latest
+          if ($LASTEXITCODE -ne 0) {
+              throw "govulncheck installation exited with code $LASTEXITCODE"
+          }
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $env:GOBIN -Encoding utf8
+      - name: Verify native-output helper contract
+        shell: pwsh
+        run: ./scripts/ci/native-output/windows/certify.tests.ps1
+      - name: Verify root artifact and Windows/NTFS semantics
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+          RELEASE_COMMIT_SHA: ${{ needs.release.outputs.commit_sha }}
+        run: ./scripts/ci/windows/release.ps1 -Version $env:RELEASE_VERSION -CommitSHA $env:RELEASE_COMMIT_SHA -NativeProfile windows-ntfs
+
+  publish:
+    name: Publish immutable root tag
+    needs:
+      - release
+      - linux-ext4
+      - windows-ntfs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: release-publish-${{ needs.release.outputs.version }}
+      cancel-in-progress: false
+    steps:
+      # The write token is exposed only to the protected default-branch helper.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: true
+      - name: Create immutable root release tag
+        env:
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+          RELEASE_COMMIT_SHA: ${{ needs.release.outputs.commit_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: bash scripts/ci/release-ref.sh publish

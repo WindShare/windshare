@@ -17,6 +17,7 @@ concurrency:
 
 env:
   GOTOOLCHAIN: local
+  GOWORK: "off"
 
 jobs:
   static:
@@ -32,9 +33,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          cache-dependency-path: go.sum
       - uses: actions/setup-node@v7
         with:
           node-version: latest
@@ -128,8 +127,8 @@ jobs:
       - name: Check Go language-server diagnostics
         run: make gopls
 
-  go-root:
-    name: Root Go module
+  go-non-core:
+    name: Non-core Go packages
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -140,9 +139,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          cache-dependency-path: go.sum
       - name: Install current coverage checker
         env:
           GOBIN: ${{ runner.temp }}/go-tools
@@ -150,23 +147,32 @@ jobs:
           mkdir -p "$GOBIN"
           go install github.com/vladopajic/go-test-coverage/v2@latest
           echo "$GOBIN" >> "$GITHUB_PATH"
-      - name: Vet the root module
-        run: go vet ./...
-      # Disabling the workspace exercises the released-core dependency graph;
-      # the ordinary workspace build is already performed by the test sweep.
-      - name: Build the released-core consumer
-        run: make root-release-graph
-      - name: Run root short race and atomic coverage once
-        run: >-
-          go test -short -race -count=1 -covermode=atomic
-          -coverprofile="$RUNNER_TEMP/root.cover.out" ./...
-      - name: Enforce root and package coverage floors
+      - name: Vet non-core packages
+        run: |
+          source scripts/ci/linux/go-package-sets.sh
+          windshare_load_go_package_set non-core
+          go vet "${WINDSHARE_GO_PACKAGES[@]}"
+      - name: Build production packages
+        run: |
+          source scripts/ci/linux/go-package-sets.sh
+          windshare_load_go_package_set all
+          # The wildcard keeps test-only packages in validation ownership without
+          # asking go build to compile packages that have no production files.
+          go build ./...
+      - name: Run non-core short race and atomic coverage once
+        run: |
+          source scripts/ci/linux/go-package-sets.sh
+          windshare_load_go_package_set non-core
+          go test -short -race -count=1 -covermode=atomic \
+            -coverprofile="$RUNNER_TEMP/root.cover.out" \
+            "${WINDSHARE_GO_PACKAGES[@]}"
+      - name: Enforce non-core and package coverage floors
         run: >-
           go-test-coverage --config=.testcoverage.yml
           --profile="$RUNNER_TEMP/root.cover.out"
 
   go-core:
-    name: Core Go module and protocol vectors
+    name: Core Go packages and protocol vectors
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -177,7 +183,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: core/go.sum
+          cache-dependency-path: go.sum
       - name: Install current coverage checker
         env:
           GOBIN: ${{ runner.temp }}/go-tools
@@ -185,21 +191,22 @@ jobs:
           mkdir -p "$GOBIN"
           go install github.com/vladopajic/go-test-coverage/v2@latest
           echo "$GOBIN" >> "$GITHUB_PATH"
-      - name: Vet the core module
-        run: go -C core vet ./...
-      - name: Build the independent core module
-        env:
-          GOWORK: "off"
-        run: go -C core build ./...
+      - name: Vet core packages
+        run: |
+          source scripts/ci/linux/go-package-sets.sh
+          windshare_load_go_package_set core
+          go vet "${WINDSHARE_GO_PACKAGES[@]}"
       - name: Run core short race and atomic coverage once
-        run: >-
-          go -C core test -short -race -count=1 -covermode=atomic
-          -coverprofile="$RUNNER_TEMP/core.cover.out" ./...
+        run: |
+          source scripts/ci/linux/go-package-sets.sh
+          windshare_load_go_package_set core
+          go test -short -race -count=1 -covermode=atomic \
+            -coverprofile="$RUNNER_TEMP/core.cover.out" \
+            "${WINDSHARE_GO_PACKAGES[@]}"
       - name: Enforce core and package coverage floors
-        working-directory: core
         run: >-
-          go-test-coverage --config=.testcoverage.yml
-          --profile="$RUNNER_TEMP/core.cover.out"
+          go-test-coverage --config=core/.testcoverage.yml
+          --profile="$RUNNER_TEMP/core.cover.out" --source-dir=core
       - name: Verify protocol vectors once
         run: make vectors
 
@@ -236,9 +243,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          cache-dependency-path: go.sum
       - name: Run the critical sender, relay, and receiver path once
         run: make e2e
 
@@ -254,9 +259,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          cache-dependency-path: go.sum
       - uses: pnpm/action-setup@v6
         with:
           version: latest
@@ -284,18 +287,19 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          cache-dependency-path: go.sum
       - name: Vet the native Windows source set
         run: make vet
-      # Windows build tags make this an independent check of the same published
-      # module boundary rather than a duplicate of the Linux root build.
-      - name: Build the released-core consumer
-        run: make root-release-graph
+      - name: Build the native Windows source set
+        run: |
+          . ./scripts/ci/windows/go-package-sets.ps1
+          Get-WindShareGoPackageSet -Set all | Out-Null
+          # The wildcard preserves go build's handling of test-only packages.
+          go build ./...
       # The measured Windows race path exceeded the six-minute workflow goal;
       # Linux owns race/coverage while this lane keeps Windows-native behavior.
-      - name: Run root short tests once
-        run: go test -short -count=1 ./...
-      - name: Run core short tests once
-        run: go -C core test -short -count=1 ./...
+      - name: Run production short tests once
+        run: |
+          . ./scripts/ci/windows/go-package-sets.ps1
+          $packages = Get-WindShareGoPackageSet -Set all
+          go test -short -count=1 $packages

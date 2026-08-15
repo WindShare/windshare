@@ -30,4 +30,16 @@ node scripts/ci/web-forbidden.mjs
 echo "-- Go retired paths and production graph"
 node scripts/ci/go-v1-forbidden.mjs
 
+echo "-- Core production dependency boundary tests"
+go test ./scripts/ci/_coreboundary
+
+echo "-- Core production dependency boundary"
+go run ./scripts/ci/_coreboundary
+
+echo "-- Go validation package ownership tests"
+go test ./scripts/ci/_gopackages
+
+echo "-- Go validation package ownership"
+go run ./scripts/ci/_gopackages -set all >/dev/null
+
 echo "== hygiene: PASS in ${SECONDS}s =="

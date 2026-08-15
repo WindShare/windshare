@@ -420,7 +420,7 @@ async function buildGoBinary(output: string, packagePath: string): Promise<void>
 }
 
 function localGoEnvironment(): NodeJS.ProcessEnv {
-  return { ...process.env, GOTOOLCHAIN: 'local', GOWORK: 'auto' }
+  return { ...process.env, GOTOOLCHAIN: 'local', GOWORK: 'off' }
 }
 
 function executableName(name: string, platform: NodeJS.Platform = process.platform): string {
