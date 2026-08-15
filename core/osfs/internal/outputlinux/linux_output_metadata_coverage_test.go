@@ -11,6 +11,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func mustModifiedTime(t *testing.T, seconds int64, nanoseconds uint32, precision catalog.TimePrecision) catalog.ModifiedTime {
+	t.Helper()
+	m, err := catalog.NewModifiedTime(seconds, nanoseconds, precision)
+	if err != nil {
+		t.Fatalf("mustModifiedTime(%d, %d, %d): %v", seconds, nanoseconds, precision, err)
+	}
+	return m
+}
+
 func TestLinuxValidateModifiedTimeAndTimespecConversion(t *testing.T) {
 	// Unset modified time
 	unset := catalog.ModifiedTime{}
@@ -21,45 +30,37 @@ func TestLinuxValidateModifiedTimeAndTimespecConversion(t *testing.T) {
 		t.Fatal("unset modified time required extended inode fields")
 	}
 
-	// Nanoseconds overflow
-	invalidNs := catalog.NewModifiedTime(100, 1_000_000_000, catalog.TimePrecisionNanoseconds)
-	if err := linuxValidateModifiedTime(invalidNs); !errors.Is(err, errLinuxOutputUnsafe) {
-		t.Fatalf("nanosecond overflow error = %v, want unsafe", err)
-	}
-
-	// Invalid precision
-	invalidPrec := catalog.NewModifiedTime(100, 500, catalog.TimePrecision(99))
-	if err := linuxValidateModifiedTime(invalidPrec); !errors.Is(err, errLinuxOutputUnsafe) {
-		t.Fatalf("invalid precision error = %v, want unsafe", err)
-	}
-
-	// Range checks for timespec
-	overflowSec := catalog.NewModifiedTime(math.MaxInt64, 0, catalog.TimePrecisionSeconds)
-	if err := linuxValidateModifiedTime(overflowSec); !errors.Is(err, errLinuxOutputUnsupported) {
-		t.Fatalf("overflow seconds error = %v, want unsupported", err)
-	}
-
-	underflowSec := catalog.NewModifiedTime(math.MinInt64, 0, catalog.TimePrecisionSeconds)
-	if err := linuxValidateModifiedTime(underflowSec); !errors.Is(err, errLinuxOutputUnsupported) {
-		t.Fatalf("underflow seconds error = %v, want unsupported", err)
-	}
-
 	// Extended inode fields requirement
-	baseSec := catalog.NewModifiedTime(100, 0, catalog.TimePrecisionSeconds)
+	baseSec := mustModifiedTime(t, 100, 0, catalog.TimePrecisionSeconds)
 	if linuxModifiedTimeRequiresExtendedInodeFields(baseSec) {
 		t.Fatal("standard seconds required extended inode fields")
 	}
-	withNs := catalog.NewModifiedTime(100, 500, catalog.TimePrecisionNanoseconds)
+	if err := linuxValidateModifiedTime(baseSec); err != nil {
+		t.Fatalf("valid seconds modified time error = %v", err)
+	}
+
+	withNs := mustModifiedTime(t, 100, 500, catalog.TimePrecisionNanoseconds)
 	if !linuxModifiedTimeRequiresExtendedInodeFields(withNs) {
 		t.Fatal("nanoseconds did not require extended inode fields")
 	}
-	epochOverflow := catalog.NewModifiedTime(math.MaxInt32+1, 0, catalog.TimePrecisionSeconds)
+	if err := linuxValidateModifiedTime(withNs); err != nil {
+		t.Fatalf("valid nanoseconds modified time error = %v", err)
+	}
+
+	epochOverflow := mustModifiedTime(t, math.MaxInt32+1, 0, catalog.TimePrecisionSeconds)
 	if !linuxModifiedTimeRequiresExtendedInodeFields(epochOverflow) {
 		t.Fatal("epoch overflow did not require extended inode fields")
 	}
-	epochUnderflow := catalog.NewModifiedTime(math.MinInt32-1, 0, catalog.TimePrecisionSeconds)
+	if err := linuxValidateModifiedTime(epochOverflow); err != nil {
+		t.Fatalf("epoch overflow modified time error = %v", err)
+	}
+
+	epochUnderflow := mustModifiedTime(t, math.MinInt32-1, 0, catalog.TimePrecisionSeconds)
 	if !linuxModifiedTimeRequiresExtendedInodeFields(epochUnderflow) {
 		t.Fatal("epoch underflow did not require extended inode fields")
+	}
+	if err := linuxValidateModifiedTime(epochUnderflow); err != nil {
+		t.Fatalf("epoch underflow modified time error = %v", err)
 	}
 
 	// Modified time matching
@@ -67,26 +68,23 @@ func TestLinuxValidateModifiedTimeAndTimespecConversion(t *testing.T) {
 	if !linuxModifiedTimeMatches(meta, unset) {
 		t.Fatal("unset expected time did not match")
 	}
-	if linuxModifiedTimeMatches(meta, catalog.NewModifiedTime(201, 300_400_500, catalog.TimePrecisionSeconds)) {
+	if linuxModifiedTimeMatches(meta, mustModifiedTime(t, 201, 0, catalog.TimePrecisionSeconds)) {
 		t.Fatal("seconds mismatch matched")
 	}
-	if !linuxModifiedTimeMatches(meta, catalog.NewModifiedTime(200, 0, catalog.TimePrecisionSeconds)) {
+	if !linuxModifiedTimeMatches(meta, mustModifiedTime(t, 200, 0, catalog.TimePrecisionSeconds)) {
 		t.Fatal("seconds precision match failed")
 	}
-	if !linuxModifiedTimeMatches(meta, catalog.NewModifiedTime(200, 300_000_000, catalog.TimePrecisionMilliseconds)) {
+	if !linuxModifiedTimeMatches(meta, mustModifiedTime(t, 200, 300_000_000, catalog.TimePrecisionMilliseconds)) {
 		t.Fatal("milliseconds precision match failed")
 	}
-	if linuxModifiedTimeMatches(meta, catalog.NewModifiedTime(200, 301_000_000, catalog.TimePrecisionMilliseconds)) {
+	if linuxModifiedTimeMatches(meta, mustModifiedTime(t, 200, 301_000_000, catalog.TimePrecisionMilliseconds)) {
 		t.Fatal("milliseconds precision mismatch matched")
 	}
-	if !linuxModifiedTimeMatches(meta, catalog.NewModifiedTime(200, 300_400_500, catalog.TimePrecisionNanoseconds)) {
+	if !linuxModifiedTimeMatches(meta, mustModifiedTime(t, 200, 300_400_500, catalog.TimePrecisionNanoseconds)) {
 		t.Fatal("nanoseconds precision match failed")
 	}
-	if linuxModifiedTimeMatches(meta, catalog.NewModifiedTime(200, 300_400_501, catalog.TimePrecisionNanoseconds)) {
+	if linuxModifiedTimeMatches(meta, mustModifiedTime(t, 200, 300_400_501, catalog.TimePrecisionNanoseconds)) {
 		t.Fatal("nanoseconds precision mismatch matched")
-	}
-	if linuxModifiedTimeMatches(meta, catalog.NewModifiedTime(200, 300_400_500, catalog.TimePrecision(42))) {
-		t.Fatal("unknown precision matched")
 	}
 }
 
@@ -99,14 +97,8 @@ func TestLinuxSetHandleModifiedTimeAndErrors(t *testing.T) {
 		t.Fatalf("unset modified time set error = %v", err)
 	}
 
-	// Invalid modified time fails validation
-	badTime := catalog.NewModifiedTime(100, 1_000_000_000, catalog.TimePrecisionNanoseconds)
-	if err := linuxSetHandleModifiedTime(root.system, root.fd, badTime, "test"); err == nil {
-		t.Fatal("expected error for invalid modified time")
-	}
-
 	// utimensat errors
-	validTime := catalog.NewModifiedTime(100, 500, catalog.TimePrecisionNanoseconds)
+	validTime := mustModifiedTime(t, 100, 500, catalog.TimePrecisionNanoseconds)
 	for _, sysErr := range []error{unix.ENOSYS, unix.EINVAL, unix.EOPNOTSUPP} {
 		root.system.utimensat = func(int, string, []unix.Timespec, int) error { return sysErr }
 		if err := linuxSetHandleModifiedTime(root.system, root.fd, validTime, "test"); !errors.Is(err, errLinuxOutputUnsupported) {
