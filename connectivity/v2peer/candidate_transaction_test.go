@@ -21,7 +21,10 @@ import (
 	"github.com/windshare/windshare/core/session/sessionruntime"
 )
 
-const authenticatedCandidateReplays = protocolsession.RouterControlQueueLimit * 2
+const (
+	authenticatedCandidateReplays    = protocolsession.RouterControlQueueLimit * 2
+	candidateRuntimeHandshakeTimeout = 30 * time.Second
+)
 
 var errCandidateDeliveredBeforeLaneFailure = errors.New("candidate frame delivered before lane failure")
 
@@ -120,7 +123,10 @@ type candidateRuntimeHarness struct {
 
 func newCandidateRuntimeHarness(t *testing.T, maxCandidates int) *candidateRuntimeHarness {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Runtime lifetime and handshake progress are separate authorities. Keeping the
+	// deadline phase-local prevents unrelated preparation and host contention from
+	// consuming the protocol handshake's diagnostic budget.
+	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
 	selected := filepath.Join(t.TempDir(), "candidate-transaction.txt")
@@ -168,16 +174,18 @@ func newCandidateRuntimeHarness(t *testing.T, maxCandidates int) *candidateRunti
 	}
 
 	initialSenderLane, initialReceiverLane := newCandidateTransactionChannelPair()
+	handshakeContext, cancelHandshake := context.WithTimeout(ctx, candidateRuntimeHandshakeTimeout)
+	defer cancelHandshake()
 	type acceptedRuntime struct {
 		runtime *sessionruntime.SenderRuntime
 		err     error
 	}
 	accepted := make(chan acceptedRuntime, 1)
 	go func() {
-		runtime, acceptErr := runtimeFactory.Accept(ctx, initialSenderLane)
+		runtime, acceptErr := runtimeFactory.Accept(handshakeContext, initialSenderLane)
 		accepted <- acceptedRuntime{runtime: runtime, err: acceptErr}
 	}()
-	receiverRuntime, err := preparedReceiver.Connect(ctx, initialReceiverLane)
+	receiverRuntime, err := preparedReceiver.Connect(handshakeContext, initialReceiverLane)
 	if err != nil {
 		t.Fatal(err)
 	}
