@@ -6,12 +6,16 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/windshare/windshare/core/osfs/internal/outputwindows"
 )
 
-const windowsRuntimeTestBasePattern = ".windshare-outputruntime-test-*"
+const (
+	windowsRuntimeTestTempSubdir  = ".windshare-test-temp"
+	windowsRuntimeTestBasePattern = ".windshare-outputruntime-test-*"
+)
 
 var windowsRuntimeTestBase string
 
@@ -29,7 +33,12 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "resolve Windows output-runtime test home: %v\n", err)
 		os.Exit(1)
 	}
-	base, err := os.MkdirTemp(home, windowsRuntimeTestBasePattern)
+	testBase := filepath.Join(home, windowsRuntimeTestTempSubdir)
+	if err := os.MkdirAll(testBase, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "create Windows output-runtime test temp base: %v\n", err)
+		os.Exit(1)
+	}
+	base, err := os.MkdirTemp(testBase, windowsRuntimeTestBasePattern)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reserve Windows output-runtime test base: %v\n", err)
 		os.Exit(1)

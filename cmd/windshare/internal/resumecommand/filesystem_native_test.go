@@ -208,7 +208,11 @@ func newResumeCertifiedOutputTestRoot(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reserved, err := os.MkdirTemp(home, ".windshare-resume-command-test-*")
+	testBase := filepath.Join(home, ".windshare-test-temp")
+	if err := os.MkdirAll(testBase, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := os.MkdirTemp(testBase, ".windshare-resume-command-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
