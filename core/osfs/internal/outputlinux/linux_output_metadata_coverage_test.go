@@ -142,10 +142,18 @@ func TestLinuxSetHandleModifiedTimeAndErrors(t *testing.T) {
 	}
 
 	// metadataMatches
+	origStatx := root.system.statx
+	root.system.statx = func(fd int, path string, flags int, mask int, stat *unix.Statx_t) error {
+		_ = origStatx(fd, path, flags, mask, stat)
+		stat.Mtime.Sec = validTime.Seconds()
+		stat.Mtime.Nsec = validTime.Nanoseconds()
+		return nil
+	}
 	matched, err := file.metadataMatches(0, validTime)
 	if err != nil || !matched {
 		t.Fatalf("file metadataMatches error=%v matched=%v", err, matched)
 	}
+	root.system.statx = origStatx
 	_ = harness
 }
 
@@ -215,9 +223,13 @@ func TestLinuxRequireExtendedTimestampLayoutBranches(t *testing.T) {
 	}
 
 	// statx identity changed
+	callCount := 0
 	root.system.statx = func(fd int, path string, flags int, mask int, stat *unix.Statx_t) error {
 		_ = origStatx(fd, path, flags, mask, stat)
-		stat.Ino = 99999
+		callCount++
+		if callCount > 1 {
+			stat.Ino = 99999
+		}
 		return nil
 	}
 	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.certificate, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsafe) {
@@ -339,6 +351,7 @@ func TestLinuxHandlesExactModeTruncateSyncAndPinnedEntry(t *testing.T) {
 	}
 
 	// setExactMode
+	harness.directoryMode = uint16(unix.S_IFDIR | linuxOutputDirectoryMode)
 	root.system.fchmod = func(int, uint32) error { return nil }
 	if err := file.setExactMode(linuxOutputStateFileMode); err != nil {
 		t.Fatalf("file setExactMode error = %v", err)
