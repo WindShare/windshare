@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-const localToolchainEnvironment = "GOTOOLCHAIN"
+const (
+	localToolchainEnvironment = "GOTOOLCHAIN"
+	workspaceEnvironment      = "GOWORK"
+)
 
 type Command struct {
 	Executable string
@@ -50,7 +53,7 @@ func (runner ExecRunner) Run(ctx context.Context, command Command) (CommandResul
 	if environment == nil {
 		environment = os.Environ()
 	}
-	child.Env = replaceEnvironment(environment, localToolchainEnvironment, "local")
+	child.Env = commandEnvironment(environment)
 	var output bytes.Buffer
 	child.Stdout = &output
 	child.Stderr = &output
@@ -68,6 +71,11 @@ func (runner ExecRunner) Run(ctx context.Context, command Command) (CommandResul
 		err = errors.Join(err, cause)
 	}
 	return result, err
+}
+
+func commandEnvironment(environment []string) []string {
+	environment = replaceEnvironment(environment, localToolchainEnvironment, "local")
+	return replaceEnvironment(environment, workspaceEnvironment, "off")
 }
 
 func replaceEnvironment(environment []string, name, value string) []string {

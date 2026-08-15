@@ -12,9 +12,9 @@ echo "-- integration packages"
 go test -count=1 ./integration/relayv2 ./integration/v2peer
 
 echo "-- catalog long suites"
-go -C core test -count=1 -run '^TestLong' ./catalog
+go test -count=1 -run '^TestLong' ./core/catalog
 
 echo "-- output runtime long suites"
-go -C core test -count=1 -run '^TestLong' ./osfs/internal/outputruntime
+go test -count=1 -run '^TestLong' ./core/osfs/internal/outputruntime
 
 echo "== long-go: PASS in ${SECONDS}s =="

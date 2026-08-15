@@ -16,6 +16,7 @@ concurrency:
 
 env:
   GOTOOLCHAIN: local
+  GOWORK: "off"
 
 jobs:
   integration-linux:
@@ -30,9 +31,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          cache-dependency-path: go.sum
       - name: Run integration packages
         run: go test -count=1 ./integration/...
 
@@ -48,9 +47,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          cache-dependency-path: go.sum
       - name: Run integration packages
         run: go test -count=1 ./integration/...
 
@@ -66,13 +63,11 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          cache-dependency-path: go.sum
       - name: Run process and relay-cut suites
         run: go test -count=1 ./e2e -run '^TestLong'
       - name: Run catalog scale suites
-        run: go -C core test -count=1 ./catalog -run '^TestLong'
+        run: go test -count=1 ./core/catalog -run '^TestLong'
 
   durable-output:
     name: Durable output runtime (Linux)
@@ -86,9 +81,9 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: core/go.sum
+          cache-dependency-path: go.sum
       - name: Run native durability suites
-        run: go -C core test -count=1 ./osfs/internal/outputruntime -run '^TestLong'
+        run: go test -count=1 ./core/osfs/internal/outputruntime -run '^TestLong'
 
   durable-output-windows:
     name: Durable output runtime (Windows)
@@ -102,9 +97,9 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: core/go.sum
+          cache-dependency-path: go.sum
       - name: Run native durability suites
-        run: go -C core test -count=1 ./osfs/internal/outputruntime -run '^TestLong'
+        run: go test -count=1 ./core/osfs/internal/outputruntime -run '^TestLong'
 
   browser-progressive:
     name: Progressive catalog browser scenario (Linux)
@@ -118,9 +113,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          cache-dependency-path: go.sum
       - uses: pnpm/action-setup@v6
         with:
           version: latest
@@ -148,9 +141,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          cache-dependency-path: go.sum
       - uses: pnpm/action-setup@v6
         with:
           version: latest
@@ -178,9 +169,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          cache-dependency-path: go.sum
       - uses: pnpm/action-setup@v6
         with:
           version: latest
@@ -208,9 +197,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          cache-dependency-path: go.sum
       - uses: pnpm/action-setup@v6
         with:
           version: latest
@@ -265,9 +252,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          cache-dependency-path: go.sum
       - uses: pnpm/action-setup@v6
         with:
           version: latest
@@ -282,3 +267,56 @@ jobs:
         run: pnpm -C web exec playwright install chromium
       - name: Run the Windows browser and process smoke
         run: pnpm -C web test:browser:smoke
+
+  native-output-linux:
+    name: Loop-ext4 output certification (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: Install latest govulncheck
+        env:
+          GOBIN: ${{ runner.temp }}/go-tools
+        run: |
+          mkdir -p "$GOBIN"
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          echo "$GOBIN" >> "$GITHUB_PATH"
+      - name: Certify the exact weekly root artifact on loop-ext4
+        run: bash scripts/ci/linux/release.sh v0.0.0 "$GITHUB_SHA" linux-ext4
+
+  native-output-windows:
+    name: Standard-user NTFS output certification (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: Install latest govulncheck
+        shell: pwsh
+        env:
+          GOBIN: ${{ runner.temp }}/go-tools
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:GOBIN | Out-Null
+          & go install golang.org/x/vuln/cmd/govulncheck@latest
+          if ($LASTEXITCODE -ne 0) {
+              throw "govulncheck installation exited with code $LASTEXITCODE"
+          }
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $env:GOBIN -Encoding utf8
+      - name: Certify the exact weekly root artifact on NTFS
+        shell: pwsh
+        run: ./scripts/ci/windows/release.ps1 -Version v0.0.0 -CommitSHA $env:GITHUB_SHA -NativeProfile windows-ntfs

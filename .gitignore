@@ -21,8 +21,6 @@ profile.cov
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-# go.work 入库(双模块本地开发依赖 workspace 解析,执行计划 §6.2),不忽略
-
 # env file
 .env
 

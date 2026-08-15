@@ -6,6 +6,8 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
 Set-Location $repositoryRoot
+. scripts/ci/windows/go-package-sets.ps1
+Get-WindShareGoPackageSet -Set all | Out-Null
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
 function Invoke-Step([string]$Label, [scriptblock]$Body) {
@@ -18,13 +20,10 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 }
 
 Write-Output '== lint =='
-Invoke-Step 'golangci-lint (root)' { golangci-lint run ./... }
-
-Push-Location (Join-Path $repositoryRoot 'core')
-try {
-    Invoke-Step 'golangci-lint (core)' { golangci-lint run ./... }
-} finally {
-    Pop-Location
+Invoke-Step 'golangci-lint (production packages)' {
+    # golangci-lint treats import paths as filesystem paths, so use the same
+    # complete pattern after the package authority has validated its expansion.
+    golangci-lint run ./...
 }
 
 Write-Output ('== lint: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

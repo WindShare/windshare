@@ -1,18 +1,17 @@
-# golangci-lint v2 gate config, shared by both Go modules: `make lint` runs
-# the linter in the root module and in core/, which discovers this file
-# upward. spikes/ is experimental and stays outside this gate, matching its
-# exclusion from the race and coverage gates.
+# golangci-lint v2 gate config for the single production module. `make lint`
+# runs from the repository root; isolated evidence modules stay outside this
+# gate and have explicit validation commands.
 version: "2"
 
 run:
-  # Guard against CI hangs; the full two-module run finishes well under this.
+  # Guard against CI hangs; the full production-package run finishes well under this.
   timeout: 5m
 
 linters:
   # The v2 "standard" default set (errcheck, govet, ineffassign, staticcheck,
   # unused) stays enabled; the list below adds to it. Deliberate deviations
   # from the reference config this gate was adapted from:
-  #  - govet also runs standalone in `make vet` (CI go-root/go-core vet).
+  #  - govet also runs standalone in `make vet` and ordinary CI.
   #    Keeping it here is harmless duplication and preserves the standard set.
   #  - staticcheck overlaps the hygiene gate's `gopls check -severity=hint`,
   #    which embeds a staticcheck subset. This is the full superset (SA + ST +

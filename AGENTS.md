@@ -18,7 +18,7 @@
 
 ### Go Specifics
 - **Accept Interfaces, Return Structs**: Define interfaces where they are used (consumer side), not where they are implemented. The bigger the interface, the weaker the abstraction.
-- **Hard Requirement**: CI enforces coverage with go-test-coverage (per-module `.testcoverage.yml`): **core total ≥90%, root total ≥80%, every package ≥70%**.
+- **Hard Requirement**: CI enforces coverage with go-test-coverage over generated, disjoint package sets: **core total ≥90%, non-core total ≥80%, every package ≥70%**.
 
 ### Validation
 
@@ -37,12 +37,12 @@
 
 WindShare is an open-source E2EE file/folder sharing tool. It creates links without pre-uploading, reading, or hashing content; receivers use the browser or CLI over authenticated relay/WebRTC lanes, with relay retained as fallback.
 
-The root Go module assembles the CLI, connectivity, concrete transports, and relay around the independently released, network-free `core` module. Local `go.work` also includes the independent performance-evidence module; `spikes/webrtc` remains an intentionally isolated evidence module.
+WindShare has one production Go module. Within it, `core/**` is the network-free application and protocol package boundary; dependency-graph gates prevent core packages from importing non-core WindShare packages or concrete networking and transport capabilities. `internal/perfevidence` and `spikes/webrtc` remain intentionally isolated evidence modules invoked separately.
 
 ```text
 .
-├── .github/workflows/             Ordinary CI, weekly suites, and core candidate release
-├── core/                         Independent Go module; network-free reusable core
+├── .github/workflows/             Ordinary CI, weekly suites, and root release
+├── core/                         Network-free reusable package subtree
 │   ├── link/, senderobject/      Capability links and sealed transport-neutral objects
 │   ├── catalog/                  Committed directory generations/pages, durable storage/recovery
 │   ├── content/                  File revisions, ranges, leases, keys, authenticated records

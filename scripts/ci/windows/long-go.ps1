@@ -23,9 +23,9 @@ Invoke-Step 'integration packages' {
     go test -count=1 ./integration/relayv2 ./integration/v2peer
 }
 Invoke-Step 'catalog long suites' {
-    go -C core test -count=1 -run '^TestLong' ./catalog
+    go test -count=1 -run '^TestLong' ./core/catalog
 }
 Invoke-Step 'output runtime long suites' {
-    go -C core test -count=1 -run '^TestLong' ./osfs/internal/outputruntime
+    go test -count=1 -run '^TestLong' ./core/osfs/internal/outputruntime
 }
 Write-Output ('== long-go: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

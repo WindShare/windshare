@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
+source scripts/ci/linux/go-package-sets.sh
+windshare_load_go_package_set non-core
+non_core_packages=("${WINDSHARE_GO_PACKAGES[@]}")
+windshare_load_go_package_set core
+core_packages=("${WINDSHARE_GO_PACKAGES[@]}")
 
 SECONDS=0
 echo "== short-go =="
@@ -14,19 +19,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "-- root short race and atomic coverage sweep"
-go test -short -race -count=1 -covermode=atomic -coverprofile="$root_profile" ./...
+echo "-- non-core short race and atomic coverage sweep"
+go test -short -race -count=1 -covermode=atomic -coverprofile="$root_profile" "${non_core_packages[@]}"
 
-echo "-- root coverage verdict"
+echo "-- non-core coverage verdict"
 go-test-coverage --config=.testcoverage.yml --profile="$root_profile"
 
 echo "-- core short race and atomic coverage sweep"
-go -C core test -short -race -count=1 -covermode=atomic -coverprofile="$core_profile" ./...
+go test -short -race -count=1 -covermode=atomic -coverprofile="$core_profile" "${core_packages[@]}"
 
 echo "-- core coverage verdict"
-(
-  cd core
-  go-test-coverage --config=.testcoverage.yml --profile="$core_profile"
-)
+go-test-coverage --config=core/.testcoverage.yml --profile="$core_profile" --source-dir=core
 
 echo "== short-go: PASS in ${SECONDS}s =="

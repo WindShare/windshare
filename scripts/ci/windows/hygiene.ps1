@@ -49,5 +49,11 @@ if ($unformatted.Count -ne 0) {
 Invoke-Step 'whitespace' { git --no-pager diff --check }
 Invoke-Step 'Web retired paths and production graph' { node scripts/ci/web-forbidden.mjs }
 Invoke-Step 'Go retired paths and production graph' { node scripts/ci/go-v1-forbidden.mjs }
+Invoke-Step 'Core production dependency boundary tests' { go test ./scripts/ci/_coreboundary }
+Invoke-Step 'Core production dependency boundary' { go run ./scripts/ci/_coreboundary }
+Invoke-Step 'Go validation package ownership tests' { go test ./scripts/ci/_gopackages }
+Invoke-Step 'Go validation package ownership' {
+    go run ./scripts/ci/_gopackages -set all | Out-Null
+}
 
 Write-Output ('== hygiene: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)
