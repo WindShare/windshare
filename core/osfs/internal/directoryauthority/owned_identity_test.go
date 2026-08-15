@@ -147,5 +147,3 @@ func TestOwnedDirectoryIDRejectsMissingAuthorityBeforeOpeningNativeState(t *test
 		}
 	}
 }
-
-

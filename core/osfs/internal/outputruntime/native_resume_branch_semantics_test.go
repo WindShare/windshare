@@ -217,8 +217,10 @@ func TestResultRootResumeDispositionUsesAuthorityCreatedRoot(t *testing.T) {
 }
 
 func TestObserveOrdinaryResumeFinalParameterValidationAndHelpers(t *testing.T) {
+	var nilContext context.Context
+
 	// Parameter validations on observeOrdinaryResumeFinal
-	if _, err := observeOrdinaryResumeFinal(nil, nil, nil, checkpointmodel.Record{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+	if _, err := observeOrdinaryResumeFinal(nilContext, nil, nil, checkpointmodel.Record{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("nil params error = %v", err)
 	}
 
@@ -231,7 +233,7 @@ func TestObserveOrdinaryResumeFinalParameterValidationAndHelpers(t *testing.T) {
 	}
 
 	// ordinaryResumeItems with invalid parameters
-	if _, err := ordinaryResumeItems(nil, nil, nil); !errors.Is(err, resumeauthority.ErrInvalidContract) {
+	if _, err := ordinaryResumeItems(nilContext, nil, nil); !errors.Is(err, resumeauthority.ErrInvalidContract) {
 		t.Fatalf("nil ordinaryResumeItems error = %v", err)
 	}
 
@@ -252,4 +254,3 @@ func TestObserveOrdinaryResumeFinalParameterValidationAndHelpers(t *testing.T) {
 		t.Fatal("closeOrdinaryResumeDirectories(nil) was not nil")
 	}
 }
-
