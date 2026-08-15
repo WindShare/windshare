@@ -539,7 +539,7 @@ func sourceLeaf(path string) string {
 }
 
 func artifactPathHasOversizedComponent(value string) bool {
-	for _, component := range strings.Split(value, "/") {
+	for component := range strings.SplitSeq(value, "/") {
 		if len([]byte(component)) > receivecontract.MaxResultComponentBytes {
 			return true
 		}

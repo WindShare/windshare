@@ -46,9 +46,8 @@ func TestLiveCleanupTicketV1FreezesMinimalCodec(t *testing.T) {
 			t.Fatalf("cleanup ticket encoded forbidden semantic %q", forbidden)
 		}
 	}
-	typeOf := reflect.TypeFor[LiveCleanupTicket]()
-	for index := range typeOf.NumField() {
-		field := strings.ToLower(typeOf.Field(index).Name)
+	for structField := range reflect.TypeFor[LiveCleanupTicket]().Fields() {
+		field := strings.ToLower(structField.Name)
 		for _, forbidden := range []string{"intent", "range", "revision", "path", "selection", "checkpoint"} {
 			if strings.Contains(field, forbidden) {
 				t.Fatalf("cleanup ticket field %q can carry %s", field, forbidden)

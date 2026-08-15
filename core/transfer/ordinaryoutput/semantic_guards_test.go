@@ -1,6 +1,7 @@
 package ordinaryoutput
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -197,7 +198,8 @@ func TestShapeSelectionConstructorsRemainBoundedAndUnambiguous(t *testing.T) {
 		t.Fatal("unknown shape decision became valid")
 	}
 	budget, _ := NewShapeProbeBudget(1, 1, 1, 1, 1)
-	if _, err := ResolveShape(nil, nil, Selection{}, budget, nil); !errors.Is(
+	var nilContext context.Context
+	if _, err := ResolveShape(nilContext, nil, Selection{}, budget, nil); !errors.Is(
 		err, ErrInvalidShapeResolution,
 	) {
 		t.Fatalf("unbound shape resolution = %v", err)

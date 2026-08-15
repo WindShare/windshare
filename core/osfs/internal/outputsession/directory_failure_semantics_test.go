@@ -22,7 +22,8 @@ func TestInvariantFailureRequiresOperationAttention(t *testing.T) {
 func TestDirectoryAdmissionRejectsUnboundAndCanceledRequestsBeforeMutation(t *testing.T) {
 	t.Run("nil-context", func(t *testing.T) {
 		fixture := newTestFixture(t, nil)
-		if _, err := fixture.session.AdmitDirectory(nil, fixture.directoryRequest(
+		var nilContext context.Context
+		if _, err := fixture.session.AdmitDirectory(nilContext, fixture.directoryRequest(
 			fixture.rootDirectory,
 		)); !errors.Is(err, ErrInvalidConfiguration) {
 			t.Fatalf("nil context = %v", err)

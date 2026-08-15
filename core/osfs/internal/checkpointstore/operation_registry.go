@@ -23,7 +23,6 @@ const (
 
 	ordinaryOperationRecordFile    = "record"
 	ordinaryFileStateDirectory     = "files"
-	ordinaryActiveIndexFile        = "active"
 	ordinaryAdmissionCandidateFile = "candidate"
 	ordinaryOperationLockSuffix    = ".operation.lock"
 	ordinaryActiveLockSuffix       = ".active.lock"
