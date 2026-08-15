@@ -447,4 +447,3 @@ func TestReceiveContractArtifactEdgeCases(t *testing.T) {
 		t.Fatalf("synthetic root getters drifted: %+v", synthetic)
 	}
 }
-

@@ -162,7 +162,6 @@ func TestTraceRootPrefetchPanicIsolationAndNilLogger(t *testing.T) {
 	})
 }
 
-
 func catalogAccessGeneration(t *testing.T, seed byte) catalog.DirectoryGeneration {
 	t.Helper()
 	value := make([]byte, catalog.IdentityBytes)

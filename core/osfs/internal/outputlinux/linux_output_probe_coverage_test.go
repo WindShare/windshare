@@ -318,4 +318,3 @@ func TestLinuxOutputProbeRootLockOperations(t *testing.T) {
 		t.Fatalf("empty lock release error = %v, want unsafe", err)
 	}
 }
-

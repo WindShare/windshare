@@ -106,4 +106,3 @@ func TestCleanLegacyResumeStateExecutesOnValidRoot(t *testing.T) {
 		t.Fatalf("report semantics on clean root = %+v", report)
 	}
 }
-

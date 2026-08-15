@@ -1027,5 +1027,3 @@ func TestAuthorityOwnedDirectoryID(t *testing.T) {
 		t.Fatalf("OwnedDirectoryID on captured claim = (%x, %v)", ownedID.Bytes(), err)
 	}
 }
-
-
