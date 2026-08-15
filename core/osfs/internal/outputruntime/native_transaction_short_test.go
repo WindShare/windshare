@@ -168,6 +168,9 @@ func TestLiveOnlyFileTransactionPublishesWithoutPersistentInventory(t *testing.T
 	)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("live transfer created resumable inventory: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(root, checkpointstore.ControlDirectory)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("successful live transfer retained private control state: %v", err)
+	}
 }
 
 func TestLiveOnlyFileTransactionPauseAndCollisionPreserveFinalAuthority(t *testing.T) {
@@ -259,5 +262,8 @@ func TestPublishedOrdinaryFileReopensAsVerifiedSiblingThenRetiresPrivateState(t 
 	}
 	if data, err := os.ReadFile(reopened.finalPath); err != nil || string(data) != "data" {
 		t.Fatalf("published sibling = (%q, %v)", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, checkpointstore.ControlDirectory)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("successful resumable transfer retained private control state: %v", err)
 	}
 }
