@@ -9,9 +9,15 @@ import {
   V2SessionBlockLane,
 } from '../../src/content/v2-session-services'
 import type { V2FileRevisionDescriptor } from '../../src/content/v2-records'
-import { encodeV2Body, encodeV2Message, V2_MESSAGE_KIND } from '../../src/session/v2-message'
+import {
+  decodeV2Message,
+  encodeV2Body,
+  encodeV2Message,
+  V2_MESSAGE_KIND,
+} from '../../src/session/v2-message'
 import type { V2ReceiverSessionRuntime, V2SessionOperation } from '../../src/session/v2-runtime'
 import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
+import { fragmentRecord } from './v2-fragment-fixture'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
 const ALL_ROUTES: V2BlockRouteEligibility = Object.freeze({
@@ -111,7 +117,7 @@ describe('v2 session block lane deadlines', () => {
     const revisions = new V2RevisionService(
       session,
       share,
-      new Uint8Array(32).fill(9),
+      new Uint8Array(16).fill(9),
       lanes,
     )
 
@@ -165,13 +171,76 @@ describe('v2 session block lane deadlines', () => {
       localBlockIndex: 0n,
     }, new AbortController().signal)
     const rejected = expect(pending).rejects.toMatchObject({
-      name: 'V2FragmentTimeoutError',
+      name: 'V2FragmentInactivityTimeoutError',
       scope: 'lane',
     })
     await vi.advanceTimersByTimeAsync(15_000)
 
     await rejected
     expect(cancellations).toBe(1)
+    lane.close()
+  })
+
+  it('renews the lane deadline when each authenticated fragment advances assembly', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const operationId = identity(9)
+    const fragments = fragmentRecord(operationId, new Uint8Array(65_441).fill(0x33))
+    const responses = [
+      decodeV2Message(fragments[0]!),
+      decodeV2Message(fragments[1]!),
+      encodeV2Message(
+        V2_MESSAGE_KIND.operationComplete,
+        operationId,
+        encodeV2Body(new Map<number, unknown>([[0, 1], [1, 1]])),
+      ),
+    ]
+    let responseIndex = 0
+    const operation: V2SessionOperation = {
+      id: operationId,
+      requestKind: V2_MESSAGE_KIND.requestBlocks,
+      next: (signal?: AbortSignal) => {
+        const response = responses[responseIndex++]
+        if (response === undefined) return Promise.reject(new Error('missing test response'))
+        if (responseIndex === responses.length) return Promise.resolve(response)
+        return new Promise((resolve, reject) => {
+          const timer = globalThis.setTimeout(() => {
+            signal?.removeEventListener('abort', abort)
+            resolve(response)
+          }, 10_000)
+          const abort = () => {
+            globalThis.clearTimeout(timer)
+            reject(signal?.reason)
+          }
+          signal?.addEventListener('abort', abort, { once: true })
+        })
+      },
+      cancel: () => undefined,
+    }
+    const session = {
+      beginOperation: async () => operation,
+      cancelOperation: async () => undefined,
+    } as unknown as V2ReceiverSessionRuntime
+    const lane = new V2SessionBlockLane(
+      1,
+      session,
+      share,
+      new Uint8Array(16).fill(9),
+      { leaseError: () => undefined } as never,
+    )
+
+    const pending = lane.fetchBlock({
+      descriptor: revision,
+      leaseId: identity(6),
+      localBlockIndex: 0n,
+    }, new AbortController().signal)
+    const rejected = expect(pending).rejects.toMatchObject({
+      name: 'V2BlockOperationError',
+      code: 'object-auth',
+    })
+    await vi.advanceTimersByTimeAsync(20_000)
+
+    await rejected
     lane.close()
   })
 

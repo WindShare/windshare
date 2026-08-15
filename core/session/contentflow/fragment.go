@@ -18,18 +18,18 @@ const (
 	MaxFragmentPayloadBytes     = 65_440
 	MaxFragmentCount            = 128
 	MaxOperationReassemblyBytes = uint64(records.MaxBlockRecordObjectBytes)
-	FragmentTimeout             = 15 * time.Second
+	FragmentInactivityTimeout   = 15 * time.Second
 	FragmentTombstone           = 30 * time.Second
 	MaxFragmentTombstones       = 4_096
 )
 
 var (
-	ErrFragmentMalformed = errors.New("authenticated block fragment is malformed")
-	ErrFragmentConflict  = errors.New("authenticated block fragment conflicts with prior data")
-	ErrFragmentTimeout   = errors.New("block fragment reassembly timed out")
-	ErrFragmentCancelled = errors.New("block fragment operation was cancelled")
-	ErrRecordDigest      = errors.New("reassembled block record has the wrong record identity")
-	ErrAssemblerClosed   = errors.New("block fragment assembler is closed")
+	ErrFragmentMalformed  = errors.New("authenticated block fragment is malformed")
+	ErrFragmentConflict   = errors.New("authenticated block fragment conflicts with prior data")
+	ErrFragmentInactivity = errors.New("block fragment reassembly made no authenticated progress before timeout")
+	ErrFragmentCancelled  = errors.New("block fragment operation was cancelled")
+	ErrRecordDigest       = errors.New("reassembled block record has the wrong record identity")
+	ErrAssemblerClosed    = errors.New("block fragment assembler is closed")
 )
 
 type Fragment struct {
