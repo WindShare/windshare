@@ -226,11 +226,24 @@ func (directory *destinationDirectory) CreateDirectory(name string, private bool
 func (*destinationDirectory) InstallDirectoryNoReplace(outputcap.Directory, string) (outputcap.Directory, error) {
 	return nil, errDestinationFake
 }
-func (*destinationDirectory) RemoveDirectory(string, outputcap.Directory) error {
-	return errDestinationFake
+func (directory *destinationDirectory) RemoveDirectory(name string, expected outputcap.Directory) error {
+	target, ok := expected.(*destinationDirectory)
+	if !ok || directory.node.entries[name] != target.node || len(target.node.entries) != 0 {
+		return outputcap.ErrUnsafeNamespace
+	}
+	delete(directory.node.entries, name)
+	return nil
 }
-func (*destinationDirectory) CreateFile(string, bool, int64) (outputcap.File, error) {
-	return nil, errDestinationFake
+func (directory *destinationDirectory) CreateFile(name string, private bool, size int64) (outputcap.File, error) {
+	if size < 0 || directory.node.entries[name] != nil {
+		return nil, outputcap.ErrNamespaceCollision
+	}
+	file := &destinationFile{data: make([]byte, size), size: uint64(size)}
+	directory.node.entries[name] = &destinationNode{
+		id: directory.platform.nextID, private: private, file: file,
+	}
+	directory.platform.nextID++
+	return file, nil
 }
 func (directory *destinationDirectory) OpenFile(name string, _ bool, _ bool) (outputcap.File, error) {
 	node := directory.node.entries[name]
@@ -245,9 +258,34 @@ func (*destinationDirectory) LinkFileNoReplace(outputcap.File, string) (outputca
 func (*destinationDirectory) ReplacePrivateFile(outputcap.File, string) error {
 	return errDestinationFake
 }
-func (*destinationDirectory) RemoveFile(string, outputcap.File) error { return errDestinationFake }
-func (*destinationDirectory) AcquireLock(string, bool) (outputcap.Lock, bool, error) {
-	return nil, false, errDestinationFake
+func (directory *destinationDirectory) RemoveFile(name string, expected outputcap.File) error {
+	node := directory.node.entries[name]
+	if node == nil || node.file == nil || node.file != expected {
+		return outputcap.ErrUnsafeNamespace
+	}
+	delete(directory.node.entries, name)
+	return nil
+}
+func (directory *destinationDirectory) AcquireLock(name string, existingOnly bool) (outputcap.Lock, bool, error) {
+	directory.platform.mu.Lock()
+	defer directory.platform.mu.Unlock()
+	node := directory.node.entries[name]
+	created := false
+	if node == nil {
+		if existingOnly {
+			return nil, false, fs.ErrNotExist
+		}
+		file := &destinationFile{}
+		node = &destinationNode{id: directory.platform.nextID, private: true, file: file}
+		directory.platform.nextID++
+		directory.node.entries[name] = node
+		created = true
+	}
+	if node.file == nil || node.file.locked {
+		return nil, false, outputcap.ErrNamespaceLockBusy
+	}
+	node.file.locked = true
+	return &destinationLock{platform: directory.platform, file: node.file}, created, nil
 }
 func (directory *destinationDirectory) PersistentDirectoryIdentityClaim() ([]byte, error) {
 	return append([]byte(nil), directory.node.identity...), nil
@@ -312,6 +350,7 @@ type destinationFile struct {
 	data   []byte
 	size   uint64
 	closed int
+	locked bool
 }
 
 func (file *destinationFile) ReadAt(p []byte, offset int64) (int, error) {
@@ -335,6 +374,24 @@ func (*destinationFile) SetModifiedTime(catalog.ModifiedTime) error             
 func (*destinationFile) MetadataMatches(uint64, catalog.ModifiedTime) (bool, error) { return true, nil }
 func (file *destinationFile) SameFile(other outputcap.File) (bool, error) {
 	return file == other, nil
+}
+
+type destinationLock struct {
+	platform *destinationPlatform
+	file     *destinationFile
+	closed   bool
+}
+
+func (lock *destinationLock) File() outputcap.File { return lock.file }
+func (lock *destinationLock) Close() error {
+	if lock == nil || lock.closed {
+		return nil
+	}
+	lock.platform.mu.Lock()
+	defer lock.platform.mu.Unlock()
+	lock.closed = true
+	lock.file.locked = false
+	return nil
 }
 
 type destinationJournal struct {

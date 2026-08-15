@@ -99,6 +99,30 @@ func TestStagedAuthorityCreatesAndExactlyReopensNamedOperation(t *testing.T) {
 	}
 }
 
+func TestControlNamespaceIsRecycledOnlyAfterLastBoundAuthorityCloses(t *testing.T) {
+	root := newRuntimeTestRootSpec(t)
+	first := newNativeReservationTestAuthority(t, root.path)
+	second := newNativeReservationTestAuthority(t, root.path)
+	if _, err := first.BindDestination(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.BindDestination(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(root.path, checkpointstore.ControlDirectory)); err != nil || !info.IsDir() {
+		t.Fatalf("live peer lost shared control namespace: (%v, %v)", info, err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root.path, checkpointstore.ControlDirectory)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("last bound authority retained empty control namespace: %v", err)
+	}
+}
+
 func TestNamedResultRootSessionDoesNotDuplicateReservedRoot(t *testing.T) {
 	root := newRuntimeTestRootSpec(t)
 	selection := nativeReservationTestSelection(t, 0x34)
