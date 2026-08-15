@@ -34,8 +34,8 @@ func TestAssemblerAdmissionTombstoneCapacityAndExpiryEdges(t *testing.T) {
 	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, fragments[0])); err != nil || assembler.ActiveRecords() != 1 {
 		t.Fatalf("active records=%d err=%v", assembler.ActiveRecords(), err)
 	}
-	now = now.Add(FragmentTimeout)
-	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, fragments[1])); !errors.Is(err, ErrFragmentTimeout) || assembler.ActiveRecords() != 0 {
+	now = now.Add(FragmentInactivityTimeout)
+	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, fragments[1])); !errors.Is(err, ErrFragmentInactivity) || assembler.ActiveRecords() != 0 {
 		t.Fatalf("implicit timeout active=%d err=%v", assembler.ActiveRecords(), err)
 	}
 	late, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, fragments[1]))
