@@ -379,7 +379,7 @@ func newTargetTrie(targets []string) *targetTrie {
 	root := &targetTrie{children: make(map[string]*targetTrie)}
 	for _, target := range targets {
 		node := root
-		for _, component := range strings.Split(target, "/") {
+		for component := range strings.SplitSeq(target, "/") {
 			child := node.children[component]
 			if child == nil {
 				child = &targetTrie{children: make(map[string]*targetTrie)}
@@ -460,10 +460,7 @@ func (proof *selectionRegionProof) addRegion(
 		proof.common = append([]realDirectoryAnchor(nil), regionAncestors...)
 		return
 	}
-	common := len(proof.common)
-	if len(regionAncestors) < common {
-		common = len(regionAncestors)
-	}
+	common := min(len(proof.common), len(regionAncestors))
 	for index := 0; index < common; index++ {
 		if proof.common[index] != regionAncestors[index] {
 			common = index
