@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointstore"
+	"github.com/windshare/windshare/core/osfs/internal/destinationauthority"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/osfs/internal/resumeauthority"
 	"github.com/windshare/windshare/core/transfer"
@@ -214,3 +215,41 @@ func TestResultRootResumeDispositionUsesAuthorityCreatedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestObserveOrdinaryResumeFinalParameterValidationAndHelpers(t *testing.T) {
+	// Parameter validations on observeOrdinaryResumeFinal
+	if _, err := observeOrdinaryResumeFinal(nil, nil, nil, checkpointmodel.Record{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("nil params error = %v", err)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	topLevel := &destinationauthority.TopLevelReservation{}
+	store := &checkpointstore.FileExecutionStore{}
+	if _, err := observeOrdinaryResumeFinal(canceled, topLevel, store, checkpointmodel.Record{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("invalid record error = %v", err)
+	}
+
+	// ordinaryResumeItems with invalid parameters
+	if _, err := ordinaryResumeItems(nil, nil, nil); !errors.Is(err, resumeauthority.ErrInvalidContract) {
+		t.Fatalf("nil ordinaryResumeItems error = %v", err)
+	}
+
+	// Helper functions with nil handles
+	if closeNativeResumeDirectory(nil) != nil {
+		t.Fatal("closeNativeResumeDirectory(nil) was not nil")
+	}
+	if closeNativeResumeFile(nil) != nil {
+		t.Fatal("closeNativeResumeFile(nil) was not nil")
+	}
+	if closeNativeResumeEntry(nil) != nil {
+		t.Fatal("closeNativeResumeEntry(nil) was not nil")
+	}
+	if closeNativeResumeOwnedFile(nil) != nil {
+		t.Fatal("closeNativeResumeOwnedFile(nil) was not nil")
+	}
+	if closeOrdinaryResumeDirectories(nil) != nil {
+		t.Fatal("closeOrdinaryResumeDirectories(nil) was not nil")
+	}
+}
+

@@ -92,3 +92,18 @@ func TestCheckpointCleanupFacadeRejectsNonCanonicalRootsBeforeNativeAccess(t *te
 		}
 	}
 }
+
+func TestCleanLegacyResumeStateExecutesOnValidRoot(t *testing.T) {
+	root := t.TempDir()
+	report, err := CleanLegacyResumeState(
+		context.Background(),
+		FilesystemResumeRoot{RootPath: root},
+	)
+	if err != nil {
+		t.Fatalf("clean legacy resume state on empty root: %v", err)
+	}
+	if !report.Complete || report.Status != CheckpointCleanupStatusComplete || report.NeedsAttention() {
+		t.Fatalf("report semantics on clean root = %+v", report)
+	}
+}
+

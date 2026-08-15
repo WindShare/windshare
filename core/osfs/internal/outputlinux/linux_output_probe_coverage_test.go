@@ -289,3 +289,33 @@ func assertLinuxProbeCoverageRootEmpty(t *testing.T, rootPath string) {
 		t.Fatalf("probe root entries = %v, error = %v", entries, err)
 	}
 }
+
+func TestLinuxOutputProbeRootLockOperations(t *testing.T) {
+	root, _ := openLinuxOutputProbeCoverageRoot(t)
+	lock, err := root.acquireOutputProbeLock()
+	if err != nil {
+		t.Fatalf("acquireOutputProbeLock error = %v", err)
+	}
+	if lock == nil || lock.directory == nil {
+		t.Fatal("acquired lock is nil")
+	}
+
+	// Double lock should fail with busy error
+	if _, err := root.acquireOutputProbeLock(); !errors.Is(err, errLinuxOutputLockBusy) {
+		t.Fatalf("concurrent probe lock error = %v, want busy", err)
+	}
+
+	// Release lock
+	if err := root.releaseOutputProbeLock(lock); err != nil {
+		t.Fatalf("releaseOutputProbeLock error = %v", err)
+	}
+
+	// Release nil lock fails closed
+	if err := root.releaseOutputProbeLock(nil); !errors.Is(err, errLinuxOutputUnsafe) {
+		t.Fatalf("nil lock release error = %v, want unsafe", err)
+	}
+	if err := root.releaseOutputProbeLock(&linuxOutputProbeRootLock{}); !errors.Is(err, errLinuxOutputUnsafe) {
+		t.Fatalf("empty lock release error = %v, want unsafe", err)
+	}
+}
+
