@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
 const remoteLeaseCleanupTimeout = 5 * time.Second
@@ -387,70 +388,176 @@ func (client *receiverRevisionClient) close() {
 }
 
 type receiverBlockLane struct {
-	identity  LaneIdentity
-	rpc       *rpcClient
-	assembler *contentflow.Assembler
-	opener    RecordOpener
-	revisions *receiverRevisionClient
+	identity                  LaneIdentity
+	rpc                       *rpcClient
+	assembler                 *contentflow.Assembler
+	opener                    RecordOpener
+	revisions                 *receiverRevisionClient
+	fragmentInactivityTimeout time.Duration
+}
+
+type receiverBlockOperation struct {
+	lane    *receiverBlockLane
+	call    *operationCall
+	retired bool
 }
 
 func (lane *receiverBlockLane) FetchBlock(
 	ctx context.Context,
 	demand transfer.BlockDemand,
 ) (records.BlockRecord, error) {
-	if err := lane.revisions.leaseError(demand.LeaseID); err != nil {
+	operation, err := lane.beginBlockOperation(ctx, demand)
+	if err != nil {
 		return records.BlockRecord{}, err
+	}
+	defer func() { _ = operation.retire(contentflow.CancelReasonOutputAbort) }()
+	return operation.receive(ctx, demand)
+}
+
+func (lane *receiverBlockLane) beginBlockOperation(
+	ctx context.Context,
+	demand transfer.BlockDemand,
+) (*receiverBlockOperation, error) {
+	if err := lane.revisions.leaseError(demand.LeaseID); err != nil {
+		return nil, err
 	}
 	request, err := contentflow.NewBlockRequest(demand.LeaseID, []uint64{demand.Index})
 	if err != nil {
-		return records.BlockRecord{}, err
+		return nil, err
 	}
 	body, err := contentflow.EncodeBlockRequest(request)
 	if err != nil {
-		return records.BlockRecord{}, err
+		return nil, err
 	}
 	call, err := lane.rpc.beginOn(ctx, &lane.identity, protocolsession.MessageRequestBlocks, body)
 	if err != nil {
 		if ctx.Err() == nil && lane.rpc.runtime.ctx.Err() == nil && requestProvenNotDelivered(err) {
-			return records.BlockRecord{}, transfer.NewDemandNotAdmitted(err)
+			return nil, transfer.NewDemandNotAdmitted(err)
 		}
-		return records.BlockRecord{}, err
+		return nil, err
 	}
-	defer func() { _ = lane.rpc.cancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
-	defer func() { _ = lane.assembler.CancelOperation(call.id) }()
+	return &receiverBlockOperation{lane: lane, call: call}, nil
+}
+
+func (operation *receiverBlockOperation) retire(reason contentflow.CancelReason) error {
+	if operation.retired {
+		return nil
+	}
+	operation.retired = true
+	// The local reassembly tombstone is committed before the RPC sink is
+	// removed, so late fragments cannot alias a replacement lane operation.
+	assemblyErr := operation.lane.assembler.CancelOperation(operation.call.id)
+	return errors.Join(assemblyErr, operation.lane.rpc.cancelAndEnd(operation.call, reason))
+}
+
+func (operation *receiverBlockOperation) receive(
+	ctx context.Context,
+	demand transfer.BlockDemand,
+) (records.BlockRecord, error) {
+	inactivityTimeout := operation.lane.blockFragmentInactivityTimeout()
+	progressDeadline := time.Now().Add(inactivityTimeout)
 	var record records.BlockRecord
 	for {
-		message, err := lane.rpc.await(ctx, call)
+		message, err := operation.lane.awaitBlockMessage(ctx, operation.call, progressDeadline)
 		if err != nil {
-			return records.BlockRecord{}, err
+			return operation.receiveFailure(err)
 		}
 		switch message.Kind() {
 		case protocolsession.MessageBlockFragment:
-			result, err := lane.assembler.AcceptAuthenticated(message.Body())
+			next, progressed, err := operation.lane.acceptBlockFragment(demand, message, record)
 			if err != nil {
-				return records.BlockRecord{}, err
+				return operation.receiveFailure(err)
 			}
-			if result.Status == contentflow.RecordComplete {
-				record, err = lane.opener.OpenBlock(demand.Descriptor, demand.Index, result.Object)
-				if err != nil {
-					return records.BlockRecord{}, err
-				}
+			record = next
+			if progressed {
+				progressDeadline = time.Now().Add(inactivityTimeout)
 			}
 		case protocolsession.MessageOperationError:
 			return records.BlockRecord{}, blockRequestOperationError(message)
 		case protocolsession.MessageOperationComplete:
-			unsigned, err := protocolsession.SenderControlSemanticBody(message)
-			if err != nil {
-				return records.BlockRecord{}, err
-			}
-			count, err := contentflow.DecodeOperationComplete(unsigned)
-			if err != nil || count != 1 || record.DataLength() == 0 {
-				return records.BlockRecord{}, errors.Join(ErrOperationMissing, err)
-			}
-			_ = lane.assembler.CompleteOperation(call.id)
-			return record, nil
+			return operation.complete(message, record)
 		default:
 			return records.BlockRecord{}, ErrOperationMissing
 		}
 	}
+}
+
+func (operation *receiverBlockOperation) receiveFailure(cause error) (records.BlockRecord, error) {
+	if !errors.Is(cause, contentflow.ErrFragmentInactivity) {
+		return records.BlockRecord{}, cause
+	}
+	boundaryErr := blockFragmentInactivityBoundary(cause)
+	if retireErr := operation.retire(contentflow.CancelReasonTimeout); retireErr != nil {
+		return records.BlockRecord{}, errors.Join(boundaryErr, retireErr)
+	}
+	return records.BlockRecord{}, transfer.NewDemandReassignableAfterRetirement(boundaryErr)
+}
+
+func (lane *receiverBlockLane) acceptBlockFragment(
+	demand transfer.BlockDemand,
+	message protocolsession.Message,
+	current records.BlockRecord,
+) (records.BlockRecord, bool, error) {
+	result, err := lane.assembler.AcceptAuthenticated(message.Body())
+	if err != nil {
+		return records.BlockRecord{}, false, err
+	}
+	progressed := result.Status == contentflow.FragmentAccepted || result.Status == contentflow.RecordComplete
+	if result.Status != contentflow.RecordComplete {
+		return current, progressed, nil
+	}
+	record, err := lane.opener.OpenBlock(demand.Descriptor, demand.Index, result.Object)
+	return record, progressed, err
+}
+
+func (operation *receiverBlockOperation) complete(
+	message protocolsession.Message,
+	record records.BlockRecord,
+) (records.BlockRecord, error) {
+	unsigned, err := protocolsession.SenderControlSemanticBody(message)
+	if err != nil {
+		return records.BlockRecord{}, err
+	}
+	count, err := contentflow.DecodeOperationComplete(unsigned)
+	if err != nil || count != 1 || record.DataLength() == 0 {
+		return records.BlockRecord{}, errors.Join(ErrOperationMissing, err)
+	}
+	_ = operation.lane.assembler.CompleteOperation(operation.call.id)
+	return record, nil
+}
+
+func (lane *receiverBlockLane) blockFragmentInactivityTimeout() time.Duration {
+	if lane.fragmentInactivityTimeout > 0 {
+		return lane.fragmentInactivityTimeout
+	}
+	return contentflow.FragmentInactivityTimeout
+}
+
+func (lane *receiverBlockLane) awaitBlockMessage(
+	ctx context.Context,
+	call *operationCall,
+	progressDeadline time.Time,
+) (protocolsession.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return protocolsession.Message{}, err
+	}
+	remaining := time.Until(progressDeadline)
+	if remaining <= 0 {
+		return protocolsession.Message{}, contentflow.ErrFragmentInactivity
+	}
+	waitContext, cancel := context.WithTimeoutCause(ctx, remaining, contentflow.ErrFragmentInactivity)
+	message, err := lane.rpc.awaitCall(waitContext, call, false)
+	cancel()
+	if errors.Is(context.Cause(waitContext), contentflow.ErrFragmentInactivity) {
+		return protocolsession.Message{}, contentflow.ErrFragmentInactivity
+	}
+	return message, err
+}
+
+func blockFragmentInactivityBoundary(cause error) error {
+	value, err := transferfault.NewSession(transferfault.ScopeOutputPause, transferfault.SessionTransport)
+	if err != nil {
+		return errors.Join(cause, err)
+	}
+	return transferfault.Wrap(value, cause)
 }
