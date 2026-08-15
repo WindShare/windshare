@@ -87,10 +87,81 @@ func TestRootPrefetchTracerDefaultsWithoutReplacingExplicitObserver(t *testing.T
 	if !called {
 		t.Fatal("explicit root prefetch tracer was replaced")
 	}
-	if got := RootPrefetchDecision(255).String(); got != "unknown" {
-		t.Fatalf("unknown root prefetch decision = %q", got)
+	decisions := []struct {
+		decision RootPrefetchDecision
+		want     string
+	}{
+		{RootPrefetchAttemptStarted, "attempt-started"},
+		{RootPrefetchYieldedToDemand, "yielded-to-demand"},
+		{RootPrefetchRetryScheduled, "retry-scheduled"},
+		{RootPrefetchCommitted, "committed"},
+		{RootPrefetchBudgetFailed, "budget-failed"},
+		{RootPrefetchScanFailed, "scan-failed"},
+		{RootPrefetchStopped, "stopped"},
+		{RootPrefetchDecision(255), "unknown"},
+	}
+	for _, tc := range decisions {
+		if got := tc.decision.String(); got != tc.want {
+			t.Fatalf("decision %v string = %q, want %q", tc.decision, got, tc.want)
+		}
 	}
 }
+
+type singleUnwrapError struct {
+	err error
+}
+
+func (e singleUnwrapError) Error() string { return "single wrapped" }
+func (e singleUnwrapError) Unwrap() error { return e.err }
+
+type sliceUnwrapError struct {
+	errs []error
+}
+
+func (e sliceUnwrapError) Error() string   { return "slice wrapped" }
+func (e sliceUnwrapError) Unwrap() []error { return e.errs }
+
+type panicUnwrapError struct{}
+
+func (e panicUnwrapError) Error() string { return "panic unwrap" }
+func (e panicUnwrapError) Unwrap() error { panic("faulty unwrapper") }
+
+func TestRootPrefetchFailureDecisionClassification(t *testing.T) {
+	if got := rootPrefetchFailureDecision(nil); got != RootPrefetchScanFailed {
+		t.Fatalf("nil error failure decision = %v, want scan-failed", got)
+	}
+	if got := rootPrefetchFailureDecision(catalog.ErrBudgetExceeded); got != RootPrefetchBudgetFailed {
+		t.Fatalf("direct budget error failure decision = %v, want budget-failed", got)
+	}
+	if got := rootPrefetchFailureDecision(singleUnwrapError{err: catalog.ErrBudgetExceeded}); got != RootPrefetchBudgetFailed {
+		t.Fatalf("single wrapped budget error failure decision = %v, want budget-failed", got)
+	}
+	if got := rootPrefetchFailureDecision(sliceUnwrapError{errs: []error{errors.New("other"), catalog.ErrBudgetExceeded}}); got != RootPrefetchBudgetFailed {
+		t.Fatalf("slice wrapped budget error failure decision = %v, want budget-failed", got)
+	}
+	if got := rootPrefetchFailureDecision(panicUnwrapError{}); got != RootPrefetchScanFailed {
+		t.Fatalf("panic unwrap error failure decision = %v, want scan-failed", got)
+	}
+	if got := rootPrefetchFailureDecision(errors.New("arbitrary error")); got != RootPrefetchScanFailed {
+		t.Fatalf("arbitrary error failure decision = %v, want scan-failed", got)
+	}
+}
+
+func TestTraceRootPrefetchPanicIsolationAndNilLogger(t *testing.T) {
+	// Nil tracer is a no-op
+	traceRootPrefetch(nil, RootPrefetchTrace{})
+
+	// Panicking tracer does not propagate
+	panickingTracer := RootPrefetchTraceFunc(func(RootPrefetchTrace) { panic("tracer fault") })
+	traceRootPrefetch(panickingTracer, RootPrefetchTrace{})
+
+	// Structured tracer with nil logger falls back to slog.Default
+	nilLoggerTracer := structuredRootPrefetchTracer{logger: nil}
+	nilLoggerTracer.TraceRootPrefetch(RootPrefetchTrace{
+		Decision: RootPrefetchScanFailed,
+	})
+}
+
 
 func catalogAccessGeneration(t *testing.T, seed byte) catalog.DirectoryGeneration {
 	t.Helper()

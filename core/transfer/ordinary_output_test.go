@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -240,3 +241,93 @@ func ordinaryID[T ~[catalog.IdentityBytes]byte](seed byte) T {
 	}
 	return value
 }
+
+func TestOrdinaryOutputSourceNodeValidators(t *testing.T) {
+	dirID := ordinaryID[catalog.DirectoryID](1)
+	fileID := ordinaryID[catalog.FileID](2)
+	sourcePath, err := ordinaryoutput.NewSourceCatalogPath("folder/file.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Directory node with invalid parameters
+	if _, err := OrdinaryOutputSourceNode(catalog.NodeKindDirectory, catalog.DirectoryID{}, catalog.FileID{}, sourcePath, ordinaryoutput.SourceNodeSelected); !errors.Is(err, ordinaryoutput.ErrInvalidAuthenticatedSource) {
+		t.Fatalf("zero directory id error = %v", err)
+	}
+	if _, err := OrdinaryOutputSourceNode(catalog.NodeKindDirectory, dirID, fileID, sourcePath, ordinaryoutput.SourceNodeSelected); !errors.Is(err, ordinaryoutput.ErrInvalidAuthenticatedSource) {
+		t.Fatalf("directory with file id error = %v", err)
+	}
+
+	// File node with invalid parameters
+	if _, err := OrdinaryOutputSourceNode(catalog.NodeKindFile, catalog.DirectoryID{}, catalog.FileID{}, sourcePath, ordinaryoutput.SourceNodeSelected); !errors.Is(err, ordinaryoutput.ErrInvalidAuthenticatedSource) {
+		t.Fatalf("zero file id error = %v", err)
+	}
+	if _, err := OrdinaryOutputSourceNode(catalog.NodeKindFile, dirID, fileID, sourcePath, ordinaryoutput.SourceNodeSelected); !errors.Is(err, ordinaryoutput.ErrInvalidAuthenticatedSource) {
+		t.Fatalf("file with directory id error = %v", err)
+	}
+
+	// Unknown node kind
+	if _, err := OrdinaryOutputSourceNode(catalog.NodeKind(255), dirID, catalog.FileID{}, sourcePath, ordinaryoutput.SourceNodeSelected); !errors.Is(err, ordinaryoutput.ErrInvalidAuthenticatedSource) {
+		t.Fatalf("unknown node kind error = %v", err)
+	}
+}
+
+func TestOrdinaryOutputShapeDecisionAndProjectorValidation(t *testing.T) {
+	// Invalid shape decision
+	if _, err := MaterializeOrdinaryOutputShape(ordinaryoutput.ShapeDecision{}); !errors.Is(err, ordinaryoutput.ErrInvalidShapeResolution) {
+		t.Fatalf("invalid shape decision error = %v", err)
+	}
+
+	// Zero intent projector
+	if _, err := OrdinaryOutputArtifactPathProjector(ReceiveIntent{}); !errors.Is(err, ordinaryoutput.ErrInvalidArtifactProjector) {
+		t.Fatalf("zero intent projector error = %v", err)
+	}
+
+	// Zero selection spec
+	if _, err := (SelectionSpec{}).OrdinaryOutputSelection(); !errors.Is(err, ErrInvalidSelectionRules) {
+		t.Fatalf("zero selection error = %v", err)
+	}
+}
+
+func TestOrdinaryOutputMaterializationRequestAndClaimAccessors(t *testing.T) {
+	// Zero claim accessors
+	zeroClaim := MaterializedDirectoryClaim{}
+	if zeroClaim.Valid() || !zeroClaim.Admission().IsZero() || zeroClaim.ArtifactPath().Valid() {
+		t.Fatalf("zero claim invalidity semantics drifted: %+v", zeroClaim)
+	}
+
+	// NewDirectoryMaterializationRequest with invalid source path
+	projector, err := ordinaryoutput.NewArtifactPathProjector(
+		ordinaryID[catalog.DirectoryID](1),
+		receivecontract.NewCatalogRootDirectoryTree(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewDirectoryMaterializationRequest(projector, AuthenticatedSourceDirectory{}, ordinaryoutput.SourceNodeSelected, zeroClaim); err == nil {
+		t.Fatal("invalid source path request succeeded")
+	}
+
+	// MatchesProjector and MatchesIntent with zero values
+	if DirectoryMaterializationMatchesIntent(ReceiveIntent{}, DirectoryMaterializationRequest{}) {
+		t.Fatal("zero intent matched materialization")
+	}
+	if DirectoryMaterializationMatchesProjector(projector, DirectoryMaterializationRequest{}) {
+		t.Fatal("empty request matched projector")
+	}
+	if MaterializationFileMatchesIntent(ReceiveIntent{}, MaterializationFile{}) {
+		t.Fatal("zero intent matched file")
+	}
+	if MaterializationFileMatchesProjector(projector, MaterializationFile{}) {
+		t.Fatal("empty file matched projector")
+	}
+
+	// File accessors on zero MaterializationFile
+	zeroFile := MaterializationFile{}
+	if zeroFile.SourcePath().Valid() || zeroFile.ArtifactPath().Valid() || zeroFile.ExpectedSize() != 0 ||
+		!zeroFile.Descriptor().ShareInstance().IsZero() || !zeroFile.SourceParentAdmission().IsZero() ||
+		zeroFile.ParentMaterialization().Valid() {
+		t.Fatalf("zero file accessors drifted: %+v", zeroFile)
+	}
+}
+

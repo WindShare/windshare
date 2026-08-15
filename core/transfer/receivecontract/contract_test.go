@@ -383,3 +383,68 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		t.Fatal("zero plan exposed authority")
 	}
 }
+
+func TestReceiveContractArtifactEdgeCases(t *testing.T) {
+	file := contractID[catalog.FileID](27)
+	directory := contractID[catalog.DirectoryID](28)
+
+	// AppendProtectedSuffix edge cases
+	if _, err := AppendProtectedSuffix("", ".zip"); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatal("empty base allowed")
+	}
+	if _, err := AppendProtectedSuffix(".wsresume", ".zip"); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatal(".wsresume base allowed")
+	}
+	if _, err := AppendProtectedSuffix("name", ""); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatal("empty suffix allowed")
+	}
+	if _, err := AppendProtectedSuffix("name", "\xff\xfe"); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatal("invalid utf8 suffix allowed")
+	}
+	if _, err := AppendProtectedSuffix("name", strings.Repeat("a", MaxResultComponentBytes)); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatal("oversized suffix allowed")
+	}
+
+	// NewZipArchiveArtifact with invalid layout
+	if _, err := NewZipArchiveArtifact(ResultRootLayout{}); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatal("invalid layout zip allowed")
+	}
+
+	// NewCompleteDirectoryResultRoot & NewDirectorySelectionResultRoot with invalid params
+	if _, err := NewCompleteDirectoryResultRoot(catalog.DirectoryID{}, "folder"); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatal("zero directory id allowed")
+	}
+	if _, err := NewDirectorySelectionResultRoot(catalog.DirectoryID{}, "folder"); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatal("zero directory id allowed")
+	}
+
+	// NewOriginalFileArtifact & NewSingleFileDirectoryTree with invalid params
+	if _, err := NewOriginalFileArtifact(catalog.FileID{}, "file.txt", "file.txt"); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatal("zero file id original allowed")
+	}
+	if _, err := NewOriginalFileArtifact(file, "folder/file.txt", "wrong.txt"); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatal("mismatched suggested name allowed")
+	}
+	if _, err := NewSingleFileDirectoryTree(catalog.FileID{}, "file.txt", "file.txt"); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatal("zero file id single allowed")
+	}
+	if _, err := NewSingleFileDirectoryTree(file, "folder/file.txt", "wrong.txt"); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatal("mismatched output name allowed")
+	}
+
+	// ResultRootLayout getters and zero checks
+	root, err := NewDirectorySelectionResultRoot(directory, "docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root.Class() != ResultRootDirectorySelection || root.AnchorKind() != ResultRootDirectoryAnchor ||
+		root.DirectoryID() != directory || root.SourcePath() != "docs" || root.Name() != "docs-selection" ||
+		len(root.CanonicalBytes()) == 0 {
+		t.Fatalf("result root getters drifted: %+v", root)
+	}
+	synthetic := NewSyntheticSelectionResultRoot()
+	if synthetic.Class() != ResultRootSyntheticSelection || synthetic.AnchorKind() != ResultRootSyntheticAnchor {
+		t.Fatalf("synthetic root getters drifted: %+v", synthetic)
+	}
+}
+
