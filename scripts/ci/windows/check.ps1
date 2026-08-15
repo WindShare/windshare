@@ -6,6 +6,8 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
 Set-Location $repositoryRoot
+. scripts/ci/windows/go-package-sets.ps1
+$allPackages = Get-WindShareGoPackageSet -Set all
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
 function Invoke-Step([string]$Label, [scriptblock]$Body) {
@@ -18,8 +20,7 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 }
 
 Write-Output '== check =='
-Invoke-Step 'root short tests' { go test -short ./... }
-Invoke-Step 'core short tests' { go -C core test -short ./... }
+Invoke-Step 'production short tests' { go test -short $allPackages }
 Invoke-Step 'Web typecheck' { pnpm -C web exec tsc -b --force }
 Invoke-Step 'Web unit tests' { pnpm -C web test }
 Write-Output ('== check: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

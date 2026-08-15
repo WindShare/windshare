@@ -1,26 +1,27 @@
 # WindShare core
 
-`github.com/windshare/windshare/core` is WindShare's network-free Go module. It
-owns capability links, catalog and content contracts, authenticated session
-state, transfer orchestration, and root-confined filesystem adapters. Signaling
-and concrete transports remain in the repository's root module.
+`github.com/windshare/windshare/core/...` is WindShare's network-free package
+subtree inside the single production Go module. It owns capability links,
+catalog and content contracts, authenticated session state, transfer
+orchestration, and root-confined filesystem adapters. Signaling and concrete
+transports remain outside this package boundary.
 
-The module is pre-v1 and intentionally does not preserve obsolete protocol
-models. Applications should pin an exact release.
+An explicit dependency-graph gate prevents core packages from importing
+non-core WindShare packages or concrete networking and transport capabilities.
+The project may reconsider a separate core module after real external consumers
+exist and need an independent compatibility and release lifecycle; the current
+pre-v1 package API makes no compatibility promise for that possible split.
 
-## Verify a release
+## Validate
 
-From this directory:
+From the repository root:
 
 ```sh
-GOWORK=off go mod tidy -diff
-GOWORK=off go list ./...
-GOWORK=off go build ./...
-GOWORK=off go test -race ./...
+GOWORK=off go test ./core/...
+make ci
 ```
 
 `testvectors/` is the single canonical Go↔TypeScript protocol-vector
-inventory. It is included in module releases so the extracted module can run
-its complete test suite without a parent repository.
+inventory and is included in the root module release archive.
 
 Licensed under Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

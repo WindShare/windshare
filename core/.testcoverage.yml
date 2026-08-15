@@ -1,19 +1,19 @@
-# go-test-coverage config for the CORE module (github.com/windshare/windshare/core).
-# The root module has its own gate at ../.testcoverage.yml (total >=80).
+# go-test-coverage config for core production packages.
+# Non-core packages have their own gate at ../.testcoverage.yml (total >=80).
 # https://github.com/vladopajic/go-test-coverage
 #
 # Core is network-free, but osfs includes platform-native disk backends.
 # Coverage therefore depends on the exercised OS profile; the bar remains
-# higher than the root module's.
+# higher than the non-core package group's.
 
 profile: cover.out
 local-prefix: github.com/windshare/windshare/core
 
 threshold:
-  # Every package must hold the floor on its own; the module total cannot
+  # Every package must hold the floor on its own; the group total cannot
   # subsidize an under-tested package.
   package: 70
-  # Core module total.
+  # Core package total.
   total: 90
   # No per-file floor.
   file: 0

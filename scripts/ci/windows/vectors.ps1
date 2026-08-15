@@ -19,7 +19,7 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 
 Write-Output '== vectors =='
 Invoke-Step 'verify protocol-contract vectors' {
-    go -C core test -count=1 ./internal/protocolcontract
+    go test -count=1 ./core/internal/protocolcontract
 }
 Invoke-Step 'verify peer-signaling vectors' {
     go test -count=1 ./connectivity/v2signal

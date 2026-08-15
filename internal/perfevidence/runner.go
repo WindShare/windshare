@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"golang.org/x/mod/modfile"
 )
 
 const (
@@ -19,7 +21,14 @@ const (
 	maximumCommandDiagnosticBytes = 8 << 10
 	performanceComponent          = "perfevidence"
 	performanceRunnerScenario     = "performance-runner"
+	repositoryModulePath          = "github.com/windshare/windshare"
 )
+
+type repositoryLocator struct {
+	workingDirectory func() (string, error)
+	absolutePath     func(string) (string, error)
+	readFile         func(string) ([]byte, error)
+}
 
 type RunConfig struct {
 	RepositoryRoot string
@@ -351,23 +360,40 @@ func randomRunID() (string, error) {
 }
 
 func resolveRepositoryRoot(requested string) (string, error) {
+	return locateRepositoryRoot(requested, repositoryLocator{
+		workingDirectory: os.Getwd,
+		absolutePath:     filepath.Abs,
+		readFile:         os.ReadFile,
+	})
+}
+
+func locateRepositoryRoot(requested string, locator repositoryLocator) (string, error) {
+	if locator.workingDirectory == nil || locator.absolutePath == nil || locator.readFile == nil {
+		return "", errors.New("repository locator dependencies are required")
+	}
 	if requested != "" {
-		absolute, err := filepath.Abs(requested)
+		absolute, err := locator.absolutePath(requested)
 		if err != nil {
 			return "", fmt.Errorf("resolve repository root: %w", err)
 		}
-		if !isRepositoryRoot(absolute) {
-			return "", fmt.Errorf("%s is not the WindShare repository root", absolute)
+		absolute = filepath.Clean(absolute)
+		if err := requireRepositoryModuleIdentity(locator.readFile, absolute); err != nil {
+			return "", fmt.Errorf("%s is not the WindShare repository root: %w", absolute, err)
 		}
-		return filepath.Clean(absolute), nil
+		return absolute, nil
 	}
-	current, err := os.Getwd()
+	current, err := locator.workingDirectory()
 	if err != nil {
 		return "", fmt.Errorf("read working directory: %w", err)
 	}
+	current, err = locator.absolutePath(current)
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory: %w", err)
+	}
+	current = filepath.Clean(current)
 	for {
-		if isRepositoryRoot(current) {
-			return filepath.Clean(current), nil
+		if err := requireRepositoryModuleIdentity(locator.readFile, current); err == nil {
+			return current, nil
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
@@ -377,12 +403,21 @@ func resolveRepositoryRoot(requested string) (string, error) {
 	}
 }
 
-func isRepositoryRoot(path string) bool {
-	for _, relative := range []string{"go.work", "go.mod", "core/go.mod"} {
-		info, err := os.Stat(filepath.Join(path, filepath.FromSlash(relative)))
-		if err != nil || !info.Mode().IsRegular() {
-			return false
-		}
+func requireRepositoryModuleIdentity(readFile func(string) ([]byte, error), root string) error {
+	path := filepath.Join(root, "go.mod")
+	encoded, err := readFile(path)
+	if err != nil {
+		return fmt.Errorf("read module identity %s: %w", path, err)
 	}
-	return true
+	parsed, err := modfile.Parse(path, encoded, nil)
+	if err != nil {
+		return fmt.Errorf("parse module identity %s: %w", path, err)
+	}
+	if parsed.Module == nil {
+		return fmt.Errorf("module identity %s has no module directive", path)
+	}
+	if actual := parsed.Module.Mod.Path; actual != repositoryModulePath {
+		return fmt.Errorf("module identity %s = %q, want %q", path, actual, repositoryModulePath)
+	}
+	return nil
 }

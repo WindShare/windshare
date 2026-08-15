@@ -8,11 +8,14 @@ Performance reports are local diagnostics. Correctness and release remain owned 
 From the repository root:
 
 ```powershell
+$env:GOWORK = 'off'
 go -C internal/perfevidence run ./cmd/perfevidence -list
 go -C internal/perfevidence run ./cmd/perfevidence -workloads ready-real-disk -samples 5 > performance.json
 ```
 
-The developer provides the local Go toolchain; the runner does not install or update it. Use
+Disabling ambient Go workspaces keeps the isolated evidence module's dependency graph reproducible;
+the runner applies the same setting to benchmark child processes. The developer provides the local Go
+toolchain; the runner does not install or update it. Use
 `-repository` only when the repository cannot be resolved from the current directory. An empty
 `-workloads` value runs all seven maintained workloads. Each sample directly executes:
 
