@@ -73,6 +73,8 @@ type BindConfig struct {
 	Platform               outputcap.Platform
 	DisplayPath            string
 	OpenLiveCleanupJournal LiveCleanupJournalOpener
+	RecyclePrivateState    PrivateStateRecycler
+	ControlUseNonceSource  io.Reader
 }
 
 // BoundDestination retains only identity/private capabilities. A retained root
@@ -87,6 +89,8 @@ type BoundDestination struct {
 	proof       outputcap.Directory
 	journal     LiveCleanupJournalHandle
 	resumable   io.Closer
+	controlUse  *controlUseLease
+	recycler    PrivateStateRecycler
 	profile     checkpointmodel.LiveCleanupNativeProfile
 	closed      bool
 }
@@ -155,13 +159,15 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 		}
 	}()
 
-	control, created, err := openOrCreateExactPrivateDirectory(root, controlDirectoryName)
+	control, created, controlUse, err := bindControlUse(
+		root, config.RecyclePrivateState != nil, config.ControlUseNonceSource,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		if resultErr != nil {
-			resultErr = errors.Join(resultErr, control.Close())
+			resultErr = errors.Join(resultErr, abortControlUse(control, controlUse), control.Close())
 		}
 	}()
 	rootClaim, controlClaim, err := bindIdentityClaims(root, control)
@@ -216,7 +222,8 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 	guardClosed = true
 	return &BoundDestination{
 		binding: binding, platform: config.Platform, rootWitness: rootWitness,
-		control: control, proof: proof, journal: journal, profile: profile,
+		control: control, proof: proof, journal: journal, controlUse: controlUse,
+		recycler: config.RecyclePrivateState, profile: profile,
 	}, nil
 }
 
@@ -332,16 +339,19 @@ func (authority *BoundDestination) Close() error {
 	}
 	authority.closed = true
 	// Dependencies close from the record codec and deepest private namespace
-	// outward. Platform closure comes last because every capability is native-owned.
+	// outward. The control-use lease is released only after those handles stop
+	// authorizing work, so the last user can safely recycle an empty namespace.
 	var err error
 	err = errors.Join(err, closeCloser(authority.resumable))
 	err = errors.Join(err, authority.journal.Close())
 	err = errors.Join(err, closeDirectory(authority.proof))
+	err = errors.Join(err, authority.recycleControlState())
 	err = errors.Join(err, closeDirectory(authority.control))
 	err = errors.Join(err, closeDirectory(authority.rootWitness))
 	err = errors.Join(err, authority.platform.Close())
 	authority.binding = Binding{}
 	authority.platform, authority.rootWitness, authority.control, authority.proof = nil, nil, nil, nil
+	authority.controlUse, authority.recycler = nil, nil
 	return err
 }
 
