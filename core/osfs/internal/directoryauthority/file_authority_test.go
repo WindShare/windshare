@@ -197,11 +197,16 @@ func (directory *fileAuthorityDirectory) InstallDirectoryNoReplace(
 	return directory.platform.wrapDirectory(installed.(*fakeDirectory)), nil
 }
 
+func (directory *fileAuthorityDirectory) PersistentDirectoryIdentityClaim() ([]byte, error) {
+	return []byte("file-authority-dir-claim"), nil
+}
+
 func (directory *fileAuthorityDirectory) OpenFile(
 	name string,
 	private bool,
 	writable bool,
 ) (outputcap.File, error) {
+
 	opened, err := directory.base.OpenFile(name, private, writable)
 	if err != nil || opened == nil {
 		return nil, err
@@ -938,3 +943,89 @@ func TestLiveFileAuthorityPublishesOnlyTheRetainedStageIdentity(t *testing.T) {
 		t.Fatalf("replaced live final = (%v, %v)", observed.Condition(), err)
 	}
 }
+
+type captureDirectoryExecutor struct {
+	outputsession.DirectoryExecutor
+	captured outputsession.DirectoryClaim
+}
+
+func (c *captureDirectoryExecutor) MaterializeDirectory(
+	ctx context.Context,
+	claim outputsession.DirectoryClaim,
+) (outputsession.DirectoryMaterialization, error) {
+	c.captured = claim
+	return c.DirectoryExecutor.MaterializeDirectory(ctx, claim)
+}
+
+func TestAuthorityOwnedDirectoryID(t *testing.T) {
+	platform := newFileAuthorityPlatform()
+	platform.addDirectory(platform.rootNode(), "folder")
+	directories, err := New(platform, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = directories.Close() })
+	capture := &captureDirectoryExecutor{DirectoryExecutor: directories}
+	sessionID := testIdentity[transfer.OutputSessionID](151)
+	share := testIdentity[catalog.ShareInstance](131)
+	rootID := testIdentity[catalog.DirectoryID](141)
+	rules, err := transfer.NewSelectionRules(true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := testDirectTreeIntent(t, share, rootID, rules)
+	session, err := outputsession.New(outputsession.Config{
+		Intent:    intent,
+		SessionID: sessionID,
+		Capabilities: transfer.DirectTreeCapabilities{
+			Durability:   transfer.DurabilityPowerLoss,
+			ModifiedTime: true,
+		},
+		ReceiptSecret: bytes.Repeat([]byte{0x71}, 32),
+		Locator:       directories,
+		Destinations: outputsession.ArtifactDestinationBinderFunc(func(path ordinaryoutput.ArtifactPath) (outputsession.DestinationPath, error) {
+			return outputsession.NewDestinationPath(path.String())
+		}),
+		Directories: capture,
+		Files:       &fileAuthorityClaimCapture{authority: &FileAuthority{}},
+		Resources: outputsession.ResourceReleaserFunc(func(context.Context) error {
+			return nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootSource := testSourceDirectory(
+		t, rootID, testIdentity[catalog.DirectoryGeneration](161),
+		transfer.DirectoryAdmission{}, "", catalog.ModifiedTime{},
+	)
+	rootAdmission, err := session.AdmitDirectory(
+		context.Background(), projectedDirectoryRequest(
+			t, intent, rootSource, transfer.MaterializedDirectoryClaim{},
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directorySource := testSourceDirectory(
+		t, testIdentity[catalog.DirectoryID](171), testIdentity[catalog.DirectoryGeneration](181),
+		rootAdmission, "folder", catalog.ModifiedTime{},
+	)
+	_, err = session.AdmitDirectory(
+		context.Background(), projectedDirectoryRequest(
+			t, intent, directorySource, transfer.MaterializedDirectoryClaim{},
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := directories.OwnedDirectoryID(outputsession.DirectoryClaim{}); !errors.Is(err, ErrInvalidClaim) {
+		t.Fatalf("empty claim error = %v", err)
+	}
+	ownedID, err := directories.OwnedDirectoryID(capture.captured)
+	if err != nil || ownedID.IsZero() {
+		t.Fatalf("OwnedDirectoryID on captured claim = (%x, %v)", ownedID.Bytes(), err)
+	}
+}
+
+

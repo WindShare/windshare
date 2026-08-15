@@ -55,10 +55,67 @@ func TestPOSIXStabilityBinderValidatesCandidateAndDetectsMutation(t *testing.T) 
 	if string(buffer) != string(data) || stable.ExactSize() != uint64(len(data)) || !stable.ModifiedTime().Present() {
 		t.Fatalf("stable file metadata/data = %q / %d / %+v", buffer, stable.ExactSize(), stable.ModifiedTime())
 	}
-	if err := os.WriteFile(path, []byte("source changed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	if err := stable.Verify(context.Background()); !errors.Is(err, content.ErrSourceDrift) {
 		t.Fatalf("mutation verification = %v", err)
 	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := stable.Verify(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled verify error = %v", err)
+	}
+	if _, err := stable.ReadAt(canceled, buffer, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled read error = %v", err)
+	}
 }
+
+func TestPOSIXStabilityPlatformConstructorsAndBinderEdgeCases(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "test.bin")
+	if err := os.WriteFile(path, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handle, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+
+	// platformCatalogBaseline
+	ident, cand, err := platformCatalogBaseline(handle)
+	if err != nil || ident.IsZero() || cand.IsZero() {
+		t.Fatalf("platformCatalogBaseline = (%+v, %+v, %v)", ident, cand, err)
+	}
+
+	// newPlatformRootedRevisionSource
+	revSource, err := newPlatformRootedRevisionSource([]string{root})
+	if err != nil {
+		t.Fatalf("newPlatformRootedRevisionSource error = %v", err)
+	}
+	_ = revSource.Close()
+
+	// openNativeOutputPlatform
+	platform, err := openNativeOutputPlatform(root, false)
+	if err != nil {
+		t.Fatalf("openNativeOutputPlatform error = %v", err)
+	}
+	_ = platform.Close()
+
+	// POSIXStabilityBinder edge cases
+	binder := POSIXStabilityBinder{}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := binder.BindStable(canceled, StableBinding{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled bind error = %v", err)
+	}
+	if _, err := binder.BindStable(context.Background(), StableBinding{File: nil}); !errors.Is(err, content.ErrUnsupportedStability) {
+		t.Fatalf("nil file bind error = %v", err)
+	}
+
+	// Stale candidate / identity mismatch
+	var dummyRecord catalog.FileNodeRecord
+	if _, err := binder.BindStable(context.Background(), StableBinding{File: handle, Record: dummyRecord}); !errors.Is(err, content.ErrRevisionStale) {
+		t.Fatalf("mismatched record bind error = %v", err)
+	}
+}
+

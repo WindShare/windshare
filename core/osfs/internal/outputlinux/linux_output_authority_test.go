@@ -154,7 +154,44 @@ func TestLinuxOpenObjectIdentityRequiresOwnerUID(t *testing.T) {
 	}
 }
 
+func TestLinuxAuthorityMissingProviderFallbacks(t *testing.T) {
+	root, _ := newLinuxAuthorityRoot(t)
+	installLinuxSafeAuthorityHarness(root.system)
+
+	// nil faccessat2
+	root.system.faccessat2 = nil
+	if err := root.validatePublicCreateAuthority(); !errors.Is(err, errLinuxOutputUnsupported) {
+		t.Fatalf("nil faccessat2 error = %v, want unsupported", err)
+	}
+
+	// faccessat2 returns ENOSYS
+	root.system.faccessat2 = func(int, string, uint32, int) error { return unix.ENOSYS }
+	if err := root.validatePublicCreateAuthority(); !errors.Is(err, errLinuxOutputUnsupported) {
+		t.Fatalf("ENOSYS faccessat2 error = %v, want unsupported", err)
+	}
+
+	// nil geteuid in metadata authority
+	installLinuxSafeAuthorityHarness(root.system)
+	root.system.geteuid = nil
+	if err := root.validateMetadataAuthority(); !errors.Is(err, errLinuxOutputUnsupported) {
+		t.Fatalf("nil geteuid metadata authority error = %v, want unsupported", err)
+	}
+
+	// nil geteuid in private authority
+	if err := root.validatePrivateAuthority("test"); !errors.Is(err, errLinuxOutputUnsupported) {
+		t.Fatalf("nil geteuid private authority error = %v, want unsupported", err)
+	}
+
+	// statx error in ownerUID
+	installLinuxSafeAuthorityHarness(root.system)
+	root.system.statx = func(int, string, int, int, *unix.Statx_t) error { return unix.EIO }
+	if _, err := root.ownerUID(); err == nil {
+		t.Fatal("statx EIO succeeded in ownerUID")
+	}
+}
+
 func installLinuxSafeAuthorityHarness(system *linuxOutputSystem) {
 	system.faccessat2 = func(int, string, uint32, int) error { return nil }
 	system.geteuid = func() int { return 0 }
 }
+
