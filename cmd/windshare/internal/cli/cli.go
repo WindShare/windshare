@@ -109,11 +109,12 @@ func (a *App) usage() {
 	      Commit selected roots, wait for relay registration, print a suite-02 link, and scan descendants on demand.
 	      --split-key prints a bare link and key string for delivery over separate channels.
 
-	  windshare get <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only]
-	  windshare get -o <directory> <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only]
+	  windshare get <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only]
+	  windshare get -o <directory> <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only]
 	      Save one ordinary named result inside the output container; -o defaults to the current directory.
 	      Compatible active downloads reuse their frozen result name and verified progress.
 	      relay-only skips direct peer setup and transfers content through the configured relay.
+	      p2p-only uses the relay for bootstrap and signaling but never for content; direct-path failure stops the download.
 	      If the link has no key, use --key or enter the key interactively.
 
 	  windshare resume list -o <directory>

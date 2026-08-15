@@ -133,7 +133,7 @@ func (a *App) parseGetRequest(args []string) (getRequest, int) {
 	connectivityName := flags.String(
 		"connectivity",
 		ConnectivityAuto.String(),
-		"content connectivity policy: auto or relay-only",
+		"content connectivity policy: auto, relay-only, or p2p-only",
 	)
 	var only repeatedFlag
 	flags.Var(&only, "only", "download only this catalog path; repeatable, directories include descendants")

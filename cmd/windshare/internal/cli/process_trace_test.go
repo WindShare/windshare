@@ -118,10 +118,15 @@ func TestGetRequestParsesConnectivityPolicy(t *testing.T) {
 		t.Fatalf("relay-only request = %+v, exit=%d stderr=%q", request, code, stderr.String())
 	}
 	app, _, stderr = newSemanticTestApp(strings.NewReader(""))
+	request, code = app.parseGetRequest([]string{encoded, "--connectivity", "p2p-only"})
+	if code != ExitOK || request.connectivity != ConnectivityP2POnly {
+		t.Fatalf("p2p-only request = %+v, exit=%d stderr=%q", request, code, stderr.String())
+	}
+	app, _, stderr = newSemanticTestApp(strings.NewReader(""))
 	if _, code := app.parseGetRequest([]string{encoded, "--connectivity", "relay"}); code != ExitUsage {
 		t.Fatalf("unknown connectivity exit=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "want auto or relay-only") {
+	if !strings.Contains(stderr.String(), "want auto, relay-only, or p2p-only") {
 		t.Fatalf("unknown connectivity diagnostic=%q", stderr.String())
 	}
 }

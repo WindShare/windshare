@@ -16,14 +16,15 @@ import (
 
 var ErrInvalidConnectivityPolicy = errors.New("invalid connectivity policy")
 
-// ConnectivityPolicy decides whether receiver planning may create a peer
-// attempt. Modeling the choice at the consumer boundary prevents relay-only
-// operation from depending on timing, failed ICE, or a test-only transport.
+// ConnectivityPolicy owns both peer-attempt requirements and application-relay
+// content admission. Keeping those decisions together prevents a mode from
+// accidentally admitting the content path it promises to exclude.
 type ConnectivityPolicy uint8
 
 const (
 	ConnectivityAuto ConnectivityPolicy = iota + 1
 	ConnectivityRelayOnly
+	ConnectivityP2POnly
 )
 
 func ParseConnectivityPolicy(value string) (ConnectivityPolicy, error) {
@@ -32,8 +33,14 @@ func ParseConnectivityPolicy(value string) (ConnectivityPolicy, error) {
 		return ConnectivityAuto, nil
 	case "relay-only":
 		return ConnectivityRelayOnly, nil
+	case "p2p-only":
+		return ConnectivityP2POnly, nil
 	default:
-		return 0, fmt.Errorf("%w %q; want auto or relay-only", ErrInvalidConnectivityPolicy, value)
+		return 0, fmt.Errorf(
+			"%w %q; want auto, relay-only, or p2p-only",
+			ErrInvalidConnectivityPolicy,
+			value,
+		)
 	}
 }
 
@@ -43,25 +50,87 @@ func (policy ConnectivityPolicy) String() string {
 		return "auto"
 	case ConnectivityRelayOnly:
 		return "relay-only"
+	case ConnectivityP2POnly:
+		return "p2p-only"
 	default:
 		return "invalid"
+	}
+}
+
+type receiverPeerRequirement uint8
+
+const (
+	receiverPeerDisabled receiverPeerRequirement = iota + 1
+	receiverPeerPreferred
+	receiverPeerRequired
+)
+
+type receiverRelayContentMode uint8
+
+const (
+	receiverRelayContentImmediate receiverRelayContentMode = iota + 1
+	receiverRelayContentAdaptive
+	receiverRelayContentProhibited
+)
+
+type receiverConnectivityPlan struct {
+	peer         receiverPeerRequirement
+	relayContent receiverRelayContentMode
+}
+
+func (plan receiverConnectivityPlan) valid() bool {
+	return plan == (receiverConnectivityPlan{
+		peer: receiverPeerPreferred, relayContent: receiverRelayContentAdaptive,
+	}) || plan == (receiverConnectivityPlan{
+		peer: receiverPeerDisabled, relayContent: receiverRelayContentImmediate,
+	}) || plan == (receiverConnectivityPlan{
+		peer: receiverPeerRequired, relayContent: receiverRelayContentProhibited,
+	})
+}
+
+func (policy ConnectivityPolicy) receiverPlan() (receiverConnectivityPlan, error) {
+	switch policy {
+	case ConnectivityAuto:
+		return receiverConnectivityPlan{
+			peer: receiverPeerPreferred, relayContent: receiverRelayContentAdaptive,
+		}, nil
+	case ConnectivityRelayOnly:
+		return receiverConnectivityPlan{
+			peer: receiverPeerDisabled, relayContent: receiverRelayContentImmediate,
+		}, nil
+	case ConnectivityP2POnly:
+		return receiverConnectivityPlan{
+			peer: receiverPeerRequired, relayContent: receiverRelayContentProhibited,
+		}, nil
+	default:
+		return receiverConnectivityPlan{}, ErrInvalidConnectivityPolicy
 	}
 }
 
 const receiverTerminationTraceWaitTime = time.Second
 
 func (a *App) monitorReceiverAdmission(
-	admission *relayContentAdmission,
+	admission receiverContentAdmission,
 	runtime receiverRuntimeCloser,
 ) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		decision, ok := <-admission.Decision()
-		if !ok || decision.Cause == nil || decision.TerminalOwner != receiverAdmissionTerminalResumeFailed {
+		if !ok || decision.Cause == nil {
 			return
 		}
-		a.logf("get: restore relay content admission failed cause_class=relay_resume")
+		switch decision.TerminalOwner {
+		case receiverAdmissionTerminalResumeFailed:
+			a.logf("get: restore relay content admission failed cause_class=relay_resume")
+		case receiverAdmissionTerminalP2PUnavailable:
+			a.logf(
+				"get: p2p-only direct peer path unavailable trigger=%s; relay content fallback is disabled",
+				decision.Trigger,
+			)
+		default:
+			return
+		}
 		if runtime != nil {
 			runtime.Close()
 		}
@@ -70,20 +139,30 @@ func (a *App) monitorReceiverAdmission(
 }
 
 func beginReceiverPlanning(
-	policy ConnectivityPolicy,
+	plan receiverConnectivityPlan,
 	startPeer func() *activeReceiverPeer,
-	resumeRelayOnly func(),
+	admitRelayOnly func() error,
 	resolveSelection func() (transfer.SelectionRules, error),
 ) (*activeReceiverPeer, transfer.SelectionRules, error) {
-	// downloadT0 and its independent relay deadline are already armed. Starting
-	// the peer before bounded rule validation keeps setup concurrent; authenticated
-	// --only path traversal belongs to the transfer job and cannot shift T0.
+	if !plan.valid() {
+		return nil, transfer.SelectionRules{}, ErrInvalidConnectivityPolicy
+	}
+	// Any policy-owned relay deadline is already armed. Starting the peer before
+	// bounded rule validation keeps setup concurrent; authenticated --only path
+	// traversal belongs to the transfer job and cannot shift adaptive policy T0.
 	var peer *activeReceiverPeer
-	switch policy {
-	case ConnectivityAuto:
+	switch plan.peer {
+	case receiverPeerPreferred:
 		peer = startPeer()
-	case ConnectivityRelayOnly:
-		resumeRelayOnly()
+	case receiverPeerDisabled:
+		if err := admitRelayOnly(); err != nil {
+			return nil, transfer.SelectionRules{}, err
+		}
+	case receiverPeerRequired:
+		peer = startPeer()
+		if peer == nil {
+			return nil, transfer.SelectionRules{}, errReceiverP2PPathUnavailable
+		}
 	default:
 		return nil, transfer.SelectionRules{}, ErrInvalidConnectivityPolicy
 	}
@@ -248,7 +327,7 @@ func (a *App) startReceiverPeer(
 
 func (a *App) logReceiverPeerSetupFailure(phase receiverPeerSetupPhase, cause error) {
 	a.logf(
-		"get: direct peer setup failed phase=%s cause_class=%s; continuing through relay",
+		"get: direct peer setup failed phase=%s cause_class=%s",
 		phase,
 		receiverPeerSetupCauseClass(cause),
 	)
@@ -361,11 +440,11 @@ func (a *App) monitorReceiverPeer(
 			_, laneAttached := attempt.Lane()
 			if attached || laneAttached {
 				notifyReceiverPeer(observe, receiverPeerDetached)
-				a.logf("get: direct peer lane lost; continuing on another authenticated path")
+				a.logf("get: direct peer lane lost")
 			} else {
 				notifyReceiverPeer(observe, receiverPeerFailed)
 				if err != nil {
-					a.logf("get: direct peer connection failed; continuing through relay")
+					a.logf("get: direct peer connection failed")
 				}
 			}
 			return

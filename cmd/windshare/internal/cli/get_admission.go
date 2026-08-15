@@ -14,6 +14,7 @@ const receiverRelayAdmissionWindow = 8 * time.Second
 var (
 	ErrInvalidReceiverAdmission      = errors.New("receiver content admission signal is invalid")
 	errReceiverAdmissionResumePanics = errors.New("receiver content admission resume panicked")
+	errReceiverP2PPathUnavailable    = errors.New("p2p-only download requires an active direct peer path")
 )
 
 type receiverPeerSignal uint8
@@ -28,6 +29,17 @@ const (
 
 type receiverContentSuspension interface {
 	Resume() error
+}
+
+type receiverContentAdmission interface {
+	ObserveConnectionSize(transfer.ConnectionSizeClass) error
+	ObservePeer(receiverPeerSignal) error
+	AdmitRelayOnly() error
+	Decision() <-chan receiverAdmissionDecision
+	Close()
+	Wait()
+	Err() error
+	Traces() []receiverContentAdmissionTrace
 }
 
 type receiverAdmissionState uint8
@@ -48,28 +60,33 @@ const (
 	receiverAdmissionTriggerConnectionSmall receiverAdmissionTrigger = "small_connection_size"
 	receiverAdmissionTriggerPeerFailed      receiverAdmissionTrigger = "peer_failed"
 	receiverAdmissionTriggerPeerDetached    receiverAdmissionTrigger = "peer_detached"
+	receiverAdmissionTriggerRelayOnly       receiverAdmissionTrigger = "relay_only_policy"
+	receiverAdmissionTriggerP2POnly         receiverAdmissionTrigger = "p2p_only_policy"
 )
 
 type receiverAdmissionTerminalOwner string
 
 const (
-	receiverAdmissionTerminalNone         receiverAdmissionTerminalOwner = "none"
-	receiverAdmissionTerminalLifecycle    receiverAdmissionTerminalOwner = "lifecycle_close"
-	receiverAdmissionTerminalPeerFatal    receiverAdmissionTerminalOwner = "peer_session_fatal"
-	receiverAdmissionTerminalRuntime      receiverAdmissionTerminalOwner = "runtime_terminal"
-	receiverAdmissionTerminalResumeFailed receiverAdmissionTerminalOwner = "resume_failure"
+	receiverAdmissionTerminalNone           receiverAdmissionTerminalOwner = "none"
+	receiverAdmissionTerminalLifecycle      receiverAdmissionTerminalOwner = "lifecycle_close"
+	receiverAdmissionTerminalPeerFatal      receiverAdmissionTerminalOwner = "peer_session_fatal"
+	receiverAdmissionTerminalRuntime        receiverAdmissionTerminalOwner = "runtime_terminal"
+	receiverAdmissionTerminalResumeFailed   receiverAdmissionTerminalOwner = "resume_failure"
+	receiverAdmissionTerminalP2PUnavailable receiverAdmissionTerminalOwner = "p2p_unavailable"
 )
 
-type receiverAdmissionAuthorityResult string
+type receiverContentAdmissionResult string
 
 const (
-	receiverAdmissionAuthorityClaimed           receiverAdmissionAuthorityResult = "claimed"
-	receiverAdmissionAuthorityRevoked           receiverAdmissionAuthorityResult = "queued_revoked"
-	receiverAdmissionAuthorityUnissued          receiverAdmissionAuthorityResult = "unissued"
-	receiverAdmissionAuthorityExecutionRetained receiverAdmissionAuthorityResult = "execution_retained"
-	receiverAdmissionAuthorityAlreadyDecided    receiverAdmissionAuthorityResult = "already_decided"
-	receiverAdmissionAuthoritySettled           receiverAdmissionAuthorityResult = "settled"
-	receiverAdmissionAuthorityResumeFailed      receiverAdmissionAuthorityResult = "resume_failed"
+	receiverContentAdmissionClaimed           receiverContentAdmissionResult = "claimed"
+	receiverContentAdmissionRevoked           receiverContentAdmissionResult = "queued_revoked"
+	receiverContentAdmissionUnissued          receiverContentAdmissionResult = "unissued"
+	receiverContentAdmissionExecutionRetained receiverContentAdmissionResult = "execution_retained"
+	receiverContentAdmissionAlreadyDecided    receiverContentAdmissionResult = "already_decided"
+	receiverContentAdmissionSettled           receiverContentAdmissionResult = "settled"
+	receiverContentAdmissionResumeFailed      receiverContentAdmissionResult = "resume_failed"
+	receiverContentAdmissionRelayProhibited   receiverContentAdmissionResult = "relay_content_prohibited"
+	receiverContentAdmissionP2PUnavailable    receiverContentAdmissionResult = "p2p_unavailable"
 )
 
 type receiverAdmissionAuthority struct {
@@ -78,12 +95,12 @@ type receiverAdmissionAuthority struct {
 	workerDone chan struct{}
 }
 
-type receiverAdmissionAuthorityTrace struct {
+type receiverContentAdmissionTrace struct {
 	Sequence      uint64
 	Generation    uint64
 	Trigger       receiverAdmissionTrigger
 	TerminalOwner receiverAdmissionTerminalOwner
-	Result        receiverAdmissionAuthorityResult
+	Result        receiverContentAdmissionResult
 }
 
 type receiverAdmissionExecution struct {
@@ -94,6 +111,7 @@ type receiverAdmissionExecution struct {
 
 type receiverAdmissionDecision struct {
 	Cause         error
+	Trigger       receiverAdmissionTrigger
 	TerminalOwner receiverAdmissionTerminalOwner
 }
 
@@ -143,7 +161,24 @@ type relayContentAdmission struct {
 	terminalOwner  receiverAdmissionTerminalOwner
 	nextGeneration uint64
 	traceSequence  uint64
-	traces         []receiverAdmissionAuthorityTrace
+	traces         []receiverContentAdmissionTrace
+}
+
+func newReceiverContentAdmissionWithExecution(
+	mode receiverRelayContentMode,
+	downloadT0 time.Time,
+	clock receiverAdmissionClock,
+	relay receiverContentSuspension,
+	execution receiverAdmissionExecution,
+) (receiverContentAdmission, error) {
+	switch mode {
+	case receiverRelayContentImmediate, receiverRelayContentAdaptive:
+		return newRelayContentAdmissionWithExecution(downloadT0, clock, relay, execution)
+	case receiverRelayContentProhibited:
+		return newP2POnlyContentAdmission(relay)
+	default:
+		return nil, ErrInvalidReceiverAdmission
+	}
 }
 
 func newRelayContentAdmission(
@@ -206,6 +241,11 @@ func (admission *relayContentAdmission) ObserveConnectionSize(size transfer.Conn
 	default:
 		return ErrInvalidReceiverAdmission
 	}
+}
+
+func (admission *relayContentAdmission) AdmitRelayOnly() error {
+	admission.beginDecision(receiverAdmissionTriggerRelayOnly)
+	return nil
 }
 
 func (admission *relayContentAdmission) ObservePeer(signal receiverPeerSignal) error {
@@ -274,13 +314,14 @@ func (admission *relayContentAdmission) completeDecision(authority *receiverAdmi
 		admission.terminalOwner = receiverAdmissionTerminalResumeFailed
 	}
 	admission.state = receiverAdmissionDecided
-	result := receiverAdmissionAuthoritySettled
+	result := receiverContentAdmissionSettled
 	if err != nil {
-		result = receiverAdmissionAuthorityResumeFailed
+		result = receiverContentAdmissionResumeFailed
 	}
 	admission.recordTraceLocked(authority, admission.terminalOwner, result)
 	admission.decisions <- receiverAdmissionDecision{
 		Cause:         err,
+		Trigger:       authority.trigger,
 		TerminalOwner: admission.terminalOwner,
 	}
 	close(admission.decisions)
@@ -300,7 +341,7 @@ func (admission *relayContentAdmission) claimDecision(
 	admission.recordTraceLocked(
 		authority,
 		receiverAdmissionTerminalNone,
-		receiverAdmissionAuthorityClaimed,
+		receiverContentAdmissionClaimed,
 	)
 	return true
 }
@@ -345,13 +386,13 @@ func (admission *relayContentAdmission) Err() error {
 	return admission.resumeError
 }
 
-func (admission *relayContentAdmission) Traces() []receiverAdmissionAuthorityTrace {
+func (admission *relayContentAdmission) Traces() []receiverContentAdmissionTrace {
 	if admission == nil {
 		return nil
 	}
 	admission.mu.Lock()
 	defer admission.mu.Unlock()
-	return append([]receiverAdmissionAuthorityTrace(nil), admission.traces...)
+	return append([]receiverContentAdmissionTrace(nil), admission.traces...)
 }
 
 func (admission *relayContentAdmission) decisionWorkerDone() <-chan struct{} {
@@ -383,7 +424,7 @@ func (admission *relayContentAdmission) close(owner receiverAdmissionTerminalOwn
 		if admission.terminalOwner == receiverAdmissionTerminalNone {
 			admission.terminalOwner = owner
 		}
-		result := receiverAdmissionAuthorityUnissued
+		result := receiverContentAdmissionUnissued
 		switch admission.state {
 		case receiverAdmissionPending:
 			admission.state = receiverAdmissionRevoked
@@ -394,16 +435,16 @@ func (admission *relayContentAdmission) close(owner receiverAdmissionTerminalOwn
 			admission.state = receiverAdmissionRevoked
 			admission.finishWithoutDecisionLocked()
 			joinableWorkerDone = admission.authority.workerDone
-			result = receiverAdmissionAuthorityRevoked
+			result = receiverContentAdmissionRevoked
 		case receiverAdmissionExecuting:
 			// A claimed external call cannot be canceled safely. Close revokes all
 			// future authority; Wait is the exact completion barrier for this one.
-			result = receiverAdmissionAuthorityExecutionRetained
+			result = receiverContentAdmissionExecutionRetained
 		case receiverAdmissionDecided:
 			joinableWorkerDone = admission.authority.workerDone
-			result = receiverAdmissionAuthorityAlreadyDecided
+			result = receiverContentAdmissionAlreadyDecided
 		case receiverAdmissionRevoked:
-			result = receiverAdmissionAuthorityAlreadyDecided
+			result = receiverContentAdmissionAlreadyDecided
 		}
 		admission.recordTraceLocked(admission.authority, admission.terminalOwner, result)
 		admission.mu.Unlock()
@@ -427,10 +468,10 @@ func (admission *relayContentAdmission) finishWithoutDecisionLocked() {
 func (admission *relayContentAdmission) recordTraceLocked(
 	authority *receiverAdmissionAuthority,
 	owner receiverAdmissionTerminalOwner,
-	result receiverAdmissionAuthorityResult,
+	result receiverContentAdmissionResult,
 ) {
 	admission.traceSequence++
-	trace := receiverAdmissionAuthorityTrace{
+	trace := receiverContentAdmissionTrace{
 		Sequence:      admission.traceSequence,
 		Trigger:       receiverAdmissionTriggerNone,
 		TerminalOwner: owner,
@@ -443,10 +484,159 @@ func (admission *relayContentAdmission) recordTraceLocked(
 	admission.traces = append(admission.traces, trace)
 }
 
-func (a *App) logReceiverAdmissionTraces(sessionID []byte, admission *relayContentAdmission) {
+type p2pOnlyContentAdmission struct {
+	// Retaining the exact suspension documents ownership of the permanent hold.
+	// Releasing it would violate the user-visible promise even after a reconnect.
+	relayHold receiverContentSuspension
+
+	finishOnce sync.Once
+	finished   chan struct{}
+	decisions  chan receiverAdmissionDecision
+
+	mu       sync.Mutex
+	cause    error
+	sequence uint64
+	traces   []receiverContentAdmissionTrace
+}
+
+func newP2POnlyContentAdmission(
+	relayHold receiverContentSuspension,
+) (*p2pOnlyContentAdmission, error) {
+	if relayHold == nil {
+		return nil, ErrInvalidReceiverAdmission
+	}
+	admission := &p2pOnlyContentAdmission{
+		relayHold: relayHold,
+		finished:  make(chan struct{}),
+		decisions: make(chan receiverAdmissionDecision, 1),
+	}
+	admission.recordTraceLocked(
+		receiverAdmissionTriggerP2POnly,
+		receiverAdmissionTerminalNone,
+		receiverContentAdmissionRelayProhibited,
+	)
+	return admission, nil
+}
+
+func (admission *p2pOnlyContentAdmission) ObserveConnectionSize(
+	size transfer.ConnectionSizeClass,
+) error {
+	switch size {
+	case transfer.ConnectionSizeUnknown, transfer.ConnectionSizeSmall, transfer.ConnectionSizeLarge:
+		return nil
+	default:
+		return ErrInvalidReceiverAdmission
+	}
+}
+
+func (admission *p2pOnlyContentAdmission) ObservePeer(signal receiverPeerSignal) error {
+	switch signal {
+	case receiverPeerReady:
+		return nil
+	case receiverPeerFailed:
+		admission.fail(receiverAdmissionTriggerPeerFailed)
+		return nil
+	case receiverPeerDetached:
+		admission.fail(receiverAdmissionTriggerPeerDetached)
+		return nil
+	case receiverPeerSessionFatal:
+		admission.stop(receiverAdmissionTerminalPeerFatal)
+		return nil
+	case receiverPeerRuntimeTerminal:
+		admission.stop(receiverAdmissionTerminalRuntime)
+		return nil
+	default:
+		return ErrInvalidReceiverAdmission
+	}
+}
+
+func (*p2pOnlyContentAdmission) AdmitRelayOnly() error {
+	return ErrInvalidReceiverAdmission
+}
+
+func (admission *p2pOnlyContentAdmission) fail(trigger receiverAdmissionTrigger) {
+	admission.finishOnce.Do(func() {
+		admission.mu.Lock()
+		admission.cause = errReceiverP2PPathUnavailable
+		admission.recordTraceLocked(
+			trigger,
+			receiverAdmissionTerminalP2PUnavailable,
+			receiverContentAdmissionP2PUnavailable,
+		)
+		admission.mu.Unlock()
+		admission.decisions <- receiverAdmissionDecision{
+			Cause:         errReceiverP2PPathUnavailable,
+			Trigger:       trigger,
+			TerminalOwner: receiverAdmissionTerminalP2PUnavailable,
+		}
+		close(admission.decisions)
+		close(admission.finished)
+	})
+}
+
+func (admission *p2pOnlyContentAdmission) stop(owner receiverAdmissionTerminalOwner) {
+	admission.finishOnce.Do(func() {
+		admission.mu.Lock()
+		admission.recordTraceLocked(
+			receiverAdmissionTriggerNone,
+			owner,
+			receiverContentAdmissionUnissued,
+		)
+		admission.mu.Unlock()
+		close(admission.decisions)
+		close(admission.finished)
+	})
+}
+
+func (admission *p2pOnlyContentAdmission) Decision() <-chan receiverAdmissionDecision {
+	return admission.decisions
+}
+
+func (admission *p2pOnlyContentAdmission) Close() {
+	if admission != nil {
+		admission.stop(receiverAdmissionTerminalLifecycle)
+	}
+}
+
+func (admission *p2pOnlyContentAdmission) Wait() {
+	if admission != nil {
+		<-admission.finished
+	}
+}
+
+func (admission *p2pOnlyContentAdmission) Err() error {
+	if admission == nil {
+		return nil
+	}
+	admission.mu.Lock()
+	defer admission.mu.Unlock()
+	return admission.cause
+}
+
+func (admission *p2pOnlyContentAdmission) Traces() []receiverContentAdmissionTrace {
+	if admission == nil {
+		return nil
+	}
+	admission.mu.Lock()
+	defer admission.mu.Unlock()
+	return append([]receiverContentAdmissionTrace(nil), admission.traces...)
+}
+
+func (admission *p2pOnlyContentAdmission) recordTraceLocked(
+	trigger receiverAdmissionTrigger,
+	owner receiverAdmissionTerminalOwner,
+	result receiverContentAdmissionResult,
+) {
+	admission.sequence++
+	admission.traces = append(admission.traces, receiverContentAdmissionTrace{
+		Sequence: admission.sequence, Trigger: trigger, TerminalOwner: owner, Result: result,
+	})
+}
+
+func (a *App) logReceiverAdmissionTraces(sessionID []byte, admission receiverContentAdmission) {
 	for _, trace := range admission.Traces() {
 		a.logf(
-			"get: relay admission authority session_id=%x sequence=%d admission_generation=%d trigger=%s terminal_owner=%s result=%s",
+			"get: content path decision session_id=%x sequence=%d admission_generation=%d trigger=%s terminal_owner=%s result=%s",
 			sessionID,
 			trace.Sequence,
 			trace.Generation,
@@ -454,7 +644,7 @@ func (a *App) logReceiverAdmissionTraces(sessionID []byte, admission *relayConte
 			trace.TerminalOwner,
 			trace.Result,
 		)
-		if trace.Result == receiverAdmissionAuthoritySettled {
+		if trace.Result == receiverContentAdmissionSettled {
 			a.recordProcessTrace(
 				processTraceGetComponent,
 				processTraceReceiverRelayContent,

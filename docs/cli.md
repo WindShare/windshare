@@ -5,6 +5,7 @@
 ```text
 windshare get <capability-link>
 windshare get -o <directory> <capability-link>
+windshare get --connectivity p2p-only <capability-link>
 ```
 
 Without `-o`, WindShare saves into the current directory. With `-o`, the directory is always a container for the result, not the result root itself. The container may already exist; WindShare can also create a missing container from its nearest existing safe parent.
@@ -19,6 +20,14 @@ Without `-o`, WindShare saves into the current directory. With `-o`, the directo
 New public files and directories use their public parent's ordinary inherited permissions. WindShare checks the permissions needed for each mutation; it does not require an exclusive download directory or rewrite ACLs or modes. Unsafe links, ancestry changes, or insufficient access fail closed.
 
 WindShare never overwrites or replaces an existing object, follows a link, or merges with an unrelated top-level result. A new operation chooses a stable short suffix after a name collision. Retrying the same active operation reuses its reserved name. A later collision inside that result blocks only the affected item or subtree and does not trigger another rename.
+
+`--connectivity` controls the content path:
+
+| Mode | Behavior |
+|---|---|
+| `auto` | Attempts a direct WebRTC peer path and admits application-relay content when fallback policy requires it. |
+| `relay-only` | Does not perform peer signaling or ICE and transfers content through the application relay. |
+| `p2p-only` | Uses the application relay only for bootstrap, authenticated control, and peer signaling. Relay content stays disabled; failure to establish or retain the direct peer path stops the download. |
 
 ## Resume modes
 
