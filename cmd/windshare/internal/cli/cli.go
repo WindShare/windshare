@@ -43,6 +43,11 @@ type App struct {
 	receiverPeerFactory func() (receiverPeerStarter, error)
 	receiverClock       receiverAdmissionClock
 	processTrace        *processTrace
+	getOutputFactory    getOutputAuthorityFactory
+	getTTYDetector      TTYDetector
+	getProgress         ProgressSink
+	getWarnings         WarningSink
+	getTraces           GetTraceSink
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
@@ -104,20 +109,20 @@ func (a *App) usage() {
 	      Commit selected roots, wait for relay registration, print a suite-02 link, and scan descendants on demand.
 	      --split-key prints a bare link and key string for delivery over separate channels.
 
-	  windshare get <link> [-o <directory>] [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only]
-	      Authenticate the descriptor, browse the progressive catalog, and publish files through a durable output session.
+	  windshare get <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only]
+	  windshare get -o <directory> <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only]
+	      Save one ordinary named result inside the output container; -o defaults to the current directory.
+	      Compatible active downloads reuse their frozen result name and verified progress.
 	      relay-only skips direct peer setup and transfers content through the configured relay.
 	      If the link has no key, use --key or enter the key interactively.
 
 	  windshare resume list -o <directory>
-	      List current paused state without acquiring deletion authority.
+	      List destination-owned incomplete, resumable, cleanup-pending, and attention state.
+	      Locally ambiguous children are reported as item-blocked.
 
 	  windshare resume discard -o <directory> --item <N>
-	      Re-list and confirm one live item on a terminal before discarding owned recovery artifacts.
-	      Published files are always preserved.
-
-	  windshare resume cleanup -o <directory>
-	      Run the isolated legacy-state cleaner; this does not discard current paused state.
+	      Re-list and exactly confirm one operation on a terminal before discarding identity-matched unfinished state.
+	      Published files and unknown objects are always preserved.
 `)
 }
 

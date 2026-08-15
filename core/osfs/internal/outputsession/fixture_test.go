@@ -2,12 +2,14 @@ package outputsession
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -21,6 +23,35 @@ func identity[T testIdentity](seed byte) T {
 		value[index] = seed + byte(index)
 	}
 	return value
+}
+
+func mustArtifactPath(t *testing.T, value string) ordinaryoutput.ArtifactPath {
+	t.Helper()
+	path, err := ordinaryoutput.NewArtifactPath(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func mustDestinationPath(t *testing.T, value string) DestinationPath {
+	t.Helper()
+	path, err := NewDestinationPath(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func mustSourceDirectory(
+	t *testing.T,
+	directory transfer.AuthenticatedSourceDirectory,
+) transfer.AuthenticatedSourceDirectory {
+	t.Helper()
+	if !directory.SourcePath.Valid() {
+		t.Fatal("source directory path is not closed")
+	}
+	return directory
 }
 
 type fakeDirectoryAuthority struct {
@@ -54,7 +85,7 @@ func (authority *fakeDirectoryAuthority) MaterializeDirectory(
 		return operation(ctx, claim)
 	}
 	disposition := DirectoryAuthorityCreatedDescendant
-	if claim.IsRoot() {
+	if claim.ArtifactPath().String() == receivecontract.DefaultResultRootName {
 		disposition = DirectoryCallerProvidedRoot
 	}
 	return DirectoryMaterialization{Cut: MutationStable, Disposition: disposition}, nil
@@ -99,7 +130,7 @@ func (engine *fakeFileEngine) BeginFile(
 	if operation != nil {
 		return operation(ctx, claim)
 	}
-	transaction := newFakeTransaction(engine.t, claim.File().Target)
+	transaction := newFakeTransaction(engine.t, claim.File().Target())
 	engine.mu.Lock()
 	engine.last = transaction
 	engine.mu.Unlock()
@@ -245,7 +276,7 @@ func (transaction *fakeTransactionExecutor) Retire(
 	if operation != nil {
 		return operation(ctx, reason)
 	}
-	settlement, err := transfer.NewRetiredFileSettlement(transaction.binding)
+	settlement, err := transfer.NewFailedFileSettlement(transaction.binding)
 	return settlement, MutationStable, err
 }
 
@@ -274,10 +305,69 @@ type testFixture struct {
 	resources     *fakeResources
 	intent        transfer.ReceiveIntent
 	sessionID     transfer.OutputSessionID
-	rootDirectory transfer.MaterializationDirectory
+	rootDirectory transfer.AuthenticatedSourceDirectory
+	materialized  *sync.Map
+}
+
+func (fixture testFixture) directoryRequest(
+	directory transfer.AuthenticatedSourceDirectory,
+) transfer.DirectoryMaterializationRequest {
+	fixture.t.Helper()
+	var parent transfer.MaterializedDirectoryClaim
+	if !directory.ParentAdmission.IsZero() {
+		if value, ok := fixture.materialized.Load(receiptKey(directory.ParentAdmission)); ok {
+			parent = value.(transfer.MaterializedDirectoryClaim)
+		}
+	}
+	request, err := transfer.NewDirectoryMaterializationRequest(
+		fixture.session.projector, directory, ordinaryoutput.SourceNodeSelected, parent,
+	)
+	if err != nil {
+		request, err = transfer.NewDirectoryMaterializationRequest(
+			fixture.session.projector, directory, ordinaryoutput.SourceNodeConnectsSelection, parent,
+		)
+	}
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	return request
+}
+
+func (fixture testFixture) admitDirectory(
+	ctx context.Context,
+	directory transfer.AuthenticatedSourceDirectory,
+) (transfer.DirectoryAdmission, error) {
+	request := fixture.directoryRequest(directory)
+	admission, err := fixture.session.AdmitDirectory(ctx, request)
+	if err != nil {
+		return transfer.DirectoryAdmission{}, err
+	}
+	if _, materialized := request.Projection().ArtifactPath(); materialized {
+		claim, claimErr := transfer.NewMaterializedDirectoryClaim(admission, request)
+		if claimErr != nil {
+			fixture.t.Fatal(claimErr)
+		}
+		fixture.materialized.Store(receiptKey(admission), claim)
+	}
+	return admission, nil
 }
 
 func newTestFixture(t *testing.T, mutate func(*Config)) testFixture {
+	t.Helper()
+	artifact, err := receivecontract.NewResultRootDirectoryTree(
+		receivecontract.NewSyntheticSelectionResultRoot(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newTestFixtureWithArtifact(t, artifact, mutate)
+}
+
+func newTestFixtureWithArtifact(
+	t *testing.T,
+	artifact receivecontract.ArtifactSpec,
+	mutate func(*Config),
+) testFixture {
 	t.Helper()
 	share := identity[catalog.ShareInstance](1)
 	root := identity[catalog.DirectoryID](21)
@@ -289,7 +379,6 @@ func newTestFixture(t *testing.T, mutate func(*Config)) testFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifact := receivecontract.NewCatalogRootDirectoryTree()
 	operationRaw := identity[receivecontract.OperationID](41)
 	operation, err := receivecontract.OperationIDFromBytes(operationRaw[:])
 	if err != nil {
@@ -308,7 +397,24 @@ func newTestFixture(t *testing.T, mutate func(*Config)) testFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := receivecontract.NewNativeContainerRootReservation(operation, reservationID, artifact, authority)
+	layout, directoryTree := artifact.DirectoryTree()
+	if !directoryTree {
+		t.Fatal("test artifact is not a directory tree")
+	}
+	var reservation receivecontract.DestinationReservation
+	if layout.Kind() == receivecontract.DirectoryTreeCatalogRoot {
+		reservation, err = receivecontract.NewNativeContainerRootReservation(
+			operation, reservationID, artifact, authority,
+		)
+	} else {
+		resultRoot, named := layout.ResultRoot()
+		if !named {
+			t.Fatal("test artifact does not reserve a result root")
+		}
+		reservation, err = receivecontract.NewNativeNamedEntryReservation(
+			operation, reservationID, artifact, authority, resultRoot.Name(), 0,
+		)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +441,21 @@ func newTestFixture(t *testing.T, mutate func(*Config)) testFixture {
 			RandomWrite: true, FileFailureIsolation: true, ModifiedTime: true,
 		},
 		ReceiptSecret: append([]byte(nil), secret[:]...),
-		Locator:       directories, Directories: directories, Files: files, Resources: resources,
+		Locator:       directories,
+		Destinations: ArtifactDestinationBinderFunc(func(
+			path ordinaryoutput.ArtifactPath,
+		) (DestinationPath, error) {
+			artifactPath := path.String()
+			if artifactPath == receivecontract.DefaultResultRootName {
+				return NewDestinationSessionRoot(), nil
+			}
+			artifactPrefix := receivecontract.DefaultResultRootName + "/"
+			if descendant, matched := strings.CutPrefix(artifactPath, artifactPrefix); matched {
+				return NewDestinationPath(descendant)
+			}
+			return NewDestinationPath(artifactPath)
+		}),
+		Directories: directories, Files: files, Resources: resources,
 	}
 	if mutate != nil {
 		mutate(&config)
@@ -346,16 +466,17 @@ func newTestFixture(t *testing.T, mutate func(*Config)) testFixture {
 	}
 	return testFixture{
 		t: t, session: session, directories: directories, files: files, resources: resources,
-		intent: intent, sessionID: sessionID,
-		rootDirectory: transfer.MaterializationDirectory{
-			DirectoryID: root, Generation: identity[catalog.DirectoryGeneration](31), Path: "",
+		intent: intent, sessionID: sessionID, materialized: &sync.Map{},
+		rootDirectory: transfer.AuthenticatedSourceDirectory{
+			DirectoryID: root, Generation: identity[catalog.DirectoryGeneration](31),
+			SourcePath: ordinaryoutput.EmptySourceCatalogPath(),
 		},
 	}
 }
 
 func (fixture testFixture) admitRoot(ctx context.Context) transfer.DirectoryAdmission {
 	fixture.t.Helper()
-	admission, err := fixture.session.AdmitDirectory(ctx, fixture.rootDirectory)
+	admission, err := fixture.admitDirectory(ctx, fixture.rootDirectory)
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
@@ -366,12 +487,16 @@ func (fixture testFixture) childDirectory(
 	parent transfer.DirectoryAdmission,
 	seed byte,
 	path string,
-) transfer.MaterializationDirectory {
-	return transfer.MaterializationDirectory{
+) transfer.AuthenticatedSourceDirectory {
+	sourcePath, err := ordinaryoutput.NewSourceCatalogPath(path)
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	return transfer.AuthenticatedSourceDirectory{
 		DirectoryID:     identity[catalog.DirectoryID](seed),
 		Generation:      identity[catalog.DirectoryGeneration](seed + 1),
 		ParentAdmission: parent,
-		Path:            path,
+		SourcePath:      sourcePath,
 	}
 }
 
@@ -392,15 +517,20 @@ func (fixture testFixture) outputFile(
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
-	locator, err := transfer.NewPathMaterializationLocator(path)
+	sourcePath, err := ordinaryoutput.NewSourceCatalogPath(path)
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
-	target, err := transfer.NewFileMaterializationTarget(fixture.sessionID, descriptor, locator)
+	var parentMaterialization transfer.MaterializedDirectoryClaim
+	if value, ok := fixture.materialized.Load(receiptKey(parent)); ok {
+		parentMaterialization = value.(transfer.MaterializedDirectoryClaim)
+	}
+	file, err := transfer.NewMaterializationFile(
+		fixture.session.projector, sourcePath, descriptor, fixture.sessionID,
+		parent, parentMaterialization,
+	)
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
-	return transfer.MaterializationFile{
-		Path: path, ExpectedSize: 1, Descriptor: descriptor, Target: target, ParentAdmission: parent,
-	}
+	return file
 }

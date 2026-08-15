@@ -14,7 +14,7 @@ import (
 )
 
 func TestRecoveryReducerSeparatesDefiniteTamperFromUnknownOwnership(t *testing.T) {
-	transaction, repository, _, _ := newCoverageTransaction(t, 4)
+	transaction, repository, _, _ := newCoveragePartialFileTransaction(t, 4)
 	active := repository.record
 	object := active.OwnedObjectID()
 	paused, err := pauseRecord(active)
@@ -73,19 +73,20 @@ func TestRecoveryReducerSeparatesDefiniteTamperFromUnknownOwnership(t *testing.T
 		wantAction RecoveryAction
 		wantReason checkpointmodel.QuarantineReason
 	}{
-		{"owned absent", active, OwnedAbsent, FinalAbsent, RecoveryInstallQuarantine, checkpointmodel.QuarantineAnchorMissing},
-		{"anchor absent", active, OwnedAnchorMissing, FinalAbsent, RecoveryInstallQuarantine, checkpointmodel.QuarantineAnchorMissing},
-		{"stage absent", active, OwnedStageMissing, FinalAbsent, RecoveryInstallQuarantine, checkpointmodel.QuarantineStageMissing},
-		{"active collision", active, OwnedReady, FinalCollision, RecoveryInstallQuarantine, checkpointmodel.QuarantinePublicationHistory},
-		{"paused incomplete collision", paused, OwnedReady, FinalCollision, RecoveryInstallQuarantine, checkpointmodel.QuarantinePublicationHistory},
-		{"paused complete collision", fullPaused, OwnedReady, FinalCollision, RecoveryPublishBlocked, 0},
-		{"active final exact", active, OwnedReady, FinalOwnedExact, RecoveryNeedsAttention, 0},
-		{"active final mismatch", active, OwnedReady, FinalOwnedMetadataMismatch, RecoveryNeedsAttention, 0},
-		{"publishing missing owned", publishing, OwnedStageMissing, FinalAbsent, RecoveryNeedsAttention, 0},
-		{"publishing final unsafe", publishing, OwnedReady, FinalUnsafe, RecoveryNeedsAttention, 0},
-		{"publishing final mismatch", publishing, OwnedReady, FinalOwnedMetadataMismatch, RecoveryNeedsAttention, 0},
-		{"published mismatch", published, OwnedReady, FinalCollision, RecoveryNeedsAttention, 0},
-		{"retired ownership unknown", retired, OwnedObjectCollision, FinalAbsent, RecoveryNeedsAttention, 0},
+		{"owned absent", active, OwnedAbsent, FinalAbsent, RecoveryStartNewPreservingOld, 0},
+		{"anchor absent", active, OwnedAnchorMissing, FinalAbsent, RecoveryStartNewPreservingOld, 0},
+		{"stage absent", active, OwnedStageMissing, FinalAbsent, RecoveryStartNewPreservingOld, 0},
+		{"active collision", active, OwnedReady, FinalCollision, RecoveryReturnCollision, 0},
+		{"paused incomplete collision", paused, OwnedReady, FinalCollision, RecoveryReturnCollision, 0},
+		{"paused complete collision", fullPaused, OwnedReady, FinalCollision, RecoveryReturnCollision, 0},
+		{"active final exact", active, OwnedReady, FinalOwnedExact, RecoveryInstallQuarantine, checkpointmodel.QuarantinePublicationHistory},
+		{"active final unsafe", active, OwnedReady, FinalUnsafe, RecoveryInstallQuarantine, checkpointmodel.QuarantineFinalUnsafe},
+		{"active owned unsafe", active, OwnedStageUnsafe, FinalAbsent, RecoveryInstallQuarantine, checkpointmodel.QuarantineStageUnsafe},
+		{"publishing missing owned", publishing, OwnedStageMissing, FinalAbsent, RecoveryInstallQuarantine, checkpointmodel.QuarantineStageMissing},
+		{"publishing final unsafe", publishing, OwnedReady, FinalUnsafe, RecoveryInstallQuarantine, checkpointmodel.QuarantineFinalUnsafe},
+		{"published mismatch", published, OwnedReady, FinalCollision, RecoveryInstallQuarantine, checkpointmodel.QuarantineFinalMismatch},
+		{"retired ownership unknown", retired, OwnedObjectCollision, FinalAbsent, RecoveryInstallQuarantine, checkpointmodel.QuarantineOutputObjectDuplicate},
+		{"retired final unsafe", retired, OwnedAbsent, FinalUnsafe, RecoveryInstallQuarantine, checkpointmodel.QuarantineFinalUnsafe},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -131,7 +132,6 @@ type coverageFaultOwnedFile struct {
 	writeAt         func([]byte, int64) (int, error)
 	sync            func() error
 	setModifiedTime func(catalog.ModifiedTime) error
-	metadataMatches func(uint64, catalog.ModifiedTime) (bool, error)
 }
 
 func (file *coverageFaultOwnedFile) WriteAt(data []byte, offset int64) (int, error) {
@@ -155,26 +155,16 @@ func (file *coverageFaultOwnedFile) SetModifiedTime(modified catalog.ModifiedTim
 	return file.OwnedFile.SetModifiedTime(modified)
 }
 
-func (file *coverageFaultOwnedFile) MetadataMatches(
-	exactSize uint64,
-	modified catalog.ModifiedTime,
-) (bool, error) {
-	if file.metadataMatches != nil {
-		return file.metadataMatches(exactSize, modified)
-	}
-	return file.OwnedFile.MetadataMatches(exactSize, modified)
-}
-
-func TestTransactionFaultBoundariesDoNotInventDurability(t *testing.T) {
+func TestPartialFileTransactionFaultBoundariesDoNotInventDurability(t *testing.T) {
 	operationErr := errors.New("operation failed")
 
 	t.Run("partial write is ambiguous", func(t *testing.T) {
-		transaction, _, _, _ := newCoverageTransaction(t, 4)
+		transaction, _, _, _ := newCoveragePartialFileTransaction(t, 4)
 		transaction.file = &coverageFaultOwnedFile{
 			OwnedFile: transaction.file,
 			writeAt:   func([]byte, int64) (int, error) { return 1, nil },
 		}
-		if err := transaction.WriteRange(context.Background(), 0, []byte("data")); !errors.Is(err, ErrPublicationAmbiguous) || !errors.Is(err, io.ErrShortWrite) {
+		if err := transaction.WriteRange(context.Background(), 0, []byte("data")); !errors.Is(err, io.ErrShortWrite) {
 			t.Fatalf("partial write error = %v", err)
 		}
 		if !transaction.pending.IsEmpty() {
@@ -183,7 +173,7 @@ func TestTransactionFaultBoundariesDoNotInventDurability(t *testing.T) {
 	})
 
 	t.Run("zero write retains collaborator failure", func(t *testing.T) {
-		transaction, _, _, _ := newCoverageTransaction(t, 4)
+		transaction, _, _, _ := newCoveragePartialFileTransaction(t, 4)
 		transaction.file = &coverageFaultOwnedFile{
 			OwnedFile: transaction.file,
 			writeAt:   func([]byte, int64) (int, error) { return 0, operationErr },
@@ -194,7 +184,7 @@ func TestTransactionFaultBoundariesDoNotInventDurability(t *testing.T) {
 	})
 
 	t.Run("sync failure preserves prior checkpoint", func(t *testing.T) {
-		transaction, repository, _, _ := newCoverageTransaction(t, 4)
+		transaction, repository, _, _ := newCoveragePartialFileTransaction(t, 4)
 		if err := transaction.WriteRange(context.Background(), 0, []byte("data")); err != nil {
 			t.Fatal(err)
 		}
@@ -209,90 +199,112 @@ func TestTransactionFaultBoundariesDoNotInventDurability(t *testing.T) {
 		}
 	})
 
-	for name, configure := range map[string]func(*Transaction, *memoryDestination){
-		"modified time failure": func(transaction *Transaction, _ *memoryDestination) {
-			transaction.file = &coverageFaultOwnedFile{
-				OwnedFile:       transaction.file,
-				setModifiedTime: func(catalog.ModifiedTime) error { return operationErr },
-			}
-		},
-		"metadata mismatch": func(transaction *Transaction, _ *memoryDestination) {
-			transaction.file = &coverageFaultOwnedFile{
-				OwnedFile:       transaction.file,
-				metadataMatches: func(uint64, catalog.ModifiedTime) (bool, error) { return false, nil },
-			}
-		},
-		"metadata failure": func(transaction *Transaction, _ *memoryDestination) {
-			transaction.file = &coverageFaultOwnedFile{
-				OwnedFile:       transaction.file,
-				metadataMatches: func(uint64, catalog.ModifiedTime) (bool, error) { return false, operationErr },
-			}
-		},
-		"publication failure": func(_ *Transaction, destination *memoryDestination) {
+	for name, configure := range map[string]func(*resumablePartialFileTransaction, *memoryDestination){
+		"publication failure": func(_ *resumablePartialFileTransaction, destination *memoryDestination) {
 			destination.publishErr = operationErr
 		},
-		"parent sync failure": func(_ *Transaction, destination *memoryDestination) {
+		"parent sync failure": func(_ *resumablePartialFileTransaction, destination *memoryDestination) {
 			destination.syncErr = operationErr
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			transaction, repository, _, destination := newCoverageTransaction(t, 4)
+			transaction, repository, _, destination := newCoveragePartialFileTransaction(t, 4)
 			if err := transaction.WriteRange(context.Background(), 0, []byte("data")); err != nil {
 				t.Fatal(err)
 			}
 			configure(transaction, destination)
-			if _, err := transaction.Commit(context.Background()); err == nil {
-				t.Fatal("faulted commit succeeded")
-			}
-			if repository.record.Phase() == checkpointmodel.PhasePublished {
-				t.Fatal("faulted commit became published")
+			settlement, err := transaction.Commit(context.Background())
+			if err != nil || settlement.Kind() != transfer.FileItemBlocked ||
+				repository.record.Phase() != checkpointmodel.PhaseQuarantined ||
+				repository.record.QuarantineReason() != checkpointmodel.QuarantinePublicationHistory {
+				t.Fatalf("faulted commit = (kind %d phase %d reason %d, %v)",
+					settlement.Kind(), repository.record.Phase(), repository.record.QuarantineReason(), err)
 			}
 		})
 	}
 
-	t.Run("retirement cleanup failure", func(t *testing.T) {
-		transaction, _, platform, _ := newCoverageTransaction(t, 4)
-		platform.retirementErr = operationErr
-		if _, err := transaction.Retire(
-			context.Background(), transfer.FileRetireInvalidatedRevision,
-		); !errors.Is(err, operationErr) {
-			t.Fatalf("retirement cleanup error = %v", err)
+	t.Run("modified time failure is warning only", func(t *testing.T) {
+		transaction, repository, _, _ := newCoveragePartialFileTransaction(t, 4)
+		if err := transaction.WriteRange(context.Background(), 0, []byte("data")); err != nil {
+			t.Fatal(err)
+		}
+		transaction.file = &coverageFaultOwnedFile{
+			OwnedFile:       transaction.file,
+			setModifiedTime: func(catalog.ModifiedTime) error { return operationErr },
+		}
+		if settlement, err := transaction.Commit(context.Background()); err != nil ||
+			settlement.Kind() != transfer.FilePublished || repository.record.Phase() != checkpointmodel.PhasePublished {
+			t.Fatalf("metadata warning commit = (%v, %v)", settlement.Kind(), err)
+		}
+		warnings := transaction.MetadataWarnings()
+		if len(warnings) != 1 || warnings[0].Kind() != MetadataModifiedTimeWarning {
+			t.Fatalf("metadata warnings = %+v", warnings)
 		}
 	})
 
-	transaction, _, _, _ := newCoverageTransaction(t, 1)
+	t.Run("published close failures cannot retract final", func(t *testing.T) {
+		transaction, repository, _, destination := newCoveragePartialFileTransaction(t, 4)
+		owned := transaction.file.(*memoryOwnedFile)
+		owned.closeErr = errors.New("owned close failed")
+		destination.closeErr = errors.New("destination close failed")
+		if err := transaction.WriteRange(context.Background(), 0, []byte("data")); err != nil {
+			t.Fatal(err)
+		}
+		settlement, err := transaction.Commit(context.Background())
+		if err != nil || settlement.Kind() != transfer.FilePublished ||
+			repository.record.Phase() != checkpointmodel.PhasePublished {
+			t.Fatalf("published close result = (kind %d phase %d, %v)",
+				settlement.Kind(), repository.record.Phase(), err)
+		}
+	})
+
+	t.Run("retirement cleanup failure", func(t *testing.T) {
+		transaction, repository, platform, _ := newCoveragePartialFileTransaction(t, 4)
+		platform.retirementErr = operationErr
+		settlement, err := transaction.Retire(
+			context.Background(), transfer.FileRetireInvalidatedRevision,
+		)
+		if err != nil || settlement.Kind() != transfer.FileItemBlocked ||
+			repository.record.Phase() != checkpointmodel.PhaseQuarantined ||
+			repository.record.QuarantineReason() != checkpointmodel.QuarantinePartialObjectCreation {
+			t.Fatalf("retirement item block = (kind %d phase %d reason %d, %v)",
+				settlement.Kind(), repository.record.Phase(), repository.record.QuarantineReason(), err)
+		}
+	})
+
+	transaction, _, _, _ := newCoveragePartialFileTransaction(t, 1)
 	if _, err := transaction.Pause(context.Background(), 0); !errors.Is(err, transfer.ErrInvalidOutputSettlement) {
 		t.Fatalf("open pause reason error = %v", err)
 	}
 	if _, err := transaction.Retire(context.Background(), 0); !errors.Is(err, ErrRetirementUnauthorized) {
 		t.Fatalf("open retirement reason error = %v", err)
 	}
-	var nilTransaction *Transaction
-	if !nilTransaction.Binding().ObjectIdentity().IsZero() {
+	var nilPartialFileTransaction *PartialFileTransaction
+	if !nilPartialFileTransaction.Binding().ObjectIdentity().IsZero() {
 		t.Fatal("nil transaction exposed a binding")
 	}
-	if err := nilTransaction.WriteRange(context.Background(), 0, nil); !errors.Is(err, ErrInvalidConfiguration) {
+	if err := nilPartialFileTransaction.WriteRange(context.Background(), 0, nil); !errors.Is(err, ErrTransactionClosed) {
 		t.Fatalf("nil write error = %v", err)
 	}
-	if _, err := nilTransaction.Checkpoint(context.Background()); !errors.Is(err, ErrInvalidConfiguration) {
+	if _, err := nilPartialFileTransaction.Checkpoint(context.Background()); !errors.Is(err, ErrTransactionClosed) {
 		t.Fatalf("nil checkpoint error = %v", err)
 	}
-	if _, err := nilTransaction.Commit(context.Background()); !errors.Is(err, ErrInvalidConfiguration) {
+	if _, err := nilPartialFileTransaction.Commit(context.Background()); !errors.Is(err, ErrTransactionClosed) {
 		t.Fatalf("nil commit error = %v", err)
 	}
 }
 
-func newCoverageTransaction(
+func newCoveragePartialFileTransaction(
 	t *testing.T,
 	exactSize uint64,
-) (*Transaction, *memoryCheckpointRepository, *memoryPlatform, *memoryDestination) {
+) (*resumablePartialFileTransaction, *memoryCheckpointRepository, *memoryPlatform, *memoryDestination) {
 	t.Helper()
 	fixture := newExecutionFixture(t, exactSize)
 	repository := &memoryCheckpointRepository{}
 	platform := newMemoryPlatform()
-	destination := &memoryDestination{target: fixture.file.Target, final: FinalAbsent}
+	destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 	engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
-	start, err := engine.BeginFile(context.Background(), fixture.file)
+	start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,30 +312,51 @@ func newCoverageTransaction(
 	if !ok {
 		t.Fatal("fixture did not start a file transaction")
 	}
-	transaction, ok := fileTransaction.(*Transaction)
+	wrapper, ok := fileTransaction.(*PartialFileTransaction)
 	if !ok {
 		t.Fatalf("transaction = %T", fileTransaction)
 	}
+	transaction, ok := wrapper.strategy.(*resumablePartialFileTransaction)
+	if !ok {
+		t.Fatalf("transaction strategy = %T", wrapper.strategy)
+	}
 	return transaction, repository, platform, destination
+}
+
+func TestModifiedTimeWarningIsProjectedOntoPublishedSettlement(t *testing.T) {
+	transaction, _, _, _ := newCoveragePartialFileTransaction(t, 1)
+	owned := transaction.file.(*memoryOwnedFile)
+	owned.metadataErr = errors.New("mtime unsupported")
+	if err := transaction.WriteRange(context.Background(), 0, []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	settlement, err := transaction.Commit(context.Background())
+	if err != nil || settlement.Kind() != transfer.FilePublished {
+		t.Fatalf("commit = (%d, %v)", settlement.Kind(), err)
+	}
+	warnings := settlement.MetadataWarnings()
+	if len(warnings) != 1 || warnings[0] != transfer.FileMetadataModifiedTime {
+		t.Fatalf("warnings = %v", warnings)
+	}
 }
 
 func TestEngineRejectsCanceledAndUnboundCollaborators(t *testing.T) {
 	fixture := newExecutionFixture(t, 1)
 	repository := &memoryCheckpointRepository{lookupErr: errors.New("lookup failed")}
 	platform := newMemoryPlatform()
-	destination := &memoryDestination{target: fixture.file.Target, final: FinalAbsent}
+	destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 	engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
-	if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, repository.lookupErr) {
+	if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, repository.lookupErr) {
 		t.Fatalf("lookup failure = %v", err)
 	}
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := engine.BeginFile(canceled, fixture.file); !errors.Is(err, context.Canceled) {
+	if _, err := engine.BeginFile(canceled, fixture.file, fixture.destination); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled begin = %v", err)
 	}
 	var nilEngine *Engine
-	if _, err := nilEngine.BeginFile(context.Background(), fixture.file); !errors.Is(err, ErrInvalidConfiguration) {
+	if _, err := nilEngine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("nil engine begin = %v", err)
 	}
 
@@ -336,7 +369,7 @@ func TestEngineRejectsCanceledAndUnboundCollaborators(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.BeginFile(context.Background(), fixture.file); err == nil {
+	if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); err == nil {
 		t.Fatal("directory binding failure was ignored")
 	}
 
@@ -348,7 +381,7 @@ func TestEngineRejectsCanceledAndUnboundCollaborators(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := shortRandomEngine.BeginFile(context.Background(), fixture.file); err == nil {
+	if _, err := shortRandomEngine.BeginFile(context.Background(), fixture.file, fixture.destination); err == nil {
 		t.Fatal("short object identity source was ignored")
 	}
 }
@@ -382,19 +415,32 @@ func (repository *coverageCheckpointRepository) Store(
 
 type coveragePlatform struct {
 	Platform
-	create func(context.Context, checkpointmodel.ObjectID, uint64) (OwnedFile, OwnedObservation, error)
-	open   func(context.Context, checkpointmodel.ObjectID, uint64, bool) (OwnedFile, OwnedObservation, error)
+	observeOverride func(context.Context, checkpointmodel.ObjectID, uint64) (OwnedObservation, error)
+	create          func(context.Context, checkpointmodel.ObjectID, uint64) (OwnedFile, OwnedObservation, error)
+	open            func(context.Context, checkpointmodel.ObjectID, uint64, bool) (OwnedFile, OwnedObservation, error)
+}
+
+func (platform *coveragePlatform) ObserveOwnedObject(
+	ctx context.Context,
+	object checkpointmodel.ObjectID,
+	exactSize uint64,
+) (OwnedObservation, error) {
+	if platform.observeOverride != nil {
+		return platform.observeOverride(ctx, object, exactSize)
+	}
+	return platform.Platform.ObserveOwnedObject(ctx, object, exactSize)
 }
 
 func (platform *coveragePlatform) CreateOwnedFile(
 	ctx context.Context,
+	destination FileDestination,
 	object checkpointmodel.ObjectID,
 	exactSize uint64,
 ) (OwnedFile, OwnedObservation, error) {
 	if platform.create != nil {
 		return platform.create(ctx, object, exactSize)
 	}
-	return platform.Platform.CreateOwnedFile(ctx, object, exactSize)
+	return platform.Platform.CreateOwnedFile(ctx, destination, object, exactSize)
 }
 
 func (platform *coveragePlatform) OpenOwnedFile(
@@ -417,12 +463,13 @@ type coverageDirectoryAuthority struct {
 func (authority *coverageDirectoryAuthority) BindFile(
 	context.Context,
 	transfer.MaterializationFile,
+	transfer.OutputDestinationPath,
 ) (FileDestination, error) {
 	return authority.destination, authority.err
 }
 
 func TestStoreRecordCrashCutUsesObservationAsTheOnlyInstallAuthority(t *testing.T) {
-	transaction, repository, _, _ := newCoverageTransaction(t, 4)
+	transaction, repository, _, _ := newCoveragePartialFileTransaction(t, 4)
 	engine := transaction.engine
 	previous := repository.record
 	next, err := pauseRecord(previous)
@@ -506,14 +553,14 @@ func TestBeginNewRejectsPortViolationsAndAmbiguousOwnedCreation(t *testing.T) {
 	newEngine := func() (*Engine, *memoryCheckpointRepository, *memoryPlatform, *memoryDestination) {
 		repository := &memoryCheckpointRepository{}
 		platform := newMemoryPlatform()
-		destination := &memoryDestination{target: fixture.file.Target, final: FinalAbsent}
+		destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 		return newFixtureEngine(t, fixture, repository, platform, destination, nil), repository, platform, destination
 	}
 
 	t.Run("nil destination", func(t *testing.T) {
 		engine, _, _, _ := newEngine()
 		engine.directories = &coverageDirectoryAuthority{}
-		if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, ErrPortContract) {
+		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, ErrPortContract) {
 			t.Fatalf("nil destination error = %v", err)
 		}
 	})
@@ -521,20 +568,19 @@ func TestBeginNewRejectsPortViolationsAndAmbiguousOwnedCreation(t *testing.T) {
 	t.Run("wrong destination target", func(t *testing.T) {
 		engine, _, _, destination := newEngine()
 		destination.target = transfer.FileMaterializationTarget{}
-		if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, ErrPortContract) {
+		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, ErrPortContract) {
 			t.Fatalf("wrong target error = %v", err)
 		}
 	})
 
 	for name, final := range map[string]FinalCondition{
-		"foreign collision":  FinalCollision,
-		"owned collision":    FinalOwnedExact,
-		"metadata collision": FinalOwnedMetadataMismatch,
+		"foreign collision": FinalCollision,
+		"owned collision":   FinalOwnedExact,
 	} {
 		t.Run(name, func(t *testing.T) {
 			engine, repository, _, destination := newEngine()
 			destination.final = final
-			start, err := engine.BeginFile(context.Background(), fixture.file)
+			start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
 			settlement, immediate := start.ImmediateSettlement()
 			if err != nil || !immediate || settlement.Kind() != transfer.FileCollision || repository.present {
 				t.Fatalf("collision start = (%d, %t, present=%t, %v)", settlement.Kind(), immediate, repository.present, err)
@@ -546,11 +592,11 @@ func TestBeginNewRejectsPortViolationsAndAmbiguousOwnedCreation(t *testing.T) {
 		engine, _, platform, _ := newEngine()
 		engine.platform = &coveragePlatform{
 			Platform: platform,
-			create: func(context.Context, checkpointmodel.ObjectID, uint64) (OwnedFile, OwnedObservation, error) {
-				return nil, OwnedObservation{}, nil
+			observeOverride: func(context.Context, checkpointmodel.ObjectID, uint64) (OwnedObservation, error) {
+				return OwnedObservation{}, nil
 			},
 		}
-		if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, ErrInvalidObservation) {
+		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, ErrInvalidObservation) {
 			t.Fatalf("invalid owned observation error = %v", err)
 		}
 	})
@@ -564,7 +610,7 @@ func TestBeginNewRejectsPortViolationsAndAmbiguousOwnedCreation(t *testing.T) {
 				return &memoryOwnedFile{object: object, data: &memoryOwnedData{bytes: make([]byte, size)}}, observation, nil
 			},
 		}
-		if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, ErrPortContract) {
+		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, ErrTargetOwnershipUnknown) {
 			t.Fatalf("collision file error = %v", err)
 		}
 	})
@@ -582,16 +628,19 @@ func TestBeginNewRejectsPortViolationsAndAmbiguousOwnedCreation(t *testing.T) {
 				return &memoryOwnedFile{object: foreign, data: &memoryOwnedData{bytes: make([]byte, size)}}, observation, nil
 			},
 		}
-		if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, ErrTargetOwnershipUnknown) {
+		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, ErrTargetOwnershipUnknown) {
 			t.Fatalf("foreign owned object error = %v", err)
 		}
 	})
 
-	t.Run("candidate store failure closes owned object", func(t *testing.T) {
-		engine, repository, _, _ := newEngine()
+	t.Run("candidate store failure precedes owned object creation", func(t *testing.T) {
+		engine, repository, platform, _ := newEngine()
 		repository.storeErr = errors.New("checkpoint unavailable")
-		if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, repository.storeErr) {
+		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, repository.storeErr) {
 			t.Fatalf("candidate store error = %v", err)
+		}
+		if len(platform.objects) != 0 {
+			t.Fatal("owned stage existed before its durable candidate")
 		}
 	})
 
@@ -605,7 +654,7 @@ func TestBeginNewRejectsPortViolationsAndAmbiguousOwnedCreation(t *testing.T) {
 				return &memoryOwnedFile{object: object, data: &memoryOwnedData{bytes: make([]byte, size)}, syncErr: syncFailure}, observation, nil
 			},
 		}
-		if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, syncFailure) {
+		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, syncFailure) {
 			t.Fatalf("owned sync error = %v", err)
 		}
 	})
@@ -615,7 +664,7 @@ func TestBeginExistingRejectsUnverifiableOwnedAndFinalObservations(t *testing.T)
 	fixture := newExecutionFixture(t, 4)
 	seedRepository := &memoryCheckpointRepository{}
 	seedPlatform := newMemoryPlatform()
-	seedDestination := &memoryDestination{target: fixture.file.Target, final: FinalAbsent}
+	seedDestination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 	seedEngine := newFixtureEngine(t, fixture, seedRepository, seedPlatform, seedDestination, nil)
 	key, err := seedEngine.checkpointKey(fixture.file)
 	if err != nil {
@@ -638,14 +687,14 @@ func TestBeginExistingRejectsUnverifiableOwnedAndFinalObservations(t *testing.T)
 		repository := &memoryCheckpointRepository{record: record, present: true}
 		platform := newMemoryPlatform()
 		platform.objects[object] = &memoryOwnedData{bytes: make([]byte, 4)}
-		destination := &memoryDestination{target: fixture.file.Target, final: FinalAbsent}
+		destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 		return newFixtureEngine(t, fixture, repository, platform, destination, nil), platform, destination
 	}
 
 	t.Run("ready without file", func(t *testing.T) {
 		engine, platform, _ := newExistingEngine(active)
 		delete(platform.objects, object)
-		if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, ErrInvalidObservation) {
+		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, ErrInvalidObservation) {
 			t.Fatalf("ready-without-file error = %v", err)
 		}
 	})
@@ -659,7 +708,7 @@ func TestBeginExistingRejectsUnverifiableOwnedAndFinalObservations(t *testing.T)
 				return &memoryOwnedFile{object: object, data: &memoryOwnedData{bytes: make([]byte, size)}}, observation, nil
 			},
 		}
-		if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, ErrInvalidObservation) {
+		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, ErrInvalidObservation) {
 			t.Fatalf("nonready-with-file error = %v", err)
 		}
 	})
@@ -667,7 +716,7 @@ func TestBeginExistingRejectsUnverifiableOwnedAndFinalObservations(t *testing.T)
 	t.Run("final observation failure", func(t *testing.T) {
 		engine, _, destination := newExistingEngine(active)
 		destination.observeErr = errors.New("final observation failed")
-		if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, destination.observeErr) {
+		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, destination.observeErr) {
 			t.Fatalf("final observation error = %v", err)
 		}
 	})
@@ -675,7 +724,7 @@ func TestBeginExistingRejectsUnverifiableOwnedAndFinalObservations(t *testing.T)
 	t.Run("candidate needs exact owned witness", func(t *testing.T) {
 		engine, platform, _ := newExistingEngine(candidate)
 		platform.openCondition = OwnedStageMissing
-		if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, ErrTargetOwnershipUnknown) {
+		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, ErrTargetOwnershipUnknown) {
 			t.Fatalf("candidate witness error = %v", err)
 		}
 	})
@@ -690,10 +739,133 @@ func TestBeginExistingRejectsUnverifiableOwnedAndFinalObservations(t *testing.T)
 				return &memoryOwnedFile{object: object, data: &memoryOwnedData{bytes: make([]byte, size)}, syncErr: syncFailure}, observation, nil
 			},
 		}
-		if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, syncFailure) {
+		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, syncFailure) {
 			t.Fatalf("candidate sync error = %v", err)
 		}
 	})
+}
+
+func TestExistingCollisionRetainsCheckpointAndRetriesAfterForeignFinalRemoval(t *testing.T) {
+	fixture := newExecutionFixture(t, 4)
+	seedRepository := &memoryCheckpointRepository{}
+	seedPlatform := newMemoryPlatform()
+	seedDestination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
+	seedEngine := newFixtureEngine(t, fixture, seedRepository, seedPlatform, seedDestination, nil)
+	key, err := seedEngine.checkpointKey(fixture.file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := checkpointmodel.ObjectIDFromBytes(bytes.Repeat(
+		[]byte{0xf1}, transfer.OwnedObjectIdentityBytes,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := newInitialRecord(key, object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := checkpointmodel.PromoteInitialCandidate(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := &memoryCheckpointRepository{record: active, present: true}
+	platform := newMemoryPlatform()
+	platform.objects[object] = &memoryOwnedData{bytes: make([]byte, 4)}
+	destination := &memoryDestination{target: fixture.file.Target(), final: FinalCollision}
+	engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
+
+	start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settlement, ok := start.ImmediateSettlement()
+	if !ok || settlement.Kind() != transfer.FileCollision ||
+		repository.record.Phase() != checkpointmodel.PhaseActive ||
+		repository.record.QuarantineReason() != 0 || destination.final != FinalCollision {
+		t.Fatalf("collision recovery = (settled %t kind %d phase %d reason %d final %d)",
+			ok, settlement.Kind(), repository.record.Phase(), repository.record.QuarantineReason(), destination.final)
+	}
+	if platform.objects[object] == nil {
+		t.Fatal("definite collision discarded the owned partial")
+	}
+
+	// Removing only the foreign object restores the original operation: the
+	// checkpoint identity and owned data object remain the mutation authority.
+	destination.final = FinalAbsent
+	retry, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, durable, ok := retry.Transaction()
+	if !ok || !durable.Ranges().IsEmpty() || transaction.Binding().ObjectIdentity().IsZero() {
+		t.Fatalf("retry = (transaction %t ranges %v object %x)",
+			ok, durable.Ranges().Ranges(), transaction.Binding().ObjectIdentity().Bytes())
+	}
+	if err := transaction.WriteRange(context.Background(), 0, []byte("data")); err != nil {
+		t.Fatal(err)
+	}
+	settlement, err = transaction.Commit(context.Background())
+	if err != nil || settlement.Kind() != transfer.FilePublished ||
+		repository.record.RecordID() != active.RecordID() || destination.final != FinalOwnedExact {
+		t.Fatalf("retry commit = (kind %d record %x final %d, %v)",
+			settlement.Kind(), repository.record.RecordID().Bytes(), destination.final, err)
+	}
+}
+
+func TestExistingUnsafeFileEvidenceInstallsDurableItemBlock(t *testing.T) {
+	for name, configure := range map[string]func(*memoryPlatform, *memoryDestination){
+		"unsafe final": func(_ *memoryPlatform, destination *memoryDestination) {
+			destination.final = FinalUnsafe
+		},
+		"unsafe stage": func(platform *memoryPlatform, _ *memoryDestination) {
+			platform.openCondition = OwnedStageUnsafe
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newExecutionFixture(t, 4)
+			seedEngine := newFixtureEngine(
+				t, fixture, &memoryCheckpointRepository{}, newMemoryPlatform(),
+				&memoryDestination{target: fixture.file.Target(), final: FinalAbsent}, nil,
+			)
+			key, err := seedEngine.checkpointKey(fixture.file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			object, err := checkpointmodel.ObjectIDFromBytes(bytes.Repeat(
+				[]byte{0xe8}, transfer.OwnedObjectIdentityBytes,
+			))
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := newInitialRecord(key, object)
+			if err != nil {
+				t.Fatal(err)
+			}
+			active, err := checkpointmodel.PromoteInitialCandidate(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			repository := &memoryCheckpointRepository{record: active, present: true}
+			platform := newMemoryPlatform()
+			platform.objects[object] = &memoryOwnedData{bytes: make([]byte, 4)}
+			destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
+			configure(platform, destination)
+
+			engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
+			start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
+			if err != nil {
+				t.Fatal(err)
+			}
+			settlement, immediate := start.ImmediateSettlement()
+			_, _, blocked := settlement.ItemBlock()
+			if !immediate || !blocked || settlement.Kind() != transfer.FileItemBlocked ||
+				repository.record.Phase() != checkpointmodel.PhaseQuarantined {
+				t.Fatalf("unsafe recovery = (immediate %t blocked %t kind %d phase %d)",
+					immediate, blocked, settlement.Kind(), repository.record.Phase())
+			}
+		})
+	}
 }
 
 func recordForRecoveryPhaseCoverage(
@@ -721,7 +893,7 @@ func recordForRecoveryPhaseCoverage(
 }
 
 func TestRecoveryReducerRejectsUnreachablePhasesAndIncompletePublication(t *testing.T) {
-	_, repository, _, _ := newCoverageTransaction(t, 4)
+	_, repository, _, _ := newCoveragePartialFileTransaction(t, 4)
 	active := repository.record
 	object := active.OwnedObjectID()
 	owned := func(condition OwnedCondition) OwnedObservation {
@@ -746,7 +918,8 @@ func TestRecoveryReducerRejectsUnreachablePhasesAndIncompletePublication(t *test
 		t.Fatalf("reserved recovery error = %v", err)
 	}
 	decision, err := ReduceRecovery(active, owned(OwnedObjectCollision), final(FinalAbsent))
-	if err != nil || decision.Action() != RecoveryNeedsAttention {
+	if err != nil || decision.Action() != RecoveryInstallQuarantine ||
+		decision.QuarantineReason() != checkpointmodel.QuarantineOutputObjectDuplicate {
 		t.Fatalf("ambiguous owned recovery = (%d, %v)", decision.Action(), err)
 	}
 	publishing, err := publishingRecord(active)
@@ -754,7 +927,8 @@ func TestRecoveryReducerRejectsUnreachablePhasesAndIncompletePublication(t *test
 		t.Fatal(err)
 	}
 	decision, err = ReduceRecovery(publishing, owned(OwnedReady), final(FinalAbsent))
-	if err != nil || decision.Action() != RecoveryNeedsAttention {
+	if err != nil || decision.Action() != RecoveryInstallQuarantine ||
+		decision.QuarantineReason() != checkpointmodel.QuarantinePublicationHistory {
 		t.Fatalf("incomplete publication recovery = (%d, %v)", decision.Action(), err)
 	}
 	quarantined, err := quarantineRecord(active, checkpointmodel.QuarantineAnchorUnsafe)
@@ -768,7 +942,7 @@ func TestRecoveryReducerRejectsUnreachablePhasesAndIncompletePublication(t *test
 }
 
 func TestRecordTransitionsRejectGenerationAndQuarantineAuthorityGaps(t *testing.T) {
-	_, repository, _, _ := newCoverageTransaction(t, 4)
+	_, repository, _, _ := newCoveragePartialFileTransaction(t, 4)
 	active := repository.record
 	if _, err := newInitialRecord(CheckpointKey{}, checkpointmodel.ObjectID{}); !errors.Is(err, ErrInvalidClaim) {
 		t.Fatalf("invalid initial record error = %v", err)

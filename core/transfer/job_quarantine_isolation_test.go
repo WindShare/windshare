@@ -28,9 +28,9 @@ func (output *pathScriptedJobOutput) OpenDirectTree(
 
 func (output *pathScriptedJobOutput) AdmitDirectory(
 	ctx context.Context,
-	directory MaterializationDirectory,
+	request DirectoryMaterializationRequest,
 ) (DirectoryAdmission, error) {
-	return output.jobOutput.AdmitDirectory(ctx, directory)
+	return output.jobOutput.AdmitDirectory(ctx, request)
 }
 
 func (output *pathScriptedJobOutput) BeginFile(
@@ -45,7 +45,7 @@ func (output *pathScriptedJobOutput) BeginFile(
 	if !ok {
 		return start, nil
 	}
-	if script, scripted := output.scripts[file.Path]; scripted {
+	if script, scripted := output.scripts[file.ArtifactPath().String()]; scripted {
 		transaction.(*jobFileTransaction).script = script
 	}
 	return start, nil
@@ -57,11 +57,11 @@ func TestTransferJobIsolatesTransactionQuarantineAndPublishesSibling(t *testing.
 	quarantinedFile := transferID[catalog.FileID](182)
 	publishedFile := transferID[catalog.FileID](183)
 	base := newJobOutput(share)
-	base.completeSettlement = DirectTreeSettlementNeedsAttention
+	base.completeSettlement = DirectTreeSettlementFailed
 	output := &pathScriptedJobOutput{
 		jobOutput: base,
 		scripts: map[string]jobTransactionScript{
-			"a-quarantined.bin": {commitSettlement: FileQuarantined},
+			"a-quarantined.bin": {commitSettlement: FileItemBlocked},
 		},
 	}
 	revisions := &jobRevisionClient{
@@ -102,13 +102,13 @@ func TestTransferJobIsolatesTransactionQuarantineAndPublishesSibling(t *testing.
 	}
 
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeNeedsAttention || result.Settlement.Kind() != DirectTreeSettlementNeedsAttention ||
+	if result.Outcome != DirectTreeOutcomeFailed || result.Settlement.Kind() != DirectTreeSettlementFailed ||
 		result.SucceededFiles != 1 || result.TerminationCause != nil || result.SettlementFailure != nil {
 		t.Fatalf("quarantine-isolated result = %+v", result)
 	}
 	if len(result.Files) != 1 || result.Files[0].Path != "a-quarantined.bin" ||
 		!errors.Is(result.Files[0].Cause, ErrOutputQuarantined) ||
-		result.Files[0].Settlement.Kind() != FileQuarantined || result.Files[0].SettlementFailure != nil {
+		result.Files[0].Settlement.Kind() != FileItemBlocked || result.Files[0].SettlementFailure != nil {
 		t.Fatalf("quarantined file failure = %+v", result.Files)
 	}
 	if binding, ok := result.Files[0].Settlement.MaterializedBinding(); !ok ||
@@ -175,7 +175,7 @@ func TestTransferJobStopsSiblingWorkOnUnsettledCommit(t *testing.T) {
 
 			result := job.Run(context.Background())
 			expected, _ := fault.NewOutput(scope, fault.OutputStateIO)
-			if result.Outcome != DirectTreeOutcomeResumable || normalizedFault(result.TerminationCause) != expected ||
+			if result.Outcome != DirectTreeOutcomePaused || normalizedFault(result.TerminationCause) != expected ||
 				normalizedFault(result.SettlementFailure) != expected ||
 				!slices.Equal(revisions.order, []catalog.FileID{first}) ||
 				base.transactions["a-first.bin"] == nil || base.transactions["b-second.bin"] != nil ||

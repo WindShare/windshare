@@ -6,207 +6,181 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
+	"github.com/windshare/windshare/core/osfs/internal/resumeauthority"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-type coverageResumeRepository struct {
-	list       []ResumeStateRepositorySnapshot
-	listErr    error
-	lease      ResumeStateRepositoryLease
-	acquireErr error
-}
-
-func (repository *coverageResumeRepository) List(
-	context.Context,
-) ([]ResumeStateRepositorySnapshot, error) {
-	return append([]ResumeStateRepositorySnapshot(nil), repository.list...), repository.listErr
-}
-
-func (repository *coverageResumeRepository) Acquire(
-	context.Context,
-	receivecontract.OperationID,
-) (ResumeStateRepositoryLease, error) {
-	return repository.lease, repository.acquireErr
-}
-
-type coverageResumeLease struct {
-	snapshot ResumeStateRepositorySnapshot
-	recovery ResumeStateRecoveryEvidence
-	cleanup  ResumeStateDiscardEvidence
-
-	snapshotErr error
-	recoveryErr error
-	cleanupErr  error
-	installErr  error
-	replaceErr  error
-	closeErr    error
-}
-
-func (lease *coverageResumeLease) Snapshot(context.Context) (ResumeStateRepositorySnapshot, error) {
-	return lease.snapshot, lease.snapshotErr
-}
-
-func (lease *coverageResumeLease) ObserveRecovery(context.Context) (ResumeStateRecoveryEvidence, error) {
-	return lease.recovery, lease.recoveryErr
-}
-
-func (lease *coverageResumeLease) CleanupOwned(context.Context) (ResumeStateDiscardEvidence, error) {
-	return lease.cleanup, lease.cleanupErr
-}
-
-func (lease *coverageResumeLease) InstallReceipt(context.Context, []byte) error {
-	return lease.installErr
-}
-
-func (lease *coverageResumeLease) ReplaceLifecycle(context.Context, []byte, []byte) error {
-	return lease.replaceErr
-}
-
-func (lease *coverageResumeLease) Close() error { return lease.closeErr }
-
-func TestResumeStateAuthorityW6RejectsMalformedFreshProcessImages(t *testing.T) {
-	fixture := newPublicResumeFixture(t, 0x81)
-	snapshot, err := decodeResumeSnapshot(fixture.snapshot)
-	if err != nil || snapshot.Operation().OperationID() != fixture.operation ||
-		snapshot.Lifecycle().Phase() != checkpointmodel.LifecycleReceiving {
-		t.Fatalf("decoded snapshot = (%+v, %v)", snapshot, err)
-	}
-
-	corruptOperation := fixture.snapshot
-	corruptOperation.OperationRecord = []byte("not-an-operation")
-	if _, err := decodeResumeSnapshot(corruptOperation); !errors.Is(err, ErrResumeStateContract) {
-		t.Fatalf("corrupt operation error = %v", err)
-	}
-	corruptLifecycle := fixture.snapshot
-	corruptLifecycle.LifecycleRecord = []byte("not-a-lifecycle")
-	if _, err := decodeResumeSnapshot(corruptLifecycle); !errors.Is(err, ErrResumeStateContract) {
-		t.Fatalf("corrupt lifecycle error = %v", err)
-	}
-	corruptBridge := repositoryBridge{repository: &coverageResumeRepository{
-		list: []ResumeStateRepositorySnapshot{corruptOperation},
-	}}
-	if _, err := corruptBridge.List(context.Background()); !errors.Is(err, ErrResumeStateContract) {
-		t.Fatalf("unidentifiable inventory error = %v", err)
-	}
-
-	receipt, err := decodeOptionalReceipt(fixture.cleanup)
-	if err != nil || receipt.Kind() != checkpointmodel.ReceiptCleanup {
-		t.Fatalf("cleanup receipt = (%d, %v)", receipt.Kind(), err)
-	}
-	if empty, err := decodeOptionalReceipt(nil); err != nil || empty.Valid() {
-		t.Fatalf("empty receipt = (%+v, %v)", empty, err)
-	}
-	if _, err := decodeOptionalReceipt([]byte("not-a-receipt")); !errors.Is(err, ErrResumeStateContract) {
-		t.Fatalf("corrupt receipt error = %v", err)
-	}
-}
-
-func TestResumeStateAuthorityW6BridgePropagatesLeaseFailures(t *testing.T) {
-	fixture := newPublicResumeFixture(t, 0x91)
-	operationErr := errors.New("operation failed")
-
-	listBridge := repositoryBridge{repository: &coverageResumeRepository{listErr: operationErr}}
-	if _, err := listBridge.List(context.Background()); !errors.Is(err, operationErr) {
-		t.Fatalf("list error = %v", err)
-	}
-	acquireBridge := repositoryBridge{repository: &coverageResumeRepository{acquireErr: operationErr}}
-	if _, err := acquireBridge.Acquire(context.Background(), fixture.operation); !errors.Is(err, operationErr) {
-		t.Fatalf("acquire error = %v", err)
-	}
-	nilLeaseBridge := repositoryBridge{repository: &coverageResumeRepository{}}
-	if _, err := nilLeaseBridge.Acquire(context.Background(), fixture.operation); !errors.Is(err, ErrResumeStateContract) {
-		t.Fatalf("nil acquired lease error = %v", err)
-	}
-
-	lease := &coverageResumeLease{snapshot: fixture.snapshot}
-	bridge := &leaseBridge{lease: lease}
-	lease.snapshotErr = operationErr
-	if _, err := bridge.Snapshot(context.Background()); !errors.Is(err, operationErr) {
-		t.Fatalf("snapshot error = %v", err)
-	}
-	lease.snapshotErr = nil
-
-	lease.recoveryErr = operationErr
-	if _, err := bridge.ObserveRecovery(context.Background()); !errors.Is(err, operationErr) {
-		t.Fatalf("recovery observation error = %v", err)
-	}
-	lease.recoveryErr = nil
-	lease.recovery = ResumeStateRecoveryEvidence{TerminalReceipt: []byte("bad")}
-	if _, err := bridge.ObserveRecovery(context.Background()); !errors.Is(err, ErrResumeStateContract) {
-		t.Fatalf("terminal receipt error = %v", err)
-	}
-	lease.recovery = ResumeStateRecoveryEvidence{ExpiryReceipt: []byte("bad")}
-	if _, err := bridge.ObserveRecovery(context.Background()); !errors.Is(err, ErrResumeStateContract) {
-		t.Fatalf("expiry receipt error = %v", err)
-	}
-
-	lease.cleanupErr = operationErr
-	if _, err := bridge.CleanupOwned(context.Background()); !errors.Is(err, operationErr) {
-		t.Fatalf("cleanup error = %v", err)
-	}
-	lease.cleanupErr = nil
-	lease.cleanup = ResumeStateDiscardEvidence{Receipt: []byte("bad")}
-	if _, err := bridge.CleanupOwned(context.Background()); !errors.Is(err, ErrResumeStateContract) {
-		t.Fatalf("cleanup receipt error = %v", err)
-	}
-
-	if err := bridge.ReplaceLifecycle(
-		context.Background(), checkpointmodel.ReceiveLifecycleState{}, checkpointmodel.ReceiveLifecycleState{},
-	); !errors.Is(err, ErrResumeStateContract) {
-		t.Fatalf("invalid lifecycle replacement error = %v", err)
-	}
-	lease.installErr = operationErr
-	if err := bridge.InstallReceipt(context.Background(), receiptFixtureForPublicBridge(t, fixture)); !errors.Is(err, operationErr) {
-		t.Fatalf("receipt install error = %v", err)
-	}
-	lease.closeErr = operationErr
-	if err := bridge.Close(); !errors.Is(err, operationErr) {
-		t.Fatalf("lease close error = %v", err)
-	}
-}
-
-func receiptFixtureForPublicBridge(
+func publicAttentionHeader(
 	t *testing.T,
-	fixture publicResumeFixture,
-) checkpointmodel.DirectTreeReceipt {
+	fixture publicOrdinaryFixture,
+	reason checkpointmodel.OrdinaryClosedReason,
+) resumeauthority.Header {
 	t.Helper()
-	receipt, err := checkpointmodel.DecodeDirectTreeReceipt(fixture.cleanup)
+	lease := &publicOrdinaryLease{header: fixture.header}
+	header, err := lease.Transition(
+		context.Background(),
+		checkpointmodel.OrdinaryLifecycleRequireAttention,
+		reason,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return receipt
+	return header
 }
 
-func TestResumeStateAuthorityW6NilReceiverAndSummaryVocabulary(t *testing.T) {
-	fixture := newPublicResumeFixture(t, 0xa1)
-	lease := &coverageResumeLease{
-		snapshot: fixture.snapshot,
-		recovery: ResumeStateRecoveryEvidence{
-			TargetOwnership: ResumeEvidenceProven, Checkpoints: ResumeEvidenceProven,
-			Cleanup: ResumeCleanupPending,
+func TestResumeStateAuthorityW6ProjectsAttentionAndDiagnosticReferences(t *testing.T) {
+	fixture := newPublicOrdinaryFixture(t, 0x71)
+	header := publicAttentionHeader(
+		t, fixture, checkpointmodel.OrdinaryReasonOperationOwnershipUnknown,
+	)
+	reference, err := resumeauthority.NewBlockedReference("checkpoint-bad-mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := &publicOrdinaryLease{
+		header: header, items: []resumeauthority.Item{reference},
+		cleanup: resumeauthority.CleanupPending,
+	}
+	authority, err := newResumeStateAuthority(&publicOrdinaryStore{
+		header: header, lease: lease,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := authority.ListResumeState(context.Background())
+	summaries := inventory.Summaries()
+	if err != nil || inventory.Status() != ResumeStateListNeedsAttention ||
+		len(summaries) != 1 ||
+		summaries[0].State() != ResumeOperationNeedsAttention ||
+		summaries[0].NeedsAttentionReason() != "operation-ownership-unknown" ||
+		len(summaries[0].Items()) != 1 ||
+		summaries[0].Items()[0].DiagnosticReference() != "checkpoint-bad-mac" ||
+		summaries[0].Items()[0].BlockReason() != ResumeItemBlockCheckpointInvalid {
+		t.Fatalf("attention inventory = (%+v, %v)", inventory, err)
+	}
+}
+
+func TestResumeStateAuthorityW6PropagatesPageAcquireAndSnapshotFailures(t *testing.T) {
+	fixture := newPublicOrdinaryFixture(t, 0x81)
+	sentinel := errors.New("resume boundary failed")
+	tests := []struct {
+		name  string
+		store *publicOrdinaryStore
+	}{
+		{
+			name: "page",
+			store: &publicOrdinaryStore{
+				header: fixture.header, pageErr: sentinel,
+			},
+		},
+		{
+			name: "acquire",
+			store: &publicOrdinaryStore{
+				header: fixture.header, acquireErr: sentinel,
+			},
+		},
+		{
+			name: "snapshot",
+			store: &publicOrdinaryStore{
+				header: fixture.header,
+				lease: &publicOrdinaryLease{
+					header: fixture.header, snapshotErr: sentinel,
+				},
+			},
+		},
+		{
+			name: "close",
+			store: &publicOrdinaryStore{
+				header: fixture.header,
+				lease: &publicOrdinaryLease{
+					header: fixture.header, closeErr: sentinel,
+				},
+			},
 		},
 	}
-	authority, err := NewResumeStateAuthority(&coverageResumeRepository{lease: lease})
-	if err != nil {
-		t.Fatal(err)
-	}
-	summary, err := authority.Recover(context.Background(), fixture.operation, 100)
-	if err != nil || summary.OperationID() != fixture.operation ||
-		summary.ReceiveIntentDigest() != fixture.intent ||
-		summary.Phase() != uint8(checkpointmodel.LifecycleResumableReceive) ||
-		summary.StateGeneration() != 3 || summary.ExpiresAtMillis() == 0 ||
-		summary.SuccessCount() != 1 || summary.FailureCount() != 0 || !summary.Resumable() {
-		t.Fatalf("summary vocabulary = (%+v, %v)", summary, err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			authority, err := newResumeStateAuthority(test.store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := authority.ListResumeState(context.Background()); !errors.Is(err, sentinel) {
+				t.Fatalf("list error = %v", err)
+			}
+		})
 	}
 
-	var nilAuthority *RepositoryResumeStateAuthority
-	if _, err := nilAuthority.ListResumeState(context.Background()); !errors.Is(err, ErrResumeStateContract) {
-		t.Fatalf("nil list authority error = %v", err)
+	nilLease, _ := newResumeStateAuthority(&publicOrdinaryStore{header: fixture.header})
+	if _, err := nilLease.ListResumeState(context.Background()); !errors.Is(err, ErrResumeStateContract) {
+		t.Fatalf("nil lease error = %v", err)
 	}
-	if _, err := nilAuthority.Recover(context.Background(), fixture.operation, 1); !errors.Is(err, ErrResumeStateContract) {
-		t.Fatalf("nil recover authority error = %v", err)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	authority, _ := newResumeStateAuthority(&publicOrdinaryStore{header: fixture.header})
+	if _, err := authority.ListResumeState(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled list error = %v", err)
 	}
-	if _, err := nilAuthority.Discard(context.Background(), fixture.operation); !errors.Is(err, ErrResumeStateContract) {
-		t.Fatalf("nil discard authority error = %v", err)
+	var nilContext context.Context
+	if _, err := authority.ListResumeState(nilContext); !errors.Is(err, ErrResumeStateContract) {
+		t.Fatalf("nil-context list error = %v", err)
+	}
+}
+
+func TestResumeStateAuthorityW6PreservesCleanupUncertaintyAndCloseErrors(t *testing.T) {
+	fixture := newPublicOrdinaryFixture(t, 0x91)
+	cleanupErr := errors.New("cleanup durability uncertain")
+	closeErr := errors.New("lease close failed")
+	lease := &publicOrdinaryLease{
+		header: fixture.header, cleanup: resumeauthority.CleanupPending,
+		cleanupErr: cleanupErr, closeErr: closeErr,
+	}
+	authority, _ := newResumeStateAuthority(&publicOrdinaryStore{
+		header: fixture.header, lease: lease,
+	})
+	summary, err := authority.Discard(context.Background(), fixture.operation)
+	if summary.State() != ResumeOperationCleanupPending ||
+		!errors.Is(err, cleanupErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("cleanup-pending discard = (%+v, %v)", summary, err)
+	}
+
+	invalidFixture := newPublicOrdinaryFixture(t, 0xa1)
+	invalidLease := &publicOrdinaryLease{
+		header: invalidFixture.header, cleanupErr: cleanupErr,
+	}
+	invalidAuthority, _ := newResumeStateAuthority(&publicOrdinaryStore{
+		header: invalidFixture.header, lease: invalidLease,
+	})
+	if _, err := invalidAuthority.Discard(
+		context.Background(), invalidFixture.operation,
+	); !errors.Is(err, ErrResumeStateContract) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("invalid cleanup outcome error = %v", err)
+	}
+}
+
+func TestResumeStateAuthorityW6RejectsDiscardTransitionAndInputFaults(t *testing.T) {
+	fixture := newPublicOrdinaryFixture(t, 0xb1)
+	transitionErr := errors.New("registry transition failed")
+	lease := &publicOrdinaryLease{
+		header: fixture.header, cleanup: resumeauthority.CleanupComplete,
+		transitionErr: transitionErr,
+	}
+	authority, _ := newResumeStateAuthority(&publicOrdinaryStore{
+		header: fixture.header, lease: lease,
+	})
+	if _, err := authority.Discard(
+		context.Background(), fixture.operation,
+	); !errors.Is(err, transitionErr) {
+		t.Fatalf("transition error = %v", err)
+	}
+	var nilContext context.Context
+	if _, err := authority.Discard(
+		nilContext, fixture.operation,
+	); !errors.Is(err, ErrResumeStateContract) {
+		t.Fatalf("nil-context discard error = %v", err)
+	}
+	if _, err := authority.Discard(
+		context.Background(), receivecontract.OperationID{},
+	); !errors.Is(err, ErrResumeStateContract) {
+		t.Fatalf("zero-operation discard error = %v", err)
 	}
 }

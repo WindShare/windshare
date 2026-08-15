@@ -3,6 +3,7 @@ package outputsession
 import (
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 type OperationKind uint8
@@ -18,6 +19,7 @@ const (
 	OperationRetireFile
 	OperationPauseTree
 	OperationFinalizeTree
+	OperationFirstWrite
 )
 
 type TraceDecision uint8
@@ -34,6 +36,7 @@ const (
 	TraceAmbiguous
 	TraceDraining
 	TraceClosed
+	TraceCollision
 )
 
 type ClaimKind uint8
@@ -55,6 +58,7 @@ const (
 
 type TraceEvent struct {
 	ReceiveIntentDigest    transfer.ReceiveIntentDigest
+	ReceiveOperationID     receivecontract.OperationID
 	SessionID              transfer.OutputSessionID
 	OperationID            uint64
 	Operation              OperationKind

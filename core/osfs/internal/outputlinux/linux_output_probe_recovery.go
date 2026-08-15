@@ -14,11 +14,15 @@ import (
 const (
 	linuxOutputProbeReservedPrefix   = ".windshare-output.probe"
 	linuxOutputProbeMaximumLeftovers = 64
-	linuxOutputProbeMaximumEntries   = 7
+	linuxOutputProbeMaximumEntries   = 8
 )
 
 var linuxOutputProbeRegularNames = map[string]struct{}{
-	"stage": {}, "anchor": {}, "publication": {}, "record": {}, "record.tmp": {},
+	"stage": {}, "live-stage": {}, "anchor": {}, "publication": {}, "record": {}, "record.tmp": {},
+}
+
+var linuxOutputProbePublicProfileNames = map[string]struct{}{
+	"live-stage": {},
 }
 
 var linuxOutputProbeDirectoryNames = map[string]struct{}{
@@ -154,7 +158,13 @@ func (root *linuxOutputDirectory) inspectOutputProbeLeftover(name string) (*linu
 	}
 	for _, entry := range names {
 		if _, ok := linuxOutputProbeRegularNames[entry]; ok {
-			file, openErr := directory.openRegularFileExact(entry, false, linuxOutputStateFileMode)
+			var file *linuxOutputRegularFile
+			var openErr error
+			if _, publicProfile := linuxOutputProbePublicProfileNames[entry]; publicProfile {
+				file, openErr = directory.openRegularFile(entry, false)
+			} else {
+				file, openErr = directory.openRegularFileExact(entry, false, linuxOutputStateFileMode)
+			}
 			if openErr != nil {
 				return fail(openErr)
 			}
@@ -162,8 +172,10 @@ func (root *linuxOutputDirectory) inspectOutputProbeLeftover(name string) (*linu
 			if identityErr != nil {
 				return fail(errors.Join(fmt.Errorf("inspect probe file %q", entry), identityErr, file.close()))
 			}
-			if observeErr := observation.ObserveFile(entry, identity.size); observeErr != nil {
-				return fail(errors.Join(observeErr, file.close()))
+			if entry != "live-stage" {
+				if observeErr := observation.ObserveFile(entry, identity.size); observeErr != nil {
+					return fail(errors.Join(observeErr, file.close()))
+				}
 			}
 			leftover.regular[entry] = file
 			continue
@@ -214,7 +226,7 @@ func (leftover *linuxOutputProbeLeftover) validateDataLinks() error {
 }
 
 func (leftover *linuxOutputProbeLeftover) remove() error {
-	for _, name := range []string{"stage", "publication", "anchor", "record.tmp", "record"} {
+	for _, name := range []string{"live-stage", "stage", "publication", "anchor", "record.tmp", "record"} {
 		file := leftover.regular[name]
 		if file == nil {
 			continue

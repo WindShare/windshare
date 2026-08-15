@@ -10,26 +10,30 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 )
 
-func ValidateDirectory(intent transfer.ReceiveIntent, directory transfer.MaterializationDirectory) error {
+func ValidateDirectory(intent transfer.ReceiveIntent, directory transfer.AuthenticatedSourceDirectory) error {
 	if directory.DirectoryID.IsZero() || directory.Generation.IsZero() {
 		return transfer.ErrInvalidDirectoryAdmission
 	}
-	if directory.Path == "" {
+	if !directory.SourcePath.Valid() {
+		return transfer.ErrInvalidDirectoryAdmission
+	}
+	sourcePath := directory.SourcePath.String()
+	if sourcePath == "" {
 		if !directory.ParentAdmission.IsZero() || directory.DirectoryID != intent.SyntheticRoot() {
 			return transfer.ErrDirectoryAdmissionMismatch
 		}
 		return nil
 	}
-	canonical, err := catalog.CanonicalPath(directory.Path)
-	if err != nil || canonical != directory.Path || directory.ParentAdmission.IsZero() {
+	canonical, err := catalog.CanonicalPath(sourcePath)
+	if err != nil || canonical != sourcePath || directory.ParentAdmission.IsZero() {
 		return transfer.ErrInvalidDirectoryAdmission
 	}
 	return nil
 }
 
-func SameDirectory(left, right transfer.MaterializationDirectory) bool {
+func SameDirectory(left, right transfer.AuthenticatedSourceDirectory) bool {
 	return left.DirectoryID == right.DirectoryID && left.Generation == right.Generation &&
-		left.ParentAdmission.Equal(right.ParentAdmission) && left.Path == right.Path &&
+		left.ParentAdmission.Equal(right.ParentAdmission) && left.SourcePath == right.SourcePath &&
 		left.ModifiedTime == right.ModifiedTime
 }
 

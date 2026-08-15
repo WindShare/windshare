@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 )
 
@@ -219,7 +220,7 @@ func (directory *linuxV3Directory) CreateDirectory(name string, private bool) (o
 	if private {
 		created, err = directory.native.createPrivateDirectoryExact(name, linuxOutputDirectoryMode)
 	} else {
-		created, err = directory.native.createDirectoryExact(name, uint32(dirPerm))
+		created, err = directory.native.createDirectoryExact(name, linuxPublicDirectoryCreateMode)
 	}
 	if err != nil {
 		return nil, linuxV3Error(err)
@@ -241,6 +242,26 @@ func (directory *linuxV3Directory) bindDirectoryOrigin(
 	}, nil
 }
 
+func (directory *linuxV3Directory) ReservePublicDirectoryNoReplace(
+	name string,
+) (outputcap.Directory, outputcap.PublishNoReplaceOutcome, error) {
+	if directory == nil || directory.native == nil {
+		return nil, 0, errors.Join(
+			outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux directory authority is closed"))
+	}
+	created, outcome, nativeErr := directory.native.reservePublicDirectoryNoReplace(
+		name, linuxPublicDirectoryCreateMode)
+	if created == nil {
+		return nil, outcome, linuxV3Error(nativeErr)
+	}
+	bound, bindErr := directory.bindDirectoryOrigin(created, name)
+	if bindErr != nil {
+		return nil, outputcap.PublishNoReplaceIndeterminate,
+			errors.Join(linuxV3Error(nativeErr), bindErr)
+	}
+	return bound, outcome, linuxV3Error(nativeErr)
+}
+
 func (directory *linuxV3Directory) InstallDirectoryNoReplace(
 	candidate outputcap.Directory,
 	name string,
@@ -248,7 +269,9 @@ func (directory *linuxV3Directory) InstallDirectoryNoReplace(
 	source, ok := candidate.(*linuxV3Directory)
 	if !ok || directory == nil || directory.native == nil || source == nil || source.native == nil ||
 		source.origin == nil || source.origin.parent == nil {
-		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux installation candidate has no fixed origin"))
+		return nil, errors.Join(
+			outputcap.ErrFixedLinkSourceChanged, outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: Linux installation candidate has no fixed origin"))
 	}
 	if err := source.origin.parent.renameDirectory(
 		source.origin.name, source.native, directory.native, name, linuxRenameNoReplace,
@@ -270,11 +293,11 @@ func (directory *linuxV3Directory) CreateFile(name string, private bool, size in
 	if directory == nil || directory.native == nil {
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux directory authority is closed"))
 	}
-	permissions := uint32(filePerm)
+	permissions := uint32(linuxPublicFileCreateMode)
 	if private {
 		permissions = linuxOutputStateFileMode
 	}
-	created, err := directory.native.createRegularFileExact(name, permissions, size)
+	created, err := directory.native.createRegularFileExactWithAuthority(name, permissions, size, private)
 	if err != nil {
 		return nil, linuxV3Error(err)
 	}
@@ -305,16 +328,48 @@ func (directory *linuxV3Directory) OpenFile(name string, private, writable bool)
 	return directory.bindFileOrigin(opened, name, private)
 }
 
-func (directory *linuxV3Directory) LinkFileNoReplace(source outputcap.File, name string) (outputcap.File, error) {
+func (directory *linuxV3Directory) PublishFileNoReplace(
+	source outputcap.File,
+	name string,
+) (outputcap.PublishNoReplaceOutcome, error) {
 	file, ok := source.(*linuxV3File)
-	if !ok || directory == nil || directory.native == nil || file == nil || file.native == nil ||
-		file.origin == nil || file.origin.parent == nil {
-		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: incompatible Linux file link authority"))
+	if !ok || directory == nil || directory.native == nil || file == nil || file.native == nil {
+		return 0, errors.Join(
+			outputcap.ErrFixedLinkSourceChanged, outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: incompatible Linux file link authority"))
 	}
-	if err := directory.native.linkRegularFileNoReplace(
-		file.origin.parent, file.origin.name, file.native, name,
-	); err != nil {
-		return nil, linuxV3Error(err)
+	sourceParent := (*linuxOutputDirectory)(nil)
+	sourceName := ""
+	if file.origin != nil {
+		sourceParent = file.origin.parent
+		sourceName = file.origin.name
+	}
+	err := directory.native.linkRegularFileNoReplace(
+		sourceParent, sourceName, file.native, name,
+	)
+	switch {
+	case err == nil:
+		return outputcap.PublishNoReplaceCommitted, nil
+	case errors.Is(err, errLinuxOutputCollision):
+		return outputcap.PublishNoReplaceCollision, nil
+	case errors.Is(err, errLinuxOutputPublishIndeterminate):
+		return outputcap.PublishNoReplaceIndeterminate, linuxV3Error(err)
+	default:
+		return 0, linuxV3Error(err)
+	}
+}
+
+func (directory *linuxV3Directory) LinkFileNoReplace(source outputcap.File, name string) (outputcap.File, error) {
+	outcome, err := directory.PublishFileNoReplace(source, name)
+	if err != nil {
+		return nil, err
+	}
+	if outcome == outputcap.PublishNoReplaceCollision {
+		return nil, outputcap.ErrNamespaceCollision
+	}
+	if outcome != outputcap.PublishNoReplaceCommitted {
+		return nil, errors.Join(outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: Linux file publication outcome is indeterminate"))
 	}
 	linked, err := directory.native.openRegularFile(name, false)
 	if err != nil {
@@ -336,6 +391,71 @@ func (directory *linuxV3Directory) bindFileOrigin(
 		native: file, private: private,
 		origin: &linuxV3FileOrigin{parent: parent, name: name},
 	}, nil
+}
+
+func (directory *linuxV3Directory) CreateOrdinaryOutputStage(
+	proofDirectory outputcap.Directory,
+	name string,
+	exactSize uint64,
+) error {
+	proof, ok := proofDirectory.(*linuxV3Directory)
+	if !ok || directory == nil || directory.native == nil || proof == nil || proof.native == nil ||
+		name == "" || exactSize > uint64(^uint64(0)>>1) {
+		return errors.Join(outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: invalid Linux ordinary-output stage authority"))
+	}
+	created, err := directory.native.createLiveCleanupStage(proof.native, name, int64(exactSize))
+	if err != nil {
+		return linuxV3Error(err)
+	}
+	return linuxV3Error(created.close())
+}
+
+func (directory *linuxV3Directory) CreateLiveCleanupStage(
+	proofDirectory outputcap.Directory,
+	ticket checkpointmodel.LiveCleanupTicket,
+) error {
+	proof, ok := proofDirectory.(*linuxV3Directory)
+	if !ok || directory == nil || directory.native == nil || proof == nil || proof.native == nil ||
+		!ticket.Valid() || ticket.Profile() != checkpointmodel.LiveCleanupLinuxExt4V1 ||
+		ticket.State() != checkpointmodel.LiveCleanupTicketCommitted ||
+		ticket.ExactSize() > uint64(^uint64(0)>>1) {
+		return errors.Join(outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: invalid Linux live-cleanup stage authority"))
+	}
+	created, err := directory.native.createLiveCleanupStage(
+		proof.native, ticket.StageName(), int64(ticket.ExactSize()))
+	if err != nil {
+		return linuxV3Error(err)
+	}
+	return linuxV3Error(created.close())
+}
+
+func (directory *linuxV3Directory) RemoveLiveCleanupStage(
+	ticket checkpointmodel.LiveCleanupTicket,
+	expected outputcap.File,
+) error {
+	file, ok := expected.(*linuxV3File)
+	if !ok || directory == nil || directory.native == nil || file == nil || file.native == nil ||
+		!ticket.Valid() || ticket.Profile() != checkpointmodel.LiveCleanupLinuxExt4V1 ||
+		!directory.native.requireExactPermissions {
+		return errors.Join(outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: invalid Linux live-cleanup removal authority"))
+	}
+	if err := directory.native.validatePrivateAuthority("remove Linux live-cleanup stage"); err != nil {
+		return linuxV3Error(err)
+	}
+	size, err := file.native.currentIdentity()
+	if err != nil {
+		return linuxV3Error(err)
+	}
+	if size.size != ticket.ExactSize() ||
+		(ticket.State() != checkpointmodel.LiveCleanupTicketCommitted &&
+			ticket.State() != checkpointmodel.LiveCleanupStageCreated) {
+		return errors.Join(outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: Linux live-cleanup stage facts do not match its ticket"))
+	}
+	return linuxV3Error(directory.native.unlinkRegularFile(ticket.StageName(), file.native))
 }
 
 func (directory *linuxV3Directory) ReplacePrivateFile(source outputcap.File, name string) error {
@@ -371,7 +491,7 @@ func (directory *linuxV3Directory) AcquireLock(
 		}
 		return newLinuxV3Lock(lock), false, nil
 	}
-	file, err := directory.native.createRegularFileExact(name, linuxOutputStateFileMode, 0)
+	file, err := directory.native.createPrivateRegularFileExact(name, linuxOutputStateFileMode, 0)
 	created := err == nil
 	if errors.Is(err, errLinuxOutputCollision) {
 		lock, existingErr := directory.native.acquireExistingStableLock(name)

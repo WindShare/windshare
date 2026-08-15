@@ -3,6 +3,7 @@ package transfer
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/fault"
@@ -11,29 +12,41 @@ import (
 
 var ErrInvalidOutputSettlement = errors.New("transfer output settlement is invalid")
 
-// FileSettlementKind is durable output state, not an error classification.
-// Keeping collision and quarantine out of the error channel lets a job continue
-// other files without guessing backend policy from wrapped error text.
+// FileSettlementKind is an item result, not operation ownership state. Keeping
+// collisions, definite failures, and blocked items out of the error channel
+// lets the job continue independent siblings without guessing wrapped errors.
 type FileSettlementKind uint8
 
 const (
 	FilePublished FileSettlementKind = iota + 1
 	FilePaused
-	FileRetired
 	FileCollision
-	FilePublishBlocked
-	FileQuarantined
+	FileItemBlocked
+	FileFailed
 )
+
+type FilePublicationProvenance uint8
+
+const (
+	FileDownloaded FilePublicationProvenance = iota + 1
+	FileResumed
+)
+
+func (provenance FilePublicationProvenance) valid() bool {
+	return provenance == FileDownloaded || provenance == FileResumed
+}
 
 type FileSettlement struct {
 	kind             FileSettlementKind
+	provenance       FilePublicationProvenance
 	target           FileMaterializationTarget
 	binding          MaterializedFileBinding
 	hasBinding       bool
 	checkpoint       VerifiedDurableRanges
 	hasCheckpoint    bool
 	stateRef         MaterializationStateRef
-	quarantineReason QuarantineReason
+	itemBlockReason  ItemBlockReason
+	metadataWarnings []FileMetadataWarning
 }
 
 func NewCollisionFileSettlement(target FileMaterializationTarget) (FileSettlement, error) {
@@ -43,15 +56,78 @@ func NewCollisionFileSettlement(target FileMaterializationTarget) (FileSettlemen
 	return FileSettlement{kind: FileCollision, target: target}, nil
 }
 
-func (s FileSettlement) Kind() FileSettlementKind          { return s.kind }
-func (s FileSettlement) Target() FileMaterializationTarget { return s.target }
-
-func NewRetiredFileSettlement(binding MaterializedFileBinding) (FileSettlement, error) {
+// NewTransactionCollisionFileSettlement retains the transaction binding so a
+// post-admission no-replace race cannot be confused with a pre-mutation collision.
+func NewTransactionCollisionFileSettlement(binding MaterializedFileBinding) (FileSettlement, error) {
 	if !binding.valid() {
 		return FileSettlement{}, ErrInvalidOutputSettlement
 	}
 	return FileSettlement{
-		kind: FileRetired, target: binding.Target(), binding: binding, hasBinding: true,
+		kind: FileCollision, target: binding.Target(), binding: binding, hasBinding: true,
+	}, nil
+}
+
+type FileMetadataWarning uint8
+
+const (
+	FileMetadataModifiedTime FileMetadataWarning = iota + 1
+)
+
+func (warning FileMetadataWarning) valid() bool {
+	return warning == FileMetadataModifiedTime
+}
+
+func (settlement FileSettlement) WithMetadataWarnings(
+	warnings []FileMetadataWarning,
+) (FileSettlement, error) {
+	if !settlement.validWithoutWarnings() {
+		return FileSettlement{}, ErrInvalidOutputSettlement
+	}
+	seen := make(map[FileMetadataWarning]struct{}, len(warnings))
+	settlement.metadataWarnings = settlement.metadataWarnings[:0]
+	for _, warning := range warnings {
+		if !warning.valid() {
+			return FileSettlement{}, ErrInvalidOutputSettlement
+		}
+		if _, duplicate := seen[warning]; duplicate {
+			continue
+		}
+		seen[warning] = struct{}{}
+		settlement.metadataWarnings = append(settlement.metadataWarnings, warning)
+	}
+	return settlement, nil
+}
+
+func (settlement FileSettlement) MetadataWarnings() []FileMetadataWarning {
+	return slices.Clone(settlement.metadataWarnings)
+}
+
+func (settlement FileSettlement) WithPublicationProvenance(
+	provenance FilePublicationProvenance,
+) (FileSettlement, error) {
+	if settlement.kind != FilePublished || !provenance.valid() {
+		return FileSettlement{}, ErrInvalidOutputSettlement
+	}
+	settlement.provenance = provenance
+	if !settlement.validWithoutWarnings() {
+		return FileSettlement{}, ErrInvalidOutputSettlement
+	}
+	return settlement, nil
+}
+
+func (settlement FileSettlement) PublicationProvenance() (FilePublicationProvenance, bool) {
+	return settlement.provenance, settlement.kind == FilePublished && settlement.provenance.valid()
+}
+
+func (s FileSettlement) Kind() FileSettlementKind          { return s.kind }
+func (s FileSettlement) Target() FileMaterializationTarget { return s.target }
+
+func NewFailedFileSettlement(binding MaterializedFileBinding) (FileSettlement, error) {
+	if !binding.valid() {
+		return FileSettlement{}, ErrInvalidOutputSettlement
+	}
+	return FileSettlement{
+		kind: FileFailed, target: binding.Target(), binding: binding, hasBinding: true,
 	}, nil
 }
 
@@ -63,7 +139,8 @@ func NewTransientPublishedFileSettlement(binding MaterializedFileBinding) (FileS
 		return FileSettlement{}, ErrInvalidOutputSettlement
 	}
 	return FileSettlement{
-		kind: FilePublished, target: binding.Target(), binding: binding, hasBinding: true,
+		kind: FilePublished, provenance: FileDownloaded,
+		target: binding.Target(), binding: binding, hasBinding: true,
 	}, nil
 }
 
@@ -71,18 +148,22 @@ func NewVerifiedFileSettlement(
 	kind FileSettlementKind,
 	checkpoint VerifiedDurableRanges,
 ) (FileSettlement, error) {
-	if kind != FilePublished && kind != FilePaused && kind != FilePublishBlocked ||
+	if kind != FilePublished && kind != FilePaused && kind != FileItemBlocked ||
 		!checkpoint.Binding().valid() {
 		return FileSettlement{}, ErrInvalidOutputSettlement
 	}
-	if (kind == FilePublished || kind == FilePublishBlocked) &&
+	if (kind == FilePublished || kind == FileItemBlocked) &&
 		!RangesCoverFile(checkpoint.Binding().ExactSize(), checkpoint.Ranges()) {
 		return FileSettlement{}, ErrInvalidOutputSettlement
 	}
-	return FileSettlement{
+	settlement := FileSettlement{
 		kind: kind, target: checkpoint.Binding().Target(), binding: checkpoint.Binding(), hasBinding: true,
 		checkpoint: checkpoint, hasCheckpoint: true,
-	}, nil
+	}
+	if kind == FilePublished {
+		settlement.provenance = FileDownloaded
+	}
+	return settlement, nil
 }
 
 func (s FileSettlement) VerifiedCheckpoint() (VerifiedDurableRanges, bool) {
@@ -115,90 +196,118 @@ func (reference MaterializationStateRef) IsZero() bool {
 	return reference.session.IsZero() || reference.locator == (MaterializationLocatorDigest{})
 }
 
-type QuarantineReason uint16
+type ItemBlockReason uint16
 
 const (
-	QuarantineStateCorrupt QuarantineReason = iota + 1
-	QuarantineOwnershipMismatch
-	QuarantinePublicationAmbiguous
-	QuarantineRetirementMismatch
+	ItemBlockStateCorrupt ItemBlockReason = iota + 1
+	ItemBlockOwnershipUnknown
+	ItemBlockPublicationAmbiguous
+	ItemBlockRetirementUncertain
 )
 
-func NewImmediateQuarantinedFileSettlement(
+func NewImmediateItemBlockedFileSettlement(
 	target FileMaterializationTarget,
 	reference MaterializationStateRef,
-	reason QuarantineReason,
+	reason ItemBlockReason,
 ) (FileSettlement, error) {
-	if !validQuarantineSettlement(target, reference, reason) {
+	if !validItemBlockedSettlement(target, reference, reason) {
 		return FileSettlement{}, ErrInvalidOutputSettlement
 	}
 	return FileSettlement{
-		kind: FileQuarantined, target: target, stateRef: reference, quarantineReason: reason,
+		kind: FileItemBlocked, target: target, stateRef: reference, itemBlockReason: reason,
 	}, nil
 }
 
-func NewTransactionQuarantinedFileSettlement(
+func NewTransactionItemBlockedFileSettlement(
 	binding MaterializedFileBinding,
 	reference MaterializationStateRef,
-	reason QuarantineReason,
+	reason ItemBlockReason,
 ) (FileSettlement, error) {
-	if !binding.valid() || !validQuarantineSettlement(binding.Target(), reference, reason) {
+	if !binding.valid() || !validItemBlockedSettlement(binding.Target(), reference, reason) {
 		return FileSettlement{}, ErrInvalidOutputSettlement
 	}
 	return FileSettlement{
-		kind: FileQuarantined, target: binding.Target(), binding: binding, hasBinding: true,
-		stateRef: reference, quarantineReason: reason,
+		kind: FileItemBlocked, target: binding.Target(), binding: binding, hasBinding: true,
+		stateRef: reference, itemBlockReason: reason,
 	}, nil
 }
 
-func validQuarantineSettlement(
+func validItemBlockedSettlement(
 	target FileMaterializationTarget,
 	reference MaterializationStateRef,
-	reason QuarantineReason,
+	reason ItemBlockReason,
 ) bool {
 	return target.valid() && !reference.IsZero() &&
 		reference.OutputSessionID() == target.OutputSessionID() &&
 		reference.LocatorDigest() == target.Locator().Digest() &&
-		reason >= QuarantineStateCorrupt && reason <= QuarantineRetirementMismatch
+		reason >= ItemBlockStateCorrupt && reason <= ItemBlockRetirementUncertain
 }
 
-func (s FileSettlement) Quarantine() (MaterializationStateRef, QuarantineReason, bool) {
-	return s.stateRef, s.quarantineReason, s.kind == FileQuarantined && !s.stateRef.IsZero() && s.quarantineReason != 0
+func (s FileSettlement) ItemBlock() (MaterializationStateRef, ItemBlockReason, bool) {
+	return s.stateRef, s.itemBlockReason, s.kind == FileItemBlocked && !s.stateRef.IsZero() && s.itemBlockReason != 0
 }
 
 func (kind FileSettlementKind) valid() bool {
-	return kind >= FilePublished && kind <= FileQuarantined
+	return kind >= FilePublished && kind <= FileFailed
 }
 
 func (settlement FileSettlement) valid() bool {
+	if !settlement.validWithoutWarnings() {
+		return false
+	}
+	for _, warning := range settlement.metadataWarnings {
+		if !warning.valid() {
+			return false
+		}
+	}
+	return true
+}
+
+func (settlement FileSettlement) validWithoutWarnings() bool {
 	switch settlement.kind {
 	case FileCollision:
-		return settlement.target.valid() && !settlement.hasBinding && !settlement.hasCheckpoint &&
-			settlement.stateRef.IsZero() && settlement.quarantineReason == 0
-	case FileRetired:
-		return settlement.target.valid() && settlement.hasBinding && settlement.binding.valid() &&
+		if settlement.provenance != 0 || !settlement.target.valid() || settlement.hasCheckpoint ||
+			!settlement.stateRef.IsZero() || settlement.itemBlockReason != 0 {
+			return false
+		}
+		return !settlement.hasBinding ||
+			settlement.binding.valid() && settlement.binding.Target() == settlement.target
+	case FileFailed:
+		return settlement.provenance == 0 && settlement.target.valid() && settlement.hasBinding && settlement.binding.valid() &&
 			settlement.binding.Target() == settlement.target && !settlement.hasCheckpoint &&
-			settlement.stateRef.IsZero() && settlement.quarantineReason == 0
+			settlement.stateRef.IsZero() && settlement.itemBlockReason == 0
 	case FilePublished:
 		binding, bound := settlement.MaterializedBinding()
-		if !bound || !binding.valid() || settlement.target != binding.Target() ||
-			!settlement.stateRef.IsZero() || settlement.quarantineReason != 0 {
+		if !bound || !binding.valid() || !settlement.provenance.valid() || settlement.target != binding.Target() ||
+			!settlement.stateRef.IsZero() || settlement.itemBlockReason != 0 {
 			return false
 		}
 		checkpoint, durable := settlement.VerifiedCheckpoint()
 		return !durable || checkpoint.Binding() == binding &&
 			RangesCoverFile(checkpoint.Binding().ExactSize(), checkpoint.Ranges())
-	case FilePaused, FilePublishBlocked:
+	case FilePaused:
+		if settlement.provenance != 0 {
+			return false
+		}
 		checkpoint, ok := settlement.VerifiedCheckpoint()
 		binding, bound := settlement.MaterializedBinding()
 		if !ok || !bound || !binding.valid() || checkpoint.Binding() != binding ||
-			settlement.target != binding.Target() || !settlement.stateRef.IsZero() || settlement.quarantineReason != 0 {
+			settlement.target != binding.Target() || !settlement.stateRef.IsZero() || settlement.itemBlockReason != 0 {
 			return false
 		}
 		return (settlement.kind == FilePaused) || RangesCoverFile(checkpoint.Binding().ExactSize(), checkpoint.Ranges())
-	case FileQuarantined:
-		reference, reason, ok := settlement.Quarantine()
-		if !ok || !validQuarantineSettlement(settlement.target, reference, reason) || settlement.hasCheckpoint {
+	case FileItemBlocked:
+		if settlement.provenance != 0 {
+			return false
+		}
+		if settlement.hasCheckpoint {
+			checkpoint := settlement.checkpoint
+			return settlement.hasBinding && settlement.binding.valid() && checkpoint.Binding() == settlement.binding &&
+				settlement.target == settlement.binding.Target() && settlement.stateRef.IsZero() &&
+				settlement.itemBlockReason == 0 && RangesCoverFile(checkpoint.Binding().ExactSize(), checkpoint.Ranges())
+		}
+		reference, reason, ok := settlement.ItemBlock()
+		if !ok || !validItemBlockedSettlement(settlement.target, reference, reason) {
 			return false
 		}
 		return !settlement.hasBinding || settlement.binding.valid() && settlement.binding.Target() == settlement.target
@@ -222,10 +331,16 @@ func (settlement FileSettlement) matchesBinding(binding MaterializedFileBinding)
 		}
 		settledBinding, ok := settlement.MaterializedBinding()
 		return ok && settledBinding == binding
-	case FilePaused, FilePublishBlocked:
+	case FilePaused:
 		checkpoint, _ := settlement.VerifiedCheckpoint()
 		return checkpoint.Binding() == binding
-	case FileQuarantined, FileRetired:
+	case FileItemBlocked:
+		if checkpoint, durable := settlement.VerifiedCheckpoint(); durable {
+			return checkpoint.Binding() == binding
+		}
+		settledBinding, ok := settlement.MaterializedBinding()
+		return ok && settledBinding == binding
+	case FileFailed:
 		settledBinding, ok := settlement.MaterializedBinding()
 		return ok && settledBinding == binding
 	default:
@@ -293,10 +408,10 @@ func (reason JobPauseReason) valid() bool {
 type DirectTreeSettlementKind uint8
 
 const (
-	DirectTreeSettlementPublished DirectTreeSettlementKind = iota + 1
-	DirectTreeSettlementPartialDirectory
-	DirectTreeSettlementResumable
-	DirectTreeSettlementNeedsAttention
+	DirectTreeSettlementSuccess DirectTreeSettlementKind = iota + 1
+	DirectTreeSettlementPartial
+	DirectTreeSettlementPaused
+	DirectTreeSettlementFailed
 )
 
 type DirectTreeSettlement struct {
@@ -313,7 +428,7 @@ func NewDirectTreeSettlement(kind DirectTreeSettlementKind) (DirectTreeSettlemen
 func (s DirectTreeSettlement) Kind() DirectTreeSettlementKind { return s.kind }
 
 func (kind DirectTreeSettlementKind) valid() bool {
-	return kind >= DirectTreeSettlementPublished && kind <= DirectTreeSettlementNeedsAttention
+	return kind >= DirectTreeSettlementSuccess && kind <= DirectTreeSettlementFailed
 }
 
 type FileTransaction interface {
@@ -333,9 +448,9 @@ const (
 )
 
 // FileStart is a sum type. An immediate settlement never exposes a transaction,
-// so a caller cannot accidentally act on an already terminal result. FileRetired
-// is valid here only when a backend deterministically finishes a persisted
-// retirement before returning from BeginFile.
+// so a caller cannot accidentally act on an already terminal result. FileFailed
+// is valid here only when a backend deterministically finishes owned cleanup
+// before returning from BeginFile.
 type FileStart struct {
 	kind        fileStartKind
 	transaction FileTransaction
@@ -352,7 +467,7 @@ func NewFileTransactionStart(transaction FileTransaction, durable VerifiedDurabl
 
 func NewFileSettlementStart(settlement FileSettlement) (FileStart, error) {
 	switch settlement.Kind() {
-	case FilePublished, FileCollision, FilePublishBlocked, FileQuarantined, FileRetired:
+	case FilePublished, FileCollision, FileItemBlocked, FileFailed:
 		_, durablePublication := settlement.VerifiedCheckpoint()
 		if !settlement.valid() || settlement.Kind() == FilePublished && !durablePublication {
 			return FileStart{}, ErrInvalidOutputSettlement
@@ -447,7 +562,7 @@ type DirectTreeSession interface {
 	SessionID() OutputSessionID
 	Binding() DirectTreeSessionBinding
 	Capabilities() DirectTreeCapabilities
-	AdmitDirectory(context.Context, MaterializationDirectory) (DirectoryAdmission, error)
+	AdmitDirectory(context.Context, DirectoryMaterializationRequest) (DirectoryAdmission, error)
 	FinalizeDirectory(context.Context, DirectoryAdmission) (DirectorySettlement, error)
 	BeginFile(context.Context, MaterializationFile) (FileStart, error)
 	PauseTree(context.Context, JobPauseReason) (DirectTreeSettlement, error)

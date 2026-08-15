@@ -14,6 +14,8 @@ func TestLinuxDirectoryIdentitySeparatesAuthorityDenialFromIdentityContradiction
 	t.Run("authority denied", func(t *testing.T) {
 		root, harness := newLinuxAuthorityRoot(t)
 		installLinuxSafeAuthorityHarness(root.system)
+		root.requireExactPermissions = true
+		root.exactPermissions = linuxOutputDirectoryMode
 		harness.directoryMode = uint16(unix.S_IFDIR | 0o770)
 		_, err := root.identityClaim()
 		if !errors.Is(err, outputfault.ErrAncestryAuthorityDenied) ||

@@ -55,11 +55,14 @@ type Authority struct {
 	gate sync.RWMutex
 	mu   sync.Mutex
 
-	closed      bool
-	rootClaimID ClaimID
-	claims      map[ClaimID]*claimRecord
-	admissions  map[string]ClaimID
-	reservedKey string
+	closed           bool
+	rootClaimID      ClaimID
+	rootSnapshotOnce sync.Once
+	rootSnapshot     parentNamespaceIndex
+	rootSnapshotErr  error
+	claims           map[ClaimID]*claimRecord
+	admissions       map[string]ClaimID
+	reservedKey      string
 }
 
 var (
@@ -125,15 +128,18 @@ func (authority *Authority) bindDirectoryClaim(claim outputsession.DirectoryClai
 	if authority == nil || claim.Admission().IsZero() {
 		return directoryClaim{}, ErrInvalidClaim
 	}
-	directory := claim.Directory()
-	locator, err := authority.canonicalLocator(directory.Path)
-	if err != nil || locator.canonicalKey != claim.LocatorKey() {
+	source := claim.Source()
+	destination := claim.DestinationPath()
+	locator, err := authority.canonicalLocator(destination.String())
+	if err != nil || !destination.Valid() ||
+		locator.canonicalKey != claim.DestinationLocatorKey() ||
+		locator.isRoot() != destination.IsSessionRoot() {
 		return directoryClaim{}, errors.Join(ErrInvalidClaim, err)
 	}
 	native, err := authority.newDirectoryClaim(
-		claim.ID(), claim.ParentID(), locator, directory.ModifiedTime, claim.Admission(),
+		claim.ID(), claim.ParentID(), locator, source.ModifiedTime, claim.Admission(),
 	)
-	if err != nil || native.locator.isRoot() != claim.IsRoot() {
+	if err != nil {
 		return directoryClaim{}, errors.Join(ErrInvalidClaim, err)
 	}
 	return native, nil
@@ -297,7 +303,7 @@ func (authority *Authority) beginMaterialization(
 			return nil, false, directoryMaterialization{}, noMutation(ErrClaimConflict)
 		}
 		authority.rootClaimID = claim.id
-	} else {
+	} else if claim.parentID != 0 {
 		parent := authority.claims[claim.parentID]
 		if parent == nil || parent.state != materializationReady || parent.retained == nil {
 			return nil, false, directoryMaterialization{}, noMutation(ErrParentUnavailable)

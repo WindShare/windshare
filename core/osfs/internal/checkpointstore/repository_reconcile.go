@@ -466,10 +466,6 @@ func recordLocation(recordID checkpointmodel.RecordID) (string, string) {
 	return encoded[:recordShardLength], encoded + recordSuffix
 }
 
-func RecordLocation(recordID checkpointmodel.RecordID) (string, string) {
-	return recordLocation(recordID)
-}
-
 func parseRecordLocation(shard, name string) (checkpointmodel.RecordID, error) {
 	if !ValidShard(shard) || len(name) != recordIDHexLength+len(recordSuffix) ||
 		!strings.HasSuffix(name, recordSuffix) || name[:recordShardLength] != shard {
@@ -484,8 +480,4 @@ func parseRecordLocation(shard, name string) (checkpointmodel.RecordID, error) {
 		return checkpointmodel.RecordID{}, checkpointmodel.ErrRecordBinding
 	}
 	return checkpointmodel.RecordIDFromBytes(raw)
-}
-
-func ParseRecordLocation(shard, name string) (checkpointmodel.RecordID, error) {
-	return parseRecordLocation(shard, name)
 }

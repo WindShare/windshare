@@ -38,6 +38,16 @@ func (authority *Authority) parentSnapshot(record *claimRecord) (parentNamespace
 	return record.snapshot, record.snapshotErr
 }
 
+func (authority *Authority) executionRootSnapshot() (parentNamespaceIndex, error) {
+	authority.rootSnapshotOnce.Do(func() {
+		authority.rootSnapshot, authority.rootSnapshotErr = authority.buildParentSnapshot(0)
+		if authority.rootSnapshotErr != nil {
+			authority.rootSnapshotErr = errors.Join(ErrParentSnapshotUnavailable, authority.rootSnapshotErr)
+		}
+	})
+	return authority.rootSnapshot, authority.rootSnapshotErr
+}
+
 func (authority *Authority) buildParentSnapshot(claimID ClaimID) (parentNamespaceIndex, error) {
 	directory, cleanup, err := authority.openGuardedDirectory(claimID)
 	if err != nil {

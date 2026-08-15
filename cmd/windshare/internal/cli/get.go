@@ -38,10 +38,15 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	if code != ExitOK {
 		return code
 	}
-	output, code := a.prepareGetOutput(request)
+	output, code := a.prepareGetOutput(ctx, request)
 	if code != ExitOK {
 		return code
 	}
+	defer func() {
+		if err := output.authority.Close(); err != nil {
+			a.logf("get: close output authority: %v", err)
+		}
+	}()
 	session, code := a.connectGetReceiver(ctx, request.link)
 	if code != ExitOK {
 		return code
@@ -61,71 +66,16 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	})
 	execution.SettleAdmission()
 	return a.reportTransferResultWithAdmission(
-		ctx, session.runtime, session.connection, result, execution.admission.Err(),
+		ctx, session.runtime, session.connection, result, execution.admission.Err(), execution.renamed,
 	)
 }
 
-// Native output emits dense runtime decisions. The CLI keeps authority
-// milestones and exceptional decisions while suppressing routine file progress.
 func (a *App) traceFilesystemOutput(event osfs.FilesystemOutputTrace) {
-	if !shouldLogFilesystemOutputTrace(event) {
-		return
-	}
-	session := outputTraceIdentity(event.SessionID.Bytes())
-	operation := outputTraceIdentity(event.ReceiveOperationID.Bytes())
-	intent := outputTraceIdentity(event.ReceiveIntentDigest.Bytes())
-	a.logf(
-		"get: output trace operation=%d receive_operation=%s session=%s intent=%s certification=%q root_disposition=%q native_lock_scope=%d native_lock_milestone=%d runtime_component=%d runtime_operation=%d runtime_decision=%d runtime_operation_id=%d claim_id=%d fault_domain=%d normalized_fault_scope=%d normalized_fault_code=%d node_claims=%d directory_claims=%d file_claims=%d active_file_claims=%d reserved_file_slots=%d directory_metadata_bytes=%d checkpoint_records=%d failed=%t",
-		event.Operation, operation, session, intent, event.Certification, event.RootOpenDisposition,
-		event.NativeLockScope, event.NativeLockMilestone,
-		event.RuntimeComponent, event.RuntimeOperation, event.RuntimeDecision,
-		event.OperationID, event.ClaimID, event.FaultDomain,
-		event.NormalizedFaultScope, event.NormalizedFaultCode,
-		event.NodeClaimCount, event.DirectoryClaimCount, event.FileClaimCount,
-		event.ActiveFileClaimCount, event.ReservedFileSlotCount,
-		event.DirectoryMetadataBytes, event.CheckpointRecordCount, event.Failed,
-	)
+	a.traceGet(GetTraceEvent{Stage: GetTraceFilesystemOutput, FilesystemOutput: event})
 }
 
 func (a *App) traceTransferLifecycle(event transfer.TransferLifecycleTrace) {
-	a.logf(
-		"get: transfer trace stage=%d operation=%s plan=%d protocol_session=%s job=%s intent=%s output_session=%s discovery=%d connection_size=%d file_selection=%d file_settlement=%s tree_settlement=%s fault_domain=%d fault_scope=%d fault_code=%d failed=%t",
-		event.Stage,
-		outputTraceIdentity(event.OperationID.Bytes()),
-		event.PlanKind,
-		outputTraceIdentity(event.ProtocolSessionID.Bytes()),
-		outputTraceIdentity(event.TransferJobID.Bytes()),
-		outputTraceIdentity(event.ReceiveIntentDigest.Bytes()),
-		outputTraceIdentity(event.OutputSessionID.Bytes()),
-		event.Discovery, event.ConnectionSizeClass, event.FileSelection,
-		fileSettlementName(event.FileSettlement), directTreeSettlementName(event.DirectTreeSettlement),
-		event.Fault.Domain(), event.Fault.Scope(), event.Fault.Code(), event.Failed,
-	)
-}
-
-func shouldLogFilesystemOutputTrace(event osfs.FilesystemOutputTrace) bool {
-	if event.Failed {
-		return true
-	}
-	switch event.Operation {
-	case osfs.TraceFilesystemCertified, osfs.TraceFeatureProbeCompleted,
-		osfs.TraceCheckpointNamespaceOpened, osfs.TraceSessionOpened,
-		osfs.TraceCheckpointReconciled:
-		return true
-	case osfs.TraceNativeLock:
-		return event.NativeLockMilestone == osfs.FilesystemOutputNativeLockContended ||
-			event.NativeLockMilestone == osfs.FilesystemOutputNativeLockAcquireFailed ||
-			event.NativeLockMilestone == osfs.FilesystemOutputNativeLockReleaseReportedFailure
-	case osfs.TraceRuntimeDecision:
-		return event.RuntimeDecision == osfs.FilesystemOutputRuntimeRejected ||
-			event.RuntimeDecision == osfs.FilesystemOutputRuntimeRolledBack ||
-			event.RuntimeDecision == osfs.FilesystemOutputRuntimeAmbiguous ||
-			event.RuntimeDecision == osfs.FilesystemOutputRuntimeCollision ||
-			event.RuntimeDecision == osfs.FilesystemOutputRuntimeNeedsAttention ||
-			event.RuntimeDecision == osfs.FilesystemOutputRuntimeIsolatedFailure
-	default:
-		return false
-	}
+	a.traceGet(GetTraceEvent{Stage: GetTraceTransferLifecycle, TransferLifecycle: event})
 }
 
 func outputTraceIdentity(raw []byte) string {
@@ -313,6 +263,8 @@ func (a *App) runTransferJob(
 	measures := job.SelectionMeasures()
 	result := make(chan transfer.JobResult, 1)
 	go func() { result <- job.Run(ctx) }()
+	progress := a.getProgressReporter()
+	defer progress.Finish()
 	ticker := time.NewTicker(getProgressInterval)
 	defer ticker.Stop()
 	for {
@@ -338,32 +290,8 @@ func (a *App) runTransferJob(
 				observeSelection(measure)
 			}
 		case <-ticker.C:
-			measure := job.Measure()
-			a.logTransferMeasure(measure)
+			progress.Update(job.Measure())
 		}
-	}
-}
-
-func (a *App) logTransferMeasure(measure transfer.SelectionMeasure) {
-	status := discoveryStatusName(measure.Discovery)
-	// Discovery is an open lower bound until its terminal page is authenticated;
-	// never turn a partial denominator into a percentage or an existence claim.
-	a.logf(
-		"get: discovery=%s discovered_files=%d discovered_bytes=%d completed_files=%d completed_bytes=%d",
-		status, measure.DiscoveredFiles, measure.DiscoveredBytes, measure.CompletedFiles, measure.CompletedBytes,
-	)
-}
-
-func discoveryStatusName(status transfer.DiscoveryStatus) string {
-	switch status {
-	case transfer.DiscoveryOpen:
-		return "open"
-	case transfer.DiscoveryComplete:
-		return "complete"
-	case transfer.DiscoveryFailed:
-		return "failed"
-	default:
-		return "unknown"
 	}
 }
 
@@ -373,23 +301,22 @@ func (a *App) reportTransferResultWithAdmission(
 	connection *relayv2.ReceiverConnection,
 	result transfer.JobResult,
 	admissionErr error,
+	renamed bool,
 ) int {
-	jobID := outputTraceIdentity(result.TransferJobID.Bytes())
-	digest := outputTraceIdentity(result.ReceiveIntentDigest.Bytes())
-	a.logf("get: transfer result job_id=%s intent_digest=%s discovery=%s", jobID, digest, discoveryStatusName(result.Measure.Discovery))
 	a.logTransferFailures(result)
-	a.logTransferSettlement(result)
+	code := ExitFailure
 	switch result.Outcome {
-	case transfer.DirectTreeOutcomePublished:
-		return a.reportSuccessfulTransfer(result)
-	case transfer.DirectTreeOutcomePartialDirectory:
-		return a.reportTransferWithErrors(result)
-	case transfer.DirectTreeOutcomeResumable, transfer.DirectTreeOutcomeNeedsAttention:
-		return a.reportPausedTransfer(ctx, runtime, connection, result, admissionErr)
+	case transfer.DirectTreeOutcomeSuccess:
+		code = a.reportSuccessfulTransfer(result)
+	case transfer.DirectTreeOutcomePartial:
+		code = a.reportTransferWithErrors(result)
+	case transfer.DirectTreeOutcomePaused, transfer.DirectTreeOutcomeFailed:
+		code = a.reportPausedTransfer(ctx, runtime, connection, result, admissionErr)
 	default:
 		a.logf("get: transfer returned an invalid outcome")
-		return ExitFailure
 	}
+	a.logGetTransferSummary(result, renamed)
+	return code
 }
 
 func (a *App) logTransferFailures(result transfer.JobResult) {
@@ -413,17 +340,6 @@ func (a *App) logTransferFailures(result transfer.JobResult) {
 	}
 }
 
-func (a *App) logTransferSettlement(result transfer.JobResult) {
-	switch result.Settlement.Kind() {
-	case transfer.DirectTreeSettlementResumable:
-		a.logf("get: transfer paused; verified progress was retained")
-	case transfer.DirectTreeSettlementNeedsAttention:
-		a.logf("get: durable output state was retained and needs attention")
-	case transfer.DirectTreeSettlementPartialDirectory:
-		a.logf("get: successful directory output was retained with isolated failures")
-	}
-}
-
 func (a *App) reportSuccessfulTransfer(result transfer.JobResult) int {
 	if result.TerminationCause != nil || result.SettlementFailure != nil {
 		a.logf("get: transfer returned success with terminal failure state")
@@ -441,29 +357,29 @@ func (a *App) reportSuccessfulTransfer(result transfer.JobResult) int {
 		)
 		return ExitFailure
 	}
-	a.logf("get: completed %d file(s), %d byte(s)", result.SucceededFiles, result.Measure.CompletedBytes)
-	if result.Settlement.Kind() == transfer.DirectTreeSettlementNeedsAttention {
+	if result.Settlement.Kind() == transfer.DirectTreeSettlementFailed {
+		a.logf("get: durable output state needs attention")
 		return ExitFailure
 	}
-	if result.Settlement.Kind() != transfer.DirectTreeSettlementPublished {
+	if result.Settlement.Kind() != transfer.DirectTreeSettlementSuccess {
 		a.logf("get: transfer returned success without a published tree settlement")
+		return ExitFailure
+	}
+	if !successfulGetResult(result) {
+		a.logf("get: transfer returned success with non-success file or directory outcomes")
 		return ExitFailure
 	}
 	return ExitOK
 }
 
 func successfulTransferIncomplete(result transfer.JobResult) bool {
-	return result.SucceededFiles != result.Measure.CompletedFiles ||
+	return result.FileOutcomes.PublishedFiles() != result.SucceededFiles ||
+		result.SucceededFiles != result.Measure.CompletedFiles ||
 		result.Measure.CompletedFiles != result.Measure.DiscoveredFiles ||
 		result.Measure.CompletedBytes != result.Measure.DiscoveredBytes
 }
 
 func (a *App) reportTransferWithErrors(result transfer.JobResult) int {
-	a.logf(
-		"get: completed %d file(s) with %d file failure(s), %d directory failure(s), and %d omitted diagnostic(s)",
-		result.SucceededFiles, len(result.Files), len(result.Directories),
-		result.OmittedFileFailures+result.OmittedDirectoryFailures,
-	)
 	if missing := missingSelectionTargetFailure(result); missing != nil {
 		return a.reportMissingSelectionTarget(result, missing)
 	}
@@ -487,14 +403,27 @@ func (a *App) reportPausedTransfer(
 	runtimeErr = errors.Join(runtimeErr, admissionErr)
 	err := errors.Join(result.TerminationCause, result.SettlementFailure, runtimeErr, connectionErr)
 	if classifyTransferTermination(result.TerminationFault, runtimeErr, connectionErr) == ExitNetwork {
-		a.logf("get: transfer stopped: %v", err)
+		if err != nil {
+			a.logf("get: transfer stopped: %v", err)
+		} else {
+			a.logf("get: authenticated session stopped before the transfer completed")
+		}
 		return ExitNetwork
 	}
 	if ctx.Err() != nil {
 		a.logf("get: interrupted")
 		return ExitFailure
 	}
-	a.logf("get: transfer stopped: %v", err)
+	switch {
+	case err != nil:
+		a.logf("get: transfer stopped: %v", err)
+	case result.Settlement.Kind() == transfer.DirectTreeSettlementFailed:
+		a.logf("get: durable output state needs attention")
+	case result.Outcome == transfer.DirectTreeOutcomePaused:
+		a.logf("get: transfer paused before completion")
+	default:
+		a.logf("get: transfer failed before completion")
+	}
 	return ExitFailure
 }
 
@@ -545,29 +474,12 @@ func fileSettlementName(kind transfer.FileSettlementKind) string {
 		return "published"
 	case transfer.FilePaused:
 		return "paused"
-	case transfer.FileRetired:
+	case transfer.FileFailed:
 		return "retired"
 	case transfer.FileCollision:
 		return "collision"
-	case transfer.FilePublishBlocked:
-		return "publish-blocked"
-	case transfer.FileQuarantined:
-		return "quarantined"
-	default:
-		return "none"
-	}
-}
-
-func directTreeSettlementName(kind transfer.DirectTreeSettlementKind) string {
-	switch kind {
-	case transfer.DirectTreeSettlementPublished:
-		return "published"
-	case transfer.DirectTreeSettlementPartialDirectory:
-		return "partial-directory"
-	case transfer.DirectTreeSettlementResumable:
-		return "resumable"
-	case transfer.DirectTreeSettlementNeedsAttention:
-		return "needs-attention"
+	case transfer.FileItemBlocked:
+		return "item-blocked"
 	default:
 		return "none"
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -13,22 +14,23 @@ import (
 	"github.com/windshare/windshare/core/osfs"
 )
 
-func TestResumeParsersAcceptOnlyAnOutputRootAndOneLiveItem(t *testing.T) {
+func TestResumeParsersRequireOneExplicitOutputRootAndOrdinal(t *testing.T) {
 	root := t.TempDir()
 	app, _, _ := newResumeTestApp()
 
-	request, code := app.parseResumeRootRequest("resume list", []string{"-o", root})
-	if code != ResultOK || request.rootPath != root {
-		t.Fatalf("list request=%+v code=%d", request, code)
+	request, valid := app.parser().ParseRoot("resume list", []string{"-o", root})
+	if !valid || request.rootPath != root {
+		t.Fatalf("list request=%+v valid=%t", request, valid)
 	}
-	discard, code := app.parseResumeDiscardRequest([]string{"--item", "2", "-o", root})
-	if code != ResultOK || discard.rootPath != root || discard.itemNumber != 2 {
-		t.Fatalf("discard request=%+v code=%d", discard, code)
+	discard, valid := app.parser().ParseDiscard([]string{"--item", "2", "-o", root})
+	if !valid || discard.rootPath != root || discard.itemNumber != 2 {
+		t.Fatalf("discard request=%+v valid=%t", discard, valid)
 	}
 
 	for name, args := range map[string][]string{
 		"missing root":       {"--item", "1"},
 		"missing item":       {"-o", root},
+		"repeated root":      {"-o", root, "-o", root, "--item", "1"},
 		"zero item":          {"-o", root, "--item", "0"},
 		"noncanonical item":  {"-o", root, "--item", "01"},
 		"bulk item syntax":   {"-o", root, "--item", "1,2"},
@@ -37,123 +39,229 @@ func TestResumeParsersAcceptOnlyAnOutputRootAndOneLiveItem(t *testing.T) {
 		"positional path":    {"-o", root, "--item", "1", "records/one"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, code := app.parseResumeDiscardRequest(args); code != ResultUsage {
-				t.Fatalf("code=%d", code)
+			if _, valid := app.parser().ParseDiscard(args); valid {
+				t.Fatal("invalid discard request was accepted")
 			}
 		})
 	}
 	for name, args := range map[string][]string{
-		"missing root": nil,
-		"item handle":  {"-o", root, "--item", "1"},
-		"positional":   {"-o", root, "records/one"},
+		"missing root":  nil,
+		"item handle":   {"-o", root, "--item", "1"},
+		"repeated root": {"-o", root, "-o", root},
+		"positional":    {"-o", root, "records/one"},
 	} {
 		t.Run("list "+name, func(t *testing.T) {
-			if _, code := app.parseResumeRootRequest("resume list", args); code != ResultUsage {
-				t.Fatalf("code=%d", code)
+			if _, valid := app.parser().ParseRoot("resume list", args); valid {
+				t.Fatal("invalid list request was accepted")
 			}
 		})
 	}
 }
 
-func TestResumeListUsesFreshInventoryAndReportsNeedsAttention(t *testing.T) {
-	root := t.TempDir()
-	t.Run("resumable", func(t *testing.T) {
-		inventory := &fakeResumeStateInventory{items: []resumeStateItem{availableResumeItem()}}
-		opener := &fakeResumeStateInventoryOpener{inventory: inventory}
-		app, stdout, stderr := newResumeTestApp()
-		app.resumeInventories = opener
+func TestResumeArgumentFailuresNeverReflectRejectedValues(t *testing.T) {
+	const accidentalCapability = "windshare://relay.example/#private-capability"
+	app, _, stderr := newResumeTestApp()
+	if result := app.Run(context.Background(), []string{
+		"resume", "discard", "-o", t.TempDir(), "--item", accidentalCapability,
+	}); result != ResultUsage {
+		t.Fatalf("result=%d", result)
+	}
+	if strings.Contains(stderr.String(), accidentalCapability) ||
+		!strings.Contains(stderr.String(), "arguments are invalid") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
 
-		if code := app.Run(context.Background(), []string{"resume", "list", "-o", root}); code != ResultOK {
-			t.Fatalf("code=%d stderr=%q", code, stderr.String())
-		}
-		if opener.calls != 1 || opener.rootPath != root {
-			t.Fatalf("opener=%+v inventory=%+v", opener, inventory)
-		}
-		for _, want := range []string{
-			`resume_list_status="ready" items=1`,
-			`resume_item=1 status="resumable"`,
-			`operation_id="11111111111111111111111111111111"`,
-			`phase=4 state_generation=3 expires_at_millis=4096`,
-			`resumable=true discardable=true`,
-		} {
-			if !strings.Contains(stdout.String(), want) {
-				t.Fatalf("stdout=%q missing=%q", stdout.String(), want)
-			}
-		}
-	})
-
-	t.Run("needs attention", func(t *testing.T) {
-		inventory := &fakeResumeStateInventory{items: []resumeStateItem{attentionResumeItem()}}
-		app, stdout, stderr := newResumeTestApp()
-		app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
-
-		if code := app.Run(context.Background(), []string{"resume", "list", "-o", root}); code != ResultFailure {
-			t.Fatalf("code=%d", code)
-		}
-		for _, want := range []string{
-			`resume_list_status="needs-attention"`,
-			`reason="cleanup-unknown"`,
-			`operation_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`,
-		} {
-			if !strings.Contains(stdout.String(), want) {
-				t.Fatalf("stdout=%q missing=%q", stdout.String(), want)
-			}
-		}
-		if !strings.Contains(stderr.String(), "no deletion authority was used") {
-			t.Fatalf("stderr=%q", stderr.String())
-		}
-	})
+	app, _, stderr = newResumeTestApp()
+	if result := app.Run(context.Background(), []string{"resume", accidentalCapability}); result != ResultUsage {
+		t.Fatalf("result=%d", result)
+	}
+	if strings.Contains(stderr.String(), accidentalCapability) ||
+		!strings.Contains(stderr.String(), "unknown action") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
 }
 
-func TestResumeListReportsTypedBusyWithoutOpeningLegacyCleanup(t *testing.T) {
+func TestResumeListGroupsOperationsAndOnlyShowsBlockedChildren(t *testing.T) {
 	root := t.TempDir()
-	opener := &fakeResumeStateInventoryOpener{err: fmt.Errorf("intent lease: %w", osfs.ErrResumeStateBusy)}
-	cleaner := &fakeLegacyResumeCleaner{}
+	operations := []resumeOperation{
+		testResumeOperation("1", resumeOperationIncomplete),
+		testResumeOperation("2", resumeOperationResumable),
+		{
+			operationID: strings.Repeat("3", 32), state: resumeOperationCleanupPending,
+			attention: "cleanup-uncertain",
+		},
+		{
+			operationID: strings.Repeat("4", 32), state: resumeOperationNeedsAttention,
+			attention: "operation-ownership-unknown",
+			blockedItems: []resumeBlockedItem{
+				{artifactPath: "tree/unknown.bin", pathKnown: true, reason: resumeBlockedPublicationUnknown},
+				{reason: resumeBlockedCheckpointInvalid},
+			},
+		},
+	}
+	snapshot, err := newResumeInventorySnapshot(operations, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory := &fakeResumeStateInventory{snapshot: snapshot}
+	opener := &fakeResumeStateInventoryOpener{inventory: inventory}
 	app, stdout, stderr := newResumeTestApp()
 	app.resumeInventories = opener
-	app.legacyResumeCleaner = cleaner
 
-	if code := app.Run(context.Background(), []string{"resume", "list", "-o", root}); code != ResultFailure {
-		t.Fatalf("code=%d", code)
+	if result := app.Run(context.Background(), []string{"resume", "list", "-o", root}); result != ResultFailure {
+		t.Fatalf("result=%d", result)
 	}
-	if !strings.Contains(stdout.String(), `resume_list_status="busy"`) ||
-		!strings.Contains(stderr.String(), "authority is busy") {
-		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	if opener.calls != 1 || opener.rootPath != root {
+		t.Fatalf("opener=%+v", opener)
 	}
-	if cleaner.calls != 0 {
-		t.Fatalf("legacy cleaner calls=%d", cleaner.calls)
+	for _, want := range []string{
+		`resume_list_status="needs-attention" operations=4 registry_unknown=false`,
+		`resume_operation=1 state="incomplete"`,
+		`resume_operation=2 state="resumable"`,
+		`resume_operation=3 state="cleanup-pending"`,
+		`resume_operation=4 state="operation-needs-attention"`,
+		`item-blocked path="tree/unknown.bin" reason="publication-unknown"`,
+		`item-blocked path_known=false reason="checkpoint-invalid"`,
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout=%q missing=%q", stdout.String(), want)
+		}
+	}
+	for _, forbidden := range []string{
+		"intent_digest", "state_generation", "expires", "success_count", "failure_count",
+		"diagnostic_reference", "partial", "published", "failed",
+	} {
+		if strings.Contains(stdout.String(), forbidden) {
+			t.Fatalf("stdout exposed %q: %q", forbidden, stdout.String())
+		}
+	}
+	if !strings.Contains(stderr.String(), "no objects were changed") {
+		t.Fatalf("stderr=%q", stderr.String())
 	}
 }
 
-func TestResumeDiscardRequiresExactTerminalIntentForTheFreshOperation(t *testing.T) {
-	root := t.TempDir()
+func TestResumeListKeepsBusyAsAvailabilityNotLifecycle(t *testing.T) {
+	operation := testResumeOperation("1", resumeOperationIncomplete)
+	operation.running = true
+	snapshot, _ := newResumeInventorySnapshot([]resumeOperation{operation}, false)
+	app, stdout, _ := newResumeTestApp()
+	app.resumeInventories = &fakeResumeStateInventoryOpener{
+		inventory: &fakeResumeStateInventory{snapshot: snapshot},
+	}
+
+	if result := app.Run(context.Background(), []string{
+		"resume", "list", "-o", t.TempDir(),
+	}); result != ResultOK {
+		t.Fatalf("result=%d", result)
+	}
+	if !strings.Contains(stdout.String(), `state="incomplete"`) ||
+		!strings.Contains(stdout.String(), `running=true`) ||
+		strings.Contains(stdout.String(), `state="operation-needs-attention"`) {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+}
+
+func TestResumeListSurfacesUnknownRegistryPagesWithoutDiscardAuthority(t *testing.T) {
+	snapshot, _ := newResumeInventorySnapshot(
+		[]resumeOperation{testResumeOperation("1", resumeOperationIncomplete)}, true,
+	)
+	app, stdout, stderr := newResumeTestApp()
+	app.resumeInventories = &fakeResumeStateInventoryOpener{
+		inventory: &fakeResumeStateInventory{snapshot: snapshot},
+	}
+	if result := app.Run(context.Background(), []string{
+		"resume", "list", "-o", t.TempDir(),
+	}); result != ResultFailure {
+		t.Fatalf("result=%d", result)
+	}
+	if !strings.Contains(stdout.String(), `resume_list_status="needs-attention"`) ||
+		!strings.Contains(stdout.String(), `registry_unknown=true`) ||
+		!strings.Contains(stdout.String(), `resume_operation=1 state="incomplete"`) ||
+		!strings.Contains(stderr.String(), "no objects were changed") {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestResumeListSurfacesUnknownOrBusyRootWithoutNativeDetails(t *testing.T) {
+	tests := map[string]struct {
+		err        error
+		wantStatus string
+		wantReason string
+	}{
+		"unknown": {
+			err:        errors.New("C:\\private\\control\\record: corrupt checksum"),
+			wantStatus: resumeListStatusNeedsAttention,
+			wantReason: resumeDestinationUnknownReason,
+		},
+		"busy": {
+			err:        fmt.Errorf("native lock: %w", osfs.ErrResumeStateBusy),
+			wantStatus: resumeBusyStatus,
+			wantReason: "destination-already-in-use",
+		},
+		"cancelled": {
+			err:        context.Canceled,
+			wantStatus: resumeCancelledStatus,
+			wantReason: resumeCommandCancelledReason,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			app, stdout, stderr := newResumeTestApp()
+			app.resumeInventories = &fakeResumeStateInventoryOpener{err: test.err}
+			if result := app.Run(context.Background(), []string{
+				"resume", "list", "-o", t.TempDir(),
+			}); result != ResultFailure {
+				t.Fatalf("result=%d", result)
+			}
+			if !strings.Contains(stdout.String(), fmt.Sprintf(`resume_list_status=%q`, test.wantStatus)) ||
+				!strings.Contains(stdout.String(), fmt.Sprintf(`reason=%q`, test.wantReason)) {
+				t.Fatalf("stdout=%q", stdout.String())
+			}
+			if strings.Contains(stdout.String()+stderr.String(), "private") ||
+				strings.Contains(stdout.String()+stderr.String(), "checksum") {
+				t.Fatalf("native detail leaked: stdout=%q stderr=%q", stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestResumeDiscardRequiresFreshOrdinalAndExactTerminalIntent(t *testing.T) {
+	snapshot, _ := newResumeInventorySnapshot(
+		[]resumeOperation{testResumeOperation("1", resumeOperationResumable)}, false,
+	)
 	inventory := &fakeResumeStateInventory{
-		items:         []resumeStateItem{availableResumeItem()},
-		discardReport: settledResumeDiscardReport(),
+		snapshot: snapshot,
+		discardReport: resumeDiscardReport{
+			status: resumeDiscardStatusDiscarded, operationID: strings.Repeat("1", 32),
+		},
 	}
 	terminal := &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
 	app, stdout, stderr := newResumeTestApp()
 	app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
 	app.resumeConfirmation = terminal
 
-	if code := app.Run(context.Background(), []string{
-		"resume", "discard", "-o", root, "--item", "1",
-	}); code != ResultOK {
-		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	if result := app.Run(context.Background(), []string{
+		"resume", "discard", "-o", t.TempDir(), "--item", "1",
+	}); result != ResultOK {
+		t.Fatalf("result=%d stderr=%q", result, stderr.String())
 	}
-	if inventory.discardCalls != 1 || inventory.discardIndex != 0 {
-		t.Fatalf("inventory=%+v", inventory)
-	}
-	if terminal.calls != 1 || !strings.Contains(terminal.prompt, `resume_item=1 status="resumable"`) ||
-		!strings.Contains(terminal.prompt, `Type "discard 1" exactly`) ||
-		!strings.Contains(terminal.prompt, "Published files are preserved") {
-		t.Fatalf("terminal=%+v", terminal)
+	if inventory.discardCalls != 1 || inventory.discardIndex != 0 || terminal.calls != 1 {
+		t.Fatalf("inventory=%+v terminal=%+v", inventory, terminal)
 	}
 	for _, want := range []string{
-		`resume_discard_status="settled"`,
-		`operation_id="11111111111111111111111111111111"`,
-		`phase=18 state_generation=4 resumable=false`,
+		`resume_operation=1 state="resumable"`,
+		`Type "discard 1" exactly`,
+		"identity-matched unfinished partial and control records",
+		"Final and foreign objects are preserved",
+	} {
+		if !strings.Contains(terminal.prompt, want) {
+			t.Fatalf("prompt=%q missing=%q", terminal.prompt, want)
+		}
+	}
+	for _, want := range []string{
+		`resume_discard_status="discarded"`,
 		`published_files="preserved"`,
+		`foreign_objects="preserved"`,
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout=%q missing=%q", stdout.String(), want)
@@ -161,342 +269,202 @@ func TestResumeDiscardRequiresExactTerminalIntentForTheFreshOperation(t *testing
 	}
 }
 
-func TestResumeDiscardRejectsRedirectedOrInexactConfirmation(t *testing.T) {
-	root := t.TempDir()
+func TestResumeDiscardRejectsRedirectedInexactUnknownAndRunningSelections(t *testing.T) {
+	base, _ := newResumeInventorySnapshot(
+		[]resumeOperation{testResumeOperation("1", resumeOperationIncomplete)}, false,
+	)
 	tests := map[string]struct {
+		snapshot resumeInventorySnapshot
 		terminal *fakeResumeConfirmationTerminal
 		status   string
 	}{
 		"redirected": {
+			snapshot: base,
 			terminal: &fakeResumeConfirmationTerminal{interactive: false, line: "discard 1"},
 			status:   resumeConfirmationStatus,
 		},
 		"trailing space": {
+			snapshot: base,
 			terminal: &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1 "},
 			status:   resumeNotConfirmedStatus,
 		},
-		"wrong case": {
-			terminal: &fakeResumeConfirmationTerminal{interactive: true, line: "Discard 1"},
-			status:   resumeNotConfirmedStatus,
+		"unknown registry": {
+			snapshot: resumeInventorySnapshot{operations: base.operations, registryUnknown: true},
+			terminal: &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"},
+			status:   resumeDiscardStatusNeedsAttention,
 		},
-		"different ordinal": {
-			terminal: &fakeResumeConfirmationTerminal{interactive: true, line: "discard 01"},
-			status:   resumeNotConfirmedStatus,
+		"running": {
+			snapshot: func() resumeInventorySnapshot {
+				operation := testResumeOperation("1", resumeOperationIncomplete)
+				operation.running = true
+				result, _ := newResumeInventorySnapshot([]resumeOperation{operation}, false)
+				return result
+			}(),
+			terminal: &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"},
+			status:   resumeBusyStatus,
 		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			inventory := &fakeResumeStateInventory{items: []resumeStateItem{availableResumeItem()}}
+			inventory := &fakeResumeStateInventory{snapshot: test.snapshot}
 			app, stdout, _ := newResumeTestApp()
 			app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
 			app.resumeConfirmation = test.terminal
-
-			if code := app.Run(context.Background(), []string{
-				"resume", "discard", "-o", root, "--item", "1",
-			}); code != ResultFailure {
-				t.Fatalf("code=%d", code)
+			if result := app.Run(context.Background(), []string{
+				"resume", "discard", "-o", t.TempDir(), "--item", "1",
+			}); result != ResultFailure {
+				t.Fatalf("result=%d", result)
 			}
-			if inventory.discardCalls != 0 {
-				t.Fatalf("inventory=%+v", inventory)
+			if inventory.discardCalls != 0 ||
+				(name == "unknown registry" || name == "running" || name == "redirected") && test.terminal.calls != 0 {
+				t.Fatalf("inventory=%+v terminal=%+v", inventory, test.terminal)
 			}
 			if !strings.Contains(stdout.String(), fmt.Sprintf(`resume_discard_status=%q`, test.status)) {
 				t.Fatalf("stdout=%q", stdout.String())
-			}
-			if !test.terminal.interactive && test.terminal.calls != 0 {
-				t.Fatalf("redirected terminal read calls=%d", test.terminal.calls)
 			}
 		})
 	}
 }
 
-func TestResumeDiscardReportsBusyAndNeedsAttentionAsClosedOutcomes(t *testing.T) {
-	root := t.TempDir()
-	t.Run("busy", func(t *testing.T) {
-		inventory := &fakeResumeStateInventory{
-			items:      []resumeStateItem{availableResumeItem()},
-			discardErr: fmt.Errorf("runtime lease: %w", osfs.ErrResumeStateBusy),
-		}
-		app, stdout, _ := newResumeTestApp()
-		app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
-		app.resumeConfirmation = &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
-
-		if code := app.Run(context.Background(), []string{
-			"resume", "discard", "-o", root, "--item", "1",
-		}); code != ResultFailure {
-			t.Fatalf("code=%d", code)
-		}
-		for _, want := range []string{
-			`resume_discard_status="busy"`, `phase="discard"`, `published_files="preserved"`,
-		} {
-			if !strings.Contains(stdout.String(), want) {
-				t.Fatalf("stdout=%q missing=%q", stdout.String(), want)
-			}
-		}
-		if inventory.discardCalls != 1 {
-			t.Fatalf("inventory=%+v", inventory)
-		}
-	})
-
-	t.Run("needs attention", func(t *testing.T) {
-		inventory := &fakeResumeStateInventory{
-			items: []resumeStateItem{attentionResumeItem()},
-			discardReport: resumeDiscardReport{
-				status:      resumeDiscardStatusNeedsAttention,
-				operationID: strings.Repeat("a", 32), phase: 20, stateGeneration: 5,
-				attention: []resumeStateAttention{{
-					reason: "cleanup-unknown", operationID: strings.Repeat("a", 32),
-				}},
-			},
-		}
-		app, stdout, stderr := newResumeTestApp()
-		app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
-		app.resumeConfirmation = &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
-
-		if code := app.Run(context.Background(), []string{
-			"resume", "discard", "-o", root, "--item", "1",
-		}); code != ResultFailure {
-			t.Fatalf("code=%d", code)
-		}
-		if !strings.Contains(stdout.String(), `resume_discard_status="needs-attention"`) ||
-			!strings.Contains(stdout.String(), `reason="cleanup-unknown"`) ||
-			!strings.Contains(stdout.String(), `published_files="preserved"`) ||
-			!strings.Contains(stderr.String(), "uncertain and published objects were preserved") {
-			t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
-		}
-	})
-
-	t.Run("published terminal record remains truthful", func(t *testing.T) {
-		inventory := &fakeResumeStateInventory{
-			items: []resumeStateItem{availableResumeItem()},
-			discardReport: resumeDiscardReport{
-				status: resumeDiscardStatusSettled, operationID: strings.Repeat("1", 32),
-				phase: 14, stateGeneration: 4,
-			},
-		}
-		app, stdout, _ := newResumeTestApp()
-		app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
-		app.resumeConfirmation = &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
-		if code := app.Run(context.Background(), []string{
-			"resume", "discard", "-o", root, "--item", "1",
-		}); code != ResultOK {
-			t.Fatalf("code=%d", code)
-		}
-		if !strings.Contains(stdout.String(), `resume_discard_status="settled"`) ||
-			!strings.Contains(stdout.String(), `phase=14 state_generation=4 resumable=false`) {
-			t.Fatalf("stdout=%q", stdout.String())
-		}
-	})
-}
-
-func TestResumeDiscardValidatesCurrentOrdinalBeforePrompt(t *testing.T) {
-	inventory := &fakeResumeStateInventory{items: []resumeStateItem{availableResumeItem()}}
-	terminal := &fakeResumeConfirmationTerminal{interactive: true, line: "discard 2"}
-	app, _, _ := newResumeTestApp()
-	app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
-	app.resumeConfirmation = terminal
-
-	if code := app.Run(context.Background(), []string{
-		"resume", "discard", "-o", t.TempDir(), "--item", "2",
-	}); code != ResultUsage {
-		t.Fatalf("code=%d", code)
+func TestResumeDiscardReportsCleanupDebtEvenWhenCleanupReturnsAnError(t *testing.T) {
+	snapshot, _ := newResumeInventorySnapshot(
+		[]resumeOperation{testResumeOperation("1", resumeOperationIncomplete)}, false,
+	)
+	inventory := &fakeResumeStateInventory{
+		snapshot: snapshot,
+		discardReport: resumeDiscardReport{
+			status: resumeDiscardStatusCleanupPending, operationID: strings.Repeat("1", 32),
+			attention: "cleanup-uncertain",
+		},
+		discardErr: errors.New("private control path should not be printed"),
 	}
-	if terminal.calls != 0 || inventory.discardCalls != 0 {
-		t.Fatalf("terminal=%+v inventory=%+v", terminal, inventory)
-	}
-}
-
-func TestResumeDiscardRefusesAttentionOnlyInventoryEvidence(t *testing.T) {
-	operationID := strings.Repeat("c", 32)
-	inventory := &fakeResumeStateInventory{items: []resumeStateItem{{
-		status: resumeItemStatusNeedsAttention, operationID: operationID,
-		attention: []resumeStateAttention{{
-			reason: "target-ownership-unknown", operationID: operationID,
-		}},
-	}}}
-	terminal := &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
-	app, _, stderr := newResumeTestApp()
-	app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
-	app.resumeConfirmation = terminal
-
-	if code := app.Run(context.Background(), []string{
-		"resume", "discard", "-o", t.TempDir(), "--item", "1",
-	}); code != ResultFailure {
-		t.Fatalf("code=%d", code)
-	}
-	if terminal.calls != 0 || inventory.discardCalls != 0 ||
-		!strings.Contains(stderr.String(), "no mutation authority") {
-		t.Fatalf("terminal=%+v inventory=%+v stderr=%q", terminal, inventory, stderr.String())
-	}
-}
-
-func TestResumeLegacyCleanupCannotSubstituteForCurrentDiscard(t *testing.T) {
-	root := t.TempDir()
-	cleaner := &fakeLegacyResumeCleaner{report: osfs.CheckpointCleanupReport{
-		Status: osfs.CheckpointCleanupStatusComplete, Complete: true,
-		Scanned: 2, Removed: 1,
-	}}
-	opener := &fakeResumeStateInventoryOpener{err: errors.New("current authority must remain unused")}
 	app, stdout, stderr := newResumeTestApp()
-	app.resumeInventories = opener
-	app.legacyResumeCleaner = cleaner
+	app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
+	app.resumeConfirmation = &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
 
-	if code := app.Run(context.Background(), []string{"resume", "cleanup", "-o", root}); code != ResultOK {
-		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	if result := app.Run(context.Background(), []string{
+		"resume", "discard", "-o", t.TempDir(), "--item", "1",
+	}); result != ResultFailure {
+		t.Fatalf("result=%d", result)
 	}
-	if cleaner.calls != 1 || cleaner.rootPath != root || opener.calls != 0 {
-		t.Fatalf("cleaner=%+v opener=%+v", cleaner, opener)
-	}
-	if !strings.Contains(stdout.String(), `legacy_cleanup_status="complete"`) ||
-		strings.Contains(stdout.String(), "resume_discard_status") {
-		t.Fatalf("stdout=%q", stdout.String())
+	if !strings.Contains(stdout.String(), `resume_discard_status="cleanup-pending"`) ||
+		!strings.Contains(stdout.String(), `reason="cleanup-uncertain"`) ||
+		!strings.Contains(stderr.String(), "owned cleanup is incomplete") ||
+		strings.Contains(stdout.String()+stderr.String(), "private control path") {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 
-func TestResumeLegacyCleanupReportsAttentionBusyAndOutputFailures(t *testing.T) {
-	root := t.TempDir()
-	t.Run("attention", func(t *testing.T) {
-		app, stdout, stderr := newResumeTestApp()
-		app.legacyResumeCleaner = &fakeLegacyResumeCleaner{report: osfs.CheckpointCleanupReport{
-			Status:    osfs.CheckpointCleanupStatusNeedsAttention,
-			Attention: []string{"ownership\nmarker"},
-		}}
-		if code := app.Run(context.Background(), []string{"resume", "cleanup", "-o", root}); code != ResultFailure {
-			t.Fatalf("code=%d", code)
-		}
-		if !strings.Contains(stdout.String(), `legacy_attention="ownership\nmarker"`) ||
-			strings.Contains(stdout.String(), "ownership\nmarker\n") ||
-			!strings.Contains(stderr.String(), "legacy resume state still needs attention") {
-			t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
-		}
-	})
+func TestResumeDiscardKeepsACompletedOutcomeWhenAuthorityCloseFails(t *testing.T) {
+	snapshot, _ := newResumeInventorySnapshot(
+		[]resumeOperation{testResumeOperation("1", resumeOperationIncomplete)}, false,
+	)
+	inventory := &fakeResumeStateInventory{
+		snapshot: snapshot,
+		discardReport: resumeDiscardReport{
+			status: resumeDiscardStatusDiscarded, operationID: strings.Repeat("1", 32),
+		},
+		discardErr: errors.New("close failed"),
+	}
+	app, stdout, stderr := newResumeTestApp()
+	app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
+	app.resumeConfirmation = &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
+	if result := app.Run(context.Background(), []string{
+		"resume", "discard", "-o", t.TempDir(), "--item", "1",
+	}); result != ResultFailure {
+		t.Fatalf("result=%d", result)
+	}
+	if !strings.Contains(stdout.String(), `resume_discard_status="discarded"`) ||
+		!strings.Contains(stderr.String(), "was discarded") ||
+		strings.Contains(stdout.String()+stderr.String(), "close failed") {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
 
-	t.Run("busy", func(t *testing.T) {
-		app, stdout, _ := newResumeTestApp()
-		app.legacyResumeCleaner = &fakeLegacyResumeCleaner{err: osfs.ErrCheckpointCleanerBusy}
-		if code := app.Run(context.Background(), []string{"resume", "cleanup", "-o", root}); code != ResultFailure {
-			t.Fatalf("code=%d", code)
-		}
-		if stdout.String() != "legacy_cleanup_status=\"busy\"\n" {
-			t.Fatalf("stdout=%q", stdout.String())
-		}
-	})
+func TestResumeDiscardHandlesLeaseRaceDisappearanceAndUnverifiedFailure(t *testing.T) {
+	snapshot, _ := newResumeInventorySnapshot(
+		[]resumeOperation{testResumeOperation("1", resumeOperationIncomplete)}, false,
+	)
+	tests := map[string]struct {
+		err    error
+		status string
+	}{
+		"busy":        {err: osfs.ErrResumeStateBusy, status: resumeBusyStatus},
+		"disappeared": {err: fs.ErrNotExist, status: resumeDiscardStatusChanged},
+		"cancelled":   {err: context.Canceled, status: resumeCancelledStatus},
+		"unknown":     {err: errors.New("ownership changed"), status: resumeDiscardStatusNeedsAttention},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			inventory := &fakeResumeStateInventory{snapshot: snapshot, discardErr: test.err}
+			app, stdout, _ := newResumeTestApp()
+			app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
+			app.resumeConfirmation = &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
+			if result := app.Run(context.Background(), []string{
+				"resume", "discard", "-o", t.TempDir(), "--item", "1",
+			}); result != ResultFailure {
+				t.Fatalf("result=%d", result)
+			}
+			if !strings.Contains(stdout.String(), fmt.Sprintf(`resume_discard_status=%q`, test.status)) ||
+				!strings.Contains(stdout.String(), `foreign_objects="preserved"`) {
+				t.Fatalf("stdout=%q", stdout.String())
+			}
+		})
+	}
+}
 
-	t.Run("empty report", func(t *testing.T) {
+func TestResumeSurfaceHasNoLegacyGlobalOrTerminalHistoryCommands(t *testing.T) {
+	for _, action := range []string{"cleanup", "status", "delete", "purge", "cancel", "pause", "complete"} {
 		app, _, stderr := newResumeTestApp()
-		app.legacyResumeCleaner = &fakeLegacyResumeCleaner{}
-		if code := app.Run(context.Background(), []string{"resume", "cleanup", "-o", root}); code != ResultFailure {
-			t.Fatalf("code=%d", code)
-		}
-		if !strings.Contains(stderr.String(), "legacy cleanup report is empty") {
-			t.Fatalf("stderr=%q", stderr.String())
-		}
-	})
-
-	if err := (&resumeTestApp{Stdout: shortResumeWriter{}}).writeResumeOutput("checkpoint"); !errors.Is(err, io.ErrShortWrite) {
-		t.Fatalf("short write error=%v", err)
-	}
-}
-
-func TestFilesystemLegacyCleanerForwardsOnlyTheOwnedRoot(t *testing.T) {
-	root := t.TempDir()
-	var observed osfs.FilesystemResumeRoot
-	cleaner := filesystemLegacyResumeCleaner{clean: func(
-		_ context.Context,
-		requested osfs.FilesystemResumeRoot,
-	) (osfs.CheckpointCleanupReport, error) {
-		observed = requested
-		return osfs.CheckpointCleanupReport{
-			Status: osfs.CheckpointCleanupStatusComplete, Complete: true,
-		}, nil
-	}}
-	report, err := cleaner.CleanLegacy(context.Background(), root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if observed.RootPath != root || !report.Complete {
-		t.Fatalf("observed=%+v report=%+v", observed, report)
-	}
-}
-
-func TestStdioResumeConfirmationRejectsRedirectedInput(t *testing.T) {
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reader.Close()
-	defer writer.Close()
-	terminal := newStdioResumeConfirmationTerminal(reader, writer, writer)
-	if terminal.Interactive() {
-		t.Fatal("pipe-backed confirmation was treated as a terminal")
-	}
-}
-
-func TestStdioResumeConfirmationReadsOneExactTerminalLine(t *testing.T) {
-	output := &bytes.Buffer{}
-	terminal := stdioResumeConfirmationTerminal{
-		input: strings.NewReader("discard 3\r\nignored\n"), output: output, interactive: true,
-	}
-	line, err := terminal.ReadLine(context.Background(), "confirm: ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if line != "discard 3" || output.String() != "confirm: " {
-		t.Fatalf("line=%q output=%q", line, output.String())
-	}
-}
-
-func TestResumeSurfaceExposesNoCompatibilityOrSessionDeletionCommands(t *testing.T) {
-	for _, action := range []string{"status", "delete", "purge", "cancel", "pause", "complete"} {
-		app, _, stderr := newResumeTestApp()
-		if code := app.Run(context.Background(), []string{"resume", action}); code != ResultUsage {
-			t.Fatalf("action=%q code=%d", action, code)
+		if result := app.Run(context.Background(), []string{"resume", action}); result != ResultUsage {
+			t.Fatalf("action=%q result=%d", action, result)
 		}
 		if !strings.Contains(stderr.String(), "unknown action") {
 			t.Fatalf("action=%q stderr=%q", action, stderr.String())
 		}
 	}
 	app, _, stderr := newResumeTestApp()
-	if code := app.Run(context.Background(), []string{"resume", "help"}); code != ResultOK {
-		t.Fatalf("code=%d", code)
+	if result := app.Run(context.Background(), []string{"resume", "help"}); result != ResultOK {
+		t.Fatalf("result=%d", result)
 	}
 	help := stderr.String()
-	for _, want := range []string{"resume list", "resume discard", "resume cleanup", "published files are always preserved", "legacy-state"} {
+	for _, want := range []string{"resume list", "resume discard", "identity-matched", "final and foreign objects stay"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help=%q missing=%q", help, want)
 		}
 	}
-	for _, forbidden := range []string{"--path", "--all", "PauseJob", "CompleteJob"} {
+	for _, forbidden := range []string{"resume cleanup", "legacy", "--path", "--all", "terminal state"} {
 		if strings.Contains(help, forbidden) {
 			t.Fatalf("help=%q exposed=%q", help, forbidden)
 		}
 	}
 }
 
-func availableResumeItem() resumeStateItem {
-	return resumeStateItem{
-		status: resumeItemStatusResumable, operationID: strings.Repeat("1", 32),
-		intentDigest: strings.Repeat("2", 64), phase: 4, stateGeneration: 3,
-		expiresAtMillis: 4096, successCount: 2, failureCount: 1,
-		resumable: true, discardable: true,
+func TestStdioResumeConfirmationAndOutputBoundaries(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
+	if terminal := newStdioResumeConfirmationTerminal(reader, writer, writer); terminal.Interactive() {
+		t.Fatal("pipe-backed confirmation was treated as a terminal")
+	}
+
+	output := &bytes.Buffer{}
+	terminal := stdioResumeConfirmationTerminal{
+		input: strings.NewReader("discard 3\r\nignored\n"), output: output, interactive: true,
+	}
+	line, err := terminal.ReadLine(context.Background(), "confirm: ")
+	if err != nil || line != "discard 3" || output.String() != "confirm: " {
+		t.Fatalf("line=%q output=%q err=%v", line, output.String(), err)
+	}
+	if err := (streamResumeOutput{result: shortResumeWriter{}}).WriteResult("checkpoint"); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("short write error=%v", err)
 	}
 }
 
-func attentionResumeItem() resumeStateItem {
-	return resumeStateItem{
-		status: resumeItemStatusNeedsAttention, operationID: strings.Repeat("a", 32),
-		intentDigest: strings.Repeat("b", 64), phase: 20, stateGeneration: 4,
-		discardable: true,
-		attention: []resumeStateAttention{{
-			reason: "cleanup-unknown", operationID: strings.Repeat("a", 32),
-		}},
-	}
-}
-
-func settledResumeDiscardReport() resumeDiscardReport {
-	return resumeDiscardReport{
-		status: resumeDiscardStatusSettled, operationID: strings.Repeat("1", 32),
-		phase: 18, stateGeneration: 4,
-	}
+func testResumeOperation(fill string, state resumeOperationState) resumeOperation {
+	return resumeOperation{operationID: strings.Repeat(fill, 32), state: state}
 }
 
 type writerLogger struct {
@@ -510,22 +478,21 @@ func (logger writerLogger) Logf(format string, args ...any) {
 }
 
 type resumeTestApp struct {
-	Stdout io.Writer
-	Stderr io.Writer
-	Stdin  io.Reader
+	stdout io.Writer
+	stderr io.Writer
+	stdin  io.Reader
 
-	resumeInventories   resumeStateInventoryOpener
-	resumeConfirmation  resumeConfirmationTerminal
-	legacyResumeCleaner legacyResumeCleanupRunner
+	resumeInventories  resumeStateInventoryOpener
+	resumeConfirmation resumeConfirmationTerminal
 }
 
 func newResumeTestApp() (*resumeTestApp, *bytes.Buffer, *bytes.Buffer) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	return &resumeTestApp{
-		Stdout: stdout,
-		Stderr: stderr,
-		Stdin:  strings.NewReader(""),
+		stdout: stdout,
+		stderr: stderr,
+		stdin:  strings.NewReader(""),
 	}, stdout, stderr
 }
 
@@ -536,33 +503,9 @@ func (app *resumeTestApp) Run(ctx context.Context, args []string) Result {
 	return app.runner().Run(ctx, args[1:])
 }
 
-func (app *resumeTestApp) parseResumeRootRequest(
-	action string,
-	args []string,
-) (resumeRootRequest, Result) {
-	request, valid := app.parser().ParseRoot(action, args)
-	if !valid {
-		return resumeRootRequest{}, ResultUsage
-	}
-	return request, ResultOK
-}
-
-func (app *resumeTestApp) parseResumeDiscardRequest(args []string) (resumeDiscardRequest, Result) {
-	request, valid := app.parser().ParseDiscard(args)
-	if !valid {
-		return resumeDiscardRequest{}, ResultUsage
-	}
-	return request, ResultOK
-}
-
-func (app *resumeTestApp) writeResumeOutput(value string) error {
-	return (streamResumeOutput{result: app.Stdout}).WriteResult(value)
-}
-
 func (app *resumeTestApp) parser() flagRequestParser {
 	return flagRequestParser{
-		output: app.Stderr,
-		logger: writerLogger{writer: app.Stderr},
+		logger: writerLogger{writer: app.stderr},
 	}
 }
 
@@ -571,24 +514,19 @@ func (app *resumeTestApp) runner() Runner {
 	if inventories == nil {
 		inventories = filesystemResumeStateInventoryOpener{}
 	}
-	legacy := app.legacyResumeCleaner
-	if legacy == nil {
-		legacy = filesystemLegacyResumeCleaner{}
-	}
 	confirmation := app.resumeConfirmation
 	if confirmation == nil {
-		confirmation = newStdioResumeConfirmationTerminal(app.Stdin, app.Stderr, app.Stderr)
+		confirmation = newStdioResumeConfirmationTerminal(app.stdin, app.stderr, app.stderr)
 	}
-	logger := writerLogger{writer: app.Stderr}
+	logger := writerLogger{writer: app.stderr}
 	return newRunner(resumeDependencies{
 		inventories:  inventories,
-		legacy:       legacy,
 		confirmation: confirmation,
 		parser:       app.parser(),
 		renderer:     textRenderer{},
 		output: streamResumeOutput{
-			result: app.Stdout,
-			usage:  app.Stderr,
+			result: app.stdout,
+			usage:  app.stderr,
 		},
 		logger: logger,
 	})
@@ -611,18 +549,16 @@ func (opener *fakeResumeStateInventoryOpener) OpenResumeStateInventory(
 }
 
 type fakeResumeStateInventory struct {
-	items         []resumeStateItem
-	itemsErr      error
+	snapshot      resumeInventorySnapshot
+	snapshotErr   error
 	discardReport resumeDiscardReport
 	discardErr    error
 	discardCalls  int
 	discardIndex  int
 }
 
-func (inventory *fakeResumeStateInventory) Items() ([]resumeStateItem, error) {
-	items := make([]resumeStateItem, len(inventory.items))
-	copy(items, inventory.items)
-	return items, inventory.itemsErr
+func (inventory *fakeResumeStateInventory) Snapshot() (resumeInventorySnapshot, error) {
+	return inventory.snapshot.clone(), inventory.snapshotErr
 }
 
 func (inventory *fakeResumeStateInventory) Discard(
@@ -653,22 +589,6 @@ func (terminal *fakeResumeConfirmationTerminal) ReadLine(
 	terminal.calls++
 	terminal.prompt = prompt
 	return terminal.line, terminal.err
-}
-
-type fakeLegacyResumeCleaner struct {
-	report   osfs.CheckpointCleanupReport
-	err      error
-	calls    int
-	rootPath string
-}
-
-func (cleaner *fakeLegacyResumeCleaner) CleanLegacy(
-	_ context.Context,
-	rootPath string,
-) (osfs.CheckpointCleanupReport, error) {
-	cleaner.calls++
-	cleaner.rootPath = rootPath
-	return cleaner.report, cleaner.err
 }
 
 type shortResumeWriter struct{}

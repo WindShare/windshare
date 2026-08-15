@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
 type receiverOperationGate struct {
@@ -23,6 +24,45 @@ type receiverOperationGate struct {
 	invokeOnce   sync.Once
 	releaseOnce  sync.Once
 	runtime      *ReceiverRuntime
+}
+
+func TestReceiverRuntimeResolvesOrdinaryOutputShapeThroughClassifiedCatalog(t *testing.T) {
+	fixture := newVerticalFixture(t)
+	receiverFactory, err := NewReceiverFactory(fixture.receiverConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, receiver := connectVerticalPair(t, fixture.senderFactory, receiverFactory)
+	t.Cleanup(func() {
+		receiver.Close()
+		sender.Close()
+		receiverFactory.Close()
+	})
+
+	close(fixture.scanGate)
+	rules, _ := transfer.NewSelectionRules(true, nil)
+	selection, _ := transfer.NewSelectionSpec(fixture.share, fixture.syntheticRoot, rules)
+	var traces []ordinaryoutput.ShapeTrace
+	decision, err := receiver.ResolveOrdinaryOutputShape(
+		context.Background(), selection, ordinaryoutput.DefaultShapeProbeBudgetV1,
+		ordinaryoutput.ShapeTraceFunc(func(event ordinaryoutput.ShapeTrace) {
+			traces = append(traces, event)
+		}),
+	)
+	if err != nil || decision.Kind() != ordinaryoutput.ShapeCompleteDirectory ||
+		decision.DirectoryID() != fixture.directoryID || decision.SourcePath() != "folder" {
+		t.Fatalf("decision=%+v err=%v", decision, err)
+	}
+	if len(traces) != 2 || traces[1].SelectionDigest != [32]byte(selection.Digest()) ||
+		traces[1].ProtocolSessionID != receiver.ProtocolSessionID() {
+		t.Fatalf("traces=%+v", traces)
+	}
+	var nilContext context.Context
+	if _, err := receiver.ResolveOrdinaryOutputShape(
+		nilContext, selection, ordinaryoutput.DefaultShapeProbeBudgetV1, nil,
+	); !errors.Is(err, ordinaryoutput.ErrInvalidShapeResolution) {
+		t.Fatalf("nil context err=%v", err)
+	}
 }
 
 func newReceiverOperationGate() *receiverOperationGate {

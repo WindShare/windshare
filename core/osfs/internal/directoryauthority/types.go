@@ -91,7 +91,9 @@ func (claim directoryClaim) valid() bool {
 	if claim.locator.isRoot() {
 		return claim.parentID == 0
 	}
-	return validClaimID(claim.parentID) && claim.parentID != claim.id
+	// A named operation may materialize its first directory directly below the
+	// retained execution root; no synthetic filesystem directory is required.
+	return claim.parentID == 0 || validClaimID(claim.parentID) && claim.parentID != claim.id
 }
 
 func sameDirectoryClaim(left, right directoryClaim) bool {

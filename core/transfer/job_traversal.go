@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
 const (
@@ -32,15 +33,19 @@ type opaqueSelectionEvidence struct {
 }
 
 type plannedFile struct {
-	file              catalog.FileID
-	path              string
-	expectedSize      uint64
-	modified          catalog.ModifiedTime
-	parentDirectory   catalog.DirectoryID
-	parentGeneration  catalog.DirectoryGeneration
-	parentAdmission   DirectoryAdmission
-	selectionDecision FileSelectionDecision
+	file                  catalog.FileID
+	sourcePath            ordinaryoutput.SourceCatalogPath
+	artifactPath          ordinaryoutput.ArtifactPath
+	expectedSize          uint64
+	modified              catalog.ModifiedTime
+	parentDirectory       catalog.DirectoryID
+	parentGeneration      catalog.DirectoryGeneration
+	parentAdmission       DirectoryAdmission
+	parentMaterialization MaterializedDirectoryClaim
+	selectionDecision     FileSelectionDecision
 }
+
+func (plan plannedFile) failurePath() string { return plan.artifactPath.String() }
 
 type transferQueueItemKind uint8
 
@@ -86,6 +91,7 @@ type jobRun struct {
 	omittedFiles               uint64
 	sourceDriftFailure         *lifecycleFailure
 	succeeded                  uint64
+	fileOutcomes               FileOutcomeSummary
 	terminationCause           *lifecycleFailure
 	settlementFailure          *lifecycleFailure
 	settlement                 DirectTreeSettlement

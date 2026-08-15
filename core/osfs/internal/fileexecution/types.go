@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
@@ -111,13 +112,16 @@ func (observation OwnedObservation) validFor(object checkpointmodel.ObjectID) bo
 	return !object.IsZero() && observation.object == object && observation.condition.valid()
 }
 
+func (observation OwnedObservation) ValidForCleanup(object checkpointmodel.ObjectID) bool {
+	return observation.validFor(object)
+}
+
 type FinalCondition uint8
 
 const (
 	FinalAbsent FinalCondition = iota + 1
 	FinalCollision
 	FinalOwnedExact
-	FinalOwnedMetadataMismatch
 	FinalUnsafe
 )
 
@@ -138,29 +142,24 @@ func (observation FinalObservation) Condition() FinalCondition { return observat
 func (observation FinalObservation) valid() bool               { return observation.condition.valid() }
 
 type FinalExpectation struct {
-	object       transfer.OwnedObjectID
-	exactSize    uint64
-	modifiedTime catalog.ModifiedTime
+	object    transfer.OwnedObjectID
+	exactSize uint64
 }
 
 func NewFinalExpectation(
 	object transfer.OwnedObjectID,
 	exactSize uint64,
-	modifiedTime catalog.ModifiedTime,
 ) (FinalExpectation, error) {
 	if object.IsZero() || exactSize > catalog.MaxFileSize {
 		return FinalExpectation{}, ErrInvalidObservation
 	}
-	return FinalExpectation{object: object, exactSize: exactSize, modifiedTime: modifiedTime}, nil
+	return FinalExpectation{object: object, exactSize: exactSize}, nil
 }
 
 func (expectation FinalExpectation) ObjectIdentity() transfer.OwnedObjectID {
 	return expectation.object
 }
 func (expectation FinalExpectation) ExactSize() uint64 { return expectation.exactSize }
-func (expectation FinalExpectation) ModifiedTime() catalog.ModifiedTime {
-	return expectation.modifiedTime
-}
 
 type RetirementStep uint8
 
@@ -180,8 +179,16 @@ type FileDestination interface {
 	Close() error
 }
 
+type OwnedFinalObserver interface {
+	ObserveOwnedFinal(context.Context, OwnedFile, FinalExpectation) (FinalObservation, error)
+}
+
 type DirectoryAuthority interface {
-	BindFile(context.Context, transfer.MaterializationFile) (FileDestination, error)
+	BindFile(
+		context.Context,
+		transfer.MaterializationFile,
+		transfer.OutputDestinationPath,
+	) (FileDestination, error)
 }
 
 type OwnedFile interface {
@@ -193,8 +200,81 @@ type OwnedFile interface {
 	Close() error
 }
 
+// LiveOwnedFile carries the already-journaled cleanup ticket beside the single
+// public-profile data object. It implements the same transaction port as a
+// resumable file but intentionally cannot manufacture durable ranges.
+type LiveOwnedFile struct {
+	object checkpointmodel.ObjectID
+	file   outputcap.File
+	ticket checkpointmodel.LiveCleanupTicket
+}
+
+func NewLiveOwnedFile(
+	object checkpointmodel.ObjectID,
+	file outputcap.File,
+	ticket checkpointmodel.LiveCleanupTicket,
+) (*LiveOwnedFile, error) {
+	if object.IsZero() || file == nil || !ticket.Valid() ||
+		ticket.State() != checkpointmodel.LiveCleanupStageCreated {
+		return nil, ErrInvalidConfiguration
+	}
+	return &LiveOwnedFile{object: object, file: file, ticket: ticket}, nil
+}
+
+func (file *LiveOwnedFile) ObjectID() checkpointmodel.ObjectID {
+	if file == nil {
+		return checkpointmodel.ObjectID{}
+	}
+	return file.object
+}
+func (file *LiveOwnedFile) NativeFile() outputcap.File {
+	if file == nil {
+		return nil
+	}
+	return file.file
+}
+func (file *LiveOwnedFile) CleanupTicket() checkpointmodel.LiveCleanupTicket {
+	if file == nil {
+		return checkpointmodel.LiveCleanupTicket{}
+	}
+	return file.ticket
+}
+func (file *LiveOwnedFile) WriteAt(value []byte, offset int64) (int, error) {
+	if file == nil || file.file == nil {
+		return 0, outputcap.ErrUnsafeNamespace
+	}
+	return file.file.WriteAt(value, offset)
+}
+func (file *LiveOwnedFile) Sync() error {
+	if file == nil || file.file == nil {
+		return outputcap.ErrUnsafeNamespace
+	}
+	return file.file.Sync()
+}
+func (file *LiveOwnedFile) SetModifiedTime(modified catalog.ModifiedTime) error {
+	if file == nil || file.file == nil {
+		return outputcap.ErrUnsafeNamespace
+	}
+	return file.file.SetModifiedTime(modified)
+}
+func (file *LiveOwnedFile) MetadataMatches(size uint64, modified catalog.ModifiedTime) (bool, error) {
+	if file == nil || file.file == nil {
+		return false, outputcap.ErrUnsafeNamespace
+	}
+	return file.file.MetadataMatches(size, modified)
+}
+func (file *LiveOwnedFile) Close() error {
+	if file == nil || file.file == nil {
+		return nil
+	}
+	err := file.file.Close()
+	file.file = nil
+	return err
+}
+
 type Platform interface {
-	CreateOwnedFile(context.Context, checkpointmodel.ObjectID, uint64) (OwnedFile, OwnedObservation, error)
+	ObserveOwnedObject(context.Context, checkpointmodel.ObjectID, uint64) (OwnedObservation, error)
+	CreateOwnedFile(context.Context, FileDestination, checkpointmodel.ObjectID, uint64) (OwnedFile, OwnedObservation, error)
 	OpenOwnedFile(context.Context, checkpointmodel.ObjectID, uint64, bool) (OwnedFile, OwnedObservation, error)
 	ApplyRetirement(context.Context, checkpointmodel.ObjectID, RetirementStep) (OwnedObservation, error)
 }
@@ -202,6 +282,13 @@ type Platform interface {
 type CheckpointRepository interface {
 	Lookup(context.Context, CheckpointKey) (checkpointmodel.Record, bool, error)
 	Store(context.Context, *checkpointmodel.Record, checkpointmodel.Record) (CheckpointObservation, error)
+}
+
+// CheckpointAbandoner drops only the process-local lookup authority for an
+// unusable record. Its durable image and any foreign partial stay untouched;
+// a new checkpoint can then own the same authenticated file coordinate.
+type CheckpointAbandoner interface {
+	Abandon(context.Context, checkpointmodel.Record) error
 }
 
 type Config struct {

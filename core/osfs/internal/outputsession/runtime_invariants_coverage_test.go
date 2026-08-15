@@ -27,7 +27,7 @@ func TestExecutorContractContradictionsRetainAmbiguousAuthority(t *testing.T) {
 			})
 		})
 
-		_, err := fixture.session.AdmitDirectory(context.Background(), fixture.rootDirectory)
+		_, err := fixture.admitDirectory(context.Background(), fixture.rootDirectory)
 		if !errors.Is(err, ErrMutationAmbiguous) || !errors.Is(err, ErrExecutorContract) {
 			t.Fatalf("contradictory admission error=%v", err)
 		}
@@ -119,7 +119,7 @@ func TestSuccessfulExecutorResultsMustCarryReplayAuthority(t *testing.T) {
 				return DirectoryMaterialization{Cut: MutationNoChange}, nil
 			}
 		})
-		if _, err := fixture.session.AdmitDirectory(
+		if _, err := fixture.admitDirectory(
 			context.Background(), fixture.rootDirectory,
 		); !errors.Is(err, ErrMutationAmbiguous) || !errors.Is(err, ErrExecutorContract) {
 			t.Fatalf("invalid success cut error=%v", err)
@@ -150,7 +150,7 @@ func TestSuccessfulExecutorResultsMustCarryReplayAuthority(t *testing.T) {
 		fixture := newTestFixture(t, func(config *Config) {
 			engine := config.Files.(*fakeFileEngine)
 			engine.begin = func(_ context.Context, claim FileClaim) (FileBeginObservation, error) {
-				transaction := newFakeTransaction(t, claim.File().Target)
+				transaction := newFakeTransaction(t, claim.File().Target())
 				engine.mu.Lock()
 				engine.last = transaction
 				engine.mu.Unlock()
@@ -169,8 +169,8 @@ func TestSuccessfulExecutorResultsMustCarryReplayAuthority(t *testing.T) {
 		fixture := newTestFixture(t, func(config *Config) {
 			engine := config.Files.(*fakeFileEngine)
 			engine.begin = func(_ context.Context, claim FileClaim) (FileBeginObservation, error) {
-				transaction := newFakeTransaction(t, claim.File().Target)
-				settlement, err := transfer.NewCollisionFileSettlement(claim.File().Target)
+				transaction := newFakeTransaction(t, claim.File().Target())
+				settlement, err := transfer.NewCollisionFileSettlement(claim.File().Target())
 				return FileBeginObservation{
 					Cut: MutationStable, Durable: transaction.emptyCheckpoint, Settlement: settlement,
 				}, err
@@ -247,11 +247,11 @@ func TestTransactionResultsMustAuthorizeRetryOrSettlement(t *testing.T) {
 
 func TestStableAdmissionRetryUsesCachedReceiptWithoutExecutorReplay(t *testing.T) {
 	fixture := newTestFixture(t, nil)
-	first, err := fixture.session.AdmitDirectory(context.Background(), fixture.rootDirectory)
+	first, err := fixture.admitDirectory(context.Background(), fixture.rootDirectory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := fixture.session.AdmitDirectory(context.Background(), fixture.rootDirectory)
+	second, err := fixture.admitDirectory(context.Background(), fixture.rootDirectory)
 	if err != nil || !first.Equal(second) {
 		t.Fatalf("cached admission equal=%v err=%v", first.Equal(second), err)
 	}
@@ -270,7 +270,7 @@ func TestCoalescedBeginCancellationDoesNotCancelTransactionOwner(t *testing.T) {
 		engine.begin = func(_ context.Context, claim FileClaim) (FileBeginObservation, error) {
 			close(beginStarted)
 			<-releaseBegin
-			transaction := newFakeTransaction(t, claim.File().Target)
+			transaction := newFakeTransaction(t, claim.File().Target())
 			engine.mu.Lock()
 			engine.last = transaction
 			engine.mu.Unlock()
@@ -426,12 +426,12 @@ func TestConcurrentCloseRequestsSettleAndReleaseExactlyOnce(t *testing.T) {
 	exactRetry := make(chan result, 1)
 	conflictingRetry := make(chan result, 1)
 	go func() {
-		settlement, err := fixture.session.FinalizeTree(ctx, transfer.DirectTreeOutcomePublished)
+		settlement, err := fixture.session.FinalizeTree(ctx, transfer.DirectTreeOutcomeSuccess)
 		owner <- result{settlement: settlement, err: err}
 	}()
 	mustSignal(t, releaseStarted)
 	go func() {
-		settlement, err := fixture.session.FinalizeTree(ctx, transfer.DirectTreeOutcomePublished)
+		settlement, err := fixture.session.FinalizeTree(ctx, transfer.DirectTreeOutcomeSuccess)
 		exactRetry <- result{settlement: settlement, err: err}
 	}()
 	go func() {
@@ -454,7 +454,7 @@ func TestConcurrentCloseRequestsSettleAndReleaseExactlyOnce(t *testing.T) {
 	ownerResult := mustResult(t, owner)
 	exactResult := mustResult(t, exactRetry)
 	conflictResult := mustResult(t, conflictingRetry)
-	if ownerResult.err != nil || ownerResult.settlement.Kind() != transfer.DirectTreeSettlementPublished {
+	if ownerResult.err != nil || ownerResult.settlement.Kind() != transfer.DirectTreeSettlementSuccess {
 		t.Fatalf("owner settlement=%v err=%v", ownerResult.settlement.Kind(), ownerResult.err)
 	}
 	if exactResult.err != nil || exactResult.settlement != ownerResult.settlement {
@@ -489,7 +489,7 @@ func TestAmbiguousActiveFileClosesWithoutReplayingItsExecutor(t *testing.T) {
 	}
 
 	settlement, err := fixture.session.PauseTree(ctx, transfer.JobPauseOutputFailure)
-	if err == nil || settlement.Kind() != transfer.DirectTreeSettlementNeedsAttention {
+	if err == nil || settlement.Kind() != transfer.DirectTreeSettlementFailed {
 		t.Fatalf("close settlement=%v err=%v", settlement.Kind(), err)
 	}
 	executor.mu.Lock()
@@ -558,12 +558,12 @@ func TestRollbackRestoresAncestorSettlementAccounting(t *testing.T) {
 				_ context.Context,
 				claim DirectoryClaim,
 			) (DirectoryMaterialization, error) {
-				if claim.Directory().Path == "child" && !failed {
+				if claim.Source().SourcePath.String() == "child" && !failed {
 					failed = true
 					return DirectoryMaterialization{Cut: MutationNoChange}, context.Canceled
 				}
 				disposition := DirectoryAuthorityCreatedDescendant
-				if claim.IsRoot() {
+				if claim.IsSessionRoot() {
 					disposition = DirectoryCallerProvidedRoot
 				}
 				return DirectoryMaterialization{Cut: MutationStable, Disposition: disposition}, nil
@@ -571,7 +571,7 @@ func TestRollbackRestoresAncestorSettlementAccounting(t *testing.T) {
 		})
 		ctx := context.Background()
 		root := fixture.admitRoot(ctx)
-		if _, err := fixture.session.AdmitDirectory(
+		if _, err := fixture.admitDirectory(
 			ctx,
 			fixture.childDirectory(root, 145, "child"),
 		); !errors.Is(err, context.Canceled) {
@@ -632,7 +632,7 @@ func TestRollbackRestoresAncestorSettlementAccounting(t *testing.T) {
 				_ context.Context,
 				claim DirectoryClaim,
 			) (DirectoryFinalization, error) {
-				if claim.Directory().Path == "child" && !failed {
+				if claim.Source().SourcePath.String() == "child" && !failed {
 					failed = true
 					return DirectoryFinalization{Cut: MutationNoChange}, context.Canceled
 				}
@@ -641,7 +641,7 @@ func TestRollbackRestoresAncestorSettlementAccounting(t *testing.T) {
 		})
 		ctx := context.Background()
 		root := fixture.admitRoot(ctx)
-		child, err := fixture.session.AdmitDirectory(ctx, fixture.childDirectory(root, 147, "child"))
+		child, err := fixture.admitDirectory(ctx, fixture.childDirectory(root, 147, "child"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -677,8 +677,8 @@ func TestCanceledResourceReleaseSettlesAsNeedsAttention(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	settlement, err := fixture.session.FinalizeTree(canceled, transfer.DirectTreeOutcomePublished)
-	if !errors.Is(err, context.Canceled) || settlement.Kind() != transfer.DirectTreeSettlementNeedsAttention {
+	settlement, err := fixture.session.FinalizeTree(canceled, transfer.DirectTreeOutcomeSuccess)
+	if !errors.Is(err, context.Canceled) || settlement.Kind() != transfer.DirectTreeSettlementFailed {
 		t.Fatalf("canceled release settlement=%v err=%v", settlement.Kind(), err)
 	}
 	fixture.resources.mu.Lock()

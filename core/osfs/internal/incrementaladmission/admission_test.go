@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -18,36 +19,29 @@ func TestValidateDirectoryRejectsUnboundShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	generation := testGeneration(t, 0x31)
-	root := transfer.MaterializationDirectory{
-		DirectoryID: intent.SyntheticRoot(),
-		Generation:  generation,
-	}
+	root := testSourceDirectory(t, intent.SyntheticRoot(), generation, transfer.DirectoryAdmission{}, "", catalog.ModifiedTime{})
 	parent, err := transfer.NewDirectoryAdmissionWithSecret(
 		bytes.Repeat([]byte{0x41}, sha256.Size), scope, root,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	child := transfer.MaterializationDirectory{
-		DirectoryID:     testDirectoryID(t, 0x42),
-		Generation:      testGeneration(t, 0x43),
-		ParentAdmission: parent,
-		Path:            "nested",
-	}
+	child := testSourceDirectory(
+		t, testDirectoryID(t, 0x42), testGeneration(t, 0x43), parent, "nested", catalog.ModifiedTime{},
+	)
 
 	for _, test := range []struct {
 		name string
-		dir  transfer.MaterializationDirectory
+		dir  transfer.AuthenticatedSourceDirectory
 		want error
 	}{
 		{name: "root", dir: root},
 		{name: "child", dir: child},
-		{name: "zero directory", dir: transfer.MaterializationDirectory{Generation: generation}, want: transfer.ErrInvalidDirectoryAdmission},
-		{name: "zero generation", dir: transfer.MaterializationDirectory{DirectoryID: root.DirectoryID}, want: transfer.ErrInvalidDirectoryAdmission},
-		{name: "root parent", dir: transfer.MaterializationDirectory{DirectoryID: root.DirectoryID, Generation: generation, ParentAdmission: parent}, want: transfer.ErrDirectoryAdmissionMismatch},
-		{name: "wrong root", dir: transfer.MaterializationDirectory{DirectoryID: child.DirectoryID, Generation: generation}, want: transfer.ErrDirectoryAdmissionMismatch},
-		{name: "child parent", dir: transfer.MaterializationDirectory{DirectoryID: child.DirectoryID, Generation: child.Generation, Path: child.Path}, want: transfer.ErrInvalidDirectoryAdmission},
-		{name: "child noncanonical", dir: transfer.MaterializationDirectory{DirectoryID: child.DirectoryID, Generation: child.Generation, ParentAdmission: parent, Path: "nested/../escape"}, want: transfer.ErrInvalidDirectoryAdmission},
+		{name: "zero directory", dir: testSourceDirectory(t, catalog.DirectoryID{}, generation, transfer.DirectoryAdmission{}, "", catalog.ModifiedTime{}), want: transfer.ErrInvalidDirectoryAdmission},
+		{name: "zero generation", dir: testSourceDirectory(t, root.DirectoryID, catalog.DirectoryGeneration{}, transfer.DirectoryAdmission{}, "", catalog.ModifiedTime{}), want: transfer.ErrInvalidDirectoryAdmission},
+		{name: "root parent", dir: testSourceDirectory(t, root.DirectoryID, generation, parent, "", catalog.ModifiedTime{}), want: transfer.ErrDirectoryAdmissionMismatch},
+		{name: "wrong root", dir: testSourceDirectory(t, child.DirectoryID, generation, transfer.DirectoryAdmission{}, "", catalog.ModifiedTime{}), want: transfer.ErrDirectoryAdmissionMismatch},
+		{name: "child parent", dir: testSourceDirectory(t, child.DirectoryID, child.Generation, transfer.DirectoryAdmission{}, child.SourcePath.String(), catalog.ModifiedTime{}), want: transfer.ErrInvalidDirectoryAdmission},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := ValidateDirectory(intent, test.dir); !errors.Is(err, test.want) {
@@ -67,15 +61,12 @@ func TestSameDirectoryComparesTheCommittedCatalogIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory := transfer.MaterializationDirectory{
-		DirectoryID:  testDirectoryID(t, 0x51),
-		Generation:   testGeneration(t, 0x52),
-		Path:         "nested",
-		ModifiedTime: modified,
-	}
-	parentDirectory := transfer.MaterializationDirectory{
-		DirectoryID: intent.SyntheticRoot(), Generation: testGeneration(t, 0x55),
-	}
+	directory := testSourceDirectory(
+		t, testDirectoryID(t, 0x51), testGeneration(t, 0x52), transfer.DirectoryAdmission{}, "nested", modified,
+	)
+	parentDirectory := testSourceDirectory(
+		t, intent.SyntheticRoot(), testGeneration(t, 0x55), transfer.DirectoryAdmission{}, "", catalog.ModifiedTime{},
+	)
 	firstParent, err := transfer.NewDirectoryAdmissionWithSecret(
 		bytes.Repeat([]byte{0x56}, sha256.Size), scope, parentDirectory,
 	)
@@ -184,6 +175,29 @@ func testIntent(t *testing.T) transfer.ReceiveIntent {
 		t.Fatal(err)
 	}
 	return intent
+}
+
+func testSourceDirectory(
+	t *testing.T,
+	directory catalog.DirectoryID,
+	generation catalog.DirectoryGeneration,
+	parent transfer.DirectoryAdmission,
+	path string,
+	modified catalog.ModifiedTime,
+) transfer.AuthenticatedSourceDirectory {
+	t.Helper()
+	sourcePath := ordinaryoutput.EmptySourceCatalogPath()
+	if path != "" {
+		var err error
+		sourcePath, err = ordinaryoutput.NewSourceCatalogPath(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return transfer.AuthenticatedSourceDirectory{
+		DirectoryID: directory, Generation: generation, ParentAdmission: parent,
+		SourcePath: sourcePath, ModifiedTime: modified,
+	}
 }
 
 func testDirectoryID(t *testing.T, fill byte) catalog.DirectoryID {

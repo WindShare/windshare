@@ -91,6 +91,7 @@ func TestLinuxOutputProbeRecoveryRemovesReachableCutInProtocolOrder(t *testing.T
 	root, rootPath := openLinuxOutputProbeCoverageRoot(t)
 	const probeName = linuxOutputProbePrefix + "33333333333333333333333333333333"
 	probePath := createLinuxProbeCoverageDirectory(t, rootPath, probeName)
+	writeLinuxProbeCoverageFile(t, probePath, "live-stage", nil)
 	stagePath := writeLinuxProbeCoverageFile(t, probePath, "stage", nil)
 	for _, name := range []string{"anchor", "publication"} {
 		if err := os.Link(stagePath, filepath.Join(probePath, name)); err != nil {
@@ -113,7 +114,7 @@ func TestLinuxOutputProbeRecoveryRemovesReachableCutInProtocolOrder(t *testing.T
 	if err := root.recoverOutputProbeLeftovers(); err != nil {
 		t.Fatalf("recover reachable probe cut: %v", err)
 	}
-	want := []string{"stage", "publication", "anchor", "record", "candidate", "installed", probeName}
+	want := []string{"live-stage", "stage", "publication", "anchor", "record", "candidate", "installed", probeName}
 	if !reflect.DeepEqual(removals, want) {
 		t.Fatalf("probe removal order = %v, want %v", removals, want)
 	}
@@ -158,8 +159,8 @@ func TestLinuxOutputProbeLeftoverRejectsAmbiguousNativeCuts(t *testing.T) {
 		{name: "invalid record generation", build: func(t *testing.T, probePath string) {
 			writeLinuxProbeCoverageFile(t, probePath, "record", []byte{1, 2})
 		}},
-		{name: "nonprivate file mode", build: func(t *testing.T, probePath string) {
-			path := writeLinuxProbeCoverageFile(t, probePath, "stage", nil)
+		{name: "nonprivate record mode", build: func(t *testing.T, probePath string) {
+			path := writeLinuxProbeCoverageFile(t, probePath, "record", nil)
 			if err := os.Chmod(path, 0o640); err != nil {
 				t.Fatal(err)
 			}

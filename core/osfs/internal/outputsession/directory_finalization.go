@@ -40,6 +40,15 @@ func (session *Session) FinalizeDirectory(
 		)
 	}
 
+	if !entry.claim.artifact.Valid() {
+		settlement, settlementErr := transfer.NewFinalizedDirectorySettlement(entry.admission)
+		if settlementErr != nil {
+			return transfer.DirectorySettlement{}, session.failDirectoryFinalization(
+				ctx, operationID, entry, MutationNoChange, settlementErr,
+			)
+		}
+		return session.commitDirectoryFinalization(operationID, entry, settlement)
+	}
 	observation, executeErr := session.directories.FinalizeDirectory(ctx, entry.claim)
 	if executeErr != nil {
 		cut := observation.Cut

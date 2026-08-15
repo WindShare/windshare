@@ -27,214 +27,7 @@ func windowsV3NativeTestTempDir(t *testing.T) string {
 	return root
 }
 
-func windowsV3TestSecurityDescriptor(
-	t *testing.T,
-	owner *windows.SID,
-	aces string,
-) *windows.SECURITY_DESCRIPTOR {
-	t.Helper()
-	descriptor, err := windows.SecurityDescriptorFromString("O:" + owner.String() + "D:P" + aces)
-	if err != nil {
-		t.Fatalf("parse test security descriptor: %v", err)
-	}
-	return descriptor
-}
-
-func TestWindowsV3AncestryAuthorityRejectsCrossPrincipalMutation(t *testing.T) {
-	policy, err := newWindowsV3PrivatePolicy()
-	if err != nil {
-		t.Fatal(err)
-	}
-	users, err := windows.CreateWellKnownSid(windows.WinBuiltinUsersSid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dangerous := uint32(windowsV3AncestryMutationRights)
-	allDangerous := fmt.Sprintf("0x%08x", dangerous)
-	allow := func(sid *windows.SID, mask string, flags string) string {
-		return fmt.Sprintf("(A;%s;%s;;;%s)", flags, mask, sid.String())
-	}
-	deny := func(sid *windows.SID, mask string) string {
-		return fmt.Sprintf("(D;;%s;;;%s)", mask, sid.String())
-	}
-
-	exemptEntries := allow(policy.userSID, allDangerous, "") +
-		allow(policy.systemSID, allDangerous, "") +
-		allow(policy.administratorsSID, allDangerous, "") +
-		allow(policy.trustedInstallerSID, allDangerous, "")
-	if err := windowsV3VerifyAncestryAuthorityDescriptor(
-		windowsV3TestSecurityDescriptor(t, policy.userSID, exemptEntries), policy,
-	); err != nil {
-		t.Fatalf("privileged and receiver authorities rejected: %v", err)
-	}
-
-	for _, test := range []struct {
-		name string
-		mask uint32
-	}{
-		{name: "delete directory", mask: windows.DELETE},
-		{name: "delete child", mask: windowsV3DirectoryDeleteChild},
-		{name: "rewrite DACL", mask: windows.WRITE_DAC},
-		{name: "replace owner", mask: windows.WRITE_OWNER},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			descriptor := windowsV3TestSecurityDescriptor(
-				t, policy.userSID, allow(users, fmt.Sprintf("0x%08x", test.mask), ""),
-			)
-			if err := windowsV3VerifyAncestryAuthorityDescriptor(descriptor, policy); err == nil {
-				t.Fatal("cross-principal mutation authority was accepted")
-			}
-		})
-	}
-
-	deniedFirst := windowsV3TestSecurityDescriptor(
-		t, policy.userSID, deny(users, allDangerous)+allow(users, allDangerous, ""),
-	)
-	if err := windowsV3VerifyAncestryAuthorityDescriptor(deniedFirst, policy); err != nil {
-		t.Fatalf("deny-before-allow authority was rejected: %v", err)
-	}
-	allowedFirst := windowsV3TestSecurityDescriptor(
-		t, policy.userSID, allow(users, allDangerous, "")+deny(users, allDangerous),
-	)
-	if err := windowsV3VerifyAncestryAuthorityDescriptor(allowedFirst, policy); err == nil {
-		t.Fatal("allow-before-deny authority was accepted")
-	}
-
-	inheritOnly := windowsV3TestSecurityDescriptor(
-		t, policy.userSID, allow(users, "GA", "CIIO"),
-	)
-	if err := windowsV3VerifyAncestryAuthorityDescriptor(inheritOnly, policy); err != nil {
-		t.Fatalf("inherit-only authority was treated as current-object access: %v", err)
-	}
-	inheritedCurrent := windowsV3TestSecurityDescriptor(
-		t, policy.userSID, allow(users, fmt.Sprintf("0x%08x", uint32(windows.DELETE)), "ID"),
-	)
-	if err := windowsV3VerifyAncestryAuthorityDescriptor(inheritedCurrent, policy); err == nil {
-		t.Fatal("applicable inherited delete authority was accepted")
-	}
-}
-
-func TestWindowsV3AncestryAuthorityClassifiesAdministratorAccountByNativeSID(t *testing.T) {
-	if windowsV3IsAdministratorAccount(nil) || windowsV3IsAdministratorAccount(new(windows.SID)) {
-		t.Fatal("an absent or invalid SID was classified as an Administrator account")
-	}
-	policy, err := newWindowsV3PrivatePolicy()
-	if err != nil {
-		t.Fatal(err)
-	}
-	accountDomain, err := windows.StringToSid("S-1-5-21-111111111-222222222-333333333")
-	if err != nil {
-		t.Fatal(err)
-	}
-	administrator, err := windows.CreateWellKnownDomainSid(windows.WinAccountAdministratorSid, accountDomain)
-	if err != nil {
-		t.Fatal(err)
-	}
-	guest, err := windows.CreateWellKnownDomainSid(windows.WinAccountGuestSid, accountDomain)
-	if err != nil {
-		t.Fatal(err)
-	}
-	extraSubauthority, err := windows.StringToSid("S-1-5-21-1-2-3-4-500")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, test := range []struct {
-		name   string
-		sid    *windows.SID
-		exempt bool
-	}{
-		{name: "administrator account", sid: administrator, exempt: true},
-		{name: "administrator group", sid: policy.administratorsSID, exempt: true},
-		{name: "ordinary account", sid: guest, exempt: false},
-		{name: "suffix lookalike", sid: extraSubauthority, exempt: false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := policy.ancestryExempts(test.sid); got != test.exempt {
-				t.Fatalf("ancestry exemption = %t, want %t for %s", got, test.exempt, test.sid.String())
-			}
-		})
-	}
-
-	dangerous := fmt.Sprintf("0x%08x", uint32(windowsV3AncestryMutationRights))
-	allow := func(sid *windows.SID) string {
-		return fmt.Sprintf("(A;;%s;;;%s)", dangerous, sid.String())
-	}
-	privilegedDescriptor := windowsV3TestSecurityDescriptor(
-		t,
-		administrator,
-		allow(administrator),
-	)
-	if err := windowsV3VerifyAncestryAuthorityDescriptor(privilegedDescriptor, policy); err != nil {
-		t.Fatalf("Administrator ancestry authority was rejected: %v", err)
-	}
-	ordinaryOwner := windowsV3TestSecurityDescriptor(t, guest, "")
-	if err := windowsV3VerifyAncestryAuthorityDescriptor(ordinaryOwner, policy); err == nil {
-		t.Fatal("ordinary ancestry owner was accepted")
-	}
-	ordinaryTrustee := windowsV3TestSecurityDescriptor(
-		t,
-		policy.userSID,
-		allow(guest),
-	)
-	if err := windowsV3VerifyAncestryAuthorityDescriptor(ordinaryTrustee, policy); err == nil {
-		t.Fatal("ordinary ancestry mutation authority was accepted")
-	}
-}
-
-func TestWindowsV3AncestryAuthorityFailsClosedOnAmbiguousACLs(t *testing.T) {
-	policy, err := newWindowsV3PrivatePolicy()
-	if err != nil {
-		t.Fatal(err)
-	}
-	users, err := windows.CreateWellKnownSid(windows.WinBuiltinUsersSid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	generic := windowsV3TestSecurityDescriptor(
-		t, policy.userSID, fmt.Sprintf("(A;;GA;;;%s)", users.String()),
-	)
-	if err := windowsV3VerifyAncestryAuthorityDescriptor(generic, policy); !errors.Is(err, errWindowsV3OutputUnsupported) {
-		t.Fatalf("generic ACE error = %v", err)
-	}
-
-	for _, aceType := range []uint8{
-		windowsV3AccessAllowedObjectACEType,
-		windowsV3AccessAllowedCallbackACEType,
-		0x7f,
-	} {
-		t.Run(fmt.Sprintf("ace-type-%d", aceType), func(t *testing.T) {
-			descriptor := windowsV3TestSecurityDescriptor(
-				t, policy.userSID, fmt.Sprintf("(A;;SD;;;%s)", users.String()),
-			)
-			dacl, _, err := descriptor.DACL()
-			if err != nil {
-				t.Fatal(err)
-			}
-			var ace *windows.ACCESS_ALLOWED_ACE
-			if err := windows.GetAce(dacl, 0, &ace); err != nil {
-				t.Fatal(err)
-			}
-			ace.Header.AceType = aceType
-			if err := windowsV3VerifyAncestryAuthorityDescriptor(descriptor, policy); !errors.Is(err, errWindowsV3OutputUnsupported) {
-				t.Fatalf("ambiguous ACE error = %v", err)
-			}
-		})
-	}
-
-	foreignOwner := windowsV3TestSecurityDescriptor(t, users, "")
-	if err := windowsV3VerifyAncestryAuthorityDescriptor(foreignOwner, policy); err == nil {
-		t.Fatal("unprivileged owner was accepted")
-	}
-	nullDACL, err := windows.SecurityDescriptorFromString("O:" + policy.userSID.String() + "D:NO_ACCESS_CONTROL")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := windowsV3VerifyAncestryAuthorityDescriptor(nullDACL, policy); err == nil {
-		t.Fatal("null DACL was accepted")
-	}
-}
-
-func TestWindowsV3PublicGuardRejectsHostileOutputRootDACL(t *testing.T) {
+func TestWindowsV3PublicGuardAcceptsOrdinaryCrossPrincipalDACL(t *testing.T) {
 	rootPath := t.TempDir()
 	policy, err := newWindowsV3PrivatePolicy()
 	if err != nil {
@@ -261,12 +54,47 @@ func TestWindowsV3PublicGuardRejectsHostileOutputRootDACL(t *testing.T) {
 	}
 	defer platform.Close()
 	guard, err := platform.acquirePublicOperationGuard()
-	if guard != nil {
-		_ = guard.Close()
+	if err != nil {
+		t.Fatalf("ordinary public DACL was rejected: %v", err)
 	}
-	if !errors.Is(err, errWindowsV3OutputUnsafe) ||
-		!errors.Is(err, outputfault.ErrAncestryAuthorityDenied) {
-		t.Fatalf("hostile output-root DACL error = %v", err)
+	if err := guard.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWindowsV3PublicGuardReportsDeniedNativeAuthority(t *testing.T) {
+	rootPath := t.TempDir()
+	policy, err := newWindowsV3PrivatePolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied, err := windows.SecurityDescriptorFromString(
+		"O:" + policy.userSID.String() + "D:P" +
+			fmt.Sprintf("(A;OICI;GRGX;;;%s)", policy.userSID.String()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore, err := policy.descriptor(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windowsV3SetTestDirectoryDACL(rootPath, denied, policy); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := windowsV3SetTestDirectoryDACL(rootPath, restore, policy); err != nil {
+			t.Errorf("restore test directory DACL: %v", err)
+		}
+	}()
+
+	if platform, err := openWindowsV3OutputPlatform(rootPath); platform != nil {
+		_ = platform.Close()
+		t.Fatal("read-only destination unexpectedly admitted mutation authority")
+	} else if !errors.Is(err, outputfault.ErrAncestryAuthorityDenied) ||
+		!errors.Is(err, errWindowsV3OutputUnsafe) ||
+		!errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		t.Fatalf("denied native authority error = %v", err)
 	}
 }
 
@@ -290,12 +118,12 @@ func TestWindowsV3ExternalPlacementGuardPinsWithoutCertifyingHostileAncestorDACL
 	if err != nil {
 		t.Fatal(err)
 	}
-	if guard, guardErr := platform.acquirePublicOperationGuard(); guardErr == nil ||
-		!errors.Is(guardErr, outputfault.ErrAncestryAuthorityDenied) {
-		if guard != nil {
-			_ = guard.Close()
-		}
-		t.Fatalf("hostile external directory was certified as an output root: %v", guardErr)
+	publicGuard, guardErr := platform.acquirePublicOperationGuard()
+	if guardErr != nil {
+		t.Fatalf("ordinary inherited DACL was rejected for public output: %v", guardErr)
+	}
+	if err := publicGuard.Close(); err != nil {
+		t.Fatal(err)
 	}
 	guard, err := platform.acquireExternalPlacementGuard()
 	if err != nil {

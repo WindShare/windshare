@@ -46,6 +46,8 @@ type DirectoryAdmission struct {
 	modified      catalog.ModifiedTime
 }
 
+func (admission DirectoryAdmission) SourcePath() string { return admission.path }
+
 // DirectoryAdmissionScope is the one-time projection of an already validated
 // intent needed by the receipt codec. Keeping full intent validation out of the
 // per-directory path prevents selection size from becoming admission cost.
@@ -146,12 +148,16 @@ func (admission DirectoryAdmission) Equal(other DirectoryAdmission) bool {
 func NewDirectoryAdmissionWithSecret(
 	secret []byte,
 	scope DirectoryAdmissionScope,
-	directory MaterializationDirectory,
+	directory AuthenticatedSourceDirectory,
 ) (DirectoryAdmission, error) {
+	directory, err := normalizeAuthenticatedSourceDirectory(directory)
+	if err != nil {
+		return DirectoryAdmission{}, err
+	}
 	if !validDirectoryAdmissionSecret(secret) {
 		return DirectoryAdmission{}, ErrInvalidDirectoryAdmission
 	}
-	message, err := CanonicalDirectoryAdmissionMessageV2(scope, directory)
+	message, err := canonicalAuthenticatedDirectoryAdmissionMessageV2(scope, directory)
 	if err != nil {
 		return DirectoryAdmission{}, err
 	}
@@ -168,7 +174,7 @@ func NewDirectoryAdmissionWithSecret(
 		directory:     directory.DirectoryID,
 		generation:    directory.Generation,
 		parent:        directory.ParentAdmission.token,
-		path:          directory.Path,
+		path:          directory.SourcePath.String(),
 		modified:      directory.ModifiedTime,
 	}, nil
 }
@@ -178,16 +184,28 @@ func NewDirectoryAdmissionWithSecret(
 // the framed caller-controlled claim fields.
 func CanonicalDirectoryAdmissionMessageV2(
 	scope DirectoryAdmissionScope,
-	directory MaterializationDirectory,
+	directory AuthenticatedSourceDirectory,
 ) ([]byte, error) {
-	if err := validateMaterializationDirectoryForScope(scope, directory); err != nil {
+	return canonicalAuthenticatedDirectoryAdmissionMessageV2(scope, directory)
+}
+
+func canonicalAuthenticatedDirectoryAdmissionMessageV2(
+	scope DirectoryAdmissionScope,
+	directory AuthenticatedSourceDirectory,
+) ([]byte, error) {
+	directory, normalizationErr := normalizeAuthenticatedSourceDirectory(directory)
+	if normalizationErr != nil {
+		return nil, normalizationErr
+	}
+	if err := validateSourceDirectoryForScope(scope, directory); err != nil {
 		return nil, err
 	}
 	modified := canonicalDirectoryAdmissionModifiedTime(directory.ModifiedTime)
-	path := canonicalDirectoryAdmissionPath(directory.Path)
+	sourcePath := directory.SourcePath.String()
+	path := canonicalDirectoryAdmissionPath(sourcePath)
 	message := make([]byte, 0, 10*8+2+len(directoryAdmissionDomain)+
 		ReceiveIntentDigestBytes+2*catalog.IdentityBytes+directoryAdmissionTokenBytes+
-		len(directory.Path)+len(modified))
+		len(sourcePath)+len(modified))
 	message = append(message, directoryAdmissionDomain...)
 	message = append(message, 0, DirectoryAdmissionV2)
 	message = appendCanonicalField(message, scope.ReceiveIntentDigest().Bytes())
@@ -205,26 +223,43 @@ func CanonicalDirectoryAdmissionMessageV2(
 	return message, nil
 }
 
-func validateMaterializationDirectoryForScope(scope DirectoryAdmissionScope, directory MaterializationDirectory) error {
+func validateSourceDirectoryForScope(scope DirectoryAdmissionScope, directory AuthenticatedSourceDirectory) error {
+	directory, err := normalizeAuthenticatedSourceDirectory(directory)
+	if err != nil {
+		return err
+	}
 	if !scope.valid() || directory.DirectoryID.IsZero() || directory.Generation.IsZero() {
 		return ErrInvalidDirectoryAdmission
 	}
-	if directory.Path == "" {
+	if !directory.SourcePath.Valid() {
+		return ErrInvalidDirectoryAdmission
+	}
+	sourcePath := directory.SourcePath.String()
+	if sourcePath == "" {
 		if !directory.ParentAdmission.IsZero() || directory.DirectoryID != scope.SyntheticRoot() {
 			return ErrInvalidDirectoryAdmission
 		}
 		return nil
 	}
-	canonical, err := catalog.CanonicalPath(directory.Path)
-	if err != nil || canonical != directory.Path || directory.ParentAdmission.IsZero() ||
+	canonical, err := catalog.CanonicalPath(sourcePath)
+	if err != nil || canonical != sourcePath || directory.ParentAdmission.IsZero() ||
 		!directory.ParentAdmission.validSnapshot() ||
 		directory.ParentAdmission.intent != scope.ReceiveIntentDigest() ||
 		directory.ParentAdmission.layoutVersion != scope.LayoutVersion() ||
 		directory.ParentAdmission.layout != scope.Layout() ||
-		!immediateDirectoryChild(directory.ParentAdmission.path, directory.Path) {
+		!immediateDirectoryChild(directory.ParentAdmission.path, sourcePath) {
 		return ErrInvalidDirectoryAdmission
 	}
 	return nil
+}
+
+func normalizeAuthenticatedSourceDirectory(
+	directory AuthenticatedSourceDirectory,
+) (AuthenticatedSourceDirectory, error) {
+	if !directory.SourcePath.Valid() {
+		return AuthenticatedSourceDirectory{}, ErrInvalidDirectoryAdmission
+	}
+	return directory, nil
 }
 
 func immediateDirectoryChild(parent, child string) bool {
@@ -253,13 +288,18 @@ func (admission DirectoryAdmission) validSnapshot() bool {
 func admissionMatchesDirectory(
 	scope DirectoryAdmissionScope,
 	admission DirectoryAdmission,
-	directory MaterializationDirectory,
+	directory AuthenticatedSourceDirectory,
 ) bool {
-	if !admission.validSnapshot() || validateMaterializationDirectoryForScope(scope, directory) != nil ||
+	var err error
+	directory, err = normalizeAuthenticatedSourceDirectory(directory)
+	if err != nil {
+		return false
+	}
+	if !admission.validSnapshot() || validateSourceDirectoryForScope(scope, directory) != nil ||
 		admission.version != DirectoryAdmissionV2 || admission.intent != scope.ReceiveIntentDigest() ||
 		admission.layoutVersion != scope.LayoutVersion() || admission.layout != scope.Layout() ||
 		admission.directory != directory.DirectoryID || admission.generation != directory.Generation ||
-		admission.path != directory.Path || admission.modified != directory.ModifiedTime {
+		admission.path != directory.SourcePath.String() || admission.modified != directory.ModifiedTime {
 		return false
 	}
 	return subtle.ConstantTimeCompare(admission.parent[:], directory.ParentAdmission.token[:]) == 1
@@ -271,7 +311,7 @@ func admissionMatchesDirectory(
 func ValidateDirectoryAdmissionBinding(
 	scope DirectoryAdmissionScope,
 	admission DirectoryAdmission,
-	directory MaterializationDirectory,
+	directory AuthenticatedSourceDirectory,
 ) error {
 	if !admissionMatchesDirectory(scope, admission, directory) {
 		return ErrDirectoryAdmissionMismatch

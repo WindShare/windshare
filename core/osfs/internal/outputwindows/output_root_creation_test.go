@@ -12,7 +12,6 @@ import (
 	"unsafe"
 
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
-	"github.com/windshare/windshare/core/osfs/internal/outputfault"
 	"golang.org/x/sys/windows"
 )
 
@@ -229,7 +228,7 @@ func TestWindowsV3PrivatePublicationRootFailureRemovesOwnedTarget(t *testing.T) 
 	}
 }
 
-func TestWindowsV3PrivatePublicationRootRejectsUnsafeExistingRootWithoutRepair(t *testing.T) {
+func TestWindowsV3PrivatePublicationRootRejectsUnprotectedExistingRootWithoutRepair(t *testing.T) {
 	base := windowsV3NativeTestTempDir(t)
 	parentPath := filepath.Join(base, "hostile-parent")
 	if err := os.Mkdir(parentPath, 0o700); err != nil {
@@ -266,22 +265,26 @@ func TestWindowsV3PrivatePublicationRootRejectsUnsafeExistingRootWithoutRepair(t
 	if beforeSDDL == "" {
 		t.Fatal("encode unsafe existing-root descriptor")
 	}
-	if verifyErr := windowsV3VerifyAncestryAuthorityDescriptor(before, policy); verifyErr == nil {
-		t.Fatalf("unsafe existing-root fixture was certifiable: descriptor=%q", beforeSDDL)
-	}
 	native, err := openWindowsV3OutputPlatform(target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	guard, guardErr := native.acquirePublicOperationGuard()
-	if guard != nil {
-		_ = guard.Close()
+	publicGuard, publicErr := native.acquirePublicOperationGuard()
+	if publicErr != nil {
+		t.Fatalf("ordinary public root rejected inherited DACL: %v", publicErr)
+	}
+	if err := publicGuard.Close(); err != nil {
+		t.Fatal(err)
+	}
+	privateGuard, privateErr := native.acquirePrivatePublicationRootGuard()
+	if privateGuard != nil {
+		_ = privateGuard.Close()
 	}
 	if closeErr := native.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	if guardErr == nil {
-		t.Fatalf("native public guard accepted unsafe fixture: descriptor=%q", beforeSDDL)
+	if privateErr == nil {
+		t.Fatalf("private guard accepted unprotected fixture: descriptor=%q", beforeSDDL)
 	}
 
 	platform, err := OpenPrivatePublicationRoot(target, true)
@@ -289,8 +292,7 @@ func TestWindowsV3PrivatePublicationRootRejectsUnsafeExistingRootWithoutRepair(t
 		_ = platform.Close()
 		t.Fatalf("unsafe existing publication root was accepted: descriptor=%q", beforeSDDL)
 	}
-	if !errors.Is(err, outputcap.ErrUnsafeNamespace) ||
-		!errors.Is(err, outputfault.ErrAncestryAuthorityDenied) {
+	if !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("unsafe existing publication-root error = %v", err)
 	}
 	after, readErr := windows.GetNamedSecurityInfo(
@@ -303,9 +305,6 @@ func TestWindowsV3PrivatePublicationRootRejectsUnsafeExistingRootWithoutRepair(t
 	}
 	if after.String() != beforeSDDL {
 		t.Fatalf("unsafe existing publication-root DACL was repaired: before=%q after=%q", beforeSDDL, after.String())
-	}
-	if verifyErr := windowsV3VerifyAncestryAuthorityDescriptor(after, policy); verifyErr == nil {
-		t.Fatal("unsafe existing publication root became certifiable after rejection")
 	}
 	if entries, readErr := os.ReadDir(target); readErr != nil || len(entries) != 0 {
 		t.Fatalf("unsafe existing publication-root rejection changed entries=%v error=%v", entries, readErr)

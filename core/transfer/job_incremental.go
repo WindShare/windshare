@@ -5,16 +5,20 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/transfer/catalogwalk"
+	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
 type incrementalDirectoryRequest struct {
-	directory        catalog.DirectoryID
-	path             string
-	modified         catalog.ModifiedTime
-	selected         bool
-	parentAdmission  DirectoryAdmission
-	mode             incrementalDiscoveryMode
-	expectedEvidence opaqueSelectionEvidence
+	directory             catalog.DirectoryID
+	path                  string
+	modified              catalog.ModifiedTime
+	selected              bool
+	parentAdmission       DirectoryAdmission
+	parentMaterialization MaterializedDirectoryClaim
+	mode                  incrementalDiscoveryMode
+	expectedEvidence      opaqueSelectionEvidence
 }
 
 type incrementalDiscoveryMode uint8
@@ -31,9 +35,6 @@ type incrementalDirectoryDiscovery struct {
 	request                    incrementalDirectoryRequest
 	checkpoint                 nodeLedgerCheckpoint
 	generation                 catalog.DirectoryGeneration
-	sequence                   catalog.DirectoryGenerationValidator
-	pageIndex                  uint32
-	terminal                   bool
 	commitments                []catalog.PageCommitment
 	selection                  SelectionMeasure
 	descendantAdmission        bool
@@ -179,20 +180,14 @@ func (r *jobRun) discoverIncrementalDirectory(
 	if cursor == nil {
 		return false, dependencyContractFailure(ErrCatalogCursorContract)
 	}
-	defer func() {
-		closeErr := normalizeCatalogBoundary(context.Background(), cursor.Close())
-		if closeErr != nil {
-			closeErr = r.isolateIncrementalFailure(
-				checkpoint, request.directory, request.path, closeErr,
-			)
-		}
-		resultErr = joinLifecycleFailures(resultErr, closeErr)
-	}()
-
 	discovery := incrementalDirectoryDiscovery{
 		run: r, queue: queue, request: request, checkpoint: checkpoint,
 	}
-	usable, readErr := discovery.readTerminalGeneration(ctx, cursor)
+	meter, ok := catalogwalk.NewMeter(r.job.catalogWalkLimits)
+	if !ok {
+		return false, dependencyContractFailure(ErrGenerationReplayBudget)
+	}
+	usable, readErr := discovery.readTerminalGeneration(ctx, cursor, meter)
 	if readErr != nil || !usable {
 		return false, readErr
 	}
@@ -211,14 +206,14 @@ func (r *jobRun) discoverIncrementalDirectory(
 		Stage: TransferGenerationCommitted,
 	})
 	if request.mode == incrementalDiscoveryOpaqueProbe {
-		return discovery.replayGeneration(ctx, DirectoryAdmission{})
+		return discovery.replayGeneration(ctx, DirectoryAdmission{}, MaterializedDirectoryClaim{})
 	}
 	r.job.tracker.addSelection(discovery.selection)
-	admission, proceed, admissionErr := discovery.admitDirectory(ctx)
+	admission, materialization, proceed, admissionErr := discovery.admitDirectory(ctx)
 	if admissionErr != nil || !proceed {
 		return false, admissionErr
 	}
-	selectedSubtree, replayErr := discovery.replayGeneration(ctx, admission)
+	selectedSubtree, replayErr := discovery.replayGeneration(ctx, admission, materialization)
 	if replayErr != nil {
 		return false, replayErr
 	}
@@ -240,60 +235,47 @@ func (r *jobRun) discoverIncrementalDirectory(
 func (discovery *incrementalDirectoryDiscovery) readTerminalGeneration(
 	ctx context.Context,
 	cursor catalog.DirectoryPageCursor,
+	meter *catalogwalk.Meter,
 ) (bool, error) {
-	for {
-		page, ok, rawNextErr := cursor.Next(ctx)
-		err := normalizeCatalogBoundary(ctx, rawNextErr)
-		if err != nil {
-			return false, discovery.run.isolateIncrementalFailure(
-				discovery.checkpoint, discovery.request.directory, discovery.request.path, err,
-			)
+	result, err := catalogwalk.ReadTerminalGeneration(
+		ctx,
+		cursor,
+		discovery.run.job.share,
+		discovery.request.directory,
+		meter,
+		discovery.acceptEntry,
+	)
+	if err != nil {
+		failure := normalizeCatalogBoundary(ctx, err)
+		switch {
+		case errors.Is(err, catalogwalk.ErrTerminalGenerationIntegrity):
+			failure = catalogIntegrityFailure(errors.Join(ErrCatalogIdentity, err))
+		case errors.Is(err, catalogwalk.ErrInvalidTerminalGenerationWalk):
+			failure = dependencyContractFailure(err)
 		}
-		if !ok {
-			return discovery.finishPages()
-		}
-		discarded, acceptErr := discovery.acceptPage(ctx, page)
-		if acceptErr != nil || discarded {
-			return false, acceptErr
-		}
+		return false, discovery.run.isolateIncrementalFailure(
+			discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
+		)
 	}
-}
-
-func (discovery *incrementalDirectoryDiscovery) acceptPage(
-	ctx context.Context,
-	page catalog.CatalogPage,
-) (bool, error) {
-	if !discovery.matchesPage(page) {
-		return false, catalogIntegrityFailure(ErrCatalogIdentity)
+	if result.Exhausted.Valid() {
+		failure := resourceBudgetFailure(ErrGenerationReplayBudget)
+		return false, discovery.run.isolateIncrementalFailure(
+			discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
+		)
 	}
-	if err := discovery.sequence.AcceptPage(page); err != nil {
-		return false, catalogIntegrityFailure(errors.Join(ErrCatalogIdentity, err))
+	if !result.Complete {
+		return false, discovery.rejectOmittedGeneration()
 	}
-	if len(discovery.commitments) >= discovery.run.job.replayPageCapacity {
-		return false, resourceBudgetFailure(ErrGenerationReplayBudget)
+	discovery.generation = result.Directory.Generation()
+	discovery.commitments = result.PageCommitments()
+	if len(discovery.commitments) == 0 {
+		failure := catalogIntegrityFailure(ErrCatalogIdentity)
+		return false, discovery.run.isolateIncrementalFailure(
+			discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
+		)
 	}
-	if discovery.pageIndex == 0 {
-		discovery.beginGeneration(page.Generation())
-	}
-	if err := discovery.acceptEntries(ctx, page); err != nil {
-		return false, err
-	}
-	discovery.terminal = page.Terminal()
-	discovery.commitments = append(discovery.commitments, page.Commitment())
-	discovery.pageIndex++
-	if discovery.terminal && page.OmittedCount() != 0 {
-		return true, discovery.rejectOmittedGeneration()
-	}
-	return false, nil
-}
-
-func (discovery *incrementalDirectoryDiscovery) matchesPage(page catalog.CatalogPage) bool {
-	return !discovery.terminal &&
-		page.ShareInstance() == discovery.run.job.share &&
-		page.DirectoryID() == discovery.request.directory &&
-		page.PageIndex() == discovery.pageIndex &&
-		!page.Generation().IsZero() &&
-		(discovery.pageIndex == 0 || page.Generation() == discovery.generation)
+	discovery.beginGeneration(discovery.generation)
+	return true, nil
 }
 
 func (discovery *incrementalDirectoryDiscovery) beginGeneration(generation catalog.DirectoryGeneration) {
@@ -307,25 +289,6 @@ func (discovery *incrementalDirectoryDiscovery) beginGeneration(generation catal
 		discovery.run.job.rules.isSelectedDirectoryTarget(discovery.request.directory) {
 		discovery.run.matchSelectedDirectory(discovery.request.directory)
 	}
-}
-
-func (discovery *incrementalDirectoryDiscovery) acceptEntries(
-	ctx context.Context,
-	page catalog.CatalogPage,
-) error {
-	for entryIndex := 0; entryIndex < page.EntryCount(); entryIndex++ {
-		if err := context.Cause(ctx); err != nil {
-			return cancellationFailure(ctx, err)
-		}
-		entry, exists := page.Entry(uint32(entryIndex))
-		if !exists {
-			return catalogIntegrityFailure(ErrCatalogIdentity)
-		}
-		if err := discovery.acceptEntry(entry); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (discovery *incrementalDirectoryDiscovery) acceptEntry(entry catalog.Entry) error {
@@ -441,17 +404,6 @@ func (discovery *incrementalDirectoryDiscovery) rejectOmittedGeneration() error 
 	return nil
 }
 
-func (discovery *incrementalDirectoryDiscovery) finishPages() (bool, error) {
-	if _, err := discovery.sequence.Finish(); err == nil {
-		return true, nil
-	} else {
-		err = catalogIntegrityFailure(errors.Join(ErrCatalogIdentity, err))
-		return false, discovery.run.isolateIncrementalFailure(
-			discovery.checkpoint, discovery.request.directory, discovery.request.path, err,
-		)
-	}
-}
-
 func (discovery *incrementalDirectoryDiscovery) needsAdmission() bool {
 	if discovery.request.mode == incrementalDiscoveryOpaqueProbe {
 		return false
@@ -475,35 +427,107 @@ func (discovery *incrementalDirectoryDiscovery) matchesExpectedEvidence() bool {
 
 func (discovery *incrementalDirectoryDiscovery) admitDirectory(
 	ctx context.Context,
-) (DirectoryAdmission, bool, error) {
+) (DirectoryAdmission, MaterializedDirectoryClaim, bool, error) {
 	if !discovery.needsAdmission() {
-		return DirectoryAdmission{}, true, nil
+		return DirectoryAdmission{}, MaterializedDirectoryClaim{}, true, nil
 	}
-	directory := discovery.outputDirectory()
-	admission, err := discovery.run.admitIncrementalDirectory(ctx, directory)
+	request, projection, projectionErr := discovery.outputDirectoryRequest()
+	if projectionErr != nil {
+		return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false, dependencyContractFailure(projectionErr)
+	}
+	if projection.Kind() == ordinaryoutput.ArtifactReject {
+		return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false,
+			discovery.run.recordSelectedProjectionRejection(projection)
+	}
+	admission, err := discovery.run.admitIncrementalDirectory(ctx, request)
 	if err == nil {
-		return admission, true, nil
+		if _, materialized := request.Projection().ArtifactPath(); materialized {
+			claim, claimErr := NewMaterializedDirectoryClaim(admission, request)
+			if claimErr != nil {
+				return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false, dependencyContractFailure(claimErr)
+			}
+			return admission, claim, true, nil
+		}
+		return admission, MaterializedDirectoryClaim{}, true, nil
 	}
 	policy := lifecyclePolicyFor(err)
 	if discovery.request.path == "" {
 		// Root admission establishes the parent authority for every later file.
-		return DirectoryAdmission{}, false, requireOutputPause(err)
+		return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false, requireOutputPause(err)
 	}
 	if policy.jobTerminal() || policy.outputRequiresJobPause(discovery.run.output.Capabilities()) {
-		return DirectoryAdmission{}, false, err
+		return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false, err
 	}
 	discovery.run.recordIncrementalAdmissionFailure(
-		discovery.request.directory, discovery.request.path, err,
+		discovery.request.directory, projectedFailurePath(request.Projection()), err,
 	)
-	return DirectoryAdmission{}, false, nil
+	return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false, nil
 }
 
-func (discovery *incrementalDirectoryDiscovery) outputDirectory() MaterializationDirectory {
-	return MaterializationDirectory{
-		DirectoryID: discovery.request.directory, Generation: discovery.generation,
-		ParentAdmission: discovery.request.parentAdmission,
-		Path:            discovery.request.path, ModifiedTime: discovery.request.modified,
+func (discovery *incrementalDirectoryDiscovery) outputDirectoryRequest() (
+	DirectoryMaterializationRequest,
+	ordinaryoutput.ArtifactPathProjection,
+	error,
+) {
+	sourcePath, err := sourceCatalogPath(discovery.request.path)
+	if err != nil {
+		return DirectoryMaterializationRequest{}, ordinaryoutput.ArtifactPathProjection{}, err
 	}
+	role := ordinaryoutput.SourceNodeConnectsSelection
+	if discovery.request.path != "" && discovery.request.selected {
+		role = ordinaryoutput.SourceNodeSelected
+	}
+	return projectDirectoryMaterializationRequest(
+		discovery.run.job.projector,
+		AuthenticatedSourceDirectory{
+			DirectoryID: discovery.request.directory, Generation: discovery.generation,
+			ParentAdmission: discovery.request.parentAdmission,
+			SourcePath:      sourcePath, ModifiedTime: discovery.request.modified,
+		},
+		role,
+		discovery.request.parentMaterialization,
+	)
+}
+
+// A selected node rejected for identity, kind, or frozen ancestry is a source
+// generation drift, not an unrelated branch to ignore. It intentionally creates
+// no item failure because a rejected node has no authorized artifact coordinate.
+func (r *jobRun) recordSelectedProjectionRejection(
+	projection ordinaryoutput.ArtifactPathProjection,
+) error {
+	if projection.Kind() != ordinaryoutput.ArtifactReject {
+		return dependencyContractFailure(ErrOutputContract)
+	}
+	switch projection.RejectReason() {
+	case ordinaryoutput.ArtifactRejectWrongKind,
+		ordinaryoutput.ArtifactRejectWrongIdentity,
+		ordinaryoutput.ArtifactRejectUnrelatedSource:
+		failure := catalogDirectoryFailure(fault.CatalogDirectoryStale, ErrFrozenSourceDrift)
+		r.failureMu.Lock()
+		r.retainSourceDriftFailure(failure)
+		r.discoveryFault = fault.Join(r.discoveryFault, failure.policy.value)
+		r.failureMu.Unlock()
+		r.discoveryFailed = true
+		r.job.tracker.failDiscovery()
+		return nil
+	default:
+		return dependencyContractFailure(ErrOutputContract)
+	}
+}
+
+func sourceCatalogPath(path string) (ordinaryoutput.SourceCatalogPath, error) {
+	if path == "" {
+		return ordinaryoutput.EmptySourceCatalogPath(), nil
+	}
+	return ordinaryoutput.NewSourceCatalogPath(path)
+}
+
+func projectedFailurePath(projection ordinaryoutput.ArtifactPathProjection) string {
+	path, materialized := projection.ArtifactPath()
+	if !materialized {
+		return ""
+	}
+	return path.String()
 }
 
 func (r *jobRun) recordIncrementalAdmissionFailure(
@@ -521,34 +545,35 @@ func (r *jobRun) recordIncrementalAdmissionFailure(
 	})
 }
 
-func (r *jobRun) admitIncrementalDirectory(ctx context.Context, directory MaterializationDirectory) (DirectoryAdmission, error) {
-	if err := validateMaterializationDirectoryForScope(r.directoryAdmissionScope, directory); err != nil {
+func (r *jobRun) admitIncrementalDirectory(ctx context.Context, request DirectoryMaterializationRequest) (DirectoryAdmission, error) {
+	source := request.Source()
+	if err := validateSourceDirectoryForScope(r.directoryAdmissionScope, source); err != nil {
 		return DirectoryAdmission{}, dependencyContractFailure(err)
 	}
-	admission, rawAdmissionErr := r.output.AdmitDirectory(ctx, directory)
+	admission, rawAdmissionErr := r.output.AdmitDirectory(ctx, request)
 	err := normalizeOutputBoundary(ctx, rawAdmissionErr)
 	if err != nil {
 		if !admission.IsZero() {
 			if bindingErr := ValidateDirectoryAdmissionBinding(
-				r.directoryAdmissionScope, admission, directory,
+				r.directoryAdmissionScope, admission, source,
 			); bindingErr != nil {
 				err = joinLifecycleFailures(err, outputContractFault(bindingErr))
 			}
 			err = requireOutputPause(err)
 		}
-		r.traceDirectoryAdmission(directory, err)
+		r.traceDirectoryAdmission(request, err)
 		return DirectoryAdmission{}, err
 	}
-	if err := ValidateDirectoryAdmissionBinding(r.directoryAdmissionScope, admission, directory); err != nil {
+	if err := ValidateDirectoryAdmissionBinding(r.directoryAdmissionScope, admission, source); err != nil {
 		contractFailure := outputContractFault(err)
-		r.traceDirectoryAdmission(directory, contractFailure)
+		r.traceDirectoryAdmission(request, contractFailure)
 		return DirectoryAdmission{}, contractFailure
 	}
-	r.traceDirectoryAdmission(directory, nil)
+	r.traceDirectoryAdmission(request, nil)
 	return admission, nil
 }
 
-func (r *jobRun) traceDirectoryAdmission(_ MaterializationDirectory, failure error) {
+func (r *jobRun) traceDirectoryAdmission(_ DirectoryMaterializationRequest, failure error) {
 	r.job.trace(TransferLifecycleTrace{
 		Stage: TransferDirectoryAdmitted, OutputSessionID: r.output.SessionID(),
 		Fault: closedFault(failure), Failed: failure != nil,
@@ -588,8 +613,26 @@ func (r *jobRun) finalizeIncrementalDirectory(ctx context.Context, admission Dir
 	}
 	isolatedFault, _ := settlement.IsolatedFault()
 	r.recordDirectoryFailure(DirectoryJobFailure{
-		DirectoryID: admission.DirectoryID(), Path: admission.Path(),
+		DirectoryID: admission.DirectoryID(), Path: r.artifactPathForAdmission(admission),
 		Stage: FailureDirectoryOutput, Fault: isolatedFault,
 	})
 	return nil
+}
+
+func (r *jobRun) artifactPathForAdmission(admission DirectoryAdmission) string {
+	if admission.IsZero() {
+		return ""
+	}
+	sourcePath, err := sourceCatalogPath(admission.SourcePath())
+	if err != nil {
+		return ""
+	}
+	node, err := OrdinaryOutputSourceNode(
+		catalog.NodeKindDirectory, admission.DirectoryID(), catalog.FileID{}, sourcePath,
+		ordinaryoutput.SourceNodeSelected,
+	)
+	if err != nil {
+		return ""
+	}
+	return projectedFailurePath(r.job.projector.Project(node))
 }

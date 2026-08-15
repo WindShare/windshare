@@ -12,7 +12,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
-	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -20,14 +19,13 @@ func TestCoverageC6FilesystemOutputFacadeProjectsLeaseAndPersistedRootDispositio
 	root := filepath.Join(t.TempDir(), "authority-created-output")
 	var traceMu sync.Mutex
 	var traces []FilesystemOutputTrace
+	tracer := FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+		traceMu.Lock()
+		traces = append(traces, event)
+		traceMu.Unlock()
+	})
 	authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{
-		RootPath:   root,
-		CreateRoot: true,
-		Tracer: FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
-			traceMu.Lock()
-			traces = append(traces, event)
-			traceMu.Unlock()
-		}),
+		RootPath: root, CreateRoot: true, Tracer: tracer,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -38,62 +36,83 @@ func TestCoverageC6FilesystemOutputFacadeProjectsLeaseAndPersistedRootDispositio
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := authority.OpenDirectTree(context.Background(), intent); err == nil {
-		t.Fatal("second facade session acquired the live operation lease")
-	} else {
-		result := transferfault.NormalizeBoundary(context.Background(), err)
-		fault, ok := result.Fault()
-		code, checkpoint := fault.CheckpointCode()
-		if !ok || !checkpoint || code != transferfault.CheckpointBusy ||
-			fault.Scope() != transferfault.ScopeOutputPause {
-			t.Fatalf("facade contention fault = %v", err)
-		}
+	contender, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{
+		RootPath: root, CreateRoot: true, Tracer: tracer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contender.BindDestination(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	lookup, err := contender.LookupActive(context.Background(), intent.SelectionSpec())
+	if err != nil || lookup.Kind() != FilesystemOutputLookupAlreadyRunning {
+		t.Fatalf("staged facade contention = (%d, %v)", lookup.Kind(), err)
+	}
+	if err := contender.Close(); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := first.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := authority.OpenDirectTree(context.Background(), intent)
+	if err := authority.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopener, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{
+		RootPath: root, CreateRoot: true, Tracer: tracer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := reopener.ReserveDirectTree(
+		context.Background(), intent.SelectionSpec(), receivecontract.NewCatalogRootDirectoryTree(),
+	)
+	if err != nil || reservation.Kind() != NativeDirectTreeReopened {
+		t.Fatalf("facade reservation was not reopened: (%d, %v)", reservation.Kind(), err)
+	}
+	reopenedIntent, ok := reservation.ReceiveIntent()
+	if !ok || !reopenedIntent.EqualCanonical(intent) {
+		t.Fatal("facade reopen changed its frozen intent")
+	}
+	reopened, err := reopener.OpenDirectTree(context.Background(), reopenedIntent)
 	if err != nil {
 		t.Fatalf("facade lease was not released: %v", err)
 	}
 	if _, err := reopened.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
 		t.Fatal(err)
 	}
+	if err := reopener.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	traceMu.Lock()
 	defer traceMu.Unlock()
-	var sessionOpens, acquired, contended, released int
+	var destinationAdmitted, pauseMilestones int
 	for _, event := range traces {
 		if event.ReceiveIntentDigest != intent.Digest() && !event.ReceiveIntentDigest.IsZero() {
 			t.Fatalf("trace crossed receive-intent authority: %+v", event)
 		}
-		switch {
-		case event.Operation == TraceSessionOpened:
-			sessionOpens++
-			if event.RootOpenDisposition != FilesystemOutputAuthorityCreatedRoot ||
+		if event.Operation != TraceRuntimeDecision {
+			continue
+		}
+		switch event.RuntimeOperation {
+		case FilesystemOutputRuntimeAdmitDestination:
+			destinationAdmitted++
+			if event.RuntimeDecision != FilesystemOutputRuntimeAdmitted ||
 				event.ReceiveOperationID != intent.OperationID() {
-				t.Fatalf("session-open projection = %+v", event)
+				t.Fatalf("destination admission trace = %+v", event)
 			}
-		case event.Operation == TraceNativeLock &&
-			event.NativeLockMilestone == FilesystemOutputNativeLockAcquired:
-			acquired++
-		case event.Operation == TraceNativeLock &&
-			event.NativeLockMilestone == FilesystemOutputNativeLockContended:
-			contended++
-			if !event.Failed || event.FaultDomain != uint8(transferfault.DomainCheckpoint) ||
-				event.NormalizedFaultScope != uint8(transferfault.ScopeOutputPause) ||
-				event.NormalizedFaultCode != uint16(transferfault.CheckpointBusy) {
-				t.Fatalf("contended trace projection = %+v", event)
+		case FilesystemOutputRuntimePauseTree:
+			pauseMilestones++
+			if event.ReceiveOperationID != intent.OperationID() || event.SessionID.IsZero() {
+				t.Fatalf("pause trace = %+v", event)
 			}
-		case event.Operation == TraceNativeLock &&
-			event.NativeLockMilestone == FilesystemOutputNativeLockReleased:
-			released++
 		}
 	}
-	if sessionOpens != 2 || acquired != 2 || contended != 1 || released != 2 {
+	if destinationAdmitted != 2 || pauseMilestones < 2 {
 		t.Fatalf(
-			"facade trace counts opens/acquired/contended/released = %d/%d/%d/%d",
-			sessionOpens, acquired, contended, released,
+			"facade trace counts destination-admitted/pause = %d/%d",
+			destinationAdmitted, pauseMilestones,
 		)
 	}
 }

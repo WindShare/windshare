@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
 )
@@ -22,6 +23,14 @@ var (
 	portableRuntimeFilesystems   sync.Map
 	portableRuntimeUnsafePrivate sync.Map
 )
+
+func incrementalTestIdentity16[T ~[catalog.IdentityBytes]byte](value byte) T {
+	var identity T
+	for index := range identity {
+		identity[index] = value
+	}
+	return identity
+}
 
 type runtimeTestRootSpec struct {
 	path string
@@ -131,6 +140,15 @@ type portableRuntimePlatform struct {
 
 	mu     sync.Mutex
 	closed bool
+}
+
+func (*portableRuntimePlatform) DestinationCapabilities() (outputcap.DestinationCapabilities, error) {
+	supported := outputcap.SupportedCapability()
+	return outputcap.NewDestinationCapabilities(supported, supported, supported, supported)
+}
+
+func (*portableRuntimePlatform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
+	return checkpointmodel.LiveCleanupLinuxExt4V1
 }
 
 func (platform *portableRuntimePlatform) RootOpenDisposition() outputcap.RootOpenDisposition {
@@ -385,6 +403,10 @@ func (directory *portableRuntimeDirectory) ValidateMetadataAuthority() error {
 	return err
 }
 
+func (directory *portableRuntimeDirectory) PreparePersistentDirectoryIdentityClaim() ([]byte, error) {
+	return directory.PersistentDirectoryIdentityClaim()
+}
+
 func (directory *portableRuntimeDirectory) PersistentDirectoryIdentityClaim() ([]byte, error) {
 	if _, err := directory.currentPath(); err != nil {
 		return nil, err
@@ -509,6 +531,75 @@ func (directory *portableRuntimeDirectory) OpenDirectory(
 		return nil, outputcap.ErrUnsafeNamespace
 	}
 	return newPortableRuntimeDirectory(directory.filesystem, path, info), nil
+}
+
+func (directory *portableRuntimeDirectory) CreateOrdinaryOutputStage(
+	proof outputcap.Directory,
+	name string,
+	exactSize uint64,
+) error {
+	if proof == nil || name == "" || exactSize > uint64(^uint64(0)>>1) {
+		return outputcap.ErrUnsafeNamespace
+	}
+	file, err := proof.CreateFile(name, false, int64(exactSize))
+	if err != nil {
+		return err
+	}
+	return file.Close()
+}
+
+func (directory *portableRuntimeDirectory) CreateLiveCleanupStage(
+	proof outputcap.Directory,
+	ticket checkpointmodel.LiveCleanupTicket,
+) error {
+	if !ticket.Valid() || proof == nil {
+		return outputcap.ErrUnsafeNamespace
+	}
+	file, err := proof.CreateFile(ticket.StageName(), false, int64(ticket.ExactSize()))
+	if err != nil {
+		return err
+	}
+	return file.Close()
+}
+
+func (directory *portableRuntimeDirectory) RemoveLiveCleanupStage(
+	ticket checkpointmodel.LiveCleanupTicket,
+	expected outputcap.File,
+) error {
+	if !ticket.Valid() {
+		return outputcap.ErrUnsafeNamespace
+	}
+	return directory.RemoveFile(ticket.StageName(), expected)
+}
+
+func (directory *portableRuntimeDirectory) ReservePublicDirectoryNoReplace(
+	name string,
+) (outputcap.Directory, outputcap.PublishNoReplaceOutcome, error) {
+	created, err := directory.CreateDirectory(name, false)
+	if errors.Is(err, outputcap.ErrNamespaceCollision) {
+		return nil, outputcap.PublishNoReplaceCollision, nil
+	}
+	if err != nil || created == nil {
+		return created, 0, err
+	}
+	if err := errors.Join(created.Sync(), directory.Sync()); err != nil {
+		return created, outputcap.PublishNoReplaceIndeterminate, err
+	}
+	return created, outputcap.PublishNoReplaceCommitted, nil
+}
+
+func (directory *portableRuntimeDirectory) PublishFileNoReplace(
+	source outputcap.File,
+	name string,
+) (outputcap.PublishNoReplaceOutcome, error) {
+	published, err := directory.LinkFileNoReplace(source, name)
+	if errors.Is(err, outputcap.ErrNamespaceCollision) {
+		return outputcap.PublishNoReplaceCollision, nil
+	}
+	if err != nil || published == nil {
+		return 0, err
+	}
+	return outputcap.PublishNoReplaceCommitted, errors.Join(published.Sync(), published.Close(), directory.Sync())
 }
 
 func (directory *portableRuntimeDirectory) CreateDirectory(

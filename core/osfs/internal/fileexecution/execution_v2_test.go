@@ -11,14 +11,16 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 type executionFixture struct {
-	intent    transfer.ReceiveIntent
-	ownership checkpointmodel.Ownership
-	session   transfer.OutputSessionID
-	file      transfer.MaterializationFile
+	intent      transfer.ReceiveIntent
+	ownership   checkpointmodel.Ownership
+	session     transfer.OutputSessionID
+	file        transfer.MaterializationFile
+	destination transfer.OutputDestinationPath
 }
 
 func newExecutionFixture(t *testing.T, exactSize uint64) executionFixture {
@@ -75,19 +77,19 @@ func newExecutionFixture(t *testing.T, exactSize uint64) executionFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sourcePath, err := ordinaryoutput.NewSourceCatalogPath("file.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationPath, err := transfer.NewOutputDestinationPath("file.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
 	geometry, err := content.NewFileGeometry(exactSize, catalog.MinChunkSize)
 	if err != nil {
 		t.Fatal(err)
 	}
 	descriptor, err := content.NewFileRevisionDescriptor(share, fileID, revision, geometry, catalog.ModifiedTime{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	locator, err := transfer.NewPathMaterializationLocator("file.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	target, err := transfer.NewFileMaterializationTarget(session, descriptor, locator)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,17 +100,27 @@ func newExecutionFixture(t *testing.T, exactSize uint64) executionFixture {
 	admission, err := transfer.NewDirectoryAdmissionWithSecret(
 		bytes.Repeat([]byte{0x25}, 32),
 		scope,
-		transfer.MaterializationDirectory{DirectoryID: root, Generation: generation},
+		transfer.AuthenticatedSourceDirectory{
+			DirectoryID: root, Generation: generation,
+			SourcePath: ordinaryoutput.EmptySourceCatalogPath(),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := transfer.NewMaterializationFile(
+		projector, sourcePath, descriptor, session, admission, transfer.MaterializedDirectoryClaim{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return executionFixture{
 		intent: intent, ownership: ownership, session: session,
-		file: transfer.MaterializationFile{
-			Path: "file.bin", ExpectedSize: exactSize, Descriptor: descriptor,
-			Target: target, ParentAdmission: admission,
-		},
+		file: file, destination: destinationPath,
 	}
 }
 
@@ -157,6 +169,17 @@ func (repository *memoryCheckpointRepository) Store(
 	return observed, err
 }
 
+func (repository *memoryCheckpointRepository) Abandon(
+	_ context.Context,
+	record checkpointmodel.Record,
+) error {
+	if !repository.present || repository.record.RecordID() != record.RecordID() {
+		return ErrCheckpointBinding
+	}
+	repository.present = false
+	return nil
+}
+
 type memoryOwnedData struct {
 	bytes    []byte
 	modified catalog.ModifiedTime
@@ -169,6 +192,7 @@ type memoryOwnedFile struct {
 	writeErr    error
 	syncErr     error
 	metadataErr error
+	closeErr    error
 }
 
 func (file *memoryOwnedFile) ObjectID() checkpointmodel.ObjectID { return file.object }
@@ -183,6 +207,9 @@ func (file *memoryOwnedFile) WriteAt(value []byte, offset int64) (int, error) {
 }
 func (file *memoryOwnedFile) Sync() error { return file.syncErr }
 func (file *memoryOwnedFile) SetModifiedTime(value catalog.ModifiedTime) error {
+	if file.metadataErr != nil {
+		return file.metadataErr
+	}
 	file.data.modified = value
 	return nil
 }
@@ -191,7 +218,7 @@ func (file *memoryOwnedFile) MetadataMatches(size uint64, modified catalog.Modif
 }
 func (file *memoryOwnedFile) Close() error {
 	file.closed = true
-	return nil
+	return file.closeErr
 }
 
 type memoryPlatform struct {
@@ -206,8 +233,25 @@ func newMemoryPlatform() *memoryPlatform {
 	return &memoryPlatform{objects: make(map[checkpointmodel.ObjectID]*memoryOwnedData)}
 }
 
+func (platform *memoryPlatform) ObserveOwnedObject(
+	_ context.Context,
+	object checkpointmodel.ObjectID,
+	_ uint64,
+) (OwnedObservation, error) {
+	condition := OwnedAbsent
+	if platform.createCollisions > 0 {
+		platform.createCollisions--
+		condition = OwnedObjectCollision
+	} else if platform.objects[object] != nil {
+		condition = OwnedReady
+	}
+	observation, _ := NewOwnedObservation(object, condition)
+	return observation, nil
+}
+
 func (platform *memoryPlatform) CreateOwnedFile(
 	_ context.Context,
+	_ FileDestination,
 	object checkpointmodel.ObjectID,
 	size uint64,
 ) (OwnedFile, OwnedObservation, error) {
@@ -264,6 +308,7 @@ type memoryDestination struct {
 	observeErr error
 	publishErr error
 	syncErr    error
+	closeErr   error
 	closed     bool
 }
 
@@ -296,7 +341,7 @@ func (destination *memoryDestination) SyncFinalParent(context.Context) error {
 }
 func (destination *memoryDestination) Close() error {
 	destination.closed = true
-	return nil
+	return destination.closeErr
 }
 
 type memoryDirectoryAuthority struct {
@@ -307,6 +352,7 @@ type memoryDirectoryAuthority struct {
 func (authority *memoryDirectoryAuthority) BindFile(
 	context.Context,
 	transfer.MaterializationFile,
+	transfer.OutputDestinationPath,
 ) (FileDestination, error) {
 	if authority.err != nil {
 		return nil, authority.err
@@ -345,13 +391,13 @@ func TestDirectTreeFileCheckpointIsTheOnlyRangeAuthority(t *testing.T) {
 	fixture := newExecutionFixture(t, 8)
 	repository := &memoryCheckpointRepository{}
 	platform := newMemoryPlatform()
-	destination := &memoryDestination{target: fixture.file.Target, final: FinalAbsent}
+	destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 	var traces []TraceEvent
 	engine := newFixtureEngine(t, fixture, repository, platform, destination, TraceSinkFunc(func(event TraceEvent) {
 		traces = append(traces, event)
 	}))
 
-	start, err := engine.BeginFile(context.Background(), fixture.file)
+	start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,9 +427,8 @@ func TestDirectTreeFileCheckpointIsTheOnlyRangeAuthority(t *testing.T) {
 		repository.record.VerifiedRanges()[0] != (checkpointmodel.Range{Offset: 0, End: 8}) {
 		t.Fatalf("published checkpoint = phase %d ranges %#v", repository.record.Phase(), repository.record.VerifiedRanges())
 	}
-	wantRetirement := []RetirementStep{RetirementRemoveStage, RetirementSyncStageNamespace}
-	if !slicesEqual(platform.retirements, wantRetirement) {
-		t.Fatalf("published cleanup = %v, want %v", platform.retirements, wantRetirement)
+	if len(platform.retirements) != 0 {
+		t.Fatalf("published witness was retired before operation settlement: %v", platform.retirements)
 	}
 	if len(traces) == 0 {
 		t.Fatal("execution emitted no structured milestones")
@@ -400,9 +445,9 @@ func TestPausedCheckpointReopensAndRetiresInOwnershipOrder(t *testing.T) {
 	fixture := newExecutionFixture(t, 8)
 	repository := &memoryCheckpointRepository{}
 	platform := newMemoryPlatform()
-	destination := &memoryDestination{target: fixture.file.Target, final: FinalAbsent}
+	destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 	engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
-	start, err := engine.BeginFile(context.Background(), fixture.file)
+	start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +461,7 @@ func TestPausedCheckpointReopensAndRetiresInOwnershipOrder(t *testing.T) {
 	}
 
 	reopenedEngine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
-	reopened, err := reopenedEngine.BeginFile(context.Background(), fixture.file)
+	reopened, err := reopenedEngine.BeginFile(context.Background(), fixture.file, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +472,7 @@ func TestPausedCheckpointReopensAndRetiresInOwnershipOrder(t *testing.T) {
 	retired, err := reopenedTransaction.Retire(
 		context.Background(), transfer.FileRetireIsolatedPermanentSourceFailure,
 	)
-	if err != nil || retired.Kind() != transfer.FileRetired {
+	if err != nil || retired.Kind() != transfer.FileFailed {
 		t.Fatalf("retire = (%d, %v)", retired.Kind(), err)
 	}
 	want := []RetirementStep{
@@ -443,7 +488,7 @@ func TestLaterGenerationCandidateReopensAtItsDurableRangeCut(t *testing.T) {
 	fixture := newExecutionFixture(t, 8)
 	repository := &memoryCheckpointRepository{}
 	platform := newMemoryPlatform()
-	destination := &memoryDestination{target: fixture.file.Target, final: FinalAbsent}
+	destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 	seedEngine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
 	key, err := seedEngine.checkpointKey(fixture.file)
 	if err != nil {
@@ -474,7 +519,7 @@ func TestLaterGenerationCandidateReopensAtItsDurableRangeCut(t *testing.T) {
 	platform.objects[object] = &memoryOwnedData{bytes: make([]byte, 8)}
 
 	engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
-	start, err := engine.BeginFile(context.Background(), fixture.file)
+	start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,9 +544,9 @@ func TestUnknownOwnershipNeverBecomesHaveState(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			repository := &memoryCheckpointRepository{}
 			platform := newMemoryPlatform()
-			destination := &memoryDestination{target: fixture.file.Target, final: final}
+			destination := &memoryDestination{target: fixture.file.Target(), final: final}
 			engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
-			start, err := engine.BeginFile(context.Background(), fixture.file)
+			start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
 			if !errors.Is(err, ErrTargetOwnershipUnknown) {
 				t.Fatalf("unknown target error = %v", err)
 			}
@@ -513,9 +558,9 @@ func TestUnknownOwnershipNeverBecomesHaveState(t *testing.T) {
 
 	repository := &memoryCheckpointRepository{}
 	platform := newMemoryPlatform()
-	destination := &memoryDestination{target: fixture.file.Target, final: FinalAbsent}
+	destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 	engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
-	start, err := engine.BeginFile(context.Background(), fixture.file)
+	start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,12 +569,16 @@ func TestUnknownOwnershipNeverBecomesHaveState(t *testing.T) {
 		t.Fatal(err)
 	}
 	destination.publish = FinalUnsafe
-	if _, err := transaction.Commit(context.Background()); !errors.Is(err, ErrPublicationAmbiguous) ||
-		!errors.Is(err, ErrTargetOwnershipUnknown) {
-		t.Fatalf("unknown publication error = %v", err)
+	settlement, err := transaction.Commit(context.Background())
+	if err != nil || settlement.Kind() != transfer.FileItemBlocked {
+		t.Fatalf("unknown publication settlement = (%d, %v)", settlement.Kind(), err)
 	}
-	if repository.record.Phase() != checkpointmodel.PhasePublishing {
-		t.Fatalf("unknown publication phase = %d", repository.record.Phase())
+	reference, reason, blocked := settlement.ItemBlock()
+	if !blocked || reference.IsZero() || reason != transfer.ItemBlockPublicationAmbiguous ||
+		repository.record.Phase() != checkpointmodel.PhaseQuarantined ||
+		repository.record.QuarantineReason() != checkpointmodel.QuarantineFinalUnsafe {
+		t.Fatalf("unknown publication evidence = (blocked %t reason %d phase %d quarantine %d)",
+			blocked, reason, repository.record.Phase(), repository.record.QuarantineReason())
 	}
 }
 
@@ -537,9 +586,9 @@ func TestFileTransactionRejectsOverlapsBoundsAndClosedReuse(t *testing.T) {
 	fixture := newExecutionFixture(t, 4)
 	repository := &memoryCheckpointRepository{}
 	platform := newMemoryPlatform()
-	destination := &memoryDestination{target: fixture.file.Target, final: FinalAbsent}
+	destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 	engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
-	start, err := engine.BeginFile(context.Background(), fixture.file)
+	start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,11 +613,44 @@ func TestFileTransactionRejectsOverlapsBoundsAndClosedReuse(t *testing.T) {
 	}
 }
 
+func TestBeginExistingMissingPartialPreservesOldAndStartsFresh(t *testing.T) {
+	fixture := newExecutionFixture(t, 4)
+	repository := &memoryCheckpointRepository{}
+	platform := newMemoryPlatform()
+	destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
+	engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
+	engine.random = bytes.NewReader(bytes.Repeat([]byte{0x81}, 128))
+	key, err := engine.checkpointKey(fixture.file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldObject, _ := checkpointmodel.ObjectIDFromBytes(bytes.Repeat([]byte{0x71}, transfer.OwnedObjectIdentityBytes))
+	candidate, _ := newInitialRecord(key, oldObject)
+	oldRecord, _ := checkpointmodel.PromoteInitialCandidate(candidate)
+	repository.record, repository.present = oldRecord, true
+	platform.openCondition = OwnedStageMissing
+
+	start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, _, ok := start.Transaction()
+	if !ok || transaction.Binding().ObjectIdentity().Bytes()[0] != 0x81 {
+		t.Fatalf("fresh transaction = (%t, %x)", ok, transaction.Binding().ObjectIdentity().Bytes())
+	}
+	if repository.record.RecordID() == oldRecord.RecordID() {
+		t.Fatal("missing old partial retained lookup authority")
+	}
+	if _, found := platform.objects[oldObject]; found {
+		t.Fatal("recovery manufactured ownership of the missing old object")
+	}
+}
+
 func TestRecoveryReducerCoversClosedOwnershipOutcomes(t *testing.T) {
 	fixture := newExecutionFixture(t, 4)
 	engine := newFixtureEngine(
 		t, fixture, &memoryCheckpointRepository{}, newMemoryPlatform(),
-		&memoryDestination{target: fixture.file.Target, final: FinalAbsent}, nil,
+		&memoryDestination{target: fixture.file.Target(), final: FinalAbsent}, nil,
 	)
 	key, err := engine.checkpointKey(fixture.file)
 	if err != nil {
@@ -622,16 +704,16 @@ func TestRecoveryReducerCoversClosedOwnershipOutcomes(t *testing.T) {
 		final  FinalObservation
 		want   RecoveryAction
 	}{
-		"active":              {active, owned(OwnedReady), final(FinalAbsent), RecoveryOpenActive},
-		"paused":              {paused, owned(OwnedReady), final(FinalAbsent), RecoveryActivate},
-		"publishing-retry":    {publishing, owned(OwnedReady), final(FinalAbsent), RecoveryRetryPublication},
-		"publishing-blocked":  {publishing, owned(OwnedReady), final(FinalCollision), RecoveryPublishBlocked},
-		"publishing-complete": {publishing, owned(OwnedReady), final(FinalOwnedExact), RecoveryCompletePublication},
-		"published":           {published, owned(OwnedStageMissing), final(FinalOwnedExact), RecoveryReturnPublished},
-		"retired":             {retired, owned(OwnedAbsent), final(FinalAbsent), RecoveryReturnRetired},
-		"quarantined":         {quarantined, owned(OwnedReady), final(FinalAbsent), RecoveryReturnQuarantined},
-		"unknown":             {active, owned(OwnedReady), final(FinalUnsafe), RecoveryNeedsAttention},
-		"anchor-missing":      {active, owned(OwnedAnchorMissing), final(FinalAbsent), RecoveryInstallQuarantine},
+		"active":               {active, owned(OwnedReady), final(FinalAbsent), RecoveryOpenActive},
+		"paused":               {paused, owned(OwnedReady), final(FinalAbsent), RecoveryActivate},
+		"publishing-retry":     {publishing, owned(OwnedReady), final(FinalAbsent), RecoveryRetryPublication},
+		"publishing-collision": {publishing, owned(OwnedReady), final(FinalCollision), RecoveryReturnCollision},
+		"publishing-complete":  {publishing, owned(OwnedReady), final(FinalOwnedExact), RecoveryCompletePublication},
+		"published":            {published, owned(OwnedStageMissing), final(FinalOwnedExact), RecoveryReturnPublished},
+		"retired":              {retired, owned(OwnedAbsent), final(FinalAbsent), RecoveryReturnRetired},
+		"quarantined":          {quarantined, owned(OwnedReady), final(FinalAbsent), RecoveryReturnQuarantined},
+		"unknown":              {active, owned(OwnedReady), final(FinalUnsafe), RecoveryInstallQuarantine},
+		"anchor-missing":       {active, owned(OwnedAnchorMissing), final(FinalAbsent), RecoveryStartNewPreservingOld},
 	} {
 		t.Run(name, func(t *testing.T) {
 			decision, err := ReduceRecovery(test.record, test.owned, test.final)
@@ -659,9 +741,9 @@ func TestEngineRejectsInvalidConfigurationAndExhaustedObjectAllocation(t *testin
 	repository := &memoryCheckpointRepository{}
 	platform := newMemoryPlatform()
 	platform.createCollisions = MaximumObjectAllocationAttempts
-	destination := &memoryDestination{target: fixture.file.Target, final: FinalAbsent}
+	destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 	engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
-	if _, err := engine.BeginFile(context.Background(), fixture.file); !errors.Is(err, ErrObjectAllocation) {
+	if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, ErrObjectAllocation) {
 		t.Fatalf("allocation exhaustion error = %v", err)
 	}
 	if repository.present {
@@ -673,7 +755,7 @@ func TestBeginExistingReducesTerminalAndRecoveryCuts(t *testing.T) {
 	fixture := newExecutionFixture(t, 4)
 	seedRepository := &memoryCheckpointRepository{}
 	seedPlatform := newMemoryPlatform()
-	seedDestination := &memoryDestination{target: fixture.file.Target, final: FinalAbsent}
+	seedDestination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 	seedEngine := newFixtureEngine(t, fixture, seedRepository, seedPlatform, seedDestination, nil)
 	key, err := seedEngine.checkpointKey(fixture.file)
 	if err != nil {
@@ -700,27 +782,48 @@ func TestBeginExistingReducesTerminalAndRecoveryCuts(t *testing.T) {
 		final  FinalCondition
 		want   transfer.FileSettlementKind
 	}{
-		"complete-publication": {publishing, OwnedReady, FinalOwnedExact, transfer.FilePublished},
-		"publication-blocked":  {publishing, OwnedReady, FinalCollision, transfer.FilePublishBlocked},
-		"published":            {published, OwnedStageMissing, FinalOwnedExact, transfer.FilePublished},
-		"retired":              {retired, OwnedAbsent, FinalAbsent, transfer.FileRetired},
-		"quarantined":          {quarantined, OwnedReady, FinalAbsent, transfer.FileQuarantined},
-		"install-quarantine":   {active, OwnedAnchorMissing, FinalAbsent, transfer.FileQuarantined},
+		"complete-publication":  {publishing, OwnedReady, FinalOwnedExact, transfer.FilePublished},
+		"publication-collision": {publishing, OwnedReady, FinalCollision, transfer.FileCollision},
+		"published":             {published, OwnedStageMissing, FinalOwnedExact, transfer.FilePublished},
+		"retired":               {retired, OwnedAbsent, FinalAbsent, transfer.FileFailed},
+		"quarantined":           {quarantined, OwnedReady, FinalAbsent, transfer.FileItemBlocked},
 	} {
 		t.Run(name, func(t *testing.T) {
 			repository := &memoryCheckpointRepository{record: test.record, present: true}
 			platform := newMemoryPlatform()
 			platform.objects[object] = &memoryOwnedData{bytes: make([]byte, 4)}
 			platform.openCondition = test.owned
-			destination := &memoryDestination{target: fixture.file.Target, final: test.final}
+			destination := &memoryDestination{target: fixture.file.Target(), final: test.final}
 			engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
-			start, err := engine.BeginFile(context.Background(), fixture.file)
+			start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
 			if err != nil {
 				t.Fatal(err)
 			}
 			settlement, ok := start.ImmediateSettlement()
 			if !ok || settlement.Kind() != test.want {
 				t.Fatalf("settlement = (%d, %t), want %d", settlement.Kind(), ok, test.want)
+			}
+			if test.want == transfer.FileCollision {
+				if repository.record.Phase() != checkpointmodel.PhasePaused ||
+					repository.record.QuarantineReason() != 0 {
+					t.Fatalf("publishing collision record = (phase %d reason %d)",
+						repository.record.Phase(), repository.record.QuarantineReason())
+				}
+				destination.final = FinalAbsent
+				retry, retryErr := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
+				if retryErr != nil {
+					t.Fatal(retryErr)
+				}
+				transaction, durable, hasTransaction := retry.Transaction()
+				if !hasTransaction || !transfer.RangesCoverFile(4, durable.Ranges()) {
+					t.Fatalf("publishing collision retry = (transaction %t ranges %v)",
+						hasTransaction, durable.Ranges().Ranges())
+				}
+				retriedSettlement, retryErr := transaction.Commit(context.Background())
+				if retryErr != nil || retriedSettlement.Kind() != transfer.FilePublished {
+					t.Fatalf("publishing collision retry commit = (%d, %v)",
+						retriedSettlement.Kind(), retryErr)
+				}
 			}
 		})
 	}
@@ -730,7 +833,7 @@ func TestExecutionValueObjectsAndFaultBoundariesAreClosed(t *testing.T) {
 	fixture := newExecutionFixture(t, 2)
 	engine := newFixtureEngine(
 		t, fixture, &memoryCheckpointRepository{}, newMemoryPlatform(),
-		&memoryDestination{target: fixture.file.Target, final: FinalAbsent}, nil,
+		&memoryDestination{target: fixture.file.Target(), final: FinalAbsent}, nil,
 	)
 	key, err := engine.checkpointKey(fixture.file)
 	if err != nil {
@@ -739,9 +842,9 @@ func TestExecutionValueObjectsAndFaultBoundariesAreClosed(t *testing.T) {
 	if key.OperationID() != fixture.intent.OperationID() ||
 		key.ReceiveIntentDigest() != fixture.intent.Digest() ||
 		key.MaterializationBindingDigest() != fixture.intent.BindingDigest() ||
-		key.FileID() != fixture.file.Descriptor.FileID() ||
-		key.FileRevision() != fixture.file.Descriptor.FileRevision() ||
-		key.CanonicalPath() != fixture.file.Path || key.ExactSize() != 2 ||
+		key.FileID() != fixture.file.Descriptor().FileID() ||
+		key.FileRevision() != fixture.file.Descriptor().FileRevision() ||
+		key.CanonicalPath() != fixture.file.ArtifactPath().String() || key.ExactSize() != 2 ||
 		key.MaterializerKind() != checkpointmodel.MaterializerNativeTree ||
 		key.AuthorityRef() != fixture.ownership.AuthorityRef() {
 		t.Fatal("checkpoint key accessors lost an immutable binding")
@@ -755,12 +858,11 @@ func TestExecutionValueObjectsAndFaultBoundariesAreClosed(t *testing.T) {
 		t.Fatalf("owned observation = %+v, %v", owned, err)
 	}
 	identity, _ := transfer.OwnedObjectIDFromBytes(object.Bytes())
-	expectation, err := NewFinalExpectation(identity, 2, catalog.ModifiedTime{})
-	if err != nil || expectation.ObjectIdentity() != identity || expectation.ExactSize() != 2 ||
-		expectation.ModifiedTime().Present() {
+	expectation, err := NewFinalExpectation(identity, 2)
+	if err != nil || expectation.ObjectIdentity() != identity || expectation.ExactSize() != 2 {
 		t.Fatalf("final expectation = %+v, %v", expectation, err)
 	}
-	if _, err := NewFinalExpectation(transfer.OwnedObjectID{}, 2, catalog.ModifiedTime{}); !errors.Is(err, ErrInvalidObservation) {
+	if _, err := NewFinalExpectation(transfer.OwnedObjectID{}, 2); !errors.Is(err, ErrInvalidObservation) {
 		t.Fatalf("invalid expectation error = %v", err)
 	}
 	if !errors.Is(checkpointBindingError(ErrCheckpointBinding), ErrCheckpointBinding) ||

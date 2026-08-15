@@ -16,7 +16,7 @@ import (
 )
 
 const windowsV3AncestryGuardAccess = windows.FILE_TRAVERSE | windows.FILE_READ_ATTRIBUTES |
-	windows.READ_CONTROL | windows.SYNCHRONIZE
+	windows.SYNCHRONIZE
 
 type windowsV3AncestryGuardScope uint8
 
@@ -24,6 +24,7 @@ const (
 	windowsV3GuardPublicOutputRoot windowsV3AncestryGuardScope = iota + 1
 	windowsV3GuardExternalPlacement
 	windowsV3GuardPrivateRootCreation
+	windowsV3GuardPrivatePublicationRoot
 )
 
 type windowsV3AncestryDirectoryOpener interface {
@@ -110,6 +111,13 @@ func (platform *windowsV3OutputPlatform) acquirePrivateRootCreationGuard() (
 	return platform.acquireDirectoryAncestryGuard(windowsV3GuardPrivateRootCreation)
 }
 
+func (platform *windowsV3OutputPlatform) acquirePrivatePublicationRootGuard() (
+	_ *windowsV3PublicOperationGuard,
+	resultErr error,
+) {
+	return platform.acquireDirectoryAncestryGuard(windowsV3GuardPrivatePublicationRoot)
+}
+
 func (platform *windowsV3OutputPlatform) acquireDirectoryAncestryGuard(
 	scope windowsV3AncestryGuardScope,
 ) (_ *windowsV3PublicOperationGuard, resultErr error) {
@@ -172,14 +180,20 @@ func (platform *windowsV3OutputPlatform) acquireDirectoryAncestryGuardWithOpener
 			continue
 		}
 		guard.root = &windowsV3Directory{
-			file: file, path: root.path, volume: root.volume,
+			file: file, metadataHandle: windows.InvalidHandle,
+			path: root.path, volume: root.volume,
 			objectIDs: root.objectIDs, objectIDState: newWindowsV3PersistentObjectIDState(),
 			inspector: root.inspector, policy: root.policy, ancestryAuthority: root.ancestryAuthority,
 			enumerate: root.enumerate, createObserver: root.createObserver,
+			private:        scope == windowsV3GuardPrivatePublicationRoot,
 			placementGuard: true, selfPlacementGuard: true,
 		}
 	}
 
+	if !guard.root.private {
+		guard.root.metadataHandle, guard.root.metadataOpenErr = root.openDirectoryMetadataHandle(".", guard.root)
+		guard.root.metadataHandleOpen = guard.root.metadataOpenErr == nil
+	}
 	same, err := sameWindowsV3OpenedDirectory(root, guard.root)
 	if err != nil || !same {
 		return nil, windowsV3Failure(operation, root.path, errWindowsV3OutputUnsafe,
@@ -196,6 +210,8 @@ func windowsV3AncestryGuardOperation(scope windowsV3AncestryGuardScope) (string,
 		return "acquire external output placement guard", nil
 	case windowsV3GuardPrivateRootCreation:
 		return "acquire private publication-root creation guard", nil
+	case windowsV3GuardPrivatePublicationRoot:
+		return "acquire private publication-root guard", nil
 	default:
 		return "acquire output ancestry guard", errors.New("windows ancestry guard scope is invalid")
 	}
@@ -222,8 +238,14 @@ func (traversal windowsV3AncestryGuardTraversal) openEntry(
 	)
 	handle, _, err := traversal.opener.Open(openRoot, openPath, access, objectAttributes)
 	if err != nil {
+		category := errWindowsV3OutputUnsupported
+		cause := err
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			category = errWindowsV3OutputUnsafe
+			cause = errors.Join(outputfault.ErrAncestryAuthorityDenied, err)
+		}
 		return nil, windowsV3HandleFacts{}, windowsV3Failure(
-			traversal.operation, path, errWindowsV3OutputUnsupported, err,
+			traversal.operation, path, category, cause,
 		)
 	}
 	file := os.NewFile(uintptr(handle), path)
@@ -236,8 +258,7 @@ func (traversal windowsV3AncestryGuardTraversal) openEntry(
 	}
 	facts, inspectErr := traversal.root.inspector.Inspect(handle)
 	validateErr := traversal.validateEntry(handle, openPath, index, rootEntry, parentCaseSensitive, facts, inspectErr)
-	authorityErr := traversal.verifyRootAuthority(handle, rootEntry, inspectErr, validateErr)
-	if cause := errors.Join(inspectErr, validateErr, authorityErr); cause != nil {
+	if cause := errors.Join(inspectErr, validateErr); cause != nil {
 		class := errWindowsV3OutputUnsafe
 		if errors.Is(cause, errWindowsV3OutputUnsupported) {
 			class = errWindowsV3OutputUnsupported
@@ -279,10 +300,14 @@ func windowsV3AncestryOpenParameters(
 }
 
 func windowsV3AncestryRootAccess(scope windowsV3AncestryGuardScope) uint32 {
-	if scope == windowsV3GuardPrivateRootCreation {
+	switch scope {
+	case windowsV3GuardPrivateRootCreation:
 		return windowsV3PrivateRootParentAccess()
+	case windowsV3GuardPrivatePublicationRoot:
+		return windowsV3PrivatePublicationRootAccess()
+	default:
+		return windowsV3RootDirectoryAccess()
 	}
-	return windowsV3RootDirectoryAccess()
 }
 
 func (traversal windowsV3AncestryGuardTraversal) validateEntry(
@@ -298,10 +323,14 @@ func (traversal windowsV3AncestryGuardTraversal) validateEntry(
 		return nil
 	}
 	var err error
-	if rootEntry && traversal.scope == windowsV3GuardPublicOutputRoot {
+	if rootEntry && (traversal.scope == windowsV3GuardPublicOutputRoot ||
+		traversal.scope == windowsV3GuardPrivatePublicationRoot) {
 		err = validateWindowsV3Certification(facts)
 		if err == nil {
 			err = windowsV3ValidateOpenedObject(facts, traversal.root.volume, true)
+		}
+		if err == nil && traversal.scope == windowsV3GuardPrivatePublicationRoot {
+			err = traversal.root.policy.verify(handle, true)
 		}
 	} else {
 		err = validateWindowsV3ExternalPlacement(facts, traversal.root.volume)
@@ -310,27 +339,6 @@ func (traversal windowsV3AncestryGuardTraversal) validateEntry(
 		return err
 	}
 	return windowsV3VerifyOpenedPlacementLeafAuthority(handle, openPath, parentCaseSensitive)
-}
-
-func (traversal windowsV3AncestryGuardTraversal) verifyRootAuthority(
-	handle windows.Handle,
-	rootEntry bool,
-	inspectErr error,
-	validateErr error,
-) error {
-	if !rootEntry || traversal.scope != windowsV3GuardPublicOutputRoot || inspectErr != nil || validateErr != nil {
-		return nil
-	}
-	// Windows pins every external component against delete sharing, so ambient
-	// ACLs above the output root cannot move that placement during an operation.
-	// Cross-principal ACL admission therefore starts at the output root.
-	if traversal.root.ancestryAuthority == nil {
-		return errors.New("windows ancestry authority verifier is absent")
-	}
-	if err := traversal.root.ancestryAuthority.Verify(handle); err != nil {
-		return errors.Join(outputfault.ErrAncestryAuthorityDenied, err)
-	}
-	return nil
 }
 
 func windowsV3AbsoluteDirectoryAncestry(path string) ([]string, error) {

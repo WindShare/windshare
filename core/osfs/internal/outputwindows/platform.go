@@ -104,7 +104,7 @@ func retainWindowsV3PrivatePublicationRoot(
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace,
 			errors.New("private publication root has no native platform"))
 	}
-	guard, err := native.acquirePublicOperationGuard()
+	guard, err := native.acquirePrivatePublicationRootGuard()
 	if err != nil {
 		return nil, errors.Join(err, native.Close())
 	}
@@ -199,7 +199,7 @@ func createWindowsV3PrivatePublicationRootWithObserver(
 		return nil, windowsV3Failure(operation, path, errWindowsV3OutputUnsafe,
 			errors.Join(errors.New("certified private publication root changed identity"), compareErr))
 	}
-	createdClaim, err = created.privateIdentityClaim()
+	createdClaim, err = created.preparePrivateIdentityClaim()
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +253,7 @@ func cleanupWindowsV3PrivatePublicationRoot(
 		cleanupTarget = reopened
 		defer func() { resultErr = errors.Join(resultErr, cleanupTarget.Close()) }()
 
-		claim, claimErr := cleanupTarget.privateIdentityClaim()
+		claim, claimErr := cleanupTarget.preparePrivateIdentityClaim()
 		if claimErr != nil || len(createdClaim) == 0 || !bytes.Equal(claim, createdClaim) {
 			return windowsV3Failure(operation, path, errWindowsV3OutputUnsafe,
 				errors.Join(errors.New("private publication-root cleanup identity changed"), claimErr))

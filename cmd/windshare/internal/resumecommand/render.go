@@ -1,11 +1,8 @@
 package resumecommand
 
 import (
-	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/windshare/windshare/core/osfs"
 )
 
 type textRenderer struct{}
@@ -13,63 +10,82 @@ type textRenderer struct{}
 func (textRenderer) Usage() string {
 	return "Usage:\n" +
 		"  windshare resume list -o <directory>\n" +
-		"      List current operation and terminal state through a fresh read-only inventory.\n\n" +
+		"      List unfinished operations owned by that output directory.\n\n" +
 		"  windshare resume discard -o <directory> --item <N>\n" +
-		"      Re-list one current item and require the exact terminal confirmation \"discard N\".\n" +
-		"      Only owned recovery artifacts are eligible; published files are always preserved.\n\n" +
-		"  windshare resume cleanup -o <directory>\n" +
-		"      Run isolated legacy-state maintenance. It cannot discard current resume state.\n"
+		"      Re-list one operation and require the exact confirmation \"discard N\".\n" +
+		"      Only identity-matched unfinished state is removed; final and foreign objects stay.\n\n" +
+		"States:\n" +
+		"  incomplete                 Unfinished, with no currently usable owned partial.\n" +
+		"  resumable                  At least one verified owned partial can continue.\n" +
+		"  cleanup-pending            Transfer ended, but exact owned cleanup remains.\n" +
+		"  operation-needs-attention  Root, registry, lease, or operation ownership is uncertain.\n" +
+		"  item-blocked               A child cannot be resolved safely; its objects stay.\n" +
+		"  running=true               Another process holds the operation; details are not inspected.\n" +
+		"  registry_unknown=true      Registry ownership is incomplete, so discard is disabled.\n"
 }
 
-func (textRenderer) Inventory(items []resumeStateItem) (string, bool, error) {
+func (textRenderer) Inventory(snapshot resumeInventorySnapshot) (string, bool, error) {
+	if !snapshot.valid() {
+		return "", false, errResumeStateContract
+	}
 	status := resumeListStatusReady
-	for _, item := range items {
-		if !item.valid() {
-			return "", false, errResumeStateContract
-		}
-		if item.status == resumeItemStatusNeedsAttention {
-			status = resumeListStatusNeedsAttention
-		}
+	if snapshot.needsAttention() {
+		status = resumeListStatusNeedsAttention
 	}
 	var output strings.Builder
-	fmt.Fprintf(&output, "resume_list_status=%q items=%d\n", status, len(items))
-	for index, item := range items {
-		rendered, err := renderResumeStateItem(index+1, item)
+	fmt.Fprintf(
+		&output,
+		"resume_list_status=%q operations=%d registry_unknown=%t\n",
+		status,
+		len(snapshot.operations),
+		snapshot.registryUnknown,
+	)
+	for index, operation := range snapshot.operations {
+		rendered, err := renderResumeOperation(index+1, operation)
 		if err != nil {
 			return "", false, err
 		}
 		output.WriteString(rendered)
 	}
-	return output.String(), status == resumeListStatusNeedsAttention, nil
+	return output.String(), snapshot.needsAttention(), nil
 }
 
-func renderResumeStateItem(itemNumber int, item resumeStateItem) (string, error) {
-	if itemNumber <= 0 || !item.valid() {
+func (textRenderer) ListControlStatus(status string, reason string) string {
+	return fmt.Sprintf("resume_list_status=%q reason=%q\n", status, reason)
+}
+
+func renderResumeOperation(itemNumber int, operation resumeOperation) (string, error) {
+	if itemNumber <= 0 || !operation.valid() {
 		return "", errResumeStateContract
 	}
 	var output strings.Builder
 	fmt.Fprintf(
 		&output,
-		"resume_item=%d status=%q operation_id=%q intent_digest=%q phase=%d state_generation=%d expires_at_millis=%d success_count=%d failure_count=%d resumable=%t discardable=%t\n",
+		"resume_operation=%d state=%q operation_id=%q running=%t item-blocked=%d",
 		itemNumber,
-		item.status,
-		item.operationID,
-		item.intentDigest,
-		item.phase,
-		item.stateGeneration,
-		item.expiresAtMillis,
-		item.successCount,
-		item.failureCount,
-		item.resumable,
-		item.discardable,
+		operation.state.String(),
+		operation.operationID,
+		operation.running,
+		len(operation.blockedItems),
 	)
-	for _, attention := range item.attention {
+	if operation.attention != "" {
+		fmt.Fprintf(&output, " reason=%q", operation.attention)
+	}
+	output.WriteByte('\n')
+	for _, item := range operation.blockedItems {
+		if item.pathKnown {
+			fmt.Fprintf(
+				&output,
+				"  item-blocked path=%q reason=%q\n",
+				item.artifactPath,
+				item.reason.String(),
+			)
+			continue
+		}
 		fmt.Fprintf(
 			&output,
-			"  resume_attention item=%d reason=%q operation_id=%q\n",
-			itemNumber,
-			attention.reason,
-			attention.operationID,
+			"  item-blocked path_known=false reason=%q\n",
+			item.reason.String(),
 		)
 	}
 	return output.String(), nil
@@ -77,26 +93,28 @@ func renderResumeStateItem(itemNumber int, item resumeStateItem) (string, error)
 
 func (textRenderer) DiscardPrompt(
 	itemNumber int,
-	item resumeStateItem,
+	operation resumeOperation,
 	expected string,
 ) (string, error) {
-	preview, err := renderResumeStateItem(itemNumber, item)
+	preview, err := renderResumeOperation(itemNumber, operation)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf(
-		"Current resume state:\n%sPublished files are preserved; only owned recovery artifacts are eligible.\nType %q exactly to continue: ",
+		"Selected resume operation:\n%sOnly identity-matched unfinished partial and control records are eligible. Final and foreign objects are preserved.\nType %q exactly to continue: ",
 		preview,
 		expected,
 	), nil
 }
 
-func (textRenderer) DiscardControlStatus(status string, itemNumber int) string {
+func (textRenderer) DiscardControlStatus(status string, itemNumber int, reason string) string {
 	return fmt.Sprintf(
-		"resume_discard_status=%q item=%d published_files=%q\n",
+		"resume_discard_status=%q item=%d reason=%q published_files=%q foreign_objects=%q\n",
 		status,
 		itemNumber,
+		reason,
 		resumePublishedFileTreatment,
+		resumeForeignObjectTreatment,
 	)
 }
 
@@ -107,101 +125,32 @@ func (textRenderer) DiscardReport(itemNumber int, report resumeDiscardReport) (s
 	var output strings.Builder
 	fmt.Fprintf(
 		&output,
-		"resume_discard_status=%q item=%d operation_id=%q phase=%d state_generation=%d resumable=%t published_files=%q\n",
+		"resume_discard_status=%q item=%d operation_id=%q published_files=%q foreign_objects=%q",
 		report.status,
 		itemNumber,
 		report.operationID,
-		report.phase,
-		report.stateGeneration,
-		report.resumable,
 		resumePublishedFileTreatment,
+		resumeForeignObjectTreatment,
 	)
-	for _, attention := range report.attention {
-		fmt.Fprintf(
-			&output,
-			"  resume_attention item=%d reason=%q operation_id=%q\n",
-			itemNumber,
-			attention.reason,
-			attention.operationID,
-		)
+	if report.attention != "" {
+		fmt.Fprintf(&output, " reason=%q", report.attention)
 	}
-	return output.String(), nil
-}
-
-func (textRenderer) Busy(operation string, itemNumber int, phase string) string {
-	if operation == "discard" {
-		return fmt.Sprintf(
-			"resume_discard_status=%q item=%d phase=%q published_files=%q\n",
-			resumeBusyStatus,
-			itemNumber,
-			phase,
-			resumePublishedFileTreatment,
-		)
-	}
-	return fmt.Sprintf("resume_list_status=%q phase=%q\n", resumeBusyStatus, phase)
-}
-
-func (textRenderer) LegacyCleanup(report osfs.CheckpointCleanupReport) (string, error) {
-	if report.Status == 0 && !report.Complete && len(report.Attention) == 0 && len(report.Entries) == 0 {
-		return "", errors.New("legacy cleanup report is empty")
-	}
-	statusName := checkpointCleanupStatusName(report.Status)
-	if statusName == "unknown" {
-		return "", errResumeStateContract
-	}
-	var output strings.Builder
-	fmt.Fprintf(
-		&output,
-		"legacy_cleanup_status=%q complete=%t resumed=%t scanned=%d removed=%d quarantined=%d skipped=%d\n",
-		statusName,
-		report.Complete,
-		report.Resumed,
-		report.Scanned,
-		report.Removed,
-		report.Quarantined,
-		report.Skipped,
-	)
-	for _, attention := range report.Attention {
-		fmt.Fprintf(&output, "  legacy_attention=%q\n", attention)
-	}
-	for _, entry := range report.Entries {
-		dispositionName := checkpointCleanupDispositionName(entry.Disposition)
-		if dispositionName == "unknown" {
-			return "", errResumeStateContract
+	output.WriteByte('\n')
+	for _, item := range report.blockedItems {
+		if item.pathKnown {
+			fmt.Fprintf(
+				&output,
+				"  item-blocked path=%q reason=%q\n",
+				item.artifactPath,
+				item.reason.String(),
+			)
+			continue
 		}
 		fmt.Fprintf(
 			&output,
-			"  legacy_entry path=%q disposition=%q detail=%q\n",
-			entry.RelativePath,
-			dispositionName,
-			entry.Detail,
+			"  item-blocked path_known=false reason=%q\n",
+			item.reason.String(),
 		)
 	}
 	return output.String(), nil
-}
-
-func checkpointCleanupStatusName(status osfs.CheckpointCleanupStatus) string {
-	switch status {
-	case osfs.CheckpointCleanupStatusComplete:
-		return "complete"
-	case osfs.CheckpointCleanupStatusNeedsAttention:
-		return "needs-attention"
-	case osfs.CheckpointCleanupStatusInProgress:
-		return "in-progress"
-	default:
-		return "unknown"
-	}
-}
-
-func checkpointCleanupDispositionName(disposition osfs.CheckpointCleanupDisposition) string {
-	switch disposition {
-	case osfs.CheckpointCleanupSkip:
-		return "skip"
-	case osfs.CheckpointCleanupRemove:
-		return "remove"
-	case osfs.CheckpointCleanupQuarantine:
-		return "quarantine"
-	default:
-		return "unknown"
-	}
 }

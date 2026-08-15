@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/outputfault"
 	"github.com/windshare/windshare/core/osfs/internal/outputsession"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -852,6 +853,54 @@ func testDirectTreeIntent(
 	return intent
 }
 
+func testSourceDirectory(
+	t *testing.T,
+	directory catalog.DirectoryID,
+	generation catalog.DirectoryGeneration,
+	parent transfer.DirectoryAdmission,
+	path string,
+	modified catalog.ModifiedTime,
+) transfer.AuthenticatedSourceDirectory {
+	t.Helper()
+	sourcePath := ordinaryoutput.EmptySourceCatalogPath()
+	if path != "" {
+		var err error
+		sourcePath, err = ordinaryoutput.NewSourceCatalogPath(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return transfer.AuthenticatedSourceDirectory{
+		DirectoryID: directory, Generation: generation, ParentAdmission: parent,
+		SourcePath: sourcePath, ModifiedTime: modified,
+	}
+}
+
+func projectedDirectoryRequest(
+	t *testing.T,
+	intent transfer.ReceiveIntent,
+	directory transfer.AuthenticatedSourceDirectory,
+	parent transfer.MaterializedDirectoryClaim,
+) transfer.DirectoryMaterializationRequest {
+	t.Helper()
+	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := transfer.NewDirectoryMaterializationRequest(
+		projector, directory, ordinaryoutput.SourceNodeSelected, parent,
+	)
+	if err != nil {
+		request, err = transfer.NewDirectoryMaterializationRequest(
+			projector, directory, ordinaryoutput.SourceNodeConnectsSelection, parent,
+		)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
+
 func TestOutputSessionUsesAuthorityDirectlyWithoutCompositionAdapter(t *testing.T) {
 	var authority *Authority
 	var traceCalls atomic.Int64
@@ -885,7 +934,11 @@ func TestOutputSessionUsesAuthorityDirectlyWithoutCompositionAdapter(t *testing.
 			RandomWrite: true, FileFailureIsolation: true, ModifiedTime: true,
 		},
 		ReceiptSecret: secret,
-		Locator:       authority, Directories: authority, Files: rejectingFileExecutor{},
+		Locator:       authority,
+		Destinations: outputsession.ArtifactDestinationBinderFunc(func(path ordinaryoutput.ArtifactPath) (outputsession.DestinationPath, error) {
+			return outputsession.NewDestinationPath(path.String())
+		}),
+		Directories: authority, Files: rejectingFileExecutor{},
 		Resources: outputsession.ResourceReleaserFunc(func(context.Context) error { return nil }),
 	})
 	if err != nil {
@@ -895,20 +948,24 @@ func TestOutputSessionUsesAuthorityDirectlyWithoutCompositionAdapter(t *testing.
 	done := make(chan error, 1)
 	go func() {
 		ctx := context.Background()
-		root := transfer.MaterializationDirectory{
-			DirectoryID: rootID, Generation: testIdentity[catalog.DirectoryGeneration](31),
-		}
-		rootAdmission, admitErr := session.AdmitDirectory(ctx, root)
+		root := testSourceDirectory(
+			t, rootID, testIdentity[catalog.DirectoryGeneration](31),
+			transfer.DirectoryAdmission{}, "", catalog.ModifiedTime{},
+		)
+		rootAdmission, admitErr := session.AdmitDirectory(
+			ctx, projectedDirectoryRequest(t, intent, root, transfer.MaterializedDirectoryClaim{}),
+		)
 		if admitErr != nil {
 			done <- admitErr
 			return
 		}
-		child := transfer.MaterializationDirectory{
-			DirectoryID:     testIdentity[catalog.DirectoryID](41),
-			Generation:      testIdentity[catalog.DirectoryGeneration](42),
-			ParentAdmission: rootAdmission, Path: "child", ModifiedTime: mustModifiedTime(t, 51),
-		}
-		childAdmission, admitErr := session.AdmitDirectory(ctx, child)
+		child := testSourceDirectory(
+			t, testIdentity[catalog.DirectoryID](41), testIdentity[catalog.DirectoryGeneration](42),
+			rootAdmission, "child", mustModifiedTime(t, 51),
+		)
+		childAdmission, admitErr := session.AdmitDirectory(
+			ctx, projectedDirectoryRequest(t, intent, child, transfer.MaterializedDirectoryClaim{}),
+		)
 		if admitErr == nil {
 			platform.mu.Lock()
 			platform.root.entries["child"].node.setErr = errors.New("metadata rejected")
@@ -932,7 +989,7 @@ func TestOutputSessionUsesAuthorityDirectlyWithoutCompositionAdapter(t *testing.
 	case <-time.After(5 * time.Second):
 		t.Fatal("direct outputsession integration deadlocked")
 	}
-	if traceCalls.Load() != 4 {
-		t.Fatalf("trace calls=%d want 4", traceCalls.Load())
+	if traceCalls.Load() != 2 {
+		t.Fatalf("trace calls=%d want 2 materialized-directory operations", traceCalls.Load())
 	}
 }

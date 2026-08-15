@@ -382,7 +382,7 @@ type jobOutput struct {
 	completeSettlement       DirectTreeSettlementKind
 	pauseSettlement          DirectTreeSettlementKind
 	rawStart                 *FileStart
-	directoryAdmission       func(MaterializationDirectory, DirectoryAdmission) (DirectoryAdmission, error)
+	directoryAdmission       func(AuthenticatedSourceDirectory, DirectoryAdmission) (DirectoryAdmission, error)
 	directorySettlement      func(DirectoryAdmission) (DirectorySettlement, error)
 	directorySecret          [directoryAdmissionSecretBytes]byte
 }
@@ -437,11 +437,17 @@ func (o *jobOutput) OpenDirectTree(_ context.Context, intent ReceiveIntent) (Dir
 	return o, nil
 }
 
-func (o *jobOutput) AdmitDirectory(_ context.Context, directory MaterializationDirectory) (DirectoryAdmission, error) {
+func (o *jobOutput) AdmitDirectory(_ context.Context, request DirectoryMaterializationRequest) (DirectoryAdmission, error) {
+	directory := request.Source()
+	directory, err := normalizeAuthenticatedSourceDirectory(directory)
+	if err != nil {
+		return DirectoryAdmission{}, err
+	}
 	if o.admitErr != nil {
 		return DirectoryAdmission{}, o.admitErr
 	}
-	if failure := o.ensureFailures[directory.Path]; failure != nil {
+	sourcePath := directory.SourcePath.String()
+	if failure := o.ensureFailures[sourcePath]; failure != nil {
 		return DirectoryAdmission{}, failure
 	}
 	if o.ensureErr != nil {
@@ -459,9 +465,9 @@ func (o *jobOutput) AdmitDirectory(_ context.Context, directory MaterializationD
 		return DirectoryAdmission{}, err
 	}
 	o.mu.Lock()
-	o.directories = append(o.directories, directory.Path)
+	o.directories = append(o.directories, sourcePath)
 	o.directoryAdmissions = append(o.directoryAdmissions, admission)
-	o.events = append(o.events, "ensure:"+directory.Path)
+	o.events = append(o.events, "ensure:"+sourcePath)
 	result := o.directoryAdmission
 	o.mu.Unlock()
 	if result != nil {
@@ -489,8 +495,9 @@ func (o *jobOutput) FinalizeDirectory(
 }
 
 func (o *jobOutput) BeginFile(_ context.Context, file MaterializationFile) (FileStart, error) {
+	artifactPath := file.ArtifactPath().String()
 	o.mu.Lock()
-	o.events = append(o.events, "begin:"+file.Path)
+	o.events = append(o.events, "begin:"+artifactPath)
 	o.mu.Unlock()
 	if o.beginHook != nil {
 		o.beginHook(file)
@@ -501,24 +508,24 @@ func (o *jobOutput) BeginFile(_ context.Context, file MaterializationFile) (File
 	if o.rawStart != nil {
 		return *o.rawStart, nil
 	}
-	if settlement, ok := o.immediate[file.Path]; ok {
+	if settlement, ok := o.immediate[artifactPath]; ok {
 		return NewFileSettlementStart(settlement)
 	}
 	var identity OwnedObjectID
-	digest := sha256.Sum256([]byte(file.Path))
+	digest := sha256.Sum256([]byte(artifactPath))
 	copy(identity[:], digest[:])
-	binding, err := BindFileMaterializationTarget(file.Target, identity)
+	binding, err := BindFileMaterializationTarget(file.Target(), identity)
 	if err != nil {
 		return FileStart{}, err
 	}
 	o.mu.Lock()
-	durable := o.durable[file.Path]
+	durable := o.durable[artifactPath]
 	script := o.transactionScript
-	if configured, exists := o.transactionScripts[file.Path]; exists {
+	if configured, exists := o.transactionScripts[artifactPath]; exists {
 		script = configured
 	}
 	transaction := &jobFileTransaction{output: o, binding: binding, durable: durable, generation: 1, script: script}
-	o.transactions[file.Path] = transaction
+	o.transactions[artifactPath] = transaction
 	o.mu.Unlock()
 	verified, err := VerifyDurableRanges(binding, 1, durable)
 	if err != nil {
@@ -541,9 +548,9 @@ func (o *jobOutput) FinalizeTree(_ context.Context, outcome DirectTreeOutcome) (
 	}
 	kind := o.completeSettlement
 	if kind == 0 {
-		kind = DirectTreeSettlementPublished
-		if outcome == DirectTreeOutcomePartialDirectory {
-			kind = DirectTreeSettlementPartialDirectory
+		kind = DirectTreeSettlementSuccess
+		if outcome == DirectTreeOutcomePartial {
+			kind = DirectTreeSettlementPartial
 		}
 	}
 	return NewDirectTreeSettlement(kind)
@@ -560,7 +567,7 @@ func (o *jobOutput) PauseTree(context.Context, JobPauseReason) (DirectTreeSettle
 	}
 	kind := o.pauseSettlement
 	if kind == 0 {
-		kind = DirectTreeSettlementResumable
+		kind = DirectTreeSettlementPaused
 	}
 	return NewDirectTreeSettlement(kind)
 }
@@ -728,7 +735,7 @@ func (t *jobFileTransaction) Retire(_ context.Context, reason FileRetireReason) 
 	}
 	kind := t.script.retireSettlement
 	if kind == 0 {
-		kind = FileRetired
+		kind = FileFailed
 	}
 	checkpoint, err := VerifyDurableRanges(t.binding, t.generation, t.durable)
 	if err != nil {
@@ -743,16 +750,16 @@ func newJobFileSettlement(
 	checkpoint VerifiedDurableRanges,
 ) (FileSettlement, error) {
 	switch kind {
-	case FilePublished, FilePaused, FilePublishBlocked:
+	case FilePublished, FilePaused:
 		return NewVerifiedFileSettlement(kind, checkpoint)
-	case FileQuarantined:
+	case FileItemBlocked:
 		reference, err := NewMaterializationStateRef(binding.OutputSessionID(), binding.Locator().Digest())
 		if err != nil {
 			return FileSettlement{}, err
 		}
-		return NewTransactionQuarantinedFileSettlement(binding, reference, QuarantineOwnershipMismatch)
-	case FileRetired:
-		return NewRetiredFileSettlement(binding)
+		return NewTransactionItemBlockedFileSettlement(binding, reference, ItemBlockOwnershipUnknown)
+	case FileFailed:
+		return NewFailedFileSettlement(binding)
 	default:
 		return FileSettlement{}, ErrInvalidOutputSettlement
 	}

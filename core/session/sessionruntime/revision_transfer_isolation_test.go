@@ -177,9 +177,9 @@ func (*revisionTransferOutput) Capabilities() transfer.DirectTreeCapabilities {
 }
 func (output *revisionTransferOutput) AdmitDirectory(
 	_ context.Context,
-	directory transfer.MaterializationDirectory,
+	request transfer.DirectoryMaterializationRequest,
 ) (transfer.DirectoryAdmission, error) {
-	return transfer.NewDirectoryAdmissionWithSecret(output.secret[:], output.scope, directory)
+	return transfer.NewDirectoryAdmissionWithSecret(output.secret[:], output.scope, request.Source())
 }
 func (*revisionTransferOutput) FinalizeDirectory(
 	_ context.Context,
@@ -191,12 +191,12 @@ func (output *revisionTransferOutput) BeginFile(
 	_ context.Context,
 	file transfer.MaterializationFile,
 ) (transfer.FileStart, error) {
-	digest := sha256.Sum256([]byte(file.Path))
+	digest := sha256.Sum256([]byte(file.ArtifactPath().String()))
 	identity, err := transfer.OwnedObjectIDFromBytes(digest[:])
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
-	binding, err := transfer.BindFileMaterializationTarget(file.Target, identity)
+	binding, err := transfer.BindFileMaterializationTarget(file.Target(), identity)
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
@@ -215,16 +215,16 @@ func (output *revisionTransferOutput) PauseTree(
 	transfer.JobPauseReason,
 ) (transfer.DirectTreeSettlement, error) {
 	output.jobPauses++
-	return transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementResumable)
+	return transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementPaused)
 }
 func (output *revisionTransferOutput) FinalizeTree(
 	_ context.Context,
 	outcome transfer.DirectTreeOutcome,
 ) (transfer.DirectTreeSettlement, error) {
 	output.jobCompletes++
-	kind := transfer.DirectTreeSettlementPublished
-	if outcome == transfer.DirectTreeOutcomePartialDirectory {
-		kind = transfer.DirectTreeSettlementPartialDirectory
+	kind := transfer.DirectTreeSettlementSuccess
+	if outcome == transfer.DirectTreeOutcomePartial {
+		kind = transfer.DirectTreeSettlementPartial
 	}
 	return transfer.NewDirectTreeSettlement(kind)
 }
@@ -282,7 +282,7 @@ func (transaction *revisionTransferTransaction) Retire(
 	context.Context,
 	transfer.FileRetireReason,
 ) (transfer.FileSettlement, error) {
-	settlement, err := transfer.NewRetiredFileSettlement(transaction.binding)
+	settlement, err := transfer.NewFailedFileSettlement(transaction.binding)
 	if err == nil {
 		transaction.output.settlements[transaction.binding.FileID()] = settlement.Kind()
 	}
@@ -312,7 +312,7 @@ func TestEveryRevisionFailureDispositionSettlesOneFileAndContinuesSibling(t *tes
 				}
 				wantSettlement := transfer.FilePaused
 				if code == contentflow.RevisionCodeDrift || !retryable && permanentRevisionOperationCode(code) {
-					wantSettlement = transfer.FileRetired
+					wantSettlement = transfer.FileFailed
 				}
 				runContentTransferIsolationCase(
 					t, failure.Scope(), code, retryable, wantSettlement, revisionOperationError(failure),
@@ -483,7 +483,7 @@ func runContentTransferIsolationCase(
 	}
 	result := job.Run(context.Background())
 	sourceCode, sourceFault := result.Files[0].Fault.SourceCode()
-	if result.Outcome != transfer.DirectTreeOutcomePartialDirectory || result.TerminationCause != nil ||
+	if result.Outcome != transfer.DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		result.SucceededFiles != 1 || len(result.Files) != 1 ||
 		output.settlements[failed] != wantSettlement || output.settlements[good] != transfer.FilePublished ||
 		output.jobPauses != 0 || output.jobCompletes != 1 ||

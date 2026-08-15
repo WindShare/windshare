@@ -1,6 +1,6 @@
 # CLI 普通接收输出重构计划
 
-> 状态：待实现。
+> 状态：已实现。W0–W4 与本地 `make check`、`make long-go`、`make ci` 已于 2026-08-14 完成。
 >
 > 目标：让 CLI 接收在普通下载目录里表现得像一次正常的文件复制，同时保留路径安全、完整性验证、不覆盖已有文件和 best-effort 断点续传。高频的首次下载路径不能为低频的终态幂等重跑付出额外扫描、哈希、复制或复杂提示。
 
@@ -58,7 +58,7 @@ active operation 查找与 `ReceiveIntentDigest` 分离。绑定目标根并冻�
 
 本计划不实现以下低频能力：
 
-- terminal publication proof、`ReceiveRequestKey` 的终态索引和跨命令自动认领 final；
+- 普通输出的终态历史索引和跨命令自动认领 final；
 - 完整内容 commitment/Merkle frontier；普通输出仍要求原子 no-replace publish。平台可以在内部保留隐藏的 native checkpoint/ownership proof（包括 hard-link 或等价原语）来支持重启复核，但不得复制完整内容、暴露第二个 public object 或把内部 proof 变成 CLI 合同；
 - 掉电级 cleanup 证明、抵抗同一 OS 账户恶意本地进程的独占 ACL 合同；
 - 为了恢复已有 final 而进行整文件重读或重哈希。
@@ -122,7 +122,7 @@ Retire(reason)
 
 `OperationRegistry` 位于目标根的 root-owned namespace，按 `ActiveOperationKey` 保存有界的 operation 级记录：operation ID、冻结的 intent、lease 和持久生命周期。记录大小不得随文件数增长，也不保存 checkpoint reference、文件路径、revision、ranges 或 phase；目标根内按 operation 分区的 `FileCheckpointV2` 是文件状态的唯一事实来源。
 
-第一版不维护 user-data `ResumeStore` 或全局 operation 索引。所有命令先打开用户指定的目标根并复核 root identity；普通 `get` 只查询有界 registry，只有恢复已匹配 operation 或执行 `resume list/discard` 才复核其 checkpoint、partial 和 final。这样不会为低频 inventory 增加首次下载成本。
+第一版只维护目标根内的 active-only operation registry，不维护全局索引。所有命令先打开用户指定的目标根并复核 root identity；普通 `get` 只做有界 active lookup，只有恢复已匹配 operation 或执行 `resume list/discard` 才复核其 checkpoint、partial 和 final。这样不会为低频 inventory 增加首次下载成本。
 
 destination binding 分离 `DestinationAuthorityID` 与规范化绝对路径：前者是恢复 authority，后者只是展示提示。当前打开根的 identity 与 root-owned namespace 都匹配时，同文件系统重命名不使 operation 失效；路径相同但 identity 已变化、跨文件系统复制或记录无法认证时不得恢复。不扫描 public output tree，不猜测、不删除陌生文件。记录采用小记录原子替换；仅在首次写入前确认完整 resume 不可用且 `SafePublish + CrashCleanup` 成立时使用 live-only。registry 写入结果不确定时进入 `operation-needs-attention`。
 
@@ -218,9 +218,9 @@ If interrupted, completed files stay; the next get uses a new name and downloads
 
 删除或从 ordinary output 移出：
 
-- terminal publication proof、跨命令自动认领 final、content commitment/Merkle accumulator 和 terminal `SelectionPlanDigest`；不得连同它们删除 active-only operation lookup；
-- 将 hard-link、anchor、witness 或 publication receipt 暴露为 public publication 合同。现有 native recovery proof 可以在内部保留并收敛到目标根绑定的 checkpoint namespace；只有在新的 partial identity/publish contract 验证覆盖后，才删除旧实现；
-- 通过解析错误文本或 CLI 开关（如 `AllowPermissiveRoot`、`DisableResume`）改变安全语义。
+- 终态历史、跨命令自动认领 final、content commitment/Merkle accumulator 和 terminal `SelectionPlanDigest`；active-only operation lookup 仍须保留；
+- 将 hard-link、anchor、witness 或内部 recovery evidence 暴露为 public publication 合同。必要的 native proof 只留在目标根绑定的 checkpoint namespace；
+- 通过解析错误文本或用户开关改变安全语义；执行模式只由 typed capability facts 决定。
 
 建议的 consumer-side contracts：
 
@@ -238,7 +238,7 @@ OperationRegistry      // bounded root-bound active lookup, lease and lifecycle
 
 - 固定 `SafePublish`、`OperationRecovery`、`RangeRecovery`、`CrashCleanup` 能力事实，以及 resumable/live-only 两种执行模式；live-only 的 warning 明确下次使用新名称并重下整个 selection。
 - 固定构造期 `ShapeDecision`、`ArtifactPathProjector` 三态和预算；shape 一次性物化为 canonical `ArtifactSpec + MaterializationPlan`，超出预算立即使用 `windshare/`。
-- 固定 `ActiveOperationKey`、`DestinationAuthorityID`、有界 `OperationRegistry` 和 operation lifecycle；区分 `item-blocked` 与 `operation-needs-attention`，第一版不维护 user-data/global resume index。
+- 固定 `ActiveOperationKey`、`DestinationAuthorityID`、有界 active-only `OperationRegistry` 和 operation lifecycle；区分 `item-blocked` 与 `operation-needs-attention`。
 - 明确旧 output records 不自动迁移或认领；实现阶段显式停用旧 namespace，过期记录只按已证明的 ownership 清理。
 - 固定 Windows/NTFS、Linux/ext4、普通继承 ACL、网络盘/FUSE 的能力矩阵；普通 profile 不因可用 ACL 被全局拒绝。
 
@@ -262,7 +262,7 @@ OperationRegistry      // bounded root-bound active lookup, lease and lifecycle
 - `get` 默认使用当前目录；`-o` 只传递保存容器，先以有界 `ShapeDecision` 构造 canonical artifact 与顶层 reservation，再继续渐进发现。
 - 实现 active-first resume、顶层冲突持久后缀、内部 collision isolation、warning-once 和 TTY-aware summary；通过注入式 progress sink/TTY detector 输出，core 不直接写终端。
 - 实现按 operation 分页的 incomplete/resumable/cleanup-pending/operation-needs-attention inventory，并列出 item-blocked；live-only 必须先证明 crash cleanup，不认领或删除身份不明对象。
-- 更新 get/resume、native output、validation 和威胁模型文档，移除 ordinary profile 的 terminal proof 和私有 publication 旧说明；共享 `FileCheckpointV2` 与现有 `ReceiveIntent` canonical 合同不变，不改变 Web 下载行为。
+- 更新 get/resume、native output、validation 和威胁模型文档，说明 active-only registry、普通继承权限和内部 recovery evidence 边界；共享 `FileCheckpointV2` 与现有 `ReceiveIntent` canonical 合同不变，不改变 Web 下载行为。
 
 ## 8. 验证重点
 

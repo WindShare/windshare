@@ -21,7 +21,6 @@ import (
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestAppCommandSurfaceReportsActionableFailures(t *testing.T) {
@@ -63,6 +62,35 @@ func TestAppCommandSurfaceReportsActionableFailures(t *testing.T) {
 				t.Fatalf("stderr=%q does not contain %q", stderr.String(), test.wantStderr)
 			}
 		})
+	}
+}
+
+func TestTopLevelHelpMatchesOrdinaryOutputCommandContracts(t *testing.T) {
+	app, stdout, stderr := newSemanticTestApp(strings.NewReader(""))
+	if code := app.Run(context.Background(), []string{"help"}); code != ExitOK {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	output := stderr.String()
+	for _, required := range []string{
+		"windshare get <link>",
+		"windshare get -o <directory> <link>",
+		"incomplete",
+		"resumable",
+		"cleanup-pending",
+		"item-blocked",
+		"Published files and unknown objects are always preserved.",
+	} {
+		if !strings.Contains(output, required) {
+			t.Fatalf("help=%q does not contain %q", output, required)
+		}
+	}
+	for _, stale := range []string{"paused state", "live item", "resume cleanup"} {
+		if strings.Contains(output, stale) {
+			t.Fatalf("help=%q contains retired wording %q", output, stale)
+		}
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q", stdout.String())
 	}
 }
 
@@ -210,19 +238,19 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 }
 
 func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
-	published, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementPublished)
+	published, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementSuccess)
 	if err != nil {
 		t.Fatal(err)
 	}
-	partial, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementPartialDirectory)
+	partial, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementPartial)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumable, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementResumable)
+	resumable, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementPaused)
 	if err != nil {
 		t.Fatal(err)
 	}
-	needsAttention, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementNeedsAttention)
+	needsAttention, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementFailed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,18 +271,32 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 		{
 			name: "success",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePublished, Settlement: published, SucceededFiles: 2,
+				Outcome: transfer.DirectTreeOutcomeSuccess, Settlement: published, SucceededFiles: 2,
+				FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 2},
 				Measure: transfer.SelectionMeasure{
 					DiscoveredFiles: 2, DiscoveredBytes: 8, CompletedFiles: 2, CompletedBytes: 8,
 					Discovery: transfer.DiscoveryComplete, DiscoveryTerminalSuccess: true,
 				},
 			},
-			wantCode: ExitOK, wantLogs: []string{"completed 2 file(s), 8 byte(s)"},
+			wantCode: ExitOK, wantLogs: []string{"result=success downloaded=2", "bytes=8"},
+		},
+		{
+			name: "success cannot hide a typed collision",
+			result: transfer.JobResult{
+				Outcome: transfer.DirectTreeOutcomeSuccess, Settlement: published, SucceededFiles: 1,
+				FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1, CollisionFiles: 1},
+				Measure: transfer.SelectionMeasure{
+					DiscoveredFiles: 1, DiscoveredBytes: 4, CompletedFiles: 1, CompletedBytes: 4,
+					Discovery: transfer.DiscoveryComplete, DiscoveryTerminalSuccess: true,
+				},
+			},
+			wantCode: ExitFailure,
+			wantLogs: []string{"non-success file or directory outcomes", "result=failed downloaded=1", "collision=1"},
 		},
 		{
 			name: "isolated ordinary failures",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePartialDirectory, Settlement: partial,
+				Outcome: transfer.DirectTreeOutcomePartial, Settlement: partial,
 				Directories: []transfer.DirectoryJobFailure{genericDirectoryFailure},
 				Files:       []transfer.FileJobFailure{genericFileFailure},
 			},
@@ -264,7 +306,7 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 		{
 			name: "directory drift dominates isolated completion",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePartialDirectory, Settlement: partial,
+				Outcome: transfer.DirectTreeOutcomePartial, Settlement: partial,
 				SourceDriftFault: mustCLIFault(transferfault.NewCatalog(
 					transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale,
 				)),
@@ -277,7 +319,7 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 		{
 			name: "file drift dominates isolated completion",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePartialDirectory, Settlement: partial,
+				Outcome: transfer.DirectTreeOutcomePartial, Settlement: partial,
 				SourceDriftFault: mustCLIFault(transferfault.NewSource(
 					transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged,
 				)),
@@ -290,7 +332,7 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 		{
 			name: "omitted drift remains exact",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePartialDirectory, Settlement: partial,
+				Outcome: transfer.DirectTreeOutcomePartial, Settlement: partial,
 				OmittedFileFailures: transfer.MaximumRetainedJobFailures,
 				SourceDriftFault: mustCLIFault(transferfault.NewSource(
 					transferfault.ScopeFileLocal, transferfault.SourceRevisionInvalidated,
@@ -300,14 +342,14 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 		},
 		{
 			name:     "caller cancellation dominates generic termination",
-			result:   transfer.JobResult{Outcome: transfer.DirectTreeOutcomeResumable, Settlement: resumable, TerminationCause: errors.New("transfer stopped")},
+			result:   transfer.JobResult{Outcome: transfer.DirectTreeOutcomePaused, Settlement: resumable, TerminationCause: errors.New("transfer stopped")},
 			cancel:   true,
 			wantCode: ExitFailure, wantLogs: []string{"interrupted"},
 		},
 		{
 			name: "session failure dominates racing caller cancellation",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomeResumable, Settlement: resumable,
+				Outcome: transfer.DirectTreeOutcomePaused, Settlement: resumable,
 				TerminationCause: errors.Join(
 					context.Canceled,
 					errors.New("authenticated runtime failed"),
@@ -321,7 +363,7 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 		{
 			name: "relay admission failure remains network-visible",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomeResumable, Settlement: resumable, TerminationCause: errors.New("transfer stopped"),
+				Outcome: transfer.DirectTreeOutcomePaused, Settlement: resumable, TerminationCause: errors.New("transfer stopped"),
 			},
 			admissionErr: errors.New("resume suspended relay failed"),
 			wantCode:     ExitNetwork, wantLogs: []string{"resume suspended relay failed"},
@@ -329,7 +371,7 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 		{
 			name: "missing explicit selection is usage",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePartialDirectory, Settlement: partial,
+				Outcome: transfer.DirectTreeOutcomePartial, Settlement: partial,
 				Measure: transfer.SelectionMeasure{
 					Discovery: transfer.DiscoveryComplete, DiscoveryTerminalSuccess: true,
 				},
@@ -340,7 +382,7 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 		{
 			name: "proven missing selection completes as usage error",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePartialDirectory, Settlement: partial,
+				Outcome: transfer.DirectTreeOutcomePartial, Settlement: partial,
 				Measure: transfer.SelectionMeasure{
 					Discovery: transfer.DiscoveryComplete, DiscoveryTerminalSuccess: true,
 				},
@@ -352,7 +394,7 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 		{
 			name: "partial discovery cannot claim an explicit selection is missing",
 			result: transfer.JobResult{
-				Outcome:                    transfer.DirectTreeOutcomePartialDirectory,
+				Outcome:                    transfer.DirectTreeOutcomePartial,
 				Settlement:                 partial,
 				Measure:                    transfer.SelectionMeasure{Discovery: transfer.DiscoveryOpen},
 				SelectionResolutionFailure: transfer.ErrSelectionTargetMissing,
@@ -362,7 +404,7 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 		{
 			name: "paused drift precedes terminal transport inspection",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomeResumable, Settlement: resumable,
+				Outcome: transfer.DirectTreeOutcomePaused, Settlement: resumable,
 				TerminationCause: content.ErrRevisionStale,
 				SourceDriftFault: mustCLIFault(transferfault.NewSource(
 					transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged,
@@ -373,7 +415,7 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 		{
 			name: "settlement failure remains local and visible",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomeResumable, SettlementFailure: errors.New("checkpoint install failed"),
+				Outcome: transfer.DirectTreeOutcomePaused, SettlementFailure: errors.New("checkpoint install failed"),
 				Files: []transfer.FileJobFailure{{
 					Path: "partial.bin", Stage: transfer.FailureFileOutput,
 					Cause: errors.New("write failed"), SettlementFailure: errors.New("file pause failed"),
@@ -384,21 +426,31 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 			wantLogs: []string{"durable output settlement failed", "file pause failed", "lease release failed"},
 		},
 		{
+			name: "failed operation without a wrapped cause remains actionable",
+			result: transfer.JobResult{
+				Outcome: transfer.DirectTreeOutcomeFailed, Settlement: needsAttention,
+			},
+			wantCode: ExitFailure,
+			wantLogs: []string{"durable output state needs attention", "result=failed"},
+		},
+		{
 			name: "successful files with retained attention are not silent success",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePublished, Settlement: needsAttention, SucceededFiles: 1,
+				Outcome: transfer.DirectTreeOutcomeSuccess, Settlement: needsAttention, SucceededFiles: 1,
+				FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1},
 				Measure: transfer.SelectionMeasure{
 					DiscoveredFiles: 1, DiscoveredBytes: 4, CompletedFiles: 1, CompletedBytes: 4,
 					Discovery: transfer.DiscoveryComplete, DiscoveryTerminalSuccess: true,
 				},
 			},
 			wantCode: ExitFailure,
-			wantLogs: []string{"needs attention", "completed 1 file(s), 4 byte(s)"},
+			wantLogs: []string{"needs attention", "result=failed downloaded=1", "bytes=4"},
 		},
 		{
 			name: "success cannot hide incomplete output",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePublished, Settlement: published, SucceededFiles: 1,
+				Outcome: transfer.DirectTreeOutcomeSuccess, Settlement: published, SucceededFiles: 1,
+				FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1},
 				Measure: transfer.SelectionMeasure{
 					DiscoveredFiles: 2, DiscoveredBytes: 8, CompletedFiles: 1, CompletedBytes: 4,
 					Discovery: transfer.DiscoveryComplete, DiscoveryTerminalSuccess: true,
@@ -409,7 +461,7 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 		{
 			name: "success outcome cannot hide settlement failure",
 			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePublished, Settlement: published,
+				Outcome: transfer.DirectTreeOutcomeSuccess, Settlement: published,
 				SettlementFailure: errors.New("terminal cleanup failed"),
 			},
 			wantCode: ExitFailure,
@@ -435,7 +487,7 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 			// The tested outcomes return before terminal runtime inspection; nil
 			// values make that boundary explicit and would panic on precedence drift.
 			if code := app.reportTransferResultWithAdmission(
-				ctx, nil, nil, test.result, test.admissionErr,
+				ctx, nil, nil, test.result, test.admissionErr, false,
 			); code != test.wantCode {
 				t.Fatalf("exit=%d want=%d stderr=%q", code, test.wantCode, stderr.String())
 			}
@@ -448,74 +500,42 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 	}
 }
 
-func TestFilesystemOutputTraceKeepsNativeMilestonesAndFailuresStructured(t *testing.T) {
+func TestGetTraceSinkReceivesTypedEventsWithoutWritingStderr(t *testing.T) {
 	app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-	var intent transfer.ReceiveIntentDigest
-	intent[0] = 1
-	var receiveOperation receivecontract.OperationID
-	receiveOperation[0] = 3
-	var session transfer.OutputSessionID
-	session[0] = 2
-
-	for _, event := range []osfs.FilesystemOutputTrace{
-		{Operation: osfs.TraceFilesystemCertified, Certification: osfs.FilesystemOutputCertificationWindowsNTFSProcessRestart},
-		{Operation: osfs.TraceFeatureProbeCompleted},
-		{Operation: osfs.TraceCheckpointNamespaceOpened},
-		{Operation: osfs.TraceSessionOpened, SessionID: session},
-		{Operation: osfs.TraceCheckpointReconciled, CheckpointRecordCount: 2},
-	} {
-		event.ReceiveIntentDigest, event.ReceiveOperationID = intent, receiveOperation
-		app.traceFilesystemOutput(event)
+	filesystemEvent := osfs.FilesystemOutputTrace{
+		Operation: osfs.TraceRuntimeDecision, RuntimeDecision: osfs.FilesystemOutputRuntimeRejected,
 	}
-	quietAt := stderr.Len()
-	for _, event := range []osfs.FilesystemOutputTrace{
-		{Operation: osfs.TraceNativeLock, NativeLockMilestone: osfs.FilesystemOutputNativeLockAcquired},
-		{Operation: osfs.TraceRuntimeDecision, RuntimeDecision: osfs.FilesystemOutputRuntimeActive},
-		{Operation: osfs.TraceRuntimeDecision, RuntimeDecision: osfs.FilesystemOutputRuntimeSucceeded},
-	} {
-		event.SessionID, event.ReceiveIntentDigest, event.ReceiveOperationID = session, intent, receiveOperation
-		app.traceFilesystemOutput(event)
+	transferEvent := transfer.TransferLifecycleTrace{
+		Stage: transfer.TransferFileEnqueued, FileSelection: transfer.FileSelectionCatalogPathTarget,
 	}
-	if stderr.Len() != quietAt {
-		t.Fatalf("successful high-volume trace was logged: %q", stderr.String())
+	app.traceFilesystemOutput(filesystemEvent)
+	app.traceTransferLifecycle(transferEvent)
+	app.traceGet(GetTraceEvent{Stage: GetTraceDestinationBound, Mode: getOutputResumable})
+	if stderr.Len() != 0 {
+		t.Fatalf("default structured tracing wrote user stderr: %q", stderr.String())
 	}
 
-	noisy := []osfs.FilesystemOutputTrace{
-		{Operation: osfs.TraceNativeLock, NativeLockScope: osfs.FilesystemOutputNativeLockSession, NativeLockMilestone: osfs.FilesystemOutputNativeLockContended},
-		{Operation: osfs.TraceNativeLock, NativeLockScope: osfs.FilesystemOutputNativeLockSession, NativeLockMilestone: osfs.FilesystemOutputNativeLockAcquireFailed},
-		{
-			Operation:        osfs.TraceRuntimeDecision,
-			RuntimeComponent: osfs.FilesystemOutputRuntimeFile,
-			RuntimeOperation: osfs.FilesystemOutputRuntimeBeginFile,
-			RuntimeDecision:  osfs.FilesystemOutputRuntimeRejected,
-			OperationID:      7, ClaimID: 8,
-			NodeClaimCount: 9, DirectoryClaimCount: 10, FileClaimCount: 11,
-		},
-		{Operation: osfs.TraceRuntimeDecision, RuntimeDecision: osfs.FilesystemOutputRuntimeNeedsAttention},
-		{Operation: osfs.TraceFeatureProbeCompleted, FaultDomain: 2, NormalizedFaultScope: 3, NormalizedFaultCode: 5, Failed: true},
+	var events []GetTraceEvent
+	app.getTraces = GetTraceSinkFunc(func(event GetTraceEvent) { events = append(events, event) })
+	app.traceFilesystemOutput(filesystemEvent)
+	app.traceTransferLifecycle(transferEvent)
+	app.traceGet(GetTraceEvent{Stage: GetTraceDestinationBound, Mode: getOutputResumable})
+	if len(events) != 3 {
+		t.Fatalf("typed trace events=%d want=3", len(events))
 	}
-	for _, event := range noisy {
-		event.SessionID, event.ReceiveIntentDigest, event.ReceiveOperationID = session, intent, receiveOperation
-		app.traceFilesystemOutput(event)
+	if events[0].Stage != GetTraceFilesystemOutput ||
+		events[0].FilesystemOutput.RuntimeDecision != osfs.FilesystemOutputRuntimeRejected {
+		t.Fatalf("filesystem trace=%+v", events[0])
 	}
-	for _, expected := range []string{
-		"operation=" + strconv.Itoa(int(osfs.TraceFilesystemCertified)),
-		"operation=" + strconv.Itoa(int(osfs.TraceCheckpointNamespaceOpened)),
-		"operation=" + strconv.Itoa(int(osfs.TraceSessionOpened)),
-		"operation=" + strconv.Itoa(int(osfs.TraceCheckpointReconciled)),
-		"native_lock_scope=" + strconv.Itoa(int(osfs.FilesystemOutputNativeLockSession)) +
-			" native_lock_milestone=" + strconv.Itoa(int(osfs.FilesystemOutputNativeLockContended)),
-		"native_lock_milestone=" + strconv.Itoa(int(osfs.FilesystemOutputNativeLockAcquireFailed)),
-		"runtime_component=" + strconv.Itoa(int(osfs.FilesystemOutputRuntimeFile)) +
-			" runtime_operation=" + strconv.Itoa(int(osfs.FilesystemOutputRuntimeBeginFile)) +
-			" runtime_decision=" + strconv.Itoa(int(osfs.FilesystemOutputRuntimeRejected)) +
-			" runtime_operation_id=7 claim_id=8",
-		"node_claims=9 directory_claims=10 file_claims=11",
-		"normalized_fault_scope=3 normalized_fault_code=5", "failed=true",
-	} {
-		if !strings.Contains(stderr.String(), expected) {
-			t.Fatalf("trace %q does not contain %q", stderr.String(), expected)
-		}
+	if events[1].Stage != GetTraceTransferLifecycle ||
+		events[1].TransferLifecycle.FileSelection != transfer.FileSelectionCatalogPathTarget {
+		t.Fatalf("transfer trace=%+v", events[1])
+	}
+	if events[2].Stage != GetTraceDestinationBound || events[2].Mode != getOutputResumable {
+		t.Fatalf("admission trace=%+v", events[2])
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("injected structured tracing wrote user stderr: %q", stderr.String())
 	}
 
 	if got := outputTraceIdentity(nil); got != "-" {
@@ -528,35 +548,13 @@ func TestFilesystemOutputTraceKeepsNativeMilestonesAndFailuresStructured(t *test
 		t.Fatalf("bounded trace identity=%q", got)
 	}
 	for kind, expected := range map[transfer.FileSettlementKind]string{
-		transfer.FilePublished: "published", transfer.FilePaused: "paused", transfer.FileRetired: "retired",
-		transfer.FileCollision: "collision", transfer.FilePublishBlocked: "publish-blocked", transfer.FileQuarantined: "quarantined",
+		transfer.FilePublished: "published", transfer.FilePaused: "paused", transfer.FileFailed: "retired",
+		transfer.FileCollision: "collision", transfer.FileItemBlocked: "item-blocked",
 		0: "none",
 	} {
 		if got := fileSettlementName(kind); got != expected {
 			t.Fatalf("file settlement %d=%q want=%q", kind, got, expected)
 		}
-	}
-	for kind, expected := range map[transfer.DirectTreeSettlementKind]string{
-		transfer.DirectTreeSettlementPublished:        "published",
-		transfer.DirectTreeSettlementPartialDirectory: "partial-directory",
-		transfer.DirectTreeSettlementResumable:        "resumable",
-		transfer.DirectTreeSettlementNeedsAttention:   "needs-attention",
-		0: "none",
-	} {
-		if got := directTreeSettlementName(kind); got != expected {
-			t.Fatalf("direct-tree settlement %d=%q want=%q", kind, got, expected)
-		}
-	}
-}
-
-func TestTransferLifecycleTraceProjectsTypedSelectionDecision(t *testing.T) {
-	app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-	app.traceTransferLifecycle(transfer.TransferLifecycleTrace{
-		Stage:         transfer.TransferFileEnqueued,
-		FileSelection: transfer.FileSelectionCatalogPathTarget,
-	})
-	if !strings.Contains(stderr.String(), "file_selection=3") {
-		t.Fatalf("transfer trace=%q", stderr.String())
 	}
 }
 

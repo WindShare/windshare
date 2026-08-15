@@ -193,7 +193,18 @@ func (directory *windowsV3Directory) setModifiedTime(modified catalog.ModifiedTi
 	if err := directory.verify(false); err != nil {
 		return err
 	}
-	return windowsV3SetHandleModifiedTime(directory.handle(), directory.path, modified)
+	if directory.private {
+		return windowsV3SetHandleModifiedTime(directory.handle(), directory.path, modified)
+	}
+	if directory.metadataHandleOpen {
+		return windowsV3SetHandleModifiedTime(directory.metadataHandle, directory.path, modified)
+	}
+	if directory.metadataOpenErr != nil {
+		return directory.metadataOpenErr
+	}
+	return windowsV3NativeOperationFailure(
+		"set output modified time", directory.path, windows.ERROR_ACCESS_DENIED,
+	)
 }
 
 func windowsV3SetHandleModifiedTime(handle windows.Handle, path string, modified catalog.ModifiedTime) error {

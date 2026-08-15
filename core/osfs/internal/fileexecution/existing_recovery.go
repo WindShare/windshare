@@ -27,7 +27,7 @@ func (engine *Engine) beginExisting(
 	recovery := existingFileRecovery{
 		engine: engine, file: file, destination: destination, record: record,
 	}
-	binding, err := outputBinding(file.Target, record)
+	binding, err := outputBinding(file.Target(), record)
 	if err != nil {
 		return recovery.failStart(ctx, err)
 	}
@@ -41,7 +41,7 @@ func (engine *Engine) beginExisting(
 			ctx, bindingError(ErrInvalidObservation), collaboratorError(ctx, openErr),
 		)
 	}
-	expectation, err := expectationFor(file, record)
+	expectation, err := expectationFor(record)
 	if err != nil {
 		return recovery.failStart(ctx, err)
 	}
@@ -57,7 +57,7 @@ func (engine *Engine) beginExisting(
 		return recovery.failStart(ctx, err)
 	}
 	engine.emit(engine.traceEvent(
-		sequence, TraceRecoverFile, traceRecoveryOutcome(decision),
+		sequence, traceOperationForRecovery(decision), traceOutcomeForRecovery(decision),
 		recovery.record.Phase(), recovery.record.Phase(), fault.Fault{},
 	))
 	return recovery.start(ctx, decision)
@@ -94,7 +94,11 @@ func (recovery *existingFileRecovery) commitCandidate(
 	if recovery.record.CommitState() != checkpointmodel.CommitCandidate {
 		return nil
 	}
-	if owned.Condition() != OwnedReady || final.Condition() != FinalAbsent || recovery.ownedFile == nil {
+	// A known foreign final does not weaken the private object's identity. Making
+	// its candidate durable preserves restart evidence while publication remains
+	// independently blocked by the reversible collision.
+	if owned.Condition() != OwnedReady || recovery.ownedFile == nil ||
+		final.Condition() != FinalAbsent && final.Condition() != FinalCollision {
 		return bindingError(ErrTargetOwnershipUnknown)
 	}
 	if err := recovery.ownedFile.Sync(); err != nil {
@@ -120,7 +124,7 @@ func (recovery *existingFileRecovery) start(
 	switch decision.Action() {
 	case RecoveryOpenActive:
 		return recovery.engine.transactionStart(
-			recovery.file, recovery.destination, recovery.ownedFile, recovery.record,
+			recovery.file, recovery.destination, recovery.ownedFile, recovery.record, true,
 		)
 	case RecoveryActivate:
 		return recovery.activate(ctx)
@@ -128,22 +132,20 @@ func (recovery *existingFileRecovery) start(
 		return recovery.recoverPublication(ctx, true)
 	case RecoveryCompletePublication:
 		return recovery.recoverPublication(ctx, false)
-	case RecoveryPublishBlocked:
-		settlement, err := verifiedSettlement(
-			transfer.FilePublishBlocked, recovery.binding, recovery.record,
-		)
-		return recovery.engine.terminalStart(
-			ctx, recovery.destination, recovery.ownedFile, settlement, err,
-		)
+	case RecoveryReturnCollision:
+		return recovery.returnCollision(ctx)
 	case RecoveryReturnPublished:
 		settlement, err := verifiedSettlement(
 			transfer.FilePublished, recovery.binding, recovery.record,
 		)
+		if err == nil {
+			settlement, err = settlement.WithPublicationProvenance(transfer.FileResumed)
+		}
 		return recovery.engine.terminalStart(
 			ctx, recovery.destination, recovery.ownedFile, settlement, err,
 		)
 	case RecoveryReturnRetired:
-		settlement, err := transfer.NewRetiredFileSettlement(recovery.binding)
+		settlement, err := transfer.NewFailedFileSettlement(recovery.binding)
 		return recovery.engine.terminalStart(
 			ctx, recovery.destination, recovery.ownedFile, settlement, err,
 		)
@@ -152,13 +154,55 @@ func (recovery *existingFileRecovery) start(
 		return recovery.engine.terminalStart(
 			ctx, recovery.destination, recovery.ownedFile, settlement, err,
 		)
+	case RecoveryStartNewPreservingOld:
+		return recovery.startNewPreservingOld(ctx)
 	case RecoveryInstallQuarantine:
 		return recovery.installQuarantine(ctx, decision.QuarantineReason())
-	case RecoveryNeedsAttention:
-		return recovery.failStart(ctx, bindingError(ErrTargetOwnershipUnknown))
 	default:
 		return recovery.failStart(ctx, bindingError(ErrPortContract))
 	}
+}
+
+func (recovery *existingFileRecovery) returnCollision(
+	ctx context.Context,
+) (transfer.FileStart, error) {
+	if recovery.record.Phase() == checkpointmodel.PhasePublishing {
+		paused, err := pauseRecord(recovery.record)
+		if err != nil {
+			return recovery.failStart(ctx, fileContractError(err))
+		}
+		if _, err := recovery.engine.storeRecord(ctx, &recovery.record, paused); err != nil {
+			return recovery.failStart(ctx, err)
+		}
+		recovery.record = paused
+	}
+	settlement, err := transfer.NewTransactionCollisionFileSettlement(recovery.binding)
+	return recovery.engine.terminalStart(
+		ctx, recovery.destination, recovery.ownedFile, settlement, err,
+	)
+}
+
+func (recovery *existingFileRecovery) startNewPreservingOld(
+	ctx context.Context,
+) (transfer.FileStart, error) {
+	abandoner, ok := recovery.engine.checkpoints.(CheckpointAbandoner)
+	if !ok {
+		return recovery.failStart(ctx, bindingError(ErrPortContract))
+	}
+	key, err := recovery.engine.checkpointKey(recovery.file)
+	if err != nil {
+		return recovery.failStart(ctx, err)
+	}
+	if err := abandoner.Abandon(ctx, recovery.record); err != nil {
+		return recovery.failStart(ctx, collaboratorError(ctx, err))
+	}
+	if err := closeOwnedFile(recovery.ownedFile); err != nil {
+		return recovery.failStart(ctx, err)
+	}
+	recovery.ownedFile = nil
+	return recovery.engine.beginNew(
+		ctx, recovery.engine.nextSequence(), recovery.file, key, recovery.destination,
+	)
 }
 
 func (recovery *existingFileRecovery) activate(ctx context.Context) (transfer.FileStart, error) {
@@ -171,7 +215,7 @@ func (recovery *existingFileRecovery) activate(ctx context.Context) (transfer.Fi
 	}
 	recovery.record = next
 	return recovery.engine.transactionStart(
-		recovery.file, recovery.destination, recovery.ownedFile, recovery.record,
+		recovery.file, recovery.destination, recovery.ownedFile, recovery.record, true,
 	)
 }
 
@@ -179,8 +223,8 @@ func (recovery *existingFileRecovery) recoverPublication(
 	ctx context.Context,
 	retry bool,
 ) (transfer.FileStart, error) {
-	transaction := recovery.engine.newTransaction(
-		recovery.file, recovery.destination, recovery.ownedFile, recovery.binding, recovery.record,
+	transaction := recovery.engine.newResumablePartialFileTransaction(
+		recovery.file, recovery.destination, recovery.ownedFile, recovery.binding, recovery.record, true,
 	)
 	return transaction.recoverPublication(ctx, retry)
 }

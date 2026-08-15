@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
 	"golang.org/x/sys/windows"
@@ -460,16 +461,42 @@ func (*windowsOutputV3Platform) Durability() transfer.DurabilityLevel {
 	return transfer.DurabilityProcessRestart
 }
 
-func (platform *windowsOutputV3Platform) ProbeRecoverableFeatures() error {
+func (*windowsOutputV3Platform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
+	return checkpointmodel.LiveCleanupWindowsNTFSV1
+}
+
+func (platform *windowsOutputV3Platform) DestinationCapabilities() (
+	_ outputcap.DestinationCapabilities,
+	resultErr error,
+) {
 	if platform == nil || platform.native == nil || platform.native.root == nil {
-		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows output platform is closed"))
+		return outputcap.DestinationCapabilities{}, errors.Join(
+			outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows output platform is closed"))
 	}
-	guard, err := platform.native.acquirePublicOperationGuard()
+	var guard *windowsV3PublicOperationGuard
+	var err error
+	if platform.root.native.private {
+		guard, err = platform.native.acquirePrivatePublicationRootGuard()
+	} else {
+		guard, err = platform.native.acquirePublicOperationGuard()
+	}
 	if err != nil {
-		return windowsOutputV3Error(err)
+		return outputcap.DestinationCapabilities{}, windowsOutputV3Error(err)
 	}
-	probeErr := guard.Root().probeRecoverableFeatures()
-	return errors.Join(windowsOutputV3Error(probeErr), windowsOutputV3Error(guard.Close()))
+	defer func() { resultErr = errors.Join(resultErr, windowsOutputV3Error(guard.Close())) }()
+	return guard.Root().destinationCapabilities()
+}
+
+func (platform *windowsOutputV3Platform) ProbeRecoverableFeatures() error {
+	capabilities, err := platform.DestinationCapabilities()
+	if err != nil {
+		return err
+	}
+	if mode, modeErr := outputcap.SelectExecutionMode(capabilities); modeErr != nil ||
+		mode != outputcap.ExecutionResumable {
+		return errors.Join(outputcap.ErrRecoverableOutputUnsupported, modeErr)
+	}
+	return nil
 }
 
 func (*windowsOutputV3Platform) ValidateModifiedTime(modified catalog.ModifiedTime) error {

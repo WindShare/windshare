@@ -94,8 +94,8 @@ func TestTransferJobAtomicallyRejectsMalformedRangeReaderOutput(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			job, output := newAtomicRangeSinkJob(t, test.reader)
 			result := job.Run(context.Background())
-			if result.Outcome != DirectTreeOutcomeResumable || result.TerminationCause == nil ||
-				result.Settlement.Kind() != DirectTreeSettlementResumable || result.SettlementFailure != nil {
+			if result.Outcome != DirectTreeOutcomePaused || result.TerminationCause == nil ||
+				result.Settlement.Kind() != DirectTreeSettlementPaused || result.SettlementFailure != nil {
 				t.Fatalf("atomic range result = %+v", result)
 			}
 			if test.wantContract {

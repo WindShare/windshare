@@ -86,10 +86,6 @@ func TestWindowsV3PrivateDirectoryCreateNeverDeletesExistingTarget(t *testing.T)
 		t.Fatal(err)
 	}
 	defer existing.Close()
-	wantID, wantPrepared, wantErr := existing.cachedPersistentObjectID()
-	if wantErr != nil || !wantPrepared {
-		t.Fatal("existing private target lacks a prepared Object ID")
-	}
 	if created, err := platform.root.CreatePrivateDirectory(target); !errors.Is(err, errWindowsV3OutputCollision) {
 		if created != nil {
 			_ = created.Close()
@@ -102,10 +98,8 @@ func TestWindowsV3PrivateDirectoryCreateNeverDeletesExistingTarget(t *testing.T)
 	}
 	defer reopened.Close()
 	same, compareErr := sameWindowsV3OpenedDirectory(existing, reopened)
-	reopenedID, reopenedPrepared, reopenedIDErr := reopened.cachedPersistentObjectID()
-	if compareErr != nil || reopenedIDErr != nil || !same || !reopenedPrepared || reopenedID != wantID {
-		t.Fatalf("existing target changed: same=%v id=%x prepared=%t want=%x error=%v",
-			same, reopenedID, reopenedPrepared, wantID, errors.Join(compareErr, reopenedIDErr))
+	if compareErr != nil || !same {
+		t.Fatalf("existing target changed: same=%v error=%v", same, compareErr)
 	}
 }
 
@@ -198,11 +192,6 @@ func assertWindowsPrivateCreateCutState(
 	if err != nil {
 		t.Fatalf("committed cut is not classifiable: %v", err)
 	}
-	identity, prepared, identityErr := opened.cachedPersistentObjectID()
-	if identityErr != nil || !prepared || !identity.valid() {
-		_ = opened.Close()
-		t.Fatal("committed cut lacks a persistent NTFS object ID")
-	}
 	if err := opened.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +200,6 @@ func assertWindowsPrivateCreateCutState(
 func windowsPrivateDirectoryCreateCuts() []windowsV3PrivateDirectoryCreateCut {
 	return []windowsV3PrivateDirectoryCreateCut{
 		windowsV3PrivateDirectoryCutCreated,
-		windowsV3PrivateDirectoryCutObjectID,
 		windowsV3PrivateDirectoryCutACLHidden,
 		windowsV3PrivateDirectoryCutSynced,
 		windowsV3PrivateDirectoryCutCommitted,

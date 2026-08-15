@@ -97,7 +97,7 @@ func TestLinuxExt4RestartIdentityRejectsForcedInodeReuse(t *testing.T) {
 	if initial != unchanged {
 		t.Fatalf("unchanged directory changed across processes:\nfirst=%+v\nsecond=%+v", initial, unchanged)
 	}
-	seenBirthTimes := map[string]struct{}{linuxNativeBirthTimeKey(initial): {}}
+	seenRestartClaims := map[string]struct{}{initial.RootBinding: {}}
 	previous := initial
 	for cycle := range linuxNativeReuseCycles {
 		if err := os.Remove(target); err != nil {
@@ -118,15 +118,21 @@ func TestLinuxExt4RestartIdentityRejectsForcedInodeReuse(t *testing.T) {
 			t.Fatalf("cycle %d did not force inode reuse: got %d, want %d",
 				cycle, observed.Inode, initial.Inode)
 		}
-		birthKey := linuxNativeBirthTimeKey(observed)
-		if _, duplicate := seenBirthTimes[birthKey]; duplicate {
-			t.Fatalf("cycle %d reused inode %d with repeated STATX_BTIME %s",
-				cycle, observed.Inode, birthKey)
+		// ext4 birth time has finite timestamp granularity, so rapid inode reuse may
+		// repeat it. Certification binds the complete restart claim, including the
+		// nonzero inode generation when the kernel exposes it; requiring btime alone
+		// to be unique would reject a stronger composite identity for the wrong reason.
+		if observed.BirthSeconds == previous.BirthSeconds &&
+			observed.BirthNanoseconds == previous.BirthNanoseconds &&
+			(!observed.GenerationPresent || !previous.GenerationPresent ||
+				observed.Generation == previous.Generation) {
+			t.Fatalf("cycle %d reused inode %d without changing birth time or generation", cycle, observed.Inode)
 		}
-		seenBirthTimes[birthKey] = struct{}{}
-		if observed.RootBinding == initial.RootBinding || observed.RootBinding == previous.RootBinding {
+		if _, duplicate := seenRestartClaims[observed.RootBinding]; duplicate ||
+			observed.RootBinding == previous.RootBinding {
 			t.Fatalf("cycle %d production root binding accepted a replacement directory", cycle)
 		}
+		seenRestartClaims[observed.RootBinding] = struct{}{}
 		if observed.FilesystemUUID != initial.FilesystemUUID {
 			t.Fatalf("cycle %d escaped the fixed ext4 filesystem", cycle)
 		}
@@ -258,8 +264,4 @@ func linuxNativeFreeInodes(t *testing.T, path string) uint64 {
 		t.Fatal(err)
 	}
 	return stat.Ffree
-}
-
-func linuxNativeBirthTimeKey(observation linuxNativeRestartObservation) string {
-	return fmt.Sprintf("%d.%09d", observation.BirthSeconds, observation.BirthNanoseconds)
 }

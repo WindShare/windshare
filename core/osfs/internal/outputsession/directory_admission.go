@@ -7,11 +7,12 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
 func (session *Session) AdmitDirectory(
 	ctx context.Context,
-	directory transfer.MaterializationDirectory,
+	request transfer.DirectoryMaterializationRequest,
 ) (transfer.DirectoryAdmission, error) {
 	lease, operationID, err := session.beginOperation()
 	if err != nil {
@@ -24,16 +25,26 @@ func (session *Session) AdmitDirectory(
 	if err := ctx.Err(); err != nil {
 		return transfer.DirectoryAdmission{}, err
 	}
-
-	admission, err := transfer.NewDirectoryAdmissionWithSecret(session.secret[:], session.scope, directory)
+	if !transfer.DirectoryMaterializationMatchesProjector(session.projector, request) {
+		return transfer.DirectoryAdmission{}, session.rejectDirectoryBinding(operationID, 0, ErrDirectoryBinding)
+	}
+	source := request.Source()
+	admission, err := transfer.NewDirectoryAdmissionWithSecret(
+		session.secret[:], session.scope, source,
+	)
 	if err != nil {
 		return transfer.DirectoryAdmission{}, session.rejectDirectoryBinding(operationID, 0, err)
 	}
-	locatorKey, canonicalErr := session.locator.CanonicalLocatorKey(directory.Path)
-	if canonicalErr != nil || !validCanonicalLocatorKey(directory.Path, locatorKey) {
-		if canonicalErr == nil {
-			canonicalErr = ErrExecutorContract
-		}
+	artifact, materialize, err := directoryProjection(request.Projection())
+	if err != nil {
+		return transfer.DirectoryAdmission{}, session.rejectDirectoryBinding(operationID, 0, err)
+	}
+	if !materialize {
+		return session.admitTraverseOnlyDirectory(operationID, source, admission)
+	}
+	artifactLocatorKey, destination, destinationLocatorKey, canonicalErr :=
+		session.bindMaterializedArtifact(artifact)
+	if canonicalErr != nil {
 		return transfer.DirectoryAdmission{}, session.rejectDirectoryBinding(operationID, 0, canonicalErr)
 	}
 	if err := ctx.Err(); err != nil {
@@ -41,7 +52,8 @@ func (session *Session) AdmitDirectory(
 	}
 
 	entry, pending, cached, event, err := session.reserveDirectory(
-		operationID, directory, admission, locatorKey,
+		operationID, source, admission, artifact, artifactLocatorKey,
+		destination, destinationLocatorKey, request.ParentMaterialization(),
 	)
 	session.emit(event)
 	if err != nil {
@@ -65,7 +77,7 @@ func (session *Session) AdmitDirectory(
 			ctx, operationID, entry, cut, executeErr,
 		)
 	}
-	if observation.Cut != MutationStable || !observation.Disposition.validFor(entry.claim.IsRoot()) {
+	if observation.Cut != MutationStable || !observation.Disposition.validFor(entry.claim.IsSessionRoot()) {
 		return transfer.DirectoryAdmission{}, session.failDirectoryAdmission(
 			ctx, operationID, entry, MutationAmbiguous, ErrExecutorContract,
 		)
@@ -73,29 +85,182 @@ func (session *Session) AdmitDirectory(
 	return session.commitDirectoryAdmission(operationID, entry, observation.Disposition)
 }
 
+func (session *Session) bindMaterializedArtifact(
+	artifact ordinaryoutput.ArtifactPath,
+) (string, DestinationPath, string, error) {
+	if !artifact.Valid() {
+		return "", DestinationPath{}, "", ErrDirectoryBinding
+	}
+	artifactLocatorKey, err := session.locator.CanonicalLocatorKey(artifact.String())
+	if err != nil || !validCanonicalLocatorKey(artifact.String(), artifactLocatorKey) {
+		if err == nil {
+			err = ErrExecutorContract
+		}
+		return "", DestinationPath{}, "", err
+	}
+	destination, err := session.destinations.BindArtifactPath(artifact)
+	if err != nil || !destination.Valid() {
+		if err == nil {
+			err = ErrExecutorContract
+		}
+		return "", DestinationPath{}, "", err
+	}
+	destinationLocatorKey, err := session.locator.CanonicalLocatorKey(destination.String())
+	if err != nil || !validCanonicalLocatorKey(destination.String(), destinationLocatorKey) {
+		if err == nil {
+			err = ErrExecutorContract
+		}
+		return "", DestinationPath{}, "", err
+	}
+	return artifactLocatorKey, destination, destinationLocatorKey, nil
+}
+
+func directoryProjection(
+	projection ordinaryoutput.ArtifactPathProjection,
+) (ordinaryoutput.ArtifactPath, bool, error) {
+	switch projection.Kind() {
+	case ordinaryoutput.ArtifactTraverseOnly:
+		return ordinaryoutput.ArtifactPath{}, false, nil
+	case ordinaryoutput.ArtifactMaterialize:
+		path, ok := projection.ArtifactPath()
+		if !ok {
+			return ordinaryoutput.ArtifactPath{}, false, ErrDirectoryBinding
+		}
+		return path, true, nil
+	default:
+		return ordinaryoutput.ArtifactPath{}, false, ErrDirectoryBinding
+	}
+}
+
+func (session *Session) admitTraverseOnlyDirectory(
+	operationID uint64,
+	source transfer.AuthenticatedSourceDirectory,
+	admission transfer.DirectoryAdmission,
+) (transfer.DirectoryAdmission, error) {
+	session.mu.Lock()
+	result, event, err := session.admitTraverseOnlyDirectoryLocked(operationID, source, admission)
+	session.mu.Unlock()
+	session.emit(event)
+	return result, err
+}
+
+func (session *Session) admitTraverseOnlyDirectoryLocked(
+	operationID uint64,
+	source transfer.AuthenticatedSourceDirectory,
+	admission transfer.DirectoryAdmission,
+) (transfer.DirectoryAdmission, TraceEvent, error) {
+	parent, err := session.sourceParentLocked(source)
+	if err != nil {
+		err = session.rejectDirectoryBindingLocked(err)
+		return transfer.DirectoryAdmission{}, session.bindingTraceLocked(
+			operationID, parent, OperationAdmitDirectory,
+		), err
+	}
+	node := catalog.NodeID(source.DirectoryID)
+	sourcePath := source.SourcePath.String()
+	reference, exists := session.sourceClaimLocked(node, sourcePath)
+	if exists {
+		entry := session.directoryClaims[reference.id]
+		if reference.kind != ClaimDirectory || entry == nil || entry.claim.source != source ||
+			!sameAdmission(entry.admission, admission) || entry.claim.artifact.Valid() {
+			err = session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
+			return transfer.DirectoryAdmission{}, session.bindingTraceLocked(
+				operationID, reference.id, OperationAdmitDirectory,
+			), err
+		}
+		state := directoryClaimState(entry.state)
+		return entry.admission, session.traceLocked(
+			operationID, OperationAdmitDirectory, TraceAdmitted, entry.claim.id,
+			ClaimDirectory, state, state, fault.Fault{},
+		), nil
+	}
+	if err := session.operationRejectionLocked(); err != nil {
+		return transfer.DirectoryAdmission{}, session.bindingTraceLocked(
+			operationID, parent, OperationAdmitDirectory,
+		), err
+	}
+	charge := directoryMetadataBytes(
+		source, ordinaryoutput.ArtifactPath{}, "", DestinationPath{}, "",
+	)
+	overMetadataBudget := session.metadataBytes > session.limits.DirectoryMetadataBytes ||
+		charge > session.limits.DirectoryMetadataBytes-session.metadataBytes
+	if uint64(len(session.directoryClaims)) >= session.limits.DirectoryClaims ||
+		uint64(len(session.nodeClaims)) >= session.limits.NodeClaims || overMetadataBudget {
+		value, _ := fault.NewOutput(fault.ScopeOutputPause, fault.OutputResourceBudget)
+		session.requirePauseLocked(value, false)
+		return transfer.DirectoryAdmission{}, session.traceLocked(
+			operationID, OperationAdmitDirectory, TraceRejected, 0,
+			ClaimDirectory, ClaimPending, ClaimPending, value,
+		), resourceBudgetError()
+	}
+	claimID, err := session.nextClaimLocked()
+	if err != nil {
+		return transfer.DirectoryAdmission{}, session.bindingTraceLocked(
+			operationID, 0, OperationAdmitDirectory,
+		), err
+	}
+	entry := &directoryEntry{
+		claim: DirectoryClaim{
+			id: claimID, source: source, admission: admission, parent: parent,
+		},
+		admission: admission, state: directoryAdmitted, metadataBytes: charge,
+		changed: make(chan struct{}),
+	}
+	reference = claimRef{kind: ClaimDirectory, id: claimID}
+	session.directoryClaims[claimID] = entry
+	session.nodeClaims[node] = reference
+	session.pathClaims[sourcePath] = reference
+	session.receiptClaims[receiptKey(admission)] = claimID
+	session.metadataBytes += charge
+	if parent == 0 {
+		session.rootClaim = claimID
+	} else if parentEntry := session.directoryClaims[parent]; parentEntry != nil {
+		parentEntry.directUnsettledChildren++
+	}
+	return admission, session.traceLocked(
+		operationID, OperationAdmitDirectory, TraceAdmitted, claimID,
+		ClaimDirectory, ClaimPending, ClaimAdmitted, fault.Fault{},
+	), nil
+}
+
 func (session *Session) reserveDirectory(
 	operationID uint64,
-	directory transfer.MaterializationDirectory,
+	source transfer.AuthenticatedSourceDirectory,
 	admission transfer.DirectoryAdmission,
-	locatorKey string,
+	artifact ordinaryoutput.ArtifactPath,
+	artifactLocatorKey string,
+	destination DestinationPath,
+	destinationLocatorKey string,
+	parentMaterialization transfer.MaterializedDirectoryClaim,
 ) (*directoryEntry, *directoryAdmissionOperation, bool, TraceEvent, error) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
-	parent, err := session.directoryParentLocked(directory)
+	parent, err := session.sourceParentLocked(source)
 	if err != nil {
 		return nil, nil, false, session.bindingTraceLocked(operationID, 0, OperationAdmitDirectory),
 			session.rejectDirectoryBindingLocked(err)
 	}
-	node := catalog.NodeID(directory.DirectoryID)
-	nameKey := parentNameKey{parent: parent, name: claimName(directory.Path)}
-	reference, exists, consistent := session.existingClaimLocked(node, directory.Path, nameKey)
+	destinationParent, err := session.destinationParentLocked(parentMaterialization, destination)
+	if err != nil {
+		return nil, nil, false, session.bindingTraceLocked(operationID, parent, OperationAdmitDirectory),
+			session.rejectDirectoryBindingLocked(err)
+	}
+	node := catalog.NodeID(source.DirectoryID)
+	sourcePath := source.SourcePath.String()
+	nameKey := parentNameKey{parent: destinationParent, name: claimName(destination.String())}
+	reference, exists, consistent := session.existingClaimLocked(
+		node, sourcePath, artifact.String(), artifactLocatorKey, nameKey,
+	)
 	if !consistent {
 		return nil, nil, false, session.bindingTraceLocked(operationID, reference.id, OperationAdmitDirectory),
 			session.markInvariantFailureLocked()
 	}
 	if exists {
-		return session.existingDirectoryReservationLocked(operationID, reference, directory, admission, locatorKey)
+		return session.existingDirectoryReservationLocked(
+			operationID, reference, source, admission, artifact, artifactLocatorKey,
+			destination, destinationLocatorKey,
+		)
 	}
 	if err := session.operationRejectionLocked(); err != nil {
 		return nil, nil, false, session.bindingTraceLocked(operationID, 0, OperationAdmitDirectory), err
@@ -107,11 +272,17 @@ func (session *Session) reserveDirectory(
 				session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
 		}
 	}
-	if owner, exists := session.locatorClaims[locatorKey]; exists {
+	if owner, exists := session.locatorClaims[artifactLocatorKey]; exists {
 		return nil, nil, false, session.bindingTraceLocked(operationID, owner.id, OperationAdmitDirectory),
 			session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
 	}
-	charge := directoryMetadataBytes(directory, locatorKey)
+	if owner, exists := session.destinationClaims[destinationLocatorKey]; exists {
+		return nil, nil, false, session.bindingTraceLocked(operationID, owner.id, OperationAdmitDirectory),
+			session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
+	}
+	charge := directoryMetadataBytes(
+		source, artifact, artifactLocatorKey, destination, destinationLocatorKey,
+	)
 	overMetadataBudget := session.metadataBytes > session.limits.DirectoryMetadataBytes ||
 		charge > session.limits.DirectoryMetadataBytes-session.metadataBytes
 	if uint64(len(session.directoryClaims)) >= session.limits.DirectoryClaims ||
@@ -129,7 +300,10 @@ func (session *Session) reserveDirectory(
 	operation := &directoryAdmissionOperation{done: make(chan struct{})}
 	entry := &directoryEntry{
 		claim: DirectoryClaim{
-			id: claimID, directory: directory, admission: admission, locatorKey: locatorKey, parent: parent,
+			id: claimID, source: source, admission: admission, artifact: artifact,
+			artifactLocatorKey: artifactLocatorKey, destination: destination,
+			destinationLocatorKey: destinationLocatorKey,
+			parent:                parent, destinationParent: destinationParent,
 		},
 		admission: admission, state: directoryPending, metadataBytes: charge,
 		changed: make(chan struct{}), admissionOperation: operation,
@@ -137,8 +311,10 @@ func (session *Session) reserveDirectory(
 	reference = claimRef{kind: ClaimDirectory, id: claimID}
 	session.directoryClaims[claimID] = entry
 	session.nodeClaims[node] = reference
-	session.pathClaims[directory.Path] = reference
-	session.locatorClaims[locatorKey] = reference
+	session.pathClaims[sourcePath] = reference
+	session.artifactClaims[artifact.String()] = reference
+	session.locatorClaims[artifactLocatorKey] = reference
+	session.destinationClaims[destinationLocatorKey] = reference
 	session.nameClaims[nameKey] = reference
 	session.metadataBytes += charge
 	if parent == 0 {
@@ -156,17 +332,27 @@ func (session *Session) reserveDirectory(
 func (session *Session) existingDirectoryReservationLocked(
 	operationID uint64,
 	reference claimRef,
-	directory transfer.MaterializationDirectory,
+	source transfer.AuthenticatedSourceDirectory,
 	admission transfer.DirectoryAdmission,
-	locatorKey string,
+	artifact ordinaryoutput.ArtifactPath,
+	artifactLocatorKey string,
+	destination DestinationPath,
+	destinationLocatorKey string,
 ) (*directoryEntry, *directoryAdmissionOperation, bool, TraceEvent, error) {
 	entry := session.directoryClaims[reference.id]
-	if reference.kind != ClaimDirectory || entry == nil || entry.claim.directory != directory ||
-		entry.claim.locatorKey != locatorKey || !sameAdmission(entry.admission, admission) {
+	if reference.kind != ClaimDirectory || entry == nil || entry.claim.source != source ||
+		entry.claim.artifact != artifact || entry.claim.artifactLocatorKey != artifactLocatorKey ||
+		entry.claim.destination != destination ||
+		entry.claim.destinationLocatorKey != destinationLocatorKey ||
+		!sameAdmission(entry.admission, admission) {
 		return nil, nil, false, session.bindingTraceLocked(operationID, reference.id, OperationAdmitDirectory),
 			session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
 	}
-	if owner, claimed := session.locatorClaims[locatorKey]; !claimed || owner != reference {
+	if owner, claimed := session.locatorClaims[artifactLocatorKey]; !claimed || owner != reference {
+		return nil, nil, false, session.bindingTraceLocked(operationID, reference.id, OperationAdmitDirectory),
+			session.markInvariantFailureLocked()
+	}
+	if owner, claimed := session.destinationClaims[destinationLocatorKey]; !claimed || owner != reference {
 		return nil, nil, false, session.bindingTraceLocked(operationID, reference.id, OperationAdmitDirectory),
 			session.markInvariantFailureLocked()
 	}
@@ -190,35 +376,58 @@ func (session *Session) existingDirectoryReservationLocked(
 		session.operationRejectionOrInvariantLocked()
 }
 
-func (session *Session) directoryParentLocked(directory transfer.MaterializationDirectory) (ClaimID, error) {
-	if directory.Path == "" {
+func (session *Session) sourceParentLocked(
+	source transfer.AuthenticatedSourceDirectory,
+) (ClaimID, error) {
+	sourcePath := source.SourcePath.String()
+	if sourcePath == "" {
 		if session.rootClaim != 0 && session.directoryClaims[session.rootClaim] == nil {
 			return 0, ErrExecutorContract
 		}
 		return 0, nil
 	}
-	claimID, ok := session.receiptClaims[receiptKey(directory.ParentAdmission)]
+	claimID, ok := session.receiptClaims[receiptKey(source.ParentAdmission)]
 	if !ok {
 		return 0, ErrDirectoryBinding
 	}
 	parent := session.directoryClaims[claimID]
-	if parent == nil || !sameAdmission(parent.admission, directory.ParentAdmission) ||
-		parent.claim.directory.Path != parentPath(directory.Path) {
+	if parent == nil || !sameAdmission(parent.admission, source.ParentAdmission) ||
+		parent.claim.source.SourcePath.String() != parentPath(sourcePath) {
 		return 0, ErrDirectoryBinding
 	}
 	return claimID, nil
 }
 
+func (session *Session) sourceClaimLocked(node catalog.NodeID, path string) (claimRef, bool) {
+	byNode, nodeOK := session.nodeClaims[node]
+	byPath, pathOK := session.pathClaims[path]
+	if nodeOK && pathOK && byNode != byPath {
+		return byNode, true
+	}
+	if nodeOK {
+		return byNode, true
+	}
+	return byPath, pathOK
+}
+
 func (session *Session) existingClaimLocked(
 	node catalog.NodeID,
-	path string,
+	sourcePath string,
+	artifactPath string,
+	locatorKey string,
 	name parentNameKey,
 ) (claimRef, bool, bool) {
-	candidates := make([]claimRef, 0, 3)
+	candidates := make([]claimRef, 0, 5)
 	if value, ok := session.nodeClaims[node]; ok {
 		candidates = append(candidates, value)
 	}
-	if value, ok := session.pathClaims[path]; ok {
+	if value, ok := session.pathClaims[sourcePath]; ok {
+		candidates = append(candidates, value)
+	}
+	if value, ok := session.artifactClaims[artifactPath]; ok {
+		candidates = append(candidates, value)
+	}
+	if value, ok := session.locatorClaims[locatorKey]; ok {
 		candidates = append(candidates, value)
 	}
 	if value, ok := session.nameClaims[name]; ok {
@@ -345,18 +554,28 @@ func (session *Session) completeDirectoryAdmissionAmbiguousLocked(entry *directo
 func (session *Session) removeDirectoryReservationLocked(entry *directoryEntry) {
 	reference := claimRef{kind: ClaimDirectory, id: entry.claim.id}
 	delete(session.directoryClaims, entry.claim.id)
-	if session.nodeClaims[catalog.NodeID(entry.claim.directory.DirectoryID)] == reference {
-		delete(session.nodeClaims, catalog.NodeID(entry.claim.directory.DirectoryID))
+	if session.nodeClaims[catalog.NodeID(entry.claim.source.DirectoryID)] == reference {
+		delete(session.nodeClaims, catalog.NodeID(entry.claim.source.DirectoryID))
 	}
-	if session.pathClaims[entry.claim.directory.Path] == reference {
-		delete(session.pathClaims, entry.claim.directory.Path)
+	sourcePath := entry.claim.source.SourcePath.String()
+	if session.pathClaims[sourcePath] == reference {
+		delete(session.pathClaims, sourcePath)
 	}
-	nameKey := parentNameKey{parent: entry.claim.parent, name: claimName(entry.claim.directory.Path)}
+	artifactPath := entry.claim.artifact.String()
+	if artifactPath != "" && session.artifactClaims[artifactPath] == reference {
+		delete(session.artifactClaims, artifactPath)
+	}
+	nameKey := parentNameKey{
+		parent: entry.claim.destinationParent, name: claimName(entry.claim.destination.String()),
+	}
 	if session.nameClaims[nameKey] == reference {
 		delete(session.nameClaims, nameKey)
 	}
-	if session.locatorClaims[entry.claim.locatorKey] == reference {
-		delete(session.locatorClaims, entry.claim.locatorKey)
+	if session.locatorClaims[entry.claim.artifactLocatorKey] == reference {
+		delete(session.locatorClaims, entry.claim.artifactLocatorKey)
+	}
+	if session.destinationClaims[entry.claim.destinationLocatorKey] == reference {
+		delete(session.destinationClaims, entry.claim.destinationLocatorKey)
 	}
 	session.metadataBytes -= entry.metadataBytes
 	if session.rootClaim == entry.claim.id {

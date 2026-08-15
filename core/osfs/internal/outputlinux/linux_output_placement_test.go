@@ -29,7 +29,6 @@ type linuxPlacementTestNode struct {
 	ownerUID         uint32
 	mode             uint16
 	magic            int64
-	acl              []byte
 	children         map[string]*linuxPlacementTestNode
 }
 
@@ -68,8 +67,8 @@ func TestLinuxAbsolutePlacementClaimIsDeterministicAndRestartIdentityBound(t *te
 	}
 }
 
-func TestLinuxAbsolutePlacementRejectsOrdinaryPrincipalMutationAuthority(t *testing.T) {
-	tests := []struct {
+func TestLinuxAbsolutePlacementAcceptsOrdinarySharedAncestry(t *testing.T) {
+	for _, test := range []struct {
 		name      string
 		configure func(*linuxPlacementTestHarness)
 	}{
@@ -88,25 +87,17 @@ func TestLinuxAbsolutePlacementRejectsOrdinaryPrincipalMutationAuthority(t *test
 		{
 			name: "foreign named user ACL",
 			configure: func(harness *linuxPlacementTestHarness) {
-				home := harness.root.children["home"]
-				home.mode = uint16(unix.S_IFDIR | 0o730)
-				home.acl = linuxTestAccessACL(
-					linuxTestACLEntry{linuxPOSIXACLUserObject, 0o7, linuxPOSIXACLUndefinedID},
-					linuxTestACLEntry{linuxPOSIXACLNamedUser, 0o3, 2000},
-					linuxTestACLEntry{linuxPOSIXACLGroupObject, 0, linuxPOSIXACLUndefinedID},
-					linuxTestACLEntry{linuxPOSIXACLMask, 0o3, linuxPOSIXACLUndefinedID},
-					linuxTestACLEntry{linuxPOSIXACLOther, 0, linuxPOSIXACLUndefinedID},
-				)
+				harness.root.children["home"].mode = uint16(unix.S_IFDIR | 0o730)
 			},
 		},
-	}
-	for _, test := range tests {
+	} {
 		t.Run(test.name, func(t *testing.T) {
 			harness, expected := newLinuxPlacementTestHarness()
 			test.configure(harness)
 			system := harness.system()
-			_, err := linuxCertifyAbsoluteOutputPlacement("/home/receiver/output", &system, expected)
-			assertLinuxUnsafe(t, err)
+			if _, err := linuxCertifyAbsoluteOutputPlacement("/home/receiver/output", &system, expected); err != nil {
+				t.Fatalf("ordinary shared ancestry was rejected: %v", err)
+			}
 		})
 	}
 }
@@ -361,23 +352,7 @@ func (harness *linuxPlacementTestHarness) system() linuxOutputSystem {
 			return nil
 		},
 		faccessat2: func(int, string, uint32, int) error { return nil },
-		fgetxattr: func(fd int, name string, destination []byte) (int, error) {
-			if name != linuxAccessACL {
-				return 0, unix.ENODATA
-			}
-			node := harness.nodes[fd]
-			if node == nil {
-				return 0, unix.EBADF
-			}
-			if len(node.acl) == 0 {
-				return 0, unix.ENODATA
-			}
-			if destination == nil {
-				return len(node.acl), nil
-			}
-			return copy(destination, node.acl), nil
-		},
-		geteuid: func() int { return int(linuxPlacementTestReceiverUID) },
+		geteuid:    func() int { return int(linuxPlacementTestReceiverUID) },
 		getVersion: func(fd int) (uint32, error) {
 			node := harness.nodes[fd]
 			if node == nil {

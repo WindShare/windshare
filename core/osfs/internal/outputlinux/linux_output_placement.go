@@ -161,9 +161,9 @@ func linuxValidateAbsolutePlacementParent(
 	fd int,
 	certificate linuxOutputCertificate,
 ) error {
-	const operation = "validate absolute output-root ancestry authority"
-	if system.faccessat2 == nil || system.fgetxattr == nil || system.geteuid == nil {
-		return linuxUnsupported(operation, "required owner, access, or ACL provider is unavailable", nil)
+	const operation = "validate absolute output-root ancestry access"
+	if system.faccessat2 == nil {
+		return linuxUnsupported(operation, "handle-bound effective search provider is unavailable", nil)
 	}
 	identity, err := linuxVerifyOpenObject(system, fd, certificate)
 	if err != nil {
@@ -173,27 +173,11 @@ func linuxValidateAbsolutePlacementParent(
 		!identity.matches(certificate.rootObject) {
 		return linuxUnsafe(operation, "ancestry handle is not its certified directory incarnation", nil)
 	}
-	receiverUID := uint32(system.geteuid())
-	if identity.ownerUID != receiverUID && identity.ownerUID != 0 {
-		// A foreign owner can grant mutation authority after validation even when
-		// the current mode and ACL happen to be restrictive.
-		return linuxUnsafe(operation,
-			"an external ancestry directory is owned by another unprivileged principal", nil)
-	}
 	if err := system.faccessat2(fd, "", uint32(unix.X_OK), unix.AT_EMPTY_PATH|unix.AT_EACCESS); err != nil {
 		if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EOPNOTSUPP) {
 			return linuxUnsupported(operation, "handle-bound effective search checks are unavailable", err)
 		}
 		return linuxUnsafe(operation, "receiver lacks effective search authority on an ancestry directory", err)
-	}
-	reason, err := linuxExternalChildMutationAuthority(system, fd, identity.mode, receiverUID, operation)
-	if err != nil {
-		return err
-	}
-	if reason != "" {
-		// Sticky semantics do not prevent an outside writer from allocating
-		// colliding names, so shared sticky parents remain outside certification.
-		return linuxUnsafe(operation, reason, nil)
 	}
 	rechecked, err := linuxVerifyOpenObject(system, fd, certificate)
 	if err != nil {
