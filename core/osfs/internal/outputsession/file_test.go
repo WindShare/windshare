@@ -10,6 +10,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestFileBeginCoalescesExecutorButNeverSharesActiveTransaction(t *testing.T) {
@@ -23,7 +24,7 @@ func TestFileBeginCoalescesExecutorButNeverSharesActiveTransaction(t *testing.T)
 			beginCalls.Add(1)
 			close(beginStarted)
 			<-releaseBegin
-			transaction := newFakeTransaction(t, claim.File().Target)
+			transaction := newFakeTransaction(t, claim.File().Target())
 			engine.mu.Lock()
 			engine.last = transaction
 			engine.mu.Unlock()
@@ -161,10 +162,14 @@ func TestLocatorAndNodeIndexesRejectFileDirectoryAliasesBeforeFileIO(t *testing.
 	locatorRejection := make(chan TraceEvent, 1)
 	fixture := newTestFixture(t, func(config *Config) {
 		config.Locator.(*fakeDirectoryAuthority).canonicalLocatorKey = func(path string) (string, error) {
-			if path == "" {
-				return "root", nil
+			switch path {
+			case receivecontract.DefaultResultRootName:
+				return "artifact-root", nil
+			case "":
+				return "destination-root", nil
+			default:
+				return "same-platform-locator", nil
 			}
-			return "same-platform-locator", nil
 		}
 		config.Trace = TraceSinkFunc(func(event TraceEvent) {
 			if event.Operation == OperationBeginFile && event.Decision == TraceRejected {
@@ -175,7 +180,7 @@ func TestLocatorAndNodeIndexesRejectFileDirectoryAliasesBeforeFileIO(t *testing.
 	ctx := context.Background()
 	root := fixture.admitRoot(ctx)
 	child := fixture.childDirectory(root, 55, "directory")
-	if _, err := fixture.session.AdmitDirectory(ctx, child); err != nil {
+	if _, err := fixture.admitDirectory(ctx, child); err != nil {
 		t.Fatal(err)
 	}
 	alias := fixture.outputFile(root, 90, "file.bin")
@@ -199,7 +204,7 @@ func TestLocatorAndNodeIndexesRejectFileDirectoryAliasesBeforeFileIO(t *testing.
 	nodeFixture := newTestFixture(t, nil)
 	nodeRoot := nodeFixture.admitRoot(ctx)
 	nodeChild := nodeFixture.childDirectory(nodeRoot, 66, "directory")
-	if _, err := nodeFixture.session.AdmitDirectory(ctx, nodeChild); err != nil {
+	if _, err := nodeFixture.admitDirectory(ctx, nodeChild); err != nil {
 		t.Fatal(err)
 	}
 	conflictingNode := nodeFixture.outputFile(nodeRoot, 66, "other.bin")
@@ -215,24 +220,21 @@ func TestFileClaimRejectsDescriptorFromForeignIntentBeforeFileIO(t *testing.T) {
 	file := fixture.outputFile(root, 97, "foreign.bin")
 	foreignDescriptor, err := content.NewFileRevisionDescriptor(
 		identity[catalog.ShareInstance](210),
-		file.Descriptor.FileID(),
-		file.Descriptor.FileRevision(),
-		file.Descriptor.Geometry(),
-		file.Descriptor.ModifiedTime(),
+		file.Descriptor().FileID(),
+		file.Descriptor().FileRevision(),
+		file.Descriptor().Geometry(),
+		file.Descriptor().ModifiedTime(),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreignTarget, err := transfer.NewFileMaterializationTarget(
-		fixture.sessionID,
-		foreignDescriptor,
-		file.Target.Locator(),
+	file, err = transfer.NewMaterializationFile(
+		fixture.session.projector, file.SourcePath(), foreignDescriptor, fixture.sessionID,
+		file.SourceParentAdmission(), file.ParentMaterialization(),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	file.Descriptor = foreignDescriptor
-	file.Target = foreignTarget
 
 	if _, err := fixture.session.BeginFile(ctx, file); !errors.Is(err, ErrDirectoryBinding) {
 		t.Fatalf("foreign-intent file error=%v", err)
@@ -382,7 +384,7 @@ func TestFileBeginRollbackThenCachesImmediateSettlement(t *testing.T) {
 			if calls == 1 {
 				return FileBeginObservation{Cut: MutationNoChange}, context.Canceled
 			}
-			settlement, err := transfer.NewCollisionFileSettlement(claim.File().Target)
+			settlement, err := transfer.NewCollisionFileSettlement(claim.File().Target())
 			return FileBeginObservation{Cut: MutationStable, Settlement: settlement}, err
 		}
 	})
@@ -439,6 +441,62 @@ func TestFileBeginAmbiguityRetainsAllIndexes(t *testing.T) {
 	}
 }
 
+func TestFileTraceMilestonesIdentifyFirstWriteAndCollision(t *testing.T) {
+	var events []TraceEvent
+	fixture := newTestFixture(t, func(config *Config) {
+		config.Trace = TraceSinkFunc(func(event TraceEvent) {
+			events = append(events, event)
+		})
+	})
+	ctx := context.Background()
+	root := fixture.admitRoot(ctx)
+	start, err := fixture.session.BeginFile(ctx, fixture.outputFile(root, 117, "trace.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, _, ok := start.Transaction()
+	if !ok {
+		t.Fatal("trace file did not start a transaction")
+	}
+	if err := transaction.WriteRange(ctx, 0, []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.WriteRange(ctx, 0, []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	executor := fixture.files.transaction()
+	executor.commit = func(context.Context) (transfer.FileSettlement, MutationCut, error) {
+		settlement, err := transfer.NewTransactionCollisionFileSettlement(executor.binding)
+		return settlement, MutationStable, err
+	}
+	settlement, err := transaction.Commit(ctx)
+	if err != nil || settlement.Kind() != transfer.FileCollision {
+		t.Fatalf("collision commit = (%d, %v)", settlement.Kind(), err)
+	}
+
+	var firstWrites, laterWrites, collisions int
+	for _, event := range events {
+		switch {
+		case event.Operation == OperationFirstWrite:
+			firstWrites++
+		case event.Operation == OperationWriteRange:
+			laterWrites++
+		case event.Operation == OperationCommitFile && event.Decision == TraceCollision:
+			collisions++
+		default:
+			continue
+		}
+		if event.ReceiveIntentDigest != fixture.intent.Digest() ||
+			event.ReceiveOperationID != fixture.intent.OperationID() ||
+			event.SessionID != fixture.sessionID || event.ClaimID == 0 {
+			t.Fatalf("trace milestone lacks stable authority identifiers: %+v", event)
+		}
+	}
+	if firstWrites != 1 || laterWrites != 1 || collisions != 1 {
+		t.Fatalf("trace milestones first/later/collision = %d/%d/%d", firstWrites, laterWrites, collisions)
+	}
+}
+
 func TestFileTransactionCheckpointPauseAndRetire(t *testing.T) {
 	t.Run("checkpoint and pause", func(t *testing.T) {
 		fixture := newTestFixture(t, nil)
@@ -469,7 +527,7 @@ func TestFileTransactionCheckpointPauseAndRetire(t *testing.T) {
 		}
 		transaction, _, _ := start.Transaction()
 		settlement, err := transaction.Retire(ctx, transfer.FileRetireInvalidatedRevision)
-		if err != nil || settlement.Kind() != transfer.FileRetired {
+		if err != nil || settlement.Kind() != transfer.FileFailed {
 			t.Fatalf("retire settlement=%v err=%v", settlement.Kind(), err)
 		}
 	})

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"golang.org/x/sys/unix"
 )
 
@@ -120,7 +119,7 @@ func (directory *linuxOutputDirectory) createPrivateDirectoryExact(
 func (directory *linuxOutputDirectory) createDirectoryExactWithRollback(
 	name string,
 	permissions uint32,
-	rollbackPrivate bool,
+	private bool,
 ) (_ *linuxOutputDirectory, resultErr error) {
 	const operation = "create output directory"
 	if err := directory.verifyHandle(); err != nil {
@@ -132,10 +131,13 @@ func (directory *linuxOutputDirectory) createDirectoryExactWithRollback(
 	if err := linuxValidatePermissions(operation, permissions); err != nil {
 		return nil, err
 	}
-	// Revalidate immediately before the irreversible name creation. A setgid bit
-	// or default ACL introduced after admission could otherwise change the mode at
-	// the mkdir cut and leave a process-restart recovery name permanently strict.
-	if err := directory.validateCreateAuthority(); err != nil {
+	// Public parents use their native ACL semantics. Private parents are already
+	// the ownership boundary and require exact owner-only authority at the cut.
+	if private {
+		if err := directory.validatePrivateCreateAuthority(); err != nil {
+			return nil, err
+		}
+	} else if err := directory.validatePublicCreateAuthority(); err != nil {
 		return nil, err
 	}
 	if err := directory.system.mkdirat(directory.fd, name, permissions); err != nil {
@@ -157,13 +159,15 @@ func (directory *linuxOutputDirectory) createDirectoryExactWithRollback(
 			return
 		}
 		var rollbackErr error
-		if rollbackPrivate {
+		if private {
 			rollbackErr = directory.unlinkDirectory(name, created)
 		}
 		resultErr = errors.Join(resultErr, rollbackErr, created.close())
 	}()
-	if err := created.setExactMode(permissions); err != nil {
-		return nil, err
+	if private {
+		if err := created.setExactMode(permissions); err != nil {
+			return nil, err
+		}
 	}
 	if err := created.sync(); err != nil {
 		return nil, err
@@ -248,10 +252,19 @@ func (directory *linuxOutputDirectory) openRegularFileWithMode(
 	}, nil
 }
 
-func (directory *linuxOutputDirectory) createRegularFileExact(
+func (directory *linuxOutputDirectory) createPrivateRegularFileExact(
 	name string,
 	permissions uint32,
 	size int64,
+) (*linuxOutputRegularFile, error) {
+	return directory.createRegularFileExactWithAuthority(name, permissions, size, true)
+}
+
+func (directory *linuxOutputDirectory) createRegularFileExactWithAuthority(
+	name string,
+	permissions uint32,
+	size int64,
+	private bool,
 ) (_ *linuxOutputRegularFile, resultErr error) {
 	const operation = "create output regular file"
 	if err := directory.verifyHandle(); err != nil {
@@ -266,7 +279,11 @@ func (directory *linuxOutputDirectory) createRegularFileExact(
 	if size < 0 {
 		return nil, linuxUnsafe(operation, "file size cannot be negative", nil)
 	}
-	if err := directory.validateCreateAuthority(); err != nil {
+	if private {
+		if err := directory.validatePrivateCreateAuthority(); err != nil {
+			return nil, err
+		}
+	} else if err := directory.validatePublicCreateAuthority(); err != nil {
 		return nil, err
 	}
 	fd, err := directory.openRelative(name, unix.O_CREAT|unix.O_EXCL|unix.O_RDWR, permissions)
@@ -306,8 +323,10 @@ func (directory *linuxOutputDirectory) createRegularFileExact(
 	}
 	created.object = identity.identity
 	authorityFixed = true
-	if err := created.setExactMode(permissions); err != nil {
-		return nil, err
+	if private {
+		if err := created.setExactMode(permissions); err != nil {
+			return nil, err
+		}
 	}
 	if err := created.truncate(size); err != nil {
 		return nil, err
@@ -320,232 +339,4 @@ func (directory *linuxOutputDirectory) createRegularFileExact(
 	}
 	committed = true
 	return created, nil
-}
-
-func (targetDirectory *linuxOutputDirectory) linkRegularFileNoReplace(
-	sourceDirectory *linuxOutputDirectory,
-	sourceName string,
-	expected *linuxOutputRegularFile,
-	targetName string,
-) error {
-	const operation = "link output regular file"
-	if err := targetDirectory.verifyHandle(); err != nil {
-		return err
-	}
-	if err := linuxValidateComponent(operation, targetName); err != nil {
-		return err
-	}
-	if err := linuxValidateComponent(operation, sourceName); err != nil {
-		return err
-	}
-	if err := sourceDirectory.verifyHandle(); err != nil {
-		return err
-	}
-	if expected == nil {
-		return linuxUnsafe(operation, "source handle is absent", nil)
-	}
-	if err := expected.verifyHandle(); err != nil {
-		return err
-	}
-	if expected.certificate.mount != targetDirectory.certificate.mount ||
-		sourceDirectory.certificate.mount != targetDirectory.certificate.mount {
-		return linuxUnsafe(operation, "source handle belongs to a different certified mount", nil)
-	}
-	matches, err := sourceDirectory.regularEntryMatches(sourceName, expected)
-	if err != nil || !matches {
-		// The no-replace primitive has not run yet, so this is deterministic
-		// source-witness invalidation rather than ambiguous publication history.
-		return errors.Join(
-			outputcap.ErrFixedLinkSourceChanged,
-			linuxUnsafe(operation, "fixed source entry does not identify the expected open file", nil),
-			err,
-		)
-	}
-	// Linux requires CAP_DAC_READ_SEARCH for linkat(AT_EMPTY_PATH), so the
-	// certified backend instead links the exact name beneath a pinned private
-	// directory. Immediate pre/post identity checks preserve the ownership
-	// witness while remaining usable by an ordinary unprivileged receiver.
-	if err := targetDirectory.system.linkat(sourceDirectory.fd, sourceName, targetDirectory.fd, targetName, 0); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return &linuxOutputCollisionError{operation: operation, name: targetName, cause: err}
-		}
-		return fmt.Errorf("%s %q: %w", operation, targetName, err)
-	}
-	if err := targetDirectory.sync(); err != nil {
-		return err
-	}
-	matches, err = targetDirectory.regularEntryMatches(targetName, expected)
-	if err != nil {
-		return err
-	}
-	if !matches {
-		return linuxUnsafe(operation, "new hard link does not identify the expected open file", nil)
-	}
-	return nil
-}
-
-func (directory *linuxOutputDirectory) renameRegularFile(
-	sourceName string,
-	expected *linuxOutputRegularFile,
-	targetDirectory *linuxOutputDirectory,
-	targetName string,
-	disposition linuxRenameDisposition,
-) error {
-	return linuxRenameVerifiedEntry(
-		directory,
-		sourceName,
-		targetDirectory,
-		targetName,
-		disposition,
-		"rename output regular file",
-		"regular file",
-		func(parent *linuxOutputDirectory, name string) (bool, error) {
-			return parent.regularEntryMatches(name, expected)
-		},
-	)
-}
-
-func (directory *linuxOutputDirectory) unlinkRegularFile(
-	name string,
-	expected *linuxOutputRegularFile,
-) error {
-	const operation = "unlink output regular file"
-	if err := directory.verifyHandle(); err != nil {
-		return err
-	}
-	if err := linuxValidateComponent(operation, name); err != nil {
-		return err
-	}
-	matches, err := directory.regularEntryMatches(name, expected)
-	if err != nil {
-		return err
-	}
-	if !matches {
-		return linuxUnsafe(operation, "name no longer identifies the expected open file", nil)
-	}
-	if err := directory.system.unlinkat(directory.fd, name, 0); err != nil {
-		return fmt.Errorf("%s %q: %w", operation, name, err)
-	}
-	return directory.sync()
-}
-
-func (directory *linuxOutputDirectory) unlinkDirectory(
-	name string,
-	expected *linuxOutputDirectory,
-) error {
-	const operation = "unlink output directory"
-	if err := linuxVerifyDirectoryPair(directory, expected); err != nil {
-		return err
-	}
-	if err := linuxValidateComponent(operation, name); err != nil {
-		return err
-	}
-	matches, closeErr := directory.directoryEntryMatches(name, expected)
-	if !matches {
-		return errors.Join(
-			linuxUnsafe(operation, "name no longer identifies the expected open directory", nil),
-			closeErr,
-		)
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	if err := directory.system.unlinkat(directory.fd, name, unix.AT_REMOVEDIR); err != nil {
-		return fmt.Errorf("%s %q: %w", operation, name, err)
-	}
-	return directory.sync()
-}
-
-func (directory *linuxOutputDirectory) renameDirectory(
-	sourceName string,
-	expected *linuxOutputDirectory,
-	targetDirectory *linuxOutputDirectory,
-	targetName string,
-	disposition linuxRenameDisposition,
-) error {
-	return linuxRenameVerifiedEntry(
-		directory,
-		sourceName,
-		targetDirectory,
-		targetName,
-		disposition,
-		"rename output directory",
-		"directory",
-		func(parent *linuxOutputDirectory, name string) (bool, error) {
-			return parent.directoryEntryMatches(name, expected)
-		},
-	)
-}
-
-func linuxRenameVerifiedEntry(
-	sourceDirectory *linuxOutputDirectory,
-	sourceName string,
-	targetDirectory *linuxOutputDirectory,
-	targetName string,
-	disposition linuxRenameDisposition,
-	operation string,
-	entryKind string,
-	matchesExpected func(*linuxOutputDirectory, string) (bool, error),
-) error {
-	if err := linuxVerifyDirectoryPair(sourceDirectory, targetDirectory); err != nil {
-		return err
-	}
-	if err := linuxValidateComponent(operation, sourceName); err != nil {
-		return err
-	}
-	if err := linuxValidateComponent(operation, targetName); err != nil {
-		return err
-	}
-	matches, err := matchesExpected(sourceDirectory, sourceName)
-	if err != nil {
-		return err
-	}
-	if !matches {
-		return linuxUnsafe(operation, "source name no longer identifies the expected "+entryKind, nil)
-	}
-	flags, err := linuxRenameFlags(operation, disposition)
-	if err != nil {
-		return err
-	}
-	if err := sourceDirectory.system.renameat2(
-		sourceDirectory.fd,
-		sourceName,
-		targetDirectory.fd,
-		targetName,
-		flags,
-	); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return &linuxOutputCollisionError{operation: operation, name: targetName, cause: err}
-		}
-		return fmt.Errorf("%s %q: %w", operation, targetName, err)
-	}
-	if err := linuxSyncRenamedParents(sourceDirectory, targetDirectory); err != nil {
-		return err
-	}
-	matches, err = matchesExpected(targetDirectory, targetName)
-	if err != nil {
-		return err
-	}
-	if !matches {
-		return linuxUnsafe(operation, "rename target does not identify the expected "+entryKind, nil)
-	}
-	return nil
-}
-
-func (directory *linuxOutputDirectory) directoryEntryMatches(
-	name string,
-	expected *linuxOutputDirectory,
-) (bool, error) {
-	if expected == nil {
-		return false, linuxUnsafe("compare output directory entry", "expected directory handle is absent", nil)
-	}
-	if err := expected.verifyHandle(); err != nil {
-		return false, err
-	}
-	opened, err := directory.openDirectory(name)
-	if err != nil {
-		return false, err
-	}
-	same := opened.object.sameObject(expected.object)
-	return same, opened.close()
 }

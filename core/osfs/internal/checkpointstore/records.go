@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	// ReceiveOperation includes the canonical intent image, whose bounded
-	// selection and artifact fields can be larger than a file checkpoint.
-	maxRepositoryRecordBytes = checkpointmodel.MaximumReceiveOperationSize
+	// The ordinary operation envelope is the largest record installed through
+	// this engine; FileCheckpointV2 remains below the same explicit bound.
+	maxRepositoryRecordBytes = checkpointmodel.MaximumOrdinaryOperationRecordBytesV1
 	ShardLimit               = checkpointmodel.CheckpointShardBuckets + 1
 	EntryLimit               = checkpointmodel.MaxCheckpointRecordsPerOperation + 1
 	installationAttempts     = 16
@@ -187,6 +187,12 @@ func InstallCreate(directory outputcap.Directory, name string, encoded []byte) e
 		return reconcileExactCandidates(directory, name, encoded)
 	case err == nil:
 		return checkpointmodel.ErrRecordBinding
+	case errors.Is(err, fs.ErrNotExist):
+		if kind, exact, classifyErr := directory.ClassifyExactEntry(name); classifyErr != nil {
+			return classifyErr
+		} else if kind != outputcap.EntryAbsent || !exact {
+			return outputcap.ErrUnsafeNamespace
+		}
 	case !errors.Is(err, fs.ErrNotExist):
 		return err
 	}
@@ -373,6 +379,25 @@ func InstallReplace(directory outputcap.Directory, name string, previous, next [
 		)
 	}
 	return fmt.Errorf("%w: checkpoint replacement temporary allocation exhausted", outputcap.ErrUnsafeNamespace)
+}
+
+// InstallReplaceStrict differs from the idempotent generic replacement helper:
+// callers use it when an exact predecessor generation is the authority. A
+// completed retry with next already present is therefore rejected rather than
+// allowing a stale actor to report success.
+func InstallReplaceStrict(directory outputcap.Directory, name string, previous, next []byte) error {
+	if directory == nil || name == "" || len(previous) == 0 || len(previous) > maxRepositoryRecordBytes ||
+		len(next) == 0 || len(next) > maxRepositoryRecordBytes {
+		return checkpointmodel.ErrInvalidRecord
+	}
+	current, err := ReadFile(directory, name)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(current, previous) {
+		return checkpointmodel.ErrRecordBinding
+	}
+	return InstallReplace(directory, name, previous, next)
 }
 
 // reconcileExactCandidates removes only deterministic names whose exact image

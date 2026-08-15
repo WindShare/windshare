@@ -11,7 +11,9 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/transfer/catalogwalk"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -36,16 +38,17 @@ var (
 	ErrOutputQuarantined      = errors.New("output file needs manual ownership review")
 	ErrOutputRetired          = errors.New("output file retirement completed without content transfer")
 	ErrGenerationReplayBudget = errors.New("transfer generation replay page budget exceeded")
+	ErrFrozenSourceDrift      = errors.New("authenticated source no longer matches the frozen output anchor")
 	errRangeReaderContract    = errors.New("range reader violated its requested output interval")
 )
 
 type DirectTreeOutcome uint8
 
 const (
-	DirectTreeOutcomePublished DirectTreeOutcome = iota + 1
-	DirectTreeOutcomePartialDirectory
-	DirectTreeOutcomeResumable
-	DirectTreeOutcomeNeedsAttention
+	DirectTreeOutcomeSuccess DirectTreeOutcome = iota + 1
+	DirectTreeOutcomePartial
+	DirectTreeOutcomePaused
+	DirectTreeOutcomeFailed
 )
 
 type FailureStage uint8
@@ -84,6 +87,23 @@ type FileJobFailure struct {
 	LeaseReleaseFault   fault.Fault
 }
 
+// FileOutcomeSummary is the bounded command-facing projection of typed file
+// settlements. It intentionally carries counts rather than paths or checkpoint
+// facts so consumers can report provenance without retaining a second manifest.
+type FileOutcomeSummary struct {
+	DownloadedFiles      uint64
+	ResumedFiles         uint64
+	PausedFiles          uint64
+	CollisionFiles       uint64
+	FailedFiles          uint64
+	ItemBlockedFiles     uint64
+	ModifiedTimeWarnings uint64
+}
+
+func (summary FileOutcomeSummary) PublishedFiles() uint64 {
+	return summary.DownloadedFiles + summary.ResumedFiles
+}
+
 type JobResult struct {
 	Outcome             DirectTreeOutcome
 	Settlement          DirectTreeSettlement
@@ -106,6 +126,7 @@ type JobResult struct {
 	SourceDriftFailure error
 	SourceDriftFault   fault.Fault
 	SucceededFiles     uint64
+	FileOutcomes       FileOutcomeSummary
 	TerminationCause   error
 	TerminationFault   fault.Fault
 	SettlementFailure  error
@@ -178,6 +199,8 @@ type TransferJob struct {
 	settlementTimeout  time.Duration
 	queueCapacity      int
 	replayPageCapacity int
+	catalogWalkLimits  catalogwalk.Limits
+	projector          ordinaryoutput.ArtifactPathProjector
 	tracer             TransferLifecycleTracer
 	tracker            selectionTracker
 
@@ -212,6 +235,18 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 	if selection.IsZero() {
 		return nil, ErrInvalidTransferJob
 	}
+	projector, err := OrdinaryOutputArtifactPathProjector(intent)
+	if err != nil {
+		return nil, ErrInvalidTransferJob
+	}
+	walkLimits, ok := catalogwalk.NewLimits(
+		uint32(replayPageCapacity),
+		catalog.MaxDirectoryEntries,
+		uint64(replayPageCapacity)*(catalog.CatalogPageMemoryOverhead+catalog.MaxCatalogPageObjectBytes),
+	)
+	if !ok {
+		return nil, ErrInvalidTransferJob
+	}
 	return &TransferJob{
 		share: intent.ShareInstance(), root: intent.SyntheticRoot(), rules: intent.SelectionRules(),
 		intent: intent, jobID: config.JobID, protocolSessionID: config.ProtocolSessionID,
@@ -219,6 +254,7 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 		catalog:       config.Catalog, revisions: config.Revisions, blocks: config.Blocks,
 		outputAuthority:   config.Materializer,
 		settlementTimeout: timeout, queueCapacity: queueCapacity, replayPageCapacity: replayPageCapacity,
+		catalogWalkLimits: walkLimits, projector: projector,
 		tracer: config.Tracer, tracker: newSelectionTracker(),
 	}, nil
 }
@@ -240,7 +276,7 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 	if j.started {
 		j.mu.Unlock()
 		failure := dependencyContractFailure(ErrTransferJobRun)
-		return JobResult{Outcome: DirectTreeOutcomeResumable, TransferJobID: j.jobID,
+		return JobResult{Outcome: DirectTreeOutcomePaused, TransferJobID: j.jobID,
 			ReceiveIntentDigest: j.intent.Digest(), ReceiveIntent: j.intent,
 			Measure: j.Measure(), TerminationCause: failure,
 			TerminationFault: closedLifecycleFault(failure)}
@@ -255,7 +291,7 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 		failure := dependencyContractFailure(err)
 		j.failUnstartedDiscovery()
 		return JobResult{
-			Outcome: DirectTreeOutcomeResumable, TransferJobID: j.jobID,
+			Outcome: DirectTreeOutcomePaused, TransferJobID: j.jobID,
 			ReceiveIntentDigest: j.intent.Digest(), ReceiveIntent: j.intent,
 			Measure: j.Measure(), TerminationCause: failure,
 			TerminationFault: closedLifecycleFault(failure),
@@ -407,30 +443,25 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 	if err != nil || !ready {
 		return err
 	}
-	locator, err := NewPathMaterializationLocator(plan.path)
-	if err != nil {
-		return r.rejectUnstartedFile(ctx, plan, opened, dependencyContractFailure(err))
-	}
-	target, err := NewFileMaterializationTarget(
-		r.output.SessionID(), opened.Descriptor, locator,
-	)
-	if err != nil {
-		return r.rejectUnstartedFile(ctx, plan, opened, dependencyContractFailure(err))
-	}
 	if plan.parentAdmission.IsZero() {
 		return r.rejectUnstartedFile(ctx, plan, opened, dependencyContractFailure(ErrDirectoryAdmissionMismatch))
 	}
-	start, err := r.output.BeginFile(ctx, MaterializationFile{
-		Path: plan.path, ExpectedSize: plan.expectedSize, Descriptor: opened.Descriptor, Target: target,
-		ParentAdmission: plan.parentAdmission,
-	})
+	file, err := NewMaterializationFile(
+		r.job.projector, plan.sourcePath, opened.Descriptor, r.output.SessionID(),
+		plan.parentAdmission, plan.parentMaterialization,
+	)
+	if err != nil || file.ArtifactPath() != plan.artifactPath || file.ExpectedSize() != plan.expectedSize {
+		return r.rejectUnstartedFile(ctx, plan, opened, dependencyContractFailure(errors.Join(ErrOutputContract, err)))
+	}
+	target := file.Target()
+	start, err := r.output.BeginFile(ctx, file)
 	err = normalizeOutputBoundary(ctx, err)
 	if err != nil {
 		r.traceFileLifecycle(TransferFileAdmitted, plan, err)
 		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 		policy := lifecyclePolicyFor(err)
 		failure := FileJobFailure{
-			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: err, LeaseReleaseFailure: releaseErr,
 		}
 		if policy.jobTerminal() || isJobTerminalError(releaseErr) ||
@@ -476,7 +507,7 @@ func (r *jobRun) rejectUnstartedFile(
 ) error {
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 	r.recordFileFailure(FileJobFailure{
-		FileID: plan.file, Path: plan.path, Stage: FailureFileOutput, Cause: cause,
+		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: cause,
 		LeaseReleaseFailure: releaseErr,
 	})
 	return joinLifecycleFailures(cause, releaseErr)
@@ -493,7 +524,7 @@ func (r *jobRun) rejectImmediateSettlement(
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 	r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, fault)
 	r.recordFileFailure(FileJobFailure{
-		FileID: plan.file, Path: plan.path, Stage: FailureFileOutput, Cause: fault,
+		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: fault,
 		Settlement: settlement, SettlementFailure: fault, LeaseReleaseFailure: releaseErr,
 	})
 	r.traceFileSettlement(plan, settlement, joinLifecycleFailures(fault, releaseErr))
@@ -512,7 +543,7 @@ func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (Op
 			return OpenedRevision{}, false, joinLifecycleFailures(err, releaseErr)
 		}
 		r.recordFileFailure(FileJobFailure{
-			FileID: plan.file, Path: plan.path, Stage: FailureRevisionOpen, Cause: err,
+			FileID: plan.file, Path: plan.failurePath(), Stage: FailureRevisionOpen, Cause: err,
 			LeaseReleaseFailure: releaseErr,
 		})
 		if isJobTerminalError(releaseErr) {
@@ -526,7 +557,7 @@ func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (Op
 		err = sourceChangedFailure(err)
 		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 		r.recordFileFailure(FileJobFailure{
-			FileID: plan.file, Path: plan.path, Stage: FailureRevisionIdentity,
+			FileID: plan.file, Path: plan.failurePath(), Stage: FailureRevisionIdentity,
 			Cause: err, LeaseReleaseFailure: releaseErr,
 		})
 		if releaseErr != nil && isJobTerminalError(releaseErr) {
@@ -552,7 +583,7 @@ func (r *jobRun) handleImmediateSettlement(
 		r.job.tracker.completeFile(plan.expectedSize)
 		if releaseErr != nil {
 			r.recordFileFailure(FileJobFailure{
-				FileID: plan.file, Path: plan.path, Stage: FailureLeaseRelease,
+				FileID: plan.file, Path: plan.failurePath(), Stage: FailureLeaseRelease,
 				Cause: releaseErr,
 			})
 		}
@@ -562,28 +593,22 @@ func (r *jobRun) handleImmediateSettlement(
 		return nil
 	case FileCollision:
 		r.recordFileFailure(FileJobFailure{
-			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: ErrOutputPublishBlocked, Settlement: settlement,
 			LeaseReleaseFailure: releaseErr,
 		})
-	case FilePublishBlocked:
+	case FileItemBlocked:
 		r.recordFileFailure(FileJobFailure{
-			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
-			Cause: ErrOutputPublishBlocked, Settlement: settlement,
-			LeaseReleaseFailure: releaseErr,
-		})
-	case FileQuarantined:
-		r.recordFileFailure(FileJobFailure{
-			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: ErrOutputQuarantined, Settlement: settlement,
 			LeaseReleaseFailure: releaseErr,
 		})
-	case FileRetired:
+	case FileFailed:
 		// A recovered retirement is already-authorized durable cleanup. Preserve
 		// its exact settlement without creating a transaction or attempting a
 		// second settlement whose reason this run cannot authenticate.
 		r.recordFileFailure(FileJobFailure{
-			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: ErrOutputRetired, Settlement: settlement,
 			LeaseReleaseFailure: releaseErr,
 		})

@@ -1,8 +1,9 @@
-// Package checkpointstore owns the native FileCheckpointV2 and receive-operation namespace.
+// Package checkpointstore owns the native FileCheckpointV2 records and the
+// ordinary-operation registry that bounds resume, list, and discard work.
 //
 // The package deliberately exposes only live capability handles to the output
-// runtime. Legacy session headers never enter this module, so they cannot become
-// an accidental prerequisite for checkpoint recovery.
+// runtime. Session headers and terminal receipt/history models never enter this
+// module, so they cannot become accidental prerequisites for recovery.
 package checkpointstore
 
 import (
@@ -16,9 +17,19 @@ import (
 )
 
 const (
-	OwnershipFile    = "marker"
-	RecordsDirectory = "records"
+	ControlDirectory     = ".windshare-output"
+	CheckpointsDirectory = "checkpoints"
+	RecordsDirectory     = "records"
+	AnchorsDirectory     = "anchors"
+	StagesDirectory      = "stages"
+	OwnershipFile        = "marker"
 )
+
+var checkpointEntries = map[string]outputcap.EntryKind{
+	RecordsDirectory: outputcap.EntryDirectory,
+	AnchorsDirectory: outputcap.EntryDirectory,
+	StagesDirectory:  outputcap.EntryDirectory,
+}
 
 type OwnershipStatus uint8
 
@@ -253,4 +264,55 @@ func closeLock(lock outputcap.Lock) error {
 		return nil
 	}
 	return lock.Close()
+}
+
+func openExistingDirectory(parent outputcap.Directory, name string) (outputcap.Directory, error) {
+	if parent == nil || name == "" {
+		return nil, transfer.ErrInvalidOutputBinding
+	}
+	kind, exact, err := parent.ClassifyExactEntry(name)
+	if err != nil {
+		return nil, err
+	}
+	if kind == outputcap.EntryAbsent {
+		return nil, fs.ErrNotExist
+	}
+	if !exact || kind != outputcap.EntryDirectory {
+		return nil, outputcap.ErrUnsafeNamespace
+	}
+	opened, err := parent.OpenDirectory(name, true)
+	if err != nil {
+		return nil, errors.Join(err, closeDirectory(opened))
+	}
+	if opened == nil {
+		return nil, outputcap.ErrUnsafeNamespace
+	}
+	return opened, nil
+}
+
+func validateAllowedEntries(directory outputcap.Directory, allowed map[string]outputcap.EntryKind) error {
+	if directory == nil {
+		return transfer.ErrInvalidOutputBinding
+	}
+	names, err := directory.Names(len(allowed) + 1)
+	if err != nil {
+		return err
+	}
+	if len(names) > len(allowed) {
+		return outputcap.ErrUnsafeNamespace
+	}
+	for _, name := range names {
+		expected, known := allowed[name]
+		if !known {
+			return outputcap.ErrUnsafeNamespace
+		}
+		kind, exact, err := directory.ClassifyExactEntry(name)
+		if err != nil {
+			return err
+		}
+		if !exact || kind != expected {
+			return outputcap.ErrUnsafeNamespace
+		}
+	}
+	return nil
 }

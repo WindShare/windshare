@@ -5,6 +5,7 @@ package outputwindows
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -43,12 +44,37 @@ type windowsV3OutputProbeLock struct {
 	threadID     uint32
 }
 
+func (directory *windowsV3Directory) currentObjectClaim() ([]byte, error) {
+	if err := directory.usable(); err != nil {
+		return nil, err
+	}
+	facts, err := directory.inspector.Inspect(directory.handle())
+	if err != nil {
+		return nil, windowsV3Failure("claim current Windows output object", directory.path,
+			errWindowsV3OutputUnsafe, err)
+	}
+	if err := windowsV3ValidateOpenedObject(facts, directory.volume, true); err != nil {
+		return nil, windowsV3Failure("claim current Windows output object", directory.path,
+			errWindowsV3OutputUnsafe, err)
+	}
+	// This claim only keys an in-process probe mutex while the root is pinned.
+	// It is deliberately not a restart identity and therefore must not enroll an
+	// NTFS Object ID as a prerequisite for SafePublish or CrashCleanup.
+	claim := make([]byte, len(facts.object.volume.guid)+8+len(facts.object.fileID))
+	copy(claim, facts.object.volume.guid)
+	offset := len(facts.object.volume.guid)
+	binary.BigEndian.PutUint64(claim[offset:], facts.object.volume.serial)
+	offset += 8
+	copy(claim[offset:], facts.object.fileID[:])
+	return claim, nil
+}
+
 func (root *windowsV3Directory) acquireOutputProbeLock() (_ *windowsV3OutputProbeLock, resultErr error) {
 	const operation = "lock Windows output feature probe"
 	if err := root.verify(false); err != nil {
 		return nil, err
 	}
-	rootClaim, err := root.identityClaim()
+	rootClaim, err := root.currentObjectClaim()
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +144,7 @@ func (root *windowsV3Directory) acquireOutputProbeLock() (_ *windowsV3OutputProb
 			windows.CloseHandle(handle),
 		)
 	}
-	currentClaim, claimErr := root.identityClaim()
+	currentClaim, claimErr := root.currentObjectClaim()
 	if claimErr != nil || !bytes.Equal(rootClaim, currentClaim) {
 		return nil, errors.Join(
 			windowsV3Failure(operation, mutexName, errWindowsV3OutputUnsafe,

@@ -9,12 +9,12 @@ const (
 	RecoveryActivate
 	RecoveryRetryPublication
 	RecoveryCompletePublication
-	RecoveryPublishBlocked
+	RecoveryReturnCollision
 	RecoveryReturnPublished
 	RecoveryReturnRetired
 	RecoveryReturnQuarantined
+	RecoveryStartNewPreservingOld
 	RecoveryInstallQuarantine
-	RecoveryNeedsAttention
 )
 
 type RecoveryDecision struct {
@@ -27,9 +27,9 @@ func (decision RecoveryDecision) QuarantineReason() checkpointmodel.QuarantineRe
 	return decision.quarantine
 }
 
-// ReduceRecovery never turns an unsafe or unclassifiable namespace observation
-// into mutation authority. Definite missing/collision states may quarantine one
-// file; unknown ownership stops at NeedsAttention.
+// ReduceRecovery never turns an unsafe or unclassifiable file observation into
+// mutation authority. File-local uncertainty is durably quarantined so only the
+// affected item stops; operation attention belongs to root/registry/lease owners.
 func ReduceRecovery(
 	record checkpointmodel.Record,
 	owned OwnedObservation,
@@ -53,21 +53,13 @@ func ReduceRecovery(
 	}
 	switch record.Phase() {
 	case checkpointmodel.PhaseActive, checkpointmodel.PhasePaused:
-		return reduceWritableRecovery(record, owned, final, complete)
+		return reduceWritableRecovery(record, owned, final)
 	case checkpointmodel.PhasePublishing:
 		return reducePublishingRecovery(record, owned, final, complete)
 	case checkpointmodel.PhasePublished:
-		if record.CommitState() == checkpointmodel.CommitPublished &&
-			final.Condition() == FinalOwnedExact && cleanupCondition(owned.Condition()) {
-			return RecoveryDecision{action: RecoveryReturnPublished}, nil
-		}
-		return RecoveryDecision{action: RecoveryNeedsAttention}, nil
+		return reducePublishedRecovery(record, owned, final)
 	case checkpointmodel.PhaseRetired:
-		if record.CommitState() == checkpointmodel.CommitVerified && record.RetirementReason().Valid() &&
-			final.Condition() == FinalAbsent && cleanupCondition(owned.Condition()) {
-			return RecoveryDecision{action: RecoveryReturnRetired}, nil
-		}
-		return RecoveryDecision{action: RecoveryNeedsAttention}, nil
+		return reduceRetiredRecovery(record, owned, final)
 	default:
 		return RecoveryDecision{}, ErrCheckpointBinding
 	}
@@ -77,7 +69,6 @@ func reduceWritableRecovery(
 	record checkpointmodel.Record,
 	owned OwnedObservation,
 	final FinalObservation,
-	complete bool,
 ) (RecoveryDecision, error) {
 	if record.CommitState() != checkpointmodel.CommitVerified {
 		return RecoveryDecision{}, ErrCheckpointBinding
@@ -91,17 +82,21 @@ func reduceWritableRecovery(
 			}
 			return RecoveryDecision{action: RecoveryOpenActive}, nil
 		case OwnedAbsent, OwnedAnchorMissing, OwnedStageMissing:
-			return recoveryQuarantine(ownedQuarantineReason(owned.Condition())), nil
+			// Definite loss of our restart object cannot authorize mutation of the
+			// old path. Preserve its evidence and establish a fresh object instead.
+			return RecoveryDecision{action: RecoveryStartNewPreservingOld}, nil
 		default:
-			return RecoveryDecision{action: RecoveryNeedsAttention}, nil
+			return recoveryQuarantine(ownedQuarantineReason(owned.Condition())), nil
 		}
 	case FinalCollision:
-		if record.Phase() == checkpointmodel.PhasePaused && complete {
-			return RecoveryDecision{action: RecoveryPublishBlocked}, nil
-		}
+		// Occupation is a reversible destination condition, not uncertainty about
+		// our checkpoint. Keeping the verified record writable lets the same
+		// operation continue as soon as the foreign final is removed.
+		return RecoveryDecision{action: RecoveryReturnCollision}, nil
+	case FinalOwnedExact:
 		return recoveryQuarantine(checkpointmodel.QuarantinePublicationHistory), nil
-	case FinalUnsafe, FinalOwnedExact, FinalOwnedMetadataMismatch:
-		return RecoveryDecision{action: RecoveryNeedsAttention}, nil
+	case FinalUnsafe:
+		return recoveryQuarantine(checkpointmodel.QuarantineFinalUnsafe), nil
 	default:
 		return RecoveryDecision{}, ErrInvalidObservation
 	}
@@ -114,23 +109,63 @@ func reducePublishingRecovery(
 	complete bool,
 ) (RecoveryDecision, error) {
 	if record.CommitState() != checkpointmodel.CommitVerified || !complete {
-		return RecoveryDecision{action: RecoveryNeedsAttention}, nil
+		return recoveryQuarantine(checkpointmodel.QuarantinePublicationHistory), nil
 	}
 	switch final.Condition() {
 	case FinalAbsent:
 		if owned.Condition() == OwnedReady {
 			return RecoveryDecision{action: RecoveryRetryPublication}, nil
 		}
-		return RecoveryDecision{action: RecoveryNeedsAttention}, nil
+		return recoveryQuarantine(ownedQuarantineReason(owned.Condition())), nil
 	case FinalCollision:
-		return RecoveryDecision{action: RecoveryPublishBlocked}, nil
+		return RecoveryDecision{action: RecoveryReturnCollision}, nil
 	case FinalOwnedExact:
 		return RecoveryDecision{action: RecoveryCompletePublication}, nil
-	case FinalUnsafe, FinalOwnedMetadataMismatch:
-		return RecoveryDecision{action: RecoveryNeedsAttention}, nil
+	case FinalUnsafe:
+		return recoveryQuarantine(checkpointmodel.QuarantineFinalUnsafe), nil
 	default:
 		return RecoveryDecision{}, ErrInvalidObservation
 	}
+}
+
+func reducePublishedRecovery(
+	record checkpointmodel.Record,
+	owned OwnedObservation,
+	final FinalObservation,
+) (RecoveryDecision, error) {
+	if record.CommitState() != checkpointmodel.CommitPublished {
+		return RecoveryDecision{}, ErrCheckpointBinding
+	}
+	if final.Condition() == FinalOwnedExact {
+		if cleanupCondition(owned.Condition()) {
+			return RecoveryDecision{action: RecoveryReturnPublished}, nil
+		}
+		return recoveryQuarantine(ownedQuarantineReason(owned.Condition())), nil
+	}
+	if final.Condition() == FinalUnsafe {
+		return recoveryQuarantine(checkpointmodel.QuarantineFinalUnsafe), nil
+	}
+	return recoveryQuarantine(checkpointmodel.QuarantineFinalMismatch), nil
+}
+
+func reduceRetiredRecovery(
+	record checkpointmodel.Record,
+	owned OwnedObservation,
+	final FinalObservation,
+) (RecoveryDecision, error) {
+	if record.CommitState() != checkpointmodel.CommitVerified || !record.RetirementReason().Valid() {
+		return RecoveryDecision{}, ErrCheckpointBinding
+	}
+	if final.Condition() == FinalAbsent {
+		if cleanupCondition(owned.Condition()) {
+			return RecoveryDecision{action: RecoveryReturnRetired}, nil
+		}
+		return recoveryQuarantine(ownedQuarantineReason(owned.Condition())), nil
+	}
+	if final.Condition() == FinalUnsafe {
+		return recoveryQuarantine(checkpointmodel.QuarantineFinalUnsafe), nil
+	}
+	return recoveryQuarantine(checkpointmodel.QuarantineFinalMismatch), nil
 }
 
 func recoveryQuarantine(reason checkpointmodel.QuarantineReason) RecoveryDecision {

@@ -3,7 +3,11 @@
 package outputwindows
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -81,6 +85,157 @@ func (directory *windowsV3Directory) openPrivateFile(relative string, dispositio
 	return directory.openFile(relative, disposition, windowsV3PrivateFileAccess(), descriptor, true)
 }
 
+const (
+	windowsV3LiveStageTemporaryPrefix      = ".windshare-live-stage-"
+	windowsV3LiveStageTemporaryRandomBytes = 16
+	windowsV3LiveStageAllocationAttempts   = 16
+)
+
+type windowsV3LiveStageCreateCut uint8
+
+const (
+	windowsV3LiveStageCutTemporaryCreated windowsV3LiveStageCreateCut = iota + 1
+	windowsV3LiveStageCutInstalled
+	windowsV3LiveStageCutSynced
+	windowsV3LiveStageCutCommitted
+)
+
+type windowsV3LiveStageCreateObserver interface {
+	ObserveLiveStageCreate(windowsV3LiveStageCreateCut) error
+}
+
+type windowsV3LiveStageCreateObserverFunc func(windowsV3LiveStageCreateCut) error
+
+func (observe windowsV3LiveStageCreateObserverFunc) ObserveLiveStageCreate(cut windowsV3LiveStageCreateCut) error {
+	return observe(cut)
+}
+
+func (directory *windowsV3Directory) observeLiveStageCreate(cut windowsV3LiveStageCreateCut) error {
+	if directory.createObserver == nil {
+		return nil
+	}
+	observer, ok := directory.createObserver.(windowsV3LiveStageCreateObserver)
+	if !ok {
+		return nil
+	}
+	return observer.ObserveLiveStageCreate(cut)
+}
+
+func (directory *windowsV3Directory) createPublicInheritedDeleteOnCloseFile() (*windowsV3File, error) {
+	if err := directory.usable(); err != nil {
+		return nil, err
+	}
+	if directory.private {
+		return nil, windowsV3Failure("create live-cleanup stage", directory.path, errWindowsV3OutputUnsafe,
+			errors.New("stage allocation requires the exact public final parent"))
+	}
+	for range windowsV3LiveStageAllocationAttempts {
+		var nonce [windowsV3LiveStageTemporaryRandomBytes]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			return nil, windowsV3Failure("allocate live-cleanup stage name", directory.path,
+				errWindowsV3OutputUnsafe, err)
+		}
+		name := windowsV3LiveStageTemporaryPrefix + hex.EncodeToString(nonce[:])
+		native, err := windowsV3RelativePath(name, true)
+		if err != nil {
+			return nil, windowsV3Failure("allocate live-cleanup stage name", name, errWindowsV3OutputUnsafe, err)
+		}
+		handle, _, err := windowsV3OpenNative(
+			directory.handle(), native, windowsV3PrivateFileAccess(), windows.FILE_CREATE,
+			windows.FILE_NON_DIRECTORY_FILE|windows.FILE_DELETE_ON_CLOSE, windows.FILE_ATTRIBUTE_NORMAL, nil,
+		)
+		if errors.Is(err, fs.ErrExist) || windowsV3IsCollision(err) {
+			continue
+		}
+		if err != nil {
+			return nil, windowsV3NativeOperationFailure("create live-cleanup stage", name, err)
+		}
+		wrapped := os.NewFile(uintptr(handle), name)
+		if wrapped == nil {
+			_ = windows.CloseHandle(handle)
+			return nil, windowsV3Failure("create live-cleanup stage", name, errWindowsV3OutputUnsafe,
+				errors.New("wrap stage file handle"))
+		}
+		stage := &windowsV3File{
+			file: wrapped, path: filepath.Join(directory.path, name), volume: directory.volume,
+			inspector: directory.inspector, policy: directory.policy,
+		}
+		if err := errors.Join(stage.verify(false), windowsV3VerifyOpenedLeafAuthority(stage.handle(), native, false)); err != nil {
+			return nil, errors.Join(err, stage.Close())
+		}
+		if err := directory.observeLiveStageCreate(windowsV3LiveStageCutTemporaryCreated); err != nil {
+			return nil, errors.Join(err, stage.Close())
+		}
+		return stage, nil
+	}
+	return nil, windowsV3Failure("create live-cleanup stage", directory.path, errWindowsV3OutputUnsafe,
+		errors.New("could not allocate a unique temporary stage name"))
+}
+
+func (directory *windowsV3Directory) moveLiveStageNoReplace(
+	stage *windowsV3File,
+	proofDirectory *windowsV3Directory,
+	target string,
+) error {
+	if err := directory.usable(); err != nil {
+		return err
+	}
+	if err := proofDirectory.usable(); err != nil {
+		return err
+	}
+	if stage == nil || stage.file == nil || directory.private || !proofDirectory.private ||
+		stage.volume != directory.volume || proofDirectory.volume != directory.volume {
+		return windowsV3Failure("install live-cleanup stage", target, errWindowsV3OutputUnsafe,
+			errors.New("stage and proof-directory authorities are incompatible"))
+	}
+	name, err := windowsV3RelativePath(target, true)
+	if err != nil {
+		return windowsV3Failure("install live-cleanup stage", target, errWindowsV3OutputUnsafe, err)
+	}
+	buffer, err := windowsV3LinkRenameBuffer(windows.FILE_RENAME_POSIX_SEMANTICS, proofDirectory.handle(), name)
+	if err != nil {
+		return windowsV3Failure("install live-cleanup stage", target, errWindowsV3OutputUnsafe, err)
+	}
+	var status windows.IO_STATUS_BLOCK
+	err = normalizeWindowsV3NTError(windows.NtSetInformationFile(
+		stage.handle(), &status, &buffer[0], uint32(len(buffer)), windowsV3FileRenameInformationEx,
+	))
+	runtime.KeepAlive(directory)
+	runtime.KeepAlive(proofDirectory)
+	runtime.KeepAlive(stage)
+	if err != nil {
+		return windowsV3NativeNoReplaceFailure("install live-cleanup stage", target, err)
+	}
+	if err := directory.observeLiveStageCreate(windowsV3LiveStageCutInstalled); err != nil {
+		return err
+	}
+	if err := errors.Join(stage.Sync(), directory.Sync(), proofDirectory.Sync()); err != nil {
+		return windowsV3Failure("sync installed live-cleanup stage", target, errWindowsV3OutputUnsafe, err)
+	}
+	if err := directory.observeLiveStageCreate(windowsV3LiveStageCutSynced); err != nil {
+		return err
+	}
+	installed, _, err := proofDirectory.openFile(
+		target, windows.FILE_OPEN, windowsV3ReadFileAccess(), nil, false,
+	)
+	if err != nil {
+		return windowsV3Failure("verify installed live-cleanup stage", target, errWindowsV3OutputUnsafe, err)
+	}
+	same, compareErr := sameWindowsV3OpenedObject(stage, installed)
+	closeErr := installed.Close()
+	if compareErr != nil || closeErr != nil || !same {
+		return errors.Join(windowsV3Failure("verify installed live-cleanup stage", target, errWindowsV3OutputUnsafe,
+			errors.New("proof-directory entry does not identify the staged object")), compareErr, closeErr)
+	}
+	if err := windowsV3CommitDeleteOnClose(stage.handle()); err != nil {
+		return windowsV3Failure("commit installed live-cleanup stage", target, errWindowsV3OutputUnsafe, err)
+	}
+	if err := directory.observeLiveStageCreate(windowsV3LiveStageCutCommitted); err != nil {
+		return err
+	}
+	return proofDirectory.Sync()
+}
+
 func (directory *windowsV3Directory) OpenRegularFile(relative string) (*windowsV3File, error) {
 	opened, _, err := directory.openFile(
 		relative, windows.FILE_OPEN, windowsV3ReadFileAccess(), nil, directory.private,
@@ -88,9 +243,9 @@ func (directory *windowsV3Directory) OpenRegularFile(relative string) (*windowsV
 	return opened, err
 }
 
-func (directory *windowsV3Directory) openFileForDelete(relative string) (*windowsV3File, error) {
+func (directory *windowsV3Directory) openFileForDelete(relative string, private bool) (*windowsV3File, error) {
 	opened, _, err := directory.openFile(
-		relative, windows.FILE_OPEN, windowsV3DeleteFileAccess(), nil, directory.private,
+		relative, windows.FILE_OPEN, windowsV3DeleteFileAccess(), nil, private,
 	)
 	return opened, err
 }
@@ -205,6 +360,21 @@ func sameWindowsV3OpenedDirectory(left, right *windowsV3Directory) (bool, error)
 	return leftFacts.object.same(rightFacts.object), nil
 }
 
+type windowsV3PublishMutationError struct {
+	cause error
+}
+
+func (failure *windowsV3PublishMutationError) Error() string {
+	return fmt.Sprintf("native publication may be visible: %v", failure.cause)
+}
+
+func (failure *windowsV3PublishMutationError) Unwrap() error { return failure.cause }
+
+func windowsV3PublicationMayBeVisible(err error) bool {
+	_, ok := errors.AsType[*windowsV3PublishMutationError](err)
+	return ok
+}
+
 func (directory *windowsV3Directory) LinkRegularFileNoReplace(source *windowsV3File, target string) (*windowsV3File, error) {
 	if err := directory.usable(); err != nil {
 		return nil, err
@@ -229,14 +399,26 @@ func (directory *windowsV3Directory) LinkRegularFileNoReplace(source *windowsV3F
 	if err != nil {
 		return nil, windowsV3NativeNoReplaceFailure("link output file", target, err)
 	}
-	linked, err := directory.OpenRegularFile(target)
+	if err := directory.Sync(); err != nil {
+		return nil, &windowsV3PublishMutationError{cause: err}
+	}
+	// A protected namespace may hold an ordinary-profile stage or anchor whose
+	// access profile must survive same-object publication. The source capability
+	// already established its profile; reopening the new name only needs native
+	// identity and no-follow validation because a hard link cannot change its DACL.
+	linked, _, err := directory.openFile(
+		target, windows.FILE_OPEN, windowsV3ReadFileAccess(), nil, false,
+	)
 	if err != nil {
-		return nil, windowsV3Failure("verify linked output file", target, errWindowsV3OutputUnsafe, err)
+		return nil, &windowsV3PublishMutationError{cause: windowsV3Failure(
+			"verify linked output file", target, errWindowsV3OutputUnsafe, err)}
 	}
 	same, err := sameWindowsV3OpenedObject(source, linked)
 	if err != nil || !same {
-		return nil, errors.Join(windowsV3Failure("verify linked output file", target, errWindowsV3OutputUnsafe,
-			errors.New("destination does not identify the source object")), err, linked.Close())
+		return nil, &windowsV3PublishMutationError{cause: errors.Join(
+			windowsV3Failure("verify linked output file", target, errWindowsV3OutputUnsafe,
+				errors.New("destination does not identify the source object")),
+			err, linked.Close())}
 	}
 	return linked, nil
 }
@@ -323,14 +505,20 @@ func (directory *windowsV3Directory) InstallPrivateDirectoryNoReplace(source *wi
 			return nil, windowsV3NativeNoReplaceFailure("install private directory", target, err)
 		}
 	}
+	if err := directory.Sync(); err != nil {
+		return nil, &windowsV3PublishMutationError{cause: err}
+	}
 	installed, err := directory.OpenPrivateDirectory(target)
 	if err != nil {
-		return nil, windowsV3Failure("verify installed private directory", target, errWindowsV3OutputUnsafe, err)
+		return nil, &windowsV3PublishMutationError{cause: windowsV3Failure(
+			"verify installed private directory", target, errWindowsV3OutputUnsafe, err)}
 	}
 	same, compareErr := sameWindowsV3OpenedDirectory(source, installed)
 	if compareErr != nil || !same {
-		return nil, errors.Join(windowsV3Failure("verify installed private directory", target, errWindowsV3OutputUnsafe,
-			errors.New("installed directory does not identify the fixed candidate")), compareErr, installed.Close())
+		return nil, &windowsV3PublishMutationError{cause: errors.Join(
+			windowsV3Failure("verify installed private directory", target, errWindowsV3OutputUnsafe,
+				errors.New("installed directory does not identify the fixed candidate")),
+			compareErr, installed.Close())}
 	}
 	return installed, nil
 }

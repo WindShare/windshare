@@ -460,7 +460,7 @@ func TestLinuxNativeNamespaceLifecycle(t *testing.T) {
 	if err := reopenedControl.close(); err != nil {
 		t.Fatalf("close reopened control directory: %v", err)
 	}
-	stage, err := control.createRegularFileExact("object.stage", linuxOutputStateFileMode, 4096)
+	stage, err := control.createPrivateRegularFileExact("object.stage", linuxOutputStateFileMode, 4096)
 	if err != nil {
 		t.Fatalf("create stage: %v", err)
 	}
@@ -495,12 +495,12 @@ func TestLinuxNativeNamespaceLifecycle(t *testing.T) {
 		t.Fatalf("anchor/final relation: same=%v err=%v", same, err)
 	}
 
-	oldRecord, err := control.createRegularFileExact("file.state", linuxOutputStateFileMode, 1)
+	oldRecord, err := control.createPrivateRegularFileExact("file.state", linuxOutputStateFileMode, 1)
 	if err != nil {
 		t.Fatalf("create old state record: %v", err)
 	}
 	t.Cleanup(func() { _ = oldRecord.close() })
-	newRecord, err := control.createRegularFileExact("file.state.tmp", linuxOutputStateFileMode, 2)
+	newRecord, err := control.createPrivateRegularFileExact("file.state.tmp", linuxOutputStateFileMode, 2)
 	if err != nil {
 		t.Fatalf("create new state record: %v", err)
 	}
@@ -576,7 +576,7 @@ func TestLinuxFailedFileCreateRollbackNeverDeletesReplacement(t *testing.T) {
 		return unix.EIO
 	}
 
-	created, err := root.createRegularFileExact(name, linuxOutputStateFileMode, 1)
+	created, err := root.createPrivateRegularFileExact(name, linuxOutputStateFileMode, 1)
 	if created != nil {
 		_ = created.close()
 	}

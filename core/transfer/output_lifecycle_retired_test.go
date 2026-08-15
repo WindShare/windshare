@@ -9,7 +9,7 @@ import (
 
 func TestFileStartAcceptsDeterministicallyRecoveredRetirement(t *testing.T) {
 	binding := retiredStartTestBinding(t)
-	settlement, err := NewRetiredFileSettlement(binding)
+	settlement, err := NewFailedFileSettlement(binding)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,8 +22,8 @@ func TestFileStartAcceptsDeterministicallyRecoveredRetirement(t *testing.T) {
 	}
 	immediate, ok := start.ImmediateSettlement()
 	actualBinding, bound := immediate.MaterializedBinding()
-	if !ok || immediate.Kind() != FileRetired || !bound || actualBinding != binding {
-		t.Fatalf("immediate settlement = (%v, %v), want target-bound FileRetired", immediate.Kind(), ok)
+	if !ok || immediate.Kind() != FileFailed || !bound || actualBinding != binding {
+		t.Fatalf("immediate settlement = (%v, %v), want target-bound FileFailed", immediate.Kind(), ok)
 	}
 }
 

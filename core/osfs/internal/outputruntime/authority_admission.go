@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"io"
+	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/osfs/internal/checkpointstore"
+	"github.com/windshare/windshare/core/osfs/internal/destinationauthority"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -78,6 +81,9 @@ const (
 	FilesystemOutputRuntimeRecoverFile
 	FilesystemOutputRuntimePublishFile
 	FilesystemOutputRuntimeQuarantineFile
+	FilesystemOutputRuntimeAdmitDestination
+	FilesystemOutputRuntimeFirstWrite
+	FilesystemOutputRuntimeCleanup
 )
 
 type FilesystemOutputRuntimeDecision uint8
@@ -101,6 +107,7 @@ const (
 	FilesystemOutputRuntimeNoChange
 	FilesystemOutputRuntimeNeedsAttention
 	FilesystemOutputRuntimeIsolatedFailure
+	FilesystemOutputRuntimeCleanupPending
 )
 
 type FilesystemOutputNativeLockScope uint8
@@ -170,6 +177,16 @@ type Config struct {
 	PlatformFactory PlatformFactory
 }
 
+type authorityStage uint8
+
+const (
+	authorityStageConstructed authorityStage = iota + 1
+	authorityStageBound
+	authorityStageLookupHeld
+	authorityStageOperationReady
+	authorityStageLookupStopped
+)
+
 type Authority struct {
 	rootPath        string
 	createRoot      bool
@@ -178,6 +195,16 @@ type Authority struct {
 	platformFactory PlatformFactory
 	random          io.Reader
 	now             func() time.Time
+
+	mu          sync.Mutex
+	stage       authorityStage
+	closed      bool
+	destination *destinationauthority.BoundDestination
+	binding     destinationauthority.Binding
+	mode        outputcap.ExecutionMode
+	registry    *checkpointstore.OperationRegistry
+	admission   *heldAdmission
+	operation   *Operation
 }
 
 func New(config Config) (*Authority, error) {
@@ -185,6 +212,7 @@ func New(config Config) (*Authority, error) {
 		rootPath: config.RootPath, createRoot: config.CreateRoot,
 		sessionIDs: cryptographicOutputSessionIDs{}, tracer: config.Tracer,
 		platformFactory: config.PlatformFactory, random: rand.Reader, now: time.Now,
+		stage: authorityStageConstructed,
 	}, nil
 }
 
@@ -231,6 +259,15 @@ func (authority *Authority) ReserveDirectTree(
 	selection transfer.SelectionSpec,
 	artifact receivecontract.ArtifactSpec,
 ) (NativeDirectTreeReservation, error) {
+	if authority == nil {
+		return NativeDirectTreeReservation{}, transfer.ErrInvalidOutputBinding
+	}
+	authority.mu.Lock()
+	staged := authority.stage != authorityStageConstructed || authority.closed
+	authority.mu.Unlock()
+	if staged {
+		return NativeDirectTreeReservation{}, transfer.ErrInvalidOutputBinding
+	}
 	return authority.reserveNativeDirectTree(ctx, selection, artifact)
 }
 

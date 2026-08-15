@@ -3,39 +3,23 @@
 package outputlinux
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 
 	"golang.org/x/sys/unix"
 )
 
-const (
-	linuxDefaultAccessACL        = "system.posix_acl_default"
-	linuxAccessACL               = "system.posix_acl_access"
-	linuxPOSIXACLVersion         = uint32(2)
-	linuxPOSIXACLHeaderBytes     = 4
-	linuxPOSIXACLEntryBytes      = 8
-	linuxMaximumAccessACLBytes   = 64 << 10
-	linuxPOSIXACLUserObject      = uint16(0x01)
-	linuxPOSIXACLNamedUser       = uint16(0x02)
-	linuxPOSIXACLGroupObject     = uint16(0x04)
-	linuxPOSIXACLNamedGroup      = uint16(0x08)
-	linuxPOSIXACLMask            = uint16(0x10)
-	linuxPOSIXACLOther           = uint16(0x20)
-	linuxPOSIXACLPermissionWrite = uint16(0x02)
-	linuxPOSIXACLPermissionExec  = uint16(0x01)
-	linuxPOSIXACLPermissions     = uint16(0x07)
-	linuxPOSIXACLUndefinedID     = ^uint32(0)
-)
-
-func (directory *linuxOutputDirectory) validateCreateAuthority() error {
-	const operation = "validate output directory create authority"
+// validatePublicCreateAuthority asks the kernel whether this process can create
+// entries through the retained directory handle. Public containers are user
+// space, not WindShare ownership boundaries, so inherited group/default/named
+// ACLs and setgid are deliberately left to normal Linux permission semantics.
+func (directory *linuxOutputDirectory) validatePublicCreateAuthority() error {
+	const operation = "validate public output create authority"
 	if err := directory.verifyHandle(); err != nil {
 		return err
 	}
-	if directory.system.faccessat2 == nil || directory.system.fgetxattr == nil {
-		return linuxUnsupported(operation, "effective access or default-ACL provider is unavailable", nil)
+	if directory.system.faccessat2 == nil {
+		return linuxUnsupported(operation, "handle-bound effective access provider is unavailable", nil)
 	}
 	if err := directory.system.faccessat2(
 		directory.fd, "", uint32(unix.W_OK|unix.X_OK), unix.AT_EMPTY_PATH|unix.AT_EACCESS,
@@ -45,282 +29,55 @@ func (directory *linuxOutputDirectory) validateCreateAuthority() error {
 		}
 		return linuxUnsafe(operation, "directory lacks effective create/search authority", err)
 	}
-	identity, err := linuxVerifyOpenObject(directory.system, directory.fd, directory.certificate)
-	if err != nil {
-		return err
-	}
-	if identity.mode&unix.S_ISGID != 0 {
-		return linuxUnsupported(operation,
-			"setgid inheritance can change a private directory mode at the create cut", nil)
-	}
-	if _, err := directory.system.fgetxattr(directory.fd, linuxDefaultAccessACL, nil); err == nil {
-		return linuxUnsupported(operation,
-			"a default POSIX ACL can change a private entry mode at the create cut", nil)
-	} else if !errors.Is(err, unix.ENODATA) {
-		if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EOPNOTSUPP) {
-			return linuxUnsupported(operation, "default POSIX ACL state cannot be inspected", err)
-		}
-		return linuxUnsafe(operation, "default POSIX ACL state cannot be trusted", err)
-	}
-	if err := directory.validateExclusiveChildMutationAuthority(); err != nil {
-		return err
-	}
 	return directory.verifyHandle()
 }
 
-func (directory *linuxOutputDirectory) validateExclusiveChildMutationAuthority() error {
-	const operation = "validate exclusive output ancestry authority"
-	if err := directory.verifyHandle(); err != nil {
+// validatePrivateCreateAuthority protects the cut before creation of owned
+// control state. Ordinary public entries retain kernel umask/default-ACL
+// inheritance, while the parent of owned state must already be an authenticated
+// private namespace so no other principal can race or replace an owned entry.
+func (directory *linuxOutputDirectory) validatePrivateCreateAuthority() error {
+	const operation = "validate private output create authority"
+	if err := directory.validatePublicCreateAuthority(); err != nil {
 		return err
 	}
-	if directory.system.fgetxattr == nil || directory.system.geteuid == nil {
-		return linuxUnsupported(operation, "owner or access-ACL provider is unavailable", nil)
+	// The first owner-only control directory is installed beneath the public
+	// container. Once inside that boundary, every deeper private mutation also
+	// re-proves the parent's exact owner-only authority.
+	if !directory.requireExactPermissions {
+		return nil
+	}
+	return directory.validatePrivateAuthority(operation)
+}
+
+func (directory *linuxOutputDirectory) validatePrivateAuthority(operation string) error {
+	if err := directory.verifyHandle(); err != nil {
+		return err
 	}
 	identity, err := linuxVerifyOpenObject(directory.system, directory.fd, directory.certificate)
 	if err != nil {
 		return err
 	}
 	if identity.identity.kind != unix.S_IFDIR || !identity.matches(directory.object) {
-		return linuxUnsafe(operation, "ancestry handle no longer identifies its fixed directory", nil)
+		return linuxUnsafe(operation, "private directory handle no longer identifies its fixed object", nil)
 	}
-	receiverUID := uint32(directory.system.geteuid())
-	if identity.ownerUID != receiverUID {
-		return linuxUnsafe(operation, "ancestry directory is not owned by the receiver identity", nil)
+	if directory.system.geteuid == nil {
+		return linuxUnsupported(operation, "effective identity provider is unavailable", nil)
 	}
-	reason, err := linuxExternalChildMutationAuthority(
-		directory.system, directory.fd, identity.mode, receiverUID, operation,
-	)
-	if err != nil {
-		return err
+	if identity.ownerUID != uint32(directory.system.geteuid()) {
+		return linuxUnsafe(operation, "private directory is not owned by the receiver identity", nil)
 	}
-	if reason != "" {
-		// Sticky directories are intentionally not a special case: an outside
-		// writer can still allocate conflicting children, and WindShare cannot
-		// make a general nested-output claim on that shared namespace.
-		return linuxUnsafe(operation, reason, nil)
+	if linuxPermissions(identity.mode) != linuxOutputDirectoryMode {
+		return linuxUnsafe(operation, "private directory permissions are not exactly owner-only", nil)
 	}
 	return directory.verifyHandle()
 }
 
-func linuxExternalChildMutationAuthority(
-	system *linuxOutputSystem,
-	fd int,
-	mode uint16,
-	receiverUID uint32,
-	operation string,
-) (string, error) {
-	if system == nil || system.fgetxattr == nil {
-		return "", linuxUnsupported(operation, "access POSIX ACL provider is unavailable", nil)
-	}
-	encoded, present, err := linuxReadAccessACL(system, fd, operation)
-	if err != nil {
-		return "", err
-	}
-	if !present {
-		groupPermissions := uint16(linuxPermissions(mode)>>3) & linuxPOSIXACLPermissions
-		otherPermissions := uint16(linuxPermissions(mode)) & linuxPOSIXACLPermissions
-		if linuxPOSIXACLGrantsChildMutation(groupPermissions) ||
-			linuxPOSIXACLGrantsChildMutation(otherPermissions) {
-			return "group or other mode grants another principal rename/delete-child authority", nil
-		}
-		return "", nil
-	}
-	acl, err := linuxParseAccessACL(encoded)
-	if err != nil {
-		return "", linuxUnsafe(operation, "access POSIX ACL is malformed", err)
-	}
-	if err := acl.validateMode(mode); err != nil {
-		return "", linuxUnsafe(operation, "access POSIX ACL disagrees with directory mode", err)
-	}
-	return acl.externalChildMutationAuthority(receiverUID), nil
-}
-
-func linuxReadAccessACL(
-	system *linuxOutputSystem,
-	fd int,
-	operation string,
-) ([]byte, bool, error) {
-	size, err := system.fgetxattr(fd, linuxAccessACL, nil)
-	if errors.Is(err, unix.ENODATA) {
-		return nil, false, nil
-	}
-	if err != nil {
-		if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EOPNOTSUPP) {
-			return nil, false, linuxUnsupported(operation, "access POSIX ACL state cannot be inspected", err)
-		}
-		return nil, false, linuxUnsafe(operation, "access POSIX ACL state cannot be trusted", err)
-	}
-	if size < linuxPOSIXACLHeaderBytes+3*linuxPOSIXACLEntryBytes ||
-		size > linuxMaximumAccessACLBytes {
-		return nil, false, linuxUnsafe(operation, "access POSIX ACL size is outside its certified bound", nil)
-	}
-	encoded := make([]byte, size)
-	read, err := system.fgetxattr(fd, linuxAccessACL, encoded)
-	if err != nil {
-		return nil, false, linuxUnsafe(operation, "access POSIX ACL changed or became unreadable", err)
-	}
-	if read != size {
-		return nil, false, linuxUnsafe(operation, "access POSIX ACL changed while it was inspected", nil)
-	}
-	return encoded, true, nil
-}
-
-type linuxPOSIXACLPermission struct {
-	value   uint16
-	present bool
-}
-
-type linuxPOSIXACL struct {
-	owner       linuxPOSIXACLPermission
-	group       linuxPOSIXACLPermission
-	mask        linuxPOSIXACLPermission
-	other       linuxPOSIXACLPermission
-	namedUsers  map[uint32]uint16
-	namedGroups map[uint32]uint16
-}
-
-func linuxParseAccessACL(encoded []byte) (linuxPOSIXACL, error) {
-	if len(encoded) < linuxPOSIXACLHeaderBytes+3*linuxPOSIXACLEntryBytes ||
-		len(encoded) > linuxMaximumAccessACLBytes ||
-		(len(encoded)-linuxPOSIXACLHeaderBytes)%linuxPOSIXACLEntryBytes != 0 {
-		return linuxPOSIXACL{}, errors.New("invalid ACL length")
-	}
-	if binary.LittleEndian.Uint32(encoded) != linuxPOSIXACLVersion {
-		return linuxPOSIXACL{}, errors.New("invalid ACL version")
-	}
-	acl := linuxPOSIXACL{
-		namedUsers:  make(map[uint32]uint16),
-		namedGroups: make(map[uint32]uint16),
-	}
-	for offset := linuxPOSIXACLHeaderBytes; offset < len(encoded); offset += linuxPOSIXACLEntryBytes {
-		entry, err := linuxDecodeAccessACLEntry(encoded[offset:])
-		if err != nil {
-			return linuxPOSIXACL{}, err
-		}
-		if err := acl.addEntry(entry); err != nil {
-			return linuxPOSIXACL{}, err
-		}
-	}
-	if !acl.owner.present || !acl.group.present || !acl.other.present {
-		return linuxPOSIXACL{}, errors.New("ACL omits a required object entry")
-	}
-	if (len(acl.namedUsers) != 0 || len(acl.namedGroups) != 0) && !acl.mask.present {
-		return linuxPOSIXACL{}, errors.New("extended ACL omits its mask")
-	}
-	return acl, nil
-}
-
-type linuxPOSIXACLEntry struct {
-	tag         uint16
-	permissions uint16
-	id          uint32
-}
-
-func linuxDecodeAccessACLEntry(encoded []byte) (linuxPOSIXACLEntry, error) {
-	entry := linuxPOSIXACLEntry{
-		tag:         binary.LittleEndian.Uint16(encoded),
-		permissions: binary.LittleEndian.Uint16(encoded[2:]),
-		id:          binary.LittleEndian.Uint32(encoded[4:]),
-	}
-	if entry.permissions&^linuxPOSIXACLPermissions != 0 {
-		return linuxPOSIXACLEntry{}, errors.New("ACL entry has invalid permissions")
-	}
-	return entry, nil
-}
-
-func (acl *linuxPOSIXACL) addEntry(entry linuxPOSIXACLEntry) error {
-	switch entry.tag {
-	case linuxPOSIXACLUserObject:
-		if entry.id != linuxPOSIXACLUndefinedID || acl.owner.present {
-			return errors.New("invalid owner ACL entry")
-		}
-		acl.owner = linuxPOSIXACLPermission{value: entry.permissions, present: true}
-	case linuxPOSIXACLNamedUser:
-		if entry.id == linuxPOSIXACLUndefinedID {
-			return errors.New("named user ACL entry has no identity")
-		}
-		if _, duplicate := acl.namedUsers[entry.id]; duplicate {
-			return errors.New("duplicate named user ACL entry")
-		}
-		acl.namedUsers[entry.id] = entry.permissions
-	case linuxPOSIXACLGroupObject:
-		if entry.id != linuxPOSIXACLUndefinedID || acl.group.present {
-			return errors.New("invalid owning-group ACL entry")
-		}
-		acl.group = linuxPOSIXACLPermission{value: entry.permissions, present: true}
-	case linuxPOSIXACLNamedGroup:
-		if entry.id == linuxPOSIXACLUndefinedID {
-			return errors.New("named group ACL entry has no identity")
-		}
-		if _, duplicate := acl.namedGroups[entry.id]; duplicate {
-			return errors.New("duplicate named group ACL entry")
-		}
-		acl.namedGroups[entry.id] = entry.permissions
-	case linuxPOSIXACLMask:
-		if entry.id != linuxPOSIXACLUndefinedID || acl.mask.present {
-			return errors.New("invalid ACL mask entry")
-		}
-		acl.mask = linuxPOSIXACLPermission{value: entry.permissions, present: true}
-	case linuxPOSIXACLOther:
-		if entry.id != linuxPOSIXACLUndefinedID || acl.other.present {
-			return errors.New("invalid other ACL entry")
-		}
-		acl.other = linuxPOSIXACLPermission{value: entry.permissions, present: true}
-	default:
-		return errors.New("unknown ACL entry tag")
-	}
-	return nil
-}
-
-func (acl linuxPOSIXACL) validateMode(mode uint16) error {
-	owner := uint16(linuxPermissions(mode)>>6) & linuxPOSIXACLPermissions
-	group := uint16(linuxPermissions(mode)>>3) & linuxPOSIXACLPermissions
-	other := uint16(linuxPermissions(mode)) & linuxPOSIXACLPermissions
-	if acl.owner.value != owner || acl.other.value != other {
-		return errors.New("ACL owner or other permissions differ from mode")
-	}
-	groupMode := acl.group.value
-	if acl.mask.present {
-		groupMode = acl.mask.value
-	}
-	if groupMode != group {
-		return errors.New("ACL group class differs from mode")
-	}
-	return nil
-}
-
-func (acl linuxPOSIXACL) externalChildMutationAuthority(receiverUID uint32) string {
-	mask := linuxPOSIXACLPermissions
-	if acl.mask.present {
-		mask = acl.mask.value
-	}
-	if linuxPOSIXACLGrantsChildMutation(acl.group.value & mask) {
-		return "owning-group ACL grants another principal rename/delete-child authority"
-	}
-	for uid, permissions := range acl.namedUsers {
-		// The receiver owner entry always takes precedence over a named entry for
-		// the same UID. UID 0 is outside the approved unprivileged threat model.
-		if uid == receiverUID || uid == 0 {
-			continue
-		}
-		if linuxPOSIXACLGrantsChildMutation(permissions & mask) {
-			return "named-user ACL grants another principal rename/delete-child authority"
-		}
-	}
-	for _, permissions := range acl.namedGroups {
-		if linuxPOSIXACLGrantsChildMutation(permissions & mask) {
-			return "named-group ACL grants another principal rename/delete-child authority"
-		}
-	}
-	if linuxPOSIXACLGrantsChildMutation(acl.other.value) {
-		return "other ACL grants another principal rename/delete-child authority"
-	}
-	return ""
-}
-
-func linuxPOSIXACLGrantsChildMutation(permissions uint16) bool {
-	const required = linuxPOSIXACLPermissionWrite | linuxPOSIXACLPermissionExec
-	return permissions&required == required
+// validateCreateAuthority remains the existing consumer-side hook, but its
+// semantics are now public actual access. Private callers invoke the stricter
+// validator explicitly at their ownership boundary.
+func (directory *linuxOutputDirectory) validateCreateAuthority() error {
+	return directory.validatePublicCreateAuthority()
 }
 
 func (directory *linuxOutputDirectory) validateMetadataAuthority() error {

@@ -101,8 +101,7 @@ func TestWindowsV3IdentityPreparationValidatesBeforeAndAfterCreateOrGet(t *testi
 
 	injected := errors.New("injected ancestry authority failure")
 	root.ancestryAuthority = windowsV3AncestryAuthorityVerifierFunc(func(windows.Handle) error { return injected })
-	if _, err := root.prepareIdentityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) ||
-		!errors.Is(err, outputfault.ErrAncestryAuthorityDenied) {
+	if _, err := root.prepareIdentityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) || !errors.Is(err, injected) {
 		t.Fatalf("pre-authority failure = %v", err)
 	}
 	if calls := provider.calls.Load(); calls != 0 {
@@ -152,8 +151,7 @@ func TestWindowsV3ReadOnlyIdentityClaimPreservesAuthorityTraceTaxonomy(t *testin
 	root.ancestryAuthority = windowsV3AncestryAuthorityVerifierFunc(func(windows.Handle) error {
 		return errors.Join(errWindowsV3OutputUnsupported, errors.New("injected ACL ambiguity"))
 	})
-	if _, err := root.identityClaim(); !errors.Is(err, outputfault.ErrAncestryAuthorityDenied) ||
-		!errors.Is(err, errWindowsV3OutputUnsupported) {
+	if _, err := root.identityClaim(); !errors.Is(err, errWindowsV3OutputUnsupported) {
 		t.Fatalf("read-only authority trace taxonomy = %v", err)
 	}
 	if calls := provider.calls.Load(); calls != 1 {

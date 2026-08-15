@@ -224,6 +224,51 @@ func TestRelayContentAdmissionCloseRevokesQueuedDecisionBeforeResume(t *testing.
 	}
 }
 
+func TestRelayContentAdmissionClaimGateHoldsContentUntilOutputIsReady(t *testing.T) {
+	downloadT0 := time.Date(2026, 7, 18, 7, 52, 30, 0, time.UTC)
+	clock := &fakeReceiverAdmissionClock{now: downloadT0}
+	relay := newFakeReceiverContentSuspension()
+	contentReady := make(chan struct{})
+	admission, err := newRelayContentAdmissionWithExecution(
+		downloadT0,
+		clock,
+		relay,
+		receiverAdmissionExecution{claimGate: contentReady},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admission.Close()
+	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
+		t.Fatal(err)
+	}
+	workerDone := admission.decisionWorkerDone()
+	if workerDone == nil {
+		t.Fatal("lane decision did not queue an owned admission worker")
+	}
+	if resumed := relay.count(); resumed != 0 {
+		t.Fatalf("content resumed before output readiness: %d", resumed)
+	}
+	select {
+	case decision := <-admission.Decision():
+		t.Fatalf("admission published before output readiness: %+v", decision)
+	default:
+	}
+
+	close(contentReady)
+	select {
+	case <-workerDone:
+	case <-time.After(time.Second):
+		t.Fatal("content admission did not resume after output readiness")
+	}
+	if decision := receiveReceiverAdmissionDecision(t, admission); decision.Cause != nil {
+		t.Fatalf("admission decision=%+v", decision)
+	}
+	if resumed := relay.count(); resumed != 1 {
+		t.Fatalf("content resumed=%d times", resumed)
+	}
+}
+
 func TestRelayContentAdmissionTerminalBeforeDecisionQueuesNoWork(t *testing.T) {
 	downloadT0 := time.Date(2026, 7, 18, 7, 53, 0, 0, time.UTC)
 	clock := &fakeReceiverAdmissionClock{now: downloadT0}

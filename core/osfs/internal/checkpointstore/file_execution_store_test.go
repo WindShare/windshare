@@ -44,7 +44,7 @@ func TestFileExecutionStoreOwnsCheckpointAndObjectLifecycle(t *testing.T) {
 	record := checkpointRecordFixture(t, ownership, intent, 0x83)
 	object := record.OwnedObjectID()
 
-	owned, observation, err := store.CreateOwnedFile(context.Background(), object, record.ExactSize())
+	owned, observation, err := store.CreateOwnedFile(context.Background(), nil, object, record.ExactSize())
 	if err != nil || owned == nil || observation.Condition() != fileexecution.OwnedReady {
 		t.Fatalf("create owned file = (%T, %d, %v)", owned, observation.Condition(), err)
 	}
@@ -80,7 +80,7 @@ func TestFileExecutionStoreOwnsCheckpointAndObjectLifecycle(t *testing.T) {
 	if err := opened.Close(); err != nil {
 		t.Fatal(err)
 	}
-	duplicate, collision, err := store.CreateOwnedFile(context.Background(), object, record.ExactSize())
+	duplicate, collision, err := store.CreateOwnedFile(context.Background(), nil, object, record.ExactSize())
 	if err != nil || duplicate != nil || collision.Condition() != fileexecution.OwnedObjectCollision {
 		t.Fatalf("duplicate owned file = (%T, %d, %v)", duplicate, collision.Condition(), err)
 	}
@@ -205,7 +205,7 @@ func TestFileExecutionStoreRejectsInvalidAndCanceledAuthority(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := store.CreateOwnedFile(canceled, object, 1); !errors.Is(err, context.Canceled) {
+	if _, _, err := store.CreateOwnedFile(canceled, nil, object, 1); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled create = %v", err)
 	}
 	if _, _, err := store.OpenOwnedFile(canceled, object, 1, false); !errors.Is(err, context.Canceled) {

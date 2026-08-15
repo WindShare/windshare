@@ -1,5 +1,5 @@
-// Package resumeauthority reduces durable DirectTree operations after a fresh
-// process has reacquired the operation lease and revalidated ownership.
+// Package resumeauthority reduces ordinary native operations after an exact
+// operation lease has been acquired. It does not retain terminal history.
 package resumeauthority
 
 import (
@@ -7,125 +7,272 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-var ErrInvalidContract = errors.New("resume authority contract is invalid")
+const MaximumDiagnosticReferenceBytes = 256
 
-type EvidenceState uint8
-
-const (
-	EvidenceAbsent EvidenceState = iota + 1
-	EvidenceProven
-	EvidenceUnknown
+var (
+	ErrInvalidContract = errors.New("resume authority contract is invalid")
+	ErrBusy            = errors.New("resume authority operation is busy")
 )
 
-func (state EvidenceState) Valid() bool {
-	return state >= EvidenceAbsent && state <= EvidenceUnknown
+type OperationState uint8
+
+const (
+	OperationIncomplete OperationState = iota + 1
+	OperationResumable
+	OperationCleanupPending
+	OperationNeedsAttention
+	OperationDiscarded
+)
+
+func (state OperationState) Valid() bool {
+	return state >= OperationIncomplete && state <= OperationDiscarded
 }
 
-type CleanupEvidenceState uint8
+func (state OperationState) String() string {
+	switch state {
+	case OperationIncomplete:
+		return "incomplete"
+	case OperationResumable:
+		return "resumable"
+	case OperationCleanupPending:
+		return "cleanup-pending"
+	case OperationNeedsAttention:
+		return "operation-needs-attention"
+	case OperationDiscarded:
+		return "discarded"
+	default:
+		return ""
+	}
+}
+
+type ItemState uint8
 
 const (
-	CleanupPending CleanupEvidenceState = iota + 1
-	CleanupComplete
-	CleanupUnknown
+	ItemIncomplete ItemState = iota + 1
+	ItemResumable
+	ItemPublished
+	ItemFailed
+	ItemBlocked
 )
 
-func (state CleanupEvidenceState) Valid() bool {
-	return state >= CleanupPending && state <= CleanupUnknown
+func (state ItemState) Valid() bool {
+	return state >= ItemIncomplete && state <= ItemBlocked
+}
+
+func (state ItemState) String() string {
+	switch state {
+	case ItemIncomplete:
+		return "incomplete"
+	case ItemResumable:
+		return "resumable"
+	case ItemPublished:
+		return "published"
+	case ItemFailed:
+		return "failed"
+	case ItemBlocked:
+		return "item-blocked"
+	default:
+		return ""
+	}
+}
+
+type ItemBlockReason uint8
+
+const (
+	ItemBlockNone ItemBlockReason = iota + 1
+	ItemBlockPublicationUnknown
+	ItemBlockCheckpointInvalid
+	ItemBlockOwnedObjectUnknown
+)
+
+func (reason ItemBlockReason) Valid() bool {
+	return reason >= ItemBlockNone && reason <= ItemBlockOwnedObjectUnknown
+}
+
+func (reason ItemBlockReason) String() string {
+	switch reason {
+	case ItemBlockNone:
+		return "none"
+	case ItemBlockPublicationUnknown:
+		return "publication-unknown"
+	case ItemBlockCheckpointInvalid:
+		return "checkpoint-invalid"
+	case ItemBlockOwnedObjectUnknown:
+		return "owned-object-unknown"
+	default:
+		return ""
+	}
+}
+
+type Item struct {
+	path      string
+	state     ItemState
+	reason    ItemBlockReason
+	reference string
+}
+
+func NewItem(path string, state ItemState, reason ItemBlockReason) (Item, error) {
+	canonical, err := catalog.CanonicalPath(path)
+	if err != nil || canonical != path || path == "" || !state.Valid() || !reason.Valid() ||
+		state == ItemBlocked && reason == ItemBlockNone ||
+		state != ItemBlocked && reason != ItemBlockNone {
+		return Item{}, errors.Join(ErrInvalidContract, err)
+	}
+	return Item{path: path, state: state, reason: reason}, nil
+}
+
+func NewBlockedReference(reference string) (Item, error) {
+	if reference == "" || len(reference) > MaximumDiagnosticReferenceBytes {
+		return Item{}, ErrInvalidContract
+	}
+	return Item{
+		state: ItemBlocked, reason: ItemBlockCheckpointInvalid, reference: reference,
+	}, nil
+}
+
+func (item Item) CanonicalPath() string        { return item.path }
+func (item Item) State() ItemState             { return item.state }
+func (item Item) BlockReason() ItemBlockReason { return item.reason }
+func (item Item) Reference() string            { return item.reference }
+func (item Item) Valid() bool {
+	if item.reference != "" {
+		return item.path == "" && item.state == ItemBlocked &&
+			item.reason == ItemBlockCheckpointInvalid &&
+			len(item.reference) <= MaximumDiagnosticReferenceBytes
+	}
+	rebuilt, err := NewItem(item.path, item.state, item.reason)
+	return err == nil && rebuilt == item
+}
+
+type Header struct {
+	record checkpointmodel.OrdinaryOperationRecord
+}
+
+func NewHeader(record checkpointmodel.OrdinaryOperationRecord) (Header, error) {
+	if !record.Valid() {
+		return Header{}, ErrInvalidContract
+	}
+	if _, err := record.VerifyIntent(transfer.DecodeReceiveIntent); err != nil {
+		return Header{}, errors.Join(ErrInvalidContract, err)
+	}
+	return Header{record: record}, nil
+}
+
+func (header Header) Record() checkpointmodel.OrdinaryOperationRecord { return header.record }
+func (header Header) Valid() bool {
+	rebuilt, err := NewHeader(header.record)
+	return err == nil && checkpointmodel.SameOrdinaryOperation(rebuilt.record, header.record) &&
+		rebuilt.record.LifecycleGeneration() == header.record.LifecycleGeneration() &&
+		rebuilt.record.Lifecycle() == header.record.Lifecycle() &&
+		rebuilt.record.Lease() == header.record.Lease() &&
+		rebuilt.record.ClosedReason() == header.record.ClosedReason()
 }
 
 type Snapshot struct {
-	operation checkpointmodel.ReceiveOperation
-	lifecycle checkpointmodel.ReceiveLifecycleState
+	header Header
+	items  []Item
 }
 
-func NewSnapshot(
-	operation checkpointmodel.ReceiveOperation,
-	lifecycle checkpointmodel.ReceiveLifecycleState,
-) (Snapshot, error) {
-	if _, err := operation.VerifyIntent(transfer.DecodeReceiveIntent); err != nil ||
-		!lifecycle.Valid() || lifecycle.OperationID() != operation.OperationID() ||
-		lifecycle.ReceiveIntentDigest() != operation.ReceiveIntentDigest() {
-		return Snapshot{}, errors.Join(ErrInvalidContract, err)
+func NewSnapshot(header Header, items []Item) (Snapshot, error) {
+	if !header.Valid() {
+		return Snapshot{}, ErrInvalidContract
 	}
-	return Snapshot{operation: operation, lifecycle: lifecycle}, nil
-}
-
-// CorruptSnapshot preserves only a structurally decoded immutable operation ID
-// for inventory attention. It cannot be acquired or mutated as valid state.
-func CorruptSnapshot(operation checkpointmodel.ReceiveOperation) Snapshot {
-	if !operation.Valid() {
-		return Snapshot{}
+	paths := make(map[string]struct{}, len(items))
+	references := make(map[string]struct{}, len(items))
+	canonical := slices.Clone(items)
+	for _, item := range canonical {
+		if !item.Valid() {
+			return Snapshot{}, ErrInvalidContract
+		}
+		if item.path != "" {
+			if _, duplicate := paths[item.path]; duplicate {
+				return Snapshot{}, ErrInvalidContract
+			}
+			paths[item.path] = struct{}{}
+		} else {
+			if _, duplicate := references[item.reference]; duplicate {
+				return Snapshot{}, ErrInvalidContract
+			}
+			references[item.reference] = struct{}{}
+		}
 	}
-	return Snapshot{operation: operation}
+	slices.SortFunc(canonical, compareItems)
+	return Snapshot{header: header, items: canonical}, nil
 }
 
-func (snapshot Snapshot) Operation() checkpointmodel.ReceiveOperation { return snapshot.operation }
-func (snapshot Snapshot) Lifecycle() checkpointmodel.ReceiveLifecycleState {
-	return snapshot.lifecycle
-}
+func (snapshot Snapshot) Header() Header { return snapshot.header }
+func (snapshot Snapshot) Items() []Item  { return slices.Clone(snapshot.items) }
 func (snapshot Snapshot) Valid() bool {
-	_, err := NewSnapshot(snapshot.operation, snapshot.lifecycle)
+	_, err := NewSnapshot(snapshot.header, snapshot.items)
 	return err == nil
+}
+
+func compareItems(left, right Item) int {
+	if compared := bytes.Compare([]byte(left.path), []byte(right.path)); compared != 0 {
+		return compared
+	}
+	if compared := bytes.Compare([]byte(left.reference), []byte(right.reference)); compared != 0 {
+		return compared
+	}
+	if left.state != right.state {
+		return int(left.state) - int(right.state)
+	}
+	return int(left.reason) - int(right.reason)
 }
 
 type Summary struct {
 	operationID receivecontract.OperationID
 	intent      transfer.ReceiveIntentDigest
-	phase       checkpointmodel.LifecyclePhase
 	generation  uint64
-	expiresAt   uint64
-	successes   uint64
-	failures    uint64
-	reason      checkpointmodel.NeedsAttentionReason
+	state       OperationState
+	reason      checkpointmodel.OrdinaryClosedReason
+	items       []Item
+	busy        bool
 }
 
-func summaryFromSnapshot(snapshot Snapshot) Summary {
-	lifecycle := snapshot.lifecycle
-	return Summary{
-		operationID: snapshot.operation.OperationID(), intent: snapshot.operation.ReceiveIntentDigest(),
-		phase: lifecycle.Phase(), generation: lifecycle.StateGeneration(),
-		expiresAt: lifecycle.ExpiresAtMillis(), successes: lifecycle.SuccessCount(),
-		failures: lifecycle.FailureCount(), reason: lifecycle.AttentionReason(),
+func newSummary(
+	header Header,
+	state OperationState,
+	items []Item,
+	busy bool,
+) (Summary, error) {
+	if !header.Valid() || !state.Valid() {
+		return Summary{}, ErrInvalidContract
 	}
+	record := header.record
+	if state == OperationNeedsAttention && !record.ClosedReason().IsAttentionReason() {
+		return Summary{}, ErrInvalidContract
+	}
+	if state != OperationNeedsAttention && record.ClosedReason().IsAttentionReason() &&
+		record.Lifecycle() != checkpointmodel.OrdinaryOperationDiscarded {
+		return Summary{}, ErrInvalidContract
+	}
+	return Summary{
+		operationID: record.OperationID(), intent: record.ReceiveIntentDigest(),
+		generation: record.LifecycleGeneration(), state: state,
+		reason: record.ClosedReason(), items: slices.Clone(items), busy: busy,
+	}, nil
 }
 
 func (summary Summary) OperationID() receivecontract.OperationID          { return summary.operationID }
 func (summary Summary) ReceiveIntentDigest() transfer.ReceiveIntentDigest { return summary.intent }
-func (summary Summary) Phase() checkpointmodel.LifecyclePhase             { return summary.phase }
 func (summary Summary) StateGeneration() uint64                           { return summary.generation }
-func (summary Summary) ExpiresAtMillis() uint64                           { return summary.expiresAt }
-func (summary Summary) SuccessCount() uint64                              { return summary.successes }
-func (summary Summary) FailureCount() uint64                              { return summary.failures }
-func (summary Summary) NeedsAttentionReason() checkpointmodel.NeedsAttentionReason {
+func (summary Summary) State() OperationState                             { return summary.state }
+func (summary Summary) NeedsAttentionReason() checkpointmodel.OrdinaryClosedReason {
 	return summary.reason
 }
-func (summary Summary) Resumable() bool {
-	return summary.phase == checkpointmodel.LifecycleResumableReceive && summary.expiresAt != 0
-}
-
-type Attention struct {
-	operationID receivecontract.OperationID
-	reason      checkpointmodel.NeedsAttentionReason
-}
-
-func NewAttention(
-	operation receivecontract.OperationID,
-	reason checkpointmodel.NeedsAttentionReason,
-) (Attention, error) {
-	if operation.IsZero() || !reason.Valid() {
-		return Attention{}, ErrInvalidContract
-	}
-	return Attention{operationID: operation, reason: reason}, nil
-}
-
-func (attention Attention) OperationID() receivecontract.OperationID { return attention.operationID }
-func (attention Attention) Reason() checkpointmodel.NeedsAttentionReason {
-	return attention.reason
+func (summary Summary) Items() []Item { return slices.Clone(summary.items) }
+func (summary Summary) Busy() bool    { return summary.busy }
+func (summary Summary) Valid() bool {
+	return !summary.operationID.IsZero() && !summary.intent.IsZero() && summary.generation > 0 &&
+		summary.state.Valid() && (!summary.reason.IsAttentionReason() ||
+		summary.state == OperationNeedsAttention || summary.state == OperationDiscarded)
 }
 
 type ListStatus uint8
@@ -138,54 +285,71 @@ const (
 type Inventory struct {
 	status    ListStatus
 	summaries []Summary
-	attention []Attention
+	unknown   bool
 }
 
-func newInventory(summaries []Summary, attention []Attention) Inventory {
-	slices.SortFunc(summaries, func(left, right Summary) int {
+func newInventory(summaries []Summary, unknown bool) Inventory {
+	canonical := slices.Clone(summaries)
+	slices.SortFunc(canonical, func(left, right Summary) int {
 		return bytes.Compare(left.operationID.Bytes(), right.operationID.Bytes())
 	})
-	slices.SortFunc(attention, func(left, right Attention) int {
-		if compared := bytes.Compare(left.operationID.Bytes(), right.operationID.Bytes()); compared != 0 {
-			return compared
-		}
-		return int(left.reason) - int(right.reason)
-	})
 	status := ListReady
-	if len(attention) != 0 {
+	if unknown {
 		status = ListNeedsAttention
 	}
-	return Inventory{
-		status: status, summaries: slices.Clone(summaries), attention: slices.Clone(attention),
+	for _, summary := range canonical {
+		if summary.state == OperationNeedsAttention {
+			status = ListNeedsAttention
+			break
+		}
 	}
+	return Inventory{status: status, summaries: canonical, unknown: unknown}
 }
 
-func (inventory Inventory) Status() ListStatus     { return inventory.status }
-func (inventory Inventory) Summaries() []Summary   { return slices.Clone(inventory.summaries) }
-func (inventory Inventory) Attention() []Attention { return slices.Clone(inventory.attention) }
+func (inventory Inventory) Status() ListStatus   { return inventory.status }
+func (inventory Inventory) Summaries() []Summary { return slices.Clone(inventory.summaries) }
+func (inventory Inventory) UnknownEntries() bool { return inventory.unknown }
 
-type RecoveryEvidence struct {
-	TargetOwnership EvidenceState
-	Checkpoints     EvidenceState
-	Cleanup         CleanupEvidenceState
-	TerminalReceipt checkpointmodel.DirectTreeReceipt
-	ExpiryReceipt   checkpointmodel.DirectTreeReceipt
+type PageCursor struct {
+	after receivecontract.OperationID
 }
 
-func (evidence RecoveryEvidence) valid() bool {
-	return evidence.TargetOwnership.Valid() && evidence.Checkpoints.Valid() &&
-		evidence.Cleanup.Valid()
+func NewPageCursor(after receivecontract.OperationID) PageCursor {
+	return PageCursor{after: after}
+}
+func (cursor PageCursor) After() receivecontract.OperationID { return cursor.after }
+func (cursor PageCursor) IsZero() bool                       { return cursor.after.IsZero() }
+
+type Page struct {
+	headers []Header
+	next    PageCursor
+	unknown bool
 }
 
-type DiscardEvidence struct {
-	State   CleanupEvidenceState
-	Receipt checkpointmodel.DirectTreeReceipt
-}
-
-func (evidence DiscardEvidence) valid() bool {
-	if !evidence.State.Valid() {
-		return false
+func NewPage(headers []Header, next PageCursor, unknown bool) (Page, error) {
+	canonical := slices.Clone(headers)
+	for _, header := range canonical {
+		if !header.Valid() {
+			return Page{}, ErrInvalidContract
+		}
 	}
-	return evidence.State != CleanupComplete ||
-		evidence.Receipt.Valid() && evidence.Receipt.Kind() == checkpointmodel.ReceiptCleanup
+	slices.SortFunc(canonical, func(left, right Header) int {
+		return bytes.Compare(left.record.OperationID().Bytes(), right.record.OperationID().Bytes())
+	})
+	return Page{headers: canonical, next: next, unknown: unknown}, nil
+}
+
+func (page Page) Headers() []Header { return slices.Clone(page.headers) }
+func (page Page) Next() PageCursor  { return page.next }
+func (page Page) Unknown() bool     { return page.unknown }
+
+type CleanupState uint8
+
+const (
+	CleanupComplete CleanupState = iota + 1
+	CleanupPending
+)
+
+func (state CleanupState) Valid() bool {
+	return state == CleanupComplete || state == CleanupPending
 }

@@ -97,7 +97,7 @@ func TestTransferJobRejectsMissingCatalogLeaseOnFailurePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeResumable || result.TerminationFault != fault.DependencyContractFault() ||
+	if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != fault.DependencyContractFault() ||
 		!isJobTerminalError(result.TerminationCause) {
 		t.Fatalf("result=%+v", result)
 	}
@@ -150,7 +150,7 @@ func TestTransferJobRollsBackSelectedPrefixOfFailedGeneration(t *testing.T) {
 	}
 
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePartialDirectory || result.SucceededFiles != 1 ||
+	if result.Outcome != DirectTreeOutcomePartial || result.SucceededFiles != 1 ||
 		len(result.Directories) != 1 || len(result.Files) != 0 ||
 		!slices.Equal(revisions.order, []catalog.FileID{sibling}) ||
 		!slices.Equal(output.directories, []string{""}) ||
@@ -192,7 +192,7 @@ func TestTransferJobPausesWithoutAdmittingFailedRootPrefix(t *testing.T) {
 	}
 
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeResumable || len(result.Directories) != 1 ||
+	if result.Outcome != DirectTreeOutcomePaused || len(result.Directories) != 1 ||
 		!result.SelectionObservation.IsZero() ||
 		result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) ||
 		len(revisions.order) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
@@ -208,7 +208,7 @@ func TestTransferJobPausesWhenRootAdmissionFailsEvenIfFilesAreIsolatable(t *test
 	job, _ := branchJob(t, output, revisions, scriptedRangeReader{})
 
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeResumable || result.TerminationCause == nil ||
+	if result.Outcome != DirectTreeOutcomePaused || result.TerminationCause == nil ||
 		len(result.Directories) != 0 || len(result.Files) != 0 || result.SucceededFiles != 0 ||
 		len(revisions.order) != 0 || len(revisions.released) != 0 ||
 		output.pauseCalls != 1 || output.completeCalls != 0 {
@@ -257,7 +257,7 @@ func TestTransferJobAppliesSyntheticRootOverrideToProbeAndExecution(t *testing.T
 			if selected {
 				wantFiles = 1
 			}
-			if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != wantFiles ||
+			if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != wantFiles ||
 				result.Measure.DiscoveredFiles != wantFiles || admission.DiscoveredFiles != wantFiles ||
 				result.Measure.ConnectionSizeClass() != ConnectionSizeSmall || admission.ConnectionSizeClass() != ConnectionSizeSmall {
 				t.Fatalf("outcome=%v succeeded=%d want=%d term=%v settleFailure=%v settlement=%v files=%+v dirs=%+v measure=%+v admission=%+v output=%+v", result.Outcome, result.SucceededFiles, wantFiles, result.TerminationCause, result.SettlementFailure, result.Settlement, result.Files, result.Directories, result.Measure, admission, output)
@@ -282,7 +282,7 @@ func TestTransferJobPreservesParentCancellationCauseWithoutSelection(t *testing.
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(cause)
 	result := job.Run(ctx)
-	if result.Outcome != DirectTreeOutcomeResumable || !errors.Is(result.TerminationCause, context.Canceled) ||
+	if result.Outcome != DirectTreeOutcomePaused || !errors.Is(result.TerminationCause, context.Canceled) ||
 		result.TerminationFault.Valid() {
 		t.Fatalf("result=%+v", result)
 	}
@@ -319,7 +319,7 @@ func TestTransferJobMaterializesOnlyAuthenticatedSelectedOutput(t *testing.T) {
 			t.Fatal(err)
 		}
 		result := job.Run(context.Background())
-		if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != 1 {
+		if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 {
 			t.Fatalf("result=%+v", result)
 		}
 		if !slices.Equal(output.directories, []string{"", "wanted"}) || !slices.Equal(output.finalized, []string{"wanted", ""}) {
@@ -349,7 +349,7 @@ func TestTransferJobMaterializesOnlyAuthenticatedSelectedOutput(t *testing.T) {
 			Blocks: scriptedRangeReader{}, Materializer: output,
 		})
 		result := job.Run(context.Background())
-		if result.Outcome != DirectTreeOutcomePartialDirectory || len(result.Files) != 1 ||
+		if result.Outcome != DirectTreeOutcomePartial || len(result.Files) != 1 ||
 			!slices.Equal(output.directories, []string{"", "folder"}) || !slices.Equal(output.finalized, []string{"folder", ""}) {
 			t.Fatalf("result=%+v directories=%v finalized=%v", result, output.directories, output.finalized)
 		}
@@ -377,7 +377,7 @@ func TestTransferJobSelectedDirectoryRequiresSuccessfulGenerationBeforeOutput(t 
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePartialDirectory || len(result.Directories) != 1 || result.Measure.ConnectionSizeClass() != ConnectionSizeUnknown {
+	if result.Outcome != DirectTreeOutcomePartial || len(result.Directories) != 1 || result.Measure.ConnectionSizeClass() != ConnectionSizeUnknown {
 		t.Fatalf("result=%+v", result)
 	}
 	if !slices.Equal(output.directories, []string{"", "empty"}) ||
@@ -404,7 +404,7 @@ func TestTransferJobMissingOpaqueTargetsRemainKindSafe(t *testing.T) {
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil ||
+	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		len(result.Directories) != 0 || !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) ||
 		output.aborted || output.pauseCalls != 0 || output.completeCalls != 1 ||
 		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
@@ -427,7 +427,7 @@ func TestTransferJobMissingOpaqueDirectoryTargetAborts(t *testing.T) {
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil ||
+	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		len(result.Directories) != 0 || !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) ||
 		output.aborted || output.pauseCalls != 0 || output.completeCalls != 1 ||
 		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
@@ -458,7 +458,7 @@ func TestTransferJobUnmatchedFileBelowFailedDirectoryRemainsUnknown(t *testing.T
 	for measure := range updates {
 		admission = measure
 	}
-	if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil ||
+	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		result.Measure.ConnectionSizeClass() != ConnectionSizeUnknown || admission.ConnectionSizeClass() != ConnectionSizeUnknown ||
 		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
 		t.Fatalf("result=%+v admission=%+v directories=%v finalized=%v", result, admission, output.directories, output.finalized)
@@ -482,7 +482,7 @@ func TestTransferJobMissingPathDescendantLeavesAncestorVirtual(t *testing.T) {
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil ||
+	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		len(result.Directories) != 0 || !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) ||
 		output.aborted || output.pauseCalls != 0 || output.completeCalls != 1 ||
 		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {

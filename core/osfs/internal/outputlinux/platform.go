@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
 )
@@ -100,7 +101,7 @@ func linuxCreateCertifiedOutputRoot(path string) (_ *linuxOutputDirectory, resul
 		}
 	}()
 	for index := range slices.Backward(missing) {
-		created, err := current.createDirectoryExact(missing[index], uint32(dirPerm))
+		created, err := current.createDirectoryExact(missing[index], linuxPublicDirectoryCreateMode)
 		if err != nil {
 			return nil, err
 		}
@@ -143,25 +144,42 @@ func (platform *linuxV3Platform) RootOpenDisposition() outputcap.RootOpenDisposi
 	return platform.rootOpenDisposition
 }
 
-// borrowedOutputPublicOperationGuard exposes the already pinned ext4 root for
-// one validated operation; Linux re-proves ancestry instead of acquiring a
-// separate namespace lock, so closing the borrowed capability is a no-op.
-type borrowedOutputPublicOperationGuard struct {
+// linuxOutputPublicOperationGuard owns a fresh pinned root capability for one
+// operation. Revalidating effective access before duplication keeps admission
+// from becoming a stale authorization decision, while the duplicate prevents
+// callers from closing or retaining the platform's lifetime root.
+type linuxOutputPublicOperationGuard struct {
 	root outputcap.Directory
 }
 
-func (guard *borrowedOutputPublicOperationGuard) Root() outputcap.Directory { return guard.root }
-func (guard *borrowedOutputPublicOperationGuard) Close() error              { return nil }
+func (guard *linuxOutputPublicOperationGuard) Root() outputcap.Directory {
+	if guard == nil {
+		return nil
+	}
+	return guard.root
+}
+
+func (guard *linuxOutputPublicOperationGuard) Close() error {
+	if guard == nil || guard.root == nil {
+		return nil
+	}
+	err := guard.root.Close()
+	guard.root = nil
+	return err
+}
 
 func (platform *linuxV3Platform) AcquirePublicOperationGuard() (outputcap.PublicOperationGuard, error) {
-	root := platform.Root()
-	if root == nil {
+	if platform == nil || platform.root == nil || platform.root.native == nil {
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux output platform is closed"))
 	}
-	// Linux's handle-relative ancestry walk proves placement for every operation;
-	// the guard makes that proof an explicit platform capability while borrowing
-	// the already pinned certified root.
-	return &borrowedOutputPublicOperationGuard{root: root}, nil
+	if err := platform.root.native.validatePublicCreateAuthority(); err != nil {
+		return nil, linuxV3Error(err)
+	}
+	root, err := platform.root.Duplicate()
+	if err != nil {
+		return nil, err
+	}
+	return &linuxOutputPublicOperationGuard{root: root}, nil
 }
 
 func (*linuxV3Platform) Certification() outputcap.CertificationID {
@@ -213,11 +231,28 @@ func (*linuxV3Platform) Durability() transfer.DurabilityLevel {
 	return transfer.DurabilityProcessRestart
 }
 
-func (platform *linuxV3Platform) ProbeRecoverableFeatures() error {
+func (*linuxV3Platform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
+	return checkpointmodel.LiveCleanupLinuxExt4V1
+}
+
+func (platform *linuxV3Platform) DestinationCapabilities() (outputcap.DestinationCapabilities, error) {
 	if platform == nil || platform.root == nil || platform.root.native == nil {
-		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux output platform is closed"))
+		return outputcap.DestinationCapabilities{}, errors.Join(
+			outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux output platform is closed"))
 	}
-	return linuxV3Error(platform.root.native.probeRecoverableFeatures())
+	return platform.root.native.destinationCapabilities()
+}
+
+func (platform *linuxV3Platform) ProbeRecoverableFeatures() error {
+	capabilities, err := platform.DestinationCapabilities()
+	if err != nil {
+		return err
+	}
+	if mode, modeErr := outputcap.SelectExecutionMode(capabilities); modeErr != nil ||
+		mode != outputcap.ExecutionResumable {
+		return errors.Join(outputcap.ErrRecoverableOutputUnsupported, modeErr)
+	}
+	return nil
 }
 
 func (*linuxV3Platform) ValidateModifiedTime(modified catalog.ModifiedTime) error {
@@ -265,8 +300,34 @@ func linuxV3Error(err error) error {
 	}
 }
 
+type linuxDestinationCapabilityReporter interface {
+	DestinationCapabilities() (outputcap.DestinationCapabilities, error)
+	LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile
+}
+
+type linuxSemanticPublisher interface {
+	PublishFileNoReplace(outputcap.File, string) (outputcap.PublishNoReplaceOutcome, error)
+	ReservePublicDirectoryNoReplace(string) (
+		outputcap.Directory,
+		outputcap.PublishNoReplaceOutcome,
+		error,
+	)
+}
+
+type linuxLiveCleanupStageCreator interface {
+	CreateLiveCleanupStage(outputcap.Directory, checkpointmodel.LiveCleanupTicket) error
+}
+
+type linuxLiveCleanupStageRemover interface {
+	RemoveLiveCleanupStage(checkpointmodel.LiveCleanupTicket, outputcap.File) error
+}
+
 var (
 	_ outputcap.Platform                            = (*linuxV3Platform)(nil)
+	_ linuxDestinationCapabilityReporter            = (*linuxV3Platform)(nil)
+	_ linuxSemanticPublisher                        = (*linuxV3Directory)(nil)
+	_ linuxLiveCleanupStageCreator                  = (*linuxV3Directory)(nil)
+	_ linuxLiveCleanupStageRemover                  = (*linuxV3Directory)(nil)
 	_ outputcap.Directory                           = (*linuxV3Directory)(nil)
 	_ outputcap.PersistentDirectoryIdentity         = (*linuxV3Directory)(nil)
 	_ outputcap.PersistentDirectoryIdentityPreparer = (*linuxV3Directory)(nil)

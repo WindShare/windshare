@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/windshare/windshare/core/osfs/internal/outputfault"
 	"golang.org/x/sys/windows"
 )
 
@@ -65,6 +66,12 @@ func openWindowsV3OutputPlatformWithAuthority(
 		windows.OBJ_CASE_INSENSITIVE|windows.OBJ_DONT_REPARSE,
 	)
 	if err != nil {
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			return nil, windowsV3Failure(
+				"open output root", absolute, errWindowsV3OutputUnsafe,
+				errors.Join(outputfault.ErrAncestryAuthorityDenied, err),
+			)
+		}
 		return nil, windowsV3NativeOperationFailure("open output root", absolute, err)
 	}
 	file := os.NewFile(uintptr(handle), absolute)
@@ -86,10 +93,10 @@ func openWindowsV3OutputPlatformWithAuthority(
 		return nil, errors.Join(windowsV3Failure("prepare private output ACL", absolute, errWindowsV3OutputUnsupported, err), file.Close())
 	}
 	root := &windowsV3Directory{
-		file: file, path: absolute, volume: facts.object.volume,
+		file: file, metadataHandle: windows.InvalidHandle, path: absolute, volume: facts.object.volume,
 		objectIDs: nativeWindowsV3PersistentObjectIDProvider{}, inspector: inspector, policy: policy,
 		objectIDState:     newWindowsV3PersistentObjectIDState(),
-		ancestryAuthority: windowsV3NativeAncestryAuthorityVerifier{policy: policy},
+		ancestryAuthority: windowsV3NativeAncestryAuthorityVerifier{},
 		enumerate:         &sync.Mutex{}, placementGuard: true,
 	}
 	return &windowsV3OutputPlatform{
@@ -120,8 +127,13 @@ func (platform *windowsV3OutputPlatform) Close() error {
 	return err
 }
 
+type windowsV3CreateObserver any
+
 type windowsV3Directory struct {
 	file               *os.File
+	metadataHandle     windows.Handle
+	metadataHandleOpen bool
+	metadataOpenErr    error
 	path               string
 	volume             windowsV3VolumeIdentity
 	objectIDs          windowsV3PersistentObjectIDProvider
@@ -130,7 +142,7 @@ type windowsV3Directory struct {
 	policy             *windowsV3PrivatePolicy
 	ancestryAuthority  windowsV3AncestryAuthorityVerifier
 	enumerate          *sync.Mutex
-	createObserver     windowsV3PrivateDirectoryCreateObserver
+	createObserver     windowsV3CreateObserver
 	private            bool
 	placementGuard     bool
 	selfPlacementGuard bool
@@ -141,12 +153,21 @@ func (directory *windowsV3Directory) handle() windows.Handle {
 }
 
 func (directory *windowsV3Directory) Close() error {
-	if directory == nil || directory.file == nil {
+	if directory == nil {
 		return nil
+	}
+	var metadataErr error
+	if directory.metadataHandleOpen {
+		metadataErr = windows.CloseHandle(directory.metadataHandle)
+		directory.metadataHandle = windows.InvalidHandle
+		directory.metadataHandleOpen = false
+	}
+	if directory.file == nil {
+		return metadataErr
 	}
 	err := directory.file.Close()
 	directory.file = nil
-	return err
+	return errors.Join(metadataErr, err)
 }
 
 func (directory *windowsV3Directory) OpenDirectory(relative string) (*windowsV3Directory, error) {
@@ -229,7 +250,8 @@ func (directory *windowsV3Directory) openDirectoryStatus(relative string, privat
 		return nil, false, windowsV3Failure("open output directory", relative, errWindowsV3OutputUnsafe, errors.New("wrap directory handle"))
 	}
 	opened := &windowsV3Directory{
-		file: file, path: filepath.Join(directory.path, relative), volume: directory.volume,
+		file: file, metadataHandle: windows.InvalidHandle,
+		path: filepath.Join(directory.path, relative), volume: directory.volume,
 		objectIDs: directory.objectIDs, inspector: directory.inspector, policy: directory.policy,
 		objectIDState: newWindowsV3PersistentObjectIDState(), ancestryAuthority: directory.ancestryAuthority,
 		enumerate: &sync.Mutex{}, createObserver: directory.createObserver, private: private,
@@ -245,12 +267,44 @@ func (directory *windowsV3Directory) openDirectoryStatus(relative string, privat
 	if err != nil {
 		return nil, false, errors.Join(windowsV3Failure("classify output directory open", relative, errWindowsV3OutputUnsafe, err), opened.Close())
 	}
-	if private {
-		if _, err := opened.preparePrivatePersistentObjectID(); err != nil {
-			return nil, false, errors.Join(err, opened.Close())
-		}
+	if !private {
+		opened.metadataHandle, opened.metadataOpenErr = directory.openDirectoryMetadataHandle(native, opened)
+		opened.metadataHandleOpen = opened.metadataOpenErr == nil
 	}
 	return opened, created, nil
+}
+
+func (directory *windowsV3Directory) openDirectoryMetadataHandle(
+	native string,
+	expected *windowsV3Directory,
+) (windows.Handle, error) {
+	handle, _, err := windowsV3OpenNative(
+		directory.handle(), native, windows.FILE_WRITE_ATTRIBUTES|windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_OPEN, windows.FILE_DIRECTORY_FILE, 0, nil,
+	)
+	if err != nil {
+		return windows.InvalidHandle, windowsV3NativeOperationFailure(
+			"open output directory metadata authority", expected.path, err,
+		)
+	}
+	expectedFacts, expectedErr := expected.inspector.Inspect(expected.handle())
+	metadataFacts, metadataErr := expected.inspector.Inspect(handle)
+	same := expectedErr == nil && metadataErr == nil && expectedFacts.object.same(metadataFacts.object)
+	if !same {
+		_ = windows.CloseHandle(handle)
+		return windows.InvalidHandle, errors.Join(
+			windowsV3Failure("open output directory metadata authority", expected.path, errWindowsV3OutputUnsafe,
+				errors.New("metadata handle does not identify the retained directory")),
+			expectedErr, metadataErr,
+		)
+	}
+	if err := windowsV3ValidateOpenedObject(metadataFacts, expected.volume, true); err != nil {
+		_ = windows.CloseHandle(handle)
+		return windows.InvalidHandle, windowsV3Failure(
+			"open output directory metadata authority", expected.path, errWindowsV3OutputUnsafe, err,
+		)
+	}
+	return handle, nil
 }
 
 func (directory *windowsV3Directory) verify(private bool) error {

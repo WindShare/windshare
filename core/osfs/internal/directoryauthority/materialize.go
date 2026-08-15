@@ -88,14 +88,7 @@ func (authority *Authority) materializeChild(
 	ctx context.Context,
 	claim directoryClaim,
 ) materializeAttempt {
-	authority.mu.Lock()
-	parent := authority.claims[claim.parentID]
-	authority.mu.Unlock()
-	if parent == nil || parent.state != materializationReady ||
-		!validateImmediateChild(parent.claim.locator.canonicalPath, claim.locator.canonicalPath) {
-		return materializeAttempt{err: noMutation(ErrParentUnavailable)}
-	}
-	snapshot, err := authority.parentSnapshot(parent)
+	snapshot, err := authority.snapshotForChild(claim)
 	if err != nil {
 		return materializeAttempt{err: noMutation(err)}
 	}
@@ -118,6 +111,23 @@ func (authority *Authority) materializeChild(
 		}
 	}
 	return attempt
+}
+
+func (authority *Authority) snapshotForChild(claim directoryClaim) (parentNamespaceIndex, error) {
+	if claim.parentID == 0 {
+		if !validateImmediateChild("", claim.locator.canonicalPath) {
+			return parentNamespaceIndex{}, ErrParentUnavailable
+		}
+		return authority.executionRootSnapshot()
+	}
+	authority.mu.Lock()
+	parent := authority.claims[claim.parentID]
+	authority.mu.Unlock()
+	if parent == nil || parent.state != materializationReady ||
+		!validateImmediateChild(parent.claim.locator.canonicalPath, claim.locator.canonicalPath) {
+		return parentNamespaceIndex{}, ErrParentUnavailable
+	}
+	return authority.parentSnapshot(parent)
 }
 
 func materializeAtParent(

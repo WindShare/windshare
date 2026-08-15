@@ -603,7 +603,7 @@ func TestCoverageC4WindowsPrivateRootCleanupPreservesUnprovenTargets(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	exactClaim, err := exact.privateIdentityClaim()
+	exactClaim, err := exact.preparePrivateIdentityClaim()
 	if err != nil {
 		_ = exact.Close()
 		t.Fatal(err)
@@ -625,7 +625,7 @@ func TestCoverageC4WindowsPrivateRootCleanupPreservesUnprovenTargets(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	ownedClaim, err := owned.privateIdentityClaim()
+	ownedClaim, err := owned.preparePrivateIdentityClaim()
 	if err != nil {
 		_ = owned.Close()
 		t.Fatal(err)

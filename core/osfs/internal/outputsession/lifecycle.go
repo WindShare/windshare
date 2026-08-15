@@ -28,9 +28,9 @@ func (session *Session) PauseTree(
 	needsAttention := session.attention || session.hasUncertainClaimsLocked()
 	snapshot := session.settlementSnapshotLocked()
 	session.mu.Unlock()
-	durableKind := transfer.DirectTreeSettlementResumable
+	durableKind := transfer.DirectTreeSettlementPaused
 	if needsAttention {
-		durableKind = transfer.DirectTreeSettlementNeedsAttention
+		durableKind = transfer.DirectTreeSettlementFailed
 	}
 	if session.lifecycle != nil {
 		if lifecycleErr := session.lifecycle.RecordTreeSettlement(ctx, durableKind, 0, snapshot); lifecycleErr != nil {
@@ -45,9 +45,9 @@ func (session *Session) PauseTree(
 
 	session.mu.Lock()
 	needsAttention = session.attention || stableErr != nil || session.hasUncertainClaimsLocked()
-	kind := transfer.DirectTreeSettlementResumable
+	kind := transfer.DirectTreeSettlementPaused
 	if needsAttention {
-		kind = transfer.DirectTreeSettlementNeedsAttention
+		kind = transfer.DirectTreeSettlementFailed
 	}
 	settlement, constructorErr := transfer.NewDirectTreeSettlement(kind)
 	if constructorErr != nil {
@@ -70,7 +70,7 @@ func (session *Session) FinalizeTree(
 	outcome transfer.DirectTreeOutcome,
 ) (transfer.DirectTreeSettlement, error) {
 	if session == nil || ctx == nil ||
-		(outcome != transfer.DirectTreeOutcomePublished && outcome != transfer.DirectTreeOutcomePartialDirectory) {
+		(outcome != transfer.DirectTreeOutcomeSuccess && outcome != transfer.DirectTreeOutcomePartial) {
 		return transfer.DirectTreeSettlement{}, executorContractError(transfer.ErrInvalidOutputSettlement)
 	}
 	owner, drained, settlement, err := session.acquireClose(closeComplete, 0, outcome)
@@ -100,12 +100,12 @@ func (session *Session) FinalizeTree(
 	needsAttention := session.attention || session.hasUncertainClaimsLocked()
 	snapshot := session.settlementSnapshotLocked()
 	session.mu.Unlock()
-	durableKind := transfer.DirectTreeSettlementPublished
-	if outcome == transfer.DirectTreeOutcomePartialDirectory {
-		durableKind = transfer.DirectTreeSettlementPartialDirectory
+	durableKind := transfer.DirectTreeSettlementSuccess
+	if outcome == transfer.DirectTreeOutcomePartial {
+		durableKind = transfer.DirectTreeSettlementPartial
 	}
 	if needsAttention {
-		durableKind = transfer.DirectTreeSettlementNeedsAttention
+		durableKind = transfer.DirectTreeSettlementFailed
 	}
 	if session.lifecycle != nil {
 		if lifecycleErr := session.lifecycle.RecordTreeSettlement(ctx, durableKind, outcome, snapshot); lifecycleErr != nil {
@@ -119,18 +119,18 @@ func (session *Session) FinalizeTree(
 
 	session.mu.Lock()
 	needsAttention = session.attention || stableErr != nil || session.hasUncertainClaimsLocked()
-	kind := transfer.DirectTreeSettlementPublished
-	if outcome == transfer.DirectTreeOutcomePartialDirectory {
-		kind = transfer.DirectTreeSettlementPartialDirectory
+	kind := transfer.DirectTreeSettlementSuccess
+	if outcome == transfer.DirectTreeOutcomePartial {
+		kind = transfer.DirectTreeSettlementPartial
 	}
 	if needsAttention {
-		kind = transfer.DirectTreeSettlementNeedsAttention
+		kind = transfer.DirectTreeSettlementFailed
 	}
 	settlement, constructorErr := transfer.NewDirectTreeSettlement(kind)
 	if constructorErr != nil {
 		stableErr = joinFailures(ctx, stableErr, executorContractError(constructorErr))
 	}
-	if kind != transfer.DirectTreeSettlementNeedsAttention {
+	if kind != transfer.DirectTreeSettlementFailed {
 		session.state = sessionCompleted
 	} else {
 		session.state = sessionPaused

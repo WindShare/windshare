@@ -76,6 +76,9 @@ const (
 	FilesystemOutputRuntimeRecoverFile
 	FilesystemOutputRuntimePublishFile
 	FilesystemOutputRuntimeQuarantineFile
+	FilesystemOutputRuntimeAdmitDestination
+	FilesystemOutputRuntimeFirstWrite
+	FilesystemOutputRuntimeCleanup
 )
 
 type FilesystemOutputRuntimeDecision uint8
@@ -99,6 +102,7 @@ const (
 	FilesystemOutputRuntimeNoChange
 	FilesystemOutputRuntimeNeedsAttention
 	FilesystemOutputRuntimeIsolatedFailure
+	FilesystemOutputRuntimeCleanupPending
 )
 
 type FilesystemOutputNativeLockScope uint8
@@ -175,6 +179,67 @@ func NewFilesystemOutputAuthority(config FilesystemOutputAuthorityConfig) (*File
 	return &FilesystemOutputAuthority{authority: runtimeAuthority}, nil
 }
 
+type FilesystemOutputExecutionMode struct {
+	mode outputruntime.ExecutionMode
+}
+
+func (mode FilesystemOutputExecutionMode) Resumable() bool { return mode.mode.Resumable() }
+func (mode FilesystemOutputExecutionMode) LiveOnly() bool  { return mode.mode.LiveOnly() }
+func (mode FilesystemOutputExecutionMode) Valid() bool     { return mode.mode.Valid() }
+
+type FilesystemOutputLookupKind uint8
+
+const (
+	FilesystemOutputLookupMiss FilesystemOutputLookupKind = iota + 1
+	FilesystemOutputLookupReopened
+	FilesystemOutputLookupAlreadyRunning
+	FilesystemOutputLookupNeedsAttention
+	FilesystemOutputLookupAmbiguous
+)
+
+type FilesystemOutputLookup struct {
+	lookup outputruntime.ActiveLookup
+}
+
+func (lookup FilesystemOutputLookup) Kind() FilesystemOutputLookupKind {
+	switch lookup.lookup.Kind() {
+	case outputruntime.ActiveLookupMiss:
+		return FilesystemOutputLookupMiss
+	case outputruntime.ActiveLookupReopened:
+		return FilesystemOutputLookupReopened
+	case outputruntime.ActiveLookupAlreadyRunning:
+		return FilesystemOutputLookupAlreadyRunning
+	case outputruntime.ActiveLookupNeedsAttention:
+		return FilesystemOutputLookupNeedsAttention
+	case outputruntime.ActiveLookupAmbiguous:
+		return FilesystemOutputLookupAmbiguous
+	default:
+		return 0
+	}
+}
+
+func (lookup FilesystemOutputLookup) Operation() FilesystemOutputOperation {
+	return FilesystemOutputOperation{operation: lookup.lookup.Operation()}
+}
+
+type FilesystemOutputOperation struct {
+	operation *outputruntime.Operation
+}
+
+func (operation FilesystemOutputOperation) ReceiveIntent() (transfer.ReceiveIntent, bool) {
+	if operation.operation == nil {
+		return transfer.ReceiveIntent{}, false
+	}
+	return operation.operation.ReceiveIntent()
+}
+
+func (operation FilesystemOutputOperation) ExecutionMode() FilesystemOutputExecutionMode {
+	if operation.operation == nil {
+		return FilesystemOutputExecutionMode{}
+	}
+	return FilesystemOutputExecutionMode{mode: operation.operation.ExecutionMode()}
+}
+
 type NativeDirectTreeReservationKind uint8
 
 const (
@@ -205,6 +270,56 @@ func (reservation NativeDirectTreeReservation) Kind() NativeDirectTreeReservatio
 
 func (reservation NativeDirectTreeReservation) ReceiveIntent() (transfer.ReceiveIntent, bool) {
 	return reservation.reservation.ReceiveIntent()
+}
+
+func (authority *FilesystemOutputAuthority) BindDestination(
+	ctx context.Context,
+) (FilesystemOutputExecutionMode, error) {
+	if authority == nil || authority.authority == nil {
+		return FilesystemOutputExecutionMode{}, transfer.ErrInvalidOutputBinding
+	}
+	mode, err := authority.authority.BindDestination(ctx)
+	return FilesystemOutputExecutionMode{mode: mode}, err
+}
+
+func (authority *FilesystemOutputAuthority) LookupActive(
+	ctx context.Context,
+	selection transfer.SelectionSpec,
+) (FilesystemOutputLookup, error) {
+	if authority == nil || authority.authority == nil {
+		return FilesystemOutputLookup{}, transfer.ErrInvalidOutputBinding
+	}
+	lookup, err := authority.authority.LookupActive(ctx, selection)
+	return FilesystemOutputLookup{lookup: lookup}, err
+}
+
+func (authority *FilesystemOutputAuthority) CreateOperation(
+	ctx context.Context,
+	lookup FilesystemOutputLookup,
+	artifact receivecontract.ArtifactSpec,
+) (FilesystemOutputOperation, error) {
+	if authority == nil || authority.authority == nil {
+		return FilesystemOutputOperation{}, transfer.ErrInvalidOutputBinding
+	}
+	operation, err := authority.authority.CreateOperation(ctx, lookup.lookup, artifact)
+	return FilesystemOutputOperation{operation: operation}, err
+}
+
+func (authority *FilesystemOutputAuthority) OpenOperation(
+	ctx context.Context,
+	operation FilesystemOutputOperation,
+) (transfer.DirectTreeSession, error) {
+	if authority == nil || authority.authority == nil {
+		return nil, transfer.ErrInvalidOutputBinding
+	}
+	return authority.authority.OpenOperation(ctx, operation.operation)
+}
+
+func (authority *FilesystemOutputAuthority) Close() error {
+	if authority == nil || authority.authority == nil {
+		return nil
+	}
+	return authority.authority.Close()
 }
 
 func (authority *FilesystemOutputAuthority) ReserveDirectTree(

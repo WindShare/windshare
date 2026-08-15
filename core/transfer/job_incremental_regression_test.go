@@ -182,7 +182,7 @@ func TestTransferJobRejectsCrossPageDuplicateNodeIDBeforeAdmission(t *testing.T)
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeResumable ||
+	if result.Outcome != DirectTreeOutcomePaused ||
 		result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) ||
 		len(revisions.order) != 0 || len(output.directories) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
 		t.Fatalf("duplicate node result=%+v opens=%v directories=%v", result, revisions.order, output.directories)
@@ -228,7 +228,7 @@ func TestTransferJobRejectsCrossPageNameSequenceViolationsBeforeAdmission(t *tes
 				t.Fatal(err)
 			}
 			result := job.Run(context.Background())
-			if result.Outcome != DirectTreeOutcomeResumable ||
+			if result.Outcome != DirectTreeOutcomePaused ||
 				result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) ||
 				len(output.directories) != 0 {
 				t.Fatalf("cross-page validation result=%+v directories=%v", result, output.directories)
@@ -265,7 +265,7 @@ func TestTransferJobDoesNotAdmitOrQueueOmittedChildGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil || len(result.Directories) != 1 ||
+	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil || len(result.Directories) != 1 ||
 		!errors.Is(result.Directories[0].Cause, ErrCatalogEntriesOmitted) || len(result.Files) != 0 ||
 		len(revisions.order) != 0 || len(output.directories) != 1 || output.directories[0] != "" ||
 		len(output.finalized) != 1 || output.finalized[0] != "" {
@@ -282,7 +282,7 @@ func TestTransferJobCombinesBeginAndTerminalReleaseFailures(t *testing.T) {
 	job, _ := branchJob(t, output, revisions, scriptedRangeReader{})
 
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeResumable ||
+	if result.Outcome != DirectTreeOutcomePaused ||
 		result.TerminationFault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
 		len(result.Files) != 1 || result.Files[0].Fault != mustOutputFault(fault.ScopeFileLocal, fault.OutputStateIO) ||
 		result.Files[0].LeaseReleaseFault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
@@ -354,7 +354,7 @@ func TestOpaqueSelectionBeginsBeforeDelayedUnrelatedBranchAndKeepsItVirtual(t *t
 	}
 	close(releaseUnrelated)
 	result := <-resultChannel
-	if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != 1 ||
+	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 ||
 		!slices.Equal(output.directories, []string{"", "a-wanted"}) ||
 		!slices.Equal(output.finalized, []string{"a-wanted", ""}) {
 		t.Fatalf("result=%+v directories=%v finalized=%v", result, output.directories, output.finalized)
@@ -397,7 +397,7 @@ func TestNonDurableStreamPublishesWithTransientCoverageAndEmptyCheckpoints(t *te
 	}
 	result := job.Run(context.Background())
 	transaction := output.transactions["stream.bin"]
-	if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != 1 || transaction == nil ||
+	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 || transaction == nil ||
 		!transaction.durable.IsEmpty() || !RangesCoverFile(size, transaction.transient) ||
 		!transaction.committed {
 		t.Fatalf("result=%+v transaction=%+v", result, transaction)

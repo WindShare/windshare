@@ -10,7 +10,44 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
+
+func TestTraverseOnlyAdmissionNeverTouchesDestinationOrExecutors(t *testing.T) {
+	var destinationCalls int
+	fixture := newTestFixtureWithArtifact(t, receivecontract.NewCatalogRootDirectoryTree(), func(config *Config) {
+		config.Destinations = ArtifactDestinationBinderFunc(func(
+			ordinaryoutput.ArtifactPath,
+		) (DestinationPath, error) {
+			destinationCalls++
+			return DestinationPath{}, errors.New("destination must remain gated")
+		})
+		config.Locator.(*fakeDirectoryAuthority).canonicalLocatorKey = func(string) (string, error) {
+			t.Fatal("traverse-only admission reached locator authority")
+			return "", nil
+		}
+		config.Directories.(*fakeDirectoryAuthority).materialize = func(
+			context.Context,
+			DirectoryClaim,
+		) (DirectoryMaterialization, error) {
+			t.Fatal("traverse-only admission reached directory executor")
+			return DirectoryMaterialization{}, nil
+		}
+	})
+	admission, err := fixture.session.AdmitDirectory(
+		context.Background(), fixture.directoryRequest(fixture.rootDirectory),
+	)
+	if err != nil || admission.IsZero() {
+		t.Fatalf("traverse-only admission = (%v, %v)", admission, err)
+	}
+	if destinationCalls != 0 {
+		t.Fatalf("traverse-only destination calls = %d", destinationCalls)
+	}
+	if _, err := fixture.session.FinalizeDirectory(context.Background(), admission); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestDirectoryDispositionSeparatesRootAndDescendantAuthority(t *testing.T) {
 	tests := []struct {
@@ -115,12 +152,12 @@ func TestDirectoryAdmissionCoalescesWithoutHoldingSessionLock(t *testing.T) {
 	first := make(chan result, 1)
 	second := make(chan result, 1)
 	go func() {
-		admission, err := fixture.session.AdmitDirectory(context.Background(), fixture.rootDirectory)
+		admission, err := fixture.admitDirectory(context.Background(), fixture.rootDirectory)
 		first <- result{admission: admission, err: err}
 	}()
 	mustSignal(t, materializeStarted)
 	go func() {
-		admission, err := fixture.session.AdmitDirectory(context.Background(), fixture.rootDirectory)
+		admission, err := fixture.admitDirectory(context.Background(), fixture.rootDirectory)
 		second <- result{admission: admission, err: err}
 	}()
 	mustSignal(t, coalesced)
@@ -164,27 +201,28 @@ func TestDirectoryAdmissionCoalescesWithoutHoldingSessionLock(t *testing.T) {
 func TestConflictingPendingDirectoryFailsBeforeBlockedMaterializationReturns(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	fixture := newTestFixture(t, func(config *Config) {
-		config.Directories.(*fakeDirectoryAuthority).materialize = func(
-			context.Context,
-			DirectoryClaim,
-		) (DirectoryMaterialization, error) {
-			close(started)
-			<-release
-			return DirectoryMaterialization{Cut: MutationStable, Disposition: DirectoryCallerProvidedRoot}, nil
-		}
-	})
+	fixture := newTestFixture(t, nil)
+	root := fixture.admitRoot(context.Background())
+	fixture.directories.materialize = func(
+		context.Context,
+		DirectoryClaim,
+	) (DirectoryMaterialization, error) {
+		close(started)
+		<-release
+		return DirectoryMaterialization{Cut: MutationStable, Disposition: DirectoryAuthorityCreatedDescendant}, nil
+	}
+	directory := fixture.childDirectory(root, 76, "child")
 	first := make(chan error, 1)
 	go func() {
-		_, err := fixture.session.AdmitDirectory(context.Background(), fixture.rootDirectory)
+		_, err := fixture.admitDirectory(context.Background(), directory)
 		first <- err
 	}()
 	mustSignal(t, started)
-	conflict := fixture.rootDirectory
+	conflict := directory
 	conflict.DirectoryID = identity[catalog.DirectoryID](77)
 	conflictResult := make(chan error, 1)
 	go func() {
-		_, err := fixture.session.AdmitDirectory(context.Background(), conflict)
+		_, err := fixture.admitDirectory(context.Background(), conflict)
 		conflictResult <- err
 	}()
 	err := mustResult(t, conflictResult)
@@ -211,7 +249,7 @@ func TestDirectoryReservationRollsBackExactlyAtStableNoChangeCut(t *testing.T) {
 			return DirectoryMaterialization{Cut: MutationStable, Disposition: DirectoryCallerProvidedRoot}, nil
 		}
 	})
-	if _, err := fixture.session.AdmitDirectory(context.Background(), fixture.rootDirectory); !errors.Is(err, context.Canceled) {
+	if _, err := fixture.admitDirectory(context.Background(), fixture.rootDirectory); !errors.Is(err, context.Canceled) {
 		t.Fatalf("first admission error=%v", err)
 	}
 	fixture.session.mu.Lock()
@@ -222,7 +260,7 @@ func TestDirectoryReservationRollsBackExactlyAtStableNoChangeCut(t *testing.T) {
 		t.Fatal("failed no-change admission retained authority or budget")
 	}
 	fixture.session.mu.Unlock()
-	if admission, err := fixture.session.AdmitDirectory(context.Background(), fixture.rootDirectory); err != nil || admission.IsZero() {
+	if admission, err := fixture.admitDirectory(context.Background(), fixture.rootDirectory); err != nil || admission.IsZero() {
 		t.Fatalf("retry admission zero=%v err=%v", admission.IsZero(), err)
 	}
 }
@@ -235,7 +273,7 @@ func TestDirectoryClaimBudgetRejectsBeforeMaterialization(t *testing.T) {
 		config.Limits.ActiveFileClaims = 1
 	})
 	root := fixture.admitRoot(context.Background())
-	if _, err := fixture.session.AdmitDirectory(
+	if _, err := fixture.admitDirectory(
 		context.Background(),
 		fixture.childDirectory(root, 43, "child"),
 	); !errors.Is(err, ErrResourceBudget) {
@@ -256,7 +294,7 @@ func TestInvalidUTF8LocatorFailsBeforeClaimReservation(t *testing.T) {
 			return string([]byte{0xff}), nil
 		}
 	})
-	if _, err := fixture.session.AdmitDirectory(context.Background(), fixture.rootDirectory); !errors.Is(err, ErrDirectoryBinding) {
+	if _, err := fixture.admitDirectory(context.Background(), fixture.rootDirectory); !errors.Is(err, ErrDirectoryBinding) {
 		t.Fatalf("invalid locator error=%v", err)
 	}
 	fixture.session.mu.Lock()
@@ -269,23 +307,31 @@ func TestInvalidUTF8LocatorFailsBeforeClaimReservation(t *testing.T) {
 }
 
 func TestDirectoryMetadataBudgetChargesLocatorBeforeMaterialization(t *testing.T) {
-	rootLocator := "locator:root"
-	root := transfer.MaterializationDirectory{
+	root := transfer.AuthenticatedSourceDirectory{
 		DirectoryID: identity[catalog.DirectoryID](21),
 		Generation:  identity[catalog.DirectoryGeneration](31),
+		SourcePath:  ordinaryoutput.EmptySourceCatalogPath(),
 	}
-	rootCharge := directoryMetadataBytes(root, rootLocator)
+	rootCharge := directoryMetadataBytes(
+		mustSourceDirectory(t, root), mustArtifactPath(t, receivecontract.DefaultResultRootName),
+		"locator:"+receivecontract.DefaultResultRootName,
+		NewDestinationSessionRoot(), "locator:root",
+	)
 	fixture := newTestFixture(t, func(config *Config) {
 		config.Limits = DefaultLimits()
 		config.Limits.DirectoryMetadataBytes = rootCharge + 128
 	})
 	rootAdmission := fixture.admitRoot(context.Background())
 	child := fixture.childDirectory(rootAdmission, 44, "child")
-	childCharge := directoryMetadataBytes(child, "locator:child")
+	childArtifact := receivecontract.DefaultResultRootName + "/child"
+	childCharge := directoryMetadataBytes(
+		mustSourceDirectory(t, child), mustArtifactPath(t, childArtifact), "locator:"+childArtifact,
+		mustDestinationPath(t, "child"), "locator:child",
+	)
 	fixture.session.mu.Lock()
 	fixture.session.limits.DirectoryMetadataBytes = rootCharge + childCharge - 1
 	fixture.session.mu.Unlock()
-	if _, err := fixture.session.AdmitDirectory(context.Background(), child); !errors.Is(err, ErrResourceBudget) {
+	if _, err := fixture.admitDirectory(context.Background(), child); !errors.Is(err, ErrResourceBudget) {
 		t.Fatalf("child budget error=%v", err)
 	}
 	materialized, _ := fixture.directories.counts()
@@ -301,12 +347,17 @@ func TestDirectoryMetadataBudgetChargesLocatorBeforeMaterialization(t *testing.T
 }
 
 func TestDirectoryMetadataBudgetAcceptsExactBoundaryAndRejectsOneByteOver(t *testing.T) {
-	root := transfer.MaterializationDirectory{
+	root := transfer.AuthenticatedSourceDirectory{
 		DirectoryID: identity[catalog.DirectoryID](21),
 		Generation:  identity[catalog.DirectoryGeneration](31),
+		SourcePath:  ordinaryoutput.EmptySourceCatalogPath(),
 	}
-	const rootCharge uint64 = 92
-	if charge := directoryMetadataBytes(root, "locator:root"); charge != rootCharge {
+	const rootCharge uint64 = 118
+	if charge := directoryMetadataBytes(
+		mustSourceDirectory(t, root), mustArtifactPath(t, receivecontract.DefaultResultRootName),
+		"locator:"+receivecontract.DefaultResultRootName,
+		NewDestinationSessionRoot(), "locator:root",
+	); charge != rootCharge {
 		t.Fatalf("root metadata charge=%d want=%d", charge, rootCharge)
 	}
 
@@ -314,7 +365,7 @@ func TestDirectoryMetadataBudgetAcceptsExactBoundaryAndRejectsOneByteOver(t *tes
 		config.Limits = DefaultLimits()
 		config.Limits.DirectoryMetadataBytes = rootCharge
 	})
-	if _, err := exact.session.AdmitDirectory(context.Background(), exact.rootDirectory); err != nil {
+	if _, err := exact.admitDirectory(context.Background(), exact.rootDirectory); err != nil {
 		t.Fatalf("exact-boundary admission: %v", err)
 	}
 	exact.session.mu.Lock()
@@ -328,7 +379,7 @@ func TestDirectoryMetadataBudgetAcceptsExactBoundaryAndRejectsOneByteOver(t *tes
 		config.Limits = DefaultLimits()
 		config.Limits.DirectoryMetadataBytes = rootCharge - 1
 	})
-	if _, err := over.session.AdmitDirectory(context.Background(), over.rootDirectory); !errors.Is(err, ErrResourceBudget) {
+	if _, err := over.admitDirectory(context.Background(), over.rootDirectory); !errors.Is(err, ErrResourceBudget) {
 		t.Fatalf("one-byte-over admission error=%v", err)
 	}
 	over.session.mu.Lock()
@@ -346,8 +397,12 @@ func TestDirectoryMetadataChargeCountsUTF8FieldsAndFixedIndexesOnce(t *testing.T
 	fixture := newTestFixture(t, nil)
 	parent := fixture.admitRoot(context.Background())
 	child := fixture.childDirectory(parent, 52, "\u76ee\u5f55")
-	const childCharge uint64 = 132
-	if charge := directoryMetadataBytes(child, "locator:\u76ee\u5f55"); charge != childCharge {
+	const childCharge uint64 = 178
+	childArtifact := receivecontract.DefaultResultRootName + "/\u76ee\u5f55"
+	if charge := directoryMetadataBytes(
+		mustSourceDirectory(t, child), mustArtifactPath(t, childArtifact), "locator:"+childArtifact,
+		mustDestinationPath(t, "\u76ee\u5f55"), "locator:\u76ee\u5f55",
+	); charge != childCharge {
 		t.Fatalf("UTF-8 metadata charge=%d want=%d", charge, childCharge)
 	}
 }
@@ -366,7 +421,7 @@ func TestDirectoryFinalizationSealsThenWaitsForActiveFile(t *testing.T) {
 	ctx := testContext()
 	rootAdmission := fixture.admitRoot(ctx)
 	child := fixture.childDirectory(rootAdmission, 40, "child")
-	childAdmission, err := fixture.session.AdmitDirectory(ctx, child)
+	childAdmission, err := fixture.admitDirectory(ctx, child)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,7 +504,7 @@ func TestParentFinalizationRequiresChildSettlementAndCachesIsolatedResult(t *tes
 			_ context.Context,
 			claim DirectoryClaim,
 		) (DirectoryFinalization, error) {
-			if claim.Directory().Path == "child" {
+			if claim.Source().SourcePath.String() == "child" {
 				return IsolatedDirectory(metadataFault)
 			}
 			return FinalizedDirectory(), nil
@@ -458,7 +513,7 @@ func TestParentFinalizationRequiresChildSettlementAndCachesIsolatedResult(t *tes
 	ctx := context.Background()
 	rootAdmission := fixture.admitRoot(ctx)
 	child := fixture.childDirectory(rootAdmission, 51, "child")
-	childAdmission, err := fixture.session.AdmitDirectory(ctx, child)
+	childAdmission, err := fixture.admitDirectory(ctx, child)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +547,7 @@ func TestDirectoryAdmissionAmbiguityRetainsClaimForAttention(t *testing.T) {
 			return DirectoryMaterialization{Cut: MutationAmbiguous}, errors.New("create result unknown")
 		}
 	})
-	if _, err := fixture.session.AdmitDirectory(context.Background(), fixture.rootDirectory); !errors.Is(err, ErrMutationAmbiguous) {
+	if _, err := fixture.admitDirectory(context.Background(), fixture.rootDirectory); !errors.Is(err, ErrMutationAmbiguous) {
 		t.Fatalf("admission ambiguity error=%v", err)
 	}
 	fixture.session.mu.Lock()
@@ -504,7 +559,7 @@ func TestDirectoryAdmissionAmbiguityRetainsClaimForAttention(t *testing.T) {
 		t.Fatal("ambiguous admission did not retain its full reservation")
 	}
 	settlement, err := fixture.session.PauseTree(context.Background(), transfer.JobPauseOutputFailure)
-	if err != nil || settlement.Kind() != transfer.DirectTreeSettlementNeedsAttention {
+	if err != nil || settlement.Kind() != transfer.DirectTreeSettlementFailed {
 		t.Fatalf("pause settlement=%v err=%v", settlement.Kind(), err)
 	}
 }

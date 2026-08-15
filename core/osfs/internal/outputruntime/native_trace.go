@@ -10,11 +10,16 @@ import (
 
 func (authority *Authority) outputSessionRuntimeTrace() outputsession.TraceSink {
 	return outputsession.TraceSinkFunc(func(event outputsession.TraceEvent) {
+		decision := runtimeSessionDecision(event.Decision)
+		if event.Operation == outputsession.OperationCommitFile && event.Decision == outputsession.TraceSettled {
+			decision = FilesystemOutputRuntimeSucceeded
+		}
 		projected := FilesystemOutputTrace{
-			Operation: TraceRuntimeDecision, ReceiveIntentDigest: event.ReceiveIntentDigest, SessionID: event.SessionID,
+			Operation: TraceRuntimeDecision, ReceiveIntentDigest: event.ReceiveIntentDigest,
+			ReceiveOperationID: event.ReceiveOperationID, SessionID: event.SessionID,
 			RuntimeComponent: FilesystemOutputRuntimeSession,
 			RuntimeOperation: runtimeSessionOperation(event.Operation),
-			RuntimeDecision:  runtimeSessionDecision(event.Decision),
+			RuntimeDecision:  decision,
 			OperationID:      event.OperationID, ClaimID: uint64(event.ClaimID),
 			NodeClaimCount: event.NodeClaims, DirectoryClaimCount: event.DirectoryClaims,
 			FileClaimCount: event.FileClaims, ActiveFileClaimCount: event.ActiveFileClaims,
@@ -88,6 +93,8 @@ func runtimeSessionOperation(operation outputsession.OperationKind) FilesystemOu
 		return FilesystemOutputRuntimePauseTree
 	case outputsession.OperationFinalizeTree:
 		return FilesystemOutputRuntimeFinalizeTree
+	case outputsession.OperationFirstWrite:
+		return FilesystemOutputRuntimeFirstWrite
 	default:
 		return 0
 	}
@@ -117,6 +124,8 @@ func runtimeSessionDecision(decision outputsession.TraceDecision) FilesystemOutp
 		return FilesystemOutputRuntimeDraining
 	case outputsession.TraceClosed:
 		return FilesystemOutputRuntimeClosed
+	case outputsession.TraceCollision:
+		return FilesystemOutputRuntimeCollision
 	default:
 		return 0
 	}
@@ -166,7 +175,7 @@ func runtimeFileOperation(operation fileexecution.TraceOperation) FilesystemOutp
 		return FilesystemOutputRuntimePauseFile
 	case fileexecution.TraceRetire:
 		return FilesystemOutputRuntimeRetireFile
-	case fileexecution.TraceQuarantine:
+	case fileexecution.TraceItemBlocked:
 		return FilesystemOutputRuntimeQuarantineFile
 	default:
 		return 0

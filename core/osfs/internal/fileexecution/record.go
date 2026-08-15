@@ -15,25 +15,27 @@ func (engine *Engine) checkpointKey(file transfer.MaterializationFile) (Checkpoi
 	if engine == nil {
 		return CheckpointKey{}, ErrInvalidClaim
 	}
-	descriptor := file.Descriptor
-	target := file.Target
-	canonical, err := catalog.CanonicalPath(file.Path)
-	if err != nil || canonical != file.Path || file.Path == "" || file.ParentAdmission.IsZero() ||
-		file.ParentAdmission.ReceiveIntentDigest() != engine.intent.Digest() ||
+	descriptor := file.Descriptor()
+	target := file.Target()
+	artifactPath := file.ArtifactPath().String()
+	canonical, err := catalog.CanonicalPath(artifactPath)
+	if err != nil || !file.SourcePath().Valid() || !file.ArtifactPath().Valid() ||
+		canonical != artifactPath || artifactPath == "" || file.SourceParentAdmission().IsZero() ||
+		file.SourceParentAdmission().ReceiveIntentDigest() != engine.intent.Digest() ||
 		descriptor.ShareInstance() != engine.intent.ShareInstance() ||
 		descriptor.FileID().IsZero() || descriptor.FileRevision().IsZero() ||
-		file.ExpectedSize != descriptor.ExactSize() || target.OutputSessionID() != engine.sessionID ||
-		target.Descriptor() != descriptor || target.ExactSize() != file.ExpectedSize ||
+		file.ExpectedSize() != descriptor.ExactSize() || target.OutputSessionID() != engine.sessionID ||
+		target.Descriptor() != descriptor || target.ExactSize() != file.ExpectedSize() ||
 		target.Locator().Kind() != transfer.MaterializationPathLocator ||
-		target.Locator().CanonicalPath() != file.Path {
+		target.Locator().CanonicalPath() != artifactPath {
 		return CheckpointKey{}, errors.Join(ErrInvalidClaim, err)
 	}
 	ownership := engine.binding.Ownership()
 	key := CheckpointKey{
 		operation: engine.binding.OperationID(), intent: engine.binding.ReceiveIntentDigest(),
 		materialization: engine.binding.MaterializationBindingDigest(),
-		fileID:          descriptor.FileID(), revision: descriptor.FileRevision(), path: file.Path,
-		exactSize: file.ExpectedSize, materializer: ownership.MaterializerKind(),
+		fileID:          descriptor.FileID(), revision: descriptor.FileRevision(), path: artifactPath,
+		exactSize: file.ExpectedSize(), materializer: ownership.MaterializerKind(),
 		authority: ownership.AuthorityRef(),
 	}
 	if !key.valid() {

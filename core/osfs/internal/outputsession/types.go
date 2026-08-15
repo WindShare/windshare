@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
 const (
@@ -79,31 +80,70 @@ func (disposition DirectoryDisposition) validFor(root bool) bool {
 
 // DirectoryClaim is the executor's immutable view of one already-reserved edge.
 // ClaimID is process-local correlation, never native or durable authority.
-type DirectoryClaim struct {
-	id         ClaimID
-	directory  transfer.MaterializationDirectory
-	admission  transfer.DirectoryAdmission
-	locatorKey string
-	parent     ClaimID
+type DestinationPath = transfer.OutputDestinationPath
+
+func NewDestinationPath(value string) (DestinationPath, error) {
+	return transfer.NewOutputDestinationPath(value)
 }
 
-func (claim DirectoryClaim) ID() ClaimID                                  { return claim.id }
-func (claim DirectoryClaim) Directory() transfer.MaterializationDirectory { return claim.directory }
-func (claim DirectoryClaim) Admission() transfer.DirectoryAdmission       { return claim.admission }
-func (claim DirectoryClaim) LocatorKey() string                           { return claim.locatorKey }
-func (claim DirectoryClaim) ParentID() ClaimID                            { return claim.parent }
-func (claim DirectoryClaim) IsRoot() bool                                 { return claim.parent == 0 }
+func NewDestinationSessionRoot() DestinationPath {
+	return transfer.OutputDestinationSessionRoot()
+}
+
+// ArtifactDestinationBinder is the only logical-to-physical alias boundary.
+// It consumes projector output and therefore cannot reinterpret source paths.
+type ArtifactDestinationBinder interface {
+	BindArtifactPath(ordinaryoutput.ArtifactPath) (DestinationPath, error)
+}
+
+type ArtifactDestinationBinderFunc func(ordinaryoutput.ArtifactPath) (DestinationPath, error)
+
+func (function ArtifactDestinationBinderFunc) BindArtifactPath(
+	path ordinaryoutput.ArtifactPath,
+) (DestinationPath, error) {
+	if function == nil {
+		return DestinationPath{}, ErrInvalidConfiguration
+	}
+	return function(path)
+}
+
+type DirectoryClaim struct {
+	id                    ClaimID
+	source                transfer.AuthenticatedSourceDirectory
+	admission             transfer.DirectoryAdmission
+	artifact              ordinaryoutput.ArtifactPath
+	artifactLocatorKey    string
+	destination           DestinationPath
+	destinationLocatorKey string
+	parent                ClaimID
+	destinationParent     ClaimID
+}
+
+func (claim DirectoryClaim) ID() ClaimID                                   { return claim.id }
+func (claim DirectoryClaim) Source() transfer.AuthenticatedSourceDirectory { return claim.source }
+func (claim DirectoryClaim) Admission() transfer.DirectoryAdmission        { return claim.admission }
+func (claim DirectoryClaim) ArtifactPath() ordinaryoutput.ArtifactPath     { return claim.artifact }
+func (claim DirectoryClaim) LocatorKey() string                            { return claim.artifactLocatorKey }
+func (claim DirectoryClaim) DestinationPath() DestinationPath              { return claim.destination }
+func (claim DirectoryClaim) DestinationLocatorKey() string                 { return claim.destinationLocatorKey }
+func (claim DirectoryClaim) ParentID() ClaimID                             { return claim.destinationParent }
+func (claim DirectoryClaim) SourceParentID() ClaimID                       { return claim.parent }
+func (claim DirectoryClaim) IsSessionRoot() bool                           { return claim.destination.IsSessionRoot() }
 
 type FileClaim struct {
-	id         ClaimID
-	file       transfer.MaterializationFile
-	locatorKey string
-	parent     ClaimID
+	id                    ClaimID
+	file                  transfer.MaterializationFile
+	artifactLocatorKey    string
+	destination           DestinationPath
+	destinationLocatorKey string
+	parent                ClaimID
 }
 
 func (claim FileClaim) ID() ClaimID                        { return claim.id }
 func (claim FileClaim) File() transfer.MaterializationFile { return claim.file }
-func (claim FileClaim) LocatorKey() string                 { return claim.locatorKey }
+func (claim FileClaim) LocatorKey() string                 { return claim.artifactLocatorKey }
+func (claim FileClaim) DestinationPath() DestinationPath   { return claim.destination }
+func (claim FileClaim) DestinationLocatorKey() string      { return claim.destinationLocatorKey }
 func (claim FileClaim) ParentID() ClaimID                  { return claim.parent }
 
 type DirectoryMaterialization struct {
@@ -208,6 +248,7 @@ type Config struct {
 	ReceiptSecret []byte
 	Limits        Limits
 	Locator       LocatorCanonicalizer
+	Destinations  ArtifactDestinationBinder
 	Directories   DirectoryExecutor
 	Files         FileExecutor
 	Resources     ResourceReleaser
@@ -219,7 +260,8 @@ func (config Config) validate() (transfer.DirectoryAdmissionScope, Limits, error
 	scope, err := transfer.NewDirectoryAdmissionScope(config.Intent)
 	if err != nil || config.SessionID.IsZero() ||
 		len(config.ReceiptSecret) != sha256.Size || allZero(config.ReceiptSecret) ||
-		config.Locator == nil || config.Directories == nil || config.Files == nil || config.Resources == nil {
+		config.Locator == nil || config.Destinations == nil ||
+		config.Directories == nil || config.Files == nil || config.Resources == nil {
 		return transfer.DirectoryAdmissionScope{}, Limits{}, errors.Join(ErrInvalidConfiguration, err)
 	}
 	if _, err = transfer.NewDirectTreeCapabilities(config.Capabilities); err != nil {
@@ -247,22 +289,38 @@ func validCanonicalLocatorKey(path, key string) bool {
 	return utf8.ValidString(key) && (path == "" || key != "")
 }
 
-func directoryBaseMetadataBytes(directory transfer.MaterializationDirectory) uint64 {
+func directoryBaseMetadataBytes(
+	source transfer.AuthenticatedSourceDirectory,
+	artifact ordinaryoutput.ArtifactPath,
+) uint64 {
 	// This is a stable accounting contract over bytes the Go ledger retains, not
 	// a heap estimate. The claim charges its raw DirectoryID and generation, the
 	// NodeID index charges its distinct fixed key copy, and the future receipt
 	// index key is reserved before materialization. Claim-count limits separately
 	// bound struct/map overhead and fixed ModifiedTime copies.
 	bytes := uint64(2*catalog.IdentityBytes) + directoryNodeIndexKeyBytes + directoryReceiptIndexKeyBytes
-	bytes += uint64(len(directory.Path))
-	if !directory.ParentAdmission.IsZero() {
+	bytes += uint64(len(source.SourcePath.String())) + uint64(len(artifact.String()))
+	if !source.ParentAdmission.IsZero() {
 		bytes += sha256.Size
 	}
 	return bytes
 }
 
-func directoryMetadataBytes(directory transfer.MaterializationDirectory, locatorKey string) uint64 {
+func directoryMetadataBytes(
+	source transfer.AuthenticatedSourceDirectory,
+	artifact ordinaryoutput.ArtifactPath,
+	artifactLocatorKey string,
+	destination DestinationPath,
+	destinationLocatorKey string,
+) uint64 {
 	// Path/name and locator indexes retain immutable string headers over the same
 	// backing bytes as their claims, so each UTF-8 byte sequence is charged once.
-	return directoryBaseMetadataBytes(directory) + uint64(len(locatorKey))
+	bytes := directoryBaseMetadataBytes(source, artifact) + uint64(len(artifactLocatorKey))
+	if destination.String() != "" && destination.String() != artifact.String() {
+		bytes += uint64(len(destination.String()))
+	}
+	if destinationLocatorKey != artifactLocatorKey {
+		bytes += uint64(len(destinationLocatorKey))
+	}
+	return bytes
 }

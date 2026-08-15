@@ -17,29 +17,30 @@ import (
 )
 
 const (
-	linuxExt4SuperMagic         = 0xef53
-	linuxMountInfoPath          = "/proc/self/mountinfo"
-	linuxProcessStatusPath      = "/proc/self/status"
-	linuxMaximumMountInfoBytes  = 4 << 20
-	linuxMaximumStatusBytes     = 1 << 20
-	linuxOutputDirectoryMode    = 0o700
-	linuxOutputStateFileMode    = 0o600
-	dirPerm                     = 0o755
-	filePerm                    = 0o644
-	linuxOutputPermissionMask   = 0o7777
-	linuxOutputUmaskMask        = 0o777
-	linuxOutputNameMaximumBytes = 255
-	linuxFSImmutableFlag        = uint32(0x00000010)
-	linuxFSAppendFlag           = uint32(0x00000020)
-	linuxFSEncryptFlag          = uint32(0x00000800)
-	linuxFSProjectInheritFlag   = uint32(0x20000000)
-	linuxFSCasefoldFlag         = uint32(0x40000000)
+	linuxExt4SuperMagic            = 0xef53
+	linuxMountInfoPath             = "/proc/self/mountinfo"
+	linuxProcessStatusPath         = "/proc/self/status"
+	linuxMaximumMountInfoBytes     = 4 << 20
+	linuxMaximumStatusBytes        = 1 << 20
+	linuxOutputDirectoryMode       = 0o700
+	linuxOutputStateFileMode       = 0o600
+	linuxPublicDirectoryCreateMode = 0o777
+	linuxPublicFileCreateMode      = 0o666
+	linuxOutputPermissionMask      = 0o7777
+	linuxOutputUmaskMask           = 0o777
+	linuxOutputNameMaximumBytes    = 255
+	linuxFSImmutableFlag           = uint32(0x00000010)
+	linuxFSAppendFlag              = uint32(0x00000020)
+	linuxFSEncryptFlag             = uint32(0x00000800)
+	linuxFSProjectInheritFlag      = uint32(0x20000000)
+	linuxFSCasefoldFlag            = uint32(0x40000000)
 )
 
 var (
-	errLinuxOutputUnsupported = errors.New("osfs: Linux recoverable output is unsupported")
-	errLinuxOutputUnsafe      = errors.New("osfs: Linux output namespace is unsafe")
-	errLinuxOutputCollision   = errors.New("osfs: Linux output entry already exists")
+	errLinuxOutputUnsupported          = errors.New("osfs: Linux recoverable output is unsupported")
+	errLinuxOutputUnsafe               = errors.New("osfs: Linux output namespace is unsafe")
+	errLinuxOutputCollision            = errors.New("osfs: Linux output entry already exists")
+	errLinuxOutputPublishIndeterminate = errors.New("osfs: Linux output publication is indeterminate")
 )
 
 type linuxOutputUnsupportedError struct {
@@ -112,7 +113,6 @@ type linuxOutputSystem struct {
 	pwrite            func(int, []byte, int64) (int, error)
 	utimensat         func(int, string, []unix.Timespec, int) error
 	faccessat2        func(int, string, uint32, int) error
-	fgetxattr         func(int, string, []byte) (int, error)
 	geteuid           func() int
 	readDirent        func(int, []byte) (int, error)
 	flock             func(int, int) error
@@ -140,7 +140,6 @@ var linuxHostOutputSystem = linuxOutputSystem{
 	pwrite:            unix.Pwrite,
 	utimensat:         unix.UtimesNanoAt,
 	faccessat2:        unix.Faccessat2,
-	fgetxattr:         unix.Fgetxattr,
 	geteuid:           unix.Geteuid,
 	readDirent:        unix.ReadDirent,
 	flock:             unix.Flock,
@@ -212,7 +211,10 @@ func linuxOpenExt4OutputRoot(path string, system *linuxOutputSystem) (*linuxOutp
 		object:       certificate.rootObject,
 		absolutePath: cleanPath,
 	}
-	if err := root.validateExclusiveChildMutationAuthority(); err != nil {
+	// The public root is admitted by actual kernel access. Its ACL and ownership
+	// remain user policy; WindShare establishes exclusivity only below its private
+	// control namespace.
+	if err := root.validatePublicCreateAuthority(); err != nil {
 		return nil, errors.Join(err, root.close())
 	}
 	return root, nil

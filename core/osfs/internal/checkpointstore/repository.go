@@ -16,17 +16,97 @@ const (
 	attentionDomain   = "windshare/checkpoint-attention/v2"
 )
 
-// Repository owns one leased operation's immutable operation image, aggregate
-// records, and FileCheckpointV2 records. Aggregate records never carry ranges.
+// Repository owns one leased ordinary operation's FileCheckpointV2 records and
+// their exact native data-object coordinates.
 type Repository struct {
 	operation   outputcap.Directory
 	checkpoints outputcap.Directory
 	records     outputcap.Directory
 	anchors     outputcap.Directory
 	stages      outputcap.Directory
-	manifests   outputcap.Directory
-	receipts    outputcap.Directory
 	binding     checkpointmodel.Binding
+}
+
+// OpenOrdinaryFileRepository binds the unchanged FileCheckpointV2 codec to one
+// leased ordinary operation. The operation registry, not a destination-global
+// lookup tree, owns this namespace and therefore bounds every resume scan.
+func OpenOrdinaryFileRepository(
+	lease *OperationRegistryLease,
+	binding checkpointmodel.Binding,
+	create bool,
+) (result Repository, resultErr error) {
+	if lease == nil || !binding.Valid() || lease.Record().OperationID() != binding.OperationID() ||
+		lease.Record().ReceiveIntentDigest() != binding.ReceiveIntentDigest() {
+		return Repository{}, transfer.ErrInvalidOutputBinding
+	}
+	operation, err := lease.OpenFileState(create)
+	if err != nil {
+		return Repository{}, err
+	}
+	defer func() {
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, closeDirectory(operation))
+		}
+	}()
+	open := openExistingDirectory
+	if create {
+		open = openOrCreateDirectory
+	}
+	checkpoints, err := open(operation, CheckpointsDirectory)
+	if err != nil {
+		return Repository{}, repositoryError("open ordinary file checkpoints", err)
+	}
+	records, err := open(checkpoints, RecordsDirectory)
+	if err != nil {
+		return Repository{}, repositoryError("open ordinary file records", errors.Join(err, checkpoints.Close()))
+	}
+	anchors, err := open(checkpoints, AnchorsDirectory)
+	if err != nil {
+		return Repository{}, repositoryError("open ordinary file anchors", errors.Join(err, records.Close(), checkpoints.Close()))
+	}
+	stages, err := open(checkpoints, StagesDirectory)
+	if err != nil {
+		return Repository{}, repositoryError("open ordinary file stages", errors.Join(err, anchors.Close(), records.Close(), checkpoints.Close()))
+	}
+	return Repository{
+		operation: operation, checkpoints: checkpoints, records: records,
+		anchors: anchors, stages: stages, binding: binding,
+	}, nil
+}
+
+func removeEmptyShards(root outputcap.Directory) error {
+	names, err := root.Names(ShardLimit)
+	if err != nil || len(names) >= ShardLimit {
+		return errors.Join(err, outputcap.ErrUnsafeNamespace)
+	}
+	for _, name := range names {
+		if !ValidShard(name) {
+			return outputcap.ErrUnsafeNamespace
+		}
+		shard, err := OpenShard(root, name, false)
+		if err != nil {
+			return err
+		}
+		if err := removeEmptyDirectory(root, name, shard); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeEmptyDirectory(parent outputcap.Directory, name string, child outputcap.Directory) error {
+	if parent == nil || child == nil || name == "" {
+		return transfer.ErrInvalidOutputBinding
+	}
+	names, err := child.Names(1)
+	if err != nil || len(names) != 0 {
+		return errors.Join(err, outputcap.ErrUnsafeNamespace, child.Close())
+	}
+	removeErr := parent.RemoveDirectory(name, child)
+	if removeErr == nil {
+		removeErr = parent.Sync()
+	}
+	return errors.Join(removeErr, child.Close())
 }
 
 func (repository *Repository) Close() error {
@@ -37,8 +117,6 @@ func (repository *Repository) Close() error {
 		closeDirectory(repository.records),
 		closeDirectory(repository.anchors),
 		closeDirectory(repository.stages),
-		closeDirectory(repository.manifests),
-		closeDirectory(repository.receipts),
 		closeDirectory(repository.checkpoints),
 		closeDirectory(repository.operation),
 	)

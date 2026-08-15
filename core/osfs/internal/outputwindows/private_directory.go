@@ -18,7 +18,6 @@ type windowsV3PrivateDirectoryCreateCut uint8
 
 const (
 	windowsV3PrivateDirectoryCutCreated windowsV3PrivateDirectoryCreateCut = iota + 1
-	windowsV3PrivateDirectoryCutObjectID
 	windowsV3PrivateDirectoryCutACLHidden
 	windowsV3PrivateDirectoryCutSynced
 	windowsV3PrivateDirectoryCutCommitted
@@ -29,8 +28,6 @@ func (cut windowsV3PrivateDirectoryCreateCut) String() string {
 	switch cut {
 	case windowsV3PrivateDirectoryCutCreated:
 		return "create"
-	case windowsV3PrivateDirectoryCutObjectID:
-		return "object-id"
 	case windowsV3PrivateDirectoryCutACLHidden:
 		return "acl-hidden"
 	case windowsV3PrivateDirectoryCutSynced:
@@ -70,7 +67,11 @@ func (directory *windowsV3Directory) observePrivateDirectoryCreate(
 	if directory.createObserver == nil {
 		return nil
 	}
-	return directory.createObserver.ObservePrivateDirectoryCreate(directory.path, target, cut)
+	observer, ok := directory.createObserver.(windowsV3PrivateDirectoryCreateObserver)
+	if !ok {
+		return nil
+	}
+	return observer.ObservePrivateDirectoryCreate(directory.path, target, cut)
 }
 
 func (directory *windowsV3Directory) createPrivateDirectory(
@@ -114,7 +115,8 @@ func (directory *windowsV3Directory) createPrivateDirectory(
 		)
 	}
 	created := &windowsV3Directory{
-		file: file, path: filepath.Join(directory.path, relative), volume: directory.volume,
+		file: file, metadataHandle: windows.InvalidHandle,
+		path: filepath.Join(directory.path, relative), volume: directory.volume,
 		objectIDs: directory.objectIDs, inspector: directory.inspector, policy: directory.policy,
 		objectIDState: newWindowsV3PersistentObjectIDState(), ancestryAuthority: directory.ancestryAuthority,
 		enumerate: &sync.Mutex{}, createObserver: directory.createObserver, private: true,
@@ -129,7 +131,7 @@ func (directory *windowsV3Directory) createPrivateDirectory(
 		}
 	}()
 
-	identity, preparedFacts, err := directory.prepareCreatedPrivateDirectory(created, relative, native)
+	preparedFacts, err := directory.prepareCreatedPrivateDirectory(created, relative, native)
 	if err != nil {
 		return nil, err
 	}
@@ -153,13 +155,11 @@ func (directory *windowsV3Directory) createPrivateDirectory(
 		return nil, windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, err)
 	}
 	reopenedFacts, factsErr := reopened.inspector.Inspect(reopened.handle())
-	reopenedIdentity, reopenedPrepared, reopenedIdentityErr := reopened.cachedPersistentObjectID()
-	if factsErr != nil || !preparedFacts.object.same(reopenedFacts.object) ||
-		!reopenedPrepared || reopenedIdentity != identity || reopenedIdentityErr != nil {
+	if factsErr != nil || !preparedFacts.object.same(reopenedFacts.object) {
 		return nil, errors.Join(
 			windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe,
 				errors.New("committed private directory reopened as a different incarnation")),
-			factsErr, reopenedIdentityErr, reopened.Close(),
+			factsErr, reopened.Close(),
 		)
 	}
 	return reopened, nil
@@ -169,73 +169,48 @@ func (directory *windowsV3Directory) prepareCreatedPrivateDirectory(
 	created *windowsV3Directory,
 	relative string,
 	native string,
-) (windowsV3PersistentObjectID, windowsV3HandleFacts, error) {
+) (windowsV3HandleFacts, error) {
 	const operation = "create crash-safe private output directory"
 	if err := directory.observePrivateDirectoryCreate(relative, windowsV3PrivateDirectoryCutCreated); err != nil {
-		return windowsV3PersistentObjectID{}, windowsV3HandleFacts{}, err
+		return windowsV3HandleFacts{}, err
 	}
-	// Validate the restrictive descriptor before CreateOrGet because Object IDs
-	// are intentionally never rolled back after a failed admission.
+	// Protected ACL verification is a private-namespace invariant. Object IDs are
+	// deliberately absent here: live crash cleanup must remain available when
+	// restart identity enrollment is not.
 	if err := created.verify(true); err != nil {
-		return windowsV3PersistentObjectID{}, windowsV3HandleFacts{}, err
-	}
-	identity, err := created.preparePrivatePersistentObjectID()
-	if err != nil {
-		return windowsV3PersistentObjectID{}, windowsV3HandleFacts{}, err
-	}
-	if err := directory.observePrivateDirectoryCreate(relative, windowsV3PrivateDirectoryCutObjectID); err != nil {
-		return windowsV3PersistentObjectID{}, windowsV3HandleFacts{}, err
-	}
-	if err := created.verify(true); err != nil {
-		return windowsV3PersistentObjectID{}, windowsV3HandleFacts{}, err
+		return windowsV3HandleFacts{}, err
 	}
 	if err := windowsV3VerifyOpenedLeafAuthority(created.handle(), native, true); err != nil {
-		return windowsV3PersistentObjectID{}, windowsV3HandleFacts{}, err
+		return windowsV3HandleFacts{}, err
 	}
 	if err := directory.observePrivateDirectoryCreate(relative, windowsV3PrivateDirectoryCutACLHidden); err != nil {
-		return windowsV3PersistentObjectID{}, windowsV3HandleFacts{}, err
+		return windowsV3HandleFacts{}, err
 	}
 	if err := errors.Join(created.Sync(), directory.Sync()); err != nil {
-		return windowsV3PersistentObjectID{}, windowsV3HandleFacts{}, err
+		return windowsV3HandleFacts{}, err
 	}
-	if err := windowsV3VerifyPreparedPrivateDirectoryDuplicate(created, identity, operation, relative); err != nil {
-		return windowsV3PersistentObjectID{}, windowsV3HandleFacts{}, err
+	duplicate, err := created.Duplicate()
+	if err != nil {
+		return windowsV3HandleFacts{}, err
+	}
+	verifyErr := duplicate.verify(true)
+	closeErr := duplicate.Close()
+	if verifyErr != nil || closeErr != nil {
+		return windowsV3HandleFacts{}, errors.Join(
+			windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe,
+				errors.New("private directory did not preserve its protected security")),
+			verifyErr, closeErr,
+		)
 	}
 	preparedFacts, err := created.inspector.Inspect(created.handle())
 	if err != nil {
-		return windowsV3PersistentObjectID{}, windowsV3HandleFacts{},
+		return windowsV3HandleFacts{},
 			windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, err)
 	}
 	if err := directory.observePrivateDirectoryCreate(relative, windowsV3PrivateDirectoryCutSynced); err != nil {
-		return windowsV3PersistentObjectID{}, windowsV3HandleFacts{}, err
+		return windowsV3HandleFacts{}, err
 	}
-	return identity, preparedFacts, nil
-}
-
-func windowsV3VerifyPreparedPrivateDirectoryDuplicate(
-	created *windowsV3Directory,
-	identity windowsV3PersistentObjectID,
-	operation string,
-	relative string,
-) error {
-	duplicate, err := created.Duplicate()
-	if err != nil {
-		return err
-	}
-	duplicateIdentity, identityPrepared, identityErr := duplicate.cachedPersistentObjectID()
-	if !identityPrepared {
-		identityErr = errors.Join(identityErr, errors.New("duplicated private directory lost its prepared Object ID"))
-	}
-	verifyErr := duplicate.verify(true)
-	closeDuplicateErr := duplicate.Close()
-	if identityErr == nil && verifyErr == nil && closeDuplicateErr == nil && duplicateIdentity == identity {
-		return nil
-	}
-	return errors.Join(
-		windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe,
-			errors.New("prepared private directory did not preserve its persistent identity and security")),
-		identityErr, verifyErr, closeDuplicateErr,
-	)
+	return preparedFacts, nil
 }
 
 func windowsV3CommitDeleteOnClose(handle windows.Handle) error {
@@ -250,13 +225,10 @@ func windowsV3CommitDeleteOnClose(handle windows.Handle) error {
 }
 
 type windowsV3PrivatePolicy struct {
-	userSID             *windows.SID
-	systemSID           *windows.SID
-	administratorsSID   *windows.SID
-	trustedInstallerSID *windows.SID
+	userSID           *windows.SID
+	systemSID         *windows.SID
+	administratorsSID *windows.SID
 }
-
-const windowsV3TrustedInstallerSID = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
 
 func newWindowsV3PrivatePolicy() (*windowsV3PrivatePolicy, error) {
 	user, err := windows.GetCurrentThreadEffectiveToken().GetTokenUser()
@@ -277,13 +249,8 @@ func newWindowsV3PrivatePolicy() (*windowsV3PrivatePolicy, error) {
 	if err != nil {
 		return nil, err
 	}
-	trustedInstallerSID, err := windows.StringToSid(windowsV3TrustedInstallerSID)
-	if err != nil {
-		return nil, err
-	}
 	return &windowsV3PrivatePolicy{
-		userSID: userSID, systemSID: systemSID,
-		administratorsSID: administratorsSID, trustedInstallerSID: trustedInstallerSID,
+		userSID: userSID, systemSID: systemSID, administratorsSID: administratorsSID,
 	}, nil
 }
 

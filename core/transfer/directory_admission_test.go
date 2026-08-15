@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -71,10 +72,9 @@ func TestDirectoryAdmissionCrossRuntimeCanonicalGolden(t *testing.T) {
 	for index := range secret {
 		secret[index] = byte(index + 1)
 	}
-	rootDirectory := MaterializationDirectory{
-		DirectoryID: syntheticRoot,
-		Generation:  crossRuntimeID[catalog.DirectoryGeneration](40),
-	}
+	rootDirectory := admissionTestDirectory(
+		t, syntheticRoot, crossRuntimeID[catalog.DirectoryGeneration](40), DirectoryAdmission{}, "", catalog.ModifiedTime{},
+	)
 	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, rootDirectory)
 	if err != nil {
 		t.Fatal(err)
@@ -83,13 +83,10 @@ func TestDirectoryAdmissionCrossRuntimeCanonicalGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	childDirectory := MaterializationDirectory{
-		DirectoryID:     crossRuntimeID[catalog.DirectoryID](41),
-		Generation:      crossRuntimeID[catalog.DirectoryGeneration](42),
-		ParentAdmission: rootAdmission,
-		Path:            "child",
-		ModifiedTime:    modified,
-	}
+	childDirectory := admissionTestDirectory(
+		t, crossRuntimeID[catalog.DirectoryID](41), crossRuntimeID[catalog.DirectoryGeneration](42),
+		rootAdmission, "child", modified,
+	)
 	message, err := CanonicalDirectoryAdmissionMessageV2(scope, childDirectory)
 	if err != nil {
 		t.Fatal(err)
@@ -121,10 +118,9 @@ func TestDirectoryAdmissionV2FramesAndAuthenticatesTheCompleteClaim(t *testing.T
 	intent := admissionTestIntent(t, root, 0x80)
 	scope := admissionTestScope(t, intent)
 	secret := admissionTestSequence(0xc0, directoryAdmissionSecretBytes)
-	rootDirectory := MaterializationDirectory{
-		DirectoryID: root,
-		Generation:  admissionTestGeneration(t, 0x50),
-	}
+	rootDirectory := admissionTestDirectory(
+		t, root, admissionTestGeneration(t, 0x50), DirectoryAdmission{}, "", catalog.ModifiedTime{},
+	)
 	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, rootDirectory)
 	if err != nil {
 		t.Fatal(err)
@@ -133,13 +129,10 @@ func TestDirectoryAdmissionV2FramesAndAuthenticatesTheCompleteClaim(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	childDirectory := MaterializationDirectory{
-		DirectoryID:     admissionTestDirectoryID(t, 0x30),
-		Generation:      admissionTestGeneration(t, 0x60),
-		Path:            "photos",
-		ParentAdmission: rootAdmission,
-		ModifiedTime:    modified,
-	}
+	childDirectory := admissionTestDirectory(
+		t, admissionTestDirectoryID(t, 0x30), admissionTestGeneration(t, 0x60),
+		rootAdmission, "photos", modified,
+	)
 	message, err := CanonicalDirectoryAdmissionMessageV2(scope, childDirectory)
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +149,7 @@ func TestDirectoryAdmissionV2FramesAndAuthenticatesTheCompleteClaim(t *testing.T
 		childDirectory.DirectoryID.Bytes(),
 		childDirectory.Generation.Bytes(),
 		rootAdmission.Bytes(),
-		canonicalDirectoryAdmissionPath(childDirectory.Path),
+		canonicalDirectoryAdmissionPath(childDirectory.SourcePath.String()),
 		canonicalDirectoryAdmissionModifiedTime(modified),
 	}
 	for index, want := range wantFields {
@@ -178,7 +171,7 @@ func TestDirectoryAdmissionV2FramesAndAuthenticatesTheCompleteClaim(t *testing.T
 		admission.LayoutVersion() != DirectoryAdmissionLayoutV1 ||
 		admission.Layout() != DirectoryAdmissionTreeCatalogRoot ||
 		admission.DirectoryID() != childDirectory.DirectoryID || admission.Generation() != childDirectory.Generation ||
-		admission.Path() != childDirectory.Path || admission.ModifiedTime() != modified ||
+		admission.Path() != childDirectory.SourcePath.String() || admission.ModifiedTime() != modified ||
 		!bytes.Equal(admission.ParentToken(), rootAdmission.Bytes()) {
 		t.Fatalf("admission snapshot=%+v", admission)
 	}
@@ -188,7 +181,9 @@ func TestDirectoryAdmissionV2UsesClosedRootAndAbsentTimeUnions(t *testing.T) {
 	root := admissionTestDirectoryID(t, 0x21)
 	intent := admissionTestIntent(t, root, 0x81)
 	scope := admissionTestScope(t, intent)
-	directory := MaterializationDirectory{DirectoryID: root, Generation: admissionTestGeneration(t, 0x51)}
+	directory := admissionTestDirectory(
+		t, root, admissionTestGeneration(t, 0x51), DirectoryAdmission{}, "", catalog.ModifiedTime{},
+	)
 	message, err := CanonicalDirectoryAdmissionMessageV2(scope, directory)
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +205,9 @@ func TestDirectoryAdmissionV2BindsIntentLayoutAndSyntheticRoot(t *testing.T) {
 	firstScope := admissionTestScope(t, firstIntent)
 	secondScope := admissionTestScope(t, secondIntent)
 	secret := admissionTestSequence(0x40, directoryAdmissionSecretBytes)
-	directory := MaterializationDirectory{DirectoryID: root, Generation: admissionTestGeneration(t, 0x52)}
+	directory := admissionTestDirectory(
+		t, root, admissionTestGeneration(t, 0x52), DirectoryAdmission{}, "", catalog.ModifiedTime{},
+	)
 
 	first, err := NewDirectoryAdmissionWithSecret(secret, firstScope, directory)
 	if err != nil {
@@ -249,7 +246,9 @@ func TestDirectoryAdmissionV2RejectsForeignOrNonImmediateParentClaims(t *testing
 	scope := admissionTestScope(t, intent)
 	foreignScope := admissionTestScope(t, foreignIntent)
 	secret := admissionTestSequence(0x60, directoryAdmissionSecretBytes)
-	rootDirectory := MaterializationDirectory{DirectoryID: root, Generation: admissionTestGeneration(t, 0x54)}
+	rootDirectory := admissionTestDirectory(
+		t, root, admissionTestGeneration(t, 0x54), DirectoryAdmission{}, "", catalog.ModifiedTime{},
+	)
 	parent, err := NewDirectoryAdmissionWithSecret(secret, scope, rootDirectory)
 	if err != nil {
 		t.Fatal(err)
@@ -258,18 +257,19 @@ func TestDirectoryAdmissionV2RejectsForeignOrNonImmediateParentClaims(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, directory := range map[string]MaterializationDirectory{
-		"missing parent": {
-			DirectoryID: admissionTestDirectoryID(t, 0x34), Generation: admissionTestGeneration(t, 0x64), Path: "child",
-		},
-		"foreign parent": {
-			DirectoryID: admissionTestDirectoryID(t, 0x35), Generation: admissionTestGeneration(t, 0x65),
-			Path: "child", ParentAdmission: foreignParent,
-		},
-		"non-immediate parent": {
-			DirectoryID: admissionTestDirectoryID(t, 0x36), Generation: admissionTestGeneration(t, 0x66),
-			Path: "child/grandchild", ParentAdmission: parent,
-		},
+	for name, directory := range map[string]AuthenticatedSourceDirectory{
+		"missing parent": admissionTestDirectory(
+			t, admissionTestDirectoryID(t, 0x34), admissionTestGeneration(t, 0x64),
+			DirectoryAdmission{}, "child", catalog.ModifiedTime{},
+		),
+		"foreign parent": admissionTestDirectory(
+			t, admissionTestDirectoryID(t, 0x35), admissionTestGeneration(t, 0x65),
+			foreignParent, "child", catalog.ModifiedTime{},
+		),
+		"non-immediate parent": admissionTestDirectory(
+			t, admissionTestDirectoryID(t, 0x36), admissionTestGeneration(t, 0x66),
+			parent, "child/grandchild", catalog.ModifiedTime{},
+		),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := NewDirectoryAdmissionWithSecret(secret, scope, directory); !errors.Is(err, ErrInvalidDirectoryAdmission) {
@@ -284,7 +284,9 @@ func TestDirectoryAdmissionV2SnapshotsKeyAndReceiptBytes(t *testing.T) {
 	intent := admissionTestIntent(t, root, 0x85)
 	scope := admissionTestScope(t, intent)
 	secret := admissionTestSequence(0x70, directoryAdmissionSecretBytes)
-	directory := MaterializationDirectory{DirectoryID: root, Generation: admissionTestGeneration(t, 0x55)}
+	directory := admissionTestDirectory(
+		t, root, admissionTestGeneration(t, 0x55), DirectoryAdmission{}, "", catalog.ModifiedTime{},
+	)
 	admission, err := NewDirectoryAdmissionWithSecret(secret, scope, directory)
 	if err != nil {
 		t.Fatal(err)
@@ -357,6 +359,29 @@ func admissionTestScope(t *testing.T, intent ReceiveIntent) DirectoryAdmissionSc
 		t.Fatal(err)
 	}
 	return scope
+}
+
+func admissionTestDirectory(
+	t *testing.T,
+	directory catalog.DirectoryID,
+	generation catalog.DirectoryGeneration,
+	parent DirectoryAdmission,
+	path string,
+	modified catalog.ModifiedTime,
+) AuthenticatedSourceDirectory {
+	t.Helper()
+	sourcePath := ordinaryoutput.EmptySourceCatalogPath()
+	if path != "" {
+		var err error
+		sourcePath, err = ordinaryoutput.NewSourceCatalogPath(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return AuthenticatedSourceDirectory{
+		DirectoryID: directory, Generation: generation, ParentAdmission: parent,
+		SourcePath: sourcePath, ModifiedTime: modified,
+	}
 }
 
 func admissionTestShare(t *testing.T, first byte) catalog.ShareInstance {

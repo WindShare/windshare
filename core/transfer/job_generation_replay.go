@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
 // replayGeneration turns terminal catalog evidence into bounded work. The
@@ -12,13 +13,14 @@ import (
 func (discovery *incrementalDirectoryDiscovery) replayGeneration(
 	ctx context.Context,
 	admission DirectoryAdmission,
+	materialization MaterializedDirectoryClaim,
 ) (bool, error) {
 	if discovery.request.mode == incrementalDiscoveryOpaqueProbe {
 		return discovery.replayOpaqueSelectionProbe(ctx)
 	}
 	selectedSubtree := discovery.request.selected || discovery.selection.DiscoveredFiles != 0
 	for _, phase := range [...]generationReplayPhase{replayGenerationFiles, replayGenerationDirectories} {
-		phaseSelected, err := discovery.replayGenerationPhase(ctx, admission, phase)
+		phaseSelected, err := discovery.replayGenerationPhase(ctx, admission, materialization, phase)
 		if err != nil {
 			return false, err
 		}
@@ -33,7 +35,7 @@ func (discovery *incrementalDirectoryDiscovery) replayOpaqueSelectionProbe(
 	selectedSubtree := discovery.opaqueSelectionFound
 	if !discovery.run.allOpaqueSelectionTargetsMatched() {
 		phaseSelected, err := discovery.replayGenerationPhase(
-			ctx, DirectoryAdmission{}, replayGenerationDirectories,
+			ctx, DirectoryAdmission{}, MaterializedDirectoryClaim{}, replayGenerationDirectories,
 		)
 		if err != nil {
 			return false, err
@@ -66,6 +68,7 @@ const (
 func (discovery *incrementalDirectoryDiscovery) replayGenerationPhase(
 	ctx context.Context,
 	admission DirectoryAdmission,
+	materialization MaterializedDirectoryClaim,
 	phase generationReplayPhase,
 ) (selected bool, resultErr error) {
 	cursor, rawOpenErr := discovery.run.job.catalog.OpenDirectoryPages(ctx, discovery.request.directory)
@@ -95,7 +98,7 @@ func (discovery *incrementalDirectoryDiscovery) replayGenerationPhase(
 		if !ok || !discovery.matchesReplayPage(page, uint32(index), commitment, terminal) {
 			return false, catalogIntegrityFailure(ErrCatalogIdentity)
 		}
-		pageSelected, replayErr := discovery.replayPage(ctx, page, admission, phase)
+		pageSelected, replayErr := discovery.replayPage(ctx, page, admission, materialization, phase)
 		if replayErr != nil {
 			return false, replayErr
 		}
@@ -126,6 +129,7 @@ func (discovery *incrementalDirectoryDiscovery) replayPage(
 	ctx context.Context,
 	page catalog.CatalogPage,
 	admission DirectoryAdmission,
+	materialization MaterializedDirectoryClaim,
 	phase generationReplayPhase,
 ) (bool, error) {
 	selectedSubtree := false
@@ -137,7 +141,7 @@ func (discovery *incrementalDirectoryDiscovery) replayPage(
 		if !exists {
 			return false, catalogIntegrityFailure(ErrCatalogIdentity)
 		}
-		selected, err := discovery.replayEntry(ctx, entry, admission, phase)
+		selected, err := discovery.replayEntry(ctx, entry, admission, materialization, phase)
 		if err != nil {
 			return false, err
 		}
@@ -154,6 +158,7 @@ func (discovery *incrementalDirectoryDiscovery) replayEntry(
 	ctx context.Context,
 	entry catalog.Entry,
 	admission DirectoryAdmission,
+	materialization MaterializedDirectoryClaim,
 	phase generationReplayPhase,
 ) (bool, error) {
 	path, err := appendOutputPath(discovery.request.path, entry.Name())
@@ -167,7 +172,7 @@ func (discovery *incrementalDirectoryDiscovery) replayEntry(
 		if !discovery.run.job.rules.FileSelectedAt(file, path, discovery.request.selected) {
 			return false, nil
 		}
-		return true, discovery.enqueueReplayFile(ctx, entry, file, path, admission)
+		return true, discovery.enqueueReplayFile(ctx, entry, file, path, admission, materialization)
 	}
 	directory, isDirectory := entry.DirectoryID()
 	if !isDirectory {
@@ -185,6 +190,7 @@ func (discovery *incrementalDirectoryDiscovery) replayEntry(
 	request := incrementalDirectoryRequest{
 		directory: directory, path: path, modified: entry.ModifiedTime(),
 		selected: selected, parentAdmission: admission,
+		parentMaterialization: materialization,
 	}
 	switch discovery.request.mode {
 	case incrementalDiscoveryOpaqueProbe:
@@ -220,14 +226,35 @@ func (discovery *incrementalDirectoryDiscovery) enqueueReplayFile(
 	file catalog.FileID,
 	path string,
 	admission DirectoryAdmission,
+	parentMaterialization MaterializedDirectoryClaim,
 ) error {
 	if admission.IsZero() {
 		return dependencyContractFailure(ErrDirectoryAdmissionMismatch)
 	}
+	sourcePath, err := ordinaryoutput.NewSourceCatalogPath(path)
+	if err != nil {
+		return dependencyContractFailure(err)
+	}
+	node, err := OrdinaryOutputSourceNode(
+		catalog.NodeKindFile, catalog.DirectoryID{}, file, sourcePath, ordinaryoutput.SourceNodeSelected,
+	)
+	if err != nil {
+		return dependencyContractFailure(err)
+	}
+	projection := discovery.run.job.projector.Project(node)
+	artifactPath, materialized := projection.ArtifactPath()
+	if !materialized {
+		if projection.Kind() == ordinaryoutput.ArtifactReject {
+			return discovery.run.recordSelectedProjectionRejection(projection)
+		}
+		return dependencyContractFailure(ErrOutputContract)
+	}
 	plan := plannedFile{
-		file: file, path: path, expectedSize: entry.ExpectedSize(), modified: entry.ModifiedTime(),
+		file: file, sourcePath: sourcePath, artifactPath: artifactPath,
+		expectedSize: entry.ExpectedSize(), modified: entry.ModifiedTime(),
 		parentDirectory: discovery.request.directory, parentGeneration: discovery.generation,
-		parentAdmission: admission, selectionDecision: discovery.run.job.rules.selectedFileDecision(file, path),
+		parentAdmission: admission, parentMaterialization: parentMaterialization,
+		selectionDecision: discovery.run.job.rules.selectedFileDecision(file, path),
 	}
 	enqueued := make(chan struct{})
 	select {

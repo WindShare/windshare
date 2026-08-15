@@ -59,7 +59,6 @@ func newLinuxAdapterTestPlatform(t *testing.T) (*linuxV3Platform, string) {
 	// implementation obtains these values from the kernel; returning the safe
 	// result lets this test focus on the adapter's sequencing and cleanup rules.
 	system.faccessat2 = func(int, string, uint32, int) error { return nil }
-	system.fgetxattr = func(int, string, []byte) (int, error) { return 0, unix.ENODATA }
 	system.getFlags = func(int) (uint32, error) { return 0, nil }
 	system.getVersion = func(int) (uint32, error) { return 0, unix.ENOTTY }
 	system.geteuid = unix.Geteuid
@@ -128,14 +127,21 @@ func TestLinuxPlatformAdapterLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire public operation guard: %v", err)
 	}
-	if guard.Root() != root {
-		t.Fatal("public guard did not borrow the platform root")
+	guardRoot := guard.Root()
+	if guardRoot == nil || guardRoot == root {
+		t.Fatal("public guard did not return an independently owned root capability")
+	}
+	if same, sameErr := guardRoot.SameDirectory(root); sameErr != nil || !same {
+		t.Fatalf("guard root differs from the platform root: same=%t error=%v", same, sameErr)
 	}
 	if err := guard.Close(); err != nil {
-		t.Fatalf("close borrowed public guard: %v", err)
+		t.Fatalf("close public guard: %v", err)
+	}
+	if guard.Root() != nil {
+		t.Fatal("closed public guard retained its root capability")
 	}
 	if err := guard.Close(); err != nil {
-		t.Fatalf("close borrowed public guard twice: %v", err)
+		t.Fatalf("close public guard twice: %v", err)
 	}
 
 	binding, err := platform.RootBinding()

@@ -31,12 +31,12 @@ func (r *jobRun) settleFailedFile(
 	cancel()
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 	failure := FileJobFailure{
-		FileID: plan.file, Path: plan.path, Stage: stage, Cause: cause,
+		FileID: plan.file, Path: plan.failurePath(), Stage: stage, Cause: cause,
 		Settlement: settlement, SettlementFailure: settlementErr,
 		LeaseReleaseFailure: releaseErr,
 	}
 	valid := settlementErr == nil && settlement.matchesBinding(transaction.Binding()) &&
-		(settlement.Kind() == FileRetired || settlement.Kind() == FileQuarantined)
+		(settlement.Kind() == FileFailed || settlement.Kind() == FileItemBlocked)
 	if !valid && settlementErr == nil {
 		settlementErr = outputContractFault(nil)
 		failure.SettlementFailure = settlementErr
@@ -74,14 +74,14 @@ func (r *jobRun) pauseFailedFile(
 	cancel()
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 	if settlementErr == nil && (!settlement.matchesBinding(transaction.Binding()) ||
-		settlement.Kind() != FilePaused && settlement.Kind() != FileQuarantined) {
+		settlement.Kind() != FilePaused && settlement.Kind() != FileItemBlocked && settlement.Kind() != FileFailed) {
 		settlementErr = outputContractFault(nil)
 	}
 	if settlementErr == nil {
 		r.acceptFileSettlement(settlement)
 	}
 	r.recordFileFailure(FileJobFailure{
-		FileID: plan.file, Path: plan.path, Stage: stage, Cause: cause,
+		FileID: plan.file, Path: plan.failurePath(), Stage: stage, Cause: cause,
 		Settlement: settlement, SettlementFailure: settlementErr,
 		LeaseReleaseFailure: releaseErr,
 	})
@@ -121,7 +121,7 @@ func (r *jobRun) commitTransferredFile(
 		r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, settlementErr)
 		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 		r.recordFileFailure(FileJobFailure{
-			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: settlementErr, Settlement: settlement, SettlementFailure: settlementErr,
 			LeaseReleaseFailure: releaseErr,
 		})
@@ -132,7 +132,7 @@ func (r *jobRun) commitTransferredFile(
 		return joinLifecycleFailures(settlementErr, releaseErr)
 	}
 	if !settlement.matchesCommittedOutput(transaction.Binding(), r.output.Capabilities()) || settlement.Kind() != FilePublished &&
-		settlement.Kind() != FilePublishBlocked && settlement.Kind() != FileQuarantined {
+		settlement.Kind() != FileCollision && settlement.Kind() != FileItemBlocked {
 		return r.rejectCommitSettlement(ctx, plan, opened, settlement)
 	}
 	r.acceptFileSettlement(settlement)
@@ -144,18 +144,18 @@ func (r *jobRun) commitTransferredFile(
 		r.job.tracker.completeFile(plan.expectedSize)
 		if releaseErr != nil {
 			r.recordFileFailure(FileJobFailure{
-				FileID: plan.file, Path: plan.path, Stage: FailureLeaseRelease, Cause: releaseErr,
+				FileID: plan.file, Path: plan.failurePath(), Stage: FailureLeaseRelease, Cause: releaseErr,
 			})
 		}
-	case FilePublishBlocked:
+	case FileCollision:
 		r.recordFileFailure(FileJobFailure{
-			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: ErrOutputPublishBlocked, Settlement: settlement,
 			LeaseReleaseFailure: releaseErr,
 		})
-	case FileQuarantined:
+	case FileItemBlocked:
 		r.recordFileFailure(FileJobFailure{
-			FileID: plan.file, Path: plan.path, Stage: FailureFileOutput,
+			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: ErrOutputQuarantined, Settlement: settlement,
 			LeaseReleaseFailure: releaseErr,
 		})
@@ -176,7 +176,7 @@ func (r *jobRun) rejectCommitSettlement(
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 	r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, contractFailure)
 	r.recordFileFailure(FileJobFailure{
-		FileID: plan.file, Path: plan.path, Stage: FailureFileOutput, Cause: contractFailure,
+		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: contractFailure,
 		Settlement: settlement, SettlementFailure: contractFailure,
 		LeaseReleaseFailure: releaseErr,
 	})
@@ -202,10 +202,10 @@ func (r *jobRun) finish(ctx context.Context) JobResult {
 	if sourceDriftFailure == nil && r.terminationCause != nil && r.terminationCause.policy.sourceDrift() {
 		sourceDriftFailure = r.terminationCause
 	}
-	outcome := DirectTreeOutcomePublished
+	outcome := DirectTreeOutcomeSuccess
 	if len(directories) != 0 || len(files) != 0 || omittedDirectories != 0 || omittedFiles != 0 ||
-		r.selectionResolutionFailure != nil || sourceDriftFailure != nil {
-		outcome = DirectTreeOutcomePartialDirectory
+		r.selectionResolutionFailure != nil || sourceDriftFailure != nil || !r.selectionFullyPublished() {
+		outcome = DirectTreeOutcomePartial
 	}
 	outcome = r.settleJob(ctx, outcome)
 	return JobResult{
@@ -217,34 +217,47 @@ func (r *jobRun) finish(ctx context.Context) JobResult {
 		SelectionResolutionFailure: r.selectionResolutionFailure,
 		SourceDriftFailure:         lifecycleError(sourceDriftFailure),
 		SourceDriftFault:           closedLifecycleFault(sourceDriftFailure),
-		SucceededFiles:             r.succeeded, TerminationCause: lifecycleError(r.terminationCause),
+		SucceededFiles:             r.succeeded, FileOutcomes: r.fileOutcomes,
+		TerminationCause:  lifecycleError(r.terminationCause),
 		TerminationFault:  closedLifecycleFault(r.terminationCause),
 		SettlementFailure: lifecycleError(r.settlementFailure),
 		SettlementFault:   closedLifecycleFault(r.settlementFailure),
 	}
 }
 
+// Success is a durable claim, not a presentation-layer count heuristic. The
+// reducer requires one published settlement for every discovered file before
+// FinalizeTree may retire the active operation.
+func (r *jobRun) selectionFullyPublished() bool {
+	measure := r.job.Measure()
+	return measure.Discovery == DiscoveryComplete && measure.DiscoveryTerminalSuccess && !measure.overflowed &&
+		measure.DiscoveredFiles == measure.CompletedFiles &&
+		measure.DiscoveredBytes == measure.CompletedBytes &&
+		measure.CompletedFiles == r.succeeded &&
+		r.fileOutcomes.PublishedFiles() == r.succeeded
+}
+
 func (r *jobRun) settleJob(ctx context.Context, outcome DirectTreeOutcome) DirectTreeOutcome {
 	failed := r.terminationCause != nil || r.settlementFailure != nil
 	if !r.admitted {
 		if failed {
-			return DirectTreeOutcomeResumable
+			return DirectTreeOutcomePaused
 		}
 		return outcome
 	}
 	if failed {
 		r.pauseJob(ctx)
-		if r.settlement.Kind() == DirectTreeSettlementNeedsAttention {
-			return DirectTreeOutcomeNeedsAttention
+		if r.settlement.Kind() == DirectTreeSettlementFailed {
+			return DirectTreeOutcomeFailed
 		}
-		return DirectTreeOutcomeResumable
+		return DirectTreeOutcomePaused
 	}
 	r.completeJob(ctx, outcome)
 	if r.settlementFailure != nil {
-		return DirectTreeOutcomeResumable
+		return DirectTreeOutcomePaused
 	}
-	if r.settlement.Kind() == DirectTreeSettlementNeedsAttention {
-		return DirectTreeOutcomeNeedsAttention
+	if r.settlement.Kind() == DirectTreeSettlementFailed {
+		return DirectTreeOutcomeFailed
 	}
 	return outcome
 }
@@ -256,8 +269,8 @@ func (r *jobRun) pauseJob(ctx context.Context) {
 	err := normalizeOutputBoundary(settleContext, rawSettlementErr)
 	cancel()
 	if err == nil {
-		if settlement.Kind() != DirectTreeSettlementResumable && settlement.Kind() != DirectTreeSettlementNeedsAttention ||
-			r.needsAttention && settlement.Kind() != DirectTreeSettlementNeedsAttention {
+		if settlement.Kind() != DirectTreeSettlementPaused && settlement.Kind() != DirectTreeSettlementFailed ||
+			r.needsAttention && settlement.Kind() != DirectTreeSettlementFailed {
 			err = outputContractFault(nil)
 		}
 	}
@@ -282,13 +295,13 @@ func (r *jobRun) completeJob(ctx context.Context, outcome DirectTreeOutcome) {
 	err := normalizeOutputBoundary(settleContext, rawSettlementErr)
 	cancel()
 	if err == nil {
-		expected := DirectTreeSettlementPublished
-		if outcome == DirectTreeOutcomePartialDirectory {
-			expected = DirectTreeSettlementPartialDirectory
+		expected := DirectTreeSettlementSuccess
+		if outcome == DirectTreeOutcomePartial {
+			expected = DirectTreeSettlementPartial
 		}
-		if outcome != DirectTreeOutcomePublished && outcome != DirectTreeOutcomePartialDirectory ||
-			settlement.Kind() != expected && settlement.Kind() != DirectTreeSettlementNeedsAttention ||
-			r.needsAttention && settlement.Kind() != DirectTreeSettlementNeedsAttention {
+		if outcome != DirectTreeOutcomeSuccess && outcome != DirectTreeOutcomePartial ||
+			settlement.Kind() != expected && settlement.Kind() != DirectTreeSettlementFailed ||
+			r.needsAttention && settlement.Kind() != DirectTreeSettlementFailed {
 			err = outputContractFault(nil)
 		}
 	}
@@ -455,7 +468,31 @@ func (r *jobRun) traceFileSettlement(plan plannedFile, settlement FileSettlement
 }
 
 func (r *jobRun) acceptFileSettlement(settlement FileSettlement) {
-	if settlement.Kind() == FilePublishBlocked || settlement.Kind() == FileQuarantined {
-		r.needsAttention = true
+	// Item-local collision, failure, or blocked publication keeps the persistent
+	// operation active. Operation attention is reserved for root/registry/lease
+	// ownership uncertainty reported through the session lifecycle boundary.
+	switch settlement.Kind() {
+	case FilePublished:
+		if provenance, ok := settlement.PublicationProvenance(); ok {
+			switch provenance {
+			case FileDownloaded:
+				r.fileOutcomes.DownloadedFiles++
+			case FileResumed:
+				r.fileOutcomes.ResumedFiles++
+			}
+		}
+	case FilePaused:
+		r.fileOutcomes.PausedFiles++
+	case FileCollision:
+		r.fileOutcomes.CollisionFiles++
+	case FileItemBlocked:
+		r.fileOutcomes.ItemBlockedFiles++
+	case FileFailed:
+		r.fileOutcomes.FailedFiles++
+	}
+	for _, warning := range settlement.MetadataWarnings() {
+		if warning == FileMetadataModifiedTime {
+			r.fileOutcomes.ModifiedTimeWarnings++
+		}
 	}
 }

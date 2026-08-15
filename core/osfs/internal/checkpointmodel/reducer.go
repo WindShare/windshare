@@ -132,6 +132,11 @@ func ValidLifecycleTransition(
 	case PhasePublishing:
 		return nextPhase == PhasePaused || nextPhase == PhasePublished ||
 			nextPhase == PhaseRetired || nextPhase == PhaseQuarantined
+	case PhasePublished, PhaseRetired:
+		// Terminal file results remain authoritative, but later exact-object or
+		// final observations may expose item-local cleanup/publication uncertainty.
+		// Quarantine records that debt without reopening mutation authority.
+		return nextPhase == PhaseQuarantined
 	default:
 		return false
 	}

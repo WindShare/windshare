@@ -1,64 +1,29 @@
 package outputruntime
 
 import (
-	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"io/fs"
 	"path/filepath"
-	"slices"
 	"sync"
 
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointstore"
-	"github.com/windshare/windshare/core/osfs/internal/fileexecution"
+	"github.com/windshare/windshare/core/osfs/internal/destinationauthority"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
+	"github.com/windshare/windshare/core/osfs/internal/resumeauthority"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 var (
-	ErrNativeResumeBusy             = errors.New("osfs: resume state is busy")
+	ErrNativeResumeBusy             = resumeauthority.ErrBusy
 	ErrNativeResumeOwnershipUnknown = errors.New("osfs: resume state ownership is unknown")
 )
 
-type NativeResumeEvidenceState uint8
-
-const (
-	NativeResumeEvidenceAbsent NativeResumeEvidenceState = iota + 1
-	NativeResumeEvidenceProven
-	NativeResumeEvidenceUnknown
-)
-
-type NativeResumeCleanupState uint8
-
-const (
-	NativeResumeCleanupPending NativeResumeCleanupState = iota + 1
-	NativeResumeCleanupComplete
-	NativeResumeCleanupUnknown
-)
-
-type NativeResumeSnapshot struct {
-	OperationRecord []byte
-	LifecycleRecord []byte
-}
-
-type NativeResumeRecoveryEvidence struct {
-	TargetOwnership NativeResumeEvidenceState
-	Checkpoints     NativeResumeEvidenceState
-	Cleanup         NativeResumeCleanupState
-	TerminalReceipt []byte
-	ExpiryReceipt   []byte
-}
-
-type NativeResumeDiscardEvidence struct {
-	State   NativeResumeCleanupState
-	Receipt []byte
-}
-
-// NativeResumeRepository reopens the certified root for every operation. A
-// path selects a root to certify; it never becomes durable mutation authority.
+// NativeResumeRepository binds a destination afresh for each page or exact
+// operation lease. The display path selects the root; durable authority comes
+// only from the destination identity and ordinary-v1 records reopened below it.
 type NativeResumeRepository struct {
 	rootPath        string
 	platformFactory PlatformFactory
@@ -75,437 +40,409 @@ func NewNativeResumeRepository(
 	return &NativeResumeRepository{rootPath: rootPath, platformFactory: platformFactory}, nil
 }
 
-func (repository *NativeResumeRepository) List(
+func (repository *NativeResumeRepository) Page(
 	ctx context.Context,
-) (result []NativeResumeSnapshot, resultErr error) {
+	cursor resumeauthority.PageCursor,
+	maximum int,
+) (result resumeauthority.Page, resultErr error) {
 	if repository == nil || ctx == nil || repository.platformFactory == nil {
-		return nil, transfer.ErrInvalidOutputBinding
+		return resumeauthority.Page{}, transfer.ErrInvalidOutputBinding
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return resumeauthority.Page{}, err
 	}
-	platform, authorityRef, err := repository.openPlatform(ctx)
+	present, err := repository.ordinaryStatePresent(ctx)
 	if err != nil {
-		return nil, err
+		return resumeauthority.Page{}, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, platform.Close()) }()
+	if !present {
+		return resumeauthority.NewPage(nil, resumeauthority.PageCursor{}, false)
+	}
+	runtime, mode, err := repository.openRuntime(ctx)
+	if err != nil {
+		return resumeauthority.Page{}, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, runtime.Close()) }()
+	if !mode.Resumable() || runtime.registry == nil {
+		return resumeauthority.NewPage(nil, resumeauthority.PageCursor{}, false)
+	}
 
-	namespace, _, namespaceErr := openNativeCheckpointNamespace(platform, authorityRef)
-	if namespaceErr != nil {
-		return repository.listUncertainNamespace(ctx, platform.Root(), namespaceErr)
-	}
-	defer func() { resultErr = errors.Join(resultErr, namespace.Close()) }()
-
-	operations, err := openNativeResumeOperations(platform.Root())
+	pageCursor := checkpointstore.NewOperationPageCursor(cursor.After())
+	page, err := runtime.registry.PageOperations(pageCursor, maximum)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, nativeResumeError(err)
+		return resumeauthority.Page{}, nativeResumeError(err)
 	}
-	defer func() { resultErr = errors.Join(resultErr, operations.Close()) }()
-	names, err := nativeResumeOperationNames(operations)
-	if err != nil {
-		return nil, nativeResumeError(err)
+	headers := make([]resumeauthority.Header, 0, len(page.Records()))
+	for _, record := range page.Records() {
+		header, headerErr := resumeauthority.NewHeader(record)
+		if headerErr != nil {
+			return resumeauthority.Page{}, headerErr
+		}
+		headers = append(headers, header)
 	}
-	result = make([]NativeResumeSnapshot, 0, len(names))
-	for _, name := range names {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		candidate, operationBytes, err := readNativeResumeOperation(operations, name)
-		if err != nil {
-			return nil, nativeResumeError(err)
-		}
-		snapshot, err := listNativeResumeSnapshot(&namespace, operations, candidate, operationBytes)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, snapshot)
+	var next resumeauthority.PageCursor
+	if after, ok := page.Next().After(); ok {
+		next = resumeauthority.NewPageCursor(after)
 	}
-	return result, nil
+	return resumeauthority.NewPage(headers, next, page.Unknown())
 }
 
 func (repository *NativeResumeRepository) Acquire(
 	ctx context.Context,
 	operation receivecontract.OperationID,
-) (result *NativeResumeLease, resultErr error) {
+) (result resumeauthority.OperationLease, resultErr error) {
 	if repository == nil || ctx == nil || repository.platformFactory == nil || operation.IsZero() {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	platform, authorityRef, err := repository.openPlatform(ctx)
+	present, err := repository.ordinaryStatePresent(ctx)
 	if err != nil {
 		return nil, err
 	}
-	resources := &NativeResumeLease{platform: platform, authorityRef: authorityRef}
+	if !present {
+		return nil, fs.ErrNotExist
+	}
+	runtime, mode, err := repository.openRuntime(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resources := &NativeResumeLease{runtime: runtime}
 	defer func() {
 		if resultErr != nil {
 			resultErr = errors.Join(resultErr, resources.Close())
 		}
 	}()
-
-	namespace, _, err := openNativeCheckpointNamespace(platform, authorityRef)
+	if !mode.Resumable() || runtime.registry == nil {
+		return nil, fs.ErrNotExist
+	}
+	lease, err := runtime.registry.AcquireOperationLease(operation)
 	if err != nil {
 		return nil, nativeResumeError(err)
 	}
-	resources.namespace = &namespace
-	operations, err := openNativeResumeOperations(platform.Root())
+	resources.operation = lease
+	header, err := resumeauthority.NewHeader(lease.Record())
 	if err != nil {
-		return nil, nativeResumeError(err)
+		return nil, err
 	}
-	name := hex.EncodeToString(operation.Bytes())
-	candidate, _, candidateErr := readNativeResumeOperation(operations, name)
-	operationDirectory, operationDirectoryErr := openNativeResumeDirectory(operations, name, true)
-	resources.operationDirectory = operationDirectory
-	operationsCloseErr := operations.Close()
-	if candidateErr != nil || operationDirectoryErr != nil || operationsCloseErr != nil ||
-		candidate.OperationID() != operation {
-		return nil, nativeResumeError(errors.Join(
-			candidateErr, operationDirectoryErr, operationsCloseErr, checkpointmodel.ErrRecordBinding,
-		))
-	}
-	lease, err := namespace.AcquireOperation(
-		operation, candidate.ReceiveIntentDigest(), candidate.BindingDigest(),
-	)
-	if err != nil {
-		return nil, nativeResumeError(err)
-	}
-	resources.operationLease = &lease
-	stored, err := lease.OpenExistingRepository()
-	if err != nil {
-		return nil, nativeResumeError(err)
-	}
-	resources.repository = &stored
-	intent, intentErr := candidate.VerifyIntent(transfer.DecodeReceiveIntent)
-	verificationErr := verifyStoredOperation(&stored, intent)
-	if intentErr != nil || verificationErr != nil ||
-		intent.MaterializationPlan().Kind() != receivecontract.PlanDirectTree ||
-		candidate.OperationID() != operation || candidate.ReceiveIntentDigest() != intent.Digest() ||
-		candidate.BindingDigest() != intent.BindingDigest() {
-		return nil, nativeResumeError(errors.Join(
-			intentErr, verificationErr, checkpointmodel.ErrRecordBinding,
-		))
-	}
-	resources.operation = candidate
+	resources.header = header
 	return resources, nil
 }
 
-func (repository *NativeResumeRepository) openPlatform(
+func (repository *NativeResumeRepository) ordinaryStatePresent(
 	ctx context.Context,
-) (result outputcap.Platform, authorityRef receivecontract.AuthorityRef, resultErr error) {
+) (present bool, resultErr error) {
 	platform, err := repository.platformFactory(repository.rootPath, false)
 	if err != nil {
-		return nil, receivecontract.AuthorityRef{}, err
+		return false, err
 	}
-	defer func() {
-		if resultErr != nil && platform != nil {
-			resultErr = errors.Join(resultErr, platform.Close())
-		}
-	}()
-	if platform == nil || platform.Root() == nil ||
-		filesystemOutputCertificationFromState(platform.Certification()) == "" {
-		return nil, receivecontract.AuthorityRef{}, outputcap.ErrRecoverableOutputUnsupported
+	if platform == nil || platform.Root() == nil {
+		return false, errors.Join(outputcap.ErrRecoverableOutputUnsupported, closeNativeResumePlatform(platform))
 	}
+	defer func() { resultErr = errors.Join(resultErr, platform.Close()) }()
 	if err := ctx.Err(); err != nil {
-		return nil, receivecontract.AuthorityRef{}, err
+		return false, err
 	}
-	if err := validateOutputCreateAuthority(platform.Root()); err != nil {
-		return nil, receivecontract.AuthorityRef{}, err
+	root := platform.Root()
+	kind, exact, err := root.ClassifyExactEntry(checkpointstore.ControlDirectory)
+	if err != nil || !exact {
+		return false, errors.Join(err, outputcap.ErrUnsafeNamespace)
 	}
-	if err := platform.ProbeRecoverableFeatures(); err != nil {
-		return nil, receivecontract.AuthorityRef{}, err
+	if kind == outputcap.EntryAbsent {
+		return false, nil
 	}
-	if platform.Durability() != transfer.DurabilityProcessRestart {
-		return nil, receivecontract.AuthorityRef{}, outputcap.ErrRecoverableOutputUnsupported
+	if kind != outputcap.EntryDirectory {
+		return false, outputcap.ErrUnsafeNamespace
 	}
-	rootBinding, err := platform.RootBinding()
-	if err != nil || rootBinding.IsZero() {
-		return nil, receivecontract.AuthorityRef{}, errors.Join(err, transfer.ErrInvalidOutputBinding)
+	control, err := root.OpenDirectory(checkpointstore.ControlDirectory, true)
+	if err != nil || control == nil {
+		return false, errors.Join(err, outputcap.ErrUnsafeNamespace, closeNativeResumeDirectory(control))
 	}
-	authority, err := receivecontract.AuthorityRefFromBytes(rootBinding.Bytes())
-	if err != nil {
-		return nil, receivecontract.AuthorityRef{}, err
+	defer func() { resultErr = errors.Join(resultErr, control.Close()) }()
+	kind, exact, err = control.ClassifyExactEntry(checkpointstore.OrdinaryRegistryDirectoryV1)
+	if err != nil || !exact {
+		return false, errors.Join(err, outputcap.ErrUnsafeNamespace)
 	}
-	return platform, authority, nil
+	switch kind {
+	case outputcap.EntryAbsent:
+		return false, nil
+	case outputcap.EntryDirectory:
+		return true, nil
+	default:
+		return false, outputcap.ErrUnsafeNamespace
+	}
 }
 
-func (repository *NativeResumeRepository) listUncertainNamespace(
+func (repository *NativeResumeRepository) openRuntime(
 	ctx context.Context,
-	root outputcap.Directory,
-	namespaceErr error,
-) ([]NativeResumeSnapshot, error) {
-	if !nativeResumeUncertain(namespaceErr) && !errors.Is(namespaceErr, fs.ErrNotExist) {
-		return nil, nativeResumeError(namespaceErr)
-	}
-	operations, err := openNativeResumeOperations(root)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
+) (*Authority, ExecutionMode, error) {
+	runtime, err := New(Config{
+		RootPath: repository.rootPath, CreateRoot: false,
+		PlatformFactory: repository.platformFactory,
+	})
 	if err != nil {
-		return nil, nativeResumeError(errors.Join(namespaceErr, err))
+		return nil, ExecutionMode{}, err
 	}
-	defer operations.Close()
-	names, err := nativeResumeOperationNames(operations)
+	mode, err := runtime.BindDestination(ctx)
 	if err != nil {
-		return nil, nativeResumeError(errors.Join(namespaceErr, err))
+		return nil, ExecutionMode{}, errors.Join(err, runtime.Close())
 	}
-	result := make([]NativeResumeSnapshot, 0, len(names))
-	for _, name := range names {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		_, encoded, readErr := readNativeResumeOperation(operations, name)
-		if readErr != nil {
-			return nil, errors.Join(ErrNativeResumeOwnershipUnknown, namespaceErr, readErr)
-		}
-		// A valid immutable operation identifies the item for the UI, but an
-		// invalid lifecycle prevents this observation from becoming authority.
-		result = append(result, NativeResumeSnapshot{
-			OperationRecord: encoded,
-			LifecycleRecord: []byte{0},
-		})
-	}
-	return result, nil
+	return runtime, mode, nil
 }
 
 type NativeResumeLease struct {
 	mu     sync.Mutex
 	closed bool
 
-	platform           outputcap.Platform
-	authorityRef       receivecontract.AuthorityRef
-	namespace          *checkpointstore.Namespace
-	operationLease     *checkpointstore.OperationLease
-	repository         *checkpointstore.Repository
-	operationDirectory outputcap.Directory
-	operation          checkpointmodel.ReceiveOperation
+	runtime    *Authority
+	operation  *checkpointstore.OperationRegistryLease
+	header     resumeauthority.Header
+	topLevel   *destinationauthority.TopLevelReservation
+	repository *checkpointstore.Repository
+	store      *checkpointstore.FileExecutionStore
 }
 
-func (lease *NativeResumeLease) Snapshot(ctx context.Context) (NativeResumeSnapshot, error) {
-	lease.mu.Lock()
-	defer lease.mu.Unlock()
-	operation, lifecycle, err := lease.snapshotLocked(ctx)
-	if err != nil {
-		return NativeResumeSnapshot{}, err
-	}
-	operationBytes, operationErr := checkpointmodel.EncodeReceiveOperation(operation)
-	lifecycleBytes, lifecycleErr := checkpointmodel.EncodeReceiveLifecycleState(lifecycle)
-	if operationErr != nil || lifecycleErr != nil {
-		return NativeResumeSnapshot{}, errors.Join(operationErr, lifecycleErr)
-	}
-	return NativeResumeSnapshot{OperationRecord: operationBytes, LifecycleRecord: lifecycleBytes}, nil
-}
-
-func (lease *NativeResumeLease) ObserveRecovery(
+func (lease *NativeResumeLease) Snapshot(
 	ctx context.Context,
-) (NativeResumeRecoveryEvidence, error) {
+) (resumeauthority.Snapshot, error) {
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
-	operation, lifecycle, err := lease.snapshotLocked(ctx)
-	if err != nil {
-		return NativeResumeRecoveryEvidence{}, err
+	if err := lease.validateLocked(ctx); err != nil {
+		return resumeauthority.Snapshot{}, err
 	}
-	store, records, directories, err := lease.reconciledRecordsLocked(ctx, lifecycle)
-	if err != nil {
-		if nativeResumeUncertain(err) {
-			return unknownNativeResumeEvidence(lifecycle), nil
+	if err := lease.refreshHeaderLocked(); err != nil {
+		return resumeauthority.Snapshot{}, err
+	}
+	record := lease.header.Record()
+	switch record.Lifecycle() {
+	case checkpointmodel.OrdinaryOperationCompleted,
+		checkpointmodel.OrdinaryOperationDiscarded,
+		checkpointmodel.OrdinaryOperationCleanupPending:
+		return resumeauthority.NewSnapshot(lease.header, nil)
+	}
+	if err := lease.ensureTopLevelLocked(); err != nil {
+		if record.Lifecycle() == checkpointmodel.OrdinaryOperationActive {
+			if _, transitionErr := lease.transitionLocked(
+				checkpointmodel.OrdinaryLifecycleRequireAttention,
+				checkpointmodel.OrdinaryReasonDestinationOwnershipUnknown,
+			); transitionErr != nil {
+				return resumeauthority.Snapshot{}, errors.Join(err, transitionErr)
+			}
+			return resumeauthority.NewSnapshot(lease.header, nil)
 		}
-		return NativeResumeRecoveryEvidence{}, nativeResumeError(err)
+		return resumeauthority.NewSnapshot(lease.header, nil)
 	}
-	proven, err := lease.observeRecordsLocked(ctx, store, records)
+	present, err := lease.ensureFileStoreLocked()
+	if errors.Is(err, fs.ErrNotExist) || !present && err == nil {
+		return resumeauthority.NewSnapshot(lease.header, nil)
+	}
 	if err != nil {
-		if nativeResumeUncertain(err) {
-			return unknownNativeResumeEvidence(lifecycle), nil
+		if record.Lifecycle() == checkpointmodel.OrdinaryOperationActive &&
+			nativeResumeUncertain(err) {
+			if _, transitionErr := lease.transitionLocked(
+				checkpointmodel.OrdinaryLifecycleRequireAttention,
+				checkpointmodel.OrdinaryReasonOperationOwnershipUnknown,
+			); transitionErr != nil {
+				return resumeauthority.Snapshot{}, errors.Join(err, transitionErr)
+			}
+			return resumeauthority.NewSnapshot(lease.header, nil)
 		}
-		return NativeResumeRecoveryEvidence{}, nativeResumeError(err)
+		return resumeauthority.Snapshot{}, nativeResumeError(err)
 	}
-	if !proven {
-		return unknownNativeResumeEvidence(lifecycle), nil
-	}
-	proven, err = lease.observeDirectoriesLocked(ctx, directories)
+	items, err := ordinaryResumeItems(ctx, lease.topLevel, lease.store)
 	if err != nil {
-		if nativeResumeUncertain(err) {
-			return unknownNativeResumeEvidence(lifecycle), nil
-		}
-		return NativeResumeRecoveryEvidence{}, nativeResumeError(err)
+		return resumeauthority.Snapshot{}, nativeResumeError(err)
 	}
-	if !proven {
-		return unknownNativeResumeEvidence(lifecycle), nil
-	}
-	terminal, err := lease.terminalReceiptLocked()
-	if err != nil {
-		if nativeResumeUncertain(err) {
-			return unknownNativeResumeEvidence(lifecycle), nil
-		}
-		return NativeResumeRecoveryEvidence{}, nativeResumeError(err)
-	}
-	expiry, err := nativeResumeExpiryReceipt(operation, lifecycle)
-	if err != nil {
-		return NativeResumeRecoveryEvidence{}, err
-	}
-	cleanup := NativeResumeCleanupPending
-	if lifecycle.CleanupState() == checkpointmodel.OwnedCleanupClean {
-		cleanup = NativeResumeCleanupComplete
-	}
-	return NativeResumeRecoveryEvidence{
-		TargetOwnership: NativeResumeEvidenceProven,
-		Checkpoints:     NativeResumeEvidenceProven,
-		Cleanup:         cleanup,
-		TerminalReceipt: terminal,
-		ExpiryReceipt:   expiry,
-	}, nil
+	return resumeauthority.NewSnapshot(lease.header, items)
 }
 
-func (lease *NativeResumeLease) CleanupOwned(
+func (lease *NativeResumeLease) Transition(
 	ctx context.Context,
-) (NativeResumeDiscardEvidence, error) {
+	event checkpointmodel.OrdinaryLifecycleEvent,
+	reason checkpointmodel.OrdinaryClosedReason,
+) (resumeauthority.Header, error) {
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
-	operation, lifecycle, err := lease.snapshotLocked(ctx)
-	if err != nil {
-		return NativeResumeDiscardEvidence{}, err
+	if err := lease.validateLocked(ctx); err != nil {
+		return resumeauthority.Header{}, err
 	}
-	authorization, proven, err := lease.authorizeCleanupLocked(ctx, operation, lifecycle)
-	if err != nil || !proven {
-		return nativeResumeUnprovenDiscard(err)
-	}
-	proven, err = retireNativeResumeObjects(ctx, authorization.store, authorization.objects)
-	if err != nil || !proven {
-		return nativeResumeUnprovenDiscard(err)
-	}
-	removedDirectories, err := lease.cleanupDirectoriesLocked(ctx, authorization.directories)
-	if err != nil {
-		return nativeResumeUnprovenDiscard(err)
-	}
-	receiptObjects := append(slices.Clone(authorization.objects), removedDirectories...)
-	receipt, err := nativeResumeCleanupReceipt(
-		authorization.operation,
-		authorization.lifecycle,
-		authorization.records,
-		receiptObjects,
+	return lease.transitionLocked(event, reason)
+}
+
+func (lease *NativeResumeLease) transitionLocked(
+	event checkpointmodel.OrdinaryLifecycleEvent,
+	reason checkpointmodel.OrdinaryClosedReason,
+) (resumeauthority.Header, error) {
+	previous := lease.operation.Record()
+	lifecycle, closedReason, err := checkpointmodel.ReduceOrdinaryOperationLifecycle(
+		previous.Lifecycle(), event, reason,
 	)
 	if err != nil {
-		return NativeResumeDiscardEvidence{}, err
+		return resumeauthority.Header{}, err
 	}
-	return NativeResumeDiscardEvidence{
-		State:   NativeResumeCleanupComplete,
-		Receipt: receipt.CanonicalBytes(),
-	}, nil
-}
-
-type nativeResumeCleanupAuthorization struct {
-	operation   checkpointmodel.ReceiveOperation
-	lifecycle   checkpointmodel.ReceiveLifecycleState
-	store       *checkpointstore.FileExecutionStore
-	records     []checkpointmodel.Record
-	directories []checkpointmodel.AdmittedDirectory
-	objects     []checkpointmodel.ObjectID
-}
-
-func (lease *NativeResumeLease) authorizeCleanupLocked(
-	ctx context.Context,
-	operation checkpointmodel.ReceiveOperation,
-	lifecycle checkpointmodel.ReceiveLifecycleState,
-) (nativeResumeCleanupAuthorization, bool, error) {
-	store, records, directories, err := lease.reconciledRecordsLocked(ctx, lifecycle)
+	next, err := checkpointmodel.NextOrdinaryOperationRecord(
+		previous,
+		checkpointmodel.NextOrdinaryOperationRecordSpec{
+			Lifecycle: lifecycle, Lease: checkpointmodel.OrdinaryLeaseHeld,
+			ClosedReason: closedReason,
+		},
+	)
 	if err != nil {
-		return nativeResumeCleanupAuthorization{}, false, err
+		return resumeauthority.Header{}, err
 	}
-	proven, err := lease.observeRecordsLocked(ctx, store, records)
-	if err != nil || !proven {
-		return nativeResumeCleanupAuthorization{}, proven, err
+	if err := lease.operation.Replace(previous, next); err != nil {
+		return resumeauthority.Header{}, nativeResumeError(err)
 	}
-	proven, err = lease.observeDirectoriesLocked(ctx, directories)
-	if err != nil || !proven {
-		return nativeResumeCleanupAuthorization{}, proven, err
+	header, err := resumeauthority.NewHeader(next)
+	if err == nil {
+		lease.header = header
 	}
-	return nativeResumeCleanupAuthorization{
-		operation: operation, lifecycle: lifecycle, store: store,
-		records: records, directories: directories, objects: nativeResumeObjects(records),
-	}, true, nil
+	return header, err
 }
 
-func retireNativeResumeObjects(
+func (lease *NativeResumeLease) Cleanup(
 	ctx context.Context,
-	store *checkpointstore.FileExecutionStore,
-	objects []checkpointmodel.ObjectID,
-) (bool, error) {
-	steps := [...]fileexecution.RetirementStep{
-		fileexecution.RetirementRemoveStage,
-		fileexecution.RetirementSyncStageNamespace,
-		fileexecution.RetirementRemoveAnchor,
-		fileexecution.RetirementSyncAnchorNamespace,
+) (resumeauthority.CleanupState, error) {
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if err := lease.validateLocked(ctx); err != nil {
+		return 0, err
 	}
-	for _, object := range objects {
-		for _, step := range steps {
-			if err := ctx.Err(); err != nil {
-				return false, err
-			}
-			observation, err := store.ApplyRetirement(ctx, object, step)
-			if err != nil {
-				return false, err
-			}
-			if observation.ObjectID() != object {
-				return false, nil
-			}
-			if step == fileexecution.RetirementSyncAnchorNamespace &&
-				observation.Condition() != fileexecution.OwnedAbsent {
-				return false, nil
-			}
+	record := lease.operation.Record()
+	if record.Lifecycle() != checkpointmodel.OrdinaryOperationCompleted &&
+		record.Lifecycle() != checkpointmodel.OrdinaryOperationDiscarded &&
+		record.Lifecycle() != checkpointmodel.OrdinaryOperationCleanupPending {
+		return 0, transfer.ErrInvalidOutputBinding
+	}
+	present, err := lease.ensureFileStoreLocked()
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nativeResumeCleanupFailure(err)
+	}
+	if present {
+		if err := lease.store.CleanupOwned(ctx); err != nil {
+			return nativeResumeCleanupFailure(err)
 		}
 	}
+	if lease.repository != nil {
+		if err := lease.repository.Close(); err != nil {
+			return resumeauthority.CleanupPending, nativeResumeError(err)
+		}
+		lease.repository = nil
+		lease.store = nil
+	}
+	if err := lease.operation.DeleteTerminal(); err != nil {
+		if lease.operation.Deleted() {
+			return resumeauthority.CleanupComplete, nativeResumeError(err)
+		}
+		return nativeResumeCleanupFailure(err)
+	}
+	return resumeauthority.CleanupComplete, nil
+}
+
+func (lease *NativeResumeLease) ensureFileStoreLocked() (bool, error) {
+	if lease.store != nil && lease.repository != nil {
+		return true, nil
+	}
+	record := lease.operation.Record()
+	intent, err := record.VerifyIntent(transfer.DecodeReceiveIntent)
+	if err != nil {
+		return false, err
+	}
+	disposition, err := ordinaryResumeRootDisposition(intent)
+	if err != nil {
+		return false, err
+	}
+	ownership, err := lease.runtime.destination.FileCheckpointOwnership(disposition)
+	if err != nil {
+		return false, err
+	}
+	binding, err := checkpointmodel.NewBinding(
+		ownership, record.OperationID(), record.ReceiveIntentDigest(), intent.BindingDigest(),
+	)
+	if err != nil {
+		return false, err
+	}
+	repository, err := checkpointstore.OpenOrdinaryFileRepository(lease.operation, binding, false)
+	if err != nil {
+		return false, err
+	}
+	store, err := checkpointstore.NewFileExecutionStoreWithProfile(
+		&repository, lease.runtime.destination.LiveCleanupProfile(),
+	)
+	if err != nil {
+		return false, errors.Join(err, repository.Close())
+	}
+	lease.repository = &repository
+	lease.store = store
 	return true, nil
 }
 
-func nativeResumeUnprovenDiscard(err error) (NativeResumeDiscardEvidence, error) {
-	if err == nil || nativeResumeUncertain(err) {
-		return NativeResumeDiscardEvidence{State: NativeResumeCleanupUnknown}, nil
+func (lease *NativeResumeLease) ensureTopLevelLocked() error {
+	if lease.topLevel != nil {
+		return nil
 	}
-	return NativeResumeDiscardEvidence{}, nativeResumeError(err)
-}
-
-func (lease *NativeResumeLease) InstallReceipt(ctx context.Context, encoded []byte) error {
-	lease.mu.Lock()
-	defer lease.mu.Unlock()
-	if err := lease.validateLocked(ctx); err != nil {
+	if lease.runtime == nil || lease.runtime.registry == nil ||
+		lease.runtime.destination == nil {
+		return transfer.ErrInvalidOutputBinding
+	}
+	record := lease.operation.Record()
+	intent, err := record.VerifyIntent(transfer.DecodeReceiveIntent)
+	if err != nil {
 		return err
 	}
-	receipt, err := checkpointmodel.DecodeDirectTreeReceipt(encoded)
-	if err != nil || receipt.OperationID() != lease.operation.OperationID() ||
-		receipt.ReceiveIntentDigest() != lease.operation.ReceiveIntentDigest() ||
-		receipt.ReservationDigest() != lease.operation.BindingDigest() {
-		return errors.Join(checkpointmodel.ErrInvalidReceipt, err)
+	reservation, direct := intent.MaterializationPlan().DestinationReservation()
+	proof, proofErr := lease.runtime.registry.RecoveryProof(record)
+	if !direct || proofErr != nil || !proof.Valid() ||
+		!validNamedReservation(reservation, intent.ArtifactSpec(), lease.runtime.binding) ||
+		record.ReservationClaim().Token() != [32]byte(proof.Claim().Token) ||
+		record.ReservationClaim().Generation() != proof.Claim().Generation {
+		return errors.Join(proofErr, ErrNativeResumeOwnershipUnknown)
 	}
-	return nativeResumeError(lease.repository.InstallReceipt(receipt))
-}
-
-func (lease *NativeResumeLease) ReplaceLifecycle(
-	ctx context.Context,
-	previousBytes []byte,
-	nextBytes []byte,
-) error {
-	lease.mu.Lock()
-	defer lease.mu.Unlock()
-	if err := lease.validateLocked(ctx); err != nil {
+	topLevel, err := lease.runtime.destination.ReopenTopLevel(
+		destinationauthority.ExpectedReservation{
+			Reservation: reservation, PersistentIdentityClaim: proof.PersistentIdentity(),
+			MetadataClaim: proof.Claim(),
+		},
+	)
+	if err != nil {
 		return err
 	}
-	previous, previousErr := checkpointmodel.DecodeReceiveLifecycleState(previousBytes)
-	next, nextErr := checkpointmodel.DecodeReceiveLifecycleState(nextBytes)
-	current, currentErr := lease.repository.ReadLifecycleState()
-	currentBytes, encodeErr := checkpointmodel.EncodeReceiveLifecycleState(current)
-	if previousErr != nil || nextErr != nil || currentErr != nil || encodeErr != nil ||
-		!bytes.Equal(currentBytes, previousBytes) ||
-		previous.OperationID() != lease.operation.OperationID() ||
-		next.OperationID() != lease.operation.OperationID() {
-		return nativeResumeError(errors.Join(
-			checkpointmodel.ErrInvalidLifecycleState,
-			previousErr, nextErr, currentErr, encodeErr,
-		))
+	lease.topLevel = topLevel
+	return nil
+}
+
+func ordinaryResumeRootDisposition(
+	intent transfer.ReceiveIntent,
+) (outputcap.RootOpenDisposition, error) {
+	reservation, ok := intent.MaterializationPlan().DestinationReservation()
+	if !ok {
+		return "", transfer.ErrInvalidOutputBinding
 	}
-	return nativeResumeError(lease.repository.ReplaceLifecycleState(previous, next))
+	switch reservation.EntryKind() {
+	case receivecontract.ContainerEntrySingleFile:
+		return outputcap.CallerProvidedContainer, nil
+	case receivecontract.ContainerEntryResultRoot:
+		return outputcap.AuthorityCreatedRoot, nil
+	default:
+		return "", transfer.ErrInvalidOutputBinding
+	}
+}
+
+func (lease *NativeResumeLease) refreshHeaderLocked() error {
+	header, err := resumeauthority.NewHeader(lease.operation.Record())
+	if err == nil {
+		lease.header = header
+	}
+	return err
+}
+
+func (lease *NativeResumeLease) validateLocked(ctx context.Context) error {
+	if lease == nil || lease.closed || lease.runtime == nil || lease.runtime.destination == nil ||
+		lease.runtime.registry == nil || lease.operation == nil || ctx == nil {
+		return transfer.ErrInvalidOutputBinding
+	}
+	return ctx.Err()
 }
 
 func (lease *NativeResumeLease) Close() error {
@@ -518,53 +455,54 @@ func (lease *NativeResumeLease) Close() error {
 		return nil
 	}
 	lease.closed = true
-	// The operation lease closes after every repository capability, preventing a
-	// second process from observing a half-released mutation authority.
 	err := errors.Join(
 		closeNativeResumeRepository(lease.repository),
-		closeNativeResumeDirectory(lease.operationDirectory),
-		closeNativeResumeOperationLease(lease.operationLease),
-		closeNativeResumeNamespace(lease.namespace),
-		closeNativeResumePlatform(lease.platform),
+		closeNativeResumeTopLevel(lease.topLevel),
+		closeNativeResumeOperationRegistryLease(lease.operation),
+		closeNativeResumeRuntime(lease.runtime),
 	)
 	lease.repository = nil
-	lease.operationDirectory = nil
-	lease.operationLease = nil
-	lease.namespace = nil
-	lease.platform = nil
+	lease.store = nil
+	lease.topLevel = nil
+	lease.operation = nil
+	lease.runtime = nil
 	return nativeResumeError(err)
 }
 
-func (lease *NativeResumeLease) snapshotLocked(
-	ctx context.Context,
-) (checkpointmodel.ReceiveOperation, checkpointmodel.ReceiveLifecycleState, error) {
-	if err := lease.validateLocked(ctx); err != nil {
-		return checkpointmodel.ReceiveOperation{}, checkpointmodel.ReceiveLifecycleState{}, err
+func closeNativeResumeRepository(repository *checkpointstore.Repository) error {
+	if repository == nil {
+		return nil
 	}
-	operation, err := lease.repository.ReadOperation()
-	if err != nil {
-		return checkpointmodel.ReceiveOperation{}, checkpointmodel.ReceiveLifecycleState{}, nativeResumeError(err)
-	}
-	intent, err := operation.VerifyIntent(transfer.DecodeReceiveIntent)
-	if err != nil || verifyStoredOperation(lease.repository, intent) != nil ||
-		operation.OperationID() != lease.operation.OperationID() ||
-		operation.ReceiveIntentDigest() != lease.operation.ReceiveIntentDigest() ||
-		operation.BindingDigest() != lease.operation.BindingDigest() {
-		return checkpointmodel.ReceiveOperation{}, checkpointmodel.ReceiveLifecycleState{},
-			nativeResumeError(errors.Join(err, checkpointmodel.ErrRecordBinding))
-	}
-	lifecycle, err := lease.repository.ReadLifecycleState()
-	if err != nil {
-		return checkpointmodel.ReceiveOperation{}, checkpointmodel.ReceiveLifecycleState{}, nativeResumeError(err)
-	}
-	return operation, lifecycle, nil
+	return repository.Close()
 }
 
-func (lease *NativeResumeLease) validateLocked(ctx context.Context) error {
-	if lease == nil || lease.closed || lease.platform == nil || lease.namespace == nil ||
-		lease.operationLease == nil || lease.repository == nil || lease.operationDirectory == nil ||
-		lease.operation.OperationID().IsZero() || ctx == nil {
-		return transfer.ErrInvalidOutputBinding
+func closeNativeResumeTopLevel(reservation *destinationauthority.TopLevelReservation) error {
+	if reservation == nil {
+		return nil
 	}
-	return ctx.Err()
+	return reservation.Close()
 }
+
+func closeNativeResumeOperationRegistryLease(lease *checkpointstore.OperationRegistryLease) error {
+	if lease == nil {
+		return nil
+	}
+	return lease.Close()
+}
+
+func closeNativeResumePlatform(platform outputcap.Platform) error {
+	if platform == nil {
+		return nil
+	}
+	return platform.Close()
+}
+
+func closeNativeResumeRuntime(runtime *Authority) error {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.Close()
+}
+
+var _ resumeauthority.Store = (*NativeResumeRepository)(nil)
+var _ resumeauthority.OperationLease = (*NativeResumeLease)(nil)

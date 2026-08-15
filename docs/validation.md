@@ -98,6 +98,10 @@ Each job has a 10-minute hang fuse. Long Go tests use native `testing.Short()` b
 reproduce GitHub's Linux/Windows matrix. `make ci-full` combines that coverage with ordinary CI and
 `make long-go`, deduplicating the Chromium smoke and short contracts already owned by ordinary CI.
 
+Ordinary native output release evidence must execute the capability, inherited-permission, no-copy/no-replace, restart,
+and crash-cleanup owners on hosted Linux/ext4 and Windows/NTFS. A current-host pass or cross-build proves compilation,
+not the other platform's filesystem semantics.
+
 ## Core candidate release
 
 The [core candidate workflow](../.github/workflows/core-release.yml) is separate from ordinary CI. A
@@ -119,10 +123,13 @@ versions are not substitutes for either boundary.
 ## Product safety boundary
 
 Validation simplification does not relax E2EE, capability links, remote-input validation, root
-confinement, file revision/lease semantics, resumable and crash-recoverable output, no-replace atomic
-publication, native output identity and ancestry revalidation, or relay/WebRTC switching. Stable
-session, operation, and scenario identifiers and structured milestone logs remain part of the product
-and test diagnostics.
+confinement, file revision/lease semantics, atomic no-replace publication, crash cleanup, native output
+identity/ancestry revalidation, or relay/WebRTC switching. Native ordinary output is resumable only when
+all four capability facts hold, live-only only when safe publication plus crash cleanup hold, and otherwise
+fails before content. Public results use ordinary inherited permissions; protected permissions are limited
+to WindShare-owned control state. Unknown local, network, FUSE, cloud-placeholder, reparse, and nested-mount
+profiles cannot inherit the NTFS/ext4 verdict. Stable session, operation, and scenario identifiers and
+structured milestone logs remain part of product and test diagnostics.
 
 Performance measurements are ordinary local diagnostics described in
 [Performance benchmarks](performance.md); they do not gate correctness or release.

@@ -1,408 +1,172 @@
 package outputruntime
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"slices"
 	"strings"
 
-	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointstore"
-	"github.com/windshare/windshare/core/osfs/internal/directoryauthority"
+	"github.com/windshare/windshare/core/osfs/internal/destinationauthority"
+	"github.com/windshare/windshare/core/osfs/internal/fileexecution"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
 )
 
-func (lease *NativeResumeLease) observeDirectoriesLocked(
+func observeOrdinaryResumeFinal(
 	ctx context.Context,
-	directories []checkpointmodel.AdmittedDirectory,
-) (bool, error) {
-	for _, record := range directories {
-		pin, err := pinNativeResumeDirectory(ctx, lease.platform, record.CanonicalPath())
-		if err != nil {
-			return false, err
-		}
-		if pin.absent {
-			stable, revalidateErr := pin.Revalidate()
-			closeErr := pin.Close()
-			if revalidateErr != nil || closeErr != nil {
-				return false, errors.Join(revalidateErr, closeErr)
-			}
-			if !stable {
-				return false, nil
-			}
-			continue
-		}
-		owned, identityErr := directoryauthority.PersistentOwnedDirectoryID(pin.directory)
-		stable, revalidateErr := pin.Revalidate()
-		closeErr := pin.Close()
-		if identityErr != nil || revalidateErr != nil || closeErr != nil {
-			return false, errors.Join(identityErr, revalidateErr, closeErr)
-		}
-		if !stable || owned != record.OwnedObjectID() {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-func (lease *NativeResumeLease) cleanupDirectoriesLocked(
-	ctx context.Context,
-	directories []checkpointmodel.AdmittedDirectory,
-) ([]checkpointmodel.ObjectID, error) {
-	ordered := slices.Clone(directories)
-	slices.Reverse(ordered)
-	removed := make([]checkpointmodel.ObjectID, 0, len(ordered))
-	for _, record := range ordered {
-		if record.CanonicalPath() == "" {
-			continue
-		}
-		pin, err := pinNativeResumeDirectory(ctx, lease.platform, record.CanonicalPath())
-		if err != nil {
-			return nil, err
-		}
-		object, objectErr := checkpointmodel.ObjectIDFromBytes(record.OwnedObjectID().Bytes())
-		if objectErr != nil {
-			return nil, errors.Join(objectErr, pin.Close())
-		}
-		if pin.absent {
-			stable, revalidateErr := pin.Revalidate()
-			closeErr := pin.Close()
-			if revalidateErr != nil || closeErr != nil || !stable {
-				return nil, errors.Join(
-					revalidateErr, closeErr, ErrNativeResumeOwnershipUnknown,
-				)
-			}
-			removed = append(removed, object)
-			continue
-		}
-		owned, identityErr := directoryauthority.PersistentOwnedDirectoryID(pin.directory)
-		if identityErr != nil || owned != record.OwnedObjectID() {
-			return nil, errors.Join(identityErr, ErrNativeResumeOwnershipUnknown, pin.Close())
-		}
-		names, namesErr := pin.directory.Names(1)
-		stable, revalidateErr := pin.Revalidate()
-		if namesErr != nil || revalidateErr != nil || !stable {
-			return nil, errors.Join(
-				namesErr, revalidateErr, ErrNativeResumeOwnershipUnknown, pin.Close(),
-			)
-		}
-		if len(names) != 0 {
-			// A retained finalized entry or a caller-created entry makes the
-			// directory ineligible for removal, not ownership-uncertain. Discard
-			// cleans only WindShare-owned unfinished objects and preserves the
-			// non-empty directory without inspecting or mutating its children.
-			if closeErr := pin.Close(); closeErr != nil {
-				return nil, errors.Join(closeErr, ErrNativeResumeOwnershipUnknown)
-			}
-			continue
-		}
-		// Public child handles intentionally deny delete sharing on Windows. Once
-		// ownership and emptiness are proven, retain the entry witness and lineage
-		// but release the child capability before unlinking through that witness.
-		targetCloseErr := pin.directory.Close()
-		pin.directory = nil
-		if targetCloseErr != nil {
-			return nil, errors.Join(targetCloseErr, ErrNativeResumeOwnershipUnknown, pin.Close())
-		}
-		removeErr := pin.parent.RemoveEntry(pin.leaf, pin.entry)
-		kind, exact, classifyErr := pin.parent.ClassifyExactEntry(pin.leaf)
-		lineageStable, lineageErr := pin.RevalidateLineage()
-		closeErr := pin.Close()
-		if removeErr != nil || classifyErr != nil || lineageErr != nil || !lineageStable ||
-			!exact || kind != outputcap.EntryAbsent || closeErr != nil {
-			return nil, errors.Join(
-				removeErr, classifyErr, lineageErr, closeErr, ErrNativeResumeOwnershipUnknown,
-			)
-		}
-		removed = append(removed, object)
-	}
-	slices.SortFunc(removed, func(left, right checkpointmodel.ObjectID) int {
-		return bytes.Compare(left.Bytes(), right.Bytes())
-	})
-	return removed, nil
-}
-
-type nativeResumeDirectoryPin struct {
-	guard outputcap.PublicOperationGuard
-
-	directory outputcap.Directory
-	parent    outputcap.Directory
-	leaf      string
-	entry     outputcap.CurrentEntryReference
-	lineage   []nativeResumeLineagePin
-	opened    []outputcap.Directory
-
-	absent       bool
-	absentParent outputcap.Directory
-	absentName   string
-	closed       bool
-}
-
-func pinNativeResumeDirectory(
-	ctx context.Context,
-	platform outputcap.Platform,
-	path string,
-) (result *nativeResumeDirectoryPin, resultErr error) {
-	components, err := validatedNativeResumeDirectoryComponents(ctx, platform, path)
-	if err != nil {
-		return nil, err
-	}
-	pin, err := acquireNativeResumeDirectoryPin(platform)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if resultErr != nil {
-			resultErr = errors.Join(resultErr, pin.Close())
-		}
-	}()
-	if len(components) == 0 {
-		pin.directory = pin.guard.Root()
-		return pin, nil
-	}
-	if err := pin.resolveDirectoryPath(components); err != nil {
-		return nil, err
-	}
-	return pin, nil
-}
-
-func validatedNativeResumeDirectoryComponents(
-	ctx context.Context,
-	platform outputcap.Platform,
-	path string,
-) ([]string, error) {
-	if ctx == nil || platform == nil || platform.Root() == nil {
-		return nil, transfer.ErrInvalidOutputBinding
+	topLevel *destinationauthority.TopLevelReservation,
+	store *checkpointstore.FileExecutionStore,
+	record checkpointmodel.Record,
+) (result fileexecution.FinalObservation, resultErr error) {
+	if ctx == nil || topLevel == nil || store == nil || !record.Valid() {
+		return fileexecution.FinalObservation{}, transfer.ErrInvalidOutputBinding
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return fileexecution.FinalObservation{}, err
 	}
-	if path == "" {
-		return nil, nil
+	physical, err := destinationauthority.PhysicalArtifactPath(
+		record.CanonicalPath(), topLevel.ReservedEntry(),
+	)
+	if err != nil || physical == "" {
+		return fileexecution.FinalObservation{}, errors.Join(err, transfer.ErrInvalidOutputBinding)
 	}
-	canonical, err := catalog.CanonicalPath(path)
-	if err != nil || canonical != path {
-		return nil, errors.Join(err, checkpointmodel.ErrInvalidAdmittedDirectory)
+	guard, err := topLevel.AcquirePublicOperationGuard()
+	if err != nil || guard == nil || guard.Root() == nil {
+		return fileexecution.FinalObservation{}, errors.Join(err, ErrNativeResumeOwnershipUnknown)
 	}
-	if key, err := platform.CanonicalLocatorKey(path); err != nil || key == "" {
-		return nil, errors.Join(err, outputcap.ErrUnsafeNamespace)
+	defer func() { resultErr = errors.Join(resultErr, guard.Close()) }()
+
+	components := strings.Split(physical, "/")
+	parent, opened, terminal, settled, err := openOrdinaryResumeFinalParent(
+		guard.Root(), components[:len(components)-1],
+	)
+	defer func() {
+		resultErr = errors.Join(resultErr, closeOrdinaryResumeDirectories(opened))
+	}()
+	if settled || err != nil {
+		return terminal, err
 	}
-	return strings.Split(path, "/"), nil
+	return observeOrdinaryResumeFinalLeaf(
+		ctx, parent, components[len(components)-1], store, record,
+	)
 }
 
-func acquireNativeResumeDirectoryPin(
-	platform outputcap.Platform,
-) (*nativeResumeDirectoryPin, error) {
-	guard, err := platform.AcquirePublicOperationGuard()
-	if err != nil {
-		return nil, nativeResumeError(err)
-	}
-	pin := &nativeResumeDirectoryPin{guard: guard}
-	if guard == nil || guard.Root() == nil {
-		return nil, errors.Join(outputcap.ErrUnsafeNamespace, pin.Close())
-	}
-	sameRoot, err := platform.Root().SameDirectory(guard.Root())
-	if err != nil || !sameRoot {
-		return nil, errors.Join(err, outputcap.ErrUnsafeNamespace, pin.Close())
-	}
-	return pin, nil
-}
-
-func (pin *nativeResumeDirectoryPin) resolveDirectoryPath(components []string) error {
-	current := pin.guard.Root()
-	for index, component := range components {
-		kind, exact, classifyErr := current.ClassifyExactEntry(component)
-		if classifyErr != nil {
-			return classifyErr
+func openOrdinaryResumeFinalParent(
+	root outputcap.Directory,
+	components []string,
+) (
+	outputcap.Directory,
+	[]outputcap.Directory,
+	fileexecution.FinalObservation,
+	bool,
+	error,
+) {
+	current := root
+	opened := make([]outputcap.Directory, 0, len(components))
+	for _, component := range components {
+		kind, exact, err := current.ClassifyExactEntry(component)
+		if err != nil || !exact {
+			observation, observationErr := finalObservation(fileexecution.FinalUnsafe, err)
+			return nil, opened, observation, true, observationErr
 		}
-		if kind == outputcap.EntryAbsent && exact {
-			pin.absent = true
-			pin.absentParent = current
-			pin.absentName = component
-			return nil
+		if kind == outputcap.EntryAbsent {
+			observation, observationErr := finalObservation(fileexecution.FinalAbsent, nil)
+			return nil, opened, observation, true, observationErr
 		}
-		if !exact || kind != outputcap.EntryDirectory {
-			return ErrNativeResumeOwnershipUnknown
+		if kind != outputcap.EntryDirectory {
+			observation, observationErr := finalObservation(fileexecution.FinalCollision, nil)
+			return nil, opened, observation, true, observationErr
 		}
-		entry, err := current.OpenEntry(component)
-		if err != nil || entry == nil || entry.Kind() != outputcap.EntryDirectory {
-			return errors.Join(err, outputcap.ErrUnsafeNamespace, closeNativeResumeEntry(entry))
-		}
-		child, err := current.OpenPinnedDirectory(entry, false)
-		if err != nil || child == nil {
-			return errors.Join(
-				err, outputcap.ErrUnsafeNamespace,
-				closeNativeResumeEntry(entry), closeNativeResumeDirectory(child),
+		reference, err := current.OpenEntry(component)
+		if err != nil || reference == nil || reference.Kind() != outputcap.EntryDirectory {
+			observation, observationErr := finalObservation(
+				fileexecution.FinalUnsafe, errors.Join(err, closeNativeResumeEntry(reference)),
 			)
+			return nil, opened, observation, true, observationErr
 		}
-		if index == len(components)-1 {
-			pin.parent = current
-			pin.leaf = component
-			pin.entry = entry
-			pin.directory = child
-			pin.opened = append(pin.opened, child)
-			return nil
+		child, childErr := current.OpenPinnedDirectory(reference, false)
+		unchanged, matchErr := current.EntryMatches(component, reference)
+		closeErr := reference.Close()
+		if childErr != nil || matchErr != nil || closeErr != nil || !unchanged || child == nil {
+			observation, observationErr := finalObservation(
+				fileexecution.FinalUnsafe,
+				errors.Join(childErr, matchErr, closeErr, closeNativeResumeDirectory(child)),
+			)
+			return nil, opened, observation, true, observationErr
 		}
-		pin.lineage = append(pin.lineage, nativeResumeLineagePin{
-			parent: current, name: component, entry: entry,
-		})
-		pin.opened = append(pin.opened, child)
+		opened = append(opened, child)
 		current = child
 	}
-	return outputcap.ErrUnsafeNamespace
+	return current, opened, fileexecution.FinalObservation{}, false, nil
 }
 
-func (pin *nativeResumeDirectoryPin) Revalidate() (bool, error) {
-	if pin == nil || pin.closed || pin.guard == nil {
-		return false, transfer.ErrInvalidOutputBinding
-	}
-	if pin.absent {
-		kind, exact, err := pin.absentParent.ClassifyExactEntry(pin.absentName)
-		if err != nil || !exact || kind != outputcap.EntryAbsent {
-			return false, err
-		}
-	} else if pin.entry != nil {
-		unchanged, err := pin.parent.EntryMatches(pin.leaf, pin.entry)
-		if err != nil || !unchanged {
-			return false, err
-		}
-	}
-	return pin.RevalidateLineage()
-}
-
-func (pin *nativeResumeDirectoryPin) RevalidateLineage() (bool, error) {
-	if pin == nil || pin.closed || pin.guard == nil {
-		return false, transfer.ErrInvalidOutputBinding
-	}
-	for _, lineage := range slices.Backward(pin.lineage) {
-		unchanged, err := lineage.parent.EntryMatches(lineage.name, lineage.entry)
-		if err != nil || !unchanged {
-			return false, err
-		}
-	}
-	return true, nil
-}
-
-func (pin *nativeResumeDirectoryPin) Close() error {
-	if pin == nil || pin.closed {
-		return nil
-	}
-	pin.closed = true
-	var result error
-	result = errors.Join(result, closeNativeResumeEntry(pin.entry))
-	for _, lineage := range slices.Backward(pin.lineage) {
-		result = errors.Join(result, closeNativeResumeEntry(lineage.entry))
-	}
-	for _, directory := range slices.Backward(pin.opened) {
-		result = errors.Join(result, closeNativeResumeDirectory(directory))
-	}
-	result = errors.Join(result, closeNativeResumeGuard(pin.guard))
-	return result
-}
-
-type nativeResumeLineagePin struct {
-	parent outputcap.Directory
-	name   string
-	entry  outputcap.CurrentEntryReference
-}
-
-func observeNativeResumePublication(
+func observeOrdinaryResumeFinalLeaf(
 	ctx context.Context,
-	platform outputcap.Platform,
-	store *checkpointstore.FileExecutionStore,
-	record checkpointmodel.Record,
-) (proven bool, resultErr error) {
-	location, err := validateNativeResumePublication(ctx, platform, store, record)
-	if err != nil {
-		return false, err
-	}
-	parent, err := pinNativeResumeDirectory(ctx, platform, location.parentPath)
-	if err != nil {
-		return false, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, parent.Close()) }()
-	if parent.absent {
-		return false, nil
-	}
-	return observeNativeResumePublishedFile(ctx, store, record, parent, location.leaf)
-}
-
-type nativeResumePublicationLocation struct {
-	parentPath string
-	leaf       string
-}
-
-func validateNativeResumePublication(
-	ctx context.Context,
-	platform outputcap.Platform,
-	store *checkpointstore.FileExecutionStore,
-	record checkpointmodel.Record,
-) (nativeResumePublicationLocation, error) {
-	if ctx == nil || platform == nil || platform.Root() == nil || store == nil || !record.Valid() {
-		return nativeResumePublicationLocation{}, transfer.ErrInvalidOutputBinding
-	}
-	if err := ctx.Err(); err != nil {
-		return nativeResumePublicationLocation{}, err
-	}
-	canonical, err := catalog.CanonicalPath(record.CanonicalPath())
-	if err != nil || canonical != record.CanonicalPath() || canonical == "" {
-		return nativeResumePublicationLocation{}, errors.Join(err, checkpointmodel.ErrRecordBinding)
-	}
-	if key, err := platform.CanonicalLocatorKey(canonical); err != nil || key == "" {
-		return nativeResumePublicationLocation{}, errors.Join(err, outputcap.ErrUnsafeNamespace)
-	}
-	components := strings.Split(canonical, "/")
-	return nativeResumePublicationLocation{
-		parentPath: strings.Join(components[:len(components)-1], "/"),
-		leaf:       components[len(components)-1],
-	}, nil
-}
-
-func observeNativeResumePublishedFile(
-	ctx context.Context,
-	store *checkpointstore.FileExecutionStore,
-	record checkpointmodel.Record,
-	parent *nativeResumeDirectoryPin,
+	parent outputcap.Directory,
 	leaf string,
-) (proven bool, resultErr error) {
-	current := parent.directory
-	kind, exact, err := current.ClassifyExactEntry(leaf)
-	if err != nil {
-		return false, err
+	store *checkpointstore.FileExecutionStore,
+	record checkpointmodel.Record,
+) (result fileexecution.FinalObservation, resultErr error) {
+	kind, exact, err := parent.ClassifyExactEntry(leaf)
+	if err != nil || !exact {
+		return finalObservation(fileexecution.FinalUnsafe, err)
 	}
-	if !exact || kind != outputcap.EntryRegularFile {
-		return false, nil
+	if kind == outputcap.EntryAbsent {
+		return finalObservation(fileexecution.FinalAbsent, nil)
 	}
-	entry, err := current.OpenEntry(leaf)
-	if err != nil || entry == nil || entry.Kind() != outputcap.EntryRegularFile {
-		return false, errors.Join(err, outputcap.ErrUnsafeNamespace, closeNativeResumeEntry(entry))
+	if kind != outputcap.EntryRegularFile {
+		return finalObservation(fileexecution.FinalCollision, nil)
 	}
-	defer func() { resultErr = errors.Join(resultErr, closeNativeResumeEntry(entry)) }()
-	final, err := current.OpenFile(leaf, false, false)
+	reference, err := parent.OpenEntry(leaf)
+	if err != nil || reference == nil || reference.Kind() != outputcap.EntryRegularFile {
+		return finalObservation(
+			fileexecution.FinalUnsafe, errors.Join(err, closeNativeResumeEntry(reference)),
+		)
+	}
+	defer func() { resultErr = errors.Join(resultErr, reference.Close()) }()
+	final, err := parent.OpenFile(leaf, false, false)
 	if err != nil || final == nil {
-		return false, errors.Join(err, outputcap.ErrUnsafeNamespace, closeNativeResumeFile(final))
+		return finalObservation(
+			fileexecution.FinalUnsafe, errors.Join(err, closeNativeResumeFile(final)),
+		)
 	}
-	defer func() { resultErr = errors.Join(resultErr, closeNativeResumeFile(final)) }()
-	unchanged, err := current.EntryMatches(leaf, entry)
+	defer func() { resultErr = errors.Join(resultErr, final.Close()) }()
+	unchanged, err := parent.EntryMatches(leaf, reference)
 	if err != nil || !unchanged {
-		return false, errors.Join(err, outputcap.ErrUnsafeNamespace)
+		return finalObservation(fileexecution.FinalUnsafe, err)
 	}
-	matches, err := store.FinalMatchesOwned(ctx, record.OwnedObjectID(), record.ExactSize(), final)
-	if err != nil || !matches {
-		return false, err
+	matches, err := store.FinalMatchesOwned(
+		ctx, record.OwnedObjectID(), record.ExactSize(), final,
+	)
+	if err != nil {
+		return finalObservation(fileexecution.FinalUnsafe, err)
 	}
-	unchanged, err = current.EntryMatches(leaf, entry)
+	unchanged, err = parent.EntryMatches(leaf, reference)
 	if err != nil || !unchanged {
-		return false, errors.Join(err, outputcap.ErrUnsafeNamespace)
+		return finalObservation(fileexecution.FinalUnsafe, err)
 	}
-	lineageStable, err := parent.Revalidate()
-	if err != nil || !lineageStable {
-		return false, errors.Join(err, outputcap.ErrUnsafeNamespace)
+	if !matches {
+		return finalObservation(fileexecution.FinalCollision, nil)
 	}
-	return true, nil
+	return finalObservation(fileexecution.FinalOwnedExact, nil)
+}
+
+func closeOrdinaryResumeDirectories(opened []outputcap.Directory) error {
+	var resultErr error
+	for _, directory := range slices.Backward(opened) {
+		resultErr = errors.Join(resultErr, directory.Close())
+	}
+	return resultErr
+}
+
+func finalObservation(
+	condition fileexecution.FinalCondition,
+	err error,
+) (fileexecution.FinalObservation, error) {
+	observation, observationErr := fileexecution.ObserveFinal(condition)
+	return observation, errors.Join(err, observationErr)
 }
 
 func closeNativeResumeDirectory(directory outputcap.Directory) error {
@@ -424,11 +188,4 @@ func closeNativeResumeEntry(entry outputcap.CurrentEntryReference) error {
 		return nil
 	}
 	return entry.Close()
-}
-
-func closeNativeResumeGuard(guard outputcap.PublicOperationGuard) error {
-	if guard == nil {
-		return nil
-	}
-	return guard.Close()
 }

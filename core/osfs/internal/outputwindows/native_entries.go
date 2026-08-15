@@ -342,12 +342,23 @@ func (directory *windowsV3Directory) Duplicate() (*windowsV3Directory, error) {
 			errors.New("wrap duplicated directory handle"))
 	}
 	result := &windowsV3Directory{
-		file: wrapped, path: directory.path, volume: directory.volume,
+		file: wrapped, metadataHandle: windows.InvalidHandle, metadataOpenErr: directory.metadataOpenErr,
+		path: directory.path, volume: directory.volume,
 		objectIDs: directory.objectIDs, objectIDState: directory.objectIDState,
 		inspector: directory.inspector, policy: directory.policy,
 		ancestryAuthority: directory.ancestryAuthority, enumerate: directory.enumerate,
 		createObserver: directory.createObserver, private: directory.private,
 		placementGuard: directory.placementGuard, selfPlacementGuard: directory.selfPlacementGuard,
+	}
+	if directory.metadataHandleOpen {
+		if err := windows.DuplicateHandle(
+			process, directory.metadataHandle, process, &result.metadataHandle, 0, false, windows.DUPLICATE_SAME_ACCESS,
+		); err != nil {
+			return nil, errors.Join(
+				windowsV3NativeOperationFailure(operation, directory.path, err), result.Close(),
+			)
+		}
+		result.metadataHandleOpen = true
 	}
 	if err := result.verify(false); err != nil {
 		return nil, errors.Join(err, result.Close())

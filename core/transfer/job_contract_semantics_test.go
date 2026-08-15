@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
 func TestTransferJobFailureTaxonomyPreservesScopeAndCause(t *testing.T) {
@@ -144,19 +145,16 @@ func TestTransferJobDirectorySettlementValidatorRequiresExactAdmission(t *testin
 	}
 	secret := make([]byte, directoryAdmissionSecretBytes)
 	secret[0] = 1
-	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, MaterializationDirectory{
-		DirectoryID: root,
-		Generation:  transferID[catalog.DirectoryGeneration](0xa3),
-	})
+	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, admissionTestDirectory(
+		t, root, transferID[catalog.DirectoryGeneration](0xa3), DirectoryAdmission{}, "", catalog.ModifiedTime{},
+	))
 	if err != nil {
 		t.Fatal(err)
 	}
-	childAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, MaterializationDirectory{
-		DirectoryID:     transferID[catalog.DirectoryID](0xa4),
-		Generation:      transferID[catalog.DirectoryGeneration](0xa5),
-		ParentAdmission: rootAdmission,
-		Path:            "child",
-	})
+	childAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, admissionTestDirectory(
+		t, transferID[catalog.DirectoryID](0xa4), transferID[catalog.DirectoryGeneration](0xa5),
+		rootAdmission, "child", catalog.ModifiedTime{},
+	))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +206,8 @@ func TestTransferJobImmediateSettlementsPreserveOutcomeAndReleaseFailures(t *tes
 		LeaseID:    transferID[content.LeaseID](162),
 		Descriptor: binding.Descriptor(),
 	}
-	plan := plannedFile{file: binding.FileID(), path: binding.Locator().CanonicalPath()}
+	artifactPath, _ := ordinaryoutput.NewArtifactPath(binding.Locator().CanonicalPath())
+	plan := plannedFile{file: binding.FileID(), artifactPath: artifactPath}
 
 	for name, settlement := range immediateDirectTreeSettlements(t, binding, checkpoint) {
 		t.Run(name, func(t *testing.T) {
@@ -228,10 +227,9 @@ func TestTransferJobImmediateSettlementsPreserveOutcomeAndReleaseFailures(t *tes
 				t.Fatalf("immediate failure record = %+v", run.files)
 			}
 			wantCause := map[FileSettlementKind]error{
-				FileCollision:      ErrOutputPublishBlocked,
-				FilePublishBlocked: ErrOutputPublishBlocked,
-				FileQuarantined:    ErrOutputQuarantined,
-				FileRetired:        ErrOutputRetired,
+				FileCollision:   ErrOutputPublishBlocked,
+				FileItemBlocked: ErrOutputQuarantined,
+				FileFailed:      ErrOutputRetired,
 			}[settlement.Kind()]
 			if !errors.Is(run.files[0].Cause, wantCause) {
 				t.Fatalf("immediate failure cause = %v, want %v", run.files[0].Cause, wantCause)
@@ -285,7 +283,8 @@ func TestTransferJobRejectsUnstartedFileWithoutLeakingRevisionLease(t *testing.T
 	revisions := &jobRevisionClient{releaseErr: releaseCause}
 	run := immediateSettlementJobRun(transferID[catalog.ShareInstance](163), revisions)
 	lease := transferID[content.LeaseID](164)
-	plan := plannedFile{file: transferID[catalog.FileID](165), path: "file.bin"}
+	artifactPath, _ := ordinaryoutput.NewArtifactPath("file.bin")
+	plan := plannedFile{file: transferID[catalog.FileID](165), artifactPath: artifactPath}
 	err := run.rejectUnstartedFile(
 		context.Background(), plan, OpenedRevision{LeaseID: lease}, dependencyContractFailure(cause),
 	)
@@ -367,7 +366,7 @@ func TestTransferJobRejectsInvalidAdmissionAndRevisionIdentityTransitions(t *tes
 		output.session = OutputSessionID{}
 		job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
 		result := job.Run(context.Background())
-		if result.Outcome != DirectTreeOutcomeResumable ||
+		if result.Outcome != DirectTreeOutcomePaused ||
 			result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
 			output.pauseCalls != 0 || output.completeCalls != 0 {
 			t.Fatalf("invalid admission result=%+v pause=%d complete=%d", result, output.pauseCalls, output.completeCalls)
@@ -425,8 +424,10 @@ func TestTransferJobRejectsInvalidAdmissionAndRevisionIdentityTransitions(t *tes
 		}
 		run := immediateSettlementJobRun(share, revisions)
 		entry := jobEntry(t, selected, "file.bin", 1)
+		artifactPath, _ := ordinaryoutput.NewArtifactPath("file.bin")
 		plan := plannedFile{
-			file: selected, path: "file.bin", expectedSize: entry.ExpectedSize(), modified: entry.ModifiedTime(),
+			file: selected, artifactPath: artifactPath,
+			expectedSize: entry.ExpectedSize(), modified: entry.ModifiedTime(),
 		}
 		_, ready, err := run.openSelectedRevision(context.Background(), plan)
 		if ready || normalizedFault(err) != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
@@ -469,7 +470,7 @@ func immediateDirectTreeSettlements(
 	if err != nil {
 		t.Fatal(err)
 	}
-	publishBlocked, err := NewVerifiedFileSettlement(FilePublishBlocked, checkpoint)
+	publishBlocked, err := NewVerifiedFileSettlement(FileItemBlocked, checkpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,15 +482,15 @@ func immediateDirectTreeSettlements(
 	if err != nil {
 		t.Fatal(err)
 	}
-	quarantined, err := NewImmediateQuarantinedFileSettlement(
+	quarantined, err := NewImmediateItemBlockedFileSettlement(
 		binding.Target(),
 		reference,
-		QuarantineOwnershipMismatch,
+		ItemBlockOwnershipUnknown,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	retired, err := NewRetiredFileSettlement(binding)
+	retired, err := NewFailedFileSettlement(binding)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,6 +22,14 @@ type nativeOwnedFile struct {
 	closed bool
 }
 
+type exactParentStageAuthority interface {
+	WithExactParent(context.Context, func(outputcap.Directory) error) error
+}
+
+type ordinaryStageCreator interface {
+	CreateOrdinaryOutputStage(outputcap.Directory, string, uint64) error
+}
+
 type RecoveryArtifactKind uint8
 
 const (
@@ -110,15 +118,36 @@ func (file *nativeOwnedFile) Close() error {
 	return fileOutputBoundaryErrorWithoutContext(transferfault.ScopeFileLocal, err)
 }
 
+func (store *FileExecutionStore) ObserveOwnedObject(
+	ctx context.Context,
+	object checkpointmodel.ObjectID,
+	exactSize uint64,
+) (observation fileexecution.OwnedObservation, resultErr error) {
+	defer func() {
+		resultErr = fileOutputBoundaryError(ctx, transferfault.ScopeFileLocal, resultErr)
+	}()
+	if store == nil || ctx == nil || object.IsZero() || exactSize > catalog.MaxFileSize {
+		return fileexecution.OwnedObservation{}, transfer.ErrInvalidOutputBinding
+	}
+	if err := ctx.Err(); err != nil {
+		return fileexecution.OwnedObservation{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	file, observation, err := store.openOwnedLocked(object, exactSize, true, false)
+	return observation, errors.Join(err, closeOwnedFile(file))
+}
+
 func (store *FileExecutionStore) CreateOwnedFile(
 	ctx context.Context,
+	destination fileexecution.FileDestination,
 	object checkpointmodel.ObjectID,
 	exactSize uint64,
 ) (file fileexecution.OwnedFile, observation fileexecution.OwnedObservation, resultErr error) {
 	defer func() {
 		resultErr = fileOutputBoundaryError(ctx, transferfault.ScopeFileLocal, resultErr)
 	}()
-	if store == nil || ctx == nil || object.IsZero() || exactSize > catalog.MaxFileSize {
+	if store == nil || ctx == nil || store.profile.Valid() && destination == nil || object.IsZero() || exactSize > catalog.MaxFileSize {
 		return nil, fileexecution.OwnedObservation{}, transfer.ErrInvalidOutputBinding
 	}
 	if err := ctx.Err(); err != nil {
@@ -152,8 +181,9 @@ func (store *FileExecutionStore) CreateOwnedFile(
 		)
 	}
 
-	stage, createErr := stageDirectory.CreateFile(stageName, true, int64(exactSize))
-	created := createErr == nil && stage != nil
+	stage, created, createErr := store.createOwnedStage(
+		ctx, destination, stageDirectory, stageName, exactSize,
+	)
 	if createErr == nil && stage == nil {
 		createErr = outputcap.ErrUnsafeNamespace
 	}
@@ -205,6 +235,37 @@ func (store *FileExecutionStore) CreateOwnedFile(
 	}
 	observation, _ = fileexecution.NewOwnedObservation(object, fileexecution.OwnedReady)
 	return &nativeOwnedFile{object: object, stage: stage, anchor: anchor}, observation, closeErr
+}
+
+func (store *FileExecutionStore) createOwnedStage(
+	ctx context.Context,
+	destination fileexecution.FileDestination,
+	stageDirectory outputcap.Directory,
+	stageName string,
+	exactSize uint64,
+) (outputcap.File, bool, error) {
+	if !store.profile.Valid() {
+		// Synthetic stores retain the private constructor for isolated unit tests;
+		// production composition always supplies a certified ordinary profile.
+		stage, err := stageDirectory.CreateFile(stageName, true, int64(exactSize))
+		return stage, err == nil && stage != nil, err
+	}
+	parent, ok := destination.(exactParentStageAuthority)
+	if !ok {
+		return nil, false, outputcap.ErrUnsafeNamespace
+	}
+	err := parent.WithExactParent(ctx, func(finalParent outputcap.Directory) error {
+		creator, ok := finalParent.(ordinaryStageCreator)
+		if !ok {
+			return outputcap.ErrUnsafeNamespace
+		}
+		return creator.CreateOrdinaryOutputStage(stageDirectory, stageName, exactSize)
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	stage, err := stageDirectory.OpenFile(stageName, false, true)
+	return stage, stage != nil, err
 }
 
 func (store *FileExecutionStore) reconcileOwnedCreateLocked(
@@ -264,8 +325,9 @@ func (store *FileExecutionStore) openOwnedLocked(
 	validateSize bool,
 	writable bool,
 ) (fileexecution.OwnedFile, fileexecution.OwnedObservation, error) {
-	stage := observePrivateFile(store.repository.stages, object, ownedStageSuffix, writable)
-	anchor := observePrivateFile(store.repository.anchors, object, ownedAnchorSuffix, false)
+	privateProfile := !store.profile.Valid()
+	stage := observeOwnedDataFile(store.repository.stages, object, ownedStageSuffix, privateProfile, writable)
+	anchor := observeOwnedDataFile(store.repository.anchors, object, ownedAnchorSuffix, privateProfile, false)
 	condition, comparisonErr := classifyOwnedObservation(stage, anchor, exactSize, validateSize)
 	observation, observationErr := fileexecution.NewOwnedObservation(object, condition)
 	closeDirectoriesErr := errors.Join(closeDirectory(stage.directory), closeDirectory(anchor.directory))
@@ -279,10 +341,11 @@ func (store *FileExecutionStore) openOwnedLocked(
 		errors.Join(comparisonErr, observationErr, closeDirectoriesErr)
 }
 
-func observePrivateFile(
+func observeOwnedDataFile(
 	root outputcap.Directory,
 	object checkpointmodel.ObjectID,
 	suffix string,
+	privateProfile bool,
 	writable bool,
 ) privateFileObservation {
 	shard, name := ownedObjectLocation(object, suffix)
@@ -303,7 +366,7 @@ func observePrivateFile(
 	if !exact || kind != outputcap.EntryRegularFile {
 		return privateFileObservation{directory: directory, state: privateEntryUnsafe}
 	}
-	file, err := directory.OpenFile(name, true, writable)
+	file, err := directory.OpenFile(name, privateProfile, writable)
 	if err != nil || file == nil {
 		return privateFileObservation{directory: directory, file: file, state: privateEntryUnsafe}
 	}
@@ -394,16 +457,25 @@ func (store *FileExecutionStore) ApplyRetirement(
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	return store.applyRetirementLocked(object, step)
+}
+
+func (store *FileExecutionStore) applyRetirementLocked(
+	object checkpointmodel.ObjectID,
+	step fileexecution.RetirementStep,
+) (fileexecution.OwnedObservation, error) {
 	var operationErr error
 	switch step {
 	case fileexecution.RetirementRemoveStage:
-		operationErr = removeOwnedEntry(store.repository.stages, object, ownedStageSuffix)
+		operationErr = removeOwnedEntry(store.repository.stages, object, ownedStageSuffix, !store.profile.Valid())
 	case fileexecution.RetirementSyncStageNamespace:
 		operationErr = syncOwnedEntryNamespace(store.repository.stages, object)
 	case fileexecution.RetirementRemoveAnchor:
-		operationErr = removeOwnedEntry(store.repository.anchors, object, ownedAnchorSuffix)
+		operationErr = removeOwnedEntry(store.repository.anchors, object, ownedAnchorSuffix, !store.profile.Valid())
 	case fileexecution.RetirementSyncAnchorNamespace:
 		operationErr = syncOwnedEntryNamespace(store.repository.anchors, object)
+	default:
+		return fileexecution.OwnedObservation{}, transfer.ErrInvalidOutputBinding
 	}
 	file, observation, observeErr := store.openOwnedLocked(object, 0, false, false)
 	return observation, errors.Join(operationErr, observeErr, closeOwnedFile(file))
@@ -431,8 +503,8 @@ func (store *FileExecutionStore) candidateDurable(record checkpointmodel.Record)
 	return syncErr == nil, errors.Join(syncErr, closeOwnedFile(file))
 }
 
-// FinalMatchesOwned compares a public file against the exact private anchor.
-// Published checkpoints intentionally retain that anchor after retiring the
+// FinalMatchesOwned compares a public file against the exact protected-name anchor.
+// Published checkpoints intentionally retain that same-object anchor after retiring the
 // writable stage, so identity remains provable across process restarts.
 func (store *FileExecutionStore) FinalMatchesOwned(
 	ctx context.Context,
@@ -451,7 +523,9 @@ func (store *FileExecutionStore) FinalMatchesOwned(
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	anchor := observePrivateFile(store.repository.anchors, object, ownedAnchorSuffix, false)
+	anchor := observeOwnedDataFile(
+		store.repository.anchors, object, ownedAnchorSuffix, !store.profile.Valid(), false,
+	)
 	if anchor.state != privateEntryReady || anchor.file == nil {
 		return false, errors.Join(
 			anchorObservationError(anchor), closeFile(anchor.file), closeDirectory(anchor.directory),
@@ -461,8 +535,9 @@ func (store *FileExecutionStore) FinalMatchesOwned(
 	return same, errors.Join(compareErr, anchor.file.Close(), anchor.directory.Close())
 }
 
-// PublishOwnedNoReplace links the private anchor into one already-guarded public
-// parent. The caller still performs post-link path and metadata reconciliation.
+// PublishOwnedNoReplace links the protected-name ordinary-profile anchor into
+// one already-guarded public parent. The caller still performs post-link path
+// and metadata reconciliation.
 func (store *FileExecutionStore) PublishOwnedNoReplace(
 	ctx context.Context,
 	object checkpointmodel.ObjectID,
@@ -490,7 +565,12 @@ func (store *FileExecutionStore) PublishOwnedNoReplace(
 	return linked, errors.Join(linkErr, owned.Close())
 }
 
-func removeOwnedEntry(root outputcap.Directory, object checkpointmodel.ObjectID, suffix string) error {
+func removeOwnedEntry(
+	root outputcap.Directory,
+	object checkpointmodel.ObjectID,
+	suffix string,
+	privateProfile bool,
+) error {
 	shard, name := ownedObjectLocation(object, suffix)
 	directory, err := OpenShard(root, shard, false)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -509,7 +589,7 @@ func removeOwnedEntry(root outputcap.Directory, object checkpointmodel.ObjectID,
 	if kind != outputcap.EntryRegularFile {
 		return errors.Join(outputcap.ErrUnsafeNamespace, directory.Close())
 	}
-	file, openErr := directory.OpenFile(name, true, false)
+	file, openErr := directory.OpenFile(name, privateProfile, false)
 	if openErr != nil || file == nil {
 		return errors.Join(openErr, outputcap.ErrUnsafeNamespace, closeFile(file), directory.Close())
 	}

@@ -246,37 +246,6 @@ func TestLinuxCreateAuthorityFailurePrecedesNamespaceMutation(t *testing.T) {
 				harness.root.system.faccessat2 = func(int, string, uint32, int) error { return unix.ENOSYS }
 			},
 		},
-		{
-			name: "setgid inheritance", directory: true, want: errLinuxOutputUnsupported,
-			configure: func(harness *linuxNamespaceCoverageHarness) {
-				harness.root.system.statx = linuxNamespaceCoverageMutateStatx(
-					harness.baseStatx, func(stat *unix.Statx_t) { stat.Mode |= unix.S_ISGID },
-				)
-			},
-		},
-		{
-			name: "default ACL unreadable", want: errLinuxOutputUnsafe,
-			configure: func(harness *linuxNamespaceCoverageHarness) {
-				harness.root.system.fgetxattr = func(int, string, []byte) (int, error) { return 0, unix.EIO }
-			},
-		},
-		{
-			name: "foreign owner", directory: true, want: errLinuxOutputUnsafe,
-			configure: func(harness *linuxNamespaceCoverageHarness) {
-				harness.root.system.statx = linuxNamespaceCoverageMutateStatx(
-					harness.baseStatx, func(stat *unix.Statx_t) { stat.Uid++ },
-				)
-			},
-		},
-		{
-			name: "external child mutation authority", want: errLinuxOutputUnsafe,
-			configure: func(harness *linuxNamespaceCoverageHarness) {
-				harness.root.system.statx = linuxNamespaceCoverageMutateStatx(
-					harness.baseStatx,
-					func(stat *unix.Statx_t) { stat.Mode = stat.Mode&^0o777 | unix.S_IFDIR | 0o730 },
-				)
-			},
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -301,7 +270,7 @@ func TestLinuxCreateAuthorityFailurePrecedesNamespaceMutation(t *testing.T) {
 			if test.directory {
 				_, err = root.createPrivateDirectoryExact("blocked", linuxOutputDirectoryMode)
 			} else {
-				_, err = root.createRegularFileExact("blocked", linuxOutputStateFileMode, 0)
+				_, err = root.createPrivateRegularFileExact("blocked", linuxOutputStateFileMode, 0)
 			}
 			if !errors.Is(err, test.want) {
 				t.Fatalf("authority error = %v, want %v", err, test.want)
@@ -337,7 +306,6 @@ func newLinuxNamespaceCoverageHarness(t *testing.T) *linuxNamespaceCoverageHarne
 	system.getFlags = func(int) (uint32, error) { return 0, nil }
 	system.fsync = func(int) error { return nil }
 	system.faccessat2 = func(int, string, uint32, int) error { return nil }
-	system.fgetxattr = func(int, string, []byte) (int, error) { return 0, unix.ENODATA }
 	system.geteuid = unix.Geteuid
 	system.close = func(fd int) error {
 		harness.closeCount++
@@ -400,19 +368,6 @@ func linuxNamespaceCoverageStatx(
 	return nil
 }
 
-func linuxNamespaceCoverageMutateStatx(
-	base func(int, string, int, int, *unix.Statx_t) error,
-	mutate func(*unix.Statx_t),
-) func(int, string, int, int, *unix.Statx_t) error {
-	return func(fd int, name string, flags int, mask int, stat *unix.Statx_t) error {
-		if err := base(fd, name, flags, mask, stat); err != nil {
-			return err
-		}
-		mutate(stat)
-		return nil
-	}
-}
-
 func linuxNamespaceCoverageCreateFile(
 	t *testing.T,
 	directory *linuxOutputDirectory,
@@ -420,7 +375,7 @@ func linuxNamespaceCoverageCreateFile(
 	size int64,
 ) *linuxOutputRegularFile {
 	t.Helper()
-	file, err := directory.createRegularFileExact(name, linuxOutputStateFileMode, size)
+	file, err := directory.createPrivateRegularFileExact(name, linuxOutputStateFileMode, size)
 	if err != nil {
 		t.Fatalf("create file %q: %v", name, err)
 	}

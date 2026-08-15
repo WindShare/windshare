@@ -23,7 +23,7 @@ func (adapter fileExecutionAdapter) BeginFile(
 		return outputsession.FileBeginObservation{Cut: outputsession.MutationNoChange},
 			fileexecution.ErrInvalidConfiguration
 	}
-	start, err := adapter.engine.BeginFile(ctx, claim.File())
+	start, err := adapter.engine.BeginFile(ctx, claim.File(), claim.DestinationPath())
 	if err != nil {
 		return outputsession.FileBeginObservation{Cut: executionMutationCut(err)}, err
 	}

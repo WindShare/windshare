@@ -7,6 +7,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -358,23 +359,43 @@ func validateDirectTreeSession(intent ReceiveIntent, output DirectTreeSession) e
 	return nil
 }
 
-type MaterializationDirectory struct {
-	// DirectoryID and Generation are authenticated catalog identity, not a
-	// filesystem inode. They let an output backend bind each mutation to the
-	// exact committed generation that made the directory visible.
+// AuthenticatedSourceDirectory is sender-authenticated catalog ancestry. It is
+// deliberately incapable of naming a destination object.
+type AuthenticatedSourceDirectory struct {
 	DirectoryID     catalog.DirectoryID
 	Generation      catalog.DirectoryGeneration
 	ParentAdmission DirectoryAdmission
-	Path            string
+	SourcePath      ordinaryoutput.SourceCatalogPath
 	ModifiedTime    catalog.ModifiedTime
 }
 
-type MaterializationFile struct {
-	Path            string
-	ExpectedSize    uint64
-	Descriptor      content.FileRevisionDescriptor
-	Target          FileMaterializationTarget
-	ParentAdmission DirectoryAdmission
+// OutputDestinationPath is the executor-only coordinate selected by retained
+// destination authority. Its explicit root value prevents a logical result-root
+// name from being materialized again below an already-reserved result root.
+type OutputDestinationPath struct {
+	value       string
+	sessionRoot bool
+	valid       bool
+}
+
+func NewOutputDestinationPath(value string) (OutputDestinationPath, error) {
+	canonical, err := catalog.CanonicalPath(value)
+	if err != nil || value == "" || canonical != value {
+		return OutputDestinationPath{}, errors.Join(ErrInvalidOutputBinding, err)
+	}
+	return OutputDestinationPath{value: canonical, valid: true}, nil
+}
+
+func OutputDestinationSessionRoot() OutputDestinationPath {
+	return OutputDestinationPath{sessionRoot: true, valid: true}
+}
+
+func (path OutputDestinationPath) String() string { return path.value }
+func (path OutputDestinationPath) IsSessionRoot() bool {
+	return path.valid && path.sessionRoot && path.value == ""
+}
+func (path OutputDestinationPath) Valid() bool {
+	return path.valid && (path.sessionRoot && path.value == "" || !path.sessionRoot && path.value != "")
 }
 
 func validateOpenedFile(share catalog.ShareInstance, entry catalog.Entry, opened OpenedRevision) error {

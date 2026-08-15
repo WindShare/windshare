@@ -28,7 +28,11 @@ func (authority *Authority) readyLineage(claimID ClaimID) ([]*claimRecord, error
 		reversed = append(reversed, record)
 		currentID = record.claim.parentID
 	}
-	if len(reversed) == 0 || !reversed[len(reversed)-1].claim.locator.isRoot() {
+	if len(reversed) == 0 {
+		return nil, ErrRetainedAuthorityChanged
+	}
+	top := reversed[len(reversed)-1].claim
+	if top.parentID != 0 || !top.locator.isRoot() && !validateImmediateChild("", top.locator.canonicalPath) {
 		return nil, ErrRetainedAuthorityChanged
 	}
 	lineage := make([]*claimRecord, len(reversed))
@@ -44,11 +48,32 @@ func (authority *Authority) readyLineage(claimID ClaimID) ([]*claimRecord, error
 func (authority *Authority) openGuardedDirectory(
 	claimID ClaimID,
 ) (outputcap.Directory, func() error, error) {
+	if claimID == 0 {
+		guard, root, err := acquireGuardedRoot(authority.platform)
+		if err != nil {
+			return nil, nil, err
+		}
+		return root, guard.Close, nil
+	}
 	lineage, err := authority.readyLineage(claimID)
 	if err != nil {
 		return nil, nil, err
 	}
-	guard, err := authority.platform.AcquirePublicOperationGuard()
+	guard, root, err := acquireGuardedRoot(authority.platform)
+	if err != nil {
+		return nil, nil, err
+	}
+	current, currentOwned, err := walkRetainedLineage(root, lineage)
+	if err != nil {
+		return nil, nil, errors.Join(err, guard.Close())
+	}
+	return current, guardedDirectoryCleanup(current, currentOwned, guard), nil
+}
+
+func acquireGuardedRoot(
+	platform Platform,
+) (outputcap.PublicOperationGuard, outputcap.Directory, error) {
+	guard, err := platform.AcquirePublicOperationGuard()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -56,51 +81,65 @@ func (authority *Authority) openGuardedDirectory(
 	if root == nil {
 		return nil, nil, errors.Join(ErrRetainedAuthorityChanged, guard.Close())
 	}
-	same, err := lineage[0].retained.SameDirectory(root)
-	if err != nil || !same {
-		return nil, nil, errors.Join(ErrRetainedAuthorityChanged, err, guard.Close())
-	}
+	return guard, root, nil
+}
+
+func walkRetainedLineage(
+	root outputcap.Directory,
+	lineage []*claimRecord,
+) (outputcap.Directory, bool, error) {
 	current := root
 	currentOwned := false
-	for _, record := range lineage[1:] {
-		next, openErr := openExactDirectory(current, record.claim.locator.leaf)
-		if openErr == nil {
-			same, openErr = record.retained.SameDirectory(next)
-			if openErr == nil && !same {
-				openErr = ErrRetainedAuthorityChanged
+	start := 0
+	if lineage[0].claim.locator.isRoot() {
+		same, err := lineage[0].retained.SameDirectory(root)
+		if err != nil || !same {
+			return nil, false, errors.Join(ErrRetainedAuthorityChanged, err)
+		}
+		start = 1
+	}
+	for _, record := range lineage[start:] {
+		next, err := openExactDirectory(current, record.claim.locator.leaf)
+		if err == nil {
+			var same bool
+			same, err = record.retained.SameDirectory(next)
+			if err == nil && !same {
+				err = ErrRetainedAuthorityChanged
 			}
 		}
-		if openErr != nil {
-			if next != nil {
-				openErr = errors.Join(openErr, next.Close())
-			}
-			if currentOwned {
-				openErr = errors.Join(openErr, current.Close())
-			}
-			return nil, nil, errors.Join(ErrRetainedAuthorityChanged, openErr, guard.Close())
+		if err != nil {
+			return nil, false, errors.Join(
+				ErrRetainedAuthorityChanged, err, closeDirectory(next), closeOwnedDirectory(current, currentOwned),
+			)
 		}
-		if currentOwned {
-			if closeErr := current.Close(); closeErr != nil {
-				return nil, nil, errors.Join(
-					ErrRetainedAuthorityChanged, closeErr, next.Close(), guard.Close(),
-				)
-			}
+		if err := closeOwnedDirectory(current, currentOwned); err != nil {
+			return nil, false, errors.Join(ErrRetainedAuthorityChanged, err, next.Close())
 		}
 		current, currentOwned = next, true
 	}
+	return current, currentOwned, nil
+}
+
+func guardedDirectoryCleanup(
+	current outputcap.Directory,
+	currentOwned bool,
+	guard outputcap.PublicOperationGuard,
+) func() error {
 	closed := false
-	cleanup := func() error {
+	return func() error {
 		if closed {
 			return nil
 		}
 		closed = true
-		var closeErr error
-		if currentOwned {
-			closeErr = current.Close()
-		}
-		return errors.Join(closeErr, guard.Close())
+		return errors.Join(closeOwnedDirectory(current, currentOwned), guard.Close())
 	}
-	return current, cleanup, nil
+}
+
+func closeOwnedDirectory(directory outputcap.Directory, owned bool) error {
+	if !owned || directory == nil {
+		return nil
+	}
+	return directory.Close()
 }
 
 func openExactDirectory(parent outputcap.Directory, name string) (outputcap.Directory, error) {

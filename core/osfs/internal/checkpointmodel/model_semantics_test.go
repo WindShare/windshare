@@ -443,6 +443,8 @@ func TestLifecycleTransitionVocabularyIsClosed(t *testing.T) {
 		{uint8(PhaseActive), uint8(CommitVerified), uint8(PhasePaused), uint8(CommitVerified)},
 		{uint8(PhasePaused), uint8(CommitVerified), uint8(PhasePublishing), uint8(CommitVerified)},
 		{uint8(PhasePublishing), uint8(CommitVerified), uint8(PhasePublished), uint8(CommitPublished)},
+		{uint8(PhasePublished), uint8(CommitPublished), uint8(PhaseQuarantined), uint8(CommitQuarantined)},
+		{uint8(PhaseRetired), uint8(CommitVerified), uint8(PhaseQuarantined), uint8(CommitQuarantined)},
 	}
 	for _, transition := range valid {
 		if !ValidLifecycleTransition(
