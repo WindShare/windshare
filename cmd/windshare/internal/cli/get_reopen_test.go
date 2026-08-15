@@ -254,7 +254,11 @@ func newCLICertifiedOutputTestRoot(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reserved, err := os.MkdirTemp(home, ".windshare-cli-reopen-test-*")
+	testBase := filepath.Join(home, ".windshare-test-temp")
+	if err := os.MkdirAll(testBase, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := os.MkdirTemp(testBase, ".windshare-cli-reopen-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
