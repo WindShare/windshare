@@ -4,6 +4,7 @@ package outputlinux
 
 import (
 	"errors"
+	"math"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
@@ -400,7 +401,7 @@ func (directory *linuxV3Directory) CreateOrdinaryOutputStage(
 ) error {
 	proof, ok := proofDirectory.(*linuxV3Directory)
 	if !ok || directory == nil || directory.native == nil || proof == nil || proof.native == nil ||
-		name == "" || exactSize > uint64(^uint64(0)>>1) {
+		name == "" || exactSize > math.MaxInt64 {
 		return errors.Join(outputcap.ErrUnsafeNamespace,
 			errors.New("osfs: invalid Linux ordinary-output stage authority"))
 	}
@@ -419,7 +420,7 @@ func (directory *linuxV3Directory) CreateLiveCleanupStage(
 	if !ok || directory == nil || directory.native == nil || proof == nil || proof.native == nil ||
 		!ticket.Valid() || ticket.Profile() != checkpointmodel.LiveCleanupLinuxExt4V1 ||
 		ticket.State() != checkpointmodel.LiveCleanupTicketCommitted ||
-		ticket.ExactSize() > uint64(^uint64(0)>>1) {
+		ticket.ExactSize() > math.MaxInt64 {
 		return errors.Join(outputcap.ErrUnsafeNamespace,
 			errors.New("osfs: invalid Linux live-cleanup stage authority"))
 	}
