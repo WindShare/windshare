@@ -15,6 +15,10 @@ func TestLaneCapabilitiesRejectNilAndStaleAuthorities(t *testing.T) {
 	if !errors.Is(notAdmitted, ErrInvalidLane) || !isDemandNotAdmitted(notAdmitted) {
 		t.Fatalf("nil demand rejection = %v", notAdmitted)
 	}
+	retired := NewDemandReassignableAfterRetirement(nil)
+	if !errors.Is(retired, ErrInvalidLane) || !isDemandReassignableAfterRetirement(retired) {
+		t.Fatalf("nil retired demand = %v", retired)
+	}
 	var nilSuspension *ContentLaneSuspension
 	if err := nilSuspension.Resume(); !errors.Is(err, ErrInvalidLane) {
 		t.Fatalf("nil suspension resume = %v", err)
@@ -36,6 +40,24 @@ func TestLaneCapabilitiesRejectNilAndStaleAuthorities(t *testing.T) {
 	lanes.mu.Unlock()
 	if err := suspension.Resume(); !errors.Is(err, ErrStaleLane) {
 		t.Fatalf("replaced suspension resume = %v", err)
+	}
+}
+
+func TestLaneFetchReassignsOnlyWithRetiredOperationAuthority(t *testing.T) {
+	lanes := newBoundaryLaneSet(t, 9)
+	retiredCause := errors.New("authenticated fragment progress stopped")
+	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		return records.BlockRecord{}, NewDemandReassignableAfterRetirement(retiredCause)
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		return records.BlockRecord{}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lanes.fetch(context.Background(), BlockDemand{}, func(records.BlockRecord) error { return nil }); err != nil {
+		t.Fatalf("retired block operation did not reach replacement lane: %v", err)
 	}
 }
 

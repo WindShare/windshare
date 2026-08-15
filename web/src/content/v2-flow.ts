@@ -16,7 +16,7 @@ export const V2_MAXIMUM_REQUESTED_BLOCKS = 256
 export const V2_FRAGMENT_HEADER_BYTES = 52
 export const V2_FRAGMENT_PAYLOAD_BYTES = 65_440
 export const V2_MAXIMUM_FRAGMENTS = 128
-export const V2_FRAGMENT_TIMEOUT_MILLISECONDS = 15_000
+export const V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS = 15_000
 export const V2_FRAGMENT_TOMBSTONE_MILLISECONDS = 30_000
 export const V2_LEASE_TTL_MILLISECONDS = 120_000
 export const V2_LEASE_RENEW_AFTER_MILLISECONDS = 60_000
@@ -42,6 +42,17 @@ export interface V2RevisionFailure {
   readonly retryAfterMilliseconds?: number
 }
 
+export type V2FragmentAssemblyResult =
+  | Readonly<{ status: 'accepted' | 'duplicate' | 'tombstoned' }>
+  | Readonly<{ status: 'complete'; object: Uint8Array<ArrayBuffer> }>
+
+export class V2FragmentInactivityError extends Error {
+  constructor() {
+    super('Block fragment reassembly made no authenticated progress before timeout')
+    this.name = 'V2FragmentInactivityError'
+  }
+}
+
 export class V2FragmentAssembler {
   readonly #operationId: Uint8Array<ArrayBuffer>
   readonly #now: () => number
@@ -51,7 +62,7 @@ export class V2FragmentAssembler {
   #totalLength = 0
   #received = 0
   #receivedFragments = 0
-  #startedAt = 0
+  #lastProgressAt = 0
   #cancelledAt: number | undefined
 
   constructor(operationId: Uint8Array, now: () => number = () => Date.now()) {
@@ -59,31 +70,37 @@ export class V2FragmentAssembler {
     this.#now = now
   }
 
-  async accept(plaintext: Uint8Array): Promise<Uint8Array<ArrayBuffer> | undefined> {
+  async accept(plaintext: Uint8Array): Promise<V2FragmentAssemblyResult> {
+    const now = this.#now()
     if (this.#cancelledAt !== undefined) {
-      if (this.#now() - this.#cancelledAt <= V2_FRAGMENT_TOMBSTONE_MILLISECONDS) return undefined
+      if (now - this.#cancelledAt <= V2_FRAGMENT_TOMBSTONE_MILLISECONDS) {
+        return Object.freeze({ status: 'tombstoned' })
+      }
       throw new V2CborError('Fragment arrived after its cancellation tombstone expired')
     }
     const fragment = decodeFragment(plaintext)
     if (!equalBytes(fragment.operationId, this.#operationId)) {
       throw new V2CborError('Fragment belongs to another operation')
     }
-    if (this.#recordId === undefined) this.#start(fragment)
+    if (this.#recordId === undefined) this.#start(fragment, now)
     this.#requireIdentity(fragment)
-    if (this.#now() - this.#startedAt >= V2_FRAGMENT_TIMEOUT_MILLISECONDS) {
-      throw new V2CborError('Block fragment reassembly timed out')
+    if (now - this.#lastProgressAt >= V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS) {
+      throw new V2FragmentInactivityError()
     }
     const existing = this.#fragments[fragment.index]
     if (existing !== undefined) {
       if (!equalBytes(existing, fragment.payload)) {
         throw new V2CborError('Block fragment conflicts with an authenticated retransmission')
       }
-      return undefined
+      return Object.freeze({ status: 'duplicate' })
     }
     this.#fragments[fragment.index] = fragment.payload
     this.#received += fragment.payload.byteLength
     this.#receivedFragments += 1
-    if (this.#receivedFragments !== this.#count) return undefined
+    // Duplicate traffic is authenticated but does not earn more lifetime; this
+    // prevents a replay loop from holding the bounded assembly budget forever.
+    this.#lastProgressAt = now
+    if (this.#receivedFragments !== this.#count) return Object.freeze({ status: 'accepted' })
     if (this.#received !== this.#totalLength) throw new V2CborError('Block fragments have a length gap')
     const object = new Uint8Array(this.#totalLength)
     let offset = 0
@@ -97,7 +114,7 @@ export class V2FragmentAssembler {
     if (recordId === undefined || !equalBytes(digest.subarray(0, 16), recordId)) {
       throw new V2CborError('Reassembled block record has the wrong identity')
     }
-    return object
+    return Object.freeze({ status: 'complete', object })
   }
 
   cancel(): void {
@@ -107,12 +124,13 @@ export class V2FragmentAssembler {
     this.#receivedFragments = 0
   }
 
-  #start(fragment: DecodedFragment): void {
+  #start(fragment: DecodedFragment, now: number): void {
     this.#recordId = fragment.recordId
     this.#count = fragment.count
     this.#totalLength = fragment.totalLength
     this.#fragments = Array.from({ length: fragment.count })
-    this.#startedAt = this.#now()
+    this.#lastProgressAt = now
+    this.#received = 0
     this.#receivedFragments = 0
   }
 

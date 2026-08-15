@@ -51,6 +51,29 @@ func isDemandNotAdmitted(err error) bool {
 	return errors.As(err, &notAdmitted) && notAdmitted != nil
 }
 
+// demandReassignableAfterRetirementError is an opaque proof that an admitted
+// block operation has acquired its exact-generation cancellation tombstone.
+// Block reads are immutable under their revision lease, so a different lane may
+// now issue a fresh operation without aliasing responses from the retired one.
+type demandReassignableAfterRetirementError struct{ cause error }
+
+func NewDemandReassignableAfterRetirement(cause error) error {
+	if cause == nil {
+		cause = ErrInvalidLane
+	}
+	return &demandReassignableAfterRetirementError{cause: cause}
+}
+
+func (e *demandReassignableAfterRetirementError) Error() string {
+	return fmt.Sprintf("demand is reassignable after retiring its admitted operation: %v", e.cause)
+}
+func (e *demandReassignableAfterRetirementError) Unwrap() error { return e.cause }
+
+func isDemandReassignableAfterRetirement(err error) bool {
+	var retired *demandReassignableAfterRetirementError
+	return errors.As(err, &retired) && retired != nil
+}
+
 type LaneIdentity struct {
 	ID    uint32
 	Epoch uint32
@@ -340,11 +363,12 @@ func (s *LaneSet) notifyAvailabilityLocked() {
 }
 
 type laneResult struct {
-	state       *laneState
-	record      records.BlockRecord
-	err         error
-	normalized  *lifecycleFailure
-	notAdmitted bool
+	state        *laneState
+	record       records.BlockRecord
+	err          error
+	normalized   *lifecycleFailure
+	notAdmitted  bool
+	reassignable bool
 }
 
 type laneRoundKind uint8
@@ -455,12 +479,13 @@ func (s *LaneSet) fetchLane(
 		fetchErr = validate(record)
 	}
 	notAdmitted := isDemandNotAdmitted(fetchErr)
+	reassignable := notAdmitted || isDemandReassignableAfterRetirement(fetchErr)
 	normalized := admitInternalFailure(normalizeSourceBoundary(ctx, fetchErr))
 	canceled := normalized != nil && normalized.policy.canceled
 	s.finish(state, s.now().Sub(started), fetchErr, canceled)
 	results <- laneResult{
 		state: state, record: record, err: fetchErr,
-		normalized: normalized, notAdmitted: notAdmitted,
+		normalized: normalized, notAdmitted: notAdmitted, reassignable: reassignable,
 	}
 }
 
@@ -483,7 +508,7 @@ func reduceLaneFailures(current laneFailureSet, results []laneResult) (laneFailu
 		}
 		current.failure = joinClosedLifecycleFailures(current.failure, failure)
 		current.diagnostic = errors.Join(current.diagnostic, diagnostic)
-		reassignable = reassignable && result.notAdmitted
+		reassignable = reassignable && result.reassignable
 	}
 	return current, reassignable
 }
