@@ -120,17 +120,17 @@ func TestOrdinaryOutputRequestsExposeNoSecondPathMappingAuthority(t *testing.T) 
 
 	for _, value := range []any{DirectoryMaterializationRequest{}, MaterializationFile{}, MaterializedDirectoryClaim{}} {
 		typeOf := reflect.TypeOf(value)
-		for index := range typeOf.NumField() {
-			if typeOf.Field(index).IsExported() {
-				t.Fatalf("%s retains caller-settable field %s", typeOf, typeOf.Field(index).Name)
+		for field := range typeOf.Fields() {
+			if field.IsExported() {
+				t.Fatalf("%s retains caller-settable field %s", typeOf, field.Name)
 			}
 		}
 	}
-	fileType := reflect.TypeOf(MaterializationFile{})
-	destinationType := reflect.TypeOf(OutputDestinationPath{})
-	for index := range fileType.NumField() {
-		if fileType.Field(index).Type == destinationType {
-			t.Fatalf("%s retains executor destination field %s", fileType, fileType.Field(index).Name)
+	fileType := reflect.TypeFor[MaterializationFile]()
+	destinationType := reflect.TypeFor[OutputDestinationPath]()
+	for field := range fileType.Fields() {
+		if field.Type == destinationType {
+			t.Fatalf("%s retains executor destination field %s", fileType, field.Name)
 		}
 	}
 	for _, retiredMethod := range []string{"BindDestination", "DestinationPath"} {

@@ -671,19 +671,19 @@ func newLinuxLiveCleanupTicket(
 }
 
 func TestLinuxOptionalConsumerSeamsStayNarrow(t *testing.T) {
-	platformType := reflect.TypeOf((*linuxDestinationCapabilityReporter)(nil)).Elem()
+	platformType := reflect.TypeFor[linuxDestinationCapabilityReporter]()
 	if platformType.NumMethod() != 2 {
 		t.Fatalf("platform seam methods=%d", platformType.NumMethod())
 	}
-	publisherType := reflect.TypeOf((*linuxSemanticPublisher)(nil)).Elem()
+	publisherType := reflect.TypeFor[linuxSemanticPublisher]()
 	if publisherType.NumMethod() != 2 {
 		t.Fatalf("publisher seam methods=%d", publisherType.NumMethod())
 	}
-	creatorType := reflect.TypeOf((*linuxLiveCleanupStageCreator)(nil)).Elem()
+	creatorType := reflect.TypeFor[linuxLiveCleanupStageCreator]()
 	if creatorType.NumMethod() != 1 {
 		t.Fatalf("cleanup creator seam methods=%d", creatorType.NumMethod())
 	}
-	removerType := reflect.TypeOf((*linuxLiveCleanupStageRemover)(nil)).Elem()
+	removerType := reflect.TypeFor[linuxLiveCleanupStageRemover]()
 	if removerType.NumMethod() != 1 {
 		t.Fatalf("cleanup remover seam methods=%d", removerType.NumMethod())
 	}

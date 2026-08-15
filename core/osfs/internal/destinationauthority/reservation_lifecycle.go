@@ -50,7 +50,7 @@ func reserveTopLevelOnRoot(
 	if !ok || !binding.Valid() || canonicalComponentKey == nil {
 		return nil, ErrInvalidReservation
 	}
-	for collisionIndex := uint32(0); collisionIndex < ordinaryoutput.MaximumResultNameReservationAttemptsV1; collisionIndex++ {
+	for collisionIndex := range ordinaryoutput.MaximumResultNameReservationAttemptsV1 {
 		candidate, collision, err := beginTopLevelReservationCandidate(
 			binding, request, preferredName, entryKind, collisionIndex, canonicalComponentKey,
 		)

@@ -369,7 +369,8 @@ func TestLivePartialTransactionConstructorAndClosureGuards(t *testing.T) {
 	}
 	transaction, _, _ := newLiveTransactionForTest(t, 4, destination)
 	strategy := transaction.strategy.(*livePartialFileStrategy)
-	if err := strategy.validateOpen(nil); !errors.Is(err, ErrTransactionClosed) {
+	var nilContext context.Context
+	if err := strategy.validateOpen(nilContext); !errors.Is(err, ErrTransactionClosed) {
 		t.Fatalf("nil context = %v", err)
 	}
 	if _, err := transaction.Retire(

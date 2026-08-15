@@ -141,7 +141,7 @@ func TestSuccessfulGetWritesOnlyFinalSummaryToRedirectedStderr(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}
-	if code := app.reportTransferResultWithAdmission(nil, nil, nil, result, nil, true); code != ExitOK {
+	if code := app.reportTransferResultWithAdmission(t.Context(), nil, nil, result, nil, true); code != ExitOK {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
 	want := "get: result=success downloaded=1 resumed=0 paused=0 collision=0 failed=0 " +
