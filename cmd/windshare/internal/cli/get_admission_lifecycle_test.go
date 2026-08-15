@@ -217,7 +217,7 @@ func TestRelayContentAdmissionCloseRevokesQueuedDecisionBeforeResume(t *testing.
 			}
 			trace := traces[0]
 			if trace.Generation != 1 || trace.Trigger != receiverAdmissionTriggerConnectionSmall ||
-				trace.TerminalOwner != test.owner || trace.Result != receiverAdmissionAuthorityRevoked {
+				trace.TerminalOwner != test.owner || trace.Result != receiverContentAdmissionRevoked {
 				t.Fatalf("revocation trace=%+v", trace)
 			}
 		})
@@ -324,7 +324,7 @@ func TestRelayContentAdmissionTerminalRevokesQueuedDeadline(t *testing.T) {
 	traces := admission.Traces()
 	if len(traces) != 1 || traces[0].Trigger != receiverAdmissionTriggerDeadline ||
 		traces[0].TerminalOwner != receiverAdmissionTerminalRuntime ||
-		traces[0].Result != receiverAdmissionAuthorityRevoked {
+		traces[0].Result != receiverContentAdmissionRevoked {
 		t.Fatalf("deadline revocation traces=%+v", traces)
 	}
 }
@@ -382,9 +382,9 @@ func TestRelayContentAdmissionCloseReturnsButWaitJoinsClaimedResume(t *testing.T
 		t.Fatalf("blocked Resume calls=%d", resumed)
 	}
 	traces := admission.Traces()
-	if len(traces) != 3 || traces[0].Result != receiverAdmissionAuthorityClaimed ||
-		traces[1].Result != receiverAdmissionAuthorityExecutionRetained ||
-		traces[2].Result != receiverAdmissionAuthoritySettled {
+	if len(traces) != 3 || traces[0].Result != receiverContentAdmissionClaimed ||
+		traces[1].Result != receiverContentAdmissionExecutionRetained ||
+		traces[2].Result != receiverContentAdmissionSettled {
 		t.Fatalf("claimed-close authority traces=%+v", traces)
 	}
 }
@@ -449,7 +449,7 @@ func TestRelayContentAdmissionHighContentionPublishesOneRevocableCapability(t *t
 	}
 	traces := admission.Traces()
 	if len(traces) != 1 || traces[0].Generation != 1 ||
-		traces[0].Result != receiverAdmissionAuthorityRevoked {
+		traces[0].Result != receiverContentAdmissionRevoked {
 		t.Fatalf("contended authority traces=%+v", traces)
 	}
 }
@@ -476,8 +476,8 @@ func TestRelayContentAdmissionContainsResumePanic(t *testing.T) {
 		t.Fatalf("panic decision=%v retained=%v", decision.Cause, admission.Err())
 	}
 	traces := admission.Traces()
-	if len(traces) != 2 || traces[0].Result != receiverAdmissionAuthorityClaimed ||
-		traces[1].Result != receiverAdmissionAuthorityResumeFailed {
+	if len(traces) != 2 || traces[0].Result != receiverContentAdmissionClaimed ||
+		traces[1].Result != receiverContentAdmissionResumeFailed {
 		t.Fatalf("panic authority traces=%+v", traces)
 	}
 }
@@ -568,6 +568,91 @@ func TestReceiverAdmissionMonitorSuppressesFailureAfterRuntimeTerminal(t *testin
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("runtime terminal replayed admission failure: %q", stderr.String())
+	}
+}
+
+func TestP2POnlyContentAdmissionNeverResumesRelay(t *testing.T) {
+	relay := newFakeReceiverContentSuspension()
+	admission, err := newReceiverContentAdmissionWithExecution(
+		receiverRelayContentProhibited,
+		time.Time{},
+		nil,
+		relay,
+		receiverAdmissionExecution{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
+		t.Fatal(err)
+	}
+	if err := admission.ObservePeer(receiverPeerReady); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case decision := <-admission.Decision():
+		t.Fatalf("p2p-only admission decided without path failure: %+v", decision)
+	default:
+	}
+	if resumed := relay.count(); resumed != 0 {
+		t.Fatalf("p2p-only admission resumed relay content %d times", resumed)
+	}
+	if err := admission.AdmitRelayOnly(); !errors.Is(err, ErrInvalidReceiverAdmission) {
+		t.Fatalf("p2p-only relay admission error=%v", err)
+	}
+	admission.Close()
+	admission.Wait()
+	traces := admission.Traces()
+	if len(traces) < 1 || traces[0].Trigger != receiverAdmissionTriggerP2POnly ||
+		traces[0].Result != receiverContentAdmissionRelayProhibited {
+		t.Fatalf("p2p-only policy traces=%+v", traces)
+	}
+}
+
+func TestP2POnlyContentAdmissionMakesPeerLossTerminal(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		signal  receiverPeerSignal
+		trigger receiverAdmissionTrigger
+	}{
+		{name: "setup failure", signal: receiverPeerFailed, trigger: receiverAdmissionTriggerPeerFailed},
+		{name: "active lane detached", signal: receiverPeerDetached, trigger: receiverAdmissionTriggerPeerDetached},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			relay := newFakeReceiverContentSuspension()
+			admission, err := newP2POnlyContentAdmission(relay)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stderr bytes.Buffer
+			runtime := &cliReceiverRuntimeCloser{}
+			monitorDone := (&App{Stderr: &stderr}).monitorReceiverAdmission(admission, runtime)
+			if err := admission.ObservePeer(test.signal); err != nil {
+				t.Fatal(err)
+			}
+			admission.Wait()
+			<-monitorDone
+			if runtime.calls.Load() != 1 {
+				t.Fatalf("runtime close calls=%d", runtime.calls.Load())
+			}
+			if resumed := relay.count(); resumed != 0 {
+				t.Fatalf("p2p-only peer loss resumed relay content %d times", resumed)
+			}
+			if !errors.Is(admission.Err(), errReceiverP2PPathUnavailable) {
+				t.Fatalf("p2p-only retained error=%v", admission.Err())
+			}
+			if !strings.Contains(stderr.String(), "relay content fallback is disabled") ||
+				!strings.Contains(stderr.String(), string(test.trigger)) {
+				t.Fatalf("p2p-only terminal diagnostic=%q", stderr.String())
+			}
+			traces := admission.Traces()
+			last := traces[len(traces)-1]
+			if last.Trigger != test.trigger ||
+				last.TerminalOwner != receiverAdmissionTerminalP2PUnavailable ||
+				last.Result != receiverContentAdmissionP2PUnavailable {
+				t.Fatalf("p2p-only failure traces=%+v", traces)
+			}
+		})
 	}
 }
 
