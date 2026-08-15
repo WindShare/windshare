@@ -101,7 +101,7 @@ func newLinuxAdapterTestPlatform(t *testing.T) (*linuxV3Platform, string) {
 			object: facts.identity,
 		},
 	}
-	platform := &linuxV3Platform{root: root}
+	platform := &linuxV3Platform{root: root, rootOpenDisposition: outputcap.CallerProvidedContainer}
 	t.Cleanup(func() {
 		if err := platform.Close(); err != nil {
 			t.Errorf("close adapter contract root: %v", err)
@@ -560,3 +560,161 @@ func TestLinuxPlatformAdapterNamesAreSortedAndBounded(t *testing.T) {
 		t.Fatalf("entry bound overflow error=%v", err)
 	}
 }
+
+func TestLinuxOutputCustomErrors(t *testing.T) {
+	cause := errors.New("underlying cause")
+	unsupported := &linuxOutputUnsupportedError{operation: "certify", reason: "bad fs", cause: cause}
+	if unsupported.Error() == "" || unsupported.Unwrap() != cause || !errors.Is(unsupported, errLinuxOutputUnsupported) {
+		t.Fatalf("unsupported error mismatch: %v", unsupported)
+	}
+	unsafe := &linuxOutputUnsafeError{operation: "open", reason: "unsafe path", cause: cause}
+	if unsafe.Error() == "" || unsafe.Unwrap() != cause || !errors.Is(unsafe, errLinuxOutputUnsafe) {
+		t.Fatalf("unsafe error mismatch: %v", unsafe)
+	}
+	collision := &linuxOutputCollisionError{operation: "create", name: "foo.txt", cause: cause}
+	if collision.Error() == "" || collision.Unwrap() != cause || !errors.Is(collision, errLinuxOutputCollision) {
+		t.Fatalf("collision error mismatch: %v", collision)
+	}
+}
+
+func TestLinuxPlatformAdapterAdditionalCoverage(t *testing.T) {
+	var nilPlatform *linuxV3Platform
+	if nilPlatform.Root() != nil || nilPlatform.RootOpenDisposition() != "" {
+		t.Fatal("nil platform returned non-empty root disposition")
+	}
+
+	platform, _ := newLinuxAdapterTestPlatform(t)
+	if platform.RootOpenDisposition() != outputcap.CallerProvidedContainer {
+		t.Fatalf("disposition=%v", platform.RootOpenDisposition())
+	}
+
+	var nilGuard *linuxOutputPublicOperationGuard
+	if nilGuard.Root() != nil {
+		t.Fatal("nil guard returned non-nil root")
+	}
+	guard := &linuxOutputPublicOperationGuard{root: platform.Root()}
+	if guard.Root() != platform.Root() {
+		t.Fatal("guard root mismatch")
+	}
+
+	var nilDir *linuxV3Directory
+	if _, err := nilDir.PreparePersistentDirectoryIdentityClaim(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+		t.Fatalf("nil dir prepare claim error=%v", err)
+	}
+	if err := nilDir.CreateOrdinaryOutputStage(platform.Root(), "stage.tmp", 100); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+		t.Fatalf("nil dir stage error=%v", err)
+	}
+
+	rootV3, ok := platform.Root().(*linuxV3Directory)
+	if !ok {
+		t.Fatalf("root is not linuxV3Directory: %T", platform.Root())
+	}
+	if err := rootV3.CreateOrdinaryOutputStage(nil, "stage.tmp", 100); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+		t.Fatalf("nil proof stage error=%v", err)
+	}
+	if err := rootV3.CreateOrdinaryOutputStage(rootV3, "", 100); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+		t.Fatalf("empty name stage error=%v", err)
+	}
+
+	claim, err := rootV3.PreparePersistentDirectoryIdentityClaim()
+	if err != nil || len(claim) == 0 {
+		t.Fatalf("prepare identity claim error=%v len=%d", err, len(claim))
+	}
+
+	controlValue, err := rootV3.CreateDirectory("control", true)
+	if err != nil {
+		t.Fatalf("create private control dir error=%v", err)
+	}
+	control := controlValue.(*linuxV3Directory)
+
+	if err := rootV3.CreateOrdinaryOutputStage(control, "test_ordinary.tmp", 512); err != nil {
+		t.Fatalf("create ordinary stage error=%v", err)
+	}
+
+	nativeDir := rootV3.native
+	var nilNative *linuxOutputDirectory
+	if nilNative.durability() != 0 {
+		t.Fatal("nil native durability != 0")
+	}
+	if nativeDir.durability() != linuxOutputProcessRestartDurability {
+		t.Fatalf("durability=%v", nativeDir.durability())
+	}
+
+	same, err := nativeDir.SameDirectory(nativeDir)
+	if err != nil || !same {
+		t.Fatalf("same directory self error=%v same=%v", err, same)
+	}
+
+	testFile, err := rootV3.CreateFile("test_file.bin", false, 0)
+	if err != nil {
+		t.Fatalf("create test file error=%v", err)
+	}
+	_ = testFile.Close()
+
+	names, err := nativeDir.names(10)
+	if err != nil {
+		t.Fatalf("native names error=%v", err)
+	}
+	if len(names) == 0 {
+		t.Fatal("expected non-empty native names")
+	}
+
+	prefixed, err := nativeDir.namesWithPrefix("test_", 10)
+	if err != nil || len(prefixed) == 0 {
+		t.Fatalf("prefixed error=%v prefixed=%v", err, prefixed)
+	}
+}
+
+func TestLinuxReadProcMetadata(t *testing.T) {
+	mountInfo, err := linuxReadMountInfo()
+	if err != nil || len(mountInfo) == 0 {
+		t.Fatalf("read mount info error=%v len=%d", err, len(mountInfo))
+	}
+	status, err := linuxReadProcessStatus()
+	if err != nil || len(status) == 0 {
+		t.Fatalf("read process status error=%v len=%d", err, len(status))
+	}
+	if _, err := linuxReadBoundedProcFile(filepath.Join(t.TempDir(), "missing"), 100); err == nil {
+		t.Fatal("expected error for missing proc file")
+	}
+	tempFile := filepath.Join(t.TempDir(), "large.txt")
+	if err := os.WriteFile(tempFile, make([]byte, 200), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := linuxReadBoundedProcFile(tempFile, 100); err == nil {
+		t.Fatal("expected error for proc file exceeding safety limit")
+	}
+}
+
+func TestLinuxLockStableFileErrorBranches(t *testing.T) {
+	platform, _ := newLinuxAdapterTestPlatform(t)
+	root := platform.Root()
+	file, err := root.CreateFile("lock_test.bin", false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	v3File := file.(*linuxV3File)
+
+	origFlock := v3File.native.system.flock
+	defer func() { v3File.native.system.flock = origFlock }()
+
+	v3File.native.system.flock = func(int, int) error { return unix.ENOSYS }
+	if _, err := linuxLockStableFile(v3File.native); !errors.Is(err, errLinuxOutputUnsupported) {
+		t.Fatalf("enosys lock error=%v", err)
+	}
+
+	v3File.native.system.flock = func(int, int) error { return errors.New("flock io error") }
+	if _, err := linuxLockStableFile(v3File.native); err == nil {
+		t.Fatal("expected error for general flock failure")
+	}
+
+	readOnlyFile := *v3File.native
+	readOnlyFile.writable = false
+	if _, err := linuxLockStableFile(&readOnlyFile); err == nil {
+		t.Fatal("expected error for read-only file lock")
+	}
+}
+
+
+
