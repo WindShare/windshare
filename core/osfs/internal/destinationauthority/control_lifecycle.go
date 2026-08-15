@@ -116,7 +116,7 @@ func beginControlUse(
 }
 
 func acquireControlCoordinator(directory outputcap.Directory) (outputcap.Lock, bool, error) {
-	for attempt := 0; attempt < maximumCoordinatorLockAttempts; attempt++ {
+	for range maximumCoordinatorLockAttempts {
 		lock, created, err := directory.AcquireLock(controlCoordinatorLock, false)
 		if err == nil {
 			if lock == nil {
