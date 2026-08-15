@@ -715,6 +715,3 @@ func TestLinuxLockStableFileErrorBranches(t *testing.T) {
 		t.Fatal("expected error for read-only file lock")
 	}
 }
-
-
-
