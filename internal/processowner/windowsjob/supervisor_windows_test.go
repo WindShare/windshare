@@ -18,6 +18,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+const (
+	windowsSupervisorStartupTimeout  = 30 * time.Second
+	windowsSupervisorCompletionSlack = time.Second
+)
+
 func TestRunSupervisesNaturalExitAndDeadline(t *testing.T) {
 	t.Run("natural", func(t *testing.T) {
 		statuses, err := runWindowsSupervisor(t, "natural", 5*time.Second, 200*time.Millisecond, nil)
@@ -252,9 +257,12 @@ func collectWindowsSupervisor(
 	}
 	collected := make(chan statusCollection, 1)
 	go func() { collected <- collectStatuses(statusReader) }()
-	maximum := time.Duration(
+	// Run starts the configured deadline only after the OS process is contained
+	// and ready. The harness therefore composes an independent startup budget
+	// instead of charging process creation and host scanning to child execution.
+	maximum := windowsSupervisorStartupTimeout + time.Duration(
 		config.DeadlineMilliseconds+config.TerminationGraceMilliseconds,
-	)*time.Millisecond + time.Second
+	)*time.Millisecond + windowsSupervisorCompletionSlack
 	timer := time.NewTimer(maximum)
 	defer timer.Stop()
 	var collection statusCollection
@@ -275,7 +283,7 @@ func collectWindowsSupervisor(
 				pending = append(pending, "run_return")
 			}
 			return nil, fmt.Errorf(
-				"windows supervisor did not settle within its lifecycle bound: pending=%s observed_statuses=%d",
+				"windows supervisor did not settle within its startup and lifecycle bounds: pending=%s observed_statuses=%d",
 				strings.Join(pending, ","),
 				len(collection.statuses),
 			)
