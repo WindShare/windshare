@@ -6,8 +6,8 @@ import (
 	"errors"
 	"io"
 
-	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointstore"
+	"github.com/windshare/windshare/core/osfs/internal/destinationauthority"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
@@ -16,157 +16,177 @@ import (
 
 const maximumStableIdentityGenerationAttempts = 8
 
+type ExecutionMode struct {
+	mode outputcap.ExecutionMode
+}
+
+func (mode ExecutionMode) Resumable() bool { return mode.mode == outputcap.ExecutionResumable }
+func (mode ExecutionMode) LiveOnly() bool  { return mode.mode == outputcap.ExecutionLiveOnly }
+func (mode ExecutionMode) Valid() bool {
+	return mode.mode == outputcap.ExecutionResumable || mode.mode == outputcap.ExecutionLiveOnly
+}
+
+func (authority *Authority) BindDestination(ctx context.Context) (ExecutionMode, error) {
+	if authority == nil || ctx == nil || authority.platformFactory == nil {
+		return ExecutionMode{}, transfer.ErrInvalidOutputBinding
+	}
+	if err := ctx.Err(); err != nil {
+		return ExecutionMode{}, err
+	}
+	authority.mu.Lock()
+	defer authority.mu.Unlock()
+	if authority.closed || authority.stage != authorityStageConstructed {
+		return ExecutionMode{}, transfer.ErrInvalidOutputBinding
+	}
+	platform, err := authority.platformFactory(authority.rootPath, authority.createRoot)
+	if err != nil {
+		return ExecutionMode{}, runtimeOutputError(ctx, transferfault.OutputOwnership, "open destination platform", err)
+	}
+	destination, err := destinationauthority.BindDestination(destinationauthority.BindConfig{
+		Platform: platform, DisplayPath: authority.rootPath,
+		OpenLiveCleanupJournal: openNativeLiveCleanupJournal,
+	})
+	if err != nil {
+		return ExecutionMode{}, runtimeOutputError(ctx, transferfault.OutputOwnership, "bind destination authority", err)
+	}
+	binding := destination.Binding()
+	mode, err := binding.ExecutionMode()
+	if err != nil {
+		return ExecutionMode{}, errors.Join(
+			runtimeOutputError(ctx, transferfault.OutputOwnership, "select destination execution mode", err),
+			destination.Close(),
+		)
+	}
+	var registry *checkpointstore.OperationRegistry
+	if mode == outputcap.ExecutionResumable {
+		err = destination.OpenResumableState(func(control outputcap.Directory) (io.Closer, error) {
+			opened, openErr := checkpointstore.OpenOperationRegistry(control)
+			if openErr != nil {
+				return nil, openErr
+			}
+			registry = &opened
+			return registry, nil
+		})
+		if err != nil {
+			return ExecutionMode{}, errors.Join(
+				checkpointRuntimeError(ctx, "open ordinary operation registry", err),
+				destination.Close(),
+			)
+		}
+	}
+	authority.destination = destination
+	authority.binding = binding
+	authority.mode = mode
+	authority.registry = registry
+	authority.stage = authorityStageBound
+	return ExecutionMode{mode: mode}, nil
+}
+
+func (authority *Authority) Close() error {
+	if authority == nil {
+		return nil
+	}
+	authority.mu.Lock()
+	if authority.closed {
+		authority.mu.Unlock()
+		return nil
+	}
+	authority.closed = true
+	operation := authority.operation
+	admission := authority.admission
+	destination := authority.destination
+	authority.operation = nil
+	authority.admission = nil
+	authority.destination = nil
+	authority.registry = nil
+	authority.binding = destinationauthority.Binding{}
+	authority.mode = 0
+	authority.stage = authorityStageLookupStopped
+	authority.mu.Unlock()
+
+	var err error
+	if operation != nil {
+		err = errors.Join(err, operation.close())
+	}
+	if admission != nil {
+		err = errors.Join(err, admission.close())
+	}
+	if destination != nil {
+		err = errors.Join(err, destination.Close())
+	}
+	return err
+}
+
+// reserveNativeDirectTree is the temporary public-facade adapter used until the
+// caller supplies its bounded output shape directly. It deliberately lowers the
+// old unbounded catalog-root request before persistence so every actual operation
+// is owned by the same named ordinary lifecycle.
 func (authority *Authority) reserveNativeDirectTree(
 	ctx context.Context,
 	selection transfer.SelectionSpec,
 	artifact receivecontract.ArtifactSpec,
-) (_ NativeDirectTreeReservation, resultErr error) {
-	if authority == nil || ctx == nil || selection.IsZero() || artifact.IsZero() ||
-		authority.platformFactory == nil || authority.random == nil {
+) (NativeDirectTreeReservation, error) {
+	if authority == nil || ctx == nil || selection.IsZero() || artifact.IsZero() {
 		return NativeDirectTreeReservation{}, transfer.ErrInvalidReceiveIntent
 	}
 	layout, tree := artifact.DirectoryTree()
 	if !tree || layout.Kind() != receivecontract.DirectoryTreeCatalogRoot {
 		return NativeDirectTreeReservation{}, transfer.ErrInvalidOutputBinding
 	}
-	if err := ctx.Err(); err != nil {
+	if _, err := authority.BindDestination(ctx); err != nil {
 		return NativeDirectTreeReservation{}, err
 	}
-	resources := &nativeOutputResources{authority: authority}
-	defer func() {
-		resultErr = errors.Join(resultErr, resources.ReleaseOutputSession(context.Background()))
-	}()
-	platform, err := authority.acquireCertifiedNativePlatform(ctx, transfer.ReceiveIntentDigest{}, resources)
+	lookup, err := authority.LookupActive(ctx, selection)
 	if err != nil {
 		return NativeDirectTreeReservation{}, err
 	}
-	guard, err := platform.platform.AcquirePublicOperationGuard()
-	if err != nil {
-		return NativeDirectTreeReservation{}, runtimeOutputError(ctx, transferfault.OutputOwnership, "acquire native reservation guard", err)
-	}
-	defer func() { resultErr = errors.Join(resultErr, guard.Close()) }()
-	if err := validateReservationGuard(platform.platform, guard); err != nil {
-		return NativeDirectTreeReservation{}, runtimeOutputError(ctx, transferfault.OutputOwnership, "validate native reservation guard", err)
-	}
-	namespace, _, err := initializeNativeCheckpointNamespace(platform.platform, platform.authorityRef)
-	if err != nil {
-		if checkpointOwnershipUncertain(err) {
-			return NativeDirectTreeReservation{kind: NativeDirectTreeNeedsAttention}, nil
+	var operation *Operation
+	kind := NativeDirectTreeReopened
+	switch lookup.Kind() {
+	case ActiveLookupMiss:
+		bounded, err := receivecontract.NewResultRootDirectoryTree(
+			receivecontract.NewSyntheticSelectionResultRoot(),
+		)
+		if err != nil {
+			return NativeDirectTreeReservation{}, err
 		}
-		return NativeDirectTreeReservation{}, checkpointRuntimeError(ctx, "initialize checkpoint namespace", err)
-	}
-	resources.namespace = &namespace
-	compatible, err := checkpointmodel.NewCLICompatibleOperationKey(selection, artifact, platform.authorityRef)
-	if err != nil {
-		return NativeDirectTreeReservation{}, err
-	}
-	lookup, err := namespace.LookupCompatible(compatible)
-	if err != nil {
-		return NativeDirectTreeReservation{}, checkpointRuntimeError(ctx, "lookup compatible native operation", err)
-	}
-	operations := lookup.Operations()
-	if lookup.OwnershipUncertain() || len(operations) > 1 {
+		operation, err = authority.CreateOperation(ctx, lookup, bounded)
+		if err != nil {
+			return NativeDirectTreeReservation{}, err
+		}
+		kind = NativeDirectTreeReserved
+	case ActiveLookupReopened:
+		operation = lookup.Operation()
+	case ActiveLookupAlreadyRunning, ActiveLookupNeedsAttention, ActiveLookupAmbiguous:
 		return NativeDirectTreeReservation{kind: NativeDirectTreeNeedsAttention}, nil
+	default:
+		return NativeDirectTreeReservation{}, transfer.ErrInvalidOutputBinding
 	}
-	if len(operations) == 1 {
-		intent, err := operations[0].VerifyIntent(transfer.DecodeReceiveIntent)
-		if err != nil || !sameSelectionAndArtifact(intent, selection, artifact) ||
-			validateIntentForCertifiedRoot(intent, platform.authorityRef) != nil {
-			return NativeDirectTreeReservation{kind: NativeDirectTreeNeedsAttention}, nil
-		}
-		return NativeDirectTreeReservation{kind: NativeDirectTreeReopened, intent: intent}, nil
+	intent, ok := operation.ReceiveIntent()
+	if !ok {
+		return NativeDirectTreeReservation{}, transfer.ErrInvalidOutputBinding
 	}
-	intent, record, err := authority.newNativeDirectTreeIntent(selection, artifact, compatible, platform.authorityRef)
-	if err != nil {
-		return NativeDirectTreeReservation{}, err
-	}
-	lease, err := namespace.AcquireOperation(intent.OperationID(), intent.Digest(), intent.BindingDigest())
-	if err != nil {
-		return NativeDirectTreeReservation{}, checkpointRuntimeError(ctx, "acquire new native operation", err)
-	}
-	resources.lease = &lease
-	repository, err := lease.OpenOrCreateRepository()
-	if err != nil {
-		return NativeDirectTreeReservation{}, checkpointRuntimeError(ctx, "create native operation repository", err)
-	}
-	resources.repository = &repository
-	reservation, _ := intent.MaterializationPlan().DestinationReservation()
-	if err := repository.InstallOperation(record, reservation.CanonicalBytes()); err != nil {
-		return NativeDirectTreeReservation{}, checkpointRuntimeError(ctx, "install native operation", err)
-	}
-	frozen, err := checkpointmodel.NewReceiveLifecycleState(checkpointmodel.LifecycleStateSpec{
-		OperationID: intent.OperationID(), ReceiveIntent: intent.Digest(),
-		StateGeneration: 1, Phase: checkpointmodel.LifecycleIntentFrozen,
-	})
-	if err != nil {
-		return NativeDirectTreeReservation{}, err
-	}
-	if err := repository.CreateLifecycleState(frozen); err != nil {
-		return NativeDirectTreeReservation{}, checkpointRuntimeError(ctx, "create native operation lifecycle", err)
-	}
-	if err := lease.RegisterLookup(record); err != nil {
-		return NativeDirectTreeReservation{}, checkpointRuntimeError(ctx, "register compatible native operation", err)
-	}
-	return NativeDirectTreeReservation{kind: NativeDirectTreeReserved, intent: intent}, nil
+	return NativeDirectTreeReservation{kind: kind, intent: intent}, nil
 }
 
-func checkpointOwnershipUncertain(err error) bool {
-	var checkpointErr *checkpointstore.Error
-	return errors.As(err, &checkpointErr) && checkpointErr.Code() == checkpointstore.ErrorOwnershipMismatch
-}
-
-func validateReservationGuard(platform outputcap.Platform, guard outputcap.PublicOperationGuard) error {
-	if platform == nil || platform.Root() == nil || guard == nil || guard.Root() == nil {
-		return outputcap.ErrUnsafeNamespace
-	}
-	same, err := platform.Root().SameDirectory(guard.Root())
-	if err != nil || !same {
-		return errors.Join(outputcap.ErrUnsafeNamespace, err)
-	}
-	return validateOutputCreateAuthority(guard.Root())
-}
-
-func sameSelectionAndArtifact(
+// openNativeOutput accepts only the exact frozen intent returned by the facade
+// reservation. The retained Operation is the sole capability path into the
+// ordinary output session; no legacy checkpoint namespace is reopened here.
+func (authority *Authority) openNativeOutput(
+	ctx context.Context,
 	intent transfer.ReceiveIntent,
-	selection transfer.SelectionSpec,
-	artifact receivecontract.ArtifactSpec,
-) bool {
-	return !intent.IsZero() && bytes.Equal(intent.SelectionSpec().CanonicalBytes(), selection.CanonicalBytes()) &&
-		bytes.Equal(intent.ArtifactSpec().CanonicalBytes(), artifact.CanonicalBytes())
-}
-
-func (authority *Authority) newNativeDirectTreeIntent(
-	selection transfer.SelectionSpec,
-	artifact receivecontract.ArtifactSpec,
-	compatible checkpointmodel.CompatibleOperationKey,
-	authorityRef receivecontract.AuthorityRef,
-) (transfer.ReceiveIntent, checkpointmodel.ReceiveOperation, error) {
-	operation, err := newOperationID(authority.random)
-	if err != nil {
-		return transfer.ReceiveIntent{}, checkpointmodel.ReceiveOperation{}, err
+) (transfer.DirectTreeSession, error) {
+	if authority == nil || ctx == nil || intent.IsZero() {
+		return nil, transfer.ErrInvalidOutputBinding
 	}
-	reservationID, err := newReservationID(authority.random)
-	if err != nil {
-		return transfer.ReceiveIntent{}, checkpointmodel.ReceiveOperation{}, err
+	authority.mu.Lock()
+	operation := authority.operation
+	authority.mu.Unlock()
+	frozen, ok := operation.ReceiveIntent()
+	if !ok || !bytes.Equal(frozen.CanonicalBytes(), intent.CanonicalBytes()) {
+		return nil, transfer.ErrInvalidOutputBinding
 	}
-	reservation, err := receivecontract.NewNativeContainerRootReservation(operation, reservationID, artifact, authorityRef)
-	if err != nil {
-		return transfer.ReceiveIntent{}, checkpointmodel.ReceiveOperation{}, err
-	}
-	plan, err := receivecontract.NewDirectTreePlan(artifact, reservation)
-	if err != nil {
-		return transfer.ReceiveIntent{}, checkpointmodel.ReceiveOperation{}, err
-	}
-	intent, err := transfer.NewReceiveIntent(selection, artifact, plan)
-	if err != nil {
-		return transfer.ReceiveIntent{}, checkpointmodel.ReceiveOperation{}, err
-	}
-	reopen, err := checkpointmodel.CLIReopenKey(compatible)
-	if err != nil {
-		return transfer.ReceiveIntent{}, checkpointmodel.ReceiveOperation{}, err
-	}
-	record, err := checkpointmodel.NewReceiveOperation(intent, reopen)
-	return intent, record, err
+	return authority.OpenOperation(ctx, operation)
 }
 
 func newOperationID(random io.Reader) (receivecontract.OperationID, error) {

@@ -66,7 +66,7 @@ func TestTransferJobUsesCatalogClientBrokerAndSparseFileLocalResume(t *testing.T
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != 3 || result.Measure.ConnectionSizeClass() != ConnectionSizeSmall ||
+	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 3 || result.Measure.ConnectionSizeClass() != ConnectionSizeSmall ||
 		result.Measure.DiscoveredFiles != 3 || result.Measure.DiscoveredBytes != 3*chunk {
 		t.Fatalf("result=%+v", result)
 	}
@@ -90,7 +90,7 @@ func TestTransferJobUsesCatalogClientBrokerAndSparseFileLocalResume(t *testing.T
 		t.Fatalf("catalog loads=%v", loads)
 	}
 	if !slices.Equal(output.directories, []string{"", "folder", "folder/empty-dir"}) ||
-		!slices.Equal(output.finalized, []string{"folder/empty-dir", "folder", ""}) || output.finished != DirectTreeOutcomePublished {
+		!slices.Equal(output.finalized, []string{"folder/empty-dir", "folder", ""}) || output.finished != DirectTreeOutcomeSuccess {
 		t.Fatalf("directories=%v finalized=%v outcome=%v", output.directories, output.finalized, output.finished)
 	}
 	if client.CachedBytes() != 0 {
@@ -125,7 +125,7 @@ func TestTransferJobRejectsRegressiveCheckpointAndCatalogCycle(t *testing.T) {
 			Blocks: scriptedRangeReader{}, Materializer: output,
 		})
 		result := job.Run(context.Background())
-		if result.Outcome != DirectTreeOutcomeResumable || !output.aborted ||
+		if result.Outcome != DirectTreeOutcomePaused || !output.aborted ||
 			result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
 			t.Fatalf("regressive checkpoint result=%+v", result)
 		}
@@ -156,7 +156,7 @@ func TestTransferJobRejectsRegressiveCheckpointAndCatalogCycle(t *testing.T) {
 			Blocks: scriptedRangeReader{}, Materializer: output,
 		})
 		result := job.Run(context.Background())
-		if result.Outcome != DirectTreeOutcomeResumable || !output.aborted ||
+		if result.Outcome != DirectTreeOutcomePaused || !output.aborted ||
 			result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
 			t.Fatalf("future checkpoint result=%+v", result)
 		}
@@ -180,7 +180,7 @@ func TestTransferJobRejectsRegressiveCheckpointAndCatalogCycle(t *testing.T) {
 			Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 		})
 		result := job.Run(context.Background())
-		if result.Outcome != DirectTreeOutcomeResumable ||
+		if result.Outcome != DirectTreeOutcomePaused ||
 			result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) {
 			t.Fatalf("cyclic catalog result=%+v", result)
 		}
@@ -291,7 +291,7 @@ func TestTransferJobDiscoveryFailurePreservesIndependentContentWork(t *testing.T
 		Revisions: revisions, Blocks: broker, Materializer: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePartialDirectory || result.SucceededFiles != 2 ||
+	if result.Outcome != DirectTreeOutcomePartial || result.SucceededFiles != 2 ||
 		len(result.Directories) != 1 || len(result.Files) != 1 {
 		t.Fatalf("result=%+v", result)
 	}
@@ -335,7 +335,7 @@ func TestTransferJobKeepsAdmissionLowerBoundSeparateFromExactResultMeasure(t *te
 	for measure := range updates {
 		admissionMeasure = measure
 	}
-	if result.Outcome != DirectTreeOutcomePublished || !result.Measure.DiscoveryTerminalSuccess ||
+	if result.Outcome != DirectTreeOutcomeSuccess || !result.Measure.DiscoveryTerminalSuccess ||
 		result.Measure.DiscoveredFiles != SmallTransferFileLimit+1 {
 		t.Fatalf("exact result=%+v", result)
 	}
@@ -369,7 +369,7 @@ func TestTransferJobOmittedRootChildrenPauseBeforeOutputAdmission(t *testing.T) 
 	for measure := range updates {
 		admissionMeasure = measure
 	}
-	if result.Outcome != DirectTreeOutcomeResumable || len(result.Directories) != 1 ||
+	if result.Outcome != DirectTreeOutcomePaused || len(result.Directories) != 1 ||
 		!errors.Is(result.Directories[0].Cause, ErrCatalogEntriesOmitted) || result.Measure.ConnectionSizeClass() != ConnectionSizeUnknown {
 		t.Fatalf("result=%+v", result)
 	}
@@ -414,7 +414,7 @@ func TestTransferJobResolvesPathSelectionInsideBoundedJobTraversal(t *testing.T)
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != 1 || result.Measure.DiscoveredFiles != 1 {
+	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 || result.Measure.DiscoveredFiles != 1 {
 		t.Fatalf("result=%+v", result)
 	}
 	if source.loadCount(root) != 3 || source.loadCount(folder) != 3 || source.loadCount(unrelated) != 0 {
@@ -439,7 +439,7 @@ func TestTransferJobReportsMissingPathTargetAfterCompleteTraversal(t *testing.T)
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil ||
+	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		len(result.Directories) != 0 || !errors.Is(result.SelectionResolutionFailure, ErrSelectionTargetMissing) ||
 		output.aborted || output.pauseCalls != 0 || output.completeCalls != 1 ||
 		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
@@ -554,7 +554,7 @@ func TestTransferJobTransfersCommittedSiblingBeforeDelayedDiscovery(t *testing.T
 	close(source.childDone)
 	select {
 	case result := <-resultCh:
-		if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != 1 || result.TerminationCause != nil {
+		if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 || result.TerminationCause != nil {
 			t.Fatalf("result=%+v", result)
 		}
 	case <-time.After(2 * time.Second):

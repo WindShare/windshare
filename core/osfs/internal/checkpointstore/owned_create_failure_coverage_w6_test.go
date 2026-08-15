@@ -52,25 +52,25 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 	t.Run("invalid and canceled requests", func(t *testing.T) {
 		store, _, object := newStore(t, 0x11)
 		if _, _, err := store.CreateOwnedFile(
-			context.TODO(), checkpointmodel.ObjectID{}, 4,
+			context.TODO(), nil, checkpointmodel.ObjectID{}, 4,
 		); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 			t.Fatalf("zero object error = %v", err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if _, _, err := store.CreateOwnedFile(ctx, object, 4); !errors.Is(err, context.Canceled) {
+		if _, _, err := store.CreateOwnedFile(ctx, nil, object, 4); !errors.Is(err, context.Canceled) {
 			t.Fatalf("canceled create error = %v", err)
 		}
 	})
 
 	t.Run("existing object is a collision", func(t *testing.T) {
 		store, _, object := newStore(t, 0x21)
-		file, observation, err := store.CreateOwnedFile(context.Background(), object, 4)
+		file, observation, err := store.CreateOwnedFile(context.Background(), nil, object, 4)
 		if err != nil || file == nil || observation.Condition() != fileexecution.OwnedReady {
 			t.Fatalf("initial owned create = (%T, %d, %v)", file, observation.Condition(), err)
 		}
 		_ = file.Close()
-		file, observation, err = store.CreateOwnedFile(context.Background(), object, 4)
+		file, observation, err = store.CreateOwnedFile(context.Background(), nil, object, 4)
 		if err != nil || file != nil || observation.Condition() != fileexecution.OwnedObjectCollision {
 			t.Fatalf("duplicate owned create = (%T, %d, %v)", file, observation.Condition(), err)
 		}
@@ -83,7 +83,7 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 			Directory:       repository.anchors,
 			createDirectory: func(string, bool) (outputcap.Directory, error) { return nil, failure },
 		}
-		file, observation, err := store.CreateOwnedFile(context.Background(), object, 4)
+		file, observation, err := store.CreateOwnedFile(context.Background(), nil, object, 4)
 		if file != nil || observation.Condition() != fileexecution.OwnedAbsent || !errors.Is(err, failure) {
 			t.Fatalf("anchor namespace cut = (%T, %d, %v)", file, observation.Condition(), err)
 		}
@@ -101,7 +101,7 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 				}}, nil
 			},
 		}
-		file, observation, err := store.CreateOwnedFile(context.Background(), object, 4)
+		file, observation, err := store.CreateOwnedFile(context.Background(), nil, object, 4)
 		if file != nil || observation.Condition() != fileexecution.OwnedAnchorMissing || !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 			t.Fatalf("uncertain stage observation = (%T, %d, %v)", file, observation.Condition(), err)
 		}
@@ -119,7 +119,7 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 				}}, nil
 			},
 		}
-		file, observation, err := store.CreateOwnedFile(context.Background(), object, 4)
+		file, observation, err := store.CreateOwnedFile(context.Background(), nil, object, 4)
 		if file != nil || observation.Condition() != fileexecution.OwnedAbsent || !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 			t.Fatalf("nil stage cut = (%T, %d, %v)", file, observation.Condition(), err)
 		}
@@ -136,7 +136,7 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 				return &faultDirectory{Directory: stageShard, sync: func() error { return failure }}, nil
 			},
 		}
-		file, observation, err := store.CreateOwnedFile(context.Background(), object, 4)
+		file, observation, err := store.CreateOwnedFile(context.Background(), nil, object, 4)
 		if file != nil || observation.Condition() != fileexecution.OwnedAnchorMissing || !errors.Is(err, failure) {
 			t.Fatalf("stage durability cut = (%T, %d, %v)", file, observation.Condition(), err)
 		}
@@ -154,7 +154,7 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 				}}, nil
 			},
 		}
-		file, observation, err := store.CreateOwnedFile(context.Background(), object, 4)
+		file, observation, err := store.CreateOwnedFile(context.Background(), nil, object, 4)
 		if file != nil || observation.Condition() != fileexecution.OwnedAnchorMissing || !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 			t.Fatalf("nil anchor cut = (%T, %d, %v)", file, observation.Condition(), err)
 		}
@@ -171,7 +171,7 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 				return &faultDirectory{Directory: anchorShard, sync: func() error { return failure }}, nil
 			},
 		}
-		file, observation, err := store.CreateOwnedFile(context.Background(), object, 4)
+		file, observation, err := store.CreateOwnedFile(context.Background(), nil, object, 4)
 		if file == nil || observation.Condition() != fileexecution.OwnedReady || !errors.Is(err, failure) {
 			t.Fatalf("anchor durability cut = (%T, %d, %v)", file, observation.Condition(), err)
 		}
@@ -194,7 +194,7 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 				}}, nil
 			},
 		}
-		file, observation, err := store.CreateOwnedFile(context.Background(), object, 4)
+		file, observation, err := store.CreateOwnedFile(context.Background(), nil, object, 4)
 		if err != nil || file == nil || observation.Condition() != fileexecution.OwnedReady {
 			t.Fatalf("durable identity reconciliation = (%T, %d, %v)", file, observation.Condition(), err)
 		}
@@ -226,7 +226,7 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 				}}, nil
 			},
 		}
-		file, observation, err := store.CreateOwnedFile(context.Background(), object, 4)
+		file, observation, err := store.CreateOwnedFile(context.Background(), nil, object, 4)
 		if file != nil || observation.Condition() != fileexecution.OwnedObjectCollision || !errors.Is(err, collision) {
 			t.Fatalf("concurrent allocation = (%T, %d, %v)", file, observation.Condition(), err)
 		}

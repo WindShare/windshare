@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
 // NewTransferJob binds one confirmed receive intent to a single transfer run.
@@ -36,6 +37,39 @@ func (runtime *ReceiverRuntime) NewTransferJob(
 		ProtocolSessionID: runtime.ProtocolSessionID(), Tracer: tracer,
 		Catalog: dependencies, Revisions: dependencies, Blocks: dependencies, Materializer: materializer,
 	})
+}
+
+// ResolveOrdinaryOutputShape consumes only authenticated catalog metadata from
+// this live session. The returned proof is construction-time state and cannot
+// outlive the canonical ReceiveIntent assembled by its caller.
+func (runtime *ReceiverRuntime) ResolveOrdinaryOutputShape(
+	ctx context.Context,
+	selection transfer.SelectionSpec,
+	budget ordinaryoutput.ShapeProbeBudget,
+	tracer ordinaryoutput.ShapeTracer,
+) (ordinaryoutput.ShapeDecision, error) {
+	if runtime == nil || runtime.runtimeCore == nil || runtime.catalog == nil {
+		return ordinaryoutput.ShapeDecision{}, ErrRuntimeClosed
+	}
+	if ctx == nil {
+		return ordinaryoutput.ShapeDecision{}, ordinaryoutput.ErrInvalidShapeResolution
+	}
+	input, err := selection.OrdinaryOutputSelection()
+	if err != nil {
+		return ordinaryoutput.ShapeDecision{}, err
+	}
+	operationContext, endAdmission, err := runtime.beginExternalAdmission(ctx)
+	if err != nil {
+		return ordinaryoutput.ShapeDecision{}, err
+	}
+	defer endAdmission()
+	return ordinaryoutput.ResolveShape(
+		operationContext,
+		receiverTransferDependencies{runtime: runtime},
+		input,
+		budget,
+		ordinaryoutput.BindShapeTracerToSession(runtime.ProtocolSessionID(), tracer),
+	)
 }
 
 // receiverTransferDependencies is the semantic boundary between a live session

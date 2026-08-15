@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/windshare/windshare/core/osfs"
 )
@@ -29,13 +30,11 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 		return runner.runList(ctx, args[1:])
 	case "discard":
 		return runner.runDiscard(ctx, args[1:])
-	case "cleanup":
-		return runner.runLegacyCleanup(ctx, args[1:])
 	case "help", "-h", "--help":
 		runner.dependencies.output.WriteUsage(runner.dependencies.renderer.Usage())
 		return ResultOK
 	default:
-		runner.dependencies.logger.Logf("resume: unknown action %q", args[0])
+		runner.dependencies.logger.Logf("resume: unknown action")
 		runner.dependencies.output.WriteUsage(runner.dependencies.renderer.Usage())
 		return ResultUsage
 	}
@@ -48,35 +47,51 @@ func (runner Runner) runList(ctx context.Context, args []string) Result {
 	}
 	inventory, err := runner.dependencies.inventories.OpenResumeStateInventory(ctx, request.rootPath)
 	if err != nil {
-		if errors.Is(err, osfs.ErrResumeStateBusy) {
-			return runner.reportBusy("list", 0, "inventory")
-		}
-		runner.dependencies.logger.Logf("resume list: open live inventory: %v", err)
-		return ResultFailure
+		return runner.reportListOpenFailure(err)
 	}
 	if inventory == nil {
-		runner.dependencies.logger.Logf("resume list: open live inventory: %v", errResumeStateContract)
-		return ResultFailure
+		return runner.reportListOpenFailure(errResumeStateContract)
 	}
-	items, err := inventory.Items()
+	snapshot, err := inventory.Snapshot()
 	if err != nil {
-		runner.dependencies.logger.Logf("resume list: project live inventory: %v", err)
-		return ResultFailure
+		return runner.reportListOpenFailure(err)
 	}
-	rendered, needsAttention, err := runner.dependencies.renderer.Inventory(items)
+	rendered, needsAttention, err := runner.dependencies.renderer.Inventory(snapshot)
 	if err != nil {
-		runner.dependencies.logger.Logf("resume list: render live inventory: %v", err)
+		runner.dependencies.logger.Logf("resume list: current inventory could not be represented safely")
 		return ResultFailure
 	}
 	if err := runner.dependencies.output.WriteResult(rendered); err != nil {
-		runner.dependencies.logger.Logf("resume list: write live inventory: %v", err)
+		runner.dependencies.logger.Logf("resume list: result output failed")
 		return ResultFailure
 	}
 	if needsAttention {
-		runner.dependencies.logger.Logf("resume list: current resume state needs attention; no deletion authority was used")
+		runner.dependencies.logger.Logf("resume list: destination state needs attention; no objects were changed")
 		return ResultFailure
 	}
 	return ResultOK
+}
+
+func (runner Runner) reportListOpenFailure(err error) Result {
+	status := resumeListStatusNeedsAttention
+	reason := resumeDestinationUnknownReason
+	message := "destination state could not be verified; no objects were changed"
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		status = resumeCancelledStatus
+		reason = resumeCommandCancelledReason
+		message = "command was cancelled; no additional objects were changed"
+	} else if errors.Is(err, osfs.ErrResumeStateBusy) {
+		status = resumeBusyStatus
+		reason = resumeDestinationBusyReason
+		message = "destination resume authority is already in use"
+	}
+	if writeErr := runner.dependencies.output.WriteResult(
+		runner.dependencies.renderer.ListControlStatus(status, reason),
+	); writeErr != nil {
+		runner.dependencies.logger.Logf("resume list: status output failed")
+	}
+	runner.dependencies.logger.Logf("resume list: %s", message)
+	return ResultFailure
 }
 
 func (runner Runner) runDiscard(ctx context.Context, args []string) Result {
@@ -86,149 +101,187 @@ func (runner Runner) runDiscard(ctx context.Context, args []string) Result {
 	}
 	inventory, err := runner.dependencies.inventories.OpenResumeStateInventory(ctx, request.rootPath)
 	if err != nil {
-		if errors.Is(err, osfs.ErrResumeStateBusy) {
-			return runner.reportBusy("discard", request.itemNumber, "inventory")
-		}
-		runner.dependencies.logger.Logf("resume discard: open live inventory: %v", err)
-		return ResultFailure
+		return runner.reportDiscardOpenFailure(request.itemNumber, err)
 	}
 	if inventory == nil {
-		runner.dependencies.logger.Logf("resume discard: open live inventory: %v", errResumeStateContract)
-		return ResultFailure
+		return runner.reportDiscardOpenFailure(request.itemNumber, errResumeStateContract)
 	}
-	items, err := inventory.Items()
+	snapshot, err := inventory.Snapshot()
 	if err != nil {
-		runner.dependencies.logger.Logf("resume discard: project live inventory: %v", err)
-		return ResultFailure
+		return runner.reportDiscardOpenFailure(request.itemNumber, err)
+	}
+	if snapshot.registryUnknown {
+		return runner.reportDiscardControl(
+			resumeDiscardStatusNeedsAttention,
+			request.itemNumber,
+			resumeRegistryUnknownReason,
+			"registry ownership is uncertain; no objects were changed",
+		)
 	}
 	index := request.itemNumber - 1
-	if index < 0 || index >= len(items) {
+	if index < 0 || index >= len(snapshot.operations) {
 		runner.dependencies.logger.Logf(
-			"resume discard: --item %d is outside the current inventory (items=%d)",
+			"resume discard: --item %d is outside the current inventory (operations=%d)",
 			request.itemNumber,
-			len(items),
+			len(snapshot.operations),
 		)
 		return ResultUsage
 	}
-	if !items[index].valid() {
-		runner.dependencies.logger.Logf("resume discard: selected item: %v", errResumeStateContract)
-		return ResultFailure
+	selected := snapshot.operations[index]
+	if !selected.valid() {
+		return runner.reportDiscardOpenFailure(request.itemNumber, errResumeStateContract)
 	}
-	if !items[index].discardable {
-		runner.dependencies.logger.Logf(
-			"resume discard: selected item has only uncertain inventory evidence; no mutation authority is available",
+	if selected.running {
+		return runner.reportDiscardControl(
+			resumeBusyStatus,
+			request.itemNumber,
+			resumeOperationRunningReason,
+			"selected operation is already running; no objects were changed",
 		)
-		return ResultFailure
 	}
 
 	confirmation := runner.dependencies.confirmation
 	if confirmation == nil || !confirmation.Interactive() {
-		if reportErr := runner.dependencies.output.WriteResult(
-			runner.dependencies.renderer.DiscardControlStatus(resumeConfirmationStatus, request.itemNumber),
-		); reportErr != nil {
-			runner.dependencies.logger.Logf("resume discard: write confirmation status: %v", reportErr)
-		}
-		runner.dependencies.logger.Logf(
-			"resume discard: %v; redirected confirmation is rejected",
-			errResumeTerminalRequired,
+		return runner.reportDiscardControl(
+			resumeConfirmationStatus,
+			request.itemNumber,
+			resumeTerminalRequiredReason,
+			"discard confirmation requires an interactive terminal; no objects were changed",
 		)
-		return ResultFailure
 	}
 	expected := fmt.Sprintf("discard %d", request.itemNumber)
-	prompt, err := runner.dependencies.renderer.DiscardPrompt(request.itemNumber, items[index], expected)
+	prompt, err := runner.dependencies.renderer.DiscardPrompt(request.itemNumber, selected, expected)
 	if err != nil {
-		runner.dependencies.logger.Logf("resume discard: render selected item: %v", err)
-		return ResultFailure
+		return runner.reportDiscardOpenFailure(request.itemNumber, err)
 	}
 	line, err := confirmation.ReadLine(ctx, prompt)
 	if err != nil {
-		runner.dependencies.logger.Logf("resume discard: read terminal confirmation: %v", err)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return runner.reportDiscardControl(
+				resumeCancelledStatus,
+				request.itemNumber,
+				resumeCommandCancelledReason,
+				"command was cancelled; no objects were changed",
+			)
+		}
+		runner.dependencies.logger.Logf("resume discard: terminal confirmation could not be read; no objects were changed")
 		return ResultFailure
 	}
 	if line != expected {
-		if reportErr := runner.dependencies.output.WriteResult(
-			runner.dependencies.renderer.DiscardControlStatus(resumeNotConfirmedStatus, request.itemNumber),
-		); reportErr != nil {
-			runner.dependencies.logger.Logf("resume discard: write confirmation status: %v", reportErr)
-			return ResultFailure
-		}
-		runner.dependencies.logger.Logf(
-			"resume discard: confirmation did not exactly match %q; no state was discarded",
-			expected,
+		return runner.reportDiscardControl(
+			resumeNotConfirmedStatus,
+			request.itemNumber,
+			resumeConfirmationMismatchReason,
+			"confirmation did not match exactly; no objects were changed",
 		)
-		return ResultFailure
 	}
 
-	report, err := inventory.Discard(ctx, index)
-	if err != nil {
-		if errors.Is(err, osfs.ErrResumeStateBusy) {
-			return runner.reportBusy("discard", request.itemNumber, "discard")
-		}
-		runner.dependencies.logger.Logf("resume discard: discard selected live item: %v", err)
-		return ResultFailure
+	report, discardErr := inventory.Discard(ctx, index)
+	if report.valid() {
+		return runner.reportDiscardSettlement(request.itemNumber, report, discardErr)
 	}
-	if !report.valid() {
-		runner.dependencies.logger.Logf("resume discard: invalid settlement: %v", errResumeStateContract)
-		return ResultFailure
-	}
-	rendered, err := runner.dependencies.renderer.DiscardReport(request.itemNumber, report)
-	if err != nil {
-		runner.dependencies.logger.Logf("resume discard: render settlement: %v", err)
-		return ResultFailure
-	}
-	if err := runner.dependencies.output.WriteResult(rendered); err != nil {
-		runner.dependencies.logger.Logf("resume discard: write settlement: %v", err)
-		return ResultFailure
-	}
-	if report.status == resumeDiscardStatusNeedsAttention {
-		runner.dependencies.logger.Logf(
-			"resume discard: selected state needs attention; uncertain and published objects were preserved",
+	if errors.Is(discardErr, osfs.ErrResumeStateBusy) {
+		return runner.reportDiscardControl(
+			resumeBusyStatus,
+			request.itemNumber,
+			resumeOperationRunningReason,
+			"selected operation became busy; no objects were changed",
 		)
-		return ResultFailure
 	}
-	return ResultOK
+	if errors.Is(discardErr, fs.ErrNotExist) {
+		return runner.reportDiscardControl(
+			resumeDiscardStatusChanged,
+			request.itemNumber,
+			resumeOperationChangedReason,
+			"selected operation changed after listing; no additional objects were changed",
+		)
+	}
+	if errors.Is(discardErr, context.Canceled) || errors.Is(discardErr, context.DeadlineExceeded) {
+		return runner.reportDiscardControl(
+			resumeCancelledStatus,
+			request.itemNumber,
+			resumeCommandCancelledReason,
+			"command was cancelled; no additional objects were changed",
+		)
+	}
+	return runner.reportDiscardControl(
+		resumeDiscardStatusNeedsAttention,
+		request.itemNumber,
+		resumeOperationUnknownReason,
+		"selected operation could not be verified; final and foreign objects were preserved",
+	)
 }
 
-func (runner Runner) runLegacyCleanup(ctx context.Context, args []string) Result {
-	request, valid := runner.dependencies.parser.ParseRoot("resume cleanup", args)
-	if !valid {
-		return ResultUsage
+func (runner Runner) reportDiscardOpenFailure(itemNumber int, err error) Result {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return runner.reportDiscardControl(
+			resumeCancelledStatus,
+			itemNumber,
+			resumeCommandCancelledReason,
+			"command was cancelled; no objects were changed",
+		)
 	}
-	report, err := runner.dependencies.legacy.CleanLegacy(ctx, request.rootPath)
-	if err != nil {
-		if errors.Is(err, osfs.ErrCheckpointCleanerBusy) {
-			if writeErr := runner.dependencies.output.WriteResult(
-				"legacy_cleanup_status=\"busy\"\n",
-			); writeErr != nil {
-				runner.dependencies.logger.Logf("resume cleanup: write legacy busy status: %v", writeErr)
-			}
-			runner.dependencies.logger.Logf("resume cleanup: legacy cleaner is busy")
-			return ResultFailure
-		}
-		runner.dependencies.logger.Logf("resume cleanup: clean legacy resume state: %v", err)
-		return ResultFailure
+	if errors.Is(err, osfs.ErrResumeStateBusy) {
+		return runner.reportDiscardControl(
+			resumeBusyStatus,
+			itemNumber,
+			resumeDestinationBusyReason,
+			"destination resume authority is already in use",
+		)
 	}
-	rendered, err := runner.dependencies.renderer.LegacyCleanup(report)
-	if err != nil {
-		runner.dependencies.logger.Logf("resume cleanup: render legacy cleanup report: %v", err)
-		return ResultFailure
-	}
-	if err := runner.dependencies.output.WriteResult(rendered); err != nil {
-		runner.dependencies.logger.Logf("resume cleanup: write legacy cleanup report: %v", err)
-		return ResultFailure
-	}
-	if report.Status != osfs.CheckpointCleanupStatusComplete || !report.Complete || report.NeedsAttention() {
-		runner.dependencies.logger.Logf("resume cleanup: legacy resume state still needs attention")
-		return ResultFailure
-	}
-	return ResultOK
+	return runner.reportDiscardControl(
+		resumeDiscardStatusNeedsAttention,
+		itemNumber,
+		resumeDestinationUnknownReason,
+		"destination state could not be verified; no objects were changed",
+	)
 }
 
-func (runner Runner) reportBusy(operation string, itemNumber int, phase string) Result {
-	rendered := runner.dependencies.renderer.Busy(operation, itemNumber, phase)
-	if err := runner.dependencies.output.WriteResult(rendered); err != nil {
-		runner.dependencies.logger.Logf("resume %s: write busy status: %v", operation, err)
+func (runner Runner) reportDiscardControl(
+	status string,
+	itemNumber int,
+	reason string,
+	message string,
+) Result {
+	if err := runner.dependencies.output.WriteResult(
+		runner.dependencies.renderer.DiscardControlStatus(status, itemNumber, reason),
+	); err != nil {
+		runner.dependencies.logger.Logf("resume discard: status output failed")
 	}
-	runner.dependencies.logger.Logf("resume %s: current resume state authority is busy", operation)
+	runner.dependencies.logger.Logf("resume discard: %s", message)
+	return ResultFailure
+}
+
+func (runner Runner) reportDiscardSettlement(
+	itemNumber int,
+	report resumeDiscardReport,
+	discardErr error,
+) Result {
+	rendered, err := runner.dependencies.renderer.DiscardReport(itemNumber, report)
+	if err != nil {
+		runner.dependencies.logger.Logf("resume discard: settlement could not be represented safely")
+		return ResultFailure
+	}
+	if err := runner.dependencies.output.WriteResult(rendered); err != nil {
+		runner.dependencies.logger.Logf("resume discard: result output failed")
+		return ResultFailure
+	}
+	switch report.status {
+	case resumeDiscardStatusDiscarded:
+		if discardErr == nil {
+			return ResultOK
+		}
+		runner.dependencies.logger.Logf(
+			"resume discard: owned state was discarded, but destination authority did not close cleanly",
+		)
+	case resumeDiscardStatusCleanupPending:
+		runner.dependencies.logger.Logf(
+			"resume discard: owned cleanup is incomplete; final and foreign objects were preserved",
+		)
+	default:
+		runner.dependencies.logger.Logf(
+			"resume discard: operation needs attention; final and foreign objects were preserved",
+		)
+	}
 	return ResultFailure
 }

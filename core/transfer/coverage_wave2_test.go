@@ -60,20 +60,17 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	secret := bytes.Repeat([]byte{0x71}, directoryAdmissionSecretBytes)
-	parentOutput := MaterializationDirectory{
-		DirectoryID: root,
-		Generation:  transferID[catalog.DirectoryGeneration](0x62),
-	}
+	parentOutput := admissionTestDirectory(
+		t, root, transferID[catalog.DirectoryGeneration](0x62), DirectoryAdmission{}, "", catalog.ModifiedTime{},
+	)
 	parent, err := NewDirectoryAdmissionWithSecret(secret, scope, parentOutput)
 	if err != nil {
 		t.Fatal(err)
 	}
-	childOutput := MaterializationDirectory{
-		DirectoryID:     transferID[catalog.DirectoryID](0x63),
-		Generation:      transferID[catalog.DirectoryGeneration](0x64),
-		ParentAdmission: parent,
-		Path:            "child",
-	}
+	childOutput := admissionTestDirectory(
+		t, transferID[catalog.DirectoryID](0x63), transferID[catalog.DirectoryGeneration](0x64),
+		parent, "child", catalog.ModifiedTime{},
+	)
 	child, err := NewDirectoryAdmissionWithSecret(secret, scope, childOutput)
 	if err != nil {
 		t.Fatal(err)
@@ -95,14 +92,20 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 	if err := ValidateDirectoryAdmissionBinding(scope, child, childOutput); err != nil {
 		t.Fatalf("valid admission binding = %v", err)
 	}
-	for name, invalid := range map[string]MaterializationDirectory{
-		"path": func() MaterializationDirectory { value := childOutput; value.Path = "other"; return value }(),
-		"generation": func() MaterializationDirectory {
+	for name, invalid := range map[string]AuthenticatedSourceDirectory{
+		"path": func() AuthenticatedSourceDirectory {
+			value := childOutput
+			value.SourcePath = admissionTestDirectory(
+				t, value.DirectoryID, value.Generation, value.ParentAdmission, "other", value.ModifiedTime,
+			).SourcePath
+			return value
+		}(),
+		"generation": func() AuthenticatedSourceDirectory {
 			value := childOutput
 			value.Generation = transferID[catalog.DirectoryGeneration](0x65)
 			return value
 		}(),
-		"parent": func() MaterializationDirectory {
+		"parent": func() AuthenticatedSourceDirectory {
 			value := childOutput
 			value.ParentAdmission = DirectoryAdmission{}
 			return value
@@ -124,12 +127,19 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 			t.Fatalf("secret length %d error = %v", len(badSecret), err)
 		}
 	}
-	for name, invalid := range map[string]MaterializationDirectory{
-		"zero identity":       {Generation: parentOutput.Generation},
-		"zero generation":     {DirectoryID: parentOutput.DirectoryID},
-		"path without parent": {DirectoryID: parentOutput.DirectoryID, Generation: parentOutput.Generation, Path: "child"},
-		"noncanonical path":   {DirectoryID: parentOutput.DirectoryID, Generation: parentOutput.Generation, ParentAdmission: parent, Path: "child/../other"},
-		"parent on root":      {DirectoryID: parentOutput.DirectoryID, Generation: parentOutput.Generation, ParentAdmission: parent},
+	for name, invalid := range map[string]AuthenticatedSourceDirectory{
+		"zero identity": admissionTestDirectory(
+			t, catalog.DirectoryID{}, parentOutput.Generation, DirectoryAdmission{}, "", catalog.ModifiedTime{},
+		),
+		"zero generation": admissionTestDirectory(
+			t, parentOutput.DirectoryID, catalog.DirectoryGeneration{}, DirectoryAdmission{}, "", catalog.ModifiedTime{},
+		),
+		"path without parent": admissionTestDirectory(
+			t, parentOutput.DirectoryID, parentOutput.Generation, DirectoryAdmission{}, "child", catalog.ModifiedTime{},
+		),
+		"parent on root": admissionTestDirectory(
+			t, parentOutput.DirectoryID, parentOutput.Generation, parent, "", catalog.ModifiedTime{},
+		),
 	} {
 		t.Run("invalid/"+name, func(t *testing.T) {
 			if _, err := NewDirectoryAdmissionWithSecret(secret, scope, invalid); !errors.Is(err, ErrInvalidDirectoryAdmission) {

@@ -191,8 +191,13 @@ func (directory *linuxOutputDirectory) identityClaim() ([]byte, error) {
 
 func (directory *linuxOutputDirectory) directoryIdentityClaim(prepare bool) ([]byte, error) {
 	const operation = "claim output directory identity"
-	if err := directory.validateExclusiveChildMutationAuthority(); err != nil {
+	if err := directory.verifyHandle(); err != nil {
 		return nil, errors.Join(outputfault.ErrAncestryAuthorityDenied, err)
+	}
+	if directory.requireExactPermissions {
+		if err := directory.validatePrivateAuthority(operation); err != nil {
+			return nil, errors.Join(outputfault.ErrAncestryAuthorityDenied, err)
+		}
 	}
 	identity, err := linuxVerifyOpenObject(directory.system, directory.fd, directory.certificate)
 	if err != nil {
@@ -221,20 +226,7 @@ func (directory *linuxOutputDirectory) directoryIdentityClaim(prepare bool) ([]b
 		!restartIdentity.sameDirectory(directory.certificate.rootRestartIdentity) {
 		return nil, linuxUnsafe(operation, "certified output-root restart identity changed", nil)
 	}
-	objectClaim, err := linuxEncodeDirectoryRestartIdentity(restartIdentity)
-	if err != nil {
-		return nil, err
-	}
-	if directory.absolutePath == "" {
-		return objectClaim, nil
-	}
-	placementClaim, err := linuxCertifyAbsoluteOutputPlacement(
-		directory.absolutePath, directory.system, directory.certificate,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return linuxEncodeAnchoredDirectoryClaim(placementClaim, objectClaim)
+	return linuxEncodeDirectoryRestartIdentity(restartIdentity)
 }
 
 func linuxOutputEntryKind(mode uint16) outputcap.EntryKind {

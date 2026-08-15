@@ -42,7 +42,19 @@ func windowsV3LinkRenameBuffer(flags uint32, root windows.Handle, name string) (
 }
 
 func (directory *windowsV3Directory) RemoveRegularLink(relative string, expected *windowsV3File) error {
-	current, err := directory.openFileForDelete(relative)
+	return directory.removeRegularLink(relative, expected, directory.private)
+}
+
+func (directory *windowsV3Directory) RemoveOrdinaryProfileLink(relative string, expected *windowsV3File) error {
+	return directory.removeRegularLink(relative, expected, false)
+}
+
+func (directory *windowsV3Directory) removeRegularLink(
+	relative string,
+	expected *windowsV3File,
+	private bool,
+) error {
+	current, err := directory.openFileForDelete(relative, private)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -247,9 +259,17 @@ func windowsV3DirectoryAccess() uint32 {
 		windows.FILE_WRITE_ATTRIBUTES | windows.READ_CONTROL | windows.DELETE | windows.SYNCHRONIZE
 }
 
+func windowsV3PublicDirectoryAccess() uint32 {
+	// Public containers keep their ordinary inherited ACL. Admission asks only
+	// for the rights used by public traversal and no-replace publication, so
+	// unrelated metadata or delete policy cannot disable safe output.
+	return windows.FILE_LIST_DIRECTORY | windows.FILE_TRAVERSE | windowsV3DirectoryAddFile |
+		windowsV3DirectoryAddSubdirectory | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
+}
+
 func windowsV3OpenedDirectoryAccess(placementGuard bool) uint32 {
 	if placementGuard {
-		return windowsV3RootDirectoryAccess()
+		return windowsV3PublicDirectoryAccess()
 	}
 	return windowsV3DirectoryAccess()
 }
@@ -263,10 +283,13 @@ func windowsV3DirectoryShareMode(placementGuard bool) uint32 {
 }
 
 func windowsV3RootDirectoryAccess() uint32 {
-	// DELETE is needed on child handles that are renamed or retired, but asking
-	// for it on the output root makes unrelated Win32 directory readers share
-	// deletion unnecessarily. FILE_DELETE_CHILD is the authority needed to
-	// mutate entries beneath the pinned root.
+	return windowsV3PublicDirectoryAccess()
+}
+
+func windowsV3PrivatePublicationRootAccess() uint32 {
+	// The retained root must mutate children but never itself. Omitting DELETE
+	// avoids rejecting ordinary readers that request delete sharing while the
+	// no-delete-share handle still pins this exact private placement.
 	return windowsV3DirectoryAccess() &^ windows.DELETE
 }
 
@@ -274,8 +297,7 @@ func windowsV3PrivateRootParentAccess() uint32 {
 	// The child starts delete-on-close and carries its own DELETE authority, so
 	// rollback never needs ambient FILE_DELETE_CHILD. Excluding FILE_ADD_FILE as
 	// well keeps this capability unable to create any non-directory entry.
-	return windowsV3RootDirectoryAccess() &^
-		(windowsV3DirectoryDeleteChild | windowsV3DirectoryAddFile)
+	return windowsV3PublicDirectoryAccess() &^ windowsV3DirectoryAddFile
 }
 
 func windowsV3PrivateFileAccess() uint32 {

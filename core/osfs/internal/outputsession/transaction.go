@@ -48,7 +48,11 @@ func (transaction *guardedTransaction) WriteRange(
 		return err
 	}
 	defer lease.release()
-	entry, operation, _, event, err := transaction.reserve(operationID, actionWrite, 0)
+	writeArgument := uint8(0)
+	if len(data) != 0 {
+		writeArgument = 1
+	}
+	entry, operation, _, event, err := transaction.reserve(operationID, actionWrite, writeArgument)
 	if err != nil {
 		transaction.session.emit(event)
 		return err
@@ -231,7 +235,12 @@ func (transaction *guardedTransaction) finishNonterminal(
 	}
 	operation.err = executeErr
 	close(operation.done)
-	event := session.traceLocked(operationID, operationKindForAction(operation.action), decision, entry.claim.id,
+	traceOperation := operationKindForAction(operation.action)
+	if executeErr == nil && operation.action == actionWrite && operation.argument != 0 && !entry.firstWrite {
+		entry.firstWrite = true
+		traceOperation = OperationFirstWrite
+	}
+	event := session.traceLocked(operationID, traceOperation, decision, entry.claim.id,
 		ClaimFile, ClaimActive, ClaimActive, value)
 	session.mu.Unlock()
 	session.emit(event)
@@ -323,11 +332,12 @@ func (transaction *guardedTransaction) finishTerminal(
 		session.mu.Unlock()
 		return transfer.FileSettlement{}, err
 	}
-	if fileSettlementNeedsAttention(settlement) {
-		session.attention = true
-	}
 	close(operation.done)
-	event := session.traceLocked(operationID, operationKindForAction(operation.action), TraceSettled,
+	decision := TraceSettled
+	if operation.action == actionCommit && settlement.Kind() == transfer.FileCollision {
+		decision = TraceCollision
+	}
+	event := session.traceLocked(operationID, operationKindForAction(operation.action), decision,
 		entry.claim.id, ClaimFile, ClaimActive, ClaimSettled, fault.Fault{})
 	session.mu.Unlock()
 	session.emit(event)
@@ -345,12 +355,13 @@ func validTerminalSettlement(
 	}
 	switch action {
 	case actionCommit:
-		return settlement.Kind() == transfer.FilePublished || settlement.Kind() == transfer.FilePublishBlocked ||
-			settlement.Kind() == transfer.FileQuarantined
+		return settlement.Kind() == transfer.FilePublished || settlement.Kind() == transfer.FileCollision ||
+			settlement.Kind() == transfer.FileItemBlocked
 	case actionPause:
-		return settlement.Kind() == transfer.FilePaused || settlement.Kind() == transfer.FileQuarantined
+		return settlement.Kind() == transfer.FilePaused || settlement.Kind() == transfer.FileItemBlocked ||
+			settlement.Kind() == transfer.FileFailed
 	case actionRetire:
-		return settlement.Kind() == transfer.FileRetired || settlement.Kind() == transfer.FileQuarantined
+		return settlement.Kind() == transfer.FileFailed || settlement.Kind() == transfer.FileItemBlocked
 	default:
 		return false
 	}

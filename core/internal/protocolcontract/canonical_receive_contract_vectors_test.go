@@ -16,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -515,8 +516,9 @@ func buildDirectoryAdmissionVectorCases(
 	}
 	secret := contractSequence(0xc0, 32)
 	rootGeneration := mustGeneration(t, contractSequence(0x50, catalog.IdentityBytes))
-	rootDirectory := transfer.MaterializationDirectory{
+	rootDirectory := transfer.AuthenticatedSourceDirectory{
 		DirectoryID: fixture.intent.SyntheticRoot(), Generation: rootGeneration,
+		SourcePath: ordinaryoutput.EmptySourceCatalogPath(),
 	}
 	rootAdmission, err := transfer.NewDirectoryAdmissionWithSecret(secret, scope, rootDirectory)
 	if err != nil {
@@ -531,10 +533,14 @@ func buildDirectoryAdmissionVectorCases(
 	if err != nil {
 		t.Fatal(err)
 	}
-	childDirectory := transfer.MaterializationDirectory{
+	childPath, err := ordinaryoutput.NewSourceCatalogPath("photos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	childDirectory := transfer.AuthenticatedSourceDirectory{
 		DirectoryID:     mustDirectory(t, contractSequence(0x30, catalog.IdentityBytes)),
 		Generation:      mustGeneration(t, contractSequence(0x60, catalog.IdentityBytes)),
-		ParentAdmission: rootAdmission, Path: "photos", ModifiedTime: modified,
+		ParentAdmission: rootAdmission, SourcePath: childPath, ModifiedTime: modified,
 	}
 	childAdmission, err := transfer.NewDirectoryAdmissionWithSecret(secret, scope, childDirectory)
 	if err != nil {
@@ -568,7 +574,7 @@ func directoryAdmissionVectorCase(
 	settlement transfer.DirectorySettlement,
 	secret []byte,
 	scope transfer.DirectoryAdmissionScope,
-	directory transfer.MaterializationDirectory,
+	directory transfer.AuthenticatedSourceDirectory,
 ) map[string]any {
 	t.Helper()
 	message, err := transfer.CanonicalDirectoryAdmissionMessageV2(scope, directory)
@@ -586,7 +592,7 @@ func directoryAdmissionVectorCase(
 		"directory": map[string]any{
 			"directoryId":  b64URL(directory.DirectoryID.Bytes()),
 			"generation":   b64URL(directory.Generation.Bytes()),
-			"path":         canonicalPathSegments(directory.Path),
+			"path":         canonicalPathSegments(directory.SourcePath.String()),
 			"modifiedTime": modifiedTimeVectorInput(directory.ModifiedTime),
 		},
 		"messageB64Url": b64URL(message), "token": b64URL(admission.Bytes()),

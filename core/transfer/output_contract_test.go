@@ -29,7 +29,7 @@ func TestFileStartAndSettlementPayloadsAreChecked(t *testing.T) {
 	if _, err := NewCollisionFileSettlement(FileMaterializationTarget{}); !errors.Is(err, ErrInvalidOutputSettlement) {
 		t.Fatalf("unbound collision error=%v", err)
 	}
-	if _, err := NewRetiredFileSettlement(MaterializedFileBinding{}); !errors.Is(err, ErrInvalidOutputSettlement) {
+	if _, err := NewFailedFileSettlement(MaterializedFileBinding{}); !errors.Is(err, ErrInvalidOutputSettlement) {
 		t.Fatalf("unbound retirement error=%v", err)
 	}
 	partialRanges, _ := content.NewRangeSet([]content.Range{{Offset: 0, End: 1}})
@@ -52,10 +52,10 @@ func TestFileStartAndSettlementPayloadsAreChecked(t *testing.T) {
 	if settlement, ok := start.ImmediateSettlement(); err != nil || !ok || settlement.Kind() != FileCollision {
 		t.Fatalf("collision start=(%+v,%v) err=%v", settlement, ok, err)
 	}
-	retired, _ := NewRetiredFileSettlement(binding)
+	retired, _ := NewFailedFileSettlement(binding)
 	retiredStart, err := NewFileSettlementStart(retired)
 	retiredSettlement, retiredImmediate := retiredStart.ImmediateSettlement()
-	if err != nil || !retiredImmediate || retiredSettlement.Kind() != FileRetired {
+	if err != nil || !retiredImmediate || retiredSettlement.Kind() != FileFailed {
 		t.Fatalf("retired immediate start=(%+v,%v) error=%v", retiredSettlement, retiredImmediate, err)
 	}
 	if transaction, _, ok := retiredStart.Transaction(); ok || transaction != nil {
@@ -71,17 +71,17 @@ func TestFileStartAndSettlementPayloadsAreChecked(t *testing.T) {
 		t.Fatal("retirement settlement matched a different owned object")
 	}
 	reference, _ := NewMaterializationStateRef(session, locator.Digest())
-	quarantined, err := NewImmediateQuarantinedFileSettlement(
-		binding.Target(), reference, QuarantineOwnershipMismatch,
+	quarantined, err := NewImmediateItemBlockedFileSettlement(
+		binding.Target(), reference, ItemBlockOwnershipUnknown,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotRef, reason, ok := quarantined.Quarantine(); !ok || gotRef != reference || reason != QuarantineOwnershipMismatch {
+	if gotRef, reason, ok := quarantined.ItemBlock(); !ok || gotRef != reference || reason != ItemBlockOwnershipUnknown {
 		t.Fatalf("quarantine payload=(%+v,%v,%v)", gotRef, reason, ok)
 	}
-	transactionQuarantine, err := NewTransactionQuarantinedFileSettlement(
-		binding, reference, QuarantineOwnershipMismatch,
+	transactionQuarantine, err := NewTransactionItemBlockedFileSettlement(
+		binding, reference, ItemBlockOwnershipUnknown,
 	)
 	if err != nil || transactionQuarantine.matchesBinding(otherBinding) {
 		t.Fatalf("transaction quarantine accepted foreign binding: err=%v", err)
@@ -109,7 +109,7 @@ func TestTransferJobOpensOutputBeforeRevisionAndAdmitsGeneration(t *testing.T) {
 		}
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePublished || result.ReceiveIntentDigest.IsZero() || result.ReceiveIntent.IsZero() || result.SucceededFiles != 1 {
+	if result.Outcome != DirectTreeOutcomeSuccess || result.ReceiveIntentDigest.IsZero() || result.ReceiveIntent.IsZero() || result.SucceededFiles != 1 {
 		t.Fatalf("result=%+v", result)
 	}
 
@@ -120,7 +120,7 @@ func TestTransferJobOpensOutputBeforeRevisionAndAdmitsGeneration(t *testing.T) {
 	job, _ = branchJob(t, output, revisions, scriptedRangeReader{})
 	result = job.Run(context.Background())
 	expectedUnsupported, _ := fault.NewOutput(fault.ScopeOutputPause, fault.OutputUnsupportedFilesystem)
-	if result.Outcome != DirectTreeOutcomeResumable || result.TerminationFault != expectedUnsupported ||
+	if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != expectedUnsupported ||
 		len(revisions.order) != 0 || len(output.transactions) != 0 || output.pauseCalls != 0 || output.completeCalls != 0 {
 		t.Fatalf("failed admission leaked revision/content work: result=%+v revisions=%v", result, revisions.order)
 	}
@@ -132,8 +132,8 @@ func TestTransferJobOpensOutputBeforeRevisionAndAdmitsGeneration(t *testing.T) {
 	job, _ = branchJob(t, output, revisions, scriptedRangeReader{})
 	result = job.Run(context.Background())
 	expectedStateIO, _ := fault.NewOutput(fault.ScopeOutputPause, fault.OutputStateIO)
-	if result.Outcome != DirectTreeOutcomeResumable || result.TerminationFault != expectedStateIO ||
-		result.Settlement.Kind() != DirectTreeSettlementResumable || output.pauseCalls != 1 ||
+	if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != expectedStateIO ||
+		result.Settlement.Kind() != DirectTreeSettlementPaused || output.pauseCalls != 1 ||
 		output.completeCalls != 0 || len(revisions.order) != 0 {
 		t.Fatalf("bound partial admission was not paused: result=%+v pause=%d", result, output.pauseCalls)
 	}
@@ -183,7 +183,7 @@ func TestTransferJobAdmitsGenerationsIncrementallyBeforeContent(t *testing.T) {
 			}
 		}
 		result := newJob(output, revisions, scriptedRangeReader{}).Run(context.Background())
-		if result.Outcome != DirectTreeOutcomePublished || !slices.Equal(output.directories, []string{"", "folder", "other"}) ||
+		if result.Outcome != DirectTreeOutcomeSuccess || !slices.Equal(output.directories, []string{"", "folder", "other"}) ||
 			!slices.Equal(output.finalized, []string{"folder", "other", ""}) ||
 			!slices.Contains(output.events, "begin:folder/file.bin") || output.completeCalls != 1 {
 			t.Fatalf("result=%+v events=%v", result, output.events)
@@ -200,7 +200,7 @@ func TestTransferJobAdmitsGenerationsIncrementallyBeforeContent(t *testing.T) {
 		}
 		blocks := &countingRangeReader{}
 		result := newJob(output, revisions, blocks).Run(context.Background())
-		if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil || len(result.Directories) != 1 ||
+		if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil || len(result.Directories) != 1 ||
 			result.Directories[0].Stage != FailureDirectoryOutput ||
 			len(revisions.order) != 0 || blocks.calls != 0 || output.pauseCalls != 0 || output.completeCalls != 1 ||
 			!slices.Equal(output.directories, []string{"", "other"}) ||
@@ -285,8 +285,8 @@ func TestTransferJobRejectsForeignOrMissingImmediateSettlementAuthority(t *testi
 				if err != nil {
 					t.Fatal(err)
 				}
-				settlement, err := NewImmediateQuarantinedFileSettlement(
-					target, reference, QuarantineOwnershipMismatch,
+				settlement, err := NewImmediateItemBlockedFileSettlement(
+					target, reference, ItemBlockOwnershipUnknown,
 				)
 				if err != nil {
 					t.Fatal(err)
@@ -313,7 +313,7 @@ func TestTransferJobRejectsForeignOrMissingImmediateSettlementAuthority(t *testi
 
 			result := job.Run(context.Background())
 			expected := mustOutputFault(fault.ScopeOutputPause, fault.OutputContract)
-			if result.Outcome != DirectTreeOutcomeResumable || result.SucceededFiles != 0 || blocks.calls != 0 ||
+			if result.Outcome != DirectTreeOutcomePaused || result.SucceededFiles != 0 || blocks.calls != 0 ||
 				len(result.Files) != 1 || result.SettlementFault != expected ||
 				output.pauseCalls != 1 || output.completeCalls != 0 {
 				t.Fatalf("result=%+v blocks=%d pause=%d complete=%d", result, blocks.calls, output.pauseCalls, output.completeCalls)
@@ -376,8 +376,8 @@ func TestTransferJobIsolatesImmediateCollisionAndQuarantine(t *testing.T) {
 				locator, _ := NewPathMaterializationLocator(path)
 				target, _ := NewFileMaterializationTarget(output.SessionID(), descriptor, locator)
 				reference, _ := NewMaterializationStateRef(output.session, locator.Digest())
-				settlement, _ := NewImmediateQuarantinedFileSettlement(
-					target, reference, QuarantineOwnershipMismatch,
+				settlement, _ := NewImmediateItemBlockedFileSettlement(
+					target, reference, ItemBlockOwnershipUnknown,
 				)
 				return settlement
 			},
@@ -406,7 +406,7 @@ func TestTransferJobIsolatesImmediateCollisionAndQuarantine(t *testing.T) {
 			output.immediate[blockedPath] = test.settlement(
 				output, blockedPath, revisions.opened[blockedFile].Descriptor,
 			)
-			output.completeSettlement = DirectTreeSettlementNeedsAttention
+			output.completeSettlement = DirectTreeSettlementFailed
 			rules, _ := NewSelectionRules(true, nil)
 			job, err := newTestTransferJob(t, testTransferJobConfig{
 				ShareInstance: share, SyntheticRoot: root, Rules: rules,
@@ -420,7 +420,7 @@ func TestTransferJobIsolatesImmediateCollisionAndQuarantine(t *testing.T) {
 				t.Fatal(err)
 			}
 			result := job.Run(context.Background())
-			if result.Outcome != DirectTreeOutcomeNeedsAttention || result.Settlement.Kind() != DirectTreeSettlementNeedsAttention ||
+			if result.Outcome != DirectTreeOutcomeFailed || result.Settlement.Kind() != DirectTreeSettlementFailed ||
 				result.SucceededFiles != 1 || len(result.Files) != 1 || !errors.Is(result.Files[0].Cause, test.cause) {
 				t.Fatalf("result=%+v", result)
 			}
@@ -434,7 +434,7 @@ func TestTransferJobIsolatesImmediateCollisionAndQuarantine(t *testing.T) {
 	}
 }
 
-func TestTransferJobRejectsClosedSessionWithQuarantinedState(t *testing.T) {
+func TestTransferJobKeepsItemBlockedOperationActive(t *testing.T) {
 	share := transferID[catalog.ShareInstance](59)
 	output := newJobOutput(share)
 	revisions := &jobRevisionClient{}
@@ -443,15 +443,15 @@ func TestTransferJobRejectsClosedSessionWithQuarantinedState(t *testing.T) {
 	locator, _ := NewPathMaterializationLocator("file.bin")
 	target, _ := NewFileMaterializationTarget(output.SessionID(), descriptor, locator)
 	reference, _ := NewMaterializationStateRef(output.SessionID(), locator.Digest())
-	quarantined, _ := NewImmediateQuarantinedFileSettlement(
-		target, reference, QuarantineOwnershipMismatch,
+	quarantined, _ := NewImmediateItemBlockedFileSettlement(
+		target, reference, ItemBlockOwnershipUnknown,
 	)
 	output.immediate["file.bin"] = quarantined
 
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeResumable || len(result.Files) != 1 ||
+	if result.Outcome != DirectTreeOutcomePartial || len(result.Files) != 1 ||
 		!errors.Is(result.Files[0].Cause, ErrOutputQuarantined) ||
-		result.SettlementFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
+		result.SettlementFailure != nil ||
 		output.completeCalls != 1 || output.pauseCalls != 0 {
 		t.Fatalf("result=%+v", result)
 	}
@@ -479,7 +479,7 @@ func TestTransferDirectTreeSettlementContextAndFailuresRemainIndependent(t *test
 	result := job.Run(context.Background())
 	sessionFault := mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol)
 	settlementFault, _ := fault.NewOutput(fault.ScopeFileLocal, fault.OutputStateIO)
-	if !settlementObserved || result.Outcome != DirectTreeOutcomeResumable ||
+	if !settlementObserved || result.Outcome != DirectTreeOutcomePaused ||
 		result.TerminationFault != sessionFault || result.SettlementFault != settlementFault ||
 		len(result.Files) != 1 || result.Files[0].SettlementFault != settlementFault {
 		t.Fatalf("result=%+v observed=%v", result, settlementObserved)
@@ -498,7 +498,7 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		result := job.Run(context.Background())
 		transaction := output.transactions["file.bin"]
 		expected, _ := fault.NewOutput(fault.ScopeFileLocal, fault.OutputStateIO)
-		if result.Outcome != DirectTreeOutcomeResumable || result.TerminationFault != expected ||
+		if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != expected ||
 			result.SettlementFault != expected || transaction == nil ||
 			transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
 			len(transaction.retireReasons) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
@@ -519,7 +519,7 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 
 		result := job.Run(context.Background())
 		transaction := output.transactions["file.bin"]
-		if result.Outcome != DirectTreeOutcomeResumable || result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
+		if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
 			result.SettlementFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) || transaction == nil ||
 			transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
 			len(transaction.retireReasons) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
@@ -536,7 +536,7 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		result := job.Run(context.Background())
 		transaction := output.transactions["file.bin"]
 		expected, _ := fault.NewOutput(fault.ScopeOutputPause, fault.OutputStateIO)
-		if result.Outcome != DirectTreeOutcomeResumable || result.TerminationCause != nil ||
+		if result.Outcome != DirectTreeOutcomePaused || result.TerminationCause != nil ||
 			result.SettlementFault != expected || transaction == nil ||
 			transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
 			output.completeCalls != 1 || output.pauseCalls != 0 {
@@ -555,7 +555,7 @@ func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
 		traces = append(traces, event)
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePublished {
+	if result.Outcome != DirectTreeOutcomeSuccess {
 		t.Fatalf("result=%+v", result)
 	}
 	wantStages := []TransferLifecycleStage{
@@ -604,7 +604,7 @@ func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
 	if fileSettlement.FileSettlement != FilePublished ||
 		discovery.Discovery != DiscoveryComplete || discovery.ConnectionSizeClass != ConnectionSizeSmall ||
 		discovery.DiscoveredFileCount != 1 || settled.CompletedFileCount != 1 ||
-		settled.DirectTreeSettlement != DirectTreeSettlementPublished {
+		settled.DirectTreeSettlement != DirectTreeSettlementSuccess {
 		t.Fatalf("typed lifecycle context=%+v", traces)
 	}
 	for _, stage := range []TransferLifecycleStage{
@@ -665,7 +665,7 @@ func TestTransferLifecycleFirstWriteRequiresNewDurableContent(t *testing.T) {
 			job.tracer = TransferLifecycleTraceFunc(func(event TransferLifecycleTrace) {
 				stages = append(stages, event.Stage)
 			})
-			if result := job.Run(context.Background()); result.Outcome != DirectTreeOutcomePublished {
+			if result := job.Run(context.Background()); result.Outcome != DirectTreeOutcomeSuccess {
 				t.Fatalf("result=%+v", result)
 			}
 			if !slices.Contains(stages, TransferFileAdmitted) || slices.Contains(stages, TransferFileFirstWrite) {

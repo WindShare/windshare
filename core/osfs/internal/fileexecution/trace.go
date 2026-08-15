@@ -20,7 +20,7 @@ const (
 	TracePublish
 	TracePause
 	TraceRetire
-	TraceQuarantine
+	TraceItemBlocked
 )
 
 type TraceOutcome uint8
@@ -96,8 +96,7 @@ func traceOutcomeForError(err error) TraceOutcome {
 	if err == nil {
 		return TraceSucceeded
 	}
-	if errors.Is(err, ErrTargetOwnershipUnknown) || errors.Is(err, ErrPublicationAmbiguous) ||
-		errors.Is(err, ErrRetirementAmbiguous) {
+	if errors.Is(err, ErrTargetOwnershipUnknown) {
 		return TraceNeedsAttention
 	}
 	return TraceNoChange
@@ -107,8 +106,22 @@ func traceOutcomeForSettlement(settlement transfer.FileSettlement, err error) Tr
 	if err != nil {
 		return traceOutcomeForError(err)
 	}
-	if settlement.Kind() == transfer.FileCollision || settlement.Kind() == transfer.FilePublishBlocked {
+	if settlement.Kind() == transfer.FileCollision {
 		return TraceCollision
 	}
+	if settlement.Kind() == transfer.FileItemBlocked {
+		return TraceReconciled
+	}
 	return TraceSucceeded
+}
+
+func traceOperationForSettlement(
+	operation TraceOperation,
+	settlement transfer.FileSettlement,
+	err error,
+) TraceOperation {
+	if err == nil && settlement.Kind() == transfer.FileItemBlocked {
+		return TraceItemBlocked
+	}
+	return operation
 }

@@ -3,6 +3,7 @@ package transfer
 import (
 	"testing"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/fault"
 )
 
@@ -13,7 +14,7 @@ func TestDirectorySettlementIsAnExactImmutableSum(t *testing.T) {
 	admission, err := NewDirectoryAdmissionWithSecret(
 		admissionTestSequence(0xa0, directoryAdmissionSecretBytes),
 		scope,
-		MaterializationDirectory{DirectoryID: root, Generation: admissionTestGeneration(t, 0x56)},
+		admissionTestDirectory(t, root, admissionTestGeneration(t, 0x56), DirectoryAdmission{}, "", catalog.ModifiedTime{}),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +56,7 @@ func TestDirectorySettlementRejectsNonTerminalOrWiderFaults(t *testing.T) {
 	admission, err := NewDirectoryAdmissionWithSecret(
 		admissionTestSequence(0xb0, directoryAdmissionSecretBytes),
 		scope,
-		MaterializationDirectory{DirectoryID: root, Generation: admissionTestGeneration(t, 0x57)},
+		admissionTestDirectory(t, root, admissionTestGeneration(t, 0x57), DirectoryAdmission{}, "", catalog.ModifiedTime{}),
 	)
 	if err != nil {
 		t.Fatal(err)

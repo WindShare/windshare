@@ -135,6 +135,12 @@ func projectRuntimeOperation(
 		return FilesystemOutputRuntimePublishFile
 	case outputruntime.FilesystemOutputRuntimeQuarantineFile:
 		return FilesystemOutputRuntimeQuarantineFile
+	case outputruntime.FilesystemOutputRuntimeAdmitDestination:
+		return FilesystemOutputRuntimeAdmitDestination
+	case outputruntime.FilesystemOutputRuntimeFirstWrite:
+		return FilesystemOutputRuntimeFirstWrite
+	case outputruntime.FilesystemOutputRuntimeCleanup:
+		return FilesystemOutputRuntimeCleanup
 	default:
 		return 0
 	}
@@ -180,6 +186,8 @@ func projectRuntimeDecision(
 		return FilesystemOutputRuntimeNeedsAttention
 	case outputruntime.FilesystemOutputRuntimeIsolatedFailure:
 		return FilesystemOutputRuntimeIsolatedFailure
+	case outputruntime.FilesystemOutputRuntimeCleanupPending:
+		return FilesystemOutputRuntimeCleanupPending
 	default:
 		return 0
 	}

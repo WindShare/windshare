@@ -179,6 +179,11 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := output.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if _, statErr := os.Stat(outputRoot); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("output authority created its root before terminal selection: %v", statErr)
 	}
@@ -212,13 +217,14 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != transfer.DirectTreeOutcomePublished ||
-		result.Settlement.Kind() != transfer.DirectTreeSettlementPublished ||
+	if result.Outcome != transfer.DirectTreeOutcomeSuccess ||
+		result.Settlement.Kind() != transfer.DirectTreeSettlementSuccess ||
 		result.SucceededFiles != 1 || result.TerminationCause != nil ||
 		result.TransferJobID != jobID || result.ReceiveIntentDigest != intent.Digest() || result.ReceiveIntent.IsZero() {
 		t.Fatalf("job result = %+v", result)
 	}
-	written, err := os.ReadFile(filepath.Join(outputRoot, "tree", "nested", "file.bin"))
+	destination, _ := intent.MaterializationPlan().DestinationReservation()
+	written, err := os.ReadFile(filepath.Join(outputRoot, destination.ReservedName(), "tree", "nested", "file.bin"))
 	if err != nil || !bytes.Equal(written, payload) {
 		t.Fatalf("output bytes = %d, %v", len(written), err)
 	}

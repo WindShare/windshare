@@ -729,10 +729,7 @@ func linuxIdentityCoverageDirectory(
 			stat.Fsid.Val = mount.runtimeFilesystemID
 			return nil
 		},
-		getFlags: func(int) (uint32, error) { return 0, nil },
-		fgetxattr: func(int, string, []byte) (int, error) {
-			return 0, unix.ENODATA
-		},
+		getFlags:        func(int) (uint32, error) { return 0, nil },
 		geteuid:         func() int { return int(receiverUID) },
 		restartIdentity: provider,
 	}

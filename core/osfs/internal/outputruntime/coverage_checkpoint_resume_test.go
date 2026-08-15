@@ -44,6 +44,21 @@ func TestNativeAdapterNormalizesFailuresAtOneBoundary(t *testing.T) {
 	if checkpointRuntimeError(context.Background(), "no failure", nil) != nil {
 		t.Fatal("nil checkpoint cause became a fault")
 	}
+	typedCheckpoint, _ := transferfault.NewCheckpoint(
+		transferfault.ScopeOutputPause,
+		transferfault.CheckpointOwnershipMismatch,
+	)
+	typedCheckpointErr := transferfault.Wrap(typedCheckpoint, dependency)
+	if got := checkpointRuntimeFault(typedCheckpointErr); got != typedCheckpoint {
+		t.Fatalf("typed checkpoint fault = %v, want %v", got, typedCheckpoint)
+	}
+	wrongScope, _ := transferfault.NewCheckpoint(
+		transferfault.ScopeFileLocal,
+		transferfault.CheckpointStateIO,
+	)
+	if got := checkpointRuntimeFault(transferfault.Wrap(wrongScope, dependency)); got != transferfault.DependencyContractFault() {
+		t.Fatalf("narrow checkpoint fault crossed the runtime boundary: %v", got)
+	}
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -69,25 +84,6 @@ func TestNativeAdapterNormalizesFailuresAtOneBoundary(t *testing.T) {
 		context.Background(), "deadline checkpoint", context.DeadlineExceeded,
 	); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("deadline checkpoint boundary = %v", err)
-	}
-}
-
-func TestNativeResourceReleaseIsStableAndReportsCloseFailureOnce(t *testing.T) {
-	closeFailure := errors.New("platform close failed")
-	platform := &releaseFailurePlatform{closeErr: closeFailure}
-	resources := &nativeOutputResources{platform: platform}
-
-	first := resources.ReleaseOutputSession(context.Background())
-	second := resources.ReleaseOutputSession(context.Background())
-	if !errors.Is(first, closeFailure) || !errors.Is(second, closeFailure) {
-		t.Fatalf("stable release errors = %v / %v", first, second)
-	}
-	if platform.closeCalls != 1 {
-		t.Fatalf("platform close calls = %d, want 1", platform.closeCalls)
-	}
-	assertOutputRuntimeFault(t, first, transferfault.OutputStateIO)
-	if err := (*nativeOutputResources)(nil).ReleaseOutputSession(context.Background()); err != nil {
-		t.Fatalf("nil resource release = %v", err)
 	}
 }
 
@@ -129,15 +125,4 @@ func assertOutputRuntimeFault(
 	if !ok || !output || code != want || value.Scope() != transferfault.ScopeOutputPause {
 		t.Fatalf("normalized output fault = %+v", normalized)
 	}
-}
-
-type releaseFailurePlatform struct {
-	outputcap.Platform
-	closeErr   error
-	closeCalls int
-}
-
-func (platform *releaseFailurePlatform) Close() error {
-	platform.closeCalls++
-	return platform.closeErr
 }

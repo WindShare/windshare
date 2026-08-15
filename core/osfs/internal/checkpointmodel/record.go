@@ -413,17 +413,18 @@ func validQuarantineHistory(origin QuarantineOrigin, reason QuarantineReason) bo
 	switch reason {
 	case QuarantineAnchorMissing:
 		return origin == QuarantineOriginWitnessed || origin == QuarantineOriginPublishing ||
-			origin == QuarantineOriginPublishBlocked || origin == QuarantineOriginPublished
+			origin == QuarantineOriginPublishBlocked || origin == QuarantineOriginPublished ||
+			origin == QuarantineOriginRetiring
 	case QuarantineAnchorUnsafe, QuarantineStageUnsafe, QuarantineUpdateTemporary,
 		QuarantineOutputObjectDuplicate, QuarantineStageMismatch:
 		return origin.Valid()
 	case QuarantineStageMissing:
 		return origin == QuarantineOriginWitnessed || origin == QuarantineOriginPublishing ||
-			origin == QuarantineOriginPublishBlocked
+			origin == QuarantineOriginPublishBlocked || origin == QuarantineOriginRetiring
 	case QuarantineFinalMismatch:
-		return origin == QuarantineOriginPublished
+		return origin == QuarantineOriginPublished || origin == QuarantineOriginRetiring
 	case QuarantineFinalUnsafe:
-		return origin >= QuarantineOriginReserved && origin <= QuarantineOriginPublished
+		return origin >= QuarantineOriginReserved && origin <= QuarantineOriginRetiring
 	case QuarantinePartialObjectCreation:
 		return origin == QuarantineOriginReserved || origin == QuarantineOriginRetiring
 	case QuarantinePublicationHistory:

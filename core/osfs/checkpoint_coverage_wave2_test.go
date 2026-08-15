@@ -47,12 +47,15 @@ func TestFileCheckpointV2PublicBoundaryRoundTripsStableAuthority(t *testing.T) {
 		checkpoint.FileID() != spec.FileID || checkpoint.FileRevision() != spec.FileRevision ||
 		checkpoint.CanonicalPath() != spec.CanonicalPath || checkpoint.ExactSize() != spec.ExactSize ||
 		checkpoint.MaterializerKind() != spec.MaterializerKind ||
+		!bytes.Equal(checkpoint.AuthorityRef().Bytes(), spec.AuthorityRef) ||
 		checkpoint.OwnedObjectID().IsZero() || checkpoint.RecordID().IsZero() ||
-		checkpoint.Checksum().IsZero() || checkpoint.StateGeneration() != 2 ||
-		checkpoint.CheckpointGeneration() != 1 ||
+		checkpoint.Checksum().IsZero() || len(checkpoint.CanonicalBytes()) == 0 ||
+		checkpoint.StateGeneration() != 2 || checkpoint.CheckpointGeneration() != 1 ||
 		checkpoint.VerifiedRanges()[0] != spec.VerifiedRanges[0] ||
 		checkpoint.Phase() != FileCheckpointActive ||
-		checkpoint.CommitState() != FileCheckpointVerified {
+		checkpoint.CommitState() != FileCheckpointVerified ||
+		checkpoint.QuarantineReason() != 0 || checkpoint.QuarantineOrigin() != 0 ||
+		checkpoint.RetirementReason() != 0 {
 		t.Fatalf("checkpoint accessors lost v2 authority: %+v", checkpoint)
 	}
 	encoded, err := EncodeFileCheckpointV2(checkpoint)
@@ -93,7 +96,7 @@ func TestFileCheckpointOwnershipUsesMaterializerAndOpaqueAuthority(t *testing.T)
 		t.Fatal(err)
 	}
 	restored, err := DecodeFileCheckpointOwnership(encoded)
-	if err != nil || !restored.Valid() ||
+	if err != nil || !restored.Valid() || len(restored.CanonicalBytes()) == 0 ||
 		restored.MaterializerKind() != FileCheckpointMaterializerNativeTree ||
 		restored.Certification() != FileCheckpointCertificationWindowsNTFSProcessRestart ||
 		!bytes.Equal(restored.AuthorityRef().Bytes(), authority) ||

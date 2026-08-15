@@ -20,7 +20,6 @@ var (
 	ErrIncompleteFile         = errors.New("file publication requires complete verified ranges")
 	ErrTransactionClosed      = errors.New("file transaction is closed")
 	ErrRetirementUnauthorized = errors.New("file retirement reason is not authorized")
-	ErrPublicationAmbiguous   = errors.New("file publication did not reach a provable durable cut")
 	ErrRetirementAmbiguous    = errors.New("file retirement did not reach a provable ordered cut")
 	ErrTargetOwnershipUnknown = errors.New("file target ownership is unknown")
 )
@@ -43,6 +42,10 @@ func newCheckpointFault(scope fault.Scope, code fault.CheckpointCode, cause erro
 
 func fileContractError(cause error) error {
 	return newOutputFault(fault.ScopeFileLocal, fault.OutputContract, cause)
+}
+
+func fileStateError(cause error) error {
+	return newOutputFault(fault.ScopeFileLocal, fault.OutputStateIO, cause)
 }
 
 func bindingError(cause error) error {
@@ -73,11 +76,4 @@ func collaboratorError(ctx context.Context, cause error) error {
 
 func joinFailures(ctx context.Context, candidates ...error) error {
 	return fault.ReduceBoundaryErrors(ctx, candidates...)
-}
-
-func publicationAmbiguousError(cause error) error {
-	return newOutputFault(
-		fault.ScopeOutputPause, fault.OutputMutationAmbiguous,
-		errors.Join(ErrPublicationAmbiguous, cause),
-	)
 }

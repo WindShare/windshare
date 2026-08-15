@@ -1,399 +1,746 @@
 package outputruntime
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointstore"
+	"github.com/windshare/windshare/core/osfs/internal/fileexecution"
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
+	"github.com/windshare/windshare/core/osfs/internal/resumeauthority"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-func TestNativeResumeRepositoryListsAndReacquiresOneCertifiedOperation(t *testing.T) {
-	root := newRuntimeTestRootSpec(t).path
-	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
-	if err != nil {
-		t.Fatal(err)
-	}
-	initial, err := repository.List(context.Background())
-	if err != nil || len(initial) != 0 {
-		t.Fatalf("initial list = (%d, %v)", len(initial), err)
-	}
-	if _, err := os.Lstat(filepath.Join(root, checkpointstore.ControlDirectory)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("read-only list created control state: %v", err)
-	}
-
-	authority := newNativeReservationTestAuthority(t, root)
-	reserved, err := authority.ReserveDirectTree(
-		context.Background(), nativeReservationTestSelection(t, 0x81),
-		receivecontract.NewCatalogRootDirectoryTree(),
-	)
-	if err != nil || reserved.Kind() != NativeDirectTreeReserved {
-		t.Fatalf("reserve = (%d, %v)", reserved.Kind(), err)
-	}
-	intent, ok := reserved.ReceiveIntent()
-	if !ok {
-		t.Fatal("reservation exposed no receive intent")
-	}
-
-	snapshots, err := repository.List(context.Background())
-	if err != nil || len(snapshots) != 1 {
-		t.Fatalf("reserved list = (%d, %v)", len(snapshots), err)
-	}
-	operation, err := checkpointmodel.DecodeReceiveOperation(snapshots[0].OperationRecord)
-	if err != nil || operation.OperationID() != intent.OperationID() {
-		t.Fatalf("listed operation = (%v, %v)", operation.OperationID(), err)
-	}
-	lifecycle, err := checkpointmodel.DecodeReceiveLifecycleState(snapshots[0].LifecycleRecord)
-	if err != nil || lifecycle.Phase() != checkpointmodel.LifecycleIntentFrozen {
-		t.Fatalf("listed lifecycle = (%d, %v)", lifecycle.Phase(), err)
-	}
-
-	platform, namespace, held := holdNativeReservationOperation(t, root, intent)
-	if _, err := repository.List(context.Background()); !errors.Is(err, ErrNativeResumeBusy) {
-		t.Fatalf("busy list error = %v", err)
-	}
-	if _, err := repository.Acquire(context.Background(), intent.OperationID()); !errors.Is(err, ErrNativeResumeBusy) {
-		t.Fatalf("busy acquire error = %v", err)
-	}
-	if err := errors.Join(held.Close(), namespace.Close(), platform.Close()); err != nil {
-		t.Fatal(err)
-	}
-
-	lease, err := repository.Acquire(context.Background(), intent.OperationID())
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := lease.Snapshot(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	operation, err = checkpointmodel.DecodeReceiveOperation(snapshot.OperationRecord)
-	if err != nil || operation.OperationID() != intent.OperationID() {
-		t.Fatalf("leased operation = (%v, %v)", operation.OperationID(), err)
-	}
-	evidence, err := lease.ObserveRecovery(context.Background())
-	if err != nil || evidence.TargetOwnership != NativeResumeEvidenceProven ||
-		evidence.Checkpoints != NativeResumeEvidenceProven || evidence.Cleanup != NativeResumeCleanupPending ||
-		len(evidence.TerminalReceipt) != 0 || len(evidence.ExpiryReceipt) != 0 {
-		t.Fatalf("frozen evidence = (%+v, %v)", evidence, err)
-	}
-	if err := lease.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := lease.Close(); err != nil {
-		t.Fatalf("idempotent close = %v", err)
-	}
-	unknown := incrementalTestIdentity16[receivecontract.OperationID](0xfe)
-	if _, err := repository.Acquire(context.Background(), unknown); err == nil {
-		t.Fatal("unknown operation unexpectedly acquired a lease")
-	}
+type ordinaryResumeSessionFixture struct {
+	authority     *Authority
+	session       transfer.DirectTreeSession
+	intent        transfer.ReceiveIntent
+	transaction   transfer.FileTransaction
+	durable       transfer.VerifiedDurableRanges
+	settlement    transfer.FileSettlement
+	rootAdmission transfer.DirectoryAdmission
+	finalPath     string
 }
 
-func TestNativeResumeRepositoryCleansPausedObjectsAndOnlyEmptyOwnedDirectories(t *testing.T) {
-	root := newRuntimeTestRootSpec(t).path
-	intent := nativeTestIntent(t, root, 0x91, 0x92)
-	session := openNativeCompositionSession(t, root, false, intent, nil)
-	rootAdmission := admitNativeRoot(t, session, intent, 0x93, catalog.ModifiedTime{})
-	emptyAdmission := admitNativeResumeDirectory(t, session, rootAdmission, "empty", 0x94, 0x95)
-	keptAdmission := admitNativeResumeDirectory(t, session, rootAdmission, "kept", 0x96, 0x97)
-
-	zero := nativeCompositionDescriptor(t, intent, 0x98, 0x99, 0)
-	zeroStart, err := session.BeginFile(context.Background(), nativeCompositionFile(
-		t, session, zero, "kept/zero.bin", keptAdmission,
-	))
-	if err != nil {
-		t.Fatal(err)
-	}
-	zeroTransaction, durable, ok := zeroStart.Transaction()
-	if !ok || !durable.Ranges().IsEmpty() {
-		t.Fatalf("zero-byte start = (transaction=%T, ranges=%v)", zeroTransaction, durable.Ranges().Ranges())
-	}
-	if settlement, err := zeroTransaction.Commit(context.Background()); err != nil ||
-		settlement.Kind() != transfer.FilePublished {
-		t.Fatalf("zero-byte commit = (%d, %v)", settlement.Kind(), err)
-	}
-
-	paused := nativeCompositionDescriptor(t, intent, 0x9a, 0x9b, 4)
-	pausedStart, err := session.BeginFile(context.Background(), nativeCompositionFile(
-		t, session, paused, "empty/paused.bin", emptyAdmission,
-	))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pausedTransaction, _, ok := pausedStart.Transaction()
-	if !ok {
-		t.Fatal("paused file settled before receiving content")
-	}
-	if err := pausedTransaction.WriteRange(context.Background(), 0, []byte("data")); err != nil {
-		t.Fatal(err)
-	}
-	checkpoint, err := pausedTransaction.Checkpoint(context.Background())
-	if err != nil || len(checkpoint.Ranges().Ranges()) != 1 {
-		t.Fatalf("paused checkpoint = (%v, %v)", checkpoint.Ranges().Ranges(), err)
-	}
-	if settlement, err := pausedTransaction.Pause(
-		context.Background(), transfer.FilePauseInterrupted,
-	); err != nil || settlement.Kind() != transfer.FilePaused {
-		t.Fatalf("file pause = (%d, %v)", settlement.Kind(), err)
-	}
-	if settlement, err := session.PauseTree(
-		context.Background(), transfer.JobPauseInterrupted,
-	); err != nil || settlement.Kind() != transfer.DirectTreeSettlementResumable {
-		t.Fatalf("tree pause = (%d, %v)", settlement.Kind(), err)
-	}
-
-	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lease, err := repository.Acquire(context.Background(), intent.OperationID())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lease.Close()
-	snapshot, err := lease.Snapshot(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	lifecycle, err := checkpointmodel.DecodeReceiveLifecycleState(snapshot.LifecycleRecord)
-	if err != nil || lifecycle.Phase() != checkpointmodel.LifecycleResumableReceive ||
-		len(lifecycle.CheckpointReferences()) != 2 {
-		t.Fatalf("paused lifecycle = (phase=%d refs=%d err=%v)", lifecycle.Phase(), len(lifecycle.CheckpointReferences()), err)
-	}
-	evidence, err := lease.ObserveRecovery(context.Background())
-	if err != nil || evidence.TargetOwnership != NativeResumeEvidenceProven ||
-		evidence.Checkpoints != NativeResumeEvidenceProven || evidence.Cleanup != NativeResumeCleanupPending {
-		t.Fatalf("paused evidence = (%+v, %v)", evidence, err)
-	}
-	expiry, err := checkpointmodel.DecodeDirectTreeReceipt(evidence.ExpiryReceipt)
-	if err != nil || expiry.Kind() != checkpointmodel.ReceiptExpiry {
-		t.Fatalf("expiry receipt = (%d, %v)", expiry.Kind(), err)
-	}
-
-	cleanup, err := lease.CleanupOwned(context.Background())
-	if err != nil || cleanup.State != NativeResumeCleanupComplete {
-		t.Fatalf("cleanup = (%+v, %v)", cleanup, err)
-	}
-	receipt, err := checkpointmodel.DecodeDirectTreeReceipt(cleanup.Receipt)
-	if err != nil || receipt.Kind() != checkpointmodel.ReceiptCleanup || receipt.RemovedObjectCount() != 3 {
-		t.Fatalf("cleanup receipt = (kind=%d removed=%d err=%v)", receipt.Kind(), receipt.RemovedObjectCount(), err)
-	}
-	if _, err := os.Lstat(filepath.Join(root, "empty")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("empty owned directory survived cleanup: %v", err)
-	}
-	if info, err := os.Stat(filepath.Join(root, "kept", "zero.bin")); err != nil || info.Size() != 0 {
-		t.Fatalf("published zero-byte file = (%v, %v)", info, err)
-	}
-	if err := lease.InstallReceipt(context.Background(), cleanup.Receipt); err != nil {
-		t.Fatal(err)
-	}
-	next, err := checkpointmodel.NewReceiveLifecycleState(checkpointmodel.LifecycleStateSpec{
-		OperationID: intent.OperationID(), ReceiveIntent: intent.Digest(),
-		StateGeneration: lifecycle.StateGeneration() + 1, Phase: checkpointmodel.LifecycleDiscarded,
-		ReceiptDigest: receipt.Digest(), CleanupState: checkpointmodel.OwnedCleanupClean,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	nextBytes, err := checkpointmodel.EncodeReceiveLifecycleState(next)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := lease.ReplaceLifecycle(context.Background(), snapshot.LifecycleRecord, nextBytes); err != nil {
-		t.Fatal(err)
-	}
-	updated, err := lease.Snapshot(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	updatedLifecycle, err := checkpointmodel.DecodeReceiveLifecycleState(updated.LifecycleRecord)
-	if err != nil || updatedLifecycle.Phase() != checkpointmodel.LifecycleDiscarded {
-		t.Fatalf("discarded lifecycle = (%d, %v)", updatedLifecycle.Phase(), err)
-	}
-}
-
-func TestNativeResumeRepositoryObservesPartialReceiptWithoutReplacingCollisions(t *testing.T) {
-	root := newRuntimeTestRootSpec(t).path
-	if err := os.WriteFile(filepath.Join(root, "collision.bin"), []byte("keep"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	intent := nativeTestIntent(t, root, 0xa1, 0xa2)
-	session := openNativeCompositionSession(t, root, false, intent, nil)
-	rootAdmission := admitNativeRoot(t, session, intent, 0xa3, catalog.ModifiedTime{})
-
-	success := nativeCompositionDescriptor(t, intent, 0xa4, 0xa5, 4)
-	start, err := session.BeginFile(context.Background(), nativeCompositionFile(
-		t, session, success, "success.bin", rootAdmission,
-	))
-	if err != nil {
-		t.Fatal(err)
-	}
-	transaction, _, ok := start.Transaction()
-	if !ok {
-		t.Fatal("successful file settled before receiving content")
-	}
-	if err := transaction.WriteRange(context.Background(), 0, []byte("good")); err != nil {
-		t.Fatal(err)
-	}
-	if settlement, err := transaction.Commit(context.Background()); err != nil ||
-		settlement.Kind() != transfer.FilePublished {
-		t.Fatalf("successful commit = (%d, %v)", settlement.Kind(), err)
-	}
-
-	collision := nativeCompositionDescriptor(t, intent, 0xa6, 0xa7, 4)
-	collisionStart, err := session.BeginFile(context.Background(), nativeCompositionFile(
-		t, session, collision, "collision.bin", rootAdmission,
-	))
-	if err != nil {
-		t.Fatal(err)
-	}
-	collisionSettlement, immediate := collisionStart.ImmediateSettlement()
-	if !immediate || collisionSettlement.Kind() != transfer.FileCollision {
-		t.Fatalf("collision settlement = (%d, immediate=%t)", collisionSettlement.Kind(), immediate)
-	}
-	if _, err := session.FinalizeDirectory(context.Background(), rootAdmission); err != nil {
-		t.Fatal(err)
-	}
-	if settlement, err := session.FinalizeTree(
-		context.Background(), transfer.DirectTreeOutcomePartialDirectory,
-	); err != nil || settlement.Kind() != transfer.DirectTreeSettlementPartialDirectory {
-		t.Fatalf("partial tree = (%d, %v)", settlement.Kind(), err)
-	}
-
-	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lease, err := repository.Acquire(context.Background(), intent.OperationID())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lease.Close()
-	evidence, err := lease.ObserveRecovery(context.Background())
-	if err != nil || evidence.TargetOwnership != NativeResumeEvidenceProven ||
-		evidence.Checkpoints != NativeResumeEvidenceProven {
-		t.Fatalf("partial evidence = (%+v, %v)", evidence, err)
-	}
-	receipt, err := checkpointmodel.DecodeDirectTreeReceipt(evidence.TerminalReceipt)
-	if err != nil || receipt.Kind() != checkpointmodel.ReceiptPartialDirectory ||
-		receipt.SuccessCount() != 1 || receipt.FailureCount() != 1 {
-		t.Fatalf("partial receipt = (kind=%d successes=%d failures=%d err=%v)",
-			receipt.Kind(), receipt.SuccessCount(), receipt.FailureCount(), err)
-	}
-	if content, err := os.ReadFile(filepath.Join(root, "success.bin")); err != nil || string(content) != "good" {
-		t.Fatalf("successful prefix = (%q, %v)", content, err)
-	}
-	if content, err := os.ReadFile(filepath.Join(root, "collision.bin")); err != nil || string(content) != "keep" {
-		t.Fatalf("collision target = (%q, %v)", content, err)
-	}
-}
-
-func TestNativeResumeRepositoryProjectsUnknownNamespaceAndDirectoryOwnership(t *testing.T) {
-	t.Run("foreign checkpoint namespace remains read-only", func(t *testing.T) {
-		root := newRuntimeTestRootSpec(t).path
-		intent := nativeTestIntent(t, root, 0xb1, 0xb2)
-		markerPath := filepath.Join(
-			root, checkpointstore.ControlDirectory, checkpointstore.CheckpointDirectory,
-			checkpointstore.OwnershipDirectory, checkpointstore.OwnershipFile,
-		)
-		foreign, err := os.ReadFile(markerPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		foreign[0] ^= 0xff
-		if err := os.WriteFile(markerPath, foreign, 0o600); err != nil {
-			t.Fatal(err)
-		}
-
-		repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
-		if err != nil {
-			t.Fatal(err)
-		}
-		snapshots, err := repository.List(context.Background())
-		if err != nil || len(snapshots) != 1 || len(snapshots[0].LifecycleRecord) != 1 ||
-			snapshots[0].LifecycleRecord[0] != 0 {
-			t.Fatalf("foreign list = (%+v, %v)", snapshots, err)
-		}
-		operation, err := checkpointmodel.DecodeReceiveOperation(snapshots[0].OperationRecord)
-		if err != nil || operation.OperationID() != intent.OperationID() {
-			t.Fatalf("foreign operation identity = (%v, %v)", operation.OperationID(), err)
-		}
-		after, err := os.ReadFile(markerPath)
-		if err != nil || string(after) != string(foreign) {
-			t.Fatalf("foreign marker was mutated: %v", err)
-		}
-		if _, err := repository.Acquire(context.Background(), intent.OperationID()); err == nil {
-			t.Fatal("foreign namespace unexpectedly yielded mutation authority")
-		}
-	})
-
-	t.Run("replaced admitted directory stops cleanup", func(t *testing.T) {
-		root := newRuntimeTestRootSpec(t).path
-		intent := nativeTestIntent(t, root, 0xc1, 0xc2)
-		session := openNativeCompositionSession(t, root, false, intent, nil)
-		rootAdmission := admitNativeRoot(t, session, intent, 0xc3, catalog.ModifiedTime{})
-		_ = admitNativeResumeDirectory(t, session, rootAdmission, "owned", 0xc4, 0xc5)
-		if _, err := session.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
-			t.Fatal(err)
-		}
-		ownedPath := filepath.Join(root, "owned")
-		if err := os.Remove(ownedPath); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Mkdir(ownedPath, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		foreignPath := filepath.Join(ownedPath, "foreign.txt")
-		if err := os.WriteFile(foreignPath, []byte("preserve"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-
-		repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
-		if err != nil {
-			t.Fatal(err)
-		}
-		lease, err := repository.Acquire(context.Background(), intent.OperationID())
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer lease.Close()
-		evidence, err := lease.ObserveRecovery(context.Background())
-		if err != nil || evidence.TargetOwnership != NativeResumeEvidenceUnknown ||
-			evidence.Checkpoints != NativeResumeEvidenceUnknown || evidence.Cleanup != NativeResumeCleanupUnknown {
-			t.Fatalf("replacement evidence = (%+v, %v)", evidence, err)
-		}
-		cleanup, err := lease.CleanupOwned(context.Background())
-		if err != nil || cleanup.State != NativeResumeCleanupUnknown || len(cleanup.Receipt) != 0 {
-			t.Fatalf("replacement cleanup = (%+v, %v)", cleanup, err)
-		}
-		if content, err := os.ReadFile(foreignPath); err != nil || string(content) != "preserve" {
-			t.Fatalf("foreign replacement was mutated = (%q, %v)", content, err)
-		}
-	})
-}
-
-func admitNativeResumeDirectory(
+func ordinaryResumeMaterializationFile(
 	t *testing.T,
 	session transfer.DirectTreeSession,
-	parent transfer.DirectoryAdmission,
+	projector ordinaryoutput.ArtifactPathProjector,
+	descriptor content.FileRevisionDescriptor,
 	path string,
-	directoryID byte,
-	generation byte,
-) transfer.DirectoryAdmission {
+	parent transfer.DirectoryAdmission,
+	parentClaim transfer.MaterializedDirectoryClaim,
+) transfer.MaterializationFile {
 	t.Helper()
-	admission, err := session.AdmitDirectory(context.Background(), transfer.MaterializationDirectory{
-		DirectoryID:     incrementalTestIdentity16[catalog.DirectoryID](directoryID),
-		Generation:      incrementalTestIdentity16[catalog.DirectoryGeneration](generation),
-		ParentAdmission: parent, Path: path,
-	})
+	sourcePath, err := ordinaryoutput.NewSourceCatalogPath(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return admission
+	file, err := transfer.NewMaterializationFile(
+		projector, sourcePath, descriptor, session.SessionID(), parent, parentClaim,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+func openOrdinaryResumeSession(
+	t *testing.T,
+	root string,
+	seed byte,
+	exactSize uint64,
+) ordinaryResumeSessionFixture {
+	t.Helper()
+	fixture := openOrdinaryResumeFile(t, root, seed, exactSize, false)
+	if fixture.transaction == nil {
+		t.Fatal("ordinary file settled before content")
+	}
+	return fixture
+}
+
+func reopenOrdinaryResumeFile(
+	t *testing.T,
+	root string,
+	seed byte,
+	exactSize uint64,
+) ordinaryResumeSessionFixture {
+	t.Helper()
+	return openOrdinaryResumeFile(t, root, seed, exactSize, true)
+}
+
+func openOrdinaryResumeFile(
+	t *testing.T,
+	root string,
+	seed byte,
+	exactSize uint64,
+	reopen bool,
+) ordinaryResumeSessionFixture {
+	t.Helper()
+	fileID := incrementalTestIdentity16[catalog.FileID](seed + 1)
+	rules, err := transfer.NewSelectionRules(false, []transfer.SelectionOverride{{
+		FileID: fileID, Selected: true,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := transfer.NewSelectionSpec(
+		incrementalTestIdentity16[catalog.ShareInstance](seed),
+		incrementalTestIdentity16[catalog.DirectoryID](seed+2),
+		rules,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "resume.bin"
+	artifact, err := receivecontract.NewSingleFileDirectoryTree(fileID, name, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := newNativeReservationTestAuthority(t, root)
+	mode, err := authority.BindDestination(context.Background())
+	if err != nil || !mode.Resumable() {
+		t.Fatalf("bind = %+v, %v", mode, err)
+	}
+	lookup, err := authority.LookupActive(context.Background(), selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var operation *Operation
+	if reopen {
+		if lookup.Kind() != ActiveLookupReopened {
+			t.Fatalf("reopen lookup = %d", lookup.Kind())
+		}
+		operation = lookup.Operation()
+	} else {
+		if lookup.Kind() != ActiveLookupMiss {
+			t.Fatalf("lookup = %d", lookup.Kind())
+		}
+		operation, err = authority.CreateOperation(context.Background(), lookup, artifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	intent, ok := operation.ReceiveIntent()
+	if !ok {
+		t.Fatal("ordinary operation omitted intent")
+	}
+	reservation, _ := intent.MaterializationPlan().DestinationReservation()
+	session, err := authority.OpenOperation(context.Background(), operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootSource := transfer.AuthenticatedSourceDirectory{
+		DirectoryID: selection.SyntheticRoot(),
+		Generation:  incrementalTestIdentity16[catalog.DirectoryGeneration](seed + 2),
+		SourcePath:  ordinaryoutput.EmptySourceCatalogPath(),
+	}
+	rootRequest, err := transfer.NewDirectoryMaterializationRequest(
+		projector, rootSource, ordinaryoutput.SourceNodeConnectsSelection,
+		transfer.MaterializedDirectoryClaim{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootAdmission, err := session.AdmitDirectory(context.Background(), rootRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	geometry, err := content.NewFileGeometry(exactSize, catalog.DefaultChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := content.NewFileRevisionDescriptor(
+		intent.ShareInstance(), fileID,
+		incrementalTestIdentity16[content.FileRevision](seed+3),
+		geometry, catalog.ModifiedTime{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := ordinaryResumeMaterializationFile(
+		t, session, projector, descriptor, name, rootAdmission,
+		transfer.MaterializedDirectoryClaim{},
+	)
+	start, err := session.BeginFile(context.Background(), file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, durable, hasTransaction := start.Transaction()
+	settlement, hasSettlement := start.ImmediateSettlement()
+	if hasTransaction == hasSettlement {
+		t.Fatal("ordinary file start did not return exactly one outcome")
+	}
+	return ordinaryResumeSessionFixture{
+		authority: authority, session: session, intent: intent,
+		transaction: transaction, durable: durable, settlement: settlement,
+		rootAdmission: rootAdmission,
+		finalPath:     filepath.Join(root, reservation.ReservedName()),
+	}
+}
+func pauseOrdinaryResumeFixture(t *testing.T, fixture ordinaryResumeSessionFixture) {
+	t.Helper()
+	if settlement, err := fixture.transaction.Pause(
+		context.Background(), transfer.FilePauseInterrupted,
+	); err != nil || settlement.Kind() != transfer.FilePaused {
+		t.Fatalf("pause file = %d, %v", settlement.Kind(), err)
+	}
+	if settlement, err := fixture.session.PauseTree(
+		context.Background(), transfer.JobPauseInterrupted,
+	); err != nil || settlement.Kind() != transfer.DirectTreeSettlementPaused {
+		t.Fatalf("pause tree = %d, %v", settlement.Kind(), err)
+	}
+	if err := fixture.authority.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeResumeRepositoryPagesOrdinaryStateWithoutCreatingIt(t *testing.T) {
+	root := newRuntimeTestRootSpec(t).path
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := repository.Page(
+		context.Background(), resumeauthority.PageCursor{}, 16,
+	)
+	if err != nil || len(page.Headers()) != 0 {
+		t.Fatalf("empty page = %d, %v", len(page.Headers()), err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, checkpointstore.ControlDirectory)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only inventory created control state: %v", err)
+	}
+
+	fixture := openOrdinaryResumeSession(t, root, 0x31, 4)
+	if _, err := repository.Acquire(
+		context.Background(), fixture.intent.OperationID(),
+	); !errors.Is(err, ErrNativeResumeBusy) {
+		t.Fatalf("busy acquire = %v", err)
+	}
+	page, err = repository.Page(
+		context.Background(), resumeauthority.PageCursor{}, 16,
+	)
+	if err != nil || len(page.Headers()) != 1 ||
+		page.Headers()[0].Record().OperationID() != fixture.intent.OperationID() {
+		t.Fatalf("active page = %+v, %v", page.Headers(), err)
+	}
+	pauseOrdinaryResumeFixture(t, fixture)
+}
+
+func TestNativeResumeSnapshotClassifiesPartialAndPublishedFiles(t *testing.T) {
+	for name, publish := range map[string]bool{"partial": false, "published": true} {
+		t.Run(name, func(t *testing.T) {
+			root := newRuntimeTestRootSpec(t).path
+			fixture := openOrdinaryResumeSession(t, root, 0x41, 4)
+			if err := fixture.transaction.WriteRange(
+				context.Background(), 0, []byte("data"),
+			); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fixture.transaction.Checkpoint(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if publish {
+				settlement, err := fixture.transaction.Commit(context.Background())
+				if err != nil || settlement.Kind() != transfer.FilePublished {
+					t.Fatalf("commit = %d, %v", settlement.Kind(), err)
+				}
+				if info, err := os.Stat(fixture.finalPath); err != nil || info.Size() != 4 {
+					t.Fatalf("final = %+v, %v", info, err)
+				}
+				if settlement, err := fixture.session.PauseTree(
+					context.Background(), transfer.JobPauseInterrupted,
+				); err != nil || settlement.Kind() != transfer.DirectTreeSettlementPaused {
+					t.Fatalf("pause tree = %d, %v", settlement.Kind(), err)
+				}
+				if err := fixture.authority.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				pauseOrdinaryResumeFixture(t, fixture)
+			}
+
+			repository, _ := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+			lease, err := repository.Acquire(
+				context.Background(), fixture.intent.OperationID(),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := lease.Snapshot(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := lease.Close(); err != nil {
+				t.Fatal(err)
+			}
+			items := snapshot.Items()
+			if len(items) != 1 {
+				t.Fatalf("items = %+v", items)
+			}
+			want := resumeauthority.ItemResumable
+			if publish {
+				want = resumeauthority.ItemPublished
+			}
+			if items[0].State() != want {
+				t.Fatalf("item state = %s, want %s", items[0].State(), want)
+			}
+
+			authority, _ := resumeauthority.New(repository)
+			result, err := authority.Discard(
+				context.Background(), fixture.intent.OperationID(),
+			)
+			if err != nil || result.State() != resumeauthority.OperationDiscarded {
+				t.Fatalf("discard = %s, %v", result.State(), err)
+			}
+			page, err := repository.Page(
+				context.Background(), resumeauthority.PageCursor{}, 16,
+			)
+			if err != nil || len(page.Headers()) != 0 {
+				t.Fatalf("post-discard page = %d, %v", len(page.Headers()), err)
+			}
+			_, finalErr := os.Stat(fixture.finalPath)
+			if publish && finalErr != nil {
+				t.Fatalf("discard removed published final: %v", finalErr)
+			}
+			if !publish && !errors.Is(finalErr, os.ErrNotExist) {
+				t.Fatalf("discard created or adopted final: %v", finalErr)
+			}
+		})
+	}
+}
+
+func TestNativeResumeCollisionRemainsResumableAndRetriesSameOperation(t *testing.T) {
+	root := newRuntimeTestRootSpec(t).path
+	fixture := openOrdinaryResumeSession(t, root, 0x49, 4)
+	if err := fixture.transaction.WriteRange(context.Background(), 0, []byte("data")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.transaction.Checkpoint(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	pauseOrdinaryResumeFixture(t, fixture)
+	if err := os.WriteFile(fixture.finalPath, []byte("foreign"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquired, err := repository.Acquire(context.Background(), fixture.intent.OperationID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := acquired.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := snapshot.Items()
+	if snapshot.Header().Record().Lifecycle() != checkpointmodel.OrdinaryOperationActive ||
+		len(items) != 1 || items[0].State() != resumeauthority.ItemResumable ||
+		items[0].BlockReason() != resumeauthority.ItemBlockNone {
+		t.Fatalf("collision inventory = lifecycle %s items %+v",
+			snapshot.Header().Record().Lifecycle(), items)
+	}
+	if err := acquired.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	collided := reopenOrdinaryResumeFile(t, root, 0x49, 4)
+	if collided.intent.OperationID() != fixture.intent.OperationID() || collided.transaction != nil ||
+		collided.settlement.Kind() != transfer.FileCollision {
+		t.Fatalf("collision retry = operation %x transaction %T settlement %d",
+			collided.intent.OperationID().Bytes(), collided.transaction, collided.settlement.Kind())
+	}
+	foreign, err := os.ReadFile(fixture.finalPath)
+	if err != nil || string(foreign) != "foreign" {
+		t.Fatalf("foreign final = %q, %v", foreign, err)
+	}
+	if tree, err := collided.session.PauseTree(
+		context.Background(), transfer.JobPauseInterrupted,
+	); err != nil || tree.Kind() != transfer.DirectTreeSettlementPaused {
+		t.Fatalf("collision pause = %d, %v", tree.Kind(), err)
+	}
+	if err := collided.authority.Close(); err != nil {
+		t.Fatal(err)
+	}
+	postCollisionLease, err := repository.Acquire(
+		context.Background(), fixture.intent.OperationID(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postCollision, err := postCollisionLease.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	postCollisionItems := postCollision.Items()
+	if postCollision.Header().Record().Lifecycle() != checkpointmodel.OrdinaryOperationActive ||
+		len(postCollisionItems) != 1 ||
+		postCollisionItems[0].State() != resumeauthority.ItemResumable ||
+		postCollisionItems[0].BlockReason() != resumeauthority.ItemBlockNone {
+		t.Fatalf("post-collision inventory = lifecycle %s items %+v",
+			postCollision.Header().Record().Lifecycle(), postCollisionItems)
+	}
+	if err := postCollisionLease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(fixture.finalPath); err != nil {
+		t.Fatal(err)
+	}
+
+	retry := reopenOrdinaryResumeFile(t, root, 0x49, 4)
+	if retry.intent.OperationID() != fixture.intent.OperationID() || retry.transaction == nil {
+		t.Fatalf("same-operation retry = operation %x transaction %T settlement %d",
+			retry.intent.OperationID().Bytes(), retry.transaction, retry.settlement.Kind())
+	}
+	settlement, err := retry.transaction.Commit(context.Background())
+	if err != nil || settlement.Kind() != transfer.FilePublished {
+		t.Fatalf("retry commit = %d, %v", settlement.Kind(), err)
+	}
+	published, err := os.ReadFile(fixture.finalPath)
+	if err != nil || string(published) != "data" {
+		t.Fatalf("published final = %q, %v", published, err)
+	}
+	if tree, err := retry.session.PauseTree(
+		context.Background(), transfer.JobPauseInterrupted,
+	); err != nil || tree.Kind() != transfer.DirectTreeSettlementPaused {
+		t.Fatalf("published pause = %d, %v", tree.Kind(), err)
+	}
+	if err := retry.authority.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeResumeDiscardPreservesUnknownPartialAndBecomesCleanupPending(t *testing.T) {
+	root := newRuntimeTestRootSpec(t).path
+	fixture := openOrdinaryResumeSession(t, root, 0x51, 4)
+	if err := fixture.transaction.WriteRange(
+		context.Background(), 0, []byte("data"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.transaction.Checkpoint(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	pauseOrdinaryResumeFixture(t, fixture)
+
+	operationPath := filepath.Join(
+		root, checkpointstore.ControlDirectory,
+		checkpointstore.OrdinaryRegistryDirectoryV1, "operations",
+		filepath.Base(filepath.Join("", bytesToHex(fixture.intent.OperationID().Bytes()))),
+		"files", checkpointstore.CheckpointsDirectory, checkpointstore.RecordsDirectory,
+	)
+	foreign := filepath.Join(operationPath, "foreign")
+	if err := os.WriteFile(foreign, []byte("preserve"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, _ := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	authority, _ := resumeauthority.New(repository)
+	result, err := authority.Discard(
+		context.Background(), fixture.intent.OperationID(),
+	)
+	if err != nil || result.State() != resumeauthority.OperationCleanupPending {
+		t.Fatalf("discard = %s, %v", result.State(), err)
+	}
+	if data, err := os.ReadFile(foreign); err != nil || string(data) != "preserve" {
+		t.Fatalf("foreign partial changed = %q, %v", data, err)
+	}
+	inventory, err := authority.List(context.Background())
+	if err != nil || len(inventory.Summaries()) != 1 ||
+		inventory.Summaries()[0].State() != resumeauthority.OperationCleanupPending {
+		t.Fatalf("cleanup inventory = %+v, %v", inventory.Summaries(), err)
+	}
+	if _, err := os.Stat(fixture.finalPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("discard published a final: %v", err)
+	}
+}
+
+func TestNativeResumeLeaseSeparatesAttentionDiscardAndCleanup(t *testing.T) {
+	root := newRuntimeTestRootSpec(t).path
+	fixture := openOrdinaryResumeSession(t, root, 0x61, 4)
+	if err := fixture.transaction.WriteRange(context.Background(), 0, []byte("data")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.transaction.Checkpoint(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	pauseOrdinaryResumeFixture(t, fixture)
+
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquired, err := repository.Acquire(context.Background(), fixture.intent.OperationID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, ok := acquired.(*NativeResumeLease)
+	if !ok {
+		t.Fatalf("native lease type = %T", acquired)
+	}
+	if state, err := lease.Cleanup(context.Background()); err == nil || state != 0 {
+		t.Fatalf("active cleanup = (%d, %v)", state, err)
+	}
+	header, err := lease.Transition(
+		context.Background(),
+		checkpointmodel.OrdinaryLifecycleRequireAttention,
+		checkpointmodel.OrdinaryReasonOperationOwnershipUnknown,
+	)
+	if err != nil || header.Record().Lifecycle() != checkpointmodel.OrdinaryOperationNeedsAttention {
+		t.Fatalf("attention transition = (%+v, %v)", header.Record(), err)
+	}
+	snapshot, err := lease.Snapshot(context.Background())
+	if err != nil || snapshot.Header().Record().Lifecycle() != checkpointmodel.OrdinaryOperationNeedsAttention ||
+		len(snapshot.Items()) != 1 {
+		t.Fatalf("attention snapshot = (%+v, %+v, %v)", snapshot.Header().Record(), snapshot.Items(), err)
+	}
+	header, err = lease.Transition(
+		context.Background(),
+		checkpointmodel.OrdinaryLifecycleDiscard,
+		checkpointmodel.OrdinaryReasonNone,
+	)
+	if err != nil || header.Record().Lifecycle() != checkpointmodel.OrdinaryOperationDiscarded {
+		t.Fatalf("discard transition = (%+v, %v)", header.Record(), err)
+	}
+	snapshot, err = lease.Snapshot(context.Background())
+	if err != nil || len(snapshot.Items()) != 0 {
+		t.Fatalf("terminal snapshot = (%+v, %v)", snapshot.Items(), err)
+	}
+	state, err := lease.Cleanup(context.Background())
+	if err != nil || state != resumeauthority.CleanupComplete {
+		t.Fatalf("terminal cleanup = (%d, %v)", state, err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lease.Snapshot(context.Background()); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("closed snapshot error = %v", err)
+	}
+	page, err := repository.Page(context.Background(), resumeauthority.PageCursor{}, 8)
+	if err != nil || len(page.Headers()) != 0 {
+		t.Fatalf("post-cleanup page = (%d, %v)", len(page.Headers()), err)
+	}
+	if _, err := os.Stat(fixture.finalPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("discard changed final authority: %v", err)
+	}
+}
+
+func TestNativeResumeRepositoryAndItemGuardsRejectUntrustedInputs(t *testing.T) {
+	if _, err := NewNativeResumeRepository("relative", openOutputRuntimeTestPlatform); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("relative repository error = %v", err)
+	}
+	if _, err := NewNativeResumeRepository(filepath.Clean(t.TempDir()), nil); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("nil factory error = %v", err)
+	}
+	var nilRepository *NativeResumeRepository
+	if _, err := nilRepository.Page(context.Background(), resumeauthority.PageCursor{}, 1); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("nil page error = %v", err)
+	}
+	if _, err := nilRepository.Acquire(context.Background(), receivecontract.OperationID{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("nil acquire error = %v", err)
+	}
+
+	root := newRuntimeTestRootSpec(t).path
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := repository.Page(canceled, resumeauthority.PageCursor{}, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled page error = %v", err)
+	}
+	operation, _ := receivecontract.OperationIDFromBytes(bytes.Repeat(
+		[]byte{1}, receivecontract.StableIdentityBytes,
+	))
+	if _, err := repository.Acquire(canceled, operation); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled acquire error = %v", err)
+	}
+	if _, err := repository.Acquire(context.Background(), operation); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("absent operation error = %v", err)
+	}
+	if closeNativeResumePlatform(nil) != nil ||
+		closeNativeResumeRuntime(nil) != nil ||
+		closeNativeResumeDirectory(nil) != nil ||
+		closeNativeResumeFile(nil) != nil ||
+		closeNativeResumeEntry(nil) != nil ||
+		closeNativeResumeOwnedFile(nil) != nil {
+		t.Fatal("nil native resume cleanup was not inert")
+	}
+	if _, err := ordinaryResumeRootDisposition(transfer.ReceiveIntent{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("zero resume intent error = %v", err)
+	}
+
+	fixture := openOrdinaryResumeSession(t, root, 0x71, 4)
+	pauseOrdinaryResumeFixture(t, fixture)
+	acquired, err := repository.Acquire(context.Background(), fixture.intent.OperationID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := acquired.(*NativeResumeLease)
+	if _, err := lease.Snapshot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	records, _ := lease.store.Snapshot()
+	if len(records) != 1 {
+		t.Fatalf("resume records = %d", len(records))
+	}
+	item, err := blockedPublicationItem(records[0])
+	if err != nil || item.State() != resumeauthority.ItemBlocked ||
+		item.BlockReason() != resumeauthority.ItemBlockPublicationUnknown {
+		t.Fatalf("publication mismatch item = (%+v, %v)", item, err)
+	}
+	item, err = blockedOwnedItem(records[0], fileexecution.OwnedObservation{})
+	if err != nil || item.BlockReason() != resumeauthority.ItemBlockOwnedObjectUnknown {
+		t.Fatalf("owned item = (%+v, %v)", item, err)
+	}
+	if disposition, err := ordinaryResumeRootDisposition(fixture.intent); err != nil ||
+		disposition != outputcap.CallerProvidedContainer {
+		t.Fatalf("single-file disposition = (%q, %v)", disposition, err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOrdinaryResumeItemReducesEveryDurableFilePhase(t *testing.T) {
+	root := newRuntimeTestRootSpec(t).path
+	fixture := openOrdinaryResumeSession(t, root, 0x78, 4)
+	if err := fixture.transaction.WriteRange(context.Background(), 0, []byte("data")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.transaction.Checkpoint(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	pauseOrdinaryResumeFixture(t, fixture)
+
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquired, err := repository.Acquire(context.Background(), fixture.intent.OperationID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := acquired.(*NativeResumeLease)
+	defer lease.Close()
+	if _, err := lease.Snapshot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	records, _ := lease.store.Snapshot()
+	if len(records) != 1 {
+		t.Fatalf("resume records = %d", len(records))
+	}
+	base := records[0]
+	tests := []struct {
+		name       string
+		phase      checkpointmodel.Phase
+		commit     checkpointmodel.CommitState
+		ranges     []checkpointmodel.Range
+		quarantine checkpointmodel.QuarantineReason
+		origin     checkpointmodel.QuarantineOrigin
+		retirement checkpointmodel.RetirementReason
+		want       resumeauthority.ItemState
+		block      resumeauthority.ItemBlockReason
+	}{
+		{
+			name: "publishing with durable object", phase: checkpointmodel.PhasePublishing,
+			commit: checkpointmodel.CommitVerified, ranges: base.VerifiedRanges(),
+			want: resumeauthority.ItemResumable,
+		},
+		{
+			name: "published without exact final", phase: checkpointmodel.PhasePublished,
+			commit: checkpointmodel.CommitPublished, ranges: base.VerifiedRanges(),
+			want: resumeauthority.ItemBlocked, block: resumeauthority.ItemBlockPublicationUnknown,
+		},
+		{
+			name: "retired isolated failure", phase: checkpointmodel.PhaseRetired,
+			commit: checkpointmodel.CommitVerified, ranges: base.VerifiedRanges(),
+			retirement: checkpointmodel.RetirementIsolatedFailure,
+			want:       resumeauthority.ItemFailed,
+		},
+		{
+			name: "quarantined checkpoint", phase: checkpointmodel.PhaseQuarantined,
+			commit: checkpointmodel.CommitQuarantined, ranges: base.VerifiedRanges(),
+			quarantine: checkpointmodel.QuarantineStageMismatch,
+			origin:     checkpointmodel.QuarantineOriginWitnessed,
+			want:       resumeauthority.ItemBlocked, block: resumeauthority.ItemBlockCheckpointInvalid,
+		},
+		{
+			name: "fresh active object", phase: checkpointmodel.PhaseActive,
+			commit: checkpointmodel.CommitVerified,
+			want:   resumeauthority.ItemIncomplete,
+		},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record, err := checkpointmodel.NewRecord(checkpointmodel.RecordSpec{
+				OperationID:                  base.OperationID(),
+				ReceiveIntentDigest:          base.ReceiveIntentDigest(),
+				MaterializationBindingDigest: base.MaterializationBindingDigest(),
+				FileID:                       base.FileID(),
+				FileRevision:                 base.FileRevision(),
+				CanonicalPath:                base.CanonicalPath(),
+				ExactSize:                    base.ExactSize(),
+				MaterializerKind:             base.MaterializerKind(),
+				AuthorityRef:                 base.AuthorityRef().Bytes(),
+				OwnedObjectID:                base.OwnedObjectID().Bytes(),
+				StateGeneration:              base.StateGeneration() + uint64(index) + 1,
+				CheckpointGeneration:         base.CheckpointGeneration(),
+				VerifiedRanges:               test.ranges,
+				Phase:                        test.phase,
+				CommitState:                  test.commit,
+				QuarantineReason:             test.quarantine,
+				QuarantineOrigin:             test.origin,
+				RetirementReason:             test.retirement,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			item, err := ordinaryResumeRecordItem(
+				context.Background(),
+				lease.topLevel,
+				lease.store,
+				record,
+			)
+			wantBlock := test.block
+			if wantBlock == 0 {
+				wantBlock = resumeauthority.ItemBlockNone
+			}
+			if err != nil || item.State() != test.want || item.BlockReason() != wantBlock {
+				t.Fatalf("resume item = (%s, %s, %v), want (%s, %s)",
+					item.State(), item.BlockReason(), err, test.want, wantBlock)
+			}
+		})
+	}
+}
+
+func bytesToHex(raw []byte) string {
+	const digits = "0123456789abcdef"
+	encoded := make([]byte, len(raw)*2)
+	for index, value := range raw {
+		encoded[index*2] = digits[value>>4]
+		encoded[index*2+1] = digits[value&0x0f]
+	}
+	return string(encoded)
 }

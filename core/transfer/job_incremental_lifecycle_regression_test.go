@@ -141,7 +141,7 @@ func TestTransferJobPublishesTerminalDiscoveryBeforeContentDrain(t *testing.T) {
 	blocks.Unblock()
 	select {
 	case result := <-resultCh:
-		if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != 1 {
+		if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 {
 			t.Fatalf("result=%+v", result)
 		}
 	case <-time.After(2 * time.Second):
@@ -191,7 +191,7 @@ func TestTransferJobSettlesSyntheticRootAfterIsolatedChildFinalization(t *testin
 	}
 
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePartialDirectory || result.TerminationCause != nil ||
+	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		result.SettlementFailure != nil || output.pauseCalls != 0 || output.completeCalls != 1 {
 		t.Fatalf("result=%+v pause=%d complete=%d", result, output.pauseCalls, output.completeCalls)
 	}
@@ -241,7 +241,7 @@ func TestTransferJobPausesWhenDirectorySettlementNamesAnotherAdmission(t *testin
 	}
 
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeResumable ||
+	if result.Outcome != DirectTreeOutcomePaused ||
 		result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
 		result.SettlementFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) || len(result.Directories) != 0 ||
 		output.pauseCalls != 1 || output.completeCalls != 0 ||
@@ -270,7 +270,7 @@ func TestTransferJobRejectsDirectoryAdmissionFromAnotherIntentScope(t *testing.T
 	}
 	output := newJobOutput(share)
 	output.directoryAdmission = func(
-		directory MaterializationDirectory,
+		directory AuthenticatedSourceDirectory,
 		_ DirectoryAdmission,
 	) (DirectoryAdmission, error) {
 		return NewDirectoryAdmissionWithSecret(output.directorySecret[:], foreignScope, directory)
@@ -290,7 +290,7 @@ func TestTransferJobRejectsDirectoryAdmissionFromAnotherIntentScope(t *testing.T
 	}
 
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeResumable ||
+	if result.Outcome != DirectTreeOutcomePaused ||
 		result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
 		len(output.directoryAdmissions) != 1 || len(output.finalizedAdmissions) != 0 ||
 		output.pauseCalls != 1 || output.completeCalls != 0 {
@@ -334,7 +334,7 @@ func TestTransferJobCatalogLedgerRejectsDuplicateUnselectedNodeBeforeOutputAdmis
 	}
 
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeResumable ||
+	if result.Outcome != DirectTreeOutcomePaused ||
 		result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) ||
 		len(output.directoryAdmissions) != 0 || len(output.finalizedAdmissions) != 0 ||
 		output.pauseCalls != 1 || output.completeCalls != 0 {
@@ -489,7 +489,7 @@ func TestTransferJobQueueBackpressuresGenerationReplay(t *testing.T) {
 	blocks.Unblock()
 	select {
 	case result := <-resultCh:
-		if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != 4 {
+		if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 4 {
 			t.Fatalf("result=%+v", result)
 		}
 		traceMu.Lock()
@@ -527,7 +527,7 @@ func TestTransferJobGenerationReplayBudgetFailsBeforeAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeResumable ||
+	if result.Outcome != DirectTreeOutcomePaused ||
 		result.TerminationFault != mustSessionFault(fault.ScopeOutputPause, fault.SessionResourceBudget) ||
 		result.Measure.DiscoveredFiles != 0 || len(output.directories) != 0 || output.pauseCalls != 1 {
 		t.Fatalf("result=%+v directories=%v pause=%d", result, output.directories, output.pauseCalls)
@@ -563,7 +563,7 @@ func TestTransferJobFailsClosedForUnknownChildCursorFailureWithoutPhantomSelecti
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeResumable || result.TerminationFault != fault.DependencyContractFault() ||
+	if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != fault.DependencyContractFault() ||
 		result.Measure.DiscoveredFiles != 0 || result.Measure.DiscoveredBytes != 0 ||
 		!slices.Equal(output.directories, []string{""}) || len(output.finalized) != 0 {
 		t.Fatalf("result=%+v directories=%v finalized=%v", result, output.directories, output.finalized)
@@ -622,7 +622,7 @@ func TestTransferJobSelectionResolutionSurvivesSaturatedDiagnostics(t *testing.T
 	want := errors.Join(ErrSelectionTargetMissing, errors.New("path missing.bin"))
 	run.selectionResolutionFailure = want
 	result := run.finish(context.Background())
-	if result.Outcome != DirectTreeOutcomePartialDirectory ||
+	if result.Outcome != DirectTreeOutcomePartial ||
 		result.SelectionResolutionFailure != want ||
 		result.SourceDriftFailure != drift ||
 		result.SourceDriftFault != mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionInvalidated) ||
@@ -641,7 +641,7 @@ func TestTransferLifecycleTracerPanicCannotChangeTransferAuthority(t *testing.T)
 	})
 
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePublished || result.SucceededFiles != 1 ||
+	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 ||
 		output.pauseCalls != 0 || output.completeCalls != 1 {
 		t.Fatalf("result=%+v pauses=%d completes=%d", result, output.pauseCalls, output.completeCalls)
 	}
@@ -674,7 +674,7 @@ func TestHugeFileRangePlanningDemandsOneBlockBeforeCancellation(t *testing.T) {
 	}
 	result := job.Run(ctx)
 	want := content.Range{Offset: 0, End: uint64(catalog.MinChunkSize)}
-	if result.Outcome != DirectTreeOutcomeResumable || reader.calls != 1 || reader.requested != want ||
+	if result.Outcome != DirectTreeOutcomePaused || reader.calls != 1 || reader.requested != want ||
 		output.pauseCalls != 1 {
 		t.Fatalf("outcome=%d calls=%d requested=%+v pauses=%d", result.Outcome,
 			reader.calls, reader.requested, output.pauseCalls)

@@ -14,6 +14,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/core/osfs/internal/checkpointstore"
+	"github.com/windshare/windshare/core/osfs/internal/destinationauthority"
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
 )
 
@@ -25,7 +28,7 @@ func TestFilesystemOutputAuthorityExportsOnlyIntentionalSurface(t *testing.T) {
 	for method := range authorityType.Methods() {
 		methods = append(methods, method.Name)
 	}
-	if want := []string{"OpenDirectTree", "ReserveDirectTree"}; !slices.Equal(methods, want) {
+	if want := []string{"BindDestination", "Close", "CreateOperation", "LookupActive", "OpenDirectTree", "OpenOperation", "ReserveDirectTree"}; !slices.Equal(methods, want) {
 		t.Fatalf("public filesystem output-authority methods = %v, want %v", methods, want)
 	}
 
@@ -40,6 +43,61 @@ func TestFilesystemOutputAuthorityExportsOnlyIntentionalSurface(t *testing.T) {
 		reservation.Type.Out(0) != reflect.TypeFor[NativeDirectTreeReservation]() ||
 		reservation.Type.Out(1) != reflect.TypeFor[error]() {
 		t.Fatalf("ReserveDirectTree signature = %v", reservation.Type)
+	}
+
+	stagedSignatures := map[string]struct {
+		inputs  int
+		outputs []reflect.Type
+	}{
+		"BindDestination": {inputs: 2, outputs: []reflect.Type{
+			reflect.TypeFor[FilesystemOutputExecutionMode](), reflect.TypeFor[error](),
+		}},
+		"LookupActive": {inputs: 3, outputs: []reflect.Type{
+			reflect.TypeFor[FilesystemOutputLookup](), reflect.TypeFor[error](),
+		}},
+		"CreateOperation": {inputs: 4, outputs: []reflect.Type{
+			reflect.TypeFor[FilesystemOutputOperation](), reflect.TypeFor[error](),
+		}},
+		"OpenOperation": {inputs: 3, outputs: []reflect.Type{
+			reflect.TypeFor[transfer.DirectTreeSession](), reflect.TypeFor[error](),
+		}},
+		"Close": {inputs: 1, outputs: []reflect.Type{reflect.TypeFor[error]()}},
+	}
+	for name, expected := range stagedSignatures {
+		method, found := authorityType.MethodByName(name)
+		if !found || method.Type.NumIn() != expected.inputs || method.Type.NumOut() != len(expected.outputs) {
+			t.Fatalf("%s signature = %v", name, method.Type)
+		}
+		for index, output := range expected.outputs {
+			if method.Type.Out(index) != output {
+				t.Fatalf("%s output %d = %v, want %v", name, index, method.Type.Out(index), output)
+			}
+		}
+	}
+}
+
+func TestFilesystemOutputStagedValuesDoNotLeakAuthorityInternals(t *testing.T) {
+	for _, value := range []reflect.Type{
+		reflect.TypeFor[FilesystemOutputExecutionMode](),
+		reflect.TypeFor[FilesystemOutputLookup](),
+		reflect.TypeFor[FilesystemOutputOperation](),
+	} {
+		for field := range value.Fields() {
+			if field.IsExported() {
+				t.Fatalf("%s exports field %s", value, field.Name)
+			}
+			forbidden := []reflect.Type{
+				reflect.TypeFor[outputcap.Directory](),
+				reflect.TypeFor[outputcap.Platform](),
+				reflect.TypeFor[*checkpointstore.OperationRegistry](),
+				reflect.TypeFor[*destinationauthority.BoundDestination](),
+			}
+			for _, rejected := range forbidden {
+				if field.Type == rejected || field.Type.AssignableTo(rejected) {
+					t.Fatalf("%s field %s leaks %s", value, field.Name, rejected)
+				}
+			}
+		}
 	}
 }
 

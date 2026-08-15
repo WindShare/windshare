@@ -224,9 +224,12 @@ func TestWindowsV3UnknownDirectoryNeverReceivesPersistentObjectID(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer private.Close()
-	if identity, prepared, identityErr := private.cachedPersistentObjectID(); identityErr != nil || !prepared || !identity.valid() {
-		t.Fatalf("WindShare-created private directory lacks persistent identity: id=%x prepared=%t error=%v",
+	if identity, prepared, identityErr := private.cachedPersistentObjectID(); identityErr != nil || prepared || identity.valid() {
+		t.Fatalf("live private directory unexpectedly enrolled restart identity: id=%x prepared=%t error=%v",
 			identity, prepared, identityErr)
+	}
+	if claim, claimErr := private.preparePrivateIdentityClaim(); claimErr != nil || len(claim) == 0 {
+		t.Fatalf("explicit recovery enrollment failed: claim=%x error=%v", claim, claimErr)
 	}
 }
 

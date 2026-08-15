@@ -402,11 +402,9 @@ func TestLongV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testi
 	if err := selected.wait(t); err != nil {
 		t.Fatalf("selected receiver failed: %v; stdout=%q stderr=%q", err, selected.stdout.String(), selected.stderr.String())
 	}
-	assertV2File(t, filepath.Join(selectedOutput, "tree", "nested", "a.txt"), []byte("selected-content"))
+	assertV2File(t, filepath.Join(selectedOutput, "a.txt"), []byte("selected-content"))
 	assertV2OutputInventory(t, selectedOutput, map[string]bool{
-		"tree":              true,
-		"tree/nested":       true,
-		"tree/nested/a.txt": false,
+		"a.txt": false,
 	})
 	scenario.requireSuccess(t)
 }

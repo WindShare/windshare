@@ -168,7 +168,7 @@ func (output *immediateSmallOutputSession) Capabilities() transfer.DirectTreeCap
 }
 func (output *immediateSmallOutputSession) AdmitDirectory(
 	_ context.Context,
-	directory transfer.MaterializationDirectory,
+	request transfer.DirectoryMaterializationRequest,
 ) (transfer.DirectoryAdmission, error) {
 	// The scheduler treats the returned proof as the parent capability for every
 	// descendant. Minting the same session-scoped proof keeps this empty-root
@@ -176,7 +176,9 @@ func (output *immediateSmallOutputSession) AdmitDirectory(
 	// mutable authority to the test.
 	secret := make([]byte, 32)
 	secret[0] = 1
-	return transfer.NewDirectoryAdmissionWithSecret(secret, output.scope, directory)
+	return transfer.NewDirectoryAdmissionWithSecret(
+		secret, output.scope, request.Source(),
+	)
 }
 func (*immediateSmallOutputSession) FinalizeDirectory(
 	_ context.Context,
@@ -194,15 +196,15 @@ func (*immediateSmallOutputSession) PauseTree(
 	context.Context,
 	transfer.JobPauseReason,
 ) (transfer.DirectTreeSettlement, error) {
-	return transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementResumable)
+	return transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementPaused)
 }
 func (*immediateSmallOutputSession) FinalizeTree(
 	_ context.Context,
 	outcome transfer.DirectTreeOutcome,
 ) (transfer.DirectTreeSettlement, error) {
-	kind := transfer.DirectTreeSettlementPublished
-	if outcome == transfer.DirectTreeOutcomePartialDirectory {
-		kind = transfer.DirectTreeSettlementPartialDirectory
+	kind := transfer.DirectTreeSettlementSuccess
+	if outcome == transfer.DirectTreeOutcomePartial {
+		kind = transfer.DirectTreeSettlementPartial
 	}
 	return transfer.NewDirectTreeSettlement(kind)
 }
@@ -416,7 +418,7 @@ func TestRunTransferJobObservesImmediateSmallWithoutSubscriptionRace(t *testing.
 	result := app.runTransferJob(context.Background(), job, func(measure transfer.SelectionMeasure) {
 		seenSmall = seenSmall || measure.ConnectionSizeClass() == transfer.ConnectionSizeSmall
 	})
-	if result.Outcome != transfer.DirectTreeOutcomePublished || !seenSmall {
+	if result.Outcome != transfer.DirectTreeOutcomeSuccess || !seenSmall {
 		t.Fatalf("result=%+v saw immediate Small=%v", result, seenSmall)
 	}
 }

@@ -315,6 +315,30 @@ func (directory *memoryDirectory) RemoveFile(name string, expected outputcap.Fil
 	return nil
 }
 
+func (directory *memoryDirectory) RemoveDirectory(name string, expected outputcap.Directory) error {
+	child, ok := expected.(*memoryDirectory)
+	if !ok {
+		return outputcap.ErrUnsafeNamespace
+	}
+	directory.mu.Lock()
+	defer directory.mu.Unlock()
+	actual, found := directory.dirs[name]
+	if !found {
+		return fs.ErrNotExist
+	}
+	if actual != child {
+		return outputcap.ErrUnsafeNamespace
+	}
+	child.mu.Lock()
+	empty := len(child.dirs) == 0 && len(child.files) == 0
+	child.mu.Unlock()
+	if !empty {
+		return outputcap.ErrUnsafeNamespace
+	}
+	delete(directory.dirs, name)
+	return nil
+}
+
 func (directory *memoryDirectory) AcquireLock(name string, _ bool) (outputcap.Lock, bool, error) {
 	directory.mu.Lock()
 	defer directory.mu.Unlock()

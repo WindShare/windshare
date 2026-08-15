@@ -29,7 +29,10 @@ func TestResumeHelpProductionProcessExposesOnlyCapabilityCommands(t *testing.T) 
 	}
 	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "windshare resume list") ||
 		!strings.Contains(stderr.String(), "windshare resume discard") ||
-		!strings.Contains(stderr.String(), "isolated legacy-state maintenance") {
+		!strings.Contains(stderr.String(), "operation-needs-attention") ||
+		!strings.Contains(stderr.String(), "item-blocked") ||
+		strings.Contains(stderr.String(), "resume cleanup") ||
+		strings.Contains(stderr.String(), "legacy") {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }

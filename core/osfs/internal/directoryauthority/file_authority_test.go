@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/osfs/internal/outputsession"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
 const fileAuthorityExactSize = uint64(1)
@@ -208,6 +209,29 @@ func (directory *fileAuthorityDirectory) OpenFile(
 	return directory.platform.wrapFile(opened), nil
 }
 
+func (directory *fileAuthorityDirectory) LinkFileNoReplace(
+	source outputcap.File,
+	name string,
+) (outputcap.File, error) {
+	if observed, ok := source.(*fileAuthorityObservedFile); ok {
+		source = observed.File
+	}
+	native, ok := source.(*fakeFile)
+	if !ok || native == nil || native.node == nil {
+		return nil, errFakeUnsupported
+	}
+	directory.platform.mu.Lock()
+	defer directory.platform.mu.Unlock()
+	if _, exists := directory.base.node.entries[name]; exists {
+		return nil, outputcap.ErrNamespaceCollision
+	}
+	directory.base.node.entries[name] = fakeEntry{
+		kind: outputcap.EntryRegularFile,
+		node: native.node,
+	}
+	return directory.platform.wrapFile(&fakeFile{node: native.node}), nil
+}
+
 type fileAuthorityObjects struct {
 	mu sync.Mutex
 
@@ -315,15 +339,17 @@ func (capture *fileAuthorityClaimCapture) BeginFile(
 	claim outputsession.FileClaim,
 ) (outputsession.FileBeginObservation, error) {
 	capture.claim = claim
-	capture.destination, capture.bindErr = capture.authority.BindFile(ctx, claim.File())
+	capture.destination, capture.bindErr = capture.authority.BindFile(
+		ctx, claim.File(), claim.DestinationPath(),
+	)
 	return outputsession.FileBeginObservation{Cut: outputsession.MutationNoChange},
 		errors.Join(errFileAuthorityCapture, capture.bindErr)
 }
 
 type fileAuthorityFixtureOptions struct {
-	nested        bool
-	preexisting   bool
-	objectLocator bool
+	nested      bool
+	preexisting bool
+	live        bool
 }
 
 type fileAuthorityFixture struct {
@@ -352,7 +378,13 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 	}
 	t.Cleanup(func() { _ = directories.Close() })
 	objects := newFileAuthorityObjects(platform)
-	authority, err := NewFileAuthority(directories, objects)
+	sessionID := testIdentity[transfer.OutputSessionID](151)
+	var authority *FileAuthority
+	if options.live {
+		authority, err = NewLiveFileAuthority(directories, sessionID)
+	} else {
+		authority, err = NewFileAuthority(directories, objects, sessionID)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +397,10 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 		t.Fatal(err)
 	}
 	intent := testDirectTreeIntent(t, share, rootID, rules)
-	sessionID := testIdentity[transfer.OutputSessionID](151)
+	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := "final.bin"
 	if options.nested {
 		path = "folder/final.bin"
@@ -381,8 +416,11 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 		},
 		ReceiptSecret: bytes.Repeat([]byte{0x71}, 32),
 		Locator:       directories,
-		Directories:   directories,
-		Files:         capture,
+		Destinations: outputsession.ArtifactDestinationBinderFunc(func(path ordinaryoutput.ArtifactPath) (outputsession.DestinationPath, error) {
+			return outputsession.NewDestinationPath(path.String())
+		}),
+		Directories: directories,
+		Files:       capture,
 		Resources: outputsession.ResourceReleaserFunc(func(context.Context) error {
 			return nil
 		}),
@@ -390,22 +428,38 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootAdmission, err := session.AdmitDirectory(context.Background(), transfer.MaterializationDirectory{
-		DirectoryID: rootID,
-		Generation:  testIdentity[catalog.DirectoryGeneration](161),
-	})
+	rootSource := testSourceDirectory(
+		t, rootID, testIdentity[catalog.DirectoryGeneration](161),
+		transfer.DirectoryAdmission{}, "", catalog.ModifiedTime{},
+	)
+	rootAdmission, err := session.AdmitDirectory(
+		context.Background(), projectedDirectoryRequest(
+			t, intent, rootSource, transfer.MaterializedDirectoryClaim{},
+		),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	parentAdmission := rootAdmission
 	parent := platform.rootNode()
+	var parentMaterialization transfer.MaterializedDirectoryClaim
 	if options.nested {
-		parentAdmission, err = session.AdmitDirectory(context.Background(), transfer.MaterializationDirectory{
-			DirectoryID:     testIdentity[catalog.DirectoryID](171),
-			Generation:      testIdentity[catalog.DirectoryGeneration](181),
-			ParentAdmission: rootAdmission,
-			Path:            "folder",
-		})
+		directorySource := testSourceDirectory(
+			t, testIdentity[catalog.DirectoryID](171), testIdentity[catalog.DirectoryGeneration](181),
+			rootAdmission, "folder", catalog.ModifiedTime{},
+		)
+		directoryRequest := projectedDirectoryRequest(
+			t, intent, directorySource, transfer.MaterializedDirectoryClaim{},
+		)
+		parentAdmission, err = session.AdmitDirectory(context.Background(), directoryRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, materialized := directoryRequest.Projection().ArtifactPath()
+		if !materialized {
+			t.Fatal("nested directory projection did not materialize")
+		}
+		parentMaterialization, err = transfer.NewMaterializedDirectoryClaim(parentAdmission, directoryRequest)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -428,25 +482,15 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	var outputLocator transfer.MaterializationLocator
-	if options.objectLocator {
-		outputLocator, err = transfer.NewMaterializationObjectLocator(bytes.Repeat([]byte{0x81}, 32))
-	} else {
-		outputLocator, err = transfer.NewPathMaterializationLocator(path)
-	}
+	sourcePath, err := ordinaryoutput.NewSourceCatalogPath(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := transfer.NewFileMaterializationTarget(sessionID, descriptor, outputLocator)
+	file, err := transfer.NewMaterializationFile(
+		projector, sourcePath, descriptor, sessionID, parentAdmission, parentMaterialization,
+	)
 	if err != nil {
 		t.Fatal(err)
-	}
-	file := transfer.MaterializationFile{
-		Path:            path,
-		ExpectedSize:    fileAuthorityExactSize,
-		Descriptor:      descriptor,
-		Target:          target,
-		ParentAdmission: parentAdmission,
 	}
 	_, beginErr := session.BeginFile(context.Background(), file)
 	if !errors.Is(beginErr, errFileAuthorityCapture) {
@@ -456,7 +500,6 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 	expectation, err := fileexecution.NewFinalExpectation(
 		identity,
 		fileAuthorityExactSize,
-		descriptor.ModifiedTime(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -488,7 +531,7 @@ func fileAuthorityObject(
 func TestFileAuthorityBindsOnlyExactLiveSessionClaims(t *testing.T) {
 	platform := newFileAuthorityPlatform()
 	objects := newFileAuthorityObjects(platform)
-	if _, err := NewFileAuthority(nil, objects); !errors.Is(err, ErrInvalidConfiguration) {
+	if _, err := NewFileAuthority(nil, objects, testIdentity[transfer.OutputSessionID](1)); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("nil directory authority error = %v", err)
 	}
 	directories, err := New(platform, Config{})
@@ -496,7 +539,7 @@ func TestFileAuthorityBindsOnlyExactLiveSessionClaims(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer directories.Close()
-	if _, err := NewFileAuthority(directories, nil); !errors.Is(err, ErrInvalidConfiguration) {
+	if _, err := NewFileAuthority(directories, nil, testIdentity[transfer.OutputSessionID](1)); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("nil object authority error = %v", err)
 	}
 
@@ -504,7 +547,7 @@ func TestFileAuthorityBindsOnlyExactLiveSessionClaims(t *testing.T) {
 	if fixture.capture.bindErr != nil || fixture.destination == nil {
 		t.Fatalf("exact binding destination=%T error=%v", fixture.destination, fixture.capture.bindErr)
 	}
-	if fixture.destination.Target() != fixture.file.Target {
+	if fixture.destination.Target() != fixture.file.Target() {
 		t.Fatalf("destination target=%+v", fixture.destination.Target())
 	}
 	if (*fileDestination)(nil).Target() != (transfer.FileMaterializationTarget{}) ||
@@ -512,18 +555,17 @@ func TestFileAuthorityBindsOnlyExactLiveSessionClaims(t *testing.T) {
 		t.Fatal("nil destination accessors did not remain inert")
 	}
 
-	if _, err := (*FileAuthority)(nil).BindFile(context.Background(), transfer.MaterializationFile{}); !errors.Is(err, ErrInvalidClaim) {
+	if _, err := (*FileAuthority)(nil).BindFile(
+		context.Background(), transfer.MaterializationFile{}, transfer.OutputDestinationPath{},
+	); !errors.Is(err, ErrInvalidClaim) {
 		t.Fatalf("nil authority error = %v", err)
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := fixture.authority.BindFile(canceled, fixture.capture.claim.File()); !errors.Is(err, context.Canceled) {
+	if _, err := fixture.authority.BindFile(
+		canceled, fixture.capture.claim.File(), fixture.capture.claim.DestinationPath(),
+	); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled bind error = %v", err)
-	}
-
-	objectLocator := newFileAuthorityFixture(t, fileAuthorityFixtureOptions{objectLocator: true})
-	if !errors.Is(objectLocator.capture.bindErr, ErrInvalidClaim) || objectLocator.capture.destination != nil {
-		t.Fatalf("non-path locator destination=%T error=%v", objectLocator.capture.destination, objectLocator.capture.bindErr)
 	}
 
 	foreignPlatform := newFileAuthorityPlatform()
@@ -532,12 +574,14 @@ func TestFileAuthorityBindsOnlyExactLiveSessionClaims(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer foreignDirectories.Close()
-	foreign, err := NewFileAuthority(foreignDirectories, newFileAuthorityObjects(foreignPlatform))
+	foreign, err := NewFileAuthority(foreignDirectories, newFileAuthorityObjects(foreignPlatform), testIdentity[transfer.OutputSessionID](152))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := foreign.BindFile(context.Background(), fixture.capture.claim.File()); !errors.Is(err, ErrParentUnavailable) {
-		t.Fatalf("foreign parent binding error = %v", err)
+	if _, err := foreign.BindFile(
+		context.Background(), fixture.capture.claim.File(), fixture.capture.claim.DestinationPath(),
+	); !errors.Is(err, ErrInvalidClaim) {
+		t.Fatalf("foreign session binding error = %v", err)
 	}
 }
 
@@ -604,7 +648,7 @@ func TestFileAuthorityClassifiesPresenceWithoutAdoptingAliases(t *testing.T) {
 	}
 }
 
-func TestFileAuthorityComparesOwnedIdentityBeforeMetadata(t *testing.T) {
+func TestFileAuthorityProvesOwnedIdentityAndSizeWithoutDisplayMetadata(t *testing.T) {
 	fixture := newFileAuthorityFixture(t, fileAuthorityFixtureOptions{})
 	fixture.platform.addFile(fixture.parent, fixture.leaf, fileAuthorityExactSize)
 
@@ -616,12 +660,14 @@ func TestFileAuthorityComparesOwnedIdentityBeforeMetadata(t *testing.T) {
 
 	fixture.objects.match = true
 	fixture.platform.finalPolicy.metadataMatches = false
+	fixture.platform.finalPolicy.metadataErr = errors.New("display metadata unavailable")
 	observed, err = fixture.destination.ObserveFinal(context.Background(), fixture.expectation)
-	if err != nil || observed.Condition() != fileexecution.FinalOwnedMetadataMismatch {
-		t.Fatalf("metadata mismatch condition=%v error=%v", observed.Condition(), err)
+	if err != nil || observed.Condition() != fileexecution.FinalOwnedExact {
+		t.Fatalf("owned final condition=%v error=%v", observed.Condition(), err)
 	}
 
 	fixture.platform.finalPolicy.metadataMatches = true
+	fixture.platform.finalPolicy.metadataErr = nil
 	observed, err = fixture.destination.ObserveFinal(context.Background(), fixture.expectation)
 	if err != nil || observed.Condition() != fileexecution.FinalOwnedExact {
 		t.Fatalf("exact final condition=%v error=%v", observed.Condition(), err)
@@ -642,13 +688,6 @@ func TestFileAuthorityComparesOwnedIdentityBeforeMetadata(t *testing.T) {
 	}
 	fixture.objects.matchErr = nil
 	fixture.platform.finalPolicy.closeErr = nil
-
-	errMetadata := errors.New("metadata observation failed")
-	fixture.platform.finalPolicy.metadataErr = errMetadata
-	if _, err := fixture.destination.ObserveFinal(context.Background(), fixture.expectation); !errors.Is(err, errMetadata) {
-		t.Fatalf("metadata observation error = %v", err)
-	}
-	fixture.platform.finalPolicy.metadataErr = nil
 
 	if _, err := fixture.destination.ObserveFinal(context.Background(), fileexecution.FinalExpectation{}); !errors.Is(err, ErrInvalidClaim) {
 		t.Fatalf("zero final expectation error = %v", err)
@@ -784,5 +823,118 @@ func TestFileAuthoritySyncAndCloseRetainParentGuardSemantics(t *testing.T) {
 	}
 	if _, err := fixture.destination.ObserveFinalPresence(context.Background()); !errors.Is(err, ErrAuthorityClosed) {
 		t.Fatalf("closed destination error = %v", err)
+	}
+}
+
+type liveFileAuthorityOwned struct {
+	*fileAuthorityOwnedFile
+	native outputcap.File
+}
+
+func (file *liveFileAuthorityOwned) NativeFile() outputcap.File {
+	if file == nil {
+		return nil
+	}
+	return file.native
+}
+
+func TestLiveFileAuthorityPublishesOnlyTheRetainedStageIdentity(t *testing.T) {
+	sessionID := testIdentity[transfer.OutputSessionID](151)
+	if _, err := NewLiveFileAuthority(nil, sessionID); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("nil live directory authority error = %v", err)
+	}
+	platform := newFileAuthorityPlatform()
+	directories, err := New(platform, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directories.Close()
+	if _, err := NewLiveFileAuthority(directories, transfer.OutputSessionID{}); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("zero live session error = %v", err)
+	}
+
+	fixture := newFileAuthorityFixture(t, fileAuthorityFixtureOptions{live: true})
+	if fixture.capture.bindErr != nil || fixture.destination == nil {
+		t.Fatalf("live binding destination=%T error=%v", fixture.destination, fixture.capture.bindErr)
+	}
+	destination, ok := fixture.destination.(*fileDestination)
+	if !ok {
+		t.Fatalf("live destination type = %T", fixture.destination)
+	}
+	if err := destination.WithExactParent(context.Background(), nil); !errors.Is(err, ErrInvalidClaim) {
+		t.Fatalf("nil parent callback error = %v", err)
+	}
+	parentVisited := false
+	if err := destination.WithExactParent(context.Background(), func(parent outputcap.Directory) error {
+		parentVisited = parent != nil
+		return nil
+	}); err != nil || !parentVisited {
+		t.Fatalf("parent visit = (%t, %v)", parentVisited, err)
+	}
+	if observed, err := fixture.destination.ObserveFinalPresence(context.Background()); err != nil ||
+		observed.Condition() != fileexecution.FinalAbsent {
+		t.Fatalf("initial final = (%v, %v)", observed.Condition(), err)
+	}
+
+	stageNode := &fakeNode{id: 900, size: fileAuthorityExactSize}
+	owned := &liveFileAuthorityOwned{
+		fileAuthorityOwnedFile: &fileAuthorityOwnedFile{object: fixture.object},
+		native:                 &fakeFile{node: stageNode},
+	}
+	if observed, err := destination.ObserveOwnedFinal(
+		context.Background(), owned, fixture.expectation,
+	); err != nil || observed.Condition() != fileexecution.FinalAbsent {
+		t.Fatalf("pre-publish owned final = (%v, %v)", observed.Condition(), err)
+	}
+	observed, err := fixture.destination.PublishNoReplace(
+		context.Background(), owned, fixture.expectation,
+	)
+	if err != nil || observed.Condition() != fileexecution.FinalOwnedExact {
+		t.Fatalf("live publish = (%v, %v)", observed.Condition(), err)
+	}
+	if observed, err = destination.ObserveOwnedFinal(
+		context.Background(), owned, fixture.expectation,
+	); err != nil || observed.Condition() != fileexecution.FinalOwnedExact {
+		t.Fatalf("published owned final = (%v, %v)", observed.Condition(), err)
+	}
+	if observed, err = fixture.destination.PublishNoReplace(
+		context.Background(), owned, fixture.expectation,
+	); err != nil || observed.Condition() != fileexecution.FinalOwnedExact {
+		t.Fatalf("idempotent live publish = (%v, %v)", observed.Condition(), err)
+	}
+	if observed, err = fixture.destination.ObserveFinalPresence(context.Background()); err != nil ||
+		observed.Condition() != fileexecution.FinalCollision {
+		t.Fatalf("presence-only final = (%v, %v)", observed.Condition(), err)
+	}
+
+	if _, err := destination.ObserveOwnedFinal(
+		context.Background(),
+		&fileAuthorityOwnedFile{object: fixture.object},
+		fixture.expectation,
+	); !errors.Is(err, ErrInvalidClaim) {
+		t.Fatalf("non-native live object error = %v", err)
+	}
+	otherObject, _ := fileAuthorityObject(t, 0x92)
+	if _, err := fixture.destination.PublishNoReplace(
+		context.Background(),
+		&liveFileAuthorityOwned{
+			fileAuthorityOwnedFile: &fileAuthorityOwnedFile{object: otherObject},
+			native:                 owned.native,
+		},
+		fixture.expectation,
+	); !errors.Is(err, ErrInvalidClaim) {
+		t.Fatalf("foreign live object error = %v", err)
+	}
+
+	fixture.platform.mu.Lock()
+	fixture.parent.entries[fixture.leaf] = fakeEntry{
+		kind: outputcap.EntryRegularFile,
+		node: &fakeNode{id: 901, size: fileAuthorityExactSize},
+	}
+	fixture.platform.mu.Unlock()
+	if observed, err = destination.ObserveOwnedFinal(
+		context.Background(), owned, fixture.expectation,
+	); err != nil || observed.Condition() != fileexecution.FinalCollision {
+		t.Fatalf("replaced live final = (%v, %v)", observed.Condition(), err)
 	}
 }

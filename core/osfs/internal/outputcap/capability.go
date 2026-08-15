@@ -13,7 +13,232 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 )
 
+// CapabilityFact is deliberately binary. Platforms report one fact per
+// semantic guarantee rather than smuggling partial support through an enum.
+type CapabilityFact uint8
+
+const (
+	CapabilityUnsupported CapabilityFact = iota + 1
+	CapabilitySupported
+)
+
+func (fact CapabilityFact) Valid() bool {
+	return fact == CapabilityUnsupported || fact == CapabilitySupported
+}
+
+func (fact CapabilityFact) Supported() bool { return fact == CapabilitySupported }
+
+func (fact CapabilityFact) String() string {
+	switch fact {
+	case CapabilityUnsupported:
+		return "unsupported"
+	case CapabilitySupported:
+		return "supported"
+	default:
+		return ""
+	}
+}
+
+// CapabilityReason is closed because callers may expose it in typed diagnostics
+// and must never infer behavior from platform error strings.
+type CapabilityReason uint8
+
+const (
+	CapabilityReasonNone CapabilityReason = iota + 1
+	CapabilityReasonUnsupportedFilesystem
+	CapabilityReasonNetworkFilesystem
+	CapabilityReasonUserspaceFilesystem
+	CapabilityReasonCloudPlaceholder
+	CapabilityReasonReparseOrNestedMount
+	CapabilityReasonUnsafePublication
+	CapabilityReasonUnverifiableOperationRecovery
+	CapabilityReasonUnverifiableRangeRecovery
+	CapabilityReasonUnverifiableCrashCleanup
+	CapabilityReasonCleanupJournalOverflow
+	CapabilityReasonCleanupOwnershipUnknown
+)
+
+func (reason CapabilityReason) Valid() bool {
+	return reason >= CapabilityReasonNone && reason <= CapabilityReasonCleanupOwnershipUnknown
+}
+
+func (reason CapabilityReason) String() string {
+	switch reason {
+	case CapabilityReasonNone:
+		return "none"
+	case CapabilityReasonUnsupportedFilesystem:
+		return "unsupported-filesystem"
+	case CapabilityReasonNetworkFilesystem:
+		return "network-filesystem"
+	case CapabilityReasonUserspaceFilesystem:
+		return "userspace-filesystem"
+	case CapabilityReasonCloudPlaceholder:
+		return "cloud-placeholder"
+	case CapabilityReasonReparseOrNestedMount:
+		return "reparse-or-nested-mount"
+	case CapabilityReasonUnsafePublication:
+		return "unsafe-publication"
+	case CapabilityReasonUnverifiableOperationRecovery:
+		return "operation-recovery-unverifiable"
+	case CapabilityReasonUnverifiableRangeRecovery:
+		return "range-recovery-unverifiable"
+	case CapabilityReasonUnverifiableCrashCleanup:
+		return "crash-cleanup-unverifiable"
+	case CapabilityReasonCleanupJournalOverflow:
+		return "cleanup-journal-overflow"
+	case CapabilityReasonCleanupOwnershipUnknown:
+		return "cleanup-ownership-unknown"
+	default:
+		return ""
+	}
+}
+
+// CapabilityEvidence pairs a guarantee with the closed reason that explains a
+// negative result. Supported facts intentionally carry no reason.
+type CapabilityEvidence struct {
+	fact   CapabilityFact
+	reason CapabilityReason
+}
+
+func SupportedCapability() CapabilityEvidence {
+	return CapabilityEvidence{fact: CapabilitySupported, reason: CapabilityReasonNone}
+}
+
+func UnsupportedCapability(reason CapabilityReason) (CapabilityEvidence, error) {
+	evidence := CapabilityEvidence{fact: CapabilityUnsupported, reason: reason}
+	if !evidence.Valid() {
+		return CapabilityEvidence{}, ErrInvalidDestinationCapabilities
+	}
+	return evidence, nil
+}
+
+func (evidence CapabilityEvidence) Fact() CapabilityFact     { return evidence.fact }
+func (evidence CapabilityEvidence) Reason() CapabilityReason { return evidence.reason }
+func (evidence CapabilityEvidence) Supported() bool          { return evidence.fact.Supported() }
+func (evidence CapabilityEvidence) Valid() bool {
+	return evidence.fact.Valid() && evidence.reason.Valid() &&
+		(evidence.fact == CapabilitySupported) == (evidence.reason == CapabilityReasonNone)
+}
+
+// DestinationCapabilities keeps independent proofs independent. In particular,
+// failure to prove restart recovery cannot erase a proven no-replace publish.
+type DestinationCapabilities struct {
+	safePublish       CapabilityEvidence
+	operationRecovery CapabilityEvidence
+	rangeRecovery     CapabilityEvidence
+	crashCleanup      CapabilityEvidence
+}
+
+func NewDestinationCapabilities(
+	safePublish CapabilityEvidence,
+	operationRecovery CapabilityEvidence,
+	rangeRecovery CapabilityEvidence,
+	crashCleanup CapabilityEvidence,
+) (DestinationCapabilities, error) {
+	capabilities := DestinationCapabilities{
+		safePublish: safePublish, operationRecovery: operationRecovery,
+		rangeRecovery: rangeRecovery, crashCleanup: crashCleanup,
+	}
+	if !capabilities.Valid() {
+		return DestinationCapabilities{}, ErrInvalidDestinationCapabilities
+	}
+	return capabilities, nil
+}
+
+func (capabilities DestinationCapabilities) SafePublish() CapabilityEvidence {
+	return capabilities.safePublish
+}
+func (capabilities DestinationCapabilities) OperationRecovery() CapabilityEvidence {
+	return capabilities.operationRecovery
+}
+func (capabilities DestinationCapabilities) RangeRecovery() CapabilityEvidence {
+	return capabilities.rangeRecovery
+}
+func (capabilities DestinationCapabilities) CrashCleanup() CapabilityEvidence {
+	return capabilities.crashCleanup
+}
+func (capabilities DestinationCapabilities) Valid() bool {
+	return capabilities.safePublish.Valid() && capabilities.operationRecovery.Valid() &&
+		capabilities.rangeRecovery.Valid() && capabilities.crashCleanup.Valid()
+}
+
+type ExecutionMode uint8
+
+const (
+	ExecutionResumable ExecutionMode = iota + 1
+	ExecutionLiveOnly
+)
+
+const (
+	ExecutionModeResumable = ExecutionResumable
+	ExecutionModeLiveOnly  = ExecutionLiveOnly
+)
+
+func (mode ExecutionMode) Valid() bool {
+	return mode == ExecutionResumable || mode == ExecutionLiveOnly
+}
+
+func (mode ExecutionMode) String() string {
+	switch mode {
+	case ExecutionResumable:
+		return "resumable"
+	case ExecutionLiveOnly:
+		return "live-only"
+	default:
+		return ""
+	}
+}
+
+// SelectExecutionMode permits live-only output only when both public visibility
+// and restart cleanup are proven. Registry or range weakness alone is not a
+// reason to weaken either safety guarantee.
+func SelectExecutionMode(capabilities DestinationCapabilities) (ExecutionMode, error) {
+	if !capabilities.Valid() {
+		return 0, ErrInvalidDestinationCapabilities
+	}
+	if !capabilities.safePublish.Supported() || !capabilities.crashCleanup.Supported() {
+		return 0, ErrOrdinaryOutputUnsupported
+	}
+	if capabilities.operationRecovery.Supported() && capabilities.rangeRecovery.Supported() {
+		return ExecutionResumable, nil
+	}
+	return ExecutionLiveOnly, nil
+}
+
+type PublishNoReplaceOutcome uint8
+
+const (
+	PublishNoReplaceCommitted PublishNoReplaceOutcome = iota + 1
+	PublishNoReplaceCollision
+	PublishNoReplaceIndeterminate
+)
+
+const (
+	PublishCommitted     = PublishNoReplaceCommitted
+	PublishCollision     = PublishNoReplaceCollision
+	PublishIndeterminate = PublishNoReplaceIndeterminate
+)
+
+func (outcome PublishNoReplaceOutcome) Valid() bool {
+	return outcome >= PublishNoReplaceCommitted && outcome <= PublishNoReplaceIndeterminate
+}
+
+func (outcome PublishNoReplaceOutcome) String() string {
+	switch outcome {
+	case PublishNoReplaceCommitted:
+		return "committed"
+	case PublishNoReplaceCollision:
+		return "collision"
+	case PublishNoReplaceIndeterminate:
+		return "indeterminate"
+	default:
+		return ""
+	}
+}
+
 var (
+	ErrInvalidDestinationCapabilities = errors.New("osfs: destination capabilities are invalid")
+	ErrOrdinaryOutputUnsupported      = errors.New("osfs: ordinary output is unsupported by the destination")
 	// ErrRecoverableOutputUnsupported reports that the native filesystem cannot
 	// satisfy the certified resumable-output contract.
 	ErrRecoverableOutputUnsupported = errors.New("osfs: recoverable native output is unsupported")

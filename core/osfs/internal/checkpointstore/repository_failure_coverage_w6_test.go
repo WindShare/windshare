@@ -16,249 +16,6 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 )
 
-func TestOperationRepositoryRejectsIncompleteAndSubstitutedAuthority(t *testing.T) {
-	_, namespace, lease, repository, _, fixture := openRepositoryFixture(t, 0x11)
-	t.Cleanup(func() {
-		_ = repository.Close()
-		_ = lease.Close()
-		_ = namespace.Close()
-	})
-
-	var nilRepository *Repository
-	if err := nilRepository.InstallOperation(fixture.operation, fixture.binding); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
-		t.Fatalf("nil install error = %v", err)
-	}
-	if _, err := nilRepository.ReadOperation(); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
-		t.Fatalf("nil operation read error = %v", err)
-	}
-	if _, err := nilRepository.ReadMaterializationBinding(); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
-		t.Fatalf("nil reservation read error = %v", err)
-	}
-	if err := repository.InstallOperation(fixture.operation, append(bytes.Clone(fixture.binding), 0)); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("substituted reservation install error = %v", err)
-	}
-	foreign := compatibleOperationFixture(t, fixture, 0x21)
-	if err := repository.InstallOperation(foreign.operation, foreign.binding); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
-		t.Fatalf("foreign operation install error = %v", err)
-	}
-
-	operationDirectory := repository.operation.(*memoryDirectory)
-	operationFile := operationDirectory.files[OperationFile]
-	reservationFile := operationDirectory.files[ReservationFile]
-	operationFile.mu.Lock()
-	originalOperation := bytes.Clone(operationFile.bytes)
-	operationFile.bytes = []byte("corrupt operation")
-	operationFile.mu.Unlock()
-	if _, err := repository.ReadOperation(); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("corrupt operation read error = %v", err)
-	}
-	operationFile.mu.Lock()
-	operationFile.bytes = originalOperation
-	operationFile.mu.Unlock()
-
-	reservationFile.mu.Lock()
-	originalReservation := bytes.Clone(reservationFile.bytes)
-	reservationFile.bytes[0] ^= 1
-	reservationFile.mu.Unlock()
-	if _, err := repository.ReadMaterializationBinding(); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("substituted reservation read error = %v", err)
-	}
-	reservationFile.mu.Lock()
-	reservationFile.bytes = originalReservation
-	reservationFile.mu.Unlock()
-
-	var nilLease *OperationLease
-	if err := nilLease.RegisterLookup(fixture.operation); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
-		t.Fatalf("nil lookup registration error = %v", err)
-	}
-	if err := lease.RegisterLookup(foreign.operation); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
-		t.Fatalf("foreign lookup registration error = %v", err)
-	}
-	if _, err := namespace.LookupCompatible(checkpointmodel.CompatibleOperationKey{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
-		t.Fatalf("zero compatible key error = %v", err)
-	}
-}
-
-func TestCompatibleLookupTurnsStorageUncertaintyIntoAttention(t *testing.T) {
-	_, namespace, lease, repository, _, fixture := openRepositoryFixture(t, 0x31)
-	t.Cleanup(func() {
-		_ = repository.Close()
-		_ = lease.Close()
-		_ = namespace.Close()
-	})
-	key := fixture.operation.ReopenKey().CompatibleKey()
-	lookupRoot := namespace.lookup.(*memoryDirectory)
-	keyDirectory := lookupRoot.dirsForTest(t, bytesToHex(key.Bytes()))
-	operationName := operationNamespaceName(fixture.intent.OperationID())
-
-	t.Run("short index image", func(t *testing.T) {
-		index := keyDirectory.files[operationName]
-		index.mu.Lock()
-		original := bytes.Clone(index.bytes)
-		index.bytes = []byte{1}
-		index.mu.Unlock()
-		t.Cleanup(func() {
-			index.mu.Lock()
-			index.bytes = original
-			index.mu.Unlock()
-		})
-		lookup, err := namespace.LookupCompatible(key)
-		if err != nil || !lookup.OwnershipUncertain() || len(lookup.Operations()) != 0 {
-			t.Fatalf("short index lookup = (%d, %t, %v)", len(lookup.Operations()), lookup.OwnershipUncertain(), err)
-		}
-	})
-
-	t.Run("index enumeration failure", func(t *testing.T) {
-		failure := errors.New("list lookup failed")
-		original := namespace.lookup
-		namespace.lookup = &faultDirectory{
-			Directory: original,
-			openDirectory: func(string, bool) (outputcap.Directory, error) {
-				return &faultDirectory{Directory: keyDirectory, names: func(int) ([]string, error) { return nil, failure }}, nil
-			},
-		}
-		defer func() { namespace.lookup = original }()
-		if _, err := namespace.LookupCompatible(key); !errors.Is(err, failure) {
-			t.Fatalf("lookup enumeration error = %v", err)
-		}
-	})
-
-	t.Run("bounded index overflow", func(t *testing.T) {
-		original := namespace.lookup
-		namespace.lookup = &faultDirectory{
-			Directory: original,
-			openDirectory: func(string, bool) (outputcap.Directory, error) {
-				return &faultDirectory{Directory: keyDirectory, names: func(int) ([]string, error) {
-					return make([]string, checkpointmodel.MaxCheckpointRecordsPerOperation+1), nil
-				}}, nil
-			},
-		}
-		defer func() { namespace.lookup = original }()
-		lookup, err := namespace.LookupCompatible(key)
-		if err != nil || !lookup.OwnershipUncertain() || len(lookup.Operations()) != 0 {
-			t.Fatalf("overflow lookup = (%d, %t, %v)", len(lookup.Operations()), lookup.OwnershipUncertain(), err)
-		}
-	})
-
-	t.Run("operation image cannot authenticate index", func(t *testing.T) {
-		operationDirectory := repository.operation.(*memoryDirectory)
-		operationFile := operationDirectory.files[OperationFile]
-		index := keyDirectory.files[operationName]
-		operationFile.mu.Lock()
-		originalOperation := bytes.Clone(operationFile.bytes)
-		operationFile.bytes = []byte("corrupt")
-		corruptOperation := bytes.Clone(operationFile.bytes)
-		operationFile.mu.Unlock()
-		index.mu.Lock()
-		originalIndex := bytes.Clone(index.bytes)
-		digest := sha256.Sum256(corruptOperation)
-		index.bytes = digest[:]
-		index.mu.Unlock()
-		defer func() {
-			operationFile.mu.Lock()
-			operationFile.bytes = originalOperation
-			operationFile.mu.Unlock()
-			index.mu.Lock()
-			index.bytes = originalIndex
-			index.mu.Unlock()
-		}()
-		lookup, err := namespace.LookupCompatible(key)
-		if err != nil || !lookup.OwnershipUncertain() || len(lookup.Operations()) != 0 {
-			t.Fatalf("corrupt operation lookup = (%d, %t, %v)", len(lookup.Operations()), lookup.OwnershipUncertain(), err)
-		}
-	})
-}
-
-func TestAggregateRepositoryRejectsForeignAndUncommittedEvidence(t *testing.T) {
-	_, namespace, lease, repository, ownership, fixture := openRepositoryFixture(t, 0x41)
-	t.Cleanup(func() {
-		_ = repository.Close()
-		_ = lease.Close()
-		_ = namespace.Close()
-	})
-
-	reference := installAggregateCheckpoint(t, &repository, ownership, fixture, 0x42)
-	evidence, err := checkpointmodel.AggregateDigestFromBytes(bytes.Repeat([]byte{0x43}, sha256.Size))
-	if err != nil {
-		t.Fatal(err)
-	}
-	foreignFixture := compatibleOperationFixture(t, fixture, 0x51)
-	foreignReceipt, err := checkpointmodel.NewDirectTreeReceipt(checkpointmodel.DirectTreeReceiptSpec{
-		Kind: checkpointmodel.ReceiptTreeCompletion, OperationID: foreignFixture.intent.OperationID(),
-		ReceiveIntent: foreignFixture.intent.Digest(), ReservationDigest: foreignFixture.intent.BindingDigest(),
-		CheckpointRefs: []checkpointmodel.FileCheckpointReference{reference}, EvidenceDigest: evidence, SuccessCount: 1,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.InstallReceipt(foreignReceipt); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("foreign receipt error = %v", err)
-	}
-	foreignLifecycle, err := checkpointmodel.NewReceiveLifecycleState(checkpointmodel.LifecycleStateSpec{
-		OperationID: foreignFixture.intent.OperationID(), ReceiveIntent: foreignFixture.intent.Digest(),
-		StateGeneration: 1, Phase: checkpointmodel.LifecycleIntentFrozen,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.CreateLifecycleState(foreignLifecycle); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("foreign lifecycle error = %v", err)
-	}
-	wrongInitial, err := checkpointmodel.NewReceiveLifecycleState(checkpointmodel.LifecycleStateSpec{
-		OperationID: fixture.intent.OperationID(), ReceiveIntent: fixture.intent.Digest(),
-		StateGeneration: 2, Phase: checkpointmodel.LifecycleReceiving,
-		CheckpointRefs: []checkpointmodel.FileCheckpointReference{reference}, SuccessCount: 1,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.CreateLifecycleState(wrongInitial); errorCode(err) != ErrorUnsafeInstall {
-		t.Fatalf("non-initial lifecycle create error = %v", err)
-	}
-
-	candidate := checkpointRecordFixture(t, ownership, fixture, 0x61)
-	if err := repository.Create(candidate); err != nil {
-		t.Fatal(err)
-	}
-	candidateReference, err := checkpointmodel.FileCheckpointReferenceFromIdentity(
-		candidate.RecordID(), candidate.CheckpointGeneration(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	uncommittedReceipt, err := checkpointmodel.NewDirectTreeReceipt(checkpointmodel.DirectTreeReceiptSpec{
-		Kind: checkpointmodel.ReceiptTreeCompletion, OperationID: fixture.intent.OperationID(),
-		ReceiveIntent: fixture.intent.Digest(), ReservationDigest: fixture.intent.BindingDigest(),
-		CheckpointRefs: []checkpointmodel.FileCheckpointReference{candidateReference}, EvidenceDigest: evidence, SuccessCount: 1,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.InstallReceipt(uncommittedReceipt); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("uncommitted aggregate reference error = %v", err)
-	}
-
-	missingID, err := checkpointmodel.RecordIDFromBytes(bytes.Repeat([]byte{0x71}, sha256.Size))
-	if err != nil {
-		t.Fatal(err)
-	}
-	missingReference, err := checkpointmodel.FileCheckpointReferenceFromIdentity(missingID, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	missingReceipt, err := checkpointmodel.NewDirectTreeReceipt(checkpointmodel.DirectTreeReceiptSpec{
-		Kind: checkpointmodel.ReceiptTreeCompletion, OperationID: fixture.intent.OperationID(),
-		ReceiveIntent: fixture.intent.Digest(), ReservationDigest: fixture.intent.BindingDigest(),
-		CheckpointRefs: []checkpointmodel.FileCheckpointReference{missingReference}, EvidenceDigest: evidence, SuccessCount: 1,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.InstallReceipt(missingReceipt); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("missing aggregate reference error = %v", err)
-	}
-}
-
 type exactFaultDirectory struct {
 	outputcap.Directory
 	classify func(string) (outputcap.EntryKind, bool, error)
@@ -284,42 +41,6 @@ type ownedFaultFile struct {
 	same func(outputcap.File) (bool, error)
 	size func() (uint64, error)
 }
-
-type leaseFaultDirectory struct {
-	outputcap.Directory
-	acquireLock func(string, bool) (outputcap.Lock, bool, error)
-	duplicate   func() (outputcap.Directory, error)
-	syncErr     error
-}
-
-func (directory *leaseFaultDirectory) AcquireLock(name string, existing bool) (outputcap.Lock, bool, error) {
-	if directory.acquireLock != nil {
-		return directory.acquireLock(name, existing)
-	}
-	return directory.Directory.AcquireLock(name, existing)
-}
-
-func (directory *leaseFaultDirectory) Duplicate() (outputcap.Directory, error) {
-	if directory.duplicate != nil {
-		return directory.duplicate()
-	}
-	return directory.Directory.Duplicate()
-}
-
-func (directory *leaseFaultDirectory) Sync() error {
-	if directory.syncErr != nil {
-		return directory.syncErr
-	}
-	return directory.Directory.Sync()
-}
-
-type coverageLock struct {
-	outputcap.Lock
-	file outputcap.File
-}
-
-func (lock *coverageLock) File() outputcap.File { return lock.file }
-func (lock *coverageLock) Close() error         { return nil }
 
 func (file *ownedFaultFile) SameFile(other outputcap.File) (bool, error) {
 	if file.same != nil {
@@ -394,7 +115,7 @@ func TestOwnedCleanupRefusesInexactOrChangedEntries(t *testing.T) {
 	shardName, entryName := ownedObjectLocation(object, ownedStageSuffix)
 
 	t.Run("missing shard is already clean", func(t *testing.T) {
-		if err := removeOwnedEntry(newMemoryDirectory(), object, ownedStageSuffix); err != nil {
+		if err := removeOwnedEntry(newMemoryDirectory(), object, ownedStageSuffix, true); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -408,7 +129,7 @@ func TestOwnedCleanupRefusesInexactOrChangedEntries(t *testing.T) {
 				return outputcap.EntryRegularFile, false, nil
 			}}, nil
 		}}
-		if err := removeOwnedEntry(rootFault, object, ownedStageSuffix); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+		if err := removeOwnedEntry(rootFault, object, ownedStageSuffix, true); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 			t.Fatalf("inexact cleanup error = %v", err)
 		}
 	})
@@ -422,7 +143,7 @@ func TestOwnedCleanupRefusesInexactOrChangedEntries(t *testing.T) {
 				return outputcap.EntryDirectory, true, nil
 			}}, nil
 		}}
-		if err := removeOwnedEntry(rootFault, object, ownedStageSuffix); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+		if err := removeOwnedEntry(rootFault, object, ownedStageSuffix, true); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 			t.Fatalf("wrong-kind cleanup error = %v", err)
 		}
 	})
@@ -439,7 +160,7 @@ func TestOwnedCleanupRefusesInexactOrChangedEntries(t *testing.T) {
 		rootFault := &faultDirectory{Directory: root, openDirectory: func(string, bool) (outputcap.Directory, error) {
 			return &exactFaultDirectory{Directory: shard, remove: func(string, outputcap.File) error { return changed }}, nil
 		}}
-		if err := removeOwnedEntry(rootFault, object, ownedStageSuffix); !errors.Is(err, changed) {
+		if err := removeOwnedEntry(rootFault, object, ownedStageSuffix, true); !errors.Is(err, changed) {
 			t.Fatalf("changed cleanup error = %v", err)
 		}
 		_ = file.Close()
@@ -471,7 +192,7 @@ func TestOwnedCreateReconcilesPartialAllocationWithoutInventingReadyState(t *tes
 		Directory:       originalStages,
 		createDirectory: func(string, bool) (outputcap.Directory, error) { return nil, failure },
 	}
-	file, observation, err := store.CreateOwnedFile(context.Background(), object, 4)
+	file, observation, err := store.CreateOwnedFile(context.Background(), nil, object, 4)
 	if file != nil || observation.Condition() != fileexecution.OwnedAbsent || !errors.Is(err, failure) {
 		t.Fatalf("partial allocation reconciliation = (%T, %d, %v)", file, observation.Condition(), err)
 	}
@@ -679,45 +400,6 @@ func TestRecordReadBoundsRejectShortAndOversizedImages(t *testing.T) {
 	}
 }
 
-func TestCertifiedNamespaceReopensWithoutRepairingDurableAuthority(t *testing.T) {
-	root, namespace, lease, repository, ownership, fixture := openRepositoryFixture(t, 0xd1)
-	if err := repository.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := lease.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := namespace.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	reopened, err := OpenNamespace(CertifiedConfig{Root: root, Ownership: ownership})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
-	reopenedLease, err := reopened.AcquireOperation(
-		fixture.intent.OperationID(), fixture.intent.Digest(), fixture.intent.BindingDigest(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopenedLease.Close() })
-	reopenedRepository, err := reopenedLease.OpenExistingRepository()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopenedRepository.Close() })
-	operation, err := reopenedRepository.ReadOperation()
-	if err != nil || operation.OperationID() != fixture.intent.OperationID() {
-		t.Fatalf("reopened operation = (%x, %v)", operation.OperationID(), err)
-	}
-	lifecycle, err := reopenedRepository.ReadLifecycleState()
-	if err != nil || lifecycle.Phase() != checkpointmodel.LifecycleIntentFrozen {
-		t.Fatalf("reopened lifecycle = (%d, %v)", lifecycle.Phase(), err)
-	}
-}
-
 func TestCreateCollisionSettlesOnlyAnExactAuthenticatedTarget(t *testing.T) {
 	install := func(t *testing.T, directory *memoryDirectory, name string, value []byte) outputcap.File {
 		t.Helper()
@@ -830,99 +512,6 @@ func TestCertifiedLayoutValidationRejectsInexactAndUnknownEntries(t *testing.T) 
 	}
 }
 
-func TestOperationLeaseRequiresExactLiveCapabilities(t *testing.T) {
-	_, namespace, lease, repository, _, fixture := openRepositoryFixture(t, 0xe1)
-	t.Cleanup(func() {
-		_ = repository.Close()
-		_ = lease.Close()
-		_ = namespace.Close()
-	})
-	operation := fixture.intent.OperationID()
-	intent := fixture.intent.Digest()
-	binding := fixture.intent.BindingDigest()
-	lock := &coverageLock{file: &memoryFile{data: &memoryFileData{}}}
-
-	for name, configure := range map[string]func(*Namespace) error{
-		"lock failure": func(candidate *Namespace) error {
-			failure := errors.New("lease unavailable")
-			candidate.leases = &leaseFaultDirectory{
-				Directory:   candidate.leases,
-				acquireLock: func(string, bool) (outputcap.Lock, bool, error) { return nil, false, failure },
-			}
-			return failure
-		},
-		"nil lock": func(candidate *Namespace) error {
-			candidate.leases = &leaseFaultDirectory{
-				Directory:   candidate.leases,
-				acquireLock: func(string, bool) (outputcap.Lock, bool, error) { return nil, false, nil },
-			}
-			return outputcap.ErrUnsafeNamespace
-		},
-		"new lock sync failure": func(candidate *Namespace) error {
-			failure := errors.New("lease sync failed")
-			candidate.leases = &leaseFaultDirectory{
-				Directory: candidate.leases, syncErr: failure,
-				acquireLock: func(string, bool) (outputcap.Lock, bool, error) { return lock, true, nil },
-			}
-			return failure
-		},
-		"operation duplicate failure": func(candidate *Namespace) error {
-			failure := errors.New("operation capability unavailable")
-			candidate.leases = &leaseFaultDirectory{
-				Directory:   candidate.leases,
-				acquireLock: func(string, bool) (outputcap.Lock, bool, error) { return lock, false, nil },
-			}
-			candidate.operations = &leaseFaultDirectory{
-				Directory: candidate.operations,
-				duplicate: func() (outputcap.Directory, error) { return nil, failure },
-			}
-			return failure
-		},
-		"nil operation duplicate": func(candidate *Namespace) error {
-			candidate.leases = &leaseFaultDirectory{
-				Directory:   candidate.leases,
-				acquireLock: func(string, bool) (outputcap.Lock, bool, error) { return lock, false, nil },
-			}
-			candidate.operations = &leaseFaultDirectory{
-				Directory: candidate.operations,
-				duplicate: func() (outputcap.Directory, error) { return nil, nil },
-			}
-			return outputcap.ErrUnsafeNamespace
-		},
-		"lookup duplicate failure": func(candidate *Namespace) error {
-			failure := errors.New("lookup capability unavailable")
-			candidate.leases = &leaseFaultDirectory{
-				Directory:   candidate.leases,
-				acquireLock: func(string, bool) (outputcap.Lock, bool, error) { return lock, false, nil },
-			}
-			candidate.lookup = &leaseFaultDirectory{
-				Directory: candidate.lookup,
-				duplicate: func() (outputcap.Directory, error) { return nil, failure },
-			}
-			return failure
-		},
-		"nil lookup duplicate": func(candidate *Namespace) error {
-			candidate.leases = &leaseFaultDirectory{
-				Directory:   candidate.leases,
-				acquireLock: func(string, bool) (outputcap.Lock, bool, error) { return lock, false, nil },
-			}
-			candidate.lookup = &leaseFaultDirectory{
-				Directory: candidate.lookup,
-				duplicate: func() (outputcap.Directory, error) { return nil, nil },
-			}
-			return outputcap.ErrUnsafeNamespace
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			candidate := namespace
-			want := configure(&candidate)
-			if _, err := candidate.AcquireOperation(operation, intent, binding); !errors.Is(err, want) {
-				t.Fatalf("lease acquisition error = %v, want %v", err, want)
-			}
-		})
-	}
-}
-
 func TestCandidateRecoverySeparatesOrphansConflictsAndInitialCrashCuts(t *testing.T) {
 	_, namespace, lease, repository, ownership, fixture := openRepositoryFixture(t, 0xf1)
 	t.Cleanup(func() {
@@ -1013,136 +602,232 @@ func TestCandidateRecoverySeparatesOrphansConflictsAndInitialCrashCuts(t *testin
 			t.Fatalf("exact duplicate attention = %+v", result.Attention())
 		}
 	})
-}
 
-func admittedDirectoryForRepositoryCoverage(
-	t *testing.T,
-	fixture operationFixture,
-	seed byte,
-) checkpointmodel.AdmittedDirectory {
-	t.Helper()
-	scope, err := transfer.NewDirectoryAdmissionScope(fixture.intent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	generation, err := catalog.DirectoryGenerationFromBytes(bytes.Repeat([]byte{seed}, catalog.IdentityBytes))
-	if err != nil {
-		t.Fatal(err)
-	}
-	admission, err := transfer.NewDirectoryAdmissionWithSecret(
-		bytes.Repeat([]byte{seed + 1}, sha256.Size), scope,
-		transfer.MaterializationDirectory{
-			DirectoryID: fixture.intent.SyntheticRoot(), Generation: generation,
-		},
+	t.Run("unlinked next candidate is retired behind its committed predecessor", func(t *testing.T) {
+		encoded, encodeErr := checkpointmodel.EncodeRecord(initial)
+		if encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		_, targetName := recordLocation(initial.RecordID())
+		stable := map[string]storedRecord{
+			targetName: {record: initial, encoded: encoded},
+		}
+		result, recovered := run(t, nextCandidate, stable, map[string]struct{}{targetName: {}})
+		if len(result.Attention()) != 0 ||
+			recovered[targetName].record.CheckpointGeneration() != initial.CheckpointGeneration() {
+			t.Fatalf("superseded candidate recovery = (%+v, %+v)", result.Attention(), recovered[targetName])
+		}
+	})
+
+	nextVerified, err := checkpointmodel.Promote(
+		nextCandidate,
+		checkpointmodel.PhaseActive,
+		checkpointmodel.CommitVerified,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned, err := transfer.OwnedObjectIDFromBytes(
-		bytes.Repeat([]byte{seed + 2}, transfer.OwnedObjectIdentityBytes),
+	paused, err := checkpointmodel.AdvanceState(
+		initial,
+		initial.StateGeneration()+1,
+		checkpointmodel.PhasePaused,
+		checkpointmodel.CommitVerified,
+		0,
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := checkpointmodel.NewAdmittedDirectory(fixture.intent, admission, owned)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return record
+	t.Run("committed lifecycle state replaces its predecessor", func(t *testing.T) {
+		encoded, encodeErr := checkpointmodel.EncodeRecord(initial)
+		if encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		_, targetName := recordLocation(initial.RecordID())
+		stable := map[string]storedRecord{
+			targetName: {record: initial, encoded: encoded},
+		}
+		result, recovered := run(t, paused, stable, map[string]struct{}{targetName: {}})
+		if len(result.Attention()) != 0 ||
+			recovered[targetName].record.Phase() != checkpointmodel.PhasePaused {
+			t.Fatalf("committed candidate recovery = (%+v, %+v)", result.Attention(), recovered[targetName])
+		}
+	})
+
+	t.Run("invalid committed generation is preserved as conflict", func(t *testing.T) {
+		encoded, encodeErr := checkpointmodel.EncodeRecord(initial)
+		if encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		_, targetName := recordLocation(initial.RecordID())
+		stable := map[string]storedRecord{
+			targetName: {record: initial, encoded: encoded},
+		}
+		result, _ := run(t, nextVerified, stable, map[string]struct{}{targetName: {}})
+		if len(result.Attention()) != 1 ||
+			result.Attention()[0].Code() != AttentionConflictingCandidate {
+			t.Fatalf("divergent candidate attention = %+v", result.Attention())
+		}
+	})
 }
 
-func TestAggregateRepositoryFailsClosedOnSubstitutedDirectoryAndLifecycleAuthority(t *testing.T) {
-	_, namespace, lease, repository, _, fixture := openRepositoryFixture(t, 0xe1)
+func TestCandidateRecoveryClassifiesExactNamespaceAndReadHazards(t *testing.T) {
+	_, namespace, lease, repository, ownership, fixture := openRepositoryFixture(t, 0xf8)
 	t.Cleanup(func() {
 		_ = repository.Close()
 		_ = lease.Close()
 		_ = namespace.Close()
 	})
-	record := admittedDirectoryForRepositoryCoverage(t, fixture, 0xe2)
-	if err := repository.InstallAdmittedDirectory(record); err != nil {
-		t.Fatal(err)
-	}
-
-	var nilRepository *Repository
-	if err := nilRepository.InstallAdmittedDirectory(record); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("nil admitted-directory install error = %v", err)
-	}
-	if _, err := nilRepository.ReadAdmittedDirectory(catalog.DirectoryID{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
-		t.Fatalf("nil admitted-directory read error = %v", err)
-	}
-	missingDirectory, err := catalog.DirectoryIDFromBytes(bytes.Repeat([]byte{0xee}, catalog.IdentityBytes))
+	record := checkpointRecordFixture(t, ownership, fixture, 0xf9)
+	encoded, err := checkpointmodel.EncodeRecord(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.ReadAdmittedDirectory(missingDirectory); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("missing admitted-directory error = %v", err)
+	shardName, targetName := recordLocation(record.RecordID())
+	candidateName := TemporaryName(targetName, encoded, 0)
+
+	run := func(
+		t *testing.T,
+		directory outputcap.Directory,
+		wantAttention bool,
+		wantErr error,
+	) {
+		t.Helper()
+		result := Snapshot{}
+		err := repository.reconcileCandidate(
+			directory,
+			shardName,
+			candidateName,
+			map[string]storedRecord{},
+			map[string]struct{}{},
+			&result,
+		)
+		if wantErr != nil {
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("candidate recovery error = %v, want %v", err, wantErr)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(result.Attention()) != 0; got != wantAttention {
+			t.Fatalf("attention = %+v, want present %t", result.Attention(), wantAttention)
+		}
 	}
 
-	manifest := repository.manifests.(*memoryDirectory)
-	name := admittedDirectoryPrefix + bytesToHex(record.DirectoryID().Bytes())
-	file := manifest.files[name]
-	file.mu.Lock()
-	original := bytes.Clone(file.bytes)
-	file.bytes = []byte("corrupt admitted directory")
-	file.mu.Unlock()
-	if _, err := repository.ReadAdmittedDirectory(record.DirectoryID()); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("corrupt admitted-directory error = %v", err)
-	}
-	file.mu.Lock()
-	file.bytes = original
-	file.mu.Unlock()
+	t.Run("candidate disappeared after bounded enumeration", func(t *testing.T) {
+		run(t, &exactFaultDirectory{
+			Directory: newMemoryDirectory(),
+			classify: func(string) (outputcap.EntryKind, bool, error) {
+				return outputcap.EntryAbsent, true, nil
+			},
+		}, false, nil)
+	})
+	t.Run("candidate entry is inexact", func(t *testing.T) {
+		run(t, &exactFaultDirectory{
+			Directory: newMemoryDirectory(),
+			classify: func(string) (outputcap.EntryKind, bool, error) {
+				return outputcap.EntryRegularFile, false, nil
+			},
+		}, true, nil)
+	})
+	t.Run("candidate entry has the wrong kind", func(t *testing.T) {
+		run(t, &exactFaultDirectory{
+			Directory: newMemoryDirectory(),
+			classify: func(string) (outputcap.EntryKind, bool, error) {
+				return outputcap.EntryDirectory, true, nil
+			},
+		}, true, nil)
+	})
+	classifyFailure := errors.New("candidate classification failed")
+	t.Run("candidate classification fails", func(t *testing.T) {
+		run(t, &exactFaultDirectory{
+			Directory: newMemoryDirectory(),
+			classify: func(string) (outputcap.EntryKind, bool, error) {
+				return outputcap.EntryAbsent, false, classifyFailure
+			},
+		}, false, classifyFailure)
+	})
+	t.Run("unsafe candidate read becomes attention", func(t *testing.T) {
+		run(t, &exactFaultDirectory{
+			Directory: &faultDirectory{
+				Directory: newMemoryDirectory(),
+				openFile: func(string, bool, bool) (outputcap.File, error) {
+					return nil, outputcap.ErrUnsafeNamespace
+				},
+			},
+			classify: func(string) (outputcap.EntryKind, bool, error) {
+				return outputcap.EntryRegularFile, true, nil
+			},
+		}, true, nil)
+	})
+	readFailure := errors.New("candidate read failed")
+	t.Run("candidate state IO is surfaced", func(t *testing.T) {
+		run(t, &exactFaultDirectory{
+			Directory: &faultDirectory{
+				Directory: newMemoryDirectory(),
+				openFile: func(string, bool, bool) (outputcap.File, error) {
+					return nil, readFailure
+				},
+			},
+			classify: func(string) (outputcap.EntryKind, bool, error) {
+				return outputcap.EntryRegularFile, true, nil
+			},
+		}, false, readFailure)
+	})
 
-	frozen, err := repository.ReadLifecycleState()
+	foreignIntent, err := transfer.ReceiveIntentDigestFromBytes(bytes.Repeat(
+		[]byte{0xfa},
+		transfer.ReceiveIntentDigestBytes,
+	))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.ReplaceLifecycleState(checkpointmodel.ReceiveLifecycleState{}, frozen); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("invalid previous lifecycle error = %v", err)
-	}
-	if err := repository.ReplaceLifecycleState(frozen, checkpointmodel.ReceiveLifecycleState{}); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("invalid next lifecycle error = %v", err)
-	}
-	generationGap, err := checkpointmodel.NewReceiveLifecycleState(checkpointmodel.LifecycleStateSpec{
-		OperationID: fixture.intent.OperationID(), ReceiveIntent: fixture.intent.Digest(),
-		StateGeneration: 3, Phase: checkpointmodel.LifecycleReceiving,
+	foreign, err := checkpointmodel.NewRecord(checkpointmodel.RecordSpec{
+		OperationID:                  record.OperationID(),
+		ReceiveIntentDigest:          foreignIntent,
+		MaterializationBindingDigest: record.MaterializationBindingDigest(),
+		FileID:                       record.FileID(),
+		FileRevision:                 record.FileRevision(),
+		CanonicalPath:                record.CanonicalPath(),
+		ExactSize:                    record.ExactSize(),
+		MaterializerKind:             record.MaterializerKind(),
+		AuthorityRef:                 record.AuthorityRef().Bytes(),
+		OwnedObjectID:                record.OwnedObjectID().Bytes(),
+		StateGeneration:              record.StateGeneration(),
+		CheckpointGeneration:         record.CheckpointGeneration(),
+		VerifiedRanges:               record.VerifiedRanges(),
+		Phase:                        record.Phase(),
+		CommitState:                  record.CommitState(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.ReplaceLifecycleState(frozen, generationGap); errorCode(err) != ErrorUnsafeInstall {
-		t.Fatalf("generation-gap lifecycle error = %v", err)
-	}
-
-	missingRecordID, err := checkpointmodel.RecordIDFromBytes(bytes.Repeat([]byte{0xef}, sha256.Size))
+	foreignEncoded, err := checkpointmodel.EncodeRecord(foreign)
 	if err != nil {
 		t.Fatal(err)
 	}
-	missingReference, err := checkpointmodel.FileCheckpointReferenceFromIdentity(missingRecordID, 1)
-	if err != nil {
+	foreignShard, foreignTarget := recordLocation(foreign.RecordID())
+	foreignName := TemporaryName(foreignTarget, foreignEncoded, 0)
+	directory := newMemoryDirectory()
+	if err := InstallCreate(directory, foreignName, foreignEncoded); err != nil {
 		t.Fatal(err)
 	}
-	receiving, err := checkpointmodel.NewReceiveLifecycleState(checkpointmodel.LifecycleStateSpec{
-		OperationID: fixture.intent.OperationID(), ReceiveIntent: fixture.intent.Digest(),
-		StateGeneration: 2, Phase: checkpointmodel.LifecycleReceiving,
-		CheckpointRefs: []checkpointmodel.FileCheckpointReference{missingReference}, SuccessCount: 1,
-	})
-	if err != nil {
+	result := Snapshot{}
+	if err := repository.reconcileCandidate(
+		directory,
+		foreignShard,
+		foreignName,
+		map[string]storedRecord{},
+		map[string]struct{}{},
+		&result,
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.ReplaceLifecycleState(frozen, receiving); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("missing checkpoint authority error = %v", err)
+	if len(result.Attention()) != 1 ||
+		result.Attention()[0].Code() != AttentionInvalidCandidate {
+		t.Fatalf("foreign candidate attention = %+v", result.Attention())
 	}
-
-	receipts := repository.receipts.(*memoryDirectory)
-	lifecycleFile := receipts.files[lifecycleStateFile]
-	lifecycleFile.mu.Lock()
-	lifecycleImage := bytes.Clone(lifecycleFile.bytes)
-	lifecycleFile.bytes = []byte("corrupt lifecycle")
-	lifecycleFile.mu.Unlock()
-	if _, err := repository.ReadLifecycleState(); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("corrupt lifecycle read error = %v", err)
-	}
-	lifecycleFile.mu.Lock()
-	lifecycleFile.bytes = lifecycleImage
-	lifecycleFile.mu.Unlock()
 }

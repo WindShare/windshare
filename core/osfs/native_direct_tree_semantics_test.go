@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -19,6 +20,7 @@ func TestNativeDirectTreeHostSemantics(t *testing.T) {
 	t.Run("zero byte publishes without a public placeholder", func(t *testing.T) {
 		root := t.TempDir()
 		intent, session, rootAdmission := openNativeDirectTreeTestSession(t, root, 0xb1)
+		resultRoot := nativeDirectTreeResultRoot(t, root, intent)
 		file := nativeDirectTreeTestFile(t, session, intent, 0xb3, "empty.bin", 0, rootAdmission)
 		start, err := session.BeginFile(context.Background(), file)
 		if err != nil {
@@ -35,25 +37,29 @@ func TestNativeDirectTreeHostSemantics(t *testing.T) {
 		if _, err := session.FinalizeDirectory(context.Background(), rootAdmission); err != nil {
 			t.Fatal(err)
 		}
-		tree, err := session.FinalizeTree(context.Background(), transfer.DirectTreeOutcomePublished)
-		if err != nil || tree.Kind() != transfer.DirectTreeSettlementPublished {
+		tree, err := session.FinalizeTree(context.Background(), transfer.DirectTreeOutcomeSuccess)
+		if err != nil || tree.Kind() != transfer.DirectTreeSettlementSuccess {
 			t.Fatalf("zero-byte tree = (%d, %v)", tree.Kind(), err)
 		}
-		info, err := os.Stat(filepath.Join(root, "empty.bin"))
+		info, err := os.Stat(filepath.Join(resultRoot, "empty.bin"))
 		if err != nil || info.Size() != 0 {
 			t.Fatalf("zero-byte output = (%v, %v)", info, err)
 		}
-		if names := nativeDirectTreePublicNames(t, root); !slices.Equal(names, []string{"empty.bin"}) {
-			t.Fatalf("zero-byte public entries = %v", names)
+		if names := nativeDirectTreePublicNames(t, root); !slices.Equal(names, []string{filepath.Base(resultRoot)}) {
+			t.Fatalf("zero-byte result roots = %v", names)
+		}
+		if names := nativeDirectTreePublicNames(t, resultRoot); !slices.Equal(names, []string{"empty.bin"}) {
+			t.Fatalf("zero-byte result entries = %v", names)
 		}
 	})
 
 	t.Run("collision is isolated and successful prefix remains partial", func(t *testing.T) {
 		root := t.TempDir()
-		if err := os.WriteFile(filepath.Join(root, "collision.bin"), []byte("keep"), 0o600); err != nil {
+		intent, session, rootAdmission := openNativeDirectTreeTestSession(t, root, 0xc1)
+		resultRoot := nativeDirectTreeResultRoot(t, root, intent)
+		if err := os.WriteFile(filepath.Join(resultRoot, "collision.bin"), []byte("keep"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		intent, session, rootAdmission := openNativeDirectTreeTestSession(t, root, 0xc1)
 		success := nativeDirectTreeTestFile(t, session, intent, 0xc3, "success.bin", 4, rootAdmission)
 		start, err := session.BeginFile(context.Background(), success)
 		if err != nil {
@@ -83,18 +89,21 @@ func TestNativeDirectTreeHostSemantics(t *testing.T) {
 		if _, err := session.FinalizeDirectory(context.Background(), rootAdmission); err != nil {
 			t.Fatal(err)
 		}
-		tree, err := session.FinalizeTree(context.Background(), transfer.DirectTreeOutcomePartialDirectory)
-		if err != nil || tree.Kind() != transfer.DirectTreeSettlementPartialDirectory {
+		tree, err := session.FinalizeTree(context.Background(), transfer.DirectTreeOutcomePartial)
+		if err != nil || tree.Kind() != transfer.DirectTreeSettlementPartial {
 			t.Fatalf("partial tree = (%d, %v)", tree.Kind(), err)
 		}
-		if content, err := os.ReadFile(filepath.Join(root, "success.bin")); err != nil || string(content) != "good" {
+		if content, err := os.ReadFile(filepath.Join(resultRoot, "success.bin")); err != nil || string(content) != "good" {
 			t.Fatalf("successful prefix = (%q, %v)", content, err)
 		}
-		if content, err := os.ReadFile(filepath.Join(root, "collision.bin")); err != nil || string(content) != "keep" {
+		if content, err := os.ReadFile(filepath.Join(resultRoot, "collision.bin")); err != nil || string(content) != "keep" {
 			t.Fatalf("collision target = (%q, %v)", content, err)
 		}
-		if names := nativeDirectTreePublicNames(t, root); !slices.Equal(names, []string{"collision.bin", "success.bin"}) {
-			t.Fatalf("partial public entries = %v", names)
+		if names := nativeDirectTreePublicNames(t, root); !slices.Equal(names, []string{filepath.Base(resultRoot)}) {
+			t.Fatalf("partial result roots = %v", names)
+		}
+		if names := nativeDirectTreePublicNames(t, resultRoot); !slices.Equal(names, []string{"collision.bin", "success.bin"}) {
+			t.Fatalf("partial result entries = %v", names)
 		}
 	})
 }
@@ -109,12 +118,20 @@ func openNativeDirectTreeTestSession(
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := authority.Close(); err != nil {
+			t.Errorf("close native output authority: %v", err)
+		}
+	})
 	intent := coverageC6FilesystemIntent(t, authority, seed)
 	layout, directoryTree := intent.ArtifactSpec().DirectoryTree()
+	resultRoot, namedRoot := layout.ResultRoot()
 	reservation, reserved := intent.MaterializationPlan().DestinationReservation()
-	if !directoryTree || layout.Kind() != receivecontract.DirectoryTreeCatalogRoot ||
+	if !directoryTree || layout.Kind() != receivecontract.DirectoryTreeResultRoot || !namedRoot ||
+		resultRoot.Class() != receivecontract.ResultRootSyntheticSelection ||
 		intent.MaterializationPlan().Kind() != receivecontract.PlanDirectTree || !reserved ||
 		reservation.AuthorityKind() != receivecontract.AuthorityNativeContainer ||
+		reservation.EntryKind() != receivecontract.ContainerEntryResultRoot ||
 		reservation.Guarantees().Profile() != receivecontract.GuaranteeNativeTree {
 		t.Fatalf("native CLI layout was not explicit: artifact=%v plan=%v", intent.ArtifactSpec().Kind(), intent.MaterializationPlan().Kind())
 	}
@@ -122,10 +139,24 @@ func openNativeDirectTreeTestSession(
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootAdmission, err := session.AdmitDirectory(context.Background(), transfer.MaterializationDirectory{
-		DirectoryID: intent.SyntheticRoot(),
-		Generation:  coverageC6Identity[catalog.DirectoryGeneration](seed + 1),
-	})
+	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootRequest, err := transfer.NewDirectoryMaterializationRequest(
+		projector,
+		transfer.AuthenticatedSourceDirectory{
+			DirectoryID: intent.SyntheticRoot(),
+			Generation:  coverageC6Identity[catalog.DirectoryGeneration](seed + 1),
+			SourcePath:  ordinaryoutput.EmptySourceCatalogPath(),
+		},
+		ordinaryoutput.SourceNodeSelected,
+		transfer.MaterializedDirectoryClaim{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootAdmission, err := session.AdmitDirectory(context.Background(), rootRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,18 +187,50 @@ func nativeDirectTreeTestFile(
 	if err != nil {
 		t.Fatal(err)
 	}
-	locator, err := transfer.NewPathMaterializationLocator(path)
+	sourcePath, err := ordinaryoutput.NewSourceCatalogPath(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := transfer.NewFileMaterializationTarget(session.SessionID(), descriptor, locator)
+	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return transfer.MaterializationFile{
-		Path: path, ExpectedSize: exactSize, Descriptor: descriptor,
-		Target: target, ParentAdmission: parent,
+	parentRequest, err := transfer.NewDirectoryMaterializationRequest(
+		projector,
+		transfer.AuthenticatedSourceDirectory{
+			DirectoryID: parent.DirectoryID(), Generation: parent.Generation(),
+			SourcePath: ordinaryoutput.EmptySourceCatalogPath(), ModifiedTime: parent.ModifiedTime(),
+		},
+		ordinaryoutput.SourceNodeSelected,
+		transfer.MaterializedDirectoryClaim{},
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
+	parentMaterialization, err := transfer.NewMaterializedDirectoryClaim(parent, parentRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := transfer.NewMaterializationFile(
+		projector, sourcePath, descriptor, session.SessionID(), parent, parentMaterialization,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+func nativeDirectTreeResultRoot(
+	t *testing.T,
+	root string,
+	intent transfer.ReceiveIntent,
+) string {
+	t.Helper()
+	reservation, ok := intent.MaterializationPlan().DestinationReservation()
+	if !ok || reservation.EntryKind() != receivecontract.ContainerEntryResultRoot {
+		t.Fatal("native result-root reservation is missing")
+	}
+	return filepath.Join(root, reservation.ReservedName())
 }
 
 func nativeDirectTreePublicNames(t *testing.T, root string) []string {
