@@ -226,7 +226,7 @@ func TestAssemblerTimeoutCancelAndThreeTierBudget(t *testing.T) {
 			t.Fatalf("reservation missing: %+v", usage)
 		}
 	}
-	now = now.Add(FragmentTimeout)
+	now = now.Add(FragmentInactivityTimeout)
 	timedOut := assembler.SweepTimeouts()
 	if !slices.Equal(timedOut, []protocolsession.OperationID{operation}) {
 		t.Fatalf("timeouts=%x", timedOut)
@@ -275,7 +275,7 @@ func TestUnrelatedFragmentCannotConsumeAnotherOperationsTimeoutSignal(t *testing
 	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, partial[0])); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(FragmentTimeout)
+	now = now.Add(FragmentInactivityTimeout)
 	result, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, active[0]))
 	if err != nil || result.Status != RecordComplete {
 		t.Fatalf("unrelated operation status=%d err=%v", result.Status, err)
@@ -289,13 +289,51 @@ func TestUnrelatedFragmentCannotConsumeAnotherOperationsTimeoutSignal(t *testing
 	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, second[0])); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(FragmentTimeout)
-	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, second[1])); !errors.Is(err, ErrFragmentTimeout) {
+	now = now.Add(FragmentInactivityTimeout)
+	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, second[1])); !errors.Is(err, ErrFragmentInactivity) {
 		t.Fatalf("expired operation accepted a late completing fragment: %v", err)
 	}
 	late, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, second[0]))
 	if err != nil || late.Status != FragmentTombstoned {
 		t.Fatalf("timed-out operation resurrected: status=%d err=%v", late.Status, err)
+	}
+}
+
+func TestAssemblerExtendsLifetimeOnlyForAuthenticatedProgress(t *testing.T) {
+	now := time.Unix(275, 0)
+	operation := flowID[protocolsession.OperationID](228)
+	object := bytes.Repeat([]byte{3}, MaxFragmentPayloadBytes*2+1)
+	fragments, _ := FragmentRecord(operation, object)
+	hierarchy, _ := reassemblyHierarchy(t, ReassemblyLimits{Bytes: uint64(len(object)), Records: 1})
+	assembler, _ := NewAssembler(flowID[protocolsession.ProtocolSessionID](229), hierarchy, func() time.Time { return now })
+
+	if result, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, fragments[0])); err != nil || result.Status != FragmentAccepted {
+		t.Fatalf("first fragment result=%+v err=%v", result, err)
+	}
+	now = now.Add(FragmentInactivityTimeout - time.Second)
+	if result, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, fragments[1])); err != nil || result.Status != FragmentAccepted {
+		t.Fatalf("progress fragment result=%+v err=%v", result, err)
+	}
+	now = now.Add(FragmentInactivityTimeout - time.Second)
+	if result, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, fragments[2])); err != nil ||
+		result.Status != RecordComplete || !bytes.Equal(result.Object, object) {
+		t.Fatalf("long progressive assembly result=%+v err=%v", result, err)
+	}
+
+	duplicateOperation := flowID[protocolsession.OperationID](230)
+	duplicateFragments, _ := FragmentRecord(duplicateOperation, bytes.Repeat([]byte{4}, MaxFragmentPayloadBytes+1))
+	duplicateHierarchy, _ := reassemblyHierarchy(t, ReassemblyLimits{Bytes: MaxFragmentPayloadBytes + 1, Records: 1})
+	duplicateAssembler, _ := NewAssembler(flowID[protocolsession.ProtocolSessionID](231), duplicateHierarchy, func() time.Time { return now })
+	if _, err := duplicateAssembler.AcceptAuthenticated(flowMessagePlaintext(t, duplicateFragments[0])); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(FragmentInactivityTimeout - time.Second)
+	if result, err := duplicateAssembler.AcceptAuthenticated(flowMessagePlaintext(t, duplicateFragments[0])); err != nil || result.Status != FragmentDuplicate {
+		t.Fatalf("duplicate result=%+v err=%v", result, err)
+	}
+	now = now.Add(time.Second)
+	if _, err := duplicateAssembler.AcceptAuthenticated(flowMessagePlaintext(t, duplicateFragments[1])); !errors.Is(err, ErrFragmentInactivity) {
+		t.Fatalf("duplicate extended inactivity deadline: %v", err)
 	}
 }
 

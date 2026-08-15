@@ -33,13 +33,13 @@ type assemblyKey struct {
 }
 
 type assemblyState struct {
-	count         uint32
-	total         uint32
-	buffer        []byte
-	received      []bool
-	receivedCount uint32
-	deadline      time.Time
-	reservation   *reassemblyReservation
+	count            uint32
+	total            uint32
+	buffer           []byte
+	received         []bool
+	receivedCount    uint32
+	progressDeadline time.Time
+	reservation      *reassemblyReservation
 }
 
 type Assembler struct {
@@ -86,9 +86,9 @@ func (a *Assembler) AcceptAuthenticated(plaintext []byte) (AssemblyResult, error
 	now := a.now()
 	a.pruneLocked(now)
 	for key, state := range a.records {
-		if key.operation == fragment.OperationID && !now.Before(state.deadline) {
+		if key.operation == fragment.OperationID && !now.Before(state.progressDeadline) {
 			_ = a.terminateOperationLocked(fragment.OperationID, now)
-			return AssemblyResult{}, ErrFragmentTimeout
+			return AssemblyResult{}, ErrFragmentInactivity
 		}
 	}
 	key := assemblyKey{operation: fragment.OperationID, record: fragment.RecordID}
@@ -118,7 +118,7 @@ func (a *Assembler) AcceptAuthenticated(plaintext []byte) (AssemblyResult, error
 		state = &assemblyState{
 			count: fragment.Count, total: fragment.TotalLength,
 			buffer: make([]byte, fragment.TotalLength), received: make([]bool, fragment.Count),
-			deadline: now.Add(FragmentTimeout), reservation: reservation,
+			progressDeadline: now.Add(FragmentInactivityTimeout), reservation: reservation,
 		}
 		a.records[key] = state
 		a.operationBytes[fragment.OperationID] = operationBytes + uint64(fragment.TotalLength)
@@ -142,6 +142,9 @@ func (a *Assembler) AcceptAuthenticated(plaintext []byte) (AssemblyResult, error
 	copy(state.buffer[offset:end], fragment.Payload)
 	state.received[fragment.Index] = true
 	state.receivedCount++
+	// Only new authenticated bytes extend the operation lifetime. Retransmitted
+	// duplicates remain harmless, but cannot pin a reserved reassembly buffer.
+	state.progressDeadline = now.Add(FragmentInactivityTimeout)
 	if state.receivedCount != state.count {
 		return AssemblyResult{Status: FragmentAccepted, OperationID: fragment.OperationID, RecordID: fragment.RecordID}, nil
 	}
@@ -183,7 +186,7 @@ func (a *Assembler) SweepTimeouts() []protocolsession.OperationID {
 	}
 	timedOut := make(map[protocolsession.OperationID]struct{})
 	for key, state := range a.records {
-		if !now.Before(state.deadline) {
+		if !now.Before(state.progressDeadline) {
 			timedOut[key.operation] = struct{}{}
 		}
 	}

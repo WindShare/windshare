@@ -17,7 +17,92 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
+
+func TestBlockFragmentInactivityIsALaneTransportBoundary(t *testing.T) {
+	err := blockFragmentInactivityBoundary(contentflow.ErrFragmentInactivity)
+	var boundary *transferfault.BoundaryError
+	expected, buildErr := transferfault.NewSession(transferfault.ScopeOutputPause, transferfault.SessionTransport)
+	if buildErr != nil {
+		t.Fatal(buildErr)
+	}
+	if !errors.As(err, &boundary) || boundary.Fault() != expected ||
+		!errors.Is(err, contentflow.ErrFragmentInactivity) {
+		t.Fatalf("fragment inactivity boundary=%v", err)
+	}
+}
+
+func TestReceiverBlockLaneRetiresAnInactiveOperationBeforeReassignment(t *testing.T) {
+	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
+	runtime.lanes.mu.Lock()
+	physical := runtime.lanes.active[runtime.initial.ID]
+	runtime.lanes.mu.Unlock()
+	writerContext, stopWriter := context.WithCancel(t.Context())
+	writerDone := make(chan error, 1)
+	go func() { writerDone <- physical.writer.Run(writerContext) }()
+	defer func() {
+		stopWriter()
+		<-writerDone
+	}()
+
+	share := id16[catalog.ShareInstance](60)
+	geometry, err := content.NewFileGeometry(uint64(catalog.MinChunkSize), catalog.MinChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := content.NewFileRevisionDescriptor(
+		share,
+		id16[catalog.FileID](61),
+		id16[content.FileRevision](62),
+		geometry,
+		catalog.ModifiedTime{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := id16[content.LeaseID](63)
+	revisions := &receiverRevisionClient{leases: map[content.LeaseID]*remoteLeaseState{
+		lease: {id: lease},
+	}}
+	reassemblyLimits := contentflow.ReassemblyLimits{Bytes: 1 << 20, Records: 8}
+	processReassembly, _ := contentflow.NewReassemblyAccount("inactive-process", reassemblyLimits)
+	shareReassembly, _ := contentflow.NewReassemblyAccount("inactive-share", reassemblyLimits)
+	sessionReassembly, _ := contentflow.NewReassemblyAccount("inactive-session", reassemblyLimits)
+	assembler, err := contentflow.NewAssembler(runtime.sessionID, contentflow.ReassemblyHierarchy{
+		Process: processReassembly, Share: shareReassembly, Session: sessionReassembly,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const testInactivityTimeout = 20 * time.Millisecond
+	lane := &receiverBlockLane{
+		identity: runtime.initial, rpc: newRPCClient(runtime, &deterministicReader{next: 64}),
+		assembler: assembler, revisions: revisions, fragmentInactivityTimeout: testInactivityTimeout,
+	}
+
+	_, fetchErr := lane.FetchBlock(t.Context(), transfer.BlockDemand{
+		LeaseID: lease, Descriptor: descriptor, Index: 0,
+	})
+	capabilityType := reflect.TypeOf(transfer.NewDemandReassignableAfterRetirement(nil))
+	var boundary *transferfault.BoundaryError
+	expected, buildErr := transferfault.NewSession(transferfault.ScopeOutputPause, transferfault.SessionTransport)
+	if buildErr != nil {
+		t.Fatal(buildErr)
+	}
+	if reflect.TypeOf(fetchErr) != capabilityType ||
+		!errors.Is(fetchErr, contentflow.ErrFragmentInactivity) ||
+		!errors.As(fetchErr, &boundary) || boundary.Fault() != expected {
+		t.Fatalf("inactive block result=%T %v", fetchErr, fetchErr)
+	}
+	if runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
+		t.Fatalf(
+			"inactive operation authority active=%d tombstones=%d",
+			runtime.operations.ActiveCount(),
+			runtime.operations.TombstoneCount(),
+		)
+	}
+}
 
 func TestReceiverBlockLaneMarksOnlyPreAdmissionFailureReassignable(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)

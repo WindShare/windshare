@@ -521,7 +521,7 @@ func classifyBlockError(err error) uint16 {
 		return BlockCodeObjectAuth
 	case errors.Is(err, ErrFragmentConflict):
 		return BlockCodeFragmentConflict
-	case errors.Is(err, ErrFragmentTimeout), errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, ErrFragmentInactivity), errors.Is(err, context.DeadlineExceeded):
 		return BlockCodeTimeout
 	case errors.Is(err, context.Canceled), errors.Is(err, ErrFragmentCancelled):
 		return BlockCodeCancelled

@@ -762,7 +762,7 @@ func TestErrorClassificationPreservesOperationScope(t *testing.T) {
 		content.ErrBlockOutOfRange: BlockCodeOutOfRange,
 		records.ErrObjectAuth:      BlockCodeObjectAuth,
 		ErrFragmentConflict:        BlockCodeFragmentConflict,
-		ErrFragmentTimeout:         BlockCodeTimeout,
+		ErrFragmentInactivity:      BlockCodeTimeout,
 		context.Canceled:           BlockCodeCancelled,
 	} {
 		if code := classifyBlockError(err); code != expected {
