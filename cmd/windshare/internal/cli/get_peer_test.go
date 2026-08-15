@@ -186,7 +186,7 @@ func TestReceiverPeerMonitorClosesSessionForAuthenticatedAuthorityViolation(t *t
 	}
 }
 
-func TestReceiverPeerMonitorKeepsRelaySessionForAttemptLocalFailure(t *testing.T) {
+func TestReceiverPeerMonitorReportsAttemptLocalFailureWithoutOwningFallback(t *testing.T) {
 	var stderr bytes.Buffer
 	app := &App{Stderr: &stderr}
 	attempt := newCLIReceiverPeerAttempt()
@@ -199,8 +199,8 @@ func TestReceiverPeerMonitorKeepsRelaySessionForAttemptLocalFailure(t *testing.T
 	if runtime.calls.Load() != 0 {
 		t.Fatal("attempt-local peer failure closed the relay session")
 	}
-	if !strings.Contains(stderr.String(), "continuing through relay") {
-		t.Fatalf("fallback diagnostic = %q", stderr.String())
+	if !strings.Contains(stderr.String(), "direct peer connection failed") {
+		t.Fatalf("peer failure diagnostic = %q", stderr.String())
 	}
 	if signal != receiverPeerFailed {
 		t.Fatalf("fallback signal=%v", signal)
@@ -227,7 +227,7 @@ func TestReceiverPeerMonitorRetainsJoinedCancellationFailure(t *testing.T) {
 	if runtime.calls.Load() != 0 {
 		t.Fatal("attempt-local residual closed the relay session")
 	}
-	if !strings.Contains(stderr.String(), "continuing through relay") {
+	if !strings.Contains(stderr.String(), "direct peer connection failed") {
 		t.Fatalf("joined cancellation residual diagnostic=%q", stderr.String())
 	}
 }
@@ -365,12 +365,16 @@ func TestReceiverPeerMonitorKeepsUnexpectedAuthenticatedKindOperationLocal(t *te
 	if signal != receiverPeerFailed || runtime.calls.Load() != 0 {
 		t.Fatalf("unexpected authenticated kind signal=%v close_calls=%d", signal, runtime.calls.Load())
 	}
-	if !strings.Contains(stderr.String(), "continuing through relay") {
+	if !strings.Contains(stderr.String(), "direct peer connection failed") {
 		t.Fatalf("unexpected authenticated kind diagnostic=%q", stderr.String())
 	}
 }
 
 func TestReceiverPeerStartsBeforeBlockingSelectionPlanning(t *testing.T) {
+	plan, err := ConnectivityAuto.receiverPlan()
+	if err != nil {
+		t.Fatal(err)
+	}
 	peerStarted := make(chan struct{})
 	selectionEntered := make(chan struct{})
 	releaseSelection := make(chan struct{})
@@ -378,12 +382,15 @@ func TestReceiverPeerStartsBeforeBlockingSelectionPlanning(t *testing.T) {
 	go func() {
 		defer close(done)
 		_, _, _ = beginReceiverPlanning(
-			ConnectivityAuto,
+			plan,
 			func() *activeReceiverPeer {
 				close(peerStarted)
 				return nil
 			},
-			func() { t.Error("auto planning resumed relay-only path") },
+			func() error {
+				t.Error("auto planning resumed relay-only path")
+				return nil
+			},
 			func() (transfer.SelectionRules, error) {
 				close(selectionEntered)
 				<-releaseSelection
@@ -406,15 +413,22 @@ func TestReceiverPeerStartsBeforeBlockingSelectionPlanning(t *testing.T) {
 }
 
 func TestReceiverRelayOnlyPlanningNeverCreatesPeerAttempt(t *testing.T) {
+	plan, err := ConnectivityRelayOnly.receiverPlan()
+	if err != nil {
+		t.Fatal(err)
+	}
 	peerStarts := 0
 	relayResumes := 0
-	_, _, err := beginReceiverPlanning(
-		ConnectivityRelayOnly,
+	_, _, err = beginReceiverPlanning(
+		plan,
 		func() *activeReceiverPeer {
 			peerStarts++
 			return nil
 		},
-		func() { relayResumes++ },
+		func() error {
+			relayResumes++
+			return nil
+		},
 		func() (transfer.SelectionRules, error) { return transfer.SelectionRules{}, nil },
 	)
 	if err != nil || peerStarts != 0 || relayResumes != 1 {
@@ -422,9 +436,46 @@ func TestReceiverRelayOnlyPlanningNeverCreatesPeerAttempt(t *testing.T) {
 	}
 }
 
+func TestReceiverP2POnlyPlanningRequiresPeerAndNeverAdmitsRelay(t *testing.T) {
+	plan, err := ConnectivityP2POnly.receiverPlan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayAdmissions := 0
+	peer := &activeReceiverPeer{}
+	got, _, err := beginReceiverPlanning(
+		plan,
+		func() *activeReceiverPeer { return peer },
+		func() error {
+			relayAdmissions++
+			return nil
+		},
+		func() (transfer.SelectionRules, error) { return transfer.SelectionRules{}, nil },
+	)
+	if err != nil || got != peer || relayAdmissions != 0 {
+		t.Fatalf("p2p-only planning: peer=%p err=%v relay_admissions=%d", got, err, relayAdmissions)
+	}
+
+	_, _, err = beginReceiverPlanning(
+		plan,
+		func() *activeReceiverPeer { return nil },
+		func() error {
+			t.Fatal("p2p-only planning admitted relay content")
+			return nil
+		},
+		func() (transfer.SelectionRules, error) {
+			t.Fatal("selection resolved without the required direct peer")
+			return transfer.SelectionRules{}, nil
+		},
+	)
+	if !errors.Is(err, errReceiverP2PPathUnavailable) {
+		t.Fatalf("missing p2p-only peer error=%v", err)
+	}
+}
+
 func TestConnectivityPolicyRejectsUnknownValues(t *testing.T) {
 	for name, want := range map[string]ConnectivityPolicy{
-		"auto": ConnectivityAuto, "relay-only": ConnectivityRelayOnly,
+		"auto": ConnectivityAuto, "relay-only": ConnectivityRelayOnly, "p2p-only": ConnectivityP2POnly,
 	} {
 		got, err := ParseConnectivityPolicy(name)
 		if err != nil || got != want || got.String() != name {

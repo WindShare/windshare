@@ -67,6 +67,22 @@ func TestCriticalSenderRelayReceiver(t *testing.T) {
 	events := drainV2ProcessTraces(t, receiver)
 	requireV2EventCount(t, events, v2ReceiverRelayContentMilestone, testrun.OutcomeSucceeded, 1)
 	requireV2EventCount(t, events, v2ReceiverDirectLaneMilestone, testrun.OutcomeSucceeded, 0)
+
+	p2pOutput := testoutputroot.New(t).RootPath
+	p2pReceiver := startV2Process(
+		t, scenario, v2WindShareGetComponent, binaries.windshare,
+		"get", shareLink, "-o", p2pOutput, "--connectivity", "p2p-only",
+	)
+	if err := p2pReceiver.wait(t); err != nil {
+		t.Fatalf(
+			"p2p-only receiver failed: %v; stdout=%q stderr=%q",
+			err, p2pReceiver.stdout.String(), p2pReceiver.stderr.String(),
+		)
+	}
+	assertV2File(t, filepath.Join(p2pOutput, filepath.Base(source)), payload)
+	p2pEvents := drainV2ProcessTraces(t, p2pReceiver)
+	requireV2EventCount(t, p2pEvents, v2ReceiverRelayContentMilestone, testrun.OutcomeSucceeded, 0)
+	requireV2EventCount(t, p2pEvents, v2ReceiverDirectLaneMilestone, testrun.OutcomeSucceeded, 1)
 	scenario.requireSuccess(t)
 }
 
