@@ -157,45 +157,9 @@ func (root *linuxOutputDirectory) inspectOutputProbeLeftover(name string) (*linu
 		return fail(err)
 	}
 	for _, entry := range names {
-		if _, ok := linuxOutputProbeRegularNames[entry]; ok {
-			var file *linuxOutputRegularFile
-			var openErr error
-			if _, publicProfile := linuxOutputProbePublicProfileNames[entry]; publicProfile {
-				file, openErr = directory.openRegularFile(entry, false)
-			} else {
-				file, openErr = directory.openRegularFileExact(entry, false, linuxOutputStateFileMode)
-			}
-			if openErr != nil {
-				return fail(openErr)
-			}
-			identity, identityErr := file.currentIdentity()
-			if identityErr != nil {
-				return fail(errors.Join(fmt.Errorf("inspect probe file %q", entry), identityErr, file.close()))
-			}
-			if entry != "live-stage" {
-				if observeErr := observation.ObserveFile(entry, identity.size); observeErr != nil {
-					return fail(errors.Join(observeErr, file.close()))
-				}
-			}
-			leftover.regular[entry] = file
-			continue
+		if err := leftover.inspectEntry(entry, &observation); err != nil {
+			return fail(err)
 		}
-		if _, ok := linuxOutputProbeDirectoryNames[entry]; ok {
-			child, openErr := directory.openDirectoryExact(entry, linuxOutputDirectoryMode)
-			if openErr != nil {
-				return fail(openErr)
-			}
-			childNames, enumerateErr := child.names(0)
-			if enumerateErr != nil || len(childNames) != 0 {
-				return fail(errors.Join(fmt.Errorf("probe directory %q is not empty", entry), enumerateErr, child.close()))
-			}
-			if observeErr := observation.ObserveDirectory(entry); observeErr != nil {
-				return fail(errors.Join(observeErr, child.close()))
-			}
-			leftover.directories[entry] = child
-			continue
-		}
-		return fail(fmt.Errorf("unexpected probe entry %q", entry))
 	}
 	if err := leftover.validateDataLinks(); err != nil {
 		return fail(err)
@@ -204,6 +168,57 @@ func (root *linuxOutputDirectory) inspectOutputProbeLeftover(name string) (*linu
 		return fail(err)
 	}
 	return leftover, nil
+}
+
+func (leftover *linuxOutputProbeLeftover) inspectEntry(entry string, observation *outputprobe.Observation) error {
+	if _, ok := linuxOutputProbeRegularNames[entry]; ok {
+		return leftover.inspectRegularEntry(entry, observation)
+	}
+	if _, ok := linuxOutputProbeDirectoryNames[entry]; ok {
+		return leftover.inspectDirectoryEntry(entry, observation)
+	}
+	return fmt.Errorf("unexpected probe entry %q", entry)
+}
+
+func (leftover *linuxOutputProbeLeftover) inspectRegularEntry(entry string, observation *outputprobe.Observation) error {
+	file, err := leftover.openRegularProbeFile(entry)
+	if err != nil {
+		return err
+	}
+	identity, err := file.currentIdentity()
+	if err != nil {
+		return errors.Join(fmt.Errorf("inspect probe file %q", entry), err, file.close())
+	}
+	if entry != "live-stage" {
+		if err := observation.ObserveFile(entry, identity.size); err != nil {
+			return errors.Join(err, file.close())
+		}
+	}
+	leftover.regular[entry] = file
+	return nil
+}
+
+func (leftover *linuxOutputProbeLeftover) openRegularProbeFile(entry string) (*linuxOutputRegularFile, error) {
+	if _, publicProfile := linuxOutputProbePublicProfileNames[entry]; publicProfile {
+		return leftover.directory.openRegularFile(entry, false)
+	}
+	return leftover.directory.openRegularFileExact(entry, false, linuxOutputStateFileMode)
+}
+
+func (leftover *linuxOutputProbeLeftover) inspectDirectoryEntry(entry string, observation *outputprobe.Observation) error {
+	child, err := leftover.directory.openDirectoryExact(entry, linuxOutputDirectoryMode)
+	if err != nil {
+		return err
+	}
+	childNames, err := child.names(0)
+	if err != nil || len(childNames) != 0 {
+		return errors.Join(fmt.Errorf("probe directory %q is not empty", entry), err, child.close())
+	}
+	if err := observation.ObserveDirectory(entry); err != nil {
+		return errors.Join(err, child.close())
+	}
+	leftover.directories[entry] = child
+	return nil
 }
 
 func (leftover *linuxOutputProbeLeftover) validateDataLinks() error {

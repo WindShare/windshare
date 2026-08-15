@@ -18,7 +18,7 @@ func platformMutationToken(file *os.File) (posixMutationToken, error) {
 	}
 	stat, ok := information.Sys().(*syscall.Stat_t)
 	if !ok {
-		return posixMutationToken{}, errors.New("Darwin FileInfo does not expose syscall.Stat_t")
+		return posixMutationToken{}, errors.New("file info does not expose syscall.Stat_t on Darwin")
 	}
 	return posixMutationToken{
 		device: uint64(stat.Dev), inode: stat.Ino, size: stat.Size,
