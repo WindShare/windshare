@@ -124,7 +124,7 @@ func (a *App) connectGetReceiver(ctx context.Context, capability link.Link) (*ge
 type getTransferExecution struct {
 	app         *App
 	runtime     *sessionruntime.ReceiverRuntime
-	admission   *relayContentAdmission
+	admission   receiverContentAdmission
 	monitorDone <-chan struct{}
 	peer        *activeReceiverPeer
 	operation   getOutputOperation
@@ -164,6 +164,11 @@ func (a *App) prepareGetTransfer(
 	output getOutputPreparation,
 	runtime *sessionruntime.ReceiverRuntime,
 ) (*getTransferExecution, int) {
+	connectivity, err := request.connectivity.receiverPlan()
+	if err != nil {
+		a.logf("get: resolve connectivity policy: %v", err)
+		return nil, ExitUsage
+	}
 	laneID, laneEpoch := runtime.LaneIdentity()
 	relaySuspension, err := runtime.LaneSet().SuspendContent(
 		transfer.LaneIdentity{ID: laneID, Epoch: laneEpoch},
@@ -173,7 +178,8 @@ func (a *App) prepareGetTransfer(
 		return nil, ExitFailure
 	}
 	contentReady := make(chan struct{})
-	admission, err := newRelayContentAdmissionWithExecution(
+	admission, err := newReceiverContentAdmissionWithExecution(
+		connectivity.relayContent,
 		output.startedAt,
 		output.clock,
 		relaySuspension,
@@ -194,13 +200,18 @@ func (a *App) prepareGetTransfer(
 		}
 	}
 	peer, rules, err := beginReceiverPlanning(
-		request.connectivity,
+		connectivity,
 		func() *activeReceiverPeer { return a.startReceiverPeer(ctx, runtime, observePeer) },
-		func() { observePeer(receiverPeerFailed) },
+		admission.AdmitRelayOnly,
 		func() (transfer.SelectionRules, error) { return selectionRules(request.only) },
 	)
 	execution.peer = peer
 	if err != nil {
+		if errors.Is(err, errReceiverP2PPathUnavailable) {
+			a.logf("get: p2p-only direct peer setup failed; relay content fallback is disabled")
+			execution.Close()
+			return nil, ExitNetwork
+		}
 		a.logf("get: resolve selection: %v", err)
 		execution.Close()
 		return nil, ExitUsage
@@ -208,6 +219,9 @@ func (a *App) prepareGetTransfer(
 	job, operation, renamed, code := a.buildGetTransferJob(ctx, runtime, output, rules)
 	if code != ExitOK {
 		execution.Close()
+		if errors.Is(admission.Err(), errReceiverP2PPathUnavailable) {
+			return nil, ExitNetwork
+		}
 		return nil, code
 	}
 	if output.mode == getOutputLiveOnly {
