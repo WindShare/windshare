@@ -330,4 +330,3 @@ func TestOrdinaryOutputMaterializationRequestAndClaimAccessors(t *testing.T) {
 		t.Fatalf("zero file accessors drifted: %+v", zeroFile)
 	}
 }
-

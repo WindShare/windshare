@@ -205,4 +205,3 @@ func TestReduceOrdinaryOperationLifecycleInvalidTransitions(t *testing.T) {
 		t.Fatal("cleanup finished from active succeeded")
 	}
 }
-

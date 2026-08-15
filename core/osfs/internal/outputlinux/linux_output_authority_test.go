@@ -194,4 +194,3 @@ func installLinuxSafeAuthorityHarness(system *linuxOutputSystem) {
 	system.faccessat2 = func(int, string, uint32, int) error { return nil }
 	system.geteuid = func() int { return 0 }
 }
-

@@ -113,9 +113,8 @@ func TestPOSIXStabilityPlatformConstructorsAndBinderEdgeCases(t *testing.T) {
 	}
 
 	// Stale candidate / identity mismatch
-	var dummyRecord catalog.FileNodeRecord
+	var dummyRecord catalog.NodeRecord
 	if _, err := binder.BindStable(context.Background(), StableBinding{File: handle, Record: dummyRecord}); !errors.Is(err, content.ErrRevisionStale) {
 		t.Fatalf("mismatched record bind error = %v", err)
 	}
 }
-
