@@ -195,3 +195,29 @@ func TestDirectoryExecutorAmbiguityQuarantinesOnlyTheClaim(t *testing.T) {
 		t.Fatalf("traverse-only projection = (%q, %t, %v)", path.String(), materialize, err)
 	}
 }
+
+func TestDirectoryFinalizationFailureSemanticsAndEdgeCases(t *testing.T) {
+	t.Run("nil-context", func(t *testing.T) {
+		fixture := newTestFixture(t, nil)
+		var nilCtx context.Context
+		if _, err := fixture.session.FinalizeDirectory(nilCtx, transfer.DirectoryAdmission{}); !errors.Is(err, ErrInvalidConfiguration) {
+			t.Fatalf("nil context error = %v, want ErrInvalidConfiguration", err)
+		}
+	})
+
+	t.Run("canceled-context", func(t *testing.T) {
+		fixture := newTestFixture(t, nil)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := fixture.session.FinalizeDirectory(ctx, transfer.DirectoryAdmission{}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled context error = %v, want context.Canceled", err)
+		}
+	})
+
+	t.Run("unbound-admission", func(t *testing.T) {
+		fixture := newTestFixture(t, nil)
+		if _, err := fixture.session.FinalizeDirectory(context.Background(), transfer.DirectoryAdmission{}); !errors.Is(err, ErrDirectoryBinding) {
+			t.Fatalf("unbound admission error = %v, want ErrDirectoryBinding", err)
+		}
+	})
+}

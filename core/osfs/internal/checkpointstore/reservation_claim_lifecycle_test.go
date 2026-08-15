@@ -160,6 +160,18 @@ func TestReservationClaimDirectoryIdentityRollbackAndPagingAreExact(t *testing.T
 	if _, err := nilHandle.Rollback(); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("nil rollback error = %v", err)
 	}
+	if _, err := nilHandle.BindReservation(rollbackReservation); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("nil bind reservation error = %v", err)
+	}
+	if _, err := nilHandle.BindDirectoryIdentity([]byte("test")); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("nil bind directory error = %v", err)
+	}
+	if _, _, err := (*OperationRegistry)(nil).BeginReservation(rollbackSpec); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("nil registry begin reservation error = %v", err)
+	}
+	if _, err := (*OperationRegistry)(nil).PageReservationClaims(ReservationClaimPageCursor{}, 8); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("nil registry page claims error = %v", err)
+	}
 
 	_ = checkpointmodel.ReservationClaimed
 }
