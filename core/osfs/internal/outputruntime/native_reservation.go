@@ -45,6 +45,7 @@ func (authority *Authority) BindDestination(ctx context.Context) (ExecutionMode,
 	destination, err := destinationauthority.BindDestination(destinationauthority.BindConfig{
 		Platform: platform, DisplayPath: authority.rootPath,
 		OpenLiveCleanupJournal: openNativeLiveCleanupJournal,
+		RecyclePrivateState:    checkpointstore.RecyclePrivateState,
 	})
 	if err != nil {
 		return ExecutionMode{}, runtimeOutputError(ctx, transferfault.OutputOwnership, "bind destination authority", err)
