@@ -5,12 +5,16 @@ package osfs
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/windshare/windshare/core/osfs/internal/outputwindows"
 )
 
-const windowsNativeTestTempPattern = ".windshare-osfs-test-*"
+const (
+	windowsNativeTestTempSubdir  = ".windshare-test-temp"
+	windowsNativeTestTempPattern = ".windshare-osfs-test-*"
+)
 
 func TestMain(m *testing.M) {
 	home, err := os.UserHomeDir()
@@ -18,7 +22,12 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "resolve Windows native-test home: %v\n", err)
 		os.Exit(1)
 	}
-	testTemp, err := os.MkdirTemp(home, windowsNativeTestTempPattern)
+	testBase := filepath.Join(home, windowsNativeTestTempSubdir)
+	if err := os.MkdirAll(testBase, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "create Windows native-test temp base: %v\n", err)
+		os.Exit(1)
+	}
+	testTemp, err := os.MkdirTemp(testBase, windowsNativeTestTempPattern)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reserve Windows native-test temp root: %v\n", err)
 		os.Exit(1)
