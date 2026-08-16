@@ -254,6 +254,32 @@ func TestRecorderCoalescesProgressWithoutMakingTraceIncomplete(t *testing.T) {
 	}
 }
 
+func TestRecorderNeverWritesSampledProgressAfterNewerLifecycle(t *testing.T) {
+	file := &memoryTraceFile{}
+	recorder := openTestRecorder(t, clievent.CommandGet, Config{}, fixedClock(), file, newManualTicker())
+	receiveOperation := mustValue(clievent.NewReceiveOperationID(testIdentity(t, 0xc1)))
+	transferJob := mustValue(clievent.NewTransferJobID(testIdentity(t, 0xc2)))
+	snapshot := mustValue(clievent.NewProgressSnapshot(clievent.ProgressSpec{
+		Discovery: clievent.DiscoveryOpen, CountersExact: true,
+	}))
+	progress := mustValue(clievent.NewTransferProgress(receiveOperation, transferJob, snapshot))
+	failure := mustValue(clievent.NewFailure(clievent.FailureUnexpected))
+	warning := mustValue(clievent.NewWarning(clievent.CommandGet, failure))
+	if !recorder.Record(progress) || !recorder.Record(warning) {
+		t.Fatal("ordered events were not retained")
+	}
+	status := recorder.Close()
+	if !status.Complete {
+		t.Fatalf("ordered trace status = %+v", status)
+	}
+	records := decodeRecords(t, file.Bytes())
+	if len(records) != 3 || records[0].Sequence != 1 || records[0].Event != "transfer_progress" ||
+		records[1].Sequence != 2 || records[1].Event != "warning" ||
+		records[2].Sequence != 3 || records[2].Event != "trace_summary" {
+		t.Fatalf("trace records were not written in sequence order: %+v", records)
+	}
+}
+
 func TestRecorderSamplesProgressOnlyOnInjectedSchedule(t *testing.T) {
 	file := &memoryTraceFile{writeObserved: make(chan struct{}, 2)}
 	ticker := newManualTicker()

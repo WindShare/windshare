@@ -3,6 +3,7 @@ package humanoutput
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
 	"github.com/windshare/windshare/cmd/windshare/internal/terminalcanvas"
@@ -80,6 +81,27 @@ func formatPeerAttempt(event clievent.PeerAttemptObserved, symbols Symbols) term
 		style, symbol = terminalcanvas.StyleWarning, symbols.Warning
 	}
 	return statusLine(symbol, message, style)
+}
+
+func formatProtocolOperationFailure(
+	event clievent.ProtocolOperationObserved,
+	symbols Symbols,
+) terminalcanvas.Line {
+	operation := strings.ReplaceAll(eventName(event.RequestKind()), "_", " ")
+	message := "Protocol operation " + operation + " failed"
+	if event.Stage() == clievent.ProtocolOperationSenderResponseSettled {
+		message = "Protocol response for " + operation + " failed"
+	}
+	if elapsed := event.OperationElapsedMillis(); elapsed != 0 {
+		message += " after " + FormatElapsed(time.Duration(elapsed)*time.Millisecond)
+	}
+	if lane, ok := event.Lane(); ok {
+		message += " on lane " + strconv.FormatUint(uint64(lane.ID()), 10) +
+			" epoch " + strconv.FormatUint(uint64(lane.Epoch()), 10)
+	}
+	cause := strings.ReplaceAll(eventName(event.Cause()), "_", " ")
+	message += " (" + cause + ")."
+	return statusLine(symbols.Warning, message, terminalcanvas.StyleWarning)
 }
 
 func formatDiscoveryMilestone(snapshot clievent.ProgressSnapshot, symbols Symbols) terminalcanvas.Line {

@@ -71,6 +71,7 @@ type ReceiverFactoryConfig struct {
 	LaneRaceWidth     int
 	Now               func() time.Time
 	After             func(time.Duration) <-chan time.Time
+	ProtocolTracer    ProtocolOperationTracer
 }
 
 type ReceiverFactory struct {
@@ -95,6 +96,7 @@ type ReceiverFactory struct {
 	raceWidth         int
 	now               func() time.Time
 	after             func(time.Duration) <-chan time.Time
+	protocolTracer    ProtocolOperationTracer
 
 	mu         sync.Mutex
 	closing    bool
@@ -144,7 +146,8 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 		resources:       config.RuntimeResources,
 		operationLimits: config.OperationLimits, routerLimits: config.RouterLimits,
 		raceWidth: config.LaneRaceWidth, now: config.Now, after: config.After,
-		closeDone: make(chan struct{}),
+		protocolTracer: config.ProtocolTracer,
+		closeDone:      make(chan struct{}),
 	}, nil
 }
 
@@ -180,6 +183,7 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 		Random: factory.random, Authenticator: handshake.authenticator,
 		Continuations:   factory.peerSemantics,
 		OperationLimits: factory.operationLimits, RouterLimits: factory.routerLimits, Now: factory.now,
+		ProtocolTracer: factory.protocolTracer,
 	})
 	if err != nil {
 		keys.Destroy()

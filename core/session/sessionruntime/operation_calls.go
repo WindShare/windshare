@@ -5,14 +5,16 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 type operationLaneRoute struct {
-	sendMu    sync.Mutex
-	preferred LaneIdentity
-	request   []byte
+	sendMu      sync.Mutex
+	preferred   LaneIdentity
+	requestKind protocolsession.MessageKind
+	request     []byte
 }
 
 func (routes *operationLaneRoutes) reserveRequest(
@@ -35,7 +37,7 @@ func (routes *operationLaneRoutes) reserveRequest(
 		}
 		return nil, false, protocolsession.ErrOperationIDReused
 	}
-	route := &operationLaneRoute{preferred: lane, request: encoded}
+	route := &operationLaneRoute{preferred: lane, requestKind: message.Kind(), request: encoded}
 	routes.routes[operationID] = route
 	return route, true, nil
 }
@@ -237,6 +239,23 @@ type operationCall struct {
 	request    protocolsession.Message
 	replay     protocolsession.OutboundReplayPermit
 
+	requestKind            protocolsession.MessageKind
+	traceEnabled           bool
+	traceStarted           time.Time
+	traceDeadlineMillis    uint64
+	traceHasDeadline       bool
+	traceUsableAtSelection uint32
+	traceHasSend           bool
+	traceSendSettled       bool
+	traceSendAdmitted      bool
+	traceSendOutcome       protocolsession.SendOutcome
+	traceResponseCount     uint64
+	traceResponseKind      protocolsession.MessageKind
+	traceHasResponse       bool
+	traceHasFinalResponse  bool
+	traceCause             ProtocolOperationCause
+	traceEmitted           bool
+
 	// The admitted continuation bound is operation identity metadata, not live
 	// authority. Retaining it after close prevents shutdown timing from changing
 	// the public contract of an operation that was already returned to a caller.
@@ -367,6 +386,16 @@ func (call *operationCall) enqueue(response operationResponse) error {
 	defer call.stateMu.Unlock()
 	if call.closed {
 		return nil
+	}
+	if call.traceEnabled {
+		if call.traceResponseCount != ^uint64(0) {
+			call.traceResponseCount++
+		}
+		call.traceResponseKind = response.message.Kind()
+		call.traceHasResponse = true
+		if senderResponseFinal(response.message.Kind()) {
+			call.traceHasFinalResponse = true
+		}
 	}
 	select {
 	case call.messages <- response:

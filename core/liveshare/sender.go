@@ -51,6 +51,7 @@ type RuntimeFactoryConfig struct {
 	TerminalConnectivity sessionruntime.TerminalConnectivity
 	PeerHandlers         sessionruntime.SenderPeerHandlerFactory
 	TerminalObserver     sessionruntime.SenderTerminalObserver
+	ProtocolTracer       sessionruntime.ProtocolOperationTracer
 }
 
 type senderPreparationDependencies struct {
@@ -520,6 +521,7 @@ func (sender *PreparedSender) NewRuntimeFactory(config RuntimeFactoryConfig) (*s
 		SenderPrivateKey: sender.privateKey, Catalog: sender.catalogAccess, Content: contentFactory,
 		Peers:            config.PeerHandlers,
 		TerminalObserver: config.TerminalObserver,
+		ProtocolTracer:   config.ProtocolTracer,
 		Random:           sender.random, TerminalConnectivity: prefetchTerminalConnectivity{
 			prefetch: sender.catalogAccess,
 			delegate: config.TerminalConnectivity,

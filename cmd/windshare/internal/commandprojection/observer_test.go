@@ -84,6 +84,43 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		v2peer.AttemptFailureScopeAttempt, v2peer.AttemptFailureScopeSession,
 	}, v2peer.AttemptFailureScope("unknown"), projectPeerFailureScope)
 
+	assertClosedProjection(t, "protocol role", []protocolsession.Role{
+		protocolsession.RoleReceiver, protocolsession.RoleSender,
+	}, protocolsession.Role(255), projectProtocolRole)
+	assertClosedProjection(t, "protocol operation stage", []sessionruntime.ProtocolOperationStage{
+		sessionruntime.ProtocolOperationReceiverCompleted,
+		sessionruntime.ProtocolOperationReceiverFailed,
+		sessionruntime.ProtocolOperationReceiverEnded,
+		sessionruntime.ProtocolOperationSenderRequestReceived,
+		sessionruntime.ProtocolOperationSenderResponseSettled,
+	}, sessionruntime.ProtocolOperationStage(255), projectProtocolOperationStage)
+	assertClosedProjection(t, "protocol message kind", []protocolsession.MessageKind{
+		protocolsession.MessageListChildren, protocolsession.MessageCatalogResult,
+		protocolsession.MessageOpenRevisions, protocolsession.MessageOpenResults,
+		protocolsession.MessageRenewLease, protocolsession.MessageReleaseLease,
+		protocolsession.MessageRequestBlocks, protocolsession.MessageBlockFragment,
+		protocolsession.MessageCancel, protocolsession.MessageOperationError,
+		protocolsession.MessageSessionTerminal, protocolsession.MessageLaneAttach,
+		protocolsession.MessageScanProgress, protocolsession.MessageOperationComplete,
+		protocolsession.MessageLeaseResult, protocolsession.MessagePeerOffer,
+		protocolsession.MessagePeerAnswer, protocolsession.MessagePeerCandidate,
+	}, protocolsession.MessageKind(255), projectProtocolMessageKind)
+	assertClosedProjection(t, "protocol send outcome", []protocolsession.SendOutcome{
+		protocolsession.SendOutcomeUnknown,
+		protocolsession.SendOutcomeDelivered,
+		protocolsession.SendOutcomeDropped,
+	}, protocolsession.SendOutcome(255), projectProtocolSendOutcome)
+	assertClosedProjection(t, "protocol operation cause", []sessionruntime.ProtocolOperationCause{
+		sessionruntime.ProtocolOperationCauseNone,
+		sessionruntime.ProtocolOperationCauseCanceled,
+		sessionruntime.ProtocolOperationCauseDeadline,
+		sessionruntime.ProtocolOperationCauseRuntimeClosed,
+		sessionruntime.ProtocolOperationCauseLaneUnavailable,
+		sessionruntime.ProtocolOperationCauseWriterStopped,
+		sessionruntime.ProtocolOperationCauseOperationClosed,
+		sessionruntime.ProtocolOperationCauseProtocolFailure,
+	}, sessionruntime.ProtocolOperationCause(255), projectProtocolOperationCause)
+
 	assertClosedProjection(t, "transfer stage", []transfer.TransferLifecycleStage{
 		transfer.TransferDiscoveryStarted, transfer.TransferGenerationCommitted,
 		transfer.TransferDiscoveryCompleted, transfer.TransferAdmissionStarted,
@@ -209,6 +246,47 @@ func TestLifecycleProjectionCopiesOnlyWhitelistedFacts(t *testing.T) {
 		t.Fatalf("peer failure = %#v, present %v", failure, ok)
 	}
 	assertProjectionOmits(t, failedPeer, "provider-message-SECRET", "operation-message-SECRET")
+}
+
+func TestProtocolOperationProjectionPreservesCorrelationAndClosedDiagnostics(t *testing.T) {
+	sessionID := sourceProtocolSessionID(t, 0x81)
+	operationID, err := protocolsession.OperationIDFromBytes(
+		bytes.Repeat([]byte{0x82}, protocolsession.IdentityBytes),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := ProjectProtocolOperation(clievent.CommandGet, sessionruntime.ProtocolOperationTrace{
+		Stage:             sessionruntime.ProtocolOperationReceiverFailed,
+		Role:              protocolsession.RoleReceiver,
+		ProtocolSessionID: sessionID, OperationID: operationID,
+		RequestKind: protocolsession.MessageReleaseLease,
+		Lane:        sessionruntime.LaneIdentity{ID: 2, Epoch: 1}, HasLane: true,
+		HasSend: true, SendSettled: true, SendAdmitted: true,
+		SendOutcome:             protocolsession.SendOutcomeDelivered,
+		DeadlineRemainingMillis: 30_000, HasDeadline: true,
+		OperationElapsedMillis: 30_000,
+		UsableLanesAtSelection: 2, UsableLanesAtSettlement: 2,
+		Cause: sessionruntime.ProtocolOperationCauseDeadline,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.ProtocolSessionID().Hex() != fmt.Sprintf("%x", sessionID) ||
+		event.ProtocolOperationID().Hex() != fmt.Sprintf("%x", operationID) ||
+		event.RequestKind() != clievent.ProtocolMessageReleaseLease ||
+		event.Cause() != clievent.ProtocolOperationCauseDeadline {
+		t.Fatalf("protocol operation projection = %#v", event)
+	}
+	if _, err := ProjectProtocolOperation(clievent.CommandShare, sessionruntime.ProtocolOperationTrace{
+		Stage:             sessionruntime.ProtocolOperationReceiverFailed,
+		Role:              protocolsession.RoleReceiver,
+		ProtocolSessionID: sessionID, OperationID: operationID,
+		RequestKind: protocolsession.MessageReleaseLease,
+		Cause:       sessionruntime.ProtocolOperationCauseDeadline,
+	}); err != ErrInvalidProjection {
+		t.Fatalf("role/command mismatch error = %v", err)
+	}
 }
 
 func TestCoreObserverProjectionPreservesCorrelationAndDropsAuthoritySecrets(t *testing.T) {
