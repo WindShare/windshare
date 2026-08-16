@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -15,6 +16,14 @@ type rangeBlockResult struct {
 	data  []byte
 	err   error
 }
+
+const (
+	// Keep the output transaction atomic at the same bounded window the broker
+	// can keep in flight. A wider request would only add receiver memory because
+	// the broker cannot make additional upstream progress concurrently.
+	defaultFileReadWindowBlocks     = DefaultConcurrentBlocks
+	maximumAtomicRequestedRangeSize = uint64(defaultFileReadWindowBlocks * catalog.MaxChunkSize)
+)
 
 type RangeSink interface {
 	WriteRange(context.Context, uint64, []byte) error
@@ -31,7 +40,7 @@ type atomicRequestedRangeSink struct {
 	target    RangeSink
 	requested content.Range
 	data      []byte
-	covered   []uint64
+	covered   []content.Range
 	count     uint64
 	failure   error
 	sealed    bool
@@ -46,12 +55,12 @@ func newAtomicRequestedRangeSink(
 	}
 	length := requested.End - requested.Offset
 	maxInt := uint64(^uint(0) >> 1)
-	if length > uint64(catalog.MaxChunkSize) || length > maxInt {
+	if length > maximumAtomicRequestedRangeSize || length > maxInt {
 		return nil, rangeReaderContractError(errors.New("requested range exceeds the atomic protocol bound"))
 	}
 	return &atomicRequestedRangeSink{
 		target: target, requested: requested,
-		data: make([]byte, int(length)), covered: make([]uint64, (length+63)/64),
+		data: make([]byte, int(length)),
 	}, nil
 }
 
@@ -82,17 +91,44 @@ func (sink *atomicRequestedRangeSink) WriteRange(
 	}
 	start := offset - sink.requested.Offset
 	end := start + uint64(len(data))
-	for index := start; index < end; index++ {
-		if sink.covered[index/64]&(uint64(1)<<(index%64)) != 0 {
-			return sink.failContractLocked(errors.New("range write overlaps bytes already supplied"))
-		}
+	if !sink.admitCoverageLocked(content.Range{Offset: start, End: end}) {
+		return sink.failContractLocked(errors.New("range write overlaps bytes already supplied"))
 	}
 	copy(sink.data[int(start):int(end)], data)
-	for index := start; index < end; index++ {
-		sink.covered[index/64] |= uint64(1) << (index % 64)
-	}
 	sink.count += uint64(len(data))
 	return nil
+}
+
+func (sink *atomicRequestedRangeSink) admitCoverageLocked(candidate content.Range) bool {
+	index := sort.Search(len(sink.covered), func(index int) bool {
+		return sink.covered[index].Offset >= candidate.Offset
+	})
+	mergeLeft := index > 0 && sink.covered[index-1].End == candidate.Offset
+	if index > 0 && sink.covered[index-1].End > candidate.Offset {
+		return false
+	}
+	mergeRight := index < len(sink.covered) && sink.covered[index].Offset == candidate.End
+	if index < len(sink.covered) && sink.covered[index].Offset < candidate.End {
+		return false
+	}
+	first, last := index, index
+	if mergeLeft {
+		first--
+		candidate.Offset = sink.covered[first].Offset
+	}
+	if mergeRight {
+		candidate.End = sink.covered[index].End
+		last++
+	}
+	// Canonical intervals make validation proportional to collaborator writes,
+	// not bytes. A bitmap would turn every 32 MiB pipeline window into tens of
+	// millions of bookkeeping operations before any output I/O could begin.
+	updated := make([]content.Range, 0, len(sink.covered)+1-(last-first))
+	updated = append(updated, sink.covered[:first]...)
+	updated = append(updated, candidate)
+	updated = append(updated, sink.covered[last:]...)
+	sink.covered = updated
+	return true
 }
 
 func (sink *atomicRequestedRangeSink) Flush(ctx context.Context) error {
@@ -250,7 +286,13 @@ func (r *jobRun) transferMissingRanges(
 					cancellationFailure(ctx, cause), 0,
 				)
 			}
-			next := min(current.End, ((offset/chunk)+1)*chunk)
+			// RangeReader owns the bounded block pipeline. Passing one chunk at a
+			// time here serialized the production job even though BlockBroker and
+			// LaneSet were already designed for concurrent, cross-lane dispatch.
+			next := min(
+				current.End,
+				((offset/chunk)+uint64(defaultFileReadWindowBlocks))*chunk,
+			)
 			requested := content.Range{Offset: offset, End: next}
 			if !durableOutput && requested.Offset != transientEnd {
 				return false, r.settleFailedFile(
