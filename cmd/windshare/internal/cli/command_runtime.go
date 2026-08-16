@@ -38,11 +38,12 @@ type queuedCommandEvent struct {
 }
 
 type commandRuntime struct {
-	command clievent.Command
-	clock   commandClock
-	human   *humanoutput.Renderer
-	trace   userTraceRecorder
-	canvas  canvasHealth
+	command             clievent.Command
+	clock               commandClock
+	human               *humanoutput.Renderer
+	trace               userTraceRecorder
+	canvas              canvasHealth
+	protocolDiagnostics bool
 
 	ready   chan struct{}
 	closing chan struct{}
@@ -122,11 +123,16 @@ func (a *App) newCommandRuntime(
 	}
 	runtime := &commandRuntime{
 		command: command, clock: terminal.clock, human: renderer, trace: recorder,
-		canvas: terminal.canvas, observerLifecycle: make([]queuedCommandEvent, capacity),
+		protocolDiagnostics: options.verbose || options.traceEnabled(),
+		canvas:              terminal.canvas, observerLifecycle: make([]queuedCommandEvent, capacity),
 		ready: make(chan struct{}, 1), closing: make(chan struct{}), done: make(chan struct{}),
 	}
 	go runtime.run()
 	return runtime, nil
+}
+
+func (runtime *commandRuntime) protocolDiagnosticsEnabled() bool {
+	return runtime != nil && runtime.protocolDiagnostics
 }
 
 func openNativeUserTrace(

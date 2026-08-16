@@ -84,15 +84,13 @@ func (recorder *Recorder) writeLoop() {
 	for {
 		select {
 		case queued := <-recorder.lifecycle:
-			recorder.writeNormal(content, queued)
+			recorder.writeLifecycle(content, queued)
 		case _, ok := <-tick:
 			if !ok {
 				tick = nil
 				continue
 			}
-			if progress := recorder.takeProgress(); progress != nil {
-				recorder.writeNormal(content, *progress)
-			}
+			recorder.writeReadySnapshot(content)
 			if content.needsSync() {
 				recorder.syncContent(content)
 			}
@@ -104,28 +102,65 @@ func (recorder *Recorder) writeLoop() {
 }
 
 func (recorder *Recorder) finish(content *traceContent) {
-	for {
-		select {
-		case queued := <-recorder.lifecycle:
-			recorder.writeNormal(content, queued)
-		default:
-			goto drained
-		}
-	}
-
-drained:
-	if progress := recorder.takeProgress(); progress != nil {
-		recorder.writeNormal(content, *progress)
-	}
+	recorder.writeReadySnapshot(content)
 	if content.needsSync() {
 		recorder.syncContent(content)
 	}
 	recorder.writeSummary(content)
 }
 
+func (recorder *Recorder) writeReadySnapshot(content *traceContent) {
+	lifecycle, progress := recorder.snapshotReady()
+	for _, queued := range lifecycle {
+		if progress != nil && progress.metadata.sequence < queued.metadata.sequence {
+			recorder.writeNormal(content, *progress)
+			progress = nil
+		}
+		recorder.writeNormal(content, queued)
+	}
+	if progress != nil {
+		recorder.writeNormal(content, *progress)
+	}
+}
+
+func (recorder *Recorder) snapshotReady() ([]queuedEvent, *queuedEvent) {
+	// Record publishes lifecycle and progress while holding entryMu. Taking both
+	// queues at the same cut prevents a newer progress sample from overtaking an
+	// older lifecycle event without putting file IO on producer goroutines.
+	recorder.entryMu.Lock()
+	defer recorder.entryMu.Unlock()
+	lifecycle := make([]queuedEvent, 0, len(recorder.lifecycle))
+	for {
+		select {
+		case queued := <-recorder.lifecycle:
+			lifecycle = append(lifecycle, queued)
+		default:
+			return lifecycle, recorder.takeProgress()
+		}
+	}
+}
+
+func (recorder *Recorder) writeLifecycle(content *traceContent, queued queuedEvent) {
+	if progress := recorder.takeProgressBefore(queued.metadata.sequence); progress != nil {
+		recorder.writeNormal(content, *progress)
+	}
+	recorder.writeNormal(content, queued)
+}
+
 func (recorder *Recorder) takeProgress() *queuedEvent {
 	recorder.progressMu.Lock()
 	defer recorder.progressMu.Unlock()
+	progress := recorder.progress
+	recorder.progress = nil
+	return progress
+}
+
+func (recorder *Recorder) takeProgressBefore(sequence uint64) *queuedEvent {
+	recorder.progressMu.Lock()
+	defer recorder.progressMu.Unlock()
+	if recorder.progress == nil || recorder.progress.metadata.sequence >= sequence {
+		return nil
+	}
 	progress := recorder.progress
 	recorder.progress = nil
 	return progress

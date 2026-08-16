@@ -17,14 +17,28 @@ type recordV1 struct {
 	Command       string `json:"command"`
 	RunID         string `json:"run_id"`
 
-	ReceiveOperationID  *string `json:"receive_operation_id,omitempty"`
-	ProtocolSessionID   *string `json:"protocol_session_id,omitempty"`
-	ProtocolOperationID *string `json:"protocol_operation_id,omitempty"`
-	TransferJobID       *string `json:"transfer_job_id,omitempty"`
-	PeerPathID          *string `json:"peer_path_id,omitempty"`
-	PeerAttemptID       *string `json:"peer_attempt_id,omitempty"`
-	LaneID              *uint32 `json:"lane_id,omitempty"`
-	LaneEpoch           *uint32 `json:"lane_epoch,omitempty"`
+	ReceiveOperationID              *string `json:"receive_operation_id,omitempty"`
+	ProtocolSessionID               *string `json:"protocol_session_id,omitempty"`
+	ProtocolOperationID             *string `json:"protocol_operation_id,omitempty"`
+	TransferJobID                   *string `json:"transfer_job_id,omitempty"`
+	PeerPathID                      *string `json:"peer_path_id,omitempty"`
+	PeerAttemptID                   *string `json:"peer_attempt_id,omitempty"`
+	LaneID                          *uint32 `json:"lane_id,omitempty"`
+	LaneEpoch                       *uint32 `json:"lane_epoch,omitempty"`
+	ProtocolRole                    *string `json:"protocol_role,omitempty"`
+	ProtocolOperationStage          *string `json:"protocol_operation_stage,omitempty"`
+	ProtocolRequestKind             *string `json:"protocol_request_kind,omitempty"`
+	ProtocolResponseKind            *string `json:"protocol_response_kind,omitempty"`
+	ProtocolHasSend                 *bool   `json:"protocol_has_send,omitempty"`
+	ProtocolSendSettled             *bool   `json:"protocol_send_settled,omitempty"`
+	ProtocolSendAdmitted            *bool   `json:"protocol_send_admitted,omitempty"`
+	ProtocolSendOutcome             *string `json:"protocol_send_outcome,omitempty"`
+	ProtocolResponseCount           *string `json:"protocol_response_count,omitempty"`
+	ProtocolDeadlineRemainingMS     *string `json:"protocol_deadline_remaining_ms,omitempty"`
+	ProtocolOperationElapsedMS      *string `json:"protocol_operation_elapsed_ms,omitempty"`
+	ProtocolUsableLanesAtSelection  *string `json:"protocol_usable_lanes_at_selection,omitempty"`
+	ProtocolUsableLanesAtSettlement *string `json:"protocol_usable_lanes_at_settlement,omitempty"`
+	ProtocolOperationCause          *string `json:"protocol_operation_cause,omitempty"`
 
 	Transport     *string `json:"transport,omitempty"`
 	FromTransport *string `json:"from_transport,omitempty"`

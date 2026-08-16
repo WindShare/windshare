@@ -21,6 +21,10 @@ type shareCommandPublisher interface {
 	Publish(...clievent.Event) bool
 }
 
+type protocolDiagnosticsPreference interface {
+	protocolDiagnosticsEnabled() bool
+}
+
 type shareObservations struct {
 	observer shareEventObserver
 
@@ -80,6 +84,22 @@ func (observations *shareObservations) ObserveSenderAttempt(value v2peer.SenderA
 func (observations *shareObservations) ObserveSenderTerminal(value sessionruntime.SenderTerminalObservation) {
 	event, err := commandprojection.ProjectSenderTerminal(value)
 	observations.emitProjected(event, err)
+}
+
+func (observations *shareObservations) TraceProtocolOperation(value sessionruntime.ProtocolOperationTrace) {
+	event, err := commandprojection.ProjectProtocolOperation(clievent.CommandShare, value)
+	observations.emitProjected(event, err)
+}
+
+func (observations *shareObservations) protocolTracer() sessionruntime.ProtocolOperationTracer {
+	if observations == nil || observations.observer == nil {
+		return nil
+	}
+	preference, ok := observations.observer.(protocolDiagnosticsPreference)
+	if !ok || !preference.protocolDiagnosticsEnabled() {
+		return nil
+	}
+	return observations
 }
 
 func (observations *shareObservations) ObserveRelayRecovery(value senderRelayRecoveryAttempt) {

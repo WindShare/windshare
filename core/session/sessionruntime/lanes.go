@@ -151,6 +151,17 @@ func (router laneInboundRouter) RouteInbound(
 		disposition == protocolsession.OperationDeliver && binding.bound != nil {
 		router.runtime.routes.releaseRoute(binding.operationID, binding.bound)
 	}
+	if err == nil && disposition == protocolsession.OperationDeliver &&
+		router.runtime.role == protocolsession.RoleSender && receiverRequestKind(message.Kind()) &&
+		router.runtime.protocolOperationTracingEnabled() && message.Kind() != protocolsession.MessageRequestBlocks {
+		router.runtime.traceProtocolOperation(ProtocolOperationTrace{
+			Stage:       ProtocolOperationSenderRequestReceived,
+			OperationID: binding.operationID, RequestKind: message.Kind(),
+			Lane: router.identity, HasLane: true,
+			UsableLanesAtSelection: router.runtime.lanes.usableCount(),
+			Cause:                  ProtocolOperationCauseNone,
+		})
+	}
 	return disposition, err
 }
 
@@ -424,6 +435,24 @@ func (lanes *runtimeLanes) hasUsableLocked() bool {
 		}
 	}
 	return false
+}
+
+func (lanes *runtimeLanes) usableCount() uint32 {
+	if lanes == nil {
+		return 0
+	}
+	lanes.mu.Lock()
+	defer lanes.mu.Unlock()
+	if lanes.stopping {
+		return 0
+	}
+	var count uint32
+	for _, lane := range lanes.active {
+		if lane.usableLocked() && count != ^uint32(0) {
+			count++
+		}
+	}
+	return count
 }
 
 func (lanes *runtimeLanes) setDetachHook(hook func(LaneIdentity)) {

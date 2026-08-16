@@ -18,6 +18,9 @@ var (
 	v2TraceStringFields = v2TraceFieldSet(`
 		time level event command run_id
 		receive_operation_id protocol_session_id protocol_operation_id transfer_job_id peer_path_id peer_attempt_id
+		protocol_role protocol_operation_stage protocol_request_kind protocol_response_kind protocol_send_outcome
+		protocol_response_count protocol_deadline_remaining_ms protocol_operation_elapsed_ms
+		protocol_usable_lanes_at_selection protocol_usable_lanes_at_settlement protocol_operation_cause
 		transport from_transport to_transport content_path relay_scheme relay_host
 		subject_kind file_bytes selected_items state
 		failure_code message_key fault_domain fault_scope retry_after_ms result_status drift
@@ -36,6 +39,7 @@ var (
 	`)
 	v2TraceBoolFields = v2TraceFieldSet(`
 		destination_adjusted stopped_cleanly counters_exact trace_incomplete writer_failed flush_failed schema_limited
+		protocol_has_send protocol_send_settled protocol_send_admitted
 		terminal settled
 	`)
 	v2TraceDecimalStringFields = v2TraceFieldSet(`
@@ -45,6 +49,8 @@ var (
 		attempt_sequence attempt_elapsed_ms node_claims directory_claims file_claims active_file_claims reserved_file_slots directory_metadata_bytes
 		checkpoint_records active_scans scan_work entries memory_bytes spill_bytes legacy_roots_removed root_prefetch_attempt
 		root_prefetch_entry_count root_prefetch_omitted_count
+		protocol_response_count protocol_deadline_remaining_ms protocol_operation_elapsed_ms
+		protocol_usable_lanes_at_selection protocol_usable_lanes_at_settlement
 	`)
 	v2TraceRunID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 )

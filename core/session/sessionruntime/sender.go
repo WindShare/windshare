@@ -106,6 +106,7 @@ type SenderFactoryConfig struct {
 	TerminalConnectivity TerminalConnectivity
 	TerminalTimeout      time.Duration
 	TerminalObserver     SenderTerminalObserver
+	ProtocolTracer       ProtocolOperationTracer
 }
 
 type SenderFactory struct {
@@ -124,6 +125,7 @@ type SenderFactory struct {
 	terminalConnectivity TerminalConnectivity
 	terminalTimeout      time.Duration
 	terminalObserver     SenderTerminalObserver
+	protocolTracer       ProtocolOperationTracer
 	admissionContext     context.Context
 	cancelAdmissions     context.CancelFunc
 
@@ -176,6 +178,7 @@ func NewSenderFactory(config SenderFactoryConfig) (*SenderFactory, error) {
 		operationLimits: config.OperationLimits, routerLimits: config.RouterLimits, now: config.Now,
 		terminalConnectivity: config.TerminalConnectivity, terminalTimeout: config.TerminalTimeout,
 		terminalObserver: config.TerminalObserver,
+		protocolTracer:   config.ProtocolTracer,
 		admissionContext: admissionContext, cancelAdmissions: cancelAdmissions,
 		sessions: make(map[protocolsession.ProtocolSessionID]*SenderRuntime), terminalDone: make(chan struct{}),
 	}, nil
@@ -315,6 +318,7 @@ func (factory *SenderFactory) acceptClient(
 		),
 		Continuations:   factory.peers,
 		OperationLimits: factory.operationLimits, RouterLimits: factory.routerLimits, Now: factory.now,
+		ProtocolTracer: factory.protocolTracer,
 	})
 	if err != nil {
 		keys.Destroy()
