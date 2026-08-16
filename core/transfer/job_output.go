@@ -20,10 +20,11 @@ func (r *jobRun) settleFailedFile(
 	stage FailureStage,
 	cause error,
 	retireReason FileRetireReason,
+	progress *fileTransferProgress,
 ) error {
 	policy := lifecyclePolicyFor(cause)
 	if !retireReason.valid() || policy.jobTerminal() || policy.outputFailure() {
-		return r.pauseFailedFile(ctx, plan, opened, transaction, stage, cause)
+		return r.pauseFailedFile(ctx, plan, opened, transaction, stage, cause, progress)
 	}
 	settleContext, cancel := r.job.newSettlementContext(ctx)
 	settlement, rawSettlementErr := transaction.Retire(settleContext, retireReason)
@@ -42,7 +43,8 @@ func (r *jobRun) settleFailedFile(
 		failure.SettlementFailure = settlementErr
 	}
 	if settlementErr == nil {
-		r.acceptFileSettlement(settlement)
+		settlementErr = r.acceptTransactionFileSettlement(plan, transaction, progress, settlement)
+		failure.SettlementFailure = settlementErr
 	}
 	r.recordFileFailure(failure)
 	r.traceFileSettlement(plan, settlement, joinLifecycleFailures(settlementErr, releaseErr))
@@ -63,6 +65,7 @@ func (r *jobRun) pauseFailedFile(
 	transaction FileTransaction,
 	stage FailureStage,
 	cause error,
+	progress *fileTransferProgress,
 ) error {
 	policy := lifecyclePolicyFor(cause)
 	isolatedOutputFailure := policy.outputCanContinueAfterFileSettlement(r.output.Capabilities())
@@ -78,7 +81,7 @@ func (r *jobRun) pauseFailedFile(
 		settlementErr = outputContractFault(nil)
 	}
 	if settlementErr == nil {
-		r.acceptFileSettlement(settlement)
+		settlementErr = r.acceptTransactionFileSettlement(plan, transaction, progress, settlement)
 	}
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: stage, Cause: cause,
@@ -107,10 +110,11 @@ func (r *jobRun) commitTransferredFile(
 	plan plannedFile,
 	opened OpenedRevision,
 	transaction FileTransaction,
+	progress *fileTransferProgress,
 ) error {
 	if cause := context.Cause(ctx); cause != nil {
 		return r.pauseFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, cancellationFailure(ctx, cause),
+			ctx, plan, opened, transaction, FailureFileOutput, cancellationFailure(ctx, cause), progress,
 		)
 	}
 	settleContext, cancel := r.job.newSettlementContext(ctx)
@@ -135,13 +139,13 @@ func (r *jobRun) commitTransferredFile(
 		settlement.Kind() != FileCollision && settlement.Kind() != FileItemBlocked {
 		return r.rejectCommitSettlement(ctx, plan, opened, settlement)
 	}
-	r.acceptFileSettlement(settlement)
+	if err := r.acceptTransactionFileSettlement(plan, transaction, progress, settlement); err != nil {
+		return r.rejectCommitSettlement(ctx, plan, opened, settlement)
+	}
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
 	r.traceFileSettlement(plan, settlement, releaseErr)
 	switch settlement.Kind() {
 	case FilePublished:
-		r.succeeded++
-		r.job.tracker.completeFile(plan.expectedSize)
 		if releaseErr != nil {
 			r.recordFileFailure(FileJobFailure{
 				FileID: plan.file, Path: plan.failurePath(), Stage: FailureLeaseRelease, Cause: releaseErr,
@@ -208,20 +212,21 @@ func (r *jobRun) finish(ctx context.Context) JobResult {
 		outcome = DirectTreeOutcomePartial
 	}
 	outcome = r.settleJob(ctx, outcome)
+	progress := r.job.Progress()
 	return JobResult{
 		Outcome: outcome, Settlement: r.settlement,
 		TransferJobID: r.job.jobID, ReceiveIntentDigest: r.job.intent.Digest(), ReceiveIntent: r.job.intent,
 		SelectionObservation: r.selectionObservation,
-		Measure:              r.job.Measure(), Directories: directories, Files: files,
+		Progress:             progress, Directories: directories, Files: files,
 		OmittedDirectoryFailures: omittedDirectories, OmittedFileFailures: omittedFiles,
 		SelectionResolutionFailure: r.selectionResolutionFailure,
 		SourceDriftFailure:         lifecycleError(sourceDriftFailure),
 		SourceDriftFault:           closedLifecycleFault(sourceDriftFailure),
-		SucceededFiles:             r.succeeded, FileOutcomes: r.fileOutcomes,
-		TerminationCause:  lifecycleError(r.terminationCause),
-		TerminationFault:  closedLifecycleFault(r.terminationCause),
-		SettlementFailure: lifecycleError(r.settlementFailure),
-		SettlementFault:   closedLifecycleFault(r.settlementFailure),
+		SucceededFiles:             progress.PublishedFiles,
+		TerminationCause:           lifecycleError(r.terminationCause),
+		TerminationFault:           closedLifecycleFault(r.terminationCause),
+		SettlementFailure:          lifecycleError(r.settlementFailure),
+		SettlementFault:            closedLifecycleFault(r.settlementFailure),
 	}
 }
 
@@ -229,12 +234,11 @@ func (r *jobRun) finish(ctx context.Context) JobResult {
 // reducer requires one published settlement for every discovered file before
 // FinalizeTree may retire the active operation.
 func (r *jobRun) selectionFullyPublished() bool {
-	measure := r.job.Measure()
-	return measure.Discovery == DiscoveryComplete && measure.DiscoveryTerminalSuccess && !measure.overflowed &&
-		measure.DiscoveredFiles == measure.CompletedFiles &&
-		measure.DiscoveredBytes == measure.CompletedBytes &&
-		measure.CompletedFiles == r.succeeded &&
-		r.fileOutcomes.PublishedFiles() == r.succeeded
+	progress := r.job.Progress()
+	return progress.Discovery == DiscoveryComplete && progress.CountersExact &&
+		progress.DiscoveredFiles == progress.PublishedFiles &&
+		progress.DiscoveredBytes == progress.PublishedBytes &&
+		progress.PublishedFiles == progress.FileOutcomes.PublishedFiles()
 }
 
 func (r *jobRun) settleJob(ctx context.Context, outcome DirectTreeOutcome) DirectTreeOutcome {
@@ -467,32 +471,27 @@ func (r *jobRun) traceFileSettlement(plan plannedFile, settlement FileSettlement
 	})
 }
 
-func (r *jobRun) acceptFileSettlement(settlement FileSettlement) {
-	// Item-local collision, failure, or blocked publication keeps the persistent
-	// operation active. Operation attention is reserved for root/registry/lease
-	// ownership uncertainty reported through the session lifecycle boundary.
-	switch settlement.Kind() {
-	case FilePublished:
-		if provenance, ok := settlement.PublicationProvenance(); ok {
-			switch provenance {
-			case FileDownloaded:
-				r.fileOutcomes.DownloadedFiles++
-			case FileResumed:
-				r.fileOutcomes.ResumedFiles++
-			}
+func (r *jobRun) acceptTransactionFileSettlement(
+	plan plannedFile,
+	transaction FileTransaction,
+	progress *fileTransferProgress,
+	settlement FileSettlement,
+) error {
+	if progress == nil {
+		if _, hasCheckpoint := settlement.VerifiedCheckpoint(); hasCheckpoint {
+			return outputContractFault(nil)
 		}
-	case FilePaused:
-		r.fileOutcomes.PausedFiles++
-	case FileCollision:
-		r.fileOutcomes.CollisionFiles++
-	case FileItemBlocked:
-		r.fileOutcomes.ItemBlockedFiles++
-	case FileFailed:
-		r.fileOutcomes.FailedFiles++
-	}
-	for _, warning := range settlement.MetadataWarnings() {
-		if warning == FileMetadataModifiedTime {
-			r.fileOutcomes.ModifiedTimeWarnings++
+	} else {
+		delta, valid := progress.reconcileSettlement(transaction, settlement)
+		if !valid {
+			return outputContractFault(nil)
+		}
+		if delta != 0 {
+			r.job.progress.addNewlyVerified(delta)
 		}
 	}
+	// Outcome and publication counters move together before lifecycle emission,
+	// preventing observers from seeing a settled file with stale progress.
+	r.job.progress.acceptFileSettlement(settlement, plan.expectedSize)
+	return nil
 }

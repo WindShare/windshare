@@ -7,13 +7,16 @@ import (
 )
 
 func (a *App) runResume(ctx context.Context, args []string) int {
-	serializedTerminal := a.stderrWriter()
+	terminal := a.terminalOutput()
+	serializedTerminal := completeLineCanvasWriter{canvas: terminal.canvas}
 	runner := resumecommand.NewFilesystemRunner(resumecommand.FilesystemConfig{
-		Input:                    a.Stdin,
-		Output:                   a.Stdout,
+		Input:  a.Stdin,
+		Output: a.Stdout,
+		// Resume still needs the raw descriptor for interactivity detection, but
+		// every byte of human output is coordinated by TerminalCanvas.
 		RawTerminalOutput:        a.Stderr,
 		SerializedTerminalOutput: serializedTerminal,
-		Logf:                     a.logf,
+		Logf:                     a.writeCompleteLine,
 	})
 	switch runner.Run(ctx, args) {
 	case resumecommand.ResultOK:
@@ -23,7 +26,7 @@ func (a *App) runResume(ctx context.Context, args []string) int {
 	case resumecommand.ResultFailure:
 		return ExitFailure
 	default:
-		a.logf("resume: command returned an invalid result")
+		a.writeCompleteLine("resume: command returned an invalid result")
 		return ExitFailure
 	}
 }

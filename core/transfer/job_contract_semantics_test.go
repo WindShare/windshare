@@ -218,8 +218,8 @@ func TestTransferJobImmediateSettlementsPreserveOutcomeAndReleaseFailures(t *tes
 				t.Fatalf("immediate settlement error = %v", err)
 			}
 			if settlement.Kind() == FilePublished {
-				if run.succeeded != 1 || len(run.files) != 0 {
-					t.Fatalf("published result succeeded=%d failures=%+v", run.succeeded, run.files)
+				if run.job.Progress().PublishedFiles != 1 || len(run.files) != 0 {
+					t.Fatalf("published progress=%+v failures=%+v", run.job.Progress(), run.files)
 				}
 				return
 			}
@@ -244,9 +244,9 @@ func TestTransferJobImmediateSettlementsPreserveOutcomeAndReleaseFailures(t *tes
 		published := immediateDirectTreeSettlements(t, binding, checkpoint)["published"]
 		err := run.handleImmediateSettlement(context.Background(), plan, opened, published)
 		if normalizedFault(err) != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
-			run.succeeded != 1 || len(run.files) != 1 ||
+			run.job.Progress().PublishedFiles != 1 || len(run.files) != 1 ||
 			run.files[0].Stage != FailureLeaseRelease {
-			t.Fatalf("terminal release result error=%v succeeded=%d failures=%+v", err, run.succeeded, run.files)
+			t.Fatalf("terminal release result error=%v progress=%+v failures=%+v", err, run.job.Progress(), run.files)
 		}
 	})
 
@@ -454,7 +454,7 @@ func TestRangesContainAdvancesAcrossDisjointDurableSegments(t *testing.T) {
 func immediateSettlementJobRun(share catalog.ShareInstance, revisions RevisionClient) *jobRun {
 	return &jobRun{
 		job: &TransferJob{
-			revisions: revisions, settlementTimeout: time.Second,
+			revisions: revisions, settlementTimeout: time.Second, progress: newReceiveProgressTracker(),
 		},
 		output: newJobOutput(share),
 	}

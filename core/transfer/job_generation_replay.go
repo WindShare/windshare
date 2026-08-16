@@ -18,7 +18,7 @@ func (discovery *incrementalDirectoryDiscovery) replayGeneration(
 	if discovery.request.mode == incrementalDiscoveryOpaqueProbe {
 		return discovery.replayOpaqueSelectionProbe(ctx)
 	}
-	selectedSubtree := discovery.request.selected || discovery.selection.DiscoveredFiles != 0
+	selectedSubtree := discovery.request.selected || discovery.selection.files != 0
 	for _, phase := range [...]generationReplayPhase{replayGenerationFiles, replayGenerationDirectories} {
 		phaseSelected, err := discovery.replayGenerationPhase(ctx, admission, materialization, phase)
 		if err != nil {

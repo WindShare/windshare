@@ -128,31 +128,27 @@ func TestSelectionMeasureExclusiveThresholdsAndAbsorbingLarge(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			tracker := selectionTracker{}
-			for range test.files {
-				tracker.addFile(0)
+			discovery := DiscoveryOpen
+			if test.terminal && test.failed {
+				discovery = DiscoveryFailed
+			} else if test.terminal {
+				discovery = DiscoveryComplete
 			}
-			if test.bytes != 0 {
-				tracker.addFile(test.bytes)
-				tracker.mu.Lock()
-				tracker.measure.DiscoveredFiles = test.files
-				tracker.mu.Unlock()
+			snapshot := ReceiveProgressSnapshot{
+				DiscoveredFiles: test.files, DiscoveredBytes: test.bytes,
+				Discovery: discovery, CountersExact: true,
 			}
-			if test.failed {
-				tracker.failDiscovery()
-			}
-			if test.terminal {
-				tracker.finishDiscovery()
-			}
-			if got := tracker.snapshot().ConnectionSizeClass(); got != test.want {
-				t.Fatalf("class=%v measure=%+v want=%v", got, tracker.snapshot(), test.want)
+			if got := snapshot.ConnectionSizeClass(); got != test.want {
+				t.Fatalf("class=%v progress=%+v want=%v", got, snapshot, test.want)
 			}
 		})
 	}
-	tracker := selectionTracker{measure: SelectionMeasure{DiscoveredBytes: math.MaxUint64 - 1}}
-	tracker.addFile(2)
-	if got := tracker.snapshot(); got.ConnectionSizeClass() != ConnectionSizeLarge || got.DiscoveredBytes != math.MaxUint64 {
-		t.Fatalf("overflow measure=%+v", got)
+	tracker := newReceiveProgressTracker()
+	tracker.snapshot.DiscoveredBytes = math.MaxUint64 - 1
+	tracker.addDiscovery(discoveredSelection{bytes: 2, exact: true})
+	if got := tracker.snapshotValue(); got.ConnectionSizeClass() != ConnectionSizeLarge ||
+		got.DiscoveredBytes != math.MaxUint64 || got.CountersExact {
+		t.Fatalf("overflow progress=%+v", got)
 	}
 }
 

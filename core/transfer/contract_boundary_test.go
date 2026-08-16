@@ -30,7 +30,7 @@ func TestUnadmittedJobFinishPreservesLateCancellation(t *testing.T) {
 	cause := errors.New("caller cancelled")
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(cause)
-	run := &jobRun{job: &TransferJob{tracker: newSelectionTracker()}}
+	run := &jobRun{job: &TransferJob{progress: newReceiveProgressTracker()}}
 	result := run.finish(ctx)
 	if result.Outcome != DirectTreeOutcomePaused || !errors.Is(result.TerminationCause, context.Canceled) ||
 		result.TerminationFault.Valid() {
