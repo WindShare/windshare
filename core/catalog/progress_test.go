@@ -18,6 +18,10 @@ const scanProgressTestDeadline = 30 * time.Second
 func TestScanProgressCoalescesBackpressureWithoutBlockingScan(t *testing.T) {
 	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
 	defer store.Close()
+	// The shared fixture's tiny sort run intentionally exercises spill behavior.
+	// Keep that disk-bound concern out of this concurrency test so reaching the
+	// publish boundary measures observer backpressure rather than Windows fsyncs.
+	store.sortRunBytes = DefaultSortRunMemoryBytes
 	session := generousBudget(t, "progress-session")
 	directory := prepareScannableDirectory(t, store, session, 181, 183)
 
