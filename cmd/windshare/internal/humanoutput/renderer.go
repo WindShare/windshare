@@ -249,3 +249,9 @@ func (eventVisitor) VisitFilesystemOutputObserved(clievent.FilesystemOutputObser
 func (eventVisitor) VisitSenderTerminalObserved(clievent.SenderTerminalObserved) error { return nil }
 func (eventVisitor) VisitCatalogStorageObserved(clievent.CatalogStorageObserved) error { return nil }
 func (eventVisitor) VisitRootPrefetchObserved(clievent.RootPrefetchObserved) error     { return nil }
+func (visitor eventVisitor) VisitProtocolOperationObserved(event clievent.ProtocolOperationObserved) error {
+	if visitor.verboseVisible() && event.Cause() != clievent.ProtocolOperationCauseNone {
+		visitor.renderer.insert(formatProtocolOperationFailure(event, visitor.symbols()))
+	}
+	return nil
+}

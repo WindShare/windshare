@@ -239,6 +239,72 @@ func ProjectTransferLifecycle(value transfer.TransferLifecycleTrace) (clievent.T
 	return event, nil
 }
 
+func ProjectProtocolOperation(
+	command clievent.Command,
+	value sessionruntime.ProtocolOperationTrace,
+) (clievent.ProtocolOperationObserved, error) {
+	role, ok := projectProtocolRole(value.Role)
+	if !ok {
+		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+	}
+	stage, ok := projectProtocolOperationStage(value.Stage)
+	if !ok {
+		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+	}
+	sessionID, err := ProtocolSessionID(value.ProtocolSessionID)
+	if err != nil {
+		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+	}
+	operationID, err := ProtocolOperationID(value.OperationID)
+	if err != nil {
+		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+	}
+	requestKind, ok := projectProtocolMessageKind(value.RequestKind)
+	if !ok {
+		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+	}
+	var responseKind clievent.ProtocolMessageKind
+	if value.HasResponse {
+		responseKind, ok = projectProtocolMessageKind(value.ResponseKind)
+		if !ok {
+			return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+		}
+	}
+	sendOutcome, ok := projectProtocolSendOutcome(value.SendOutcome)
+	if !ok {
+		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+	}
+	cause, ok := projectProtocolOperationCause(value.Cause)
+	if !ok {
+		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+	}
+	var lane clievent.LaneIdentity
+	if value.HasLane {
+		lane, err = LaneIdentity(value.Lane)
+		if err != nil {
+			return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+		}
+	}
+	event, err := clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
+		Command: command, Role: role, Stage: stage,
+		ProtocolSession: sessionID, ProtocolOperation: operationID,
+		RequestKind: requestKind, ResponseKind: responseKind, HasResponse: value.HasResponse,
+		Lane: lane, HasLane: value.HasLane,
+		HasSend: value.HasSend, SendSettled: value.SendSettled,
+		SendAdmitted: value.SendAdmitted, SendOutcome: sendOutcome,
+		ResponseCount:           value.ResponseCount,
+		DeadlineRemainingMillis: value.DeadlineRemainingMillis, HasDeadline: value.HasDeadline,
+		OperationElapsedMillis:  value.OperationElapsedMillis,
+		UsableLanesAtSelection:  value.UsableLanesAtSelection,
+		UsableLanesAtSettlement: value.UsableLanesAtSettlement,
+		Cause:                   cause,
+	})
+	if err != nil {
+		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+	}
+	return event, nil
+}
+
 func ProjectFilesystemOutput(value osfs.FilesystemOutputTrace) (clievent.FilesystemOutputObserved, error) {
 	operation, ok := projectFilesystemOperation(value.Operation)
 	if !ok {

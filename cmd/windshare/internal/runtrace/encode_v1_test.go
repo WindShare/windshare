@@ -20,7 +20,7 @@ const (
 
 func TestEncodeV1VisitsEveryEventAndOmitsPrivacyCanaries(t *testing.T) {
 	events := allTraceEvents(t)
-	if got, want := len(events), 21; got != want {
+	if got, want := len(events), 22; got != want {
 		t.Fatalf("event fixture count = %d, want %d", got, want)
 	}
 	for index, event := range events {
@@ -208,6 +208,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 	authority := mustValue(clievent.NewRelayAuthority(clievent.RelayWSS, "relay.example", 443))
 	receiveOperation := mustValue(clievent.NewReceiveOperationID(testIdentity(t, 0x11)))
 	protocolSession := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x22)))
+	protocolOperation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x23)))
 	transferJob := mustValue(clievent.NewTransferJobID(testIdentity(t, 0x33)))
 	peerPath := mustValue(clievent.NewPeerPathID(testIdentity(t, 0x44)))
 	peerAttempt := mustValue(clievent.NewPeerAttemptID(testIdentity(t, 0x55)))
@@ -343,6 +344,20 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			math.MaxUint64,
 			math.MaxUint64,
 		)),
+		mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
+			Command: clievent.CommandGet, Role: clievent.ProtocolRoleReceiver,
+			Stage:           clievent.ProtocolOperationReceiverFailed,
+			ProtocolSession: protocolSession, ProtocolOperation: protocolOperation,
+			RequestKind: clievent.ProtocolMessageReleaseLease,
+			Lane:        lane, HasLane: true,
+			HasSend: true, SendSettled: true, SendAdmitted: true,
+			SendOutcome:             clievent.ProtocolSendDelivered,
+			DeadlineRemainingMillis: math.MaxUint64, HasDeadline: true,
+			OperationElapsedMillis:  math.MaxUint64,
+			UsableLanesAtSelection:  math.MaxUint32,
+			UsableLanesAtSettlement: math.MaxUint32,
+			Cause:                   clievent.ProtocolOperationCauseDeadline,
+		})),
 	}
 }
 

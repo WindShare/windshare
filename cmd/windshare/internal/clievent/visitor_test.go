@@ -67,6 +67,9 @@ func (visitor *exhaustiveVisitor) VisitCatalogStorageObserved(CatalogStorageObse
 func (visitor *exhaustiveVisitor) VisitRootPrefetchObserved(RootPrefetchObserved) error {
 	return visitor.mark("root_prefetch")
 }
+func (visitor *exhaustiveVisitor) VisitProtocolOperationObserved(ProtocolOperationObserved) error {
+	return visitor.mark("protocol_operation")
+}
 
 func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 	failure, _ := NewFailure(FailureRelayTransport)
@@ -126,6 +129,14 @@ func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 		CatalogStorageRecovered, CatalogStorageCauseNone, CatalogUsage{}, 0,
 	)
 	rootPrefetch, _ := NewRootPrefetchObserved(RootPrefetchCommitted, 1, 2, 3)
+	protocolOperationID, _ := NewProtocolOperationID(bytes16(6))
+	protocolOperation, _ := NewProtocolOperationObserved(ProtocolOperationSpec{
+		Command: CommandGet, Role: ProtocolRoleReceiver,
+		Stage:           ProtocolOperationReceiverFailed,
+		ProtocolSession: sessionID, ProtocolOperation: protocolOperationID,
+		RequestKind: ProtocolMessageReleaseLease,
+		Lane:        lane, HasLane: true, Cause: ProtocolOperationCauseDeadline,
+	})
 
 	tests := []struct {
 		name  string
@@ -152,6 +163,7 @@ func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 		{"sender_terminal", senderTerminal},
 		{"catalog_storage", catalogStorage},
 		{"root_prefetch", rootPrefetch},
+		{"protocol_operation", protocolOperation},
 	}
 	visitor := &exhaustiveVisitor{}
 	for _, test := range tests {
