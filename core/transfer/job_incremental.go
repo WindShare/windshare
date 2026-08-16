@@ -36,7 +36,7 @@ type incrementalDirectoryDiscovery struct {
 	checkpoint                 nodeLedgerCheckpoint
 	generation                 catalog.DirectoryGeneration
 	commitments                []catalog.PageCommitment
-	selection                  SelectionMeasure
+	selection                  discoveredSelection
 	descendantAdmission        bool
 	descendantDiscoveryPending bool
 	opaqueSelectionFound       bool
@@ -182,6 +182,7 @@ func (r *jobRun) discoverIncrementalDirectory(
 	}
 	discovery := incrementalDirectoryDiscovery{
 		run: r, queue: queue, request: request, checkpoint: checkpoint,
+		selection: newDiscoveredSelection(),
 	}
 	meter, ok := catalogwalk.NewMeter(r.job.catalogWalkLimits)
 	if !ok {
@@ -202,13 +203,12 @@ func (r *jobRun) discoverIncrementalDirectory(
 		// authenticated catalog cut incomplete after the fact.
 		r.catalogTraversalComplete = true
 	}
-	r.job.trace(TransferLifecycleTrace{
-		Stage: TransferGenerationCommitted,
-	})
 	if request.mode == incrementalDiscoveryOpaqueProbe {
+		r.job.trace(TransferLifecycleTrace{Stage: TransferGenerationCommitted})
 		return discovery.replayGeneration(ctx, DirectoryAdmission{}, MaterializedDirectoryClaim{})
 	}
-	r.job.tracker.addSelection(discovery.selection)
+	r.job.progress.addDiscovery(discovery.selection)
+	r.job.trace(TransferLifecycleTrace{Stage: TransferGenerationCommitted})
 	admission, materialization, proceed, admissionErr := discovery.admitDirectory(ctx)
 	if admissionErr != nil || !proceed {
 		return false, admissionErr
@@ -334,7 +334,7 @@ func (discovery *incrementalDirectoryDiscovery) acceptFile(
 	if !selected {
 		return
 	}
-	discovery.selection.addDiscoveredFile(entry.ExpectedSize())
+	discovery.selection.addFile(entry.ExpectedSize())
 }
 
 func (discovery *incrementalDirectoryDiscovery) acceptDirectory(
@@ -383,7 +383,7 @@ func (discovery *incrementalDirectoryDiscovery) childNeedsDiscovery(
 }
 
 func (discovery *incrementalDirectoryDiscovery) rejectOmittedGeneration() error {
-	discovery.run.job.tracker.failDiscovery()
+	discovery.run.job.progress.failDiscovery()
 	discovery.run.discoveryFailed = true
 	discovery.run.recordDirectoryFailure(DirectoryJobFailure{
 		DirectoryID: discovery.request.directory,
@@ -412,7 +412,7 @@ func (discovery *incrementalDirectoryDiscovery) needsAdmission() bool {
 		return true
 	}
 	return discovery.request.path == "" || discovery.request.selected ||
-		discovery.selection.DiscoveredFiles != 0 || discovery.descendantAdmission
+		discovery.selection.files != 0 || discovery.descendantAdmission
 }
 
 func (discovery *incrementalDirectoryDiscovery) matchesExpectedEvidence() bool {
@@ -508,7 +508,7 @@ func (r *jobRun) recordSelectedProjectionRejection(
 		r.discoveryFault = fault.Join(r.discoveryFault, failure.policy.value)
 		r.failureMu.Unlock()
 		r.discoveryFailed = true
-		r.job.tracker.failDiscovery()
+		r.job.progress.failDiscovery()
 		return nil
 	default:
 		return dependencyContractFailure(ErrOutputContract)
@@ -536,7 +536,7 @@ func (r *jobRun) recordIncrementalAdmissionFailure(
 	err error,
 ) {
 	r.discoveryFailed = true
-	r.job.tracker.failDiscovery()
+	r.job.progress.failDiscovery()
 	r.recordDirectoryFailure(DirectoryJobFailure{
 		DirectoryID: directory,
 		Path:        path,

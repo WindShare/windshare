@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/transfer"
-	"github.com/windshare/windshare/internal/testrun"
 )
 
 const receiverRelayAdmissionWindow = 8 * time.Second
@@ -39,7 +38,6 @@ type receiverContentAdmission interface {
 	Close()
 	Wait()
 	Err() error
-	Traces() []receiverContentAdmissionTrace
 }
 
 type receiverAdmissionState uint8
@@ -55,13 +53,11 @@ const (
 type receiverAdmissionTrigger string
 
 const (
-	receiverAdmissionTriggerNone            receiverAdmissionTrigger = "none"
 	receiverAdmissionTriggerDeadline        receiverAdmissionTrigger = "deadline"
 	receiverAdmissionTriggerConnectionSmall receiverAdmissionTrigger = "small_connection_size"
 	receiverAdmissionTriggerPeerFailed      receiverAdmissionTrigger = "peer_failed"
 	receiverAdmissionTriggerPeerDetached    receiverAdmissionTrigger = "peer_detached"
 	receiverAdmissionTriggerRelayOnly       receiverAdmissionTrigger = "relay_only_policy"
-	receiverAdmissionTriggerP2POnly         receiverAdmissionTrigger = "p2p_only_policy"
 )
 
 type receiverAdmissionTerminalOwner string
@@ -75,38 +71,18 @@ const (
 	receiverAdmissionTerminalP2PUnavailable receiverAdmissionTerminalOwner = "p2p_unavailable"
 )
 
-type receiverContentAdmissionResult string
-
-const (
-	receiverContentAdmissionClaimed           receiverContentAdmissionResult = "claimed"
-	receiverContentAdmissionRevoked           receiverContentAdmissionResult = "queued_revoked"
-	receiverContentAdmissionUnissued          receiverContentAdmissionResult = "unissued"
-	receiverContentAdmissionExecutionRetained receiverContentAdmissionResult = "execution_retained"
-	receiverContentAdmissionAlreadyDecided    receiverContentAdmissionResult = "already_decided"
-	receiverContentAdmissionSettled           receiverContentAdmissionResult = "settled"
-	receiverContentAdmissionResumeFailed      receiverContentAdmissionResult = "resume_failed"
-	receiverContentAdmissionRelayProhibited   receiverContentAdmissionResult = "relay_content_prohibited"
-	receiverContentAdmissionP2PUnavailable    receiverContentAdmissionResult = "p2p_unavailable"
-)
-
 type receiverAdmissionAuthority struct {
 	generation uint64
 	trigger    receiverAdmissionTrigger
 	workerDone chan struct{}
 }
 
-type receiverContentAdmissionTrace struct {
-	Sequence      uint64
-	Generation    uint64
-	Trigger       receiverAdmissionTrigger
-	TerminalOwner receiverAdmissionTerminalOwner
-	Result        receiverContentAdmissionResult
-}
-
 type receiverAdmissionExecution struct {
-	// A channel gate makes the queued/revoked interleaving deterministic without
-	// placing an injectable scheduler inside the authority lock. Production is nil.
+	// The gate keeps content suspended until destination authority and the transfer
+	// job exist. onClaim publishes the path decision before Resume can expose that
+	// path to content requests, while both remain outside the authority lock.
 	claimGate <-chan struct{}
+	onClaim   func(receiverAdmissionTrigger)
 }
 
 type receiverAdmissionDecision struct {
@@ -160,8 +136,6 @@ type relayContentAdmission struct {
 	authority      *receiverAdmissionAuthority
 	terminalOwner  receiverAdmissionTerminalOwner
 	nextGeneration uint64
-	traceSequence  uint64
-	traces         []receiverContentAdmissionTrace
 }
 
 func newReceiverContentAdmissionWithExecution(
@@ -299,6 +273,9 @@ func (admission *relayContentAdmission) completeDecision(authority *receiverAdmi
 	if !admission.claimDecision(authority) {
 		return
 	}
+	if admission.exec.onClaim != nil {
+		admission.exec.onClaim(authority.trigger)
+	}
 	// Resume is synchronous and bounded in production, but remains outside the
 	// authority lock because injected implementations may reenter or panic.
 	err := resumeReceiverContent(admission.relay)
@@ -314,11 +291,6 @@ func (admission *relayContentAdmission) completeDecision(authority *receiverAdmi
 		admission.terminalOwner = receiverAdmissionTerminalResumeFailed
 	}
 	admission.state = receiverAdmissionDecided
-	result := receiverContentAdmissionSettled
-	if err != nil {
-		result = receiverContentAdmissionResumeFailed
-	}
-	admission.recordTraceLocked(authority, admission.terminalOwner, result)
 	admission.decisions <- receiverAdmissionDecision{
 		Cause:         err,
 		Trigger:       authority.trigger,
@@ -338,11 +310,6 @@ func (admission *relayContentAdmission) claimDecision(
 		return false
 	}
 	admission.state = receiverAdmissionExecuting
-	admission.recordTraceLocked(
-		authority,
-		receiverAdmissionTerminalNone,
-		receiverContentAdmissionClaimed,
-	)
 	return true
 }
 
@@ -386,15 +353,6 @@ func (admission *relayContentAdmission) Err() error {
 	return admission.resumeError
 }
 
-func (admission *relayContentAdmission) Traces() []receiverContentAdmissionTrace {
-	if admission == nil {
-		return nil
-	}
-	admission.mu.Lock()
-	defer admission.mu.Unlock()
-	return append([]receiverContentAdmissionTrace(nil), admission.traces...)
-}
-
 func (admission *relayContentAdmission) decisionWorkerDone() <-chan struct{} {
 	if admission == nil {
 		return nil
@@ -424,7 +382,6 @@ func (admission *relayContentAdmission) close(owner receiverAdmissionTerminalOwn
 		if admission.terminalOwner == receiverAdmissionTerminalNone {
 			admission.terminalOwner = owner
 		}
-		result := receiverContentAdmissionUnissued
 		switch admission.state {
 		case receiverAdmissionPending:
 			admission.state = receiverAdmissionRevoked
@@ -435,18 +392,13 @@ func (admission *relayContentAdmission) close(owner receiverAdmissionTerminalOwn
 			admission.state = receiverAdmissionRevoked
 			admission.finishWithoutDecisionLocked()
 			joinableWorkerDone = admission.authority.workerDone
-			result = receiverContentAdmissionRevoked
 		case receiverAdmissionExecuting:
 			// A claimed external call cannot be canceled safely. Close revokes all
 			// future authority; Wait is the exact completion barrier for this one.
-			result = receiverContentAdmissionExecutionRetained
 		case receiverAdmissionDecided:
 			joinableWorkerDone = admission.authority.workerDone
-			result = receiverContentAdmissionAlreadyDecided
 		case receiverAdmissionRevoked:
-			result = receiverContentAdmissionAlreadyDecided
 		}
-		admission.recordTraceLocked(admission.authority, admission.terminalOwner, result)
 		admission.mu.Unlock()
 		admission.timer.Stop()
 		close(admission.done)
@@ -465,25 +417,6 @@ func (admission *relayContentAdmission) finishWithoutDecisionLocked() {
 	close(admission.decisionDone)
 }
 
-func (admission *relayContentAdmission) recordTraceLocked(
-	authority *receiverAdmissionAuthority,
-	owner receiverAdmissionTerminalOwner,
-	result receiverContentAdmissionResult,
-) {
-	admission.traceSequence++
-	trace := receiverContentAdmissionTrace{
-		Sequence:      admission.traceSequence,
-		Trigger:       receiverAdmissionTriggerNone,
-		TerminalOwner: owner,
-		Result:        result,
-	}
-	if authority != nil {
-		trace.Generation = authority.generation
-		trace.Trigger = authority.trigger
-	}
-	admission.traces = append(admission.traces, trace)
-}
-
 type p2pOnlyContentAdmission struct {
 	// Retaining the exact suspension documents ownership of the permanent hold.
 	// Releasing it would violate the user-visible promise even after a reconnect.
@@ -493,10 +426,8 @@ type p2pOnlyContentAdmission struct {
 	finished   chan struct{}
 	decisions  chan receiverAdmissionDecision
 
-	mu       sync.Mutex
-	cause    error
-	sequence uint64
-	traces   []receiverContentAdmissionTrace
+	mu    sync.Mutex
+	cause error
 }
 
 func newP2POnlyContentAdmission(
@@ -510,11 +441,6 @@ func newP2POnlyContentAdmission(
 		finished:  make(chan struct{}),
 		decisions: make(chan receiverAdmissionDecision, 1),
 	}
-	admission.recordTraceLocked(
-		receiverAdmissionTriggerP2POnly,
-		receiverAdmissionTerminalNone,
-		receiverContentAdmissionRelayProhibited,
-	)
 	return admission, nil
 }
 
@@ -540,10 +466,10 @@ func (admission *p2pOnlyContentAdmission) ObservePeer(signal receiverPeerSignal)
 		admission.fail(receiverAdmissionTriggerPeerDetached)
 		return nil
 	case receiverPeerSessionFatal:
-		admission.stop(receiverAdmissionTerminalPeerFatal)
+		admission.stop()
 		return nil
 	case receiverPeerRuntimeTerminal:
-		admission.stop(receiverAdmissionTerminalRuntime)
+		admission.stop()
 		return nil
 	default:
 		return ErrInvalidReceiverAdmission
@@ -558,11 +484,6 @@ func (admission *p2pOnlyContentAdmission) fail(trigger receiverAdmissionTrigger)
 	admission.finishOnce.Do(func() {
 		admission.mu.Lock()
 		admission.cause = errReceiverP2PPathUnavailable
-		admission.recordTraceLocked(
-			trigger,
-			receiverAdmissionTerminalP2PUnavailable,
-			receiverContentAdmissionP2PUnavailable,
-		)
 		admission.mu.Unlock()
 		admission.decisions <- receiverAdmissionDecision{
 			Cause:         errReceiverP2PPathUnavailable,
@@ -574,15 +495,8 @@ func (admission *p2pOnlyContentAdmission) fail(trigger receiverAdmissionTrigger)
 	})
 }
 
-func (admission *p2pOnlyContentAdmission) stop(owner receiverAdmissionTerminalOwner) {
+func (admission *p2pOnlyContentAdmission) stop() {
 	admission.finishOnce.Do(func() {
-		admission.mu.Lock()
-		admission.recordTraceLocked(
-			receiverAdmissionTriggerNone,
-			owner,
-			receiverContentAdmissionUnissued,
-		)
-		admission.mu.Unlock()
 		close(admission.decisions)
 		close(admission.finished)
 	})
@@ -594,7 +508,7 @@ func (admission *p2pOnlyContentAdmission) Decision() <-chan receiverAdmissionDec
 
 func (admission *p2pOnlyContentAdmission) Close() {
 	if admission != nil {
-		admission.stop(receiverAdmissionTerminalLifecycle)
+		admission.stop()
 	}
 }
 
@@ -611,45 +525,4 @@ func (admission *p2pOnlyContentAdmission) Err() error {
 	admission.mu.Lock()
 	defer admission.mu.Unlock()
 	return admission.cause
-}
-
-func (admission *p2pOnlyContentAdmission) Traces() []receiverContentAdmissionTrace {
-	if admission == nil {
-		return nil
-	}
-	admission.mu.Lock()
-	defer admission.mu.Unlock()
-	return append([]receiverContentAdmissionTrace(nil), admission.traces...)
-}
-
-func (admission *p2pOnlyContentAdmission) recordTraceLocked(
-	trigger receiverAdmissionTrigger,
-	owner receiverAdmissionTerminalOwner,
-	result receiverContentAdmissionResult,
-) {
-	admission.sequence++
-	admission.traces = append(admission.traces, receiverContentAdmissionTrace{
-		Sequence: admission.sequence, Trigger: trigger, TerminalOwner: owner, Result: result,
-	})
-}
-
-func (a *App) logReceiverAdmissionTraces(sessionID []byte, admission receiverContentAdmission) {
-	for _, trace := range admission.Traces() {
-		a.logf(
-			"get: content path decision session_id=%x sequence=%d admission_generation=%d trigger=%s terminal_owner=%s result=%s",
-			sessionID,
-			trace.Sequence,
-			trace.Generation,
-			trace.Trigger,
-			trace.TerminalOwner,
-			trace.Result,
-		)
-		if trace.Result == receiverContentAdmissionSettled {
-			a.recordProcessTrace(
-				processTraceGetComponent,
-				processTraceReceiverRelayContent,
-				testrun.OutcomeSucceeded,
-			)
-		}
-	}
 }

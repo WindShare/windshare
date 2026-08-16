@@ -573,7 +573,7 @@ func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
 		if trace.TransferJobID != result.TransferJobID || trace.ReceiveIntentDigest != result.ReceiveIntentDigest || trace.ReceiveIntentDigest.IsZero() {
 			t.Fatalf("trace[%d] correlation=%+v result=(%x,%x)", index, trace, result.TransferJobID, result.ReceiveIntentDigest)
 		}
-		if trace.OperationID != result.ReceiveIntent.OperationID() ||
+		if trace.ReceiveOperationID != result.ReceiveIntent.OperationID() ||
 			trace.PlanKind != result.ReceiveIntent.MaterializationPlan().Kind() ||
 			!trace.ProtocolSessionID.IsZero() {
 			t.Fatalf("trace[%d] runtime correlation=%+v", index, trace)
@@ -603,7 +603,7 @@ func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
 	settled := traces[indices[TransferJobSettled]]
 	if fileSettlement.FileSettlement != FilePublished ||
 		discovery.Discovery != DiscoveryComplete || discovery.ConnectionSizeClass != ConnectionSizeSmall ||
-		discovery.DiscoveredFileCount != 1 || settled.CompletedFileCount != 1 ||
+		discovery.Progress.DiscoveredFiles != 1 || settled.Progress.PublishedFiles != 1 ||
 		settled.DirectTreeSettlement != DirectTreeSettlementSuccess {
 		t.Fatalf("typed lifecycle context=%+v", traces)
 	}
@@ -615,6 +615,38 @@ func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
 		if fileTrace.FileSelection != FileSelectionInherited {
 			t.Fatalf("file stage %d context=%+v", stage, fileTrace)
 		}
+	}
+}
+
+func TestFileTransferProgressRejectsUnrelatedSettlementCheckpointCoverage(t *testing.T) {
+	binding, _ := outputLifecycleFixture(t)
+	empty, err := content.NewRangeSet(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := VerifyDurableRanges(binding, 0, empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction := &jobFileTransaction{binding: binding}
+	progress, recovered, valid := newFileTransferProgress(transaction, initial, true)
+	if !valid || recovered != 0 || !progress.beginPending(content.Range{Offset: 0, End: 1}) {
+		t.Fatalf("initial file progress = %+v, recovered=%d valid=%t", progress, recovered, valid)
+	}
+	unrelated, err := content.NewRangeSet([]content.Range{{Offset: 1, End: binding.ExactSize()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	future, err := VerifyDurableRanges(binding, 1, unrelated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settlement, err := NewVerifiedFileSettlement(FilePaused, future)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delta, accepted := progress.reconcileSettlement(transaction, settlement); accepted || delta != 0 {
+		t.Fatalf("unrelated settlement checkpoint advanced progress: delta=%d progress=%+v", delta, progress)
 	}
 }
 

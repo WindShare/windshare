@@ -247,9 +247,9 @@ func TestTransferJobAppliesSyntheticRootOverrideToProbeAndExecution(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			updates := job.SelectionMeasures()
+			updates := job.ProgressSnapshots()
 			result := job.Run(context.Background())
-			var admission SelectionMeasure
+			var admission ReceiveProgressSnapshot
 			for measure := range updates {
 				admission = measure
 			}
@@ -258,9 +258,9 @@ func TestTransferJobAppliesSyntheticRootOverrideToProbeAndExecution(t *testing.T
 				wantFiles = 1
 			}
 			if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != wantFiles ||
-				result.Measure.DiscoveredFiles != wantFiles || admission.DiscoveredFiles != wantFiles ||
-				result.Measure.ConnectionSizeClass() != ConnectionSizeSmall || admission.ConnectionSizeClass() != ConnectionSizeSmall {
-				t.Fatalf("outcome=%v succeeded=%d want=%d term=%v settleFailure=%v settlement=%v files=%+v dirs=%+v measure=%+v admission=%+v output=%+v", result.Outcome, result.SucceededFiles, wantFiles, result.TerminationCause, result.SettlementFailure, result.Settlement, result.Files, result.Directories, result.Measure, admission, output)
+				result.Progress.DiscoveredFiles != wantFiles || admission.DiscoveredFiles != wantFiles ||
+				result.Progress.ConnectionSizeClass() != ConnectionSizeSmall || admission.ConnectionSizeClass() != ConnectionSizeSmall {
+				t.Fatalf("outcome=%v succeeded=%d want=%d term=%v settleFailure=%v settlement=%v files=%+v dirs=%+v measure=%+v admission=%+v output=%+v", result.Outcome, result.SucceededFiles, wantFiles, result.TerminationCause, result.SettlementFailure, result.Settlement, result.Files, result.Directories, result.Progress, admission, output)
 			}
 		})
 	}
@@ -377,7 +377,7 @@ func TestTransferJobSelectedDirectoryRequiresSuccessfulGenerationBeforeOutput(t 
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePartial || len(result.Directories) != 1 || result.Measure.ConnectionSizeClass() != ConnectionSizeUnknown {
+	if result.Outcome != DirectTreeOutcomePartial || len(result.Directories) != 1 || result.Progress.ConnectionSizeClass() != ConnectionSizeUnknown {
 		t.Fatalf("result=%+v", result)
 	}
 	if !slices.Equal(output.directories, []string{"", "empty"}) ||
@@ -452,14 +452,14 @@ func TestTransferJobUnmatchedFileBelowFailedDirectoryRemainsUnknown(t *testing.T
 		},
 		Revisions: &jobRevisionClient{}, Blocks: scriptedRangeReader{}, Materializer: output,
 	})
-	updates := job.SelectionMeasures()
+	updates := job.ProgressSnapshots()
 	result := job.Run(context.Background())
-	var admission SelectionMeasure
+	var admission ReceiveProgressSnapshot
 	for measure := range updates {
 		admission = measure
 	}
 	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
-		result.Measure.ConnectionSizeClass() != ConnectionSizeUnknown || admission.ConnectionSizeClass() != ConnectionSizeUnknown ||
+		result.Progress.ConnectionSizeClass() != ConnectionSizeUnknown || admission.ConnectionSizeClass() != ConnectionSizeUnknown ||
 		!slices.Equal(output.directories, []string{""}) || !slices.Equal(output.finalized, []string{""}) {
 		t.Fatalf("result=%+v admission=%+v directories=%v finalized=%v", result, admission, output.directories, output.finalized)
 	}

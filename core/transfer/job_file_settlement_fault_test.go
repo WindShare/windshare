@@ -39,8 +39,8 @@ func TestTransferJobSessionFailureAbortsJob(t *testing.T) {
 	})
 	result := job.Run(context.Background())
 	if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != normalizedFault(terminal) || !output.aborted || output.finished != 0 ||
-		result.Measure.ConnectionSizeClass() != ConnectionSizeSmall || !result.Measure.DiscoveryTerminalSuccess ||
-		result.Measure.DiscoveredFiles != 2 || result.Measure.DiscoveredBytes != 2*chunk {
+		result.Progress.ConnectionSizeClass() != ConnectionSizeSmall || result.Progress.Discovery != DiscoveryComplete ||
+		result.Progress.DiscoveredFiles != 2 || result.Progress.DiscoveredBytes != 2*chunk {
 		t.Fatalf("result=%+v output=%+v", result, output)
 	}
 	transaction := output.transactions["file.bin"]
@@ -189,6 +189,92 @@ func TestTransferJobAcceptsRecoveredImmediateRetirementWithoutContentOrSecondFil
 	}
 }
 
+func TestTransferJobCountsRecoveredImmediatePublicationWithoutInventingNewBytes(t *testing.T) {
+	share := transferID[catalog.ShareInstance](0x61)
+	output := newJobOutput(share)
+	revisions := &jobRevisionClient{}
+	blocks := &retiredCountingRangeReader{}
+	job, file := branchJob(t, output, revisions, blocks)
+	opened := revisions.opened[file]
+	locator, err := NewPathMaterializationLocator("file.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := NewFileMaterializationTarget(output.SessionID(), opened.Descriptor, locator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identity OwnedObjectID
+	digest := sha256.Sum256([]byte("recovered-published-output"))
+	copy(identity[:], digest[:])
+	binding, err := BindFileMaterializationTarget(target, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := content.NewRangeSet([]content.Range{{Offset: 0, End: binding.ExactSize()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := VerifyDurableRanges(binding, 1, full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := NewVerifiedFileSettlement(FilePublished, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err = published.WithPublicationProvenance(FileResumed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output.immediate["file.bin"] = published
+
+	result := job.Run(context.Background())
+	progress := result.Progress
+	if result.Outcome != DirectTreeOutcomeSuccess || blocks.calls != 0 ||
+		progress.VerifiedBytes != binding.ExactSize() || progress.NewlyVerifiedBytes != 0 ||
+		progress.PublishedFiles != 1 || progress.PublishedBytes != binding.ExactSize() ||
+		progress.FileOutcomes.ResumedFiles != 1 || !progress.CountersExact {
+		t.Fatalf("recovered publication result=%+v progress=%+v rangeCalls=%d", result, progress, blocks.calls)
+	}
+}
+
+func TestTransferJobReconcilesOnlySettlementConfirmedPendingCheckpointBytes(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		afterAccept  bool
+		wantVerified bool
+	}{
+		{name: "prior checkpoint", wantVerified: false},
+		{name: "pending checkpoint accepted by pause", afterAccept: true, wantVerified: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			share := transferID[catalog.ShareInstance](0x62)
+			output := newJobOutput(share)
+			revisions := &jobRevisionClient{}
+			job, file := branchJob(t, output, revisions, scriptedRangeReader{})
+			checkpointFailure := errors.New("explicit checkpoint result lost")
+			if test.afterAccept {
+				output.transactionScript.checkpointErrAfterAccept = checkpointFailure
+			} else {
+				output.transactionScript.checkpointErr = checkpointFailure
+			}
+			expectedSize := revisions.opened[file].Descriptor.ExactSize()
+
+			result := job.Run(context.Background())
+			wantBytes := uint64(0)
+			if test.wantVerified {
+				wantBytes = expectedSize
+			}
+			if result.Outcome != DirectTreeOutcomePaused || result.Progress.VerifiedBytes != wantBytes ||
+				result.Progress.NewlyVerifiedBytes != wantBytes || result.Progress.PublishedFiles != 0 ||
+				result.Progress.FileOutcomes.PausedFiles != 1 || !result.Progress.CountersExact {
+				t.Fatalf("checkpoint reconciliation result=%+v", result)
+			}
+		})
+	}
+}
+
 func TestTransferJobRetiresOnlyWithTypedPermanentSourceAuthority(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -310,8 +396,8 @@ func TestTransferJobContinuesSiblingAfterSettledFileOutputFault(t *testing.T) {
 	siblingTransaction := output.transactions["b-sibling.bin"]
 	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		result.SucceededFiles != 1 || len(result.Files) != 1 ||
-		result.FileOutcomes.DownloadedFiles != 1 || result.FileOutcomes.PausedFiles != 1 ||
-		result.FileOutcomes.PublishedFiles() != result.SucceededFiles ||
+		result.Progress.FileOutcomes.DownloadedFiles != 1 || result.Progress.FileOutcomes.PausedFiles != 1 ||
+		result.Progress.FileOutcomes.PublishedFiles() != result.SucceededFiles ||
 		result.Files[0].Fault != mustOutputFault(fault.ScopeFileLocal, fault.OutputStateIO) ||
 		failedTransaction == nil || siblingTransaction == nil ||
 		!slices.Equal(failedTransaction.pauseReasons, []FilePauseReason{FilePauseOutputFailure}) ||
@@ -472,7 +558,7 @@ func TestTransferJobValidationEmptySelectionAndFailureBranches(t *testing.T) {
 		!bytes.Equal(emptyJob.ReceiveIntent().Bytes(), baseConfig.ReceiveIntent.CanonicalBytes()) {
 		t.Fatal("job accessors lost immutable receive authority")
 	}
-	if result := emptyJob.Run(context.Background()); result.Outcome != DirectTreeOutcomeSuccess || result.Measure.ConnectionSizeClass() != ConnectionSizeSmall || emptyOutput.finished != DirectTreeOutcomeSuccess {
+	if result := emptyJob.Run(context.Background()); result.Outcome != DirectTreeOutcomeSuccess || result.Progress.ConnectionSizeClass() != ConnectionSizeSmall || emptyOutput.finished != DirectTreeOutcomeSuccess {
 		t.Fatalf("empty result=%+v", result)
 	}
 
