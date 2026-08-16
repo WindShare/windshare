@@ -193,9 +193,7 @@ export class ZipLayoutLedgerV1 {
 
   acceptsSealedPlan(plan: SealedZipLayoutPlanV1): boolean {
     return this.#state === 'sealed' && this.#sealedPlan !== undefined &&
-      plan.digest === this.#sealedPlan.digest &&
-      plan.receiveIntentDigest === this.#receiveIntentDigest &&
-      plan.artifactDigest === this.#artifactDigest
+      plan === this.#sealedPlan
   }
 
   #invalidate(): void {
