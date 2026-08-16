@@ -98,14 +98,16 @@ func (wallSenderRelayRecoveryClock) Wait(ctx context.Context, delay time.Duratio
 }
 
 type senderRelayLifecycleConfig struct {
-	relayURL    string
-	fresh       v2.RegisterInit
-	resumeToken v2.ResumeToken
-	privateKey  ed25519.PrivateKey
-	initial     senderRelayEndpoint
-	dialer      senderRelayDialer
-	clock       senderRelayRecoveryClock
-	observe     func(senderRelayRecoveryMilestone)
+	relayURL       string
+	fresh          v2.RegisterInit
+	resumeToken    v2.ResumeToken
+	privateKey     ed25519.PrivateKey
+	initial        senderRelayEndpoint
+	dialer         senderRelayDialer
+	clock          senderRelayRecoveryClock
+	lifecycleTrace relayv2.LifecycleTracer
+	observe        func(senderRelayRecoveryMilestone)
+	observeAttempt func(senderRelayRecoveryAttempt)
 }
 
 type senderRelayRecoveryMilestone uint8
@@ -115,6 +117,20 @@ const (
 	senderRelayRecoverySucceeded
 	senderRelayRecoveryFailed
 )
+
+type senderRelayRecoveryAttemptState uint8
+
+const (
+	senderRelayAttemptStarted senderRelayRecoveryAttemptState = iota + 1
+	senderRelayAttemptSucceeded
+	senderRelayAttemptFailed
+)
+
+type senderRelayRecoveryAttempt struct {
+	attempt uint32
+	state   senderRelayRecoveryAttemptState
+	failure error
+}
 
 type senderRelayLifecycle struct {
 	mu sync.Mutex
@@ -202,9 +218,22 @@ func (lifecycle *senderRelayLifecycle) recover(callerContext context.Context) (r
 		}
 		lifecycle.observeRecovery(senderRelayRecoveryFailed)
 	}()
+	attempt := uint32(1)
+	lifecycle.observeRecoveryAttempt(senderRelayRecoveryAttempt{
+		attempt: attempt,
+		state:   senderRelayAttemptStarted,
+	})
+	failAttempt := func(cause error) error {
+		lifecycle.observeRecoveryAttempt(senderRelayRecoveryAttempt{
+			attempt: attempt,
+			state:   senderRelayAttemptFailed,
+			failure: cause,
+		})
+		return cause
+	}
 	old, err := lifecycle.detachForRecovery()
 	if err != nil {
-		return err
+		return failAttempt(err)
 	}
 	// Detaching before Close prevents retries and cleanup from repeatedly owning
 	// the failed transport while a replacement is being established.
@@ -224,51 +253,71 @@ func (lifecycle *senderRelayLifecycle) recover(callerContext context.Context) (r
 
 	for {
 		if err := lifecycle.recoveryCause(callerContext, recoveryContext); err != nil {
-			return err
+			return failAttempt(err)
 		}
 		connection, dialErr := lifecycle.config.dialer.Dial(recoveryContext, relayv2.SenderConfig{
 			RelayBaseURL:     lifecycle.config.relayURL,
 			Init:             lifecycle.resume,
 			SenderPrivateKey: lifecycle.config.privateKey,
 			ResumeToken:      lifecycle.config.resumeToken,
+			Dial: relayv2.DialOptions{
+				LifecycleTracer: lifecycle.config.lifecycleTrace,
+			},
 		})
 		if dialErr == nil {
 			if err := lifecycle.recoveryCause(callerContext, recoveryContext); err != nil {
 				_ = connection.Close()
-				return err
+				return failAttempt(err)
 			}
 			if !connection.valid() {
-				return relayv2.ErrProtocol
+				return failAttempt(relayv2.ErrProtocol)
 			}
 			if err := lifecycle.installRecovered(connection, callerContext, recoveryContext); err != nil {
 				// A dial can win concurrently with cancellation or explicit stop.
 				// Closing the uninstalled result keeps route ownership leak-free.
 				_ = connection.Close()
-				return err
+				return failAttempt(err)
 			}
+			lifecycle.observeRecoveryAttempt(senderRelayRecoveryAttempt{
+				attempt: attempt,
+				state:   senderRelayAttemptSucceeded,
+			})
 			return nil
 		}
 		if err := lifecycle.recoveryCause(callerContext, recoveryContext); err != nil {
-			return errors.Join(dialErr, err)
+			return failAttempt(errors.Join(dialErr, err))
 		}
 		// A retry must start strictly inside the fixed recovery budget; the
 		// context deadline independently bounds a dial that blocks.
 		if !lifecycle.config.clock.Now().Add(delay).Before(deadline) {
-			return dialErr
+			return failAttempt(dialErr)
 		}
 		if waitErr := lifecycle.config.clock.Wait(recoveryContext, delay); waitErr != nil {
 			if err := lifecycle.recoveryCause(callerContext, recoveryContext); err != nil {
-				return errors.Join(dialErr, err)
+				return failAttempt(errors.Join(dialErr, err))
 			}
-			return errors.Join(dialErr, waitErr)
+			return failAttempt(errors.Join(dialErr, waitErr))
 		}
 		delay = min(delay*2, senderRelayRetryMaximum)
+		if attempt != ^uint32(0) {
+			attempt++
+		}
+		lifecycle.observeRecoveryAttempt(senderRelayRecoveryAttempt{
+			attempt: attempt,
+			state:   senderRelayAttemptStarted,
+		})
 	}
 }
 
 func (lifecycle *senderRelayLifecycle) observeRecovery(milestone senderRelayRecoveryMilestone) {
 	if lifecycle != nil && lifecycle.config.observe != nil {
 		lifecycle.config.observe(milestone)
+	}
+}
+
+func (lifecycle *senderRelayLifecycle) observeRecoveryAttempt(observation senderRelayRecoveryAttempt) {
+	if lifecycle != nil && lifecycle.config.observeAttempt != nil {
+		lifecycle.config.observeAttempt(observation)
 	}
 }
 

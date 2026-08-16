@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
@@ -143,11 +144,15 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 
 	firstAuthority := openAuthority()
 	firstResolver := &fixedGetShapeResolver{decision: decision}
-	first, err := resolveGetOutputOperation(ctx, firstAuthority, firstResolver, selection, nil)
+	first, err := resolveGetOutputOperation(ctx, firstAuthority, firstResolver, selection)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.lookup != getOutputLookupMiss || firstResolver.calls != 1 || first.renamed {
+	firstDestination, firstAdjusted, err := getOperationDestination(rootPath, first.operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.lookup != getOutputLookupMiss || firstResolver.calls != 1 || firstAdjusted || firstDestination == "" {
 		t.Fatalf("first admission=%+v shape_calls=%d", first, firstResolver.calls)
 	}
 	if err := firstAuthority.Close(); err != nil {
@@ -156,7 +161,7 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 
 	activeAuthority := openAuthority()
 	reopenResolver := &fixedGetShapeResolver{err: errors.New("active reopen must not resolve shape")}
-	reopened, err := resolveGetOutputOperation(ctx, activeAuthority, reopenResolver, selection, nil)
+	reopened, err := resolveGetOutputOperation(ctx, activeAuthority, reopenResolver, selection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +172,7 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 
 	contendingAuthority := openAuthority()
 	contendingResolver := &fixedGetShapeResolver{err: errors.New("lease contention must not resolve shape")}
-	_, err = resolveGetOutputOperation(ctx, contendingAuthority, contendingResolver, selection, nil)
+	_, err = resolveGetOutputOperation(ctx, contendingAuthority, contendingResolver, selection)
 	if !errors.Is(err, errGetOutputOperationAlreadyRunning) || contendingResolver.calls != 0 {
 		t.Fatalf("contending error=%v shape_calls=%d", err, contendingResolver.calls)
 	}
@@ -182,13 +187,18 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 	differentAuthority := openAuthority()
 	differentResolver := &fixedGetShapeResolver{decision: decision}
 	different, err := resolveGetOutputOperation(
-		ctx, differentAuthority, differentResolver, differentSelection, nil,
+		ctx, differentAuthority, differentResolver, differentSelection,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	differentDestination, differentAdjusted, err := getOperationDestination(rootPath, different.operation)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if different.lookup != getOutputLookupMiss || differentResolver.calls != 1 ||
-		different.operation.intent.OperationID() == first.operation.intent.OperationID() || !different.renamed {
+		different.operation.intent.OperationID() == first.operation.intent.OperationID() ||
+		!differentAdjusted || differentDestination == firstDestination {
 		t.Fatalf("different admission=%+v shape_calls=%d", different, differentResolver.calls)
 	}
 	if err := differentAuthority.Close(); err != nil {
@@ -197,7 +207,7 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 
 	finalAuthority := openAuthority()
 	finalResolver := &fixedGetShapeResolver{err: errors.New("final reopen must not resolve shape")}
-	final, err := resolveGetOutputOperation(ctx, finalAuthority, finalResolver, selection, nil)
+	final, err := resolveGetOutputOperation(ctx, finalAuthority, finalResolver, selection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +283,7 @@ func newCLICertifiedOutputTestRoot(t *testing.T) string {
 func TestResolveGetOutputOperationRejectsMissingAuthorityOrSelection(t *testing.T) {
 	resolver := &fixedGetShapeResolver{}
 	if _, err := resolveGetOutputOperation(
-		context.Background(), nil, resolver, transfer.SelectionSpec{}, nil,
+		context.Background(), nil, resolver, transfer.SelectionSpec{},
 	); !errors.Is(err, errGetOutputReservationContract) {
 		t.Fatalf("error=%v", err)
 	}
@@ -298,7 +308,6 @@ func TestResolveGetOutputOperationStopsOnOwnedLookupStateBeforeShape(t *testing.
 				fixedLookupGetOutputAuthority{lookup: getOutputLookup{kind: test.kind}},
 				resolver,
 				selection,
-				nil,
 			)
 			if !errors.Is(err, test.want) || resolver.calls != 0 {
 				t.Fatalf("error=%v shape_calls=%d", err, resolver.calls)
@@ -347,14 +356,14 @@ func TestResolveGetOutputOperationComposesAllOrdinaryLayouts(t *testing.T) {
 			events := make([]string, 0, 3)
 			authority := &layoutRecordingGetOutputAuthority{selection: selection, events: &events}
 			resolver := &fixedGetShapeResolver{decision: test.decision, events: &events}
-			admission, err := resolveGetOutputOperation(
-				context.Background(), authority, resolver, selection, nil,
+			_, err := resolveGetOutputOperation(
+				context.Background(), authority, resolver, selection,
 			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Join(events, ",") != "lookup,shape,create" || admission.renamed {
-				t.Fatalf("admission events=%v renamed=%v", events, admission.renamed)
+			if strings.Join(events, ",") != "lookup,shape,create" {
+				t.Fatalf("admission events=%v", events)
 			}
 			tree, ok := authority.artifact.DirectoryTree()
 			if !ok || tree.Kind() != test.layoutKind {
@@ -380,7 +389,13 @@ func TestPrepareGetOutputCreatesMissingContainerFromExistingParent(t *testing.T)
 	container := filepath.Join(parent, "downloads")
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}
-	prepared, code := app.prepareGetOutput(context.Background(), getRequest{outDir: container})
+	runtime, err := app.newCommandRuntime(clievent.CommandGet, observationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, code := app.prepareGetOutput(
+		context.Background(), getRequest{outDir: container}, getObservation{runtime: runtime},
+	)
 	if code != ExitOK {
 		t.Fatalf("prepare exit=%d stderr=%q", code, stderr.String())
 	}
@@ -396,6 +411,7 @@ func TestPrepareGetOutputCreatesMissingContainerFromExistingParent(t *testing.T)
 	if !info.IsDir() || prepared.mode != getOutputResumable {
 		t.Fatalf("container=%q mode=%d", container, prepared.mode)
 	}
+	runtime.Close()
 	if stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("bind wrote stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}

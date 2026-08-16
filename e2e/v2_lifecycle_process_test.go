@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -48,42 +49,60 @@ func TestCriticalSenderRelayReceiver(t *testing.T) {
 	if err := os.WriteFile(source, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	share := startV2Process(
+	share := startTracedV2Process(
 		t, scenario, v2WindShareShareComponent, binaries.windshare,
 		"share", source, "--relay", relayURL,
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
+	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
+	share.forbidStderr(capabilitySecrets...)
+	share.forbidUserTrace(append(capabilitySecrets, source, filepath.Base(source))...)
 	output := testoutputroot.New(t).RootPath
-	receiver := startV2Process(
+	receiver := startTracedV2Process(
 		t, scenario, v2WindShareGetComponent, binaries.windshare,
 		"get", shareLink, "-o", output, "--connectivity", "relay-only",
 	)
+	receiver.forbidStderr(capabilitySecrets...)
+	receiver.forbidUserTrace(append(capabilitySecrets, source, filepath.Base(source), output)...)
 	if err := receiver.wait(t); err != nil {
 		t.Fatalf(
 			"relay-only receiver failed: %v; stdout=%q stderr=%q",
 			err, receiver.stdout.String(), receiver.stderr.String(),
 		)
 	}
+	for _, expected := range []string{"Download completed", "Destination: "} {
+		if !strings.Contains(receiver.stderr.String(), expected) {
+			t.Fatalf("redirected get result is missing %q: %q", expected, receiver.stderr.String())
+		}
+	}
+	requireV2UserTraceFact(t, receiver, "content_path_selected", "content_path", "relay")
 	assertV2File(t, filepath.Join(output, filepath.Base(source)), payload)
 	events := drainV2ProcessTraces(t, receiver)
 	requireV2EventCount(t, events, v2ReceiverRelayContentMilestone, testrun.OutcomeSucceeded, 1)
 	requireV2EventCount(t, events, v2ReceiverDirectLaneMilestone, testrun.OutcomeSucceeded, 0)
 
 	p2pOutput := testoutputroot.New(t).RootPath
-	p2pReceiver := startV2Process(
+	p2pReceiver := startTracedV2Process(
 		t, scenario, v2WindShareGetComponent, binaries.windshare,
 		"get", shareLink, "-o", p2pOutput, "--connectivity", "p2p-only",
 	)
+	p2pReceiver.forbidStderr(capabilitySecrets...)
+	p2pReceiver.forbidUserTrace(append(capabilitySecrets, source, filepath.Base(source), p2pOutput)...)
 	if err := p2pReceiver.wait(t); err != nil {
 		t.Fatalf(
 			"p2p-only receiver failed: %v; stdout=%q stderr=%q",
 			err, p2pReceiver.stdout.String(), p2pReceiver.stderr.String(),
 		)
 	}
+	requireV2UserTraceFact(t, p2pReceiver, "content_path_selected", "content_path", "direct")
 	assertV2File(t, filepath.Join(p2pOutput, filepath.Base(source)), payload)
 	p2pEvents := drainV2ProcessTraces(t, p2pReceiver)
 	requireV2EventCount(t, p2pEvents, v2ReceiverRelayContentMilestone, testrun.OutcomeSucceeded, 0)
 	requireV2EventCount(t, p2pEvents, v2ReceiverDirectLaneMilestone, testrun.OutcomeSucceeded, 1)
+	share.interrupt(t)
+	if err := share.wait(t); err != nil {
+		t.Fatalf("sender failed while closing traced critical scenario: %v; stderr=%q", err, share.stderr.String())
+	}
 	scenario.requireSuccess(t)
 }
 
@@ -105,6 +124,7 @@ func TestLongV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
 		"share", source, "--relay", proxy.BaseURL(),
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
+	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
 	pauseContext, cancelPause := context.WithTimeout(context.Background(), v2ProcessTerminationGrace)
 	if err := scenario.observe(v2RelayProxyPauseMilestone, nil, func() error {
 		return proxy.Pause(pauseContext)
@@ -123,10 +143,12 @@ func TestLongV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
 	waitV2ProcessTrace(t, share, v2SenderRelayRecoveryMilestone, testrun.OutcomeSucceeded)
 
 	output := testoutputroot.New(t).RootPath
-	receiver := startV2Process(
+	receiver := startTracedV2Process(
 		t, scenario, v2WindShareGetComponent, binaries.windshare,
 		"get", shareLink, "-o", output, "--connectivity", "relay-only",
 	)
+	receiver.forbidStderr(capabilitySecrets...)
+	receiver.forbidUserTrace(append(capabilitySecrets, source, filepath.Base(source), output)...)
 	if err := receiver.wait(t); err != nil {
 		t.Fatalf(
 			"receiver after sender reconnect failed: %v; receiver stderr=%q sender stderr=%q",
@@ -149,11 +171,14 @@ func TestLongV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
 	if err := os.WriteFile(source, []byte("must never be available after STOP"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	share := startV2Process(
+	share := startTracedV2Process(
 		t, scenario, v2WindShareShareComponent, binaries.windshare,
 		"share", source, "--relay", proxy.BaseURL(),
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
+	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
+	share.forbidStderr(capabilitySecrets...)
+	share.forbidUserTrace(append(capabilitySecrets, source, filepath.Base(source))...)
 	share.interrupt(t)
 	waitV2ProcessTrace(t, share, v2SenderStopMilestone, testrun.OutcomeSucceeded)
 	if err := share.wait(t); err != nil {
@@ -182,10 +207,12 @@ func TestLongV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		output := testoutputroot.New(t).RootPath
-		receiver := startV2Process(
+		receiver := startTracedV2Process(
 			t, scenario, v2WindShareGetComponent, binaries.windshare,
 			"get", shareLink, "-o", output, "--connectivity", "relay-only",
 		)
+		receiver.forbidStderr(capabilitySecrets...)
+		receiver.forbidUserTrace(append(capabilitySecrets, source, filepath.Base(source), output)...)
 		if err := receiver.wait(t); err == nil {
 			t.Fatalf("post-STOP receiver %d unexpectedly succeeded", attempt)
 		}

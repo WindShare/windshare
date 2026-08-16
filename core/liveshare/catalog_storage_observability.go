@@ -2,46 +2,69 @@ package liveshare
 
 import (
 	"context"
-	"encoding/hex"
-	"log/slog"
+	"reflect"
+
+	"github.com/windshare/windshare/core/catalog"
 )
 
-const catalogStorageLogMessage = "share: catalog storage"
+const maximumCatalogStorageFailureNodes = 64
 
-type structuredCatalogStorageTracer struct {
-	logger *slog.Logger
-}
+// catalogStorageCause inspects only trusted sentinel identity. It never asks a
+// provider error for text, and the work bound prevents a cyclic collaborator
+// graph from stalling catalog lifecycle reporting.
+//
+//nolint:errorlint // Recursive errors.Is cannot provide a graph work bound.
+func catalogStorageCause(root error) (cause CatalogStorageCause) {
+	if root == nil {
+		return CatalogStorageCauseNone
+	}
+	cause = CatalogStorageCauseUnexpected
+	defer func() {
+		if recover() != nil {
+			cause = CatalogStorageCauseUnexpected
+		}
+	}()
 
-func catalogStorageTracerOrDefault(tracer CatalogStorageTracer) CatalogStorageTracer {
-	if tracer != nil {
-		return tracer
+	var canceled, deadline, budget bool
+	pending := []error{root}
+	for inspected := 0; len(pending) != 0 && inspected < maximumCatalogStorageFailureNodes; inspected++ {
+		last := len(pending) - 1
+		current := pending[last]
+		pending = pending[:last]
+		if current == nil {
+			continue
+		}
+		if reflect.TypeOf(current).Comparable() {
+			switch current {
+			case catalog.ErrBudgetExceeded:
+				budget = true
+			case context.Canceled:
+				canceled = true
+			case context.DeadlineExceeded:
+				deadline = true
+			}
+		}
+		remaining := maximumCatalogStorageFailureNodes - inspected - 1 - len(pending)
+		switch wrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			children := wrapped.Unwrap()
+			if remaining > 0 {
+				pending = append(pending, children[:min(len(children), remaining)]...)
+			}
+		case interface{ Unwrap() error }:
+			if remaining > 0 {
+				pending = append(pending, wrapped.Unwrap())
+			}
+		}
 	}
-	// Catalog recovery runs before the application can assemble a session runtime.
-	// A process-wide slog handler keeps these required diagnostics observable while
-	// allowing an embedding application to own formatting and destination.
-	return structuredCatalogStorageTracer{logger: slog.Default()}
-}
-
-func (tracer structuredCatalogStorageTracer) TraceCatalogStorage(event CatalogStorageTrace) {
-	level := slog.LevelInfo
-	if event.Failed {
-		level = slog.LevelError
+	switch {
+	case budget:
+		return CatalogStorageCauseBudgetExceeded
+	case canceled:
+		return CatalogStorageCauseCanceled
+	case deadline:
+		return CatalogStorageCauseDeadlineExceeded
+	default:
+		return cause
 	}
-	cause := "-"
-	if event.Cause != nil {
-		cause = event.Cause.Error()
-	}
-	tracer.logger.LogAttrs(
-		context.Background(),
-		level,
-		catalogStorageLogMessage,
-		slog.String("operation", event.Operation.String()),
-		slog.String("share_instance", hex.EncodeToString(event.ShareInstance.Bytes())),
-		slog.Uint64("recovered_entries", event.RecoveredUsage.Entries),
-		slog.Uint64("recovered_memory_bytes", event.RecoveredUsage.MemoryBytes),
-		slog.Uint64("recovered_spill_bytes", event.RecoveredUsage.SpillBytes),
-		slog.Uint64("legacy_roots_removed", event.LegacyRootsRemoved),
-		slog.Bool("failed", event.Failed),
-		slog.String("cause", cause),
-	)
 }

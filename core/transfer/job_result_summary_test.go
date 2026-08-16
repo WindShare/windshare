@@ -37,16 +37,23 @@ func TestJobRunAggregatesSettlementOwnedFileOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	run := &jobRun{}
+	tracker := newReceiveProgressTracker()
+	selection := newDiscoveredSelection()
+	selection.addFile(binding.ExactSize())
+	selection.addFile(binding.ExactSize())
+	tracker.addDiscovery(selection)
+	tracker.addRecoveredVerified(2 * binding.ExactSize())
 	for _, settlement := range []FileSettlement{downloaded, resumed, paused, collision, blocked, failed} {
-		run.acceptFileSettlement(settlement)
+		tracker.acceptFileSettlement(settlement, binding.ExactSize())
 	}
 	want := FileOutcomeSummary{
 		DownloadedFiles: 1, ResumedFiles: 1, PausedFiles: 1,
 		CollisionFiles: 1, FailedFiles: 1, ItemBlockedFiles: 1,
 		ModifiedTimeWarnings: 2,
 	}
-	if run.fileOutcomes != want || run.fileOutcomes.PublishedFiles() != 2 {
-		t.Fatalf("summary = %+v, want %+v", run.fileOutcomes, want)
+	progress := tracker.snapshotValue()
+	if progress.FileOutcomes != want || progress.PublishedFiles != 2 ||
+		progress.PublishedBytes != 2*binding.ExactSize() || !progress.CountersExact {
+		t.Fatalf("progress = %+v, want outcomes %+v", progress, want)
 	}
 }

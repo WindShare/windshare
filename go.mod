@@ -27,6 +27,10 @@ require golang.org/x/sys v0.47.0
 // files, and other redirected character devices on every supported platform.
 require golang.org/x/term v0.45.0
 
+// TerminalCanvas clips only at grapheme boundaries and measures combining,
+// East Asian wide, and emoji clusters in terminal display cells.
+require github.com/rivo/uniseg v0.4.7
+
 require (
 	github.com/pion/ice/v4 v4.2.7
 	github.com/pion/logging v0.2.4

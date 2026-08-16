@@ -15,6 +15,7 @@ const (
 
 	processTraceSenderReady          testrun.Milestone = "sender_ready"
 	processTraceSenderDirectLane     testrun.Milestone = "sender_direct_lane"
+	processTraceSenderSessionRetired testrun.Milestone = "sender_session_retired"
 	processTraceSenderRelayRecovery  testrun.Milestone = "sender_relay_recovery"
 	processTraceSenderStop           testrun.Milestone = "sender_stop"
 	processTraceReceiverDirectLane   testrun.Milestone = "receiver_direct_lane"
