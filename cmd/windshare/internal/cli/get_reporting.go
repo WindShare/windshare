@@ -166,6 +166,22 @@ func (observation getObservation) transferLifecycle(value transfer.TransferLifec
 	observation.observe(event)
 }
 
+func (observation getObservation) protocolOperation(value sessionruntime.ProtocolOperationTrace) {
+	event, err := commandprojection.ProjectProtocolOperation(clievent.CommandGet, value)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	observation.observe(event)
+}
+
+func (observation getObservation) protocolTracer() sessionruntime.ProtocolOperationTracer {
+	if observation.runtime == nil || !observation.runtime.protocolDiagnosticsEnabled() {
+		return nil
+	}
+	return sessionruntime.ProtocolOperationTraceFunc(observation.protocolOperation)
+}
+
 func (observation getObservation) progress(
 	receiveOperation receivecontract.OperationID,
 	transferJob transfer.TransferJobID,

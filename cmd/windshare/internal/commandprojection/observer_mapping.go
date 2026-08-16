@@ -5,6 +5,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/osfs"
+	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -31,6 +32,113 @@ func projectRelayStage(value relayv2.LifecycleStage) (clievent.RelayLifecycleSta
 		return clievent.RelayLinkRetiring, true
 	case relayv2.LifecycleLinkClosed:
 		return clievent.RelayLinkClosed, true
+	default:
+		return 0, false
+	}
+}
+
+func projectProtocolRole(value protocolsession.Role) (clievent.ProtocolRole, bool) {
+	switch value {
+	case protocolsession.RoleReceiver:
+		return clievent.ProtocolRoleReceiver, true
+	case protocolsession.RoleSender:
+		return clievent.ProtocolRoleSender, true
+	default:
+		return 0, false
+	}
+}
+
+func projectProtocolOperationStage(value sessionruntime.ProtocolOperationStage) (clievent.ProtocolOperationStage, bool) {
+	switch value {
+	case sessionruntime.ProtocolOperationReceiverCompleted:
+		return clievent.ProtocolOperationReceiverCompleted, true
+	case sessionruntime.ProtocolOperationReceiverFailed:
+		return clievent.ProtocolOperationReceiverFailed, true
+	case sessionruntime.ProtocolOperationReceiverEnded:
+		return clievent.ProtocolOperationReceiverEnded, true
+	case sessionruntime.ProtocolOperationSenderRequestReceived:
+		return clievent.ProtocolOperationSenderRequestReceived, true
+	case sessionruntime.ProtocolOperationSenderResponseSettled:
+		return clievent.ProtocolOperationSenderResponseSettled, true
+	default:
+		return 0, false
+	}
+}
+
+func projectProtocolMessageKind(value protocolsession.MessageKind) (clievent.ProtocolMessageKind, bool) {
+	switch value {
+	case protocolsession.MessageListChildren:
+		return clievent.ProtocolMessageListChildren, true
+	case protocolsession.MessageCatalogResult:
+		return clievent.ProtocolMessageCatalogResult, true
+	case protocolsession.MessageOpenRevisions:
+		return clievent.ProtocolMessageOpenRevisions, true
+	case protocolsession.MessageOpenResults:
+		return clievent.ProtocolMessageOpenResults, true
+	case protocolsession.MessageRenewLease:
+		return clievent.ProtocolMessageRenewLease, true
+	case protocolsession.MessageReleaseLease:
+		return clievent.ProtocolMessageReleaseLease, true
+	case protocolsession.MessageRequestBlocks:
+		return clievent.ProtocolMessageRequestBlocks, true
+	case protocolsession.MessageBlockFragment:
+		return clievent.ProtocolMessageBlockFragment, true
+	case protocolsession.MessageCancel:
+		return clievent.ProtocolMessageCancel, true
+	case protocolsession.MessageOperationError:
+		return clievent.ProtocolMessageOperationError, true
+	case protocolsession.MessageSessionTerminal:
+		return clievent.ProtocolMessageSessionTerminal, true
+	case protocolsession.MessageLaneAttach:
+		return clievent.ProtocolMessageLaneAttach, true
+	case protocolsession.MessageScanProgress:
+		return clievent.ProtocolMessageScanProgress, true
+	case protocolsession.MessageOperationComplete:
+		return clievent.ProtocolMessageOperationComplete, true
+	case protocolsession.MessageLeaseResult:
+		return clievent.ProtocolMessageLeaseResult, true
+	case protocolsession.MessagePeerOffer:
+		return clievent.ProtocolMessagePeerOffer, true
+	case protocolsession.MessagePeerAnswer:
+		return clievent.ProtocolMessagePeerAnswer, true
+	case protocolsession.MessagePeerCandidate:
+		return clievent.ProtocolMessagePeerCandidate, true
+	default:
+		return 0, false
+	}
+}
+
+func projectProtocolSendOutcome(value protocolsession.SendOutcome) (clievent.ProtocolSendOutcome, bool) {
+	switch value {
+	case protocolsession.SendOutcomeUnknown:
+		return clievent.ProtocolSendUnknown, true
+	case protocolsession.SendOutcomeDelivered:
+		return clievent.ProtocolSendDelivered, true
+	case protocolsession.SendOutcomeDropped:
+		return clievent.ProtocolSendDropped, true
+	default:
+		return 0, false
+	}
+}
+
+func projectProtocolOperationCause(value sessionruntime.ProtocolOperationCause) (clievent.ProtocolOperationCause, bool) {
+	switch value {
+	case sessionruntime.ProtocolOperationCauseNone:
+		return clievent.ProtocolOperationCauseNone, true
+	case sessionruntime.ProtocolOperationCauseCanceled:
+		return clievent.ProtocolOperationCauseCanceled, true
+	case sessionruntime.ProtocolOperationCauseDeadline:
+		return clievent.ProtocolOperationCauseDeadline, true
+	case sessionruntime.ProtocolOperationCauseRuntimeClosed:
+		return clievent.ProtocolOperationCauseRuntimeClosed, true
+	case sessionruntime.ProtocolOperationCauseLaneUnavailable:
+		return clievent.ProtocolOperationCauseLaneUnavailable, true
+	case sessionruntime.ProtocolOperationCauseWriterStopped:
+		return clievent.ProtocolOperationCauseWriterStopped, true
+	case sessionruntime.ProtocolOperationCauseOperationClosed:
+		return clievent.ProtocolOperationCauseOperationClosed, true
+	case sessionruntime.ProtocolOperationCauseProtocolFailure:
+		return clievent.ProtocolOperationCauseProtocolFailure, true
 	default:
 		return 0, false
 	}

@@ -22,6 +22,7 @@ type Visitor interface {
 	VisitSenderTerminalObserved(SenderTerminalObserved) error
 	VisitCatalogStorageObserved(CatalogStorageObserved) error
 	VisitRootPrefetchObserved(RootPrefetchObserved) error
+	VisitProtocolOperationObserved(ProtocolOperationObserved) error
 }
 
 func acceptReady(visitor Visitor, value Ready) error {
@@ -190,4 +191,11 @@ func acceptRootPrefetchObserved(visitor Visitor, value RootPrefetchObserved) err
 		return ErrInvalidEvent
 	}
 	return visitor.VisitRootPrefetchObserved(value)
+}
+
+func acceptProtocolOperationObserved(visitor Visitor, value ProtocolOperationObserved) error {
+	if visitor == nil || !validProtocolOperationSpec(value.spec) {
+		return ErrInvalidEvent
+	}
+	return visitor.VisitProtocolOperationObserved(value)
 }

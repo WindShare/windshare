@@ -29,6 +29,7 @@ type ReceiverConfig struct {
 	Random           io.Reader
 	CatalogProgress  sessionruntime.CatalogScanProgressObserver
 	PeerControls     sessionruntime.ReceiverPeerSemantics
+	ProtocolTracer   sessionruntime.ProtocolOperationTracer
 }
 
 type PreparedReceiver struct {
@@ -124,6 +125,7 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 		CatalogVerifier: verifier, RecordOpener: opener,
 		ReassemblyProcess: processReassembly, ReassemblyShare: shareReassembly, PlaintextProcess: plaintext,
 		Random: config.Random, CatalogProgress: config.CatalogProgress, PeerControls: config.PeerControls,
+		ProtocolTracer:   config.ProtocolTracer,
 		RuntimeResources: resources,
 	})
 	if err != nil {
