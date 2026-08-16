@@ -171,6 +171,7 @@ describe('progressive ZIP layout ledger', () => {
       discoveryLedgerDigest: DISCOVERY_DIGEST,
     })
     expect(ledger.acceptsSealedPlan(plan)).toBe(true)
+    expect(ledger.acceptsSealedPlan({ ...plan })).toBe(false)
     await expect(validateSealedZipLayoutPlan(plan)).resolves.toEqual(plan)
   })
 

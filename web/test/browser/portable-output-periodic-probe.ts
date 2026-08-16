@@ -16,6 +16,8 @@ export interface MillionMemberZipProbe {
   readonly outputBytes: number
   readonly outputWrites: number
   readonly maximumWriteBytes: number
+  readonly outputWritesBeforeClose: number
+  readonly entryStreamBytes: number
   readonly closed: boolean
   readonly beforeClose: readonly number[]
   readonly afterClose: readonly number[]
@@ -59,6 +61,7 @@ export async function probeMillionMemberZipWriter(): Promise<MillionMemberZipPro
   ledger.completeDiscovery(probeDigest(DISCOVERY_LEDGER_DIGEST_SEED))
   const sealedPlan = await ledger.seal()
   const beforeClose = await countStores(databaseName)
+  const outputWritesBeforeClose = outputWrites
   await archive.close(sealedPlan, new AbortController().signal)
   const afterClose = await countStores(databaseName)
   await deleteDatabase(databaseName)
@@ -67,6 +70,8 @@ export async function probeMillionMemberZipWriter(): Promise<MillionMemberZipPro
     outputBytes,
     outputWrites,
     maximumWriteBytes,
+    outputWritesBeforeClose,
+    entryStreamBytes: Number(sealedPlan.centralDirectoryOffset),
     closed,
     beforeClose,
     afterClose,
