@@ -449,10 +449,11 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 	receiver := startV2Process(
 		t, scenario, v2WindShareGetComponent, binaries.windshare, "get", shareLink, "-o", output,
 	)
-	// Direct-lane adoption is emitted only after the receiver has attached the
-	// Pion lane. That injected protocol milestone gives the cut a causal boundary
-	// independent of payload size or a guessed transfer delay.
+	// A data channel becomes useful only after both runtimes own the attached lane.
+	// Waiting for both private milestones prevents relay loss from racing the
+	// sender-side adoption that the receiver cannot observe.
 	waitV2ProcessTrace(t, receiver, v2ReceiverDirectLaneMilestone, testrun.OutcomeSucceeded)
+	waitV2ProcessTrace(t, share, v2SenderDirectLaneMilestone, testrun.OutcomeSucceeded)
 	select {
 	case <-receiver.done:
 		t.Fatalf(
