@@ -14,6 +14,7 @@ import type {
   ZipArchiveWriter,
 } from './zip-archive'
 import type { ZipCentralDirectorySpool } from './zip-spool'
+import { ZipOutputSink } from './zip-output-sink'
 
 export type ZipArchiveTraceEvent =
   | Readonly<{
@@ -41,7 +42,7 @@ type WriterState = 'open' | 'closing' | 'committed' | 'aborting' | 'aborted' | '
 /** Store-mode writer whose only length and encoding inputs are immutable layout plans. */
 export class StreamingZipArchiveWriter implements ZipArchiveWriter {
   readonly #spool: ZipCentralDirectorySpool
-  readonly #writer: WritableStreamDefaultWriter<Uint8Array>
+  readonly #output: ZipOutputSink
   readonly #authority: ZipArchiveLayoutAuthority
   readonly #observe: ZipArchiveObserver | undefined
   readonly #centralDirectoryCrc32 = new ZipCrc32()
@@ -63,11 +64,10 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
     authority: ZipArchiveLayoutAuthority,
     observe?: ZipArchiveObserver,
   ) {
-    if (output.locked) throw new TypeError('ZIP output stream is already locked')
     if (authority.kind !== 'sealed' && authority.kind !== 'progressive') {
       throw new TypeError('ZIP layout authority is invalid')
     }
-    this.#writer = output.getWriter()
+    this.#output = new ZipOutputSink(output)
     this.#spool = spool
     this.#authority = authority.kind === 'sealed'
       ? Object.freeze({ kind: 'sealed', plan: authority.plan })
@@ -87,8 +87,8 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
     this.#requireIdle()
     try {
       const plan = this.#claimEntry(entry, 'directory')
-      await this.#write(ZIP_ENCODING_POLICY_V1.encodeLocalHeader(plan))
-      await this.#write(ZIP_ENCODING_POLICY_V1.encodeDataDescriptor(plan, 0))
+      await this.#writeMetadata(ZIP_ENCODING_POLICY_V1.encodeLocalHeader(plan))
+      await this.#writeMetadata(ZIP_ENCODING_POLICY_V1.encodeDataDescriptor(plan, 0))
       this.#assertEntryStreamComplete(plan)
       await this.#appendCentralRecord(plan, 0)
       this.#entryIndex += 1
@@ -103,14 +103,14 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
     let plan: ZipEntryPlanV1
     try {
       plan = this.#claimEntry(entry, 'file')
-      await this.#write(ZIP_ENCODING_POLICY_V1.encodeLocalHeader(plan))
+      await this.#writeMetadata(ZIP_ENCODING_POLICY_V1.encodeLocalHeader(plan))
     } catch (error) {
       await this.#failEntry(error, 'ZIP member start and abort failed')
       throw error
     }
     const member = new StreamingZipMember(
       plan,
-      (chunk) => this.#write(chunk),
+      (chunk) => this.#writePayload(chunk),
       (crc32) => this.#commitMember(plan, crc32),
       (reason) => this.#memberFailed(reason),
       () => {
@@ -187,14 +187,13 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
     let published = false
     let outputAbort: Promise<void> | undefined
     const abortOutput = () => {
-      outputAbort ??= writerAbort(this.#writer, abortReason(signal))
+      outputAbort ??= outputAbortPromise(this.#output, abortReason(signal))
       outputAbort.catch(() => undefined)
     }
     signal.addEventListener('abort', abortOutput, { once: true })
     try {
-      const proof = await validateSealedZipLayoutPlan(candidate)
+      const proof = await this.#resolveAuthorityProof(candidate)
       signal.throwIfAborted()
-      await this.#verifyAuthorityProof(proof)
       if (this.#entryIndex !== proof.entries.length ||
           BigInt(this.#entryIndex) !== proof.entryCount ||
           this.#offset !== proof.centralDirectoryOffset) {
@@ -208,7 +207,7 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
         entryCount: proof.entryCount,
       })
       await this.#writeCentralDirectory(proof, signal)
-      await this.#writer.close()
+      await this.#output.close()
       published = true
       await outputAbort?.catch(() => undefined)
       this.#emit({
@@ -221,25 +220,31 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
       failure = await this.#settleFailedClose(error, outputAbort)
     } finally {
       signal.removeEventListener('abort', abortOutput)
-      this.#writer.releaseLock()
+      this.#output.releaseLock()
       failure = await this.#clearSpoolAfterSettlement(published, failure)
     }
     if (failure !== undefined) throw failure
   }
 
-  async #verifyAuthorityProof(proof: SealedZipLayoutPlanV1): Promise<void> {
+  async #resolveAuthorityProof(candidate: SealedZipLayoutPlanV1): Promise<SealedZipLayoutPlanV1> {
     if (this.#authority.kind === 'progressive') {
-      if (!this.#authority.ledger.acceptsSealedPlan(proof)) {
+      if (!this.#authority.ledger.acceptsSealedPlan(candidate)) {
         throw new Error('ZIP progressive ledger did not issue the close proof')
       }
-      return
+      // The ledger accepts only its immutable issued object, so rebuilding a
+      // million-entry proof here would duplicate the sealing authority without
+      // adding an independent validation boundary.
+      return candidate
     }
     const expected = await validateSealedZipLayoutPlan(this.#authority.plan)
+    if (candidate === this.#authority.plan) return expected
+    const proof = await validateSealedZipLayoutPlan(candidate)
     if (expected.digest !== proof.digest ||
         expected.receiveIntentDigest !== proof.receiveIntentDigest ||
         expected.artifactDigest !== proof.artifactDigest) {
       throw new Error('ZIP prepared close proof changed')
     }
+    return proof
   }
 
   async #writeCentralDirectory(
@@ -258,7 +263,7 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
       const chunk = await this.#spool.readChunk(index)
       if (chunk === undefined) throw new Error('ZIP central-directory spool ended early')
       replayCrc32.update(chunk)
-      await this.#write(chunk)
+      await this.#writePayload(chunk)
     }
     if (this.#offset !== checkedZipAdd(
       proof.centralDirectoryOffset,
@@ -271,9 +276,9 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
     }
     const ends = ZIP_ENCODING_POLICY_V1.encodeEndRecords(proof)
     signal.throwIfAborted()
-    if (ends.zip64End !== undefined) await this.#write(ends.zip64End)
-    if (ends.zip64Locator !== undefined) await this.#write(ends.zip64Locator)
-    await this.#write(ends.classicEnd)
+    if (ends.zip64End !== undefined) await this.#writeMetadata(ends.zip64End)
+    if (ends.zip64Locator !== undefined) await this.#writeMetadata(ends.zip64Locator)
+    await this.#writeMetadata(ends.classicEnd)
     signal.throwIfAborted()
     if (this.#offset !== proof.exactArchiveBytes) {
       throw new Error('ZIP actual archive length disagrees with the layout proof')
@@ -285,7 +290,7 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
     requestedAbort: Promise<void> | undefined,
   ): Promise<unknown> {
     try {
-      await (requestedAbort ?? writerAbort(this.#writer, closeFailure))
+      await (requestedAbort ?? outputAbortPromise(this.#output, closeFailure))
       this.#emitAbort()
       return closeFailure
     } catch (abortFailure) {
@@ -329,11 +334,11 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
     this.#active?.abandon()
     this.#active = undefined
     try {
-      await this.#writer.abort(reason)
+      await this.#output.abort(reason)
     } catch (error) {
       failures.push(error)
     } finally {
-      this.#writer.releaseLock()
+      this.#output.releaseLock()
     }
     try {
       await this.#spool.clear()
@@ -372,7 +377,7 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
 
   async #commitMember(plan: ZipEntryPlanV1, crc32: number): Promise<void> {
     if (this.#active === undefined) throw new Error('ZIP member is not active')
-    await this.#write(ZIP_ENCODING_POLICY_V1.encodeDataDescriptor(plan, crc32))
+    await this.#writeMetadata(ZIP_ENCODING_POLICY_V1.encodeDataDescriptor(plan, crc32))
     this.#assertEntryStreamComplete(plan)
     await this.#appendCentralRecord(plan, crc32)
     this.#entryIndex += 1
@@ -399,8 +404,13 @@ export class StreamingZipArchiveWriter implements ZipArchiveWriter {
     }
   }
 
-  async #write(chunk: Uint8Array): Promise<void> {
-    await this.#writer.write(chunk)
+  async #writeMetadata(chunk: Uint8Array): Promise<void> {
+    await this.#output.appendMetadata(chunk)
+    this.#offset = checkedZipAdd(this.#offset, BigInt(chunk.byteLength))
+  }
+
+  async #writePayload(chunk: Uint8Array): Promise<void> {
+    await this.#output.writePayload(chunk)
     this.#offset = checkedZipAdd(this.#offset, BigInt(chunk.byteLength))
   }
 
@@ -519,12 +529,12 @@ function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException('ZIP output aborted', 'AbortError')
 }
 
-function writerAbort(
-  writer: WritableStreamDefaultWriter<Uint8Array>,
+function outputAbortPromise(
+  output: ZipOutputSink,
   reason: unknown,
 ): Promise<void> {
   try {
-    return writer.abort(reason)
+    return output.abort(reason)
   } catch (error) {
     return Promise.reject(error)
   }

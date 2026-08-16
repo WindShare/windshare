@@ -14,6 +14,7 @@ const (
 	processTraceGetComponent   testrun.Component = "windshare_get"
 
 	processTraceSenderReady          testrun.Milestone = "sender_ready"
+	processTraceSenderDirectLane     testrun.Milestone = "sender_direct_lane"
 	processTraceSenderRelayRecovery  testrun.Milestone = "sender_relay_recovery"
 	processTraceSenderStop           testrun.Milestone = "sender_stop"
 	processTraceReceiverDirectLane   testrun.Milestone = "receiver_direct_lane"
