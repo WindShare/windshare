@@ -12,7 +12,7 @@ func TestClosedEnumRegistriesNameEveryDeclaredValue(t *testing.T) {
 		{"command", int(CommandShare), int(CommandGet), func(value int) (string, bool) { return Command(value).Name() }},
 		{"level", int(LevelDebug), int(LevelError), func(value int) (string, bool) { return Level(value).Name() }},
 		{"transport", int(TransportRelay), int(TransportWebRTC), func(value int) (string, bool) { return Transport(value).Name() }},
-		{"content path", int(ContentPathRelay), int(ContentPathDirect), func(value int) (string, bool) { return ContentPath(value).Name() }},
+		{"content path", int(ContentPathRelay), int(ContentPathDirectAndRelay), func(value int) (string, bool) { return ContentPath(value).Name() }},
 		{"exit", int(ExitSuccess), int(ExitDrift), func(value int) (string, bool) { return ExitCode(value).Name() }},
 		{"result", int(ResultSuccess), int(ResultFailed), func(value int) (string, bool) { return ResultStatus(value).Name() }},
 		{"discovery", int(DiscoveryOpen), int(DiscoveryFailed), func(value int) (string, bool) { return DiscoveryStatus(value).Name() }},

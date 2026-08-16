@@ -174,6 +174,7 @@ func (a *App) prepareGetTransfer(
 		return nil, observation.commandFailure(ExitFailure, err)
 	}
 	contentReady := make(chan struct{})
+	paths := newReceiverContentPaths(observation)
 	admission, err := newReceiverContentAdmissionWithExecution(
 		connectivity.relayContent,
 		output.startedAt,
@@ -182,7 +183,7 @@ func (a *App) prepareGetTransfer(
 		receiverAdmissionExecution{
 			claimGate: contentReady,
 			onClaim: func(trigger receiverAdmissionTrigger) {
-				a.observeRelayContentAdmission(trigger, observation)
+				a.observeRelayContentAdmission(trigger, paths)
 			},
 		},
 	)
@@ -194,6 +195,7 @@ func (a *App) prepareGetTransfer(
 		monitorDone: a.monitorReceiverAdmission(admission, runtime, observation),
 	}
 	observePeer := func(signal receiverPeerSignal) {
+		paths.observePeer(signal)
 		if observeErr := admission.ObservePeer(signal); observeErr != nil {
 			observation.warning(observeErr)
 			runtime.Close()
