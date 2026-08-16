@@ -70,7 +70,7 @@ func (factory *ReceiverFactory) Close() {
 func (factory *ReceiverFactory) beginAdmission(
 	caller context.Context,
 ) (context.Context, func(), bool) {
-	if caller == nil {
+	if caller == nil || factory == nil {
 		return nil, nil, false
 	}
 	factory.mu.Lock()
