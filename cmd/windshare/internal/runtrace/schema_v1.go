@@ -170,9 +170,9 @@ func summaryV1(
 	record.LifecycleDropped = decimalPointer(status.LifecycleDropped)
 	record.ProgressDropped = decimalPointer(status.ProgressDropped)
 	record.EventsWritten = decimalPointer(status.EventsWritten)
-	record.WriterFailed = boolPointer(status.WriterFailed)
-	record.FlushFailed = boolPointer(status.FlushFailed)
-	record.SchemaLimited = boolPointer(status.SchemaLimited)
+	record.WriterFailed = new(status.WriterFailed)
+	record.FlushFailed = new(status.FlushFailed)
+	record.SchemaLimited = new(status.SchemaLimited)
 	return record
 }
 
@@ -180,10 +180,3 @@ func decimalPointer(value uint64) *string {
 	encoded := strconv.FormatUint(value, 10)
 	return &encoded
 }
-
-func stringPointer(value string) *string { return &value }
-func boolPointer(value bool) *bool       { return &value }
-func uint16Pointer(value uint16) *uint16 { return &value }
-func uint32Pointer(value uint32) *uint32 { return &value }
-func intPointer(value int) *int          { return &value }
-func int64Pointer(value int64) *int64    { return &value }

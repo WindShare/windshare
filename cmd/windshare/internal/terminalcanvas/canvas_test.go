@@ -276,7 +276,7 @@ func TestCanvasConcurrentProducersAreSerialized(t *testing.T) {
 	})
 
 	var producers sync.WaitGroup
-	for index := 0; index < 40; index++ {
+	for index := range 40 {
 		producers.Add(1)
 		go func(index int) {
 			defer producers.Done()
