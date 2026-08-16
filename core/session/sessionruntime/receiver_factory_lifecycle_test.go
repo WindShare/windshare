@@ -177,7 +177,7 @@ func TestReceiverFactoryNilMethods(t *testing.T) {
 	nilFactory.BeginClose()
 	nilFactory.Close()
 	nilFactory.WaitClosed()
-	if ctx, cancel, ok := nilFactory.beginAdmission(nil); ok || ctx != nil || cancel != nil {
+	if ctx, cancel, ok := nilFactory.beginAdmission(context.Background()); ok || ctx != nil || cancel != nil {
 		t.Fatalf("nil receiver factory admitted context: ctx=%v, cancelNil=%v, ok=%v", ctx, cancel == nil, ok)
 	}
 }
