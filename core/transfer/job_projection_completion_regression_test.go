@@ -81,14 +81,14 @@ func TestSelectedAnchorDriftFinalizesAsTypedPartialAndLeavesNoArtifactAuthority(
 			if !admitted || !errors.Is(drift.diagnostic, ErrFrozenSourceDrift) {
 				t.Fatalf("anchor drift diagnostic = %v", result.SourceDriftFailure)
 			}
-			if result.Measure.Discovery != DiscoveryFailed || result.Measure.DiscoveryTerminalSuccess ||
-				result.Measure.DiscoveredFiles != 1 || result.Measure.DiscoveredBytes != exactSize ||
-				result.Measure.CompletedFiles != 0 || result.Measure.CompletedBytes != 0 {
-				t.Fatalf("anchor drift measure = %+v", result.Measure)
+			if result.Progress.Discovery != DiscoveryFailed ||
+				result.Progress.DiscoveredFiles != 1 || result.Progress.DiscoveredBytes != exactSize ||
+				result.Progress.PublishedFiles != 0 || result.Progress.PublishedBytes != 0 {
+				t.Fatalf("anchor drift measure = %+v", result.Progress)
 			}
 			if len(result.Directories) != 0 || len(result.Files) != 0 ||
 				result.SelectionResolutionFailure != nil || result.SucceededFiles != 0 ||
-				result.FileOutcomes != (FileOutcomeSummary{}) {
+				result.Progress.FileOutcomes != (FileOutcomeSummary{}) {
 				t.Fatalf("anchor drift manufactured artifact failure coordinates: %+v", result)
 			}
 

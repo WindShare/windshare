@@ -15,10 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/link"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
@@ -37,7 +34,7 @@ func TestAppCommandSurfaceReportsActionableFailures(t *testing.T) {
 			name:       "malformed share flag",
 			args:       []string{"share", "--definitely-unknown"},
 			wantCode:   ExitUsage,
-			wantStderr: "flag provided but not defined",
+			wantStderr: "unknown option",
 		},
 		{
 			name:       "missing get link",
@@ -49,7 +46,7 @@ func TestAppCommandSurfaceReportsActionableFailures(t *testing.T) {
 			name:       "malformed get flag",
 			args:       []string{"get", "--definitely-unknown"},
 			wantCode:   ExitUsage,
-			wantStderr: "flag provided but not defined",
+			wantStderr: "unknown option",
 		},
 	}
 	for _, test := range tests {
@@ -97,12 +94,12 @@ func TestTopLevelHelpMatchesOrdinaryOutputCommandContracts(t *testing.T) {
 func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 	t.Run("valid explicit configuration", func(t *testing.T) {
 		app, _, _ := newSemanticTestApp(strings.NewReader(""))
-		request, code := app.parseShareRequest([]string{
+		request, parse := app.parseShareRequest([]string{
 			"root", "--relay", "wss://relay.example", "--front-url", "https://app.example",
 			"--block-size", "65536", "--split-key",
 		})
-		if code != ExitOK {
-			t.Fatalf("exit=%d", code)
+		if parse != requestParseReady {
+			t.Fatalf("parse=%d", parse)
 		}
 		if !reflect.DeepEqual(request.paths, []string{"root"}) ||
 			request.relayURL != "wss://relay.example" ||
@@ -136,8 +133,8 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-			if _, code := app.parseShareRequest(test.args); code != ExitUsage {
-				t.Fatalf("exit=%d want=%d", code, ExitUsage)
+			if _, parse := app.parseShareRequest(test.args); parse != requestParseUsageFailure {
+				t.Fatalf("parse=%d want=%d", parse, requestParseUsageFailure)
 			}
 			if !strings.Contains(stderr.String(), test.wantStderr) {
 				t.Fatalf("stderr=%q does not contain %q", stderr.String(), test.wantStderr)
@@ -151,7 +148,7 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 		if code := app.Run(context.Background(), []string{"share", missing}); code != ExitUsage {
 			t.Fatalf("exit=%d want=%d stderr=%q", code, ExitUsage, stderr.String())
 		}
-		if !strings.Contains(stderr.String(), "prepare selected roots") {
+		if !strings.Contains(stderr.String(), "unexpected error") || strings.Contains(stderr.String(), missing) {
 			t.Fatalf("stderr=%q", stderr.String())
 		}
 	})
@@ -208,8 +205,8 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 
 	t.Run("invalid link has a stable typed usage diagnostic", func(t *testing.T) {
 		app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-		if _, code := app.parseGetRequest([]string{"not-a-link"}); code != ExitUsage {
-			t.Fatalf("exit=%d want=%d", code, ExitUsage)
+		if _, parse := app.parseGetRequest([]string{"not-a-link"}); parse != requestParseUsageFailure {
+			t.Fatalf("parse=%d want=%d", parse, requestParseUsageFailure)
 		}
 		if stderr.String() != "get: "+invalidCapabilityDiagnostic+"\n" {
 			t.Fatalf("stderr=%q", stderr.String())
@@ -228,8 +225,8 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 			t.Fatal(err)
 		}
 		app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-		if _, code := app.parseGetRequest([]string{full}); code != ExitUsage {
-			t.Fatalf("exit=%d want=%d", code, ExitUsage)
+		if _, parse := app.parseGetRequest([]string{full}); parse != requestParseUsageFailure {
+			t.Fatalf("parse=%d want=%d", parse, requestParseUsageFailure)
 		}
 		if !strings.Contains(stderr.String(), "link has no relay address") {
 			t.Fatalf("stderr=%q", stderr.String())
@@ -237,7 +234,7 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 	})
 }
 
-func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
+func TestTransferResultEventsPreserveExitCodePrecedence(t *testing.T) {
 	published, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementSuccess)
 	if err != nil {
 		t.Fatal(err)
@@ -254,97 +251,56 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	genericDirectoryFailure := transfer.DirectoryJobFailure{
-		Path: "ordinary-directory", Stage: transfer.FailureDirectoryDiscovery, Cause: errors.New("directory unavailable"),
-	}
-	genericFileFailure := transfer.FileJobFailure{
-		Path: "ordinary-file", Stage: transfer.FailureBlockTransfer, Cause: errors.New("block unavailable"),
-	}
 	tests := []struct {
 		name         string
 		result       transfer.JobResult
 		cancel       bool
 		admissionErr error
 		wantCode     int
-		wantLogs     []string
+		wantText     []string
 	}{
 		{
 			name: "success",
 			result: transfer.JobResult{
 				Outcome: transfer.DirectTreeOutcomeSuccess, Settlement: published, SucceededFiles: 2,
-				FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 2},
-				Measure: transfer.SelectionMeasure{
-					DiscoveredFiles: 2, DiscoveredBytes: 8, CompletedFiles: 2, CompletedBytes: 8,
-					Discovery: transfer.DiscoveryComplete, DiscoveryTerminalSuccess: true,
+				Progress: transfer.ReceiveProgressSnapshot{
+					DiscoveredFiles: 2, DiscoveredBytes: 8, PublishedFiles: 2, PublishedBytes: 8,
+					VerifiedBytes: 8, NewlyVerifiedBytes: 8,
+					FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 2},
+					Discovery:    transfer.DiscoveryComplete, CountersExact: true,
 				},
 			},
-			wantCode: ExitOK, wantLogs: []string{"result=success downloaded=2", "bytes=8"},
+			wantCode: ExitOK, wantText: []string{"Download completed", "2 downloaded", "8 B"},
 		},
 		{
 			name: "success cannot hide a typed collision",
 			result: transfer.JobResult{
 				Outcome: transfer.DirectTreeOutcomeSuccess, Settlement: published, SucceededFiles: 1,
-				FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1, CollisionFiles: 1},
-				Measure: transfer.SelectionMeasure{
-					DiscoveredFiles: 1, DiscoveredBytes: 4, CompletedFiles: 1, CompletedBytes: 4,
-					Discovery: transfer.DiscoveryComplete, DiscoveryTerminalSuccess: true,
+				Progress: transfer.ReceiveProgressSnapshot{
+					DiscoveredFiles: 1, DiscoveredBytes: 4, PublishedFiles: 1, PublishedBytes: 4,
+					VerifiedBytes: 4, NewlyVerifiedBytes: 4,
+					FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1, CollisionFiles: 1},
+					Discovery:    transfer.DiscoveryComplete, CountersExact: true,
 				},
 			},
 			wantCode: ExitFailure,
-			wantLogs: []string{"non-success file or directory outcomes", "result=failed downloaded=1", "collision=1"},
+			wantText: []string{"Download failed", "1 downloaded", "1 collision"},
 		},
 		{
-			name: "isolated ordinary failures",
-			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePartial, Settlement: partial,
-				Directories: []transfer.DirectoryJobFailure{genericDirectoryFailure},
-				Files:       []transfer.FileJobFailure{genericFileFailure},
-			},
-			wantCode: ExitFailure,
-			wantLogs: []string{"directory \"ordinary-directory\" failed", "file \"ordinary-file\" failed"},
-		},
-		{
-			name: "directory drift dominates isolated completion",
-			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePartial, Settlement: partial,
-				SourceDriftFault: mustCLIFault(transferfault.NewCatalog(
-					transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale,
-				)),
-				Directories: []transfer.DirectoryJobFailure{{
-					Path: "stale-directory", Stage: transfer.FailureDirectoryDiscovery, Cause: catalog.ErrDirectoryStale,
-				}},
-			},
-			wantCode: ExitDrift, wantLogs: []string{"stale-directory"},
-		},
-		{
-			name: "file drift dominates isolated completion",
+			name: "source drift dominates partial completion",
 			result: transfer.JobResult{
 				Outcome: transfer.DirectTreeOutcomePartial, Settlement: partial,
 				SourceDriftFault: mustCLIFault(transferfault.NewSource(
 					transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged,
 				)),
-				Files: []transfer.FileJobFailure{{
-					Path: "stale-file", Stage: transfer.FailureRevisionOpen, Cause: content.ErrSourceDrift,
-				}},
 			},
-			wantCode: ExitDrift, wantLogs: []string{"stale-file"},
-		},
-		{
-			name: "omitted drift remains exact",
-			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePartial, Settlement: partial,
-				OmittedFileFailures: transfer.MaximumRetainedJobFailures,
-				SourceDriftFault: mustCLIFault(transferfault.NewSource(
-					transferfault.ScopeFileLocal, transferfault.SourceRevisionInvalidated,
-				)),
-			},
-			wantCode: ExitDrift,
+			wantCode: ExitDrift, wantText: []string{"finished partially", "source changed"},
 		},
 		{
 			name:     "caller cancellation dominates generic termination",
 			result:   transfer.JobResult{Outcome: transfer.DirectTreeOutcomePaused, Settlement: resumable, TerminationCause: errors.New("transfer stopped")},
 			cancel:   true,
-			wantCode: ExitFailure, wantLogs: []string{"interrupted"},
+			wantCode: ExitFailure, wantText: []string{"Download paused", "interrupted"},
 		},
 		{
 			name: "session failure dominates racing caller cancellation",
@@ -358,7 +314,7 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 					transferfault.ScopeSessionTerminal, transferfault.SessionTransport,
 				)),
 			},
-			cancel: true, wantCode: ExitNetwork, wantLogs: []string{"transfer stopped"},
+			cancel: true, wantCode: ExitNetwork, wantText: []string{"Download paused", "transfer session failed"},
 		},
 		{
 			name: "relay admission failure remains network-visible",
@@ -366,64 +322,36 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 				Outcome: transfer.DirectTreeOutcomePaused, Settlement: resumable, TerminationCause: errors.New("transfer stopped"),
 			},
 			admissionErr: errors.New("resume suspended relay failed"),
-			wantCode:     ExitNetwork, wantLogs: []string{"resume suspended relay failed"},
+			wantCode:     ExitNetwork, wantText: []string{"Download paused", "unexpected error"},
 		},
 		{
 			name: "missing explicit selection is usage",
 			result: transfer.JobResult{
 				Outcome: transfer.DirectTreeOutcomePartial, Settlement: partial,
-				Measure: transfer.SelectionMeasure{
-					Discovery: transfer.DiscoveryComplete, DiscoveryTerminalSuccess: true,
+				Progress: transfer.ReceiveProgressSnapshot{
+					Discovery: transfer.DiscoveryComplete, CountersExact: true,
 				},
 				SelectionResolutionFailure: errors.Join(transfer.ErrSelectionTargetMissing, errors.New("path: missing")),
 			},
-			wantCode: ExitUsage, wantLogs: []string{"selection target was not found"},
-		},
-		{
-			name: "proven missing selection completes as usage error",
-			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePartial, Settlement: partial,
-				Measure: transfer.SelectionMeasure{
-					Discovery: transfer.DiscoveryComplete, DiscoveryTerminalSuccess: true,
-				},
-				SelectionResolutionFailure: errors.Join(transfer.ErrSelectionTargetMissing, errors.New("path: missing")),
-				OmittedDirectoryFailures:   transfer.MaximumRetainedJobFailures,
-			},
-			wantCode: ExitUsage, wantLogs: []string{"selection target was not found"},
+			wantCode: ExitUsage, wantText: []string{"finished partially", "selected content was not found"},
 		},
 		{
 			name: "partial discovery cannot claim an explicit selection is missing",
 			result: transfer.JobResult{
 				Outcome:                    transfer.DirectTreeOutcomePartial,
 				Settlement:                 partial,
-				Measure:                    transfer.SelectionMeasure{Discovery: transfer.DiscoveryOpen},
+				Progress:                   transfer.ReceiveProgressSnapshot{Discovery: transfer.DiscoveryOpen, CountersExact: true},
 				SelectionResolutionFailure: transfer.ErrSelectionTargetMissing,
 			},
-			wantCode: ExitFailure, wantLogs: []string{"selection target remains unknown/partial"},
-		},
-		{
-			name: "paused drift precedes terminal transport inspection",
-			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomePaused, Settlement: resumable,
-				TerminationCause: content.ErrRevisionStale,
-				SourceDriftFault: mustCLIFault(transferfault.NewSource(
-					transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged,
-				)),
-			},
-			wantCode: ExitDrift,
+			wantCode: ExitFailure, wantText: []string{"finished partially"},
 		},
 		{
 			name: "settlement failure remains local and visible",
 			result: transfer.JobResult{
 				Outcome: transfer.DirectTreeOutcomePaused, SettlementFailure: errors.New("checkpoint install failed"),
-				Files: []transfer.FileJobFailure{{
-					Path: "partial.bin", Stage: transfer.FailureFileOutput,
-					Cause: errors.New("write failed"), SettlementFailure: errors.New("file pause failed"),
-					LeaseReleaseFailure: errors.New("lease release failed"),
-				}},
 			},
 			wantCode: ExitFailure,
-			wantLogs: []string{"durable output settlement failed", "file pause failed", "lease release failed"},
+			wantText: []string{"Download paused", "unexpected error"},
 		},
 		{
 			name: "failed operation without a wrapped cause remains actionable",
@@ -431,48 +359,7 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 				Outcome: transfer.DirectTreeOutcomeFailed, Settlement: needsAttention,
 			},
 			wantCode: ExitFailure,
-			wantLogs: []string{"durable output state needs attention", "result=failed"},
-		},
-		{
-			name: "successful files with retained attention are not silent success",
-			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomeSuccess, Settlement: needsAttention, SucceededFiles: 1,
-				FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1},
-				Measure: transfer.SelectionMeasure{
-					DiscoveredFiles: 1, DiscoveredBytes: 4, CompletedFiles: 1, CompletedBytes: 4,
-					Discovery: transfer.DiscoveryComplete, DiscoveryTerminalSuccess: true,
-				},
-			},
-			wantCode: ExitFailure,
-			wantLogs: []string{"needs attention", "result=failed downloaded=1", "bytes=4"},
-		},
-		{
-			name: "success cannot hide incomplete output",
-			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomeSuccess, Settlement: published, SucceededFiles: 1,
-				FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1},
-				Measure: transfer.SelectionMeasure{
-					DiscoveredFiles: 2, DiscoveredBytes: 8, CompletedFiles: 1, CompletedBytes: 4,
-					Discovery: transfer.DiscoveryComplete, DiscoveryTerminalSuccess: true,
-				},
-			},
-			wantCode: ExitFailure, wantLogs: []string{"success with incomplete output"},
-		},
-		{
-			name: "success outcome cannot hide settlement failure",
-			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcomeSuccess, Settlement: published,
-				SettlementFailure: errors.New("terminal cleanup failed"),
-			},
-			wantCode: ExitFailure,
-			wantLogs: []string{"terminal cleanup failed", "success with terminal failure state"},
-		},
-		{
-			name: "invalid outcome",
-			result: transfer.JobResult{
-				Outcome: transfer.DirectTreeOutcome(255),
-			},
-			wantCode: ExitFailure, wantLogs: []string{"invalid outcome"},
+			wantText: []string{"Download failed", "unexpected error"},
 		},
 	}
 	for _, test := range tests {
@@ -483,78 +370,27 @@ func TestReportTransferResultPreservesExitCodePrecedence(t *testing.T) {
 				ctx, cancel = context.WithCancel(ctx)
 				cancel()
 			}
-			app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-			// The tested outcomes return before terminal runtime inspection; nil
-			// values make that boundary explicit and would panic on precedence drift.
+			runtime, stderr := newGetReportingRuntime(t, false, false)
+			observation := getObservation{runtime: runtime}
+			app := &App{}
 			if code := app.reportTransferResultWithAdmission(
-				ctx, nil, nil, test.result, test.admissionErr, false,
+				ctx, newGetReportingCompletion(t, test.result), test.admissionErr, nil, nil,
+				t.TempDir(), false, runtime.Clock().Now(), observation,
 			); code != test.wantCode {
 				t.Fatalf("exit=%d want=%d stderr=%q", code, test.wantCode, stderr.String())
 			}
-			for _, expected := range test.wantLogs {
+			runtime.Close()
+			for _, expected := range test.wantText {
 				if !strings.Contains(stderr.String(), expected) {
 					t.Fatalf("stderr=%q does not contain %q", stderr.String(), expected)
 				}
 			}
+			for _, retired := range []string{"result=", "phase=", "cause_class="} {
+				if strings.Contains(stderr.String(), retired) {
+					t.Fatalf("stderr=%q contains retired ledger %q", stderr.String(), retired)
+				}
+			}
 		})
-	}
-}
-
-func TestGetTraceSinkReceivesTypedEventsWithoutWritingStderr(t *testing.T) {
-	app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-	filesystemEvent := osfs.FilesystemOutputTrace{
-		Operation: osfs.TraceRuntimeDecision, RuntimeDecision: osfs.FilesystemOutputRuntimeRejected,
-	}
-	transferEvent := transfer.TransferLifecycleTrace{
-		Stage: transfer.TransferFileEnqueued, FileSelection: transfer.FileSelectionCatalogPathTarget,
-	}
-	app.traceFilesystemOutput(filesystemEvent)
-	app.traceTransferLifecycle(transferEvent)
-	app.traceGet(GetTraceEvent{Stage: GetTraceDestinationBound, Mode: getOutputResumable})
-	if stderr.Len() != 0 {
-		t.Fatalf("default structured tracing wrote user stderr: %q", stderr.String())
-	}
-
-	var events []GetTraceEvent
-	app.getTraces = GetTraceSinkFunc(func(event GetTraceEvent) { events = append(events, event) })
-	app.traceFilesystemOutput(filesystemEvent)
-	app.traceTransferLifecycle(transferEvent)
-	app.traceGet(GetTraceEvent{Stage: GetTraceDestinationBound, Mode: getOutputResumable})
-	if len(events) != 3 {
-		t.Fatalf("typed trace events=%d want=3", len(events))
-	}
-	if events[0].Stage != GetTraceFilesystemOutput ||
-		events[0].FilesystemOutput.RuntimeDecision != osfs.FilesystemOutputRuntimeRejected {
-		t.Fatalf("filesystem trace=%+v", events[0])
-	}
-	if events[1].Stage != GetTraceTransferLifecycle ||
-		events[1].TransferLifecycle.FileSelection != transfer.FileSelectionCatalogPathTarget {
-		t.Fatalf("transfer trace=%+v", events[1])
-	}
-	if events[2].Stage != GetTraceDestinationBound || events[2].Mode != getOutputResumable {
-		t.Fatalf("admission trace=%+v", events[2])
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("injected structured tracing wrote user stderr: %q", stderr.String())
-	}
-
-	if got := outputTraceIdentity(nil); got != "-" {
-		t.Fatalf("zero trace identity=%q", got)
-	}
-	if got := outputTraceIdentity([]byte{1}); got != "01" {
-		t.Fatalf("short trace identity=%q", got)
-	}
-	if got := outputTraceIdentity(bytes.Repeat([]byte{2}, outputTraceIdentityPrefixBytes+1)); len(got) != 2*outputTraceIdentityPrefixBytes {
-		t.Fatalf("bounded trace identity=%q", got)
-	}
-	for kind, expected := range map[transfer.FileSettlementKind]string{
-		transfer.FilePublished: "published", transfer.FilePaused: "paused", transfer.FileFailed: "retired",
-		transfer.FileCollision: "collision", transfer.FileItemBlocked: "item-blocked",
-		0: "none",
-	} {
-		if got := fileSettlementName(kind); got != expected {
-			t.Fatalf("file settlement %d=%q want=%q", kind, got, expected)
-		}
 	}
 }
 

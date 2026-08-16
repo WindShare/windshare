@@ -262,28 +262,33 @@ func (r *jobRun) transferMissingRanges(
 	plan plannedFile,
 	opened OpenedRevision,
 	transaction FileTransaction,
-	checkpoint VerifiedDurableRanges,
+	progress *fileTransferProgress,
 ) (bool, error) {
 	durableOutput := r.output.Capabilities().Durability != DurabilityNone
-	if !durableOutput && !checkpoint.Ranges().IsEmpty() {
+	if progress == nil || progress.durable != durableOutput {
 		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0,
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
 		)
 	}
-	missing, err := MissingRanges(opened.Descriptor.ExactSize(), checkpoint.Ranges())
+	if !durableOutput && !progress.trusted.Ranges().IsEmpty() {
+		return false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
+		)
+	}
+	missing, err := MissingRanges(opened.Descriptor.ExactSize(), progress.trusted.Ranges())
 	if err != nil {
 		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(err), 0,
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(err), 0, progress,
 		)
 	}
-	wrote, transientEnd := false, uint64(0)
+	wrote := false
 	chunk := uint64(opened.Descriptor.Geometry().ChunkSize())
 	for _, current := range missing.Ranges() {
 		for offset := current.Offset; offset < current.End; {
 			if cause := context.Cause(ctx); cause != nil {
 				return false, r.settleFailedFile(
 					ctx, plan, opened, transaction, FailureBlockTransfer,
-					cancellationFailure(ctx, cause), 0,
+					cancellationFailure(ctx, cause), 0, progress,
 				)
 			}
 			// RangeReader owns the bounded block pipeline. Passing one chunk at a
@@ -294,19 +299,17 @@ func (r *jobRun) transferMissingRanges(
 				((offset/chunk)+uint64(defaultFileReadWindowBlocks))*chunk,
 			)
 			requested := content.Range{Offset: offset, End: next}
-			if !durableOutput && requested.Offset != transientEnd {
+			if !durableOutput && requested.Offset != progress.transientEnd {
 				return false, r.settleFailedFile(
-					ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0,
+					ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
 				)
 			}
-			advanced, transferred, transferErr := r.transferRequestedRange(
-				ctx, plan, opened, transaction, checkpoint, requested, durableOutput,
+			transferred, transferErr := r.transferRequestedRange(
+				ctx, plan, opened, transaction, progress, requested,
 			)
 			if transferErr != nil || !transferred {
 				return false, transferErr
 			}
-			checkpoint = advanced
-			transientEnd = requested.End
 			if !wrote {
 				r.traceFileLifecycle(TransferFileFirstWrite, plan, nil)
 				wrote = true
@@ -314,13 +317,13 @@ func (r *jobRun) transferMissingRanges(
 			offset = next
 		}
 	}
-	complete := RangesCoverFile(opened.Descriptor.ExactSize(), checkpoint.Ranges())
+	complete := RangesCoverFile(opened.Descriptor.ExactSize(), progress.trusted.Ranges())
 	if !durableOutput {
-		complete = transientEnd == opened.Descriptor.ExactSize()
+		complete = progress.transientEnd == opened.Descriptor.ExactSize()
 	}
 	if !complete {
 		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0,
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
 		)
 	}
 	return true, nil
@@ -331,10 +334,9 @@ func (r *jobRun) transferRequestedRange(
 	plan plannedFile,
 	opened OpenedRevision,
 	transaction FileTransaction,
-	prior VerifiedDurableRanges,
+	progress *fileTransferProgress,
 	requested content.Range,
-	durableOutput bool,
-) (VerifiedDurableRanges, bool, error) {
+) (bool, error) {
 	buffered, err := newAtomicRequestedRangeSink(requested, transaction)
 	if err == nil {
 		rawReadErr := r.job.blocks.ReadRange(ctx, opened.LeaseID, opened.Descriptor, requested, buffered)
@@ -350,32 +352,35 @@ func (r *jobRun) transferRequestedRange(
 		}); ok && policy.invalidatedRevision() {
 			invalidator.InvalidateRevision(plan.file, opened.Descriptor.FileRevision())
 		}
-		return VerifiedDurableRanges{}, false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureBlockTransfer, err, policy.retireReason(),
+		return false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureBlockTransfer, err, policy.retireReason(), progress,
 		)
 	}
 	if err := buffered.Flush(ctx); err != nil {
-		return VerifiedDurableRanges{}, false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureBlockTransfer, err, 0,
+		return false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureBlockTransfer, err, 0, progress,
+		)
+	}
+	if !progress.beginPending(requested) {
+		return false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
 		)
 	}
 	checkpoint, rawCheckpointErr := transaction.Checkpoint(ctx)
 	err = normalizeOutputBoundary(ctx, rawCheckpointErr)
 	if err != nil {
-		return VerifiedDurableRanges{}, false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, err, 0,
+		return false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureFileOutput, err, 0, progress,
 		)
 	}
-	valid := checkpointExactlyAdvances(transaction, prior, requested, checkpoint)
-	if !durableOutput {
-		valid = checkpointAcknowledgesTransientWrite(transaction, prior, checkpoint)
-	}
+	delta, valid := progress.acknowledge(transaction, checkpoint)
 	if !valid {
-		return VerifiedDurableRanges{}, false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0,
+		return false, r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
 		)
 	}
-	return checkpoint, true, nil
+	r.job.progress.addNewlyVerified(delta)
+	return true, nil
 }
 
 func checkpointExactlyAdvances(

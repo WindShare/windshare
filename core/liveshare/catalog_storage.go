@@ -52,13 +52,42 @@ const (
 	CatalogStorageCleaned
 )
 
+type CatalogStorageCause uint8
+
+const (
+	CatalogStorageCauseNone CatalogStorageCause = iota
+	CatalogStorageCauseCanceled
+	CatalogStorageCauseDeadlineExceeded
+	CatalogStorageCauseBudgetExceeded
+	CatalogStorageCauseUnexpected
+)
+
+func (cause CatalogStorageCause) String() string {
+	switch cause {
+	case CatalogStorageCauseNone:
+		return "none"
+	case CatalogStorageCauseCanceled:
+		return "canceled"
+	case CatalogStorageCauseDeadlineExceeded:
+		return "deadline-exceeded"
+	case CatalogStorageCauseBudgetExceeded:
+		return "budget-exceeded"
+	case CatalogStorageCauseUnexpected:
+		return "unexpected"
+	default:
+		return "unknown"
+	}
+}
+
+// CatalogStorageTrace contains only closed facts. In particular it never
+// retains provider errors, whose text may contain filesystem paths or relay
+// credentials owned by an embedding application.
 type CatalogStorageTrace struct {
 	Operation          CatalogStorageOperation
 	ShareInstance      catalog.ShareInstance
 	RecoveredUsage     catalog.ResourceUsage
 	LegacyRootsRemoved uint64
-	Failed             bool
-	Cause              error
+	Cause              CatalogStorageCause
 }
 
 type CatalogStorageTracer interface {
@@ -97,7 +126,7 @@ type fileCatalogStorageFactory struct {
 func productionCatalogStorageFactory(tracer CatalogStorageTracer) CatalogStorageFactory {
 	return &fileCatalogStorageFactory{
 		registry: filepath.Join(os.TempDir(), liveCatalogRegistryName),
-		tracer:   catalogStorageTracerOrDefault(tracer),
+		tracer:   tracer,
 	}
 }
 
@@ -127,7 +156,7 @@ func (factory *fileCatalogStorageFactory) Create(
 	removed, cleanupErr := factory.cleanAbandonedRoots(ctx)
 	factory.trace(CatalogStorageTrace{
 		Operation: CatalogStorageCleaned, ShareInstance: share,
-		LegacyRootsRemoved: removed, Failed: cleanupErr != nil, Cause: cleanupErr,
+		LegacyRootsRemoved: removed, Cause: catalogStorageCause(cleanupErr),
 	})
 	if cleanupErr != nil {
 		return nil, cleanupErr
@@ -239,9 +268,7 @@ func removeCatalogRoot(root string) error {
 }
 
 func (factory *fileCatalogStorageFactory) trace(event CatalogStorageTrace) {
-	if factory.tracer != nil {
-		factory.tracer.TraceCatalogStorage(event)
-	}
+	traceCatalogStorage(factory.tracer, event)
 }
 
 type ownedCatalogBackend struct {
@@ -268,7 +295,7 @@ func (backend *ownedCatalogBackend) Recover(ctx context.Context) (catalog.Resour
 	usage, err := backend.CatalogBackend.Recover(ctx)
 	backend.trace(CatalogStorageTrace{
 		Operation: CatalogStorageRecovered, ShareInstance: backend.share,
-		RecoveredUsage: usage, Failed: err != nil, Cause: err,
+		RecoveredUsage: usage, Cause: catalogStorageCause(err),
 	})
 	return usage, err
 }
@@ -298,16 +325,14 @@ func (backend *ownedCatalogBackend) destroy() error {
 		}
 		backend.trace(CatalogStorageTrace{
 			Operation: CatalogStorageCleaned, ShareInstance: backend.share,
-			Failed: backend.closeErr != nil, Cause: backend.closeErr,
+			Cause: catalogStorageCause(backend.closeErr),
 		})
 	})
 	return backend.closeErr
 }
 
 func (backend *ownedCatalogBackend) trace(event CatalogStorageTrace) {
-	if backend.tracer != nil {
-		backend.tracer.TraceCatalogStorage(event)
-	}
+	traceCatalogStorage(backend.tracer, event)
 }
 
 type observedCatalogBackend struct {
@@ -326,7 +351,7 @@ func (backend *observedCatalogBackend) Recover(ctx context.Context) (catalog.Res
 	usage, err := backend.CatalogBackend.Recover(ctx)
 	traceCatalogStorage(backend.tracer, CatalogStorageTrace{
 		Operation: CatalogStorageRecovered, ShareInstance: backend.share,
-		RecoveredUsage: usage, Failed: err != nil, Cause: err,
+		RecoveredUsage: usage, Cause: catalogStorageCause(err),
 	})
 	return usage, err
 }
@@ -346,14 +371,17 @@ func (backend *observedCatalogBackend) destroy() error {
 		}
 		traceCatalogStorage(backend.tracer, CatalogStorageTrace{
 			Operation: CatalogStorageCleaned, ShareInstance: backend.share,
-			Failed: backend.closeErr != nil, Cause: backend.closeErr,
+			Cause: catalogStorageCause(backend.closeErr),
 		})
 	})
 	return backend.closeErr
 }
 
 func traceCatalogStorage(tracer CatalogStorageTracer, event CatalogStorageTrace) {
-	if tracer != nil {
-		tracer.TraceCatalogStorage(event)
+	if tracer == nil {
+		return
 	}
+	// Storage diagnostics must never gain authority over catalog lifecycle.
+	defer func() { _ = recover() }()
+	tracer.TraceCatalogStorage(event)
 }

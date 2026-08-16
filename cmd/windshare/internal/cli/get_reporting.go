@@ -1,282 +1,253 @@
 package cli
 
 import (
-	"fmt"
-	"io"
-	"math/bits"
-	"strings"
-	"sync"
-
+	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
+	"github.com/windshare/windshare/cmd/windshare/internal/commandprojection"
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
-	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
-	"golang.org/x/term"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
+	"github.com/windshare/windshare/transport/relayv2"
+	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
-const liveOnlyOutputWarning = "This destination supports safe saving, but this download cannot be resumed.\n" +
-	"If interrupted, completed files stay; the next get uses a new name and downloads the selection again."
-
-type TTYDetector interface {
-	IsTTY(io.Writer) bool
+type getObservation struct {
+	runtime *commandRuntime
 }
 
-type TTYDetectorFunc func(io.Writer) bool
-
-func (function TTYDetectorFunc) IsTTY(writer io.Writer) bool {
-	return function != nil && function(writer)
+func (observation getObservation) observe(event clievent.Event) bool {
+	return observation.runtime != nil && observation.runtime.Observe(event)
 }
 
-type nativeTTYDetector struct{}
-
-func (nativeTTYDetector) IsTTY(writer io.Writer) bool {
-	file, ok := writer.(interface{ Fd() uintptr })
-	return ok && term.IsTerminal(int(file.Fd()))
+func (observation getObservation) publish(events ...clievent.Event) bool {
+	return observation.runtime != nil && observation.runtime.Publish(events...)
 }
 
-type ProgressSink interface {
-	Update(transfer.SelectionMeasure)
-	Finish()
+func (observation getObservation) finalize(
+	progress clievent.TransferProgress,
+	settlement clievent.TransferSettled,
+) bool {
+	return observation.runtime != nil &&
+		observation.runtime.PublishTransferFinalization(progress, settlement)
 }
 
-type silentProgressSink struct{}
-
-func (silentProgressSink) Update(transfer.SelectionMeasure) {}
-func (silentProgressSink) Finish()                          {}
-
-type terminalProgressSink struct {
-	writer io.Writer
-	width  int
-}
-
-func (sink *terminalProgressSink) Update(measure transfer.SelectionMeasure) {
-	if sink == nil || sink.writer == nil {
-		return
-	}
-	line := formatGetProgress(measure)
-	padding := ""
-	if sink.width > len(line) {
-		padding = strings.Repeat(" ", sink.width-len(line))
-	}
-	_, _ = fmt.Fprintf(sink.writer, "\r%s%s", line, padding)
-	sink.width = len(line)
-}
-
-func (sink *terminalProgressSink) Finish() {
-	if sink == nil || sink.writer == nil || sink.width == 0 {
-		return
-	}
-	_, _ = fmt.Fprintf(sink.writer, "\r%s\r", strings.Repeat(" ", sink.width))
-	sink.width = 0
-}
-
-func formatGetProgress(measure transfer.SelectionMeasure) string {
-	if measure.Discovery != transfer.DiscoveryComplete {
-		return fmt.Sprintf(
-			"get: discovering files=%d bytes=%d completed_files=%d completed_bytes=%d",
-			measure.DiscoveredFiles, measure.DiscoveredBytes,
-			measure.CompletedFiles, measure.CompletedBytes,
-		)
-	}
-	percent := uint64(100)
-	if measure.DiscoveredBytes > 0 {
-		completed := min(measure.CompletedBytes, measure.DiscoveredBytes)
-		high, low := bits.Mul64(completed, 100)
-		percent, _ = bits.Div64(high, low, measure.DiscoveredBytes)
-	}
-	return fmt.Sprintf(
-		"get: files=%d/%d bytes=%d/%d %d%%",
-		measure.CompletedFiles, measure.DiscoveredFiles,
-		measure.CompletedBytes, measure.DiscoveredBytes, percent,
-	)
-}
-
-type WarningSink interface {
-	Warn(string)
-}
-
-type WarningSinkFunc func(string)
-
-func (function WarningSinkFunc) Warn(message string) {
-	if function != nil {
-		function(message)
+func (observation getObservation) loseLifecycle() {
+	if observation.runtime != nil {
+		observation.runtime.ReportObserverLoss(1, 0)
 	}
 }
 
-type warningOnce struct {
-	sink WarningSink
-	once sync.Once
-}
-
-func (warning *warningOnce) Warn(message string) {
-	if warning == nil || warning.sink == nil {
-		return
+func (observation getObservation) commandFailure(exit int, cause error) int {
+	projectedExit, ok := getEventExit(exit)
+	if !ok || projectedExit == clievent.ExitSuccess {
+		projectedExit = clievent.ExitFailure
+		exit = ExitFailure
 	}
-	warning.once.Do(func() { warning.sink.Warn(message) })
-}
-
-type GetTraceStage uint8
-
-const (
-	GetTraceDestinationBound GetTraceStage = iota + 1
-	GetTraceActiveLookup
-	GetTraceShapeProbe
-	GetTraceOperationReady
-	GetTraceContentAdmitted
-	GetTraceFilesystemOutput
-	GetTraceTransferLifecycle
-)
-
-type GetTraceEvent struct {
-	Stage             GetTraceStage
-	ProtocolSessionID protocolsession.ProtocolSessionID
-	SelectionDigest   transfer.SelectionSpecDigest
-	IntentDigest      transfer.ReceiveIntentDigest
-	Mode              getOutputMode
-	Lookup            getOutputLookupKind
-	ShapeKind         ordinaryoutput.ShapeKind
-	ShapeFallback     ordinaryoutput.ShapeFallbackReason
-	DirectoryRequests uint32
-	Pages             uint32
-	Entries           uint32
-	MetadataBytes     uint64
-	Renamed           bool
-	Failed            bool
-	FilesystemOutput  osfs.FilesystemOutputTrace
-	TransferLifecycle transfer.TransferLifecycleTrace
-}
-
-type GetTraceSink interface {
-	TraceGet(GetTraceEvent)
-}
-
-type GetTraceSinkFunc func(GetTraceEvent)
-
-func (function GetTraceSinkFunc) TraceGet(event GetTraceEvent) {
-	if function != nil {
-		function(event)
+	event, err := commandprojection.ProjectCommandFailure(clievent.CommandGet, projectedExit, cause)
+	if err != nil {
+		observation.loseLifecycle()
+		event = unexpectedGetFailure(projectedExit)
 	}
+	observation.publish(event)
+	return exit
 }
 
-func (a *App) getProgressReporter() ProgressSink {
-	detector := a.getTTYDetector
-	if detector == nil {
-		detector = nativeTTYDetector{}
+func (observation getObservation) commandFailureCode(exit int, code clievent.FailureCode) int {
+	failure, err := clievent.NewFailure(code)
+	projectedExit, validExit := getEventExit(exit)
+	if err != nil || !validExit || projectedExit == clievent.ExitSuccess {
+		return observation.commandFailure(ExitFailure, commandprojection.ErrInvalidProjection)
 	}
-	if !detector.IsTTY(a.Stderr) {
-		return silentProgressSink{}
+	event, err := clievent.NewCommandFailed(clievent.CommandGet, projectedExit, failure)
+	if err != nil {
+		return observation.commandFailure(ExitFailure, commandprojection.ErrInvalidProjection)
 	}
-	if a.getProgress != nil {
-		return a.getProgress
-	}
-	return &terminalProgressSink{writer: a.stderrWriter()}
+	observation.publish(event)
+	return exit
 }
 
-func (a *App) getWarningReporter() *warningOnce {
-	sink := a.getWarnings
-	if sink == nil {
-		sink = WarningSinkFunc(func(message string) { a.logf("get: warning: %s", message) })
-	}
-	return &warningOnce{sink: sink}
+func unexpectedGetFailure(exit clievent.ExitCode) clievent.CommandFailed {
+	failure, _ := clievent.NewFailure(clievent.FailureUnexpected)
+	event, _ := clievent.NewCommandFailed(clievent.CommandGet, exit, failure)
+	return event
 }
 
-func (a *App) traceGet(event GetTraceEvent) {
-	if a == nil || a.getTraces == nil {
-		return
-	}
-	a.getTraces.TraceGet(event)
-}
-
-func (a *App) traceOrdinaryOutputShape(event ordinaryoutput.ShapeTrace) {
-	a.traceGet(GetTraceEvent{
-		Stage: GetTraceShapeProbe, ProtocolSessionID: event.ProtocolSessionID,
-		SelectionDigest: transfer.SelectionSpecDigest(event.SelectionDigest),
-		ShapeKind:       event.Kind, ShapeFallback: event.Fallback,
-		DirectoryRequests: event.DirectoryRequests, Pages: event.AuthenticatedPages,
-		Entries: event.AuthenticatedEntries, MetadataBytes: event.AuthenticatedMetadataBytes,
-	})
-}
-
-type getTransferSummary struct {
-	status             DirectGetStatus
-	files              transfer.FileOutcomeSummary
-	directoryFailures  uint64
-	omittedDiagnostics uint64
-	renamed            bool
-	bytes              uint64
-}
-
-type DirectGetStatus uint8
-
-const (
-	DirectGetSuccess DirectGetStatus = iota + 1
-	DirectGetPartial
-	DirectGetPaused
-	DirectGetFailed
-)
-
-func summarizeGetTransfer(result transfer.JobResult, renamed bool) getTransferSummary {
-	// Per-item diagnostics are intentionally bounded. Exact file counts therefore
-	// come only from the settlement-owned aggregate, never from retained paths.
-	summary := getTransferSummary{
-		status: DirectGetFailed, files: result.FileOutcomes, renamed: renamed, bytes: result.Measure.CompletedBytes,
-		directoryFailures:  uint64(len(result.Directories)) + result.OmittedDirectoryFailures,
-		omittedDiagnostics: result.OmittedFileFailures + result.OmittedDirectoryFailures,
-	}
-	switch result.Outcome {
-	case transfer.DirectTreeOutcomeSuccess:
-		if successfulGetResult(result) {
-			summary.status = DirectGetSuccess
-		} else {
-			summary.status = DirectGetFailed
-		}
-	case transfer.DirectTreeOutcomePartial:
-		summary.status = DirectGetPartial
-	case transfer.DirectTreeOutcomePaused:
-		summary.status = DirectGetPaused
-	case transfer.DirectTreeOutcomeFailed:
-		summary.status = DirectGetFailed
-	}
-	return summary
-}
-
-func successfulGetResult(result transfer.JobResult) bool {
-	files := result.FileOutcomes
-	return result.TerminationCause == nil && !result.TerminationFault.Valid() &&
-		result.SettlementFailure == nil && !result.SettlementFault.Valid() &&
-		result.SelectionResolutionFailure == nil && result.SourceDriftFailure == nil &&
-		!result.SourceDriftFault.Valid() && len(result.Directories) == 0 && len(result.Files) == 0 &&
-		result.OmittedDirectoryFailures == 0 && result.OmittedFileFailures == 0 &&
-		files.PausedFiles == 0 && files.CollisionFiles == 0 && files.FailedFiles == 0 &&
-		files.ItemBlockedFiles == 0 && result.Settlement.Kind() == transfer.DirectTreeSettlementSuccess &&
-		result.Measure.Discovery == transfer.DiscoveryComplete && result.Measure.DiscoveryTerminalSuccess &&
-		!successfulTransferIncomplete(result)
-}
-
-func (a *App) logGetTransferSummary(result transfer.JobResult, renamed bool) {
-	summary := summarizeGetTransfer(result, renamed)
-	a.logf(
-		"get: result=%s downloaded=%d resumed=%d paused=%d collision=%d failed=%d item-blocked=%d directories-failed=%d renamed=%t metadata-warnings=%d omitted-diagnostics=%d bytes=%d",
-		getStatusName(summary.status),
-		summary.files.DownloadedFiles, summary.files.ResumedFiles, summary.files.PausedFiles,
-		summary.files.CollisionFiles,
-		summary.files.FailedFiles,
-		summary.files.ItemBlockedFiles, summary.directoryFailures, summary.renamed,
-		summary.files.ModifiedTimeWarnings, summary.omittedDiagnostics, summary.bytes,
-	)
-}
-
-func getStatusName(status DirectGetStatus) string {
-	switch status {
-	case DirectGetSuccess:
-		return "success"
-	case DirectGetPartial:
-		return "partial"
-	case DirectGetPaused:
-		return "paused"
-	case DirectGetFailed:
-		return "failed"
+func getEventExit(exit int) (clievent.ExitCode, bool) {
+	switch exit {
+	case ExitOK:
+		return clievent.ExitSuccess, true
+	case ExitFailure:
+		return clievent.ExitFailure, true
+	case ExitUsage:
+		return clievent.ExitUsage, true
+	case ExitNetwork:
+		return clievent.ExitNetwork, true
+	case ExitDrift:
+		return clievent.ExitDrift, true
 	default:
-		return "invalid"
+		return 0, false
+	}
+}
+
+func (observation getObservation) warning(cause error) {
+	failure, present := commandprojection.ClassifyError(cause)
+	if present {
+		observation.warningFailure(failure)
+	}
+}
+
+func (observation getObservation) warningCode(code clievent.FailureCode) {
+	failure, err := clievent.NewFailure(code)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	observation.warningFailure(failure)
+}
+
+func (observation getObservation) warningFailure(failure clievent.Failure) {
+	event, err := clievent.NewWarning(clievent.CommandGet, failure)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	observation.observe(event)
+}
+
+func (observation getObservation) relayConnected(endpoint v2.RelayEndpoint) {
+	authority, err := commandprojection.RelayAuthority(endpoint)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	event, err := clievent.NewRelayConnected(clievent.CommandGet, authority)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	observation.publish(event)
+}
+
+func (observation getObservation) relayLifecycle(value relayv2.LifecycleTrace) {
+	event, err := commandprojection.ProjectRelayLifecycle(clievent.CommandGet, value)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	observation.observe(event)
+}
+
+func (observation getObservation) webRTCLifecycle(value transportwebrtc.LifecycleTrace) {
+	event, err := commandprojection.ProjectWebRTCLifecycle(clievent.CommandGet, value)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	observation.observe(event)
+}
+
+func (observation getObservation) filesystemOutput(value osfs.FilesystemOutputTrace) {
+	event, err := commandprojection.ProjectFilesystemOutput(value)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	observation.observe(event)
+}
+
+func (observation getObservation) transferLifecycle(value transfer.TransferLifecycleTrace) {
+	event, err := commandprojection.ProjectTransferLifecycle(value)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	observation.observe(event)
+}
+
+func (observation getObservation) progress(
+	receiveOperation receivecontract.OperationID,
+	transferJob transfer.TransferJobID,
+	value transfer.ReceiveProgressSnapshot,
+) {
+	event, err := commandprojection.ProjectTransferProgress(receiveOperation, transferJob, value)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	observation.observe(event)
+}
+
+func (observation getObservation) contentPath(path clievent.ContentPath) {
+	event, err := clievent.NewContentPathSelected(path)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	observation.publish(event)
+}
+
+func (observation getObservation) fallback(code clievent.FailureCode) {
+	failure, err := clievent.NewFailure(code)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	event, err := clievent.NewFallback(
+		clievent.CommandGet,
+		clievent.TransportWebRTC,
+		clievent.TransportRelay,
+		failure,
+	)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	observation.publish(event)
+}
+
+func (observation getObservation) laneAdopted(
+	session protocolsession.ProtocolSessionID,
+	lane sessionruntime.LaneIdentity,
+) {
+	projectedSession, err := commandprojection.ProtocolSessionID(session)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	projectedLane, err := commandprojection.LaneIdentity(lane)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	event, err := clievent.NewLaneAdopted(
+		clievent.CommandGet,
+		projectedSession,
+		projectedLane,
+		clievent.TransportWebRTC,
+	)
+	if err != nil {
+		observation.loseLifecycle()
+		return
+	}
+	observation.observe(event)
+}
+
+func (observation getObservation) receiverTermination(value receiverPeerTerminationTrace) {
+	if value.diagnosticsTruncated {
+		observation.loseLifecycle()
+	}
+	for _, cause := range value.retainedCauseClasses {
+		failure, ok := commandprojection.ProjectReceiverCauseClass(cause)
+		if ok {
+			observation.warningFailure(failure)
+			return
+		}
+	}
+	if value.peerShutdownFailed {
+		observation.warningCode(clievent.FailurePeerShutdown)
+	} else if value.channelDrainFailed {
+		observation.warningCode(clievent.FailurePeerChannelDrain)
 	}
 }

@@ -67,7 +67,7 @@ func TestFileCatalogStorageFactoryPreservesActiveRootsAndCleansAbandonedRoots(t 
 
 	var observedLegacyCleanup bool
 	for _, event := range traces {
-		if event.Operation == CatalogStorageCleaned && event.LegacyRootsRemoved == 1 && !event.Failed {
+		if event.Operation == CatalogStorageCleaned && event.LegacyRootsRemoved == 1 && event.Cause == CatalogStorageCauseNone {
 			observedLegacyCleanup = true
 		}
 	}
@@ -106,7 +106,7 @@ func TestFileCatalogStorageCloseLeavesRecoverableRootWhenRegistryLockIsUnavailab
 		t.Fatalf("failed close did not preserve a recoverable catalog root: %v", err)
 	}
 	last := traces[len(traces)-1]
-	if last.Operation != CatalogStorageCleaned || last.ShareInstance != share || !last.Failed {
+	if last.Operation != CatalogStorageCleaned || last.ShareInstance != share || last.Cause != CatalogStorageCauseUnexpected {
 		t.Fatalf("failed close trace = %#v", last)
 	}
 
@@ -148,9 +148,28 @@ func TestObservedCatalogBackendTracesRecoveryAndCleanupFailures(t *testing.T) {
 	if err := observed.Close(); !errors.Is(err, closeFailure) {
 		t.Fatalf("close error = %v", err)
 	}
-	if len(traces) != 4 || traces[1].Operation != CatalogStorageRecovered || !traces[1].Failed ||
-		traces[3].Operation != CatalogStorageCleaned || !traces[3].Failed {
+	if len(traces) != 4 || traces[1].Operation != CatalogStorageRecovered || traces[1].Cause != CatalogStorageCauseUnexpected ||
+		traces[3].Operation != CatalogStorageCleaned || traces[3].Cause != CatalogStorageCauseUnexpected {
 		t.Fatalf("storage lifecycle traces = %#v", traces)
+	}
+}
+
+func TestCatalogStorageTracerPanicCannotInterruptSenderLifecycle(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "selected.bin")
+	if err := os.WriteFile(filename, []byte("catalog tracer authority"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sender, err := PrepareSender(context.Background(), SenderConfig{
+		Paths: []string{filename}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		CatalogTracer: CatalogStorageTraceFunc(func(CatalogStorageTrace) {
+			panic("catalog diagnostics must remain observational")
+		}),
+	})
+	if err != nil {
+		t.Fatalf("catalog tracer panic interrupted preparation: %v", err)
+	}
+	if err := sender.Close(); err != nil {
+		t.Fatalf("catalog tracer panic interrupted cleanup: %v", err)
 	}
 }
 
@@ -179,7 +198,7 @@ func TestPrepareSenderCatalogTracesUnusableStorageRoot(t *testing.T) {
 		t.Fatal("unusable catalog registry was accepted")
 	}
 	if len(traces) != 2 || traces[0].Operation != CatalogStorageCreating ||
-		traces[1].Operation != CatalogStorageCreated || !traces[1].Failed || traces[1].Cause == nil {
+		traces[1].Operation != CatalogStorageCreated || traces[1].Cause != CatalogStorageCauseUnexpected {
 		t.Fatalf("catalog creation traces = %#v", traces)
 	}
 	for _, event := range traces {
@@ -247,6 +266,10 @@ func TestPrepareSenderCatalogTracesCreationRecoveryAndBudgetRejection(t *testing
 			t.Fatalf("catalog storage trace operations = %v, want %v", got, want)
 		}
 	}
+	if traces[3].Cause != CatalogStorageCauseNone ||
+		traces[4].Cause != CatalogStorageCauseBudgetExceeded {
+		t.Fatalf("budget failure causes = recovered %v, rejected %v", traces[3].Cause, traces[4].Cause)
+	}
 }
 
 func TestCatalogStorageContractsRejectInvalidFactoriesAndAdmission(t *testing.T) {
@@ -270,7 +293,7 @@ func TestCatalogStorageContractsRejectInvalidFactoriesAndAdmission(t *testing.T)
 	fileFactory, ok := production.(*fileCatalogStorageFactory)
 	if !ok ||
 		fileFactory.registry != filepath.Join(os.TempDir(), liveCatalogRegistryName) ||
-		fileFactory.tracer == nil {
+		fileFactory.tracer != nil {
 		t.Fatalf("production factory = %#v", production)
 	}
 	factory := &fileCatalogStorageFactory{registry: t.TempDir()}

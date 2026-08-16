@@ -598,11 +598,11 @@ const (
 )
 
 // TransferLifecycleTrace is deliberately text-free and identity-minimal.
-// OperationID, ReceiveIntentDigest, and TransferJobID correlate stable authority
+// ReceiveOperationID, ReceiveIntentDigest, and TransferJobID correlate stable authority
 // and one run without exposing catalog identities, names, or plaintext paths.
 type TransferLifecycleTrace struct {
 	Stage                TransferLifecycleStage
-	OperationID          receivecontract.OperationID
+	ReceiveOperationID   receivecontract.OperationID
 	PlanKind             receivecontract.MaterializationPlanKind
 	ProtocolSessionID    protocolsession.ProtocolSessionID
 	TransferJobID        TransferJobID
@@ -613,10 +613,7 @@ type TransferLifecycleTrace struct {
 	FileSelection        FileSelectionDecision
 	FileSettlement       FileSettlementKind
 	DirectTreeSettlement DirectTreeSettlementKind
-	DiscoveredFileCount  uint64
-	DiscoveredBytes      uint64
-	CompletedFileCount   uint64
-	CompletedBytes       uint64
+	Progress             ReceiveProgressSnapshot
 	Fault                fault.Fault
 	Failed               bool
 }
@@ -649,17 +646,13 @@ func (j *TransferJob) trace(event TransferLifecycleTrace) {
 	if event.ReceiveIntentDigest.IsZero() {
 		event.ReceiveIntentDigest = j.intent.Digest()
 	}
-	if event.OperationID.IsZero() {
-		event.OperationID = j.intent.OperationID()
+	if event.ReceiveOperationID.IsZero() {
+		event.ReceiveOperationID = j.intent.OperationID()
 	}
 	if event.PlanKind == 0 {
 		event.PlanKind = j.intent.MaterializationPlan().Kind()
 	}
-	measure := j.Measure()
-	event.DiscoveredFileCount = measure.DiscoveredFiles
-	event.DiscoveredBytes = measure.DiscoveredBytes
-	event.CompletedFileCount = measure.CompletedFiles
-	event.CompletedBytes = measure.CompletedBytes
+	event.Progress = j.Progress()
 	// Discovery and the file worker intentionally overlap. Serialize the
 	// callback so a tracer can append to one audit stream without having to
 	// provide its own scheduler-specific synchronization.
