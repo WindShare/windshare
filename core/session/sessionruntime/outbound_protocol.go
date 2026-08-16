@@ -270,13 +270,15 @@ type outboundLaneAttempt func(
 ) (protocolsession.SendReceipt, error)
 
 type outboundTransaction struct {
-	runtime     *runtimeCore
-	operationID protocolsession.OperationID
-	route       *operationLaneRoute
-	lane        selectedLane
-	authority   protocolsession.OutboundOperationPermit
-	generation  protocolsession.OperationGeneration
-	lease       *protocolsession.OutboundOperationLease
+	runtime        *runtimeCore
+	operationID    protocolsession.OperationID
+	route          *operationLaneRoute
+	lane           selectedLane
+	authority      protocolsession.OutboundOperationPermit
+	generation     protocolsession.OperationGeneration
+	lease          *protocolsession.OutboundOperationLease
+	lastCompletion protocolsession.SendCompletion
+	attempted      bool
 }
 
 func beginOutboundTransaction(
@@ -340,6 +342,8 @@ func (transaction *outboundTransaction) Run(
 	aggregate := protocolsession.SendOutcomeDropped
 	for range protocolsession.DefaultMaxLogicalLanes {
 		completion, err := transaction.runLaneAttempt(ctx, attempt, permit)
+		transaction.attempted = true
+		transaction.lastCompletion = completion
 		if !completion.Replay.IsZero() {
 			permit = completion.Replay
 		}

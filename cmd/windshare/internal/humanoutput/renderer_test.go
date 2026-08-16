@@ -50,6 +50,27 @@ func TestRendererVisibilityForEveryEvent(t *testing.T) {
 	}
 }
 
+func TestVerboseProtocolFailureNamesWaitLaneAndCause(t *testing.T) {
+	var event clievent.Event
+	for _, candidate := range rendererEvents(t) {
+		if candidate.name == "protocol operation failure" {
+			event = candidate.event
+			break
+		}
+	}
+	if event == nil {
+		t.Fatal("protocol operation fixture is missing")
+	}
+	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, true)
+	if err := harness.renderer.Render(event); err != nil {
+		t.Fatal(err)
+	}
+	const want = "Protocol operation release lease failed after 30.0s on lane 2 epoch 1 (deadline)."
+	if got := harness.buffer.String(); !strings.Contains(got, want) {
+		t.Fatalf("protocol failure output = %q, want substring %q", got, want)
+	}
+}
+
 func rendererEvents(t *testing.T) []visibilityExpectation {
 	t.Helper()
 	authority, err := clievent.NewRelayAuthority(clievent.RelayWSS, "relay.example", 443)
@@ -202,6 +223,24 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
+	protocolOperationID, err := clievent.NewProtocolOperationID(mustID(t, 6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	protocolOperation, err := clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
+		Command: clievent.CommandGet, Role: clievent.ProtocolRoleReceiver,
+		Stage:           clievent.ProtocolOperationReceiverFailed,
+		ProtocolSession: sessionID, ProtocolOperation: protocolOperationID,
+		RequestKind: clievent.ProtocolMessageReleaseLease,
+		Lane:        lane, HasLane: true,
+		HasSend: true, SendSettled: true, SendAdmitted: true,
+		SendOutcome:            clievent.ProtocolSendDelivered,
+		OperationElapsedMillis: 30_000,
+		Cause:                  clievent.ProtocolOperationCauseDeadline,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	return []visibilityExpectation{
 		{"ready", clievent.NewReady(), true, false, false, false},
@@ -225,6 +264,7 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 		{"sender terminal", senderTerminal, false, false, false, false},
 		{"catalog storage", catalogStorage, false, false, false, false},
 		{"root prefetch", rootPrefetch, false, false, false, false},
+		{"protocol operation failure", protocolOperation, false, true, false, false},
 	}
 }
 

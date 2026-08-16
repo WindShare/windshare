@@ -420,6 +420,61 @@ func (visitor *encodeVisitorV1) VisitRootPrefetchObserved(event clievent.RootPre
 	return nil
 }
 
+func (visitor *encodeVisitorV1) VisitProtocolOperationObserved(event clievent.ProtocolOperationObserved) error {
+	visitor.record.Event = "protocol_operation"
+	role, err := nameOf(event.Role())
+	if err != nil {
+		return err
+	}
+	stage, err := nameOf(event.Stage())
+	if err != nil {
+		return err
+	}
+	requestKind, err := nameOf(event.RequestKind())
+	if err != nil {
+		return err
+	}
+	cause, err := nameOf(event.Cause())
+	if err != nil {
+		return err
+	}
+	visitor.record.ProtocolSessionID = new(event.ProtocolSessionID().Hex())
+	visitor.record.ProtocolOperationID = new(event.ProtocolOperationID().Hex())
+	visitor.record.ProtocolRole = new(role)
+	visitor.record.ProtocolOperationStage = new(stage)
+	visitor.record.ProtocolRequestKind = new(requestKind)
+	visitor.record.ProtocolOperationCause = new(cause)
+	if responseKind, ok := event.ResponseKind(); ok {
+		name, nameErr := nameOf(responseKind)
+		if nameErr != nil {
+			return nameErr
+		}
+		visitor.record.ProtocolResponseKind = new(name)
+	}
+	if lane, ok := event.Lane(); ok {
+		visitor.setLane(lane)
+	}
+	outcome, settled, admitted, hasSend := event.Send()
+	visitor.record.ProtocolHasSend = new(hasSend)
+	if hasSend {
+		name, nameErr := nameOf(outcome)
+		if nameErr != nil {
+			return nameErr
+		}
+		visitor.record.ProtocolSendOutcome = new(name)
+		visitor.record.ProtocolSendSettled = new(settled)
+		visitor.record.ProtocolSendAdmitted = new(admitted)
+	}
+	visitor.record.ProtocolResponseCount = decimalPointer(event.ResponseCount())
+	if deadline, ok := event.DeadlineRemainingMillis(); ok {
+		visitor.record.ProtocolDeadlineRemainingMS = decimalPointer(deadline)
+	}
+	visitor.record.ProtocolOperationElapsedMS = decimalPointer(event.OperationElapsedMillis())
+	visitor.record.ProtocolUsableLanesAtSelection = decimalPointer(uint64(event.UsableLanesAtSelection()))
+	visitor.record.ProtocolUsableLanesAtSettlement = decimalPointer(uint64(event.UsableLanesAtSettlement()))
+	return nil
+}
+
 func (visitor *encodeVisitorV1) setRelayAuthority(authority clievent.RelayAuthority) error {
 	scheme, err := nameOf(authority.Scheme())
 	if err != nil || !authority.Valid() {

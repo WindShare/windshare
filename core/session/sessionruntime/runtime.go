@@ -42,16 +42,18 @@ func (reader *lockedReader) Read(destination []byte) (int, error) {
 }
 
 type runtimeCore struct {
-	share      catalog.ShareInstance
-	role       protocolsession.Role
-	sessionID  protocolsession.ProtocolSessionID
-	initial    LaneIdentity
-	keys       protocolsession.SessionKeys
-	random     io.Reader
-	operations *protocolsession.OperationTable
-	router     *protocolsession.RoleRouter
-	lanes      *runtimeLanes
-	routes     *operationLaneRoutes
+	share          catalog.ShareInstance
+	role           protocolsession.Role
+	sessionID      protocolsession.ProtocolSessionID
+	initial        LaneIdentity
+	keys           protocolsession.SessionKeys
+	random         io.Reader
+	operations     *protocolsession.OperationTable
+	router         *protocolsession.RoleRouter
+	lanes          *runtimeLanes
+	routes         *operationLaneRoutes
+	now            func() time.Time
+	protocolTracer ProtocolOperationTracer
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -84,6 +86,7 @@ type runtimeConfig struct {
 	OperationLimits protocolsession.OperationLimits
 	RouterLimits    protocolsession.RouterLimits
 	Now             func() time.Time
+	ProtocolTracer  ProtocolOperationTracer
 }
 
 func newRuntime(config runtimeConfig) (*runtimeCore, error) {
@@ -98,6 +101,9 @@ func newRuntime(config runtimeConfig) (*runtimeCore, error) {
 	}
 	if config.RouterLimits == (protocolsession.RouterLimits{}) {
 		config.RouterLimits = protocolsession.DefaultRouterLimits
+	}
+	if config.Now == nil {
+		config.Now = time.Now
 	}
 	operations, err := protocolsession.NewOperationTableWithContinuations(
 		config.OperationLimits, config.Now, config.Continuations,
@@ -114,7 +120,8 @@ func newRuntime(config runtimeConfig) (*runtimeCore, error) {
 		share: config.Share, role: config.Role, sessionID: config.Keys.ProtocolSessionID(),
 		initial: LaneIdentity{ID: config.LaneID, Epoch: config.LaneEpoch}, keys: config.Keys,
 		random: config.Random, operations: operations, router: router,
-		routes: newOperationLaneRoutes(), ctx: ctx, cancel: cancel, done: make(chan struct{}),
+		routes: newOperationLaneRoutes(), now: config.Now, protocolTracer: config.ProtocolTracer,
+		ctx: ctx, cancel: cancel, done: make(chan struct{}),
 	}
 	runtime.lanes = newRuntimeLanes(runtime)
 	if _, err := runtime.lanes.add(runtime.initial, config.Channel, config.Authenticator, true); err != nil {
@@ -332,8 +339,30 @@ func (outbound senderOutbound) sendControl(
 	body []byte,
 ) (resultOutcome protocolsession.SendOutcome, resultErr error) {
 	final := senderResponseFinal(kind)
+	traceEnabled := outbound.runtime.protocolOperationTracingEnabled()
+	var started time.Time
+	var deadlineMillis uint64
+	var hasDeadline bool
+	requestKind := protocolsession.MessageKind(0)
+	if traceEnabled {
+		started = outbound.runtime.now()
+		deadlineMillis, hasDeadline = remainingDeadlineMillis(ctx, started)
+		if route, routeErr := outboundRoute(ctx, operationID); routeErr == nil {
+			requestKind = route.requestKind
+		}
+	}
 	transaction, err := beginOutboundTransaction(outbound.runtime, ctx, operationID)
 	if err != nil {
+		if traceEnabled && requestKind != 0 {
+			outbound.runtime.traceProtocolOperation(ProtocolOperationTrace{
+				Stage:       ProtocolOperationSenderResponseSettled,
+				OperationID: operationID, RequestKind: requestKind,
+				ResponseKind: kind, HasResponse: true,
+				DeadlineRemainingMillis: deadlineMillis, HasDeadline: hasDeadline,
+				OperationElapsedMillis: durationMillis(outbound.runtime.now().Sub(started)),
+				Cause:                  protocolOperationCause(err),
+			})
+		}
 		if final {
 			// A final response owns operation retirement even when every physical
 			// writer became non-accepting before transaction admission. Otherwise
@@ -343,6 +372,29 @@ func (outbound senderOutbound) sendControl(
 		return protocolsession.SendOutcomeDropped, err
 	}
 	defer transaction.Close()
+	if traceEnabled {
+		usableAtSelection := outbound.runtime.lanes.usableCount()
+		defer func() {
+			completion := transaction.lastCompletion
+			cause := protocolOperationCause(resultErr)
+			if cause == ProtocolOperationCauseNone && transaction.attempted &&
+				(!completion.Settled || !completion.Admitted || resultOutcome != protocolsession.SendOutcomeDelivered) {
+				cause = ProtocolOperationCauseProtocolFailure
+			}
+			outbound.runtime.traceProtocolOperation(ProtocolOperationTrace{
+				Stage:       ProtocolOperationSenderResponseSettled,
+				OperationID: operationID, RequestKind: transaction.route.requestKind,
+				ResponseKind: kind, HasResponse: true,
+				Lane: transaction.lane.identity, HasLane: transaction.lane.identity.valid(true),
+				HasSend: transaction.attempted, SendSettled: completion.Settled,
+				SendAdmitted: completion.Admitted, SendOutcome: resultOutcome,
+				DeadlineRemainingMillis: deadlineMillis, HasDeadline: hasDeadline,
+				OperationElapsedMillis: durationMillis(outbound.runtime.now().Sub(started)),
+				UsableLanesAtSelection: usableAtSelection,
+				Cause:                  cause,
+			})
+		}()
+	}
 	if final {
 		defer func() {
 			if resultErr == nil && resultOutcome == protocolsession.SendOutcomeDelivered {
