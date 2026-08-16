@@ -322,7 +322,8 @@ func classifyEvent(event clievent.Event) (progress bool, recognized bool) {
 		clievent.FilesystemOutputObserved,
 		clievent.SenderTerminalObserved,
 		clievent.CatalogStorageObserved,
-		clievent.RootPrefetchObserved:
+		clievent.RootPrefetchObserved,
+		clievent.ProtocolOperationObserved:
 		return false, true
 	case clievent.TransferProgress:
 		return true, true

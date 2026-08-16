@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -148,7 +149,11 @@ func (client *rpcClient) HandleMessage(ctx context.Context, message protocolsess
 	} else if !expected.Same(generation) {
 		return nil
 	}
-	return call.enqueue(operationResponse{message: message, generation: generation})
+	err := call.enqueue(operationResponse{message: message, generation: generation})
+	if err != nil {
+		call.recordProtocolTraceFailure(err)
+	}
+	return err
 }
 
 func (client *rpcClient) begin(
@@ -176,26 +181,33 @@ func (client *rpcClient) beginOn(
 	if err != nil {
 		return nil, err
 	}
-	call := &operationCall{
-		id: id, messages: make(chan operationResponse, operationResponseFrames), done: make(chan struct{}),
-	}
+	call := client.newCall(ctx, id, kind)
 	client.mu.Lock()
 	if client.closed {
 		client.mu.Unlock()
+		call.recordProtocolTraceFailure(ErrRuntimeClosed)
+		client.end(call)
 		return nil, ErrRuntimeClosed
 	}
 	if client.calls[id] != nil {
 		client.mu.Unlock()
+		call.recordProtocolTraceFailure(ErrOperationMissing)
+		client.end(call)
 		return nil, ErrOperationMissing
 	}
 	client.calls[id] = call
 	client.mu.Unlock()
 	selected, err := client.runtime.lanes.selectLane(lane)
 	if err != nil {
+		call.recordProtocolTraceFailure(err)
 		client.end(call)
 		return nil, newRPCRequestSendError(protocolsession.SendOutcomeDropped, false, err)
 	}
-	call.lane = selected.identity
+	var usableAtSelection uint32
+	if call.traceEnabled {
+		usableAtSelection = client.runtime.lanes.usableCount()
+	}
+	call.setProtocolTraceLane(selected.identity, usableAtSelection)
 	var receipt protocolsession.SendReceipt
 	if kind == protocolsession.MessagePeerOffer {
 		receipt, err = selected.writer.TryControlObservingAuthenticatedViolations(
@@ -206,16 +218,22 @@ func (client *rpcClient) beginOn(
 		receipt, err = selected.writer.TryControl(message)
 	}
 	if err != nil {
+		call.recordProtocolTraceSend(protocolsession.SendCompletion{
+			Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: err,
+		})
+		call.recordProtocolTraceFailure(err)
 		client.end(call)
 		return nil, newRPCRequestSendError(protocolsession.SendOutcomeDropped, false, err)
 	}
 	completion := receipt.Await(ctx)
+	call.recordProtocolTraceSend(completion)
 	outcome, err := completion.Outcome, completion.Err
 	exactAuthority := completion.Admitted && !completion.Generation.IsZero() &&
 		!completion.Operation.IsZero() && completion.Generation.Same(completion.Operation.Generation())
 	safePreadmissionDrop := !completion.Admitted && outcome == protocolsession.SendOutcomeDropped
 	if !exactAuthority && !safePreadmissionDrop {
 		authorityErr := client.runtime.failRPCOperationAuthority()
+		call.recordProtocolTraceFailure(authorityErr)
 		client.end(call)
 		return nil, newRPCRequestSendError(
 			outcome, completion.Admitted,
@@ -223,6 +241,7 @@ func (client *rpcClient) beginOn(
 		)
 	}
 	if exactAuthority && !call.setAuthority(completion.Generation, completion.Operation) {
+		call.recordProtocolTraceFailure(ErrRuntimeClosed)
 		client.end(call)
 		return nil, newRPCRequestSendError(
 			outcome, true,
@@ -233,6 +252,7 @@ func (client *rpcClient) beginOn(
 		if outcome == protocolsession.SendOutcomeUnknown && ctx.Err() == nil && client.runtime.ctx.Err() == nil {
 			if !completion.Settled || !call.setRequestReplay(message, completion.Replay) {
 				authorityErr := client.runtime.failRPCOperationAuthority()
+				call.recordProtocolTraceFailure(authorityErr)
 				client.end(call)
 				return nil, newRPCRequestSendError(
 					outcome, completion.Admitted,
@@ -248,13 +268,31 @@ func (client *rpcClient) beginOn(
 		if completion.Admitted {
 			cleanupErr = client.admitCancellation(call, contentflow.CancelReasonTimeout)
 		}
+		deliveryErr := rpcDeliveryError(
+			client.runtime, errRequestNotDelivered, errors.Join(err, cleanupErr),
+		)
+		call.recordProtocolTraceFailure(deliveryErr)
 		client.end(call)
 		return nil, newRPCRequestSendError(
 			outcome, completion.Admitted,
-			rpcDeliveryError(client.runtime, errRequestNotDelivered, errors.Join(err, cleanupErr)),
+			deliveryErr,
 		)
 	}
 	return call, nil
+}
+
+func (client *rpcClient) newCall(
+	ctx context.Context,
+	id protocolsession.OperationID,
+	kind protocolsession.MessageKind,
+) *operationCall {
+	traceEnabled := client.runtime.protocolOperationTracingEnabled()
+	if !traceEnabled {
+		return newOperationCall(id, kind, time.Time{}, 0, false, false)
+	}
+	started := client.runtime.now()
+	deadlineMillis, hasDeadline := remainingDeadlineMillis(ctx, started)
+	return newOperationCall(id, kind, started, deadlineMillis, hasDeadline, true)
 }
 
 func (runtime *runtimeCore) failRPCOperationAuthority() error {
@@ -444,6 +482,11 @@ func (client *rpcClient) end(call *operationCall) {
 		delete(client.calls, call.id)
 	}
 	client.mu.Unlock()
+	if client.runtime != nil && client.runtime.protocolOperationTracingEnabled() {
+		if event, ok := call.protocolOperationTrace(client.runtime.now()); ok {
+			client.runtime.traceProtocolOperation(event)
+		}
+	}
 	call.close()
 }
 
@@ -460,6 +503,12 @@ func (client *rpcClient) Close() {
 	clear(client.calls)
 	client.mu.Unlock()
 	for _, call := range calls {
+		call.recordProtocolTraceFailure(ErrRuntimeClosed)
+		if client.runtime != nil && client.runtime.protocolOperationTracingEnabled() {
+			if event, ok := call.protocolOperationTrace(client.runtime.now()); ok {
+				client.runtime.traceProtocolOperation(event)
+			}
+		}
 		call.close()
 	}
 }
@@ -505,6 +554,7 @@ func (client *rpcClient) awaitCall(
 		done := call.doneChannel()
 		select {
 		case <-ctx.Done():
+			call.recordProtocolTraceFailure(ctx.Err())
 			if !cancelOnContext {
 				return protocolsession.Message{}, ctx.Err()
 			}
@@ -516,8 +566,10 @@ func (client *rpcClient) awaitCall(
 				client.admitCancellation(call, contentflow.CancelReasonTimeout),
 			)
 		case <-client.runtime.Done():
+			call.recordProtocolTraceFailure(ErrRuntimeClosed)
 			return protocolsession.Message{}, errors.Join(ErrRuntimeClosed, client.runtime.Err())
 		case <-done:
+			call.recordProtocolTraceFailure(ErrOperationMissing)
 			return protocolsession.Message{}, ErrOperationMissing
 		case response := <-call.messages:
 			expected, _ := call.operationAuthority()

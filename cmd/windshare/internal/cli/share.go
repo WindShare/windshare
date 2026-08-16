@@ -353,6 +353,7 @@ func (a *App) newShareRuntimeFactory(
 		TerminalConnectivity: lifecycle,
 		PeerHandlers:         peers,
 		TerminalObserver:     observations,
+		ProtocolTracer:       observations.protocolTracer(),
 	})
 }
 

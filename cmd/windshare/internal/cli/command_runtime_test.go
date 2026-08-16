@@ -47,6 +47,11 @@ func TestCommandRuntimeFansOutWithSharedClock(t *testing.T) {
 	if runtime.Clock() != clock {
 		t.Fatal("runtime did not retain the command clock")
 	}
+	if !runtime.protocolDiagnosticsEnabled() ||
+		(getObservation{runtime: runtime}).protocolTracer() == nil ||
+		newShareObservations(runtime).protocolTracer() == nil {
+		t.Fatal("verbose/trace runtime did not enable protocol diagnostics")
+	}
 	if !runtime.Publish(clievent.NewReady()) {
 		t.Fatal("ready event was not retained")
 	}
@@ -61,6 +66,21 @@ func TestCommandRuntimeFansOutWithSharedClock(t *testing.T) {
 	defer clock.mu.Unlock()
 	if len(clock.tickerIntervals) != 1 || clock.tickerIntervals[0] != time.Second {
 		t.Fatalf("ticker intervals=%v", clock.tickerIntervals)
+	}
+}
+
+func TestCommandRuntimeLeavesProtocolHotPathUnobservedByDefault(t *testing.T) {
+	runtime, err := (&App{Stderr: bytes.NewBuffer(nil)}).newCommandRuntime(
+		clievent.CommandGet, observationOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if runtime.protocolDiagnosticsEnabled() ||
+		(getObservation{runtime: runtime}).protocolTracer() != nil ||
+		newShareObservations(runtime).protocolTracer() != nil {
+		t.Fatal("default runtime enabled protocol diagnostics")
 	}
 }
 
