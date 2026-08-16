@@ -26,6 +26,7 @@ const (
 	v2CriticalPayload               = "critical sender-relay-receiver\n"
 
 	v2SenderRelayRecoveryMilestone  = "sender_relay_recovery"
+	v2SenderDirectLaneMilestone     = "sender_direct_lane"
 	v2SenderStopMilestone           = "sender_stop"
 	v2ReceiverDirectLaneMilestone   = "receiver_direct_lane"
 	v2ReceiverRelayContentMilestone = "receiver_relay_content"

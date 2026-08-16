@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
 
+import { ZIP_OUTPUT_METADATA_BUFFER_BYTES } from '../../src/output/streams/zip-output-sink'
+
 const FULL_PORTABLE_STRESS_BYTES = 64 * 1024 * 1024
 const CROSS_ENGINE_PORTABLE_STRESS_BYTES = 4 * 1024 * 1024
 
@@ -23,11 +25,19 @@ test('streams one million ZIP members through the production writer and durable 
     closed: true,
     afterClose: [0, 0],
   })
-  expect(result.beforeClose[0]).toBeGreaterThan(1_000)
+  const durableChunkCount = result.beforeClose[0]
+  if (durableChunkCount === undefined) throw new Error('Durable ZIP chunk count is missing')
+  expect(durableChunkCount).toBeGreaterThan(1_000)
   expect(result.beforeClose[1]).toBe(1)
   expect(result.outputBytes).toBeGreaterThan(0)
-  expect(result.outputWrites).toBeGreaterThan(result.memberCount * 2)
-  expect(result.maximumWriteBytes).toBeLessThanOrEqual(256 * 1024)
+  const maximumEntryWrites = Math.ceil(
+    result.entryStreamBytes / ZIP_OUTPUT_METADATA_BUFFER_BYTES,
+  )
+  expect(result.outputWritesBeforeClose).toBeLessThanOrEqual(maximumEntryWrites)
+  expect(result.outputWrites).toBeLessThanOrEqual(
+    maximumEntryWrites + durableChunkCount + 2,
+  )
+  expect(result.maximumWriteBytes).toBeLessThanOrEqual(ZIP_OUTPUT_METADATA_BUFFER_BYTES)
 })
 
 test('assembles the exact portable ceiling and rejects the first over-limit admission', async ({
