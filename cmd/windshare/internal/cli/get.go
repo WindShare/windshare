@@ -88,9 +88,12 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 			session.runtime.Close()
 		}
 	})
-	execution.Close()
 	admissionErr := execution.admission.Err()
 	runtimeErr, connectionErr := receiverTerminationErrors(session.runtime, session.connection)
+	// Settlement diagnostics must describe the state that ended the transfer.
+	// Closing optional paths can discover cleanup residue, but that later residue
+	// cannot retroactively turn a caller interruption into a network failure.
+	execution.Close()
 	// A terminal result is meaningful only after every producer has lost the
 	// ability to append a later fact to this run's ordered publication stream.
 	closeSession()

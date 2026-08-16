@@ -26,7 +26,11 @@ func formatSharingSubject(subject clievent.SharingSubject, symbols Symbols) term
 }
 
 func formatContentPath(path clievent.ContentPath, symbols Symbols) terminalcanvas.Line {
-	return statusLine(symbols.Path, "Content path: "+titleName(path), terminalcanvas.StyleAccent)
+	name := titleName(path)
+	if path == clievent.ContentPathDirectAndRelay {
+		name = "Direct + Relay"
+	}
+	return statusLine(symbols.Path, "Content path: "+name, terminalcanvas.StyleAccent)
 }
 
 func formatFallback(event clievent.Fallback, symbols Symbols) terminalcanvas.Line {

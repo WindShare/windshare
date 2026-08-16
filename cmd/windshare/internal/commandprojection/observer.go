@@ -183,6 +183,9 @@ func ProjectSenderAttempt(
 }
 
 func ProjectTransferLifecycle(value transfer.TransferLifecycleTrace) (clievent.TransferLifecycleObserved, error) {
+	if value.Interruption != 0 && !value.Interruption.Valid() {
+		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
+	}
 	receiveID, err := ReceiveOperationID(value.ReceiveOperationID)
 	if err != nil {
 		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
@@ -222,9 +225,11 @@ func ProjectTransferLifecycle(value transfer.TransferLifecycleTrace) (clievent.T
 	}
 	if value.Failed {
 		if spec.Failure, ok = ProjectFault(value.Fault); !ok {
-			spec.Failure = mustFailure(clievent.FailureUnexpected)
+			if spec.Failure, ok = ProjectTransferInterruption(value.Interruption); !ok {
+				spec.Failure = mustFailure(clievent.FailureUnexpected)
+			}
 		}
-	} else if value.Fault.Valid() {
+	} else if value.Fault.Valid() || value.Interruption != 0 {
 		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
 	}
 	event, err := clievent.NewTransferLifecycleObserved(spec)

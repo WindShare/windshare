@@ -62,6 +62,41 @@ func (attempt *cliReceiverPeerAttempt) finishOutcome(outcome receiverPeerMonitor
 	})
 }
 
+func TestReceiverContentPathsAddsRelayWithoutInventingPeerTimeout(t *testing.T) {
+	runtime, stderr := newGetReportingRuntime(t, true, false)
+	paths := newReceiverContentPaths(getObservation{runtime: runtime})
+
+	paths.observePeer(receiverPeerReady)
+	(&App{}).observeRelayContentAdmission(receiverAdmissionTriggerDeadline, paths)
+	runtime.Close()
+
+	diagnostic := stderr.String()
+	direct := strings.Index(diagnostic, "Content path: Direct")
+	combined := strings.Index(diagnostic, "Content path: Direct + Relay")
+	if direct < 0 || combined <= direct {
+		t.Fatalf("content path transitions=%q", diagnostic)
+	}
+	if strings.Contains(diagnostic, "Warning:") || strings.Contains(diagnostic, "unavailable") {
+		t.Fatalf("relay policy deadline was rendered as a peer failure: %q", diagnostic)
+	}
+}
+
+func TestReceiverContentPathsReportsRealDirectDetachAfterRelayAdmission(t *testing.T) {
+	runtime, stderr := newGetReportingRuntime(t, true, false)
+	paths := newReceiverContentPaths(getObservation{runtime: runtime})
+
+	paths.observePeer(receiverPeerReady)
+	paths.relayAdmitted(receiverAdmissionTriggerDeadline)
+	paths.observePeer(receiverPeerDetached)
+	runtime.Close()
+
+	diagnostic := stderr.String()
+	if !strings.Contains(diagnostic, "Direct path unavailable; using Relay.") ||
+		!strings.Contains(diagnostic, "Content path: Relay") {
+		t.Fatalf("direct detach transitions=%q", diagnostic)
+	}
+}
+
 type cliReceiverRuntimeCloser struct{ calls atomic.Int32 }
 
 func (runtime *cliReceiverRuntimeCloser) Close() { runtime.calls.Add(1) }
@@ -108,7 +143,7 @@ func TestReceiverPeerTerminationTraceIsDrainedSynchronously(t *testing.T) {
 		channelDrainFailed:   true,
 	}
 
-	(&App{}).awaitReceiverTerminationTrace(traces, getObservation{runtime: runtime})
+	(&App{}).awaitReceiverTerminationTrace(traces, getObservation{runtime: runtime}, false)
 	runtime.Close()
 
 	diagnostic := stderr.String()
@@ -257,6 +292,39 @@ func TestReceiverPeerMonitorKeepsCleanLocalCloseSilent(t *testing.T) {
 	}
 	if runtime.calls.Load() != 0 {
 		t.Fatal("clean local Close ended the relay session")
+	}
+}
+
+func TestReceiverPeerMonitorSuppressesLocalCloseCleanupResidue(t *testing.T) {
+	commandRuntime, stderr := newGetReportingRuntime(t, false, false)
+	attempt := newCLIReceiverPeerAttempt()
+	attempt.finishOutcome(receiverPeerMonitorOutcome{
+		disposition: receiverPeerLocalStop, retainedCause: errors.New("peer cleanup residue"),
+	})
+	runtime := &cliReceiverRuntimeCloser{}
+	signals := make(chan receiverPeerSignal, 1)
+
+	locallyCanceled := (&App{}).monitorReceiverPeer(
+		attempt, runtime, protocolsession.ProtocolSessionID{1},
+		getObservation{runtime: commandRuntime}, func(signal receiverPeerSignal) { signals <- signal },
+	)
+	traces := make(chan receiverPeerTerminationTrace, 1)
+	traces <- receiverPeerTerminationTrace{
+		retainedCauseClasses: []v2peer.ReceiverCauseClass{v2peer.ReceiverCauseChannelAdmission},
+	}
+	(&App{}).awaitReceiverTerminationTrace(
+		traces, getObservation{runtime: commandRuntime}, locallyCanceled,
+	)
+	commandRuntime.Close()
+
+	if !locallyCanceled || runtime.calls.Load() != 0 || stderr.Len() != 0 {
+		t.Fatalf("local cleanup: canceled=%t close_calls=%d diagnostic=%q",
+			locallyCanceled, runtime.calls.Load(), stderr.String())
+	}
+	select {
+	case signal := <-signals:
+		t.Fatalf("local cleanup emitted peer signal=%v", signal)
+	default:
 	}
 }
 
