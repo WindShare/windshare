@@ -576,7 +576,9 @@ func (r *jobRun) admitIncrementalDirectory(ctx context.Context, request Director
 func (r *jobRun) traceDirectoryAdmission(_ DirectoryMaterializationRequest, failure error) {
 	r.job.trace(TransferLifecycleTrace{
 		Stage: TransferDirectoryAdmitted, OutputSessionID: r.output.SessionID(),
-		Fault: closedFault(failure), Failed: failure != nil,
+		Fault:        closedFault(failure),
+		Interruption: closedInterruption(failure),
+		Failed:       failure != nil,
 	})
 }
 
@@ -601,7 +603,9 @@ func (r *jobRun) finalizeIncrementalDirectory(ctx context.Context, admission Dir
 	}
 	r.job.trace(TransferLifecycleTrace{
 		Stage: TransferDirectoryFinalized, OutputSessionID: r.output.SessionID(),
-		Fault: traceFault, Failed: err != nil || settlement.Kind() == DirectoryIsolatedFailure,
+		Fault:        traceFault,
+		Interruption: closedInterruption(err),
+		Failed:       err != nil || settlement.Kind() == DirectoryIsolatedFailure,
 	})
 	if err != nil {
 		// Only a terminal settlement may isolate metadata failure. An error means

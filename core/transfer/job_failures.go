@@ -512,6 +512,28 @@ func closedLifecycleFault(failure *lifecycleFailure) fault.Fault {
 	return failure.policy.value
 }
 
+func closedLifecycleInterruption(failure *lifecycleFailure) TransferInterruption {
+	if failure == nil || !failure.policy.canceled {
+		return 0
+	}
+	switch failure.cancellation {
+	case cancellationCanceled:
+		return TransferInterruptionCanceled
+	case cancellationDeadline:
+		return TransferInterruptionDeadline
+	default:
+		return 0
+	}
+}
+
+func closedInterruption(err error) TransferInterruption {
+	failure, ok := admitLifecycleFailure(err)
+	if !ok {
+		return 0
+	}
+	return closedLifecycleInterruption(failure)
+}
+
 func lifecycleDiagnostic(err error) error {
 	failure, ok := admitLifecycleFailure(err)
 	if !ok {

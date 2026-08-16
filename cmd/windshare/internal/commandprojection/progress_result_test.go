@@ -149,6 +149,41 @@ func TestGetResultProjectionFreezesStatusAndExitPrecedence(t *testing.T) {
 	}
 }
 
+func TestGetResultProjectsClosedCallerCancellationBeforeCleanupDiagnostics(t *testing.T) {
+	result := successfulJobResult(t)
+	result.Outcome = transfer.DirectTreeOutcomePaused
+	result.TerminationCause = opaqueCanaryError{"private cancellation carrier"}
+	result.TerminationInterruption = transfer.TransferInterruptionCanceled
+	projected, err := ProjectGetResult(GetResultInput{
+		Result: result, RuntimeError: opaqueCanaryError{"late peer cleanup residue"},
+		ContextError: context.Canceled, Destination: clievent.NewDisplayPath("C:/safe"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure, present := projected.Failure()
+	if !present || failure.Code() != clievent.FailureCanceled || projected.ExitCode() != clievent.ExitFailure {
+		t.Fatalf("canceled result=%+v failure=%+v present=%t", projected, failure, present)
+	}
+}
+
+func TestGetResultProjectsClosedSettlementDeadline(t *testing.T) {
+	result := successfulJobResult(t)
+	result.Outcome = transfer.DirectTreeOutcomePaused
+	result.SettlementFailure = opaqueCanaryError{"private settlement carrier"}
+	result.SettlementInterruption = transfer.TransferInterruptionDeadline
+	projected, err := ProjectGetResult(GetResultInput{
+		Result: result, Destination: clievent.NewDisplayPath("C:/safe"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure, present := projected.Failure()
+	if !present || failure.Code() != clievent.FailureDeadline || projected.ExitCode() != clievent.ExitFailure {
+		t.Fatalf("deadline result=%+v failure=%+v present=%t", projected, failure, present)
+	}
+}
+
 func TestGetResultUsesSettlementOwnedCountsAndDropsDiagnosticPathsAndCauses(t *testing.T) {
 	const catalogPath = "catalog/path/SECRET-FILENAME"
 	const providerSecret = "wss://relay/private?token=RESULT-TOKEN"

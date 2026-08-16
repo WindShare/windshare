@@ -543,6 +543,19 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 			t.Fatalf("result=%+v transaction=%+v", result, transaction)
 		}
 	})
+
+	t.Run("complete deadline remains typed across the command boundary", func(t *testing.T) {
+		share := transferID[catalog.ShareInstance](94)
+		output := newJobOutput(share)
+		output.finishErr = context.DeadlineExceeded
+		job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
+
+		result := job.Run(context.Background())
+		if result.Outcome != DirectTreeOutcomePaused || result.TerminationInterruption != 0 ||
+			result.SettlementInterruption != TransferInterruptionDeadline {
+			t.Fatalf("deadline result=%+v", result)
+		}
+	})
 }
 
 func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
