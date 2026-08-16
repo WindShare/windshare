@@ -51,7 +51,7 @@ var (
 
 func v2TraceFieldSet(value string) map[string]struct{} {
 	fields := make(map[string]struct{})
-	for _, field := range strings.Fields(value) {
+	for field := range strings.FieldsSeq(value) {
 		fields[field] = struct{}{}
 	}
 	return fields

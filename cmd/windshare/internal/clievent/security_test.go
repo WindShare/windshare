@@ -45,8 +45,7 @@ func assertSafePayloadType(t *testing.T, value reflect.Type, seen map[reflect.Ty
 	case reflect.Array:
 		assertSafePayloadType(t, value.Elem(), seen)
 	case reflect.Struct:
-		for index := range value.NumField() {
-			field := value.Field(index)
+		for field := range value.Fields() {
 			if field.Type.Kind() == reflect.String {
 				owner := value.Name()
 				if owner != "DisplayName" && owner != "DisplayPath" && owner != "RelayAuthority" {

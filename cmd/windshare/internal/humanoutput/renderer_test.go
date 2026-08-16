@@ -275,7 +275,7 @@ func TestRedirectedMilestonesResetForANewOperation(t *testing.T) {
 func TestRendererRateUsesInjectedClockWithoutWaiting(t *testing.T) {
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{Interactive: true}, false)
 	receive, job := mustReceiveID(t), mustJobID(t)
-	for index := uint64(0); index < 3; index++ {
+	for index := range uint64(3) {
 		snapshot := mustSnapshot(t, clievent.ProgressSpec{
 			DiscoveredFiles: 1, DiscoveredBytes: 10_000_000,
 			VerifiedBytes: index * 1_000_000, NewlyVerifiedBytes: index * 1_000_000,
@@ -400,13 +400,11 @@ func TestRendererSerializesConcurrentEvents(t *testing.T) {
 	const producers = 20
 	var group sync.WaitGroup
 	for range producers {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			if err := harness.renderer.Render(warning); err != nil {
 				t.Errorf("Render() error = %v", err)
 			}
-		}()
+		})
 	}
 	group.Wait()
 	if got := strings.Count(harness.buffer.String(), "\n"); got != producers {

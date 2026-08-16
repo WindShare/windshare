@@ -202,9 +202,7 @@ func zeroBytePercentage(
 
 func formatProgressBar(percent uint64, unicode bool) string {
 	filled := int(percent * progressBarSegments / 100)
-	if filled > progressBarSegments {
-		filled = progressBarSegments
-	}
+	filled = min(filled, progressBarSegments)
 	fill, empty := "#", "-"
 	if unicode {
 		fill, empty = "█", "░"

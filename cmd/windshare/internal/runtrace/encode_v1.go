@@ -49,7 +49,7 @@ func (visitor *encodeVisitorV1) VisitSharingSubjectSelected(event clievent.Shari
 	if err != nil {
 		return err
 	}
-	visitor.record.SubjectKind = stringPointer(kind)
+	visitor.record.SubjectKind = new(kind)
 	visitor.record.SelectedItems = decimalPointer(subject.SelectedItems())
 	if subject.Kind() == clievent.SharingFile {
 		visitor.record.FileBytes = decimalPointer(subject.FileBytes())
@@ -71,8 +71,8 @@ func (visitor *encodeVisitorV1) VisitRelayRecovering(event clievent.RelayRecover
 	if err != nil {
 		return err
 	}
-	visitor.record.Attempt = uint32Pointer(event.Attempt())
-	visitor.record.State = stringPointer(state)
+	visitor.record.Attempt = new(event.Attempt())
+	visitor.record.State = new(state)
 	if failure, ok := event.Failure(); ok {
 		return visitor.setFailure(failure)
 	}
@@ -85,7 +85,7 @@ func (visitor *encodeVisitorV1) VisitContentPathSelected(event clievent.ContentP
 	if err != nil {
 		return err
 	}
-	visitor.record.ContentPath = stringPointer(path)
+	visitor.record.ContentPath = new(path)
 	return nil
 }
 
@@ -99,15 +99,15 @@ func (visitor *encodeVisitorV1) VisitFallback(event clievent.Fallback) error {
 	if err != nil {
 		return err
 	}
-	visitor.record.FromTransport = stringPointer(from)
-	visitor.record.ToTransport = stringPointer(to)
+	visitor.record.FromTransport = new(from)
+	visitor.record.ToTransport = new(to)
 	return visitor.setFailure(event.Failure())
 }
 
 func (visitor *encodeVisitorV1) VisitTransferProgress(event clievent.TransferProgress) error {
 	visitor.record.Event = "transfer_progress"
-	visitor.record.ReceiveOperationID = stringPointer(event.ReceiveOperationID().Hex())
-	visitor.record.TransferJobID = stringPointer(event.TransferJobID().Hex())
+	visitor.record.ReceiveOperationID = new(event.ReceiveOperationID().Hex())
+	visitor.record.TransferJobID = new(event.TransferJobID().Hex())
 	return visitor.setProgress(event.Snapshot())
 }
 
@@ -122,7 +122,7 @@ func (visitor *encodeVisitorV1) VisitCommandFailed(event clievent.CommandFailed)
 	if !ok {
 		return errInvalidSchemaEvent
 	}
-	visitor.record.ExitCode = intPointer(exitCode)
+	visitor.record.ExitCode = new(exitCode)
 	return visitor.setFailure(event.Failure())
 }
 
@@ -141,16 +141,16 @@ func (visitor *encodeVisitorV1) VisitTransferSettled(event clievent.TransferSett
 	if !ok {
 		return errInvalidSchemaEvent
 	}
-	visitor.record.ResultStatus = stringPointer(status)
-	visitor.record.ExitCode = intPointer(exitCode)
-	visitor.record.Drift = stringPointer(drift)
-	visitor.record.ResultElapsedMS = int64Pointer(result.Elapsed().Milliseconds())
-	visitor.record.DestinationAdjusted = boolPointer(result.DestinationAdjusted())
+	visitor.record.ResultStatus = new(status)
+	visitor.record.ExitCode = new(exitCode)
+	visitor.record.Drift = new(drift)
+	visitor.record.ResultElapsedMS = new(result.Elapsed().Milliseconds())
+	visitor.record.DestinationAdjusted = new(result.DestinationAdjusted())
 	visitor.setOutcomes(result.Files())
 	visitor.record.DirectoryFailures = decimalPointer(result.DirectoryFailures())
 	visitor.record.OmittedDiagnostics = decimalPointer(result.OmittedDiagnostics())
 	visitor.record.PublishedBytes = decimalPointer(result.PublishedBytes())
-	visitor.record.CountersExact = boolPointer(result.CountersExact())
+	visitor.record.CountersExact = new(result.CountersExact())
 	if failure, ok := result.Failure(); ok {
 		return visitor.setFailure(failure)
 	}
@@ -164,9 +164,9 @@ func (visitor *encodeVisitorV1) VisitSharingStopped(event clievent.SharingStoppe
 	if !ok {
 		return errInvalidSchemaEvent
 	}
-	visitor.record.ExitCode = intPointer(exitCode)
-	visitor.record.ResultElapsedMS = int64Pointer(result.Elapsed().Milliseconds())
-	visitor.record.StoppedCleanly = boolPointer(result.StoppedCleanly())
+	visitor.record.ExitCode = new(exitCode)
+	visitor.record.ResultElapsedMS = new(result.Elapsed().Milliseconds())
+	visitor.record.StoppedCleanly = new(result.StoppedCleanly())
 	if failure, ok := result.Failure(); ok {
 		return visitor.setFailure(failure)
 	}
@@ -179,7 +179,7 @@ func (visitor *encodeVisitorV1) VisitTraceIncomplete(event clievent.TraceIncompl
 	if err != nil {
 		return err
 	}
-	visitor.record.TraceIncompleteCause = stringPointer(cause)
+	visitor.record.TraceIncompleteCause = new(cause)
 	visitor.record.LifecycleDropped = decimalPointer(event.LifecycleDrops())
 	visitor.record.ProgressDropped = decimalPointer(event.ProgressDrops())
 	return nil
@@ -191,8 +191,8 @@ func (visitor *encodeVisitorV1) VisitLaneAdopted(event clievent.LaneAdopted) err
 	if err != nil {
 		return err
 	}
-	visitor.record.ProtocolSessionID = stringPointer(event.ProtocolSessionID().Hex())
-	visitor.record.Transport = stringPointer(transport)
+	visitor.record.ProtocolSessionID = new(event.ProtocolSessionID().Hex())
+	visitor.record.Transport = new(transport)
 	visitor.setLane(event.Lane())
 	return nil
 }
@@ -217,17 +217,17 @@ func (visitor *encodeVisitorV1) VisitRelayLifecycleObserved(event clievent.Relay
 	}
 	visitor.record.RelayLinkID = decimalPointer(event.LinkID())
 	visitor.record.RelaySendOperationID = decimalPointer(event.SendOperationID())
-	visitor.record.Stage = stringPointer(stage)
-	visitor.record.Terminal = boolPointer(event.Terminal())
-	visitor.record.RetirementSource = stringPointer(retirement)
-	visitor.record.Cause = stringPointer(cause)
-	visitor.record.DrainCause = stringPointer(drain)
+	visitor.record.Stage = new(stage)
+	visitor.record.Terminal = new(event.Terminal())
+	visitor.record.RetirementSource = new(retirement)
+	visitor.record.Cause = new(cause)
+	visitor.record.DrainCause = new(drain)
 	if disposition, ok := event.Disposition(); ok {
 		name, err := nameOf(disposition)
 		if err != nil {
 			return err
 		}
-		visitor.record.Disposition = stringPointer(name)
+		visitor.record.Disposition = new(name)
 	}
 	return nil
 }
@@ -256,17 +256,17 @@ func (visitor *encodeVisitorV1) VisitWebRTCLifecycleObserved(event clievent.WebR
 	}
 	visitor.record.WebRTCChannelID = decimalPointer(event.ChannelID())
 	visitor.record.WebRTCSendOperationID = decimalPointer(event.SendOperationID())
-	visitor.record.Operation = stringPointer(operation)
-	visitor.record.Transition = stringPointer(transition)
-	visitor.record.State = stringPointer(state)
-	visitor.record.TerminalState = stringPointer(terminal)
-	visitor.record.Cause = stringPointer(cause)
+	visitor.record.Operation = new(operation)
+	visitor.record.Transition = new(transition)
+	visitor.record.State = new(state)
+	visitor.record.TerminalState = new(terminal)
+	visitor.record.Cause = new(cause)
 	if disposition, ok := event.Disposition(); ok {
 		name, err := nameOf(disposition)
 		if err != nil {
 			return err
 		}
-		visitor.record.Disposition = stringPointer(name)
+		visitor.record.Disposition = new(name)
 	}
 	if event.Dropped() != 0 {
 		visitor.record.Dropped = decimalPointer(event.Dropped())
@@ -280,15 +280,15 @@ func (visitor *encodeVisitorV1) VisitPeerAttemptObserved(event clievent.PeerAtte
 	if err != nil {
 		return err
 	}
-	visitor.record.ProtocolSessionID = stringPointer(event.ProtocolSessionID().Hex())
-	visitor.record.PeerPathID = stringPointer(event.PeerPathID().Hex())
-	visitor.record.PeerAttemptID = stringPointer(event.PeerAttemptID().Hex())
+	visitor.record.ProtocolSessionID = new(event.ProtocolSessionID().Hex())
+	visitor.record.PeerPathID = new(event.PeerPathID().Hex())
+	visitor.record.PeerAttemptID = new(event.PeerAttemptID().Hex())
 	visitor.record.AttemptSequence = decimalPointer(event.Sequence())
 	visitor.record.AttemptElapsedMS = decimalPointer(event.ElapsedMillis())
-	visitor.record.Stage = stringPointer(stage)
+	visitor.record.Stage = new(stage)
 	if candidates, ok := event.Candidates(); ok {
-		visitor.record.CandidatesLocalEmitted = uint32Pointer(candidates.LocalEmitted)
-		visitor.record.CandidatesRemoteAccepted = uint32Pointer(candidates.RemoteAccepted)
+		visitor.record.CandidatesLocalEmitted = new(candidates.LocalEmitted)
+		visitor.record.CandidatesRemoteAccepted = new(candidates.RemoteAccepted)
 	}
 	if lane, ok := event.Lane(); ok {
 		visitor.setLane(lane)
@@ -298,7 +298,7 @@ func (visitor *encodeVisitorV1) VisitPeerAttemptObserved(event clievent.PeerAtte
 		if err != nil {
 			return err
 		}
-		visitor.record.FailureScope = stringPointer(scopeName)
+		visitor.record.FailureScope = new(scopeName)
 		return visitor.setFailure(failure)
 	}
 	return nil
@@ -322,13 +322,13 @@ func (visitor *encodeVisitorV1) VisitTransferLifecycleObserved(event clievent.Tr
 	if err != nil {
 		return err
 	}
-	visitor.record.ReceiveOperationID = stringPointer(event.ReceiveOperationID().Hex())
-	visitor.record.ProtocolSessionID = stringPointer(event.ProtocolSessionID().Hex())
-	visitor.record.TransferJobID = stringPointer(event.TransferJobID().Hex())
-	visitor.record.Stage = stringPointer(stage)
-	visitor.record.FileSelection = stringPointer(selection)
-	visitor.record.FileSettlement = stringPointer(fileSettlement)
-	visitor.record.TreeSettlement = stringPointer(treeSettlement)
+	visitor.record.ReceiveOperationID = new(event.ReceiveOperationID().Hex())
+	visitor.record.ProtocolSessionID = new(event.ProtocolSessionID().Hex())
+	visitor.record.TransferJobID = new(event.TransferJobID().Hex())
+	visitor.record.Stage = new(stage)
+	visitor.record.FileSelection = new(selection)
+	visitor.record.FileSettlement = new(fileSettlement)
+	visitor.record.TreeSettlement = new(treeSettlement)
 	if err := visitor.setProgress(event.Progress()); err != nil {
 		return err
 	}
@@ -344,9 +344,9 @@ func (visitor *encodeVisitorV1) VisitFilesystemOutputObserved(event clievent.Fil
 	if err != nil {
 		return err
 	}
-	visitor.record.Operation = stringPointer(operation)
+	visitor.record.Operation = new(operation)
 	if receiveOperation, ok := event.ReceiveOperationID(); ok {
-		visitor.record.ReceiveOperationID = stringPointer(receiveOperation.Hex())
+		visitor.record.ReceiveOperationID = new(receiveOperation.Hex())
 	}
 	counters := event.Counters()
 	visitor.record.NodeClaims = decimalPointer(counters.NodeClaims)
@@ -376,12 +376,12 @@ func (visitor *encodeVisitorV1) VisitSenderTerminalObserved(event clievent.Sende
 	if err != nil {
 		return err
 	}
-	visitor.record.ProtocolSessionID = stringPointer(event.ProtocolSessionID().Hex())
+	visitor.record.ProtocolSessionID = new(event.ProtocolSessionID().Hex())
 	visitor.setLane(event.Lane())
-	visitor.record.Settled = boolPointer(event.Settled())
-	visitor.record.TransportDisposition = stringPointer(transport)
-	visitor.record.Outcome = stringPointer(outcome)
-	visitor.record.Decision = stringPointer(decision)
+	visitor.record.Settled = new(event.Settled())
+	visitor.record.TransportDisposition = new(transport)
+	visitor.record.Outcome = new(outcome)
+	visitor.record.Decision = new(decision)
 	return nil
 }
 
@@ -395,8 +395,8 @@ func (visitor *encodeVisitorV1) VisitCatalogStorageObserved(event clievent.Catal
 	if err != nil {
 		return err
 	}
-	visitor.record.Operation = stringPointer(operation)
-	visitor.record.Cause = stringPointer(cause)
+	visitor.record.Operation = new(operation)
+	visitor.record.Cause = new(cause)
 	usage := event.Usage()
 	visitor.record.ActiveScans = decimalPointer(usage.ActiveScans)
 	visitor.record.ScanWork = decimalPointer(usage.ScanWork)
@@ -413,7 +413,7 @@ func (visitor *encodeVisitorV1) VisitRootPrefetchObserved(event clievent.RootPre
 	if err != nil {
 		return err
 	}
-	visitor.record.Decision = stringPointer(decision)
+	visitor.record.Decision = new(decision)
 	visitor.record.RootPrefetchAttempt = decimalPointer(event.Attempt())
 	visitor.record.RootPrefetchEntryCount = decimalPointer(event.EntryCount())
 	visitor.record.RootPrefetchOmittedCount = decimalPointer(event.OmittedCount())
@@ -425,15 +425,15 @@ func (visitor *encodeVisitorV1) setRelayAuthority(authority clievent.RelayAuthor
 	if err != nil || !authority.Valid() {
 		return errInvalidSchemaEvent
 	}
-	visitor.record.RelayScheme = stringPointer(scheme)
-	visitor.record.RelayHost = stringPointer(authority.Host())
-	visitor.record.RelayPort = uint16Pointer(authority.Port())
+	visitor.record.RelayScheme = new(scheme)
+	visitor.record.RelayHost = new(authority.Host())
+	visitor.record.RelayPort = new(authority.Port())
 	return nil
 }
 
 func (visitor *encodeVisitorV1) setLane(lane clievent.LaneIdentity) {
-	visitor.record.LaneID = uint32Pointer(lane.ID())
-	visitor.record.LaneEpoch = uint32Pointer(lane.Epoch())
+	visitor.record.LaneID = new(lane.ID())
+	visitor.record.LaneEpoch = new(lane.Epoch())
 }
 
 func (visitor *encodeVisitorV1) setFailure(failure clievent.Failure) error {
@@ -449,8 +449,8 @@ func (visitor *encodeVisitorV1) setFailure(failure clievent.Failure) error {
 	if err != nil {
 		return err
 	}
-	visitor.record.FailureCode = stringPointer(code)
-	visitor.record.MessageKey = stringPointer(message)
+	visitor.record.FailureCode = new(code)
+	visitor.record.MessageKey = new(message)
 	if fault, ok := failure.Fault(); ok {
 		domain, err := nameOf(fault.Domain())
 		if err != nil {
@@ -460,9 +460,9 @@ func (visitor *encodeVisitorV1) setFailure(failure clievent.Failure) error {
 		if err != nil {
 			return err
 		}
-		visitor.record.FaultDomain = stringPointer(domain)
-		visitor.record.FaultScope = stringPointer(scope)
-		visitor.record.FaultCode = uint16Pointer(fault.Code())
+		visitor.record.FaultDomain = new(domain)
+		visitor.record.FaultScope = new(scope)
+		visitor.record.FaultCode = new(fault.Code())
 	}
 	if retryAfter, ok := failure.RetryAfterMillis(); ok {
 		visitor.record.RetryAfterMS = decimalPointer(retryAfter)
@@ -475,8 +475,8 @@ func (visitor *encodeVisitorV1) setProgress(snapshot clievent.ProgressSnapshot) 
 	if err != nil || !snapshot.Valid() {
 		return errInvalidSchemaEvent
 	}
-	visitor.record.Discovery = stringPointer(discovery)
-	visitor.record.CountersExact = boolPointer(snapshot.CountersExact())
+	visitor.record.Discovery = new(discovery)
+	visitor.record.CountersExact = new(snapshot.CountersExact())
 	visitor.record.DiscoveredFiles = decimalPointer(snapshot.DiscoveredFiles())
 	visitor.record.DiscoveredBytes = decimalPointer(snapshot.DiscoveredBytes())
 	visitor.record.PublishedFiles = decimalPointer(snapshot.PublishedFiles())

@@ -144,11 +144,10 @@ func TestEncodeV1RootPrefetchUsesOnlyClosedTraceFields(t *testing.T) {
 }
 
 func TestSchemaV1HasNoOpenPayloadOrUnsafeNumericDomainCounter(t *testing.T) {
-	schema := reflect.TypeOf(recordV1{})
+	schema := reflect.TypeFor[recordV1]()
 	seenTags := make(map[string]struct{}, schema.NumField())
-	for index := range schema.NumField() {
-		field := schema.Field(index)
-		tag := strings.Split(field.Tag.Get("json"), ",")[0]
+	for field := range schema.Fields() {
+		tag, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 		if tag == "" || tag == "-" {
 			t.Fatalf("field %s has no explicit JSON name", field.Name)
 		}
