@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -289,6 +290,25 @@ func TestDescendantInventoryIncludesCurrentChildrenOnly(t *testing.T) {
 	}
 	if len(descendants) != 0 {
 		t.Fatalf("impossible owner descendants = %v", descendants)
+	}
+}
+
+func TestProcessStatReadErrorsDistinguishInventoryRaces(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "entry disappeared", err: os.ErrNotExist, want: true},
+		{name: "process disappeared", err: &os.PathError{Op: "read", Path: "/proc/1/stat", Err: syscall.ESRCH}, want: true},
+		{name: "inventory hidden", err: os.ErrPermission, want: true},
+		{name: "filesystem failure", err: syscall.EIO, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ignorableProcessStatReadError(test.err); got != test.want {
+				t.Fatalf("ignorable process stat error = %t, want %t: %v", got, test.want, test.err)
+			}
+		})
 	}
 }
 
