@@ -136,12 +136,7 @@ func TestWindowsV3ExternalPlacementGuardPinsWithoutCertifyingHostileAncestorDACL
 	if err := guard.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(external, moved); err != nil {
-		t.Fatalf("external placement remained pinned after guard close: %v", err)
-	}
-	if err := os.Rename(moved, external); err != nil {
-		t.Fatal(err)
-	}
+	windowsV3RequireReleasedRename(t, external, moved, "external placement after guard close")
 	if err := platform.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -284,6 +279,15 @@ func windowsV3IsBlockedAncestorReplacement(err error) bool {
 		errors.Is(err, windows.ERROR_SHARING_VIOLATION)
 }
 
+func windowsV3RequireReleasedRename(t *testing.T, path, moved, authority string) {
+	t.Helper()
+	if err := os.Rename(path, moved); err != nil {
+		t.Fatalf("%s remained pinned: %v", authority, err)
+	}
+	// The one-way move is the complete release proof. Reversing it exercises an
+	// unrelated rename that Windows can transiently deny while nested closes settle.
+}
+
 func TestWindowsV3PublicGuardPinsRootAndEveryExternalAncestor(t *testing.T) {
 	base := windowsV3NativeTestTempDir(t)
 	externalParent := filepath.Join(base, "external-parent")
@@ -314,19 +318,11 @@ func TestWindowsV3PublicGuardPinsRootAndEveryExternalAncestor(t *testing.T) {
 	if err := guard.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(rootPath, rootMoved); err != nil {
-		t.Fatalf("root rename remained blocked after guard close: %v", err)
-	}
-	if err := os.Rename(rootMoved, rootPath); err != nil {
-		t.Fatal(err)
-	}
+	windowsV3RequireReleasedRename(t, rootPath, rootMoved, "root after guard close")
 	if err := platform.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(externalParent, externalMoved); err != nil {
-		t.Fatalf("external-ancestor rename remained blocked after all authorities closed: %v", err)
-	}
-	if err := os.Rename(externalMoved, externalParent); err != nil {
-		t.Fatal(err)
-	}
+	windowsV3RequireReleasedRename(
+		t, externalParent, externalMoved, "external ancestor after all authorities closed",
+	)
 }

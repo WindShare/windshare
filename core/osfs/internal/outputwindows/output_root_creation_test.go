@@ -78,12 +78,7 @@ func TestWindowsV3CreateRootPinsEveryExternalAndCreatedComponent(t *testing.T) {
 		t.Fatal(err)
 	}
 	externalMoved := external + "-moved"
-	if err := os.Rename(external, externalMoved); err != nil {
-		t.Fatalf("created-root ancestry remained pinned after cleanup: %v", err)
-	}
-	if err := os.Rename(externalMoved, external); err != nil {
-		t.Fatal(err)
-	}
+	windowsV3RequireReleasedRename(t, external, externalMoved, "created-root ancestry after cleanup")
 }
 
 func TestWindowsV3PrivatePublicationRootCreationPinsHostileInheritedParent(t *testing.T) {
@@ -220,12 +215,7 @@ func TestWindowsV3PrivatePublicationRootFailureRemovesOwnedTarget(t *testing.T) 
 		t.Fatalf("failed private publication-root creation left entries=%v error=%v", entries, readErr)
 	}
 	movedParent := parentPath + "-moved"
-	if err := os.Rename(parentPath, movedParent); err != nil {
-		t.Fatalf("failed creation retained a parent placement handle: %v", err)
-	}
-	if err := os.Rename(movedParent, parentPath); err != nil {
-		t.Fatal(err)
-	}
+	windowsV3RequireReleasedRename(t, parentPath, movedParent, "failed creation parent placement")
 }
 
 func TestWindowsV3PrivatePublicationRootRejectsUnprotectedExistingRootWithoutRepair(t *testing.T) {
