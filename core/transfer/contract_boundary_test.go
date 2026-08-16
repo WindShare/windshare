@@ -33,7 +33,7 @@ func TestUnadmittedJobFinishPreservesLateCancellation(t *testing.T) {
 	run := &jobRun{job: &TransferJob{progress: newReceiveProgressTracker()}}
 	result := run.finish(ctx)
 	if result.Outcome != DirectTreeOutcomePaused || !errors.Is(result.TerminationCause, context.Canceled) ||
-		result.TerminationFault.Valid() {
+		result.TerminationFault.Valid() || result.TerminationInterruption != TransferInterruptionCanceled {
 		t.Fatalf("cancelled finish = %+v", result)
 	}
 }

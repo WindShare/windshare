@@ -21,6 +21,10 @@ type GetResultInput struct {
 }
 
 func ProjectGetResult(input GetResultInput) (clievent.TransferResult, error) {
+	if input.Result.TerminationInterruption != 0 && !input.Result.TerminationInterruption.Valid() ||
+		input.Result.SettlementInterruption != 0 && !input.Result.SettlementInterruption.Valid() {
+		return clievent.TransferResult{}, ErrInvalidProjection
+	}
 	status := projectResultStatus(input.Result)
 	drift := clievent.DriftNone
 	exit := clievent.ExitFailure
@@ -31,6 +35,10 @@ func ProjectGetResult(input GetResultInput) (clievent.TransferResult, error) {
 		exit = clievent.ExitSuccess
 	case provesMissingSelection(input.Result):
 		exit = clievent.ExitUsage
+	case resultHasTerminalNetworkFault(input.Result):
+		exit = clievent.ExitNetwork
+	case input.Result.TerminationInterruption.Valid() || input.Result.SettlementInterruption.Valid():
+		exit = clievent.ExitFailure
 	case (input.Result.Outcome == transfer.DirectTreeOutcomePaused ||
 		input.Result.Outcome == transfer.DirectTreeOutcomeFailed) &&
 		getResultHasNetworkAuthority(input):
@@ -88,7 +96,9 @@ func successfulGetResult(result transfer.JobResult) bool {
 	progress := result.Progress
 	files := progress.FileOutcomes
 	return result.TerminationCause == nil && !result.TerminationFault.Valid() &&
+		result.TerminationInterruption == 0 &&
 		result.SettlementFailure == nil && !result.SettlementFault.Valid() &&
+		result.SettlementInterruption == 0 &&
 		result.SelectionResolutionFailure == nil && result.SourceDriftFailure == nil &&
 		!result.SourceDriftFault.Valid() && len(result.Directories) == 0 && len(result.Files) == 0 &&
 		result.OmittedDirectoryFailures == 0 && result.OmittedFileFailures == 0 &&
@@ -99,6 +109,11 @@ func successfulGetResult(result transfer.JobResult) bool {
 		progress.PublishedFiles == progress.DiscoveredFiles &&
 		progress.PublishedBytes == progress.DiscoveredBytes &&
 		progress.VerifiedBytes == progress.DiscoveredBytes
+}
+
+func resultHasTerminalNetworkFault(result transfer.JobResult) bool {
+	fault := result.TerminationFault
+	return fault.Domain() == transferfault.DomainSession && fault.Scope() == transferfault.ScopeSessionTerminal
 }
 
 func getResultHasNetworkAuthority(input GetResultInput) bool {
@@ -126,6 +141,12 @@ func resultFailure(
 		if failure, ok := ProjectFault(value); ok {
 			return failure, true
 		}
+	}
+	if failure, ok := ProjectTransferInterruption(input.Result.TerminationInterruption); ok {
+		return failure, true
+	}
+	if failure, ok := ProjectTransferInterruption(input.Result.SettlementInterruption); ok {
+		return failure, true
 	}
 	for _, directory := range input.Result.Directories {
 		if failure, ok := ProjectFault(directory.Fault); ok {

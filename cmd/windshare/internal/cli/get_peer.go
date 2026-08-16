@@ -144,22 +144,109 @@ func (a *App) monitorReceiverAdmission(
 
 func (a *App) observeRelayContentAdmission(
 	trigger receiverAdmissionTrigger,
-	observation getObservation,
+	paths *receiverContentPaths,
 ) {
-	switch trigger {
-	case receiverAdmissionTriggerPeerFailed:
-		observation.fallback(clievent.FailurePeerNegotiation)
-	case receiverAdmissionTriggerPeerDetached:
-		observation.fallback(clievent.FailurePeerStopped)
-	case receiverAdmissionTriggerDeadline:
-		observation.fallback(clievent.FailurePeerTimeout)
+	if paths != nil {
+		paths.relayAdmitted(trigger)
 	}
-	observation.contentPath(clievent.ContentPathRelay)
 	a.recordProcessTrace(
 		processTraceGetComponent,
 		processTraceReceiverRelayContent,
 		testrun.OutcomeSucceeded,
 	)
+}
+
+// receiverContentPaths owns the user-visible set of content-capable transports.
+// The relay deadline adds a path; it does not prove that an already-admitted
+// direct lane failed. Publishing the set prevents that policy transition from
+// being rendered as a false P2P timeout.
+type receiverContentPaths struct {
+	mu          sync.Mutex
+	observation getObservation
+	direct      bool
+	relay       bool
+	published   clievent.ContentPath
+}
+
+func newReceiverContentPaths(observation getObservation) *receiverContentPaths {
+	return &receiverContentPaths{observation: observation}
+}
+
+func (paths *receiverContentPaths) observePeer(signal receiverPeerSignal) {
+	if paths == nil {
+		return
+	}
+	paths.mu.Lock()
+	defer paths.mu.Unlock()
+	wasDirect := paths.direct
+	switch signal {
+	case receiverPeerReady:
+		paths.direct = true
+	case receiverPeerFailed, receiverPeerDetached:
+		paths.direct = false
+	default:
+		return
+	}
+	path, changed := paths.changedPathLocked()
+	relayAvailable := paths.relay
+
+	// Publication stays inside the state lock so concurrent deadline and peer
+	// callbacks cannot expose an older path snapshot after a newer one.
+	if wasDirect && signal != receiverPeerReady && relayAvailable {
+		paths.observation.fallback(peerPathFailureCode(signal))
+	}
+	if changed {
+		paths.observation.contentPath(path)
+	}
+}
+
+func (paths *receiverContentPaths) relayAdmitted(trigger receiverAdmissionTrigger) {
+	if paths == nil {
+		return
+	}
+	paths.mu.Lock()
+	defer paths.mu.Unlock()
+	wasRelay := paths.relay
+	paths.relay = true
+	path, changed := paths.changedPathLocked()
+
+	if !wasRelay {
+		switch trigger {
+		case receiverAdmissionTriggerPeerFailed:
+			paths.observation.fallback(clievent.FailurePeerNegotiation)
+		case receiverAdmissionTriggerPeerDetached:
+			paths.observation.fallback(clievent.FailurePeerStopped)
+		}
+	}
+	if changed {
+		paths.observation.contentPath(path)
+	}
+}
+
+func (paths *receiverContentPaths) changedPathLocked() (clievent.ContentPath, bool) {
+	var current clievent.ContentPath
+	switch {
+	case paths.direct && paths.relay:
+		current = clievent.ContentPathDirectAndRelay
+	case paths.direct:
+		current = clievent.ContentPathDirect
+	case paths.relay:
+		current = clievent.ContentPathRelay
+	default:
+		return 0, false
+	}
+	if current == paths.published {
+		return current, false
+	}
+	paths.published = current
+	return current, true
+}
+
+func peerPathFailureCode(signal receiverPeerSignal) clievent.FailureCode {
+	if signal == receiverPeerDetached {
+		return clievent.FailurePeerStopped
+	}
+	return clievent.FailurePeerNegotiation
 }
 
 func beginReceiverPlanning(
@@ -239,6 +326,7 @@ func (adapter *receiverPeerAttemptAdapter) Close() error { return adapter.attemp
 func (adapter *receiverPeerAttemptAdapter) Outcome() receiverPeerMonitorOutcome {
 	outcome := adapter.attempt.Outcome()
 	retainedCause := outcome.RetainedCause()
+	locallyCanceled := outcome.LocallyCanceled()
 	disposition := receiverPeerFallbackAllowed
 	switch outcome.Disposition() {
 	case v2peer.ReceiverDispositionSessionUnsafe:
@@ -246,15 +334,14 @@ func (adapter *receiverPeerAttemptAdapter) Outcome() receiverPeerMonitorOutcome 
 	case v2peer.ReceiverDispositionSessionUnavailable:
 		disposition = receiverPeerSessionUnavailable
 	case v2peer.ReceiverDispositionFallbackAllowed:
-		// Local provenance describes who ended the operation; it does not erase a
-		// retained cleanup failure that the fallback path still needs to surface.
-		if outcome.LocallyCanceled() && retainedCause == nil {
+		// Local authority owns settlement even when teardown retains diagnostic
+		// residue; cleanup cannot retroactively turn an explicit stop into fallback.
+		if locallyCanceled {
 			disposition = receiverPeerLocalStop
 		}
 	}
 	return receiverPeerMonitorOutcome{
-		disposition:   disposition,
-		retainedCause: retainedCause,
+		disposition: disposition, retainedCause: retainedCause,
 	}
 }
 
@@ -330,8 +417,10 @@ func (a *App) startReceiverPeer(
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		a.monitorReceiverPeer(attempt, runtime, runtime.ProtocolSessionID(), observation, observe)
-		a.awaitReceiverTerminationTrace(terminationTraces, observation)
+		locallyCanceled := a.monitorReceiverPeer(
+			attempt, runtime, runtime.ProtocolSessionID(), observation, observe,
+		)
+		a.awaitReceiverTerminationTrace(terminationTraces, observation, locallyCanceled)
 	}()
 	return &activeReceiverPeer{attempt: attempt, done: done}
 }
@@ -387,8 +476,9 @@ func (a *App) newReceiverPeerStarter(observation getObservation) (
 func (a *App) awaitReceiverTerminationTrace(
 	traces <-chan receiverPeerTerminationTrace,
 	observation getObservation,
+	locallyCanceled bool,
 ) {
-	if traces == nil {
+	if traces == nil || locallyCanceled {
 		return
 	}
 	if observation.runtime == nil || observation.runtime.Clock() == nil {
@@ -411,7 +501,7 @@ func (a *App) monitorReceiverPeer(
 	session protocolsession.ProtocolSessionID,
 	observation getObservation,
 	observe func(receiverPeerSignal),
-) {
+) bool {
 	ready := attempt.Ready()
 	attached := false
 	for {
@@ -419,16 +509,15 @@ func (a *App) monitorReceiverPeer(
 		case <-ready:
 			attached = true
 			ready = nil
-			notifyReceiverPeer(observe, receiverPeerReady)
 			if lane, ok := attempt.Lane(); ok {
 				observation.laneAdopted(session, lane)
-				observation.contentPath(clievent.ContentPathDirect)
 				a.recordProcessTrace(
 					processTraceGetComponent,
 					processTraceReceiverDirectLane,
 					testrun.OutcomeSucceeded,
 				)
 			}
+			notifyReceiverPeer(observe, receiverPeerReady)
 		case <-attempt.Done():
 			outcome := attempt.Outcome()
 			err := outcome.retainedCause
@@ -441,15 +530,15 @@ func (a *App) monitorReceiverPeer(
 					observation.warningCode(clievent.FailurePeerProtocol)
 				}
 				runtime.Close()
-				return
+				return false
 			case receiverPeerSessionUnavailable:
 				notifyReceiverPeer(observe, receiverPeerRuntimeTerminal)
 				if err != nil {
 					observation.warning(err)
 				}
-				return
+				return false
 			case receiverPeerLocalStop:
-				return
+				return true
 			}
 			_, laneAttached := attempt.Lane()
 			if attached || laneAttached {
@@ -457,7 +546,7 @@ func (a *App) monitorReceiverPeer(
 			} else {
 				notifyReceiverPeer(observe, receiverPeerFailed)
 			}
-			return
+			return false
 		}
 	}
 }

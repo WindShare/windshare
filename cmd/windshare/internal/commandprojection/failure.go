@@ -12,6 +12,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
 	"github.com/windshare/windshare/connectivity/v2peer"
+	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -254,6 +255,17 @@ func ProjectFault(value transferfault.Fault) (clievent.Failure, bool) {
 	}
 	failure, err := clievent.NewFaultFailure(code, context)
 	return failure, err == nil
+}
+
+func ProjectTransferInterruption(value transfer.TransferInterruption) (clievent.Failure, bool) {
+	switch value {
+	case transfer.TransferInterruptionCanceled:
+		return mustFailure(clievent.FailureCanceled), true
+	case transfer.TransferInterruptionDeadline:
+		return mustFailure(clievent.FailureDeadline), true
+	default:
+		return clievent.Failure{}, false
+	}
 }
 
 func ProjectNormalizedFault(domain uint8, scope uint8, code uint16) (clievent.Failure, bool) {
