@@ -36,10 +36,12 @@
 
 ```text
   Link: https://windshare.app/...
+
   ✨ WindShare is ready
-  📦 Sharing: vacation_photos/ (directory)
-  📡 Relay: Connected
-  👥 Waiting for receivers · Press Ctrl+C to stop
+  ➜ Sharing: vacation_photos/ (directory)
+  ➜ Relay: Connected
+
+  Waiting for receivers · Press Ctrl+C to stop
 ```
 
 `Link:` 来自 `stdout`，其他行来自 `stderr`。正常停止只输出可信事实，不推测尚未采集的发送流量：

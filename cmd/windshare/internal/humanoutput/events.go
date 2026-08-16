@@ -23,7 +23,7 @@ func formatSharingSubject(subject clievent.SharingSubject, symbols Symbols) term
 	case clievent.SharingMultiple:
 		description = formatCount(subject.SelectedItems()) + " selected items"
 	}
-	return statusLine(symbols.Sharing, "Sharing: "+description, terminalcanvas.StyleAccent)
+	return statusLine(symbols.Arrow, "Sharing: "+description, terminalcanvas.StyleAccent)
 }
 
 func formatContentPath(path clievent.ContentPath, symbols Symbols) terminalcanvas.Line {

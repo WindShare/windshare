@@ -112,6 +112,11 @@ func titleName(value interface{ Name() (string, bool) }) string {
 }
 
 func statusLine(symbol, text string, style terminalcanvas.Style) terminalcanvas.Line {
+	if symbol == "" {
+		return terminalcanvas.NewLine(
+			terminalcanvas.Span{Text: text},
+		)
+	}
 	return terminalcanvas.NewLine(
 		terminalcanvas.Span{Text: symbol + " ", Style: style},
 		terminalcanvas.Span{Text: text},
