@@ -101,7 +101,7 @@ func TestTransferJobPublishesTerminalDiscoveryBeforeContentDrain(t *testing.T) {
 			discoveryTrace <- event
 		}
 	})
-	updates := job.SelectionMeasures()
+	updates := job.ProgressSnapshots()
 	resultCh := make(chan JobResult, 1)
 	go func() { resultCh <- job.Run(context.Background()) }()
 
@@ -110,11 +110,11 @@ func TestTransferJobPublishesTerminalDiscoveryBeforeContentDrain(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("content transfer did not start")
 	}
-	var terminal SelectionMeasure
-	for !terminal.DiscoveryTerminalSuccess {
+	var terminal ReceiveProgressSnapshot
+	for terminal.Discovery != DiscoveryComplete {
 		select {
 		case measure, ok := <-updates:
-			if !ok && !terminal.DiscoveryTerminalSuccess {
+			if !ok && terminal.Discovery != DiscoveryComplete {
 				t.Fatal("selection updates closed without terminal discovery")
 			}
 			if ok {
@@ -126,8 +126,8 @@ func TestTransferJobPublishesTerminalDiscoveryBeforeContentDrain(t *testing.T) {
 	}
 	select {
 	case trace := <-discoveryTrace:
-		if trace.Discovery != DiscoveryComplete || trace.OperationID.IsZero() ||
-			trace.DiscoveredFileCount != 1 {
+		if trace.Discovery != DiscoveryComplete || trace.ReceiveOperationID.IsZero() ||
+			trace.Progress.DiscoveredFiles != 1 {
 			t.Fatalf("discovery trace=%+v", trace)
 		}
 	case <-time.After(2 * time.Second):
@@ -147,11 +147,11 @@ func TestTransferJobPublishesTerminalDiscoveryBeforeContentDrain(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("job did not settle after content was released")
 	}
-	var final SelectionMeasure
+	var final ReceiveProgressSnapshot
 	for measure := range updates {
 		final = measure
 	}
-	if final.CompletedFiles != 1 || final.CompletedBytes != 1 || !final.DiscoveryTerminalSuccess {
+	if final.PublishedFiles != 1 || final.PublishedBytes != 1 || final.Discovery != DiscoveryComplete {
 		t.Fatalf("final progress after worker drainage=%+v", final)
 	}
 }
@@ -482,7 +482,7 @@ func TestTransferJobQueueBackpressuresGenerationReplay(t *testing.T) {
 	if queuedBeforeRelease != 2 {
 		t.Fatalf("enqueued traces=%d, want only the two successful queue sends", queuedBeforeRelease)
 	}
-	measure := job.Measure()
+	measure := job.Progress()
 	if measure.DiscoveredFiles != 4 || measure.Discovery != DiscoveryOpen {
 		t.Fatalf("measure while replay is backpressured=%+v", measure)
 	}
@@ -529,7 +529,7 @@ func TestTransferJobGenerationReplayBudgetFailsBeforeAdmission(t *testing.T) {
 	result := job.Run(context.Background())
 	if result.Outcome != DirectTreeOutcomePaused ||
 		result.TerminationFault != mustSessionFault(fault.ScopeOutputPause, fault.SessionResourceBudget) ||
-		result.Measure.DiscoveredFiles != 0 || len(output.directories) != 0 || output.pauseCalls != 1 {
+		result.Progress.DiscoveredFiles != 0 || len(output.directories) != 0 || output.pauseCalls != 1 {
 		t.Fatalf("result=%+v directories=%v pause=%d", result, output.directories, output.pauseCalls)
 	}
 }
@@ -564,7 +564,7 @@ func TestTransferJobFailsClosedForUnknownChildCursorFailureWithoutPhantomSelecti
 	}
 	result := job.Run(context.Background())
 	if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != fault.DependencyContractFault() ||
-		result.Measure.DiscoveredFiles != 0 || result.Measure.DiscoveredBytes != 0 ||
+		result.Progress.DiscoveredFiles != 0 || result.Progress.DiscoveredBytes != 0 ||
 		!slices.Equal(output.directories, []string{""}) || len(output.finalized) != 0 {
 		t.Fatalf("result=%+v directories=%v finalized=%v", result, output.directories, output.finalized)
 	}

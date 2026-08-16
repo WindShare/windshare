@@ -90,8 +90,6 @@ type jobRun struct {
 	omittedDirectories         uint64
 	omittedFiles               uint64
 	sourceDriftFailure         *lifecycleFailure
-	succeeded                  uint64
-	fileOutcomes               FileOutcomeSummary
 	terminationCause           *lifecycleFailure
 	settlementFailure          *lifecycleFailure
 	settlement                 DirectTreeSettlement
@@ -254,7 +252,7 @@ func (r *jobRun) recordDiscoveryFailure(directory catalog.DirectoryID, path stri
 	if isJobTerminalError(err) || !isDirectoryDiscoveryFailure(err) {
 		return err
 	}
-	r.job.tracker.failDiscovery()
+	r.job.progress.failDiscovery()
 	r.discoveryFailed = true
 	r.recordDirectoryFailure(DirectoryJobFailure{
 		DirectoryID: directory, Path: path, Stage: FailureDirectoryDiscovery, Cause: err,

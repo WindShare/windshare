@@ -1,20 +1,12 @@
 package liveshare
 
 import (
-	"context"
-	"encoding/hex"
-	"log/slog"
 	"reflect"
 
 	"github.com/windshare/windshare/core/catalog"
 )
 
-const (
-	rootPrefetchLogMessage          = "share: root prefetch"
-	maximumRootPrefetchFailureNodes = 64
-)
-
-type structuredRootPrefetchTracer struct{ logger *slog.Logger }
+const maximumRootPrefetchFailureNodes = 64
 
 func (decision RootPrefetchDecision) String() string {
 	switch decision {
@@ -35,34 +27,6 @@ func (decision RootPrefetchDecision) String() string {
 	default:
 		return "unknown"
 	}
-}
-
-func rootPrefetchTracerOrDefault(tracer RootPrefetchTracer) RootPrefetchTracer {
-	if tracer != nil {
-		return tracer
-	}
-	return structuredRootPrefetchTracer{logger: slog.Default()}
-}
-
-func (tracer structuredRootPrefetchTracer) TraceRootPrefetch(event RootPrefetchTrace) {
-	logger := tracer.logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	level := slog.LevelInfo
-	if event.Decision == RootPrefetchBudgetFailed || event.Decision == RootPrefetchScanFailed {
-		level = slog.LevelWarn
-	}
-	logger.LogAttrs(
-		context.Background(), level, rootPrefetchLogMessage,
-		slog.String("decision", event.Decision.String()),
-		slog.String("share_instance", hex.EncodeToString(event.ShareInstance.Bytes())),
-		slog.String("directory_id", hex.EncodeToString(event.DirectoryID.Bytes())),
-		slog.String("generation", hex.EncodeToString(event.Generation.Bytes())),
-		slog.Uint64("attempt", event.Attempt),
-		slog.Uint64("entry_count", event.EntryCount),
-		slog.Uint64("omitted_count", event.OmittedCount),
-	)
 }
 
 func traceRootPrefetch(tracer RootPrefetchTracer, event RootPrefetchTrace) {

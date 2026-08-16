@@ -87,6 +87,12 @@ type v2Process struct {
 	closeOnce sync.Once
 	closeDone chan struct{}
 	closeErr  error
+
+	userTracePath      string
+	userTraceCommand   string
+	traceForbidden     []string
+	stderrForbidden    []string
+	userTraceValidated bool
 }
 
 func startV2Process(
@@ -146,6 +152,32 @@ func startV2Process(
 		close(process.done)
 	}()
 	scenario.succeedPhase(t, phase, phaseContext)
+	return process
+}
+
+func startTracedV2Process(
+	t *testing.T,
+	scenario *v2Scenario,
+	component string,
+	binary string,
+	arguments ...string,
+) *v2Process {
+	t.Helper()
+	command := ""
+	if len(arguments) > 0 {
+		command = arguments[0]
+	}
+	if command != "share" && command != "get" {
+		t.Fatalf("user trace requested for unsupported command %q", command)
+	}
+	tracePath := filepath.Join(t.TempDir(), component+"-user-trace.ndjson")
+	if !filepath.IsAbs(tracePath) {
+		t.Fatalf("user trace path is not absolute: %q", tracePath)
+	}
+	arguments = append(append([]string(nil), arguments...), "--trace", tracePath)
+	process := startV2Process(t, scenario, component, binary, arguments...)
+	process.userTracePath = tracePath
+	process.userTraceCommand = command
 	return process
 }
 
@@ -255,6 +287,7 @@ func (process *v2Process) waitResultWithin(
 	defer timer.Stop()
 	select {
 	case <-process.done:
+		process.validateUserTrace(t)
 		if process.err != nil {
 			return process.result, errors.Join(process.err, phase.Fail(v2ProcessWaitFailureReason))
 		}
@@ -364,6 +397,7 @@ func TestLongV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testi
 	share := startV2Process(t, scenario, v2WindShareShareComponent, binaries.windshare, "share", root, "--relay", relayURL)
 	linkExpression := regexp.MustCompile(`(?m)^Link: (\S+)$`)
 	shareLink := waitV2Match(t, share, linkExpression, share.stdout)
+	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
 	outputs := []string{
 		testoutputroot.New(t).RootPath,
 		testoutputroot.New(t).RootPath,
@@ -395,13 +429,16 @@ func TestLongV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testi
 	}
 
 	selectedOutput := testoutputroot.New(t).RootPath
-	selected := startV2Process(
+	selected := startTracedV2Process(
 		t, scenario, v2WindShareGetComponent, binaries.windshare,
 		"get", shareLink, "-o", selectedOutput, "--only", "tree/nested/a.txt",
 	)
+	selected.forbidStderr(capabilitySecrets...)
+	selected.forbidUserTrace(append(capabilitySecrets, root, "tree/nested/a.txt", selectedOutput)...)
 	if err := selected.wait(t); err != nil {
 		t.Fatalf("selected receiver failed: %v; stdout=%q stderr=%q", err, selected.stdout.String(), selected.stderr.String())
 	}
+	requireV2UserTraceFact(t, selected, "transfer_settled", "result_status", "success")
 	assertV2File(t, filepath.Join(selectedOutput, "a.txt"), []byte("selected-content"))
 	assertV2OutputInventory(t, selectedOutput, map[string]bool{
 		"a.txt": false,
@@ -445,13 +482,17 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 		"--block-size", fmt.Sprint(v2PionRelayCutBlockBytes),
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
+	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
 	output := testoutputroot.New(t).RootPath
-	receiver := startV2Process(
+	receiver := startTracedV2Process(
 		t, scenario, v2WindShareGetComponent, binaries.windshare, "get", shareLink, "-o", output,
 	)
+	receiver.forbidStderr(capabilitySecrets...)
+	receiver.forbidUserTrace(append(capabilitySecrets, source, filepath.Base(source), output)...)
 	// A data channel becomes useful only after both runtimes own the attached lane.
 	// Waiting for both private milestones prevents relay loss from racing the
-	// sender-side adoption that the receiver cannot observe.
+	// sender-side adoption that the receiver cannot observe, without exposing a
+	// private correctness cut through user-facing output or trace.
 	waitV2ProcessTrace(t, receiver, v2ReceiverDirectLaneMilestone, testrun.OutcomeSucceeded)
 	waitV2ProcessTrace(t, share, v2SenderDirectLaneMilestone, testrun.OutcomeSucceeded)
 	select {
@@ -463,7 +504,6 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 		)
 	default:
 	}
-
 	cutPhase := scenario.startPhase(t, v2RelayProxyCutMilestone, nil)
 	cutContext, cancelCut := context.WithTimeout(context.Background(), v2ProcessTerminationGrace)
 	relayDownstream, proxyErr := proxy.CutAndWait(cutContext)
@@ -484,6 +524,7 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 			receiver.stderr.String(),
 		)
 	}
+	requireV2UserTraceFact(t, receiver, "content_path_selected", "content_path", "direct")
 
 	outputPath := filepath.Join(output, filepath.Base(source))
 	assertV2FileSHA256(
@@ -592,6 +633,7 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 		t, scenario, v2WindShareShareComponent, binaries.windshare, "share", root, "--relay", "ws://"+address,
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
+	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
 	output := testoutputroot.New(t).RootPath
 	firstOutput := filepath.Join(output, "resume-tree", "file-000.bin")
 
@@ -601,9 +643,11 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 	waitV2PublishedFile(t, interrupted, firstOutput)
 	interrupted.stop(t)
 
-	resumed := startV2Process(
+	resumed := startTracedV2Process(
 		t, scenario, v2WindShareGetComponent, binaries.windshare, "get", shareLink, "-o", output,
 	)
+	resumed.forbidStderr(capabilitySecrets...)
+	resumed.forbidUserTrace(append(capabilitySecrets, root, filepath.Base(root), output)...)
 	// Recovery performs native witness revalidation before transferring the
 	// interrupted tail, so it retains a scenario ceiling distinct from readiness.
 	if err := resumed.waitWithin(t, v2DurableResumeProcessTimeout); err != nil {
@@ -615,6 +659,7 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 			relay.stdout.diagnosticString(), relay.stderr.diagnosticString(),
 		)
 	}
+	requireV2UserTraceFact(t, resumed, "transfer_settled", "result_status", "success")
 	// A fresh output session would hit the already-published first path and the
 	// no-replace contract would make this command fail. Successful completion is
 	// therefore the durable-resume oracle without exposing backend reopen state.

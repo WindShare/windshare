@@ -66,8 +66,11 @@ func TestTransferJobUsesCatalogClientBrokerAndSparseFileLocalResume(t *testing.T
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 3 || result.Measure.ConnectionSizeClass() != ConnectionSizeSmall ||
-		result.Measure.DiscoveredFiles != 3 || result.Measure.DiscoveredBytes != 3*chunk {
+	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 3 || result.Progress.ConnectionSizeClass() != ConnectionSizeSmall ||
+		result.Progress.DiscoveredFiles != 3 || result.Progress.DiscoveredBytes != 3*chunk ||
+		result.Progress.VerifiedBytes != 3*chunk || result.Progress.NewlyVerifiedBytes != 2*chunk ||
+		result.Progress.PublishedFiles != 3 || result.Progress.PublishedBytes != 3*chunk ||
+		!result.Progress.CountersExact {
 		t.Fatalf("result=%+v", result)
 	}
 	if !slices.Equal(revisions.order, []catalog.FileID{fileA, fileB, emptyFile}) {
@@ -126,7 +129,9 @@ func TestTransferJobRejectsRegressiveCheckpointAndCatalogCycle(t *testing.T) {
 		})
 		result := job.Run(context.Background())
 		if result.Outcome != DirectTreeOutcomePaused || !output.aborted ||
-			result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
+			result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
+			result.Progress.VerifiedBytes != 2*chunk || result.Progress.NewlyVerifiedBytes != chunk ||
+			result.Progress.PublishedFiles != 0 {
 			t.Fatalf("regressive checkpoint result=%+v", result)
 		}
 	})
@@ -159,7 +164,9 @@ func TestTransferJobRejectsRegressiveCheckpointAndCatalogCycle(t *testing.T) {
 		})
 		result := job.Run(context.Background())
 		if result.Outcome != DirectTreeOutcomePaused || !output.aborted ||
-			result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
+			result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
+			result.Progress.VerifiedBytes != windowEnd || result.Progress.NewlyVerifiedBytes != windowEnd ||
+			result.Progress.VerifiedBytes == exactSize || result.Progress.PublishedFiles != 0 {
 			t.Fatalf("future checkpoint result=%+v", result)
 		}
 	})
@@ -297,8 +304,8 @@ func TestTransferJobDiscoveryFailurePreservesIndependentContentWork(t *testing.T
 		len(result.Directories) != 1 || len(result.Files) != 1 {
 		t.Fatalf("result=%+v", result)
 	}
-	if result.Measure.ConnectionSizeClass() != ConnectionSizeUnknown || result.Measure.DiscoveryTerminalSuccess {
-		t.Fatalf("failed discovery measure=%+v", result.Measure)
+	if result.Progress.ConnectionSizeClass() != ConnectionSizeUnknown || result.Progress.Discovery != DiscoveryFailed {
+		t.Fatalf("failed discovery measure=%+v", result.Progress)
 	}
 	if len(revisions.order) != 3 || len(output.transactions) != 2 ||
 		output.intent.IsZero() || !slices.Equal(output.directories, []string{""}) {
@@ -331,18 +338,18 @@ func TestTransferJobKeepsAdmissionLowerBoundSeparateFromExactResultMeasure(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	updates := job.SelectionMeasures()
+	updates := job.ProgressSnapshots()
 	result := job.Run(context.Background())
-	var admissionMeasure SelectionMeasure
+	var admissionMeasure ReceiveProgressSnapshot
 	for measure := range updates {
 		admissionMeasure = measure
 	}
-	if result.Outcome != DirectTreeOutcomeSuccess || !result.Measure.DiscoveryTerminalSuccess ||
-		result.Measure.DiscoveredFiles != SmallTransferFileLimit+1 {
+	if result.Outcome != DirectTreeOutcomeSuccess || result.Progress.Discovery != DiscoveryComplete ||
+		result.Progress.DiscoveredFiles != SmallTransferFileLimit+1 {
 		t.Fatalf("exact result=%+v", result)
 	}
 	if admissionMeasure.ConnectionSizeClass() != ConnectionSizeLarge || admissionMeasure.DiscoveredFiles != SmallTransferFileLimit+1 ||
-		!admissionMeasure.DiscoveryTerminalSuccess {
+		admissionMeasure.Discovery != DiscoveryComplete {
 		t.Fatalf("admission lower bound=%+v", admissionMeasure)
 	}
 }
@@ -365,14 +372,14 @@ func TestTransferJobOmittedRootChildrenPauseBeforeOutputAdmission(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	updates := job.SelectionMeasures()
+	updates := job.ProgressSnapshots()
 	result := job.Run(context.Background())
-	var admissionMeasure SelectionMeasure
+	var admissionMeasure ReceiveProgressSnapshot
 	for measure := range updates {
 		admissionMeasure = measure
 	}
 	if result.Outcome != DirectTreeOutcomePaused || len(result.Directories) != 1 ||
-		!errors.Is(result.Directories[0].Cause, ErrCatalogEntriesOmitted) || result.Measure.ConnectionSizeClass() != ConnectionSizeUnknown {
+		!errors.Is(result.Directories[0].Cause, ErrCatalogEntriesOmitted) || result.Progress.ConnectionSizeClass() != ConnectionSizeUnknown {
 		t.Fatalf("result=%+v", result)
 	}
 	if result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) ||
@@ -381,7 +388,7 @@ func TestTransferJobOmittedRootChildrenPauseBeforeOutputAdmission(t *testing.T) 
 		// completion.
 		t.Fatalf("root omission termination=%v", result.TerminationCause)
 	}
-	if admissionMeasure.ConnectionSizeClass() != ConnectionSizeUnknown || admissionMeasure.DiscoveryTerminalSuccess {
+	if admissionMeasure.ConnectionSizeClass() != ConnectionSizeUnknown || admissionMeasure.Discovery != DiscoveryFailed {
 		t.Fatalf("admission measure=%+v", admissionMeasure)
 	}
 }
@@ -416,7 +423,7 @@ func TestTransferJobResolvesPathSelectionInsideBoundedJobTraversal(t *testing.T)
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 || result.Measure.DiscoveredFiles != 1 {
+	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 || result.Progress.DiscoveredFiles != 1 {
 		t.Fatalf("result=%+v", result)
 	}
 	if source.loadCount(root) != 3 || source.loadCount(folder) != 3 || source.loadCount(unrelated) != 0 {

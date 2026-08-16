@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -39,10 +38,14 @@ func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallba
 		t.Fatal("queued admission has no owned worker")
 	}
 
+	sessionFault, err := transferfault.NewSession(
+		transferfault.ScopeSessionTerminal, transferfault.SessionProtocol,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sessionFailure := transferfault.Wrap(
-		mustCLIFault(transferfault.NewSession(
-			transferfault.ScopeSessionTerminal, transferfault.SessionProtocol,
-		)),
+		sessionFault,
 		protocolsession.ErrInvalidOperationFailure,
 	)
 	classes := v2peer.ReceiverCauseClasses(sessionFailure)
@@ -57,17 +60,20 @@ func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallba
 		retainedCause: sessionFailure,
 	})
 
-	var stderr bytes.Buffer
-	app := &App{Stderr: &stderr}
-	runtime := &cliReceiverRuntimeCloser{}
+	commandRuntime, stderr := newGetReportingRuntime(t, false, false)
+	receiverRuntime := &cliReceiverRuntimeCloser{}
 	var signals []receiverPeerSignal
 	var observeErr error
-	app.monitorReceiverPeer(attempt, runtime, func(signal receiverPeerSignal) {
-		signals = append(signals, signal)
-		if err := admission.ObservePeer(signal); err != nil {
-			observeErr = err
-		}
-	})
+	(&App{}).monitorReceiverPeer(
+		attempt, receiverRuntime, protocolsession.ProtocolSessionID{1},
+		getObservation{runtime: commandRuntime}, func(signal receiverPeerSignal) {
+			signals = append(signals, signal)
+			if err := admission.ObservePeer(signal); err != nil {
+				observeErr = err
+			}
+		},
+	)
+	commandRuntime.Close()
 
 	if observeErr != nil {
 		t.Fatalf("apply peer signal: %v", observeErr)
@@ -80,7 +86,7 @@ func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallba
 			t.Fatalf("unsafe disposition emitted fallback signal=%v", signal)
 		}
 	}
-	if calls := runtime.calls.Load(); calls != 1 {
+	if calls := receiverRuntime.calls.Load(); calls != 1 {
 		t.Fatalf("fatal monitor branch Close calls=%d, want 1", calls)
 	}
 	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
@@ -97,7 +103,7 @@ func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallba
 	}
 
 	diagnostic := stderr.String()
-	if !strings.Contains(diagnostic, "closing the session") {
+	if !strings.Contains(diagnostic, "The transfer session failed.") {
 		t.Fatalf("unsafe-disposition diagnostic=%q", diagnostic)
 	}
 	if strings.Contains(diagnostic, "continuing") {

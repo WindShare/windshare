@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"io"
 	"sync"
 	"testing"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/transfer"
-	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -82,32 +80,6 @@ func (immediateSmallBlocks) ReadRange(
 	transfer.RangeSink,
 ) error {
 	return errors.New("empty selection must not read blocks")
-}
-
-func TestClassifyTransferTerminationSeparatesNetworkAndLocalFailures(t *testing.T) {
-	resource := mustCLIFault(transferfault.NewSession(
-		transferfault.ScopeOutputPause, transferfault.SessionResourceBudget,
-	))
-	session := mustCLIFault(transferfault.NewSession(
-		transferfault.ScopeSessionTerminal, transferfault.SessionTransport,
-	))
-	for name, test := range map[string]struct {
-		fault                     transferfault.Fault
-		runtimeErr, connectionErr error
-		want                      int
-	}{
-		"local output":    {want: ExitFailure},
-		"resource budget": {fault: resource, want: ExitFailure},
-		"session failure": {fault: session, want: ExitNetwork},
-		"runtime failure": {runtimeErr: errors.New("runtime closed"), want: ExitNetwork},
-		"relay failure":   {connectionErr: errors.New("relay closed"), want: ExitNetwork},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if got := classifyTransferTermination(test.fault, test.runtimeErr, test.connectionErr); got != test.want {
-				t.Fatalf("exit=%d want=%d", got, test.want)
-			}
-		})
-	}
 }
 
 type immediateSmallOutputAuthority struct {
@@ -351,6 +323,39 @@ func (inertReceiverBlockLane) FetchBlock(
 	return records.BlockRecord{}, errors.New("admission race must not fetch content")
 }
 
+func TestRelayContentAdmissionPublishesPathDecisionBeforeResume(t *testing.T) {
+	downloadT0 := time.Date(2026, 7, 18, 3, 30, 0, 0, time.UTC)
+	clock := &fakeReceiverAdmissionClock{now: downloadT0}
+	events := make(chan string, 2)
+	admission, err := newRelayContentAdmissionWithExecution(
+		downloadT0,
+		clock,
+		receiverContentSuspensionFunc(func() error {
+			events <- "resume"
+			return nil
+		}),
+		receiverAdmissionExecution{onClaim: func(trigger receiverAdmissionTrigger) {
+			if trigger != receiverAdmissionTriggerConnectionSmall {
+				t.Errorf("claim trigger=%s", trigger)
+			}
+			events <- "path"
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admission.Close()
+	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
+		t.Fatal(err)
+	}
+	if decision := receiveReceiverAdmissionDecision(t, admission); decision.Cause != nil {
+		t.Fatal(decision.Cause)
+	}
+	if first, second := <-events, <-events; first != "path" || second != "resume" {
+		t.Fatalf("admission events=%q,%q", first, second)
+	}
+}
+
 func TestRelayContentAdmissionDeadlineDoesNotWaitForSelectionMeasurement(t *testing.T) {
 	downloadT0 := time.Date(2026, 7, 18, 4, 0, 0, 0, time.UTC)
 	clock := &fakeReceiverAdmissionClock{now: downloadT0}
@@ -413,13 +418,15 @@ func TestRunTransferJobObservesImmediateSmallWithoutSubscriptionRace(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &App{Stderr: io.Discard}
+	runtime, _ := newGetReportingRuntime(t, false, false)
+	observation := getObservation{runtime: runtime}
 	seenSmall := false
-	result := app.runTransferJob(context.Background(), job, func(measure transfer.SelectionMeasure) {
-		seenSmall = seenSmall || measure.ConnectionSizeClass() == transfer.ConnectionSizeSmall
+	completion := (&App{}).runTransferJob(context.Background(), job, runtime.Clock(), observation, func(progress transfer.ReceiveProgressSnapshot) {
+		seenSmall = seenSmall || progress.ConnectionSizeClass() == transfer.ConnectionSizeSmall
 	})
-	if result.Outcome != transfer.DirectTreeOutcomeSuccess || !seenSmall {
-		t.Fatalf("result=%+v saw immediate Small=%v", result, seenSmall)
+	runtime.Close()
+	if completion.result.Outcome != transfer.DirectTreeOutcomeSuccess || !seenSmall {
+		t.Fatalf("result=%+v saw immediate Small=%v", completion.result, seenSmall)
 	}
 }
 

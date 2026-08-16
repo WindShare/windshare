@@ -101,7 +101,8 @@ type FileOutcomeSummary struct {
 }
 
 func (summary FileOutcomeSummary) PublishedFiles() uint64 {
-	return summary.DownloadedFiles + summary.ResumedFiles
+	published, _ := checkedAdd(summary.DownloadedFiles, summary.ResumedFiles)
+	return published
 }
 
 type JobResult struct {
@@ -113,7 +114,7 @@ type JobResult struct {
 	// SelectionObservation is diagnostic only and is normally zero for the
 	// incremental path, which does not materialize a whole-tree snapshot.
 	SelectionObservation     SelectionObservationV1
-	Measure                  SelectionMeasure
+	Progress                 ReceiveProgressSnapshot
 	Directories              []DirectoryJobFailure
 	Files                    []FileJobFailure
 	OmittedDirectoryFailures uint64
@@ -126,7 +127,6 @@ type JobResult struct {
 	SourceDriftFailure error
 	SourceDriftFault   fault.Fault
 	SucceededFiles     uint64
-	FileOutcomes       FileOutcomeSummary
 	TerminationCause   error
 	TerminationFault   fault.Fault
 	SettlementFailure  error
@@ -202,7 +202,7 @@ type TransferJob struct {
 	catalogWalkLimits  catalogwalk.Limits
 	projector          ordinaryoutput.ArtifactPathProjector
 	tracer             TransferLifecycleTracer
-	tracker            selectionTracker
+	progress           receiveProgressTracker
 
 	mu      sync.Mutex
 	traceMu sync.Mutex
@@ -255,11 +255,11 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 		outputAuthority:   config.Materializer,
 		settlementTimeout: timeout, queueCapacity: queueCapacity, replayPageCapacity: replayPageCapacity,
 		catalogWalkLimits: walkLimits, projector: projector,
-		tracer: config.Tracer, tracker: newSelectionTracker(),
+		tracer: config.Tracer, progress: newReceiveProgressTracker(),
 	}, nil
 }
 
-func (j *TransferJob) Measure() SelectionMeasure { return j.tracker.snapshot() }
+func (j *TransferJob) Progress() ReceiveProgressSnapshot { return j.progress.snapshotValue() }
 
 func (j *TransferJob) JobID() TransferJobID         { return j.jobID }
 func (j *TransferJob) ReceiveIntent() ReceiveIntent { return j.intent }
@@ -267,9 +267,9 @@ func (j *TransferJob) ReceiveIntentDigest() ReceiveIntentDigest {
 	return j.intent.Digest()
 }
 
-// SelectionMeasures publishes monotonic discovery updates. Discovery now owns
-// the first job phase, so no duplicate catalog walk can race output admission.
-func (j *TransferJob) SelectionMeasures() <-chan SelectionMeasure { return j.tracker.Updates() }
+// ProgressSnapshots coalesces updates for prompt connection-size admission.
+// Presentation and trace sampling should poll Progress at their own cadence.
+func (j *TransferJob) ProgressSnapshots() <-chan ReceiveProgressSnapshot { return j.progress.Updates() }
 
 func (j *TransferJob) Run(ctx context.Context) JobResult {
 	j.mu.Lock()
@@ -278,7 +278,7 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 		failure := dependencyContractFailure(ErrTransferJobRun)
 		return JobResult{Outcome: DirectTreeOutcomePaused, TransferJobID: j.jobID,
 			ReceiveIntentDigest: j.intent.Digest(), ReceiveIntent: j.intent,
-			Measure: j.Measure(), TerminationCause: failure,
+			Progress: j.Progress(), TerminationCause: failure,
 			TerminationFault: closedLifecycleFault(failure)}
 	}
 	j.started = true
@@ -293,7 +293,7 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 		return JobResult{
 			Outcome: DirectTreeOutcomePaused, TransferJobID: j.jobID,
 			ReceiveIntentDigest: j.intent.Digest(), ReceiveIntent: j.intent,
-			Measure: j.Measure(), TerminationCause: failure,
+			Progress: j.Progress(), TerminationCause: failure,
 			TerminationFault: closedLifecycleFault(failure),
 		}
 	}
@@ -370,9 +370,9 @@ func (j *TransferJob) admitRunOutput(ctx context.Context, state *jobRun) *lifecy
 func (j *TransferJob) failUnstartedDiscovery() {
 	// Consumers must observe one terminal discovery transition even when output
 	// admission fails before the catalog can safely be opened.
-	j.tracker.failDiscovery()
-	j.tracker.finishDiscovery()
-	j.tracker.closeUpdates()
+	j.progress.failDiscovery()
+	j.progress.finishDiscovery()
+	j.progress.closeUpdates()
 }
 
 func (r *jobRun) completeDiscovery(
@@ -391,7 +391,7 @@ func (r *jobRun) completeDiscovery(
 		(!workerInterruptedDiscovery || !r.catalogTraversalComplete)
 	if discoveryFailure != nil {
 		if discoveryIncomplete {
-			r.job.tracker.failDiscovery()
+			r.job.progress.failDiscovery()
 		}
 		r.terminationCause = discoveryFailure
 		cancel(discoveryFailure)
@@ -405,11 +405,12 @@ func (r *jobRun) completeDiscovery(
 			r.selectionResolutionFailure = missingErr
 		}
 	}
-	r.job.tracker.finishDiscovery()
+	r.job.progress.finishDiscovery()
+	progress := r.job.Progress()
 	r.job.trace(TransferLifecycleTrace{
 		Stage: TransferDiscoveryCompleted, TransferJobID: r.job.jobID,
 		ReceiveIntentDigest: r.job.intent.Digest(),
-		Discovery:           r.job.Measure().Discovery, ConnectionSizeClass: r.job.Measure().ConnectionSizeClass(),
+		Discovery:           progress.Discovery, ConnectionSizeClass: progress.ConnectionSizeClass(),
 		Fault: fault.Join(
 			discoveryCompletionFault(discoveryFailure, discoveryIncomplete), r.discoveryFaultSnapshot(),
 		),
@@ -430,7 +431,7 @@ func (r *jobRun) completeDiscovery(
 		}
 	default:
 	}
-	r.job.tracker.closeUpdates()
+	r.job.progress.closeUpdates()
 	return r.finish(ctx)
 }
 
@@ -484,6 +485,15 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 			r.traceFileLifecycle(TransferFileAdmitted, plan, contractFailure)
 			return r.rejectImmediateSettlement(ctx, plan, opened, settlement, contractFailure)
 		}
+		if checkpoint, ok := settlement.VerifiedCheckpoint(); ok {
+			recovered, exact := rangeSetByteCount(checkpoint.Ranges())
+			if !exact || recovered > plan.expectedSize {
+				contractFailure := outputContractFault(ErrOutputContract)
+				r.traceFileLifecycle(TransferFileAdmitted, plan, contractFailure)
+				return r.rejectImmediateSettlement(ctx, plan, opened, settlement, contractFailure)
+			}
+			r.job.progress.addRecoveredVerified(recovered)
+		}
 		r.traceFileLifecycle(TransferFileAdmitted, plan, nil)
 		return r.handleImmediateSettlement(ctx, plan, opened, settlement)
 	}
@@ -495,14 +505,25 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 	}
 	if err := validateOutputTransaction(target, transaction, durable); err != nil {
 		r.traceFileLifecycle(TransferFileAdmitted, plan, err)
-		return r.settleFailedFile(ctx, plan, opened, transaction, FailureFileOutput, err, 0)
+		return r.settleFailedFile(ctx, plan, opened, transaction, FailureFileOutput, err, 0, nil)
 	}
+	fileProgress, recovered, validProgress := newFileTransferProgress(
+		transaction, durable, r.output.Capabilities().Durability != DurabilityNone,
+	)
+	if !validProgress {
+		contractFailure := outputContractFault(ErrOutputContract)
+		r.traceFileLifecycle(TransferFileAdmitted, plan, contractFailure)
+		return r.settleFailedFile(
+			ctx, plan, opened, transaction, FailureFileOutput, contractFailure, 0, nil,
+		)
+	}
+	r.job.progress.addRecoveredVerified(recovered)
 	r.traceFileLifecycle(TransferFileAdmitted, plan, nil)
-	completed, err := r.transferMissingRanges(ctx, plan, opened, transaction, durable)
+	completed, err := r.transferMissingRanges(ctx, plan, opened, transaction, &fileProgress)
 	if err != nil || !completed {
 		return err
 	}
-	return r.commitTransferredFile(ctx, plan, opened, transaction)
+	return r.commitTransferredFile(ctx, plan, opened, transaction, &fileProgress)
 }
 
 func (r *jobRun) rejectUnstartedFile(
@@ -581,12 +602,10 @@ func (r *jobRun) handleImmediateSettlement(
 	settlement FileSettlement,
 ) error {
 	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
-	r.acceptFileSettlement(settlement)
+	r.job.progress.acceptFileSettlement(settlement, plan.expectedSize)
 	r.traceFileSettlement(plan, settlement, releaseErr)
 	switch settlement.Kind() {
 	case FilePublished:
-		r.succeeded++
-		r.job.tracker.completeFile(plan.expectedSize)
 		if releaseErr != nil {
 			r.recordFileFailure(FileJobFailure{
 				FileID: plan.file, Path: plan.failurePath(), Stage: FailureLeaseRelease,

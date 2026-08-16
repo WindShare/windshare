@@ -22,9 +22,11 @@ test.
 
 [Makefile](../Makefile) dispatches one native script per target. Developers provide Go, Node.js, pnpm,
 GNU Make, golangci-lint, gopls, sloc-guard, actionlint, govulncheck, installed Web dependencies, and the
-required Playwright browser runtimes. Gates use the installed toolchain and never install or update tools,
-packages, or browsers. A missing prerequisite fails in the command that needs it. Windows Firewall and
-WBEM state are not validation gates.
+required Playwright browser runtimes. Windows ordinary CI additionally requires PowerShell 7 (`pwsh`),
+Git, `go-test-coverage`, a CGO-capable C compiler, and Chromium. Firefox and WebKit are required only by
+weekly browser gates. Gates use the installed toolchain and never install or update tools, packages, or
+browsers. A missing prerequisite fails in the command that needs it. Windows Firewall and WBEM state are
+not validation gates.
 
 | Entry point | Direct responsibility |
 |---|---|
