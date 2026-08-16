@@ -47,7 +47,7 @@ func NewRelayAuthority(scheme RelayScheme, host string, port uint16) (RelayAutho
 	// This defensive check keeps arbitrary provider strings from becoming hosts
 	// if a future caller bypasses commandprojection.
 	if ip := net.ParseIP(host); ip == nil {
-		for _, label := range strings.Split(strings.TrimSuffix(host, "."), ".") {
+		for label := range strings.SplitSeq(strings.TrimSuffix(host, "."), ".") {
 			if label == "" {
 				return RelayAuthority{}, ErrInvalidFact
 			}

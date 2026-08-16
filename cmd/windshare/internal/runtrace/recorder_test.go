@@ -144,11 +144,9 @@ func TestRecorderAssignsEntryMetadataUnderConcurrency(t *testing.T) {
 	var wait sync.WaitGroup
 	results := make(chan bool, eventCount)
 	for range eventCount {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			results <- recorder.Record(event)
-		}()
+		})
 	}
 	wait.Wait()
 	close(results)
