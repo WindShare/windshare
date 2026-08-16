@@ -100,6 +100,18 @@ func TestSenderSelectedRootSummaryExposesOnlyCountForMultipleRoots(t *testing.T)
 	}
 }
 
+func TestNewSelectedRootSummaryValidation(t *testing.T) {
+	if _, err := newSelectedRootSummary(nil); err == nil {
+		t.Fatal("expected error for nil selected roots")
+	}
+	if _, err := newSelectedRootSummary([]catalog.NodeRecord{}); err == nil {
+		t.Fatal("expected error for empty selected roots")
+	}
+	if _, err := newSelectedRootSummary([]catalog.NodeRecord{{}}); err == nil {
+		t.Fatal("expected error for empty node record")
+	}
+}
+
 func prepareDisplaySender(t *testing.T, paths []string) *PreparedSender {
 	t.Helper()
 	sender, err := PrepareSender(context.Background(), SenderConfig{

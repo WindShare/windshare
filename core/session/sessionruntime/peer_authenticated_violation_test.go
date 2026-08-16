@@ -211,3 +211,51 @@ func TestSignedMalformedPeerControlTerminatesOnlyExactOperation(t *testing.T) {
 		})
 	}
 }
+
+func TestReceiverPeerAuthenticatedViolationEvidenceCodes(t *testing.T) {
+	tests := []struct {
+		code protocolsession.AuthenticatedOperationViolationCode
+		want ReceiverPeerTerminalProvenance
+		diag ReceiverPeerDiagnosticCode
+	}{
+		{
+			protocolsession.AuthenticatedOperationViolationMalformedFailure,
+			ReceiverPeerProvenanceRemoteFailureMalformed,
+			ReceiverPeerDiagnosticRemoteFailureMalformed,
+		},
+		{
+			protocolsession.AuthenticatedOperationViolationMalformedPeerControl,
+			ReceiverPeerProvenanceRemoteControlMalformed,
+			ReceiverPeerDiagnosticControlMalformed,
+		},
+		{
+			protocolsession.AuthenticatedOperationViolationConflictingPeerAnswer,
+			ReceiverPeerProvenanceRemoteAnswerConflict,
+			ReceiverPeerDiagnosticRemoteAnswerConflict,
+		},
+		{
+			protocolsession.AuthenticatedOperationViolationConflictingFinal,
+			ReceiverPeerProvenanceRemoteFinalConflict,
+			ReceiverPeerDiagnosticRemoteFinalConflict,
+		},
+		{
+			protocolsession.AuthenticatedOperationViolationContinuationAuthority,
+			ReceiverPeerProvenanceRemoteContinuationAuthorityViolation,
+			ReceiverPeerDiagnosticRemoteContinuationAuthorityViolation,
+		},
+	}
+	for _, test := range tests {
+		violation, err := protocolsession.NewAuthenticatedOperationViolation(test.code)
+		if err != nil {
+			t.Fatal(err)
+		}
+		evidence, ok := receiverPeerAuthenticatedViolationEvidence(violation)
+		if !ok || evidence.transition.provenance != test.want || !receiverPeerDiagnosticsContain(evidence.diagnostics, test.diag) {
+			t.Fatalf("code %v evidence = %+v, ok = %v", test.code, evidence, ok)
+		}
+	}
+	invalidViolation := protocolsession.AuthenticatedOperationViolation{}
+	if _, ok := receiverPeerAuthenticatedViolationEvidence(invalidViolation); ok {
+		t.Fatal("invalid violation produced evidence")
+	}
+}

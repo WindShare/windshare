@@ -172,3 +172,13 @@ func TestSegmentForBlockValidation(t *testing.T) {
 		t.Fatalf("expected segment 0, got %d", seg)
 	}
 }
+
+func TestOwnDerivedKeyEdgeCases(t *testing.T) {
+	wantErr := errors.New("underlying error")
+	if _, err := ownDerivedKey(nil, wantErr); !errors.Is(err, wantErr) {
+		t.Fatalf("ownDerivedKey error = %v, want %v", err, wantErr)
+	}
+	if _, err := ownDerivedKey([]byte{1, 2, 3}, nil); err == nil {
+		t.Fatal("ownDerivedKey accepted short slice")
+	}
+}
