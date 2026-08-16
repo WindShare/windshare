@@ -15,12 +15,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
+	"github.com/windshare/windshare/cmd/windshare/internal/commandprojection"
+	"github.com/windshare/windshare/cmd/windshare/internal/runtrace"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/internal/testoutputroot"
+	"github.com/windshare/windshare/internal/testrun"
 	"github.com/windshare/windshare/relay/httpapi"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/relay/signaling/v2endpoint"
@@ -32,9 +36,9 @@ func TestParseInterleavedV2Flags(t *testing.T) {
 	app := testApp("")
 	flags := app.newFlagSet("share")
 	relay := flags.String("relay", "", "")
-	positionals, err := parseInterleaved(flags, []string{"first", "--relay", "ws://relay.example", "second"})
-	if err != nil || *relay != "ws://relay.example" || strings.Join(positionals, ",") != "first,second" {
-		t.Fatalf("parse result = %v %q %v", positionals, *relay, err)
+	positionals, outcome := parseInterleaved(flags, []string{"first", "--relay", "ws://relay.example", "second"})
+	if outcome != flagParseReady || *relay != "ws://relay.example" || strings.Join(positionals, ",") != "first,second" {
+		t.Fatalf("parse result = %v %q %v", positionals, *relay, outcome)
 	}
 }
 
@@ -47,8 +51,8 @@ func TestGetRequestRejectsRetiredSuite(t *testing.T) {
 	)
 	encoded := "http://localhost:5173/" + shareID + "#" + retiredKey
 	app := testApp("")
-	if _, code := app.parseGetRequest([]string{encoded}); code != ExitUsage {
-		t.Fatalf("retired suite exit code = %d", code)
+	if _, outcome := app.parseGetRequest([]string{encoded}); outcome != requestParseUsageFailure {
+		t.Fatalf("retired suite parse outcome = %d", outcome)
 	}
 }
 
@@ -64,12 +68,30 @@ func TestTransferResultDriftClassification(t *testing.T) {
 		mustCLIFault(transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionInvalidated)),
 		mustCLIFault(transferfault.NewCatalog(transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale)),
 	} {
-		if !transferResultDrifted(transfer.JobResult{SourceDriftFault: value}) {
-			t.Fatalf("drift %v was not classified", value)
+		result, err := commandprojection.ProjectGetResult(commandprojection.GetResultInput{
+			Result: transfer.JobResult{
+				Outcome:          transfer.DirectTreeOutcomePartial,
+				SourceDriftFault: value,
+			},
+			Destination: clievent.NewDisplayPath(t.TempDir()),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Drift() != clievent.DriftSource || result.ExitCode() != clievent.ExitDrift {
+			t.Fatalf("drift projection = %v/%v", result.Drift(), result.ExitCode())
 		}
 	}
-	if transferResultDrifted(transfer.JobResult{TerminationCause: errors.New("network")}) {
-		t.Fatal("network failure was classified as drift")
+	network, err := commandprojection.ProjectGetResult(commandprojection.GetResultInput{
+		Result:       transfer.JobResult{Outcome: transfer.DirectTreeOutcomePaused},
+		RuntimeError: errors.New("network"),
+		Destination:  clievent.NewDisplayPath(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if network.Drift() != clievent.DriftNone || network.ExitCode() != clievent.ExitNetwork {
+		t.Fatalf("network projection = %v/%v", network.Drift(), network.ExitCode())
 	}
 }
 
@@ -137,11 +159,41 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 	}
 	stdout := &lockedTestBuffer{}
 	stderr := &lockedTestBuffer{}
-	app := &App{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("")}
+	userTrace := newRecordingUserTrace()
+	userTracePath := filepath.Join(t.TempDir(), "share.ndjson")
+	privateSink := newRecordingV2ProcessTraceSink()
+	privateOperation, err := testrun.NewOperation("run-v2-cli", "operation-v2-cli", "share-session-retirement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateRecorder, err := testrun.NewRecorder(privateOperation, processTraceShareComponent, privateSink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateTrace := &processTrace{
+		operation: privateOperation,
+		events:    privateSink,
+		recorders: map[testrun.Component]*testrun.Recorder{processTraceShareComponent: privateRecorder},
+	}
+	app := &App{
+		Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader(""),
+		processTrace: privateTrace,
+		openUserTrace: func(
+			path string,
+			command clievent.Command,
+			_ runtrace.Config,
+			_ runtrace.Dependencies,
+		) (userTraceRecorder, error) {
+			if path != userTracePath || !filepath.IsAbs(path) || command != clievent.CommandShare {
+				return nil, errors.New("unexpected user trace request")
+			}
+			return userTrace, nil
+		},
+	}
 	shareContext, cancelShare := context.WithCancel(context.Background())
 	result := make(chan int, 1)
 	go func() {
-		result <- app.Run(shareContext, []string{"share", file, "--relay", server.URL})
+		result <- app.Run(shareContext, []string{"share", file, "--relay", server.URL, "--trace", userTracePath})
 	}()
 	linkLine := waitTestLine(t, stdout, "Link: ")
 	capability, err := link.Parse(strings.TrimPrefix(linkLine, "Link: "))
@@ -171,7 +223,7 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 	// Receiver success and sender-side channel retirement are intentionally
 	// asynchronous. Stop only after both completed sessions have relinquished
 	// sender authority, so this test isolates the durable relay STOP contract.
-	waitTestLineCount(t, stderr, "share: receiver session retired ", 2)
+	waitV2PrivateMilestones(t, privateSink, processTraceSenderSessionRetired, 2)
 	cancelShare()
 	select {
 	case code := <-result:
@@ -180,6 +232,12 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("share did not complete explicit stop")
+	}
+	if err := privateTrace.close(); err != nil {
+		t.Fatal(err)
+	}
+	if userTrace.eventCount() == 0 {
+		t.Fatal("user trace received no events while the private process trace was active")
 	}
 	if store.Count() != 1 {
 		t.Fatalf("durable STOP writes = %d", store.Count())
@@ -225,22 +283,92 @@ func waitTestLine(t *testing.T, output *lockedTestBuffer, prefix string) string 
 	return ""
 }
 
-func waitTestLineCount(t *testing.T, output *lockedTestBuffer, prefix string, count int) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		matched := 0
-		for line := range strings.SplitSeq(output.String(), "\n") {
-			if strings.HasPrefix(line, prefix) {
-				matched++
-			}
+type recordingUserTrace struct {
+	mu     sync.Mutex
+	events []clievent.Event
+	health chan clievent.TraceIncomplete
+}
+
+func newRecordingUserTrace() *recordingUserTrace {
+	return &recordingUserTrace{
+		health: make(chan clievent.TraceIncomplete),
+	}
+}
+
+func (trace *recordingUserTrace) Record(event clievent.Event) bool {
+	trace.mu.Lock()
+	trace.events = append(trace.events, event)
+	trace.mu.Unlock()
+	return true
+}
+
+func (*recordingUserTrace) ReportUpstreamLoss(uint64, uint64) bool { return true }
+
+func (trace *recordingUserTrace) Health() <-chan clievent.TraceIncomplete { return trace.health }
+
+func (*recordingUserTrace) Close() runtrace.Status { return runtrace.Status{Complete: true} }
+
+func (trace *recordingUserTrace) eventCount() int {
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	return len(trace.events)
+}
+
+type recordingV2ProcessTraceSink struct {
+	mu      sync.Mutex
+	events  []testrun.Event
+	changed chan struct{}
+}
+
+func newRecordingV2ProcessTraceSink() *recordingV2ProcessTraceSink {
+	return &recordingV2ProcessTraceSink{changed: make(chan struct{})}
+}
+
+func (sink *recordingV2ProcessTraceSink) WriteEvent(event testrun.Event) error {
+	sink.mu.Lock()
+	sink.events = append(sink.events, event)
+	close(sink.changed)
+	sink.changed = make(chan struct{})
+	sink.mu.Unlock()
+	return nil
+}
+
+func (*recordingV2ProcessTraceSink) Close() error { return nil }
+
+func (sink *recordingV2ProcessTraceSink) milestoneSnapshot(
+	milestone testrun.Milestone,
+) (int, <-chan struct{}) {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	count := 0
+	for _, event := range sink.events {
+		if event.Milestone == string(milestone) && event.Outcome == string(testrun.OutcomeSucceeded) {
+			count++
 		}
-		if matched >= count {
+	}
+	return count, sink.changed
+}
+
+func waitV2PrivateMilestones(
+	t *testing.T,
+	sink *recordingV2ProcessTraceSink,
+	milestone testrun.Milestone,
+	count int,
+) {
+	t.Helper()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	for {
+		observed, changed := sink.milestoneSnapshot(milestone)
+		if observed >= count {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-changed:
+		case <-timer.C:
+			t.Fatalf("timed out waiting for %d %q private milestones; observed=%d", count, milestone, observed)
+		}
 	}
-	t.Fatalf("timed out waiting for %d %q lines in %q", count, prefix, output.String())
 }
 
 type memoryStopStore struct {

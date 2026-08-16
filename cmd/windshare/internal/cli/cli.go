@@ -5,13 +5,13 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 )
 
 // 退出码语义(§6.9 工程要求):脚本据此区分"该重试"(网络)与"该改命令"
@@ -39,43 +39,47 @@ type App struct {
 	Stderr io.Writer
 	Stdin  io.Reader
 
-	stderrMu            sync.Mutex
+	terminal             terminalOutputState
+	clock                commandClock
+	terminalCapabilities terminalCapabilityProvider
+	terminalCellWidth    terminalCellWidthFunc
+	openUserTrace        userTraceOpener
+	commandEventCapacity int
+
 	receiverPeerFactory func() (receiverPeerStarter, error)
 	receiverClock       receiverAdmissionClock
 	processTrace        *processTrace
 	getOutputFactory    getOutputAuthorityFactory
-	getTTYDetector      TTYDetector
-	getProgress         ProgressSink
-	getWarnings         WarningSink
-	getTraces           GetTraceSink
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
 // /"中断下载"语义,§6.9)。
 func Main() int {
+	app := &App{
+		Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
+	}
 	trace, err := newProcessTrace(os.LookupEnv)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		app.writeCompleteLine("%v", err)
+		app.closeTerminalOutput()
 		return ExitFailure
 	}
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
-	app := &App{
-		Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
-		processTrace: trace,
-	}
+	app.processTrace = trace
 	code := runCLIWithInterruptEscalation(
 		interrupts,
 		os.Exit,
 		func(ctx context.Context) int { return app.Run(ctx, os.Args[1:]) },
 	)
 	if err := trace.close(); err != nil {
-		fmt.Fprintln(os.Stderr, "windshare: publish test trace:", err)
+		app.writeCompleteLine("windshare: publish test trace: %v", err)
 		if code == ExitOK {
 			code = ExitFailure
 		}
 	}
+	app.closeTerminalOutput()
 	return code
 }
 
@@ -97,7 +101,9 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		a.usage()
 		return ExitOK
 	default:
-		fmt.Fprintf(a.stderrWriter(), "windshare: unknown command %q\n", args[0])
+		// A command token is untrusted input and can itself be a capability or
+		// private credential accidentally pasted in the wrong position.
+		a.writeCompleteLine("windshare: unknown command")
 		a.usage()
 		return ExitUsage
 	}
@@ -105,17 +111,19 @@ func (a *App) Run(ctx context.Context, args []string) int {
 
 func (a *App) usage() {
 	fmt.Fprint(a.stderrWriter(), `Usage:
-	  windshare share <path...> [--relay <url>] [--block-size <bytes>] [--split-key] [--front-url <url>]
+	  windshare share <path...> [--relay <url>] [--block-size <bytes>] [--split-key] [--front-url <url>] [-v|--verbose] [--trace <file>]
 	      Commit selected roots, wait for relay registration, print a suite-02 link, and scan descendants on demand.
 	      --split-key prints a bare link and key string for delivery over separate channels.
 
-	  windshare get <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only]
-	  windshare get -o <directory> <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only]
+	  windshare get <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>]
+	  windshare get -o <directory> <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>]
 	      Save one ordinary named result inside the output container; -o defaults to the current directory.
 	      Compatible active downloads reuse their frozen result name and verified progress.
 	      relay-only skips direct peer setup and transfers content through the configured relay.
 	      p2p-only uses the relay for bootstrap and signaling but never for content; direct-path failure stops the download.
 	      If the link has no key, use --key or enter the key interactively.
+	      -v and --verbose show static diagnostic milestones; --trace writes private-safe NDJSON to a file.
+	      --trace=- is not supported because trace data never shares a human or capability stream.
 
 	  windshare resume list -o <directory>
 	      List destination-owned incomplete, resumable, cleanup-pending, and attention state.
@@ -127,53 +135,184 @@ func (a *App) usage() {
 `)
 }
 
-// logf 输出运行状态到 stderr(stdout 只留给链接等机器可读产物)。
-func (a *App) logf(format string, args ...any) {
-	// Format before taking the lock so a concurrent progress callback cannot
-	// interleave the individual writes performed by fmt for Stringer values.
+// writeCompleteLine is reserved for command parsing, prompts, resume, and
+// private-test diagnostics that occur outside a command event runtime.
+func (a *App) writeCompleteLine(format string, args ...any) {
 	message := fmt.Sprintf(format, args...)
-	a.stderrMu.Lock()
-	defer a.stderrMu.Unlock()
-	_, _ = fmt.Fprintln(a.Stderr, message)
+	_, _ = fmt.Fprintln(a.stderrWriter(), message)
 }
 
-type synchronizedStderr struct{ app *App }
-
-func (w synchronizedStderr) Write(p []byte) (int, error) {
-	w.app.stderrMu.Lock()
-	defer w.app.stderrMu.Unlock()
-	return w.app.Stderr.Write(p)
+// stderrWriter gives top-level, prompt, resume, and private-trace diagnostics a
+// complete-line adapter so TerminalCanvas remains the only stderr writer and
+// can coordinate each insertion with an active command progress row.
+func (a *App) stderrWriter() io.Writer {
+	return completeLineCanvasWriter{canvas: a.terminalOutput().canvas}
 }
 
-// stderrWriter gives progress, relay callbacks, and orchestration diagnostics
-// one output serialization boundary. Those producers are intentionally
-// concurrent even though bytes.Buffer-based tests and many io.Writer values are
-// not safe for concurrent writes.
-func (a *App) stderrWriter() io.Writer { return synchronizedStderr{app: a} }
+type requestParseOutcome uint8
 
-// newFlagSet 统一 flag 行为:错误不退出进程(返回给调用方定退出码),
-// 用法输出走注入的 stderr。
+const (
+	requestParseReady requestParseOutcome = iota
+	requestParseHelp
+	requestParseUsageFailure
+	requestParseInternalFailure
+)
+
+func (outcome requestParseOutcome) exitCode() int {
+	switch outcome {
+	case requestParseReady, requestParseHelp:
+		return ExitOK
+	case requestParseUsageFailure:
+		return ExitUsage
+	case requestParseInternalFailure:
+		return ExitFailure
+	default:
+		return ExitFailure
+	}
+}
+
+type flagParseOutcome uint8
+
+const (
+	flagParseReady flagParseOutcome = iota
+	flagParseHelp
+	flagParseUnknownOption
+	flagParseMissingOptionValue
+	flagParseInvalidOptionValue
+	flagParseInvalidOptionSyntax
+	flagParseInternalFailure
+)
+
+func flagParseDiagnostic(outcome flagParseOutcome) string {
+	switch outcome {
+	case flagParseUnknownOption:
+		return "unknown option"
+	case flagParseMissingOptionValue:
+		return "option value is required"
+	case flagParseInvalidOptionValue:
+		return "option value is invalid"
+	case flagParseInvalidOptionSyntax:
+		return "option syntax is invalid"
+	default:
+		return "command arguments could not be parsed"
+	}
+}
+
+// newFlagSet gives the standard parser a discard-only sink because its errors
+// quote rejected values. Human output is produced later from the closed
+// flagParseOutcome classification, never from error text.
 func (a *App) newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(a.stderrWriter())
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
 	return fs
 }
 
-// parseInterleaved 支持 §6.9 的「位置参数在前、flag 在后」书写:stdlib flag
-// 遇首个非 flag 参数即停止解析,这里循环续解,位置参数按原相对顺序收集。
-func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
-	var pos []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			return nil, err
-		}
-		rest := fs.Args()
-		if len(rest) == 0 {
-			return pos, nil
-		}
-		pos = append(pos, rest[0])
-		args = rest[1:]
+// writeFlagHelp renders only registration-time metadata. PrintDefaults uses
+// DefValue rather than the parsed Value, so help after a positional capability
+// cannot reflect that capability back to the terminal.
+func (a *App) writeFlagHelp(fs *flag.FlagSet, synopsis string) {
+	var help strings.Builder
+	fmt.Fprintf(&help, "Usage: windshare %s\n\nOptions:\n", synopsis)
+	fs.SetOutput(&help)
+	fs.PrintDefaults()
+	fs.SetOutput(io.Discard)
+	_, _ = io.WriteString(a.stderrWriter(), help.String())
+}
+
+func (a *App) projectFlagParse(
+	command string,
+	fs *flag.FlagSet,
+	synopsis string,
+	outcome flagParseOutcome,
+) requestParseOutcome {
+	switch outcome {
+	case flagParseReady:
+		return requestParseReady
+	case flagParseHelp:
+		a.writeFlagHelp(fs, synopsis)
+		return requestParseHelp
+	case flagParseInternalFailure:
+		a.writeCompleteLine("%s: command arguments could not be parsed", command)
+		return requestParseInternalFailure
+	default:
+		a.writeCompleteLine("%s: %s", command, flagParseDiagnostic(outcome))
+		return requestParseUsageFailure
 	}
+}
+
+// parseInterleaved preserves the flag package's individual flag semantics
+// while treating positionals as collectable between options. Parsing one
+// occurrence at a time lets the boundary classify a failure from option
+// structure without examining the standard library's value-bearing error.
+func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, flagParseOutcome) {
+	if fs == nil {
+		return nil, flagParseInternalFailure
+	}
+	positionals := make([]string, 0, len(args))
+	for len(args) > 0 {
+		if args[0] == "--" {
+			return append(positionals, args[1:]...), flagParseReady
+		}
+		occurrence := inspectFlagOccurrence(fs, args)
+		if occurrence.positional {
+			positionals = append(positionals, args[0])
+			args = args[1:]
+			continue
+		}
+		err := fs.Parse(args[:occurrence.width])
+		if errors.Is(err, flag.ErrHelp) {
+			return nil, flagParseHelp
+		}
+		if err != nil {
+			return nil, occurrence.failure
+		}
+		args = args[occurrence.width:]
+	}
+	return positionals, flagParseReady
+}
+
+type flagOccurrence struct {
+	width      int
+	failure    flagParseOutcome
+	positional bool
+}
+
+type boolFlag interface {
+	IsBoolFlag() bool
+}
+
+func inspectFlagOccurrence(fs *flag.FlagSet, args []string) flagOccurrence {
+	argument := args[0]
+	if len(argument) < 2 || argument[0] != '-' || argument == "-" {
+		return flagOccurrence{width: 1, positional: true}
+	}
+	numMinuses := 1
+	if argument[1] == '-' {
+		numMinuses++
+		if len(argument) == numMinuses {
+			return flagOccurrence{width: 1, positional: true}
+		}
+	}
+	nameAndValue := argument[numMinuses:]
+	if nameAndValue == "" || nameAndValue[0] == '-' || nameAndValue[0] == '=' {
+		return flagOccurrence{width: 1, failure: flagParseInvalidOptionSyntax}
+	}
+	name, _, hasValue := strings.Cut(nameAndValue, "=")
+	registered := fs.Lookup(name)
+	if registered == nil {
+		return flagOccurrence{width: 1, failure: flagParseUnknownOption}
+	}
+	if candidate, ok := registered.Value.(boolFlag); ok && candidate.IsBoolFlag() {
+		return flagOccurrence{width: 1, failure: flagParseInvalidOptionValue}
+	}
+	if hasValue {
+		return flagOccurrence{width: 1, failure: flagParseInvalidOptionValue}
+	}
+	if len(args) == 1 {
+		return flagOccurrence{width: 1, failure: flagParseMissingOptionValue}
+	}
+	return flagOccurrence{width: 2, failure: flagParseInvalidOptionValue}
 }
 
 // repeatedFlag 收集可重复 flag(--only a --only b)。

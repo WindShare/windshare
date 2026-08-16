@@ -7,11 +7,14 @@ import (
 	"sync"
 	"time"
 
+	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/internal/testrun"
+	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
 var ErrInvalidConnectivityPolicy = errors.New("invalid connectivity policy")
@@ -112,22 +115,23 @@ const receiverTerminationTraceWaitTime = time.Second
 func (a *App) monitorReceiverAdmission(
 	admission receiverContentAdmission,
 	runtime receiverRuntimeCloser,
+	observation getObservation,
 ) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		decision, ok := <-admission.Decision()
-		if !ok || decision.Cause == nil {
+		if !ok {
+			return
+		}
+		if decision.Cause == nil {
 			return
 		}
 		switch decision.TerminalOwner {
 		case receiverAdmissionTerminalResumeFailed:
-			a.logf("get: restore relay content admission failed cause_class=relay_resume")
+			observation.warning(decision.Cause)
 		case receiverAdmissionTerminalP2PUnavailable:
-			a.logf(
-				"get: p2p-only direct peer path unavailable trigger=%s; relay content fallback is disabled",
-				decision.Trigger,
-			)
+			observation.warningCode(clievent.FailurePeerStopped)
 		default:
 			return
 		}
@@ -136,6 +140,26 @@ func (a *App) monitorReceiverAdmission(
 		}
 	}()
 	return done
+}
+
+func (a *App) observeRelayContentAdmission(
+	trigger receiverAdmissionTrigger,
+	observation getObservation,
+) {
+	switch trigger {
+	case receiverAdmissionTriggerPeerFailed:
+		observation.fallback(clievent.FailurePeerNegotiation)
+	case receiverAdmissionTriggerPeerDetached:
+		observation.fallback(clievent.FailurePeerStopped)
+	case receiverAdmissionTriggerDeadline:
+		observation.fallback(clievent.FailurePeerTimeout)
+	}
+	observation.contentPath(clievent.ContentPathRelay)
+	a.recordProcessTrace(
+		processTraceGetComponent,
+		processTraceReceiverRelayContent,
+		testrun.OutcomeSucceeded,
+	)
 }
 
 func beginReceiverPlanning(
@@ -249,18 +273,10 @@ func (adapter receiverPeerFactoryAdapter) Start(
 type receiverRuntimeCloser interface{ Close() }
 
 type receiverPeerTerminationTrace struct {
-	operationID           protocolsession.OperationID
-	localGeneration       uint64
-	transitionAuthority   v2peer.ReceiverTerminalOwner
-	transitionProvenance  v2peer.ReceiverTerminalProvenance
-	disposition           v2peer.ReceiverAttemptDisposition
-	consequenceProvenance v2peer.ReceiverTerminalProvenance
-	diagnosticsTruncated  bool
-	benignComponents      []v2peer.ReceiverBenignCause
-	retainedCauseClasses  []v2peer.ReceiverCauseClass
-	teardownTransitions   []v2peer.PeerTeardownTransition
-	peerShutdownFailed    bool
-	channelDrainFailed    bool
+	diagnosticsTruncated bool
+	retainedCauseClasses []v2peer.ReceiverCauseClass
+	peerShutdownFailed   bool
+	channelDrainFailed   bool
 }
 
 type receiverPeerSetupPhase string
@@ -290,58 +306,48 @@ func (peer *activeReceiverPeer) Close() {
 func (a *App) startReceiverPeer(
 	ctx context.Context,
 	runtime *sessionruntime.ReceiverRuntime,
+	observation getObservation,
 	observe func(receiverPeerSignal),
 ) *activeReceiverPeer {
-	starter, terminationTraces, err := a.newReceiverPeerStarter()
+	starter, terminationTraces, err := a.newReceiverPeerStarter(observation)
 	if err != nil || starter == nil {
-		if err == nil {
-			err = v2peer.ErrConfig
-		}
-		a.logReceiverPeerSetupFailure(receiverPeerSetupFactory, err)
+		observation.warningCode(receiverPeerSetupFailureCode(receiverPeerSetupFactory))
 		notifyReceiverPeer(observe, receiverPeerFailed)
 		return nil
 	}
 	signaling, err := v2peer.NewRuntimeReceiverSignaling(runtime)
 	if err != nil {
-		a.logReceiverPeerSetupFailure(receiverPeerSetupSignaling, err)
+		observation.warningCode(receiverPeerSetupFailureCode(receiverPeerSetupSignaling))
 		notifyReceiverPeer(observe, receiverPeerFailed)
 		return nil
 	}
 	attempt, err := starter.Start(ctx, signaling, runtime)
 	if err != nil || attempt == nil {
-		if err == nil {
-			err = v2peer.ErrConfig
-		}
-		a.logReceiverPeerSetupFailure(receiverPeerSetupStart, err)
+		observation.warningCode(receiverPeerSetupFailureCode(receiverPeerSetupStart))
 		notifyReceiverPeer(observe, receiverPeerFailed)
 		return nil
 	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		a.monitorReceiverPeer(attempt, runtime, observe)
-		a.awaitReceiverTerminationTrace(terminationTraces)
+		a.monitorReceiverPeer(attempt, runtime, runtime.ProtocolSessionID(), observation, observe)
+		a.awaitReceiverTerminationTrace(terminationTraces, observation)
 	}()
 	return &activeReceiverPeer{attempt: attempt, done: done}
 }
 
-func (a *App) logReceiverPeerSetupFailure(phase receiverPeerSetupPhase, cause error) {
-	a.logf(
-		"get: direct peer setup failed phase=%s cause_class=%s",
-		phase,
-		receiverPeerSetupCauseClass(cause),
-	)
-}
-
-func receiverPeerSetupCauseClass(cause error) v2peer.ReceiverCauseClass {
-	classes := v2peer.ReceiverCauseClasses(cause)
-	if len(classes) == 0 {
-		return v2peer.ReceiverCauseUnknown
+func receiverPeerSetupFailureCode(phase receiverPeerSetupPhase) clievent.FailureCode {
+	switch phase {
+	case receiverPeerSetupFactory:
+		return clievent.FailurePeerConfiguration
+	case receiverPeerSetupSignaling:
+		return clievent.FailurePeerSignaling
+	default:
+		return clievent.FailurePeerNegotiation
 	}
-	return classes[0]
 }
 
-func (a *App) newReceiverPeerStarter() (
+func (a *App) newReceiverPeerStarter(observation getObservation) (
 	receiverPeerStarter,
 	<-chan receiverPeerTerminationTrace,
 	error,
@@ -353,24 +359,22 @@ func (a *App) newReceiverPeerStarter() (
 	terminationTraces := make(chan receiverPeerTerminationTrace, 1)
 	factory, err := v2peer.NewReceiverFactory(v2peer.ReceiverFactoryConfig{
 		Configuration: v2peer.DefaultConfiguration(),
+		DataChannels: v2peer.DataChannelAdapterFunc(func(channel *pion.DataChannel) (v2peer.PeerDataChannel, error) {
+			return transportwebrtc.NewChannelWithOptions(channel, transportwebrtc.ChannelOptions{
+				LifecycleTracer: transportwebrtc.LifecycleTraceFunc(observation.webRTCLifecycle),
+			})
+		}),
 		OnTermination: func(trace v2peer.ReceiverTerminationTrace) {
 			projected := receiverPeerTerminationTrace{
-				operationID:           trace.OperationID(),
-				localGeneration:       trace.LocalGeneration(),
-				transitionAuthority:   trace.TransitionAuthority(),
-				transitionProvenance:  trace.TransitionProvenance(),
-				disposition:           trace.Disposition(),
-				consequenceProvenance: trace.ConsequenceProvenance(),
-				diagnosticsTruncated:  trace.DiagnosticsTruncated(),
-				benignComponents:      trace.BenignComponents(),
-				retainedCauseClasses:  trace.RetainedCauseClasses(),
-				teardownTransitions:   trace.TeardownTransitions(),
-				peerShutdownFailed:    trace.PeerShutdownFailed(),
-				channelDrainFailed:    trace.ChannelDrainFailed(),
+				diagnosticsTruncated: trace.DiagnosticsTruncated(),
+				retainedCauseClasses: trace.RetainedCauseClasses(),
+				peerShutdownFailed:   trace.PeerShutdownFailed(),
+				channelDrainFailed:   trace.ChannelDrainFailed(),
 			}
 			select {
 			case terminationTraces <- projected:
 			default:
+				observation.loseLifecycle()
 			}
 		},
 	})
@@ -380,29 +384,32 @@ func (a *App) newReceiverPeerStarter() (
 	return receiverPeerFactoryAdapter{factory: factory}, terminationTraces, nil
 }
 
-func (a *App) awaitReceiverTerminationTrace(traces <-chan receiverPeerTerminationTrace) {
+func (a *App) awaitReceiverTerminationTrace(
+	traces <-chan receiverPeerTerminationTrace,
+	observation getObservation,
+) {
 	if traces == nil {
 		return
 	}
-	timer := time.NewTimer(receiverTerminationTraceWaitTime)
+	if observation.runtime == nil || observation.runtime.Clock() == nil {
+		observation.loseLifecycle()
+		return
+	}
+	timer := observation.runtime.Clock().NewTimer(receiverTerminationTraceWaitTime)
 	defer timer.Stop()
 	select {
 	case trace := <-traces:
-		a.logf(
-			"get: direct peer termination operation_id=%x local_generation=%d transition_authority=%s transition_provenance=%s disposition=%s consequence_provenance=%s diagnostics_truncated=%t benign_components=%v retained_cause_classes=%v teardown_transitions=%v peer_shutdown_failed=%t channel_drain_failed=%t",
-			trace.operationID, trace.localGeneration, trace.transitionAuthority,
-			trace.transitionProvenance, trace.disposition, trace.consequenceProvenance,
-			trace.diagnosticsTruncated, trace.benignComponents, trace.retainedCauseClasses,
-			trace.teardownTransitions, trace.peerShutdownFailed, trace.channelDrainFailed,
-		)
-	case <-timer.C:
-		a.logf("get: direct peer termination trace unavailable cause_class=trace_timeout")
+		observation.receiverTermination(trace)
+	case <-timer.C():
+		observation.loseLifecycle()
 	}
 }
 
 func (a *App) monitorReceiverPeer(
 	attempt receiverPeerAttempt,
 	runtime receiverRuntimeCloser,
+	session protocolsession.ProtocolSessionID,
+	observation getObservation,
 	observe func(receiverPeerSignal),
 ) {
 	ready := attempt.Ready()
@@ -413,8 +420,9 @@ func (a *App) monitorReceiverPeer(
 			attached = true
 			ready = nil
 			notifyReceiverPeer(observe, receiverPeerReady)
-			if _, ok := attempt.Lane(); ok {
-				a.logf("get: direct peer lane active")
+			if lane, ok := attempt.Lane(); ok {
+				observation.laneAdopted(session, lane)
+				observation.contentPath(clievent.ContentPathDirect)
 				a.recordProcessTrace(
 					processTraceGetComponent,
 					processTraceReceiverDirectLane,
@@ -427,12 +435,18 @@ func (a *App) monitorReceiverPeer(
 			switch outcome.disposition {
 			case receiverPeerSessionUnsafe:
 				notifyReceiverPeer(observe, receiverPeerSessionFatal)
-				a.logf("get: authenticated peer signaling violated this session; closing the session")
+				if err != nil {
+					observation.warning(err)
+				} else {
+					observation.warningCode(clievent.FailurePeerProtocol)
+				}
 				runtime.Close()
 				return
 			case receiverPeerSessionUnavailable:
 				notifyReceiverPeer(observe, receiverPeerRuntimeTerminal)
-				a.logf("get: authenticated runtime ended; direct peer admission stopped")
+				if err != nil {
+					observation.warning(err)
+				}
 				return
 			case receiverPeerLocalStop:
 				return
@@ -440,12 +454,8 @@ func (a *App) monitorReceiverPeer(
 			_, laneAttached := attempt.Lane()
 			if attached || laneAttached {
 				notifyReceiverPeer(observe, receiverPeerDetached)
-				a.logf("get: direct peer lane lost")
 			} else {
 				notifyReceiverPeer(observe, receiverPeerFailed)
-				if err != nil {
-					a.logf("get: direct peer connection failed")
-				}
 			}
 			return
 		}

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
@@ -13,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
@@ -24,21 +26,21 @@ var (
 )
 
 type getOutputPreparation struct {
-	authority getOutputAuthority
-	mode      getOutputMode
-	warnings  *warningOnce
-	clock     receiverAdmissionClock
-	startedAt time.Time
+	authority   getOutputAuthority
+	mode        getOutputMode
+	displayRoot string
+	clock       receiverAdmissionClock
+	startedAt   time.Time
 }
 
 func (a *App) prepareGetOutput(
 	ctx context.Context,
 	request getRequest,
+	observation getObservation,
 ) (getOutputPreparation, int) {
 	outputRoot, err := filepath.Abs(request.outDir)
 	if err != nil {
-		a.logf("get: resolve output directory: %v", err)
-		return getOutputPreparation{}, ExitFailure
+		return getOutputPreparation{}, observation.commandFailure(ExitFailure, err)
 	}
 	clock := a.admissionClock()
 	// Starting the command certifies the caller-provided container. The operation
@@ -51,21 +53,18 @@ func (a *App) prepareGetOutput(
 	}
 	authority, err := factory.NewGetOutputAuthority(getOutputAuthorityConfig{
 		rootPath: outputRoot, createRoot: true,
-		tracer: osfs.FilesystemOutputTraceFunc(a.traceFilesystemOutput),
+		tracer: osfs.FilesystemOutputTraceFunc(observation.filesystemOutput),
 	})
 	if err != nil {
-		a.logf("get: initialize output authority: %v", err)
-		return getOutputPreparation{}, ExitFailure
+		return getOutputPreparation{}, observation.commandFailure(ExitFailure, err)
 	}
 	mode, err := authority.BindDestination(ctx)
 	if err != nil {
 		closeErr := authority.Close()
-		a.logf("get: bind output container: %v", errors.Join(err, closeErr))
-		return getOutputPreparation{}, ExitFailure
+		return getOutputPreparation{}, observation.commandFailure(ExitFailure, errors.Join(err, closeErr))
 	}
-	a.traceGet(GetTraceEvent{Stage: GetTraceDestinationBound, Mode: mode})
 	return getOutputPreparation{
-		authority: authority, mode: mode, warnings: a.getWarningReporter(),
+		authority: authority, mode: mode, displayRoot: outputRoot,
 		clock: clock, startedAt: startedAt,
 	}, ExitOK
 }
@@ -91,8 +90,12 @@ func (session *getReceiverSession) Close() {
 	}
 }
 
-func (a *App) connectGetReceiver(ctx context.Context, capability link.Link) (*getReceiverSession, int) {
-	connection, code := a.dialV2Receiver(ctx, capability)
+func (a *App) connectGetReceiver(
+	ctx context.Context,
+	capability link.Link,
+	observation getObservation,
+) (*getReceiverSession, int) {
+	connection, code := a.dialV2Receiver(ctx, capability, observation)
 	if code != ExitOK {
 		return nil, code
 	}
@@ -102,19 +105,16 @@ func (a *App) connectGetReceiver(ctx context.Context, capability link.Link) (*ge
 	})
 	if err != nil {
 		_ = connection.Close()
-		a.logf("get: authenticate descriptor: %v\nCheck that the link and key belong to this share.", err)
-		return nil, ExitUsage
+		return nil, observation.commandFailureCode(ExitUsage, clievent.FailureCapabilityInvalid)
 	}
 	runtime, err := prepared.Connect(ctx, connection.Channel())
 	if err != nil {
 		prepared.Close()
 		_ = connection.Close()
 		if ctx.Err() != nil {
-			a.logf("get: interrupted during session handshake")
-			return nil, ExitFailure
+			return nil, observation.commandFailure(ExitFailure, ctx.Err())
 		}
-		a.logf("get: establish authenticated session: %v", err)
-		return nil, ExitNetwork
+		return nil, observation.commandFailure(ExitNetwork, err)
 	}
 	return &getReceiverSession{
 		connection: connection, prepared: prepared, runtime: runtime,
@@ -122,16 +122,16 @@ func (a *App) connectGetReceiver(ctx context.Context, capability link.Link) (*ge
 }
 
 type getTransferExecution struct {
-	app         *App
-	runtime     *sessionruntime.ReceiverRuntime
-	admission   receiverContentAdmission
-	monitorDone <-chan struct{}
-	peer        *activeReceiverPeer
-	operation   getOutputOperation
-	renamed     bool
-	job         *transfer.TransferJob
-	settled     bool
-	closed      bool
+	runtime             *sessionruntime.ReceiverRuntime
+	admission           receiverContentAdmission
+	monitorDone         <-chan struct{}
+	peer                *activeReceiverPeer
+	operation           getOutputOperation
+	destination         string
+	destinationAdjusted bool
+	job                 *transfer.TransferJob
+	settled             bool
+	closed              bool
 }
 
 func (execution *getTransferExecution) Close() {
@@ -153,9 +153,6 @@ func (execution *getTransferExecution) SettleAdmission() {
 	execution.admission.Close()
 	execution.admission.Wait()
 	<-execution.monitorDone
-	execution.app.logReceiverAdmissionTraces(
-		execution.runtime.ProtocolSessionID().Bytes(), execution.admission,
-	)
 }
 
 func (a *App) prepareGetTransfer(
@@ -163,19 +160,18 @@ func (a *App) prepareGetTransfer(
 	request getRequest,
 	output getOutputPreparation,
 	runtime *sessionruntime.ReceiverRuntime,
+	observation getObservation,
 ) (*getTransferExecution, int) {
 	connectivity, err := request.connectivity.receiverPlan()
 	if err != nil {
-		a.logf("get: resolve connectivity policy: %v", err)
-		return nil, ExitUsage
+		return nil, observation.commandFailureCode(ExitUsage, clievent.FailureInvalidInput)
 	}
 	laneID, laneEpoch := runtime.LaneIdentity()
 	relaySuspension, err := runtime.LaneSet().SuspendContent(
 		transfer.LaneIdentity{ID: laneID, Epoch: laneEpoch},
 	)
 	if err != nil {
-		a.logf("get: initialize content-path admission: %v", err)
-		return nil, ExitFailure
+		return nil, observation.commandFailure(ExitFailure, err)
 	}
 	contentReady := make(chan struct{})
 	admission, err := newReceiverContentAdmissionWithExecution(
@@ -183,40 +179,46 @@ func (a *App) prepareGetTransfer(
 		output.startedAt,
 		output.clock,
 		relaySuspension,
-		receiverAdmissionExecution{claimGate: contentReady},
+		receiverAdmissionExecution{
+			claimGate: contentReady,
+			onClaim: func(trigger receiverAdmissionTrigger) {
+				a.observeRelayContentAdmission(trigger, observation)
+			},
+		},
 	)
 	if err != nil {
-		a.logf("get: initialize content-path admission: %v", err)
-		return nil, ExitFailure
+		return nil, observation.commandFailure(ExitFailure, err)
 	}
 	execution := &getTransferExecution{
-		app: a, runtime: runtime, admission: admission,
-		monitorDone: a.monitorReceiverAdmission(admission, runtime),
+		runtime: runtime, admission: admission,
+		monitorDone: a.monitorReceiverAdmission(admission, runtime, observation),
 	}
 	observePeer := func(signal receiverPeerSignal) {
 		if observeErr := admission.ObservePeer(signal); observeErr != nil {
-			a.logf("get: apply direct-peer admission signal failed cause_class=relay_resume")
+			observation.warning(observeErr)
 			runtime.Close()
 		}
 	}
 	peer, rules, err := beginReceiverPlanning(
 		connectivity,
-		func() *activeReceiverPeer { return a.startReceiverPeer(ctx, runtime, observePeer) },
+		func() *activeReceiverPeer { return a.startReceiverPeer(ctx, runtime, observation, observePeer) },
 		admission.AdmitRelayOnly,
 		func() (transfer.SelectionRules, error) { return selectionRules(request.only) },
 	)
 	execution.peer = peer
 	if err != nil {
 		if errors.Is(err, errReceiverP2PPathUnavailable) {
-			a.logf("get: p2p-only direct peer setup failed; relay content fallback is disabled")
+			observation.commandFailureCode(ExitNetwork, clievent.FailurePeerNegotiation)
 			execution.Close()
 			return nil, ExitNetwork
 		}
-		a.logf("get: resolve selection: %v", err)
+		observation.commandFailure(ExitUsage, err)
 		execution.Close()
 		return nil, ExitUsage
 	}
-	job, operation, renamed, code := a.buildGetTransferJob(ctx, runtime, output, rules)
+	job, operation, destination, adjusted, code := a.buildGetTransferJob(
+		ctx, runtime, output, rules, observation,
+	)
 	if code != ExitOK {
 		execution.Close()
 		if errors.Is(admission.Err(), errReceiverP2PPathUnavailable) {
@@ -225,19 +227,16 @@ func (a *App) prepareGetTransfer(
 		return nil, code
 	}
 	if output.mode == getOutputLiveOnly {
-		output.warnings.Warn(liveOnlyOutputWarning)
+		observation.warningCode(clievent.FailureOutputUnsupportedFilesystem)
 	}
 	execution.operation = operation
-	execution.renamed = renamed
+	execution.destination = destination
+	execution.destinationAdjusted = adjusted
 	execution.job = job
 	// Lane timing may queue relay admission while shape and destination authority
 	// are being resolved. Releasing this separate gate only after the immutable
 	// operation and job exist prevents any content request from outrunning them.
 	close(contentReady)
-	a.traceGet(GetTraceEvent{
-		Stage: GetTraceContentAdmitted, ProtocolSessionID: runtime.ProtocolSessionID(),
-		IntentDigest: operation.intent.Digest(), Mode: operation.mode, Renamed: renamed,
-	})
 	return execution, ExitOK
 }
 
@@ -246,39 +245,40 @@ func (a *App) buildGetTransferJob(
 	runtime *sessionruntime.ReceiverRuntime,
 	output getOutputPreparation,
 	rules transfer.SelectionRules,
-) (*transfer.TransferJob, getOutputOperation, bool, int) {
+	observation getObservation,
+) (*transfer.TransferJob, getOutputOperation, string, bool, int) {
 	selection, err := transfer.NewSelectionSpec(
 		runtime.Descriptor().ShareInstance(), runtime.Descriptor().SyntheticRoot(), rules,
 	)
 	if err != nil {
-		a.logf("get: freeze selection: %v", err)
-		return nil, getOutputOperation{}, false, ExitFailure
+		return nil, getOutputOperation{}, "", false, observation.commandFailure(ExitFailure, err)
 	}
-	admission, err := resolveGetOutputOperation(ctx, output.authority, runtime, selection, a)
+	admission, err := resolveGetOutputOperation(ctx, output.authority, runtime, selection)
 	if err != nil {
-		a.reportGetOutputAdmissionFailure(err)
-		return nil, getOutputOperation{}, false, ExitFailure
+		return nil, getOutputOperation{}, "", false, reportGetOutputAdmissionFailure(observation, err)
 	}
 	if admission.operation.mode != output.mode {
-		a.reportGetOutputAdmissionFailure(errGetOutputReservationContract)
-		return nil, getOutputOperation{}, false, ExitFailure
+		return nil, getOutputOperation{}, "", false,
+			reportGetOutputAdmissionFailure(observation, errGetOutputReservationContract)
+	}
+	destination, adjusted, err := getOperationDestination(output.displayRoot, admission.operation)
+	if err != nil {
+		return nil, getOutputOperation{}, "", false, reportGetOutputAdmissionFailure(observation, err)
 	}
 	jobID, err := transfer.NewTransferJobID()
 	if err != nil {
-		a.logf("get: allocate transfer job identity: %v", err)
-		return nil, getOutputOperation{}, false, ExitFailure
+		return nil, getOutputOperation{}, "", false, observation.commandFailure(ExitFailure, err)
 	}
 	job, err := runtime.NewTransferJob(
 		admission.operation.intent,
 		jobID,
 		getOperationMaterializer{authority: output.authority, operation: admission.operation},
-		transfer.TransferLifecycleTraceFunc(a.traceTransferLifecycle),
+		transfer.TransferLifecycleTraceFunc(observation.transferLifecycle),
 	)
 	if err != nil {
-		a.logf("get: initialize transfer: %v", err)
-		return nil, getOutputOperation{}, false, ExitFailure
+		return nil, getOutputOperation{}, "", false, observation.commandFailure(ExitFailure, err)
 	}
-	return job, admission.operation, admission.renamed, ExitOK
+	return job, admission.operation, destination, adjusted, ExitOK
 }
 
 type getShapeResolver interface {
@@ -293,7 +293,30 @@ type getShapeResolver interface {
 type getOutputAdmission struct {
 	operation getOutputOperation
 	lookup    getOutputLookupKind
-	renamed   bool
+}
+
+func getOperationDestination(
+	displayRoot string,
+	operation getOutputOperation,
+) (string, bool, error) {
+	if displayRoot == "" || !filepath.IsAbs(displayRoot) || !operation.valid() {
+		return "", false, errGetOutputReservationContract
+	}
+	reservation, direct := operation.intent.MaterializationPlan().DestinationReservation()
+	if !direct || reservation.IsZero() {
+		return "", false, errGetOutputReservationContract
+	}
+	switch reservation.Kind() {
+	case receivecontract.ReservationContainerRoot:
+		return displayRoot, false, nil
+	case receivecontract.ReservationNamedContainerEntry:
+		if reservation.ReservedName() == "" {
+			return "", false, errGetOutputReservationContract
+		}
+		return filepath.Join(displayRoot, reservation.ReservedName()), reservation.CollisionIndex() > 0, nil
+	default:
+		return "", false, errGetOutputReservationContract
+	}
 }
 
 func resolveGetOutputOperation(
@@ -301,7 +324,6 @@ func resolveGetOutputOperation(
 	authority getOutputAuthority,
 	resolver getShapeResolver,
 	selection transfer.SelectionSpec,
-	app *App,
 ) (getOutputAdmission, error) {
 	if ctx == nil || authority == nil || resolver == nil || selection.IsZero() {
 		return getOutputAdmission{}, errGetOutputReservationContract
@@ -313,20 +335,11 @@ func resolveGetOutputOperation(
 	if !lookup.valid() {
 		return getOutputAdmission{}, errGetOutputReservationContract
 	}
-	if app != nil {
-		app.traceGet(GetTraceEvent{
-			Stage: GetTraceActiveLookup, SelectionDigest: selection.Digest(), Lookup: lookup.kind,
-		})
-	}
 	var operation getOutputOperation
 	switch lookup.kind {
 	case getOutputLookupMiss:
-		var shapeTracer ordinaryoutput.ShapeTracer
-		if app != nil {
-			shapeTracer = ordinaryoutput.ShapeTraceFunc(app.traceOrdinaryOutputShape)
-		}
 		decision, resolveErr := resolver.ResolveOrdinaryOutputShape(
-			ctx, selection, ordinaryoutput.DefaultShapeProbeBudgetV1, shapeTracer,
+			ctx, selection, ordinaryoutput.DefaultShapeProbeBudgetV1, nil,
 		)
 		if resolveErr != nil {
 			return getOutputAdmission{}, resolveErr
@@ -357,30 +370,22 @@ func resolveGetOutputOperation(
 	if !direct || reservation.IsZero() {
 		return getOutputAdmission{}, errGetOutputReservationContract
 	}
-	admission := getOutputAdmission{
-		operation: operation, lookup: lookup.kind, renamed: reservation.CollisionIndex() > 0,
-	}
-	if app != nil {
-		app.traceGet(GetTraceEvent{
-			Stage: GetTraceOperationReady, SelectionDigest: selection.Digest(),
-			IntentDigest: operation.intent.Digest(), Mode: operation.mode,
-			Lookup: lookup.kind, Renamed: admission.renamed,
-		})
-	}
-	return admission, nil
+	return getOutputAdmission{
+		operation: operation, lookup: lookup.kind,
+	}, nil
 }
 
-func (a *App) reportGetOutputAdmissionFailure(err error) {
+func reportGetOutputAdmissionFailure(observation getObservation, err error) int {
 	switch {
 	case errors.Is(err, errGetOutputOperationAlreadyRunning):
-		a.logf("get: this download is already running for the selected destination")
+		return observation.commandFailureCode(ExitFailure, clievent.FailureOutputFileAlreadyActive)
 	case errors.Is(err, errGetOutputOperationNeedsAttention):
-		a.logf("get: output operation needs attention; run 'windshare resume list -o <directory>'")
+		return observation.commandFailureCode(ExitFailure, clievent.FailureCheckpointStateIO)
 	case errors.Is(err, errGetOutputOperationAmbiguous):
-		a.logf("get: output operation ownership is ambiguous; no destination was selected")
+		return observation.commandFailureCode(ExitFailure, clievent.FailureOutputOwnership)
 	case errors.Is(err, errGetOutputReservationContract), errors.Is(err, errGetOutputAdapterContract):
-		a.logf("get: output operation reservation violated its contract")
+		return observation.commandFailureCode(ExitFailure, clievent.FailureOutputContract)
 	default:
-		a.logf("get: prepare output operation: %v", err)
+		return observation.commandFailure(ExitFailure, err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -104,58 +105,137 @@ func TestSelectionDecisionPreservesTheRuleThatAdmittedAFile(t *testing.T) {
 }
 
 func TestSelectionMeasureAndTrackerDefensiveLifecycleEdges(t *testing.T) {
-	t.Run("discovery-and-completion-counters", func(t *testing.T) {
-		tracker := newSelectionTracker()
+	t.Run("discovery-and-verified-counters", func(t *testing.T) {
+		tracker := newReceiveProgressTracker()
 		initial := <-tracker.Updates()
-		if initial.Discovery != DiscoveryOpen || initial.DiscoveredFiles != 0 || initial.CompletedFiles != 0 {
-			t.Fatalf("initial measure = %+v", initial)
+		if initial.Discovery != DiscoveryOpen || initial.DiscoveredFiles != 0 || !initial.CountersExact {
+			t.Fatalf("initial progress = %+v", initial)
 		}
-		tracker.addFile(5)
-		tracker.completeFile(5)
-		open := tracker.snapshot()
+		selection := newDiscoveredSelection()
+		selection.addFile(5)
+		tracker.addDiscovery(selection)
+		tracker.addNewlyVerified(5)
+		open := tracker.snapshotValue()
 		if open.Discovery != DiscoveryOpen || open.DiscoveredFiles != 1 || open.DiscoveredBytes != 5 ||
-			open.CompletedFiles != 1 || open.CompletedBytes != 5 || open.ConnectionSizeClass() != ConnectionSizeUnknown {
-			t.Fatalf("open measure = %+v", open)
+			open.VerifiedBytes != 5 || open.NewlyVerifiedBytes != 5 || open.ConnectionSizeClass() != ConnectionSizeUnknown {
+			t.Fatalf("open progress = %+v", open)
 		}
 		tracker.finishDiscovery()
-		complete := tracker.snapshot()
-		if complete.Discovery != DiscoveryComplete || !complete.DiscoveryTerminalSuccess || complete.ConnectionSizeClass() != ConnectionSizeSmall {
-			t.Fatalf("complete measure = %+v", complete)
+		complete := tracker.snapshotValue()
+		if complete.Discovery != DiscoveryComplete || complete.ConnectionSizeClass() != ConnectionSizeSmall {
+			t.Fatalf("complete progress = %+v", complete)
 		}
 		// Discovery status is terminal; a late failure report from another
 		// settlement path must not rewrite a completed catalog into failed.
 		tracker.failDiscovery()
-		if got := tracker.snapshot(); got.Discovery != DiscoveryComplete || got.DiscoveryTerminalSuccess != true {
+		if got := tracker.snapshotValue(); got.Discovery != DiscoveryComplete {
 			t.Fatalf("late failure regressed discovery status: %+v", got)
 		}
 	})
 
 	t.Run("file-count-overflow", func(t *testing.T) {
-		measure := SelectionMeasure{DiscoveredFiles: math.MaxUint64}
-		measure.addDiscoveredFile(0)
-		if !measure.overflowed || measure.DiscoveredFiles != math.MaxUint64 || measure.ConnectionSizeClass() != ConnectionSizeLarge {
-			t.Fatalf("overflowed file measure = %+v", measure)
+		tracker := newReceiveProgressTracker()
+		tracker.addDiscovery(discoveredSelection{files: math.MaxUint64, exact: true})
+		tracker.addDiscovery(discoveredSelection{files: 1, exact: true})
+		progress := tracker.snapshotValue()
+		if progress.CountersExact || progress.DiscoveredFiles != math.MaxUint64 ||
+			progress.ConnectionSizeClass() != ConnectionSizeLarge {
+			t.Fatalf("overflowed progress = %+v", progress)
 		}
 	})
 
-	t.Run("replacement-publishes-exact-snapshot", func(t *testing.T) {
-		tracker := newSelectionTracker()
-		want := SelectionMeasure{DiscoveredFiles: 7, DiscoveredBytes: 19, DiscoveryTerminalSuccess: true}
-		tracker.replace(want)
-		if got := tracker.snapshot(); got != want {
-			t.Fatalf("replacement snapshot = %+v, want %+v", got, want)
-		}
+	t.Run("latest-update-coalesces", func(t *testing.T) {
+		tracker := newReceiveProgressTracker()
+		tracker.addDiscovery(discoveredSelection{files: 3, bytes: 7, exact: true})
+		tracker.addDiscovery(discoveredSelection{files: 4, bytes: 12, exact: true})
+		want := tracker.snapshotValue()
 		if got := <-tracker.Updates(); got != want {
-			t.Fatalf("replacement update = %+v, want %+v", got, want)
+			t.Fatalf("coalesced update = %+v, want %+v", got, want)
 		}
 	})
 
 	t.Run("zero-value-close-is-idempotent", func(t *testing.T) {
-		var tracker selectionTracker
+		var tracker receiveProgressTracker
 		tracker.closeUpdates()
 		tracker.closeUpdates()
 		if !tracker.closed || tracker.Updates() != nil {
 			t.Fatalf("zero-value tracker close = closed %t, updates %v", tracker.closed, tracker.Updates())
 		}
 	})
+}
+
+func TestReceiveProgressSnapshotRemainsExactDuringConcurrentDiscoveryAndVerification(t *testing.T) {
+	const workers = 64
+	tracker := newReceiveProgressTracker()
+	start := make(chan struct{})
+	stop := make(chan struct{})
+	invalid := make(chan ReceiveProgressSnapshot, 1)
+	var observers sync.WaitGroup
+	observers.Go(func() {
+		previous := tracker.snapshotValue()
+		for {
+			current := tracker.snapshotValue()
+			if current.DiscoveredFiles < previous.DiscoveredFiles ||
+				current.DiscoveredBytes < previous.DiscoveredBytes ||
+				current.VerifiedBytes < previous.VerifiedBytes ||
+				current.NewlyVerifiedBytes < previous.NewlyVerifiedBytes ||
+				!current.CountersExact || current.NewlyVerifiedBytes > current.VerifiedBytes ||
+				current.VerifiedBytes > current.DiscoveredBytes {
+				select {
+				case invalid <- current:
+				default:
+				}
+				return
+			}
+			previous = current
+			select {
+			case <-stop:
+				return
+			default:
+			}
+		}
+	})
+
+	var mutations sync.WaitGroup
+	for range workers {
+		mutations.Go(func() {
+			<-start
+			tracker.addDiscovery(discoveredSelection{files: 1, bytes: 1, exact: true})
+			tracker.addNewlyVerified(1)
+		})
+	}
+	close(start)
+	mutations.Wait()
+	tracker.finishDiscovery()
+	close(stop)
+	observers.Wait()
+	select {
+	case snapshot := <-invalid:
+		t.Fatalf("invalid concurrent snapshot: %+v", snapshot)
+	default:
+	}
+	final := tracker.snapshotValue()
+	if final.Discovery != DiscoveryComplete || final.DiscoveredFiles != workers ||
+		final.DiscoveredBytes != workers || final.VerifiedBytes != workers ||
+		final.NewlyVerifiedBytes != workers || !final.CountersExact {
+		t.Fatalf("final concurrent snapshot: %+v", final)
+	}
+}
+
+func TestReceiveProgressCounterSaturationIsAbsorbing(t *testing.T) {
+	_, checkpoint := outputLifecycleFixture(t)
+	paused, err := NewVerifiedFileSettlement(FilePaused, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := newReceiveProgressTracker()
+	tracker.snapshot.FileOutcomes.PausedFiles = math.MaxUint64
+	tracker.acceptFileSettlement(paused, 0)
+	tracker.addDiscovery(discoveredSelection{files: 1, bytes: 1, exact: true})
+	progress := tracker.snapshotValue()
+	if progress.FileOutcomes.PausedFiles != math.MaxUint64 || progress.CountersExact ||
+		progress.DiscoveredFiles != 1 ||
+		(FileOutcomeSummary{DownloadedFiles: math.MaxUint64, ResumedFiles: 1}).PublishedFiles() != math.MaxUint64 {
+		t.Fatalf("saturation was not absorbing: %+v", progress)
+	}
 }

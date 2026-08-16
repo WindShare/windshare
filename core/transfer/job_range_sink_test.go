@@ -117,6 +117,10 @@ func TestTransferJobAtomicallyRejectsMalformedRangeReaderOutput(t *testing.T) {
 				result.Files[0].Settlement.Kind() != FilePaused {
 				t.Fatalf("file failure = %+v", result.Files)
 			}
+			if result.Progress.VerifiedBytes != 0 || result.Progress.NewlyVerifiedBytes != 0 ||
+				result.Progress.PublishedFiles != 0 {
+				t.Fatalf("rejected or duplicate wire bytes advanced progress: %+v", result.Progress)
+			}
 		})
 	}
 }

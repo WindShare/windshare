@@ -80,6 +80,55 @@ func TestSenderRelayRecoveryRetriesUnexpectedDisconnectWithBackoff(t *testing.T)
 	}
 }
 
+func TestSenderRelayRecoveryReusesLifecycleTracerAndPublishesTypedAttempts(t *testing.T) {
+	initial := &senderRelayTestEndpoint{
+		accept: func(context.Context) (*relayv2.Channel, error) {
+			return nil, errors.New("disconnect provider canary")
+		},
+	}
+	recovered := &senderRelayTestEndpoint{
+		accept: func(context.Context) (*relayv2.Channel, error) {
+			return new(relayv2.Channel), nil
+		},
+	}
+	var dialCount int
+	dialer := &senderRelayTestDialer{
+		dial: func(context.Context, relayv2.SenderConfig) (senderRelayConnection, error) {
+			dialCount++
+			if dialCount == 1 {
+				return senderRelayConnection{}, errors.New("transient provider canary")
+			}
+			return newSenderRelayConnection(recovered), nil
+		},
+	}
+	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, newSenderRelayTestClock())
+	lifecycle.config.lifecycleTrace = relayv2.LifecycleTraceFunc(func(relayv2.LifecycleTrace) {})
+	var attempts []senderRelayRecoveryAttempt
+	lifecycle.config.observeAttempt = func(value senderRelayRecoveryAttempt) {
+		attempts = append(attempts, value)
+	}
+	if _, err := lifecycle.Accept(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	configs, _ := dialer.Snapshot()
+	for index, config := range configs {
+		if config.Dial.LifecycleTracer == nil {
+			t.Fatalf("recovery dial %d lost the lifecycle tracer", index)
+		}
+	}
+	if len(attempts) != 3 ||
+		attempts[0].attempt != 1 || attempts[0].state != senderRelayAttemptStarted ||
+		attempts[1].attempt != 2 || attempts[1].state != senderRelayAttemptStarted ||
+		attempts[2].attempt != 2 || attempts[2].state != senderRelayAttemptSucceeded {
+		t.Fatalf("recovery attempt events = %#v", attempts)
+	}
+	for _, attempt := range attempts {
+		if attempt.failure != nil {
+			t.Fatalf("successful recovery retained provider failure: %#v", attempts)
+		}
+	}
+}
+
 func TestSenderRelayRecoveryExpiresFixedBudget(t *testing.T) {
 	disconnect := errors.New("unexpected relay disconnect")
 	unavailable := errors.New("relay remains unavailable")

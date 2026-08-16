@@ -399,7 +399,9 @@ func TestNonDurableStreamPublishesWithTransientCoverageAndEmptyCheckpoints(t *te
 	transaction := output.transactions["stream.bin"]
 	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 || transaction == nil ||
 		!transaction.durable.IsEmpty() || !RangesCoverFile(size, transaction.transient) ||
-		!transaction.committed {
+		!transaction.committed || result.Progress.VerifiedBytes != size ||
+		result.Progress.NewlyVerifiedBytes != size || result.Progress.PublishedBytes != size ||
+		!result.Progress.CountersExact {
 		t.Fatalf("result=%+v transaction=%+v", result, transaction)
 	}
 }

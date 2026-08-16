@@ -573,23 +573,24 @@ func (o *jobOutput) PauseTree(context.Context, JobPauseReason) (DirectTreeSettle
 }
 
 type jobTransactionScript struct {
-	writeErr            error
-	writeErrAfterWrite  error
-	checkpointErr       error
-	omitCheckpoint      bool
-	dropPriorRanges     bool
-	checkpointExtra     content.RangeSet
-	commitErr           error
-	commitSettlement    FileSettlementKind
-	commitResult        *FileSettlement
-	pauseSettlement     FileSettlementKind
-	pauseErr            error
-	pauseResult         *FileSettlement
-	pauseHook           func(context.Context, FilePauseReason)
-	retireSettlement    FileSettlementKind
-	retireErr           error
-	retireErrAfterWrite error
-	retireResult        *FileSettlement
+	writeErr                 error
+	writeErrAfterWrite       error
+	checkpointErr            error
+	checkpointErrAfterAccept error
+	omitCheckpoint           bool
+	dropPriorRanges          bool
+	checkpointExtra          content.RangeSet
+	commitErr                error
+	commitSettlement         FileSettlementKind
+	commitResult             *FileSettlement
+	pauseSettlement          FileSettlementKind
+	pauseErr                 error
+	pauseResult              *FileSettlement
+	pauseHook                func(context.Context, FilePauseReason)
+	retireSettlement         FileSettlementKind
+	retireErr                error
+	retireErrAfterWrite      error
+	retireResult             *FileSettlement
 }
 
 type jobFileTransaction struct {
@@ -644,6 +645,9 @@ func (t *jobFileTransaction) Checkpoint(context.Context) (VerifiedDurableRanges,
 		}
 		t.durable, t.pending = empty, content.RangeSet{}
 		t.generation++
+		if t.script.checkpointErrAfterAccept != nil {
+			return VerifiedDurableRanges{}, t.script.checkpointErrAfterAccept
+		}
 		return VerifyDurableRanges(t.binding, t.generation, empty)
 	}
 	t.durable, t.pending = merged, content.RangeSet{}
@@ -651,6 +655,9 @@ func (t *jobFileTransaction) Checkpoint(context.Context) (VerifiedDurableRanges,
 	t.output.mu.Lock()
 	t.output.durable[t.binding.Locator().CanonicalPath()] = merged
 	t.output.mu.Unlock()
+	if t.script.checkpointErrAfterAccept != nil {
+		return VerifiedDurableRanges{}, t.script.checkpointErrAfterAccept
+	}
 	if t.script.omitCheckpoint {
 		empty, _ := content.NewRangeSet(nil)
 		return VerifyDurableRanges(t.binding, t.generation, empty)

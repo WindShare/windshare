@@ -1,92 +1,13 @@
 package liveshare
 
 import (
-	"bytes"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 )
 
-type rootPrefetchLogRecord struct {
-	Level         string `json:"level"`
-	Message       string `json:"msg"`
-	Decision      string `json:"decision"`
-	ShareInstance string `json:"share_instance"`
-	DirectoryID   string `json:"directory_id"`
-	Generation    string `json:"generation"`
-	Attempt       uint64 `json:"attempt"`
-	EntryCount    uint64 `json:"entry_count"`
-	OmittedCount  uint64 `json:"omitted_count"`
-}
-
-func TestStructuredRootPrefetchTracerPreservesPrivacySafeDecisionContext(t *testing.T) {
-	share := catalogAccessShare(t, 71)
-	directory := catalogAccessDirectory(t, 72)
-	generation := catalogAccessGeneration(t, 73)
-	events := []RootPrefetchTrace{
-		{
-			Decision: RootPrefetchCommitted, ShareInstance: share, DirectoryID: directory,
-			Generation: generation, Attempt: 2, EntryCount: 5, OmittedCount: 3,
-		},
-		{
-			Decision: RootPrefetchBudgetFailed, ShareInstance: share, DirectoryID: directory, Attempt: 3,
-		},
-	}
-	var output bytes.Buffer
-	tracer := structuredRootPrefetchTracer{logger: slog.New(slog.NewJSONHandler(&output, nil))}
-	for _, event := range events {
-		tracer.TraceRootPrefetch(event)
-	}
-
-	decoder := json.NewDecoder(&output)
-	var records []rootPrefetchLogRecord
-	for {
-		var record rootPrefetchLogRecord
-		err := decoder.Decode(&record)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		records = append(records, record)
-	}
-	if len(records) != 2 {
-		t.Fatalf("structured prefetch records = %#v", records)
-	}
-	wantShare := hex.EncodeToString(share.Bytes())
-	wantDirectory := hex.EncodeToString(directory.Bytes())
-	if records[0] != (rootPrefetchLogRecord{
-		Level: "INFO", Message: rootPrefetchLogMessage, Decision: "committed",
-		ShareInstance: wantShare, DirectoryID: wantDirectory,
-		Generation: hex.EncodeToString(generation.Bytes()), Attempt: 2, EntryCount: 5, OmittedCount: 3,
-	}) {
-		t.Fatalf("committed prefetch record = %#v", records[0])
-	}
-	if records[1] != (rootPrefetchLogRecord{
-		Level: "WARN", Message: rootPrefetchLogMessage, Decision: "budget-failed",
-		ShareInstance: wantShare, DirectoryID: wantDirectory,
-		Generation: hex.EncodeToString(catalog.DirectoryGeneration{}.Bytes()), Attempt: 3,
-	}) {
-		t.Fatalf("failed prefetch record = %#v", records[1])
-	}
-}
-
-func TestRootPrefetchTracerDefaultsWithoutReplacingExplicitObserver(t *testing.T) {
-	if _, ok := rootPrefetchTracerOrDefault(nil).(structuredRootPrefetchTracer); !ok {
-		t.Fatalf("default root prefetch tracer = %T", rootPrefetchTracerOrDefault(nil))
-	}
-	called := false
-	explicit := RootPrefetchTraceFunc(func(RootPrefetchTrace) { called = true })
-	rootPrefetchTracerOrDefault(explicit).TraceRootPrefetch(RootPrefetchTrace{})
-	if !called {
-		t.Fatal("explicit root prefetch tracer was replaced")
-	}
+func TestRootPrefetchDecisionNamesAreClosed(t *testing.T) {
 	decisions := []struct {
 		decision RootPrefetchDecision
 		want     string
@@ -100,31 +21,27 @@ func TestRootPrefetchTracerDefaultsWithoutReplacingExplicitObserver(t *testing.T
 		{RootPrefetchStopped, "stopped"},
 		{RootPrefetchDecision(255), "unknown"},
 	}
-	for _, tc := range decisions {
-		if got := tc.decision.String(); got != tc.want {
-			t.Fatalf("decision %v string = %q, want %q", tc.decision, got, tc.want)
+	for _, test := range decisions {
+		if got := test.decision.String(); got != test.want {
+			t.Fatalf("decision %d string = %q, want %q", test.decision, got, test.want)
 		}
 	}
 }
 
-type singleUnwrapError struct {
-	err error
-}
+type singleUnwrapError struct{ err error }
 
-func (e singleUnwrapError) Error() string { return "single wrapped" }
-func (e singleUnwrapError) Unwrap() error { return e.err }
+func (failure singleUnwrapError) Error() string { return "single wrapped" }
+func (failure singleUnwrapError) Unwrap() error { return failure.err }
 
-type sliceUnwrapError struct {
-	errs []error
-}
+type sliceUnwrapError struct{ errs []error }
 
-func (e sliceUnwrapError) Error() string   { return "slice wrapped" }
-func (e sliceUnwrapError) Unwrap() []error { return e.errs }
+func (failure sliceUnwrapError) Error() string   { return "slice wrapped" }
+func (failure sliceUnwrapError) Unwrap() []error { return failure.errs }
 
 type panicUnwrapError struct{}
 
-func (e panicUnwrapError) Error() string { return "panic unwrap" }
-func (e panicUnwrapError) Unwrap() error { panic("faulty unwrapper") }
+func (panicUnwrapError) Error() string { return "panic unwrap" }
+func (panicUnwrapError) Unwrap() error { panic("faulty unwrapper") }
 
 func TestRootPrefetchFailureDecisionClassification(t *testing.T) {
 	if got := rootPrefetchFailureDecision(nil); got != RootPrefetchScanFailed {
@@ -147,30 +64,16 @@ func TestRootPrefetchFailureDecisionClassification(t *testing.T) {
 	}
 }
 
-func TestTraceRootPrefetchPanicIsolationAndNilLogger(t *testing.T) {
-	// Nil tracer is a no-op
+func TestTraceRootPrefetchIsOptionalAndPanicIsolated(t *testing.T) {
 	traceRootPrefetch(nil, RootPrefetchTrace{})
+	traceRootPrefetch(
+		RootPrefetchTraceFunc(func(RootPrefetchTrace) { panic("diagnostic failure") }),
+		RootPrefetchTrace{},
+	)
 
-	// Panicking tracer does not propagate
-	panickingTracer := RootPrefetchTraceFunc(func(RootPrefetchTrace) { panic("tracer fault") })
-	traceRootPrefetch(panickingTracer, RootPrefetchTrace{})
-
-	// Structured tracer with nil logger falls back to slog.Default
-	nilLoggerTracer := structuredRootPrefetchTracer{logger: nil}
-	nilLoggerTracer.TraceRootPrefetch(RootPrefetchTrace{
-		Decision: RootPrefetchScanFailed,
-	})
-}
-
-func catalogAccessGeneration(t *testing.T, seed byte) catalog.DirectoryGeneration {
-	t.Helper()
-	value := make([]byte, catalog.IdentityBytes)
-	for index := range value {
-		value[index] = seed + byte(index)
+	called := false
+	traceRootPrefetch(RootPrefetchTraceFunc(func(RootPrefetchTrace) { called = true }), RootPrefetchTrace{})
+	if !called {
+		t.Fatal("explicit root prefetch tracer was not called")
 	}
-	generation, err := catalog.DirectoryGenerationFromBytes(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return generation
 }

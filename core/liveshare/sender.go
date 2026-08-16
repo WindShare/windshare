@@ -79,6 +79,7 @@ type PreparedSender struct {
 	mu sync.Mutex
 
 	capability       link.Link
+	selectedSummary  SelectedRootSummary
 	descriptor       catalog.ShareDescriptor
 	descriptorObject []byte
 	committedRoot    catalog.CommittedRoot
@@ -274,7 +275,7 @@ func prepareSenderCatalog(
 	if err != nil {
 		return senderCatalog{}, err
 	}
-	tracer := catalogStorageTracerOrDefault(config.CatalogTracer)
+	tracer := config.CatalogTracer
 	storageFactory := config.CatalogStorage
 	if storageFactory == nil {
 		storageFactory = productionCatalogStorageFactory(tracer)
@@ -285,7 +286,7 @@ func prepareSenderCatalog(
 	backend, err := storageFactory.Create(ctx, authority.shareInstance)
 	traceCatalogStorage(tracer, CatalogStorageTrace{
 		Operation: CatalogStorageCreated, ShareInstance: authority.shareInstance,
-		Failed: err != nil, Cause: err,
+		Cause: catalogStorageCause(err),
 	})
 	if err != nil {
 		return senderCatalog{}, fmt.Errorf("create live catalog storage: %w", err)
@@ -303,18 +304,23 @@ func prepareSenderCatalog(
 		ProcessBudget: processBudget, ShareBudget: shareBudget, PageSealer: objects, SpillFactory: spillFactory,
 	})
 	if err != nil {
-		if errors.Is(err, catalog.ErrBudgetExceeded) {
+		if catalogStorageCause(err) == CatalogStorageCauseBudgetExceeded {
 			traceCatalogStorage(tracer, CatalogStorageTrace{
 				Operation: CatalogStorageBudgetRejected, ShareInstance: authority.shareInstance,
-				Failed: true, Cause: err,
+				Cause: CatalogStorageCauseBudgetExceeded,
 			})
 		}
 		_ = backend.Close()
 		return senderCatalog{}, err
 	}
+	selectedRoots := sender.selectedSource.SelectedRoots()
+	sender.selectedSummary, err = newSelectedRootSummary(selectedRoots)
+	if err != nil {
+		return senderCatalog{}, err
+	}
 	rootCommit, err := catalog.NewSyntheticRootCommit(catalog.SyntheticRootCommitSpec{
 		ShareInstance: authority.shareInstance, SyntheticRoot: authority.syntheticRoot,
-		Generation: authority.rootGeneration, SelectedRoots: sender.selectedSource.SelectedRoots(),
+		Generation: authority.rootGeneration, SelectedRoots: selectedRoots,
 	})
 	if err != nil {
 		return senderCatalog{}, err
@@ -341,8 +347,8 @@ func prepareSenderCatalog(
 		authority.shareInstance,
 		sender.catalogStore,
 		directoryScannerWithAdmission(sender.selectedSource, config.ScanAdmission),
-		sender.selectedSource.SelectedRoots(),
-		rootPrefetchTracerOrDefault(config.RootPrefetchTracer),
+		selectedRoots,
+		config.RootPrefetchTracer,
 	)
 	if err != nil {
 		return senderCatalog{}, err
@@ -441,6 +447,17 @@ func (sender *PreparedSender) Capability() link.Link {
 	result.PKHash = append([]byte(nil), result.PKHash...)
 	result.Relays = append([]string(nil), result.Relays...)
 	return result
+}
+
+// SelectedRootSummary returns the display-only selection fact frozen from the
+// root records opened during preparation. It remains valid after Close because
+// reading it neither reopens caller paths nor depends on retained filesystem
+// authority.
+func (sender *PreparedSender) SelectedRootSummary() SelectedRootSummary {
+	if sender == nil {
+		return SelectedRootSummary{}
+	}
+	return sender.selectedSummary
 }
 
 func (sender *PreparedSender) Registration() RegistrationMaterial {

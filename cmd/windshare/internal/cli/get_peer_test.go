@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -67,105 +67,61 @@ type cliReceiverRuntimeCloser struct{ calls atomic.Int32 }
 func (runtime *cliReceiverRuntimeCloser) Close() { runtime.calls.Add(1) }
 
 func TestReceiverPeerSetupFailureLogsSafePhaseAndCauseClass(t *testing.T) {
-	var stderr bytes.Buffer
+	runtime, stderr := newGetReportingRuntime(t, false, false)
 	app := &App{
-		Stderr: &stderr,
 		receiverPeerFactory: func() (receiverPeerStarter, error) {
 			return nil, v2peer.ErrNegotiation
 		},
 	}
 	var signal receiverPeerSignal
-	peer := app.startReceiverPeer(context.Background(), nil, func(observed receiverPeerSignal) {
+	peer := app.startReceiverPeer(context.Background(), nil, getObservation{runtime: runtime}, func(observed receiverPeerSignal) {
 		signal = observed
 	})
+	runtime.Close()
 	if peer != nil || signal != receiverPeerFailed {
 		t.Fatalf("setup failure peer=%v signal=%v", peer, signal)
 	}
-	if diagnostic := stderr.String(); !strings.Contains(diagnostic, "phase=factory") ||
-		!strings.Contains(diagnostic, "cause_class=negotiation") {
+	if diagnostic := stderr.String(); !strings.Contains(diagnostic, "The direct connection is unavailable.") ||
+		strings.Contains(diagnostic, "factory") || strings.Contains(diagnostic, v2peer.ErrNegotiation.Error()) {
 		t.Fatalf("setup failure diagnostic=%q", diagnostic)
 	}
 }
 
 func TestReceiverPeerSetupFailureDistinguishesEveryPhase(t *testing.T) {
-	for _, test := range []struct {
-		phase receiverPeerSetupPhase
-		cause error
-		class v2peer.ReceiverCauseClass
-	}{
-		{phase: receiverPeerSetupFactory, cause: v2peer.ErrNegotiation, class: v2peer.ReceiverCauseNegotiation},
-		{phase: receiverPeerSetupSignaling, cause: v2peer.ErrConfig, class: v2peer.ReceiverCauseConfiguration},
-		{phase: receiverPeerSetupStart, cause: context.DeadlineExceeded, class: v2peer.ReceiverCauseDeadline},
-	} {
-		t.Run(string(test.phase), func(t *testing.T) {
-			var stderr bytes.Buffer
-			(&App{Stderr: &stderr}).logReceiverPeerSetupFailure(test.phase, test.cause)
-			diagnostic := stderr.String()
-			if !strings.Contains(diagnostic, "phase="+string(test.phase)) ||
-				!strings.Contains(diagnostic, "cause_class="+string(test.class)) {
-				t.Fatalf("setup diagnostic=%q", diagnostic)
-			}
-		})
+	if got := receiverPeerSetupFailureCode(receiverPeerSetupFactory); got != clievent.FailurePeerConfiguration {
+		t.Fatalf("factory failure code=%v", got)
 	}
-}
-
-type cyclicReceiverSetupError struct{}
-
-func (*cyclicReceiverSetupError) Error() string { return "cyclic setup failure" }
-func (failure *cyclicReceiverSetupError) Unwrap() error {
-	return failure
-}
-
-func TestReceiverPeerSetupCauseClassificationIsCycleBounded(t *testing.T) {
-	if class := receiverPeerSetupCauseClass(&cyclicReceiverSetupError{}); class != v2peer.ReceiverCauseUnknown {
-		t.Fatalf("cyclic setup cause class=%s", class)
+	if got := receiverPeerSetupFailureCode(receiverPeerSetupSignaling); got != clievent.FailurePeerSignaling {
+		t.Fatalf("signaling failure code=%v", got)
+	}
+	if got := receiverPeerSetupFailureCode(receiverPeerSetupStart); got != clievent.FailurePeerNegotiation {
+		t.Fatalf("start failure code=%v", got)
 	}
 }
 
 func TestReceiverPeerTerminationTraceIsDrainedSynchronously(t *testing.T) {
-	var stderr bytes.Buffer
-	app := &App{Stderr: &stderr}
+	runtime, stderr := newGetReportingRuntime(t, false, false)
 	traces := make(chan receiverPeerTerminationTrace, 1)
 	traces <- receiverPeerTerminationTrace{
-		operationID:           protocolsession.OperationID{1},
-		localGeneration:       7,
-		transitionAuthority:   v2peer.ReceiverTerminalRemote,
-		transitionProvenance:  v2peer.ReceiverProvenanceRemoteOperationRejected,
-		disposition:           v2peer.ReceiverDispositionFallbackAllowed,
-		consequenceProvenance: v2peer.ReceiverProvenanceRemoteOperationRejected,
-		diagnosticsTruncated:  true,
-		retainedCauseClasses:  []v2peer.ReceiverCauseClass{v2peer.ReceiverCauseProtocol},
-		teardownTransitions: []v2peer.PeerTeardownTransition{
-			v2peer.PeerTeardownPeerShutdownInitiated,
-			v2peer.PeerTeardownPeerShutdownReturned,
-			v2peer.PeerTeardownChannelDrainStarted,
-			v2peer.PeerTeardownChannelDrainJoined,
-		},
-		peerShutdownFailed: false,
-		channelDrainFailed: true,
+		diagnosticsTruncated: true,
+		retainedCauseClasses: []v2peer.ReceiverCauseClass{v2peer.ReceiverCauseProtocol},
+		channelDrainFailed:   true,
 	}
 
-	app.awaitReceiverTerminationTrace(traces)
+	(&App{}).awaitReceiverTerminationTrace(traces, getObservation{runtime: runtime})
+	runtime.Close()
 
 	diagnostic := stderr.String()
-	if !strings.Contains(diagnostic, "local_generation=7") ||
-		!strings.Contains(diagnostic, "transition_authority=remote") ||
-		!strings.Contains(diagnostic, "transition_provenance=remote_operation_rejected") ||
-		!strings.Contains(diagnostic, "disposition=fallback_allowed") ||
-		!strings.Contains(diagnostic, "diagnostics_truncated=true") ||
-		!strings.Contains(diagnostic, "protocol") ||
-		!strings.Contains(diagnostic, "teardown_transitions=[peer_shutdown_initiated peer_shutdown_returned channel_drain_started channel_drain_joined]") ||
-		!strings.Contains(diagnostic, "peer_shutdown_failed=false") ||
-		!strings.Contains(diagnostic, "channel_drain_failed=true") {
+	if !strings.Contains(diagnostic, "The direct connection is unavailable.") ||
+		strings.Contains(diagnostic, "diagnostics_truncated") || strings.Contains(diagnostic, "protocol") {
 		t.Fatalf("termination trace diagnostic=%q", diagnostic)
 	}
 }
 
 func TestReceiverPeerMonitorClosesSessionForAuthenticatedAuthorityViolation(t *testing.T) {
-	var stderr bytes.Buffer
-	app := &App{Stderr: &stderr}
+	commandRuntime, _ := newGetReportingRuntime(t, false, false)
 	attempt := newCLIReceiverPeerAttempt()
-	runtime := &cliReceiverRuntimeCloser{}
+	receiverRuntime := &cliReceiverRuntimeCloser{}
 	fatalCause := errors.New("binding substitution")
 	attempt.finishOutcome(receiverPeerMonitorOutcome{
 		disposition:   receiverPeerSessionUnsafe,
@@ -173,13 +129,14 @@ func TestReceiverPeerMonitorClosesSessionForAuthenticatedAuthorityViolation(t *t
 	})
 	var signal receiverPeerSignal
 
-	app.monitorReceiverPeer(attempt, runtime, func(observed receiverPeerSignal) { signal = observed })
+	(&App{}).monitorReceiverPeer(
+		attempt, receiverRuntime, protocolsession.ProtocolSessionID{1},
+		getObservation{runtime: commandRuntime}, func(observed receiverPeerSignal) { signal = observed },
+	)
+	commandRuntime.Close()
 
-	if runtime.calls.Load() != 1 {
-		t.Fatalf("runtime close calls = %d", runtime.calls.Load())
-	}
-	if !strings.Contains(stderr.String(), "closing the session") {
-		t.Fatalf("fatal diagnostic = %q", stderr.String())
+	if receiverRuntime.calls.Load() != 1 {
+		t.Fatalf("runtime close calls = %d", receiverRuntime.calls.Load())
 	}
 	if signal != receiverPeerSessionFatal {
 		t.Fatalf("fatal signal=%v", signal)
@@ -187,20 +144,18 @@ func TestReceiverPeerMonitorClosesSessionForAuthenticatedAuthorityViolation(t *t
 }
 
 func TestReceiverPeerMonitorReportsAttemptLocalFailureWithoutOwningFallback(t *testing.T) {
-	var stderr bytes.Buffer
-	app := &App{Stderr: &stderr}
 	attempt := newCLIReceiverPeerAttempt()
-	runtime := &cliReceiverRuntimeCloser{}
+	receiverRuntime := &cliReceiverRuntimeCloser{}
 	attempt.finish(errors.New("ICE negotiation failed"))
 	var signal receiverPeerSignal
 
-	app.monitorReceiverPeer(attempt, runtime, func(observed receiverPeerSignal) { signal = observed })
+	(&App{}).monitorReceiverPeer(
+		attempt, receiverRuntime, protocolsession.ProtocolSessionID{1}, getObservation{},
+		func(observed receiverPeerSignal) { signal = observed },
+	)
 
-	if runtime.calls.Load() != 0 {
+	if receiverRuntime.calls.Load() != 0 {
 		t.Fatal("attempt-local peer failure closed the relay session")
-	}
-	if !strings.Contains(stderr.String(), "direct peer connection failed") {
-		t.Fatalf("peer failure diagnostic = %q", stderr.String())
 	}
 	if signal != receiverPeerFailed {
 		t.Fatalf("fallback signal=%v", signal)
@@ -208,10 +163,8 @@ func TestReceiverPeerMonitorReportsAttemptLocalFailureWithoutOwningFallback(t *t
 }
 
 func TestReceiverPeerMonitorRetainsJoinedCancellationFailure(t *testing.T) {
-	var stderr bytes.Buffer
-	app := &App{Stderr: &stderr}
 	attempt := newCLIReceiverPeerAttempt()
-	runtime := &cliReceiverRuntimeCloser{}
+	receiverRuntime := &cliReceiverRuntimeCloser{}
 	retained := errors.New("ICE teardown failed")
 	attempt.finishOutcome(receiverPeerMonitorOutcome{
 		disposition:   receiverPeerFallbackAllowed,
@@ -219,30 +172,32 @@ func TestReceiverPeerMonitorRetainsJoinedCancellationFailure(t *testing.T) {
 	})
 	var signal receiverPeerSignal
 
-	app.monitorReceiverPeer(attempt, runtime, func(observed receiverPeerSignal) { signal = observed })
+	(&App{}).monitorReceiverPeer(
+		attempt, receiverRuntime, protocolsession.ProtocolSessionID{1}, getObservation{},
+		func(observed receiverPeerSignal) { signal = observed },
+	)
 
 	if signal != receiverPeerFailed {
 		t.Fatalf("joined cancellation residual signal=%v", signal)
 	}
-	if runtime.calls.Load() != 0 {
+	if receiverRuntime.calls.Load() != 0 {
 		t.Fatal("attempt-local residual closed the relay session")
-	}
-	if !strings.Contains(stderr.String(), "direct peer connection failed") {
-		t.Fatalf("joined cancellation residual diagnostic=%q", stderr.String())
 	}
 }
 
 func TestReceiverPeerMonitorSignalsReadyThenCleanDetach(t *testing.T) {
-	var stderr bytes.Buffer
-	app := &App{Stderr: &stderr}
+	commandRuntime, _ := newGetReportingRuntime(t, false, false)
 	attempt := newCLIReceiverPeerAttempt()
 	attempt.lane = sessionruntime.LaneIdentity{ID: 3, Epoch: 1}
-	runtime := &cliReceiverRuntimeCloser{}
+	receiverRuntime := &cliReceiverRuntimeCloser{}
 	signals := make(chan receiverPeerSignal, 2)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		app.monitorReceiverPeer(attempt, runtime, func(signal receiverPeerSignal) { signals <- signal })
+		(&App{}).monitorReceiverPeer(
+			attempt, receiverRuntime, protocolsession.ProtocolSessionID{1},
+			getObservation{runtime: commandRuntime}, func(signal receiverPeerSignal) { signals <- signal },
+		)
 	}()
 	close(attempt.ready)
 	if signal := <-signals; signal != receiverPeerReady {
@@ -253,11 +208,9 @@ func TestReceiverPeerMonitorSignalsReadyThenCleanDetach(t *testing.T) {
 		t.Fatalf("detach signal=%v", signal)
 	}
 	<-done
-	if runtime.calls.Load() != 0 {
+	commandRuntime.Close()
+	if receiverRuntime.calls.Load() != 0 {
 		t.Fatal("clean peer detach closed the authenticated relay session")
-	}
-	if !strings.Contains(stderr.String(), "direct peer lane active") || !strings.Contains(stderr.String(), "lane lost") {
-		t.Fatalf("peer lifecycle diagnostic=%q", stderr.String())
 	}
 }
 
@@ -287,9 +240,10 @@ func TestReceiverPeerMonitorKeepsCleanLocalCloseSilent(t *testing.T) {
 	monitorDone := make(chan struct{})
 	go func() {
 		defer close(monitorDone)
-		(&App{}).monitorReceiverPeer(attempt, runtime, func(signal receiverPeerSignal) {
-			signals <- signal
-		})
+		(&App{}).monitorReceiverPeer(
+			attempt, runtime, protocolsession.ProtocolSessionID{1}, getObservation{},
+			func(signal receiverPeerSignal) { signals <- signal },
+		)
 	}()
 
 	if err := attempt.Close(); err != nil {
@@ -314,9 +268,10 @@ func TestReceiverPeerMonitorTreatsBenignRemoteFinalAsPathFailure(t *testing.T) {
 	})
 	var signal receiverPeerSignal
 
-	(&App{}).monitorReceiverPeer(attempt, runtime, func(observed receiverPeerSignal) {
-		signal = observed
-	})
+	(&App{}).monitorReceiverPeer(
+		attempt, runtime, protocolsession.ProtocolSessionID{1}, getObservation{},
+		func(observed receiverPeerSignal) { signal = observed },
+	)
 
 	if signal != receiverPeerFailed {
 		t.Fatalf("benign remote final signal=%v", signal)
@@ -327,46 +282,45 @@ func TestReceiverPeerMonitorTreatsBenignRemoteFinalAsPathFailure(t *testing.T) {
 }
 
 func TestReceiverPeerMonitorDoesNotSilenceRuntimeTermination(t *testing.T) {
-	var stderr bytes.Buffer
+	commandRuntime, stderr := newGetReportingRuntime(t, false, false)
 	attempt := newCLIReceiverPeerAttempt()
-	runtime := &cliReceiverRuntimeCloser{}
+	receiverRuntime := &cliReceiverRuntimeCloser{}
 	attempt.finishOutcome(receiverPeerMonitorOutcome{
 		disposition:   receiverPeerSessionUnavailable,
 		retainedCause: sessionruntime.ErrRuntimeClosed,
 	})
 	var signal receiverPeerSignal
 
-	(&App{Stderr: &stderr}).monitorReceiverPeer(attempt, runtime, func(observed receiverPeerSignal) {
-		signal = observed
-	})
+	(&App{}).monitorReceiverPeer(
+		attempt, receiverRuntime, protocolsession.ProtocolSessionID{1},
+		getObservation{runtime: commandRuntime}, func(observed receiverPeerSignal) { signal = observed },
+	)
+	commandRuntime.Close()
 
-	if signal != receiverPeerRuntimeTerminal || runtime.calls.Load() != 0 {
-		t.Fatalf("runtime terminal signal=%v close_calls=%d", signal, runtime.calls.Load())
+	if signal != receiverPeerRuntimeTerminal || receiverRuntime.calls.Load() != 0 {
+		t.Fatalf("runtime terminal signal=%v close_calls=%d", signal, receiverRuntime.calls.Load())
 	}
-	if !strings.Contains(stderr.String(), "authenticated runtime ended") {
+	if !strings.Contains(stderr.String(), "An unexpected error occurred.") {
 		t.Fatalf("runtime terminal diagnostic=%q", stderr.String())
 	}
 }
 
 func TestReceiverPeerMonitorKeepsUnexpectedAuthenticatedKindOperationLocal(t *testing.T) {
-	var stderr bytes.Buffer
 	attempt := newCLIReceiverPeerAttempt()
-	runtime := &cliReceiverRuntimeCloser{}
+	receiverRuntime := &cliReceiverRuntimeCloser{}
 	attempt.finishOutcome(receiverPeerMonitorOutcome{
 		disposition:   receiverPeerFallbackAllowed,
 		retainedCause: protocolsession.ErrUnknownMessageKind,
 	})
 	var signal receiverPeerSignal
 
-	(&App{Stderr: &stderr}).monitorReceiverPeer(attempt, runtime, func(observed receiverPeerSignal) {
-		signal = observed
-	})
+	(&App{}).monitorReceiverPeer(
+		attempt, receiverRuntime, protocolsession.ProtocolSessionID{1}, getObservation{},
+		func(observed receiverPeerSignal) { signal = observed },
+	)
 
-	if signal != receiverPeerFailed || runtime.calls.Load() != 0 {
-		t.Fatalf("unexpected authenticated kind signal=%v close_calls=%d", signal, runtime.calls.Load())
-	}
-	if !strings.Contains(stderr.String(), "direct peer connection failed") {
-		t.Fatalf("unexpected authenticated kind diagnostic=%q", stderr.String())
+	if signal != receiverPeerFailed || receiverRuntime.calls.Load() != 0 {
+		t.Fatalf("unexpected authenticated kind signal=%v close_calls=%d", signal, receiverRuntime.calls.Load())
 	}
 }
 
