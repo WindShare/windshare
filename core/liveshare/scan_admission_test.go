@@ -91,3 +91,10 @@ func TestDirectoryScanAdmissionFailureNeverReachesScanner(t *testing.T) {
 		t.Fatalf("scanner ran after admission failure: calls=%d", calls)
 	}
 }
+
+func TestNilDirectoryScanAdmissionFunc(t *testing.T) {
+	var nilAdmit DirectoryScanAdmissionFunc
+	if err := nilAdmit.AdmitDirectoryScan(context.Background(), catalog.ScanRequest{}); err == nil {
+		t.Fatal("nil admission func accepted scan request")
+	}
+}
