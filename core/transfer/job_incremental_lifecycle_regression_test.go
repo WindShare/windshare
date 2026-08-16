@@ -647,7 +647,7 @@ func TestTransferLifecycleTracerPanicCannotChangeTransferAuthority(t *testing.T)
 	}
 }
 
-func TestHugeFileRangePlanningDemandsOneBlockBeforeCancellation(t *testing.T) {
+func TestHugeFileRangePlanningDemandsOneBoundedWindowBeforeCancellation(t *testing.T) {
 	share := transferID[catalog.ShareInstance](184)
 	root := transferID[catalog.DirectoryID](185)
 	file := transferID[catalog.FileID](186)
@@ -673,7 +673,10 @@ func TestHugeFileRangePlanningDemandsOneBlockBeforeCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := job.Run(ctx)
-	want := content.Range{Offset: 0, End: uint64(catalog.MinChunkSize)}
+	want := content.Range{
+		Offset: 0,
+		End:    uint64(defaultFileReadWindowBlocks * catalog.MinChunkSize),
+	}
 	if result.Outcome != DirectTreeOutcomePaused || reader.calls != 1 || reader.requested != want ||
 		output.pauseCalls != 1 {
 		t.Fatalf("outcome=%d calls=%d requested=%+v pauses=%d", result.Outcome,

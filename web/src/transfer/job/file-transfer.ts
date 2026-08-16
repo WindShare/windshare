@@ -1,6 +1,9 @@
-import { V2_MAXIMUM_CHUNK_BYTES, type V2ShareDescriptor } from '../../catalog/v2-records'
+import type { V2ShareDescriptor } from '../../catalog/v2-records'
 import { ByteRangeSet, bigintToSafeNumber, byteRange, type ByteRange } from '../../content/geometry'
-import type { V2BlockRangeReader } from '../../content/v2-broker'
+import {
+  V2_BLOCK_BROKER_PARALLEL_READS,
+  type V2BlockRangeReader,
+} from '../../content/v2-broker'
 import type {
   V2OpenedRevision,
   V2RevisionReader,
@@ -132,28 +135,13 @@ export async function transferV2File(
     const missing = bound.durableRanges.asRangeSet().missingFrom(wanted)
     let wrote = false
     for (const missingRange of missing.ranges) {
-      const plan = opened.descriptor.geometry.plan(missingRange)
-      for (let index = plan.blocks.first; index < plan.blocks.end; index += 1n) {
-        const requested = plan.sliceForBlock(index)?.requestedBytes
-        if (requested === undefined) {
-          throw new V2RangeReaderContractError('content geometry lost a requested block range')
-        }
-        const data = await readAtomicRange(options, opened, requested)
-        await outputOperation(
-          options.signal,
-          'Unable to write the output file range',
-          'output-write-failed',
-          () => transaction?.writeRange(requested.start, data, options.signal) ?? Promise.resolve(),
-        )
-        await outputOperation(
-          options.signal,
-          'Unable to checkpoint the output file',
-          'output-write-failed',
-          () => transaction?.checkpoint(options.signal) ?? Promise.resolve(undefined),
-        )
-        options.onWriteAcknowledged(BigInt(data.byteLength), !wrote)
-        wrote = true
-      }
+      wrote = await transferMissingRange(
+        options,
+        opened,
+        bound.transaction,
+        missingRange,
+        wrote,
+      )
     }
     await outputOperation(
       options.signal,
@@ -282,22 +270,33 @@ function outputFileFor(
   })
 }
 
-async function readAtomicRange(
+async function transferMissingRange(
   options: V2FileTransferOptions,
   opened: V2OpenedRevision,
+  transaction: BoundOutputFileTransaction,
   requested: ByteRange,
-): Promise<Uint8Array<ArrayBuffer>> {
-  const length = requested.end - requested.start
-  if (length <= 0n || length > BigInt(V2_MAXIMUM_CHUNK_BYTES)) {
-    throw new V2RangeReaderContractError('requested atomic range exceeds the protocol chunk bound')
+  wrote: boolean,
+): Promise<boolean> {
+  if (requested.start >= requested.end) {
+    throw new V2RangeReaderContractError('requested transfer range is empty')
   }
-  const data = new Uint8Array(bigintToSafeNumber(length, 'requested atomic range'))
+  const geometry = opened.descriptor.geometry
   let covered = requested.start
+  let atomic = atomicRangeAt(geometry.blockSize, covered, requested.end)
+  let data = new Uint8Array(bigintToSafeNumber(atomic.end - atomic.start, 'atomic output range'))
+  let filled = 0
+  // One range iterator lets the broker refill its global block window while the
+  // consumer awaits output I/O. Atomic block assembly keeps that network
+  // pipeline from exposing partial collaborator slices to the output authority.
   for await (const slice of options.broker.readRange(
     opened.descriptor,
     opened.leaseId,
     requested,
-    { signal: options.signal, priority: 'download' },
+    {
+      signal: options.signal,
+      maximumParallel: V2_BLOCK_BROKER_PARALLEL_READS,
+      priority: 'download',
+    },
   )) {
     options.signal.throwIfAborted()
     if (typeof slice.offset !== 'bigint' || !(slice.data instanceof Uint8Array) || slice.data.byteLength === 0) {
@@ -309,14 +308,58 @@ async function readAtomicRange(
         'range reader slice escapes, overlaps, or leaves a gap in the requested interval',
       )
     }
-    data.set(slice.data, bigintToSafeNumber(slice.offset - requested.start, 'range slice offset'))
-    covered = end
+    let sliceOffset = 0
+    while (sliceOffset < slice.data.byteLength) {
+      const available = data.byteLength - filled
+      const consumed = Math.min(available, slice.data.byteLength - sliceOffset)
+      data.set(slice.data.subarray(sliceOffset, sliceOffset + consumed), filled)
+      filled += consumed
+      sliceOffset += consumed
+      covered += BigInt(consumed)
+      if (filled !== data.byteLength) continue
+      await writeAtomicRange(options, transaction, atomic.start, data)
+      options.onWriteAcknowledged(BigInt(data.byteLength), !wrote)
+      wrote = true
+      if (covered < requested.end) {
+        atomic = atomicRangeAt(geometry.blockSize, covered, requested.end)
+        data = new Uint8Array(bigintToSafeNumber(atomic.end - atomic.start, 'atomic output range'))
+        filled = 0
+      }
+    }
   }
   options.signal.throwIfAborted()
-  if (covered !== requested.end) {
+  if (covered !== requested.end || filled !== data.byteLength) {
     throw new V2RangeReaderContractError('range reader returned before covering the requested interval')
   }
-  return data
+  return wrote
+}
+
+function atomicRangeAt(blockSize: bigint, offset: bigint, requestedEnd: bigint): ByteRange {
+  if (blockSize <= 0n || offset < 0n || offset >= requestedEnd) {
+    throw new V2RangeReaderContractError('content geometry lost an atomic output range')
+  }
+  const blockEnd = (offset / blockSize + 1n) * blockSize
+  return byteRange(offset, blockEnd < requestedEnd ? blockEnd : requestedEnd)
+}
+
+async function writeAtomicRange(
+  options: V2FileTransferOptions,
+  transaction: BoundOutputFileTransaction,
+  offset: bigint,
+  data: Uint8Array<ArrayBuffer>,
+): Promise<void> {
+  await outputOperation(
+    options.signal,
+    'Unable to write the output file range',
+    'output-write-failed',
+    () => transaction.writeRange(offset, data, options.signal),
+  )
+  await outputOperation(
+    options.signal,
+    'Unable to checkpoint the output file',
+    'output-write-failed',
+    () => transaction.checkpoint(options.signal),
+  )
 }
 
 async function outputOperation<T>(

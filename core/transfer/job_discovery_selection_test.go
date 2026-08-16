@@ -136,17 +136,19 @@ func TestTransferJobRejectsRegressiveCheckpointAndCatalogCycle(t *testing.T) {
 		root := transferID[catalog.DirectoryID](153)
 		file := transferID[catalog.FileID](154)
 		chunk := uint64(catalog.MinChunkSize)
-		descriptor := jobDescriptor(t, share, file, 155, 2*chunk)
+		exactSize := uint64(defaultFileReadWindowBlocks+1) * chunk
+		descriptor := jobDescriptor(t, share, file, 155, exactSize)
 		opened, _ := NewOpenedRevision(transferID[content.LeaseID](156), descriptor)
 		output := newJobOutput(share)
-		future, _ := content.NewRangeSet([]content.Range{{Offset: chunk, End: 2 * chunk}})
+		windowEnd := uint64(defaultFileReadWindowBlocks) * chunk
+		future, _ := content.NewRangeSet([]content.Range{{Offset: windowEnd, End: exactSize}})
 		output.transactionScript.checkpointExtra = future
 		rules, _ := NewSelectionRules(true, nil)
 		job, _ := newTestTransferJob(t, testTransferJobConfig{
 			ShareInstance: share, SyntheticRoot: root, Rules: rules,
 			Catalog: failingCatalog{
 				snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
-					root: jobSnapshot(t, share, root, 157, jobEntry(t, file, "file.bin", 2*chunk)),
+					root: jobSnapshot(t, share, root, 157, jobEntry(t, file, "file.bin", exactSize)),
 				},
 				failures: make(map[catalog.DirectoryID]error),
 			},
