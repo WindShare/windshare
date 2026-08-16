@@ -169,6 +169,15 @@ func (violation AuthenticatedOperationViolation) valid() bool {
 		violation.code <= AuthenticatedOperationViolationContinuationAuthority
 }
 
+// NewAuthenticatedOperationViolation constructs a verified violation value.
+func NewAuthenticatedOperationViolation(code AuthenticatedOperationViolationCode) (AuthenticatedOperationViolation, error) {
+	violation := AuthenticatedOperationViolation{code: code}
+	if !violation.valid() {
+		return AuthenticatedOperationViolation{}, ErrInvalidAuthenticatedOperationViolation
+	}
+	return violation, nil
+}
+
 // InboundAuthenticationResult is a sealed result of authenticating one opened
 // message. Its zero value means ordinary authenticated traffic. A non-zero
 // result is consumed by ProtocolPump before generic runtime shutdown.

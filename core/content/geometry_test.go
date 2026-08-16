@@ -197,3 +197,22 @@ func directHKDF(t *testing.T, secret []byte, label string, context []byte) []byt
 	}
 	return key
 }
+
+func TestFileGeometryBlockPlainLength(t *testing.T) {
+	geometry, err := NewFileGeometry(2*uint64(catalog.MinChunkSize)+10, catalog.MinChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if length, err := geometry.BlockPlainLength(0); err != nil || length != catalog.MinChunkSize {
+		t.Fatalf("first block length = %d, %v", length, err)
+	}
+	if length, err := geometry.BlockPlainLength(1); err != nil || length != catalog.MinChunkSize {
+		t.Fatalf("middle block length = %d, %v", length, err)
+	}
+	if length, err := geometry.BlockPlainLength(2); err != nil || length != 10 {
+		t.Fatalf("last block length = %d, %v", length, err)
+	}
+	if _, err := geometry.BlockPlainLength(3); !errors.Is(err, ErrBlockOutOfRange) {
+		t.Fatalf("out of range error = %v", err)
+	}
+}
