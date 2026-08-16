@@ -375,7 +375,7 @@ func descendantPIDs(ownerPID int) ([]int, error) {
 		}
 		encoded, readErr := os.ReadFile(filepath.Join("/proc", entry.Name(), "stat"))
 		if readErr != nil {
-			if errors.Is(readErr, os.ErrNotExist) || errors.Is(readErr, os.ErrPermission) {
+			if ignorableProcessStatReadError(readErr) {
 				continue
 			}
 			return nil, fmt.Errorf("read Linux process %d: %w", processID, readErr)
@@ -395,6 +395,14 @@ func descendantPIDs(ownerPID int) ([]int, error) {
 		queue = append(queue, children[processID]...)
 	}
 	return result, nil
+}
+
+func ignorableProcessStatReadError(err error) bool {
+	// A process can exit after ReadDir exposes its PID but before procfs serves
+	// stat. Linux reports that race as either ENOENT or ESRCH; stable-empty
+	// confirmation performs later inventory cuts, so neither is cleanup failure.
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) ||
+		errors.Is(err, os.ErrPermission)
 }
 
 func parseParentPID(stat string) (int, error) {

@@ -98,7 +98,11 @@ func (visitor eventVisitor) symbols() Symbols {
 
 func (visitor eventVisitor) VisitReady(clievent.Ready) error {
 	if visitor.mainVisible() {
-		visitor.renderer.insert(statusLine(visitor.symbols().Ready, "WindShare is ready", terminalcanvas.StyleSuccess))
+		visitor.renderer.insert(
+			terminalcanvas.Plain(""),
+			statusLine(visitor.symbols().Ready, "WindShare is ready", terminalcanvas.StyleSuccess),
+			terminalcanvas.Plain(""),
+		)
 	}
 	return nil
 }
@@ -113,8 +117,9 @@ func (visitor eventVisitor) VisitSharingSubjectSelected(event clievent.SharingSu
 func (visitor eventVisitor) VisitRelayConnected(event clievent.RelayConnected) error {
 	if event.Command() == clievent.CommandShare && visitor.mainVisible() {
 		visitor.renderer.insert(
-			statusLine(visitor.symbols().Relay, "Relay: Connected", terminalcanvas.StyleAccent),
-			statusLine(visitor.symbols().Waiting, "Waiting for receivers"+visitor.symbols().Separator+"Press Ctrl+C to stop", terminalcanvas.StyleDefault),
+			statusLine(visitor.symbols().Arrow, "Relay: Connected", terminalcanvas.StyleAccent),
+			terminalcanvas.Plain(""),
+			statusLine("", "Waiting for receivers"+visitor.symbols().Separator+"Press Ctrl+C to stop", terminalcanvas.StyleMuted),
 		)
 	} else if event.Command() == clievent.CommandGet && visitor.verboseVisible() {
 		visitor.renderer.insert(statusLine(visitor.symbols().Relay, "Relay connected", terminalcanvas.StyleAccent))
