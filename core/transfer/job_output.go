@@ -225,8 +225,10 @@ func (r *jobRun) finish(ctx context.Context) JobResult {
 		SucceededFiles:             progress.PublishedFiles,
 		TerminationCause:           lifecycleError(r.terminationCause),
 		TerminationFault:           closedLifecycleFault(r.terminationCause),
+		TerminationInterruption:    closedLifecycleInterruption(r.terminationCause),
 		SettlementFailure:          lifecycleError(r.settlementFailure),
 		SettlementFault:            closedLifecycleFault(r.settlementFailure),
+		SettlementInterruption:     closedLifecycleInterruption(r.settlementFailure),
 	}
 }
 
@@ -313,7 +315,10 @@ func (r *jobRun) completeJob(ctx context.Context, outcome DirectTreeOutcome) {
 		r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, err)
 		r.job.trace(TransferLifecycleTrace{
 			Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(),
-			DirectTreeSettlement: settlement.Kind(), Fault: closedFault(err), Failed: true,
+			DirectTreeSettlement: settlement.Kind(),
+			Fault:                closedFault(err),
+			Interruption:         closedInterruption(err),
+			Failed:               true,
 		})
 		return
 	}
@@ -467,6 +472,7 @@ func (r *jobRun) traceFileSettlement(plan plannedFile, settlement FileSettlement
 		FileSelection:  plan.selectionDecision,
 		FileSettlement: settlement.Kind(),
 		Fault:          closedFault(failure),
+		Interruption:   closedInterruption(failure),
 		Failed:         failure != nil,
 	})
 }

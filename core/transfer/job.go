@@ -51,6 +51,20 @@ const (
 	DirectTreeOutcomeFailed
 )
 
+// TransferInterruption is the closed, command-facing reason that caller
+// authority ended a job. Keeping it separate from Fault prevents an expected
+// local stop from being misreported as an unknown collaborator failure.
+type TransferInterruption uint8
+
+const (
+	TransferInterruptionCanceled TransferInterruption = iota + 1
+	TransferInterruptionDeadline
+)
+
+func (interruption TransferInterruption) Valid() bool {
+	return interruption >= TransferInterruptionCanceled && interruption <= TransferInterruptionDeadline
+}
+
 type FailureStage uint8
 
 const (
@@ -124,13 +138,15 @@ type JobResult struct {
 	SelectionResolutionFailure error
 	// SourceDriftFailure preserves the first semantic drift outcome even when its
 	// per-file or per-directory diagnostic is omitted by the retention budget.
-	SourceDriftFailure error
-	SourceDriftFault   fault.Fault
-	SucceededFiles     uint64
-	TerminationCause   error
-	TerminationFault   fault.Fault
-	SettlementFailure  error
-	SettlementFault    fault.Fault
+	SourceDriftFailure      error
+	SourceDriftFault        fault.Fault
+	SucceededFiles          uint64
+	TerminationCause        error
+	TerminationFault        fault.Fault
+	TerminationInterruption TransferInterruption
+	SettlementFailure       error
+	SettlementFault         fault.Fault
+	SettlementInterruption  TransferInterruption
 }
 
 type CatalogReader interface {
@@ -414,7 +430,8 @@ func (r *jobRun) completeDiscovery(
 		Fault: fault.Join(
 			discoveryCompletionFault(discoveryFailure, discoveryIncomplete), r.discoveryFaultSnapshot(),
 		),
-		Failed: discoveryIncomplete || r.discoveryFailed,
+		Interruption: closedLifecycleInterruption(discoveryFailure),
+		Failed:       discoveryIncomplete || r.discoveryFailed,
 	})
 	close(fileQueue)
 	<-workerDone

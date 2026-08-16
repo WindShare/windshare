@@ -69,6 +69,7 @@ type ContentPath uint8
 const (
 	ContentPathRelay ContentPath = iota + 1
 	ContentPathDirect
+	ContentPathDirectAndRelay
 )
 
 func (value ContentPath) Name() (string, bool) {
@@ -77,6 +78,8 @@ func (value ContentPath) Name() (string, bool) {
 		return "relay", true
 	case ContentPathDirect:
 		return "direct", true
+	case ContentPathDirectAndRelay:
+		return "direct_and_relay", true
 	default:
 		return "", false
 	}

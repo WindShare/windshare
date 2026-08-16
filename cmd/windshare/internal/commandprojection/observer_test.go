@@ -235,6 +235,19 @@ func TestCoreObserverProjectionPreservesCorrelationAndDropsAuthoritySecrets(t *t
 		t.Fatalf("transfer projection = %#v, err %v", transferEvent, err)
 	}
 	assertProjectionOmits(t, transferEvent, fmt.Sprintf("%x", transfer.ReceiveIntentDigest{0x61}), fmt.Sprintf("%x", transfer.OutputSessionID{0x62}))
+	canceled, err := ProjectTransferLifecycle(transfer.TransferLifecycleTrace{
+		Stage: transfer.TransferDiscoveryCompleted, ReceiveOperationID: receiveID,
+		ProtocolSessionID: sessionID, TransferJobID: jobID,
+		Discovery: transfer.DiscoveryFailed, Progress: progress,
+		Interruption: transfer.TransferInterruptionCanceled, Failed: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceledFailure, present := canceled.Failure()
+	if !present || canceledFailure.Code() != clievent.FailureCanceled {
+		t.Fatalf("canceled lifecycle=%#v failure=%#v present=%t", canceled, canceledFailure, present)
+	}
 
 	filesystemEvent, err := ProjectFilesystemOutput(osfs.FilesystemOutputTrace{
 		Operation: osfs.TraceRuntimeDecision, ReceiveOperationID: receiveID,

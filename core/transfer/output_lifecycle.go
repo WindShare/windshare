@@ -615,6 +615,7 @@ type TransferLifecycleTrace struct {
 	DirectTreeSettlement DirectTreeSettlementKind
 	Progress             ReceiveProgressSnapshot
 	Fault                fault.Fault
+	Interruption         TransferInterruption
 	Failed               bool
 }
 
@@ -673,6 +674,7 @@ func (r *jobRun) traceFileLifecycle(stage TransferLifecycleStage, plan plannedFi
 		Stage: stage, OutputSessionID: r.output.SessionID(),
 		FileSelection: plan.selectionDecision,
 		Fault:         closedFault(failure),
+		Interruption:  closedInterruption(failure),
 		Failed:        failure != nil,
 	})
 }
