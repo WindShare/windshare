@@ -87,6 +87,18 @@ func openOrdinaryResumeFile(
 	reopen bool,
 ) ordinaryResumeSessionFixture {
 	t.Helper()
+	return openOrdinaryResumeFileWithTracer(t, root, seed, exactSize, reopen, nil)
+}
+
+func openOrdinaryResumeFileWithTracer(
+	t *testing.T,
+	root string,
+	seed byte,
+	exactSize uint64,
+	reopen bool,
+	tracer FilesystemOutputTracer,
+) ordinaryResumeSessionFixture {
+	t.Helper()
 	fileID := incrementalTestIdentity16[catalog.FileID](seed + 1)
 	rules, err := transfer.NewSelectionRules(false, []transfer.SelectionOverride{{
 		FileID: fileID, Selected: true,
@@ -108,6 +120,7 @@ func openOrdinaryResumeFile(
 		t.Fatal(err)
 	}
 	authority := newNativeReservationTestAuthority(t, root)
+	authority.tracer = tracer
 	mode, err := authority.BindDestination(context.Background())
 	if err != nil || !mode.Resumable() {
 		t.Fatalf("bind = %+v, %v", mode, err)
@@ -211,7 +224,7 @@ func pauseOrdinaryResumeFixture(t *testing.T, fixture ordinaryResumeSessionFixtu
 
 func TestNativeResumeRepositoryPagesOrdinaryStateWithoutCreatingIt(t *testing.T) {
 	root := newRuntimeTestRootSpec(t).path
-	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +287,7 @@ func TestNativeResumeSnapshotClassifiesPartialAndPublishedFiles(t *testing.T) {
 				pauseOrdinaryResumeFixture(t, fixture)
 			}
 
-			repository, _ := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+			repository, _ := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform, nil)
 			lease, err := repository.Acquire(
 				context.Background(), fixture.intent.OperationID(),
 			)
@@ -338,7 +351,7 @@ func TestNativeResumeCollisionRemainsResumableAndRetriesSameOperation(t *testing
 		t.Fatal(err)
 	}
 
-	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +464,7 @@ func TestNativeResumeDiscardPreservesUnknownPartialAndBecomesCleanupPending(t *t
 		t.Fatal(err)
 	}
 
-	repository, _ := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	repository, _ := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform, nil)
 	authority, _ := resumeauthority.New(repository)
 	result, err := authority.Discard(
 		context.Background(), fixture.intent.OperationID(),
@@ -483,7 +496,7 @@ func TestNativeResumeLeaseSeparatesAttentionDiscardAndCleanup(t *testing.T) {
 	}
 	pauseOrdinaryResumeFixture(t, fixture)
 
-	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,10 +559,10 @@ func TestNativeResumeLeaseSeparatesAttentionDiscardAndCleanup(t *testing.T) {
 }
 
 func TestNativeResumeRepositoryAndItemGuardsRejectUntrustedInputs(t *testing.T) {
-	if _, err := NewNativeResumeRepository("relative", openOutputRuntimeTestPlatform); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+	if _, err := NewNativeResumeRepository("relative", openOutputRuntimeTestPlatform, nil); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("relative repository error = %v", err)
 	}
-	if _, err := NewNativeResumeRepository(filepath.Clean(t.TempDir()), nil); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+	if _, err := NewNativeResumeRepository(filepath.Clean(t.TempDir()), nil, nil); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("nil factory error = %v", err)
 	}
 	var nilRepository *NativeResumeRepository
@@ -561,7 +574,7 @@ func TestNativeResumeRepositoryAndItemGuardsRejectUntrustedInputs(t *testing.T) 
 	}
 
 	root := newRuntimeTestRootSpec(t).path
-	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -634,7 +647,7 @@ func TestOrdinaryResumeItemReducesEveryDurableFilePhase(t *testing.T) {
 	}
 	pauseOrdinaryResumeFixture(t, fixture)
 
-	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -732,6 +745,261 @@ func TestOrdinaryResumeItemReducesEveryDurableFilePhase(t *testing.T) {
 					item.State(), item.BlockReason(), err, test.want, wantBlock)
 			}
 		})
+	}
+}
+
+func retainUnobservableCheckpointCandidate(
+	t *testing.T,
+	root string,
+	intent transfer.ReceiveIntent,
+) {
+	t.Helper()
+	platform, err := openOutputRuntimeTestPlatform(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err := platform.Root().OpenDirectory(checkpointstore.ControlDirectory, true)
+	if err != nil {
+		_ = platform.Close()
+		t.Fatal(err)
+	}
+	registry, err := checkpointstore.OpenOperationRegistry(control)
+	if err != nil {
+		_ = errors.Join(control.Close(), platform.Close())
+		t.Fatal(err)
+	}
+	operation, err := registry.AcquireOperationLease(intent.OperationID())
+	if err != nil {
+		_ = errors.Join(registry.Close(), control.Close(), platform.Close())
+		t.Fatal(err)
+	}
+	reservation, ok := intent.MaterializationPlan().DestinationReservation()
+	if !ok {
+		t.Fatal("candidate intent omitted destination reservation")
+	}
+	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
+		Materializer:        checkpointmodel.MaterializerNativeTree,
+		Certification:       platform.Certification(),
+		AuthorityRef:        reservation.AuthorityRef().Bytes(),
+		RootOpenDisposition: platform.RootOpenDisposition(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := checkpointmodel.NewBinding(
+		ownership, intent.OperationID(), intent.Digest(), intent.BindingDigest(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := checkpointstore.OpenOrdinaryFileRepository(operation, binding, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := checkpointstore.NewFileExecutionStoreWithProfile(
+		&repository, checkpointmodel.LiveCleanupLinuxExt4V1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, _ := store.Snapshot()
+	if len(records) != 1 {
+		t.Fatalf("candidate source records = %d, want 1", len(records))
+	}
+	stable := records[0]
+	active, err := checkpointmodel.AdvanceState(
+		stable,
+		stable.StateGeneration()+1,
+		checkpointmodel.PhaseActive,
+		checkpointmodel.CommitVerified,
+		stable.QuarantineReason(),
+		stable.QuarantineOrigin(),
+		stable.RetirementReason(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Replace(stable, active); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := checkpointmodel.AdvanceGeneration(
+		active,
+		active.VerifiedRanges(),
+		checkpointmodel.PhaseActive,
+		checkpointmodel.CommitCandidate,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Replace(active, candidate); err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(
+		repository.Close(), operation.Close(), registry.Close(), control.Close(), platform.Close(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	stageName := bytesToHex(candidate.OwnedObjectID().Bytes()) + ".stage"
+	var stagePath string
+	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Name() == stageName {
+			stagePath = path
+			return fs.SkipAll
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stagePath == "" {
+		t.Fatal("candidate stage was not found")
+	}
+	if err := os.Remove(stagePath); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckpointReconciliationTraceIsTerminalAndOncePerAttempt(t *testing.T) {
+	t.Run("get reopen", func(t *testing.T) {
+		root := newRuntimeTestRootSpec(t).path
+		initial := openOrdinaryResumeSession(t, root, 0x91, 4)
+		pauseOrdinaryResumeFixture(t, initial)
+
+		var events []FilesystemOutputTrace
+		reopened := openOrdinaryResumeFileWithTracer(
+			t, root, 0x91, 4, true,
+			FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+				if event.Operation == TraceCheckpointReconciled {
+					events = append(events, event)
+				}
+			}),
+		)
+		if len(events) != 1 || events[0].Failed ||
+			events[0].RuntimeComponent != FilesystemOutputRuntimeCheckpoint ||
+			events[0].RuntimeOperation != FilesystemOutputRuntimeReconcileCheckpoints ||
+			events[0].RuntimeDecision != FilesystemOutputRuntimeReconciled ||
+			events[0].ReceiveOperationID != reopened.intent.OperationID() ||
+			events[0].SessionID.IsZero() {
+			t.Fatalf("get reconciliation events = %+v", events)
+		}
+		pauseOrdinaryResumeFixture(t, reopened)
+	})
+
+	t.Run("resume snapshot", func(t *testing.T) {
+		root := newRuntimeTestRootSpec(t).path
+		initial := openOrdinaryResumeSession(t, root, 0xa1, 4)
+		pauseOrdinaryResumeFixture(t, initial)
+
+		var events []FilesystemOutputTrace
+		repository, err := NewNativeResumeRepository(
+			root,
+			openOutputRuntimeTestPlatform,
+			FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+				if event.Operation == TraceCheckpointReconciled {
+					events = append(events, event)
+				}
+			}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lease, err := repository.Acquire(context.Background(), initial.intent.OperationID())
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := lease.Snapshot(context.Background())
+		if err != nil || !snapshot.Valid() {
+			t.Fatalf("resume snapshot = (%+v, %v)", snapshot, err)
+		}
+		if len(events) != 1 || events[0].Failed ||
+			events[0].RuntimeComponent != FilesystemOutputRuntimeCheckpoint ||
+			events[0].RuntimeOperation != FilesystemOutputRuntimeReconcileCheckpoints ||
+			events[0].RuntimeDecision != FilesystemOutputRuntimeReconciled ||
+			events[0].ReceiveOperationID != initial.intent.OperationID() ||
+			!events[0].SessionID.IsZero() {
+			t.Fatalf("resume reconciliation events = %+v", events)
+		}
+		if err := lease.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestCheckpointReconciliationFailureTraceIsTerminalAndOnceForBothPaths(t *testing.T) {
+	root := newRuntimeTestRootSpec(t).path
+	initial := openOrdinaryResumeSession(t, root, 0xb1, 4)
+	pauseOrdinaryResumeFixture(t, initial)
+	retainUnobservableCheckpointCandidate(t, root, initial.intent)
+
+	var getEvents []FilesystemOutputTrace
+	authority := newNativeReservationTestAuthority(t, root)
+	authority.tracer = FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+		if event.Operation == TraceCheckpointReconciled {
+			getEvents = append(getEvents, event)
+		}
+	})
+	if _, err := authority.BindDestination(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	lookup, err := authority.LookupActive(context.Background(), initial.intent.SelectionSpec())
+	if err != nil || lookup.Kind() != ActiveLookupReopened {
+		t.Fatalf("get failure lookup = (%d, %v)", lookup.Kind(), err)
+	}
+	if _, err := authority.OpenOperation(context.Background(), lookup.Operation()); err == nil {
+		t.Fatal("get reopen accepted an unobservable checkpoint candidate")
+	}
+	if err := authority.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertFailedCheckpointReconciliationTrace(t, "get", getEvents, initial.intent, false)
+
+	var resumeEvents []FilesystemOutputTrace
+	repository, err := NewNativeResumeRepository(
+		root,
+		openOutputRuntimeTestPlatform,
+		FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+			if event.Operation == TraceCheckpointReconciled {
+				resumeEvents = append(resumeEvents, event)
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := repository.Acquire(context.Background(), initial.intent.OperationID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := lease.Snapshot(context.Background())
+	if err != nil || !snapshot.Valid() {
+		t.Fatalf("resume snapshot did not preserve typed needs-attention state = (%+v, %v)", snapshot, err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertFailedCheckpointReconciliationTrace(t, "resume", resumeEvents, initial.intent, true)
+}
+
+func assertFailedCheckpointReconciliationTrace(
+	t *testing.T,
+	path string,
+	events []FilesystemOutputTrace,
+	intent transfer.ReceiveIntent,
+	wantZeroSession bool,
+) {
+	t.Helper()
+	if len(events) != 1 || !events[0].Failed ||
+		events[0].RuntimeComponent != FilesystemOutputRuntimeCheckpoint ||
+		events[0].RuntimeOperation != FilesystemOutputRuntimeReconcileCheckpoints ||
+		events[0].RuntimeDecision != FilesystemOutputRuntimeRejected ||
+		events[0].ReceiveOperationID != intent.OperationID() ||
+		events[0].SessionID.IsZero() != wantZeroSession ||
+		events[0].FailureStage != FilesystemOutputFailureCheckpointReconciliation ||
+		events[0].ReconciliationStep != FilesystemCheckpointCandidateObservation {
+		t.Fatalf("%s failed reconciliation events = %+v", path, events)
 	}
 }
 

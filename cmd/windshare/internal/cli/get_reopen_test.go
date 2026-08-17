@@ -12,8 +12,11 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
+	"github.com/windshare/windshare/cmd/windshare/internal/runtrace"
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
@@ -48,6 +51,69 @@ type layoutRecordingGetOutputAuthority struct {
 type fixedLookupGetOutputAuthority struct {
 	getOutputAuthority
 	lookup getOutputLookup
+}
+
+type adapterFilesystemDiagnosticError struct {
+	diagnostic osfs.FilesystemOutputDiagnostic
+}
+
+func (failure adapterFilesystemDiagnosticError) Error() string {
+	return "filesystem adapter diagnostic"
+}
+
+func (failure adapterFilesystemDiagnosticError) FilesystemOutputDiagnostic() osfs.FilesystemOutputDiagnostic {
+	return failure.diagnostic
+}
+
+type failingNativeFilesystemOutputAuthority struct {
+	diagnostic osfs.FilesystemOutputDiagnostic
+	tracer     osfs.FilesystemOutputTracer
+}
+
+func (authority *failingNativeFilesystemOutputAuthority) fail() error {
+	if authority.tracer != nil {
+		diagnostic := authority.diagnostic
+		authority.tracer.TraceFilesystemOutput(osfs.FilesystemOutputTrace{
+			Operation: osfs.TraceRuntimeDecision, Failed: true,
+			FailureStage: diagnostic.Stage, ReconciliationStep: diagnostic.ReconciliationStep,
+			NativeErrorClass: diagnostic.NativeErrorClass, FaultDomain: diagnostic.FaultDomain,
+			NormalizedFaultScope: diagnostic.NormalizedScope,
+			NormalizedFaultCode:  diagnostic.NormalizedCode,
+		})
+	}
+	return adapterFilesystemDiagnosticError{diagnostic: authority.diagnostic}
+}
+
+func (authority *failingNativeFilesystemOutputAuthority) BindDestination(
+	context.Context,
+) (osfs.FilesystemOutputExecutionMode, error) {
+	return osfs.FilesystemOutputExecutionMode{}, authority.fail()
+}
+
+func (authority *failingNativeFilesystemOutputAuthority) LookupActive(
+	context.Context,
+	transfer.SelectionSpec,
+) (osfs.FilesystemOutputLookup, error) {
+	return osfs.FilesystemOutputLookup{}, authority.fail()
+}
+
+func (authority *failingNativeFilesystemOutputAuthority) CreateOperation(
+	context.Context,
+	osfs.FilesystemOutputLookup,
+	receivecontract.ArtifactSpec,
+) (osfs.FilesystemOutputOperation, error) {
+	return osfs.FilesystemOutputOperation{}, authority.fail()
+}
+
+func (authority *failingNativeFilesystemOutputAuthority) OpenOperation(
+	context.Context,
+	osfs.FilesystemOutputOperation,
+) (transfer.DirectTreeSession, error) {
+	return nil, authority.fail()
+}
+
+func (authority *failingNativeFilesystemOutputAuthority) Close() error {
+	return authority.fail()
 }
 
 func (authority fixedLookupGetOutputAuthority) LookupActive(
@@ -230,6 +296,219 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 	if firstJob == secondJob || bytes.Equal(first.operation.intent.OperationID().Bytes(), firstJob.Bytes()) ||
 		bytes.Equal(first.operation.intent.OperationID().Bytes(), secondJob.Bytes()) {
 		t.Fatal("stable operation identity was reused as per-run transfer job identity")
+	}
+}
+
+func TestFilesystemGetOutputAdapterPreservesDiagnosticPresentationAndTraceStage(t *testing.T) {
+	selection := getReopenSelection(t, true, nil)
+	decision, err := ordinaryoutput.NewSyntheticSelectionShape(ordinaryoutput.ShapeFallbackMultipleRoots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := transfer.MaterializeOrdinaryOutputShape(decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := make([]string, 0, 2)
+	operation, err := (&layoutRecordingGetOutputAuthority{
+		selection: selection, events: &events,
+	}).CreateOperation(context.Background(), getOutputLookup{kind: getOutputLookupMiss}, artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type adapterCase struct {
+		name           string
+		stage          osfs.FilesystemOutputFailureStage
+		reconciliation osfs.FilesystemCheckpointReconciliationStep
+		nativeClass    osfs.FilesystemNativeErrorClass
+		fault          transferfault.Fault
+		want           clievent.FailureCode
+		invoke         func(*filesystemGetOutputAuthority) error
+	}
+	outputFault := func(code transferfault.OutputCode) transferfault.Fault {
+		value, faultErr := transferfault.NewOutput(transferfault.ScopeOutputPause, code)
+		if faultErr != nil {
+			t.Fatal(faultErr)
+		}
+		return value
+	}
+	checkpointFault := func(code transferfault.CheckpointCode) transferfault.Fault {
+		value, faultErr := transferfault.NewCheckpoint(transferfault.ScopeOutputPause, code)
+		if faultErr != nil {
+			t.Fatal(faultErr)
+		}
+		return value
+	}
+	tests := []adapterCase{
+		{
+			name: "destination binding", stage: osfs.FilesystemOutputFailureDestinationBinding,
+			fault: outputFault(transferfault.OutputOwnership), want: clievent.FailureOutputOwnership,
+			invoke: func(authority *filesystemGetOutputAuthority) error {
+				_, invokeErr := authority.BindDestination(context.Background())
+				return invokeErr
+			},
+		},
+		{
+			name: "active lookup", stage: osfs.FilesystemOutputFailureActiveLookup,
+			fault: checkpointFault(transferfault.CheckpointBusy), want: clievent.FailureCheckpointBusy,
+			invoke: func(authority *filesystemGetOutputAuthority) error {
+				_, invokeErr := authority.LookupActive(context.Background(), selection)
+				return invokeErr
+			},
+		},
+		{
+			name: "operation admission", stage: osfs.FilesystemOutputFailureOperationAdmission,
+			fault: outputFault(transferfault.OutputStateIO), want: clievent.FailureOutputStateIO,
+			invoke: func(authority *filesystemGetOutputAuthority) error {
+				_, invokeErr := authority.CreateOperation(
+					context.Background(), getOutputLookup{kind: getOutputLookupMiss}, artifact,
+				)
+				return invokeErr
+			},
+		},
+		{
+			name: "operation acquisition", stage: osfs.FilesystemOutputFailureOperationAcquisition,
+			fault: outputFault(transferfault.OutputContract), want: clievent.FailureOutputContract,
+			invoke: func(authority *filesystemGetOutputAuthority) error {
+				_, invokeErr := authority.OpenOperation(context.Background(), operation)
+				return invokeErr
+			},
+		},
+		{
+			name: "checkpoint reconciliation", stage: osfs.FilesystemOutputFailureCheckpointReconciliation,
+			reconciliation: osfs.FilesystemCheckpointCandidateObservation,
+			fault:          checkpointFault(transferfault.CheckpointStateIO), want: clievent.FailureCheckpointStateIO,
+			invoke: func(authority *filesystemGetOutputAuthority) error {
+				_, invokeErr := authority.OpenOperation(context.Background(), operation)
+				return invokeErr
+			},
+		},
+		{
+			name: "native durability", stage: osfs.FilesystemOutputFailureNativeDurability,
+			reconciliation: osfs.FilesystemCheckpointStageDurability,
+			nativeClass:    osfs.FilesystemNativeErrorAccessDenied,
+			fault:          checkpointFault(transferfault.CheckpointStateIO), want: clievent.FailureCheckpointStateIO,
+			invoke: func(authority *filesystemGetOutputAuthority) error {
+				_, invokeErr := authority.OpenOperation(context.Background(), operation)
+				return invokeErr
+			},
+		},
+		{
+			name: "authority close", stage: osfs.FilesystemOutputFailureAuthorityClose,
+			fault: outputFault(transferfault.OutputStateIO), want: clievent.FailureOutputStateIO,
+			invoke: func(authority *filesystemGetOutputAuthority) error { return authority.Close() },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diagnostic := osfs.FilesystemOutputDiagnostic{
+				Stage: test.stage, ReconciliationStep: test.reconciliation,
+				NativeErrorClass: test.nativeClass, FaultDomain: uint8(test.fault.Domain()),
+				NormalizedScope: uint8(test.fault.Scope()), NormalizedCode: test.fault.Code(),
+			}
+			recorder := newFakeUserTrace(runtrace.Status{Complete: true})
+			app := &App{
+				Stderr: bytes.NewBuffer(nil),
+				openUserTrace: func(
+					string,
+					clievent.Command,
+					runtrace.Config,
+					runtrace.Dependencies,
+				) (userTraceRecorder, error) {
+					return recorder, nil
+				},
+			}
+			runtime, runtimeErr := app.newCommandRuntime(
+				clievent.CommandGet,
+				observationOptions{tracePath: "get-output-failure.ndjson"},
+			)
+			if runtimeErr != nil {
+				t.Fatal(runtimeErr)
+			}
+			observation := getObservation{runtime: runtime}
+			native := &failingNativeFilesystemOutputAuthority{
+				diagnostic: diagnostic,
+				tracer:     osfs.FilesystemOutputTraceFunc(observation.filesystemOutput),
+			}
+			adapter := &filesystemGetOutputAuthority{native: native}
+			invokeErr := test.invoke(adapter)
+			if invokeErr == nil {
+				t.Fatal("filesystem adapter omitted its diagnostic failure")
+			}
+			if exit := reportGetOutputAdmissionFailure(observation, invokeErr); exit != ExitFailure {
+				t.Fatalf("failure exit=%d", exit)
+			}
+			runtime.Close()
+
+			var traceStage clievent.FilesystemFailureStage
+			var failureCode clievent.FailureCode
+			for _, event := range recorder.recorded() {
+				switch value := event.(type) {
+				case clievent.FilesystemOutputObserved:
+					stage, _, _, present := value.FailureClassification()
+					if present {
+						traceStage = stage
+					}
+				case clievent.CommandFailed:
+					failureCode = value.Failure().Code()
+				}
+			}
+			if traceStage != clievent.FilesystemFailureStage(test.stage) {
+				t.Fatalf("trace stage=%d want=%d", traceStage, test.stage)
+			}
+			if failureCode != test.want {
+				t.Fatalf("presentation code=%d want=%d", failureCode, test.want)
+			}
+		})
+	}
+}
+
+func TestFilesystemGetOutputAdapterPreservesExactNonDiagnosticErrorsAndNeedsAttention(t *testing.T) {
+	for name, cause := range map[string]error{
+		"canceled":         context.Canceled,
+		"deadline":         context.DeadlineExceeded,
+		"adapter contract": errGetOutputAdapterContract,
+	} {
+		if got := sealFilesystemOutputFailure(cause); got != cause {
+			t.Fatalf("%s error identity changed from %T to %T", name, cause, got)
+		}
+	}
+
+	recorder := newFakeUserTrace(runtrace.Status{Complete: true})
+	app := &App{
+		Stderr: bytes.NewBuffer(nil),
+		openUserTrace: func(
+			string,
+			clievent.Command,
+			runtrace.Config,
+			runtrace.Dependencies,
+		) (userTraceRecorder, error) {
+			return recorder, nil
+		},
+	}
+	runtime, err := app.newCommandRuntime(
+		clievent.CommandGet,
+		observationOptions{tracePath: "get-output-needs-attention.ndjson"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exit := reportGetOutputAdmissionFailure(
+		getObservation{runtime: runtime},
+		errGetOutputOperationNeedsAttention,
+	); exit != ExitFailure {
+		t.Fatalf("needs-attention exit=%d", exit)
+	}
+	runtime.Close()
+	events := recorder.recorded()
+	if len(events) != 1 {
+		t.Fatalf("needs-attention events=%#v", events)
+	}
+	failure, ok := events[0].(clievent.CommandFailed)
+	if !ok || failure.Failure().Code() != clievent.FailureOutputNeedsAttention {
+		t.Fatalf("needs-attention presentation=%#v", events[0])
 	}
 }
 

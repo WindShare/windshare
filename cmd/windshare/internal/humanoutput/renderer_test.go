@@ -161,7 +161,8 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 		t.Fatal(err)
 	}
 	relayLifecycle, err := clievent.NewRelayLifecycleObserved(clievent.RelayLifecycleSpec{
-		Command: clievent.CommandShare, LinkID: 1, Stage: clievent.RelayTerminalReserved,
+		Command: clievent.CommandShare, LinkID: 1, RelaySession: mustRelaySessionID(t), SendOperationID: 1,
+		Stage: clievent.RelayTerminalReserved, Terminal: true,
 		RetirementSource: clievent.RelayRetirementNone,
 		Cause:            clievent.RelayCauseNone, DrainCause: clievent.RelayCauseNone,
 	})
@@ -170,7 +171,7 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	}
 	webRTC, err := clievent.NewWebRTCLifecycleObserved(clievent.WebRTCLifecycleSpec{
 		Command: clievent.CommandGet, ChannelID: 1, Operation: clievent.WebRTCChannel,
-		Transition: clievent.WebRTCSendAccepted, State: clievent.ChannelConnecting,
+		Transition: clievent.WebRTCClosedClean, State: clievent.ChannelClosed,
 		Terminal: clievent.WebRTCTerminalNone, Cause: clievent.WebRTCCauseNone,
 	})
 	if err != nil {
@@ -200,9 +201,9 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	filesystem, err := clievent.NewFilesystemOutputObserved(
-		mustReceiveID(t), clievent.FilesystemCertified, clievent.FilesystemOutputCounters{}, clievent.Failure{},
-	)
+	filesystem, err := clievent.NewFilesystemOutputObserved(clievent.FilesystemOutputSpec{
+		ReceiveOperation: mustReceiveID(t), Operation: clievent.FilesystemCertified,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,6 +267,15 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 		{"root prefetch", rootPrefetch, false, false, false, false},
 		{"protocol operation failure", protocolOperation, false, true, false, false},
 	}
+}
+
+func mustRelaySessionID(t *testing.T) clievent.RelaySessionID {
+	t.Helper()
+	value, err := clievent.NewRelaySessionID([]byte{1, 2, 3, 4, 5, 6, 7, 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 func TestRedirectedVerboseProgressEmitsOnlyPhaseMilestones(t *testing.T) {

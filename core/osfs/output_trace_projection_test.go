@@ -148,11 +148,80 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 			t.Fatalf("lock milestone %d projected as %d, want %d", test.value, actual, test.want)
 		}
 	}
+	failureStages := []struct {
+		value outputruntime.FilesystemOutputFailureStage
+		want  FilesystemOutputFailureStage
+	}{
+		{outputruntime.FilesystemOutputFailureDestinationBinding, FilesystemOutputFailureDestinationBinding},
+		{outputruntime.FilesystemOutputFailureInventoryPaging, FilesystemOutputFailureInventoryPaging},
+		{outputruntime.FilesystemOutputFailureActiveLookup, FilesystemOutputFailureActiveLookup},
+		{outputruntime.FilesystemOutputFailureOperationAcquisition, FilesystemOutputFailureOperationAcquisition},
+		{outputruntime.FilesystemOutputFailureOperationAdmission, FilesystemOutputFailureOperationAdmission},
+		{outputruntime.FilesystemOutputFailureCheckpointReconciliation, FilesystemOutputFailureCheckpointReconciliation},
+		{outputruntime.FilesystemOutputFailureNativeDurability, FilesystemOutputFailureNativeDurability},
+		{outputruntime.FilesystemOutputFailureAuthorityClose, FilesystemOutputFailureAuthorityClose},
+	}
+	for _, test := range failureStages {
+		if actual := projectFilesystemFailureStage(test.value); actual != test.want {
+			t.Fatalf("failure stage %d projected as %d, want %d", test.value, actual, test.want)
+		}
+	}
+	reconciliationSteps := []struct {
+		value outputruntime.FilesystemCheckpointReconciliationStep
+		want  FilesystemCheckpointReconciliationStep
+	}{
+		{outputruntime.FilesystemCheckpointCandidateObservation, FilesystemCheckpointCandidateObservation},
+		{outputruntime.FilesystemCheckpointStageDurability, FilesystemCheckpointStageDurability},
+		{outputruntime.FilesystemCheckpointNamespaceDurability, FilesystemCheckpointNamespaceDurability},
+		{outputruntime.FilesystemCheckpointRecordPromotion, FilesystemCheckpointRecordPromotion},
+	}
+	for _, test := range reconciliationSteps {
+		if actual := projectFilesystemReconciliationStep(test.value); actual != test.want {
+			t.Fatalf("reconciliation step %d projected as %d, want %d", test.value, actual, test.want)
+		}
+	}
+	nativeClasses := []struct {
+		value outputruntime.FilesystemNativeErrorClass
+		want  FilesystemNativeErrorClass
+	}{
+		{outputruntime.FilesystemNativeErrorAccessDenied, FilesystemNativeErrorAccessDenied},
+		{outputruntime.FilesystemNativeErrorSharingViolation, FilesystemNativeErrorSharingViolation},
+		{outputruntime.FilesystemNativeErrorNotFound, FilesystemNativeErrorNotFound},
+		{outputruntime.FilesystemNativeErrorInvalidHandle, FilesystemNativeErrorInvalidHandle},
+		{outputruntime.FilesystemNativeErrorUnsupported, FilesystemNativeErrorUnsupported},
+		{outputruntime.FilesystemNativeErrorIO, FilesystemNativeErrorIO},
+		{outputruntime.FilesystemNativeErrorUnknown, FilesystemNativeErrorUnknown},
+	}
+	for _, test := range nativeClasses {
+		if actual := projectFilesystemNativeErrorClass(test.value); actual != test.want {
+			t.Fatalf("native class %d projected as %d, want %d", test.value, actual, test.want)
+		}
+	}
+	stateReasons := []struct {
+		value outputruntime.FilesystemOutputStateReason
+		want  FilesystemOutputStateReason
+	}{
+		{outputruntime.FilesystemOutputStateReasonNone, FilesystemOutputStateReasonNone},
+		{outputruntime.FilesystemOutputStateDestinationOwnershipUnknown, FilesystemOutputStateDestinationOwnershipUnknown},
+		{outputruntime.FilesystemOutputStateRegistryOwnershipUnknown, FilesystemOutputStateRegistryOwnershipUnknown},
+		{outputruntime.FilesystemOutputStateLeaseOwnershipUnknown, FilesystemOutputStateLeaseOwnershipUnknown},
+		{outputruntime.FilesystemOutputStateOperationOwnershipUnknown, FilesystemOutputStateOperationOwnershipUnknown},
+		{outputruntime.FilesystemOutputStateCleanupUncertain, FilesystemOutputStateCleanupUncertain},
+	}
+	for _, test := range stateReasons {
+		if actual := projectFilesystemOutputStateReason(test.value); actual != test.want {
+			t.Fatalf("state reason %d projected as %d, want %d", test.value, actual, test.want)
+		}
+	}
 
 	if projectTraceOperation(255) != 0 || projectRootOpenDisposition("unknown") != "" ||
 		projectRuntimeComponent(255) != 0 || projectRuntimeOperation(255) != 0 ||
 		projectRuntimeDecision(255) != 0 || projectCertification("unknown") != "" ||
-		projectNativeLockScope(255) != 0 || projectNativeLockMilestone(255) != 0 {
+		projectNativeLockScope(255) != 0 || projectNativeLockMilestone(255) != 0 ||
+		projectFilesystemFailureStage(255) != 0 ||
+		projectFilesystemReconciliationStep(255) != 0 ||
+		projectFilesystemNativeErrorClass(255) != 0 ||
+		projectFilesystemOutputStateReason(255) != 0 {
 		t.Fatal("unknown internal trace values crossed the public projection")
 	}
 }
@@ -182,6 +251,9 @@ func TestOutputTraceProjectionCopiesNativeRuntimePayload(t *testing.T) {
 		ReservedFileSlotCount:  12,
 		DirectoryMetadataBytes: 13,
 		CheckpointRecordCount:  14,
+		FailureStage:           outputruntime.FilesystemOutputFailureNativeDurability,
+		ReconciliationStep:     outputruntime.FilesystemCheckpointStageDurability,
+		NativeErrorClass:       outputruntime.FilesystemNativeErrorAccessDenied,
 		Failed:                 true,
 	}
 	want := FilesystemOutputTrace{
@@ -208,6 +280,9 @@ func TestOutputTraceProjectionCopiesNativeRuntimePayload(t *testing.T) {
 		ReservedFileSlotCount:  12,
 		DirectoryMetadataBytes: 13,
 		CheckpointRecordCount:  14,
+		FailureStage:           FilesystemOutputFailureNativeDurability,
+		ReconciliationStep:     FilesystemCheckpointStageDurability,
+		NativeErrorClass:       FilesystemNativeErrorAccessDenied,
 		Failed:                 true,
 	}
 	if actual := projectFilesystemOutputTrace(event); actual != want {

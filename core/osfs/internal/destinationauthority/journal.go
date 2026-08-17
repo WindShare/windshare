@@ -198,8 +198,8 @@ func promoteLiveCleanupStageTicket(
 func openExactLiveCleanupStage(
 	proof outputcap.Directory,
 	ticket checkpointmodel.LiveCleanupTicket,
-) (outputcap.File, bool, error) {
-	stage, err := proof.OpenFile(ticket.StageName(), false, true)
+) (outputcap.MutableFile, bool, error) {
+	stage, err := proof.OpenMutableFile(ticket.StageName(), false)
 	if err != nil || stage == nil {
 		if errors.Is(err, outputcap.ErrUnsafeNamespace) || errors.Is(err, fs.ErrNotExist) {
 			return nil, false, closeFile(stage)
@@ -219,7 +219,7 @@ func openExactLiveCleanupStage(
 	return stage, true, nil
 }
 
-func closeFile(file outputcap.File) error {
+func closeFile(file outputcap.FileIdentity) error {
 	if file == nil {
 		return nil
 	}

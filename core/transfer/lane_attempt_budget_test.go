@@ -46,7 +46,7 @@ func TestLaneSetBoundsOneDemandAcrossEpochChurnAndFinalHedgeBatch(t *testing.T) 
 				switch {
 				case identity.Epoch < uint32(MaxDemandLaneAttempts-1):
 					next := LaneIdentity{ID: churnLaneID, Epoch: identity.Epoch + 1}
-					if addErr := lanes.Add(next, laneFor(next)); addErr != nil {
+					if addErr := lanes.Add(next, LaneRouteRelay, laneFor(next)); addErr != nil {
 						recordExpansionError(addErr)
 					}
 				case identity.Epoch == uint32(MaxDemandLaneAttempts-1):
@@ -55,12 +55,12 @@ func TestLaneSetBoundsOneDemandAcrossEpochChurnAndFinalHedgeBatch(t *testing.T) 
 					// bounded only by current lane count instead of remaining demand
 					// authority.
 					next := LaneIdentity{ID: churnLaneID, Epoch: identity.Epoch + 1}
-					if addErr := lanes.Add(next, laneFor(next)); addErr != nil {
+					if addErr := lanes.Add(next, LaneRouteRelay, laneFor(next)); addErr != nil {
 						recordExpansionError(addErr)
 					}
 					for laneID := uint32(1); laneID < churnLaneID; laneID++ {
 						candidate := LaneIdentity{ID: laneID, Epoch: 1}
-						if addErr := lanes.Add(candidate, laneFor(candidate)); addErr != nil {
+						if addErr := lanes.Add(candidate, LaneRouteRelay, laneFor(candidate)); addErr != nil {
 							recordExpansionError(addErr)
 						}
 					}
@@ -71,7 +71,7 @@ func TestLaneSetBoundsOneDemandAcrossEpochChurnAndFinalHedgeBatch(t *testing.T) 
 	}
 
 	initial := LaneIdentity{ID: churnLaneID, Epoch: 1}
-	if err := lanes.Add(initial, laneFor(initial)); err != nil {
+	if err := lanes.Add(initial, LaneRouteRelay, laneFor(initial)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); !errors.Is(err, notAdmitted) {

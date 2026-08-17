@@ -43,7 +43,7 @@ func (policy *fileAuthorityFilePolicy) calls() int {
 }
 
 type fileAuthorityObservedFile struct {
-	outputcap.File
+	outputcap.ObservedFile
 	policy *fileAuthorityFilePolicy
 }
 
@@ -63,12 +63,12 @@ func (file *fileAuthorityObservedFile) MetadataMatches(
 	return file.policy.metadataMatches, file.policy.metadataErr
 }
 
-func (file *fileAuthorityObservedFile) SameFile(other outputcap.File) (bool, error) {
+func (file *fileAuthorityObservedFile) SameFile(other outputcap.FileIdentity) (bool, error) {
 	peer := other
 	if wrapped, ok := other.(*fileAuthorityObservedFile); ok {
-		peer = wrapped.File
+		peer = wrapped.ObservedFile
 	}
-	return file.File.SameFile(peer)
+	return file.ObservedFile.SameFile(peer)
 }
 
 type fileAuthorityPlatform struct {
@@ -115,11 +115,11 @@ func (platform *fileAuthorityPlatform) wrapDirectory(directory *fakeDirectory) o
 	}
 }
 
-func (platform *fileAuthorityPlatform) wrapFile(file outputcap.File) outputcap.File {
+func (platform *fileAuthorityPlatform) wrapFile(file outputcap.ObservedFile) outputcap.ObservedFile {
 	if file == nil {
 		return nil
 	}
-	return &fileAuthorityObservedFile{File: file, policy: platform.finalPolicy}
+	return &fileAuthorityObservedFile{ObservedFile: file, policy: platform.finalPolicy}
 }
 
 type fileAuthorityGuard struct {
@@ -201,13 +201,12 @@ func (directory *fileAuthorityDirectory) PersistentDirectoryIdentityClaim() ([]b
 	return []byte("file-authority-dir-claim"), nil
 }
 
-func (directory *fileAuthorityDirectory) OpenFile(
+func (directory *fileAuthorityDirectory) OpenObservedFile(
 	name string,
 	private bool,
-	writable bool,
-) (outputcap.File, error) {
+) (outputcap.ObservedFile, error) {
 
-	opened, err := directory.base.OpenFile(name, private, writable)
+	opened, err := directory.base.OpenObservedFile(name, private)
 	if err != nil || opened == nil {
 		return nil, err
 	}
@@ -215,11 +214,11 @@ func (directory *fileAuthorityDirectory) OpenFile(
 }
 
 func (directory *fileAuthorityDirectory) LinkFileNoReplace(
-	source outputcap.File,
+	source outputcap.FileIdentity,
 	name string,
-) (outputcap.File, error) {
+) (outputcap.ObservedFile, error) {
 	if observed, ok := source.(*fileAuthorityObservedFile); ok {
-		source = observed.File
+		source = observed.ObservedFile
 	}
 	native, ok := source.(*fakeFile)
 	if !ok || native == nil || native.node == nil {
@@ -270,7 +269,7 @@ func (objects *fileAuthorityObjects) FinalMatchesOwned(
 	_ context.Context,
 	object checkpointmodel.ObjectID,
 	exactSize uint64,
-	_ outputcap.File,
+	_ outputcap.FileIdentity,
 ) (bool, error) {
 	objects.mu.Lock()
 	defer objects.mu.Unlock()
@@ -286,7 +285,7 @@ func (objects *fileAuthorityObjects) PublishOwnedNoReplace(
 	exactSize uint64,
 	parent outputcap.Directory,
 	leaf string,
-) (outputcap.File, error) {
+) (outputcap.ObservedFile, error) {
 	objects.mu.Lock()
 	objects.publishCalls++
 	objects.lastObject = object
@@ -312,7 +311,7 @@ func (objects *fileAuthorityObjects) PublishOwnedNoReplace(
 	if node == nil {
 		node = &fakeNode{id: 1_000_000, size: exactSize}
 	}
-	return &fileAuthorityObservedFile{File: &fakeFile{node: node}, policy: policy}, publishErr
+	return &fileAuthorityObservedFile{ObservedFile: &fakeFile{node: node}, policy: policy}, publishErr
 }
 
 type fileAuthorityOwnedFile struct {
@@ -833,10 +832,10 @@ func TestFileAuthoritySyncAndCloseRetainParentGuardSemantics(t *testing.T) {
 
 type liveFileAuthorityOwned struct {
 	*fileAuthorityOwnedFile
-	native outputcap.File
+	native outputcap.MutableFile
 }
 
-func (file *liveFileAuthorityOwned) NativeFile() outputcap.File {
+func (file *liveFileAuthorityOwned) NativeFile() outputcap.MutableFile {
 	if file == nil {
 		return nil
 	}

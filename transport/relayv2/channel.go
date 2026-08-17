@@ -220,11 +220,7 @@ func (c *Channel) SendTerminal(ctx context.Context, frame framechannel.Frame) er
 	err = c.link.enqueueTerminal(ctx, c, request, reservation)
 	if framechannel.SendDispositionOf(err) == framechannel.SendAccepted {
 		transition := c.link.settleTerminal(c, reservation, err)
-		c.link.trace(LifecycleTrace{
-			RelaySessionID: c.id, OperationID: request.operationID,
-			Stage: LifecycleTerminalSettled, Terminal: true,
-			Disposition: framechannel.SendAccepted, Cause: lifecycleCause(err),
-		})
+		c.link.trace(terminalSettledTrace(c.id, request.operationID, lifecycleCause(err)))
 		c.link.traceTransition(c, transition)
 	}
 	return err
@@ -238,11 +234,10 @@ func (c *Channel) prepareSend(
 	operationID := c.link.nextOperationID()
 	reject := func(cause error) (*sendRequest, error) {
 		err := framechannel.RejectSend(cause)
-		c.link.trace(LifecycleTrace{
-			RelaySessionID: c.id, OperationID: operationID,
-			Stage: LifecycleSendRejected, Terminal: terminal,
-			Disposition: framechannel.SendRejected, Cause: lifecycleCause(err),
-		})
+		c.link.trace(sendRejectedTrace(
+			c.id, operationID, terminal,
+			framechannel.SendRejected, lifecycleCause(err),
+		))
 		return nil, err
 	}
 	if len(frame) == 0 || len(frame) > framechannel.MaxFrameSize {
@@ -281,11 +276,10 @@ func (c *Channel) reserveTerminal(
 	}
 	if err != nil {
 		c.link.unlockChannel(c)
-		c.link.trace(LifecycleTrace{
-			RelaySessionID: c.id, OperationID: request.operationID,
-			Stage: LifecycleSendRejected, Terminal: true,
-			Disposition: framechannel.SendDispositionOf(err), Cause: lifecycleCause(err),
-		})
+		c.link.trace(sendRejectedTrace(
+			c.id, request.operationID, true,
+			framechannel.SendDispositionOf(err), lifecycleCause(err),
+		))
 		return nil, err
 	}
 	reservation := &terminalReservation{
@@ -293,10 +287,7 @@ func (c *Channel) reserveTerminal(
 	}
 	c.terminal = reservation
 	c.link.unlockChannel(c)
-	c.link.trace(LifecycleTrace{
-		RelaySessionID: c.id, OperationID: request.operationID,
-		Stage: LifecycleTerminalReserved, Terminal: true,
-	})
+	c.link.trace(terminalReservedTrace(c.id, request.operationID))
 	return reservation, nil
 }
 

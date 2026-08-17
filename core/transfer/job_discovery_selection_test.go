@@ -45,7 +45,7 @@ func TestTransferJobUsesCatalogClientBrokerAndSparseFileLocalResume(t *testing.T
 	lane := &jobLane{indices: make(map[catalog.FileID][]uint64)}
 	lanes, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](50), RaceWidth: 1})
 	defer lanes.Close()
-	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, lane); err != nil {
+	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, lane); err != nil {
 		t.Fatal(err)
 	}
 	budget, _ := NewPlaintextBudget(8 * chunk)
@@ -286,7 +286,7 @@ func TestTransferJobDiscoveryFailurePreservesIndependentContentWork(t *testing.T
 	lane := &jobLane{indices: make(map[catalog.FileID][]uint64)}
 	lanes, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](80), RaceWidth: 1})
 	defer lanes.Close()
-	_ = lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, lane)
+	_ = lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, lane)
 	budget, _ := NewPlaintextBudget(4 * chunk)
 	broker, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: share, Lanes: lanes, MaxBytes: 2 * chunk, ProcessBudget: budget})
 	defer broker.Close()

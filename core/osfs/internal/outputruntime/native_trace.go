@@ -8,6 +8,42 @@ import (
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
+func (authority *Authority) traceCheckpointReconciled(
+	intent transfer.ReceiveIntent,
+	sessionID transfer.OutputSessionID,
+	recordCount uint64,
+	reconciliationErr error,
+) {
+	if authority == nil || intent.IsZero() {
+		return
+	}
+	event := FilesystemOutputTrace{
+		Operation:             TraceCheckpointReconciled,
+		ReceiveIntentDigest:   intent.Digest(),
+		ReceiveOperationID:    intent.OperationID(),
+		SessionID:             sessionID,
+		RuntimeComponent:      FilesystemOutputRuntimeCheckpoint,
+		RuntimeOperation:      FilesystemOutputRuntimeReconcileCheckpoints,
+		RuntimeDecision:       FilesystemOutputRuntimeReconciled,
+		CheckpointRecordCount: recordCount,
+	}
+	if reconciliationErr != nil {
+		diagnostic := filesystemOutputDiagnostic(
+			FilesystemOutputFailureCheckpointReconciliation,
+			reconciliationErr,
+		)
+		event.RuntimeDecision = FilesystemOutputRuntimeRejected
+		event.FailureStage = diagnostic.Stage
+		event.ReconciliationStep = diagnostic.ReconciliationStep
+		event.NativeErrorClass = diagnostic.NativeErrorClass
+		event.FaultDomain = diagnostic.FaultDomain
+		event.NormalizedFaultScope = diagnostic.NormalizedScope
+		event.NormalizedFaultCode = diagnostic.NormalizedCode
+		event.Failed = true
+	}
+	authority.trace(event)
+}
+
 func (authority *Authority) outputSessionRuntimeTrace() outputsession.TraceSink {
 	return outputsession.TraceSinkFunc(func(event outputsession.TraceEvent) {
 		decision := runtimeSessionDecision(event.Decision)

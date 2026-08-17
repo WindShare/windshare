@@ -164,7 +164,7 @@ func (file *portableRuntimeFile) MetadataMatches(
 	return portableRuntimeModifiedTimeMatches(info.ModTime(), modified), nil
 }
 
-func (file *portableRuntimeFile) SameFile(other outputcap.File) (bool, error) {
+func (file *portableRuntimeFile) SameFile(other outputcap.FileIdentity) (bool, error) {
 	if err := file.usable(); err != nil {
 		return false, err
 	}
@@ -223,7 +223,7 @@ type portableRuntimeLock struct {
 	closed bool
 }
 
-func (lock *portableRuntimeLock) File() outputcap.File {
+func (lock *portableRuntimeLock) File() outputcap.MutableFile {
 	lock.mu.Lock()
 	defer lock.mu.Unlock()
 	if lock.closed {

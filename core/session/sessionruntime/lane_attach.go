@@ -474,7 +474,11 @@ func (runtime *ReceiverRuntime) AttachLane(
 		opener: runtime.opener, revisions: runtime.revisions,
 	}
 	_, err = runtime.lanes.addWithAdmission(identity, handOff, authenticator, false, func() error {
-		return runtime.laneSet.Add(transfer.LaneIdentity{ID: identity.ID, Epoch: identity.Epoch}, blockLane)
+		return runtime.laneSet.Add(
+			transfer.LaneIdentity{ID: identity.ID, Epoch: identity.Epoch},
+			transfer.LaneRouteDirect,
+			blockLane,
+		)
 	})
 	if err != nil {
 		return LaneIdentity{}, err

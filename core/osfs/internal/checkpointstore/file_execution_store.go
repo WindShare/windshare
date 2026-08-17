@@ -302,13 +302,13 @@ func (store *FileExecutionStore) indexReconciledRecord(record checkpointmodel.Re
 }
 
 func (store *FileExecutionStore) recordOwnedReady(record checkpointmodel.Record) (bool, error) {
-	file, observation, err := store.openOwnedLocked(
-		record.OwnedObjectID(), record.ExactSize(), true, false,
+	files, observation, err := store.openObservedOwnedLocked(
+		record.OwnedObjectID(), record.ExactSize(), true,
 	)
 	if err != nil {
-		return false, errors.Join(err, closeOwnedFile(file))
+		return false, errors.Join(err, files.close())
 	}
-	return observation.Condition() == fileexecution.OwnedReady, closeOwnedFile(file)
+	return observation.Condition() == fileexecution.OwnedReady, files.close()
 }
 
 func (store *FileExecutionStore) indexRecord(record checkpointmodel.Record) error {

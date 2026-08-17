@@ -260,3 +260,9 @@ func (visitor eventVisitor) VisitProtocolOperationObserved(event clievent.Protoc
 	}
 	return nil
 }
+
+func (eventVisitor) VisitLaneSettlementObserved(clievent.LaneSettlementObserved) error { return nil }
+func (eventVisitor) VisitObserverLossObserved(clievent.ObserverLossObserved) error     { return nil }
+func (eventVisitor) VisitReceiverTerminationObserved(clievent.ReceiverTerminationObserved) error {
+	return nil
+}

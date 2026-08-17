@@ -115,7 +115,7 @@ func (file *liveTransactionFile) MetadataMatches(size uint64, modified catalog.M
 	return uint64(len(file.data)) == size && file.modified == modified, file.metadataErr
 }
 
-func (file *liveTransactionFile) SameFile(other outputcap.File) (bool, error) {
+func (file *liveTransactionFile) SameFile(other outputcap.FileIdentity) (bool, error) {
 	peer, ok := other.(*liveTransactionFile)
 	return ok && peer == file, nil
 }

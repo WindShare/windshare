@@ -26,7 +26,14 @@ func (mode ExecutionMode) Valid() bool {
 	return mode.mode == outputcap.ExecutionResumable || mode.mode == outputcap.ExecutionLiveOnly
 }
 
-func (authority *Authority) BindDestination(ctx context.Context) (ExecutionMode, error) {
+func (authority *Authority) BindDestination(
+	ctx context.Context,
+) (result ExecutionMode, resultErr error) {
+	defer func() {
+		resultErr = diagnoseFilesystemOutputFailure(
+			FilesystemOutputFailureDestinationBinding, resultErr,
+		)
+	}()
 	if authority == nil || ctx == nil || authority.platformFactory == nil {
 		return ExecutionMode{}, transfer.ErrInvalidOutputBinding
 	}
@@ -53,10 +60,11 @@ func (authority *Authority) BindDestination(ctx context.Context) (ExecutionMode,
 	binding := destination.Binding()
 	mode, err := binding.ExecutionMode()
 	if err != nil {
-		return ExecutionMode{}, errors.Join(
+		primary := diagnoseFilesystemOutputFailure(
+			FilesystemOutputFailureDestinationBinding,
 			runtimeOutputError(ctx, transferfault.OutputOwnership, "select destination execution mode", err),
-			destination.Close(),
 		)
+		return ExecutionMode{}, freezeFilesystemOutputFailure(primary, destination.Close())
 	}
 	var registry *checkpointstore.OperationRegistry
 	if mode == outputcap.ExecutionResumable {
@@ -69,10 +77,11 @@ func (authority *Authority) BindDestination(ctx context.Context) (ExecutionMode,
 			return registry, nil
 		})
 		if err != nil {
-			return ExecutionMode{}, errors.Join(
+			primary := diagnoseFilesystemOutputFailure(
+				FilesystemOutputFailureDestinationBinding,
 				checkpointRuntimeError(ctx, "open ordinary operation registry", err),
-				destination.Close(),
 			)
+			return ExecutionMode{}, freezeFilesystemOutputFailure(primary, destination.Close())
 		}
 	}
 	authority.destination = destination
@@ -115,7 +124,7 @@ func (authority *Authority) Close() error {
 	if destination != nil {
 		err = errors.Join(err, destination.Close())
 	}
-	return err
+	return diagnoseFilesystemOutputFailure(FilesystemOutputFailureAuthorityClose, err)
 }
 
 // reserveNativeDirectTree is the temporary public-facade adapter used until the

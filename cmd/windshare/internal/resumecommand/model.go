@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -28,6 +29,14 @@ const (
 
 	resumeRegistryUnknownReason      = "registry-ownership-unknown"
 	resumeDestinationUnknownReason   = "destination-or-registry-unverified"
+	resumeDestinationBindingReason   = "destination-binding-failed"
+	resumeInventoryPagingReason      = "inventory-paging-failed"
+	resumeActiveLookupReason         = "active-lookup-failed"
+	resumeOperationAcquisitionReason = "operation-acquisition-failed"
+	resumeOperationAdmissionReason   = "operation-admission-failed"
+	resumeCheckpointReconcileReason  = "checkpoint-reconciliation-failed"
+	resumeNativeDurabilityReason     = "native-durability-failed"
+	resumeAuthorityCloseReason       = "authority-close-failed"
 	resumeDestinationBusyReason      = "destination-already-in-use"
 	resumeOperationRunningReason     = "operation-already-running"
 	resumeOperationChangedReason     = "operation-no-longer-matches"
@@ -46,6 +55,29 @@ var (
 	errResumeTerminalRequired  = errors.New("resume discard confirmation requires an interactive terminal")
 	errResumeConfirmationInput = errors.New("resume discard confirmation could not be read")
 )
+
+type resumeFailureDetail struct {
+	stage          osfs.FilesystemOutputFailureStage
+	reconciliation osfs.FilesystemCheckpointReconciliationStep
+	nativeClass    osfs.FilesystemNativeErrorClass
+}
+
+func (detail resumeFailureDetail) valid() bool {
+	if detail == (resumeFailureDetail{}) {
+		return true
+	}
+	if !detail.stage.Valid() {
+		return false
+	}
+	if detail.reconciliation != 0 {
+		if !detail.reconciliation.Valid() ||
+			detail.stage != osfs.FilesystemOutputFailureCheckpointReconciliation &&
+				detail.stage != osfs.FilesystemOutputFailureNativeDurability {
+			return false
+		}
+	}
+	return detail.nativeClass == 0 || detail.nativeClass.Valid()
+}
 
 // Result is deliberately smaller than the process exit-code space: resume does
 // not own network or snapshot-drift outcomes.
@@ -303,9 +335,9 @@ type resumeRequestParser interface {
 type resumeRenderer interface {
 	Usage() string
 	Inventory(resumeInventorySnapshot) (string, bool, error)
-	ListControlStatus(string, string) string
+	ListControlStatus(string, string, resumeFailureDetail) (string, error)
 	DiscardPrompt(int, resumeOperation, string) (string, error)
-	DiscardControlStatus(string, int, string) string
+	DiscardControlStatus(string, int, string, resumeFailureDetail) (string, error)
 	DiscardReport(int, resumeDiscardReport) (string, error)
 }
 

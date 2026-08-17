@@ -114,7 +114,7 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 		repository.stages = &faultDirectory{
 			Directory: repository.stages,
 			openDirectory: func(string, bool) (outputcap.Directory, error) {
-				return &faultDirectory{Directory: stageShard, createFile: func(string, bool, int64) (outputcap.File, error) {
+				return &faultDirectory{Directory: stageShard, createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 					return nil, nil
 				}}, nil
 			},
@@ -149,7 +149,7 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 		repository.anchors = &faultDirectory{
 			Directory: repository.anchors,
 			openDirectory: func(string, bool) (outputcap.Directory, error) {
-				return &faultDirectory{Directory: anchorShard, linkFile: func(outputcap.File, string) (outputcap.File, error) {
+				return &faultDirectory{Directory: anchorShard, linkFile: func(outputcap.FileIdentity, string) (outputcap.ObservedFile, error) {
 					return nil, nil
 				}}, nil
 			},
@@ -185,12 +185,12 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 		repository.anchors = &faultDirectory{
 			Directory: repository.anchors,
 			openDirectory: func(string, bool) (outputcap.Directory, error) {
-				return &faultDirectory{Directory: anchorShard, linkFile: func(source outputcap.File, name string) (outputcap.File, error) {
+				return &faultDirectory{Directory: anchorShard, linkFile: func(source outputcap.FileIdentity, name string) (outputcap.ObservedFile, error) {
 					linked, err := anchorShard.LinkFileNoReplace(source, name)
 					if err != nil {
 						return nil, err
 					}
-					return &ownedFaultFile{File: linked}, nil
+					return &ownedFaultFile{ObservedFile: linked}, nil
 				}}, nil
 			},
 		}
@@ -211,7 +211,7 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 		repository.stages = &faultDirectory{
 			Directory: repository.stages,
 			openDirectory: func(string, bool) (outputcap.Directory, error) {
-				return &faultDirectory{Directory: stageShard, createFile: func(string, bool, int64) (outputcap.File, error) {
+				return &faultDirectory{Directory: stageShard, createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 					stage, err := stageShard.CreateFile(stageName, true, 4)
 					if err != nil {
 						return nil, err

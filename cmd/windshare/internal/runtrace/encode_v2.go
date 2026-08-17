@@ -6,25 +6,25 @@ import (
 	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
 )
 
-var errInvalidSchemaEvent = errors.New("event cannot be represented by trace schema v1")
+var errInvalidSchemaEvent = errors.New("event cannot be represented by trace schema v2")
 
 type namedValue interface {
 	Name() (string, bool)
 }
 
-type encodeVisitorV1 struct{ record *recordV1 }
+type encodeVisitorV2 struct{ record *recordV2 }
 
-func encodeV1(runID string, metadata entryMetadata, event clievent.Event) (recordV1, error) {
-	record, err := baseRecordV1(runID, metadata, event.Command(), event.Level(), "pending")
+func encodeV2(runID string, metadata entryMetadata, event clievent.Event) (recordV2, error) {
+	record, err := baseRecordV2(runID, metadata, event.Command(), event.Level(), "pending")
 	if err != nil {
-		return recordV1{}, err
+		return recordV2{}, err
 	}
-	visitor := &encodeVisitorV1{record: &record}
+	visitor := &encodeVisitorV2{record: &record}
 	if err := event.Accept(visitor); err != nil {
-		return recordV1{}, err
+		return recordV2{}, err
 	}
 	if record.Event == "pending" {
-		return recordV1{}, errInvalidSchemaEvent
+		return recordV2{}, errInvalidSchemaEvent
 	}
 	return record, nil
 }
@@ -37,12 +37,12 @@ func nameOf(value namedValue) (string, error) {
 	return name, nil
 }
 
-func (visitor *encodeVisitorV1) VisitReady(clievent.Ready) error {
+func (visitor *encodeVisitorV2) VisitReady(clievent.Ready) error {
 	visitor.record.Event = "ready"
 	return nil
 }
 
-func (visitor *encodeVisitorV1) VisitSharingSubjectSelected(event clievent.SharingSubjectSelected) error {
+func (visitor *encodeVisitorV2) VisitSharingSubjectSelected(event clievent.SharingSubjectSelected) error {
 	visitor.record.Event = "sharing_subject_selected"
 	subject := event.Subject()
 	kind, err := nameOf(subject.Kind())
@@ -57,12 +57,12 @@ func (visitor *encodeVisitorV1) VisitSharingSubjectSelected(event clievent.Shari
 	return nil
 }
 
-func (visitor *encodeVisitorV1) VisitRelayConnected(event clievent.RelayConnected) error {
+func (visitor *encodeVisitorV2) VisitRelayConnected(event clievent.RelayConnected) error {
 	visitor.record.Event = "relay_connected"
 	return visitor.setRelayAuthority(event.Authority())
 }
 
-func (visitor *encodeVisitorV1) VisitRelayRecovering(event clievent.RelayRecovering) error {
+func (visitor *encodeVisitorV2) VisitRelayRecovering(event clievent.RelayRecovering) error {
 	visitor.record.Event = "relay_recovering"
 	if err := visitor.setRelayAuthority(event.Authority()); err != nil {
 		return err
@@ -79,7 +79,7 @@ func (visitor *encodeVisitorV1) VisitRelayRecovering(event clievent.RelayRecover
 	return nil
 }
 
-func (visitor *encodeVisitorV1) VisitContentPathSelected(event clievent.ContentPathSelected) error {
+func (visitor *encodeVisitorV2) VisitContentPathSelected(event clievent.ContentPathSelected) error {
 	visitor.record.Event = "content_path_selected"
 	path, err := nameOf(event.Path())
 	if err != nil {
@@ -89,7 +89,7 @@ func (visitor *encodeVisitorV1) VisitContentPathSelected(event clievent.ContentP
 	return nil
 }
 
-func (visitor *encodeVisitorV1) VisitFallback(event clievent.Fallback) error {
+func (visitor *encodeVisitorV2) VisitFallback(event clievent.Fallback) error {
 	visitor.record.Event = "fallback"
 	from, err := nameOf(event.From())
 	if err != nil {
@@ -104,19 +104,19 @@ func (visitor *encodeVisitorV1) VisitFallback(event clievent.Fallback) error {
 	return visitor.setFailure(event.Failure())
 }
 
-func (visitor *encodeVisitorV1) VisitTransferProgress(event clievent.TransferProgress) error {
+func (visitor *encodeVisitorV2) VisitTransferProgress(event clievent.TransferProgress) error {
 	visitor.record.Event = "transfer_progress"
 	visitor.record.ReceiveOperationID = new(event.ReceiveOperationID().Hex())
 	visitor.record.TransferJobID = new(event.TransferJobID().Hex())
 	return visitor.setProgress(event.Snapshot())
 }
 
-func (visitor *encodeVisitorV1) VisitWarning(event clievent.Warning) error {
+func (visitor *encodeVisitorV2) VisitWarning(event clievent.Warning) error {
 	visitor.record.Event = "warning"
 	return visitor.setFailure(event.Failure())
 }
 
-func (visitor *encodeVisitorV1) VisitCommandFailed(event clievent.CommandFailed) error {
+func (visitor *encodeVisitorV2) VisitCommandFailed(event clievent.CommandFailed) error {
 	visitor.record.Event = "command_failed"
 	exitCode, ok := event.ExitCode().ProcessCode()
 	if !ok {
@@ -126,7 +126,7 @@ func (visitor *encodeVisitorV1) VisitCommandFailed(event clievent.CommandFailed)
 	return visitor.setFailure(event.Failure())
 }
 
-func (visitor *encodeVisitorV1) VisitTransferSettled(event clievent.TransferSettled) error {
+func (visitor *encodeVisitorV2) VisitTransferSettled(event clievent.TransferSettled) error {
 	visitor.record.Event = "transfer_settled"
 	result := event.Result()
 	status, err := nameOf(result.Status())
@@ -157,7 +157,7 @@ func (visitor *encodeVisitorV1) VisitTransferSettled(event clievent.TransferSett
 	return nil
 }
 
-func (visitor *encodeVisitorV1) VisitSharingStopped(event clievent.SharingStopped) error {
+func (visitor *encodeVisitorV2) VisitSharingStopped(event clievent.SharingStopped) error {
 	visitor.record.Event = "sharing_stopped"
 	result := event.Result()
 	exitCode, ok := result.ExitCode().ProcessCode()
@@ -173,7 +173,7 @@ func (visitor *encodeVisitorV1) VisitSharingStopped(event clievent.SharingStoppe
 	return nil
 }
 
-func (visitor *encodeVisitorV1) VisitTraceIncomplete(event clievent.TraceIncomplete) error {
+func (visitor *encodeVisitorV2) VisitTraceIncomplete(event clievent.TraceIncomplete) error {
 	visitor.record.Event = "trace_incomplete"
 	cause, err := nameOf(event.Cause())
 	if err != nil {
@@ -185,7 +185,7 @@ func (visitor *encodeVisitorV1) VisitTraceIncomplete(event clievent.TraceIncompl
 	return nil
 }
 
-func (visitor *encodeVisitorV1) VisitLaneAdopted(event clievent.LaneAdopted) error {
+func (visitor *encodeVisitorV2) VisitLaneAdopted(event clievent.LaneAdopted) error {
 	visitor.record.Event = "lane_adopted"
 	transport, err := nameOf(event.Transport())
 	if err != nil {
@@ -197,7 +197,7 @@ func (visitor *encodeVisitorV1) VisitLaneAdopted(event clievent.LaneAdopted) err
 	return nil
 }
 
-func (visitor *encodeVisitorV1) VisitRelayLifecycleObserved(event clievent.RelayLifecycleObserved) error {
+func (visitor *encodeVisitorV2) VisitRelayLifecycleObserved(event clievent.RelayLifecycleObserved) error {
 	visitor.record.Event = "relay_lifecycle"
 	stage, err := nameOf(event.Stage())
 	if err != nil {
@@ -216,12 +216,20 @@ func (visitor *encodeVisitorV1) VisitRelayLifecycleObserved(event clievent.Relay
 		return err
 	}
 	visitor.record.RelayLinkID = decimalPointer(event.LinkID())
-	visitor.record.RelaySendOperationID = decimalPointer(event.SendOperationID())
+	if session, ok := event.RelaySessionID(); ok {
+		visitor.record.RelaySessionID = new(session.Hex())
+	}
+	if event.SendOperationID() != 0 {
+		visitor.record.RelaySendOperationID = decimalPointer(event.SendOperationID())
+	}
 	visitor.record.Stage = new(stage)
 	visitor.record.Terminal = new(event.Terminal())
 	visitor.record.RetirementSource = new(retirement)
 	visitor.record.Cause = new(cause)
 	visitor.record.DrainCause = new(drain)
+	if event.Dropped() != 0 {
+		visitor.record.RelayDropped = decimalPointer(event.Dropped())
+	}
 	if disposition, ok := event.Disposition(); ok {
 		name, err := nameOf(disposition)
 		if err != nil {
@@ -232,7 +240,7 @@ func (visitor *encodeVisitorV1) VisitRelayLifecycleObserved(event clievent.Relay
 	return nil
 }
 
-func (visitor *encodeVisitorV1) VisitWebRTCLifecycleObserved(event clievent.WebRTCLifecycleObserved) error {
+func (visitor *encodeVisitorV2) VisitWebRTCLifecycleObserved(event clievent.WebRTCLifecycleObserved) error {
 	visitor.record.Event = "webrtc_lifecycle"
 	operation, err := nameOf(event.Operation())
 	if err != nil {
@@ -274,7 +282,7 @@ func (visitor *encodeVisitorV1) VisitWebRTCLifecycleObserved(event clievent.WebR
 	return nil
 }
 
-func (visitor *encodeVisitorV1) VisitPeerAttemptObserved(event clievent.PeerAttemptObserved) error {
+func (visitor *encodeVisitorV2) VisitPeerAttemptObserved(event clievent.PeerAttemptObserved) error {
 	visitor.record.Event = "peer_attempt"
 	stage, err := nameOf(event.Stage())
 	if err != nil {
@@ -304,7 +312,7 @@ func (visitor *encodeVisitorV1) VisitPeerAttemptObserved(event clievent.PeerAtte
 	return nil
 }
 
-func (visitor *encodeVisitorV1) VisitTransferLifecycleObserved(event clievent.TransferLifecycleObserved) error {
+func (visitor *encodeVisitorV2) VisitTransferLifecycleObserved(event clievent.TransferLifecycleObserved) error {
 	visitor.record.Event = "transfer_lifecycle"
 	stage, err := nameOf(event.Stage())
 	if err != nil {
@@ -338,144 +346,27 @@ func (visitor *encodeVisitorV1) VisitTransferLifecycleObserved(event clievent.Tr
 	return nil
 }
 
-func (visitor *encodeVisitorV1) VisitFilesystemOutputObserved(event clievent.FilesystemOutputObserved) error {
-	visitor.record.Event = "filesystem_output"
-	operation, err := nameOf(event.Operation())
+func namedPointer(value namedValue) (*string, error) {
+	name, err := nameOf(value)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	visitor.record.Operation = new(operation)
-	if receiveOperation, ok := event.ReceiveOperationID(); ok {
-		visitor.record.ReceiveOperationID = new(receiveOperation.Hex())
-	}
-	counters := event.Counters()
-	visitor.record.NodeClaims = decimalPointer(counters.NodeClaims)
-	visitor.record.DirectoryClaims = decimalPointer(counters.DirectoryClaims)
-	visitor.record.FileClaims = decimalPointer(counters.FileClaims)
-	visitor.record.ActiveFileClaims = decimalPointer(counters.ActiveFileClaims)
-	visitor.record.ReservedFileSlots = decimalPointer(counters.ReservedFileSlots)
-	visitor.record.DirectoryMetadataBytes = decimalPointer(counters.DirectoryMetadataBytes)
-	visitor.record.CheckpointRecords = decimalPointer(counters.CheckpointRecords)
-	if failure, ok := event.Failure(); ok {
-		return visitor.setFailure(failure)
-	}
-	return nil
+	return new(name), nil
 }
 
-func (visitor *encodeVisitorV1) VisitSenderTerminalObserved(event clievent.SenderTerminalObserved) error {
-	visitor.record.Event = "sender_terminal"
-	transport, err := nameOf(event.TransportDisposition())
-	if err != nil {
-		return err
-	}
-	outcome, err := nameOf(event.Outcome())
-	if err != nil {
-		return err
-	}
-	decision, err := nameOf(event.Decision())
-	if err != nil {
-		return err
-	}
-	visitor.record.ProtocolSessionID = new(event.ProtocolSessionID().Hex())
-	visitor.setLane(event.Lane())
-	visitor.record.Settled = new(event.Settled())
-	visitor.record.TransportDisposition = new(transport)
-	visitor.record.Outcome = new(outcome)
-	visitor.record.Decision = new(decision)
-	return nil
-}
-
-func (visitor *encodeVisitorV1) VisitCatalogStorageObserved(event clievent.CatalogStorageObserved) error {
-	visitor.record.Event = "catalog_storage"
-	operation, err := nameOf(event.Operation())
-	if err != nil {
-		return err
-	}
-	cause, err := nameOf(event.Cause())
-	if err != nil {
-		return err
-	}
-	visitor.record.Operation = new(operation)
-	visitor.record.Cause = new(cause)
-	usage := event.Usage()
-	visitor.record.ActiveScans = decimalPointer(usage.ActiveScans)
-	visitor.record.ScanWork = decimalPointer(usage.ScanWork)
-	visitor.record.Entries = decimalPointer(usage.Entries)
-	visitor.record.MemoryBytes = decimalPointer(usage.MemoryBytes)
-	visitor.record.SpillBytes = decimalPointer(usage.SpillBytes)
-	visitor.record.LegacyRootsRemoved = decimalPointer(event.LegacyRootsRemoved())
-	return nil
-}
-
-func (visitor *encodeVisitorV1) VisitRootPrefetchObserved(event clievent.RootPrefetchObserved) error {
-	visitor.record.Event = "root_prefetch"
-	decision, err := nameOf(event.Decision())
-	if err != nil {
-		return err
-	}
-	visitor.record.Decision = new(decision)
-	visitor.record.RootPrefetchAttempt = decimalPointer(event.Attempt())
-	visitor.record.RootPrefetchEntryCount = decimalPointer(event.EntryCount())
-	visitor.record.RootPrefetchOmittedCount = decimalPointer(event.OmittedCount())
-	return nil
-}
-
-func (visitor *encodeVisitorV1) VisitProtocolOperationObserved(event clievent.ProtocolOperationObserved) error {
-	visitor.record.Event = "protocol_operation"
-	role, err := nameOf(event.Role())
-	if err != nil {
-		return err
-	}
-	stage, err := nameOf(event.Stage())
-	if err != nil {
-		return err
-	}
-	requestKind, err := nameOf(event.RequestKind())
-	if err != nil {
-		return err
-	}
-	cause, err := nameOf(event.Cause())
-	if err != nil {
-		return err
-	}
-	visitor.record.ProtocolSessionID = new(event.ProtocolSessionID().Hex())
-	visitor.record.ProtocolOperationID = new(event.ProtocolOperationID().Hex())
-	visitor.record.ProtocolRole = new(role)
-	visitor.record.ProtocolOperationStage = new(stage)
-	visitor.record.ProtocolRequestKind = new(requestKind)
-	visitor.record.ProtocolOperationCause = new(cause)
-	if responseKind, ok := event.ResponseKind(); ok {
-		name, nameErr := nameOf(responseKind)
-		if nameErr != nil {
-			return nameErr
+func namesOf[T namedValue](values []T) ([]string, error) {
+	names := make([]string, 0, len(values))
+	for _, value := range values {
+		name, err := nameOf(value)
+		if err != nil {
+			return nil, err
 		}
-		visitor.record.ProtocolResponseKind = new(name)
+		names = append(names, name)
 	}
-	if lane, ok := event.Lane(); ok {
-		visitor.setLane(lane)
-	}
-	outcome, settled, admitted, hasSend := event.Send()
-	visitor.record.ProtocolHasSend = new(hasSend)
-	if hasSend {
-		name, nameErr := nameOf(outcome)
-		if nameErr != nil {
-			return nameErr
-		}
-		visitor.record.ProtocolSendOutcome = new(name)
-		visitor.record.ProtocolSendSettled = new(settled)
-		visitor.record.ProtocolSendAdmitted = new(admitted)
-	}
-	visitor.record.ProtocolResponseCount = decimalPointer(event.ResponseCount())
-	if deadline, ok := event.DeadlineRemainingMillis(); ok {
-		visitor.record.ProtocolDeadlineRemainingMS = decimalPointer(deadline)
-	}
-	visitor.record.ProtocolOperationElapsedMS = decimalPointer(event.OperationElapsedMillis())
-	visitor.record.ProtocolUsableLanesAtSelection = decimalPointer(uint64(event.UsableLanesAtSelection()))
-	visitor.record.ProtocolUsableLanesAtSettlement = decimalPointer(uint64(event.UsableLanesAtSettlement()))
-	return nil
+	return names, nil
 }
 
-func (visitor *encodeVisitorV1) setRelayAuthority(authority clievent.RelayAuthority) error {
+func (visitor *encodeVisitorV2) setRelayAuthority(authority clievent.RelayAuthority) error {
 	scheme, err := nameOf(authority.Scheme())
 	if err != nil || !authority.Valid() {
 		return errInvalidSchemaEvent
@@ -486,12 +377,12 @@ func (visitor *encodeVisitorV1) setRelayAuthority(authority clievent.RelayAuthor
 	return nil
 }
 
-func (visitor *encodeVisitorV1) setLane(lane clievent.LaneIdentity) {
+func (visitor *encodeVisitorV2) setLane(lane clievent.LaneIdentity) {
 	visitor.record.LaneID = new(lane.ID())
 	visitor.record.LaneEpoch = new(lane.Epoch())
 }
 
-func (visitor *encodeVisitorV1) setFailure(failure clievent.Failure) error {
+func (visitor *encodeVisitorV2) setFailure(failure clievent.Failure) error {
 	code, err := nameOf(failure.Code())
 	if err != nil {
 		return err
@@ -525,7 +416,7 @@ func (visitor *encodeVisitorV1) setFailure(failure clievent.Failure) error {
 	return nil
 }
 
-func (visitor *encodeVisitorV1) setProgress(snapshot clievent.ProgressSnapshot) error {
+func (visitor *encodeVisitorV2) setProgress(snapshot clievent.ProgressSnapshot) error {
 	discovery, err := nameOf(snapshot.Discovery())
 	if err != nil || !snapshot.Valid() {
 		return errInvalidSchemaEvent
@@ -542,7 +433,7 @@ func (visitor *encodeVisitorV1) setProgress(snapshot clievent.ProgressSnapshot) 
 	return nil
 }
 
-func (visitor *encodeVisitorV1) setOutcomes(outcomes clievent.FileOutcomes) {
+func (visitor *encodeVisitorV2) setOutcomes(outcomes clievent.FileOutcomes) {
 	visitor.record.DownloadedFiles = decimalPointer(outcomes.DownloadedFiles)
 	visitor.record.ResumedFiles = decimalPointer(outcomes.ResumedFiles)
 	visitor.record.PausedFiles = decimalPointer(outcomes.PausedFiles)

@@ -197,7 +197,7 @@ func TestWindowsOutputV3DirectoryClosedSurfaceRejectsAllCapabilities(t *testing.
 	if _, err := directory.CreateFile("x", false, -1); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("create file error = %v", err)
 	}
-	if _, err := directory.OpenFile("x", false, false); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+	if _, err := directory.OpenObservedFile("x", false); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("open file error = %v", err)
 	}
 	if _, err := directory.LinkFileNoReplace(nil, "x"); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
@@ -215,7 +215,7 @@ func TestWindowsOutputV3DirectoryClosedSurfaceRejectsAllCapabilities(t *testing.
 }
 
 func TestWindowsOutputV3FileEntryAndLockClosedSurfaceIsSafe(t *testing.T) {
-	var file *windowsOutputV3File
+	var file *windowsOutputV3MutableFile
 	if _, err := file.ReadAt(nil, 0); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("read error = %v", err)
 	}
@@ -276,7 +276,7 @@ func TestWindowsOutputV3FileLiveSurfacePreservesPinnedAuthorityThroughSettlement
 			t.Errorf("close file: %v", err)
 		}
 	})
-	file, ok := created.(*windowsOutputV3File)
+	file, ok := created.(*windowsOutputV3MutableFile)
 	if !ok {
 		t.Fatalf("created file type = %T", created)
 	}
@@ -307,7 +307,7 @@ func TestWindowsOutputV3FileLiveSurfacePreservesPinnedAuthorityThroughSettlement
 		t.Fatalf("metadata match = %t, %v", matches, err)
 	}
 
-	opened, err := directory.OpenFile(name, true, true)
+	opened, err := directory.OpenMutableFile(name, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestWindowsOutputV3FileLiveSurfacePreservesPinnedAuthorityThroughSettlement
 			t.Errorf("close peer: %v", err)
 		}
 	})
-	peer, ok := opened.(*windowsOutputV3File)
+	peer, ok := opened.(*windowsOutputV3MutableFile)
 	if !ok {
 		t.Fatalf("opened file type = %T", opened)
 	}
@@ -334,7 +334,7 @@ func TestWindowsOutputV3FileLiveSurfacePreservesPinnedAuthorityThroughSettlement
 	if err := file.Close(); err != nil {
 		t.Fatalf("close unlinked file: %v", err)
 	}
-	if file.native != nil {
+	if file.state.native != nil {
 		t.Fatal("closed wrapper retained native authority")
 	}
 	if err := file.Close(); err != nil {

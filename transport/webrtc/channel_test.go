@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -147,6 +148,10 @@ func TestLifecycleTraceCorrelatesImmutableSendDecisions(t *testing.T) {
 	if err := channel.Close(); err != nil {
 		t.Fatalf("close traced channel: %v", err)
 	}
+	completion := channel.CompleteObservations(context.Background())
+	if !completion.Drained || completion.Delivered != 3 || completion.Loss.Total() != 0 {
+		t.Fatalf("channel observation completion = %+v", completion)
+	}
 }
 
 func TestLifecycleTraceBackpressureIsBoundedAndObservable(t *testing.T) {
@@ -184,11 +189,84 @@ func TestLifecycleTraceBackpressureIsBoundedAndObservable(t *testing.T) {
 				if event.Dropped != overflowEvents {
 					t.Fatalf("dropped trace count = %d, want %d", event.Dropped, overflowEvents)
 				}
+				completion := dispatcher.complete(context.Background())
+				if !completion.Drained || completion.Loss.QueueOverflow != overflowEvents ||
+					completion.Loss.Total() != overflowEvents {
+					t.Fatalf("overflow completion = %+v", completion)
+				}
 				return
 			}
 		case <-time.After(unitTimeout):
 			t.Fatal("bounded trace queue did not publish its drop record")
 		}
+	}
+}
+
+func TestWebRTCLifecycleCompletionAccountsTimeoutAndStopsAdmission(t *testing.T) {
+	entered := make(chan struct{})
+	exited := make(chan struct{})
+	var calls atomic.Uint64
+	var committed atomic.Uint64
+	dispatcher := newLifecycleTraceDispatcher(LifecycleContextTraceFunc(func(ctx context.Context, _ LifecycleTrace) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-ctx.Done()
+			if ctx.Err() == nil {
+				committed.Add(1)
+			}
+			close(exited)
+		}
+	}))
+	dispatcher.callbackLimit = 10 * time.Millisecond
+	for operationID := uint64(1); operationID <= 4; operationID++ {
+		dispatcher.emit(LifecycleTrace{
+			ChannelID: 31, OperationID: operationID,
+			Operation: LifecycleOperationSend, Transition: LifecycleTransitionSendRejected,
+			Disposition: framechannel.SendRejected, State: framechannel.Open,
+			Terminal: LifecycleTerminalNone, Cause: LifecycleCauseCanceled,
+		})
+	}
+	select {
+	case <-entered:
+	case <-time.After(unitTimeout):
+		t.Fatal("observer callback did not begin")
+	}
+	completion := dispatcher.complete(context.Background())
+	if completion.Drained || completion.Delivered != 0 ||
+		completion.Loss.CallbackTimeout != 1 || completion.Loss.Undrained != 3 {
+		t.Fatalf("completion = %+v", completion)
+	}
+	dispatcher.emit(LifecycleTrace{ChannelID: 31})
+	select {
+	case <-exited:
+	case <-time.After(unitTimeout):
+		t.Fatal("revoked WebRTC callback did not exit")
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("callbacks begun after completion = %d", calls.Load())
+	}
+	if committed.Load() != 0 {
+		t.Fatalf("revoked callback committed %d late fact(s)", committed.Load())
+	}
+}
+
+func TestWebRTCLifecycleCompletionAccountsObserverPanic(t *testing.T) {
+	var calls atomic.Uint64
+	dispatcher := newLifecycleTraceDispatcher(LifecycleTraceFunc(func(LifecycleTrace) {
+		calls.Add(1)
+		panic("observer defect")
+	}))
+	dispatcher.emit(LifecycleTrace{
+		ChannelID: 32, OperationID: 1,
+		Operation: LifecycleOperationSend, Transition: LifecycleTransitionSendRejected,
+		Disposition: framechannel.SendRejected, State: framechannel.Open,
+		Terminal: LifecycleTerminalNone, Cause: LifecycleCauseCanceled,
+	})
+	dispatcher.shutdown()
+	completion := dispatcher.complete(context.Background())
+	if !completion.Drained || completion.Delivered != 0 || calls.Load() != 1 ||
+		completion.Loss.ObserverPanic != 1 || completion.Loss.Total() != 1 {
+		t.Fatalf("panic completion = %+v", completion)
 	}
 }
 

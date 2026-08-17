@@ -234,7 +234,7 @@ func (directory *destinationDirectory) RemoveDirectory(name string, expected out
 	delete(directory.node.entries, name)
 	return nil
 }
-func (directory *destinationDirectory) CreateFile(name string, private bool, size int64) (outputcap.File, error) {
+func (directory *destinationDirectory) CreateFile(name string, private bool, size int64) (outputcap.MutableFile, error) {
 	if size < 0 || directory.node.entries[name] != nil {
 		return nil, outputcap.ErrNamespaceCollision
 	}
@@ -245,20 +245,33 @@ func (directory *destinationDirectory) CreateFile(name string, private bool, siz
 	directory.platform.nextID++
 	return file, nil
 }
-func (directory *destinationDirectory) OpenFile(name string, _ bool, _ bool) (outputcap.File, error) {
+func (directory *destinationDirectory) OpenObservedFile(name string, _ bool) (outputcap.ObservedFile, error) {
 	node := directory.node.entries[name]
 	if node == nil || node.file == nil {
 		return nil, fs.ErrNotExist
 	}
 	return node.file, nil
 }
-func (*destinationDirectory) LinkFileNoReplace(outputcap.File, string) (outputcap.File, error) {
+func (directory *destinationDirectory) OpenRecoveryDurabilityFile(name string, private bool) (outputcap.RecoveryDurabilityFile, error) {
+	return directory.openFile(name)
+}
+func (directory *destinationDirectory) OpenMutableFile(name string, private bool) (outputcap.MutableFile, error) {
+	return directory.openFile(name)
+}
+func (directory *destinationDirectory) openFile(name string) (*destinationFile, error) {
+	node := directory.node.entries[name]
+	if node == nil || node.file == nil {
+		return nil, fs.ErrNotExist
+	}
+	return node.file, nil
+}
+func (*destinationDirectory) LinkFileNoReplace(outputcap.FileIdentity, string) (outputcap.ObservedFile, error) {
 	return nil, errDestinationFake
 }
-func (*destinationDirectory) ReplacePrivateFile(outputcap.File, string) error {
+func (*destinationDirectory) ReplacePrivateFile(outputcap.FileIdentity, string) error {
 	return errDestinationFake
 }
-func (directory *destinationDirectory) RemoveFile(name string, expected outputcap.File) error {
+func (directory *destinationDirectory) RemoveFile(name string, expected outputcap.FileIdentity) error {
 	node := directory.node.entries[name]
 	if node == nil || node.file == nil || node.file != expected {
 		return outputcap.ErrUnsafeNamespace
@@ -312,7 +325,7 @@ func (directory *destinationDirectory) ReservePublicDirectoryNoReplace(name stri
 	}
 	return created, outputcap.PublishNoReplaceCommitted, err
 }
-func (directory *destinationDirectory) PublishFileNoReplace(outputcap.File, string) (outputcap.PublishNoReplaceOutcome, error) {
+func (directory *destinationDirectory) PublishFileNoReplace(outputcap.FileIdentity, string) (outputcap.PublishNoReplaceOutcome, error) {
 	if directory.platform.fileOutcome != 0 {
 		return directory.platform.fileOutcome, directory.platform.fileErr
 	}
@@ -329,7 +342,7 @@ func (directory *destinationDirectory) CreateLiveCleanupStage(proof outputcap.Di
 	directory.platform.nextID++
 	return nil
 }
-func (directory *destinationDirectory) RemoveLiveCleanupStage(ticket checkpointmodel.LiveCleanupTicket, expected outputcap.File) error {
+func (directory *destinationDirectory) RemoveLiveCleanupStage(ticket checkpointmodel.LiveCleanupTicket, expected outputcap.FileIdentity) error {
 	node := directory.node.entries[ticket.StageName()]
 	if node == nil || node.file != expected {
 		return outputcap.ErrUnsafeNamespace
@@ -372,7 +385,7 @@ func (*destinationFile) Sync() error                                            
 func (file *destinationFile) Size() (uint64, error)                                 { return file.size, nil }
 func (*destinationFile) SetModifiedTime(catalog.ModifiedTime) error                 { return nil }
 func (*destinationFile) MetadataMatches(uint64, catalog.ModifiedTime) (bool, error) { return true, nil }
-func (file *destinationFile) SameFile(other outputcap.File) (bool, error) {
+func (file *destinationFile) SameFile(other outputcap.FileIdentity) (bool, error) {
 	return file == other, nil
 }
 
@@ -382,7 +395,7 @@ type destinationLock struct {
 	closed   bool
 }
 
-func (lock *destinationLock) File() outputcap.File { return lock.file }
+func (lock *destinationLock) File() outputcap.MutableFile { return lock.file }
 func (lock *destinationLock) Close() error {
 	if lock == nil || lock.closed {
 		return nil

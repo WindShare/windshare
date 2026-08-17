@@ -107,13 +107,13 @@ type c5ClosureFaultDirectory struct {
 	names           func(int) ([]string, error)
 	openDirectory   func(string, bool) (outputcap.Directory, error)
 	createDirectory func(string, bool) (outputcap.Directory, error)
-	openFile        func(string, bool, bool) (outputcap.File, error)
+	openFile        func(string, bool, bool) (outputcap.MutableFile, error)
 	openEntry       func(string) (outputcap.CurrentEntryReference, error)
 	openPinned      func(outputcap.CurrentEntryReference, bool) (outputcap.Directory, error)
 	entryMatches    func(string, outputcap.CurrentEntryReference) (bool, error)
 	removeEntry     func(string, outputcap.CurrentEntryReference) error
 	removeDirectory func(string, outputcap.Directory) error
-	removeFile      func(string, outputcap.File) error
+	removeFile      func(string, outputcap.FileIdentity) error
 	acquireLock     func(string, bool) (outputcap.Lock, bool, error)
 	duplicate       func() (outputcap.Directory, error)
 	sameDirectory   func(outputcap.Directory) (bool, error)
@@ -149,11 +149,11 @@ func (directory *c5ClosureFaultDirectory) CreateDirectory(name string, private b
 	return directory.createDirectory(name, private)
 }
 
-func (directory *c5ClosureFaultDirectory) OpenFile(name string, private, writable bool) (outputcap.File, error) {
+func (directory *c5ClosureFaultDirectory) OpenObservedFile(name string, private bool) (outputcap.ObservedFile, error) {
 	if directory.openFile == nil {
 		return nil, fs.ErrNotExist
 	}
-	return directory.openFile(name, private, writable)
+	return directory.openFile(name, private, false)
 }
 
 func (directory *c5ClosureFaultDirectory) OpenEntry(name string) (outputcap.CurrentEntryReference, error) {
@@ -200,7 +200,7 @@ func (directory *c5ClosureFaultDirectory) RemoveDirectory(name string, expected 
 	return directory.removeDirectory(name, expected)
 }
 
-func (directory *c5ClosureFaultDirectory) RemoveFile(name string, expected outputcap.File) error {
+func (directory *c5ClosureFaultDirectory) RemoveFile(name string, expected outputcap.FileIdentity) error {
 	if directory.removeFile == nil {
 		return errors.New("unexpected file removal")
 	}
@@ -233,12 +233,12 @@ func (directory *c5ClosureFaultDirectory) Sync() error { return directory.syncEr
 func (directory *c5ClosureFaultDirectory) Close() error { return directory.closeErr }
 
 type c5ClosureFaultFile struct {
-	outputcap.File
+	outputcap.MutableFile
 	data     []byte
 	size     uint64
 	sizeErr  error
 	read     func([]byte, int64) (int, error)
-	same     func(outputcap.File) (bool, error)
+	same     func(outputcap.FileIdentity) (bool, error)
 	closeErr error
 }
 
@@ -263,7 +263,7 @@ func (file *c5ClosureFaultFile) ReadAt(buffer []byte, offset int64) (int, error)
 	return read, nil
 }
 
-func (file *c5ClosureFaultFile) SameFile(other outputcap.File) (bool, error) {
+func (file *c5ClosureFaultFile) SameFile(other outputcap.FileIdentity) (bool, error) {
 	if file.same == nil {
 		return file == other, nil
 	}
@@ -274,11 +274,11 @@ func (file *c5ClosureFaultFile) Close() error { return file.closeErr }
 
 type c5ClosureFaultLock struct {
 	outputcap.Lock
-	file  outputcap.File
+	file  outputcap.MutableFile
 	close func() error
 }
 
-func (lock *c5ClosureFaultLock) File() outputcap.File { return lock.file }
+func (lock *c5ClosureFaultLock) File() outputcap.MutableFile { return lock.file }
 
 func (lock *c5ClosureFaultLock) Close() error {
 	if lock.close == nil {
@@ -306,7 +306,7 @@ type c5ClosureCloseLock struct {
 	err   error
 }
 
-func (lock *c5ClosureCloseLock) File() outputcap.File { return nil }
+func (lock *c5ClosureCloseLock) File() outputcap.MutableFile { return nil }
 
 func (lock *c5ClosureCloseLock) Close() error {
 	*lock.order = append(*lock.order, lock.name)
@@ -404,7 +404,7 @@ func (directory *c5ClosureTrackedDirectory) AcquireLock(name string, existingOnl
 	return lock, created, err
 }
 
-func (directory *c5ClosureTrackedDirectory) RemoveFile(name string, expected outputcap.File) error {
+func (directory *c5ClosureTrackedDirectory) RemoveFile(name string, expected outputcap.FileIdentity) error {
 	err := directory.Directory.RemoveFile(name, expected)
 	if err == nil && path.Join(directory.relative, name) == path.Join(legacyresume.ControlDirectory, legacyresume.CoordinatorLock) {
 		directory.platform.tracker.coordinatorRemoved = true
@@ -423,12 +423,12 @@ func (directory *c5ClosureTrackedDirectory) Sync() error {
 	return err
 }
 
-func c5ClosureRecordDirectory(file outputcap.File) *c5ClosureFaultDirectory {
+func c5ClosureRecordDirectory(file outputcap.MutableFile) *c5ClosureFaultDirectory {
 	return &c5ClosureFaultDirectory{
 		classify: func(string) (outputcap.EntryKind, bool, error) {
 			return outputcap.EntryRegularFile, true, nil
 		},
-		openFile: func(string, bool, bool) (outputcap.File, error) { return file, nil },
+		openFile: func(string, bool, bool) (outputcap.MutableFile, error) { return file, nil },
 	}
 }
 
@@ -480,7 +480,7 @@ func c5ClosureStateDirectory(encoded []byte) *c5ClosureFaultDirectory {
 			}
 			return outputcap.EntryAbsent, true, nil
 		},
-		openFile: func(string, bool, bool) (outputcap.File, error) {
+		openFile: func(string, bool, bool) (outputcap.MutableFile, error) {
 			return &c5ClosureFaultFile{data: append([]byte(nil), encoded...)}, nil
 		},
 	}
@@ -505,10 +505,10 @@ func c5ClosureAuthorizedMutation(t *testing.T) c5ClosureMutationFixture {
 	stateFile := &c5ClosureFaultFile{data: append([]byte(nil), state...)}
 	cleanupExpected := &c5ClosureFaultFile{}
 	coordinatorExpected := &c5ClosureFaultFile{}
-	cleanupCurrent := &c5ClosureFaultFile{same: func(other outputcap.File) (bool, error) {
+	cleanupCurrent := &c5ClosureFaultFile{same: func(other outputcap.FileIdentity) (bool, error) {
 		return other == cleanupExpected, nil
 	}}
-	coordinatorCurrent := &c5ClosureFaultFile{same: func(other outputcap.File) (bool, error) {
+	coordinatorCurrent := &c5ClosureFaultFile{same: func(other outputcap.FileIdentity) (bool, error) {
 		return other == coordinatorExpected, nil
 	}}
 	namespace := &c5ClosureFaultDirectory{
@@ -518,7 +518,7 @@ func c5ClosureAuthorizedMutation(t *testing.T) c5ClosureMutationFixture {
 			}
 			return outputcap.EntryAbsent, true, nil
 		},
-		openFile: func(name string, _, _ bool) (outputcap.File, error) {
+		openFile: func(name string, _, _ bool) (outputcap.MutableFile, error) {
 			switch name {
 			case FileCheckpointCleanupState:
 				return stateFile, nil
@@ -537,7 +537,7 @@ func c5ClosureAuthorizedMutation(t *testing.T) c5ClosureMutationFixture {
 			}
 			return nil, fs.ErrNotExist
 		},
-		openFile: func(name string, _, _ bool) (outputcap.File, error) {
+		openFile: func(name string, _, _ bool) (outputcap.MutableFile, error) {
 			if name == legacyresume.CoordinatorLock {
 				return coordinatorCurrent, nil
 			}

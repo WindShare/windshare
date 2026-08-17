@@ -39,7 +39,7 @@ func TestSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *te
 	terminal := collector.forAttempt(binding.AttemptID)[2]
 	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
 		terminal.Failure.FailedAtStage != SenderAttemptAnswerCreated ||
-		terminal.Failure.TypedCode != TypedPeerErrorNegotiation {
+		terminal.Failure.TypedPeerErrorCode != TypedPeerErrorSignaling {
 		t.Fatalf("recovered rejection terminal = %#v", terminal)
 	}
 
@@ -182,6 +182,9 @@ func TestSenderCanceledBeforeEnqueueStillTerminalizesFirstBinding(t *testing.T) 
 			if err := handler.HandleMessage(messageContext, message); !errors.Is(err, context.Canceled) {
 				t.Fatalf("canceled enqueue error = %v", err)
 			}
+			waitForTest(t, func() bool {
+				return len(collector.forAttempt(binding.AttemptID)) == 3
+			})
 			assertUnstartedSenderTerminal(
 				t,
 				collector.forAttempt(binding.AttemptID),
@@ -219,6 +222,7 @@ func TestSenderShutdownTerminalizesQueuedOfferBeforeClaimsRelease(t *testing.T) 
 	}
 
 	handler.stopAll()
+	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 3 })
 	assertUnstartedSenderTerminal(
 		t,
 		collector.forAttempt(binding.AttemptID),
@@ -269,6 +273,7 @@ func TestSenderShutdownWaitsForAdmittedIngressBeforeReleasingClaims(t *testing.T
 	}
 	handler.ingress.Done()
 	receiveTest(t, stopDone)
+	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 3 })
 	assertUnstartedSenderTerminal(
 		t,
 		collector.forAttempt(binding.AttemptID),
@@ -314,6 +319,9 @@ func TestSenderDistinctBindingRejectionIsNotSuppressedByActiveOperation(t *testi
 	if err := handler.terminalizeUnstartedOffer(event, senderAttemptCancelledFailure()); err != nil {
 		t.Fatalf("distinct binding rejection: %v", err)
 	}
+	waitForTest(t, func() bool {
+		return len(collector.forAttempt(rejectedBinding.AttemptID)) == 3
+	})
 	assertUnstartedSenderTerminal(
 		t,
 		collector.forAttempt(rejectedBinding.AttemptID),
@@ -343,7 +351,7 @@ func assertUnstartedSenderTerminal(
 	terminal := observations[2]
 	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
 		terminal.Failure.FailedAtStage != SenderAttemptAnswerCreated ||
-		terminal.Failure.Scope != wantScope || terminal.Failure.TypedCode != wantCode {
+		terminal.Failure.Scope != wantScope || terminal.Failure.TypedPeerErrorCode != wantCode {
 		t.Fatalf("unstarted sender terminal = %#v", terminal)
 	}
 }

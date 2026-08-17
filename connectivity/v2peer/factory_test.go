@@ -495,6 +495,7 @@ func TestSenderHandlerQueueOverflowTombstonesRejectedOfferBinding(t *testing.T) 
 	if failure.operation != operation || failure.code != protocolsession.PeerOperationCodeNegotiation {
 		t.Fatalf("overflow failure = %#v", failure)
 	}
+	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 3 })
 	assertUnstartedSenderTerminal(
 		t,
 		collector.forAttempt(binding.AttemptID),
@@ -541,6 +542,7 @@ func TestSenderHandlerTerminalizesOfferCanceledBeforePublication(t *testing.T) {
 	if len(handler.events) != 0 {
 		t.Fatal("canceled peer offer reached the negotiation queue")
 	}
+	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 3 })
 	assertUnstartedSenderTerminal(
 		t,
 		collector.forAttempt(binding.AttemptID),

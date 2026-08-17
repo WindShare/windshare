@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -11,8 +12,18 @@ import (
 	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
 	"github.com/windshare/windshare/cmd/windshare/internal/runtrace"
 	"github.com/windshare/windshare/cmd/windshare/internal/terminalcanvas"
+	"github.com/windshare/windshare/connectivity/v2peer"
+	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/internal/testrun"
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
+	"github.com/windshare/windshare/transport/relayv2"
 )
+
+type receiverObservationCompleterFunc func(context.Context) v2peer.ReceiverObservationCompletion
+
+func (function receiverObservationCompleterFunc) CompleteObservations(ctx context.Context) v2peer.ReceiverObservationCompletion {
+	return function(ctx)
+}
 
 func TestCommandRuntimeFansOutWithSharedClock(t *testing.T) {
 	var stderr bytes.Buffer
@@ -47,10 +58,12 @@ func TestCommandRuntimeFansOutWithSharedClock(t *testing.T) {
 	if runtime.Clock() != clock {
 		t.Fatal("runtime did not retain the command clock")
 	}
-	if !runtime.protocolDiagnosticsEnabled() ||
-		(getObservation{runtime: runtime}).protocolTracer() == nil ||
-		newShareObservations(runtime).protocolTracer() == nil {
-		t.Fatal("verbose/trace runtime did not enable protocol diagnostics")
+	getDiagnostics := getObservation{runtime: runtime}
+	shareDiagnostics := newShareObservations(runtime)
+	if !runtime.detailedDiagnosticsEnabled() || getDiagnostics.protocolTracer() == nil ||
+		getDiagnostics.relayTracer() == nil || getDiagnostics.webRTCTracer() == nil || getDiagnostics.laneSettlementTracer() == nil ||
+		shareDiagnostics.protocolTracer() == nil || shareDiagnostics.relayTracer() == nil || shareDiagnostics.webRTCTracer() == nil {
+		t.Fatal("verbose/trace runtime did not enable detailed diagnostics")
 	}
 	if !runtime.Publish(clievent.NewReady()) {
 		t.Fatal("ready event was not retained")
@@ -77,10 +90,12 @@ func TestCommandRuntimeLeavesProtocolHotPathUnobservedByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if runtime.protocolDiagnosticsEnabled() ||
-		(getObservation{runtime: runtime}).protocolTracer() != nil ||
-		newShareObservations(runtime).protocolTracer() != nil {
-		t.Fatal("default runtime enabled protocol diagnostics")
+	getDiagnostics := getObservation{runtime: runtime}
+	shareDiagnostics := newShareObservations(runtime)
+	if runtime.detailedDiagnosticsEnabled() || getDiagnostics.protocolTracer() != nil ||
+		getDiagnostics.relayTracer() != nil || getDiagnostics.webRTCTracer() != nil || getDiagnostics.laneSettlementTracer() != nil ||
+		shareDiagnostics.protocolTracer() != nil || shareDiagnostics.relayTracer() != nil || shareDiagnostics.webRTCTracer() != nil {
+		t.Fatal("default runtime enabled detailed diagnostics")
 	}
 }
 
@@ -159,14 +174,432 @@ func TestCommandRuntimeReportsPreRecorderObserverLoss(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !runtime.ReportObserverLoss(3, 4) {
+	if !runtime.ReportObserverLoss(clievent.ObserverLossRelayLifecycle, clievent.ObserverLossTraceQueue, 3) {
 		t.Fatal("observer loss was not retained")
 	}
 	runtime.Close()
+	recorded := recorder.recorded()
+	if len(recorded) != 1 {
+		t.Fatalf("observer loss trace events=%#v", recorded)
+	}
+	loss, ok := recorded[0].(clievent.ObserverLossObserved)
+	if !ok || loss.Category() != clievent.ObserverLossRelayLifecycle || loss.Reason() != clievent.ObserverLossTraceQueue || loss.Count() != 3 {
+		t.Fatalf("observer loss event=%#v", recorded[0])
+	}
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
-	if recorder.lifecycle != 3 || recorder.progress != 4 {
+	if recorder.lifecycle != 3 || recorder.progress != 0 {
 		t.Fatalf("reported loss=(%d,%d)", recorder.lifecycle, recorder.progress)
+	}
+}
+
+func TestCommandRuntimeObserverLossCoalescesByClassAndSaturates(t *testing.T) {
+	runtime, writer, recorder := newSaturatedCommandRuntime(t, clievent.CommandGet, false)
+	if !runtime.ReportObserverLoss(
+		clievent.ObserverLossCommandAdapter,
+		clievent.ObserverLossAdapterCapacityTimeout,
+		^uint64(0)-1,
+	) || !runtime.ReportObserverLoss(
+		clievent.ObserverLossCommandAdapter,
+		clievent.ObserverLossAdapterCapacityTimeout,
+		10,
+	) || !runtime.ReportObserverLoss(
+		clievent.ObserverLossRelayLifecycle,
+		clievent.ObserverLossTraceQueue,
+		2,
+	) {
+		t.Fatal("valid observer loss was rejected")
+	}
+	closeBlockedRuntime(t, runtime, writer)
+
+	got := make(map[[2]uint8]uint64)
+	for _, event := range recorder.recorded() {
+		loss, ok := event.(clievent.ObserverLossObserved)
+		if !ok {
+			continue
+		}
+		got[[2]uint8{uint8(loss.Category()), uint8(loss.Reason())}] = loss.Count()
+	}
+	if count := got[[2]uint8{uint8(clievent.ObserverLossCommandAdapter), uint8(clievent.ObserverLossAdapterCapacityTimeout)}]; count != ^uint64(0) {
+		t.Fatalf("coalesced adapter loss=%d, want saturation", count)
+	}
+	if count := got[[2]uint8{uint8(clievent.ObserverLossRelayLifecycle), uint8(clievent.ObserverLossTraceQueue)}]; count != 2 {
+		t.Fatalf("relay trace-queue loss=%d, want 2", count)
+	}
+}
+
+func TestCommandRuntimeCumulativeLossCountsEachDeltaOnce(t *testing.T) {
+	recorder := newFakeUserTrace(runtrace.Status{Complete: true})
+	runtime, err := (&App{
+		Stderr: bytes.NewBuffer(nil),
+		openUserTrace: func(string, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+			return recorder, nil
+		},
+	}).newCommandRuntime(clievent.CommandShare, observationOptions{tracePath: "trace.ndjson"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cumulative := range []uint64{3, 3, 2, 7} {
+		if !runtime.ReportCumulativeObserverLoss(
+			clievent.ObserverLossSenderAttempt,
+			clievent.ObserverLossAdapterCapacityTimeout,
+			cumulative,
+		) {
+			t.Fatalf("cumulative %d was rejected", cumulative)
+		}
+	}
+	if !runtime.Finalize(newRuntimeTestSharingStopped(t)) {
+		t.Fatal("terminal event was rejected")
+	}
+	if runtime.Observe(newRuntimeTestSharingStopped(t)) {
+		t.Fatal("ordinary publication crossed the finalization cut")
+	}
+	runtime.Close()
+
+	var capacity, closed uint64
+	for _, event := range recorder.recorded() {
+		loss, ok := event.(clievent.ObserverLossObserved)
+		if !ok {
+			continue
+		}
+		switch loss.Reason() {
+		case clievent.ObserverLossAdapterCapacityTimeout:
+			capacity = saturatingAdd(capacity, loss.Count())
+		case clievent.ObserverLossRecorderClosed:
+			closed = saturatingAdd(closed, loss.Count())
+		}
+	}
+	if capacity != 7 || closed != 1 {
+		t.Fatalf("cumulative=%d post-finalize=%d", capacity, closed)
+	}
+}
+
+func TestRelayDropSummaryIsRetainedAndNotDoubleCountedAtCompletion(t *testing.T) {
+	var stderr bytes.Buffer
+	recorder := newFakeUserTrace(runtrace.Status{Complete: true})
+	app := &App{
+		Stderr: &stderr,
+		openUserTrace: func(string, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+			return recorder, nil
+		},
+	}
+	runtime, err := app.newCommandRuntime(clievent.CommandGet, observationOptions{tracePath: "trace.ndjson"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := newGetObservation(runtime)
+	observation.TraceRelayLifecycle(relayv2.LifecycleTrace{
+		LinkID: 1, Stage: relayv2.LifecycleTraceDropped,
+		RetirementSource: relayv2.LifecycleRetirementNone,
+		Cause:            relayv2.LifecycleCauseNone, DrainCause: relayv2.LifecycleCauseNone,
+		Dropped: 4,
+	})
+	observation.reportRelayCompletion(relayv2.LifecycleObservationCompletion{
+		Drained: true, Loss: relayv2.LifecycleObservationLoss{QueueOverflow: 4, ObserverPanic: 1},
+	})
+	runtime.Close()
+
+	var lifecycleSeen bool
+	var queueLoss, panicLoss uint64
+	for _, event := range recorder.recorded() {
+		switch value := event.(type) {
+		case clievent.RelayLifecycleObserved:
+			lifecycleSeen = value.Stage() == clievent.RelayTraceDropped && value.Dropped() == 4
+		case clievent.ObserverLossObserved:
+			if value.Category() == clievent.ObserverLossRelayLifecycle && value.Reason() == clievent.ObserverLossTraceQueue {
+				queueLoss = saturatingAdd(queueLoss, value.Count())
+			}
+			if value.Category() == clievent.ObserverLossRelayLifecycle && value.Reason() == clievent.ObserverLossEventContract {
+				panicLoss = saturatingAdd(panicLoss, value.Count())
+			}
+		}
+	}
+	if !lifecycleSeen || queueLoss != 4 || panicLoss != 1 {
+		t.Fatalf("drop lifecycle=%t queue loss=%d panic loss=%d events=%#v", lifecycleSeen, queueLoss, panicLoss, recorder.recorded())
+	}
+	if strings.Count(stderr.String(), "Trace is incomplete") != 1 || strings.Contains(strings.ToLower(stderr.String()), "unexpected") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
+func TestObservationPublicationGateSerializesRevocationWithRuntimeEnqueue(t *testing.T) {
+	recorder := newFakeUserTrace(runtrace.Status{Complete: true})
+	runtime, err := (&App{
+		Stderr: bytes.NewBuffer(nil),
+		openUserTrace: func(string, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+			return recorder, nil
+		},
+	}).newCommandRuntime(clievent.CommandShare, observationOptions{tracePath: "trace.ndjson"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gate := &observationPublicationGate{}
+	validated := make(chan struct{})
+	resume := make(chan struct{})
+	lateResult := make(chan bool, 1)
+	go func() {
+		// Projection and an advisory context check may finish before completion;
+		// the gate remains the authority at the actual enqueue boundary.
+		close(validated)
+		<-resume
+		lateResult <- gate.commit(context.Background(), func() bool {
+			return runtime.Observe(clievent.NewReady())
+		})
+	}()
+	<-validated
+	gate.revoke()
+	close(resume)
+	if <-lateResult {
+		t.Fatal("callback crossed a revoked publication cut")
+	}
+
+	preCutGate := &observationPublicationGate{}
+	insideGate := make(chan struct{})
+	releaseEnqueue := make(chan struct{})
+	commitDone := make(chan bool, 1)
+	go func() {
+		commitDone <- preCutGate.commit(context.Background(), func() bool {
+			close(insideGate)
+			<-releaseEnqueue
+			return runtime.Observe(clievent.NewReady())
+		})
+	}()
+	<-insideGate
+	revokeDone := make(chan struct{})
+	go func() {
+		preCutGate.revoke()
+		close(revokeDone)
+	}()
+	select {
+	case <-revokeDone:
+		t.Fatal("revocation overtook an enqueue that already held publication authority")
+	default:
+	}
+	close(releaseEnqueue)
+	if !<-commitDone {
+		t.Fatal("pre-cut enqueue was rejected")
+	}
+	<-revokeDone
+
+	if !runtime.Finalize(newRuntimeTestSharingStopped(t)) {
+		t.Fatal("terminal event was rejected")
+	}
+	runtime.Close()
+	events := recorder.recorded()
+	if len(events) != 2 {
+		t.Fatalf("events=%#v", events)
+	}
+	if _, ok := events[0].(clievent.Ready); !ok {
+		t.Fatalf("pre-cut event=%T", events[0])
+	}
+	if _, ok := events[1].(clievent.SharingStopped); !ok {
+		t.Fatalf("terminal event=%T", events[1])
+	}
+}
+
+func TestGetContextObserversCannotCommitAfterCompletionRevocation(t *testing.T) {
+	recorder := newFakeUserTrace(runtrace.Status{Complete: true})
+	runtime, err := (&App{
+		Stderr: bytes.NewBuffer(nil),
+		openUserTrace: func(string, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+			return recorder, nil
+		},
+	}).newCommandRuntime(clievent.CommandGet, observationOptions{tracePath: "trace.ndjson"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := newGetObservation(runtime)
+	observation.state.relayGate.revoke()
+	observation.state.receiverGate.revoke()
+
+	observation.TraceRelayLifecycleContext(context.Background(), relayv2.LifecycleTrace{
+		LinkID: 7, OperationID: 9, Stage: relayv2.LifecycleLinkClosed,
+		RetirementSource: relayv2.LifecycleRetirementLocalClose,
+		Cause:            relayv2.LifecycleCauseNone, DrainCause: relayv2.LifecycleCauseNone,
+	})
+	observation.ObservePeerDiagnosticContext(context.Background(), v2peer.PeerDiagnosticObservation{
+		Category: v2peer.PeerDiagnosticReceiverTermination,
+		Reason:   v2peer.PeerDiagnosticObserverCapacity,
+		Count:    1,
+	})
+	if !runtime.Finalize(newRuntimeTestCommandFailure(t, clievent.CommandGet, clievent.FailureCanceled)) {
+		t.Fatal("terminal event was rejected")
+	}
+	runtime.Close()
+
+	events := recorder.recorded()
+	if len(events) != 1 {
+		t.Fatalf("revoked producer callbacks committed events=%#v", events)
+	}
+	if _, ok := events[0].(clievent.CommandFailed); !ok {
+		t.Fatalf("terminal event=%T", events[0])
+	}
+}
+
+func TestGetFinalizationWaitsForProducerCompletionCut(t *testing.T) {
+	recorder := newFakeUserTrace(runtrace.Status{Complete: true})
+	app := &App{
+		Stderr: bytes.NewBuffer(nil),
+		openUserTrace: func(string, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+			return recorder, nil
+		},
+	}
+	runtime, err := app.newCommandRuntime(clievent.CommandGet, observationOptions{tracePath: "trace.ndjson"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := newGetObservation(runtime)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	observation.registerReceiverFactory(receiverObservationCompleterFunc(func(ctx context.Context) v2peer.ReceiverObservationCompletion {
+		close(entered)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return v2peer.ReceiverObservationCompletion{
+				Terminations: v2peer.ObservationCompletion{Drained: false, Loss: v2peer.ObservationLoss{Undrained: 1}},
+				Diagnostics:  v2peer.ObservationCompletion{Drained: true},
+			}
+		}
+		observation.ObservePeerDiagnosticContext(ctx, v2peer.PeerDiagnosticObservation{
+			Category: v2peer.PeerDiagnosticReceiverTermination,
+			Reason:   v2peer.PeerDiagnosticObserverCapacity,
+			Count:    1,
+		})
+		return v2peer.ReceiverObservationCompletion{
+			Terminations: v2peer.ObservationCompletion{Drained: true},
+			Diagnostics:  v2peer.ObservationCompletion{Drained: true},
+		}
+	}))
+	failed := newRuntimeTestCommandFailure(t, clievent.CommandGet, clievent.FailureCanceled)
+	if !observation.stageTerminal(failed) {
+		t.Fatal("terminal event was not staged")
+	}
+	done := make(chan struct{})
+	go func() {
+		observation.completeAndFinalize()
+		close(done)
+	}()
+	<-entered
+	select {
+	case <-done:
+		t.Fatal("finalization crossed an incomplete producer cut")
+	default:
+	}
+	close(release)
+	<-done
+	runtime.Close()
+
+	events := recorder.recorded()
+	if len(events) != 2 {
+		t.Fatalf("events=%#v", events)
+	}
+	if _, ok := events[0].(clievent.ObserverLossObserved); !ok {
+		t.Fatalf("first event=%T, want terminal producer fact", events[0])
+	}
+	if _, ok := events[1].(clievent.CommandFailed); !ok {
+		t.Fatalf("second event=%T, want command result", events[1])
+	}
+}
+
+func TestDrainTimeoutLossPrecedesTerminalWithoutUnexpectedFailure(t *testing.T) {
+	var stderr bytes.Buffer
+	recorder := newFakeUserTrace(runtrace.Status{Complete: true})
+	app := &App{
+		Stderr: &stderr,
+		openUserTrace: func(string, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+			return recorder, nil
+		},
+	}
+	runtime, err := app.newCommandRuntime(clievent.CommandGet, observationOptions{tracePath: "trace.ndjson"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := newGetObservation(runtime)
+	observation.registerReceiverFactory(receiverObservationCompleterFunc(func(context.Context) v2peer.ReceiverObservationCompletion {
+		return v2peer.ReceiverObservationCompletion{
+			Terminations: v2peer.ObservationCompletion{Drained: false, Loss: v2peer.ObservationLoss{Undrained: 2}},
+			Diagnostics:  v2peer.ObservationCompletion{Drained: true},
+		}
+	}))
+	if !observation.stageTerminal(newRuntimeTestCommandFailure(t, clievent.CommandGet, clievent.FailureCanceled)) {
+		t.Fatal("terminal event was not staged")
+	}
+	observation.completeAndFinalize()
+	runtime.Close()
+
+	events := recorder.recorded()
+	if len(events) != 2 {
+		t.Fatalf("events=%#v", events)
+	}
+	loss, ok := events[0].(clievent.ObserverLossObserved)
+	if !ok || loss.Category() != clievent.ObserverLossReceiverTermination ||
+		loss.Reason() != clievent.ObserverLossAdapterCapacityTimeout || loss.Count() != 2 {
+		t.Fatalf("first event=%#v", events[0])
+	}
+	if _, ok := events[1].(clievent.CommandFailed); !ok {
+		t.Fatalf("terminal event=%T", events[1])
+	}
+	if strings.Count(stderr.String(), "Trace is incomplete") != 1 || strings.Contains(strings.ToLower(stderr.String()), "unexpected error") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
+func newRuntimeTestCommandFailure(t *testing.T, command clievent.Command, code clievent.FailureCode) clievent.CommandFailed {
+	t.Helper()
+	failure, err := clievent.NewFailure(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := clievent.NewCommandFailed(command, clievent.ExitFailure, failure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return event
+}
+
+func TestMalformedRelayLifecycleProducesTypedLossAndSingleIncompleteWarning(t *testing.T) {
+	var stderr bytes.Buffer
+	recorder := newFakeUserTrace(runtrace.Status{Complete: true})
+	app := &App{
+		Stderr: &stderr,
+		openUserTrace: func(string, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+			return recorder, nil
+		},
+	}
+	runtime, err := app.newCommandRuntime(
+		clievent.CommandGet,
+		observationOptions{tracePath: "trace.ndjson"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	(getObservation{runtime: runtime}).relayLifecycle(relayv2.LifecycleTrace{
+		LinkID: 1, RelaySessionID: v2.RelaySessionID{1},
+		Stage: relayv2.LifecycleSendAdmitted, Terminal: true,
+		Disposition:      framechannel.SendAccepted,
+		RetirementSource: relayv2.LifecycleRetirementNone,
+		Cause:            relayv2.LifecycleCauseNone,
+		DrainCause:       relayv2.LifecycleCauseNone,
+		// A send-stage lifecycle fact without its operation correlation must be
+		// counted as observation loss, never promoted into a generic warning.
+		OperationID: 0,
+	})
+	runtime.Close()
+
+	recorded := recorder.recorded()
+	if len(recorded) != 1 {
+		t.Fatalf("trace events=%#v", recorded)
+	}
+	loss, ok := recorded[0].(clievent.ObserverLossObserved)
+	if !ok || loss.Category() != clievent.ObserverLossRelayLifecycle ||
+		loss.Reason() != clievent.ObserverLossInvalidIdentity || loss.Count() != 1 {
+		t.Fatalf("observer loss=%#v", recorded[0])
+	}
+	output := stderr.String()
+	if strings.Count(output, "Trace is incomplete") != 1 || strings.Contains(strings.ToLower(output), "unexpected") {
+		t.Fatalf("stderr=%q", output)
 	}
 }
 
@@ -188,6 +621,7 @@ func TestCommandRuntimeGetFinalizationSurvivesObserverSaturation(t *testing.T) {
 		clievent.Warning{},
 		clievent.Warning{},
 		clievent.TransferProgress{},
+		clievent.ObserverLossObserved{},
 		clievent.TransferProgress{},
 		clievent.TransferSettled{},
 	)
@@ -227,6 +661,7 @@ func TestCommandRuntimeShareReadyAndStopSurviveObserverSaturation(t *testing.T) 
 		clievent.Ready{},
 		clievent.SharingSubjectSelected{},
 		clievent.RelayConnected{},
+		clievent.ObserverLossObserved{},
 		clievent.SharingStopped{},
 	)
 }
@@ -258,6 +693,7 @@ func TestCommandRuntimeObserverIngestionStaysLossyAndNonblockingWhileFailureIsGu
 	assertRuntimeEventTypes(t, recorder.recorded(),
 		clievent.Warning{},
 		clievent.Warning{},
+		clievent.ObserverLossObserved{},
 		clievent.CommandFailed{},
 	)
 	if recorder.lifecycle != 2 {

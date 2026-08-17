@@ -18,13 +18,13 @@ const (
 	displayPathCanary = `C:\private\catalog\secret-file-name-token.txt`
 )
 
-func TestEncodeV1VisitsEveryEventAndOmitsPrivacyCanaries(t *testing.T) {
+func TestEncodeV2VisitsEveryEventAndOmitsPrivacyCanaries(t *testing.T) {
 	events := allTraceEvents(t)
-	if got, want := len(events), 22; got != want {
+	if got, want := len(events), 25; got != want {
 		t.Fatalf("event fixture count = %d, want %d", got, want)
 	}
 	for index, event := range events {
-		record, err := encodeV1(
+		record, err := encodeV2(
 			"11111111111111111111111111111111",
 			entryMetadata{
 				sequence:  uint64(index + 1),
@@ -40,7 +40,7 @@ func TestEncodeV1VisitsEveryEventAndOmitsPrivacyCanaries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal event %T: %v", event, err)
 		}
-		var strict recordV1
+		var strict recordV2
 		decoder := json.NewDecoder(strings.NewReader(string(encoded)))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&strict); err != nil {
@@ -53,7 +53,7 @@ func TestEncodeV1VisitsEveryEventAndOmitsPrivacyCanaries(t *testing.T) {
 	}
 }
 
-func TestEncodeV1UsesDecimalStringsAndSemanticContexts(t *testing.T) {
+func TestEncodeV2UsesDecimalStringsAndSemanticContexts(t *testing.T) {
 	identity := testIdentity(t, 0xa1)
 	receiveOperation := mustValue(clievent.NewReceiveOperationID(identity))
 	transferJob := mustValue(clievent.NewTransferJobID(testIdentity(t, 0xb2)))
@@ -69,7 +69,7 @@ func TestEncodeV1UsesDecimalStringsAndSemanticContexts(t *testing.T) {
 		CountersExact:      false,
 	}))
 	progress := mustValue(clievent.NewTransferProgress(receiveOperation, transferJob, snapshot))
-	record, err := encodeV1(
+	record, err := encodeV2(
 		"22222222222222222222222222222222",
 		entryMetadata{sequence: 1, time: time.Unix(1, 0), elapsedMS: 2},
 		progress,
@@ -104,11 +104,11 @@ func TestEncodeV1UsesDecimalStringsAndSemanticContexts(t *testing.T) {
 	}
 }
 
-func TestEncodeV1RootPrefetchUsesOnlyClosedTraceFields(t *testing.T) {
+func TestEncodeV2RootPrefetchUsesOnlyClosedTraceFields(t *testing.T) {
 	event := mustValue(clievent.NewRootPrefetchObserved(
 		clievent.RootPrefetchCommitted, math.MaxUint64, 11, 2,
 	))
-	record, err := encodeV1(
+	record, err := encodeV2(
 		"44444444444444444444444444444444",
 		entryMetadata{sequence: 1, time: time.Unix(1, 0), elapsedMS: 2},
 		event,
@@ -125,7 +125,7 @@ func TestEncodeV1RootPrefetchUsesOnlyClosedTraceFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantFields := map[string]any{
-		"schema_version":              float64(1),
+		"schema_version":              float64(2),
 		"sequence":                    float64(1),
 		"time":                        time.Unix(1, 0).UTC().Format(time.RFC3339Nano),
 		"elapsed_ms":                  float64(2),
@@ -143,8 +143,92 @@ func TestEncodeV1RootPrefetchUsesOnlyClosedTraceFields(t *testing.T) {
 	}
 }
 
-func TestSchemaV1HasNoOpenPayloadOrUnsafeNumericDomainCounter(t *testing.T) {
-	schema := reflect.TypeFor[recordV1]()
+func TestEncodeV2FilesystemFailureClassification(t *testing.T) {
+	failure := mustValue(clievent.NewFailure(clievent.FailureOutputNeedsAttention))
+	event := mustValue(clievent.NewFilesystemOutputObserved(clievent.FilesystemOutputSpec{
+		Operation:          clievent.FilesystemCheckpointReconciled,
+		Failure:            failure,
+		FailureStage:       clievent.FilesystemFailureNativeDurability,
+		ReconciliationStep: clievent.FilesystemReconciliationRecordPromotion,
+		NativeErrorClass:   clievent.FilesystemNativeErrorSharingViolation,
+	}))
+	record, err := encodeV2(
+		"55555555555555555555555555555555",
+		entryMetadata{sequence: 1, time: time.Unix(1, 0), elapsedMS: 2},
+		event,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for field, want := range map[string]string{
+		"filesystem_failure_stage":       "native_durability",
+		"filesystem_reconciliation_step": "record_promotion",
+		"filesystem_native_error_class":  "sharing_violation",
+	} {
+		if got := fields[field]; got != want {
+			t.Fatalf("%s = %#v, want %q", field, got, want)
+		}
+	}
+}
+
+func TestEncodeV2LaneSettlementUsesOnlyBoundedSummary(t *testing.T) {
+	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x91)))
+	lane := mustValue(clievent.NewLaneIdentity(4, 2))
+	event := mustValue(clievent.NewLaneSettlementObserved(clievent.LaneSettlementSpec{
+		Session: session, Route: clievent.LaneRouteDirect, Lane: lane,
+		DeliveredBlocks: 7, DeliveredBytes: 11, FailedBlockAttempts: 3,
+		ReassignedBlocks: 2, Incomplete: true,
+	}))
+	record, err := encodeV2(
+		"66666666666666666666666666666666",
+		entryMetadata{sequence: 1, time: time.Unix(1, 0), elapsedMS: 2},
+		event,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	wantFields := map[string]any{
+		"schema_version":        float64(2),
+		"sequence":              float64(1),
+		"time":                  time.Unix(1, 0).UTC().Format(time.RFC3339Nano),
+		"elapsed_ms":            float64(2),
+		"level":                 "debug",
+		"event":                 "lane_settlement",
+		"command":               "get",
+		"run_id":                "66666666666666666666666666666666",
+		"protocol_session_id":   session.Hex(),
+		"lane_route":            "direct",
+		"lane_id":               float64(4),
+		"lane_epoch":            float64(2),
+		"delivered_blocks":      "7",
+		"delivered_bytes":       "11",
+		"failed_block_attempts": "3",
+		"reassigned_blocks":     "2",
+		"incomplete":            true,
+	}
+	if !reflect.DeepEqual(fields, wantFields) {
+		t.Fatalf("lane-settlement record = %#v, want %#v", fields, wantFields)
+	}
+}
+
+func TestSchemaV2HasNoOpenPayloadOrUnsafeNumericDomainCounter(t *testing.T) {
+	schema := reflect.TypeFor[recordV2]()
 	seenTags := make(map[string]struct{}, schema.NumField())
 	for field := range schema.Fields() {
 		tag, _, _ := strings.Cut(field.Tag.Get("json"), ",")
@@ -160,8 +244,12 @@ func TestSchemaV1HasNoOpenPayloadOrUnsafeNumericDomainCounter(t *testing.T) {
 			baseType = baseType.Elem()
 		}
 		switch baseType.Kind() {
-		case reflect.Map, reflect.Interface, reflect.Slice, reflect.Array, reflect.Struct:
+		case reflect.Map, reflect.Interface, reflect.Array, reflect.Struct:
 			t.Fatalf("field %s introduces an open or nested payload type %s", field.Name, field.Type)
+		case reflect.Slice:
+			if baseType.Elem().Kind() != reflect.String {
+				t.Fatalf("field %s introduces an open slice type %s", field.Name, field.Type)
+			}
 		case reflect.Uint64:
 			if tag != "sequence" {
 				t.Fatalf("domain uint64 %s must be encoded as a decimal string", field.Name)
@@ -173,10 +261,10 @@ func TestSchemaV1HasNoOpenPayloadOrUnsafeNumericDomainCounter(t *testing.T) {
 	}
 }
 
-func TestEncodeV1RelayAuthorityContainsNoURLRemainder(t *testing.T) {
+func TestEncodeV2RelayAuthorityContainsNoURLRemainder(t *testing.T) {
 	authority := mustValue(clievent.NewRelayAuthority(clievent.RelayWSS, "relay.example", 443))
 	event := mustValue(clievent.NewRelayConnected(clievent.CommandShare, authority))
-	record, err := encodeV1(
+	record, err := encodeV2(
 		"33333333333333333333333333333333",
 		entryMetadata{sequence: 1, time: time.Unix(1, 0), elapsedMS: 0},
 		event,
@@ -213,6 +301,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 	peerPath := mustValue(clievent.NewPeerPathID(testIdentity(t, 0x44)))
 	peerAttempt := mustValue(clievent.NewPeerAttemptID(testIdentity(t, 0x55)))
 	lane := mustValue(clievent.NewLaneIdentity(7, 9))
+	relaySession := mustValue(clievent.NewRelaySessionID([]byte{1, 2, 3, 4, 5, 6, 7, 8}))
 	progress := mustValue(clievent.NewProgressSnapshot(clievent.ProgressSpec{
 		DiscoveredFiles:    3,
 		DiscoveredBytes:    500,
@@ -261,24 +350,24 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 		mustValue(clievent.NewRelayLifecycleObserved(clievent.RelayLifecycleSpec{
 			Command:          clievent.CommandShare,
 			LinkID:           math.MaxUint64,
+			RelaySession:     relaySession,
 			SendOperationID:  math.MaxUint64,
 			Stage:            clievent.RelaySendAdmitted,
 			Terminal:         false,
 			Disposition:      clievent.SendAccepted,
 			RetirementSource: clievent.RelayRetirementNone,
-			Cause:            clievent.RelayCauseNone,
+			Cause:            clievent.RelayCauseTransport,
 			DrainCause:       clievent.RelayCauseNone,
 		})),
 		mustValue(clievent.NewWebRTCLifecycleObserved(clievent.WebRTCLifecycleSpec{
-			Command:         clievent.CommandGet,
-			ChannelID:       math.MaxUint64,
-			SendOperationID: math.MaxUint64,
-			Operation:       clievent.WebRTCSend,
-			Transition:      clievent.WebRTCTraceDropped,
-			State:           clievent.ChannelOpen,
-			Terminal:        clievent.WebRTCTerminalNone,
-			Cause:           clievent.WebRTCCauseOther,
-			Dropped:         math.MaxUint64,
+			Command:    clievent.CommandGet,
+			ChannelID:  math.MaxUint64,
+			Operation:  clievent.WebRTCChannel,
+			Transition: clievent.WebRTCTraceDropped,
+			State:      clievent.ChannelOpen,
+			Terminal:   clievent.WebRTCTerminalNone,
+			Cause:      clievent.WebRTCCauseNone,
+			Dropped:    math.MaxUint64,
 		})),
 		mustValue(clievent.NewPeerAttemptObserved(clievent.PeerAttemptSpec{
 			Command:       clievent.CommandGet,
@@ -304,10 +393,10 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			TreeSettlement:   clievent.TreeSettlementPartial,
 			Failure:          failure,
 		})),
-		mustValue(clievent.NewFilesystemOutputObserved(
-			receiveOperation,
-			clievent.FilesystemRuntimeDecision,
-			clievent.FilesystemOutputCounters{
+		mustValue(clievent.NewFilesystemOutputObserved(clievent.FilesystemOutputSpec{
+			ReceiveOperation: receiveOperation,
+			Operation:        clievent.FilesystemRuntimeDecision,
+			Counters: clievent.FilesystemOutputCounters{
 				NodeClaims:             math.MaxUint64,
 				DirectoryClaims:        2,
 				FileClaims:             3,
@@ -316,8 +405,8 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 				DirectoryMetadataBytes: math.MaxUint64,
 				CheckpointRecords:      7,
 			},
-			faultFailure,
-		)),
+			Failure: faultFailure, FailureStage: clievent.FilesystemFailureNativeDurability,
+		})),
 		mustValue(clievent.NewSenderTerminalObserved(
 			protocolSession,
 			lane,
@@ -357,6 +446,27 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			UsableLanesAtSelection:  math.MaxUint32,
 			UsableLanesAtSettlement: math.MaxUint32,
 			Cause:                   clievent.ProtocolOperationCauseDeadline,
+		})),
+		mustValue(clievent.NewLaneSettlementObserved(clievent.LaneSettlementSpec{
+			Session: protocolSession, Route: clievent.LaneRouteDirect, Lane: lane,
+			DeliveredBlocks: math.MaxUint64, DeliveredBytes: math.MaxUint64,
+			FailedBlockAttempts: 2, ReassignedBlocks: 3, Incomplete: true,
+		})),
+		mustValue(clievent.NewObserverLossObserved(clievent.ObserverLossSpec{
+			Command: clievent.CommandGet, Category: clievent.ObserverLossReceiverTermination,
+			Reason: clievent.ObserverLossAdapterCapacityTimeout, Count: math.MaxUint64,
+		})),
+		mustValue(clievent.NewReceiverTerminationObserved(clievent.ReceiverTerminationSpec{
+			Operation: protocolOperation, HasOperation: true, LocalGeneration: math.MaxUint64,
+			TransitionAuthority:   clievent.ReceiverTerminalRemote,
+			Disposition:           clievent.ReceiverSessionUnsafe,
+			TransitionProvenance:  clievent.ReceiverProvenanceRemoteFailureMalformed,
+			ConsequenceProvenance: clievent.ReceiverProvenanceRemoteFailureMalformed,
+			LocalStopReason:       clievent.ReceiverLocalStopNone, DiagnosticsTruncated: true,
+			BenignComponents:     []clievent.ReceiverBenignComponent{clievent.ReceiverBenignContextCanceled},
+			RetainedCauseClasses: []clievent.ReceiverCauseClass{clievent.ReceiverCauseProtocol},
+			TeardownTransitions:  []clievent.PeerTeardownTransition{clievent.PeerTeardownShutdownInitiated},
+			PeerShutdownFailed:   true, ChannelDrainFailed: true,
 		})),
 	}
 }

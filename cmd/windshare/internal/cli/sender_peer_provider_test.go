@@ -1,11 +1,9 @@
 package cli
 
 import (
-	"errors"
 	"io"
 	"testing"
 
-	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/internal/testrun"
@@ -72,30 +70,19 @@ func TestSenderPeerAdmissionPublishesPrivateLaneMilestone(t *testing.T) {
 	}
 }
 
-func TestSenderPeerConfigWiresTypedAttemptWebRTCAndFallbackObservers(t *testing.T) {
+func TestSenderPeerConfigKeepsDetailedDiagnosticsDisabledByDefault(t *testing.T) {
 	emitter := &shareRecordingEmitter{}
 	observations := newShareObservations(emitter)
 	config := senderPeerConfig(observations, nil, nil)
-	if config.Observer == nil || config.DataChannels == nil || config.OnError == nil {
+	if config.Observer == nil || config.DataChannels == nil || config.DiagnosticObserver != nil {
 		t.Fatalf("sender observer config = %#v", config)
 	}
 	adapter, ok := config.DataChannels.(senderDataChannelAdapter)
-	if !ok || adapter.tracer != observations {
+	if !ok || adapter.tracer != nil {
 		t.Fatalf("data channel adapter = %#v", config.DataChannels)
 	}
-	config.OnError(v2peer.ErrNegotiation)
-	if len(emitter.events) != 1 {
-		t.Fatalf("fallback events = %d", len(emitter.events))
-	}
-	fallback, ok := emitter.events[0].(clievent.Fallback)
-	if !ok || fallback.From() != clievent.TransportWebRTC || fallback.To() != clievent.TransportRelay ||
-		fallback.Failure().Code() != clievent.FailureUnexpected {
-		t.Fatalf("fallback event = %#v", emitter.events[0])
-	}
-
-	config.OnError(errors.New("provider canary with token=secret"))
-	second, ok := emitter.events[1].(clievent.Fallback)
-	if !ok || second.Failure().Code() != clievent.FailureUnexpected {
-		t.Fatalf("opaque fallback event = %#v", emitter.events[1])
+	router := config.Observer.(senderPeerObservationRouter)
+	if router.command != nil || len(emitter.events) != 0 {
+		t.Fatalf("default detailed observer = %#v, events=%#v", router.command, emitter.events)
 	}
 }

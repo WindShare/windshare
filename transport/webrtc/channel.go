@@ -330,6 +330,15 @@ func (c *Channel) Close() error {
 	return nil
 }
 
+// CompleteObservations closes lifecycle callback admission and returns the
+// exact delivery/loss cut after the channel owner has stopped transport work.
+func (c *Channel) CompleteObservations(ctx context.Context) LifecycleObservationCompletion {
+	if c == nil {
+		return LifecycleObservationCompletion{Drained: true}
+	}
+	return c.traces.complete(ctx)
+}
+
 func validateOutboundFrame(frame framechannel.Frame) error {
 	if len(frame) == 0 || len(frame) > framechannel.MaxFrameSize {
 		return fmt.Errorf("%w: got %d bytes, want 1..%d", ErrFrameBounds, len(frame), framechannel.MaxFrameSize)
@@ -596,8 +605,10 @@ func (c *Channel) finishWithPhysicalClose(reason error, closePhysical bool) bool
 func (c *Channel) runFinalizer() {
 	<-c.lifecycle.stopSignal()
 	<-c.inboundDone
-	c.lifecycle.complete()
 	c.traces.shutdown()
+	// Done is the producer cut, so callback admission closes before an owner can
+	// await lifecycle completion.
+	c.lifecycle.complete()
 }
 
 func (c *Channel) requestPhysicalClose() {

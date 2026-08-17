@@ -76,6 +76,10 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 		}
 		_ = sender.Close()
 		<-sender.Done()
+		completion := sender.CompleteObservations(context.Background())
+		if !completion.Drained || completion.Delivered == 0 || completion.Loss.Total() != 0 {
+			t.Fatalf("sender observation completion = %+v", completion)
+		}
 	})
 
 	t.Run("resume sender", func(t *testing.T) {
@@ -454,7 +458,6 @@ func TestRelayCloseAndTerminalReservationHaveOneLinearization(t *testing.T) {
 		default:
 		}
 
-		gate.release()
 		requireQueuedRequests(t, link, channel.id, 1)
 		request, ok := link.takeRequest()
 		if !ok {
@@ -494,7 +497,6 @@ func TestRelayCloseAndTerminalReservationHaveOneLinearization(t *testing.T) {
 			framechannel.SendDispositionOf(err) != framechannel.SendRetired {
 			t.Fatalf("terminal after close = %v disposition=%d", err, framechannel.SendDispositionOf(err))
 		}
-		gate.release()
 		if err := <-closeResult; err != nil {
 			t.Fatal(err)
 		}
@@ -539,7 +541,6 @@ func TestRelayRetirementCauseIsMonotonicAcrossLinkAndChannel(t *testing.T) {
 
 		laterFailure := errors.New("failure after natural retirement authority")
 		link.stop(laterFailure)
-		gate.release()
 		err := <-terminalResult
 		if !errors.Is(err, laterFailure) ||
 			framechannel.SendDispositionOf(err) != framechannel.SendAccepted {
@@ -601,7 +602,6 @@ func TestRelayRetirementCauseIsMonotonicAcrossLinkAndChannel(t *testing.T) {
 		if !errors.Is(channel.Err(), linkFailure) {
 			t.Fatalf("channel lost published link cause: %v", channel.Err())
 		}
-		gate.release()
 		<-stopResult
 		if !errors.Is(link.Err(), linkFailure) {
 			t.Fatalf("link error = %v", link.Err())
@@ -616,10 +616,14 @@ func TestRelayCancellationAndAdmissionHaveOneLinearization(t *testing.T) {
 		channel := link.installFixed(relaySessionID(35))
 		ctx, cancel := context.WithCancel(context.Background())
 
-		terminalResult := make(chan error, 1)
-		go func() {
-			terminalResult <- channel.SendTerminal(ctx, framechannel.Frame("terminal"))
-		}()
+		request, err := channel.prepareSend(ctx, framechannel.Frame("terminal"), true)
+		if err != nil {
+			t.Fatalf("prepare terminal: %v", err)
+		}
+		reservation, err := channel.reserveTerminal(ctx, request)
+		if err != nil {
+			t.Fatalf("reserve terminal: %v", err)
+		}
 		gate.wait(t)
 		cancel()
 		<-ctx.Done()
@@ -629,8 +633,7 @@ func TestRelayCancellationAndAdmissionHaveOneLinearization(t *testing.T) {
 			t.Fatalf("retirement trace = %+v", deferred)
 		}
 
-		gate.release()
-		err := <-terminalResult
+		err = link.enqueueTerminal(ctx, channel, request, reservation)
 		if !errors.Is(err, context.Canceled) ||
 			framechannel.SendDispositionOf(err) != framechannel.SendRejected {
 			t.Fatalf("pre-admission cancellation = %v disposition=%d", err, framechannel.SendDispositionOf(err))
@@ -663,7 +666,6 @@ func TestRelayCancellationAndAdmissionHaveOneLinearization(t *testing.T) {
 		gate.waitFor(t, LifecycleRetirementDeferred)
 		cancel()
 		<-ctx.Done()
-		gate.release()
 
 		err := <-terminalResult
 		if !errors.Is(err, context.Canceled) ||
@@ -700,14 +702,13 @@ type lifecycleStageGate struct {
 	stage   LifecycleStage
 	events  chan LifecycleTrace
 	entered chan LifecycleTrace
-	unblock chan struct{}
 	once    sync.Once
 }
 
 func newLifecycleStageGate(stage LifecycleStage) *lifecycleStageGate {
 	return &lifecycleStageGate{
 		stage: stage, events: make(chan LifecycleTrace, 64),
-		entered: make(chan LifecycleTrace, 1), unblock: make(chan struct{}),
+		entered: make(chan LifecycleTrace, 1),
 	}
 }
 
@@ -718,7 +719,6 @@ func (gate *lifecycleStageGate) TraceRelayLifecycle(event LifecycleTrace) {
 	}
 	gate.once.Do(func() {
 		gate.entered <- event
-		<-gate.unblock
 	})
 }
 
@@ -746,10 +746,6 @@ func (gate *lifecycleStageGate) waitFor(t *testing.T, stage LifecycleStage) Life
 			return LifecycleTrace{}
 		}
 	}
-}
-
-func (gate *lifecycleStageGate) release() {
-	close(gate.unblock)
 }
 
 func requireQueuedRequests(t *testing.T, l *link, id v2.RelaySessionID, want int) {
