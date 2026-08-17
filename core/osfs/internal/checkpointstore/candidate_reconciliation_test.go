@@ -6,6 +6,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/fileexecution"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
@@ -134,6 +135,40 @@ func TestCandidateRecoveryUsesDurabilityAndObservationCapabilities(t *testing.T)
 	}
 	if _, durable := any(observedHandle).(interface{ Sync() error }); durable {
 		t.Fatal("candidate anchor observation exposed durability authority")
+	}
+}
+
+func TestObservedOwnedFilePreservesObservationWithoutMutationAuthority(t *testing.T) {
+	store, _, record := candidateReconciliationFixture(t)
+	observed, observation, err := store.OpenOwnedFile(
+		context.Background(), record.OwnedObjectID(), record.ExactSize(), false,
+	)
+	if err != nil || observed == nil || observation.Condition() != fileexecution.OwnedReady {
+		t.Fatalf("open observed owned file = (%T, %d, %v)", observed, observation.Condition(), err)
+	}
+	if observed.ObjectID() != record.OwnedObjectID() {
+		t.Fatalf("observed object = %x", observed.ObjectID())
+	}
+	if matches, matchErr := observed.MetadataMatches(record.ExactSize(), catalog.ModifiedTime{}); matchErr != nil || !matches {
+		t.Fatalf("observed metadata = (%t, %v)", matches, matchErr)
+	}
+	if _, writeErr := observed.WriteAt([]byte("mutation canary"), 0); !errors.Is(writeErr, outputcap.ErrUnsafeNamespace) {
+		t.Fatalf("observed write = %v", writeErr)
+	}
+	if syncErr := observed.Sync(); !errors.Is(syncErr, outputcap.ErrUnsafeNamespace) {
+		t.Fatalf("observed sync = %v", syncErr)
+	}
+	if metadataErr := observed.SetModifiedTime(catalog.ModifiedTime{}); !errors.Is(metadataErr, outputcap.ErrUnsafeNamespace) {
+		t.Fatalf("observed metadata mutation = %v", metadataErr)
+	}
+	if err := observed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := observed.Close(); err != nil {
+		t.Fatalf("second observed close = %v", err)
+	}
+	if _, matchErr := observed.MetadataMatches(record.ExactSize(), catalog.ModifiedTime{}); !errors.Is(matchErr, outputcap.ErrUnsafeNamespace) {
+		t.Fatalf("closed observed metadata = %v", matchErr)
 	}
 }
 
