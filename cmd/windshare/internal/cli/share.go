@@ -153,9 +153,7 @@ func (a *App) connectShareRelay(
 	connection, err := relayv2.DialSender(ctx, relayv2.SenderConfig{
 		RelayBaseURL: relayURL, Init: register, SenderPrivateKey: material.SenderPrivateKey,
 		Descriptor: material.Descriptor,
-		Dial: relayv2.DialOptions{
-			LifecycleTracer: observations.relayTracer(),
-		},
+		Dial:       relayv2.DialOptions{LifecycleObservationCapacity: observations.relayObservationCapacity()},
 	})
 	if err != nil {
 		exit := ExitNetwork
@@ -165,6 +163,7 @@ func (a *App) connectShareRelay(
 		emitShareCommandFailure(runtime, exit, err)
 		return nil, clievent.RelayAuthority{}, exit
 	}
+	observations.attachRelayStream(connection.LifecycleTrace())
 	relayAuthority, err := commandprojection.RelayAuthority(connection.Endpoint())
 	if err != nil {
 		_ = connection.Close()
@@ -176,7 +175,10 @@ func (a *App) connectShareRelay(
 	lifecycle, err := newSenderRelayLifecycle(senderRelayLifecycleConfig{
 		relayURL: relayURL, fresh: register, resumeToken: resumeToken,
 		privateKey: material.SenderPrivateKey, initial: connection,
-		lifecycleTrace: observations,
+		lifecycleObservationCapacity: observations.relayObservationCapacity(),
+		observeConnection: func(connection senderRelayConnection) {
+			observations.attachRelayStream(connection.LifecycleTrace())
+		},
 		observe:        a.observeSenderRelayRecovery,
 		observeAttempt: observations.ObserveRelayRecovery,
 	})
@@ -381,7 +383,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		return shareRequest{}, parse
 	}
 	if err := observation.validate(); err != nil {
-		_, _ = fmt.Fprintln(a.stderrWriter(), "share: trace output must be a file")
+		_, _ = fmt.Fprintf(a.stderrWriter(), "share: %s\n", observationOptionDiagnostic(err))
 		return shareRequest{}, requestParseUsageFailure
 	}
 	if len(paths) == 0 || *relayURL == "" || *frontURL == "" {

@@ -160,7 +160,7 @@ func failureMessage(failure clievent.Failure) string {
 	case clievent.MessageTraceIncomplete:
 		message = "The trace is incomplete."
 	case clievent.MessageTraceExists:
-		message = "The trace path already exists. Choose a new path."
+		message = "The trace path already exists; prior evidence was preserved and command/output state was untouched. Choose a new --trace path, use --trace-dir, or omit tracing."
 	case clievent.MessageOutputNeedsAttention:
 		message = "The destination needs attention before the transfer can continue."
 	default:
