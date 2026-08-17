@@ -48,12 +48,12 @@ func ProjectPeerDiagnostic(value v2peer.PeerDiagnosticObservation) (clievent.Obs
 	}
 	var reason clievent.ObserverLossReason
 	switch value.Reason {
-	case v2peer.PeerDiagnosticObserverPanic:
-		reason = clievent.ObserverLossEventContract
-	case v2peer.PeerDiagnosticObserverCapacity, v2peer.PeerDiagnosticEvidenceCapacity:
-		reason = clievent.ObserverLossAdapterCapacityTimeout
+	case v2peer.PeerDiagnosticStreamCapacity:
+		reason = clievent.ObserverLossStreamCapacity
+	case v2peer.PeerDiagnosticEvidenceCapacity:
+		reason = clievent.ObserverLossEvidenceCapacity
 	case v2peer.PeerDiagnosticCleanupResidue:
-		reason = clievent.ObserverLossEventContract
+		reason = clievent.ObserverLossCleanupResidue
 	default:
 		return 0, 0, 0, invalidProjection(ProjectionUnknownEnum)
 	}

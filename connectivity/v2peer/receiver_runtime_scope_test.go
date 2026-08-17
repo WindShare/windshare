@@ -184,7 +184,6 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 
 	receiverPeer := newReceiverTestPeerConnection()
 	receiverDataChannel := newReceiverTestChannel()
-	traces := make(chan ReceiverTerminationTrace, 1)
 	receiverFactory, err := NewReceiverFactory(ReceiverFactoryConfig{
 		MaxCandidates:  receiverRuntimeScopeCandidateLimit,
 		AttemptTimeout: receiverRuntimeScopeAttemptTimeout,
@@ -194,13 +193,12 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 		DataChannels: DataChannelAdapterFunc(func(*pion.DataChannel) (PeerDataChannel, error) {
 			return receiverDataChannel, nil
 		}),
-		OnTermination: func(trace ReceiverTerminationTrace) {
-			traces <- trace
-		},
+		ReceiverTerminationObservationCapacity: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	traces := receiverFactory.ReceiverTerminationObservations()
 	receiverSignaling, err := NewRuntimeReceiverSignaling(receiverRuntime)
 	if err != nil {
 		t.Fatal(err)

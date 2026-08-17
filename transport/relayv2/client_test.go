@@ -24,7 +24,6 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 	fixture := newClientFixture(t)
 	t.Run("fresh sender", func(t *testing.T) {
 		socket := newScriptedSocket()
-		traces := make(chan LifecycleTrace, 16)
 		socket.respond(challengeFrame(t, v2.ChallengeRegister))
 		registered, _ := (v2.Registered{
 			ShareID: fixture.fresh.ShareID, ShareInstance: fixture.fresh.ShareInstance,
@@ -36,7 +35,7 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 			SenderPrivateKey: fixture.privateKey, Descriptor: fixture.descriptor,
 			Dial: DialOptions{
 				Header: http.Header{"Origin": {"https://app.example"}}, SocketDialer: socket.dial,
-				LifecycleTracer: LifecycleTraceFunc(func(event LifecycleTrace) { traces <- event }),
+				LifecycleObservationCapacity: 16,
 			},
 		})
 		if err != nil {
@@ -66,7 +65,7 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertOpaqueWrite(t, socket, sessionID, "outgoing")
-		admitted := waitLifecycleTrace(t, traces, LifecycleSendAdmitted)
+		admitted := waitLifecycleTrace(t, sender.LifecycleTrace(), LifecycleSendAdmitted)
 		if admitted.LinkID == 0 || admitted.OperationID == 0 || admitted.RelaySessionID != sessionID ||
 			!admitted.Terminal || admitted.Disposition != framechannel.SendAccepted {
 			t.Fatalf("public lifecycle trace = %+v", admitted)
@@ -76,8 +75,8 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 		}
 		_ = sender.Close()
 		<-sender.Done()
-		completion := sender.CompleteObservations(context.Background())
-		if !completion.Drained || completion.Delivered == 0 || completion.Loss.Total() != 0 {
+		completion := sender.CompleteObservations()
+		if completion.Enqueued == 0 || completion.Loss.Total() != 0 {
 			t.Fatalf("sender observation completion = %+v", completion)
 		}
 	})
@@ -119,6 +118,9 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 		if !bytes.Equal(receiver.Descriptor(), fixture.descriptor) || receiver.Channel().RelaySessionID() != sessionID {
 			t.Fatal("descriptor delivery changed")
 		}
+		if receiver.LifecycleTrace() != nil {
+			t.Fatal("default receiver unexpectedly enabled lifecycle observations")
+		}
 		assertWriteMagic(t, socket, "WS2J")
 		if err := receiver.Channel().Send(context.Background(), []byte("request")); err != nil {
 			t.Fatal(err)
@@ -156,6 +158,16 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 
 func TestClientErrorsAndQueueBounds(t *testing.T) {
 	fixture := newClientFixture(t)
+	if _, err := DialSender(context.Background(), SenderConfig{
+		Dial: DialOptions{LifecycleObservationCapacity: -1},
+	}); !errors.Is(err, ErrLifecycleObservationCapacity) {
+		t.Fatalf("negative sender lifecycle capacity error = %v", err)
+	}
+	if _, err := DialReceiver(context.Background(), ReceiverConfig{
+		Dial: DialOptions{LifecycleObservationCapacity: -1},
+	}); !errors.Is(err, ErrLifecycleObservationCapacity) {
+		t.Fatalf("negative receiver lifecycle capacity error = %v", err)
+	}
 	if _, err := NewFreshRegisterInit(v2.ShareID{}, v2.ShareInstance{}, v2.PKHash{}, nil, v2.ResumeToken{}); !errors.Is(err, ErrProtocol) {
 		t.Fatalf("empty fresh init error = %v", err)
 	}
@@ -419,7 +431,7 @@ func TestRelayTerminalReservationPreservesRejectedChannelAndCannotBeOvertakenByC
 				t.Fatalf("Close overtook terminal settlement: %v", err)
 			default:
 			}
-			request.receipt <- nil
+			link.resolveRequest(request, nil, true)
 			synctest.Wait()
 			if err := <-terminalResult; err != nil {
 				t.Fatalf("terminal settlement: %v", err)
@@ -436,8 +448,10 @@ func TestRelayTerminalReservationPreservesRejectedChannelAndCannotBeOvertakenByC
 
 func TestRelayCloseAndTerminalReservationHaveOneLinearization(t *testing.T) {
 	t.Run("published reservation wins before queue insertion", func(t *testing.T) {
-		gate := newLifecycleStageGate(LifecycleTerminalReserved)
-		link := newLinkWithTracer(context.Background(), newScriptedSocket(), false, gate)
+		link := newLinkWithLifecycleStream(
+			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
+		)
+		gate := newLifecycleStageGate(LifecycleTerminalReserved, link.lifecycleTrace())
 		channel := link.installFixed(relaySessionID(31))
 
 		terminalResult := make(chan error, 1)
@@ -468,7 +482,7 @@ func TestRelayCloseAndTerminalReservationHaveOneLinearization(t *testing.T) {
 			t.Fatalf("Close overtook admitted terminal settlement: %v", err)
 		default:
 		}
-		request.receipt <- nil
+		link.resolveRequest(request, nil, true)
 		if err := <-terminalResult; err != nil {
 			t.Fatalf("terminal settlement: %v", err)
 		}
@@ -481,8 +495,10 @@ func TestRelayCloseAndTerminalReservationHaveOneLinearization(t *testing.T) {
 	})
 
 	t.Run("close winner rejects a later terminal as retired", func(t *testing.T) {
-		gate := newLifecycleStageGate(LifecycleRetired)
-		link := newLinkWithTracer(context.Background(), newScriptedSocket(), false, gate)
+		link := newLinkWithLifecycleStream(
+			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
+		)
+		gate := newLifecycleStageGate(LifecycleRetired, link.lifecycleTrace())
 		channel := link.installFixed(relaySessionID(32))
 
 		closeResult := make(chan error, 1)
@@ -527,8 +543,10 @@ func TestRelayRetirementCauseIsMonotonicAcrossLinkAndChannel(t *testing.T) {
 	})
 
 	t.Run("deferred natural retirement keeps identity while later failure drains exactly", func(t *testing.T) {
-		gate := newLifecycleStageGate(LifecycleSendAdmitted)
-		link := newLinkWithTracer(context.Background(), newScriptedSocket(), false, gate)
+		link := newLinkWithLifecycleStream(
+			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
+		)
+		gate := newLifecycleStageGate(LifecycleSendAdmitted, link.lifecycleTrace())
 		channel := link.installFixed(relaySessionID(37))
 
 		terminalResult := make(chan error, 1)
@@ -569,8 +587,10 @@ func TestRelayRetirementCauseIsMonotonicAcrossLinkAndChannel(t *testing.T) {
 	})
 
 	t.Run("published link failure wins before local close and drains its exact cause", func(t *testing.T) {
-		gate := newLifecycleStageGate(LifecycleLinkRetiring)
-		link := newLinkWithTracer(context.Background(), newScriptedSocket(), false, gate)
+		link := newLinkWithLifecycleStream(
+			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
+		)
+		gate := newLifecycleStageGate(LifecycleLinkRetiring, link.lifecycleTrace())
 		channel := link.installFixed(relaySessionID(34))
 
 		sendResult := make(chan error, 1)
@@ -611,8 +631,10 @@ func TestRelayRetirementCauseIsMonotonicAcrossLinkAndChannel(t *testing.T) {
 
 func TestRelayCancellationAndAdmissionHaveOneLinearization(t *testing.T) {
 	t.Run("completed cancellation wins before natural retirement admission", func(t *testing.T) {
-		gate := newLifecycleStageGate(LifecycleTerminalReserved)
-		link := newLinkWithTracer(context.Background(), newScriptedSocket(), false, gate)
+		link := newLinkWithLifecycleStream(
+			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
+		)
+		gate := newLifecycleStageGate(LifecycleTerminalReserved, link.lifecycleTrace())
 		channel := link.installFixed(relaySessionID(35))
 		ctx, cancel := context.WithCancel(context.Background())
 
@@ -645,8 +667,10 @@ func TestRelayCancellationAndAdmissionHaveOneLinearization(t *testing.T) {
 	})
 
 	t.Run("irreversible admission keeps later cancellation accepted", func(t *testing.T) {
-		gate := newLifecycleStageGate(LifecycleSendAdmitted)
-		link := newLinkWithTracer(context.Background(), newScriptedSocket(), false, gate)
+		link := newLinkWithLifecycleStream(
+			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
+		)
+		gate := newLifecycleStageGate(LifecycleSendAdmitted, link.lifecycleTrace())
 		channel := link.installFixed(relaySessionID(36))
 		ctx, cancel := context.WithCancel(context.Background())
 
@@ -675,7 +699,7 @@ func TestRelayCancellationAndAdmissionHaveOneLinearization(t *testing.T) {
 		if channel.State() != framechannel.Closed || !errors.Is(channel.Err(), ErrSessionRetired) {
 			t.Fatalf("authoritative retirement state=%d error=%v", channel.State(), channel.Err())
 		}
-		request.receipt <- nil
+		link.resolveRequest(request, nil, true)
 	})
 }
 
@@ -687,7 +711,11 @@ func waitLifecycleTrace(
 	t.Helper()
 	for {
 		select {
-		case event := <-traces:
+		case event, open := <-traces:
+			if !open {
+				t.Fatalf("lifecycle stream closed before stage %q", stage)
+				return LifecycleTrace{}
+			}
 			if event.Stage == stage {
 				return event
 			}
@@ -699,45 +727,27 @@ func waitLifecycleTrace(
 }
 
 type lifecycleStageGate struct {
-	stage   LifecycleStage
-	events  chan LifecycleTrace
-	entered chan LifecycleTrace
-	once    sync.Once
+	stage  LifecycleStage
+	traces <-chan LifecycleTrace
 }
 
-func newLifecycleStageGate(stage LifecycleStage) *lifecycleStageGate {
-	return &lifecycleStageGate{
-		stage: stage, events: make(chan LifecycleTrace, 64),
-		entered: make(chan LifecycleTrace, 1),
-	}
-}
-
-func (gate *lifecycleStageGate) TraceRelayLifecycle(event LifecycleTrace) {
-	gate.events <- event
-	if event.Stage != gate.stage {
-		return
-	}
-	gate.once.Do(func() {
-		gate.entered <- event
-	})
+func newLifecycleStageGate(stage LifecycleStage, traces <-chan LifecycleTrace) *lifecycleStageGate {
+	return &lifecycleStageGate{stage: stage, traces: traces}
 }
 
 func (gate *lifecycleStageGate) wait(t *testing.T) LifecycleTrace {
-	t.Helper()
-	select {
-	case event := <-gate.entered:
-		return event
-	case <-time.After(time.Second):
-		t.Fatalf("timed out waiting for gated lifecycle stage %q", gate.stage)
-		return LifecycleTrace{}
-	}
+	return gate.waitFor(t, gate.stage)
 }
 
 func (gate *lifecycleStageGate) waitFor(t *testing.T, stage LifecycleStage) LifecycleTrace {
 	t.Helper()
 	for {
 		select {
-		case event := <-gate.events:
+		case event, open := <-gate.traces:
+			if !open {
+				t.Fatalf("lifecycle stream closed before stage %q", stage)
+				return LifecycleTrace{}
+			}
 			if event.Stage == stage {
 				return event
 			}

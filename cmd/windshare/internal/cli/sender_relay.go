@@ -36,7 +36,8 @@ type senderRelayEndpoint interface {
 }
 
 type senderRelayObservationCompleter interface {
-	CompleteObservations(context.Context) relayv2.LifecycleObservationCompletion
+	LifecycleTrace() <-chan relayv2.LifecycleTrace
+	CompleteObservations() relayv2.LifecycleObservationCompletion
 }
 
 // senderRelayConnection keeps factories concrete while containing the narrow
@@ -64,15 +65,26 @@ func (connection senderRelayConnection) Close() error {
 	return connection.endpoint.Close()
 }
 
-func (connection senderRelayConnection) CompleteObservations(ctx context.Context) relayv2.LifecycleObservationCompletion {
+func (connection senderRelayConnection) LifecycleTrace() <-chan relayv2.LifecycleTrace {
 	if !connection.valid() {
-		return relayv2.LifecycleObservationCompletion{Drained: true}
+		return nil
+	}
+	observer, ok := connection.endpoint.(senderRelayObservationCompleter)
+	if !ok {
+		return nil
+	}
+	return observer.LifecycleTrace()
+}
+
+func (connection senderRelayConnection) CompleteObservations() relayv2.LifecycleObservationCompletion {
+	if !connection.valid() {
+		return relayv2.LifecycleObservationCompletion{}
 	}
 	completer, ok := connection.endpoint.(senderRelayObservationCompleter)
 	if !ok {
-		return relayv2.LifecycleObservationCompletion{Drained: true}
+		return relayv2.LifecycleObservationCompletion{}
 	}
-	return completer.CompleteObservations(ctx)
+	return completer.CompleteObservations()
 }
 
 type senderRelayDialer interface {
@@ -113,16 +125,17 @@ func (wallSenderRelayRecoveryClock) Wait(ctx context.Context, delay time.Duratio
 }
 
 type senderRelayLifecycleConfig struct {
-	relayURL       string
-	fresh          v2.RegisterInit
-	resumeToken    v2.ResumeToken
-	privateKey     ed25519.PrivateKey
-	initial        senderRelayEndpoint
-	dialer         senderRelayDialer
-	clock          senderRelayRecoveryClock
-	lifecycleTrace relayv2.LifecycleTracer
-	observe        func(senderRelayRecoveryMilestone)
-	observeAttempt func(senderRelayRecoveryAttempt)
+	relayURL                     string
+	fresh                        v2.RegisterInit
+	resumeToken                  v2.ResumeToken
+	privateKey                   ed25519.PrivateKey
+	initial                      senderRelayEndpoint
+	dialer                       senderRelayDialer
+	clock                        senderRelayRecoveryClock
+	lifecycleObservationCapacity int
+	observeConnection            func(senderRelayConnection)
+	observe                      func(senderRelayRecoveryMilestone)
+	observeAttempt               func(senderRelayRecoveryAttempt)
 }
 
 type senderRelayRecoveryMilestone uint8
@@ -279,9 +292,7 @@ func (lifecycle *senderRelayLifecycle) recover(callerContext context.Context) (r
 			Init:             lifecycle.resume,
 			SenderPrivateKey: lifecycle.config.privateKey,
 			ResumeToken:      lifecycle.config.resumeToken,
-			Dial: relayv2.DialOptions{
-				LifecycleTracer: lifecycle.config.lifecycleTrace,
-			},
+			Dial:             relayv2.DialOptions{LifecycleObservationCapacity: lifecycle.config.lifecycleObservationCapacity},
 		})
 		if dialErr == nil {
 			lifecycle.trackObservationConnection(connection)
@@ -336,19 +347,21 @@ func (lifecycle *senderRelayLifecycle) trackObservationConnection(connection sen
 	lifecycle.mu.Lock()
 	lifecycle.observed = append(lifecycle.observed, connection)
 	lifecycle.mu.Unlock()
+	if lifecycle.config.observeConnection != nil {
+		lifecycle.config.observeConnection(connection)
+	}
 }
 
-func (lifecycle *senderRelayLifecycle) CompleteObservations(ctx context.Context) relayv2.LifecycleObservationCompletion {
+func (lifecycle *senderRelayLifecycle) CompleteObservations() relayv2.LifecycleObservationCompletion {
 	if lifecycle == nil {
-		return relayv2.LifecycleObservationCompletion{Drained: true}
+		return relayv2.LifecycleObservationCompletion{}
 	}
 	lifecycle.completionOnce.Do(func() {
 		lifecycle.mu.Lock()
 		connections := append([]senderRelayConnection(nil), lifecycle.observed...)
 		lifecycle.mu.Unlock()
-		lifecycle.completion.Drained = true
 		for _, connection := range connections {
-			mergeRelayCompletion(&lifecycle.completion, connection.CompleteObservations(ctx))
+			mergeRelayCompletion(&lifecycle.completion, connection.CompleteObservations())
 		}
 	})
 	return lifecycle.completion

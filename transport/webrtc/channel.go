@@ -8,6 +8,7 @@ import (
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/observationstream"
 )
 
 const (
@@ -70,7 +71,7 @@ type channelRuntime struct {
 	inboundGate              <-chan struct{}
 	remoteTerminalFinishGate <-chan struct{}
 
-	lifecycleTracer LifecycleTracer
+	lifecycleObservationCapacity int
 }
 
 // Channel is the sole owner of the callbacks installed on its Pion DataChannel.
@@ -90,11 +91,12 @@ type Channel struct {
 	inboundGate              <-chan struct{}
 	remoteTerminalFinishGate <-chan struct{}
 
-	physicalOnce sync.Once
-	physicalDone chan struct{}
-	physicalMu   sync.Mutex
-	physicalErr  error
-	traces       *lifecycleTraceDispatcher
+	physicalOnce    sync.Once
+	physicalDone    chan struct{}
+	physicalMu      sync.Mutex
+	physicalErr     error
+	traces          *lifecycleTraceSource
+	lifecycleTraces observationstream.Consumer[LifecycleTrace]
 }
 
 var _ framechannel.Channel = (*Channel)(nil)
@@ -110,7 +112,7 @@ func NewChannelWithOptions(dc *pion.DataChannel, options ChannelOptions) (*Chann
 		return nil, ErrNilDataChannel
 	}
 	return newChannelWithRuntime(pionDataChannel{DataChannel: dc}, defaultFlowControl, channelRuntime{
-		lifecycleTracer: options.LifecycleTracer,
+		lifecycleObservationCapacity: options.LifecycleObservationCapacity,
 	})
 }
 
@@ -129,9 +131,17 @@ func newChannelWithRuntime(dc dataChannel, flow flowControlProfile, runtime chan
 		return nil, err
 	}
 
-	dispatcher := newLifecycleTraceDispatcher(runtime.lifecycleTracer)
+	if runtime.lifecycleObservationCapacity < 0 {
+		return nil, ErrLifecycleObservationCapacity
+	}
+	traceSource, lifecycleTraces, err := newLifecycleTraceSource(runtime.lifecycleObservationCapacity)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrLifecycleObservationCapacity, err)
+	}
 	lifecycle := newChannelLifecycle()
-	lifecycle.configureTrace(nextLifecycleChannelID.Add(1), dispatcher)
+	if traceSource != nil {
+		lifecycle.configureTrace(nextLifecycleChannelID.Add(1), traceSource)
+	}
 	c := &Channel{
 		dc:                       dc,
 		flow:                     flow,
@@ -144,7 +154,8 @@ func newChannelWithRuntime(dc dataChannel, flow flowControlProfile, runtime chan
 		inboundGate:              runtime.inboundGate,
 		remoteTerminalFinishGate: runtime.remoteTerminalFinishGate,
 		physicalDone:             make(chan struct{}),
-		traces:                   dispatcher,
+		traces:                   traceSource,
+		lifecycleTraces:          lifecycleTraces,
 	}
 	c.sendTurn <- struct{}{}
 
@@ -175,6 +186,15 @@ func (c *Channel) Opened() <-chan struct{} { return c.lifecycle.openedSignal() }
 func (c *Channel) Done() <-chan struct{} { return c.lifecycle.doneSignal() }
 
 func (c *Channel) Recv() <-chan framechannel.Frame { return c.recv }
+
+// LifecycleTrace returns nil when lifecycle observation was not activated.
+// The receive-only capability cannot publish or close producer-owned admission.
+func (c *Channel) LifecycleTrace() <-chan LifecycleTrace {
+	if c == nil {
+		return nil
+	}
+	return c.lifecycleTraces
+}
 
 func (c *Channel) State() framechannel.ChannelState {
 	return c.lifecycle.channelState()
@@ -330,13 +350,14 @@ func (c *Channel) Close() error {
 	return nil
 }
 
-// CompleteObservations closes lifecycle callback admission and returns the
-// exact delivery/loss cut after the channel owner has stopped transport work.
-func (c *Channel) CompleteObservations(ctx context.Context) LifecycleObservationCompletion {
+// CompleteObservations makes an immediate producer admission cut. Call it after
+// channel shutdown when the result must include the final channel transition;
+// it never waits for or makes claims about consumer execution.
+func (c *Channel) CompleteObservations() LifecycleObservationCompletion {
 	if c == nil {
-		return LifecycleObservationCompletion{Drained: true}
+		return LifecycleObservationCompletion{}
 	}
-	return c.traces.complete(ctx)
+	return c.traces.complete()
 }
 
 func validateOutboundFrame(frame framechannel.Frame) error {
@@ -605,9 +626,7 @@ func (c *Channel) finishWithPhysicalClose(reason error, closePhysical bool) bool
 func (c *Channel) runFinalizer() {
 	<-c.lifecycle.stopSignal()
 	<-c.inboundDone
-	c.traces.shutdown()
-	// Done is the producer cut, so callback admission closes before an owner can
-	// await lifecycle completion.
+	// Done exposes only the fully ordered producer cut, never a consumer join.
 	c.lifecycle.complete()
 }
 

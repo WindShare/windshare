@@ -18,12 +18,13 @@ const (
 )
 
 var (
-	ErrClosed          = errors.New("relay v2 transport: connection is closed")
-	ErrProtocol        = errors.New("relay v2 transport: protocol violation")
-	ErrSessionRetired  = errors.New("relay v2 transport: relay session is retired")
-	ErrIngressOverflow = errors.New("relay v2 transport: session receive queue is full")
-	ErrEgressOverflow  = errors.New("relay v2 transport: session send queue is full")
-	ErrFrameBounds     = errors.New("relay v2 transport: frame size is outside bounds")
+	ErrClosed                       = errors.New("relay v2 transport: connection is closed")
+	ErrProtocol                     = errors.New("relay v2 transport: protocol violation")
+	ErrSessionRetired               = errors.New("relay v2 transport: relay session is retired")
+	ErrIngressOverflow              = errors.New("relay v2 transport: session receive queue is full")
+	ErrEgressOverflow               = errors.New("relay v2 transport: session send queue is full")
+	ErrFrameBounds                  = errors.New("relay v2 transport: frame size is outside bounds")
+	ErrLifecycleObservationCapacity = errors.New("relay v2 transport: lifecycle observation capacity must not be negative")
 )
 
 type linkLifecycle uint8
@@ -62,7 +63,7 @@ type retirementTransition struct {
 func (l *link) requestChannelRetirement(
 	channel *Channel,
 	proposed retirementRecord,
-) (<-chan struct{}, retirementTransition) {
+) <-chan struct{} {
 	l.lockChannel(channel)
 	if channel.state == framechannel.Closed {
 		var done <-chan struct{}
@@ -70,7 +71,7 @@ func (l *link) requestChannelRetirement(
 			done = channel.terminal.done
 		}
 		l.unlockChannel(channel)
-		return done, retirementTransition{}
+		return done
 	}
 	record := l.authoritativeRetirementLocked(channel, proposed)
 	if proposed.natural && record.natural && channel.terminal != nil {
@@ -83,8 +84,9 @@ func (l *link) requestChannelRetirement(
 			deferred: true, record: *channel.pendingNatural,
 			consequence: *channel.pendingNatural, terminal: true,
 		}
+		l.traceTransition(channel, transition)
 		l.unlockChannel(channel)
-		return done, transition
+		return done
 	}
 	consequence := proposed
 	if proposed.natural && record.operationID != proposed.operationID {
@@ -96,8 +98,9 @@ func (l *link) requestChannelRetirement(
 		done = channel.terminal.done
 		transition.terminal = true
 	}
+	l.traceTransition(channel, transition)
 	l.unlockChannel(channel)
-	return done, transition
+	return done
 }
 
 func (l *link) authoritativeRetirementLocked(
@@ -139,34 +142,35 @@ func (l *link) closeChannelLocked(
 func (l *link) releaseTerminalLocked(
 	channel *Channel,
 	reservation *terminalReservation,
-) retirementTransition {
+) {
 	if reservation == nil || channel.terminal != reservation {
-		return retirementTransition{}
+		return
 	}
 	channel.terminal = nil
 	close(reservation.done)
 	if channel.state != framechannel.Open || channel.pendingNatural == nil {
-		return retirementTransition{}
+		return
 	}
 	record := *channel.pendingNatural
-	return l.closeChannelLocked(channel, record, record)
+	transition := l.closeChannelLocked(channel, record, record)
+	l.traceTransition(channel, transition)
 }
 
 func (l *link) settleTerminal(
 	channel *Channel,
 	reservation *terminalReservation,
 	sendErr error,
-) retirementTransition {
+) {
 	l.lockChannel(channel)
 	if channel.terminal != reservation {
 		l.unlockChannel(channel)
-		return retirementTransition{}
+		return
 	}
 	channel.terminal = nil
 	close(reservation.done)
 	if channel.state == framechannel.Closed {
 		l.unlockChannel(channel)
-		return retirementTransition{}
+		return
 	}
 	record := retirementRecord{
 		natural: sendErr == nil, source: LifecycleRetirementTerminal,
@@ -178,8 +182,8 @@ func (l *link) settleTerminal(
 		consequence = authoritative
 	}
 	transition := l.closeChannelLocked(channel, authoritative, consequence)
+	l.traceTransition(channel, transition)
 	l.unlockChannel(channel)
-	return transition
 }
 
 type Channel struct {
@@ -219,9 +223,7 @@ func (c *Channel) SendTerminal(ctx context.Context, frame framechannel.Frame) er
 	}
 	err = c.link.enqueueTerminal(ctx, c, request, reservation)
 	if framechannel.SendDispositionOf(err) == framechannel.SendAccepted {
-		transition := c.link.settleTerminal(c, reservation, err)
-		c.link.trace(terminalSettledTrace(c.id, request.operationID, lifecycleCause(err)))
-		c.link.traceTransition(c, transition)
+		c.link.settleTerminal(c, reservation, err)
 	}
 	return err
 }
@@ -252,7 +254,7 @@ func (c *Channel) prepareSend(
 	}
 	return &sendRequest{
 		data: route, receipt: make(chan error, 1),
-		operationID: operationID, terminal: terminal,
+		channelID: c.id, operationID: operationID, terminal: terminal,
 	}, nil
 }
 
@@ -286,8 +288,8 @@ func (c *Channel) reserveTerminal(
 		operationID: request.operationID, done: make(chan struct{}),
 	}
 	c.terminal = reservation
-	c.link.unlockChannel(c)
 	c.link.trace(terminalReservedTrace(c.id, request.operationID))
+	c.link.unlockChannel(c)
 	return reservation, nil
 }
 
@@ -323,8 +325,7 @@ func (c *Channel) Close() error {
 		natural: true, source: LifecycleRetirementLocalClose,
 		operationID: c.link.nextOperationID(),
 	}
-	done, transition := c.link.requestChannelRetirement(c, record)
-	c.link.traceTransition(c, transition)
+	done := c.link.requestChannelRetirement(c, record)
 	if done != nil {
 		<-done
 	}

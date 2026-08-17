@@ -59,11 +59,42 @@ func (renderer *Renderer) Render(event clievent.Event) error {
 	if renderer == nil || event == nil {
 		return clievent.ErrInvalidEvent
 	}
+	if _, terminal := event.(clievent.TerminalEvent); terminal {
+		return clievent.ErrInvalidEvent
+	}
 	renderer.mu.Lock()
 	defer renderer.mu.Unlock()
 
 	capabilities := renderer.capabilities.Snapshot()
 	return event.Accept(eventVisitor{renderer: renderer, capabilities: capabilities})
+}
+
+// RenderTerminal is intentionally separate from Render: a running command can
+// drain ordinary work without accidentally presenting authority before trace
+// sealing has made diagnostic completeness final.
+func (renderer *Renderer) RenderTerminal(event clievent.TerminalEvent) error {
+	if renderer == nil || event == nil {
+		return clievent.ErrInvalidEvent
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	return event.Accept(eventVisitor{
+		renderer:     renderer,
+		capabilities: renderer.capabilities.Snapshot(),
+	})
+}
+
+// RenderTracePath reports only local human state. The generated path is escaped
+// before layout and is never modeled as a trace event, avoiding self-disclosure
+// in the NDJSON artifact.
+func (renderer *Renderer) RenderTracePath(path string) error {
+	if renderer == nil || path == "" {
+		return clievent.ErrInvalidEvent
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	renderer.insert(terminalcanvas.Plain("Trace: " + escapedDisplay(path)))
+	return nil
 }
 
 func (renderer *Renderer) insert(lines ...terminalcanvas.Line) {

@@ -50,7 +50,7 @@ type channelLifecycle struct {
 	state     framechannel.ChannelState
 	terminal  terminalState
 	channelID uint64
-	traces    *lifecycleTraceDispatcher
+	traces    *lifecycleTraceSource
 
 	pendingSends map[*sendAdmission]struct{}
 	nextSendID   uint64
@@ -330,7 +330,14 @@ func (l *channelLifecycle) finish(reason error) bool {
 	return true
 }
 
-func (l *channelLifecycle) complete() { close(l.done) }
+func (l *channelLifecycle) complete() {
+	// Every lifecycle producer uses this mutex, so completing the stream here
+	// makes the terminal transition and the admission cut one ordered decision.
+	l.mu.Lock()
+	l.traces.complete()
+	close(l.done)
+	l.mu.Unlock()
+}
 
 func (l *channelLifecycle) requireSendStateLocked(required terminalState) error {
 	if l.state == framechannel.Connecting {

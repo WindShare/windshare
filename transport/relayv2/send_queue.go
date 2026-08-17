@@ -2,6 +2,7 @@ package relayv2
 
 import (
 	"context"
+	"sync"
 
 	"github.com/windshare/windshare/core/framechannel"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -10,8 +11,12 @@ import (
 type sendRequest struct {
 	data        []byte
 	receipt     chan error
+	channelID   v2.RelaySessionID
 	operationID uint64
 	terminal    bool
+	resultOnce  sync.Once
+
+	observationPending bool
 }
 
 type sendQueue struct{ requests []*sendRequest }
@@ -65,13 +70,12 @@ func (l *link) enqueueWithAuthority(
 		}
 	}
 	if rejection != nil {
-		transition := l.releaseTerminalLocked(channel, reservation)
+		l.releaseTerminalLocked(channel, reservation)
 		l.unlockChannel(channel)
 		l.trace(sendRejectedTrace(
 			channel.id, request.operationID, request.terminal,
 			framechannel.SendDispositionOf(rejection), lifecycleCause(rejection),
 		))
-		l.traceTransition(channel, transition)
 		return rejection
 	}
 	if queue == nil {
@@ -81,37 +85,81 @@ func (l *link) enqueueWithAuthority(
 	}
 	queue.requests = append(queue.requests, request)
 	l.queued++
+	if l.traces != nil {
+		request.observationPending = true
+		l.sendResultPublishers.Add(1)
+		l.sendResultMu.Lock()
+		if l.pendingSendResults == nil {
+			l.pendingSendResults = make(map[*sendRequest]struct{})
+		}
+		l.pendingSendResults[request] = struct{}{}
+		l.sendResultMu.Unlock()
+	}
 	if reservation != nil {
 		reservation.admitted = true
 	}
-	l.unlockChannel(channel)
-
 	if request.terminal {
 		l.trace(terminalSendAdmittedTrace(channel.id, request.operationID))
 	}
+	l.unlockChannel(channel)
 	select {
 	case l.writeWake <- struct{}{}:
 	default:
 	}
 	select {
 	case <-ctx.Done():
-		if transition, rolledBack := l.rollbackQueued(channel, request, reservation); rolledBack {
+		if rolledBack := l.rollbackQueued(channel, request, reservation); rolledBack {
 			rejection := framechannel.RejectSend(ctx.Err())
 			l.trace(sendRolledBackTrace(
 				channel.id, request.operationID,
 				request.terminal, lifecycleCause(ctx.Err()),
 			))
-			l.traceTransition(channel, transition)
+			l.abandonRequest(request)
 			return rejection
 		}
-		return ctx.Err()
+		l.resolveRequest(request, ctx.Err(), false)
+		return <-request.receipt
 	case err := <-request.receipt:
-		if !request.terminal && err != nil {
-			l.trace(acceptedSendFailureTrace(
-				channel.id, request.operationID, lifecycleCause(err),
-			))
-		}
 		return err
+	}
+}
+
+func (l *link) resolveRequest(request *sendRequest, err error, traceOrdinaryFailure bool) {
+	request.resultOnce.Do(func() {
+		if request.terminal {
+			l.trace(terminalSettledTrace(request.channelID, request.operationID, lifecycleCause(err)))
+		} else if traceOrdinaryFailure && err != nil {
+			l.trace(acceptedSendFailureTrace(request.channelID, request.operationID, lifecycleCause(err)))
+		}
+		request.receipt <- err
+		l.finishRequestObservation(request)
+	})
+}
+
+func (l *link) abandonRequest(request *sendRequest) {
+	request.resultOnce.Do(func() {
+		l.finishRequestObservation(request)
+	})
+}
+
+func (l *link) finishRequestObservation(request *sendRequest) {
+	if request.observationPending {
+		l.sendResultMu.Lock()
+		delete(l.pendingSendResults, request)
+		l.sendResultMu.Unlock()
+		l.sendResultPublishers.Done()
+	}
+}
+
+func (l *link) resolvePendingRequests(err error) {
+	l.sendResultMu.Lock()
+	requests := make([]*sendRequest, 0, len(l.pendingSendResults))
+	for request := range l.pendingSendResults {
+		requests = append(requests, request)
+	}
+	l.sendResultMu.Unlock()
+	for _, request := range requests {
+		l.resolveRequest(request, err, true)
 	}
 }
 
@@ -168,12 +216,12 @@ func (l *link) rollbackQueued(
 	channel *Channel,
 	request *sendRequest,
 	reservation *terminalReservation,
-) (retirementTransition, bool) {
+) bool {
 	l.lockChannel(channel)
 	queue := l.queues[channel.id]
 	if queue == nil {
 		l.unlockChannel(channel)
-		return retirementTransition{}, false
+		return false
 	}
 	for index, queued := range queue.requests {
 		if queued != request {
@@ -183,12 +231,12 @@ func (l *link) rollbackQueued(
 		queue.requests[len(queue.requests)-1] = nil
 		queue.requests = queue.requests[:len(queue.requests)-1]
 		l.queued--
-		transition := l.releaseTerminalLocked(channel, reservation)
+		l.releaseTerminalLocked(channel, reservation)
 		l.unlockChannel(channel)
-		return transition, true
+		return true
 	}
 	l.unlockChannel(channel)
-	return retirementTransition{}, false
+	return false
 }
 
 func (l *link) takeRequest() (*sendRequest, bool) {
@@ -220,7 +268,7 @@ func (l *link) drainQueueLocked(id v2.RelaySessionID, failure error) {
 	if queue := l.queues[id]; queue != nil {
 		l.queued -= len(queue.requests)
 		for _, request := range queue.requests {
-			request.receipt <- failure
+			l.resolveRequest(request, failure, true)
 		}
 		delete(l.queues, id)
 	}

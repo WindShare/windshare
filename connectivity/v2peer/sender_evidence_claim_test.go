@@ -14,12 +14,11 @@ import (
 func TestSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *testing.T) {
 	collector := &senderObservationCollector{}
 	now := time.Unix(9_000, 0)
-	factory := mustTestFactory(t, Config{
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
 		Now:                          func() time.Time { return now },
 		RetiredBindingTTL:            time.Minute,
 		MaxActiveAttempts:            1,
 		MaxSessionEvidenceIdentities: 2,
-		Observer:                     SenderAttemptObserverFunc(collector.observe),
 	})
 	session := newTestPeerSession(121)
 	handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
@@ -154,9 +153,7 @@ func TestSenderCanceledBeforeEnqueueStillTerminalizesFirstBinding(t *testing.T) 
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			collector := &senderObservationCollector{}
-			factory := mustTestFactory(t, Config{
-				Observer: SenderAttemptObserverFunc(collector.observe),
-			})
+			factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
 			handler := newDirectTestHandler(t, factory, newTestPeerSession(128))
 			runtimeContext := context.Background()
 			if test.stopRuntime {
@@ -203,9 +200,7 @@ func TestSenderCanceledBeforeEnqueueStillTerminalizesFirstBinding(t *testing.T) 
 
 func TestSenderShutdownTerminalizesQueuedOfferBeforeClaimsRelease(t *testing.T) {
 	collector := &senderObservationCollector{}
-	factory := mustTestFactory(t, Config{
-		Observer: SenderAttemptObserverFunc(collector.observe),
-	})
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
 	handler := newDirectTestHandler(t, factory, newTestPeerSession(131))
 	operation := testOperationID(132)
 	binding := testBinding(133)
@@ -236,9 +231,7 @@ func TestSenderShutdownTerminalizesQueuedOfferBeforeClaimsRelease(t *testing.T) 
 
 func TestSenderShutdownWaitsForAdmittedIngressBeforeReleasingClaims(t *testing.T) {
 	collector := &senderObservationCollector{}
-	factory := mustTestFactory(t, Config{
-		Observer: SenderAttemptObserverFunc(collector.observe),
-	})
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
 	handler := newDirectTestHandler(t, factory, newTestPeerSession(134))
 	operation := testOperationID(135)
 	binding := testBinding(136)
@@ -294,9 +287,7 @@ func TestSenderShutdownWaitsForAdmittedIngressBeforeReleasingClaims(t *testing.T
 
 func TestSenderDistinctBindingRejectionIsNotSuppressedByActiveOperation(t *testing.T) {
 	collector := &senderObservationCollector{}
-	factory := mustTestFactory(t, Config{
-		Observer: SenderAttemptObserverFunc(collector.observe),
-	})
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
 	handler := newDirectTestHandler(t, factory, newTestPeerSession(137))
 	operation := testPeerOperation(testOperationID(138))
 	activeBinding := testBinding(139)

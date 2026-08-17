@@ -18,9 +18,11 @@ import (
 const registrationReadLimit = v2.MaxDescriptorBytes + v2.DescriptorDeliveryHeaderBytes
 
 type DialOptions struct {
-	HTTPClient      *http.Client
-	Header          http.Header
-	LifecycleTracer LifecycleTracer
+	HTTPClient *http.Client
+	Header     http.Header
+	// LifecycleObservationCapacity enables a producer-owned bounded stream.
+	// Zero disables lifecycle observation without allocating producer work.
+	LifecycleObservationCapacity int
 	// SocketDialer lets deterministic tests and embedded callers own the
 	// transport boundary without weakening the protocol handshake.
 	SocketDialer func(context.Context, string, http.Header) (BinarySocket, error)
@@ -68,6 +70,9 @@ type SenderConnection struct {
 }
 
 func DialSender(ctx context.Context, config SenderConfig) (*SenderConnection, error) {
+	if config.Dial.LifecycleObservationCapacity < 0 {
+		return nil, ErrLifecycleObservationCapacity
+	}
 	endpoint, err := v2.NormalizeRelayEndpoint(config.RelayBaseURL)
 	if err != nil {
 		return nil, err
@@ -142,7 +147,9 @@ func DialSender(ctx context.Context, config SenderConfig) (*SenderConnection, er
 		return fail(ErrProtocol)
 	}
 	socket.SetReadLimit(v2.OpaqueRouteHeaderBytes + v2.MaxOpaqueCiphertextBytes)
-	link := newLinkWithTracer(context.Background(), socket, false, config.Dial.LifecycleTracer)
+	link := newLinkWithLifecycleStream(
+		context.Background(), socket, false, config.Dial.LifecycleObservationCapacity,
+	)
 	link.start()
 	return &SenderConnection{endpoint: endpoint, link: link, stats: stats}, nil
 }
@@ -172,13 +179,21 @@ func (connection *SenderConnection) Endpoint() v2.RelayEndpoint           { retu
 func (connection *SenderConnection) Done() <-chan struct{}                { return connection.link.done }
 func (connection *SenderConnection) Err() error                           { return connection.link.Err() }
 
-// CompleteObservations closes lifecycle callback admission and returns the
-// cumulative delivery/loss cut owned by this relay connection.
-func (connection *SenderConnection) CompleteObservations(ctx context.Context) LifecycleObservationCompletion {
+// LifecycleTrace is nil when lifecycle observations were not enabled at dial.
+func (connection *SenderConnection) LifecycleTrace() <-chan LifecycleTrace {
 	if connection == nil || connection.link == nil {
-		return LifecycleObservationCompletion{Drained: true}
+		return nil
 	}
-	return connection.link.completeObservations(ctx)
+	return connection.link.lifecycleTrace()
+}
+
+// CompleteObservations closes lifecycle stream admission and returns the
+// producer-proven enqueue/loss cut owned by this relay connection.
+func (connection *SenderConnection) CompleteObservations() LifecycleObservationCompletion {
+	if connection == nil || connection.link == nil {
+		return LifecycleObservationCompletion{}
+	}
+	return connection.link.completeObservations()
 }
 func (connection *SenderConnection) Close() error {
 	if connection == nil || connection.link == nil {
@@ -202,6 +217,9 @@ type ReceiverConnection struct {
 }
 
 func DialReceiver(ctx context.Context, config ReceiverConfig) (*ReceiverConnection, error) {
+	if config.Dial.LifecycleObservationCapacity < 0 {
+		return nil, ErrLifecycleObservationCapacity
+	}
 	endpoint, err := v2.NormalizeRelayEndpoint(config.RelayBaseURL)
 	if err != nil {
 		return nil, err
@@ -237,7 +255,9 @@ func DialReceiver(ctx context.Context, config ReceiverConfig) (*ReceiverConnecti
 		return fail(ErrProtocol)
 	}
 	socket.SetReadLimit(v2.OpaqueRouteHeaderBytes + v2.MaxOpaqueCiphertextBytes)
-	link := newLinkWithTracer(context.Background(), socket, true, config.Dial.LifecycleTracer)
+	link := newLinkWithLifecycleStream(
+		context.Background(), socket, true, config.Dial.LifecycleObservationCapacity,
+	)
 	channel := link.installFixed(delivery.RelaySessionID)
 	link.start()
 	return &ReceiverConnection{
@@ -253,13 +273,21 @@ func (connection *ReceiverConnection) Endpoint() v2.RelayEndpoint { return conne
 func (connection *ReceiverConnection) Done() <-chan struct{}      { return connection.link.done }
 func (connection *ReceiverConnection) Err() error                 { return connection.link.Err() }
 
-// CompleteObservations closes lifecycle callback admission and returns the
-// cumulative delivery/loss cut owned by this relay connection.
-func (connection *ReceiverConnection) CompleteObservations(ctx context.Context) LifecycleObservationCompletion {
+// LifecycleTrace is nil when lifecycle observations were not enabled at dial.
+func (connection *ReceiverConnection) LifecycleTrace() <-chan LifecycleTrace {
 	if connection == nil || connection.link == nil {
-		return LifecycleObservationCompletion{Drained: true}
+		return nil
 	}
-	return connection.link.completeObservations(ctx)
+	return connection.link.lifecycleTrace()
+}
+
+// CompleteObservations closes lifecycle stream admission and returns the
+// producer-proven enqueue/loss cut owned by this relay connection.
+func (connection *ReceiverConnection) CompleteObservations() LifecycleObservationCompletion {
+	if connection == nil || connection.link == nil {
+		return LifecycleObservationCompletion{}
+	}
+	return connection.link.completeObservations()
 }
 func (connection *ReceiverConnection) Close() error {
 	if connection == nil || connection.link == nil {

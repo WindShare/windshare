@@ -179,12 +179,13 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 		Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader(""),
 		processTrace: privateTrace,
 		openUserTrace: func(
-			path string,
+			target runtrace.Target,
 			command clievent.Command,
 			_ runtrace.Config,
 			_ runtrace.Dependencies,
 		) (userTraceRecorder, error) {
-			if path != userTracePath || !filepath.IsAbs(path) || command != clievent.CommandShare {
+			expected, _ := runtrace.ExactFile(userTracePath)
+			if target != expected || !filepath.IsAbs(userTracePath) || command != clievent.CommandShare {
 				return nil, errors.New("unexpected user trace request")
 			}
 			return userTrace, nil
@@ -305,6 +306,7 @@ func (trace *recordingUserTrace) Record(event clievent.Event) bool {
 func (*recordingUserTrace) ReportUpstreamLoss(uint64, uint64) bool { return true }
 
 func (trace *recordingUserTrace) Health() <-chan clievent.TraceIncomplete { return trace.health }
+func (*recordingUserTrace) Path() string                                  { return "trace.ndjson" }
 
 func (*recordingUserTrace) Close() runtrace.Status { return runtrace.Status{Complete: true} }
 
