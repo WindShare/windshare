@@ -22,8 +22,16 @@ type linuxOutputRegularFile struct {
 	object                  linuxOpenHandleIdentity
 	exactPermissions        uint32
 	requireExactPermissions bool
-	writable                bool
+	access                  linuxOutputFileAccess
 }
+
+type linuxOutputFileAccess uint8
+
+const (
+	linuxOutputFileObserved linuxOutputFileAccess = iota + 1
+	linuxOutputFileRecoveryDurability
+	linuxOutputFileMutable
+)
 
 type linuxRenameDisposition uint8
 
@@ -181,22 +189,22 @@ func (directory *linuxOutputDirectory) createDirectoryExactWithRollback(
 
 func (directory *linuxOutputDirectory) openRegularFile(
 	name string,
-	writable bool,
+	access linuxOutputFileAccess,
 ) (*linuxOutputRegularFile, error) {
-	return directory.openRegularFileWithMode(name, writable, 0, false)
+	return directory.openRegularFileWithMode(name, access, 0, false)
 }
 
 func (directory *linuxOutputDirectory) openRegularFileExact(
 	name string,
-	writable bool,
+	access linuxOutputFileAccess,
 	permissions uint32,
 ) (*linuxOutputRegularFile, error) {
-	return directory.openRegularFileWithMode(name, writable, permissions, true)
+	return directory.openRegularFileWithMode(name, access, permissions, true)
 }
 
 func (directory *linuxOutputDirectory) openRegularFileWithMode(
 	name string,
-	writable bool,
+	access linuxOutputFileAccess,
 	permissions uint32,
 	requireExactMode bool,
 ) (*linuxOutputRegularFile, error) {
@@ -212,11 +220,17 @@ func (directory *linuxOutputDirectory) openRegularFileWithMode(
 			return nil, err
 		}
 	}
-	access := unix.O_RDONLY
-	if writable {
-		access = unix.O_RDWR
+	openMode := unix.O_RDONLY
+	switch access {
+	case linuxOutputFileObserved:
+	case linuxOutputFileRecoveryDurability:
+		openMode = unix.O_WRONLY
+	case linuxOutputFileMutable:
+		openMode = unix.O_RDWR
+	default:
+		return nil, linuxUnsafe(operation, "file access purpose is invalid", nil)
 	}
-	fd, err := directory.openRelative(name, access, 0)
+	fd, err := directory.openRelative(name, openMode, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +262,7 @@ func (directory *linuxOutputDirectory) openRegularFileWithMode(
 		object:                  identity.identity,
 		exactPermissions:        permissions,
 		requireExactPermissions: requireExactMode,
-		writable:                writable,
+		access:                  access,
 	}, nil
 }
 
@@ -297,7 +311,7 @@ func (directory *linuxOutputDirectory) createRegularFileExactWithAuthority(
 		system:      directory.system,
 		fd:          fd,
 		certificate: directory.certificate,
-		writable:    true,
+		access:      linuxOutputFileMutable,
 	}
 	committed := false
 	authorityFixed := false

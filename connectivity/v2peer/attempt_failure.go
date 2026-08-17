@@ -43,10 +43,14 @@ func peerFailure(err error) (uint16, string) {
 	}
 }
 
-func senderOperationAttemptFailure(code uint16, message string) SenderAttemptFailure {
+func senderOperationAttemptFailure(code uint16, message string, cause error) SenderAttemptFailure {
 	operation := &PeerOperationFailure{Code: code, Message: message}
+	typedCode := typedPeerErrorForOperationCode(code)
+	if isSenderSignalingContractFailure(cause) {
+		typedCode = TypedPeerErrorSignaling
+	}
 	return SenderAttemptFailure{
-		Scope: AttemptFailureScopeAttempt, TypedCode: typedPeerErrorForOperationCode(code),
+		Scope: AttemptFailureScopeAttempt, TypedPeerErrorCode: typedCode,
 		Message: message, Operation: operation,
 	}
 }
@@ -59,10 +63,10 @@ func attemptFailure(result, primary error, operationCanceled bool) SenderAttempt
 		return senderRuntimeStoppedFailure()
 	case result != nil:
 		code, message := peerFailure(result)
-		return senderOperationAttemptFailure(code, message)
+		return senderOperationAttemptFailure(code, message, primary)
 	default:
 		return SenderAttemptFailure{
-			Scope: AttemptFailureScopeAttempt, TypedCode: TypedPeerErrorUnexpected,
+			Scope: AttemptFailureScopeAttempt, TypedPeerErrorCode: TypedPeerErrorUnexpected,
 			Message: peerUnexpectedFailureMessage,
 		}
 	}
@@ -70,21 +74,21 @@ func attemptFailure(result, primary error, operationCanceled bool) SenderAttempt
 
 func senderAttemptCancelledFailure() SenderAttemptFailure {
 	return SenderAttemptFailure{
-		Scope: AttemptFailureScopeAttempt, TypedCode: TypedPeerErrorCancelled,
+		Scope: AttemptFailureScopeAttempt, TypedPeerErrorCode: TypedPeerErrorCancelled,
 		Message: peerAttemptCancelledMessage,
 	}
 }
 
 func senderRuntimeStoppedFailure() SenderAttemptFailure {
 	return SenderAttemptFailure{
-		Scope: AttemptFailureScopeSession, TypedCode: TypedPeerErrorStopped,
+		Scope: AttemptFailureScopeSession, TypedPeerErrorCode: TypedPeerErrorStopped,
 		Message: peerRuntimeStoppedMessage,
 	}
 }
 
 func senderEvidenceCapacityFailure() SenderAttemptFailure {
 	return SenderAttemptFailure{
-		Scope: AttemptFailureScopeSession, TypedCode: TypedPeerErrorStopped,
+		Scope: AttemptFailureScopeSession, TypedPeerErrorCode: TypedPeerErrorStopped,
 		Message: peerEvidenceCapacityFailureMessage,
 	}
 }
@@ -138,7 +142,7 @@ func (handler *senderHandler) rejectOperation(
 	if binding != nil {
 		claim = handler.claimRejectedOffer(operation, *binding)
 		if claim.acquired {
-			failure := senderOperationAttemptFailure(rejection.code, rejection.message)
+			failure := senderOperationAttemptFailure(rejection.code, rejection.message, rejection)
 			if claim.sessionTerminal {
 				failure = senderEvidenceCapacityFailure()
 			}
@@ -146,7 +150,7 @@ func (handler *senderHandler) rejectOperation(
 		}
 	}
 	if claim.sessionTerminal || handler.evidenceSessionTerminal() {
-		handler.factory.reportError(errors.Join(rejection, ErrEvidenceIdentityCapacity))
+		handler.factory.reportDiagnostic(PeerDiagnosticSenderAttempt, PeerDiagnosticEvidenceCapacity)
 		return ErrEvidenceIdentityCapacity
 	}
 	failureContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), failureDeliveryTimeout)
@@ -154,8 +158,15 @@ func (handler *senderHandler) rejectOperation(
 		failureContext, operation.id, rejection.code, rejection.message,
 	)
 	cancel()
-	handler.factory.reportError(errors.Join(rejection, err))
+	if err != nil {
+		handler.factory.reportDiagnostic(PeerDiagnosticSenderAttempt, PeerDiagnosticCleanupResidue)
+	}
 	return nil
+}
+
+func isSenderSignalingContractFailure(err error) bool {
+	return errors.Is(err, ErrProtocol) || errors.Is(err, v2signal.ErrInvalidSignal) ||
+		errors.Is(err, v2signal.ErrNonCanonicalSignal) || errors.Is(err, v2signal.ErrSignalBinding)
 }
 
 func (handler *senderHandler) terminalizeUnstartedOffer(
@@ -174,6 +185,7 @@ func (handler *senderHandler) terminalizeUnstartedOffer(
 		handler.emitRejectedOfferTerminal(*binding, failure)
 	}
 	if claim.sessionTerminal {
+		handler.factory.reportDiagnostic(PeerDiagnosticSenderAttempt, PeerDiagnosticEvidenceCapacity)
 		return ErrEvidenceIdentityCapacity
 	}
 	return nil

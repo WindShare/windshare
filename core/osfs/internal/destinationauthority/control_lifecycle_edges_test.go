@@ -420,7 +420,7 @@ func TestControlLifecycleRecycleHelpersRetainUnprovenState(t *testing.T) {
 		lease := &controlUseLease{participantName: "gone", participant: &lifecycleFaultLock{}}
 		participants := &lifecycleFaultDirectory{
 			Directory: newDestinationDirectoryNode(newDestinationPlatform()),
-			removeFile: func(string, outputcap.File) error {
+			removeFile: func(string, outputcap.FileIdentity) error {
 				return fs.ErrNotExist
 			},
 		}
@@ -476,7 +476,7 @@ func TestControlLifecycleRecycleHelpersRetainUnprovenState(t *testing.T) {
 		}
 		participants := &lifecycleFaultDirectory{
 			Directory: base,
-			removeFile: func(string, outputcap.File) error {
+			removeFile: func(string, outputcap.FileIdentity) error {
 				return errDestinationFake
 			},
 		}
@@ -560,7 +560,7 @@ type lifecycleFaultDirectory struct {
 	acquireLock func(string, bool) (outputcap.Lock, bool, error)
 	names       func(int) ([]string, error)
 	openEntry   func(string) (outputcap.CurrentEntryReference, error)
-	removeFile  func(string, outputcap.File) error
+	removeFile  func(string, outputcap.FileIdentity) error
 	sync        func() error
 }
 
@@ -585,7 +585,7 @@ func (directory *lifecycleFaultDirectory) OpenEntry(name string) (outputcap.Curr
 	return directory.Directory.OpenEntry(name)
 }
 
-func (directory *lifecycleFaultDirectory) RemoveFile(name string, expected outputcap.File) error {
+func (directory *lifecycleFaultDirectory) RemoveFile(name string, expected outputcap.FileIdentity) error {
 	if directory.removeFile != nil {
 		return directory.removeFile(name, expected)
 	}
@@ -604,7 +604,7 @@ type lifecycleFaultLock struct {
 	closes int
 }
 
-func (lock *lifecycleFaultLock) File() outputcap.File { return nil }
+func (lock *lifecycleFaultLock) File() outputcap.MutableFile { return nil }
 func (lock *lifecycleFaultLock) Close() error {
 	lock.closes++
 	return nil

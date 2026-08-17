@@ -28,7 +28,7 @@ func TestBlockBrokerHonorsExactWindowAcrossLaneWidths(t *testing.T) {
 			defer lanes.Close()
 			probe := newExactWindowProbe(recordSet)
 			for index := range laneCount {
-				if err := lanes.Add(LaneIdentity{ID: uint32(index + 1)}, probe); err != nil {
+				if err := lanes.Add(LaneIdentity{ID: uint32(index + 1)}, LaneRouteRelay, probe); err != nil {
 					t.Fatal(err)
 				}
 			}

@@ -91,7 +91,7 @@ func TestCleanerRejectsUnknownAndConflictingLegacyPathsWithoutMutation(t *testin
 			mutate: func(t *testing.T, platform outputcap.Platform, fixture legacyFixture) string {
 				session := openLegacySession(t, platform, fixture)
 				defer session.Close()
-				lock, err := session.OpenFile(legacyresume.SessionLock, true, false)
+				lock, err := session.OpenObservedFile(legacyresume.SessionLock, true)
 				if err != nil {
 					t.Fatal(err)
 				}

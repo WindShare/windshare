@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -82,7 +83,7 @@ func TestGetDefaultsToCurrentDirectoryAndBindsItBeforeSessionWork(t *testing.T) 
 	}
 }
 
-func TestGetTraceOpenFailurePrecedesOutputMutation(t *testing.T) {
+func TestGetExistingTracePrecedesOutputMutation(t *testing.T) {
 	capability := newGetOutputPreparationCapability(t, "wss://relay.example")
 	encoded, err := capability.URL("https://app.example")
 	if err != nil {
@@ -98,7 +99,7 @@ func TestGetTraceOpenFailurePrecedesOutputMutation(t *testing.T) {
 			runtrace.Config,
 			runtrace.Dependencies,
 		) (userTraceRecorder, error) {
-			return nil, errors.New("injected trace open failure")
+			return nil, runtrace.ErrTraceExists
 		},
 		getOutputFactory: getOutputAuthorityFactoryFunc(func(getOutputAuthorityConfig) (getOutputAuthority, error) {
 			outputCalls++
@@ -111,7 +112,27 @@ func TestGetTraceOpenFailurePrecedesOutputMutation(t *testing.T) {
 	if outputCalls != 0 {
 		t.Fatalf("trace open failure allowed %d output mutation(s)", outputCalls)
 	}
-	if !strings.Contains(stderr.String(), "trace") || strings.Contains(stderr.String(), "injected") {
+	if !strings.Contains(stderr.String(), "already exists") {
+		t.Fatalf("trace open diagnostic=%q", stderr.String())
+	}
+}
+
+func TestGetNativeExistingTraceReturnsTypedFailureWithoutPanic(t *testing.T) {
+	capability := newGetOutputPreparationCapability(t, "wss://relay.example")
+	encoded, err := capability.URL("https://app.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracePath := filepath.Join(t.TempDir(), "existing.ndjson")
+	if err := os.WriteFile(tracePath, []byte("retained\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	app := &App{Stderr: &stderr}
+	if code := app.Run(t.Context(), []string{"get", encoded, "--trace", tracePath}); code != ExitFailure {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "already exists") {
 		t.Fatalf("trace open diagnostic=%q", stderr.String())
 	}
 }

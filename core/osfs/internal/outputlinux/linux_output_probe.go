@@ -211,7 +211,7 @@ func (probe *linuxOutputProbe) probeSafePublish() error {
 	// The source handle is sufficient to clean a successfully linked entry if
 	// reopening the new name is the operation that fails.
 	probe.anchor = stage
-	anchor, err := probe.directory.openRegularFile("anchor", false)
+	anchor, err := probe.directory.openRegularFile("anchor", linuxOutputFileObserved)
 	if err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func (probe *linuxOutputProbe) probeSafePublish() error {
 	}
 	probe.publicationPresent = true
 	probe.publication = anchor
-	publication, err := probe.directory.openRegularFile("publication", false)
+	publication, err := probe.directory.openRegularFile("publication", linuxOutputFileObserved)
 	if err != nil {
 		return err
 	}
@@ -262,7 +262,7 @@ func (probe *linuxOutputProbe) probeRangeRecovery() error {
 	probe.temporaryRecordPresent = false
 	probe.oldRecordPresent = false
 	probe.newRecordPresent = true
-	reopened, err := probe.directory.openRegularFileExact("record", false, linuxOutputStateFileMode)
+	reopened, err := probe.directory.openRegularFileExact("record", linuxOutputFileObserved, linuxOutputStateFileMode)
 	if err != nil {
 		return err
 	}

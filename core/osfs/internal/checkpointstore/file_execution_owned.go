@@ -17,9 +17,50 @@ import (
 
 type nativeOwnedFile struct {
 	object checkpointmodel.ObjectID
-	stage  outputcap.File
-	anchor outputcap.File
+	stage  outputcap.MutableFile
+	anchor outputcap.ObservedFile
 	closed bool
+}
+
+// observedOwnedFile satisfies the file-execution transaction port for terminal
+// checkpoints without widening its native handles. Mutation methods fail closed;
+// only active/paused/publishing records request nativeOwnedFile instead.
+type observedOwnedFile struct {
+	object checkpointmodel.ObjectID
+	files  observedOwnedFiles
+	closed bool
+}
+
+func (file *observedOwnedFile) ObjectID() checkpointmodel.ObjectID { return file.object }
+func (*observedOwnedFile) WriteAt([]byte, int64) (int, error) {
+	return 0, fileOutputBoundaryErrorWithoutContext(transferfault.ScopeFileLocal, outputcap.ErrUnsafeNamespace)
+}
+func (*observedOwnedFile) Sync() error {
+	return fileOutputBoundaryErrorWithoutContext(transferfault.ScopeFileLocal, outputcap.ErrUnsafeNamespace)
+}
+func (*observedOwnedFile) SetModifiedTime(catalog.ModifiedTime) error {
+	return fileOutputBoundaryErrorWithoutContext(transferfault.ScopeFileLocal, outputcap.ErrUnsafeNamespace)
+}
+func (file *observedOwnedFile) MetadataMatches(
+	exactSize uint64,
+	modifiedTime catalog.ModifiedTime,
+) (bool, error) {
+	if file == nil || file.closed || file.files.stage == nil {
+		return false, fileOutputBoundaryErrorWithoutContext(
+			transferfault.ScopeFileLocal, outputcap.ErrUnsafeNamespace,
+		)
+	}
+	matches, err := file.files.stage.MetadataMatches(exactSize, modifiedTime)
+	return matches, fileOutputBoundaryErrorWithoutContext(transferfault.ScopeFileLocal, err)
+}
+func (file *observedOwnedFile) Close() error {
+	if file == nil || file.closed {
+		return nil
+	}
+	file.closed = true
+	err := file.files.close()
+	file.files = observedOwnedFiles{}
+	return fileOutputBoundaryErrorWithoutContext(transferfault.ScopeFileLocal, err)
 }
 
 type exactParentStageAuthority interface {
@@ -134,8 +175,8 @@ func (store *FileExecutionStore) ObserveOwnedObject(
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	file, observation, err := store.openOwnedLocked(object, exactSize, true, false)
-	return observation, errors.Join(err, closeOwnedFile(file))
+	files, observation, err := store.openObservedOwnedLocked(object, exactSize, true)
+	return observation, errors.Join(err, files.close())
 }
 
 func (store *FileExecutionStore) CreateOwnedFile(
@@ -156,10 +197,8 @@ func (store *FileExecutionStore) CreateOwnedFile(
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	existing, observation, observeErr := store.openOwnedLocked(object, exactSize, true, false)
-	if existing != nil {
-		observeErr = errors.Join(observeErr, existing.Close())
-	}
+	existing, observation, observeErr := store.openObservedOwnedLocked(object, exactSize, true)
+	observeErr = errors.Join(observeErr, existing.close())
 	if observeErr != nil {
 		return nil, observation, observeErr
 	}
@@ -243,7 +282,7 @@ func (store *FileExecutionStore) createOwnedStage(
 	stageDirectory outputcap.Directory,
 	stageName string,
 	exactSize uint64,
-) (outputcap.File, bool, error) {
+) (outputcap.MutableFile, bool, error) {
 	if !store.profile.Valid() {
 		// Synthetic stores retain the private constructor for isolated unit tests;
 		// production composition always supplies a certified ordinary profile.
@@ -264,7 +303,7 @@ func (store *FileExecutionStore) createOwnedStage(
 	if err != nil {
 		return nil, false, err
 	}
-	stage, err := stageDirectory.OpenFile(stageName, false, true)
+	stage, err := stageDirectory.OpenMutableFile(stageName, false)
 	return stage, stage != nil, err
 }
 
@@ -274,7 +313,7 @@ func (store *FileExecutionStore) reconcileOwnedCreateLocked(
 	created bool,
 	operationErr error,
 ) (fileexecution.OwnedFile, fileexecution.OwnedObservation, error) {
-	file, observation, observeErr := store.openOwnedLocked(object, exactSize, true, true)
+	file, observation, observeErr := store.openMutableOwnedLocked(object, exactSize, true)
 	if !created && observation.Condition() != fileexecution.OwnedAbsent {
 		if file != nil {
 			observeErr = errors.Join(observeErr, file.Close())
@@ -302,7 +341,14 @@ func (store *FileExecutionStore) OpenOwnedFile(
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	return store.openOwnedLocked(object, exactSize, true, writable)
+	if writable {
+		return store.openMutableOwnedLocked(object, exactSize, true)
+	}
+	files, observation, err := store.openObservedOwnedLocked(object, exactSize, true)
+	if err != nil || observation.Condition() != fileexecution.OwnedReady {
+		return nil, observation, errors.Join(err, files.close())
+	}
+	return &observedOwnedFile{object: object, files: files}, observation, nil
 }
 
 type privateEntryState uint8
@@ -315,38 +361,117 @@ const (
 
 type privateFileObservation struct {
 	directory outputcap.Directory
-	file      outputcap.File
+	file      outputcap.FileIdentity
 	state     privateEntryState
+	err       error
 }
 
-func (store *FileExecutionStore) openOwnedLocked(
+type observedOwnedFiles struct {
+	stage  outputcap.ObservedFile
+	anchor outputcap.ObservedFile
+}
+
+func (files observedOwnedFiles) close() error {
+	return errors.Join(closeFile(files.stage), closeFile(files.anchor))
+}
+
+func (store *FileExecutionStore) openObservedOwnedLocked(
 	object checkpointmodel.ObjectID,
 	exactSize uint64,
 	validateSize bool,
-	writable bool,
-) (fileexecution.OwnedFile, fileexecution.OwnedObservation, error) {
+) (observedOwnedFiles, fileexecution.OwnedObservation, error) {
 	privateProfile := !store.profile.Valid()
-	stage := observeOwnedDataFile(store.repository.stages, object, ownedStageSuffix, privateProfile, writable)
-	anchor := observeOwnedDataFile(store.repository.anchors, object, ownedAnchorSuffix, privateProfile, false)
+	stage := observeOwnedDataFile(store.repository.stages, object, ownedStageSuffix, privateProfile)
+	anchor := observeOwnedDataFile(store.repository.anchors, object, ownedAnchorSuffix, privateProfile)
 	condition, comparisonErr := classifyOwnedObservation(stage, anchor, exactSize, validateSize)
 	observation, observationErr := fileexecution.NewOwnedObservation(object, condition)
 	closeDirectoriesErr := errors.Join(closeDirectory(stage.directory), closeDirectory(anchor.directory))
-	if condition != fileexecution.OwnedReady {
+	files := observedOwnedFiles{}
+	if stage.file != nil {
+		files.stage, _ = stage.file.(outputcap.ObservedFile)
+	}
+	if anchor.file != nil {
+		files.anchor, _ = anchor.file.(outputcap.ObservedFile)
+	}
+	if condition != fileexecution.OwnedReady || files.stage == nil || files.anchor == nil {
+		return observedOwnedFiles{}, observation, errors.Join(
+			stageObservationError(stage), anchorObservationError(anchor), comparisonErr, observationErr,
+			closeFile(stage.file), closeFile(anchor.file), closeDirectoriesErr,
+		)
+	}
+	return files, observation, errors.Join(comparisonErr, observationErr, closeDirectoriesErr)
+}
+
+func (store *FileExecutionStore) openMutableOwnedLocked(
+	object checkpointmodel.ObjectID,
+	exactSize uint64,
+	validateSize bool,
+) (fileexecution.OwnedFile, fileexecution.OwnedObservation, error) {
+	privateProfile := !store.profile.Valid()
+	stage := openMutableOwnedDataFile(store.repository.stages, object, ownedStageSuffix, privateProfile)
+	anchor := observeOwnedDataFile(store.repository.anchors, object, ownedAnchorSuffix, privateProfile)
+	condition, comparisonErr := classifyOwnedObservation(stage, anchor, exactSize, validateSize)
+	observation, observationErr := fileexecution.NewOwnedObservation(object, condition)
+	closeDirectoriesErr := errors.Join(closeDirectory(stage.directory), closeDirectory(anchor.directory))
+	mutable, mutableOK := stage.file.(outputcap.MutableFile)
+	observedAnchor, anchorOK := anchor.file.(outputcap.ObservedFile)
+	if condition != fileexecution.OwnedReady || !mutableOK || !anchorOK {
 		return nil, observation, errors.Join(
 			stageObservationError(stage), anchorObservationError(anchor), comparisonErr, observationErr,
 			closeFile(stage.file), closeFile(anchor.file), closeDirectoriesErr,
 		)
 	}
-	return &nativeOwnedFile{object: object, stage: stage.file, anchor: anchor.file}, observation,
+	return &nativeOwnedFile{object: object, stage: mutable, anchor: observedAnchor}, observation,
 		errors.Join(comparisonErr, observationErr, closeDirectoriesErr)
 }
+
+type ownedFileOpener func(outputcap.Directory, string, bool) (outputcap.FileIdentity, error)
 
 func observeOwnedDataFile(
 	root outputcap.Directory,
 	object checkpointmodel.ObjectID,
 	suffix string,
 	privateProfile bool,
-	writable bool,
+) privateFileObservation {
+	return openOwnedDataFile(root, object, suffix, privateProfile, func(
+		directory outputcap.Directory, name string, private bool,
+	) (outputcap.FileIdentity, error) {
+		return directory.OpenObservedFile(name, private)
+	})
+}
+
+func openMutableOwnedDataFile(
+	root outputcap.Directory,
+	object checkpointmodel.ObjectID,
+	suffix string,
+	privateProfile bool,
+) privateFileObservation {
+	return openOwnedDataFile(root, object, suffix, privateProfile, func(
+		directory outputcap.Directory, name string, private bool,
+	) (outputcap.FileIdentity, error) {
+		return directory.OpenMutableFile(name, private)
+	})
+}
+
+func openRecoveryOwnedDataFile(
+	root outputcap.Directory,
+	object checkpointmodel.ObjectID,
+	suffix string,
+	privateProfile bool,
+) privateFileObservation {
+	return openOwnedDataFile(root, object, suffix, privateProfile, func(
+		directory outputcap.Directory, name string, private bool,
+	) (outputcap.FileIdentity, error) {
+		return directory.OpenRecoveryDurabilityFile(name, private)
+	})
+}
+
+func openOwnedDataFile(
+	root outputcap.Directory,
+	object checkpointmodel.ObjectID,
+	suffix string,
+	privateProfile bool,
+	opener ownedFileOpener,
 ) privateFileObservation {
 	shard, name := ownedObjectLocation(object, suffix)
 	directory, err := OpenShard(root, shard, false)
@@ -354,11 +479,11 @@ func observeOwnedDataFile(
 		return privateFileObservation{state: privateEntryAbsent}
 	}
 	if err != nil || directory == nil {
-		return privateFileObservation{directory: directory, state: privateEntryUnsafe}
+		return privateFileObservation{directory: directory, state: privateEntryUnsafe, err: err}
 	}
 	kind, exact, err := directory.ClassifyExactEntry(name)
 	if err != nil {
-		return privateFileObservation{directory: directory, state: privateEntryUnsafe}
+		return privateFileObservation{directory: directory, state: privateEntryUnsafe, err: err}
 	}
 	if kind == outputcap.EntryAbsent {
 		return privateFileObservation{directory: directory, state: privateEntryAbsent}
@@ -366,23 +491,23 @@ func observeOwnedDataFile(
 	if !exact || kind != outputcap.EntryRegularFile {
 		return privateFileObservation{directory: directory, state: privateEntryUnsafe}
 	}
-	file, err := directory.OpenFile(name, privateProfile, writable)
+	file, err := opener(directory, name, privateProfile)
 	if err != nil || file == nil {
-		return privateFileObservation{directory: directory, file: file, state: privateEntryUnsafe}
+		return privateFileObservation{directory: directory, file: file, state: privateEntryUnsafe, err: err}
 	}
 	return privateFileObservation{directory: directory, file: file, state: privateEntryReady}
 }
 
 func stageObservationError(observation privateFileObservation) error {
 	if observation.state == privateEntryUnsafe {
-		return outputcap.ErrUnsafeNamespace
+		return errors.Join(outputcap.ErrUnsafeNamespace, observation.err)
 	}
 	return nil
 }
 
 func anchorObservationError(observation privateFileObservation) error {
 	if observation.state == privateEntryUnsafe {
-		return outputcap.ErrUnsafeNamespace
+		return errors.Join(outputcap.ErrUnsafeNamespace, observation.err)
 	}
 	return nil
 }
@@ -427,7 +552,7 @@ func classifyOwnedObservation(
 	return fileexecution.OwnedReady, nil
 }
 
-func sameExactOwnedFiles(stage, anchor outputcap.File, exactSize uint64) (bool, error) {
+func sameExactOwnedFiles(stage, anchor outputcap.FileIdentity, exactSize uint64) (bool, error) {
 	if stage == nil || anchor == nil {
 		return false, outputcap.ErrUnsafeNamespace
 	}
@@ -438,185 +563,4 @@ func sameExactOwnedFiles(stage, anchor outputcap.File, exactSize uint64) (bool, 
 		return false, errors.Join(sameErr, stageErr, anchorErr)
 	}
 	return same && stageSize == exactSize && anchorSize == exactSize, nil
-}
-
-func (store *FileExecutionStore) ApplyRetirement(
-	ctx context.Context,
-	object checkpointmodel.ObjectID,
-	step fileexecution.RetirementStep,
-) (observation fileexecution.OwnedObservation, resultErr error) {
-	defer func() {
-		resultErr = fileOutputBoundaryError(ctx, transferfault.ScopeFileLocal, resultErr)
-	}()
-	if store == nil || ctx == nil || object.IsZero() ||
-		step < fileexecution.RetirementRemoveStage || step > fileexecution.RetirementSyncAnchorNamespace {
-		return fileexecution.OwnedObservation{}, transfer.ErrInvalidOutputBinding
-	}
-	if err := ctx.Err(); err != nil {
-		return fileexecution.OwnedObservation{}, err
-	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	return store.applyRetirementLocked(object, step)
-}
-
-func (store *FileExecutionStore) applyRetirementLocked(
-	object checkpointmodel.ObjectID,
-	step fileexecution.RetirementStep,
-) (fileexecution.OwnedObservation, error) {
-	var operationErr error
-	switch step {
-	case fileexecution.RetirementRemoveStage:
-		operationErr = removeOwnedEntry(store.repository.stages, object, ownedStageSuffix, !store.profile.Valid())
-	case fileexecution.RetirementSyncStageNamespace:
-		operationErr = syncOwnedEntryNamespace(store.repository.stages, object)
-	case fileexecution.RetirementRemoveAnchor:
-		operationErr = removeOwnedEntry(store.repository.anchors, object, ownedAnchorSuffix, !store.profile.Valid())
-	case fileexecution.RetirementSyncAnchorNamespace:
-		operationErr = syncOwnedEntryNamespace(store.repository.anchors, object)
-	default:
-		return fileexecution.OwnedObservation{}, transfer.ErrInvalidOutputBinding
-	}
-	file, observation, observeErr := store.openOwnedLocked(object, 0, false, false)
-	return observation, errors.Join(operationErr, observeErr, closeOwnedFile(file))
-}
-
-func (store *FileExecutionStore) candidateDurable(record checkpointmodel.Record) (bool, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	file, observation, err := store.openOwnedLocked(
-		record.OwnedObjectID(), record.ExactSize(), true, false,
-	)
-	if observation.Condition() != fileexecution.OwnedReady {
-		return false, errors.Join(err, closeOwnedFile(file))
-	}
-	if err != nil {
-		return false, errors.Join(err, closeOwnedFile(file))
-	}
-	syncErr := file.Sync()
-	if syncErr == nil {
-		syncErr = errors.Join(
-			syncOwnedEntryNamespace(store.repository.stages, record.OwnedObjectID()),
-			syncOwnedEntryNamespace(store.repository.anchors, record.OwnedObjectID()),
-		)
-	}
-	return syncErr == nil, errors.Join(syncErr, closeOwnedFile(file))
-}
-
-// FinalMatchesOwned compares a public file against the exact protected-name anchor.
-// Published checkpoints intentionally retain that same-object anchor after retiring the
-// writable stage, so identity remains provable across process restarts.
-func (store *FileExecutionStore) FinalMatchesOwned(
-	ctx context.Context,
-	object checkpointmodel.ObjectID,
-	exactSize uint64,
-	final outputcap.File,
-) (matches bool, resultErr error) {
-	defer func() {
-		resultErr = fileOutputBoundaryError(ctx, transferfault.ScopeFileLocal, resultErr)
-	}()
-	if store == nil || ctx == nil || object.IsZero() || final == nil {
-		return false, transfer.ErrInvalidOutputBinding
-	}
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	anchor := observeOwnedDataFile(
-		store.repository.anchors, object, ownedAnchorSuffix, !store.profile.Valid(), false,
-	)
-	if anchor.state != privateEntryReady || anchor.file == nil {
-		return false, errors.Join(
-			anchorObservationError(anchor), closeFile(anchor.file), closeDirectory(anchor.directory),
-		)
-	}
-	same, compareErr := sameExactOwnedFiles(final, anchor.file, exactSize)
-	return same, errors.Join(compareErr, anchor.file.Close(), anchor.directory.Close())
-}
-
-// PublishOwnedNoReplace links the protected-name ordinary-profile anchor into
-// one already-guarded public parent. The caller still performs post-link path
-// and metadata reconciliation.
-func (store *FileExecutionStore) PublishOwnedNoReplace(
-	ctx context.Context,
-	object checkpointmodel.ObjectID,
-	exactSize uint64,
-	parent outputcap.Directory,
-	name string,
-) (linked outputcap.File, resultErr error) {
-	defer func() {
-		resultErr = fileOutputBoundaryError(ctx, transferfault.ScopeFileLocal, resultErr)
-	}()
-	if store == nil || ctx == nil || object.IsZero() || parent == nil || name == "" {
-		return nil, transfer.ErrInvalidOutputBinding
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	file, observation, err := store.openOwnedLocked(object, exactSize, true, false)
-	owned, ok := file.(*nativeOwnedFile)
-	if err != nil || observation.Condition() != fileexecution.OwnedReady || !ok || owned.anchor == nil {
-		return nil, errors.Join(err, closeOwnedFile(file), outputcap.ErrUnsafeNamespace)
-	}
-	linked, linkErr := parent.LinkFileNoReplace(owned.anchor, name)
-	return linked, errors.Join(linkErr, owned.Close())
-}
-
-func removeOwnedEntry(
-	root outputcap.Directory,
-	object checkpointmodel.ObjectID,
-	suffix string,
-	privateProfile bool,
-) error {
-	shard, name := ownedObjectLocation(object, suffix)
-	directory, err := OpenShard(root, shard, false)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	kind, exact, classifyErr := directory.ClassifyExactEntry(name)
-	if classifyErr != nil || !exact {
-		return errors.Join(classifyErr, outputcap.ErrUnsafeNamespace, directory.Close())
-	}
-	if kind == outputcap.EntryAbsent {
-		return directory.Close()
-	}
-	if kind != outputcap.EntryRegularFile {
-		return errors.Join(outputcap.ErrUnsafeNamespace, directory.Close())
-	}
-	file, openErr := directory.OpenFile(name, privateProfile, false)
-	if openErr != nil || file == nil {
-		return errors.Join(openErr, outputcap.ErrUnsafeNamespace, closeFile(file), directory.Close())
-	}
-	removeErr := directory.RemoveFile(name, file)
-	return errors.Join(removeErr, file.Close(), directory.Close())
-}
-
-func syncOwnedEntryNamespace(root outputcap.Directory, object checkpointmodel.ObjectID) error {
-	shard, _ := ownedObjectLocation(object, ownedStageSuffix)
-	directory, err := OpenShard(root, shard, false)
-	if errors.Is(err, fs.ErrNotExist) {
-		return root.Sync()
-	}
-	if err != nil {
-		return err
-	}
-	return errors.Join(directory.Sync(), directory.Close())
-}
-
-func ownedObjectLocation(object checkpointmodel.ObjectID, suffix string) (string, string) {
-	encoded := hex.EncodeToString(object.Bytes())
-	return encoded[:recordShardLength], encoded + suffix
-}
-
-func closeOwnedFile(file fileexecution.OwnedFile) error {
-	if file == nil {
-		return nil
-	}
-	return file.Close()
 }

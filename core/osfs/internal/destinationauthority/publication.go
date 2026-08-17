@@ -19,7 +19,7 @@ type LiveCleanupStageParent interface {
 // delegated to a separately retained directory authority; neither path text nor
 // DestinationAuthorityID can substitute for that handle.
 func (authority *BoundDestination) PublishFileNoReplace(
-	source outputcap.File,
+	source outputcap.FileIdentity,
 	name string,
 ) (outputcap.PublishNoReplaceOutcome, error) {
 	if source == nil || name == "" {
@@ -53,7 +53,7 @@ func (authority *BoundDestination) CreateLiveCleanupStage(
 	ctx context.Context,
 	parent LiveCleanupStageParent,
 	ticket checkpointmodel.LiveCleanupTicket,
-) (outputcap.File, checkpointmodel.LiveCleanupTicket, error) {
+) (outputcap.MutableFile, checkpointmodel.LiveCleanupTicket, error) {
 	if authority == nil || ctx == nil || parent == nil || !ticket.Valid() ||
 		ticket.State() != checkpointmodel.LiveCleanupTicketCommitted {
 		return nil, checkpointmodel.LiveCleanupTicket{}, ErrInvalidConfiguration
@@ -69,7 +69,7 @@ func (authority *BoundDestination) CreateLiveCleanupStage(
 	if ticket.Profile() != authority.profile {
 		return nil, checkpointmodel.LiveCleanupTicket{}, ErrInvalidConfiguration
 	}
-	var stage outputcap.File
+	var stage outputcap.MutableFile
 	var createdTicket checkpointmodel.LiveCleanupTicket
 	if err := authority.journal.journal.Create(ticket); err != nil {
 		return nil, checkpointmodel.LiveCleanupTicket{}, err
@@ -87,7 +87,7 @@ func (authority *BoundDestination) CreateLiveCleanupStage(
 	if err != nil {
 		return nil, checkpointmodel.LiveCleanupTicket{}, err
 	}
-	opened, err := authority.proof.OpenFile(ticket.StageName(), false, true)
+	opened, err := authority.proof.OpenMutableFile(ticket.StageName(), false)
 	if err != nil || opened == nil {
 		return nil, checkpointmodel.LiveCleanupTicket{}, errors.Join(
 			ErrReservationIndeterminate, err, closeFile(opened),
@@ -123,7 +123,7 @@ func (authority *BoundDestination) CreateLiveCleanupStage(
 // as reconciliation evidence.
 func (authority *BoundDestination) RemoveLiveCleanupStage(
 	ticket checkpointmodel.LiveCleanupTicket,
-	expected outputcap.File,
+	expected outputcap.FileIdentity,
 ) error {
 	if authority == nil || expected == nil || !ticket.Valid() ||
 		ticket.State() != checkpointmodel.LiveCleanupStageCreated {

@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
+	"github.com/windshare/windshare/cmd/windshare/internal/commandprojection"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -110,12 +110,11 @@ func (policy ConnectivityPolicy) receiverPlan() (receiverConnectivityPlan, error
 	}
 }
 
-const receiverTerminationTraceWaitTime = time.Second
-
 func (a *App) monitorReceiverAdmission(
 	admission receiverContentAdmission,
 	runtime receiverRuntimeCloser,
 	observation getObservation,
+	localStop *receiverLocalStop,
 ) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -136,6 +135,7 @@ func (a *App) monitorReceiverAdmission(
 			return
 		}
 		if runtime != nil {
+			localStop.record(clievent.ReceiverLocalStopOutputAdmission)
 			runtime.Close()
 		}
 	}()
@@ -143,11 +143,11 @@ func (a *App) monitorReceiverAdmission(
 }
 
 func (a *App) observeRelayContentAdmission(
-	trigger receiverAdmissionTrigger,
+	_ receiverAdmissionTrigger,
 	paths *receiverContentPaths,
 ) {
 	if paths != nil {
-		paths.relayAdmitted(trigger)
+		paths.relayAdmitted()
 	}
 	a.recordProcessTrace(
 		processTraceGetComponent,
@@ -200,24 +200,14 @@ func (paths *receiverContentPaths) observePeer(signal receiverPeerSignal) {
 	}
 }
 
-func (paths *receiverContentPaths) relayAdmitted(trigger receiverAdmissionTrigger) {
+func (paths *receiverContentPaths) relayAdmitted() {
 	if paths == nil {
 		return
 	}
 	paths.mu.Lock()
 	defer paths.mu.Unlock()
-	wasRelay := paths.relay
 	paths.relay = true
 	path, changed := paths.changedPathLocked()
-
-	if !wasRelay {
-		switch trigger {
-		case receiverAdmissionTriggerPeerFailed:
-			paths.observation.fallback(clievent.FailurePeerNegotiation)
-		case receiverAdmissionTriggerPeerDetached:
-			paths.observation.fallback(clievent.FailurePeerStopped)
-		}
-	}
 	if changed {
 		paths.observation.contentPath(path)
 	}
@@ -357,13 +347,38 @@ func (adapter receiverPeerFactoryAdapter) Start(
 	return &receiverPeerAttemptAdapter{attempt: attempt}, nil
 }
 
+func (adapter receiverPeerFactoryAdapter) CompleteObservations(ctx context.Context) v2peer.ReceiverObservationCompletion {
+	return adapter.factory.CompleteObservations(ctx)
+}
+
 type receiverRuntimeCloser interface{ Close() }
 
-type receiverPeerTerminationTrace struct {
-	diagnosticsTruncated bool
-	retainedCauseClasses []v2peer.ReceiverCauseClass
-	peerShutdownFailed   bool
-	channelDrainFailed   bool
+type receiverLocalStop struct {
+	mu     sync.Mutex
+	reason clievent.ReceiverLocalStopReason
+}
+
+func (stop *receiverLocalStop) record(reason clievent.ReceiverLocalStopReason) {
+	if stop == nil || reason == clievent.ReceiverLocalStopNone {
+		return
+	}
+	stop.mu.Lock()
+	if stop.reason == 0 {
+		stop.reason = reason
+	}
+	stop.mu.Unlock()
+}
+
+func (stop *receiverLocalStop) snapshot() clievent.ReceiverLocalStopReason {
+	if stop == nil {
+		return clievent.ReceiverLocalStopNone
+	}
+	stop.mu.Lock()
+	defer stop.mu.Unlock()
+	if stop.reason == 0 {
+		return clievent.ReceiverLocalStopNone
+	}
+	return stop.reason
 }
 
 type receiverPeerSetupPhase string
@@ -375,16 +390,22 @@ const (
 )
 
 type activeReceiverPeer struct {
-	attempt receiverPeerAttempt
-	done    <-chan struct{}
-	once    sync.Once
+	attempt   receiverPeerAttempt
+	done      <-chan struct{}
+	localStop *receiverLocalStop
+	once      sync.Once
 }
 
 func (peer *activeReceiverPeer) Close() {
+	peer.CloseWithReason(clievent.ReceiverLocalStopCaller)
+}
+
+func (peer *activeReceiverPeer) CloseWithReason(reason clievent.ReceiverLocalStopReason) {
 	if peer == nil {
 		return
 	}
 	peer.once.Do(func() {
+		peer.localStop.record(reason)
 		_ = peer.attempt.Close()
 		<-peer.done
 	})
@@ -395,8 +416,9 @@ func (a *App) startReceiverPeer(
 	runtime *sessionruntime.ReceiverRuntime,
 	observation getObservation,
 	observe func(receiverPeerSignal),
+	localStop *receiverLocalStop,
 ) *activeReceiverPeer {
-	starter, terminationTraces, err := a.newReceiverPeerStarter(observation)
+	starter, err := a.newReceiverPeerStarter(observation, localStop)
 	if err != nil || starter == nil {
 		observation.warningCode(receiverPeerSetupFailureCode(receiverPeerSetupFactory))
 		notifyReceiverPeer(observe, receiverPeerFailed)
@@ -417,12 +439,11 @@ func (a *App) startReceiverPeer(
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		locallyCanceled := a.monitorReceiverPeer(
+		a.monitorReceiverPeer(
 			attempt, runtime, runtime.ProtocolSessionID(), observation, observe,
 		)
-		a.awaitReceiverTerminationTrace(terminationTraces, observation, locallyCanceled)
 	}()
-	return &activeReceiverPeer{attempt: attempt, done: done}
+	return &activeReceiverPeer{attempt: attempt, done: done, localStop: localStop}
 }
 
 func receiverPeerSetupFailureCode(phase receiverPeerSetupPhase) clievent.FailureCode {
@@ -436,63 +457,53 @@ func receiverPeerSetupFailureCode(phase receiverPeerSetupPhase) clievent.Failure
 	}
 }
 
-func (a *App) newReceiverPeerStarter(observation getObservation) (
-	receiverPeerStarter,
-	<-chan receiverPeerTerminationTrace,
-	error,
-) {
+func (a *App) newReceiverPeerStarter(
+	observation getObservation,
+	localStop *receiverLocalStop,
+) (receiverPeerStarter, error) {
 	if a.receiverPeerFactory != nil {
 		starter, err := a.receiverPeerFactory()
-		return starter, nil, err
+		if err == nil {
+			if completer, ok := starter.(receiverObservationCompleter); ok {
+				observation.registerReceiverFactory(completer)
+			}
+		}
+		return starter, err
 	}
-	terminationTraces := make(chan receiverPeerTerminationTrace, 1)
+	if observation.runtime == nil || !observation.runtime.detailedDiagnosticsEnabled() {
+		factory, err := v2peer.NewReceiverFactory(v2peer.ReceiverFactoryConfig{
+			Configuration: v2peer.DefaultConfiguration(),
+			DataChannels: v2peer.DataChannelAdapterFunc(func(channel *pion.DataChannel) (v2peer.PeerDataChannel, error) {
+				return transportwebrtc.NewChannelWithOptions(channel, transportwebrtc.ChannelOptions{})
+			}),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return receiverPeerFactoryAdapter{factory: factory}, nil
+	}
 	factory, err := v2peer.NewReceiverFactory(v2peer.ReceiverFactoryConfig{
 		Configuration: v2peer.DefaultConfiguration(),
 		DataChannels: v2peer.DataChannelAdapterFunc(func(channel *pion.DataChannel) (v2peer.PeerDataChannel, error) {
-			return transportwebrtc.NewChannelWithOptions(channel, transportwebrtc.ChannelOptions{
-				LifecycleTracer: transportwebrtc.LifecycleTraceFunc(observation.webRTCLifecycle),
+			wrapped, wrapErr := transportwebrtc.NewChannelWithOptions(channel, transportwebrtc.ChannelOptions{
+				LifecycleTracer: observation.webRTCTracer(),
 			})
+			if wrapErr == nil {
+				observation.webRTCObservationSet().register(wrapped)
+			}
+			return wrapped, wrapErr
 		}),
-		OnTermination: func(trace v2peer.ReceiverTerminationTrace) {
-			projected := receiverPeerTerminationTrace{
-				diagnosticsTruncated: trace.DiagnosticsTruncated(),
-				retainedCauseClasses: trace.RetainedCauseClasses(),
-				peerShutdownFailed:   trace.PeerShutdownFailed(),
-				channelDrainFailed:   trace.ChannelDrainFailed(),
-			}
-			select {
-			case terminationTraces <- projected:
-			default:
-				observation.loseLifecycle()
-			}
+		OnTerminationContext: func(ctx context.Context, trace v2peer.ReceiverTerminationTrace) {
+			observation.receiverTerminationContext(ctx, trace, localStop.snapshot())
 		},
+		DiagnosticObserver: observation,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return receiverPeerFactoryAdapter{factory: factory}, terminationTraces, nil
-}
-
-func (a *App) awaitReceiverTerminationTrace(
-	traces <-chan receiverPeerTerminationTrace,
-	observation getObservation,
-	locallyCanceled bool,
-) {
-	if traces == nil || locallyCanceled {
-		return
-	}
-	if observation.runtime == nil || observation.runtime.Clock() == nil {
-		observation.loseLifecycle()
-		return
-	}
-	timer := observation.runtime.Clock().NewTimer(receiverTerminationTraceWaitTime)
-	defer timer.Stop()
-	select {
-	case trace := <-traces:
-		observation.receiverTermination(trace)
-	case <-timer.C():
-		observation.loseLifecycle()
-	}
+	adapter := receiverPeerFactoryAdapter{factory: factory}
+	observation.registerReceiverFactory(adapter)
+	return adapter, nil
 }
 
 func (a *App) monitorReceiverPeer(
@@ -554,5 +565,51 @@ func (a *App) monitorReceiverPeer(
 func notifyReceiverPeer(observe func(receiverPeerSignal), signal receiverPeerSignal) {
 	if observe != nil {
 		observe(signal)
+	}
+}
+
+func (observation getObservation) ObservePeerDiagnostic(value v2peer.PeerDiagnosticObservation) {
+	observation.ObservePeerDiagnosticContext(context.Background(), value)
+}
+
+func (observation getObservation) ObservePeerDiagnosticContext(ctx context.Context, value v2peer.PeerDiagnosticObservation) {
+	if ctx.Err() != nil {
+		return
+	}
+	category, reason, cumulative, err := commandprojection.ProjectPeerDiagnostic(value)
+	var gate *observationPublicationGate
+	if observation.state != nil {
+		gate = observation.state.receiverGate
+	}
+	gate.commit(ctx, func() bool {
+		if err != nil {
+			observation.lose(clievent.ObserverLossCommandAdapter, err)
+			return false
+		}
+		observation.reportCumulativeLoss(peerDiagnosticLossSource(value), category, reason, cumulative)
+		return true
+	})
+}
+
+func peerDiagnosticLossSource(value v2peer.PeerDiagnosticObservation) observerLossSource {
+	switch value.Category {
+	case v2peer.PeerDiagnosticSenderAttempt:
+		switch value.Reason {
+		case v2peer.PeerDiagnosticObserverPanic:
+			return observerLossSenderAttemptPanic
+		case v2peer.PeerDiagnosticObserverCapacity:
+			return observerLossSenderAttemptCapacity
+		case v2peer.PeerDiagnosticEvidenceCapacity:
+			return observerLossSenderEvidenceCapacity
+		default:
+			return observerLossSenderCleanupResidue
+		}
+	case v2peer.PeerDiagnosticReceiverTermination:
+		if value.Reason == v2peer.PeerDiagnosticObserverPanic {
+			return observerLossReceiverTerminationPanic
+		}
+		return observerLossReceiverTerminationCapacity
+	default:
+		return 0
 	}
 }

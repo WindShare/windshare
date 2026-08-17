@@ -255,7 +255,7 @@ func (directory *windowsOutputV3Directory) RemoveDirectory(name string, expected
 	return windowsOutputV3Error(directory.native.RemoveDirectory(name, target.native))
 }
 
-func (directory *windowsOutputV3Directory) CreateFile(name string, private bool, size int64) (outputcap.File, error) {
+func (directory *windowsOutputV3Directory) CreateFile(name string, private bool, size int64) (outputcap.MutableFile, error) {
 	if directory == nil || directory.native == nil || size < 0 {
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: invalid Windows file creation authority or size"))
 	}
@@ -282,31 +282,58 @@ func (directory *windowsOutputV3Directory) CreateFile(name string, private bool,
 			errors.New("osfs: Windows file creation did not install the exact size"), err, removeErr, native.Close(),
 		))
 	}
-	return &windowsOutputV3File{native: native, private: private}, nil
+	return newWindowsOutputV3MutableFile(native, private), nil
 }
 
-func (directory *windowsOutputV3Directory) OpenFile(name string, private, writable bool) (outputcap.File, error) {
+func (directory *windowsOutputV3Directory) OpenObservedFile(name string, private bool) (outputcap.ObservedFile, error) {
+	state, err := directory.openFileState(name, private, windowsV3ReadFileAccess())
+	if err != nil {
+		return nil, err
+	}
+	return &windowsOutputV3ObservedFile{state: state}, nil
+}
+
+func (directory *windowsOutputV3Directory) OpenRecoveryDurabilityFile(
+	name string,
+	private bool,
+) (outputcap.RecoveryDurabilityFile, error) {
+	state, err := directory.openFileState(name, private, windowsV3RecoveryDurabilityFileAccess())
+	if err != nil {
+		return nil, err
+	}
+	return &windowsOutputV3RecoveryDurabilityFile{state: state}, nil
+}
+
+func (directory *windowsOutputV3Directory) OpenMutableFile(name string, private bool) (outputcap.MutableFile, error) {
+	state, err := directory.openFileState(name, private, windowsV3PrivateFileAccess())
+	if err != nil {
+		return nil, err
+	}
+	return &windowsOutputV3MutableFile{state: state}, nil
+}
+
+func (directory *windowsOutputV3Directory) openFileState(
+	name string,
+	private bool,
+	access uint32,
+) (*windowsOutputV3FileState, error) {
 	if directory == nil || directory.native == nil {
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows directory authority is closed"))
-	}
-	access := windowsV3ReadFileAccess()
-	if writable {
-		access = windowsV3PrivateFileAccess()
 	}
 	native, _, err := directory.native.openFile(name, windows.FILE_OPEN, access, nil, private)
 	if err != nil {
 		return nil, windowsOutputV3Error(err)
 	}
-	return &windowsOutputV3File{native: native, private: private}, nil
+	return &windowsOutputV3FileState{native: native, private: private}, nil
 }
 
 func (directory *windowsOutputV3Directory) PublishFileNoReplace(
-	source outputcap.File,
+	source outputcap.FileIdentity,
 	name string,
 ) (outputcap.PublishNoReplaceOutcome, error) {
-	file, ok := source.(*windowsOutputV3File)
+	file, ok := windowsOutputV3FileStateFrom(source)
 	if !ok || directory == nil || directory.native == nil || directory.native.private ||
-		file == nil || file.native == nil || file.private {
+		file.native == nil || file.private {
 		return 0, errors.Join(
 			outputcap.ErrUnsafeNamespace, errors.New("osfs: incompatible Windows file publication authority"))
 	}
@@ -407,11 +434,11 @@ func (directory *windowsOutputV3Directory) CreateLiveCleanupStage(
 
 func (directory *windowsOutputV3Directory) RemoveLiveCleanupStage(
 	ticket checkpointmodel.LiveCleanupTicket,
-	expected outputcap.File,
+	expected outputcap.FileIdentity,
 ) error {
-	file, ok := expected.(*windowsOutputV3File)
+	file, ok := windowsOutputV3FileStateFrom(expected)
 	if !ok || directory == nil || directory.native == nil || !directory.native.private ||
-		file == nil || file.native == nil || !ticket.Valid() ||
+		file.native == nil || !ticket.Valid() ||
 		ticket.Profile() != checkpointmodel.LiveCleanupWindowsNTFSV1 {
 		return errors.Join(outputcap.ErrUnsafeNamespace,
 			errors.New("osfs: invalid Windows live-cleanup removal authority"))
@@ -438,29 +465,32 @@ func (directory *windowsOutputV3Directory) RemoveLiveCleanupStage(
 	))
 }
 
-func (directory *windowsOutputV3Directory) LinkFileNoReplace(source outputcap.File, name string) (outputcap.File, error) {
-	file, ok := source.(*windowsOutputV3File)
-	if !ok || directory == nil || directory.native == nil || file == nil || file.native == nil {
+func (directory *windowsOutputV3Directory) LinkFileNoReplace(
+	source outputcap.FileIdentity,
+	name string,
+) (outputcap.ObservedFile, error) {
+	file, ok := windowsOutputV3FileStateFrom(source)
+	if !ok || directory == nil || directory.native == nil || file.native == nil {
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: incompatible Windows file link authority"))
 	}
 	linked, err := directory.native.LinkRegularFileNoReplace(file.native, name)
 	if err != nil {
 		return nil, windowsOutputV3Error(err)
 	}
-	return &windowsOutputV3File{native: linked, private: file.private}, nil
+	return newWindowsOutputV3ObservedFile(linked, file.private), nil
 }
 
-func (directory *windowsOutputV3Directory) ReplacePrivateFile(source outputcap.File, name string) error {
-	file, ok := source.(*windowsOutputV3File)
-	if !ok || directory == nil || directory.native == nil || file == nil || file.native == nil || !file.private {
+func (directory *windowsOutputV3Directory) ReplacePrivateFile(source outputcap.FileIdentity, name string) error {
+	file, ok := windowsOutputV3FileStateFrom(source)
+	if !ok || directory == nil || directory.native == nil || file.native == nil || !file.private {
 		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: incompatible Windows private state replacement authority"))
 	}
 	return windowsOutputV3Error(directory.native.AtomicReplacePrivateFile(file.native, name))
 }
 
-func (directory *windowsOutputV3Directory) RemoveFile(name string, expected outputcap.File) error {
-	file, ok := expected.(*windowsOutputV3File)
-	if !ok || directory == nil || directory.native == nil || file == nil || file.native == nil {
+func (directory *windowsOutputV3Directory) RemoveFile(name string, expected outputcap.FileIdentity) error {
+	file, ok := windowsOutputV3FileStateFrom(expected)
+	if !ok || directory == nil || directory.native == nil || file.native == nil {
 		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: incompatible Windows file removal authority"))
 	}
 	if file.private {
@@ -506,97 +536,6 @@ func (directory *windowsOutputV3Directory) AcquireLock(
 	return newWindowsOutputV3Lock(lock), created, nil
 }
 
-func newWindowsOutputV3Lock(lock *windowsV3StableLock) *windowsOutputV3Lock {
-	file := &windowsOutputV3File{private: true, borrowed: true}
-	if lock != nil {
-		file.native = lock.file
-	}
-	return &windowsOutputV3Lock{native: lock, file: file}
-}
-
-func (file *windowsOutputV3File) ReadAt(destination []byte, offset int64) (int, error) {
-	if file == nil || file.native == nil {
-		return 0, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows file authority is closed"))
-	}
-	count, err := file.native.ReadAt(destination, offset)
-	return count, windowsOutputV3Error(err)
-}
-
-func (file *windowsOutputV3File) WriteAt(source []byte, offset int64) (int, error) {
-	if file == nil || file.native == nil {
-		return 0, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows file authority is closed"))
-	}
-	count, err := file.native.WriteAt(source, offset)
-	return count, windowsOutputV3Error(err)
-}
-
-func (file *windowsOutputV3File) Close() error {
-	if file == nil || file.borrowed || file.native == nil {
-		return nil
-	}
-	err := file.native.Close()
-	file.native = nil
-	return windowsOutputV3Error(err)
-}
-
-func (file *windowsOutputV3File) Sync() error {
-	if file == nil || file.native == nil {
-		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows file authority is closed"))
-	}
-	return windowsOutputV3Error(file.native.Sync())
-}
-
-func (file *windowsOutputV3File) Size() (uint64, error) {
-	if file == nil || file.native == nil {
-		return 0, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows file authority is closed"))
-	}
-	size, err := file.native.Size()
-	return size, windowsOutputV3Error(err)
-}
-
-func (file *windowsOutputV3File) SetModifiedTime(modified catalog.ModifiedTime) error {
-	if file == nil || file.native == nil {
-		return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows file authority is closed"))
-	}
-	return windowsOutputV3Error(file.native.setModifiedTime(modified))
-}
-
-func (file *windowsOutputV3File) MetadataMatches(size uint64, modified catalog.ModifiedTime) (bool, error) {
-	if file == nil || file.native == nil {
-		return false, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows file authority is closed"))
-	}
-	matches, err := file.native.metadataMatches(size, modified)
-	return matches, windowsOutputV3Error(err)
-}
-
-func (file *windowsOutputV3File) SameFile(other outputcap.File) (bool, error) {
-	right, ok := other.(*windowsOutputV3File)
-	if !ok || file == nil || file.native == nil || right == nil || right.native == nil {
-		return false, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: incompatible Windows file authority"))
-	}
-	same, err := sameWindowsV3OpenedObject(file.native, right.native)
-	return same, windowsOutputV3Error(err)
-}
-
-func (lock *windowsOutputV3Lock) File() outputcap.File {
-	if lock == nil || lock.native == nil || lock.file == nil || lock.file.native == nil {
-		return nil
-	}
-	return lock.file
-}
-
-func (lock *windowsOutputV3Lock) Close() error {
-	if lock == nil || lock.native == nil {
-		return nil
-	}
-	err := lock.native.Close()
-	lock.native = nil
-	if lock.file != nil {
-		lock.file.native = nil
-	}
-	return windowsOutputV3Error(err)
-}
-
 func windowsOutputV3Error(err error) error {
 	if err == nil {
 		return nil
@@ -623,6 +562,8 @@ var (
 	_ outputcap.MetadataAuthorityValidator          = (*windowsOutputV3Directory)(nil)
 	_ outputcap.PersistentDirectoryIdentity         = (*windowsOutputV3Directory)(nil)
 	_ outputcap.PersistentDirectoryIdentityPreparer = (*windowsOutputV3Directory)(nil)
-	_ outputcap.File                                = (*windowsOutputV3File)(nil)
+	_ outputcap.ObservedFile                        = (*windowsOutputV3ObservedFile)(nil)
+	_ outputcap.RecoveryDurabilityFile              = (*windowsOutputV3RecoveryDurabilityFile)(nil)
+	_ outputcap.MutableFile                         = (*windowsOutputV3MutableFile)(nil)
 	_ outputcap.Lock                                = (*windowsOutputV3Lock)(nil)
 )

@@ -40,7 +40,109 @@ func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) Fil
 		ReservedFileSlotCount:  event.ReservedFileSlotCount,
 		DirectoryMetadataBytes: event.DirectoryMetadataBytes,
 		CheckpointRecordCount:  event.CheckpointRecordCount,
+		FailureStage:           projectFilesystemFailureStage(event.FailureStage),
+		ReconciliationStep:     projectFilesystemReconciliationStep(event.ReconciliationStep),
+		NativeErrorClass:       projectFilesystemNativeErrorClass(event.NativeErrorClass),
 		Failed:                 event.Failed,
+	}
+}
+
+func projectFilesystemOutputDiagnostic(
+	value outputruntime.FilesystemOutputDiagnostic,
+) FilesystemOutputDiagnostic {
+	return FilesystemOutputDiagnostic{
+		Stage:              projectFilesystemFailureStage(value.Stage),
+		ReconciliationStep: projectFilesystemReconciliationStep(value.ReconciliationStep),
+		NativeErrorClass:   projectFilesystemNativeErrorClass(value.NativeErrorClass),
+		FaultDomain:        value.FaultDomain,
+		NormalizedScope:    value.NormalizedScope,
+		NormalizedCode:     value.NormalizedCode,
+	}
+}
+
+func projectFilesystemFailureStage(
+	value outputruntime.FilesystemOutputFailureStage,
+) FilesystemOutputFailureStage {
+	switch value {
+	case outputruntime.FilesystemOutputFailureDestinationBinding:
+		return FilesystemOutputFailureDestinationBinding
+	case outputruntime.FilesystemOutputFailureInventoryPaging:
+		return FilesystemOutputFailureInventoryPaging
+	case outputruntime.FilesystemOutputFailureActiveLookup:
+		return FilesystemOutputFailureActiveLookup
+	case outputruntime.FilesystemOutputFailureOperationAcquisition:
+		return FilesystemOutputFailureOperationAcquisition
+	case outputruntime.FilesystemOutputFailureOperationAdmission:
+		return FilesystemOutputFailureOperationAdmission
+	case outputruntime.FilesystemOutputFailureCheckpointReconciliation:
+		return FilesystemOutputFailureCheckpointReconciliation
+	case outputruntime.FilesystemOutputFailureNativeDurability:
+		return FilesystemOutputFailureNativeDurability
+	case outputruntime.FilesystemOutputFailureAuthorityClose:
+		return FilesystemOutputFailureAuthorityClose
+	default:
+		return 0
+	}
+}
+
+func projectFilesystemReconciliationStep(
+	value outputruntime.FilesystemCheckpointReconciliationStep,
+) FilesystemCheckpointReconciliationStep {
+	switch value {
+	case outputruntime.FilesystemCheckpointCandidateObservation:
+		return FilesystemCheckpointCandidateObservation
+	case outputruntime.FilesystemCheckpointStageDurability:
+		return FilesystemCheckpointStageDurability
+	case outputruntime.FilesystemCheckpointNamespaceDurability:
+		return FilesystemCheckpointNamespaceDurability
+	case outputruntime.FilesystemCheckpointRecordPromotion:
+		return FilesystemCheckpointRecordPromotion
+	default:
+		return 0
+	}
+}
+
+func projectFilesystemNativeErrorClass(
+	value outputruntime.FilesystemNativeErrorClass,
+) FilesystemNativeErrorClass {
+	switch value {
+	case outputruntime.FilesystemNativeErrorAccessDenied:
+		return FilesystemNativeErrorAccessDenied
+	case outputruntime.FilesystemNativeErrorSharingViolation:
+		return FilesystemNativeErrorSharingViolation
+	case outputruntime.FilesystemNativeErrorNotFound:
+		return FilesystemNativeErrorNotFound
+	case outputruntime.FilesystemNativeErrorInvalidHandle:
+		return FilesystemNativeErrorInvalidHandle
+	case outputruntime.FilesystemNativeErrorUnsupported:
+		return FilesystemNativeErrorUnsupported
+	case outputruntime.FilesystemNativeErrorIO:
+		return FilesystemNativeErrorIO
+	case outputruntime.FilesystemNativeErrorUnknown:
+		return FilesystemNativeErrorUnknown
+	default:
+		return 0
+	}
+}
+
+func projectFilesystemOutputStateReason(
+	value outputruntime.FilesystemOutputStateReason,
+) FilesystemOutputStateReason {
+	switch value {
+	case outputruntime.FilesystemOutputStateReasonNone:
+		return FilesystemOutputStateReasonNone
+	case outputruntime.FilesystemOutputStateDestinationOwnershipUnknown:
+		return FilesystemOutputStateDestinationOwnershipUnknown
+	case outputruntime.FilesystemOutputStateRegistryOwnershipUnknown:
+		return FilesystemOutputStateRegistryOwnershipUnknown
+	case outputruntime.FilesystemOutputStateLeaseOwnershipUnknown:
+		return FilesystemOutputStateLeaseOwnershipUnknown
+	case outputruntime.FilesystemOutputStateOperationOwnershipUnknown:
+		return FilesystemOutputStateOperationOwnershipUnknown
+	case outputruntime.FilesystemOutputStateCleanupUncertain:
+		return FilesystemOutputStateCleanupUncertain
+	default:
+		return 0
 	}
 }
 

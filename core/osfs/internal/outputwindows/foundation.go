@@ -6,8 +6,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unsafe"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -52,6 +54,7 @@ type windowsV3OutputError struct {
 	Path      string
 	Category  error
 	Cause     error
+	native    outputcap.NativeErrorClass
 }
 
 func (failure *windowsV3OutputError) Error() string {
@@ -79,8 +82,21 @@ func (failure *windowsV3OutputError) Is(target error) bool {
 
 func (failure *windowsV3OutputError) Unwrap() error { return failure.Cause }
 
+func (failure *windowsV3OutputError) NativeErrorClass() outputcap.NativeErrorClass {
+	if failure == nil || !failure.native.Valid() {
+		return outputcap.NativeErrorUnknown
+	}
+	return failure.native
+}
+
 func windowsV3Failure(operation, path string, category, cause error) error {
-	return &windowsV3OutputError{Operation: operation, Path: path, Category: category, Cause: cause}
+	return &windowsV3OutputError{
+		Operation: operation,
+		Path:      path,
+		Category:  category,
+		Cause:     cause,
+		native:    windowsV3NativeErrorClass(category, cause),
+	}
 }
 
 // Operational failures retain diagnostic context without inventing namespace
@@ -88,7 +104,35 @@ func windowsV3Failure(operation, path string, category, cause error) error {
 // denials, while explicit semantic categories continue to drive collision,
 // unsupported-platform, and quarantine decisions.
 func windowsV3OperationalFailure(operation, path string, cause error) error {
-	return &windowsV3OutputError{Operation: operation, Path: path, Cause: cause}
+	return &windowsV3OutputError{
+		Operation: operation,
+		Path:      path,
+		Cause:     cause,
+		native:    windowsV3NativeErrorClass(nil, cause),
+	}
+}
+
+func windowsV3NativeErrorClass(category, cause error) outputcap.NativeErrorClass {
+	switch {
+	case errors.Is(cause, windows.ERROR_ACCESS_DENIED),
+		errors.Is(cause, windows.ERROR_PRIVILEGE_NOT_HELD):
+		return outputcap.NativeErrorAccessDenied
+	case errors.Is(cause, windows.ERROR_SHARING_VIOLATION),
+		errors.Is(cause, windows.ERROR_LOCK_VIOLATION):
+		return outputcap.NativeErrorSharingViolation
+	case errors.Is(cause, fs.ErrNotExist),
+		errors.Is(cause, windows.ERROR_FILE_NOT_FOUND),
+		errors.Is(cause, windows.ERROR_PATH_NOT_FOUND):
+		return outputcap.NativeErrorNotFound
+	case errors.Is(cause, windows.ERROR_INVALID_HANDLE):
+		return outputcap.NativeErrorInvalidHandle
+	case errors.Is(category, errWindowsV3OutputUnsupported), windowsV3IsUnsupportedNative(cause):
+		return outputcap.NativeErrorUnsupported
+	}
+	if _, ok := errors.AsType[syscall.Errno](cause); ok {
+		return outputcap.NativeErrorIO
+	}
+	return outputcap.NativeErrorUnknown
 }
 
 func windowsV3NativeOperationFailure(operation, path string, cause error) error {

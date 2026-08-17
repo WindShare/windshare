@@ -309,6 +309,14 @@ func windowsV3ReadFileAccess() uint32 {
 	return windows.FILE_GENERIC_READ | windows.READ_CONTROL | windows.SYNCHRONIZE
 }
 
+func windowsV3RecoveryDurabilityFileAccess() uint32 {
+	// FlushFileBuffers requires one write-class right. Append authority is the
+	// narrowest NTFS right that permits the flush while withholding arbitrary
+	// offset writes, truncation, deletion, and metadata mutation.
+	return windows.FILE_APPEND_DATA | windows.FILE_READ_ATTRIBUTES |
+		windows.READ_CONTROL | windows.SYNCHRONIZE
+}
+
 func windowsV3DeleteFileAccess() uint32 {
 	return windows.DELETE | windows.FILE_READ_ATTRIBUTES | windows.READ_CONTROL | windows.SYNCHRONIZE
 }

@@ -57,64 +57,109 @@ func ProjectRelayLifecycle(
 	command clievent.Command,
 	value relayv2.LifecycleTrace,
 ) (clievent.RelayLifecycleObserved, error) {
+	if !command.Valid() {
+		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionInvalidIdentity)
+	}
+	switch relayv2.ValidateLifecycleTrace(value) {
+	case relayv2.LifecycleContractValid:
+	case relayv2.LifecycleContractUnknownEnum:
+		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
+	case relayv2.LifecycleContractInvalidIdentity:
+		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionInvalidIdentity)
+	case relayv2.LifecycleContractInvalidStageFields:
+		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionInvalidStageFields)
+	default:
+		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionEventContract)
+	}
 	stage, ok := projectRelayStage(value.Stage)
 	if !ok {
-		return clievent.RelayLifecycleObserved{}, ErrInvalidProjection
+		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
 	}
 	disposition, ok := projectOptionalDisposition(value.Disposition)
 	if !ok {
-		return clievent.RelayLifecycleObserved{}, ErrInvalidProjection
+		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
 	}
 	retirement, ok := projectRelayRetirement(value.RetirementSource)
 	if !ok {
-		return clievent.RelayLifecycleObserved{}, ErrInvalidProjection
+		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
 	}
 	cause, ok := projectRelayCause(value.Cause)
 	if !ok {
-		return clievent.RelayLifecycleObserved{}, ErrInvalidProjection
+		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
 	}
 	drain, ok := projectRelayCause(value.DrainCause)
 	if !ok {
-		return clievent.RelayLifecycleObserved{}, ErrInvalidProjection
+		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
+	}
+	var session clievent.RelaySessionID
+	if nonzeroBytes(value.RelaySessionID[:]) {
+		var err error
+		session, err = RelaySessionID(value.RelaySessionID[:])
+		if err != nil {
+			return clievent.RelayLifecycleObserved{}, err
+		}
 	}
 	event, err := clievent.NewRelayLifecycleObserved(clievent.RelayLifecycleSpec{
-		Command: command, LinkID: value.LinkID, SendOperationID: value.OperationID,
+		Command: command, LinkID: value.LinkID, RelaySession: session, SendOperationID: value.OperationID,
 		Stage: stage, Terminal: value.Terminal, Disposition: disposition,
-		RetirementSource: retirement, Cause: cause, DrainCause: drain,
+		RetirementSource: retirement, Cause: cause, DrainCause: drain, Dropped: value.Dropped,
 	})
 	if err != nil {
-		return clievent.RelayLifecycleObserved{}, ErrInvalidProjection
+		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionEventContract)
 	}
 	return event, nil
+}
+
+func nonzeroBytes(raw []byte) bool {
+	for _, value := range raw {
+		if value != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func ProjectWebRTCLifecycle(
 	command clievent.Command,
 	value wsrtc.LifecycleTrace,
 ) (clievent.WebRTCLifecycleObserved, error) {
+	if !command.Valid() {
+		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionInvalidIdentity)
+	}
+	switch wsrtc.ValidateLifecycleTrace(value) {
+	case wsrtc.LifecycleContractValid:
+	case wsrtc.LifecycleContractUnknownEnum:
+		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
+	case wsrtc.LifecycleContractInvalidIdentity:
+		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionInvalidIdentity)
+	case wsrtc.LifecycleContractInvalidStageFields:
+		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionInvalidStageFields)
+	default:
+		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionEventContract)
+	}
 	operation, ok := projectWebRTCOperation(value.Operation)
 	if !ok {
-		return clievent.WebRTCLifecycleObserved{}, ErrInvalidProjection
+		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
 	}
 	transition, ok := projectWebRTCTransition(value.Transition)
 	if !ok {
-		return clievent.WebRTCLifecycleObserved{}, ErrInvalidProjection
+		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
 	}
 	disposition, ok := projectOptionalDisposition(value.Disposition)
 	if !ok {
-		return clievent.WebRTCLifecycleObserved{}, ErrInvalidProjection
+		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
 	}
 	state, ok := projectChannelState(value.State)
 	if !ok {
-		return clievent.WebRTCLifecycleObserved{}, ErrInvalidProjection
+		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
 	}
 	terminal, ok := projectWebRTCTerminal(value.Terminal)
 	if !ok {
-		return clievent.WebRTCLifecycleObserved{}, ErrInvalidProjection
+		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
 	}
 	cause, ok := projectWebRTCCause(value.Cause)
 	if !ok {
-		return clievent.WebRTCLifecycleObserved{}, ErrInvalidProjection
+		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
 	}
 	event, err := clievent.NewWebRTCLifecycleObserved(clievent.WebRTCLifecycleSpec{
 		Command: command, ChannelID: value.ChannelID, SendOperationID: value.OperationID,
@@ -122,7 +167,7 @@ func ProjectWebRTCLifecycle(
 		State: state, Terminal: terminal, Cause: cause, Dropped: value.Dropped,
 	})
 	if err != nil {
-		return clievent.WebRTCLifecycleObserved{}, ErrInvalidProjection
+		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionEventContract)
 	}
 	return event, nil
 }
@@ -170,7 +215,7 @@ func ProjectSenderAttempt(
 		if !ok {
 			return clievent.PeerAttemptObserved{}, ErrInvalidProjection
 		}
-		spec.Failure, ok = ProjectPeerErrorCode(value.Failure.TypedCode)
+		spec.Failure, ok = ProjectPeerErrorCode(value.Failure.TypedPeerErrorCode)
 		if !ok {
 			return clievent.PeerAttemptObserved{}, ErrInvalidProjection
 		}
@@ -318,6 +363,20 @@ func ProjectFilesystemOutput(value osfs.FilesystemOutputTrace) (clievent.Filesys
 			return clievent.FilesystemOutputObserved{}, ErrInvalidProjection
 		}
 	}
+	var receiveIntent clievent.ReceiveIntentDigest
+	if !value.ReceiveIntentDigest.IsZero() {
+		receiveIntent, err = clievent.NewReceiveIntentDigest(value.ReceiveIntentDigest.Bytes())
+		if err != nil {
+			return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionInvalidIdentity)
+		}
+	}
+	var outputSession clievent.OutputSessionID
+	if !value.SessionID.IsZero() {
+		outputSession, err = clievent.NewOutputSessionID(value.SessionID.Bytes())
+		if err != nil {
+			return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionInvalidIdentity)
+		}
+	}
 	var failure clievent.Failure
 	if value.Failed {
 		if failure, ok = ProjectNormalizedFault(value.FaultDomain, value.NormalizedFaultScope, value.NormalizedFaultCode); !ok {
@@ -326,20 +385,63 @@ func ProjectFilesystemOutput(value osfs.FilesystemOutputTrace) (clievent.Filesys
 	} else if value.FaultDomain != 0 || value.NormalizedFaultScope != 0 || value.NormalizedFaultCode != 0 {
 		return clievent.FilesystemOutputObserved{}, ErrInvalidProjection
 	}
-	event, err := clievent.NewFilesystemOutputObserved(
-		receiveID,
-		operation,
-		clievent.FilesystemOutputCounters{
+	certification, ok := projectFilesystemCertification(value.Certification)
+	if !ok {
+		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
+	}
+	rootDisposition, ok := projectFilesystemRootDisposition(value.RootOpenDisposition)
+	if !ok {
+		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
+	}
+	runtimeComponent, ok := projectFilesystemRuntimeComponent(value.RuntimeComponent)
+	if !ok {
+		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
+	}
+	runtimeOperation, ok := projectFilesystemRuntimeOperation(value.RuntimeOperation)
+	if !ok {
+		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
+	}
+	runtimeDecision, ok := projectFilesystemRuntimeDecision(value.RuntimeDecision)
+	if !ok {
+		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
+	}
+	lockScope, ok := projectFilesystemNativeLockScope(value.NativeLockScope)
+	if !ok {
+		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
+	}
+	lockMilestone, ok := projectFilesystemNativeLockMilestone(value.NativeLockMilestone)
+	if !ok {
+		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
+	}
+	failureStage, ok := projectFilesystemFailureStage(value.FailureStage)
+	if !ok {
+		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
+	}
+	reconciliation, ok := projectFilesystemReconciliationStep(value.ReconciliationStep)
+	if !ok {
+		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
+	}
+	nativeClass, ok := projectFilesystemNativeErrorClass(value.NativeErrorClass)
+	if !ok {
+		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
+	}
+	event, err := clievent.NewFilesystemOutputObserved(clievent.FilesystemOutputSpec{
+		Operation: operation, ReceiveIntent: receiveIntent, ReceiveOperation: receiveID, OutputSession: outputSession,
+		Certification: certification, NativeLockScope: lockScope, NativeLockMilestone: lockMilestone,
+		RootDisposition: rootDisposition, RuntimeComponent: runtimeComponent,
+		RuntimeOperation: runtimeOperation, RuntimeDecision: runtimeDecision,
+		OperationID: value.OperationID, ClaimID: value.ClaimID,
+		Counters: clievent.FilesystemOutputCounters{
 			NodeClaims: value.NodeClaimCount, DirectoryClaims: value.DirectoryClaimCount,
 			FileClaims: value.FileClaimCount, ActiveFileClaims: value.ActiveFileClaimCount,
 			ReservedFileSlots:      value.ReservedFileSlotCount,
 			DirectoryMetadataBytes: value.DirectoryMetadataBytes,
 			CheckpointRecords:      value.CheckpointRecordCount,
 		},
-		failure,
-	)
+		Failure: failure, FailureStage: failureStage, ReconciliationStep: reconciliation, NativeErrorClass: nativeClass,
+	})
 	if err != nil {
-		return clievent.FilesystemOutputObserved{}, ErrInvalidProjection
+		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionInvalidStageFields)
 	}
 	return event, nil
 }

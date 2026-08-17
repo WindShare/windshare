@@ -191,8 +191,7 @@ func TestTransferJobPipelinesSingleFileAcrossAvailableLanes(t *testing.T) {
 	defer lanes.Close()
 	for laneID := uint32(1); laneID <= 2; laneID++ {
 		if err := lanes.Add(
-			LaneIdentity{ID: laneID},
-			attributedWindowLane{id: laneID, probe: probe, assignments: assignments},
+			LaneIdentity{ID: laneID}, LaneRouteRelay, attributedWindowLane{id: laneID, probe: probe, assignments: assignments},
 		); err != nil {
 			t.Fatal(err)
 		}

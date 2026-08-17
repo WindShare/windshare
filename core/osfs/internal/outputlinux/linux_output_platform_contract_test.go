@@ -250,7 +250,7 @@ func TestLinuxPlatformAdapterLifecycle(t *testing.T) {
 		t.Fatalf("stage metadata matches=%t error=%v", matches, err)
 	}
 
-	openedStage, err := privateDirectory.OpenFile("stage", true, true)
+	openedStage, err := privateDirectory.OpenMutableFile("stage", true)
 	if err != nil {
 		t.Fatalf("reopen stage writable: %v", err)
 	}
@@ -444,7 +444,7 @@ func TestLinuxPlatformAdapterClosedCapabilityContracts(t *testing.T) {
 	if _, err := nilDirectory.CreateFile("x", false, 0); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Errorf("nil directory create file error=%v", err)
 	}
-	if _, err := nilDirectory.OpenFile("x", false, false); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+	if _, err := nilDirectory.OpenObservedFile("x", false); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Errorf("nil directory open file error=%v", err)
 	}
 	if _, err := nilDirectory.LinkFileNoReplace(nil, "x"); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
@@ -460,7 +460,7 @@ func TestLinuxPlatformAdapterClosedCapabilityContracts(t *testing.T) {
 		t.Errorf("nil directory acquire lock error=%v", err)
 	}
 
-	var nilFile *linuxV3File
+	var nilFile *linuxV3MutableFile
 	if err := nilFile.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -694,23 +694,23 @@ func TestLinuxLockStableFileErrorBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	v3File := file.(*linuxV3File)
+	v3File := file.(*linuxV3MutableFile)
 
-	origFlock := v3File.native.system.flock
-	defer func() { v3File.native.system.flock = origFlock }()
+	origFlock := v3File.state.native.system.flock
+	defer func() { v3File.state.native.system.flock = origFlock }()
 
-	v3File.native.system.flock = func(int, int) error { return unix.ENOSYS }
-	if _, err := linuxLockStableFile(v3File.native); !errors.Is(err, errLinuxOutputUnsupported) {
+	v3File.state.native.system.flock = func(int, int) error { return unix.ENOSYS }
+	if _, err := linuxLockStableFile(v3File.state.native); !errors.Is(err, errLinuxOutputUnsupported) {
 		t.Fatalf("enosys lock error=%v", err)
 	}
 
-	v3File.native.system.flock = func(int, int) error { return errors.New("flock io error") }
-	if _, err := linuxLockStableFile(v3File.native); err == nil {
+	v3File.state.native.system.flock = func(int, int) error { return errors.New("flock io error") }
+	if _, err := linuxLockStableFile(v3File.state.native); err == nil {
 		t.Fatal("expected error for general flock failure")
 	}
 
-	readOnlyFile := *v3File.native
-	readOnlyFile.writable = false
+	readOnlyFile := *v3File.state.native
+	readOnlyFile.access = linuxOutputFileObserved
 	if _, err := linuxLockStableFile(&readOnlyFile); err == nil {
 		t.Fatal("expected error for read-only file lock")
 	}

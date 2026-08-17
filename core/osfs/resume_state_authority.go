@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 
+	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/resumeauthority"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -76,6 +77,27 @@ type ResumeStateSummary struct {
 	items []ResumeStateItem
 }
 
+func projectResumeStateReason(
+	reason checkpointmodel.OrdinaryClosedReason,
+) FilesystemOutputStateReason {
+	switch reason {
+	case checkpointmodel.OrdinaryReasonNone:
+		return FilesystemOutputStateReasonNone
+	case checkpointmodel.OrdinaryReasonDestinationOwnershipUnknown:
+		return FilesystemOutputStateDestinationOwnershipUnknown
+	case checkpointmodel.OrdinaryReasonRegistryOwnershipUnknown:
+		return FilesystemOutputStateRegistryOwnershipUnknown
+	case checkpointmodel.OrdinaryReasonLeaseOwnershipUnknown:
+		return FilesystemOutputStateLeaseOwnershipUnknown
+	case checkpointmodel.OrdinaryReasonOperationOwnershipUnknown:
+		return FilesystemOutputStateOperationOwnershipUnknown
+	case checkpointmodel.OrdinaryReasonCleanupUncertain:
+		return FilesystemOutputStateCleanupUncertain
+	default:
+		return 0
+	}
+}
+
 func projectResumeStateSummary(summary resumeauthority.Summary) ResumeStateSummary {
 	items := summary.Items()
 	projected := make([]ResumeStateItem, len(items))
@@ -97,12 +119,12 @@ func (summary ResumeStateSummary) State() ResumeOperationState {
 func (summary ResumeStateSummary) StateGeneration() uint64 {
 	return summary.inner.StateGeneration()
 }
-func (summary ResumeStateSummary) NeedsAttentionReason() string {
+func (summary ResumeStateSummary) NeedsAttentionReason() FilesystemOutputStateReason {
 	switch summary.State() {
 	case ResumeOperationNeedsAttention, ResumeOperationCleanupPending:
-		return summary.inner.NeedsAttentionReason().String()
+		return projectResumeStateReason(summary.inner.NeedsAttentionReason())
 	default:
-		return ""
+		return FilesystemOutputStateReasonNone
 	}
 }
 func (summary ResumeStateSummary) Items() []ResumeStateItem {
