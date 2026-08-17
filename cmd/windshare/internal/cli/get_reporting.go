@@ -7,6 +7,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
 	"github.com/windshare/windshare/cmd/windshare/internal/commandprojection"
+	"github.com/windshare/windshare/cmd/windshare/internal/observationbridge"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -24,98 +25,35 @@ type observerLossSource uint8
 
 const (
 	observerLossRelayQueue observerLossSource = iota + 1
-	observerLossRelayPanic
-	observerLossRelayDrain
 	observerLossWebRTCQueue
-	observerLossWebRTCPanic
-	observerLossWebRTCDrain
 	observerLossLaneQueue
-	observerLossLanePanic
-	observerLossLaneDrain
 	observerLossSenderAttemptCapacity
-	observerLossSenderAttemptPanic
-	observerLossSenderAttemptDrain
 	observerLossSenderEvidenceCapacity
 	observerLossSenderCleanupResidue
-	observerLossSenderDiagnosticPanic
 	observerLossSenderDiagnosticDrain
 	observerLossReceiverTerminationCapacity
-	observerLossReceiverTerminationPanic
-	observerLossReceiverTerminationDrain
-	observerLossReceiverDiagnosticPanic
 	observerLossReceiverDiagnosticDrain
 )
 
-type observerLossKey struct {
-	source   observerLossSource
-	category clievent.ObserverLossCategory
-	reason   clievent.ObserverLossReason
-}
-
-type observerLossSink interface {
-	ReportObserverLoss(clievent.ObserverLossCategory, clievent.ObserverLossReason, uint64) bool
-}
-
-// observerLossAccumulator keeps producer cumulative identities distinct until
-// they reach the narrower CLI category/reason schema. This preserves addition
-// across independent producer counters while making repeated snapshots idempotent.
-type observerLossAccumulator struct {
-	mu       sync.Mutex
-	sink     observerLossSink
-	reported map[observerLossKey]uint64
-}
-
-func newObserverLossAccumulator(sink observerLossSink) *observerLossAccumulator {
-	if sink == nil {
-		return nil
-	}
-	return &observerLossAccumulator{sink: sink}
-}
-
-func (losses *observerLossAccumulator) report(
-	source observerLossSource,
-	category clievent.ObserverLossCategory,
-	reason clievent.ObserverLossReason,
-	cumulative uint64,
-) {
-	if losses == nil || cumulative == 0 {
-		return
-	}
-	key := observerLossKey{source: source, category: category, reason: reason}
-	losses.mu.Lock()
-	if losses.reported == nil {
-		losses.reported = make(map[observerLossKey]uint64)
-	}
-	previous := losses.reported[key]
-	if cumulative <= previous {
-		losses.mu.Unlock()
-		return
-	}
-	losses.reported[key] = cumulative
-	losses.mu.Unlock()
-	losses.sink.ReportObserverLoss(category, reason, cumulative-previous)
-}
-
 type receiverObservationCompleter interface {
-	CompleteObservations(context.Context) v2peer.ReceiverObservationCompletion
+	ReceiverTerminationObservations() <-chan v2peer.ReceiverTerminationTrace
+	PeerDiagnostics() <-chan v2peer.PeerDiagnosticObservation
+	CompleteObservations() v2peer.ReceiverObservationCompletion
 }
 
 type getObservationState struct {
-	terminalMu sync.Mutex
-	terminal   []clievent.Event
+	completionMu             sync.Mutex
+	relay                    *relayv2.ReceiverConnection
+	relayReader              *observationbridge.Reader[relayv2.LifecycleTrace]
+	webRTC                   *webRTCObservationSet
+	receiver                 receiverObservationCompleter
+	receiverReader           *observationbridge.Reader[v2peer.ReceiverTerminationTrace]
+	receiverDiagnosticReader *observationbridge.Reader[v2peer.PeerDiagnosticObservation]
+	lanes                    *transfer.LaneSet
+	laneReader               *observationbridge.Reader[transfer.LaneSettlementSummary]
+	completeOnce             sync.Once
 
-	completionMu sync.Mutex
-	relay        *relayv2.ReceiverConnection
-	webRTC       *webRTCObservationSet
-	receiver     receiverObservationCompleter
-	lanes        *transfer.LaneSet
-	relayGate    *observationPublicationGate
-	webRTCGate   *observationPublicationGate
-	receiverGate *observationPublicationGate
-	laneGate     *observationPublicationGate
-	completeOnce sync.Once
-
-	losses *observerLossAccumulator
+	losses *observationbridge.CumulativeLosses[observerLossSource]
 }
 
 type getObservation struct {
@@ -127,11 +65,7 @@ func newGetObservation(runtime *commandRuntime) getObservation {
 	state := &getObservationState{}
 	if runtime != nil && runtime.detailedDiagnosticsEnabled() {
 		state.webRTC = &webRTCObservationSet{}
-		state.losses = newObserverLossAccumulator(runtime)
-		state.relayGate = &observationPublicationGate{}
-		state.webRTCGate = &observationPublicationGate{}
-		state.receiverGate = &observationPublicationGate{}
-		state.laneGate = &observationPublicationGate{}
+		state.losses = observationbridge.NewCumulativeLosses[observerLossSource](runtime)
 	}
 	return getObservation{runtime: runtime, state: state}
 }
@@ -148,23 +82,30 @@ func (observation getObservation) finalize(
 	progress clievent.TransferProgress,
 	settlement clievent.TransferSettled,
 ) bool {
-	return observation.stageTerminal(progress, settlement)
+	return observation.stageTransferTerminal(progress, settlement)
 }
 
-func (observation getObservation) stageTerminal(events ...clievent.Event) bool {
-	if observation.runtime == nil || len(events) == 0 {
+func (observation getObservation) stageTerminal(terminal clievent.TerminalEvent) bool {
+	if observation.runtime == nil || terminal == nil {
 		return false
 	}
 	if observation.state == nil {
-		return observation.runtime.Finalize(events...)
+		return observation.runtime.Finalize(terminal)
 	}
-	observation.state.terminalMu.Lock()
-	defer observation.state.terminalMu.Unlock()
-	if len(observation.state.terminal) != 0 {
+	return observation.runtime.StageFinalization(terminal)
+}
+
+func (observation getObservation) stageTransferTerminal(
+	progress clievent.TransferProgress,
+	terminal clievent.TransferSettled,
+) bool {
+	if observation.runtime == nil {
 		return false
 	}
-	observation.state.terminal = append([]clievent.Event(nil), events...)
-	return true
+	if observation.state == nil {
+		return observation.runtime.PublishTransferFinalization(progress, terminal)
+	}
+	return observation.runtime.StageTransferFinalization(progress, terminal)
 }
 
 func (observation getObservation) completeAndFinalize() {
@@ -174,15 +115,7 @@ func (observation getObservation) completeAndFinalize() {
 	ctx, cancel := context.WithTimeout(context.Background(), observationCompletionTimeout)
 	observation.complete(ctx)
 	cancel()
-	if observation.state == nil {
-		return
-	}
-	observation.state.terminalMu.Lock()
-	events := append([]clievent.Event(nil), observation.state.terminal...)
-	observation.state.terminalMu.Unlock()
-	if len(events) != 0 {
-		observation.runtime.Finalize(events...)
-	}
+	observation.runtime.FinalizeStaged()
 }
 
 func (observation getObservation) lose(category clievent.ObserverLossCategory, cause error) {
@@ -283,7 +216,7 @@ func (observation getObservation) relayConnected(endpoint v2.RelayEndpoint) {
 }
 
 func (observation getObservation) relayLifecycle(value relayv2.LifecycleTrace) {
-	observation.relayLifecycleContext(context.Background(), value)
+	observation.relayLifecycleContext(context.Background(), nil, value)
 }
 
 func (observation getObservation) TraceRelayLifecycle(value relayv2.LifecycleTrace) {
@@ -291,19 +224,19 @@ func (observation getObservation) TraceRelayLifecycle(value relayv2.LifecycleTra
 }
 
 func (observation getObservation) TraceRelayLifecycleContext(ctx context.Context, value relayv2.LifecycleTrace) {
-	observation.relayLifecycleContext(ctx, value)
+	observation.relayLifecycleContext(ctx, nil, value)
 }
 
-func (observation getObservation) relayLifecycleContext(ctx context.Context, value relayv2.LifecycleTrace) {
+func (observation getObservation) relayLifecycleContext(
+	ctx context.Context,
+	gate *observationbridge.PublicationGate,
+	value relayv2.LifecycleTrace,
+) {
 	if ctx.Err() != nil {
 		return
 	}
 	event, err := commandprojection.ProjectRelayLifecycle(clievent.CommandGet, value)
-	var gate *observationPublicationGate
-	if observation.state != nil {
-		gate = observation.state.relayGate
-	}
-	gate.commit(ctx, func() bool {
+	gate.Commit(ctx, func() bool {
 		if err != nil {
 			observation.lose(clievent.ObserverLossRelayLifecycle, err)
 			return false
@@ -317,7 +250,7 @@ func (observation getObservation) relayLifecycleContext(ctx context.Context, val
 }
 
 func (observation getObservation) webRTCLifecycle(value transportwebrtc.LifecycleTrace) {
-	observation.webRTCLifecycleContext(context.Background(), value)
+	observation.webRTCLifecycleContext(context.Background(), nil, value)
 }
 
 func (observation getObservation) TraceWebRTCLifecycle(value transportwebrtc.LifecycleTrace) {
@@ -325,19 +258,19 @@ func (observation getObservation) TraceWebRTCLifecycle(value transportwebrtc.Lif
 }
 
 func (observation getObservation) TraceWebRTCLifecycleContext(ctx context.Context, value transportwebrtc.LifecycleTrace) {
-	observation.webRTCLifecycleContext(ctx, value)
+	observation.webRTCLifecycleContext(ctx, nil, value)
 }
 
-func (observation getObservation) webRTCLifecycleContext(ctx context.Context, value transportwebrtc.LifecycleTrace) {
+func (observation getObservation) webRTCLifecycleContext(
+	ctx context.Context,
+	gate *observationbridge.PublicationGate,
+	value transportwebrtc.LifecycleTrace,
+) {
 	if ctx.Err() != nil {
 		return
 	}
 	event, err := commandprojection.ProjectWebRTCLifecycle(clievent.CommandGet, value)
-	var gate *observationPublicationGate
-	if observation.state != nil {
-		gate = observation.state.webRTCGate
-	}
-	gate.commit(ctx, func() bool {
+	gate.Commit(ctx, func() bool {
 		if err != nil {
 			observation.lose(clievent.ObserverLossWebRTCLifecycle, err)
 			return false
@@ -384,34 +317,38 @@ func (observation getObservation) protocolTracer() sessionruntime.ProtocolOperat
 	return sessionruntime.ProtocolOperationTraceFunc(observation.protocolOperation)
 }
 
-func (observation getObservation) relayTracer() relayv2.LifecycleTracer {
+func (observation getObservation) relayObservationCapacity() int {
 	if observation.runtime == nil || !observation.runtime.detailedDiagnosticsEnabled() {
-		return nil
+		return 0
 	}
-	return observation
+	return relayv2.DefaultLifecycleObservationCapacity
 }
 
-func (observation getObservation) webRTCTracer() transportwebrtc.LifecycleTracer {
+func (observation getObservation) webRTCObservationCapacity() int {
 	if observation.runtime == nil || !observation.runtime.detailedDiagnosticsEnabled() {
-		return nil
+		return 0
 	}
-	return observation
+	return transportwebrtc.DefaultLifecycleObservationCapacity
 }
 
 func (observation getObservation) TraceLaneSettlement(value transfer.LaneSettlementSummary) {
-	observation.TraceLaneSettlementContext(context.Background(), value)
+	observation.traceLaneSettlementContext(context.Background(), nil, value)
 }
 
 func (observation getObservation) TraceLaneSettlementContext(ctx context.Context, value transfer.LaneSettlementSummary) {
+	observation.traceLaneSettlementContext(ctx, nil, value)
+}
+
+func (observation getObservation) traceLaneSettlementContext(
+	ctx context.Context,
+	gate *observationbridge.PublicationGate,
+	value transfer.LaneSettlementSummary,
+) {
 	if ctx.Err() != nil {
 		return
 	}
 	event, err := commandprojection.ProjectLaneSettlement(value)
-	var gate *observationPublicationGate
-	if observation.state != nil {
-		gate = observation.state.laneGate
-	}
-	gate.commit(ctx, func() bool {
+	gate.Commit(ctx, func() bool {
 		if err != nil {
 			observation.lose(clievent.ObserverLossLaneSettlement, err)
 			return false
@@ -420,11 +357,11 @@ func (observation getObservation) TraceLaneSettlementContext(ctx context.Context
 	})
 }
 
-func (observation getObservation) laneSettlementTracer() transfer.LaneSettlementTracer {
+func (observation getObservation) laneSettlementObservationCapacity() transfer.LaneSettlementObservationCapacity {
 	if observation.runtime == nil || !observation.runtime.detailedDiagnosticsEnabled() {
-		return nil
+		return 0
 	}
-	return observation
+	return transfer.DefaultLaneSettlementObservationCapacity
 }
 
 func (observation getObservation) reportCumulativeLoss(
@@ -434,7 +371,7 @@ func (observation getObservation) reportCumulativeLoss(
 	cumulative uint64,
 ) {
 	if observation.state != nil && observation.state.losses != nil {
-		observation.state.losses.report(source, category, reason, cumulative)
+		observation.state.losses.Report(source, category, reason, cumulative)
 		return
 	}
 	if observation.runtime != nil {
@@ -446,17 +383,43 @@ func (observation getObservation) registerRelayConnection(connection *relayv2.Re
 	if observation.state == nil || !observation.runtime.detailedDiagnosticsEnabled() {
 		return
 	}
+	gate := &observationbridge.PublicationGate{}
+	reader := observationbridge.Start(connection.LifecycleTrace(), gate, func(ctx context.Context, value relayv2.LifecycleTrace) {
+		observation.relayLifecycleContext(ctx, gate, value)
+	})
 	observation.state.completionMu.Lock()
 	observation.state.relay = connection
+	observation.state.relayReader = reader
 	observation.state.completionMu.Unlock()
 }
 
-func (observation getObservation) registerReceiverFactory(factory receiverObservationCompleter) {
+func (observation getObservation) registerReceiverFactory(
+	factory receiverObservationCompleter,
+	localStop *receiverLocalStop,
+) {
 	if observation.state == nil || !observation.runtime.detailedDiagnosticsEnabled() {
 		return
 	}
+	terminationGate := &observationbridge.PublicationGate{}
+	terminationReader := observationbridge.Start(
+		factory.ReceiverTerminationObservations(),
+		terminationGate,
+		func(ctx context.Context, value v2peer.ReceiverTerminationTrace) {
+			observation.receiverTerminationContext(ctx, terminationGate, value, localStop.snapshot())
+		},
+	)
+	diagnosticGate := &observationbridge.PublicationGate{}
+	diagnosticReader := observationbridge.Start(
+		factory.PeerDiagnostics(),
+		diagnosticGate,
+		func(ctx context.Context, value v2peer.PeerDiagnosticObservation) {
+			observation.peerDiagnosticContext(ctx, diagnosticGate, value)
+		},
+	)
 	observation.state.completionMu.Lock()
 	observation.state.receiver = factory
+	observation.state.receiverReader = terminationReader
+	observation.state.receiverDiagnosticReader = diagnosticReader
 	observation.state.completionMu.Unlock()
 }
 
@@ -464,8 +427,17 @@ func (observation getObservation) registerLaneSet(lanes *transfer.LaneSet) {
 	if observation.state == nil || !observation.runtime.detailedDiagnosticsEnabled() {
 		return
 	}
+	gate := &observationbridge.PublicationGate{}
+	reader := observationbridge.Start(
+		lanes.SettlementObservations(),
+		gate,
+		func(ctx context.Context, value transfer.LaneSettlementSummary) {
+			observation.traceLaneSettlementContext(ctx, gate, value)
+		},
+	)
 	observation.state.completionMu.Lock()
 	observation.state.lanes = lanes
+	observation.state.laneReader = reader
 	observation.state.completionMu.Unlock()
 }
 
@@ -483,79 +455,75 @@ func (observation getObservation) complete(ctx context.Context) {
 	observation.state.completeOnce.Do(func() {
 		observation.state.completionMu.Lock()
 		relay := observation.state.relay
+		relayReader := observation.state.relayReader
 		webRTC := observation.state.webRTC
 		receiver := observation.state.receiver
+		receiverReader := observation.state.receiverReader
+		receiverDiagnosticReader := observation.state.receiverDiagnosticReader
 		lanes := observation.state.lanes
+		laneReader := observation.state.laneReader
 		observation.state.completionMu.Unlock()
 
 		if relay != nil {
-			completion := relay.CompleteObservations(ctx)
-			observation.state.relayGate.revoke()
+			completion := relay.CompleteObservations()
+			status := relayReader.Join(ctx)
 			observation.reportRelayCompletion(completion)
-		} else {
-			observation.state.relayGate.revoke()
+			observation.reportReaderStatus(clievent.ObserverLossRelayLifecycle, status)
 		}
-		webRTCCompletion := webRTC.complete(ctx)
-		observation.state.webRTCGate.revoke()
+		webRTCCompletion, webRTCStatuses := webRTC.complete(ctx)
 		observation.reportWebRTCCompletion(webRTCCompletion)
+		for _, status := range webRTCStatuses {
+			observation.reportReaderStatus(clievent.ObserverLossWebRTCLifecycle, status)
+		}
 		if receiver != nil {
-			completion := receiver.CompleteObservations(ctx)
-			observation.state.receiverGate.revoke()
+			completion := receiver.CompleteObservations()
+			terminationStatus := receiverReader.Join(ctx)
+			diagnosticStatus := receiverDiagnosticReader.Join(ctx)
 			observation.reportReceiverCompletion(completion)
-		} else {
-			observation.state.receiverGate.revoke()
+			observation.reportReaderStatus(clievent.ObserverLossReceiverTermination, terminationStatus)
+			observation.reportReaderStatus(clievent.ObserverLossReceiverTermination, diagnosticStatus)
 		}
 		if lanes != nil {
-			completion := lanes.CompleteObservations(ctx)
-			observation.state.laneGate.revoke()
+			completion := lanes.CompleteObservations()
+			status := laneReader.Join(ctx)
 			observation.reportLaneCompletion(completion)
-		} else {
-			observation.state.laneGate.revoke()
+			observation.reportReaderStatus(clievent.ObserverLossLaneSettlement, status)
 		}
 	})
 }
 
 func (observation getObservation) reportRelayCompletion(completion relayv2.LifecycleObservationCompletion) {
-	observation.reportCumulativeLoss(observerLossRelayQueue, clievent.ObserverLossRelayLifecycle, clievent.ObserverLossTraceQueue, completion.Loss.QueueOverflow)
-	observation.reportCumulativeLoss(observerLossRelayPanic, clievent.ObserverLossRelayLifecycle, clievent.ObserverLossEventContract, completion.Loss.ObserverPanic)
-	observation.reportCumulativeLoss(observerLossRelayDrain, clievent.ObserverLossRelayLifecycle, clievent.ObserverLossAdapterCapacityTimeout,
-		observationDrainLoss(completion.Loss.CallbackTimeout, completion.Loss.Undrained, completion.Drained))
+	observation.reportCumulativeLoss(observerLossRelayQueue, clievent.ObserverLossRelayLifecycle, clievent.ObserverLossStreamCapacity, completion.Loss.CapacityDropped)
 }
 
 func (observation getObservation) reportWebRTCCompletion(completion transportwebrtc.LifecycleObservationCompletion) {
-	observation.reportCumulativeLoss(observerLossWebRTCQueue, clievent.ObserverLossWebRTCLifecycle, clievent.ObserverLossTraceQueue, completion.Loss.QueueOverflow)
-	observation.reportCumulativeLoss(observerLossWebRTCPanic, clievent.ObserverLossWebRTCLifecycle, clievent.ObserverLossEventContract, completion.Loss.ObserverPanic)
-	observation.reportCumulativeLoss(observerLossWebRTCDrain, clievent.ObserverLossWebRTCLifecycle, clievent.ObserverLossAdapterCapacityTimeout,
-		observationDrainLoss(completion.Loss.CallbackTimeout, completion.Loss.Undrained, completion.Drained))
+	observation.reportCumulativeLoss(observerLossWebRTCQueue, clievent.ObserverLossWebRTCLifecycle, clievent.ObserverLossStreamCapacity, completion.Loss.CapacityDropped)
 }
 
 func (observation getObservation) reportLaneCompletion(completion transfer.LaneSettlementObservationCompletion) {
-	observation.reportCumulativeLoss(observerLossLaneQueue, clievent.ObserverLossLaneSettlement, clievent.ObserverLossTraceQueue, completion.Loss.QueueOverflow)
-	observation.reportCumulativeLoss(observerLossLanePanic, clievent.ObserverLossLaneSettlement, clievent.ObserverLossEventContract, completion.Loss.ObserverPanic)
-	observation.reportCumulativeLoss(observerLossLaneDrain, clievent.ObserverLossLaneSettlement, clievent.ObserverLossAdapterCapacityTimeout,
-		observationDrainLoss(completion.Loss.CallbackTimeout, completion.Loss.Undrained, completion.Drained))
+	observation.reportCumulativeLoss(observerLossLaneQueue, clievent.ObserverLossLaneSettlement, clievent.ObserverLossStreamCapacity, completion.Loss.CapacityDropped)
 }
 
 func (observation getObservation) reportReceiverCompletion(completion v2peer.ReceiverObservationCompletion) {
-	observation.reportCumulativeLoss(observerLossReceiverTerminationCapacity, clievent.ObserverLossReceiverTermination, clievent.ObserverLossAdapterCapacityTimeout, completion.Terminations.Loss.Capacity)
-	observation.reportCumulativeLoss(observerLossReceiverTerminationPanic, clievent.ObserverLossReceiverTermination, clievent.ObserverLossEventContract, completion.Terminations.Loss.ObserverPanic)
-	observation.reportCumulativeLoss(observerLossReceiverTerminationDrain, clievent.ObserverLossReceiverTermination, clievent.ObserverLossAdapterCapacityTimeout,
-		observationDrainLoss(completion.Terminations.Loss.CallbackTimeout, completion.Terminations.Loss.Undrained, completion.Terminations.Drained))
-	observation.reportCumulativeLoss(observerLossReceiverDiagnosticPanic, clievent.ObserverLossReceiverTermination, clievent.ObserverLossEventContract, completion.Diagnostics.Loss.ObserverPanic)
-	observation.reportCumulativeLoss(observerLossReceiverDiagnosticDrain, clievent.ObserverLossReceiverTermination, clievent.ObserverLossAdapterCapacityTimeout,
-		observationDrainLoss(
-			saturatingAdd(completion.Diagnostics.Loss.Capacity, completion.Diagnostics.Loss.CallbackTimeout),
-			completion.Diagnostics.Loss.Undrained,
-			completion.Diagnostics.Drained,
-		))
+	observation.reportCumulativeLoss(observerLossReceiverTerminationCapacity, clievent.ObserverLossReceiverTermination, clievent.ObserverLossStreamCapacity, completion.Terminations.Loss.CapacityDropped)
+	observation.reportCumulativeLoss(observerLossReceiverDiagnosticDrain, clievent.ObserverLossReceiverTermination, clievent.ObserverLossStreamCapacity, completion.Diagnostics.Loss.CapacityDropped)
 }
 
-func observationDrainLoss(callbackTimeout, undrained uint64, drained bool) uint64 {
-	loss := saturatingAdd(callbackTimeout, undrained)
-	if !drained && loss == 0 {
-		return 1
+func (observation getObservation) reportReaderStatus(
+	category clievent.ObserverLossCategory,
+	status observationbridge.Status,
+) {
+	if status.Joined || observation.runtime == nil {
+		return
 	}
-	return loss
+	residue := status.Buffered
+	if status.Active {
+		residue = saturatingAdd(residue, 1)
+	}
+	if residue == 0 {
+		residue = 1
+	}
+	observation.runtime.ReportObserverLoss(category, clievent.ObserverLossReaderNotJoined, residue)
 }
 
 func (observation getObservation) progress(
@@ -627,11 +595,12 @@ func (observation getObservation) laneAdopted(
 }
 
 func (observation getObservation) receiverTermination(value v2peer.ReceiverTerminationTrace, localStop clievent.ReceiverLocalStopReason) {
-	observation.receiverTerminationContext(context.Background(), value, localStop)
+	observation.receiverTerminationContext(context.Background(), nil, value, localStop)
 }
 
 func (observation getObservation) receiverTerminationContext(
 	ctx context.Context,
+	gate *observationbridge.PublicationGate,
 	value v2peer.ReceiverTerminationTrace,
 	localStop clievent.ReceiverLocalStopReason,
 ) {
@@ -639,11 +608,7 @@ func (observation getObservation) receiverTerminationContext(
 		return
 	}
 	event, err := commandprojection.ProjectReceiverTermination(value, localStop)
-	var gate *observationPublicationGate
-	if observation.state != nil {
-		gate = observation.state.receiverGate
-	}
-	gate.commit(ctx, func() bool {
+	gate.Commit(ctx, func() bool {
 		if err != nil {
 			observation.lose(clievent.ObserverLossReceiverTermination, err)
 			return false

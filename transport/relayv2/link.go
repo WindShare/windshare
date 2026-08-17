@@ -24,6 +24,11 @@ type link struct {
 	order     []v2.RelaySessionID
 	cursor    int
 	queued    int
+	// Observation completion joins only accepted sends that can still publish a
+	// result fact; disabled tracing pays no registration or synchronization cost.
+	sendResultMu         sync.Mutex
+	pendingSendResults   map[*sendRequest]struct{}
+	sendResultPublishers sync.WaitGroup
 
 	channelMu sync.Mutex
 	channels  map[v2.RelaySessionID]*Channel
@@ -36,22 +41,22 @@ type link struct {
 	shutdownOnce sync.Once
 	done         chan struct{}
 
-	traces        *lifecycleDispatcher
+	traces        *lifecycleSource
 	nextOperation atomic.Uint64
 }
 
 func newLink(parent context.Context, socket BinarySocket, fixed bool) *link {
-	return newLinkWithTracer(parent, socket, fixed, nil)
+	return newLinkWithLifecycleStream(parent, socket, fixed, 0)
 }
 
-func newLinkWithTracer(parent context.Context, socket BinarySocket, fixed bool, tracer LifecycleTracer) *link {
+func newLinkWithLifecycleStream(parent context.Context, socket BinarySocket, fixed bool, capacity int) *link {
 	ctx, cancel := context.WithCancel(parent)
 	linkID := nextLinkID.Add(1)
 	return &link{
 		id: linkID, socket: socket, ctx: ctx, cancel: cancel, fixed: fixed,
 		writeWake: make(chan struct{}, 1), queues: make(map[v2.RelaySessionID]*sendQueue),
 		channels: make(map[v2.RelaySessionID]*Channel), accept: make(chan *Channel, channelReceiveFrames),
-		done: make(chan struct{}), traces: newLifecycleDispatcher(linkID, tracer),
+		done: make(chan struct{}), traces: newLifecycleSource(linkID, capacity),
 	}
 }
 
@@ -66,11 +71,26 @@ func (l *link) trace(event LifecycleTrace) {
 	}
 }
 
-func (l *link) completeObservations(ctx context.Context) LifecycleObservationCompletion {
+func (l *link) lifecycleTrace() <-chan LifecycleTrace {
 	if l == nil {
-		return LifecycleObservationCompletion{Drained: true}
+		return nil
 	}
-	return l.traces.complete(ctx)
+	return l.traces.stream()
+}
+
+func (l *link) completeObservations() LifecycleObservationCompletion {
+	if l == nil {
+		return LifecycleObservationCompletion{}
+	}
+	return l.traces.complete()
+}
+
+func (l *link) completeObservationsWithFinal(event LifecycleTrace) LifecycleObservationCompletion {
+	if l == nil {
+		return LifecycleObservationCompletion{}
+	}
+	event.LinkID = l.id
+	return l.traces.completeWithFinal(event)
 }
 
 func (l *link) traceTransition(channel *Channel, transition retirementTransition) {
@@ -152,7 +172,7 @@ func (l *link) writeLoop() {
 		request, ok := l.takeRequest()
 		if ok {
 			err := l.socket.Write(l.ctx, websocket.MessageBinary, request.data)
-			request.receipt <- err
+			l.resolveRequest(request, err, true)
 			if err != nil {
 				l.stop(err)
 				return
@@ -209,16 +229,14 @@ func (l *link) retire(id v2.RelaySessionID) {
 		natural: true, source: LifecycleRetirementRelaySession,
 		cause: ErrSessionRetired, operationID: l.nextOperationID(),
 	}
-	_, transition := l.requestChannelRetirement(channel, record)
-	l.traceTransition(channel, transition)
+	l.requestChannelRetirement(channel, record)
 }
 
 func (l *link) failChannel(channel *Channel, source LifecycleRetirementSource, cause error) {
 	record := retirementRecord{
 		source: source, cause: cause, operationID: l.nextOperationID(),
 	}
-	_, transition := l.requestChannelRetirement(channel, record)
-	l.traceTransition(channel, transition)
+	l.requestChannelRetirement(channel, record)
 }
 
 func (l *link) stop(cause error) {
@@ -242,20 +260,18 @@ func (l *link) stop(cause error) {
 		l.retirement = &record
 	}
 	authoritative := *l.retirement
-	l.lifecycleMu.Unlock()
-
 	l.trace(linkRetiringTrace(
 		proposed.operationID,
 		authoritative.source,
 		lifecycleCause(authoritative.cause),
 		lifecycleCause(proposed.cause),
 	))
+	l.lifecycleMu.Unlock()
 	channels := l.snapshotChannels()
 	waiters := make([]<-chan struct{}, 0, len(channels))
 	if first || cause != nil {
 		for _, channel := range channels {
-			done, transition := l.requestChannelRetirement(channel, proposed)
-			l.traceTransition(channel, transition)
+			done := l.requestChannelRetirement(channel, proposed)
 			if first && authoritative.natural && done != nil {
 				waiters = append(waiters, done)
 			}
@@ -269,20 +285,27 @@ func (l *link) stop(cause error) {
 			<-done
 		}
 	}
+	// Failure retirement can cancel an in-flight write that was already removed
+	// from the queue. Keep the stream open until that accepted result publishes.
+	l.cancel()
+	if l.traces != nil {
+		if authoritative.cause != nil {
+			l.resolvePendingRequests(authoritative.sendError())
+		}
+		l.sendResultPublishers.Wait()
+	}
 	l.shutdownOnce.Do(func() {
-		l.cancel()
 		_ = l.socket.Close(websocket.StatusNormalClosure, "")
 		l.lifecycleMu.Lock()
 		l.lifecycle = linkClosed
 		l.lifecycleMu.Unlock()
-		l.trace(linkClosedTrace(
+		l.completeObservationsWithFinal(linkClosedTrace(
 			authoritative.operationID,
 			authoritative.source,
 			lifecycleCause(authoritative.cause),
 		))
-		l.traces.shutdown()
-		// Done is also the producer quiescence cut: the terminal lifecycle fact
-		// must be admitted before an owner can begin observation completion.
+		// Done follows the producer cut so observers never see transport completion
+		// before the terminal link fact has been admitted and the stream sealed.
 		close(l.done)
 	})
 }

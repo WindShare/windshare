@@ -18,10 +18,17 @@ func TestSenderPeerFactoryUsesProductionProviderForEveryZeroValueApp(t *testing.
 	} {
 		t.Setenv(name, "must-not-be-read")
 	}
-	app := &App{Stderr: io.Discard}
-	factory, err := app.newSenderPeerFactory(nil, nil)
-	if err != nil || factory == nil {
-		t.Fatalf("production sender factory = %v, %v", factory, err)
+	const constructionCount = 100
+	for construction := range constructionCount {
+		app := &App{Stderr: io.Discard}
+		factory, err := app.newSenderPeerFactory(nil, nil)
+		if err != nil || factory == nil {
+			t.Fatalf("construction %d production sender factory = %v, %v", construction, factory, err)
+		}
+		if factory.SenderAttemptObservations() != nil || factory.PeerDiagnostics() != nil {
+			t.Fatalf("construction %d enabled a default observation stream", construction)
+		}
+		factory.CompleteObservations()
 	}
 }
 
@@ -44,19 +51,14 @@ func TestSenderPeerAdmissionPublishesPrivateLaneMilestone(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := &App{processTrace: trace}
-	config := senderPeerConfig(
-		nil,
-		v2peer.SenderAttemptObserverFunc(app.observeSenderPeerAttempt),
-		nil,
-	)
-	config.Observer.ObserveSenderAttempt(v2peer.SenderAttemptObservation{
+	app.observeSenderPeerAttempt(v2peer.SenderAttemptObservation{
 		Stage: v2peer.SenderAttemptLaneAdmissionStarted,
 		Lane:  &sessionruntime.LaneIdentity{ID: 1, Epoch: 1},
 	})
 	if sink.event.Milestone != "" {
 		t.Fatalf("pre-admission observation published milestone %q", sink.event.Milestone)
 	}
-	config.Observer.ObserveSenderAttempt(v2peer.SenderAttemptObservation{
+	app.observeSenderPeerAttempt(v2peer.SenderAttemptObservation{
 		Stage: v2peer.SenderAttemptAdmitted,
 		Lane:  &sessionruntime.LaneIdentity{ID: 1, Epoch: 1},
 	})
@@ -73,16 +75,35 @@ func TestSenderPeerAdmissionPublishesPrivateLaneMilestone(t *testing.T) {
 func TestSenderPeerConfigKeepsDetailedDiagnosticsDisabledByDefault(t *testing.T) {
 	emitter := &shareRecordingEmitter{}
 	observations := newShareObservations(emitter)
-	config := senderPeerConfig(observations, nil, nil)
-	if config.Observer == nil || config.DataChannels == nil || config.DiagnosticObserver != nil {
+	config := senderPeerConfig(observations, false, nil)
+	if config.SenderAttemptObservationCapacity != 0 || config.PeerDiagnosticObservationCapacity != 0 || config.DataChannels != nil {
 		t.Fatalf("sender observer config = %#v", config)
 	}
-	adapter, ok := config.DataChannels.(senderDataChannelAdapter)
-	if !ok || adapter.tracer != nil {
-		t.Fatalf("data channel adapter = %#v", config.DataChannels)
+	processOnly := senderPeerConfig(observations, true, nil)
+	if processOnly.SenderAttemptObservationCapacity == 0 || processOnly.PeerDiagnosticObservationCapacity != 0 || processOnly.DataChannels != nil {
+		t.Fatalf("process-only observer config = %#v", processOnly)
 	}
-	router := config.Observer.(senderPeerObservationRouter)
-	if router.command != nil || len(emitter.events) != 0 {
-		t.Fatalf("default detailed observer = %#v, events=%#v", router.command, emitter.events)
+	if len(emitter.events) != 0 {
+		t.Fatalf("default detailed events=%#v", emitter.events)
+	}
+}
+
+func TestProcessTraceOnlySenderFactoryRetainsAndCompletesItsAttemptStream(t *testing.T) {
+	observations := newShareObservations(&shareRecordingEmitter{})
+	app := &App{processTrace: &processTrace{}}
+	factory, err := app.newSenderPeerFactory(observations, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if factory.SenderAttemptObservations() == nil || factory.PeerDiagnostics() != nil {
+		t.Fatalf("process-only streams: attempts=%v diagnostics=%v", factory.SenderAttemptObservations(), factory.PeerDiagnostics())
+	}
+	if observations.peerFactory != factory || observations.peerAttemptReader == nil {
+		t.Fatal("process-only observation ownership was not retained")
+	}
+	observations.completeWithin()
+	completion := factory.CompleteObservations()
+	if completion.Attempts.Loss.CapacityDropped != 0 {
+		t.Fatalf("completion = %+v", completion)
 	}
 }

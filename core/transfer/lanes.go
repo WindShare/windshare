@@ -11,6 +11,7 @@ import (
 
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -90,10 +91,10 @@ type BlockLane interface {
 }
 
 type LaneSetConfig struct {
-	ProtocolSessionID protocolsession.ProtocolSessionID
-	RaceWidth         int
-	Now               func() time.Time
-	SettlementTracer  LaneSettlementTracer
+	ProtocolSessionID             protocolsession.ProtocolSessionID
+	RaceWidth                     int
+	Now                           func() time.Time
+	SettlementObservationCapacity LaneSettlementObservationCapacity
 }
 
 type laneState struct {
@@ -141,7 +142,8 @@ type LaneSet struct {
 	contentSuspensions  map[uint32]*contentLaneSuspensionPolicy
 	cursor              uint64
 	availabilityChanged chan struct{}
-	settlements         *laneSettlementDispatcher
+	settlementProducer  observationstream.Producer[LaneSettlementSummary]
+	settlementConsumer  observationstream.Consumer[LaneSettlementSummary]
 	finalSettlements    []*laneState
 }
 
@@ -158,13 +160,25 @@ func NewLaneSet(config LaneSetConfig) (*LaneSet, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
+	var settlementProducer observationstream.Producer[LaneSettlementSummary]
+	var settlementConsumer observationstream.Consumer[LaneSettlementSummary]
+	if config.SettlementObservationCapacity != 0 {
+		var err error
+		settlementProducer, settlementConsumer, err = observationstream.New[LaneSettlementSummary](
+			observationstream.Capacity(config.SettlementObservationCapacity),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("lane settlement observations: %w", err)
+		}
+	}
 	lifecycle, stop := context.WithCancel(context.Background())
 	return &LaneSet{
 		sessionID: config.ProtocolSessionID, raceWidth: config.RaceWidth, now: config.Now,
 		lifecycle: lifecycle, stop: stop, lanes: make(map[uint32]*laneState),
 		contentSuspensions:  make(map[uint32]*contentLaneSuspensionPolicy),
 		availabilityChanged: make(chan struct{}),
-		settlements:         newLaneSettlementDispatcher(config.SettlementTracer),
+		settlementProducer:  settlementProducer,
+		settlementConsumer:  settlementConsumer,
 		closeDone:           make(chan struct{}),
 	}, nil
 }
@@ -174,7 +188,7 @@ func (s *LaneSet) Add(identity LaneIdentity, route LaneRoute, lane BlockLane) er
 		return ErrInvalidLane
 	}
 	state := &laneState{identity: identity, route: route, lane: lane}
-	if s.settlements != nil {
+	if s.settlementObservationsEnabled() {
 		state.settlement = &laneSettlementCounters{}
 	}
 	s.mu.Lock()
@@ -206,6 +220,19 @@ func (s *LaneSet) Add(identity LaneIdentity, route LaneRoute, lane BlockLane) er
 	s.notifyAvailabilityLocked()
 	s.mu.Unlock()
 	return nil
+}
+
+// SettlementObservations returns nil when settlement observation was disabled.
+// The receive-only capability leaves publication and completion with LaneSet.
+func (s *LaneSet) SettlementObservations() observationstream.Consumer[LaneSettlementSummary] {
+	if s == nil {
+		return nil
+	}
+	return s.settlementConsumer
+}
+
+func (s *LaneSet) settlementObservationsEnabled() bool {
+	return s != nil && s.settlementConsumer != nil
 }
 
 func (s *LaneSet) logicalLaneCountLocked() int {

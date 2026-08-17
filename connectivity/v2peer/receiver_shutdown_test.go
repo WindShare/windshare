@@ -101,7 +101,7 @@ type receiverTeardownGateHarness struct {
 	operation *exactReceiverTestOperation
 	peer      *receiverTestPeerConnection
 	gates     *receiverTeardownGates
-	traces    chan ReceiverTerminationTrace
+	traces    <-chan ReceiverTerminationTrace
 }
 
 func newReceiverTeardownGateHarness(t *testing.T) *receiverTeardownGateHarness {
@@ -110,7 +110,6 @@ func newReceiverTeardownGateHarness(t *testing.T) *receiverTeardownGateHarness {
 	baseChannel := newReceiverTestChannel()
 	gates := newReceiverTeardownGates()
 	channel := newReceiverTeardownGateChannel(baseChannel, peer.closed, gates)
-	traces := make(chan ReceiverTerminationTrace, 1)
 	var operation *exactReceiverTestOperation
 	harness := newReceiverHarness(t, func(config *ReceiverFactoryConfig, signaling *receiverTestSignaling) {
 		operation = newExactReceiverTestOperation(
@@ -125,8 +124,9 @@ func newReceiverTeardownGateHarness(t *testing.T) *receiverTeardownGateHarness {
 		config.DataChannels = DataChannelAdapterFunc(
 			func(*pion.DataChannel) (PeerDataChannel, error) { return channel, nil },
 		)
-		config.OnTermination = func(trace ReceiverTerminationTrace) { traces <- trace }
+		config.ReceiverTerminationObservationCapacity = 1
 	})
+	traces := harness.factory.ReceiverTerminationObservations()
 	t.Cleanup(func() {
 		gates.breakCycle()
 		gates.releaseDrain()

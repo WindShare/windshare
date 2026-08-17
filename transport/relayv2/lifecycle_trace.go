@@ -65,40 +65,6 @@ type LifecycleTrace struct {
 	Dropped          uint64
 }
 
-// LifecycleTracer receives link-ordered events asynchronously. Observer latency
-// and panics are isolated because diagnostics never own transport progress.
-type LifecycleTracer interface {
-	TraceRelayLifecycle(LifecycleTrace)
-}
-
-// LifecycleContextTracer receives revocable callback authority. Owners that can
-// block before publication should implement it so a bounded drain can prevent a
-// timed-out callback from committing a late fact.
-type LifecycleContextTracer interface {
-	LifecycleTracer
-	TraceRelayLifecycleContext(context.Context, LifecycleTrace)
-}
-
-type LifecycleTraceFunc func(LifecycleTrace)
-
-func (function LifecycleTraceFunc) TraceRelayLifecycle(event LifecycleTrace) {
-	if function != nil {
-		function(event)
-	}
-}
-
-type LifecycleContextTraceFunc func(context.Context, LifecycleTrace)
-
-func (function LifecycleContextTraceFunc) TraceRelayLifecycle(event LifecycleTrace) {
-	function.TraceRelayLifecycleContext(context.Background(), event)
-}
-
-func (function LifecycleContextTraceFunc) TraceRelayLifecycleContext(ctx context.Context, event LifecycleTrace) {
-	if function != nil {
-		function(ctx, event)
-	}
-}
-
 func lifecycleCause(err error) LifecycleCause {
 	switch {
 	case err == nil:

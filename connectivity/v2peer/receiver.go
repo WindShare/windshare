@@ -84,43 +84,45 @@ type ReceiverLaneSession interface {
 }
 
 const (
-	DefaultReceiverTerminationCapacity = 64
-	maximumReceiverTerminationCapacity = 4_096
+	DefaultReceiverTerminationObservationCapacity = 64
+	maximumReceiverTerminationObservationCapacity = 4_096
 )
 
 type ReceiverFactoryConfig struct {
-	Configuration                  pion.Configuration
-	PeerConnections                ReceiverPeerConnectionFactory
-	DataChannels                   DataChannelAdapter
-	AttemptTimeout                 time.Duration
-	AttemptTimers                  ReceiverAttemptTimerSource
-	MaxCandidates                  int
-	Random                         io.Reader
-	OnTermination                  func(ReceiverTerminationTrace)
-	OnTerminationContext           func(context.Context, ReceiverTerminationTrace)
-	TerminationObservationCapacity int
-	DiagnosticObserver             PeerDiagnosticObserver
+	Configuration                          pion.Configuration
+	PeerConnections                        ReceiverPeerConnectionFactory
+	DataChannels                           DataChannelAdapter
+	AttemptTimeout                         time.Duration
+	AttemptTimers                          ReceiverAttemptTimerSource
+	MaxCandidates                          int
+	Random                                 io.Reader
+	ReceiverTerminationObservationCapacity int
+	PeerDiagnosticObservationCapacity      int
 }
 
 type ReceiverFactory struct {
-	configuration   pion.Configuration
-	peerConnections ReceiverPeerConnectionFactory
-	dataChannels    DataChannelAdapter
-	attemptTimeout  time.Duration
-	attemptTimers   ReceiverAttemptTimerSource
-	maxCandidates   int
-	random          io.Reader
-	terminations    *observationDispatcher[ReceiverTerminationTrace]
-	diagnostics     *peerDiagnosticReporter
-	readMu          sync.Mutex
+	configuration         pion.Configuration
+	peerConnections       ReceiverPeerConnectionFactory
+	dataChannels          DataChannelAdapter
+	attemptTimeout        time.Duration
+	attemptTimers         ReceiverAttemptTimerSource
+	maxCandidates         int
+	random                io.Reader
+	terminations          *observationSource[ReceiverTerminationTrace]
+	diagnostics           *peerDiagnosticReporter
+	readMu                sync.Mutex
+	observationMu         sync.Mutex
+	observationsCompleted bool
+	observationCompletion ReceiverObservationCompletion
 }
 
 func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) {
 	if config.AttemptTimeout < 0 || config.MaxCandidates < 0 ||
 		config.MaxCandidates > maximumConfiguredCandidates ||
-		config.TerminationObservationCapacity < 0 ||
-		config.TerminationObservationCapacity > maximumReceiverTerminationCapacity ||
-		(config.OnTermination != nil && config.OnTerminationContext != nil) {
+		config.ReceiverTerminationObservationCapacity < 0 ||
+		config.ReceiverTerminationObservationCapacity > maximumReceiverTerminationObservationCapacity ||
+		config.PeerDiagnosticObservationCapacity < 0 ||
+		config.PeerDiagnosticObservationCapacity > maximumPeerDiagnosticObservationCapacity {
 		return nil, ErrConfig
 	}
 	if config.AttemptTimeout == 0 {
@@ -147,48 +149,64 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 	if config.Random == nil {
 		config.Random = rand.Reader
 	}
-	if (config.OnTermination != nil || config.OnTerminationContext != nil) &&
-		config.TerminationObservationCapacity == 0 {
-		config.TerminationObservationCapacity = DefaultReceiverTerminationCapacity
+	terminations, err := newObservationSource[ReceiverTerminationTrace](
+		config.ReceiverTerminationObservationCapacity,
+	)
+	if err != nil {
+		return nil, errors.Join(ErrConfig, err)
+	}
+	diagnostics, err := newPeerDiagnosticReporter(config.PeerDiagnosticObservationCapacity)
+	if err != nil {
+		return nil, errors.Join(ErrConfig, err)
 	}
 	factory := &ReceiverFactory{
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
 		dataChannels: config.DataChannels, attemptTimeout: config.AttemptTimeout,
 		attemptTimers: config.AttemptTimers,
 		maxCandidates: config.MaxCandidates, random: config.Random,
-		diagnostics: newPeerDiagnosticReporter(config.DiagnosticObserver),
-	}
-	if config.OnTermination != nil || config.OnTerminationContext != nil {
-		observeTermination := config.OnTermination
-		if observeTermination == nil {
-			observeTermination = func(trace ReceiverTerminationTrace) {
-				config.OnTerminationContext(context.Background(), trace)
-			}
-		}
-		factory.terminations = newObservationDispatcher(
-			config.TerminationObservationCapacity,
-			observeTermination,
-			func() { factory.reportDiagnostic(PeerDiagnosticReceiverTermination, PeerDiagnosticObserverPanic) },
-			func() { factory.reportDiagnostic(PeerDiagnosticReceiverTermination, PeerDiagnosticObserverCapacity) },
-		)
-		factory.terminations.observeContext = config.OnTerminationContext
+		terminations: terminations, diagnostics: diagnostics,
 	}
 	return factory, nil
 }
 
-// CompleteObservations closes receiver-termination callback admission before
-// draining diagnostics generated by that stream.
-func (factory *ReceiverFactory) CompleteObservations(ctx context.Context) ReceiverObservationCompletion {
+func (factory *ReceiverFactory) ReceiverTerminationObservations() <-chan ReceiverTerminationTrace {
 	if factory == nil {
-		return ReceiverObservationCompletion{
-			Terminations: ObservationCompletion{Drained: true},
-			Diagnostics:  ObservationCompletion{Drained: true},
-		}
+		return nil
 	}
-	return ReceiverObservationCompletion{
-		Terminations: factory.terminations.complete(ctx),
-		Diagnostics:  factory.diagnostics.complete(ctx),
+	return factory.terminations.observations()
+}
+
+func (factory *ReceiverFactory) PeerDiagnostics() <-chan PeerDiagnosticObservation {
+	if factory == nil {
+		return nil
 	}
+	return factory.diagnostics.observations()
+}
+
+// CompleteObservations cuts termination admission before publishing its final
+// capacity fact and cutting diagnostics. Attempts must be joined by the caller
+// first so the returned producer snapshot is final.
+func (factory *ReceiverFactory) CompleteObservations() ReceiverObservationCompletion {
+	if factory == nil {
+		return ReceiverObservationCompletion{}
+	}
+	factory.observationMu.Lock()
+	defer factory.observationMu.Unlock()
+	if factory.observationsCompleted {
+		return factory.observationCompletion
+	}
+	terminations := factory.terminations.completeObservations()
+	factory.diagnostics.reportCount(
+		PeerDiagnosticReceiverTermination,
+		PeerDiagnosticStreamCapacity,
+		terminations.Loss.CapacityDropped,
+	)
+	factory.observationCompletion = ReceiverObservationCompletion{
+		Terminations: terminations,
+		Diagnostics:  factory.diagnostics.completeObservations(),
+	}
+	factory.observationsCompleted = true
+	return factory.observationCompletion
 }
 
 type ReceiverAttempt struct {

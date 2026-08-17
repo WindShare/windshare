@@ -50,11 +50,15 @@ const (
 	ObserverLossAdapterCapacityTimeout
 	ObserverLossTraceQueue
 	ObserverLossRecorderClosed
+	ObserverLossStreamCapacity
+	ObserverLossReaderNotJoined
+	ObserverLossEvidenceCapacity
+	ObserverLossCleanupResidue
 	ObserverLossReasonLimit
 )
 
 func (value ObserverLossReason) Name() (string, bool) {
-	names := [...]string{"", "unknown_enum", "invalid_identity", "invalid_stage_field_combination", "event_contract_rejection", "adapter_capacity_timeout", "trace_queue", "recorder_closed"}
+	names := [...]string{"", "unknown_enum", "invalid_identity", "invalid_stage_field_combination", "event_contract_rejection", "adapter_capacity_timeout", "trace_queue", "recorder_closed", "stream_capacity", "reader_not_joined", "evidence_capacity", "cleanup_residue"}
 	if value == 0 || int(value) >= len(names) {
 		return "", false
 	}

@@ -412,7 +412,7 @@ func TestFilesystemGetOutputAdapterPreservesDiagnosticPresentationAndTraceStage(
 			app := &App{
 				Stderr: bytes.NewBuffer(nil),
 				openUserTrace: func(
-					string,
+					runtrace.Target,
 					clievent.Command,
 					runtrace.Config,
 					runtrace.Dependencies,
@@ -422,7 +422,7 @@ func TestFilesystemGetOutputAdapterPreservesDiagnosticPresentationAndTraceStage(
 			}
 			runtime, runtimeErr := app.newCommandRuntime(
 				clievent.CommandGet,
-				observationOptions{tracePath: "get-output-failure.ndjson"},
+				testExactTraceOptions("get-output-failure.ndjson"),
 			)
 			if runtimeErr != nil {
 				t.Fatal(runtimeErr)
@@ -480,7 +480,7 @@ func TestFilesystemGetOutputAdapterPreservesExactNonDiagnosticErrorsAndNeedsAtte
 	app := &App{
 		Stderr: bytes.NewBuffer(nil),
 		openUserTrace: func(
-			string,
+			runtrace.Target,
 			clievent.Command,
 			runtrace.Config,
 			runtrace.Dependencies,
@@ -490,7 +490,7 @@ func TestFilesystemGetOutputAdapterPreservesExactNonDiagnosticErrorsAndNeedsAtte
 	}
 	runtime, err := app.newCommandRuntime(
 		clievent.CommandGet,
-		observationOptions{tracePath: "get-output-needs-attention.ndjson"},
+		testExactTraceOptions("get-output-needs-attention.ndjson"),
 	)
 	if err != nil {
 		t.Fatal(err)

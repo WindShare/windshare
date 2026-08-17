@@ -1,7 +1,6 @@
 package v2peer
 
 import (
-	"context"
 	"errors"
 	"net"
 	"time"
@@ -92,38 +91,6 @@ type SenderAttemptObservation struct {
 	Lane                 *sessionruntime.LaneIdentity
 	SelectedPair         *PionSelectedPairEvidence
 	Failure              *SenderAttemptFailure
-}
-
-type SenderAttemptObserver interface {
-	ObserveSenderAttempt(SenderAttemptObservation)
-}
-
-type SenderAttemptContextObserver interface {
-	SenderAttemptObserver
-	ObserveSenderAttemptContext(context.Context, SenderAttemptObservation)
-}
-
-type SenderAttemptObserverFunc func(SenderAttemptObservation)
-
-func (function SenderAttemptObserverFunc) ObserveSenderAttempt(observation SenderAttemptObservation) {
-	if function != nil {
-		function(observation)
-	}
-}
-
-type SenderAttemptContextObserverFunc func(context.Context, SenderAttemptObservation)
-
-func (function SenderAttemptContextObserverFunc) ObserveSenderAttempt(observation SenderAttemptObservation) {
-	function.ObserveSenderAttemptContext(context.Background(), observation)
-}
-
-func (function SenderAttemptContextObserverFunc) ObserveSenderAttemptContext(
-	ctx context.Context,
-	observation SenderAttemptObservation,
-) {
-	if function != nil {
-		function(ctx, observation)
-	}
 }
 
 type senderAttemptRecorder struct {
@@ -265,10 +232,10 @@ func cloneSelectedPair(pair *PionSelectedPairEvidence) *PionSelectedPairEvidence
 }
 
 func (factory *Factory) observeSenderAttempt(observation SenderAttemptObservation) {
-	if factory == nil || factory.senderObservations == nil {
+	if factory == nil || factory.senderAttempts == nil {
 		return
 	}
-	factory.senderObservations.publish(cloneSenderAttemptObservation(observation))
+	factory.senderAttempts.publish(cloneSenderAttemptObservation(observation))
 }
 
 func (factory *Factory) reportDiagnostic(category PeerDiagnosticCategory, reason PeerDiagnosticReason) {

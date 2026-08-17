@@ -80,7 +80,7 @@ func TestSenderRelayRecoveryRetriesUnexpectedDisconnectWithBackoff(t *testing.T)
 	}
 }
 
-func TestSenderRelayRecoveryReusesLifecycleTracerAndPublishesTypedAttempts(t *testing.T) {
+func TestSenderRelayRecoveryReusesLifecycleStreamPolicyAndPublishesTypedAttempts(t *testing.T) {
 	initial := &senderRelayTestEndpoint{
 		accept: func(context.Context) (*relayv2.Channel, error) {
 			return nil, errors.New("disconnect provider canary")
@@ -102,7 +102,7 @@ func TestSenderRelayRecoveryReusesLifecycleTracerAndPublishesTypedAttempts(t *te
 		},
 	}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, newSenderRelayTestClock())
-	lifecycle.config.lifecycleTrace = relayv2.LifecycleTraceFunc(func(relayv2.LifecycleTrace) {})
+	lifecycle.config.lifecycleObservationCapacity = relayv2.DefaultLifecycleObservationCapacity
 	var attempts []senderRelayRecoveryAttempt
 	lifecycle.config.observeAttempt = func(value senderRelayRecoveryAttempt) {
 		attempts = append(attempts, value)
@@ -112,8 +112,8 @@ func TestSenderRelayRecoveryReusesLifecycleTracerAndPublishesTypedAttempts(t *te
 	}
 	configs, _ := dialer.Snapshot()
 	for index, config := range configs {
-		if config.Dial.LifecycleTracer == nil {
-			t.Fatalf("recovery dial %d lost the lifecycle tracer", index)
+		if config.Dial.LifecycleObservationCapacity != relayv2.DefaultLifecycleObservationCapacity {
+			t.Fatalf("recovery dial %d lost the lifecycle stream policy", index)
 		}
 	}
 	if len(attempts) != 3 ||

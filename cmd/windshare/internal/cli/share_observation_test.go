@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
+	"github.com/windshare/windshare/cmd/windshare/internal/observationbridge"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/framechannel"
@@ -116,7 +117,7 @@ func TestShareObservationsAcceptSenderLaneAdmissionStarted(t *testing.T) {
 	}
 }
 
-func TestShareRelayDropSummaryAndCompletionUseOneCumulativeSource(t *testing.T) {
+func TestShareRelayDropSummaryAndStreamCompletionRetainPreciseSources(t *testing.T) {
 	emitter := &shareRecordingEmitter{detailed: true}
 	observations := newShareObservations(emitter)
 	dropped := relayv2.LifecycleTrace{
@@ -127,7 +128,7 @@ func TestShareRelayDropSummaryAndCompletionUseOneCumulativeSource(t *testing.T) 
 	}
 	observations.TraceRelayLifecycle(dropped)
 	observations.reportRelayCompletion(relayv2.LifecycleObservationCompletion{
-		Drained: true, Loss: relayv2.LifecycleObservationLoss{QueueOverflow: 6},
+		Loss: relayv2.LifecycleObservationLoss{CapacityDropped: 6},
 	})
 	observations.TraceRelayLifecycle(dropped)
 
@@ -140,7 +141,7 @@ func TestShareRelayDropSummaryAndCompletionUseOneCumulativeSource(t *testing.T) 
 			t.Fatalf("drop event=%#v", event)
 		}
 	}
-	if emitter.lifecycleLoss != 6 {
+	if emitter.lifecycleLoss != 12 {
 		t.Fatalf("cumulative relay loss=%d", emitter.lifecycleLoss)
 	}
 }
@@ -159,14 +160,16 @@ func TestShareContextObserversCannotCommitAfterAuthorityRevocation(t *testing.T)
 
 	// Completion revocation is authoritative even when the producer callback's
 	// context has not yet observed cancellation.
-	observations.webRTCGate.revoke()
-	observations.peerGate.revoke()
-	observations.TraceWebRTCLifecycleContext(context.Background(), wsrtc.LifecycleTrace{
+	webRTCGate := &observationbridge.PublicationGate{}
+	peerGate := &observationbridge.PublicationGate{}
+	webRTCGate.Revoke()
+	peerGate.Revoke()
+	observations.webRTCLifecycleContext(context.Background(), webRTCGate, wsrtc.LifecycleTrace{
 		ChannelID: 2, Operation: wsrtc.LifecycleOperationChannel,
 		Transition: wsrtc.LifecycleTransitionClosedClean,
 		State:      framechannel.Closed, Terminal: wsrtc.LifecycleTerminalNone, Cause: wsrtc.LifecycleCauseNone,
 	})
-	observations.ObserveSenderAttemptContext(context.Background(), testShareAttemptObservation(t))
+	observations.senderAttemptContext(context.Background(), peerGate, testShareAttemptObservation(t))
 	if len(emitter.events) != 0 || emitter.lifecycleLoss != 0 {
 		t.Fatalf("revoked callbacks committed events=%#v loss=%d", emitter.events, emitter.lifecycleLoss)
 	}

@@ -53,7 +53,7 @@ func normalizedDependencies(dependencies Dependencies) Dependencies {
 }
 
 func openOwnerOnlyFile(path string) (TraceFile, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, ownerOnlyFileMode)
+	file, err := createOwnerOnlyFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return nil, ErrTraceExists
