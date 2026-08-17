@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
 	"github.com/windshare/windshare/connectivity/v2peer"
+	"github.com/windshare/windshare/core/osfs"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -193,6 +194,130 @@ type untrustedUnwrapper struct {
 
 func (failure untrustedUnwrapper) Error() string { return failure.secret }
 func (failure untrustedUnwrapper) Unwrap() error { return failure.child }
+
+type untrustedFilesystemDiagnosticCarrier struct {
+	diagnostic osfs.FilesystemOutputDiagnostic
+}
+
+func (failure untrustedFilesystemDiagnosticCarrier) Error() string {
+	return "filesystem output failed"
+}
+
+func (failure untrustedFilesystemDiagnosticCarrier) FilesystemOutputDiagnostic() osfs.FilesystemOutputDiagnostic {
+	return failure.diagnostic
+}
+
+type hostileAsError struct{}
+
+func (hostileAsError) Error() string { return "hostile As error" }
+func (hostileAsError) As(any) bool   { panic("ClassifyError invoked untrusted As") }
+
+func TestSealedFilesystemFailuresPreserveClosedOutputAndCheckpointCodes(t *testing.T) {
+	tests := make([]struct {
+		name  string
+		fault transferfault.Fault
+		code  clievent.FailureCode
+		stage osfs.FilesystemOutputFailureStage
+	}, 0, int(transferfault.OutputContract)+int(transferfault.CheckpointStateIO))
+	for code := transferfault.OutputStateIO; code <= transferfault.OutputContract; code++ {
+		fault, err := transferfault.NewOutput(transferfault.ScopeOutputPause, code)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tests = append(tests, struct {
+			name  string
+			fault transferfault.Fault
+			code  clievent.FailureCode
+			stage osfs.FilesystemOutputFailureStage
+		}{
+			name: fmt.Sprintf("output/%d", code), fault: fault,
+			code:  clievent.FailureCode(uint16(clievent.FailureOutputStateIO) + uint16(code) - 1),
+			stage: osfs.FilesystemOutputFailureOperationAdmission,
+		})
+	}
+	for code := transferfault.CheckpointBusy; code <= transferfault.CheckpointStateIO; code++ {
+		fault, err := transferfault.NewCheckpoint(transferfault.ScopeOutputPause, code)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tests = append(tests, struct {
+			name  string
+			fault transferfault.Fault
+			code  clievent.FailureCode
+			stage osfs.FilesystemOutputFailureStage
+		}{
+			name: fmt.Sprintf("checkpoint/%d", code), fault: fault,
+			code:  clievent.FailureCode(uint16(clievent.FailureCheckpointBusy) + uint16(code) - 1),
+			stage: osfs.FilesystemOutputFailureCheckpointReconciliation,
+		})
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diagnostic := osfs.FilesystemOutputDiagnostic{
+				Stage: test.stage, FaultDomain: uint8(test.fault.Domain()),
+				NormalizedScope: uint8(test.fault.Scope()), NormalizedCode: test.fault.Code(),
+			}
+			sealed, ok := SealFilesystemOutputFailure(diagnostic)
+			if !ok {
+				t.Fatal("valid filesystem diagnostic was not sealed")
+			}
+			failure, present := ClassifyError(sealed)
+			if !present || !failure.Valid() || failure.Code() != test.code {
+				t.Fatalf("sealed diagnostic = %+v,%t want code %d", failure, present, test.code)
+			}
+		})
+	}
+}
+
+func TestFilesystemFailureAuthorityIsExactAndPrimary(t *testing.T) {
+	primaryFault, err := transferfault.NewOutput(
+		transferfault.ScopeOutputPause,
+		transferfault.OutputOwnership,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primaryDiagnostic := osfs.FilesystemOutputDiagnostic{
+		Stage:       osfs.FilesystemOutputFailureOperationAcquisition,
+		FaultDomain: uint8(primaryFault.Domain()), NormalizedScope: uint8(primaryFault.Scope()),
+		NormalizedCode: primaryFault.Code(),
+	}
+	sealed, ok := SealFilesystemOutputFailure(primaryDiagnostic)
+	if !ok {
+		t.Fatal("valid primary diagnostic was not sealed")
+	}
+	cleanupFault, err := transferfault.NewCheckpoint(
+		transferfault.ScopeOutputPause,
+		transferfault.CheckpointStateIO,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup, ok := SealFilesystemOutputFailure(osfs.FilesystemOutputDiagnostic{
+		Stage:       osfs.FilesystemOutputFailureAuthorityClose,
+		FaultDomain: uint8(cleanupFault.Domain()), NormalizedScope: uint8(cleanupFault.Scope()),
+		NormalizedCode: cleanupFault.Code(),
+	})
+	if !ok {
+		t.Fatal("valid cleanup diagnostic was not sealed")
+	}
+	failure, present := ClassifyError(errors.Join(sealed, cleanup))
+	if !present || failure.Code() != clievent.FailureOutputOwnership {
+		t.Fatalf("joined filesystem failure = %+v,%t", failure, present)
+	}
+
+	for name, lookalike := range map[string]error{
+		"diagnostic carrier": untrustedFilesystemDiagnosticCarrier{diagnostic: primaryDiagnostic},
+		"hostile As":         hostileAsError{},
+		"hostile Unwrap":     untrustedUnwrapper{secret: "hostile Unwrap", child: sealed},
+	} {
+		failure, present := ClassifyError(lookalike)
+		if !present || failure.Code() != clievent.FailureUnexpected {
+			t.Fatalf("%s classification = %+v,%t", name, failure, present)
+		}
+	}
+}
 
 func TestRawProviderTextTerminatesAtFailureProjection(t *testing.T) {
 	const secret = "wss://relay.example/private?token=AUTH-TOKEN-CANARY"

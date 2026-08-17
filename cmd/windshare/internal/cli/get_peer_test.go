@@ -86,7 +86,7 @@ func TestReceiverContentPathsReportsRealDirectDetachAfterRelayAdmission(t *testi
 	paths := newReceiverContentPaths(getObservation{runtime: runtime})
 
 	paths.observePeer(receiverPeerReady)
-	paths.relayAdmitted(receiverAdmissionTriggerDeadline)
+	paths.relayAdmitted()
 	paths.observePeer(receiverPeerDetached)
 	runtime.Close()
 
@@ -101,6 +101,15 @@ type cliReceiverRuntimeCloser struct{ calls atomic.Int32 }
 
 func (runtime *cliReceiverRuntimeCloser) Close() { runtime.calls.Add(1) }
 
+func TestReceiverLocalStopPreservesFirstAuthority(t *testing.T) {
+	stop := &receiverLocalStop{}
+	stop.record(clievent.ReceiverLocalStopOutputAdmission)
+	stop.record(clievent.ReceiverLocalStopCaller)
+	if got := stop.snapshot(); got != clievent.ReceiverLocalStopOutputAdmission {
+		t.Fatalf("local stop=%v", got)
+	}
+}
+
 func TestReceiverPeerSetupFailureLogsSafePhaseAndCauseClass(t *testing.T) {
 	runtime, stderr := newGetReportingRuntime(t, false, false)
 	app := &App{
@@ -111,7 +120,7 @@ func TestReceiverPeerSetupFailureLogsSafePhaseAndCauseClass(t *testing.T) {
 	var signal receiverPeerSignal
 	peer := app.startReceiverPeer(context.Background(), nil, getObservation{runtime: runtime}, func(observed receiverPeerSignal) {
 		signal = observed
-	})
+	}, &receiverLocalStop{})
 	runtime.Close()
 	if peer != nil || signal != receiverPeerFailed {
 		t.Fatalf("setup failure peer=%v signal=%v", peer, signal)
@@ -136,18 +145,13 @@ func TestReceiverPeerSetupFailureDistinguishesEveryPhase(t *testing.T) {
 
 func TestReceiverPeerTerminationTraceIsDrainedSynchronously(t *testing.T) {
 	runtime, stderr := newGetReportingRuntime(t, false, false)
-	traces := make(chan receiverPeerTerminationTrace, 1)
-	traces <- receiverPeerTerminationTrace{
-		diagnosticsTruncated: true,
-		retainedCauseClasses: []v2peer.ReceiverCauseClass{v2peer.ReceiverCauseProtocol},
-		channelDrainFailed:   true,
-	}
-
-	(&App{}).awaitReceiverTerminationTrace(traces, getObservation{runtime: runtime}, false)
+	getObservation{runtime: runtime}.receiverTermination(
+		v2peer.ReceiverTerminationTrace{}, clievent.ReceiverLocalStopNone,
+	)
 	runtime.Close()
 
 	diagnostic := stderr.String()
-	if !strings.Contains(diagnostic, "The direct connection is unavailable.") ||
+	if strings.Contains(diagnostic, "An unexpected error occurred") ||
 		strings.Contains(diagnostic, "diagnostics_truncated") || strings.Contains(diagnostic, "protocol") {
 		t.Fatalf("termination trace diagnostic=%q", diagnostic)
 	}
@@ -308,12 +312,10 @@ func TestReceiverPeerMonitorSuppressesLocalCloseCleanupResidue(t *testing.T) {
 		attempt, runtime, protocolsession.ProtocolSessionID{1},
 		getObservation{runtime: commandRuntime}, func(signal receiverPeerSignal) { signals <- signal },
 	)
-	traces := make(chan receiverPeerTerminationTrace, 1)
-	traces <- receiverPeerTerminationTrace{
-		retainedCauseClasses: []v2peer.ReceiverCauseClass{v2peer.ReceiverCauseChannelAdmission},
-	}
-	(&App{}).awaitReceiverTerminationTrace(
-		traces, getObservation{runtime: commandRuntime}, locallyCanceled,
+	localStop := &receiverLocalStop{}
+	localStop.record(clievent.ReceiverLocalStopCaller)
+	getObservation{runtime: commandRuntime}.receiverTermination(
+		v2peer.ReceiverTerminationTrace{}, localStop.snapshot(),
 	)
 	commandRuntime.Close()
 

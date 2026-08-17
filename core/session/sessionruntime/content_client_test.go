@@ -229,11 +229,11 @@ func TestReceiverBlockLaneUnknownSendDoesNotIssueSecondOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer contentLanes.Close()
-	if err := contentLanes.Add(transfer.LaneIdentity{ID: 1, Epoch: 1}, signalingLane); err != nil {
+	if err := contentLanes.Add(transfer.LaneIdentity{ID: 1, Epoch: 1}, transfer.LaneRouteRelay, signalingLane); err != nil {
 		t.Fatal(err)
 	}
 	fallback := &countingReceiverFallbackLane{}
-	if err := contentLanes.Add(transfer.LaneIdentity{ID: 2, Epoch: 1}, fallback); err != nil {
+	if err := contentLanes.Add(transfer.LaneIdentity{ID: 2, Epoch: 1}, transfer.LaneRouteRelay, fallback); err != nil {
 		t.Fatal(err)
 	}
 	processBudget, err := transfer.NewPlaintextBudget(uint64(catalog.MinChunkSize) * 2)
@@ -288,11 +288,11 @@ func TestReceiverBlockLaneProvenDropReassignsDemand(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer contentLanes.Close()
-	if err := contentLanes.Add(transfer.LaneIdentity{ID: 1, Epoch: 1}, blockLane); err != nil {
+	if err := contentLanes.Add(transfer.LaneIdentity{ID: 1, Epoch: 1}, transfer.LaneRouteRelay, blockLane); err != nil {
 		t.Fatal(err)
 	}
 	fallback := &countingReceiverFallbackLane{}
-	if err := contentLanes.Add(transfer.LaneIdentity{ID: 2, Epoch: 1}, fallback); err != nil {
+	if err := contentLanes.Add(transfer.LaneIdentity{ID: 2, Epoch: 1}, transfer.LaneRouteRelay, fallback); err != nil {
 		t.Fatal(err)
 	}
 

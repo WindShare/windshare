@@ -252,7 +252,7 @@ func closeDirectory(directory outputcap.Directory) error {
 	return directory.Close()
 }
 
-func closeFile(file outputcap.File) error {
+func closeFile(file outputcap.FileIdentity) error {
 	if file == nil {
 		return nil
 	}

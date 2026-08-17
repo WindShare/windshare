@@ -58,7 +58,7 @@ func newBrokerFixture(t *testing.T, blocks uint64, lane BlockLane, maxBytes uint
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := lanes.Add(LaneIdentity{ID: 1}, lane); err != nil {
+	if err := lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, lane); err != nil {
 		t.Fatal(err)
 	}
 	process, _ := NewPlaintextBudget(processBytes)
@@ -191,10 +191,10 @@ func TestBlockBrokerReadRangeDispatchesDistinctBlocksAcrossDefaultLanes(t *testi
 		t.Fatal(err)
 	}
 	defer lanes.Close()
-	if err := lanes.Add(LaneIdentity{ID: 1}, newLane(1)); err != nil {
+	if err := lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, newLane(1)); err != nil {
 		t.Fatal(err)
 	}
-	if err := lanes.Add(LaneIdentity{ID: 2}, newLane(2)); err != nil {
+	if err := lanes.Add(LaneIdentity{ID: 2}, LaneRouteRelay, newLane(2)); err != nil {
 		t.Fatal(err)
 	}
 	process, _ := NewPlaintextBudget(uint64(catalog.MinChunkSize) * 2)
@@ -291,8 +291,8 @@ func TestBlockBrokerInvalidationEvictionAndSharedProcessAdmission(t *testing.T) 
 	validLane := laneFunction(func(_ context.Context, demand BlockDemand) (records.BlockRecord, error) {
 		return transferRecord(t, descriptor, demand.Index), nil
 	})
-	_ = setA.Add(LaneIdentity{ID: 1}, validLane)
-	_ = setB.Add(LaneIdentity{ID: 1}, validLane)
+	_ = setA.Add(LaneIdentity{ID: 1}, LaneRouteRelay, validLane)
+	_ = setB.Add(LaneIdentity{ID: 1}, LaneRouteRelay, validLane)
 	brokerA, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: descriptor.ShareInstance(), Lanes: setA, MaxBytes: uint64(catalog.MinChunkSize), ProcessBudget: sharedProcess})
 	brokerB, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: descriptor.ShareInstance(), Lanes: setB, MaxBytes: uint64(catalog.MinChunkSize), ProcessBudget: sharedProcess})
 	defer brokerA.Close()
@@ -393,7 +393,7 @@ func TestRangeSinkFailureAndLaneLifecycleCancelOnlyCurrentDemand(t *testing.T) {
 
 	blockingSet, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](33), RaceWidth: 1})
 	started := make(chan struct{})
-	_ = blockingSet.Add(LaneIdentity{ID: 1}, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
+	_ = blockingSet.Add(LaneIdentity{ID: 1}, LaneRouteRelay, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
 		close(started)
 		<-ctx.Done()
 		return records.BlockRecord{}, ctx.Err()
@@ -427,7 +427,7 @@ func TestConstructorsAndLaneFailuresAreTyped(t *testing.T) {
 	}
 	lanes, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](21)})
 	defer lanes.Close()
-	if err := lanes.Add(LaneIdentity{}, nil); !errors.Is(err, ErrInvalidLane) {
+	if err := lanes.Add(LaneIdentity{}, LaneRouteRelay, nil); !errors.Is(err, ErrInvalidLane) {
 		t.Fatalf("invalid lane error=%v", err)
 	}
 	if lanes.Remove(LaneIdentity{}) {

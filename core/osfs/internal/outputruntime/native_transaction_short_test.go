@@ -252,7 +252,7 @@ func TestPublishedOrdinaryFileReopensAsVerifiedSiblingThenRetiresPrivateState(t 
 	if err := reopened.authority.Close(); err != nil {
 		t.Fatal(err)
 	}
-	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

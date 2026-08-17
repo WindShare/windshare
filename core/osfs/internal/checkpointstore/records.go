@@ -71,7 +71,7 @@ func MatchesTemporaryName(candidate, target string, encoded []byte) bool {
 	return false
 }
 
-func WriteFile(file outputcap.File, encoded []byte) error {
+func WriteFile(file outputcap.MutableFile, encoded []byte) error {
 	if file == nil || len(encoded) == 0 || len(encoded) > maxRepositoryRecordBytes {
 		return checkpointmodel.ErrInvalidRecord
 	}
@@ -99,7 +99,7 @@ func ReadFile(directory outputcap.Directory, name string) ([]byte, error) {
 	if !exact || kind != outputcap.EntryRegularFile {
 		return nil, outputcap.ErrUnsafeNamespace
 	}
-	file, err := directory.OpenFile(name, true, false)
+	file, err := directory.OpenObservedFile(name, true)
 	if err != nil {
 		return nil, errors.Join(err, closeFile(file))
 	}
@@ -107,7 +107,7 @@ func ReadFile(directory outputcap.Directory, name string) ([]byte, error) {
 	return encoded, errors.Join(readErr, closeFile(file))
 }
 
-func readBoundedFile(file outputcap.File) ([]byte, error) {
+func readBoundedFile(file outputcap.ObservedFile) ([]byte, error) {
 	if file == nil {
 		return nil, checkpointmodel.ErrInvalidRecord
 	}
@@ -136,7 +136,7 @@ func RemoveExact(directory outputcap.Directory, name string, expected []byte) (e
 	if directory == nil || name == "" || len(expected) == 0 || len(expected) > maxRepositoryRecordBytes {
 		return checkpointmodel.ErrInvalidRecord, nil
 	}
-	file, err := directory.OpenFile(name, true, false)
+	file, err := directory.OpenObservedFile(name, true)
 	if err != nil {
 		return err, closeFile(file)
 	}
@@ -151,7 +151,7 @@ func RemoveExact(directory outputcap.Directory, name string, expected []byte) (e
 	return operationErr, file.Close()
 }
 
-func RemoveTemporary(directory outputcap.Directory, name string, file outputcap.File) error {
+func RemoveTemporary(directory outputcap.Directory, name string, file outputcap.FileIdentity) error {
 	if directory == nil || file == nil {
 		return nil
 	}
@@ -216,7 +216,7 @@ func prepareInstallationCandidate(
 	targetName string,
 	encoded []byte,
 	attempt int,
-) (outputcap.File, string, error) {
+) (outputcap.MutableFile, string, error) {
 	temporaryName := TemporaryName(targetName, encoded, attempt)
 	temporary, err := directory.CreateFile(temporaryName, true, int64(len(encoded)))
 	if errors.Is(err, outputcap.ErrNamespaceCollision) {
@@ -247,7 +247,7 @@ func installCreatedCandidate(
 	targetName string,
 	encoded []byte,
 	temporaryName string,
-	temporary outputcap.File,
+	temporary outputcap.MutableFile,
 ) error {
 	target, linkErr := directory.LinkFileNoReplace(temporary, targetName)
 	if errors.Is(linkErr, outputcap.ErrNamespaceCollision) {
@@ -273,7 +273,7 @@ func settleCreateCollision(
 	targetName string,
 	encoded []byte,
 	temporaryName string,
-	temporary outputcap.File,
+	temporary outputcap.MutableFile,
 ) error {
 	cleanupErr := RemoveTemporary(directory, temporaryName, temporary)
 	existing, readErr := ReadFile(directory, targetName)
@@ -291,8 +291,8 @@ func verifyCreatedTarget(
 	targetName string,
 	encoded []byte,
 	temporaryName string,
-	temporary outputcap.File,
-	target outputcap.File,
+	temporary outputcap.MutableFile,
+	target outputcap.ObservedFile,
 ) error {
 	closeTargetErr := closeFile(target)
 	syncErr := directory.Sync()
@@ -430,11 +430,11 @@ func openExactTemporary(
 	directory outputcap.Directory,
 	name string,
 	expected []byte,
-) (outputcap.File, error) {
+) (outputcap.MutableFile, error) {
 	var mismatchErr error
 	var lastObserved []byte
 	for range candidateReadAttempts {
-		file, err := directory.OpenFile(name, true, false)
+		file, err := directory.OpenMutableFile(name, true)
 		if err != nil {
 			closeErr := closeFile(file)
 			if candidateContention(err) {

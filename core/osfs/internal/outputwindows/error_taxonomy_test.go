@@ -134,7 +134,7 @@ func TestWindowsV3RealNativeOpenFailuresRemainRawThroughWrapper(t *testing.T) {
 			return err
 		}},
 		{name: "wrapper", run: func() error {
-			_, err := wrapper.OpenFile("missing.bin", false, false)
+			_, err := wrapper.OpenObservedFile("missing.bin", false)
 			return err
 		}},
 		{name: "native pinned entry", run: func() error {
@@ -179,7 +179,7 @@ func TestWindowsV3RealNativeOpenFailuresRemainRawThroughWrapper(t *testing.T) {
 			return err
 		}},
 		{name: "wrapper", run: func() error {
-			_, err := wrapper.OpenFile(blockedName, false, false)
+			_, err := wrapper.OpenObservedFile(blockedName, false)
 			return err
 		}},
 	} {
@@ -215,7 +215,7 @@ func TestWindowsV3RealNativeOpenFailuresRemainRawThroughWrapper(t *testing.T) {
 		t.Fatalf("native post-open denial = %v", err)
 	}
 	inaccessibleWrapper := &windowsOutputV3Directory{native: &inaccessibleRoot}
-	if opened, err := inaccessibleWrapper.OpenFile(collisionName, false, false); opened != nil {
+	if opened, err := inaccessibleWrapper.OpenObservedFile(collisionName, false); opened != nil {
 		_ = opened.Close()
 		t.Fatal("wrapper post-open denial unexpectedly returned an authority")
 	} else if !errors.Is(err, outputcap.ErrUnsafeNamespace) || !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
@@ -246,7 +246,9 @@ func TestWindowsV3RealNativeMutationFailuresRemainOperational(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer readOnly.Close()
-	wrappedReadOnly := &windowsOutputV3File{native: readOnly, private: true, borrowed: true}
+	wrappedReadOnly := &windowsOutputV3ObservedFile{state: &windowsOutputV3FileState{
+		native: readOnly, private: true, borrowed: true,
+	}}
 
 	staleDirectory, err := root.Duplicate()
 	if err != nil {

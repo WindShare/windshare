@@ -347,11 +347,11 @@ func (directory *fakeDirectory) RemoveDirectory(string, outputcap.Directory) err
 	return errFakeUnsupported
 }
 
-func (directory *fakeDirectory) CreateFile(string, bool, int64) (outputcap.File, error) {
+func (directory *fakeDirectory) CreateFile(string, bool, int64) (outputcap.MutableFile, error) {
 	return nil, errFakeUnsupported
 }
 
-func (directory *fakeDirectory) OpenFile(name string, _ bool, _ bool) (outputcap.File, error) {
+func (directory *fakeDirectory) OpenObservedFile(name string, _ bool) (outputcap.ObservedFile, error) {
 	directory.platform.mu.Lock()
 	defer directory.platform.mu.Unlock()
 	entry, actual, exists := directory.resolveLocked(name)
@@ -364,15 +364,23 @@ func (directory *fakeDirectory) OpenFile(name string, _ bool, _ bool) (outputcap
 	return &fakeFile{node: entry.node}, nil
 }
 
-func (directory *fakeDirectory) LinkFileNoReplace(outputcap.File, string) (outputcap.File, error) {
+func (directory *fakeDirectory) OpenRecoveryDurabilityFile(string, bool) (outputcap.RecoveryDurabilityFile, error) {
 	return nil, errFakeUnsupported
 }
 
-func (directory *fakeDirectory) ReplacePrivateFile(outputcap.File, string) error {
+func (directory *fakeDirectory) OpenMutableFile(string, bool) (outputcap.MutableFile, error) {
+	return nil, errFakeUnsupported
+}
+
+func (directory *fakeDirectory) LinkFileNoReplace(outputcap.FileIdentity, string) (outputcap.ObservedFile, error) {
+	return nil, errFakeUnsupported
+}
+
+func (directory *fakeDirectory) ReplacePrivateFile(outputcap.FileIdentity, string) error {
 	return errFakeUnsupported
 }
 
-func (directory *fakeDirectory) RemoveFile(string, outputcap.File) error {
+func (directory *fakeDirectory) RemoveFile(string, outputcap.FileIdentity) error {
 	return errFakeUnsupported
 }
 
@@ -401,7 +409,6 @@ func (reference *fakeEntryReference) Kind() outputcap.EntryKind { return referen
 func (reference *fakeEntryReference) Close() error              { return nil }
 
 type fakeFile struct {
-	outputcap.File
 	node *fakeNode
 }
 
@@ -414,9 +421,30 @@ func (file *fakeFile) Size() (uint64, error) {
 	return file.node.size, nil
 }
 
-func (file *fakeFile) SameFile(other outputcap.File) (bool, error) {
+func (file *fakeFile) SameFile(other outputcap.FileIdentity) (bool, error) {
 	peer, ok := other.(*fakeFile)
 	return ok && file != nil && peer != nil && file.node == peer.node, nil
+}
+
+func (*fakeFile) ReadAt([]byte, int64) (int, error) { return 0, errFakeUnsupported }
+
+func (file *fakeFile) WriteAt(value []byte, _ int64) (int, error) { return len(value), nil }
+
+func (*fakeFile) Sync() error { return nil }
+
+func (file *fakeFile) SetModifiedTime(modified catalog.ModifiedTime) error {
+	if file == nil || file.node == nil {
+		return errFakeUnsupported
+	}
+	file.node.modified = modified
+	return nil
+}
+
+func (file *fakeFile) MetadataMatches(size uint64, modified catalog.ModifiedTime) (bool, error) {
+	if file == nil || file.node == nil {
+		return false, errFakeUnsupported
+	}
+	return file.node.size == size && file.node.modified == modified, nil
 }
 
 type fakeAliasSnapshotter struct {

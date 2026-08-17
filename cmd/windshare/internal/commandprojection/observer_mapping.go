@@ -32,6 +32,8 @@ func projectRelayStage(value relayv2.LifecycleStage) (clievent.RelayLifecycleSta
 		return clievent.RelayLinkRetiring, true
 	case relayv2.LifecycleLinkClosed:
 		return clievent.RelayLinkClosed, true
+	case relayv2.LifecycleTraceDropped:
+		return clievent.RelayTraceDropped, true
 	default:
 		return 0, false
 	}
@@ -146,7 +148,7 @@ func projectProtocolOperationCause(value sessionruntime.ProtocolOperationCause) 
 
 func projectRelayRetirement(value relayv2.LifecycleRetirementSource) (clievent.RelayRetirementSource, bool) {
 	switch value {
-	case "":
+	case relayv2.LifecycleRetirementNone:
 		return clievent.RelayRetirementNone, true
 	case relayv2.LifecycleRetirementLocalClose:
 		return clievent.RelayRetirementLocalClose, true
@@ -405,6 +407,112 @@ func projectFilesystemOperation(value osfs.FilesystemOutputTraceOperation) (clie
 	default:
 		return 0, false
 	}
+}
+
+func projectFilesystemCertification(value osfs.FilesystemOutputCertificationID) (clievent.FilesystemCertification, bool) {
+	switch value {
+	case "":
+		return 0, true
+	case osfs.FilesystemOutputCertificationLinuxExt4ProcessRestart:
+		return clievent.FilesystemCertificationLinuxExt4ProcessRestart, true
+	case osfs.FilesystemOutputCertificationWindowsNTFSProcessRestart:
+		return clievent.FilesystemCertificationWindowsNTFSProcessRestart, true
+	default:
+		return 0, false
+	}
+}
+
+func projectFilesystemRootDisposition(value osfs.FilesystemOutputRootDisposition) (clievent.FilesystemRootDisposition, bool) {
+	switch value {
+	case "":
+		return 0, true
+	case osfs.FilesystemOutputCallerProvidedContainer:
+		return clievent.FilesystemRootCallerProvidedContainer, true
+	case osfs.FilesystemOutputAuthorityCreatedRoot:
+		return clievent.FilesystemRootAuthorityCreated, true
+	default:
+		return 0, false
+	}
+}
+
+func projectFilesystemRuntimeComponent(value osfs.FilesystemOutputRuntimeComponent) (clievent.FilesystemRuntimeComponent, bool) {
+	if value == 0 {
+		return 0, true
+	}
+	if value < osfs.FilesystemOutputRuntimeSession || value > osfs.FilesystemOutputRuntimeCheckpoint {
+		return 0, false
+	}
+	return clievent.FilesystemRuntimeComponent(value), true
+}
+
+func projectFilesystemRuntimeOperation(value osfs.FilesystemOutputRuntimeOperation) (clievent.FilesystemRuntimeOperation, bool) {
+	if value == 0 {
+		return 0, true
+	}
+	if value < osfs.FilesystemOutputRuntimeOpenDirectTree || value > osfs.FilesystemOutputRuntimeCleanup {
+		return 0, false
+	}
+	return clievent.FilesystemRuntimeOperation(value), true
+}
+
+func projectFilesystemRuntimeDecision(value osfs.FilesystemOutputRuntimeDecision) (clievent.FilesystemRuntimeDecisionKind, bool) {
+	if value == 0 {
+		return 0, true
+	}
+	if value < osfs.FilesystemOutputRuntimeValidated || value > osfs.FilesystemOutputRuntimeCleanupPending {
+		return 0, false
+	}
+	return clievent.FilesystemRuntimeDecisionKind(value), true
+}
+
+func projectFilesystemNativeLockScope(value osfs.FilesystemOutputNativeLockScope) (clievent.FilesystemNativeLockScope, bool) {
+	if value == 0 {
+		return 0, true
+	}
+	if value != osfs.FilesystemOutputNativeLockSession {
+		return 0, false
+	}
+	return clievent.FilesystemNativeLockSession, true
+}
+
+func projectFilesystemNativeLockMilestone(value osfs.FilesystemOutputNativeLockMilestone) (clievent.FilesystemNativeLockMilestone, bool) {
+	if value == 0 {
+		return 0, true
+	}
+	if value < osfs.FilesystemOutputNativeLockAcquired || value > osfs.FilesystemOutputNativeLockReleaseReportedFailure {
+		return 0, false
+	}
+	return clievent.FilesystemNativeLockMilestone(value), true
+}
+
+func projectFilesystemFailureStage(value osfs.FilesystemOutputFailureStage) (clievent.FilesystemFailureStage, bool) {
+	if value == 0 {
+		return 0, true
+	}
+	if !value.Valid() {
+		return 0, false
+	}
+	return clievent.FilesystemFailureStage(value), true
+}
+
+func projectFilesystemReconciliationStep(value osfs.FilesystemCheckpointReconciliationStep) (clievent.FilesystemReconciliationStep, bool) {
+	if value == 0 {
+		return 0, true
+	}
+	if !value.Valid() {
+		return 0, false
+	}
+	return clievent.FilesystemReconciliationStep(value), true
+}
+
+func projectFilesystemNativeErrorClass(value osfs.FilesystemNativeErrorClass) (clievent.FilesystemNativeErrorClass, bool) {
+	if value == 0 {
+		return 0, true
+	}
+	if !value.Valid() {
+		return 0, false
+	}
+	return clievent.FilesystemNativeErrorClass(value), true
 }
 
 func projectSenderTerminalTransport(value sessionruntime.SenderTerminalTransportDisposition) (clievent.SenderTerminalTransport, bool) {

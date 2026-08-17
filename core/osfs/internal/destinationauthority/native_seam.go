@@ -14,7 +14,7 @@ type liveCleanupProfileSource interface {
 }
 
 type fileNoReplacePublisher interface {
-	PublishFileNoReplace(outputcap.File, string) (outputcap.PublishNoReplaceOutcome, error)
+	PublishFileNoReplace(outputcap.FileIdentity, string) (outputcap.PublishNoReplaceOutcome, error)
 }
 
 type publicDirectoryReserver interface {
@@ -26,5 +26,5 @@ type liveCleanupStageCreator interface {
 }
 
 type liveCleanupStageRemover interface {
-	RemoveLiveCleanupStage(checkpointmodel.LiveCleanupTicket, outputcap.File) error
+	RemoveLiveCleanupStage(checkpointmodel.LiveCleanupTicket, outputcap.FileIdentity) error
 }

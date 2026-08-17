@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,11 +28,19 @@ var (
 		discovery discovered_files discovered_bytes published_files published_bytes verified_bytes newly_verified_bytes
 		downloaded_files resumed_files paused_files collision_files item_blocked_files failed_files modified_time_warnings
 		directory_failures omitted_diagnostics trace_incomplete_cause lifecycle_dropped progress_dropped events_written
-		relay_link_id relay_send_operation_id stage disposition retirement_source cause drain_cause
+		relay_link_id relay_session_id relay_send_operation_id stage disposition retirement_source cause drain_cause relay_dropped
 		webrtc_channel_id webrtc_send_operation_id operation transition terminal_state dropped attempt_sequence attempt_elapsed_ms failure_scope
 		file_selection file_settlement tree_settlement node_claims directory_claims file_claims active_file_claims reserved_file_slots
 		directory_metadata_bytes checkpoint_records transport_disposition outcome decision active_scans scan_work entries memory_bytes spill_bytes
 		legacy_roots_removed root_prefetch_attempt root_prefetch_entry_count root_prefetch_omitted_count
+		receive_intent_digest output_session_id filesystem_certification filesystem_root_disposition
+		filesystem_native_lock_scope filesystem_native_lock_milestone filesystem_runtime_component filesystem_runtime_operation
+		filesystem_runtime_decision filesystem_operation_id filesystem_claim_id filesystem_failure_stage
+		filesystem_reconciliation_step filesystem_native_error_class
+		lane_route delivered_blocks delivered_bytes failed_block_attempts reassigned_blocks
+		observer_loss_category observer_loss_reason observer_loss_count
+		receiver_local_generation receiver_transition_authority receiver_disposition receiver_transition_provenance
+		receiver_consequence_provenance receiver_local_stop_reason
 	`)
 	v2TraceNumberFields = v2TraceFieldSet(`
 		schema_version sequence elapsed_ms lane_id lane_epoch relay_port attempt fault_code exit_code result_elapsed_ms
@@ -40,7 +49,10 @@ var (
 	v2TraceBoolFields = v2TraceFieldSet(`
 		destination_adjusted stopped_cleanly counters_exact trace_incomplete writer_failed flush_failed schema_limited
 		protocol_has_send protocol_send_settled protocol_send_admitted
-		terminal settled
+		terminal settled incomplete receiver_diagnostics_truncated receiver_peer_shutdown_failed receiver_channel_drain_failed
+	`)
+	v2TraceStringSliceFields = v2TraceFieldSet(`
+		receiver_benign_components receiver_retained_cause_classes receiver_teardown_transitions
 	`)
 	v2TraceDecimalStringFields = v2TraceFieldSet(`
 		file_bytes selected_items retry_after_ms discovered_files discovered_bytes published_files published_bytes verified_bytes newly_verified_bytes
@@ -48,7 +60,9 @@ var (
 		lifecycle_dropped progress_dropped events_written relay_link_id relay_send_operation_id webrtc_channel_id webrtc_send_operation_id dropped
 		attempt_sequence attempt_elapsed_ms node_claims directory_claims file_claims active_file_claims reserved_file_slots directory_metadata_bytes
 		checkpoint_records active_scans scan_work entries memory_bytes spill_bytes legacy_roots_removed root_prefetch_attempt
-		root_prefetch_entry_count root_prefetch_omitted_count
+		root_prefetch_entry_count root_prefetch_omitted_count relay_dropped delivered_blocks delivered_bytes failed_block_attempts
+		reassigned_blocks observer_loss_count receiver_local_generation
+		filesystem_operation_id filesystem_claim_id
 		protocol_response_count protocol_deadline_remaining_ms protocol_operation_elapsed_ms
 		protocol_usable_lanes_at_selection protocol_usable_lanes_at_settlement
 	`)
@@ -122,14 +136,41 @@ func (process *v2Process) validateUserTrace(t *testing.T) {
 		t.Fatalf("%s user trace has no terminal summary", process.component)
 	}
 	incomplete := v2TraceBool(t, last, "trace_incomplete")
-	hasWarning := strings.Contains(stderr, "Trace is incomplete")
-	if incomplete != hasWarning {
+	warningCount := strings.Count(stderr, "Trace is incomplete")
+	if warningCount > 1 {
+		t.Fatalf("%s emitted %d trace-incomplete warnings, want at most one", process.component, warningCount)
+	}
+	if incomplete != (warningCount == 1) {
 		t.Fatalf(
-			"%s user trace incomplete=%t but redirected warning=%t",
+			"%s user trace incomplete=%t but redirected warning count=%d",
 			process.component,
 			incomplete,
-			hasWarning,
+			warningCount,
 		)
+	}
+	assertV2ProducerFactsPrecedeCommandResult(t, process.component, records)
+}
+
+func assertV2ProducerFactsPrecedeCommandResult(t *testing.T, component string, records []map[string]json.RawMessage) {
+	t.Helper()
+	terminal := -1
+	for index, record := range records {
+		switch v2TraceString(t, record, "event") {
+		case "transfer_settled", "sharing_stopped", "command_failed":
+			if terminal < 0 {
+				terminal = index
+			}
+		}
+	}
+	if terminal < 0 {
+		t.Fatalf("%s user trace omitted its command result", component)
+	}
+	for index := terminal + 1; index < len(records); index++ {
+		event := v2TraceString(t, records[index], "event")
+		switch event {
+		case "relay_lifecycle", "webrtc_lifecycle", "peer_attempt", "receiver_termination", "lane_settlement", "observer_loss":
+			t.Fatalf("%s user trace emitted %s after its command result", component, event)
+		}
 	}
 }
 
@@ -202,12 +243,17 @@ func validateV2TraceRecord(
 			}
 		case v2TraceHas(v2TraceBoolFields, field):
 			_ = v2TraceBool(t, record, field)
+		case v2TraceHas(v2TraceStringSliceFields, field):
+			var values []string
+			if err := json.Unmarshal(raw, &values); err != nil || values == nil {
+				t.Fatalf("user trace field %q is not a string array: %v", field, err)
+			}
 		default:
 			t.Fatalf("user trace contains unknown field %q", field)
 		}
 	}
-	if v2TraceInt64(t, record, "schema_version") != 1 {
-		t.Fatal("user trace schema_version is not 1")
+	if v2TraceInt64(t, record, "schema_version") != 2 {
+		t.Fatal("user trace schema_version is not 2")
 	}
 	sequence := uint64(v2TraceInt64(t, record, "sequence"))
 	if sequence == 0 || sequence > 9_007_199_254_740_991 {
@@ -236,6 +282,66 @@ func validateV2TraceRecord(
 	case "debug", "info", "warning", "error":
 	default:
 		t.Fatal("user trace level is outside the closed vocabulary")
+	}
+	validateV2DiagnosticRecord(t, record)
+}
+
+func validateV2DiagnosticRecord(t *testing.T, record map[string]json.RawMessage) {
+	t.Helper()
+	switch event := v2TraceString(t, record, "event"); event {
+	case "lane_settlement":
+		route := v2TraceString(t, record, "lane_route")
+		if route != "relay" && route != "direct" {
+			t.Fatalf("lane settlement has unknown route %q", route)
+		}
+		if session := v2TraceString(t, record, "protocol_session_id"); !v2TraceRunID.MatchString(session) {
+			t.Fatalf("lane settlement has invalid protocol session %q", session)
+		}
+		_ = v2TraceInt64(t, record, "lane_id")
+		_ = v2TraceInt64(t, record, "lane_epoch")
+		for _, field := range []string{"delivered_blocks", "delivered_bytes", "failed_block_attempts", "reassigned_blocks"} {
+			_ = v2TraceDecimal(t, record, field)
+		}
+		_ = v2TraceBool(t, record, "incomplete")
+	case "observer_loss":
+		if !v2KnownObserverLossCategory(v2TraceString(t, record, "observer_loss_category")) {
+			t.Fatal("observer loss category is outside the closed vocabulary")
+		}
+		if !v2KnownObserverLossReason(v2TraceString(t, record, "observer_loss_reason")) {
+			t.Fatal("observer loss reason is outside the closed vocabulary")
+		}
+		if v2TraceDecimal(t, record, "observer_loss_count") == 0 {
+			t.Fatal("observer loss count is zero")
+		}
+	case "receiver_termination":
+		if reason := v2TraceString(t, record, "receiver_local_stop_reason"); reason != "none" && reason != "caller_stop" && reason != "output_admission_stop" &&
+			reason != "runtime_session_failure" && reason != "normal_completion" {
+			t.Fatalf("receiver termination has unknown local stop reason %q", reason)
+		}
+	case "relay_lifecycle":
+		if v2TraceString(t, record, "stage") == "send_admitted" {
+			t.Fatal("ordinary successful relay sends must not enter the user trace")
+		}
+	}
+}
+
+func v2KnownObserverLossCategory(value string) bool {
+	switch value {
+	case "relay_lifecycle", "webrtc_lifecycle", "sender_attempt", "receiver_termination", "lane_settlement",
+		"protocol_operation", "transfer_lifecycle", "filesystem_output", "catalog_storage", "root_prefetch", "command_adapter":
+		return true
+	default:
+		return false
+	}
+}
+
+func v2KnownObserverLossReason(value string) bool {
+	switch value {
+	case "unknown_enum", "invalid_identity", "invalid_stage_field_combination", "event_contract_rejection",
+		"adapter_capacity_timeout", "trace_queue", "recorder_closed":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -308,6 +414,16 @@ func v2TraceInt64(t *testing.T, record map[string]json.RawMessage, field string)
 	return parsed
 }
 
+func v2TraceDecimal(t *testing.T, record map[string]json.RawMessage, field string) uint64 {
+	t.Helper()
+	value := v2TraceString(t, record, field)
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		t.Fatalf("user trace field %q is not an unsigned decimal string: %q", field, value)
+	}
+	return parsed
+}
+
 func requireV2UserTraceFact(t *testing.T, process *v2Process, event, field, value string) {
 	t.Helper()
 	records, _ := readV2UserTrace(t, process.userTracePath, process.userTraceCommand)
@@ -323,4 +439,166 @@ func requireV2UserTraceFact(t *testing.T, process *v2Process, event, field, valu
 		}
 	}
 	t.Fatalf("%s user trace has no %s with %s=%q", process.component, event, field, value)
+}
+
+func assertV2UserTraceProductDiagnostics(t *testing.T, process *v2Process, receiveOperationID string) {
+	t.Helper()
+	records, _ := readV2UserTrace(t, process.userTracePath, process.userTraceCommand)
+	checkpointReconciled := false
+	receiverCompleted := false
+	laneSettlements := 0
+	laneAdoptions := 0
+	laneIdentities := make(map[string]struct{})
+	for _, record := range records {
+		event := v2TraceString(t, record, "event")
+		switch event {
+		case "filesystem_output":
+			if raw, ok := record["operation"]; ok {
+				var operation string
+				if json.Unmarshal(raw, &operation) == nil && operation == "checkpoint_reconciled" {
+					if v2TraceString(t, record, "receive_operation_id") != receiveOperationID {
+						t.Fatal("checkpoint reconciliation belongs to a different retained operation")
+					}
+					checkpointReconciled = true
+				}
+			}
+		case "lane_settlement":
+			laneSettlements++
+			identity := fmt.Sprintf(
+				"%s/%d/%d",
+				v2TraceString(t, record, "protocol_session_id"),
+				v2TraceInt64(t, record, "lane_id"),
+				v2TraceInt64(t, record, "lane_epoch"),
+			)
+			if _, duplicate := laneIdentities[identity]; duplicate {
+				t.Fatalf("lane settlement %q was emitted more than once", identity)
+			}
+			laneIdentities[identity] = struct{}{}
+		case "lane_adopted":
+			laneAdoptions++
+		case "receiver_termination":
+			if v2TraceString(t, record, "receiver_local_stop_reason") == "normal_completion" {
+				receiverCompleted = true
+			}
+		case "fallback":
+			t.Fatal("successful retained-operation recovery emitted a fallback record")
+		case "observer_loss":
+			t.Fatal("successful retained-operation recovery lost diagnostic observations")
+		}
+	}
+	if !checkpointReconciled {
+		t.Fatal("user trace omitted retained-operation checkpoint reconciliation")
+	}
+	// The initial relay lane exists before lane-adoption observations; every
+	// additional incarnation must have a corresponding adoption record.
+	if laneSettlements == 0 || laneSettlements > laneAdoptions+1 {
+		t.Fatalf("user trace lane settlements=%d adoptions=%d, want one bounded summary per incarnation", laneSettlements, laneAdoptions)
+	}
+	if !receiverCompleted {
+		t.Fatal("user trace omitted normal receiver termination")
+	}
+}
+
+func assertV2UserTraceTransportDiagnostics(
+	t *testing.T,
+	process *v2Process,
+	wantRoute string,
+	requireReceiverTermination bool,
+) {
+	t.Helper()
+	records, _ := readV2UserTrace(t, process.userTracePath, process.userTraceCommand)
+	delivered := false
+	receiverCompleted := false
+	for _, record := range records {
+		switch v2TraceString(t, record, "event") {
+		case "lane_settlement":
+			if v2TraceString(t, record, "lane_route") == wantRoute &&
+				v2TraceDecimal(t, record, "delivered_blocks") > 0 &&
+				v2TraceDecimal(t, record, "delivered_bytes") > 0 {
+				delivered = true
+			}
+		case "receiver_termination":
+			if v2TraceString(t, record, "receiver_local_stop_reason") == "normal_completion" {
+				receiverCompleted = true
+			}
+		case "fallback":
+			t.Fatalf("%s-only transfer emitted an unexpected fallback record", wantRoute)
+		case "observer_loss":
+			t.Fatalf("%s-only transfer lost diagnostic observations", wantRoute)
+		}
+	}
+	if !delivered {
+		t.Fatalf("user trace omitted authenticated %s lane delivery", wantRoute)
+	}
+	if requireReceiverTermination && !receiverCompleted {
+		t.Fatal("direct transfer trace omitted normal receiver termination")
+	}
+}
+
+func TestUserTraceV2DiagnosticContract(t *testing.T) {
+	runID := strings.Repeat("1", 32)
+	base := func(sequence int, event string) map[string]any {
+		return map[string]any{
+			"schema_version": 2,
+			"sequence":       sequence,
+			"time":           "2026-08-17T00:00:00Z",
+			"elapsed_ms":     sequence,
+			"level":          "debug",
+			"event":          event,
+			"command":        "get",
+			"run_id":         runID,
+		}
+	}
+	lane := base(1, "lane_settlement")
+	lane["protocol_session_id"] = runID
+	lane["lane_id"] = 1
+	lane["lane_epoch"] = 0
+	lane["lane_route"] = "relay"
+	lane["delivered_blocks"] = "2"
+	lane["delivered_bytes"] = "8192"
+	lane["failed_block_attempts"] = "0"
+	lane["reassigned_blocks"] = "0"
+	lane["incomplete"] = false
+	loss := base(2, "observer_loss")
+	loss["observer_loss_category"] = "filesystem_output"
+	loss["observer_loss_reason"] = "trace_queue"
+	loss["observer_loss_count"] = "1"
+	termination := base(3, "receiver_termination")
+	termination["receiver_local_generation"] = "1"
+	termination["receiver_transition_authority"] = "local"
+	termination["receiver_disposition"] = "session_unavailable"
+	termination["receiver_transition_provenance"] = "local_explicit_stop"
+	termination["receiver_consequence_provenance"] = "local_explicit_stop"
+	termination["receiver_local_stop_reason"] = "output_admission_stop"
+	termination["receiver_diagnostics_truncated"] = false
+	termination["receiver_benign_components"] = []string{}
+	termination["receiver_retained_cause_classes"] = []string{}
+	termination["receiver_teardown_transitions"] = []string{}
+	termination["receiver_peer_shutdown_failed"] = false
+	termination["receiver_channel_drain_failed"] = false
+	adaptive := base(4, "content_path_selected")
+	adaptive["content_path"] = "direct_and_relay"
+
+	var encoded bytes.Buffer
+	for _, record := range []map[string]any{lane, loss, termination, adaptive} {
+		line, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded.Write(line)
+		encoded.WriteByte('\n')
+	}
+	path := filepath.Join(t.TempDir(), "trace.ndjson")
+	if err := os.WriteFile(path, encoded.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	records, _ := readV2UserTrace(t, path, "get")
+	if len(records) != 4 {
+		t.Fatalf("diagnostic records=%d want=4", len(records))
+	}
+	for _, record := range records {
+		if v2TraceString(t, record, "event") == "fallback" {
+			t.Fatal("adaptive relay admission or output-admission shutdown produced fallback evidence")
+		}
+	}
 }

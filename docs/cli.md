@@ -45,7 +45,7 @@ WindShare never overwrites an existing object, follows a link, or merges unrelat
 
 | Mode | Behavior |
 |---|---|
-| `auto` | Attempts direct WebRTC and admits relay content when fallback policy requires it. |
+| `auto` | Attempts direct WebRTC and may admit relay content adaptively; `Direct + Relay` means both paths are usable, not that fallback occurred. |
 | `relay-only` | Skips peer setup and transfers content through the application relay. |
 | `p2p-only` | Uses the relay only for bootstrap, control, and signaling; direct-path failure stops the download. |
 
@@ -58,8 +58,9 @@ The final result is `success`, `partial`, `paused`, or `failed`; source drift is
 - Capability information is always written to stdout. It is never copied to stderr, verbose output, or trace.
 - Human status, progress, warnings, errors, and results are written to stderr. Redirected stderr has no ANSI or dynamic refresh and, by default, keeps only warnings, errors, and final results.
 - `-v` and `--verbose` add static handshake, reconnect, lane, fallback, and failed protocol-operation diagnostics without changing capability output, results, or exit codes.
-- `--trace <file>` writes versioned private-safe NDJSON to a separate file. Protocol-operation records correlate request and response delivery by random operation ID without recording request bodies. Successful per-block and streaming-response milestones are omitted, and trace recording never waits for file I/O. `--trace=-` is rejected.
-- Trace open failure prevents relay or output mutation. A later write, flush, or queue failure warns once that the trace is incomplete but does not cancel or reclassify the transfer.
+- `--trace <file>` creates a new versioned private-safe NDJSON file. An existing path is preserved and fails before relay or output mutation; append, overwrite, and `--trace=-` are unsupported.
+- Protocol-operation records omit successful block/streaming milestones. `content_path` reports usable paths, while terminal `lane_settlement` records summarize authenticated blocks and bytes delivered by each relay or direct lane.
+- Trace recording never waits for file I/O. Projection, queue, write, or flush loss emits bounded `observer_loss` evidence when possible and one `Trace is incomplete` warning, without cancelling or reclassifying the transfer.
 
 Trace records use full semantic run/session/operation identifiers and normalized relay authority. They exclude capability links and keys, tokens, private keys, filenames, catalog and local paths, command lines, environment values, raw content, and unfiltered provider text. The private process-event pipe used by repository tests is a separate correctness authority.
 
@@ -72,4 +73,4 @@ windshare resume list -o <directory>
 windshare resume discard -o <directory> --item <N>
 ```
 
-`resume list` reports destination-owned `incomplete`, `resumable`, `cleanup-pending`, `operation-needs-attention`, and `item-blocked` state. `resume discard` requires exact interactive confirmation and removes only identity-matched unfinished WindShare state; published files and unknown objects are preserved.
+`resume list` reports destination-owned `incomplete`, `resumable`, `cleanup-pending`, `operation-needs-attention`, and `item-blocked` state. Failures use closed `stage`, optional `reconciliation_stage`, and optional `native_error_class` fields so destination binding, inventory, operation acquisition, checkpoint reconciliation, native durability, and authority close remain distinguishable without exposing paths or provider text. `resume discard` requires exact interactive confirmation and removes only identity-matched unfinished WindShare state; published files and unknown objects are preserved.

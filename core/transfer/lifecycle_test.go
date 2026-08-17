@@ -119,14 +119,14 @@ func TestLaneSetCloseJoinsBlockedHedgeAfterFastWinner(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := lanes.Add(LaneIdentity{ID: 1}, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		if err := lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 			close(winnerStarted)
 			<-allowWinner
 			return winnerRecord, nil
 		})); err != nil {
 			t.Fatal(err)
 		}
-		if err := lanes.Add(LaneIdentity{ID: 2}, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
+		if err := lanes.Add(LaneIdentity{ID: 2}, LaneRouteRelay, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
 			close(loserStarted)
 			<-ctx.Done()
 			close(loserCancelled)
@@ -136,7 +136,7 @@ func TestLaneSetCloseJoinsBlockedHedgeAfterFastWinner(t *testing.T) {
 			t.Fatal(err)
 		}
 		suspendedIdentity := LaneIdentity{ID: 3}
-		if err := lanes.Add(suspendedIdentity, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
+		if err := lanes.Add(suspendedIdentity, LaneRouteRelay, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
 			<-ctx.Done()
 			return records.BlockRecord{}, ctx.Err()
 		})); err != nil {
@@ -259,7 +259,7 @@ func TestLaneCallbackCanStopWithoutSelfJoin(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := lanes.Add(LaneIdentity{ID: 1}, lane); err != nil {
+		if err := lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, lane); err != nil {
 			t.Fatal(err)
 		}
 

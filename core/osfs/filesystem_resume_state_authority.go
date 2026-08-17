@@ -23,6 +23,7 @@ func NewFilesystemResumeStateAuthority(
 	repository, err := outputruntime.NewNativeResumeRepository(
 		filepath.Clean(root.RootPath),
 		openNativeOutputPlatform,
+		nil,
 	)
 	if err != nil {
 		return nil, err

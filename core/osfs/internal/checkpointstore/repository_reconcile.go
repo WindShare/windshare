@@ -318,14 +318,25 @@ func reconcileCandidateRecord(
 		loaded.record, loaded.record.Phase(), checkpointmodel.CommitVerified,
 	)
 	if err != nil {
-		return storedRecord{}, codedError(ErrorCorruptRecord, "promote checkpoint candidate", err)
+		return storedRecord{}, codedError(
+			ErrorCorruptRecord,
+			"promote checkpoint candidate",
+			reconciliationError(ReconciliationRecordPromotion, err),
+		)
 	}
 	promotedEncoded, err := checkpointmodel.EncodeRecord(promoted)
 	if err != nil {
-		return storedRecord{}, codedError(ErrorCorruptRecord, "encode promoted checkpoint", err)
+		return storedRecord{}, codedError(
+			ErrorCorruptRecord,
+			"encode promoted checkpoint",
+			reconciliationError(ReconciliationRecordPromotion, err),
+		)
 	}
 	if err := InstallReplace(shard, name, loaded.encoded, promotedEncoded); err != nil {
-		return storedRecord{}, repositoryError("install promoted checkpoint", err)
+		return storedRecord{}, repositoryError(
+			"install promoted checkpoint",
+			reconciliationError(ReconciliationRecordPromotion, err),
+		)
 	}
 	return storedRecord{record: promoted, encoded: promotedEncoded}, nil
 }

@@ -7,7 +7,7 @@ import (
 	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
 )
 
-type recordV1 struct {
+type recordV2 struct {
 	SchemaVersion int    `json:"schema_version"`
 	Sequence      uint64 `json:"sequence"`
 	Time          string `json:"time"`
@@ -95,6 +95,7 @@ type recordV1 struct {
 	SchemaLimited        *bool   `json:"schema_limited,omitempty"`
 
 	RelayLinkID          *string `json:"relay_link_id,omitempty"`
+	RelaySessionID       *string `json:"relay_session_id,omitempty"`
 	RelaySendOperationID *string `json:"relay_send_operation_id,omitempty"`
 	Stage                *string `json:"stage,omitempty"`
 	Terminal             *bool   `json:"terminal,omitempty"`
@@ -102,6 +103,7 @@ type recordV1 struct {
 	RetirementSource     *string `json:"retirement_source,omitempty"`
 	Cause                *string `json:"cause,omitempty"`
 	DrainCause           *string `json:"drain_cause,omitempty"`
+	RelayDropped         *string `json:"relay_dropped,omitempty"`
 
 	WebRTCChannelID          *string `json:"webrtc_channel_id,omitempty"`
 	WebRTCSendOperationID    *string `json:"webrtc_send_operation_id,omitempty"`
@@ -119,13 +121,27 @@ type recordV1 struct {
 	FileSettlement *string `json:"file_settlement,omitempty"`
 	TreeSettlement *string `json:"tree_settlement,omitempty"`
 
-	NodeClaims             *string `json:"node_claims,omitempty"`
-	DirectoryClaims        *string `json:"directory_claims,omitempty"`
-	FileClaims             *string `json:"file_claims,omitempty"`
-	ActiveFileClaims       *string `json:"active_file_claims,omitempty"`
-	ReservedFileSlots      *string `json:"reserved_file_slots,omitempty"`
-	DirectoryMetadataBytes *string `json:"directory_metadata_bytes,omitempty"`
-	CheckpointRecords      *string `json:"checkpoint_records,omitempty"`
+	NodeClaims                    *string `json:"node_claims,omitempty"`
+	DirectoryClaims               *string `json:"directory_claims,omitempty"`
+	FileClaims                    *string `json:"file_claims,omitempty"`
+	ActiveFileClaims              *string `json:"active_file_claims,omitempty"`
+	ReservedFileSlots             *string `json:"reserved_file_slots,omitempty"`
+	DirectoryMetadataBytes        *string `json:"directory_metadata_bytes,omitempty"`
+	CheckpointRecords             *string `json:"checkpoint_records,omitempty"`
+	ReceiveIntentDigest           *string `json:"receive_intent_digest,omitempty"`
+	OutputSessionID               *string `json:"output_session_id,omitempty"`
+	FilesystemCertification       *string `json:"filesystem_certification,omitempty"`
+	FilesystemRootDisposition     *string `json:"filesystem_root_disposition,omitempty"`
+	FilesystemNativeLockScope     *string `json:"filesystem_native_lock_scope,omitempty"`
+	FilesystemNativeLockMilestone *string `json:"filesystem_native_lock_milestone,omitempty"`
+	FilesystemRuntimeComponent    *string `json:"filesystem_runtime_component,omitempty"`
+	FilesystemRuntimeOperation    *string `json:"filesystem_runtime_operation,omitempty"`
+	FilesystemRuntimeDecision     *string `json:"filesystem_runtime_decision,omitempty"`
+	FilesystemOperationID         *string `json:"filesystem_operation_id,omitempty"`
+	FilesystemClaimID             *string `json:"filesystem_claim_id,omitempty"`
+	FilesystemFailureStage        *string `json:"filesystem_failure_stage,omitempty"`
+	FilesystemReconciliationStep  *string `json:"filesystem_reconciliation_step,omitempty"`
+	FilesystemNativeErrorClass    *string `json:"filesystem_native_error_class,omitempty"`
 
 	Settled              *bool   `json:"settled,omitempty"`
 	TransportDisposition *string `json:"transport_disposition,omitempty"`
@@ -141,22 +157,46 @@ type recordV1 struct {
 	RootPrefetchAttempt      *string `json:"root_prefetch_attempt,omitempty"`
 	RootPrefetchEntryCount   *string `json:"root_prefetch_entry_count,omitempty"`
 	RootPrefetchOmittedCount *string `json:"root_prefetch_omitted_count,omitempty"`
+
+	LaneRoute           *string `json:"lane_route,omitempty"`
+	DeliveredBlocks     *string `json:"delivered_blocks,omitempty"`
+	DeliveredBytes      *string `json:"delivered_bytes,omitempty"`
+	FailedBlockAttempts *string `json:"failed_block_attempts,omitempty"`
+	ReassignedBlocks    *string `json:"reassigned_blocks,omitempty"`
+	Incomplete          *bool   `json:"incomplete,omitempty"`
+
+	ObserverLossCategory *string `json:"observer_loss_category,omitempty"`
+	ObserverLossReason   *string `json:"observer_loss_reason,omitempty"`
+	ObserverLossCount    *string `json:"observer_loss_count,omitempty"`
+
+	ReceiverLocalGeneration       *string  `json:"receiver_local_generation,omitempty"`
+	ReceiverTransitionAuthority   *string  `json:"receiver_transition_authority,omitempty"`
+	ReceiverDisposition           *string  `json:"receiver_disposition,omitempty"`
+	ReceiverTransitionProvenance  *string  `json:"receiver_transition_provenance,omitempty"`
+	ReceiverConsequenceProvenance *string  `json:"receiver_consequence_provenance,omitempty"`
+	ReceiverLocalStopReason       *string  `json:"receiver_local_stop_reason,omitempty"`
+	ReceiverDiagnosticsTruncated  *bool    `json:"receiver_diagnostics_truncated,omitempty"`
+	ReceiverBenignComponents      []string `json:"receiver_benign_components,omitempty"`
+	ReceiverRetainedCauseClasses  []string `json:"receiver_retained_cause_classes,omitempty"`
+	ReceiverTeardownTransitions   []string `json:"receiver_teardown_transitions,omitempty"`
+	ReceiverPeerShutdownFailed    *bool    `json:"receiver_peer_shutdown_failed,omitempty"`
+	ReceiverChannelDrainFailed    *bool    `json:"receiver_channel_drain_failed,omitempty"`
 }
 
-func baseRecordV1(
+func baseRecordV2(
 	runID string,
 	metadata entryMetadata,
 	command clievent.Command,
 	level clievent.Level,
 	event string,
-) (recordV1, error) {
+) (recordV2, error) {
 	commandName, commandOK := command.Name()
 	levelName, levelOK := level.Name()
 	if !commandOK || !levelOK || event == "" || metadata.sequence == 0 ||
 		metadata.sequence > maxJSONSafeInteger || metadata.elapsedMS < 0 {
-		return recordV1{}, ErrInvalidConfig
+		return recordV2{}, ErrInvalidConfig
 	}
-	return recordV1{
+	return recordV2{
 		SchemaVersion: SchemaVersion,
 		Sequence:      metadata.sequence,
 		Time:          metadata.time.UTC().Format(time.RFC3339Nano),
@@ -168,17 +208,17 @@ func baseRecordV1(
 	}, nil
 }
 
-func summaryV1(
+func summaryV2(
 	runID string,
 	command clievent.Command,
 	metadata entryMetadata,
 	status Status,
-) recordV1 {
+) recordV2 {
 	level := clievent.LevelInfo
 	if !status.Complete {
 		level = clievent.LevelWarning
 	}
-	record, _ := baseRecordV1(runID, metadata, command, level, "trace_summary")
+	record, _ := baseRecordV2(runID, metadata, command, level, "trace_summary")
 	incomplete := !status.Complete
 	record.TraceIncomplete = &incomplete
 	record.LifecycleDropped = decimalPointer(status.LifecycleDropped)

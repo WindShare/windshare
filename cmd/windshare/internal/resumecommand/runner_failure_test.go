@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/windshare/windshare/core/osfs"
 )
 
 func TestRunnerFailsClosedAtInjectedPresentationBoundaries(t *testing.T) {
@@ -57,6 +59,105 @@ func TestRunnerFailsClosedAtInjectedPresentationBoundaries(t *testing.T) {
 			t.Fatalf("result=%d", result)
 		}
 	})
+}
+
+type resumeDiagnosticTestError struct {
+	diagnostic osfs.FilesystemOutputDiagnostic
+}
+
+func (failure resumeDiagnosticTestError) Error() string {
+	return "provider path and capability canary"
+}
+
+func (failure resumeDiagnosticTestError) FilesystemOutputDiagnostic() osfs.FilesystemOutputDiagnostic {
+	return failure.diagnostic
+}
+
+func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
+	tests := []struct {
+		name       string
+		diagnostic osfs.FilesystemOutputDiagnostic
+		reason     string
+		fields     []string
+	}{
+		{
+			name: "destination binding",
+			diagnostic: osfs.FilesystemOutputDiagnostic{
+				Stage: osfs.FilesystemOutputFailureDestinationBinding,
+			},
+			reason: resumeDestinationBindingReason,
+		},
+		{
+			name: "inventory paging",
+			diagnostic: osfs.FilesystemOutputDiagnostic{
+				Stage: osfs.FilesystemOutputFailureInventoryPaging,
+			},
+			reason: resumeInventoryPagingReason,
+		},
+		{
+			name: "operation acquisition",
+			diagnostic: osfs.FilesystemOutputDiagnostic{
+				Stage: osfs.FilesystemOutputFailureOperationAcquisition,
+			},
+			reason: resumeOperationAcquisitionReason,
+		},
+		{
+			name: "checkpoint reconciliation",
+			diagnostic: osfs.FilesystemOutputDiagnostic{
+				Stage:              osfs.FilesystemOutputFailureCheckpointReconciliation,
+				ReconciliationStep: osfs.FilesystemCheckpointRecordPromotion,
+			},
+			reason: resumeCheckpointReconcileReason,
+			fields: []string{`reconciliation_stage="record_promotion"`},
+		},
+		{
+			name: "native durability",
+			diagnostic: osfs.FilesystemOutputDiagnostic{
+				Stage:              osfs.FilesystemOutputFailureNativeDurability,
+				ReconciliationStep: osfs.FilesystemCheckpointStageDurability,
+				NativeErrorClass:   osfs.FilesystemNativeErrorAccessDenied,
+			},
+			reason: resumeNativeDurabilityReason,
+			fields: []string{
+				`reconciliation_stage="stage_durability"`,
+				`native_error_class="access_denied"`,
+			},
+		},
+		{
+			name: "authority close",
+			diagnostic: osfs.FilesystemOutputDiagnostic{
+				Stage: osfs.FilesystemOutputFailureAuthorityClose,
+			},
+			reason: resumeAuthorityCloseReason,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			app, stdout, _ := newResumeTestApp()
+			app.resumeInventories = &fakeResumeStateInventoryOpener{
+				err: resumeDiagnosticTestError{diagnostic: test.diagnostic},
+			}
+			result := app.Run(context.Background(), []string{
+				"resume", "list", "-o", t.TempDir(),
+			})
+			rendered := stdout.String()
+			if result != ResultFailure ||
+				!strings.Contains(rendered, `reason="`+test.reason+`"`) ||
+				!strings.Contains(rendered, `stage="`+test.diagnostic.Stage.String()+`"`) {
+				t.Fatalf("result=%d output=%q", result, rendered)
+			}
+			for _, field := range test.fields {
+				if !strings.Contains(rendered, field) {
+					t.Fatalf("output=%q missing=%q", rendered, field)
+				}
+			}
+			if strings.Contains(rendered, "provider") ||
+				strings.Contains(rendered, "path") ||
+				strings.Contains(rendered, "capability") {
+				t.Fatalf("provider canary escaped: %q", rendered)
+			}
+		})
+	}
 }
 
 type errorResumeWriter struct{}

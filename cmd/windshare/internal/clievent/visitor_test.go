@@ -70,6 +70,15 @@ func (visitor *exhaustiveVisitor) VisitRootPrefetchObserved(RootPrefetchObserved
 func (visitor *exhaustiveVisitor) VisitProtocolOperationObserved(ProtocolOperationObserved) error {
 	return visitor.mark("protocol_operation")
 }
+func (visitor *exhaustiveVisitor) VisitLaneSettlementObserved(LaneSettlementObserved) error {
+	return visitor.mark("lane_settlement")
+}
+func (visitor *exhaustiveVisitor) VisitObserverLossObserved(ObserverLossObserved) error {
+	return visitor.mark("observer_loss")
+}
+func (visitor *exhaustiveVisitor) VisitReceiverTerminationObserved(ReceiverTerminationObserved) error {
+	return visitor.mark("receiver_termination")
+}
 
 func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 	failure, _ := NewFailure(FailureRelayTransport)
@@ -98,8 +107,8 @@ func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 	lane, _ := NewLaneIdentity(2, 1)
 	adopted, _ := NewLaneAdopted(CommandGet, sessionID, lane, TransportWebRTC)
 	relayLifecycle, _ := NewRelayLifecycleObserved(RelayLifecycleSpec{
-		Command: CommandGet, LinkID: 1, Stage: RelayLinkClosed,
-		RetirementSource: RelayRetirementNone, Cause: RelayCauseNone, DrainCause: RelayCauseNone,
+		Command: CommandGet, LinkID: 1, SendOperationID: 1, Stage: RelayLinkClosed,
+		RetirementSource: RelayRetirementLocalClose, Cause: RelayCauseNone, DrainCause: RelayCauseNone,
 	})
 	webRTCLifecycle, _ := NewWebRTCLifecycleObserved(WebRTCLifecycleSpec{
 		Command: CommandGet, ChannelID: 1, Operation: WebRTCChannel,
@@ -118,9 +127,9 @@ func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 		FileSelection: FileSelectionNone, FileSettlement: FileSettlementNone,
 		TreeSettlement: TreeSettlementNone,
 	})
-	filesystemOutput, _ := NewFilesystemOutputObserved(
-		receiveID, FilesystemRuntimeDecision, FilesystemOutputCounters{}, Failure{},
-	)
+	filesystemOutput, _ := NewFilesystemOutputObserved(FilesystemOutputSpec{
+		ReceiveOperation: receiveID, Operation: FilesystemRuntimeDecision,
+	})
 	senderTerminal, _ := NewSenderTerminalObserved(
 		sessionID, lane, true, SenderTerminalAccepted,
 		SenderTerminalDelivered, SenderTerminalDecisionDelivered,
@@ -136,6 +145,13 @@ func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 		ProtocolSession: sessionID, ProtocolOperation: protocolOperationID,
 		RequestKind: ProtocolMessageReleaseLease,
 		Lane:        lane, HasLane: true, Cause: ProtocolOperationCauseDeadline,
+	})
+	laneSettlement, _ := NewLaneSettlementObserved(LaneSettlementSpec{Session: sessionID, Route: LaneRouteDirect, Lane: lane})
+	observerLoss, _ := NewObserverLossObserved(ObserverLossSpec{Command: CommandGet, Category: ObserverLossCommandAdapter, Reason: ObserverLossEventContract, Count: 1})
+	receiverTermination, _ := NewReceiverTerminationObserved(ReceiverTerminationSpec{
+		LocalGeneration: 1, TransitionAuthority: ReceiverTerminalLocal,
+		Disposition: ReceiverFallbackAllowed, TransitionProvenance: ReceiverProvenanceLocalExplicitStop,
+		ConsequenceProvenance: ReceiverProvenanceLocalExplicitStop, LocalStopReason: ReceiverLocalStopCaller,
 	})
 
 	tests := []struct {
@@ -164,6 +180,9 @@ func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 		{"catalog_storage", catalogStorage},
 		{"root_prefetch", rootPrefetch},
 		{"protocol_operation", protocolOperation},
+		{"lane_settlement", laneSettlement},
+		{"observer_loss", observerLoss},
+		{"receiver_termination", receiverTermination},
 	}
 	visitor := &exhaustiveVisitor{}
 	for _, test := range tests {

@@ -81,7 +81,7 @@ func TestLaneSetRacesOneWinnerAndCancelsLateLane(t *testing.T) {
 	defer lanes.Close()
 	slowStarted := make(chan struct{})
 	slowCancelled := make(chan struct{})
-	if err := lanes.Add(LaneIdentity{ID: 1}, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
 		close(slowStarted)
 		<-ctx.Done()
 		close(slowCancelled)
@@ -89,7 +89,7 @@ func TestLaneSetRacesOneWinnerAndCancelsLateLane(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if err := lanes.Add(LaneIdentity{ID: 2}, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(LaneIdentity{ID: 2}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		<-slowStarted
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
@@ -120,8 +120,8 @@ func TestLaneSetFairnessFailureHotSwitchAndEpochReplacement(t *testing.T) {
 		secondCalls.Add(1)
 		return transferRecord(t, descriptor, 0), nil
 	})
-	_ = lanes.Add(LaneIdentity{ID: 1}, first)
-	_ = lanes.Add(LaneIdentity{ID: 2}, second)
+	_ = lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, first)
+	_ = lanes.Add(LaneIdentity{ID: 2}, LaneRouteRelay, second)
 	for range 4 {
 		if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
 			t.Fatal(err)
@@ -133,17 +133,17 @@ func TestLaneSetFairnessFailureHotSwitchAndEpochReplacement(t *testing.T) {
 
 	failing, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](7), RaceWidth: 1})
 	defer failing.Close()
-	_ = failing.Add(LaneIdentity{ID: 1}, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	_ = failing.Add(LaneIdentity{ID: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, errors.New("lane down")
 	}))
-	_ = failing.Add(LaneIdentity{ID: 2}, second)
+	_ = failing.Add(LaneIdentity{ID: 2}, LaneRouteRelay, second)
 	if _, err := failing.fetch(context.Background(), demand, validateTransferRecord(demand)); err == nil {
 		t.Fatal("an untyped block failure was unsafely reassigned as a new operation")
 	}
 	if _, err := failing.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
 		t.Fatalf("healthy lane was not selected after failure: %v", err)
 	}
-	if err := failing.Add(LaneIdentity{ID: 2, Epoch: 0}, second); !errors.Is(err, ErrStaleLane) {
+	if err := failing.Add(LaneIdentity{ID: 2, Epoch: 0}, LaneRouteRelay, second); !errors.Is(err, ErrStaleLane) {
 		t.Fatalf("stale epoch error=%v", err)
 	}
 	replacementCalls := atomic.Int32{}
@@ -151,7 +151,7 @@ func TestLaneSetFairnessFailureHotSwitchAndEpochReplacement(t *testing.T) {
 		replacementCalls.Add(1)
 		return transferRecord(t, descriptor, 0), nil
 	})
-	if err := failing.Add(LaneIdentity{ID: 2, Epoch: 1}, replacement); err != nil {
+	if err := failing.Add(LaneIdentity{ID: 2, Epoch: 1}, LaneRouteRelay, replacement); err != nil {
 		t.Fatal(err)
 	}
 	if failing.Remove(LaneIdentity{ID: 2, Epoch: 0}) || !failing.Remove(LaneIdentity{ID: 2, Epoch: 1}) {
@@ -199,10 +199,10 @@ func TestLaneSetRejectsHostileWinnerAndBoundsDynamicLanes(t *testing.T) {
 	demand := validDemand(t, descriptor, 0)
 	lanes, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](8), RaceWidth: 2})
 	defer lanes.Close()
-	_ = lanes.Add(LaneIdentity{ID: 1}, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	_ = lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return transferRecord(t, descriptor, 1), nil
 	}))
-	_ = lanes.Add(LaneIdentity{ID: 2}, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	_ = lanes.Add(LaneIdentity{ID: 2}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		time.Sleep(time.Millisecond)
 		return transferRecord(t, descriptor, 0), nil
 	}))
@@ -213,13 +213,13 @@ func TestLaneSetRejectsHostileWinnerAndBoundsDynamicLanes(t *testing.T) {
 	full, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](9)})
 	defer full.Close()
 	for id := uint32(1); id <= MaxLogicalLanes; id++ {
-		if err := full.Add(LaneIdentity{ID: id}, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		if err := full.Add(LaneIdentity{ID: id}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, nil
 		})); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := full.Add(LaneIdentity{ID: MaxLogicalLanes + 1}, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := full.Add(LaneIdentity{ID: MaxLogicalLanes + 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, nil
 	})); !errors.Is(err, ErrLaneBudget) {
 		t.Fatalf("lane budget error=%v", err)
@@ -228,7 +228,7 @@ func TestLaneSetRejectsHostileWinnerAndBoundsDynamicLanes(t *testing.T) {
 		t.Fatalf("lane count=%d", full.Len())
 	}
 	full.Close()
-	if err := full.Add(LaneIdentity{ID: 99}, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := full.Add(LaneIdentity{ID: 99}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, nil
 	})); !errors.Is(err, ErrLaneClosed) {
 		t.Fatalf("closed add error=%v", err)
@@ -249,7 +249,7 @@ func TestLaneSetSuspendsRelayContentUntilAnotherLaneArrives(t *testing.T) {
 
 	relayIdentity := LaneIdentity{ID: 1, Epoch: 1}
 	var relayCalls atomic.Int32
-	if err := lanes.Add(relayIdentity, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(relayIdentity, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		relayCalls.Add(1)
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
@@ -270,7 +270,7 @@ func TestLaneSetSuspendsRelayContentUntilAnotherLaneArrives(t *testing.T) {
 	}()
 
 	var peerCalls atomic.Int32
-	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		peerCalls.Add(1)
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
@@ -303,7 +303,7 @@ func TestLaneSetReassignsCurrentDemandWhenSuspendedRelayResumes(t *testing.T) {
 
 	relayIdentity := LaneIdentity{ID: 1, Epoch: 0}
 	var relayCalls atomic.Int32
-	if err := lanes.Add(relayIdentity, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(relayIdentity, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		relayCalls.Add(1)
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
@@ -315,7 +315,7 @@ func TestLaneSetReassignsCurrentDemandWhenSuspendedRelayResumes(t *testing.T) {
 	}
 	peerFailed := make(chan struct{})
 	var peerCalls atomic.Int32
-	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		peerCalls.Add(1)
 		close(peerFailed)
 		return records.BlockRecord{}, NewDemandNotAdmitted(errors.New("peer path detached before request delivery"))
@@ -362,13 +362,13 @@ func TestLaneSetRejectsForgedDemandNotAdmittedMarker(t *testing.T) {
 		RaceWidth:         1,
 	})
 	defer lanes.Close()
-	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, impostorDemandNotAdmittedError{}
 	})); err != nil {
 		t.Fatal(err)
 	}
 	var fallbackCalls atomic.Int32
-	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		fallbackCalls.Add(1)
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
@@ -391,7 +391,7 @@ func TestLaneSetResumeAndLifecycleWakeBlockedFetches(t *testing.T) {
 	})
 	identity := LaneIdentity{ID: 1, Epoch: 1}
 	var calls atomic.Int32
-	_ = lanes.Add(identity, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	_ = lanes.Add(identity, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		calls.Add(1)
 		return transferRecord(t, descriptor, 0), nil
 	}))
@@ -458,7 +458,7 @@ func TestLaneSetResumeAndLifecycleWakeBlockedFetches(t *testing.T) {
 func TestLaneSetContentSuspensionUsesExactInitialIdentityAndOpaqueHandle(t *testing.T) {
 	lanes, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](38)})
 	identity := LaneIdentity{ID: 1, Epoch: 2}
-	if err := lanes.Add(identity, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(identity, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, nil
 	})); err != nil {
 		t.Fatal(err)
@@ -508,7 +508,7 @@ func TestLaneSetContentSuspensionFollowsReplacementEpoch(t *testing.T) {
 	defer lanes.Close()
 
 	initial := LaneIdentity{ID: 1, Epoch: 1}
-	if err := lanes.Add(initial, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(initial, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, errors.New("replaced relay must not be called")
 	})); err != nil {
 		t.Fatal(err)
@@ -522,7 +522,7 @@ func TestLaneSetContentSuspensionFollowsReplacementEpoch(t *testing.T) {
 	}
 	var replacementCalls atomic.Int32
 	replacement := LaneIdentity{ID: initial.ID, Epoch: initial.Epoch + 1}
-	if err := lanes.Add(replacement, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(replacement, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		replacementCalls.Add(1)
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
@@ -530,7 +530,7 @@ func TestLaneSetContentSuspensionFollowsReplacementEpoch(t *testing.T) {
 	}
 	var peerCalls atomic.Int32
 	peer := LaneIdentity{ID: 2, Epoch: 1}
-	if err := lanes.Add(peer, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(peer, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		peerCalls.Add(1)
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
@@ -563,7 +563,7 @@ func TestLaneSetContentSuspensionCanResumeBetweenEpochs(t *testing.T) {
 	defer lanes.Close()
 
 	initial := LaneIdentity{ID: 1, Epoch: 3}
-	if err := lanes.Add(initial, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(initial, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, errors.New("removed relay must not be called")
 	})); err != nil {
 		t.Fatal(err)
@@ -582,7 +582,7 @@ func TestLaneSetContentSuspensionCanResumeBetweenEpochs(t *testing.T) {
 		t.Fatalf("double resume error=%v", err)
 	}
 	var replacementCalls atomic.Int32
-	if err := lanes.Add(LaneIdentity{ID: initial.ID, Epoch: initial.Epoch + 1}, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(LaneIdentity{ID: initial.ID, Epoch: initial.Epoch + 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		replacementCalls.Add(1)
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
@@ -602,7 +602,7 @@ func TestLaneSetContentSuspensionsShareLogicalLaneBudget(t *testing.T) {
 	holds := make([]*ContentLaneSuspension, 0, MaxLogicalLanes)
 	for index := range MaxLogicalLanes {
 		identity := LaneIdentity{ID: uint32(index + 1), Epoch: 1}
-		if err := lanes.Add(identity, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		if err := lanes.Add(identity, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, nil
 		})); err != nil {
 			t.Fatalf("add logical lane %d: %v", index, err)
@@ -617,7 +617,7 @@ func TestLaneSetContentSuspensionsShareLogicalLaneBudget(t *testing.T) {
 		}
 	}
 	extra := LaneIdentity{ID: MaxLogicalLanes + 1, Epoch: 1}
-	if err := lanes.Add(extra, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(extra, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, nil
 	})); !errors.Is(err, ErrLaneBudget) {
 		t.Fatalf("held-policy flood add error=%v", err)
@@ -625,7 +625,7 @@ func TestLaneSetContentSuspensionsShareLogicalLaneBudget(t *testing.T) {
 	if err := holds[0].Resume(); err != nil {
 		t.Fatal(err)
 	}
-	if err := lanes.Add(extra, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(extra, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, nil
 	})); err != nil {
 		t.Fatalf("released hold did not reopen logical capacity: %v", err)

@@ -85,13 +85,47 @@ func (runner Runner) reportListOpenFailure(err error) Result {
 		reason = resumeDestinationBusyReason
 		message = "destination resume authority is already in use"
 	}
-	if writeErr := runner.dependencies.output.WriteResult(
-		runner.dependencies.renderer.ListControlStatus(status, reason),
-	); writeErr != nil {
+	reason, detail := resumeFailurePresentation(err, reason)
+	rendered, renderErr := runner.dependencies.renderer.ListControlStatus(status, reason, detail)
+	if renderErr != nil {
+		runner.dependencies.logger.Logf("resume list: status could not be represented safely")
+	} else if writeErr := runner.dependencies.output.WriteResult(rendered); writeErr != nil {
 		runner.dependencies.logger.Logf("resume list: status output failed")
 	}
 	runner.dependencies.logger.Logf("resume list: %s", message)
 	return ResultFailure
+}
+
+func resumeFailurePresentation(err error, fallback string) (string, resumeFailureDetail) {
+	diagnostic, ok := osfs.FilesystemOutputDiagnosticFor(err)
+	if !ok || !diagnostic.Valid() {
+		return fallback, resumeFailureDetail{}
+	}
+	detail := resumeFailureDetail{
+		stage:          diagnostic.Stage,
+		reconciliation: diagnostic.ReconciliationStep,
+		nativeClass:    diagnostic.NativeErrorClass,
+	}
+	switch diagnostic.Stage {
+	case osfs.FilesystemOutputFailureDestinationBinding:
+		return resumeDestinationBindingReason, detail
+	case osfs.FilesystemOutputFailureInventoryPaging:
+		return resumeInventoryPagingReason, detail
+	case osfs.FilesystemOutputFailureActiveLookup:
+		return resumeActiveLookupReason, detail
+	case osfs.FilesystemOutputFailureOperationAcquisition:
+		return resumeOperationAcquisitionReason, detail
+	case osfs.FilesystemOutputFailureOperationAdmission:
+		return resumeOperationAdmissionReason, detail
+	case osfs.FilesystemOutputFailureCheckpointReconciliation:
+		return resumeCheckpointReconcileReason, detail
+	case osfs.FilesystemOutputFailureNativeDurability:
+		return resumeNativeDurabilityReason, detail
+	case osfs.FilesystemOutputFailureAuthorityClose:
+		return resumeAuthorityCloseReason, detail
+	default:
+		return fallback, resumeFailureDetail{}
+	}
 }
 
 func (runner Runner) runDiscard(ctx context.Context, args []string) Result {
@@ -229,11 +263,13 @@ func (runner Runner) reportDiscardOpenFailure(itemNumber int, err error) Result 
 			"destination resume authority is already in use",
 		)
 	}
-	return runner.reportDiscardControl(
+	reason, detail := resumeFailurePresentation(err, resumeDestinationUnknownReason)
+	return runner.reportDiscardControlWithDetail(
 		resumeDiscardStatusNeedsAttention,
 		itemNumber,
-		resumeDestinationUnknownReason,
+		reason,
 		"destination state could not be verified; no objects were changed",
+		detail,
 	)
 }
 
@@ -243,9 +279,24 @@ func (runner Runner) reportDiscardControl(
 	reason string,
 	message string,
 ) Result {
-	if err := runner.dependencies.output.WriteResult(
-		runner.dependencies.renderer.DiscardControlStatus(status, itemNumber, reason),
-	); err != nil {
+	return runner.reportDiscardControlWithDetail(
+		status, itemNumber, reason, message, resumeFailureDetail{},
+	)
+}
+
+func (runner Runner) reportDiscardControlWithDetail(
+	status string,
+	itemNumber int,
+	reason string,
+	message string,
+	detail resumeFailureDetail,
+) Result {
+	rendered, renderErr := runner.dependencies.renderer.DiscardControlStatus(
+		status, itemNumber, reason, detail,
+	)
+	if renderErr != nil {
+		runner.dependencies.logger.Logf("resume discard: status could not be represented safely")
+	} else if err := runner.dependencies.output.WriteResult(rendered); err != nil {
 		runner.dependencies.logger.Logf("resume discard: status output failed")
 	}
 	runner.dependencies.logger.Logf("resume discard: %s", message)

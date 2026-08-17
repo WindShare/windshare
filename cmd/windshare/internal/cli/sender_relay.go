@@ -35,6 +35,10 @@ type senderRelayEndpoint interface {
 	Close() error
 }
 
+type senderRelayObservationCompleter interface {
+	CompleteObservations(context.Context) relayv2.LifecycleObservationCompletion
+}
+
 // senderRelayConnection keeps factories concrete while containing the narrow
 // transport interface at the consumer boundary.
 type senderRelayConnection struct {
@@ -58,6 +62,17 @@ func (connection senderRelayConnection) Close() error {
 		return nil
 	}
 	return connection.endpoint.Close()
+}
+
+func (connection senderRelayConnection) CompleteObservations(ctx context.Context) relayv2.LifecycleObservationCompletion {
+	if !connection.valid() {
+		return relayv2.LifecycleObservationCompletion{Drained: true}
+	}
+	completer, ok := connection.endpoint.(senderRelayObservationCompleter)
+	if !ok {
+		return relayv2.LifecycleObservationCompletion{Drained: true}
+	}
+	return completer.CompleteObservations(ctx)
 }
 
 type senderRelayDialer interface {
@@ -144,6 +159,9 @@ type senderRelayLifecycle struct {
 	stopping        bool
 	cleanupOnce     sync.Once
 	cleanupErr      error
+	observed        []senderRelayConnection
+	completionOnce  sync.Once
+	completion      relayv2.LifecycleObservationCompletion
 }
 
 func newSenderRelayLifecycle(config senderRelayLifecycleConfig) (*senderRelayLifecycle, error) {
@@ -173,6 +191,7 @@ func newSenderRelayLifecycle(config senderRelayLifecycleConfig) (*senderRelayLif
 		resume:          resume,
 		stopID:          stopID,
 		connection:      connection,
+		observed:        []senderRelayConnection{connection},
 		recoveryContext: recoveryContext,
 		cancelRecovery:  cancel,
 	}, nil
@@ -265,6 +284,7 @@ func (lifecycle *senderRelayLifecycle) recover(callerContext context.Context) (r
 			},
 		})
 		if dialErr == nil {
+			lifecycle.trackObservationConnection(connection)
 			if err := lifecycle.recoveryCause(callerContext, recoveryContext); err != nil {
 				_ = connection.Close()
 				return failAttempt(err)
@@ -307,6 +327,31 @@ func (lifecycle *senderRelayLifecycle) recover(callerContext context.Context) (r
 			state:   senderRelayAttemptStarted,
 		})
 	}
+}
+
+func (lifecycle *senderRelayLifecycle) trackObservationConnection(connection senderRelayConnection) {
+	if lifecycle == nil || !connection.valid() {
+		return
+	}
+	lifecycle.mu.Lock()
+	lifecycle.observed = append(lifecycle.observed, connection)
+	lifecycle.mu.Unlock()
+}
+
+func (lifecycle *senderRelayLifecycle) CompleteObservations(ctx context.Context) relayv2.LifecycleObservationCompletion {
+	if lifecycle == nil {
+		return relayv2.LifecycleObservationCompletion{Drained: true}
+	}
+	lifecycle.completionOnce.Do(func() {
+		lifecycle.mu.Lock()
+		connections := append([]senderRelayConnection(nil), lifecycle.observed...)
+		lifecycle.mu.Unlock()
+		lifecycle.completion.Drained = true
+		for _, connection := range connections {
+			mergeRelayCompletion(&lifecycle.completion, connection.CompleteObservations(ctx))
+		}
+	})
+	return lifecycle.completion
 }
 
 func (lifecycle *senderRelayLifecycle) observeRecovery(milestone senderRelayRecoveryMilestone) {

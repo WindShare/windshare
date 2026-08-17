@@ -42,8 +42,11 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	if err != nil {
 		return ExitFailure
 	}
-	defer runtime.Close()
-	observation := getObservation{runtime: runtime}
+	observation := newGetObservation(runtime)
+	defer func() {
+		observation.completeAndFinalize()
+		runtime.Close()
+	}()
 	startedAt := runtime.Clock().Now()
 
 	output, code := a.prepareGetOutput(ctx, request, observation)
@@ -93,7 +96,16 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	// Settlement diagnostics must describe the state that ended the transfer.
 	// Closing optional paths can discover cleanup residue, but that later residue
 	// cannot retroactively turn a caller interruption into a network failure.
-	execution.Close()
+	stopReason := clievent.ReceiverLocalStopNormalCompletion
+	switch {
+	case ctx.Err() != nil:
+		stopReason = clievent.ReceiverLocalStopCaller
+	case admissionErr != nil:
+		stopReason = clievent.ReceiverLocalStopOutputAdmission
+	case runtimeErr != nil || connectionErr != nil:
+		stopReason = clievent.ReceiverLocalStopRuntimeSessionFailure
+	}
+	execution.CloseWithReason(stopReason)
 	// A terminal result is meaningful only after every producer has lost the
 	// ability to append a later fact to this run's ordered publication stream.
 	closeSession()
@@ -253,10 +265,11 @@ func (a *App) dialV2Receiver(
 		connection, err := relayv2.DialReceiver(joinContext, relayv2.ReceiverConfig{
 			RelayBaseURL: capability.Relays[0], ShareID: shareID,
 			Dial: relayv2.DialOptions{
-				LifecycleTracer: relayv2.LifecycleTraceFunc(observation.relayLifecycle),
+				LifecycleTracer: observation.relayTracer(),
 			},
 		})
 		if err == nil {
+			observation.registerRelayConnection(connection)
 			observation.relayConnected(connection.Endpoint())
 			return connection, ExitOK
 		}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -37,13 +38,51 @@ type queuedCommandEvent struct {
 	event    clievent.Event
 }
 
+// observationPublicationGate makes the owner-facing completion cut and the
+// command-runtime enqueue one serialized decision. Projection may happen before
+// this gate, but a callback cannot retain publication authority across revoke.
+type observationPublicationGate struct {
+	mu      sync.Mutex
+	revoked bool
+}
+
+func (gate *observationPublicationGate) commit(
+	ctx context.Context,
+	publish func() bool,
+) bool {
+	if publish == nil {
+		return false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if gate == nil {
+		return ctx.Err() == nil && publish()
+	}
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if gate.revoked || ctx.Err() != nil {
+		return false
+	}
+	return publish()
+}
+
+func (gate *observationPublicationGate) revoke() {
+	if gate == nil {
+		return
+	}
+	gate.mu.Lock()
+	gate.revoked = true
+	gate.mu.Unlock()
+}
+
 type commandRuntime struct {
 	command             clievent.Command
 	clock               commandClock
 	human               *humanoutput.Renderer
 	trace               userTraceRecorder
 	canvas              canvasHealth
-	protocolDiagnostics bool
+	detailedDiagnostics bool
 
 	ready   chan struct{}
 	closing chan struct{}
@@ -60,9 +99,13 @@ type commandRuntime struct {
 	hasObserverProgress    bool
 	commandPublications    []queuedCommandEvent
 	commandPublicationHead int
+	stagedFinalization     []clievent.Event
 
-	pendingLifecycleLoss atomic.Uint64
+	pendingObserverLoss  [clievent.ObserverLossCategoryLimit][clievent.ObserverLossReasonLimit]atomic.Uint64
+	upstreamCumulative   [clievent.ObserverLossCategoryLimit][clievent.ObserverLossReasonLimit]atomic.Uint64
 	pendingProgressLoss  atomic.Uint64
+	pendingTraceLoss     atomic.Uint64
+	pendingTraceProgress atomic.Uint64
 	warningOnce          sync.Once
 	closeOnce            sync.Once
 }
@@ -96,25 +139,9 @@ func (a *App) newCommandRuntime(
 		return nil, errCommandRuntimeConfig
 	}
 
-	var recorder userTraceRecorder
-	if options.traceEnabled() {
-		opener := a.openUserTrace
-		if opener == nil {
-			opener = openNativeUserTrace
-		}
-		recorder, err = opener(options.tracePath, command, runtrace.Config{}, runtrace.Dependencies{
-			Clock: terminal.clock,
-			NewTicker: func(interval time.Duration) runtrace.Ticker {
-				return terminal.clock.NewTicker(interval)
-			},
-		})
-		if err != nil || recorder == nil {
-			if recorder != nil {
-				_ = recorder.Close()
-			}
-			renderTraceOpenFailure(renderer, command)
-			return nil, errUserTraceOpen
-		}
+	recorder, err := a.openCommandTrace(command, options, terminal, renderer)
+	if err != nil {
+		return nil, err
 	}
 
 	capacity := a.commandEventCapacity
@@ -123,7 +150,7 @@ func (a *App) newCommandRuntime(
 	}
 	runtime := &commandRuntime{
 		command: command, clock: terminal.clock, human: renderer, trace: recorder,
-		protocolDiagnostics: options.verbose || options.traceEnabled(),
+		detailedDiagnostics: options.verbose || options.traceEnabled(),
 		canvas:              terminal.canvas, observerLifecycle: make([]queuedCommandEvent, capacity),
 		ready: make(chan struct{}, 1), closing: make(chan struct{}), done: make(chan struct{}),
 	}
@@ -131,8 +158,40 @@ func (a *App) newCommandRuntime(
 	return runtime, nil
 }
 
-func (runtime *commandRuntime) protocolDiagnosticsEnabled() bool {
-	return runtime != nil && runtime.protocolDiagnostics
+func (a *App) openCommandTrace(
+	command clievent.Command,
+	options observationOptions,
+	terminal *terminalOutputState,
+	renderer *humanoutput.Renderer,
+) (userTraceRecorder, error) {
+	if !options.traceEnabled() {
+		return nil, nil
+	}
+	opener := a.openUserTrace
+	if opener == nil {
+		opener = openNativeUserTrace
+	}
+	recorder, err := opener(options.tracePath, command, runtrace.Config{}, runtrace.Dependencies{
+		Clock: terminal.clock,
+		NewTicker: func(interval time.Duration) runtrace.Ticker {
+			return terminal.clock.NewTicker(interval)
+		},
+	})
+	if err == nil && recorder != nil {
+		return recorder, nil
+	}
+	if recorder != nil {
+		_ = recorder.Close()
+	}
+	renderTraceOpenFailure(renderer, command, err)
+	if errors.Is(err, runtrace.ErrTraceExists) {
+		return nil, errors.Join(errUserTraceOpen, runtrace.ErrTraceExists)
+	}
+	return nil, errUserTraceOpen
+}
+
+func (runtime *commandRuntime) detailedDiagnosticsEnabled() bool {
+	return runtime != nil && runtime.detailedDiagnostics
 }
 
 func openNativeUserTrace(
@@ -141,11 +200,21 @@ func openNativeUserTrace(
 	config runtrace.Config,
 	dependencies runtrace.Dependencies,
 ) (userTraceRecorder, error) {
-	return runtrace.OpenWithDependencies(path, command, config, dependencies)
+	recorder, err := runtrace.OpenWithDependencies(path, command, config, dependencies)
+	if err != nil {
+		// Converting a nil *Recorder directly to the interface would create a
+		// non-nil typed-nil cleanup target on startup failure.
+		return nil, err
+	}
+	return recorder, nil
 }
 
-func renderTraceOpenFailure(renderer *humanoutput.Renderer, command clievent.Command) {
-	failure, err := clievent.NewFailure(clievent.FailureTraceOpen)
+func renderTraceOpenFailure(renderer *humanoutput.Renderer, command clievent.Command, openErr error) {
+	code := clievent.FailureTraceOpen
+	if errors.Is(openErr, runtrace.ErrTraceExists) {
+		code = clievent.FailureTraceExists
+	}
+	failure, err := clievent.NewFailure(code)
 	if err != nil {
 		return
 	}
@@ -171,13 +240,13 @@ func (runtime *commandRuntime) Observe(event clievent.Event) bool {
 		if _, progress := event.(clievent.TransferProgress); progress {
 			saturatingAtomicAdd(&runtime.pendingProgressLoss, 1)
 		} else {
-			saturatingAtomicAdd(&runtime.pendingLifecycleLoss, 1)
+			runtime.addObserverLoss(clievent.ObserverLossCommandAdapter, clievent.ObserverLossRecorderClosed, 1)
 		}
 		runtime.signalReadyLocked()
 		return false
 	}
 	if event == nil || event.Command() != runtime.command {
-		saturatingAtomicAdd(&runtime.pendingLifecycleLoss, 1)
+		runtime.addObserverLoss(clievent.ObserverLossCommandAdapter, clievent.ObserverLossEventContract, 1)
 		runtime.signalReadyLocked()
 		return false
 	}
@@ -186,7 +255,7 @@ func (runtime *commandRuntime) Observe(event clievent.Event) bool {
 		if progress {
 			saturatingAtomicAdd(&runtime.pendingProgressLoss, 1)
 		} else {
-			saturatingAtomicAdd(&runtime.pendingLifecycleLoss, 1)
+			runtime.addObserverLoss(clievent.ObserverLossCommandAdapter, clievent.ObserverLossAdapterCapacityTimeout, 1)
 		}
 		runtime.signalReadyLocked()
 		return false
@@ -203,7 +272,7 @@ func (runtime *commandRuntime) Observe(event clievent.Event) bool {
 		return true
 	}
 	if runtime.observerLifecycleCount == len(runtime.observerLifecycle) {
-		saturatingAtomicAdd(&runtime.pendingLifecycleLoss, 1)
+		runtime.addObserverLoss(clievent.ObserverLossCommandAdapter, clievent.ObserverLossAdapterCapacityTimeout, 1)
 		runtime.signalReadyLocked()
 		return false
 	}
@@ -234,11 +303,69 @@ func (runtime *commandRuntime) Finalize(events ...clievent.Event) bool {
 		return false
 	}
 	runtime.entryMu.Lock()
-	defer runtime.entryMu.Unlock()
-	if runtime.observerFinalized || !runtime.publishLocked(events...) {
+	if runtime.closed || runtime.observerFinalized || len(runtime.stagedFinalization) != 0 {
+		runtime.entryMu.Unlock()
+		return false
+	}
+	for _, event := range events {
+		if event == nil || event.Command() != runtime.command {
+			runtime.entryMu.Unlock()
+			return false
+		}
+	}
+	loss := runtime.collectPendingLossLocked()
+	if !runtime.publishLocked(events...) {
+		runtime.entryMu.Unlock()
 		return false
 	}
 	runtime.observerFinalized = true
+	runtime.scheduleUpstreamLossLocked(loss)
+	runtime.entryMu.Unlock()
+	return true
+}
+
+// StageFinalization keeps an already-decided terminal result outside the ordered
+// stream until the command owner has stopped products and joined observations.
+// Setup failures use this path because their terminal meaning is known before
+// transport cleanup has necessarily completed.
+func (runtime *commandRuntime) StageFinalization(events ...clievent.Event) bool {
+	if runtime == nil || len(events) == 0 {
+		return false
+	}
+	runtime.entryMu.Lock()
+	defer runtime.entryMu.Unlock()
+	if runtime.closed || runtime.observerFinalized || len(runtime.stagedFinalization) != 0 {
+		return false
+	}
+	for _, event := range events {
+		if event == nil || event.Command() != runtime.command {
+			return false
+		}
+	}
+	runtime.stagedFinalization = append([]clievent.Event(nil), events...)
+	return true
+}
+
+func (runtime *commandRuntime) FinalizeStaged() bool {
+	if runtime == nil {
+		return false
+	}
+	runtime.entryMu.Lock()
+	if runtime.closed || runtime.observerFinalized || len(runtime.stagedFinalization) == 0 {
+		runtime.entryMu.Unlock()
+		return false
+	}
+	events := runtime.stagedFinalization
+	runtime.stagedFinalization = nil
+	loss := runtime.collectPendingLossLocked()
+	if !runtime.publishLocked(events...) {
+		runtime.stagedFinalization = events
+		runtime.entryMu.Unlock()
+		return false
+	}
+	runtime.observerFinalized = true
+	runtime.scheduleUpstreamLossLocked(loss)
+	runtime.entryMu.Unlock()
 	return true
 }
 
@@ -278,8 +405,14 @@ func (runtime *commandRuntime) PublishTransferFinalization(
 // ReportObserverLoss accounts for facts dropped by a bounded producer adapter
 // before they could be offered to Observe. Recorder-local Record failures must not
 // be reported here because runtrace already owns those counters.
-func (runtime *commandRuntime) ReportObserverLoss(lifecycle, progress uint64) bool {
+func (runtime *commandRuntime) ReportObserverLoss(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, count uint64) bool {
 	if runtime == nil {
+		return false
+	}
+	if _, ok := category.Name(); !ok {
+		return false
+	}
+	if _, ok := reason.Name(); !ok || count == 0 {
 		return false
 	}
 	runtime.entryMu.Lock()
@@ -287,10 +420,41 @@ func (runtime *commandRuntime) ReportObserverLoss(lifecycle, progress uint64) bo
 	if runtime.closed {
 		return false
 	}
-	saturatingAtomicAdd(&runtime.pendingLifecycleLoss, lifecycle)
-	saturatingAtomicAdd(&runtime.pendingProgressLoss, progress)
+	runtime.addObserverLoss(category, reason, count)
 	runtime.signalReadyLocked()
 	return true
+}
+
+func (runtime *commandRuntime) ReportCumulativeObserverLoss(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, cumulative uint64) bool {
+	if runtime == nil || cumulative == 0 {
+		return false
+	}
+	if _, ok := category.Name(); !ok {
+		return false
+	}
+	if _, ok := reason.Name(); !ok {
+		return false
+	}
+	runtime.entryMu.Lock()
+	defer runtime.entryMu.Unlock()
+	if runtime.closed {
+		return false
+	}
+	counter := &runtime.upstreamCumulative[category][reason]
+	previous := counter.Load()
+	if cumulative <= previous {
+		return true
+	}
+	counter.Store(cumulative)
+	runtime.addObserverLoss(category, reason, cumulative-previous)
+	runtime.signalReadyLocked()
+	return true
+}
+
+func (runtime *commandRuntime) addObserverLoss(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, count uint64) {
+	if category > 0 && category < clievent.ObserverLossCategoryLimit && reason > 0 && reason < clievent.ObserverLossReasonLimit {
+		saturatingAtomicAdd(&runtime.pendingObserverLoss[category][reason], count)
+	}
 }
 
 func (runtime *commandRuntime) signalReadyLocked() {
@@ -427,10 +591,14 @@ func (runtime *commandRuntime) takeNext() clievent.Event {
 }
 
 func (runtime *commandRuntime) drain() {
-	for event := runtime.takeNext(); event != nil; event = runtime.takeNext() {
+	for {
+		runtime.reportPendingLoss()
+		event := runtime.takeNext()
+		if event == nil {
+			break
+		}
 		runtime.dispatch(event)
 	}
-	runtime.reportPendingLoss()
 	if runtime.trace != nil {
 		status := runtime.trace.Close()
 		runtime.drainTraceHealth()
@@ -441,71 +609,54 @@ func (runtime *commandRuntime) drain() {
 	runtime.canvas.FinishProgress()
 }
 
-func (runtime *commandRuntime) reportPendingLoss() {
-	lifecycle := runtime.pendingLifecycleLoss.Swap(0)
-	progress := runtime.pendingProgressLoss.Swap(0)
-	if runtime.trace != nil && (lifecycle != 0 || progress != 0) {
-		_ = runtime.trace.ReportUpstreamLoss(lifecycle, progress)
-	}
+// commandClock is shared by presentation sampling and user trace metadata for
+// one command. Connectivity policy keeps its own clock because transport
+// deadlines must not become presentation policy accidentally.
+type commandClock interface {
+	Now() time.Time
+	NewTimer(time.Duration) commandTimer
+	NewTicker(time.Duration) commandTicker
 }
 
-func (runtime *commandRuntime) drainTraceHealth() {
-	health := runtime.trace.Health()
-	for {
-		select {
-		case event, open := <-health:
-			if !open {
-				return
-			}
-			runtime.warnTraceIncomplete(event)
-		default:
-			return
-		}
-	}
+type commandTimer interface {
+	C() <-chan time.Time
+	Stop() bool
 }
 
-func (runtime *commandRuntime) warnTraceIncomplete(event clievent.TraceIncomplete) {
-	runtime.warningOnce.Do(func() {
-		_ = runtime.human.Render(event)
-	})
+type commandTicker interface {
+	C() <-chan time.Time
+	Stop()
 }
 
-func traceIncompleteFromStatus(command clievent.Command, status runtrace.Status) clievent.TraceIncomplete {
-	cause := clievent.TraceIncompleteLifecycleDrop
-	switch {
-	case status.WriterFailed:
-		cause = clievent.TraceIncompleteWriter
-	case status.FlushFailed:
-		cause = clievent.TraceIncompleteFlush
-	case status.SchemaLimited:
-		cause = clievent.TraceIncompleteSchemaLimit
-	case status.LifecycleDropped == 0:
-		cause = clievent.TraceIncompleteWriter
-	}
-	event, err := clievent.NewTraceIncomplete(
-		command, cause, status.LifecycleDropped, status.ProgressDropped,
-	)
-	if err == nil {
-		return event
-	}
-	// The fallback is constructible for every valid command and keeps an
-	// inconsistent recorder status from leaking provider text into stderr.
-	event, _ = clievent.NewTraceIncomplete(command, clievent.TraceIncompleteWriter, 0, 0)
-	return event
+type systemCommandClock struct {
+	now func() time.Time
 }
 
-func saturatingAtomicAdd(counter *atomic.Uint64, amount uint64) {
-	if amount == 0 {
-		return
+func newSystemCommandClock(now func() time.Time) systemCommandClock {
+	if now == nil {
+		now = time.Now
 	}
-	for {
-		current := counter.Load()
-		next := current + amount
-		if next < current {
-			next = ^uint64(0)
-		}
-		if counter.CompareAndSwap(current, next) {
-			return
-		}
-	}
+	return systemCommandClock{now: now}
 }
+
+func (clock systemCommandClock) Now() time.Time {
+	return clock.now()
+}
+
+func (systemCommandClock) NewTimer(delay time.Duration) commandTimer {
+	return systemCommandTimer{timer: time.NewTimer(delay)}
+}
+
+func (systemCommandClock) NewTicker(interval time.Duration) commandTicker {
+	return systemCommandTicker{ticker: time.NewTicker(interval)}
+}
+
+type systemCommandTimer struct{ timer *time.Timer }
+
+func (timer systemCommandTimer) C() <-chan time.Time { return timer.timer.C }
+func (timer systemCommandTimer) Stop() bool          { return timer.timer.Stop() }
+
+type systemCommandTicker struct{ ticker *time.Ticker }
+
+func (ticker systemCommandTicker) C() <-chan time.Time { return ticker.ticker.C }
+func (ticker systemCommandTicker) Stop()               { ticker.ticker.Stop() }

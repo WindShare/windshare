@@ -47,7 +47,7 @@ func (filesystem *portableRuntimeFilesystem) findObjectPath(
 }
 
 func (filesystem *portableRuntimeFilesystem) findMatchingFile(
-	source outputcap.File,
+	source outputcap.FileIdentity,
 ) (string, os.FileInfo, error) {
 	direct, ok := source.(*portableRuntimeFile)
 	if !ok || direct.filesystem != filesystem {

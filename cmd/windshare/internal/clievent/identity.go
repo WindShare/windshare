@@ -6,10 +6,14 @@ import (
 )
 
 const IdentityBytes = 16
+const RelaySessionIdentityBytes = 8
+const ReceiveIntentDigestBytes = 32
 
 var ErrInvalidIdentity = errors.New("CLI event identity is invalid")
 
 type identity [IdentityBytes]byte
+type relaySessionIdentity [RelaySessionIdentityBytes]byte
+type receiveIntentDigest [ReceiveIntentDigestBytes]byte
 
 func newIdentity(raw []byte) (identity, error) {
 	var value identity
@@ -27,6 +31,37 @@ func (value identity) bytes() []byte { return append([]byte(nil), value[:]...) }
 func (value identity) hex() string   { return hex.EncodeToString(value[:]) }
 func (value identity) valid() bool   { return value != (identity{}) }
 
+func newRelaySessionIdentity(raw []byte) (relaySessionIdentity, error) {
+	var value relaySessionIdentity
+	if len(raw) != len(value) {
+		return relaySessionIdentity{}, ErrInvalidIdentity
+	}
+	copy(value[:], raw)
+	if value == (relaySessionIdentity{}) {
+		return relaySessionIdentity{}, ErrInvalidIdentity
+	}
+	return value, nil
+}
+
+func (value relaySessionIdentity) bytes() []byte { return append([]byte(nil), value[:]...) }
+func (value relaySessionIdentity) hex() string   { return hex.EncodeToString(value[:]) }
+func (value relaySessionIdentity) valid() bool   { return value != (relaySessionIdentity{}) }
+
+func newReceiveIntentDigest(raw []byte) (receiveIntentDigest, error) {
+	var value receiveIntentDigest
+	if len(raw) != len(value) {
+		return receiveIntentDigest{}, ErrInvalidIdentity
+	}
+	copy(value[:], raw)
+	if value == (receiveIntentDigest{}) {
+		return receiveIntentDigest{}, ErrInvalidIdentity
+	}
+	return value, nil
+}
+
+func (value receiveIntentDigest) hex() string { return hex.EncodeToString(value[:]) }
+func (value receiveIntentDigest) valid() bool { return value != (receiveIntentDigest{}) }
+
 // Each identity remains a distinct type so a protocol operation can never be
 // serialized under the receive-operation field merely because both are 16 bytes.
 type ReceiveOperationID struct{ value identity }
@@ -35,6 +70,9 @@ type ProtocolOperationID struct{ value identity }
 type TransferJobID struct{ value identity }
 type PeerPathID struct{ value identity }
 type PeerAttemptID struct{ value identity }
+type RelaySessionID struct{ value relaySessionIdentity }
+type OutputSessionID struct{ value identity }
+type ReceiveIntentDigest struct{ value receiveIntentDigest }
 
 func NewReceiveOperationID(raw []byte) (ReceiveOperationID, error) {
 	value, err := newIdentity(raw)
@@ -66,12 +104,29 @@ func NewPeerAttemptID(raw []byte) (PeerAttemptID, error) {
 	return PeerAttemptID{value: value}, err
 }
 
+func NewRelaySessionID(raw []byte) (RelaySessionID, error) {
+	value, err := newRelaySessionIdentity(raw)
+	return RelaySessionID{value: value}, err
+}
+
+func NewOutputSessionID(raw []byte) (OutputSessionID, error) {
+	value, err := newIdentity(raw)
+	return OutputSessionID{value: value}, err
+}
+
+func NewReceiveIntentDigest(raw []byte) (ReceiveIntentDigest, error) {
+	value, err := newReceiveIntentDigest(raw)
+	return ReceiveIntentDigest{value: value}, err
+}
+
 func (id ReceiveOperationID) Bytes() []byte  { return id.value.bytes() }
 func (id ProtocolSessionID) Bytes() []byte   { return id.value.bytes() }
 func (id ProtocolOperationID) Bytes() []byte { return id.value.bytes() }
 func (id TransferJobID) Bytes() []byte       { return id.value.bytes() }
 func (id PeerPathID) Bytes() []byte          { return id.value.bytes() }
 func (id PeerAttemptID) Bytes() []byte       { return id.value.bytes() }
+func (id RelaySessionID) Bytes() []byte      { return id.value.bytes() }
+func (id OutputSessionID) Bytes() []byte     { return id.value.bytes() }
 
 func (id ReceiveOperationID) Hex() string  { return id.value.hex() }
 func (id ProtocolSessionID) Hex() string   { return id.value.hex() }
@@ -79,6 +134,9 @@ func (id ProtocolOperationID) Hex() string { return id.value.hex() }
 func (id TransferJobID) Hex() string       { return id.value.hex() }
 func (id PeerPathID) Hex() string          { return id.value.hex() }
 func (id PeerAttemptID) Hex() string       { return id.value.hex() }
+func (id RelaySessionID) Hex() string      { return id.value.hex() }
+func (id OutputSessionID) Hex() string     { return id.value.hex() }
+func (id ReceiveIntentDigest) Hex() string { return id.value.hex() }
 
 func (id ReceiveOperationID) Valid() bool  { return id.value.valid() }
 func (id ProtocolSessionID) Valid() bool   { return id.value.valid() }
@@ -86,6 +144,9 @@ func (id ProtocolOperationID) Valid() bool { return id.value.valid() }
 func (id TransferJobID) Valid() bool       { return id.value.valid() }
 func (id PeerPathID) Valid() bool          { return id.value.valid() }
 func (id PeerAttemptID) Valid() bool       { return id.value.valid() }
+func (id RelaySessionID) Valid() bool      { return id.value.valid() }
+func (id OutputSessionID) Valid() bool     { return id.value.valid() }
+func (id ReceiveIntentDigest) Valid() bool { return id.value.valid() }
 
 type LaneIdentity struct {
 	id    uint32

@@ -356,12 +356,12 @@ func TestCoverageC4WindowsPrivatePublicationIsNoReplaceAcrossGuardedRestart(t *t
 		t.Fatalf("private root binding changed: first=%s restarted=%s", firstBinding, restartedBinding)
 	}
 	restartedRoot := restarted.Root()
-	restartedStage, err := restartedRoot.OpenFile(coverageC4StageName, true, false)
+	restartedStage, err := restartedRoot.OpenObservedFile(coverageC4StageName, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer restartedStage.Close()
-	restartedFinal, err := restartedRoot.OpenFile(coverageC4FinalName, false, false)
+	restartedFinal, err := restartedRoot.OpenObservedFile(coverageC4FinalName, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +400,7 @@ func TestCoverageC4WindowsPrivatePublicationIsNoReplaceAcrossGuardedRestart(t *t
 	if err := restartedRoot.RemoveEntry(coverageC4FinalName, pinned); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("remove foreign replacement error = %v", err)
 	}
-	preserved, err := restartedRoot.OpenFile(coverageC4FinalName, false, false)
+	preserved, err := restartedRoot.OpenObservedFile(coverageC4FinalName, false)
 	if err != nil {
 		t.Fatalf("foreign replacement was removed: %v", err)
 	}
