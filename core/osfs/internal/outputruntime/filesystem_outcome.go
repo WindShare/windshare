@@ -264,8 +264,7 @@ func filesystemOutputDiagnostic(
 	cause error,
 ) FilesystemOutputDiagnostic {
 	diagnostic := FilesystemOutputDiagnostic{Stage: stage}
-	var reconciliation *checkpointstore.ReconciliationError
-	if errors.As(cause, &reconciliation) {
+	if reconciliation, ok := errors.AsType[*checkpointstore.ReconciliationError](cause); ok {
 		diagnostic.ReconciliationStep = filesystemReconciliationStep(reconciliation.Step())
 		if reconciliation.Step() == checkpointstore.ReconciliationStageDurability ||
 			reconciliation.Step() == checkpointstore.ReconciliationNamespaceDurability {

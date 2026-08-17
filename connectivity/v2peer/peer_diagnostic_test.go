@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 
@@ -28,8 +29,7 @@ func (collector *peerDiagnosticCollector) latest(
 ) (PeerDiagnosticObservation, bool) {
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
-	for index := len(collector.observations) - 1; index >= 0; index-- {
-		observation := collector.observations[index]
+	for _, observation := range slices.Backward(collector.observations) {
 		if observation.Category == category && observation.Reason == reason {
 			return observation, true
 		}

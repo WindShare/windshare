@@ -64,8 +64,8 @@ func assertWindowsFileAccessMethods(t *testing.T, file any, want []string) {
 	t.Helper()
 	access := reflect.TypeOf(file)
 	got := make([]string, 0, access.NumMethod())
-	for index := range access.NumMethod() {
-		got = append(got, access.Method(index).Name)
+	for method := range access.Methods() {
+		got = append(got, method.Name)
 	}
 	slices.Sort(got)
 	slices.Sort(want)
