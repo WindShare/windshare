@@ -101,9 +101,9 @@ func (a *App) connectGetReceiver(
 	}
 	prepared, err := liveshare.PrepareReceiver(liveshare.ReceiverConfig{
 		Capability: capability, DescriptorObject: connection.Descriptor(),
-		PeerControls:         v2signal.ReceiverControlValidator{},
-		ProtocolTracer:       observation.protocolTracer(),
-		LaneSettlementTracer: observation.laneSettlementTracer(),
+		PeerControls:                      v2signal.ReceiverControlValidator{},
+		ProtocolTracer:                    observation.protocolTracer(),
+		LaneSettlementObservationCapacity: observation.laneSettlementObservationCapacity(),
 	})
 	if err != nil {
 		_ = connection.Close()

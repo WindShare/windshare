@@ -463,16 +463,16 @@ func TestReceiverAttemptTruncatedDiagnosticsDoNotInventSessionAuthority(t *testi
 }
 
 func TestReceiverTerminationTraceContainsSafeCorrelationAndClassification(t *testing.T) {
-	traces := make(chan ReceiverTerminationTrace, 1)
 	var operation *exactReceiverTestOperation
 	harness := newReceiverHarness(t, func(config *ReceiverFactoryConfig, signaling *receiverTestSignaling) {
-		config.OnTermination = func(trace ReceiverTerminationTrace) { traces <- trace }
+		config.ReceiverTerminationObservationCapacity = 1
 		operation = newExactReceiverTestOperation(
 			signaling.operation.(*receiverTestOperation),
 			false,
 		)
 		signaling.operation = operation
 	})
+	traces := harness.factory.ReceiverTerminationObservations()
 	genuineConflict := errors.New("secret diagnostic text must not enter trace")
 	operation.terminateCause = errors.Join(context.Canceled, genuineConflict)
 

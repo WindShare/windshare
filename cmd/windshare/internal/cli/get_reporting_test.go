@@ -310,6 +310,7 @@ func (*getIncompleteTraceRecorder) ReportUpstreamLoss(uint64, uint64) bool {
 func (recorder *getIncompleteTraceRecorder) Health() <-chan clievent.TraceIncomplete {
 	return recorder.health
 }
+func (*getIncompleteTraceRecorder) Path() string { return "get.ndjson" }
 func (*getIncompleteTraceRecorder) Close() runtrace.Status {
 	return runtrace.Status{WriterFailed: true}
 }
@@ -323,7 +324,7 @@ func TestGetTraceRuntimeFailureCannotReclassifySuccess(t *testing.T) {
 			return terminalcanvas.Capabilities{Columns: 500}
 		}),
 		openUserTrace: func(
-			string,
+			runtrace.Target,
 			clievent.Command,
 			runtrace.Config,
 			runtrace.Dependencies,
@@ -333,7 +334,7 @@ func TestGetTraceRuntimeFailureCannotReclassifySuccess(t *testing.T) {
 	}
 	runtime, err := app.newCommandRuntime(
 		clievent.CommandGet,
-		observationOptions{tracePath: filepath.Join(t.TempDir(), "get.ndjson")},
+		testExactTraceOptions(filepath.Join(t.TempDir(), "get.ndjson")),
 	)
 	if err != nil {
 		t.Fatal(err)

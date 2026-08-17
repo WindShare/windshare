@@ -26,7 +26,7 @@
 - `stderr` 是 TTY 时启用动态刷新、颜色和受支持的 Unicode 符号。
 - `stderr` 被重定向时关闭动态刷新和 ANSI；默认只保留 warning、error 与最终摘要，显式 `-v, --verbose` 额外输出静态里程碑行。
 - `-v, --verbose` 不改变链接、结果或退出码。
-- `--trace <file>` 将结构化事件写入独立文件，不支持与人类输出混流的 `--trace=-`。
+- `--trace <file>` 只创建指定的新文件且不覆盖既有证据；`--trace-dir <directory>` 为每次运行生成独立文件。两者都不支持与人类输出混流。
 
 ## 用户界面
 
@@ -111,7 +111,7 @@ core 只更新轻量计数，CLI 按固定间隔读取快照；数据热路径�
 
 ## Trace 契约
 
-`--trace <file>` 使用版本化 NDJSON。每条事件包含 schema version、run-scoped sequence、wall time、elapsed time、level、event、command 和随机 `run_id`；sequence 与时间在事件进入 recorder 时固定，不按落盘时间重写。`receive_operation_id`、`protocol_session_id`、`protocol_operation_id`、`transfer_job_id`、lane ID 与 epoch 仅在事件实际属于该上下文时出现，不使用含义重叠的通用 `operation_id`。标识使用完整规范编码，不截断，也不从秘密派生。
+`--trace <file>` 与 `--trace-dir <directory>` 都使用版本化 NDJSON；前者保持精确路径 no-clobber，后者选择运行专属文件。每条事件包含 schema version、run-scoped sequence、wall time、elapsed time、level、event、command 和随机 `run_id`；sequence 与时间在事件进入 recorder 时固定，不按落盘时间重写。`receive_operation_id`、`protocol_session_id`、`protocol_operation_id`、`transfer_job_id`、lane ID 与 epoch 仅在事件实际属于该上下文时出现，不使用含义重叠的通用 `operation_id`。标识使用完整规范编码，不截断，也不从秘密派生。
 
 Trace 采用字段白名单。秘密类型、完整能力链接、Key、认证 token、私钥、原始内容、文件名、catalog path、本地路径、完整命令行、环境变量和未筛选的 provider 文本不得进入事件，也不得用哈希或截断值代替。Relay 只记录规范化 scheme、host 与有效 port，不记录 userinfo、path、query 或 fragment；类型上可能超过 JSON safe integer 的计数始终编码为十进制字符串。
 

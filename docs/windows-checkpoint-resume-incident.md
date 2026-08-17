@@ -84,9 +84,9 @@ The transfer continued because observation has no transport authority. The incom
 
 The later `fallback` records classified as `unexpected` belong to the two immediate retry sessions. Those receivers closed while peer negotiation was still in progress because local checkpoint admission had already failed. Treating that shutdown as an unclassified transport fallback is a separate diagnostics-classification defect, not evidence that the first WebRTC session failed.
 
-### The trace did not retain the first receiver failure
+### Historical trace behavior did not retain the first receiver failure
 
-The second invocation reused `--trace receiver.ndjson`. Trace creation truncates an existing file, so the long first receiver run was overwritten. The surviving receiver traces cover only the two immediate failures.
+During the original capture, the second invocation reused `--trace receiver.ndjson`; the implementation at that time truncated the existing file, so the long first receiver run was overwritten. Current `--trace <file>` creation is exclusive: an existing path and its evidence are preserved, and the command fails before relay or output mutation. For repeated diagnostic runs, `--trace-dir <directory>` creates and reports a new run-specific file each time. The surviving historical receiver traces cover only the two immediate failures.
 
 Both surviving traces reported:
 
@@ -257,9 +257,8 @@ Observer loss should identify a bounded event category and projection reason ins
 
 ### Diagnostic retention and presentation
 
-The remaining diagnostics work should cover:
+Trace retention now uses one file per run: exact paths are no-clobber, while directory targets generate a new reported path and leave retention to the user. The remaining diagnostics work should cover:
 
-- trace-file behavior that prevents accidental loss of an earlier run or warns clearly before truncation;
 - distinct CLI failure stages for destination binding, operation inventory, checkpoint reconciliation, and native durability failure;
 - preservation of the first safe failure category and native error class without recording paths, content, provider text, or capability material.
 
@@ -267,7 +266,7 @@ Diagnostics must remain off the transfer hot path unless tracing is enabled, and
 
 ## Current handling guidance
 
-Until the runtime is fixed:
+For state retained by a binary with this defect:
 
 - preserve the destination and `.windshare-output` directory;
 - do not manually edit the operation or checkpoint records;

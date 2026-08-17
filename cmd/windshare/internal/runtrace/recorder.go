@@ -3,6 +3,7 @@ package runtrace
 import (
 	"errors"
 	"io"
+	"io/fs"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,10 +19,11 @@ const (
 )
 
 var (
-	ErrInvalidPath          = errors.New("trace path is invalid")
+	ErrInvalidTarget        = errors.New("trace target is invalid")
 	ErrInvalidConfig        = errors.New("trace configuration is invalid")
 	ErrRunIDUnavailable     = errors.New("trace run identity is unavailable")
 	ErrTraceFileUnavailable = errors.New("trace file is unavailable")
+	ErrTraceNameUnavailable = errors.New("trace filename is unavailable")
 	ErrTraceExists          = errors.New("trace path already exists")
 )
 
@@ -41,6 +43,8 @@ type TraceFile interface {
 	Close() error
 }
 
+// OpenFile is an exclusive-create seam: collisions must remain distinguishable
+// so directory targets can choose a new identity without inspecting existing evidence.
 type OpenFile func(path string) (TraceFile, error)
 type NewTicker func(interval time.Duration) Ticker
 
@@ -81,6 +85,7 @@ type queuedEvent struct {
 type Recorder struct {
 	command clievent.Command
 	runID   string
+	path    string
 	clock   Clock
 	start   time.Time
 	file    TraceFile
@@ -112,18 +117,18 @@ type Recorder struct {
 	schemaLimited    atomic.Bool
 }
 
-func Open(path string, command clievent.Command, config Config) (*Recorder, error) {
-	return OpenWithDependencies(path, command, config, Dependencies{})
+func Open(target Target, command clievent.Command, config Config) (*Recorder, error) {
+	return OpenWithDependencies(target, command, config, Dependencies{})
 }
 
 func OpenWithDependencies(
-	path string,
+	target Target,
 	command clievent.Command,
 	config Config,
 	dependencies Dependencies,
 ) (*Recorder, error) {
-	if path == "" || path == "-" {
-		return nil, ErrInvalidPath
+	if !target.valid() {
+		return nil, ErrInvalidTarget
 	}
 	if !command.Valid() {
 		return nil, ErrInvalidConfig
@@ -133,26 +138,23 @@ func OpenWithDependencies(
 		return nil, ErrInvalidConfig
 	}
 	dependencies = normalizedDependencies(dependencies)
-	runID, err := newRunID(dependencies.Random)
-	if err != nil {
-		return nil, ErrRunIDUnavailable
-	}
-	start := dependencies.Clock.Now()
-	file, err := dependencies.OpenFile(path)
-	if errors.Is(err, ErrTraceExists) {
-		return nil, ErrTraceExists
-	}
-	if err != nil || file == nil {
-		return nil, ErrTraceFileUnavailable
-	}
 	ticker := dependencies.NewTicker(interval)
 	if ticker == nil || ticker.C() == nil {
-		_ = file.Close()
+		if ticker != nil {
+			ticker.Stop()
+		}
 		return nil, ErrInvalidConfig
+	}
+	start := dependencies.Clock.Now()
+	file, path, runID, err := openTarget(target, command, start, dependencies)
+	if err != nil {
+		ticker.Stop()
+		return nil, err
 	}
 	recorder := &Recorder{
 		command:   command,
 		runID:     runID,
+		path:      path,
 		clock:     dependencies.Clock,
 		start:     start,
 		file:      file,
@@ -164,6 +166,40 @@ func OpenWithDependencies(
 	}
 	go recorder.writeLoop()
 	return recorder, nil
+}
+
+func openTarget(
+	target Target,
+	command clievent.Command,
+	start time.Time,
+	dependencies Dependencies,
+) (TraceFile, string, string, error) {
+	attempts := 1
+	if target.kind == targetRunDirectory {
+		attempts = directoryCreateAttempts
+	}
+	for range attempts {
+		runID, err := newRunID(dependencies.Random)
+		if err != nil {
+			return nil, "", "", ErrRunIDUnavailable
+		}
+		path := target.path
+		if target.kind == targetRunDirectory {
+			path = directoryTracePath(target.path, command, start, runID)
+		}
+		file, err := dependencies.OpenFile(path)
+		if errors.Is(err, ErrTraceExists) || errors.Is(err, fs.ErrExist) {
+			if target.kind == targetRunDirectory {
+				continue
+			}
+			return nil, "", "", ErrTraceExists
+		}
+		if err != nil || file == nil {
+			return nil, "", "", ErrTraceFileUnavailable
+		}
+		return file, path, runID, nil
+	}
+	return nil, "", "", ErrTraceNameUnavailable
 }
 
 func normalizedConfig(config Config) (int, time.Duration, bool) {
@@ -182,6 +218,10 @@ func normalizedConfig(config Config) (int, time.Duration, bool) {
 }
 
 func (recorder *Recorder) RunID() string { return recorder.runID }
+
+// Path is intentionally local recorder state; trace rows omit it so a diagnostic
+// artifact cannot disclose the caller's filesystem namespace.
+func (recorder *Recorder) Path() string { return recorder.path }
 
 // Health exposes a capacity-one edge notification. The final Close status is
 // authoritative because later failures and final drop totals may follow this signal.

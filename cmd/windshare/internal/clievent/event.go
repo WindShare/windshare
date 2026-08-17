@@ -11,6 +11,14 @@ type Event interface {
 	Accept(Visitor) error
 }
 
+// TerminalEvent is sealed to the three command-authoritative result shapes.
+// Keeping finality out of ordinary Event prevents presentation policy from
+// being inferred from an extensible list of event values.
+type TerminalEvent interface {
+	Event
+	terminalEvent()
+}
+
 type Ready struct{}
 
 func NewReady() Ready                      { return Ready{} }
@@ -215,6 +223,7 @@ func NewCommandFailed(command Command, exit ExitCode, failure Failure) (CommandF
 }
 
 func (CommandFailed) event()                       {}
+func (CommandFailed) terminalEvent()               {}
 func (value CommandFailed) Command() Command       { return value.command }
 func (CommandFailed) Level() Level                 { return LevelError }
 func (value CommandFailed) ExitCode() ExitCode     { return value.exit }
@@ -231,6 +240,7 @@ func NewTransferSettled(result TransferResult) (TransferSettled, error) {
 }
 
 func (TransferSettled) event()           {}
+func (TransferSettled) terminalEvent()   {}
 func (TransferSettled) Command() Command { return CommandGet }
 func (value TransferSettled) Level() Level {
 	if value.result.Status() == ResultSuccess {
@@ -251,6 +261,7 @@ func NewSharingStopped(result ShareResult) (SharingStopped, error) {
 }
 
 func (SharingStopped) event()           {}
+func (SharingStopped) terminalEvent()   {}
 func (SharingStopped) Command() Command { return CommandShare }
 func (value SharingStopped) Level() Level {
 	if value.result.StoppedCleanly() {

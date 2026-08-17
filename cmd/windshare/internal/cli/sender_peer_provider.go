@@ -6,124 +6,120 @@ import (
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/cmd/windshare/internal/observationbridge"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/internal/testrun"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
 type senderDataChannelAdapter struct {
-	tracer   wsrtc.LifecycleTracer
-	channels *webRTCObservationSet
+	observations *shareObservations
 }
 
 func (adapter senderDataChannelAdapter) WrapDataChannel(
 	channel *pion.DataChannel,
 ) (v2peer.PeerDataChannel, error) {
+	capacity := 0
+	if adapter.observations != nil && adapter.observations.detailedDiagnosticsEnabled() {
+		capacity = wsrtc.DefaultLifecycleObservationCapacity
+	}
 	wrapped, err := wsrtc.NewChannelWithOptions(channel, wsrtc.ChannelOptions{
-		LifecycleTracer: adapter.tracer,
+		LifecycleObservationCapacity: capacity,
 	})
-	if err == nil {
-		adapter.channels.register(wrapped)
+	if err == nil && adapter.observations != nil {
+		adapter.observations.webRTCChannels.registerSender(wrapped, adapter.observations)
 	}
 	return wrapped, err
 }
 
-// webRTCObservationSet retains only channel observation ownership. Product
-// teardown remains with v2peer, while this owner proves that every terminal
-// lifecycle callback has either committed or been counted before CLI finality.
-type webRTCObservationSet struct {
-	mu       sync.Mutex
-	channels []*wsrtc.Channel
-	once     sync.Once
-	result   wsrtc.LifecycleObservationCompletion
+type observedWebRTCChannel struct {
+	channel *wsrtc.Channel
+	reader  *observationbridge.Reader[wsrtc.LifecycleTrace]
 }
 
-func (set *webRTCObservationSet) register(channel *wsrtc.Channel) {
+// webRTCObservationSet owns only CLI readers and completion cuts. Product
+// teardown remains with v2peer and must precede complete.
+type webRTCObservationSet struct {
+	mu       sync.Mutex
+	channels []observedWebRTCChannel
+	once     sync.Once
+	result   wsrtc.LifecycleObservationCompletion
+	statuses []observationbridge.Status
+}
+
+func (set *webRTCObservationSet) registerSender(channel *wsrtc.Channel, observations *shareObservations) {
+	if set == nil || channel == nil || observations == nil {
+		return
+	}
+	gate := &observationbridge.PublicationGate{}
+	reader := observationbridge.Start(channel.LifecycleTrace(), gate, func(ctx context.Context, value wsrtc.LifecycleTrace) {
+		observations.webRTCLifecycleContext(ctx, gate, value)
+	})
+	set.register(channel, reader)
+}
+
+func (set *webRTCObservationSet) registerReceiver(channel *wsrtc.Channel, observation getObservation) {
 	if set == nil || channel == nil {
 		return
 	}
+	gate := &observationbridge.PublicationGate{}
+	reader := observationbridge.Start(channel.LifecycleTrace(), gate, func(ctx context.Context, value wsrtc.LifecycleTrace) {
+		observation.webRTCLifecycleContext(ctx, gate, value)
+	})
+	set.register(channel, reader)
+}
+
+func (set *webRTCObservationSet) register(
+	channel *wsrtc.Channel,
+	reader *observationbridge.Reader[wsrtc.LifecycleTrace],
+) {
 	set.mu.Lock()
-	set.channels = append(set.channels, channel)
+	set.channels = append(set.channels, observedWebRTCChannel{channel: channel, reader: reader})
 	set.mu.Unlock()
 }
 
-func (set *webRTCObservationSet) complete(ctx context.Context) wsrtc.LifecycleObservationCompletion {
+func (set *webRTCObservationSet) complete(
+	ctx context.Context,
+) (wsrtc.LifecycleObservationCompletion, []observationbridge.Status) {
 	if set == nil {
-		return wsrtc.LifecycleObservationCompletion{Drained: true}
+		return wsrtc.LifecycleObservationCompletion{}, nil
 	}
 	set.once.Do(func() {
 		set.mu.Lock()
-		channels := append([]*wsrtc.Channel(nil), set.channels...)
+		channels := append([]observedWebRTCChannel(nil), set.channels...)
 		set.mu.Unlock()
-		set.result.Drained = true
-		for _, channel := range channels {
-			completion := channel.CompleteObservations(ctx)
-			set.result.Delivered = saturatingAdd(set.result.Delivered, completion.Delivered)
-			set.result.Loss.QueueOverflow = saturatingAdd(set.result.Loss.QueueOverflow, completion.Loss.QueueOverflow)
-			set.result.Loss.ObserverPanic = saturatingAdd(set.result.Loss.ObserverPanic, completion.Loss.ObserverPanic)
-			set.result.Loss.CallbackTimeout = saturatingAdd(set.result.Loss.CallbackTimeout, completion.Loss.CallbackTimeout)
-			set.result.Loss.Undrained = saturatingAdd(set.result.Loss.Undrained, completion.Loss.Undrained)
-			set.result.Drained = set.result.Drained && completion.Drained
+		for _, observed := range channels {
+			mergeWebRTCCompletion(&set.result, observed.channel.CompleteObservations())
+			set.statuses = append(set.statuses, observed.reader.Join(ctx))
 		}
 	})
-	return set.result
+	return set.result, append([]observationbridge.Status(nil), set.statuses...)
 }
 
-type senderPeerObservationRouter struct {
-	command      v2peer.SenderAttemptObserver
-	processTrace v2peer.SenderAttemptObserver
-}
-
-func (router senderPeerObservationRouter) ObserveSenderAttemptContext(
-	ctx context.Context,
-	observation v2peer.SenderAttemptObservation,
+func mergeWebRTCCompletion(
+	total *wsrtc.LifecycleObservationCompletion,
+	next wsrtc.LifecycleObservationCompletion,
 ) {
-	if ctx.Err() != nil {
-		return
-	}
-	if contextual, ok := router.command.(v2peer.SenderAttemptContextObserver); ok {
-		contextual.ObserveSenderAttemptContext(ctx, observation)
-	} else if router.command != nil {
-		router.command.ObserveSenderAttempt(observation)
-	}
-	if ctx.Err() == nil && router.processTrace != nil {
-		router.processTrace.ObserveSenderAttempt(observation)
-	}
-}
-
-func (router senderPeerObservationRouter) ObserveSenderAttempt(observation v2peer.SenderAttemptObservation) {
-	// The user trace and private process trace have intentionally different
-	// schemas and secrecy contracts, so they share the provider fact but not an
-	// event model or recorder.
-	if router.command != nil {
-		router.command.ObserveSenderAttempt(observation)
-	}
-	if router.processTrace != nil {
-		router.processTrace.ObserveSenderAttempt(observation)
-	}
+	total.Enqueued = saturatingAdd(total.Enqueued, next.Enqueued)
+	total.Loss.CapacityDropped = saturatingAdd(total.Loss.CapacityDropped, next.Loss.CapacityDropped)
 }
 
 func senderPeerConfig(
 	observations *shareObservations,
-	processTrace v2peer.SenderAttemptObserver,
+	processTraceEnabled bool,
 	now func() time.Time,
 ) v2peer.Config {
 	config := v2peer.Config{
 		Configuration: v2peer.DefaultConfiguration(),
-		Observer: senderPeerObservationRouter{
-			command:      observations.senderAttemptObserver(),
-			processTrace: processTrace,
-		},
-		Now: now,
+		Now:           now,
 	}
-	if observations == nil {
-		return config
+	detailed := observations != nil && observations.detailedDiagnosticsEnabled()
+	if detailed || processTraceEnabled {
+		config.SenderAttemptObservationCapacity = v2peer.DefaultSenderAttemptObservationCapacity
 	}
-	config.DataChannels = senderDataChannelAdapter{
-		tracer: observations.webRTCTracer(), channels: observations.webRTCChannels,
-	}
-	if observations.detailedDiagnosticsEnabled() {
-		config.DiagnosticObserver = observations
+	if detailed {
+		config.PeerDiagnosticObservationCapacity = v2peer.DefaultPeerDiagnosticObservationCapacity
+		config.DataChannels = senderDataChannelAdapter{observations: observations}
 	}
 	return config
 }
@@ -136,13 +132,14 @@ func (a *App) newSenderPeerFactory(
 	if clock != nil {
 		now = clock.Now
 	}
-	factory, err := v2peer.NewFactory(senderPeerConfig(
-		observations,
-		v2peer.SenderAttemptObserverFunc(a.observeSenderPeerAttempt),
-		now,
-	))
-	if err == nil {
-		observations.registerPeerFactory(factory)
+	processTraceEnabled := a != nil && a.processTrace != nil
+	factory, err := v2peer.NewFactory(senderPeerConfig(observations, processTraceEnabled, now))
+	if err == nil && observations != nil {
+		observations.registerPeerFactory(factory, func(value v2peer.SenderAttemptObservation) {
+			if processTraceEnabled {
+				a.observeSenderPeerAttempt(value)
+			}
+		})
 	}
 	return factory, err
 }
@@ -151,8 +148,8 @@ func (a *App) observeSenderPeerAttempt(observation v2peer.SenderAttemptObservati
 	if observation.Stage != v2peer.SenderAttemptAdmitted || observation.Lane == nil {
 		return
 	}
-	// SenderAttemptAdmitted is emitted only after the authenticated runtime owns
-	// the attached lane, making it the sender-side counterpart to receiver Ready.
+	// SenderAttemptAdmitted is emitted only after authenticated runtime ownership,
+	// making it the sender-side synchronization counterpart to receiver Ready.
 	a.recordProcessTrace(
 		processTraceShareComponent,
 		processTraceSenderDirectLane,
