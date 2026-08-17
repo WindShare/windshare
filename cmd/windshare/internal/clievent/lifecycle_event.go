@@ -152,12 +152,15 @@ func validPeerAttemptSpec(spec PeerAttemptSpec) bool {
 	_, stageOK := spec.Stage.Name()
 	_, scopeOK := spec.FailureScope.Name()
 	hasFailure := spec.Failure.Valid()
+	// The provider publishes both admission milestones only after core returns
+	// the authenticated lane, so they share one stable lane identity.
+	laneRequired := spec.Stage == PeerLaneAdmissionStarted || spec.Stage == PeerAttemptAdmitted
 	return spec.Command.Valid() && spec.Session.Valid() && spec.PeerPath.Valid() && spec.Attempt.Valid() &&
 		spec.Sequence != 0 && stageOK &&
 		(spec.Stage == PeerAttemptFailed) == hasFailure &&
 		(spec.Stage == PeerAttemptFailed) == scopeOK &&
 		(!spec.HasLane || spec.Lane.Valid()) &&
-		(spec.Stage == PeerAttemptAdmitted) == spec.HasLane
+		laneRequired == spec.HasLane
 }
 
 func (PeerAttemptObserved) event()                                     {}
