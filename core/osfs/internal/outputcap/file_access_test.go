@@ -22,8 +22,8 @@ func TestFileAccessMethodSetsArePurposeBound(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := make([]string, 0, test.access.NumMethod())
-			for index := range test.access.NumMethod() {
-				got = append(got, test.access.Method(index).Name)
+			for method := range test.access.Methods() {
+				got = append(got, method.Name)
 			}
 			slices.Sort(got)
 			slices.Sort(test.methods)
