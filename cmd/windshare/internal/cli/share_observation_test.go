@@ -93,6 +93,29 @@ func TestShareObservationsCollapseInvalidProducerFactsWithoutProviderText(t *tes
 	}
 }
 
+func TestShareObservationsAcceptSenderLaneAdmissionStarted(t *testing.T) {
+	emitter := &shareRecordingEmitter{detailed: true}
+	observations := newShareObservations(emitter)
+	observation := testShareAttemptObservation(t)
+	observation.Stage = v2peer.SenderAttemptLaneAdmissionStarted
+	observation.CandidateCounts = &v2peer.SenderCandidateCounts{LocalEmitted: 2, RemoteAccepted: 1}
+	observation.Lane = &sessionruntime.LaneIdentity{ID: 2, Epoch: 1}
+
+	observations.ObserveSenderAttempt(observation)
+
+	if emitter.lifecycleLoss != 0 || len(emitter.events) != 1 {
+		t.Fatalf("events = %#v, lifecycle loss = %d", emitter.events, emitter.lifecycleLoss)
+	}
+	event, ok := emitter.events[0].(clievent.PeerAttemptObserved)
+	if !ok || event.Stage() != clievent.PeerLaneAdmissionStarted {
+		t.Fatalf("lane-admission event = %#v", emitter.events[0])
+	}
+	lane, ok := event.Lane()
+	if !ok || lane.ID() != 2 || lane.Epoch() != 1 {
+		t.Fatalf("lane-admission identity = %#v, present %t", lane, ok)
+	}
+}
+
 func TestShareRelayDropSummaryAndCompletionUseOneCumulativeSource(t *testing.T) {
 	emitter := &shareRecordingEmitter{detailed: true}
 	observations := newShareObservations(emitter)

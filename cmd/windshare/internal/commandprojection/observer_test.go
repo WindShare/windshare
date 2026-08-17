@@ -227,6 +227,19 @@ func TestLifecycleProjectionCopiesOnlyWhitelistedFacts(t *testing.T) {
 		t.Fatalf("peer projection = %#v, err %v", peer, err)
 	}
 	assertProjectionOmits(t, peer, "198.51.100.7", "203.0.113.9")
+	admissionStarted, err := ProjectSenderAttempt(clievent.CommandShare, v2peer.SenderAttemptObservation{
+		SessionID: sessionID, PeerPathID: peerPath, AttemptID: attemptID,
+		SideSequence: 3, AttemptElapsedMillis: 119, Stage: v2peer.SenderAttemptLaneAdmissionStarted,
+		CandidateCounts: &v2peer.SenderCandidateCounts{LocalEmitted: 2, RemoteAccepted: 1},
+		Lane:            &lane,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectedLane, ok := admissionStarted.Lane()
+	if !ok || projectedLane.ID() != lane.ID || projectedLane.Epoch() != lane.Epoch {
+		t.Fatalf("admission-started lane = %#v, present %t", projectedLane, ok)
+	}
 
 	failedPeer, err := ProjectSenderAttempt(clievent.CommandShare, v2peer.SenderAttemptObservation{
 		SessionID: sessionID, PeerPathID: peerPath, AttemptID: attemptID,
