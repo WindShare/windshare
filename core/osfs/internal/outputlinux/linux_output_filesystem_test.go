@@ -469,7 +469,7 @@ func TestLinuxNativeNamespaceLifecycle(t *testing.T) {
 	if err := control.linkRegularFileNoReplace(control, "object.stage", stage, "object.anchor"); err != nil {
 		t.Fatalf("create anchor: %v", err)
 	}
-	anchor, err := control.openRegularFileExact("object.anchor", false, linuxOutputStateFileMode)
+	anchor, err := control.openRegularFileExact("object.anchor", linuxOutputFileObserved, linuxOutputStateFileMode)
 	if err != nil {
 		t.Fatalf("open anchor: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestLinuxNativeNamespaceLifecycle(t *testing.T) {
 	if err := root.linkRegularFileNoReplace(control, "object.anchor", anchor, "received.bin"); !errors.Is(err, errLinuxOutputCollision) {
 		t.Fatalf("second publication: expected collision, got %v", err)
 	}
-	final, err := root.openRegularFileExact("received.bin", false, linuxOutputStateFileMode)
+	final, err := root.openRegularFileExact("received.bin", linuxOutputFileObserved, linuxOutputStateFileMode)
 	if err != nil {
 		t.Fatalf("open final: %v", err)
 	}
@@ -514,7 +514,7 @@ func TestLinuxNativeNamespaceLifecycle(t *testing.T) {
 	); err != nil {
 		t.Fatalf("replace state record: %v", err)
 	}
-	reopenedRecord, err := control.openRegularFileExact("file.state", false, linuxOutputStateFileMode)
+	reopenedRecord, err := control.openRegularFileExact("file.state", linuxOutputFileObserved, linuxOutputStateFileMode)
 	if err != nil {
 		t.Fatalf("open replaced state record: %v", err)
 	}

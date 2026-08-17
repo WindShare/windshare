@@ -20,7 +20,7 @@ func (directory *linuxOutputDirectory) regularEntryMatches(
 	if err := expected.verifyHandle(); err != nil {
 		return false, err
 	}
-	opened, err := directory.openRegularFile(name, false)
+	opened, err := directory.openRegularFile(name, linuxOutputFileObserved)
 	if err != nil {
 		return false, err
 	}
@@ -78,7 +78,7 @@ func (file *linuxOutputRegularFile) setExactMode(permissions uint32) error {
 	if err := linuxValidatePermissions(operation, permissions); err != nil {
 		return err
 	}
-	if err := file.requireWritable(operation); err != nil {
+	if err := file.requireMutable(operation); err != nil {
 		return err
 	}
 	if err := file.system.fchmod(file.fd, permissions); err != nil {
@@ -104,7 +104,7 @@ func (file *linuxOutputRegularFile) truncate(size int64) error {
 	if size < 0 {
 		return linuxUnsafe(operation, "file size cannot be negative", nil)
 	}
-	if err := file.requireWritable(operation); err != nil {
+	if err := file.requireMutable(operation); err != nil {
 		return err
 	}
 	if err := file.system.ftruncate(file.fd, size); err != nil {
@@ -129,7 +129,7 @@ func (directory *linuxOutputDirectory) sync() error {
 
 func (file *linuxOutputRegularFile) sync() error {
 	const operation = "sync output file"
-	if err := file.requireWritable(operation); err != nil {
+	if err := file.requireSyncAuthority(operation); err != nil {
 		return err
 	}
 	return linuxSyncOutputHandle(file.system, file.fd, operation)
@@ -221,12 +221,22 @@ func (file *linuxOutputRegularFile) currentIdentity() (linuxOpenHandleFacts, err
 	return identity, nil
 }
 
-func (file *linuxOutputRegularFile) requireWritable(operation string) error {
+func (file *linuxOutputRegularFile) requireMutable(operation string) error {
 	if err := file.verifyHandle(); err != nil {
 		return err
 	}
-	if !file.writable {
+	if file.access != linuxOutputFileMutable {
 		return linuxUnsafe(operation, "file handle was not opened for mutation", nil)
+	}
+	return nil
+}
+
+func (file *linuxOutputRegularFile) requireSyncAuthority(operation string) error {
+	if err := file.verifyHandle(); err != nil {
+		return err
+	}
+	if file.access != linuxOutputFileRecoveryDurability && file.access != linuxOutputFileMutable {
+		return linuxUnsafe(operation, "file handle was not opened for durability", nil)
 	}
 	return nil
 }

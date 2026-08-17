@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
@@ -16,7 +17,7 @@ import (
 )
 
 func TestShareObservationsProjectEverySenderProducerToTypedEvents(t *testing.T) {
-	emitter := &shareRecordingEmitter{}
+	emitter := &shareRecordingEmitter{detailed: true}
 	observations := newShareObservations(emitter)
 	authority, err := clievent.NewRelayAuthority(clievent.RelayWSS, "relay.example", 443)
 	if err != nil {
@@ -33,10 +34,9 @@ func TestShareObservationsProjectEverySenderProducerToTypedEvents(t *testing.T) 
 		Attempt:  1,
 	})
 	observations.TraceRelayLifecycle(relayv2.LifecycleTrace{
-		LinkID:     1,
-		Stage:      relayv2.LifecycleLinkClosed,
-		Cause:      relayv2.LifecycleCauseNone,
-		DrainCause: relayv2.LifecycleCauseNone,
+		LinkID: 1, OperationID: 1,
+		Stage: relayv2.LifecycleLinkClosed, RetirementSource: relayv2.LifecycleRetirementLocalClose,
+		Cause: relayv2.LifecycleCauseNone, DrainCause: relayv2.LifecycleCauseNone,
 	})
 	observations.TraceWebRTCLifecycle(wsrtc.LifecycleTrace{
 		ChannelID:  2,
@@ -80,7 +80,7 @@ func TestShareObservationsProjectEverySenderProducerToTypedEvents(t *testing.T) 
 }
 
 func TestShareObservationsCollapseInvalidProducerFactsWithoutProviderText(t *testing.T) {
-	emitter := &shareRecordingEmitter{}
+	emitter := &shareRecordingEmitter{detailed: true}
 	observations := newShareObservations(emitter)
 	for range 2 {
 		observations.TraceRootPrefetch(liveshare.RootPrefetchTrace{
@@ -88,12 +88,64 @@ func TestShareObservationsCollapseInvalidProducerFactsWithoutProviderText(t *tes
 			Attempt:  1,
 		})
 	}
-	if emitter.lifecycleLoss != 1 || len(emitter.events) != 1 {
+	if emitter.lifecycleLoss != 2 || len(emitter.events) != 0 {
 		t.Fatalf("loss = %d events = %#v", emitter.lifecycleLoss, emitter.events)
 	}
-	warning, ok := emitter.events[0].(clievent.Warning)
-	if !ok || warning.Failure().Code() != clievent.FailureUnexpected {
-		t.Fatalf("safe projection warning = %#v", emitter.events[0])
+}
+
+func TestShareRelayDropSummaryAndCompletionUseOneCumulativeSource(t *testing.T) {
+	emitter := &shareRecordingEmitter{detailed: true}
+	observations := newShareObservations(emitter)
+	dropped := relayv2.LifecycleTrace{
+		LinkID: 4, Stage: relayv2.LifecycleTraceDropped,
+		RetirementSource: relayv2.LifecycleRetirementNone,
+		Cause:            relayv2.LifecycleCauseNone, DrainCause: relayv2.LifecycleCauseNone,
+		Dropped: 6,
+	}
+	observations.TraceRelayLifecycle(dropped)
+	observations.reportRelayCompletion(relayv2.LifecycleObservationCompletion{
+		Drained: true, Loss: relayv2.LifecycleObservationLoss{QueueOverflow: 6},
+	})
+	observations.TraceRelayLifecycle(dropped)
+
+	if len(emitter.events) != 2 {
+		t.Fatalf("safe lifecycle events=%#v", emitter.events)
+	}
+	for _, event := range emitter.events {
+		value, ok := event.(clievent.RelayLifecycleObserved)
+		if !ok || value.Stage() != clievent.RelayTraceDropped || value.Dropped() != 6 {
+			t.Fatalf("drop event=%#v", event)
+		}
+	}
+	if emitter.lifecycleLoss != 6 {
+		t.Fatalf("cumulative relay loss=%d", emitter.lifecycleLoss)
+	}
+}
+
+func TestShareContextObserversCannotCommitAfterAuthorityRevocation(t *testing.T) {
+	emitter := &shareRecordingEmitter{detailed: true}
+	observations := newShareObservations(emitter)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	observations.TraceWebRTCLifecycleContext(ctx, wsrtc.LifecycleTrace{
+		ChannelID: 1, Operation: wsrtc.LifecycleOperationChannel,
+		Transition: wsrtc.LifecycleTransitionClosedClean,
+		State:      framechannel.Closed, Terminal: wsrtc.LifecycleTerminalNone, Cause: wsrtc.LifecycleCauseNone,
+	})
+	observations.ObserveSenderAttemptContext(ctx, testShareAttemptObservation(t))
+
+	// Completion revocation is authoritative even when the producer callback's
+	// context has not yet observed cancellation.
+	observations.webRTCGate.revoke()
+	observations.peerGate.revoke()
+	observations.TraceWebRTCLifecycleContext(context.Background(), wsrtc.LifecycleTrace{
+		ChannelID: 2, Operation: wsrtc.LifecycleOperationChannel,
+		Transition: wsrtc.LifecycleTransitionClosedClean,
+		State:      framechannel.Closed, Terminal: wsrtc.LifecycleTerminalNone, Cause: wsrtc.LifecycleCauseNone,
+	})
+	observations.ObserveSenderAttemptContext(context.Background(), testShareAttemptObservation(t))
+	if len(emitter.events) != 0 || emitter.lifecycleLoss != 0 {
+		t.Fatalf("revoked callbacks committed events=%#v loss=%d", emitter.events, emitter.lifecycleLoss)
 	}
 }
 
@@ -142,7 +194,7 @@ type shareRecordingEmitter struct {
 	events        []clievent.Event
 	published     []clievent.Event
 	lifecycleLoss uint64
-	progressLoss  uint64
+	detailed      bool
 }
 
 func (emitter *shareRecordingEmitter) Observe(event clievent.Event) bool {
@@ -155,11 +207,12 @@ func (emitter *shareRecordingEmitter) Publish(events ...clievent.Event) bool {
 	return true
 }
 
-func (emitter *shareRecordingEmitter) ReportObserverLoss(lifecycle, progress uint64) bool {
-	emitter.lifecycleLoss += lifecycle
-	emitter.progressLoss += progress
+func (emitter *shareRecordingEmitter) ReportObserverLoss(_ clievent.ObserverLossCategory, _ clievent.ObserverLossReason, count uint64) bool {
+	emitter.lifecycleLoss += count
 	return true
 }
+
+func (emitter *shareRecordingEmitter) detailedDiagnosticsEnabled() bool { return emitter.detailed }
 
 func testShareAttemptObservation(t *testing.T) v2peer.SenderAttemptObservation {
 	t.Helper()

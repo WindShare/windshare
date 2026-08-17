@@ -17,11 +17,11 @@ import (
 )
 
 func TestNativeResumeRepositoryRejectsInvalidAndCancelledBoundaries(t *testing.T) {
-	if _, err := NewNativeResumeRepository("relative", openOutputRuntimeTestPlatform); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+	if _, err := NewNativeResumeRepository("relative", openOutputRuntimeTestPlatform, nil); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("relative root = %v", err)
 	}
 	root := newRuntimeTestRootSpec(t).path
-	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestNativeResumeInventoryDoesNotCreateRegistryForLiveOnlyDestination(t *tes
 	if err := authority.Close(); err != nil {
 		t.Fatal(err)
 	}
-	repository, _ := NewNativeResumeRepository(root, factory)
+	repository, _ := NewNativeResumeRepository(root, factory, nil)
 	page, err := repository.Page(context.Background(), resumeauthority.PageCursor{}, 1)
 	if err != nil || len(page.Headers()) != 0 {
 		t.Fatalf("live page = %d, %v", len(page.Headers()), err)

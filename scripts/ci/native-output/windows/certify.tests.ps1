@@ -121,12 +121,13 @@ $outputWindowsSelector = @($requiredSelectors | Where-Object {
 if ($coreSelector.Count -ne 1 -or
     $outputWindowsSelector.Count -ne 1 -or
     (Get-WindowsNativeRequiredTestExpression -TestNames $coreSelector[0].TestNames) -cne
-        '^(TestWindowsNTFSNativeCertification|TestWindowsNTFSProcessRestartRecovery)$' -or
+        '^(TestWindowsNTFSNativeCertification|TestWindowsNTFSProcessRestartRecovery|TestWindowsNTFSRetainedCandidateListAndReopen)$' -or
     (Get-WindowsNativeRequiredTestExpression -TestNames $outputWindowsSelector[0].TestNames) -cne
-        '^(TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment)$') {
+        '^(TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment|TestWindowsRecoveryDurabilityOrdinaryStageSync)$') {
     throw 'required native tests are not bound to their owning package selectors'
 }
 $requiredTests = @($requiredSelectors | ForEach-Object { $_.TestNames })
+$mutexTestName = 'TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment'
 
 $profilePolicySID = 'S-1-5-21-4000000001-4000000002-4000000003-4000000004'
 $profileDeleteCodes = [Collections.Generic.Queue[int]]::new()
@@ -630,22 +631,21 @@ try {
     Remove-Item -LiteralPath $writableProbeRoot -Recurse -Force
 }
 
-$passingEvents = @(
-    [pscustomobject]@{ Action = 'run'; Test = $requiredTests[0]; Package = 'example/osfs' },
-    [pscustomobject]@{ Action = 'pass'; Test = $requiredTests[0]; Package = 'example/osfs' },
-    [pscustomobject]@{ Action = 'run'; Test = $requiredTests[1]; Package = 'example/osfs' },
-    [pscustomobject]@{ Action = 'pass'; Test = $requiredTests[1]; Package = 'example/osfs' },
-    [pscustomobject]@{ Action = 'run'; Test = $requiredTests[2]; Package = 'example/osfs' },
-    [pscustomobject]@{ Action = 'pass'; Test = $requiredTests[2]; Package = 'example/osfs' },
-    [pscustomobject]@{ Action = 'pass'; Package = 'example/osfs' }
-)
+$passingEvents = @($requiredTests | ForEach-Object {
+    [pscustomobject]@{ Action = 'run'; Test = $_; Package = 'example/osfs' }
+    [pscustomobject]@{ Action = 'pass'; Test = $_; Package = 'example/osfs' }
+}) + [pscustomobject]@{ Action = 'pass'; Package = 'example/osfs' }
 $jsonEvents = @(ConvertFrom-WindowsNativeTestJSONLines -Lines @(
     '{"Action":"run","Test":"TestWindowsNTFSNativeCertification"}',
     '{"Action":"pass","Test":"TestWindowsNTFSNativeCertification"}',
     '{"Action":"run","Test":"TestWindowsNTFSProcessRestartRecovery"}',
     '{"Action":"pass","Test":"TestWindowsNTFSProcessRestartRecovery"}',
+    '{"Action":"run","Test":"TestWindowsNTFSRetainedCandidateListAndReopen"}',
+    '{"Action":"pass","Test":"TestWindowsNTFSRetainedCandidateListAndReopen"}',
     '{"Action":"run","Test":"TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment"}',
-    '{"Action":"pass","Test":"TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment"}'
+    '{"Action":"pass","Test":"TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment"}',
+    '{"Action":"run","Test":"TestWindowsRecoveryDurabilityOrdinaryStageSync"}',
+    '{"Action":"pass","Test":"TestWindowsRecoveryDurabilityOrdinaryStageSync"}'
 ))
 Assert-WindowsNativeTestEvents -ExitCode 0 -Events $jsonEvents -RequiredTests $requiredTests
 Assert-Throws 'invalid JSON event' {
@@ -677,7 +677,7 @@ Assert-Throws 'missing mutex evidence' {
     $events = @($passingEvents | Where-Object {
         $testProperty = $_.PSObject.Properties['Test']
         $testName = if ($null -eq $testProperty) { '' } else { [string]$testProperty.Value }
-        $testName -cne $requiredTests[2]
+        $testName -cne $mutexTestName
     })
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events $events -RequiredTests $requiredTests
 }
@@ -685,7 +685,7 @@ Assert-Throws 'missing mutex top-level run' {
     $events = @($passingEvents | Where-Object {
         $testProperty = $_.PSObject.Properties['Test']
         $testName = if ($null -eq $testProperty) { '' } else { [string]$testProperty.Value }
-        -not ($_.Action -ceq 'run' -and $testName -ceq $requiredTests[2])
+        -not ($_.Action -ceq 'run' -and $testName -ceq $mutexTestName)
     })
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events $events -RequiredTests $requiredTests
 }
@@ -693,14 +693,14 @@ Assert-Throws 'missing mutex top-level pass' {
     $events = @($passingEvents | Where-Object {
         $testProperty = $_.PSObject.Properties['Test']
         $testName = if ($null -eq $testProperty) { '' } else { [string]$testProperty.Value }
-        -not ($_.Action -ceq 'pass' -and $testName -ceq $requiredTests[2])
+        -not ($_.Action -ceq 'pass' -and $testName -ceq $mutexTestName)
     })
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events $events -RequiredTests $requiredTests
 }
 Assert-Throws 'skipped mutex test' {
     $events = @($passingEvents) + [pscustomobject]@{
         Action = 'skip'
-        Test = $requiredTests[2]
+        Test = $mutexTestName
         Package = 'example/osfs'
     }
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events $events -RequiredTests $requiredTests
@@ -709,10 +709,10 @@ Assert-Throws 'failed mutex test' {
     $events = @($passingEvents | Where-Object {
         $testProperty = $_.PSObject.Properties['Test']
         $testName = if ($null -eq $testProperty) { '' } else { [string]$testProperty.Value }
-        -not ($_.Action -ceq 'pass' -and $testName -ceq $requiredTests[2])
+        -not ($_.Action -ceq 'pass' -and $testName -ceq $mutexTestName)
     }) + [pscustomobject]@{
         Action = 'fail'
-        Test = $requiredTests[2]
+        Test = $mutexTestName
         Package = 'example/osfs'
     }
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events $events -RequiredTests $requiredTests

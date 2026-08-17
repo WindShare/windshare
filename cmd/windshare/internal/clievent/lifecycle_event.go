@@ -3,6 +3,7 @@ package clievent
 type RelayLifecycleSpec struct {
 	Command          Command
 	LinkID           uint64
+	RelaySession     RelaySessionID
 	SendOperationID  uint64
 	Stage            RelayLifecycleStage
 	Terminal         bool
@@ -10,6 +11,7 @@ type RelayLifecycleSpec struct {
 	RetirementSource RelayRetirementSource
 	Cause            RelayLifecycleCause
 	DrainCause       RelayLifecycleCause
+	Dropped          uint64
 }
 
 type RelayLifecycleObserved struct{ spec RelayLifecycleSpec }
@@ -27,6 +29,9 @@ func validRelayLifecycleSpec(spec RelayLifecycleSpec) bool {
 	_, causeOK := spec.Cause.Name()
 	_, drainOK := spec.DrainCause.Name()
 	_, dispositionOK := spec.Disposition.Name()
+	// Source packages own stage-aware shape validation. The event layer validates
+	// only its closed vocabulary so it cannot become a second, narrower producer
+	// matrix as lifecycle semantics evolve.
 	return spec.Command.Valid() && spec.LinkID != 0 && stageOK && retirementOK && causeOK && drainOK &&
 		(spec.Disposition == 0 || dispositionOK)
 }
@@ -35,6 +40,9 @@ func (RelayLifecycleObserved) event()                 {}
 func (value RelayLifecycleObserved) Command() Command { return value.spec.Command }
 func (RelayLifecycleObserved) Level() Level           { return LevelDebug }
 func (value RelayLifecycleObserved) LinkID() uint64   { return value.spec.LinkID }
+func (value RelayLifecycleObserved) RelaySessionID() (RelaySessionID, bool) {
+	return value.spec.RelaySession, value.spec.RelaySession.Valid()
+}
 func (value RelayLifecycleObserved) SendOperationID() uint64 {
 	return value.spec.SendOperationID
 }
@@ -51,6 +59,7 @@ func (value RelayLifecycleObserved) Cause() RelayLifecycleCause { return value.s
 func (value RelayLifecycleObserved) DrainCause() RelayLifecycleCause {
 	return value.spec.DrainCause
 }
+func (value RelayLifecycleObserved) Dropped() uint64 { return value.spec.Dropped }
 func (value RelayLifecycleObserved) Accept(visitor Visitor) error {
 	return acceptRelayLifecycleObserved(visitor, value)
 }
@@ -84,9 +93,8 @@ func validWebRTCLifecycleSpec(spec WebRTCLifecycleSpec) bool {
 	_, stateOK := spec.State.Name()
 	_, terminalOK := spec.Terminal.Name()
 	_, causeOK := spec.Cause.Name()
-	return spec.Command.Valid() && spec.ChannelID != 0 && operationOK && transitionOK && stateOK &&
-		terminalOK && causeOK && (spec.Disposition == 0 || dispositionOK) &&
-		(spec.Transition == WebRTCTraceDropped) == (spec.Dropped != 0)
+	return spec.Command.Valid() && spec.ChannelID != 0 && operationOK && transitionOK && stateOK && terminalOK && causeOK &&
+		(spec.Disposition == 0 || dispositionOK)
 }
 
 func (WebRTCLifecycleObserved) event()                  {}
@@ -242,42 +250,145 @@ type FilesystemOutputCounters struct {
 	CheckpointRecords      uint64
 }
 
-type FilesystemOutputObserved struct {
-	receiveOperation    ReceiveOperationID
-	hasReceiveOperation bool
-	operation           FilesystemOutputOperation
-	counters            FilesystemOutputCounters
-	failure             Failure
-	hasFailure          bool
+type FilesystemOutputSpec struct {
+	Operation           FilesystemOutputOperation
+	ReceiveIntent       ReceiveIntentDigest
+	ReceiveOperation    ReceiveOperationID
+	OutputSession       OutputSessionID
+	Certification       FilesystemCertification
+	NativeLockScope     FilesystemNativeLockScope
+	NativeLockMilestone FilesystemNativeLockMilestone
+	RootDisposition     FilesystemRootDisposition
+	RuntimeComponent    FilesystemRuntimeComponent
+	RuntimeOperation    FilesystemRuntimeOperation
+	RuntimeDecision     FilesystemRuntimeDecisionKind
+	OperationID         uint64
+	ClaimID             uint64
+	Counters            FilesystemOutputCounters
+	Failure             Failure
+	FailureStage        FilesystemFailureStage
+	ReconciliationStep  FilesystemReconciliationStep
+	NativeErrorClass    FilesystemNativeErrorClass
 }
 
-func NewFilesystemOutputObserved(
-	receiveOperation ReceiveOperationID,
-	operation FilesystemOutputOperation,
-	counters FilesystemOutputCounters,
-	failure Failure,
-) (FilesystemOutputObserved, error) {
-	_, operationOK := operation.Name()
-	if !operationOK {
+type FilesystemOutputObserved struct{ spec FilesystemOutputSpec }
+
+func NewFilesystemOutputObserved(spec FilesystemOutputSpec) (FilesystemOutputObserved, error) {
+	if !validFilesystemOutputSpec(spec) {
 		return FilesystemOutputObserved{}, ErrInvalidEvent
 	}
-	return FilesystemOutputObserved{
-		receiveOperation: receiveOperation, hasReceiveOperation: receiveOperation.Valid(),
-		operation: operation, counters: counters,
-		failure: failure, hasFailure: failure.Valid(),
-	}, nil
+	return FilesystemOutputObserved{spec: spec}, nil
+}
+
+func validFilesystemOutputSpec(spec FilesystemOutputSpec) bool {
+	return validFilesystemOutputNames(spec) &&
+		spec.Failure.Valid() == (spec.FailureStage != 0) &&
+		(spec.NativeLockScope != 0) == (spec.NativeLockMilestone != 0) &&
+		validFilesystemRuntimeDecision(spec) &&
+		validFilesystemReconciliation(spec)
+}
+
+type filesystemNamedValue interface {
+	Name() (string, bool)
+}
+
+type optionalFilesystemName struct {
+	present bool
+	value   filesystemNamedValue
+}
+
+func validFilesystemOutputNames(spec FilesystemOutputSpec) bool {
+	if _, ok := spec.Operation.Name(); !ok {
+		return false
+	}
+	optional := [...]optionalFilesystemName{
+		{spec.Certification != 0, spec.Certification},
+		{spec.NativeLockScope != 0, spec.NativeLockScope},
+		{spec.NativeLockMilestone != 0, spec.NativeLockMilestone},
+		{spec.RootDisposition != 0, spec.RootDisposition},
+		{spec.RuntimeComponent != 0, spec.RuntimeComponent},
+		{spec.RuntimeOperation != 0, spec.RuntimeOperation},
+		{spec.RuntimeDecision != 0, spec.RuntimeDecision},
+		{spec.FailureStage != 0, spec.FailureStage},
+		{spec.ReconciliationStep != 0, spec.ReconciliationStep},
+		{spec.NativeErrorClass != 0, spec.NativeErrorClass},
+	}
+	for _, field := range optional {
+		if field.present && !validFilesystemName(field.value) {
+			return false
+		}
+	}
+	return true
+}
+
+func validFilesystemName(value filesystemNamedValue) bool {
+	_, ok := value.Name()
+	return ok
+}
+
+func validFilesystemRuntimeDecision(spec FilesystemOutputSpec) bool {
+	runtimeFields := 0
+	if spec.RuntimeComponent != 0 {
+		runtimeFields++
+	}
+	if spec.RuntimeOperation != 0 {
+		runtimeFields++
+	}
+	if spec.RuntimeDecision != 0 {
+		runtimeFields++
+	}
+	return runtimeFields == 0 || runtimeFields == 3
+}
+
+func validFilesystemReconciliation(spec FilesystemOutputSpec) bool {
+	return spec.ReconciliationStep == 0 ||
+		spec.FailureStage == FilesystemFailureCheckpointReconciliation ||
+		spec.FailureStage == FilesystemFailureNativeDurability
 }
 
 func (FilesystemOutputObserved) event()           {}
 func (FilesystemOutputObserved) Command() Command { return CommandGet }
 func (FilesystemOutputObserved) Level() Level     { return LevelDebug }
 func (value FilesystemOutputObserved) ReceiveOperationID() (ReceiveOperationID, bool) {
-	return value.receiveOperation, value.hasReceiveOperation
+	return value.spec.ReceiveOperation, value.spec.ReceiveOperation.Valid()
 }
-func (value FilesystemOutputObserved) Operation() FilesystemOutputOperation { return value.operation }
-func (value FilesystemOutputObserved) Counters() FilesystemOutputCounters   { return value.counters }
+func (value FilesystemOutputObserved) ReceiveIntentDigest() (ReceiveIntentDigest, bool) {
+	return value.spec.ReceiveIntent, value.spec.ReceiveIntent.Valid()
+}
+func (value FilesystemOutputObserved) OutputSessionID() (OutputSessionID, bool) {
+	return value.spec.OutputSession, value.spec.OutputSession.Valid()
+}
+func (value FilesystemOutputObserved) Operation() FilesystemOutputOperation {
+	return value.spec.Operation
+}
+func (value FilesystemOutputObserved) Certification() (FilesystemCertification, bool) {
+	_, ok := value.spec.Certification.Name()
+	return value.spec.Certification, ok
+}
+func (value FilesystemOutputObserved) NativeLock() (FilesystemNativeLockScope, FilesystemNativeLockMilestone, bool) {
+	_, a := value.spec.NativeLockScope.Name()
+	_, b := value.spec.NativeLockMilestone.Name()
+	return value.spec.NativeLockScope, value.spec.NativeLockMilestone, a && b
+}
+func (value FilesystemOutputObserved) RootDisposition() (FilesystemRootDisposition, bool) {
+	_, ok := value.spec.RootDisposition.Name()
+	return value.spec.RootDisposition, ok
+}
+func (value FilesystemOutputObserved) RuntimeDecision() (FilesystemRuntimeComponent, FilesystemRuntimeOperation, FilesystemRuntimeDecisionKind, bool) {
+	_, a := value.spec.RuntimeComponent.Name()
+	_, b := value.spec.RuntimeOperation.Name()
+	_, c := value.spec.RuntimeDecision.Name()
+	return value.spec.RuntimeComponent, value.spec.RuntimeOperation, value.spec.RuntimeDecision, a && b && c
+}
+func (value FilesystemOutputObserved) Correlation() (uint64, uint64) {
+	return value.spec.OperationID, value.spec.ClaimID
+}
+func (value FilesystemOutputObserved) Counters() FilesystemOutputCounters { return value.spec.Counters }
 func (value FilesystemOutputObserved) Failure() (Failure, bool) {
-	return value.failure, value.hasFailure
+	return value.spec.Failure, value.spec.Failure.Valid()
+}
+func (value FilesystemOutputObserved) FailureClassification() (FilesystemFailureStage, FilesystemReconciliationStep, FilesystemNativeErrorClass, bool) {
+	return value.spec.FailureStage, value.spec.ReconciliationStep, value.spec.NativeErrorClass, value.spec.Failure.Valid()
 }
 func (value FilesystemOutputObserved) Accept(visitor Visitor) error {
 	return acceptFilesystemOutputObserved(visitor, value)

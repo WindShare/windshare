@@ -126,7 +126,7 @@ func observeOrdinaryResumeFinalLeaf(
 		)
 	}
 	defer func() { resultErr = errors.Join(resultErr, reference.Close()) }()
-	final, err := parent.OpenFile(leaf, false, false)
+	final, err := parent.OpenObservedFile(leaf, false)
 	if err != nil || final == nil {
 		return finalObservation(
 			fileexecution.FinalUnsafe, errors.Join(err, closeNativeResumeFile(final)),
@@ -176,7 +176,7 @@ func closeNativeResumeDirectory(directory outputcap.Directory) error {
 	return directory.Close()
 }
 
-func closeNativeResumeFile(file outputcap.File) error {
+func closeNativeResumeFile(file outputcap.ObservedFile) error {
 	if file == nil {
 		return nil
 	}

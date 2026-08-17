@@ -33,15 +33,27 @@ type windowsOutputV3EntryRef struct {
 	native *windowsV3PinnedEntry
 }
 
-type windowsOutputV3File struct {
+type windowsOutputV3FileState struct {
 	native   *windowsV3File
 	private  bool
 	borrowed bool
 }
 
+type windowsOutputV3ObservedFile struct {
+	state *windowsOutputV3FileState
+}
+
+type windowsOutputV3RecoveryDurabilityFile struct {
+	state *windowsOutputV3FileState
+}
+
+type windowsOutputV3MutableFile struct {
+	state *windowsOutputV3FileState
+}
+
 type windowsOutputV3Lock struct {
 	native *windowsV3StableLock
-	file   *windowsOutputV3File
+	file   *windowsOutputV3MutableFile
 }
 
 func Open(path string, create bool) (outputcap.Platform, error) {

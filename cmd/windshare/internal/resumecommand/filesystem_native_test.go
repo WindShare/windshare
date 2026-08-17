@@ -143,7 +143,8 @@ func TestFilesystemResumeRunnerPreservesCorruptUnknownControlOwnership(t *testin
 		t.Fatalf("result=%d", result)
 	}
 	if !strings.Contains(stdout.String(), `resume_list_status="needs-attention"`) ||
-		!strings.Contains(stdout.String(), resumeDestinationUnknownReason) {
+		!strings.Contains(stdout.String(), resumeDestinationBindingReason) ||
+		!strings.Contains(stdout.String(), `stage="destination_binding"`) {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 	got, err := os.ReadFile(foreignControl)

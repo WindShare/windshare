@@ -175,7 +175,7 @@ func TestC5ClosureBoundedRecordFailsClosedAtEveryAuthorityCut(t *testing.T) {
 	openFailure := errors.New("open failed")
 	closeFailure := errors.New("open result close failed")
 	directory = c5ClosureRecordDirectory(&c5ClosureFaultFile{closeErr: closeFailure})
-	directory.openFile = func(string, bool, bool) (outputcap.File, error) {
+	directory.openFile = func(string, bool, bool) (outputcap.MutableFile, error) {
 		return &c5ClosureFaultFile{closeErr: closeFailure}, openFailure
 	}
 	if _, err := readBoundedRecord(directory, "record", 8); !errors.Is(err, openFailure) || !errors.Is(err, closeFailure) {
@@ -493,15 +493,15 @@ func TestC5ClosureRevalidationRejectsReboundRootsDirectoriesAndLocks(t *testing.
 		t.Fatalf("nil lock authority = %v", err)
 	}
 	lockOpenFailure := errors.New("lock reopen failed")
-	parent := &c5ClosureFaultDirectory{openFile: func(string, bool, bool) (outputcap.File, error) {
+	parent := &c5ClosureFaultDirectory{openFile: func(string, bool, bool) (outputcap.MutableFile, error) {
 		return nil, lockOpenFailure
 	}}
 	expected := &c5ClosureFaultLock{file: &c5ClosureFaultFile{}}
 	if err := run.revalidateLock(parent, "lock", expected); !errors.Is(err, lockOpenFailure) || !errors.Is(err, ErrCheckpointCleanerOwnership) {
 		t.Fatalf("lock reopen = %v", err)
 	}
-	currentFile := &c5ClosureFaultFile{same: func(outputcap.File) (bool, error) { return false, nil }, closeErr: closeFailure}
-	parent.openFile = func(string, bool, bool) (outputcap.File, error) { return currentFile, nil }
+	currentFile := &c5ClosureFaultFile{same: func(outputcap.FileIdentity) (bool, error) { return false, nil }, closeErr: closeFailure}
+	parent.openFile = func(string, bool, bool) (outputcap.MutableFile, error) { return currentFile, nil }
 	if err := run.revalidateLock(parent, "lock", expected); !errors.Is(err, ErrCheckpointCleanerOwnership) || !errors.Is(err, closeFailure) {
 		t.Fatalf("lock replacement = %v", err)
 	}
@@ -565,7 +565,7 @@ func TestC5ClosureMutationAuthorizationRevalidatesEveryRetainedAuthority(t *test
 
 	t.Run("cleanup lock replacement", func(t *testing.T) {
 		fixture := c5ClosureAuthorizedMutation(t)
-		fixture.cleanupCurrent.same = func(outputcap.File) (bool, error) { return false, nil }
+		fixture.cleanupCurrent.same = func(outputcap.FileIdentity) (bool, error) { return false, nil }
 		if err := fixture.run.authorizeMutation(fixture.state); !errors.Is(err, ErrCheckpointCleanerOwnership) {
 			t.Fatalf("cleanup lock replacement = %v", err)
 		}
@@ -573,7 +573,7 @@ func TestC5ClosureMutationAuthorizationRevalidatesEveryRetainedAuthority(t *test
 
 	t.Run("coordinator replacement", func(t *testing.T) {
 		fixture := c5ClosureAuthorizedMutation(t)
-		fixture.coordinatorCurrent.same = func(outputcap.File) (bool, error) { return false, nil }
+		fixture.coordinatorCurrent.same = func(outputcap.FileIdentity) (bool, error) { return false, nil }
 		if err := fixture.run.authorizeMutation(fixture.state); !errors.Is(err, ErrCheckpointCleanerOwnership) {
 			t.Fatalf("coordinator replacement = %v", err)
 		}
@@ -582,8 +582,8 @@ func TestC5ClosureMutationAuthorizationRevalidatesEveryRetainedAuthority(t *test
 	t.Run("remaining session replacement", func(t *testing.T) {
 		fixture := c5ClosureAuthorizedMutation(t)
 		expected := &c5ClosureFaultFile{}
-		current := &c5ClosureFaultFile{same: func(outputcap.File) (bool, error) { return false, nil }}
-		parent := &c5ClosureFaultDirectory{openFile: func(string, bool, bool) (outputcap.File, error) {
+		current := &c5ClosureFaultFile{same: func(outputcap.FileIdentity) (bool, error) { return false, nil }}
+		parent := &c5ClosureFaultDirectory{openFile: func(string, bool, bool) (outputcap.MutableFile, error) {
 			return current, nil
 		}}
 		fixture.run.sessionLocks = []cleanupLockRef{{

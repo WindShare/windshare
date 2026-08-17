@@ -171,11 +171,19 @@ func (authority *Authority) namedFileExecutor(
 		storeFactory = checkpointstore.NewFileExecutionStoreWithProfile
 	}
 	store, err := storeFactory(&repository, authority.destination.LiveCleanupProfile())
+	if operation.reopened {
+		var recordCount uint64
+		if store != nil {
+			recordCount = store.RecordCount()
+		}
+		authority.traceCheckpointReconciled(operation.intent, sessionID, recordCount, err)
+	}
 	if err != nil {
-		return nil, nil, nil, errors.Join(
+		primary := diagnoseFilesystemOutputFailure(
+			FilesystemOutputFailureCheckpointReconciliation,
 			checkpointRuntimeError(context.Background(), "reconcile ordinary file repository", err),
-			repository.Close(),
 		)
+		return nil, nil, nil, freezeFilesystemOutputFailure(primary, repository.Close())
 	}
 	fileAuthority, err := directoryauthority.NewFileAuthority(directories, store, sessionID)
 	if err != nil {

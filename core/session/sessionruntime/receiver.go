@@ -53,50 +53,52 @@ type ReceiverPeerSemantics interface {
 }
 
 type ReceiverFactoryConfig struct {
-	Descriptor        catalog.ShareDescriptor
-	SessionAuthKey    []byte
-	SenderPublicKey   ed25519.PublicKey
-	CatalogVerifier   catalogflow.ObjectVerifier
-	RecordOpener      RecordOpener
-	ReassemblyProcess *contentflow.ReassemblyAccount
-	ReassemblyShare   *contentflow.ReassemblyAccount
-	PlaintextProcess  *transfer.PlaintextBudget
-	Random            io.Reader
-	ReceiverInstances ReceiverInstanceSource
-	CatalogProgress   CatalogScanProgressObserver
-	PeerControls      ReceiverPeerSemantics
-	RuntimeResources  ReceiverRuntimeResourceSource
-	OperationLimits   protocolsession.OperationLimits
-	RouterLimits      protocolsession.RouterLimits
-	LaneRaceWidth     int
-	Now               func() time.Time
-	After             func(time.Duration) <-chan time.Time
-	ProtocolTracer    ProtocolOperationTracer
+	Descriptor           catalog.ShareDescriptor
+	SessionAuthKey       []byte
+	SenderPublicKey      ed25519.PublicKey
+	CatalogVerifier      catalogflow.ObjectVerifier
+	RecordOpener         RecordOpener
+	ReassemblyProcess    *contentflow.ReassemblyAccount
+	ReassemblyShare      *contentflow.ReassemblyAccount
+	PlaintextProcess     *transfer.PlaintextBudget
+	Random               io.Reader
+	ReceiverInstances    ReceiverInstanceSource
+	CatalogProgress      CatalogScanProgressObserver
+	PeerControls         ReceiverPeerSemantics
+	RuntimeResources     ReceiverRuntimeResourceSource
+	OperationLimits      protocolsession.OperationLimits
+	RouterLimits         protocolsession.RouterLimits
+	LaneRaceWidth        int
+	Now                  func() time.Time
+	After                func(time.Duration) <-chan time.Time
+	ProtocolTracer       ProtocolOperationTracer
+	LaneSettlementTracer transfer.LaneSettlementTracer
 }
 
 type ReceiverFactory struct {
-	descriptor        catalog.ShareDescriptor
-	authKey           []byte
-	publicKey         ed25519.PublicKey
-	verifier          catalogflow.ObjectVerifier
-	opener            RecordOpener
-	processReassembly *contentflow.ReassemblyAccount
-	shareReassembly   *contentflow.ReassemblyAccount
-	plaintextProcess  *transfer.PlaintextBudget
-	random            *lockedReader
-	admissionContext  context.Context
-	cancelAdmissions  context.CancelFunc
-	instances         ReceiverInstanceSource
-	catalogProgress   CatalogScanProgressObserver
-	semantic          protocolsession.SenderControlSemanticValidator
-	peerSemantics     ReceiverPeerSemantics
-	resources         ReceiverRuntimeResourceSource
-	operationLimits   protocolsession.OperationLimits
-	routerLimits      protocolsession.RouterLimits
-	raceWidth         int
-	now               func() time.Time
-	after             func(time.Duration) <-chan time.Time
-	protocolTracer    ProtocolOperationTracer
+	descriptor           catalog.ShareDescriptor
+	authKey              []byte
+	publicKey            ed25519.PublicKey
+	verifier             catalogflow.ObjectVerifier
+	opener               RecordOpener
+	processReassembly    *contentflow.ReassemblyAccount
+	shareReassembly      *contentflow.ReassemblyAccount
+	plaintextProcess     *transfer.PlaintextBudget
+	random               *lockedReader
+	admissionContext     context.Context
+	cancelAdmissions     context.CancelFunc
+	instances            ReceiverInstanceSource
+	catalogProgress      CatalogScanProgressObserver
+	semantic             protocolsession.SenderControlSemanticValidator
+	peerSemantics        ReceiverPeerSemantics
+	resources            ReceiverRuntimeResourceSource
+	operationLimits      protocolsession.OperationLimits
+	routerLimits         protocolsession.RouterLimits
+	raceWidth            int
+	now                  func() time.Time
+	after                func(time.Duration) <-chan time.Time
+	protocolTracer       ProtocolOperationTracer
+	laneSettlementTracer transfer.LaneSettlementTracer
 
 	mu         sync.Mutex
 	closing    bool
@@ -146,8 +148,9 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 		resources:       config.RuntimeResources,
 		operationLimits: config.OperationLimits, routerLimits: config.RouterLimits,
 		raceWidth: config.LaneRaceWidth, now: config.Now, after: config.After,
-		protocolTracer: config.ProtocolTracer,
-		closeDone:      make(chan struct{}),
+		protocolTracer:       config.ProtocolTracer,
+		laneSettlementTracer: config.LaneSettlementTracer,
+		closeDone:            make(chan struct{}),
 	}, nil
 }
 
@@ -238,6 +241,7 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 	}
 	lanes, err := transfer.NewLaneSet(transfer.LaneSetConfig{
 		ProtocolSessionID: keys.ProtocolSessionID(), RaceWidth: factory.raceWidth, Now: factory.now,
+		SettlementTracer: factory.laneSettlementTracer,
 	})
 	if err != nil {
 		return nil, err
@@ -248,7 +252,11 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 			lanes.Close()
 		}
 	}()
-	if err := lanes.Add(transfer.LaneIdentity{ID: initialLane.ID, Epoch: initialLane.Epoch}, blockLane); err != nil {
+	if err := lanes.Add(
+		transfer.LaneIdentity{ID: initialLane.ID, Epoch: initialLane.Epoch},
+		transfer.LaneRouteRelay,
+		blockLane,
+	); err != nil {
 		return nil, err
 	}
 	broker, err := transfer.NewBlockBroker(transfer.BlockBrokerConfig{

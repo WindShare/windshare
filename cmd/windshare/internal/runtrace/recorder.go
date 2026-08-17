@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	SchemaVersion            = 1
+	SchemaVersion            = 2
 	DefaultLifecycleCapacity = 256
 	DefaultSampleInterval    = 250 * time.Millisecond
 	maxJSONSafeInteger       = uint64(1<<53 - 1)
@@ -22,6 +22,7 @@ var (
 	ErrInvalidConfig        = errors.New("trace configuration is invalid")
 	ErrRunIDUnavailable     = errors.New("trace run identity is unavailable")
 	ErrTraceFileUnavailable = errors.New("trace file is unavailable")
+	ErrTraceExists          = errors.New("trace path already exists")
 )
 
 type Clock interface {
@@ -138,6 +139,9 @@ func OpenWithDependencies(
 	}
 	start := dependencies.Clock.Now()
 	file, err := dependencies.OpenFile(path)
+	if errors.Is(err, ErrTraceExists) {
+		return nil, ErrTraceExists
+	}
 	if err != nil || file == nil {
 		return nil, ErrTraceFileUnavailable
 	}
@@ -323,7 +327,10 @@ func classifyEvent(event clievent.Event) (progress bool, recognized bool) {
 		clievent.SenderTerminalObserved,
 		clievent.CatalogStorageObserved,
 		clievent.RootPrefetchObserved,
-		clievent.ProtocolOperationObserved:
+		clievent.ProtocolOperationObserved,
+		clievent.LaneSettlementObserved,
+		clievent.ObserverLossObserved,
+		clievent.ReceiverTerminationObserved:
 		return false, true
 	case clievent.TransferProgress:
 		return true, true

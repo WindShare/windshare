@@ -200,9 +200,9 @@ func (leftover *linuxOutputProbeLeftover) inspectRegularEntry(entry string, obse
 
 func (leftover *linuxOutputProbeLeftover) openRegularProbeFile(entry string) (*linuxOutputRegularFile, error) {
 	if _, publicProfile := linuxOutputProbePublicProfileNames[entry]; publicProfile {
-		return leftover.directory.openRegularFile(entry, false)
+		return leftover.directory.openRegularFile(entry, linuxOutputFileObserved)
 	}
-	return leftover.directory.openRegularFileExact(entry, false, linuxOutputStateFileMode)
+	return leftover.directory.openRegularFileExact(entry, linuxOutputFileObserved, linuxOutputStateFileMode)
 }
 
 func (leftover *linuxOutputProbeLeftover) inspectDirectoryEntry(entry string, observation *outputprobe.Observation) error {

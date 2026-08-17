@@ -276,7 +276,7 @@ func TestWindowsV3AdapterAuthoritiesFailClosedAfterClose(t *testing.T) {
 	platform := &windowsOutputV3Platform{}
 	directory := &windowsOutputV3Directory{}
 	entry := &windowsOutputV3EntryRef{}
-	file := &windowsOutputV3File{}
+	file := &windowsOutputV3MutableFile{state: &windowsOutputV3FileState{}}
 	lock := &windowsOutputV3Lock{}
 
 	checks := []struct {
@@ -302,7 +302,7 @@ func TestWindowsV3AdapterAuthoritiesFailClosedAfterClose(t *testing.T) {
 		{name: "install directory", run: func() error { _, err := directory.InstallDirectoryNoReplace(nil, "x"); return err }},
 		{name: "remove directory", run: func() error { return directory.RemoveDirectory("x", nil) }},
 		{name: "create file", run: func() error { _, err := directory.CreateFile("x", true, 0); return err }},
-		{name: "open file", run: func() error { _, err := directory.OpenFile("x", true, true); return err }},
+		{name: "open file", run: func() error { _, err := directory.OpenMutableFile("x", true); return err }},
 		{name: "link file", run: func() error { _, err := directory.LinkFileNoReplace(nil, "x"); return err }},
 		{name: "replace file", run: func() error { return directory.ReplacePrivateFile(nil, "x") }},
 		{name: "remove file", run: func() error { return directory.RemoveFile("x", nil) }},
@@ -337,7 +337,7 @@ func TestWindowsV3AdapterAuthoritiesFailClosedAfterClose(t *testing.T) {
 		t.Fatalf("idempotent close = %v", err)
 	}
 	closed := newWindowsOutputV3Lock(nil)
-	if closed.File() != nil || closed.file.native != nil || !closed.file.borrowed {
+	if closed.File() != nil || closed.file.state.native != nil || !closed.file.state.borrowed {
 		t.Fatal("empty native lock exposed a non-live file authority")
 	}
 	live := newWindowsOutputV3Lock(&windowsV3StableLock{file: &windowsV3File{}})

@@ -23,6 +23,9 @@ type Visitor interface {
 	VisitCatalogStorageObserved(CatalogStorageObserved) error
 	VisitRootPrefetchObserved(RootPrefetchObserved) error
 	VisitProtocolOperationObserved(ProtocolOperationObserved) error
+	VisitLaneSettlementObserved(LaneSettlementObserved) error
+	VisitObserverLossObserved(ObserverLossObserved) error
+	VisitReceiverTerminationObserved(ReceiverTerminationObserved) error
 }
 
 func acceptReady(visitor Visitor, value Ready) error {
@@ -154,10 +157,7 @@ func acceptTransferLifecycleObserved(visitor Visitor, value TransferLifecycleObs
 }
 
 func acceptFilesystemOutputObserved(visitor Visitor, value FilesystemOutputObserved) error {
-	_, operationOK := value.operation.Name()
-	if visitor == nil || !operationOK ||
-		value.hasReceiveOperation != value.receiveOperation.Valid() ||
-		value.hasFailure != value.failure.Valid() {
+	if visitor == nil || !validFilesystemOutputSpec(value.spec) {
 		return ErrInvalidEvent
 	}
 	return visitor.VisitFilesystemOutputObserved(value)
@@ -198,4 +198,28 @@ func acceptProtocolOperationObserved(visitor Visitor, value ProtocolOperationObs
 		return ErrInvalidEvent
 	}
 	return visitor.VisitProtocolOperationObserved(value)
+}
+
+func acceptLaneSettlementObserved(visitor Visitor, value LaneSettlementObserved) error {
+	_, routeOK := value.spec.Route.Name()
+	if visitor == nil || !value.spec.Session.Valid() || !value.spec.Lane.Valid() || !routeOK {
+		return ErrInvalidEvent
+	}
+	return visitor.VisitLaneSettlementObserved(value)
+}
+
+func acceptObserverLossObserved(visitor Visitor, value ObserverLossObserved) error {
+	_, categoryOK := value.spec.Category.Name()
+	_, reasonOK := value.spec.Reason.Name()
+	if visitor == nil || !value.spec.Command.Valid() || !categoryOK || !reasonOK || value.spec.Count == 0 {
+		return ErrInvalidEvent
+	}
+	return visitor.VisitObserverLossObserved(value)
+}
+
+func acceptReceiverTerminationObserved(visitor Visitor, value ReceiverTerminationObserved) error {
+	if visitor == nil || !validReceiverTerminationSpec(value.spec) {
+		return ErrInvalidEvent
+	}
+	return visitor.VisitReceiverTerminationObserved(value)
 }

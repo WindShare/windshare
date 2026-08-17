@@ -15,20 +15,24 @@ import (
 func TestFilesystemSummaryProjectionUsesClosedOperationVocabulary(t *testing.T) {
 	tests := []struct {
 		state  osfs.ResumeOperationState
-		reason string
+		reason osfs.FilesystemOutputStateReason
 		want   resumeOperationState
 	}{
-		{osfs.ResumeOperationIncomplete, "", resumeOperationIncomplete},
-		{osfs.ResumeOperationResumable, "", resumeOperationResumable},
-		{osfs.ResumeOperationCleanupPending, "cleanup-uncertain", resumeOperationCleanupPending},
-		{osfs.ResumeOperationNeedsAttention, "operation-ownership-unknown", resumeOperationNeedsAttention},
+		{osfs.ResumeOperationIncomplete, osfs.FilesystemOutputStateReasonNone, resumeOperationIncomplete},
+		{osfs.ResumeOperationResumable, osfs.FilesystemOutputStateReasonNone, resumeOperationResumable},
+		{osfs.ResumeOperationCleanupPending, osfs.FilesystemOutputStateCleanupUncertain, resumeOperationCleanupPending},
+		{osfs.ResumeOperationNeedsAttention, osfs.FilesystemOutputStateOperationOwnershipUnknown, resumeOperationNeedsAttention},
 	}
 	for _, test := range tests {
 		summary := validResumeSummaryView()
 		summary.state = test.state
 		summary.reason = test.reason
 		operation, err := projectResumeStateSummary(summary)
-		if err != nil || operation.state != test.want || operation.attention != test.reason {
+		wantAttention := ""
+		if test.reason != osfs.FilesystemOutputStateReasonNone {
+			wantAttention = test.reason.String()
+		}
+		if err != nil || operation.state != test.want || operation.attention != wantAttention {
 			t.Fatalf("state=%s operation=%+v err=%v", test.state, operation, err)
 		}
 	}
@@ -122,12 +126,12 @@ func TestResumeInventoryRejectsAmbiguousOrdinalsAndInvalidAttention(t *testing.T
 func TestFilesystemDiscardProjectionSeparatesCommandOutcomeFromInventoryHistory(t *testing.T) {
 	tests := []struct {
 		state  osfs.ResumeOperationState
-		reason string
+		reason osfs.FilesystemOutputStateReason
 		want   string
 	}{
-		{osfs.ResumeOperationDiscarded, "", resumeDiscardStatusDiscarded},
-		{osfs.ResumeOperationCleanupPending, "cleanup-uncertain", resumeDiscardStatusCleanupPending},
-		{osfs.ResumeOperationNeedsAttention, "operation-ownership-unknown", resumeDiscardStatusNeedsAttention},
+		{osfs.ResumeOperationDiscarded, osfs.FilesystemOutputStateReasonNone, resumeDiscardStatusDiscarded},
+		{osfs.ResumeOperationCleanupPending, osfs.FilesystemOutputStateCleanupUncertain, resumeDiscardStatusCleanupPending},
+		{osfs.ResumeOperationNeedsAttention, osfs.FilesystemOutputStateOperationOwnershipUnknown, resumeDiscardStatusNeedsAttention},
 	}
 	for _, test := range tests {
 		summary := validResumeSummaryView()
@@ -182,7 +186,7 @@ type fakeResumeSummaryView struct {
 	intent     transfer.ReceiveIntentDigest
 	state      osfs.ResumeOperationState
 	generation uint64
-	reason     string
+	reason     osfs.FilesystemOutputStateReason
 	items      []osfs.ResumeStateItem
 	busy       bool
 	valid      bool
@@ -193,7 +197,7 @@ func validResumeSummaryView() *fakeResumeSummaryView {
 	intent, _ := transfer.ReceiveIntentDigestFromBytes(bytes.Repeat([]byte{0x22}, transfer.ReceiveIntentDigestBytes))
 	return &fakeResumeSummaryView{
 		operation: operation, intent: intent, state: osfs.ResumeOperationIncomplete,
-		generation: 1, valid: true,
+		generation: 1, reason: osfs.FilesystemOutputStateReasonNone, valid: true,
 	}
 }
 
@@ -221,9 +225,9 @@ func (summary *fakeResumeSummaryView) StateGeneration() uint64 {
 	}
 	return summary.generation
 }
-func (summary *fakeResumeSummaryView) NeedsAttentionReason() string {
+func (summary *fakeResumeSummaryView) NeedsAttentionReason() osfs.FilesystemOutputStateReason {
 	if summary == nil {
-		return ""
+		return 0
 	}
 	return summary.reason
 }

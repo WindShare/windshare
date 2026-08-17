@@ -256,6 +256,9 @@ func (attempt *peerAttempt) finish(
 	if !attempt.recorder.admitted() {
 		attempt.recorder.fail(attemptFailure(result, primary, operationCanceled))
 	}
+	if cleanup != nil {
+		attempt.config.factory.reportDiagnostic(PeerDiagnosticSenderAttempt, PeerDiagnosticCleanupResidue)
+	}
 	return attempt.deliverFailure(
 		ctx,
 		result,

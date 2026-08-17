@@ -156,6 +156,9 @@ func TestSuccessfulAdmissionWinsEveryCompetingTerminalBoundary(t *testing.T) {
 			if actual.done != test.wantDone || !errors.Is(actual.err, test.wantErr) {
 				t.Fatalf("boundary result = %#v, want done=%t err=%v", actual, test.wantDone, test.wantErr)
 			}
+			waitForTest(t, func() bool {
+				return len(harness.collector.forAttempt(harness.attempt.binding().AttemptID)) == 7
+			})
 			observations := harness.collector.forAttempt(harness.attempt.binding().AttemptID)
 			if len(observations) != 7 || observations[len(observations)-1].Stage != SenderAttemptAdmitted {
 				t.Fatalf("admission terminal was overwritten: %#v", observations)

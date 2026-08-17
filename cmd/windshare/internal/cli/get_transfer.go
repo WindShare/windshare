@@ -101,8 +101,9 @@ func (a *App) connectGetReceiver(
 	}
 	prepared, err := liveshare.PrepareReceiver(liveshare.ReceiverConfig{
 		Capability: capability, DescriptorObject: connection.Descriptor(),
-		PeerControls:   v2signal.ReceiverControlValidator{},
-		ProtocolTracer: observation.protocolTracer(),
+		PeerControls:         v2signal.ReceiverControlValidator{},
+		ProtocolTracer:       observation.protocolTracer(),
+		LaneSettlementTracer: observation.laneSettlementTracer(),
 	})
 	if err != nil {
 		_ = connection.Close()
@@ -117,6 +118,7 @@ func (a *App) connectGetReceiver(
 		}
 		return nil, observation.commandFailure(ExitNetwork, err)
 	}
+	observation.registerLaneSet(runtime.LaneSet())
 	return &getReceiverSession{
 		connection: connection, prepared: prepared, runtime: runtime,
 	}, ExitOK
@@ -127,6 +129,7 @@ type getTransferExecution struct {
 	admission           receiverContentAdmission
 	monitorDone         <-chan struct{}
 	peer                *activeReceiverPeer
+	localStop           *receiverLocalStop
 	operation           getOutputOperation
 	destination         string
 	destinationAdjusted bool
@@ -136,12 +139,16 @@ type getTransferExecution struct {
 }
 
 func (execution *getTransferExecution) Close() {
+	execution.CloseWithReason(clievent.ReceiverLocalStopCaller)
+}
+
+func (execution *getTransferExecution) CloseWithReason(reason clievent.ReceiverLocalStopReason) {
 	if execution == nil || execution.closed {
 		return
 	}
 	execution.closed = true
 	if execution.peer != nil {
-		execution.peer.Close()
+		execution.peer.CloseWithReason(reason)
 	}
 	execution.SettleAdmission()
 }
@@ -191,20 +198,25 @@ func (a *App) prepareGetTransfer(
 	if err != nil {
 		return nil, observation.commandFailure(ExitFailure, err)
 	}
+	localStop := &receiverLocalStop{}
 	execution := &getTransferExecution{
 		runtime: runtime, admission: admission,
-		monitorDone: a.monitorReceiverAdmission(admission, runtime, observation),
+		monitorDone: a.monitorReceiverAdmission(admission, runtime, observation, localStop),
+		localStop:   localStop,
 	}
 	observePeer := func(signal receiverPeerSignal) {
 		paths.observePeer(signal)
 		if observeErr := admission.ObservePeer(signal); observeErr != nil {
 			observation.warning(observeErr)
+			localStop.record(clievent.ReceiverLocalStopOutputAdmission)
 			runtime.Close()
 		}
 	}
 	peer, rules, err := beginReceiverPlanning(
 		connectivity,
-		func() *activeReceiverPeer { return a.startReceiverPeer(ctx, runtime, observation, observePeer) },
+		func() *activeReceiverPeer {
+			return a.startReceiverPeer(ctx, runtime, observation, observePeer, localStop)
+		},
 		admission.AdmitRelayOnly,
 		func() (transfer.SelectionRules, error) { return selectionRules(request.only) },
 	)
@@ -212,18 +224,18 @@ func (a *App) prepareGetTransfer(
 	if err != nil {
 		if errors.Is(err, errReceiverP2PPathUnavailable) {
 			observation.commandFailureCode(ExitNetwork, clievent.FailurePeerNegotiation)
-			execution.Close()
+			execution.CloseWithReason(clievent.ReceiverLocalStopRuntimeSessionFailure)
 			return nil, ExitNetwork
 		}
 		observation.commandFailure(ExitUsage, err)
-		execution.Close()
+		execution.CloseWithReason(clievent.ReceiverLocalStopCaller)
 		return nil, ExitUsage
 	}
 	job, operation, destination, adjusted, code := a.buildGetTransferJob(
 		ctx, runtime, output, rules, observation,
 	)
 	if code != ExitOK {
-		execution.Close()
+		execution.CloseWithReason(clievent.ReceiverLocalStopOutputAdmission)
 		if errors.Is(admission.Err(), errReceiverP2PPathUnavailable) {
 			return nil, ExitNetwork
 		}
@@ -383,7 +395,7 @@ func reportGetOutputAdmissionFailure(observation getObservation, err error) int 
 	case errors.Is(err, errGetOutputOperationAlreadyRunning):
 		return observation.commandFailureCode(ExitFailure, clievent.FailureOutputFileAlreadyActive)
 	case errors.Is(err, errGetOutputOperationNeedsAttention):
-		return observation.commandFailureCode(ExitFailure, clievent.FailureCheckpointStateIO)
+		return observation.commandFailureCode(ExitFailure, clievent.FailureOutputNeedsAttention)
 	case errors.Is(err, errGetOutputOperationAmbiguous):
 		return observation.commandFailureCode(ExitFailure, clievent.FailureOutputOwnership)
 	case errors.Is(err, errGetOutputReservationContract), errors.Is(err, errGetOutputAdapterContract):

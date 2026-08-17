@@ -27,16 +27,23 @@ func TestNativeResumePresenceRejectsForeignOrUnavailablePrivateState(t *testing.
 	failed, err := NewNativeResumeRepository(
 		root,
 		func(string, bool) (outputcap.Platform, error) { return nil, failure },
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := failed.Page(context.Background(), resumeauthority.PageCursor{}, 1); !errors.Is(err, failure) {
 		t.Fatalf("page platform failure = %v", err)
+	} else if diagnostic, ok := FilesystemOutputDiagnosticFor(err); !ok ||
+		diagnostic.Stage != FilesystemOutputFailureDestinationBinding {
+		t.Fatalf("page platform diagnostic = (%+v, %t)", diagnostic, ok)
 	}
 	operation := incrementalTestIdentity16[receivecontract.OperationID](0xd1)
 	if _, err := failed.Acquire(context.Background(), operation); !errors.Is(err, failure) {
 		t.Fatalf("acquire platform failure = %v", err)
+	} else if diagnostic, ok := FilesystemOutputDiagnosticFor(err); !ok ||
+		diagnostic.Stage != FilesystemOutputFailureDestinationBinding {
+		t.Fatalf("acquire platform diagnostic = (%+v, %t)", diagnostic, ok)
 	}
 
 	nilRoot, err := NewNativeResumeRepository(
@@ -48,6 +55,7 @@ func TestNativeResumePresenceRejectsForeignOrUnavailablePrivateState(t *testing.
 			}
 			return nilRootResumePlatform{Platform: platform}, nil
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +70,7 @@ func TestNativeResumePresenceRejectsForeignOrUnavailablePrivateState(t *testing.
 	); err != nil {
 		t.Fatal(err)
 	}
-	foreign, err := NewNativeResumeRepository(foreignRoot, openOutputRuntimeTestPlatform)
+	foreign, err := NewNativeResumeRepository(foreignRoot, openOutputRuntimeTestPlatform, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +89,7 @@ func TestNativeResumePresenceRejectsForeignOrUnavailablePrivateState(t *testing.
 		t.Fatal(err)
 	}
 	foreignRegistry, err := NewNativeResumeRepository(
-		foreignRegistryRoot, openOutputRuntimeTestPlatform,
+		foreignRegistryRoot, openOutputRuntimeTestPlatform, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +108,7 @@ func TestNativeResumePagingStaysOperationScopedAcrossMultipleSiblings(t *testing
 	second := openOrdinaryResumeSession(t, root, 0xd8, 1)
 	pauseOrdinaryResumeFixture(t, second)
 
-	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +141,7 @@ func TestNativeResumeLeaseCancellationAndCachedAuthorityAreExplicit(t *testing.T
 	root := newRuntimeTestRootSpec(t).path
 	fixture := openOrdinaryResumeSession(t, root, 0xe1, 1)
 	pauseOrdinaryResumeFixture(t, fixture)
-	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform)
+	repository, err := NewNativeResumeRepository(root, openOutputRuntimeTestPlatform, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

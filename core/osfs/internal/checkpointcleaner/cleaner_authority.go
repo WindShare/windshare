@@ -219,7 +219,7 @@ func readBoundedRecord(directory outputcap.Directory, name string, limit int) ([
 	if !exact || kind != outputcap.EntryRegularFile {
 		return nil, outputcap.ErrUnsafeNamespace
 	}
-	file, err := directory.OpenFile(name, true, false)
+	file, err := directory.OpenObservedFile(name, true)
 	if err != nil {
 		return nil, errors.Join(err, closeFile(file))
 	}
@@ -268,7 +268,7 @@ func closeDirectory(directory outputcap.Directory) error {
 	return directory.Close()
 }
 
-func closeFile(file outputcap.File) error {
+func closeFile(file outputcap.FileIdentity) error {
 	if file == nil {
 		return nil
 	}
