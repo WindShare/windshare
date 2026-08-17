@@ -24,13 +24,13 @@ import (
 var errReceiverClosed = errors.New("live share receiver is closed")
 
 type ReceiverConfig struct {
-	Capability           link.Link
-	DescriptorObject     []byte
-	Random               io.Reader
-	CatalogProgress      sessionruntime.CatalogScanProgressObserver
-	PeerControls         sessionruntime.ReceiverPeerSemantics
-	ProtocolTracer       sessionruntime.ProtocolOperationTracer
-	LaneSettlementTracer transfer.LaneSettlementTracer
+	Capability                        link.Link
+	DescriptorObject                  []byte
+	Random                            io.Reader
+	CatalogProgress                   sessionruntime.CatalogScanProgressObserver
+	PeerControls                      sessionruntime.ReceiverPeerSemantics
+	ProtocolTracer                    sessionruntime.ProtocolOperationTracer
+	LaneSettlementObservationCapacity transfer.LaneSettlementObservationCapacity
 }
 
 type PreparedReceiver struct {
@@ -126,9 +126,9 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 		CatalogVerifier: verifier, RecordOpener: opener,
 		ReassemblyProcess: processReassembly, ReassemblyShare: shareReassembly, PlaintextProcess: plaintext,
 		Random: config.Random, CatalogProgress: config.CatalogProgress, PeerControls: config.PeerControls,
-		ProtocolTracer:       config.ProtocolTracer,
-		LaneSettlementTracer: config.LaneSettlementTracer,
-		RuntimeResources:     resources,
+		ProtocolTracer:                    config.ProtocolTracer,
+		LaneSettlementObservationCapacity: config.LaneSettlementObservationCapacity,
+		RuntimeResources:                  resources,
 	})
 	if err != nil {
 		clear(authKey)

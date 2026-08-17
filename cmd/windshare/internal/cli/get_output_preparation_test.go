@@ -12,6 +12,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/windshare/internal/clievent"
 	"github.com/windshare/windshare/cmd/windshare/internal/runtrace"
+	"github.com/windshare/windshare/cmd/windshare/internal/terminalcanvas"
 	"github.com/windshare/windshare/core/link"
 )
 
@@ -94,7 +95,7 @@ func TestGetExistingTracePrecedesOutputMutation(t *testing.T) {
 	app := &App{
 		Stderr: stderr,
 		openUserTrace: func(
-			string,
+			runtrace.Target,
 			clievent.Command,
 			runtrace.Config,
 			runtrace.Dependencies,
@@ -112,8 +113,10 @@ func TestGetExistingTracePrecedesOutputMutation(t *testing.T) {
 	if outputCalls != 0 {
 		t.Fatalf("trace open failure allowed %d output mutation(s)", outputCalls)
 	}
-	if !strings.Contains(stderr.String(), "already exists") {
-		t.Fatalf("trace open diagnostic=%q", stderr.String())
+	for _, want := range []string{"already exists", "prior evidence was preserved", "command/output state was untouched", "--trace-dir"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("trace open diagnostic=%q missing %q", stderr.String(), want)
+		}
 	}
 }
 
@@ -132,8 +135,53 @@ func TestGetNativeExistingTraceReturnsTypedFailureWithoutPanic(t *testing.T) {
 	if code := app.Run(t.Context(), []string{"get", encoded, "--trace", tracePath}); code != ExitFailure {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "already exists") {
-		t.Fatalf("trace open diagnostic=%q", stderr.String())
+	for _, want := range []string{"already exists", "prior evidence was preserved", "command/output state was untouched", "--trace-dir"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("trace open diagnostic=%q missing %q", stderr.String(), want)
+		}
+	}
+	retained, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(retained) != "retained\n" {
+		t.Fatalf("existing trace was changed: %q", retained)
+	}
+}
+
+func TestGetTraceDirectoryOwnsAndReportsRunFileBeforeOutputConstruction(t *testing.T) {
+	capability := newGetOutputPreparationCapability(t, "wss://relay.example")
+	encoded, err := capability.URL("https://app.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	traceDirectory := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	outputCalls := 0
+	app := &App{
+		Stdout: &stdout, Stderr: &stderr,
+		getOutputFactory: getOutputAuthorityFactoryFunc(func(getOutputAuthorityConfig) (getOutputAuthority, error) {
+			outputCalls++
+			entries, readErr := os.ReadDir(traceDirectory)
+			if readErr != nil || len(entries) != outputCalls {
+				t.Fatalf("trace entries before output construction = %v, %v", entries, readErr)
+			}
+			for _, entry := range entries {
+				path := filepath.Join(traceDirectory, entry.Name())
+				if strings.Count(stderr.String(), terminalcanvas.EscapeText(path)) != 1 {
+					t.Fatalf("generated trace path was not reported exactly once before output construction: %q", stderr.String())
+				}
+			}
+			return nil, errors.New("output construction canary")
+		}),
+	}
+	for run := range 2 {
+		if code := app.runGet(t.Context(), []string{"--trace-dir", traceDirectory, encoded}); code != ExitFailure {
+			t.Fatalf("run %d exit=%d stderr=%q", run+1, code, stderr.String())
+		}
+	}
+	if outputCalls != 2 || stdout.Len() != 0 {
+		t.Fatalf("output calls=%d stdout=%q", outputCalls, stdout.String())
 	}
 }
 

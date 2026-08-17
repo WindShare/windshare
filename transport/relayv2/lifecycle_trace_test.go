@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,12 +38,8 @@ func TestRelayLifecycleConstructorsProduceStageShapes(t *testing.T) {
 }
 
 func TestRelayLifecycleOrdinarySuccessIsSuppressed(t *testing.T) {
-	var observed atomic.Uint64
-	link := newLinkWithTracer(
-		context.Background(),
-		newScriptedSocket(),
-		false,
-		LifecycleTraceFunc(func(LifecycleTrace) { observed.Add(1) }),
+	link := newLinkWithLifecycleStream(
+		context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 	)
 	channel := link.installFixed(relaySessionID(92))
 
@@ -57,66 +52,58 @@ func TestRelayLifecycleOrdinarySuccessIsSuppressed(t *testing.T) {
 	if !ok {
 		t.Fatal("ordinary send did not reach provider ownership")
 	}
-	request.receipt <- nil
+	link.resolveRequest(request, nil, true)
 	if err := waitRelayResult(t, result); err != nil {
 		t.Fatalf("ordinary send: %v", err)
 	}
-
-	link.traces.mu.Lock()
-	queued, dropped := len(link.traces.queue), link.traces.loss.Total()
-	link.traces.mu.Unlock()
-	if observed.Load() != 0 || queued != 0 || dropped != 0 {
-		t.Fatalf("ordinary success produced lifecycle work: observed=%d queued=%d dropped=%d", observed.Load(), queued, dropped)
+	select {
+	case event := <-link.lifecycleTrace():
+		t.Fatalf("ordinary success produced lifecycle work: %+v", event)
+	default:
 	}
 	link.stop(nil)
 }
 
-func TestRelayLifecycleAcceptedProviderFailureRemainsObservable(t *testing.T) {
-	events := make(chan LifecycleTrace, 4)
-	link := newLinkWithTracer(
-		context.Background(),
-		newScriptedSocket(),
-		false,
-		LifecycleTraceFunc(func(event LifecycleTrace) { events <- event }),
-	)
-	channel := link.installFixed(relaySessionID(96))
-	result := make(chan error, 1)
-	providerFailure := errors.New("provider failed after acceptance")
-	go func() {
-		result <- channel.Send(context.Background(), framechannel.Frame("ordinary"))
-	}()
-	requireQueuedRequests(t, link, channel.id, 1)
-	request, ok := link.takeRequest()
-	if !ok {
-		t.Fatal("ordinary send did not reach provider ownership")
-	}
-	request.receipt <- providerFailure
-	if err := waitRelayResult(t, result); !errors.Is(err, providerFailure) ||
-		framechannel.SendDispositionOf(err) != framechannel.SendAccepted {
-		t.Fatalf("accepted provider failure = %v disposition=%d", err, framechannel.SendDispositionOf(err))
-	}
-	event := waitLifecycleTrace(t, events, LifecycleSendAdmitted)
-	if event.RelaySessionID != channel.id || event.OperationID != request.operationID || event.Terminal ||
-		event.Disposition != framechannel.SendAccepted || event.RetirementSource != LifecycleRetirementNone ||
-		event.Cause != LifecycleCauseTransport || event.DrainCause != LifecycleCauseNone {
-		t.Fatalf("accepted provider failure trace = %+v", event)
-	}
-	link.stop(nil)
-}
+func TestRelayLifecycleFailureAndRefusalRemainObservable(t *testing.T) {
+	t.Run("accepted provider failure", func(t *testing.T) {
+		link := newLinkWithLifecycleStream(
+			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
+		)
+		channel := link.installFixed(relaySessionID(96))
+		result := make(chan error, 1)
+		providerFailure := errors.New("provider failed after acceptance")
+		go func() {
+			result <- channel.Send(context.Background(), framechannel.Frame("ordinary"))
+		}()
+		requireQueuedRequests(t, link, channel.id, 1)
+		request, ok := link.takeRequest()
+		if !ok {
+			t.Fatal("ordinary send did not reach provider ownership")
+		}
+		link.resolveRequest(request, providerFailure, true)
+		if err := waitRelayResult(t, result); !errors.Is(err, providerFailure) ||
+			framechannel.SendDispositionOf(err) != framechannel.SendAccepted {
+			t.Fatalf("accepted provider failure = %v disposition=%d", err, framechannel.SendDispositionOf(err))
+		}
+		event := waitLifecycleTrace(t, link.lifecycleTrace(), LifecycleSendAdmitted)
+		if event.RelaySessionID != channel.id || event.OperationID != request.operationID || event.Terminal ||
+			event.Disposition != framechannel.SendAccepted || event.RetirementSource != LifecycleRetirementNone ||
+			event.Cause != LifecycleCauseTransport || event.DrainCause != LifecycleCauseNone {
+			t.Fatalf("accepted provider failure trace = %+v", event)
+		}
+		link.stop(nil)
+	})
 
-func TestRelayLifecycleRefusalRollbackAndTerminalFailureRemainObservable(t *testing.T) {
 	t.Run("rejection", func(t *testing.T) {
-		events := make(chan LifecycleTrace, 4)
-		link := newLinkWithTracer(
-			context.Background(), newScriptedSocket(), false,
-			LifecycleTraceFunc(func(event LifecycleTrace) { events <- event }),
+		link := newLinkWithLifecycleStream(
+			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 		)
 		channel := link.installFixed(relaySessionID(97))
 		err := channel.Send(context.Background(), nil)
 		if !errors.Is(err, ErrFrameBounds) || framechannel.SendDispositionOf(err) != framechannel.SendRejected {
 			t.Fatalf("invalid send = %v disposition=%d", err, framechannel.SendDispositionOf(err))
 		}
-		event := waitLifecycleTrace(t, events, LifecycleSendRejected)
+		event := waitLifecycleTrace(t, link.lifecycleTrace(), LifecycleSendRejected)
 		if event.RetirementSource != LifecycleRetirementNone || event.Cause != LifecycleCauseFrameBounds ||
 			event.DrainCause != LifecycleCauseNone {
 			t.Fatalf("rejection trace = %+v", event)
@@ -125,10 +112,8 @@ func TestRelayLifecycleRefusalRollbackAndTerminalFailureRemainObservable(t *test
 	})
 
 	t.Run("rollback", func(t *testing.T) {
-		events := make(chan LifecycleTrace, 4)
-		link := newLinkWithTracer(
-			context.Background(), newScriptedSocket(), false,
-			LifecycleTraceFunc(func(event LifecycleTrace) { events <- event }),
+		link := newLinkWithLifecycleStream(
+			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 		)
 		channel := link.installFixed(relaySessionID(98))
 		ctx, cancel := context.WithCancel(context.Background())
@@ -140,7 +125,7 @@ func TestRelayLifecycleRefusalRollbackAndTerminalFailureRemainObservable(t *test
 			framechannel.SendDispositionOf(err) != framechannel.SendRejected {
 			t.Fatalf("rolled-back send = %v disposition=%d", err, framechannel.SendDispositionOf(err))
 		}
-		event := waitLifecycleTrace(t, events, LifecycleSendRolledBack)
+		event := waitLifecycleTrace(t, link.lifecycleTrace(), LifecycleSendRolledBack)
 		if event.RetirementSource != LifecycleRetirementNone || event.Cause != LifecycleCauseCanceled ||
 			event.DrainCause != LifecycleCauseNone {
 			t.Fatalf("rollback trace = %+v", event)
@@ -149,10 +134,8 @@ func TestRelayLifecycleRefusalRollbackAndTerminalFailureRemainObservable(t *test
 	})
 
 	t.Run("terminal provider failure", func(t *testing.T) {
-		events := make(chan LifecycleTrace, 8)
-		link := newLinkWithTracer(
-			context.Background(), newScriptedSocket(), false,
-			LifecycleTraceFunc(func(event LifecycleTrace) { events <- event }),
+		link := newLinkWithLifecycleStream(
+			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 		)
 		channel := link.installFixed(relaySessionID(99))
 		result := make(chan error, 1)
@@ -165,12 +148,12 @@ func TestRelayLifecycleRefusalRollbackAndTerminalFailureRemainObservable(t *test
 		if !ok {
 			t.Fatal("terminal send did not reach provider ownership")
 		}
-		request.receipt <- providerFailure
+		link.resolveRequest(request, providerFailure, true)
 		if err := waitRelayResult(t, result); !errors.Is(err, providerFailure) ||
 			framechannel.SendDispositionOf(err) != framechannel.SendAccepted {
 			t.Fatalf("terminal provider failure = %v disposition=%d", err, framechannel.SendDispositionOf(err))
 		}
-		event := waitLifecycleTrace(t, events, LifecycleTerminalSettled)
+		event := waitLifecycleTrace(t, link.lifecycleTrace(), LifecycleTerminalSettled)
 		if !event.Terminal || event.Disposition != framechannel.SendAccepted ||
 			event.RetirementSource != LifecycleRetirementNone || event.Cause != LifecycleCauseTransport ||
 			event.DrainCause != LifecycleCauseNone {
@@ -180,50 +163,24 @@ func TestRelayLifecycleRefusalRollbackAndTerminalFailureRemainObservable(t *test
 	})
 }
 
-func TestRelayLifecycleNilTracerHasNoDispatcher(t *testing.T) {
-	link := newLinkWithTracer(context.Background(), newScriptedSocket(), false, nil)
-	if link.traces != nil {
-		t.Fatal("nil tracer allocated a relay lifecycle dispatcher")
+func TestRelayLifecycleDisabledHasNoProducerWork(t *testing.T) {
+	link := newLink(context.Background(), newScriptedSocket(), false)
+	if link.traces != nil || link.lifecycleTrace() != nil {
+		t.Fatal("disabled lifecycle observations allocated a producer")
 	}
 	link.stop(nil)
+	if completion := link.completeObservations(); completion != (LifecycleObservationCompletion{}) {
+		t.Fatalf("disabled completion = %+v", completion)
+	}
 }
 
-func TestRelayLifecycleBlockedObserverCannotDelayTransport(t *testing.T) {
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	defer close(release)
-	var first sync.Once
-	link := newLinkWithTracer(
-		context.Background(),
-		newScriptedSocket(),
-		false,
-		LifecycleTraceFunc(func(LifecycleTrace) {
-			first.Do(func() {
-				close(entered)
-				<-release
-			})
-		}),
-	)
+func TestRelayLifecycleNoReaderSaturationCannotDelayShutdown(t *testing.T) {
+	link := newLinkWithLifecycleStream(context.Background(), newScriptedSocket(), false, 1)
 	channel := link.installFixed(relaySessionID(93))
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	sendResult := make(chan error, 1)
-	go func() { sendResult <- channel.Send(canceled, framechannel.Frame("rejected")) }()
-	if err := waitRelayResult(t, sendResult); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled send = %v", err)
-	}
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("relay observer did not enter blocking callback")
+	if err := channel.Send(context.Background(), nil); !errors.Is(err, ErrFrameBounds) {
+		t.Fatalf("invalid send = %v", err)
 	}
 
-	closeResult := make(chan error, 1)
-	go func() { closeResult <- channel.Close() }()
-	if err := waitRelayResult(t, closeResult); err != nil {
-		t.Fatalf("channel close: %v", err)
-	}
 	stopped := make(chan struct{})
 	go func() {
 		link.stop(nil)
@@ -232,85 +189,229 @@ func TestRelayLifecycleBlockedObserverCannotDelayTransport(t *testing.T) {
 	select {
 	case <-stopped:
 	case <-time.After(time.Second):
-		t.Fatal("blocked observer delayed relay link close")
+		t.Fatal("full lifecycle stream delayed relay shutdown")
+	}
+
+	completion := link.completeObservations()
+	if completion.Enqueued != 1 || completion.Loss.CapacityDropped == 0 {
+		t.Fatalf("saturated completion = %+v", completion)
+	}
+	var events []LifecycleTrace
+	for event := range link.lifecycleTrace() {
+		events = append(events, event)
+	}
+	if len(events) != 1 || events[0].Stage != LifecycleSendRejected {
+		t.Fatalf("retained saturated prefix = %+v", events)
 	}
 }
 
-func TestRelayLifecycleDispatcherCoalescesOverflowAndPanic(t *testing.T) {
-	t.Run("overflow", func(t *testing.T) {
-		const overflow = uint64(5)
-		entered := make(chan struct{})
-		release := make(chan struct{})
-		observed := make(chan LifecycleTrace, relayLifecycleQueueCapacity+2)
-		var first sync.Once
-		dispatcher := newLifecycleDispatcher(17, LifecycleTraceFunc(func(event LifecycleTrace) {
-			first.Do(func() {
-				close(entered)
-				<-release
-			})
-			observed <- event
-		}))
-		dispatcher.emit(terminalReservedTrace(relaySessionID(94), 1))
-		select {
-		case <-entered:
-		case <-time.After(time.Second):
-			t.Fatal("relay observer did not enter overflow gate")
-		}
-		for operationID := uint64(1); operationID <= relayLifecycleQueueCapacity+overflow; operationID++ {
-			dispatcher.emit(sendRejectedTrace(
-				relaySessionID(94), operationID, false,
-				framechannel.SendRejected, LifecycleCauseCanceled,
-			))
-		}
-		dispatcher.shutdown()
-		close(release)
-		for {
-			select {
-			case event := <-observed:
-				if event.Stage == LifecycleTraceDropped {
-					if event.LinkID != 17 || event.Dropped != overflow {
-						t.Fatalf("drop summary = %+v, want link=17 dropped=%d", event, overflow)
-					}
-					assertRelayLifecycleSourceShape(t, event)
-					completion := dispatcher.complete(context.Background())
-					if !completion.Drained || completion.Loss.QueueOverflow != overflow ||
-						completion.Loss.Total() != overflow {
-						t.Fatalf("overflow completion = %+v", completion)
-					}
+func TestRelayLifecyclePublishesLinkScopedDropSummaryWhenSpaceReturns(t *testing.T) {
+	source := newLifecycleSource(17, 2)
+	sessionID := relaySessionID(94)
+	source.emit(sendRejectedTrace(sessionID, 1, false, framechannel.SendRejected, LifecycleCauseCanceled))
+	source.emit(sendRejectedTrace(sessionID, 2, false, framechannel.SendRejected, LifecycleCauseCanceled))
+	if source.emit(sendRejectedTrace(sessionID, 3, false, framechannel.SendRejected, LifecycleCauseCanceled)) {
+		t.Fatal("saturated lifecycle event was retained")
+	}
+
+	<-source.stream()
+	<-source.stream()
+	if !source.emit(sendRejectedTrace(sessionID, 4, false, framechannel.SendRejected, LifecycleCauseCanceled)) {
+		t.Fatal("lifecycle source did not resume after consumer progress")
+	}
+	summary := <-source.stream()
+	if summary.LinkID != 17 || summary.Stage != LifecycleTraceDropped || summary.Dropped != 1 {
+		t.Fatalf("drop summary = %+v", summary)
+	}
+	assertRelayLifecycleSourceShape(t, summary)
+	if event := <-source.stream(); event.OperationID != 4 {
+		t.Fatalf("post-gap event = %+v", event)
+	}
+
+	completion := source.complete()
+	if completion.Enqueued != 4 || completion.Loss.CapacityDropped != 1 ||
+		completion.Loss.Total() != 1 {
+		t.Fatalf("summary completion = %+v", completion)
+	}
+}
+
+func TestRelayLifecycleCompletionIsImmediateIdempotentAndAuthoritative(t *testing.T) {
+	source := newLifecycleSource(18, 1)
+	sessionID := relaySessionID(95)
+	source.emit(sendRejectedTrace(sessionID, 1, false, framechannel.SendRejected, LifecycleCauseCanceled))
+	source.emit(sendRejectedTrace(sessionID, 2, false, framechannel.SendRejected, LifecycleCauseCanceled))
+
+	first := source.complete()
+	second := source.complete()
+	if first != second {
+		t.Fatalf("completion changed: first=%+v second=%+v", first, second)
+	}
+	if first.Enqueued != 1 || first.Loss.CapacityDropped != 1 {
+		t.Fatalf("completion = %+v", first)
+	}
+	if source.emit(sendRejectedTrace(sessionID, 3, false, framechannel.SendRejected, LifecycleCauseCanceled)) {
+		t.Fatal("publication succeeded after completion")
+	}
+	if event, open := <-source.stream(); !open || event.OperationID != 1 {
+		t.Fatalf("retained event after completion open=%t event=%+v", open, event)
+	}
+	if _, open := <-source.stream(); open {
+		t.Fatal("lifecycle stream remained open after retained prefix")
+	}
+}
+
+func TestRelayLifecycleDropSummaryPrecedesRetainedFinalFact(t *testing.T) {
+	source := newLifecycleSource(19, 2)
+	sessionID := relaySessionID(103)
+	for operationID := uint64(1); operationID <= 2; operationID++ {
+		source.emit(sendRejectedTrace(
+			sessionID, operationID, false, framechannel.SendRejected, LifecycleCauseCanceled,
+		))
+	}
+	source.emit(sendRejectedTrace(
+		sessionID, 3, false, framechannel.SendRejected, LifecycleCauseCanceled,
+	))
+	<-source.stream()
+	<-source.stream()
+
+	completion := source.completeWithFinal(linkClosedTrace(
+		4, LifecycleRetirementLinkFailure, LifecycleCauseTransport,
+	))
+	var events []LifecycleTrace
+	for event := range source.stream() {
+		events = append(events, event)
+	}
+	if len(events) != 2 || events[0].Stage != LifecycleTraceDropped ||
+		events[0].Dropped != 1 || events[1].Stage != LifecycleLinkClosed {
+		t.Fatalf("final gap ordering = %+v", events)
+	}
+	if completion.Enqueued != 4 || completion.Loss.CapacityDropped != 1 {
+		t.Fatalf("final completion = %+v", completion)
+	}
+}
+
+func TestRelayLifecycleFailurePublishesAdmittedSendResultsBeforeCompletion(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		terminal bool
+		stage    LifecycleStage
+	}{
+		{name: "ordinary failure", stage: LifecycleSendAdmitted},
+		{name: "terminal settlement", terminal: true, stage: LifecycleTerminalSettled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			link := newLinkWithLifecycleStream(
+				context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
+			)
+			channel := link.installFixed(relaySessionID(104))
+			result := make(chan error, 1)
+			go func() {
+				if test.terminal {
+					result <- channel.SendTerminal(context.Background(), framechannel.Frame("owned"))
 					return
 				}
-			case <-time.After(time.Second):
-				t.Fatal("relay overflow did not publish its coalesced drop summary")
+				result <- channel.Send(context.Background(), framechannel.Frame("owned"))
+			}()
+			requireQueuedRequests(t, link, channel.id, 1)
+			request, ok := link.takeRequest()
+			if !ok {
+				t.Fatal("accepted send did not reach write ownership")
 			}
-		}
-	})
 
-	t.Run("observer panic", func(t *testing.T) {
-		var calls atomic.Uint64
-		dispatcher := newLifecycleDispatcher(18, LifecycleTraceFunc(func(LifecycleTrace) {
-			calls.Add(1)
-			panic("observer panic must remain outside transport authority")
-		}))
-		dispatcher.emit(terminalReservedTrace(relaySessionID(95), 1))
-		dispatcher.shutdown()
-		completion := dispatcher.complete(context.Background())
-		if !completion.Drained || completion.Delivered != 0 || calls.Load() != 1 ||
-			completion.Loss.ObserverPanic != 1 || completion.Loss.Total() != 1 {
-			t.Fatalf("panic completion = %+v", completion)
-		}
-	})
+			linkFailure := errors.New("failure while accepted write is unresolved")
+			stopped := make(chan struct{})
+			go func() {
+				link.stop(linkFailure)
+				close(stopped)
+			}()
+			select {
+			case <-stopped:
+			case <-time.After(time.Second):
+				t.Fatal("link did not resolve the admitted send during failure shutdown")
+			}
+			if err := waitRelayResult(t, result); !errors.Is(err, linkFailure) {
+				t.Fatalf("accepted send result = %v", err)
+			}
 
-	t.Run("saturation", func(t *testing.T) {
-		dispatcher := &lifecycleDispatcher{
-			linkID: 19,
-			loss:   LifecycleObservationLoss{QueueOverflow: ^uint64(0)},
-			queue:  make([]LifecycleTrace, 0, relayLifecycleQueueCapacity),
+			var events []LifecycleTrace
+			for event := range link.lifecycleTrace() {
+				events = append(events, event)
+			}
+			acceptedIndex, closedIndex := -1, -1
+			for index, event := range events {
+				switch event.Stage {
+				case test.stage:
+					if event.OperationID == request.operationID && event.Cause == LifecycleCauseClosed {
+						acceptedIndex = index
+					}
+				case LifecycleLinkClosed:
+					closedIndex = index
+				}
+			}
+			if acceptedIndex < 0 || closedIndex < 0 || acceptedIndex >= closedIndex {
+				t.Fatalf("accepted-result/link-close ordering = %+v", events)
+			}
+			completion := link.completeObservations()
+			if completion.Enqueued != uint64(len(events)) || completion.Loss.Total() != 0 {
+				t.Fatalf("completion = %+v events=%d", completion, len(events))
+			}
+		})
+	}
+}
+
+func TestRelayLifecycleShutdownOrdersTerminalFactBeforeStreamCloseAndDone(t *testing.T) {
+	const concurrentEmits = 32
+	link := newLinkWithLifecycleStream(context.Background(), newScriptedSocket(), false, 128)
+	channel := link.installFixed(relaySessionID(102))
+
+	var publishers sync.WaitGroup
+	publishers.Add(concurrentEmits)
+	for range concurrentEmits {
+		go func() {
+			defer publishers.Done()
+			_ = channel.Send(context.Background(), nil)
+		}()
+	}
+	stopDone := make(chan struct{})
+	go func() {
+		link.stop(nil)
+		close(stopDone)
+	}()
+	publishers.Wait()
+	select {
+	case <-stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("concurrent lifecycle publication delayed stop")
+	}
+
+	var events []LifecycleTrace
+	for event := range link.lifecycleTrace() {
+		events = append(events, event)
+	}
+	if len(events) == 0 || events[len(events)-1].Stage != LifecycleLinkClosed {
+		t.Fatalf("terminal lifecycle ordering = %+v", events)
+	}
+	first := link.completeObservations()
+	var completions [8]LifecycleObservationCompletion
+	var completionsWait sync.WaitGroup
+	completionsWait.Add(len(completions))
+	for index := range completions {
+		go func() {
+			defer completionsWait.Done()
+			completions[index] = link.completeObservations()
+		}()
+	}
+	completionsWait.Wait()
+	for index, completion := range completions {
+		if completion != first {
+			t.Fatalf("completion[%d]=%+v want %+v", index, completion, first)
 		}
-		dispatcher.flushDropSummaryLocked()
-		if len(dispatcher.queue) != 1 || dispatcher.queue[0].Dropped != ^uint64(0) {
-			t.Fatalf("saturated drop summary = %+v", dispatcher.queue)
-		}
-	})
+	}
+	select {
+	case <-link.done:
+	default:
+		t.Fatal("link done was not closed after lifecycle stream completion")
+	}
 }
 
 func TestRelayLifecycleValidatorOwnsRetirementConsequenceShape(t *testing.T) {
@@ -341,54 +442,6 @@ func TestRelayLifecycleValidatorOwnsRetirementConsequenceShape(t *testing.T) {
 				t.Fatalf("violation=%d want=%d event=%+v", got, test.want, mutated)
 			}
 		})
-	}
-}
-
-func TestRelayLifecycleCompletionAccountsTimeoutAndStopsCallbackAdmission(t *testing.T) {
-	entered := make(chan struct{})
-	exited := make(chan struct{})
-	var calls atomic.Uint64
-	var committed atomic.Uint64
-	dispatcher := newLifecycleDispatcher(45, LifecycleContextTraceFunc(func(ctx context.Context, _ LifecycleTrace) {
-		if calls.Add(1) == 1 {
-			close(entered)
-			<-ctx.Done()
-			if ctx.Err() == nil {
-				committed.Add(1)
-			}
-			close(exited)
-		}
-	}))
-	dispatcher.callbackLimit = 10 * time.Millisecond
-	for operationID := uint64(1); operationID <= 4; operationID++ {
-		dispatcher.emit(sendRejectedTrace(
-			relaySessionID(102), operationID, false,
-			framechannel.SendRejected, LifecycleCauseCanceled,
-		))
-	}
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("observer callback did not begin")
-	}
-	completion := dispatcher.complete(context.Background())
-	if completion.Drained || completion.Delivered != 0 ||
-		completion.Loss.CallbackTimeout != 1 || completion.Loss.Undrained != 3 {
-		t.Fatalf("completion = %+v", completion)
-	}
-	dispatcher.emit(sendRejectedTrace(
-		relaySessionID(102), 5, false, framechannel.SendRejected, LifecycleCauseCanceled,
-	))
-	select {
-	case <-exited:
-	case <-time.After(time.Second):
-		t.Fatal("revoked relay callback did not exit")
-	}
-	if calls.Load() != 1 {
-		t.Fatalf("callbacks begun after completion = %d", calls.Load())
-	}
-	if committed.Load() != 0 {
-		t.Fatalf("revoked callback committed %d late fact(s)", committed.Load())
 	}
 }
 

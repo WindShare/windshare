@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"sync"
 	"testing"
 
 	pion "github.com/pion/webrtc/v4"
@@ -209,31 +208,81 @@ func TestWebRTCLifecycleSourceShapes(t *testing.T) {
 	}
 }
 
-func TestWebRTCLifecycleNilTracerHasNoDispatcher(t *testing.T) {
+func TestWebRTCLifecycleDisabledHasNilStreamAndNoSource(t *testing.T) {
 	fake := newFakeDataChannel(pion.DataChannelStateOpen)
 	channel, err := newChannelWithRuntime(fake, defaultFlowControl, channelRuntime{})
 	if err != nil {
 		t.Fatalf("construct channel: %v", err)
 	}
 	if channel.traces != nil || channel.lifecycle.traces != nil {
-		t.Fatal("nil tracer allocated a WebRTC lifecycle dispatcher")
+		t.Fatal("disabled lifecycle stream allocated a source")
+	}
+	if channel.LifecycleTrace() != nil {
+		t.Fatal("disabled lifecycle stream is non-nil")
 	}
 	if err := channel.Close(); err != nil {
 		t.Fatalf("close channel: %v", err)
 	}
+	if completion := channel.CompleteObservations(); completion != (LifecycleObservationCompletion{}) {
+		t.Fatalf("disabled completion = %+v", completion)
+	}
+	var nilChannel *Channel
+	if nilChannel.LifecycleTrace() != nil ||
+		nilChannel.CompleteObservations() != (LifecycleObservationCompletion{}) {
+		t.Fatal("nil channel exposed lifecycle observations")
+	}
 }
 
-func TestWebRTCLifecycleDropCounterSaturates(t *testing.T) {
-	dispatcher := &lifecycleTraceDispatcher{
-		tracer: LifecycleTraceFunc(func(LifecycleTrace) {}),
-		queue:  make([]LifecycleTrace, lifecycleTraceQueueCapacity),
-		loss:   LifecycleObservationLoss{QueueOverflow: ^uint64(0)},
+func TestWebRTCLifecycleSourcePublishesCumulativeDropSummary(t *testing.T) {
+	event := func(transition LifecycleTransition) LifecycleTrace {
+		return channelLifecycleTrace(
+			41, transition, framechannel.Closed, LifecycleTerminalNone, nil,
+		)
 	}
-	dispatcher.wake = sync.NewCond(&dispatcher.mu)
-	dispatcher.emit(LifecycleTrace{ChannelID: 1})
-	if dispatcher.loss.QueueOverflow != ^uint64(0) {
-		t.Fatalf("drop count wrapped to %d", dispatcher.loss.QueueOverflow)
-	}
+
+	t.Run("summary precedes the post-gap event", func(t *testing.T) {
+		source, stream, err := newLifecycleTraceSource(2)
+		if err != nil {
+			t.Fatalf("construct lifecycle source: %v", err)
+		}
+		source.emit(event(LifecycleTransitionTerminationPending))
+		source.emit(event(LifecycleTransitionTerminationPending))
+		source.emit(event(LifecycleTransitionTerminationPending))
+		<-stream
+		<-stream
+		source.emit(event(LifecycleTransitionClosedClean))
+
+		summary := <-stream
+		final := <-stream
+		if summary.Transition != LifecycleTransitionTraceDropped || summary.Dropped != 1 ||
+			final.Transition != LifecycleTransitionClosedClean {
+			t.Fatalf("post-gap ordering = summary:%+v final:%+v", summary, final)
+		}
+		completion := source.complete()
+		if _, open := <-stream; open {
+			t.Fatal("completed lifecycle source remained open")
+		}
+		if completion.Enqueued != 4 || completion.Loss.CapacityDropped != 1 {
+			t.Fatalf("drop completion = %+v", completion)
+		}
+	})
+
+	t.Run("a full synthetic notice does not inflate loss", func(t *testing.T) {
+		source, stream, err := newLifecycleTraceSource(1)
+		if err != nil {
+			t.Fatalf("construct lifecycle source: %v", err)
+		}
+		source.emit(event(LifecycleTransitionTerminationPending))
+		source.emit(event(LifecycleTransitionTerminationPending))
+		completion := source.complete()
+		if completion.Enqueued != 1 || completion.Loss.CapacityDropped != 1 {
+			t.Fatalf("recursive synthetic loss = %+v", completion)
+		}
+		<-stream
+		if _, open := <-stream; open {
+			t.Fatal("completed lifecycle source remained open")
+		}
+	})
 }
 
 func TestWebRTCLifecycleValidatorReturnsClosedMutationReasons(t *testing.T) {

@@ -150,28 +150,21 @@ func validLifecycleCause(cause LifecycleCause) bool {
 	}
 }
 
-// LifecycleObservationLoss is cumulative through the returned delivery cut.
-// Fields are separate so consumers can map capacity and callback failures to
-// stable health reasons without parsing lifecycle records.
+// LifecycleObservationLoss is cumulative through the producer admission cut.
+// It describes only observations the bounded stream could not retain.
 type LifecycleObservationLoss struct {
-	QueueOverflow   uint64
-	ObserverPanic   uint64
-	CallbackTimeout uint64
-	Undrained       uint64
+	CapacityDropped uint64
 }
 
 func (loss LifecycleObservationLoss) Total() uint64 {
-	total := saturatingLifecycleCount(loss.QueueOverflow, loss.ObserverPanic)
-	total = saturatingLifecycleCount(total, loss.CallbackTimeout)
-	return saturatingLifecycleCount(total, loss.Undrained)
+	return loss.CapacityDropped
 }
 
-// LifecycleObservationCompletion proves that callback admission has closed.
-// Delivered is the callback-completed cut; losses are cumulative through it.
+// LifecycleObservationCompletion proves that stream admission has closed.
+// Enqueued does not imply that a consumer received or projected an observation.
 type LifecycleObservationCompletion struct {
-	Delivered uint64
-	Loss      LifecycleObservationLoss
-	Drained   bool
+	Enqueued uint64
+	Loss     LifecycleObservationLoss
 }
 
 func saturatingLifecycleCount(current, increment uint64) uint64 {

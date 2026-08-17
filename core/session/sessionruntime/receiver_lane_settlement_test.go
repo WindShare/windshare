@@ -1,34 +1,15 @@
 package sessionruntime
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/windshare/windshare/core/transfer"
 )
 
-type receiverLaneSettlementCollector struct {
-	mu        sync.Mutex
-	summaries []transfer.LaneSettlementSummary
-}
-
-func (collector *receiverLaneSettlementCollector) TraceLaneSettlement(summary transfer.LaneSettlementSummary) {
-	collector.mu.Lock()
-	collector.summaries = append(collector.summaries, summary)
-	collector.mu.Unlock()
-}
-
-func (collector *receiverLaneSettlementCollector) snapshot() []transfer.LaneSettlementSummary {
-	collector.mu.Lock()
-	defer collector.mu.Unlock()
-	return append([]transfer.LaneSettlementSummary(nil), collector.summaries...)
-}
-
 func TestReceiverLaneSettlementLabelsInitialRelayAndAttachedDirect(t *testing.T) {
 	fixture := newVerticalFixture(t)
-	collector := &receiverLaneSettlementCollector{}
 	config := fixture.receiverConfig
-	config.LaneSettlementTracer = collector
+	config.LaneSettlementObservationCapacity = transfer.DefaultLaneSettlementObservationCapacity
 	receiverFactory, err := NewReceiverFactory(config)
 	if err != nil {
 		t.Fatal(err)
@@ -36,6 +17,7 @@ func TestReceiverLaneSettlementLabelsInitialRelayAndAttachedDirect(t *testing.T)
 	t.Cleanup(receiverFactory.Close)
 
 	sender, receiver := connectVerticalPair(t, fixture.senderFactory, receiverFactory)
+	observations := receiver.LaneSet().SettlementObservations()
 	initialID, initialEpoch := receiver.LaneIdentity()
 	initial := LaneIdentity{ID: initialID, Epoch: initialEpoch}
 	attached, _, _, _ := attachObservedLane(t, fixture.senderFactory, receiver, 0)
@@ -43,7 +25,7 @@ func TestReceiverLaneSettlementLabelsInitialRelayAndAttachedDirect(t *testing.T)
 	sender.Close()
 
 	routes := make(map[LaneIdentity]transfer.LaneRoute)
-	for _, summary := range collector.snapshot() {
+	for summary := range observations {
 		identity := LaneIdentity{ID: summary.Lane.ID, Epoch: summary.Lane.Epoch}
 		if _, duplicate := routes[identity]; duplicate {
 			t.Fatalf("lane %v settled more than once", identity)

@@ -37,7 +37,7 @@ func TestRendererVisibilityForEveryEvent(t *testing.T) {
 		for _, mode := range modes {
 			t.Run(eventCase.name+"/"+mode.name, func(t *testing.T) {
 				harness := newRenderHarness(t, terminalcanvas.Capabilities{Interactive: mode.interactive}, mode.verbose)
-				if err := harness.renderer.Render(eventCase.event); err != nil {
+				if err := renderTestEvent(harness.renderer, eventCase.event); err != nil {
 					t.Fatalf("Render() error = %v", err)
 				}
 				want := eventCase.always || eventCase.main && (mode.interactive || mode.verbose) ||
@@ -393,7 +393,7 @@ func TestRendererEmptySelectionReachesHundredPercentOnlyForSuccess(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := harness.renderer.Render(settled); err != nil {
+			if err := harness.renderer.RenderTerminal(settled); err != nil {
 				t.Fatal(err)
 			}
 			output := harness.buffer.String()
@@ -404,6 +404,33 @@ func TestRendererEmptySelectionReachesHundredPercentOnlyForSuccess(t *testing.T)
 				t.Fatalf("settlement output %q missing %q", output, test.wantResult)
 			}
 		})
+	}
+}
+
+func renderTestEvent(renderer *Renderer, event clievent.Event) error {
+	if terminal, ok := event.(clievent.TerminalEvent); ok {
+		return renderer.RenderTerminal(terminal)
+	}
+	return renderer.Render(event)
+}
+
+func TestRendererRequiresTerminalEventsThroughNarrowTerminalBoundary(t *testing.T) {
+	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, false)
+	var terminal clievent.TerminalEvent
+	for _, candidate := range rendererEvents(t) {
+		if value, ok := candidate.event.(clievent.TerminalEvent); ok {
+			terminal = value
+			break
+		}
+	}
+	if terminal == nil {
+		t.Fatal("renderer fixtures contain no terminal event")
+	}
+	if err := harness.renderer.Render(terminal); !errors.Is(err, clievent.ErrInvalidEvent) {
+		t.Fatalf("ordinary terminal render error = %v", err)
+	}
+	if err := harness.renderer.RenderTerminal(terminal); err != nil {
+		t.Fatalf("terminal render error = %v", err)
 	}
 }
 

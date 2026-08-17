@@ -53,7 +53,7 @@ func TestClosedEnumRegistriesNameEveryDeclaredValue(t *testing.T) {
 		{"protocol operation cause", int(ProtocolOperationCauseNone), int(ProtocolOperationCauseProtocolFailure), func(value int) (string, bool) { return ProtocolOperationCause(value).Name() }},
 		{"lane route", int(LaneRouteRelay), int(LaneRouteDirect), func(value int) (string, bool) { return LaneRoute(value).Name() }},
 		{"observer loss category", int(ObserverLossRelayLifecycle), int(ObserverLossCommandAdapter), func(value int) (string, bool) { return ObserverLossCategory(value).Name() }},
-		{"observer loss reason", int(ObserverLossUnknownEnum), int(ObserverLossRecorderClosed), func(value int) (string, bool) { return ObserverLossReason(value).Name() }},
+		{"observer loss reason", int(ObserverLossUnknownEnum), int(ObserverLossCleanupResidue), func(value int) (string, bool) { return ObserverLossReason(value).Name() }},
 		{"receiver terminal owner", int(ReceiverTerminalUnbound), int(ReceiverTerminalRuntime), func(value int) (string, bool) { return ReceiverTerminalOwner(value).Name() }},
 		{"receiver disposition", int(ReceiverFallbackAllowed), int(ReceiverSessionUnsafe), func(value int) (string, bool) { return ReceiverDisposition(value).Name() }},
 		{"receiver provenance", int(ReceiverProvenanceUnbound), int(ReceiverProvenanceAuthenticatedContinuationAuthorityViolation), func(value int) (string, bool) { return ReceiverProvenance(value).Name() }},

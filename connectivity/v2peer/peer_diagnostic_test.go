@@ -5,37 +5,10 @@ import (
 	"errors"
 	"math"
 	"reflect"
-	"slices"
-	"sync"
 	"testing"
 
 	"github.com/windshare/windshare/connectivity/v2signal"
 )
-
-type peerDiagnosticCollector struct {
-	mu           sync.Mutex
-	observations []PeerDiagnosticObservation
-}
-
-func (collector *peerDiagnosticCollector) observe(observation PeerDiagnosticObservation) {
-	collector.mu.Lock()
-	defer collector.mu.Unlock()
-	collector.observations = append(collector.observations, observation)
-}
-
-func (collector *peerDiagnosticCollector) latest(
-	category PeerDiagnosticCategory,
-	reason PeerDiagnosticReason,
-) (PeerDiagnosticObservation, bool) {
-	collector.mu.Lock()
-	defer collector.mu.Unlock()
-	for _, observation := range slices.Backward(collector.observations) {
-		if observation.Category == category && observation.Reason == reason {
-			return observation, true
-		}
-	}
-	return PeerDiagnosticObservation{}, false
-}
 
 func TestSenderAttemptTerminalTypedCodeTable(t *testing.T) {
 	for _, test := range []struct {
@@ -91,84 +64,95 @@ func TestSenderAttemptTerminalTypedCodeTable(t *testing.T) {
 	}
 }
 
-func TestSenderObserverCapacityDoesNotBlockAttemptSettlement(t *testing.T) {
-	observerStarted := make(chan struct{})
-	releaseObserver := make(chan struct{})
-	var startedOnce sync.Once
-	diagnostics := &peerDiagnosticCollector{}
+func TestSenderAttemptStreamSaturationCannotBlockSettlement(t *testing.T) {
 	factory := mustTestFactory(t, Config{
-		SenderObservationCapacity: 1,
-		Observer: SenderAttemptObserverFunc(func(SenderAttemptObservation) {
-			startedOnce.Do(func() { close(observerStarted) })
-			<-releaseObserver
-		}),
-		DiagnosticObserver: PeerDiagnosticObserverFunc(diagnostics.observe),
+		SenderAttemptObservationCapacity:  1,
+		PeerDiagnosticObservationCapacity: 2,
 	})
 	recorder := newSenderAttemptRecorder(factory, newTestPeerSession(201).sessionID, testBinding(202))
 	recorder.complete(SenderAttemptStarted, SenderCandidateCounts{}, nil, nil)
-	receiveTest(t, observerStarted)
-
-	settled := make(chan struct{})
-	go func() {
-		recorder.complete(SenderAttemptOfferReceived, SenderCandidateCounts{}, nil, nil)
-		recorder.complete(SenderAttemptAnswerCreated, SenderCandidateCounts{}, nil, nil)
-		recorder.fail(SenderAttemptFailure{
-			Scope: AttemptFailureScopeAttempt, TypedPeerErrorCode: TypedPeerErrorNegotiation,
-		})
-		close(settled)
-	}()
-	receiveTest(t, settled)
-	waitForTest(t, func() bool {
-		observation, ok := diagnostics.latest(
-			PeerDiagnosticSenderAttempt,
-			PeerDiagnosticObserverCapacity,
-		)
-		return ok && observation.Count >= 1
+	recorder.complete(SenderAttemptOfferReceived, SenderCandidateCounts{}, nil, nil)
+	recorder.complete(SenderAttemptAnswerCreated, SenderCandidateCounts{}, nil, nil)
+	recorder.fail(SenderAttemptFailure{
+		Scope: AttemptFailureScopeAttempt, TypedPeerErrorCode: TypedPeerErrorNegotiation,
 	})
-	close(releaseObserver)
+
+	completion := factory.CompleteObservations()
+	if completion.Attempts.Enqueued != 1 || completion.Attempts.Loss.CapacityDropped != 3 {
+		t.Fatalf("attempt completion = %#v", completion.Attempts)
+	}
+	diagnostic := <-factory.PeerDiagnostics()
+	if diagnostic.Reason != PeerDiagnosticStreamCapacity || diagnostic.Count != 3 {
+		t.Fatalf("stream capacity diagnostic = %#v", diagnostic)
+	}
 }
 
-func TestReceiverTerminationObserverCapacityDoesNotBlockPublication(t *testing.T) {
-	observerStarted := make(chan struct{})
-	releaseObserver := make(chan struct{})
-	var startedOnce sync.Once
-	diagnostics := &peerDiagnosticCollector{}
+func TestReceiverTerminationStreamSaturationCannotBlockPublication(t *testing.T) {
 	factory, err := NewReceiverFactory(ReceiverFactoryConfig{
-		TerminationObservationCapacity: 1,
-		OnTermination: func(ReceiverTerminationTrace) {
-			startedOnce.Do(func() { close(observerStarted) })
-			<-releaseObserver
-		},
-		DiagnosticObserver: PeerDiagnosticObserverFunc(diagnostics.observe),
+		ReceiverTerminationObservationCapacity: 1,
+		PeerDiagnosticObservationCapacity:      2,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	attempt := &ReceiverAttempt{factory: factory}
-	attempt.emitTerminationTrace(ReceiverTerminationTrace{})
-	receiveTest(t, observerStarted)
+	attempt.emitTerminationTrace(ReceiverTerminationTrace{localGeneration: 1})
+	attempt.emitTerminationTrace(ReceiverTerminationTrace{localGeneration: 2})
+	attempt.emitTerminationTrace(ReceiverTerminationTrace{localGeneration: 3})
 
-	published := make(chan struct{})
-	go func() {
-		attempt.emitTerminationTrace(ReceiverTerminationTrace{})
-		attempt.emitTerminationTrace(ReceiverTerminationTrace{})
-		close(published)
-	}()
-	receiveTest(t, published)
-	waitForTest(t, func() bool {
-		observation, ok := diagnostics.latest(
-			PeerDiagnosticReceiverTermination,
-			PeerDiagnosticObserverCapacity,
-		)
-		return ok && observation.Count == 1
-	})
-	close(releaseObserver)
+	completion := factory.CompleteObservations()
+	if completion.Terminations.Enqueued != 1 || completion.Terminations.Loss.CapacityDropped != 2 {
+		t.Fatalf("termination completion = %#v", completion.Terminations)
+	}
+	diagnostic := <-factory.PeerDiagnostics()
+	if diagnostic.Category != PeerDiagnosticReceiverTermination ||
+		diagnostic.Reason != PeerDiagnosticStreamCapacity || diagnostic.Count != 2 {
+		t.Fatalf("stream capacity diagnostic = %#v", diagnostic)
+	}
 }
 
-func TestPeerDiagnosticsAreClosedTextFreeAndSaturating(t *testing.T) {
+func TestPeerDiagnosticStreamIsCumulativeBoundedAndSaturating(t *testing.T) {
+	reporter, err := newPeerDiagnosticReporter(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reporter.report(PeerDiagnosticSenderAttempt, PeerDiagnosticCleanupResidue)
+	reporter.report(PeerDiagnosticSenderAttempt, PeerDiagnosticCleanupResidue)
+	reporter.report(PeerDiagnosticSenderAttempt, PeerDiagnosticCleanupResidue)
+	completion := reporter.completeObservations()
+	if completion != (ObservationCompletion{Enqueued: 2, Loss: ObservationLoss{CapacityDropped: 1}}) {
+		t.Fatalf("diagnostic completion = %#v", completion)
+	}
+	first := <-reporter.observations()
+	second := <-reporter.observations()
+	if first.Count != 1 || second.Count != 2 {
+		t.Fatalf("cumulative diagnostic snapshots = %#v, %#v", first, second)
+	}
+
+	reporter, err = newPeerDiagnosticReporter(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reporter.reportCount(PeerDiagnosticReceiverTermination, PeerDiagnosticEvidenceCapacity, math.MaxUint64)
+	reporter.report(PeerDiagnosticReceiverTermination, PeerDiagnosticEvidenceCapacity)
+	reporter.completeObservations()
+	if observation := <-reporter.observations(); observation.Count != math.MaxUint64 {
+		t.Fatalf("saturating diagnostic = %#v", observation)
+	}
+}
+
+func TestPeerDiagnosticsHaveClosedTextFreeVocabulary(t *testing.T) {
 	configType := reflect.TypeFor[Config]()
-	if _, exists := configType.FieldByName("OnError"); exists {
-		t.Fatal("raw error callback remains part of sender configuration")
+	for _, retired := range []string{"Observer", "DiagnosticObserver"} {
+		if _, exists := configType.FieldByName(retired); exists {
+			t.Fatalf("callback field %q remains in sender configuration", retired)
+		}
+	}
+	receiverConfigType := reflect.TypeFor[ReceiverFactoryConfig]()
+	for _, retired := range []string{"OnTermination", "OnTerminationContext", "DiagnosticObserver"} {
+		if _, exists := receiverConfigType.FieldByName(retired); exists {
+			t.Fatalf("callback field %q remains in receiver configuration", retired)
+		}
 	}
 	diagnosticType := reflect.TypeFor[PeerDiagnosticObservation]()
 	wantFields := []string{"Category", "Reason", "Count"}
@@ -180,16 +164,28 @@ func TestPeerDiagnosticsAreClosedTextFreeAndSaturating(t *testing.T) {
 			t.Fatalf("diagnostic field[%d] = %q, want %q", index, got, want)
 		}
 	}
-	if got := saturatingAdd(math.MaxUint64-1, 2); got != math.MaxUint64 {
-		t.Fatalf("saturating count = %d", got)
+	validPairs := 0
+	for _, category := range []PeerDiagnosticCategory{
+		PeerDiagnosticSenderAttempt,
+		PeerDiagnosticReceiverTermination,
+	} {
+		for _, reason := range []PeerDiagnosticReason{
+			PeerDiagnosticStreamCapacity,
+			PeerDiagnosticEvidenceCapacity,
+			PeerDiagnosticCleanupResidue,
+		} {
+			if _, valid := peerDiagnosticIndex(category, reason); valid {
+				validPairs++
+			}
+		}
+	}
+	if validPairs != peerDiagnosticCounterCount {
+		t.Fatalf("valid diagnostic pair count = %d", validPairs)
 	}
 }
 
 func TestSenderCleanupResidueProducesOnlyClosedDiagnostic(t *testing.T) {
-	diagnostics := &peerDiagnosticCollector{}
-	factory := mustTestFactory(t, Config{
-		DiagnosticObserver: PeerDiagnosticObserverFunc(diagnostics.observe),
-	})
+	factory := mustTestFactory(t, Config{PeerDiagnosticObservationCapacity: 1})
 	attempt := newPeerAttempt(peerAttemptConfig{
 		factory:   factory,
 		session:   newTestPeerSession(211),
@@ -201,11 +197,10 @@ func TestSenderCleanupResidueProducesOnlyClosedDiagnostic(t *testing.T) {
 	if err := attempt.finish(context.Background(), ErrNegotiation, providerCanary, false); !errors.Is(err, providerCanary) {
 		t.Fatalf("finish result = %v", err)
 	}
-	waitForTest(t, func() bool {
-		observation, ok := diagnostics.latest(
-			PeerDiagnosticSenderAttempt,
-			PeerDiagnosticCleanupResidue,
-		)
-		return ok && observation.Count == 1
-	})
+	factory.CompleteObservations()
+	observation := <-factory.PeerDiagnostics()
+	if observation.Category != PeerDiagnosticSenderAttempt ||
+		observation.Reason != PeerDiagnosticCleanupResidue || observation.Count != 1 {
+		t.Fatalf("cleanup diagnostic = %#v", observation)
+	}
 }

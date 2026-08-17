@@ -5,9 +5,9 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/observationstream"
 )
 
 type LifecycleOperation string
@@ -69,270 +69,106 @@ type LifecycleTrace struct {
 	Dropped     uint64
 }
 
-// LifecycleTracer receives channel-ordered events asynchronously so observer
-// latency cannot become transport latency.
-type LifecycleTracer interface {
-	TraceWebRTCLifecycle(LifecycleTrace)
-}
+// DefaultLifecycleObservationCapacity retains a bounded prefix until the owner
+// attaches a consumer. Callers must opt in by assigning it explicitly.
+const DefaultLifecycleObservationCapacity = 256
 
-type LifecycleContextTracer interface {
-	LifecycleTracer
-	TraceWebRTCLifecycleContext(context.Context, LifecycleTrace)
-}
-
-// LifecycleTraceFunc adapts a function to LifecycleTracer.
-type LifecycleTraceFunc func(LifecycleTrace)
-
-func (function LifecycleTraceFunc) TraceWebRTCLifecycle(event LifecycleTrace) {
-	if function != nil {
-		function(event)
-	}
-}
-
-type LifecycleContextTraceFunc func(context.Context, LifecycleTrace)
-
-func (function LifecycleContextTraceFunc) TraceWebRTCLifecycle(event LifecycleTrace) {
-	function.TraceWebRTCLifecycleContext(context.Background(), event)
-}
-
-func (function LifecycleContextTraceFunc) TraceWebRTCLifecycleContext(ctx context.Context, event LifecycleTrace) {
-	if function != nil {
-		function(ctx, event)
-	}
-}
-
-// ChannelOptions carries optional process observability without coupling the
-// transport state machine to a logging framework.
+// ChannelOptions carries optional process observability without allowing
+// consumer execution to become transport work. Zero capacity disables it.
 type ChannelOptions struct {
-	LifecycleTracer LifecycleTracer
+	LifecycleObservationCapacity int
 }
 
 var nextLifecycleChannelID atomic.Uint64
 
-const (
-	lifecycleTraceQueueCapacity = 256
-	lifecycleCallbackLimit      = 25 * time.Millisecond
-)
+type lifecycleTraceSource struct {
+	mu       sync.Mutex
+	producer observationstream.Producer[LifecycleTrace]
+	consumer observationstream.Consumer[LifecycleTrace]
 
-type lifecycleCallbackOutcome uint8
-
-const (
-	lifecycleCallbackDelivered lifecycleCallbackOutcome = iota + 1
-	lifecycleCallbackPanicked
-	lifecycleCallbackTimedOut
-	lifecycleCallbackAbandoned
-)
-
-type lifecycleTraceDispatcher struct {
-	tracer LifecycleTracer
-
-	mu            sync.Mutex
-	wake          *sync.Cond
-	queue         []LifecycleTrace
-	closing       bool
-	detached      bool
-	callbackLive  bool
-	drained       bool
-	delivered     uint64
-	loss          LifecycleObservationLoss
-	summarized    uint64
-	last          LifecycleTrace
-	callbackLimit time.Duration
-	detach        chan struct{}
-	detachOnce    sync.Once
-	done          chan struct{}
+	completed       bool
+	completion      LifecycleObservationCompletion
+	capacityDropped uint64
+	summarized      uint64
 }
 
-func newLifecycleTraceDispatcher(tracer LifecycleTracer) *lifecycleTraceDispatcher {
-	if tracer == nil {
-		return nil
+func newLifecycleTraceSource(
+	capacity int,
+) (*lifecycleTraceSource, observationstream.Consumer[LifecycleTrace], error) {
+	if capacity == 0 {
+		return nil, nil, nil
 	}
-	dispatcher := &lifecycleTraceDispatcher{
-		tracer: tracer, drained: true, callbackLimit: lifecycleCallbackLimit,
-		detach: make(chan struct{}), done: make(chan struct{}),
+	producer, consumer, err := observationstream.New[LifecycleTrace](
+		observationstream.Capacity(capacity),
+	)
+	if err != nil {
+		return nil, nil, err
 	}
-	dispatcher.wake = sync.NewCond(&dispatcher.mu)
-	go dispatcher.run()
-	return dispatcher
+	return &lifecycleTraceSource{producer: producer, consumer: consumer}, consumer, nil
 }
 
-func (d *lifecycleTraceDispatcher) emit(event LifecycleTrace) {
-	if d == nil {
+func (source *lifecycleTraceSource) emit(event LifecycleTrace) {
+	if source == nil {
 		return
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closing || d.detached {
-		d.loss.Undrained = saturatingLifecycleCount(d.loss.Undrained, 1)
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	if source.completed {
 		return
 	}
-	d.last = event
-	d.flushDropSummaryLocked()
-	if len(d.queue) < lifecycleTraceQueueCapacity {
-		d.queue = append(d.queue, event)
-	} else {
-		d.loss.QueueOverflow = saturatingLifecycleCount(d.loss.QueueOverflow, 1)
-	}
-	d.wake.Signal()
-}
 
-func (d *lifecycleTraceDispatcher) shutdown() {
-	if d == nil {
+	source.flushDropSummaryLocked(event)
+	if !source.producer.TryPublish(event) {
+		source.capacityDropped = saturatingLifecycleCount(source.capacityDropped, 1)
 		return
 	}
-	d.mu.Lock()
-	if !d.closing {
-		d.closing = true
-		d.flushDropSummaryLocked()
-		d.wake.Broadcast()
-	}
-	d.mu.Unlock()
 }
 
-func (d *lifecycleTraceDispatcher) complete(ctx context.Context) LifecycleObservationCompletion {
-	if d == nil {
-		return LifecycleObservationCompletion{Drained: true}
+func (source *lifecycleTraceSource) complete() LifecycleObservationCompletion {
+	if source == nil {
+		return LifecycleObservationCompletion{}
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	if source.completed {
+		return source.completion
 	}
-	d.shutdown()
-	select {
-	case <-d.done:
-	default:
-		select {
-		case <-d.done:
-		case <-ctx.Done():
-			d.mu.Lock()
-			d.detachAtDeadlineLocked()
-			d.mu.Unlock()
-			<-d.done
-		}
+
+	cut := source.producer.Complete()
+	source.completed = true
+	source.completion = LifecycleObservationCompletion{
+		Enqueued: cut.Enqueued,
+		Loss: LifecycleObservationLoss{
+			CapacityDropped: cut.CapacityDropped,
+		},
 	}
-	d.mu.Lock()
-	completion := LifecycleObservationCompletion{Delivered: d.delivered, Loss: d.loss, Drained: d.drained}
-	d.mu.Unlock()
-	return completion
+	return source.completion
 }
 
-func (d *lifecycleTraceDispatcher) detachAtDeadlineLocked() {
-	if d.detached {
+func (source *lifecycleTraceSource) flushDropSummaryLocked(next LifecycleTrace) {
+	if source.capacityDropped == 0 || source.capacityDropped == source.summarized {
 		return
 	}
-	undrained := uint64(len(d.queue))
-	if d.callbackLive {
-		undrained = saturatingLifecycleCount(undrained, 1)
-	}
-	d.loss.Undrained = saturatingLifecycleCount(d.loss.Undrained, undrained)
-	clear(d.queue)
-	d.queue = nil
-	d.detached = true
-	d.drained = false
-	d.detachOnce.Do(func() { close(d.detach) })
-	d.wake.Broadcast()
-}
-
-func (d *lifecycleTraceDispatcher) flushDropSummaryLocked() {
-	// Dropped is a queue-omission summary, while callback defects are reported
-	// by the typed completion vector. Keeping those domains disjoint prevents a
-	// panic or timeout from being relabeled and counted again as queue loss.
-	dropped := d.loss.QueueOverflow
-	if dropped == 0 || dropped == d.summarized || len(d.queue) >= lifecycleTraceQueueCapacity || d.detached {
+	// A skipped notice must not enter TryPublish: that counted path is reserved
+	// for real lifecycle facts. With one producer, observed room cannot disappear.
+	if len(source.consumer) >= cap(source.consumer) {
 		return
 	}
-	d.queue = append(d.queue, lifecycleTraceDropNotice(d.last, dropped))
-	d.summarized = dropped
+	dropped := source.capacityDropped
+	if source.producer.TryPublish(lifecycleTraceDropNotice(next, dropped)) {
+		source.summarized = dropped
+	}
 }
 
-func lifecycleTraceDropNotice(last LifecycleTrace, dropped uint64) LifecycleTrace {
+func lifecycleTraceDropNotice(next LifecycleTrace, dropped uint64) LifecycleTrace {
 	return LifecycleTrace{
-		ChannelID:  last.ChannelID,
+		ChannelID:  next.ChannelID,
 		Operation:  LifecycleOperationChannel,
 		Transition: LifecycleTransitionTraceDropped,
-		State:      last.State,
-		Terminal:   last.Terminal,
+		State:      next.State,
+		Terminal:   next.Terminal,
 		Cause:      LifecycleCauseNone,
 		Dropped:    dropped,
-	}
-}
-
-func (d *lifecycleTraceDispatcher) run() {
-	defer close(d.done)
-	for {
-		d.mu.Lock()
-		d.flushDropSummaryLocked()
-		for len(d.queue) == 0 && !d.closing && !d.detached {
-			d.wake.Wait()
-			d.flushDropSummaryLocked()
-		}
-		if d.detached || (len(d.queue) == 0 && d.closing) {
-			d.mu.Unlock()
-			return
-		}
-		event := d.queue[0]
-		d.queue[0] = LifecycleTrace{}
-		d.queue = d.queue[1:]
-		d.callbackLive = true
-		d.mu.Unlock()
-
-		outcome := d.invoke(event)
-		d.mu.Lock()
-		d.callbackLive = false
-		if d.detached || outcome == lifecycleCallbackAbandoned {
-			d.mu.Unlock()
-			return
-		}
-		switch outcome {
-		case lifecycleCallbackDelivered:
-			d.delivered = saturatingLifecycleCount(d.delivered, 1)
-		case lifecycleCallbackPanicked:
-			d.loss.ObserverPanic = saturatingLifecycleCount(d.loss.ObserverPanic, 1)
-		case lifecycleCallbackTimedOut:
-			d.loss.CallbackTimeout = saturatingLifecycleCount(d.loss.CallbackTimeout, 1)
-			d.loss.Undrained = saturatingLifecycleCount(d.loss.Undrained, uint64(len(d.queue)))
-			clear(d.queue)
-			d.queue = nil
-			d.detached = true
-			d.drained = false
-			d.detachOnce.Do(func() { close(d.detach) })
-		}
-		d.flushDropSummaryLocked()
-		d.mu.Unlock()
-		if outcome == lifecycleCallbackTimedOut {
-			return
-		}
-	}
-}
-
-func (d *lifecycleTraceDispatcher) invoke(event LifecycleTrace) lifecycleCallbackOutcome {
-	result := make(chan lifecycleCallbackOutcome, 1)
-	callbackContext, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		outcome := lifecycleCallbackDelivered
-		defer func() {
-			if recover() != nil {
-				outcome = lifecycleCallbackPanicked
-			}
-			result <- outcome
-		}()
-		if contextual, ok := d.tracer.(LifecycleContextTracer); ok {
-			contextual.TraceWebRTCLifecycleContext(callbackContext, event)
-			return
-		}
-		d.tracer.TraceWebRTCLifecycle(event)
-	}()
-	timer := time.NewTimer(d.callbackLimit)
-	defer timer.Stop()
-	select {
-	case outcome := <-result:
-		return outcome
-	case <-timer.C:
-		cancel()
-		return lifecycleCallbackTimedOut
-	case <-d.detach:
-		cancel()
-		return lifecycleCallbackAbandoned
 	}
 }
 
@@ -379,9 +215,9 @@ func terminalTraceState(state terminalState) LifecycleTerminalState {
 	}
 }
 
-func (l *channelLifecycle) configureTrace(channelID uint64, dispatcher *lifecycleTraceDispatcher) {
+func (l *channelLifecycle) configureTrace(channelID uint64, source *lifecycleTraceSource) {
 	l.channelID = channelID
-	l.traces = dispatcher
+	l.traces = source
 }
 
 func (l *channelLifecycle) traceSendResolutionLocked(admission *sendAdmission) {

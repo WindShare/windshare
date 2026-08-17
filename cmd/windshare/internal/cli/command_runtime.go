@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -24,10 +23,11 @@ type userTraceRecorder interface {
 	ReportUpstreamLoss(lifecycle, progress uint64) bool
 	Health() <-chan clievent.TraceIncomplete
 	Close() runtrace.Status
+	Path() string
 }
 
 type userTraceOpener func(
-	path string,
+	target runtrace.Target,
 	command clievent.Command,
 	config runtrace.Config,
 	dependencies runtrace.Dependencies,
@@ -36,44 +36,6 @@ type userTraceOpener func(
 type queuedCommandEvent struct {
 	sequence uint64
 	event    clievent.Event
-}
-
-// observationPublicationGate makes the owner-facing completion cut and the
-// command-runtime enqueue one serialized decision. Projection may happen before
-// this gate, but a callback cannot retain publication authority across revoke.
-type observationPublicationGate struct {
-	mu      sync.Mutex
-	revoked bool
-}
-
-func (gate *observationPublicationGate) commit(
-	ctx context.Context,
-	publish func() bool,
-) bool {
-	if publish == nil {
-		return false
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if gate == nil {
-		return ctx.Err() == nil && publish()
-	}
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
-	if gate.revoked || ctx.Err() != nil {
-		return false
-	}
-	return publish()
-}
-
-func (gate *observationPublicationGate) revoke() {
-	if gate == nil {
-		return
-	}
-	gate.mu.Lock()
-	gate.revoked = true
-	gate.mu.Unlock()
 }
 
 type commandRuntime struct {
@@ -99,7 +61,9 @@ type commandRuntime struct {
 	hasObserverProgress    bool
 	commandPublications    []queuedCommandEvent
 	commandPublicationHead int
-	stagedFinalization     []clievent.Event
+	stagedFinalProgress    *clievent.TransferProgress
+	stagedTerminal         clievent.TerminalEvent
+	presentationTerminal   clievent.TerminalEvent
 
 	pendingObserverLoss  [clievent.ObserverLossCategoryLimit][clievent.ObserverLossReasonLimit]atomic.Uint64
 	upstreamCumulative   [clievent.ObserverLossCategoryLimit][clievent.ObserverLossReasonLimit]atomic.Uint64
@@ -171,13 +135,21 @@ func (a *App) openCommandTrace(
 	if opener == nil {
 		opener = openNativeUserTrace
 	}
-	recorder, err := opener(options.tracePath, command, runtrace.Config{}, runtrace.Dependencies{
+	target, targetErr := options.traceTarget()
+	if targetErr != nil {
+		renderTraceOpenFailure(renderer, command, targetErr)
+		return nil, errUserTraceOpen
+	}
+	recorder, err := opener(target, command, runtrace.Config{}, runtrace.Dependencies{
 		Clock: terminal.clock,
 		NewTicker: func(interval time.Duration) runtrace.Ticker {
 			return terminal.clock.NewTicker(interval)
 		},
 	})
 	if err == nil && recorder != nil {
+		if options.traceDirectoryMode() {
+			_ = renderer.RenderTracePath(recorder.Path())
+		}
 		return recorder, nil
 	}
 	if recorder != nil {
@@ -195,12 +167,12 @@ func (runtime *commandRuntime) detailedDiagnosticsEnabled() bool {
 }
 
 func openNativeUserTrace(
-	path string,
+	target runtrace.Target,
 	command clievent.Command,
 	config runtrace.Config,
 	dependencies runtrace.Dependencies,
 ) (userTraceRecorder, error) {
-	recorder, err := runtrace.OpenWithDependencies(path, command, config, dependencies)
+	recorder, err := runtrace.OpenWithDependencies(target, command, config, dependencies)
 	if err != nil {
 		// Converting a nil *Recorder directly to the interface would create a
 		// non-nil typed-nil cleanup target on startup failure.
@@ -220,7 +192,7 @@ func renderTraceOpenFailure(renderer *humanoutput.Renderer, command clievent.Com
 	}
 	event, err := clievent.NewCommandFailed(command, clievent.ExitFailure, failure)
 	if err == nil {
-		_ = renderer.Render(event)
+		_ = renderer.RenderTerminal(event)
 	}
 }
 
@@ -246,6 +218,11 @@ func (runtime *commandRuntime) Observe(event clievent.Event) bool {
 		return false
 	}
 	if event == nil || event.Command() != runtime.command {
+		runtime.addObserverLoss(clievent.ObserverLossCommandAdapter, clievent.ObserverLossEventContract, 1)
+		runtime.signalReadyLocked()
+		return false
+	}
+	if _, terminal := event.(clievent.TerminalEvent); terminal {
 		runtime.addObserverLoss(clievent.ObserverLossCommandAdapter, clievent.ObserverLossEventContract, 1)
 		runtime.signalReadyLocked()
 		return false
@@ -290,59 +267,81 @@ func (runtime *commandRuntime) Publish(events ...clievent.Event) bool {
 	if runtime == nil || len(events) == 0 {
 		return false
 	}
+	for _, event := range events {
+		if _, terminal := event.(clievent.TerminalEvent); terminal {
+			return false
+		}
+	}
 	runtime.entryMu.Lock()
 	defer runtime.entryMu.Unlock()
 	return runtime.publishLocked(events...)
 }
 
-// Finalize closes observer ingestion and retains the terminal command events at
-// one sequence cut. Quiescing producers first keeps a rejected late fact from
-// being the normal shutdown path while this guard prevents terminal reordering.
-func (runtime *commandRuntime) Finalize(events ...clievent.Event) bool {
-	if runtime == nil || len(events) == 0 {
-		return false
-	}
-	runtime.entryMu.Lock()
-	if runtime.closed || runtime.observerFinalized || len(runtime.stagedFinalization) != 0 {
-		runtime.entryMu.Unlock()
-		return false
-	}
-	for _, event := range events {
-		if event == nil || event.Command() != runtime.command {
-			runtime.entryMu.Unlock()
-			return false
-		}
-	}
-	loss := runtime.collectPendingLossLocked()
-	if !runtime.publishLocked(events...) {
-		runtime.entryMu.Unlock()
-		return false
-	}
-	runtime.observerFinalized = true
-	runtime.scheduleUpstreamLossLocked(loss)
-	runtime.entryMu.Unlock()
-	return true
+// Finalize closes observer ingestion and assigns exactly one terminal event its
+// causal sequence. Its trace record remains ordered work; only human rendering
+// is staged until trace sealing.
+func (runtime *commandRuntime) Finalize(terminal clievent.TerminalEvent) bool {
+	return runtime.finalize(nil, terminal)
 }
 
-// StageFinalization keeps an already-decided terminal result outside the ordered
-// stream until the command owner has stopped products and joined observations.
-// Setup failures use this path because their terminal meaning is known before
-// transport cleanup has necessarily completed.
-func (runtime *commandRuntime) StageFinalization(events ...clievent.Event) bool {
-	if runtime == nil || len(events) == 0 {
+func (runtime *commandRuntime) finalize(
+	progress *clievent.TransferProgress,
+	terminal clievent.TerminalEvent,
+) bool {
+	if runtime == nil || terminal == nil || terminal.Command() != runtime.command {
 		return false
 	}
 	runtime.entryMu.Lock()
 	defer runtime.entryMu.Unlock()
-	if runtime.closed || runtime.observerFinalized || len(runtime.stagedFinalization) != 0 {
+	if runtime.closed || runtime.observerFinalized || runtime.stagedTerminal != nil {
 		return false
 	}
-	for _, event := range events {
-		if event == nil || event.Command() != runtime.command {
+	events := make([]clievent.Event, 0, 2)
+	if progress != nil {
+		if runtime.command != clievent.CommandGet || progress.Command() != runtime.command {
 			return false
 		}
+		events = append(events, *progress)
 	}
-	runtime.stagedFinalization = append([]clievent.Event(nil), events...)
+	events = append(events, terminal)
+	loss := runtime.collectPendingLossLocked()
+	if !runtime.publishLocked(events...) {
+		return false
+	}
+	runtime.observerFinalized = true
+	runtime.scheduleUpstreamLossLocked(loss)
+	return true
+}
+
+// StageFinalization retains a decided terminal authority while product owners
+// stop and complete their streams. It accepts no ordinary events by design.
+func (runtime *commandRuntime) StageFinalization(terminal clievent.TerminalEvent) bool {
+	if runtime == nil || terminal == nil || terminal.Command() != runtime.command {
+		return false
+	}
+	runtime.entryMu.Lock()
+	defer runtime.entryMu.Unlock()
+	if runtime.closed || runtime.observerFinalized || runtime.stagedTerminal != nil {
+		return false
+	}
+	runtime.stagedTerminal = terminal
+	return true
+}
+
+func (runtime *commandRuntime) StageTransferFinalization(
+	progress clievent.TransferProgress,
+	terminal clievent.TransferSettled,
+) bool {
+	if runtime == nil || runtime.command != clievent.CommandGet {
+		return false
+	}
+	runtime.entryMu.Lock()
+	defer runtime.entryMu.Unlock()
+	if runtime.closed || runtime.observerFinalized || runtime.stagedTerminal != nil {
+		return false
+	}
+	runtime.stagedFinalProgress = &progress
+	runtime.stagedTerminal = terminal
 	return true
 }
 
@@ -351,15 +350,23 @@ func (runtime *commandRuntime) FinalizeStaged() bool {
 		return false
 	}
 	runtime.entryMu.Lock()
-	if runtime.closed || runtime.observerFinalized || len(runtime.stagedFinalization) == 0 {
+	if runtime.closed || runtime.observerFinalized || runtime.stagedTerminal == nil {
 		runtime.entryMu.Unlock()
 		return false
 	}
-	events := runtime.stagedFinalization
-	runtime.stagedFinalization = nil
+	progress := runtime.stagedFinalProgress
+	terminal := runtime.stagedTerminal
+	runtime.stagedFinalProgress = nil
+	runtime.stagedTerminal = nil
 	loss := runtime.collectPendingLossLocked()
+	events := make([]clievent.Event, 0, 2)
+	if progress != nil {
+		events = append(events, *progress)
+	}
+	events = append(events, terminal)
 	if !runtime.publishLocked(events...) {
-		runtime.stagedFinalization = events
+		runtime.stagedFinalProgress = progress
+		runtime.stagedTerminal = terminal
 		runtime.entryMu.Unlock()
 		return false
 	}
@@ -399,7 +406,7 @@ func (runtime *commandRuntime) PublishTransferFinalization(
 	if runtime == nil || runtime.command != clievent.CommandGet {
 		return false
 	}
-	return runtime.Finalize(progress, settlement)
+	return runtime.finalize(&progress, settlement)
 }
 
 // ReportObserverLoss accounts for facts dropped by a bounded producer adapter
@@ -524,7 +531,11 @@ func (runtime *commandRuntime) traceHealth() <-chan clievent.TraceIncomplete {
 }
 
 func (runtime *commandRuntime) dispatch(event clievent.Event) {
-	_ = runtime.human.Render(event)
+	if terminal, ok := event.(clievent.TerminalEvent); ok {
+		runtime.presentationTerminal = terminal
+	} else {
+		_ = runtime.human.Render(event)
+	}
 	if runtime.trace != nil {
 		_ = runtime.trace.Record(event)
 	}
@@ -605,6 +616,10 @@ func (runtime *commandRuntime) drain() {
 		if !status.Complete {
 			runtime.warnTraceIncomplete(traceIncompleteFromStatus(runtime.command, status))
 		}
+	}
+	if runtime.presentationTerminal != nil {
+		_ = runtime.human.RenderTerminal(runtime.presentationTerminal)
+		return
 	}
 	runtime.canvas.FinishProgress()
 }

@@ -462,6 +462,7 @@ func (lanes *receiverTestLanes) AttachLane(
 }
 
 type receiverHarness struct {
+	factory   *ReceiverFactory
 	peer      *receiverTestPeerConnection
 	channel   *receiverTestChannel
 	operation *receiverTestOperation
@@ -514,7 +515,7 @@ func newReceiverHarnessWithContext(
 		t.Fatal(err)
 	}
 	return &receiverHarness{
-		peer: peer, channel: channel, operation: operation, signaling: signaling,
+		factory: factory, peer: peer, channel: channel, operation: operation, signaling: signaling,
 		lanes: lanes, attempt: attempt, binding: offer.Binding,
 	}
 }
