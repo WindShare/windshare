@@ -50,8 +50,32 @@ func (textRenderer) Inventory(snapshot resumeInventorySnapshot) (string, bool, e
 	return output.String(), snapshot.needsAttention(), nil
 }
 
-func (textRenderer) ListControlStatus(status string, reason string) string {
-	return fmt.Sprintf("resume_list_status=%q reason=%q\n", status, reason)
+func (textRenderer) ListControlStatus(
+	status string,
+	reason string,
+	detail resumeFailureDetail,
+) (string, error) {
+	if !detail.valid() {
+		return "", errResumeStateContract
+	}
+	var output strings.Builder
+	fmt.Fprintf(&output, "resume_list_status=%q reason=%q", status, reason)
+	renderResumeFailureDetail(&output, detail)
+	output.WriteByte('\n')
+	return output.String(), nil
+}
+
+func renderResumeFailureDetail(output *strings.Builder, detail resumeFailureDetail) {
+	if output == nil || detail == (resumeFailureDetail{}) {
+		return
+	}
+	fmt.Fprintf(output, " stage=%q", detail.stage.String())
+	if detail.reconciliation != 0 {
+		fmt.Fprintf(output, " reconciliation_stage=%q", detail.reconciliation.String())
+	}
+	if detail.nativeClass != 0 {
+		fmt.Fprintf(output, " native_error_class=%q", detail.nativeClass.String())
+	}
 }
 
 func renderResumeOperation(itemNumber int, operation resumeOperation) (string, error) {
@@ -107,15 +131,28 @@ func (textRenderer) DiscardPrompt(
 	), nil
 }
 
-func (textRenderer) DiscardControlStatus(status string, itemNumber int, reason string) string {
-	return fmt.Sprintf(
-		"resume_discard_status=%q item=%d reason=%q published_files=%q foreign_objects=%q\n",
+func (textRenderer) DiscardControlStatus(
+	status string,
+	itemNumber int,
+	reason string,
+	detail resumeFailureDetail,
+) (string, error) {
+	if !detail.valid() {
+		return "", errResumeStateContract
+	}
+	var output strings.Builder
+	fmt.Fprintf(
+		&output,
+		"resume_discard_status=%q item=%d reason=%q published_files=%q foreign_objects=%q",
 		status,
 		itemNumber,
 		reason,
 		resumePublishedFileTreatment,
 		resumeForeignObjectTreatment,
 	)
+	renderResumeFailureDetail(&output, detail)
+	output.WriteByte('\n')
+	return output.String(), nil
 }
 
 func (textRenderer) DiscardReport(itemNumber int, report resumeDiscardReport) (string, error) {

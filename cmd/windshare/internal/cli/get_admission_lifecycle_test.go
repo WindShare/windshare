@@ -460,7 +460,7 @@ func TestReceiverAdmissionMonitorConsumesFailureBeforeJoinReturns(t *testing.T) 
 		t.Fatal(err)
 	}
 	runtime, stderr := newGetReportingRuntime(t, false, false)
-	monitorDone := (&App{}).monitorReceiverAdmission(admission, nil, getObservation{runtime: runtime})
+	monitorDone := (&App{}).monitorReceiverAdmission(admission, nil, getObservation{runtime: runtime}, &receiverLocalStop{})
 	if err := admission.ObservePeer(receiverPeerFailed); err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +489,7 @@ func TestReceiverAdmissionMonitorSuppressesFailureAfterRuntimeTerminal(t *testin
 		t.Fatal(err)
 	}
 	runtime, stderr := newGetReportingRuntime(t, false, false)
-	monitorDone := (&App{}).monitorReceiverAdmission(admission, nil, getObservation{runtime: runtime})
+	monitorDone := (&App{}).monitorReceiverAdmission(admission, nil, getObservation{runtime: runtime}, &receiverLocalStop{})
 	if err := admission.ObservePeer(receiverPeerFailed); err != nil {
 		t.Fatal(err)
 	}
@@ -562,6 +562,7 @@ func TestP2POnlyContentAdmissionMakesPeerLossTerminal(t *testing.T) {
 				admission,
 				receiverRuntime,
 				getObservation{runtime: commandRuntime},
+				&receiverLocalStop{},
 			)
 			if err := admission.ObservePeer(test.signal); err != nil {
 				t.Fatal(err)
@@ -680,7 +681,7 @@ func TestRelayContentAdmissionPeerFailureSurvivesRelayEpochReplacement(t *testin
 			t.Fatal(err)
 		}
 		initial := transfer.LaneIdentity{ID: 1, Epoch: 1}
-		if err := lanes.Add(initial, inertReceiverBlockLane{}); err != nil {
+		if err := lanes.Add(initial, transfer.LaneRouteRelay, inertReceiverBlockLane{}); err != nil {
 			lanes.Close()
 			t.Fatal(err)
 		}
@@ -702,7 +703,7 @@ func TestRelayContentAdmissionPeerFailureSurvivesRelayEpochReplacement(t *testin
 		admitted := make(chan error, 1)
 		go func() {
 			<-start
-			replaced <- lanes.Add(transfer.LaneIdentity{ID: initial.ID, Epoch: initial.Epoch + 1}, inertReceiverBlockLane{})
+			replaced <- lanes.Add(transfer.LaneIdentity{ID: initial.ID, Epoch: initial.Epoch + 1}, transfer.LaneRouteRelay, inertReceiverBlockLane{})
 		}()
 		go func() {
 			<-start

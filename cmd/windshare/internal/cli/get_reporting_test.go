@@ -140,6 +140,7 @@ func TestGetFinalProgressAndSettlementUseOrderedFinalization(t *testing.T) {
 	assertRuntimeEventTypes(t, recorder.recorded(),
 		clievent.Warning{},
 		clievent.Warning{},
+		clievent.ObserverLossObserved{},
 		clievent.TransferProgress{},
 		clievent.TransferSettled{},
 	)

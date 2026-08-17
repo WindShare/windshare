@@ -12,12 +12,13 @@ const (
 	RelayTerminalSettled
 	RelayLinkRetiring
 	RelayLinkClosed
+	RelayTraceDropped
 )
 
 func (value RelayLifecycleStage) Name() (string, bool) {
 	names := [...]string{
 		"", "terminal_reserved", "send_admitted", "send_rejected", "send_rolled_back",
-		"retirement_deferred", "retired", "terminal_settled", "link_retiring", "link_closed",
+		"retirement_deferred", "retired", "terminal_settled", "link_retiring", "link_closed", "trace_dropped",
 	}
 	if value == 0 || int(value) >= len(names) {
 		return "", false

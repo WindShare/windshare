@@ -223,7 +223,7 @@ func TestReceiverBeginCloseFreezesCachedBlocksAndLaneMutationBeforeJoin(t *testi
 			t.Fatalf("BeginClose retained %d plaintext bytes", receiver.BlockBroker().UsedBytes())
 		}
 		if err := receiver.LaneSet().Add(
-			transfer.LaneIdentity{ID: 99, Epoch: 1}, receiverOperationBlockLane{},
+			transfer.LaneIdentity{ID: 99, Epoch: 1}, transfer.LaneRouteRelay, receiverOperationBlockLane{},
 		); !errors.Is(err, transfer.ErrLaneClosed) {
 			t.Fatalf("lane mutation admitted after BeginClose: %v", err)
 		}

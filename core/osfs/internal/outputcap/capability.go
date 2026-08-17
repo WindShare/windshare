@@ -6,7 +6,6 @@ package outputcap
 
 import (
 	"errors"
-	"io"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
@@ -330,11 +329,13 @@ type Directory interface {
 	InstallDirectoryNoReplace(candidate Directory, name string) (Directory, error)
 	RemoveDirectory(name string, expected Directory) error
 
-	CreateFile(name string, private bool, size int64) (File, error)
-	OpenFile(name string, private, writable bool) (File, error)
-	LinkFileNoReplace(source File, name string) (File, error)
-	ReplacePrivateFile(source File, name string) error
-	RemoveFile(name string, expected File) error
+	CreateFile(name string, private bool, size int64) (MutableFile, error)
+	OpenObservedFile(name string, private bool) (ObservedFile, error)
+	OpenRecoveryDurabilityFile(name string, private bool) (RecoveryDurabilityFile, error)
+	OpenMutableFile(name string, private bool) (MutableFile, error)
+	LinkFileNoReplace(source FileIdentity, name string) (ObservedFile, error)
+	ReplacePrivateFile(source FileIdentity, name string) error
+	RemoveFile(name string, expected FileIdentity) error
 	AcquireLock(name string, existingOnly bool) (Lock, bool, error)
 }
 
@@ -382,22 +383,9 @@ type CurrentEntryReference interface {
 	Close() error
 }
 
-// File is a live, fixed-handle file capability. Retaining one can witness a
-// staged or anchored file across namespace mutations without trusting a path.
-type File interface {
-	io.ReaderAt
-	io.WriterAt
-	Close() error
-	Sync() error
-	Size() (uint64, error)
-	SetModifiedTime(catalog.ModifiedTime) error
-	MetadataMatches(uint64, catalog.ModifiedTime) (bool, error)
-	SameFile(File) (bool, error)
-}
-
 // Lock retains both the namespace lock and the fixed file capability that
 // carries its data.
 type Lock interface {
-	File() File
+	File() MutableFile
 	Close() error
 }

@@ -27,17 +27,21 @@ var (
 type NativeResumeRepository struct {
 	rootPath        string
 	platformFactory PlatformFactory
+	tracer          FilesystemOutputTracer
 }
 
 func NewNativeResumeRepository(
 	rootPath string,
 	platformFactory PlatformFactory,
+	tracer FilesystemOutputTracer,
 ) (*NativeResumeRepository, error) {
 	if rootPath == "" || !filepath.IsAbs(rootPath) || filepath.Clean(rootPath) != rootPath ||
 		platformFactory == nil {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
-	return &NativeResumeRepository{rootPath: rootPath, platformFactory: platformFactory}, nil
+	return &NativeResumeRepository{
+		rootPath: rootPath, platformFactory: platformFactory, tracer: tracer,
+	}, nil
 }
 
 func (repository *NativeResumeRepository) Page(
@@ -53,16 +57,22 @@ func (repository *NativeResumeRepository) Page(
 	}
 	present, err := repository.ordinaryStatePresent(ctx)
 	if err != nil {
-		return resumeauthority.Page{}, err
+		return resumeauthority.Page{}, diagnoseFilesystemOutputFailure(
+			FilesystemOutputFailureDestinationBinding, err,
+		)
 	}
 	if !present {
 		return resumeauthority.NewPage(nil, resumeauthority.PageCursor{}, false)
 	}
 	runtime, mode, err := repository.openRuntime(ctx)
 	if err != nil {
-		return resumeauthority.Page{}, err
+		return resumeauthority.Page{}, diagnoseFilesystemOutputFailure(
+			FilesystemOutputFailureDestinationBinding, err,
+		)
 	}
-	defer func() { resultErr = errors.Join(resultErr, runtime.Close()) }()
+	defer func() {
+		resultErr = freezeFilesystemOutputFailure(resultErr, runtime.Close())
+	}()
 	if !mode.Resumable() || runtime.registry == nil {
 		return resumeauthority.NewPage(nil, resumeauthority.PageCursor{}, false)
 	}
@@ -70,7 +80,9 @@ func (repository *NativeResumeRepository) Page(
 	pageCursor := checkpointstore.NewOperationPageCursor(cursor.After())
 	page, err := runtime.registry.PageOperations(pageCursor, maximum)
 	if err != nil {
-		return resumeauthority.Page{}, nativeResumeError(err)
+		return resumeauthority.Page{}, diagnoseFilesystemOutputFailure(
+			FilesystemOutputFailureInventoryPaging, nativeResumeError(err),
+		)
 	}
 	headers := make([]resumeauthority.Header, 0, len(page.Records()))
 	for _, record := range page.Records() {
@@ -99,19 +111,23 @@ func (repository *NativeResumeRepository) Acquire(
 	}
 	present, err := repository.ordinaryStatePresent(ctx)
 	if err != nil {
-		return nil, err
+		return nil, diagnoseFilesystemOutputFailure(
+			FilesystemOutputFailureDestinationBinding, err,
+		)
 	}
 	if !present {
 		return nil, fs.ErrNotExist
 	}
 	runtime, mode, err := repository.openRuntime(ctx)
 	if err != nil {
-		return nil, err
+		return nil, diagnoseFilesystemOutputFailure(
+			FilesystemOutputFailureDestinationBinding, err,
+		)
 	}
 	resources := &NativeResumeLease{runtime: runtime}
 	defer func() {
 		if resultErr != nil {
-			resultErr = errors.Join(resultErr, resources.Close())
+			resultErr = freezeFilesystemOutputFailure(resultErr, resources.Close())
 		}
 	}()
 	if !mode.Resumable() || runtime.registry == nil {
@@ -119,7 +135,9 @@ func (repository *NativeResumeRepository) Acquire(
 	}
 	lease, err := runtime.registry.AcquireOperationLease(operation)
 	if err != nil {
-		return nil, nativeResumeError(err)
+		return nil, diagnoseFilesystemOutputFailure(
+			FilesystemOutputFailureOperationAcquisition, nativeResumeError(err),
+		)
 	}
 	resources.operation = lease
 	header, err := resumeauthority.NewHeader(lease.Record())
@@ -140,7 +158,12 @@ func (repository *NativeResumeRepository) ordinaryStatePresent(
 	if platform == nil || platform.Root() == nil {
 		return false, errors.Join(outputcap.ErrRecoverableOutputUnsupported, closeNativeResumePlatform(platform))
 	}
-	defer func() { resultErr = errors.Join(resultErr, platform.Close()) }()
+	defer func() {
+		primary := diagnoseFilesystemOutputFailure(
+			FilesystemOutputFailureDestinationBinding, resultErr,
+		)
+		resultErr = freezeFilesystemOutputFailure(primary, platform.Close())
+	}()
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -159,7 +182,12 @@ func (repository *NativeResumeRepository) ordinaryStatePresent(
 	if err != nil || control == nil {
 		return false, errors.Join(err, outputcap.ErrUnsafeNamespace, closeNativeResumeDirectory(control))
 	}
-	defer func() { resultErr = errors.Join(resultErr, control.Close()) }()
+	defer func() {
+		primary := diagnoseFilesystemOutputFailure(
+			FilesystemOutputFailureDestinationBinding, resultErr,
+		)
+		resultErr = freezeFilesystemOutputFailure(primary, control.Close())
+	}()
 	kind, exact, err = control.ClassifyExactEntry(checkpointstore.OrdinaryRegistryDirectoryV1)
 	if err != nil || !exact {
 		return false, errors.Join(err, outputcap.ErrUnsafeNamespace)
@@ -180,13 +208,14 @@ func (repository *NativeResumeRepository) openRuntime(
 	runtime, err := New(Config{
 		RootPath: repository.rootPath, CreateRoot: false,
 		PlatformFactory: repository.platformFactory,
+		Tracer:          repository.tracer,
 	})
 	if err != nil {
 		return nil, ExecutionMode{}, err
 	}
 	mode, err := runtime.BindDestination(ctx)
 	if err != nil {
-		return nil, ExecutionMode{}, errors.Join(err, runtime.Close())
+		return nil, ExecutionMode{}, freezeFilesystemOutputFailure(err, runtime.Close())
 	}
 	return runtime, mode, nil
 }
@@ -370,8 +399,17 @@ func (lease *NativeResumeLease) ensureFileStoreLocked() (bool, error) {
 	store, err := checkpointstore.NewFileExecutionStoreWithProfile(
 		&repository, lease.runtime.destination.LiveCleanupProfile(),
 	)
+	var recordCount uint64
+	if store != nil {
+		recordCount = store.RecordCount()
+	}
+	lease.runtime.traceCheckpointReconciled(intent, transfer.OutputSessionID{}, recordCount, err)
 	if err != nil {
-		return false, errors.Join(err, repository.Close())
+		primary := diagnoseFilesystemOutputFailure(
+			FilesystemOutputFailureCheckpointReconciliation,
+			nativeResumeError(err),
+		)
+		return false, freezeFilesystemOutputFailure(primary, repository.Close())
 	}
 	lease.repository = &repository
 	lease.store = store
@@ -466,7 +504,9 @@ func (lease *NativeResumeLease) Close() error {
 	lease.topLevel = nil
 	lease.operation = nil
 	lease.runtime = nil
-	return nativeResumeError(err)
+	return diagnoseFilesystemOutputFailure(
+		FilesystemOutputFailureAuthorityClose, nativeResumeError(err),
+	)
 }
 
 func closeNativeResumeRepository(repository *checkpointstore.Repository) error {

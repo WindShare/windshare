@@ -52,7 +52,7 @@ func TestResumeStateAuthorityW6ProjectsAttentionAndDiagnosticReferences(t *testi
 	if err != nil || inventory.Status() != ResumeStateListNeedsAttention ||
 		len(summaries) != 1 ||
 		summaries[0].State() != ResumeOperationNeedsAttention ||
-		summaries[0].NeedsAttentionReason() != "operation-ownership-unknown" ||
+		summaries[0].NeedsAttentionReason() != FilesystemOutputStateOperationOwnershipUnknown ||
 		len(summaries[0].Items()) != 1 ||
 		summaries[0].Items()[0].DiagnosticReference() != "checkpoint-bad-mac" ||
 		summaries[0].Items()[0].BlockReason() != ResumeItemBlockCheckpointInvalid {

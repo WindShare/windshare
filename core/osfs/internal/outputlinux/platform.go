@@ -34,16 +34,28 @@ type linuxV3FileOrigin struct {
 	name   string
 }
 
-type linuxV3File struct {
+type linuxV3FileState struct {
 	native   *linuxOutputRegularFile
 	origin   *linuxV3FileOrigin
 	private  bool
 	borrowed bool
 }
 
+type linuxV3ObservedFile struct {
+	state *linuxV3FileState
+}
+
+type linuxV3RecoveryDurabilityFile struct {
+	state *linuxV3FileState
+}
+
+type linuxV3MutableFile struct {
+	state *linuxV3FileState
+}
+
 type linuxV3Lock struct {
 	native *linuxOutputStableLock
-	file   *linuxV3File
+	file   *linuxV3MutableFile
 }
 
 type linuxV3EntryRef struct {
@@ -306,7 +318,7 @@ type linuxDestinationCapabilityReporter interface {
 }
 
 type linuxSemanticPublisher interface {
-	PublishFileNoReplace(outputcap.File, string) (outputcap.PublishNoReplaceOutcome, error)
+	PublishFileNoReplace(outputcap.FileIdentity, string) (outputcap.PublishNoReplaceOutcome, error)
 	ReservePublicDirectoryNoReplace(string) (
 		outputcap.Directory,
 		outputcap.PublishNoReplaceOutcome,
@@ -319,7 +331,7 @@ type linuxLiveCleanupStageCreator interface {
 }
 
 type linuxLiveCleanupStageRemover interface {
-	RemoveLiveCleanupStage(checkpointmodel.LiveCleanupTicket, outputcap.File) error
+	RemoveLiveCleanupStage(checkpointmodel.LiveCleanupTicket, outputcap.FileIdentity) error
 }
 
 var (
@@ -331,6 +343,8 @@ var (
 	_ outputcap.Directory                           = (*linuxV3Directory)(nil)
 	_ outputcap.PersistentDirectoryIdentity         = (*linuxV3Directory)(nil)
 	_ outputcap.PersistentDirectoryIdentityPreparer = (*linuxV3Directory)(nil)
-	_ outputcap.File                                = (*linuxV3File)(nil)
+	_ outputcap.ObservedFile                        = (*linuxV3ObservedFile)(nil)
+	_ outputcap.RecoveryDurabilityFile              = (*linuxV3RecoveryDurabilityFile)(nil)
+	_ outputcap.MutableFile                         = (*linuxV3MutableFile)(nil)
 	_ outputcap.Lock                                = (*linuxV3Lock)(nil)
 )

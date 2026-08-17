@@ -95,6 +95,21 @@ func classifyDirectError(cause error) (clievent.Failure, bool) {
 	if exactError(cause, context.DeadlineExceeded) {
 		return mustFailure(clievent.FailureDeadline), true
 	}
+	// The concrete type is intentionally private. The filesystem adapter seals a
+	// validated value at its trust boundary; arbitrary diagnostic carriers remain
+	// unable to grant themselves presentation authority.
+	//nolint:errorlint
+	if filesystemFailure, ok := cause.(*filesystemOutputFailure); ok && filesystemFailure != nil {
+		diagnostic := filesystemFailure.diagnostic
+		if !diagnostic.Valid() {
+			return clievent.Failure{}, false
+		}
+		return ProjectNormalizedFault(
+			diagnostic.FaultDomain,
+			diagnostic.NormalizedScope,
+			diagnostic.NormalizedCode,
+		)
+	}
 	// Only a direct concrete provider fault is trusted here. errors.As could invoke
 	// an untrusted As method while diagnostics are crossing the safety boundary.
 	//nolint:errorlint

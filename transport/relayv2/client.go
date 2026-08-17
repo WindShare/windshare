@@ -169,6 +169,15 @@ func (connection *SenderConnection) RegistrationStats() RegistrationStats { retu
 func (connection *SenderConnection) Endpoint() v2.RelayEndpoint           { return connection.endpoint }
 func (connection *SenderConnection) Done() <-chan struct{}                { return connection.link.done }
 func (connection *SenderConnection) Err() error                           { return connection.link.Err() }
+
+// CompleteObservations closes lifecycle callback admission and returns the
+// cumulative delivery/loss cut owned by this relay connection.
+func (connection *SenderConnection) CompleteObservations(ctx context.Context) LifecycleObservationCompletion {
+	if connection == nil || connection.link == nil {
+		return LifecycleObservationCompletion{Drained: true}
+	}
+	return connection.link.completeObservations(ctx)
+}
 func (connection *SenderConnection) Close() error {
 	if connection == nil || connection.link == nil {
 		return nil
@@ -241,6 +250,15 @@ func (connection *ReceiverConnection) Channel() *Channel          { return conne
 func (connection *ReceiverConnection) Endpoint() v2.RelayEndpoint { return connection.endpoint }
 func (connection *ReceiverConnection) Done() <-chan struct{}      { return connection.link.done }
 func (connection *ReceiverConnection) Err() error                 { return connection.link.Err() }
+
+// CompleteObservations closes lifecycle callback admission and returns the
+// cumulative delivery/loss cut owned by this relay connection.
+func (connection *ReceiverConnection) CompleteObservations(ctx context.Context) LifecycleObservationCompletion {
+	if connection == nil || connection.link == nil {
+		return LifecycleObservationCompletion{Drained: true}
+	}
+	return connection.link.completeObservations(ctx)
+}
 func (connection *ReceiverConnection) Close() error {
 	if connection == nil || connection.link == nil {
 		return nil

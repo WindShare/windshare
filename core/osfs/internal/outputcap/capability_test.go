@@ -191,8 +191,11 @@ func TestCapabilityInterfacesExcludeRetiredAdapterMethods(t *testing.T) {
 		reflect.TypeFor[Directory](): {
 			"NamesWithPrefix", "ValidatePublicEntryName", "PrepareIdentityClaim", "IdentityClaim",
 		},
-		reflect.TypeFor[CurrentEntryReference](): {"AllocatedSize"},
-		reflect.TypeFor[File]():                  {"Truncate", "AllocatedSize"},
+		reflect.TypeFor[CurrentEntryReference]():  {"AllocatedSize"},
+		reflect.TypeFor[FileIdentity]():           {"ReadAt", "WriteAt", "Sync", "SetModifiedTime", "MetadataMatches", "Truncate", "AllocatedSize"},
+		reflect.TypeFor[ObservedFile]():           {"WriteAt", "Sync", "SetModifiedTime", "Truncate", "AllocatedSize"},
+		reflect.TypeFor[RecoveryDurabilityFile](): {"ReadAt", "WriteAt", "SetModifiedTime", "MetadataMatches", "Truncate", "AllocatedSize"},
+		reflect.TypeFor[MutableFile]():            {"Truncate", "AllocatedSize"},
 	}
 	for capability, methods := range retired {
 		for _, method := range methods {

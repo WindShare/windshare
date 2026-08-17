@@ -13,6 +13,45 @@ import (
 
 var ErrInvalidProjection = errors.New("command observation cannot be projected safely")
 
+type ProjectionFailureReason uint8
+
+const (
+	ProjectionUnknownEnum ProjectionFailureReason = iota + 1
+	ProjectionInvalidIdentity
+	ProjectionInvalidStageFields
+	ProjectionEventContract
+)
+
+type ProjectionError struct{ reason ProjectionFailureReason }
+
+func (err ProjectionError) Error() string                   { return ErrInvalidProjection.Error() }
+func (err ProjectionError) Unwrap() error                   { return ErrInvalidProjection }
+func (err ProjectionError) Reason() ProjectionFailureReason { return err.reason }
+
+func invalidProjection(reason ProjectionFailureReason) error { return ProjectionError{reason: reason} }
+
+func ObserverLossReason(err error) clievent.ObserverLossReason {
+	if projection, ok := errors.AsType[ProjectionError](err); ok {
+		switch projection.Reason() {
+		case ProjectionUnknownEnum:
+			return clievent.ObserverLossUnknownEnum
+		case ProjectionInvalidIdentity:
+			return clievent.ObserverLossInvalidIdentity
+		case ProjectionInvalidStageFields:
+			return clievent.ObserverLossInvalidStageFields
+		}
+	}
+	return clievent.ObserverLossEventContract
+}
+
+func RelaySessionID(raw []byte) (clievent.RelaySessionID, error) {
+	result, err := clievent.NewRelaySessionID(raw)
+	if err != nil {
+		return clievent.RelaySessionID{}, invalidProjection(ProjectionInvalidIdentity)
+	}
+	return result, nil
+}
+
 func ReceiveOperationID(value receivecontract.OperationID) (clievent.ReceiveOperationID, error) {
 	if len(value.Bytes()) != clievent.IdentityBytes {
 		return clievent.ReceiveOperationID{}, ErrInvalidProjection

@@ -305,7 +305,7 @@ func TestTreeDirectoryCleanupRetainsEveryUncertainIdentity(t *testing.T) {
 	}
 
 	lockExpected := &c5ClosureFaultFile{}
-	lockCurrent := &c5ClosureFaultFile{same: func(outputcap.File) (bool, error) { return true, nil }}
+	lockCurrent := &c5ClosureFaultFile{same: func(outputcap.FileIdentity) (bool, error) { return true, nil }}
 	lock := &c5ClosureFaultLock{file: lockExpected}
 	referenceParent := &c5ClosureFaultDirectory{}
 	lockedRun := &cleanupRun{sessionLocks: []cleanupLockRef{{
@@ -314,7 +314,7 @@ func TestTreeDirectoryCleanupRetainsEveryUncertainIdentity(t *testing.T) {
 	}}}
 	child := &c5ClosureFaultDirectory{
 		sameDirectory: func(outputcap.Directory) (bool, error) { return false, nil },
-		openFile:      func(string, bool, bool) (outputcap.File, error) { return lockCurrent, nil },
+		openFile:      func(string, bool, bool) (outputcap.MutableFile, error) { return lockCurrent, nil },
 	}
 	if err := call(lockedRun, &c5ClosureFaultDirectory{
 		openEntry:  func(string) (outputcap.CurrentEntryReference, error) { return entry, nil },
@@ -369,7 +369,7 @@ func TestCleanerStateLoadDistinguishesStorageUncertaintyFromAbsence(t *testing.T
 		classify: func(string) (outputcap.EntryKind, bool, error) {
 			return outputcap.EntryRegularFile, true, nil
 		},
-		openFile: func(string, bool, bool) (outputcap.File, error) { return nil, fs.ErrNotExist },
+		openFile: func(string, bool, bool) (outputcap.MutableFile, error) { return nil, fs.ErrNotExist },
 	}
 	if _, _, _, err := run.loadState(); !errors.Is(err, ErrCheckpointCleanerState) {
 		t.Fatalf("disappeared state error = %v", err)
@@ -380,7 +380,7 @@ func TestCleanerStateLoadDistinguishesStorageUncertaintyFromAbsence(t *testing.T
 		classify: func(string) (outputcap.EntryKind, bool, error) {
 			return outputcap.EntryRegularFile, true, nil
 		},
-		openFile: func(string, bool, bool) (outputcap.File, error) { return nil, readFailure },
+		openFile: func(string, bool, bool) (outputcap.MutableFile, error) { return nil, readFailure },
 	}
 	if _, _, _, err := run.loadState(); !errors.Is(err, readFailure) {
 		t.Fatalf("state read error = %v", err)

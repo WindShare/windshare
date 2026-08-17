@@ -24,6 +24,8 @@ const (
 	MessageCheckpointFailed
 	MessagePublicationFailed
 	MessageTraceIncomplete
+	MessageTraceExists
+	MessageOutputNeedsAttention
 )
 
 func (value SafeMessageKey) Name() (string, bool) {
@@ -62,6 +64,10 @@ func (value SafeMessageKey) Name() (string, bool) {
 		return "publication_failed", true
 	case MessageTraceIncomplete:
 		return "trace_incomplete", true
+	case MessageTraceExists:
+		return "trace_exists", true
+	case MessageOutputNeedsAttention:
+		return "output_needs_attention", true
 	default:
 		return "", false
 	}
@@ -78,6 +84,7 @@ const (
 	FailureSelectionMissing
 	FailurePublication
 	FailureTraceOpen
+	FailureTraceExists
 	FailureTraceWrite
 
 	FailureRelayMalformed
@@ -131,6 +138,7 @@ const (
 	FailureOutputResourceBudget
 	FailureOutputMutationAmbiguous
 	FailureOutputContract
+	FailureOutputNeedsAttention
 	FailureCheckpointBusy
 	FailureCheckpointCorruptRecord
 	FailureCheckpointUnsafeInstall
@@ -178,6 +186,8 @@ func commandFailureDefinition(code FailureCode) (failureDefinition, bool) {
 		return failureDefinition{"capability_publication", MessagePublicationFailed}, true
 	case FailureTraceOpen:
 		return failureDefinition{"trace_open", MessageTraceIncomplete}, true
+	case FailureTraceExists:
+		return failureDefinition{"trace_exists", MessageTraceExists}, true
 	case FailureTraceWrite:
 		return failureDefinition{"trace_write", MessageTraceIncomplete}, true
 	default:
@@ -306,6 +316,8 @@ func outputFailureDefinition(code FailureCode) (failureDefinition, bool) {
 		return failureDefinition{"output_mutation_ambiguous", MessageOutputFailed}, true
 	case FailureOutputContract:
 		return failureDefinition{"output_contract", MessageOutputFailed}, true
+	case FailureOutputNeedsAttention:
+		return failureDefinition{"output_needs_attention", MessageOutputNeedsAttention}, true
 	case FailureCheckpointBusy:
 		return failureDefinition{"checkpoint_busy", MessageCheckpointFailed}, true
 	case FailureCheckpointCorruptRecord:

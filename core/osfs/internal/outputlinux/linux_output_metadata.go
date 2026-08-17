@@ -60,7 +60,7 @@ func linuxModifiedTimespec(modified catalog.ModifiedTime) (unix.Timespec, error)
 
 func (file *linuxOutputRegularFile) setModifiedTime(modified catalog.ModifiedTime) error {
 	const operation = "set output file modified time"
-	if err := file.requireWritable(operation); err != nil {
+	if err := file.requireMutable(operation); err != nil {
 		return err
 	}
 	if linuxModifiedTimeRequiresExtendedInodeFields(modified) {

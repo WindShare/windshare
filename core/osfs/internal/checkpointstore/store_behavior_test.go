@@ -324,42 +324,42 @@ func TestOwnershipMarkerRejectsAmbiguousInstallCuts(t *testing.T) {
 	}{
 		{
 			name: "allocation exhausted",
-			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.File, error) {
+			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 				return nil, outputcap.ErrNamespaceCollision
 			}},
 			want: outputcap.ErrUnsafeNamespace,
 		},
 		{
 			name: "create failure",
-			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.File, error) {
+			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 				return nil, failure
 			}},
 			want: failure,
 		},
 		{
 			name: "create contention",
-			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.File, error) {
+			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 				return nil, outputcap.ErrFixedLinkSourceChanged
 			}},
 			want: outputcap.ErrNamespaceLockBusy,
 		},
 		{
 			name: "write failure",
-			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.File, error) {
+			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 				return &faultFile{writeAt: func([]byte, int64) (int, error) { return 0, failure }}, nil
 			}},
 			want: failure,
 		},
 		{
 			name: "short write",
-			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.File, error) {
+			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 				return &faultFile{writeAt: func(encoded []byte, _ int64) (int, error) { return len(encoded) - 1, nil }}, nil
 			}},
 			want: outputcap.ErrUnsafeNamespace,
 		},
 		{
 			name: "link failure",
-			directory: &faultDirectory{Directory: newMemoryDirectory(), linkFile: func(outputcap.File, string) (outputcap.File, error) {
+			directory: &faultDirectory{Directory: newMemoryDirectory(), linkFile: func(outputcap.FileIdentity, string) (outputcap.ObservedFile, error) {
 				return nil, failure
 			}},
 			want: failure,
@@ -403,43 +403,43 @@ func TestRecordInstallRejectsUnverifiedNamespaceOutcomes(t *testing.T) {
 	}{
 		{
 			name: "allocation exhausted",
-			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.File, error) {
+			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 				return nil, outputcap.ErrNamespaceCollision
 			}},
 			want: outputcap.ErrUnsafeNamespace,
 		},
 		{
 			name: "create failure",
-			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.File, error) {
+			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 				return nil, failure
 			}},
 			want: failure,
 		},
 		{
 			name: "write failure",
-			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.File, error) {
+			directory: &faultDirectory{Directory: newMemoryDirectory(), createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 				return &faultFile{writeAt: func([]byte, int64) (int, error) { return 0, failure }}, nil
 			}},
 			want: failure,
 		},
 		{
 			name: "link failure",
-			directory: &faultDirectory{Directory: newMemoryDirectory(), linkFile: func(outputcap.File, string) (outputcap.File, error) {
+			directory: &faultDirectory{Directory: newMemoryDirectory(), linkFile: func(outputcap.FileIdentity, string) (outputcap.ObservedFile, error) {
 				return nil, failure
 			}},
 			want: failure,
 		},
 		{
 			name: "link contention",
-			directory: &faultDirectory{Directory: newMemoryDirectory(), linkFile: func(outputcap.File, string) (outputcap.File, error) {
+			directory: &faultDirectory{Directory: newMemoryDirectory(), linkFile: func(outputcap.FileIdentity, string) (outputcap.ObservedFile, error) {
 				return nil, outputcap.ErrFixedLinkSourceChanged
 			}},
 			want: outputcap.ErrNamespaceLockBusy,
 		},
 		{
 			name: "unverified link",
-			directory: &faultDirectory{Directory: newMemoryDirectory(), linkFile: func(source outputcap.File, _ string) (outputcap.File, error) {
-				return source, nil
+			directory: &faultDirectory{Directory: newMemoryDirectory(), linkFile: func(source outputcap.FileIdentity, _ string) (outputcap.ObservedFile, error) {
+				return source.(outputcap.ObservedFile), nil
 			}},
 			want: checkpointmodel.ErrRecordCrashBoundary,
 		},
@@ -455,7 +455,7 @@ func TestRecordInstallRejectsUnverifiedNamespaceOutcomes(t *testing.T) {
 	writeMemoryFile(t, base, "record.state", encoded)
 	failedReplace := &faultDirectory{
 		Directory: base,
-		replaceFile: func(outputcap.File, string) error {
+		replaceFile: func(outputcap.FileIdentity, string) error {
 			return failure
 		},
 	}
@@ -467,7 +467,7 @@ func TestRecordInstallRejectsUnverifiedNamespaceOutcomes(t *testing.T) {
 	writeMemoryFile(t, adopted, "record.state", encoded)
 	adoptedWithError := &faultDirectory{
 		Directory: adopted,
-		replaceFile: func(source outputcap.File, name string) error {
+		replaceFile: func(source outputcap.FileIdentity, name string) error {
 			if err := adopted.ReplacePrivateFile(source, name); err != nil {
 				return err
 			}
@@ -486,12 +486,12 @@ func TestRecordInstallerClosesCapabilitiesReturnedWithErrors(t *testing.T) {
 	failure := errors.New("operation returned a capability with an error")
 	createCloses := 0
 	createHandle := &closeTrackingFile{
-		File:   &memoryFile{data: &memoryFileData{bytes: make([]byte, len("record-image"))}},
-		closes: &createCloses,
+		MutableFile: &memoryFile{data: &memoryFileData{bytes: make([]byte, len("record-image"))}},
+		closes:      &createCloses,
 	}
 	createDirectory := &faultDirectory{
 		Directory: newMemoryDirectory(),
-		createFile: func(string, bool, int64) (outputcap.File, error) {
+		createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 			return createHandle, failure
 		},
 	}
@@ -501,12 +501,12 @@ func TestRecordInstallerClosesCapabilitiesReturnedWithErrors(t *testing.T) {
 
 	linkCloses := 0
 	linkHandle := &closeTrackingFile{
-		File:   &memoryFile{data: &memoryFileData{bytes: []byte("target")}},
-		closes: &linkCloses,
+		MutableFile: &memoryFile{data: &memoryFileData{bytes: []byte("target")}},
+		closes:      &linkCloses,
 	}
 	linkDirectory := &faultDirectory{
 		Directory: newMemoryDirectory(),
-		linkFile: func(outputcap.File, string) (outputcap.File, error) {
+		linkFile: func(outputcap.FileIdentity, string) (outputcap.ObservedFile, error) {
 			return linkHandle, failure
 		},
 	}
@@ -550,7 +550,7 @@ func TestRecordReplacementPreservesEveryPreInstallFailure(t *testing.T) {
 		{
 			name: "allocation exhausted",
 			directory: func(base *memoryDirectory) outputcap.Directory {
-				return &faultDirectory{Directory: base, createFile: func(string, bool, int64) (outputcap.File, error) {
+				return &faultDirectory{Directory: base, createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 					return nil, outputcap.ErrNamespaceCollision
 				}}
 			},
@@ -559,7 +559,7 @@ func TestRecordReplacementPreservesEveryPreInstallFailure(t *testing.T) {
 		{
 			name: "create failure",
 			directory: func(base *memoryDirectory) outputcap.Directory {
-				return &faultDirectory{Directory: base, createFile: func(string, bool, int64) (outputcap.File, error) {
+				return &faultDirectory{Directory: base, createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 					return nil, failure
 				}}
 			},
@@ -568,7 +568,7 @@ func TestRecordReplacementPreservesEveryPreInstallFailure(t *testing.T) {
 		{
 			name: "write failure",
 			directory: func(base *memoryDirectory) outputcap.Directory {
-				return &faultDirectory{Directory: base, createFile: func(string, bool, int64) (outputcap.File, error) {
+				return &faultDirectory{Directory: base, createFile: func(string, bool, int64) (outputcap.MutableFile, error) {
 					return &faultFile{writeAt: func([]byte, int64) (int, error) { return 0, failure }}, nil
 				}}
 			},

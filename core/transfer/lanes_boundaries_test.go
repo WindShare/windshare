@@ -26,7 +26,7 @@ func TestLaneCapabilitiesRejectNilAndStaleAuthorities(t *testing.T) {
 
 	lanes := newBoundaryLaneSet(t, 1)
 	identity := LaneIdentity{ID: 1, Epoch: 1}
-	if err := lanes.Add(identity, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(identity, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, nil
 	})); err != nil {
 		t.Fatal(err)
@@ -46,12 +46,12 @@ func TestLaneCapabilitiesRejectNilAndStaleAuthorities(t *testing.T) {
 func TestLaneFetchReassignsOnlyWithRetiredOperationAuthority(t *testing.T) {
 	lanes := newBoundaryLaneSet(t, 9)
 	retiredCause := errors.New("authenticated fragment progress stopped")
-	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, NewDemandReassignableAfterRetirement(retiredCause)
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, nil
 	})); err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 	t.Run("all current identities attempted", func(t *testing.T) {
 		lanes := newBoundaryLaneSet(t, 3)
 		identity := LaneIdentity{ID: 1, Epoch: 1}
-		if err := lanes.Add(identity, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		if err := lanes.Add(identity, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, nil
 		})); err != nil {
 			t.Fatal(err)
@@ -121,7 +121,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 			selected, _, err := lanes.candidates(context.Background(), nil)
 			done <- laneCandidatesResult{selected: selected, err: err}
 		}()
-		if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, nil
 		})); err != nil {
 			t.Fatal(err)
@@ -137,7 +137,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 func TestLaneFetchTerminatesAfterEveryIdentityRejectsAdmission(t *testing.T) {
 	lanes := newBoundaryLaneSet(t, 7)
 	rejection := errors.New("transport not reached")
-	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, NewDemandNotAdmitted(rejection)
 	})); err != nil {
 		t.Fatal(err)
@@ -150,9 +150,9 @@ func TestLaneFetchTerminatesAfterEveryIdentityRejectsAdmission(t *testing.T) {
 func TestLaneLatencyAccountingClampsClockRegressionAndSmoothsSamples(t *testing.T) {
 	lanes := newBoundaryLaneSet(t, 8)
 	state := &laneState{inflight: 3}
-	lanes.finish(state, -time.Second, nil, false)
-	lanes.finish(state, time.Second, nil, false)
-	lanes.finish(state, 3*time.Second, nil, false)
+	lanes.finish(state, -time.Second, records.BlockRecord{}, nil, false, false)
+	lanes.finish(state, time.Second, records.BlockRecord{}, nil, false, false)
+	lanes.finish(state, 3*time.Second, records.BlockRecord{}, nil, false, false)
 	if state.inflight != 0 || state.latency != 1500*time.Millisecond {
 		t.Fatalf("lane accounting = inflight %d, latency %v", state.inflight, state.latency)
 	}

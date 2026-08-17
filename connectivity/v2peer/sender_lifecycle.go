@@ -3,7 +3,6 @@ package v2peer
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -185,10 +184,6 @@ func (handler *senderHandler) attemptDone(attempt *peerAttempt, result error) {
 		}
 	}
 	handler.mu.Unlock()
-	if result != nil && (!errors.Is(result, context.Canceled) ||
-		errors.Is(result, errPeerShutdown) || errors.Is(result, errChannelDrain)) {
-		handler.factory.reportError(fmt.Errorf("%w: %w", ErrNegotiation, result))
-	}
 }
 
 func (handler *senderHandler) claimEvidenceLocked(

@@ -1,8 +1,8 @@
 package v2peer
 
 import (
+	"context"
 	"errors"
-	"fmt"
 	"net"
 	"time"
 
@@ -74,11 +74,11 @@ type PeerOperationFailure struct {
 }
 
 type SenderAttemptFailure struct {
-	FailedAtStage SenderAttemptStage
-	Scope         AttemptFailureScope
-	TypedCode     TypedPeerErrorCode
-	Message       string
-	Operation     *PeerOperationFailure
+	FailedAtStage      SenderAttemptStage
+	Scope              AttemptFailureScope
+	TypedPeerErrorCode TypedPeerErrorCode
+	Message            string
+	Operation          *PeerOperationFailure
 }
 
 type SenderAttemptObservation struct {
@@ -98,6 +98,11 @@ type SenderAttemptObserver interface {
 	ObserveSenderAttempt(SenderAttemptObservation)
 }
 
+type SenderAttemptContextObserver interface {
+	SenderAttemptObserver
+	ObserveSenderAttemptContext(context.Context, SenderAttemptObservation)
+}
+
 type SenderAttemptObserverFunc func(SenderAttemptObservation)
 
 func (function SenderAttemptObserverFunc) ObserveSenderAttempt(observation SenderAttemptObservation) {
@@ -106,7 +111,20 @@ func (function SenderAttemptObserverFunc) ObserveSenderAttempt(observation Sende
 	}
 }
 
-var ErrSenderObserverPanic = errors.New("v2 peer sender observer panicked")
+type SenderAttemptContextObserverFunc func(context.Context, SenderAttemptObservation)
+
+func (function SenderAttemptContextObserverFunc) ObserveSenderAttempt(observation SenderAttemptObservation) {
+	function.ObserveSenderAttemptContext(context.Background(), observation)
+}
+
+func (function SenderAttemptContextObserverFunc) ObserveSenderAttemptContext(
+	ctx context.Context,
+	observation SenderAttemptObservation,
+) {
+	if function != nil {
+		function(ctx, observation)
+	}
+}
 
 type senderAttemptRecorder struct {
 	factory   *Factory
@@ -247,25 +265,36 @@ func cloneSelectedPair(pair *PionSelectedPairEvidence) *PionSelectedPairEvidence
 }
 
 func (factory *Factory) observeSenderAttempt(observation SenderAttemptObservation) {
-	if factory == nil || factory.observer == nil {
+	if factory == nil || factory.senderObservations == nil {
 		return
 	}
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			factory.reportError(fmt.Errorf("%w: %v", ErrSenderObserverPanic, recovered))
-		}
-	}()
-	factory.observer.ObserveSenderAttempt(observation)
+	factory.senderObservations.publish(cloneSenderAttemptObservation(observation))
 }
 
-func (factory *Factory) reportError(err error) {
-	if factory == nil || factory.onError == nil || err == nil {
+func (factory *Factory) reportDiagnostic(category PeerDiagnosticCategory, reason PeerDiagnosticReason) {
+	if factory == nil || factory.diagnostics == nil {
 		return
 	}
-	// Diagnostics are outside the connectivity state machine. A callback panic
-	// must not acquire authority to terminate an otherwise healthy relay fallback.
-	defer func() { _ = recover() }()
-	factory.onError(err)
+	factory.diagnostics.report(category, reason)
+}
+
+func cloneSenderAttemptObservation(observation SenderAttemptObservation) SenderAttemptObservation {
+	clone := observation
+	if observation.CandidateCounts != nil {
+		counts := *observation.CandidateCounts
+		clone.CandidateCounts = &counts
+	}
+	clone.Lane = cloneLane(observation.Lane)
+	clone.SelectedPair = cloneSelectedPair(observation.SelectedPair)
+	if observation.Failure != nil {
+		failure := *observation.Failure
+		if observation.Failure.Operation != nil {
+			operation := *observation.Failure.Operation
+			failure.Operation = &operation
+		}
+		clone.Failure = &failure
+	}
+	return clone
 }
 
 type selectedCandidatePairReader interface {

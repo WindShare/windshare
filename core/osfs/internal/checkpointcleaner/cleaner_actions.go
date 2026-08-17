@@ -423,7 +423,7 @@ func (run *cleanupRun) revalidateLock(
 	if parent == nil || expected == nil || expected.File() == nil {
 		return ErrCheckpointCleanerOwnership
 	}
-	current, err := parent.OpenFile(name, true, false)
+	current, err := parent.OpenObservedFile(name, true)
 	if err != nil {
 		return errors.Join(ErrCheckpointCleanerOwnership, err)
 	}

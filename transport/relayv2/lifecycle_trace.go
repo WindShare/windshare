@@ -20,11 +20,13 @@ const (
 	LifecycleTerminalSettled    LifecycleStage = "terminal_settled"
 	LifecycleLinkRetiring       LifecycleStage = "link_retiring"
 	LifecycleLinkClosed         LifecycleStage = "link_closed"
+	LifecycleTraceDropped       LifecycleStage = "trace_dropped"
 )
 
 type LifecycleRetirementSource string
 
 const (
+	LifecycleRetirementNone           LifecycleRetirementSource = "none"
 	LifecycleRetirementLocalClose     LifecycleRetirementSource = "local_close"
 	LifecycleRetirementTerminal       LifecycleRetirementSource = "terminal"
 	LifecycleRetirementRelaySession   LifecycleRetirementSource = "relay_session"
@@ -60,12 +62,21 @@ type LifecycleTrace struct {
 	RetirementSource LifecycleRetirementSource
 	Cause            LifecycleCause
 	DrainCause       LifecycleCause
+	Dropped          uint64
 }
 
-// LifecycleTracer runs after transition locks are released so observation
-// cannot alter the winner; implementations should return promptly.
+// LifecycleTracer receives link-ordered events asynchronously. Observer latency
+// and panics are isolated because diagnostics never own transport progress.
 type LifecycleTracer interface {
 	TraceRelayLifecycle(LifecycleTrace)
+}
+
+// LifecycleContextTracer receives revocable callback authority. Owners that can
+// block before publication should implement it so a bounded drain can prevent a
+// timed-out callback from committing a late fact.
+type LifecycleContextTracer interface {
+	LifecycleTracer
+	TraceRelayLifecycleContext(context.Context, LifecycleTrace)
 }
 
 type LifecycleTraceFunc func(LifecycleTrace)
@@ -73,6 +84,18 @@ type LifecycleTraceFunc func(LifecycleTrace)
 func (function LifecycleTraceFunc) TraceRelayLifecycle(event LifecycleTrace) {
 	if function != nil {
 		function(event)
+	}
+}
+
+type LifecycleContextTraceFunc func(context.Context, LifecycleTrace)
+
+func (function LifecycleContextTraceFunc) TraceRelayLifecycle(event LifecycleTrace) {
+	function.TraceRelayLifecycleContext(context.Background(), event)
+}
+
+func (function LifecycleContextTraceFunc) TraceRelayLifecycleContext(ctx context.Context, event LifecycleTrace) {
+	if function != nil {
+		function(ctx, event)
 	}
 }
 
@@ -98,5 +121,144 @@ func lifecycleCause(err error) LifecycleCause {
 		return LifecycleCauseClosed
 	default:
 		return LifecycleCauseTransport
+	}
+}
+
+func terminalReservedTrace(sessionID v2.RelaySessionID, operationID uint64) LifecycleTrace {
+	return LifecycleTrace{
+		RelaySessionID: sessionID, OperationID: operationID,
+		Stage: LifecycleTerminalReserved, Terminal: true,
+		RetirementSource: LifecycleRetirementNone,
+		Cause:            LifecycleCauseNone, DrainCause: LifecycleCauseNone,
+	}
+}
+
+func terminalSendAdmittedTrace(sessionID v2.RelaySessionID, operationID uint64) LifecycleTrace {
+	return LifecycleTrace{
+		RelaySessionID: sessionID, OperationID: operationID,
+		Stage: LifecycleSendAdmitted, Terminal: true,
+		Disposition:      framechannel.SendAccepted,
+		RetirementSource: LifecycleRetirementNone,
+		Cause:            LifecycleCauseNone, DrainCause: LifecycleCauseNone,
+	}
+}
+
+func acceptedSendFailureTrace(
+	sessionID v2.RelaySessionID,
+	operationID uint64,
+	cause LifecycleCause,
+) LifecycleTrace {
+	return LifecycleTrace{
+		RelaySessionID: sessionID, OperationID: operationID,
+		Stage:            LifecycleSendAdmitted,
+		Disposition:      framechannel.SendAccepted,
+		RetirementSource: LifecycleRetirementNone,
+		Cause:            cause, DrainCause: LifecycleCauseNone,
+	}
+}
+
+func sendRejectedTrace(
+	sessionID v2.RelaySessionID,
+	operationID uint64,
+	terminal bool,
+	disposition framechannel.SendDisposition,
+	cause LifecycleCause,
+) LifecycleTrace {
+	return LifecycleTrace{
+		RelaySessionID: sessionID, OperationID: operationID,
+		Stage: LifecycleSendRejected, Terminal: terminal, Disposition: disposition,
+		RetirementSource: LifecycleRetirementNone,
+		Cause:            cause, DrainCause: LifecycleCauseNone,
+	}
+}
+
+func sendRolledBackTrace(
+	sessionID v2.RelaySessionID,
+	operationID uint64,
+	terminal bool,
+	cause LifecycleCause,
+) LifecycleTrace {
+	return LifecycleTrace{
+		RelaySessionID: sessionID, OperationID: operationID,
+		Stage: LifecycleSendRolledBack, Terminal: terminal,
+		Disposition:      framechannel.SendRejected,
+		RetirementSource: LifecycleRetirementNone,
+		Cause:            cause, DrainCause: LifecycleCauseNone,
+	}
+}
+
+func retirementDeferredTrace(
+	sessionID v2.RelaySessionID,
+	operationID uint64,
+	terminal bool,
+	source LifecycleRetirementSource,
+	cause LifecycleCause,
+	drainCause LifecycleCause,
+) LifecycleTrace {
+	return LifecycleTrace{
+		RelaySessionID: sessionID, OperationID: operationID,
+		Stage: LifecycleRetirementDeferred, Terminal: terminal,
+		RetirementSource: source, Cause: cause, DrainCause: drainCause,
+	}
+}
+
+func retiredTrace(
+	sessionID v2.RelaySessionID,
+	operationID uint64,
+	terminal bool,
+	source LifecycleRetirementSource,
+	cause LifecycleCause,
+	drainCause LifecycleCause,
+) LifecycleTrace {
+	return LifecycleTrace{
+		RelaySessionID: sessionID, OperationID: operationID,
+		Stage: LifecycleRetired, Terminal: terminal,
+		RetirementSource: source, Cause: cause, DrainCause: drainCause,
+	}
+}
+
+func terminalSettledTrace(
+	sessionID v2.RelaySessionID,
+	operationID uint64,
+	cause LifecycleCause,
+) LifecycleTrace {
+	return LifecycleTrace{
+		RelaySessionID: sessionID, OperationID: operationID,
+		Stage: LifecycleTerminalSettled, Terminal: true,
+		Disposition:      framechannel.SendAccepted,
+		RetirementSource: LifecycleRetirementNone,
+		Cause:            cause, DrainCause: LifecycleCauseNone,
+	}
+}
+
+func linkRetiringTrace(
+	operationID uint64,
+	source LifecycleRetirementSource,
+	cause LifecycleCause,
+	drainCause LifecycleCause,
+) LifecycleTrace {
+	return LifecycleTrace{
+		OperationID: operationID, Stage: LifecycleLinkRetiring,
+		RetirementSource: source, Cause: cause, DrainCause: drainCause,
+	}
+}
+
+func linkClosedTrace(
+	operationID uint64,
+	source LifecycleRetirementSource,
+	cause LifecycleCause,
+) LifecycleTrace {
+	return LifecycleTrace{
+		OperationID: operationID, Stage: LifecycleLinkClosed,
+		RetirementSource: source, Cause: cause, DrainCause: LifecycleCauseNone,
+	}
+}
+
+func traceDroppedSummary(linkID uint64, dropped uint64) LifecycleTrace {
+	return LifecycleTrace{
+		LinkID: linkID, Stage: LifecycleTraceDropped,
+		RetirementSource: LifecycleRetirementNone,
+		Cause:            LifecycleCauseNone, DrainCause: LifecycleCauseNone,
+		Dropped: dropped,
 	}
 }

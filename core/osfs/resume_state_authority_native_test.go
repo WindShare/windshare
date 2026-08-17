@@ -318,7 +318,7 @@ func TestRepositoryResumeStateAuthorityDeindexesBeforeSafeDiscard(t *testing.T) 
 	})
 	pending, err := pendingAuthority.Discard(context.Background(), pendingFixture.operation)
 	if err != nil || pending.State() != ResumeOperationCleanupPending ||
-		pending.NeedsAttentionReason() != checkpointmodel.OrdinaryReasonCleanupUncertain.String() ||
+		pending.NeedsAttentionReason() != FilesystemOutputStateCleanupUncertain ||
 		!slices.Equal(pendingLease.transitions, []checkpointmodel.OrdinaryLifecycleEvent{
 			checkpointmodel.OrdinaryLifecycleDiscard,
 			checkpointmodel.OrdinaryLifecycleCleanupFailed,

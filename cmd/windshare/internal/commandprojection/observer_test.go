@@ -20,7 +20,6 @@ import (
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
@@ -31,10 +30,10 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		relayv2.LifecycleSendRejected, relayv2.LifecycleSendRolledBack,
 		relayv2.LifecycleRetirementDeferred, relayv2.LifecycleRetired,
 		relayv2.LifecycleTerminalSettled, relayv2.LifecycleLinkRetiring,
-		relayv2.LifecycleLinkClosed,
+		relayv2.LifecycleLinkClosed, relayv2.LifecycleTraceDropped,
 	}, relayv2.LifecycleStage("unknown"), projectRelayStage)
 	assertClosedProjection(t, "relay retirement", []relayv2.LifecycleRetirementSource{
-		"", relayv2.LifecycleRetirementLocalClose, relayv2.LifecycleRetirementTerminal,
+		relayv2.LifecycleRetirementNone, relayv2.LifecycleRetirementLocalClose, relayv2.LifecycleRetirementTerminal,
 		relayv2.LifecycleRetirementRelaySession, relayv2.LifecycleRetirementLinkClose,
 		relayv2.LifecycleRetirementLinkFailure, relayv2.LifecycleRetirementIngressFailure,
 	}, relayv2.LifecycleRetirementSource("unknown"), projectRelayRetirement)
@@ -189,9 +188,9 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 
 func TestLifecycleProjectionCopiesOnlyWhitelistedFacts(t *testing.T) {
 	relay, err := ProjectRelayLifecycle(clievent.CommandShare, relayv2.LifecycleTrace{
-		LinkID: 9, RelaySessionID: v2.RelaySessionID{0x91}, OperationID: 10,
+		LinkID: 9, OperationID: 10,
 		Stage: relayv2.LifecycleLinkClosed, RetirementSource: relayv2.LifecycleRetirementRelaySession,
-		Cause: relayv2.LifecycleCauseClosed, DrainCause: relayv2.LifecycleCauseTransport,
+		Cause: relayv2.LifecycleCauseClosed, DrainCause: relayv2.LifecycleCauseNone,
 	})
 	if err != nil || relay.LinkID() != 9 || relay.SendOperationID() != 10 ||
 		relay.Stage() != clievent.RelayLinkClosed || relay.RetirementSource() != clievent.RelayRetirementSession {
@@ -201,7 +200,7 @@ func TestLifecycleProjectionCopiesOnlyWhitelistedFacts(t *testing.T) {
 	webRTC, err := ProjectWebRTCLifecycle(clievent.CommandGet, wsrtc.LifecycleTrace{
 		ChannelID: 12, Operation: wsrtc.LifecycleOperationChannel,
 		Transition: wsrtc.LifecycleTransitionTraceDropped, State: framechannel.Closed,
-		Terminal: wsrtc.LifecycleTerminalRemotePending, Cause: wsrtc.LifecycleCauseOther,
+		Terminal: wsrtc.LifecycleTerminalRemotePending, Cause: wsrtc.LifecycleCauseNone,
 		Dropped: 3,
 	})
 	if err != nil || webRTC.ChannelID() != 12 || webRTC.Dropped() != 3 ||
@@ -233,7 +232,7 @@ func TestLifecycleProjectionCopiesOnlyWhitelistedFacts(t *testing.T) {
 		SessionID: sessionID, PeerPathID: peerPath, AttemptID: attemptID,
 		SideSequence: 5, Stage: v2peer.SenderAttemptFailed,
 		Failure: &v2peer.SenderAttemptFailure{
-			Scope: v2peer.AttemptFailureScopeSession, TypedCode: v2peer.TypedPeerErrorAdmission,
+			Scope: v2peer.AttemptFailureScopeSession, TypedPeerErrorCode: v2peer.TypedPeerErrorAdmission,
 			Message:   "provider-message-SECRET",
 			Operation: &v2peer.PeerOperationFailure{Code: 99, Message: "operation-message-SECRET"},
 		},
@@ -350,6 +349,22 @@ func TestCoreObserverProjectionPreservesCorrelationAndDropsAuthoritySecrets(t *t
 	}
 	if _, present := withoutReceive.ReceiveOperationID(); present {
 		t.Fatal("pre-binding filesystem trace invented receive-operation correlation")
+	}
+	failedFilesystem, err := ProjectFilesystemOutput(osfs.FilesystemOutputTrace{
+		Operation:          osfs.TraceCheckpointReconciled,
+		FailureStage:       osfs.FilesystemOutputFailureNativeDurability,
+		ReconciliationStep: osfs.FilesystemCheckpointRecordPromotion,
+		NativeErrorClass:   osfs.FilesystemNativeErrorSharingViolation,
+		Failed:             true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, step, nativeClass, present := failedFilesystem.FailureClassification()
+	if !present || stage != clievent.FilesystemFailureNativeDurability ||
+		step != clievent.FilesystemReconciliationRecordPromotion ||
+		nativeClass != clievent.FilesystemNativeErrorSharingViolation {
+		t.Fatalf("filesystem failure classification = (%v, %v, %v, %t)", stage, step, nativeClass, present)
 	}
 
 	terminal, err := ProjectSenderTerminal(sessionruntime.SenderTerminalObservation{

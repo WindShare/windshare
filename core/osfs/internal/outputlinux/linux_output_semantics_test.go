@@ -192,7 +192,7 @@ func TestLinuxSemanticFilePublicationIsNoCopyAndNoReplace(t *testing.T) {
 	if err != nil || outcome != outputcap.PublishNoReplaceCommitted {
 		t.Fatalf("first publish outcome=%v error=%v", outcome, err)
 	}
-	final, err := root.OpenFile("final", false, false)
+	final, err := root.OpenObservedFile("final", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestLinuxSemanticFilePublicationReportsPostLinkIndeterminate(t *testing.T) 
 	if outcome != outputcap.PublishNoReplaceIndeterminate || publishErr == nil {
 		t.Fatalf("post-link sync outcome=%v error=%v", outcome, publishErr)
 	}
-	final, err := root.OpenFile("final", false, false)
+	final, err := root.OpenObservedFile("final", false)
 	if err != nil {
 		t.Fatalf("indeterminate publish did not retain reconcilable final: %v", err)
 	}
@@ -389,21 +389,21 @@ func TestLinuxLiveCleanupTicketCreatesAndRemovesOnlyExactStage(t *testing.T) {
 	if requestedMode != linuxPublicFileCreateMode {
 		t.Fatalf("anonymous stage requested mode=%o, want %o", requestedMode, linuxPublicFileCreateMode)
 	}
-	stage, err := control.OpenFile(ticket.StageName(), false, true)
+	stage, err := control.OpenMutableFile(ticket.StageName(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if size, sizeErr := stage.Size(); sizeErr != nil || size != ticket.ExactSize() {
 		t.Fatalf("stage size=%d error=%v", size, sizeErr)
 	}
-	facts, err := stage.(*linuxV3File).native.currentIdentity()
+	facts, err := stage.(*linuxV3MutableFile).state.native.currentIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if facts.mode&linuxOutputPermissionMask == linuxOutputStateFileMode ||
-		stage.(*linuxV3File).native.requireExactPermissions {
+		stage.(*linuxV3MutableFile).state.native.requireExactPermissions {
 		t.Fatalf("stage inherited private mode/profile: mode=%o exact=%t",
-			facts.mode&linuxOutputPermissionMask, stage.(*linuxV3File).native.requireExactPermissions)
+			facts.mode&linuxOutputPermissionMask, stage.(*linuxV3MutableFile).state.native.requireExactPermissions)
 	}
 
 	if err := root.CreateLiveCleanupStage(control, ticket); !errors.Is(err, outputcap.ErrNamespaceCollision) {
@@ -420,7 +420,7 @@ func TestLinuxLiveCleanupTicketCreatesAndRemovesOnlyExactStage(t *testing.T) {
 	if err != nil || outcome != outputcap.PublishNoReplaceCommitted {
 		t.Fatalf("publish cleanup stage outcome=%v error=%v", outcome, err)
 	}
-	final, err := root.OpenFile("final", false, false)
+	final, err := root.OpenObservedFile("final", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +473,7 @@ func TestLinuxNestedLiveStageInheritsExactParentDefaultACL(t *testing.T) {
 	if err := nested.CreateLiveCleanupStage(control, ticket); err != nil {
 		t.Fatal(err)
 	}
-	stage, err := control.OpenFile(ticket.StageName(), false, true)
+	stage, err := control.OpenMutableFile(ticket.StageName(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,7 +511,7 @@ func TestLinuxNestedLiveStageInheritsExactParentDefaultACL(t *testing.T) {
 	if err != nil || outcome != outputcap.PublishNoReplaceCommitted {
 		t.Fatalf("nested publish = (%d, %v)", outcome, err)
 	}
-	final, err := nested.OpenFile("final", false, false)
+	final, err := nested.OpenObservedFile("final", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,13 +589,13 @@ func TestLinuxLiveCleanupPreservesUnknownReplacement(t *testing.T) {
 	if err := root.CreateLiveCleanupStage(control, ticket); err != nil {
 		t.Fatal(err)
 	}
-	owned, err := control.OpenFile(ticket.StageName(), false, true)
+	owned, err := control.OpenMutableFile(ticket.StageName(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	displacedName := "displaced-stage"
-	if err := owned.(*linuxV3File).origin.parent.renameRegularFile(
-		ticket.StageName(), owned.(*linuxV3File).native,
+	if err := owned.(*linuxV3MutableFile).state.origin.parent.renameRegularFile(
+		ticket.StageName(), owned.(*linuxV3MutableFile).state.native,
 		control.native, displacedName, linuxRenameReplace,
 	); err != nil {
 		t.Fatal(err)

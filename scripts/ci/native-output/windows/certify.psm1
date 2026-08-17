@@ -6,13 +6,15 @@ $script:RequiredWindowsNativeTestSelectors = @(
         PackageArgument = './core/osfs'
         TestNames = @(
             'TestWindowsNTFSNativeCertification',
-            'TestWindowsNTFSProcessRestartRecovery'
+            'TestWindowsNTFSProcessRestartRecovery',
+            'TestWindowsNTFSRetainedCandidateListAndReopen'
         )
     },
     [pscustomobject]@{
         PackageArgument = './core/osfs/internal/outputwindows'
         TestNames = @(
-            'TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment'
+            'TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment',
+            'TestWindowsRecoveryDurabilityOrdinaryStageSync'
         )
     }
 )

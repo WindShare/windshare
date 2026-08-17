@@ -138,6 +138,7 @@ func TestSenderObserverEmitsExactSuccessfulLifecycle(t *testing.T) {
 		t.Fatalf("channel admitted before Opened completed: %T", admission)
 	case <-time.After(25 * time.Millisecond):
 	}
+	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) >= 4 })
 	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 4 {
 		t.Fatalf("pre-open observations = %#v", observations)
 	}
@@ -238,10 +239,10 @@ func TestSenderObserverEmitsExactSuccessfulLifecycle(t *testing.T) {
 func TestSenderObserverPanicCannotChangeConnectivityOutcome(t *testing.T) {
 	peer := newTestPeerConnection()
 	channel := newTestPeerChannel()
-	observerErrors := make(chan error, 16)
+	diagnostics := &peerDiagnosticCollector{}
 	factory := mustTestFactory(t, Config{
-		Observer: SenderAttemptObserverFunc(func(SenderAttemptObservation) { panic("observer failure") }),
-		OnError:  func(err error) { observerErrors <- err },
+		Observer:           SenderAttemptObserverFunc(func(SenderAttemptObservation) { panic("observer failure") }),
+		DiagnosticObserver: PeerDiagnosticObserverFunc(diagnostics.observe),
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return peer, nil
 		}),
@@ -256,11 +257,13 @@ func TestSenderObserverPanicCannotChangeConnectivityOutcome(t *testing.T) {
 	receiveTest(t, session.controls)
 	peer.emitDataChannel(&pion.DataChannel{})
 	receiveTest(t, session.admissions)
-	for index := range 7 {
-		if err := receiveTest(t, observerErrors); !errors.Is(err, ErrSenderObserverPanic) {
-			t.Fatalf("observer error[%d] = %v", index, err)
-		}
-	}
+	waitForTest(t, func() bool {
+		observation, ok := diagnostics.latest(
+			PeerDiagnosticSenderAttempt,
+			PeerDiagnosticObserverPanic,
+		)
+		return ok && observation.Count == 7
+	})
 	if err := channel.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -333,13 +336,14 @@ func TestSenderObserverPreservesNegotiationFailure(t *testing.T) {
 		t.Fatalf("failure envelope = %#v", failed)
 	}
 	wantFailure := SenderAttemptFailure{
-		FailedAtStage: SenderAttemptAnswerCreated,
-		Scope:         AttemptFailureScopeAttempt,
-		TypedCode:     TypedPeerErrorNegotiation,
-		Message:       peerNegotiationFailureMessage,
+		FailedAtStage:      SenderAttemptAnswerCreated,
+		Scope:              AttemptFailureScopeAttempt,
+		TypedPeerErrorCode: TypedPeerErrorNegotiation,
+		Message:            peerNegotiationFailureMessage,
 	}
 	if failed.Failure == nil || failed.Failure.FailedAtStage != wantFailure.FailedAtStage ||
-		failed.Failure.Scope != wantFailure.Scope || failed.Failure.TypedCode != wantFailure.TypedCode ||
+		failed.Failure.Scope != wantFailure.Scope ||
+		failed.Failure.TypedPeerErrorCode != wantFailure.TypedPeerErrorCode ||
 		failed.Failure.Message != wantFailure.Message || failed.Failure.Operation == nil ||
 		failed.Failure.Operation.Code != protocolsession.PeerOperationCodeNegotiation ||
 		failed.Failure.Operation.Message != peerNegotiationFailureMessage {
@@ -387,7 +391,7 @@ func TestSenderObserverPreservesAdmissionFailure(t *testing.T) {
 	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
 		terminal.Failure.FailedAtStage != SenderAttemptLaneAdmissionStarted ||
 		terminal.Failure.Scope != AttemptFailureScopeAttempt ||
-		terminal.Failure.TypedCode != TypedPeerErrorAdmission ||
+		terminal.Failure.TypedPeerErrorCode != TypedPeerErrorAdmission ||
 		terminal.Failure.Message != peerAdmissionFailureMessage ||
 		terminal.Failure.Operation == nil ||
 		terminal.Failure.Operation.Code != protocolsession.PeerOperationCodeAdmission ||
@@ -444,7 +448,7 @@ func TestSenderObserverClassifiesCancellationAndRuntimeStop(t *testing.T) {
 			failed := observed[len(observed)-1]
 			if failed.Stage != SenderAttemptFailed || failed.Failure == nil ||
 				failed.Failure.FailedAtStage != SenderAttemptDataChannelOpen ||
-				failed.Failure.Scope != test.scope || failed.Failure.TypedCode != test.code ||
+				failed.Failure.Scope != test.scope || failed.Failure.TypedPeerErrorCode != test.code ||
 				failed.Failure.Message != test.message || failed.Failure.Operation != nil {
 				t.Fatalf("classified failure = %#v", failed)
 			}
@@ -544,7 +548,7 @@ func TestSenderObserverCountsOnlyDeliveredCandidatesBeforeLimitFailure(t *testin
 	terminal := observed[len(observed)-1]
 	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
 		terminal.Failure.FailedAtStage != SenderAttemptDataChannelOpen ||
-		terminal.Failure.TypedCode != TypedPeerErrorCandidates || terminal.CandidateCounts == nil ||
+		terminal.Failure.TypedPeerErrorCode != TypedPeerErrorCandidates || terminal.CandidateCounts == nil ||
 		*terminal.CandidateCounts != (SenderCandidateCounts{LocalEmitted: 1}) {
 		t.Fatalf("candidate limit terminal = %#v", terminal)
 	}
@@ -586,7 +590,7 @@ func TestSenderObserverTreatsRetiredCandidateAsAttemptCancellation(t *testing.T)
 	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
 		terminal.Failure.FailedAtStage != SenderAttemptDataChannelOpen ||
 		terminal.Failure.Scope != AttemptFailureScopeAttempt ||
-		terminal.Failure.TypedCode != TypedPeerErrorCancelled ||
+		terminal.Failure.TypedPeerErrorCode != TypedPeerErrorCancelled ||
 		terminal.Failure.Operation != nil || terminal.CandidateCounts == nil ||
 		*terminal.CandidateCounts != (SenderCandidateCounts{}) {
 		t.Fatalf("dropped candidate terminal = %#v", terminal)
@@ -620,14 +624,17 @@ func TestSenderAttemptRecorderAllowsOnlyOneTerminalAtEveryBoundary(t *testing.T)
 				recorder.complete(stages[index], SenderCandidateCounts{}, nil, nil)
 			}
 			recorder.fail(SenderAttemptFailure{
-				Scope: AttemptFailureScopeAttempt, TypedCode: TypedPeerErrorUnexpected,
+				Scope: AttemptFailureScopeAttempt, TypedPeerErrorCode: TypedPeerErrorUnexpected,
 				Message: peerUnexpectedFailureMessage,
 			})
 			recorder.fail(SenderAttemptFailure{
-				Scope: AttemptFailureScopeSession, TypedCode: TypedPeerErrorStopped,
+				Scope: AttemptFailureScopeSession, TypedPeerErrorCode: TypedPeerErrorStopped,
 				Message: peerRuntimeStoppedMessage,
 			})
 			recorder.complete(stages[failedIndex], SenderCandidateCounts{}, nil, nil)
+			waitForTest(t, func() bool {
+				return len(collector.forAttempt(binding.AttemptID)) == failedIndex+1
+			})
 			observed := collector.forAttempt(binding.AttemptID)
 			if len(observed) != failedIndex+1 || observed[len(observed)-1].Stage != SenderAttemptFailed ||
 				observed[len(observed)-1].Failure == nil ||

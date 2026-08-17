@@ -59,9 +59,13 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		}
 		return ExitFailure
 	}
-	defer runtime.Close()
 	startedAt := runtime.Clock().Now()
 	observations := newShareObservations(runtime)
+	defer func() {
+		observations.completeWithin()
+		runtime.FinalizeStaged()
+		runtime.Close()
+	}()
 
 	prepared, code := a.prepareShareSender(ctx, request, runtime.Clock(), runtime, observations)
 	if code != ExitOK {
@@ -150,7 +154,7 @@ func (a *App) connectShareRelay(
 		RelayBaseURL: relayURL, Init: register, SenderPrivateKey: material.SenderPrivateKey,
 		Descriptor: material.Descriptor,
 		Dial: relayv2.DialOptions{
-			LifecycleTracer: observations,
+			LifecycleTracer: observations.relayTracer(),
 		},
 	})
 	if err != nil {
@@ -164,6 +168,7 @@ func (a *App) connectShareRelay(
 	relayAuthority, err := commandprojection.RelayAuthority(connection.Endpoint())
 	if err != nil {
 		_ = connection.Close()
+		observations.registerRelayCompletion(connection.CompleteObservations)
 		emitShareCommandFailure(runtime, ExitFailure, err)
 		return nil, clievent.RelayAuthority{}, ExitFailure
 	}
@@ -177,9 +182,11 @@ func (a *App) connectShareRelay(
 	})
 	if err != nil {
 		_ = connection.Close()
+		observations.registerRelayCompletion(connection.CompleteObservations)
 		emitShareCommandFailure(runtime, ExitFailure, err)
 		return nil, clievent.RelayAuthority{}, ExitFailure
 	}
+	observations.registerRelayCompletion(lifecycle.CompleteObservations)
 	return lifecycle, relayAuthority, ExitOK
 }
 
@@ -317,6 +324,7 @@ func (a *App) serveActiveShare(ctx context.Context, active *activeShare) int {
 		emitShareKnownFailure(active.runtime, ExitFailure, clievent.FailureUnexpected)
 		return ExitFailure
 	}
+	active.observations.completeWithin()
 	active.runtime.Finalize(event)
 	code, ok := result.ExitCode().ProcessCode()
 	if !ok {
@@ -430,7 +438,7 @@ func (a *App) serveSessions(
 			session := admission.Session
 			if session == nil {
 				_ = channel.Close()
-				observations.projectionFailed()
+				observations.projectionFailed(clievent.ObserverLossCommandAdapter, commandprojection.ErrInvalidProjection)
 				return
 			}
 			<-session.Done()
@@ -459,6 +467,10 @@ func emitShareCommandFailure(emitter shareCommandPublisher, exit int, cause erro
 		emitShareKnownFailure(emitter, ExitFailure, clievent.FailureUnexpected)
 		return
 	}
+	if finalizer, ok := emitter.(shareCommandFinalizer); ok {
+		finalizer.StageFinalization(event)
+		return
+	}
 	emitter.Publish(event)
 }
 
@@ -472,6 +484,10 @@ func emitShareKnownFailure(emitter shareCommandPublisher, exit int, code clieven
 		mustShareFailure(code),
 	)
 	if err == nil {
+		if finalizer, ok := emitter.(shareCommandFinalizer); ok {
+			finalizer.StageFinalization(event)
+			return
+		}
 		emitter.Publish(event)
 	}
 }
