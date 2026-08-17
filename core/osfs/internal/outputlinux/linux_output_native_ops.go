@@ -290,7 +290,7 @@ func (file *linuxOutputRegularFile) WriteAt(source []byte, offset int64) (int, e
 	if offset < 0 {
 		return 0, linuxUnsafe(operation, "offset cannot be negative", nil)
 	}
-	if err := file.requireWritable(operation); err != nil {
+	if err := file.requireMutable(operation); err != nil {
 		return 0, err
 	}
 	for {
@@ -330,7 +330,7 @@ type linuxOutputStableLock struct {
 }
 
 func (directory *linuxOutputDirectory) acquireExistingStableLock(name string) (*linuxOutputStableLock, error) {
-	file, err := directory.openRegularFileExact(name, true, linuxOutputStateFileMode)
+	file, err := directory.openRegularFileExact(name, linuxOutputFileMutable, linuxOutputStateFileMode)
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +351,7 @@ func (directory *linuxOutputDirectory) acquireExistingStableLock(name string) (*
 
 func linuxLockStableFile(file *linuxOutputRegularFile) (*linuxOutputStableLock, error) {
 	const operation = "lock stable output authority"
-	if err := file.requireWritable(operation); err != nil {
+	if err := file.requireMutable(operation); err != nil {
 		return nil, err
 	}
 	if err := file.system.flock(file.fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {

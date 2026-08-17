@@ -42,7 +42,7 @@ type cleanupProofDirectory struct {
 	outputcap.Directory
 	kind        outputcap.EntryKind
 	exact       bool
-	file        outputcap.File
+	file        outputcap.MutableFile
 	classifyErr error
 	openErr     error
 	removeErr   error
@@ -52,19 +52,19 @@ type cleanupProofDirectory struct {
 func (directory *cleanupProofDirectory) ClassifyExactEntry(string) (outputcap.EntryKind, bool, error) {
 	return directory.kind, directory.exact, directory.classifyErr
 }
-func (directory *cleanupProofDirectory) OpenFile(string, bool, bool) (outputcap.File, error) {
+func (directory *cleanupProofDirectory) OpenMutableFile(string, bool) (outputcap.MutableFile, error) {
 	return directory.file, directory.openErr
 }
 func (directory *cleanupProofDirectory) RemoveLiveCleanupStage(
 	checkpointmodel.LiveCleanupTicket,
-	outputcap.File,
+	outputcap.FileIdentity,
 ) error {
 	directory.removeCalls++
 	return directory.removeErr
 }
 
 type cleanupFile struct {
-	outputcap.File
+	outputcap.MutableFile
 	size     uint64
 	sizeErr  error
 	closeErr error
@@ -149,14 +149,14 @@ type nonRemovingCleanupProof struct {
 	outputcap.Directory
 	kind  outputcap.EntryKind
 	exact bool
-	file  outputcap.File
+	file  outputcap.MutableFile
 }
 
 func (proof nonRemovingCleanupProof) ClassifyExactEntry(string) (outputcap.EntryKind, bool, error) {
 	return proof.kind, proof.exact, nil
 }
 
-func (proof nonRemovingCleanupProof) OpenFile(string, bool, bool) (outputcap.File, error) {
+func (proof nonRemovingCleanupProof) OpenMutableFile(string, bool) (outputcap.MutableFile, error) {
 	return proof.file, nil
 }
 

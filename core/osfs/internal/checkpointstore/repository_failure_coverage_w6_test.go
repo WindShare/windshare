@@ -19,7 +19,7 @@ import (
 type exactFaultDirectory struct {
 	outputcap.Directory
 	classify func(string) (outputcap.EntryKind, bool, error)
-	remove   func(string, outputcap.File) error
+	remove   func(string, outputcap.FileIdentity) error
 }
 
 func (directory *exactFaultDirectory) ClassifyExactEntry(name string) (outputcap.EntryKind, bool, error) {
@@ -29,7 +29,7 @@ func (directory *exactFaultDirectory) ClassifyExactEntry(name string) (outputcap
 	return directory.Directory.ClassifyExactEntry(name)
 }
 
-func (directory *exactFaultDirectory) RemoveFile(name string, file outputcap.File) error {
+func (directory *exactFaultDirectory) RemoveFile(name string, file outputcap.FileIdentity) error {
 	if directory.remove != nil {
 		return directory.remove(name, file)
 	}
@@ -37,23 +37,23 @@ func (directory *exactFaultDirectory) RemoveFile(name string, file outputcap.Fil
 }
 
 type ownedFaultFile struct {
-	outputcap.File
-	same func(outputcap.File) (bool, error)
+	outputcap.ObservedFile
+	same func(outputcap.FileIdentity) (bool, error)
 	size func() (uint64, error)
 }
 
-func (file *ownedFaultFile) SameFile(other outputcap.File) (bool, error) {
+func (file *ownedFaultFile) SameFile(other outputcap.FileIdentity) (bool, error) {
 	if file.same != nil {
 		return file.same(other)
 	}
-	return file.File.SameFile(other)
+	return file.ObservedFile.SameFile(other)
 }
 
 func (file *ownedFaultFile) Size() (uint64, error) {
 	if file.size != nil {
 		return file.size()
 	}
-	return file.File.Size()
+	return file.ObservedFile.Size()
 }
 
 func TestOwnedObservationClassifiesEveryRecoveryHazard(t *testing.T) {
@@ -95,7 +95,7 @@ func TestOwnedObservationClassifiesEveryRecoveryHazard(t *testing.T) {
 	}
 
 	identityFailure := errors.New("identity unavailable")
-	fault := &ownedFaultFile{File: readyFile, same: func(outputcap.File) (bool, error) { return false, identityFailure }}
+	fault := &ownedFaultFile{ObservedFile: readyFile, same: func(outputcap.FileIdentity) (bool, error) { return false, identityFailure }}
 	condition, err := classifyOwnedObservation(
 		privateFileObservation{file: fault, state: privateEntryReady}, ready, 4, true,
 	)
@@ -158,7 +158,7 @@ func TestOwnedCleanupRefusesInexactOrChangedEntries(t *testing.T) {
 		}
 		changed := errors.New("entry changed")
 		rootFault := &faultDirectory{Directory: root, openDirectory: func(string, bool) (outputcap.Directory, error) {
-			return &exactFaultDirectory{Directory: shard, remove: func(string, outputcap.File) error { return changed }}, nil
+			return &exactFaultDirectory{Directory: shard, remove: func(string, outputcap.FileIdentity) error { return changed }}, nil
 		}}
 		if err := removeOwnedEntry(rootFault, object, ownedStageSuffix, true); !errors.Is(err, changed) {
 			t.Fatalf("changed cleanup error = %v", err)
@@ -389,10 +389,10 @@ func TestRecordReadBoundsRejectShortAndOversizedImages(t *testing.T) {
 	if _, err := ReadFile(directory, "missing"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("missing record read error = %v", err)
 	}
-	file := &faultFile{File: &memoryFile{data: &memoryFileData{bytes: []byte{1}}}, readAt: func([]byte, int64) (int, error) {
+	file := &faultFile{MutableFile: &memoryFile{data: &memoryFileData{bytes: []byte{1}}}, readAt: func([]byte, int64) (int, error) {
 		return 0, io.ErrUnexpectedEOF
 	}}
-	fault := &faultDirectory{Directory: directory, openFile: func(string, bool, bool) (outputcap.File, error) {
+	fault := &faultDirectory{Directory: directory, openFile: func(string, bool, bool) (outputcap.MutableFile, error) {
 		return file, nil
 	}}
 	if _, err := ReadFile(fault, "record"); err == nil {
@@ -401,7 +401,7 @@ func TestRecordReadBoundsRejectShortAndOversizedImages(t *testing.T) {
 }
 
 func TestCreateCollisionSettlesOnlyAnExactAuthenticatedTarget(t *testing.T) {
-	install := func(t *testing.T, directory *memoryDirectory, name string, value []byte) outputcap.File {
+	install := func(t *testing.T, directory *memoryDirectory, name string, value []byte) outputcap.MutableFile {
 		t.Helper()
 		file, err := directory.CreateFile(name, true, int64(len(value)))
 		if err != nil {
@@ -435,7 +435,7 @@ func TestCreateCollisionSettlesOnlyAnExactAuthenticatedTarget(t *testing.T) {
 			} else if !errors.Is(err, checkpointmodel.ErrRecordBinding) {
 				t.Fatalf("foreign target collision error = %v", err)
 			}
-			if _, err := directory.OpenFile(temporaryName, true, false); !errors.Is(err, fs.ErrNotExist) {
+			if _, err := directory.OpenObservedFile(temporaryName, true); !errors.Is(err, fs.ErrNotExist) {
 				t.Fatalf("settled candidate survived: %v", err)
 			}
 		})
@@ -754,7 +754,7 @@ func TestCandidateRecoveryClassifiesExactNamespaceAndReadHazards(t *testing.T) {
 		run(t, &exactFaultDirectory{
 			Directory: &faultDirectory{
 				Directory: newMemoryDirectory(),
-				openFile: func(string, bool, bool) (outputcap.File, error) {
+				openFile: func(string, bool, bool) (outputcap.MutableFile, error) {
 					return nil, outputcap.ErrUnsafeNamespace
 				},
 			},
@@ -768,7 +768,7 @@ func TestCandidateRecoveryClassifiesExactNamespaceAndReadHazards(t *testing.T) {
 		run(t, &exactFaultDirectory{
 			Directory: &faultDirectory{
 				Directory: newMemoryDirectory(),
-				openFile: func(string, bool, bool) (outputcap.File, error) {
+				openFile: func(string, bool, bool) (outputcap.MutableFile, error) {
 					return nil, readFailure
 				},
 			},

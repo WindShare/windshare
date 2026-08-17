@@ -116,14 +116,39 @@ func TestFileExecutionStoreOwnsCheckpointAndObjectLifecycle(t *testing.T) {
 	if err := repository.Replace(promoted, checkpointCandidate); err != nil {
 		t.Fatal(err)
 	}
+	// The candidate is a process-restart cut, so release every process-scoped
+	// handle before proving that a fresh authority can adopt it.
+	if err := errors.Join(repository.Close(), lease.Close(), namespace.Close()); err != nil {
+		t.Fatal(err)
+	}
+	namespace, err = OpenOperationRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err = namespace.AcquireOperationLease(intent.intent.OperationID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := checkpointmodel.NewBinding(
+		ownership, intent.intent.OperationID(), intent.intent.Digest(), intent.intent.BindingDigest(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err = OpenOrdinaryFileRepository(lease, binding, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	reconciled, err = NewFileExecutionStore(&repository)
 	if err != nil {
 		t.Fatalf("range candidate crash recovery = %v", err)
 	}
 	recovered, err := repository.Reopen(record.RecordID())
+	recoveredRanges := recovered.VerifiedRanges()
 	if err != nil || recovered.CommitState() != checkpointmodel.CommitVerified ||
 		recovered.CheckpointGeneration() != checkpointCandidate.CheckpointGeneration() ||
-		len(recovered.VerifiedRanges()) != 1 {
+		len(recoveredRanges) != 1 || recoveredRanges[0].Offset != 0 ||
+		recoveredRanges[0].End != uint64(len("windshare")) {
 		t.Fatalf("recovered range candidate = (%+v, %v)", recovered, err)
 	}
 

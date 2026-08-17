@@ -2,7 +2,9 @@ package runtrace
 
 import (
 	"crypto/rand"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"time"
 )
@@ -51,22 +53,11 @@ func normalizedDependencies(dependencies Dependencies) Dependencies {
 }
 
 func openOwnerOnlyFile(path string) (TraceFile, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, ownerOnlyFileMode)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, ownerOnlyFileMode)
 	if err != nil {
-		return nil, err
-	}
-	// Tighten an existing file before truncating it so a failed permission
-	// transition does not destroy the prior trace.
-	if err := file.Chmod(ownerOnlyFileMode); err != nil {
-		_ = file.Close()
-		return nil, err
-	}
-	if err := file.Truncate(0); err != nil {
-		_ = file.Close()
-		return nil, err
-	}
-	if _, err := file.Seek(0, 0); err != nil {
-		_ = file.Close()
+		if errors.Is(err, fs.ErrExist) {
+			return nil, ErrTraceExists
+		}
 		return nil, err
 	}
 	return durableFile{file: file}, nil

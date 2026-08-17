@@ -36,7 +36,7 @@ type link struct {
 	shutdownOnce sync.Once
 	done         chan struct{}
 
-	tracer        LifecycleTracer
+	traces        *lifecycleDispatcher
 	nextOperation atomic.Uint64
 }
 
@@ -46,11 +46,12 @@ func newLink(parent context.Context, socket BinarySocket, fixed bool) *link {
 
 func newLinkWithTracer(parent context.Context, socket BinarySocket, fixed bool, tracer LifecycleTracer) *link {
 	ctx, cancel := context.WithCancel(parent)
+	linkID := nextLinkID.Add(1)
 	return &link{
-		id: nextLinkID.Add(1), socket: socket, ctx: ctx, cancel: cancel, fixed: fixed,
+		id: linkID, socket: socket, ctx: ctx, cancel: cancel, fixed: fixed,
 		writeWake: make(chan struct{}, 1), queues: make(map[v2.RelaySessionID]*sendQueue),
 		channels: make(map[v2.RelaySessionID]*Channel), accept: make(chan *Channel, channelReceiveFrames),
-		done: make(chan struct{}), tracer: tracer,
+		done: make(chan struct{}), traces: newLifecycleDispatcher(linkID, tracer),
 	}
 }
 
@@ -59,27 +60,42 @@ func (l *link) nextOperationID() uint64 {
 }
 
 func (l *link) trace(event LifecycleTrace) {
-	if l.tracer != nil {
+	if l.traces != nil {
 		event.LinkID = l.id
-		l.tracer.TraceRelayLifecycle(event)
+		l.traces.emit(event)
 	}
+}
+
+func (l *link) completeObservations(ctx context.Context) LifecycleObservationCompletion {
+	if l == nil {
+		return LifecycleObservationCompletion{Drained: true}
+	}
+	return l.traces.complete(ctx)
 }
 
 func (l *link) traceTransition(channel *Channel, transition retirementTransition) {
 	if !transition.applied && !transition.deferred {
 		return
 	}
-	stage := LifecycleRetired
 	if transition.deferred {
-		stage = LifecycleRetirementDeferred
+		l.trace(retirementDeferredTrace(
+			channel.id,
+			transition.record.operationID,
+			transition.terminal,
+			transition.record.source,
+			lifecycleCause(transition.record.cause),
+			lifecycleCause(transition.consequence.cause),
+		))
+		return
 	}
-	l.trace(LifecycleTrace{
-		RelaySessionID: channel.id, OperationID: transition.record.operationID,
-		Stage: stage, Terminal: transition.terminal,
-		RetirementSource: transition.record.source,
-		Cause:            lifecycleCause(transition.record.cause),
-		DrainCause:       lifecycleCause(transition.consequence.cause),
-	})
+	l.trace(retiredTrace(
+		channel.id,
+		transition.record.operationID,
+		transition.terminal,
+		transition.record.source,
+		lifecycleCause(transition.record.cause),
+		lifecycleCause(transition.consequence.cause),
+	))
 }
 
 func (l *link) start() {
@@ -228,11 +244,12 @@ func (l *link) stop(cause error) {
 	authoritative := *l.retirement
 	l.lifecycleMu.Unlock()
 
-	l.trace(LifecycleTrace{
-		OperationID: proposed.operationID, Stage: LifecycleLinkRetiring,
-		RetirementSource: authoritative.source, Cause: lifecycleCause(authoritative.cause),
-		DrainCause: lifecycleCause(proposed.cause),
-	})
+	l.trace(linkRetiringTrace(
+		proposed.operationID,
+		authoritative.source,
+		lifecycleCause(authoritative.cause),
+		lifecycleCause(proposed.cause),
+	))
 	channels := l.snapshotChannels()
 	waiters := make([]<-chan struct{}, 0, len(channels))
 	if first || cause != nil {
@@ -258,11 +275,15 @@ func (l *link) stop(cause error) {
 		l.lifecycleMu.Lock()
 		l.lifecycle = linkClosed
 		l.lifecycleMu.Unlock()
+		l.trace(linkClosedTrace(
+			authoritative.operationID,
+			authoritative.source,
+			lifecycleCause(authoritative.cause),
+		))
+		l.traces.shutdown()
+		// Done is also the producer quiescence cut: the terminal lifecycle fact
+		// must be admitted before an owner can begin observation completion.
 		close(l.done)
-		l.trace(LifecycleTrace{
-			OperationID: authoritative.operationID, Stage: LifecycleLinkClosed,
-			RetirementSource: authoritative.source, Cause: lifecycleCause(authoritative.cause),
-		})
 	})
 }
 

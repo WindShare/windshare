@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/windshare/windshare/cmd/windshare/internal/commandprojection"
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -94,7 +95,22 @@ func (function getOutputAuthorityFactoryFunc) NewGetOutputAuthority(
 }
 
 type filesystemGetOutputAuthority struct {
-	native *osfs.FilesystemOutputAuthority
+	native nativeFilesystemOutputAuthority
+}
+
+type nativeFilesystemOutputAuthority interface {
+	BindDestination(context.Context) (osfs.FilesystemOutputExecutionMode, error)
+	LookupActive(context.Context, transfer.SelectionSpec) (osfs.FilesystemOutputLookup, error)
+	CreateOperation(
+		context.Context,
+		osfs.FilesystemOutputLookup,
+		receivecontract.ArtifactSpec,
+	) (osfs.FilesystemOutputOperation, error)
+	OpenOperation(
+		context.Context,
+		osfs.FilesystemOutputOperation,
+	) (transfer.DirectTreeSession, error)
+	Close() error
 }
 
 func newFilesystemGetOutputAuthority(config getOutputAuthorityConfig) (getOutputAuthority, error) {
@@ -102,7 +118,7 @@ func newFilesystemGetOutputAuthority(config getOutputAuthorityConfig) (getOutput
 		RootPath: config.rootPath, CreateRoot: config.createRoot, Tracer: config.tracer,
 	})
 	if err != nil {
-		return nil, err
+		return nil, sealFilesystemOutputFailure(err)
 	}
 	return &filesystemGetOutputAuthority{native: native}, nil
 }
@@ -115,7 +131,7 @@ func (authority *filesystemGetOutputAuthority) BindDestination(
 	}
 	mode, err := authority.native.BindDestination(ctx)
 	if err != nil {
-		return 0, err
+		return 0, sealFilesystemOutputFailure(err)
 	}
 	switch {
 	case mode.Resumable():
@@ -136,7 +152,7 @@ func (authority *filesystemGetOutputAuthority) LookupActive(
 	}
 	lookup, err := authority.native.LookupActive(ctx, selection)
 	if err != nil {
-		return getOutputLookup{}, err
+		return getOutputLookup{}, sealFilesystemOutputFailure(err)
 	}
 	converted := getOutputLookup{native: lookup}
 	switch lookup.Kind() {
@@ -171,7 +187,7 @@ func (authority *filesystemGetOutputAuthority) CreateOperation(
 	}
 	operation, err := authority.native.CreateOperation(ctx, lookup.native, artifact)
 	if err != nil {
-		return getOutputOperation{}, err
+		return getOutputOperation{}, sealFilesystemOutputFailure(err)
 	}
 	return getFilesystemOutputOperation(operation)
 }
@@ -183,14 +199,30 @@ func (authority *filesystemGetOutputAuthority) OpenOperation(
 	if authority == nil || authority.native == nil || !operation.valid() {
 		return nil, errGetOutputAdapterContract
 	}
-	return authority.native.OpenOperation(ctx, operation.native)
+	session, err := authority.native.OpenOperation(ctx, operation.native)
+	return session, sealFilesystemOutputFailure(err)
 }
 
 func (authority *filesystemGetOutputAuthority) Close() error {
 	if authority == nil || authority.native == nil {
 		return nil
 	}
-	return authority.native.Close()
+	return sealFilesystemOutputFailure(authority.native.Close())
+}
+
+func sealFilesystemOutputFailure(cause error) error {
+	if cause == nil {
+		return nil
+	}
+	diagnostic, ok := osfs.FilesystemOutputDiagnosticFor(cause)
+	if !ok {
+		return cause
+	}
+	sealed, ok := commandprojection.SealFilesystemOutputFailure(diagnostic)
+	if !ok {
+		return errGetOutputAdapterContract
+	}
+	return sealed
 }
 
 func getFilesystemOutputOperation(

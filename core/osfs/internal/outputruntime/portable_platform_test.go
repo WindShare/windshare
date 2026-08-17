@@ -564,7 +564,7 @@ func (directory *portableRuntimeDirectory) CreateLiveCleanupStage(
 
 func (directory *portableRuntimeDirectory) RemoveLiveCleanupStage(
 	ticket checkpointmodel.LiveCleanupTicket,
-	expected outputcap.File,
+	expected outputcap.FileIdentity,
 ) error {
 	if !ticket.Valid() {
 		return outputcap.ErrUnsafeNamespace
@@ -589,7 +589,7 @@ func (directory *portableRuntimeDirectory) ReservePublicDirectoryNoReplace(
 }
 
 func (directory *portableRuntimeDirectory) PublishFileNoReplace(
-	source outputcap.File,
+	source outputcap.FileIdentity,
 	name string,
 ) (outputcap.PublishNoReplaceOutcome, error) {
 	published, err := directory.LinkFileNoReplace(source, name)
@@ -599,7 +599,15 @@ func (directory *portableRuntimeDirectory) PublishFileNoReplace(
 	if err != nil || published == nil {
 		return 0, err
 	}
-	return outputcap.PublishNoReplaceCommitted, errors.Join(published.Sync(), published.Close(), directory.Sync())
+	durable, durabilityErr := directory.OpenRecoveryDurabilityFile(name, false)
+	if durabilityErr != nil || durable == nil {
+		return outputcap.PublishNoReplaceIndeterminate, errors.Join(
+			durabilityErr, published.Close(),
+		)
+	}
+	return outputcap.PublishNoReplaceCommitted, errors.Join(
+		durable.Sync(), durable.Close(), published.Close(), directory.Sync(),
+	)
 }
 
 func (directory *portableRuntimeDirectory) CreateDirectory(
@@ -670,7 +678,7 @@ func (directory *portableRuntimeDirectory) CreateFile(
 	name string,
 	_ bool,
 	size int64,
-) (outputcap.File, error) {
+) (outputcap.MutableFile, error) {
 	if size < 0 {
 		return nil, outputcap.ErrUnsafeNamespace
 	}
@@ -690,11 +698,32 @@ func (directory *portableRuntimeDirectory) CreateFile(
 	return newPortableRuntimeFile(directory.filesystem, path, file)
 }
 
-func (directory *portableRuntimeDirectory) OpenFile(
+func (directory *portableRuntimeDirectory) OpenObservedFile(
+	name string,
+	private bool,
+) (outputcap.ObservedFile, error) {
+	return directory.openFile(name, private, false)
+}
+
+func (directory *portableRuntimeDirectory) OpenRecoveryDurabilityFile(
+	name string,
+	private bool,
+) (outputcap.RecoveryDurabilityFile, error) {
+	return directory.openFile(name, private, true)
+}
+
+func (directory *portableRuntimeDirectory) OpenMutableFile(
+	name string,
+	private bool,
+) (outputcap.MutableFile, error) {
+	return directory.openFile(name, private, true)
+}
+
+func (directory *portableRuntimeDirectory) openFile(
 	name string,
 	private bool,
 	writable bool,
-) (outputcap.File, error) {
+) (*portableRuntimeFile, error) {
 	path, err := directory.entryPath(name)
 	if err != nil {
 		return nil, err
@@ -718,9 +747,9 @@ func (directory *portableRuntimeDirectory) OpenFile(
 }
 
 func (directory *portableRuntimeDirectory) LinkFileNoReplace(
-	source outputcap.File,
+	source outputcap.FileIdentity,
 	name string,
-) (outputcap.File, error) {
+) (outputcap.ObservedFile, error) {
 	target, err := directory.entryPath(name)
 	if err != nil {
 		return nil, err
@@ -745,7 +774,7 @@ func (directory *portableRuntimeDirectory) LinkFileNoReplace(
 }
 
 func (directory *portableRuntimeDirectory) ReplacePrivateFile(
-	source outputcap.File,
+	source outputcap.FileIdentity,
 	name string,
 ) error {
 	target, err := directory.entryPath(name)
@@ -769,7 +798,7 @@ func (directory *portableRuntimeDirectory) ReplacePrivateFile(
 	return portableRuntimeMutationError(os.Rename(sourcePath, target))
 }
 
-func (directory *portableRuntimeDirectory) RemoveFile(name string, expected outputcap.File) error {
+func (directory *portableRuntimeDirectory) RemoveFile(name string, expected outputcap.FileIdentity) error {
 	path, err := directory.entryPath(name)
 	if err != nil {
 		return err
@@ -956,6 +985,6 @@ var (
 	_ outputcap.PublicEntryNamesValidator  = (*portableRuntimeDirectory)(nil)
 	_ outputcap.CreateAuthorityValidator   = (*portableRuntimeDirectory)(nil)
 	_ outputcap.MetadataAuthorityValidator = (*portableRuntimeDirectory)(nil)
-	_ outputcap.File                       = (*portableRuntimeFile)(nil)
+	_ outputcap.MutableFile                = (*portableRuntimeFile)(nil)
 	_ io.ReaderAt                          = (*portableRuntimeFile)(nil)
 )

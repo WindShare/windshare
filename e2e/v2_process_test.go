@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,9 +41,10 @@ const (
 	v2PionRelayCutBlockBytes          = 4 << 10
 	v2PionRelayCutPayloadSHA256       = "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
 
-	v2RelayComponent          = "wsrelay"
-	v2WindShareShareComponent = "windshare_share"
-	v2WindShareGetComponent   = "windshare_get"
+	v2RelayComponent           = "wsrelay"
+	v2WindShareShareComponent  = "windshare_share"
+	v2WindShareGetComponent    = "windshare_get"
+	v2WindShareResumeComponent = "windshare_resume_list"
 )
 
 const (
@@ -634,6 +636,37 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
+	privateDiagnosticCanaries := []string{
+		"FlushFileBuffers", "ERROR_ACCESS_DENIED", "provider path and detail canary", "win32_error=5",
+		strings.Repeat("Z", 64),
+	}
+	stderrCanaries := append(append([]string(nil), capabilitySecrets...), privateDiagnosticCanaries...)
+	traceSafetyOutput := testoutputroot.New(t).RootPath
+	if _, err := os.Stat(traceSafetyOutput); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("trace-safety destination unexpectedly exists before get: %v", err)
+	}
+	traceSafetyPath := filepath.Join(t.TempDir(), "retained.ndjson")
+	traceSafetyContents := []byte("retained trace evidence\n")
+	if err := os.WriteFile(traceSafetyPath, traceSafetyContents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	traceSafety := startV2Process(
+		t, scenario, v2WindShareGetComponent, binaries.windshare,
+		"get", shareLink, "-o", traceSafetyOutput, "--trace", traceSafetyPath,
+	)
+	traceSafety.forbidStderr(append(append([]string(nil), stderrCanaries...), traceSafetyPath, traceSafetyOutput)...)
+	if err := traceSafety.wait(t); err == nil {
+		t.Fatalf("get unexpectedly replaced an existing trace; stderr=%q", traceSafety.stderr.String())
+	}
+	if got, err := os.ReadFile(traceSafetyPath); err != nil || !bytes.Equal(got, traceSafetyContents) {
+		t.Fatalf("existing trace changed: contents=%q err=%v", got, err)
+	}
+	if _, err := os.Stat(traceSafetyOutput); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("trace-open failure created the destination: %v", err)
+	}
+	if !strings.Contains(traceSafety.stderr.String(), "The trace path already exists. Choose a new path.") {
+		t.Fatalf("trace-open failure omitted the owner-safe explanation: %q", traceSafety.stderr.String())
+	}
 	output := testoutputroot.New(t).RootPath
 	firstOutput := filepath.Join(output, "resume-tree", "file-000.bin")
 
@@ -642,12 +675,24 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 	)
 	waitV2PublishedFile(t, interrupted, firstOutput)
 	interrupted.stop(t)
+	resumeList := startV2Process(
+		t, scenario, v2WindShareResumeComponent, binaries.windshare,
+		"resume", "list", "-o", output,
+	)
+	resumeList.forbidStderr(append(append([]string(nil), stderrCanaries...), root, filepath.Base(root), output)...)
+	if err := resumeList.wait(t); err != nil {
+		t.Fatalf("resume list failed over retained output: %v; stdout=%q stderr=%q", err, resumeList.stdout.String(), resumeList.stderr.String())
+	}
+	retainedOperationID := requireV2ResumeListOperation(t, resumeList.stdout.String())
+	if information, err := os.Stat(filepath.Join(output, v2OutputControlDirectory)); err != nil || !information.IsDir() {
+		t.Fatalf("resume list did not retain the output control state: info=%v err=%v", information, err)
+	}
 
 	resumed := startTracedV2Process(
 		t, scenario, v2WindShareGetComponent, binaries.windshare, "get", shareLink, "-o", output,
 	)
-	resumed.forbidStderr(capabilitySecrets...)
-	resumed.forbidUserTrace(append(capabilitySecrets, root, filepath.Base(root), output)...)
+	resumed.forbidStderr(stderrCanaries...)
+	resumed.forbidUserTrace(append(append([]string(nil), stderrCanaries...), root, filepath.Base(root), "file-000.bin", "file-001.bin", output)...)
 	// Recovery performs native witness revalidation before transferring the
 	// interrupted tail, so it retains a scenario ceiling distinct from readiness.
 	if err := resumed.waitWithin(t, v2DurableResumeProcessTimeout); err != nil {
@@ -660,12 +705,27 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 		)
 	}
 	requireV2UserTraceFact(t, resumed, "transfer_settled", "result_status", "success")
+	assertV2UserTraceProductDiagnostics(t, resumed, retainedOperationID)
 	// A fresh output session would hit the already-published first path and the
 	// no-replace contract would make this command fail. Successful completion is
 	// therefore the durable-resume oracle without exposing backend reopen state.
 	assertV2File(t, firstOutput, payload)
 	assertV2File(t, filepath.Join(output, "resume-tree", fmt.Sprintf("file-%03d.bin", v2ResumeFileCount-1)), payload)
 	scenario.requireSuccess(t)
+}
+
+func requireV2ResumeListOperation(t *testing.T, output string) string {
+	t.Helper()
+	status := regexp.MustCompile(`(?m)^resume_list_status="ready" operations=1 registry_unknown=false\r?$`)
+	if !status.MatchString(output) {
+		t.Fatalf("resume list did not report one ready retained operation: %q", output)
+	}
+	operation := regexp.MustCompile(`(?m)^resume_operation=1 state="(incomplete|resumable)" operation_id="([0-9a-f]{32})" running=false item-blocked=0\r?$`)
+	match := operation.FindStringSubmatch(output)
+	if len(match) != 3 {
+		t.Fatalf("resume list did not report the retained operation as incomplete or resumable: %q", output)
+	}
+	return match[2]
 }
 
 func waitV2PublishedFile(t *testing.T, process *v2Process, filename string) {

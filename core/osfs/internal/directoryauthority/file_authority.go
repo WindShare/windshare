@@ -15,14 +15,14 @@ import (
 // checkpoint namespace. Directory authority receives only exact comparison and
 // no-replace publication operations for an already-bound object ID.
 type OwnedObjectAuthority interface {
-	FinalMatchesOwned(context.Context, checkpointmodel.ObjectID, uint64, outputcap.File) (bool, error)
+	FinalMatchesOwned(context.Context, checkpointmodel.ObjectID, uint64, outputcap.FileIdentity) (bool, error)
 	PublishOwnedNoReplace(
 		context.Context,
 		checkpointmodel.ObjectID,
 		uint64,
 		outputcap.Directory,
 		string,
-	) (outputcap.File, error)
+	) (outputcap.ObservedFile, error)
 }
 
 type FileAuthority struct {
@@ -111,7 +111,7 @@ func (authority *FileAuthority) BindFile(
 }
 
 type nativeOwnedSource interface {
-	NativeFile() outputcap.File
+	NativeFile() outputcap.MutableFile
 }
 
 type fileDestination struct {
@@ -224,7 +224,7 @@ func (destination *fileDestination) PublishNoReplace(
 			}
 			return destination.observeFinalAgainstFile(parent, source.NativeFile(), expectation)
 		}
-		var linked outputcap.File
+		var linked outputcap.ObservedFile
 		var publishErr error
 		if destination.objects != nil {
 			linked, publishErr = destination.objects.PublishOwnedNoReplace(
@@ -309,7 +309,7 @@ func (destination *fileDestination) withParent(
 
 func (destination *fileDestination) observeFinalAgainstFile(
 	parent outputcap.Directory,
-	owned outputcap.File,
+	owned outputcap.FileIdentity,
 	expectation fileexecution.FinalExpectation,
 ) (fileexecution.FinalObservation, error) {
 	kind, exact, err := parent.ClassifyExactEntry(destination.leaf)
@@ -325,7 +325,7 @@ func (destination *fileDestination) observeFinalAgainstFile(
 	if kind != outputcap.EntryRegularFile {
 		return fileexecution.ObserveFinal(fileexecution.FinalUnsafe)
 	}
-	final, err := parent.OpenFile(destination.leaf, false, false)
+	final, err := parent.OpenObservedFile(destination.leaf, false)
 	if err != nil || final == nil {
 		return fileexecution.FinalObservation{}, errors.Join(err, outputcap.ErrUnsafeNamespace, closeRuntimeFile(final))
 	}
@@ -359,7 +359,7 @@ func (destination *fileDestination) observeFinalAtParent(
 	if kind != outputcap.EntryRegularFile {
 		return fileexecution.ObserveFinal(fileexecution.FinalUnsafe)
 	}
-	final, err := parent.OpenFile(destination.leaf, false, false)
+	final, err := parent.OpenObservedFile(destination.leaf, false)
 	if err != nil || final == nil {
 		return fileexecution.FinalObservation{}, errors.Join(err, outputcap.ErrUnsafeNamespace, closeRuntimeFile(final))
 	}
@@ -380,13 +380,13 @@ func (destination *fileDestination) observeFinalAtParent(
 
 func finalObservationWithClose(
 	condition fileexecution.FinalCondition,
-	file outputcap.File,
+	file outputcap.FileIdentity,
 ) (fileexecution.FinalObservation, error) {
 	observation, err := fileexecution.ObserveFinal(condition)
 	return observation, errors.Join(err, closeRuntimeFile(file))
 }
 
-func closeRuntimeFile(file outputcap.File) error {
+func closeRuntimeFile(file outputcap.FileIdentity) error {
 	if file == nil {
 		return nil
 	}

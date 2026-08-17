@@ -93,14 +93,20 @@ type LaneSetConfig struct {
 	ProtocolSessionID protocolsession.ProtocolSessionID
 	RaceWidth         int
 	Now               func() time.Time
+	SettlementTracer  LaneSettlementTracer
 }
 
 type laneState struct {
-	identity LaneIdentity
-	lane     BlockLane
-	inflight uint32
-	failures uint32
-	latency  time.Duration
+	identity        LaneIdentity
+	route           LaneRoute
+	lane            BlockLane
+	inflight        uint32
+	settlementHolds uint32
+	failures        uint32
+	latency         time.Duration
+	retired         bool
+	settled         bool
+	settlement      *laneSettlementCounters
 }
 
 type contentLaneSuspensionPolicy struct {
@@ -126,11 +132,17 @@ type LaneSet struct {
 
 	mu                  sync.Mutex
 	attempts            sync.WaitGroup
+	fetches             sync.WaitGroup
+	publications        sync.WaitGroup
+	closeStarted        bool
+	closeDone           chan struct{}
 	closed              bool
 	lanes               map[uint32]*laneState
 	contentSuspensions  map[uint32]*contentLaneSuspensionPolicy
 	cursor              uint64
 	availabilityChanged chan struct{}
+	settlements         *laneSettlementDispatcher
+	finalSettlements    []*laneState
 }
 
 func NewLaneSet(config LaneSetConfig) (*LaneSet, error) {
@@ -152,31 +164,47 @@ func NewLaneSet(config LaneSetConfig) (*LaneSet, error) {
 		lifecycle: lifecycle, stop: stop, lanes: make(map[uint32]*laneState),
 		contentSuspensions:  make(map[uint32]*contentLaneSuspensionPolicy),
 		availabilityChanged: make(chan struct{}),
+		settlements:         newLaneSettlementDispatcher(config.SettlementTracer),
+		closeDone:           make(chan struct{}),
 	}, nil
 }
 
-func (s *LaneSet) Add(identity LaneIdentity, lane BlockLane) error {
-	if identity.ID == 0 || lane == nil {
+func (s *LaneSet) Add(identity LaneIdentity, route LaneRoute, lane BlockLane) error {
+	if identity.ID == 0 || !route.valid() || lane == nil {
 		return ErrInvalidLane
 	}
+	state := &laneState{identity: identity, route: route, lane: lane}
+	if s.settlements != nil {
+		state.settlement = &laneSettlementCounters{}
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return ErrLaneClosed
 	}
+	var retired *LaneSettlementSummary
 	if current := s.lanes[identity.ID]; current != nil {
 		if identity.Epoch <= current.identity.Epoch {
+			s.mu.Unlock()
 			return ErrStaleLane
 		}
-		s.lanes[identity.ID] = &laneState{identity: identity, lane: lane}
+		retired = s.retireLaneLocked(current)
+		if retired != nil {
+			s.publications.Add(1)
+		}
+		s.lanes[identity.ID] = state
 		s.notifyAvailabilityLocked()
+		s.mu.Unlock()
+		s.publishRegisteredLaneSettlement(retired)
 		return nil
 	}
 	if _, reattachingHeldLane := s.contentSuspensions[identity.ID]; !reattachingHeldLane && s.logicalLaneCountLocked() == MaxLogicalLanes {
+		s.mu.Unlock()
 		return ErrLaneBudget
 	}
-	s.lanes[identity.ID] = &laneState{identity: identity, lane: lane}
+	s.lanes[identity.ID] = state
 	s.notifyAvailabilityLocked()
+	s.mu.Unlock()
 	return nil
 }
 
@@ -246,13 +274,19 @@ func (s *LaneSet) Remove(identity LaneIdentity) bool {
 		return false
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	current := s.lanes[identity.ID]
 	if current == nil || current.identity != identity {
+		s.mu.Unlock()
 		return false
 	}
 	delete(s.lanes, identity.ID)
+	retired := s.retireLaneLocked(current)
+	if retired != nil {
+		s.publications.Add(1)
+	}
 	s.notifyAvailabilityLocked()
+	s.mu.Unlock()
+	s.publishRegisteredLaneSettlement(retired)
 	return true
 }
 
@@ -386,6 +420,11 @@ type laneRoundResult struct {
 	err      error
 }
 
+type laneRoundDecision struct {
+	done   chan struct{}
+	winner *laneState
+}
+
 type laneFailureSet struct {
 	failure    *lifecycleFailure
 	diagnostic error
@@ -399,8 +438,16 @@ func (s *LaneSet) fetch(
 	if err := ctx.Err(); err != nil {
 		return records.BlockRecord{}, err
 	}
+	if !s.beginFetch() {
+		return records.BlockRecord{}, ErrLaneClosed
+	}
+	defer s.fetches.Done()
 	attempted := make(map[LaneIdentity]struct{}, MaxDemandLaneAttempts)
 	failures := laneFailureSet{}
+	var pendingReassignments []laneResult
+	defer func() {
+		s.resolveLaneReassignments(pendingReassignments, false)
+	}()
 	for len(attempted) < MaxDemandLaneAttempts {
 		candidates, exhausted, err := s.candidates(ctx, attempted)
 		if err != nil {
@@ -410,6 +457,10 @@ func (s *LaneSet) fetch(
 		if exhausted {
 			return records.BlockRecord{}, collaboratorError(failures.failure, failures.diagnostic)
 		}
+		// Reassignment is an admitted action, not an inference from a retryable
+		// error. Candidate selection has already reserved the subsequent round.
+		s.resolveLaneReassignments(pendingReassignments, true)
+		pendingReassignments = nil
 		for _, state := range candidates {
 			attempted[state.identity] = struct{}{}
 		}
@@ -425,9 +476,22 @@ func (s *LaneSet) fetch(
 			if !reassignable {
 				return records.BlockRecord{}, collaboratorError(failures.failure, failures.diagnostic)
 			}
+			pendingReassignments = round.failures
 		}
 	}
 	return records.BlockRecord{}, collaboratorError(failures.failure, failures.diagnostic)
+}
+
+func (s *LaneSet) beginFetch() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	// Registration shares the closed-state lock with Stop so Close cannot begin
+	// a join while an admitted fetch is still about to select its first round.
+	s.fetches.Add(1)
+	return true
 }
 
 func (s *LaneSet) runLaneRound(
@@ -438,14 +502,16 @@ func (s *LaneSet) runLaneRound(
 ) laneRoundResult {
 	raceContext, cancel := context.WithCancel(ctx)
 	stopLifecycle := context.AfterFunc(s.lifecycle, cancel)
+	decision := &laneRoundDecision{done: make(chan struct{})}
 	defer func() {
+		close(decision.done)
 		stopLifecycle()
 		cancel()
 	}()
 
 	results := make(chan laneResult, len(candidates))
 	for _, state := range candidates {
-		go s.fetchLane(raceContext, demand, validate, state, results)
+		go s.fetchLane(raceContext, demand, validate, state, decision, results)
 	}
 	failures := make([]laneResult, 0, len(candidates))
 	for range candidates {
@@ -457,12 +523,28 @@ func (s *LaneSet) runLaneRound(
 			return laneRoundResult{kind: laneRoundInterrupted, err: ErrLaneClosed}
 		case result := <-results:
 			if result.err == nil {
+				decision.winner = result.state
 				return laneRoundResult{kind: laneRoundSucceeded, record: result.record}
 			}
 			failures = append(failures, result)
 		}
 	}
+	if laneResultsReassignable(failures) {
+		s.holdLaneReassignments(failures)
+	}
 	return laneRoundResult{kind: laneRoundFailed, failures: failures}
+}
+
+func laneResultsReassignable(results []laneResult) bool {
+	if len(results) == 0 {
+		return false
+	}
+	for _, result := range results {
+		if !result.reassignable {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *LaneSet) fetchLane(
@@ -470,6 +552,7 @@ func (s *LaneSet) fetchLane(
 	demand BlockDemand,
 	validate func(records.BlockRecord) error,
 	state *laneState,
+	decision *laneRoundDecision,
 	results chan<- laneResult,
 ) {
 	defer s.attempts.Done()
@@ -479,14 +562,16 @@ func (s *LaneSet) fetchLane(
 		fetchErr = validate(record)
 	}
 	notAdmitted := isDemandNotAdmitted(fetchErr)
-	reassignable := notAdmitted || isDemandReassignableAfterRetirement(fetchErr)
 	normalized := admitInternalFailure(normalizeSourceBoundary(ctx, fetchErr))
 	canceled := normalized != nil && normalized.policy.canceled
-	s.finish(state, s.now().Sub(started), fetchErr, canceled)
+	reassignable := !canceled && (notAdmitted || isDemandReassignableAfterRetirement(fetchErr))
+	elapsed := s.now().Sub(started)
 	results <- laneResult{
 		state: state, record: record, err: fetchErr,
 		normalized: normalized, notAdmitted: notAdmitted, reassignable: reassignable,
 	}
+	<-decision.done
+	s.finish(state, elapsed, record, fetchErr, canceled, decision.winner == state)
 }
 
 func reduceLaneFailures(current laneFailureSet, results []laneResult) (laneFailureSet, bool) {
@@ -513,46 +598,47 @@ func reduceLaneFailures(current laneFailureSet, results []laneResult) (laneFailu
 	return current, reassignable
 }
 
-func (s *LaneSet) finish(state *laneState, elapsed time.Duration, err error, canceled bool) {
+func (s *LaneSet) finish(
+	state *laneState,
+	elapsed time.Duration,
+	record records.BlockRecord,
+	err error,
+	canceled bool,
+	selected bool,
+) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if selected {
+		state.settlement.addDelivered(uint64(record.DataLength()))
+	}
 	state.inflight--
 	if err != nil {
-		if !canceled && state.failures < maximumLaneFailures {
-			state.failures++
-		}
+		state.recordFailure(canceled)
+	} else {
+		state.recordSuccess(elapsed)
+	}
+	settlement := s.settleLaneLocked(state)
+	s.mu.Unlock()
+	s.publishLaneSettlement(settlement)
+}
+
+func (state *laneState) recordFailure(canceled bool) {
+	if canceled {
 		return
 	}
+	if state.failures < maximumLaneFailures {
+		state.failures++
+	}
+	state.settlement.addFailure()
+}
+
+func (state *laneState) recordSuccess(elapsed time.Duration) {
 	state.failures = 0
 	if elapsed < 0 {
 		elapsed = 0
 	}
 	if state.latency == 0 {
 		state.latency = elapsed
-	} else {
-		state.latency = (state.latency*3 + elapsed) / 4
+		return
 	}
-}
-
-// Stop closes admission and cancels attempts without waiting. BlockLane
-// callbacks use it when a lane-local failure must terminate the whole set.
-func (s *LaneSet) Stop() {
-	s.mu.Lock()
-	if !s.closed {
-		s.closed = true
-		clear(s.lanes)
-		clear(s.contentSuspensions)
-		s.notifyAvailabilityLocked()
-	}
-	s.mu.Unlock()
-	s.stop()
-}
-
-// Close is the external ownership boundary. Attempt callbacks call Stop because
-// synchronously joining their own attempt would prevent its deferred completion.
-func (s *LaneSet) Close() {
-	s.Stop()
-	// A winner may return without waiting for its hedges, but lane ownership
-	// cannot end until cancellation has brought every admitted attempt home.
-	s.attempts.Wait()
+	state.latency = (state.latency*3 + elapsed) / 4
 }

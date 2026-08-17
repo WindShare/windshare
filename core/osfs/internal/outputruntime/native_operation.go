@@ -100,7 +100,10 @@ func (authority *Authority) LookupActive(
 	}
 	activeAdmission, registryLookup, err := authority.registry.BeginActive(key)
 	if err != nil {
-		return ActiveLookup{}, checkpointRuntimeError(ctx, "begin active ordinary operation", err)
+		return ActiveLookup{}, diagnoseFilesystemOutputFailure(
+			FilesystemOutputFailureActiveLookup,
+			checkpointRuntimeError(ctx, "begin active ordinary operation", err),
+		)
 	}
 	switch registryLookup.State() {
 	case checkpointstore.ActiveLookupNone:
@@ -110,13 +113,17 @@ func (authority *Authority) LookupActive(
 		authority.admission, authority.stage = admission, authorityStageLookupHeld
 		return ActiveLookup{authority: authority, kind: ActiveLookupMiss, admission: admission}, nil
 	case checkpointstore.ActiveLookupReopenable:
-		operation, attention, err := authority.reopenOperationLocked(ctx, selection, key, &registryLookup)
+		operation, stateReason, err := authority.reopenOperationLocked(ctx, selection, key, &registryLookup)
 		if err != nil {
-			return ActiveLookup{}, err
+			return ActiveLookup{}, diagnoseFilesystemOutputFailure(
+				FilesystemOutputFailureOperationAcquisition, err,
+			)
 		}
-		if attention {
+		if stateReason != 0 {
 			authority.stage = authorityStageLookupStopped
-			return ActiveLookup{authority: authority, kind: ActiveLookupNeedsAttention}, nil
+			return ActiveLookup{
+				authority: authority, kind: ActiveLookupNeedsAttention, stateReason: stateReason,
+			}, nil
 		}
 		authority.operation, authority.stage = operation, authorityStageOperationReady
 		return ActiveLookup{authority: authority, kind: ActiveLookupReopened, operation: operation}, nil
@@ -124,8 +131,16 @@ func (authority *Authority) LookupActive(
 		authority.stage = authorityStageLookupStopped
 		return ActiveLookup{authority: authority, kind: ActiveLookupAlreadyRunning}, nil
 	case checkpointstore.ActiveLookupNeedsAttention:
+		reason := filesystemOutputStateReason(registryLookup.Record().ClosedReason())
+		if reason == 0 || reason == FilesystemOutputStateReasonNone {
+			return ActiveLookup{}, diagnoseFilesystemOutputFailure(
+				FilesystemOutputFailureActiveLookup, transfer.ErrInvalidOutputBinding,
+			)
+		}
 		authority.stage = authorityStageLookupStopped
-		return ActiveLookup{authority: authority, kind: ActiveLookupNeedsAttention}, nil
+		return ActiveLookup{
+			authority: authority, kind: ActiveLookupNeedsAttention, stateReason: reason,
+		}, nil
 	case checkpointstore.ActiveLookupAmbiguous:
 		authority.stage = authorityStageLookupStopped
 		return ActiveLookup{authority: authority, kind: ActiveLookupAmbiguous}, nil
@@ -139,10 +154,10 @@ func (authority *Authority) reopenOperationLocked(
 	selection transfer.SelectionSpec,
 	key checkpointmodel.ActiveOperationKey,
 	lookup *checkpointstore.ActiveLookup,
-) (*Operation, bool, error) {
+) (*Operation, FilesystemOutputStateReason, error) {
 	lease := lookup.TakeLease()
 	if lease == nil {
-		return nil, false, transfer.ErrInvalidOutputBinding
+		return nil, 0, transfer.ErrInvalidOutputBinding
 	}
 	record := lookup.Record()
 	intent, err := record.VerifyIntent(transfer.DecodeReceiveIntent)
@@ -159,9 +174,9 @@ func (authority *Authority) reopenOperationLocked(
 		attentionErr := requireOperationAttention(lease, checkpointmodel.OrdinaryReasonOperationOwnershipUnknown)
 		closeErr := lease.Close()
 		if attentionErr != nil || closeErr != nil {
-			return nil, false, checkpointRuntimeError(ctx, "quarantine invalid ordinary operation", errors.Join(err, attentionErr, closeErr))
+			return nil, 0, checkpointRuntimeError(ctx, "quarantine invalid ordinary operation", errors.Join(err, attentionErr, closeErr))
 		}
-		return nil, true, nil
+		return nil, FilesystemOutputStateOperationOwnershipUnknown, nil
 	}
 	topLevel, err := authority.destination.ReopenTopLevel(destinationauthority.ExpectedReservation{
 		Reservation: reservation, PersistentIdentityClaim: proof.PersistentIdentity(),
@@ -171,21 +186,21 @@ func (authority *Authority) reopenOperationLocked(
 		attentionErr := requireOperationAttention(lease, checkpointmodel.OrdinaryReasonDestinationOwnershipUnknown)
 		closeErr := lease.Close()
 		if attentionErr != nil || closeErr != nil {
-			return nil, false, errors.Join(
+			return nil, 0, errors.Join(
 				runtimeOutputError(ctx, transferfault.OutputOwnership, "reopen exact top-level reservation", err),
 				checkpointRuntimeError(ctx, "persist reopen attention", errors.Join(attentionErr, closeErr)),
 			)
 		}
-		return nil, true, nil
+		return nil, FilesystemOutputStateDestinationOwnershipUnknown, nil
 	}
 	operation := &Operation{
 		authority: authority, key: key, mode: authority.mode, intent: intent,
 		topLevel: topLevel, claim: proof.Claim(), lease: lease, reopened: true,
 	}
 	if err := operation.validate(authority); err != nil {
-		return nil, false, errors.Join(err, topLevel.Close(), lease.Close())
+		return nil, 0, errors.Join(err, topLevel.Close(), lease.Close())
 	}
-	return operation, false, nil
+	return operation, 0, nil
 }
 
 func requireOperationAttention(

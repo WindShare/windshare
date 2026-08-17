@@ -91,7 +91,7 @@ func (publicDirectory *linuxOutputDirectory) createLiveCleanupStage(
 	}
 	stage := &linuxOutputRegularFile{
 		system: publicDirectory.system, fd: fd, certificate: publicDirectory.certificate,
-		writable: true,
+		access: linuxOutputFileMutable,
 	}
 	defer func() {
 		if result == nil {

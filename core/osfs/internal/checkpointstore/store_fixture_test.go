@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 )
 
@@ -16,10 +17,12 @@ type faultDirectory struct {
 	names           func(int) ([]string, error)
 	openDirectory   func(string, bool) (outputcap.Directory, error)
 	createDirectory func(string, bool) (outputcap.Directory, error)
-	createFile      func(string, bool, int64) (outputcap.File, error)
-	openFile        func(string, bool, bool) (outputcap.File, error)
-	linkFile        func(outputcap.File, string) (outputcap.File, error)
-	replaceFile     func(outputcap.File, string) error
+	createFile      func(string, bool, int64) (outputcap.MutableFile, error)
+	openObserved    func(string, bool) (outputcap.ObservedFile, error)
+	openFile        func(string, bool, bool) (outputcap.MutableFile, error)
+	openRecovery    func(string, bool) (outputcap.RecoveryDurabilityFile, error)
+	linkFile        func(outputcap.FileIdentity, string) (outputcap.ObservedFile, error)
+	replaceFile     func(outputcap.FileIdentity, string) error
 	observeEntry    func(string) (outputcap.EntryKind, error)
 	sync            func() error
 }
@@ -52,28 +55,48 @@ func (directory *faultDirectory) CreateDirectory(name string, private bool) (out
 	return directory.Directory.CreateDirectory(name, private)
 }
 
-func (directory *faultDirectory) CreateFile(name string, private bool, size int64) (outputcap.File, error) {
+func (directory *faultDirectory) CreateFile(name string, private bool, size int64) (outputcap.MutableFile, error) {
 	if directory.createFile != nil {
 		return directory.createFile(name, private, size)
 	}
 	return directory.Directory.CreateFile(name, private, size)
 }
 
-func (directory *faultDirectory) OpenFile(name string, private, writable bool) (outputcap.File, error) {
-	if directory.openFile != nil {
-		return directory.openFile(name, private, writable)
+func (directory *faultDirectory) OpenObservedFile(name string, private bool) (outputcap.ObservedFile, error) {
+	if directory.openObserved != nil {
+		return directory.openObserved(name, private)
 	}
-	return directory.Directory.OpenFile(name, private, writable)
+	if directory.openFile != nil {
+		return directory.openFile(name, private, false)
+	}
+	return directory.Directory.OpenObservedFile(name, private)
 }
 
-func (directory *faultDirectory) LinkFileNoReplace(source outputcap.File, name string) (outputcap.File, error) {
+func (directory *faultDirectory) OpenRecoveryDurabilityFile(name string, private bool) (outputcap.RecoveryDurabilityFile, error) {
+	if directory.openRecovery != nil {
+		return directory.openRecovery(name, private)
+	}
+	if directory.openFile != nil {
+		return directory.openFile(name, private, false)
+	}
+	return directory.Directory.OpenRecoveryDurabilityFile(name, private)
+}
+
+func (directory *faultDirectory) OpenMutableFile(name string, private bool) (outputcap.MutableFile, error) {
+	if directory.openFile != nil {
+		return directory.openFile(name, private, true)
+	}
+	return directory.Directory.OpenMutableFile(name, private)
+}
+
+func (directory *faultDirectory) LinkFileNoReplace(source outputcap.FileIdentity, name string) (outputcap.ObservedFile, error) {
 	if directory.linkFile != nil {
 		return directory.linkFile(source, name)
 	}
 	return directory.Directory.LinkFileNoReplace(source, name)
 }
 
-func (directory *faultDirectory) ReplacePrivateFile(source outputcap.File, name string) error {
+func (directory *faultDirectory) ReplacePrivateFile(source outputcap.FileIdentity, name string) error {
 	if directory.replaceFile != nil {
 		return directory.replaceFile(source, name)
 	}
@@ -95,7 +118,7 @@ func (directory *faultDirectory) Sync() error {
 }
 
 type faultFile struct {
-	outputcap.File
+	outputcap.MutableFile
 	readAt  func([]byte, int64) (int, error)
 	writeAt func([]byte, int64) (int, error)
 }
@@ -104,7 +127,7 @@ func (file *faultFile) ReadAt(encoded []byte, offset int64) (int, error) {
 	if file.readAt != nil {
 		return file.readAt(encoded, offset)
 	}
-	return file.File.ReadAt(encoded, offset)
+	return file.MutableFile.ReadAt(encoded, offset)
 }
 
 func (file *faultFile) WriteAt(encoded []byte, offset int64) (int, error) {
@@ -114,7 +137,7 @@ func (file *faultFile) WriteAt(encoded []byte, offset int64) (int, error) {
 func (file *faultFile) Close() error { return nil }
 
 type closeTrackingFile struct {
-	outputcap.File
+	outputcap.MutableFile
 	closes *int
 }
 
@@ -236,7 +259,7 @@ func (directory *memoryDirectory) CreateDirectory(name string, _ bool) (outputca
 	return child, nil
 }
 
-func (directory *memoryDirectory) CreateFile(name string, _ bool, size int64) (outputcap.File, error) {
+func (directory *memoryDirectory) CreateFile(name string, _ bool, size int64) (outputcap.MutableFile, error) {
 	directory.mu.Lock()
 	defer directory.mu.Unlock()
 	if size < 0 {
@@ -253,7 +276,27 @@ func (directory *memoryDirectory) CreateFile(name string, _ bool, size int64) (o
 	return &memoryFile{data: data}, nil
 }
 
-func (directory *memoryDirectory) OpenFile(name string, _, _ bool) (outputcap.File, error) {
+func (directory *memoryDirectory) OpenObservedFile(name string, _ bool) (outputcap.ObservedFile, error) {
+	directory.mu.Lock()
+	defer directory.mu.Unlock()
+	data, found := directory.files[name]
+	if !found {
+		return nil, fs.ErrNotExist
+	}
+	return &memoryObservedFile{data: data}, nil
+}
+
+func (directory *memoryDirectory) OpenRecoveryDurabilityFile(name string, _ bool) (outputcap.RecoveryDurabilityFile, error) {
+	directory.mu.Lock()
+	defer directory.mu.Unlock()
+	data, found := directory.files[name]
+	if !found {
+		return nil, fs.ErrNotExist
+	}
+	return &memoryRecoveryFile{data: data}, nil
+}
+
+func (directory *memoryDirectory) OpenMutableFile(name string, _ bool) (outputcap.MutableFile, error) {
 	directory.mu.Lock()
 	defer directory.mu.Unlock()
 	data, found := directory.files[name]
@@ -263,8 +306,8 @@ func (directory *memoryDirectory) OpenFile(name string, _, _ bool) (outputcap.Fi
 	return &memoryFile{data: data}, nil
 }
 
-func (directory *memoryDirectory) LinkFileNoReplace(source outputcap.File, name string) (outputcap.File, error) {
-	file, ok := source.(*memoryFile)
+func (directory *memoryDirectory) LinkFileNoReplace(source outputcap.FileIdentity, name string) (outputcap.ObservedFile, error) {
+	data, ok := memoryFileDataFrom(source)
 	if !ok {
 		return nil, outputcap.ErrUnsafeNamespace
 	}
@@ -276,29 +319,29 @@ func (directory *memoryDirectory) LinkFileNoReplace(source outputcap.File, name 
 	if _, found := directory.dirs[name]; found {
 		return nil, outputcap.ErrNamespaceCollision
 	}
-	directory.files[name] = file.data
-	return &memoryFile{data: file.data}, nil
+	directory.files[name] = data
+	return &memoryObservedFile{data: data}, nil
 }
 
-func (directory *memoryDirectory) ReplacePrivateFile(source outputcap.File, name string) error {
-	file, ok := source.(*memoryFile)
+func (directory *memoryDirectory) ReplacePrivateFile(source outputcap.FileIdentity, name string) error {
+	data, ok := memoryFileDataFrom(source)
 	if !ok {
 		return outputcap.ErrUnsafeNamespace
 	}
 	directory.mu.Lock()
 	defer directory.mu.Unlock()
-	for candidate, data := range directory.files {
-		if candidate != name && data == file.data {
+	for candidate, candidateData := range directory.files {
+		if candidate != name && candidateData == data {
 			delete(directory.files, candidate)
 			break
 		}
 	}
-	directory.files[name] = file.data
+	directory.files[name] = data
 	return nil
 }
 
-func (directory *memoryDirectory) RemoveFile(name string, expected outputcap.File) error {
-	file, ok := expected.(*memoryFile)
+func (directory *memoryDirectory) RemoveFile(name string, expected outputcap.FileIdentity) error {
+	expectedData, ok := memoryFileDataFrom(expected)
 	if !ok {
 		return outputcap.ErrUnsafeNamespace
 	}
@@ -308,7 +351,7 @@ func (directory *memoryDirectory) RemoveFile(name string, expected outputcap.Fil
 	if !found {
 		return fs.ErrNotExist
 	}
-	if data != file.data {
+	if data != expectedData {
 		return outputcap.ErrUnsafeNamespace
 	}
 	delete(directory.files, name)
@@ -361,13 +404,58 @@ type memoryFileData struct {
 }
 
 type memoryFile struct {
-	outputcap.File
 	data *memoryFileData
 }
 
-func (file *memoryFile) SameFile(other outputcap.File) (bool, error) {
-	peer, ok := other.(*memoryFile)
-	return ok && file.data == peer.data, nil
+type memoryObservedFile struct {
+	data *memoryFileData
+}
+
+type memoryRecoveryFile struct {
+	data *memoryFileData
+}
+
+func memoryFileDataFrom(file outputcap.FileIdentity) (*memoryFileData, bool) {
+	switch value := file.(type) {
+	case *memoryFile:
+		return value.data, value != nil && value.data != nil
+	case *memoryObservedFile:
+		return value.data, value != nil && value.data != nil
+	case *memoryRecoveryFile:
+		return value.data, value != nil && value.data != nil
+	default:
+		return nil, false
+	}
+}
+
+func (file *memoryObservedFile) SameFile(other outputcap.FileIdentity) (bool, error) {
+	peer, ok := memoryFileDataFrom(other)
+	return ok && file.data == peer, nil
+}
+func (file *memoryObservedFile) Close() error { return nil }
+func (file *memoryObservedFile) Size() (uint64, error) {
+	return (&memoryFile{data: file.data}).Size()
+}
+func (file *memoryObservedFile) ReadAt(target []byte, offset int64) (int, error) {
+	return (&memoryFile{data: file.data}).ReadAt(target, offset)
+}
+func (file *memoryObservedFile) MetadataMatches(size uint64, modified catalog.ModifiedTime) (bool, error) {
+	return (&memoryFile{data: file.data}).MetadataMatches(size, modified)
+}
+
+func (file *memoryRecoveryFile) SameFile(other outputcap.FileIdentity) (bool, error) {
+	peer, ok := memoryFileDataFrom(other)
+	return ok && file.data == peer, nil
+}
+func (file *memoryRecoveryFile) Close() error { return nil }
+func (file *memoryRecoveryFile) Size() (uint64, error) {
+	return (&memoryFile{data: file.data}).Size()
+}
+func (file *memoryRecoveryFile) Sync() error { return nil }
+
+func (file *memoryFile) SameFile(other outputcap.FileIdentity) (bool, error) {
+	peer, ok := memoryFileDataFrom(other)
+	return ok && file.data == peer, nil
 }
 
 func (file *memoryFile) Close() error { return nil }
@@ -410,7 +498,7 @@ type memoryLock struct {
 	closed    bool
 }
 
-func (lock *memoryLock) File() outputcap.File { return lock.file }
+func (lock *memoryLock) File() outputcap.MutableFile { return lock.file }
 
 func (lock *memoryLock) Close() error {
 	lock.directory.mu.Lock()
@@ -423,7 +511,7 @@ func (lock *memoryLock) Close() error {
 	return nil
 }
 
-type shortWriteFile struct{ outputcap.File }
+type shortWriteFile struct{ outputcap.MutableFile }
 
 func (shortWriteFile) WriteAt(source []byte, _ int64) (int, error) { return len(source) - 1, nil }
 

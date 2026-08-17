@@ -608,6 +608,15 @@ func TestOpenValidatesSynchronouslyAndCreatesOwnerOnlyFile(t *testing.T) {
 		}
 	}
 	recorder, err := Open(path, clievent.CommandShare, Config{})
+	if !errors.Is(err, ErrTraceExists) || recorder != nil {
+		t.Fatalf("existing trace open = recorder %v, err %v", recorder, err)
+	}
+	contents, readErr := os.ReadFile(path)
+	if readErr != nil || string(contents) != "old permissive trace" {
+		t.Fatalf("existing trace changed: %q, err %v", contents, readErr)
+	}
+	path = t.TempDir() + string(os.PathSeparator) + "user-trace.ndjson"
+	recorder, err = Open(path, clievent.CommandShare, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,7 +636,7 @@ func TestOpenValidatesSynchronouslyAndCreatesOwnerOnlyFile(t *testing.T) {
 			t.Fatalf("trace mode = %o, want %o", got, ownerOnlyFileMode)
 		}
 	}
-	contents, err := os.ReadFile(path)
+	contents, err = os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -721,13 +730,13 @@ func awaitSignal(t *testing.T, signal <-chan struct{}, description string) {
 	}
 }
 
-func decodeRecords(t *testing.T, contents []byte) []recordV1 {
+func decodeRecords(t *testing.T, contents []byte) []recordV2 {
 	t.Helper()
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
-	var records []recordV1
+	var records []recordV2
 	for {
-		var record recordV1
+		var record recordV2
 		if err := decoder.Decode(&record); err != nil {
 			if errors.Is(err, io.EOF) {
 				return records

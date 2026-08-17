@@ -205,13 +205,13 @@ type OwnedFile interface {
 // resumable file but intentionally cannot manufacture durable ranges.
 type LiveOwnedFile struct {
 	object checkpointmodel.ObjectID
-	file   outputcap.File
+	file   outputcap.MutableFile
 	ticket checkpointmodel.LiveCleanupTicket
 }
 
 func NewLiveOwnedFile(
 	object checkpointmodel.ObjectID,
-	file outputcap.File,
+	file outputcap.MutableFile,
 	ticket checkpointmodel.LiveCleanupTicket,
 ) (*LiveOwnedFile, error) {
 	if object.IsZero() || file == nil || !ticket.Valid() ||
@@ -227,7 +227,7 @@ func (file *LiveOwnedFile) ObjectID() checkpointmodel.ObjectID {
 	}
 	return file.object
 }
-func (file *LiveOwnedFile) NativeFile() outputcap.File {
+func (file *LiveOwnedFile) NativeFile() outputcap.MutableFile {
 	if file == nil {
 		return nil
 	}

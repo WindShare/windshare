@@ -67,11 +67,10 @@ func (l *link) enqueueWithAuthority(
 	if rejection != nil {
 		transition := l.releaseTerminalLocked(channel, reservation)
 		l.unlockChannel(channel)
-		l.trace(LifecycleTrace{
-			RelaySessionID: channel.id, OperationID: request.operationID,
-			Stage: LifecycleSendRejected, Terminal: request.terminal,
-			Disposition: framechannel.SendDispositionOf(rejection), Cause: lifecycleCause(rejection),
-		})
+		l.trace(sendRejectedTrace(
+			channel.id, request.operationID, request.terminal,
+			framechannel.SendDispositionOf(rejection), lifecycleCause(rejection),
+		))
 		l.traceTransition(channel, transition)
 		return rejection
 	}
@@ -87,11 +86,9 @@ func (l *link) enqueueWithAuthority(
 	}
 	l.unlockChannel(channel)
 
-	l.trace(LifecycleTrace{
-		RelaySessionID: channel.id, OperationID: request.operationID,
-		Stage: LifecycleSendAdmitted, Terminal: request.terminal,
-		Disposition: framechannel.SendAccepted,
-	})
+	if request.terminal {
+		l.trace(terminalSendAdmittedTrace(channel.id, request.operationID))
+	}
 	select {
 	case l.writeWake <- struct{}{}:
 	default:
@@ -100,16 +97,20 @@ func (l *link) enqueueWithAuthority(
 	case <-ctx.Done():
 		if transition, rolledBack := l.rollbackQueued(channel, request, reservation); rolledBack {
 			rejection := framechannel.RejectSend(ctx.Err())
-			l.trace(LifecycleTrace{
-				RelaySessionID: channel.id, OperationID: request.operationID,
-				Stage: LifecycleSendRolledBack, Terminal: request.terminal,
-				Disposition: framechannel.SendRejected, Cause: lifecycleCause(ctx.Err()),
-			})
+			l.trace(sendRolledBackTrace(
+				channel.id, request.operationID,
+				request.terminal, lifecycleCause(ctx.Err()),
+			))
 			l.traceTransition(channel, transition)
 			return rejection
 		}
 		return ctx.Err()
 	case err := <-request.receipt:
+		if !request.terminal && err != nil {
+			l.trace(acceptedSendFailureTrace(
+				channel.id, request.operationID, lifecycleCause(err),
+			))
+		}
 		return err
 	}
 }

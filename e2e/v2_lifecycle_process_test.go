@@ -34,7 +34,7 @@ const (
 	v2ReceiverJoinStoppedMilestone  = "receiver_join_stopped"
 )
 
-func TestCriticalSenderRelayReceiver(t *testing.T) {
+func TestUserTraceCriticalSenderRelayReceiver(t *testing.T) {
 	requireV2ProcessScenario(t)
 	scenario := startV2Scenario(t, v2CriticalRelayTransferScenario)
 	binaries := loadE2EBinaries(t)
@@ -76,6 +76,7 @@ func TestCriticalSenderRelayReceiver(t *testing.T) {
 		}
 	}
 	requireV2UserTraceFact(t, receiver, "content_path_selected", "content_path", "relay")
+	assertV2UserTraceTransportDiagnostics(t, receiver, "relay", false)
 	assertV2File(t, filepath.Join(output, filepath.Base(source)), payload)
 	events := drainV2ProcessTraces(t, receiver)
 	requireV2EventCount(t, events, v2ReceiverRelayContentMilestone, testrun.OutcomeSucceeded, 1)
@@ -95,6 +96,7 @@ func TestCriticalSenderRelayReceiver(t *testing.T) {
 		)
 	}
 	requireV2UserTraceFact(t, p2pReceiver, "content_path_selected", "content_path", "direct")
+	assertV2UserTraceTransportDiagnostics(t, p2pReceiver, "direct", true)
 	assertV2File(t, filepath.Join(p2pOutput, filepath.Base(source)), payload)
 	p2pEvents := drainV2ProcessTraces(t, p2pReceiver)
 	requireV2EventCount(t, p2pEvents, v2ReceiverRelayContentMilestone, testrun.OutcomeSucceeded, 0)

@@ -27,13 +27,21 @@ func (kind ActiveLookupKind) Valid() bool {
 // ActiveLookup is an opaque continuation. A miss retains admission authority;
 // a reopened result retains the exact operation lease and top-level capability.
 type ActiveLookup struct {
-	authority *Authority
-	kind      ActiveLookupKind
-	admission *heldAdmission
-	operation *Operation
+	authority   *Authority
+	kind        ActiveLookupKind
+	admission   *heldAdmission
+	operation   *Operation
+	stateReason FilesystemOutputStateReason
 }
 
 func (lookup ActiveLookup) Kind() ActiveLookupKind { return lookup.kind }
+
+func (lookup ActiveLookup) StateReason() FilesystemOutputStateReason {
+	if lookup.kind != ActiveLookupNeedsAttention {
+		return 0
+	}
+	return lookup.stateReason
+}
 
 func (lookup ActiveLookup) Operation() *Operation {
 	if lookup.kind != ActiveLookupReopened {

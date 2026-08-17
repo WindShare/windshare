@@ -113,19 +113,19 @@ func TestWindowsV3SemanticFilePublishIsNoCopyNoReplace(t *testing.T) {
 	if err := root.CreateLiveCleanupStage(stages, ticket); err != nil {
 		t.Fatal(err)
 	}
-	stage, err := stages.OpenFile(ticket.StageName(), false, true)
+	stage, err := stages.OpenMutableFile(ticket.StageName(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stage.Close()
-	if _, err := stage.(*windowsOutputV3File).native.WriteAt([]byte("data"), 0); err != nil {
+	if _, err := stage.WriteAt([]byte("data"), 0); err != nil {
 		t.Fatal(err)
 	}
 	outcome, err := root.PublishFileNoReplace(stage, "published.bin")
 	if err != nil || outcome != outputcap.PublishNoReplaceCommitted {
 		t.Fatalf("publish outcome = %v, %v", outcome, err)
 	}
-	published, err := root.OpenFile("published.bin", false, false)
+	published, err := root.OpenObservedFile("published.bin", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestWindowsV3SemanticFilePublishRaceHasOneWinner(t *testing.T) {
 	defer stagesValue.Close()
 	stages := stagesValue.(*windowsOutputV3Directory)
 	const contenders = 8
-	files := make([]outputcap.File, contenders)
+	files := make([]outputcap.MutableFile, contenders)
 	for index := range files {
 		ticket := windowsV3TestLiveCleanupTicketWithNonce(
 			t, byte(index+1), 1, checkpointmodel.LiveCleanupTicketCommitted,
@@ -165,7 +165,7 @@ func TestWindowsV3SemanticFilePublishRaceHasOneWinner(t *testing.T) {
 		if err := root.CreateLiveCleanupStage(stages, ticket); err != nil {
 			t.Fatal(err)
 		}
-		files[index], err = stages.OpenFile(ticket.StageName(), false, true)
+		files[index], err = stages.OpenMutableFile(ticket.StageName(), false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -177,7 +177,7 @@ func TestWindowsV3SemanticFilePublishRaceHasOneWinner(t *testing.T) {
 	}
 	results := make(chan result, contenders)
 	for _, file := range files {
-		go func(source outputcap.File) {
+		go func(source outputcap.FileIdentity) {
 			outcome, publishErr := root.PublishFileNoReplace(source, "race.bin")
 			results <- result{outcome: outcome, err: publishErr}
 		}(file)
@@ -201,7 +201,7 @@ func TestWindowsV3SemanticFilePublishRaceHasOneWinner(t *testing.T) {
 	if committed != 1 || collisions != contenders-1 {
 		t.Fatalf("race results committed=%d collisions=%d", committed, collisions)
 	}
-	published, err := root.OpenFile("race.bin", false, false)
+	published, err := root.OpenObservedFile("race.bin", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestWindowsV3LiveCleanupStageUsesPublicParentACLAndPrivateProofName(t *test
 	if err := nested.CreateLiveCleanupStage(control, ticket); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := control.OpenFile(ticket.StageName(), false, true)
+	reopened, err := control.OpenMutableFile(ticket.StageName(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +411,7 @@ func TestWindowsV3OrdinaryStageUsesOneSameFilesystemPrivateObject(t *testing.T) 
 	if err := root.CreateOrdinaryOutputStage(stages, stageName, 7); err != nil {
 		t.Fatal(err)
 	}
-	stage, err := stages.OpenFile(stageName, false, true)
+	stage, err := stages.OpenMutableFile(stageName, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -614,7 +614,7 @@ func TestWindowsV3RecordBeforeStageCleanupReplaysEveryCut(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := record.(*windowsOutputV3File).native.WriteAt(encoded, 0); err != nil {
+			if _, err := record.WriteAt(encoded, 0); err != nil {
 				t.Fatal(err)
 			}
 			if err := errors.Join(record.Sync(), control.Sync()); err != nil {
@@ -626,7 +626,7 @@ func TestWindowsV3RecordBeforeStageCleanupReplaysEveryCut(t *testing.T) {
 				}
 			}
 			if cut == "stage-removed" || cut == "ticket-removed" {
-				stage, err := control.OpenFile(ticket.StageName(), false, true)
+				stage, err := control.OpenMutableFile(ticket.StageName(), false)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -652,7 +652,7 @@ func TestWindowsV3RecordBeforeStageCleanupReplaysEveryCut(t *testing.T) {
 
 			// Replay begins only from the durable ticket. A committed ticket with
 			// no stage is retired; a present exact stage is removed before it.
-			reopenedRecord, err := control.OpenFile(ticketName, true, false)
+			reopenedRecord, err := control.OpenObservedFile(ticketName, true)
 			if cut == "ticket-removed" {
 				if !errors.Is(err, fs.ErrNotExist) {
 					t.Fatalf("retired ticket reopened: %v", err)
@@ -663,7 +663,7 @@ func TestWindowsV3RecordBeforeStageCleanupReplaysEveryCut(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer reopenedRecord.Close()
-			reopenedStage, stageErr := control.OpenFile(ticket.StageName(), false, true)
+			reopenedStage, stageErr := control.OpenMutableFile(ticket.StageName(), false)
 			if stageErr == nil {
 				if err := control.RemoveLiveCleanupStage(ticket, reopenedStage); err != nil {
 					_ = reopenedStage.Close()

@@ -148,6 +148,9 @@ type FilesystemOutputTrace struct {
 	ReservedFileSlotCount  uint64
 	DirectoryMetadataBytes uint64
 	CheckpointRecordCount  uint64
+	FailureStage           FilesystemOutputFailureStage
+	ReconciliationStep     FilesystemCheckpointReconciliationStep
+	NativeErrorClass       FilesystemNativeErrorClass
 	Failed                 bool
 }
 

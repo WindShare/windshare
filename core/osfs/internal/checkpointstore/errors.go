@@ -33,6 +33,99 @@ func (code ErrorCode) Valid() bool {
 	}
 }
 
+// ReconciliationStep is the last authoritative checkpoint-recovery decision
+// reached before a candidate promotion failed. Cleanup is deliberately absent:
+// closing capabilities cannot rewrite the primary recovery outcome.
+type ReconciliationStep uint8
+
+const (
+	ReconciliationCandidateObservation ReconciliationStep = iota + 1
+	ReconciliationStageDurability
+	ReconciliationNamespaceDurability
+	ReconciliationRecordPromotion
+)
+
+func (step ReconciliationStep) Valid() bool {
+	return step >= ReconciliationCandidateObservation && step <= ReconciliationRecordPromotion
+}
+
+func (step ReconciliationStep) String() string {
+	switch step {
+	case ReconciliationCandidateObservation:
+		return "candidate_observation"
+	case ReconciliationStageDurability:
+		return "stage_durability"
+	case ReconciliationNamespaceDurability:
+		return "namespace_durability"
+	case ReconciliationRecordPromotion:
+		return "record_promotion"
+	default:
+		return ""
+	}
+}
+
+// ReconciliationError seals the safe recovery diagnosis while the provider's
+// typed native classification is still reachable. The raw cause remains private
+// diagnostic evidence and never authorizes a later policy decision.
+type ReconciliationError struct {
+	step      ReconciliationStep
+	fault     transferfault.Fault
+	native    outputcap.NativeErrorClass
+	hasNative bool
+	cause     error
+}
+
+func (failure *ReconciliationError) Error() string {
+	if failure == nil || !failure.step.Valid() || !failure.fault.Valid() {
+		return "checkpoint reconciliation failed"
+	}
+	return fmt.Sprintf("checkpoint reconciliation %s failed: %v", failure.step, failure.cause)
+}
+
+func (failure *ReconciliationError) Unwrap() error {
+	if failure == nil {
+		return nil
+	}
+	return failure.cause
+}
+
+func (failure *ReconciliationError) Step() ReconciliationStep {
+	if failure == nil {
+		return 0
+	}
+	return failure.step
+}
+
+func (failure *ReconciliationError) Fault() transferfault.Fault {
+	if failure == nil {
+		return transferfault.Fault{}
+	}
+	return failure.fault
+}
+
+func (failure *ReconciliationError) NativeClass() (outputcap.NativeErrorClass, bool) {
+	if failure == nil || !failure.hasNative || !failure.native.Valid() {
+		return 0, false
+	}
+	return failure.native, true
+}
+
+func reconciliationError(step ReconciliationStep, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	normalized := fileOutputBoundaryErrorWithoutContext(transferfault.ScopeOutputPause, cause)
+	result := transferfault.NormalizeBoundaryError(normalized)
+	value, ok := result.Fault()
+	if !step.Valid() || !ok {
+		value = transferfault.DependencyContractFault()
+	}
+	native, hasNative := outputcap.ClassifyNativeError(cause)
+	return &ReconciliationError{
+		step: step, fault: value, native: native, hasNative: hasNative, cause: cause,
+	}
+}
+
 // Error retains a raw cause only for immediate diagnostics. Its code is the sole
 // authority that may cross into settlement policy.
 type Error struct {

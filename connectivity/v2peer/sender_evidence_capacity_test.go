@@ -98,6 +98,9 @@ func TestSenderEvidenceCapacityTerminalizesBoundaryAndEndsProtocolSession(t *tes
 	if err := receiveTest(t, runDone); !errors.Is(err, ErrEvidenceIdentityCapacity) {
 		t.Fatalf("capacity run result = %v", err)
 	}
+	waitForTest(t, func() bool {
+		return len(collector.forAttempt(boundaryBinding.AttemptID)) == 3
+	})
 	assertUnstartedSenderTerminal(
 		t,
 		collector.forAttempt(boundaryBinding.AttemptID),
@@ -194,6 +197,13 @@ func TestSenderEvidenceCapacityConcurrentBoundaryHasOneTerminalOwner(t *testing.
 			t.Fatalf("concurrent boundary result = %v", err)
 		}
 	}
+	waitForTest(t, func() bool {
+		total := 0
+		for _, offer := range offers {
+			total += len(collector.forAttempt(offer.binding.AttemptID))
+		}
+		return total == 3
+	})
 	terminalStreams := 0
 	for _, offer := range offers {
 		observations := collector.forAttempt(offer.binding.AttemptID)
@@ -221,7 +231,7 @@ func TestSenderEvidenceCapacityConcurrentBoundaryHasOneTerminalOwner(t *testing.
 
 func TestSenderEvidenceCapacityObserverPanicStillEndsAndCleansSession(t *testing.T) {
 	var observations atomic.Int32
-	diagnostics := make(chan error, 4)
+	diagnostics := &peerDiagnosticCollector{}
 	var peerCreations atomic.Int32
 	factory := mustTestFactory(t, Config{
 		MaxActiveAttempts:            1,
@@ -230,7 +240,7 @@ func TestSenderEvidenceCapacityObserverPanicStillEndsAndCleansSession(t *testing
 			observations.Add(1)
 			panic("synthetic capacity observer panic")
 		}),
-		OnError: func(err error) { diagnostics <- err },
+		DiagnosticObserver: PeerDiagnosticObserverFunc(diagnostics.observe),
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			peerCreations.Add(1)
 			return nil, errors.New("peer creation must not run")
@@ -260,14 +270,22 @@ func TestSenderEvidenceCapacityObserverPanicStillEndsAndCleansSession(t *testing
 	if err := receiveTest(t, runDone); !errors.Is(err, ErrEvidenceIdentityCapacity) {
 		t.Fatalf("observer panic capacity result = %v", err)
 	}
+	waitForTest(t, func() bool { return observations.Load() == 3 })
 	if observations.Load() != 3 || peerCreations.Load() != 0 {
 		t.Fatalf("observer boundary: observations=%d peers=%d", observations.Load(), peerCreations.Load())
 	}
-	for range 3 {
-		if err := receiveTest(t, diagnostics); !errors.Is(err, ErrSenderObserverPanic) {
-			t.Fatalf("observer diagnostic = %v", err)
-		}
-	}
+	waitForTest(t, func() bool {
+		panicObservation, panicOK := diagnostics.latest(
+			PeerDiagnosticSenderAttempt,
+			PeerDiagnosticObserverPanic,
+		)
+		capacityObservation, capacityOK := diagnostics.latest(
+			PeerDiagnosticSenderAttempt,
+			PeerDiagnosticEvidenceCapacity,
+		)
+		return panicOK && panicObservation.Count == 3 &&
+			capacityOK && capacityObservation.Count == 1
+	})
 	if handler.evidenceAuthority.claimCount() != 0 || handler.evidenceAuthority.terminal {
 		t.Fatalf("observer panic retained authority: %#v", handler.evidenceAuthority)
 	}

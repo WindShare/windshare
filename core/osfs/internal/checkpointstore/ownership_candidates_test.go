@@ -80,11 +80,11 @@ func TestOwnershipInspectionAuthenticatesCandidatesAndClassifiesContention(t *te
 		writeMemoryFile(t, base, candidate, encoded)
 		directory := &faultDirectory{
 			Directory: base,
-			openFile: func(name string, private, writable bool) (outputcap.File, error) {
+			openFile: func(name string, private, writable bool) (outputcap.MutableFile, error) {
 				if name == candidate {
 					return nil, outputcap.ErrFixedLinkSourceChanged
 				}
-				return base.OpenFile(name, private, writable)
+				return base.OpenMutableFile(name, private)
 			},
 		}
 		status, err := inspectOwnership(directory, ownership)
@@ -99,13 +99,13 @@ func TestOwnershipInspectionAuthenticatesCandidatesAndClassifiesContention(t *te
 		writeMemoryFile(t, base, candidate, encoded)
 		directory := &faultDirectory{
 			Directory: base,
-			openFile: func(name string, private, writable bool) (outputcap.File, error) {
-				opened, err := base.OpenFile(name, private, writable)
+			openFile: func(name string, private, writable bool) (outputcap.MutableFile, error) {
+				opened, err := base.OpenMutableFile(name, private)
 				if err != nil || name != candidate {
 					return opened, err
 				}
 				return &faultFile{
-					File: opened,
+					MutableFile: opened,
 					readAt: func([]byte, int64) (int, error) {
 						return 0, outputcap.ErrFixedLinkSourceChanged
 					},
@@ -147,11 +147,11 @@ func TestOwnershipInspectionAuthenticatesCandidatesAndClassifiesContention(t *te
 		writeMemoryFile(t, base, OwnershipFile, encoded)
 		directory := &faultDirectory{
 			Directory: base,
-			openFile: func(name string, private, writable bool) (outputcap.File, error) {
+			openFile: func(name string, private, writable bool) (outputcap.MutableFile, error) {
 				if name == OwnershipFile {
 					return nil, outputcap.ErrFixedLinkSourceChanged
 				}
-				return base.OpenFile(name, private, writable)
+				return base.OpenMutableFile(name, private)
 			},
 		}
 		status, err := inspectOwnership(directory, ownership)

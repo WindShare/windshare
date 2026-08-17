@@ -5,7 +5,6 @@ package v2peer
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -23,6 +22,7 @@ const (
 	DefaultMaxActiveAttempts                     = 4
 	DefaultRetiredBindingTTL                     = protocolsession.OperationTombstoneLifetime
 	DefaultMaxRetiredBindings                    = 64
+	DefaultSenderObservationCapacity             = 256
 	defaultEvidenceReplacementWavesPerActiveSlot = 64
 	// A session normally needs one direct attempt. Sixty-four replacement waves
 	// per active slot leave broad diagnostic headroom without letting an
@@ -33,6 +33,7 @@ const (
 	maximumConfiguredAttempts          = 64
 	maximumRetiredBindings             = 4_096
 	maximumSessionEvidenceIdentities   = 65_536
+	maximumSenderObservationCapacity   = 4_096
 	handlerEventReserve                = 16
 	rejectedOfferAuthoritySDP          = "v=0\r\n"
 	peerEvidenceCapacityFailureMessage = "Sender peer evidence identity capacity exhausted"
@@ -108,8 +109,9 @@ type Config struct {
 	RetiredBindingTTL            time.Duration
 	MaxRetiredBindings           int
 	MaxSessionEvidenceIdentities int
+	SenderObservationCapacity    int
 	Now                          func() time.Time
-	OnError                      func(error)
+	DiagnosticObserver           PeerDiagnosticObserver
 }
 
 type Factory struct {
@@ -123,8 +125,8 @@ type Factory struct {
 	maxRetiredBindings           int
 	maxSessionEvidenceIdentities int
 	now                          func() time.Time
-	onError                      func(error)
-	observer                     SenderAttemptObserver
+	diagnostics                  *peerDiagnosticReporter
+	senderObservations           *observationDispatcher[SenderAttemptObservation]
 }
 
 func DefaultConfiguration() pion.Configuration {
@@ -134,7 +136,7 @@ func DefaultConfiguration() pion.Configuration {
 func NewFactory(config Config) (*Factory, error) {
 	if config.AttemptTimeout < 0 || config.MaxCandidates < 0 || config.MaxActiveAttempts < 0 ||
 		config.RetiredBindingTTL < 0 || config.MaxRetiredBindings < 0 ||
-		config.MaxSessionEvidenceIdentities < 0 {
+		config.MaxSessionEvidenceIdentities < 0 || config.SenderObservationCapacity < 0 {
 		return nil, ErrConfig
 	}
 	if config.AttemptTimeout == 0 {
@@ -155,12 +157,16 @@ func NewFactory(config Config) (*Factory, error) {
 	if config.MaxSessionEvidenceIdentities == 0 {
 		config.MaxSessionEvidenceIdentities = DefaultMaxSessionEvidenceIdentities
 	}
+	if config.Observer != nil && config.SenderObservationCapacity == 0 {
+		config.SenderObservationCapacity = DefaultSenderObservationCapacity
+	}
 	if config.MaxCandidates > maximumConfiguredCandidates ||
 		config.MaxActiveAttempts > maximumConfiguredAttempts ||
 		config.MaxRetiredBindings > maximumRetiredBindings ||
 		config.MaxRetiredBindings < config.MaxActiveAttempts ||
 		config.MaxSessionEvidenceIdentities > maximumSessionEvidenceIdentities ||
-		config.MaxSessionEvidenceIdentities < config.MaxActiveAttempts {
+		config.MaxSessionEvidenceIdentities < config.MaxActiveAttempts ||
+		config.SenderObservationCapacity > maximumSenderObservationCapacity {
 		return nil, ErrConfig
 	}
 	if config.PeerConnections == nil {
@@ -173,20 +179,30 @@ func NewFactory(config Config) (*Factory, error) {
 			return transportwebrtc.NewChannel(channel)
 		})
 	}
-	if config.OnError == nil {
-		config.OnError = func(error) {}
-	}
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	return &Factory{
+	factory := &Factory{
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
 		dataChannels: config.DataChannels, attemptTimeout: config.AttemptTimeout,
 		maxCandidates: config.MaxCandidates, maxActiveAttempts: config.MaxActiveAttempts,
 		retiredBindingTTL: config.RetiredBindingTTL, maxRetiredBindings: config.MaxRetiredBindings,
 		maxSessionEvidenceIdentities: config.MaxSessionEvidenceIdentities,
-		now:                          config.Now, onError: config.OnError, observer: config.Observer,
-	}, nil
+		now:                          config.Now,
+		diagnostics:                  newPeerDiagnosticReporter(config.DiagnosticObserver),
+	}
+	if config.Observer != nil {
+		factory.senderObservations = newObservationDispatcher(
+			config.SenderObservationCapacity,
+			config.Observer.ObserveSenderAttempt,
+			func() { factory.reportDiagnostic(PeerDiagnosticSenderAttempt, PeerDiagnosticObserverPanic) },
+			func() { factory.reportDiagnostic(PeerDiagnosticSenderAttempt, PeerDiagnosticObserverCapacity) },
+		)
+		if contextual, ok := config.Observer.(SenderAttemptContextObserver); ok {
+			factory.senderObservations.observeContext = contextual.ObserveSenderAttemptContext
+		}
+	}
+	return factory, nil
 }
 
 func (factory *Factory) NewSenderPeerHandler(
@@ -204,6 +220,21 @@ func (factory *Factory) NewSenderPeerHandler(
 		retiredOperations: make(map[peerOperation]retiredBinding),
 		retiredBindings:   make(map[v2signal.Binding]retiredBinding),
 	}, nil
+}
+
+// CompleteObservations closes sender-attempt callback admission before draining
+// diagnostics, because attempt loss may itself publish a cumulative diagnostic.
+func (factory *Factory) CompleteObservations(ctx context.Context) SenderObservationCompletion {
+	if factory == nil {
+		return SenderObservationCompletion{
+			Attempts:    ObservationCompletion{Drained: true},
+			Diagnostics: ObservationCompletion{Drained: true},
+		}
+	}
+	return SenderObservationCompletion{
+		Attempts:    factory.senderObservations.complete(ctx),
+		Diagnostics: factory.diagnostics.complete(ctx),
+	}
 }
 
 func (factory *Factory) BeginOperationContinuation(
@@ -519,7 +550,7 @@ func (handler *senderHandler) handleRunEvent(ctx context.Context, event handlerE
 		return err
 	}
 	if err != nil {
-		handler.factory.reportError(fmt.Errorf("cancel peer operation: %w", err))
+		handler.factory.reportDiagnostic(PeerDiagnosticSenderAttempt, PeerDiagnosticCleanupResidue)
 	}
 	return nil
 }

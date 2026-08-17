@@ -93,7 +93,7 @@ func BenchmarkFileLocalMultiLane(b *testing.B) {
 			probes := make([]*immediateBenchmarkLane, laneCount)
 			for index := range probes {
 				probes[index] = newImmediateBenchmarkLane(recordSet)
-				if err := lanes.Add(LaneIdentity{ID: uint32(index + 1)}, probes[index]); err != nil {
+				if err := lanes.Add(LaneIdentity{ID: uint32(index + 1)}, LaneRouteRelay, probes[index]); err != nil {
 					b.Fatal(err)
 				}
 			}

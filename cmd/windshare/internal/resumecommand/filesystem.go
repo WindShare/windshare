@@ -109,7 +109,7 @@ type resumeSummaryView interface {
 	ReceiveIntentDigest() transfer.ReceiveIntentDigest
 	State() osfs.ResumeOperationState
 	StateGeneration() uint64
-	NeedsAttentionReason() string
+	NeedsAttentionReason() osfs.FilesystemOutputStateReason
 	Items() []osfs.ResumeStateItem
 	Busy() bool
 	Valid() bool
@@ -131,10 +131,18 @@ func projectResumeStateSummary(summary resumeSummaryView) (resumeOperation, erro
 	if err != nil {
 		return resumeOperation{}, err
 	}
+	reason := summary.NeedsAttentionReason()
+	attention := ""
+	if reason != osfs.FilesystemOutputStateReasonNone {
+		if !reason.Valid() {
+			return resumeOperation{}, errResumeStateContract
+		}
+		attention = reason.String()
+	}
 	operation := resumeOperation{
 		operationID: hex.EncodeToString(summary.OperationID().Bytes()),
 		state:       state,
-		attention:   summary.NeedsAttentionReason(),
+		attention:   attention,
 		running:     summary.Busy(),
 	}
 	for _, item := range summary.Items() {
@@ -210,9 +218,17 @@ func projectResumeDiscardSummary(summary resumeSummaryView) (resumeDiscardReport
 	if summary == nil || !summary.Valid() || summary.OperationID().IsZero() {
 		return resumeDiscardReport{}, errResumeStateContract
 	}
+	reason := summary.NeedsAttentionReason()
+	attention := ""
+	if reason != osfs.FilesystemOutputStateReasonNone {
+		if !reason.Valid() {
+			return resumeDiscardReport{}, errResumeStateContract
+		}
+		attention = reason.String()
+	}
 	report := resumeDiscardReport{
 		operationID: hex.EncodeToString(summary.OperationID().Bytes()),
-		attention:   summary.NeedsAttentionReason(),
+		attention:   attention,
 	}
 	switch summary.State() {
 	case osfs.ResumeOperationDiscarded:

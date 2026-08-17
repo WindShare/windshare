@@ -159,6 +159,10 @@ func failureMessage(failure clievent.Failure) string {
 		message = "The share link could not be published."
 	case clievent.MessageTraceIncomplete:
 		message = "The trace is incomplete."
+	case clievent.MessageTraceExists:
+		message = "The trace path already exists. Choose a new path."
+	case clievent.MessageOutputNeedsAttention:
+		message = "The destination needs attention before the transfer can continue."
 	default:
 		message = "An unexpected error occurred."
 	}

@@ -2,6 +2,7 @@ package osfs
 
 import (
 	"context"
+	"errors"
 
 	"github.com/windshare/windshare/core/osfs/internal/outputfault"
 	"github.com/windshare/windshare/core/osfs/internal/outputruntime"
@@ -25,6 +26,198 @@ const (
 
 type FilesystemResumeRoot struct {
 	RootPath string
+}
+
+type FilesystemOutputFailureStage uint8
+
+const (
+	FilesystemOutputFailureDestinationBinding FilesystemOutputFailureStage = iota + 1
+	FilesystemOutputFailureInventoryPaging
+	FilesystemOutputFailureActiveLookup
+	FilesystemOutputFailureOperationAcquisition
+	FilesystemOutputFailureOperationAdmission
+	FilesystemOutputFailureCheckpointReconciliation
+	FilesystemOutputFailureNativeDurability
+	FilesystemOutputFailureAuthorityClose
+)
+
+func (stage FilesystemOutputFailureStage) Valid() bool {
+	return stage >= FilesystemOutputFailureDestinationBinding &&
+		stage <= FilesystemOutputFailureAuthorityClose
+}
+
+func (stage FilesystemOutputFailureStage) String() string {
+	switch stage {
+	case FilesystemOutputFailureDestinationBinding:
+		return "destination_binding"
+	case FilesystemOutputFailureInventoryPaging:
+		return "inventory_paging"
+	case FilesystemOutputFailureActiveLookup:
+		return "active_lookup"
+	case FilesystemOutputFailureOperationAcquisition:
+		return "operation_acquisition"
+	case FilesystemOutputFailureOperationAdmission:
+		return "operation_admission"
+	case FilesystemOutputFailureCheckpointReconciliation:
+		return "checkpoint_reconciliation"
+	case FilesystemOutputFailureNativeDurability:
+		return "native_durability"
+	case FilesystemOutputFailureAuthorityClose:
+		return "authority_close"
+	default:
+		return ""
+	}
+}
+
+type FilesystemCheckpointReconciliationStep uint8
+
+const (
+	FilesystemCheckpointCandidateObservation FilesystemCheckpointReconciliationStep = iota + 1
+	FilesystemCheckpointStageDurability
+	FilesystemCheckpointNamespaceDurability
+	FilesystemCheckpointRecordPromotion
+)
+
+func (step FilesystemCheckpointReconciliationStep) Valid() bool {
+	return step >= FilesystemCheckpointCandidateObservation &&
+		step <= FilesystemCheckpointRecordPromotion
+}
+
+func (step FilesystemCheckpointReconciliationStep) String() string {
+	switch step {
+	case FilesystemCheckpointCandidateObservation:
+		return "candidate_observation"
+	case FilesystemCheckpointStageDurability:
+		return "stage_durability"
+	case FilesystemCheckpointNamespaceDurability:
+		return "namespace_durability"
+	case FilesystemCheckpointRecordPromotion:
+		return "record_promotion"
+	default:
+		return ""
+	}
+}
+
+type FilesystemNativeErrorClass uint8
+
+const (
+	FilesystemNativeErrorAccessDenied FilesystemNativeErrorClass = iota + 1
+	FilesystemNativeErrorSharingViolation
+	FilesystemNativeErrorNotFound
+	FilesystemNativeErrorInvalidHandle
+	FilesystemNativeErrorUnsupported
+	FilesystemNativeErrorIO
+	FilesystemNativeErrorUnknown
+)
+
+func (class FilesystemNativeErrorClass) Valid() bool {
+	return class >= FilesystemNativeErrorAccessDenied && class <= FilesystemNativeErrorUnknown
+}
+
+func (class FilesystemNativeErrorClass) String() string {
+	switch class {
+	case FilesystemNativeErrorAccessDenied:
+		return "access_denied"
+	case FilesystemNativeErrorSharingViolation:
+		return "sharing_violation"
+	case FilesystemNativeErrorNotFound:
+		return "not_found"
+	case FilesystemNativeErrorInvalidHandle:
+		return "invalid_handle"
+	case FilesystemNativeErrorUnsupported:
+		return "unsupported"
+	case FilesystemNativeErrorIO:
+		return "io"
+	case FilesystemNativeErrorUnknown:
+		return "unknown"
+	default:
+		return ""
+	}
+}
+
+type FilesystemOutputStateReason uint8
+
+const (
+	FilesystemOutputStateReasonNone FilesystemOutputStateReason = iota + 1
+	FilesystemOutputStateDestinationOwnershipUnknown
+	FilesystemOutputStateRegistryOwnershipUnknown
+	FilesystemOutputStateLeaseOwnershipUnknown
+	FilesystemOutputStateOperationOwnershipUnknown
+	FilesystemOutputStateCleanupUncertain
+)
+
+func (reason FilesystemOutputStateReason) Valid() bool {
+	return reason >= FilesystemOutputStateReasonNone &&
+		reason <= FilesystemOutputStateCleanupUncertain
+}
+
+func (reason FilesystemOutputStateReason) String() string {
+	switch reason {
+	case FilesystemOutputStateReasonNone:
+		return "none"
+	case FilesystemOutputStateDestinationOwnershipUnknown:
+		return "destination-ownership-unknown"
+	case FilesystemOutputStateRegistryOwnershipUnknown:
+		return "registry-ownership-unknown"
+	case FilesystemOutputStateLeaseOwnershipUnknown:
+		return "lease-ownership-unknown"
+	case FilesystemOutputStateOperationOwnershipUnknown:
+		return "operation-ownership-unknown"
+	case FilesystemOutputStateCleanupUncertain:
+		return "cleanup-uncertain"
+	default:
+		return ""
+	}
+}
+
+type FilesystemOutputDiagnostic struct {
+	Stage              FilesystemOutputFailureStage
+	ReconciliationStep FilesystemCheckpointReconciliationStep
+	NativeErrorClass   FilesystemNativeErrorClass
+	FaultDomain        uint8
+	NormalizedScope    uint8
+	NormalizedCode     uint16
+}
+
+func (diagnostic FilesystemOutputDiagnostic) Valid() bool {
+	if !diagnostic.Stage.Valid() {
+		return false
+	}
+	if diagnostic.ReconciliationStep != 0 {
+		if !diagnostic.ReconciliationStep.Valid() ||
+			diagnostic.Stage != FilesystemOutputFailureCheckpointReconciliation &&
+				diagnostic.Stage != FilesystemOutputFailureNativeDurability {
+			return false
+		}
+	}
+	if diagnostic.NativeErrorClass != 0 && !diagnostic.NativeErrorClass.Valid() {
+		return false
+	}
+	faultZero := diagnostic.FaultDomain == 0 &&
+		diagnostic.NormalizedScope == 0 &&
+		diagnostic.NormalizedCode == 0
+	faultComplete := diagnostic.FaultDomain != 0 &&
+		diagnostic.NormalizedScope != 0 &&
+		diagnostic.NormalizedCode != 0
+	return faultZero || faultComplete
+}
+
+type FilesystemOutputDiagnosticCarrier interface {
+	FilesystemOutputDiagnostic() FilesystemOutputDiagnostic
+}
+
+func FilesystemOutputDiagnosticFor(err error) (FilesystemOutputDiagnostic, bool) {
+	var carrier FilesystemOutputDiagnosticCarrier
+	if errors.As(err, &carrier) {
+		diagnostic := carrier.FilesystemOutputDiagnostic()
+		return diagnostic, diagnostic.Valid()
+	}
+	internal, ok := outputruntime.FilesystemOutputDiagnosticFor(err)
+	if !ok {
+		return FilesystemOutputDiagnostic{}, false
+	}
+	diagnostic := projectFilesystemOutputDiagnostic(internal)
+	return diagnostic, diagnostic.Valid()
 }
 
 type FilesystemOutputTraceOperation uint8
@@ -146,6 +339,9 @@ type FilesystemOutputTrace struct {
 	ReservedFileSlotCount  uint64
 	DirectoryMetadataBytes uint64
 	CheckpointRecordCount  uint64
+	FailureStage           FilesystemOutputFailureStage
+	ReconciliationStep     FilesystemCheckpointReconciliationStep
+	NativeErrorClass       FilesystemNativeErrorClass
 	Failed                 bool
 }
 
@@ -216,6 +412,10 @@ func (lookup FilesystemOutputLookup) Kind() FilesystemOutputLookupKind {
 	default:
 		return 0
 	}
+}
+
+func (lookup FilesystemOutputLookup) StateReason() FilesystemOutputStateReason {
+	return projectFilesystemOutputStateReason(lookup.lookup.StateReason())
 }
 
 func (lookup FilesystemOutputLookup) Operation() FilesystemOutputOperation {
@@ -290,7 +490,9 @@ func (authority *FilesystemOutputAuthority) LookupActive(
 		return FilesystemOutputLookup{}, transfer.ErrInvalidOutputBinding
 	}
 	lookup, err := authority.authority.LookupActive(ctx, selection)
-	return FilesystemOutputLookup{lookup: lookup}, err
+	return FilesystemOutputLookup{lookup: lookup}, outputruntime.DiagnoseFilesystemOutputFailure(
+		outputruntime.FilesystemOutputFailureActiveLookup, err,
+	)
 }
 
 func (authority *FilesystemOutputAuthority) CreateOperation(
@@ -302,7 +504,9 @@ func (authority *FilesystemOutputAuthority) CreateOperation(
 		return FilesystemOutputOperation{}, transfer.ErrInvalidOutputBinding
 	}
 	operation, err := authority.authority.CreateOperation(ctx, lookup.lookup, artifact)
-	return FilesystemOutputOperation{operation: operation}, err
+	return FilesystemOutputOperation{operation: operation}, outputruntime.DiagnoseFilesystemOutputFailure(
+		outputruntime.FilesystemOutputFailureOperationAdmission, err,
+	)
 }
 
 func (authority *FilesystemOutputAuthority) OpenOperation(
@@ -312,7 +516,10 @@ func (authority *FilesystemOutputAuthority) OpenOperation(
 	if authority == nil || authority.authority == nil {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
-	return authority.authority.OpenOperation(ctx, operation.operation)
+	session, err := authority.authority.OpenOperation(ctx, operation.operation)
+	return session, outputruntime.DiagnoseFilesystemOutputFailure(
+		outputruntime.FilesystemOutputFailureOperationAcquisition, err,
+	)
 }
 
 func (authority *FilesystemOutputAuthority) Close() error {

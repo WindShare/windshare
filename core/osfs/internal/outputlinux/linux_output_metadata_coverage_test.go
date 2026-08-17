@@ -124,15 +124,15 @@ func TestLinuxSetHandleModifiedTimeAndErrors(t *testing.T) {
 			deviceMinor: linuxTestDeviceMinor, inode: linuxTestRootInode + 1,
 			kind: unix.S_IFREG,
 		},
-		writable: true,
+		access: linuxOutputFileMutable,
 	}
 
 	// File not writable
-	file.writable = false
+	file.access = linuxOutputFileObserved
 	if err := file.setModifiedTime(validTime); !errors.Is(err, errLinuxOutputUnsafe) {
 		t.Fatalf("read-only file setModifiedTime error = %v, want unsafe", err)
 	}
-	file.writable = true
+	file.access = linuxOutputFileMutable
 
 	if err := file.setModifiedTime(validTime); err != nil {
 		t.Fatalf("file setModifiedTime error = %v", err)
@@ -347,7 +347,7 @@ func TestLinuxHandlesExactModeTruncateSyncAndPinnedEntry(t *testing.T) {
 			deviceMinor: linuxTestDeviceMinor, inode: linuxTestRootInode + 1,
 			kind: unix.S_IFREG,
 		},
-		writable: true,
+		access: linuxOutputFileMutable,
 	}
 
 	// setExactMode
