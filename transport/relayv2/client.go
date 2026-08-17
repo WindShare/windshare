@@ -39,7 +39,9 @@ func (options DialOptions) dial(ctx context.Context, target string) (BinarySocke
 	if options.SocketDialer != nil {
 		return options.SocketDialer(ctx, target, options.Header.Clone())
 	}
-	socket, _, err := websocket.Dial(ctx, target, &websocket.DialOptions{
+	// coder/websocket owns the handshake response body on every outcome, so
+	// closing it here would violate the dialer's transport ownership contract.
+	socket, _, err := websocket.Dial(ctx, target, &websocket.DialOptions{ //nolint:bodyclose
 		HTTPClient: options.HTTPClient, HTTPHeader: options.Header,
 	})
 	return socket, err
