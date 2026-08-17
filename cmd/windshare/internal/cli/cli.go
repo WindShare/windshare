@@ -111,19 +111,19 @@ func (a *App) Run(ctx context.Context, args []string) int {
 
 func (a *App) usage() {
 	fmt.Fprint(a.stderrWriter(), `Usage:
-	  windshare share <path...> [--relay <url>] [--block-size <bytes>] [--split-key] [--front-url <url>] [-v|--verbose] [--trace <file>]
+	  windshare share <path...> [--relay <url>] [--block-size <bytes>] [--split-key] [--front-url <url>] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
 	      Commit selected roots, wait for relay registration, print a suite-02 link, and scan descendants on demand.
 	      --split-key prints a bare link and key string for delivery over separate channels.
 
-	  windshare get <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>]
-	  windshare get -o <directory> <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>]
+	  windshare get <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
+	  windshare get -o <directory> <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
 	      Save one ordinary named result inside the output container; -o defaults to the current directory.
 	      Compatible active downloads reuse their frozen result name and verified progress.
 	      relay-only skips direct peer setup and transfers content through the configured relay.
 	      p2p-only uses the relay for bootstrap and signaling but never for content; direct-path failure stops the download.
 	      If the link has no key, use --key or enter the key interactively.
-	      -v and --verbose show static diagnostic milestones; --trace writes private-safe NDJSON to a file.
-	      --trace=- is not supported because trace data never shares a human or capability stream.
+	      -v and --verbose show static diagnostic milestones; --trace creates one exact file and --trace-dir generates one run-specific file.
+	      Trace targets are mutually exclusive; '-' is unsupported because trace data never shares a human or capability stream.
 
 	  windshare resume list -o <directory>
 	      List destination-owned incomplete, resumable, cleanup-pending, and attention state.

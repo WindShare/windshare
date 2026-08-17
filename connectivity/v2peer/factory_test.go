@@ -471,8 +471,7 @@ func TestSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
 
 func TestSenderHandlerQueueOverflowTombstonesRejectedOfferBinding(t *testing.T) {
 	collector := &senderObservationCollector{}
-	factory := mustTestFactory(t, Config{
-		Observer: SenderAttemptObserverFunc(collector.observe),
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return nil, errors.New("unexpected attempt")
 		}),
@@ -514,9 +513,7 @@ func TestSenderHandlerQueueOverflowTombstonesRejectedOfferBinding(t *testing.T) 
 
 func TestSenderHandlerTerminalizesOfferCanceledBeforePublication(t *testing.T) {
 	collector := &senderObservationCollector{}
-	factory := mustTestFactory(t, Config{
-		Observer: SenderAttemptObserverFunc(collector.observe),
-	})
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
 	handler := newDirectTestHandler(t, factory, newTestPeerSession(27))
 	operation := testOperationID(140)
 	binding := testBinding(141)

@@ -158,23 +158,21 @@ func validLifecycleCauseValue(cause LifecycleCause) bool {
 	}
 }
 
+// LifecycleObservationLoss describes only observations the bounded stream
+// could not retain before the producer admission cut.
 type LifecycleObservationLoss struct {
-	QueueOverflow   uint64
-	ObserverPanic   uint64
-	CallbackTimeout uint64
-	Undrained       uint64
+	CapacityDropped uint64
 }
 
 func (loss LifecycleObservationLoss) Total() uint64 {
-	total := saturatingLifecycleCount(loss.QueueOverflow, loss.ObserverPanic)
-	total = saturatingLifecycleCount(total, loss.CallbackTimeout)
-	return saturatingLifecycleCount(total, loss.Undrained)
+	return loss.CapacityDropped
 }
 
+// LifecycleObservationCompletion proves stream admission has closed. Enqueued
+// does not imply that a consumer received or projected an observation.
 type LifecycleObservationCompletion struct {
-	Delivered uint64
-	Loss      LifecycleObservationLoss
-	Drained   bool
+	Enqueued uint64
+	Loss     LifecycleObservationLoss
 }
 
 func saturatingLifecycleCount(current, increment uint64) uint64 {

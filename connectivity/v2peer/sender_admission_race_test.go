@@ -182,8 +182,7 @@ func newAdmissionBoundaryHarness(t *testing.T) *admissionBoundaryHarness {
 	t.Helper()
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
-	factory := mustTestFactory(t, Config{
-		Observer: SenderAttemptObserverFunc(collector.observe),
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return peer, nil
 		}),

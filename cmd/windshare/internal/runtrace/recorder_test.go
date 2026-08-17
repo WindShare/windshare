@@ -559,43 +559,45 @@ func TestRecorderReportsUpstreamLossAndSchemaExhaustion(t *testing.T) {
 }
 
 func TestOpenValidatesSynchronouslyAndCreatesOwnerOnlyFile(t *testing.T) {
-	if _, err := Open("", clievent.CommandShare, Config{}); !errors.Is(err, ErrInvalidPath) {
-		t.Fatalf("empty path error = %v", err)
+	exactTarget := mustExactTarget(t, "trace")
+	if _, err := Open(Target{}, clievent.CommandShare, Config{}); !errors.Is(err, ErrInvalidTarget) {
+		t.Fatalf("zero target error = %v", err)
 	}
-	if _, err := Open("-", clievent.CommandShare, Config{}); !errors.Is(err, ErrInvalidPath) {
-		t.Fatalf("dash path error = %v", err)
-	}
-	if _, err := Open("trace", 0, Config{}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := Open(exactTarget, 0, Config{}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("invalid command error = %v", err)
 	}
-	if _, err := Open("trace", clievent.CommandShare, Config{LifecycleCapacity: -1}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := Open(exactTarget, clievent.CommandShare, Config{LifecycleCapacity: -1}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("negative capacity error = %v", err)
 	}
-	if _, err := Open("trace", clievent.CommandShare, Config{SampleInterval: -1}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := Open(exactTarget, clievent.CommandShare, Config{SampleInterval: -1}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("negative interval error = %v", err)
 	}
-	if _, err := OpenWithDependencies("trace", clievent.CommandShare, Config{}, Dependencies{
+	if _, err := OpenWithDependencies(exactTarget, clievent.CommandShare, Config{}, Dependencies{
 		OpenFile: func(string) (TraceFile, error) { return nil, errInjected },
 	}); !errors.Is(err, ErrTraceFileUnavailable) {
 		t.Fatalf("open failure = %v", err)
 	}
-	if _, err := OpenWithDependencies("trace", clievent.CommandShare, Config{}, Dependencies{
+	if _, err := OpenWithDependencies(exactTarget, clievent.CommandShare, Config{}, Dependencies{
 		Random: bytes.NewReader(make([]byte, clievent.IdentityBytes)),
 	}); !errors.Is(err, ErrRunIDUnavailable) {
 		t.Fatalf("zero run ID error = %v", err)
 	}
-	if _, err := OpenWithDependencies("trace", clievent.CommandShare, Config{}, Dependencies{
+	if _, err := OpenWithDependencies(exactTarget, clievent.CommandShare, Config{}, Dependencies{
 		Random: bytes.NewReader([]byte{1}),
 	}); !errors.Is(err, ErrRunIDUnavailable) {
 		t.Fatalf("short random source error = %v", err)
 	}
 	invalidTickerFile := &memoryTraceFile{}
-	if _, err := OpenWithDependencies("trace", clievent.CommandShare, Config{}, Dependencies{
+	openCalled := false
+	if _, err := OpenWithDependencies(exactTarget, clievent.CommandShare, Config{}, Dependencies{
 		Random:    bytes.NewReader(bytes.Repeat([]byte{1}, clievent.IdentityBytes)),
-		OpenFile:  func(string) (TraceFile, error) { return invalidTickerFile, nil },
+		OpenFile:  func(string) (TraceFile, error) { openCalled = true; return invalidTickerFile, nil },
 		NewTicker: func(time.Duration) Ticker { return nil },
 	}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("nil ticker error = %v", err)
+	}
+	if openCalled {
+		t.Fatal("invalid ticker created a trace file")
 	}
 
 	path := t.TempDir() + string(os.PathSeparator) + "user-trace.ndjson"
@@ -607,7 +609,7 @@ func TestOpenValidatesSynchronouslyAndCreatesOwnerOnlyFile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	recorder, err := Open(path, clievent.CommandShare, Config{})
+	recorder, err := Open(mustExactTarget(t, path), clievent.CommandShare, Config{})
 	if !errors.Is(err, ErrTraceExists) || recorder != nil {
 		t.Fatalf("existing trace open = recorder %v, err %v", recorder, err)
 	}
@@ -616,9 +618,12 @@ func TestOpenValidatesSynchronouslyAndCreatesOwnerOnlyFile(t *testing.T) {
 		t.Fatalf("existing trace changed: %q, err %v", contents, readErr)
 	}
 	path = t.TempDir() + string(os.PathSeparator) + "user-trace.ndjson"
-	recorder, err = Open(path, clievent.CommandShare, Config{})
+	recorder, err = Open(mustExactTarget(t, path), clievent.CommandShare, Config{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if recorder.Path() != path {
+		t.Fatalf("exact recorder path = %q, want %q", recorder.Path(), path)
 	}
 	if got := recorder.RunID(); len(got) != clievent.IdentityBytes*2 {
 		t.Fatalf("run ID length = %d, want %d", len(got), clievent.IdentityBytes*2)
@@ -688,7 +693,7 @@ func openTestRecorder(
 	ticker Ticker,
 ) *Recorder {
 	t.Helper()
-	recorder, err := OpenWithDependencies("trace.ndjson", command, config, Dependencies{
+	recorder, err := OpenWithDependencies(mustExactTarget(t, "trace.ndjson"), command, config, Dependencies{
 		Clock:     clock,
 		Random:    bytes.NewReader(bytes.Repeat([]byte{0x5a}, clievent.IdentityBytes)),
 		OpenFile:  func(string) (TraceFile, error) { return file, nil },
@@ -698,6 +703,24 @@ func openTestRecorder(
 		t.Fatal(err)
 	}
 	return recorder
+}
+
+func mustExactTarget(t *testing.T, path string) Target {
+	t.Helper()
+	target, err := ExactFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return target
+}
+
+func mustRunDirectory(t *testing.T, path string) Target {
+	t.Helper()
+	target, err := RunDirectory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return target
 }
 
 func fixedClock() Clock {

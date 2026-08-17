@@ -179,7 +179,7 @@ func (a *App) parseGetRequest(args []string) (getRequest, requestParseOutcome) {
 		return getRequest{}, parse
 	}
 	if err := observation.validate(); err != nil {
-		a.writeCompleteLine("get: trace output must be a file")
+		a.writeCompleteLine("get: %s", observationOptionDiagnostic(err))
 		return getRequest{}, requestParseUsageFailure
 	}
 	if len(positional) != 1 {
@@ -264,9 +264,7 @@ func (a *App) dialV2Receiver(
 	for {
 		connection, err := relayv2.DialReceiver(joinContext, relayv2.ReceiverConfig{
 			RelayBaseURL: capability.Relays[0], ShareID: shareID,
-			Dial: relayv2.DialOptions{
-				LifecycleTracer: observation.relayTracer(),
-			},
+			Dial: relayv2.DialOptions{LifecycleObservationCapacity: observation.relayObservationCapacity()},
 		})
 		if err == nil {
 			observation.registerRelayConnection(connection)

@@ -4,8 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"sync"
-	"sync/atomic"
+	"reflect"
 	"testing"
 	"time"
 
@@ -95,18 +94,27 @@ func TestNewChannelRejectsInvalidConfiguration(t *testing.T) {
 	if _, err := newChannel(fake, flowControlProfile{lowWaterBytes: 4, highWaterBytes: 4}); !errors.Is(err, ErrInvalidFlowControl) {
 		t.Fatalf("invalid flow profile = %v, want ErrInvalidFlowControl", err)
 	}
+	fake = newFakeDataChannel(pion.DataChannelStateConnecting)
+	if _, err := newChannelWithRuntime(fake, defaultFlowControl, channelRuntime{
+		lifecycleObservationCapacity: -1,
+	}); !errors.Is(err, ErrLifecycleObservationCapacity) {
+		t.Fatalf("negative lifecycle capacity = %v, want ErrLifecycleObservationCapacity", err)
+	}
 }
 
 func TestLifecycleTraceCorrelatesImmutableSendDecisions(t *testing.T) {
-	events := make(chan LifecycleTrace, 8)
 	fake := newFakeDataChannel(pion.DataChannelStateOpen)
 	channel, err := newChannelWithRuntime(fake, defaultFlowControl, channelRuntime{
-		lifecycleTracer: LifecycleTraceFunc(func(event LifecycleTrace) { events <- event }),
+		lifecycleObservationCapacity: 8,
 	})
 	if err != nil {
 		t.Fatalf("construct traced channel: %v", err)
 	}
 	waitOpened(t, channel)
+	events := channel.LifecycleTrace()
+	if events == nil {
+		t.Fatal("enabled lifecycle stream is nil")
+	}
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -148,125 +156,149 @@ func TestLifecycleTraceCorrelatesImmutableSendDecisions(t *testing.T) {
 	if err := channel.Close(); err != nil {
 		t.Fatalf("close traced channel: %v", err)
 	}
-	completion := channel.CompleteObservations(context.Background())
-	if !completion.Drained || completion.Delivered != 3 || completion.Loss.Total() != 0 {
+	completion := channel.CompleteObservations()
+	if completion.Enqueued != 3 || completion.Loss.Total() != 0 {
 		t.Fatalf("channel observation completion = %+v", completion)
+	}
+	if _, open := <-events; open {
+		t.Fatal("lifecycle stream remained open after channel finalization")
 	}
 }
 
 func TestLifecycleTraceBackpressureIsBoundedAndObservable(t *testing.T) {
-	const overflowEvents = 5
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	observed := make(chan LifecycleTrace, lifecycleTraceQueueCapacity+2)
-	var first sync.Once
-	dispatcher := newLifecycleTraceDispatcher(LifecycleTraceFunc(func(event LifecycleTrace) {
-		first.Do(func() {
-			close(entered)
-			<-release
-		})
-		observed <- event
-	}))
-	dispatcher.emit(LifecycleTrace{ChannelID: 7, Transition: LifecycleTransitionSendRejected})
-	select {
-	case <-entered:
-	case <-time.After(unitTimeout):
-		t.Fatal("trace observer did not enter its deterministic backpressure gate")
-	}
-	for operationID := uint64(1); operationID <= lifecycleTraceQueueCapacity+overflowEvents; operationID++ {
-		dispatcher.emit(LifecycleTrace{
-			ChannelID: operationID, OperationID: operationID,
-			Transition: LifecycleTransitionSendRejected,
-		})
-	}
-	dispatcher.shutdown()
-	close(release)
-
-	for {
-		select {
-		case event := <-observed:
-			if event.Transition == LifecycleTransitionTraceDropped {
-				if event.Dropped != overflowEvents {
-					t.Fatalf("dropped trace count = %d, want %d", event.Dropped, overflowEvents)
-				}
-				completion := dispatcher.complete(context.Background())
-				if !completion.Drained || completion.Loss.QueueOverflow != overflowEvents ||
-					completion.Loss.Total() != overflowEvents {
-					t.Fatalf("overflow completion = %+v", completion)
-				}
-				return
-			}
-		case <-time.After(unitTimeout):
-			t.Fatal("bounded trace queue did not publish its drop record")
-		}
-	}
-}
-
-func TestWebRTCLifecycleCompletionAccountsTimeoutAndStopsAdmission(t *testing.T) {
-	entered := make(chan struct{})
-	exited := make(chan struct{})
-	var calls atomic.Uint64
-	var committed atomic.Uint64
-	dispatcher := newLifecycleTraceDispatcher(LifecycleContextTraceFunc(func(ctx context.Context, _ LifecycleTrace) {
-		if calls.Add(1) == 1 {
-			close(entered)
-			<-ctx.Done()
-			if ctx.Err() == nil {
-				committed.Add(1)
-			}
-			close(exited)
-		}
-	}))
-	dispatcher.callbackLimit = 10 * time.Millisecond
-	for operationID := uint64(1); operationID <= 4; operationID++ {
-		dispatcher.emit(LifecycleTrace{
-			ChannelID: 31, OperationID: operationID,
-			Operation: LifecycleOperationSend, Transition: LifecycleTransitionSendRejected,
-			Disposition: framechannel.SendRejected, State: framechannel.Open,
-			Terminal: LifecycleTerminalNone, Cause: LifecycleCauseCanceled,
-		})
-	}
-	select {
-	case <-entered:
-	case <-time.After(unitTimeout):
-		t.Fatal("observer callback did not begin")
-	}
-	completion := dispatcher.complete(context.Background())
-	if completion.Drained || completion.Delivered != 0 ||
-		completion.Loss.CallbackTimeout != 1 || completion.Loss.Undrained != 3 {
-		t.Fatalf("completion = %+v", completion)
-	}
-	dispatcher.emit(LifecycleTrace{ChannelID: 31})
-	select {
-	case <-exited:
-	case <-time.After(unitTimeout):
-		t.Fatal("revoked WebRTC callback did not exit")
-	}
-	if calls.Load() != 1 {
-		t.Fatalf("callbacks begun after completion = %d", calls.Load())
-	}
-	if committed.Load() != 0 {
-		t.Fatalf("revoked callback committed %d late fact(s)", committed.Load())
-	}
-}
-
-func TestWebRTCLifecycleCompletionAccountsObserverPanic(t *testing.T) {
-	var calls atomic.Uint64
-	dispatcher := newLifecycleTraceDispatcher(LifecycleTraceFunc(func(LifecycleTrace) {
-		calls.Add(1)
-		panic("observer defect")
-	}))
-	dispatcher.emit(LifecycleTrace{
-		ChannelID: 32, OperationID: 1,
-		Operation: LifecycleOperationSend, Transition: LifecycleTransitionSendRejected,
-		Disposition: framechannel.SendRejected, State: framechannel.Open,
-		Terminal: LifecycleTerminalNone, Cause: LifecycleCauseCanceled,
+	const (
+		capacity     = 2
+		refusedSends = 8
+	)
+	fake := newFakeDataChannel(pion.DataChannelStateOpen)
+	channel, err := newChannelWithRuntime(fake, defaultFlowControl, channelRuntime{
+		lifecycleObservationCapacity: capacity,
 	})
-	dispatcher.shutdown()
-	completion := dispatcher.complete(context.Background())
-	if !completion.Drained || completion.Delivered != 0 || calls.Load() != 1 ||
-		completion.Loss.ObserverPanic != 1 || completion.Loss.Total() != 1 {
-		t.Fatalf("panic completion = %+v", completion)
+	if err != nil {
+		t.Fatalf("construct traced channel: %v", err)
+	}
+	waitOpened(t, channel)
+
+	for range refusedSends {
+		canceled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := channel.Send(canceled, framechannel.Frame{0x31}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled send = %v", err)
+		}
+	}
+	if err := channel.Close(); err != nil {
+		t.Fatalf("close saturated traced channel: %v", err)
+	}
+
+	completion := channel.CompleteObservations()
+	if completion.Enqueued != capacity || completion.Loss.CapacityDropped == 0 {
+		t.Fatalf("saturated completion = %+v", completion)
+	}
+	retained := 0
+	for range channel.LifecycleTrace() {
+		retained++
+	}
+	if retained != capacity {
+		t.Fatalf("retained traces = %d, want %d", retained, capacity)
+	}
+}
+
+func TestWebRTCLifecycleShutdownClosesStreamAfterTerminalTransition(t *testing.T) {
+	fake := newFakeDataChannel(pion.DataChannelStateOpen)
+	channel, err := newChannelWithRuntime(fake, defaultFlowControl, channelRuntime{
+		lifecycleObservationCapacity: 4,
+	})
+	if err != nil {
+		t.Fatalf("construct traced channel: %v", err)
+	}
+	waitOpened(t, channel)
+	stream := channel.LifecycleTrace()
+
+	if err := channel.Close(); err != nil {
+		t.Fatalf("close traced channel: %v", err)
+	}
+	completion := channel.CompleteObservations()
+	var events []LifecycleTrace
+	for event := range stream {
+		events = append(events, event)
+	}
+	if len(events) == 0 || events[len(events)-1].Transition != LifecycleTransitionClosedClean {
+		t.Fatalf("terminal lifecycle ordering = %+v", events)
+	}
+	if completion.Enqueued != uint64(len(events)) || completion.Loss.Total() != 0 {
+		t.Fatalf("shutdown completion = %+v events=%d", completion, len(events))
+	}
+}
+
+func TestWebRTCLifecycleDropSummaryPrecedesTerminalTransition(t *testing.T) {
+	const capacity = 3
+	fake := newFakeDataChannel(pion.DataChannelStateOpen)
+	channel, err := newChannelWithRuntime(fake, defaultFlowControl, channelRuntime{
+		lifecycleObservationCapacity: capacity,
+	})
+	if err != nil {
+		t.Fatalf("construct traced channel: %v", err)
+	}
+	waitOpened(t, channel)
+	stream := channel.LifecycleTrace()
+	for range capacity + 1 {
+		canceled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := channel.Send(canceled, framechannel.Frame{0x32}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled send = %v", err)
+		}
+	}
+	for range capacity {
+		<-stream
+	}
+
+	if err := channel.Close(); err != nil {
+		t.Fatalf("close traced channel: %v", err)
+	}
+	var events []LifecycleTrace
+	for event := range stream {
+		events = append(events, event)
+	}
+	if len(events) != 2 || events[0].Transition != LifecycleTransitionTraceDropped ||
+		events[0].Dropped != 1 || events[1].Transition != LifecycleTransitionClosedClean {
+		t.Fatalf("terminal gap ordering = %+v", events)
+	}
+	completion := channel.CompleteObservations()
+	if completion.Enqueued != capacity+2 || completion.Loss.CapacityDropped != 1 {
+		t.Fatalf("terminal completion = %+v", completion)
+	}
+}
+
+func TestWebRTCLifecycleCompletionRacesTerminalTransitionAndIsIdempotent(t *testing.T) {
+	fake := newFakeDataChannel(pion.DataChannelStateOpen)
+	channel, err := newChannelWithRuntime(fake, defaultFlowControl, channelRuntime{
+		lifecycleObservationCapacity: 4,
+	})
+	if err != nil {
+		t.Fatalf("construct traced channel: %v", err)
+	}
+	waitOpened(t, channel)
+
+	completed := make(chan LifecycleObservationCompletion, 1)
+	go func() { completed <- channel.CompleteObservations() }()
+	if err := channel.Close(); err != nil {
+		t.Fatalf("close traced channel: %v", err)
+	}
+	first := <-completed
+	second := channel.CompleteObservations()
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("repeated completion changed: first=%+v second=%+v", first, second)
+	}
+
+	var last LifecycleTrace
+	for event := range channel.LifecycleTrace() {
+		last = event
+	}
+	if first.Loss.Total() != 0 || first.Enqueued > 1 {
+		t.Fatalf("completion=%+v last=%+v", first, last)
+	}
+	if first.Enqueued == 1 && last.Transition != LifecycleTransitionClosedClean {
+		t.Fatalf("retained terminal transition = %+v", last)
 	}
 }
 

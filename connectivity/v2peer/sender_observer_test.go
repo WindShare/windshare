@@ -25,6 +25,7 @@ func (peer *selectedPairTestPeer) SelectedCandidatePair() (*pion.ICECandidatePai
 
 type senderObservationCollector struct {
 	mu           sync.Mutex
+	source       <-chan SenderAttemptObservation
 	observations []SenderAttemptObservation
 }
 
@@ -61,10 +62,10 @@ func (session *candidateDropTestSession) SendPeerControl(
 	return session.testPeerSession.SendPeerControl(ctx, kind, operation, body)
 }
 
-func (collector *senderObservationCollector) observe(observation SenderAttemptObservation) {
+func (collector *senderObservationCollector) bind(source <-chan SenderAttemptObservation) {
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
-	collector.observations = append(collector.observations, observation)
+	collector.source = source
 }
 
 func (collector *senderObservationCollector) forAttempt(
@@ -72,6 +73,19 @@ func (collector *senderObservationCollector) forAttempt(
 ) []SenderAttemptObservation {
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
+draining:
+	for collector.source != nil {
+		select {
+		case observation, open := <-collector.source:
+			if !open {
+				collector.source = nil
+				continue
+			}
+			collector.observations = append(collector.observations, observation)
+		default:
+			break draining
+		}
+	}
 	var observations []SenderAttemptObservation
 	for _, observation := range collector.observations {
 		if observation.AttemptID == attemptID {
@@ -81,7 +95,21 @@ func (collector *senderObservationCollector) forAttempt(
 	return observations
 }
 
-func TestSenderObserverEmitsExactSuccessfulLifecycle(t *testing.T) {
+func mustTestFactoryWithSenderCollector(
+	t *testing.T,
+	collector *senderObservationCollector,
+	config Config,
+) *Factory {
+	t.Helper()
+	if config.SenderAttemptObservationCapacity == 0 {
+		config.SenderAttemptObservationCapacity = DefaultSenderAttemptObservationCapacity
+	}
+	factory := mustTestFactory(t, config)
+	collector.bind(factory.SenderAttemptObservations())
+	return factory
+}
+
+func TestSenderAttemptStreamEmitsExactSuccessfulLifecycle(t *testing.T) {
 	basePeer := newTestPeerConnection()
 	peer := &selectedPairTestPeer{
 		testPeerConnection: basePeer,
@@ -99,8 +127,7 @@ func TestSenderObserverEmitsExactSuccessfulLifecycle(t *testing.T) {
 	channel := newTestPeerChannel()
 	channel.opened = make(chan struct{})
 	collector := &senderObservationCollector{}
-	factory := mustTestFactory(t, Config{
-		Observer: SenderAttemptObserverFunc(collector.observe),
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return peer, nil
 		}),
@@ -236,52 +263,11 @@ func TestSenderObserverEmitsExactSuccessfulLifecycle(t *testing.T) {
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
-func TestSenderObserverPanicCannotChangeConnectivityOutcome(t *testing.T) {
-	peer := newTestPeerConnection()
-	channel := newTestPeerChannel()
-	diagnostics := &peerDiagnosticCollector{}
-	factory := mustTestFactory(t, Config{
-		Observer:           SenderAttemptObserverFunc(func(SenderAttemptObservation) { panic("observer failure") }),
-		DiagnosticObserver: PeerDiagnosticObserverFunc(diagnostics.observe),
-		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
-			return peer, nil
-		}),
-		DataChannels: DataChannelAdapterFunc(func(*pion.DataChannel) (PeerDataChannel, error) {
-			return channel, nil
-		}),
-	})
-	session := newTestPeerSession(61)
-	handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
-	_, _, _ = sendSenderTestOffer(t, handler, ctx, 62)
-	receiveTest(t, peer.remote)
-	receiveTest(t, session.controls)
-	peer.emitDataChannel(&pion.DataChannel{})
-	receiveTest(t, session.admissions)
-	waitForTest(t, func() bool {
-		observation, ok := diagnostics.latest(
-			PeerDiagnosticSenderAttempt,
-			PeerDiagnosticObserverPanic,
-		)
-		return ok && observation.Count == 7
-	})
-	if err := channel.Close(); err != nil {
-		t.Fatal(err)
-	}
-	receiveTest(t, peer.closed)
-	select {
-	case failure := <-session.failures:
-		t.Fatalf("observer panic emitted operation failure %#v", failure)
-	default:
-	}
-	stopSenderTestRuntime(t, cancel, runDone)
-}
-
-func TestSenderObserverAdmissionWinsImmediateNormalClose(t *testing.T) {
+func TestSenderAttemptStreamAdmissionWinsImmediateNormalClose(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
 	channel := newTestPeerChannel()
-	factory := mustTestFactory(t, Config{
-		Observer: SenderAttemptObserverFunc(collector.observe),
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return peer, nil
 		}),
@@ -311,17 +297,15 @@ func TestSenderObserverAdmissionWinsImmediateNormalClose(t *testing.T) {
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
-func TestSenderObserverPreservesNegotiationFailure(t *testing.T) {
-	observations := make(chan SenderAttemptObservation, 8)
+func TestSenderAttemptStreamPreservesNegotiationFailure(t *testing.T) {
 	peer := newTestPeerConnection()
 	factory := mustTestFactory(t, Config{
-		Observer: SenderAttemptObserverFunc(func(observation SenderAttemptObservation) {
-			observations <- observation
-		}),
+		SenderAttemptObservationCapacity: DefaultSenderAttemptObservationCapacity,
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return peer, errors.New("synthetic peer creation failure")
 		}),
 	})
+	observations := factory.SenderAttemptObservations()
 	session := newTestPeerSession(71)
 	handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
 	operation, binding, _ := sendSenderTestOffer(t, handler, ctx, 72)
@@ -358,12 +342,11 @@ func TestSenderObserverPreservesNegotiationFailure(t *testing.T) {
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
-func TestSenderObserverPreservesAdmissionFailure(t *testing.T) {
+func TestSenderAttemptStreamPreservesAdmissionFailure(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
 	channel := newTestPeerChannel()
-	factory := mustTestFactory(t, Config{
-		Observer: SenderAttemptObserverFunc(collector.observe),
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return peer, nil
 		}),
@@ -401,7 +384,7 @@ func TestSenderObserverPreservesAdmissionFailure(t *testing.T) {
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
-func TestSenderObserverClassifiesCancellationAndRuntimeStop(t *testing.T) {
+func TestSenderAttemptStreamClassifiesCancellationAndRuntimeStop(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		cancelRun bool
@@ -421,8 +404,7 @@ func TestSenderObserverClassifiesCancellationAndRuntimeStop(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			collector := &senderObservationCollector{}
 			peer := newTestPeerConnection()
-			factory := mustTestFactory(t, Config{
-				Observer: SenderAttemptObserverFunc(collector.observe),
+			factory := mustTestFactoryWithSenderCollector(t, collector, Config{
 				PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 					return peer, nil
 				}),
@@ -461,16 +443,15 @@ func TestSenderObserverClassifiesCancellationAndRuntimeStop(t *testing.T) {
 	}
 }
 
-func TestSenderObserverRejectsCapacityWithCompleteAttemptStream(t *testing.T) {
+func TestSenderAttemptStreamRejectsCapacityWithCompleteAttemptStream(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
 	now := time.Unix(8_000, 0)
-	factory := mustTestFactory(t, Config{
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
 		MaxActiveAttempts:  1,
 		MaxRetiredBindings: 1,
 		RetiredBindingTTL:  time.Minute,
 		Now:                func() time.Time { return now },
-		Observer:           SenderAttemptObserverFunc(collector.observe),
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return peer, nil
 		}),
@@ -514,12 +495,11 @@ func TestSenderObserverRejectsCapacityWithCompleteAttemptStream(t *testing.T) {
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
-func TestSenderObserverCountsOnlyDeliveredCandidatesBeforeLimitFailure(t *testing.T) {
+func TestSenderAttemptStreamCountsOnlyDeliveredCandidatesBeforeLimitFailure(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
-	factory := mustTestFactory(t, Config{
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
 		MaxCandidates: 1,
-		Observer:      SenderAttemptObserverFunc(collector.observe),
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return peer, nil
 		}),
@@ -560,11 +540,10 @@ func TestSenderObserverCountsOnlyDeliveredCandidatesBeforeLimitFailure(t *testin
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
-func TestSenderObserverTreatsRetiredCandidateAsAttemptCancellation(t *testing.T) {
+func TestSenderAttemptStreamTreatsRetiredCandidateAsAttemptCancellation(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
-	factory := mustTestFactory(t, Config{
-		Observer: SenderAttemptObserverFunc(collector.observe),
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return peer, nil
 		}),
@@ -616,7 +595,7 @@ func TestSenderAttemptRecorderAllowsOnlyOneTerminalAtEveryBoundary(t *testing.T)
 	for failedIndex := 1; failedIndex < len(stages); failedIndex++ {
 		t.Run(string(stages[failedIndex]), func(t *testing.T) {
 			collector := &senderObservationCollector{}
-			factory := mustTestFactory(t, Config{Observer: SenderAttemptObserverFunc(collector.observe)})
+			factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
 			session := newTestPeerSession(byte(100 + failedIndex))
 			binding := testBinding(byte(110 + failedIndex))
 			recorder := newSenderAttemptRecorder(factory, session.sessionID, binding)
