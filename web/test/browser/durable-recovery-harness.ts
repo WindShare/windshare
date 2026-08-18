@@ -6,6 +6,7 @@ import {
 } from '../../src/output/planning'
 import { nextProjectionEpoch } from '../../src/transfer/projection'
 import { TransferJob } from '../../src/transfer/v2-job'
+import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../src/transfer/outcome'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import type {
   ExactPreparationEvidence,
@@ -70,6 +71,7 @@ const FILE_BYTES = Uint8Array.of(1, 2, 3, 4, 5)
 const PRODUCT_ZIP_FILE_BYTES = 68n
 const PRODUCT_FIXTURE_CHUNK_BYTES = 2
 const PRODUCT_FIXTURE_LANE_COUNT = 1
+const EMPTY_MATERIALIZATION_SUMMARY = Object.freeze({ entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n })
 const CHECKPOINT_PREFIX_BYTES = 3
 const INITIAL_TIME = 1_000
 const FRESH_PAGE_RECOVERY_TIME = 1_500
@@ -443,7 +445,12 @@ export async function proveProductPreparedZipAdmission(
     if (admission.kind !== 'accepted') {
       throw new DOMException('product workspace ZIP was rejected', 'QuotaExceededError')
     }
-    const discarded = await runtime.abandon('product admission proof completed')
+    const paused = await admission.execution.pause(Object.freeze({
+      worker: transferWorkerSettlement('Paused', EMPTY_TRANSFER_FAILURE_SUMMARY),
+      materialization: EMPTY_MATERIALIZATION_SUMMARY,
+      reason: 'product admission proof completed',
+    }), signal)
+    const discarded = await runtime.startLifecycleAction('discard', paused)
     return Object.freeze({
       admission: admission.kind,
       lifecycle: 'receiving',
@@ -559,7 +566,7 @@ export async function proveTransferJobPreparedZip(): Promise<TransferJobPrepared
     if (evidence === undefined) {
       throw new TypeError('TransferJob did not expose exact preparation evidence')
     }
-    const discarded = await runtime.abandon('TransferJob preparation proof completed')
+    const discarded = await runtime.startLifecycleAction('discard', result.lifecycle)
     return Object.freeze({
       worker: result.worker.status,
       lifecycle: result.lifecycle.kind,

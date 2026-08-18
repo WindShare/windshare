@@ -7,8 +7,10 @@ import { equalBytes } from '../crypto/bytes'
 import {
   decodeV2OperationErrorControl,
   decodeV2ScanProgress,
+  type V2MessageKind,
   V2_MESSAGE_KIND,
 } from '../session/v2-message'
+import { v2OperationErrorScopeAllowed } from '../session/v2-operation-error-contract'
 import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
 import { V2SessionRuntimeError } from '../session/v2-runtime-types'
 import { decodeV2CatalogResult, encodeV2ListRequest } from './v2-flow'
@@ -39,7 +41,7 @@ export class V2RemoteOperationError extends Error {
 export async function remoteOperationErrorFor(
   session: V2ReceiverSessionRuntime,
   body: Uint8Array,
-  expected: 'directory' | 'revision' | 'block',
+  requestKind: V2MessageKind,
 ): Promise<V2RemoteOperationError> {
   let remote: V2RemoteOperationError
   try {
@@ -50,7 +52,7 @@ export async function remoteOperationErrorFor(
       cause,
     })
   }
-  if (remote.scope !== expected) {
+  if (!v2OperationErrorScopeAllowed(requestKind, remote.scope)) {
     await session.close().catch(() => undefined)
     throw new V2SessionRuntimeError(
       'session',
@@ -113,7 +115,11 @@ export class V2CatalogSessionOperations implements V2CatalogOperationClient {
         continue
       }
       if (message.kind === V2_MESSAGE_KIND.operationError) {
-        throw await remoteOperationErrorFor(this.#session, message.body, 'directory')
+        throw await remoteOperationErrorFor(
+          this.#session,
+          message.body,
+          V2_MESSAGE_KIND.listChildren,
+        )
       }
       if (message.kind !== V2_MESSAGE_KIND.catalogResult) {
         throw new Error('Catalog operation received an unexpected response')

@@ -30,7 +30,10 @@ import {
   type AuthenticatedDiscoveryRequest,
   type AuthenticatedDiscoverySource,
 } from '../../src/transfer/projection'
-import type { TransferJobResult } from '../../src/transfer/v2-job'
+import {
+  V2TransferAdmissionFailureError,
+  type TransferJobResult,
+} from '../../src/transfer/v2-job'
 import { V2ReceiverController } from '../../src/ui/v2-controller'
 import type {
   V2BrowseDirectory,
@@ -439,7 +442,64 @@ describe('v2 receiver active operation orchestration', () => {
     expect(run.signal?.aborted).toBe(true)
     await waitFor(() => controller.getSnapshot().output.lifecycle?.kind === expectedKind)
     expect(controller.getSnapshot().output.lifecyclePresentation?.title).toBe(expectedTitle)
+    expect(runtime.admissionFailures).toEqual([])
 
+    await controller.dispose()
+  })
+
+  it('publishes the original transfer failure after the job has already settled output', async () => {
+    const receive = new FakeReceiveComposition(WORKSPACE_ENVIRONMENT)
+    const joined = new FakeJoinedShare(true)
+    const controller = controllerFor(joined, receive)
+    await startTransfer(controller, joined)
+    const runtime = receive.startedAuthorities[0]?.runtime
+    const run = joined.transferRuns[0]
+    if (runtime === undefined || run === undefined) throw new Error('active receive was not started')
+    const failure = new Error('sender rejected the revision lease')
+    const stable = stableLifecycle(runtime.lifecycle, 'resumable-receive')
+
+    run.resolve(stable, failure)
+    await waitFor(() => controller.getSnapshot().error === failure.message)
+
+    expect(controller.getSnapshot().error).toBe(failure.message)
+    expect(controller.getSnapshot().output.lifecycle).toEqual(stable)
+    expect(runtime.admissionFailures).toEqual([])
+    await controller.dispose()
+  })
+
+  it('keeps the initiating failure visible when admission settlement also fails', async () => {
+    const receive = new FakeReceiveComposition(WORKSPACE_ENVIRONMENT)
+    const joined = new FakeJoinedShare(true)
+    const controller = controllerFor(joined, receive)
+    await startTransfer(controller, joined)
+    const runtime = receive.startedAuthorities[0]?.runtime
+    const run = joined.transferRuns[0]
+    if (runtime === undefined || run === undefined) throw new Error('active receive was not started')
+    const failure = new Error('transfer job could not validate its session')
+    runtime.admissionSettlementError = new Error('secondary lifecycle settlement failed')
+
+    run.reject(new V2TransferAdmissionFailureError(failure))
+    await waitFor(() => controller.getSnapshot().error === failure.message)
+
+    expect(controller.getSnapshot().error).toBe(failure.message)
+    expect(runtime.admissionFailures).toEqual([failure])
+    await controller.dispose()
+  })
+
+  it('does not reinterpret an unclassified job rejection as an admission failure', async () => {
+    const receive = new FakeReceiveComposition(WORKSPACE_ENVIRONMENT)
+    const joined = new FakeJoinedShare(true)
+    const controller = controllerFor(joined, receive)
+    await startTransfer(controller, joined)
+    const runtime = receive.startedAuthorities[0]?.runtime
+    const run = joined.transferRuns[0]
+    if (runtime === undefined || run === undefined) throw new Error('active receive was not started')
+    const failure = new Error('unexpected post-admission failure')
+
+    run.reject(failure)
+    await waitFor(() => controller.getSnapshot().error === failure.message)
+
+    expect(runtime.admissionFailures).toEqual([])
     await controller.dispose()
   })
 
@@ -618,6 +678,15 @@ class FakeStartedAuthority implements V2StartedArtifactAuthority {
   }
 }
 
+class FakeTransferControlError extends DOMException {
+  readonly control: V2ActiveReceiveControl
+
+  constructor(control: V2ActiveReceiveControl) {
+    super(`${control} requested`, 'AbortError')
+    this.control = control
+  }
+}
+
 class FakeBoundRuntime implements V2BoundReceiveOperation {
   readonly plans = Object.freeze({}) as V2PlanExecutionAuthority
   readonly transferJobId = identityText(76)
@@ -632,9 +701,11 @@ class FakeBoundRuntime implements V2BoundReceiveOperation {
   readonly lifecycleActions: Array<{ action: LifecycleUserAction; inClickStack: boolean }> = []
   readonly expiryObservations: ReceiveLifecycleState[] = []
   readonly detachments: unknown[] = []
+  readonly admissionFailures: unknown[] = []
   controlStack: () => boolean = () => true
   lifecycleActionStack: () => boolean = () => true
   lastControl: V2ActiveReceiveControl | undefined
+  admissionSettlementError: unknown
   nextLifecycleAction: (
     action: Exclude<LifecycleUserAction, V2ActiveReceiveControl>,
     lifecycle: ReceiveLifecycleState,
@@ -654,7 +725,7 @@ class FakeBoundRuntime implements V2BoundReceiveOperation {
   interrupt(control: V2ActiveReceiveControl, transfer: AbortController): void {
     this.lastControl = control
     this.interruptions.push({ control, inClickStack: this.controlStack() })
-    transfer.abort(new DOMException(`${control} requested`, 'AbortError'))
+    transfer.abort(new FakeTransferControlError(control))
   }
 
   startLifecycleAction(
@@ -684,7 +755,9 @@ class FakeBoundRuntime implements V2BoundReceiveOperation {
     return this.initialWorkspaceUsage
   }
 
-  abandon(): V2LifecycleMutation {
+  settleTransferAdmissionFailure(reason: unknown): V2LifecycleMutation {
+    this.admissionFailures.push(reason)
+    if (this.admissionSettlementError !== undefined) throw this.admissionSettlementError
     if (this.lastControl === 'pause') {
       return {
         lifecycle: next(this.lifecycle, {
@@ -824,18 +897,46 @@ class FakeTransferRun {
 
   start(signal?: AbortSignal): Promise<TransferJobResult> {
     this.signal = signal
-    signal?.addEventListener('abort', () => this.#result.reject(signal.reason), { once: true })
+    signal?.addEventListener('abort', () => {
+      const reason = signal.reason
+      if (!(reason instanceof FakeTransferControlError)) {
+        this.#result.reject(reason)
+        return
+      }
+      const lifecycle = initialReceiveLifecycleState({
+        operationId: this.intent.operationId,
+        receiveIntentDigest: this.intent.digest,
+      })
+      this.resolve(reason.control === 'pause'
+        ? next(lifecycle, {
+            kind: 'resumable-receive',
+            checkpointSetDigest: identityText(74, 32),
+            completedFileCount: 0n,
+            completedBytes: 0n,
+            expiresAt: Date.now() + 60_000,
+          })
+        : next(lifecycle, {
+            kind: 'restart-required',
+            reason: 'direct-atomic-rolled-back',
+            receiptDigest: identityText(75, 32),
+          }), reason)
+    }, { once: true })
     return this.#result.promise
   }
 
-  resolve(lifecycle: ReceiveLifecycleState): void {
+  resolve(lifecycle: ReceiveLifecycleState, abortReason?: unknown): void {
     this.#result.resolve({
       worker: Object.freeze({}) as never,
       lifecycle,
       measure: Object.freeze({}) as never,
       transferJobId: identityText(76),
       intent: this.intent,
+      ...(abortReason === undefined ? {} : { abortReason }),
     })
+  }
+
+  reject(reason: unknown): void {
+    this.#result.reject(reason)
   }
 }
 

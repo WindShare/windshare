@@ -146,7 +146,7 @@ describe('v2 catalog and preparation authority', () => {
       expect(plans.routes).toEqual([])
       expect(plans.preparations).toEqual([])
       expect(plans.settlements).toEqual([])
-      expect(plans.aborts).toEqual([expect.anything()])
+      expect(plans.admissionFailures).toEqual([expect.anything()])
       expect(plans.output.requests).toEqual([])
       expect(readers.revisionRequests).toEqual([])
       expect(readers.blockRequests).toEqual([])

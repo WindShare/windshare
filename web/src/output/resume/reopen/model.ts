@@ -83,6 +83,7 @@ export interface ReopenedReceiveOperationBase {
 export interface ReopenedDirectTreeOperation extends ReopenedReceiveOperationBase {
   readonly kind: 'direct-tree'
   readonly binding: PersistedFSAOperationBinding
+  readonly receiveAdmissionFallback?: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>
 }
 
 export interface ReopenedWorkspaceOperation extends ReopenedReceiveOperationBase {
@@ -93,6 +94,7 @@ export interface ReopenedWorkspaceOperation extends ReopenedReceiveOperationBase
   readonly admittedContent?: AdmittedWorkspaceContent
   readonly preparation?: SealedWorkspaceZipPreparationV1
   readonly receiveContinuation?: ReopenedWorkspaceReceiveContinuation
+  readonly receiveAdmissionFallback?: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>
   readonly packageContinuation?: ReopenedWorkspacePackageContinuation
 }
 
@@ -199,6 +201,7 @@ export interface ReopenResources {
 
 export interface ReopenLifecycleAuthority {
   readonly lifecycle: ReceiveLifecycleState
+  readonly receiveAdmissionFallback?: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>
   readonly stages?: WorkspaceOperationStages
   readonly admittedContent?: AdmittedWorkspaceContent
   readonly preparation?: SealedWorkspaceZipPreparationV1

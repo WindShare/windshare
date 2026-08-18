@@ -34,6 +34,7 @@ import {
   isolatedDirectoryOutputFailure,
   materializationFailureReason,
 } from './job/failures'
+import { V2TransferAdmissionFailureError } from './job/admission-error'
 import { V2JobDiscovery } from './job/discovery'
 import { transferV2File } from './job/file-transfer'
 import {
@@ -213,7 +214,7 @@ export class TransferJob {
       }
       throw new TypeError('receive intent has an unknown materialization plan')
     } catch (error) {
-      if (this.#intent === undefined) throw error
+      if (this.#intent === undefined) throw new V2TransferAdmissionFailureError(error)
       return this.#settleRunFailure(error)
     } finally {
       this.#externalAbortCleanup?.()
