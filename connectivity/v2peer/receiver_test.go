@@ -292,6 +292,7 @@ type receiverTestPeerConnection struct {
 	added          chan pion.ICECandidateInit
 	closed         chan struct{}
 	closeOnce      sync.Once
+	closeCalls     atomic.Int32
 	raw            *pion.DataChannel
 	createChannels atomic.Int32
 	channelLabel   string
@@ -366,6 +367,7 @@ func (peer *receiverTestPeerConnection) AddICECandidate(candidate pion.ICECandid
 }
 
 func (peer *receiverTestPeerConnection) Close() error {
+	peer.closeCalls.Add(1)
 	peer.closeOnce.Do(func() { close(peer.closed) })
 	return nil
 }
@@ -385,12 +387,13 @@ func (peer *receiverTestPeerConnection) emitUnexpectedDataChannel(channel *pion.
 }
 
 type receiverTestChannel struct {
-	receive   chan framechannel.Frame
-	opened    chan struct{}
-	done      chan struct{}
-	openOnce  sync.Once
-	closeOnce sync.Once
-	state     atomic.Uint32
+	receive    chan framechannel.Frame
+	opened     chan struct{}
+	done       chan struct{}
+	openOnce   sync.Once
+	closeOnce  sync.Once
+	closeCalls atomic.Int32
+	state      atomic.Uint32
 }
 
 func newReceiverTestChannel() *receiverTestChannel {
@@ -412,6 +415,7 @@ func (channel *receiverTestChannel) Done() <-chan struct{}   { return channel.do
 func (*receiverTestChannel) Err() error                      { return nil }
 func (channel *receiverTestChannel) open()                   { channel.openOnce.Do(func() { close(channel.opened) }) }
 func (channel *receiverTestChannel) Close() error {
+	channel.closeCalls.Add(1)
 	channel.closeOnce.Do(func() {
 		channel.state.Store(uint32(framechannel.Closed))
 		close(channel.done)
@@ -421,16 +425,24 @@ func (channel *receiverTestChannel) Close() error {
 }
 
 type receiverTestLanes struct {
-	requested   chan uint32
-	attachments chan protocolsession.FrameChannel
-	lane        sessionruntime.LaneIdentity
-	err         error
+	requested        chan uint32
+	attachments      chan protocolsession.FrameChannel
+	ownedAttachments chan protocolsession.FrameChannel
+	lane             sessionruntime.LaneIdentity
+	err              error
+	requestRelease   <-chan struct{}
+	attach           func(
+		context.Context,
+		sessionruntime.LaneAttachmentGrant,
+		protocolsession.FrameChannel,
+	) (sessionruntime.ReceiverLaneAdmissionResult, error)
 }
 
 func newReceiverTestLanes() *receiverTestLanes {
 	return &receiverTestLanes{
 		requested: make(chan uint32, 4), attachments: make(chan protocolsession.FrameChannel, 4),
-		lane: sessionruntime.LaneIdentity{ID: 17, Epoch: 4},
+		ownedAttachments: make(chan protocolsession.FrameChannel, 4),
+		lane:             sessionruntime.LaneIdentity{ID: 17, Epoch: 4},
 	}
 }
 
@@ -443,6 +455,13 @@ func (lanes *receiverTestLanes) RequestLane(
 		return sessionruntime.LaneAttachmentGrant{}, ctx.Err()
 	case lanes.requested <- requested:
 	}
+	if lanes.requestRelease != nil {
+		select {
+		case <-ctx.Done():
+			return sessionruntime.LaneAttachmentGrant{}, ctx.Err()
+		case <-lanes.requestRelease:
+		}
+	}
 	return sessionruntime.LaneAttachmentGrant{
 		LaneID: lanes.lane.ID, LaneEpoch: lanes.lane.Epoch, OperationID: testOperationID(152),
 	}, lanes.err
@@ -450,26 +469,46 @@ func (lanes *receiverTestLanes) RequestLane(
 
 func (lanes *receiverTestLanes) AttachLane(
 	ctx context.Context,
-	_ sessionruntime.LaneAttachmentGrant,
+	grant sessionruntime.LaneAttachmentGrant,
 	channel protocolsession.FrameChannel,
-) (sessionruntime.LaneIdentity, error) {
+) (sessionruntime.ReceiverLaneAdmissionResult, error) {
+	if lanes.attach != nil {
+		return lanes.attach(ctx, grant, channel)
+	}
 	select {
 	case <-ctx.Done():
-		return sessionruntime.LaneIdentity{}, ctx.Err()
-	case lanes.attachments <- channel:
+		return sessionruntime.ReceiverLaneAdmissionResult{
+			Disposition:      sessionruntime.ReceiverLaneAdmissionUnverified,
+			LaneInstallation: sessionruntime.ReceiverLaneInstallationNotAttempted,
+		}, ctx.Err()
+	case lanes.attachments <- receiverObservedChannel(channel):
+		lanes.ownedAttachments <- channel
 	}
-	return lanes.lane, lanes.err
+	return sessionruntime.ReceiverLaneAdmissionResult{
+		GrantOperationID: grant.OperationID,
+		Lane:             lanes.lane,
+		Disposition:      sessionruntime.ReceiverLaneAdmissionAccepted,
+		LaneInstallation: sessionruntime.ReceiverLaneInstalled,
+	}, lanes.err
+}
+
+func receiverObservedChannel(channel protocolsession.FrameChannel) protocolsession.FrameChannel {
+	if owner, ok := channel.(*ownedPeerDataChannel); ok {
+		return owner.PeerDataChannel
+	}
+	return channel
 }
 
 type receiverHarness struct {
-	factory   *ReceiverFactory
-	peer      *receiverTestPeerConnection
-	channel   *receiverTestChannel
-	operation *receiverTestOperation
-	signaling *receiverTestSignaling
-	lanes     *receiverTestLanes
-	attempt   *ReceiverAttempt
-	binding   v2signal.Binding
+	factory       *ReceiverFactory
+	peer          *receiverTestPeerConnection
+	channel       *receiverTestChannel
+	operation     *receiverTestOperation
+	signaling     *receiverTestSignaling
+	lanes         *receiverTestLanes
+	attempt       *ReceiverAttempt
+	binding       v2signal.Binding
+	admittedOwner protocolsession.FrameChannel
 }
 
 func newReceiverHarness(t *testing.T, configure func(*ReceiverFactoryConfig, *receiverTestSignaling)) *receiverHarness {
@@ -495,8 +534,9 @@ func newReceiverHarnessWithContext(
 		DataChannels: DataChannelAdapterFunc(
 			func(*pion.DataChannel) (PeerDataChannel, error) { return channel, nil },
 		),
-		AttemptTimeout: peerTestTimeout,
-		Random:         bytes.NewReader(bytes.Repeat([]byte{0x5a}, v2signal.IdentityBytes*2)),
+		NegotiationBudget: peerTestTimeout,
+		AdmissionBudget:   peerTestTimeout,
+		Random:            bytes.NewReader(bytes.Repeat([]byte{0x5a}, v2signal.IdentityBytes*2)),
 	}
 	if configure != nil {
 		configure(&config, signaling)
@@ -544,6 +584,7 @@ func (harness *receiverHarness) openAndAwaitLane(t *testing.T) {
 	if attached := receiveTest(t, harness.lanes.attachments); attached != harness.channel {
 		t.Fatalf("attached channel = %T", attached)
 	}
+	harness.admittedOwner = receiveTest(t, harness.lanes.ownedAttachments)
 	select {
 	case <-harness.attempt.Ready():
 	case <-time.After(peerTestTimeout):
@@ -598,6 +639,9 @@ func TestReceiverAttemptNegotiatesTricklesAndAttachesOneLane(t *testing.T) {
 		t.Fatalf("explicit shutdown canceled signaling after physical close: %v", state)
 	}
 	receiveTest(t, harness.operation.cancelled)
+	if err := harness.admittedOwner.Close(); err != nil {
+		t.Fatal(err)
+	}
 	receiveTest(t, harness.peer.closed)
 }
 
@@ -859,9 +903,84 @@ func TestReceiverAttemptIsolatesSenderCreatedDataChannelToPeerPath(t *testing.T)
 	receiveTest(t, harness.operation.cancelled)
 }
 
-func TestReceiverAttemptTimeoutIncludesSignalingOpen(t *testing.T) {
+type recordedReceiverPhaseTimer struct {
+	phase    PeerAttemptPhase
+	duration time.Duration
+	timer    *receiverManualTimer
+}
+
+type recordingReceiverPhaseTimerSource struct {
+	created chan recordedReceiverPhaseTimer
+}
+
+func newRecordingReceiverPhaseTimerSource() *recordingReceiverPhaseTimerSource {
+	return &recordingReceiverPhaseTimerSource{
+		created: make(chan recordedReceiverPhaseTimer, 2),
+	}
+}
+
+func (source *recordingReceiverPhaseTimerSource) NewPeerPhaseTimer(
+	phase PeerAttemptPhase,
+	duration time.Duration,
+) (PeerPhaseTimer, error) {
+	timer := newReceiverManualTimer()
+	source.created <- recordedReceiverPhaseTimer{
+		phase: phase, duration: duration, timer: timer,
+	}
+	return timer, nil
+}
+
+func TestReceiverOpenStartsFreshAdmissionBudgetAndDelayedGrantTimesOut(t *testing.T) {
+	const (
+		negotiationBudget = 11 * time.Second
+		admissionBudget   = 13 * time.Second
+	)
+	timers := newRecordingReceiverPhaseTimerSource()
+	harness := newReceiverHarness(t, func(config *ReceiverFactoryConfig, _ *receiverTestSignaling) {
+		config.NegotiationBudget = negotiationBudget
+		config.AdmissionBudget = admissionBudget
+		config.PhaseTimers = timers
+	})
+	negotiation := receiveTest(t, timers.created)
+	if negotiation.phase != PeerAttemptPhaseNegotiation ||
+		negotiation.duration != negotiationBudget {
+		t.Fatalf("negotiation deadline = %+v", negotiation)
+	}
+	harness.answer(t)
+	harness.lanes.requestRelease = make(chan struct{})
+	harness.channel.open()
+	if requested := receiveTest(t, harness.lanes.requested); requested != 0 {
+		t.Fatalf("requested lane = %d", requested)
+	}
+	admission := receiveTest(t, timers.created)
+	if admission.phase != PeerAttemptPhaseAdmission ||
+		admission.duration != admissionBudget {
+		t.Fatalf("admission deadline = %+v", admission)
+	}
+	if !negotiation.timer.stopped.Load() {
+		t.Fatal("negotiation timer remained armed after local DataChannel Open")
+	}
+	admission.timer.Fire()
+	receiveTest(t, harness.attempt.Done())
+	outcome := harness.attempt.Outcome()
+	if outcome.TransitionAuthority() != ReceiverTerminalLocal ||
+		outcome.TransitionProvenance() != ReceiverProvenanceLocalAdmissionTimeout ||
+		!errors.Is(outcome.RetainedCause(), ErrPeerAdmissionTimeout) ||
+		!outcome.HasRetainedCauseClass(ReceiverCauseAdmissionTimeout) {
+		t.Fatalf(
+			"admission timeout outcome = owner=%q provenance=%q cause=%v classes=%v",
+			outcome.TransitionAuthority(),
+			outcome.TransitionProvenance(),
+			outcome.RetainedCause(),
+			outcome.RetainedCauseClasses(),
+		)
+	}
+	receiveTest(t, harness.peer.closed)
+}
+
+func TestReceiverNegotiationTimeoutIncludesSignalingOpen(t *testing.T) {
 	harness := newReceiverHarness(t, func(config *ReceiverFactoryConfig, signaling *receiverTestSignaling) {
-		config.AttemptTimeout = 20 * time.Millisecond
+		config.NegotiationBudget = 20 * time.Millisecond
 		signaling.open = func(
 			ctx context.Context,
 			_ ReceiverSignalingOperationBinding,
@@ -876,8 +995,8 @@ func TestReceiverAttemptTimeoutIncludesSignalingOpen(t *testing.T) {
 	case <-time.After(peerTestTimeout):
 		t.Fatal("signaling open ignored the attempt deadline")
 	}
-	if !errors.Is(harness.attempt.Err(), errAttemptTimeout) {
-		t.Fatalf("signaling timeout error = %v", harness.attempt.Err())
+	if !errors.Is(harness.attempt.Err(), ErrPeerNegotiationTimeout) {
+		t.Fatalf("signaling negotiation timeout error = %v", harness.attempt.Err())
 	}
 	select {
 	case <-harness.lanes.requested:

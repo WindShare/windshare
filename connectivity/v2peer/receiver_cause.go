@@ -514,8 +514,10 @@ func directReceiverCauseClass(cause error) (ReceiverCauseClass, bool) {
 		return ReceiverCauseConfiguration, true
 	case isExactReceiverSentinel(cause, sessionruntime.ErrOperationMissing):
 		return ReceiverCauseOperationMissing, true
-	case isExactReceiverSentinel(cause, errAttemptTimeout):
-		return ReceiverCauseAttemptTimeout, true
+	case isExactReceiverSentinel(cause, ErrPeerNegotiationTimeout):
+		return ReceiverCauseNegotiationTimeout, true
+	case isExactReceiverSentinel(cause, ErrPeerAdmissionTimeout):
+		return ReceiverCauseAdmissionTimeout, true
 	case isExactReceiverSentinel(cause, errCandidateLimit):
 		return ReceiverCauseCandidateLimit, true
 	case isExactReceiverSentinel(cause, errChannelAdmission):

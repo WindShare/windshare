@@ -5,11 +5,11 @@ import {
   type V2ContentLaneAdmissionObservation,
   type V2ContentLaneDetachmentObservation,
   type V2ContentIntent,
-  type V2ContentSizeClass,
   type V2ConnectivityObserver,
   V2ReceiverConnectivity,
 } from '../connectivity/v2-receiver-policy'
 import type { OfferChannelFactory } from '../connectivity/peer-offer'
+import type { V2PeerRecoveryDependencies } from '../connectivity/v2-peer-recovery'
 import {
   V2BlockBroker,
   V2BlockDispatchSequenceAuthority,
@@ -62,6 +62,7 @@ export interface V2ReceiverSupervisorOptions {
   readonly randomBytes?: (length: number) => Uint8Array
   readonly nativePeerUsable?: () => boolean
   readonly connectivityObserver?: V2ConnectivityObserver
+  readonly peerRecovery?: V2PeerRecoveryDependencies
   readonly onRecoveryError?: (error: unknown) => void
   readonly onBlockDispatched?: (observation: V2BlockDispatchObservation) => void
   readonly onBlockFetched?: (observation: V2BlockRouteObservation) => void
@@ -104,6 +105,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
   readonly #nativePeerUsable: (() => boolean) | undefined
   readonly #connectivityObserver: V2ConnectivityObserver | undefined
+  readonly #peerRecovery: V2PeerRecoveryDependencies | undefined
   readonly #onRecoveryError: (error: unknown) => void
   readonly #onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined
   readonly #onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined
@@ -135,12 +137,13 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     this.#randomBytes = options.randomBytes
     this.#nativePeerUsable = options.nativePeerUsable
     this.#connectivityObserver = options.connectivityObserver
+    this.#peerRecovery = options.peerRecovery
     this.#onRecoveryError = options.onRecoveryError ?? (() => undefined)
     this.#onBlockDispatched = options.onBlockDispatched
     this.#onBlockFetched = options.onBlockFetched
     this.#onContentLaneAdmitted = options.onContentLaneAdmitted
     this.#onContentLaneDetached = options.onContentLaneDetached
-    this.connectivity = new V2SupervisedConnectivity(() => this.#clock.now())
+    this.connectivity = new V2SupervisedConnectivity()
     this.#current = this.#createGeneration(options.initial)
     this.connectivity.bind(this.#current.connectivity)
     this.content = new V2SupervisedContent(this, options.randomBytes)
@@ -165,11 +168,8 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     return this.#stopped
   }
 
-  beginConnectivity(
-    intent: V2ContentIntent,
-    sizeClass: V2ContentSizeClass = 'unknown',
-  ): V2ConnectivityActivation {
-    return this.connectivity.begin(intent, sizeClass)
+  beginConnectivity(intent: V2ContentIntent): V2ConnectivityActivation {
+    return this.connectivity.begin(intent)
   }
 
   async execute<T>(
@@ -296,6 +296,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
         ...(this.#connectivityObserver === undefined
           ? {}
           : { connectivityObserver: this.#connectivityObserver }),
+        ...(this.#peerRecovery === undefined ? {} : { peerRecovery: this.#peerRecovery }),
         now: () => this.#clock.now(),
         ...(this.#onContentLaneAdmitted === undefined
           ? {}

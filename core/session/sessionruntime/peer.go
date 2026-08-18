@@ -420,10 +420,74 @@ func isExactReceiverPeerCause(cause, sentinel error) bool {
 		causeValue.Comparable() && causeValue.Equal(sentinelValue)
 }
 
+// SenderPeerAdmissionControl owns the attempt's one-shot transition from
+// admission-waiting to admission-settling. Core calls it only after WS2A has
+// authenticated and before it consumes/rejects a grant or sends signed evidence.
+type SenderPeerAdmissionControl interface {
+	BeginAuthenticatedSettlement(protocolsession.OperationID, LaneIdentity) bool
+}
+
+type SenderPeerAdmissionControlFunc func(protocolsession.OperationID, LaneIdentity) bool
+
+func (function SenderPeerAdmissionControlFunc) BeginAuthenticatedSettlement(
+	operationID protocolsession.OperationID,
+	lane LaneIdentity,
+) bool {
+	return function != nil && function(operationID, lane)
+}
+
+type SenderPeerAdmissionDisposition uint8
+
+const (
+	SenderPeerAdmissionSilentClose SenderPeerAdmissionDisposition = iota + 1
+	SenderPeerAdmissionAccepted
+	SenderPeerAdmissionRejected
+)
+
+type SenderPeerResponseDelivery uint8
+
+const (
+	SenderPeerResponseNotAttempted SenderPeerResponseDelivery = iota + 1
+	SenderPeerResponseDelivered
+	SenderPeerResponseDeliveryFailed
+)
+
+type SenderPeerLaneAttachment uint8
+
+const (
+	SenderPeerLaneAttachmentNotAttempted SenderPeerLaneAttachment = iota + 1
+	SenderPeerLaneAttached
+	SenderPeerLaneAttachmentFailed
+)
+
+// SenderPeerAdmissionResult is safe settlement evidence: it deliberately
+// excludes WS2A/WS2B/WS2N bytes, nonces, proofs, traffic keys, and raw errors.
+// The authenticated disposition remains authoritative when delivery or local
+// attachment later fails.
+type SenderPeerAdmissionResult struct {
+	SettlementBegan  bool
+	GrantOperationID protocolsession.OperationID
+	Lane             LaneIdentity
+	Disposition      SenderPeerAdmissionDisposition
+	Rejection        protocolsession.LaneRejection
+	ResponseDelivery SenderPeerResponseDelivery
+	LaneAttachment   SenderPeerLaneAttachment
+}
+
+func silentSenderPeerAdmission() SenderPeerAdmissionResult {
+	return SenderPeerAdmissionResult{
+		Disposition:      SenderPeerAdmissionSilentClose,
+		ResponseDelivery: SenderPeerResponseNotAttempted,
+		LaneAttachment:   SenderPeerLaneAttachmentNotAttempted,
+	}
+}
+
 // SenderPeerSession is the transport-neutral authority granted to one
 // connectivity-owned peer-signaling handler. The handler can emit only the two
 // sender signaling controls and can admit a DataChannel only into the exact
-// ProtocolSession that created it.
+// ProtocolSession that created it. AdmitPeerChannel consumes the candidate
+// channel: core closes it exactly once on failure, while successful attachment
+// transfers that same close authority to the installed runtime lane.
 type SenderPeerSession interface {
 	ShareInstance() catalog.ShareInstance
 	ProtocolSessionID() protocolsession.ProtocolSessionID
@@ -434,7 +498,11 @@ type SenderPeerSession interface {
 		[]byte,
 	) (protocolsession.OperationDisposition, error)
 	FailPeerOperation(context.Context, protocolsession.OperationID, uint16, string) error
-	AdmitPeerChannel(context.Context, protocolsession.FrameChannel) (LaneIdentity, error)
+	AdmitPeerChannel(
+		context.Context,
+		protocolsession.FrameChannel,
+		SenderPeerAdmissionControl,
+	) (SenderPeerAdmissionResult, error)
 }
 
 // SenderPeerHandler owns provider policy, SDP/ICE interpretation, and physical
@@ -525,11 +593,15 @@ func (session senderPeerSession) SendPeerControl(
 func (session senderPeerSession) AdmitPeerChannel(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
-) (LaneIdentity, error) {
+	control SenderPeerAdmissionControl,
+) (SenderPeerAdmissionResult, error) {
 	if session.runtime == nil {
-		return LaneIdentity{}, ErrRuntimeClosed
+		if channel != nil {
+			_ = channel.Close()
+		}
+		return silentSenderPeerAdmission(), ErrRuntimeClosed
 	}
-	return session.runtime.AdmitPeerChannel(ctx, channel)
+	return session.runtime.AdmitPeerChannel(ctx, channel, control)
 }
 
 func (session senderPeerSession) FailPeerOperation(

@@ -12,12 +12,12 @@ import {
 } from '../catalog/v2-selection'
 import { snapshotPortableCatalogPath } from '../catalog/path-policy'
 import type { OfferChannelFactory } from '../connectivity/peer-offer'
+import type { V2PeerRecoveryDependencies } from '../connectivity/v2-peer-recovery'
 import type {
   V2ConnectivityActivation,
   V2ConnectivityObserver,
   V2ContentLaneAdmissionObservation,
   V2ContentLaneDetachmentObservation,
-  V2ContentSizeClass,
 } from '../connectivity/v2-receiver-policy'
 import {
   decodeSuite02CapabilityKey,
@@ -166,10 +166,8 @@ export class V2JoinedBrowserShare {
     return this.#supervisor.beginConnectivity('preview')
   }
 
-  beginDownloadConnectivity(
-    sizeClass: V2ContentSizeClass,
-  ): V2ConnectivityActivation {
-    return this.#supervisor.beginConnectivity('download', sizeClass)
+  beginDownloadConnectivity(): V2ConnectivityActivation {
+    return this.#supervisor.beginConnectivity('download')
   }
 
   get protocolSessionId(): string {
@@ -478,6 +476,7 @@ export interface V2BrowserReceiverGatewayOptions {
   readonly offersFactory?: () => OfferChannelFactory
   readonly nativePeerUsable?: () => boolean
   readonly connectivityObserver?: V2ConnectivityObserver
+  readonly peerRecovery?: V2PeerRecoveryDependencies
   readonly onBlockDispatched?: (observation: V2BlockDispatchObservation) => void
   readonly onBlockFetched?: (observation: V2BlockRouteObservation) => void
   readonly onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void
@@ -488,6 +487,7 @@ export class V2BrowserReceiverGateway {
   readonly #offersFactory: (() => OfferChannelFactory) | undefined
   readonly #nativePeerUsable: (() => boolean) | undefined
   readonly #connectivityObserver: V2ConnectivityObserver | undefined
+  readonly #peerRecovery: V2PeerRecoveryDependencies | undefined
   readonly #onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined
   readonly #onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined
   readonly #onContentLaneAdmitted: (
@@ -501,6 +501,7 @@ export class V2BrowserReceiverGateway {
     this.#offersFactory = options.offersFactory
     this.#nativePeerUsable = options.nativePeerUsable
     this.#connectivityObserver = options.connectivityObserver
+    this.#peerRecovery = options.peerRecovery
     this.#onBlockDispatched = options.onBlockDispatched
     this.#onBlockFetched = options.onBlockFetched
     this.#onContentLaneAdmitted = options.onContentLaneAdmitted
@@ -555,6 +556,7 @@ export class V2BrowserReceiverGateway {
           this.#offersFactory,
           this.#nativePeerUsable,
           this.#connectivityObserver,
+          this.#peerRecovery,
           this.#onBlockDispatched,
           this.#onBlockFetched,
           this.#onContentLaneAdmitted,
@@ -600,6 +602,7 @@ function gatewayConnectivityOptions(
   offersFactory: (() => OfferChannelFactory) | undefined,
   nativePeerUsable: (() => boolean) | undefined,
   connectivityObserver: V2ConnectivityObserver | undefined,
+  peerRecovery: V2PeerRecoveryDependencies | undefined,
   onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined,
   onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined,
   onContentLaneAdmitted:
@@ -611,6 +614,7 @@ function gatewayConnectivityOptions(
     ...(offersFactory === undefined ? {} : { offersFactory }),
     ...(nativePeerUsable === undefined ? {} : { nativePeerUsable }),
     ...(connectivityObserver === undefined ? {} : { connectivityObserver }),
+    ...(peerRecovery === undefined ? {} : { peerRecovery }),
     ...(onBlockDispatched === undefined ? {} : { onBlockDispatched }),
     ...(onBlockFetched === undefined ? {} : { onBlockFetched }),
     ...(onContentLaneAdmitted === undefined ? {} : { onContentLaneAdmitted }),

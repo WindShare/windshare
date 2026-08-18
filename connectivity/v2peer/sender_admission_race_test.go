@@ -19,23 +19,46 @@ type controlledAdmissionSession struct {
 	release           chan struct{}
 	contextCanceled   chan struct{}
 	contextCancelOnce sync.Once
+	rejection         *protocolsession.LaneRejection
 }
 
 func (session *controlledAdmissionSession) AdmitPeerChannel(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
-) (sessionruntime.LaneIdentity, error) {
+	control sessionruntime.SenderPeerAdmissionControl,
+) (sessionruntime.SenderPeerAdmissionResult, error) {
 	session.admissions <- channel
+	grantOperation := testOperationID(248)
+	if !control.BeginAuthenticatedSettlement(grantOperation, session.lane) {
+		_ = channel.Close()
+		return sessionruntime.SenderPeerAdmissionResult{
+			Disposition:      sessionruntime.SenderPeerAdmissionSilentClose,
+			ResponseDelivery: sessionruntime.SenderPeerResponseNotAttempted,
+			LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+		}, context.Canceled
+	}
 	close(session.entered)
 	go func() {
 		<-ctx.Done()
 		session.contextCancelOnce.Do(func() { close(session.contextCanceled) })
 	}()
 	<-session.release
-	// This adversarial implementation deliberately returns a real admission
-	// after observing cancellation. The sender must respect the core success
-	// boundary instead of rewriting it as the competing transport terminal.
-	return session.lane, nil
+	if session.rejection != nil {
+		_ = channel.Close()
+		return sessionruntime.SenderPeerAdmissionResult{
+			SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
+			Disposition:      sessionruntime.SenderPeerAdmissionRejected,
+			Rejection:        *session.rejection,
+			ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
+			LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+		}, &sessionruntime.LaneRejectedError{Rejection: *session.rejection}
+	}
+	return sessionruntime.SenderPeerAdmissionResult{
+		SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
+		Disposition:      sessionruntime.SenderPeerAdmissionAccepted,
+		ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
+		LaneAttachment:   sessionruntime.SenderPeerLaneAttached,
+	}, nil
 }
 
 type admissionBoundaryResult struct {
@@ -49,7 +72,7 @@ type admissionBoundaryHarness struct {
 	session         *controlledAdmissionSession
 	collector       *senderObservationCollector
 	cancelExecution context.CancelCauseFunc
-	timeout         chan time.Time
+	expireAdmission func()
 	admissionDone   chan struct{}
 }
 
@@ -62,6 +85,7 @@ func TestSuccessfulAdmissionWinsEveryCompetingTerminalBoundary(t *testing.T) {
 		lifetimeStops bool
 		wantDone      bool
 		wantErr       error
+		alternateErr  error
 	}{
 		{
 			name: "runtime cancellation",
@@ -75,7 +99,7 @@ func TestSuccessfulAdmissionWinsEveryCompetingTerminalBoundary(t *testing.T) {
 			},
 			lifetimeStops: true,
 			wantDone:      true,
-			wantErr:       boundaryErr,
+			alternateErr:  boundaryErr,
 		},
 		{
 			name: "admission timeout",
@@ -84,7 +108,7 @@ func TestSuccessfulAdmissionWinsEveryCompetingTerminalBoundary(t *testing.T) {
 				go func() {
 					result <- admissionBoundaryResult{done: true, err: harness.execution.runEvents()}
 				}()
-				harness.timeout <- time.Unix(1, 0)
+				harness.expireAdmission()
 				return result
 			},
 			closeAfterWin: true,
@@ -101,7 +125,6 @@ func TestSuccessfulAdmissionWinsEveryCompetingTerminalBoundary(t *testing.T) {
 				return result
 			},
 			wantDone: true,
-			wantErr:  boundaryErr,
 		},
 		{
 			name: "operation cancellation",
@@ -131,7 +154,6 @@ func TestSuccessfulAdmissionWinsEveryCompetingTerminalBoundary(t *testing.T) {
 				return result
 			},
 			wantDone: true,
-			wantErr:  errCandidateLimit,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -153,20 +175,34 @@ func TestSuccessfulAdmissionWinsEveryCompetingTerminalBoundary(t *testing.T) {
 			}
 
 			actual := receiveTest(t, result)
-			if actual.done != test.wantDone || !errors.Is(actual.err, test.wantErr) {
+			matchesError := errors.Is(actual.err, test.wantErr) ||
+				(test.alternateErr != nil && errors.Is(actual.err, test.alternateErr))
+			if actual.done != test.wantDone || !matchesError {
 				t.Fatalf("boundary result = %#v, want done=%t err=%v", actual, test.wantDone, test.wantErr)
 			}
 			waitForTest(t, func() bool {
-				return len(harness.collector.forAttempt(harness.attempt.binding().AttemptID)) == 7
+				return senderAttemptReachedTerminal(
+					harness.collector.forAttempt(harness.attempt.binding().AttemptID),
+					SenderAttemptAdmitted,
+				)
 			})
 			observations := harness.collector.forAttempt(harness.attempt.binding().AttemptID)
-			if len(observations) != 7 || observations[len(observations)-1].Stage != SenderAttemptAdmitted {
+			wantStages := successfulSenderAttemptStages
+			if len(observations) == len(successfulSenderAttemptStages)+1 {
+				wantStages = append(
+					append([]SenderAttemptStage{}, successfulSenderAttemptStages[:8]...),
+					append([]SenderAttemptStage{SenderAttemptAdmissionDeadlineExpired}, successfulSenderAttemptStages[8:]...)...,
+				)
+			}
+			assertSenderAttemptStages(t, observations, wantStages)
+			if observations[len(observations)-1].Stage != SenderAttemptAdmitted {
 				t.Fatalf("admission terminal was overwritten: %#v", observations)
 			}
+			observedCount := len(observations)
 			harness.attempt.finish(
 				context.Background(), actual.err, nil, harness.execution.operationCanceled,
 			)
-			if observations = harness.collector.forAttempt(harness.attempt.binding().AttemptID); len(observations) != 7 {
+			if observations = harness.collector.forAttempt(harness.attempt.binding().AttemptID); len(observations) != observedCount {
 				t.Fatalf("finish appended a post-admission terminal: %#v", observations)
 			}
 			select {
@@ -178,7 +214,53 @@ func TestSuccessfulAdmissionWinsEveryCompetingTerminalBoundary(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedLaneRejectionWinsAdmissionTimeout(t *testing.T) {
+	rejection := protocolsession.LaneRejection{
+		Code:       protocolsession.LaneRejectAdmissionLimited,
+		RetryAfter: 7 * time.Second,
+	}
+	harness := newAdmissionBoundaryHarnessWithRejection(t, &rejection)
+	result := make(chan error, 1)
+	go func() { result <- harness.execution.runEvents() }()
+	harness.expireAdmission()
+	receiveTest(t, harness.session.contextCanceled)
+	close(harness.session.release)
+	receiveTest(t, harness.admissionDone)
+	actual := receiveTest(t, result)
+	var rejected *sessionruntime.LaneRejectedError
+	if !errors.As(actual, &rejected) || rejected.Rejection != rejection {
+		t.Fatalf("authenticated rejection = %#v, error=%v", rejected, actual)
+	}
+	if errors.Is(actual, ErrPeerAdmissionTimeout) {
+		t.Fatalf("admission timeout hid authenticated rejection: %v", actual)
+	}
+	if harness.attempt.attached.Load() {
+		t.Fatal("rejected admission published a lane")
+	}
+	peer := harness.execution.peer.(*testPeerConnection)
+	receiveTest(t, peer.closed)
+	if cleanup := harness.execution.close(actual); cleanup != nil {
+		t.Fatalf("post-rejection cleanup = %v", cleanup)
+	}
+	channel := harness.execution.transport.PeerDataChannel.(*testPeerChannel)
+	if peer.closeCalls.Load() != 1 || channel.closeCalls.Load() != 1 {
+		t.Fatalf("transport close calls peer=%d channel=%d", peer.closeCalls.Load(), channel.closeCalls.Load())
+	}
+	select {
+	case failure := <-harness.session.failures:
+		t.Fatalf("authenticated lane rejection emitted peer operation failure %#v", failure)
+	default:
+	}
+}
+
 func newAdmissionBoundaryHarness(t *testing.T) *admissionBoundaryHarness {
+	return newAdmissionBoundaryHarnessWithRejection(t, nil)
+}
+
+func newAdmissionBoundaryHarnessWithRejection(
+	t *testing.T,
+	rejection *protocolsession.LaneRejection,
+) *admissionBoundaryHarness {
 	t.Helper()
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
@@ -192,6 +274,7 @@ func newAdmissionBoundaryHarness(t *testing.T) *admissionBoundaryHarness {
 		entered:         make(chan struct{}),
 		release:         make(chan struct{}),
 		contextCanceled: make(chan struct{}),
+		rejection:       rejection,
 	}
 	binding := testBinding(129)
 	attempt := newPeerAttempt(peerAttemptConfig{
@@ -200,6 +283,7 @@ func newAdmissionBoundaryHarness(t *testing.T) *admissionBoundaryHarness {
 		offer:   v2signalOffer(binding),
 	})
 	attempt.recorder.begin()
+	attempt.recorder.negotiationDeadlineArmed()
 	attempt.recorder.complete(SenderAttemptAnswerCreated, SenderCandidateCounts{}, nil, nil)
 	attempt.recorder.complete(SenderAttemptAnswerSent, SenderCandidateCounts{}, nil, nil)
 
@@ -208,19 +292,39 @@ func newAdmissionBoundaryHarness(t *testing.T) *admissionBoundaryHarness {
 	attempt.cancel = cancelExecution
 	attempt.cancelMu.Unlock()
 	execution := newAttemptExecution(attempt, executionContext, peer)
-	timeout := make(chan time.Time)
-	execution.timeout = timeout
+	phaseContext, err := attempt.phases.beginNegotiation(executionContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution.phaseContext = phaseContext
 	channel := newTestPeerChannel()
-	execution.channel = channel
+	transport := newOwnedPeerDataChannel(peer, channel)
+	execution.channel = transport
+	execution.transport = transport
+	openTransition := make(chan struct{})
+	execution.openTransition = openTransition
 	admissionDone := make(chan struct{})
 	go func() {
 		defer close(admissionDone)
-		attempt.awaitOpenAndAdmit(executionContext, channel)
+		attempt.awaitOpenAndAdmit(executionContext, transport, openTransition)
 	}()
 	receiveTest(t, session.entered)
+	expireAdmission := func() {
+		attempt.phases.mu.Lock()
+		expiration := peerPhaseExpiration{
+			phase: PeerAttemptPhaseAdmission, generation: attempt.phases.generation,
+			cause: ErrPeerAdmissionTimeout,
+		}
+		deadline := attempt.phases.deadline
+		attempt.phases.mu.Unlock()
+		attempt.phases.deadlineFired(expiration)
+		deadline.cancel(ErrPeerAdmissionTimeout)
+		attempt.phases.expirations <- expiration
+	}
 	return &admissionBoundaryHarness{
 		attempt: attempt, execution: execution, session: session, collector: collector,
-		cancelExecution: cancelExecution, timeout: timeout, admissionDone: admissionDone,
+		cancelExecution: cancelExecution, expireAdmission: expireAdmission,
+		admissionDone: admissionDone,
 	}
 }
 

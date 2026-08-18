@@ -1,5 +1,6 @@
 import type { V2ShareDescriptor } from '../catalog/v2-records'
 import type { FrameChannel } from '../contracts/channel'
+import { encodeBase64Url } from '../crypto/bytes'
 import {
   decodeV2LaneGrant,
   encodeV2LaneAttachRequest,
@@ -36,7 +37,6 @@ import {
 } from './v2-transcript'
 
 export const V2_SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS = 30_000
-export const V2_LANE_ADMISSION_TIMEOUT_MILLISECONDS = 30_000
 
 export * from './v2-lane-runtime'
 export * from './v2-operation-router'
@@ -50,6 +50,93 @@ export class V2LaneAdmissionRejectedError extends V2SessionRuntimeError {
     this.name = 'V2LaneAdmissionRejectedError'
     this.rejection = rejection
   }
+}
+
+export class V2LaneAdmissionTransportError extends V2SessionRuntimeError {
+  constructor(message: string, options?: ErrorOptions) {
+    super('lane', message, options)
+    this.name = 'V2LaneAdmissionTransportError'
+  }
+}
+
+export class V2LaneInstallationError extends V2SessionRuntimeError {
+  constructor(options?: ErrorOptions) {
+    super('lane', 'Accepted lane could not be installed', options)
+    this.name = 'V2LaneInstallationError'
+  }
+}
+
+interface V2LaneAdmissionIdentity {
+  readonly grantOperationId: string
+  readonly laneId: number
+  readonly laneEpoch: number
+}
+
+/**
+ * Authentication and local installation are separate settlement facts. Keeping
+ * them in one closed result prevents a later lifecycle signal from erasing a
+ * sender-authenticated disposition when publication fails locally.
+ */
+export type V2LaneAdmissionResult =
+  | {
+      readonly disposition: 'unverified'
+      readonly installation: 'not-attempted'
+      readonly error: unknown
+    }
+  | (V2LaneAdmissionIdentity & {
+      readonly disposition: 'rejected'
+      readonly installation: 'not-attempted'
+      readonly rejection: V2LaneRejection
+      readonly error: V2LaneAdmissionRejectedError
+    })
+  | (V2LaneAdmissionIdentity & {
+      readonly disposition: 'accepted'
+      readonly installation: 'failed'
+      readonly error: V2LaneInstallationError
+    })
+  | (V2LaneAdmissionIdentity & {
+      readonly disposition: 'accepted'
+      readonly installation: 'installed'
+    })
+
+export type V2LaneAdmissionMilestone =
+  | {
+      readonly type: 'grant-requested' | 'grant-received' | 'lane-hello-sent'
+      readonly grantOperationId: string
+      readonly laneId: number
+      readonly laneEpoch: number
+    }
+  | {
+      readonly type: 'admission-response-accepted'
+      readonly grantOperationId: string
+      readonly laneId: number
+      readonly laneEpoch: number
+    }
+  | {
+      readonly type: 'admission-response-rejected'
+      readonly grantOperationId: string
+      readonly laneId: number
+      readonly laneEpoch: number
+      readonly rejection: V2LaneRejection
+    }
+  | {
+      readonly type: 'lane-adopted'
+      readonly grantOperationId: string
+      readonly laneId: number
+      readonly laneEpoch: number
+    }
+
+export type V2LaneAdmissionObserver = (milestone: V2LaneAdmissionMilestone) => void
+
+export interface V2LaneGrantRequestOptions {
+  readonly laneId?: number
+  readonly signal?: AbortSignal
+  readonly observeAdmission?: V2LaneAdmissionObserver
+}
+
+export interface V2LaneAdoptionOptions {
+  readonly signal?: AbortSignal
+  readonly observeAdmission?: V2LaneAdmissionObserver
 }
 
 export class V2ReceiverSessionRuntime {
@@ -137,13 +224,19 @@ export class V2ReceiverSessionRuntime {
 
   async requestLaneGrant(
     requestedLaneId = 0,
-    options: { readonly laneId?: number; readonly signal?: AbortSignal } = {},
+    options: V2LaneGrantRequestOptions = {},
   ): Promise<V2LaneGrant> {
     const operation = await this.beginOperation(
       V2_MESSAGE_KIND.laneAttach,
       encodeV2LaneAttachRequest(requestedLaneId),
       options,
     )
+    emitLaneAdmission(options.observeAdmission, {
+      type: 'grant-requested',
+      grantOperationId: encodeBase64Url(operation.id),
+      laneId: requestedLaneId,
+      laneEpoch: 0,
+    })
     const message = await operation.next(options.signal)
     if (message.kind === V2_MESSAGE_KIND.operationError) {
       throw new V2SessionRuntimeError('lane', 'Sender rejected the lane grant request')
@@ -168,24 +261,22 @@ export class V2ReceiverSessionRuntime {
         { cause: error },
       )
     }
+    emitLaneAdmission(options.observeAdmission, grantMilestone('grant-received', grant))
     return grant
   }
 
-  async attachGrantedLane(
+  async adoptGrantedLane(
     channel: FrameChannel,
     grant: V2LaneGrant,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    this.#requireOpen()
-    const admission = deadlineSignal(
-      signal,
-      V2_LANE_ADMISSION_TIMEOUT_MILLISECONDS,
-      'Lane admission timed out',
-      'lane',
-    )
+    options: V2LaneAdoptionOptions = {},
+  ): Promise<V2LaneAdmissionResult> {
+    const signal = options.signal
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    let cleanupCause: unknown
+    let transferred = false
     try {
-      admission.signal.throwIfAborted()
+      this.#requireOpen()
+      signal?.throwIfAborted()
       reader = channel.frames.getReader()
       const hello = await encodeV2LaneHello({
         shareInstance: this.descriptor.shareInstance,
@@ -195,32 +286,78 @@ export class V2ReceiverSessionRuntime {
         grantOperationId: grant.grantOperationId,
         attachNonce: grant.attachNonce,
       }, this.keys.receiverToSenderKey)
-      await channel.send(hello, admission.signal)
-      const response = await readLaneAdmission(reader, admission.signal)
+      try {
+        await channel.send(hello, signal)
+      } catch (cause) {
+        if (signal?.aborted) throw signal.reason ?? cause
+        throw new V2LaneAdmissionTransportError('LaneHello delivery failed', { cause })
+      }
+      emitLaneAdmission(options.observeAdmission, grantMilestone('lane-hello-sent', grant))
+      const response = await readLaneAdmission(reader, signal)
       if (response.byteLength === V2_LANE_REJECT_BYTES) {
         const rejection = await verifyV2LaneReject(
           response,
           hello,
           this.descriptor.senderPublicKey,
         )
-        throw new V2LaneAdmissionRejectedError(rejection)
+        emitLaneAdmission(options.observeAdmission, {
+          ...grantMilestone('admission-response-rejected', grant),
+          rejection,
+        })
+        const error = new V2LaneAdmissionRejectedError(rejection)
+        cleanupCause = error
+        return Object.freeze({
+          ...laneAdmissionIdentity(grant),
+          disposition: 'rejected',
+          installation: 'not-attempted',
+          rejection,
+          error,
+        })
       }
       if (response.byteLength !== V2_LANE_ACCEPT_BYTES) {
         throw new V2SessionRuntimeError('lane', 'Lane admission response has an invalid length')
       }
       await verifyV2LaneAccept(response, hello, this.descriptor.senderPublicKey)
-      await this.#installAcceptedLane(channel, reader, grant.laneId, grant.laneEpoch)
-    } catch (error) {
-      await reader?.cancel(error).catch(() => undefined)
+      emitLaneAdmission(
+        options.observeAdmission,
+        grantMilestone('admission-response-accepted', grant),
+      )
       try {
-        reader?.releaseLock()
-      } catch {
-        // A failed admission may already have closed the candidate channel.
+        await this.#installAcceptedLane(channel, reader, grant.laneId, grant.laneEpoch)
+      } catch (cause) {
+        const error = new V2LaneInstallationError({ cause })
+        cleanupCause = error
+        return Object.freeze({
+          ...laneAdmissionIdentity(grant),
+          disposition: 'accepted',
+          installation: 'failed',
+          error,
+        })
       }
-      await channel.close().catch(() => undefined)
-      throw error
+      transferred = true
+      emitLaneAdmission(options.observeAdmission, grantMilestone('lane-adopted', grant))
+      return Object.freeze({
+        ...laneAdmissionIdentity(grant),
+        disposition: 'accepted',
+        installation: 'installed',
+      })
+    } catch (error) {
+      cleanupCause = error
+      return Object.freeze({
+        disposition: 'unverified',
+        installation: 'not-attempted',
+        error,
+      })
     } finally {
-      admission.close()
+      if (!transferred) {
+        await reader?.cancel(cleanupCause).catch(() => undefined)
+        try {
+          reader?.releaseLock()
+        } catch {
+          // A failed admission may already have closed the candidate channel.
+        }
+        await channel.close().catch(() => undefined)
+      }
     }
   }
 
@@ -471,7 +608,9 @@ async function readLaneAdmission(
   signal?.throwIfAborted()
   if (signal === undefined) {
     const result = await reader.read()
-    if (result.done) throw new V2SessionRuntimeError('lane', 'Candidate lane closed before admission')
+    if (result.done) {
+      throw new V2LaneAdmissionTransportError('Candidate lane closed before admission')
+    }
     return result.value.slice()
   }
   return new Promise<Uint8Array<ArrayBuffer>>((resolve, reject) => {
@@ -491,7 +630,7 @@ async function readLaneAdmission(
     reader.read().then(
       (result) => finish(() => {
         if (result.done) {
-          reject(new V2SessionRuntimeError('lane', 'Candidate lane closed before admission'))
+          reject(new V2LaneAdmissionTransportError('Candidate lane closed before admission'))
         } else {
           resolve(result.value.slice())
         }
@@ -526,6 +665,37 @@ function cancellationProtocolReason(cause: unknown): V2OperationCancelReason {
   return cause instanceof DOMException && cause.name === 'TimeoutError'
     ? V2_OPERATION_CANCEL_REASON.timeout
     : V2_OPERATION_CANCEL_REASON.user
+}
+
+function grantMilestone<T extends V2LaneAdmissionMilestone['type']>(
+  type: T,
+  grant: V2LaneGrant,
+): Extract<V2LaneAdmissionMilestone, { readonly type: T }> {
+  return Object.freeze({
+    type,
+    grantOperationId: encodeBase64Url(grant.grantOperationId),
+    laneId: grant.laneId,
+    laneEpoch: grant.laneEpoch,
+  }) as Extract<V2LaneAdmissionMilestone, { readonly type: T }>
+}
+
+function laneAdmissionIdentity(grant: V2LaneGrant): V2LaneAdmissionIdentity {
+  return Object.freeze({
+    grantOperationId: encodeBase64Url(grant.grantOperationId),
+    laneId: grant.laneId,
+    laneEpoch: grant.laneEpoch,
+  })
+}
+
+function emitLaneAdmission(
+  observer: V2LaneAdmissionObserver | undefined,
+  milestone: V2LaneAdmissionMilestone,
+): void {
+  try {
+    observer?.(Object.freeze(milestone))
+  } catch {
+    // Admission evidence is observational; authenticated state has already advanced.
+  }
 }
 
 function deadlineSignal(

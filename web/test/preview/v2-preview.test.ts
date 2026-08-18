@@ -66,7 +66,6 @@ function runtime(bytes: Uint8Array<ArrayBuffer>, blockSize: bigint) {
   lanes.add(lane, 'relay')
   const upstreamBroker = new V2BlockBroker(lanes)
   const routes = new V2ConnectivityRouteAuthority()
-  routes.admitRelay()
   const broker: V2BlockRangeReader = Object.freeze({
     readRange: (
       revision: V2FileRevisionDescriptor,
