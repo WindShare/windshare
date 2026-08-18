@@ -72,18 +72,23 @@ for release_gate in "$linux_gate" "$windows_gate"; do
   assert_contains "$release_gate" './scripts/ci/_coreboundary'
   assert_contains "$release_gate" 'build ./...'
   assert_contains "$release_gate" 'test'
-  assert_contains "$release_gate" 'install ./cmd/windshare'
+  assert_contains "$release_gate" 'install ./cmd/wind'
 done
+
+assert_contains "$linux_gate" '"$install_root/wind" --help'
+assert_not_contains "$linux_gate" '"$install_root/windshare"'
+assert_contains "$windows_gate" "Join-Path \$cliInstallRoot 'wind.exe'"
+assert_not_contains "$windows_gate" "Join-Path \$cliInstallRoot 'windshare.exe'"
 
 # Tests may execute arbitrary repository code, so exact-artifact consumers must
 # finish first and the Linux certifier itself must come from the proven checkout.
 assert_contains "$linux_gate" 'bash "$release_repository/scripts/ci/native-output/linux/certify.sh"'
 assert_not_contains "$linux_gate" 'bash scripts/ci/native-output/linux/certify.sh'
-assert_precedes "$linux_gate" 'GOBIN="$install_root" go install ./cmd/windshare' \
+assert_precedes "$linux_gate" 'GOBIN="$install_root" go install ./cmd/wind' \
   'go test -count=1 -timeout="$module_suite_test_timeout" ./...'
 assert_precedes "$linux_gate" 'bash "$release_repository/scripts/ci/native-output/linux/certify.sh"' \
   'go test -count=1 -timeout="$module_suite_test_timeout" ./...'
-assert_precedes "$windows_gate" '& $goExecutable install ./cmd/windshare' \
+assert_precedes "$windows_gate" '& $goExecutable install ./cmd/wind' \
   '& $goExecutable test -count=1 "-timeout=$moduleSuiteTestTimeout" ./...'
 assert_precedes "$windows_gate" '        Invoke-RequiredWindowsNativeTestsAsStandardUser' \
   '& $goExecutable test -count=1 "-timeout=$moduleSuiteTestTimeout" ./...'

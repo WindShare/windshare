@@ -54,7 +54,7 @@ WindShare has one production Go module. Within it, `core/**` is the network-free
 │   ├── testvectors/              Canonical Go↔TypeScript protocol vectors
 │   └── internal/                 HKDF hierarchy, protocol contracts, and test fixtures
 ├── cmd/
-│   ├── windshare/                Share/get/resume CLI and recovery management
+│   ├── wind/                     Share/get/resume CLI and recovery management
 │   └── testprocessowner/         Test-only bounded process supervisor
 ├── connectivity/
 │   ├── v2signal/                 E2EE signaling codec and validation

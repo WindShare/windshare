@@ -3,8 +3,8 @@
 ## Share
 
 ```text
-windshare share <path...>
-windshare share <path...> --split-key
+wind share <path...>
+wind share <path...> --split-key
 ```
 
 `share` registers with the relay before publishing capability information. Standard output contains only the copyable capability:
@@ -25,9 +25,9 @@ The link is available before directory descendants are scanned. Human readiness,
 ## Get
 
 ```text
-windshare get <capability-link>
-windshare get -o <directory> <capability-link>
-windshare get --connectivity p2p-only <capability-link>
+wind get <capability-link>
+wind get -o <directory> <capability-link>
+wind get --connectivity p2p-only <capability-link>
 ```
 
 Without `-o`, WindShare saves into the current directory. The directory is a container for the result:
@@ -70,14 +70,14 @@ Trace records use full semantic run/session/operation identifiers and normalized
 A destination is `resumable` only when it proves safe no-replace publication, operation recovery, verified-range recovery, and crash cleanup. Repeating the same compatible `get` continues the matching active operation; for repeat-run tracing, use a run directory so every attempt keeps separate evidence:
 
 ```text
-windshare get -o <directory> <same-capability-link> --trace-dir <trace-directory>
+wind get -o <directory> <same-capability-link> --trace-dir <trace-directory>
 ```
 
 A `live-only` destination preserves completed files after interruption but starts a new named operation on the next `get`.
 
 ```text
-windshare resume list -o <directory>
-windshare resume discard -o <directory> --item <N>
+wind resume list -o <directory>
+wind resume discard -o <directory> --item <N>
 ```
 
 `resume list` reports destination-owned `incomplete`, `resumable`, `cleanup-pending`, `operation-needs-attention`, and `item-blocked` state. Failures use closed `stage`, optional `reconciliation_stage`, and optional `native_error_class` fields so destination binding, inventory, operation acquisition, checkpoint reconciliation, native durability, and authority close remain distinguishable without exposing paths or provider text. `resume discard` requires exact interactive confirmation and removes only identity-matched unfinished WindShare state; published files and unknown objects are preserved.
