@@ -1,212 +1,156 @@
-import { encodeBase64Url } from '../crypto/bytes'
-import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
+import type { V2PeerAttemptFailure } from './v2-peer-failure'
 import {
   V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES,
   V2_CONNECTIVITY_DIAGNOSTIC_SCHEMA_VERSION,
+  v2TypedErrorForPeerOperationCode,
+  type V2AttemptOrdinalCorrelation,
   type V2BrowserConnectivityAttemptDiagnostic,
-  type V2BrowserConnectivityAttemptStage,
-  type V2BrowserSelectedPairDiagnostic,
-  type V2CandidateCounts,
+  type V2StableBrowserConnectivityAttemptStage,
   type V2ConnectivityObserver,
   type V2LaneIdentity,
-  type V2TypedPeerErrorCode,
 } from './diagnostics'
-import type { V2PeerBinding } from './v2-signaling-codec'
-import { awaitPeerEvidence } from './abortable-peer-evidence'
-import { classifyV2TerminalSignalingFailure } from './v2-session-signaling-errors'
 
-const BROWSER_SUCCESS_STAGES = V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES.filter(
-  (stage): stage is Exclude<V2BrowserConnectivityAttemptStage, 'failed'> => stage !== 'failed',
+const BROWSER_LINEAR_STAGES = V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES.filter(
+  (stage): stage is Exclude<
+    V2StableBrowserConnectivityAttemptStage,
+    'negotiation-deadline-expired' | 'admission-deadline-expired' | 'failed'
+  > => stage !== 'negotiation-deadline-expired' &&
+    stage !== 'admission-deadline-expired' && stage !== 'failed',
 )
 
-type BrowserMilestonePayload = {
-  readonly candidateCounts: V2CandidateCounts
-  readonly lane?: V2LaneIdentity
+type AttemptEnvelopeKey =
+  | 'schemaVersion' | 'stream' | 'sessionId' | 'peerPathId' | 'attemptId' | 'side'
+  | 'sideSequence' | 'attemptElapsedMs' | keyof V2AttemptOrdinalCorrelation
+
+type BrowserAttemptPayload = V2BrowserConnectivityAttemptDiagnostic extends infer Event
+  ? Event extends V2BrowserConnectivityAttemptDiagnostic ? Omit<Event, AttemptEnvelopeKey> : never
+  : never
+
+interface BrowserAttemptCorrelation extends V2AttemptOrdinalCorrelation {
+  readonly sessionId: string
+  readonly peerPathId: string
+  readonly attemptId: string
 }
 
+/** Owns the one linear, privacy-safe event stream for a browser attempt. */
 export class BrowserAttemptLifecycle {
-  readonly #observer: V2ConnectivityObserver | undefined
+  readonly #observers: readonly V2ConnectivityObserver[]
   readonly #now: () => number
-  readonly #sessionId: string
-  readonly #peerPathId: string
-  readonly #attemptId: string
+  readonly #correlation: BrowserAttemptCorrelation
   readonly #startedAt: number
   #nextStageIndex = 1
   #sideSequence = 0
   #lastElapsedMs = 0
   #terminal = false
-  #candidateCounts: V2CandidateCounts | undefined
+  #offerOperationId: string | undefined
+  #grantOperationId: string | undefined
   #lane: V2LaneIdentity | undefined
-  #selectedPairReader: (() => Promise<V2BrowserSelectedPairDiagnostic | null>) | undefined
-  #selectedPairPromise: Promise<V2BrowserSelectedPairDiagnostic | null> | undefined
-  #selectedPair: V2BrowserSelectedPairDiagnostic | null = null
-  #selectedPairRead = false
-  #failureScope: 'attempt' | 'session' = 'attempt'
 
   constructor(
-    session: V2ReceiverSessionRuntime,
-    binding: V2PeerBinding,
-    observer: V2ConnectivityObserver | undefined,
+    correlation: BrowserAttemptCorrelation,
+    observers: readonly (V2ConnectivityObserver | undefined)[],
     now: () => number,
   ) {
-    this.#observer = observer
+    this.#observers = observers.filter(
+      (observer): observer is V2ConnectivityObserver => observer !== undefined,
+    )
     this.#now = now
-    this.#sessionId = observer === undefined ? '' : encodeBase64Url(session.keys.protocolSessionId)
-    this.#peerPathId = observer === undefined ? '' : encodeBase64Url(binding.peerPathId)
-    this.#attemptId = observer === undefined ? '' : encodeBase64Url(binding.attemptId)
+    this.#correlation = Object.freeze({ ...correlation })
     this.#startedAt = this.#readNow()
-    if (observer !== undefined) this.#emit({ stage: 'started' })
+    this.#emit({ stage: 'started' })
   }
 
-  get candidateCounts(): V2CandidateCounts {
-    return this.#candidateCounts ?? Object.freeze({ localEmitted: 0, remoteAccepted: 0 })
+  setOfferOperationId(operationId: string): void {
+    if (!this.#terminal && operationId !== '') this.#offerOperationId ??= operationId
   }
 
-  get failureScope(): 'attempt' | 'session' {
-    return this.#failureScope
-  }
-
-  setFailureScope(scope: 'attempt' | 'session'): void {
-    if (!this.#terminal) this.#failureScope = scope
-  }
-
-  advance(
-    stage: Exclude<V2BrowserConnectivityAttemptStage, 'started' | 'admitted' | 'failed'>,
-    payload: BrowserMilestonePayload,
-  ): void {
-    if (this.#observer === undefined || this.#terminal) return
-    if (!this.#expect(stage)) return
-    const candidateCounts = snapshotCandidateCounts(payload.candidateCounts)
-    const lane = payload.lane === undefined ? undefined : snapshotLane(payload.lane)
-    this.#candidateCounts = candidateCounts
-    if (lane !== undefined) this.#lane = lane
+  advance(payload: BrowserAttemptPayload): void {
+    if (this.#terminal || !this.#expect(payload.stage)) return
+    this.#remember(payload)
     this.#nextStageIndex += 1
-    this.#emit({
-      stage,
-      candidateCounts,
-      ...(lane === undefined ? {} : { lane }),
-    })
+    this.#emit(this.#withRememberedCorrelation(payload))
+    if (payload.stage === 'admitted') this.#terminal = true
   }
 
-  registerSelectedPairReader(
-    reader: () => Promise<V2BrowserSelectedPairDiagnostic | null>,
+  deadlineExpired(
+    phase: 'negotiation' | 'admission',
+    deadlineBudgetMs: number,
   ): void {
-    this.#selectedPairReader ??= reader
-  }
-
-  async readSelectedPair(signal?: AbortSignal): Promise<V2BrowserSelectedPairDiagnostic | null> {
-    if (this.#selectedPairPromise === undefined) {
-      this.#selectedPairPromise = this.#readSelectedPair()
-    }
-    const selectedPair = signal === undefined
-      ? await this.#selectedPairPromise
-      : await awaitPeerEvidence(this.#selectedPairPromise, signal)
-    this.#selectedPair = selectedPair
-    this.#selectedPairRead = true
-    return selectedPair
-  }
-
-  admitted(lane: V2LaneIdentity, selectedPair: V2BrowserSelectedPairDiagnostic | null): void {
-    if (this.#observer === undefined || this.#terminal) return
-    if (!this.#expect('admitted')) return
-    const authoritativeLane = snapshotLane(lane)
-    if (this.#lane !== undefined && !sameLane(this.#lane, authoritativeLane)) {
-      this.failed(
-        new Error('Connectivity admission changed the authenticated lane identity'),
-        'attempt',
-        'unexpected',
-      )
+    if (this.#terminal) return
+    const stage = phase === 'negotiation'
+      ? 'negotiation-deadline-expired'
+      : 'admission-deadline-expired'
+    if (stage === 'negotiation-deadline-expired') {
+      this.#emit({ stage, phase: 'negotiation', deadlineBudgetMs })
       return
     }
-    this.#lane = authoritativeLane
-    this.#selectedPair = selectedPair
-    this.#selectedPairRead = true
-    this.#terminal = true
-    this.#nextStageIndex += 1
-    this.#emit({
-      stage: 'admitted',
-      candidateCounts: this.candidateCounts,
-      lane: authoritativeLane,
-      selectedPair,
-    })
+    this.#emit(this.#withRememberedCorrelation({
+      stage,
+      phase: 'admission',
+      deadlineBudgetMs,
+      offerOperationId: this.#offerOperationId ?? '',
+    }))
   }
 
-  failed(
-    reason: unknown,
-    failureScope: 'attempt' | 'session',
-    typedErrorCode?: V2TypedPeerErrorCode,
-  ): void {
-    if (this.#observer === undefined || this.#terminal) return
-    const failedAtStage = BROWSER_SUCCESS_STAGES[this.#nextStageIndex]
+  failed(failure: V2PeerAttemptFailure): void {
+    if (this.#terminal) return
+    const failedAtStage = BROWSER_LINEAR_STAGES[this.#nextStageIndex]
     if (failedAtStage === undefined || failedAtStage === 'started') return
-    const failure = classifyV2TerminalSignalingFailure(
-      reason,
-      failedAtStage,
-      failureScope,
-      typedErrorCode,
-    )
     this.#terminal = true
     this.#emit({
       stage: 'failed',
       failedAtStage,
-      failureScope: failure.failureScope,
-      typedErrorCode: failure.typedErrorCode,
-      failureMessage: failure.failureMessage,
-      ...(this.#candidateCounts === undefined || failedAtStage === 'offer-created'
+      failure: snapshotFailure(failure),
+      failureScope: failure.kind === 'session-terminal' ? 'session' : 'attempt',
+      typedErrorCode: diagnosticTypedErrorCode(failure),
+      ...(this.#offerOperationId === undefined
         ? {}
-        : { candidateCounts: this.#candidateCounts }),
-      ...(this.#lane === undefined || (failedAtStage !== 'lane-attached' && failedAtStage !== 'admitted')
+        : { offerOperationId: this.#offerOperationId }),
+      ...(this.#grantOperationId === undefined
         ? {}
-        : { lane: this.#lane }),
-      ...(failedAtStage === 'admitted' && this.#selectedPairRead
-        ? { selectedPair: this.#selectedPair }
-        : {}),
-      ...(failure.authenticatedSenderOperationFailure === undefined
-        ? {}
-        : { authenticatedSenderOperationFailure: failure.authenticatedSenderOperationFailure }),
+        : { grantOperationId: this.#grantOperationId }),
+      ...(this.#lane === undefined ? {} : { lane: this.#lane }),
     })
   }
 
-  #expect(stage: Exclude<V2BrowserConnectivityAttemptStage, 'started' | 'failed'>): boolean {
-    const expected = BROWSER_SUCCESS_STAGES[this.#nextStageIndex]
-    if (expected === stage) return true
-    this.failed(
-      new Error(`Connectivity milestone ${stage} arrived while ${expected ?? 'terminal'} was expected`),
-      'attempt',
-      'unexpected',
-    )
-    return false
+  #expect(stage: BrowserAttemptPayload['stage']): boolean {
+    const expected = BROWSER_LINEAR_STAGES[this.#nextStageIndex]
+    return expected === stage
   }
 
-  async #readSelectedPair(): Promise<V2BrowserSelectedPairDiagnostic | null> {
-    if (this.#selectedPairReader === undefined) return null
-    try {
-      return await this.#selectedPairReader()
-    } catch {
-      // getStats evidence may be unavailable even after authenticated admission.
-      return null
+  #remember(payload: BrowserAttemptPayload): void {
+    if ('offerOperationId' in payload && payload.offerOperationId !== undefined) {
+      this.#offerOperationId ??= payload.offerOperationId
     }
+    if ('grantOperationId' in payload) this.#grantOperationId = payload.grantOperationId
+    if ('lane' in payload) this.#lane = snapshotLane(payload.lane)
   }
 
-  #emit(payload: Record<string, unknown>): void {
-    const observer = this.#observer
-    if (observer === undefined) return
-    const attemptElapsedMs = this.#elapsedMilliseconds()
+  #withRememberedCorrelation(payload: BrowserAttemptPayload): BrowserAttemptPayload {
+    const withOffer = this.#offerOperationId === undefined || 'offerOperationId' in payload
+      ? payload
+      : { ...payload, offerOperationId: this.#offerOperationId }
+    return Object.freeze(withOffer) as BrowserAttemptPayload
+  }
+
+  #emit(payload: BrowserAttemptPayload): void {
+    if (this.#observers.length === 0) return
     this.#sideSequence += 1
-    const diagnostic = Object.freeze({
+    const event = Object.freeze({
       schemaVersion: V2_CONNECTIVITY_DIAGNOSTIC_SCHEMA_VERSION,
-      sessionId: this.#sessionId,
-      peerPathId: this.#peerPathId,
-      attemptId: this.#attemptId,
+      stream: 'attempt' as const,
+      ...this.#correlation,
       side: 'browser' as const,
       sideSequence: this.#sideSequence,
-      attemptElapsedMs,
+      attemptElapsedMs: this.#elapsedMilliseconds(),
       ...payload,
     }) as V2BrowserConnectivityAttemptDiagnostic
-    try {
-      observer(diagnostic)
-    } catch {
-      // Diagnostic consumers cannot alter authenticated connectivity or cleanup.
+    for (const observer of this.#observers) {
+      try {
+        observer(event)
+      } catch {
+        // Observer loss cannot alter phase, authenticated settlement, or cleanup.
+      }
     }
   }
 
@@ -229,17 +173,35 @@ export class BrowserAttemptLifecycle {
   }
 }
 
-function snapshotCandidateCounts(candidateCounts: V2CandidateCounts): V2CandidateCounts {
-  return Object.freeze({
-    localEmitted: candidateCounts.localEmitted,
-    remoteAccepted: candidateCounts.remoteAccepted,
-  })
-}
-
 function snapshotLane(lane: V2LaneIdentity): V2LaneIdentity {
   return Object.freeze({ laneId: lane.laneId, laneEpoch: lane.laneEpoch })
 }
 
-function sameLane(left: V2LaneIdentity, right: V2LaneIdentity): boolean {
-  return left.laneId === right.laneId && left.laneEpoch === right.laneEpoch
+function snapshotFailure(failure: V2PeerAttemptFailure): V2PeerAttemptFailure {
+  if (failure.kind === 'authenticated-lane-rejection') {
+    return Object.freeze({
+      kind: failure.kind,
+      rejection: Object.freeze({ ...failure.rejection }),
+    })
+  }
+  if (failure.kind === 'session-terminal') {
+    return Object.freeze({ kind: failure.kind, terminal: Object.freeze({ ...failure.terminal }) })
+  }
+  return Object.freeze({ ...failure })
+}
+
+function diagnosticTypedErrorCode(failure: V2PeerAttemptFailure) {
+  if (failure.kind === 'session-terminal') return 'runtime-stopped' as const
+  if (failure.kind === 'authenticated-peer-operation') {
+    return v2TypedErrorForPeerOperationCode(failure.code) ?? 'unexpected'
+  }
+  if (failure.kind === 'authenticated-lane-rejection') return 'peer-admission' as const
+  if (failure.kind === 'local-contract') return 'signaling-contract' as const
+  if (failure.kind === 'local-policy') {
+    return failure.code === 'candidate-limit' ? 'peer-candidates' as const : 'unexpected' as const
+  }
+  if (failure.reason === 'negotiation-timeout' || failure.reason === 'admission-timeout') {
+    return 'peer-timeout' as const
+  }
+  return failure.phase === 'admission' ? 'peer-admission' as const : 'peer-negotiation' as const
 }

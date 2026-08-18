@@ -16,23 +16,14 @@ import (
 )
 
 const (
-	DefaultSTUNServer                            = "stun:stun.l.google.com:19302"
-	DefaultAttemptTimeout                        = 10 * time.Second
-	DefaultMaxCandidates                         = v2signal.DefaultMaximumCandidates
-	DefaultMaxActiveAttempts                     = 4
-	DefaultRetiredBindingTTL                     = protocolsession.OperationTombstoneLifetime
-	DefaultMaxRetiredBindings                    = 64
-	DefaultSenderAttemptObservationCapacity      = 256
-	defaultEvidenceReplacementWavesPerActiveSlot = 64
-	// A session normally needs one direct attempt. Sixty-four replacement waves
-	// per active slot leave broad diagnostic headroom without letting an
-	// authenticated peer turn exact lifetime claims into unbounded state.
-	DefaultMaxSessionEvidenceIdentities = DefaultMaxActiveAttempts * defaultEvidenceReplacementWavesPerActiveSlot
+	DefaultSTUNServer                       = "stun:stun.l.google.com:19302"
+	DefaultMaxCandidates                    = v2signal.DefaultMaximumCandidates
+	DefaultRetiredBindingTTL                = protocolsession.OperationTombstoneLifetime
+	DefaultMaxRetiredBindings               = 64
+	DefaultSenderAttemptObservationCapacity = 256
 
 	maximumConfiguredCandidates             = v2signal.MaximumCandidates
-	maximumConfiguredAttempts               = 64
 	maximumRetiredBindings                  = 4_096
-	maximumSessionEvidenceIdentities        = 65_536
 	maximumSenderAttemptObservationCapacity = 4_096
 	handlerEventReserve                     = 16
 	rejectedOfferAuthoritySDP               = "v=0\r\n"
@@ -99,14 +90,17 @@ func (function DataChannelAdapterFunc) WrapDataChannel(
 }
 
 type Config struct {
-	Configuration                     pion.Configuration
-	PeerConnections                   PeerConnectionFactory
-	DataChannels                      DataChannelAdapter
-	AttemptTimeout                    time.Duration
-	MaxCandidates                     int
-	MaxActiveAttempts                 int
-	RetiredBindingTTL                 time.Duration
-	MaxRetiredBindings                int
+	Configuration      pion.Configuration
+	PeerConnections    PeerConnectionFactory
+	DataChannels       DataChannelAdapter
+	NegotiationBudget  time.Duration
+	AdmissionBudget    time.Duration
+	PhaseTimers        PeerPhaseTimerSource
+	MaxCandidates      int
+	RetiredBindingTTL  time.Duration
+	MaxRetiredBindings int
+	// MaxSessionEvidenceIdentities may tighten, but never expand, the total
+	// ordinary-plus-terminal identity ceiling.
 	MaxSessionEvidenceIdentities      int
 	SenderAttemptObservationCapacity  int
 	PeerDiagnosticObservationCapacity int
@@ -117,9 +111,10 @@ type Factory struct {
 	configuration                pion.Configuration
 	peerConnections              PeerConnectionFactory
 	dataChannels                 DataChannelAdapter
-	attemptTimeout               time.Duration
+	negotiationBudget            time.Duration
+	admissionBudget              time.Duration
+	phaseTimers                  PeerPhaseTimerSource
 	maxCandidates                int
-	maxActiveAttempts            int
 	retiredBindingTTL            time.Duration
 	maxRetiredBindings           int
 	maxSessionEvidenceIdentities int
@@ -136,20 +131,23 @@ func DefaultConfiguration() pion.Configuration {
 }
 
 func NewFactory(config Config) (*Factory, error) {
-	if config.AttemptTimeout < 0 || config.MaxCandidates < 0 || config.MaxActiveAttempts < 0 ||
+	if config.NegotiationBudget < 0 || config.AdmissionBudget < 0 || config.MaxCandidates < 0 ||
 		config.RetiredBindingTTL < 0 || config.MaxRetiredBindings < 0 ||
 		config.MaxSessionEvidenceIdentities < 0 || config.SenderAttemptObservationCapacity < 0 ||
 		config.PeerDiagnosticObservationCapacity < 0 {
 		return nil, ErrConfig
 	}
-	if config.AttemptTimeout == 0 {
-		config.AttemptTimeout = DefaultAttemptTimeout
+	if config.NegotiationBudget == 0 {
+		config.NegotiationBudget = DefaultPeerNegotiationBudget
+	}
+	if config.AdmissionBudget == 0 {
+		config.AdmissionBudget = DefaultPeerAdmissionBudget
+	}
+	if !validPeerPhaseBudgets(config.NegotiationBudget, config.AdmissionBudget) {
+		return nil, ErrConfig
 	}
 	if config.MaxCandidates == 0 {
 		config.MaxCandidates = DefaultMaxCandidates
-	}
-	if config.MaxActiveAttempts == 0 {
-		config.MaxActiveAttempts = DefaultMaxActiveAttempts
 	}
 	if config.RetiredBindingTTL == 0 {
 		config.RetiredBindingTTL = DefaultRetiredBindingTTL
@@ -158,17 +156,19 @@ func NewFactory(config Config) (*Factory, error) {
 		config.MaxRetiredBindings = DefaultMaxRetiredBindings
 	}
 	if config.MaxSessionEvidenceIdentities == 0 {
-		config.MaxSessionEvidenceIdentities = DefaultMaxSessionEvidenceIdentities
+		config.MaxSessionEvidenceIdentities = SenderMaxSessionEvidenceIdentities
 	}
 	if config.MaxCandidates > maximumConfiguredCandidates ||
-		config.MaxActiveAttempts > maximumConfiguredAttempts ||
 		config.MaxRetiredBindings > maximumRetiredBindings ||
-		config.MaxRetiredBindings < config.MaxActiveAttempts ||
-		config.MaxSessionEvidenceIdentities > maximumSessionEvidenceIdentities ||
-		config.MaxSessionEvidenceIdentities < config.MaxActiveAttempts ||
+		config.MaxRetiredBindings < SenderMaxActivePeerAttemptsPerSession ||
+		config.MaxSessionEvidenceIdentities > SenderMaxSessionEvidenceIdentities ||
+		config.MaxSessionEvidenceIdentities < minimumSessionEvidenceIdentities ||
 		config.SenderAttemptObservationCapacity > maximumSenderAttemptObservationCapacity ||
 		config.PeerDiagnosticObservationCapacity > maximumPeerDiagnosticObservationCapacity {
 		return nil, ErrConfig
+	}
+	if config.PhaseTimers == nil {
+		config.PhaseTimers = systemPeerPhaseTimerSource{}
 	}
 	if config.PeerConnections == nil {
 		config.PeerConnections = PeerConnectionFactoryFunc(func(configuration pion.Configuration) (PeerConnection, error) {
@@ -195,8 +195,9 @@ func NewFactory(config Config) (*Factory, error) {
 	}
 	factory := &Factory{
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
-		dataChannels: config.DataChannels, attemptTimeout: config.AttemptTimeout,
-		maxCandidates: config.MaxCandidates, maxActiveAttempts: config.MaxActiveAttempts,
+		dataChannels:      config.DataChannels,
+		negotiationBudget: config.NegotiationBudget, admissionBudget: config.AdmissionBudget,
+		phaseTimers: config.PhaseTimers, maxCandidates: config.MaxCandidates,
 		retiredBindingTTL: config.RetiredBindingTTL, maxRetiredBindings: config.MaxRetiredBindings,
 		maxSessionEvidenceIdentities: config.MaxSessionEvidenceIdentities,
 		now:                          config.Now,
@@ -226,7 +227,7 @@ func (factory *Factory) NewSenderPeerHandler(
 	if factory == nil || session == nil || session.ShareInstance().IsZero() || session.ProtocolSessionID().IsZero() {
 		return nil, ErrConfig
 	}
-	capacity := factory.maxActiveAttempts*(factory.maxCandidates+3) + handlerEventReserve
+	capacity := SenderMaxActivePeerAttemptsPerSession*(factory.maxCandidates+3) + handlerEventReserve
 	return &senderHandler{
 		factory: factory, session: session, events: make(chan handlerEvent, capacity),
 		attempts:          make(map[peerOperation]*peerAttempt),

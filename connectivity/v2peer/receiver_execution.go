@@ -62,7 +62,6 @@ func receiverWorkflowUnsafe(
 
 func (attempt *ReceiverAttempt) execute() receiverExecutionResult {
 	execution := newReceiverExecution(attempt)
-	execution.startDeadline()
 	workflow := execution.openSignaling()
 	if workflow.cause == nil && execution.operation != nil {
 		execution.startWorkers()
@@ -115,13 +114,14 @@ func receiverWorkflowCompletion(
 }
 
 type receiverExecution struct {
-	attempt      *ReceiverAttempt
-	operation    *receiverBoundSignalingOperation
-	binding      ReceiverSignalingOperationBinding
-	children     sync.WaitGroup
-	timer        ReceiverAttemptTimer
-	deadlineDone chan struct{}
-	deadlineOnce sync.Once
+	attempt                *ReceiverAttempt
+	operation              *receiverBoundSignalingOperation
+	binding                ReceiverSignalingOperationBinding
+	children               sync.WaitGroup
+	attachmentMu           sync.Mutex
+	attachmentResult       receiverEvent
+	attachmentDone         chan struct{}
+	attachmentTerminalOwns bool
 
 	answerSeen       bool
 	channelOpened    bool
@@ -134,7 +134,7 @@ type receiverExecution struct {
 func newReceiverExecution(attempt *ReceiverAttempt) *receiverExecution {
 	return &receiverExecution{
 		attempt: attempt, binding: newReceiverSignalingOperationBinding(),
-		deadlineDone: make(chan struct{}),
+		attachmentDone: make(chan struct{}),
 	}
 }
 
@@ -169,7 +169,7 @@ func (execution *receiverExecution) openSignaling() receiverWorkflowResult {
 		)
 	}
 	operation, err := execution.attempt.signaling.OpenPeerOperation(
-		execution.attempt.ctx,
+		execution.attempt.phaseContext,
 		execution.binding,
 		body,
 	)
@@ -215,12 +215,14 @@ func (execution *receiverExecution) classifySignalingOpenFailure(err error) rece
 	if err == nil {
 		return receiverPreOperationAdapterFailure(nil)
 	}
-	combined := errors.Join(err, context.Cause(execution.attempt.ctx))
-	workflow := receiverPreOperationFailure(
-		combined,
-		ReceiverProvenanceLocalNegotiationFailure,
-	)
-	if execution.attempt.ctx.Err() == nil {
+	phaseCause := context.Cause(execution.attempt.phaseContext)
+	combined := errors.Join(err, phaseCause, context.Cause(execution.attempt.ctx))
+	provenance := ReceiverProvenanceLocalNegotiationFailure
+	if errors.Is(phaseCause, ErrPeerNegotiationTimeout) {
+		provenance = ReceiverProvenanceLocalNegotiationTimeout
+	}
+	workflow := receiverPreOperationFailure(combined, provenance)
+	if phaseCause == nil && execution.attempt.ctx.Err() == nil {
 		workflow.cause = errors.Join(ErrNegotiation, combined)
 	}
 	return workflow
@@ -265,18 +267,6 @@ func (execution *receiverExecution) startWorkers() {
 	}()
 }
 
-func (execution *receiverExecution) startDeadline() {
-	execution.timer = execution.attempt.deadline
-	execution.children.Go(func() {
-		select {
-		case <-execution.timer.C():
-			execution.attempt.cancel(errAttemptTimeout)
-		case <-execution.deadlineDone:
-		case <-execution.attempt.ctx.Done():
-		}
-	})
-}
-
 func (execution *receiverExecution) close(
 	result error,
 ) (ReceiverSignalingTermination, peerTransportTeardown) {
@@ -288,24 +278,92 @@ func (execution *receiverExecution) close(
 	// cancellation keeps that context from becoming a competing lifecycle signal
 	// and makes its returned cause include receive and cleanup failures.
 	execution.attempt.cancel(result)
-	teardown := teardownPeerTransport(execution.attempt.peer, execution.attempt.channel)
-	execution.stopDeadline()
+	execution.attempt.phases.terminate(result)
+	var teardown peerTransportTeardown
+	if execution.attempt.transport == nil {
+		teardown = teardownPeerTransport(execution.attempt.peer, nil)
+	} else {
+		_ = execution.attempt.transport.closeIfUnconsumed()
+	}
 	execution.children.Wait()
+	if execution.attempt.transport != nil {
+		teardown = execution.attempt.transport.teardownSnapshot()
+	}
 	return termination, teardown
 }
 
 func (execution *receiverExecution) runEvents() receiverWorkflowResult {
 	for {
+		var terminal bool
+		var result receiverWorkflowResult
 		select {
 		case <-execution.attempt.ctx.Done():
-			return receiverWorkflowResult{cause: context.Cause(execution.attempt.ctx)}
+			terminal, result = execution.settleAttemptContext()
+		case expiration := <-execution.attempt.phases.expirationEvents():
+			terminal, result = execution.handlePhaseExpiration(expiration)
 		case event := <-execution.attempt.events:
-			done, result := execution.handleEvent(event)
-			if result.cause != nil || done {
-				return result
-			}
+			terminal, result = execution.settleAttemptEvent(event)
+		}
+		if terminal {
+			return result
 		}
 	}
+}
+
+func (execution *receiverExecution) settleAttemptContext() (bool, receiverWorkflowResult) {
+	cause := context.Cause(execution.attempt.ctx)
+	if owned, admitted, result := execution.settleAttachmentAtTerminal(cause); owned {
+		if admitted && execution.attempt.ctx.Err() == nil {
+			return false, receiverWorkflowResult{}
+		}
+		return true, result
+	}
+	return true, receiverWorkflowResult{cause: cause}
+}
+
+func (execution *receiverExecution) handlePhaseExpiration(
+	expiration peerPhaseExpiration,
+) (bool, receiverWorkflowResult) {
+	if expiration.phase == PeerAttemptPhaseNegotiation {
+		reconciled, reconcileErr := execution.reconcileOpen()
+		if reconcileErr != nil {
+			return true, receiverWorkflowResult{cause: reconcileErr}
+		}
+		if reconciled {
+			return false, receiverWorkflowResult{}
+		}
+	}
+	expired, settling := execution.attempt.phases.expire(expiration)
+	if !expired && !settling {
+		return false, receiverWorkflowResult{}
+	}
+	if owned, admitted, result := execution.settleAttachmentAtTerminal(expiration.cause); owned {
+		if admitted && execution.attempt.ctx.Err() == nil {
+			return false, receiverWorkflowResult{}
+		}
+		return true, result
+	}
+	return true, receiverPreOperationFailure(
+		expiration.cause,
+		receiverTimeoutProvenance(expiration.phase),
+	)
+}
+
+func (execution *receiverExecution) settleAttemptEvent(
+	event receiverEvent,
+) (bool, receiverWorkflowResult) {
+	done, result := execution.handleEvent(event)
+	if result.cause == nil && !done {
+		return false, receiverWorkflowResult{}
+	}
+	if execution.attachmentTerminalOwns {
+		execution.attachmentTerminalOwns = false
+		return true, result
+	}
+	if owned, _, settled := execution.settleAttachmentAtTerminal(result.cause); owned {
+		return true, settled
+	}
+	return true, result
 }
 
 func (execution *receiverExecution) handleEvent(event receiverEvent) (bool, receiverWorkflowResult) {
@@ -329,7 +387,12 @@ func (execution *receiverExecution) handleEvent(event receiverEvent) (bool, rece
 	case receiverChannelDone:
 		return true, receiverWorkflowResult{cause: execution.channelClosed(event.err)}
 	case receiverAttached:
-		return false, receiverWorkflowResult{cause: execution.finishAttachment(event)}
+		settled, admitted, result := execution.finishAttachment(event)
+		if !settled {
+			return false, receiverWorkflowResult{}
+		}
+		execution.attachmentTerminalOwns = !admitted
+		return !admitted, result
 	case receiverUnexpectedDataChannel:
 		return true, receiverWorkflowResult{cause: errors.Join(errChannelAdmission, event.err)}
 	default:
@@ -400,49 +463,114 @@ func (execution *receiverExecution) acceptAnswer(body []byte) receiverWorkflowRe
 }
 
 func (execution *receiverExecution) startAttachment() error {
-	if execution.channelOpened || execution.attachStarted {
-		return errors.Join(errChannelAdmission, errors.New("peer DataChannel opened more than once"))
+	if execution.channelOpened {
+		return nil
+	}
+	if execution.attachStarted {
+		return errors.Join(errChannelAdmission, errors.New("peer DataChannel admission started twice"))
+	}
+	phaseContext, transitioned, err := execution.attempt.phases.beginAdmission(execution.attempt.ctx)
+	if err != nil {
+		return err
+	}
+	if !transitioned {
+		return nil
 	}
 	execution.channelOpened = true
 	execution.attachStarted = true
+	execution.attempt.phaseContext = phaseContext
 	execution.children.Go(func() {
-		grant, err := execution.attempt.lanes.RequestLane(execution.attempt.ctx, 0)
-		var lane sessionruntime.LaneIdentity
-		if err == nil {
-			lane, err = execution.attempt.lanes.AttachLane(
-				execution.attempt.ctx, grant, execution.attempt.channel,
-			)
+		grant, err := execution.attempt.lanes.RequestLane(phaseContext, 0)
+		admission := sessionruntime.ReceiverLaneAdmissionResult{
+			Disposition:      sessionruntime.ReceiverLaneAdmissionUnverified,
+			LaneInstallation: sessionruntime.ReceiverLaneInstallationNotAttempted,
 		}
-		execution.attempt.push(receiverEvent{kind: receiverAttached, lane: lane, err: err})
+		if err == nil {
+			if !execution.attempt.transport.consume() {
+				err = ErrProtocol
+			} else {
+				admission, err = execution.attempt.lanes.AttachLane(
+					phaseContext, grant, execution.attempt.transport,
+				)
+			}
+		}
+		execution.resolveAttachment(receiverEvent{
+			kind: receiverAttached, grant: grant, admission: admission, err: err,
+		})
 	})
 	return nil
 }
 
-func (execution *receiverExecution) finishAttachment(event receiverEvent) error {
-	if event.err != nil || event.lane.ID == 0 || event.lane.Epoch == 0 {
-		return errors.Join(errChannelAdmission, event.err)
+func (execution *receiverExecution) resolveAttachment(event receiverEvent) {
+	execution.attachmentMu.Lock()
+	execution.attachmentResult = event
+	close(execution.attachmentDone)
+	execution.attachmentMu.Unlock()
+	execution.attempt.push(event)
+}
+
+func (execution *receiverExecution) finishAttachment(
+	event receiverEvent,
+) (bool, bool, receiverWorkflowResult) {
+	settlement, err := receiverAttachmentSettlement(event.grant, event.admission, event.err)
+	admitted := settlement == receiverAdmissionInstalled
+	if !execution.attempt.phases.settleReceiverAdmission(settlement) {
+		return false, false, receiverWorkflowResult{}
+	}
+	if !admitted {
+		result := receiverWorkflowResult{cause: errors.Join(errChannelAdmission, err)}
+		if settlement == receiverAdmissionAcceptedInstallationFailed {
+			result.decision = receiverOperationDecision(
+				ReceiverTerminalLocal,
+				ReceiverProvenanceLocalOperationContract,
+			)
+		}
+		return true, false, result
 	}
 	execution.attempt.resultMu.Lock()
-	execution.attempt.lane = event.lane
+	execution.attempt.lane = event.admission.Lane
 	execution.attempt.resultMu.Unlock()
 	close(execution.attempt.ready)
-	execution.stopDeadline()
-	return nil
+	return true, true, receiverWorkflowResult{}
+}
+
+func (execution *receiverExecution) settleAttachmentAtTerminal(
+	cause error,
+) (bool, bool, receiverWorkflowResult) {
+	if !execution.attachStarted {
+		execution.attempt.phases.terminate(cause)
+		return false, false, receiverWorkflowResult{}
+	}
+	execution.attempt.phases.terminate(cause)
+	<-execution.attachmentDone
+	execution.attachmentMu.Lock()
+	event := execution.attachmentResult
+	execution.attachmentMu.Unlock()
+	settled, admitted, result := execution.finishAttachment(event)
+	return settled, admitted, result
+}
+
+func (execution *receiverExecution) reconcileOpen() (bool, error) {
+	if execution.channelOpened {
+		return true, nil
+	}
+	select {
+	case <-execution.attempt.channel.Opened():
+		if err := execution.startAttachment(); err != nil {
+			return false, err
+		}
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 func (execution *receiverExecution) channelClosed(channelErr error) error {
 	if execution.attempt.ctx.Err() != nil {
 		return context.Cause(execution.attempt.ctx)
 	}
-	return errors.Join(errChannelAdmission, channelErr, errors.New("peer DataChannel closed"))
-}
-
-func (execution *receiverExecution) stopDeadline() {
-	if execution.timer == nil {
-		return
+	if execution.attempt.phases.admitted() {
+		return nil
 	}
-	execution.deadlineOnce.Do(func() {
-		close(execution.deadlineDone)
-		execution.timer.Stop()
-	})
+	return errors.Join(errChannelAdmission, channelErr, errors.New("peer DataChannel closed"))
 }

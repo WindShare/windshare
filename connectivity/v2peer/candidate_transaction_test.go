@@ -209,9 +209,10 @@ func TestSenderCandidateDeliveredUnknownMigratesThroughAuthenticatedReceiverOnce
 	receiverPeer := newReceiverTestPeerConnection()
 	receiverDataChannel := newReceiverTestChannel()
 	receiverPeerFactory, err := NewReceiverFactory(ReceiverFactoryConfig{
-		MaxCandidates:  2,
-		AttemptTimeout: 5 * time.Second,
-		Random:         bytes.NewReader(bytes.Repeat([]byte{0x71}, 256)),
+		MaxCandidates:     2,
+		NegotiationBudget: 5 * time.Second,
+		AdmissionBudget:   5 * time.Second,
+		Random:            bytes.NewReader(bytes.Repeat([]byte{0x71}, 256)),
 		PeerConnections: ReceiverPeerConnectionFactoryFunc(func(pion.Configuration) (ReceiverPeerConnection, error) {
 			return receiverPeer, nil
 		}),
@@ -256,17 +257,17 @@ func TestSenderCandidateDeliveredUnknownMigratesThroughAuthenticatedReceiverOnce
 			err      error
 		}{identity: identity, err: attachErr}
 	}()
-	receiverIdentity, err := receiverRuntime.AttachLane(ctx, grant, replacementReceiverLane)
+	receiverAdmission, err := receiverRuntime.AttachLane(ctx, grant, replacementReceiverLane)
 	if err != nil {
 		t.Fatal(err)
 	}
 	senderAttachment := receiveTest(t, attached)
-	if senderAttachment.err != nil || senderAttachment.identity != receiverIdentity {
+	if senderAttachment.err != nil || senderAttachment.identity != receiverAdmission.Lane {
 		t.Fatalf(
 			"replacement lane sender=%+v err=%v receiver=%+v",
 			senderAttachment.identity,
 			senderAttachment.err,
-			receiverIdentity,
+			receiverAdmission.Lane,
 		)
 	}
 

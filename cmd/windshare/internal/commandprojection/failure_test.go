@@ -52,7 +52,8 @@ func TestEveryRelayAndPeerCodeHasAnExplicitSafeMapping(t *testing.T) {
 
 	receiverClasses := []v2peer.ReceiverCauseClass{
 		v2peer.ReceiverCauseRuntimeClosed, v2peer.ReceiverCauseConfiguration,
-		v2peer.ReceiverCauseOperationMissing, v2peer.ReceiverCauseAttemptTimeout,
+		v2peer.ReceiverCauseOperationMissing, v2peer.ReceiverCauseNegotiationTimeout,
+		v2peer.ReceiverCauseAdmissionTimeout,
 		v2peer.ReceiverCauseCandidateLimit, v2peer.ReceiverCauseChannelAdmission,
 		v2peer.ReceiverCauseEventCapacity, v2peer.ReceiverCauseNegotiation,
 		v2peer.ReceiverCauseProtocol, v2peer.ReceiverCauseDeadline,

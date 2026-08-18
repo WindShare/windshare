@@ -2,10 +2,16 @@ import type { V2BrowserConnectivityAttemptDiagnostic } from '../../src/connectiv
 import type {
   HotSwitchLaneObservation,
   HotSwitchPageEvent,
+  HotSwitchRecoveryControl,
   ObservedTransferFailure,
 } from './hot-switch-contract'
 import type { V2FrozenSelectionPolicy } from '../../src/catalog/v2-selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import {
+  OneShotRelease,
+  OutputFence,
+  PagePeerRecoveryHarness,
+} from './hot-switch-page-transfer'
 import type {
   ReceiveLifecycleState,
   ReceiveLifecycleStatePayload,
@@ -51,13 +57,17 @@ export interface HotSwitchPageTransferRuntimeInput {
   readonly failureDiagnosticMaximumDepth: number
   readonly key: string
   readonly nativePeerUsable: boolean
+  readonly peerRecovery?: HotSwitchRecoveryControl
   readonly rtcConfiguration: RTCConfiguration
   readonly runtimePath: string
   readonly transferBytes: number
 }
 
 interface HotSwitchWindow extends Window {
+  __windshareAdvanceHotSwitchOutput?: () => void
+  __windshareDetachHotSwitchPeer?: () => Promise<void>
   __windshareHotSwitchEvent?: (event: HotSwitchPageEvent) => Promise<void>
+  __windshareReleaseHotSwitchAdmission?: () => void
   __windshareReleaseHotSwitchOutput?: () => void
   __windshareSealHotSwitchRelayCut?: () => Promise<void>
 }
@@ -114,49 +124,6 @@ class EvidenceBridge {
   }
 }
 
-class OneShotRelease {
-  readonly #released: Promise<void>
-  #release!: () => void
-  #didRelease = false
-
-  constructor() {
-    this.#released = new Promise<void>((resolveRelease) => {
-      this.#release = resolveRelease
-    })
-  }
-
-  release(): void {
-    if (this.#didRelease) return
-    this.#didRelease = true
-    this.#release()
-  }
-
-  wait(): Promise<void> {
-    return this.#released
-  }
-
-  async waitUntilReleased(signal: AbortSignal): Promise<void> {
-    signal.throwIfAborted()
-    await new Promise<void>((resolveRelease, rejectRelease) => {
-      const aborted = () => {
-        cleanup()
-        rejectRelease(signal.reason ?? new DOMException('Peer release aborted', 'AbortError'))
-      }
-      const released = () => {
-        cleanup()
-        resolveRelease()
-      }
-      const cleanup = () => signal.removeEventListener('abort', aborted)
-      signal.addEventListener('abort', aborted, { once: true })
-      if (signal.aborted) {
-        aborted()
-        return
-      }
-      this.#released.then(released, rejectRelease)
-    })
-  }
-}
-
 class RelayCutEvidence {
   readonly #bridge: EvidenceBridge
   readonly #activeRelayLanes = new Set<string>()
@@ -199,17 +166,13 @@ class DeliveryBuffer {
   outputSession(
     stream: StreamModule,
     outputSessionId: string,
-    outputRelease: OneShotRelease,
+    outputFence: OutputFence,
   ): DirectAtomicStreamOutput {
-    let outputFenceUsed = false
     const session = new stream.SingleFileStreamOutputSession(
       outputSessionId,
       new WritableStream<Uint8Array>({
         write: async (chunk) => {
-          if (!outputFenceUsed) {
-            outputFenceUsed = true
-            await outputRelease.wait()
-          }
+          await outputFence.waitForWrite()
           this.#chunks.push(chunk.slice())
         },
       }),
@@ -269,14 +232,26 @@ export function startHotSwitchPageTransfer(input: HotSwitchPageTransferRuntimeIn
   const bridge = new EvidenceBridge(exposedBridge, input.failureDiagnosticMaximumDepth)
   const relayCut = new RelayCutEvidence(bridge)
   const peerRelease = new OneShotRelease()
-  const outputRelease = new OneShotRelease()
-  hotSwitchWindow.__windshareReleaseHotSwitchOutput = () => outputRelease.release()
+  const outputFence = new OutputFence(input.peerRecovery !== undefined)
+  const peerHarness = new PagePeerRecoveryHarness(bridge, input.peerRecovery !== undefined)
+  hotSwitchWindow.__windshareAdvanceHotSwitchOutput = () => outputFence.advance()
+  hotSwitchWindow.__windshareDetachHotSwitchPeer = () => peerHarness.detachCurrentPeer()
+  hotSwitchWindow.__windshareReleaseHotSwitchAdmission = () => peerHarness.releaseAdmission()
+  hotSwitchWindow.__windshareReleaseHotSwitchOutput = () => outputFence.release()
   hotSwitchWindow.__windshareSealHotSwitchRelayCut = () => relayCut.seal()
 
   let runtimeTerminalPublished = false
-  const transferTask = runTransfer(input, bridge, relayCut, peerRelease, outputRelease, () => {
-    runtimeTerminalPublished = true
-  })
+  const transferTask = runTransfer(
+    input,
+    bridge,
+    relayCut,
+    peerRelease,
+    outputFence,
+    peerHarness,
+    () => {
+      runtimeTerminalPublished = true
+    },
+  )
   transferTask.catch(async (error: unknown) => {
     if (runtimeTerminalPublished) return
     runtimeTerminalPublished = true
@@ -289,7 +264,8 @@ async function runTransfer(
   bridge: EvidenceBridge,
   relayCut: RelayCutEvidence,
   peerRelease: OneShotRelease,
-  outputRelease: OneShotRelease,
+  outputFence: OutputFence,
+  peerHarness: PagePeerRecoveryHarness,
   markRuntimeTerminalPublished: () => void,
 ): Promise<void> {
   const modules = await loadProductModules()
@@ -300,16 +276,16 @@ async function runTransfer(
   let runtimeError: string | undefined
 
   try {
-    const gateway = createGateway(input, modules, bridge, relayCut, peerRelease)
+    const gateway = createGateway(input, modules, bridge, relayCut, peerRelease, peerHarness)
     joined = await gateway.join(input.key, window.location.href)
     const operation = await bindDirectAtomicOperation(
       input,
       joined,
       modules,
       delivery,
-      outputRelease,
+      outputFence,
     )
-    activation = joined.beginDownloadConnectivity('large')
+    activation = joined.beginDownloadConnectivity()
     deliveryStarted = true
     const result = await joined.transferJob(
       operation.plans,
@@ -373,7 +349,7 @@ async function bindDirectAtomicOperation(
   joined: JoinedReceiver,
   modules: ProductModules,
   delivery: DeliveryBuffer,
-  outputRelease: OneShotRelease,
+  outputFence: OutputFence,
 ): Promise<BoundDirectAtomicOperation> {
   const selection = joined.selection.snapshot()
   const selectionSpec = await modules.intent.createSelectionSpec({
@@ -454,7 +430,7 @@ async function bindDirectAtomicOperation(
           const output = delivery.outputSession(
             modules.stream,
             modules.intent.createOutputSessionID(),
-            outputRelease,
+            outputFence,
           )
           return Object.freeze({
             planKind: 'direct-atomic' as const,
@@ -546,6 +522,7 @@ function createGateway(
   bridge: EvidenceBridge,
   relayCut: RelayCutEvidence,
   peerRelease: OneShotRelease,
+  peerHarness: PagePeerRecoveryHarness,
 ): InstanceType<GatewayModule['V2BrowserReceiverGateway']> {
   const realOffers = new modules.offer.BrowserOfferChannelFactory({
     configuration: input.rtcConfiguration,
@@ -556,11 +533,13 @@ function createGateway(
       signal: AbortSignal,
       observer?: Parameters<typeof realOffers.offer>[2],
     ) => {
-      const [peer] = await Promise.all([
-        realOffers.offer(route, signal, observer),
-        peerRelease.waitUntilReleased(signal),
-      ])
-      return peer
+      const peer = input.peerRecovery === undefined
+        ? (await Promise.all([
+            realOffers.offer(route, signal, observer),
+            peerRelease.waitUntilReleased(signal),
+          ]))[0]
+        : await realOffers.offer(route, signal, observer)
+      return peerHarness.wrap(peer)
     },
   }
   return new modules.gateway.V2BrowserReceiverGateway({
@@ -569,6 +548,17 @@ function createGateway(
     connectivityObserver: (diagnostic: V2BrowserConnectivityAttemptDiagnostic) => {
       bridge.publish({ kind: 'attempt', evidence: diagnostic }).catch(() => undefined)
     },
+    ...(input.peerRecovery === undefined
+      ? {}
+      : {
+          peerRecovery: {
+            policy: input.peerRecovery.policy,
+            random: () => 0,
+            observer: (diagnostic) => {
+              bridge.publish({ kind: 'recovery', evidence: diagnostic }).catch(() => undefined)
+            },
+          },
+        }),
     onBlockDispatched: (observation) => {
       bridge.publish({
         kind: 'dispatch',
@@ -582,7 +572,10 @@ function createGateway(
       if (observation.route === 'relay') peerRelease.release()
     },
     onContentLaneAdmitted: (observation) => relayCut.admit(observation),
-    onContentLaneDetached: (observation) => relayCut.detach(observation),
+    onContentLaneDetached: (observation) => {
+      relayCut.detach(observation)
+      peerHarness.observeDetachment(observation)
+    },
   })
 }
 

@@ -7,6 +7,8 @@ import {
   type V2RelayReceiverConnection,
 } from '../transport/relay/v2-receiver'
 
+export const V2_RELAY_LANE_ADMISSION_TIMEOUT_MILLISECONDS = 30_000
+
 export interface V2ProtocolGenerationCore {
   readonly relay: V2RelayReceiverConnection
   readonly session: V2ReceiverSessionRuntime
@@ -107,15 +109,23 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
   ): Promise<V2AttachedRelay> {
     this.#requireOpen()
     const relay = await this.#dialValidatedRelay(signal)
+    const admission = relayAdmissionDeadline(signal)
     try {
       // A redial gets a new delivery route and a new logical lane grant. It
       // never treats RelaySessionID as ProtocolSession resumption authority.
-      const grant = await session.requestLaneGrant(0, { signal })
-      await session.attachGrantedLane(relay.channel, grant, signal)
+      const grant = await session.requestLaneGrant(0, { signal: admission.signal })
+      const result = await session.adoptGrantedLane(
+        relay.channel,
+        grant,
+        { signal: admission.signal },
+      )
+      if (result.installation !== 'installed') throw result.error
       return Object.freeze({ relay, laneId: grant.laneId })
     } catch (error) {
       await relay.close().catch(() => undefined)
       throw error
+    } finally {
+      admission.close()
     }
   }
 
@@ -153,6 +163,28 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
   #requireOpen(): void {
     if (this.#closed) throw new Error('Receiver session factory is closed')
   }
+}
+
+function relayAdmissionDeadline(parent: AbortSignal): {
+  readonly signal: AbortSignal
+  readonly close: () => void
+} {
+  const controller = new AbortController()
+  const abort = () => controller.abort(
+    parent.reason ?? new DOMException('Relay lane admission aborted', 'AbortError'),
+  )
+  parent.addEventListener('abort', abort, { once: true })
+  if (parent.aborted) abort()
+  const timer = globalThis.setTimeout(() => {
+    controller.abort(new DOMException('Relay lane admission timed out', 'TimeoutError'))
+  }, V2_RELAY_LANE_ADMISSION_TIMEOUT_MILLISECONDS)
+  return Object.freeze({
+    signal: controller.signal,
+    close: () => {
+      globalThis.clearTimeout(timer)
+      parent.removeEventListener('abort', abort)
+    },
+  })
 }
 
 function requireSameDescriptor(expected: V2ShareDescriptor, candidate: V2ShareDescriptor): void {

@@ -17,7 +17,6 @@ func TestSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *te
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
 		Now:                          func() time.Time { return now },
 		RetiredBindingTTL:            time.Minute,
-		MaxActiveAttempts:            1,
 		MaxSessionEvidenceIdentities: 2,
 	})
 	session := newTestPeerSession(121)
@@ -34,10 +33,12 @@ func TestSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *te
 	if failure := receiveTest(t, session.failures); failure.operation != operation {
 		t.Fatalf("first rejection = %#v", failure)
 	}
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 3 })
-	terminal := collector.forAttempt(binding.AttemptID)[2]
+	waitForTest(t, func() bool {
+		return senderAttemptReachedTerminal(collector.forAttempt(binding.AttemptID), SenderAttemptFailed)
+	})
+	terminal := collector.forAttempt(binding.AttemptID)[1]
 	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
-		terminal.Failure.FailedAtStage != SenderAttemptAnswerCreated ||
+		terminal.Failure.FailedAtStage != SenderAttemptNegotiationDeadlineArmed ||
 		terminal.Failure.TypedPeerErrorCode != TypedPeerErrorSignaling {
 		t.Fatalf("recovered rejection terminal = %#v", terminal)
 	}
@@ -49,11 +50,11 @@ func TestSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *te
 		t.Fatalf("replayed malformed offer: %v", err)
 	}
 	receiveTest(t, session.failures)
-	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 3 {
+	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 2 {
 		t.Fatalf("expired replay tombstone restarted evidence: %#v", observations)
 	}
 	handler.mu.Lock()
-	claims := handler.evidenceAuthority.claimCount()
+	claims := len(handler.evidenceAuthority.claims)
 	exhausted := handler.evidenceAuthority.terminal
 	handler.mu.Unlock()
 	if claims != 1 || exhausted {
@@ -127,7 +128,7 @@ func TestSenderEvidenceClaimsReleaseOnlyWithProtocolSession(t *testing.T) {
 		t.Fatalf("claimed identity restarted: %v", err)
 	}
 	handler.stopAll()
-	if handler.evidenceAuthority.claimCount() != 0 {
+	if len(handler.evidenceAuthority.claims) != 0 {
 		t.Fatalf("session shutdown retained evidence claims: %#v", handler.evidenceAuthority)
 	}
 }
@@ -180,7 +181,7 @@ func TestSenderCanceledBeforeEnqueueStillTerminalizesFirstBinding(t *testing.T) 
 				t.Fatalf("canceled enqueue error = %v", err)
 			}
 			waitForTest(t, func() bool {
-				return len(collector.forAttempt(binding.AttemptID)) == 3
+				return senderAttemptReachedTerminal(collector.forAttempt(binding.AttemptID), SenderAttemptFailed)
 			})
 			assertUnstartedSenderTerminal(
 				t,
@@ -191,7 +192,7 @@ func TestSenderCanceledBeforeEnqueueStillTerminalizesFirstBinding(t *testing.T) 
 			if err := handler.HandleMessage(messageContext, message); !errors.Is(err, context.Canceled) {
 				t.Fatalf("canceled replay error = %v", err)
 			}
-			if observations := collector.forAttempt(binding.AttemptID); len(observations) != 3 {
+			if observations := collector.forAttempt(binding.AttemptID); len(observations) != 2 {
 				t.Fatalf("canceled enqueue replay restarted evidence: %#v", observations)
 			}
 		})
@@ -217,14 +218,16 @@ func TestSenderShutdownTerminalizesQueuedOfferBeforeClaimsRelease(t *testing.T) 
 	}
 
 	handler.stopAll()
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 3 })
+	waitForTest(t, func() bool {
+		return senderAttemptReachedTerminal(collector.forAttempt(binding.AttemptID), SenderAttemptFailed)
+	})
 	assertUnstartedSenderTerminal(
 		t,
 		collector.forAttempt(binding.AttemptID),
 		AttemptFailureScopeSession,
 		TypedPeerErrorStopped,
 	)
-	if handler.evidenceAuthority.claimCount() != 0 {
+	if len(handler.evidenceAuthority.claims) != 0 {
 		t.Fatalf("shutdown retained claims after publishing terminals: %#v", handler.evidenceAuthority)
 	}
 }
@@ -266,21 +269,23 @@ func TestSenderShutdownWaitsForAdmittedIngressBeforeReleasingClaims(t *testing.T
 	}
 	handler.ingress.Done()
 	receiveTest(t, stopDone)
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 3 })
+	waitForTest(t, func() bool {
+		return senderAttemptReachedTerminal(collector.forAttempt(binding.AttemptID), SenderAttemptFailed)
+	})
 	assertUnstartedSenderTerminal(
 		t,
 		collector.forAttempt(binding.AttemptID),
 		AttemptFailureScopeSession,
 		TypedPeerErrorStopped,
 	)
-	if handler.evidenceAuthority.claimCount() != 0 {
+	if len(handler.evidenceAuthority.claims) != 0 {
 		t.Fatalf("crossing shutdown retained claims: %#v", handler.evidenceAuthority)
 	}
 
 	if err := handler.HandleMessage(messageContext, message); !errors.Is(err, context.Canceled) {
 		t.Fatalf("post-shutdown ingress error = %v", err)
 	}
-	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 3 {
+	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 2 {
 		t.Fatalf("post-shutdown ingress restarted evidence: %#v", observations)
 	}
 }
@@ -311,7 +316,7 @@ func TestSenderDistinctBindingRejectionIsNotSuppressedByActiveOperation(t *testi
 		t.Fatalf("distinct binding rejection: %v", err)
 	}
 	waitForTest(t, func() bool {
-		return len(collector.forAttempt(rejectedBinding.AttemptID)) == 3
+		return senderAttemptReachedTerminal(collector.forAttempt(rejectedBinding.AttemptID), SenderAttemptFailed)
 	})
 	assertUnstartedSenderTerminal(
 		t,
@@ -323,7 +328,7 @@ func TestSenderDistinctBindingRejectionIsNotSuppressedByActiveOperation(t *testi
 	if err := handler.terminalizeUnstartedOffer(event, senderAttemptCancelledFailure()); err != nil {
 		t.Fatalf("distinct binding replay: %v", err)
 	}
-	if observations := collector.forAttempt(rejectedBinding.AttemptID); len(observations) != 3 {
+	if observations := collector.forAttempt(rejectedBinding.AttemptID); len(observations) != 2 {
 		t.Fatalf("distinct binding replay restarted evidence: %#v", observations)
 	}
 }
@@ -335,13 +340,12 @@ func assertUnstartedSenderTerminal(
 	wantCode TypedPeerErrorCode,
 ) {
 	t.Helper()
-	if len(observations) != 3 || observations[0].Stage != SenderAttemptStarted ||
-		observations[1].Stage != SenderAttemptOfferReceived {
+	if len(observations) != 2 || observations[0].Stage != SenderAttemptStarted {
 		t.Fatalf("unstarted sender evidence = %#v", observations)
 	}
-	terminal := observations[2]
+	terminal := observations[1]
 	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
-		terminal.Failure.FailedAtStage != SenderAttemptAnswerCreated ||
+		terminal.Failure.FailedAtStage != SenderAttemptNegotiationDeadlineArmed ||
 		terminal.Failure.Scope != wantScope || terminal.Failure.TypedPeerErrorCode != wantCode {
 		t.Fatalf("unstarted sender terminal = %#v", terminal)
 	}

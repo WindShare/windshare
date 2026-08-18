@@ -294,6 +294,19 @@ func (visitor *encodeVisitorV2) VisitPeerAttemptObserved(event clievent.PeerAtte
 	visitor.record.AttemptSequence = decimalPointer(event.Sequence())
 	visitor.record.AttemptElapsedMS = decimalPointer(event.ElapsedMillis())
 	visitor.record.Stage = new(stage)
+	if operation, ok := event.OfferOperationID(); ok {
+		visitor.record.PeerOfferOperationID = new(operation.Hex())
+	}
+	if phase, deadline, ok := event.PhaseDeadline(); ok {
+		phaseName, err := nameOf(phase)
+		if err != nil {
+			return err
+		}
+		visitor.record.PeerPhase = new(phaseName)
+		if deadline != 0 {
+			visitor.record.PeerDeadlineMS = decimalPointer(deadline)
+		}
+	}
 	if candidates, ok := event.Candidates(); ok {
 		visitor.record.CandidatesLocalEmitted = new(candidates.LocalEmitted)
 		visitor.record.CandidatesRemoteAccepted = new(candidates.RemoteAccepted)
@@ -301,7 +314,38 @@ func (visitor *encodeVisitorV2) VisitPeerAttemptObserved(event clievent.PeerAtte
 	if lane, ok := event.Lane(); ok {
 		visitor.setLane(lane)
 	}
+	if operation, ok := event.GrantOperationID(); ok {
+		visitor.record.PeerGrantOperationID = new(operation.Hex())
+	}
+	if disposition, delivery, ok := event.Admission(); ok {
+		dispositionName, err := nameOf(disposition)
+		if err != nil {
+			return err
+		}
+		deliveryName, err := nameOf(delivery)
+		if err != nil {
+			return err
+		}
+		visitor.record.PeerAdmissionDisposition = new(dispositionName)
+		visitor.record.PeerResponseDelivery = new(deliveryName)
+	}
+	if rejection, retryAfter, ok := event.Rejection(); ok {
+		rejectionName, err := nameOf(rejection)
+		if err != nil {
+			return err
+		}
+		visitor.record.PeerLaneRejectionCode = new(rejectionName)
+		if retryAfter != 0 {
+			visitor.record.PeerRejectionRetryAfterMS = decimalPointer(retryAfter)
+		}
+	}
 	if scope, failure, ok := event.Failure(); ok {
+		failedAt, _ := event.FailedAtStage()
+		failedAtName, err := nameOf(failedAt)
+		if err != nil {
+			return err
+		}
+		visitor.record.PeerFailedAtStage = new(failedAtName)
 		scopeName, err := nameOf(scope)
 		if err != nil {
 			return err
