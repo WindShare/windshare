@@ -1,6 +1,6 @@
 # Windows checkpoint resume failure after an interrupted download
 
-Status: root cause confirmed on 2026-08-17; the retained download state is recoverable after the runtime fix.
+Status: resolved and archived on 2026-08-18; retained download state is recoverable with fixed binaries.
 
 ## Summary
 
