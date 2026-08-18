@@ -42,4 +42,7 @@ go test ./scripts/ci/_gopackages
 echo "-- Go validation package ownership"
 go run ./scripts/ci/_gopackages -set all >/dev/null
 
+echo "-- Named Go test suite selection tests"
+go test ./scripts/ci/_gotestsuite
+
 echo "== hygiene: PASS in ${SECONDS}s =="

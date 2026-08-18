@@ -18,14 +18,14 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 }
 
 Write-Output '== long-go =='
-Invoke-Step 'named E2E long suites' { go test -count=1 -run '^TestLong' ./e2e }
+Invoke-Step 'named E2E long suites' { go run ./scripts/ci/_gotestsuite -run '^TestLong' ./e2e }
 Invoke-Step 'integration packages' {
     go test -count=1 ./integration/relayv2 ./integration/v2peer
 }
 Invoke-Step 'catalog long suites' {
-    go test -count=1 -run '^TestLong' ./core/catalog
+    go run ./scripts/ci/_gotestsuite -run '^TestLong' ./core/catalog
 }
 Invoke-Step 'output runtime long suites' {
-    go test -count=1 -run '^TestLong' ./core/osfs/internal/outputruntime
+    go run ./scripts/ci/_gotestsuite -run '^TestLong' ./core/osfs/internal/outputruntime
 }
 Write-Output ('== long-go: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)
