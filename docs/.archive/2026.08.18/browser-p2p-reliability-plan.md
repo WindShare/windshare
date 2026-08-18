@@ -54,7 +54,7 @@ Extend the real Chromium/Pion product scenario with a controlled admission delay
 - `connectivity/v2peer`: sender phase state, deadlines, admission settlement, and typed failure evidence.
 - `core/session/protocolsession` and `core/session/sessionruntime`: bounded grant and authenticated lane-admission lifecycle.
 - `web/src/session`: grant and LaneHello admission milestones.
-- `cmd/windshare/internal`: safe trace projection for the new lifecycle facts.
+- `cmd/wind/internal`: safe trace projection for the new lifecycle facts.
 - `web/e2e` and transport integration suites: delayed Chromium/Pion admission and recovery scenarios.
 - `docs/协议规范.md`, `docs/威胁模型.md`, product clarification, and user-facing behavior docs: replace stale 0/8 and retry semantics when implementation lands.
 

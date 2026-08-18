@@ -167,12 +167,12 @@ function CliTab() {
         <div className="portal-code-block">
           <span className="portal-code-text">
             <span className="portal-code-prompt">$</span>
-            windshare share ./My-Project-Folder
+            wind share ./My-Project-Folder
           </span>
           <button
             type="button"
             className="portal-btn-copy"
-            onClick={() => handleCopy('windshare share ./My-Project-Folder', 'share')}
+            onClick={() => handleCopy('wind share ./My-Project-Folder', 'share')}
           >
             {copiedKey === 'share' ? '✓ 已复制' : '复制'}
           </button>
