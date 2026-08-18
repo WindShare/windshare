@@ -13,6 +13,8 @@ import { DirectProcess } from './direct-process'
 const execFileAsync = promisify(execFile)
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const WEB_ROOT = join(REPOSITORY_ROOT, 'web')
+const NATIVE_CLI_EXECUTABLE = 'wind'
+const NATIVE_CLI_PACKAGE = './cmd/wind'
 const BUILD_TIMEOUT_MILLISECONDS = 60_000
 const BUILD_OUTPUT_LIMIT_BYTES = 1_000_000
 const PROCESS_READINESS_TIMEOUT_MILLISECONDS = 20_000
@@ -55,7 +57,7 @@ export interface DirectDirectoryEntry {
 export interface DirectBinaryPaths {
   readonly directory: string
   readonly relay: string
-  readonly windshare: string
+  readonly wind: string
 }
 
 export class DirectProductStack {
@@ -128,7 +130,7 @@ export class DirectProductStack {
     validateBlockSize(blockSizeBytes)
     this.#senderSequence += 1
     const operationId = `${this.#scenarioId}-sender-${this.#senderSequence}`
-    const sender = this.#track(new DirectProcess(binaries.windshare, [
+    const sender = this.#track(new DirectProcess(binaries.wind, [
       'share',
       path,
       '--relay',
@@ -217,7 +219,7 @@ export class DirectProductStack {
     const binaries = directBinaryPaths(output)
     await Promise.all([
       buildGoBinary(binaries.relay, './relay/cmd/wsrelay'),
-      buildGoBinary(binaries.windshare, './cmd/windshare'),
+      buildGoBinary(binaries.wind, NATIVE_CLI_PACKAGE),
     ])
     return binaries
   }
@@ -405,7 +407,7 @@ export function directBinaryPaths(
   return Object.freeze({
     directory,
     relay: join(directory, executableName('wsrelay', platform)),
-    windshare: join(directory, executableName('windshare', platform)),
+    wind: join(directory, executableName(NATIVE_CLI_EXECUTABLE, platform)),
   })
 }
 
