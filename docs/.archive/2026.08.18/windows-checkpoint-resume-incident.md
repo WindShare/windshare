@@ -219,8 +219,8 @@ On Windows, an interrupted transfer can become temporarily non-resumable when it
 
 Affected commands include:
 
-- repeated `windshare get` for the same selection and destination;
-- `windshare resume list`, because listing reconciles operation snapshots;
+- repeated `wind get` for the same selection and destination;
+- `wind resume list`, because listing reconciles operation snapshots;
 - discard flows that depend on obtaining the same inventory snapshot.
 
 Published files and the operation registry remain authenticated. The retained private state is evidence needed for recovery and should be preserved until a fixed binary reconciles it.
