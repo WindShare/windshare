@@ -196,6 +196,36 @@ func ProjectSenderAttempt(
 		Command: command, Session: session, PeerPath: path, Attempt: attempt,
 		Sequence: value.SideSequence, ElapsedMillis: value.AttemptElapsedMillis, Stage: stage,
 	}
+	if err := projectSenderAttemptEvidence(&spec, value); err != nil {
+		return clievent.PeerAttemptObserved{}, err
+	}
+	event, err := clievent.NewPeerAttemptObserved(spec)
+	if err != nil {
+		return clievent.PeerAttemptObserved{}, ErrInvalidProjection
+	}
+	return event, nil
+}
+
+func projectSenderAttemptEvidence(
+	spec *clievent.PeerAttemptSpec,
+	value v2peer.SenderAttemptObservation,
+) error {
+	var err error
+	var ok bool
+	if !value.OfferOperationID.IsZero() {
+		spec.OfferOperation, err = ProtocolOperationID(value.OfferOperationID)
+		if err != nil {
+			return ErrInvalidProjection
+		}
+		spec.HasOfferOperation = true
+	}
+	if value.DeadlineMillis != 0 || value.Phase != "" {
+		spec.Phase, ok = projectPeerPhase(value.Phase)
+		if !ok {
+			return ErrInvalidProjection
+		}
+		spec.DeadlineMillis = value.DeadlineMillis
+	}
 	if value.CandidateCounts != nil {
 		spec.Candidates = clievent.CandidateCounts{
 			LocalEmitted:   value.CandidateCounts.LocalEmitted,
@@ -203,28 +233,52 @@ func ProjectSenderAttempt(
 		}
 		spec.HasCandidates = true
 	}
+	if !value.GrantOperationID.IsZero() {
+		spec.GrantOperation, err = ProtocolOperationID(value.GrantOperationID)
+		if err != nil {
+			return ErrInvalidProjection
+		}
+		spec.HasGrantOperation = true
+	}
 	if value.Lane != nil {
 		spec.Lane, err = LaneIdentity(*value.Lane)
 		if err != nil {
-			return clievent.PeerAttemptObserved{}, ErrInvalidProjection
+			return ErrInvalidProjection
 		}
 		spec.HasLane = true
 	}
+	if value.AdmissionDisposition != "" || value.ResponseDelivery != "" {
+		spec.AdmissionDisposition, ok = projectPeerAdmissionDisposition(value.AdmissionDisposition)
+		if !ok {
+			return ErrInvalidProjection
+		}
+		spec.ResponseDelivery, ok = projectPeerResponseDelivery(value.ResponseDelivery)
+		if !ok {
+			return ErrInvalidProjection
+		}
+	}
+	if value.Rejection != nil {
+		spec.RejectionCode, ok = projectPeerLaneRejection(value.Rejection.Code)
+		if !ok {
+			return ErrInvalidProjection
+		}
+		spec.RejectionRetryAfterMillis = value.Rejection.RetryAfterMillis
+	}
 	if value.Failure != nil {
+		spec.FailedAtStage, ok = projectPeerStage(value.Failure.FailedAtStage)
+		if !ok {
+			return ErrInvalidProjection
+		}
 		spec.FailureScope, ok = projectPeerFailureScope(value.Failure.Scope)
 		if !ok {
-			return clievent.PeerAttemptObserved{}, ErrInvalidProjection
+			return ErrInvalidProjection
 		}
 		spec.Failure, ok = ProjectPeerErrorCode(value.Failure.TypedPeerErrorCode)
 		if !ok {
-			return clievent.PeerAttemptObserved{}, ErrInvalidProjection
+			return ErrInvalidProjection
 		}
 	}
-	event, err := clievent.NewPeerAttemptObserved(spec)
-	if err != nil {
-		return clievent.PeerAttemptObserved{}, ErrInvalidProjection
-	}
-	return event, nil
+	return nil
 }
 
 func ProjectTransferLifecycle(value transfer.TransferLifecycleTrace) (clievent.TransferLifecycleObserved, error) {

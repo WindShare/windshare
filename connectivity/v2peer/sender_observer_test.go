@@ -13,20 +13,46 @@ import (
 	"github.com/windshare/windshare/core/session/sessionruntime"
 )
 
-type selectedPairTestPeer struct {
-	*testPeerConnection
-	pair *pion.ICECandidatePair
-	err  error
-}
-
-func (peer *selectedPairTestPeer) SelectedCandidatePair() (*pion.ICECandidatePair, error) {
-	return peer.pair, peer.err
-}
-
 type senderObservationCollector struct {
 	mu           sync.Mutex
 	source       <-chan SenderAttemptObservation
 	observations []SenderAttemptObservation
+}
+
+var successfulSenderAttemptStages = []SenderAttemptStage{
+	SenderAttemptStarted,
+	SenderAttemptNegotiationDeadlineArmed,
+	SenderAttemptOfferReceived,
+	SenderAttemptAnswerCreated,
+	SenderAttemptAnswerSent,
+	SenderAttemptDataChannelOpen,
+	SenderAttemptAdmissionDeadlineArmed,
+	SenderAttemptLaneHelloAuthenticated,
+	SenderAttemptAdmissionResponseSettled,
+	SenderAttemptAdmitted,
+}
+
+func senderAttemptReachedTerminal(
+	observations []SenderAttemptObservation,
+	terminal SenderAttemptStage,
+) bool {
+	return len(observations) != 0 && observations[len(observations)-1].Stage == terminal
+}
+
+func assertSenderAttemptStages(
+	t *testing.T,
+	observations []SenderAttemptObservation,
+	want []SenderAttemptStage,
+) {
+	t.Helper()
+	if len(observations) != len(want) {
+		t.Fatalf("sender attempt stage count = %d, want %d: %#v", len(observations), len(want), observations)
+	}
+	for index, observation := range observations {
+		if observation.Stage != want[index] {
+			t.Fatalf("sender attempt stage[%d] = %q, want %q", index, observation.Stage, want[index])
+		}
+	}
 }
 
 type candidateDropTestSession struct {
@@ -41,12 +67,32 @@ type closingAdmissionTestSession struct {
 func (session *closingAdmissionTestSession) AdmitPeerChannel(
 	_ context.Context,
 	channel protocolsession.FrameChannel,
-) (sessionruntime.LaneIdentity, error) {
-	session.admissions <- channel
-	if err := channel.Close(); err != nil {
-		return sessionruntime.LaneIdentity{}, err
+	control sessionruntime.SenderPeerAdmissionControl,
+) (sessionruntime.SenderPeerAdmissionResult, error) {
+	session.admissions <- receiverObservedChannel(channel)
+	grantOperation := testOperationID(249)
+	if !control.BeginAuthenticatedSettlement(grantOperation, session.lane) {
+		_ = channel.Close()
+		return sessionruntime.SenderPeerAdmissionResult{
+			Disposition:      sessionruntime.SenderPeerAdmissionSilentClose,
+			ResponseDelivery: sessionruntime.SenderPeerResponseNotAttempted,
+			LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+		}, context.Canceled
 	}
-	return session.lane, nil
+	if err := channel.Close(); err != nil {
+		return sessionruntime.SenderPeerAdmissionResult{
+			SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
+			Disposition:      sessionruntime.SenderPeerAdmissionAccepted,
+			ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
+			LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentFailed,
+		}, err
+	}
+	return sessionruntime.SenderPeerAdmissionResult{
+		SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
+		Disposition:      sessionruntime.SenderPeerAdmissionAccepted,
+		ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
+		LaneAttachment:   sessionruntime.SenderPeerLaneAttached,
+	}, nil
 }
 
 func (session *candidateDropTestSession) SendPeerControl(
@@ -109,21 +155,8 @@ func mustTestFactoryWithSenderCollector(
 	return factory
 }
 
-func TestSenderAttemptStreamEmitsExactSuccessfulLifecycle(t *testing.T) {
-	basePeer := newTestPeerConnection()
-	peer := &selectedPairTestPeer{
-		testPeerConnection: basePeer,
-		pair: &pion.ICECandidatePair{
-			Local: &pion.ICECandidate{
-				Address: "10.0.0.5", Port: 41000, Protocol: pion.ICEProtocolUDP,
-				Typ: pion.ICECandidateTypeHost,
-			},
-			Remote: &pion.ICECandidate{
-				Address: "10.0.0.6", Port: 42000, Protocol: pion.ICEProtocolUDP,
-				Typ: pion.ICECandidateTypePrflx,
-			},
-		},
-	}
+func TestSenderAttemptObservationEmitsExactSuccessfulLifecycle(t *testing.T) {
+	peer := newTestPeerConnection()
 	channel := newTestPeerChannel()
 	channel.opened = make(chan struct{})
 	collector := &senderObservationCollector{}
@@ -165,24 +198,35 @@ func TestSenderAttemptStreamEmitsExactSuccessfulLifecycle(t *testing.T) {
 		t.Fatalf("channel admitted before Opened completed: %T", admission)
 	case <-time.After(25 * time.Millisecond):
 	}
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) >= 4 })
-	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 4 {
+	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) >= 5 })
+	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 5 {
 		t.Fatalf("pre-open observations = %#v", observations)
 	}
 	close(channel.opened)
 	if admitted := receiveTest(t, session.admissions); admitted != channel {
 		t.Fatalf("admitted channel = %T, want injected channel", admitted)
 	}
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 7 })
+	admittedOwner := receiveTest(t, session.ownedAdmissions)
+	waitForTest(t, func() bool {
+		observed := collector.forAttempt(binding.AttemptID)
+		return len(observed) != 0 && (observed[len(observed)-1].Stage == SenderAttemptAdmitted ||
+			observed[len(observed)-1].Stage == SenderAttemptFailed)
+	})
 
 	observations := collector.forAttempt(binding.AttemptID)
+	if len(observations) != 10 {
+		t.Fatalf("successful lifecycle stages = %v", attemptObservationStages(observations))
+	}
 	wantStages := []SenderAttemptStage{
 		SenderAttemptStarted,
+		SenderAttemptNegotiationDeadlineArmed,
 		SenderAttemptOfferReceived,
 		SenderAttemptAnswerCreated,
 		SenderAttemptAnswerSent,
 		SenderAttemptDataChannelOpen,
-		SenderAttemptLaneAdmissionStarted,
+		SenderAttemptAdmissionDeadlineArmed,
+		SenderAttemptLaneHelloAuthenticated,
+		SenderAttemptAdmissionResponseSettled,
 		SenderAttemptAdmitted,
 	}
 	for index, observation := range observations {
@@ -202,32 +246,35 @@ func TestSenderAttemptStreamEmitsExactSuccessfulLifecycle(t *testing.T) {
 		if observation.Failure != nil {
 			t.Fatalf("success observation[%d] carried failure %#v", index, observation.Failure)
 		}
-		if index < 2 && observation.CandidateCounts != nil {
+		if index < 3 && observation.CandidateCounts != nil {
 			t.Fatalf("early observation[%d] carried counts %#v", index, observation.CandidateCounts)
 		}
-		if index >= 2 && observation.CandidateCounts == nil {
+		if index >= 3 && observation.CandidateCounts == nil {
 			t.Fatalf("observation[%d] omitted candidate counts", index)
 		}
-		if index >= 4 && *observation.CandidateCounts != (SenderCandidateCounts{LocalEmitted: 1, RemoteAccepted: 1}) {
+		if index >= 5 && *observation.CandidateCounts != (SenderCandidateCounts{LocalEmitted: 1, RemoteAccepted: 1}) {
 			t.Fatalf("candidate counts[%d] = %#v", index, observation.CandidateCounts)
 		}
-		if index < 5 && observation.Lane != nil {
+		if index < 7 && observation.Lane != nil {
 			t.Fatalf("observation[%d] carried premature lane %#v", index, observation.Lane)
 		}
-		if index >= 5 && (observation.Lane == nil || *observation.Lane != session.lane) {
+		if index >= 7 && (observation.Lane == nil || *observation.Lane != session.lane) {
 			t.Fatalf("lane[%d] = %#v", index, observation.Lane)
 		}
-		if index < 6 && observation.SelectedPair != nil {
-			t.Fatalf("observation[%d] carried premature selected pair", index)
-		}
 	}
-	selected := observations[6].SelectedPair
-	if selected == nil || selected.Local.AddressFamily != "ipv4" || selected.Remote.AddressFamily != "ipv4" ||
-		selected.Local.CandidateType != "host" || selected.Remote.CandidateType != "prflx" {
-		t.Fatalf("selected pair = %#v", selected)
+	if observations[0].OfferOperationID != operation || observations[7].GrantOperationID.IsZero() {
+		t.Fatalf("operation correlation = %#v", observations)
+	}
+	if observations[1].Phase != SenderAttemptPhaseNegotiation || observations[1].DeadlineMillis == 0 ||
+		observations[6].Phase != SenderAttemptPhaseAdmission || observations[6].DeadlineMillis == 0 {
+		t.Fatalf("phase deadlines = %#v", observations)
+	}
+	if observations[8].AdmissionDisposition != SenderAdmissionAccepted ||
+		observations[8].ResponseDelivery != SenderResponseDelivered {
+		t.Fatalf("admission settlement = %#v", observations[8])
 	}
 
-	if err := channel.Close(); err != nil {
+	if err := admittedOwner.Close(); err != nil {
 		t.Fatal(err)
 	}
 	receiveTest(t, peer.closed)
@@ -238,7 +285,7 @@ func TestSenderAttemptStreamEmitsExactSuccessfulLifecycle(t *testing.T) {
 		_, retired := handler.retiredOperations[operationKey]
 		return retired
 	})
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 7 })
+	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 10 })
 	select {
 	case failure := <-session.failures:
 		t.Fatalf("normal post-admission close emitted failure %#v", failure)
@@ -257,13 +304,13 @@ func TestSenderAttemptStreamEmitsExactSuccessfulLifecycle(t *testing.T) {
 	if replayFailure.operation != replayOperation {
 		t.Fatalf("replay failure = %#v", replayFailure)
 	}
-	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 7 {
+	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 10 {
 		t.Fatalf("binding replay restarted evidence stream: %#v", observations)
 	}
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
-func TestSenderAttemptStreamAdmissionWinsImmediateNormalClose(t *testing.T) {
+func TestSenderAttemptObservationImmediateCloseHasOneSafeTerminal(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
 	channel := newTestPeerChannel()
@@ -284,10 +331,22 @@ func TestSenderAttemptStreamAdmissionWinsImmediateNormalClose(t *testing.T) {
 	peer.emitDataChannel(&pion.DataChannel{})
 	receiveTest(t, baseSession.admissions)
 	receiveTest(t, peer.closed)
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 7 })
+	waitForTest(t, func() bool {
+		observed := collector.forAttempt(binding.AttemptID)
+		return len(observed) != 0 && (observed[len(observed)-1].Stage == SenderAttemptAdmitted ||
+			observed[len(observed)-1].Stage == SenderAttemptFailed)
+	})
 	observed := collector.forAttempt(binding.AttemptID)
-	if terminal := observed[len(observed)-1]; terminal.Stage != SenderAttemptAdmitted || terminal.Failure != nil {
+	terminal := observed[len(observed)-1]
+	if len(observed) != 8 && len(observed) != 10 {
+		t.Fatalf("immediate-close lifecycle stages = %v", attemptObservationStages(observed))
+	}
+	if terminal.Stage != SenderAttemptAdmitted && terminal.Stage != SenderAttemptFailed {
 		t.Fatalf("immediate-close terminal = %#v", terminal)
+	}
+	if terminal.Failure != nil && (terminal.Failure.Message != "" ||
+		(terminal.Failure.Operation != nil && terminal.Failure.Operation.Message != "")) {
+		t.Fatalf("immediate-close failure retained private text = %#v", terminal.Failure)
 	}
 	select {
 	case failure := <-baseSession.failures:
@@ -297,7 +356,15 @@ func TestSenderAttemptStreamAdmissionWinsImmediateNormalClose(t *testing.T) {
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
-func TestSenderAttemptStreamPreservesNegotiationFailure(t *testing.T) {
+func attemptObservationStages(observations []SenderAttemptObservation) []SenderAttemptStage {
+	stages := make([]SenderAttemptStage, len(observations))
+	for index := range observations {
+		stages[index] = observations[index].Stage
+	}
+	return stages
+}
+
+func TestSenderAttemptObservationRedactsNegotiationFailureText(t *testing.T) {
 	peer := newTestPeerConnection()
 	factory := mustTestFactory(t, Config{
 		SenderAttemptObservationCapacity: DefaultSenderAttemptObservationCapacity,
@@ -310,27 +377,28 @@ func TestSenderAttemptStreamPreservesNegotiationFailure(t *testing.T) {
 	handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
 	operation, binding, _ := sendSenderTestOffer(t, handler, ctx, 72)
 	started := receiveTest(t, observations)
+	deadlineArmed := receiveTest(t, observations)
 	offerReceived := receiveTest(t, observations)
 	failed := receiveTest(t, observations)
-	if started.Stage != SenderAttemptStarted || offerReceived.Stage != SenderAttemptOfferReceived ||
+	if started.Stage != SenderAttemptStarted || deadlineArmed.Stage != SenderAttemptNegotiationDeadlineArmed ||
+		offerReceived.Stage != SenderAttemptOfferReceived ||
 		failed.Stage != SenderAttemptFailed {
-		t.Fatalf("failure lifecycle = %q, %q, %q", started.Stage, offerReceived.Stage, failed.Stage)
+		t.Fatalf("failure lifecycle = %q, %q, %q, %q", started.Stage, deadlineArmed.Stage, offerReceived.Stage, failed.Stage)
 	}
-	if failed.AttemptID != binding.AttemptID || failed.SideSequence != 3 || failed.CandidateCounts != nil {
+	if failed.AttemptID != binding.AttemptID || failed.SideSequence != 4 || failed.CandidateCounts != nil {
 		t.Fatalf("failure envelope = %#v", failed)
 	}
 	wantFailure := SenderAttemptFailure{
 		FailedAtStage:      SenderAttemptAnswerCreated,
 		Scope:              AttemptFailureScopeAttempt,
 		TypedPeerErrorCode: TypedPeerErrorNegotiation,
-		Message:            peerNegotiationFailureMessage,
 	}
 	if failed.Failure == nil || failed.Failure.FailedAtStage != wantFailure.FailedAtStage ||
 		failed.Failure.Scope != wantFailure.Scope ||
 		failed.Failure.TypedPeerErrorCode != wantFailure.TypedPeerErrorCode ||
-		failed.Failure.Message != wantFailure.Message || failed.Failure.Operation == nil ||
+		failed.Failure.Message != "" || failed.Failure.Operation == nil ||
 		failed.Failure.Operation.Code != protocolsession.PeerOperationCodeNegotiation ||
-		failed.Failure.Operation.Message != peerNegotiationFailureMessage {
+		failed.Failure.Operation.Message != "" {
 		t.Fatalf("failure details = %#v", failed.Failure)
 	}
 	wireFailure := receiveTest(t, session.failures)
@@ -342,7 +410,7 @@ func TestSenderAttemptStreamPreservesNegotiationFailure(t *testing.T) {
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
-func TestSenderAttemptStreamPreservesAdmissionFailure(t *testing.T) {
+func TestSenderAttemptObservationPreservesTypedAdmissionFailure(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
 	channel := newTestPeerChannel()
@@ -368,14 +436,14 @@ func TestSenderAttemptStreamPreservesAdmissionFailure(t *testing.T) {
 		t.Fatalf("admission wire failure = %#v", wireFailure)
 	}
 	receiveTest(t, peer.closed)
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 6 })
+	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 8 })
 	observed := collector.forAttempt(binding.AttemptID)
 	terminal := observed[len(observed)-1]
 	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
-		terminal.Failure.FailedAtStage != SenderAttemptLaneAdmissionStarted ||
+		terminal.Failure.FailedAtStage != SenderAttemptLaneHelloAuthenticated ||
 		terminal.Failure.Scope != AttemptFailureScopeAttempt ||
 		terminal.Failure.TypedPeerErrorCode != TypedPeerErrorAdmission ||
-		terminal.Failure.Message != peerAdmissionFailureMessage ||
+		terminal.Failure.Message != "" ||
 		terminal.Failure.Operation == nil ||
 		terminal.Failure.Operation.Code != protocolsession.PeerOperationCodeAdmission ||
 		terminal.CandidateCounts == nil {
@@ -384,21 +452,20 @@ func TestSenderAttemptStreamPreservesAdmissionFailure(t *testing.T) {
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
-func TestSenderAttemptStreamClassifiesCancellationAndRuntimeStop(t *testing.T) {
+func TestSenderAttemptObservationClassifiesCancellationAndRuntimeStop(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		cancelRun bool
 		scope     AttemptFailureScope
 		code      TypedPeerErrorCode
-		message   string
 	}{
 		{
 			name: "operation cancellation", scope: AttemptFailureScopeAttempt,
-			code: TypedPeerErrorCancelled, message: peerAttemptCancelledMessage,
+			code: TypedPeerErrorCancelled,
 		},
 		{
 			name: "runtime stop", cancelRun: true, scope: AttemptFailureScopeSession,
-			code: TypedPeerErrorStopped, message: peerRuntimeStoppedMessage,
+			code: TypedPeerErrorStopped,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -425,13 +492,13 @@ func TestSenderAttemptStreamClassifiesCancellationAndRuntimeStop(t *testing.T) {
 				}
 				stopSenderTestRuntime(t, cancel, runDone)
 			}
-			waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 5 })
+			waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 6 })
 			observed := collector.forAttempt(binding.AttemptID)
 			failed := observed[len(observed)-1]
 			if failed.Stage != SenderAttemptFailed || failed.Failure == nil ||
 				failed.Failure.FailedAtStage != SenderAttemptDataChannelOpen ||
 				failed.Failure.Scope != test.scope || failed.Failure.TypedPeerErrorCode != test.code ||
-				failed.Failure.Message != test.message || failed.Failure.Operation != nil {
+				failed.Failure.Message != "" || failed.Failure.Operation != nil {
 				t.Fatalf("classified failure = %#v", failed)
 			}
 			select {
@@ -443,12 +510,11 @@ func TestSenderAttemptStreamClassifiesCancellationAndRuntimeStop(t *testing.T) {
 	}
 }
 
-func TestSenderAttemptStreamRejectsCapacityWithCompleteAttemptStream(t *testing.T) {
+func TestSenderAttemptObservationRejectsCapacityWithCompleteAttemptStream(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
 	now := time.Unix(8_000, 0)
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
-		MaxActiveAttempts:  1,
 		MaxRetiredBindings: 1,
 		RetiredBindingTTL:  time.Minute,
 		Now:                func() time.Time { return now },
@@ -463,13 +529,13 @@ func TestSenderAttemptStreamRejectsCapacityWithCompleteAttemptStream(t *testing.
 	receiveTest(t, session.controls)
 	rejectedOperation, rejectedBinding, rejectedContext := sendSenderTestOffer(t, handler, ctx, 94)
 	receiveTest(t, session.failures)
-	waitForTest(t, func() bool { return len(collector.forAttempt(rejectedBinding.AttemptID)) == 3 })
+	waitForTest(t, func() bool { return len(collector.forAttempt(rejectedBinding.AttemptID)) == 2 })
 	rejected := collector.forAttempt(rejectedBinding.AttemptID)
-	if rejected[0].Stage != SenderAttemptStarted || rejected[1].Stage != SenderAttemptOfferReceived ||
-		rejected[2].Stage != SenderAttemptFailed || rejected[2].Failure == nil ||
-		rejected[2].Failure.FailedAtStage != SenderAttemptAnswerCreated ||
-		rejected[2].Failure.Operation == nil ||
-		rejected[2].Failure.Operation.Code != protocolsession.PeerOperationCodeNegotiation {
+	if rejected[0].Stage != SenderAttemptStarted || rejected[1].Stage != SenderAttemptFailed ||
+		rejected[1].Failure == nil ||
+		rejected[1].Failure.FailedAtStage != SenderAttemptNegotiationDeadlineArmed ||
+		rejected[1].Failure.Operation == nil ||
+		rejected[1].Failure.Operation.Code != protocolsession.PeerOperationCodeNegotiation {
 		t.Fatalf("rejected attempt stream = %#v", rejected)
 	}
 	repeatedBody, err := v2signal.EncodeOffer(v2signal.Offer{Binding: rejectedBinding, SDP: "v=0\r\n"})
@@ -486,7 +552,7 @@ func TestSenderAttemptStreamRejectsCapacityWithCompleteAttemptStream(t *testing.
 		t.Fatalf("repeat rejected offer: %v", err)
 	}
 	receiveTest(t, session.failures)
-	if repeated := collector.forAttempt(rejectedBinding.AttemptID); len(repeated) != 3 {
+	if repeated := collector.forAttempt(rejectedBinding.AttemptID); len(repeated) != 2 {
 		t.Fatalf("repeated rejection restarted evidence stream: %#v", repeated)
 	}
 	if err := handler.Cancel(firstContext, firstOperation); err != nil {
@@ -495,7 +561,7 @@ func TestSenderAttemptStreamRejectsCapacityWithCompleteAttemptStream(t *testing.
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
-func TestSenderAttemptStreamCountsOnlyDeliveredCandidatesBeforeLimitFailure(t *testing.T) {
+func TestSenderAttemptObservationCountsOnlyDeliveredCandidatesBeforeLimitFailure(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
@@ -523,7 +589,7 @@ func TestSenderAttemptStreamCountsOnlyDeliveredCandidatesBeforeLimitFailure(t *t
 		t.Fatalf("candidate limit failure = %#v", failure)
 	}
 	receiveTest(t, peer.closed)
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 5 })
+	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 6 })
 	observed := collector.forAttempt(binding.AttemptID)
 	terminal := observed[len(observed)-1]
 	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
@@ -540,7 +606,7 @@ func TestSenderAttemptStreamCountsOnlyDeliveredCandidatesBeforeLimitFailure(t *t
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
-func TestSenderAttemptStreamTreatsRetiredCandidateAsAttemptCancellation(t *testing.T) {
+func TestSenderAttemptObservationTreatsRetiredCandidateAsAttemptCancellation(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
@@ -563,7 +629,7 @@ func TestSenderAttemptStreamTreatsRetiredCandidateAsAttemptCancellation(t *testi
 	})
 	receiveTest(t, session.candidateCalls)
 	receiveTest(t, peer.closed)
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 5 })
+	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 6 })
 	observed := collector.forAttempt(binding.AttemptID)
 	terminal := observed[len(observed)-1]
 	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
@@ -582,14 +648,64 @@ func TestSenderAttemptStreamTreatsRetiredCandidateAsAttemptCancellation(t *testi
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
+func TestSenderAttemptObservationProjectsAuthenticatedRejectionSettlement(t *testing.T) {
+	collector := &senderObservationCollector{}
+	factory := mustTestFactoryWithSenderCollector(t, collector, Config{})
+	session := newTestPeerSession(121)
+	binding := testBinding(122)
+	offerOperation := testOperationID(123)
+	grantOperation := testOperationID(124)
+	recorder := newSenderAttemptRecorder(
+		factory, session.sessionID, binding, offerOperation,
+	)
+	recorder.begin()
+	recorder.negotiationDeadlineArmed()
+	recorder.complete(SenderAttemptAnswerCreated, SenderCandidateCounts{}, SenderAttemptObservation{})
+	recorder.complete(SenderAttemptAnswerSent, SenderCandidateCounts{}, SenderAttemptObservation{})
+	recorder.dataChannelOpened(SenderCandidateCounts{})
+	recorder.laneHelloAuthenticated(grantOperation, session.lane)
+	recorder.admissionSettled(sessionruntime.SenderPeerAdmissionResult{
+		SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
+		Disposition:      sessionruntime.SenderPeerAdmissionRejected,
+		ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
+		Rejection: protocolsession.LaneRejection{
+			Code: protocolsession.LaneRejectAdmissionLimited, RetryAfter: 7 * time.Second,
+		},
+	}, SenderCandidateCounts{})
+	recorder.fail(SenderAttemptFailure{
+		Scope: AttemptFailureScopeAttempt, TypedPeerErrorCode: TypedPeerErrorAdmission,
+		Message: "private provider text",
+	})
+
+	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 10 })
+	observed := collector.forAttempt(binding.AttemptID)
+	settled := observed[8]
+	if settled.Stage != SenderAttemptAdmissionResponseSettled ||
+		settled.AdmissionDisposition != SenderAdmissionRejected ||
+		settled.ResponseDelivery != SenderResponseDelivered || settled.Rejection == nil ||
+		settled.Rejection.Code != protocolsession.LaneRejectAdmissionLimited ||
+		settled.Rejection.RetryAfterMillis != 7_000 || settled.OfferOperationID != offerOperation ||
+		settled.GrantOperationID != grantOperation || settled.Lane == nil || *settled.Lane != session.lane {
+		t.Fatalf("authenticated rejection settlement = %#v", settled)
+	}
+	terminal := observed[9]
+	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
+		terminal.Failure.FailedAtStage != SenderAttemptAdmitted || terminal.Failure.Message != "" {
+		t.Fatalf("rejected terminal = %#v", terminal)
+	}
+}
+
 func TestSenderAttemptRecorderAllowsOnlyOneTerminalAtEveryBoundary(t *testing.T) {
 	stages := []SenderAttemptStage{
 		SenderAttemptStarted,
+		SenderAttemptNegotiationDeadlineArmed,
 		SenderAttemptOfferReceived,
 		SenderAttemptAnswerCreated,
 		SenderAttemptAnswerSent,
 		SenderAttemptDataChannelOpen,
-		SenderAttemptLaneAdmissionStarted,
+		SenderAttemptAdmissionDeadlineArmed,
+		SenderAttemptLaneHelloAuthenticated,
+		SenderAttemptAdmissionResponseSettled,
 		SenderAttemptAdmitted,
 	}
 	for failedIndex := 1; failedIndex < len(stages); failedIndex++ {
@@ -619,19 +735,6 @@ func TestSenderAttemptRecorderAllowsOnlyOneTerminalAtEveryBoundary(t *testing.T)
 				observed[len(observed)-1].Failure == nil ||
 				observed[len(observed)-1].Failure.FailedAtStage != stages[failedIndex] {
 				t.Fatalf("terminal observations = %#v", observed)
-			}
-		})
-	}
-}
-
-func TestSelectedPairEvidenceRejectsNonOperationalIPv4Ranges(t *testing.T) {
-	for _, address := range []string{"0.1.2.3", "127.0.0.2", "169.254.1.2", "224.0.0.1", "240.0.0.1"} {
-		t.Run(address, func(t *testing.T) {
-			_, err := pionCandidateEvidence(&pion.ICECandidate{
-				Address: address, Port: 40000, Protocol: pion.ICEProtocolUDP, Typ: pion.ICECandidateTypeHost,
-			})
-			if err == nil {
-				t.Fatalf("address %s was accepted as operational", address)
 			}
 		})
 	}

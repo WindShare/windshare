@@ -13,7 +13,6 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/transfer"
 )
 
 const (
@@ -250,6 +249,40 @@ func (handler *laneGrantHandler) process(ctx context.Context, message protocolse
 	return err
 }
 
+// candidateChannelOwner makes the admission boundary consume one close
+// authority. Failure paths and runtime lanes may converge on Close without
+// calling provider cleanup more than once.
+type candidateChannelOwner struct {
+	protocolsession.FrameChannel
+	receive   <-chan framechannel.Frame
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func newCandidateChannelOwner(channel protocolsession.FrameChannel) *candidateChannelOwner {
+	if owner, ok := channel.(*candidateChannelOwner); ok {
+		return owner
+	}
+	return &candidateChannelOwner{FrameChannel: channel, receive: channel.Recv()}
+}
+
+func newCandidateChannelOwnerWithReceive(
+	channel protocolsession.FrameChannel,
+	receive <-chan framechannel.Frame,
+) *candidateChannelOwner {
+	if owner, ok := channel.(*candidateChannelOwner); ok {
+		return owner
+	}
+	return &candidateChannelOwner{FrameChannel: channel, receive: receive}
+}
+
+func (owner *candidateChannelOwner) Recv() <-chan framechannel.Frame { return owner.receive }
+
+func (owner *candidateChannelOwner) Close() error {
+	owner.closeOnce.Do(func() { owner.closeErr = owner.FrameChannel.Close() })
+	return owner.closeErr
+}
+
 // Attach routes an untrusted WS2A only far enough to find its live
 // ProtocolSession. Unknown/malformed candidates are closed without a response;
 // all signed responses remain behind LaneRegistry's traffic-key proof.
@@ -258,21 +291,34 @@ func (factory *SenderFactory) Attach(
 	channel protocolsession.FrameChannel,
 ) (LaneIdentity, error) {
 	if factory == nil || channel == nil || ctx == nil {
+		if channel != nil {
+			_ = channel.Close()
+		}
 		return LaneIdentity{}, ErrRuntimeConfig
 	}
+	owner := newCandidateChannelOwner(channel)
+	transferred := false
+	defer func() {
+		if !transferred {
+			_ = owner.Close()
+		}
+	}()
 	admissionContext, endAdmission, ok := factory.beginAdmission(ctx)
 	if !ok {
 		return LaneIdentity{}, ErrRuntimeClosed
 	}
 	defer endAdmission()
 	ctx = admissionContext
-	receive := channel.Recv()
-	encoded, err := receiveHandshake(ctx, receive)
+	encoded, err := receiveHandshake(ctx, owner.Recv())
 	if err != nil {
-		_ = channel.Close()
 		return LaneIdentity{}, err
 	}
-	return factory.attachCandidate(ctx, channel, receive, encoded)
+	identity, err := factory.attachCandidate(ctx, owner, owner.Recv(), encoded)
+	if err != nil {
+		return LaneIdentity{}, err
+	}
+	transferred = true
+	return identity, nil
 }
 
 // AdmitPeerChannel binds a connectivity-owned channel to this exact
@@ -282,28 +328,41 @@ func (factory *SenderFactory) Attach(
 func (runtime *SenderRuntime) AdmitPeerChannel(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
-) (LaneIdentity, error) {
+	control SenderPeerAdmissionControl,
+) (SenderPeerAdmissionResult, error) {
 	if runtime == nil || channel == nil || ctx == nil {
-		return LaneIdentity{}, ErrRuntimeConfig
+		if channel != nil {
+			_ = channel.Close()
+		}
+		return silentSenderPeerAdmission(), ErrRuntimeConfig
+	}
+	owner := newCandidateChannelOwner(channel)
+	transferred := false
+	defer func() {
+		if !transferred {
+			_ = owner.Close()
+		}
+	}()
+	if control == nil {
+		return silentSenderPeerAdmission(), ErrRuntimeConfig
 	}
 	admissionContext, endAdmission, err := runtime.beginExternalAdmission(ctx)
 	if err != nil {
-		return LaneIdentity{}, err
+		return silentSenderPeerAdmission(), err
 	}
 	defer endAdmission()
 	ctx = admissionContext
-	receive := channel.Recv()
-	encoded, err := receiveHandshake(ctx, receive)
+	encoded, err := receiveHandshake(ctx, owner.Recv())
 	if err != nil {
-		_ = channel.Close()
-		return LaneIdentity{}, err
+		return silentSenderPeerAdmission(), err
 	}
 	share, sessionID, err := protocolsession.UntrustedLaneHelloRoute(encoded)
 	if err != nil || share != runtime.share || sessionID != runtime.ProtocolSessionID() || !runtime.lanes.hasUsable() {
-		_ = channel.Close()
-		return LaneIdentity{}, errors.Join(ErrHandshake, err)
+		return silentSenderPeerAdmission(), errors.Join(ErrHandshake, err)
 	}
-	return runtime.acceptCandidate(ctx, &handedOffChannel{FrameChannel: channel, receive: receive}, encoded)
+	result, err := runtime.acceptCandidate(ctx, owner, encoded, control)
+	transferred = result.LaneAttachment == SenderPeerLaneAttached
+	return result, err
 }
 
 func (factory *SenderFactory) attachCandidate(
@@ -312,29 +371,47 @@ func (factory *SenderFactory) attachCandidate(
 	receive <-chan framechannel.Frame,
 	encoded []byte,
 ) (LaneIdentity, error) {
+	owner := newCandidateChannelOwnerWithReceive(channel, receive)
+	transferred := false
+	defer func() {
+		if !transferred {
+			_ = owner.Close()
+		}
+	}()
+	result, err := factory.settleCandidate(ctx, owner, encoded)
+	if err != nil {
+		return LaneIdentity{}, err
+	}
+	transferred = result.LaneAttachment == SenderPeerLaneAttached
+	return result.Lane, nil
+}
+
+func (factory *SenderFactory) settleCandidate(
+	ctx context.Context,
+	channel protocolsession.FrameChannel,
+	encoded []byte,
+) (SenderPeerAdmissionResult, error) {
 	share, sessionID, err := protocolsession.UntrustedLaneHelloRoute(encoded)
 	if err != nil || share != factory.share {
-		_ = channel.Close()
-		return LaneIdentity{}, errors.Join(ErrHandshake, err)
+		return silentSenderPeerAdmission(), errors.Join(ErrHandshake, err)
 	}
 	factory.mu.Lock()
 	runtime := factory.sessions[sessionID]
 	stopping := factory.stopping
 	factory.mu.Unlock()
 	if runtime == nil || stopping || !runtime.lanes.hasUsable() {
-		_ = channel.Close()
-		return LaneIdentity{}, ErrHandshake
+		return silentSenderPeerAdmission(), ErrHandshake
 	}
 	admissionContext, endAdmission, err := runtime.beginExternalAdmission(ctx)
 	if err != nil {
-		_ = channel.Close()
-		return LaneIdentity{}, err
+		return silentSenderPeerAdmission(), err
 	}
 	defer endAdmission()
 	return runtime.acceptCandidate(
-		admissionContext,
-		&handedOffChannel{FrameChannel: channel, receive: receive},
-		encoded,
+		admissionContext, channel, encoded,
+		SenderPeerAdmissionControlFunc(func(protocolsession.OperationID, LaneIdentity) bool {
+			return admissionContext.Err() == nil
+		}),
 	)
 }
 
@@ -342,27 +419,53 @@ func (runtime *SenderRuntime) acceptCandidate(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
 	encoded []byte,
-) (LaneIdentity, error) {
+	control SenderPeerAdmissionControl,
+) (SenderPeerAdmissionResult, error) {
+	owner := newCandidateChannelOwner(channel)
+	transferred := false
+	defer func() {
+		if !transferred {
+			_ = owner.Close()
+		}
+	}()
+	channel = owner
 	senderNonce, err := readNonzeroLaneNonce(runtime.random, protocolsession.LaneSenderNonceBytes)
 	if err != nil {
-		_ = channel.Close()
-		return LaneIdentity{}, err
+		return silentSenderPeerAdmission(), err
 	}
-	admission, err := runtime.lanesRegistry.AdmitCandidate(encoded, senderNonce)
+	admission, err := runtime.lanesRegistry.AdmitCandidate(
+		encoded,
+		senderNonce,
+		protocolsession.LaneAdmissionSettlementGateFunc(func(
+			operationID protocolsession.OperationID,
+			lane protocolsession.LaneAdmissionIdentity,
+		) bool {
+			if ctx.Err() != nil {
+				return false
+			}
+			return control.BeginAuthenticatedSettlement(
+				operationID,
+				LaneIdentity{ID: lane.LaneID, Epoch: lane.LaneEpoch},
+			)
+		}),
+	)
+	result := senderPeerAdmissionFromRegistry(admission)
 	if admission.Disposition == protocolsession.LaneAdmissionSilentClose || err != nil {
-		_ = channel.Close()
-		return LaneIdentity{}, errors.Join(ErrHandshake, err)
+		return result, errors.Join(ErrHandshake, err)
 	}
 	if sendErr := channel.Send(ctx, framechannel.Frame(admission.Response)); sendErr != nil {
+		result.ResponseDelivery = SenderPeerResponseDeliveryFailed
 		if admission.Disposition == protocolsession.LaneAdmissionAccepted {
 			runtime.lanesRegistry.Release(admission.LaneID, admission.LaneEpoch)
 		}
-		_ = channel.Close()
-		return LaneIdentity{}, sendErr
+		if admission.Disposition == protocolsession.LaneAdmissionRejected {
+			return result, errors.Join(&LaneRejectedError{Rejection: admission.Rejection}, sendErr)
+		}
+		return result, sendErr
 	}
+	result.ResponseDelivery = SenderPeerResponseDelivered
 	if admission.Disposition == protocolsession.LaneAdmissionRejected {
-		_ = channel.Close()
-		return LaneIdentity{}, &LaneRejectedError{Rejection: protocolsession.LaneRejection{Code: admission.Rejection}}
+		return result, &LaneRejectedError{Rejection: admission.Rejection}
 	}
 	identity := LaneIdentity{ID: admission.LaneID, Epoch: admission.LaneEpoch}
 	authenticator := protocolsession.InboundMessageAuthenticatorFunc(
@@ -372,9 +475,27 @@ func (runtime *SenderRuntime) acceptCandidate(
 	)
 	if _, err := runtime.lanes.add(identity, channel, authenticator, false); err != nil {
 		runtime.lanesRegistry.Release(identity.ID, identity.Epoch)
-		return LaneIdentity{}, err
+		result.LaneAttachment = SenderPeerLaneAttachmentFailed
+		return result, err
 	}
-	return identity, nil
+	result.LaneAttachment = SenderPeerLaneAttached
+	transferred = true
+	return result, nil
+}
+
+func senderPeerAdmissionFromRegistry(admission protocolsession.LaneAdmission) SenderPeerAdmissionResult {
+	result := silentSenderPeerAdmission()
+	result.SettlementBegan = admission.SettlementBegan
+	result.GrantOperationID = admission.OperationID
+	result.Lane = LaneIdentity{ID: admission.LaneID, Epoch: admission.LaneEpoch}
+	result.Rejection = admission.Rejection
+	switch admission.Disposition {
+	case protocolsession.LaneAdmissionAccepted:
+		result.Disposition = SenderPeerAdmissionAccepted
+	case protocolsession.LaneAdmissionRejected:
+		result.Disposition = SenderPeerAdmissionRejected
+	}
+	return result
 }
 
 // RequestLane obtains the one-use sender-signed grant before connectivity opens
@@ -410,80 +531,6 @@ func (runtime *ReceiverRuntime) RequestLane(
 		return LaneAttachmentGrant{}, err
 	}
 	return decodeLaneGrant(unsigned, call.id)
-}
-
-// AttachLane authenticates a connectivity-owned FrameChannel as exactly the
-// granted LaneID/Epoch, then makes it available to both the shared router and the
-// receiver-scoped LaneSet. Provider, path, and cost remain outside core.
-func (runtime *ReceiverRuntime) AttachLane(
-	ctx context.Context,
-	grant LaneAttachmentGrant,
-	channel protocolsession.FrameChannel,
-) (LaneIdentity, error) {
-	if runtime == nil || channel == nil || ctx == nil || grant.LaneID == 0 || grant.LaneEpoch == 0 || grant.OperationID.IsZero() {
-		return LaneIdentity{}, ErrRuntimeConfig
-	}
-	admissionContext, endAdmission, err := runtime.beginExternalAdmission(ctx)
-	if err != nil {
-		return LaneIdentity{}, err
-	}
-	defer endAdmission()
-	ctx = admissionContext
-	hello, err := protocolsession.NewLaneHello(
-		runtime.descriptor.ShareInstance(), runtime.ProtocolSessionID(), grant.LaneID, grant.LaneEpoch,
-		grant.OperationID, grant.AttachNonce[:], runtime.keys.ReceiverToSender(),
-	)
-	if err != nil {
-		return LaneIdentity{}, err
-	}
-	receive := channel.Recv()
-	if err := channel.Send(ctx, framechannel.Frame(hello.Encoded())); err != nil {
-		_ = channel.Close()
-		return LaneIdentity{}, err
-	}
-	response, err := receiveHandshake(ctx, receive)
-	if err != nil {
-		_ = channel.Close()
-		return LaneIdentity{}, err
-	}
-	if len(response) == protocolsession.LaneRejectBytes {
-		rejection, parseErr := protocolsession.ParseLaneReject(response, hello, runtime.publicKey)
-		_ = channel.Close()
-		if parseErr != nil {
-			return LaneIdentity{}, parseErr
-		}
-		return LaneIdentity{}, &LaneRejectedError{Rejection: rejection}
-	}
-	if _, err := protocolsession.ParseLaneAccept(response, hello, runtime.publicKey); err != nil {
-		_ = channel.Close()
-		return LaneIdentity{}, err
-	}
-	identity := LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}
-	base := protocolsession.ControlBinding{
-		ShareInstance: runtime.descriptor.ShareInstance(), ProtocolSessionID: runtime.ProtocolSessionID(),
-		LaneID: identity.ID, LaneEpoch: identity.Epoch, Direction: protocolsession.DirectionSenderToReceiver,
-	}
-	authenticator, err := protocolsession.NewSenderControlAuthenticator(runtime.publicKey, base, runtime.semantic)
-	if err != nil {
-		_ = channel.Close()
-		return LaneIdentity{}, err
-	}
-	handOff := &handedOffChannel{FrameChannel: channel, receive: receive}
-	blockLane := &receiverBlockLane{
-		identity: identity, rpc: runtime.rpc, assembler: runtime.assembler,
-		opener: runtime.opener, revisions: runtime.revisions,
-	}
-	_, err = runtime.lanes.addWithAdmission(identity, handOff, authenticator, false, func() error {
-		return runtime.laneSet.Add(
-			transfer.LaneIdentity{ID: identity.ID, Epoch: identity.Epoch},
-			transfer.LaneRouteDirect,
-			blockLane,
-		)
-	})
-	if err != nil {
-		return LaneIdentity{}, err
-	}
-	return identity, nil
 }
 
 func (runtime *ReceiverRuntime) DetachLane(identity LaneIdentity) bool {

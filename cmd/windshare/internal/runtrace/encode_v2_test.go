@@ -104,6 +104,57 @@ func TestEncodeV2UsesDecimalStringsAndSemanticContexts(t *testing.T) {
 	}
 }
 
+func TestEncodeV2ProjectsSafePeerAdmissionSettlement(t *testing.T) {
+	identity := testIdentity(t, 0xa2)
+	session := mustValue(clievent.NewProtocolSessionID(identity))
+	path := mustValue(clievent.NewPeerPathID(testIdentity(t, 0xa3)))
+	attempt := mustValue(clievent.NewPeerAttemptID(testIdentity(t, 0xa4)))
+	offer := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0xa5)))
+	grant := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0xa6)))
+	lane := mustValue(clievent.NewLaneIdentity(7, 2))
+	event := mustValue(clievent.NewPeerAttemptObserved(clievent.PeerAttemptSpec{
+		Command: clievent.CommandShare, Session: session, PeerPath: path, Attempt: attempt,
+		OfferOperation: offer, HasOfferOperation: true,
+		GrantOperation: grant, HasGrantOperation: true,
+		Sequence: 9, ElapsedMillis: 120, Stage: clievent.PeerAdmissionResponseSettled,
+		Phase: clievent.PeerPhaseAdmission, Lane: lane, HasLane: true,
+		AdmissionDisposition:      clievent.PeerAdmissionRejected,
+		ResponseDelivery:          clievent.PeerResponseDelivered,
+		RejectionCode:             clievent.PeerLaneRejectAdmissionLimited,
+		RejectionRetryAfterMillis: 7_000,
+	}))
+	record, err := encodeV2(
+		"33333333333333333333333333333333",
+		entryMetadata{sequence: 1, time: time.Unix(1, 0), elapsedMS: 2},
+		event,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]any{
+		"stage":                         "admission-response-settled",
+		"peer_phase":                    "admission",
+		"peer_admission_disposition":    "rejected",
+		"peer_response_delivery":        "delivered",
+		"peer_lane_rejection_code":      "admission-limited",
+		"peer_rejection_retry_after_ms": "7000",
+		"peer_offer_operation_id":       offer.Hex(),
+		"peer_grant_operation_id":       grant.Hex(),
+	} {
+		if fields[name] != want {
+			t.Fatalf("%s = %#v, want %#v", name, fields[name], want)
+		}
+	}
+}
+
 func TestEncodeV2RootPrefetchUsesOnlyClosedTraceFields(t *testing.T) {
 	event := mustValue(clievent.NewRootPrefetchObserved(
 		clievent.RootPrefetchCommitted, math.MaxUint64, 11, 2,
@@ -377,6 +428,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			Sequence:      math.MaxUint64,
 			ElapsedMillis: math.MaxUint64,
 			Stage:         clievent.PeerAttemptFailed,
+			FailedAtStage: clievent.PeerAdmissionResponseSettled,
 			Candidates:    clievent.CandidateCounts{LocalEmitted: 1, RemoteAccepted: 2},
 			HasCandidates: true,
 			FailureScope:  clievent.PeerFailureAttempt,

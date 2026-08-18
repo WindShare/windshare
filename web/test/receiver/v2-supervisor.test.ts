@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import { FileGeometry } from '../../src/content/geometry'
 import type {
@@ -14,6 +14,7 @@ import {
   type V2ContentLaneAdmissionObservation,
 } from '../../src/connectivity/v2-receiver-policy'
 import type { V2BrowserConnectivityAttemptDiagnostic } from '../../src/connectivity/diagnostics'
+import type { V2PeerAttemptMilestone } from '../../src/connectivity/v2-peer-attempt'
 import {
   V2BrowserSessionFactory,
   type V2AttachedRelay,
@@ -32,6 +33,8 @@ const ALL_BLOCK_ROUTES: V2BlockRouteEligibility = Object.freeze({
   assertActive: () => undefined,
   subscribe: () => () => undefined,
 })
+
+afterEach(() => vi.useRealTimers())
 
 class FakeSession {
   readonly initialLaneId: number
@@ -253,6 +256,61 @@ async function flushReconciliation(): Promise<void> {
 }
 
 describe('v2 receiver reconnect supervisor', () => {
+  it('dispatches relay content while the peer offer remains pending', async () => {
+    const session = new FakeSession([1])
+    const relay = new TrackedRelay(1)
+    const factory = new FakeSessionFactory()
+    const dispatches: V2BlockDispatchObservation[] = []
+    let offerCalls = 0
+    let offerAborts = 0
+    const supervisor = new V2ReceiverReconnectSupervisor({
+      descriptor: descriptor(),
+      initial: core(session, relay),
+      sessionFactory: factory,
+      randomBytes: (length) => new Uint8Array(length).fill(11),
+      offersFactory: () => ({
+        offer: (_route, signal) => {
+          offerCalls += 1
+          return new Promise((_resolve, reject) => {
+            const abort = () => {
+              offerAborts += 1
+              reject(signal.reason)
+            }
+            signal.addEventListener('abort', abort, { once: true })
+            if (signal.aborted) abort()
+          })
+        },
+      }),
+      nativePeerUsable: () => true,
+      onBlockDispatched: (observation) => dispatches.push(observation),
+    })
+
+    const activation = supervisor.beginConnectivity('download')
+
+    expect(supervisor.contentLaneCount(activation.routes)).toBe(1)
+    await Promise.resolve()
+    expect(offerCalls).toBe(1)
+    await supervisor.execute(undefined, async (generation) => {
+      expect(generation.lanes.laneIds()).toEqual([1])
+      generation.lanes.remove(1)
+      generation.lanes.add(new ImmediateBlockLane(1), 'relay', 0)
+      const block = await generation.lanes.fetch(
+        blockDemand(0n),
+        activation.routes,
+        new AbortController().signal,
+      )
+      expect(block.data).toEqual(Uint8Array.of(1))
+    })
+    expect(dispatches).toMatchObject([{ route: 'relay', laneId: 1 }])
+
+    activation.close()
+    await flushReconciliation()
+    expect(offerAborts).toBe(1)
+    expect(supervisor.generationId).toBe(1)
+    expect(factory.connectFreshCalls).toBe(0)
+    await supervisor.close()
+  })
+
   it('projects connectivity attempt diagnostics through the generation boundary', async () => {
     const session = new FakeSession([1])
     const relay = new TrackedRelay(1)
@@ -273,10 +331,14 @@ describe('v2 receiver reconnect supervisor', () => {
     const activation = supervisor.beginConnectivity('preview')
     await flushReconciliation()
 
-    expect(diagnostics.map((event) => event.stage)).toEqual(['started', 'failed'])
+    expect(diagnostics.map((event) => event.stage)).toEqual([
+      'started',
+      'negotiation-deadline-armed',
+      'failed',
+    ])
     expect(diagnostics.at(-1)).toMatchObject({
       failedAtStage: 'offer-created',
-      typedErrorCode: 'unexpected',
+      typedErrorCode: 'signaling-contract',
     })
 
     activation.close()
@@ -298,7 +360,7 @@ describe('v2 receiver reconnect supervisor', () => {
       descriptor(),
       (observation) => observations.push(observation),
     )
-    const download = supervisor.connectivity.begin('download', 'small')
+    const download = supervisor.connectivity.begin('download')
 
     expect(observations).toEqual([{ laneId: 1, laneEpoch: 0, route: 'relay' }])
     firstSession.detach(1)
@@ -311,6 +373,47 @@ describe('v2 receiver reconnect supervisor', () => {
     ])
 
     download.close()
+    await supervisor.close()
+  })
+
+  it('allocates fresh peer recovery identities and budgets for a replacement generation', async () => {
+    const firstSession = new FakeSession([1])
+    const firstRelay = new TrackedRelay(1)
+    const secondSession = new FakeSession([10])
+    const secondRelay = new TrackedRelay(10)
+    const factory = new FakeSessionFactory()
+    factory.connectFreshImpl = async () => core(secondSession, secondRelay)
+    const milestones: V2PeerAttemptMilestone[] = []
+    let seed = 20
+    const supervisor = new V2ReceiverReconnectSupervisor({
+      descriptor: descriptor(),
+      initial: core(firstSession, firstRelay),
+      sessionFactory: factory,
+      randomBytes: (length) => new Uint8Array(length).fill(seed++),
+      offersFactory: () => ({
+        offer: async () => { throw new Error('synthetic path-scoped failure') },
+      }),
+      nativePeerUsable: () => true,
+      peerRecovery: {
+        observeAttempt: (milestone) => milestones.push(milestone),
+      },
+    })
+    const activation = supervisor.beginConnectivity('preview')
+    await flushReconciliation()
+    const first = milestones.find((milestone) => milestone.type === 'phase-deadline-armed')
+    expect(first).toBeDefined()
+
+    firstSession.detach(1)
+    await flushReconciliation()
+    const armed = milestones.filter((milestone) => milestone.type === 'phase-deadline-armed')
+    expect(armed).toHaveLength(2)
+    expect(armed[1]).toMatchObject({ protocolSessionId: supervisor.protocolSessionId })
+    expect(armed[1]?.protocolSessionId).not.toBe(armed[0]?.protocolSessionId)
+    expect(armed[1]?.peerPathId).not.toBe(armed[0]?.peerPathId)
+    expect(armed[1]?.attemptId).not.toBe(armed[0]?.attemptId)
+    expect(supervisor.contentLaneCount(activation.routes)).toBe(1)
+
+    activation.close()
     await supervisor.close()
   })
 
@@ -329,7 +432,7 @@ describe('v2 receiver reconnect supervisor', () => {
       randomBytes: (length) => new Uint8Array(length).fill(15),
       onBlockDispatched: (observation) => dispatches.push(observation),
     })
-    const download = supervisor.beginConnectivity('download', 'small')
+    const download = supervisor.beginConnectivity('download')
 
     await dispatchOnCurrentGeneration(supervisor, 1, 0n)
     firstSession.detach(1)
@@ -480,6 +583,62 @@ describe('v2 receiver reconnect supervisor', () => {
 })
 
 describe('v2 browser session factory descriptor continuity', () => {
+  it('owns one named relay admission deadline outside the session runtime', async () => {
+    vi.useFakeTimers()
+    const expected = descriptor(1)
+    const relay = new TrackedRelay(4)
+    const capability: Suite02CapabilityKey = {
+      suite: 2,
+      readSecret: new Uint8Array(16).fill(1),
+      pkHash: new Uint8Array(16).fill(2),
+      shareIdRaw: new Uint8Array(12).fill(3),
+      shareId: 'share',
+    }
+    const signals: AbortSignal[] = []
+    const session = {
+      requestLaneGrant: async (_laneId: number, options: { readonly signal: AbortSignal }) => {
+        signals.push(options.signal)
+        return {
+          laneId: 9,
+          laneEpoch: 1,
+          grantOperationId: identity(91),
+          attachNonce: identity(92),
+        }
+      },
+      adoptGrantedLane: async (
+        _channel: unknown,
+        _grant: unknown,
+        options: { readonly signal: AbortSignal },
+      ) => {
+        signals.push(options.signal)
+        return Object.freeze({
+          disposition: 'accepted' as const,
+          installation: 'installed' as const,
+          grantOperationId: '',
+          laneId: 9,
+          laneEpoch: 1,
+        })
+      },
+    } as unknown as V2ReceiverSessionRuntime
+    const factory = new V2BrowserSessionFactory({
+      relayBase: 'https://relay.example',
+      capability,
+      descriptor: expected,
+      descriptorObject: relay.connection.descriptorObject,
+      dialRelay: async () => relay.connection,
+      openDescriptor: async () => expected,
+    })
+    const parent = new AbortController()
+
+    await expect(factory.attachRelay(session, parent.signal)).resolves.toMatchObject({ laneId: 9 })
+    expect(signals).toHaveLength(2)
+    expect(signals[0]).toBe(signals[1])
+    expect(signals[0]).not.toBe(parent.signal)
+    expect(signals[0]?.aborted).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+    factory.close()
+  })
+
   it('closes an equivocated relay before session construction', async () => {
     const expected = descriptor(1)
     const stale = descriptor(30)

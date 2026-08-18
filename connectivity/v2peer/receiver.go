@@ -43,44 +43,13 @@ func (function ReceiverPeerConnectionFactoryFunc) NewReceiverPeerConnection(
 	return function(configuration)
 }
 
-type ReceiverAttemptTimer interface {
-	C() <-chan time.Time
-	Stop()
-}
-
-type ReceiverAttemptTimerSource interface {
-	NewReceiverAttemptTimer(time.Duration) (ReceiverAttemptTimer, error)
-}
-
-type systemReceiverAttemptTimer struct{ timer *time.Timer }
-
-func (timer systemReceiverAttemptTimer) C() <-chan time.Time { return timer.timer.C }
-
-func (timer systemReceiverAttemptTimer) Stop() {
-	if timer.timer == nil || timer.timer.Stop() {
-		return
-	}
-	select {
-	case <-timer.timer.C:
-	default:
-	}
-}
-
-type systemReceiverAttemptTimerSource struct{}
-
-func (systemReceiverAttemptTimerSource) NewReceiverAttemptTimer(
-	duration time.Duration,
-) (ReceiverAttemptTimer, error) {
-	return systemReceiverAttemptTimer{timer: time.NewTimer(duration)}, nil
-}
-
 type ReceiverLaneSession interface {
 	RequestLane(context.Context, uint32) (sessionruntime.LaneAttachmentGrant, error)
 	AttachLane(
 		context.Context,
 		sessionruntime.LaneAttachmentGrant,
 		protocolsession.FrameChannel,
-	) (sessionruntime.LaneIdentity, error)
+	) (sessionruntime.ReceiverLaneAdmissionResult, error)
 }
 
 const (
@@ -92,8 +61,9 @@ type ReceiverFactoryConfig struct {
 	Configuration                          pion.Configuration
 	PeerConnections                        ReceiverPeerConnectionFactory
 	DataChannels                           DataChannelAdapter
-	AttemptTimeout                         time.Duration
-	AttemptTimers                          ReceiverAttemptTimerSource
+	NegotiationBudget                      time.Duration
+	AdmissionBudget                        time.Duration
+	PhaseTimers                            PeerPhaseTimerSource
 	MaxCandidates                          int
 	Random                                 io.Reader
 	ReceiverTerminationObservationCapacity int
@@ -104,8 +74,9 @@ type ReceiverFactory struct {
 	configuration         pion.Configuration
 	peerConnections       ReceiverPeerConnectionFactory
 	dataChannels          DataChannelAdapter
-	attemptTimeout        time.Duration
-	attemptTimers         ReceiverAttemptTimerSource
+	negotiationBudget     time.Duration
+	admissionBudget       time.Duration
+	phaseTimers           PeerPhaseTimerSource
 	maxCandidates         int
 	random                io.Reader
 	terminations          *observationSource[ReceiverTerminationTrace]
@@ -117,7 +88,7 @@ type ReceiverFactory struct {
 }
 
 func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) {
-	if config.AttemptTimeout < 0 || config.MaxCandidates < 0 ||
+	if config.NegotiationBudget < 0 || config.AdmissionBudget < 0 || config.MaxCandidates < 0 ||
 		config.MaxCandidates > maximumConfiguredCandidates ||
 		config.ReceiverTerminationObservationCapacity < 0 ||
 		config.ReceiverTerminationObservationCapacity > maximumReceiverTerminationObservationCapacity ||
@@ -125,14 +96,20 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 		config.PeerDiagnosticObservationCapacity > maximumPeerDiagnosticObservationCapacity {
 		return nil, ErrConfig
 	}
-	if config.AttemptTimeout == 0 {
-		config.AttemptTimeout = DefaultAttemptTimeout
+	if config.NegotiationBudget == 0 {
+		config.NegotiationBudget = DefaultPeerNegotiationBudget
+	}
+	if config.AdmissionBudget == 0 {
+		config.AdmissionBudget = DefaultPeerAdmissionBudget
+	}
+	if !validPeerPhaseBudgets(config.NegotiationBudget, config.AdmissionBudget) {
+		return nil, ErrConfig
 	}
 	if config.MaxCandidates == 0 {
 		config.MaxCandidates = DefaultMaxCandidates
 	}
-	if config.AttemptTimers == nil {
-		config.AttemptTimers = systemReceiverAttemptTimerSource{}
+	if config.PhaseTimers == nil {
+		config.PhaseTimers = systemPeerPhaseTimerSource{}
 	}
 	if config.PeerConnections == nil {
 		config.PeerConnections = ReceiverPeerConnectionFactoryFunc(
@@ -161,8 +138,9 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 	}
 	factory := &ReceiverFactory{
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
-		dataChannels: config.DataChannels, attemptTimeout: config.AttemptTimeout,
-		attemptTimers: config.AttemptTimers,
+		dataChannels:      config.DataChannels,
+		negotiationBudget: config.NegotiationBudget, admissionBudget: config.AdmissionBudget,
+		phaseTimers:   config.PhaseTimers,
 		maxCandidates: config.MaxCandidates, random: config.Random,
 		terminations: terminations, diagnostics: diagnostics,
 	}
@@ -234,7 +212,9 @@ type ReceiverAttempt struct {
 	operation         *receiverBoundSignalingOperation
 	shutdownRequested bool
 	shutdownDecision  receiverAttemptDecision
-	deadline          ReceiverAttemptTimer
+	phases            *peerPhaseLifecycle
+	phaseContext      context.Context
+	transport         *ownedPeerDataChannel
 }
 
 func (factory *ReceiverFactory) Start(
@@ -245,38 +225,49 @@ func (factory *ReceiverFactory) Start(
 	if factory == nil || signaling == nil || lanes == nil || parent == nil {
 		return nil, ErrConfig
 	}
+	ctx, cancel := context.WithCancelCause(parent)
+	phases := newPeerPhaseLifecycle(
+		factory.phaseTimers,
+		factory.negotiationBudget,
+		factory.admissionBudget,
+	)
+	phaseContext, err := phases.beginNegotiation(ctx)
+	if err != nil {
+		cancel(err)
+		return nil, err
+	}
+	fail := func(cause error, peer peerCloseOwner, channel peerCloseOwner) (*ReceiverAttempt, error) {
+		phases.terminate(cause)
+		cancel(cause)
+		teardown := teardownPeerTransport(peer, channel)
+		return nil, errors.Join(cause, teardown.cause())
+	}
 	binding, err := factory.newBinding()
 	if err != nil {
-		return nil, err
+		return fail(err, nil, nil)
 	}
 	peer, err := factory.peerConnections.NewReceiverPeerConnection(factory.configuration)
 	if err != nil || peer == nil {
-		return nil, errors.Join(ErrNegotiation, err)
+		return fail(errors.Join(ErrNegotiation, err), peer, nil)
 	}
 	raw, err := peer.CreateDataChannel(
 		transportwebrtc.ChannelLabel,
 		transportwebrtc.DefaultDataChannelInit(),
 	)
 	if err != nil || raw == nil {
-		teardown := teardownPeerTransport(peer, nil)
-		return nil, errors.Join(ErrNegotiation, err, teardown.cause())
+		return fail(errors.Join(ErrNegotiation, err), peer, nil)
 	}
 	channel, err := factory.dataChannels.WrapDataChannel(raw)
 	if err != nil || channel == nil {
-		teardown := teardownPeerTransport(peer, raw)
-		return nil, errors.Join(errChannelAdmission, err, teardown.cause())
+		return fail(errors.Join(errChannelAdmission, err), peer, raw)
 	}
-	deadline, err := factory.attemptTimers.NewReceiverAttemptTimer(factory.attemptTimeout)
-	if err != nil || deadline == nil {
-		teardown := teardownPeerTransport(peer, channel)
-		return nil, errors.Join(ErrConfig, err, teardown.cause())
-	}
-	ctx, cancel := context.WithCancelCause(parent)
+	transport := newOwnedPeerDataChannel(peer, channel)
 	attempt := &ReceiverAttempt{
-		factory: factory, signaling: signaling, lanes: lanes, peer: peer, channel: channel, binding: binding,
+		factory: factory, signaling: signaling, lanes: lanes, peer: peer,
+		channel: transport, transport: transport, binding: binding,
 		events: make(chan receiverEvent, factory.maxCandidates*2+attemptEventReserve),
 		ctx:    ctx, cancel: cancel, done: make(chan struct{}), ready: make(chan struct{}),
-		deadline: deadline,
+		phases: phases, phaseContext: phaseContext,
 	}
 	attempt.registerCallbacks()
 	go attempt.run()
@@ -379,7 +370,8 @@ type receiverEvent struct {
 	candidate v2signal.Candidate
 	control   ReceiverControl
 	terminal  ReceiverSignalingTermination
-	lane      sessionruntime.LaneIdentity
+	grant     sessionruntime.LaneAttachmentGrant
+	admission sessionruntime.ReceiverLaneAdmissionResult
 	err       error
 }
 

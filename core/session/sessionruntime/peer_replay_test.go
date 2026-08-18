@@ -483,15 +483,15 @@ func attachAmbiguousPeerReplayLane(
 			err      error
 		}{identity: identity, err: attachErr}
 	}()
-	receiverIdentity, receiverErr := receiver.AttachLane(ctx, grant, receiverChannel)
+	receiverAdmission, receiverErr := receiver.AttachLane(ctx, grant, receiverChannel)
 	senderAttached := <-senderResult
 	if receiverErr != nil || senderAttached.err != nil {
 		t.Fatalf("attach ambiguous replay lane: receiver=%v sender=%v", receiverErr, senderAttached.err)
 	}
-	if receiverIdentity != senderAttached.identity {
-		t.Fatalf("ambiguous replay lane identity receiver=%+v sender=%+v", receiverIdentity, senderAttached.identity)
+	if receiverAdmission.Lane != senderAttached.identity {
+		t.Fatalf("ambiguous replay lane identity receiver=%+v sender=%+v", receiverAdmission.Lane, senderAttached.identity)
 	}
-	return receiverIdentity, receiverChannel
+	return receiverAdmission.Lane, receiverChannel
 }
 
 func preferNextRuntimeLane(t *testing.T, receiver *ReceiverRuntime, identity LaneIdentity) {

@@ -30,7 +30,8 @@ const (
 	ReceiverProvenanceLocalExplicitStop                     ReceiverTerminalProvenance = "local_explicit_stop"
 	ReceiverProvenanceLocalContextEnded                     ReceiverTerminalProvenance = "local_context_ended"
 	ReceiverProvenanceLocalNegotiationFailure               ReceiverTerminalProvenance = "local_negotiation_failure"
-	ReceiverProvenanceLocalAttemptTimeout                   ReceiverTerminalProvenance = "local_attempt_timeout"
+	ReceiverProvenanceLocalNegotiationTimeout               ReceiverTerminalProvenance = "local_negotiation_timeout"
+	ReceiverProvenanceLocalAdmissionTimeout                 ReceiverTerminalProvenance = "local_admission_timeout"
 	ReceiverProvenanceLocalOperationContract                ReceiverTerminalProvenance = "local_operation_contract"
 	ReceiverProvenanceRemoteOperationRejected               ReceiverTerminalProvenance = "remote_operation_rejected"
 	ReceiverProvenanceRemoteUnknownControl                  ReceiverTerminalProvenance = "remote_unknown_control"
@@ -45,6 +46,15 @@ const (
 	ReceiverProvenanceAuthenticatedCandidateBindingMismatch ReceiverTerminalProvenance = "authenticated_candidate_binding_mismatch"
 	ReceiverProvenanceAuthenticatedContinuationAuthority    ReceiverTerminalProvenance = "authenticated_continuation_authority_violation"
 )
+
+func receiverTimeoutProvenance(phase PeerAttemptPhase) ReceiverTerminalProvenance {
+	switch phase {
+	case PeerAttemptPhaseAdmission:
+		return ReceiverProvenanceLocalAdmissionTimeout
+	default:
+		return ReceiverProvenanceLocalNegotiationTimeout
+	}
+}
 
 type receiverAttemptDecision struct {
 	transitionOwner       ReceiverTerminalOwner
@@ -89,7 +99,8 @@ func validReceiverBoundDecision(decision receiverAttemptDecision) bool {
 		case ReceiverProvenanceLocalExplicitStop,
 			ReceiverProvenanceLocalContextEnded,
 			ReceiverProvenanceLocalNegotiationFailure,
-			ReceiverProvenanceLocalAttemptTimeout,
+			ReceiverProvenanceLocalNegotiationTimeout,
+			ReceiverProvenanceLocalAdmissionTimeout,
 			ReceiverProvenanceLocalOperationContract,
 			ReceiverProvenanceSignalingAdapterContract:
 		default:
@@ -122,7 +133,8 @@ func validReceiverBoundDecision(decision receiverAttemptDecision) bool {
 		case ReceiverProvenanceLocalExplicitStop,
 			ReceiverProvenanceLocalContextEnded,
 			ReceiverProvenanceLocalNegotiationFailure,
-			ReceiverProvenanceLocalAttemptTimeout,
+			ReceiverProvenanceLocalNegotiationTimeout,
+			ReceiverProvenanceLocalAdmissionTimeout,
 			ReceiverProvenanceLocalOperationContract,
 			ReceiverProvenanceSignalingAdapterContract,
 			ReceiverProvenanceRemoteOperationRejected,
@@ -194,19 +206,20 @@ const (
 type ReceiverCauseClass string
 
 const (
-	ReceiverCauseRuntimeClosed    ReceiverCauseClass = "runtime_closed"
-	ReceiverCauseConfiguration    ReceiverCauseClass = "configuration"
-	ReceiverCauseOperationMissing ReceiverCauseClass = "operation_missing"
-	ReceiverCauseAttemptTimeout   ReceiverCauseClass = "attempt_timeout"
-	ReceiverCauseCandidateLimit   ReceiverCauseClass = "candidate_limit"
-	ReceiverCauseChannelAdmission ReceiverCauseClass = "channel_admission"
-	ReceiverCauseEventCapacity    ReceiverCauseClass = "event_capacity"
-	ReceiverCauseNegotiation      ReceiverCauseClass = "negotiation"
-	ReceiverCauseProtocol         ReceiverCauseClass = "protocol"
-	ReceiverCauseDeadline         ReceiverCauseClass = "deadline_exceeded"
-	ReceiverCausePeerShutdown     ReceiverCauseClass = "peer_shutdown"
-	ReceiverCauseChannelDrain     ReceiverCauseClass = "channel_drain"
-	ReceiverCauseUnknown          ReceiverCauseClass = "unknown"
+	ReceiverCauseRuntimeClosed      ReceiverCauseClass = "runtime_closed"
+	ReceiverCauseConfiguration      ReceiverCauseClass = "configuration"
+	ReceiverCauseOperationMissing   ReceiverCauseClass = "operation_missing"
+	ReceiverCauseNegotiationTimeout ReceiverCauseClass = "negotiation_timeout"
+	ReceiverCauseAdmissionTimeout   ReceiverCauseClass = "admission_timeout"
+	ReceiverCauseCandidateLimit     ReceiverCauseClass = "candidate_limit"
+	ReceiverCauseChannelAdmission   ReceiverCauseClass = "channel_admission"
+	ReceiverCauseEventCapacity      ReceiverCauseClass = "event_capacity"
+	ReceiverCauseNegotiation        ReceiverCauseClass = "negotiation"
+	ReceiverCauseProtocol           ReceiverCauseClass = "protocol"
+	ReceiverCauseDeadline           ReceiverCauseClass = "deadline_exceeded"
+	ReceiverCausePeerShutdown       ReceiverCauseClass = "peer_shutdown"
+	ReceiverCauseChannelDrain       ReceiverCauseClass = "channel_drain"
+	ReceiverCauseUnknown            ReceiverCauseClass = "unknown"
 )
 
 // ReceiverAttemptOutcome is a sealed value. Diagnostic accessors expose only

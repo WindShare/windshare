@@ -7,6 +7,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/v2signal"
+	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 )
 
@@ -28,7 +29,7 @@ func (attempt *peerAttempt) beginAdmission(
 ) (context.Context, bool) {
 	attempt.admissionMu.Lock()
 	defer attempt.admissionMu.Unlock()
-	if attempt.admissionPhase != attemptAdmissionIdle {
+	if attempt.admissionPhase != attemptAdmissionIdle || parent == nil {
 		return nil, false
 	}
 	admissionContext, cancel := context.WithCancelCause(parent)
@@ -37,13 +38,18 @@ func (attempt *peerAttempt) beginAdmission(
 	return admissionContext, true
 }
 
-func (attempt *peerAttempt) resolveAdmission(lane sessionruntime.LaneIdentity, err error) {
+func (attempt *peerAttempt) resolveAdmission(
+	result sessionruntime.SenderPeerAdmissionResult,
+	err error,
+) {
 	attempt.admissionMu.Lock()
 	if attempt.admissionPhase != attemptAdmissionPending {
 		attempt.admissionMu.Unlock()
 		return
 	}
-	attempt.admissionResult = attemptEvent{kind: attemptAdmission, lane: lane, err: err}
+	attempt.admissionResult = attemptEvent{
+		kind: attemptAdmission, lane: result.Lane, admission: result, err: err,
+	}
 	attempt.admissionPhase = attemptAdmissionResolved
 	cancel := attempt.admissionCancel
 	attempt.admissionCancel = nil
@@ -52,6 +58,12 @@ func (attempt *peerAttempt) resolveAdmission(lane sessionruntime.LaneIdentity, e
 	if cancel != nil {
 		cancel(err)
 	}
+}
+
+func (attempt *peerAttempt) authenticatedSettlementBegan() bool {
+	attempt.admissionMu.Lock()
+	defer attempt.admissionMu.Unlock()
+	return attempt.admissionResult.admission.SettlementBegan
 }
 
 func (attempt *peerAttempt) admissionAtTerminal(cause error) (attemptEvent, bool) {
@@ -92,21 +104,20 @@ func (attempt *peerAttempt) admissionAtTerminal(cause error) (attemptEvent, bool
 	}
 }
 
-func (execution *attemptExecution) settleAdmissionAtTerminal(cause error) (bool, error) {
+func (execution *attemptExecution) settleAdmissionAtTerminal(
+	cause error,
+) (bool, bool, error) {
 	result, started := execution.attempt.admissionAtTerminal(cause)
 	if !started {
-		return false, nil
+		execution.attempt.phases.terminate(cause)
+		return false, false, nil
 	}
-	execution.attempt.recorder.complete(
-		SenderAttemptDataChannelOpen,
-		execution.candidateCounts(),
-		nil,
-		nil,
-	)
-	if err := execution.acceptAdmission(result); err != nil {
-		return false, err
+	execution.attempt.recorder.dataChannelOpened(execution.candidateCounts())
+	owned, admitted, err := execution.acceptAdmission(result)
+	if !owned {
+		return false, false, nil
 	}
-	return true, nil
+	return true, admitted, err
 }
 
 var rejectedOfferIdentityDecoding = func() cbor.DecMode {
@@ -165,54 +176,141 @@ func (execution *attemptExecution) startDataChannel(raw *pion.DataChannel) error
 	if err != nil || channel == nil {
 		return errors.Join(errChannelAdmission, err)
 	}
-	execution.channel = channel
+	execution.transport = newOwnedPeerDataChannel(execution.peer, channel)
+	execution.channel = execution.transport
+	openTransition := make(chan struct{})
+	execution.openTransition = openTransition
 	admissionEventsComplete := make(chan struct{})
 	execution.children.Add(2)
 	go func() {
 		defer execution.children.Done()
 		defer close(admissionEventsComplete)
-		execution.attempt.awaitOpenAndAdmit(execution.ctx, channel)
+		execution.attempt.awaitOpenAndAdmit(execution.ctx, execution.transport, openTransition)
 	}()
 	go func() {
 		defer execution.children.Done()
-		execution.attempt.watchChannel(channel, admissionEventsComplete)
+		execution.attempt.watchChannel(execution.transport, admissionEventsComplete)
 	}()
 	return nil
 }
 
-func (execution *attemptExecution) acceptAdmission(event attemptEvent) error {
-	if event.err != nil {
-		return errors.Join(errChannelAdmission, event.err)
+func (execution *attemptExecution) acceptAdmission(
+	event attemptEvent,
+) (bool, bool, error) {
+	result := event.admission
+	admitted := event.err == nil &&
+		result.Disposition == sessionruntime.SenderPeerAdmissionAccepted &&
+		result.ResponseDelivery == sessionruntime.SenderPeerResponseDelivered &&
+		result.LaneAttachment == sessionruntime.SenderPeerLaneAttached &&
+		result.Lane.ID != 0 && result.Lane.Epoch != 0
+	if !execution.attempt.phases.settleSenderAdmission(result.SettlementBegan, admitted) {
+		return false, false, nil
 	}
-	if event.lane.ID == 0 || event.lane.Epoch == 0 {
-		return errors.Join(errChannelAdmission, errors.New("peer DataChannel admission returned a zero lane"))
+	if result.SettlementBegan {
+		if result.GrantOperationID.IsZero() || result.Lane.ID == 0 || result.Lane.Epoch == 0 {
+			return true, false, errors.Join(
+				errChannelAdmission,
+				errors.New("authenticated peer admission returned incomplete identity evidence"),
+			)
+		}
+		execution.attempt.recorder.admissionSettled(result, execution.candidateCounts())
+	}
+	switch result.Disposition {
+	case sessionruntime.SenderPeerAdmissionRejected:
+		if result.Rejection.Code == 0 {
+			return true, false, errors.Join(
+				errChannelAdmission,
+				errors.New("authenticated peer admission omitted its rejection"),
+				event.err,
+			)
+		}
+		return true, false, errors.Join(
+			&sessionruntime.LaneRejectedError{Rejection: result.Rejection},
+			event.err,
+		)
+	case sessionruntime.SenderPeerAdmissionAccepted:
+		if !admitted {
+			return true, false, errors.Join(errChannelAdmission, event.err)
+		}
+	case sessionruntime.SenderPeerAdmissionSilentClose:
+		if result.SettlementBegan {
+			return true, false, errors.Join(
+				errChannelAdmission,
+				errors.New("authenticated peer admission returned a silent disposition"),
+			)
+		}
+		return true, false, errors.Join(errChannelAdmission, event.err)
+	default:
+		return true, false, errors.Join(
+			errChannelAdmission,
+			errors.New("peer admission returned an unknown disposition"),
+			event.err,
+		)
 	}
 	execution.attempt.attached.Store(true)
-	execution.stopDeadline()
 	execution.attempt.recorder.complete(
-		SenderAttemptLaneAdmissionStarted, execution.candidateCounts(), &event.lane, nil,
+		SenderAttemptAdmitted, execution.candidateCounts(), SenderAttemptObservation{
+			Phase:                SenderAttemptPhaseAdmission,
+			GrantOperationID:     result.GrantOperationID,
+			Lane:                 &result.Lane,
+			AdmissionDisposition: SenderAdmissionAccepted,
+			ResponseDelivery:     SenderResponseDelivered,
+		},
 	)
-	pair := selectedPairEvidence(execution.peer)
-	execution.attempt.recorder.complete(
-		SenderAttemptAdmitted, execution.candidateCounts(), &event.lane, pair,
-	)
-	return nil
+	return true, true, nil
 }
 
-func (attempt *peerAttempt) awaitOpenAndAdmit(ctx context.Context, channel PeerDataChannel) {
+func (attempt *peerAttempt) awaitOpenAndAdmit(
+	ctx context.Context,
+	channel *ownedPeerDataChannel,
+	openTransition chan<- struct{},
+) {
 	if !awaitDataChannelOpen(ctx, channel) {
 		return
 	}
-	admissionContext, admitted := attempt.beginAdmission(ctx)
-	if !admitted {
+	phaseContext, transitioned, err := attempt.phases.beginAdmission(ctx)
+	if err != nil {
+		close(openTransition)
+		attempt.push(attemptEvent{kind: attemptDataChannelOpen, err: err})
 		return
 	}
-	// Both events come from this goroutine, so FIFO delivery makes the public
-	// open milestone precede every admission result even when admission is fast.
-	attempt.push(attemptEvent{kind: attemptDataChannelOpen})
-	lane, err := attempt.config.session.AdmitPeerChannel(admissionContext, channel)
-	attempt.resolveAdmission(lane, err)
-	attempt.push(attemptEvent{kind: attemptAdmission, lane: lane, err: err})
+	if !transitioned {
+		close(openTransition)
+		return
+	}
+	admissionContext, admitted := attempt.beginAdmission(phaseContext)
+	if !admitted {
+		close(openTransition)
+		return
+	}
+	close(openTransition)
+	// One goroutine owns Open and admission publication, so the public phase
+	// transition remains ordered even when authenticated settlement is immediate.
+	attempt.push(attemptEvent{
+		kind: attemptDataChannelOpen, admissionContext: phaseContext,
+	})
+	if !channel.consume() {
+		attempt.resolveAdmission(sessionruntime.SenderPeerAdmissionResult{}, ErrProtocol)
+		return
+	}
+	result, err := attempt.config.session.AdmitPeerChannel(
+		admissionContext,
+		channel,
+		sessionruntime.SenderPeerAdmissionControlFunc(func(
+			operationID protocolsession.OperationID,
+			lane sessionruntime.LaneIdentity,
+		) bool {
+			if !attempt.phases.beginAuthenticatedSettlement() {
+				return false
+			}
+			attempt.recorder.laneHelloAuthenticated(operationID, lane)
+			return true
+		}),
+	)
+	attempt.resolveAdmission(result, err)
+	attempt.push(attemptEvent{
+		kind: attemptAdmission, lane: result.Lane, admission: result, err: err,
+	})
 }
 
 func awaitDataChannelOpen(ctx context.Context, channel PeerDataChannel) bool {

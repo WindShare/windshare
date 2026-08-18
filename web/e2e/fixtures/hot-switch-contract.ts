@@ -1,4 +1,8 @@
-import type { V2BrowserConnectivityAttemptDiagnostic } from '../../src/connectivity/diagnostics'
+import type {
+  V2BrowserConnectivityAttemptDiagnostic,
+  V2BrowserConnectivityRecoveryDiagnostic,
+} from '../../src/connectivity/diagnostics'
+import type { V2PeerRecoveryPolicy } from '../../src/connectivity/v2-peer-recovery'
 
 export interface HotSwitchDispatch {
   readonly dispatchSequence: number
@@ -45,9 +49,23 @@ export interface HotSwitchRuntimeTerminal {
   readonly error?: string
 }
 
+export interface HotSwitchRecoveryControl {
+  readonly policy: V2PeerRecoveryPolicy
+}
+
+export interface HotSwitchAdmissionGateObservation {
+  readonly offerOrdinal: number
+  readonly release: 'attempt-timeout' | 'page-controlled'
+}
+
 /** Product observations cross the Playwright bridge without evidence-process ownership. */
 export type HotSwitchPageEvent =
   | { readonly kind: 'attempt'; readonly evidence: V2BrowserConnectivityAttemptDiagnostic }
+  | { readonly kind: 'recovery'; readonly evidence: V2BrowserConnectivityRecoveryDiagnostic }
+  | {
+      readonly kind: 'admission-response-gated'
+      readonly observation: HotSwitchAdmissionGateObservation
+    }
   | { readonly kind: 'dispatch'; readonly observation: HotSwitchDispatch }
   | { readonly kind: 'lane-admitted'; readonly observation: HotSwitchLaneObservation }
   | { readonly kind: 'lane-detached'; readonly observation: HotSwitchLaneObservation }

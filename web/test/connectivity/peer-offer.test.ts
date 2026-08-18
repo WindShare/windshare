@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type {
-  V2BrowserSelectedPairDiagnostic,
-  V2CandidateCounts,
-} from '../../src/connectivity/diagnostics'
+import type { V2CandidateCounts } from '../../src/connectivity/diagnostics'
 
 import {
   BrowserOfferChannelFactory,
@@ -153,10 +150,9 @@ describe('browser offer negotiation', () => {
     await channel.close()
   })
 
-  it('reports isolated negotiation milestones and a public selected-pair snapshot', async () => {
+  it('reports isolated negotiation milestones without collecting network endpoints', async () => {
     const fixture = negotiationFixture()
     const milestones: Array<{ readonly stage: string; readonly counts: V2CandidateCounts }> = []
-    let readSelectedPair: (() => Promise<V2BrowserSelectedPairDiagnostic | null>) | undefined
     const observer: V2PeerOfferAttemptObserver = {
       offerCreated: (counts) => milestones.push({ stage: 'offer-created', counts }),
       offerSent: (counts) => {
@@ -164,9 +160,8 @@ describe('browser offer negotiation', () => {
         throw new Error('synthetic observer failure')
       },
       answerReceived: (counts) => milestones.push({ stage: 'answer-received', counts }),
-      dataChannelOpened: (counts, reader) => {
+      dataChannelOpened: (counts) => {
         milestones.push({ stage: 'datachannel-open', counts })
-        readSelectedPair = reader
       },
     }
 
@@ -185,23 +180,7 @@ describe('browser offer negotiation', () => {
       { stage: 'answer-received', counts: { localEmitted: 1, remoteAccepted: 1 } },
       { stage: 'datachannel-open', counts: { localEmitted: 1, remoteAccepted: 1 } },
     ])
-    expect(await readSelectedPair?.()).toEqual({
-      candidatePairId: 'pair-1',
-      local: {
-        candidateId: 'local-1',
-        candidateType: 'host',
-        protocol: 'udp',
-        address: '192.0.2.1',
-        port: 5_001,
-      },
-      remote: {
-        candidateId: 'remote-1',
-        candidateType: 'host',
-        protocol: 'udp',
-        address: '192.0.2.2',
-        port: 5_002,
-      },
-    })
+    expect(fixture.peer.statsCalls).toBe(0)
     await channel.close()
   })
 
@@ -664,6 +643,7 @@ class FakeNegotiationPeer extends EventTarget {
   addCandidateOperation: Promise<void> | undefined
   readonly lifecycle: string[] = []
   closeCalls = 0
+  statsCalls = 0
   readonly stats = new Map<string, Record<string, unknown>>([
     ['transport-1', {
       id: 'transport-1',
@@ -728,6 +708,7 @@ class FakeNegotiationPeer extends EventTarget {
   }
 
   getStats(): Promise<RTCStatsReport> {
+    this.statsCalls += 1
     return Promise.resolve(this.stats as unknown as RTCStatsReport)
   }
 

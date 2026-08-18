@@ -1,32 +1,23 @@
 import {
-  V2_RELAY_CONTENT_FALLBACK_MILLISECONDS,
   type V2ConnectivityActivation,
   V2ConnectivityRouteAuthority,
   type V2ContentIntent,
-  type V2ContentSizeClass,
   V2ReceiverConnectivity,
 } from '../connectivity/v2-receiver-policy'
 
 interface V2StableActivation {
   readonly id: number
   readonly intent: V2ContentIntent
-  readonly startedAt: number
   readonly routes: V2ConnectivityRouteAuthority
-  sizeClass: V2ContentSizeClass
   delegate?: V2ConnectivityActivation
 }
 
-/** Keeps click-time 0/8 policy and activation ownership above session generations. */
+/** Keeps click-scoped route authority stable while ProtocolSession generations change. */
 export class V2SupervisedConnectivity {
-  readonly #now: () => number
   readonly #activations = new Map<number, V2StableActivation>()
   #current: V2ReceiverConnectivity | undefined
   #nextActivation = 1
   #closed = false
-
-  constructor(now: () => number = () => performance.now()) {
-    this.#now = now
-  }
 
   bind(connectivity: V2ReceiverConnectivity): void {
     if (this.#closed) {
@@ -44,16 +35,11 @@ export class V2SupervisedConnectivity {
     }
   }
 
-  begin(
-    intent: V2ContentIntent,
-    sizeClass: V2ContentSizeClass = 'unknown',
-  ): V2ConnectivityActivation {
+  begin(intent: V2ContentIntent): V2ConnectivityActivation {
     if (this.#closed) throw new Error('Supervised connectivity is closed')
     const activation: V2StableActivation = {
       id: this.#nextActivation++,
       intent,
-      sizeClass,
-      startedAt: this.#now(),
       routes: new V2ConnectivityRouteAuthority(),
     }
     if (this.#current !== undefined) {
@@ -63,11 +49,6 @@ export class V2SupervisedConnectivity {
     let closed = false
     return Object.freeze({
       routes: activation.routes,
-      observeSizeClass: (observed: V2ContentSizeClass) => {
-        if (closed) return
-        activation.sizeClass = observed
-        activation.delegate?.observeSizeClass(observed)
-      },
       close: () => {
         if (closed) return
         closed = true
@@ -96,10 +77,7 @@ export class V2SupervisedConnectivity {
     connectivity: V2ReceiverConnectivity,
     activation: V2StableActivation,
   ): V2ConnectivityActivation {
-    const elapsed = Math.max(0, this.#now() - activation.startedAt)
-    const remaining = Math.max(0, V2_RELAY_CONTENT_FALLBACK_MILLISECONDS - elapsed)
-    return connectivity.begin(activation.intent, activation.sizeClass, {
-      relayFallbackMilliseconds: remaining,
+    return connectivity.begin(activation.intent, {
       routeAuthority: activation.routes,
     })
   }

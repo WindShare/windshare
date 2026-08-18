@@ -11,7 +11,6 @@ import {
   type ReceiveIntent,
   type SelectionSpec,
 } from '../transfer/intent'
-import { SMALL_TRANSFER_BYTE_LIMIT } from '../transfer/measure'
 import {
   discoverAuthenticatedSelection,
   retryAuthenticatedSelectionDiscovery,
@@ -350,9 +349,6 @@ export class V2ReceiverController {
     this.#activeReceive.adopt({
       joined,
       selection,
-      // Persisted intent has no speculative size projection. The conservative
-      // connectivity class does not alter authenticated transfer scope.
-      sizeClass: 'large',
       runtime,
     })
   }
@@ -600,8 +596,6 @@ export class V2ReceiverController {
       this.#activeReceive.adopt({
         joined: activeProjection.joined,
         selection: activeProjection.frozenSelection,
-        sizeClass: activeProjection.state.projection.metrics.byteCountLowerBound >=
-          SMALL_TRANSFER_BYTE_LIMIT ? 'large' : 'small',
         runtime,
       })
     } catch (error) {

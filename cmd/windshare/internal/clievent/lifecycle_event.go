@@ -124,19 +124,30 @@ type CandidateCounts struct {
 }
 
 type PeerAttemptSpec struct {
-	Command       Command
-	Session       ProtocolSessionID
-	PeerPath      PeerPathID
-	Attempt       PeerAttemptID
-	Sequence      uint64
-	ElapsedMillis uint64
-	Stage         PeerAttemptStage
-	Candidates    CandidateCounts
-	HasCandidates bool
-	Lane          LaneIdentity
-	HasLane       bool
-	FailureScope  PeerFailureScope
-	Failure       Failure
+	Command                   Command
+	Session                   ProtocolSessionID
+	PeerPath                  PeerPathID
+	Attempt                   PeerAttemptID
+	OfferOperation            ProtocolOperationID
+	HasOfferOperation         bool
+	Sequence                  uint64
+	ElapsedMillis             uint64
+	Stage                     PeerAttemptStage
+	Phase                     PeerAttemptPhase
+	DeadlineMillis            uint64
+	Candidates                CandidateCounts
+	HasCandidates             bool
+	GrantOperation            ProtocolOperationID
+	HasGrantOperation         bool
+	Lane                      LaneIdentity
+	HasLane                   bool
+	AdmissionDisposition      PeerAdmissionDisposition
+	ResponseDelivery          PeerResponseDelivery
+	RejectionCode             PeerLaneRejectionCode
+	RejectionRetryAfterMillis uint64
+	FailedAtStage             PeerAttemptStage
+	FailureScope              PeerFailureScope
+	Failure                   Failure
 }
 
 type PeerAttemptObserved struct{ spec PeerAttemptSpec }
@@ -151,16 +162,47 @@ func NewPeerAttemptObserved(spec PeerAttemptSpec) (PeerAttemptObserved, error) {
 func validPeerAttemptSpec(spec PeerAttemptSpec) bool {
 	_, stageOK := spec.Stage.Name()
 	_, scopeOK := spec.FailureScope.Name()
+	_, phaseOK := spec.Phase.Name()
+	_, admissionOK := spec.AdmissionDisposition.Name()
+	_, deliveryOK := spec.ResponseDelivery.Name()
+	_, rejectionOK := spec.RejectionCode.Name()
+	_, failedAtOK := spec.FailedAtStage.Name()
 	hasFailure := spec.Failure.Valid()
-	// The provider publishes both admission milestones only after core returns
-	// the authenticated lane, so they share one stable lane identity.
-	laneRequired := spec.Stage == PeerLaneAdmissionStarted || spec.Stage == PeerAttemptAdmitted
+	deadlineStage := spec.Stage == PeerNegotiationDeadlineArmed ||
+		spec.Stage == PeerNegotiationDeadlineExpired || spec.Stage == PeerAdmissionDeadlineArmed ||
+		spec.Stage == PeerAdmissionDeadlineExpired
+	negotiationPhaseStage := spec.Stage == PeerNegotiationDeadlineArmed ||
+		spec.Stage == PeerNegotiationDeadlineExpired
+	admissionPhaseStage := spec.Stage == PeerAdmissionDeadlineArmed ||
+		spec.Stage == PeerAdmissionDeadlineExpired || spec.Stage == PeerLaneHelloAuthenticated ||
+		spec.Stage == PeerAdmissionResponseSettled || spec.Stage == PeerAttemptAdmitted
+	phaseRequired := negotiationPhaseStage || admissionPhaseStage
+	grantRequired := spec.Stage == PeerLaneHelloAuthenticated ||
+		spec.Stage == PeerAdmissionResponseSettled || spec.Stage == PeerAttemptAdmitted
+	grantAllowed := grantRequired || spec.Stage == PeerAdmissionDeadlineExpired ||
+		spec.Stage == PeerAttemptFailed
+	responseStage := spec.Stage == PeerAdmissionResponseSettled || spec.Stage == PeerAttemptAdmitted
+	rejectionStage := responseStage && spec.AdmissionDisposition == PeerAdmissionRejected
 	return spec.Command.Valid() && spec.Session.Valid() && spec.PeerPath.Valid() && spec.Attempt.Valid() &&
 		spec.Sequence != 0 && stageOK &&
 		(spec.Stage == PeerAttemptFailed) == hasFailure &&
+		(spec.Stage == PeerAttemptFailed) == failedAtOK &&
+		(!failedAtOK || spec.FailedAtStage != PeerAttemptStarted && spec.FailedAtStage != PeerAttemptFailed) &&
 		(spec.Stage == PeerAttemptFailed) == scopeOK &&
+		spec.HasOfferOperation == spec.OfferOperation.Valid() &&
+		phaseRequired == phaseOK &&
+		(!negotiationPhaseStage || spec.Phase == PeerPhaseNegotiation) &&
+		(!admissionPhaseStage || spec.Phase == PeerPhaseAdmission) &&
+		deadlineStage == (spec.DeadlineMillis != 0) &&
+		spec.HasGrantOperation == spec.GrantOperation.Valid() &&
+		(!grantRequired || spec.HasGrantOperation) && (!spec.HasGrantOperation || grantAllowed) &&
 		(!spec.HasLane || spec.Lane.Valid()) &&
-		laneRequired == spec.HasLane
+		(!grantRequired || spec.HasLane) && (!spec.HasLane || grantAllowed) &&
+		responseStage == admissionOK && responseStage == deliveryOK &&
+		rejectionStage == rejectionOK &&
+		(spec.Stage != PeerAttemptAdmitted ||
+			spec.AdmissionDisposition == PeerAdmissionAccepted && spec.ResponseDelivery == PeerResponseDelivered) &&
+		(spec.RejectionRetryAfterMillis == 0 || spec.RejectionCode == PeerLaneRejectAdmissionLimited)
 }
 
 func (PeerAttemptObserved) event()                                     {}
@@ -169,17 +211,40 @@ func (PeerAttemptObserved) Level() Level                               { return 
 func (value PeerAttemptObserved) ProtocolSessionID() ProtocolSessionID { return value.spec.Session }
 func (value PeerAttemptObserved) PeerPathID() PeerPathID               { return value.spec.PeerPath }
 func (value PeerAttemptObserved) PeerAttemptID() PeerAttemptID         { return value.spec.Attempt }
-func (value PeerAttemptObserved) Sequence() uint64                     { return value.spec.Sequence }
-func (value PeerAttemptObserved) ElapsedMillis() uint64                { return value.spec.ElapsedMillis }
-func (value PeerAttemptObserved) Stage() PeerAttemptStage              { return value.spec.Stage }
+func (value PeerAttemptObserved) OfferOperationID() (ProtocolOperationID, bool) {
+	return value.spec.OfferOperation, value.spec.HasOfferOperation
+}
+func (value PeerAttemptObserved) Sequence() uint64        { return value.spec.Sequence }
+func (value PeerAttemptObserved) ElapsedMillis() uint64   { return value.spec.ElapsedMillis }
+func (value PeerAttemptObserved) Stage() PeerAttemptStage { return value.spec.Stage }
+func (value PeerAttemptObserved) PhaseDeadline() (PeerAttemptPhase, uint64, bool) {
+	_, ok := value.spec.Phase.Name()
+	return value.spec.Phase, value.spec.DeadlineMillis, ok
+}
 func (value PeerAttemptObserved) Candidates() (CandidateCounts, bool) {
 	return value.spec.Candidates, value.spec.HasCandidates
 }
 func (value PeerAttemptObserved) Lane() (LaneIdentity, bool) {
 	return value.spec.Lane, value.spec.HasLane
 }
+func (value PeerAttemptObserved) GrantOperationID() (ProtocolOperationID, bool) {
+	return value.spec.GrantOperation, value.spec.HasGrantOperation
+}
+func (value PeerAttemptObserved) Admission() (PeerAdmissionDisposition, PeerResponseDelivery, bool) {
+	_, admissionOK := value.spec.AdmissionDisposition.Name()
+	_, deliveryOK := value.spec.ResponseDelivery.Name()
+	return value.spec.AdmissionDisposition, value.spec.ResponseDelivery, admissionOK && deliveryOK
+}
+func (value PeerAttemptObserved) Rejection() (PeerLaneRejectionCode, uint64, bool) {
+	_, ok := value.spec.RejectionCode.Name()
+	return value.spec.RejectionCode, value.spec.RejectionRetryAfterMillis, ok
+}
 func (value PeerAttemptObserved) Failure() (PeerFailureScope, Failure, bool) {
 	return value.spec.FailureScope, value.spec.Failure, value.spec.Failure.Valid()
+}
+func (value PeerAttemptObserved) FailedAtStage() (PeerAttemptStage, bool) {
+	_, ok := value.spec.FailedAtStage.Name()
+	return value.spec.FailedAtStage, ok
 }
 func (value PeerAttemptObserved) Accept(visitor Visitor) error {
 	return acceptPeerAttemptObserved(visitor, value)
