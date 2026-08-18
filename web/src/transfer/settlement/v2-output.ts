@@ -24,6 +24,22 @@ export class V2OutputSettlementTimeoutError extends Error {
   }
 }
 
+/** Keeps the transfer failure user-visible while retaining every failed safety action as cause. */
+export class V2TransferFailureSettlementError extends Error {
+  readonly transferFailure: unknown
+  readonly settlementFailures: readonly unknown[]
+
+  constructor(transferFailure: unknown, settlementFailures: readonly unknown[]) {
+    const failures = Object.freeze([...settlementFailures])
+    super(primaryTransferFailureMessage(transferFailure), {
+      cause: new AggregateError(failures, 'Transfer failure could not reach a proven output state'),
+    })
+    this.name = 'V2TransferFailureSettlementError'
+    this.transferFailure = transferFailure
+    this.settlementFailures = failures
+  }
+}
+
 export function outputSettlementTimeoutMilliseconds(value: number | undefined): number {
   const timeout = value ?? V2_DEFAULT_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS
   if (!Number.isSafeInteger(timeout) || timeout <= 0 ||
@@ -63,9 +79,9 @@ export async function pauseFailedV2Execution(options: {
   try {
     if (options.execution === undefined) {
       return validate(await settleWithSignal(
-        'abandon unopened plan execution',
+        'settle plan execution admission failure',
         budget,
-        signal => options.authority.abortUnopened(
+        signal => options.authority.settleExecutionAdmissionFailure(
           options.intent,
           options.reason,
           signal,
@@ -81,16 +97,29 @@ export async function pauseFailedV2Execution(options: {
         reason: options.reason,
       }, signal),
     ))
-  } catch {
-    return validate(await settleWithSignal(
-      'record unknown output settlement',
-      new SettlementBudget(options.timeoutMilliseconds, options.clock),
-      signal => options.authority.recordSettlementUnknown(
-        options.intent,
-        signal,
-      ),
-    ))
+  } catch (settlementFailure) {
+    try {
+      return validate(await settleWithSignal(
+        'record unknown output settlement',
+        new SettlementBudget(options.timeoutMilliseconds, options.clock),
+        signal => options.authority.recordSettlementUnknown(
+          options.intent,
+          signal,
+        ),
+      ))
+    } catch (unknownSettlementFailure) {
+      throw new V2TransferFailureSettlementError(options.reason, [
+        settlementFailure,
+        unknownSettlementFailure,
+      ])
+    }
   }
+}
+
+function primaryTransferFailureMessage(error: unknown): string {
+  return error instanceof Error && error.message.trim().length > 0
+    ? error.message
+    : 'Transfer failed before output settlement completed'
 }
 
 class SettlementBudget {

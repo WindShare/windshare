@@ -344,12 +344,18 @@ func (outbound senderOutbound) sendControl(
 	var deadlineMillis uint64
 	var hasDeadline bool
 	requestKind := protocolsession.MessageKind(0)
+	var operationErrorScope ProtocolOperationErrorScope
+	var operationErrorCode uint16
+	var operationErrorRetryable bool
+	var hasOperationError bool
 	if traceEnabled {
 		started = outbound.runtime.now()
 		deadlineMillis, hasDeadline = remainingDeadlineMillis(ctx, started)
 		if route, routeErr := outboundRoute(ctx, operationID); routeErr == nil {
 			requestKind = route.requestKind
 		}
+		operationErrorScope, operationErrorCode, operationErrorRetryable, hasOperationError =
+			protocolOperationErrorTrace(kind, body)
 	}
 	transaction, err := beginOutboundTransaction(outbound.runtime, ctx, operationID)
 	if err != nil {
@@ -360,7 +366,9 @@ func (outbound senderOutbound) sendControl(
 				ResponseKind: kind, HasResponse: true,
 				DeadlineRemainingMillis: deadlineMillis, HasDeadline: hasDeadline,
 				OperationElapsedMillis: durationMillis(outbound.runtime.now().Sub(started)),
-				Cause:                  protocolOperationCause(err),
+				OperationErrorScope:    operationErrorScope, OperationErrorCode: operationErrorCode,
+				OperationErrorRetryable: operationErrorRetryable, HasOperationError: hasOperationError,
+				Cause: protocolOperationCause(err),
 			})
 		}
 		if final {
@@ -391,7 +399,9 @@ func (outbound senderOutbound) sendControl(
 				DeadlineRemainingMillis: deadlineMillis, HasDeadline: hasDeadline,
 				OperationElapsedMillis: durationMillis(outbound.runtime.now().Sub(started)),
 				UsableLanesAtSelection: usableAtSelection,
-				Cause:                  cause,
+				OperationErrorScope:    operationErrorScope, OperationErrorCode: operationErrorCode,
+				OperationErrorRetryable: operationErrorRetryable, HasOperationError: hasOperationError,
+				Cause: cause,
 			})
 		}()
 	}

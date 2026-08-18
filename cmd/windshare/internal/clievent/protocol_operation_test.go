@@ -80,3 +80,25 @@ func TestProtocolOperationEventRejectsContradictoryLifecycleFacts(t *testing.T) 
 		})
 	}
 }
+
+func TestProtocolOperationEventExposesBoundedOperationErrorClassification(t *testing.T) {
+	session, _ := NewProtocolSessionID(bytes16(51))
+	operation, _ := NewProtocolOperationID(bytes16(52))
+	event, err := NewProtocolOperationObserved(ProtocolOperationSpec{
+		Command: CommandShare, Role: ProtocolRoleSender,
+		Stage:           ProtocolOperationSenderResponseSettled,
+		ProtocolSession: session, ProtocolOperation: operation,
+		RequestKind:  ProtocolMessageRequestBlocks,
+		ResponseKind: ProtocolMessageOperationError, HasResponse: true,
+		OperationErrorScope: ProtocolOperationErrorRevision,
+		OperationErrorCode:  0x3008, HasOperationError: true,
+		Cause: ProtocolOperationCauseNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, code, retryable, ok := event.OperationError()
+	if !ok || scope != ProtocolOperationErrorRevision || code != 0x3008 || retryable {
+		t.Fatalf("operation error = scope=%d code=%x retryable=%v present=%v", scope, code, retryable, ok)
+	}
+}

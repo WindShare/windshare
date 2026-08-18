@@ -5,7 +5,10 @@ import {
   reopenFileSystemAccessOutput,
   type FSAOutputTraceEvent,
 } from '../../src/output/file-system-access/session'
-import { createFileSystemAccessSettlementAuthority } from '../../src/output/file-system-access/settlement'
+import {
+  createFileSystemAccessSettlementAuthority,
+  type FSASettlementTraceEvent,
+} from '../../src/output/file-system-access/settlement'
 import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
 import {
   RECEIVE_RECORD_CLEANUP,
@@ -439,7 +442,7 @@ describe('File System Access settlement authority', () => {
     expect(retired).toBe(1)
   })
 
-  it('records an unopened single-file abort without creating a namespace entry', async () => {
+  it('settles a never-opened single-file admission failure without creating a namespace entry', async () => {
     const parent = new MemoryDirectory('downloads')
     const repository = new MemoryOperationRepository()
     const session = await bindTask({
@@ -461,9 +464,89 @@ describe('File System Access settlement authority', () => {
       clock: () => 1_000,
     })
 
-    await expect(settlement.abortUnopened(session.intent, 'cancelled', SIGNAL))
+    await expect(settlement.settleExecutionAdmissionFailure(session.intent, 'cancelled', SIGNAL))
       .resolves.toMatchObject({ kind: 'discarded' })
     expect(parent.entryNames()).toEqual([])
+    await session.close()
+  })
+
+  it('restores the exact continuation when a resumed execution fails before output binding', async () => {
+    const parent = new MemoryDirectory('downloads')
+    const repository = new MemoryOperationRepository()
+    const session = await bindTask({
+      parent,
+      repository,
+      checkpointFactory: memoryCheckpointFactory(),
+      locks: new MemoryLockManager(),
+      artifact: await singleFileArtifact(),
+      operationSeed: 103,
+    })
+    const leaseId = identity(104)
+    await startReceiving(repository, session.intent, leaseId)
+    const firstExecution = await fsaExecution(
+      session,
+      repository,
+      leaseId,
+      identity(105),
+      identity(106),
+    )
+    const fallback = await firstExecution.pause({
+      worker: PAUSED,
+      materialization: { entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n },
+      reason: new Error('first attempt paused'),
+    }, SIGNAL)
+    if (fallback.kind !== 'resumable-receive') throw new Error('test did not create a continuation')
+    await resumeReceiving(repository, session.intent, leaseId)
+    const trace: FSASettlementTraceEvent[] = []
+    const settlement = await createFileSystemAccessSettlementAuthority({
+      intent: session.intent,
+      repository,
+      lifecycleLeaseId: leaseId,
+      transferJobId: identity(107),
+      admissionFallback: fallback,
+      clock: () => 1_600,
+      trace: event => trace.push(event),
+    })
+
+    const restored = await settlement.settleExecutionAdmissionFailure(
+      session.intent,
+      new Error('revision lease expired before execution opened'),
+      SIGNAL,
+    )
+
+    expect(restored).toMatchObject({
+      kind: 'resumable-receive',
+      checkpointSetDigest: fallback.checkpointSetDigest,
+      completedFileCount: fallback.completedFileCount,
+      completedBytes: fallback.completedBytes,
+      expiresAt: fallback.expiresAt,
+      partialReceiptDigest: fallback.partialReceiptDigest,
+    })
+    expect(restored.generation).toBe(fallback.generation + 2n)
+    expect(trace).toEqual([expect.objectContaining({
+      name: 'receive.fsa.continuation.admission_failed',
+      restored_checkpoint_set_digest: fallback.checkpointSetDigest,
+      restored_expires_at_ms: fallback.expiresAt,
+    })])
+    if (restored.kind !== 'resumable-receive') throw new Error('continuation was not restored')
+    await resumeReceiving(repository, session.intent, leaseId)
+    const boundSettlement = await createFileSystemAccessSettlementAuthority({
+      intent: session.intent,
+      repository,
+      lifecycleLeaseId: leaseId,
+      transferJobId: identity(108),
+      admissionFallback: restored,
+      clock: () => 1_700,
+    })
+    boundSettlement.bindMaterialization(session)
+    await expect(boundSettlement.settleExecutionAdmissionFailure(
+      session.intent,
+      new Error('execution failed after output binding'),
+      SIGNAL,
+    )).resolves.toMatchObject({
+      kind: 'needs-attention',
+      reason: 'target-ownership-unknown',
+    })
     await session.close()
   })
 })

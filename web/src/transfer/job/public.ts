@@ -19,6 +19,7 @@ export type {
   TransferTraceListener,
 } from './contract'
 export { isV2FileScopedTransferFailure } from './failures'
+export { V2TransferAdmissionFailureError } from './admission-error'
 export { V2RangeReaderContractError } from './file-transfer'
 export {
   V2_DEFAULT_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS,
@@ -50,7 +51,7 @@ export type {
   V2PlanExecutionRouteRegistry,
   V2PortableOriginalExecutionRoute,
   V2PortableZipExecutionRoute,
-  V2UnopenedExecutionLifecycle,
+  V2ExecutionAdmissionLifecycle,
   V2WorkspaceOriginalExecutionRoute,
   V2WorkspaceZipExecutionRoute,
 } from '../settlement/v2-plan-authority'

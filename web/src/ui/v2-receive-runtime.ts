@@ -56,7 +56,9 @@ export interface V2BoundReceiveOperation {
   resolveWorkspaceUsage(
     lifecycle: ReceiveLifecycleState,
   ): WorkspaceUsage | null | PromiseLike<WorkspaceUsage | null>
-  abandon(reason: unknown): V2LifecycleMutation | PromiseLike<V2LifecycleMutation>
+  settleTransferAdmissionFailure(
+    reason: unknown,
+  ): V2LifecycleMutation | PromiseLike<V2LifecycleMutation>
   detach(): void | PromiseLike<void>
 }
 

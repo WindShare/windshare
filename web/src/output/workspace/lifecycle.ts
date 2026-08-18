@@ -32,6 +32,7 @@ export function reduceReceiveLifecycle(
     case 'preparation-rejected': return applied(rejectPreparation(state, event))
     case 'pause-verified': return applied(pauseVerified(state, event, context))
     case 'resume-started': return applied(resumeStable(state, event, context))
+    case 'resume-admission-failed': return applied(restoreReceiveContinuation(state, event, context))
     case 'stop-requested': return applied(stopReceive(state, event, context.planKind))
     case 'discovery-completed': return applied(discoveryCompleted(state, context))
     case 'tree-finalization-completed': return applied(finalizeTree(state, event, context))
@@ -196,6 +197,27 @@ function resumeStable(
     })
   }
   throw new TypeError('resume-started requires a resumable state')
+}
+
+function restoreReceiveContinuation(
+  state: ReceiveLifecycleState,
+  event: Extract<LifecycleEvent, { kind: 'resume-admission-failed' }>,
+  context: LifecycleReducerContext,
+): ReceiveLifecycleState {
+  requireState(state, 'receiving')
+  if (context.planKind !== 'direct-tree' && context.planKind !== 'workspace-then-publish') {
+    throw new TypeError('plan cannot restore a receive continuation')
+  }
+  return nextReceiveLifecycleState(state, {
+    kind: 'resumable-receive',
+    checkpointSetDigest: event.checkpointSetDigest,
+    completedFileCount: event.completedFileCount,
+    completedBytes: event.completedBytes,
+    expiresAt: event.expiresAt,
+    ...(event.partialReceiptDigest === undefined
+      ? {}
+      : { partialReceiptDigest: event.partialReceiptDigest }),
+  })
 }
 
 function stopReceive(

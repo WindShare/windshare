@@ -305,7 +305,7 @@ describe('production plan execution authority', () => {
       file,
     })
     const admittedEvidence: string[][] = []
-    const abortUnopened = vi.fn(async () => discardedState(intent))
+    const settleExecutionAdmissionFailure = vi.fn(async () => discardedState(intent))
     const recordSettlementUnknown = vi.fn(async () => needsAttentionState(intent))
     const authority = await createV2PlanExecutionAuthority({
       intent,
@@ -318,7 +318,7 @@ describe('production plan execution authority', () => {
             return Object.freeze({ kind: 'rejected', state: discardedState(intent) })
           },
         },
-        lifecycle: { abortUnopened, recordSettlementUnknown },
+        lifecycle: { settleExecutionAdmissionFailure, recordSettlementUnknown },
       },
     })
     const mutablePath = ['payload.bin']
@@ -331,7 +331,7 @@ describe('production plan execution authority', () => {
 
     expect(result).toEqual({ kind: 'rejected', state: discardedState(intent) })
     expect(admittedEvidence).toEqual([['payload.bin']])
-    await expect(authority.abortUnopened(
+    await expect(authority.settleExecutionAdmissionFailure(
       intent,
       new Error('admission failed'),
       new AbortController().signal,
@@ -340,7 +340,7 @@ describe('production plan execution authority', () => {
       intent,
       new AbortController().signal,
     )).resolves.toMatchObject({ kind: 'needs-attention' })
-    expect(abortUnopened).toHaveBeenCalledOnce()
+    expect(settleExecutionAdmissionFailure).toHaveBeenCalledOnce()
     expect(recordSettlementUnknown).toHaveBeenCalledOnce()
   })
 
@@ -472,7 +472,7 @@ function portableRouteRegistry(
   return Object.freeze({
     ...routes,
     lifecycle: Object.freeze({
-      abortUnopened: async () => discardedState(intent),
+      settleExecutionAdmissionFailure: async () => discardedState(intent),
       recordSettlementUnknown: async () => needsAttentionState(intent),
     }),
   })
@@ -606,7 +606,7 @@ function routeRegistry(
   return {
     ...routes,
     lifecycle: {
-      abortUnopened: async (intent) => discardedState(intent),
+      settleExecutionAdmissionFailure: async (intent) => discardedState(intent),
       recordSettlementUnknown: async (intent) => needsAttentionState(intent),
     },
   }

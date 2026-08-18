@@ -444,7 +444,7 @@ export interface TestPlanAuthority extends V2PlanExecutionAuthority {
   readonly singleFileAdmissions: ExactSingleFileEvidence[]
   readonly settlements: string[]
   readonly pauses: string[]
-  readonly aborts: unknown[]
+  readonly admissionFailures: unknown[]
   readonly unknownSettlements: string[]
   readonly pauseSignals: AbortSignal[]
   readonly output: TestOutput
@@ -455,6 +455,7 @@ export function planAuthorityFixture(input: {
   readonly rejectPreparation?: boolean
   readonly failSettlement?: boolean
   readonly failPause?: boolean
+  readonly failUnknownSettlement?: boolean
   readonly hangPause?: boolean
   readonly failDirectoryFinalizePath?: string
   readonly invalidPauseLifecycle?: boolean
@@ -466,7 +467,7 @@ export function planAuthorityFixture(input: {
   const singleFileAdmissions: ExactSingleFileEvidence[] = []
   const settlements: string[] = []
   const pauses: string[] = []
-  const aborts: unknown[] = []
+  const admissionFailures: unknown[] = []
   const unknownSettlements: string[] = []
   const pauseSignals: AbortSignal[] = []
 
@@ -569,12 +570,15 @@ export function planAuthorityFixture(input: {
       }
       return Object.freeze({ kind: 'accepted', execution })
     },
-    abortUnopened: async (intent, reason) => {
-      aborts.push(reason)
+    settleExecutionAdmissionFailure: async (intent, reason) => {
+      admissionFailures.push(reason)
       return discardedState(intent)
     },
     recordSettlementUnknown: async (intent) => {
       unknownSettlements.push(intent.plan.kind)
+      if (input.failUnknownSettlement === true) {
+        throw new Error('fixture unknown-settlement failure')
+      }
       return needsAttentionState(intent)
     },
   }
@@ -584,7 +588,7 @@ export function planAuthorityFixture(input: {
     singleFileAdmissions,
     settlements,
     pauses,
-    aborts,
+    admissionFailures,
     unknownSettlements,
     pauseSignals,
     output,

@@ -50,7 +50,7 @@ import {
   type WorkspaceMaterializationEvidence,
 } from '../../transfer/settlement/persistent-execution'
 import {
-  type V2UnopenedExecutionLifecycle,
+  type V2ExecutionAdmissionLifecycle,
 } from '../../transfer/settlement/v2-plan-authority'
 import {
   createOperationID,
@@ -84,13 +84,16 @@ import type {
 } from '../v2-receive-runtime'
 import type { BrowserReceiveWindow } from './contracts'
 import {
+  WorkspaceExecutionAdmissionSettlement,
+  type WorkspaceReceiveAdmissionFallback,
+} from './workspace-admission'
+import {
   NamespaceOnlyCleanupPort,
   handoffRetainedWorkspacePackage,
   workspacePlanAuthority,
 } from './workspace-publication'
 import {
   checkpointSetDigest,
-  isWorkspaceTerminal,
   randomAuthorityReference,
   readLifecycle,
   requireMatchingSingleFileAdmission,
@@ -206,7 +209,7 @@ interface WorkspaceSealBundle {
   readonly sealed: Awaited<ReturnType<WorkspaceOperationStages['sealMaterialization']>>
 }
 
-export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2UnopenedExecutionLifecycle {
+export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2ExecutionAdmissionLifecycle {
   readonly intent: ReceiveIntent
   readonly lifecycle: ReceiveLifecycleState
   readonly activeControls = Object.freeze(['pause'] as const)
@@ -226,6 +229,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Uno
   #preparation: SealedWorkspaceZipPreparationV1 | undefined
   #sealBundle: WorkspaceSealBundle | undefined
   #packageExactBytes: bigint | undefined
+  readonly #admissionSettlement: WorkspaceExecutionAdmissionSettlement
   #detached = false
 
   private constructor(input: {
@@ -241,6 +245,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Uno
     backend?: OriginPrivateWorkspaceBackend
     admitted?: AdmittedWorkspaceContent
     preparation?: SealedWorkspaceZipPreparationV1
+    receiveAdmissionFallback?: WorkspaceReceiveAdmissionFallback
     closeAuthority?: () => Promise<void>
   }) {
     this.#window = input.windowPort
@@ -263,6 +268,13 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Uno
       ownedBytes: 0n,
       maximumBytes: DEFAULT_OPFS_JOB_WORKSPACE_LIMIT,
     })
+    this.#admissionSettlement = new WorkspaceExecutionAdmissionSettlement({
+      currentLifecycle: () => readLifecycle(this.#repository, this.intent.operationId),
+      restoreContinuation: fallback => this.#stages.restoreReceiveContinuation(fallback),
+      discard: () => this.#discard(),
+      recordUnknown: () => this.recordSettlementUnknown(this.intent),
+      workspaceUsage: state => this.resolveWorkspaceUsage(state),
+    }, input.receiveAdmissionFallback)
   }
 
   static async create(input: {
@@ -310,6 +322,9 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Uno
       ...(operation.receiveContinuation.preparation === undefined
         ? {}
         : { preparation: operation.receiveContinuation.preparation }),
+      ...(operation.receiveAdmissionFallback === undefined
+        ? {}
+        : { receiveAdmissionFallback: operation.receiveAdmissionFallback }),
       closeAuthority: () => operation.close(),
     })
     owner.#plans = await workspacePlanAuthority(operation.intent, owner)
@@ -370,25 +385,20 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Uno
     return Object.freeze({ ownedBytes, maximumBytes: DEFAULT_OPFS_JOB_WORKSPACE_LIMIT })
   }
 
-  async abandon(): Promise<V2LifecycleMutation> {
+  settleTransferAdmissionFailure(): Promise<V2LifecycleMutation> {
     this.#requireAttached()
-    const current = await readLifecycle(this.#repository, this.intent.operationId)
-    if (isWorkspaceTerminal(current)) {
-      return Object.freeze({ lifecycle: current, workspaceUsage: this.resolveWorkspaceUsage(current) })
-    }
-    return this.#discard()
+    return this.#admissionSettlement.settle()
   }
 
-  async abortUnopened(
+  async settleExecutionAdmissionFailure(
     intent: ReceiveIntent,
     _reason: unknown,
     signal: AbortSignal,
   ): Promise<ReceiveLifecycleState> {
     requireSameIntent(this.intent, intent)
     signal.throwIfAborted()
-    const current = await readLifecycle(this.#repository, this.intent.operationId)
-    if (isWorkspaceTerminal(current)) return current
-    return (await this.#stages.discard(this.#cleanupRequest())).state
+    this.#requireAttached()
+    return (await this.#admissionSettlement.settle()).lifecycle
   }
 
   async recordSettlementUnknown(
@@ -564,6 +574,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Uno
       settlement,
       signal,
     } as Parameters<typeof createPersistentWorkspaceExecution>[0])
+    this.#admissionSettlement.markExecutionAdmitted()
     return Object.freeze({ kind: 'accepted', execution })
   }
 
@@ -662,10 +673,11 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Uno
       await this.#backend?.close()
       this.#backend = undefined
     }
-    await this.#stages.resumeReceive()
+    const plans = await workspacePlanAuthority(this.intent, this)
+    const current = await this.#stages.resumeReceive()
+    this.#admissionSettlement.beginContinuation(lifecycle)
     this.#transferJobId = createTransferJobID()
-    this.#plans = await workspacePlanAuthority(this.intent, this)
-    const current = await readLifecycle(this.#repository, this.intent.operationId)
+    this.#plans = plans
     return Object.freeze({
       lifecycle: current,
       activeControls: this.activeControls,

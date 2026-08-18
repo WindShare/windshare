@@ -283,6 +283,9 @@ export class PersistedReceiveOperationReopenAuthority {
     }>,
     observedAt: number,
   ): Promise<ReopenLifecycleAuthority> {
+    if (input.snapshot.lifecycle.kind !== 'resumable-receive') {
+      throw new TypeError('receive continuation lost its stable admission fallback')
+    }
     if (input.target.kind === 'direct-tree') {
       return Object.freeze({
         lifecycle: await persistReceiveResume(
@@ -291,9 +294,14 @@ export class PersistedReceiveOperationReopenAuthority {
           input.lease,
           observedAt,
         ),
+        receiveAdmissionFallback: input.snapshot.lifecycle,
       })
     }
-    return this.#resumeWorkspace(Object.freeze({ ...input, target: input.target }), observedAt)
+    return this.#resumeWorkspace(
+      Object.freeze({ ...input, target: input.target }),
+      observedAt,
+      input.snapshot.lifecycle,
+    )
   }
 
   async #resumeWorkspace(
@@ -306,6 +314,7 @@ export class PersistedReceiveOperationReopenAuthority {
       resources: ReopenResources
     }>,
     observedAt: number,
+    admissionFallback: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
   ): Promise<ReopenLifecycleAuthority> {
     const stages = await this.#openStages(input.repository, input.snapshot, input.lease)
     const admission = await this.#reclaimWorkspaceAdmission(input)
@@ -346,6 +355,7 @@ export class PersistedReceiveOperationReopenAuthority {
     })
     return Object.freeze({
       lifecycle,
+      receiveAdmissionFallback: admissionFallback,
       stages,
       admittedContent,
       receiveContinuation,
@@ -535,7 +545,12 @@ export class PersistedReceiveOperationReopenAuthority {
       ),
     }
     if (input.target.kind === 'direct-tree') {
-      return Object.freeze({ ...base, ...input.target })
+      const fallback = input.lifecycleAuthority.receiveAdmissionFallback
+      return Object.freeze({
+        ...base,
+        ...input.target,
+        ...(fallback === undefined ? {} : { receiveAdmissionFallback: fallback }),
+      })
     }
     const stages = input.lifecycleAuthority.stages ??
       await this.#openStages(input.repository, input.snapshot, input.lease)
@@ -552,6 +567,9 @@ export class PersistedReceiveOperationReopenAuthority {
       ...(input.lifecycleAuthority.receiveContinuation === undefined
         ? {}
         : { receiveContinuation: input.lifecycleAuthority.receiveContinuation }),
+      ...(input.lifecycleAuthority.receiveAdmissionFallback === undefined
+        ? {}
+        : { receiveAdmissionFallback: input.lifecycleAuthority.receiveAdmissionFallback }),
       ...(input.lifecycleAuthority.packageContinuation === undefined
         ? {}
         : { packageContinuation: input.lifecycleAuthority.packageContinuation }),

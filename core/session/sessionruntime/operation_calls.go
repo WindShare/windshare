@@ -239,22 +239,26 @@ type operationCall struct {
 	request    protocolsession.Message
 	replay     protocolsession.OutboundReplayPermit
 
-	requestKind            protocolsession.MessageKind
-	traceEnabled           bool
-	traceStarted           time.Time
-	traceDeadlineMillis    uint64
-	traceHasDeadline       bool
-	traceUsableAtSelection uint32
-	traceHasSend           bool
-	traceSendSettled       bool
-	traceSendAdmitted      bool
-	traceSendOutcome       protocolsession.SendOutcome
-	traceResponseCount     uint64
-	traceResponseKind      protocolsession.MessageKind
-	traceHasResponse       bool
-	traceHasFinalResponse  bool
-	traceCause             ProtocolOperationCause
-	traceEmitted           bool
+	requestKind                  protocolsession.MessageKind
+	traceEnabled                 bool
+	traceStarted                 time.Time
+	traceDeadlineMillis          uint64
+	traceHasDeadline             bool
+	traceUsableAtSelection       uint32
+	traceHasSend                 bool
+	traceSendSettled             bool
+	traceSendAdmitted            bool
+	traceSendOutcome             protocolsession.SendOutcome
+	traceResponseCount           uint64
+	traceResponseKind            protocolsession.MessageKind
+	traceHasResponse             bool
+	traceHasFinalResponse        bool
+	traceOperationErrorScope     ProtocolOperationErrorScope
+	traceOperationErrorCode      uint16
+	traceOperationErrorRetryable bool
+	traceHasOperationError       bool
+	traceCause                   ProtocolOperationCause
+	traceEmitted                 bool
 
 	// The admitted continuation bound is operation identity metadata, not live
 	// authority. Retaining it after close prevents shutdown timing from changing
@@ -393,6 +397,15 @@ func (call *operationCall) enqueue(response operationResponse) error {
 		}
 		call.traceResponseKind = response.message.Kind()
 		call.traceHasResponse = true
+		if scope, code, retryable, ok := protocolOperationErrorTrace(
+			response.message.Kind(),
+			response.message.Body(),
+		); ok {
+			call.traceOperationErrorScope = scope
+			call.traceOperationErrorCode = code
+			call.traceOperationErrorRetryable = retryable
+			call.traceHasOperationError = true
+		}
 		if senderResponseFinal(response.message.Kind()) {
 			call.traceHasFinalResponse = true
 		}

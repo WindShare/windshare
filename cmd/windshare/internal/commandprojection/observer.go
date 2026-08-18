@@ -384,6 +384,13 @@ func ProjectProtocolOperation(
 			return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
 		}
 	}
+	var operationErrorScope clievent.ProtocolOperationErrorScope
+	if value.HasOperationError {
+		operationErrorScope, ok = projectProtocolOperationErrorScope(value.OperationErrorScope)
+		if !ok {
+			return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+		}
+	}
 	event, err := clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
 		Command: command, Role: role, Stage: stage,
 		ProtocolSession: sessionID, ProtocolOperation: operationID,
@@ -396,6 +403,9 @@ func ProjectProtocolOperation(
 		OperationElapsedMillis:  value.OperationElapsedMillis,
 		UsableLanesAtSelection:  value.UsableLanesAtSelection,
 		UsableLanesAtSettlement: value.UsableLanesAtSettlement,
+		OperationErrorScope:     operationErrorScope, OperationErrorCode: value.OperationErrorCode,
+		OperationErrorRetryable: value.OperationErrorRetryable,
+		HasOperationError:       value.HasOperationError,
 		Cause:                   cause,
 	})
 	if err != nil {

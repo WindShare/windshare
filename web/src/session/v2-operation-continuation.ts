@@ -8,11 +8,11 @@ import {
 } from '../protocol/cbor'
 import {
   decodeV2OperationErrorControl,
-  type V2OperationErrorControl,
   type V2MessageKind,
   V2_MESSAGE_KIND,
   type V2SessionMessage,
 } from './v2-message'
+import { v2OperationErrorScopeAllowed } from './v2-operation-error-contract'
 import { V2SessionRuntimeError } from './v2-runtime-types'
 
 export const V2_MAXIMUM_PEER_CANDIDATES = 64
@@ -208,8 +208,7 @@ export class V2OperationContinuationAuthority {
     try {
       if (message.kind === V2_MESSAGE_KIND.operationError) {
         const actualScope = decodeV2OperationErrorControl(message.body).scope
-        const expectedScope = operationErrorScopeFor(this.requestKind)
-        if (expectedScope !== undefined && actualScope !== expectedScope) {
+        if (!v2OperationErrorScopeAllowed(this.requestKind, actualScope)) {
           throw new Error('operation received an error from another scope')
         }
         return
@@ -316,25 +315,6 @@ function isResponseAllowed(request: V2MessageKind, response: V2MessageKind): boo
       return response === V2_MESSAGE_KIND.peerAnswer || response === V2_MESSAGE_KIND.peerCandidate
     default:
       return false
-  }
-}
-
-function operationErrorScopeFor(
-  request: V2MessageKind,
-): V2OperationErrorControl['scope'] | undefined {
-  switch (request) {
-    case V2_MESSAGE_KIND.listChildren:
-      return 'directory'
-    case V2_MESSAGE_KIND.openRevisions:
-    case V2_MESSAGE_KIND.renewLease:
-    case V2_MESSAGE_KIND.releaseLease:
-      return 'revision'
-    case V2_MESSAGE_KIND.requestBlocks:
-      return 'block'
-    case V2_MESSAGE_KIND.peerOffer:
-      return 'peer'
-    default:
-      return undefined
   }
 }
 
