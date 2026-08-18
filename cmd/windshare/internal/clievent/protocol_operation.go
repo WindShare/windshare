@@ -123,6 +123,34 @@ func (value ProtocolOperationCause) Name() (string, bool) {
 	return names[value], true
 }
 
+type ProtocolOperationErrorScope uint8
+
+const (
+	ProtocolOperationErrorDirectory ProtocolOperationErrorScope = iota + 1
+	ProtocolOperationErrorRevision
+	ProtocolOperationErrorBlock
+	ProtocolOperationErrorPeer
+)
+
+const (
+	directoryProtocolOperationCodeFirst uint16 = 0x2001
+	directoryProtocolOperationCodeLast  uint16 = 0x2008
+	revisionProtocolOperationCodeFirst  uint16 = 0x3001
+	revisionProtocolOperationCodeLast   uint16 = 0x3008
+	blockProtocolOperationCodeFirst     uint16 = 0x4001
+	blockProtocolOperationCodeLast      uint16 = 0x4006
+	peerProtocolOperationCodeFirst      uint16 = 0x5001
+	peerProtocolOperationCodeLast       uint16 = 0x5004
+)
+
+func (value ProtocolOperationErrorScope) Name() (string, bool) {
+	names := [...]string{"", "directory", "revision", "block", "peer"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
 type ProtocolOperationSpec struct {
 	Command                 Command
 	Role                    ProtocolRole
@@ -144,6 +172,10 @@ type ProtocolOperationSpec struct {
 	OperationElapsedMillis  uint64
 	UsableLanesAtSelection  uint32
 	UsableLanesAtSettlement uint32
+	OperationErrorScope     ProtocolOperationErrorScope
+	OperationErrorCode      uint16
+	OperationErrorRetryable bool
+	HasOperationError       bool
 	Cause                   ProtocolOperationCause
 }
 
@@ -163,8 +195,10 @@ func validProtocolOperationSpec(spec ProtocolOperationSpec) bool {
 	_, responseOK := spec.ResponseKind.Name()
 	_, sendOK := spec.SendOutcome.Name()
 	_, causeOK := spec.Cause.Name()
+	operationErrorOK := validProtocolOperationError(spec)
 	if !spec.Command.Valid() || !roleOK || !stageOK || !requestOK || !spec.RequestKind.Request() ||
-		!sendOK || !causeOK || !spec.ProtocolSession.Valid() || !spec.ProtocolOperation.Valid() ||
+		!sendOK || !causeOK || !operationErrorOK ||
+		!spec.ProtocolSession.Valid() || !spec.ProtocolOperation.Valid() ||
 		spec.HasLane != spec.Lane.Valid() || spec.HasResponse != responseOK ||
 		(!spec.HasDeadline && spec.DeadlineRemainingMillis != 0) ||
 		(!spec.HasSend && (spec.SendSettled || spec.SendAdmitted || spec.SendOutcome != ProtocolSendUnknown)) {
@@ -185,6 +219,33 @@ func validProtocolOperationSpec(spec ProtocolOperationSpec) bool {
 			!spec.HasResponse && !spec.HasSend && spec.Cause == ProtocolOperationCauseNone
 	case ProtocolOperationSenderResponseSettled:
 		return spec.Command == CommandShare && spec.Role == ProtocolRoleSender && spec.HasResponse
+	default:
+		return false
+	}
+}
+
+func validProtocolOperationError(spec ProtocolOperationSpec) bool {
+	if !spec.HasOperationError {
+		return spec.OperationErrorScope == 0 && spec.OperationErrorCode == 0 &&
+			!spec.OperationErrorRetryable
+	}
+	if !spec.HasResponse || spec.ResponseKind != ProtocolMessageOperationError {
+		return false
+	}
+	switch spec.OperationErrorScope {
+	case ProtocolOperationErrorDirectory:
+		return spec.OperationErrorCode >= directoryProtocolOperationCodeFirst &&
+			spec.OperationErrorCode <= directoryProtocolOperationCodeLast
+	case ProtocolOperationErrorRevision:
+		return spec.OperationErrorCode >= revisionProtocolOperationCodeFirst &&
+			spec.OperationErrorCode <= revisionProtocolOperationCodeLast
+	case ProtocolOperationErrorBlock:
+		return spec.OperationErrorCode >= blockProtocolOperationCodeFirst &&
+			spec.OperationErrorCode <= blockProtocolOperationCodeLast
+	case ProtocolOperationErrorPeer:
+		return spec.OperationErrorCode >= peerProtocolOperationCodeFirst &&
+			spec.OperationErrorCode <= peerProtocolOperationCodeLast &&
+			!spec.OperationErrorRetryable
 	default:
 		return false
 	}
@@ -225,6 +286,15 @@ func (value ProtocolOperationObserved) UsableLanesAtSelection() uint32 {
 }
 func (value ProtocolOperationObserved) UsableLanesAtSettlement() uint32 {
 	return value.spec.UsableLanesAtSettlement
+}
+func (value ProtocolOperationObserved) OperationError() (
+	ProtocolOperationErrorScope,
+	uint16,
+	bool,
+	bool,
+) {
+	return value.spec.OperationErrorScope, value.spec.OperationErrorCode,
+		value.spec.OperationErrorRetryable, value.spec.HasOperationError
 }
 func (value ProtocolOperationObserved) Cause() ProtocolOperationCause { return value.spec.Cause }
 func (value ProtocolOperationObserved) Accept(visitor Visitor) error {

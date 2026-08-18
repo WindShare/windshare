@@ -498,7 +498,7 @@ function lifecycleAuthority(
 
 function unopenedLifecycle(intent: ReceiveIntent) {
   return {
-    abortUnopened: async () => discarded(intent),
+    settleExecutionAdmissionFailure: async () => discarded(intent),
     recordSettlementUnknown: async () => Object.freeze({
       kind: 'needs-attention' as const,
       operationId: intent.operationId,

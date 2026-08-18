@@ -15,7 +15,7 @@ import { reduceReceiveLifecycle, type LifecycleEvent } from '../../output/worksp
 import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../output/workspace/state'
 import {
   createV2PlanExecutionAuthority,
-  type V2UnopenedExecutionLifecycle,
+  type V2ExecutionAdmissionLifecycle,
 } from '../../transfer/settlement/v2-plan-authority'
 import {
   createOperationID,
@@ -105,7 +105,7 @@ export class StartedPortableReceive implements V2StartedArtifactAuthority {
 class PortableReceiveOperation implements
 V2BoundReceiveOperation,
 PortableExecutionLifecycleAuthority,
-V2UnopenedExecutionLifecycle {
+V2ExecutionAdmissionLifecycle {
   readonly intent: ReceiveIntent
   readonly lifecycle: ReceiveLifecycleState
   readonly activeControls = Object.freeze(['stop'] as const)
@@ -166,8 +166,12 @@ V2UnopenedExecutionLifecycle {
     return null
   }
 
-  async abandon(reason: unknown): Promise<V2LifecycleMutation> {
-    const state = await this.abortUnopened(this.intent, reason, new AbortController().signal)
+  async settleTransferAdmissionFailure(reason: unknown): Promise<V2LifecycleMutation> {
+    const state = await this.settleExecutionAdmissionFailure(
+      this.intent,
+      reason,
+      new AbortController().signal,
+    )
     return Object.freeze({ lifecycle: state, workspaceUsage: null })
   }
 
@@ -243,7 +247,7 @@ V2UnopenedExecutionLifecycle {
     }>
   }
 
-  async abortUnopened(
+  async settleExecutionAdmissionFailure(
     intent: ReceiveIntent,
     ...[, signal]: [reason: unknown, signal: AbortSignal]
   ): Promise<ReceiveLifecycleState> {

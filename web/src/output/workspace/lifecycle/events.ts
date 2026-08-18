@@ -41,6 +41,14 @@ export type LifecycleEvent =
       packageTempObjectId?: string
     }>
   | Readonly<LifecycleEventAuthority & {
+      kind: 'resume-admission-failed'
+      checkpointSetDigest: string
+      completedFileCount: bigint
+      completedBytes: bigint
+      expiresAt: number
+      partialReceiptDigest?: string
+    }>
+  | Readonly<LifecycleEventAuthority & {
       kind: 'stop-requested'
       successCount: bigint
       failureCount: bigint

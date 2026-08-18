@@ -27,6 +27,7 @@ import type {
   ReopenedWorkspaceOperation,
 } from '../output/resume/reopen-authority'
 import type { WorkspaceStageTraceListener } from '../output/workspace/stages'
+import { V2TransferFailureSettlementError } from '../transfer/settlement/v2-output'
 import type {
   V2BoundReceiveOperation,
   V2ReceiveCompositionPort,
@@ -370,16 +371,34 @@ function browserRetainedContinuationExecutor(
         case 'direct-tree-receive':
           return FSAReceiveOperation.reopen(continuation.operation)
         case 'workspace-receive': {
-          const backend = await continuation.operation.receiveContinuation.openBackend(
-            trace === undefined ? {} : { onTrace: trace },
-          )
-          signal.throwIfAborted()
-          return WorkspaceReceiveOperation.reopen({
-            windowPort,
-            operation: continuation.operation,
-            backend,
-            ...(trace === undefined ? {} : { trace }),
-          })
+          const fallback = continuation.operation.receiveAdmissionFallback
+          if (fallback === undefined) {
+            throw new TypeError('Workspace continuation omitted its admission fallback')
+          }
+          try {
+            const backend = await continuation.operation.receiveContinuation.openBackend(
+              trace === undefined ? {} : { onTrace: trace },
+            )
+            try {
+              signal.throwIfAborted()
+              return await WorkspaceReceiveOperation.reopen({
+                windowPort,
+                operation: continuation.operation,
+                backend,
+                ...(trace === undefined ? {} : { trace }),
+              })
+            } catch (error) {
+              await backend.close().catch(() => undefined)
+              throw error
+            }
+          } catch (error) {
+            try {
+              await continuation.operation.stages.restoreReceiveContinuation(fallback)
+            } catch (settlementError) {
+              throw new V2TransferFailureSettlementError(error, [settlementError])
+            }
+            throw error
+          }
         }
       }
     },

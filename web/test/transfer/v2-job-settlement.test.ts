@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { V2TransferFailureSettlementError } from '../../src/transfer/settlement/v2-output'
 import {
   catalogFixture,
   directoryEntry,
@@ -209,6 +210,45 @@ describe('v2 plan settlement', () => {
     expect(plans.settlements).toEqual([])
     expect(plans.pauses).toEqual(['direct-atomic'])
     expect(plans.unknownSettlements).toEqual(['direct-atomic'])
+  })
+
+  it('preserves the transfer failure when both output settlement paths fail', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 2n)
+    const selection = selectOnlyFile(file)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readers = readerFixture([file], [], { failRevisionFor: file.idText })
+    const plans = planAuthorityFixture({ failPause: true, failUnknownSettlement: true })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-atomic',
+      artifactKind: 'original-file',
+      selection,
+      file,
+    })
+
+    let thrown: unknown
+    try {
+      await transferJobFixture({
+        catalog: catalog.catalog,
+        selection,
+        intent,
+        plans,
+        revisions: readers.revisions,
+        broker: readers.broker,
+      }).run()
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(V2TransferFailureSettlementError)
+    const failure = thrown as V2TransferFailureSettlementError
+    expect(failure.transferFailure).toBeInstanceOf(Error)
+    expect(failure.message).toBe((failure.transferFailure as Error).message)
+    expect(failure.message).not.toContain('fixture pause failure')
+    expect(failure.settlementFailures).toEqual([
+      expect.objectContaining({ message: 'fixture pause failure' }),
+      expect.objectContaining({ message: 'fixture unknown-settlement failure' }),
+    ])
   })
 })
 

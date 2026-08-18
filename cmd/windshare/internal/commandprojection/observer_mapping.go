@@ -96,6 +96,13 @@ var protocolOperationCauseProjections = map[sessionruntime.ProtocolOperationCaus
 	sessionruntime.ProtocolOperationCauseProtocolFailure: clievent.ProtocolOperationCauseProtocolFailure,
 }
 
+var protocolOperationErrorScopeProjections = map[sessionruntime.ProtocolOperationErrorScope]clievent.ProtocolOperationErrorScope{
+	sessionruntime.ProtocolOperationErrorDirectory: clievent.ProtocolOperationErrorDirectory,
+	sessionruntime.ProtocolOperationErrorRevision:  clievent.ProtocolOperationErrorRevision,
+	sessionruntime.ProtocolOperationErrorBlock:     clievent.ProtocolOperationErrorBlock,
+	sessionruntime.ProtocolOperationErrorPeer:      clievent.ProtocolOperationErrorPeer,
+}
+
 func projectProtocolOperationStage(value sessionruntime.ProtocolOperationStage) (clievent.ProtocolOperationStage, bool) {
 	projected, ok := protocolOperationStageProjections[value]
 	return projected, ok
@@ -113,6 +120,13 @@ func projectProtocolSendOutcome(value protocolsession.SendOutcome) (clievent.Pro
 
 func projectProtocolOperationCause(value sessionruntime.ProtocolOperationCause) (clievent.ProtocolOperationCause, bool) {
 	projected, ok := protocolOperationCauseProjections[value]
+	return projected, ok
+}
+
+func projectProtocolOperationErrorScope(
+	value sessionruntime.ProtocolOperationErrorScope,
+) (clievent.ProtocolOperationErrorScope, bool) {
+	projected, ok := protocolOperationErrorScopeProjections[value]
 	return projected, ok
 }
 

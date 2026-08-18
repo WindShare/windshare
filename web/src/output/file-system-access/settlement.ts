@@ -36,6 +36,12 @@ import {
   type FSAFinalSettlementObservation,
 } from './session'
 import {
+  isFSAStableOrTerminal,
+  sameReceiveAdmissionFallback,
+  snapshotReceiveAdmissionFallback,
+  type ReceiveAdmissionFallback,
+} from './admission-fallback'
+import {
   createFSASettlementReceipt,
   createFSAUnopenedCleanupReceipt,
   fsaCheckpointSetDigest,
@@ -60,21 +66,32 @@ export type FSASettlementRepository = Pick<
   'commitTransition' | 'readLifecycle' | 'readLease' | 'readRecord' | 'readHandle'
 >
 
-export type FSASettlementTraceEvent = Readonly<{
-  name: 'receive.fsa.settlement.completed'
-  operation_id: string
-  receive_intent_digest: string
-  transfer_job_id: string
-  outcome: 'published' | 'partial-directory' | 'resumable-receive' | 'discarded' | 'needs-attention'
-  checkpoint_count: bigint
-  completed_file_count: bigint
-  completed_bytes: bigint
-  ownership_stage?: TargetOwnershipUnknownError['stage']
-}>
+export type FSASettlementTraceEvent =
+  | Readonly<{
+      name: 'receive.fsa.settlement.completed'
+      operation_id: string
+      receive_intent_digest: string
+      transfer_job_id: string
+      outcome: 'published' | 'partial-directory' | 'resumable-receive' | 'discarded' | 'needs-attention'
+      checkpoint_count: bigint
+      completed_file_count: bigint
+      completed_bytes: bigint
+      ownership_stage?: TargetOwnershipUnknownError['stage']
+    }>
+  | Readonly<{
+      name: 'receive.fsa.continuation.admission_failed'
+      operation_id: string
+      receive_intent_digest: string
+      transfer_job_id: string
+      restored_checkpoint_set_digest: string
+      restored_completed_file_count: bigint
+      restored_completed_bytes: bigint
+      restored_expires_at_ms: number
+    }>
 
 export interface FileSystemAccessOperationSettlementAuthority {
   bindMaterialization(session: FileSystemAccessOutputSession): PersistentDirectTreeSettlementAuthority
-  abortUnopened(
+  settleExecutionAdmissionFailure(
     intent: ReceiveIntent,
     reason: unknown,
     signal: AbortSignal,
@@ -90,6 +107,8 @@ export interface CreateFileSystemAccessSettlementAuthorityOptions {
   readonly repository: FSASettlementRepository
   readonly lifecycleLeaseId: string
   readonly transferJobId: string
+  /** Exact durable state to restore when a continuation cannot admit an execution. */
+  readonly admissionFallback?: ReceiveAdmissionFallback
   readonly clock?: () => number
   readonly trace?: (event: FSASettlementTraceEvent) => void
 }
@@ -102,11 +121,13 @@ export async function createFileSystemAccessSettlementAuthority(
   options: CreateFileSystemAccessSettlementAuthorityOptions,
 ): Promise<FileSystemAccessOperationSettlementAuthority> {
   const intent = await requireDirectTreeIntent(options.intent)
+  const admissionFallback = snapshotReceiveAdmissionFallback(intent, options.admissionFallback)
   return new FSAOperationSettlementAuthority({
     intent,
     repository: options.repository,
     lifecycleLeaseId: snapshotIdentity(options.lifecycleLeaseId, 16, 'lifecycle lease ID'),
     transferJobId: snapshotTransferJobId(options.transferJobId),
+    ...(admissionFallback === undefined ? {} : { admissionFallback }),
     clock: options.clock ?? Date.now,
     ...(options.trace === undefined ? {} : { trace: options.trace }),
     directoryScope: await createDirectoryAdmissionScope(intent),
@@ -121,6 +142,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
   readonly #clock: () => number
   readonly #trace: CreateFileSystemAccessSettlementAuthorityOptions['trace']
   readonly #directoryScope: DirectoryAdmissionScope
+  readonly #admissionFallback: ReceiveAdmissionFallback | undefined
   #materializationBound = false
 
   constructor(input: Readonly<{
@@ -128,6 +150,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
     repository: FSASettlementRepository
     lifecycleLeaseId: string
     transferJobId: string
+    admissionFallback?: ReceiveAdmissionFallback
     clock: () => number
     trace?: (event: FSASettlementTraceEvent) => void
     directoryScope: DirectoryAdmissionScope
@@ -136,6 +159,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
     this.#repository = input.repository
     this.#lifecycleLeaseId = input.lifecycleLeaseId
     this.#transferJobId = input.transferJobId
+    this.#admissionFallback = input.admissionFallback
     this.#clock = input.clock
     this.#trace = input.trace
     this.#directoryScope = input.directoryScope
@@ -159,7 +183,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
     return Object.freeze(authority)
   }
 
-  async abortUnopened(
+  async settleExecutionAdmissionFailure(
     intent: ReceiveIntent,
     _reason: unknown,
     signal: AbortSignal,
@@ -173,8 +197,36 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
       return (await this.#recordNeedsAttention(cause)).state
     }
     const current = await this.#lifecycle()
-    if (current.state.kind !== 'intent-frozen') {
-      throw new TypeError('unopened FSA abort requires IntentFrozen lifecycle state')
+    if (this.#admissionFallback !== undefined &&
+        sameReceiveAdmissionFallback(current.state, this.#admissionFallback)) {
+      return current.state
+    }
+    if (isFSAStableOrTerminal(current.state)) return current.state
+    if (current.state.kind === 'receiving' && this.#admissionFallback !== undefined &&
+        current.state.generation === this.#admissionFallback.generation + 1n &&
+        !this.#materializationBound) {
+      const fallback = this.#admissionFallback
+      const next = this.#reduce(current.state, {
+        kind: 'resume-admission-failed',
+        checkpointSetDigest: fallback.checkpointSetDigest,
+        completedFileCount: fallback.completedFileCount,
+        completedBytes: fallback.completedBytes,
+        expiresAt: fallback.expiresAt,
+        ...(fallback.partialReceiptDigest === undefined
+          ? {}
+          : { partialReceiptDigest: fallback.partialReceiptDigest }),
+        expectedGeneration: current.state.generation,
+        leaseId: this.#lifecycleLeaseId,
+      })
+      const committed = await this.#commitLifecycle(current, next)
+      this.#emitAdmissionFailureRestored(fallback)
+      return committed.state
+    }
+    const safelyUnopened = !this.#materializationBound &&
+      (current.state.kind === 'intent-frozen' ||
+       (current.state.kind === 'receiving' && this.#admissionFallback === undefined))
+    if (!safelyUnopened) {
+      return (await this.#recordNeedsAttention()).state
     }
     const receipt = await this.#unopenedCleanupReceipt()
     const next = this.#reduce(current.state, {
@@ -605,7 +657,10 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
   }
 
   #emit(
-    outcome: FSASettlementTraceEvent['outcome'],
+    outcome: Extract<
+      FSASettlementTraceEvent,
+      { name: 'receive.fsa.settlement.completed' }
+    >['outcome'],
     checkpointCount: bigint,
     completedFileCount: bigint,
     completedBytes: bigint,
@@ -625,6 +680,23 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
       }))
     } catch {
       // The persisted reducer state remains authoritative when telemetry is unavailable.
+    }
+  }
+
+  #emitAdmissionFailureRestored(fallback: ReceiveAdmissionFallback): void {
+    try {
+      this.#trace?.(Object.freeze({
+        name: 'receive.fsa.continuation.admission_failed',
+        operation_id: this.#intent.operationId,
+        receive_intent_digest: this.#intent.digest,
+        transfer_job_id: this.#transferJobId,
+        restored_checkpoint_set_digest: fallback.checkpointSetDigest,
+        restored_completed_file_count: fallback.completedFileCount,
+        restored_completed_bytes: fallback.completedBytes,
+        restored_expires_at_ms: fallback.expiresAt,
+      }))
+    } catch {
+      // Durable lifecycle restoration remains authoritative when telemetry is unavailable.
     }
   }
 }
