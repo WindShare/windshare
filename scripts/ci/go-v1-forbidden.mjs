@@ -71,6 +71,7 @@ for (const path of retiredFiles) {
 // Whole retired packages are checked physically so dead or build-tagged copies
 // cannot survive outside the dependency graph as a second implementation.
 const retiredTrees = [
+  'cmd/windshare',
   'core/chunk',
   'core/layout',
   'core/manifest',
@@ -141,7 +142,7 @@ const requiredSenderDependencies = new Set([
 
 for (const tagArguments of [[], ['-tags=v1fixtures']]) {
   const label = tagArguments.length === 0 ? 'default' : 'all-tag'
-  const sender = productionDependencies(tagArguments, './cmd/windshare', `${label} sender`)
+  const sender = productionDependencies(tagArguments, './cmd/wind', `${label} sender`)
   if (sender !== undefined) {
     rejectForbiddenDependencies(sender, `${label} sender`)
     for (const dependency of requiredSenderDependencies) {

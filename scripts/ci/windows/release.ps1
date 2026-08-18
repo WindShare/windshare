@@ -437,11 +437,11 @@ try {
     )
     try {
         $env:GOBIN = $cliInstallRoot
-        Invoke-Step 'install windshare CLI from the extracted release revision' {
-            & $goExecutable install ./cmd/windshare
+        Invoke-Step 'install wind CLI from the extracted release revision' {
+            & $goExecutable install ./cmd/wind
         }
-        Invoke-Step 'execute the installed windshare CLI' {
-            & (Join-Path $cliInstallRoot 'windshare.exe') --help | Out-Null
+        Invoke-Step 'execute the installed wind CLI' {
+            & (Join-Path $cliInstallRoot 'wind.exe') --help | Out-Null
         }
     } finally {
         if ($null -eq $originalGOBIN) {

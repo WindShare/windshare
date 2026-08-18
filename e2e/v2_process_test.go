@@ -41,10 +41,10 @@ const (
 	v2PionRelayCutBlockBytes          = 4 << 10
 	v2PionRelayCutPayloadSHA256       = "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
 
-	v2RelayComponent           = "wsrelay"
-	v2WindShareShareComponent  = "windshare_share"
-	v2WindShareGetComponent    = "windshare_get"
-	v2WindShareResumeComponent = "windshare_resume_list"
+	v2RelayComponent             = "wsrelay"
+	v2ShareCommandComponent      = "wind_share"
+	v2GetCommandComponent        = "wind_get"
+	v2ResumeListCommandComponent = "wind_resume_list"
 )
 
 const (
@@ -396,7 +396,7 @@ func TestLongV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testi
 	)
 	address := waitV2RelayReady(t, relay)
 	relayURL := "ws://" + address
-	share := startV2Process(t, scenario, v2WindShareShareComponent, binaries.windshare, "share", root, "--relay", relayURL)
+	share := startV2Process(t, scenario, v2ShareCommandComponent, binaries.wind, "share", root, "--relay", relayURL)
 	linkExpression := regexp.MustCompile(`(?m)^Link: (\S+)$`)
 	shareLink := waitV2Match(t, share, linkExpression, share.stdout)
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
@@ -407,7 +407,7 @@ func TestLongV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testi
 	receivers := make([]*v2Process, 0, len(outputs))
 	for _, output := range outputs {
 		receivers = append(receivers, startV2Process(
-			t, scenario, v2WindShareGetComponent, binaries.windshare, "get", shareLink, "-o", output,
+			t, scenario, v2GetCommandComponent, binaries.wind, "get", shareLink, "-o", output,
 		))
 	}
 	for index, receiver := range receivers {
@@ -432,7 +432,7 @@ func TestLongV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testi
 
 	selectedOutput := testoutputroot.New(t).RootPath
 	selected := startTracedV2Process(
-		t, scenario, v2WindShareGetComponent, binaries.windshare,
+		t, scenario, v2GetCommandComponent, binaries.wind,
 		"get", shareLink, "-o", selectedOutput, "--only", "tree/nested/a.txt",
 	)
 	selected.forbidStderr(capabilitySecrets...)
@@ -477,8 +477,8 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 	share := startV2Process(
 		t,
 		scenario,
-		v2WindShareShareComponent,
-		binaries.windshare,
+		v2ShareCommandComponent,
+		binaries.wind,
 		"share", source,
 		"--relay", proxy.BaseURL(),
 		"--block-size", fmt.Sprint(v2PionRelayCutBlockBytes),
@@ -487,7 +487,7 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
 	output := testoutputroot.New(t).RootPath
 	receiver := startTracedV2Process(
-		t, scenario, v2WindShareGetComponent, binaries.windshare, "get", shareLink, "-o", output,
+		t, scenario, v2GetCommandComponent, binaries.wind, "get", shareLink, "-o", output,
 	)
 	receiver.forbidStderr(capabilitySecrets...)
 	receiver.forbidUserTrace(append(capabilitySecrets, source, filepath.Base(source), output)...)
@@ -632,7 +632,7 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 	)
 	address := waitV2RelayReady(t, relay)
 	share := startV2Process(
-		t, scenario, v2WindShareShareComponent, binaries.windshare, "share", root, "--relay", "ws://"+address,
+		t, scenario, v2ShareCommandComponent, binaries.wind, "share", root, "--relay", "ws://"+address,
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
@@ -651,7 +651,7 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 	traceSafety := startV2Process(
-		t, scenario, v2WindShareGetComponent, binaries.windshare,
+		t, scenario, v2GetCommandComponent, binaries.wind,
 		"get", shareLink, "-o", traceSafetyOutput, "--trace", traceSafetyPath,
 	)
 	traceSafety.forbidStderr(append(append([]string(nil), stderrCanaries...), traceSafetyPath, traceSafetyOutput)...)
@@ -678,12 +678,12 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 	firstOutput := filepath.Join(output, "resume-tree", "file-000.bin")
 
 	interrupted := startV2Process(
-		t, scenario, v2WindShareGetComponent, binaries.windshare, "get", shareLink, "-o", output,
+		t, scenario, v2GetCommandComponent, binaries.wind, "get", shareLink, "-o", output,
 	)
 	waitV2PublishedFile(t, interrupted, firstOutput)
 	interrupted.stop(t)
 	resumeList := startV2Process(
-		t, scenario, v2WindShareResumeComponent, binaries.windshare,
+		t, scenario, v2ResumeListCommandComponent, binaries.wind,
 		"resume", "list", "-o", output,
 	)
 	resumeList.forbidStderr(append(append([]string(nil), stderrCanaries...), root, filepath.Base(root), output)...)
@@ -696,7 +696,7 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 	}
 
 	resumed := startTracedV2Process(
-		t, scenario, v2WindShareGetComponent, binaries.windshare, "get", shareLink, "-o", output,
+		t, scenario, v2GetCommandComponent, binaries.wind, "get", shareLink, "-o", output,
 	)
 	resumed.forbidStderr(stderrCanaries...)
 	resumed.forbidUserTrace(append(append([]string(nil), stderrCanaries...), root, filepath.Base(root), "file-000.bin", "file-001.bin", output)...)

@@ -59,25 +59,25 @@ func TestDerivePackageSetsRejectsInvalidInputs(t *testing.T) {
 	}{
 		{
 			name:       "duplicate all package",
-			all:        []string{modulePath + "/cmd/windshare", modulePath + "/cmd/windshare"},
+			all:        []string{modulePath + "/cmd/wind", modulePath + "/cmd/wind"},
 			core:       []string{modulePath + "/core/session"},
 			wantDetail: "all package set contains duplicate",
 		},
 		{
 			name:       "duplicate core package",
-			all:        []string{modulePath + "/cmd/windshare", modulePath + "/core/session"},
+			all:        []string{modulePath + "/cmd/wind", modulePath + "/core/session"},
 			core:       []string{modulePath + "/core/session", modulePath + "/core/session"},
 			wantDetail: "core package set contains duplicate",
 		},
 		{
 			name:       "core outside universe",
-			all:        []string{modulePath + "/cmd/windshare"},
+			all:        []string{modulePath + "/cmd/wind"},
 			core:       []string{modulePath + "/core/session"},
 			wantDetail: "absent from the production package universe",
 		},
 		{
 			name:       "empty core",
-			all:        []string{modulePath + "/cmd/windshare"},
+			all:        []string{modulePath + "/cmd/wind"},
 			core:       nil,
 			wantDetail: "core package set is empty",
 		},
@@ -157,7 +157,7 @@ func TestLoadPackageSetsUsesOnlyProductionUniversePatterns(t *testing.T) {
 
 	layout := &recordingModuleLayout{}
 	lister := &recordingLister{responses: map[string][]string{
-		allPattern:  {modulePath + "/cmd/windshare", modulePath + "/core/session"},
+		allPattern:  {modulePath + "/cmd/wind", modulePath + "/core/session"},
 		corePattern: {modulePath + "/core/session"},
 	}}
 	sets, err := loadPackageSets(context.Background(), layout, lister)
@@ -171,7 +171,7 @@ func TestLoadPackageSetsUsesOnlyProductionUniversePatterns(t *testing.T) {
 	if !reflect.DeepEqual(lister.patterns, []string{allPattern, corePattern}) {
 		t.Fatalf("patterns = %v, want [%q %q]", lister.patterns, allPattern, corePattern)
 	}
-	assertStringsEqual(t, sets.nonCore, []string{modulePath + "/cmd/windshare"})
+	assertStringsEqual(t, sets.nonCore, []string{modulePath + "/cmd/wind"})
 }
 
 func TestLoadPackageSetsFailsClosedBeforeListingAnUnapprovedLayout(t *testing.T) {

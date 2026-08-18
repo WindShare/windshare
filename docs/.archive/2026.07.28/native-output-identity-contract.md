@@ -29,7 +29,7 @@ Process-restart durability covers receiver termination while the kernel and moun
 
 Unknown platforms, non-allowlisted filesystems, network filesystems, FUSE, cloud-placeholder namespaces, Windows remote volumes, reparse-based roots, and nested mounts are rejected. There is no silent non-recoverable fallback.
 
-Recovery state does not expire automatically. `windshare resume list [-o <directory>]` reports a fresh inventory. `windshare resume discard -o <directory> --item <number>` lists again, previews that current item on the prompt stream, and removes it only after the user types the exact displayed `discard N` confirmation. Both confirmation input and preview/prompt output must be interactive terminals; redirection is rejected before inventory opens. Item numbers are ephemeral, no serialized reference or bulk/automatic discard is accepted, and a second interrupt exits immediately and is recovered as a process-crash cut.
+Recovery state does not expire automatically. `wind resume list [-o <directory>]` reports a fresh inventory. `wind resume discard -o <directory> --item <number>` lists again, previews that current item on the prompt stream, and removes it only after the user types the exact displayed `discard N` confirmation. Both confirmation input and preview/prompt output must be interactive terminals; redirection is rejected before inventory opens. Item numbers are ephemeral, no serialized reference or bulk/automatic discard is accepted, and a second interrupt exits immediately and is recovered as a process-crash cut.
 
 ## Identity and threat boundary
 
