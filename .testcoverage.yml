@@ -27,5 +27,5 @@ force-annotation-comment: true
 # is a finding, not a config problem.
 exclude:
   paths:
-    # CLI entry point; all business logic lives in cmd/windshare/internal/cli.
-    - ^cmd/windshare/main\.go$
+    # CLI entry point; all business logic lives in cmd/wind/internal/cli.
+    - ^cmd/wind/main\.go$
