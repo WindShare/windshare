@@ -664,8 +664,15 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 	if _, err := os.Stat(traceSafetyOutput); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("trace-open failure created the destination: %v", err)
 	}
-	if !strings.Contains(traceSafety.stderr.String(), "The trace path already exists. Choose a new path.") {
-		t.Fatalf("trace-open failure omitted the owner-safe explanation: %q", traceSafety.stderr.String())
+	traceSafetyDiagnostic := traceSafety.stderr.String()
+	for _, required := range []string{
+		"The trace path already exists",
+		"prior evidence was preserved and command/output state was untouched",
+		"Choose a new --trace path, use --trace-dir, or omit tracing",
+	} {
+		if !strings.Contains(traceSafetyDiagnostic, required) {
+			t.Fatalf("trace-open failure omitted %q from the owner-safe explanation: %q", required, traceSafetyDiagnostic)
+		}
 	}
 	output := testoutputroot.New(t).RootPath
 	firstOutput := filepath.Join(output, "resume-tree", "file-000.bin")
