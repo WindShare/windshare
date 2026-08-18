@@ -105,7 +105,8 @@ const (
 	ReceiverProvenanceLocalExplicitStop
 	ReceiverProvenanceLocalContextEnded
 	ReceiverProvenanceLocalNegotiationFailure
-	ReceiverProvenanceLocalAttemptTimeout
+	ReceiverProvenanceLocalNegotiationTimeout
+	ReceiverProvenanceLocalAdmissionTimeout
 	ReceiverProvenanceLocalOperationContract
 	ReceiverProvenanceRemoteOperationRejected
 	ReceiverProvenanceRemoteUnknownControl
@@ -122,7 +123,7 @@ const (
 )
 
 func (value ReceiverProvenance) Name() (string, bool) {
-	names := [...]string{"", "unbound", "local_explicit_stop", "local_context_ended", "local_negotiation_failure", "local_attempt_timeout", "local_operation_contract", "remote_operation_rejected", "remote_unknown_control", "remote_control_malformed", "remote_failure_malformed", "remote_failure_scope_violation", "runtime_stopping", "signaling_adapter_contract", "authenticated_second_answer", "authenticated_final_conflict", "authenticated_answer_binding_mismatch", "authenticated_candidate_binding_mismatch", "authenticated_continuation_authority_violation"}
+	names := [...]string{"", "unbound", "local_explicit_stop", "local_context_ended", "local_negotiation_failure", "local_negotiation_timeout", "local_admission_timeout", "local_operation_contract", "remote_operation_rejected", "remote_unknown_control", "remote_control_malformed", "remote_failure_malformed", "remote_failure_scope_violation", "runtime_stopping", "signaling_adapter_contract", "authenticated_second_answer", "authenticated_final_conflict", "authenticated_answer_binding_mismatch", "authenticated_candidate_binding_mismatch", "authenticated_continuation_authority_violation"}
 	if value == 0 || int(value) >= len(names) {
 		return "", false
 	}
@@ -169,7 +170,8 @@ const (
 	ReceiverCauseRuntimeClosed ReceiverCauseClass = iota + 1
 	ReceiverCauseConfiguration
 	ReceiverCauseOperationMissing
-	ReceiverCauseAttemptTimeout
+	ReceiverCauseNegotiationTimeout
+	ReceiverCauseAdmissionTimeout
 	ReceiverCauseCandidateLimit
 	ReceiverCauseChannelAdmission
 	ReceiverCauseEventCapacity
@@ -182,7 +184,7 @@ const (
 )
 
 func (value ReceiverCauseClass) Name() (string, bool) {
-	names := [...]string{"", "runtime_closed", "configuration", "operation_missing", "attempt_timeout", "candidate_limit", "channel_admission", "event_capacity", "negotiation", "protocol", "deadline_exceeded", "peer_shutdown", "channel_drain", "unknown"}
+	names := [...]string{"", "runtime_closed", "configuration", "operation_missing", "negotiation_timeout", "admission_timeout", "candidate_limit", "channel_admission", "event_capacity", "negotiation", "protocol", "deadline_exceeded", "peer_shutdown", "channel_drain", "unknown"}
 	if value == 0 || int(value) >= len(names) {
 		return "", false
 	}

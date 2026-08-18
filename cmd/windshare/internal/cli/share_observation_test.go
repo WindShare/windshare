@@ -94,11 +94,13 @@ func TestShareObservationsCollapseInvalidProducerFactsWithoutProviderText(t *tes
 	}
 }
 
-func TestShareObservationsAcceptSenderLaneAdmissionStarted(t *testing.T) {
+func TestShareObservationsAcceptAuthenticatedLaneHello(t *testing.T) {
 	emitter := &shareRecordingEmitter{detailed: true}
 	observations := newShareObservations(emitter)
 	observation := testShareAttemptObservation(t)
-	observation.Stage = v2peer.SenderAttemptLaneAdmissionStarted
+	observation.Stage = v2peer.SenderAttemptLaneHelloAuthenticated
+	observation.Phase = v2peer.SenderAttemptPhaseAdmission
+	observation.GrantOperationID = testShareProtocolOperationID(t, 0x31)
 	observation.CandidateCounts = &v2peer.SenderCandidateCounts{LocalEmitted: 2, RemoteAccepted: 1}
 	observation.Lane = &sessionruntime.LaneIdentity{ID: 2, Epoch: 1}
 
@@ -108,7 +110,7 @@ func TestShareObservationsAcceptSenderLaneAdmissionStarted(t *testing.T) {
 		t.Fatalf("events = %#v, lifecycle loss = %d", emitter.events, emitter.lifecycleLoss)
 	}
 	event, ok := emitter.events[0].(clievent.PeerAttemptObserved)
-	if !ok || event.Stage() != clievent.PeerLaneAdmissionStarted {
+	if !ok || event.Stage() != clievent.PeerLaneHelloAuthenticated {
 		t.Fatalf("lane-admission event = %#v", emitter.events[0])
 	}
 	lane, ok := event.Lane()
@@ -263,6 +265,17 @@ func testShareProtocolSessionID(t *testing.T, marker byte) protocolsession.Proto
 	raw := make([]byte, protocolsession.IdentityBytes)
 	raw[len(raw)-1] = marker
 	id, err := protocolsession.ProtocolSessionIDFromBytes(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func testShareProtocolOperationID(t *testing.T, marker byte) protocolsession.OperationID {
+	t.Helper()
+	raw := make([]byte, protocolsession.IdentityBytes)
+	raw[len(raw)-1] = marker
+	id, err := protocolsession.OperationIDFromBytes(raw)
 	if err != nil {
 		t.Fatal(err)
 	}

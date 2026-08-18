@@ -136,15 +136,19 @@ func TestLaneRegistryOwnsGrantEpochAdmissionAndStop(t *testing.T) {
 		t.Fatalf("grant = %+v, %v", grant, err)
 	}
 	hello, _ := NewLaneHello(share, session, grant.LaneID, grant.LaneEpoch, operation, grant.AttachNonce[:], traffic)
-	accepted, err := registry.AdmitCandidate(hello.Encoded(), bytes.Repeat([]byte{0x61}, 16))
+	accepted, err := registry.AdmitCandidate(hello.Encoded(), bytes.Repeat([]byte{0x61}, 16), allowLaneSettlement)
 	if err != nil || accepted.Disposition != LaneAdmissionAccepted {
 		t.Fatalf("admission = %+v, %v", accepted, err)
+	}
+	if !accepted.SettlementBegan || accepted.OperationID != operation ||
+		accepted.LaneID != grant.LaneID || accepted.LaneEpoch != grant.LaneEpoch {
+		t.Fatalf("accepted settlement correlation = %+v", accepted)
 	}
 	if _, err := ParseLaneAccept(accepted.Response, hello, privateKey.Public().(ed25519.PublicKey)); err != nil {
 		t.Fatal(err)
 	}
-	duplicate, err := registry.AdmitCandidate(hello.Encoded(), bytes.Repeat([]byte{0x61}, 16))
-	if err != nil || duplicate.Disposition != LaneAdmissionRejected || duplicate.Rejection != LaneRejectGrantConsumed {
+	duplicate, err := registry.AdmitCandidate(hello.Encoded(), bytes.Repeat([]byte{0x61}, 16), allowLaneSettlement)
+	if err != nil || duplicate.Disposition != LaneAdmissionRejected || duplicate.Rejection.Code != LaneRejectGrantConsumed {
 		t.Fatalf("duplicate = %+v, %v", duplicate, err)
 	}
 	if rejection, err := ParseLaneReject(duplicate.Response, hello, privateKey.Public().(ed25519.PublicKey)); err != nil || rejection.Code != LaneRejectGrantConsumed {
@@ -153,7 +157,7 @@ func TestLaneRegistryOwnsGrantEpochAdmissionAndStop(t *testing.T) {
 
 	malformed := hello.Encoded()
 	malformed[len(malformed)-1] ^= 1
-	silent, err := registry.AdmitCandidate(malformed, bytes.Repeat([]byte{0x61}, 16))
+	silent, err := registry.AdmitCandidate(malformed, bytes.Repeat([]byte{0x61}, 16), allowLaneSettlement)
 	if !errors.Is(err, ErrLaneProof) || silent.Disposition != LaneAdmissionSilentClose || len(silent.Response) != 0 {
 		t.Fatalf("unauthenticated disposition = %+v, %v", silent, err)
 	}
@@ -168,8 +172,8 @@ func TestLaneRegistryOwnsGrantEpochAdmissionAndStop(t *testing.T) {
 	}
 	registry.Stop()
 	hello2, _ := NewLaneHello(share, session, grant2.LaneID, grant2.LaneEpoch, operation2, grant2.AttachNonce[:], traffic)
-	stopped, err := registry.AdmitCandidate(hello2.Encoded(), bytes.Repeat([]byte{0x61}, 16))
-	if err != nil || stopped.Rejection != LaneRejectStopping {
+	stopped, err := registry.AdmitCandidate(hello2.Encoded(), bytes.Repeat([]byte{0x61}, 16), allowLaneSettlement)
+	if err != nil || stopped.Rejection.Code != LaneRejectStopping {
 		t.Fatalf("stopping admission = %+v, %v", stopped, err)
 	}
 	if _, err := registry.IssueGrant(grant.LaneID, operation2, grant2.AttachNonce[:]); !errors.Is(err, ErrLaneStopping) {
@@ -189,14 +193,92 @@ func TestLaneRegistryExpiresGrantsAndRejectsWrongSessionAfterProof(t *testing.T)
 	grant, _ := registry.IssueGrant(0, operation, bytes.Repeat([]byte{0x51}, 16))
 	now = now.Add(LaneGrantTTL)
 	hello, _ := NewLaneHello(share, session, grant.LaneID, grant.LaneEpoch, operation, grant.AttachNonce[:], traffic)
-	expired, err := registry.AdmitCandidate(hello.Encoded(), bytes.Repeat([]byte{0x61}, 16))
-	if err != nil || expired.Rejection != LaneRejectGrantExpired {
+	expired, err := registry.AdmitCandidate(hello.Encoded(), bytes.Repeat([]byte{0x61}, 16), allowLaneSettlement)
+	if err != nil || expired.Rejection.Code != LaneRejectGrantExpired {
 		t.Fatalf("expired admission = %+v, %v", expired, err)
 	}
 	wrongSession, _ := NewLaneHello(share, otherSession, grant.LaneID, grant.LaneEpoch, operation, grant.AttachNonce[:], traffic)
-	wrong, err := registry.AdmitCandidate(wrongSession.Encoded(), bytes.Repeat([]byte{0x61}, 16))
-	if err != nil || wrong.Rejection != LaneRejectUnknownSession {
+	wrong, err := registry.AdmitCandidate(wrongSession.Encoded(), bytes.Repeat([]byte{0x61}, 16), allowLaneSettlement)
+	if err != nil || wrong.Rejection.Code != LaneRejectUnknownSession {
 		t.Fatalf("wrong-session admission = %+v, %v", wrong, err)
+	}
+}
+
+func TestLaneRegistryRequiresAuthenticatedSettlementBeforeStateOrResponse(t *testing.T) {
+	now := time.Unix(20, 0)
+	share, _ := catalog.ShareInstanceFromBytes(laneSequence(1, 16))
+	session, _ := ProtocolSessionIDFromBytes(laneSequence(21, 16))
+	traffic, _ := TrafficKeyFromBytes(bytes.Repeat([]byte{0x31}, 32), DirectionReceiverToSender)
+	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x41}, 32))
+	registry, _ := NewLaneRegistry(LaneRegistryConfig{
+		ShareInstance: share, ProtocolSessionID: session, ReceiverToSender: traffic,
+		SenderSigningKey: privateKey, InitialLaneID: 7, Now: func() time.Time { return now },
+	})
+	operation, _ := OperationIDFromBytes(laneSequence(62, 16))
+	grant, _ := registry.IssueGrant(0, operation, bytes.Repeat([]byte{0x52}, 16))
+	hello, _ := NewLaneHello(
+		share, session, grant.LaneID, grant.LaneEpoch, operation, grant.AttachNonce[:], traffic,
+	)
+
+	gateCalls := 0
+	declined, err := registry.AdmitCandidate(
+		hello.Encoded(),
+		bytes.Repeat([]byte{0x62}, 16),
+		LaneAdmissionSettlementGateFunc(func(gotOperation OperationID, lane LaneAdmissionIdentity) bool {
+			gateCalls++
+			if gotOperation != operation ||
+				lane != (LaneAdmissionIdentity{LaneID: grant.LaneID, LaneEpoch: grant.LaneEpoch}) {
+				t.Fatalf("settlement identity = %x/%+v", gotOperation, lane)
+			}
+			return false
+		}),
+	)
+	if !errors.Is(err, ErrLaneSettlementUnclaimed) || declined.SettlementBegan ||
+		declined.OperationID != operation || len(declined.Response) != 0 {
+		t.Fatalf("declined settlement = %+v, %v", declined, err)
+	}
+	if state := registry.grants[operation]; !state.consumedAt.IsZero() {
+		t.Fatal("declined settlement consumed its one-use grant")
+	}
+
+	malformed := hello.Encoded()
+	malformed[len(malformed)-1] ^= 1
+	if result, parseErr := registry.AdmitCandidate(
+		malformed, bytes.Repeat([]byte{0x62}, 16),
+		LaneAdmissionSettlementGateFunc(func(OperationID, LaneAdmissionIdentity) bool {
+			gateCalls++
+			return true
+		}),
+	); !errors.Is(parseErr, ErrLaneProof) || result.SettlementBegan {
+		t.Fatalf("malformed settlement = %+v, %v", result, parseErr)
+	}
+	if gateCalls != 1 {
+		t.Fatalf("gate calls after unauthenticated input = %d", gateCalls)
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("settlement gate panic was swallowed")
+			}
+		}()
+		_, _ = registry.AdmitCandidate(
+			hello.Encoded(),
+			bytes.Repeat([]byte{0x62}, 16),
+			LaneAdmissionSettlementGateFunc(func(OperationID, LaneAdmissionIdentity) bool {
+				panic("settlement control failed")
+			}),
+		)
+	}()
+	if registry.settlementCount != 0 || registry.settlementDone != nil {
+		t.Fatalf("panicking settlement retained count=%d done=%v",
+			registry.settlementCount, registry.settlementDone != nil)
+	}
+
+	accepted, err := registry.AdmitCandidate(
+		hello.Encoded(), bytes.Repeat([]byte{0x62}, 16), allowLaneSettlement,
+	)
+	if err != nil || !accepted.SettlementBegan || accepted.Disposition != LaneAdmissionAccepted {
+		t.Fatalf("valid settlement after decline = %+v, %v", accepted, err)
 	}
 }
 
@@ -339,12 +421,12 @@ func TestLaneRegistryRejectsBudgetEpochAndGrantSubstitution(t *testing.T) {
 		t.Fatal("initial lane release failed")
 	}
 	secondHello, _ := NewLaneHello(share, session, 7, second.LaneEpoch, operation2, second.AttachNonce[:], traffic)
-	if result, err := staleRegistry.AdmitCandidate(secondHello.Encoded(), laneSequence(111, 16)); err != nil || result.Disposition != LaneAdmissionAccepted {
+	if result, err := staleRegistry.AdmitCandidate(secondHello.Encoded(), laneSequence(111, 16), allowLaneSettlement); err != nil || result.Disposition != LaneAdmissionAccepted {
 		t.Fatalf("newer epoch admission = %+v, %v", result, err)
 	}
 	staleRegistry.Release(7, second.LaneEpoch)
 	firstHello, _ := NewLaneHello(share, session, 7, first.LaneEpoch, operation, first.AttachNonce[:], traffic)
-	if result, err := staleRegistry.AdmitCandidate(firstHello.Encoded(), laneSequence(121, 16)); err != nil || result.Rejection != LaneRejectStaleEpoch {
+	if result, err := staleRegistry.AdmitCandidate(firstHello.Encoded(), laneSequence(121, 16), allowLaneSettlement); err != nil || result.Rejection.Code != LaneRejectStaleEpoch {
 		t.Fatalf("stale epoch admission = %+v, %v", result, err)
 	}
 
@@ -353,7 +435,7 @@ func TestLaneRegistryRejectsBudgetEpochAndGrantSubstitution(t *testing.T) {
 	mismatchNonce := grant.AttachNonce
 	mismatchNonce[0] ^= 1
 	mismatchHello, _ := NewLaneHello(share, session, 7, grant.LaneEpoch, operation, mismatchNonce[:], traffic)
-	if result, err := mismatchRegistry.AdmitCandidate(mismatchHello.Encoded(), laneSequence(111, 16)); err != nil || result.Rejection != LaneRejectGrantMismatch {
+	if result, err := mismatchRegistry.AdmitCandidate(mismatchHello.Encoded(), laneSequence(111, 16), allowLaneSettlement); err != nil || result.Rejection.Code != LaneRejectGrantMismatch {
 		t.Fatalf("grant mismatch admission = %+v, %v", result, err)
 	}
 	if (*LaneRegistry)(nil).Release(7, 0) {
@@ -364,3 +446,7 @@ func TestLaneRegistryRejectsBudgetEpochAndGrantSubstitution(t *testing.T) {
 	}
 	(*LaneRegistry)(nil).Stop()
 }
+
+var allowLaneSettlement = LaneAdmissionSettlementGateFunc(
+	func(OperationID, LaneAdmissionIdentity) bool { return true },
+)

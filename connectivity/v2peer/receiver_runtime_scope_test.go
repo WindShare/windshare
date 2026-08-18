@@ -27,7 +27,7 @@ const (
 	receiverRuntimeScopeCandidateLimit   = 2
 	receiverRuntimeScopeInitialLaneID    = uint32(73)
 	receiverRuntimeScopeTestTimeout      = 10 * time.Second
-	receiverRuntimeScopeAttemptTimeout   = 5 * time.Second
+	receiverRuntimeScopePhaseBudget      = 5 * time.Second
 	receiverRuntimeScopeRelay            = "ws://127.0.0.1:8484"
 	receiverRuntimeScopeExpectedOfferSDP = "v=0\r\ns=authoritative-local-offer\r\n"
 	receiverRuntimeScopeFailureMessage   = "Block failure sent for a peer operation"
@@ -185,8 +185,9 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 	receiverPeer := newReceiverTestPeerConnection()
 	receiverDataChannel := newReceiverTestChannel()
 	receiverFactory, err := NewReceiverFactory(ReceiverFactoryConfig{
-		MaxCandidates:  receiverRuntimeScopeCandidateLimit,
-		AttemptTimeout: receiverRuntimeScopeAttemptTimeout,
+		MaxCandidates:     receiverRuntimeScopeCandidateLimit,
+		NegotiationBudget: receiverRuntimeScopePhaseBudget,
+		AdmissionBudget:   receiverRuntimeScopePhaseBudget,
 		PeerConnections: ReceiverPeerConnectionFactoryFunc(func(pion.Configuration) (ReceiverPeerConnection, error) {
 			return receiverPeer, nil
 		}),

@@ -4,11 +4,7 @@ import {
 } from '../transport/webrtc'
 import { V2_MAXIMUM_PEER_CANDIDATES } from '../session/v2-operation-continuation'
 import { abortReason } from './clock'
-import type {
-  V2BrowserIceCandidateDiagnostic,
-  V2BrowserSelectedPairDiagnostic,
-  V2CandidateCounts,
-} from './diagnostics'
+import type { V2CandidateCounts } from './diagnostics'
 import { NegotiationEventQueue } from './negotiation-event-queue'
 import {
   CandidateLimitExceededError,
@@ -54,7 +50,7 @@ export interface V2PeerOfferAttemptObserver {
   answerReceived(candidateCounts: V2CandidateCounts): void
   dataChannelOpened(
     candidateCounts: V2CandidateCounts,
-    readSelectedPair: () => Promise<V2BrowserSelectedPairDiagnostic | null>,
+    ...unusedLegacyArguments: readonly unknown[]
   ): void
 }
 
@@ -326,10 +322,7 @@ class OfferNegotiation {
   #publishOpenedChannel(): void {
     if (!this.#openedChannel) {
       this.#openedChannel = true
-      this.#observe((observer) => observer.dataChannelOpened(
-        this.#candidateCounts(),
-        () => readBrowserSelectedPair(this.#peer),
-      ))
+      this.#observe((observer) => observer.dataChannelOpened(this.#candidateCounts()))
       this.#opened.resolve(this.#ownedChannel)
     }
   }
@@ -506,85 +499,6 @@ function optionalCandidateString(value: unknown, label: string): string | null {
   if (value === undefined || value === null) return null
   if (typeof value !== 'string') throw new TypeError(`ICE candidate ${label} is invalid`)
   return value
-}
-
-async function readBrowserSelectedPair(
-  peer: RTCPeerConnection,
-): Promise<V2BrowserSelectedPairDiagnostic | null> {
-  let report: RTCStatsReport
-  try {
-    report = await peer.getStats()
-  } catch {
-    // Admission is an authenticated session fact. Missing browser diagnostics are
-    // represented explicitly as null and remain a later evidence-verdict concern.
-    return null
-  }
-  const stats = new Map<string, Record<string, unknown>>()
-  report.forEach((entry) => {
-    if (isRecord(entry) && typeof entry.id === 'string') stats.set(entry.id, entry)
-  })
-  const selectedPairId = selectedCandidatePairId(stats)
-  if (selectedPairId === undefined) return null
-  const pair = stats.get(selectedPairId)
-  if (pair === undefined) return null
-  const localId = stringField(pair, 'localCandidateId')
-  const remoteId = stringField(pair, 'remoteCandidateId')
-  if (localId === undefined || remoteId === undefined) return null
-  const local = browserCandidateEvidence(stats.get(localId), localId)
-  const remote = browserCandidateEvidence(stats.get(remoteId), remoteId)
-  if (local === null || remote === null) return null
-  return Object.freeze({ candidatePairId: selectedPairId, local, remote })
-}
-
-function selectedCandidatePairId(
-  stats: ReadonlyMap<string, Record<string, unknown>>,
-): string | undefined {
-  for (const entry of stats.values()) {
-    if (entry.type !== 'transport') continue
-    const selected = stringField(entry, 'selectedCandidatePairId')
-    if (selected !== undefined) return selected
-  }
-  for (const entry of stats.values()) {
-    if (entry.type !== 'candidate-pair') continue
-    if (entry.selected === true || (entry.nominated === true && entry.state === 'succeeded')) {
-      return stringField(entry, 'id')
-    }
-  }
-  return undefined
-}
-
-function browserCandidateEvidence(
-  candidate: Record<string, unknown> | undefined,
-  candidateId: string,
-): V2BrowserIceCandidateDiagnostic | null {
-  if (candidate === undefined) return null
-  const candidateType = candidate.candidateType
-  const protocol = candidate.protocol
-  if (!isIceCandidateType(candidateType) || !isIceProtocol(protocol)) return null
-  const address = stringField(candidate, 'address') ?? stringField(candidate, 'ip')
-  const port = candidate.port
-  return Object.freeze({
-    candidateId,
-    candidateType,
-    protocol,
-    ...(address === undefined ? {} : { address }),
-    ...(typeof port === 'number' && Number.isSafeInteger(port) && port > 0 && port <= 65_535
-      ? { port }
-      : {}),
-  })
-}
-
-function stringField(record: Record<string, unknown>, field: string): string | undefined {
-  const value = record[field]
-  return typeof value === 'string' && value !== '' ? value : undefined
-}
-
-function isIceCandidateType(value: unknown): value is V2BrowserIceCandidateDiagnostic['candidateType'] {
-  return value === 'host' || value === 'prflx' || value === 'srflx' || value === 'relay'
-}
-
-function isIceProtocol(value: unknown): value is V2BrowserIceCandidateDiagnostic['protocol'] {
-  return value === 'udp' || value === 'tcp'
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

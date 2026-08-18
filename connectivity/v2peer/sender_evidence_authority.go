@@ -7,21 +7,30 @@ type evidenceClaim struct {
 	sessionTerminal bool
 }
 
+const (
+	senderEvidenceTerminalIdentityReserve = 1
+	minimumSessionEvidenceIdentities      = SenderMaxActivePeerAttemptsPerSession +
+		senderEvidenceTerminalIdentityReserve
+)
+
 // senderEvidenceAuthority is protected by senderHandler.mu. Exact membership
-// must outlive replay tombstones, but its memory cannot. The first identity past
-// the normal budget owns one separate terminal slot; publishing that stream and
-// ending the ProtocolSession preserves exactness without retaining later input.
+// must outlive replay tombstones, but its memory cannot. One identity is reserved
+// for the capacity terminal so ordinary claims and their terminal boundary share
+// the same session-wide ceiling.
 type senderEvidenceAuthority struct {
-	maximumClaims   int
-	claims          map[v2signal.Binding]peerOperation
-	terminal        bool
-	terminalBinding v2signal.Binding
+	maximumIdentities int
+	claims            map[v2signal.Binding]peerOperation
+	terminal          bool
+	terminalBinding   v2signal.Binding
 }
 
-func newSenderEvidenceAuthority(maximumClaims int) senderEvidenceAuthority {
+func newSenderEvidenceAuthority(maximumIdentities int) senderEvidenceAuthority {
 	return senderEvidenceAuthority{
-		maximumClaims: maximumClaims,
-		claims:        make(map[v2signal.Binding]peerOperation, maximumClaims),
+		maximumIdentities: maximumIdentities,
+		claims: make(
+			map[v2signal.Binding]peerOperation,
+			maximumIdentities-senderEvidenceTerminalIdentityReserve,
+		),
 	}
 }
 
@@ -38,7 +47,7 @@ func (authority *senderEvidenceAuthority) claim(
 	if authority.terminal {
 		return evidenceClaim{sessionTerminal: true}
 	}
-	if len(authority.claims) < authority.maximumClaims {
+	if len(authority.claims)+senderEvidenceTerminalIdentityReserve < authority.maximumIdentities {
 		authority.claims[binding] = operation
 		return evidenceClaim{acquired: true}
 	}
@@ -66,9 +75,13 @@ func (authority *senderEvidenceAuthority) reset() {
 	authority.terminalBinding = v2signal.Binding{}
 }
 
-func (authority *senderEvidenceAuthority) claimCount() int {
+func (authority *senderEvidenceAuthority) retainedIdentityCount() int {
 	if authority == nil {
 		return 0
 	}
-	return len(authority.claims)
+	count := len(authority.claims)
+	if authority.terminal {
+		count++
+	}
+	return count
 }

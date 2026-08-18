@@ -4,6 +4,8 @@ const EVENT_TIMEOUT_MILLISECONDS = 30_000
 const MAXIMUM_RETAINED_EVENTS = 1_024
 const PAGE_EVENT_KINDS: ReadonlySet<unknown> = new Set<HotSwitchPageEvent['kind']>([
   'attempt',
+  'recovery',
+  'admission-response-gated',
   'dispatch',
   'lane-admitted',
   'lane-detached',

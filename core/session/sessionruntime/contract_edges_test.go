@@ -333,7 +333,9 @@ func TestSenderPeerSessionRejectsMissingAuthorityAndExposesExactIdentity(t *test
 	); !errors.Is(err, ErrRuntimeConfig) {
 		t.Fatalf("empty peer control error = %v", err)
 	}
-	if _, err := empty.AdmitPeerChannel(context.Background(), nil); !errors.Is(err, ErrRuntimeClosed) {
+	if _, err := empty.AdmitPeerChannel(
+		context.Background(), nil, allowSenderPeerSettlement,
+	); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("empty peer admission error = %v", err)
 	}
 	if err := empty.FailPeerOperation(

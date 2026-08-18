@@ -99,7 +99,6 @@ class FakeJoined {
     const routes = new V2ConnectivityRouteAuthority()
     return {
       routes,
-      observeSizeClass: () => undefined,
       close: () => {
         if (closed) return
         closed = true

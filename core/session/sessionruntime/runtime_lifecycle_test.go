@@ -497,7 +497,9 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 	sendResponseHello := laneHelloForGrant(t, receiver, sendResponseGrant)
 	sendResponse, sendResponsePeer := newMemoryChannelPair()
 	_ = sendResponsePeer.Close()
-	if _, err := sender.acceptCandidate(context.Background(), sendResponse, sendResponseHello); !errors.Is(err, io.ErrClosedPipe) {
+	if _, err := sender.acceptCandidate(
+		context.Background(), sendResponse, sendResponseHello, allowSenderPeerSettlement,
+	); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("lane acceptance send error = %v", err)
 	}
 
@@ -505,7 +507,9 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 	randomHello := laneHelloForGrant(t, receiver, randomGrant)
 	sender.random = edgeErrorReader{}
 	randomFailure, randomFailurePeer := newMemoryChannelPair()
-	if _, err := sender.acceptCandidate(context.Background(), randomFailure, randomHello); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if _, err := sender.acceptCandidate(
+		context.Background(), randomFailure, randomHello, allowSenderPeerSettlement,
+	); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("lane sender nonce error = %v", err)
 	}
 	if randomFailure.State() != framechannel.Closed {

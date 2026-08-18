@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -84,7 +85,9 @@ func TestLaneRegistryCloseClearsSensitiveAndAdmissionState(t *testing.T) {
 	go func() {
 		defer wait.Done()
 		<-start
-		_, _ = registry.AdmitCandidate(hello.Encoded(), laneSequence(177, LaneSenderNonceBytes))
+		_, _ = registry.AdmitCandidate(
+			hello.Encoded(), laneSequence(177, LaneSenderNonceBytes), allowLaneSettlement,
+		)
 	}()
 	go func() {
 		defer wait.Done()
@@ -102,5 +105,73 @@ func TestLaneRegistryCloseClearsSensitiveAndAdmissionState(t *testing.T) {
 	}
 	if _, err := registry.IssueGrant(0, testOperationID(178), laneSequence(179, LaneAttachNonceBytes)); !errors.Is(err, ErrLaneStopping) {
 		t.Fatalf("post-close grant error=%v", err)
+	}
+}
+
+func TestLaneRegistryCloseJoinsAuthenticatedSettlementBeforeSecretDestruction(t *testing.T) {
+	now := time.Unix(400, 0)
+	registry, share, session, traffic, privateKey := newLifecycleLaneRegistry(t, &now)
+	operationID := testOperationID(180)
+	grant, _ := registry.IssueGrant(0, operationID, laneSequence(181, LaneAttachNonceBytes))
+	hello, _ := NewLaneHello(
+		share, session, grant.LaneID, grant.LaneEpoch, operationID, grant.AttachNonce[:], traffic,
+	)
+	settlementEntered := make(chan struct{})
+	releaseSettlement := make(chan struct{})
+	admissionResult := make(chan struct {
+		admission LaneAdmission
+		err       error
+	}, 1)
+	go func() {
+		admission, err := registry.AdmitCandidate(
+			hello.Encoded(),
+			laneSequence(182, LaneSenderNonceBytes),
+			LaneAdmissionSettlementGateFunc(func(OperationID, LaneAdmissionIdentity) bool {
+				close(settlementEntered)
+				<-releaseSettlement
+				return true
+			}),
+		)
+		admissionResult <- struct {
+			admission LaneAdmission
+			err       error
+		}{admission: admission, err: err}
+	}()
+	<-settlementEntered
+	closeDone := make(chan struct{})
+	go func() {
+		registry.Close()
+		close(closeDone)
+	}()
+	for {
+		registry.mu.Lock()
+		closing := registry.closing
+		registry.mu.Unlock()
+		if closing {
+			break
+		}
+		runtime.Gosched()
+	}
+	select {
+	case <-closeDone:
+		t.Fatal("registry close destroyed authority before settlement joined")
+	default:
+	}
+	close(releaseSettlement)
+	settled := <-admissionResult
+	if settled.err != nil || !settled.admission.SettlementBegan ||
+		settled.admission.Disposition != LaneAdmissionRejected ||
+		settled.admission.Rejection.Code != LaneRejectStopping {
+		t.Fatalf("close-raced settlement = %+v, %v", settled.admission, settled.err)
+	}
+	if rejection, err := ParseLaneReject(
+		settled.admission.Response, hello, privateKey.Public().(ed25519.PublicKey),
+	); err != nil || rejection != settled.admission.Rejection {
+		t.Fatalf("close-raced signed rejection = %+v, %v", rejection, err)
+	}
+	<-closeDone
+	if registry.settlementCount != 0 || registry.settlementDone != nil || !registry.closing {
+		t.Fatalf("closed settlement lifecycle count=%d done=%v closing=%v",
+			registry.settlementCount, registry.settlementDone != nil, registry.closing)
 	}
 }

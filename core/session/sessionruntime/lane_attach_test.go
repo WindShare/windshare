@@ -594,9 +594,15 @@ func TestAdmitChannelSeparatesLaneRecoveryFromProtocolSessionReplacement(t *test
 			err   error
 		}{value: value, err: err}
 	}()
-	receiverLane, err := receiver.AttachLane(context.Background(), grant, attachedReceiverChannel)
+	receiverAdmission, err := receiver.AttachLane(context.Background(), grant, attachedReceiverChannel)
 	if err != nil {
 		t.Fatal(err)
+	}
+	receiverLane := receiverAdmission.Lane
+	if receiverAdmission.GrantOperationID != grant.OperationID ||
+		receiverAdmission.Disposition != ReceiverLaneAdmissionAccepted ||
+		receiverAdmission.LaneInstallation != ReceiverLaneInstalled {
+		t.Fatalf("receiver admission = %+v", receiverAdmission)
 	}
 	attached := <-attachedAdmission
 	if attached.err != nil || attached.value.Kind != SenderChannelAttachedLane || attached.value.Session != nil ||
@@ -769,72 +775,202 @@ func TestForgedLaneProofIsSilentAndDoesNotConsumeGrant(t *testing.T) {
 	}
 }
 
-func TestAdmitPeerChannelCannotRouteAProofIntoSiblingProtocolSession(t *testing.T) {
+func TestAdmitPeerChannelSettlementGatePrecedesGrantAndSignedResponse(t *testing.T) {
 	fixture := newVerticalFixture(t)
-	firstSender, firstReceiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
-	secondSender, secondReceiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
-	defer firstSender.Close()
-	defer firstReceiver.Close()
-	defer secondSender.Close()
-	defer secondReceiver.Close()
-	grant, err := firstReceiver.RequestLane(context.Background(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	wrongSenderChannel, wrongReceiverChannel := newMemoryChannelPair()
-	wrongResult := make(chan error, 1)
-	wrongContext, cancelWrong := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancelWrong()
-	go func() {
-		_, admitErr := secondSender.AdmitPeerChannel(wrongContext, wrongSenderChannel)
-		wrongResult <- admitErr
-	}()
-	if _, err := firstReceiver.AttachLane(wrongContext, grant, wrongReceiverChannel); err == nil {
-		t.Fatal("receiver attached a peer lane through a sibling ProtocolSession")
-	}
-	if err := <-wrongResult; !errors.Is(err, ErrHandshake) {
-		t.Fatalf("sibling peer admission error = %v", err)
-	}
-
-	rightSenderChannel, rightReceiverChannel := newMemoryChannelPair()
-	rightResult := make(chan struct {
-		identity LaneIdentity
-		err      error
+	sender, receiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
+	defer sender.Close()
+	defer receiver.Close()
+	grant := mustRequestLane(t, receiver)
+	hello := laneHelloForGrant(t, receiver, grant)
+	base, peer := newObservedChannelPair()
+	candidate := &countingAdmissionChannel{FrameChannel: base}
+	result := make(chan struct {
+		admission SenderPeerAdmissionResult
+		err       error
 	}, 1)
 	go func() {
-		identity, admitErr := firstSender.AdmitPeerChannel(context.Background(), rightSenderChannel)
-		rightResult <- struct {
-			identity LaneIdentity
-			err      error
-		}{identity: identity, err: admitErr}
+		admission, err := sender.AdmitPeerChannel(
+			context.Background(),
+			candidate,
+			SenderPeerAdmissionControlFunc(func(
+				operationID protocolsession.OperationID,
+				lane LaneIdentity,
+			) bool {
+				if operationID != grant.OperationID ||
+					lane != (LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) {
+					t.Errorf("settlement identity = %x/%+v", operationID, lane)
+				}
+				return false
+			}),
+		)
+		result <- struct {
+			admission SenderPeerAdmissionResult
+			err       error
+		}{admission: admission, err: err}
 	}()
-	receiverIdentity, err := firstReceiver.AttachLane(context.Background(), grant, rightReceiverChannel)
-	if err != nil {
-		t.Fatalf("attach exact-session peer lane after sibling rejection: %v", err)
+	if err := peer.Send(context.Background(), framechannel.Frame(hello)); err != nil {
+		t.Fatal(err)
 	}
-	right := <-rightResult
-	if right.err != nil || right.identity != receiverIdentity {
-		t.Fatalf("exact peer admission = %#v, %v; receiver=%#v", right.identity, right.err, receiverIdentity)
+	settled := <-result
+	if !errors.Is(settled.err, protocolsession.ErrLaneSettlementUnclaimed) ||
+		settled.admission.SettlementBegan ||
+		settled.admission.GrantOperationID != grant.OperationID ||
+		settled.admission.Lane != (LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) ||
+		settled.admission.Disposition != SenderPeerAdmissionSilentClose ||
+		settled.admission.ResponseDelivery != SenderPeerResponseNotAttempted ||
+		settled.admission.LaneAttachment != SenderPeerLaneAttachmentNotAttempted {
+		t.Fatalf("declined peer settlement = %+v, %v", settled.admission, settled.err)
 	}
-	senderRelay, err := firstSender.lanes.selectLane(&firstSender.initial)
+	if base.sends.Load() != 0 || candidate.closes.Load() != 1 {
+		t.Fatalf("declined settlement sends=%d closes=%d", base.sends.Load(), candidate.closes.Load())
+	}
+	_ = peer.Close()
+
+	identity, receiverErr, senderErr := attachGrantedLane(t, fixture.senderFactory, receiver, grant)
+	if receiverErr != nil || senderErr != nil ||
+		identity != (LaneIdentity{ID: grant.LaneID, Epoch: grant.LaneEpoch}) {
+		t.Fatalf("grant changed by declined settlement = %+v, %v/%v", identity, receiverErr, senderErr)
+	}
+}
+
+func TestAdmitPeerChannelPreservesAuthenticatedSettlementAcrossCancellation(t *testing.T) {
+	fixture := newVerticalFixture(t)
+	sender, receiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
+	defer sender.Close()
+	defer receiver.Close()
+	grant := mustRequestLane(t, receiver)
+	hello := laneHelloForGrant(t, receiver, grant)
+	base, peer := newObservedChannelPair()
+	responseGate := base.gateNextSend()
+	candidate := &countingAdmissionChannel{FrameChannel: base}
+	ctx, cancel := context.WithCancel(context.Background())
+	gateEntered := make(chan struct{})
+	releaseGate := make(chan struct{})
+	result := make(chan struct {
+		admission SenderPeerAdmissionResult
+		err       error
+	}, 1)
+	go func() {
+		admission, err := sender.AdmitPeerChannel(
+			ctx,
+			candidate,
+			SenderPeerAdmissionControlFunc(func(protocolsession.OperationID, LaneIdentity) bool {
+				close(gateEntered)
+				<-releaseGate
+				return true
+			}),
+		)
+		result <- struct {
+			admission SenderPeerAdmissionResult
+			err       error
+		}{admission: admission, err: err}
+	}()
+	if err := peer.Send(context.Background(), framechannel.Frame(hello)); err != nil {
+		t.Fatal(err)
+	}
+	<-gateEntered
+	cancel()
+	close(releaseGate)
+	<-responseGate.started
+	settled := <-result
+	if !errors.Is(settled.err, context.Canceled) ||
+		!settled.admission.SettlementBegan ||
+		settled.admission.GrantOperationID != grant.OperationID ||
+		settled.admission.Disposition != SenderPeerAdmissionAccepted ||
+		settled.admission.ResponseDelivery != SenderPeerResponseDeliveryFailed ||
+		settled.admission.LaneAttachment != SenderPeerLaneAttachmentNotAttempted {
+		t.Fatalf("canceled authenticated settlement = %+v, %v", settled.admission, settled.err)
+	}
+	if candidate.closes.Load() != 1 {
+		t.Fatalf("canceled candidate closes=%d", candidate.closes.Load())
+	}
+	_ = peer.Close()
+
+	retryGrant, err := receiver.RequestLane(context.Background(), grant.LaneID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiverRelay, err := firstReceiver.lanes.selectLane(&firstReceiver.initial)
+	identity, receiverErr, senderErr := attachGrantedLane(t, fixture.senderFactory, receiver, retryGrant)
+	if receiverErr != nil || senderErr != nil || identity.ID != grant.LaneID {
+		t.Fatalf("accepted-send failure did not release lane = %+v, %v/%v", identity, receiverErr, senderErr)
+	}
+}
+
+func TestAdmitPeerChannelResponseFailureRetainsAuthenticatedRejection(t *testing.T) {
+	fixture := newVerticalFixture(t)
+	sender, receiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
+	defer sender.Close()
+	defer receiver.Close()
+	initialLaneID, _ := receiver.LaneIdentity()
+	grant, err := receiver.RequestLane(context.Background(), initialLaneID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = senderRelay.channel.Close()
-	_ = receiverRelay.channel.Close()
-	waitSessionCondition(t, "exact-session peer survives relay loss", func() bool {
-		return firstSender.AttachedLanes() == 1 && firstReceiver.AttachedLanes() == 1
-	})
-	select {
-	case <-firstReceiver.Done():
-		t.Fatal("relay loss ended the receiver despite its admitted peer lane")
-	default:
+	hello := laneHelloForGrant(t, receiver, grant)
+	base, peer := newMemoryChannelPair()
+	wantSendErr := errors.New("admission response transport failed")
+	candidate := &failingAdmissionSendChannel{
+		countingAdmissionChannel: countingAdmissionChannel{FrameChannel: base},
+		err:                      wantSendErr,
 	}
+	result := make(chan struct {
+		admission SenderPeerAdmissionResult
+		err       error
+	}, 1)
+	go func() {
+		admission, admitErr := sender.AdmitPeerChannel(
+			context.Background(), candidate, allowSenderPeerSettlement,
+		)
+		result <- struct {
+			admission SenderPeerAdmissionResult
+			err       error
+		}{admission: admission, err: admitErr}
+	}()
+	if err := peer.Send(context.Background(), framechannel.Frame(hello)); err != nil {
+		t.Fatal(err)
+	}
+	settled := <-result
+	var rejected *LaneRejectedError
+	if !errors.Is(settled.err, wantSendErr) || !errors.As(settled.err, &rejected) ||
+		rejected.Rejection.Code != protocolsession.LaneRejectAdmissionLimited ||
+		rejected.Rejection.RetryAfter != time.Second ||
+		!settled.admission.SettlementBegan ||
+		settled.admission.GrantOperationID != grant.OperationID ||
+		settled.admission.Disposition != SenderPeerAdmissionRejected ||
+		settled.admission.Rejection != rejected.Rejection ||
+		settled.admission.ResponseDelivery != SenderPeerResponseDeliveryFailed ||
+		settled.admission.LaneAttachment != SenderPeerLaneAttachmentNotAttempted {
+		t.Fatalf("rejected response failure = %+v, %v", settled.admission, settled.err)
+	}
+	if candidate.sends.Load() != 1 || candidate.closes.Load() != 1 {
+		t.Fatalf("rejected response sends=%d closes=%d", candidate.sends.Load(), candidate.closes.Load())
+	}
+	_ = peer.Close()
+}
+
+var allowSenderPeerSettlement = SenderPeerAdmissionControlFunc(
+	func(protocolsession.OperationID, LaneIdentity) bool { return true },
+)
+
+type countingAdmissionChannel struct {
+	protocolsession.FrameChannel
+	closes atomic.Int32
+}
+
+func (channel *countingAdmissionChannel) Close() error {
+	channel.closes.Add(1)
+	return channel.FrameChannel.Close()
+}
+
+type failingAdmissionSendChannel struct {
+	countingAdmissionChannel
+	err   error
+	sends atomic.Int32
+}
+
+func (channel *failingAdmissionSendChannel) Send(context.Context, framechannel.Frame) error {
+	channel.sends.Add(1)
+	return channel.err
 }
 
 type observedMemoryChannel struct {
@@ -981,10 +1117,10 @@ func attachGrantedLaneWithChannels(
 			err      error
 		}{identity: identity, err: err}
 	}()
-	receiverIdentity, receiverErr := receiver.AttachLane(ctx, grant, receiverChannel)
+	receiverAdmission, receiverErr := receiver.AttachLane(ctx, grant, receiverChannel)
 	senderAttached := <-senderResult
-	if receiverErr == nil && senderAttached.err == nil && receiverIdentity != senderAttached.identity {
+	if receiverErr == nil && senderAttached.err == nil && receiverAdmission.Lane != senderAttached.identity {
 		return LaneIdentity{}, errors.New("lane identities differ"), nil
 	}
-	return receiverIdentity, receiverErr, senderAttached.err
+	return receiverAdmission.Lane, receiverErr, senderAttached.err
 }

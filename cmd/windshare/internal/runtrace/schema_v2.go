@@ -105,17 +105,26 @@ type recordV2 struct {
 	DrainCause           *string `json:"drain_cause,omitempty"`
 	RelayDropped         *string `json:"relay_dropped,omitempty"`
 
-	WebRTCChannelID          *string `json:"webrtc_channel_id,omitempty"`
-	WebRTCSendOperationID    *string `json:"webrtc_send_operation_id,omitempty"`
-	Operation                *string `json:"operation,omitempty"`
-	Transition               *string `json:"transition,omitempty"`
-	TerminalState            *string `json:"terminal_state,omitempty"`
-	Dropped                  *string `json:"dropped,omitempty"`
-	AttemptSequence          *string `json:"attempt_sequence,omitempty"`
-	AttemptElapsedMS         *string `json:"attempt_elapsed_ms,omitempty"`
-	CandidatesLocalEmitted   *uint32 `json:"candidates_local_emitted,omitempty"`
-	CandidatesRemoteAccepted *uint32 `json:"candidates_remote_accepted,omitempty"`
-	FailureScope             *string `json:"failure_scope,omitempty"`
+	WebRTCChannelID           *string `json:"webrtc_channel_id,omitempty"`
+	WebRTCSendOperationID     *string `json:"webrtc_send_operation_id,omitempty"`
+	Operation                 *string `json:"operation,omitempty"`
+	Transition                *string `json:"transition,omitempty"`
+	TerminalState             *string `json:"terminal_state,omitempty"`
+	Dropped                   *string `json:"dropped,omitempty"`
+	AttemptSequence           *string `json:"attempt_sequence,omitempty"`
+	AttemptElapsedMS          *string `json:"attempt_elapsed_ms,omitempty"`
+	PeerOfferOperationID      *string `json:"peer_offer_operation_id,omitempty"`
+	PeerGrantOperationID      *string `json:"peer_grant_operation_id,omitempty"`
+	PeerPhase                 *string `json:"peer_phase,omitempty"`
+	PeerDeadlineMS            *string `json:"peer_deadline_ms,omitempty"`
+	PeerAdmissionDisposition  *string `json:"peer_admission_disposition,omitempty"`
+	PeerResponseDelivery      *string `json:"peer_response_delivery,omitempty"`
+	PeerLaneRejectionCode     *string `json:"peer_lane_rejection_code,omitempty"`
+	PeerRejectionRetryAfterMS *string `json:"peer_rejection_retry_after_ms,omitempty"`
+	CandidatesLocalEmitted    *uint32 `json:"candidates_local_emitted,omitempty"`
+	CandidatesRemoteAccepted  *uint32 `json:"candidates_remote_accepted,omitempty"`
+	PeerFailedAtStage         *string `json:"peer_failed_at_stage,omitempty"`
+	FailureScope              *string `json:"failure_scope,omitempty"`
 
 	FileSelection  *string `json:"file_selection,omitempty"`
 	FileSettlement *string `json:"file_settlement,omitempty"`

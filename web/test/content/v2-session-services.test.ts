@@ -95,7 +95,7 @@ function responseOperation(
 }
 
 describe('v2 session block lane deadlines', () => {
-  it('binds revision OPEN to the activation-eligible physical route', async () => {
+  it('uses relay immediately while rejecting a closed route authority', async () => {
     const lanes = new V2LaneSet()
     const unusedLane = (id: number) => ({
       id,
@@ -122,18 +122,14 @@ describe('v2 session block lane deadlines', () => {
     )
 
     const canceledRoutes = new V2ConnectivityRouteAuthority()
-    const canceled = revisions.open(revision.fileId, canceledRoutes)
     canceledRoutes.close()
+    const canceled = revisions.open(revision.fileId, canceledRoutes)
     await expect(canceled).rejects.toMatchObject({ name: 'AbortError' })
     expect(observedLaneId).toBeUndefined()
 
     const peerRoutes = new V2ConnectivityRouteAuthority()
-    const pending = revisions.open(revision.fileId, peerRoutes)
-    await Promise.resolve()
-    expect(observedLaneId).toBeUndefined()
-    lanes.add(unusedLane(2), 'peer')
-    await expect(pending).rejects.toBe(beginFailure)
-    expect(observedLaneId).toBe(2)
+    await expect(revisions.open(revision.fileId, peerRoutes)).rejects.toBe(beginFailure)
+    expect(observedLaneId).toBe(1)
 
     revisions.close()
     lanes.close()

@@ -235,10 +235,16 @@ func (attempt *ReceiverAttempt) preOperationCompletionDecision(
 	if shutdownDecision.transitionOwner != "" {
 		return shutdownDecision
 	}
-	if errors.Is(cause, errAttemptTimeout) {
+	if errors.Is(cause, ErrPeerNegotiationTimeout) {
 		return receiverOperationDecision(
 			ReceiverTerminalLocal,
-			ReceiverProvenanceLocalAttemptTimeout,
+			ReceiverProvenanceLocalNegotiationTimeout,
+		)
+	}
+	if errors.Is(cause, ErrPeerAdmissionTimeout) {
+		return receiverOperationDecision(
+			ReceiverTerminalLocal,
+			ReceiverProvenanceLocalAdmissionTimeout,
 		)
 	}
 	return receiverOperationDecision(

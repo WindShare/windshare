@@ -10,12 +10,17 @@ destination/workspace plan without adding a sender or relay wire field. Director
 output may retain successful files; ZIP uses `store` encoding and `complete-only`
 publication. `browser-handoff` ends at `download-started`, never `published`.
 
+Browsing uses the established relay without starting ICE. A preview or download
+activation makes relay content eligible immediately and starts one bounded P2P
+recovery supervisor in the background; direct-path delay or exhaustion never gates
+the healthy relay.
+
 The protocol authority is [`docs/协议规范.md`](../docs/协议规范.md); product
 semantics are in [`docs/重构功能变化.md`](../docs/重构功能变化.md), and the historical
 closure record is archived in
 [`docs/.archive/2026.08.06/即时分享与文件浏览重构收尾计划.md`](../docs/.archive/2026.08.06/即时分享与文件浏览重构收尾计划.md).
 The browser artifact and recovery decisions are recorded in
-[`docs/browser-output-ux-refactor-plan.md`](../docs/browser-output-ux-refactor-plan.md).
+[`docs/browser-output-ux-refactor-plan.md`](../docs/.archive/2026.08.07/browser-output-ux-refactor-plan.md).
 Validation entry points are in [`docs/validation.md`](../docs/validation.md), and
 local performance diagnostics are in
 [`docs/performance.md`](../docs/performance.md).
@@ -27,7 +32,7 @@ local performance diagnostics are in
 | `src/catalog/` | Authenticated descriptor/pages, frozen path policy, page storage, and selection rules |
 | `src/content/` | File-local geometry, revisions, leases, range broker, and lane scheduling |
 | `src/session/`, `src/receiver/` | ProtocolSession runtime and receiver-scoped reconnect supervision |
-| `src/transport/`, `src/connectivity/` | v2 relay/WebRTC channels, signaling, and 0/8-second path policy |
+| `src/transport/`, `src/connectivity/` | v2 relay/WebRTC channels, signaling, phased peer admission, and bounded direct recovery |
 | `src/transfer/projection/`, `src/transfer/discovery/` | Epoch-fenced selection proof and authenticated progressive discovery |
 | `src/transfer/job/`, `src/transfer/settlement/` | Plan-specific content execution, durable evidence, and settlement |
 | `src/output/planning/`, `src/output/capability/` | Pure artifact offers/binding and thin browser authority acquisition |
@@ -73,7 +78,7 @@ multiple contract projects concurrently on one host.
 | `pnpm -C web test:browser:progressive` | Progressive catalog paging across the authenticated page boundary. |
 | `pnpm -C web test:browser:network` | Authenticated direct and TURN peer adoption after relay loss. |
 | `pnpm -C web test:browser:interop` | Direct D1/D2 browser/Pion adapter interoperability. |
-| `pnpm -C web test:browser:cross` | The relay smoke plus native peer hot-switch or capability-driven relay fallback in Firefox and WebKit. |
+| `pnpm -C web test:browser:cross` | The relay smoke plus native peer hot-switch or a relay-only route when peer capability is unavailable in Firefox and WebKit. |
 | `pnpm -C web test:browser:contract:short` | Chromium short component contracts for browser storage, output, catalog, crypto, and media behavior. |
 | `pnpm -C web test:browser:contract:cross` | The `*.cross-browser.spec.ts` component contracts in Firefox and WebKit. |
 | `pnpm -C web test:browser:contract:periodic` | Chromium-only periodic scale and full-recovery component contracts. |

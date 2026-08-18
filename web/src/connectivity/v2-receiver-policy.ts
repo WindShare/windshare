@@ -6,8 +6,8 @@ import type {
   V2BlockRouteEligibility,
   V2BlockTransportRoute,
 } from '../content/v2-route-policy'
+import { encodeBase64Url } from '../crypto/bytes'
 import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
-import type { V2LaneIdentity } from './diagnostics'
 import type { PeerChannel } from './peer-channel'
 import {
   browserPeerConnectionAvailable,
@@ -15,16 +15,24 @@ import {
   type OfferChannelFactory,
 } from './peer-offer'
 import {
-  createV2PeerBinding,
+  createV2PeerPathIdentity,
   type V2ConnectivityObserver,
   type V2SessionSignalingObserver,
   V2SessionSignalingRoute,
 } from './v2-session-signaling'
+import {
+  type V2PeerCandidatePublication,
+  V2BrowserPeerAttemptExecutor,
+} from './v2-peer-attempt'
+import {
+  browserV2PeerRecoveryClock,
+  BrowserV2PeerRecoveryRearmSource,
+  type V2PeerRecoveryActivation,
+  type V2PeerRecoveryDependencies,
+  V2PeerRecoverySupervisor,
+} from './v2-peer-recovery'
 
 export type { V2ConnectivityObserver } from './v2-session-signaling'
-
-export const V2_RELAY_CONTENT_FALLBACK_MILLISECONDS = 8_000
-export const V2_P2P_CONNECT_TIMEOUT_MILLISECONDS = 10_000
 
 export interface V2ContentLaneAdmissionObservation {
   readonly laneId: number
@@ -48,21 +56,19 @@ export interface V2ReceiverConnectivityOptions {
   readonly onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void
   readonly onContentLaneDetached?: (observation: V2ContentLaneDetachmentObservation) => void
   readonly observePeerSignaling?: V2SessionSignalingObserver
+  readonly peerRecovery?: V2PeerRecoveryDependencies
 }
 
 export type V2ContentIntent = 'preview' | 'download'
-export type V2ContentSizeClass = 'small' | 'large' | 'unknown'
 
 export interface V2ConnectivityActivation {
   readonly routes: V2BlockRouteEligibility
-  observeSizeClass(sizeClass: V2ContentSizeClass): void
   close(): void
 }
 
-/** Stable click-scoped authority; session generations may contribute lanes but cannot reset its t0. */
+/** Stable click-scoped authority shared by every ProtocolSession generation it spans. */
 export class V2ConnectivityRouteAuthority implements V2BlockRouteEligibility {
   readonly #listeners = new Set<() => void>()
-  #relay = false
   #active = true
   #closedReason: unknown
 
@@ -70,8 +76,8 @@ export class V2ConnectivityRouteAuthority implements V2BlockRouteEligibility {
     return this.#active
   }
 
-  allows(route: V2BlockTransportRoute): boolean {
-    return this.#active && (route === 'peer' || (route === 'relay' && this.#relay))
+  allows(): boolean {
+    return this.#active
   }
 
   assertActive(): void {
@@ -82,13 +88,6 @@ export class V2ConnectivityRouteAuthority implements V2BlockRouteEligibility {
   subscribe(listener: () => void): () => void {
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
-  }
-
-  admitRelay(): void {
-    this.assertActive()
-    if (this.#relay) return
-    this.#relay = true
-    this.#notify()
   }
 
   close(reason: unknown = new DOMException('Content activation is closed', 'AbortError')): void {
@@ -111,23 +110,23 @@ export class V2ConnectivityRouteAuthority implements V2BlockRouteEligibility {
 }
 
 interface V2ActiveConnectivity {
-  readonly controller: AbortController
-  readonly intent: V2ContentIntent
   readonly routes: V2ConnectivityRouteAuthority
   readonly ownsRoutes: boolean
-  sizeClass: V2ContentSizeClass
+  peerRecovery: V2PeerRecoveryActivation | undefined
 }
 
-interface V2PeerAttemptResources {
-  route?: V2SessionSignalingRoute
-  peer?: PeerChannel
+interface V2InstalledPeer {
+  readonly protocolSessionId: string
+  readonly peerPathId: string
+  readonly attemptId: string
+  readonly laneId: number
+  readonly laneEpoch: number
+  readonly peer: PeerChannel
+  readonly route: V2SessionSignalingRoute
+  closeTask?: Promise<void>
 }
 
-/**
- * Browsing keeps the joined relay as a control lane, while content admission is
- * governed independently by the 0/8 policy. This separation prevents catalog UI
- * work from silently opting large or still-unknown selections into relay traffic.
- */
+/** Browsing keeps relay control-only; explicit content activation admits both routes. */
 export class V2ReceiverConnectivity {
   readonly #session: V2ReceiverSessionRuntime
   readonly #lanes: V2LaneSet
@@ -145,24 +144,17 @@ export class V2ReceiverConnectivity {
     observation: V2ContentLaneDetachmentObservation,
   ) => void
   readonly #observePeerSignaling: V2SessionSignalingObserver
+  readonly #peerRecoveryOptions: V2PeerRecoveryDependencies
+  readonly #protocolSessionId: string
   readonly #lifetime = new AbortController()
   readonly #admitted = new Map<number, { readonly laneEpoch: number; readonly route: V2BlockTransportRoute }>()
   readonly #laneEpochs = new Map<number, number>()
-  readonly #routes = new Set<V2SessionSignalingRoute>()
   readonly #activations = new Map<number, V2ActiveConnectivity>()
-  readonly #relayDemand = new Set<number>()
-  readonly #fallbackTasks = new Set<Promise<void>>()
+  readonly #peerCleanupTasks = new Map<V2InstalledPeer, Promise<void>>()
   readonly #unsubscribeLaneChanges: () => void
-  #peer: PeerChannel | undefined
-  #peerRoute: V2SessionSignalingRoute | undefined
-  #peerLaneId: number | undefined
-  #pendingPeer: PeerChannel | undefined
-  #pendingPeerRoute: V2SessionSignalingRoute | undefined
-  #pendingPeerLaneId: number | undefined
-  #peerReconnectLaneId: number | undefined
-  #peerController: AbortController | undefined
-  #peerTask: Promise<void> | undefined
-  #peerReconnectRequested = false
+  #peerRecovery: V2PeerRecoverySupervisor | undefined
+  #peerPathId: string | undefined
+  #installedPeer: V2InstalledPeer | undefined
   #relayLaneId: number
   #closeTask: Promise<void> | undefined
   #nextActivation = 1
@@ -181,6 +173,8 @@ export class V2ReceiverConnectivity {
     this.#onContentLaneAdmitted = options.onContentLaneAdmitted ?? (() => undefined)
     this.#onContentLaneDetached = options.onContentLaneDetached ?? (() => undefined)
     this.#observePeerSignaling = options.observePeerSignaling ?? (() => undefined)
+    this.#peerRecoveryOptions = options.peerRecovery ?? {}
+    this.#protocolSessionId = encodeBase64Url(options.session.keys.protocolSessionId)
     this.#laneEpochs.set(options.session.initialLaneId, options.session.keys.initialLaneEpoch)
     this.#unsubscribeLaneChanges = this.#session.subscribeLaneChanges((change) => {
       if (change.type === 'attached') {
@@ -190,59 +184,43 @@ export class V2ReceiverConnectivity {
           this.#laneEpochs.delete(change.laneId)
         }
         this.#removeAdmittedLane(change.laneId, change.laneEpoch)
-        if (change.laneId === this.#peerLaneId || change.laneId === this.#pendingPeerLaneId) {
-          this.#peerDetached(change.laneId)
-        }
+        this.#peerDetached(change.laneId, change.laneEpoch)
       }
     })
   }
 
   begin(
-    intent: V2ContentIntent,
-    sizeClass: V2ContentSizeClass = 'unknown',
+    _intent: V2ContentIntent,
     options: {
-      readonly relayFallbackMilliseconds?: number
       readonly routeAuthority?: V2ConnectivityRouteAuthority
     } = {},
   ): V2ConnectivityActivation {
     this.#lifetime.signal.throwIfAborted()
-    const relayFallbackMilliseconds = options.relayFallbackMilliseconds ??
-      V2_RELAY_CONTENT_FALLBACK_MILLISECONDS
-    if (!Number.isFinite(relayFallbackMilliseconds) || relayFallbackMilliseconds < 0 ||
-        relayFallbackMilliseconds > V2_RELAY_CONTENT_FALLBACK_MILLISECONDS) {
-      throw new RangeError('Relay fallback delay is outside its frozen policy window')
-    }
     const id = this.#nextActivation++
-    const controller = new AbortController()
     const routes = options.routeAuthority ?? new V2ConnectivityRouteAuthority()
     routes.assertActive()
-    this.#activations.set(id, {
-      controller,
-      intent,
+    const active: {
+      routes: V2ConnectivityRouteAuthority
+      ownsRoutes: boolean
+      peerRecovery: V2PeerRecoveryActivation | undefined
+    } = {
       routes,
       ownsRoutes: options.routeAuthority === undefined,
-      sizeClass,
-    })
-    if (routes.allows('relay') || (intent === 'download' && sizeClass === 'small')) {
-      this.#requestRelay(id)
+      peerRecovery: undefined,
     }
-    this.#ensurePeer()
-    const fallback = this.#admitRelayAfterDelay(
-      id,
-      controller.signal,
-      relayFallbackMilliseconds,
-    )
-      .finally(() => this.#fallbackTasks.delete(fallback))
-    this.#fallbackTasks.add(fallback)
+    this.#activations.set(id, active)
+    try {
+      // Content must be usable before direct negotiation can yield, fail, or stall.
+      this.#admitRelay()
+    } catch (error) {
+      this.#activations.delete(id)
+      if (options.routeAuthority === undefined) routes.close(error)
+      throw error
+    }
+    active.peerRecovery = this.#activatePeerRecovery()
     let closed = false
     return Object.freeze({
       routes,
-      observeSizeClass: (observed: V2ContentSizeClass) => {
-        if (closed || intent !== 'download' || observed !== 'small') return
-        const active = this.#activations.get(id)
-        if (active !== undefined) active.sizeClass = observed
-        this.#requestRelay(id)
-      },
       close: () => {
         if (closed) return
         closed = true
@@ -261,7 +239,7 @@ export class V2ReceiverConnectivity {
       const admitted = this.#admitted.get(previous)
       if (admitted !== undefined) this.#removeAdmittedLane(previous, admitted.laneEpoch)
     }
-    if (this.#relayDemand.size > 0) this.#admitRelay()
+    if (this.#activations.size > 0) this.#admitRelay()
   }
 
   close(): Promise<void> {
@@ -272,165 +250,91 @@ export class V2ReceiverConnectivity {
   async #close(): Promise<void> {
     const reason = new DOMException('Receiver connectivity closed', 'AbortError')
     this.#lifetime.abort(reason)
+    const recoveryClose = this.#peerRecovery?.close()
     for (const activationId of [...this.#activations.keys()]) {
       this.#endActivation(activationId, reason)
     }
-    this.#relayDemand.clear()
-    this.#peerController?.abort(new DOMException('Receiver connectivity closed', 'AbortError'))
     this.#unsubscribeLaneChanges()
-    await Promise.allSettled([...this.#routes].map((route) => route.close()))
-    this.#routes.clear()
-    await this.#peer?.close().catch(() => undefined)
+    const installed = this.#installedPeer
+    this.#installedPeer = undefined
+    if (installed !== undefined) this.#startInstalledPeerCleanup(installed)
     await Promise.allSettled([
-      ...(this.#peerTask === undefined ? [] : [this.#peerTask]),
-      ...this.#fallbackTasks,
+      ...(recoveryClose === undefined ? [] : [recoveryClose]),
+      this.#joinPeerCleanup(),
     ])
   }
 
-  #ensurePeer(): void {
-    if (this.#peerTask !== undefined) {
-      if (this.#peerController?.signal.aborted && this.#activations.size > 0 &&
-          !this.#lifetime.signal.aborted) this.#peerReconnectRequested = true
-      return
-    }
-    if (this.#peer !== undefined || this.#activations.size === 0 || this.#lifetime.signal.aborted) return
-    this.#peerReconnectRequested = false
-    const controller = new AbortController()
-    this.#peerController = controller
-    const task = this.#connectPeer(controller.signal)
-      .catch((error: unknown) => this.#reportPeerError(error))
-      .finally(() => {
-        if (this.#peerTask === task) this.#peerTask = undefined
-        if (this.#peerController === controller) this.#peerController = undefined
-        if (this.#peerReconnectRequested) this.#ensurePeer()
-      })
-    this.#peerTask = task
+  #activatePeerRecovery(): V2PeerRecoveryActivation | undefined {
+    if (!this.#capabilityAllowsAttempt()) return undefined
+    return this.#ensurePeerRecovery().activate()
   }
 
-  async #connectPeer(signal: AbortSignal): Promise<void> {
-    if (!this.#capabilityAllowsAttempt()) return
-    const attempt = peerAttemptDeadline(signal)
-    const resources: V2PeerAttemptResources = {}
-    try {
-      await this.#establishPeer(resources, attempt.signal)
-    } catch (error) {
-      await this.#handlePeerAttemptFailure(resources, error, signal)
-    } finally {
-      attempt.close()
-    }
+  #ensurePeerRecovery(): V2PeerRecoverySupervisor {
+    if (this.#peerRecovery !== undefined) return this.#peerRecovery
+    const peerPathIdentity = this.#randomBytes === undefined
+      ? createV2PeerPathIdentity()
+      : createV2PeerPathIdentity(this.#randomBytes)
+    const peerPathId = encodeBase64Url(peerPathIdentity)
+    const clock = this.#peerRecoveryOptions.clock ?? browserV2PeerRecoveryClock
+    const attempts = new V2BrowserPeerAttemptExecutor({
+      session: this.#session,
+      offers: this.#offers,
+      peerPathIdentity,
+      clock,
+      publish: (candidate) => this.#publishPeer(candidate),
+      ...(this.#randomBytes === undefined ? {} : { randomBytes: this.#randomBytes }),
+      ...(this.#connectivityObserver === undefined
+        ? {}
+        : { connectivityObserver: this.#connectivityObserver }),
+      observePeerSignaling: this.#observePeerSignaling,
+      ...(this.#peerRecoveryOptions.observeAttempt === undefined
+        ? {}
+        : { observeAttempt: this.#peerRecoveryOptions.observeAttempt }),
+      now: this.#now,
+      onFailure: (error) => this.#reportPeerError(error),
+    })
+    this.#peerPathId = peerPathId
+    this.#peerRecovery = new V2PeerRecoverySupervisor({
+      protocolSessionId: this.#protocolSessionId,
+      peerPathId,
+      attempts,
+      ...(this.#peerRecoveryOptions.policy === undefined
+        ? {}
+        : { policy: this.#peerRecoveryOptions.policy }),
+      clock,
+      ...(this.#peerRecoveryOptions.random === undefined
+        ? {}
+        : { random: this.#peerRecoveryOptions.random }),
+      rearmSource: this.#peerRecoveryOptions.rearmSource ?? new BrowserV2PeerRecoveryRearmSource(),
+      ...(this.#peerRecoveryOptions.observer === undefined
+        ? {}
+        : { observer: this.#peerRecoveryOptions.observer }),
+    })
+    return this.#peerRecovery
   }
 
   #capabilityAllowsAttempt(): boolean {
     try {
       if (this.#nativePeerUsable()) return true
       // A caller may know more than constructor presence (for example, a local
-      // ICE/DataChannel probe). An unusable native lane must request relay
-      // directly so a doomed offer cannot pin the fallback it is meant to protect.
-      if (this.#activations.size > 0) this.#requestRelayForAll()
+      // ICE/DataChannel probe), but that probe never owns relay eligibility.
     } catch (error) {
-      if (this.#activations.size > 0) this.#requestRelayForAll()
       this.#reportPeerError(error)
     }
     return false
   }
 
-  async #establishPeer(
-    resources: V2PeerAttemptResources,
-    signal: AbortSignal,
-  ): Promise<void> {
-    const binding = this.#randomBytes === undefined
-      ? createV2PeerBinding()
-      : createV2PeerBinding(this.#randomBytes)
-    const route = new V2SessionSignalingRoute(
-      this.#session,
-      binding,
-      this.#observePeerSignaling,
-      this.#connectivityObserver,
-      this.#now,
-    )
-    resources.route = route
-    this.#routes.add(route)
-    const peer = await this.#offers.offer(route, signal, route)
-    resources.peer = peer
-    const admission = peerAdmissionSignal(signal, route.attemptFailureSignal)
-    try {
-      await this.#attachAndAdmitPeer(peer, route, admission.signal)
-    } finally {
-      admission.close()
-    }
-  }
-
-  async #attachAndAdmitPeer(
-    peer: PeerChannel,
-    route: V2SessionSignalingRoute,
-    signal: AbortSignal,
-  ): Promise<void> {
-    this.#requireLiveAttempt(route, signal)
-    const grant = await this.#session.requestLaneGrant(
-      this.#peerReconnectLaneId ?? 0,
-      { signal },
-    )
-    this.#requireLiveAttempt(route, signal)
-    const lane = laneIdentity(grant.laneId, grant.laneEpoch)
-    route.laneGranted(lane)
-    this.#pendingPeer = peer
-    this.#pendingPeerRoute = route
-    this.#pendingPeerLaneId = grant.laneId
-    await this.#session.attachGrantedLane(peer, grant, signal)
-    this.#requireLiveAttempt(route, signal)
-    this.#requirePendingPeer(peer, grant.laneId)
-    route.laneAttached(lane)
-    const selectedPair = await route.readSelectedPair(signal)
-    this.#requireLiveAttempt(route, signal)
-    if (!this.#admit(lane.laneId, lane.laneEpoch, 'peer')) {
-      throw new Error('Peer lane became ineligible before content admission')
-    }
-    // Publish only after lane admission succeeds so a rejected lane cannot leak
-    // into the durable peer state or require a compensating rollback.
-    this.#publishPeer(peer, route, lane)
-    route.admitted(lane, selectedPair)
-  }
-
-  #requireLiveAttempt(route: V2SessionSignalingRoute, signal: AbortSignal): void {
-    signal.throwIfAborted()
-    route.throwIfAttemptFailed()
-  }
-
-  #requirePendingPeer(peer: PeerChannel, laneId: number): void {
+  #publishPeer(candidate: V2PeerCandidatePublication): boolean {
     if (
-      this.#pendingPeer !== peer || this.#pendingPeerLaneId !== laneId ||
-      !this.#session.laneIds().includes(laneId)
-    ) throw new Error('Peer lane detached during admission')
-  }
-
-  #publishPeer(peer: PeerChannel, route: V2SessionSignalingRoute, lane: V2LaneIdentity): void {
-    this.#peer = peer
-    this.#peerRoute = route
-    this.#peerLaneId = lane.laneId
-    this.#peerReconnectLaneId = undefined
-    this.#pendingPeer = undefined
-    this.#pendingPeerRoute = undefined
-    this.#pendingPeerLaneId = undefined
-  }
-
-  async #handlePeerAttemptFailure(
-    resources: V2PeerAttemptResources,
-    error: unknown,
-    signal: AbortSignal,
-  ): Promise<void> {
-    const typedErrorCode = this.#attemptStopCode(signal)
-    resources.route?.failAttempt(error, typedErrorCode === undefined ? {} : { typedErrorCode })
-    if (this.#pendingPeer === resources.peer) {
-      this.#pendingPeer = undefined
-      this.#pendingPeerRoute = undefined
-      this.#pendingPeerLaneId = undefined
-    }
-    await resources.peer?.close().catch(() => undefined)
-    await resources.route?.close().catch(() => undefined)
-    if (resources.route !== undefined) this.#routes.delete(resources.route)
-    if (signal.aborted) return
-    if (this.#activations.size > 0) this.#requestRelayForAll()
-    this.#reportPeerError(error)
+      this.#lifetime.signal.aborted || this.#installedPeer !== undefined ||
+      candidate.protocolSessionId !== this.#protocolSessionId ||
+      candidate.peerPathId !== this.#peerPathId ||
+      this.#laneEpochs.get(candidate.laneId) !== candidate.laneEpoch ||
+      !this.#session.laneIds().includes(candidate.laneId)
+    ) return false
+    if (!this.#admit(candidate.laneId, candidate.laneEpoch, 'peer')) return false
+    this.#installedPeer = { ...candidate }
+    return true
   }
 
   #reportPeerError(error: unknown): void {
@@ -441,23 +345,6 @@ export class V2ReceiverConnectivity {
     }
   }
 
-  #attemptStopCode(signal: AbortSignal): 'runtime-stopped' | 'attempt-cancelled' | undefined {
-    if (this.#lifetime.signal.aborted) return 'runtime-stopped'
-    return signal.aborted ? 'attempt-cancelled' : undefined
-  }
-
-  async #admitRelayAfterDelay(
-    id: number,
-    signal: AbortSignal,
-    delayMilliseconds: number,
-  ): Promise<void> {
-    try {
-      await delay(delayMilliseconds, signal)
-      this.#requestRelay(id)
-    } catch (error) {
-      if (!signal.aborted) throw error
-    }
-  }
 
   #endActivation(
     id: number,
@@ -466,40 +353,50 @@ export class V2ReceiverConnectivity {
     const active = this.#activations.get(id)
     if (active === undefined) return
     this.#activations.delete(id)
-    this.#relayDemand.delete(id)
-    active.controller.abort(reason)
+    active.peerRecovery?.close()
     if (active.ownsRoutes) active.routes.close(reason)
-    if (this.#activations.size === 0 && this.#peer === undefined) {
-      this.#peerController?.abort(new DOMException('Last content activation closed', 'AbortError'))
-    }
   }
 
-  #peerDetached(laneId: number): void {
-    const peer = this.#peer ?? this.#pendingPeer
-    const route = this.#peerRoute ?? this.#pendingPeerRoute
-    this.#peer = undefined
-    this.#peerRoute = undefined
-    this.#peerLaneId = undefined
-    this.#pendingPeer = undefined
-    this.#pendingPeerRoute = undefined
-    this.#pendingPeerLaneId = undefined
-    this.#peerReconnectLaneId = laneId
-    peer?.close().catch(() => undefined)
-    if (route !== undefined) {
-      this.#routes.delete(route)
-      route.close().catch(() => undefined)
-    }
-    if (this.#activations.size > 0) {
-      this.#requestRelayForAll()
-      // Detachment can arrive in the final microtask of attachment; remember the
-      // replacement intent until the completing attempt releases its task slot.
-      this.#peerReconnectRequested = true
-      this.#ensurePeer()
+  #peerDetached(laneId: number, laneEpoch: number): void {
+    const installed = this.#installedPeer
+    if (
+      installed === undefined || installed.protocolSessionId !== this.#protocolSessionId ||
+      installed.peerPathId !== this.#peerPathId || installed.laneId !== laneId ||
+      installed.laneEpoch !== laneEpoch
+    ) return
+    this.#installedPeer = undefined
+    this.#peerRecovery?.peerDetached({
+      protocolSessionId: installed.protocolSessionId,
+      peerPathId: installed.peerPathId,
+      laneId,
+      laneEpoch,
+    })
+    this.#startInstalledPeerCleanup(installed)
+  }
+
+  #startInstalledPeerCleanup(installed: V2InstalledPeer): void {
+    if (installed.closeTask !== undefined) return
+    const closeTask = Promise.allSettled([
+      Promise.resolve().then(() => installed.peer.close()),
+      Promise.resolve().then(() => installed.route.close()),
+    ]).then(() => {
+      this.#peerCleanupTasks.delete(installed)
+    })
+    installed.closeTask = closeTask
+    this.#peerCleanupTasks.set(installed, closeTask)
+  }
+
+  async #joinPeerCleanup(): Promise<void> {
+    while (this.#peerCleanupTasks.size > 0) {
+      await Promise.allSettled([...this.#peerCleanupTasks.values()])
     }
   }
 
   #admit(laneId: number, laneEpoch: number, route: V2BlockTransportRoute): boolean {
-    if (this.#admitted.has(laneId)) return true
+    const existing = this.#admitted.get(laneId)
+    if (existing !== undefined) {
+      return existing.laneEpoch === laneEpoch && existing.route === route
+    }
     if (!this.#session.laneIds().includes(laneId)) return false
     this.#lanes.add(this.#createBlockLane(laneId), route, laneEpoch)
     this.#admitted.set(laneId, { laneEpoch, route })
@@ -509,18 +406,6 @@ export class V2ReceiverConnectivity {
       // Admission is already authoritative; diagnostics cannot revoke or corrupt it.
     }
     return true
-  }
-
-  #requestRelay(activationId: number): void {
-    const active = this.#activations.get(activationId)
-    if (active === undefined) return
-    active.routes.admitRelay()
-    this.#relayDemand.add(activationId)
-    this.#admitRelay()
-  }
-
-  #requestRelayForAll(): void {
-    for (const activationId of this.#activations.keys()) this.#requestRelay(activationId)
   }
 
   #admitRelay(): void {
@@ -545,71 +430,5 @@ export class V2ReceiverConnectivity {
     } catch {
       // The lane is already ineligible; diagnostics cannot re-admit it.
     }
-  }
-}
-
-function laneIdentity(laneId: number, laneEpoch: number): V2LaneIdentity {
-  return Object.freeze({ laneId, laneEpoch })
-}
-
-function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
-  signal.throwIfAborted()
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', abort)
-      resolve()
-    }, milliseconds)
-    const abort = () => {
-      clearTimeout(timer)
-      reject(signal.reason ?? new DOMException('Connectivity timer aborted', 'AbortError'))
-    }
-    signal.addEventListener('abort', abort, { once: true })
-  })
-}
-
-function peerAttemptDeadline(parent: AbortSignal): {
-  readonly signal: AbortSignal
-  readonly close: () => void
-} {
-  const controller = new AbortController()
-  const abort = () => controller.abort(
-    parent.reason ?? new DOMException('Peer attempt aborted', 'AbortError'),
-  )
-  parent.addEventListener('abort', abort, { once: true })
-  if (parent.aborted) abort()
-  const timer = globalThis.setTimeout(() => {
-    controller.abort(new DOMException('Peer connection attempt timed out', 'TimeoutError'))
-  }, V2_P2P_CONNECT_TIMEOUT_MILLISECONDS)
-  return {
-    signal: controller.signal,
-    close: () => {
-      globalThis.clearTimeout(timer)
-      parent.removeEventListener('abort', abort)
-    },
-  }
-}
-
-function peerAdmissionSignal(
-  attempt: AbortSignal,
-  routeFailure: AbortSignal,
-): { readonly signal: AbortSignal; readonly close: () => void } {
-  const controller = new AbortController()
-  const abortFrom = (source: AbortSignal) => {
-    if (!controller.signal.aborted) {
-      controller.abort(source.reason ?? new DOMException('Peer admission aborted', 'AbortError'))
-    }
-  }
-  const attemptAborted = () => abortFrom(attempt)
-  const routeFailed = () => abortFrom(routeFailure)
-  attempt.addEventListener('abort', attemptAborted, { once: true })
-  routeFailure.addEventListener('abort', routeFailed, { once: true })
-  if (routeFailure.aborted) routeFailed()
-  if (attempt.aborted) attemptAborted()
-  return {
-    signal: controller.signal,
-    close: () => {
-      attempt.removeEventListener('abort', attemptAborted)
-      routeFailure.removeEventListener('abort', routeFailed)
-    },
   }
 }
