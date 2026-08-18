@@ -9,7 +9,7 @@ Set-Location $repositoryRoot
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
 Write-Output '== e2e =='
-go test ./e2e -run '^TestCritical' -count=1
+go run ./scripts/ci/_gotestsuite -run '^TestUserTraceCriticalSenderRelayReceiver$' ./e2e
 if ($LASTEXITCODE -ne 0) {
     throw "critical Go E2E exited with code $LASTEXITCODE"
 }
