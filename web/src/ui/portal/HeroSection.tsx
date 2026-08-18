@@ -247,7 +247,7 @@ export function HeroSection({
           端到端加密 · WebRTC P2P 直连 · 零云端中转
         </div>
 
-        <h1>无需上传云端 · 秒级直传任意文件</h1>
+        <h1>无需上传云端 · 秒出任意文件分享链接</h1>
         <p className="portal-hero-subtitle">
           基于 WebRTC 与零知识 Suite-02 加密规范。选定多文件或多级文件夹，毫秒级出链；
           接收方浏览器免装软件即开即下，大文件不占双倍空间。
