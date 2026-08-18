@@ -55,5 +55,6 @@ Invoke-Step 'Go validation package ownership tests' { go test ./scripts/ci/_gopa
 Invoke-Step 'Go validation package ownership' {
     go run ./scripts/ci/_gopackages -set all | Out-Null
 }
+Invoke-Step 'Named Go test suite selection tests' { go test ./scripts/ci/_gotestsuite }
 
 Write-Output ('== hygiene: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

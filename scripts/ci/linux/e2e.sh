@@ -4,5 +4,5 @@ cd "$(dirname "$0")/../../.."
 
 SECONDS=0
 echo "== e2e =="
-go test ./e2e -run '^TestCritical' -count=1
+go run ./scripts/ci/_gotestsuite -run '^TestUserTraceCriticalSenderRelayReceiver$' ./e2e
 echo "== e2e: PASS in ${SECONDS}s =="
