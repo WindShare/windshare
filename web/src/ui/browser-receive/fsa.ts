@@ -21,6 +21,7 @@ import type { ReopenedDirectTreeOperation } from '../../output/resume/reopen-aut
 import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../output/workspace/state'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
 import { createPersistentDirectTreeExecution } from '../../transfer/settlement/persistent-execution'
+import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
 import {
   createV2PlanExecutionAuthority,
 } from '../../transfer/settlement/v2-plan-authority'
@@ -184,17 +185,32 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   }
 
   static async reopen(operation: ReopenedDirectTreeOperation): Promise<FSAReceiveOperation> {
-    const session = await reopenFileSystemAccessOutput({
-      intent: operation.intent,
-      operationRepository: operation.repository,
-    })
+    if (operation.lifecycle.kind !== 'receiving') {
+      throw new TypeError('Direct-tree continuation requires active receive lifecycle state')
+    }
+    const admissionFallback = operation.receiveAdmissionFallback
+    if (admissionFallback === undefined) {
+      throw new TypeError('Direct-tree continuation omitted its admission fallback')
+    }
+    const attemptAuthority = await createFSAAttemptSettlement(
+      operation.intent,
+      operation.repository,
+      operation.lease,
+      admissionFallback,
+    )
+    let session: FileSystemAccessOutputSession | undefined
     try {
-      const attempt = await createFSAAttempt(
+      session = await reopenFileSystemAccessOutput({
+        intent: operation.intent,
+        operationRepository: operation.repository,
+      })
+      const plans = await createFSAPlanAuthority(
         operation.intent,
         operation.repository,
         operation.lease,
         session,
         'resume',
+        attemptAuthority.settlement,
       )
       return new FSAReceiveOperation({
         intent: operation.intent,
@@ -203,10 +219,21 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         lease: operation.lease,
         session,
         closeAuthority: () => operation.close(),
-        ...attempt,
+        settlement: attemptAuthority.settlement,
+        plans,
+        transferJobId: attemptAuthority.transferJobId,
       })
     } catch (error) {
-      await session.close().catch(() => undefined)
+      await session?.close().catch(() => undefined)
+      try {
+        await attemptAuthority.settlement.settleExecutionAdmissionFailure(
+          operation.intent,
+          error,
+          new AbortController().signal,
+        )
+      } catch (settlementError) {
+        throw new V2TransferFailureSettlementError(error, [settlementError])
+      }
       throw error
     }
   }
@@ -234,28 +261,37 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
       intent: this.intent,
       operationRepository: this.#repository,
     })
-    let resumed: ReceiveLifecycleState
     try {
-      resumed = await transitionLifecycle(
+      // Acquire the attempt before leaving the stable state so setup failures retain
+      // the exact checkpoint deadline and never require compensating durable writes.
+      const attempt = await createFSAAttempt(
+        this.intent,
+        this.#repository,
+        this.#lease,
+        session,
+        'resume',
+        lifecycle,
+      )
+      const resumed = await transitionLifecycle(
         this.#repository,
         this.intent,
         this.#lease.leaseId,
         { kind: 'resume-started' },
+        lifecycle,
       )
+      this.#session = session
+      this.#settlement = attempt.settlement
+      this.#plans = attempt.plans
+      this.#transferJobId = attempt.transferJobId
+      return Object.freeze({
+        lifecycle: resumed,
+        activeControls: this.activeControls,
+        resumeTransfer: true,
+      })
     } catch (error) {
       await session.close().catch(() => undefined)
       throw error
     }
-    const attempt = await createFSAAttempt(this.intent, this.#repository, this.#lease, session, 'resume')
-    this.#session = session
-    this.#settlement = attempt.settlement
-    this.#plans = attempt.plans
-    this.#transferJobId = attempt.transferJobId
-    return Object.freeze({
-      lifecycle: resumed,
-      activeControls: this.activeControls,
-      resumeTransfer: true,
-    })
   }
 
   async observeExpiry(lifecycle: ReceiveLifecycleState): Promise<V2LifecycleMutation> {
@@ -279,10 +315,14 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     return null
   }
 
-  async abandon(reason: unknown): Promise<V2LifecycleMutation> {
+  async settleTransferAdmissionFailure(reason: unknown): Promise<V2LifecycleMutation> {
     this.#requireAttached()
     const controller = new AbortController()
-    const lifecycle = await this.#settlement.abortUnopened(this.intent, reason, controller.signal)
+    const lifecycle = await this.#settlement.settleExecutionAdmissionFailure(
+      this.intent,
+      reason,
+      controller.signal,
+    )
     return Object.freeze({ lifecycle, workspaceUsage: null })
   }
 
@@ -310,9 +350,36 @@ async function createFSAAttempt(
   lease: BrowserReceiveOperationLease,
   session: FileSystemAccessOutputSession,
   lifecycleEntry: 'start' | 'resume',
+  admissionFallback?: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
 ): Promise<Readonly<{
   settlement: FileSystemAccessOperationSettlementAuthority
   plans: V2PlanExecutionAuthority
+  transferJobId: string
+}>> {
+  const attemptAuthority = await createFSAAttemptSettlement(
+    intent,
+    repository,
+    lease,
+    admissionFallback,
+  )
+  const plans = await createFSAPlanAuthority(
+    intent,
+    repository,
+    lease,
+    session,
+    lifecycleEntry,
+    attemptAuthority.settlement,
+  )
+  return Object.freeze({ ...attemptAuthority, plans })
+}
+
+async function createFSAAttemptSettlement(
+  intent: ReceiveIntent,
+  repository: ReceiveOperationRepository,
+  lease: BrowserReceiveOperationLease,
+  admissionFallback?: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
+): Promise<Readonly<{
+  settlement: FileSystemAccessOperationSettlementAuthority
   transferJobId: string
 }>> {
   const transferJobId = createTransferJobID()
@@ -321,7 +388,19 @@ async function createFSAAttempt(
     repository,
     lifecycleLeaseId: lease.leaseId,
     transferJobId,
+    ...(admissionFallback === undefined ? {} : { admissionFallback }),
   })
+  return Object.freeze({ settlement, transferJobId })
+}
+
+async function createFSAPlanAuthority(
+  intent: ReceiveIntent,
+  repository: ReceiveOperationRepository,
+  lease: BrowserReceiveOperationLease,
+  session: FileSystemAccessOutputSession,
+  lifecycleEntry: 'start' | 'resume',
+  settlement: FileSystemAccessOperationSettlementAuthority,
+): Promise<V2PlanExecutionAuthority> {
   const plans = await createV2PlanExecutionAuthority({
     intent,
     routes: {
@@ -350,5 +429,5 @@ async function createFSAAttempt(
       lifecycle: settlement,
     },
   })
-  return Object.freeze({ settlement, plans, transferJobId })
+  return plans
 }

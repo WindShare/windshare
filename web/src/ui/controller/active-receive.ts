@@ -3,7 +3,14 @@ import type {
 } from '../../connectivity/v2-receiver-policy'
 import { lifecycleDeadline } from '../../output/workspace'
 import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
-import type { TransferJobResult, TransferProgress, TransferTraceEvent } from '../../transfer/v2-job'
+import { TransferPauseRequestedError } from '../../transfer/output-session'
+import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
+import {
+  V2TransferAdmissionFailureError,
+  type TransferJobResult,
+  type TransferProgress,
+  type TransferTraceEvent,
+} from '../../transfer/v2-job'
 import type {
   LifecycleUserAction,
   V2ActiveReceiveControl,
@@ -175,9 +182,13 @@ export class ActiveReceiveCoordinator {
       const ownedConnectivity = connectivity
       const ownedTransfer = transfer
       active.running = job.run(ownedTransfer.signal).then(
-        (result) => this.#settleTransfer(active, result),
-        (error: unknown) => this.#settleTransferFailure(active, error),
-      ).catch((error: unknown) => this.#settleTransferFailure(active, error)).finally(async () => {
+        (result) => this.#settleTransfer(active, result).catch((error: unknown) => {
+          this.#reportTransferFailure(active, error)
+        }),
+        (error: unknown) => error instanceof V2TransferAdmissionFailureError
+          ? this.#settleTransferAdmissionFailure(active, error.transferFailure)
+          : this.#reportTransferFailure(active, error),
+      ).finally(async () => {
         ownedConnectivity.close()
         if (active.connectivity === ownedConnectivity) delete active.connectivity
         if (active.transfer === ownedTransfer) delete active.transfer
@@ -188,9 +199,7 @@ export class ActiveReceiveCoordinator {
       connectivity?.close()
       if (active.connectivity === connectivity) delete active.connectivity
       if (active.transfer === transfer) delete active.transfer
-      this.#settleTransferFailure(active, error).catch((settlementError: unknown) => {
-        if (this.#operationIsCurrent(active)) this.#onFailure(settlementError)
-      })
+      active.running = this.#settleTransferAdmissionFailure(active, error)
     }
   }
 
@@ -205,19 +214,39 @@ export class ActiveReceiveCoordinator {
       throw new TypeError('transfer lifecycle did not advance the active receive operation')
     }
     this.#scheduleExpiry(active)
+    if (result.abortReason !== undefined) this.#reportTransferFailure(active, result.abortReason)
   }
 
-  async #settleTransferFailure(active: ActiveReceiveOperation, error: unknown): Promise<void> {
+  async #settleTransferAdmissionFailure(
+    active: ActiveReceiveOperation,
+    error: unknown,
+  ): Promise<void> {
     if (!this.#operationIsCurrent(active)) return
     try {
-      const mutation = await Promise.resolve(active.runtime.abandon(error))
+      const mutation = await Promise.resolve(active.runtime.settleTransferAdmissionFailure(error))
       await this.#applyLifecycleMutation(
         active,
         this.#outputs.getSnapshot().lifecycle?.generation ?? 0n,
         mutation,
       )
     } catch (settlementError) {
-      if (this.#operationIsCurrent(active)) this.#onFailure(settlementError)
+      this.#reportTransferFailure(
+        active,
+        new V2TransferFailureSettlementError(error, [settlementError]),
+      )
+      return
+    }
+    this.#reportTransferFailure(active, error)
+  }
+
+  #reportTransferFailure(active: ActiveReceiveOperation, error: unknown): void {
+    if (!this.#operationIsCurrent(active)) return
+    if (!(error instanceof V2TransferFailureSettlementError) &&
+        (isAbortError(error) || error instanceof TransferPauseRequestedError)) return
+    try {
+      this.#onFailure(error)
+    } catch {
+      // A presentation observer cannot replace the failure that was already published.
     }
   }
 

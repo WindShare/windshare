@@ -217,6 +217,20 @@ describe('v2 operation replay ownership', () => {
 })
 
 describe('v2 operation tombstone and admission ownership', () => {
+  it('accepts revision authority failures for an active block request', async () => {
+    const router = new V2OperationRouter(() => undefined)
+    const operationId = identity(7)
+    const operation = router.create(
+      operationId,
+      V2_MESSAGE_KIND.requestBlocks,
+      EMPTY_REQUEST_BODY,
+    )
+    const revisionFailure = operationError(operationId, 'revision', 'lease is no longer valid')
+
+    await expect(router.route(revisionFailure)).resolves.toBeUndefined()
+    await expect(operation.next()).resolves.toEqual(revisionFailure)
+  })
+
   it('preserves the exact local cancellation cause across pending and later reads', async () => {
     const router = new V2OperationRouter(() => undefined)
     const operationId = identity(8)
@@ -512,7 +526,7 @@ function scanProgress(
 
 function operationError(
   operationId: Uint8Array<ArrayBuffer>,
-  scope: 'block' | 'directory' | 'peer',
+  scope: 'block' | 'directory' | 'peer' | 'revision',
   message: string,
 ) {
   const [scopeId, code] = operationErrorRegistry(scope)
@@ -526,11 +540,13 @@ function operationError(
 }
 
 function operationErrorRegistry(
-  scope: 'block' | 'directory' | 'peer',
+  scope: 'block' | 'directory' | 'peer' | 'revision',
 ): readonly [number, number] {
   switch (scope) {
     case 'directory':
       return [2, 0x2001]
+    case 'revision':
+      return [3, 0x3008]
     case 'block':
       return [4, 0x4001]
     case 'peer':

@@ -80,6 +80,7 @@ test('admits product-bound workspace ZIP before requesting content', async ({ pa
       'receive.preparation.started',
       'receive.preparation.sealed',
       'receive.preparation_admission.accepted',
+      'receive.materialization.paused',
       'receive.operation.discarded',
     ],
     cleanup: 'discarded',

@@ -109,6 +109,7 @@ describe('persisted receive operation reopen authority', () => {
     })
     expect(reopened.lease.leaseId).not.toBe(staleLeaseId)
     expect(reopened.lifecycle).toMatchObject({ activeLeaseId: reopened.lease.leaseId })
+    expect(reopened.receiveAdmissionFallback).toEqual(lifecycle)
     expect(trace).toHaveBeenCalledWith(expect.objectContaining({
       name: 'receive.operation.reopen_authorized',
       operation_id: intent.operationId,
@@ -223,6 +224,7 @@ describe('persisted receive operation reopen authority', () => {
     })
     expect(storageRoot.creationCount).toBe(1)
     if (reopened.kind !== 'workspace') throw new Error('workspace reopen changed kind')
+    expect(reopened.receiveAdmissionFallback).toEqual(lifecycle)
     expect(reopened.admittedContent).toMatchObject({
       budget: { digest: admission.budget.digest },
       admissionReceipt: { digest: admission.receipt.digest },
