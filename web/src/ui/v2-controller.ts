@@ -570,7 +570,7 @@ export class V2ReceiverController {
       controller.signal.throwIfAborted()
       if (!this.#authorityBoundaryIsCurrent(activeProjection, activation) ||
           frozenIntent === undefined) {
-        await runtime.abandon(new StaleReceiveBoundaryError())
+        await runtime.settleTransferAdmissionFailure(new StaleReceiveBoundaryError())
         await runtime.detach()
         return
       }
@@ -588,7 +588,7 @@ export class V2ReceiverController {
         runtime.initialWorkspaceUsage,
         runtime.activeControls,
       )) {
-        await runtime.abandon(new StaleReceiveBoundaryError())
+        await runtime.settleTransferAdmissionFailure(new StaleReceiveBoundaryError())
         await runtime.detach()
         return
       }
@@ -602,7 +602,8 @@ export class V2ReceiverController {
       if (finalizedRuntime === undefined) {
         await Promise.resolve(activation.authority.release(error)).catch(() => undefined)
       } else {
-        await Promise.resolve(finalizedRuntime.abandon(error)).catch(() => undefined)
+        await Promise.resolve(finalizedRuntime.settleTransferAdmissionFailure(error))
+          .catch(() => undefined)
         await Promise.resolve(finalizedRuntime.detach()).catch(() => undefined)
       }
       if (this.#activeProjection === activeProjection && !controller.signal.aborted) {

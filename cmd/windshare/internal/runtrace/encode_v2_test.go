@@ -104,6 +104,34 @@ func TestEncodeV2UsesDecimalStringsAndSemanticContexts(t *testing.T) {
 	}
 }
 
+func TestEncodeV2ProjectsBoundedProtocolOperationErrorClassification(t *testing.T) {
+	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0xc1)))
+	operation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0xc2)))
+	event := mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
+		Command: clievent.CommandShare, Role: clievent.ProtocolRoleSender,
+		Stage:           clievent.ProtocolOperationSenderResponseSettled,
+		ProtocolSession: session, ProtocolOperation: operation,
+		RequestKind:  clievent.ProtocolMessageRequestBlocks,
+		ResponseKind: clievent.ProtocolMessageOperationError, HasResponse: true,
+		OperationErrorScope: clievent.ProtocolOperationErrorRevision,
+		OperationErrorCode:  0x3008, OperationErrorRetryable: true, HasOperationError: true,
+		Cause: clievent.ProtocolOperationCauseNone,
+	}))
+	record, err := encodeV2(
+		"33333333333333333333333333333333",
+		entryMetadata{sequence: 1, time: time.Unix(1, 0)},
+		event,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.ProtocolErrorScope == nil || *record.ProtocolErrorScope != "revision" ||
+		record.ProtocolErrorCode == nil || *record.ProtocolErrorCode != 0x3008 ||
+		record.ProtocolErrorRetryable == nil || !*record.ProtocolErrorRetryable {
+		t.Fatalf("protocol operation error trace = %+v", record)
+	}
+}
+
 func TestEncodeV2ProjectsSafePeerAdmissionSettlement(t *testing.T) {
 	identity := testIdentity(t, 0xa2)
 	session := mustValue(clievent.NewProtocolSessionID(identity))

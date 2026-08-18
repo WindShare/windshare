@@ -39,6 +39,9 @@ type recordV2 struct {
 	ProtocolUsableLanesAtSelection  *string `json:"protocol_usable_lanes_at_selection,omitempty"`
 	ProtocolUsableLanesAtSettlement *string `json:"protocol_usable_lanes_at_settlement,omitempty"`
 	ProtocolOperationCause          *string `json:"protocol_operation_cause,omitempty"`
+	ProtocolErrorScope              *string `json:"protocol_error_scope,omitempty"`
+	ProtocolErrorCode               *uint16 `json:"protocol_error_code,omitempty"`
+	ProtocolErrorRetryable          *bool   `json:"protocol_error_retryable,omitempty"`
 
 	Transport     *string `json:"transport,omitempty"`
 	FromTransport *string `json:"from_transport,omitempty"`

@@ -234,6 +234,15 @@ func (visitor *encodeVisitorV2) VisitProtocolOperationObserved(event clievent.Pr
 	visitor.record.ProtocolOperationElapsedMS = decimalPointer(event.OperationElapsedMillis())
 	visitor.record.ProtocolUsableLanesAtSelection = decimalPointer(uint64(event.UsableLanesAtSelection()))
 	visitor.record.ProtocolUsableLanesAtSettlement = decimalPointer(uint64(event.UsableLanesAtSettlement()))
+	if scope, code, retryable, ok := event.OperationError(); ok {
+		name, nameErr := nameOf(scope)
+		if nameErr != nil {
+			return nameErr
+		}
+		visitor.record.ProtocolErrorScope = new(name)
+		visitor.record.ProtocolErrorCode = new(code)
+		visitor.record.ProtocolErrorRetryable = new(retryable)
+	}
 	return nil
 }
 

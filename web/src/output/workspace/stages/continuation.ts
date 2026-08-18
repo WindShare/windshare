@@ -92,6 +92,41 @@ export class WorkspaceContinuationStages {
     return next
   }
 
+  async restoreReceiveContinuation(
+    fallback: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
+  ): Promise<Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>> {
+    const state = await this.runtime.lifecycle()
+    if (state.kind !== 'receiving' || state.generation !== fallback.generation + 1n ||
+        fallback.operationId !== this.runtime.intent.operationId ||
+        fallback.receiveIntentDigest !== this.runtime.intent.digest) {
+      throw new TypeError('receive admission fallback no longer matches the active continuation')
+    }
+    const next = this.runtime.reduce(state, this.runtime.event({
+      kind: 'resume-admission-failed',
+      checkpointSetDigest: fallback.checkpointSetDigest,
+      completedFileCount: fallback.completedFileCount,
+      completedBytes: fallback.completedBytes,
+      expiresAt: fallback.expiresAt,
+      ...(fallback.partialReceiptDigest === undefined
+        ? {}
+        : { partialReceiptDigest: fallback.partialReceiptDigest }),
+    }, state))
+    if (next.kind !== 'resumable-receive') {
+      throw new TypeError('receive admission failure did not restore a stable continuation')
+    }
+    await this.runtime.commitLifecycle(state, next)
+    this.runtime.emit({
+      name: 'receive.continuation.admission_failed',
+      operation_id: this.runtime.intent.operationId,
+      receive_intent_digest: this.runtime.intent.digest,
+      restored_checkpoint_set_digest: next.checkpointSetDigest,
+      restored_completed_file_count: next.completedFileCount,
+      restored_completed_bytes: next.completedBytes,
+      restored_expires_at_ms: next.expiresAt,
+    })
+    return next
+  }
+
   async resumePackage(
     sealedMaterialization: SealedMaterializationV1,
     packageHandle: ReceiveOperationHandleRecord,
@@ -119,6 +154,4 @@ export class WorkspaceContinuationStages {
     })
     return next
   }
-
-
 }

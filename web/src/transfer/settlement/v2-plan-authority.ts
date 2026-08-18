@@ -84,8 +84,8 @@ export interface V2PortableZipExecutionRoute {
   ): Promise<ExecutionAdmissionResult<PortableExecution>>
 }
 
-export interface V2UnopenedExecutionLifecycle {
-  abortUnopened(
+export interface V2ExecutionAdmissionLifecycle {
+  settleExecutionAdmissionFailure(
     intent: ReceiveIntent,
     reason: unknown,
     signal: AbortSignal,
@@ -107,7 +107,7 @@ export interface V2PlanExecutionRouteRegistry {
   readonly workspaceZip?: V2WorkspaceZipExecutionRoute
   readonly portableOriginal?: V2PortableOriginalExecutionRoute
   readonly portableZip?: V2PortableZipExecutionRoute
-  readonly lifecycle: V2UnopenedExecutionLifecycle
+  readonly lifecycle: V2ExecutionAdmissionLifecycle
 }
 
 export class V2PlanRouteUnavailableError extends Error {
@@ -210,10 +210,10 @@ export async function createV2PlanExecutionAuthority(input: {
       if (result === undefined) throw new V2PlanRouteUnavailableError(intent)
       return validateExecutionAdmission(intent, result)
     },
-    abortUnopened: async (supplied, reason, signal) => {
+    settleExecutionAdmissionFailure: async (supplied, reason, signal) => {
       signal.throwIfAborted()
       const intent = await requireBoundIntent(boundIntent, supplied)
-      const state = await routes.lifecycle.abortUnopened(intent, reason, signal)
+      const state = await routes.lifecycle.settleExecutionAdmissionFailure(intent, reason, signal)
       signal.throwIfAborted()
       return validateLifecycleIdentity(intent, state)
     },
@@ -234,9 +234,10 @@ export async function createV2PlanExecutionAuthority(input: {
 
 function snapshotRouteRegistry(input: V2PlanExecutionRouteRegistry): V2PlanExecutionRouteRegistry {
   if (typeof input !== 'object' || input === null || typeof input.lifecycle !== 'object' ||
-      input.lifecycle === null || typeof input.lifecycle.abortUnopened !== 'function' ||
+      input.lifecycle === null ||
+      typeof input.lifecycle.settleExecutionAdmissionFailure !== 'function' ||
       typeof input.lifecycle.recordSettlementUnknown !== 'function') {
-    throw new TypeError('plan route registry requires unopened and unknown lifecycle authority')
+    throw new TypeError('plan route registry requires admission-failure and unknown lifecycle authority')
   }
   return Object.freeze({
     ...(input.directTree === undefined
@@ -258,7 +259,8 @@ function snapshotRouteRegistry(input: V2PlanExecutionRouteRegistry): V2PlanExecu
       ? {}
       : { portableZip: snapshotRoute(input.portableZip, 'prepare') }),
     lifecycle: Object.freeze({
-      abortUnopened: input.lifecycle.abortUnopened.bind(input.lifecycle),
+      settleExecutionAdmissionFailure:
+        input.lifecycle.settleExecutionAdmissionFailure.bind(input.lifecycle),
       recordSettlementUnknown: input.lifecycle.recordSettlementUnknown.bind(input.lifecycle),
     }),
   })

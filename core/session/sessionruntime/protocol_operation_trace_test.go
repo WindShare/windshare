@@ -203,6 +203,30 @@ func TestProtocolOperationTraceSuppressesSuccessfulTransferHotPath(t *testing.T)
 	}
 }
 
+func TestProtocolOperationErrorTraceRetainsOnlyBoundedWireClassification(t *testing.T) {
+	body, err := protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{
+		Scope:   protocolsession.OperationScopeRevision,
+		Code:    0x3008,
+		Message: "provider text must not enter the trace",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, code, retryable, ok := protocolOperationErrorTrace(
+		protocolsession.MessageOperationError,
+		body,
+	)
+	if !ok || scope != ProtocolOperationErrorRevision || code != 0x3008 || retryable {
+		t.Fatalf("operation error trace = scope=%d code=%x retryable=%v present=%v", scope, code, retryable, ok)
+	}
+	if _, _, _, malformed := protocolOperationErrorTrace(
+		protocolsession.MessageOperationError,
+		[]byte("provider text must not enter the trace"),
+	); malformed {
+		t.Fatal("malformed operation error exposed unverified classification")
+	}
+}
+
 func TestProtocolOperationTraceCorrelatesLaneGrantWithoutAuthenticatedBody(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	recorder := &protocolTraceRecorder{}

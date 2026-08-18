@@ -257,6 +257,15 @@ export type WorkspaceStageTraceEvent =
       expires_at_ms: number
     }>
   | Readonly<{
+      name: 'receive.continuation.admission_failed'
+      operation_id: string
+      receive_intent_digest: string
+      restored_checkpoint_set_digest: string
+      restored_completed_file_count: bigint
+      restored_completed_bytes: bigint
+      restored_expires_at_ms: number
+    }>
+  | Readonly<{
       name: 'receive.operation.expired'
       operation_id: string
       prior_stable_state: ExpiryReceiptV1['priorStableState']

@@ -36,6 +36,17 @@ const (
 	ProtocolOperationCauseProtocolFailure
 )
 
+// ProtocolOperationErrorScope is the bounded semantic domain of an authenticated
+// OPERATION_ERROR. It intentionally excludes provider text and operation bodies.
+type ProtocolOperationErrorScope uint8
+
+const (
+	ProtocolOperationErrorDirectory = ProtocolOperationErrorScope(protocolsession.OperationScopeDirectory)
+	ProtocolOperationErrorRevision  = ProtocolOperationErrorScope(protocolsession.OperationScopeRevision)
+	ProtocolOperationErrorBlock     = ProtocolOperationErrorScope(protocolsession.OperationScopeBlock)
+	ProtocolOperationErrorPeer      = ProtocolOperationErrorScope(protocolsession.OperationScopePeer)
+)
+
 // ProtocolOperationTrace summarizes one RPC boundary. The operation identity is
 // random correlation authority; request bodies, file identities, lease identities,
 // catalog paths, and raw errors are intentionally absent.
@@ -59,6 +70,10 @@ type ProtocolOperationTrace struct {
 	OperationElapsedMillis  uint64
 	UsableLanesAtSelection  uint32
 	UsableLanesAtSettlement uint32
+	OperationErrorScope     ProtocolOperationErrorScope
+	OperationErrorCode      uint16
+	OperationErrorRetryable bool
+	HasOperationError       bool
 	Cause                   ProtocolOperationCause
 }
 
@@ -161,10 +176,35 @@ func (call *operationCall) protocolOperationTrace(now time.Time) (ProtocolOperat
 		DeadlineRemainingMillis: call.traceDeadlineMillis, HasDeadline: call.traceHasDeadline,
 		OperationElapsedMillis: durationMillis(now.Sub(call.traceStarted)),
 		UsableLanesAtSelection: call.traceUsableAtSelection, Cause: call.traceCause,
+		OperationErrorScope:     call.traceOperationErrorScope,
+		OperationErrorCode:      call.traceOperationErrorCode,
+		OperationErrorRetryable: call.traceOperationErrorRetryable,
+		HasOperationError:       call.traceHasOperationError,
 	}
 	call.stateMu.Unlock()
 	call.laneMu.Unlock()
 	return event, true
+}
+
+func protocolOperationErrorTrace(
+	kind protocolsession.MessageKind,
+	body []byte,
+) (ProtocolOperationErrorScope, uint16, bool, bool) {
+	if kind != protocolsession.MessageOperationError {
+		return 0, 0, false, false
+	}
+	failure, err := protocolsession.DecodeOperationFailure(body)
+	if err != nil {
+		return 0, 0, false, false
+	}
+	scope := ProtocolOperationErrorScope(failure.Scope)
+	switch scope {
+	case ProtocolOperationErrorDirectory, ProtocolOperationErrorRevision,
+		ProtocolOperationErrorBlock, ProtocolOperationErrorPeer:
+		return scope, failure.Code, failure.Retryable, true
+	default:
+		return 0, 0, false, false
+	}
 }
 
 func (runtime *runtimeCore) traceProtocolOperation(event ProtocolOperationTrace) {

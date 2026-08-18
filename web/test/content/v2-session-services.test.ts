@@ -177,6 +177,42 @@ describe('v2 session block lane deadlines', () => {
     lane.close()
   })
 
+  it('keeps a revision-scoped block rejection inside the file boundary', async () => {
+    let cancellations = 0
+    const close = vi.fn(async () => undefined)
+    const session = {
+      beginOperation: async () => responseOperation(
+        V2_MESSAGE_KIND.requestBlocks,
+        V2_MESSAGE_KIND.operationError,
+        encodeV2Body(new Map<number, unknown>([
+          [0, 1], [1, 3], [2, 0x3008], [3, false], [4, null], [5, 'invalid lease'],
+        ])),
+      ),
+      cancelOperation: async () => { cancellations += 1 },
+      close,
+    } as unknown as V2ReceiverSessionRuntime
+    const lane = new V2SessionBlockLane(
+      1,
+      session,
+      share,
+      new Uint8Array(32).fill(9),
+      { leaseError: () => undefined } as never,
+    )
+
+    await expect(lane.fetchBlock({
+      descriptor: revision,
+      leaseId: identity(6),
+      localBlockIndex: 0n,
+    }, new AbortController().signal)).rejects.toMatchObject({
+      name: 'V2RemoteOperationError',
+      scope: 'revision',
+      code: 0x3008,
+    })
+    expect(cancellations).toBe(1)
+    expect(close).not.toHaveBeenCalled()
+    lane.close()
+  })
+
   it('renews the lane deadline when each authenticated fragment advances assembly', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(0)

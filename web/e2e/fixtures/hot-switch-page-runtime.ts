@@ -463,7 +463,7 @@ async function bindDirectAtomicOperation(
         },
       },
       lifecycle: {
-        abortUnopened: async (routeIntent, _reason, signal) => {
+        settleExecutionAdmissionFailure: async (routeIntent, _reason, signal) => {
           signal.throwIfAborted()
           return lifecycleState(modules, routeIntent, {
             kind: 'discarded',

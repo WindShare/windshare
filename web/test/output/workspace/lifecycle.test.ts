@@ -53,6 +53,24 @@ describe('receive lifecycle reducer', () => {
     }, context('direct-tree', NOW + 500)).state
     expect(resumed.kind).toBe('receiving')
     expect(resumed).not.toHaveProperty('expiresAt')
+
+    const restored = reduceReceiveLifecycle(resumed, {
+      kind: 'resume-admission-failed',
+      expectedGeneration: resumed.generation,
+      leaseId: LEASE,
+      checkpointSetDigest: stable.kind === 'resumable-receive'
+        ? stable.checkpointSetDigest
+        : identity(32, 4),
+      completedFileCount: 1n,
+      completedBytes: 12n,
+      expiresAt: NOW + STABLE_RETENTION_MILLISECONDS,
+    }, context('direct-tree', NOW + 600)).state
+    expect(restored).toEqual(expect.objectContaining({
+      kind: 'resumable-receive',
+      completedFileCount: 1n,
+      completedBytes: 12n,
+      expiresAt: NOW + STABLE_RETENTION_MILLISECONDS,
+    }))
   })
 
   it('maps unknown external outcomes to closed NeedsAttention reasons', () => {
