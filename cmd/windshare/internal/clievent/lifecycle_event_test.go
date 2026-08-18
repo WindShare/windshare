@@ -19,6 +19,10 @@ func TestPeerAttemptLaneRequirementMatchesAdmissionLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	grant, err := NewProtocolOperationID(bytes16(4))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, test := range []struct {
 		name    string
@@ -28,8 +32,8 @@ func TestPeerAttemptLaneRequirementMatchesAdmissionLifecycle(t *testing.T) {
 	}{
 		{name: "datachannel without lane", stage: PeerDataChannelOpen, valid: true},
 		{name: "datachannel with lane", stage: PeerDataChannelOpen, hasLane: true},
-		{name: "admission started without lane", stage: PeerLaneAdmissionStarted},
-		{name: "admission started with lane", stage: PeerLaneAdmissionStarted, hasLane: true, valid: true},
+		{name: "lane hello without lane", stage: PeerLaneHelloAuthenticated},
+		{name: "lane hello with lane", stage: PeerLaneHelloAuthenticated, hasLane: true, valid: true},
 		{name: "admitted without lane", stage: PeerAttemptAdmitted},
 		{name: "admitted with lane", stage: PeerAttemptAdmitted, hasLane: true, valid: true},
 	} {
@@ -37,6 +41,15 @@ func TestPeerAttemptLaneRequirementMatchesAdmissionLifecycle(t *testing.T) {
 			spec := PeerAttemptSpec{
 				Command: CommandShare, Session: session, PeerPath: path,
 				Attempt: attempt, Sequence: 1, Stage: test.stage,
+			}
+			if test.stage == PeerLaneHelloAuthenticated || test.stage == PeerAttemptAdmitted {
+				spec.Phase = PeerPhaseAdmission
+				spec.GrantOperation = grant
+				spec.HasGrantOperation = true
+			}
+			if test.stage == PeerAttemptAdmitted {
+				spec.AdmissionDisposition = PeerAdmissionAccepted
+				spec.ResponseDelivery = PeerResponseDelivered
 			}
 			if test.hasLane {
 				spec.Lane = lane

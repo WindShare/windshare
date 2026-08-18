@@ -155,7 +155,8 @@ var receiverProvenanceProjections = [...]receiverProvenanceProjection{
 	{v2peer.ReceiverProvenanceLocalExplicitStop, clievent.ReceiverProvenanceLocalExplicitStop},
 	{v2peer.ReceiverProvenanceLocalContextEnded, clievent.ReceiverProvenanceLocalContextEnded},
 	{v2peer.ReceiverProvenanceLocalNegotiationFailure, clievent.ReceiverProvenanceLocalNegotiationFailure},
-	{v2peer.ReceiverProvenanceLocalAttemptTimeout, clievent.ReceiverProvenanceLocalAttemptTimeout},
+	{v2peer.ReceiverProvenanceLocalNegotiationTimeout, clievent.ReceiverProvenanceLocalNegotiationTimeout},
+	{v2peer.ReceiverProvenanceLocalAdmissionTimeout, clievent.ReceiverProvenanceLocalAdmissionTimeout},
 	{v2peer.ReceiverProvenanceLocalOperationContract, clievent.ReceiverProvenanceLocalOperationContract},
 	{v2peer.ReceiverProvenanceRemoteOperationRejected, clievent.ReceiverProvenanceRemoteOperationRejected},
 	{v2peer.ReceiverProvenanceRemoteUnknownControl, clievent.ReceiverProvenanceRemoteUnknownControl},
@@ -201,8 +202,10 @@ func projectReceiverCauseClassification(value v2peer.ReceiverCauseClass) (clieve
 		return clievent.ReceiverCauseConfiguration, true
 	case v2peer.ReceiverCauseOperationMissing:
 		return clievent.ReceiverCauseOperationMissing, true
-	case v2peer.ReceiverCauseAttemptTimeout:
-		return clievent.ReceiverCauseAttemptTimeout, true
+	case v2peer.ReceiverCauseNegotiationTimeout:
+		return clievent.ReceiverCauseNegotiationTimeout, true
+	case v2peer.ReceiverCauseAdmissionTimeout:
+		return clievent.ReceiverCauseAdmissionTimeout, true
 	case v2peer.ReceiverCauseCandidateLimit:
 		return clievent.ReceiverCauseCandidateLimit, true
 	case v2peer.ReceiverCauseChannelAdmission:

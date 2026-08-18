@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +37,278 @@ const (
 	senderLaneIdentityFailureReason      = "lane_identity_mismatch"
 	senderAdmissionTimeoutFailureReason  = "admission_timeout"
 )
+
+type integrationManualPhaseTimer struct {
+	ticks   chan time.Time
+	stopped atomic.Bool
+}
+
+func newIntegrationManualPhaseTimer() *integrationManualPhaseTimer {
+	return &integrationManualPhaseTimer{ticks: make(chan time.Time, 1)}
+}
+
+func (timer *integrationManualPhaseTimer) C() <-chan time.Time { return timer.ticks }
+func (timer *integrationManualPhaseTimer) Stop()               { timer.stopped.Store(true) }
+
+func (timer *integrationManualPhaseTimer) Fire() bool {
+	if timer == nil || timer.stopped.Load() {
+		return false
+	}
+	select {
+	case timer.ticks <- time.Unix(1, 0):
+		return true
+	default:
+		return false
+	}
+}
+
+type integrationPhaseTimerRecord struct {
+	phase    v2peer.PeerAttemptPhase
+	duration time.Duration
+	timer    *integrationManualPhaseTimer
+}
+
+type integrationPhaseTimerSource struct {
+	created chan integrationPhaseTimerRecord
+}
+
+func newIntegrationPhaseTimerSource() *integrationPhaseTimerSource {
+	return &integrationPhaseTimerSource{created: make(chan integrationPhaseTimerRecord, 16)}
+}
+
+func (source *integrationPhaseTimerSource) NewPeerPhaseTimer(
+	phase v2peer.PeerAttemptPhase,
+	duration time.Duration,
+) (v2peer.PeerPhaseTimer, error) {
+	timer := newIntegrationManualPhaseTimer()
+	source.created <- integrationPhaseTimerRecord{phase: phase, duration: duration, timer: timer}
+	return timer, nil
+}
+
+func receiveIntegrationPhaseTimer(
+	t *testing.T,
+	source *integrationPhaseTimerSource,
+	wantPhase v2peer.PeerAttemptPhase,
+) integrationPhaseTimerRecord {
+	t.Helper()
+	select {
+	case record := <-source.created:
+		if record.phase != wantPhase || record.duration != v2PeerIntegrationTimeout {
+			t.Fatalf(
+				"phase timer = %s/%s, want %s/%s",
+				record.phase,
+				record.duration,
+				wantPhase,
+				v2PeerIntegrationTimeout,
+			)
+		}
+		return record
+	case <-time.After(v2PeerIntegrationTimeout):
+		t.Fatalf("phase timer %s was not armed", wantPhase)
+		return integrationPhaseTimerRecord{}
+	}
+}
+
+func requireNoIntegrationPhaseTimer(
+	t *testing.T,
+	source *integrationPhaseTimerSource,
+) {
+	t.Helper()
+	select {
+	case record := <-source.created:
+		t.Fatalf("unexpected phase timer armed: %s/%s", record.phase, record.duration)
+	default:
+	}
+}
+
+func receiveIntegrationSignal(t *testing.T, name string, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(v2PeerIntegrationTimeout):
+		t.Fatalf("%s did not occur", name)
+	}
+}
+
+type integrationTrackedPeerConnection struct {
+	*pion.PeerConnection
+	closeCalls atomic.Int32
+	closed     chan struct{}
+}
+
+func newIntegrationTrackedPeerConnection(
+	connection *pion.PeerConnection,
+) *integrationTrackedPeerConnection {
+	return &integrationTrackedPeerConnection{
+		PeerConnection: connection,
+		closed:         make(chan struct{}),
+	}
+}
+
+func (connection *integrationTrackedPeerConnection) Close() error {
+	call := connection.closeCalls.Add(1)
+	err := connection.PeerConnection.Close()
+	if call == 1 {
+		close(connection.closed)
+	}
+	return err
+}
+
+type integrationDataChannelScript struct {
+	openGate       <-chan struct{}
+	physicalOpened chan struct{}
+}
+
+type integrationTrackedPeerDataChannel struct {
+	v2peer.PeerDataChannel
+	visibleOpened <-chan struct{}
+	closeCalls    atomic.Int32
+	closed        chan struct{}
+}
+
+func (channel *integrationTrackedPeerDataChannel) Opened() <-chan struct{} {
+	return channel.visibleOpened
+}
+
+func (channel *integrationTrackedPeerDataChannel) Close() error {
+	call := channel.closeCalls.Add(1)
+	err := channel.PeerDataChannel.Close()
+	if call == 1 {
+		close(channel.closed)
+	}
+	return err
+}
+
+type integrationTrackedDataChannelAdapter struct {
+	scripts  chan integrationDataChannelScript
+	channels chan *integrationTrackedPeerDataChannel
+}
+
+func newIntegrationTrackedDataChannelAdapter() *integrationTrackedDataChannelAdapter {
+	return &integrationTrackedDataChannelAdapter{
+		scripts:  make(chan integrationDataChannelScript, 8),
+		channels: make(chan *integrationTrackedPeerDataChannel, 8),
+	}
+}
+
+func (adapter *integrationTrackedDataChannelAdapter) WrapDataChannel(
+	raw *pion.DataChannel,
+) (v2peer.PeerDataChannel, error) {
+	underlying, err := transportwebrtc.NewChannel(raw)
+	if err != nil {
+		return nil, err
+	}
+	var script integrationDataChannelScript
+	select {
+	case script = <-adapter.scripts:
+	case <-time.After(v2PeerIntegrationTimeout):
+		_ = underlying.Close()
+		return nil, errors.New("integration DataChannel script was not installed")
+	}
+	visibleOpened := (<-chan struct{})(underlying.Opened())
+	if script.openGate != nil {
+		opened := make(chan struct{})
+		visibleOpened = opened
+		go func() {
+			select {
+			case <-underlying.Opened():
+				if script.physicalOpened != nil {
+					close(script.physicalOpened)
+				}
+			case <-underlying.Done():
+				return
+			}
+			select {
+			case <-script.openGate:
+				close(opened)
+			case <-underlying.Done():
+			}
+		}()
+	}
+	channel := &integrationTrackedPeerDataChannel{
+		PeerDataChannel: underlying,
+		visibleOpened:   visibleOpened,
+		closed:          make(chan struct{}),
+	}
+	adapter.channels <- channel
+	return channel, nil
+}
+
+func receiveIntegrationPeer(
+	t *testing.T,
+	created <-chan *integrationTrackedPeerConnection,
+) *integrationTrackedPeerConnection {
+	t.Helper()
+	select {
+	case connection := <-created:
+		return connection
+	case <-time.After(v2PeerIntegrationTimeout):
+		t.Fatal("real Pion PeerConnection was not created")
+		return nil
+	}
+}
+
+func receiveIntegrationDataChannel(
+	t *testing.T,
+	adapter *integrationTrackedDataChannelAdapter,
+) *integrationTrackedPeerDataChannel {
+	t.Helper()
+	select {
+	case channel := <-adapter.channels:
+		return channel
+	case <-time.After(v2PeerIntegrationTimeout):
+		t.Fatal("real Pion DataChannel was not wrapped")
+		return nil
+	}
+}
+
+func requireIntegrationTransportClosedOnce(
+	t *testing.T,
+	side string,
+	peer *integrationTrackedPeerConnection,
+	channel *integrationTrackedPeerDataChannel,
+) {
+	t.Helper()
+	receiveIntegrationSignal(t, side+" PeerConnection close", peer.closed)
+	receiveIntegrationSignal(t, side+" DataChannel close", channel.closed)
+	if peer.closeCalls.Load() != 1 || channel.closeCalls.Load() != 1 {
+		t.Fatalf(
+			"%s transport close calls peer=%d channel=%d, want 1/1",
+			side,
+			peer.closeCalls.Load(),
+			channel.closeCalls.Load(),
+		)
+	}
+}
+
+func receiveIntegrationAdmissionOutcome(
+	t *testing.T,
+	outcomes <-chan receiverIntegrationAdmissionOutcome,
+) receiverIntegrationAdmissionOutcome {
+	t.Helper()
+	select {
+	case outcome := <-outcomes:
+		return outcome
+	case <-time.After(v2PeerIntegrationTimeout):
+		t.Fatal("sender admission settlement did not finish")
+		return receiverIntegrationAdmissionOutcome{}
+	}
+}
+
+func receiveIntegrationFrameChannel(
+	t *testing.T,
+	name string,
+	channels <-chan protocolsession.FrameChannel,
+) protocolsession.FrameChannel {
+	t.Helper()
+	select {
+	case channel := <-channels:
+		return channel
+	case <-time.After(v2PeerIntegrationTimeout):
+		t.Fatalf("%s channel was not published", name)
+		return nil
+	}
+}
 
 type integrationPeerIngress struct {
 	mu          sync.Mutex
@@ -253,33 +526,56 @@ func (session *integrationPeerSession) FailPeerOperation(
 func (session *integrationPeerSession) AdmitPeerChannel(
 	ctx context.Context,
 	channel protocolsession.FrameChannel,
-) (sessionruntime.LaneIdentity, error) {
+	control sessionruntime.SenderPeerAdmissionControl,
+) (result sessionruntime.SenderPeerAdmissionResult, err error) {
+	result = sessionruntime.SenderPeerAdmissionResult{
+		Disposition:      sessionruntime.SenderPeerAdmissionSilentClose,
+		ResponseDelivery: sessionruntime.SenderPeerResponseNotAttempted,
+		LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			_ = channel.Close()
+		}
+	}()
 	opened, ok := channel.(interface{ Opened() <-chan struct{} })
 	if !ok {
-		return sessionruntime.LaneIdentity{}, errors.New("peer adapter omitted its open signal")
+		return result, errors.New("peer adapter omitted its open signal")
 	}
 	select {
 	case <-ctx.Done():
-		return sessionruntime.LaneIdentity{}, ctx.Err()
+		return result, ctx.Err()
 	case <-opened.Opened():
 	}
 	if err := channel.Send(ctx, framechannel.Frame("sender-to-browser")); err != nil {
-		return sessionruntime.LaneIdentity{}, err
+		return result, err
 	}
 	select {
 	case <-ctx.Done():
-		return sessionruntime.LaneIdentity{}, ctx.Err()
+		return result, ctx.Err()
 	case frame, ok := <-channel.Recv():
 		if !ok || !bytes.Equal(frame, []byte("browser-to-sender")) {
-			return sessionruntime.LaneIdentity{}, errors.New("peer FrameChannel changed binary frame delivery")
+			return result, errors.New("peer FrameChannel changed binary frame delivery")
 		}
 	}
 	lane := sessionruntime.LaneIdentity{ID: 17, Epoch: 3}
+	grantOperation := integrationOperationID(0x7e)
+	if !control.BeginAuthenticatedSettlement(grantOperation, lane) {
+		return result, context.Canceled
+	}
+	result = sessionruntime.SenderPeerAdmissionResult{
+		SettlementBegan: true, GrantOperationID: grantOperation, Lane: lane,
+		Disposition:      sessionruntime.SenderPeerAdmissionAccepted,
+		ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
+		LaneAttachment:   sessionruntime.SenderPeerLaneAttached,
+	}
 	session.mu.Lock()
 	session.channel = channel
 	session.mu.Unlock()
 	session.admit <- lane
-	return lane, nil
+	transferred = true
+	return result, nil
 }
 
 func TestV2PeerSenderNegotiatesRealPionDataChannel(t *testing.T) {
@@ -322,7 +618,7 @@ func TestV2PeerSenderNegotiatesRealPionDataChannel(t *testing.T) {
 		answer: make(chan struct{}), admit: make(chan sessionruntime.LaneIdentity, 1),
 	}
 	factory, err := v2peer.NewFactory(v2peer.Config{
-		Configuration: pion.Configuration{}, AttemptTimeout: v2PeerIntegrationTimeout,
+		Configuration: pion.Configuration{}, NegotiationBudget: v2PeerIntegrationTimeout, AdmissionBudget: v2PeerIntegrationTimeout,
 		MaxCandidates: v2PeerIntegrationMaxCandidates,
 		PeerConnections: v2peer.PeerConnectionFactoryFunc(
 			func(configuration pion.Configuration) (v2peer.PeerConnection, error) {

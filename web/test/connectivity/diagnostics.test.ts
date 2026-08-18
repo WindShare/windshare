@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES,
+  V2_BROWSER_CONNECTIVITY_RECOVERY_STAGES,
+  V2_CONNECTIVITY_DIAGNOSTIC_SCHEMA_VERSION,
   V2_PEER_OPERATION_ERROR_REGISTRY,
   V2_TYPED_PEER_ERROR_CODES,
   v2TypedErrorForPeerOperationCode,
@@ -22,10 +24,42 @@ describe('connectivity diagnostics vocabulary', () => {
     expect(v2TypedErrorForPeerOperationCode(0xffff)).toBeUndefined()
   })
 
-  it('keeps the observer vocabulary immutable and terminally explicit', () => {
+  it('keeps the schema-v2 attempt and recovery vocabularies exact and immutable', () => {
+    expect(V2_CONNECTIVITY_DIAGNOSTIC_SCHEMA_VERSION).toBe(2)
     expect(Object.isFrozen(V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES)).toBe(true)
+    expect(Object.isFrozen(V2_BROWSER_CONNECTIVITY_RECOVERY_STAGES)).toBe(true)
     expect(Object.isFrozen(V2_TYPED_PEER_ERROR_CODES)).toBe(true)
-    expect(V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES.at(-1)).toBe('failed')
+    expect(V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES).toEqual([
+      'started',
+      'negotiation-deadline-armed',
+      'negotiation-deadline-expired',
+      'offer-created',
+      'offer-sent',
+      'answer-received',
+      'datachannel-open',
+      'admission-deadline-armed',
+      'admission-deadline-expired',
+      'grant-requested',
+      'grant-received',
+      'lane-hello-sent',
+      'admission-response-received',
+      'admission-response-settled',
+      'lane-attached',
+      'admitted',
+      'failed',
+    ])
+    expect(V2_BROWSER_CONNECTIVITY_RECOVERY_STAGES).toEqual([
+      'wave-started',
+      'retry-decided',
+      'backoff-scheduled',
+      'attempt-replaced',
+      'wave-quiesced',
+      'wave-rearmed',
+      'peer-detached',
+      'session-budget-exhausted',
+      'path-stopped',
+      'session-stopped',
+    ])
     expect(V2_TYPED_PEER_ERROR_CODES).toContain('signaling-contract')
     expect(V2_TYPED_PEER_ERROR_CODES).toContain('attempt-cancelled')
   })

@@ -96,7 +96,7 @@ func (handler *senderHandler) startAttempt(
 	if handler.evidenceAuthority.claimed(offer.Binding) {
 		return errors.Join(ErrProtocol, v2signal.ErrSignalBinding)
 	}
-	if len(handler.attempts) >= handler.factory.maxActiveAttempts {
+	if len(handler.attempts) >= SenderMaxActivePeerAttemptsPerSession {
 		return ErrAttemptCapacity
 	}
 	// Every admitted attempt must be able to leave a replay tombstone. Reserving

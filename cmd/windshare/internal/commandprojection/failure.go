@@ -566,7 +566,7 @@ func ProjectReceiverCauseClass(value v2peer.ReceiverCauseClass) (clievent.Failur
 		code = clievent.FailurePeerConfiguration
 	case v2peer.ReceiverCauseOperationMissing:
 		code = clievent.FailurePeerOperationMissing
-	case v2peer.ReceiverCauseAttemptTimeout:
+	case v2peer.ReceiverCauseNegotiationTimeout, v2peer.ReceiverCauseAdmissionTimeout:
 		code = clievent.FailurePeerTimeout
 	case v2peer.ReceiverCauseCandidateLimit:
 		code = clievent.FailurePeerCandidates

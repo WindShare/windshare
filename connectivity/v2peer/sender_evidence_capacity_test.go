@@ -13,18 +13,27 @@ import (
 )
 
 func TestSenderEvidenceIdentityBudgetConfigurationIsExplicitAndBounded(t *testing.T) {
+	const documentedBrowserSessionAttemptCeiling = 8
 	factory := mustTestFactory(t, Config{})
-	if factory.maxSessionEvidenceIdentities != DefaultMaxSessionEvidenceIdentities ||
-		factory.maxSessionEvidenceIdentities <= 0 {
+	if SenderMaxSessionEvidenceIdentities != 64 ||
+		factory.maxSessionEvidenceIdentities != SenderMaxSessionEvidenceIdentities {
 		t.Fatalf("default evidence identity budget = %d", factory.maxSessionEvidenceIdentities)
 	}
+	ordinaryIdentityCapacity := SenderMaxSessionEvidenceIdentities - senderEvidenceTerminalIdentityReserve
+	if documentedBrowserSessionAttemptCeiling*8 != SenderMaxSessionEvidenceIdentities ||
+		documentedBrowserSessionAttemptCeiling >= ordinaryIdentityCapacity {
+		t.Fatalf(
+			"browser/session evidence relationship = %d/%d ordinary=%d",
+			documentedBrowserSessionAttemptCeiling,
+			SenderMaxSessionEvidenceIdentities,
+			ordinaryIdentityCapacity,
+		)
+	}
 	for name, config := range map[string]Config{
-		"negative": {MaxSessionEvidenceIdentities: -1},
-		"above implementation bound": {
-			MaxSessionEvidenceIdentities: maximumSessionEvidenceIdentities + 1,
-		},
-		"cannot cover active attempts": {
-			MaxActiveAttempts: 2, MaxSessionEvidenceIdentities: 1,
+		"negative":            {MaxSessionEvidenceIdentities: -1},
+		"no terminal reserve": {MaxSessionEvidenceIdentities: 1},
+		"above semantic ceiling": {
+			MaxSessionEvidenceIdentities: SenderMaxSessionEvidenceIdentities + 1,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -36,7 +45,7 @@ func TestSenderEvidenceIdentityBudgetConfigurationIsExplicitAndBounded(t *testin
 }
 
 func TestSenderEvidenceAuthorityBoundsNormalClaimsAndOwnsOneTerminalIdentity(t *testing.T) {
-	authority := newSenderEvidenceAuthority(2)
+	authority := newSenderEvidenceAuthority(3)
 	firstBinding := testBinding(140)
 	secondBinding := testBinding(142)
 	boundaryBinding := testBinding(144)
@@ -60,12 +69,39 @@ func TestSenderEvidenceAuthorityBoundsNormalClaimsAndOwnsOneTerminalIdentity(t *
 	if claim := authority.claim(operation, testBinding(148)); claim.acquired || !claim.sessionTerminal {
 		t.Fatalf("post-terminal claim = %#v", claim)
 	}
-	if authority.claimCount() != 2 || !authority.claimed(boundaryBinding) {
+	if authority.retainedIdentityCount() != 3 || len(authority.claims) != 2 ||
+		!authority.claimed(boundaryBinding) {
 		t.Fatalf("bounded authority = %#v", authority)
 	}
 	authority.reset()
-	if authority.claimCount() != 0 || authority.terminal {
+	if authority.retainedIdentityCount() != 0 || authority.terminal {
 		t.Fatalf("reset authority = %#v", authority)
+	}
+}
+
+func TestSenderEvidenceAuthorityRetainsAtMostDocumentedIdentityCeiling(t *testing.T) {
+	authority := newSenderEvidenceAuthority(SenderMaxSessionEvidenceIdentities)
+	operation := testPeerOperation(testOperationID(170))
+	ordinaryCapacity := SenderMaxSessionEvidenceIdentities - senderEvidenceTerminalIdentityReserve
+	for index := range ordinaryCapacity {
+		binding := testBinding(byte(index + 1))
+		if claim := authority.claim(operation, binding); !claim.acquired || claim.sessionTerminal {
+			t.Fatalf("ordinary claim %d = %#v", index, claim)
+		}
+	}
+	boundary := testBinding(byte(ordinaryCapacity + 1))
+	if claim := authority.claim(operation, boundary); !claim.acquired || !claim.sessionTerminal {
+		t.Fatalf("capacity boundary = %#v", claim)
+	}
+	if authority.retainedIdentityCount() != SenderMaxSessionEvidenceIdentities ||
+		len(authority.claims) != ordinaryCapacity || !authority.claimed(boundary) {
+		t.Fatalf("bounded authority = %#v", authority)
+	}
+	if claim := authority.claim(operation, testBinding(byte(ordinaryCapacity+2))); claim.acquired || !claim.sessionTerminal {
+		t.Fatalf("post-ceiling claim = %#v", claim)
+	}
+	if authority.retainedIdentityCount() != SenderMaxSessionEvidenceIdentities {
+		t.Fatalf("post-ceiling identities = %d", authority.retainedIdentityCount())
 	}
 }
 
@@ -73,8 +109,7 @@ func TestSenderEvidenceCapacityTerminalizesBoundaryAndEndsProtocolSession(t *tes
 	collector := &senderObservationCollector{}
 	var peerCreations atomic.Int32
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
-		MaxActiveAttempts:            1,
-		MaxSessionEvidenceIdentities: 1,
+		MaxSessionEvidenceIdentities: 2,
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			peerCreations.Add(1)
 			return nil, errors.New("synthetic first attempt failure")
@@ -85,7 +120,9 @@ func TestSenderEvidenceCapacityTerminalizesBoundaryAndEndsProtocolSession(t *tes
 	defer cancel()
 
 	_, firstBinding, _ := sendSenderTestOffer(t, handler, ctx, 151)
-	waitForTest(t, func() bool { return len(collector.forAttempt(firstBinding.AttemptID)) == 3 })
+	waitForTest(t, func() bool {
+		return senderAttemptReachedTerminal(collector.forAttempt(firstBinding.AttemptID), SenderAttemptFailed)
+	})
 	receiveTest(t, session.failures)
 	waitForTest(t, func() bool {
 		handler.mu.Lock()
@@ -98,7 +135,7 @@ func TestSenderEvidenceCapacityTerminalizesBoundaryAndEndsProtocolSession(t *tes
 		t.Fatalf("capacity run result = %v", err)
 	}
 	waitForTest(t, func() bool {
-		return len(collector.forAttempt(boundaryBinding.AttemptID)) == 3
+		return senderAttemptReachedTerminal(collector.forAttempt(boundaryBinding.AttemptID), SenderAttemptFailed)
 	})
 	assertUnstartedSenderTerminal(
 		t,
@@ -106,9 +143,9 @@ func TestSenderEvidenceCapacityTerminalizesBoundaryAndEndsProtocolSession(t *tes
 		AttemptFailureScopeSession,
 		TypedPeerErrorStopped,
 	)
-	terminal := collector.forAttempt(boundaryBinding.AttemptID)[2]
-	if terminal.Failure.Message != peerEvidenceCapacityFailureMessage {
-		t.Fatalf("capacity terminal = %#v", terminal)
+	terminal := collector.forAttempt(boundaryBinding.AttemptID)[1]
+	if terminal.Failure.Message != "" {
+		t.Fatalf("capacity terminal exposed an internal message: %#v", terminal)
 	}
 	if peerCreations.Load() != 1 {
 		t.Fatalf("peer creations = %d, want 1", peerCreations.Load())
@@ -118,7 +155,7 @@ func TestSenderEvidenceCapacityTerminalizesBoundaryAndEndsProtocolSession(t *tes
 		t.Fatalf("capacity boundary emitted an operation failure: %#v", failure)
 	default:
 	}
-	if handler.evidenceAuthority.claimCount() != 0 || handler.evidenceAuthority.terminal {
+	if handler.evidenceAuthority.retainedIdentityCount() != 0 || handler.evidenceAuthority.terminal {
 		t.Fatalf("completed session retained evidence authority: %#v", handler.evidenceAuthority)
 	}
 
@@ -130,7 +167,7 @@ func TestSenderEvidenceCapacityTerminalizesBoundaryAndEndsProtocolSession(t *tes
 	if err := handler.HandleMessage(boundaryContext, message); !errors.Is(err, context.Canceled) {
 		t.Fatalf("post-terminal replay = %v", err)
 	}
-	if observations := collector.forAttempt(boundaryBinding.AttemptID); len(observations) != 3 {
+	if observations := collector.forAttempt(boundaryBinding.AttemptID); len(observations) != 2 {
 		t.Fatalf("post-terminal replay restarted evidence: %#v", observations)
 	}
 }
@@ -139,8 +176,7 @@ func TestSenderEvidenceCapacityConcurrentBoundaryHasOneTerminalOwner(t *testing.
 	collector := &senderObservationCollector{}
 	var peerCreations atomic.Int32
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
-		MaxActiveAttempts:            1,
-		MaxSessionEvidenceIdentities: 1,
+		MaxSessionEvidenceIdentities: 2,
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			peerCreations.Add(1)
 			return nil, errors.New("peer creation must not run")
@@ -200,7 +236,7 @@ func TestSenderEvidenceCapacityConcurrentBoundaryHasOneTerminalOwner(t *testing.
 		for _, offer := range offers {
 			total += len(collector.forAttempt(offer.binding.AttemptID))
 		}
-		return total == 3
+		return total == 2
 	})
 	terminalStreams := 0
 	for _, offer := range offers {
@@ -212,15 +248,16 @@ func TestSenderEvidenceCapacityConcurrentBoundaryHasOneTerminalOwner(t *testing.
 		assertUnstartedSenderTerminal(
 			t, observations, AttemptFailureScopeSession, TypedPeerErrorStopped,
 		)
-		if observations[2].Failure.Message != peerEvidenceCapacityFailureMessage {
-			t.Fatalf("concurrent terminal = %#v", observations[2])
+		if observations[1].Failure.Message != "" {
+			t.Fatalf("concurrent terminal exposed an internal message: %#v", observations[1])
 		}
 	}
-	if terminalStreams != 1 || handler.evidenceAuthority.claimCount() != 1 || peerCreations.Load() != 0 {
+	if terminalStreams != 1 || handler.evidenceAuthority.retainedIdentityCount() != 2 ||
+		len(handler.evidenceAuthority.claims) != 1 || peerCreations.Load() != 0 {
 		t.Fatalf(
 			"concurrent authority: terminals=%d claims=%d peerCreations=%d",
 			terminalStreams,
-			handler.evidenceAuthority.claimCount(),
+			handler.evidenceAuthority.retainedIdentityCount(),
 			peerCreations.Load(),
 		)
 	}
@@ -230,8 +267,7 @@ func TestSenderEvidenceCapacityConcurrentBoundaryHasOneTerminalOwner(t *testing.
 func TestSenderEvidenceCapacityWithUnreadStreamStillEndsAndCleansSession(t *testing.T) {
 	var peerCreations atomic.Int32
 	factory := mustTestFactory(t, Config{
-		MaxActiveAttempts:                 1,
-		MaxSessionEvidenceIdentities:      1,
+		MaxSessionEvidenceIdentities:      2,
 		SenderAttemptObservationCapacity:  1,
 		PeerDiagnosticObservationCapacity: 4,
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
@@ -267,7 +303,7 @@ func TestSenderEvidenceCapacityWithUnreadStreamStillEndsAndCleansSession(t *test
 		t.Fatalf("peer creations = %d", peerCreations.Load())
 	}
 	completion := factory.CompleteObservations()
-	if completion.Attempts != (ObservationCompletion{Enqueued: 1, Loss: ObservationLoss{CapacityDropped: 2}}) {
+	if completion.Attempts != (ObservationCompletion{Enqueued: 1, Loss: ObservationLoss{CapacityDropped: 1}}) {
 		t.Fatalf("attempt completion = %#v", completion.Attempts)
 	}
 	diagnostics := make(map[PeerDiagnosticReason]PeerDiagnosticObservation)
@@ -275,10 +311,10 @@ func TestSenderEvidenceCapacityWithUnreadStreamStillEndsAndCleansSession(t *test
 		diagnostics[observation.Reason] = observation
 	}
 	if diagnostics[PeerDiagnosticEvidenceCapacity].Count != 1 ||
-		diagnostics[PeerDiagnosticStreamCapacity].Count != 2 {
+		diagnostics[PeerDiagnosticStreamCapacity].Count != 1 {
 		t.Fatalf("capacity diagnostics = %#v", diagnostics)
 	}
-	if handler.evidenceAuthority.claimCount() != 0 || handler.evidenceAuthority.terminal {
+	if handler.evidenceAuthority.retainedIdentityCount() != 0 || handler.evidenceAuthority.terminal {
 		t.Fatalf("unread stream retained authority: %#v", handler.evidenceAuthority)
 	}
 }

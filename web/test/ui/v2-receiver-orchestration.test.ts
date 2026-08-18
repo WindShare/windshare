@@ -793,7 +793,6 @@ class FakeJoinedShare {
   beginDownloadConnectivity(): V2ConnectivityActivation {
     return {
       routes: Object.freeze({}) as never,
-      observeSizeClass: () => undefined,
       close: () => undefined,
     }
   }

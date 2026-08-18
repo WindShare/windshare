@@ -17,7 +17,6 @@ import type { V2FileRevisionDescriptor } from '../../src/content/v2-records'
 import type {
   V2ConnectivityActivation,
   V2ContentIntent,
-  V2ContentSizeClass,
   V2ReceiverConnectivity,
 } from '../../src/connectivity/v2-receiver-policy'
 import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
@@ -80,10 +79,7 @@ class SwitchingGenerationProvider implements V2ContentGenerationProvider {
 
 interface ConnectivityBeginCall {
   readonly intent: V2ContentIntent
-  readonly sizeClass: V2ContentSizeClass
-  readonly relayFallbackMilliseconds: number | undefined
   readonly routeAuthority: V2ConnectivityRouteAuthority | undefined
-  readonly observed: V2ContentSizeClass[]
   delegateCloses: number
 }
 
@@ -93,24 +89,18 @@ class FakeConnectivity {
 
   begin(
     intent: V2ContentIntent,
-    sizeClass: V2ContentSizeClass,
     options: {
-      readonly relayFallbackMilliseconds?: number
       readonly routeAuthority?: V2ConnectivityRouteAuthority
     } = {},
   ): V2ConnectivityActivation {
     const call: ConnectivityBeginCall = {
       intent,
-      sizeClass,
-      relayFallbackMilliseconds: options.relayFallbackMilliseconds,
       routeAuthority: options.routeAuthority,
-      observed: [],
       delegateCloses: 0,
     }
     this.begins.push(call)
     return {
       routes: options.routeAuthority ?? new V2ConnectivityRouteAuthority(),
-      observeSizeClass: (observed) => { call.observed.push(observed) },
       close: () => { call.delegateCloses += 1 },
     }
   }
@@ -370,34 +360,29 @@ describe('v2 supervised content generations', () => {
   })
 })
 
-describe('v2 supervised connectivity activation clock', () => {
-  it('preserves the original zero/eight-second window across generation binds', async () => {
-    let now = 0
-    const supervised = new V2SupervisedConnectivity(() => now)
+describe('v2 supervised connectivity activation ownership', () => {
+  it('preserves one route authority while replacing generation delegates', async () => {
+    const supervised = new V2SupervisedConnectivity()
     const first = new FakeConnectivity()
     const second = new FakeConnectivity()
     const third = new FakeConnectivity()
     supervised.bind(first as unknown as V2ReceiverConnectivity)
 
     const activation = supervised.begin('preview')
-    expect(first.begins[0]?.relayFallbackMilliseconds).toBe(8_000)
     expect(first.begins[0]?.routeAuthority).toBe(activation.routes)
+    expect(activation.routes.allows('relay')).toBe(true)
+    expect(activation.routes.allows('peer')).toBe(true)
 
-    now = 5_000
     supervised.bind(second as unknown as V2ReceiverConnectivity)
     expect(first.begins[0]?.delegateCloses).toBe(1)
-    expect(second.begins[0]?.relayFallbackMilliseconds).toBe(3_000)
     expect(second.begins[0]?.routeAuthority).toBe(activation.routes)
     expect(activation.routes.active).toBe(true)
 
-    activation.observeSizeClass('large')
-    now = 8_000
     supervised.bind(third as unknown as V2ReceiverConnectivity)
     expect(second.begins[0]?.delegateCloses).toBe(1)
     expect(third.begins[0]).toMatchObject({
       intent: 'preview',
-      sizeClass: 'large',
-      relayFallbackMilliseconds: 0,
+      routeAuthority: activation.routes,
     })
 
     activation.close()

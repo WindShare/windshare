@@ -52,7 +52,7 @@ func TestSenderPeerAdmissionPublishesPrivateLaneMilestone(t *testing.T) {
 	}
 	app := &App{processTrace: trace}
 	app.observeSenderPeerAttempt(v2peer.SenderAttemptObservation{
-		Stage: v2peer.SenderAttemptLaneAdmissionStarted,
+		Stage: v2peer.SenderAttemptLaneHelloAuthenticated,
 		Lane:  &sessionruntime.LaneIdentity{ID: 1, Epoch: 1},
 	})
 	if sink.event.Milestone != "" {

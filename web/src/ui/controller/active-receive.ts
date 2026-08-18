@@ -1,6 +1,5 @@
 import type {
   V2ConnectivityActivation,
-  V2ContentSizeClass,
 } from '../../connectivity/v2-receiver-policy'
 import { lifecycleDeadline } from '../../output/workspace'
 import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
@@ -24,7 +23,6 @@ interface ActiveReceiveOperation {
   readonly boundary: number
   readonly joined: V2JoinedBrowserShare
   readonly selection: V2FrozenSelectionPolicy
-  readonly sizeClass: V2ContentSizeClass
   readonly runtime: V2BoundReceiveOperation
   transfer?: AbortController
   connectivity?: V2ConnectivityActivation
@@ -51,7 +49,6 @@ export interface ActiveReceiveCoordinatorOptions {
 export interface ActiveReceiveAdoption {
   readonly joined: V2JoinedBrowserShare
   readonly selection: V2FrozenSelectionPolicy
-  readonly sizeClass: V2ContentSizeClass
   readonly runtime: V2BoundReceiveOperation
 }
 
@@ -158,7 +155,7 @@ export class ActiveReceiveCoordinator {
     let connectivity: V2ConnectivityActivation | undefined
     let transfer: AbortController | undefined
     try {
-      connectivity = active.joined.beginDownloadConnectivity(active.sizeClass)
+      connectivity = active.joined.beginDownloadConnectivity()
       transfer = new AbortController()
       active.connectivity = connectivity
       active.transfer = transfer

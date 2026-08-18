@@ -40,14 +40,15 @@ const (
 )
 
 var (
-	ErrLaneInput       = errors.New("protocol session lane input is invalid")
-	ErrLaneMalformed   = errors.New("protocol session lane frame is malformed")
-	ErrLaneProof       = errors.New("protocol session lane proof is invalid")
-	ErrLaneSignature   = errors.New("protocol session lane signature is invalid")
-	ErrLaneGrantBudget = errors.New("protocol session lane grant budget is exhausted")
-	ErrLaneEpoch       = errors.New("protocol session lane epoch is exhausted")
-	ErrLaneUnknown     = errors.New("protocol session logical lane is unknown")
-	ErrLaneStopping    = errors.New("protocol session is stopping")
+	ErrLaneInput               = errors.New("protocol session lane input is invalid")
+	ErrLaneMalformed           = errors.New("protocol session lane frame is malformed")
+	ErrLaneProof               = errors.New("protocol session lane proof is invalid")
+	ErrLaneSignature           = errors.New("protocol session lane signature is invalid")
+	ErrLaneGrantBudget         = errors.New("protocol session lane grant budget is exhausted")
+	ErrLaneEpoch               = errors.New("protocol session lane epoch is exhausted")
+	ErrLaneUnknown             = errors.New("protocol session logical lane is unknown")
+	ErrLaneStopping            = errors.New("protocol session is stopping")
+	ErrLaneSettlementUnclaimed = errors.New("protocol session authenticated lane settlement was not claimed")
 )
 
 type LaneHello struct {
@@ -282,6 +283,9 @@ type LaneRegistry struct {
 	nextLaneID       uint32
 	activeCount      int
 	stopping         bool
+	closing          bool
+	settlementCount  int
+	settlementDone   chan struct{}
 	lanes            map[uint32]logicalLaneState
 	grants           map[OperationID]laneGrantState
 }
@@ -407,30 +411,90 @@ const (
 )
 
 type LaneAdmission struct {
-	Disposition LaneAdmissionDisposition
-	LaneID      uint32
-	LaneEpoch   uint32
-	Rejection   LaneRejectCode
-	Response    []byte
+	Disposition     LaneAdmissionDisposition
+	SettlementBegan bool
+	OperationID     OperationID
+	LaneID          uint32
+	LaneEpoch       uint32
+	Rejection       LaneRejection
+	Response        []byte
 }
 
-// AdmitCandidate returns SilentClose for malformed or unauthenticated input.
-// A signed rejection is legal only after the traffic-key proof authenticates the peer.
-func (r *LaneRegistry) AdmitCandidate(encoded, senderNonce []byte) (LaneAdmission, error) {
-	if r == nil {
+// LaneAdmissionSettlementGate transfers terminal authority to the exact
+// connectivity attempt after WS2A authentication and before registry state or
+// signed evidence changes. Implementations must make this a one-shot state
+// transition; false leaves the grant untouched and produces no response.
+type LaneAdmissionSettlementGate interface {
+	BeginAuthenticatedSettlement(OperationID, LaneAdmissionIdentity) bool
+}
+
+type LaneAdmissionIdentity struct {
+	LaneID    uint32
+	LaneEpoch uint32
+}
+
+type LaneAdmissionSettlementGateFunc func(OperationID, LaneAdmissionIdentity) bool
+
+func (function LaneAdmissionSettlementGateFunc) BeginAuthenticatedSettlement(
+	operationID OperationID,
+	lane LaneAdmissionIdentity,
+) bool {
+	return function != nil && function(operationID, lane)
+}
+
+// AdmitCandidate returns SilentClose for malformed, unauthenticated, or
+// unclaimed input. A signed response or registry mutation is legal only after
+// the traffic-key proof and the caller's synchronous settlement transition.
+func (r *LaneRegistry) AdmitCandidate(
+	encoded,
+	senderNonce []byte,
+	settlement LaneAdmissionSettlementGate,
+) (LaneAdmission, error) {
+	if r == nil || settlement == nil {
 		return LaneAdmission{Disposition: LaneAdmissionSilentClose}, ErrLaneInput
 	}
+	// Authentication uses a registry-owned traffic key, so it remains serialized
+	// with Close while the caller-controlled gate stays outside the registry lock.
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	hello, err := ParseLaneHello(encoded, r.receiverToSender)
 	if err != nil {
+		r.mu.Unlock()
 		return LaneAdmission{Disposition: LaneAdmissionSilentClose}, err
 	}
+	identity := LaneAdmission{
+		Disposition: LaneAdmissionSilentClose,
+		OperationID: hello.operationID,
+		LaneID:      hello.laneID,
+		LaneEpoch:   hello.laneEpoch,
+	}
+	if r.closing {
+		r.mu.Unlock()
+		return identity, ErrLaneStopping
+	}
+	r.beginSettlementLocked()
+	r.mu.Unlock()
+	if !r.claimAuthenticatedSettlement(settlement, hello.operationID, LaneAdmissionIdentity{
+		LaneID: hello.laneID, LaneEpoch: hello.laneEpoch,
+	}) {
+		return identity, ErrLaneSettlementUnclaimed
+	}
+	identity.SettlementBegan = true
+
+	r.mu.Lock()
+	defer func() {
+		r.finishSettlementLocked()
+		r.mu.Unlock()
+	}()
 	now := r.now()
 	r.cleanup(now)
 	reject := func(code LaneRejectCode, retry time.Duration) (LaneAdmission, error) {
-		response, buildErr := NewLaneReject(hello, LaneRejection{Code: code, RetryAfter: retry}, r.senderSigningKey)
-		return LaneAdmission{Disposition: LaneAdmissionRejected, LaneID: hello.laneID, LaneEpoch: hello.laneEpoch, Rejection: code, Response: response}, buildErr
+		rejection := LaneRejection{Code: code, RetryAfter: retry}
+		response, buildErr := NewLaneReject(hello, rejection, r.senderSigningKey)
+		result := identity
+		result.Disposition = LaneAdmissionRejected
+		result.Rejection = rejection
+		result.Response = response
+		return result, buildErr
 	}
 	if hello.share != r.share || hello.session != r.session {
 		return reject(LaneRejectUnknownSession, 0)
@@ -461,14 +525,16 @@ func (r *LaneRegistry) AdmitCandidate(encoded, senderNonce []byte) (LaneAdmissio
 	}
 	response, err := NewLaneAccept(hello, senderNonce, r.senderSigningKey)
 	if err != nil {
-		return LaneAdmission{Disposition: LaneAdmissionSilentClose}, err
+		return identity, err
 	}
 	state.consumedAt = now
 	r.grants[hello.operationID] = state
 	lane.lastEpoch, lane.active = grant.LaneEpoch, true
 	r.lanes[grant.LaneID] = lane
 	r.activeCount++
-	return LaneAdmission{Disposition: LaneAdmissionAccepted, LaneID: grant.LaneID, LaneEpoch: grant.LaneEpoch, Response: response}, nil
+	identity.Disposition = LaneAdmissionAccepted
+	identity.Response = response
+	return identity, nil
 }
 
 func (r *LaneRegistry) Release(laneID, laneEpoch uint32) bool {
@@ -502,6 +568,13 @@ func (r *LaneRegistry) Close() {
 	}
 	r.mu.Lock()
 	r.stopping = true
+	r.closing = true
+	settlementDone := r.settlementDone
+	r.mu.Unlock()
+	if settlementDone != nil {
+		<-settlementDone
+	}
+	r.mu.Lock()
 	clear(r.grants)
 	clear(r.lanes)
 	r.activeCount = 0
@@ -509,6 +582,39 @@ func (r *LaneRegistry) Close() {
 	r.senderSigningKey = nil
 	r.receiverToSender.Destroy()
 	r.mu.Unlock()
+}
+
+func (r *LaneRegistry) beginSettlementLocked() {
+	if r.settlementCount == 0 {
+		r.settlementDone = make(chan struct{})
+	}
+	r.settlementCount++
+}
+
+func (r *LaneRegistry) claimAuthenticatedSettlement(
+	gate LaneAdmissionSettlementGate,
+	operationID OperationID,
+	lane LaneAdmissionIdentity,
+) (claimed bool) {
+	// A faulty control gate must not strand registry shutdown. Panics still
+	// propagate because this is lifecycle authority, but its in-flight lease is
+	// released first.
+	defer func() {
+		if !claimed {
+			r.mu.Lock()
+			r.finishSettlementLocked()
+			r.mu.Unlock()
+		}
+	}()
+	return gate.BeginAuthenticatedSettlement(operationID, lane)
+}
+
+func (r *LaneRegistry) finishSettlementLocked() {
+	r.settlementCount--
+	if r.settlementCount == 0 {
+		close(r.settlementDone)
+		r.settlementDone = nil
+	}
 }
 
 func (r *LaneRegistry) cleanup(now time.Time) {
