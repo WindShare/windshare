@@ -61,6 +61,7 @@ describe('Portal and App mode routing', () => {
 
     expect(html).toContain('WindShare')
     expect(html).toContain('无需上传云端')
+    expect(html).toContain('秒出任意文件分享链接')
     expect(html).toContain('极速接收 (Receive)')
     expect(html).toContain('CLI 命令行分享')
   })
